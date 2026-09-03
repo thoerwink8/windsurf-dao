@@ -7,7 +7,7 @@
 // interpretTuiIdleWait/tui-idle 等待）、Devin 拆步（planWorkerStart/usesSplitStart）、
 // 认账钟（DEVIN_WORKER_START_TIMEOUT_MS）、注入后开工验证（派工路的 finishWorkerInject）、
 // 同厂闸（审官不存在时查空气；真闸在 reviewer-create/attach/worker-done）、每单环境自检、
-// 同步看板（卡 comment 定界区 + master 全量重写）、gc 顺车（自动扫描留在 inbox-station ensure）、
+// 同步看板（卡 comment 定界区 + master 全量重写）、gc 顺车（已删）、
 // 热路全量 slate 打分（挪执行体，仅 --role 选型打；显式 --model 路由表序 + bans 门闩）、
 // 热路全量账本查重（换 .dispatch-index 增量读，也在执行体）。
 // 纯函数层：送字分类、dispatchId 找回、账本去重判定、派工单队列。不真起工人。

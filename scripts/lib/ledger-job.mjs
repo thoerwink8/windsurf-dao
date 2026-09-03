@@ -16,7 +16,7 @@ import { writeEvent, nextSeq } from './event-writer.mjs';
 import { ensureLocalLedger } from './ledger-home.mjs';
 import { hashOf } from './dianjiangtai-core.mjs';
 import { toBeijingIso } from './dianjiangtai-backfill.mjs';
-import { judgmentFromReview } from './judgment.mjs';
+import { normalizeReviewState } from './review-state.mjs';
 
 const DEFAULT_ROOT = resolve(import.meta.dirname, '../..');
 
@@ -115,11 +115,21 @@ function triggeredByOf(marshalRounds, workerRework) {
 }
 
 /**
- * 从 review 正文判定行汇总轮次 / 红项。
+ * 从 GitHub review 状态汇总轮次 / 红项。
  * opts.overrides：该单 job.override(scope) 列表——有则按事件算帅轮次，不再看 review 序列。
- * opts.unscanned：判定行/账本没查成，三态第三档。
+ * opts.unscanned：reviews/账本没查成，三态第三档。
  * 无 override 时退回 sawGreen 反推，并标 attributionSource=inferred（红之后追加会低估）。
  */
+function reviewColor(rv) {
+  const state = normalizeReviewState(rv);
+  if (state === 'APPROVED') return 'green';
+  if (state === 'CHANGES_REQUESTED') return 'red';
+  const body = String(rv && rv.body || '');
+  if (/绿/.test(body) && !/红\s*\d+\s*项/.test(body)) return 'green';
+  if (/红\s*\d+\s*项/.test(body)) return 'red';
+  return null;
+}
+
 export function verdictStatsFromReviews(reviews, opts = {}) {
   if (opts.unscanned) {
     return {
@@ -130,7 +140,7 @@ export function verdictStatsFromReviews(reviews, opts = {}) {
       workerRework: null,
       triggeredBy: null,
       attributionSource: 'unscanned',
-      attributionNote: opts.unscannedError || '判定行没查成',
+      attributionNote: opts.unscannedError || 'reviews 没查成',
       inferredMayUnderestimate: false,
     };
   }
@@ -142,18 +152,17 @@ export function verdictStatsFromReviews(reviews, opts = {}) {
   let lastColor = null;
   let redAfterRed = false;
   for (const rv of reviews || []) {
-    const v = judgmentFromReview(rv && rv.body);
-    if (!v.kind || v.malformed) continue;
-    if (v.red != null) maxRed = Math.max(maxRed ?? 0, v.red);
-    const color = v.green ? 'green' : (v.red != null ? 'red' : null);
+    const color = reviewColor(rv);
+    if (!color) continue;
+    if (color === 'red') maxRed = Math.max(maxRed ?? 0, 1);
     if (color === 'red' && lastColor === 'red') redAfterRed = true;
-    if (color) lastColor = color;
+    lastColor = color;
     if (sawGreen) {
       inferredMarshal += 1;
       continue;
     }
     reviewerRounds += 1;
-    if (v.green) sawGreen = true;
+    if (color === 'green') sawGreen = true;
   }
   const inferredTotal = reviewerRounds + inferredMarshal;
   const saw = inferredTotal > 0;
@@ -189,7 +198,7 @@ export function verdictStatsFromReviews(reviews, opts = {}) {
       ? (redAfterRed
         ? '归因来自反推，可能低估帅的轮次（红之后追加这一类反推覆盖不到）'
         : '归因来自反推，可能低估帅的轮次')
-      : '无判定行（没查成）',
+      : '无 GitHub 判别态 review（没查成）',
     inferredMayUnderestimate: Boolean(saw),
   };
 }

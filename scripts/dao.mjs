@@ -233,9 +233,6 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
-import {
-  defaultLogRel, leasePath, launchFilePath, parseLease,
-} from './inbox-station.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
@@ -1048,11 +1045,42 @@ function unwrapWorkers(json) {
   return json?.result?.workers || null;
 }
 
+function stationLogRel(runId) {
+  const short = String(runId || '').replace(/^run_/, '');
+  return short ? join('_flow', `inbox-${short}.log`) : join('_flow', 'inbox.log');
+}
+
 function stationFilesFor(runId) {
   const main = resolveMainWorktreeRoot({ from: ROOT });
   const base = main.ok ? main.root : ROOT;
-  const logPath = join(base, defaultLogRel(runId));
-  return [leasePath(logPath), launchFilePath(logPath), logPath];
+  const logPath = join(base, stationLogRel(runId));
+  const baseName = String(logPath).split('/').pop() || 'inbox.log';
+  const stem = (baseName.split('\\').pop() || baseName).replace(/\.log$/i, '') || 'inbox';
+  const dir = dirname(logPath);
+  return [join(dir, `${stem}.lease`), join(dir, `${stem}.cmd`), logPath];
+}
+
+function parseStationLease(raw) {
+  if (raw == null) return null;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text) return null;
+  try {
+    const obj = JSON.parse(text);
+    const pid = Number(obj?.pid);
+    const ts = Number(obj?.ts);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ts)) return null;
+    const ttlMs = Number(obj?.ttlMs);
+    const handle = typeof obj.handle === 'string' && obj.handle.trim() ? obj.handle.trim() : null;
+    return {
+      pid,
+      ts,
+      runId: obj.runId ?? null,
+      handle,
+      ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : 25000,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function readStationLease(runId) {
@@ -1060,7 +1088,7 @@ function readStationLease(runId) {
   const [leaseFile] = files;
   try {
     if (!existsSync(leaseFile)) return { read: 'missing', lease: null, files };
-    const lease = parseLease(readFileSync(leaseFile, 'utf8'));
+    const lease = parseStationLease(readFileSync(leaseFile, 'utf8'));
     if (!lease) return { read: 'unscanned', lease: null, files, error: `租约坏了 ${leaseFile}` };
     return { read: 'ok', lease, files };
   } catch (e) {
@@ -1921,7 +1949,7 @@ async function runDispatchExecution(order, { queueDir } = {}) {
   }
 
   // gc 顺车已删（2026-08-23 delete-all-ceremony 拍板）：派工热路不再顺带只读 run-gc。
-  // 自动扫描仍在 inbox-station ensure（#614 顺车在那保留）；手动清用 dao.mjs run-gc。
+  // 手动清用 dao.mjs run-gc。
 
   emit({
     ok: true,
@@ -2057,7 +2085,7 @@ function cmdDispatchBatch(args) {
   }
 
   // gc 顺车 + 同步看板已删（2026-08-23 delete-all-ceremony 拍板）：批派工热路同样不背。
-  // 自动 gc 扫描在 inbox-station ensure；master 定界区在 worktree-rm / 合并时重写。
+  // master 定界区在 worktree-rm / 合并时重写。
 
   emit({
     ok: true,

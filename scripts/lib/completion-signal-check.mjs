@@ -2,7 +2,7 @@
 //
 // 病：flow 读 PR comment 首行「完工」，工人只发编排层 worker_done → 流转器看不见。
 // #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（并按需起审官）。
-// 检查逻辑自己持有契约文本，不 import flow / judgment 的正则（自己查自己查不出错）。
+// 检查逻辑自己持有契约文本，不 import flow / review-state 的正则（自己查自己查不出错）。
 // 两边对不上（比如把 worker-brief 的「完工」改成「已完成」）必须报红。
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 const FILES = {
   flow: 'scripts/flow.mjs',
-  judgment: 'scripts/lib/judgment.mjs',
+  reviewState: 'scripts/lib/review-state.mjs',
   brief: 'host/skills/dispatch/templates/soldier-book.md',
   dispatch: 'host/skills/dispatch/SKILL.md',
 };
@@ -57,8 +57,8 @@ export function checkCompletionSignal({ root, files } = {}) {
   if (!loaded.flow.includes(FLOW_MARK)) {
     problems.push(`flow.mjs 缺契约注释「${FLOW_MARK}」`);
   }
-  if (!loaded.judgment.includes(JUDGMENT_MARK)) {
-    problems.push(`judgment.mjs 缺首行正则 ${JUDGMENT_MARK}（改成 /^已完成/ 就会让 flow 认不出工人评论）`);
+  if (!loaded.reviewState.includes(JUDGMENT_MARK)) {
+    problems.push(`review-state.mjs 缺首行正则 ${JUDGMENT_MARK}（改成 /^已完成/ 就会认不出工人评论）`);
   }
   if (!loaded.brief.includes(BRIEF_HEAD)) {
     problems.push(`soldier-book 没教「${BRIEF_HEAD}」（把「完工」改成「已完成」就会踩这里）`);

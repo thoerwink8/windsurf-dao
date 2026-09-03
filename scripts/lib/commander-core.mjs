@@ -6,7 +6,7 @@
 // #800 三节判据逐条落这里：
 //   自己做（确定性，调 dao.mjs 现有动词）：dispatch / attach-reviewer / merge(+land)
 //   唤大脑（要判断，起一次性 pi）：审官判红一轮 / 撞死指纹 #833 没接住
-//   报帅停手（永不自动）：审官两轮仍红 / 判定行歪了 / 缺 model|reviewer 标签 / 同单三次唤醒仍没闭环
+//   报帅停手（永不自动）：审官两轮仍红 / 缺 model|reviewer 标签 / 同单三次唤醒仍没闭环
 //
 // 铁律（CLAUDE.md「自动检查」+ #800）：**situation 里任何一节 unscanned，对应正向动作一律不产，
 //   改产 escalate(reason:'unscanned')**。没查成 ≠ 空态势——空态势静默（noop），没查成要 fail-visible。
@@ -15,11 +15,11 @@
 // 复用已测原语（不重造）：
 //   shuai-scan.mjs   prApprovedReady / prApprovedDraft / prChecksRed —— PR 判绿/待拍板/CI 红
 //   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 = 可立即起
-//   judgment.mjs     judgmentFromReview —— 审官判定行解析（红 N 项 / 绿 / 歪了）
+//   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
-import { judgmentFromReview } from './judgment.mjs';
+import { analyzeGithubReviews } from './review-state.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'attach-reviewer', 'merge', 'land',
@@ -40,35 +40,22 @@ export function labelValue(issue, prefix) {
 }
 
 /**
- * 一张 PR 的审官 review 历史 → 判别态。bodies 按时间序（旧→新）。
- * 复用 judgmentFromReview（单一判定行解析器）。
+ * 一张 PR 的审官 review 历史 → 判别态。入参按时间序（旧→新）。
+ * 认 GitHub state（APPROVED / CHANGES_REQUESTED）；兼容旧夹具里的判定行字符串。
  * 返回：
- *   { scanned:false }                 —— bodies 不是数组（没查成）
- *   { malformed:true, ... }           —— 有判定行但格式歪了（近义变体/缺红数）→ 报帅，绝不当判绿
+ *   { scanned:false }                 —— 入参不是数组（没查成）
  *   { redRounds:N, green:bool, latestGreen:bool }
- * redRounds = 判红的 review 轮数（kind 判定/复核结论且 red≥1）；green = 出现过判绿。
  */
-export function analyzeReviews(bodies) {
-  if (!Array.isArray(bodies)) return { scanned: false };
-  let redRounds = 0;
-  let green = false;
-  let malformed = false;
-  let latestJudged = null; // 最后一条「有判定」的 review 的判别（绿/红）
-  for (const body of bodies) {
-    const j = judgmentFromReview(body);
-    if (j.malformed) { malformed = true; continue; }
-    if (j.kind == null) continue; // 该 review 没有判定行（叙述/闲聊），跳过
-    if (j.green) { green = true; latestJudged = 'green'; continue; }
-    if (typeof j.red === 'number' && j.red >= 1) { redRounds += 1; latestJudged = 'red'; }
-  }
-  return {
-    scanned: true,
-    malformed,
-    redRounds,
-    green,
-    latestGreen: latestJudged === 'green',
-    latestRed: latestJudged === 'red',
-  };
+export function analyzeReviews(reviews) {
+  if (!Array.isArray(reviews)) return { scanned: false };
+  const mapped = reviews.map((item) => {
+    if (item && typeof item === 'object' && (item.state || item.body != null)) return item;
+    const s = String(item || '');
+    if (/^\s*(?:[>*]\s*)*(判定|复核结论)[:：].*绿/.test(s) && !/红\s*\d+\s*项/.test(s)) return { state: 'APPROVED' };
+    if (/^\s*(?:[>*]\s*)*(判定|复核结论)[:：].*红\s*\d+\s*项/.test(s)) return { state: 'CHANGES_REQUESTED' };
+    return { state: 'COMMENTED' };
+  });
+  return analyzeGithubReviews(mapped);
 }
 
 function esc(why, extra = {}) {
@@ -162,8 +149,8 @@ function collectCandidates(situation) {
         out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
         continue;
       }
-      if (a.malformed) {
-        out.push(withNeeds(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }), N.merge));
+      if (!a.green && !a.latestGreen) {
+        out.push(withNeeds(esc(`PR #${pr.number} reviewDecision=APPROVED 但 reviews 里没有 APPROVED 状态——报帅`, { reason: 'approved-without-review', pr: pr.number }), N.merge));
         continue;
       }
       out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿 + m=auto + CI 绿 + MERGEABLE' }, N.merge));
@@ -179,9 +166,7 @@ function collectCandidates(situation) {
 
     const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
     if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
-    if (a.malformed) {
-      out.push(withNeeds(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判红/判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }), N['wake-brain']));
-    } else if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
+    if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
       out.push(withNeeds(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }), N['wake-brain']));
       out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
     } else if (a.redRounds === 1 && !a.latestGreen) { // 审官判红一轮 → 唤大脑；同单已唤满 → 转报帅

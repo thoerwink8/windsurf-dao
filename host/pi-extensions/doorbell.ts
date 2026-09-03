@@ -2,7 +2,7 @@
 //
 // 机制（#644/#645 消歧记录，2026-08-18 用户拍）：
 //   - 协调者（帅）的 pi 会话空闲（输入框空、没在打字）时，工人发完工/上报
-//     应该叫醒协调者开一轮处理。实现 = 被动盯信箱台 relay 写进 `_flow/inbox-*.log`
+//     应该叫醒协调者开一轮处理。实现 = 被动盯 `_flow/inbox-*.log`
 //     的新消息，命中时 `pi.sendUserMessage("你有来信")` 代按一句短门铃再回车。
 //   - 人在打字（输入框非空）→ 绝不占输入框（不响门铃、不碰编辑框）。
 //   - 信的正文 → 不进输入框，只在对话里（门铃只进短句；正文留在 relay 日志里，
@@ -11,7 +11,7 @@
 //     `check --wait`，不拆信箱台（dispatch skill #525：一个 run 只一个 waiter）。
 //
 // 为什么盯日志而不是 `orca orchestration check`：
-//   relay（scripts/inbox-station.mjs）已经是 run 的唯一等信者，check --wait 会跟它
+//   历史上 relay（inbox-station.mjs，#807 已删）是 run 的唯一等信者，check --wait 会跟它
 //   抢 waiter（#525 刷屏）；本扩展只读 relay 落盘的 `_flow/inbox-<run后缀>.log`
 //   （格式见 formatLogLine），零冲突。
 //

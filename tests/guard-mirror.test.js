@@ -21,8 +21,8 @@ const NEW = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const ORIGIN = 'git@github.com:thoerwink8/windsurf-dao.git';
 const DEST = 'C:/Users/Administrator/.dao/guard-mirror';
 const ROOT = 'D:/frank/windsurf-dao';
-const SCRIPT = path.join(ROOT, 'scripts', 'inbox-station.mjs');
-const MIRROR_SCRIPT = path.join(DEST, 'scripts', 'inbox-station.mjs');
+const SCRIPT = path.join(ROOT, 'scripts', 'watchdog.mjs');
+const MIRROR_SCRIPT = path.join(DEST, 'scripts', 'watchdog.mjs');
 
 describe('guard-mirror', () => {
   it('DAO_GUARD_SKIP_MIRROR 跳过', async (t) => {
@@ -48,7 +48,7 @@ describe('guard-mirror', () => {
       cwd: ROOT, scriptFile: SCRIPT, argv: ['relay'], git, exists, mirrorPath: DEST,
     });
     await t.test('reexec 到镜像脚本', () => {
-      assert.ok(plan.ok && plan.action === 'reexec' && plan.script.replace(/\\/g, '/').endsWith('scripts/inbox-station.mjs') && plan.sha === NEW, 'reexec  →  ' + JSON.stringify(plan));
+      assert.ok(plan.ok && plan.action === 'reexec' && plan.script.replace(/\\/g, '/').endsWith('scripts/watchdog.mjs') && plan.sha === NEW, 'reexec  →  ' + JSON.stringify(plan));
     });
     const spawned = [];
     const exits = [];

@@ -16,7 +16,7 @@ export const DOORBELL_TEXT = '你有来信';
 export const DEFAULT_LOG_DIR = '_flow';
 
 /**
- * 解析 relay 写的一行日志。格式见 scripts/inbox-station.mjs 的 formatLogLine：
+ * 解析 inbox 日志一行。格式：
  *   {"ts","id","type","from","to","subject","body","payload"}
  * relay 只落盘非 heartbeat 的消息行；archive-exec 行（可归档执行记录）是机器动作，
  * 不是工人来信，不算 actionable。

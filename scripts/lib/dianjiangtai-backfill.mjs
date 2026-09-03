@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hashOf } from './dianjiangtai-core.mjs';
 import { writeEvent, nextSeq } from './event-writer.mjs';
-import { redFlagsFromReviewBodies } from './judgment.mjs';
+import { requestedChangeCount } from './review-state.mjs';
 
 function hasBackfillEvent(dir, type, jobId) {
   if (!existsSync(dir)) return false;
@@ -116,7 +116,7 @@ export function reconstructJob(pr, { models = [] } = {}) {
   const registry = models.find(m => m.id === model);
   const reviews = pr.reviews || [];
   const reviewCount = reviews.length;
-  const redFlags = reviewCount === 0 ? null : redFlagsFromReviewBodies(reviews.map(r => r.body));
+  const redFlags = reviewCount === 0 ? null : requestedChangeCount(reviews);
   const merged = Boolean(pr.mergedAt);
   const closed = Boolean(pr.closedAt || pr.mergedAt);
   const jobId = `gh-pr-${pr.number}`;
@@ -126,7 +126,7 @@ export function reconstructJob(pr, { models = [] } = {}) {
   const whyBits = [
     `回填自 GitHub PR #${pr.number}`,
     pr.title,
-    redFlags === null ? '无审读' : `判定行红 ${redFlags} 项`,
+    redFlags === null ? '无审读' : `CHANGES_REQUESTED ${redFlags} 次`,
   ];
 
   const events = [
