@@ -101,6 +101,29 @@ describe('nextLaunch', () => {
       assert.ok(ids[0] === 'grok-4.6' && ids[1] === 'deepseek-v4-flash', JSON.stringify(ids));
     });
 
+    await t.test('禁用的模型不进降级链（2026-09-04 实咬：deepseek-v4-pro 标了禁用仍排 slate 第 2 位）', () => {
+      const routing = {
+        routes: [],
+        // 两个名字都要认：JSON 里叫「禁用」，落地成 legacy model 后叫 reviewerDisabled
+        models: [
+          { id: 'grok-4.6' },
+          { id: 'deepseek-v4-pro', reviewerDisabled: true },
+          { id: 'ox-alpha-free', 禁用: true },
+          { id: 'kimi-k3' },
+        ],
+      };
+      const ids = routingSlateIds({ routing, model: 'grok-4.6' });
+      assert.deepEqual(ids, ['grok-4.6', 'kimi-k3'], JSON.stringify(ids));
+      assert.ok(!routingSlateIds({ routing, model: 'deepseek-v4-pro' }).includes('deepseek-v4-pro'),
+        '显式点一个被禁用的模型也不许进 slate（否则 --model 就成了绕过禁令的后门）');
+      // 反证：去掉禁用标记，它就该回来——证明是标记在起作用，不是名字被写死排除
+      const unbanned = routingSlateIds({
+        routing: { routes: [], models: routing.models.map(m => ({ id: m.id })) },
+        model: 'grok-4.6',
+      });
+      assert.ok(unbanned.includes('deepseek-v4-pro') && unbanned.includes('ox-alpha-free'), JSON.stringify(unbanned));
+    });
+
     await t.test('#828：拒模两次硬失败换模型（不再切支路）', () => {
       const kind = classifyLaunchFailure({ verifyReason: '拒模', text: 'Cannot use this model' });
       assert.ok(kind === 'hard', '拒模 = hard');

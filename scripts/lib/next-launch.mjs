@@ -199,7 +199,13 @@ export function resolveDispatchSlate({
 
 /** 路由第一、其余按表序。dry-run 预览与显式 --model 真派工用它（async-launch）；--role 真派工必须走过门闩的 slate。 */
 export function routingSlateIds({ routing, role, now, model } = {}) {
-  const models = Array.isArray(routing?.models) ? routing.models : [];
+  const all = Array.isArray(routing?.models) ? routing.models : [];
+  // 被 ban 的模型不许进降级链（2026-09-04 实咬：deepseek-v4-pro 在 model-routing.json 里
+  // 明明标了 禁用:true，派单 slate 里照样排在第 2 位——网关那侧也把它砍了，真降级过去必 503。
+  // rankListFromTree 一直在滤，这条路径漏了；「禁用」只有处处生效才叫禁用）。
+  // 字段名注意：JSON 里叫「禁用」，落地成 legacy model 后叫 reviewerDisabled
+  //（model-routing-json.mjs toLegacyModel）。两个名都认，防将来改名又漏一处。
+  const models = all.filter(m => m && m.reviewerDisabled !== true && m.禁用 !== true);
   const known = new Set(models.map(m => m && m.id).filter(Boolean));
   const ids = [];
   const push = (id) => {
