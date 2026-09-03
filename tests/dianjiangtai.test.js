@@ -274,6 +274,9 @@ describe('dianjiangtai', () => {
     await t.test('F1：gpt-5.6-sol 对 UI 工种被 ban 剔除', () => {
       assert.ok(ui.models["gpt-5.6-sol"].gates.rejected && ui.models["gpt-5.6-sol"].gates.reasons.includes("ban"), 'F1：gpt-5.6-sol 对 UI 工种被 ban 剔除');
     });
+    await t.test('F1：gpt-5.6-luna 属 GPT，UI 同样 ban（#817）', () => {
+      assert.ok(ui.models["gpt-5.6-luna"] && ui.models["gpt-5.6-luna"].gates.rejected && ui.models["gpt-5.6-luna"].gates.reasons.includes("ban"), 'F1：luna UI ban  →  ' + JSON.stringify(ui.models["gpt-5.6-luna"] && ui.models["gpt-5.6-luna"].gates));
+    });
     await t.test('F1：ban 剔除模型不在 B 自选位', () => {
       assert.ok(!ui.options.B.models.includes("gpt-5.6-sol"), 'F1：ban 剔除模型不在 B 自选位');
     });
@@ -522,8 +525,8 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 11 个现役模型', () => {
-      assert.ok(models.length === 11 && models.some(m => m.id === DEVIN) && models.some(m => m.id === 'ox-alpha-free') && !models.some(m => m.id === 'glm-5.3'), 'models.yml 解析出 11 个现役模型（og 只留 ds 与 ox-alpha-free，已撤 glm-5.3）  →  ' + String(models.length));
+    await t.test('models.yml 解析出 12 个现役模型', () => {
+      assert.ok(models.length === 12 && models.some(m => m.id === DEVIN) && models.some(m => m.id === 'ox-alpha-free') && models.some(m => m.id === 'gpt-5.6-luna') && !models.some(m => m.id === 'glm-5.3'), 'models.yml 解析出 12 个现役模型（含 luna 审官降级）  →  ' + String(models.length));
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
@@ -571,6 +574,9 @@ describe('dianjiangtai', () => {
     });
     await t.test('审官顺位 GPT 顶位（Claude 禁用）', () => {
       assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-sol', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
+    });
+    await t.test('审官顺位 2 = gpt-5.6-luna（#817 pqapi 降级）', () => {
+      assert.ok((policy.reviewerOrder || [])[1] === 'gpt-5.6-luna', '审官顺位 2  →  ' + JSON.stringify(policy.reviewerOrder));
     });
     const planOrder = policy.rankOrderFor('工人', '方案');
     await t.test('model-routing.json 方案顺位 gpt > flash > glm（#817 订正）', () => {

@@ -97,6 +97,23 @@ models:
       metered: null
       subscription: null
 
+  - id: gpt-5.6-luna
+    provider: gw
+    cli: pi --provider gw-windsurf
+    version: gpt-5.6-luna
+    context_window: null
+    max_output: null
+    roles: [审查]
+    status: 试用
+    retired: false
+    trial_since: "2026-09-03"
+    why: 2026-09-03 用户拍板：pqapi 不可用时审官降级到 Windsurf luna（credit 5 vs sol 50）
+    decided: "2026-09-03"
+    pricing:
+      verified_at: null
+      metered: null
+      subscription: null
+
   - id: glm-5.2
     provider: cursor
     cli: cursor-agent

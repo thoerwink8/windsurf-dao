@@ -318,6 +318,24 @@
           ]
         },
         {
+          "id": "gpt-5.6-luna",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：pqapi 不可用时审官降级到 Windsurf luna（credit 5 vs sol 50）",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "gw",
+              "cli_model": "gw-windsurf/gpt-5.6-luna",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "pi --provider gw-windsurf --model gpt-5.6-luna；服务器实测 PONG"
+            }
+          ]
+        },
+        {
           "id": "claude-opus",
           "顺位": null,
           "禁用": true,
@@ -514,7 +532,8 @@
     {
       "id": "ban-gpt-ui",
       "模型": [
-        "gpt-5.6-sol"
+        "gpt-5.6-sol",
+        "gpt-5.6-luna"
       ],
       "工种": [
         "UI"
