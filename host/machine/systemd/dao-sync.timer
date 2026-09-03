@@ -1,0 +1,12 @@
+# /etc/systemd/system/dao-sync.timer —— 每 5 分钟。装法见 dao-sync.service 文件头。
+
+[Unit]
+Description=每 5 分钟让服务器主树跟上主分支
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
