@@ -57,9 +57,10 @@ function norm(p) {
   return s;
 }
 
-/** 门 1：realpath 之后必须落在 `.../host/skills/<名>` 上（任何 checkout 都认）。 */
+/** 门 1：realpath 之后必须落在 `.../host/skills/<名>` 上（任何 checkout 都认）。
+ *  后缀比较沿用 norm 的平台语义：POSIX 精确（Foo ≠ foo），win32 忽略大小写。 */
 function suffixOk(target, name) {
-  return norm(target).endsWith(`/host/skills/${name.toLowerCase()}`);
+  return norm(target).endsWith(norm(`/host/skills/${name}`));
 }
 
 /**

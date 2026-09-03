@@ -126,6 +126,23 @@ describe('skill-link', () => {
       });
     }
 
+    // ── ②b 绿样本：混合大小写 skill 名（host/skills/FooBar）正确链接。
+    //    POSIX：suffixOk 必须按原大小写匹配——name.toLowerCase() 去对 FooBar 会假红「指错」。
+    //    win32：norm 两侧都 lower，忽略大小写，同样绿。──
+    {
+      const root = path.join(SANDBOX, "roots", "mixed-case");
+      fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+      const mixed = "FooBar";
+      fs.mkdirSync(path.join(root, "host", "skills", mixed), { recursive: true });
+      fs.writeFileSync(path.join(root, "host", "skills", mixed, "SKILL.md"), `---\nname: ${mixed}\n---\n# ${mixed}\n`, "utf8");
+      const home = makeHome("mixed-case-home");
+      linkSkill(home, mixed, path.join(root, "host", "skills", mixed));
+      const r = checkSkillLinks({ root, home });
+      await t.test('混合大小写 skill 名（FooBar）正确链接 ⇒ 绿（POSIX 精确 / win32 忽略大小写）', () => {
+        assert.ok(!!r.green && !r.fail && !r.skip, '混合大小写 skill 名正确链接 ⇒ 绿  →  ' + JSON.stringify(r).slice(0, 200));
+      });
+    }
+
     // ── ③ 红样本：缺链（#789 现场形态：新增 skill 忘了建链）⇒ 必须报红 ──
     {
       const root = makeRoot("missing");
