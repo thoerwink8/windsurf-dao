@@ -131,8 +131,19 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
   return { ok: true, unscanned: false, refs, labels: collected };
 }
 
-export function resolveWorkerFromPr({ pr, runGh } = {}) {
+export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
+  const explicit = model == null ? '' : String(model).trim();
   const collected = collectIssueLabelsFromPr({ pr, runGh });
+  if (explicit) {
+    if (!collected.ok && collected.unscanned) return collected;
+    return {
+      ok: true,
+      source: 'flag',
+      modelId: explicit,
+      refs: collected.ok ? collected.refs : [],
+      labels: collected.ok ? collected.labels : [],
+    };
+  }
   if (!collected.ok) return collected;
   const picked = requireWorkerModel(collected.labels);
   if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };

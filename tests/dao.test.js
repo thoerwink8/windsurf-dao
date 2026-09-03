@@ -859,6 +859,7 @@ describe('dao', () => {
     const calls = [];
     const recGh = (a) => {
       calls.push(a.slice());
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [] }) };
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }]) };
       if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
@@ -981,6 +982,7 @@ describe('dao', () => {
     const stampCalls = [];
     const stampGh = (a) => {
       stampCalls.push(a.slice());
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [] }) };
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
       if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
@@ -3529,9 +3531,9 @@ describe('dao', () => {
         && /未结算/.test(archiveBlock) && /#551/.test(archiveBlock),
         '审官结算走 notify --type worker_done 且带 task-id/dispatch-id  →  ' + archiveBlock.slice(0, 400));
     });
-    await t.test('审官任务书写明红项后也结算，复审靠新 Dispatch（#552）', () => {
-      assert.ok(/inspect-only/.test(archiveBlock) && /worker-start --terminal/.test(archiveBlock) && /#552/.test(archiveBlock),
-        '审官任务书写明红项后也结算，复审靠新 Dispatch（#552）');
+    await t.test('审官任务书写明红项后也结算，复审轮走队列（#552/#815）', () => {
+      assert.ok(/inspect-only/.test(archiveBlock) && /复审轮走队列/.test(archiveBlock) && /#552/.test(archiveBlock),
+        '审官任务书写明红项后也结算，复审轮走队列（#552/#815）');
     });
     await t.test('#675 审官任务书红项只跑 notify，不自己拼 task-create', () => {
       assert.ok(/不要自己拼/.test(tmplReviewer) && /task-create/.test(tmplReviewer) && /不要开下一跳/.test(tmplReviewer),
