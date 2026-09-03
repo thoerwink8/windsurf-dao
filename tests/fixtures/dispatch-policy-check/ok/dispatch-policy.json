@@ -1,0 +1,1 @@
+{ "preflight": { "enabled": true, "timeoutMs": 5000, "maxCandidates": 4, "useHealthTable": true } }

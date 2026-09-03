@@ -79,6 +79,9 @@
 // ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
 //    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
 //    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
+// ㉛ 派前探策略（#842）：docs/dispatch-policy.json 的 preflight 取值范围（enabled/useHealthTable 布尔、
+//    timeoutMs 500~60000、maxCandidates 整数 1~12）。检查器自持解析，不 import preflight.mjs；
+//    红/绿/空夹具验判别力；文件不在 / JSON 坏 / 缺 preflight 节 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -120,6 +123,9 @@ import {
 import {
   inspectReleasePolicyFixtures, inspectReleasePolicyLive,
 } from './lib/release-policy-check.mjs';
+import {
+  inspectDispatchPolicyFixtures, inspectDispatchPolicyLive,
+} from './lib/dispatch-policy-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -1458,6 +1464,42 @@ checkFeishuGroupsSamples();
 checkFeishuGroupsLive();
 checkReleasePolicySamples();
 checkReleasePolicyLive();
+checkDispatchPolicySamples();
+checkDispatchPolicyLive();
+
+function checkDispatchPolicySamples() {
+  const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '派前探策略样本没查成' : '派前探策略样本对不上',
+      '恢复 tests/fixtures/dispatch-policy-check/{red,ok,empty}：红=取值越界必须拦、绿必须过、空={} 没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`派前探策略样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkDispatchPolicyLive() {
+  const r = inspectDispatchPolicyLive(ROOT);
+  if (r.unscanned) {
+    fail(
+      'dispatch-policy.json 没查成',
+      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight 节 = 没查成，不是过',
+      (r.problems || []).join('；'),
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `dispatch-policy.json preflight 取值越界 ${(r.problems || []).length} 处`,
+      'enabled/useHealthTable 布尔；timeoutMs 500~60000；maxCandidates 整数 1~12',
+      (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green('dispatch-policy.json preflight 取值合范围');
+}
 
 function checkReleasePolicySamples() {
   const r = inspectReleasePolicyFixtures(join(ROOT, 'tests', 'fixtures', 'release-policy-check'));

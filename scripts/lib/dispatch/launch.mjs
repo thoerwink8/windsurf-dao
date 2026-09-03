@@ -12,6 +12,8 @@ import { createRequire } from 'node:module';
 import { loadRoutingPolicy } from '../model-routing-json.mjs';
 import { normalizePipes } from '../next-launch.mjs';
 import { applyOrcaAgentCmds, loadOrcaAgentCmds } from '../orca-agent-cmds.mjs';
+import { availabilityFor } from '../provider-health.mjs';
+import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
 import { DEFAULT_PROBE_WAIT_MS, ROOT, ROUTING_FILE } from './constants.mjs';
 
 const require = createRequire(import.meta.url);
@@ -306,4 +308,60 @@ export function agentStartSpec({ provider, command, agentId, start } = {}) {
     return { mode: 'agent', agentId: id, model };
   }
   return { mode: 'command', agentId: id, model: cliModel, command: command || null };
+}
+
+// ── 派前探一针：工人起终端前（#842）──────────────────────────────────────
+//
+// 先按健康表把红的排后、熔断 open 的直接拦，再逐位真探（同路径流式），红换下一位，
+// 全红 → stop 报帅停手。逻辑全在 lib/preflight.mjs（runPreflight），本函数只把 slate
+// 适配成候选并把结果映回 slate 下标。--no-preflight 跳过且记账。
+//
+// @param {object} args
+// @param {Array}  args.slate     名单条目 [{ id, pipes:[{provider,cli_model}] }]
+// @param {number} args.startIndex 起点下标
+// @param {boolean} [args.noPreflight]
+// @param {string|null} [args.dispatchId]
+// @param {function} [args.probe] 注入探针（测试用）
+// @param {object} [args.policy]  注入策略（测试用）
+// @param {object} [args.availabilityResult] 注入可用性（测试用）
+// @param {Date} [args.now]
+// @returns {Promise<{ok,stop,chosen,startIndex,reordered,probed,hardBlocked,notes,skipped,report}>}
+export async function preflightWorkerSlate({
+  slate = [], startIndex = 0, noPreflight = false, dispatchId = null,
+  probe, policy, availabilityResult, now = new Date(), root = ROOT, home,
+} = {}) {
+  const pol = policy || loadDispatchPolicy({ root });
+  const candidates = (Array.isArray(slate) ? slate : []).slice(Math.max(0, startIndex));
+  const avail = availabilityResult
+    || (pol.useHealthTable ? availabilityFor(candidates, { home, now: now instanceof Date ? now.getTime() : now }) : undefined);
+  const r = await runPreflight({
+    candidates, policy: pol, noPreflight, role: '工人', dispatchId,
+    availabilityResult: avail, probe, now, home,
+  });
+  const newIndex = r.chosen ? slate.findIndex(s => s && s.id === r.chosen) : -1;
+  return {
+    ok: r.ok,
+    stop: r.stop,
+    chosen: r.chosen,
+    startIndex: newIndex >= 0 ? newIndex : startIndex,
+    reordered: r.reordered,
+    probed: r.probed,
+    hardBlocked: r.hardBlocked,
+    notes: r.notes,
+    skipped: r.skipped,
+    unscannedFallback: !!r.unscannedFallback,
+    report: r.stop ? preflightStopReport({ role: '工人', probed: r.probed, hardBlocked: r.hardBlocked }) : null,
+  };
+}
+
+/** 全红/全拦时给任务书/账本的一段人话（探了谁、各自什么码）。 */
+export function preflightStopReport({ role = '工人', probed = [], hardBlocked = [] } = {}) {
+  const lines = [`派前探一针：${role}候选全部不可用，停手报帅（一个 agent 都不起）。`];
+  for (const p of probed) {
+    lines.push(`- ${p.model} → ${p.state}${p.code != null ? ` (HTTP ${p.code})` : ''}${p.why ? `：${p.why}` : ''}`);
+  }
+  for (const b of hardBlocked) {
+    lines.push(`- ${b.id} → 熔断拦下：${b.label}`);
+  }
+  return lines.join('\n');
 }

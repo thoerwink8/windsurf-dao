@@ -29,6 +29,9 @@
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
+| D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
+| C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
+| D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
@@ -38,6 +41,9 @@
 | D | ~/.dao/guard | NEW-MACHINE §9b。保活日志 / 自停留痕。换机重建，不要拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；本机新增事件要带走就手动拷（同名即同一事件，合并拷安全） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
+| A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
+| A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
+| A | ~/.dao/provider-breaker.json | 网关熔断表（#843 消费端读，可选）。内容由熔断单写、本仓只读判 open/half-open；缺失=无熔断。不进 git |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |

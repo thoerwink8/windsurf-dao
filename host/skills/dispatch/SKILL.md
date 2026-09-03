@@ -106,6 +106,15 @@ test "$(git branch --show-current)" = master \
 
 新工位三选项由 `node scripts/dianjiangtai-select.mjs` 产出，帅只负责转述与收拍板（拍板 2026-08-15，issue #455）。
 
+## 派前探一针（#842）
+
+起 agent 前用**和 agent 完全相同的请求路径**流式探一次（8 token、判据「2xx + 收到真内容」，与 ai-gateway-stack 探针同款 DECISIONS §61）：绿放行、红换选型序下一位（同厂闸不放宽）、全红报帅停手（一个 agent 都不起，任务书/账本写清探了谁、各自什么码）。探不了的 provider（devin/cursor/grok Build 等无对齐端点）返回 `unscanned`，**不当绿**——没探到绿又没证据挂了才按现状起，watchdog 兜底。工人接线在 `scripts/lib/dispatch/launch.mjs`（`preflightWorkerSlate`）、审官在 `scripts/lib/dispatch/reviewer.mjs`（`preflightReviewer`），引擎在 `scripts/lib/preflight.mjs`。
+
+- **配置**：`docs/dispatch-policy.json` 的 `preflight` 节（`enabled/timeoutMs/maxCandidates/useHealthTable`），dao-check ㉛ 校验取值范围。`--no-preflight` 单次跳过且记账。
+- **健康表 + 熔断表**（消费端只读，`scripts/lib/provider-health.mjs`）：健康表 `~/.dao/provider-health.json` 红 → 后置照探（红可能已恢复，不直接拦）、过期(>2×interval)/缺失 → unknown 注明「健康表没查成」不拦；熔断表 `~/.dao/provider-breaker.json`（可选，#843）`open` 未到冷却 → 直接拦 `availability:cooldown`，`half-open` → 后置探一针，缺失=无熔断。
+- **状态**：每探一次追加 `~/.dao/preflight/<YYYY-MM-DD>.ndjson`（`ts,target,state,code,ms,why,dispatchId`）。
+- **动作**：`node scripts/dao.mjs preflight --model <id> [--json]`（只读，输出与 ndjson 同形）。
+
 ## 小活打包
 
 多个编辑级小活打包成一单，派一个工人。不因活小而主会话下场。
