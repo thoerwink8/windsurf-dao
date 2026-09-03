@@ -19,6 +19,7 @@ import {
   nextStrike,
   scanRound,
   decideHitAction,
+  stateWindow,
 } from '../scripts/lib/agent-stall-detect.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -73,6 +74,20 @@ test('#833 撞限流判据', async (t) => {
     });
     await t.test('正常工作屏面不报', () => {
       assert.deepEqual(matchFingerprints(SCREEN_OK), []);
+    });
+    await t.test('429 只在上部任务书、底部正常 → 整轮不报（状态窗，v0 假阳同款）', () => {
+      const history = [
+        ...Array.from({ length: 40 }, () => '正在读 diff…'),
+        '夹具原文 exceeded retry limit, last status: 429 Too Many Requests',
+        ...Array.from({ length: 20 }, () => '正在写审查意见…'),
+      ].join('\n');
+      assert.equal(matchFingerprints(stateWindow(history)).length, 0);
+      const r = scanRound({
+        agents: [{ handle: 'term_hist', screen: history, displayName: 'PR-#834 审官·gpt-5.6-sol' }],
+        prevState: {},
+        strikesNeeded: 1,
+      });
+      assert.equal(r.reports.length, 0);
     });
     await t.test('判别力：拿掉 429 三条，今天这段必须变不报', () => {
       const stripped = STALL_FINGERPRINTS.filter((fp) => {

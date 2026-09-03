@@ -30,6 +30,15 @@ export const STALL_FINGERPRINTS = [
 ];
 
 const DEFAULT_STRIKES = 2;
+const DEFAULT_STATE_WINDOW = 12;
+
+/** 只看屏面底部当前状态，不对上部任务书/叙述做关键字匹配（watchdog v0 假阳同款）。 */
+export function stateWindow(text, lines = DEFAULT_STATE_WINDOW) {
+  const n = Number(lines);
+  const take = Number.isFinite(n) && n > 0 ? n : DEFAULT_STATE_WINDOW;
+  const parts = String(text || '').split(/\r?\n/);
+  return parts.slice(-take).join('\n');
+}
 
 export function fingerprintLabel(fp) {
   return fp instanceof RegExp ? fp.source : String(fp);
@@ -85,7 +94,7 @@ export function nextStrike({ prev = {}, hitSig = null, need = DEFAULT_STRIKES } 
  * 扫一轮 agent 终端。agents[].screen 是字符串；screen === null 算没查成。
  * @returns {{ nextState: object, reports: object[], unscanned: number, scanned: number }}
  */
-export function scanRound({ agents = [], prevState = {}, strikesNeeded = DEFAULT_STRIKES } = {}) {
+export function scanRound({ agents = [], prevState = {}, strikesNeeded = DEFAULT_STRIKES, stateLines = DEFAULT_STATE_WINDOW } = {}) {
   const next = {};
   const reports = [];
   let unscanned = 0;
@@ -97,7 +106,7 @@ export function scanRound({ agents = [], prevState = {}, strikesNeeded = DEFAULT
       continue;
     }
     scanned += 1;
-    const hits = matchFingerprints(t.screen);
+    const hits = matchFingerprints(stateWindow(t.screen, stateLines));
     const hitSig = hits[0] || null;
     const step = nextStrike({ prev: prevState[t.handle], hitSig, need: strikesNeeded });
     if (!step.keep) continue;
