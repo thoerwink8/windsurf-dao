@@ -133,13 +133,24 @@ test('#833 撞限流判据', async (t) => {
   });
 
   await t.test('判别性实验② / 选型序走完', async (t) => {
-    await t.test('工人 grok（gw）+ 当前 GPT → 下一位 luna 也是 gw → 报帅停手，不降级同厂', () => {
+    await t.test('#843 后 grok 工人 + GPT 审官 → 下一位 luna 是 OpenAI 家族，跨厂可换', () => {
       const d = decideHitAction({
         displayName: 'PR-#827 审官·gpt-5.6-sol',
         workerId: 'grok-4.6',
         models: MODELS,
         passerIds: ['gpt-5.6-sol', 'gpt-5.6-luna', 'kimi-k3'],
         order: ['gpt-5.6-sol', 'gpt-5.6-luna', 'kimi-k3'],
+      });
+      assert.equal(d.action, 'switch');
+      assert.equal(d.to, 'gpt-5.6-luna');
+    });
+    await t.test('选型序剩余全是 grok 家族 → 报帅停手，不降级同厂', () => {
+      const d = decideHitAction({
+        displayName: 'PR-#827 审官·gpt-5.6-sol',
+        workerId: 'grok-4.6',
+        models: MODELS,
+        passerIds: ['gpt-5.6-sol', 'grok-4.6'],
+        order: ['gpt-5.6-sol', 'grok-4.6'],
       });
       assert.equal(d.action, 'escalate');
       assert.equal(d.exhausted, true);
@@ -273,7 +284,7 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
   assert.equal(r2.status, 0, r2.stdout + r2.stderr);
   switched = readFileSync(log, 'utf8');
   assert.match(switched, /--pr 664/);
-  assert.match(switched, /--reviewer gpt-5.6-luna/);
+  assert.match(switched, /--reviewer kimi-k3/);
   const said = readFileSync(sayLog, 'utf8');
   assert.match(said, /已换人|将换人|命中/);
 
@@ -305,7 +316,7 @@ if (args[0] === 'terminal' && args[1] === 'read') {
 if (args[0] === 'worktree' && args[1] === 'ps') {
   emit({ worktrees: [
     { worktreeId: 'wt-worker', displayName: 'PR-#664 工人·grok-4.6', parentWorktreeId: null, linkedIssue: 664 },
-    { worktreeId: 'wt-reviewer', displayName: 'PR-#664 审官·gpt-5.6-sol', parentWorktreeId: 'wt-worker' },
+    { worktreeId: 'wt-reviewer', displayName: 'PR-#664 审官·glm-5.2', parentWorktreeId: 'wt-worker' },
   ] });
   process.exit(0);
 }

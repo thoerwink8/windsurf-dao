@@ -10,11 +10,11 @@
 
 进展：
 - 判据：`scripts/lib/agent-stall-detect.mjs`；CLI：`scripts/agent-stall-watch.mjs`（一条命令两处用）
-- systemd：`host/machine/systemd/dao-agent-stall.{service,timer}`，15 分钟 + 连红 2 轮；安��：`sudo bash scripts/install-agent-stall-watch.sh`
+- systemd：`host/machine/systemd/dao-agent-stall.{service,timer}`，15 分钟 + 连红 2 轮；安装：`sudo bash scripts/install-agent-stall-watch.sh`
 - 指纹补 `exceeded retry limit` / `429`（watchdog 表同步补）
-- 换人走 `planCapacitySwitch`（跳过工人那一厂）；走完报帅停手
+- 换人走 `planCapacitySwitch`（跳过工人那一厂，#843 后按真实供应商家族）；走完报帅停手
 - `server-check` ⑮ 另起一项（不改 #829 automations 行；⑭ 是指挥官自检）
 - 夹具 `tests/agent-stall-watch.test.js` 绿；`node scripts/dao-check.mjs` 绿
 - live ①：`term_fd909a60`（PR-#827 审官·gpt-5.6-sol）屏面仍是今天这段 429；连红 2 轮报 `exceeded retry limit`
-- live ②：工人 grok-4.6 与剩余审官同厂 → **报帅停手**（不许降级同厂）。证据：`命中 exceeded retry limit → 报帅停手：选型序剩余 4 位全部与工人同厂，没法再换（不许降级同厂）`
+- 判别性②：夹具跨厂工人两轮调换人钩子；选型序剩余全同厂 → 报帅停手不调钩子。rebase 后 #843 按家族判同厂，grok 工人从 GPT 可换到 luna/kimi，不再因 provider=gw 误报同厂
 - **欠账（没查成）**：工人无 sudo，`dao-agent-stall.timer` 未装，垫片 `agent-stall-watch.timer` 仍在 `/etc/systemd/system/`。合并后由有 sudo 的人跑安装脚本。
