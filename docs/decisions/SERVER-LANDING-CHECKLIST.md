@@ -21,7 +21,7 @@
 | 2 | 服务器上装本仓 + 接线 + 凭据 | `NEW-MACHINE.md`（`git clone` + `node scripts/onboard.mjs`；凭据手动带，onboard 不碰） | `node scripts/dao-check.mjs --full` 绿 | 已达成（2026-09-03，#797/#798） |
 | 3 | 编排回岗：`--full` 设为常态；派工/审官流程整体恢复 | `host/skills/dispatch/SKILL.md`「编排态工作法」+ `host/skills/dispatch/review-standard.md` | 一单端到端：卡 → PR → 审官判绿 → 合并 | 已达成（2026-09-03，#797/#798） |
 | 4 | 删冻结件（五层判活链 / flow 常驻 / powershell 依赖等），用 systemd + automations 顶替 | `2026-08-24-...-from-zero.md` 的保留/删除清单；`2026-08-31-local-guards-retire-with-server.md` 恢复路径 | 故意 kill 进程后自动拉起的记录；被删机制的测试同 PR 删（孤儿测试闸会拦） | 待拍板，见 #807 |
-| 5 | 选型收拢：渠道降级唯一归网关，仓内 JSON 只留职责层；价目改从网关用量取数 | `2026-08-31-land-check-slim-review-standard.md` §4 | `docs/model-routing.json` 无 pipes 层且 dao-check 绿 | |
+| 5 | 选型收拢：渠道降级唯一归网关，仓内 JSON 只留职责层；价目改从网关用量取数 | `2026-08-31-land-check-slim-review-standard.md` §4 | `docs/model-routing.json` 无 pipes 层且 dao-check 绿 | 职责层收拢见 PR #830（价目/fx 另开单） |
 | 6 | 群聊机器人 Phase 1→3（前置「审官质量标准」已于 2026-08-31 完成） | `2026-08-31-groupchat-triage-dispatch.md` | 按该文四阶段表逐阶段验收 | Phase 2 见 #801 |
 | 7 | land 接上 automations（合并后自动清理） | `2026-08-31-land-check-slim-review-standard.md` §3 | 服务器上 automations 调 `node scripts/land.mjs`，与本机同一条命令 | |
 

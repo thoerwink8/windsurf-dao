@@ -9,7 +9,7 @@ const FIXTURE = path.join(REPO, 'tests', 'fixtures', 'next-launch-cases.json');
 const LIB = path.join(REPO, 'scripts', 'lib', 'next-launch.mjs');
 
 describe('nextLaunch', () => {
-  it('夹具四条：瞬时不切 / 2 次硬失败切支路 / 管子尽了换模型 / 名单走完才失败', async (t) => {
+  it('夹具：瞬时不切 / 2 次硬失败换模型 / 名单走完才失败', async (t) => {
     const {
       nextLaunch, classifyLaunchFailure, advanceLaunchState, normalizePipes, attachPipes, buildSlate, routingSlateIds, resolveDispatchSlate,
     } = await import('file://' + LIB.replace(/\\/g, '/'));
@@ -55,12 +55,12 @@ describe('nextLaunch', () => {
       });
       assert.ok(r.action === 'retry' && r.pipeIndex === 0 && r.hardFailsOnThisPipe === 0, JSON.stringify(r));
     });
-    await t.test('advance：连续 2 次硬失败切支路', () => {
+    await t.test('advance：连续 2 次硬失败换模型', () => {
       const r = advanceLaunchState({
         slate: doc.slate, modelId: 'kimi-k3', pipeIndex: 0,
         hardFailsOnThisPipe: 1, transientFailsOnThisPipe: 0, kind: 'hard',
       });
-      assert.ok(r.action === 'switch_pipe' && r.pipeIndex === 1 && r.modelId === 'kimi-k3', JSON.stringify(r));
+      assert.ok(r.action === 'switch_model' && r.pipeIndex === 0 && r.modelId === 'grok-4.6', JSON.stringify(r));
     });
 
     await t.test('normalizePipes：缺省一根', () => {
@@ -101,7 +101,7 @@ describe('nextLaunch', () => {
       assert.ok(ids[0] === 'grok-4.6' && ids[1] === 'deepseek-v4-flash', JSON.stringify(ids));
     });
 
-    await t.test('#618 返工：拒模两次硬失败切支路', () => {
+    await t.test('#828：拒模两次硬失败换模型（不再切支路）', () => {
       const kind = classifyLaunchFailure({ verifyReason: '拒模', text: 'Cannot use this model' });
       assert.ok(kind === 'hard', '拒模 = hard');
       const first = advanceLaunchState({
@@ -113,7 +113,7 @@ describe('nextLaunch', () => {
         slate: doc.slate, modelId: 'kimi-k3', pipeIndex: 0,
         hardFailsOnThisPipe: first.hardFailsOnThisPipe, kind,
       });
-      assert.ok(second.action === 'switch_pipe' && second.pipeIndex === 1 && second.modelId === 'kimi-k3', JSON.stringify(second));
+      assert.ok(second.action === 'switch_model' && second.pipeIndex === 0 && second.modelId === 'grok-4.6', JSON.stringify(second));
     });
 
     const routingAll = {

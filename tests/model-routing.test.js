@@ -18,17 +18,7 @@ function isGwVendor(id) {
   return s === 'gw' || s.startsWith('gw-');
 }
 
-function rankVendors(vendors) {
-  return [...(vendors || [])]
-    .filter((v) => v && v.id && v.禁用 !== true)
-    .sort((a, b) => {
-      const ra = a.顺位 == null ? Infinity : Number(a.顺位);
-      const rb = b.顺位 == null ? Infinity : Number(b.顺位);
-      return ra - rb || String(a.id).localeCompare(String(b.id));
-    });
-}
-
-/** 每个启用模型的全部启用厂商（任意顺位）+ 顺位 1 厂商。 */
+/** 每个启用模型的单值落地（provider + cli_model）。 */
 function scanEnabled(doc) {
   const slots = [];
   const vendors = [];
@@ -40,26 +30,24 @@ function scanEnabled(doc) {
       const list = Array.isArray(cfg?.模型) ? cfg.模型 : [];
       for (const m of list) {
         if (!m?.id || m.禁用 === true) continue;
-        const enabled = rankVendors(m.厂商);
-        if (enabled.length === 0) continue;
+        if (m.provider == null || String(m.provider).trim() === '') continue;
+        const vendor = String(m.provider).trim();
+        const cli = m.cli_model == null ? null : String(m.cli_model);
         slots.push({
           duty,
           workType,
           model: String(m.id),
           rank: m.顺位,
-          vendor: String(enabled[0].id),
-          cli_model: enabled[0].cli_model == null ? null : String(enabled[0].cli_model),
+          vendor,
+          cli_model: cli,
         });
-        for (const v of enabled) {
-          vendors.push({
-            duty,
-            workType,
-            model: String(m.id),
-            vendor: String(v.id),
-            cli_model: v.cli_model == null ? null : String(v.cli_model),
-            顺位: v.顺位,
-          });
-        }
+        vendors.push({
+          duty,
+          workType,
+          model: String(m.id),
+          vendor,
+          cli_model: cli,
+        });
       }
     }
   }

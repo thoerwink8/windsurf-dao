@@ -134,9 +134,6 @@ export function providerLaunchProblems(doc) {
   const used = new Set();
   for (const m of models) {
     if (m && m.provider) used.add(m.provider);
-    for (const pipe of m && Array.isArray(m.pipes) ? m.pipes : []) {
-      if (pipe && pipe.provider) used.add(pipe.provider);
-    }
   }
   if (used.size === 0) return { unscanned: true, problems: ['没扫到任何带 provider 的模型'] };
   const problems = [];

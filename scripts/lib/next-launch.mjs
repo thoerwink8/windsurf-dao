@@ -1,18 +1,11 @@
-// scripts/lib/next-launch.mjs —— 管子层纯函数（#615）
+// scripts/lib/next-launch.mjs —— 换模型纯函数（#828：渠道级降级唯一归网关）
 //
-// 派工 / 验开工 / 换管只读 pipes，不另造映射表。
-// 管子不进打分：本文件不碰 Score，只决定下一根管子或名单里的下一个模型。
+// 派工 / 验开工只读每个模型的单值落地（provider + cli_model）。
+// 不进打分：本文件不碰 Score，只决定名单里的下一个模型。仓内不再换支路。
 
-/** 缺省 = 只一根，等于现在的 provider + cli_model。 */
+/** 单值落地。旧 pipes[] 多支路已删，不读、不合成。 */
 export function normalizePipes(model) {
   if (!model || typeof model !== 'object') return [];
-  const listed = Array.isArray(model.pipes) ? model.pipes.filter(p => p && p.provider) : [];
-  if (listed.length > 0) {
-    return listed.map(p => ({
-      provider: String(p.provider),
-      cli_model: p.cli_model != null && String(p.cli_model) !== '' ? String(p.cli_model) : undefined,
-    }));
-  }
   if (!model.provider) return [];
   return [{
     provider: String(model.provider),
@@ -22,7 +15,7 @@ export function normalizePipes(model) {
   }];
 }
 
-/** 把模型 id 名单钉上每根管子。找不到的 id 丢掉（调用方应先做幽灵检查）。 */
+/** 把模型 id 名单钉上单值落地。找不到的 id 丢掉（调用方应先做幽灵检查）。 */
 export function attachPipes(ids, routingModels) {
   const byId = new Map();
   for (const m of routingModels || []) {
@@ -41,7 +34,7 @@ export function attachPipes(ids, routingModels) {
 
 /**
  * 过门闩后的模型序：JSON 顺位第一，否则配额/最高分那条队列。
- * 返回裸 id 数组；管子由 attachPipes 另钉。
+ * 返回裸 id 数组；落地由 attachPipes 另钉。
  */
 export function buildSlate({ passers, rankOrder, matchedRoute, quotaTop, byScore } = {}) {
   const passerIds = new Set((passers || []).map(d => d && d.model).filter(Boolean));
@@ -64,10 +57,24 @@ function findSlateIndex(slate, modelId) {
   return (slate || []).findIndex(s => s && s.id === modelId);
 }
 
+function landingOf(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (Array.isArray(entry.pipes) && entry.pipes[0] && entry.pipes[0].provider) {
+    return {
+      provider: String(entry.pipes[0].provider),
+      cli_model: entry.pipes[0].cli_model != null && String(entry.pipes[0].cli_model) !== ''
+        ? String(entry.pipes[0].cli_model)
+        : undefined,
+    };
+  }
+  return normalizePipes(entry)[0] || null;
+}
+
 /**
  * 下一步启动。
- * hardFailsOnThisPipe < 2 → 同一根重试（瞬时失败走这条：调用方不要把瞬时算进 hardFails）。
- * hardFailsOnThisPipe >= 2 → 切 pipes[1]；管子尽了换 slate 下一个模型的主路；名单走完才 fail。
+ * hardFailsOnThisPipe < 2 → 同一模型重试（瞬时失败走这条：调用方不要把瞬时算进 hardFails）。
+ * hardFailsOnThisPipe >= 2 → 换 slate 下一个模型；名单走完才 fail。
+ * 不再切支路：渠道级降级唯一归网关（#828）。
  */
 export function nextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe } = {}) {
   const models = Array.isArray(slate) ? slate : [];
@@ -75,36 +82,24 @@ export function nextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe } = 
   if (idx < 0) {
     return { action: 'fail', reason: 'model_not_in_slate', exhausted: true };
   }
-  const entry = models[idx];
-  const pipes = Array.isArray(entry.pipes) ? entry.pipes : [];
   const pi = Number(pipeIndex) || 0;
   const fails = Number(hardFailsOnThisPipe) || 0;
 
   if (fails < 2) {
-    const pipe = pipes[pi] || null;
     return {
       action: 'retry',
       modelId,
       pipeIndex: pi,
-      pipe,
-    };
-  }
-  if (pi + 1 < pipes.length) {
-    return {
-      action: 'switch_pipe',
-      modelId,
-      pipeIndex: pi + 1,
-      pipe: pipes[pi + 1],
+      pipe: landingOf(models[idx]),
     };
   }
   const next = models[idx + 1];
   if (next && next.id) {
-    const nextPipes = Array.isArray(next.pipes) ? next.pipes : [];
     return {
       action: 'switch_model',
       modelId: next.id,
       pipeIndex: 0,
-      pipe: nextPipes[0] || null,
+      pipe: landingOf(next),
     };
   }
   return { action: 'fail', reason: 'slate_exhausted', exhausted: true };
@@ -150,7 +145,7 @@ export function advanceLaunchState({
       action: 'retry',
       modelId,
       pipeIndex,
-      pipe: ((slate || []).find(s => s && s.id === modelId) || {}).pipes?.[pipeIndex] || null,
+      pipe: landingOf((slate || []).find(s => s && s.id === modelId)),
       hardFailsOnThisPipe,
       transientFailsOnThisPipe: transientFailsOnThisPipe + 1,
     };
@@ -160,7 +155,7 @@ export function advanceLaunchState({
   if (next.action === 'retry') {
     return { ...next, hardFailsOnThisPipe: fails, transientFailsOnThisPipe: 0 };
   }
-  if (next.action === 'switch_pipe' || next.action === 'switch_model') {
+  if (next.action === 'switch_model') {
     return { ...next, hardFailsOnThisPipe: 0, transientFailsOnThisPipe: 0 };
   }
   return { ...next, hardFailsOnThisPipe: fails, transientFailsOnThisPipe: 0 };

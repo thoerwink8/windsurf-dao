@@ -11,15 +11,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw/grok-4.6",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03 用户拍板：除 GPT 外一律 pi；前置2 grok 渠道写文件/跑测试/gh 绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
         },
         {
           "id": "devin-deepseek-v4-flash-max",
@@ -29,15 +22,8 @@
           "拍板": "2026-09-03",
           "status": "正式",
           "禁用时间": "2026-09-03",
-          "厂商": [
-            {
-              "id": "devin",
-              "cli_model": "deepseek-v4-flash-max",
-              "顺位": null,
-              "禁用": true,
-              "理由": "随模型退役；CLI 卸载等本单验收后"
-            }
-          ]
+          "provider": "devin",
+          "cli_model": "deepseek-v4-flash-max"
         },
         {
           "id": "deepseek-v4-flash",
@@ -46,15 +32,8 @@
           "理由": "写码 fallback；2026-09-03 通道 gw-dspool（前置2 绿）",
           "拍板": "2026-08-16",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-dspool/deepseek-v4-flash",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03 拍板：能用 pi 的用 pi；前置2 工具样例绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-dspool/deepseek-v4-flash"
         }
       ]
     },
@@ -68,14 +47,7 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gpt",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "Codex 主路；#822 不给 cursor 留支路"
-            }
-          ]
+          "provider": "gpt"
         },
         {
           "id": "deepseek-v4-flash",
@@ -85,15 +57,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-dspool/deepseek-v4-flash",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-dspool；前置2 工具样例绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-dspool/deepseek-v4-flash"
         },
         {
           "id": "glm-5.2",
@@ -103,15 +68,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/glm-5-2",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-windsurf；前置2 glm 渠道工具样例绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/glm-5-2"
         }
       ]
     },
@@ -125,15 +83,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw/grok-4.6",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw；前置2 grok 渠道绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
         }
       ]
     },
@@ -147,15 +98,8 @@
           "拍板": "2026-08-14",
           "status": "试用",
           "trial_since": "2026-08-14",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw/grok-4.6",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw；前置2 grok 渠道绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
         },
         {
           "id": "gemini-3.7-flash",
@@ -165,15 +109,8 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/gemini-3-7-flash-high",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03：非 GPT 只走 pi；网关 id 是 gemini-3-7-flash-high"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
         },
         {
           "id": "gpt-5.6-sol",
@@ -182,14 +119,7 @@
           "理由": "codex 查证备选",
           "拍板": "2026-08-12",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "gpt",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "Codex 主路；#822 不给 cursor 留支路"
-            }
-          ]
+          "provider": "gpt"
         }
       ]
     },
@@ -203,15 +133,8 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-sub/composer-2.5",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03：非 GPT 只走 pi；composer 在 gw-sub / gw-cursor 注册"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-sub/composer-2.5"
         },
         {
           "id": "kimi-k3",
@@ -221,15 +144,8 @@
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-sub/kimi-k3-high",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03 拍板映射：kimi-k3 → gw-sub/kimi-k3-high"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-sub/kimi-k3-high"
         },
         {
           "id": "glm-5.2",
@@ -239,15 +155,8 @@
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-19",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/glm-5-2",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-windsurf；前置2 绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/glm-5-2"
         },
         {
           "id": "gemini-3.7-flash",
@@ -257,15 +166,8 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/gemini-3-7-flash-high",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "2026-09-03：非 GPT 只走 pi"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
         }
       ]
     }
@@ -280,14 +182,7 @@
           "理由": "2026-08-22 审官只用 Codex（GPT 主路）；#822 用户例外：GPT 必须走 Codex",
           "拍板": "2026-08-22",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "gpt",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "Codex 主路；#822 不给 cursor 留支路"
-            }
-          ]
+          "provider": "gpt"
         },
         {
           "id": "gpt-5.6-luna",
@@ -297,15 +192,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/gpt-5.6-luna",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi --provider gw-windsurf --model gpt-5.6-luna；仅降级路径"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/gpt-5.6-luna"
         },
         {
           "id": "claude-opus",
@@ -314,15 +202,8 @@
           "理由": "2026-08-22 审官位暂时禁用；#822 claude CLI 从选型移除，本条保持禁用",
           "拍板": "2026-08-14",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "claude",
-              "cli_model": "opus",
-              "顺位": null,
-              "禁用": true,
-              "理由": "禁用名单；CLI 卸载等 #822 验收后"
-            }
-          ]
+          "provider": "claude",
+          "cli_model": "opus"
         },
         {
           "id": "kimi-k3",
@@ -332,15 +213,8 @@
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-sub/kimi-k3-high",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-sub"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-sub/kimi-k3-high"
         },
         {
           "id": "glm-5.2",
@@ -350,15 +224,8 @@
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-19",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-windsurf/glm-5-2",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-windsurf；前置2 绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-windsurf/glm-5-2"
         },
         {
           "id": "grok-4.6",
@@ -368,15 +235,8 @@
           "拍板": "2026-08-14",
           "status": "试用",
           "trial_since": "2026-08-14",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw/grok-4.6",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw；前置2 绿"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
         }
       ]
     }
@@ -391,15 +251,8 @@
           "理由": "判断类主选；#822 从 opencode-go 改 gw-dspool（服务器 og 403）",
           "拍板": "2026-08-16",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-dspool/deepseek-v4-pro-max",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "dspool 无无后缀 deepseek-v4-pro，用 pro-max；2026-09-03 服务器 ping 通"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-dspool/deepseek-v4-pro-max"
         },
         {
           "id": "gpt-5.6-sol",
@@ -408,14 +261,7 @@
           "理由": "codex 判断备选",
           "拍板": "2026-08-12",
           "status": "正式",
-          "厂商": [
-            {
-              "id": "gpt",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "Codex 主路；#822 不给 cursor 留支路"
-            }
-          ]
+          "provider": "gpt"
         },
         {
           "id": "kimi-k3",
@@ -425,15 +271,8 @@
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-sub/kimi-k3-high",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-sub"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-sub/kimi-k3-high"
         },
         {
           "id": "composer-2.5",
@@ -443,15 +282,8 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "厂商": [
-            {
-              "id": "gw",
-              "cli_model": "gw-sub/composer-2.5",
-              "顺位": 1,
-              "禁用": false,
-              "理由": "pi gw-sub"
-            }
-          ]
+          "provider": "gw",
+          "cli_model": "gw-sub/composer-2.5"
         },
         {
           "id": "ox-alpha-free",
@@ -462,15 +294,8 @@
           "status": "试用",
           "trial_since": "2026-08-22",
           "禁用时间": "2026-09-03",
-          "厂商": [
-            {
-              "id": "opencode-go",
-              "cli_model": "ox-alpha-free",
-              "顺位": null,
-              "禁用": true,
-              "理由": "随模型从选型移除"
-            }
-          ]
+          "provider": "opencode-go",
+          "cli_model": "ox-alpha-free"
         }
       ]
     }
@@ -490,8 +315,14 @@
     },
     {
       "id": "ban-ox-alpha-free-未验证工种",
-      "模型": ["ox-alpha-free"],
-      "工种": ["查证", "审查", "UI"],
+      "模型": [
+        "ox-alpha-free"
+      ],
+      "工种": [
+        "查证",
+        "审查",
+        "UI"
+      ],
       "理由": "ox-alpha-free 只进写码+判断试用候选（#718）；#822 已从选型禁用，本禁令留着防加回",
       "拍板": "2026-08-22"
     },
