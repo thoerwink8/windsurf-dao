@@ -1,8 +1,8 @@
 // 完工信号契约检查（#575 ⑥，dao-check 第 ⑯ 项）。
 //
-// 病：flow 读 PR comment 首行「完工」，工人只发编排层 worker_done → 流转器看不见。
+// 病：读侧认 issue comment 首行「完工」，工人只发编排层 worker_done → 指挥官看不见。
 // #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（并按需起审官）。
-// 检查逻辑自己持有契约文本，不 import flow / review-state 的正则（自己查自己查不出错）。
+// 检查逻辑自己持有契约文本，不 import review-state 的正则（自己查自己查不出错）。
 // 两边对不上（比如把 worker-brief 的「完工」改成「已完成」）必须报红。
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -71,10 +71,10 @@ export function checkCompletionSignal({ root, files } = {}) {
     return {
       fail: [
         `完工信号契约两边对不上 ${problems.length} 处`,
-        'flow 读首行「完工」，soldier-book / dispatch skill 必须教同一句话；改一边必须改另一边',
+        'review-state.mjs 读首行「完工」，soldier-book / dispatch skill 必须教同一句话；改一边必须改另一边',
         problems.slice(0, 4).join('；'),
       ],
     };
   }
-  return { green: '完工信号契约：soldier-book / flow 都读 issue comment 首行「完工」' };
+  return { green: '完工信号契约：soldier-book / review-state 都读 issue comment 首行「完工」' };
 }
