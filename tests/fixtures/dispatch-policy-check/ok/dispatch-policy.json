@@ -1,1 +1,5 @@
-{ "preflight": { "enabled": true, "timeoutMs": 5000, "maxCandidates": 4, "useHealthTable": true }, "commander": { "maxDispatchPerRound": 2, "requireModelInRouting": true } }
+{
+  "preflight": { "enabled": true, "timeoutMs": 5000, "maxCandidates": 4, "useHealthTable": true },
+  "breaker": { "windowHours": 24, "failuresToTrip": 3, "cooldownHours": 24, "halfOpenProbes": 1 },
+  "commander": { "maxDispatchPerRound": 2, "requireModelInRouting": true }
+}
