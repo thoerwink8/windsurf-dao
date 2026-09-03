@@ -161,7 +161,10 @@ export function providerLaunchProblems(doc) {
  * #802：id 在目录里 ≠ agent 真起来了。无头 Linux 上 pi/devin 会落成裸 bash，
  * 派工在 startOrcaWorker 读屏回退（见 agent-ready.mjs），不要把 toml start 改成 command。 */
 export function orcaKnownAgentId({ provider, command } = {}) {
-  const bin = String(command || '').trim().split(/\s+/)[0].replace(/\\/g, '/').split('/').pop().toLowerCase();
+  // #823：launch 命令前可能拼 DAO_TASK=… DAO_ACTOR=… DAO_RUN=…，bin 取第一个非赋值 token。
+  const parts = String(command || '').trim().split(/\s+/).filter(Boolean);
+  const binTok = parts.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) || parts[0] || '';
+  const bin = binTok.replace(/\\/g, '/').split('/').pop().toLowerCase();
   const p = String(provider || '').toLowerCase();
   if (bin === 'cursor-agent' || bin === 'agent' || p === 'cursor') return 'cursor';
   if (bin === 'grok' || p === 'grok') return 'grok';
@@ -179,6 +182,112 @@ export function launchCliModel(command) {
   if (long) return long[1];
   const short = s.match(/(?:^|\s)-m\s+(\S+)/);
   return short ? short[1] : null;
+}
+
+/** 网关 X-Dao-Task 的仓名。本仓默认；测试可覆盖。 */
+export const DEFAULT_DAO_REPO = 'thoerwink8/windsurf-dao';
+
+/** POSIX `VAR=val` 安全字符：repo、#issue、模型 id、run/dispatch id。 */
+const DAO_ENV_SAFE = /^[A-Za-z0-9_#./:@+-]+$/;
+
+function daoRepoOf(repo) {
+  const r = String(repo || '').trim();
+  return r || DEFAULT_DAO_REPO;
+}
+
+function daoDigits(raw, { stripPr } = {}) {
+  let s = String(raw ?? '').trim();
+  if (!s) return '';
+  s = s.replace(/^#/, '');
+  if (stripPr) s = s.replace(/^pr/i, '');
+  return s;
+}
+
+/**
+ * DAO_TASK = owner/repo#<issue>；缺 issue 落 #pr<N>（不许空）。
+ * 两者都缺才用 fallback（start 用 start，飞书用 triage）。
+ */
+export function daoTaskId({ repo, issue, pr, fallback } = {}) {
+  const r = daoRepoOf(repo);
+  const issueNo = daoDigits(issue);
+  if (issueNo) return `${r}#${issueNo}`;
+  const prNo = daoDigits(pr, { stripPr: true });
+  if (prNo) return `${r}#pr${prNo}`;
+  const fb = String(fallback || '').trim().replace(/^#/, '');
+  if (fb) return `${r}#${fb}`;
+  throw new Error('daoTaskId 缺 issue 也缺 pr（会空）');
+}
+
+/** DAO_ACTOR = worker-<模型> | reviewer-<模型> | shuai */
+export function daoActorId({ role, model } = {}) {
+  const r = String(role || '').trim().toLowerCase();
+  if (r === 'shuai' || r === '帅') return 'shuai';
+  const m = String(model || '').trim();
+  if (r === 'reviewer' || r === '审官') return m ? `reviewer-${m}` : 'reviewer';
+  if (r === 'feishu-triage' || r === 'feishu') return 'feishu-triage';
+  return m ? `worker-${m}` : 'worker';
+}
+
+function assertDaoEnvValue(key, value) {
+  const v = String(value ?? '').trim();
+  if (!v) throw new Error(`缺 ${key}`);
+  if (!DAO_ENV_SAFE.test(v)) throw new Error(`${key}=${v} 含非法字符`);
+  return v;
+}
+
+/**
+ * 三变量齐。run 优先用调用方给的（Run / dispatch / issueN）；
+ * 空则按 issue / pr / fallback 兜底——dispatch id 在 worker-start 之后才有，
+ * 进程启动读不到（Orca terminal create 也不支持 Unix env）。
+ */
+export function buildDaoTraceEnv({ repo, issue, pr, role, model, run, fallback } = {}) {
+  const runId = String(run || '').trim()
+    || (daoDigits(issue) ? `issue${daoDigits(issue)}` : '')
+    || (daoDigits(pr, { stripPr: true }) ? `pr${daoDigits(pr, { stripPr: true })}` : '')
+    || String(fallback || '').trim()
+    || 'start';
+  return {
+    DAO_TASK: assertDaoEnvValue('DAO_TASK', daoTaskId({ repo, issue, pr, fallback })),
+    DAO_ACTOR: assertDaoEnvValue('DAO_ACTOR', daoActorId({ role, model })),
+    DAO_RUN: assertDaoEnvValue('DAO_RUN', runId),
+  };
+}
+
+export function isDaoTraceEnv(trace) {
+  return !!(trace && trace.DAO_TASK && trace.DAO_ACTOR && trace.DAO_RUN);
+}
+
+export function normalizeDaoTrace(trace, extra = {}) {
+  if (!trace) return null;
+  if (isDaoTraceEnv(trace) && extra.model == null) return trace;
+  return buildDaoTraceEnv({ ...trace, ...extra });
+}
+
+/** 只给 pi（deepseek / gw / opencode-go）。别的 agent 不拼——Windows 上 `VAR=val cmd` 会炸。 */
+export function shouldPrefixDaoTrace(launch) {
+  return orcaKnownAgentId(launch || {}) === 'pi';
+}
+
+export function prefixLaunchWithDaoTrace(command, env) {
+  const cmd = String(command || '').trim();
+  if (!cmd) throw new Error('prefixLaunchWithDaoTrace 没给 command');
+  if (/^DAO_TASK=/.test(cmd)) return cmd;
+  const e = isDaoTraceEnv(env) ? env : buildDaoTraceEnv(env || {});
+  const parts = ['DAO_TASK', 'DAO_ACTOR', 'DAO_RUN'].map((k) => {
+    return `${k}=${assertDaoEnvValue(k, e[k])}`;
+  });
+  return `${parts.join(' ')} ${cmd}`;
+}
+
+/** 给 pi 的 launch.command 前面拼三变量；非 pi 原样返回。 */
+export function applyDaoTraceToLaunch(launch, trace) {
+  if (!launch || !shouldPrefixDaoTrace(launch) || !trace) return launch;
+  const env = normalizeDaoTrace(trace, { model: trace.model });
+  return {
+    ...launch,
+    command: prefixLaunchWithDaoTrace(launch.command, env),
+    daoTrace: env,
+  };
 }
 
 /** 起法只读路由表 [providers.*].start（#680）。禁止按二进制名硬编码 agent|command。

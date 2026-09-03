@@ -154,6 +154,9 @@ import {
   buildSplitRoleSpec,
   startSplitChildren,
   resolveLaunch,
+  DEFAULT_DAO_REPO,
+  shouldPrefixDaoTrace,
+  applyDaoTraceToLaunch,
   formatDesktopLaunchNotes,
   reviewerCardName,
 
@@ -443,6 +446,20 @@ function closeWorkerHandle(handle) {
   orca(argsTerminalClose({ terminal: handle, tab: false }));
 }
 
+/** #823：起 pi 时要带的溯源头。Orca terminal create 不支持 Unix env，只能拼在 launch 命令前。 */
+function daoTraceFor({ role, model, issue, pr, run, fallback } = {}) {
+  const r = String(role || '').trim().toLowerCase();
+  return {
+    repo: DEFAULT_DAO_REPO,
+    issue,
+    pr,
+    role,
+    model,
+    run,
+    fallback: fallback || (r === 'shuai' || r === '帅' ? 'start' : 'dispatch'),
+  };
+}
+
 /** #633：建卡默认空壳只拿来关。认识的 agent 走 worker-start --agent；特殊 argv / reclaude 走 --command。禁止 send 进 pwsh。 */
 function findDefaultTerminalForLaunch(worktreeId) {
   for (let i = 0; i < 10; i++) {
@@ -464,12 +481,24 @@ function findAgentTerminalHandle(worktreeId, wantAgentId) {
   return picked.handle || null;
 }
 
-function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand }) {
+function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand, daoTrace }) {
+  // #823：Orca terminal create 不支持 Unix env。pi 网关扩展读 DAO_*，
+  // 只能拼在 --command 前；--agent pi 由 Orca 起进程，带不上。
+  // 不改 toml start=agent（#802）；只在本跳有溯源头且目标是 pi 时走 command。
+  if (daoTrace && shouldPrefixDaoTrace(launch || { command })) {
+    const traced = applyDaoTraceToLaunch(launch || { command }, daoTrace);
+    command = traced.command;
+    if (launch) {
+      launch.command = traced.command;
+      launch.daoTrace = traced.daoTrace;
+    }
+  }
   const spec = agentStartSpec(launch || { command });
   const found = findDefaultTerminalForLaunch(worktreeId);
   const plan = planLaunchFallback({ foundHandle: found.handle || null });
   if (plan.closeHandle) closeWorkerHandle(plan.closeHandle);
-  if (spec.mode === 'agent' && !forceCommand) {
+  const mustCommand = forceCommand || !!(launch && launch.daoTrace);
+  if (spec.mode === 'agent' && !mustCommand) {
     return {
       ok: true,
       handle: null,
@@ -774,7 +803,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
   };
 }
 
-function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile }) {
+function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile, daoTrace }) {
   let modelId = slate[startIndex].id;
   let pipeIndex = 0;
   let hardFailsOnThisPipe = 0;
@@ -803,6 +832,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       title,
       command: launch.command,
       launch,
+      daoTrace: daoTrace ? { ...daoTrace, model: modelId } : undefined,
     });
     if (!term.ok) {
       const kind = classifyLaunchFailure({ error: term.error });
@@ -842,7 +872,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     // #762/#753：command 型 TUI（devin）起法 = create → wait tui-idle → worker-start。
     // wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底；不等就绪就送字会
     // agent_prompt_stalled（devin 未就绪不接受 dispatch_input）。agent 型由 orca 管就绪。
-    if (launch?.start === 'command' && launch.provider !== 'devin') {
+    if (launch.provider !== 'devin' && (launch?.start === 'command' || launch?.daoTrace)) {
       const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, pipe.provider) }));
       if (!ready.ok) {
         return { ok: false, error: `工人 TUI 等就绪失败：${errText(ready.error)}`, handle, attempts };
@@ -1559,6 +1589,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     title: args.name,
     created,
     promptFile,
+    daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
   });
   if (!launched.ok) {
     failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, orderId: order.id, ...plan });
@@ -1672,6 +1703,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           worktreeId,
           title,
           created: scratch,
+          daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
         });
         if (!childLaunch.ok) {
           return { ok: false, error: childLaunch.error || '子工人 TUI 未就绪', handle: scratch.workerHandle };
@@ -1868,6 +1900,7 @@ function cmdDispatchBatch(args) {
         title,
         command: launch.command,
         launch,
+        daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
       });
       if (!term.ok) return { ok: false, error: term.error };
       if (term.deferred) {
@@ -2715,6 +2748,10 @@ function cmdStart(args) {
     });
   } catch (e) { fail(String(e.message || e)); }
   noteDroppedFlags(launch);
+  const startTrace = daoTraceFor({ role: 'shuai', model: args.model || launch.provider, fallback: 'start' });
+  if (shouldPrefixDaoTrace(launch)) {
+    launch = applyDaoTraceToLaunch(launch, startTrace);
+  }
 
   const startCap = assertCodexLaunch({ command: launch.command });
   if (!startCap.ok) fail(startCap.error);
@@ -2730,6 +2767,7 @@ function cmdStart(args) {
     command: launch.command,
     launch,
     forceCommand: true, // 裸起 TUI 无 task，不能 --agent
+    daoTrace: startTrace,
   });
   if (!created.ok) fail(created.error, { command: launch.command });
   const handle = created.handle;
@@ -3187,6 +3225,12 @@ function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    daoTrace: daoTraceFor({
+      role: 'reviewer',
+      model: picked.modelId,
+      issue: args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null,
+      pr: args.pr,
+    }),
   });
   if (!revTerm.ok) {
     rmReviewerCard();
@@ -3593,6 +3637,12 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    daoTrace: daoTraceFor({
+      role: 'reviewer',
+      model: args.reviewer,
+      issue: args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null,
+      pr: args.pr,
+    }),
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;

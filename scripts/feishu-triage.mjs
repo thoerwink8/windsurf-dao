@@ -12,8 +12,9 @@
 //     （hub_card → 总控群卡片；issue_created → 留账，回执已在 replies 里）。
 //   · deps 按记录：{ghSearch, ghCreateIssue, ghComment, now, state(Map),
 //     allowOpenIds, llm}；llm 按补充2：HK 网关 ANTHROPIC_BASE_URL +
-//     /v1/chat/completions、model grok-4.6、key 读 ~/.mirasim/keys/grok.key、
-//     超时 60s、失败抛错（块B 收到错误回「稍后重试」，不编造）。
+//     /v1/chat/completions、model grok-4.6、key 读 ~/.mirasim/keys/feishu-triage.key
+//     （#823，专用 token，不进聊天/不进仓）、超时 60s、失败抛错（块B 收到错误回「稍后重试」，不编造）。
+//     fetch 带 X-Dao-Actor / X-Dao-Task / X-Dao-Run，网关落 logs.other。
 //   · 话题状态 Map 由本文件持久化到 ~/.dao/feishu-threads.json（每次事件后落盘）。
 //
 // 块A/块B 并行（#801 记录）：B 缺席时本文件自动用空 triage 桩（stubTriage），
@@ -64,7 +65,9 @@ export const DEFAULT_GROUPS = join(REPO_ROOT, 'host', 'machine', 'feishu-groups.
 export const DEFAULT_CREDS = join(homedir(), '.mirasim', 'keys', 'feishu-app.json');
 export const DEFAULT_STATE = join(homedir(), '.dao', 'feishu-threads.json');
 export const SDK_DIR = join(REPO_ROOT, 'host', 'machine', 'feishu-triage', 'node_modules');
-export const GROK_KEY = join(homedir(), '.mirasim', 'keys', 'grok.key');
+export const FEISHU_TRIAGE_KEY = join(homedir(), '.mirasim', 'keys', 'feishu-triage.key');
+/** @deprecated #823 飞书 llm 改读 feishu-triage.key */
+export const GROK_KEY = FEISHU_TRIAGE_KEY;
 
 function log(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -243,21 +246,47 @@ export async function loadCore() {
 // ---------------------------------------------------------------------------
 // deps.llm（补充2）：HK 网关 grok。
 //   POST ${ANTHROPIC_BASE_URL}/v1/chat/completions，model grok-4.6，
-//   key 读 ~/.mirasim/keys/grok.key，超时 60s；失败抛错（块B 收到错误回「稍后重试」）。
-export function makeLlm({ gateway, keyPath = GROK_KEY, fetchImpl = fetch, timeoutMs = 60000 }) {
-  return async function llm({ system, user, json = false } = {}) {
+//   key 读 ~/.mirasim/keys/feishu-triage.key（#823），超时 60s；失败抛错（块B 收到错误回「稍后重试」）。
+//   三头：X-Dao-Actor=feishu-triage，X-Dao-Task=<repo>#<已建单号或 triage>，X-Dao-Run=<chatId>。
+export function daoTraceHeaders({ repo, issueNumber, chatId, actor, daoTask, daoRun, daoActor } = {}) {
+  const r = String(repo || '').trim();
+  const n = issueNumber == null || String(issueNumber).trim() === '' ? '' : String(issueNumber).trim();
+  const task = daoTask
+    || (r ? `${r}#${n || 'triage'}` : (n || 'triage'));
+  return {
+    'X-Dao-Actor': daoActor || actor || 'feishu-triage',
+    'X-Dao-Task': task,
+    'X-Dao-Run': daoRun || String(chatId || '').trim() || 'feishu-triage',
+  };
+}
+
+export function makeLlm({
+  gateway, keyPath = FEISHU_TRIAGE_KEY, fetchImpl = fetch, timeoutMs = 60000, traceRef = null,
+} = {}) {
+  return async function llm({ system, user, json = false, daoTask, daoRun, daoActor } = {}) {
     if (!gateway) throw new Error('ANTHROPIC_BASE_URL 未设置——llm 不可用（补充2：网关与 claude 同源，systemd drop-in 注入）');
     let key;
     try {
       key = readFileSync(keyPath, 'utf8').trim();
     } catch (e) {
-      throw new Error(`grok key 读不到（${keyPath}）：${e.message}`);
+      throw new Error(`feishu-triage key 读不到（${keyPath}）：${e.message}`);
     }
-    if (!key) throw new Error('grok key 为空');
+    if (!key) throw new Error('feishu-triage key 为空');
     let resp;
     try {
+      const inbound = traceRef && traceRef.current;
+      const store = traceRef && traceRef.store;
+      const thread = inbound && store && store.map && store.map.get(inbound.rootId);
       const headers = { 'content-type': 'application/json' };
       headers.authorization = `Bearer ${key}`;
+      Object.assign(headers, daoTraceHeaders({
+        repo: inbound && inbound.repo,
+        issueNumber: thread && thread.issue && thread.issue.number,
+        chatId: inbound && inbound.chatId,
+        daoTask,
+        daoRun,
+        daoActor,
+      }));
       resp = await fetchImpl(`${gateway}/v1/chat/completions`, {
         method: 'POST',
         headers,
@@ -343,6 +372,7 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh 
 // deps 装配（记录：{ghSearch, ghCreateIssue, ghComment, now, state, allowOpenIds, llm}）
 export function buildDeps({ creds = null, store, gateway = process.env.ANTHROPIC_BASE_URL || '', ghBin, run, fetchImpl } = {}) {
   const gh = makeGhDeps({ ghBin, run });
+  const daoTraceRef = { current: null, store };
   return {
     ...gh,
     now: () => new Date(),
@@ -350,7 +380,8 @@ export function buildDeps({ creds = null, store, gateway = process.env.ANTHROPIC
     // （2026-09-03 实咬：三问答过的又被重问）。
     get state() { return store.map; },
     allowOpenIds: Array.isArray(creds?.allowOpenIds) ? creds.allowOpenIds : [],
-    llm: makeLlm({ gateway, fetchImpl }),
+    llm: makeLlm({ gateway, fetchImpl, traceRef: daoTraceRef }),
+    daoTraceRef,
   };
 }
 
@@ -492,7 +523,13 @@ export async function handleEvent(event, { groups, store, deps, triage, client, 
     if (canon && canon !== inbound.rootId) { inbound.aliasedFrom = inbound.rootId; inbound.rootId = canon; }
   }
   log({ type: 'inbound', inbound });
-  const out = await triage(inbound, deps);
+  if (deps && deps.daoTraceRef) deps.daoTraceRef.current = inbound;
+  let out;
+  try {
+    out = await triage(inbound, deps);
+  } finally {
+    if (deps && deps.daoTraceRef) deps.daoTraceRef.current = null;
+  }
   const replies = out.replies || [];
   const actions = out.actions || [];
   for (const r of replies) {

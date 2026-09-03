@@ -148,7 +148,7 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 
 ## 终审即校准
 
-每单合并时主会话跑 `scripts/calibrate.mjs`，把本单成绩（返工轮数 / 红项）+ 该模型在该任务类的累计战绩原样呈现给用户。校准更新永远可见，不落暗账。
+每单合并时主会话跑 `scripts/calibrate.mjs`，把本单成绩（返工轮数 / 红项）+ 该模型在该任务类的累计战绩原样呈现给用户。校准更新永远可见，不落暗账。网关日志按 `dao_task` 查这张单花了多少（怎么查见 ai-gateway-stack #3）。
 
 **label 是校准数据源（#564）**：`dispatch` 成功时已把 `model/<模型>` `type/<角色>` 打到目标 issue（自动，不用人记）；审官/帅合并前跑 `node scripts/dao.mjs pr-sync-labels --pr <N>` 从署名 issue 同步到 PR（worker 手打遗漏的兜底；非零退出 = 没同步成，补上再合）。没 label 的 PR 进不了战绩（calibrate 只认带 model/* 与 type/* 的已合并 PR）。
 
