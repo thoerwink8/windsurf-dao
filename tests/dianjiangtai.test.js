@@ -572,11 +572,11 @@ describe('dianjiangtai', () => {
     await t.test('model-routing.json 写码顺位 grok > flash（#822 devin 退役）', () => {
       assert.ok(rankOrder[0] === GROK && rankOrder[1] === FLASH && !rankOrder.includes(DEVIN), '写码顺位  →  ' + JSON.stringify(rankOrder));
     });
-    await t.test('审官顺位 GPT 顶位（Claude 禁用）', () => {
-      assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-sol', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
+    await t.test('审官顺位 1 = gpt-5.6-luna（#843 过渡：pqapi 故障，codex 每单必死，临时切 luna）', () => {
+      assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-luna', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
     });
-    await t.test('审官顺位 2 = gpt-5.6-luna（#817 pqapi 降级）', () => {
-      assert.ok((policy.reviewerOrder || [])[1] === 'gpt-5.6-luna', '审官顺位 2  →  ' + JSON.stringify(policy.reviewerOrder));
+    await t.test('审官顺位 2 = gpt-5.6-sol（Codex 主路，pqapi 恢复后切回顺位 1）', () => {
+      assert.ok((policy.reviewerOrder || [])[1] === 'gpt-5.6-sol', '审官顺位 2  →  ' + JSON.stringify(policy.reviewerOrder));
     });
     const planOrder = policy.rankOrderFor('工人', '方案');
     await t.test('model-routing.json 方案顺位 gpt > flash > glm（#817 订正）', () => {
@@ -844,9 +844,9 @@ describe('dianjiangtai', () => {
       assert.ok(djReview.status === 0, 'CLI 审读退出码 0  →  ' + (djReview.stderr || "").slice(0, 240));
     });
     const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
-    const gptProvider = localProviderOf("gpt-5.6-sol");
-    await t.test('CLI 审读 A = provider/gpt-5.6-sol（GPT 顶位）', () => {
-      assert.ok(!!gptProvider && djReviewOut.options.A.model === `${gptProvider}/gpt-5.6-sol`, 'CLI 审读 A = provider/gpt-5.6-sol  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    const lunaProvider = localProviderOf("gpt-5.6-luna");
+    await t.test('CLI 审读 A = provider/gpt-5.6-luna（#843 过渡顶位，pqapi 故障）', () => {
+      assert.ok(!!lunaProvider && djReviewOut.options.A.model === `${lunaProvider}/gpt-5.6-luna`, 'CLI 审读 A = provider/gpt-5.6-luna  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
     await t.test('CLI 审读 A reason=reviewer_order', () => {
       assert.ok(djReviewOut.options.A.reason === "reviewer_order", 'CLI 审读 A reason=reviewer_order  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));

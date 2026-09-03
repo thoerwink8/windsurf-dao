@@ -248,9 +248,9 @@ describe('#682 微通道 quick-fix', () => {
     });
     const ok = runCli(['--issue', '565', '--model', 'grok-4.6', '--dry-run'], env);
     const pOk = payload(ok);
-    await t.test('issue 565（model/grok + reviewer/gpt）dry-run → 0 且计划齐', () => {
+    await t.test('issue 565（model/grok + reviewer/luna）dry-run → 0 且计划齐', () => {
       assert.ok(ok.status === 0 && pOk.ok === true && pOk.dryRun === true, JSON.stringify(pOk));
-      assert.ok(pOk.reviewer === 'gpt-5.6-sol' && pOk.branch === 'thoerwink8/quickfix-565-微修', JSON.stringify(pOk));
+      assert.ok(pOk.reviewer === 'gpt-5.6-luna' && pOk.branch === 'thoerwink8/quickfix-565-微修', JSON.stringify(pOk));
       assert.ok(pOk.labels.includes('type/微修') && pOk.labels.includes('model/grok-4.6'), JSON.stringify(pOk.labels));
       assert.ok(pOk.gate && pOk.gate.state === 'pass', JSON.stringify(pOk.gate));
     });

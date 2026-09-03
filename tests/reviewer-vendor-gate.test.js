@@ -42,13 +42,25 @@ describe('#679 起审官同厂硬闸', () => {
     });
     const { loadRoutingPolicy } = await POLICY_LOAD;
     const liveModels = loadRoutingPolicy().models;
+    // #843 判别性：grok(xAI) 工人 + luna(OpenAI) 审官 → 放行。两者网关落地都是 gw，但真实供应商
+    // 家族 grok≠gpt，跨厂成立。这是 #822/#828 埋洞的修复：从前按 provider(gw==gw) 误判成同厂拒绝。
     const lunaGate = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('grok 工人 + luna 审官 → 同厂拒绝（#822 工人切 gw 后 luna 也是 gw）', () => {
-      assert.ok(lunaGate.ok === false && lunaGate.state === 'same_vendor' && lunaGate.workerProvider === 'gw' && lunaGate.reviewerProvider === 'gw',
-        'luna 降级同厂  →  ' + JSON.stringify(lunaGate));
+    await t.test('grok 工人 + luna 审官 → 放行（真实供应商 grok/xAI ≠ gpt/OpenAI，虽同经 gw）', () => {
+      assert.ok(lunaGate.ok === true && lunaGate.state === 'pass'
+        && lunaGate.workerVendor === 'grok' && lunaGate.reviewerVendor === 'gpt'
+        && lunaGate.workerProvider === 'gw' && lunaGate.reviewerProvider === 'gw',
+      '#843 grok 工人 + luna 审官应放行  →  ' + JSON.stringify(lunaGate));
+    });
+    // 判别性另一半：同为 OpenAI 家族（sol 直连 gpt、luna 经 gw）→ 同厂拒绝。堵上按 provider 判时
+    // gpt(provider gpt) vs luna(provider gw) 会被误当跨厂放行的旧洞。
+    const gptOnGpt = assertCrossVendor({ workerId: 'gpt-5.6-sol', reviewerId: 'gpt-5.6-luna', models: liveModels });
+    await t.test('gpt-sol 工人 + gpt-luna 审官 → 同厂拒绝（都是 OpenAI，落地 gpt/gw 不同也拒）', () => {
+      assert.ok(gptOnGpt.ok === false && gptOnGpt.state === 'same_vendor'
+        && gptOnGpt.workerVendor === 'gpt' && gptOnGpt.reviewerVendor === 'gpt',
+      'gpt 家族自审应拒  →  ' + JSON.stringify(gptOnGpt));
     });
     const liveGpt = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-sol', models: liveModels });
-    await t.test('grok 工人（gw）+ gpt 审官 → 通过（#822 跨厂只剩 Codex 主路）', () => {
+    await t.test('grok 工人（gw）+ gpt-sol 审官 → 通过（grok/xAI ≠ gpt/OpenAI）', () => {
       assert.ok(liveGpt.ok === true && liveGpt.state === 'pass' && liveGpt.workerProvider === 'gw' && liveGpt.reviewerProvider === 'gpt',
         'gw 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
     });
@@ -69,6 +81,25 @@ describe('#679 起审官同厂硬闸', () => {
     });
     await t.test('三态互不相同', () => {
       assert.ok(pass.state !== same.state && same.state !== miss.state && pass.state !== miss.state);
+    });
+  });
+
+  it('#843 vendorFamilyOf：真实供应商家族按 id 前缀，未登记 → null（不猜）', async (t) => {
+    const { vendorFamilyOf } = await GATE_LOAD;
+    await t.test('sol 与 luna 同属 OpenAI 家族 gpt（落地 gpt/gw 不同也同家族）', () => {
+      assert.ok(vendorFamilyOf('gpt-5.6-sol') === 'gpt' && vendorFamilyOf('gpt-5.6-luna') === 'gpt');
+    });
+    await t.test('grok/kimi/glm/deepseek/gemini/claude 各归各家', () => {
+      assert.ok(vendorFamilyOf('grok-4.6') === 'grok'
+        && vendorFamilyOf('kimi-k3') === 'kimi'
+        && vendorFamilyOf('glm-5.2') === 'glm'
+        && vendorFamilyOf('deepseek-v4-flash') === 'deepseek'
+        && vendorFamilyOf('gemini-3.7-flash') === 'gemini'
+        && vendorFamilyOf('claude-opus') === 'claude');
+    });
+    await t.test('未登记家族 / 空 → null（挡住而非放行）', () => {
+      assert.ok(vendorFamilyOf('mistral-large') === null
+        && vendorFamilyOf('') === null && vendorFamilyOf(null) === null);
     });
   });
 

@@ -1062,7 +1062,7 @@ describe('dao', () => {
     const pPick = (() => { try { return JSON.parse((cliPick.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('CLI reviewer-create --pr 42 --dry-run 打印出自读选型',
       () => {
-        assert.ok(cliPick.status === 0 && pPick.ok === true && pPick.dryRun === true && pPick.reviewer === 'gpt-5.6-sol' && pPick.reviewerSource === 'label',
+        assert.ok(cliPick.status === 0 && pPick.ok === true && pPick.dryRun === true && pPick.reviewer === 'gpt-5.6-luna' && pPick.reviewerSource === 'label',
           'CLI reviewer-create --pr 42 --dry-run 打印出自读选型  →  ' + `status=${cliPick.status} ${JSON.stringify(pPick)} stderr=${cliPick.stderr}`);
       });
 
@@ -1109,9 +1109,9 @@ describe('dao', () => {
     await t.test('CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run',
       () => {
         assert.ok(cliWd.status === 0 && pWd.ok === true && pWd.wired === true && pWd.round === 'first' && pWd.shouldCreate === true
-        && pWd.reviewer === 'gpt-5.6-sol'
+        && pWd.reviewer === 'gpt-5.6-luna'
         && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
-        && pWd.reviewerCreate.reviewer === 'gpt-5.6-sol'
+        && pWd.reviewerCreate.reviewer === 'gpt-5.6-luna'
         && pWd.settled === false
         && /^完工/.test(pWd.comment || ''),
         'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);

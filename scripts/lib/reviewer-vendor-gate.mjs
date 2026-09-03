@@ -2,7 +2,42 @@
 //
 // 纯函数。输入 = 工人模型 id + 审官模型 id + 路由表 models。
 // 输出三态分开：通过 / 同厂拒绝 / 没查成。
-// 不读点将台打分，不复用「已经选好了」当判据——厂商只从路由表 [[models]].provider 当场查。
+// 不读点将台打分，不复用「已经选好了」当判据。
+//
+// #843（过渡措施 2026-09-03）修 #822/#828 埋的洞：判「同厂」按**模型家族/网关后面的
+// 真实供应商**（vendorFamilyOf），不是 provider 字段。#828 收拢后 provider 是**网关落地 id**
+// （gw / gw-windsurf / gpt / pqapi…，供 launch 用），一个 gw 后面挂着多家真实供应商——
+// grok(xAI)、gpt-luna(OpenAI)、glm(智谱)、kimi(月之暗面)、deepseek。工人全切 gw 后
+// 用 provider 判会把 grok 工人与 luna 审官误判成同厂拒绝（见 docs/decisions/2026-09-03-all-pi-gw.md
+// 「已知后果」，那单明写「要修另开单」——本单就是那张单）；反过来 gpt-sol(provider gpt) 与
+// gpt-luna(provider gw) 是同一家 OpenAI 却会被误判成跨厂放行。真实厂商只认模型家族。
+// provider（网关落地）仍随结果返回，只作诊断，不作判据。
+
+// 已知真实供应商家族（网关后面那一家）。模型 id 以 `家族[-版本…]` 命名，取前缀即家族。
+// 新增一家真实供应商要在这里登记；漏登记 → 家族没查成 → unscanned（挡住、报警），不静默放行。
+const VENDOR_FAMILIES = [
+  'gpt',      // OpenAI（sol 直连 codex、luna 经 gw-windsurf，同属 OpenAI）
+  'claude',   // Anthropic
+  'grok',     // xAI
+  'kimi',     // 月之暗面 Moonshot
+  'glm',      // 智谱 Zhipu
+  'gemini',   // Google
+  'deepseek', // DeepSeek
+  'composer', // Cursor Composer
+  'ox',       // opencode
+  'devin',    // Cognition Devin（封装层，已退役）
+];
+
+/** 模型 id → 真实供应商家族（网关后面那一家）。查不出 → null（调用方按 unscanned 处置，不许猜）。 */
+export function vendorFamilyOf(modelId) {
+  if (modelId == null) return null;
+  const id = String(modelId).trim().toLowerCase();
+  if (!id) return null;
+  for (const fam of VENDOR_FAMILIES) {
+    if (id === fam || id.startsWith(fam + '-')) return fam;
+  }
+  return null;
+}
 
 export function providerOf(modelId, models) {
   if (!Array.isArray(models)) return { ok: false, state: 'unscanned', error: '路由表没查成（没拿到 models）' };
@@ -26,7 +61,9 @@ export function providerOf(modelId, models) {
  *   error?: string,
  *   workerId?: string,
  *   reviewerId?: string,
- *   workerProvider?: string,
+ *   workerVendor?: string,     // 真实供应商家族——判据
+ *   reviewerVendor?: string,
+ *   workerProvider?: string,   // 网关落地 id——仅诊断，不作判据
  *   reviewerProvider?: string,
  * }}
  */
@@ -40,6 +77,7 @@ export function assertCrossVendor({ workerId, reviewerId, models } = {}) {
   if (reviewerId == null || String(reviewerId).trim() === '') {
     return { ok: false, state: 'unscanned', error: '审官模型 id 没查成' };
   }
+  // providerOf 先保「id 在路由表且有落地 provider」（缺 → unscanned，不猜）；网关落地只作诊断。
   const worker = providerOf(workerId, models);
   if (!worker.ok) {
     return { ok: false, state: 'unscanned', error: `工人：${worker.error || '没查成厂商'}` };
@@ -48,13 +86,24 @@ export function assertCrossVendor({ workerId, reviewerId, models } = {}) {
   if (!reviewer.ok) {
     return { ok: false, state: 'unscanned', error: `审官：${reviewer.error || '没查成厂商'}` };
   }
-  if (worker.provider === reviewer.provider) {
+  // 判据 = 真实供应商家族（网关后面那一家），不是网关落地 provider。
+  const workerVendor = vendorFamilyOf(worker.id);
+  if (!workerVendor) {
+    return { ok: false, state: 'unscanned', error: `工人 ${worker.id} 没查成真实供应商家族（VENDOR_FAMILIES 未登记，不许猜）` };
+  }
+  const reviewerVendor = vendorFamilyOf(reviewer.id);
+  if (!reviewerVendor) {
+    return { ok: false, state: 'unscanned', error: `审官 ${reviewer.id} 没查成真实供应商家族（VENDOR_FAMILIES 未登记，不许猜）` };
+  }
+  if (workerVendor === reviewerVendor) {
     return {
       ok: false,
       state: 'same_vendor',
-      error: `工人 ${worker.id} 与审官 ${reviewer.id} 同厂（${worker.provider}），审查必须换厂商`,
+      error: `工人 ${worker.id} 与审官 ${reviewer.id} 同厂（真实供应商 ${workerVendor}；网关落地 ${worker.provider}/${reviewer.provider}），审查必须换厂商`,
       workerId: worker.id,
       reviewerId: reviewer.id,
+      workerVendor,
+      reviewerVendor,
       workerProvider: worker.provider,
       reviewerProvider: reviewer.provider,
     };
@@ -64,6 +113,8 @@ export function assertCrossVendor({ workerId, reviewerId, models } = {}) {
     state: 'pass',
     workerId: worker.id,
     reviewerId: reviewer.id,
+    workerVendor,
+    reviewerVendor,
     workerProvider: worker.provider,
     reviewerProvider: reviewer.provider,
   };

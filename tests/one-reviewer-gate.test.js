@@ -105,7 +105,7 @@ describe('一 PR 一审官闸', () => {
     assert.ok(reuse.action === 'reuse' && reuse.outcome === 'reused' && reuse.worktreeId === 'wt_rev', JSON.stringify(reuse));
   });
 
-  it('失败不换厂；审官位只许当前 Codex', async () => {
+  it('失败不换厂；审官位只许当前顺位1（#843 过渡 = gpt-5.6-luna）', async () => {
     const S = await S_LOAD;
     const stop = S.planReviewerCreateAfterFail({ error: 'ensure 超时' });
     assert.ok(stop.ok === false && stop.switchVendor === false && stop.retry === false
@@ -113,12 +113,16 @@ describe('一 PR 一审官闸', () => {
 
     const routing = S.loadRouting();
     const seat = S.currentReviewerSeat(routing);
-    assert.ok(seat.ok === true && seat.modelId === 'gpt-5.6-sol', JSON.stringify(seat));
-    const pass = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing });
+    // #843 过渡：审官顺位1 = gpt-5.6-luna（pqapi 故障，codex 每单必死）。恢复后切回 gpt-5.6-sol。
+    assert.ok(seat.ok === true && seat.modelId === 'gpt-5.6-luna', JSON.stringify(seat));
+    const pass = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-luna', routing });
     assert.ok(pass.ok === true, JSON.stringify(pass));
+    // 非顺位1（含 codex 主路 sol）当场拒：只许 reviewerOrder[0]，不许换厂/降级。
+    const sol = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing });
     const kimi = S.assertReviewerSeat({ reviewerId: 'kimi-k3', routing });
     const glm = S.assertReviewerSeat({ reviewerId: 'glm-5.2', routing });
     const grok = S.assertReviewerSeat({ reviewerId: 'grok-4.6', routing });
+    assert.ok(sol.ok === false && /不许换厂/.test(sol.error), JSON.stringify(sol));
     assert.ok(kimi.ok === false && /不许换厂/.test(kimi.error), JSON.stringify(kimi));
     assert.ok(glm.ok === false && grok.ok === false, JSON.stringify({ glm, grok }));
     const miss = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing: null });
