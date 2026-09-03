@@ -26,6 +26,11 @@ export const SKIP_RELS = new Set([
   IGNORE_REL,
   'scripts/lib/machine-path-check.mjs',
   'tests/machine-path.test.js',
+  // CHANGELOG 由发布列车（#800）从**历史提交标题**自动生成：历史里提过的仓外路径会被当成
+  // 「仓里新出现的指针」反复报红，而那些路径往往早已随代码删掉，人再也修不掉它。
+  // 它是生成物不是代码，扫它只产出机器自己制造的红——2026-09-04 实咬：v0.1.0 一发布，
+  // 历史标题里的 ~/.codex/skills 让每张在途 PR 的 CI 全红。
+  'CHANGELOG.md',
 ]);
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|zip|7z|gz|exe|dll|pdb|bin|wasm)$/i;
