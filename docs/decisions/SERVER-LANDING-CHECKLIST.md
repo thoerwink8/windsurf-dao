@@ -20,10 +20,10 @@
 | 1 | 起 orca 无头运行时（AppImage + Xvfb + systemd + 防火墙） | `NEW-MACHINE.md` §9d（每条都在 Ubuntu 24.04 真跑过） | `orca serve --port 6768` 由 systemd 拉起；kill 后自动回来 | 已达成（2026-09-03，#797/#798） |
 | 2 | 服务器上装本仓 + 接线 + 凭据 | `NEW-MACHINE.md`（`git clone` + `node scripts/onboard.mjs`；凭据手动带，onboard 不碰） | `node scripts/dao-check.mjs --full` 绿 | 已达成（2026-09-03，#797/#798） |
 | 3 | 编排回岗：`--full` 设为常态；派工/审官流程整体恢复 | `host/skills/dispatch/SKILL.md`「编排态工作法」+ `host/skills/dispatch/review-standard.md` | 一单端到端：卡 → PR → 审官判绿 → 合并 | 已达成（2026-09-03，#797/#798） |
-| 4 | 删冻结件（五层判活链 / flow 常驻 / powershell 依赖等），用 systemd + automations 顶替 | `2026-08-24-...-from-zero.md` 的保留/删除清单；`2026-08-31-local-guards-retire-with-server.md` 恢复路径 | 故意 kill 进程后自动拉起的记录；被删机制的测试同 PR 删（孤儿测试闸会拦） | 待拍板，见 #807 |
-| 5 | 选型收拢：渠道降级唯一归网关，仓内 JSON 只留职责层；价目改从网关用量取数 | `2026-08-31-land-check-slim-review-standard.md` §4 | `docs/model-routing.json` 无 pipes 层且 dao-check 绿 | 职责层收拢见 PR #830（价目/fx 另开单） |
-| 6 | 群聊机器人 Phase 1→3（前置「审官质量标准」已于 2026-08-31 完成） | `2026-08-31-groupchat-triage-dispatch.md` | 按该文四阶段表逐阶段验收 | Phase 2 见 #801 |
-| 7 | land 接上 automations（合并后自动清理） | `2026-08-31-land-check-slim-review-standard.md` §3 | 服务器上 automations 调 `node scripts/land.mjs`，与本机同一条命令 | 本 PR（#829 / `scripts/install-land-automation.mjs`） |
+| 4 | 删冻结件（五层判活链 / flow 常驻 / powershell 依赖等），用 systemd + automations 顶替 | `2026-08-24-...-from-zero.md` 的保留/删除清单；`2026-08-31-local-guards-retire-with-server.md` 恢复路径 | 故意 kill 进程后自动拉起的记录；被删机制的测试同 PR 删（孤儿测试闸会拦） | 已消歧（#807）；前置 #833/PR#834 已合（2026-09-03），待拆块派 |
+| 5 | 选型收拢：渠道降级唯一归网关，仓内 JSON 只留职责层；价目改从网关用量取数 | `2026-08-31-land-check-slim-review-standard.md` §4 | `docs/model-routing.json` 无 pipes 层且 dao-check 绿 | 已达成（PR #830 合并 2026-09-03）；价目/fx 另开单待拍 |
+| 6 | 群聊机器人 Phase 1→3（前置「审官质量标准」已于 2026-08-31 完成） | `2026-08-31-groupchat-triage-dispatch.md` | 按该文四阶段表逐阶段验收 | Phase 2 见 #801；Phase 3 待用户拍 |
+| 7 | land 接上 automations（合并后自动清理） | `2026-08-31-land-check-slim-review-standard.md` §3 | 服务器上 automations 调 `node scripts/land.mjs`，与本机同一条命令 | 已达成（PR #832 合并 2026-09-03） |
 
 ## 两条不许绕的
 
@@ -42,3 +42,10 @@
 
 - 2026-09-02：机器到位（Contabo Cloud VPS 6，EU；中转站不搬，A/B 见 ai-gateway-stack DECISIONS §56）。无头六坑全文在 PR #796（当时未合）。
 - 2026-09-03：第 1–3 步已达成——`kill -9` orca-serve 自动拉起（§9d / PR #796）；首单端到端 #797 / PR #798。第 4 步见 #807（待拍板）。第 6 步 Phase 2 见 #801。
+- 2026-09-03 晚：第 5、7 步达成（PR #830 / #832）。同晚服务器新增运行时件（本页只留指针）：
+  - 撞限流探测进 systemd：`dao-agent-stall.timer`，15 分钟一轮 + 自动换人（#833 / PR #834；垫片已退役）。
+  - 服务器指挥官（眼睛常驻、大脑按需醒）+ 发布列车（#800，PR #840 / #838）。指挥官 scan/inventory timer 在跑；
+    **act 派单闸首轮实咬三洞后停用中**（单轮无上限、过时 model 标签照派、并发建树撞锁），修复 #849 / PR #850，合并后重开。
+  - 派前探一针 + F15 接健康表（#842 / PR #845）；健康表由 ai-gateway-stack 探针写（其 DECISIONS §66）。
+  - 编排层熔断 provider 级 cooldown（#843 / PR #851）；与网关侧熔断的边界见 ai-gateway-stack DECISIONS §67。
+  - 审官首选临时切 gpt-5.6-luna（PR #844，pqapi 故障过渡；切回条件=#843 上线且 pqapi 恢复后再拍）。
