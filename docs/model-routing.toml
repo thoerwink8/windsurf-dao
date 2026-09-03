@@ -56,7 +56,7 @@ shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节�
 每弹一次框就是帅被叫醒一次，正是要消灭的「帅退不出闭环」。
 git push 仍会被宿主硬拦，授权词还是往终端回「推」——那是对外发布闸，和 TUI 确认框不是一层。
 """
-why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
+why = "2026-09-03 #822：写码 grok-4.6 改走 pi gw，Grok Build CLI 从选型移除。本节 launch 留给未卸的机器和按 provider=grok 的测试；卸载等本单验收后。"
 note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
 decided = "2026-08-14"
 
@@ -169,13 +169,13 @@ start = "agent"
 launch = "pi --model {model}"
 launch_model = "gw-dspool/deepseek-v4-flash"
 launch_note = """
-pi 走自建中转站（pi-gateway 扩展，provider id gw-dspool）。
-用户 2026-09-03 拍板：能用 pi 的用 pi，成本最小。
-服务器（Contabo）实测 `pi --provider gw-dspool --model deepseek-v4-flash` 无工具/带工具均通。
-派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸名跨 provider 歧义）。
+pi 走自建中转站（pi-gateway 扩展）。#822：非 GPT 工人/审官备选一律本 provider。
+cli_model 带组前缀：`gw/grok-4.6`、`gw-dspool/deepseek-v4-flash`、`gw-windsurf/glm-5-2`、`gw-sub/kimi-k3-high`。
+派工写法 `pi --model {cli_model}`（#602：裸名跨 provider 歧义）。
 网关装法归 ai-gateway-stack（INDEX E 类），本仓只登记启动模板。
+前置2（2026-09-03）：grok / dspool flash / windsurf glm 三渠道写文件+node --test+gh 均绿。
 """
-why = "2026-09-03 拍板：自建中转站最大的用处就是能用 pi 的用 pi。opencode-go 在服务器上 403 RegionError，需后台 opt-in，降为 flash 写码顺位 2。"
+why = "2026-09-03 拍板：除 GPT 必须走 Codex 外，其他都切 pi。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等 #822 验收后。toml 里这些节先留着给未卸的机器和禁用条目。"
 decided = "2026-09-03"
 
 [providers.cursor]

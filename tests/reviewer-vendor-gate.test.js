@@ -42,10 +42,15 @@ describe('#679 起审官同厂硬闸', () => {
     });
     const { loadRoutingPolicy } = await POLICY_LOAD;
     const liveModels = loadRoutingPolicy().models;
-    const lunaPass = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('grok 工人 + luna 审官 → 通过（厂商 gw ≠ grok，#817）', () => {
-      assert.ok(lunaPass.ok === true && lunaPass.state === 'pass' && lunaPass.reviewerProvider === 'gw',
-        'luna 降级不同厂  →  ' + JSON.stringify(lunaPass));
+    const lunaGate = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-luna', models: liveModels });
+    await t.test('grok 工人 + luna 审官 → 同厂拒绝（#822 工人切 gw 后 luna 也是 gw）', () => {
+      assert.ok(lunaGate.ok === false && lunaGate.state === 'same_vendor' && lunaGate.workerProvider === 'gw' && lunaGate.reviewerProvider === 'gw',
+        'luna 降级同厂  →  ' + JSON.stringify(lunaGate));
+    });
+    const liveGpt = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-sol', models: liveModels });
+    await t.test('grok 工人（gw）+ gpt 审官 → 通过（#822 跨厂只剩 Codex 主路）', () => {
+      assert.ok(liveGpt.ok === true && liveGpt.state === 'pass' && liveGpt.workerProvider === 'gw' && liveGpt.reviewerProvider === 'gpt',
+        'gw 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
     });
     const same = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'grok-4.6', models: MODELS });
     await t.test('grok 工人 + grok 审官 → 同厂拒绝', () => {

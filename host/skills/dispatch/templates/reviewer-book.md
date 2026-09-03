@@ -10,6 +10,11 @@
 
 你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`（审官默认 codex → codex.md）。开工前先读它——正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：codex 要 --agent 不是粘贴，文档早有）。
 
+## 启动形态（#822）
+
+审官**主路仍是 Codex**（`gpt-5.6-sol`，`docs/cli-notes/codex.md`）。工人已切 pi gw；跨厂审官只剩这一条 gpt 主路。
+pqapi 挂时降级 `gpt-5.6-luna` 走 pi `gw-windsurf/gpt-5.6-luna`——与 gw 工人同厂，#679 闸会拒。不要把审官主路写成 pi。
+
 ## 你的角色
 
 - 你审**士兵**（Dispatch id 见注入参数「对方 dispatch」）的产出。士兵在你开工后才做完活、发完工消息给你。

@@ -7,27 +7,26 @@
 # 加模型：先改 JSON 真相源，再同步本 registry。
 # ============================================================================
 
-updated: "2026-08-22"
+updated: "2026-09-03"
 currency: CNY
 fx_usd_per_cny: null      # 待补：汇率拍板后填，并给 fx_verified_at 打时间戳
 fx_verified_at: null
 
 models:
-  # ds-flash/pro 2026-08-16 起主通道走 opencode Go 额度池。同一个模型两条通道，
+  # ds-flash/pro 2026-09-03 起主通道走 pi gw-dspool（#822）。同一个模型两条通道，
   # 条目仍只有一条——用户拍板「没区别，算法记录要互通」，拆两个 id 会把战绩记成两本账。
-  # 应急直连价目（元/百万tokens）见 model-routing.toml 末尾「DeepSeek 价目注记」，
-  # 那是切回直连时的参考；本处 pricing 记的是日常主通道（Go）的口径。
+  # og / 应急直连价目见 model-routing.toml，只在用户拍板切回时参考。
   - id: deepseek-v4-flash
-    provider: opencode-go
-    cli: pi --provider opencode-go
+    provider: gw
+    cli: pi --model gw-dspool/deepseek-v4-flash
     version: DeepSeek-V4-Flash-0731
     context_window: 1000000
     max_output: 384000
     roles: [写码]
     status: 正式
     retired: false
-    why: 写码类 og 通道（#688 起是路由 fallback）；主通道 opencode-go，直连只在用户拍板时启用（model-routing.toml）
-    decided: "2026-08-16"
+    why: 写码 fallback；#822 通道 gw-dspool（前置2 工具样例绿）。og 在服务器 403，从选型移除
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-16"  # 「额度内边际成本≈0」已实测；月费是美元、fx 未拍板 → 摊销待补
       subscription:
@@ -39,16 +38,16 @@ models:
       metered: null
 
   - id: deepseek-v4-pro
-    provider: opencode-go
-    cli: pi --provider opencode-go
+    provider: gw
+    cli: pi --model gw-dspool/deepseek-v4-pro-max
     version: DeepSeek-V4-Pro-0813
     context_window: 1000000
     max_output: 384000
     roles: [判断]
     status: 正式
     retired: false
-    why: 判断类主选；主通道 opencode-go，限流时切直连接着做（model-routing.toml）
-    decided: "2026-08-16"
+    why: 判断类主选；#822 通道 gw-dspool/deepseek-v4-pro-max（dspool 无无后缀 id）
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-16"
       subscription:
@@ -60,8 +59,8 @@ models:
       metered: null
 
   - id: grok-4.6
-    provider: grok
-    cli: grok
+    provider: gw
+    cli: pi --model gw/grok-4.6
     version: grok-4.6            # 版本串待官方核（暂以 id 代）
     context_window: null         # 待补
     max_output: null
@@ -69,8 +68,8 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-14"
-    why: 写码/查证试用；会员套餐边际成本≈0。写码 A 位以 model-routing.toml [[routes]] 为准（#688 改成 devin 优先）
-    decided: "2026-08-14"
+    why: 写码/查证主选；#822 通道改 pi gw（前置2 工具样例绿）。Grok Build CLI 从选型移除，卸载等验收后
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-14"  # 「边际成本≈0」已拍板；月费/包含额度/公平份额未核 → 摊销待补
       subscription:
@@ -115,8 +114,8 @@ models:
       subscription: null
 
   - id: glm-5.2
-    provider: cursor
-    cli: cursor-agent
+    provider: gw
+    cli: pi --model gw-windsurf/glm-5-2
     version: glm-5.2-high
     context_window: null
     max_output: null
@@ -124,8 +123,8 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-19"
-    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用备选。登记仍保留、不套 glm-5.3 禁令；评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位；#658（2026-08-19）GPT 恢复，glm-5.2 仍只作备选登记、不顶审官位
-    decided: "2026-08-19"
+    why: 方案/UI 备选；#822 通道 gw-windsurf/glm-5-2（前置2 工具样例绿）。不顶审官位
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-19"
       subscription:
@@ -144,10 +143,10 @@ models:
     max_output: 131072
     roles: [写码, 判断]
     status: 试用
-    retired: false
+    retired: true
     trial_since: "2026-08-22"
-    why: og 免费探路 / Unlimited；只进写码+判断试用候选，不改写码 fallback、不顶判断主路。质量不稳风险，按返工率实测再谈定位（用户 2026-08-22 拍板：只加本 id）
-    decided: "2026-08-22"
+    why: #822 从选型移除（无网关渠道，服务器 og 403）。登记留着防战绩断号
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-22"
       subscription:
@@ -174,10 +173,10 @@ models:
       metered: null
       subscription: null
 
-  # #615：kimi 主路改 cursor，仍一条记录（战绩不拆）。管子形状只在 model-routing.toml。
+  # #822：kimi 改 gw-sub，仍一条记录（战绩不拆）。
   - id: kimi-k3
-    provider: cursor
-    cli: cursor-agent
+    provider: gw
+    cli: pi --model gw-sub/kimi-k3-high
     version: kimi-k3
     context_window: null
     max_output: null
@@ -185,8 +184,8 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-16"
-    why: 单管 cursor/kimi-k3-high（2026-08-22 拍板：og 只留 ds 与 ox-alpha-free）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；#658（2026-08-19）：GPT 恢复，kimi-k3 不再顶审官位，保留登记
-    decided: "2026-08-19"
+    why: #822 通道 gw-sub/kimi-k3-high。不顶审官位（与 gw 工人同厂，闸会拒）
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-18"
       subscription:
@@ -198,8 +197,8 @@ models:
       metered: null
 
   - id: composer-2.5
-    provider: cursor
-    cli: cursor-agent
+    provider: gw
+    cli: pi --model gw-sub/composer-2.5
     version: composer-2.5
     context_window: null
     max_output: null
@@ -207,8 +206,8 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-18"
-    why: Cursor 自研，试用写码+判断；单管 cursor / composer-2.5（#615）
-    decided: "2026-08-18"
+    why: Cursor 自研，试用写码+判断；#822 通道 gw-sub/composer-2.5
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-18"
       subscription:
@@ -220,8 +219,8 @@ models:
       metered: null
 
   - id: gemini-3.7-flash
-    provider: cursor
-    cli: cursor-agent
+    provider: gw
+    cli: pi --model gw-windsurf/gemini-3-7-flash-high
     version: gemini-3.7-flash
     context_window: null
     max_output: null
@@ -229,8 +228,8 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-18"
-    why: 试用写码+判断+查证；单管 cursor / gemini-3.7-flash-high（#615）
-    decided: "2026-08-18"
+    why: 试用写码+判断+查证；#822 通道 gw-windsurf/gemini-3-7-flash-high
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-18"
       subscription:
@@ -249,10 +248,10 @@ models:
     max_output: null
     roles: [写码]
     status: 试用
-    retired: false
+    retired: true
     trial_since: "2026-08-21"
-    why: 写码主选；Devin CLI 通道的 deepseek-v4-flash-max。与 og flash 分账（通道/计价/cli_model 都不同，#688）
-    decided: "2026-08-21"
+    why: #822 退役：无网关渠道。登记留着防战绩断号；CLI 卸载等验收后
+    decided: "2026-09-03"
     pricing:
       verified_at: "2026-08-21"
       unit: USD / 百万 tokens
