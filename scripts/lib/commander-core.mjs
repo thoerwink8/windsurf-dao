@@ -104,6 +104,17 @@ export function analyzeReviews(reviews) {
   return analyzeGithubReviews(mapped);
 }
 
+/**
+ * 从 prReviews.byPr[n] 取给 analyzeReviews 的入参：优先 `.reviews`（[{state, body}]，认 GitHub state），
+ * 缺时才回退 `.bodies`（旧夹具的判定行字符串）。#807 后 reviewer-book 不再写「判定：」行，
+ * 只喂 bodies 会把真 approve 判成 approved-without-review、两轮 request-changes 判成 noop。
+ */
+function prReviewInput(entry) {
+  if (!entry || typeof entry !== 'object') return undefined;
+  if (Array.isArray(entry.reviews)) return entry.reviews;
+  return entry.bodies;
+}
+
 function esc(why, extra = {}) {
   return { kind: 'escalate', why, ...extra };
 }
@@ -206,7 +217,7 @@ function collectCandidates(situation) {
         out.push(withNeeds(hub(`PR #${pr.number} 判绿但 CI 红，卡住了`, 'stuck', { pr: pr.number }), N.merge));
         continue;
       }
-      const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
+      const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
       if (!a.scanned) { // 该 PR 单独没抓到 reviews（section 可能 scanned 但这条 PR 的 fetch 缺）：不合，报没查成
         out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
         continue;
@@ -226,7 +237,7 @@ function collectCandidates(situation) {
       continue;
     }
 
-    const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
+    const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
     if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
       out.push(withNeeds(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }), N['wake-brain']));
@@ -263,7 +274,7 @@ function collectCandidates(situation) {
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,statusCheckRollup,body}], error }
  *   orca:          { scanned, worktrees:[...], error }
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }
- *   prReviews:     { scanned, byPr:{ <n>:{ bodies:[...] } }, error }
+ *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   wakeCounts:    { <target>: n }
  *

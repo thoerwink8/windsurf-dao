@@ -108,7 +108,7 @@ function scanPrReviews(prs) {
   for (const pr of prs || []) {
     if (!pr || pr.isDraft) continue; // draft 还没交卷，不抓
     const gh = runGh(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
-      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submittedAt}]'], 30000);
+      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at}]'], 30000);
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
       const arr = JSON.parse(gh.out || '[]');
