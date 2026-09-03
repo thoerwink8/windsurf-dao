@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRouting, runGh } from './lib/dao-cmd.mjs';
 import { issueNumberFromWorktree } from './lib/card-identity.mjs';
 import { resolveActualWorkerModel } from './lib/reviewer-vendor-gate.mjs';
+import { ensurePlain } from './lib/plain-words.mjs';
 import {
   decideHitAction,
   reviewerOrderOf,
@@ -290,24 +291,45 @@ function main(argv = process.argv.slice(2)) {
         parentWorktree: hit.parentWorktreeId,
         dryRun: args.dryRun,
       });
-      lines.push(`· ${who} 命中 ${hit.sig} → ${sw.detail}（${decision.from} → ${decision.to}）`);
+      console.log(`· ${who} 命中 ${hit.sig} → ${sw.detail}（${decision.from} → ${decision.to}）`);
+      lines.push({ name: hit.displayName, action: 'switch', ok: sw.ok, from: decision.from, to: decision.to, detail: sw.detail });
       if (!sw.ok) failed += 1;
     } else if (decision.action === 'escalate') {
-      lines.push(`· ${who} 命中 ${hit.sig} → 报帅停手：${decision.reason}`);
+      console.log(`· ${who} 命中 ${hit.sig} → 报帅停手：${decision.reason}`);
+      lines.push({ name: hit.displayName, action: 'escalate', reason: decision.reason });
     } else {
-      lines.push(`· ${who} 命中 ${hit.sig} → 只报警（${decision.reason}）`);
+      console.log(`· ${who} 命中 ${hit.sig} → 只报警（${decision.reason}）`);
+      lines.push({ name: hit.displayName, action: 'alert', reason: decision.reason });
     }
   }
 
-  const head = failed
-    ? `🔴 撞限流探测：有 ${failed} 条换人没做成`
-    : `🔴 撞限流探测：连红 ${need} 轮，已按选型序处理`;
-  say([head, ...lines].join('\n'));
+  say(ensurePlain(buildStallReport({ failed, need, items: lines }), 'agent-stall-watch'));
   console.log(`扫 ${round.scanned} 个 agent 终端，新报 ${round.reports.length} 条，没查成 ${round.unscanned} 个`);
   process.exit(failed ? 1 : 0);
+}
+
+/** 总控群文案（说人话，用户 2026-09-04 拍板）：技术细节（签名/句柄/身份）留在 journal，群里只说谁、怎么了、我做了什么。 */
+function buildStallReport({ failed, need, items }) {
+  const switched = items.some((it) => it.action === 'switch' && it.ok);
+  const head = failed
+    ? `有 ${failed} 个卡住的工人换人没成功，需要你看一眼`
+    : switched
+      ? `有工人连续 ${need} 轮卡在上游限流，我已按备选顺序换人`
+      : `有工人连续 ${need} 轮卡在上游限流，这次没换人（原因见下）`;
+  const body = items.map((it) => {
+    const name = String(it.name || '某工人').replace(/【.*?】|term_[0-9a-f-]+/g, '').trim();
+    if (it.action === 'switch') {
+      return it.ok
+        ? `· ${name}：已换成 ${it.to}（原来是 ${it.from}）继续干`
+        : `· ${name}：想换成 ${it.to} 但没换成——${String(it.detail || '').replace(/^换人失败：/, '')}`;
+    }
+    if (it.action === 'escalate') return `· ${name}：备选都用完了，先停手等你拍——${it.reason}`;
+    return `· ${name}：先只提醒不换人——${it.reason}`;
+  });
+  return [head, ...body].join('\n');
 }
 
 const isDirect = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirect) main();
 
-export { main, parseArgs, workerModelOf };
+export { main, parseArgs, workerModelOf, buildStallReport };

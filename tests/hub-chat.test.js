@@ -152,7 +152,7 @@ describe('hub 对话（#852 总帅入口）', () => {
       assert.ok(calls.comment[0].body.includes('om_hub_msg'), '要带来源 message_id');
     });
     await t.test('回执说清落点；llm 一次没调（确定性，不猜）', () => {
-      assert.ok(out.replies[0].text.includes(`拍板已写回 ${DEFAULT_REPO}#846`), out.replies[0].text);
+      assert.ok(out.replies[0].text.includes(`已记到 #846（windsurf-dao）`), out.replies[0].text);
       assert.strictEqual(calls.llm.length, 0);
     });
     await t.test('消费记录 landedTo 指到单', () => {
@@ -185,7 +185,7 @@ describe('hub 对话（#852 总帅入口）', () => {
     assert.strictEqual(calls.comment.length, 1);
     assert.strictEqual(calls.comment[0].repo, DEFAULT_REPO, '裸 #N 用聚合层第一个项目的 repo 兜底');
     assert.strictEqual(calls.comment[0].number, 807);
-    assert.ok(out.replies[0].text.includes(`拍板已写回 ${DEFAULT_REPO}#807`));
+    assert.ok(out.replies[0].text.includes(`已记到 #807（windsurf-dao）`));
   });
 
   it('拍板意图但定位不到单：问编号，不猜不写', async () => {
@@ -240,7 +240,7 @@ describe('hub 对话（#852 总帅入口）', () => {
     });
     const out = await S.triage(hubInbound({ hubPending: { repo: DEFAULT_REPO, number: 846 } }), deps);
     assert.strictEqual(calls.comment.length, 0);
-    assert.ok(out.replies[0].text.includes('未开放'), out.replies[0].text);
+    assert.ok(out.replies[0].text.includes('不收拍板'), out.replies[0].text); // 说人话文案（2026-09-04）
   });
 
   it('extractIssueRef：URL > owner/repo#N > 裸 #N（要兜底 repo）> 抽不到 null', async () => {

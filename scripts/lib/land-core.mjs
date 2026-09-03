@@ -55,8 +55,19 @@ export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent,
   return { remove: true, reason: `分支 ${branch} 已合并且树干净` };
 }
 
-/** precheck「有没有活」（#829）：有可运/可清 → true。判断只认上面三个 decide* 的结论，不另写闸。 */
-export function hasLandWork({ shipAction, removeCount, deleteCount }) {
+/**
+ * 僵尸终端：orca 里登记着、但它挂的工位目录已经不在了（树被 land/worktree-rm 拆掉，终端登记留下来）。
+ * 2026-09-04 实咬：服务器 70 个终端里 39 个是这种，探测每轮白扫、盘面看不清。
+ * 只认「目录确实不存在」（exists === false）；探不到（null/undefined）一律不关——没查成不是没事。
+ */
+export function decideTerminalClose({ path, exists }) {
+  if (!path) return { close: false, reason: '终端没挂工位（裸终端），不动' };
+  if (exists !== false) return { close: false, reason: exists === true ? '工位目录还在' : '目录存在性没查成，不动' };
+  return { close: true, reason: `工位目录已不在：${path}` };
+}
+
+/** precheck「有没有活」（#829）：有可运/可清 → true。判断只认上面 decide* 的结论，不另写闸。 */
+export function hasLandWork({ shipAction, removeCount, deleteCount, zombieCount = 0 }) {
   if (shipAction === 'push' || shipAction === 'ff') return true;
-  return (Number(removeCount) > 0) || (Number(deleteCount) > 0);
+  return (Number(removeCount) > 0) || (Number(deleteCount) > 0) || (Number(zombieCount) > 0);
 }

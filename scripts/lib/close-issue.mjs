@@ -75,7 +75,7 @@ export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
   if (!issue) return { ok: true, action: 'none', reason: '无署名单号', pr: number };
   const dec = closeDecision(pr);
   if (dec.action === 'none') return { ok: true, action: 'none', reason: dec.reason, pr: number };
-  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url']);
+  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url,labels']);
   if (!iv.ok) {
     const msg = String(iv.error || '');
     // 署名目标不存在：署名解析误中（标题/正文随手引用 #N），不是关单失败——跳过不污染 exit code。
@@ -90,6 +90,12 @@ export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
   // 署名目标其实是 PR（gh issue view 对 PR 号也答得出，url 才是照妖镜）：跳过不污染 exit code。
   if (typeof issueUrl === 'string' && issueUrl.includes('/pull/')) {
     return { ok: true, action: 'none', reason: `署名目标 #${issue} 是 PR 不是 issue（标题/正文引用误中），跳过`, issue, pr: number };
+  }
+  // 人工判定「已顶替」的单不弹回（2026-09-04 实咬：#633/#651/#683/#684/#686/#693 六张被 sweep
+  // 反复 reopen——署名 PR 合入时历史 check 红，脚本不区分「谁关的、为什么关」。带标签 = 人拍过，机器让路）。
+  const labels = Array.isArray(iv.json?.labels) ? iv.json.labels.map((l) => String(l?.name || '')) : [];
+  if (dec.action === 'reopen' && labels.includes('已顶替')) {
+    return { ok: true, action: 'none', reason: `issue #${issue} 带「已顶替」标签（人工拍过），不弹回`, issue, pr: number };
   }
   const expectOpen = dec.action === 'close';
   if (expectOpen && String(issueState).toUpperCase() === 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 已关`, issue, pr: number };

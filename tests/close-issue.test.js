@@ -123,6 +123,20 @@ describe('close-issue 判定', () => {
       assert.ok(r.ok && r.action === 'none');
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'close'), '绿但单已关不应重复 close  →  ' + JSON.stringify(calls));
     });
+    calls.length = 0;
+    await t.test('红且单已关但带「已顶替」标签→不弹回（2026-09-04：人拍过，机器让路）', () => {
+      const ghLabeled = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { ok: true, json: { state: 'CLOSED', labels: [{ name: '任务' }, { name: '已顶替' }] } };
+        }
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 5, title: 'x', body: '署名 issue #12', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: ghLabeled });
+      assert.ok(r.ok && r.action === 'none', JSON.stringify(r));
+      assert.match(r.reason, /已顶替/);
+      assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'reopen'), '带标签不应 reopen  →  ' + JSON.stringify(calls));
+    });
   });
 });
 
