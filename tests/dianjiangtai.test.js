@@ -44,6 +44,7 @@ const TS_VALLEY = "2026-08-15T13:00:00+08:00";     // 北京 13:00 = 谷时（12
 const FLASH = "deepseek-v4-flash";
 const FLASH_VERSION = "DeepSeek-V4-Flash-0731";
 const DEVIN = "devin-deepseek-v4-flash-max";
+const GROK = "grok-4.6";
 
 const schema = JSON.parse(fs.readFileSync(path.join(REPO, "schemas", "events.schema.json"), "utf8"));
 const models = parseYaml(fs.readFileSync(path.join(REPO, "policy", "models.yml"), "utf8")).models;
@@ -562,11 +563,11 @@ describe('dianjiangtai', () => {
     });
   });
 
-  it('⑤ JSON 职责树顺位参与推荐（写码 devin > flash，#688）', async (t) => {
+  it('⑤ JSON 职责树顺位参与推荐（写码 grok > devin > flash，#817）', async (t) => {
     const policy = await routingPolicy();
     const rankOrder = policy.rankOrderFor('工人', '写码');
-    await t.test('model-routing.json 写码顺位 ≥2（devin + flash）', () => {
-      assert.ok(rankOrder.length >= 2 && rankOrder[0] === DEVIN && rankOrder[1] === FLASH, '写码顺位  →  ' + JSON.stringify(rankOrder));
+    await t.test('model-routing.json 写码顺位 ≥3（grok + devin + flash）', () => {
+      assert.ok(rankOrder.length >= 3 && rankOrder[0] === GROK && rankOrder[1] === DEVIN && rankOrder[2] === FLASH, '写码顺位  →  ' + JSON.stringify(rankOrder));
     });
     await t.test('审官顺位 GPT 顶位（Claude 禁用）', () => {
       assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-sol', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
@@ -585,8 +586,8 @@ describe('dianjiangtai', () => {
     await t.test('判别力：不接线（无 rankOrder）A ≠ grok-4.6', () => {
       assert.ok(discBare.options.A.model !== "grok-4.6", '判别力：不接线 A ≠ grok-4.6  →  ' + discBare.options.A.model);
     });
-    await t.test('判别力：接线后写码 A = devin（顺位压过评分）', () => {
-      assert.ok(discWired.options.A.model === DEVIN && discWired.options.A.model !== FLASH, '判别力：接线后写码 A = devin  →  ' + discWired.options.A.model);
+    await t.test('判别力：接线后写码 A = grok（顺位压过评分）', () => {
+      assert.ok(discWired.options.A.model === GROK && discWired.options.A.model !== FLASH, '判别力：接线后写码 A = grok  →  ' + discWired.options.A.model);
     });
     await t.test('判别力：接线后 reason=rank_order', () => {
       assert.ok(discWired.options.A.reason === "rank_order", '判别力：接线后 reason=rank_order  →  ' + discWired.options.A.reason);
@@ -596,24 +597,24 @@ describe('dianjiangtai', () => {
     });
 
     const rankedPeak = run({ jobId: "j-route-peak", events: discEvents, rankOrder });
-    await t.test('select+rankOrder：峰时写码 A = devin（不是 ds-flash）', () => {
-      assert.ok(rankedPeak.options.A.model === DEVIN && rankedPeak.options.A.model !== FLASH, 'select+rankOrder：峰时写码 A = devin  →  ' + rankedPeak.options.A.model);
+    await t.test('select+rankOrder：峰时写码 A = grok（不是 ds-flash）', () => {
+      assert.ok(rankedPeak.options.A.model === GROK && rankedPeak.options.A.model !== FLASH, 'select+rankOrder：峰时写码 A = grok  →  ' + rankedPeak.options.A.model);
     });
     await t.test('select+rankOrder：峰时 reason=rank_order', () => {
       assert.ok(rankedPeak.options.A.reason === "rank_order", 'select+rankOrder：峰时 reason=rank_order  →  ' + rankedPeak.options.A.reason);
     });
     const rankedValley = run({ jobId: "j-route-valley", ts: TS_VALLEY, events: discEvents, rankOrder });
-    await t.test('select+rankOrder：谷时写码 A = devin（各时段一致）', () => {
-      assert.ok(rankedValley.options.A.model === DEVIN, 'select+rankOrder：谷时写码 A = devin  →  ' + rankedValley.options.A.model);
+    await t.test('select+rankOrder：谷时写码 A = grok（各时段一致）', () => {
+      assert.ok(rankedValley.options.A.model === GROK, 'select+rankOrder：谷时写码 A = grok  →  ' + rankedValley.options.A.model);
     });
     await t.test('select+rankOrder：谷时 reason=rank_order', () => {
       assert.ok(rankedValley.options.A.reason === "rank_order", 'select+rankOrder：谷时 reason=rank_order  →  ' + rankedValley.options.A.reason);
     });
-    await t.test('slate：峰时第一是 devin，og flash 在列', () => {
-      assert.ok(Array.isArray(rankedPeak.slate) && rankedPeak.slate[0] === DEVIN && rankedPeak.slate.includes(FLASH), 'slate：峰时第一是 devin，og flash 在列  →  ' + JSON.stringify(rankedPeak.slate));
+    await t.test('slate：峰时第一是 grok，og flash 在列', () => {
+      assert.ok(Array.isArray(rankedPeak.slate) && rankedPeak.slate[0] === GROK && rankedPeak.slate.includes(FLASH), 'slate：峰时第一是 grok，og flash 在列  →  ' + JSON.stringify(rankedPeak.slate));
     });
-    await t.test('slate：谷时第一是 devin，og flash 在列', () => {
-      assert.ok(Array.isArray(rankedValley.slate) && rankedValley.slate[0] === DEVIN && rankedValley.slate.includes(FLASH), 'slate：谷时第一是 devin，og flash 在列  →  ' + JSON.stringify(rankedValley.slate));
+    await t.test('slate：谷时第一是 grok，og flash 在列', () => {
+      assert.ok(Array.isArray(rankedValley.slate) && rankedValley.slate[0] === GROK && rankedValley.slate.includes(FLASH), 'slate：谷时第一是 grok，og flash 在列  →  ' + JSON.stringify(rankedValley.slate));
     });
     await t.test('无 rankOrder 时行为不变：零样本仍 quota_explore', () => {
       assert.ok(run().options.A.reason === "quota_explore", '无 rankOrder 时行为不变：零样本仍 quota_explore');

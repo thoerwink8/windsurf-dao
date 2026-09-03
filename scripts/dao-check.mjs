@@ -70,6 +70,9 @@
 //    逐个确认还在；查不到/已解散报红并写出群名；全都在为绿；无实机映射 / 无 lark-cli /
 //    无凭据（CI）SKIP 不是绿；0 个 chat_id = 没查成。
 //    检查器自持解析，不 import feishu-triage.loadGroups；红/绿/空夹具验判别力
+// ㉙ 发布策略 schema（#817）：docs/release-policy.json 可解析且过 schema（四个顶层键 /
+//    confirm 三级 / bump 表 / 每项目 demo）。检查器自持解析，不 import 消费方；
+//    红/绿/空夹具验判别力；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -107,6 +110,9 @@ import {
 import {
   inspectFeishuGroupsFixtures, checkFeishuGroups,
 } from './lib/feishu-groups-check.mjs';
+import {
+  inspectReleasePolicyFixtures, inspectReleasePolicyLive,
+} from './lib/release-policy-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -1433,6 +1439,42 @@ checkVersionCarrierSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
 checkFeishuGroupsLive();
+checkReleasePolicySamples();
+checkReleasePolicyLive();
+
+function checkReleasePolicySamples() {
+  const r = inspectReleasePolicyFixtures(join(ROOT, 'tests', 'fixtures', 'release-policy-check'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? 'release-policy 样本没查成' : 'release-policy 样本对不上',
+      '恢复 tests/fixtures/release-policy-check/{red,ok,empty}：红=缺 confirm.major 必须拦、绿必须过、空={} 没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`release-policy 样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkReleasePolicyLive() {
+  const r = inspectReleasePolicyLive(ROOT);
+  if (r.unscanned) {
+    fail(
+      'release-policy.json 没查成',
+      '恢复 docs/release-policy.json；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成，不是过',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `release-policy.json schema 不过 ${(r.problems || []).length} 处`,
+      '四个顶层键 confirm/version/rollback/budget 齐；confirm 三级齐；bump 表覆盖 conventional 类型；每项目 demo 有 kind',
+      (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`release-policy.json 可解析且过 schema（${r.scanned} 项）`);
+}
 
 function checkFeishuGroupsSamples() {
   const r = inspectFeishuGroupsFixtures(join(ROOT, 'tests', 'fixtures', 'feishu-groups-check'));
