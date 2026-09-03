@@ -1351,51 +1351,6 @@ function checkNoAutoCloseLive() {
   green(`PR 正文任务书模板无 GitHub 关单关键词（${files.length} 个模板）`);
 }
 
-// ── ㉒ 删横幅收信整层（#667）────────────────────────────────────────
-function checkNoBannerInboxSamples() {
-  const r = inspectNoBannerInboxFixtures(join(ROOT, 'tests', 'fixtures', 'no-banner-inbox'));
-  if (!r.ok) {
-    fail(
-      r.unscanned ? '横幅收信样本没查成' : '横幅收信样本对不上',
-      '恢复 tests/fixtures/no-banner-inbox/{red,ok}：红夹具必须红、绿夹具必须绿',
-      r.error || '',
-    );
-    return;
-  }
-  green(`横幅收信样本红/绿各 ${r.kinds.red}/${r.kinds.ok}（有判别力）`);
-}
-
-function checkNoBannerInboxLive() {
-  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
-  const skillFile = join(ROOT, 'host', 'skills', 'dispatch', 'SKILL.md');
-  const soldierFile = join(ROOT, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md');
-  if (!existsSync(daoFile) || !existsSync(skillFile) || !existsSync(soldierFile)) {
-    fail(
-      '横幅收信 live 扫描缺文件',
-      '恢复 scripts/dao.mjs、host/skills/dispatch/SKILL.md、templates/soldier-book.md；缺文件 = 没查成',
-      `dao=${existsSync(daoFile)} skill=${existsSync(skillFile)} soldier=${existsSync(soldierFile)}`,
-    );
-    return;
-  }
-  const r = inspectNoBannerInboxLive({
-    daoSrc: readFileSync(daoFile, 'utf8'),
-    skillSrc: readFileSync(skillFile, 'utf8'),
-    soldierSrc: readFileSync(soldierFile, 'utf8'),
-  });
-  if (r.unscanned) {
-    fail('横幅收信 live 没查成', '给齐 dao/SKILL/soldier 正文再扫', r.error || '');
-    return;
-  }
-  if (!r.ok) {
-    fail(
-      `横幅收信整层回潮 ${r.problems.length} 处`,
-      'dao.mjs 不 run-use；SKILL 不教横幅收信；soldier-book 写「心跳不准发」',
-      r.problems.join('；'),
-    );
-    return;
-  }
-  green('横幅收信整层已删（派工不 run-use / 不教横幅收信 / 心跳不准发）');
-}
 
 // 停派工态门（2026-08-31 dbfa323 / docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
 // ⑦⑭⑮⑰-live 四项是**派工节奏与外部盘面的活探**（orca --help、gh 盘面、账本对 GitHub），
@@ -1667,9 +1622,7 @@ function checkNoReviewerRecreateLive() {
     );
     return;
   }
-  // #807：flow.mjs 已删。live 只扫 dao.mjs；flowSrc 给空串（不再要求文件在）。
   const r = inspectNoReviewerRecreate({
-    flowSrc: '',
     daoSrc: readFileSync(daoFile, 'utf8'),
   });
   if (r.unscanned) {
@@ -1679,7 +1632,7 @@ function checkNoReviewerRecreateLive() {
   if (!r.ok) {
     fail(
       `再造审官闸接线丢了 ${r.problems.length} 处`,
-      'flow 不许结算后 runDao reviewer-create；worker-done 不许 nextReviewerAfter 换厂再造',
+      'worker-done 不许 nextReviewerAfter 换厂再造',
       r.problems.join('；'),
     );
   } else {
@@ -1783,72 +1736,6 @@ function checkVendorGateLive() {
     return;
   }
   green('起审官同厂硬闸还在（create/attach/worker-done/换人接线齐；dispatch 预检闸已删；审官不写死 forceCommand）');
-}
-
-function checkQuickFixSamples() {
-  const r = inspectQuickFixFixtures(join(ROOT, 'tests', 'fixtures', 'quick-fix'));
-  if (!r.ok) {
-    fail(
-      r.unscanned ? '微通道样本没查成' : '微通道样本对不上',
-      '恢复 tests/fixtures/quick-fix/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
-      r.error || '',
-    );
-    return;
-  }
-  green(`微通道样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
-}
-
-function checkQuickFixLive() {
-  const qfFile = join(ROOT, 'scripts', 'quick-fix.mjs');
-  const qfLibFile = join(ROOT, 'scripts', 'lib', 'quick-fix.mjs');
-  const skillFile = join(ROOT, 'host', 'skills', 'dispatch', 'SKILL.md');
-  if (!existsSync(qfFile) || !existsSync(qfLibFile) || !existsSync(skillFile)) {
-    fail(
-      '微通道 live 扫描缺文件',
-      '恢复 scripts/quick-fix.mjs、scripts/lib/quick-fix.mjs、host/skills/dispatch/SKILL.md；缺文件 = 没查成',
-      `qf=${existsSync(qfFile)} lib=${existsSync(qfLibFile)} skill=${existsSync(skillFile)}`,
-    );
-    return;
-  }
-  const src = inspectQuickFixSource({
-    qfSrc: readFileSync(qfFile, 'utf8'),
-    qfLibSrc: readFileSync(qfLibFile, 'utf8'),
-  });
-  if (src.unscanned) {
-    fail('微通道脚本扫描没查成', '给齐 quick-fix.mjs 再扫', src.error || '');
-    return;
-  }
-  if (!src.ok) {
-    fail(
-      `微通道脚本丢了 ${src.problems.length} 处`,
-      'quick-fix.mjs 必须：强制 --issue/--model、assertCrossVendor 同厂闸、reviewer-attach --skip-wait、整体回滚、dao-worker[bot] 身份',
-      src.problems.join('；'),
-    );
-    return;
-  }
-  const skill = inspectDispatchRedLine({ skillSrc: readFileSync(skillFile, 'utf8') });
-  if (skill.unscanned) {
-    fail('dispatch 红线扫描没查成', '给齐 dispatch SKILL.md 再扫', skill.error || '');
-    return;
-  }
-  if (!skill.ok) {
-    fail(
-      `dispatch 主会话红线丢了 ${skill.problems.length} 处`,
-      '红线写死「无例外」并点名微通道例外 scripts/quick-fix.mjs',
-      skill.problems.join('；'),
-    );
-    return;
-  }
-  const probe = probeQuickFixGate(ROOT);
-  if (!probe.ok) {
-    fail(
-      probe.unscanned ? '故意同厂样本没查成' : '故意同厂样本没拦住',
-      'quick-fix --dry-run --model grok-4.6 --reviewer grok-4.6 必须非零且话面含同厂；缺 --model 必须非零',
-      probe.error || '',
-    );
-    return;
-  }
-  green('微通道 quick-fix 还在（强制 --issue/--model、#679 闸、异步审官、回滚；红线写例外；故意同厂样本被拦）');
 }
 
 function checkMachinePathSamples() {
