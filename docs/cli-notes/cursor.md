@@ -1,6 +1,6 @@
 # CLI 踩坑教学：Cursor（`cursor-agent` CLI，模型 composer-2.5 / kimi / gemini / glm，UI 主选）
 
-> 提炼自 `docs/model-routing.toml [providers.cursor]`。
+> 提炼自 `docs/model-routing.toml [providers.cursor]`。**#822 验收后已卸**：Composer / Kimi / GLM 走 pi gw，新机不装 cursor-agent。本节只留历史坑。
 
 ## 一句话特性
 

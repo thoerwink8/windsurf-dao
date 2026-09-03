@@ -112,9 +112,13 @@ describe('machine-path', () => {
     await t.test('本仓仓外路径闸绿', () => {
       assert.ok(live.kind === 'ok' && live.green && !live.fail, '本仓仓外路径闸绿  →  ' + JSON.stringify(live));
     });
-    await t.test('POSIX B 模板还在', () => {
+    await t.test('POSIX B 模板还在（#822 退役存根）', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok')), 'host/machine/shims/grok 在');
       assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'agent')), 'host/machine/shims/agent 在');
+      const grok = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok'), 'utf8');
+      const agent = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'agent'), 'utf8');
+      assert.ok(/retired/.test(grok) && /exit 1/.test(grok), 'grok shim 退役');
+      assert.ok(/retired/.test(agent) && /exit 1/.test(agent), 'agent shim 退役');
     });
   });
 });

@@ -1,6 +1,6 @@
 # CLI 踩坑教学：Claude（`reclaude` CLI，模型 opus）
 
-> 提炼自 `docs/model-routing.toml [providers.claude]`。
+> 提炼自 `docs/model-routing.toml [providers.claude]`。**#822 验收后已卸**：Claude 模型改由 pi 经网关调，新机不装 reclaude。本节只留历史坑。
 
 ## 一句话特性
 

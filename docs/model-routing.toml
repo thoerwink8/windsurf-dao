@@ -175,7 +175,7 @@ cli_model 带组前缀：`gw/grok-4.6`、`gw-dspool/deepseek-v4-flash`、`gw-win
 网关装法归 ai-gateway-stack（INDEX E 类），本仓只登记启动模板。
 前置2（2026-09-03）：grok / dspool flash / windsurf glm 三渠道写文件+node --test+gh 均绿。
 """
-why = "2026-09-03 拍板：除 GPT 必须走 Codex 外，其他都切 pi。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等 #822 验收后。toml 里这些节先留着给未卸的机器和禁用条目。"
+why = "2026-09-03 拍板：除 GPT 必须走 Codex 外，其他都切 pi。Grok Build / cursor-agent / devin / claude CLI 从选型移除；#822 验收后卸，NEW-MACHINE §7 改退役记录，server-check ⑱ 拦它们还在 PATH。toml 里这些节先留着给禁用条目和未卸机器的测试。"
 decided = "2026-09-03"
 
 [providers.cursor]

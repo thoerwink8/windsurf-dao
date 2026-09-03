@@ -1,6 +1,6 @@
 # CLI 踩坑教学：Grok Build（`grok` CLI）
 
-> 提炼自 `docs/model-routing.toml [providers.grok]`。**#822：写码/查证 grok-4.6 已改走 pi gw**（见 `pi.md`）。本节留给未卸的机器；CLI 卸载等 #822 验收后。
+> 提炼自 `docs/model-routing.toml [providers.grok]`。**#822 验收后已卸**：写码/查证 grok-4.6 走 pi gw（见 `pi.md`）。本节只留历史坑，新机不装 Grok Build CLI。
 
 ## 一句话特性
 

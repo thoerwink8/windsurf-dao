@@ -14,7 +14,7 @@
 ## 启动形态（#822）
 
 工人默认 **pi**：`pi --model {cli_model}`（厂商 `gw`，cli_model 如 `gw/grok-4.6` / `gw-dspool/deepseek-v4-flash` / `gw-windsurf/glm-5-2`）。启动模板只认 `docs/model-routing.toml` `[providers.gw].launch`。踩坑教学 `docs/cli-notes/pi.md`。
-GPT（方案里的 gpt-5.6-sol）仍走 Codex，见 `docs/cli-notes/codex.md`。Grok Build / cursor-agent / devin / claude CLI 已从选型移除。
+GPT（方案里的 gpt-5.6-sol）仍走 Codex，见 `docs/cli-notes/codex.md`。Grok Build / cursor-agent / devin / claude CLI 已从选型移除并卸（#822 验收后）。
 
 ## 开工五步（进 git 的活，先做这个再干活）
 

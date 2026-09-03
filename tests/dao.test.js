@@ -173,12 +173,10 @@ describe('dao', () => {
     await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {
       assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false' && devin.start === 'agent' && devin.agentId === 'devin', '#782 devin launch  →  ' + JSON.stringify(devin));
     });
-    await t.test('POSIX grok shim 在仓里', () => {
+    await t.test('#822 POSIX grok shim 是 exit-1 存根', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok')), 'POSIX grok shim 在仓里');
-    });
-    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok'), 'utf8');
-    await t.test('shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）', () => {
-      assert.ok(/DAO_PROXY:=http:\/\/127\.0\.0\.1:7890/.test(shim) && /HTTPS_PROXY/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
+      const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok'), 'utf8');
+      assert.ok(/retired/.test(shim) && /exit 1/.test(shim) && !/GROK_REAL/.test(shim), '#822 grok shim 退役存根  →  ' + shim.replace(/\r?\n/g, ' | '));
     });
 
     let threw = false;

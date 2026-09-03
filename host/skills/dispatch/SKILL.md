@@ -98,7 +98,7 @@ test "$(git branch --show-current)" = master \
 
 派工前读 `docs/model-routing.json`（选型只认 JSON，2026-08-22 拍板；启动模板才在 toml）。新工位派单前出三选项问用户（AskUserQuestion：推荐+备选，含工人数/做法/模型）；已批闭环内的返工/复核流转不重复问。选型上面板可见：终端名带角色·模型。用户可随时改派。全新任务类型或高危选型走「重大决策一事一问」。
 
-审官选型序见 `docs/model-routing.json`（rules），Claude 族启动命令见 `docs/model-routing.toml` [providers.claude]——路由决策只存在那里，本页只留指针。#822：非 GPT 工人一律 pi gw（`pi --model gw…/模型`，见 `[providers.gw].launch`）；GPT 必须走 Codex。Grok Build / cursor-agent / devin / claude CLI 已从选型移除，卸载等 #822 验收后。
+审官选型序见 `docs/model-routing.json`（rules），路由决策只存在那里，本页只留指针。#822：非 GPT 工人一律 pi gw（`pi --model gw…/模型`，见 `[providers.gw].launch`）；GPT 必须走 Codex。Grok Build / cursor-agent / devin / claude CLI 已从选型移除并卸（NEW-MACHINE §7）。
 
 用户拍板换工具/通道/模型后立即对在途活生效（正在跑的当场切），协调者不得自行解释为「下一单起」；仅用户明说「跑完这单再切」才保留在途（拍板 2026-08-14，issue #443）。
 

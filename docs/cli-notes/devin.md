@@ -1,6 +1,6 @@
 # CLI 踩坑教学：Devin（`devin` CLI，模型 deepseek-v4-flash-max）
 
-> 每条都是实测踩出来的，不是推理。改代码/派工前先读本页 + `docs/model-routing.toml [providers.devin]`。
+> 每条都是实测踩出来的，不是推理。**#822 验收后已卸**：devin 从选型禁用，新机不装。本节只留历史坑。
 
 ## 一句话特性
 

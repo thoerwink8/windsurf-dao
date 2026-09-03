@@ -108,7 +108,7 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 模型配置（API key、模型列表、网关地址、**代理分流**）不在本仓，真相源是 `ai-gateway-stack` 仓——
 客户端怎么接、换 VPS 要改哪几处，都是它自带的手册。本页不复制那边的步骤，也不记会过期的网关地址。
 
-- 各 CLI 的**工具本身**怎么装，见下面 §6 / §7；**连哪个模型、走哪个网关**归 `ai-gateway-stack`。
+- 各 CLI 的**工具本身**怎么装，见下面 §6（pi）与 Codex（GPT 审官主路，`docs/cli-notes/codex.md`）；**连哪个模型、走哪个网关**归 `ai-gateway-stack`。#822 验收后服务器工人栈只留 **pi + codex**，Grok Build / cursor-agent / devin / reclaude 新机不装（§7 起是退役记录，不是装机清单）。
 - 机器上开了梯子的话，网关必须配直连分流，否则流量会绕代理节点出海再绕回来（实测慢 35 倍，且不报错）。
 
 Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
@@ -155,13 +155,14 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
 
 doorbell 曾是给信箱台配的门铃：协调者 pi 空闲时代按一句「你有来信」。信箱台（inbox-station.mjs）随 #807 删掉后门铃盯的 `_flow/inbox-*.log` 再无生产者，源码已随 #857 返工一并删（死消费者不留仓）。
 
-## 7. grok 怎么配
+## 7. grok / cursor-agent / devin / reclaude（#822 退役，新机不装）
 
-grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，选型见 `docs/model-routing.json`，启动模板见 `docs/model-routing.toml` `[providers.grok].launch`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
+用户 2026-09-03 拍板：服务器工人栈只留 **pi + codex**。Grok Build CLI、cursor-agent、devin、reclaude 从选型移除（#825），验收后卸（本单收尾）。写码 grok-4.6 走 `pi --model gw/grok-4.6`；Composer / Kimi / GLM 走 `gw-sub` / `gw-windsurf`。Claude 模型改由 pi 经网关调，不装 reclaude。
 
-- npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
-- regrok shim：把 `host/machine/shims/grok`（Git Bash 形态；`.cmd` 形态已随 #807 删，Windows 需要时照它重写）拷到 `~/.local/bin/`（覆盖 PATH 第一位）。打开模板改 `GROK_REAL`（真实二进制因机而异，例：`C:\nvm4w\nodejs\grok.cmd`）。行为与现机一致：内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染；代理地址可设环境变量 `DAO_PROXY` 覆盖，不设回退 7890），默认追加 `-m grok-4.6`，显式传 `-m/--model` 时原样透传。Windows `.cmd` 禁止 `findstr`（#633：用字符串替换判 `-m` / `--model`，不弹可见 cmd）。`--agent grok` 不带 launch 旗标时，shim 补 `--effort xhigh --always-approve`。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。注释保持纯 ASCII。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制。
-- 宿主对外发布闸仍会硬拦 git push，协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。这和 TUI 确认框不是一层。
+- **新机不要装**：不要 `npm i -g @xai-official/grok`、不要 `curl https://cursor.com/install`、不要装 Devin CLI、不要装 reclaude。`server-check` 第⑱项反过来查这些命令**不在 PATH**——装机脚本又装回来会红。
+- **已装的机器卸法**（Linux）：`sudo npm uninstall -g @xai-official/grok`（装在 `/usr/lib/node_modules` 时非 root 会 EACCES）；删 `~/.local/bin/{cursor-agent,agent,devin}` 软链（真实目录可留着不进 PATH）；`command -v grok cursor-agent agent devin reclaude` 都应空。Codex（GPT）与 pi 留下。本机 2026-09-04：cursor-agent / agent / devin 软链已摘；grok 仍在 `/usr/bin/grok`，合入后需 root 卸。
+- toml 里 `[providers.grok]` / `[providers.cursor]` / `[providers.devin]` / `[providers.claude]` 节先留着给禁用条目和未卸机器的测试；派工不读它们当顺位 1。仓内 `host/machine/shims/grok` 与 `shims/agent` 是 exit-1 存根，防旧 PATH 拷贝误起。
+- 历史装机记录（钉 grok@1.0.1、regrok 代理、cursor `--trust`、devin dangerous+trust）见 git 史 / `docs/cli-notes/{grok,cursor,devin,claude}.md`，新机不照抄。
 
 ## 7b. command-code 怎么配
 
@@ -173,24 +174,13 @@ command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速
 - 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
 - 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
 
-## 7c. cursor 怎么配
+## 7c. cursor 怎么配（退役）
 
-Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主路仍 Codex）。选型见 `docs/model-routing.json`，启动模板见 `docs/model-routing.toml` `[providers.cursor]`。**不装 pi-cursor-sdk**（官方无第三方 chat API；撞「pi 不写插件」）。
+#822 起 Composer / Kimi / Gemini 走 pi `gw-sub` / `gw-windsurf`，不装 cursor-agent。新机步骤见 §7。历史装机与 `--trust` 坑见 `docs/cli-notes/cursor.md`。仓内 `host/machine/shims/agent` 是 exit-1 存根。
 
-- 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
-- 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
-- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`（shim 默认回退此值，代理不同设环境变量 `DAO_PROXY` 覆盖）。cursor-agent 已随 #807/#822 退出选型，包装真实二进制的 shim 已删（仓里只剩 `host/machine/shims/agent` exit-1 存根，防旧 PATH 拷贝误起）；以下为历史装机记录，新机不再装。注释保持纯 ASCII。Windows `.cmd` 禁止 `for /f in ('dir')` 和 `findstr`（各弹一个可见 cmd；#633：版本目录写临时文件再 `for /f` 读，`--model` 用字符串替换判）。shim 在带 `--model` 时会补 `--trust`（#648：新 worktree 弹 Workspace Trust，`--force` 不管，Orca 报 agent_unconfigured）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
-- 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force --trust`）。`--force` 是无人值守放行（等同 `--yolo`）；`--trust` 免弹 Workspace Trust（#648 返工补丁）。
-- 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
+## 7d. devin 怎么配（退役）
 
-## 7d. devin 怎么配
-
-Devin CLI 的选型顺位见 `docs/model-routing.json`；启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
-
-- 装机：官方 Devin 安装器（本机二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`）。验证：`where.exe devin` 能找到；`devin models list` 含 `deepseek-v4-flash-max`。
-- 登录只能用户做：`devin auth`。凭据在 `%LOCALAPPDATA%\devin\credentials.toml`（C 类，不进 git）。
-- 非交互冒烟：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。未信任目录必须关 workspace trust 检查，否则没提示可弹、当场失败。`--print` 跑完即退，**不能**当 Orca 工人。
-- 工人 TUI 起法只信路由表 launch（`--permission-mode dangerous` 全放行）。不要另造一份启动命令。
+#822 起 devin 从选型禁用，新机不装。历史交互 TUI / 非交互形态见 `docs/cli-notes/devin.md`。凭据若还在 `%LOCALAPPDATA%\devin\credentials.toml` 是 C 类，不进 git，也不再当工人通道。
 
 ## 8. 本机工具坑
 
@@ -318,7 +308,7 @@ ssh -N -L 6768:127.0.0.1:6768 <用户>@<服务器>
 
 ### 无头机上的交互式登录（各家 CLI 首登）
 
-`orca account add` 与 Grok / Devin / OpenCode / cursor-agent 首登都要浏览器，无头机上这是最容易卡整晚的一步（#708 的「新 worktree 弹信任目录对话框」是同类）。两种流程分开对付：
+`orca account add` 与 Codex / pi（网关侧）首登都要浏览器，无头机上这是最容易卡整晚的一步（#708 的「新 worktree 弹信任目录对话框」是同类）。Grok / Devin / cursor-agent 已退役，新机不登它们。两种流程分开对付：
 
 - **device-code 流**（CLI 打印一个 URL + 配对码）：在**任何**有浏览器的地方打开那个 URL 认证即可，令牌回落到服务器上的 CLI。
 - **localhost-callback 流**（CLI 在服务器上监听某端口等回调）：浏览器必须能访问到**服务器的** localhost。从带浏览器的机器开隧道再在本地开：
@@ -383,7 +373,7 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 - **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
 - **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
 - **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
-- **#802**：`server-check` 第⑬项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。
+- **#802**：`server-check` 第⑬项探本构建是否认**启用选型**的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，需求从 `docs/model-routing.json` 启用厂商收，#822 起是 pi / codex，不把 toml 退役节当必认）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。第⑱项查 grok / cursor-agent / agent / devin / reclaude **不在 PATH**。
 
 ### 发布列车 timer（#800，服务器上装）
 

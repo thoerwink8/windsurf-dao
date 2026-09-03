@@ -1,4 +1,4 @@
 #!/bin/sh
-# agent shim leftover after #807: cursor-agent 已从选型移除，本 shim 不再包装 Windows 二进制。
+# agent shim leftover after #807/#822: cursor-agent retired; Composer/Kimi/GLM via pi gw.
 echo "agent shim retired (#807/#822): use pi, not cursor-agent" >&2
 exit 1

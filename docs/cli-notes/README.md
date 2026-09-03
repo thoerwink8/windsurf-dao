@@ -4,14 +4,14 @@
 
 | CLI | 文件 | 一句话特性 |
 |---|---|---|
-| Devin | [devin.md](devin.md) | command 型，TUI 就绪慢，必须先 `wait --for tui-idle` 再送字 |
-| Codex (gpt) | [codex.md](codex.md) | agent 型，必须 `--agent codex`，粘贴 `[Pasted Content]` 永不发送 |
-| Grok Build CLI | [grok.md](grok.md) | #822 已从选型移除；写码 grok-4.6 走 pi gw。本节留卸载前的坑 |
 | pi / gw | [pi.md](pi.md) | #822 起非 GPT 工人默认宿主。`pi --model gw…/模型` |
-| Cursor | [cursor.md](cursor.md) | agent 型，`[Pasted text]` 是提交后残留不算未提交 |
+| Codex (gpt) | [codex.md](codex.md) | GPT 例外：必须 `--agent codex`，粘贴 `[Pasted Content]` 永不发送 |
 | Command Code | [commandcode.md](commandcode.md) | command 型，只做非交互查证，需补空回车 |
-| Claude (reclaude) | [claude.md](claude.md) | command 型，必须 `--command` 读 launch，抢跑注入必被吞 |
 | 飞书 (`lark-cli`) | [feishu.md](feishu.md) | 运维 CLI，不是工人；`--as bot` 发消息，话题群≠线性群 |
+| Grok Build CLI（退役） | [grok.md](grok.md) | #822 已卸；写码 grok-4.6 走 pi gw。历史坑 |
+| Cursor（退役） | [cursor.md](cursor.md) | #822 已卸；Composer/Kimi/GLM 走 pi gw |
+| Devin（退役） | [devin.md](devin.md) | #822 已卸；历史 TUI 注入坑 |
+| Claude / reclaude（退役） | [claude.md](claude.md) | #822 已卸；Claude 模型改由 pi 经网关调 |
 
 ## 跨 CLI 通用教训（#762 实战，2026-08-25）
 

@@ -53,11 +53,11 @@
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
-| B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
+| B/C | ~/AppData/Local/devin | #822 退役：新机不装。历史凭据 credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |
 | B | ~/.orca/agent-hooks | Orca 状态 hook。现机已装的保持现状；模板已随 #807 删（cursor hook 那份，cursor-agent 退出选型） |
 | D | ~/AppData/Roaming/orca | Orca Desktop 本机画像。派工启动听仓内 launch；这份文件只拿来比较，禁拷、禁改、不进 git |
-| D | ~/AppData/Roaming/Devin | Devin 桌面端 user-data-dir。派工走 CLI 非交互形态，桌面端不参与 |
+| D | ~/AppData/Roaming/Devin | #822 退役：Devin 桌面端 user-data-dir。新机不装，桌面端不参与派工 |
 | E | ~/AppData/Roaming/mihomo-party | 归 `ai-gateway-stack`。Clash Party 覆写里有按 IP 写死的网关直连规则，换 VPS 要跟着改；覆写只在启动时读盘，改完必须重启 |
 | A | ~/.cursor/skills | NEW-MACHINE §11.2。链到 `host/skills`（Cursor Desktop；与 `~/.claude/skills` 对称） |
 | D | ~/.cursor/skills-cursor | Cursor 系统内置 skills，禁手写；装机只链 `~/.cursor/skills` |

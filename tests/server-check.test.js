@@ -22,6 +22,9 @@ import {
   classifyRequiredAgents,
   providerToAgentId,
   classifyLandAutomation,
+  parseEnabledAgentIds,
+  classifyRetiredClis,
+  RETIRED_WORKER_CLIS,
 } from '../scripts/server-check.mjs';
 
 test('server-check 判别力', async (t) => {
@@ -178,7 +181,7 @@ test('server-check 判别力', async (t) => {
       const text = fs.readFileSync(path.join(here, 'fixtures/orca-tui-agents/missing-pi.js'), 'utf8');
       const known = parseTuiAgentDisplayNames(text);
       const r = classifyRequiredAgents({
-        requiredIds: ['pi', 'devin', 'grok'],
+        requiredIds: ['pi', 'codex'],
         knownIds: known.ids,
         knownUnscanned: known.unscanned,
       });
@@ -198,11 +201,67 @@ test('server-check 判别力', async (t) => {
 
     await t.test('目录齐 → ok', () => {
       const r = classifyRequiredAgents({
-        requiredIds: ['pi', 'devin', 'grok'],
+        requiredIds: ['pi', 'codex'],
         knownIds: ['pi', 'devin', 'grok', 'codex'],
         knownUnscanned: false,
       });
       assert.equal(r.state, 'ok');
+    });
+
+    await t.test('#822 启用 JSON 只收 pi/codex，退役 grok/devin 不算必认', () => {
+      const json = JSON.stringify({
+        '工人': {
+          '写码': {
+            '模型': [
+              { id: 'grok-4.6', '禁用': false, provider: 'gw' },
+              { id: 'devin-x', '禁用': true, provider: 'devin' },
+            ],
+          },
+        },
+        '审官': {
+          '审查': {
+            '模型': [
+              { id: 'gpt-5.6-sol', '禁用': false, provider: 'gpt' },
+            ],
+          },
+        },
+      });
+      const r = parseEnabledAgentIds(json);
+      assert.equal(r.unscanned, false);
+      assert.deepEqual(r.ids.sort(), ['codex', 'pi']);
+      assert.ok(!r.ids.includes('grok') && !r.ids.includes('devin'), JSON.stringify(r.ids));
+    });
+
+    await t.test('#822 空 JSON / 全禁用 = 没扫到，不是 0 个', () => {
+      assert.equal(parseEnabledAgentIds('').unscanned, true);
+      assert.equal(parseEnabledAgentIds('{}').unscanned, true);
+      const allOff = parseEnabledAgentIds(JSON.stringify({
+        '工人': { '写码': { '模型': [{ id: 'devin-x', '禁用': true, provider: 'devin' }] } },
+      }));
+      assert.equal(allOff.unscanned, true);
+    });
+  });
+
+  await t.test('#822 退役工人 CLI 三态', async (t) => {
+    await t.test('扫完 0 个 → ok', () => {
+      const r = classifyRetiredClis({ probed: true, found: [] });
+      assert.equal(r.state, 'ok');
+      assert.match(r.detail, /0 个/);
+    });
+    await t.test('还在 PATH → 红', () => {
+      const r = classifyRetiredClis({ probed: true, found: ['grok=/usr/bin/grok', 'devin=/home/orca/.local/bin/devin'] });
+      assert.equal(r.state, 'red');
+      assert.ok(r.found.includes('grok=/usr/bin/grok'), JSON.stringify(r));
+    });
+    await t.test('没探到 → unknown，不许当绿', () => {
+      const r = classifyRetiredClis({ probed: false, reason: 'spawn 失败：ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+    await t.test('名单含 grok/cursor-agent/devin/reclaude', () => {
+      for (const n of ['grok', 'cursor-agent', 'devin', 'reclaude']) {
+        assert.ok(RETIRED_WORKER_CLIS.includes(n), n);
+      }
+      assert.ok(!RETIRED_WORKER_CLIS.includes('pi') && !RETIRED_WORKER_CLIS.includes('codex'));
     });
   });
 

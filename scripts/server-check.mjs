@@ -322,6 +322,44 @@ export function parseTuiAgentDisplayNames(source) {
   return { unscanned: false, ids };
 }
 
+const ENABLED_DUTIES = ['帅', '工人', '审官'];
+
+/** #822：只从选型 JSON 的启用条目收 --agent id，不把 toml 里退役节（grok/devin/cursor）当必认。检查器自持走职责树，不 import model-routing-json.mjs。 */
+export function parseEnabledAgentIds(jsonText) {
+  if (!jsonText || !String(jsonText).trim()) {
+    return { unscanned: true, ids: null, error: '选型 JSON 空' };
+  }
+  let doc;
+  try {
+    doc = JSON.parse(jsonText);
+  } catch (e) {
+    return { unscanned: true, ids: null, error: `选型 JSON 坏了：${String(e.message).slice(0, 120)}` };
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    return { unscanned: true, ids: null, error: '选型 JSON 不是对象' };
+  }
+  const ids = [];
+  let scanned = 0;
+  for (const duty of ENABLED_DUTIES) {
+    const workTypes = doc[duty];
+    if (!workTypes || typeof workTypes !== 'object') continue;
+    for (const cfg of Object.values(workTypes)) {
+      const list = Array.isArray(cfg?.['模型']) ? cfg['模型'] : [];
+      for (const m of list) {
+        if (!m?.id || m['禁用'] === true) continue;
+        if (m.provider == null || String(m.provider).trim() === '') continue;
+        scanned += 1;
+        const id = providerToAgentId(String(m.provider).trim());
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    }
+  }
+  if (scanned === 0) {
+    return { unscanned: true, ids: null, error: '没扫到任何启用中的厂商（没查成，不是 0 个）' };
+  }
+  return { unscanned: false, ids, scanned };
+}
+
 export function classifyRequiredAgents({ requiredIds, knownIds, knownUnscanned, knownError } = {}) {
   if (knownUnscanned || !Array.isArray(knownIds)) {
     return { state: UNKNOWN, detail: knownError || '没扫到 Orca TUI agent 目录（没查成，不是 0 个）' };
@@ -377,30 +415,78 @@ function loadTuiAgentCatalog({ env = process.env, readFile } = {}) {
 }
 
 function checkOrcaAgentIds() {
-  const routingPath = join(REPO_ROOT, 'docs', 'model-routing.toml');
+  const routingPath = join(REPO_ROOT, 'docs', 'model-routing.json');
   if (!existsSync(routingPath)) {
-    return { state: UNKNOWN, detail: 'docs/model-routing.toml 不在（没查成）' };
+    return { state: UNKNOWN, detail: 'docs/model-routing.json 不在（没查成）' };
   }
-  let tomlText;
+  let jsonText;
   try {
-    tomlText = readFileSync(routingPath, 'utf8');
+    jsonText = readFileSync(routingPath, 'utf8');
   } catch (e) {
-    return { state: UNKNOWN, detail: `路由表读失败：${String(e.message).slice(0, 120)}` };
+    return { state: UNKNOWN, detail: `选型 JSON 读失败：${String(e.message).slice(0, 120)}` };
   }
-  const parsed = parseStartAgentProviders(tomlText);
+  const parsed = parseEnabledAgentIds(jsonText);
   if (parsed.unscanned) return { state: UNKNOWN, detail: parsed.error };
-  const requiredIds = [];
-  for (const p of parsed.providers) {
-    const id = providerToAgentId(p.name);
-    if (id && !requiredIds.includes(id)) requiredIds.push(id);
-  }
   const catalog = loadTuiAgentCatalog();
   return classifyRequiredAgents({
-    requiredIds,
+    requiredIds: parsed.ids,
     knownIds: catalog.ids,
     knownUnscanned: catalog.unscanned,
     knownError: catalog.error,
   });
+}
+
+// —— ⑱ 退役工人 CLI 不得在 PATH（#822 验收后）——
+// 用户 2026-09-03 12:30：服务器只留 codex 与 pi。反过来检查 grok / cursor-agent / agent / devin / reclaude
+// **不在**——防装机脚本又装回来。扫完 0 个 = 绿；查到仍在 = 红；探 PATH 失败 = 没查成。
+export const RETIRED_WORKER_CLIS = ['grok', 'cursor-agent', 'agent', 'devin', 'reclaude'];
+
+export function classifyRetiredClis({ probed, reason, found } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: reason || '没探到 PATH（没查成，不是 0 个）' };
+  if (!Array.isArray(found)) {
+    return { state: UNKNOWN, detail: '退役 CLI 探测结果不是数组（没查成）' };
+  }
+  if (found.length === 0) {
+    return { state: OK, detail: `退役工人 CLI 不在 PATH（扫完 0 个：${RETIRED_WORKER_CLIS.join('、')}）` };
+  }
+  return {
+    state: RED,
+    found,
+    detail: `退役工人 CLI 还在 PATH：${found.join('、')}——#822 服务器只留 pi + codex，卸掉再跑`,
+  };
+}
+
+function whichOnPath(name) {
+  // `command -v` 是 shell 内置，spawnSync 会 EACCES。自扫 PATH，不 spawn 子进程。
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return { probed: false, reason: 'PATH 空（没查成）', hit: null };
+  const segs = pathEnv.split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
+  if (segs.length === 0) return { probed: false, reason: 'PATH 分段 0 个（没查成）', hit: null };
+  const win = process.platform === 'win32';
+  const candidates = win ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
+  for (const dir of segs) {
+    for (const file of candidates) {
+      const p = join(dir, file);
+      try {
+        if (existsSync(p)) return { probed: true, hit: p };
+      } catch {
+        /* 单段读失败继续扫，整表扫完才算没查成 */
+      }
+    }
+  }
+  return { probed: true, hit: null };
+}
+
+function checkRetiredClis() {
+  const found = [];
+  for (const name of RETIRED_WORKER_CLIS) {
+    const w = whichOnPath(name);
+    if (!w.probed) {
+      return { state: UNKNOWN, detail: `探 ${name} 失败：${w.reason}` };
+    }
+    if (w.hit) found.push(`${name}=${w.hit}`);
+  }
+  return classifyRetiredClis({ probed: true, found });
 }
 
 // —— ⑫ 飞书适配器（#801 块A）——
@@ -618,6 +704,7 @@ const CHECKS = [
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
+  ['⑱ 退役工人 CLI 不在 PATH（#822 只留 pi+codex）', checkRetiredClis],
 ];
 
 function outPath() {
@@ -647,15 +734,21 @@ function selfTest() {
     if (emptyList.state !== UNKNOWN) failures.push(`空列表判成了 ${emptyList.state}，应为 ok/count=0`);
   }
 
-  // #802：故意造「目录里没有 pi」——必须判红，不能当绿。
+  // #802：故意造「目录里没有 pi」——必须判红，不能当绿。#822 启用槽只认 pi/codex。
   const missingPi = classifyRequiredAgents({
-    requiredIds: ['pi', 'devin', 'grok'],
-    knownIds: ['grok', 'codex', 'devin'],
+    requiredIds: ['pi', 'codex'],
+    knownIds: ['codex'],
     knownUnscanned: false,
   });
   if (missingPi.state !== RED || !Array.isArray(missingPi.missing) || !missingPi.missing.includes('pi')) {
     failures.push(`故意缺 pi 应判红，实际 ${missingPi.state} missing=${JSON.stringify(missingPi.missing)}`);
   }
+  const leftover = classifyRetiredClis({ probed: true, found: ['grok=/usr/bin/grok'] });
+  if (leftover.state !== RED) failures.push(`退役 CLI 还在应判红，实际 ${leftover.state}`);
+  const gone = classifyRetiredClis({ probed: true, found: [] });
+  if (gone.state !== OK) failures.push(`退役 CLI 扫完 0 个应判 ok，实际 ${gone.state}`);
+  const unscannedCli = classifyRetiredClis({ probed: false, reason: '没探到' });
+  if (unscannedCli.state !== UNKNOWN) failures.push(`退役 CLI 没探到应判 unknown，实际 ${unscannedCli.state}`);
   const noCatalog = classifyRequiredAgents({
     requiredIds: ['pi'],
     knownIds: null,

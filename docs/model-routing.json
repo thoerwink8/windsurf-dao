@@ -355,7 +355,7 @@
     },
     {
       "名称": "非GPT只走pi-gw",
-      "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等本单验收后",
+      "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，#822 验收后卸（NEW-MACHINE §7 / server-check ⑱）",
       "约束": "启用中的厂商：GPT 模型必须 gpt；其余必须 gw。禁用条目可留旧 CLI 作退役记录",
       "拍板": "2026-09-03"
     }
