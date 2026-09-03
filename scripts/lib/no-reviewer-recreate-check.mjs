@@ -1,12 +1,11 @@
 // dao-check ㉕：删掉「审官死了/结算后再造卡、换厂」整层。
-// 检查器自己持有正则，不 import flow.mjs / dao-cmd 的解析——自己查自己查不出错。
+// 检查器自己持有正则，不 import dao-cmd 的解析——自己查自己查不出错。
 // 扫完 0 条违规 ≠ 没扫成：没给正文 / 找不到函数块 = unscanned。
+// #807 起 flow.mjs 已删（本机守卫栈退役），本检查只剩 dao.mjs 半边；#857 返工把 flow 半边一并清掉。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const AUTO_CREATE_TALK = /将自动 reviewer-create|自动 reviewer-create 起新审官/;
-const RUNDAO_CREATE = /runDao\s*\(\s*\[\s*['"]reviewer-create['"]/;
 const NEXT_IN_DONE = /nextReviewerAfter/;
 
 function chunk(src, re) {
@@ -14,13 +13,10 @@ function chunk(src, re) {
   return m ? m[0] : '';
 }
 
-/** 扫 flow / worker-done 还在不在造第二张审官。不读被查对象自己的函数。 */
-export function inspectNoReviewerRecreate({ flowSrc, daoSrc } = {}) {
-  if (flowSrc == null) return { ok: false, unscanned: true, error: '没给 flow.mjs 正文（没查成）' };
+/** 扫 worker-done 还在不在造第二张审官/换厂。不读被查对象自己的函数。 */
+export function inspectNoReviewerRecreate({ daoSrc } = {}) {
   if (daoSrc == null) return { ok: false, unscanned: true, error: '没给 dao.mjs 正文（没查成）' };
   const problems = [];
-  if (AUTO_CREATE_TALK.test(flowSrc)) problems.push('flow 仍写自动 reviewer-create 自愈话面');
-  if (RUNDAO_CREATE.test(flowSrc)) problems.push('flow 仍 runDao reviewer-create（结算后再造）');
   const done = chunk(daoSrc, /function cmdWorkerDone\b[\s\S]*?\nfunction /);
   if (!done) problems.push('找不到 cmdWorkerDone（没查成函数块）');
   else if (NEXT_IN_DONE.test(done)) problems.push('worker-done 仍调 nextReviewerAfter 换厂');
@@ -34,10 +30,8 @@ export function inspectNoReviewerRecreateFixtures(root) {
   const problems = [];
 
   function bundle(dir) {
-    const flow = join(dir, 'flow.mjs');
     const dao = join(dir, 'dao.mjs');
     return {
-      flowSrc: existsSync(flow) ? readFileSync(flow, 'utf8') : null,
       daoSrc: existsSync(dao) ? readFileSync(dao, 'utf8') : null,
     };
   }
