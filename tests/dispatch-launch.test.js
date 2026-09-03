@@ -190,6 +190,14 @@ describe('dispatch-launch（async-launch）', () => {
       const m = hot.match(/loadDispatchSlate\(\{[\s\S]*?\}\)/);
       assert.ok(m && /live:\s*false/.test(m[0]), '热路 slate 加载必须 live:false（不读 441+ 账本文件）');
     });
+    await t.test('#831 热路在写派工单之前走 assertDispatchInjectPlan（dry-run 也拦）', () => {
+      const gateAt = hot.indexOf('assertDispatchInjectPlan(');
+      const writeAt = hot.indexOf('writeDispatchOrder(');
+      const dryAt = hot.indexOf('if (args.dryRun)');
+      assert.ok(gateAt > 0, '热路缺 assertDispatchInjectPlan');
+      assert.ok(writeAt > gateAt, '注入闸必须在写派工单之前');
+      assert.ok(dryAt > gateAt, '注入闸必须在 dry-run 分支之前（dry-run 也要拦）');
+    });
 
     // 执行体段 = runDispatchExecution 本体（到 cmdDispatchBatch 为止）。
     const xi = daoSrc.indexOf('function runDispatchExecution(');
@@ -207,6 +215,13 @@ describe('dispatch-launch（async-launch）', () => {
         'rewriteMasterZone', 'afterDispatchComment', 'runGcReadonlyScan', 'gcThresholdLine', 'launchedGate']) {
         assert.ok(!new RegExp(`\\b${sym}\\b`).test(seg), `执行体段不该再有 ${sym}`);
       }
+    });
+    await t.test('#831 执行体段：同一道注入闸在建卡之前（防绕过热路直接 dispatch-exec）', () => {
+      const gateAt = seg.indexOf('assertDispatchInjectPlan(');
+      const createAt = seg.indexOf('argsWorktreeCreate(');
+      assert.ok(gateAt > 0, '执行体缺 assertDispatchInjectPlan');
+      assert.ok(createAt > gateAt, '执行体注入闸必须在 argsWorktreeCreate 之前');
+      assert.ok(/buildSoldierInject\(/.test(seg), '执行体仍走 buildSoldierInject（闸在模板纯函数里，不是抄第二份）');
     });
     await t.test('执行体段：两道查重与消歧门都在建卡之前（拦截不碰 orca）', () => {
       assert.ok(seg.indexOf('precheckDispatchDup(') > 0
@@ -586,6 +601,96 @@ describe('dispatch-launch（async-launch）', () => {
         && /派工单 dq-/.test(String(result.error || '')) && /--allow-dup/.test(String(result.error || '')),
         '队列拦截  →  ' + JSON.stringify(result).slice(0, 400));
       assert.ok(!result.workerId, '被拦时什么都没创建');
+    });
+  });
+
+  it('#831 注入闸前移到热路：超长 --spec 当场非零，一棵树都不建', async (t) => {
+    const S = await S_LOAD;
+    const prefix = '读 host/skills/dispatch/templates/soldier-book.md spec=';
+    const prefixBytes = S.injectUtf8Bytes(prefix);
+    const over = 'x'.repeat(S.INJECT_MAX_BYTES - prefixBytes + 1);
+
+    await t.test('纯函数：短 spec 放行，超长说清超了多少字节', () => {
+      const ok = S.assertDispatchInjectPlan({ spec: '短摘要' });
+      assert.ok(ok.ok === true, '短 spec  →  ' + JSON.stringify(ok));
+      const noSpec = S.assertDispatchInjectPlan({ spec: '' });
+      assert.ok(noSpec.ok === true && noSpec.skipped === true, '无 spec 跳过  →  ' + JSON.stringify(noSpec));
+      const bad = S.assertDispatchInjectPlan({ spec: over });
+      assert.ok(bad.ok === false && /上限/.test(bad.error) && /士兵注入/.test(bad.error),
+        '超长  →  ' + JSON.stringify(bad));
+      const m = String(bad.error).match(/注入 (\d+) 字节超过上限 (\d+)/);
+      assert.ok(m && Number(m[1]) > Number(m[2]), '话面要带实际字节与上限  →  ' + bad.error);
+    });
+
+    await t.test('纯函数：热路与执行体调的是同一导出，不是抄两份', () => {
+      const daoSrc = fs.readFileSync(CLI, 'utf8');
+      const hits = daoSrc.match(/assertDispatchInjectPlan\(/g) || [];
+      assert.ok(hits.length >= 2, `dao.mjs 热路+执行体都应调用，实际 ${hits.length}`);
+      const tmpl = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'template.mjs'), 'utf8');
+      assert.ok(/export function assertDispatchInjectPlan/.test(tmpl),
+        '闸本体只在 template.mjs');
+      assert.ok(!/function assertDispatchInjectPlan/.test(daoSrc),
+        'dao.mjs 不许再定义一份');
+    });
+
+    const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-831-q-'));
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-831-l-'));
+    const env = {
+      ...process.env, DAO_GH_FAKE: FAKE_GH,
+      LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
+    };
+    const base = [
+      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
+      '--name', 'x', '--split', 'no', '--split-reason', '单测', '--issue', '565',
+    ];
+
+    const dry = spawnSync(process.execPath, [...base, '--spec', over, '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env,
+    });
+    const pDry = payload(dry);
+    await t.test('--dry-run 超长 --spec 当场非零，话面带字节数', () => {
+      assert.ok(dry.status !== 0 && pDry.ok === false && /上限/.test(String(pDry.error || '')),
+        'dry-run  →  ' + JSON.stringify(pDry).slice(0, 400));
+      assert.ok(/注入 \d+ 字节超过上限 500/.test(String(pDry.error || '')),
+        '要说清超了多少  →  ' + pDry.error);
+      assert.ok(!pDry.queued && !pDry.dryRun, '不合格不许冒充已受理/预览过');
+    });
+
+    const before = fs.readdirSync(queueDir);
+    const hot = spawnSync(process.execPath, [...base, '--spec', over], {
+      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
+    });
+    const pHot = payload(hot);
+    const after = fs.readdirSync(queueDir);
+    await t.test('真 dispatch 超长 --spec 热路非零，不写派工单（执行体起不来，一棵树都不建）', () => {
+      assert.ok(hot.status !== 0 && pHot.ok === false && /上限/.test(String(pHot.error || '')),
+        '热路  →  ' + JSON.stringify(pHot).slice(0, 400));
+      assert.ok(!pHot.queued, '不合格不许 queued:true');
+      assert.ok(after.length === before.length,
+        `不该写下派工单  before=${before.join(',')} after=${after.join(',')}`);
+    });
+
+    // 绕过热路：手工写派工单再跑 dispatch-exec，执行体同一道闸仍拦在建卡前。
+    const DQ = await DQ_LOAD;
+    const id = 'dq-831-bypass';
+    const written = DQ.writeDispatchOrder({
+      dir: queueDir, id, now: new Date('2026-09-03T12:00:00+08:00'),
+      args: {
+        name: 'x', issue: '565', spec: over, model: 'grok-4.6', reviewer: 'gpt-5.6-sol',
+        confirm: true, split: 'no', splitReason: '单测',
+      },
+      plan: { workerCard: '卡A' },
+      dedup: { issue: '565', terminal: 'pi', name: '卡A' },
+    });
+    assert.ok(written.ok, '写绕过单  →  ' + JSON.stringify(written));
+    const exec = spawnSync(process.execPath, [CLI, 'dispatch-exec', '--order', written.paths.order], {
+      encoding: 'utf8', cwd: REPO, env,
+    });
+    const pExec = payload(exec);
+    await t.test('dispatch-exec 绕过热路：同一道闸仍非零，不建卡', () => {
+      assert.ok(exec.status !== 0 && pExec.ok === false && /上限/.test(String(pExec.error || '')),
+        'exec  →  ' + JSON.stringify(pExec).slice(0, 400));
+      assert.ok(!pExec.workerId && !pExec.workerPath, '被拦时什么都不会创建');
     });
   });
 

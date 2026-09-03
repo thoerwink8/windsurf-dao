@@ -861,13 +861,13 @@ import {
   DISPATCH_TEMPLATE_DIR, listDispatchTemplates, readDispatchTemplate, renderDispatchTemplate,
   INJECT_MAX_BYTES, INJECT_OVER_LIMIT_HINT, INJECT_GATE_SCOPE, ORCA_WORKER_PREAMBLE_BYTES_MEASURED,
   INJECT_GATE_NOTE, injectUtf8Bytes, stripInjectEof, assertInjectText, assertInjectLen,
-  buildSoldierInject, buildBatchInject, buildReviewerInject,
+  buildSoldierInject, buildBatchInject, buildReviewerInject, assertDispatchInjectPlan,
 } from './dispatch/template.mjs';
 export {
   DISPATCH_TEMPLATE_DIR, listDispatchTemplates, readDispatchTemplate, renderDispatchTemplate,
   INJECT_MAX_BYTES, INJECT_OVER_LIMIT_HINT, INJECT_GATE_SCOPE, ORCA_WORKER_PREAMBLE_BYTES_MEASURED,
   INJECT_GATE_NOTE, injectUtf8Bytes, stripInjectEof, assertInjectText, assertInjectLen,
-  buildSoldierInject, buildBatchInject, buildReviewerInject,
+  buildSoldierInject, buildBatchInject, buildReviewerInject, assertDispatchInjectPlan,
 } from './dispatch/template.mjs';
 
 // ── 闭环投递（发不到必须炸，#548 红项 1）──────────────────────────

@@ -172,6 +172,7 @@ import {
   buildSoldierInject,
   buildReviewerInject,
   assertInjectText,
+  assertDispatchInjectPlan,
   encodeSendText,
   runGh,
   stampIssueLabels,
@@ -1283,7 +1284,7 @@ function buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routin
 /**
  * 派工热路（2026-08-23 async-launch 拍板）：删同步脊整层——不再同步做 建卡→终端→送字。
  * 只做四步，<1s 返回：
- *   1. 参数校验（routing/约束/split/launch/名单预览，全内存或单小文件，不读账本不碰 gh/orca）
+ *   1. 参数校验（routing/约束/split/launch/名单预览/注入字节闸，全内存或单小文件，不读账本不碰 gh/orca）
  *   2. 写派工单到 _flow/queue/<id>.json
  *   3. spawn detached 执行体（dao.mjs dispatch-exec，信箱台同款 detached 模式）
  *   4. 返回「已受理」（结果落 _flow/queue/<id>.out.json；开工/死亡确认交 watchdog 与 inbox.log）
@@ -1318,6 +1319,16 @@ function cmdDispatch(args) {
   const built = buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routing });
   if (!built.ok) fail(built.error);
   const { plan, workerLaunch } = built;
+
+  // #831：注入字节闸是纯参数校验，热路当场判。不合格非零退出，不写派工单、不建树。
+  // --dry-run 同样拦（2026-09-03 实咬：dry-run 放过去，真派才在执行体崩）。
+  const injectGate = assertDispatchInjectPlan({
+    spec: args.spec,
+    issue: args.issue,
+    headSpec: built.headSpec,
+    childSpecs: (plan.childCards || []).map(c => c.spec),
+  });
+  if (!injectGate.ok) fail(injectGate.error, { injectGate });
 
   if (args.dryRun) {
     // dry-run 预览保留消歧报告与查重透出（查重走索引增量读，不扫全量账本）；
@@ -1523,6 +1534,17 @@ function runDispatchExecution(order, { queueDir } = {}) {
   if (!built.ok) fail(built.error, { orderId: order.id });
   const { plan, cards, headSpec } = built;
   let { workerLaunch } = built;
+
+  // #831：执行体也走同一道注入闸（有人可能绕过热路直接 dispatch-exec）。
+  // 必须在建卡之前：热路漏拦时这里仍一棵树都不建。闸本体是 assertDispatchInjectPlan，
+  // 后面 buildSoldierInject 里的 assertInjectText 仍保留（双保险，不是抄第二份逻辑）。
+  const injectGate = assertDispatchInjectPlan({
+    spec: args.spec,
+    issue: args.issue,
+    headSpec,
+    childSpecs: (plan.childCards || []).map(c => c.spec),
+  });
+  if (!injectGate.ok) fail(injectGate.error, { injectGate, orderId: order.id, ...plan });
 
   // 消歧门（#565）：带 --issue 的派工，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
   // 在一切建卡动作之前拦（被拦下时什么都不会创建）。gh 查失败单独报「没查成」，不许当有 label 放行。

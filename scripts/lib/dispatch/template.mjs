@@ -115,6 +115,27 @@ export function buildSoldierInject({ spec, issue } = {}) {
   return text;
 }
 
+/**
+ * #831：派工注入闸（纯函数，不看盘面）。热路和执行体共用这一处，
+ * 超长 --spec 当场 {ok:false}，不许抄两份。无 spec（已有 --task）跳过。
+ * 头工人 / 子块都会渲染士兵注入，任一超限都拦。
+ */
+export function assertDispatchInjectPlan({ spec, issue, headSpec, childSpecs } = {}) {
+  if (!spec) return { ok: true, skipped: true };
+  const list = [headSpec == null ? String(spec) : String(headSpec)];
+  if (Array.isArray(childSpecs)) {
+    for (const s of childSpecs) list.push(String(s ?? ''));
+  }
+  for (const item of list) {
+    try {
+      buildSoldierInject({ spec: item, issue });
+    } catch (e) {
+      return { ok: false, error: String(e.message || e) };
+    }
+  }
+  return { ok: true };
+}
+
 export function buildBatchInject({ spec, issue } = {}) {
   const text = renderInjectTemplate('batch-inject.md', {
     SPEC: spec,
