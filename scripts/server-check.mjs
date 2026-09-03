@@ -23,6 +23,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, stat
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
+import { extractDeltaContent } from './lib/provider-probe.mjs';
 import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -33,8 +35,11 @@ const RED = 'red';
 const UNKNOWN = 'unknown';
 
 /** 跑一条命令，永不抛：拿不到就 unknown，不许当 0 条。 */
-function run(cmd, args, { timeout = 30000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
+function run(cmd, args, { timeout = 30000, input, env } = {}) {
+  // input：给需要走 stdin 的命令用。env：给需要带敏感值的子进程用——
+  // 值放环境而不是 argv，因为 argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
+  // /proc/<pid>/environ 只有属主读得到。
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, ...(input == null ? {} : { input }), ...(env == null ? {} : { env }) });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
@@ -441,23 +446,64 @@ export function classifyBotModelProbe({ probed = false, reason = '', code = null
   return { state: RED, detail: `机器人模型 ${model} 不通（网关 ${code ?? '?'}${/model_not_found|No available channel/.test(reason) ? '，模型已被砍' : ''}）——改 FEISHU_LLM_MODEL 或把模型加回网关白名单` };
 }
 
+/** 机器人 systemd 单元真正读的那份 env（EnvironmentFile，600 root:root）。
+ *  不能只看 process.env：Orca 终端不继承 orca-serve 的环境（NEW-MACHINE.md §「实测」），
+ *  按 shell 循环跑法 ANTHROPIC_* 全空——那样 ⑰ 会在编排机上永远返回「本机不是编排机」，
+ *  变成一个永不响的报警，正好复刻本单要修的「零报警」。 */
+export const BOT_ENV_FILE = '/etc/feishu-triage.env';
+export function parseEnvFile(text) {
+  const out = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    out[m[1]] = v;
+  }
+  return out;
+}
+
 function probeBotModel() {
-  const base = process.env.ANTHROPIC_BASE_URL || '';
-  const model = process.env.FEISHU_LLM_MODEL || 'grok-4.6';
+  let fileEnv = {};
+  let envErr = null;
+  if (existsSync(BOT_ENV_FILE)) {
+    try { fileEnv = parseEnvFile(readFileSync(BOT_ENV_FILE, 'utf8')); }
+    catch (e) { envErr = `读不了 ${BOT_ENV_FILE}（权限？要 root，机器人单元是以 root 读它的）：${e.message}`; }
+  }
+  const base = fileEnv.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || '';
+  // 模型默认值只有一份真相：scripts/feishu-triage.mjs 的 LLM_MODEL。这里 import 常量，不抄第二份。
+  const model = fileEnv.FEISHU_LLM_MODEL || process.env.FEISHU_LLM_MODEL || BOT_LLM_MODEL;
   const keyFile = join(homedir(), '.mirasim', 'keys', 'feishu-triage.key');
-  if (!base) return { probed: false, reason: 'ANTHROPIC_BASE_URL 没设（本机不是编排机？）', model };
+  if (!base) return { probed: false, reason: envErr || `网关地址没查成（${BOT_ENV_FILE} 里没有 ANTHROPIC_BASE_URL，环境变量里也没有）`, model };
   if (!existsSync(keyFile)) return { probed: false, reason: '机器人 key 不在本机', model };
   let key = '';
   try { key = readFileSync(keyFile, 'utf8').trim(); } catch (e) { return { probed: false, reason: `key 读不了：${e.message}`, model }; }
   if (!key) return { probed: false, reason: 'key 为空', model };
-  const body = JSON.stringify({ model, stream: true, max_tokens: 16, messages: [{ role: 'user', content: 'ok' }] });
-  const r = run('curl', ['-s', '--max-time', '90', '-o', '-', '-w', '\n__HTTP__%{http_code}',
-    `${base}/v1/chat/completions`, '-H', 'content-type: application/json',
-    '-H', `authorization: Bearer ${key}`, '-d', body], { timeout: 100000 });
-  if (!r.probed) return { probed: false, reason: r.reason || 'curl 没跑成', model };
+  // key **走子进程环境变量**，不进 argv：argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
+  // 而 /proc/<pid>/environ 只有属主读得到，与「能读 key 文件本身」是同一道信任边界。
+  //（硬规矩：key 永不进聊天/日志。另：curl -K - 在 Windows 上会挂住读不到 stdin EOF，2026-09-04 实测，别回头改回去。）
+  // key 走子进程**环境变量**，不进 argv（argv 即 /proc/<pid>/cmdline，全局可读）。
+  // 子进程是独立文件（不内联 -e 源码：两层转义写岔过一次，探针只会报「超时」，根因看不见）。
+  const childFile = join(REPO_ROOT, 'scripts', 'lib', 'bot-model-probe-child.mjs');
+  const r = run(process.execPath, [childFile, base, model], { timeout: 100000, env: { ...process.env, __PROBE_KEY__: key } });
+  if (!r.probed) return { probed: false, reason: r.reason || "探针子进程没跑成", model };
   const out = String(r.stdout || '');
+  const errHit = out.match(/__ERR__(.*)$/);
   const code = Number((out.match(/__HTTP__(\d{3})/) || [])[1]) || null;
-  const gotContent = /"(?:content|delta)"\s*:/.test(out) && /"content"\s*:\s*"[^"]/.test(out);
+  // 连不上/超时是「这次没探成」，不是「网关真红」（本文件头的三态纪律：探不到 ≠ 结果不对）。
+  if (errHit) return { probed: false, reason: `发不出去：${errHit[1].slice(0, 120)}`, model };
+  if (r.code !== 0 || !code) {
+    return { probed: false, reason: `探针子进程退出 ${r.code}，没拿到状态码${String(r.stderr || '').slice(0, 120)}`, model };
+  }
+  // 「有真内容」判据复用 provider-probe 的纯函数：它认 content / reasoning_content / reasoning。
+  // grok-4.6 是推理档，小预算时可能只吐推理增量——自己写正则就会把「模型正常」判成红。
+  let gotContent = false;
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const p = line.slice(5).trim();
+    if (!p || p === '[DONE]') continue;
+    try { if (extractDeltaContent('gw-openai', JSON.parse(p))) { gotContent = true; break; } } catch { /* 半截行跳过 */ }
+  }
   return { probed: true, code, gotContent, model, reason: out.replace(/__HTTP__\d+/, '').slice(0, 200) };
 }
 

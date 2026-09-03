@@ -978,14 +978,19 @@ describe('llm 流式（2026-09-04：非流式 + 60s 在 grok 排队时必超时�
     assert.deepEqual(await llm({ system: 's', user: 'u', json: true }), { intent: 'situation' });
   });
 
-  it('超时预算可配，默认 180s（60s 曾把盘面问答全切断）', async () => {
+  it('超时预算：默认 180s 是从模块读回来的真值，不是「有个信号量」就算过', async () => {
     const M = await MOD;
+    assert.equal(M.LLM_TIMEOUT_MS, 180000, '默认预算必须是 180s——改小了这条要红（60s 曾把盘面问答全切断）');
     const dir = tmpdir();
     const keyFile = path.join(dir, 'feishu-triage-timeout.key');
     fs.writeFileSync(keyFile, 'k9\n');
     let seenSignal = null;
-    const fetchImpl = async (_u, init) => { seenSignal = init.signal; return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) }; };
+    const enc = new TextEncoder();
+    const sse = () => { const parts = [`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}
+
+`]; let i = 0; return { getReader: () => ({ read: async () => (i < parts.length ? { done: false, value: enc.encode(parts[i++]) } : { done: true }) }) }; };
+    const fetchImpl = async (_u, init) => { seenSignal = init.signal; return { ok: true, status: 200, body: sse() }; };
     await M.makeLlm({ gateway: 'https://gw.example', keyPath: keyFile, fetchImpl, timeoutMs: 1234 })({ system: 's', user: 'u' });
-    assert.ok(seenSignal && typeof seenSignal.aborted === 'boolean', '带 AbortSignal');
+    assert.ok(seenSignal && typeof seenSignal.aborted === 'boolean', '流式路径也带 AbortSignal');
   });
 });

@@ -15,6 +15,7 @@ import {
   classifyFeishuTriage,
   classifyAgentStallWatch,
   classifyBotModelProbe,
+  parseEnvFile,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
   parseTuiAgentDisplayNames,
@@ -343,5 +344,35 @@ test('⑰ 机器人模型探针（2026-09-04 实咬：模型被砍后消费方�
     const r = classifyBotModelProbe({ probed: false, reason: '机器人 key 不在本机' });
     assert.equal(r.state, 'unknown');
     assert.match(r.detail, /没探成/);
+  });
+});
+
+test('⑰ 返工：env 文件解析 + 连不上判没查成 + 推理增量算真内容（审官红 2/3/4）', async (t) => {
+  await t.test('parseEnvFile：认 export/引号/注释，值里的 = 不切断', () => {
+    const e = parseEnvFile([
+      '# 注释行',
+      'ANTHROPIC_BASE_URL=https://gw.example',
+      'export FEISHU_LLM_MODEL="grok-4.6"',
+      "QUOTED='v=1&b=2'",
+      '  SPACED = x ',
+      '坏行没有等号',
+    ].join('\n'));
+    assert.equal(e.ANTHROPIC_BASE_URL, 'https://gw.example');
+    assert.equal(e.FEISHU_LLM_MODEL, 'grok-4.6', '引号要剥掉');
+    assert.equal(e.QUOTED, 'v=1&b=2', '值里的 = 不许当分隔符');
+    assert.equal(e.SPACED, 'x');
+    assert.equal(Object.keys(e).length, 4, '注释与坏行不进表');
+  });
+
+  await t.test('连不上/超时（curl 000）→ 没查成，不是真红', () => {
+    const r = classifyBotModelProbe({ probed: false, reason: 'curl 退出 28（连不上或超时，HTTP 000）' });
+    assert.equal(r.state, 'unknown', '网络抖一下不许算网关真红');
+    assert.match(r.detail, /没探成/);
+  });
+
+  await t.test('探不到时不许说「本机不是编排机」这种误导话', () => {
+    const r = classifyBotModelProbe({ probed: false, reason: '网关地址没查成（/etc/feishu-triage.env 里没有 ANTHROPIC_BASE_URL，环境变量里也没有）' });
+    assert.equal(r.state, 'unknown');
+    assert.doesNotMatch(r.detail, /不是编排机/);
   });
 });

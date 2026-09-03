@@ -82,6 +82,9 @@ export const DEFAULT_HUB_CHAT_DIR = join(homedir(), '.dao', 'hub-chat');
 /** 机器人自己判重/分类/作答用的模型。必须在网关白名单里（ai-gateway-stack §68 大扫除砍了 253 条，
  *  砍掉的模型请求会 503「No available channel」）。换模型改这里，别散落。 */
 export const LLM_MODEL = process.env.FEISHU_LLM_MODEL || 'grok-4.6';
+/** llm 单次预算。2026-09-04 实咬：非流式 + 60s 在 grok 排队时必超时（单次大 prompt 实测 26s，
+ *  盘面问答两跳）。导出成常量是为了测试能把 180000 这个数**读回来**验，而不是只验「有个信号量」。 */
+export const LLM_TIMEOUT_MS = Number(process.env.FEISHU_LLM_TIMEOUT_MS || 180000);
 export const COMMANDER_DIR = join(homedir(), '.dao', 'commander');
 export const PROVIDER_HEALTH_FILE = join(homedir(), '.dao', 'provider-health.json');
 export const PROVIDER_BREAKER_FILE = join(homedir(), '.dao', 'provider-breaker.json');
@@ -376,7 +379,7 @@ export function makeLlm({
   gateway, keyPath = FEISHU_TRIAGE_KEY, fetchImpl = fetch,
   // 2026-09-04 实咬：非流式 + 60s 在 grok 排队时必超时（单次大 prompt 实测 26s，盘面问答两跳）——
   // 与「探针一律流式」同一条教训：走流式（首字节就开始收，不被网关空闲切断），预算给足。
-  timeoutMs = Number(process.env.FEISHU_LLM_TIMEOUT_MS || 180000), traceRef = null,
+  timeoutMs = LLM_TIMEOUT_MS, traceRef = null,
 } = {}) {
   return async function llm({ system, user, json = false, daoTask, daoRun, daoActor } = {}) {
     if (!gateway) throw new Error('ANTHROPIC_BASE_URL 未设置——llm 不可用（补充2：网关与 claude 同源，systemd drop-in 注入）');
