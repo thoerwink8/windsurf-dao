@@ -4,8 +4,26 @@
     "写码": {
       "模型": [
         {
-          "id": "devin-deepseek-v4-flash-max",
+          "id": "grok-4.6",
           "顺位": 1,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：代码全 grok，heavy 套餐；复看 2026-09-13",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "grok",
+              "cli_model": "grok-4.6",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Grok Build 官方 CLI"
+            }
+          ]
+        },
+        {
+          "id": "devin-deepseek-v4-flash-max",
+          "顺位": 2,
           "禁用": false,
           "理由": "2026-08-26 #771 全链实测恢复：devin CLI 已登录（Pro），非交互形态（-p --prompt-file）派单→开工→写码→开 PR→完工 comment→补审官→审官判绿合并全通。dispatch 报 agent_prompt_stalled 是假 stalled（工人实际在跑），worker-done 起审官失败走 reviewer-attach --skip-wait 补审官（#631）。",
           "拍板": "2026-08-26",
@@ -23,7 +41,7 @@
         },
         {
           "id": "deepseek-v4-flash",
-          "顺位": 2,
+          "顺位": 3,
           "禁用": false,
           "理由": "写码 fallback（#688）；2026-09-03 通道改 gw-dspool 优先",
           "拍板": "2026-08-16",
@@ -42,6 +60,92 @@
               "顺位": 2,
               "禁用": false,
               "理由": "2026-09-03 服务器实测 403 RegionError，需 opencode 后台 opt-in"
+            }
+          ]
+        }
+      ]
+    },
+    "方案": {
+      "模型": [
+        {
+          "id": "gpt-5.6-sol",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：方案多模型盲写、机器人整合、代码全 grok",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "gpt",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Codex 主路"
+            },
+            {
+              "id": "cursor",
+              "cli_model": "gpt-5.6-sol-high",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "GPT 支路 cursor"
+            }
+          ]
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：方案多模型盲写、机器人整合、代码全 grok",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "gw",
+              "cli_model": "gw-dspool/deepseek-v4-flash",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "2026-09-03 拍板：能用 pi 的用 pi，走自建中转站；服务器实测通"
+            }
+          ]
+        },
+        {
+          "id": "glm-5.2",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：方案多模型盲写、机器人整合、代码全 grok",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "glm-5.2-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor Ultra"
+            }
+          ]
+        }
+      ]
+    },
+    "方案整合": {
+      "模型": [
+        {
+          "id": "grok-4.6",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：方案多模型盲写、机器人整合、代码全 grok",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "grok",
+              "cli_model": "grok-4.6",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Grok Build 官方 CLI"
             }
           ]
         }
@@ -210,6 +314,24 @@
               "顺位": 2,
               "禁用": false,
               "理由": "支路"
+            }
+          ]
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "2026-09-03 用户拍板：pqapi 不可用时审官降级到 Windsurf luna（credit 5 vs sol 50）",
+          "拍板": "2026-09-03",
+          "status": "试用",
+          "trial_since": "2026-09-03",
+          "厂商": [
+            {
+              "id": "gw",
+              "cli_model": "gw-windsurf/gpt-5.6-luna",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "pi --provider gw-windsurf --model gpt-5.6-luna；服务器实测 PONG"
             }
           ]
         },
@@ -410,7 +532,8 @@
     {
       "id": "ban-gpt-ui",
       "模型": [
-        "gpt-5.6-sol"
+        "gpt-5.6-sol",
+        "gpt-5.6-luna"
       ],
       "工种": [
         "UI"

@@ -70,7 +70,10 @@
 //    逐个确认还在；查不到/已解散报红并写出群名；全都在为绿；无实机映射 / 无 lark-cli /
 //    无凭据（CI）SKIP 不是绿；0 个 chat_id = 没查成。
 //    检查器自持解析，不 import feishu-triage.loadGroups；红/绿/空夹具验判别力
-// ㉙ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
+// ㉙ 发布策略 schema（#817）：docs/release-policy.json 可解析且过 schema（四个顶层键 /
+//    confirm 三级 / bump 表 / 每项目 demo）。检查器自持解析，不 import 消费方；
+//    红/绿/空夹具验判别力；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成。
+// ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
 //    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
 //    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
 
@@ -111,6 +114,9 @@ import {
 import {
   inspectFeishuGroupsFixtures, checkFeishuGroups,
 } from './lib/feishu-groups-check.mjs';
+import {
+  inspectReleasePolicyFixtures, inspectReleasePolicyLive,
+} from './lib/release-policy-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -800,7 +806,7 @@ function checkMemoryLinkAlive() {
   else fail(...r.fail);
 }
 
-// ── ㉙ skill 发现面符号链接（local-only，issue #793）────────────────────
+// ── ㉚ skill 发现面符号链接（local-only，issue #793）────────────────────
 // 仓内 host/skills/<名>/ 每个 skill，在本机宿主发现面 ~/.claude/skills/<名> 必须是指向仓内
 // host/skills/<名> 的符号链接（NEW-MACHINE §11；建链是手动动作，#565 拍板 symlink 归帅建，
 // 本检查只报警不自动建链）。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
@@ -1457,6 +1463,42 @@ checkVersionCarrierSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
 checkFeishuGroupsLive();
+checkReleasePolicySamples();
+checkReleasePolicyLive();
+
+function checkReleasePolicySamples() {
+  const r = inspectReleasePolicyFixtures(join(ROOT, 'tests', 'fixtures', 'release-policy-check'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? 'release-policy 样本没查成' : 'release-policy 样本对不上',
+      '恢复 tests/fixtures/release-policy-check/{red,ok,empty}：红=缺 confirm.major 必须拦、绿必须过、空={} 没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`release-policy 样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkReleasePolicyLive() {
+  const r = inspectReleasePolicyLive(ROOT);
+  if (r.unscanned) {
+    fail(
+      'release-policy.json 没查成',
+      '恢复 docs/release-policy.json；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成，不是过',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `release-policy.json schema 不过 ${(r.problems || []).length} 处`,
+      '四个顶层键 confirm/version/rollback/budget 齐；confirm 三级齐；bump 表覆盖 conventional 类型；每项目 demo 有 kind',
+      (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`release-policy.json 可解析且过 schema（${r.scanned} 项）`);
+}
 
 function checkFeishuGroupsSamples() {
   const r = inspectFeishuGroupsFixtures(join(ROOT, 'tests', 'fixtures', 'feishu-groups-check'));

@@ -528,8 +528,8 @@ describe('dao', () => {
     await t.test('峰时只给 --role 不给 --model → 非零（禁静默默认）', () => {
       assert.ok(roleOnly.status !== 0, '峰时只给 --role 不给 --model → 非零（禁静默默认）  →  ' + JSON.stringify(pRole));
     });
-    await t.test('写码推荐 devin 通道条目不是 ds-flash', () => {
-      assert.ok(pRole.recommendation && pRole.recommendation.model === 'devin-deepseek-v4-flash-max', '写码推荐 devin 通道条目  →  ' + JSON.stringify(pRole));
+    await t.test('写码推荐 grok-4.6 通道条目不是 ds-flash', () => {
+      assert.ok(pRole.recommendation && pRole.recommendation.model === 'grok-4.6', '写码推荐 grok 通道条目  →  ' + JSON.stringify(pRole));
     });
     await t.test('写码推荐不是 deepseek-v4-flash（误推钉）', () => {
       assert.ok(!(pRole.recommendation && pRole.recommendation.model === 'deepseek-v4-flash'), '写码推荐不是 deepseek-v4-flash（误推钉）  →  ' + JSON.stringify(pRole));
@@ -537,8 +537,8 @@ describe('dao', () => {
 
     const roleConfirm = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pConf = payload(roleConfirm);
-    await t.test('--role + --confirm 采用写码推荐 devin', () => {
-      assert.ok(roleConfirm.status === 0 && pConf.model === 'devin-deepseek-v4-flash-max', '--role + --confirm 采用写码推荐 devin  →  ' + JSON.stringify(pConf));
+    await t.test('--role + --confirm 采用写码推荐 grok-4.6', () => {
+      assert.ok(roleConfirm.status === 0 && pConf.model === 'grok-4.6', '--role + --confirm 采用写码推荐 grok  →  ' + JSON.stringify(pConf));
     });
 
     // #754 偏离闸：手写 --model 偏离该工种顺位 1（默认写码；给了 --role 按那个工种），
@@ -551,7 +551,7 @@ describe('dao', () => {
         '偏离 1 号 → 失败要 --confirm  →  ' + JSON.stringify(fnDeviation));
     });
     await t.test('函数层：偏离话面点名 1 号模型、手写模型与 --confirm', () => {
-      assert.ok(/devin-deepseek-v4-flash-max/.test(fnDeviation.error) && /deepseek-v4-flash/.test(fnDeviation.error) && /--confirm/.test(fnDeviation.error),
+      assert.ok(/grok-4\.6/.test(fnDeviation.error) && /deepseek-v4-flash/.test(fnDeviation.error) && /--confirm/.test(fnDeviation.error),
         '话面点名 1 号/手写/--confirm  →  ' + fnDeviation.error);
     });
     const fnDeviationConfirm = S.resolveDispatchConstraints({
@@ -562,10 +562,10 @@ describe('dao', () => {
         '偏离 1 号带 --confirm → 放行  →  ' + JSON.stringify(fnDeviationConfirm));
     });
     const fnRankOne = S.resolveDispatchConstraints({
-      model: 'devin-deepseek-v4-flash-max', reviewer: 'gpt-5.6-sol', routing,
+      model: 'grok-4.6', reviewer: 'gpt-5.6-sol', routing,
     });
     await t.test('函数层：--model 正是顺位 1 → 不用 confirm', () => {
-      assert.ok(fnRankOne.ok === true && fnRankOne.model === 'devin-deepseek-v4-flash-max',
+      assert.ok(fnRankOne.ok === true && fnRankOne.model === 'grok-4.6',
         '--model 正是顺位 1 → 不用 confirm  →  ' + JSON.stringify(fnRankOne));
     });
     const fnRoleDeviation = S.resolveDispatchConstraints({
@@ -589,7 +589,7 @@ describe('dao', () => {
       assert.ok(devFlash.status !== 0, '#754 无 --confirm → 非零  →  ' + `status=${devFlash.status} ${JSON.stringify(pDevFlash)}`);
     });
     await t.test('#754 dispatch --dry-run：错误点名 1 号 / 手写 / --confirm', () => {
-      assert.ok(/devin-deepseek-v4-flash-max/.test(pDevFlash.error || '') && /deepseek-v4-flash/.test(pDevFlash.error || '') && /--confirm/.test(pDevFlash.error || ''),
+      assert.ok(/grok-4\.6/.test(pDevFlash.error || '') && /deepseek-v4-flash/.test(pDevFlash.error || '') && /--confirm/.test(pDevFlash.error || ''),
         '错误点名  →  ' + JSON.stringify(pDevFlash));
     });
     const devFlashConf = dispatch(['--merge-policy', 'auto', '--model', 'deepseek-v4-flash', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
@@ -598,15 +598,15 @@ describe('dao', () => {
       assert.ok(devFlashConf.status === 0 && pDevFlashConf.ok === true && pDevFlashConf.model === 'deepseek-v4-flash',
         '#754 带 --confirm → 过  →  ' + JSON.stringify(pDevFlashConf));
     });
-    const rankOne = dispatch(['--merge-policy', 'auto', '--model', 'devin-deepseek-v4-flash-max', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const rankOne = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pRankOne = payload(rankOne);
-    await t.test('#754 dispatch --dry-run：--model devin-deepseek-v4-flash-max（顺位 1）不用 confirm', () => {
-      assert.ok(rankOne.status === 0 && pRankOne.ok === true && pRankOne.model === 'devin-deepseek-v4-flash-max',
+    await t.test('#754 dispatch --dry-run：--model grok-4.6（顺位 1）不用 confirm', () => {
+      assert.ok(rankOne.status === 0 && pRankOne.ok === true && pRankOne.model === 'grok-4.6',
         '顺位 1 直接过  →  ' + JSON.stringify(pRankOne));
     });
 
     const fnDefault = S.resolveDispatchConstraints({
-      model: 'devin-deepseek-v4-flash-max', reviewer: 'gpt-5.6-sol', routing,
+      model: 'grok-4.6', reviewer: 'gpt-5.6-sol', routing,
     });
     await t.test('函数层不给 mergePolicy → 默认 auto', () => {
       assert.ok(fnDefault.ok === true && fnDefault.mergePolicy === 'auto', '函数层不给 mergePolicy → 默认 auto  →  ' + JSON.stringify(fnDefault));
@@ -859,6 +859,7 @@ describe('dao', () => {
     const calls = [];
     const recGh = (a) => {
       calls.push(a.slice());
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [] }) };
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }]) };
       if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
@@ -981,6 +982,7 @@ describe('dao', () => {
     const stampCalls = [];
     const stampGh = (a) => {
       stampCalls.push(a.slice());
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [] }) };
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
       if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
@@ -3529,9 +3531,9 @@ describe('dao', () => {
         && /未结算/.test(archiveBlock) && /#551/.test(archiveBlock),
         '审官结算走 notify --type worker_done 且带 task-id/dispatch-id  →  ' + archiveBlock.slice(0, 400));
     });
-    await t.test('审官任务书写明红项后也结算，复审靠新 Dispatch（#552）', () => {
-      assert.ok(/inspect-only/.test(archiveBlock) && /worker-start --terminal/.test(archiveBlock) && /#552/.test(archiveBlock),
-        '审官任务书写明红项后也结算，复审靠新 Dispatch（#552）');
+    await t.test('审官任务书写明红项后也结算，复审轮走队列（#552/#815）', () => {
+      assert.ok(/inspect-only/.test(archiveBlock) && /复审轮走队列/.test(archiveBlock) && /#552/.test(archiveBlock),
+        '审官任务书写明红项后也结算，复审轮走队列（#552/#815）');
     });
     await t.test('#675 审官任务书红项只跑 notify，不自己拼 task-create', () => {
       assert.ok(/不要自己拼/.test(tmplReviewer) && /task-create/.test(tmplReviewer) && /不要开下一跳/.test(tmplReviewer),

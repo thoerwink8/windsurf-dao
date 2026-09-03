@@ -4,7 +4,7 @@
 
 ## 一句话特性
 
-agent 型（`start = "agent"`），ds-flash 写码日常通道走 **gw-dspool**（`pi --model gw-dspool/deepseek-v4-flash`，2026-09-03 拍板）。`opencode-go` 是顺位 2（服务器 403 RegionError）。写码模型顺位 2（顺位 1 = devin）。
+agent 型（`start = "agent"`），ds-flash 写码日常通道走 **gw-dspool**（`pi --model gw-dspool/deepseek-v4-flash`，2026-09-03 拍板）。`opencode-go` 是顺位 2（服务器 403 RegionError）。写码模型顺位 3（顺位 1 = grok-4.6，#817）。
 
 ## 坑
 

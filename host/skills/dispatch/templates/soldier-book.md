@@ -19,6 +19,15 @@
 4. 给 PR 打标签（不存在先 `node scripts/gh-as.mjs worker -- label create`，幂等）：`node scripts/gh-as.mjs worker -- pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
 5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review`。**卡备注「待终审」只由 `worker-done` 在审官起来之后写**；审官没起来不许写「待终审」（#675：假待终审会让盘面撒谎）。
 
+## 交卷前自查（必做）
+
+`worker-done` 之前必须做完这一轮，审官只审自查之后的版本（2026-09-03 拍板，#817）：
+
+1. 跑本单目标测试（有改到的相关套一并跑）。
+2. 跑 `node scripts/dao-check.mjs`，绿了才往下。
+3. 对照本单验收标准逐条打勾，每条贴证据（命令输出 / 文件路径 / PR 段）；缺证据的条不算过。
+4. 再 `worker-done`。没自查完不许交卷。
+
 ## 干完活之后（顺序执行，缺一不可）
 
 1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。**不要在 PR 正文写 GitHub 的自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 issue #657）。

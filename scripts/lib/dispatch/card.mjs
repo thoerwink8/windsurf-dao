@@ -114,23 +114,77 @@ export function ensureRepoLabels({ names, runGh } = {}) {
   return { ok: true, created, existing };
 }
 
+function labelNameOf(item) {
+  if (typeof item === 'string') return item;
+  if (item && typeof item === 'object' && typeof item.name === 'string') return item.name;
+  return '';
+}
+
+/**
+ * 接手派单不重挂 model/*（#815/#810）：issue 上已有任意 model/* 就不再加第二条。
+ * existingNames 没拿到 → unscanned，不许猜着再挂。
+ */
+export function planStampIssueLabels({ existingNames, model, role, reviewer } = {}) {
+  if (existingNames == null || !Array.isArray(existingNames)) {
+    return { ok: false, unscanned: true, error: 'issue 现有 label 没查成（没查成，不许再挂）' };
+  }
+  const names = dispatchLabelNames({ model, role, reviewer });
+  const existing = existingNames.map(labelNameOf).filter(Boolean);
+  const existingModel = existing.filter(n => n.startsWith('model/'));
+  const add = [];
+  const skipped = [];
+  for (const name of names) {
+    if (existing.includes(name)) {
+      skipped.push({ name, reason: 'already' });
+      continue;
+    }
+    if (name.startsWith('model/') && existingModel.length > 0) {
+      skipped.push({ name, reason: 'handoff-keep-existing-model', existing: existingModel });
+      continue;
+    }
+    add.push(name);
+  }
+  return { ok: true, names, add, skipped, existingModel };
+}
+
 /** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
 export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) {
     return { ok: false, skipped: true, issue: n, error: '没给合法 issue 号，label 不打' };
   }
-  const names = dispatchLabelNames({ model, role, reviewer });
   if (typeof runGh !== 'function') {
     return { ok: false, issue: n, unscanned: true, error: 'stampIssueLabels 没拿到 gh 执行器——label 没打' };
   }
-  const ensured = ensureRepoLabels({ names, runGh });
+  const view = runGh(['issue', 'view', n, '--json', 'labels']);
+  if (!view.ok) {
+    return { ok: false, issue: n, unscanned: true, error: `gh 读 issue #${n} labels 失败——没查成，不许再挂：${view.error}` };
+  }
+  let existingNames = [];
+  try {
+    const parsed = JSON.parse(view.out);
+    existingNames = Array.isArray(parsed?.labels) ? parsed.labels : [];
+  } catch {
+    return { ok: false, issue: n, unscanned: true, error: `gh 读 issue #${n} labels 返回非 JSON——没查成，不许再挂` };
+  }
+  const planned = planStampIssueLabels({ existingNames, model, role, reviewer });
+  if (!planned.ok) return { ...planned, issue: n };
+  if (!planned.add.length) {
+    return {
+      ok: true, issue: n, names: planned.names, add: [], skipped: planned.skipped,
+      created: [], labels: planned.names,
+    };
+  }
+  const ensured = ensureRepoLabels({ names: planned.add, runGh });
   if (!ensured.ok) return { ok: false, issue: n, unscanned: ensured.unscanned === true, error: ensured.error };
   const add = [];
-  for (const name of names) add.push('--add-label', name);
+  for (const name of planned.add) add.push('--add-label', name);
   const r = runGh(['issue', 'edit', n, ...add]);
   if (!r.ok) return { ok: false, issue: n, error: `issue #${n} 打 label 失败：${r.error}` };
-  return { ok: true, issue: n, names, created: ensured.created, labels: names };
+  return {
+    ok: true, issue: n, names: planned.names, add: planned.add, skipped: planned.skipped,
+    created: ensured.created, labels: planned.add,
+  };
 }
 
 /** 合并侧（帅合并时跑）：PR 正文署名的 issue 上取 model/* type/* reviewer/* label，抄到 PR。

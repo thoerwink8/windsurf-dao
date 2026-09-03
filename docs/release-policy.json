@@ -1,0 +1,30 @@
+{
+  "updated": "2026-09-03",
+  "_comment": "发布/确认/回滚/预算策略。用户 2026-09-03 拍板：AI 拍代码内一切，人只确认四样。看板后台管理将来读写本文件；任何改动走 PR。",
+  "human_holds": ["对用户发布(minor/major)", "花钱", "删数据", "改规则(协作约定/本文件/model-routing)"],
+  "confirm": {
+    "patch": { "who": "auto", "evidence": ["tests", "dao-check"] },
+    "minor": { "who": "admin:1", "evidence": ["changelog", "tests", "dao-check"], "channel": "feishu-hub-card", "timeout_h": 24, "on_timeout": "hold" },
+    "major": { "who": "admin:1", "evidence": ["changelog", "tests", "dao-check", "demo"], "channel": "feishu-hub-card", "timeout_h": 48, "on_timeout": "hold" }
+  },
+  "version": {
+    "scheme": "semver",
+    "bump_by_commit_type": { "fix": "patch", "docs": "patch", "chore": "patch", "refactor": "patch", "perf": "patch", "feat": "minor", "feat!": "major", "BREAKING CHANGE": "major" },
+    "train": { "min_merged": 3, "max_wait_h": 24, "cut_when": "min_merged 达到 或 max_wait_h 到期，取先到者" }
+  },
+  "rollback": {
+    "strategy": "回到上一个发布 tag（脚本仓 revert 合并提交；服务器配置重跑上一版部署脚本；桌面程序回发上一版安装包）",
+    "auto_when": ["上线后冒烟检查红"],
+    "who_otherwise": "admin:1",
+    "keep_versions": 3
+  },
+  "budget": {
+    "per_issue": { "review_rounds_max": 6, "worker_wall_hours_max": 4, "on_exceed": "停手，发总控群卡片上报" },
+    "per_day": { "dispatch_max": 20, "on_exceed": "排队到次日" }
+  },
+  "demo": {
+    "windsurf-dao": { "kind": "scripts", "evidence": "dao-check 输出 + 测试计数" },
+    "ai-gateway-stack": { "kind": "server-config", "evidence": "部署脚本日志 + machine-check 全绿" },
+    "miraquota-win": { "kind": "desktop-windows", "evidence": "仿真人点击录像（录像员方案待拍板，见伞单第 4 步）" }
+  }
+}

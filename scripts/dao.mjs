@@ -123,6 +123,16 @@ import {
   isRunRequired,
   RUN_REQUIRED_HINT,
   collectReviewerCardsForPr,
+  planReviewerAttachReuse,
+  prepareReviewerOriginRef,
+  checkoutOriginRef,
+  pickDispatchAgentTerminal,
+  resolveSendTarget,
+  reviewPendingDir,
+  buildReviewPendingTicket,
+  writeReviewPending,
+  listReviewPending,
+  drainReviewPending,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -1629,6 +1639,13 @@ function runDispatchExecution(order, { queueDir } = {}) {
   if (!created.workerDispatchId) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { orderId: order.id, ...plan, taskId });
   }
+  const wrAgent = orca(argsWorkerRead({ dispatch: created.workerDispatchId, source: 'auto' }));
+  const agentTerminal = pickDispatchAgentTerminal({
+    workerHandle: created.workerHandle,
+    workerReadJson: wrAgent.ok ? wrAgent.json : null,
+  });
+  created.agentTerminalHandle = agentTerminal.ok ? agentTerminal.agentTerminalHandle : null;
+  created.agentTerminal = agentTerminal;
   created.dispatchIds.push(created.workerDispatchId);
   created.taskIds.push(taskId);
   const workerConfirmation = {
@@ -2109,6 +2126,38 @@ function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
   return { ok: true, from: current, to: next };
 }
 
+function writeReviewPendingOnFail({
+  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh,
+} = {}) {
+  try {
+    let head = { name: null, oid: null };
+    if (typeof runGh === 'function') {
+      const meta = runGh(['pr', 'view', String(pr), '--json', 'headRefName,headRefOid']);
+      if (meta.ok) {
+        try {
+          const parsed = JSON.parse(meta.out);
+          head = { name: parsed.headRefName || null, oid: parsed.headRefOid || null };
+        } catch { /* drain 自己再读 PR */ }
+      }
+    }
+    const built = buildReviewPendingTicket({
+      pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
+    });
+    if (!built.ok) return built;
+    return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+function reviewerFetchCwd({ parentSel, worktrees } = {}) {
+  if (parentSel && Array.isArray(worktrees)) {
+    const wt = findWorktreeBySel(worktrees, parentSel);
+    if (wt?.path) return wt.path;
+  }
+  return ROOT;
+}
+
 function loadReviewerReuseInputs() {
   const listed = orca(['worktree', 'list', '--json']);
   if (!listed.ok) return { ok: false, error: `worktree list 没查成：${errText(listed.error)}` };
@@ -2483,10 +2532,15 @@ function cmdWorkerDone(args) {
       if (parentId) {
         setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
       }
+      const reviewPending = writeReviewPendingOnFail({
+        pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
+        round: plan.round, error: create.error, workerModel: plan.workerModel,
+        soldierDispatch: args.soldierDispatch, runGh: gh,
+      });
       fail(stop.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
         reviewerCreate: create, reuse, spawnKind: cls.kind,
-        switchVendor: false, outcome: 'stop',
+        switchVendor: false, outcome: 'stop', reviewPending,
       });
     }
   } else if (shouldReuse) {
@@ -2550,10 +2604,15 @@ function cmdWorkerDone(args) {
         if (parentId) {
           setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
         }
+        const reviewPending = writeReviewPendingOnFail({
+          pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
+          round: plan.round, error: reused.error, workerModel: plan.workerModel,
+          soldierDispatch: args.soldierDispatch, runGh: gh,
+        });
         fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
           ...plan, commentPosted: true, postedIssue, postedPr,
           reviewerCreate: create, reviewerReuse: { ...reused, invoked: true, reuseFailed: true, retried: true }, reuse,
-          spawnKind: cls.kind,
+          spawnKind: cls.kind, reviewPending,
         });
       }
     }
@@ -2565,9 +2624,14 @@ function cmdWorkerDone(args) {
     if (parentId) {
       setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
     }
+    const reviewPending = writeReviewPendingOnFail({
+      pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
+      round: plan.round, error: refuseErr, workerModel: plan.workerModel,
+      soldierDispatch: args.soldierDispatch, runGh: gh,
+    });
     fail(refuseErr, {
       ...plan, commentPosted: true, postedIssue, postedPr,
-      outcome: 'refused-existing', reuse, reviewerCreate: create,
+      outcome: 'refused-existing', reuse, reviewerCreate: create, reviewPending,
     });
   }
 
@@ -3044,12 +3108,21 @@ function cmdReviewerCreate(args) {
     reviewerPath = oneReviewerGate.worktreePath;
   }
 
+  const fetchCwd = reviewerFetchCwd({
+    parentSel: args.parentWorktree,
+    worktrees: inputs.ok ? inputs.worktrees : null,
+  });
+  let originRef = prepareReviewerOriginRef({ branch: baseBranch, expectedOid, cwd: fetchCwd });
+  if (!originRef.ok) fail(originRef.error, { originRef, ...plan });
+  plan.baseBranch = originRef.baseBranch;
+  plan.originOid = originRef.originOid;
+
   if (!resumedFromExisting) {
     const created = orca(argsWorktreeCreate({
       name: revName,
       setup: 'skip',
       parentWorktree: args.parentWorktree,
-      baseBranch,
+      baseBranch: originRef.baseBranch,
       issue: args.issue,
       comment: args.comment,
     }));
@@ -3057,6 +3130,10 @@ function cmdReviewerCreate(args) {
     reviewerId = extractWorktreeId(created.json);
     reviewerPath = extractWorktreePath(created.json);
     if (!reviewerId || !reviewerPath) fail('审官卡没返回 id/path', { ...plan, reviewerId, reviewerPath });
+  } else {
+    originRef = checkoutOriginRef({ cwd: reviewerPath, branch: baseBranch, expectedOid });
+    if (!originRef.ok) fail(originRef.error, { originRef, reviewerId, reviewerPath, ...plan });
+    plan.originOid = originRef.originOid;
   }
 
   // PR #758：续跑已有卡时，校验/启动失败不删卡（卡是半成功的现场，删了下轮还是
@@ -3070,10 +3147,10 @@ function cmdReviewerCreate(args) {
     rmReviewerCard();
     fail(`审官树环境自检失败: ${env.error}`, { ...plan, reviewerId, reviewerPath, probes: env, resumedFromExisting });
   }
-  const heads = verifyReviewerTree({ reviewerPath, expectedOid });
+  const heads = verifyReviewerTree({ reviewerPath, expectedOid, originOid: originRef.originOid });
   if (!heads.ok) {
     rmReviewerCard();
-    fail(heads.error, { ...plan, reviewerId, reviewerPath, heads, resumedFromExisting });
+    fail(heads.error, { ...plan, reviewerId, reviewerPath, heads, originRef, resumedFromExisting });
   }
   const filesOk = verifyReviewerFiles({ reviewerPath, files });
   if (!filesOk.ok) {
@@ -3362,7 +3439,7 @@ function cmdReviewerAttach(args) {
   const files = parseGhPullFiles(fileJson);
   if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
 
-  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
+  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh, model: args.model });
   if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
 
   // #631：树→PR 归属校验。树↔dispatch 是 issue 派工时绑死的，PR 号是后开出来的——
@@ -3427,16 +3504,64 @@ function cmdReviewerAttach(args) {
     vendorGate,
     treeVerified,
   };
+  const wlReuse = orca(argsWorkerList());
+  const workersForReuse = wlReuse.ok ? unwrapWorkers(wlReuse.json) : null;
+  const parentWt = Array.isArray(trees) ? findWorktreeBySel(trees, args.worktree) : null;
+  const cardsForReuse = collectReviewerCardsForPr({
+    pr: args.pr,
+    parentId: parentWt?.id || args.worktree,
+    worktrees: trees,
+    workers: workersForReuse,
+  });
+  let reusePlan = planReviewerAttachReuse({
+    cards: cardsForReuse,
+    workers: workersForReuse,
+    workerRead: null,
+  });
+  if (reusePlan.action === 'probe') {
+    const wrReuse = orca(argsWorkerRead({ dispatch: reusePlan.dispatchId, source: 'auto' }));
+    reusePlan = planReviewerAttachReuse({
+      cards: cardsForReuse,
+      workers: workersForReuse,
+      workerRead: wrReuse.ok ? wrReuse : { ok: false, unscanned: true, error: errText(wrReuse.error) },
+    });
+  }
+  plan.reusePlan = reusePlan;
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
-  // #762：审官单例（一 PR 一审官，#575）。已有审官卡 → 复用（resolveReviewerReuse/reuseReviewerOnTerminal），
-  // 不销毁重建。attach 的复用接线见 cmdReviewerAttach 后续（当前先保持新建，单例复用另单落地）。
+  if (!reusePlan.ok) fail(reusePlan.error, { reusePlan, ...plan });
+
+  if (reusePlan.action === 'reuse') {
+    const reused = reuseReviewerOnTerminal({
+      pr: args.pr,
+      reviewerWorktreeId: reusePlan.worktreeId,
+      handle: reusePlan.handle,
+      parentWorktree: args.worktree,
+      soldierDispatch: args.soldierDispatch,
+      reviewer: args.reviewer,
+      issue: args.issue || (Array.isArray(worker.refs) ? worker.refs[0] : null),
+      dryRun: false,
+    });
+    if (!reused.ok) fail(reused.error, { reused, reusePlan, ...plan });
+    emit({ ok: true, reused: true, reusePlan, ...plan, ...reused });
+  }
+
+  // #815：不活或已结算 → 新建树。建树前 fetch origin/<分支>，按远端检出。
+  const originRef = prepareReviewerOriginRef({
+    branch: baseBranch,
+    expectedOid,
+    cwd: reviewerFetchCwd({ parentSel: args.worktree, worktrees: trees }),
+  });
+  if (!originRef.ok) fail(originRef.error, { originRef, ...plan });
+  plan.baseBranch = originRef.baseBranch;
+  plan.originOid = originRef.originOid;
+
   const created = {};
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',
     parentWorktree: args.worktree,
-    baseBranch,
+    baseBranch: originRef.baseBranch,
     issue: args.issue,
     comment: args.comment,
   }));
@@ -3450,8 +3575,12 @@ function cmdReviewerAttach(args) {
   const env = envProbeWorktree(created.reviewerPath);
   if (!env.ok) failCreated(created, `审官树环境自检失败: ${env.error}`, { probes: env, ...plan });
 
-  const heads = verifyReviewerTree({ reviewerPath: created.reviewerPath, expectedOid });
-  if (!heads.ok) failCreated(created, heads.error, { heads, ...plan });
+  const heads = verifyReviewerTree({
+    reviewerPath: created.reviewerPath,
+    expectedOid,
+    originOid: originRef.originOid,
+  });
+  if (!heads.ok) failCreated(created, heads.error, { heads, originRef, ...plan });
 
   const filesOk = verifyReviewerFiles({ reviewerPath: created.reviewerPath, files });
   if (!filesOk.ok) failCreated(created, filesOk.error, { files: filesOk, ...plan });
@@ -3641,17 +3770,74 @@ function cmdReviewerAttach(args) {
   });
 }
 
+function cmdReviewPendingDrain(args) {
+  const dir = reviewPendingDir({ root: ROOT });
+  const listed = listReviewPending(dir);
+  if (!listed.ok) fail(listed.error, listed);
+  const tickets = args.pr
+    ? listed.tickets.filter(t => String(t.pr) === String(args.pr))
+    : listed.tickets;
+  if (args.dryRun) {
+    emit({
+      ok: true,
+      dryRun: true,
+      scanned: tickets.length,
+      tickets,
+      dir,
+    });
+  }
+  const self = fileURLToPath(import.meta.url);
+  const drained = drainReviewPending({
+    dir,
+    tickets,
+    attach: (plan) => {
+      const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], {
+        encoding: 'utf8',
+        cwd: ROOT,
+        windowsHide: true,
+        timeout: 600000,
+      });
+      let json = null;
+      try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
+      if (spawned.error || (spawned.status !== 0 && spawned.status != null) || !json || json.ok !== true) {
+        return {
+          ok: false,
+          error: (json && json.error)
+            || String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`).trim().slice(0, 400),
+          json,
+        };
+      }
+      return { ok: true, json };
+    },
+  });
+  if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
+  emit(drained);
+}
+
 function cmdSend(args) {
-  if (!args.terminal) fail('send 要 --terminal');
   if (args.text == null) fail('send 要 --text');
+  let terminal = args.terminal || null;
+  let resolved = null;
+  if (args.dispatch) {
+    const wr = orca(argsWorkerRead({ dispatch: args.dispatch, source: 'auto' }));
+    resolved = resolveSendTarget({
+      terminal: args.terminal,
+      dispatch: args.dispatch,
+      workerReadJson: wr.ok ? wr.json : null,
+    });
+    if (!resolved.ok) fail(resolved.error, { resolved, dispatch: args.dispatch });
+    terminal = resolved.terminal;
+  } else if (!terminal) {
+    fail('send 要 --terminal 或 --dispatch');
+  }
   const r = orca(argsTerminalSend({
-    terminal: args.terminal,
+    terminal,
     text: args.text,
     enter: args.enter,
     agent: args.agent,
   }));
   if (!r.ok) fail(`terminal send 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  emit({ ok: true, json: r.json, terminal, dispatch: args.dispatch || null, resolved });
 }
 
 /**
@@ -4081,6 +4267,7 @@ function main() {
     case 'reviewer-create': return cmdReviewerCreate(args);
     case 'worker-done': return cmdWorkerDone(args);
     case 'reviewer-attach': return cmdReviewerAttach(args);
+    case 'review-pending-drain': return cmdReviewPendingDrain(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
     case 'reply': return cmdReply(args);
