@@ -79,6 +79,12 @@ export const GROK_KEY = FEISHU_TRIAGE_KEY;
 /** #852：策略真相源与聚合读盘落点。 */
 export const DEFAULT_POLICY = join(REPO_ROOT, 'docs', 'dispatch-policy.json');
 export const DEFAULT_HUB_CHAT_DIR = join(homedir(), '.dao', 'hub-chat');
+/** 机器人自己判重/分类/作答用的模型。必须在网关白名单里（ai-gateway-stack §68 大扫除砍了 253 条，
+ *  砍掉的模型请求会 503「No available channel」）。换模型改这里，别散落。 */
+export const LLM_MODEL = process.env.FEISHU_LLM_MODEL || 'grok-4.6';
+/** llm 单次预算。2026-09-04 实咬：非流式 + 60s 在 grok 排队时必超时（单次大 prompt 实测 26s，
+ *  盘面问答两跳）。导出成常量是为了测试能把 180000 这个数**读回来**验，而不是只验「有个信号量」。 */
+export const LLM_TIMEOUT_MS = Number(process.env.FEISHU_LLM_TIMEOUT_MS || 180000);
 export const COMMANDER_DIR = join(homedir(), '.dao', 'commander');
 export const PROVIDER_HEALTH_FILE = join(homedir(), '.dao', 'provider-health.json');
 export const PROVIDER_BREAKER_FILE = join(homedir(), '.dao', 'provider-breaker.json');
@@ -343,8 +349,37 @@ export function daoTraceHeaders({ repo, issueNumber, chatId, actor, daoTask, dao
   };
 }
 
+/** SSE 流累积成整段文本。只认 choices[0].delta.content，忽略心跳与其它字段。 */
+export async function readSseText(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const j = JSON.parse(payload);
+        const d = j?.choices?.[0]?.delta?.content;
+        if (typeof d === 'string') out += d;
+      } catch { /* 半截 JSON：下一轮拼齐再解析 */ }
+    }
+  }
+  return out;
+}
+
 export function makeLlm({
-  gateway, keyPath = FEISHU_TRIAGE_KEY, fetchImpl = fetch, timeoutMs = 60000, traceRef = null,
+  gateway, keyPath = FEISHU_TRIAGE_KEY, fetchImpl = fetch,
+  // 2026-09-04 实咬：非流式 + 60s 在 grok 排队时必超时（单次大 prompt 实测 26s，盘面问答两跳）——
+  // 与「探针一律流式」同一条教训：走流式（首字节就开始收，不被网关空闲切断），预算给足。
+  timeoutMs = LLM_TIMEOUT_MS, traceRef = null,
 } = {}) {
   return async function llm({ system, user, json = false, daoTask, daoRun, daoActor } = {}) {
     if (!gateway) throw new Error('ANTHROPIC_BASE_URL 未设置——llm 不可用（补充2：网关与 claude 同源，systemd drop-in 注入）');
@@ -374,7 +409,8 @@ export function makeLlm({
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: 'grok-4.6',
+          model: LLM_MODEL,
+          stream: true,
           messages: [
             { role: 'system', content: String(system ?? '') },
             { role: 'user', content: String(user ?? '') },
@@ -387,13 +423,23 @@ export function makeLlm({
       throw new Error(`llm 调用失败：${e.message}`);
     }
     if (!resp.ok) throw new Error(`llm HTTP ${resp.status}`);
-    let data;
-    try {
-      data = await resp.json();
-    } catch (e) {
-      throw new Error(`llm 响应不是 JSON：${e.message}`);
+    let text;
+    if (resp.body && typeof resp.body.getReader === 'function') {
+      try {
+        text = await readSseText(resp.body);
+      } catch (e) {
+        throw new Error(`llm 流读失败：${e.message}`);
+      }
+    } else {
+      // 非流式回退（伪 fetch / 网关不给流）：读整段 JSON。
+      let data;
+      try {
+        data = await resp.json();
+      } catch (e) {
+        throw new Error(`llm 响应不是 JSON：${e.message}`);
+      }
+      text = data?.choices?.[0]?.message?.content;
     }
-    const text = data?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || !text.trim()) throw new Error('llm 空返回');
     if (!json) return text;
     try {

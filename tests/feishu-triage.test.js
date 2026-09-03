@@ -747,7 +747,8 @@ export async function triage(inbound, deps) {
     assert.equal(calls[0].url, 'https://gw.example/v1/chat/completions', '网关 + /v1/chat/completions');
     assert.equal(calls[0].init.headers.authorization, 'Bearer k123', 'key 文件内容作 Bearer');
     const body = JSON.parse(calls[0].init.body);
-    assert.equal(body.model, 'grok-4.6', 'model 固定 grok-4.6');
+    assert.equal(body.model, 'grok-4.6', 'model 默认 grok-4.6（白名单内）');
+    assert.equal(body.stream, true, '一律流式（2026-09-04：非流式 60s 必超时）');
     assert.equal(body.messages[0].content, 's');
     assert.ok(!body.response_format, '非 json 模式不带 response_format');
 
@@ -941,5 +942,55 @@ export async function triage(inbound, deps) {
     assert.equal(persisted.threads.om_1.seen, 3, '追答经别名归回原根，om_1 累计 3 条');
     assert.equal(persisted.threads.om_bot_reply_1, undefined, '不产生孤儿新话题');
     assert.equal(persisted.aliases.om_bot_reply_1, 'om_1', '别名随状态落盘');
+  });
+});
+
+describe('llm 流式（2026-09-04：非流式 + 60s 在 grok 排队时必超时，同「探针一律流式」教训）', () => {
+  it('SSE 累积成整段文本；心跳/[DONE]/半截 JSON 都不炸', async () => {
+    const M = await MOD;
+    const { readSseText } = M;
+    const chunks = [
+      'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"你好"}}]}\n\ndata: {"choices":[{"delta":{"content":"，'.concat('世界"}}]}\n\n'),
+      ': heartbeat\n\ndata: {"cho',           // 半截，下一块拼齐
+      'ices":[{"delta":{"content":"！"}}]}\n\ndata: [DONE]\n\n',
+    ];
+    const enc = new TextEncoder();
+    let i = 0;
+    const body = { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: enc.encode(chunks[i++]) } : { done: true }) }) };
+    assert.equal(await readSseText(body), '你好，世界！');
+  });
+
+  it('makeLlm 走流式响应；json 模式仍解析对象', async () => {
+    const M = await MOD;
+    const dir = tmpdir();
+    const keyFile = path.join(dir, 'feishu-triage-stream.key');
+    fs.writeFileSync(keyFile, 'k9\n');
+    const enc = new TextEncoder();
+    const sse = (text) => {
+      const parts = [`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`, 'data: [DONE]\n\n'];
+      let i = 0;
+      return { getReader: () => ({ read: async () => (i < parts.length ? { done: false, value: enc.encode(parts[i++]) } : { done: true }) }) };
+    };
+    const fetchImpl = async () => ({ ok: true, status: 200, body: sse('{"intent":"situation"}') });
+    const llm = M.makeLlm({ gateway: 'https://gw.example', keyPath: keyFile, fetchImpl });
+    assert.equal(await llm({ system: 's', user: 'u' }), '{"intent":"situation"}');
+    assert.deepEqual(await llm({ system: 's', user: 'u', json: true }), { intent: 'situation' });
+  });
+
+  it('超时预算：默认 180s 是从模块读回来的真值，不是「有个信号量」就算过', async () => {
+    const M = await MOD;
+    assert.equal(M.LLM_TIMEOUT_MS, 180000, '默认预算必须是 180s——改小了这条要红（60s 曾把盘面问答全切断）');
+    const dir = tmpdir();
+    const keyFile = path.join(dir, 'feishu-triage-timeout.key');
+    fs.writeFileSync(keyFile, 'k9\n');
+    let seenSignal = null;
+    const enc = new TextEncoder();
+    const sse = () => { const parts = [`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}
+
+`]; let i = 0; return { getReader: () => ({ read: async () => (i < parts.length ? { done: false, value: enc.encode(parts[i++]) } : { done: true }) }) }; };
+    const fetchImpl = async (_u, init) => { seenSignal = init.signal; return { ok: true, status: 200, body: sse() }; };
+    await M.makeLlm({ gateway: 'https://gw.example', keyPath: keyFile, fetchImpl, timeoutMs: 1234 })({ system: 's', user: 'u' });
+    assert.ok(seenSignal && typeof seenSignal.aborted === 'boolean', '流式路径也带 AbortSignal');
   });
 });

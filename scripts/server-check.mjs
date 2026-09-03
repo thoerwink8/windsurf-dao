@@ -23,6 +23,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, stat
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
+import { extractDeltaContent } from './lib/provider-probe.mjs';
 import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -33,8 +35,11 @@ const RED = 'red';
 const UNKNOWN = 'unknown';
 
 /** 跑一条命令，永不抛：拿不到就 unknown，不许当 0 条。 */
-function run(cmd, args, { timeout = 30000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
+function run(cmd, args, { timeout = 30000, env } = {}) {
+  // env：给需要带敏感值的子进程用——
+  // 值放环境而不是 argv，因为 argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
+  // /proc/<pid>/environ 只有属主读得到。
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, ...(env == null ? {} : { env }) });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
@@ -430,6 +435,88 @@ function checkFeishuCreds() {
   return { state: OK, detail: `凭据在（${file}）` };
 }
 
+// 机器人自己的模型还在不在（2026-09-04 实咬）：网关侧砍模型（ai-gateway-stack §68 砍了 253 条）后，
+// **消费方没有任何东西报警**——机器人对每条消息都只回「稍后重试」，日志里只有 inbound，哑了一整天。
+// 判据：拿机器人自己的 key 向网关发一针流式，200 且收到真内容才算通；503/model_not_found = 红。
+// 「指针配报警」：模型名是指向网关的指针，这就是那道会报警的检查。
+export function classifyBotModelProbe({ probed = false, reason = '', code = null, gotContent = false, model = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `机器人模型没探成：${reason || '未知'}` };
+  if (code === 200 && gotContent) return { state: OK, detail: `机器人模型 ${model} 通（网关有货）` };
+  if (code === 200) return { state: RED, detail: `机器人模型 ${model}：200 但零内容（网关只给了心跳）` };
+  return { state: RED, detail: `机器人模型 ${model} 不通（网关 ${code ?? '?'}${/model_not_found|No available channel/.test(reason) ? '，模型已被砍' : ''}）——改 FEISHU_LLM_MODEL 或把模型加回网关白名单` };
+}
+
+/** 机器人的接线值从哪读。两份，按序合并（后者不覆盖前者已有的键）：
+ *  ① `/etc/feishu-triage.public.env`（644）——**不含密钥**的那半：网关地址、模型名。
+ *     检查器以 orca 身份跑，读得到的只有这一份。
+ *  ② `/etc/feishu-triage.env`（600 root:root，含 ANTHROPIC_AUTH_TOKEN）——检查器读不到，
+ *     只有以 root 跑时才补得上；读不到不报错，因为 ① 已经够判。
+ *  为什么不能只看 process.env：Orca 终端不继承 orca-serve 的环境（NEW-MACHINE.md §「实测」），
+ *  ANTHROPIC_* 全空——那样 ⑰ 会在编排机上永远说「探不到」，变成一个永不响的报警，
+ *  正好复刻本单要修的「零报警」。为什么不能把 ② 改成 644：那份里有 token（key 不外泄是硬规矩）。 */
+export const BOT_ENV_FILES = ['/etc/feishu-triage.public.env', '/etc/feishu-triage.env'];
+/** @deprecated 单份时代的名字，留给旧引用；真相是 BOT_ENV_FILES。 */
+export const BOT_ENV_FILE = BOT_ENV_FILES[1];
+export function parseEnvFile(text) {
+  const out = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    out[m[1]] = v;
+  }
+  return out;
+}
+
+function probeBotModel() {
+  const fileEnv = {};
+  const notes = [];
+  for (const f of BOT_ENV_FILES) {
+    if (!existsSync(f)) { notes.push(`${f} 不在`); continue; }
+    try {
+      const kv = parseEnvFile(readFileSync(f, 'utf8'));
+      for (const [k, v] of Object.entries(kv)) if (!(k in fileEnv)) fileEnv[k] = v;   // 先读的优先
+    } catch (e) { notes.push(`${f} 读不了（${e.code || e.message}）`); }
+  }
+  const envErr = notes.length ? `接线值没读到：${notes.join('；')}——网关地址与模型名应放 ${BOT_ENV_FILES[0]}（644，不含密钥），密钥另留 600 那份` : null;
+  const base = fileEnv.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || '';
+  // 模型只有一份真相：scripts/feishu-triage.mjs 的 LLM_MODEL（它自己已经认 process.env.FEISHU_LLM_MODEL）。
+  // 这里不再插一层检查器自己的环境变量——否则可能去探一个机器人并不用的模型。
+  const model = fileEnv.FEISHU_LLM_MODEL || BOT_LLM_MODEL;
+  const keyFile = join(homedir(), '.mirasim', 'keys', 'feishu-triage.key');
+  if (!base) return { probed: false, reason: envErr || `网关地址没查成（${BOT_ENV_FILES.join(' / ')} 里都没有 ANTHROPIC_BASE_URL，环境变量里也没有）`, model };
+  if (!existsSync(keyFile)) return { probed: false, reason: '机器人 key 不在本机', model };
+  let key = '';
+  try { key = readFileSync(keyFile, 'utf8').trim(); } catch (e) { return { probed: false, reason: `key 读不了：${e.message}`, model }; }
+  if (!key) return { probed: false, reason: 'key 为空', model };
+  // key **走子进程环境变量**，不进 argv：argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
+  // 而 /proc/<pid>/environ 只有属主读得到，与「能读 key 文件本身」是同一道信任边界。
+  //（另两条别回头踩：curl -K - 在 Windows 上挂住读不到 stdin EOF；内联 -e 源码要过两层转义，
+  //  写岔过一次，探针只会报「超时」，根因看不见。所以子进程是独立文件。2026-09-04 实测。）
+  const childFile = join(REPO_ROOT, 'scripts', 'lib', 'bot-model-probe-child.mjs');
+  const r = run(process.execPath, [childFile, base, model], { timeout: 100000, env: { ...process.env, __PROBE_KEY__: key } });
+  if (!r.probed) return { probed: false, reason: r.reason || "探针子进程没跑成", model };
+  const out = String(r.stdout || '');
+  const errHit = out.match(/__ERR__(.*)$/);
+  const code = Number((out.match(/__HTTP__(\d{3})/) || [])[1]) || null;
+  // 连不上/超时是「这次没探成」，不是「网关真红」（本文件头的三态纪律：探不到 ≠ 结果不对）。
+  if (errHit) return { probed: false, reason: `发不出去：${errHit[1].slice(0, 120)}`, model };
+  if (r.code !== 0 || !code) {
+    return { probed: false, reason: `探针子进程退出 ${r.code}，没拿到状态码${String(r.stderr || '').slice(0, 120)}`, model };
+  }
+  // 「有真内容」判据复用 provider-probe 的纯函数：它认 content / reasoning_content / reasoning。
+  // grok-4.6 是推理档，小预算时可能只吐推理增量——自己写正则就会把「模型正常」判成红。
+  let gotContent = false;
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const p = line.slice(5).trim();
+    if (!p || p === '[DONE]') continue;
+    try { if (extractDeltaContent('gw-openai', JSON.parse(p))) { gotContent = true; break; } } catch { /* 半截行跳过 */ }
+  }
+  return { probed: true, code, gotContent, model, reason: out.replace(/__HTTP__\d+/, '').slice(0, 200) };
+}
+
 function checkFeishuTriage() {
   const svc = classifyFeishuTriage(run('systemctl', ['is-active', 'feishu-triage.service'], { timeout: 10000 }));
   const creds = checkFeishuCreds();
@@ -439,6 +526,10 @@ function checkFeishuTriage() {
   if (!parts.length) return { state: OK, detail: '飞书适配器在跑 + 凭据文件在（600）' };
   const state = svc.state === RED || creds.state === RED ? RED : UNKNOWN;
   return { state, detail: parts.join('；') };
+}
+
+function checkBotModel() {
+  return classifyBotModelProbe(probeBotModel());
 }
 
 // —— ⑮ 撞限流探测 timer（#833）——
@@ -526,6 +617,7 @@ const CHECKS = [
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
+  ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
 ];
 
 function outPath() {
