@@ -130,16 +130,40 @@ function say(text) {
   console.log(text);
 }
 
+function wtId(w) {
+  return (w && (w.worktreeId || w.id)) || null;
+}
+
+function idsEqual(a, b) {
+  const left = String(a || '');
+  const right = String(b || '');
+  if (!left || !right) return false;
+  return left === right || left.endsWith(`::${right}`) || left.endsWith(right)
+    || right.endsWith(`::${left}`) || right.endsWith(left);
+}
+
 function parentOf(ps, worktreeId) {
   const list = Array.isArray(ps) ? ps : [];
-  const self = list.find((w) => (w.id || w.worktreeId) === worktreeId);
+  const self = list.find((w) => idsEqual(wtId(w), worktreeId));
   return self?.parentWorktreeId || null;
 }
 
 function displayNameOf(ps, worktreeId, fallback) {
   const list = Array.isArray(ps) ? ps : [];
-  const self = list.find((w) => (w.id || w.worktreeId) === worktreeId);
+  const self = list.find((w) => idsEqual(wtId(w), worktreeId));
   return self?.displayName || fallback;
+}
+
+function labelsFromGh(issue) {
+  for (const role of ['watchdog', 'worker']) {
+    const r = runGh(['issue', 'view', String(issue), '--json', 'labels'], { role });
+    if (!r.ok) continue;
+    try {
+      const parsed = JSON.parse(r.out);
+      if (Array.isArray(parsed.labels)) return { ok: true, labels: parsed.labels };
+    } catch { /* 下一身份再试 */ }
+  }
+  return { ok: false };
 }
 
 function workerModelOf({ ps, workers, worktreeId }) {
@@ -148,22 +172,19 @@ function workerModelOf({ ps, workers, worktreeId }) {
   const list = Array.isArray(workers) ? workers : [];
   const hit = list.find((w) => {
     const id = w?.resource?.worktreeId || w?.worktreeId;
-    return id && (id === parentId || String(id).endsWith(parentId));
+    return idsEqual(id, parentId);
   });
   const dispatchModel = hit?.model || hit?.resource?.model || hit?.requestedModel || null;
   if (dispatchModel) return resolveActualWorkerModel({ dispatchModel });
-  const parent = (ps || []).find((w) => (w.id || w.worktreeId) === parentId);
-  if (Array.isArray(parent?.labels)) return resolveActualWorkerModel({ labels: parent.labels });
+  const parent = (ps || []).find((w) => idsEqual(wtId(w), parentId));
+  if (Array.isArray(parent?.labels) && parent.labels.length) {
+    return resolveActualWorkerModel({ labels: parent.labels });
+  }
   const issue = issueNumberFromWorktree(parent);
   if (!issue) return resolveActualWorkerModel({ labels: [] });
-  const r = runGh(['issue', 'view', String(issue), '--json', 'labels'], { role: 'watchdog' });
-  if (!r.ok) return resolveActualWorkerModel({});
-  try {
-    const parsed = JSON.parse(r.out);
-    return resolveActualWorkerModel({ labels: Array.isArray(parsed.labels) ? parsed.labels : [] });
-  } catch {
-    return resolveActualWorkerModel({});
-  }
+  const gh = labelsFromGh(issue);
+  if (!gh.ok) return resolveActualWorkerModel({});
+  return resolveActualWorkerModel({ labels: gh.labels });
 }
 
 function switchReviewer({ pr, reviewer, parentWorktree, dryRun }) {

@@ -207,9 +207,10 @@ if (args[0] === 'terminal' && args[1] === 'read') {
   process.exit(0);
 }
 if (args[0] === 'worktree' && args[1] === 'ps') {
+  // live orca worktree ps 的主键是 worktreeId，没有 id（#833 实咬）
   emit({ worktrees: [
-    { id: 'wt-worker', displayName: 'PR-#664 工人·claude-opus', parentWorktreeId: null },
-    { id: 'wt-reviewer', displayName: 'PR-#664 审官·gpt-5.6-sol', parentWorktreeId: 'wt-worker' },
+    { worktreeId: 'wt-worker', displayName: 'PR-#664 工人·claude-opus', parentWorktreeId: null },
+    { worktreeId: 'wt-reviewer', displayName: 'PR-#664 审官·gpt-5.6-sol', parentWorktreeId: 'wt-worker' },
   ] });
   process.exit(0);
 }
@@ -288,8 +289,8 @@ if (args[0] === 'terminal' && args[1] === 'read') {
 }
 if (args[0] === 'worktree' && args[1] === 'ps') {
   emit({ worktrees: [
-    { id: 'wt-worker', displayName: 'PR-#664 工人·grok-4.6', parentWorktreeId: null },
-    { id: 'wt-reviewer', displayName: 'PR-#664 审官·gpt-5.6-sol', parentWorktreeId: 'wt-worker' },
+    { worktreeId: 'wt-worker', displayName: 'PR-#664 工人·grok-4.6', parentWorktreeId: null, linkedIssue: 664 },
+    { worktreeId: 'wt-reviewer', displayName: 'PR-#664 审官·gpt-5.6-sol', parentWorktreeId: 'wt-worker' },
   ] });
   process.exit(0);
 }
