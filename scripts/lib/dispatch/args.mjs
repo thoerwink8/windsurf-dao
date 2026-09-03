@@ -255,6 +255,14 @@ export function argsTerminalClose({ terminal, tab } = {}) {
   return a;
 }
 
+/** #835：删树前按 worktree 收该树终端（含 agent 进程）。 */
+export function argsTerminalStop({ worktree } = {}) {
+  const a = ['terminal', 'stop'];
+  if (worktree) a.push('--worktree', worktree);
+  a.push('--json');
+  return a;
+}
+
 /** #762/#753：等 command 型 TUI 就绪（devin 起法：create → wait tui-idle → worker-start）。
  * wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底。 */
 export function argsTerminalWait({ terminal, for: forWhat, timeoutMs } = {}) {

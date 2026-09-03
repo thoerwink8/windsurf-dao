@@ -51,6 +51,7 @@ import {
   argsTerminalList,
   argsTerminalRead,
   argsTerminalSend,
+  argsTerminalStop,
   argsTerminalWait,
   argsWorktreeCreate,
   argsWorktreeSet,
@@ -61,6 +62,10 @@ import {
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   resolveWorktreeSelector,
+  reapWorktreeAgents,
+  verifyWorktreeTerminalsGone,
+  pidsOnTreePath,
+  unwrapTerminalList,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
@@ -982,6 +987,53 @@ function bindStation({ runRole = 'dispatch' } = {}) {
 
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function listWorktreeTerminals(worktreeId) {
+  const listed = orca(argsTerminalList({ worktree: worktreeId }));
+  if (!listed.ok) return { ok: false, error: errText(listed.error), terminals: [] };
+  return unwrapTerminalList(listed.json);
+}
+
+function killPidTerm(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    if (e && (e.code === 'ESRCH' || e.errno === 3)) return { ok: true, alreadyGone: true, pid };
+    return { ok: false, pid, error: String(e && e.message ? e.message : e) };
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+    return { ok: true, pid };
+  } catch (e) {
+    if (e && (e.code === 'ESRCH' || e.errno === 3)) return { ok: true, alreadyGone: true, pid };
+    return { ok: false, pid, error: String(e && e.message ? e.message : e) };
+  }
+}
+
+/** #835：占用闸过后再收该树 agent。收不掉就停，不许先删树留下孤儿。 */
+function reapThenRmWorktree(node, { force } = {}) {
+  const reaped = reapWorktreeAgents({
+    node,
+    stop: (id) => orca(argsTerminalStop({ worktree: id })),
+    listTerminals: listWorktreeTerminals,
+    listPids: (treePath) => pidsOnTreePath(treePath),
+    killPid: killPidTerm,
+    sleep: sleepMs,
+  });
+  if (!reaped.ok) return reaped;
+  const rm = orca(argsWorktreeRm({ worktree: node.id, force }));
+  if (!rm || rm.ok !== true) return rm;
+  return { ok: true, reaped };
+}
+
+function leftoverTerminalsAfterRm(nodes) {
+  const leftover = [];
+  for (const node of nodes || []) {
+    const check = verifyWorktreeTerminalsGone({ node, listTerminals: listWorktreeTerminals });
+    if (!check.ok) leftover.push(check.error);
+  }
+  return leftover;
 }
 
 function unwrapRuns(json) {
@@ -3032,9 +3084,13 @@ function cmdWorktreeRm(args) {
     fail(life.error, { runs: life });
   }
   const applied = applyWorktreeRmPlan(plan, {
-    rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
+    rm: (node) => reapThenRmWorktree(node, { force: args.force }),
   });
   if (!applied.ok) fail(applied.error, { removed: applied.removed || [], runs: life });
+  const leftover = leftoverTerminalsAfterRm(applied.removed);
+  if (leftover.length) {
+    fail(`树已删但终端登记还在：${leftover.join('；')}`, { removed: applied.removed, runs: life, terminals: leftover });
+  }
   const masterZone = rewriteMasterZone(remaining);
   emit({
     ok: true,
@@ -4258,10 +4314,21 @@ function cmdBoardReset(args) {
   for (const e of entries) {
     if (!e.plan) { skipped.push({ id: e.id, name: e.name, reason: e.reason }); continue; }
     const applied = applyWorktreeRmPlan(e.plan, {
-      rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: true })),
+      rm: (node) => reapThenRmWorktree(node, { force: true }),
     });
-    if (applied.ok) removed.push({ id: e.id, name: e.name, trees: applied.removed.map((n) => n.id) });
-    else skipped.push({ id: e.id, name: e.name, reason: applied.error, partialRemoved: (applied.removed || []).map((n) => n.id) });
+    if (applied.ok) {
+      const leftover = leftoverTerminalsAfterRm(applied.removed);
+      if (leftover.length) {
+        skipped.push({
+          id: e.id,
+          name: e.name,
+          reason: leftover.join('；'),
+          partialRemoved: (applied.removed || []).map((n) => n.id),
+        });
+      } else {
+        removed.push({ id: e.id, name: e.name, trees: applied.removed.map((n) => n.id) });
+      }
+    } else skipped.push({ id: e.id, name: e.name, reason: applied.error, partialRemoved: (applied.removed || []).map((n) => n.id) });
   }
   const gc = boardResetGc();
   const verdict = boardResetVerdict({ removed, skipped, gc });

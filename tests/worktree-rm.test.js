@@ -301,4 +301,210 @@ describe('worktree-rm', () => {
     fs.rmSync(mainDir, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('#835 cwd 归属：只认本树，含 (deleted) 后缀',
+    async (t) => {
+      const S = await LIB_LOAD;
+      await t.test('本树 cwd 命中',
+        () => {
+          assert.ok(S.cwdBelongsToTree('/tmp/ISSUE-835', '/tmp/ISSUE-835') === true, '本树 cwd 命中');
+        });
+      await t.test('(deleted) 也算本树',
+        () => {
+          assert.ok(S.cwdBelongsToTree('/tmp/ISSUE-835 (deleted)', '/tmp/ISSUE-835') === true, '(deleted) 也算本树');
+        });
+      await t.test('子目录不算本树（不许扫到父路径）',
+        () => {
+          assert.ok(S.cwdBelongsToTree('/tmp/ISSUE-835/src', '/tmp/ISSUE-835') === false, '子目录不算');
+        });
+      await t.test('别的树不算',
+        () => {
+          assert.ok(S.cwdBelongsToTree('/tmp/ISSUE-831', '/tmp/ISSUE-835') === false, '别的树不算');
+        });
+    });
+
+  it('#835 假 /proc：只收本树 pid',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const proc = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-835-proc-'));
+      const tree = '/tmp/ISSUE-835-tree';
+      const other = '/tmp/other-tree';
+      for (const [pid, target] of [['111', tree], ['222', `${tree} (deleted)`], ['333', other]]) {
+        const dir = path.join(proc, pid);
+        fs.mkdirSync(dir);
+        fs.symlinkSync(target, path.join(dir, 'cwd'));
+      }
+      fs.mkdirSync(path.join(proc, 'self'));
+      const found = S.pidsOnTreePath(tree, { procDir: proc, selfPid: -1 });
+      await t.test('扫成',
+        () => {
+          assert.ok(found.ok === true && found.available === true, JSON.stringify(found));
+        });
+      await t.test('本树两个 pid（含 deleted）',
+        () => {
+          assert.deepEqual([...found.pids].sort(), [111, 222], JSON.stringify(found));
+        });
+      await t.test('别的树的 pid 不收',
+        () => {
+          assert.ok(!found.pids.includes(333), JSON.stringify(found));
+        });
+      fs.rmSync(proc, { recursive: true, force: true });
+    });
+
+  it('#835 占用闸一条都不放宽',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const busy = [
+        wt({ id: 'p835', name: '#835 - 工人', agents: [{ state: 'working' }] }),
+      ];
+      const plan = S.planWorktreeRm(busy, 'p835');
+      await t.test('working 仍整树不删',
+        () => {
+          assert.ok(plan.ok === false && /占用/.test(plan.error), plan.error);
+        });
+    });
+
+  it('#835 terminal stop 后进程没了 → 放行',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const node = { id: 'w835', name: '#835', path: '/tmp/w835' };
+      const calls = [];
+      let live = [{ handle: 'term_a', agentIdentity: 'pi' }];
+      let pids = [4242];
+      const reaped = S.reapWorktreeAgents({
+        node,
+        stop: (id) => { calls.push(`stop:${id}`); live = []; pids = []; return { ok: true }; },
+        listTerminals: () => ({ ok: true, terminals: live }),
+        listPids: () => ({ ok: true, available: true, pids }),
+        killPid: (pid) => { calls.push(`kill:${pid}`); return { ok: true, pid }; },
+        sleep: () => {},
+        now: (() => { let n = 0; return () => (n += 1000); })(),
+        stopWaitMs: 10,
+        termWaitMs: 10,
+        pollMs: 1,
+      });
+      await t.test('收进程成功',
+        () => {
+          assert.ok(reaped.ok === true, JSON.stringify(reaped));
+        });
+      await t.test('先 stop 没升 SIGTERM',
+        () => {
+          assert.ok(calls.join(',') === 'stop:w835', calls.join(','));
+        });
+    });
+
+  it('#835 stop 不退则 SIGTERM，再退 → 放行',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const node = { id: 'w835b', name: '#835b', path: '/tmp/w835b' };
+      const calls = [];
+      let pids = [77];
+      const reaped = S.reapWorktreeAgents({
+        node,
+        stop: (id) => { calls.push(`stop:${id}`); return { ok: true }; },
+        listTerminals: () => ({ ok: true, terminals: [] }),
+        listPids: () => ({ ok: true, available: true, pids: [...pids] }),
+        killPid: (pid) => { calls.push(`kill:${pid}`); pids = []; return { ok: true, pid }; },
+        sleep: () => {},
+        now: (() => { let n = 0; return () => (n += 1000); })(),
+        stopWaitMs: 10,
+        termWaitMs: 10,
+        pollMs: 1,
+      });
+      await t.test('升级后成功',
+        () => {
+          assert.ok(reaped.ok === true, JSON.stringify(reaped));
+        });
+      await t.test('stop 之后才 SIGTERM 77',
+        () => {
+          assert.ok(calls.join(',') === 'stop:w835b,kill:77', calls.join(','));
+        });
+    });
+
+  it('#835 收不掉报 pid 非零',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const node = { id: 'w835c', name: '#835c', path: '/tmp/w835c' };
+      const reaped = S.reapWorktreeAgents({
+        node,
+        stop: () => ({ ok: true }),
+        listTerminals: () => ({ ok: true, terminals: [] }),
+        listPids: () => ({ ok: true, available: true, pids: [1511975] }),
+        killPid: (pid) => ({ ok: true, pid }),
+        sleep: () => {},
+        now: (() => { let n = 0; return () => (n += 1000); })(),
+        stopWaitMs: 10,
+        termWaitMs: 10,
+        pollMs: 1,
+      });
+      await t.test('失败非零',
+        () => {
+          assert.ok(reaped.ok === false, JSON.stringify(reaped));
+        });
+      await t.test('报出 pid',
+        () => {
+          assert.ok(/1511975/.test(reaped.error) && /未删树/.test(reaped.error), reaped.error);
+        });
+    });
+
+  it('#835 删树后本树终端登记还在 → 非零',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const stuck = S.verifyWorktreeTerminalsGone({
+        node: { id: 'w835d', name: '#835d' },
+        listTerminals: () => ({ ok: true, terminals: [{ handle: 'term_left' }] }),
+      });
+      await t.test('登记还在失败',
+        () => {
+          assert.ok(stuck.ok === false && /term_left/.test(stuck.error), JSON.stringify(stuck));
+        });
+      const gone = S.verifyWorktreeTerminalsGone({
+        node: { id: 'w835d' },
+        listTerminals: () => ({ ok: true, terminals: [] }),
+      });
+      await t.test('空名单算跟着掉',
+        () => {
+          assert.ok(gone.ok === true, JSON.stringify(gone));
+        });
+      const missing = S.verifyWorktreeTerminalsGone({
+        node: { id: 'w835d' },
+        listTerminals: () => ({ ok: false, error: 'orca 报错 selector_not_found: selector_not_found' }),
+      });
+      await t.test('selector_not_found 算树已没、登记跟着掉',
+        () => {
+          assert.ok(missing.ok === true && missing.missingWorktree === true, JSON.stringify(missing));
+        });
+    });
+
+  it('#835 argsTerminalStop 带 --worktree --json',
+    async (t) => {
+      const S = await LIB_LOAD;
+      const a = S.argsTerminalStop({ worktree: 'w' });
+      await t.test('命令是 terminal stop',
+        () => {
+          assert.ok(a[0] === 'terminal' && a[1] === 'stop', a.join(' '));
+        });
+      await t.test('带选择器和 json',
+        () => {
+          assert.ok(a.includes('--worktree') && a[a.indexOf('--worktree') + 1] === 'w' && a.includes('--json'), a.join(' '));
+        });
+    });
+
+  it('#835 cmdWorktreeRm 闸过后再 reapThenRm',
+    async (t) => {
+      const daoSrc = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'dao.mjs'), 'utf8');
+      const rmFn = daoSrc.slice(daoSrc.indexOf('function cmdWorktreeRm'), daoSrc.indexOf('function cmdTaskCreate'));
+      await t.test('热路走 reapThenRmWorktree',
+        () => {
+          assert.ok(/reapThenRmWorktree/.test(rmFn), rmFn.slice(0, 400));
+        });
+      await t.test('先退役再 reap/删树',
+        () => {
+          assert.ok(rmFn.indexOf('finalizeWorktreeRmLifecycle') < rmFn.indexOf('reapThenRmWorktree'), '顺序反了');
+        });
+      await t.test('占用闸文案仍在',
+        () => {
+          assert.ok(/占用中，未删任何树/.test(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'worktree.mjs'), 'utf8')), '占用闸文案丢了');
+        });
+    });
 });
