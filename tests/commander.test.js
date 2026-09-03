@@ -439,3 +439,98 @@ describe('辅助纯函数', () => {
     assert.equal(analyzeReviews(['审官判定：绿']).green, false, '近义变体不算绿');
   });
 });
+
+describe('异步派工的真结果（2026-09-04 实咬：#787 派工失败，指挥官报「跑完」+群里发「已自动派单」）', () => {
+  it('resultPathOf：从「已受理」输出里取结果文件路径；取不到回 null', async () => {
+    const M = await import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    assert.equal(M.resultPathOf('{"ok":true,"queued":true,"resultPath":"/tmp/x.out.json"}'), '/tmp/x.out.json');
+    assert.equal(M.resultPathOf('前面有诊断行\n{"resultPath":"/tmp/y.json"}'), '/tmp/y.json');
+    assert.equal(M.resultPathOf('不是 JSON'), null);
+    assert.equal(M.resultPathOf('{"ok":true}'), null, '没有 resultPath 字段 = 拿不到');
+  });
+
+  it('classifyDispatchResult：成/败/没落盘三态分得开，受理不当成功', async () => {
+    const M = await import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const good = M.classifyDispatchResult({ present: true, doc: { ok: true, workerCard: 'ISSUE-#815 工人' }, waitedMs: 5000 });
+    assert.equal(good.ok, true);
+    assert.match(good.card, /ISSUE-#815/);
+
+    // 实咬那条：工人 TUI 等就绪失败
+    const bad = M.classifyDispatchResult({ present: true, doc: { ok: false, error: '工人 TUI 等就绪失败：exit null' }, waitedMs: 60000 });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.unscanned, false, '执行体明说失败 = 真失败，不是没查成');
+    assert.match(bad.error, /TUI 等就绪失败/);
+
+    const pending = M.classifyDispatchResult({ present: false, doc: null, waitedMs: 240000 });
+    assert.equal(pending.ok, false);
+    assert.equal(pending.unscanned, true, '还没落盘 = 没查成，既不算成也不算败');
+    assert.match(pending.error, /没查成/);
+
+    const garbage = M.classifyDispatchResult({ present: true, doc: null, waitedMs: 1000 });
+    assert.equal(garbage.unscanned, true, '结果文件坏了也是没查成');
+  });
+});
+
+describe('派工失败不许发喜报（2026-09-04 实咬：#787 派工失败，群里照样收到「已自动派单 #787」）', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+
+  it('两单一成一败：败的那单不发 hub、多一条报帅；成的那单一切照旧（不许殃及池鱼）', async () => {
+    const { runActions } = await MOD();
+    // decide() 真实产出的顺序：dispatch(787) → notify-hub(787) → dispatch(815) → notify-hub(815)
+    const actions = [
+      { kind: 'dispatch', issue: 787, title: 'a' },
+      { kind: 'notify-hub', issue: 787, moment: 'dispatched', subject: '已自动派单 #787' },
+      { kind: 'dispatch', issue: 815, title: 'b' },
+      { kind: 'notify-hub', issue: 815, moment: 'dispatched', subject: '已自动派单 #815' },
+    ];
+    const seen = [];
+    const exec = (a) => {
+      seen.push(a);
+      if (a.kind === 'dispatch' && a.issue === 787) return { ok: false, unscanned: false, error: '工人 TUI 等就绪失败：exit null' };
+      if (a.kind === 'dispatch') return { ok: true, card: 'ISSUE-#815 工人' };
+      return { ok: true };
+    };
+    const out = runActions(actions, { exec });
+
+    const hub787 = seen.filter(a => a.kind === 'notify-hub' && a.issue === 787);
+    assert.equal(hub787.length, 0, '派工失败的单不许发「已自动派单」');
+    const hub815 = seen.filter(a => a.kind === 'notify-hub' && a.issue === 815);
+    assert.equal(hub815.length, 1, '成功的那单照发，不许殃及池鱼');
+    const esc = seen.filter(a => a.kind === 'escalate');
+    assert.equal(esc.length, 1);
+    assert.equal(esc[0].reason, 'dispatch-failed');
+    assert.equal(esc[0].issue, 787);
+    assert.match(esc[0].why, /TUI 等就绪失败/);
+    assert.deepEqual(out.failedIssues, ['787']);
+  });
+
+  it('没查成（结果没落盘）也拦喜报，但报帅理由分得开', async () => {
+    const { runActions } = await MOD();
+    const actions = [{ kind: 'dispatch', issue: 900 }, { kind: 'notify-hub', issue: 900, moment: 'dispatched' }];
+    const seen = [];
+    const exec = (a) => { seen.push(a); return a.kind === 'dispatch' ? { ok: false, unscanned: true, error: '派工结果还没落盘' } : { ok: true }; };
+    runActions(actions, { exec });
+    assert.equal(seen.filter(a => a.kind === 'notify-hub').length, 0);
+    const esc = seen.find(a => a.kind === 'escalate');
+    assert.equal(esc.reason, 'dispatch-unscanned', '没查成 ≠ 失败，报帅理由要分得开');
+    assert.match(esc.why, /没查成/);
+  });
+
+  it('全成功时：不产生任何报帅，喜报照发（反证——不是把 hub 一律掐了）', async () => {
+    const { runActions } = await MOD();
+    const actions = [{ kind: 'dispatch', issue: 1 }, { kind: 'notify-hub', issue: 1 }, { kind: 'land' }];
+    const seen = [];
+    runActions(actions, { exec: (a) => { seen.push(a); return { ok: true }; } });
+    assert.equal(seen.filter(a => a.kind === 'notify-hub').length, 1);
+    assert.equal(seen.filter(a => a.kind === 'escalate').length, 0);
+    assert.equal(seen.filter(a => a.kind === 'land').length, 1, '别的动作不受影响');
+  });
+
+  it('exec 返回 undefined 也算失败（防「什么都没返回」被当成功）', async () => {
+    const { runActions } = await MOD();
+    const seen = [];
+    runActions([{ kind: 'dispatch', issue: 7 }, { kind: 'notify-hub', issue: 7 }], { exec: (a) => { seen.push(a); return undefined; } });
+    assert.equal(seen.filter(a => a.kind === 'notify-hub').length, 0);
+    assert.equal(seen.filter(a => a.kind === 'escalate').length, 1);
+  });
+});
