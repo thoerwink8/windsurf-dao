@@ -174,7 +174,20 @@ export function consumeReviewPending({ dir, ticket, attach } = {}) {
     };
   }
   if (dir && ticket?.pr) {
-    try { unlinkSync(reviewPendingPath(dir, ticket.pr)); } catch { /* 删不掉也算消费成功，下轮 list 会再撞 */ }
+    const pendingPath = reviewPendingPath(dir, ticket.pr);
+    try {
+      unlinkSync(pendingPath);
+    } catch (e) {
+      return {
+        ok: false,
+        cleanupFailed: true,
+        error: `复审待办删不掉：${String(e.message || e)}（清理失败，不许当已消费）`,
+        pr: plan.pr,
+        plan,
+        attached,
+        path: pendingPath,
+      };
+    }
   }
   return { ok: true, pr: plan.pr, plan, attached };
 }

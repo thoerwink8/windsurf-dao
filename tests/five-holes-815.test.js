@@ -100,6 +100,45 @@ describe('#815 ① 复审待办队列 + drain', () => {
     assert.ok(/复审轮走队列/.test(book) && /review-pending-drain/.test(book),
       'reviewer-book 必须写复审轮走队列');
   });
+
+  it('不可删除路径：attach 成功但待办删不掉 → consume/drain 必须 ok:false，文件仍在', async () => {
+    const S = await S_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-sticky-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '820',
+      head: { name: 'ISSUE-815', oid: 'abc1234def' },
+      workerWorktree: 'wt_worker',
+      reviewer: 'gpt-5.6-sol',
+    });
+    assert.ok(built.ok, JSON.stringify(built));
+    const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
+    assert.ok(wrote.ok, JSON.stringify(wrote));
+    const pendingPath = path.join(dir, '820.json');
+    const bak = `${pendingPath}.bak`;
+    fs.renameSync(pendingPath, bak);
+    fs.mkdirSync(pendingPath);
+    fs.writeFileSync(path.join(pendingPath, 'keep'), 'x');
+    fs.unlinkSync(bak);
+
+    const consumed = S.consumeReviewPending({
+      dir,
+      ticket: built.ticket,
+      attach: () => ({ ok: true, pr: '820' }),
+    });
+    assert.ok(consumed.ok === false && consumed.cleanupFailed === true,
+      '删不掉必须 ok:false，不许当已消费 → ' + JSON.stringify(consumed));
+    assert.ok(/删不掉|清理失败/.test(consumed.error || ''), '报错要点名清理失败 → ' + consumed.error);
+    assert.ok(fs.existsSync(pendingPath), '待办路径必须还在，下轮才能重试');
+
+    const drained = S.drainReviewPending({
+      dir,
+      tickets: [built.ticket],
+      attach: () => ({ ok: true, pr: '820' }),
+    });
+    assert.ok(drained.ok === false && drained.failed === 1 && drained.drained === 0,
+      'drain 必须非零且不计入 drained → ' + JSON.stringify(drained));
+    assert.ok(fs.existsSync(pendingPath), 'drain 失败后待办仍在');
+  });
 });
 
 describe('#815 ② 派工单记真终端 + send --dispatch', () => {
