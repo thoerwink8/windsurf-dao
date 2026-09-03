@@ -99,9 +99,6 @@ import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import {
-  inspectNoBannerInboxLive, inspectNoBannerInboxFixtures,
-} from './lib/no-banner-inbox-check.mjs';
-import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
 import {
@@ -126,10 +123,6 @@ import {
 import {
   inspectDispatchPolicyFixtures, inspectDispatchPolicyLive,
 } from './lib/dispatch-policy-check.mjs';
-import {
-  inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
-  inspectQuickFixFixtures,
-} from './lib/quick-fix-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1443,14 +1436,10 @@ checkMachinePathSamples();
 checkMachinePathLive();
 checkNoAutoCloseSamples();
 checkNoAutoCloseLive();
-checkNoBannerInboxSamples();
-checkNoBannerInboxLive();
 checkDesignExamHarvestSamples();
 checkDesignExamHarvestLive();
 checkVendorGateSamples();
 checkVendorGateLive();
-checkQuickFixSamples();
-checkQuickFixLive();
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1666,22 +1655,22 @@ function checkNoReviewerRecreateSamples() {
 }
 
 function checkNoReviewerRecreateLive() {
-  const flowFile = join(ROOT, 'scripts', 'flow.mjs');
   const daoFile = join(ROOT, 'scripts', 'dao.mjs');
-  if (![flowFile, daoFile].every(existsSync)) {
+  if (!existsSync(daoFile)) {
     fail(
       '再造审官闸 live 扫描缺文件',
-      '恢复 scripts/flow.mjs 与 scripts/dao.mjs；缺文件 = 没查成',
-      `flow=${existsSync(flowFile)} dao=${existsSync(daoFile)}`,
+      '恢复 scripts/dao.mjs；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)}`,
     );
     return;
   }
+  // #807：flow.mjs 已删。live 只扫 dao.mjs；flowSrc 给空串（不再要求文件在）。
   const r = inspectNoReviewerRecreate({
-    flowSrc: readFileSync(flowFile, 'utf8'),
+    flowSrc: '',
     daoSrc: readFileSync(daoFile, 'utf8'),
   });
   if (r.unscanned) {
-    fail('再造审官闸 live 没查成', '给齐 flow.mjs / dao.mjs 再扫', r.error || '');
+    fail('再造审官闸 live 没查成', '给齐 dao.mjs 再扫', r.error || '');
     return;
   }
   if (!r.ok) {
@@ -1747,12 +1736,12 @@ function checkVendorGateLive() {
   const daoFile = join(ROOT, 'scripts', 'dao.mjs');
   const cmdFile = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
   const slotFile = join(ROOT, 'scripts', 'lib', 'dianjiangtai-reviewer-slot.mjs');
-  const wdFile = join(ROOT, 'scripts', 'watchdog.mjs');
-  if (![daoFile, cmdFile, slotFile, wdFile].every(existsSync)) {
+  const stallFile = join(ROOT, 'scripts', 'agent-stall-watch.mjs');
+  if (![daoFile, cmdFile, slotFile, stallFile].every(existsSync)) {
     fail(
       '同厂硬闸 live 扫描缺文件',
-      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs / watchdog.mjs；缺文件 = 没查成',
-      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)} wd=${existsSync(wdFile)}`,
+      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs / agent-stall-watch.mjs；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)} stall=${existsSync(stallFile)}`,
     );
     return;
   }
@@ -1763,7 +1752,7 @@ function checkVendorGateLive() {
     daoSrc,
     cmdSrc: readFileSync(existsSync(constraintsFile) ? constraintsFile : cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
-    watchdogSrc: readFileSync(wdFile, 'utf8'),
+    stallSrc: readFileSync(stallFile, 'utf8'),
   });
   if (r.unscanned) {
     fail('同厂硬闸 live 没查成', '给齐源文件再扫', r.error || '');

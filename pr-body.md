@@ -25,7 +25,7 @@
 
 - **同厂样本当场拦**：`quick-fix --dry-run --model grok-4.6 --reviewer grok-4.6` → exit 1 + 「同厂（grok），审查必须换厂商」。
 - **20 秒内产出 PR**：`quick-fix --issue 732 --model devin-deepseek-v4-flash-max --reviewer gpt-5.6-sol --yes` → PR #740 落地 15.5s（脚本自测 14.8s），label 齐（model/devin-deepseek-v4-flash-max、type/微修、reviewer/gpt-5.6-sol）。
-- **审官异步起**：attach 子进程建壳卡（挂在微修分支）→ 信箱台 Run（coordinator=常驻台）→ `reviewer-attach --skip-wait` → Codex 审官 dispatch `ctx_726074414ac8`，审官卡 PR-#740 审官·gpt-5.6-sol 在盘。日志 `~/.dao/quickfix/quickfix-732.log`。
+- **审官异步起**：attach 子进程建壳卡（挂在微修分支）→ 信箱台 Run（coordinator=常驻台）→ `reviewer-attach --skip-wait` → Codex 审官 dispatch `ctx_726074414ac8`，审官卡 PR-#740 审官·gpt-5.6-sol 在盘。日志在本机 `.dao/quickfix/`（#807 微通道已删，此路径不再是产品落点）。
 - **原子回滚实测**：验收调试中多次中途失败（PR create 旗标 / 壳卡派生分支 / 审官 Run / codex 冷启动），每次失败均：删远端分支 / 关 PR / 删壳卡 / 回 master / 删本地分支，无半成品残留。
 - **环境教训（写进 PR 给后人）**：codex TUI 冷启动注入会落在「model: loading」窗口导致 `agent_prompt_stalled`；本机实测与残留 codex 进程堆积强相关（全清后首启必成，堆叠后连败）。attach 子进程已做 5 次重试 + 30s 间隔兜底；根治需 orca/codex 侧（注入等 TUI 就绪）。
 

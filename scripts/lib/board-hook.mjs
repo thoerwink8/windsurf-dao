@@ -33,7 +33,7 @@ function parseWorktreePorcelain(text) {
 }
 
 function watchdogHeartbeatPath({ env = process.env, home = homedir() } = {}) {
-  const dir = env.DAO_GUARD_HALT_DIR || join(home, '.dao', 'guard');
+  const dir = env.DAO_GUARD_HALT_DIR || join(home, '.dao');
   return join(dir, 'watchdog-heartbeat.json');
 }
 

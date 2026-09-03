@@ -27,7 +27,7 @@ const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = join(dirname(HERE), '..');
 
 function statePath() {
-  return join(homedir(), '.dao', 'guard', 'memory-sync.json');
+  return join(homedir(), '.dao', 'memory-sync.json');
 }
 
 function readState() {
@@ -56,7 +56,7 @@ function emit(payload, code = 0) {
   console.log(line);
   // detached 运行时 stdout 没人读：结果同时落 jsonl，失败可查可见
   try {
-    const logFile = join(homedir(), '.dao', 'guard', 'memory-sync.jsonl');
+    const logFile = join(homedir(), '.dao', 'memory-sync.jsonl');
     mkdirSync(dirname(logFile), { recursive: true });
     appendFileSync(logFile, line + '\n');
   } catch { /* 落痕失败不挡主流程 */ }
