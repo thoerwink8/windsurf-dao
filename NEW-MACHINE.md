@@ -294,6 +294,7 @@ for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/
 orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
+# 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
 ```
 
 ### 两条部署前必须先定的（踩过就晚了）

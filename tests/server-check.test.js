@@ -13,6 +13,7 @@ import {
   classifyRuntimeStatus,
   classifyAccountsResult,
   classifyFeishuTriage,
+  classifyAgentStallWatch,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
   parseTuiAgentDisplayNames,
@@ -258,6 +259,61 @@ test('server-check 判别力', async (t) => {
     await t.test('别的名字在册不算这条', () => {
       const r = classifyLandAutomation([{ name: 'other', enabled: true, id: 'z' }]);
       assert.equal(r.state, 'red');
+    });
+  });
+
+  await t.test('classifyAgentStallWatch（⑮ #833，另起一项不改 automations 行）', async (t) => {
+    await t.test('正式 timer 在册且垫片不在 → ok', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
+        padScriptExists: false,
+      });
+      assert.equal(r.state, 'ok');
+    });
+
+    await t.test('垫片 timer 还在 → red（影子制度）', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
+        padScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /垫片/);
+    });
+
+    await t.test('垫片脚本还在 → red，即使正式 timer 已在', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
+        padScriptExists: true,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /agent-stall-watch\.mjs/);
+    });
+
+    await t.test('正式 timer 不在册 → red，带怎么起', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: 'Thu sysstat-collect.timer',
+        padScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /dao-agent-stall\.timer/);
+    });
+
+    await t.test('systemctl 探不到 → unknown，不当绿', () => {
+      const r = classifyAgentStallWatch({ probed: false, reason: 'spawn 失败：ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('垫片脚本没查成 → unknown', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: 'Thu dao-agent-stall.timer',
+        padScriptUnknown: true,
+      });
+      assert.equal(r.state, 'unknown');
     });
   });
 });

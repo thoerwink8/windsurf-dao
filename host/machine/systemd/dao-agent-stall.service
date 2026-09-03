@@ -1,0 +1,33 @@
+# /etc/systemd/system/dao-agent-stall.service
+#
+# 撞限流/卡死探测（#833）：读 orca agent 终端屏面，连红 2 轮才报，审官命中则
+# 调 planCapacitySwitch 换人，选型序走完报帅停手。
+#
+# 装（服务器，orca 用户；与 orca-serve 同一套路）：
+#   sudo install -m 644 host/machine/systemd/dao-agent-stall.service /etc/systemd/system/
+#   sudo install -m 644 host/machine/systemd/dao-agent-stall.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dao-agent-stall.timer
+#   systemctl list-timers | grep dao-agent-stall
+#
+# 退役垫片（落地即删，防影子制度）：
+#   sudo systemctl disable --now agent-stall-watch.timer
+#   sudo rm -f /etc/systemd/system/agent-stall-watch.timer /etc/systemd/system/agent-stall-watch.service
+#   rm -f /home/orca/bin/agent-stall-watch.mjs
+#   sudo systemctl daemon-reload
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+# PATH 必须带 ~/.local/bin，否则 oneshot 找不到 orca。
+
+[Unit]
+Description=windsurf-dao agent stall / 429 watch (issue #833)
+After=network-online.target orca-serve.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/home/orca/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/agent-stall-watch.mjs
+StandardOutput=journal
+StandardError=journal

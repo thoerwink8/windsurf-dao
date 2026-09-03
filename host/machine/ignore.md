@@ -15,3 +15,5 @@
 | ~/.dao/feishu-threads.json | 飞书适配器（#801）话题状态文件，运行时自建，非产品配置，可丢可重算 |
 | ~/.bashrc | NEW-MACHINE §9d 只叫人往里加一行 PATH（~/.local/bin），本机 shell 配置，不拷不进 git，非 dao 品类 |
 | ~/.profile | NEW-MACHINE §9d 记「Orca 终端不吃 login shell」的事实，本机 shell 配置，不拷不进 git，非 dao 品类 |
+| ~/bin/agent-stall-watch.mjs | #833 退役的 Contabo 垫片路径（落地即删），不进 INDEX 不当产品落点；正式件是仓内 scripts/agent-stall-watch.mjs + host/machine/systemd/dao-agent-stall.* |
+| ~/.dao/agent-stall-watch.json | #833 连红账本，运行时自建于仓外，可丢可重算 |
