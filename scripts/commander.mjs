@@ -34,6 +34,7 @@ import {
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
+import { runBreakerCommand } from './lib/provider-breaker.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -120,6 +121,18 @@ function scanPrReviews(prs) {
   return { scanned: true, byPr, ...(anyFail ? { partialError: anyFail } : {}) };
 }
 
+/** #843：周期面把健康表 red / 撞死指纹记进熔断表（只记事件，判定在 applyEvent）。失败不挡 scan。 */
+function ingestBreakerSignals({ now = Date.now() } = {}) {
+  try {
+    const policy = loadDispatchPolicy({ root: ROOT });
+    const health = runBreakerCommand({ action: 'ingest-health' }, { now, policy: policy.breaker });
+    const stall = runBreakerCommand({ action: 'ingest-stall' }, { now, policy: policy.breaker });
+    return { ok: true, health, stall };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
 function scanStall() {
   if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 垫片没写，读不到 ≠ 无撞死` };
   try {
@@ -169,9 +182,11 @@ function buildSituation({ state } = {}) {
     routingModels = null;
     healthRedModels = [];
   }
+  const breakerIngest = ingestBreakerSignals();
   return {
     at: nowIso(), repo: REPO,
     github, orca, reviewPending, prReviews, stall,
+    breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,

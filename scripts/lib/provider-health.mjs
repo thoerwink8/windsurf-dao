@@ -19,6 +19,7 @@ import os from 'node:os';
 import { join } from 'node:path';
 import { probeTargetOf } from './provider-probe.mjs';
 import { normalizePipes } from './next-launch.mjs';
+import { inspectAvailability, resolveBreakerPolicy } from './provider-breaker.mjs';
 
 const HEALTH_PATH = ['.dao', 'provider-health.json'];
 const BREAKER_PATH = ['.dao', 'provider-breaker.json'];
@@ -115,24 +116,19 @@ export function availabilityFor(models, opts = {}) {
     const target = probeTargetOf(landingOf(entry));
     const rs = [];
 
-    // 熔断优先：open 未到冷却 = 直接拦。
+    // 熔断优先：open 未到冷却 / half-open 一针已用 = 直接拦。
     if (target && breaker && breaker.targets && breaker.targets[target]) {
-      const b = breaker.targets[target];
-      const st = String(b.state || '');
-      if (st === 'open') {
-        const untilMs = Date.parse(b.cooldownUntil || '');
-        if (Number.isFinite(untilMs) && untilMs > now) {
-          const label = `cooldown(until ${b.cooldownUntil})`;
-          availability[id] = label;
-          hardBlocked[id] = label;
-          rs.push(`availability:${label}`);
-          reasons[id] = rs;
-          continue; // 直接拦，不再看健康表
-        }
-        // open 但冷却已到：当 half-open 处理（后置探一针）
-        deprioritize.add(id);
-        rs.push('breaker:open-cooldown-elapsed');
-      } else if (st === 'half-open') {
+      const pol = resolveBreakerPolicy(opts.breakerPolicy, target);
+      const av = inspectAvailability(breaker.targets[target], now, pol);
+      if (!av.available) {
+        const label = av.until ? `cooldown(until ${av.until})` : (av.why || 'cooldown');
+        availability[id] = label.startsWith('cooldown') ? label : `cooldown(${label})`;
+        hardBlocked[id] = availability[id];
+        rs.push(`availability:${availability[id]}`);
+        reasons[id] = rs;
+        continue; // 直接拦，不再看健康表
+      }
+      if (av.state === 'half-open') {
         deprioritize.add(id);
         rs.push('breaker:half-open');
       }

@@ -43,8 +43,9 @@
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
+| A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
 | A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
-| A | ~/.dao/provider-breaker.json | 网关熔断表（#843 消费端读，可选）。内容由熔断单写、本仓只读判 open/half-open；缺失=无熔断。不进 git |
+| A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |

@@ -108,10 +108,10 @@ test "$(git branch --show-current)" = master \
 
 起 agent 前用**和 agent 完全相同的请求路径**流式探一次（8 token、判据「2xx + 收到真内容」，与 ai-gateway-stack 探针同款 DECISIONS §61）：绿放行、红换选型序下一位（同厂闸不放宽）、全红报帅停手（一个 agent 都不起，任务书/账本写清探了谁、各自什么码）。探不了的 provider（devin/cursor/grok Build 等无对齐端点）返回 `unscanned`，**不当绿**——没探到绿又没证据挂了才按现状起。工人接线在 `scripts/lib/dispatch/launch.mjs`（`preflightWorkerSlate`）、审官在 `scripts/lib/dispatch/reviewer.mjs`（`preflightReviewer`），引擎在 `scripts/lib/preflight.mjs`。
 
-- **配置**：`docs/dispatch-policy.json` 的 `preflight` 节（`enabled/timeoutMs/maxCandidates/useHealthTable`），dao-check ㉛ 校验取值范围。`--no-preflight` 单次跳过且记账。
-- **健康表 + 熔断表**（消费端只读，`scripts/lib/provider-health.mjs`）：健康表 `~/.dao/provider-health.json` 红 → 后置照探（红可能已恢复，不直接拦）、过期(>2×interval)/缺失 → unknown 注明「健康表没查成」不拦；熔断表 `~/.dao/provider-breaker.json`（可选，#843）`open` 未到冷却 → 直接拦 `availability:cooldown`，`half-open` → 后置探一针，缺失=无熔断。
-- **状态**：每探一次追加 `~/.dao/preflight/<YYYY-MM-DD>.ndjson`（`ts,target,state,code,ms,why,dispatchId`）。
-- **动作**：`node scripts/dao.mjs preflight --model <id> [--json]`（只读，输出与 ndjson 同形）。
+- **配置**：`docs/dispatch-policy.json` 的 `preflight` 节（`enabled/timeoutMs/maxCandidates/useHealthTable`）和 `breaker` 节（`windowHours/failuresToTrip/cooldownHours/halfOpenProbes`，可按 target `overrides`），dao-check ㉛ 校验取值范围。`--no-preflight` 单次跳过且记账。后台改策略文件 → PR。
+- **健康表 + 熔断表**（消费端只读，`scripts/lib/provider-health.mjs`）：健康表 `~/.dao/provider-health.json` 红 → 后置照探（红可能已恢复，不直接拦）、过期(>2×interval)/缺失 → unknown 注明「健康表没查成」不拦；熔断表 `~/.dao/provider-breaker.json`（#843 编排层写）`open` 未到冷却 → 直接拦 `availability:cooldown`，`half-open` → 后置且只探一针，缺失=无熔断。全部 target open → 报帅停手 + 总控群一条。
+- **状态**：每探一次追加 `~/.dao/preflight/<YYYY-MM-DD>.ndjson`（`ts,target,state,code,ms,why,dispatchId`）。看板「卡点」读熔断表：谁 open、为什么、几点恢复。
+- **动作**：`node scripts/dao.mjs preflight --model <id> [--json]`（现在探一针）；`breaker reset <key>`（手动解除）；`breaker trip <key> --hours N`（手动熔断）。后台只调这三条。
 
 ## 小活打包
 

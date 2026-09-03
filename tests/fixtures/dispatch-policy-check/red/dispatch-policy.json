@@ -1,1 +1,25 @@
-{ "preflight": { "enabled": "yes", "timeoutMs": 999999, "maxCandidates": 0, "useHealthTable": true } }
+{
+  "preflight": {
+    "enabled": "yes",
+    "timeoutMs": 999999,
+    "maxCandidates": 0,
+    "useHealthTable": true
+  },
+  "breaker": {
+    "windowHours": 24,
+    "failuresToTrip": 0,
+    "cooldownHours": 24,
+    "halfOpenProbes": 1
+  },
+  "hubChat": {
+    "enabled": "yes",
+    "allowedActions": [
+      "hack"
+    ],
+    "upstream": {
+      "redThreshold": 0,
+      "decisions": "yes",
+      "digest": false
+    }
+  }
+}

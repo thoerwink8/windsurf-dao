@@ -79,10 +79,12 @@
 // ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
 //    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
 //    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
-// ㉛ 派前探策略（#842/#849）：docs/dispatch-policy.json 的 preflight 取值范围（enabled/useHealthTable 布尔、
-//    timeoutMs 500~60000、maxCandidates 整数 1~12）+ commander 节（maxDispatchPerRound 1~20、
-//    requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。检查器自持解析，不 import preflight.mjs；
-//    红/绿/空夹具验判别力；文件不在 / JSON 坏 / 缺 preflight 节 = 没查成。
+// ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
+//    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
+//    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
+//    commander（maxDispatchPerRound 1~20、requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。
+//    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
+//    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -1460,7 +1462,7 @@ function checkDispatchPolicySamples() {
   if (!r.ok) {
     fail(
       r.unscanned ? '派前探策略样本没查成' : '派前探策略样本对不上',
-      '恢复 tests/fixtures/dispatch-policy-check/{red,ok,empty}：红=取值越界必须拦、绿必须过、空={} 没查成',
+      '恢复 tests/fixtures/dispatch-policy-check/{red,ok,empty}：红=取值越界（含 failuresToTrip:0）必须拦、绿必须过、空={} 没查成',
       r.error || (r.problems || []).join('；'),
     );
     return;
@@ -1473,20 +1475,20 @@ function checkDispatchPolicyLive() {
   if (r.unscanned) {
     fail(
       'dispatch-policy.json 没查成',
-      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight 节 = 没查成，不是过',
+      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight/hubChat 节 = 没查成，不是过',
       (r.problems || []).join('；'),
     );
     return;
   }
   if (!r.ok) {
     fail(
-      `dispatch-policy.json preflight 取值越界 ${(r.problems || []).length} 处`,
-      'enabled/useHealthTable 布尔；timeoutMs 500~60000；maxCandidates 整数 1~12',
+      `dispatch-policy.json 取值越界 ${(r.problems || []).length} 处`,
+      'preflight：enabled/useHealthTable 布尔；timeoutMs 500~60000；maxCandidates 整数 1~12。breaker：windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5',
       (r.problems || []).join('；'),
     );
     return;
   }
-  green('dispatch-policy.json preflight 取值合范围');
+  green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
 }
 
 function checkReleasePolicySamples() {

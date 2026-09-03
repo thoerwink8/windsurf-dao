@@ -333,7 +333,7 @@ export async function preflightWorkerSlate({
   const pol = policy || loadDispatchPolicy({ root });
   const candidates = (Array.isArray(slate) ? slate : []).slice(Math.max(0, startIndex));
   const avail = availabilityResult
-    || (pol.useHealthTable ? availabilityFor(candidates, { home, now: now instanceof Date ? now.getTime() : now }) : undefined);
+    || (pol.useHealthTable ? availabilityFor(candidates, { home, now: now instanceof Date ? now.getTime() : now, breakerPolicy: pol.breaker }) : undefined);
   const r = await runPreflight({
     candidates, policy: pol, noPreflight, role: '工人', dispatchId,
     availabilityResult: avail, probe, now, home,
