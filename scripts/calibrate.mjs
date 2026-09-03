@@ -8,7 +8,7 @@
 //      null = 没测成，不是 0 轮。
 //   3. 红项三态（#591）：undefined = 未记录（有审官痕迹但没记住，不进均值）；
 //      0 = 审过零红；无 -review job 且无 red_flags = 无审。三者表上不许长得一样。
-//   4. judgment.mjs 不再承担校准计量，只给 flow 判红绿。
+//   4. #807：判定行协议退役。校准计量只读账本；GitHub 侧只认 APPROVED / CHANGES_REQUESTED。
 //   5. classifyPr 仍导出给 flow 写账本时读标签。
 //
 // 本脚本只读账本（--pr 标题可问 GitHub，失败单独说），只向 stdout/stderr 输出。
@@ -17,12 +17,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { redFlagsFromReviewBodies, judgmentFromReview } from './lib/judgment.mjs';
 import { describeUnclosedJobs, formatUnclosedDetails, unclosedJobIds } from './lib/ledger-query.mjs';
 import { describeAttribution, scopeOverridesFor } from './lib/ledger-job.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
-
-export { redFlagsFromReviewBodies } from './lib/judgment.mjs';
+import { judgedReviewCount, requestedChangeCount } from './lib/review-state.mjs';
 
 export const TASK_TYPES = ['写码', '判断', '查证', '审查', 'UI'];
 
@@ -181,44 +179,56 @@ export function classifyPr(pr) {
   };
 }
 
-// 返工轮数口径 v3（issue #501 缺陷二）：返工轮数 = 审官判定行的条数 - 1，数据源与红项数
-// 同一处（PR review 正文判定行）。判定行解析复用 judgment.mjs（唯一真相源，禁止在别处
-// 再写一份正则）：一条判定行 = 审官审过一次 = 零返工；两条 = 返工一轮；以此类推。
-// 0 条判定行记 null、输出「无判定行（本项没测成）」——「数到 0 轮」和「一条判定行都没有」
-// 必须输出不同的话（仓规硬条款：没查成 ≠ 查过没事）。
-export function countVerdictLines(bodies) {
-  return (bodies || []).filter(body => judgmentFromReview(body).kind !== null).length;
+// #807：返工轮数 = GitHub 判别态 review 条数 - 1（APPROVED / CHANGES_REQUESTED）。
+// 0 条记 null、输出「无审读（本项没测成）」——「数到 0 轮」和「一条判别态都没有」必须不同形。
+export function countVerdictLines(reviews) {
+  const list = Array.isArray(reviews) ? reviews : [];
+  let n = 0;
+  for (const r of list) {
+    if (r && typeof r === 'object' && r.state) {
+      const s = String(r.state).toUpperCase();
+      if (s.includes('APPROV') || s.includes('CHANGES')) n += 1;
+      continue;
+    }
+    const body = typeof r === 'string' ? r : (r && r.body) || '';
+    if (/^\s*(?:[>*]\s*)*(判定|复核结论)/m.test(String(body))) n += 1;
+  }
+  return n;
 }
 
-export function reworkFromVerdictLines(bodies) {
-  const count = countVerdictLines(bodies);
+export function reworkFromVerdictLines(reviews) {
+  const count = countVerdictLines(reviews);
   return count === 0 ? null : count - 1;
 }
 
-// 单 PR 报告的返工三态输出（三种话可分辨）：
-//   - 判定行 1 条 → 「0 轮（判定行 1 条：审过一次，零返工）」
-//   - 判定行 N>1 条 → 「N-1 轮（判定行 N 条）」
-//   - 0 条判定行 → 「无判定行（本项没测成）」并说明可能原因——不是 0 轮。
-export function describeRework(rework, malformed = []) {
-  if (malformed.length > 0) {
-    return `判定行不合规（没查成）：${malformed.map(m => `「${m.attempt || '?'}」`).join('、')}——格式只认 判定：红 N 项 / 判定：绿，可合并 / 复核结论：…（见 scripts/lib/judgment.mjs），流转器与校准都把它当没查成，不许当无判定`;
+export function redFlagsFromReviewBodies(reviews) {
+  const list = Array.isArray(reviews) ? reviews : [];
+  let max = 0;
+  let anyJudged = false;
+  for (const r of list) {
+    if (r && typeof r === 'object' && r.state) {
+      anyJudged = true;
+      if (String(r.state).toUpperCase().includes('CHANGES')) max = Math.max(max, 1);
+      continue;
+    }
+    const body = typeof r === 'string' ? r : (r && r.body) || '';
+    for (const line of String(body).split(/\r?\n/)) {
+      if (!/^\s*(?:[>*]\s*)*(判定|复核结论)/.test(line)) continue;
+      anyJudged = true;
+      for (const m of line.matchAll(/红\s*(\d+)\s*项/g)) max = Math.max(max, Number(m[1]));
+    }
   }
-  if (rework === null || rework === undefined) {
-    return '无判定行（本项没测成）：PR 上一条审官判定行都没有——审读可能走了 Orca 消息没落 PR review，流转器自动同步（缺陷一修法）生效后会自动补上';
-  }
-  return rework === 0
-    ? `0 轮（判定行 1 条：审过一次，零返工）`
-    : `${rework} 轮（判定行 ${rework + 1} 条）`;
+  return anyJudged || list.length === 0 ? max : 0;
 }
 
-// 红项口径 v2（issue #444，提交方式经 #573 更新）：从 review 正文判定行提取红项数。
-// 判定格式：判定写正文首行，如「判定：红 N 项」「**判定：红 N 项**」
-// 「复核结论：绿，可合并」（#444 曾因同账号限制只能 COMMENT；#573 起审官走
-// approve / request-changes，解析仍只认正文判定行）。跨全部 review 取最大 N ⇒
-// 复核绿（无红数）不清零首审红项。
-// 解析逻辑的单一真相源 = scripts/lib/judgment.mjs（本脚本
-// 共用，禁止复制第二份）。判定行 = 行首为「判定」「复核结论」（允许 >、** 前缀）
-// 的行——正文叙述里引用他单「红 N 项」不计入，防引用性多计（对抗审 #449 红 1）。
+export function describeRework(rework) {
+  if (rework === null || rework === undefined) {
+    return '无审读（本项没测成）：PR 上没有 APPROVED / CHANGES_REQUESTED';
+  }
+  return rework === 0
+    ? `0 轮（判别态 1 条：审过一次，零返工）`
+    : `${rework} 轮（判别态 ${rework + 1} 条）`;
+}
 
 function average(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -285,7 +295,7 @@ export function renderRow(row) {
     .map(item => `#${item.number} ${item.malformed ? '判定不合规' : (item.rework === null || item.rework === undefined ? '无判定' : item.rework)}/${formatRedCell(item)}`)
     .join(' → ');
   const avgRework = row.averageRework === null || row.averageRework === undefined
-    ? '无判定行'
+    ? '无审读'
     : formatAverage(row.averageRework);
   const avgRed = row.averageRedFlags === null || row.averageRedFlags === undefined
     ? (row.redBlank === 'unrecorded' ? '未记录' : '无审读')

@@ -109,15 +109,15 @@ describe('decide：报帅停手（永不自动）', () => {
     assert.ok(e.some((a) => a.reason === 'two-red'), '要有 two-red 报帅');
   });
 
-  it('判定行歪了（近义变体）→ escalate malformed，绝不当判绿/判红', async () => {
+  it('COMMENT 近义变体不算判别态，不 escalate malformed', async () => {
     const { decide } = await CORE;
     const pr = { number: 931, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 931: { bodies: ['审官判定：绿'] } } }, // 行首不规范 = malformed
+      prReviews: { scanned: true, byPr: { 931: { bodies: ['审官判定：绿'] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0);
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'malformed-judgment'));
+    assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'malformed-judgment'));
   });
 
   it('同单已唤大脑 WAKE_LIMIT 次仍没闭环 → 转报帅，不再唤', async () => {
@@ -319,6 +319,6 @@ describe('辅助纯函数', () => {
     assert.equal(analyzeReviews(null).scanned, false);
     assert.equal(analyzeReviews(['判定：红 3 项', '复核结论：红 1 项']).redRounds, 2);
     assert.equal(analyzeReviews(['判定：绿，可合并']).green, true);
-    assert.equal(analyzeReviews(['审官判定：绿']).malformed, true, '近义变体 = 歪了');
+    assert.equal(analyzeReviews(['审官判定：绿']).green, false, '近义变体不算绿');
   });
 });

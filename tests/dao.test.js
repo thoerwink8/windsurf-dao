@@ -2167,7 +2167,7 @@ describe('dao', () => {
       assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
         '批派工失败同样回收 Run');
     });
-    await t.test('#614 dispatch 不再顺带只读 gc（2026-08-23 删顺车；自动扫描留在 inbox-station ensure）', () => {
+    await t.test('#614 dispatch 不再顺带只读 gc（2026-08-23 删顺车；自动扫描已删）', () => {
       const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
       assert.ok(!/runGcReadonlyScan/.test(dispatchFn) && !/gcThresholdLine/.test(dispatchFn),
         'dispatch 热路不该再有 gc 顺车');
@@ -2432,20 +2432,6 @@ describe('dao', () => {
         && !/isProcessAlive/.test(retireFn)
         && !/pidAlive/.test(retireFn)
         && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
-    });
-    const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
-    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('// #637 可归档二次验证闸'));
-    await t.test('2026-08-23 detached：cmdEnsure 不再 stamp handle，rebuild 走 spawnDetachedRelay 不起终端', () => {
-      assert.ok(ensureFn.length > 0, 'cmdEnsure 段要切得到');
-      assert.ok(!/stampLeaseHandle|planEnsureLeaseStamp/.test(ensureFn)
-        && !/terminal', 'create'/.test(ensureFn)
-        && /planSingleStation/.test(ensureFn)
-        && /pidAlive/.test(ensureFn),
-        'cmdEnsure 该是 detached 形态（无 handle stamp、无 terminal create）  →  ' + ensureFn.slice(0, 200));
-    });
-    await t.test('2026-08-23 detached：信箱台没有终端台概念残留（无哑终端标题/启动文件）', () => {
-      assert.ok(!/buildLaunchScript|buildRelayCommand|writeLaunchFile|acceptRebuildReady/.test(inboxSrc),
-        'inbox-station.mjs 不该再有终端台启动件');
     });
     await t.test('#598 红项2：reply 无 --from 不许裸发', () => {
       assert.ok(/reply 没有信箱台 --from/.test(daoCliSrc) && /resolveReplySender/.test(daoCliSrc), '#598 红项2：reply 无 --from 不许裸发');

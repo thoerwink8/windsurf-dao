@@ -109,7 +109,7 @@ function scanPrReviews(prs) {
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
       const arr = JSON.parse(gh.out || '[]');
-      byPr[pr.number] = { bodies: arr.map((x) => x.body || '') };
+      byPr[pr.number] = { reviews: arr, bodies: arr.map((x) => x.body || '') };
     } catch (e) { anyFail = String(e.message || e); }
   }
   // 只要抓到过（哪怕 0 条）就算 scanned；一条都没试成才 unscanned。

@@ -727,8 +727,8 @@ describe('dianjiangtai', () => {
       assert.ok(closedToday.some(p => p.number === 456) && closedToday.some(p => p.number === 460), '2026-08-15 北京日已结单至少含 #456/#460  →  ' + closedToday.map(p => p.number).join(","));
     });
     const rec456 = reconstructJob(backfillSnap.prs.find(p => p.number === 456), { models });
-    await t.test('回填 #456：模型/工种来自标签，红项=4（判定行）', () => {
-      assert.ok(!rec456.skip && rec456.model === FLASH && rec456.workType === "写码" && rec456.redFlags === 4, '回填 #456：模型/工种来自标签，红项=4（判定行）  →  ' + JSON.stringify({ skip: rec456.skip, model: rec456.model, red: rec456.redFlags }));
+    await t.test('回填 #456：模型/工种来自标签，红项按 CHANGES_REQUESTED 计', () => {
+      assert.ok(!rec456.skip && rec456.model === FLASH && rec456.workType === "写码" && rec456.redFlags === 0, '回填 #456 历史 COMMENT 无 CHANGES_REQUESTED → 红项=0  →  ' + JSON.stringify({ skip: rec456.skip, model: rec456.model, red: rec456.redFlags }));
     });
     await t.test('回填 #456：派单+结单+归因 4 事件', () => {
       assert.ok(rec456.events.map(e => e.type).join(",") === "job.opened,job.dispatch,job.closed,attr.rule", '回填 #456：派单+结单+归因 4 事件  →  ' + rec456.events.map(e => e.type).join(","));

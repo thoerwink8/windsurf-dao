@@ -7,7 +7,7 @@
 //   <id>.json      派工单本体（热路写完即不可变）
 //   <id>.running   执行体开工标记（pid + ts；结果落盘即删——还在 = 在跑或崩了）
 //   <id>.out.json  执行结果（emit 结果槽写；ok:true=已派 / ok:false=拒派或失败回滚）
-//   <id>.out.log   执行体 stdio（detached 没有屏面，同 inbox-station relay 的 .out.log）
+//   <id>.out.log   执行体 stdio（detached 没有屏面）
 //
 // 队列目录可被 DAO_DISPATCH_QUEUE_DIR 覆盖（测试隔真仓，同 LEDGER_EVENTS_DIR 的思路）。
 

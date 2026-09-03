@@ -1,6 +1,6 @@
 // scripts/lib/orca-run.mjs —— spawn orca 的唯一真源（审查修复：7 处拷贝收编成 1 份）
 //
-// 收编前 runOrca/runCmd 在 watchdog.mjs / dao.mjs / inbox-station.mjs / flow.mjs /
+// 收编前 runOrca/runCmd 在 watchdog.mjs / dao.mjs / flow.mjs /
 // board-hook.mjs / dao-check.mjs / dao-mode.mjs 各有一份拷贝，其中 board-hook 的
 // shell 回落、dao-mode 与 dao-check 的全部拷贝缺 windowsHide: true（#695 同款弹窗隐患）。
 //

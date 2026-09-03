@@ -246,7 +246,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
 - 挂点已摘：随仓 `.claude/settings.json` 只剩 PreToolUse 派工闸 + SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。
-- #807 块 1：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*` 已删。`inbox-station.mjs` 去留另测。
+- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + `orca automations` + `agent-stall-watch`。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
@@ -712,8 +712,6 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.json 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
 
 派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
-
-微通道（#682）：几行改动走 `node scripts/quick-fix.mjs --issue <N> --model <主会话模型> [--yes]`——一条命令原子完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步审官，20 秒内落地；任一步失败整体回滚。`--model` 必须显式声明（#679 同厂闸），审官默认读 issue 的 `reviewer/*` label。异步审官日志在 `~/.dao/quickfix/quickfix-<issue>.log`。无新装依赖（复用 gh / orca / 三身份凭据）。
 
 ### 分支卫生：一条命令，不设规矩
 

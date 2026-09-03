@@ -292,7 +292,7 @@ describe('gh-as', () => {
   it('过期「同账号不能 approve」注释不得再当现行约束', async (t) => {
     const files = [
       path.join(REPO, 'scripts', 'calibrate.mjs'),
-      path.join(REPO, 'scripts', 'lib', 'judgment.mjs'),
+      path.join(REPO, 'scripts', 'lib', 'review-state.mjs'),
     ];
     const present = files.filter(f => fs.existsSync(f));
     await t.test('点名的两份文件都扫到（不是 0 样本）', () => {
