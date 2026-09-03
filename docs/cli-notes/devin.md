@@ -60,5 +60,5 @@ worker-start --agent devin（launch 模板 = devin --permission-mode dangerous -
 ## 相关
 
 - 启动模板唯一真源：`docs/model-routing.toml [providers.devin]`（start=agent，launch 带 dangerous+trust 旗标，#782）
-- 选型：`docs/model-routing.json` 写码模型 devin-deepseek-v4-flash-max（#771 实测后恢复可用）
+- 选型：`docs/model-routing.json` 写码顺位 2（#817 起首选 grok-4.6；#771 实测恢复可用）
 - 派工链路修复：#762；#771 全链实测拍板交互形态

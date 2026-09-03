@@ -1,4 +1,4 @@
-# CLI 踩坑教学：Grok（`grok` CLI，模型 grok-4.6，查证主选）
+# CLI 踩坑教学：Grok（`grok` CLI，模型 grok-4.6，写码首选 / 查证主选）
 
 > 提炼自 `docs/model-routing.toml [providers.grok]`。
 

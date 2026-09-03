@@ -1,0 +1,23 @@
+{
+  "confirm": {
+    "patch": { "who": "auto" },
+    "minor": { "who": "admin:1" }
+  },
+  "version": {
+    "bump_by_commit_type": {
+      "fix": "patch",
+      "docs": "patch",
+      "chore": "patch",
+      "refactor": "patch",
+      "perf": "patch",
+      "feat": "minor",
+      "feat!": "major",
+      "BREAKING CHANGE": "major"
+    }
+  },
+  "rollback": {},
+  "budget": {},
+  "demo": {
+    "example": { "kind": "scripts" }
+  }
+}
