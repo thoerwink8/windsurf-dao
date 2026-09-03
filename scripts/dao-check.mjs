@@ -500,12 +500,15 @@ function checkRoutingPolicyJson() {
       list.forEach((m, i) => {
         if (!m?.id) problems.push(`${duty}.${workType}.模型[${i}] 缺 id`);
         if (m?.禁用 !== true && m?.顺位 == null) problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 未禁用但缺 顺位`);
-        const vendors = Array.isArray(m?.厂商) ? m.厂商 : [];
-        if (vendors.length === 0) problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 厂商 空`);
-        vendors.forEach((v, j) => {
-          if (!v?.id) problems.push(`${duty}.${workType}.模型[${i}].厂商[${j}] 缺 id`);
-          if (v?.禁用 !== true && v?.顺位 == null) problems.push(`${duty}.${workType}.模型[${i}].厂商[${j}](${v?.id}) 未禁用但缺 顺位`);
-        });
+        if (Object.prototype.hasOwnProperty.call(m || {}, '厂商')) {
+          problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 仍有厂商数组（#828 落地方式必须是单值 provider）`);
+        }
+        if (Object.prototype.hasOwnProperty.call(m || {}, 'pipes')) {
+          problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 仍有 pipes（渠道降级唯一归网关）`);
+        }
+        if (m?.provider == null || String(m.provider).trim() === '') {
+          problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 缺 provider`);
+        }
       });
     }
   }
@@ -526,28 +529,9 @@ function checkRoutingPolicyJson() {
   const usedProviders = new Set();
   models.forEach((m, i) => {
     if (m && m.provider) usedProviders.add(m.provider);
-    const pipes = Array.isArray(m?.pipes) ? m.pipes : null;
-    if (!pipes) return;
-    if (pipes.length === 0) {
-      problems.push(`models[${i}](${m.id}) pipes 是空数组（缺省应省略，不是空）`);
-      return;
+    if (Array.isArray(m?.pipes)) {
+      problems.push(`registry[${i}](${m.id}) 仍有 pipes（#828 落地方式必须是单值）`);
     }
-    const p0 = pipes[0] || {};
-    if (p0.provider !== m.provider) {
-      problems.push(`models[${i}](${m.id}) pipes[0].provider=${JSON.stringify(p0.provider)} ≠ provider=${JSON.stringify(m.provider)}`);
-    }
-    const pipeCli = p0.cli_model == null || p0.cli_model === '' ? '' : String(p0.cli_model);
-    const modelCli = m.cli_model == null || m.cli_model === '' ? '' : String(m.cli_model);
-    if (pipeCli !== modelCli) {
-      problems.push(`models[${i}](${m.id}) pipes[0].cli_model=${JSON.stringify(p0.cli_model)} ≠ cli_model=${JSON.stringify(m.cli_model)}`);
-    }
-    pipes.forEach((p, j) => {
-      if (!p || !p.provider) {
-        problems.push(`models[${i}](${m.id}) pipes[${j}] 缺 provider`);
-        return;
-      }
-      usedProviders.add(p.provider);
-    });
   });
 
   if (usedProviders.size === 0) {
@@ -591,7 +575,7 @@ function checkRoutingPolicyJson() {
   if (problems.length === 0) {
     green(`选型 JSON ${models.length} 模型/${bans.length} 禁令/${rules.length} 规则；写码顺位 ${rankSlots.写码.length} 审官 ${reviewerOrder.length} 判断 ${rankSlots.判断.length}；yml 同源`);
   } else {
-    fail(`选型 JSON 校验不过 ${problems.length} 处`, '职责树 模型/厂商/顺位 齐；pipes 与 provider 一致；yml 与 JSON 模型 id 同源', problems.slice(0, 10).join(' '));
+    fail(`选型 JSON 校验不过 ${problems.length} 处`, '职责树 模型/provider/顺位 齐；落地方式单值；yml 与 JSON 模型 id 同源', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -610,11 +594,9 @@ function oracleNextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe }) {
   const models = Array.isArray(slate) ? slate : [];
   const idx = models.findIndex(s => s && s.id === modelId);
   if (idx < 0) return { action: 'fail' };
-  const pipes = Array.isArray(models[idx].pipes) ? models[idx].pipes : [];
   const pi = Number(pipeIndex) || 0;
   const fails = Number(hardFailsOnThisPipe) || 0;
   if (fails < 2) return { action: 'retry', modelId, pipeIndex: pi };
-  if (pi + 1 < pipes.length) return { action: 'switch_pipe', modelId, pipeIndex: pi + 1 };
   const next = models[idx + 1];
   if (next && next.id) return { action: 'switch_model', modelId: next.id, pipeIndex: 0 };
   return { action: 'fail' };
@@ -668,7 +650,14 @@ function checkNextLaunchFixture() {
       problems.push(`${c.name}: pipeIndex ${got.pipeIndex} ≠ ${c.expect.pipeIndex}`);
     }
   }
-  if (problems.length === 0) green(`nextLaunch 夹具 ${cases.length} 条（瞬时不切 / 2 次硬失败切支路 / 管子尽了换模型 / 名单走完失败）`);
+  const names = new Set(cases.map(c => c && c.name).filter(Boolean));
+  if (!names.has('two-hard-switch-model')) {
+    problems.push('夹具缺 two-hard-switch-model（#828 换模型路径必须有判别样本）');
+  }
+  if ([...names].some(n => /switch-pipe|pipes-exhausted/.test(n))) {
+    problems.push('夹具仍有换支路用例（#828 渠道降级唯一归网关）');
+  }
+  if (problems.length === 0) green(`nextLaunch 夹具 ${cases.length} 条（瞬时不切 / 2 次硬失败换模型 / 名单走完失败）`);
   else fail(`nextLaunch 夹具 ${problems.length} 处对不上`, '夹具 expect 与检查器自己的决策表必须一致；生产实现由 tests/next-launch.test.js 对同一份夹具核', problems.slice(0, 8).join(' '));
 }
 

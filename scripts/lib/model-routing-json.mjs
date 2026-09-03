@@ -30,25 +30,36 @@ export function sortByRank(entries) {
   });
 }
 
-export function pickEnabledVendor(vendors) {
-  return sortByRank((vendors || []).filter(v => v && v.禁用 !== true))[0] || null;
-}
-
-function pipeFromVendor(v) {
-  if (!v || !v.id) return null;
-  const out = { provider: String(v.id) };
-  if (v.cli_model != null && String(v.cli_model) !== '') out.cli_model = String(v.cli_model);
+function landingOf(entry) {
+  if (!entry || entry.provider == null || String(entry.provider).trim() === '') return null;
+  const out = { provider: String(entry.provider).trim() };
+  if (entry.cli_model != null && String(entry.cli_model) !== '') out.cli_model = String(entry.cli_model);
   return out;
 }
 
-function mergeVendors(a, b) {
-  const byId = new Map();
-  for (const v of [...(a || []), ...(b || [])]) {
-    if (!v?.id) continue;
-    const prev = byId.get(v.id);
-    byId.set(v.id, prev ? { ...prev, ...v, 顺位: v.顺位 ?? prev.顺位 } : { ...v });
+function mergeLanding(prev, next) {
+  if (!prev) {
+    return {
+      id: next.id,
+      provider: next.provider,
+      cli_model: next.cli_model,
+      status: next.status || '正式',
+      理由: next.理由 || '',
+      拍板: next.拍板 || '',
+      trial_since: next.trial_since,
+      禁用: next.禁用 === true,
+    };
   }
-  return sortByRank([...byId.values()]);
+  return {
+    id: prev.id,
+    provider: next.provider || prev.provider,
+    cli_model: next.cli_model ?? prev.cli_model,
+    status: next.status || prev.status || '正式',
+    理由: next.理由 || prev.理由 || '',
+    拍板: next.拍板 || prev.拍板 || '',
+    trial_since: next.trial_since || prev.trial_since,
+    禁用: next.禁用 === true || prev.禁用 === true,
+  };
 }
 
 export function dutyForIdentity(identity, workType) {
@@ -79,26 +90,22 @@ export function reviewerSelectOrder(doc) {
 }
 
 function toLegacyModel(entry, roles) {
-  const vendors = entry.厂商 || [];
-  const primary = pickEnabledVendor(vendors) || vendors[0];
-  const pipes = vendors.map(pipeFromVendor).filter(Boolean);
+  const landing = landingOf(entry);
   const legacy = {
     id: entry.id,
-    provider: primary?.id ? String(primary.id) : (pipes[0]?.provider || ''),
+    provider: landing?.provider || '',
     roles,
     status: entry.status || '',
     why: entry.理由 || '',
     decided: entry.拍板 || '',
     reviewerDisabled: entry.禁用 === true,
   };
-  if (primary?.cli_model) legacy.cli_model = String(primary.cli_model);
-  if (pipes.length > 1) legacy.pipes = pipes;
-  else if (pipes.length === 1 && pipes[0].cli_model) legacy.cli_model = pipes[0].cli_model;
+  if (landing?.cli_model) legacy.cli_model = landing.cli_model;
   if (entry.trial_since) legacy.trial_since = entry.trial_since;
   return legacy;
 }
 
-/** 从职责树合并模型登记（供 pipes / 同厂闸 / yml 同源校验）。 */
+/** 从职责树合并模型登记（供同厂闸 / yml 同源校验）。落地方式是单值 provider + cli_model。 */
 export function modelsFromJson(doc) {
   const byId = new Map();
   const rolesById = new Map();
@@ -111,16 +118,7 @@ export function modelsFromJson(doc) {
         const id = String(m.id);
         if (!rolesById.has(id)) rolesById.set(id, new Set());
         rolesById.get(id).add(workType);
-        const prev = byId.get(id);
-        byId.set(id, {
-          id,
-          厂商: mergeVendors(prev?.厂商, m.厂商),
-          status: m.status || prev?.status || '正式',
-          理由: m.理由 || prev?.理由 || '',
-          拍板: m.拍板 || prev?.拍板 || '',
-          trial_since: m.trial_since || prev?.trial_since,
-          禁用: m.禁用 === true || prev?.禁用 === true,
-        });
+        byId.set(id, mergeLanding(byId.get(id), { ...m, id }));
       }
     }
   }
@@ -201,8 +199,8 @@ export function pickRankedSlotA({
     const id = String(m.id);
     if (identity && isPolicyBanned(id, workType, identity, policyBans)) continue;
     if (passerIds && !passerIds.includes(id)) continue;
-    const vendor = pickEnabledVendor(m.厂商);
-    if (!vendor) continue;
+    const landing = landingOf(m);
+    if (!landing) continue;
 
     if (workerId != null && String(workerId).trim() !== '' && duty === '审官') {
       const gate = assertCrossVendor({ workerId, reviewerId: id, models });
@@ -213,10 +211,10 @@ export function pickRankedSlotA({
 
     return {
       model: id,
-      provider: String(vendor.id),
-      cli_model: vendor.cli_model != null ? String(vendor.cli_model) : undefined,
+      provider: landing.provider,
+      cli_model: landing.cli_model,
       reason: duty === '审官' ? 'reviewer_order' : 'rank_order',
-      vendor,
+      vendor: { id: landing.provider, cli_model: landing.cli_model },
     };
   }
   return { model: null, reason: 'no_candidate' };
