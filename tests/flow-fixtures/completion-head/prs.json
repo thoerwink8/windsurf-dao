@@ -1,1 +1,0 @@
-[{"number":998,"title":"[grok] #575 完工首行正控","isDraft":true,"state":"OPEN","createdAt":"2026-08-17T01:00:00Z","updatedAt":"2026-08-17T02:00:00Z","mergedAt":null,"headRefName":"thoerwink8/575-completion-head","labels":[{"name":"model/grok-4.6"},{"name":"type/写码"}],"body":"## 目标\n验收：首行「完工：」必须触发起审官。\n"}]

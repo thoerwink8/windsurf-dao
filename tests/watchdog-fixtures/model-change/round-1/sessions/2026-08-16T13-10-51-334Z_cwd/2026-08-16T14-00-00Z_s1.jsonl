@@ -1,6 +1,0 @@
-{"type":"session","version":3,"id":"s1","timestamp":"2026-08-16T14:00:00.000Z","cwd":"C:\\x"}
-{"type":"model_change","id":"m0","parentId":null,"timestamp":"2026-08-16T14:00:01.000Z","provider":"opencode-go","modelId":"deepseek-v4-flash"}
-{"type":"message","id":"m1","parentId":"m0","timestamp":"2026-08-16T14:00:02.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1}}
-{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-08-16T14:00:03.000Z","message":{"role":"assistant","content":[],"provider":"opencode-go","stopReason":"error","errorMessage":"503 status code (no body)","timestamp":2}}
-{"type":"model_change","id":"m3","parentId":"m2","timestamp":"2026-08-16T14:00:03.001Z","provider":"deepseek","modelId":"deepseek-v4-flash"}
-{"type":"message","id":"m4","parentId":"m3","timestamp":"2026-08-16T14:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"好的"}],"provider":"deepseek","timestamp":3}}

@@ -62,8 +62,6 @@ import {
   parsePrStateOutput,
   parsePrReviewsOutput,
 } from './lib/archive-exec.mjs';
-import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
-import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { ghAs } from './lib/gh.mjs';
 export { parseOrcaStdout };
 
@@ -1114,7 +1112,6 @@ async function cmdRelay(args) {
   mkdirSync(dirname(logPath), { recursive: true });
   const leaseTtlMs = args.timeoutMs + LEASE_GRACE_MS;
   const pollMs = Math.max(2000, args.timeoutMs);
-  const startupRev = recordStartupRevision({ cwd: ROOT });
 
   console.log(`${READY_MARK} run=all log=${logPath}`);
   persistLease(logPath, null, leaseTtlMs);
@@ -1123,7 +1120,6 @@ async function cmdRelay(args) {
   let consecutiveBoardFail = 0;
   for (;;) {
     try {
-      haltIfStale(checkGuardRevision({ startup: startupRev, cwd: ROOT }), { tag: '[inbox] STALE_CODE' });
       persistLease(logPath, null, leaseTtlMs);
       const board = loadBoard();
       if (!board.ok) {
@@ -1262,13 +1258,6 @@ async function main() {
   if (args.help) {
     printUsage();
     process.exit(0);
-  }
-  if (args.cmd !== 'retire') {
-    bootGuardOrHalt({
-      repoRoot: ROOT,
-      scriptFile: import.meta.url,
-      argv: process.argv.slice(2),
-    });
   }
   if (args.cmd === 'relay') return cmdRelay(args);
   if (args.cmd === 'retire') return cmdRetire(args);

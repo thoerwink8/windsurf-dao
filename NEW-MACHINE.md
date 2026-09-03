@@ -98,7 +98,7 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 
 ## 4c. 账本事件（~/.dao/ledger/events/）
 
-点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `flow.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
+点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
 
 - 仓内 `ledger/events/` 只保留已合并历史，**不要再往那里写新事件**；`LEDGER_EVENTS_DIR=<目录>` 可临时改落点（测试用，覆盖时不播种子）。
 - 本机产生的新事件只在本机。跨机汇聚的方向是 dao-hub 按需拉取（已拍板，机制未实现）；汇聚上线前要带走旧机事件，就手动拷 `~/.dao/ledger/events/`——文件名由事件内容决定，同名即同一事件，直接合并拷贝安全。
@@ -124,7 +124,7 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - **ds-flash 写码通道走 gw-dspool**（选型顺位以 `docs/model-routing.json` 为准，2026-09-03 拍板）：派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）。网关凭据与分组归 `ai-gateway-stack`（INDEX E 类，本仓不写装法）。`opencode-go` 因服务器 403 RegionError 降为顺位 2，凭据仍填 `~/.pi/agent/auth.json` 的 `opencode-go` 键（取 key 见 §4）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
   - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
 - **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
-  - 这条止血本身没被验证过——`scripts/watchdog.mjs` 的 model-change 检测（#569 ②，扫 `~/.pi/agent/sessions/**/*.jsonl` 的 model_change 事件）就是验证手段：下次真 503 是当场报错（止血生效）还是又切了（止血失效，检测会报出诱因）。
+  - 这条止血本身没被验证过——下次真 503 是当场报错（止血生效）还是又切了（止血失效）。本机 `watchdog.mjs` 的 model-change 检测 #807 已删。
   - 与 go-fallback 扩展的交互（#569 核对）：扩展的降级查找 `modelRegistry.find("deepseek", model.id)` 与兜底 `find("deepseek", "deepseek-v4-flash")` 现在都找不到 `-direct` 改名后的模型 → 扩展明确报「无可用模型，无法降级」而不是悄悄切走。**这是止血想要的形态**（错误上浮有人看见），不是故障；将来若想让扩展能切直连，把 `PI_GO_FALLBACK_MODEL` 设成 `deepseek-v4-flash-direct` 即可（同时失去「静默切换」的保护，慎重）。
   - 将来 deepseek 充值后要走直连：模型名是带 `-direct` 的那个，`pi --provider deepseek --model deepseek-v4-flash-direct`（`cli_model` 字段表达不了这条通道差异的坑见 `docs/model-routing.toml`）。
 - 三条验证命令：
@@ -246,7 +246,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
 - 挂点已摘：随仓 `.claude/settings.json` 只剩 PreToolUse 派工闸 + SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。
-- 代码死缓：`scripts/inbox-station.mjs`、`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`board-hook.mjs`、`cursor-context-hook.mjs` 原样留仓、测试照跑，不修不加不移植；服务器落地后按 `docs/decisions/SERVER-LANDING-CHECKLIST.md` 第 4 步删。
+- #807 块 1：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*` 已删。`inbox-station.mjs` 去留另测。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
@@ -419,7 +419,7 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 
 **事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在 memory 仓里。本机有、memory 仓没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction（目标 = 你的 memory 仓）则什么都不做、原地返回。接上之后 Claude 每写一条 memory，memory 仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
-**自动同步**（2026-08-22 起）：`guard-keepalive --once` 尾部顺带跑 `scripts/memory-sync.mjs --once`——有未提交改动自动 commit、有未推送自动 push、远端领先先 `pull --rebase`（冲突只报不合、push 被拒不强推）。时间门 30 分钟，高频触发无害；手动立刻同步用 `node scripts/memory-sync.mjs --force`。新机不用额外装东西，接上 memory + 守卫保活后就自动有了。
+**自动同步**：手动立刻同步用 `node scripts/memory-sync.mjs --force`（#807 起不再挂守卫保活）。时间门 30 分钟，高频触发无害。
 
 ```powershell
 & {

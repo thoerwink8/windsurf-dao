@@ -960,7 +960,7 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false, from } = {}) {
  * cmdDispatchBatch）传 runRole='coordinator'（派工协调 Run 永不自动退役）；其余（工人 TUI）默认
  * 'dispatch'。
  * 2026-08-23 拍板：信箱台 ensure 挪出派工路——这里不再 ensure（一次 ensure 最慢 300s，
- * 是派工分钟级耗时的大头）。台的保活归 guard-keepalive（detached relay + 租约心跳）。 */
+ * 是派工分钟级耗时的大头）。#807 起本机守卫保活已删。 */
 function bindStation({ runRole = 'dispatch' } = {}) {
   const cur = orca(argsRunCurrent());
   const plan = planCallerRun({
@@ -2166,8 +2166,8 @@ function healReviewerCreateAfterFence(first, opts) {
   });
   const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
   const retried = invokeReviewerCreate(opts);
-  // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路（含 fence 自愈）——保活归 guard-keepalive。
-  const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（信箱台保活归 guard-keepalive）' };
+  // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路（含 fence 自愈）。#807 起本机守卫保活已删。
+  const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（本机守卫保活 #807 已删）' };
   const plan = planFenceHeal({
     error: first.error,
     runId: run.ok ? run.runId : null,
@@ -2752,8 +2752,8 @@ function cmdWorkerDone(args) {
         from: args.from,
         dryRun: false,
       });
-      // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路——保活归 guard-keepalive。
-      const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（信箱台保活归 guard-keepalive）' };
+      // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路。#807 起本机守卫保活已删。
+      const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（本机守卫保活 #807 已删）' };
       const planHeal = planFenceHeal({
         error: reused.error,
         runId: run.ok ? run.runId : null,

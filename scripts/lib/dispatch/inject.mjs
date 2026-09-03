@@ -218,7 +218,7 @@ export function leftoverDispatchMatch(text) {
   return null;
 }
 
-/** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
+/** #565 时序 bug 的 TUI 启动占位态指纹：
  * 命中这些屏面文本 = TUI 还在加载（MCP servers 0/5 之类），任务书还没渲染——
  * 绝不判绿，稳定轮数归零，继续等 proof/marker。 */
 export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正在启动|初始化|配置同步|请稍候|加载中|登录/i;

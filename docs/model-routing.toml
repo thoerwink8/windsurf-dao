@@ -35,7 +35,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @earendil-works/pi-codi
 除账单外零信号）。**本文件表达不了这条通道差异**：[[models]] 的 cli_model 只有一个字段，两个通道的
 真实模型名不同（opencode-go 侧 `deepseek-v4-flash` / 直连侧 `deepseek-v4-flash-direct`），这儿只能记
 主通道的。将来充值后切直连派工时，在 launch 模板/派工参数里显式写 `-direct` 模型名（NEW-MACHINE §6），
-别指望本文件帮你变。止血本身的验证手段 = scripts/watchdog.mjs 的 model-change 检测（#569 ②）。
+别指望本文件帮你变。本机 watchdog.mjs 的 model-change 检测 #807 已删。
 """
 
 [providers.grok]

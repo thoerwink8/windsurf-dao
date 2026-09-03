@@ -216,7 +216,7 @@ export function describeRework(rework, malformed = []) {
 // 「复核结论：绿，可合并」（#444 曾因同账号限制只能 COMMENT；#573 起审官走
 // approve / request-changes，解析仍只认正文判定行）。跨全部 review 取最大 N ⇒
 // 复核绿（无红数）不清零首审红项。
-// 解析逻辑的单一真相源 = scripts/lib/judgment.mjs（本脚本与 scripts/flow.mjs
+// 解析逻辑的单一真相源 = scripts/lib/judgment.mjs（本脚本
 // 共用，禁止复制第二份）。判定行 = 行首为「判定」「复核结论」（允许 >、** 前缀）
 // 的行——正文叙述里引用他单「红 N 项」不计入，防引用性多计（对抗审 #449 红 1）。
 
