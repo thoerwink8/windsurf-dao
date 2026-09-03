@@ -53,6 +53,15 @@ export {
   orcaKnownAgentId,
   launchCliModel,
   agentStartSpec,
+  DEFAULT_DAO_REPO,
+  daoTaskId,
+  daoActorId,
+  buildDaoTraceEnv,
+  isDaoTraceEnv,
+  normalizeDaoTrace,
+  shouldPrefixDaoTrace,
+  prefixLaunchWithDaoTrace,
+  applyDaoTraceToLaunch,
 } from './dispatch/launch.mjs';
 
 // #802：start=agent 落裸 shell 的屏面分类 / 回退计划 / launchAttempts 行

@@ -728,7 +728,7 @@ export async function triage(inbound, deps) {
   it('deps.llm（补充2）：网关契约 / model / key 文件 / 失败抛错', async () => {
     const M = await MOD;
     const dir = tmpdir();
-    const keyFile = path.join(dir, 'grok.key');
+    const keyFile = path.join(dir, 'feishu-triage.key');
     fs.writeFileSync(keyFile, 'k123\n');
     const calls = [];
     const fetchImpl = async (url, init) => {
@@ -755,8 +755,41 @@ export async function triage(inbound, deps) {
     assert.deepEqual(obj, { a: 1 }, 'json 模式解析对象');
 
     await assert.rejects(() => M.makeLlm({ gateway: '', keyPath: keyFile, fetchImpl })({ system: 's', user: 'u' }), /ANTHROPIC_BASE_URL/);
-    await assert.rejects(() => M.makeLlm({ gateway: 'https://gw.example', keyPath: path.join(dir, 'no.key'), fetchImpl })({ system: 's', user: 'u' }), /grok key/);
+    await assert.rejects(() => M.makeLlm({ gateway: 'https://gw.example', keyPath: path.join(dir, 'no.key'), fetchImpl })({ system: 's', user: 'u' }), /feishu-triage key/);
     await assert.rejects(() => llm({ system: 's', user: 'FAIL' }), /HTTP 500/);
+  });
+
+  it('#823 伪 fetch 断言 X-Dao 三头齐', async () => {
+    const M = await MOD;
+    const dir = tmpdir();
+    const keyFile = path.join(dir, 'feishu-triage.key');
+    fs.writeFileSync(keyFile, 'k123\n');
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true, status: 200,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      };
+    };
+    const llm = M.makeLlm({ gateway: 'https://gw.example', keyPath: keyFile, fetchImpl });
+    await llm({
+      system: 's',
+      user: 'u',
+      daoActor: 'feishu-triage',
+      daoTask: 'thoerwink8/windsurf-dao#823',
+      daoRun: 'oc_chat_1',
+    });
+    assert.equal(calls.length, 1);
+    const h = calls[0].init.headers;
+    assert.equal(h['X-Dao-Actor'], 'feishu-triage', 'X-Dao-Actor');
+    assert.equal(h['X-Dao-Task'], 'thoerwink8/windsurf-dao#823', 'X-Dao-Task');
+    assert.equal(h['X-Dao-Run'], 'oc_chat_1', 'X-Dao-Run');
+
+    const defaults = M.daoTraceHeaders({ repo: 'thoerwink8/windsurf-dao', chatId: 'oc_x' });
+    assert.equal(defaults['X-Dao-Task'], 'thoerwink8/windsurf-dao#triage', '未建单落 repo#triage');
+    const withIssue = M.daoTraceHeaders({ repo: 'thoerwink8/windsurf-dao', issueNumber: 42, chatId: 'oc_x' });
+    assert.equal(withIssue['X-Dao-Task'], 'thoerwink8/windsurf-dao#42', '已建单带号');
   });
 
   it('deps 的 gh 三件套：搜索 / 建单 / 追评（假 gh）', async () => {
