@@ -83,6 +83,34 @@ export function parsePrStateOutput({ status, stdout, stderr, error } = {}, pr) {
   return { ok: true, state: String(state).trim() };
 }
 
+/** #826：gh pr view --json reviews 的解析。没查成 / 缺数组 / 扫完 0 条必须分开。 */
+export function parsePrReviewsOutput({ status, stdout, stderr, error } = {}, pr) {
+  const n = pr == null ? '?' : pr;
+  if (error || (status !== 0 && status != null)) {
+    const detail = String(error?.message || stderr || stdout || `exit ${status}`).trim().slice(0, 160);
+    return {
+      ok: false,
+      unscanned: true,
+      reviews: [],
+      error: `gh 读 PR #${n} reviews 失败（${status ?? 'error'}）——不是查过没事：${detail}`,
+    };
+  }
+  const text = String(stdout || '').trim();
+  if (!text) {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} reviews 空输出——不是查过没事` };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} reviews 返回非 JSON` };
+  }
+  if (!Array.isArray(json?.reviews)) {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} 缺 reviews 数组（没查成，不许当已 approve）` };
+  }
+  return { ok: true, unscanned: false, reviews: json.reviews, count: json.reviews.length };
+}
+
 export function planArchiveNotice({
   message,
   prQuery,
