@@ -19,7 +19,10 @@ try {
     method: 'POST',
     signal: ac.signal,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, stream: true, max_tokens: 64, messages: [{ role: 'user', content: 'ok' }] }),
+    // 不设 max_tokens：机器人自己也不设。探针必须看到**和消费方同一种响应形态**——
+    // 设了小预算，推理档模型可能把额度全花在思考上、只吐 reasoning 不吐 content，
+    // 于是探针判绿而机器人拿到空回答报「稍后重试」（复审 2026-09-04 抓出的不对称）。
+    body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: '只回两个字：好的' }] }),
   });
   let text = '';
   if (res.body) {

@@ -34,6 +34,12 @@ Type=simple
 User=orca
 # 帅 2026-09-03 实况：llm 网关来自 ANTHROPIC_BASE_URL（补充2），不注入 llm 只回兜底话。
 # 服务器上把 claude 的 env 拷到 /etc/feishu-triage.env（600 root:root，systemd 以 root 读）
+# 两份，缺一不炸（前缀 -）：
+#  · public 那份 644，只放**不是密钥**的接线值（ANTHROPIC_BASE_URL / FEISHU_LLM_MODEL），
+#    好让以 orca 身份跑的 server-check ⑰ 读得到「机器人在用哪个网关、哪个模型」——
+#    2026-09-04 实咬：模型被砍后机器人哑了一整天，零报警，就是因为没人看得见这两个值。
+#  · 另一份 600 root:root，放 ANTHROPIC_AUTH_TOKEN 等密钥，谁都别改成 644。
+EnvironmentFile=-/etc/feishu-triage.public.env
 EnvironmentFile=/etc/feishu-triage.env
 WorkingDirectory=/home/orca/windsurf-dao
 ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/feishu-triage.mjs

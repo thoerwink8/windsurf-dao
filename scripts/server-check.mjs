@@ -35,11 +35,11 @@ const RED = 'red';
 const UNKNOWN = 'unknown';
 
 /** 跑一条命令，永不抛：拿不到就 unknown，不许当 0 条。 */
-function run(cmd, args, { timeout = 30000, input, env } = {}) {
-  // input：给需要走 stdin 的命令用。env：给需要带敏感值的子进程用——
+function run(cmd, args, { timeout = 30000, env } = {}) {
+  // env：给需要带敏感值的子进程用——
   // 值放环境而不是 argv，因为 argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
   // /proc/<pid>/environ 只有属主读得到。
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, ...(input == null ? {} : { input }), ...(env == null ? {} : { env }) });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, ...(env == null ? {} : { env }) });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
@@ -446,11 +446,17 @@ export function classifyBotModelProbe({ probed = false, reason = '', code = null
   return { state: RED, detail: `机器人模型 ${model} 不通（网关 ${code ?? '?'}${/model_not_found|No available channel/.test(reason) ? '，模型已被砍' : ''}）——改 FEISHU_LLM_MODEL 或把模型加回网关白名单` };
 }
 
-/** 机器人 systemd 单元真正读的那份 env（EnvironmentFile，600 root:root）。
- *  不能只看 process.env：Orca 终端不继承 orca-serve 的环境（NEW-MACHINE.md §「实测」），
- *  按 shell 循环跑法 ANTHROPIC_* 全空——那样 ⑰ 会在编排机上永远返回「本机不是编排机」，
- *  变成一个永不响的报警，正好复刻本单要修的「零报警」。 */
-export const BOT_ENV_FILE = '/etc/feishu-triage.env';
+/** 机器人的接线值从哪读。两份，按序合并（后者不覆盖前者已有的键）：
+ *  ① `/etc/feishu-triage.public.env`（644）——**不含密钥**的那半：网关地址、模型名。
+ *     检查器以 orca 身份跑，读得到的只有这一份。
+ *  ② `/etc/feishu-triage.env`（600 root:root，含 ANTHROPIC_AUTH_TOKEN）——检查器读不到，
+ *     只有以 root 跑时才补得上；读不到不报错，因为 ① 已经够判。
+ *  为什么不能只看 process.env：Orca 终端不继承 orca-serve 的环境（NEW-MACHINE.md §「实测」），
+ *  ANTHROPIC_* 全空——那样 ⑰ 会在编排机上永远说「探不到」，变成一个永不响的报警，
+ *  正好复刻本单要修的「零报警」。为什么不能把 ② 改成 644：那份里有 token（key 不外泄是硬规矩）。 */
+export const BOT_ENV_FILES = ['/etc/feishu-triage.public.env', '/etc/feishu-triage.env'];
+/** @deprecated 单份时代的名字，留给旧引用；真相是 BOT_ENV_FILES。 */
+export const BOT_ENV_FILE = BOT_ENV_FILES[1];
 export function parseEnvFile(text) {
   const out = {};
   for (const line of String(text || '').split(/\r?\n/)) {
@@ -464,26 +470,30 @@ export function parseEnvFile(text) {
 }
 
 function probeBotModel() {
-  let fileEnv = {};
-  let envErr = null;
-  if (existsSync(BOT_ENV_FILE)) {
-    try { fileEnv = parseEnvFile(readFileSync(BOT_ENV_FILE, 'utf8')); }
-    catch (e) { envErr = `读不了 ${BOT_ENV_FILE}（权限？要 root，机器人单元是以 root 读它的）：${e.message}`; }
+  const fileEnv = {};
+  const notes = [];
+  for (const f of BOT_ENV_FILES) {
+    if (!existsSync(f)) { notes.push(`${f} 不在`); continue; }
+    try {
+      const kv = parseEnvFile(readFileSync(f, 'utf8'));
+      for (const [k, v] of Object.entries(kv)) if (!(k in fileEnv)) fileEnv[k] = v;   // 先读的优先
+    } catch (e) { notes.push(`${f} 读不了（${e.code || e.message}）`); }
   }
+  const envErr = notes.length ? `接线值没读到：${notes.join('；')}——网关地址与模型名应放 ${BOT_ENV_FILES[0]}（644，不含密钥），密钥另留 600 那份` : null;
   const base = fileEnv.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || '';
-  // 模型默认值只有一份真相：scripts/feishu-triage.mjs 的 LLM_MODEL。这里 import 常量，不抄第二份。
-  const model = fileEnv.FEISHU_LLM_MODEL || process.env.FEISHU_LLM_MODEL || BOT_LLM_MODEL;
+  // 模型只有一份真相：scripts/feishu-triage.mjs 的 LLM_MODEL（它自己已经认 process.env.FEISHU_LLM_MODEL）。
+  // 这里不再插一层检查器自己的环境变量——否则可能去探一个机器人并不用的模型。
+  const model = fileEnv.FEISHU_LLM_MODEL || BOT_LLM_MODEL;
   const keyFile = join(homedir(), '.mirasim', 'keys', 'feishu-triage.key');
-  if (!base) return { probed: false, reason: envErr || `网关地址没查成（${BOT_ENV_FILE} 里没有 ANTHROPIC_BASE_URL，环境变量里也没有）`, model };
+  if (!base) return { probed: false, reason: envErr || `网关地址没查成（${BOT_ENV_FILES.join(' / ')} 里都没有 ANTHROPIC_BASE_URL，环境变量里也没有）`, model };
   if (!existsSync(keyFile)) return { probed: false, reason: '机器人 key 不在本机', model };
   let key = '';
   try { key = readFileSync(keyFile, 'utf8').trim(); } catch (e) { return { probed: false, reason: `key 读不了：${e.message}`, model }; }
   if (!key) return { probed: false, reason: 'key 为空', model };
   // key **走子进程环境变量**，不进 argv：argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
   // 而 /proc/<pid>/environ 只有属主读得到，与「能读 key 文件本身」是同一道信任边界。
-  //（硬规矩：key 永不进聊天/日志。另：curl -K - 在 Windows 上会挂住读不到 stdin EOF，2026-09-04 实测，别回头改回去。）
-  // key 走子进程**环境变量**，不进 argv（argv 即 /proc/<pid>/cmdline，全局可读）。
-  // 子进程是独立文件（不内联 -e 源码：两层转义写岔过一次，探针只会报「超时」，根因看不见）。
+  //（另两条别回头踩：curl -K - 在 Windows 上挂住读不到 stdin EOF；内联 -e 源码要过两层转义，
+  //  写岔过一次，探针只会报「超时」，根因看不见。所以子进程是独立文件。2026-09-04 实测。）
   const childFile = join(REPO_ROOT, 'scripts', 'lib', 'bot-model-probe-child.mjs');
   const r = run(process.execPath, [childFile, base, model], { timeout: 100000, env: { ...process.env, __PROBE_KEY__: key } });
   if (!r.probed) return { probed: false, reason: r.reason || "探针子进程没跑成", model };
