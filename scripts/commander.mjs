@@ -405,7 +405,7 @@ function cmdAct(argv) {
 }
 function summarizeAction(a) {
   const o = { kind: a.kind };
-  for (const k of ['issue', 'pr', 'target', 'term', 'reason', 'moment', 'model', 'reviewer']) if (a[k] != null) o[k] = a[k];
+  for (const k of ['issue', 'pr', 'target', 'term', 'reason', 'moment', 'model', 'reviewer', 'missing']) if (a[k] != null) o[k] = a[k];
   return o;
 }
 

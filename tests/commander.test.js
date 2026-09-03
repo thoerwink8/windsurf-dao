@@ -158,8 +158,8 @@ describe('decide：唤大脑（要判断）', () => {
   });
 });
 
-describe('decide：没查成 ≠ 空态势（红样本）', () => {
-  it('某节 unscanned → escalate(unscanned)，绝不产该节正向动作、绝不 noop', async () => {
+describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-closed）', () => {
+  it('某节 unscanned → escalate(unscanned, missing)，绝不产该节正向动作、绝不 noop', async () => {
     const { decide } = await CORE;
     // GitHub 没查成，其余全查成且空。若把 scanned:false 当空处理会回 noop——这里必须抓住。
     const r = decide(baseSituation({ github: { scanned: false, error: 'gh 挂了' } }));
@@ -167,15 +167,15 @@ describe('decide：没查成 ≠ 空态势（红样本）', () => {
     assert.equal(byKind(r, 'dispatch').length, 0, '没查成不产 dispatch');
     assert.equal(byKind(r, 'merge').length, 0, '没查成不产 merge');
     const e = byKind(r, 'escalate');
-    assert.ok(e.some((a) => a.reason === 'unscanned' && a.section === 'github'));
+    assert.ok(e.some((a) => a.reason === 'unscanned' && (a.missing || []).includes('github')));
   });
 
-  it('reviewPending / stall 各自 unscanned 都单独 escalate', async () => {
+  it('reviewPending / stall 各自 unscanned 都进合并 escalate 的 missing', async () => {
     const { decide } = await CORE;
     const r1 = decide(baseSituation({ reviewPending: { scanned: false, error: '目录读不了' } }));
-    assert.ok(byKind(r1, 'escalate').some((a) => a.section === 'reviewPending'));
+    assert.ok(byKind(r1, 'escalate').some((a) => (a.missing || []).includes('reviewPending')));
     const r2 = decide(baseSituation({ stall: { scanned: false, error: '文件不在' } }));
-    assert.ok(byKind(r2, 'escalate').some((a) => a.section === 'stall'));
+    assert.ok(byKind(r2, 'escalate').some((a) => (a.missing || []).includes('stall')));
   });
 
   it('判绿待合并但该 PR reviews 没查成 → escalate，不合', async () => {
@@ -186,10 +186,94 @@ describe('decide：没查成 ≠ 空态势（红样本）', () => {
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: {} }, // 该 PR 没抓到 reviews
+      prReviews: { scanned: true, byPr: {} }, // section 查成但该 PR 的 fetch 缺
     }));
     assert.equal(byKind(r, 'merge').length, 0, '判定行没查成绝不合');
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned'));
+  });
+
+  // 审官 #840 红①：三条交叉组合原样加成红样本——散落 if 会被它们绕过，入口总闸必须挡住。
+  it('红①绕过a：github.scanned=false + reviewPending 有条目 → 不产 attach-reviewer', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: false, error: 'gh 挂' },
+      reviewPending: { scanned: true, items: [{ pr: 1 }] },
+    }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 0, 'github 没查成时 attach-reviewer 一律不产');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('github')));
+  });
+
+  it('红①绕过b：stall.scanned=false + 一轮红 PR → 不产 wake-brain', async () => {
+    const { decide } = await CORE;
+    const pr = { number: 2, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 2: { bodies: ['判定：红 1 项'] } } },
+      stall: { scanned: false, error: '撞死指纹读不到' },
+    }));
+    assert.equal(byKind(r, 'wake-brain').length, 0, 'stall 没查成时 wake-brain 一律不产');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('stall')));
+  });
+
+  it('红①绕过c：prReviews.scanned=false + 已消歧 issue → 不产 dispatch/notify-hub', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 3, title: 'X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      prReviews: { scanned: false, error: 'reviews API 挂' },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, 'prReviews 没查成时 dispatch 一律不产');
+    assert.equal(byKind(r, 'notify-hub').length, 0, '随附 notify-hub 也一并不产');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('prReviews')));
+  });
+
+  it('全部节 unscanned → 只有一条 escalate、零正向动作', async () => {
+    const { decide, ACTION_KINDS } = await CORE;
+    const r = decide({
+      github: { scanned: false }, orca: { scanned: false }, reviewPending: { scanned: false },
+      prReviews: { scanned: false }, stall: { scanned: false }, wakeCounts: {},
+    });
+    assert.equal(r.actions.length, 1, '全 unscanned 只该有一条动作');
+    assert.equal(r.actions[0].kind, 'escalate');
+    assert.equal(r.actions[0].reason, 'unscanned');
+    assert.equal((r.actions[0].missing || []).length, 5, 'missing 列全五节');
+    const positive = r.actions.filter((a) => !['escalate', 'noop'].includes(a.kind));
+    assert.equal(positive.length, 0, '零正向动作');
+    void ACTION_KINDS;
+  });
+});
+
+describe('decide：自动路径边界（审官建议）', () => {
+  it('任何输出的 kind 都在 ACTION_KINDS 内，绝不出现清树/写指纹/改 dao.mjs 类破坏动作', async () => {
+    const { decide, ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    const allowed = new Set(ACTION_KINDS);
+    // 一份「样样都有」的态势：dispatch + merge + manual待拍板 + 一轮红wake + 两轮红报帅 + stall wake + review-pending
+    const situ = baseSituation({
+      github: { scanned: true,
+        issues: [{ number: 10, title: 'A', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }],
+        prs: [
+          { number: 20, isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '' },
+          { number: 21, isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', body: '' },
+          { number: 22, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' },
+          { number: 23, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' },
+        ] },
+      prReviews: { scanned: true, byPr: {
+        20: { bodies: ['判定：绿，可合并'] },
+        22: { bodies: ['判定：红 1 项'] },
+        23: { bodies: ['判定：红 3 项', '复核结论：红 2 项'] },
+      } },
+      reviewPending: { scanned: true, items: [{ pr: 30, reviewer: 'gpt-5.6-sol', worker: 'wt' }] },
+      stall: { scanned: true, strikes: { term_z: { strikes: 2 } } },
+    });
+    const r = decide(situ);
+    for (const a of r.actions) {
+      assert.ok(allowed.has(a.kind), `未知 kind ${a.kind} 不在 ACTION_KINDS`);
+      assert.ok(!FORBIDDEN_AUTO_KINDS.has(a.kind), `禁用自动动作 ${a.kind} 冒出来了`);
+    }
+    // 确认这份富态势确实覆盖了几类主动作（否则边界测试是空跑）
+    assert.ok(kinds(r).includes('dispatch') && kinds(r).includes('merge') && kinds(r).includes('wake-brain') && kinds(r).includes('escalate'));
   });
 });
 

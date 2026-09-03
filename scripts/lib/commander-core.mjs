@@ -79,152 +79,173 @@ function hub(subject, moment, extra = {}) {
   return { kind: 'notify-hub', subject, moment, ...extra };
 }
 
+// 态势的五节。scan 每节标 scanned:true/false。
+export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
+
+// 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
+// notify-hub / land 是随附动作，产出处会用 _needs 显式继承主动作的依赖（下面 hub/withNeeds）。
+// escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
+// 审官 #840 红①要求：不靠各分支散落 if 挡 unscanned，改在 decide 入口按此表统一 fail-closed。
+export const ACTION_NEEDS = {
+  dispatch: ['github', 'orca', 'prReviews'],
+  'attach-reviewer': ['github', 'reviewPending'],
+  merge: ['github', 'prReviews'],
+  land: ['github', 'prReviews'],
+  'wake-brain': ['github', 'prReviews', 'stall'],
+  'notify-hub': [],
+  escalate: [],
+  noop: [],
+};
+
+// 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
+// 有破坏性或越界的动作，指挥官自动层永不产出——归帅或归别的在途单。
+export const FORBIDDEN_AUTO_KINDS = new Set([
+  'worktree-rm', 'worktree-remove', 'rm-tree', 'write-fingerprint', 'edit-dao', 'merge-force',
+]);
+
+function withNeeds(action, needs) { return { ...action, _needs: needs }; }
+
 /**
- * 纯函数：态势 → 动作清单。
+ * 收集「候选动作」：各分支照常按数据产候选，正向动作带 _needs（依赖节），由入口总闸统一裁定产不产。
+ * 分支内只做「数据在不在」的安全读取（可选链 + || []），不再用 section.scanned 挡正向产出——
+ * fail-closed 由总闸按 ACTION_NEEDS 统一做（审官 #840 红①：散落 if 会漏，交叉组合能绕过）。
+ */
+function collectCandidates(situation) {
+  const out = [];
+  const gh = situation.github || {};
+  const orca = situation.orca || {};
+  const rp = situation.reviewPending || {};
+  const reviews = situation.prReviews || {};
+  const stall = situation.stall || {};
+  const wakeCounts = situation.wakeCounts || {};
+  const N = ACTION_NEEDS;
+
+  // ① 已消歧 + 无在途派工 → dispatch（缺 model|reviewer 标签 = 报帅不猜）
+  const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
+  if (ready.kind === 'ready') {
+    for (const n of ready.ready) {
+      const issue = (gh.issues || []).find((i) => i && i.number === n);
+      const model = labelValue(issue, 'model/');
+      const reviewer = labelValue(issue, 'reviewer/');
+      const role = labelValue(issue, 'type/');
+      if (!model || !reviewer) {
+        // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
+        out.push(withNeeds(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
+          reason: 'missing-labels', issue: n, title: issue?.title || '',
+        }), N.dispatch));
+      } else {
+        out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
+        out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
+      }
+    }
+  }
+
+  // ② review-pending 入队 → attach-reviewer（#815）
+  for (const it of rp.items || []) {
+    if (!it || it.pr == null) continue;
+    out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
+  }
+
+  // ③ PR 驱动：判绿合并 / manual 待拍板 / 审官轮次
+  for (const pr of gh.prs || []) {
+    if (!pr || pr.number == null) continue;
+
+    if (prApprovedReady(pr)) { // 判绿 + 非 draft + MERGEABLE（manual 会被审官转 draft）
+      const ci = prChecksRed(pr);
+      if (ci.red) { // 判绿却 CI 红：矛盾态，不自动合，报帅
+        out.push(withNeeds(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }), N.merge));
+        out.push(withNeeds(hub(`PR #${pr.number} 判绿但 CI 红，卡住了`, 'stuck', { pr: pr.number }), N.merge));
+        continue;
+      }
+      const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
+      if (!a.scanned) { // 该 PR 单独没抓到 reviews（section 可能 scanned 但这条 PR 的 fetch 缺）：不合，报没查成
+        out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
+        continue;
+      }
+      if (a.malformed) {
+        out.push(withNeeds(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }), N.merge));
+        continue;
+      }
+      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿 + m=auto + CI 绿 + MERGEABLE' }, N.merge));
+      out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
+      out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
+      continue;
+    }
+
+    if (prApprovedDraft(pr)) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+      out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
+      continue;
+    }
+
+    const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
+    if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
+    if (a.malformed) {
+      out.push(withNeeds(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判红/判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }), N['wake-brain']));
+    } else if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
+      out.push(withNeeds(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }), N['wake-brain']));
+      out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
+    } else if (a.redRounds === 1 && !a.latestGreen) { // 审官判红一轮 → 唤大脑；同单已唤满 → 转报帅
+      const woken = wakeCounts[`pr:${pr.number}`] || 0;
+      if (woken >= WAKE_LIMIT) {
+        out.push(withNeeds(esc(`PR #${pr.number} 已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', pr: pr.number, woken }), N['wake-brain']));
+        out.push(withNeeds(hub(`PR #${pr.number} 唤大脑 ${woken} 次仍没闭环，等你`, 'stuck', { pr: pr.number }), N['wake-brain']));
+      } else {
+        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官判红一轮，返工方向要判` }, N['wake-brain']));
+      }
+    }
+  }
+
+  // ④ 撞死指纹 + #833 自动换人没接住 → wake-brain
+  for (const [term, info] of Object.entries(stall.strikes || {})) {
+    if (!info || (info.strikes || 0) < 2) continue;
+    const woken = wakeCounts[`stall:${term}`] || 0;
+    if (woken >= WAKE_LIMIT) {
+      out.push(withNeeds(esc(`终端 ${term} 撞死指纹已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', term, woken }), N['wake-brain']));
+    } else {
+      out.push(withNeeds({ kind: 'wake-brain', target: `stall:${term}`, term, why: `终端 ${term} 撞死指纹 strikes=${info.strikes}，#833 自动换人未接住` }, N['wake-brain']));
+    }
+  }
+
+  return out;
+}
+
+/**
+ * 纯函数：态势 → 动作清单。**入口总闸 fail-closed**（审官 #840 红①）。
  * situation 各节形态（scan 负责填，任一节没查成把 scanned 置 false + error）：
  *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,statusCheckRollup,body}], error }
- *   orca:          { scanned, worktrees:[...], error }   // 卡去重用
- *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }  // _flow/queue/review-pending
- *   prReviews:     { scanned, byPr:{ <n>:{ bodies:[...] } }, error }      // 每 PR 审官 review 正文
- *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }   // #833 消费，读不到=unscanned
- *   wakeCounts:    { <target>: n }                                        // 来自 state，供「三次唤醒」判据
+ *   orca:          { scanned, worktrees:[...], error }
+ *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }
+ *   prReviews:     { scanned, byPr:{ <n>:{ bodies:[...] } }, error }
+ *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
+ *   wakeCounts:    { <target>: n }
+ *
+ * 契约：任一节 unscanned → 依赖它的动作一律不产，汇成**一条** escalate(reason:'unscanned', missing:[...])；
+ *       依赖节全 scanned 的动作照常。全部 unscanned → 只有那一条 escalate、零正向动作。
  */
 export function decide(situation = {}) {
+  const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
+  const candidates = collectCandidates(situation);
   const actions = [];
-  const gh = situation.github;
-  const orca = situation.orca;
-  const rp = situation.reviewPending;
-  const stall = situation.stall;
-  const wakeCounts = situation.wakeCounts || {};
-
-  // ── 门：没查成的节，对应正向动作一律不产，改产 escalate(unscanned) ──
-  if (!gh?.scanned) actions.push(esc(`GitHub 没查成：${gh?.error || '缺 github 节'}`, { reason: 'unscanned', section: 'github' }));
-  if (!orca?.scanned) actions.push(esc(`Orca 盘面没查成：${orca?.error || '缺 orca 节'}`, { reason: 'unscanned', section: 'orca' }));
-  if (!rp?.scanned) actions.push(esc(`review-pending 队列没查成：${rp?.error || '缺 reviewPending 节'}`, { reason: 'unscanned', section: 'reviewPending' }));
-  if (!stall?.scanned) actions.push(esc(`撞死指纹没查成：${stall?.error || '缺 stall 节'}`, { reason: 'unscanned', section: 'stall' }));
-
-  // ── 自己做 ①：已消歧 + 无在途派工 → dispatch（缺 model|reviewer 标签 = 报帅不猜）──
-  // 需要 github + orca 都查成（inspectReadyQueue 要 issues/prs/worktrees）。
-  if (gh?.scanned && orca?.scanned) {
-    const ready = inspectReadyQueue({ issues: gh.issues, prs: gh.prs, worktrees: orca.worktrees });
-    if (ready.kind === 'unscanned') {
-      actions.push(esc(`可立即起没查成：${ready.line}`, { reason: 'unscanned', section: 'ready' }));
-    } else if (ready.kind === 'ready') {
-      for (const n of ready.ready) {
-        const issue = (gh.issues || []).find((i) => i && i.number === n);
-        const model = labelValue(issue, 'model/');
-        const reviewer = labelValue(issue, 'reviewer/');
-        const role = labelValue(issue, 'type/');
-        if (!model || !reviewer) {
-          actions.push(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
-            reason: 'missing-labels', issue: n, title: issue?.title || '',
-          }));
-        } else {
-          actions.push({
-            kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '',
-            why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐`,
-          });
-          actions.push(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }));
-        }
-      }
+  for (const cand of candidates) {
+    const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
+    const missing = needs.filter((s) => !situation[s]?.scanned);
+    const { _needs, ...clean } = cand;
+    if (missing.length === 0) actions.push(clean);
+    // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条
+  }
+  // 入口总闸：有节没查成 → 一条合并 escalate，列全缺的节。没查成 ≠ 空态势，必须 fail-visible。
+  if (unscanned.length) {
+    actions.push(esc(`没查成的节：${unscanned.join('、')}——依赖它们的动作一律不产（fail-closed 总闸）`, { reason: 'unscanned', missing: unscanned }));
+  }
+  // 硬保险：自动路径永不出现清树/写指纹/改 dao.mjs 类破坏性动作（审官「自动路径边界」）。
+  for (const a of actions) {
+    if (FORBIDDEN_AUTO_KINDS.has(a.kind)) {
+      throw new Error(`decide 产出了禁用的自动动作 kind=${a.kind}——自动路径不许有破坏性/越界动作`);
     }
   }
-
-  // ── 自己做 ②：worker-done 起审官失败入队 → attach-reviewer（消费 review-pending 队列，#815）──
-  if (rp?.scanned) {
-    for (const it of rp.items || []) {
-      if (!it || it.pr == null) continue;
-      actions.push({
-        kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null,
-        head: it.head || null,
-        why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队`,
-      });
-    }
-  }
-
-  // ── PR 驱动：判绿合并 / manual 待拍板 / 审官轮次（红一轮唤大脑、两轮报帅）──
-  if (gh?.scanned) {
-    const reviews = situation.prReviews;
-    for (const pr of gh.prs || []) {
-      if (!pr || pr.number == null) continue;
-
-      // 判绿 + 非 draft + MERGEABLE（= m=auto，manual 会被审官转 draft）→ 校 CI 与判定行 → 合并
-      if (prApprovedReady(pr)) {
-        const ci = prChecksRed(pr);
-        if (ci.red) {
-          // 判绿却 CI 红：矛盾态，不自动合，报帅（卡壳回流）
-          actions.push(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }));
-          actions.push(hub(`PR #${pr.number} 判绿但 CI 红，卡住了`, 'stuck', { pr: pr.number }));
-          continue;
-        }
-        // 判定行必须真查过且是绿（reviewDecision=APPROVED 已足，但按仓规核判定行，防「没查成当判绿」）
-        if (!reviews?.scanned) {
-          actions.push(esc(`PR #${pr.number} 审官判绿待合并，但 reviews 没查成`, { reason: 'unscanned', section: 'prReviews', pr: pr.number }));
-          continue;
-        }
-        const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
-        if (!a.scanned) {
-          actions.push(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', section: 'prReviews', pr: pr.number }));
-          continue;
-        }
-        if (a.malformed) {
-          actions.push(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }));
-          continue;
-        }
-        actions.push({ kind: 'merge', pr: pr.number, title: pr.title || '', why: `审官判绿 + m=auto + CI 绿 + MERGEABLE` });
-        actions.push({ kind: 'land', why: `合并后收工清理（land 幂等；清树归 #829，本单只调 land）` });
-        actions.push(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }));
-        continue;
-      }
-
-      // 判绿但 draft（manual 合门被审官转 draft）→ 需拍板，报帅（不自动合）
-      if (prApprovedDraft(pr)) {
-        actions.push(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }));
-        continue;
-      }
-
-      // 审官轮次（要 reviews 查成才判红轮）
-      if (reviews?.scanned) {
-        const a = analyzeReviews(reviews.byPr?.[pr.number]?.bodies);
-        if (!a.scanned) continue; // 该 PR 没抓到 reviews：不臆测，静默（scan 已在别处标 unscanned 时会 escalate）
-        if (a.malformed) {
-          actions.push(esc(`PR #${pr.number} 判定行歪了（没查成 ≠ 判红/判绿）——报帅`, { reason: 'malformed-judgment', pr: pr.number }));
-        } else if (a.redRounds >= 2) {
-          // 报帅停手：审官两轮仍红 = 换人信号，永不自动
-          actions.push(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }));
-          actions.push(hub(`PR #${pr.number} 审官两轮仍红，等你拍换人`, 'stuck', { pr: pr.number }));
-        } else if (a.redRounds === 1 && !a.latestGreen) {
-          // 唤大脑：审官判红一轮，返工方向要判——但同单已唤 WAKE_LIMIT 次仍没闭环 → 转报帅
-          const woken = wakeCounts[`pr:${pr.number}`] || 0;
-          if (woken >= WAKE_LIMIT) {
-            actions.push(esc(`PR #${pr.number} 已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', pr: pr.number, woken }));
-            actions.push(hub(`PR #${pr.number} 唤大脑 ${woken} 次仍没闭环，等你`, 'stuck', { pr: pr.number }));
-          } else {
-            actions.push({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官判红一轮，返工方向要判` });
-          }
-        }
-      }
-    }
-  }
-
-  // ── 唤大脑 ②：撞死指纹 + #833 自动换人没接住 → wake-brain（stall 查成才判）──
-  if (stall?.scanned) {
-    for (const [term, info] of Object.entries(stall.strikes || {})) {
-      if (!info) continue;
-      if ((info.strikes || 0) >= 2) {
-        const woken = wakeCounts[`stall:${term}`] || 0;
-        if (woken >= WAKE_LIMIT) {
-          actions.push(esc(`终端 ${term} 撞死指纹已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', term, woken }));
-        } else {
-          actions.push({ kind: 'wake-brain', target: `stall:${term}`, term, why: `终端 ${term} 撞死指纹 strikes=${info.strikes}，#833 自动换人未接住` });
-        }
-      }
-    }
-  }
-
-  // ── 空态势：查成了但没有任何要做的 → noop（静默，不回流）──
-  if (actions.length === 0) actions.push({ kind: 'noop', why: '盘面查成、无待处理' });
+  // 空态势：全查成、无待处理 → noop（静默，不回流）
+  if (actions.length === 0) actions.push({ kind: 'noop', why: '盘面全查成、无待处理' });
   return { actions };
 }
 
