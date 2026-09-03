@@ -1,7 +1,8 @@
-// scripts/lib/dispatch-policy-check.mjs —— docs/dispatch-policy.json 的 preflight 节校验（#842）
+// scripts/lib/dispatch-policy-check.mjs —— docs/dispatch-policy.json 的 preflight + commander 节校验（#842/#849）
 //
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
 // 取值范围：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
+// commander：maxDispatchPerRound 整数 ∈ [1,20]；requireModelInRouting 布尔。缺 commander 节不拦（#842 旧夹具兼容）。
 // 三态可分：文件不在 / 坏 JSON / 缺 preflight 节 = 没查成（unscanned）；越界 = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,6 +28,15 @@ export function inspectDispatchPolicySource(src) {
   if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = pf.maxCandidates;
   if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  const cm = doc.commander;
+  if (cm != null) {
+    if (typeof cm !== 'object') problems.push('commander 必须是对象');
+    else {
+      if (typeof cm.requireModelInRouting !== 'boolean') problems.push('requireModelInRouting 必须 true/false');
+      const m = Number(cm.maxDispatchPerRound);
+      if (!Number.isInteger(m) || m < 1 || m > 20) problems.push(`maxDispatchPerRound 越界（要整数 1~20，实际 ${cm.maxDispatchPerRound}）`);
+    }
+  }
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 

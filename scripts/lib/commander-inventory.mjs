@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
 
 const INV_MARKER = '[commander-inventory]';
 const STALE_PR_DAYS = 14;
@@ -127,6 +128,24 @@ function checkLandingChecklist({ ROOT }) {
   return { state: 'ok', detail: '落地清单无空状态行', key: 'landing-empty' };
 }
 
+// 7. 派工执行体僵尸 .running（#849）：kill -9 写不出 out.json，inventory 补写失败记录并清标记。
+function checkStaleDispatchRunning({ ROOT, dryRun }) {
+  let dir;
+  try { dir = dispatchQueueDir({ root: ROOT }); }
+  catch (e) { return { state: 'unknown', detail: `队列目录没定：${String(e.message || e)}`, key: 'stale-running' }; }
+  const r = reapStaleDispatchRunning(dir, { dryRun });
+  if (!r.ok) return { state: 'unknown', detail: r.error || '队列扫不了', key: 'stale-running' };
+  if (r.reaped.length) {
+    return {
+      state: 'ok',
+      detail: `清了 ${r.reaped.length} 个僵尸 .running：${r.reaped.map((x) => x.id + '/' + x.reason).slice(0, 5).join('、')}`,
+      key: 'stale-running',
+      reaped: r.reaped,
+    };
+  }
+  return { state: 'ok', detail: '无僵尸 .running', key: 'stale-running' };
+}
+
 function fmt(err) { return typeof err === 'string' ? err.slice(0, 120) : (err?.message || err?.code || JSON.stringify(err) || '').slice(0, 120); }
 
 // ── inventory 子命令 ──
@@ -140,6 +159,7 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     checkProbeJournal(),
     checkStalePrs({ runGh, REPO }),
     checkLandingChecklist({ ROOT }),
+    checkStaleDispatchRunning({ ROOT, dryRun }),
   ];
   const reds = checks.filter((c) => c.state === 'red');
   const unknowns = checks.filter((c) => c.state === 'unknown');
