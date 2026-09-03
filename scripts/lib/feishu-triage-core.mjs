@@ -1,11 +1,13 @@
-// scripts/lib/feishu-triage-core.mjs —— 飞书 triage 块 B 逻辑（#801 消歧记录 + 补充 2）
+// scripts/lib/feishu-triage-core.mjs —— 飞书 triage 块 B 逻辑（#801 消歧记录 + 补充 2；#852 总帅入口）
 //
-// 职责：判重 → 三问 → 建单 → 两档放行。纯函数 + 注入 deps：不做网络 I/O、
-// 不读环境变量；persona.md 在模块装载时读一次（静态配置，算常量不算副作用）。
+// 职责：判重 → 三问 → 建单 → 两档放行；hub 群走总帅对话路径（#852）。纯函数 + 注入 deps：
+// 不做网络 I/O、不读环境变量；persona.md 在模块装载时读一次（静态配置，算常量不算副作用）。
 //
 // Inbound（块 A 产出，块 B 只读）：
 //   { chatId, rootId /*话题根消息 id*/, messageId, senderOpenId, senderName,
-//     text, ts, repo /*由映射表填，hub 群为 null*/ }
+//     text, ts, repo /*由映射表填，hub 群为 null*/, kind /*'project'|'hub'|null（未映射群）*/,
+//     hubPending? /*{repo,number}，块 A 从 hubPending 表查到的待拍板归属*/,
+//     threadRoot? /*{text,fromBot}，hub thread 回复时块 A 取的话题根消息*/ }
 // deps（块 A 注入）：
 //   { ghSearch(repo, query) -> [{number,title,url}],
 //     ghCreateIssue(repo,{title,body,labels}) -> {number,url},
@@ -13,14 +15,21 @@
 //     llm({system,user,json?:true}) -> string|object,
 //     now() -> number,
 //     state /* Map<rootId, ThreadState>，由 A 持久化 */,
-//     allowOpenIds: [] }
+//     allowOpenIds: [],
+//     hubChat /* docs/dispatch-policy.json 的 hubChat 节（#852），缺省关 */,
+//     hubContext() -> {projects:[{repo,situation,error}],health,breaker,…} /* #852 聚合读盘 */ }
 // 返回：
 //   { replies: [{ rootId, text }],
 //     actions: [ {type:'issue_created', repo, number, url, gate:'已消歧'|'待拍板'}
-//              | {type:'hub_card', repo, number, url, title, from} ],
+//              | {type:'hub_card', repo, number, url, title, from}
+//              | {type:'hub_chat_record', record} /* #852 消费记录，块 A 落 ndjson */ ],
 //     state }
 //
 // 流程（每个话题 rootId 一条状态机）：
+//   hub 群（#852）：hubChat.enabled 才走对话路径（无状态，一条消息一答）——
+//     待拍板 thread 回复 → 拍板直落对应单（不走 LLM，不猜）；其余 LLM 分类：
+//     new_request → HUB_GUIDANCE（唯一保留的指路分支）；decision → 写回对应单；
+//     situation/other → 聚合盘面（projects[]+健康表+熔断表）作答。未开 hubChat/未映射群照旧指路。
 //   dedup 阶段：ghSearch 取候选 → llm 逐条判 同一件事/相关/无关。
 //     命中 → ghComment 追评到最像的单 + 回执（已在 #N 下补充了你的反馈）→ done。
 //     未命中 → asking，问三问缺项。
@@ -41,6 +50,10 @@ export const GATE_ALLOWED = '已消歧';
 export const GATE_PENDING = '待拍板';
 export const LLM_DOWN_REPLY = '机器人暂时没法判断，稍后重试。';
 export const HUB_GUIDANCE = '这里是总控群，需求请发到项目群。';
+/** #852：拍板意图但定位不到单号时问清，不猜。 */
+export const HUB_DECISION_ASK = '要拍板哪张单？给我编号（#N 或 issue/PR 链接），我把结论写回去。';
+/** #852：hub 对话意图集合（LLM 分类只认这四个，其余归 other）。 */
+export const HUB_INTENTS = ['situation', 'decision', 'new_request', 'other'];
 
 /** 三问固定表：key 进 llm JSON 与 ThreadState.answers，fallback 是 llm 没给追问时的兜底问法。 */
 export const THREE_QUESTIONS = [
@@ -54,6 +67,7 @@ const MAX_RELATED_LISTED = 3;
 const MAX_RELATED_ON_MISS = 2;
 const MAX_QUERY_LEN = 300;
 const MAX_SUMMARY_LEN = 60;
+const MAX_PENDING_LISTED = 5;
 /** 消歧记录：判重候选 = gh search 返回的「前 10 条」。块 B 自己再截一道，A 多返回也不越界。 */
 const MAX_DEDUP_CANDIDATES = 10;
 
@@ -76,7 +90,11 @@ export async function triage(inbound, deps) {
 async function triageInner(inbound, deps) {
   const { rootId, repo } = inbound;
   if (!repo) {
-    // hub 群只收卡片，不建单：指路，不留状态。
+    // #852 总帅入口：hub 群且 hubChat 开着 → 对话路径。
+    // 未映射群 / hubChat 关着 → 维持旧行为：指路，不留状态。
+    if (inbound.kind === 'hub' && deps.hubChat?.enabled === true) {
+      return triageHub(inbound, deps);
+    }
     return { replies: [{ rootId, text: HUB_GUIDANCE }], actions: [], state: deps.state };
   }
 
@@ -163,6 +181,198 @@ async function triageInner(inbound, deps) {
     };
   }
   return { replies: [{ rootId, text: LLM_DOWN_REPLY }], actions: [], state: next };
+}
+
+// ── 总帅入口（#852）：hub 群对话，先做薄 = 路由 + 聚合 ────────────────
+// 无状态：一条消息一答，不进 ThreadState 状态机（拍板留痕在 issue/PR 评论，
+// 消费记录在 hub_chat_record → ~/.dao/hub-chat/*.ndjson，由块 A 落盘）。
+
+async function triageHub(inbound, deps) {
+  const { rootId } = inbound;
+  const allowed = a => Array.isArray(deps.hubChat?.allowedActions) && deps.hubChat.allowedActions.includes(a);
+  const reply = (text, rec) => ({
+    replies: [{ rootId, text }],
+    actions: [hubChatRecord(inbound, deps, { ...rec, reply: text })],
+    state: deps.state,
+  });
+
+  // ① 机器人在 hub 发起的待拍板 thread：回复即拍板，直落对应单（确定性，不走 LLM，不猜）。
+  //    归属两条腿：块 A 的 hubPending 表（本进程发过的卡片）；话题根消息是机器人发的且带单链接（hub-say 旁路）。
+  const pending = inbound.hubPending
+    || (inbound.threadRoot?.fromBot ? extractIssueRef(inbound.threadRoot.text) : null);
+  if (pending?.repo && pending?.number) {
+    if (!allowed('decision')) {
+      return reply('拍板回写未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 decision）。', { intent: 'decision' });
+    }
+    await deps.ghComment(pending.repo, pending.number, hubDecisionComment(inbound));
+    return reply(
+      `拍板已写回 ${pending.repo}#${pending.number}：${sentence(oneSentence(inbound.text))}`,
+      { intent: 'decision', landedTo: `${pending.repo}#${pending.number}` },
+    );
+  }
+
+  // ② LLM 分类意图（与项目群同款调用：PERSONA system + json；X-Dao-* 溯源头由块 A 的 llm 注入）。
+  const cls = await llmJson(() => deps.llm({
+    system: PERSONA, user: hubClassifyPrompt(inbound), json: true, daoTask: 'hub-chat',
+  }));
+  const intent = HUB_INTENTS.includes(cls.intent) ? cls.intent : 'other';
+
+  // 新需求建单仍归项目群——HUB_GUIDANCE 唯一保留的分支（#852）。
+  if (intent === 'new_request') return reply(HUB_GUIDANCE, { intent });
+
+  const context = await readHubContextVia(deps);
+
+  if (intent === 'decision') {
+    if (!allowed('decision')) {
+      return reply('拍板回写未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 decision）。', { intent });
+    }
+    const fallbackRepo = context.projects?.[0]?.repo || null;
+    const ref = extractIssueRef(inbound.text, fallbackRepo)
+      || (Number.isInteger(cls.issueNumber) && fallbackRepo
+        ? { repo: fallbackRepo, number: cls.issueNumber } : null);
+    if (!ref) return reply(HUB_DECISION_ASK, { intent });
+    await deps.ghComment(ref.repo, ref.number, hubDecisionComment(inbound));
+    return reply(
+      `拍板已写回 ${ref.repo}#${ref.number}：${sentence(oneSentence(inbound.text))}`,
+      { intent, landedTo: `${ref.repo}#${ref.number}` },
+    );
+  }
+
+  // situation / other：聚合盘面作答（只读，不新增动词——#852 后台管理接线③）。
+  if (!allowed('situation')) {
+    return reply('盘面问答未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 situation）。', { intent });
+  }
+  const answer = await deps.llm({
+    system: PERSONA, user: hubAnswerPrompt(inbound, buildHubContextBlock(context)), daoTask: 'hub-chat',
+  });
+  const text = String(answer ?? '').trim();
+  if (!text) throw new Error('llm 空回答，不编造');
+  return reply(text, { intent });
+}
+
+async function readHubContextVia(deps) {
+  if (typeof deps.hubContext !== 'function') return { projects: [], health: null, breaker: null };
+  const c = await deps.hubContext();
+  return c && typeof c === 'object' ? c : { projects: [], health: null, breaker: null };
+}
+
+function hubChatRecord(inbound, deps, { intent, reply, landedTo = null }) {
+  return {
+    type: 'hub_chat_record',
+    record: {
+      updatedAt: new Date(deps.now()).toISOString(),
+      chatId: inbound.chatId,
+      rootId: inbound.rootId,
+      messageId: inbound.messageId,
+      from: inbound.senderName || inbound.senderOpenId || '',
+      question: inbound.text,
+      intent,
+      reply,
+      landedTo,
+    },
+  };
+}
+
+function hubDecisionComment(inbound) {
+  return [
+    `【飞书拍板】${inbound.senderName || inbound.senderOpenId}：${inbound.text}`,
+    `（来源：总控群 chat_id ${inbound.chatId} / message_id ${inbound.messageId}）`,
+  ].join('\n');
+}
+
+function hubClassifyPrompt(inbound) {
+  return [
+    `总控群里 ${inbound.senderName || inbound.senderOpenId} @机器人 说：`,
+    inbound.text,
+    '',
+    '判断意图，四选一：',
+    '- situation：问盘面/进展/供应商健康/某张单的状态（只读问答）',
+    '- decision：对某张待拍板的单给出拍板/确认/选择',
+    '- new_request：提出要建单的新需求（要做新东西/改代码）',
+    '- other：其他（临时指令、问用法、闲聊）',
+    '返回 JSON：{"intent":"situation","issueNumber":846,"reason":"一句话"}（没提到单号则 issueNumber 为 null）',
+  ].join('\n');
+}
+
+function hubAnswerPrompt(inbound, contextBlock) {
+  return [
+    `总控群里 ${inbound.senderName || inbound.senderOpenId} 问：`,
+    inbound.text,
+    '',
+    '机读盘面（聚合自各项目指挥官态势 + 供应商健康表 + 熔断表）：',
+    contextBlock,
+    '',
+    '用盘面数据回答；数据里没有的就说没查到，不编造。提到单子带编号。一条回复 ≤ 8 行。',
+  ].join('\n');
+}
+
+/** #852 聚合层：盘面上下文 → 文本块。projects[] 逐项目渲染——多项目即多段（结构留好接口）。
+ *  没读到的面明说「没查成」，与「查过没事」分开形（CLAUDE.md）。 */
+export function buildHubContextBlock(context = {}) {
+  const lines = [];
+  const projects = Array.isArray(context.projects) ? context.projects : [];
+  if (projects.length === 0) lines.push('【项目态势】没查成：一个项目的态势文件都没读到。');
+  for (const p of projects) {
+    const repo = p?.repo || '（未知项目）';
+    const s = p?.situation;
+    if (!s || typeof s !== 'object') {
+      lines.push(`【项目 ${repo} 态势】没查成：${p?.error || '无态势文件'}`);
+      continue;
+    }
+    lines.push(`【项目 ${s.repo || repo} 态势 @ ${s.at || '未知时间'}】`);
+    const gh = s.github;
+    if (gh?.scanned) {
+      const issues = Array.isArray(gh.issues) ? gh.issues : [];
+      const prs = Array.isArray(gh.prs) ? gh.prs : [];
+      lines.push(`开放 issues ${issues.length} 张 / PRs ${prs.length} 张`);
+      const pending = issues.filter(i => (Array.isArray(i.labels) ? i.labels : [])
+        .some(l => (l && typeof l === 'object' ? l.name : l) === GATE_PENDING));
+      if (pending.length > 0) {
+        lines.push(`待拍板 ${pending.length} 张：`);
+        for (const i of pending.slice(0, MAX_PENDING_LISTED)) lines.push(`  #${i.number} ${i.title}`);
+      } else {
+        lines.push('待拍板 0 张');
+      }
+    } else {
+      lines.push(`github 面没查成：${gh?.error || '未扫'}`);
+    }
+    for (const [key, label] of [['orca', 'orca'], ['reviewPending', '复审队列'], ['stall', '撞死指纹']]) {
+      const sec = s[key];
+      if (sec && sec.scanned === false) lines.push(`${label} 面没查成：${sec.error || ''}`);
+    }
+  }
+  const h = context.health;
+  if (h && typeof h === 'object' && h.targets && typeof h.targets === 'object') {
+    const entries = Object.entries(h.targets);
+    const red = entries.filter(([, v]) => v?.state === 'red');
+    lines.push(`【供应商健康 @ ${h.updatedAt || '未知'}】共 ${entries.length} 路，红 ${red.length} 路${red.length ? '：' : ''}`);
+    for (const [name, v] of red) lines.push(`  ${name}（${v.why || v.code || '原因未知'}）`);
+  } else {
+    lines.push(`【供应商健康】没查成：${context.healthError || '健康表没读到'}`);
+  }
+  const b = context.breaker;
+  if (b && typeof b === 'object' && b.targets && typeof b.targets === 'object') {
+    const open = Object.entries(b.targets).filter(([, v]) => v?.state && v.state !== 'closed');
+    lines.push(open.length
+      ? `【熔断 @ ${b.updatedAt || '未知'}】非 closed ${open.length} 路：${open.map(([n, v]) => `${n}=${v.state}`).join('、')}`
+      : `【熔断 @ ${b.updatedAt || '未知'}】全部 closed`);
+  } else {
+    lines.push(`【熔断】没查成：${context.breakerError || '熔断表没读到'}`);
+  }
+  return lines.join('\n');
+}
+
+/** #852：从文本抽 issue/PR 引用。优先级：完整 URL > owner/repo#N > 裸 #N（要 fallbackRepo）。
+ *  抽不到返回 null——问编号，不猜。 */
+export function extractIssueRef(text, fallbackRepo = null) {
+  const t = String(text ?? '');
+  let m = t.match(/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)/);
+  if (m) return { repo: m[1], number: Number(m[2]) };
+  m = t.match(/([\w.-]+\/[\w.-]+)#(\d+)/);
+  if (m) return { repo: m[1], number: Number(m[2]) };
+  m = t.match(/#(\d+)/);
+  if (m && fallbackRepo) return { repo: fallbackRepo, number: Number(m[1]) };
+  return null;
 }
 
 // ── 判重 ──────────────────────────────────────────────────────────────

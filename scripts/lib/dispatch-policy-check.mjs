@@ -1,15 +1,20 @@
-// scripts/lib/dispatch-policy-check.mjs — docs/dispatch-policy.json 的 preflight + breaker + commander 节校验（#842 / #843 / #849）
+// scripts/lib/dispatch-policy-check.mjs — docs/dispatch-policy.json 的 preflight + breaker + commander + hubChat 节校验（#842 / #843 / #849 / #852）
 //
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
 // preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
 // breaker：windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 整数 1–5；overrides 按 target 覆盖同范围。
 // commander：maxDispatchPerRound 整数 ∈ [1,20]；requireModelInRouting 布尔。缺 commander 节不拦（#842 旧夹具兼容）。
-// 三态可分：文件不在 / 坏 JSON / 缺 preflight 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
+// hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
+// upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
+// 三态可分：文件不在 / 坏 JSON / 缺 preflight 或 hubChat 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const POLICY_REL = join('docs', 'dispatch-policy.json');
+
+/** hubChat.allowedActions 只认这三个动词（#852 后台管理接线：盘面只读 / 拍板落单 / 指路）。 */
+export const HUB_CHAT_ACTIONS = ['situation', 'decision', 'guide'];
 
 /** 自持校验（不复用消费方解析）。返回 { ok, unscanned, problems }。 */
 export function inspectDispatchPolicySource(src) {
@@ -22,11 +27,12 @@ export function inspectDispatchPolicySource(src) {
   if (!doc || typeof doc !== 'object') return { ok: false, unscanned: true, problems: ['顶层不是对象'] };
   const pf = doc.preflight;
   if (!pf || typeof pf !== 'object') return { ok: false, unscanned: true, problems: ['缺 preflight 节'] };
+  const hc = doc.hubChat;
   const problems = [];
-  if (typeof pf.enabled !== 'boolean') problems.push('enabled 必须 true/false');
-  if (typeof pf.useHealthTable !== 'boolean') problems.push('useHealthTable 必须 true/false');
+  if (typeof pf.enabled !== 'boolean') problems.push('preflight.enabled 必须 true/false');
+  if (typeof pf.useHealthTable !== 'boolean') problems.push('preflight.useHealthTable 必须 true/false');
   const t = Number(pf.timeoutMs);
-  if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
+  if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`preflight.timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = pf.maxCandidates;
   if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
   problems.push(...inspectBreakerSection(doc.breaker));
@@ -38,6 +44,30 @@ export function inspectDispatchPolicySource(src) {
       const m = Number(cm.maxDispatchPerRound);
       if (!Number.isInteger(m) || m < 1 || m > 20) problems.push(`maxDispatchPerRound 越界（要整数 1~20，实际 ${cm.maxDispatchPerRound}）`);
     }
+  }
+  // hubChat（#852）：缺节 = 没查成（老抄本兼容），但**其他节的越界照红**，红优先于没查成
+  //（#843 的 failuresToTrip:0 样本没带 hubChat，也必须红——没查成不能吞掉查出来的问题）。
+  if (!hc || typeof hc !== 'object') {
+    if (problems.length) return { ok: false, unscanned: false, problems };
+    return { ok: false, unscanned: true, problems: ['缺 hubChat 节（#852）'] };
+  }
+  if (typeof hc.enabled !== 'boolean') problems.push('hubChat.enabled 必须 true/false');
+  if (!Array.isArray(hc.allowedActions) || hc.allowedActions.length === 0) {
+    problems.push('hubChat.allowedActions 必须是非空数组');
+  } else {
+    for (const a of hc.allowedActions) {
+      if (!HUB_CHAT_ACTIONS.includes(a)) problems.push(`hubChat.allowedActions 不认识：${a}（只认 ${HUB_CHAT_ACTIONS.join('/')}）`);
+    }
+  }
+  const up = hc.upstream;
+  if (!up || typeof up !== 'object') {
+    problems.push('hubChat.upstream 必须是对象 {redThreshold,decisions,digest}');
+  } else {
+    if (!Number.isInteger(up.redThreshold) || up.redThreshold < 1 || up.redThreshold > 99) {
+      problems.push(`hubChat.upstream.redThreshold 越界（要整数 1~99，实际 ${up.redThreshold}）`);
+    }
+    if (typeof up.decisions !== 'boolean') problems.push('hubChat.upstream.decisions 必须 true/false');
+    if (typeof up.digest !== 'boolean') problems.push('hubChat.upstream.digest 必须 true/false');
   }
   return { ok: problems.length === 0, unscanned: false, problems };
 }
