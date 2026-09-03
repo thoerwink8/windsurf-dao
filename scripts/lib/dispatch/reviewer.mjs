@@ -368,7 +368,7 @@ export function resolveReviewerReuse({
   };
 }
 
-/** 路由表当前审官位（审官.审查 A 位，现为 Codex gpt-5.6-sol）。没查成 ≠ 扫完没有。 */
+/** 路由表当前审官位（审官.审查 A 位 = reviewerOrder[0]；#843 过渡期为 gpt-5.6-luna，常态 Codex gpt-5.6-sol）。没查成 ≠ 扫完没有。 */
 export function currentReviewerSeat(routing) {
   if (routing == null) {
     return { ok: false, outcome: 'unscanned', unscanned: true, error: '审官位路由表没拿到（没查成，不许猜）' };
@@ -382,7 +382,7 @@ export function currentReviewerSeat(routing) {
   return { ok: true, modelId: routing.reviewerOrder[0] };
 }
 
-/** 审官位只许当前 Codex 那条。换厂到 kimi/glm/grok 当场拒。 */
+/** 审官位只许当前 reviewerOrder[0] 那条（#843 过渡 = luna，常态 Codex）。换厂到别的当场拒。 */
 export function assertReviewerSeat({ reviewerId, routing } = {}) {
   const seat = currentReviewerSeat(routing);
   if (!seat.ok) return seat;
@@ -391,7 +391,7 @@ export function assertReviewerSeat({ reviewerId, routing } = {}) {
   if (got !== String(seat.modelId)) {
     return {
       ok: false,
-      error: `审官位只许 ${seat.modelId}（路由表当前审官 Codex），不许换厂到 ${got}`,
+      error: `审官位只许 ${seat.modelId}（路由表当前审官位 reviewerOrder[0]），不许换厂到 ${got}`,
       seat: seat.modelId,
       requested: got,
     };

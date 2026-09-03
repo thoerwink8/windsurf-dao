@@ -1016,7 +1016,7 @@ describe('watchdog', () => {
     });
     await t.test('默认快照打印「将自动起审官」，不写「已起审官」', () => {
       assert.ok(
-        /动作: 将自动起审官：gpt-5\.6-sol（PR #676/.test(r.out) && !/已起审官/.test(r.out),
+        /动作: 将自动起审官：gpt-5\.6-luna（PR #676/.test(r.out) && !/已起审官/.test(r.out),
         '默认快照只打印将起审官  →  ' + r.out.trim(),
       );
     });
@@ -1052,13 +1052,13 @@ describe('watchdog', () => {
     const hit = runWithHook(MISSING);
     await t.test('测试钩：退出码 1 且打印「已起审官」', () => {
       assert.ok(
-        hit.status === 1 && /动作: 已起审官：gpt-5\.6-sol（PR #676）/.test(hit.out),
+        hit.status === 1 && /动作: 已起审官：gpt-5\.6-luna（PR #676）/.test(hit.out),
         '测试钩已起审官  →  ' + `status=${hit.status} ${hit.out.trim()}`,
       );
     });
-    await t.test('测试钩：带 --pr 676 --reviewer gpt-5.6-sol --parent-worktree', () => {
+    await t.test('测试钩：带 --pr 676 --reviewer gpt-5.6-luna --parent-worktree', () => {
       assert.ok(
-        /--pr 676 --reviewer gpt-5\.6-sol --parent-worktree wt::worker-676/.test(hit.log),
+        /--pr 676 --reviewer gpt-5\.6-luna --parent-worktree wt::worker-676/.test(hit.log),
         '钩参数对  →  ' + hit.log,
       );
     });
@@ -1066,7 +1066,7 @@ describe('watchdog', () => {
     const off = runWithHook(MISSING, ['--dispose-actions', 'off']);
     await t.test('dispose off：只打印将起，不调钩', () => {
       assert.ok(
-        /动作: 将自动起审官：gpt-5\.6-sol（PR #676/.test(off.out) && !off.log,
+        /动作: 将自动起审官：gpt-5\.6-luna（PR #676/.test(off.out) && !off.log,
         'dispose off 不调钩  →  ' + `log=${off.log} ${off.out.trim()}`,
       );
     });

@@ -87,8 +87,14 @@ function audit(doc) {
     })[0];
   if (!reviewerRank1) {
     problems.push('审官.审查 没有启用模型');
-  } else if (reviewerRank1.model !== 'gpt-5.6-sol' || reviewerRank1.vendor !== 'gpt') {
-    problems.push(`审官顺位1 是 ${reviewerRank1.model}/${reviewerRank1.vendor}，应是 gpt-5.6-sol/gpt`);
+  } else {
+    // 持久不变量：审官顺位1 必须是 GPT 家族且落地正确——常态 sol/gpt（Codex 主路），
+    // #843 过渡期 luna/gw（pqapi 故障，codex 每单必死，临时切；恢复后切回）。二者皆合法。
+    const okSol = reviewerRank1.model === 'gpt-5.6-sol' && reviewerRank1.vendor === 'gpt';
+    const okLuna = reviewerRank1.model === 'gpt-5.6-luna' && isGwVendor(reviewerRank1.vendor);
+    if (!okSol && !okLuna) {
+      problems.push(`审官顺位1 是 ${reviewerRank1.model}/${reviewerRank1.vendor}，应是 gpt-5.6-sol/gpt 或 gpt-5.6-luna/gw（#843 过渡）`);
+    }
   }
   return { scanned: slots.length, problems, slots, vendors };
 }

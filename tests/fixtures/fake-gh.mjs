@@ -16,7 +16,7 @@ const args = process.argv.slice(2);
 // #564：label 自动打 / pr-sync-labels 的 CLI 测试也要走假 gh（CI 无 GH_TOKEN）。
 // #586：reviewer/* 自读选型 + worker-done 骨架也走假 gh。
 // 固定判定：
-//   issue 565 → 已消歧 + model/grok-4.6 + type/写码 + reviewer/gpt-5.6-sol（查到一个）；
+//   issue 565 → 已消歧 + model/grok-4.6 + type/写码 + reviewer/gpt-5.6-luna（查到一个；#843 过渡后审官位 = luna）；
 //   issue 568 → 无 reviewer/*（扫完 0 条）；
 //   issue 569 → reviewer/gpt-5.6-sol + reviewer/claude-opus（有多个）；
 //   issue 999 → 模拟 gh 失败（CI 无 GH_TOKEN 场景：必须报「没查成」拒派）；
@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 //   #679：issue 570 无 model/*（PR 45）；issue 571 工人审官都是 grok（PR 47 同厂样本）。
 // 只实现测试用到的调用面；其它 gh 调用一律报错退出（fail-loud，不许静默返回假数据）。
 const ISSUE_LABELS = {
-  '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
+  '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }],
   '568': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }],
   '569': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'reviewer/claude-opus' }],
   '570': [{ name: '已消歧' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
