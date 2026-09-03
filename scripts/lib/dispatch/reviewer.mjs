@@ -275,6 +275,35 @@ export function planReviewerAttachReuse({ cards, workers, workerRead } = {}) {
 }
 
 /**
+ * #815 第 6 洞：审官树已建成后，注入/开工验证失败不回滚。
+ * 古路 failCreated 把整棵树删掉，下次 start --worktree path: 直接 selector_not_found。
+ * 未建树才允许回滚。
+ */
+export function planReviewerKeepOnFail({ reviewerId, reviewerPath, reason } = {}) {
+  const id = String(reviewerId || '').trim();
+  const treePath = String(reviewerPath || '').trim();
+  const why = String(reason || '审官注入失败').trim();
+  if (!id && !treePath) {
+    return {
+      ok: true,
+      keep: false,
+      rollback: true,
+      keepTree: false,
+      reason: '还没有审官树，失败仍回滚',
+    };
+  }
+  return {
+    ok: true,
+    keep: true,
+    rollback: false,
+    keepTree: true,
+    reviewerId: id || null,
+    reviewerPath: treePath || null,
+    warning: `审官注入失败（树与终端保留，不回滚）：${why}。接手：node scripts/dao.mjs start --model <审官模型> --worktree path:<审官树>，再 send --agent pi 送审官任务书。`,
+  };
+}
+
+/**
  * 找可复用审官。给了 pr 走一 PR 一审官闸。
  * 已有审官卡（含终端已关）→ 复用或拒绝新建，不许再 create。
  */
