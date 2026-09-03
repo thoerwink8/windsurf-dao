@@ -6,8 +6,8 @@
 |---|---|---|
 | Devin | [devin.md](devin.md) | command 型，TUI 就绪慢，必须先 `wait --for tui-idle` 再送字 |
 | Codex (gpt) | [codex.md](codex.md) | agent 型，必须 `--agent codex`，粘贴 `[Pasted Content]` 永不发送 |
-| Grok | [grok.md](grok.md) | agent 型（regrok shim），push 硬拦要授权词「推」 |
-| pi / gw-dspool / opencode-go (deepseek) | [pi.md](pi.md) | agent 型，flash 走 gw-dspool，og 顺位 2（403 RegionError），额度顶报 402 不许自切直连 |
+| Grok Build CLI | [grok.md](grok.md) | #822 已从选型移除；写码 grok-4.6 走 pi gw。本节留卸载前的坑 |
+| pi / gw | [pi.md](pi.md) | #822 起非 GPT 工人默认宿主。`pi --model gw…/模型` |
 | Cursor | [cursor.md](cursor.md) | agent 型，`[Pasted text]` 是提交后残留不算未提交 |
 | Command Code | [commandcode.md](commandcode.md) | command 型，只做非交互查证，需补空回车 |
 | Claude (reclaude) | [claude.md](claude.md) | command 型，必须 `--command` 读 launch，抢跑注入必被吞 |

@@ -9,7 +9,12 @@
 
 ## 派工前读 CLI 教学（#762）
 
-你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`（如 devin.md / codex.md / grok.md / pi.md / cursor.md / claude.md）。开工前先读它——每个 CLI 的正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：devin 要 wait tui-idle、codex 要 --agent，文档早有，现场重推浪费 1 小时）。
+你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`。开工前先读它——每个 CLI 的正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：devin 要 wait tui-idle、codex 要 --agent，文档早有，现场重推浪费 1 小时）。
+
+## 启动形态（#822）
+
+工人默认 **pi**：`pi --model {cli_model}`（厂商 `gw`，cli_model 如 `gw/grok-4.6` / `gw-dspool/deepseek-v4-flash` / `gw-windsurf/glm-5-2`）。启动模板只认 `docs/model-routing.toml` `[providers.gw].launch`。踩坑教学 `docs/cli-notes/pi.md`。
+GPT（方案里的 gpt-5.6-sol）仍走 Codex，见 `docs/cli-notes/codex.md`。Grok Build / cursor-agent / devin / claude CLI 已从选型移除。
 
 ## 开工五步（进 git 的活，先做这个再干活）
 

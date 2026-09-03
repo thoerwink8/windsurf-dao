@@ -143,11 +143,11 @@ describe('dao', () => {
       assert.ok(flash.provider === 'gw' && flash.command.includes('gw-dspool/deepseek-v4-flash'), '#602 / #797 pi 启动走 gw-dspool  →  ' + flash.command);
     });
     const kimi = S.resolveLaunch({ model: 'kimi-k3', routing });
-    await t.test('#615 kimi 主路走 cursor-agent / kimi-k3-high', () => {
-      assert.ok(/cursor-agent/.test(kimi.command) && /--model\s+kimi-k3-high/.test(kimi.command) && /--force/.test(kimi.command), '#615 kimi 主路走 cursor-agent / kimi-k3-high  →  ' + kimi.command);
+    await t.test('#822 kimi 主路走 pi gw-sub/kimi-k3-high', () => {
+      assert.ok(kimi.provider === 'gw' && /pi --model/.test(kimi.command) && /gw-sub\/kimi-k3-high/.test(kimi.command), '#822 kimi 主路走 pi gw-sub  →  ' + kimi.command);
     });
-    await t.test('kimi 不再挂 opencode-go 支路', () => {
-      assert.ok(/cursor-agent/.test(kimi.command) && !/opencode-go\/kimi-k3/.test(kimi.command), 'kimi 默认启动不走 og  →  ' + kimi.command);
+    await t.test('kimi 不再挂 cursor-agent / opencode-go', () => {
+      assert.ok(!/cursor-agent/.test(kimi.command) && !/opencode-go\/kimi-k3/.test(kimi.command), 'kimi 默认启动不走 cursor/og  →  ' + kimi.command);
     });
     const gptMain = S.resolveLaunch({ model: 'gpt-5.6-sol', routing });
     await t.test('#615 gpt 主路仍 Codex', () => {
@@ -162,8 +162,12 @@ describe('dao', () => {
       assert.ok(/cursor-agent/.test(gptPipe.command) && /gpt-5\.6-sol-high/.test(gptPipe.command), '#615 gpt 支路走 cursor / gpt-5.6-sol-high  →  ' + gptPipe.command);
     });
     const composer = S.resolveLaunch({ model: 'composer-2.5', routing });
-    await t.test('#615 composer 单管 cursor', () => {
-      assert.ok(/cursor-agent/.test(composer.command) && /--model\s+composer-2.5/.test(composer.command), '#615 composer 单管 cursor  →  ' + composer.command);
+    await t.test('#822 composer 走 pi gw-sub', () => {
+      assert.ok(composer.provider === 'gw' && /pi --model/.test(composer.command) && /gw-sub\/composer-2.5/.test(composer.command), '#822 composer 走 pi gw-sub  →  ' + composer.command);
+    });
+    const grokModel = S.resolveLaunch({ model: 'grok-4.6', routing });
+    await t.test('#822 写码 grok-4.6 走 pi gw/grok-4.6（不再是 Grok Build CLI）', () => {
+      assert.ok(grokModel.provider === 'gw' && /pi --model/.test(grokModel.command) && /gw\/grok-4\.6/.test(grokModel.command) && !/\bgrok -m\b/.test(grokModel.command), '#822 grok 工人走 pi  →  ' + grokModel.command);
     });
     const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
     await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {
@@ -509,8 +513,8 @@ describe('dao', () => {
     await t.test('dry-run 仍校验审官 launch（不建卡但选型要合法）', () => {
       assert.ok(/codex/.test(pOk.reviewerLaunchChecked) && String(pOk.reviewerLaunchChecked || '').includes(S.CODEX_CAPABLE_FLAG), 'dry-run 仍校验审官 launch（不建卡但选型要合法）  →  ' + JSON.stringify(pOk));
     });
-    await t.test('dry-run 工人走 grok --always-approve', () => {
-      assert.ok(/\bgrok\b/.test(pOk.workerLaunch) && /--always-approve/.test(pOk.workerLaunch), 'dry-run 工人走 grok --always-approve  →  ' + JSON.stringify(pOk));
+    await t.test('dry-run 工人走 pi gw/grok-4.6', () => {
+      assert.ok(/pi --model gw\/grok-4\.6/.test(pOk.workerLaunch), 'dry-run 工人走 pi gw  →  ' + JSON.stringify(pOk));
     });
 
     const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
@@ -2774,14 +2778,15 @@ describe('dao', () => {
     });
 
     const kimi = S.resolveLaunch({ model: 'kimi-k3', routing });
+    const cursorLaunch = S.resolveLaunch({ provider: 'cursor', routing });
     const grokLaunch = S.resolveLaunch({ provider: 'grok', routing });
     const flash = S.resolveLaunch({ model: 'deepseek-v4-flash', routing });
     const gpt = S.resolveLaunch({ provider: 'gpt', routing });
     const claude = S.resolveLaunch({ provider: 'claude', routing });
     await t.test('认识的 agent：cursor / grok / pi / codex 有 id', () => {
-      assert.ok(kimi.agentId === 'cursor' && grokLaunch.agentId === 'grok' && flash.agentId === 'pi' && gpt.agentId === 'codex',
+      assert.ok(cursorLaunch.agentId === 'cursor' && grokLaunch.agentId === 'grok' && flash.agentId === 'pi' && gpt.agentId === 'codex' && kimi.agentId === 'pi',
         '认识的 agent：cursor / grok / pi / codex 有 id  →  ' + JSON.stringify({
-          kimi: kimi.agentId, grok: grokLaunch.agentId, flash: flash.agentId, gpt: gpt.agentId,
+          cursor: cursorLaunch.agentId, grok: grokLaunch.agentId, flash: flash.agentId, gpt: gpt.agentId, kimi: kimi.agentId,
         }));
     });
     await t.test('#797 gw provider 映射到 --agent pi（不靠 launch 二进制名）', () => {
@@ -2792,14 +2797,19 @@ describe('dao', () => {
       assert.ok(claude.agentId == null && /reclaude/.test(claude.command),
         'reclaude 不能映射成 --agent claude  →  ' + JSON.stringify({ agentId: claude.agentId, command: claude.command }));
     });
-    const kimiSpec = S.agentStartSpec(kimi);
+    const cursorSpec = S.agentStartSpec(cursorLaunch);
     const gptSpec = S.agentStartSpec(gpt);
     const grokSpec = S.agentStartSpec(grokLaunch);
     const claudeSpec = S.agentStartSpec(claude);
+    const kimiSpec = S.agentStartSpec(kimi);
     await t.test('cursor / codex 走 worker-start --agent + --model', () => {
-      assert.ok(kimiSpec.mode === 'agent' && kimiSpec.agentId === 'cursor' && kimiSpec.model === 'kimi-k3-high'
+      assert.ok(cursorSpec.mode === 'agent' && cursorSpec.agentId === 'cursor' && cursorSpec.model === 'composer-2.5'
         && gptSpec.mode === 'agent' && gptSpec.agentId === 'codex',
-        'cursor / codex 走 worker-start --agent + --model  →  ' + JSON.stringify({ kimiSpec, gptSpec }));
+        'cursor / codex 走 worker-start --agent + --model  →  ' + JSON.stringify({ cursorSpec, gptSpec }));
+    });
+    await t.test('#822 kimi 走 --agent pi（模型在 launch，orca --model 不认 pi）', () => {
+      assert.ok(kimiSpec.mode === 'agent' && kimiSpec.agentId === 'pi' && kimiSpec.model == null,
+        'kimi → pi  →  ' + JSON.stringify(kimiSpec));
     });
     await t.test('grok / pi 走 --agent（模型在 shim；orca --model 不认这两家）', () => {
       assert.ok(grokSpec.mode === 'agent' && grokSpec.agentId === 'grok' && grokSpec.model == null,

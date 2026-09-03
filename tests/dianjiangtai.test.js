@@ -535,8 +535,8 @@ describe('dianjiangtai', () => {
     await t.test('models.yml：flash 版本串与 model-routing.toml 注记一致', () => {
       assert.ok(flash.version === FLASH_VERSION, 'models.yml：flash 版本串与 model-routing.toml 注记一致  →  ' + flash.version);
     });
-    await t.test('models.yml：flash 主通道 = opencode-go 额度包月（不是按量）', () => {
-      assert.ok(flash.provider === "opencode-go" && flash.pricing.subscription.marginal_cost === 0 && flash.pricing.metered === null, 'models.yml：flash 主通道 = opencode-go 额度包月（不是按量）  →  ' + `${flash.provider}/${JSON.stringify(flash.pricing.metered)}`);
+    await t.test('models.yml：flash 主通道 = gw 额度包月（不是按量）', () => {
+      assert.ok(flash.provider === "gw" && flash.pricing.subscription.marginal_cost === 0 && flash.pricing.metered === null, 'models.yml：flash 主通道 = gw 额度包月（不是按量）  →  ' + `${flash.provider}/${JSON.stringify(flash.pricing.metered)}`);
     });
     await t.test('models.yml：grok 订阅边际成本≈0（拍板口径）', () => {
       assert.ok(models.find(m => m.id === "grok-4.6").pricing.subscription.marginal_cost === 0, 'models.yml：grok 订阅边际成本≈0（拍板口径）');
@@ -566,11 +566,11 @@ describe('dianjiangtai', () => {
     });
   });
 
-  it('⑤ JSON 职责树顺位参与推荐（写码 grok > devin > flash，#817）', async (t) => {
+  it('⑤ JSON 职责树顺位参与推荐（写码 grok > flash，#822）', async (t) => {
     const policy = await routingPolicy();
     const rankOrder = policy.rankOrderFor('工人', '写码');
-    await t.test('model-routing.json 写码顺位 ≥3（grok + devin + flash）', () => {
-      assert.ok(rankOrder.length >= 3 && rankOrder[0] === GROK && rankOrder[1] === DEVIN && rankOrder[2] === FLASH, '写码顺位  →  ' + JSON.stringify(rankOrder));
+    await t.test('model-routing.json 写码顺位 grok > flash（#822 devin 退役）', () => {
+      assert.ok(rankOrder[0] === GROK && rankOrder[1] === FLASH && !rankOrder.includes(DEVIN), '写码顺位  →  ' + JSON.stringify(rankOrder));
     });
     await t.test('审官顺位 GPT 顶位（Claude 禁用）', () => {
       assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-sol', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
