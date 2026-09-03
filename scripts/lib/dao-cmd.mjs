@@ -926,7 +926,7 @@ export const VERBS = [
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
-  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'raw',
+  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight']);
@@ -939,6 +939,7 @@ export const FLAGS_BY_VERB = {
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--json', '--help', '-h',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
+  breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),
   'dispatch-exec': new Set(['--order', '--json', '--help', '-h']),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
@@ -1015,11 +1016,15 @@ export function parseArgs(argv) {
   const allowed = FLAGS_BY_VERB[verb];
   if (!allowed) throw new Error(`动词 ${verb} 没登记参数表`);
   const args = { verb };
+  const positionals = [];
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
     const flag = a.split('=')[0];
     if (flag === '--help' || flag === '-h') { args.help = true; continue; }
-    if (!flag.startsWith('--')) throw new Error(`未知参数: ${a}`);
+    if (!flag.startsWith('--')) {
+      if (verb === 'breaker') { positionals.push(a); continue; }
+      throw new Error(`未知参数: ${a}`);
+    }
     if (!allowed.has(flag)) throw new Error(`未知参数: ${flag}`);
     const key = flag.slice(2);
     if (BOOL_FLAGS.has(key)) { args[camelFlag(key)] = true; continue; }
@@ -1032,6 +1037,10 @@ export function parseArgs(argv) {
       continue;
     }
     args[ck] = val;
+  }
+  if (verb === 'breaker') {
+    args.action = positionals[0] || null;
+    args.key = positionals[1] || null;
   }
   return args;
 }
@@ -1128,6 +1137,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   preflight --model <id> [--json]
                   # 派前探一针（#842）：同路径流式探一次，输出与 ~/.dao/preflight ndjson 同形（只读，不建卡不起终端）
                   # 派工/审官起终端前自动探（红换下一位、全红报帅停手）；单次跳过用 dispatch/reviewer-create 的 --no-preflight
+  breaker reset <key>
+                  # 手动解除熔断（#843）：把 ~/.dao/provider-breaker.json 该 target 置 closed、failures 清空
+  breaker trip <key> --hours N
+                  # 手动熔断（#843）：立刻 open，冷却 N 小时。全部 open 时报帅 + 总控群一条
+                  # 「现在探一针」走 preflight --model；后台只调这三条
   amend --issue <号> --why <一句话> [--pr <号>] [--by 帅|用户] [--model <id>]
                   # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕

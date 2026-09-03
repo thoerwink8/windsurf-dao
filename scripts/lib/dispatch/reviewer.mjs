@@ -749,7 +749,7 @@ export async function preflightReviewer({
   }
   const pol = policy || loadDispatchPolicy(root ? { root } : {});
   const avail = availabilityResult
-    || (pol.useHealthTable ? availabilityFor(vendorFiltered, { home, now: now instanceof Date ? now.getTime() : now }) : undefined);
+    || (pol.useHealthTable ? availabilityFor(vendorFiltered, { home, now: now instanceof Date ? now.getTime() : now, breakerPolicy: pol.breaker }) : undefined);
   const r = await runPreflight({
     candidates: vendorFiltered, policy: pol, noPreflight, role: '审官', dispatchId,
     availabilityResult: avail, probe, now, home,

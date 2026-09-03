@@ -1,9 +1,10 @@
-// scripts/lib/dispatch-policy-check.mjs —— docs/dispatch-policy.json 的 preflight + commander 节校验（#842/#849）
+// scripts/lib/dispatch-policy-check.mjs — docs/dispatch-policy.json 的 preflight + breaker + commander 节校验（#842 / #843 / #849）
 //
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
-// 取值范围：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
+// preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
+// breaker：windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 整数 1–5；overrides 按 target 覆盖同范围。
 // commander：maxDispatchPerRound 整数 ∈ [1,20]；requireModelInRouting 布尔。缺 commander 节不拦（#842 旧夹具兼容）。
-// 三态可分：文件不在 / 坏 JSON / 缺 preflight 节 = 没查成（unscanned）；越界 = 红；齐且合范围 = 绿。
+// 三态可分：文件不在 / 坏 JSON / 缺 preflight 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +29,7 @@ export function inspectDispatchPolicySource(src) {
   if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = pf.maxCandidates;
   if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  problems.push(...inspectBreakerSection(doc.breaker));
   const cm = doc.commander;
   if (cm != null) {
     if (typeof cm !== 'object') problems.push('commander 必须是对象');
@@ -38,6 +40,51 @@ export function inspectDispatchPolicySource(src) {
     }
   }
   return { ok: problems.length === 0, unscanned: false, problems };
+}
+
+function inspectBreakerFields(obj, prefix) {
+  const problems = [];
+  const p = prefix || 'breaker';
+  if (obj.windowHours !== undefined) {
+    const w = Number(obj.windowHours);
+    if (!Number.isFinite(w) || w < 1 || w > 168) problems.push(`${p}.windowHours 越界（要 1~168，实际 ${obj.windowHours}）`);
+  }
+  if (obj.failuresToTrip !== undefined) {
+    const f = obj.failuresToTrip;
+    if (!Number.isInteger(f) || f < 1 || f > 20) problems.push(`${p}.failuresToTrip 越界（要整数 1~20，实际 ${obj.failuresToTrip}）`);
+  }
+  if (obj.cooldownHours !== undefined) {
+    const c = Number(obj.cooldownHours);
+    if (!Number.isFinite(c) || c < 0.25 || c > 168) problems.push(`${p}.cooldownHours 越界（要 0.25~168，实际 ${obj.cooldownHours}）`);
+  }
+  if (obj.halfOpenProbes !== undefined) {
+    const h = obj.halfOpenProbes;
+    if (!Number.isInteger(h) || h < 1 || h > 5) problems.push(`${p}.halfOpenProbes 越界（要整数 1~5，实际 ${obj.halfOpenProbes}）`);
+  }
+  return problems;
+}
+
+function inspectBreakerSection(br) {
+  if (!br || typeof br !== 'object' || Array.isArray(br)) return ['缺 breaker 节'];
+  const problems = inspectBreakerFields(br, 'breaker');
+  if (br.windowHours === undefined) problems.push('breaker 缺 windowHours');
+  if (br.failuresToTrip === undefined) problems.push('breaker 缺 failuresToTrip');
+  if (br.cooldownHours === undefined) problems.push('breaker 缺 cooldownHours');
+  if (br.halfOpenProbes === undefined) problems.push('breaker 缺 halfOpenProbes');
+  if (br.overrides !== undefined) {
+    if (!br.overrides || typeof br.overrides !== 'object' || Array.isArray(br.overrides)) {
+      problems.push('breaker.overrides 必须是对象');
+    } else {
+      for (const [k, v] of Object.entries(br.overrides)) {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+          problems.push(`breaker.overrides[${k}] 必须是对象`);
+          continue;
+        }
+        problems.push(...inspectBreakerFields(v, `breaker.overrides[${k}]`));
+      }
+    }
+  }
+  return problems;
 }
 
 function inspectFile(file) {

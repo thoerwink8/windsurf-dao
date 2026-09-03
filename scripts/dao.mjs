@@ -204,6 +204,7 @@ import {
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
+import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
@@ -1712,13 +1713,16 @@ async function runDispatchExecution(order, { queueDir } = {}) {
 
   // #842 派前探一针：起终端前按健康表排序 + 逐位真探。红换下一位（改 startIndex）；
   // 全红/全拦 → 报帅停手，一个 agent 都不起（回滚已建的工人卡）。--no-preflight 跳过且记账。
+  // #843：熔断拦下的候选写进账本 extra.cooldown（看板「卡点」对账）。
+  let workerPreflight = null;
   try {
     const pf = await preflightWorkerSlate({
       slate: slatePack.slate, startIndex: slatePack.startIndex,
       noPreflight: args.noPreflight === true, dispatchId: order.id, now,
     });
+    workerPreflight = pf;
     if (pf.stop) {
-      failCreated(created, `派前探一针：工人候选全红/全拦，停手不起 agent。\n${pf.report || ''}`, { orderId: order.id, preflight: pf, ...plan });
+      failCreated(created, `派前探一针：工人候选全红/全拦，停手不起 agent。\n${pf.report || ''}`, { orderId: order.id, preflight: pf, cooldown: (pf.hardBlocked || []).map(b => `${b.id}:${b.label}`).join(';') || undefined, ...plan });
     }
     if (pf.chosen && Number.isInteger(pf.startIndex) && pf.startIndex >= 0) {
       slatePack = { ...slatePack, startIndex: pf.startIndex };
@@ -1948,6 +1952,9 @@ async function runDispatchExecution(order, { queueDir } = {}) {
         : {}),
       ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
       card_name: plan.workerCard,
+      ...(workerPreflight && workerPreflight.hardBlocked && workerPreflight.hardBlocked.length
+        ? { cooldown: workerPreflight.hardBlocked.map(b => `${b.id}:${b.label}`).join(';') }
+        : {}),
     },
     });
     if (!ledger.ok && !ledger.skipped) {
@@ -3644,7 +3651,13 @@ async function cmdReviewerCreate(args) {
       workType: '审查',
       terminal: reviewerLaunch.provider || 'dao',
       prNumber: Number(args.pr),
-      extra: { source: 'reviewer-create', worktreeId: reviewerId },
+      extra: {
+        source: 'reviewer-create',
+        worktreeId: reviewerId,
+        ...(reviewerPreflight && reviewerPreflight.hardBlocked && reviewerPreflight.hardBlocked.length
+          ? { cooldown: reviewerPreflight.hardBlocked.map(b => `${b.id}:${b.label}`).join(';') }
+          : {}),
+      },
     });
     if (!ledger.ok && !ledger.skipped) {
       console.error(`[dao] reviewer-create 账本没写上（建卡本身成功）：${ledger.error}`);
@@ -4571,6 +4584,14 @@ async function cmdPreflight(args) {
   emit({ ok: true, ...r });
 }
 
+/** #843 熔断后台动作：reset / trip。ingest-* 给指挥官周期面调，不进 USAGE 主路径。 */
+function cmdBreaker(args) {
+  const policy = loadDispatchPolicy({});
+  const r = runBreakerCommand(args, { now: Date.now(), policy: policy.breaker, dryRun: args.dryRun === true });
+  if (!r.ok) fail(r.error, { action: args.action || null, key: args.key || null });
+  emit({ ok: true, ...r });
+}
+
 function main() {
   let args;
   try { args = parseArgs(process.argv); }
@@ -4613,6 +4634,7 @@ function main() {
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
     case 'ledger-query': return cmdLedgerQuery(args);
     case 'preflight': return cmdPreflight(args);
+    case 'breaker': return cmdBreaker(args);
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);

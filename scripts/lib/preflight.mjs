@@ -13,11 +13,13 @@ import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { probeLanding, probeTargetOf } from './provider-probe.mjs';
 import { availabilityFor } from './provider-health.mjs';
+import { BREAKER_DEFAULTS, inspectAvailability, recordEvent, escalateAllOpen, loadBreakerDoc } from './provider-breaker.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
 
 export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true };
 export const COMMANDER_POLICY_DEFAULTS = { maxDispatchPerRound: 2, requireModelInRouting: true };
+export const BREAKER_POLICY_DEFAULTS = { ...BREAKER_DEFAULTS, overrides: {} };
 
 function parseCommanderSection(cm) {
   const src = cm && typeof cm === 'object' ? cm : {};
@@ -36,20 +38,34 @@ function parseCommanderSection(cm) {
 export function loadDispatchPolicy({ root = ROOT, read = readFileSync, exists = existsSync } = {}) {
   const path = join(root, 'docs', 'dispatch-policy.json');
   if (!exists(path)) {
-    return { ...DISPATCH_POLICY_DEFAULTS, commander: { ...COMMANDER_POLICY_DEFAULTS }, source: 'default', path };
+    return {
+      ...DISPATCH_POLICY_DEFAULTS, breaker: { ...BREAKER_POLICY_DEFAULTS }, commander: { ...COMMANDER_POLICY_DEFAULTS },
+      source: 'default', path,
+    };
   }
   let doc;
   try {
     doc = JSON.parse(read(path, 'utf8'));
   } catch {
-    return { ...DISPATCH_POLICY_DEFAULTS, commander: { ...COMMANDER_POLICY_DEFAULTS }, source: 'default(bad-json)', path };
+    return {
+      ...DISPATCH_POLICY_DEFAULTS, breaker: { ...BREAKER_POLICY_DEFAULTS }, commander: { ...COMMANDER_POLICY_DEFAULTS },
+      source: 'default(bad-json)', path,
+    };
   }
   const pf = doc && doc.preflight && typeof doc.preflight === 'object' ? doc.preflight : {};
+  const br = doc && doc.breaker && typeof doc.breaker === 'object' ? doc.breaker : {};
   return {
     enabled: pf.enabled !== undefined ? !!pf.enabled : DISPATCH_POLICY_DEFAULTS.enabled,
     timeoutMs: Number.isFinite(Number(pf.timeoutMs)) ? Number(pf.timeoutMs) : DISPATCH_POLICY_DEFAULTS.timeoutMs,
     maxCandidates: Number.isFinite(Number(pf.maxCandidates)) ? Number(pf.maxCandidates) : DISPATCH_POLICY_DEFAULTS.maxCandidates,
     useHealthTable: pf.useHealthTable !== undefined ? !!pf.useHealthTable : DISPATCH_POLICY_DEFAULTS.useHealthTable,
+    breaker: {
+      windowHours: Number.isFinite(Number(br.windowHours)) ? Number(br.windowHours) : BREAKER_POLICY_DEFAULTS.windowHours,
+      failuresToTrip: Number.isFinite(Number(br.failuresToTrip)) ? Number(br.failuresToTrip) : BREAKER_POLICY_DEFAULTS.failuresToTrip,
+      cooldownHours: Number.isFinite(Number(br.cooldownHours)) ? Number(br.cooldownHours) : BREAKER_POLICY_DEFAULTS.cooldownHours,
+      halfOpenProbes: Number.isFinite(Number(br.halfOpenProbes)) ? Number(br.halfOpenProbes) : BREAKER_POLICY_DEFAULTS.halfOpenProbes,
+      overrides: br.overrides && typeof br.overrides === 'object' ? br.overrides : {},
+    },
     commander: parseCommanderSection(doc && doc.commander),
     source: 'file',
     path,
@@ -73,6 +89,18 @@ export function validateDispatchPolicy(doc) {
   if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = Number(pf.maxCandidates);
   if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  const br = doc.breaker;
+  if (!br || typeof br !== 'object') problems.push('缺 breaker 节');
+  else {
+    const w = Number(br.windowHours);
+    if (!Number.isFinite(w) || w < 1 || w > 168) problems.push(`breaker.windowHours 越界（要 1~168，实际 ${br.windowHours}）`);
+    const f = br.failuresToTrip;
+    if (!Number.isInteger(f) || f < 1 || f > 20) problems.push(`breaker.failuresToTrip 越界（要整数 1~20，实际 ${br.failuresToTrip}）`);
+    const c = Number(br.cooldownHours);
+    if (!Number.isFinite(c) || c < 0.25 || c > 168) problems.push(`breaker.cooldownHours 越界（要 0.25~168，实际 ${br.cooldownHours}）`);
+    const h = br.halfOpenProbes;
+    if (!Number.isInteger(h) || h < 1 || h > 5) problems.push(`breaker.halfOpenProbes 越界（要整数 1~5，实际 ${br.halfOpenProbes}）`);
+  }
   const cm = doc.commander;
   if (cm != null) {
     if (typeof cm !== 'object') problems.push('commander 必须是对象');
@@ -142,14 +170,33 @@ function landingOf(entry) {
  * @param {Date|number} [args.now]
  * @returns {Promise<object>}
  */
+function defaultRecordBreaker(event, { home, now, policy }) {
+  if (process.env.NODE_TEST_CONTEXT) return { ok: true, skipped: 'test' };
+  try {
+    const rec = recordEvent(event, { home, now, policy: policy && policy.breaker });
+    if (rec.alert && rec.alert.alert) {
+      rec.escalate = escalateAllOpen({ doc: rec.doc, now });
+    }
+    return rec;
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
 export async function runPreflight({
   candidates = [], policy = DISPATCH_POLICY_DEFAULTS, noPreflight = false, role = '工人',
   dispatchId = null, availabilityResult = null, probe, audit, probeOpts = {}, now = new Date(),
-  home = os.homedir(),
+  home = os.homedir(), recordBreaker, breakerDoc,
 } = {}) {
   const doProbe = probe || ((landing) => probeLanding(landing, { timeoutMs: policy.timeoutMs, ...probeOpts }));
   const doAudit = audit || ((rec) => appendPreflightAudit(rec, { home, now }));
+  const doRecord = recordBreaker || ((ev) => defaultRecordBreaker(ev, { home, now, policy }));
   const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const nowMsValue = now instanceof Date ? now.getTime() : Number(now);
+  if (!breakerDoc && !process.env.NODE_TEST_CONTEXT) {
+    const loaded = loadBreakerDoc({ home });
+    breakerDoc = loaded.doc;
+  }
 
   const cands = (candidates || []).map(c => {
     if (c && typeof c === 'object' && c.id != null && (c.landing || c.pipes || c.provider)) {
@@ -174,7 +221,7 @@ export async function runPreflight({
 
   // 健康表 + 熔断表：算可用性用于排序与直接拦。
   const avail = availabilityResult
-    || (policy.useHealthTable ? availabilityFor(cands, { now: now instanceof Date ? now.getTime() : now }) : { availability: {}, hardBlocked: {}, deprioritize: new Set(), reasons: {}, notes: [], unknown: false });
+    || (policy.useHealthTable ? availabilityFor(cands, { now: nowMsValue, home, breakerPolicy: policy.breaker }) : { availability: {}, hardBlocked: {}, deprioritize: new Set(), reasons: {}, notes: [], unknown: false });
   for (const n of avail.notes || []) notes.push(n);
   for (const [id, rs] of Object.entries(avail.reasons || {})) reasons[id] = [...(reasons[id] || []), ...rs];
 
@@ -219,17 +266,32 @@ export async function runPreflight({
   const budget = Math.max(1, Number(policy.maxCandidates) || DISPATCH_POLICY_DEFAULTS.maxCandidates);
   let firstUnscanned = null;
   const tried = reordered.slice(0, budget);
+  const breakerPol = policy.breaker || BREAKER_POLICY_DEFAULTS;
   for (const c of tried) {
+    const target = probeTargetOf(c.landing);
+    if (target && breakerDoc && breakerDoc.targets && breakerDoc.targets[target]) {
+      const av = inspectAvailability(breakerDoc.targets[target], nowMsValue, breakerPol);
+      if (!av.available) {
+        hardBlocked.push({ id: c.id, label: av.until ? `cooldown(until ${av.until})` : (av.why || 'cooldown') });
+        reasons[c.id] = [...(reasons[c.id] || []), 'breaker:blocked-no-probe'];
+        continue; // 冷却中不发请求
+      }
+      if (av.state === 'half-open') {
+        const recProbe = doRecord({ type: 'probe', target, why: 'half-open 一针' });
+        if (recProbe && recProbe.doc) breakerDoc = recProbe.doc;
+      }
+    }
     let r;
     try {
       r = await doProbe(c.landing);
     } catch (e) {
       r = { state: 'red', code: null, ms: null, why: `探针抛错：${String(e.message || e)}`, target: null };
     }
-    const rec = { ts: (now instanceof Date ? now.toISOString() : new Date(now).toISOString()), target: r.target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null, why: r.why ?? null, dispatchId, role, model: c.id };
+    const rec = { ts: (now instanceof Date ? now.toISOString() : new Date(now).toISOString()), target: r.target ?? target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null, why: r.why ?? null, dispatchId, role, model: c.id };
     doAudit(rec);
     probed.push({ id: c.id, ...rec });
     if (r.state === 'green') {
+      if (rec.target) doRecord({ type: 'success', target: rec.target, why: '派前探绿' });
       return { ok: true, chosen: c.id, chosenLanding: c.landing, reordered: reordered.map(x => x.id), probed, hardBlocked, allRed: false, stop: false, skipped: false, reasons, notes };
     }
     if (r.state === 'unscanned') {
@@ -239,8 +301,12 @@ export async function runPreflight({
       // 继续看后面有没有能探到绿的；没有再回退到它。
       continue;
     }
-    // red：换下一位
+    // red：换下一位；记失败事件（判定在纯函数里）
     reasons[c.id] = [...(reasons[c.id] || []), `probe:red(${r.code ?? '—'})`];
+    if (rec.target) {
+      const recFail = doRecord({ type: 'failure', target: rec.target, code: r.code, why: r.why || `派前探红 HTTP ${r.code ?? '—'}` });
+      if (recFail && recFail.doc) breakerDoc = recFail.doc;
+    }
   }
 
   // 没探到绿：有探不了的就按现状起它（保守：不因探不了而停摆）；否则全红 → 报帅停手。
@@ -262,7 +328,7 @@ export async function runPreflight({
  * preflight 只读动词处理（dao.mjs 只加一行分发到这里）。
  * 探一个模型，输出与 ndjson 同形；--json 出结构化。
  */
-export async function runPreflightCommand(args = {}, { routingModels, probe, home, now } = {}) {
+export async function runPreflightCommand(args = {}, { routingModels, probe, home, now, recordBreaker, breakerDoc } = {}) {
   const modelId = args.model || args['--model'];
   if (!modelId) return { ok: false, error: 'preflight 要 --model <id>' };
   const models = routingModels || [];
@@ -271,13 +337,33 @@ export async function runPreflightCommand(args = {}, { routingModels, probe, hom
   const landing = landingOf(model);
   if (!landing || !landing.provider) return { ok: false, error: `模型 ${modelId} 缺落地（provider）` };
   const policy = loadDispatchPolicy({});
+  const target = probeTargetOf(landing);
+  const nowMsValue = now instanceof Date ? now.getTime() : (now != null ? Number(now) : Date.now());
+  const doRecord = recordBreaker || ((ev) => defaultRecordBreaker(ev, { home, now: nowMsValue, policy }));
+  if (!breakerDoc) {
+    const loaded = loadBreakerDoc({ home });
+    breakerDoc = loaded.doc;
+  }
+  if (target && breakerDoc && breakerDoc.targets && breakerDoc.targets[target]) {
+    const av = inspectAvailability(breakerDoc.targets[target], nowMsValue, policy.breaker || BREAKER_POLICY_DEFAULTS);
+    if (!av.available) {
+      return {
+        ok: false, blocked: true, model: modelId, landing, target,
+        state: 'blocked', why: av.until ? `cooldown(until ${av.until})` : (av.why || '熔断冷却中'),
+        error: `熔断冷却中，不发请求（${av.until ? `until ${av.until}` : av.why || 'open'}）`,
+      };
+    }
+    if (av.state === 'half-open') doRecord({ type: 'probe', target, why: 'half-open 一针' });
+  }
   const doProbe = probe || ((l) => probeLanding(l, { timeoutMs: policy.timeoutMs }));
   const r = await doProbe(landing);
   const rec = {
     ts: (now instanceof Date ? now : new Date()).toISOString(),
-    target: r.target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null,
+    target: r.target ?? target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null,
     why: r.why ?? null, dispatchId: null, role: 'preflight-verb', model: modelId,
   };
   appendPreflightAudit(rec, { home, now });
+  if (rec.target && r.state === 'green') doRecord({ type: 'success', target: rec.target, why: 'preflight 绿' });
+  if (rec.target && r.state === 'red') doRecord({ type: 'failure', target: rec.target, code: r.code, why: r.why || `preflight 红 HTTP ${r.code ?? '—'}` });
   return { ok: true, model: modelId, landing, ...rec, json: !!args.json };
 }
