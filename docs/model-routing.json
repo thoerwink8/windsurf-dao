@@ -247,9 +247,9 @@
         {
           "id": "deepseek-v4-pro",
           "顺位": 1,
-          "禁用": false,
-          "理由": "判断类主选；#822 从 opencode-go 改 gw-dspool（服务器 og 403）",
-          "拍板": "2026-08-16",
+          "禁用": true,
+          "理由": "用户 2026-09-03 拍板 ban：deepseek 只用 v4-flash（判断类主选；#822 从 opencode-go 改 gw-dspool（服务器 og 403））",
+          "拍板": "2026-09-03",
           "status": "正式",
           "provider": "gw",
           "cli_model": "gw-dspool/deepseek-v4-pro-max"
