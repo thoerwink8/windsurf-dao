@@ -29,6 +29,52 @@ export const ACTION_KINDS = [
 // 报帅停手的默认门槛：同一单唤醒大脑到这个次数仍没闭环 → 转报帅（#800「同单三次唤醒仍没闭环」）。
 export const WAKE_LIMIT = 3;
 
+// 指挥官派单策略缺省（#849）：单轮上限 2；派前校验模型在当前选型内。
+export const COMMANDER_POLICY_DEFAULTS = {
+  maxDispatchPerRound: 2,
+  requireModelInRouting: true,
+};
+
+/** 归一 commander 节：maxDispatchPerRound 整数 1~20，越界/缺失用缺省。 */
+export function resolveCommanderPolicy(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const n = Number(src.maxDispatchPerRound);
+  const max = Number.isInteger(n) && n >= 1 && n <= 20
+    ? n
+    : COMMANDER_POLICY_DEFAULTS.maxDispatchPerRound;
+  return {
+    maxDispatchPerRound: max,
+    requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
+      ? src.requireModelInRouting
+      : COMMANDER_POLICY_DEFAULTS.requireModelInRouting,
+  };
+}
+
+/**
+ * 派前模型闸（#849）：不在当前选型 → 不派；健康表 red → 不派。
+ * enabledIds 不是数组＝选型没查成（fail-closed）。
+ */
+export function assessDispatchModel(model, { policy, enabledIds, redIds } = {}) {
+  const pol = resolveCommanderPolicy(policy);
+  const id = model == null ? '' : String(model);
+  if (pol.requireModelInRouting) {
+    if (!Array.isArray(enabledIds)) {
+      return { ok: false, reason: 'model-routing-unscanned', why: `模型 ${id} 的选型没查成，不派` };
+    }
+    if (!enabledIds.includes(id)) {
+      return {
+        ok: false,
+        reason: 'model-not-in-routing',
+        why: `模型标签 model/${id} 不在当前选型（退役或未登记），不派`,
+      };
+    }
+  }
+  if (Array.isArray(redIds) && redIds.includes(id)) {
+    return { ok: false, reason: 'model-health-red', why: `模型 ${id} 健康表红，不派` };
+  }
+  return { ok: true };
+}
+
 /** issue 标签取值：`model/grok-4.6` → 传 prefix 'model/' 得 'grok-4.6'。取第一个命中，没有返回 null。 */
 export function labelValue(issue, prefix) {
   const labels = Array.isArray(issue?.labels) ? issue.labels : [];
@@ -105,11 +151,16 @@ function collectCandidates(situation) {
   const reviews = situation.prReviews || {};
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
+  const policy = resolveCommanderPolicy(situation.commanderPolicy);
+  const enabledIds = situation.routingModels;
+  const redIds = situation.healthRedModels;
   const N = ACTION_NEEDS;
 
-  // ① 已消歧 + 无在途派工 → dispatch（缺 model|reviewer 标签 = 报帅不猜）
+  // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
+  // #849：本轮最多派 maxDispatchPerRound 张，超出的排队下轮再派（不丢、不 escalate）。
   const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
   if (ready.kind === 'ready') {
+    let dispatchedThisRound = 0;
     for (const n of ready.ready) {
       const issue = (gh.issues || []).find((i) => i && i.number === n);
       const model = labelValue(issue, 'model/');
@@ -120,10 +171,21 @@ function collectCandidates(situation) {
         out.push(withNeeds(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
           reason: 'missing-labels', issue: n, title: issue?.title || '',
         }), N.dispatch));
-      } else {
-        out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
-        out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
+        continue;
       }
+      const gate = assessDispatchModel(model, { policy, enabledIds, redIds });
+      if (!gate.ok) {
+        out.push(withNeeds(esc(`#${n} ${gate.why}`, {
+          reason: gate.reason, issue: n, model, title: issue?.title || '',
+        }), N.dispatch));
+        continue;
+      }
+      if (dispatchedThisRound >= policy.maxDispatchPerRound) {
+        continue; // 超上限：排队下轮，不丢、不 escalate（#849 消歧）
+      }
+      dispatchedThisRound += 1;
+      out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
+      out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
     }
   }
 

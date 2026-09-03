@@ -31,6 +31,9 @@ import { reviewPendingDir, listReviewPending } from './lib/dispatch/review-pendi
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest,
 } from './lib/commander-core.mjs';
+import { loadDispatchPolicy } from './lib/preflight.mjs';
+import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
+import { availabilityFor } from './lib/provider-health.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -134,6 +137,19 @@ function orcaErr(err) {
   return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
+/** 健康表标红的模型 id。表没查成 / unknown → []（不拦，与 #842 unknown 不拦对齐）。 */
+function loadHealthRedIds(models) {
+  if (!Array.isArray(models) || models.length === 0) return [];
+  try {
+    const r = availabilityFor(models);
+    return Object.entries(r.availability || {})
+      .filter(([, v]) => v === 'red')
+      .map(([id]) => id);
+  } catch {
+    return [];
+  }
+}
+
 // 完整态势（scan 子命令与 act 共用）。
 function buildSituation({ state } = {}) {
   const github = scanGithub();
@@ -141,10 +157,25 @@ function buildSituation({ state } = {}) {
   const reviewPending = scanReviewPending();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
+  const policy = loadDispatchPolicy({ root: ROOT });
+  let routingModels = null;
+  let healthRedModels = [];
+  try {
+    const raw = loadRoutingJsonRaw();
+    const models = modelsFromJson(raw);
+    routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
+    healthRedModels = loadHealthRedIds(models);
+  } catch {
+    routingModels = null;
+    healthRedModels = [];
+  }
   return {
     at: nowIso(), repo: REPO,
     github, orca, reviewPending, prReviews, stall,
     wakeCounts: (state && state.wakeCounts) || {},
+    commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
+    routingModels,
+    healthRedModels,
   };
 }
 

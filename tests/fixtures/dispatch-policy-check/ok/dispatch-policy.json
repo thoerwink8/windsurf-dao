@@ -1,1 +1,1 @@
-{ "preflight": { "enabled": true, "timeoutMs": 5000, "maxCandidates": 4, "useHealthTable": true } }
+{ "preflight": { "enabled": true, "timeoutMs": 5000, "maxCandidates": 4, "useHealthTable": true }, "commander": { "maxDispatchPerRound": 2, "requireModelInRouting": true } }

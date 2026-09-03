@@ -12,7 +12,7 @@
 // 队列目录可被 DAO_DISPATCH_QUEUE_DIR 覆盖（测试隔真仓，同 LEDGER_EVENTS_DIR 的思路）。
 
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DISPATCH_DEDUP_WINDOW_MS } from './ledger-query.mjs';
 
@@ -173,6 +173,67 @@ export function listDispatchOrders(dir, { readResult } = {}) {
   }
   orders.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   return { ok: true, unscanned: false, orders };
+}
+
+export const STALE_RUNNING_MS = 30 * 60 * 1000; // 30 分钟：.running 还在、pid 已死或过期 → 僵尸
+
+function pidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; }
+  catch (e) { return e && e.code === 'EPERM'; }
+}
+
+/**
+ * 扫超时/死进程的 .running：补写 out.json（ok:false crashed）并删标记（#849）。
+ * kill -9 跑不了 trap，靠这一轮把僵尸清掉。dryRun 只报告不写。
+ */
+export function reapStaleDispatchRunning(dir, {
+  now = Date.now(), staleMs = STALE_RUNNING_MS, dryRun = false,
+  exists = existsSync, read = readFileSync, write = writeFileSync, unlink = unlinkSync,
+  alive = pidAlive,
+} = {}) {
+  if (!dir) return { ok: false, unscanned: true, error: '没给队列目录', reaped: [] };
+  if (!exists(dir)) return { ok: true, unscanned: false, reaped: [] };
+  let names;
+  try { names = readdirSync(dir); }
+  catch (e) { return { ok: false, unscanned: true, error: `队列目录读不了：${String(e.message || e)}`, reaped: [] }; }
+  const reaped = [];
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  for (const name of names) {
+    if (!name.endsWith('.running')) continue;
+    const id = name.slice(0, -'.running'.length);
+    if (!id.startsWith('dq-')) continue;
+    const paths = dispatchOrderPaths(dir, id);
+    if (exists(paths.result)) {
+      // 结果已在，标记漏删：补删，不算 crash
+      if (!dryRun) { try { unlink(paths.running); } catch { /* ignore */ } }
+      reaped.push({ id, reason: 'result-already-there' });
+      continue;
+    }
+    let meta = {};
+    try { meta = JSON.parse(read(paths.running, 'utf8') || '{}'); } catch { meta = {}; }
+    const pid = meta && meta.pid;
+    const ts = Date.parse(meta && meta.ts) || 0;
+    const dead = pid != null && !alive(pid);
+    const aged = ts > 0 && Number.isFinite(nowMs) && (nowMs - ts) >= staleMs;
+    const noMeta = pid == null && ts === 0;
+    if (!dead && !aged && !noMeta) continue;
+    const reason = dead ? 'pid-dead' : (aged ? 'stale' : 'no-meta');
+    if (!dryRun) {
+      try {
+        write(paths.result, JSON.stringify({
+          ok: false, orderId: id, crashed: true,
+          error: `执行体 .running 僵尸（${reason}），inventory 补写失败记录`,
+        }, null, 2), 'utf8');
+      } catch (e) {
+        return { ok: false, unscanned: true, error: `补写 ${paths.result} 失败：${String(e.message || e)}`, reaped };
+      }
+      try { unlink(paths.running); } catch { /* ignore */ }
+    }
+    reaped.push({ id, reason, pid: pid || null });
+  }
+  return { ok: true, unscanned: false, reaped };
 }
 
 /**

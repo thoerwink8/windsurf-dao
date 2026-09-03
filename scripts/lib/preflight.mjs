@@ -17,16 +17,32 @@ import { availabilityFor } from './provider-health.mjs';
 const ROOT = resolve(import.meta.dirname, '..', '..');
 
 export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true };
+export const COMMANDER_POLICY_DEFAULTS = { maxDispatchPerRound: 2, requireModelInRouting: true };
 
-/** 读 docs/dispatch-policy.json 的 preflight 节，缺项用缺省。文件不在 = 用缺省（不算错）。 */
+function parseCommanderSection(cm) {
+  const src = cm && typeof cm === 'object' ? cm : {};
+  const n = Number(src.maxDispatchPerRound);
+  return {
+    maxDispatchPerRound: Number.isInteger(n) && n >= 1 && n <= 20
+      ? n
+      : COMMANDER_POLICY_DEFAULTS.maxDispatchPerRound,
+    requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
+      ? src.requireModelInRouting
+      : COMMANDER_POLICY_DEFAULTS.requireModelInRouting,
+  };
+}
+
+/** 读 docs/dispatch-policy.json 的 preflight + commander 节，缺项用缺省。文件不在 = 用缺省（不算错）。 */
 export function loadDispatchPolicy({ root = ROOT, read = readFileSync, exists = existsSync } = {}) {
   const path = join(root, 'docs', 'dispatch-policy.json');
-  if (!exists(path)) return { ...DISPATCH_POLICY_DEFAULTS, source: 'default', path };
+  if (!exists(path)) {
+    return { ...DISPATCH_POLICY_DEFAULTS, commander: { ...COMMANDER_POLICY_DEFAULTS }, source: 'default', path };
+  }
   let doc;
   try {
     doc = JSON.parse(read(path, 'utf8'));
   } catch {
-    return { ...DISPATCH_POLICY_DEFAULTS, source: 'default(bad-json)', path };
+    return { ...DISPATCH_POLICY_DEFAULTS, commander: { ...COMMANDER_POLICY_DEFAULTS }, source: 'default(bad-json)', path };
   }
   const pf = doc && doc.preflight && typeof doc.preflight === 'object' ? doc.preflight : {};
   return {
@@ -34,14 +50,17 @@ export function loadDispatchPolicy({ root = ROOT, read = readFileSync, exists = 
     timeoutMs: Number.isFinite(Number(pf.timeoutMs)) ? Number(pf.timeoutMs) : DISPATCH_POLICY_DEFAULTS.timeoutMs,
     maxCandidates: Number.isFinite(Number(pf.maxCandidates)) ? Number(pf.maxCandidates) : DISPATCH_POLICY_DEFAULTS.maxCandidates,
     useHealthTable: pf.useHealthTable !== undefined ? !!pf.useHealthTable : DISPATCH_POLICY_DEFAULTS.useHealthTable,
+    commander: parseCommanderSection(doc && doc.commander),
     source: 'file',
     path,
   };
 }
 
 /**
- * 校验 preflight 取值范围（dao-check 自持，不 import 消费方）。
+ * 校验 preflight + commander 取值范围（dao-check 自持，不 import 消费方）。
  * enabled/useHealthTable 必须布尔；timeoutMs ∈ [500, 60000]；maxCandidates 整数 ∈ [1, 12]。
+ * commander.maxDispatchPerRound 整数 ∈ [1, 20]；requireModelInRouting 必须布尔。
+ * 缺 commander 节不算没查成（#842 旧文件兼容），但 live 文件应有。
  */
 export function validateDispatchPolicy(doc) {
   const problems = [];
@@ -54,6 +73,15 @@ export function validateDispatchPolicy(doc) {
   if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = Number(pf.maxCandidates);
   if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  const cm = doc.commander;
+  if (cm != null) {
+    if (typeof cm !== 'object') problems.push('commander 必须是对象');
+    else {
+      if (typeof cm.requireModelInRouting !== 'boolean') problems.push('requireModelInRouting 必须 true/false');
+      const m = Number(cm.maxDispatchPerRound);
+      if (!Number.isInteger(m) || m < 1 || m > 20) problems.push(`maxDispatchPerRound 越界（要整数 1~20，实际 ${cm.maxDispatchPerRound}）`);
+    }
+  }
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 
