@@ -572,6 +572,13 @@ describe('dianjiangtai', () => {
     await t.test('审官顺位 GPT 顶位（Claude 禁用）', () => {
       assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-sol', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
     });
+    const planOrder = policy.rankOrderFor('工人', '方案');
+    await t.test('model-routing.json 方案顺位 gpt > flash > glm（#817 订正）', () => {
+      assert.ok(planOrder[0] === 'gpt-5.6-sol' && planOrder[1] === FLASH && planOrder[2] === 'glm-5.2', '方案顺位  →  ' + JSON.stringify(planOrder));
+    });
+    await t.test('model-routing.json 方案整合顺位 grok（#817 订正）', () => {
+      assert.ok(policy.rankOrderFor('工人', '方案整合')[0] === GROK, '方案整合  →  ' + JSON.stringify(policy.rankOrderFor('工人', '方案整合')));
+    });
   });
 
   it('判别力账本 / select+rankOrder 接线（红3）', async (t) => {
