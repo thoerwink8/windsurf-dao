@@ -381,10 +381,11 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 - **`ok:false` 时退出码仍是 0**——退出码不是信号，只认 JSON。
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
-- **2026-09-02 Contabo 实测续坑**（命令、包名、env 路径全文在 PR #796，当时未合；本条不抄值）：
-  1. **systemd drop-in 注入 agent 的网关 env 与 PATH**。Orca `terminal create` 的壳不继承服务环境；`worktree create --agent` 起的 agent 继承。只改单元 drop-in，值不进仓（`host/skills/server-ops/SKILL.md`，INDEX E 类）。
-  2. **Claude Code 无头信任框**：`IS_SANDBOX=1` 这版不认。要在 `~/.claude.json` 的 `projects` 里给工位树**父目录**写信任标记——它会向上找祖先，预置一次即可。
-  3. **Orca 终端不吃 login shell 的 `~/.profile` / `~/.bashrc`**。人开的壳要自己补 PATH；agent 靠上一条 drop-in。
+- **AppImage 解包后 Electron 共享库可能缺**（2026-09-02 Contabo Ubuntu 24.04 干净机实测：`orca-ide: error while loading shared libraries: libatk-1.0.so.0`，前台 serve 直接 exit 127、永远等不到 ready）。装 `libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libcups2t64 libxkbcommon0 libatspi2.0-0t64 libxss1 libgl1`，验收 `ldd /opt/orca/squashfs-root/orca-ide | grep "not found"` 为空再起。
+- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/home/orca/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /home/orca/windsurf-dao`。
+- **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
+- **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
+- **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
 - **#802**：`server-check` 第⑬项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。
 
 ### 发布列车 timer（#800，服务器上装）
@@ -399,13 +400,6 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 ```
 
 真发版留给合并后 timer 首次触发；人工只该跑到 `plan` 与 `release --dry-run`（别在真仓手打 tag / 建 Release，会污染版本历史）。触发阈值/发布日/档位表都在 `docs/release-policy.json`，改动走 PR。
-
-- **AppImage 解包后 Electron 共享库可能缺**（2026-09-02 Contabo Ubuntu 24.04 干净机实测：`orca-ide: error while loading shared libraries: libatk-1.0.so.0`，前台 serve 直接 exit 127、永远等不到 ready）。装 `libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libcups2t64 libxkbcommon0 libatspi2.0-0t64 libxss1 libgl1`，验收 `ldd /opt/orca/squashfs-root/orca-ide | grep "not found"` 为空再起。
-- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/home/orca/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /home/orca/windsurf-dao`。
-- **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
-- **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
-- **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
-- 服务器落地清单第 1 步的判据（kill 后自动回来）2026-09-02 在 Contabo Cloud VPS 6（6C/12G，EU）上实测达成：`kill -9` 主进程后 15 秒 `systemctl is-active` 回 active、`NRestarts=1`、`runtime.reachable=true`。
 
 ### 搬过去之后本仓的红项变化（实测）
 
