@@ -1,6 +1,6 @@
 {
   "updated": "2026-09-03",
-  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位。编排层熔断（#843）：窗口内连撞 N 次自动 cooldown，到点半开一针。指挥官（#849）：单轮派单上限 + 派前校验模型在当前选型且健康表非红。真相源，改动后 dao-check 校验取值范围。后台改的是这份文件 → PR。",
+  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位。编排层熔断（#843）：窗口内连撞 N 次自动 cooldown，到点半开一针。指挥官（#849）：单轮派单上限 + 派前校验模型在当前选型且健康表非红。真相源，改动后 dao-check 校验取值范围。后台改的是这份文件 → PR。；hubChat（#852 总帅入口）：总控群对话开关与允许动作（situation=盘面只读问答 / decision=拍板写回对应单 / guide=新需求指路项目群），upstream 是三类上行的分级",
   "preflight": {
     "enabled": true,
     "timeoutMs": 5000,
@@ -17,5 +17,14 @@
   "commander": {
     "maxDispatchPerRound": 2,
     "requireModelInRouting": true
+  },
+  "hubChat": {
+    "enabled": true,
+    "allowedActions": ["situation", "decision", "guide"],
+    "upstream": {
+      "redThreshold": 2,
+      "decisions": true,
+      "digest": false
+    }
   }
 }

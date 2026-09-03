@@ -84,7 +84,7 @@
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
 //    commander（maxDispatchPerRound 1~20、requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
-//    文件不在 / JSON 坏 / 缺 preflight 节 = 没查成。缺 breaker / 越界 = 红。
+//    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -1488,7 +1488,7 @@ function checkDispatchPolicyLive() {
   if (r.unscanned) {
     fail(
       'dispatch-policy.json 没查成',
-      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight 节 = 没查成，不是过',
+      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight/hubChat 节 = 没查成，不是过',
       (r.problems || []).join('；'),
     );
     return;
@@ -1501,7 +1501,7 @@ function checkDispatchPolicyLive() {
     );
     return;
   }
-  green('dispatch-policy.json preflight/breaker 取值合范围');
+  green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
 }
 
 function checkReleasePolicySamples() {
