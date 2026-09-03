@@ -11,7 +11,7 @@
 - [x] 故意违规样本当场拦下：`tests/fixtures/version-carrier/red/` 基线 `1.2.3` → 当前 `1.2.2`；`inspectVersionCarrierFixtures` kinds `{red:1,ok:1,empty:1}`
 - [x] `CLAUDE.md` L9 有 dao-commit 按需指针，不常驻注入
 - [x] 提交标题带宿主前缀（本跳 `[pi]`；原实现 #789 为 `[grok]`）
-- [x] `node scripts/dao-check.mjs` 在工人树 PR head 复跑（本返工轮，head 将随本提交更新）：退出码 0，末行 `dao check: 好的（104 项，7 项跳过，56.5s）`。CI check 已绿（run 33803575961）。审官树同 head 复跑亦退出码 0、末行 `dao check: 好的（104 项，7 项跳过，55.6s）`。审官当时在同 SHA 上看到 `不好（2 项红 / 102 项绿 / 7 项跳过）`（`dao-mode.test.js` 8 红 + `redact.test.js` 1 红）；这两套用仓内 `_tmp/` 沙箱，dao-check 池宽 6 并行，偶发踩踏可解释当时红、现在绿。返工后工人树/审官树/CI 三处均为绿，不以当时瞬时红冒充当前结果。
+- [x] `node scripts/dao-check.mjs` 在工人树 head `76f93a5` 复跑：退出码 0，末行形态 `dao check: 好的（104 项，7 项跳过，…s）`（本轮实测 53.7s；时长每次会变，不��它当哈希）。`dao-mode.test.js` 97/0、`redact.test.js` 47/0。审官树同基线复跑同样退出码 0 / 104 绿 7 跳过。CI check 绿（run 33803575961，对应上一 SHA `a914026`）。审官当时在 `a914026` 上看到 `不好（2 项红 / 102 项绿 / 7 项跳过）`（`dao-mode` 8 红 + `redact` 1 红）；这两套用仓内 `_tmp/` 沙箱，dao-check 池宽 6 并行，偶发踩踏可解释当时红、现在绿。不以当时瞬时红冒充当前结果。
 
 ## 进展
 
