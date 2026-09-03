@@ -40,7 +40,7 @@
 
 全程指针：`2026-09-03-server-landing-night.md`（不在本页抄值）。
 
-- 2026-09-02：机器到位（Contabo Cloud VPS 6，EU；中转站不搬，A/B 见 ai-gateway-stack DECISIONS §56）。无头六坑全文在 PR #796（当时未合）。
+- 2026-09-02：机器到位（Contabo Cloud VPS 6，6C/12G/200G，EU 机房，ssh 别名 `contabo`；中转站不搬，A/B 见 ai-gateway-stack DECISIONS §56）。无头六坑全文在 PR #796（当时未合）。
 - 2026-09-03：第 1–3 步已达成——`kill -9` orca-serve 自动拉起（§9d / PR #796）；首单端到端 #797 / PR #798。第 4 步见 #807（待拍板）。第 6 步 Phase 2 见 #801。
 - 2026-09-03 晚：第 5、7 步达成（PR #830 / #832）。同晚服务器新增运行时件（本页只留指针）：
   - 撞限流探测进 systemd：`dao-agent-stall.timer`，15 分钟一轮 + 自动换人（#833 / PR #834；垫片已退役）。
