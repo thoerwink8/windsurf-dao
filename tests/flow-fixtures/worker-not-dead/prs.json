@@ -1,1 +1,0 @@
-[{"number":2008,"title":"[pi] #686 工人正常干活测试","isDraft":true,"state":"OPEN","createdAt":"2026-08-21T00:00:00Z","updatedAt":"2026-08-21T01:00:00Z","mergedAt":null,"headRefName":"thoerwink8/worker-dead-2008","labels":[{"name":"model/deepseek-v4-flash"},{"name":"type/写码"}],"body":"## 目标\n测试工人正常干活不报死亡。\n## 验收标准\n- [ ] 测试\n## 进展\n- [ ] 进行中"}]

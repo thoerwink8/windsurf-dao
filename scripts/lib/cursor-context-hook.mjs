@@ -5,7 +5,7 @@
 //   1. 只报不拦：永远 exit 0 + {"continue": true}。Cursor 的 beforeSubmitPrompt / sessionStart
 //      只认 stdout JSON，纯文本输出会被当 invalid JSON 丢弃（[盘]/[卫] 行进不了会话上下文，
 //      #707 验收 6 实测）。本适配层挂在 .cursor/hooks.json 上，把子脚本的输出包成 JSON。
-//   2. 不复制任何判定逻辑：子脚本（board-hook / guard-session-hook）的 stdout 原样包进
+//   2. 不复制任何判定逻辑：子脚本（board-hook）的 stdout 原样包进
 //      additional_context——Cursor 唯一能把文本注入会话上下文的字段（源码实测：
 //      executeHookForStep 的响应里 additional_context 被拼进下一轮 prompt 上下文）。
 //   3. 输出区分「查过」和「没查成」：子脚本没跑成 / 超时输出可辨认的「没查成」行，

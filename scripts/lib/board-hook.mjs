@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-// 盘面摘要 + 守卫兜底 hook（issue #564 第 1 条 + #693 守卫兜底；2026-08-23 起信箱台保活也归守卫）。
-// 挂在仓内 .claude/settings.json 的 UserPromptSubmit：每轮输出一行 [盘] 摘要；
-// 主树会话顺手 ensure 一遍守卫（#693：会话中途 watchdog/flow/信箱台 relay 死了，下一轮提示时拉起；
-// 2026-08-22 起主树即拉，不再要求 master——master 只管帅位展示）+ 把未上报的守卫自停显形。
+// 盘面摘要 hook（issue #564 第 1 条）。#807 起本机守卫栈已删：不再 ensure watchdog/flow，
+// 也不再注 [卫] 行。挂点已从 settings.json 摘掉；本文件只剩 [盘] 纯函数给 next / 测试用。
 //
 // 改这个文件前必须知道的四条：
 //   1. 只报不拦：永远 exit 0。UserPromptSubmit hook 的输出只是进上下文，绝不挡住用户输入
@@ -23,15 +21,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { runOrcaRaw } from './orca-run.mjs';
 import { displayNumberFromWorktree } from './card-identity.mjs';
-import { judgeSeat, guardLaunchGate } from './guard-seat.mjs';
-import {
-  FLOW_HEARTBEAT_STALE_MS,
-  WATCHDOG_HEARTBEAT_STALE_MS,
-  onceResultBits,
-  parseWorktreePorcelain,
-  watchdogHeartbeatPath,
-} from './guard-keepalive.mjs';
-import { haltLogPath, readHaltLog } from './guard-halt.mjs';
+
+// 心跳阈值原在 guard-keepalive（#807 已删）。next 行仍读本地心跳文件，口径钉死在这里。
+const FLOW_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+
+function parseWorktreePorcelain(text) {
+  const src = String(text || '');
+  const m = src.match(/^worktree (.+)$/m);
+  return m ? m[1].trim() : null;
+}
+
+function watchdogHeartbeatPath({ env = process.env, home = homedir() } = {}) {
+  const dir = env.DAO_GUARD_HALT_DIR || join(home, '.dao', 'guard');
+  return join(dir, 'watchdog-heartbeat.json');
+}
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -40,7 +44,6 @@ const ROOT = process.env.CLAUDE_PROJECT_DIR
 const CACHE_FILE = join(ROOT, '_flow', 'board-summary.json');
 const CACHE_TTL_MS = 60 * 1000;
 const ORCA_TIMEOUT_MS = 15000;
-const GUARD_ONCE_TIMEOUT_MS = 25000; // 健康时一次 CIM 查询秒级；hook 预算内
 
 function cardRef(w) {
   const name = String(w.displayName || '');
@@ -303,81 +306,8 @@ export function nextInjection({ root = ROOT, git = defaultGit, read = readFileSy
   return nextLine({ board: boardSummary({ orca, cache }), flowHb, wdHb, mode, now: at });
 }
 
-/** 2026-08-23 拍板：信箱台 detached 化，保活归 guard-keepalive（本 hook 的 [卫] 行
- * 会显形 inbox=started/restarted）。这里不再每轮跑 inbox-station ensure——
- * 派工路也不跑（ensure 最慢 300s 是派工分钟级大头）。 */
-
-/** 守卫兜底 ensure（#693）：主树会话每轮顺手跑 --once。健康 = 无输出（[盘] 行的存在
- * 就是活证）；拉起/失败留痕；只报不拦。非主树（工人树、别的仓）静默。
- * 2026-08-22 拍板：拉起闸认「主树在本仓」不认 master（主树停非 master 分支全灭过一次，
- * 15 小时无人知）；master 只管帅位展示。判不出来时不猜：注入可辨认的「没查成」行（≠ 已查）。
- * judge / exec 可注入（测试用假判定与假 spawn，不碰真机）。 */
-export function guardInjection({ root = ROOT, judge = null, exec = null } = {}) {
-  const seat = judge ? judge({ projectDir: root }) : judgeSeat({ projectDir: root });
-  const gate = guardLaunchGate(seat);
-  if (gate.unknown) {
-    return `[卫] 帥位判定没查成：${gate.error}（守卫 ensure 这轮没跑，≠ 已查）`;
-  }
-  if (!gate.launch) return null;
-  const script = join(root, 'scripts', 'guard-keepalive.mjs');
-  const r = exec
-    ? exec(script)
-    : spawnSync(process.execPath, [script, '--once'], {
-        // cwd 钉在判定的项目上：--once 用 cwd 的 git worktree list 定主树（心跳/状态文件落主树 _flow）
-        encoding: 'utf8', cwd: root, timeout: GUARD_ONCE_TIMEOUT_MS, windowsHide: true,
-      });
-  const out = String(r.stdout || '').trim();
-  if (r.error || (r.status !== 0 && r.status != null)) {
-    const tail = String(r.stderr || '').trim() || out.slice(-120);
-    return `[卫] 守卫 ensure 没查成：${r.error?.message || `exit ${r.status}`}${tail ? `（${tail.slice(-120)}）` : ''}（只报不拦，≠ 查过没事）`;
-  }
-  let doc = null;
-  try { doc = JSON.parse(out.split(/\r?\n/).filter(Boolean).pop() || '{}'); } catch { doc = null; }
-  if (!doc || !Array.isArray(doc.results)) {
-    return `[卫] 守卫 ensure 输出没查成：--once 末行不是结果 JSON（≠ 查过没事）`;
-  }
-  const bits = onceResultBits(doc);
-  // 主树非 master 时把分支显形：守卫照拉，但「谁是帅位」展示口径仍认 master，防盘面误读。
-  const branchNote = gate.shuai ? '' : `（主树在 ${gate.branch}，非 master——守卫照拉）`;
-  if (bits.failed.length) {
-    return `[卫] 守卫拉起没成：${bits.all.join(' ')}${branchNote}（只报不拦，≠ 查过没事）`;
-  }
-  if (bits.started.length) {
-    return `[卫] 守卫已拉起：${bits.all.join(' ')}${branchNote}`;
-  }
-  return null; // 全 already：静音
-}
-
-// ── 守卫自停可见（2026-08-22 拍板）──────────────────────────────────
-// 自停（STALE_CODE 落后自停/查不成自停）只写本机 halt.jsonl 时，没人知道守卫死过。
-// 本注入每轮读一次本机台账（纯本地文件，不打 GitHub）：近 24h 内有「没报成 GitHub」的
-// 自停记录就显形一行；全已上报或台账不存在（从没自停过）静音；台账读不出 = 没查成行。
-const HALT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
-
-export function haltInjection({ now = Date.now(), loadLog = null } = {}) {
-  const log = loadLog ? loadLog() : readHaltLog(haltLogPath({ env: process.env }));
-  if (!log || log.scanned !== true) {
-    return `[卫] 守卫自停台账没查成：${log?.error || '读不出 halt.jsonl'}（≠ 查过没事；只报不拦）`;
-  }
-  if (log.missing || log.count === 0) return null; // 从没自停过：扫完 0，静音
-  const recent = log.records.filter((r) => {
-    const ts = Date.parse(r && r.at);
-    return Number.isFinite(ts) && now - ts <= HALT_LOOKBACK_MS;
-  });
-  const unreported = recent.filter((r) => r && r.github?.ok !== true);
-  if (unreported.length === 0) return null; // 近 24h 的自停都已报 GitHub：静音
-  const latest = unreported[unreported.length - 1];
-  const why = latest.github?.error ? `（${String(latest.github.error).slice(0, 80)}）` : '';
-  return `[卫] 守卫自停 ${unreported.length} 条近 24h 未上报 GitHub：最近 ${latest.tag || '?'} ${latest.at || '?'}${why}——见 ~/.dao/guard/halt.jsonl（只报不拦）`;
-}
-
 function main() {
-  const lines = [nextInjection()];
-  const guard = guardInjection();
-  if (guard) lines.push(guard);
-  const halt = haltInjection();
-  if (halt) lines.push(halt);
-  process.stdout.write(`${lines.join('\n')}\n`);
+  process.stdout.write(`${nextInjection()}\n`);
   process.exit(0);
 }
 

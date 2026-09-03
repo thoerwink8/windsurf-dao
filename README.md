@@ -14,10 +14,8 @@
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
 | `scripts/dao.mjs` | 派工闭环的命令入口；盘面子命令 `board-archive` / `board-reset`（重测派单前的存档与清盘）：`board-archive` 全量存档卡片/终端/workers/Run/信箱到本机 `~/.dao/board-archive/`（不进 git），`board-reset` 默认 dry-run 只列将删的卡，加 `--apply` 先存档再删盘 |
-| `scripts/watchdog.mjs` | 事故路径停摆看门狗（issue #442）：轮询 `orca worktree ps` 自动枚举 working/waiting 工位，检测终端 exited / ps waiting / 屏面错误指纹 / 整屏哈希三轮不变。结构性排除主工作区（master）、监视器自己的工作区与稳定 pane ID，不对协调者/审官自误报。**2026-08-31 起冻结不跑**（本机守卫栈随停派工归零，见 `docs/decisions/2026-08-31-local-guards-retire-with-server.md`）。`--once` 跑单轮；`--snapshot-dir` 用快照复现/测试；`--exclude-pane` 排除控制端会话 |
-| `scripts/guard-keepalive.mjs` | 守卫保活（冻结中，同上；挂点已从随仓 settings.json 与 .cursor/hooks.json 摘掉，代码留仓等服务器落地后删） |
+| `scripts/agent-stall-watch.mjs` | 服务器撞限流/卡弹窗探测（#833）：读 `orca terminal list` 屏面指纹，连红后换人/报帅。本机 `watchdog.mjs` / `flow.mjs` / 守卫保活 #807 已删 |
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
-| `tests/watchdog.test.js` | 看门狗回归网：真实语料负向对照 + 真实事故实录（at-capacity 两起 / terminal_handle_stale）+ 违规样本逐一被拦（语料在 `tests/watchdog-fixtures/`）。跑法（写死，别按直觉敲 `node --test tests/`）：单套回归 `node --test tests/watchdog.test.js`；全仓自检（自发现 `tests/*.test.js` 逐套跑）`node scripts/dao-check.mjs`。⚠️ `node --test tests/` 在 Node 24 下把 `tests/` 当模块报 MODULE_NOT_FOUND，不要用它 |
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/global-CLAUDE.md` | 用户级 `~/.claude/CLAUDE.md` 的真相源副本：换机跑 `node scripts/onboard.mjs` 自动同步（漂移由 SessionStart 哨兵报），git 不带机器配置 |
 | memory 独立仓 | Claude 项目 memory（教训/坑/拍板，一条一个文件）住在独立仓 `thoerwink8/windsurf-dao-memory`，主仓不再持有；本机目录由 `node scripts/onboard.mjs` 接上（落点有内容时拒绝并指路人工并回，见 NEW-MACHINE §10），换机不丢；历史文档归档也在那的 `docs-archive/` |

@@ -753,8 +753,8 @@ describe('dao', () => {
     });
 
     // 2026-08-23 fire-and-forget 拍板：信箱台 ensure 挪出派工路（一次 ensure 最慢 300s，
-    // 是派工分钟级耗时大头）。dao.mjs 不再有 ensureInboxStation；台保活归 guard-keepalive。
-    await t.test('dao.mjs 不再有 ensureInboxStation（ensure 挪出派工路，保活归 guard-keepalive）', () => {
+    // 是派工分钟级耗时大头）。dao.mjs 不再有 ensureInboxStation。#807 起本机守卫保活已删。
+    await t.test('dao.mjs 不再有 ensureInboxStation（ensure 挪出派工路）', () => {
       assert.ok(!/function ensureInboxStation/.test(daoSrc565) && !/ensureInboxStation\(/.test(daoSrc565),
         'dao.mjs 不该再有 ensureInboxStation');
     });

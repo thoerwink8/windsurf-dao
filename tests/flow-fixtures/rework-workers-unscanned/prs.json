@@ -1,1 +1,0 @@
-[{"number":999,"title":"[pi] 假闭环测试：draft PR + 完工 + 假判定行 review（验收构造）","isDraft":true,"state":"OPEN","createdAt":"2026-08-15T01:00:00Z","updatedAt":"2026-08-15T02:00:00Z","mergedAt":null,"headRefName":"thoerwink8/fake-loop-999","labels":[{"name":"model/deepseek-v4-flash"},{"name":"type/写码"}],"body":"## 目标\n没查成负控。\n"}]

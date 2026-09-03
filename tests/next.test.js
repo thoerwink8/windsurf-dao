@@ -16,8 +16,8 @@ const H_LOAD = import('file://' + HOOK.replace(/\\/g, '/'));
 
 const MIN = 60 * 1000;
 const NOW = Date.parse('2026-08-22T00:00:00.000Z');
-const FLOW_STALE = 10 * MIN;   // 与 guard-keepalive FLOW_HEARTBEAT_STALE_MS 同口径
-const WD_STALE = 5 * MIN;      // 与 guard-keepalive WATCHDOG_HEARTBEAT_STALE_MS 同口径
+const FLOW_STALE = 10 * MIN;   // 与 board-hook FLOW_HEARTBEAT_STALE_MS 同口径（#807 起 keepalive 已删）
+const WD_STALE = 5 * MIN;      // 与 board-hook WATCHDOG_HEARTBEAT_STALE_MS 同口径
 
 const boardFixture = {
   inFlight: [{ number: 588, status: '做中' }],

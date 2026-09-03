@@ -52,18 +52,18 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一个** detached 后台进程（2026-08-23 拍板：从哑终端改成 spawn detached + windowsHide，面板 0 占用；活性看租约 `_flow/inbox.lease` 新鲜 + PID 在 + 命令行核对），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。台保活归 `guard-keepalive`（hook 触发 --once，租约即心跳，停更 90s 杀掉重拉）；派工路不再跑 ensure。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；**帅窗不许触发这条**。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是 detached 后台进程（2026-08-23 拍板：spawn detached，面板 0 占用；活性看租约 `_flow/inbox.lease` 新鲜 + PID 在 + 命令行核对），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。派工路不再跑 ensure。#807 起本机守卫保活已删，服务器承重面是 systemd + `orca automations`。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；**帅窗不许触发这条**。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 
 - **编排层**：`worker_done` 是触发器、GitHub PR 存在是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
-- **流转器（#575 ⑥ 订正）**：交棒发到 **issue comment** 首行「完工」（issue 一直在，不绑 push）。`scripts/flow.mjs:183` 读关联 issue 的评论（标题 `#N` 或正文「署名 issue #N」）。工人发评论走 `node scripts/dao.mjs worker-done --pr <N> --body-file <文件>`（#586：同时按需起审官），格式见 worker-brief。
+- **流转器（#575 ⑥ 订正）**：交棒发到 **issue comment** 首行「完工」（issue 一直在，不绑 push）。工人发评论走 `node scripts/dao.mjs worker-done --pr <N> --body-file <文件>`（#586：同时按需起审官），格式见 worker-brief。#807 起本机 `flow.mjs` 已删，完工信号契约钉在 soldier-book / 本页 / `judgment.mjs`。
 
 向用户汇报工位状态前，先实刷 orca worktree ps 的 agents[].state 与 gh pr 状态——凭上次印象汇报会状态失真（2026-08-14 三次实测，issue #443）。
 
 监听三分诊：收到「活动消失 / 疑似交卷」通知后，第一动作是读屏分诊终态，不得直接按交卷入队——交卷→收卷；报错→原地重试一次（输入框残留补回车）；卡死（错误指纹两连同）→换人不救（拍板 2026-08-14，issue #442）。
 
-看门狗双通道：快乐路径（工人自报 `dao.mjs worker-done`）之外，事故路径的轮询侦测由 `scripts/watchdog.mjs` 承担（检测矩阵见 issue #442 + #500/#492/#471/#476，勿在此复制细节，只留指针）。**生产保活是帥位触发**（#693：随仓 SessionStart hook + board-hook 兜底调 `guard-keepalive.mjs --once`，机制 NEW-MACHINE §9b），不要靠人记得 Monitor 挂载，也不要再加一层看着 watchdog 的 AI。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长（spinner 重绘不算——#500 实证转圈挂死 27 分钟）、工作树 git 证据（空转）、还有没有活跃执行者（孤儿树）、flow 心跳是否在更新。看门狗还执行处置矩阵（指纹→动作）与任务卡命名校验。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
+事故路径的撞限流/卡弹窗探测由服务器 `scripts/agent-stall-watch.mjs`（#833，systemd timer）承担，不是本机 `watchdog.mjs`（#807 已删）。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长、工作树 git 证据、还有没有活跃执行者。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
 
 **delete-ack-layer（2026-08-23）**：Orca 假 stall 会在约 6s 吊销 dispatch capability，原生 `orca orchestration send --type worker_done` 交卷会失败、审官起不来。士兵交卷只走 `dao.mjs worker-done --pr`（仓内起审官，不依赖 Orca 结算）。看门狗 `missing-reviewer` 从只报警升级为 `--dispose-actions` 下自动 `reviewer-create`（有 linked PR、工位已下班、无审官子卡；Devin `agents=[]` 要有 dispatch 记账且卡 `in-review` 才算下班，避免开工第二步刚开 PR 就误起）。
 
@@ -88,7 +88,7 @@ test "$(git branch --show-current)" = master \
 2. 需要用户本人拍板的
 3. 它判断帅给的前提可能是错的——先问，别照做后发现（#511 当天两次错误前提都是照做后才发现的代价样本）
 
-派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.json 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）；帅没收到时靠看门狗兜底（`scripts/watchdog.mjs` 检测矩阵第 9 项已在 master）。
+派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.json 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）。
 
 **帅位无人值守（2026-08-21 用户拍板）**：合并动作全归帅——终审通过（diff 亲看、CI 绿、dao-check 红项均为既有治理项）后 marshal 直接 `pr merge --squash --delete-branch`，不再等用户手动合并（此前「用户手动合并」是制度默认，不是技术限制）。决策权分配不变：选型 / 体系类 / 花钱仍用户拍板，拍板后合并动作同样归帅执行，PR 正文留拍板原话与时间。Cursor 帅位与 CC 帅位同此规矩。首单 #709。
 
@@ -108,7 +108,7 @@ test "$(git branch --show-current)" = master \
 
 ## 派前探一针（#842）
 
-起 agent 前用**和 agent 完全相同的请求路径**流式探一次（8 token、判据「2xx + 收到真内容」，与 ai-gateway-stack 探针同款 DECISIONS §61）：绿放行、红换选型序下一位（同厂闸不放宽）、全红报帅停手（一个 agent 都不起，任务书/账本写清探了谁、各自什么码）。探不了的 provider（devin/cursor/grok Build 等无对齐端点）返回 `unscanned`，**不当绿**——没探到绿又没证据挂了才按现状起，watchdog 兜底。工人接线在 `scripts/lib/dispatch/launch.mjs`（`preflightWorkerSlate`）、审官在 `scripts/lib/dispatch/reviewer.mjs`（`preflightReviewer`），引擎在 `scripts/lib/preflight.mjs`。
+起 agent 前用**和 agent 完全相同的请求路径**流式探一次（8 token、判据「2xx + 收到真内容」，与 ai-gateway-stack 探针同款 DECISIONS §61）：绿放行、红换选型序下一位（同厂闸不放宽）、全红报帅停手（一个 agent 都不起，任务书/账本写清探了谁、各自什么码）。探不了的 provider（devin/cursor/grok Build 等无对齐端点）返回 `unscanned`，**不当绿**——没探到绿又没证据挂了才按现状起。工人接线在 `scripts/lib/dispatch/launch.mjs`（`preflightWorkerSlate`）、审官在 `scripts/lib/dispatch/reviewer.mjs`（`preflightReviewer`），引擎在 `scripts/lib/preflight.mjs`。
 
 - **配置**：`docs/dispatch-policy.json` 的 `preflight` 节（`enabled/timeoutMs/maxCandidates/useHealthTable`），dao-check ㉛ 校验取值范围。`--no-preflight` 单次跳过且记账。
 - **健康表 + 熔断表**（消费端只读，`scripts/lib/provider-health.mjs`）：健康表 `~/.dao/provider-health.json` 红 → 后置照探（红可能已恢复，不直接拦）、过期(>2×interval)/缺失 → unknown 注明「健康表没查成」不拦；熔断表 `~/.dao/provider-breaker.json`（可选，#843）`open` 未到冷却 → 直接拦 `availability:cooldown`，`half-open` → 后置探一针，缺失=无熔断。
@@ -131,7 +131,7 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 
 这批工人硬编码跳过审官路径：不调 `reviewer-create`，也不走 `worker-done` 结算。完工方式是各自往共享 issue 发 comment，帅事后逐张核。要进 git / 开 PR 的活不要走这条。
 
-先 `--dry-run` 看计划，再真派。信箱台不用派工顺手 ensure——它是 detached 进程，保活归 guard-keepalive（2026-08-23）。
+先 `--dry-run` 看计划，再真派。信箱台不用派工顺手 ensure——它是 detached 进程（2026-08-23）。
 
 ## 阻塞项不排队（#577）
 
@@ -161,7 +161,7 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 
 累计数据触发定位调整信号时，以策略 PR 提案形式摆给用户拍板。一个任务只做一次，不为测评搞对跑或重复实验——校准数据全部来自真实任务流。
 
-合并即归档：PR 合并后当场 `node scripts/dao.mjs worktree-rm --worktree <任务卡>`（一条命令整树收口，含子卡；子卡占用中会拒删并报是哪棵，不会半删）。#665：扳机是 GitHub MERGED（扫描器每轮收树），「可归档」只加速不是门；idle/done 不算占用，只有 working/waiting 才拒删。归档失败写 GitHub 评论（marshal），不靠信箱台自己 ack 的 escalation。守卫跑 `~/.dao/guard-mirror`（启动 fetch + reset --hard origin/master），落后自停。#593 起同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）。存量堆积用 `node scripts/dao.mjs run-gc`（默认只列，`--apply` 才关）；跨单收信用 `node scripts/dao.mjs inbox-collect`。分支已进 master，副本无保留价值——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443；递归删 #588）。已判定的孤儿树（无活跃执行者 + 关联单已关 / 无关联且静置超时）现在由 `scripts/watchdog.mjs` 自动 `worktree-rm --force` 兜底，帅不用再手清这类树；合并后立刻清树仍归帅日常动作，watchdog 不是唯一路径（#630）。
+合并即归档：PR 合并后当场 `node scripts/dao.mjs worktree-rm --worktree <任务卡>`（一条命令整树收口，含子卡；子卡占用中会拒删并报是哪棵，不会半删）。#665：扳机是 GitHub MERGED（扫描器每轮收树），「可归档」只加速不是门；idle/done 不算占用，只有 working/waiting 才拒删。归档失败写 GitHub 评论（marshal），不靠信箱台自己 ack 的 escalation。#593 起同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）。存量堆积用 `node scripts/dao.mjs run-gc`（默认只列，`--apply` 才关）；跨单收信用 `node scripts/dao.mjs inbox-collect`。分支已进 master，副本无保留价值——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443；递归删 #588）。合并后立刻清树仍归帅日常动作。
 
 收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `node scripts/dao.mjs worktree-rm --worktree <卡>`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
 
@@ -221,13 +221,13 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "短摘要：<目标 + 全部职责类别>" --model <id>
 ```
 
-`dispatch` 是 fire-and-forget + delete-all-ceremony（2026-08-23 两轮拍板，758-763 实证认账钟误杀能干活的工人）：**几秒钟派工，事前只留两件便宜又真挡事的**——消歧门（一次 label 读取，防派错 issue）+ 账本事前查重（10 分钟内同 issue 已有未结派工 → 拒派，防 #759 重复建卡；确要重派加 `--allow-dup`）。流程：消歧 label（~1s）→ 账本查重（~0s）→ 建工人卡 + git 身份（~2s）→ 起工人终端（~2s）→ task-create → `worker-start` 送任务书（<1s）→ 落 dispatch 记录（~0s）→ 返回「已派，未确认」。**删掉的事前层**：同厂闸（审官不存在时查空气，真闸挪到审官落地时）、每单环境自检（shell 探针）、同步看板（卡定界区 + master 全量重写）、gc 顺车（自动只读扫描留在 inbox-station ensure；手动清用 `run-gc`）。**不等 TUI 就绪、不等 worker-start 认账**：传输错误（终端死 / agent 未配置）同步报错回滚；`agent_prompt_stalled` 类认账假阴性当「已送未确认」（字已进终端，763 实证报 stalled 的工人其实在跑）。开工/死亡确认交 watchdog（非 spinner 真实内容 / git 证据 / token；ps 不报 agent 的工人有树级「吞注入」判据：有记账 + 活终端 + 无 PR + 屏面 3 轮不动 → 报）与 inbox.log 完工信。**不建审官卡**（#586：工人完工 `worker-done` 才起）。
+`dispatch` 是 fire-and-forget + delete-all-ceremony（2026-08-23 两轮拍板，758-763 实证认账钟误杀能干活的工人）：**几秒钟派工，事前只留两件便宜又真挡事的**——消歧门（一次 label 读取，防派错 issue）+ 账本事前查重（10 分钟内同 issue 已有未结派工 → 拒派，防 #759 重复建卡；确要重派加 `--allow-dup`）。流程：消歧 label（~1s）→ 账本查重（~0s）→ 建工人卡 + git 身份（~2s）→ 起工人终端（~2s）→ task-create → `worker-start` 送任务书（<1s）→ 落 dispatch 记录（~0s）→ 返回「已派，未确认」。**删掉的事前层**：同厂闸（审官不存在时查空气，真闸挪到审官落地时）、每单环境自检（shell 探针）、同步看板（卡定界区 + master 全量重写）、gc 顺车（自动只读扫描留在 inbox-station ensure；手动清用 `run-gc`）。**不等 TUI 就绪、不等 worker-start 认账**：传输错误（终端死 / agent 未配置）同步报错回滚；`agent_prompt_stalled` 类认账假阴性当「已送未确认」（字已进终端，763 实证报 stalled 的工人其实在跑）。开工/死亡确认交服务器 `agent-stall-watch`（#833）与 inbox.log 完工信。**不建审官卡**（#586：工人完工 `worker-done` 才起）。
 
 启动 argv **只听仓内** `docs/model-routing.toml` 的 `[providers.*].launch`。Orca Desktop `agentDefaultArgs` 只拿来比较：桌面多的建议补进仓内，少的只报不删桌面，**不得盖掉仓内旗标**，也不要手改 `%APPDATA%\\orca\\profiles\\local-default\\orca-data.json`（Orca 开着会回写冲掉）。
 
 裸 `orca orchestration worker-start` 仍被闸拦住；送字收在 `dao.mjs`（fire-and-forget 三分类：`classifyWorkerStartSend`）。
 
-**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`：没有审官卡才 `reviewer-create`；已有则复用，终端已关/dispatch 已结算也禁止再造。flow 不再在审官结算后自动 `reviewer-create`（#730：那是洞，不是自愈）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`：没有审官卡才 `reviewer-create`；已有则复用，终端已关/dispatch 已结算也禁止再造。工人完工后不再自动再造审官（#730：那是洞，不是自愈；#807 起本机 flow 已删）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人仍在约束载体内；给已有 PR 补审官走 `reviewer-attach`，不要再拼五步 + `raw`：
 

@@ -6,7 +6,7 @@
 // 的不关，若单已关而关它的 PR check 红 → `issue reopen`。没查成 ≠ 绿。
 // 判定细节在 scripts/lib/close-issue.mjs。
 //
-// 生产唯一入口：scripts/flow.mjs 合后钩 per-PR（closeIssueForPr）。
+// 生产入口：node scripts/close-issues.mjs --pr <N>（#807 起本机 flow.mjs 合后钩已删）。
 // 全量 sweep 制度：docs/decisions/2026-08-21-close-issue-from-zero.md
 //
 // 用法：
