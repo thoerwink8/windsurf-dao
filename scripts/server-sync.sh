@@ -21,6 +21,7 @@ if [ "$before" = "$after" ]; then
 fi
 echo "主树 ${before:0:7} → ${after:0:7}"
 if g diff --name-only "$before" "$after" | grep -qE "$BOT_PATHS"; then
-  systemctl restart feishu-triage
-  echo "飞书机器人代码有变，已重启让它吃到新码"
+  # try-restart：只重启「正在跑」的——故意停着的机器人不被拉起，单元缺失也不炸（审官疑问 2）
+  systemctl try-restart feishu-triage || echo "机器人重启没成（单元缺失或没权限），代码已更新、进程还跑旧码"
+  echo "飞书机器人代码有变，已请求重启让它吃到新码"
 fi

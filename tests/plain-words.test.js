@@ -20,6 +20,33 @@ describe('说人话闸', () => {
     for (const s of bad) assert.ok(plainViolations(s).length > 0, `该抓没抓：${s}`);
   });
 
+  it('每条规则一个独占样本（审官红1：注掉任一条规则这里必红，不许互相顶班）', async () => {
+    const { plainViolations } = await import(url('scripts/lib/plain-words.mjs'));
+    // 样本设计成只命中一条规则：断言 violations 恰好 1 条且 why 对得上。
+    const oneEach = [
+      ['pid=123', '进程号'],
+      ['cwd=/somewhere', '工作目录字段'],
+      ['comm=pi', '进程名字段'],
+      ['句柄 term_9d5d7780abcd', '终端句柄'],
+      ['commander-act.timer 停了', 'systemd 单元名'],
+      ['去 journalctl 看', 'systemd 命令/日志'],
+      ['它是 disabled 状态', '英文状态词'],
+      ['文件在 /home/orca/x 里', '文件路径'],
+      ['跑 node scripts/commander.mjs', '命令行'],
+      ['加 --force 参数', '命令行参数'],
+      ['HTTP 503 错误', 'HTTP 状态码'],
+      ['这是 worktree 的问题', '内部英文代号'],
+      ['pool 红了', '探针内部分类词'],
+      ['有 3 个 live agent', 'live agent'],
+    ];
+    for (const [sample, whyPart] of oneEach) {
+      const v = plainViolations(sample);
+      assert.ok(v.length >= 1, `该抓没抓：${sample}`);
+      assert.ok(v.some((x) => x.why.includes(whyPart)), `${sample} 抓到的是 ${JSON.stringify(v)}，缺「${whyPart}」`);
+      assert.equal(v.filter((x) => !x.why.includes(whyPart)).length, 0, `${sample} 不该命中别的规则：${JSON.stringify(v)}`);
+    }
+  });
+
   it('人话样本放行', async () => {
     const { plainViolations } = await import(url('scripts/lib/plain-words.mjs'));
     const good = [
@@ -74,7 +101,8 @@ describe('说人话闸', () => {
     assert.match(text, /先只提醒不换人/);
     assert.doesNotMatch(text, /term_|【/);
     assert.deepEqual(plainViolations(text), [], text);
-    assert.match(buildStallReport({ failed: 0, need: 2, items: [] }), /已按备选顺序换人/);
+    assert.match(buildStallReport({ failed: 0, need: 2, items: [{ name: 'a', action: 'switch', ok: true, from: 'x', to: 'y' }] }), /已按备选顺序换人/);
+    assert.match(buildStallReport({ failed: 0, need: 2, items: [{ name: 'a', action: 'alert', reason: 'r' }] }), /这次没换人/); // 审官疑问4：没换成事实别说换了
   });
 
   it('机器人人格文件带说人话规则与口吻参照', () => {

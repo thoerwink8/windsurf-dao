@@ -310,9 +310,12 @@ function main(argv = process.argv.slice(2)) {
 
 /** 总控群文案（说人话，用户 2026-09-04 拍板）：技术细节（签名/句柄/身份）留在 journal，群里只说谁、怎么了、我做了什么。 */
 function buildStallReport({ failed, need, items }) {
+  const switched = items.some((it) => it.action === 'switch' && it.ok);
   const head = failed
     ? `有 ${failed} 个卡住的工人换人没成功，需要你看一眼`
-    : `有工人连续 ${need} 轮卡在上游限流，我已按备选顺序换人`;
+    : switched
+      ? `有工人连续 ${need} 轮卡在上游限流，我已按备选顺序换人`
+      : `有工人连续 ${need} 轮卡在上游限流，这次没换人（原因见下）`;
   const body = items.map((it) => {
     const name = String(it.name || '某工人').replace(/【.*?】|term_[0-9a-f-]+/g, '').trim();
     if (it.action === 'switch') {
