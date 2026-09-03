@@ -14,6 +14,7 @@ import {
   classifyAccountsResult,
   classifyFeishuTriage,
   classifyAgentStallWatch,
+  classifyBotModelProbe,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
   parseTuiAgentDisplayNames,
@@ -315,5 +316,32 @@ test('server-check 判别力', async (t) => {
       });
       assert.equal(r.state, 'unknown');
     });
+  });
+});
+
+test('⑰ 机器人模型探针（2026-09-04 实咬：模型被砍后消费方零报警，机器人哑了一天）', async (t) => {
+  await t.test('200 且有真内容 → 绿', () => {
+    const r = classifyBotModelProbe({ probed: true, code: 200, gotContent: true, model: 'grok-4.6' });
+    assert.equal(r.state, 'ok');
+    assert.match(r.detail, /grok-4\.6/);
+  });
+
+  await t.test('503 model_not_found → 红，且点名「模型已被砍」', () => {
+    const r = classifyBotModelProbe({ probed: true, code: 503, gotContent: false, model: 'claude-5-fable-medium', reason: 'No available channel for model claude-5-fable-medium' });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /模型已被砍/);
+    assert.match(r.detail, /FEISHU_LLM_MODEL/);
+  });
+
+  await t.test('200 但零内容（只有心跳）→ 红，不当绿', () => {
+    const r = classifyBotModelProbe({ probed: true, code: 200, gotContent: false, model: 'grok-4.6' });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /零内容/);
+  });
+
+  await t.test('探不到（本机没 key / 没网关）→ unknown，不当绿也不当红', () => {
+    const r = classifyBotModelProbe({ probed: false, reason: '机器人 key 不在本机' });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没探成/);
   });
 });

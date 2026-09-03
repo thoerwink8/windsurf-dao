@@ -430,6 +430,37 @@ function checkFeishuCreds() {
   return { state: OK, detail: `凭据在（${file}）` };
 }
 
+// 机器人自己的模型还在不在（2026-09-04 实咬）：网关侧砍模型（ai-gateway-stack §68 砍了 253 条）后，
+// **消费方没有任何东西报警**——机器人对每条消息都只回「稍后重试」，日志里只有 inbound，哑了一整天。
+// 判据：拿机器人自己的 key 向网关发一针流式，200 且收到真内容才算通；503/model_not_found = 红。
+// 「指针配报警」：模型名是指向网关的指针，这就是那道会报警的检查。
+export function classifyBotModelProbe({ probed = false, reason = '', code = null, gotContent = false, model = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `机器人模型没探成：${reason || '未知'}` };
+  if (code === 200 && gotContent) return { state: OK, detail: `机器人模型 ${model} 通（网关有货）` };
+  if (code === 200) return { state: RED, detail: `机器人模型 ${model}：200 但零内容（网关只给了心跳）` };
+  return { state: RED, detail: `机器人模型 ${model} 不通（网关 ${code ?? '?'}${/model_not_found|No available channel/.test(reason) ? '，模型已被砍' : ''}）——改 FEISHU_LLM_MODEL 或把模型加回网关白名单` };
+}
+
+function probeBotModel() {
+  const base = process.env.ANTHROPIC_BASE_URL || '';
+  const model = process.env.FEISHU_LLM_MODEL || 'grok-4.6';
+  const keyFile = join(homedir(), '.mirasim', 'keys', 'feishu-triage.key');
+  if (!base) return { probed: false, reason: 'ANTHROPIC_BASE_URL 没设（本机不是编排机？）', model };
+  if (!existsSync(keyFile)) return { probed: false, reason: '机器人 key 不在本机', model };
+  let key = '';
+  try { key = readFileSync(keyFile, 'utf8').trim(); } catch (e) { return { probed: false, reason: `key 读不了：${e.message}`, model }; }
+  if (!key) return { probed: false, reason: 'key 为空', model };
+  const body = JSON.stringify({ model, stream: true, max_tokens: 16, messages: [{ role: 'user', content: 'ok' }] });
+  const r = run('curl', ['-s', '--max-time', '90', '-o', '-', '-w', '\n__HTTP__%{http_code}',
+    `${base}/v1/chat/completions`, '-H', 'content-type: application/json',
+    '-H', `authorization: Bearer ${key}`, '-d', body], { timeout: 100000 });
+  if (!r.probed) return { probed: false, reason: r.reason || 'curl 没跑成', model };
+  const out = String(r.stdout || '');
+  const code = Number((out.match(/__HTTP__(\d{3})/) || [])[1]) || null;
+  const gotContent = /"(?:content|delta)"\s*:/.test(out) && /"content"\s*:\s*"[^"]/.test(out);
+  return { probed: true, code, gotContent, model, reason: out.replace(/__HTTP__\d+/, '').slice(0, 200) };
+}
+
 function checkFeishuTriage() {
   const svc = classifyFeishuTriage(run('systemctl', ['is-active', 'feishu-triage.service'], { timeout: 10000 }));
   const creds = checkFeishuCreds();
@@ -439,6 +470,10 @@ function checkFeishuTriage() {
   if (!parts.length) return { state: OK, detail: '飞书适配器在跑 + 凭据文件在（600）' };
   const state = svc.state === RED || creds.state === RED ? RED : UNKNOWN;
   return { state, detail: parts.join('；') };
+}
+
+function checkBotModel() {
+  return classifyBotModelProbe(probeBotModel());
 }
 
 // —— ⑮ 撞限流探测 timer（#833）——
@@ -526,6 +561,7 @@ const CHECKS = [
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
+  ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
 ];
 
 function outPath() {
