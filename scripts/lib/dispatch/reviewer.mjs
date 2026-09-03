@@ -629,6 +629,66 @@ export function listComments({ kind, number, runGh } = {}) {
   }
 }
 
+/**
+ * #826：审官收口。不需要 Run id / task-id / dispatch-id。
+ * 帅手起的审官、或士兵已结算时 d= 为空，任务书没法走 notify --type worker_done。
+ * 本动词按 PR 号收口：PR 已合 + 审官已 approve 即合法下班。
+ */
+export function planReviewerDone({ pr, prState, reviews } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n || !/^\d+$/.test(n)) {
+    return { ok: false, unscanned: false, error: 'reviewer-done 要 --pr' };
+  }
+  if (prState == null) {
+    return { ok: false, unscanned: true, error: `PR #${n} state 没查成（不许当已合）` };
+  }
+  if (prState.ok !== true) {
+    return {
+      ok: false,
+      unscanned: !!prState.unscanned,
+      error: prState.error || `PR #${n} state 没查成`,
+    };
+  }
+  const state = String(prState.state || '').toUpperCase();
+  if (state !== 'MERGED') {
+    return {
+      ok: false,
+      unscanned: false,
+      error: `PR #${n} 实际是 ${prState.state}，不是 MERGED（reviewer-done 只收已合的单）`,
+    };
+  }
+  if (reviews == null) {
+    return { ok: false, unscanned: true, error: `PR #${n} reviews 没查成（不许当已 approve）` };
+  }
+  if (reviews.ok !== true) {
+    return {
+      ok: false,
+      unscanned: !!reviews.unscanned,
+      error: reviews.error || `PR #${n} reviews 没查成`,
+    };
+  }
+  const list = Array.isArray(reviews.reviews) ? reviews.reviews : [];
+  const approved = list.some((r) => {
+    const s = String(r?.state || r?.verdict || '').toUpperCase();
+    return s === 'APPROVED' || s === 'APPROVE';
+  });
+  if (!approved) {
+    return {
+      ok: false,
+      unscanned: false,
+      error: `PR #${n} 已合但没有 APPROVED review（reviewer-done 不伪造判定）`,
+    };
+  }
+  return {
+    ok: true,
+    pr: n,
+    merged: true,
+    approved: true,
+    needsRunId: false,
+    reason: 'PR 已合并且审官已 approve，不需要 Run id',
+  };
+}
+
 /** 幂等发评论：同款已发过就跳过。拉取没查成 → ok:false unscanned（不瞎发也不瞎跳）。 */
 export function postCommentOnce({ kind, number, body, runGh } = {}) {
   const listed = listComments({ kind, number, runGh });

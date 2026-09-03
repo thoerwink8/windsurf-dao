@@ -304,6 +304,85 @@ export function probeRecipient(target, orca) {
 
 /** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。
  * to_handle / to_dispatch 都可能是收件人落点（send --to dispatch:<id> 的消息字段形态以当时返回为准）。 */
+/** #826：该树「派工协调（勿关）」哑终端。title 是 create --title 写进去的，不是 Linux bash 窗标题。 */
+export const COORDINATOR_TITLE = '派工协调（勿关）';
+
+function terminalLooksLive(t) {
+  if (!t || !t.handle) return false;
+  if (t.connected === false || t.writable === false || t.orphaned === true) return false;
+  const st = String(t.status || t.state || '').toLowerCase();
+  if (!st) return true;
+  return !/^(exited|closed|stopped|stale|dead)$/.test(st);
+}
+
+export function isCoordinatorTerminal(term) {
+  if (!term || typeof term !== 'object') return false;
+  const title = String(term.title || term.name || term.displayName || '');
+  return title.includes('派工协调') && title.includes('勿关');
+}
+
+function worktreeIdMatchesHandle(termWt, want) {
+  const a = String(termWt || '');
+  const b = String(want || '');
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`::${b}`) || a.endsWith(b) || b.endsWith(`::${a}`) || b.endsWith(a);
+}
+
+/** 从 terminal list 取该树协调终端 handle。没查成 / 扫完没有 必须分开。 */
+export function pickCoordinatorHandle(terminals, { worktreeId } = {}) {
+  if (terminals == null) {
+    return { ok: false, unscanned: true, handle: null, error: 'terminal list 没拿到（没查成，不许猜协调终端）' };
+  }
+  if (!Array.isArray(terminals)) {
+    return { ok: false, unscanned: true, handle: null, error: 'terminal list 不是数组（没查成）' };
+  }
+  const want = String(worktreeId || '').trim();
+  const inTree = want
+    ? terminals.filter(t => t && worktreeIdMatchesHandle(t.worktreeId, want))
+    : terminals.filter(Boolean);
+  const hits = inTree.filter(isCoordinatorTerminal);
+  if (hits.length === 0) {
+    return { ok: false, unscanned: false, handle: null, error: '该树没有「派工协调（勿关）」终端' };
+  }
+  const live = hits.find(terminalLooksLive);
+  const pick = live || hits[0];
+  return { ok: true, handle: pick.handle, title: pick.title || pick.name || COORDINATOR_TITLE, live: !!live };
+}
+
+/**
+ * #826 发信人 handle：显式 --from > 本跳刚建的协调终端 > 盘面该树「派工协调（勿关）」。
+ * 不读 ORCA_TERMINAL_HANDLE（合并本单时那块垫片退役）。
+ */
+export function resolveIdentitySender({ explicitFrom, fallbackHandle, terminals, worktreeId } = {}) {
+  const from = String(explicitFrom || '').trim();
+  if (from) return { ok: true, from, source: 'flag' };
+  const fb = String(fallbackHandle || '').trim();
+  if (fb) return { ok: true, from: fb, source: 'created-coord' };
+  const picked = pickCoordinatorHandle(terminals, { worktreeId });
+  if (!picked.ok) {
+    return { ok: false, unscanned: !!picked.unscanned, error: picked.error, handle: null };
+  }
+  return { ok: true, from: picked.handle, source: 'coordinator', live: picked.live };
+}
+
+/**
+ * #826：身份消息失败降级为非致命。树与终端保留，只记红项并提示 notify --from 补发。
+ * 古路（整树 rollback）代价远大于失败本身。
+ */
+export function planIdentityKeep({ identityOk, identityError } = {}) {
+  if (identityOk) {
+    return { ok: true, keep: true, rollback: false, identityFailed: false };
+  }
+  const why = String(identityError || '身份消息发失败').trim();
+  return {
+    ok: true,
+    keep: true,
+    rollback: false,
+    identityFailed: true,
+    warning: `审官身份消息没送到士兵收件箱（树与终端保留，不回滚）：${why}。补发：node scripts/dao.mjs notify --from <协调终端> --to dispatch:<士兵 dispatch> --subject "审官身份：…"`,
+  };
+}
+
 export function extractSentMessage(json) {
   const m = json?.result?.message || json?.message || null;
   if (!m || !m.id) return null;

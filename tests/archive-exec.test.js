@@ -471,6 +471,20 @@ describe('archive-exec', () => {
       assert.ok(refused.results[0].result === 'refused' && io.calls.rm.length === 0 && /working/.test(refused.results[0].reason), 'working 拒删  →  ' + JSON.stringify(refused.results[0]));
     });
 
+    const waivedIo = recorder();
+    waivedIo.state.prQuery = { ok: true, state: 'MERGED' };
+    const waived = S.processMergedScan({
+      worktrees: busy,
+      queryPrState: waivedIo.queryPrState.bind(waivedIo),
+      queryPrReviews: () => ({ ok: true, reviews: [{ state: 'APPROVED' }] }),
+      removeWorktree: waivedIo.removeWorktree.bind(waivedIo),
+    });
+    await t.test('#826 MERGED+APPROVED 占用放行',
+      () => {
+        assert.ok(waived.results[0].removed === true && waivedIo.calls.rm.join(',') === 'p1',
+          '#826 占用豁免  →  ' + JSON.stringify(waived.results[0]));
+      });
+
     const waiting = [
       wt({ id: 'master', name: 'master', main: true }),
       wt({ id: 'p1', name: 'PR-#12 工人', pr: 12, agents: [{ state: 'waiting' }] }),
