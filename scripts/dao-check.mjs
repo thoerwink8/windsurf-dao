@@ -81,7 +81,7 @@
 //    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
 // ㉛ 派前探策略（#842）：docs/dispatch-policy.json 的 preflight 取值范围（enabled/useHealthTable 布尔、
 //    timeoutMs 500~60000、maxCandidates 整数 1~12）。检查器自持解析，不 import preflight.mjs；
-//    红/绿/空夹具验判别力；文件不在 / JSON 坏 / 缺 preflight 节 = 没查成。
+//    红/绿/空夹具验判别力；文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -1485,20 +1485,20 @@ function checkDispatchPolicyLive() {
   if (r.unscanned) {
     fail(
       'dispatch-policy.json 没查成',
-      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight 节 = 没查成，不是过',
+      '恢复 docs/dispatch-policy.json；文件不在 / JSON 坏了 / 缺 preflight/hubChat 节 = 没查成，不是过',
       (r.problems || []).join('；'),
     );
     return;
   }
   if (!r.ok) {
     fail(
-      `dispatch-policy.json preflight 取值越界 ${(r.problems || []).length} 处`,
-      'enabled/useHealthTable 布尔；timeoutMs 500~60000；maxCandidates 整数 1~12',
+      `dispatch-policy.json preflight/hubChat 取值越界 ${(r.problems || []).length} 处`,
+      'enabled/useHealthTable 布尔；timeoutMs 500~60000；maxCandidates 整数 1~12；hubChat：enabled 布尔、allowedActions ⊆ situation/decision/guide、upstream.redThreshold 1~99、decisions/digest 布尔',
       (r.problems || []).join('；'),
     );
     return;
   }
-  green('dispatch-policy.json preflight 取值合范围');
+  green('dispatch-policy.json preflight/hubChat 取值合范围');
 }
 
 function checkReleasePolicySamples() {

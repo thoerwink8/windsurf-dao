@@ -1,13 +1,20 @@
-// scripts/lib/dispatch-policy-check.mjs —— docs/dispatch-policy.json 的 preflight 节校验（#842）
+// scripts/lib/dispatch-policy-check.mjs —— docs/dispatch-policy.json 的 preflight（#842）+ hubChat（#852）节校验
 //
-// dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
-// 取值范围：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
-// 三态可分：文件不在 / 坏 JSON / 缺 preflight 节 = 没查成（unscanned）；越界 = 红；齐且合范围 = 绿。
+// dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs / feishu-triage.mjs**（消费方），
+// 否则自己查自己查不出错。
+// 取值范围：
+//   preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
+//   hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
+//   upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
+// 三态可分：文件不在 / 坏 JSON / 缺 preflight 或 hubChat 节 = 没查成（unscanned）；越界 = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const POLICY_REL = join('docs', 'dispatch-policy.json');
+
+/** hubChat.allowedActions 只认这三个动词（#852 后台管理接线：盘面只读 / 拍板落单 / 指路）。 */
+export const HUB_CHAT_ACTIONS = ['situation', 'decision', 'guide'];
 
 /** 自持校验（不复用消费方解析）。返回 { ok, unscanned, problems }。 */
 export function inspectDispatchPolicySource(src) {
@@ -20,13 +27,34 @@ export function inspectDispatchPolicySource(src) {
   if (!doc || typeof doc !== 'object') return { ok: false, unscanned: true, problems: ['顶层不是对象'] };
   const pf = doc.preflight;
   if (!pf || typeof pf !== 'object') return { ok: false, unscanned: true, problems: ['缺 preflight 节'] };
+  const hc = doc.hubChat;
+  if (!hc || typeof hc !== 'object') return { ok: false, unscanned: true, problems: ['缺 hubChat 节（#852）'] };
   const problems = [];
-  if (typeof pf.enabled !== 'boolean') problems.push('enabled 必须 true/false');
-  if (typeof pf.useHealthTable !== 'boolean') problems.push('useHealthTable 必须 true/false');
+  if (typeof pf.enabled !== 'boolean') problems.push('preflight.enabled 必须 true/false');
+  if (typeof pf.useHealthTable !== 'boolean') problems.push('preflight.useHealthTable 必须 true/false');
   const t = Number(pf.timeoutMs);
-  if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
+  if (!Number.isFinite(t) || t < 500 || t > 60000) problems.push(`preflight.timeoutMs 越界（要 500~60000，实际 ${pf.timeoutMs}）`);
   const n = pf.maxCandidates;
-  if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  if (!Number.isInteger(n) || n < 1 || n > 12) problems.push(`preflight.maxCandidates 越界（要整数 1~12，实际 ${pf.maxCandidates}）`);
+  // hubChat（#852）
+  if (typeof hc.enabled !== 'boolean') problems.push('hubChat.enabled 必须 true/false');
+  if (!Array.isArray(hc.allowedActions) || hc.allowedActions.length === 0) {
+    problems.push('hubChat.allowedActions 必须是非空数组');
+  } else {
+    for (const a of hc.allowedActions) {
+      if (!HUB_CHAT_ACTIONS.includes(a)) problems.push(`hubChat.allowedActions 不认识：${a}（只认 ${HUB_CHAT_ACTIONS.join('/')}）`);
+    }
+  }
+  const up = hc.upstream;
+  if (!up || typeof up !== 'object') {
+    problems.push('hubChat.upstream 必须是对象 {redThreshold,decisions,digest}');
+  } else {
+    if (!Number.isInteger(up.redThreshold) || up.redThreshold < 1 || up.redThreshold > 99) {
+      problems.push(`hubChat.upstream.redThreshold 越界（要整数 1~99，实际 ${up.redThreshold}）`);
+    }
+    if (typeof up.decisions !== 'boolean') problems.push('hubChat.upstream.decisions 必须 true/false');
+    if (typeof up.digest !== 'boolean') problems.push('hubChat.upstream.digest 必须 true/false');
+  }
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 

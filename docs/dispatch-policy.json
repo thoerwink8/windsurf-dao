@@ -1,10 +1,19 @@
 {
   "updated": "2026-09-03",
-  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位。真相源，改动后 dao-check 校验取值范围。",
+  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位。hubChat（#852 总帅入口）：总控群对话开关与允许动作（situation=盘面只读问答 / decision=拍板写回对应单 / guide=新需求指路项目群）；upstream 是三类上行的分级（redThreshold=红项达到几个才上行总控、decisions=待拍板上行、digest=定期摘要可关，总控安静=一切正常）。真相源，改动后 dao-check 校验取值范围。",
   "preflight": {
     "enabled": true,
     "timeoutMs": 5000,
     "maxCandidates": 4,
     "useHealthTable": true
+  },
+  "hubChat": {
+    "enabled": true,
+    "allowedActions": ["situation", "decision", "guide"],
+    "upstream": {
+      "redThreshold": 2,
+      "decisions": true,
+      "digest": false
+    }
   }
 }

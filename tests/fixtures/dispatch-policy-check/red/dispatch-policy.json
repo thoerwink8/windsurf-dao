@@ -1,1 +1,1 @@
-{ "preflight": { "enabled": "yes", "timeoutMs": 999999, "maxCandidates": 0, "useHealthTable": true } }
+{ "preflight": { "enabled": "yes", "timeoutMs": 999999, "maxCandidates": 0, "useHealthTable": true }, "hubChat": { "enabled": "yes", "allowedActions": ["hack"], "upstream": { "redThreshold": 0, "decisions": "yes", "digest": null } } }
