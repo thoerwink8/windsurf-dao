@@ -6,6 +6,7 @@
 // 审官 dispatch 已结算：报帅，不许自动 reviewer-create / 换厂再造。
 
 import { prNumberFromWorktree } from '../card-identity.mjs';
+import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
 
 export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
@@ -177,6 +178,94 @@ export function gateReviewerCreate({ pr, parentId, worktrees, workers, terminals
     closedWorktrees: withHandles.map(c => c.worktreeId),
     error: REFUSE_EXISTING_REVIEWER,
     reason: '已有所以拒绝新建',
+  };
+}
+
+/**
+ * #815：reviewer-attach 复用旧审官前必须 worker-read 核活性。
+ * 不活或已结算 → 新建树；没查成不许猜。
+ * workerRead 缺省 = 先返回 probe（调用方去 worker-read 再喂回来）。
+ */
+export function planReviewerAttachReuse({ cards, workers, workerRead } = {}) {
+  if (cards == null) {
+    return { ok: false, unscanned: true, action: 'unscanned', error: '审官卡列表没拿到（没查成，不许猜活性）' };
+  }
+  if (!cards.ok) {
+    return {
+      ok: false,
+      unscanned: cards.unscanned === true,
+      action: 'unscanned',
+      error: cards.error || '审官卡没查成',
+    };
+  }
+  if (!cards.count) {
+    return { ok: true, action: 'create', reason: '扫完没有该 PR 的审官树，新建' };
+  }
+  if (workers == null || !Array.isArray(workers)) {
+    return { ok: false, unscanned: true, action: 'unscanned', error: 'worker-list 没查成，不许猜审官 dispatch' };
+  }
+  const pick = [...cards.cards].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+  const hits = workers.filter(w => worktreeIdMatches(w?.resource?.worktreeId, pick.worktreeId));
+  const dispatchId = hits[0]?.dispatchId || hits[0]?.dispatch_id || null;
+  if (!dispatchId) {
+    return {
+      ok: true,
+      action: 'create',
+      reason: '已有审官树但没有 dispatch，新建树',
+      worktreeId: pick.worktreeId,
+    };
+  }
+  if (workerRead == null) {
+    return { ok: true, action: 'probe', dispatchId, worktreeId: pick.worktreeId };
+  }
+  if (workerRead.ok === false && (workerRead.unscanned || workerRead.json == null)) {
+    return {
+      ok: false,
+      unscanned: true,
+      action: 'unscanned',
+      dispatchId,
+      error: `worker-read 没查成，不许猜活性：${workerRead.error || ''}`.trim(),
+    };
+  }
+  const json = workerRead.json || workerRead;
+  const settlement = readDispatchSettlement(json);
+  if (settlement.unscanned) {
+    return { ok: false, unscanned: true, action: 'unscanned', dispatchId, error: settlement.error };
+  }
+  if (settlement.settled) {
+    return {
+      ok: true,
+      action: 'create',
+      reason: '旧审官已结算，新建树',
+      dispatchId,
+      worktreeId: pick.worktreeId,
+    };
+  }
+  const live = isLiveDispatchRecipient({
+    workerState: json?.result?.worker?.state,
+    dispatchStatus: json?.result?.dispatch?.status,
+    lastFailure: json?.result?.dispatch?.last_failure,
+  });
+  const handle = extractSoldierTerminal(json);
+  const term = json?.result?.terminal;
+  const termDead = !!(term && (term.connected === false || term.writable === false || term.orphaned === true));
+  if (!live || !handle || termDead) {
+    return {
+      ok: true,
+      action: 'create',
+      reason: '旧审官不活，新建树',
+      dispatchId,
+      worktreeId: pick.worktreeId,
+      handle: handle || null,
+    };
+  }
+  return {
+    ok: true,
+    action: 'reuse',
+    reason: 'worker-read 核活性：旧审官仍活，复用终端',
+    dispatchId,
+    worktreeId: pick.worktreeId,
+    handle,
   };
 }
 

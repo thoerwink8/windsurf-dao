@@ -111,7 +111,11 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 
 缺身份 = 未结算。错 pane / 落库但 Dispatch 仍 dispatched = 未结算。
 
-**红项之后也结算这一跳**（#552）：红项 notify 士兵送达后，同样发上面这条 `worker_done`。士兵还活着；下一轮复审是士兵 `worker-done` 用 `worker-start --terminal` 开你的新 Dispatch 注入你。不要 `check --wait` 等复审——你自己这跳已经下班，信箱会变 inspect-only。
+**红项之后也结算这一跳**（#552）：红项 notify 士兵送达后，同样发上面这条 `worker_done`。士兵还活着。不要 `check --wait` 等复审——你自己这跳已经下班，信箱会变 inspect-only。
+
+## 复审轮走队列
+
+返工完成后士兵仍调 `worker-done`（首行「返工完成」）。起审官失败（含士兵 dispatch 里不能再 worker-start 的深度限制）时，`worker-done` 把待办写入 `_flow/queue/review-pending/<pr>.json`（含 head、工人树、reviewer），不靠人手 `reviewer-attach`。指挥官 / automations 调 `dao.mjs review-pending-drain` 逐条 `reviewer-attach --skip-wait`。不要自己再派一张审官，也不要在已结算的审官 dispatch 上等复审。
 
 **禁止**往**自己**已结算的 dispatch 发工作指令。士兵侧 `--to` 仍是注入参数里那个还活着的 id，不要改打别的地址、不要开下一跳。人走了才升级给帅。
 

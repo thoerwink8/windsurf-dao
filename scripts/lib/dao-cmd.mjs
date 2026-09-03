@@ -727,12 +727,12 @@ export {
 import {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
-  parseDiffNameStatus, runGh,
+  parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';
 export {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
-  parseDiffNameStatus, runGh,
+  parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';
 
 export function envProbeWorktree(cwd) {
@@ -824,24 +824,24 @@ import {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
 import {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
-  parseDispatchComment, progressDispatchComment,
+  parseDispatchComment, progressDispatchComment, planStampIssueLabels,
 } from './dispatch/card.mjs';
 export {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
-  parseDispatchComment, progressDispatchComment,
+  parseDispatchComment, progressDispatchComment, planStampIssueLabels,
 } from './dispatch/card.mjs';
 import {
   DISPATCH_TEMPLATE_DIR, listDispatchTemplates, readDispatchTemplate, renderDispatchTemplate,
@@ -873,15 +873,21 @@ import {
   extractRunId, classifyNotifyTarget, extractSoldierTerminal, extractDispatchRunId,
   extractDispatchWorktreeId, isSoldierReworkHop, isCompletedDispatchProbe,
   isLiveDispatchRecipient, probeRecipient, extractSentMessage, findInboxMessage,
-  deliverMessage, settleDispatch,
+  deliverMessage, settleDispatch, pickDispatchAgentTerminal, resolveSendTarget,
 } from './dispatch/deliver.mjs';
 export {
   planWorkerDoneSend, readDispatchSettlement, isWrongPaneWorkerDoneError, planCallerRun,
   extractRunId, classifyNotifyTarget, extractSoldierTerminal, extractDispatchRunId,
   extractDispatchWorktreeId, isSoldierReworkHop, isCompletedDispatchProbe,
   isLiveDispatchRecipient, probeRecipient, extractSentMessage, findInboxMessage,
-  deliverMessage, settleDispatch,
+  deliverMessage, settleDispatch, pickDispatchAgentTerminal, resolveSendTarget,
 } from './dispatch/deliver.mjs';
+
+export {
+  REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
+  buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
+  planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+} from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
 
@@ -897,7 +903,8 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
+  'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
+  'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
 ];
@@ -934,9 +941,10 @@ export const FLAGS_BY_VERB = {
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--dry-run', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--dry-run', '--json', '--help', '-h',
   ]),
-  send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
     '--task-id', '--dispatch-id', '--dispatch-capability', '--from',
@@ -1032,7 +1040,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait]
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
                   # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
@@ -1040,6 +1048,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
                   #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
+                  # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
+                  # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
+  review-pending-drain [--pr <N>]
+                  # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
+                  # worker-done 起审官失败时写队列；扫完 0 条是空转成功，目录读不了才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -1063,8 +1076,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色>) [--confirm] [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
-  send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
+  send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]
                   # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
+                  # #802/#815：--dispatch 用 worker-read 的 terminal.handle（真 agent），不要信派工单 workerHandle（常是空壳）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
                   [--task-id <id> --dispatch-id <id> --from <handle> --dispatch-capability <token>]
                   # 普通通知：dispatch: 活人直接投递。hop 审官→士兵 打进还活着的 id；已完工 fail-visible，不开下一跳救人（#677）

@@ -123,6 +123,58 @@ export function extractSoldierTerminal(showJson) {
     || null;
 }
 
+/**
+ * #802/#815：派工单 workerHandle 常是空壳，活人是 worker-read 的 terminal.handle。
+ * 没读成和「读到了但没有 handle」必须分开。
+ */
+export function pickDispatchAgentTerminal({ workerHandle, workerReadJson } = {}) {
+  if (workerReadJson == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      workerHandle: workerHandle || null,
+      agentTerminalHandle: null,
+      error: 'worker-read 没拿到（没查成，不许把空壳 workerHandle 当活人）',
+    };
+  }
+  const agentTerminalHandle = extractSoldierTerminal(workerReadJson);
+  if (!agentTerminalHandle) {
+    return {
+      ok: false,
+      workerHandle: workerHandle || null,
+      agentTerminalHandle: null,
+      error: 'worker-read 没有 terminal.handle（空壳）',
+    };
+  }
+  const shell = workerHandle ? String(workerHandle) : null;
+  return {
+    ok: true,
+    agentTerminalHandle,
+    workerHandle: shell,
+    mismatch: !!(shell && shell !== agentTerminalHandle),
+  };
+}
+
+/** send：给了 --dispatch 就用 worker-read 的真终端；只给 --terminal 走旗标。 */
+export function resolveSendTarget({ terminal, dispatch, workerReadJson } = {}) {
+  const d = dispatch == null ? '' : String(dispatch).trim();
+  const t = terminal == null ? '' : String(terminal).trim();
+  if (d) {
+    const picked = pickDispatchAgentTerminal({ workerHandle: t || null, workerReadJson });
+    if (!picked.ok) return picked;
+    return {
+      ok: true,
+      terminal: picked.agentTerminalHandle,
+      source: 'dispatch',
+      dispatch: d,
+      mismatch: picked.mismatch,
+      workerHandle: picked.workerHandle,
+    };
+  }
+  if (t) return { ok: true, terminal: t, source: 'flag' };
+  return { ok: false, error: 'send 要 --terminal 或 --dispatch' };
+}
+
 export function extractDispatchRunId(showJson) {
   return showJson?.result?.dispatch?.run_id || null;
 }

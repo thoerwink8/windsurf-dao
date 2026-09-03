@@ -174,7 +174,83 @@ export function trialMergeMaster({ cwd, runGit } = {}) {
   };
 }
 
-export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {}) {
+function oidsMatch(a, b) {
+  const x = String(a || '').toLowerCase();
+  const y = String(b || '').toLowerCase();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  return (x.length >= 7 && y.startsWith(x)) || (y.length >= 7 && x.startsWith(y));
+}
+
+/** 建审官树前：fetch origin/<分支>，PR head 的真相在远端不在本地（#810/#815）。 */
+export function originRefForBranch(branch) {
+  const raw = String(branch || '').trim();
+  if (!raw) return { ok: false, error: '没给分支名' };
+  const b = raw.replace(/^refs\/heads\//, '').replace(/^origin\//, '');
+  if (!b) return { ok: false, error: '没给分支名' };
+  return { ok: true, branch: b, ref: `origin/${b}` };
+}
+
+export function prepareReviewerOriginRef({ branch, expectedOid, cwd, runGit } = {}) {
+  const parsed = originRefForBranch(branch);
+  if (!parsed.ok) return parsed;
+  if (!cwd && typeof runGit !== 'function') {
+    return { ok: false, unscanned: true, error: 'prepareReviewerOriginRef 没给工作区（没查成）' };
+  }
+  const run = (args) => gitRun(cwd, args, runGit);
+  const fetch = run(['fetch', 'origin', parsed.branch]);
+  if (!fetch.ok) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: `git fetch origin ${parsed.branch} 没查成：${fetch.error}`,
+    };
+  }
+  const rev = run(['rev-parse', parsed.ref]);
+  if (!rev.ok) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: `${parsed.ref} 没查成：${rev.error}`,
+    };
+  }
+  const originOid = String(rev.out || '').trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(originOid)) {
+    return { ok: false, unscanned: true, error: `${parsed.ref} 不是 oid：${originOid.slice(0, 80)}` };
+  }
+  const want = expectedOid ? String(expectedOid).trim() : null;
+  if (want && !oidsMatch(originOid, want)) {
+    return {
+      ok: false,
+      error: `本地分支落后：${parsed.ref} ${originOid} ≠ PR head ${want}`,
+      originOid,
+      expectedOid: want,
+      baseBranch: parsed.ref,
+      localBehind: true,
+    };
+  }
+  return {
+    ok: true,
+    branch: parsed.branch,
+    baseBranch: parsed.ref,
+    originOid,
+    expectedOid: want,
+  };
+}
+
+/** 已有审官树：按 origin/<分支> 检出（#810 接手后本地指针停在旧提交）。 */
+export function checkoutOriginRef({ cwd, branch, expectedOid, runGit } = {}) {
+  const prep = prepareReviewerOriginRef({ branch, expectedOid, cwd, runGit });
+  if (!prep.ok) return prep;
+  const run = (args) => gitRun(cwd, args, runGit);
+  const co = run(['checkout', '-B', prep.branch, prep.baseBranch]);
+  if (!co.ok) {
+    return { ok: false, error: `按 ${prep.baseBranch} 检出失败：${co.error}`, ...prep };
+  }
+  return prep;
+}
+
+export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid, originOid } = {}) {
   const rev = gitHeadOid(reviewerPath);
   if (!rev.ok) return { ok: false, error: `审官树 HEAD 没查成：${rev.error}` };
   let want = expectedOid || null;
@@ -183,15 +259,21 @@ export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {
     if (!w.ok) return { ok: false, error: `工人树 HEAD 没查成：${w.error}` };
     want = w.oid;
   }
-  if (rev.oid !== want) {
+  if (!oidsMatch(rev.oid, want)) {
+    const origin = originOid ? String(originOid) : '';
+    const localBehind = !!(origin && (!oidsMatch(origin, want) || !oidsMatch(rev.oid, origin)));
     return {
       ok: false,
-      error: `审官树 HEAD ${rev.oid} ≠ 期望 ${want}（在审空气）`,
+      error: localBehind
+        ? `审官树 HEAD ${rev.oid} ≠ 期望 ${want}（本地分支落后）`
+        : `审官树 HEAD ${rev.oid} ≠ 期望 ${want}（在审空气）`,
       reviewerHead: rev.oid,
       expectedOid: want,
+      originOid: origin || null,
+      localBehind,
     };
   }
-  return { ok: true, reviewerHead: rev.oid, expectedOid: want };
+  return { ok: true, reviewerHead: rev.oid, expectedOid: want, originOid: originOid || null };
 }
 
 export function verifyReviewerFiles({ reviewerPath, files } = {}) {
