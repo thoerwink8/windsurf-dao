@@ -164,7 +164,11 @@ export function shouldRelease({
     }
   }
 
-  return { release: reasons.length > 0, reasons, mergedSinceTag, minMerged, weekday: wd };
+  const release = reasons.length > 0;
+  if (!release) {
+    reasons.push(`未到发布点：攒了 ${mergedSinceTag}/${minMerged} 个、且本周期已过发布日（每周 ${wd}）`);
+  }
+  return { release, reasons, mergedSinceTag, minMerged, weekday: wd };
 }
 
 /**
