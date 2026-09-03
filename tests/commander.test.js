@@ -15,6 +15,10 @@ function baseSituation(over = {}) {
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
     wakeCounts: {},
+    // 旧夹具不测模型闸：默认关 requireModelInRouting，#849 新测显式打开。
+    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
+    healthRedModels: [],
     ...over,
   };
 }
@@ -282,6 +286,92 @@ describe('decide：空态势静默', () => {
     const { decide } = await CORE;
     const r = decide(baseSituation());
     assert.deepEqual(kinds(r), ['noop']);
+  });
+});
+
+function readyIssue(n, model = 'grok-4.6') {
+  return {
+    number: n, title: `单 ${n}`, labels: [
+      { name: '已消歧' }, { name: `model/${model}` }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+}
+
+describe('decide：单轮派单上限（#849）', () => {
+  it('15 张可派 → 一轮只派 maxDispatchPerRound 张，其余排队不 escalate', async () => {
+    const { decide } = await CORE;
+    const issues = Array.from({ length: 15 }, (_, i) => readyIssue(1000 + i));
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs: [] },
+      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 2, `应只派 2 张，实际 ${d.length}`);
+    assert.deepEqual(d.map((a) => a.issue), [1000, 1001]);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason !== 'unscanned').length, 0, '超上限不 escalate');
+  });
+
+  it('上限默认 2：不传 commanderPolicy 也截断', async () => {
+    const { decide } = await CORE;
+    const issues = Array.from({ length: 5 }, (_, i) => readyIssue(1100 + i));
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs: [] },
+      commanderPolicy: { requireModelInRouting: false },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 2);
+  });
+});
+
+describe('decide：派前模型校验（#849）', () => {
+  it('model 标签不在当前选型 → escalate 不派', async () => {
+    const { decide } = await CORE;
+    const issue = readyIssue(1200, 'devin-deepseek-v4-flash-max');
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash'],
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '退役模型绝不派');
+    const e = byKind(r, 'escalate');
+    assert.ok(e.some((a) => a.reason === 'model-not-in-routing' && a.issue === 1200));
+  });
+
+  it('健康表 red → escalate 不派', async () => {
+    const { decide } = await CORE;
+    const issue = readyIssue(1201, 'deepseek-v4-flash');
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash'],
+      healthRedModels: ['deepseek-v4-flash'],
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '健康表红绝不派');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'model-health-red' && a.issue === 1201));
+  });
+
+  it('选型没查成（routingModels 不是数组）→ fail-closed 不派', async () => {
+    const { decide } = await CORE;
+    const issue = readyIssue(1202);
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      routingModels: null,
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0);
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'model-routing-unscanned'));
+  });
+
+  it('在选型且非红 → 照常派', async () => {
+    const { decide } = await CORE;
+    const issue = readyIssue(1203);
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      routingModels: ['grok-4.6'],
+      healthRedModels: [],
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 1);
+    assert.equal(byKind(r, 'dispatch')[0].issue, 1203);
   });
 });
 

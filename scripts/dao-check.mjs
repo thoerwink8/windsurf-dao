@@ -79,8 +79,9 @@
 // ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
 //    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
 //    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
-// ㉛ 派前探策略（#842）：docs/dispatch-policy.json 的 preflight 取值范围（enabled/useHealthTable 布尔、
-//    timeoutMs 500~60000、maxCandidates 整数 1~12）。检查器自持解析，不 import preflight.mjs；
+// ㉛ 派前探策略（#842/#849）：docs/dispatch-policy.json 的 preflight 取值范围（enabled/useHealthTable 布尔、
+//    timeoutMs 500~60000、maxCandidates 整数 1~12）+ commander 节（maxDispatchPerRound 1~20、
+//    requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。检查器自持解析，不 import preflight.mjs；
 //    红/绿/空夹具验判别力；文件不在 / JSON 坏 / 缺 preflight 节 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';

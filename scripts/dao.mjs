@@ -42,6 +42,7 @@ import {
   spawnDispatchExecutor,
   writeDispatchOrder,
 } from './lib/dispatch-queue.mjs';
+import { withWorktreeLockSync } from './lib/dispatch-lock.mjs';
 import {
   ROOT,
   USAGE,
@@ -1426,6 +1427,40 @@ async function cmdDispatch(args) {
  * emit 结果槽保证每个出口（含 failCreated 回滚路径）都落结果文件、删 running 标记；
  * 崩在 emit 之外的补一份 crashed 结果，不让单卡死成 pending 假象。
  */
+function writeDispatchCrashResult(paths, orderId, error) {
+  if (!paths || !paths.result) return false;
+  try {
+    writeFileSync(paths.result, JSON.stringify({
+      ok: false, orderId, crashed: true,
+      error: String(error || '执行体崩溃'),
+    }, null, 2), 'utf8');
+    if (paths.running) {
+      try { unlinkSync(paths.running); } catch { /* 标记不在也算收尾 */ }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installDispatchExecCrashGuard(paths, orderId) {
+  const once = (why) => {
+    writeDispatchCrashResult(paths, orderId, why);
+  };
+  // SIGKILL（kill -9）杀不了、也跑不了 finally——那条靠 inventory 清超时 .running（#849）。
+  // SIGTERM / 未捕获异常 / 正常 beforeExit 漏写时补一份失败记录。
+  process.on('SIGTERM', () => { once('执行体收到 SIGTERM'); process.exit(1); });
+  process.on('SIGINT', () => { once('执行体收到 SIGINT'); process.exit(1); });
+  process.on('uncaughtException', (e) => {
+    once(`执行体崩溃：${String(e?.message || e)}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (e) => {
+    once(`执行体未处理 rejection：${String(e?.message || e)}`);
+    process.exit(1);
+  });
+}
+
 async function cmdDispatchExec(args) {
   if (!args.order) fail('dispatch-exec 要 --order <派工单路径>');
   const read = readDispatchOrder(args.order);
@@ -1439,16 +1474,11 @@ async function cmdDispatchExec(args) {
   } catch (e) {
     fail(`执行体开工标记写不了：${String(e.message || e)}`, { orderId: order.id });
   }
+  installDispatchExecCrashGuard(paths, order.id);
   try {
     await runDispatchExecution(order, { queueDir });
   } catch (e) {
-    try {
-      writeFileSync(paths.result, JSON.stringify({
-        ok: false, orderId: order.id, crashed: true,
-        error: `执行体崩溃：${String(e?.message || e)}`,
-      }, null, 2), 'utf8');
-      try { unlinkSync(paths.running); } catch { /* 标记不在也算收尾 */ }
-    } catch { /* 结果也写不动，留 running 标记显形 */ }
+    writeDispatchCrashResult(paths, order.id, `执行体崩溃：${String(e?.message || e)}`);
     console.error(`[dispatch-exec] 崩溃：${String(e?.stack || e)}`);
     process.exit(1);
   }
@@ -1607,51 +1637,59 @@ async function runDispatchExecution(order, { queueDir } = {}) {
   }
   created.repoSelector = repoResolved.selector;
 
-  const workerWt = orca(argsWorktreeCreate({
-    name: plan.workerCard,
-    noParent: true,
-    setup: 'skip',
-    issue: args.issue,
-    comment: plan.comment,
-    repo: repoResolved.selector,
-  }));
-  if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, { orderId: order.id, ...plan });
-  created.workerId = extractWorktreeId(workerWt.json);
-  created.workerPath = extractWorktreePath(workerWt.json);
-  if (!created.workerId) fail('工人卡没返回 id', { orderId: order.id, ...plan });
-  if (!created.workerPath) failCreated(created, '工人卡没返回 path', { orderId: order.id, ...plan });
+  // #849：建树段（worktree create + git config --worktree）串行化，避免并发撞 .git/config 锁。
+  // fail()/failCreated 会 process.exit，所以用 try/finally 保证放锁，不靠 withWorktreeLockSync 的返回。
+  const wtLock = withWorktreeLockSync(() => {
+    const workerWt = orca(argsWorktreeCreate({
+      name: plan.workerCard,
+      noParent: true,
+      setup: 'skip',
+      issue: args.issue,
+      comment: plan.comment,
+      repo: repoResolved.selector,
+    }));
+    if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, { orderId: order.id, ...plan });
+    created.workerId = extractWorktreeId(workerWt.json);
+    created.workerPath = extractWorktreePath(workerWt.json);
+    if (!created.workerId) fail('工人卡没返回 id', { orderId: order.id, ...plan });
+    if (!created.workerPath) failCreated(created, '工人卡没返回 path', { orderId: order.id, ...plan });
 
-  // 每单环境自检已删（2026-08-23 delete-all-ceremony 拍板）：建树后不再跑 shell 探针，
-  // 环境类毛病的证据归 watchdog / 工人开工报。
+    // 每单环境自检已删（2026-08-23 delete-all-ceremony 拍板）：建树后不再跑 shell 探针，
+    // 环境类毛病的证据归 watchdog / 工人开工报。
 
-  // #573：commit author 跟身份走。token 只改 PR 页，git log 仍读 user.name——
-  // 只改一半比不改更容易误判。写在 worktree 级 config，不碰共用 user.name。
-  const workerIdent = applyGitIdentity('worker', { cwd: created.workerPath });
-  if (!workerIdent.ok) failCreated(created, `工人 git 身份没设上：${workerIdent.error}`, { orderId: order.id, ...plan });
-  created.workerGitIdentity = `${workerIdent.name} <${workerIdent.email}>`;
+    // #573：commit author 跟身份走。token 只改 PR 页，git log 仍读 user.name——
+    // 只改一半比不改更容易误判。写在 worktree 级 config，不碰共用 user.name。
+    const workerIdent = applyGitIdentity('worker', { cwd: created.workerPath });
+    if (!workerIdent.ok) failCreated(created, `工人 git 身份没设上：${workerIdent.error}`, { orderId: order.id, ...plan });
+    created.workerGitIdentity = `${workerIdent.name} <${workerIdent.email}>`;
 
-  const workerBranch = gitBranchName(created.workerPath);
-  if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, { orderId: order.id, ...plan });
+    const workerBranch = gitBranchName(created.workerPath);
+    if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, { orderId: order.id, ...plan });
 
-  if (splitGate.childCount > 0) {
-    const baseBranch = workerBranch.branch;
-    for (const child of cards.children) {
-      const childWt = orca(argsWorktreeCreate({
-        name: child.name,
-        setup: 'skip',
-        parentWorktree: created.workerId,
-        baseBranch,
-        issue: args.issue,
-        comment: plan.comment,
-        repo: created.repoSelector,
-      }));
-      if (!childWt.ok) failCreated(created, `子卡 ${child.name} 创建失败: ${errText(childWt.error)}`, { orderId: order.id, ...plan });
-      const childId = extractWorktreeId(childWt.json);
-      if (!childId) failCreated(created, `子卡 ${child.name} 没返回 id`, { orderId: order.id, ...plan });
-      const childPath = extractWorktreePath(childWt.json);
-      created.childIds.push(childId);
-      created.children.push({ id: childId, path: childPath, name: child.name });
+    if (splitGate.childCount > 0) {
+      const baseBranch = workerBranch.branch;
+      for (const child of cards.children) {
+        const childWt = orca(argsWorktreeCreate({
+          name: child.name,
+          setup: 'skip',
+          parentWorktree: created.workerId,
+          baseBranch,
+          issue: args.issue,
+          comment: plan.comment,
+          repo: created.repoSelector,
+        }));
+        if (!childWt.ok) failCreated(created, `子卡 ${child.name} 创建失败: ${errText(childWt.error)}`, { orderId: order.id, ...plan });
+        const childId = extractWorktreeId(childWt.json);
+        if (!childId) failCreated(created, `子卡 ${child.name} 没返回 id`, { orderId: order.id, ...plan });
+        const childPath = extractWorktreePath(childWt.json);
+        created.childIds.push(childId);
+        created.children.push({ id: childId, path: childPath, name: child.name });
+      }
     }
+    return { ok: true };
+  });
+  if (!wtLock || wtLock.ok !== true) {
+    fail(`建树锁没拿到：${(wtLock && wtLock.error) || '未知'}`, { orderId: order.id, ...plan });
   }
 
   // devin 交互形态（2026-08-26 拍板）：worker-start --agent devin 起 TUI，注入不送达，

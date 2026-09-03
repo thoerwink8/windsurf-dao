@@ -253,8 +253,11 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(ei > 0 && ej > ei, 'cmdDispatchExec 段定位');
       const eseg = daoSrc.slice(ei, ej);
       assert.ok(/readDispatchOrder\(/.test(eseg) && /setDispatchResultSink\(/.test(eseg)
-        && /runDispatchExecution\(/.test(eseg) && /crashed:\s*true/.test(eseg),
-        'cmdDispatchExec 要读单、设结果槽、跑执行体、崩了补 crashed 结果');
+        && /runDispatchExecution\(/.test(eseg) && /installDispatchExecCrashGuard\(/.test(eseg),
+        'cmdDispatchExec 要读单、设结果槽、跑执行体、装 crash guard');
+      assert.ok(/crashed:\s*true/.test(daoSrc) && /SIGTERM/.test(daoSrc),
+        '崩溃补 crashed 结果（含 SIGTERM trap）');
+      assert.ok(/withWorktreeLockSync\(/.test(daoSrc), '建树段必须 flock/互斥锁串行（#849）');
     });
     await t.test('dispatch-exec 动词注册进路由与参数表', () => {
       assert.ok(/case 'dispatch-exec': return cmdDispatchExec\(args\)/.test(daoSrc),
