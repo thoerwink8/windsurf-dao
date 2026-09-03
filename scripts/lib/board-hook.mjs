@@ -18,24 +18,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { runOrcaRaw } from './orca-run.mjs';
 import { displayNumberFromWorktree } from './card-identity.mjs';
-
-// 心跳阈值原在 guard-keepalive（#807 已删）。next 行仍读本地心跳文件，口径钉死在这里。
-const FLOW_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
-const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
-
-function parseWorktreePorcelain(text) {
-  const src = String(text || '');
-  const m = src.match(/^worktree (.+)$/m);
-  return m ? m[1].trim() : null;
-}
-
-function watchdogHeartbeatPath({ env = process.env, home = homedir() } = {}) {
-  const dir = env.DAO_GUARD_HALT_DIR || join(home, '.dao');
-  return join(dir, 'watchdog-heartbeat.json');
-}
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -134,7 +118,6 @@ export function boardLine(summary) {
 }
 
 // spawn 唯一真源在 scripts/lib/orca-run.mjs——raw 结果由本文件调用点自己解析。
-// （收编前本拷贝的 shell 回落缺 windowsHide: true，#695 同款弹窗隐患。）
 function runOrca(args) {
   return runOrcaRaw(args, { timeout: ORCA_TIMEOUT_MS });
 }
@@ -180,47 +163,23 @@ export function boardInjection() {
 }
 
 // ── #576 next：动作候选层 ──────────────────────────────────────────
-// 分层（issue #576 消歧记录）：常驻进程（flow/watchdog）打 GitHub 后把结论写成本地
-// 文件，next 只读文件、零 GitHub API。本文件只产出那一行字，不复述别处的事实。
-// 读侧输入的三个形（每个来源都要能区分「扫完是 0」和「这次没扫到」）：
-//   正常   { ts, prs, ... }    心跳在且新鲜 / 数据在
-//   缺失   { missing: true }   文件不在（flow 从没被启动过 = 未在跑，不是没查成）
-//   没查成 { unscanned: true, error }  读到了但用不了（损坏 / 路径没解出来）
-// flow 心跳 prs 是 flow 报帅（待帅处置）清单，语义见 flow.mjs 心跳契约（#497/#580）。
+// #807 起本机常驻进程（flow/watchdog）整层删掉：next 不再读心跳文件，只剩盘面 + 模式态。
+// 派工节奏与 PR 回流归服务器指挥官（commander.mjs），本行只报本地 orca 盘面。
 
 /** 动作候选行（#576）：把「现在该干什么」算出来，按谁在等谁排，等人的排最前。
  * 纯函数：输入全是解析好的对象，测试喂 fixture 不碰 orca / GitHub。
  * standby 态（mode.mode === 'standby'，复用 dao-mode 的 state.json，不造新开关）
  * 不输出「待消歧」栏（⑤）。mode 读不到 = 按常态（不隐藏），dao-mode hook 自报态。 */
-export function nextLine({ board, flowHb, wdHb, mode, now } = {}) {
-  const at = Number.isFinite(now) ? now : Date.now();
+export function nextLine({ board, mode } = {}) {
   if (!board || board.unscanned) {
     return `[盘] 没查成：${(board && board.error) || '盘面摘要没算出来'}（≠ 扫完是空的）`;
   }
   const bits = [];
 
-  // 待帅处置：flow 报帅的 PR（flow 心跳契约：prs = 报帅清单，state 字段 = kind/reason）
-  const reported = Array.isArray(flowHb && flowHb.prs)
-    ? flowHb.prs.filter(p => p && p.number != null)
-    : [];
-  if (reported.length) {
-    const desc = reported.map(p => {
-      const reason = String(p.state || p.reason || '').trim().slice(0, 24);
-      return reason ? `#${p.number}（${reason}）` : `#${p.number}`;
-    }).join(' ');
-    bits.push(`待帅处置 ${desc}`);
-  }
-
   // 待收口：盘面做完等帅合并/归档的卡
   if (Array.isArray(board.closing) && board.closing.length) {
     bits.push(`待收口 ${fmtCards(board.closing, false)}`);
   }
-
-  // 监控自己没跑：flow / watchdog 心跳缺失或过期；损坏/解析不了 = 没查成（不同形）
-  const flowBit = heartbeatBit('flow', flowHb, at, FLOW_HEARTBEAT_STALE_MS);
-  if (flowBit) bits.push(flowBit);
-  const wdBit = heartbeatBit('watchdog', wdHb, at, WATCHDOG_HEARTBEAT_STALE_MS);
-  if (wdBit) bits.push(wdBit);
 
   // 待消歧：todo 卡；standby 态不输出（⑤）
   const standby = !!mode && mode.mode === 'standby';
@@ -237,31 +196,10 @@ export function nextLine({ board, flowHb, wdHb, mode, now } = {}) {
   return `[盘] ${bits.join(' · ')}`;
 }
 
-/** 单个心跳源的候选位。新鲜 = null（不占位）；缺失/过期 = 未在跑；损坏 = 没查成。 */
-function heartbeatBit(name, hb, at, staleMs) {
-  if (!hb || hb.missing) return `${name} 未在跑`;
-  if (hb.unscanned) return `${name} 没查成（${hb.error || '读到了但用不了'}，≠ 未在跑）`;
-  const ts = Date.parse(hb.ts);
-  if (!Number.isFinite(ts)) return `${name} 没查成（心跳 ts 不可解析，≠ 未在跑）`;
-  const age = at - ts;
-  if (age > staleMs) return `${name} 未在跑（心跳过期 ${Math.round(age / 60000)} 分钟）`;
-  return null;
-}
-
 /** dao-mode 状态文件路径：唯一真源是 host/skills/dao-mode/hooks/dao-mode.mjs 的 STATE_FILE，
  * 这里只复制落点（~/.claude/state.json，DAO_STATE_FILE 覆写），不复述它的解析逻辑。 */
 function modeStatePath(env = process.env, home = homedir()) {
   return env.DAO_STATE_FILE || join(home, '.claude', 'state.json');
-}
-
-function defaultGit(args, cwd) {
-  const r = spawnSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8', timeout: 10000, windowsHide: true,
-  });
-  if (r.error || (r.status !== 0 && r.status != null)) {
-    return { ok: false, error: String(r.error?.message || r.stderr || r.stdout || `git exit ${r.status}`).trim() };
-  }
-  return { ok: true, out: String(r.stdout || '').trim() };
 }
 
 function readJsonOr(path, read) {
@@ -270,32 +208,10 @@ function readJsonOr(path, read) {
   } catch { return null; }
 }
 
-/** 读侧（CLI 与 hook 共用）：主树心跳 + 盘面摘要 + 用户级模式态 → 一行动作候选。
+/** 读侧（CLI 与 hook 共用）：盘面摘要 + 用户级模式态 → 一行动作候选。
  * 只读不写判断（board-summary 缓存过期经 orca worktree ps 重算，本地零 GitHub）。
- * git / read / exists / orca / now 可注入（测试喂 fixture，不碰真机）。 */
-export function nextInjection({ root = ROOT, git = defaultGit, read = readFileSync, exists = existsSync, orca = runOrca, cache = null, now = null } = {}) {
-  const at = Number.isFinite(now) ? now : Date.now();
-  const mainTree = git(['worktree', 'list', '--porcelain'], root);
-  const mainPath = mainTree.ok ? parseWorktreePorcelain(mainTree.out) : null;
-
-  const flowPath = mainPath ? join(mainPath, '_flow', 'heartbeat.json') : null;
-  let flowHb = { unscanned: true, error: '主树路径没解出来，flow 心跳没查成' };
-  if (flowPath && exists(flowPath)) {
-    const doc = readJsonOr(flowPath, read);
-    flowHb = doc ? { ts: doc.ts, prs: doc.prs } : { unscanned: true, error: 'flow 心跳损坏' };
-  } else if (flowPath) {
-    flowHb = { missing: true };
-  }
-
-  const wdPath = watchdogHeartbeatPath();
-  let wdHb = { unscanned: true, error: 'watchdog 心跳路径没解出来' };
-  if (exists(wdPath)) {
-    const doc = readJsonOr(wdPath, read);
-    wdHb = doc ? { ts: doc.ts, prs: doc.prs } : { unscanned: true, error: 'watchdog 心跳损坏' };
-  } else {
-    wdHb = { missing: true };
-  }
-
+ * read / exists / orca / cache 可注入（测试喂 fixture，不碰真机）。 */
+export function nextInjection({ read = readFileSync, exists = existsSync, orca = runOrca, cache = null } = {}) {
   const modePath = modeStatePath();
   let mode = null;
   if (exists(modePath)) {
@@ -303,9 +219,8 @@ export function nextInjection({ root = ROOT, git = defaultGit, read = readFileSy
     mode = doc && doc.mode ? { mode: String(doc.mode) } : { unreadable: true };
   }
 
-  return nextLine({ board: boardSummary({ orca, cache }), flowHb, wdHb, mode, now: at });
+  return nextLine({ board: boardSummary({ orca, cache }), mode });
 }
-
 function main() {
   process.stdout.write(`${nextInjection()}\n`);
   process.exit(0);
