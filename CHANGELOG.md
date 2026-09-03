@@ -1,0 +1,1077 @@
+# CHANGELOG
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v0.1.0 — 2026-09-03
+
+### 新功能
+- feat(hub): 总控群接全量对话——总帅入口第一版（#852） (#854)
+- [cc] feat(dispatch): 派前探一针 + F15 接健康表（#842） (#845)
+- [cc] feat(commander): 服务器指挥官——眼睛常驻、大脑按需醒（#800） (#840)
+- [pi] feat: 把派工参数闸前移到热路（#831） (#837)
+- [pi] feat: worktree-rm 收树时一并收掉 agent 进程 (#835) (#836)
+- [cc] feat(release): 发布列车——合并进列车、攒够或周日切版（#800） (#838)
+- [grok] feat: 全员切pi，非GPT顺位1改gw（#822） (#825)
+- [grok] feat: 派工层与飞书机器人带溯源头 (#824)
+- [grok] feat: 落地 AI 拍板约定与发布策略默认配置 (#817) (#821)
+- [grok] feat: dao-check 加飞书群有效性检查 (#813) (#814)
+- [grok] feat: 删 webview-debug，新建 server-ops / feishu-ops (#809)
+- [grok] feat(routing): deepseek-v4-flash 加 gw-dspool 通道 (#798)
+- [cc] feat(onboard): pi 扩展 go-fallback 进接线自检（⑥ pi-ext-missing/drift，缺就拷、漂就重拷）；~/.ssh 登记归 ai-gateway-stack
+- feat(latency): 给一次回复分段计时——「模型好慢」先分段再查网络
+- [claude] feat(onboard): 换机自检加第④项——npx @latest 型 MCP 让每个会话冷启动多花数秒
+- [pi] feat: go-fallback 多通道降级 + 错误分类抽取 (#794)
+- [grok] feat: 建统一命令库 CLI (#485)
+- [grok] feat: memory 真相源入仓 (#467)
+- [cc] feat(merge-cleanup): 收尾成功后提醒可 /dao-remove 丢弃会话（只提醒不自动删）
+- [cc] feat(dao): 事前五步入常驻场域——马斯克五步法钉进「动」节每消息注入(用户 2026-08-13:不要每次提醒;skill 形态被否:要记住才能加载的东西治不了记不住)
+- [cc] feat(permissions): 用户级 auto 三层工具进 git，删被宿主忽略的随仓死配置
+- [cc] feat(dispatch): 落 2026-08-09 一揽子拍板 Q3——#202 三处超字面追认生效 + 判官跨族/对抗权限折中两条新判据入法（体检 J7/J8）
+- [cc] feat(dao): 立「报告落盘」条款——workflow/调研/审计报告全文交付即落目标项目 _tmp/（用户 2026-08-09 拍板）[#归-报告落盘]
+- [cc] feat(dao): 源与投影条款扩「同一动作内跑漂移检测收尾」半句（用户点名固化）
+- [cc] feat(skills): 用户面 5 个 skill 补 Codex 侧禁自动调用声明
+- [cc] feat(scaffold): 共性 rule 加第四类 product-type + 品节收 H1-10
+- [cc] feat(dao): 本窗七条形态类升格落 dao + 三项裁定落地（元仓库取消整体豁免）
+- [cc] feat(workflows): dao-harvest 好实践收割——补上生长闭环最后一块
+- [cc] feat(scaffold): 共性 rule 备案清单化——检查项从硬编码搬进 manifest
+- [cc] feat(workflows): PR 全史复盘 workflow 参数化入货架 + workflows 目录约定
+- [cc] feat(dao): 外向汲取扩为常态六源 + 打磨自曝交付义务（用户点名固化）
+- [cc] feat(scaffold): frontend-ui-testing 处方补进强制链——九处方唯一的漏网补上
+- [cc] feat(dao): 军衔升档——尉档 Sonnet→Opus 5，语义改「级名=模型+协议」
+- [cc] feat(hooks): PostCompact 可见化——dao-compact-log 记录压缩事件
+- [cc] feat(hooks): rule-echo 监视面扩到 docs/rules/——mousse 条款库存根化后的连带件
+- [cc] feat(dao): 帅节新增 Workflow 常驻授权条款——高性能档信号即显式 opt-in
+- [cc] feat(dao): 长窗自主排程增⑥双档模式——标准档/高性能档+语义识别原则（用户拍板 2026-07-21）
+- [cc] feat(dao): 人·验新增④微复盘——每任务收官三问（自检/沉淀/规划，用户点名固化 2026-07-20）
+- [cc] feat(dao): 品节增支柱工作法(产品级宏观层)+pillar-recon playbook 沉淀(七步生命周期+两个可移植战役脚本)+长窗选题接 POSITIONING 之镜
+- [cc] feat(dao): 帅节长窗自主排程守则——开窗仪式/选题判断框架/容量换算/自主边界（用户拍板 2026-07-17）
+- [cc] feat(dao): 帅节增补长窗自主守则——监督信号独立于作业信道四层防御（L24/L25 固化）
+- [cc] feat(dao): CI成本处方入链——stacks处方+scaffold门控+开工处方单入口定位(用户拍板2026-07-13)
+- [cc] feat(hooks): 帅位警戒hook补侦察型盲区——连续只读侦察计数（第三次复发修复）
+- [cc] feat(hooks): 帅位警戒线 dao-marshal-guard——制作性编辑第4次起注入提醒
+- [cc] feat(dao): 帅节增设对话席铁律（转向权）——实现件后台派单+在跑转向机制
+- [cc] feat(dao): PR 自主合并即删分支——清理绑在合并动作本身上
+- [cc] feat(dao): OD 面板快照自动刷新——同步从"靠人记"改为门控自动附带
+- [cc] feat(dao): 波次五 OD 衔接复活——od-pull 回搬 + 提示稿消费队列 + scaffold 自检补项
+- [cc] feat(dao-design): standards §3 组件规格层铁律——约束性默认值方法论
+- [cc] feat(frictionless): 心智负担审计四连手术C1-C4——围绕用户无为而AI无所不为
+- [cc] feat(kit-chain): 开工包消费链路七断链适配（D1-D7，dao-chain-audit授权实施）
+- [cc] feat(theme): 新增 dao-dark 自定义主题并修正 theme 设置值格式
+- [cc] feat(dao): 续力节加选项溢出策略——硬限≤4 + 提问文本暴露低频关键词
+- [cc] feat(dao-design): 选项溢出策略——提问文本暴露低频关键词 + Other 走 §P.1
+- [cc] feat(dao-design): 模式选项补 od-sync 入口——无参数也能发现面板同步
+- [cc] feat(dao-design): od-panel-sync 自动发现——查 OD SQLite 取项目名，用户不碰 UUID
+- [cc] feat(dao-design): OD 面板同步——design/ robocopy 到 Open Design 项目工作目录
+- [cc] feat(dao): 天·觉 增加归属层判断——意图升维机制
+- [cc] feat(dao): 桌面端调试体系——WebView2直连决策树 + scaffold自动检测
+- [cc] feat(dao): 验收截图标准 §V + 设计同步门控 + 跨层一致性
+- [cc] feat(theme): dao-enhance 全量适配 Atom One Dark
+- [cc] feat(dao-design): add dao-loop as implementation option in §P.2 / §1 模式A / §2 routing table
+- [cc] feat(ccswitch): add sync-skills.ps1 — manage ~/.claude/skills/ junctions from windsurf-dao as true source
+- [cc] feat(dao): add dao-design unified entry to scene lookup table
+- [cc] feat(dao-design): add §P inline intent parse — shortcut scan when args contain intent+scope
+- [cc] feat(dao-design): add unified entry skill — context scan → pattern detect → dynamic options
+- [cc] feat(dao-design-asset): add §O OD side conventions — cross-end protocol definition
+- [cc] feat(dao-design-sync): add §0.0 draft routing guard
+- [cc] feat(dao-design-asset): §C.0 草稿发现 + §C.0.5 确认门，用户只需说功能名无需知路径
+- [cc] feat(dao-design-asset): 新增 §C 一键发布+实施，覆盖草稿→正式稿→代码落地完整正向闭环
+- [cc] feat(design-sync): 底层 skill 适配——design-open 和 design-asset 加 sync 接入接口
+- [cc] feat(design-sync): 新增漂移同步 skill——一键检测设计/代码不一致并自动同步
+- [cc] feat(config-guard): settings.json 漂移探测 + 双向同步脚本
+- [cc] feat(skill): dao-design-sync — 设计变更结构提取 skill
+- [cc] feat(dao-bat): 菜单选项 8 打包 + --pack CLI 参数
+- [cc] feat(installer): dao 分发安装包 — 从零到可用的一键部署
+- [cc] feat(dao-loop): 造线 git 全自动 + 归档 PR 归根
+- [cc] feat(fidelity): 新增 §6.4.1 布局完整性检查 — L2 结构层自动化补充
+- [cc] feat(skill): 截图资产生命周期——5 个 skill 补截图归位规范
+- [cc] feat(loop): 孤儿 Loop 检测机制 — 开新 Loop 前必扫未归档遗留
+- [cc] feat(fidelity): §6.4 状态矩阵枚举 — L3 截图前强制枚举每页所有数据/流程/条件分支态
+- [cc] feat(skill): 浏览器工具门控 + 设计流水线双栈统一
+- [cc] feat(skill): dao-design-system 新增 design/ 版本控制规则 — 选择性跟踪
+- [cc] feat(deploy): 新增 themes 部署 — dao-enhance 主题 + link-claude 自动同步
+- [cc] feat(skill): dao-design-system 统一 Token 命名规范 — 跨项目一套名字，只变值
+- [cc] feat(skill): Design Pipeline 统一 — 新建 design-system + design-layout，5 skill 流水线编排
+- [cc] feat(skill): 新增 dao-design-fidelity — 设计还原度五层金字塔
+- [cc] feat(devin): 双栈概念同步 — design/ 条件检查 + 三层交互对齐 + 跨页组件整合
+- [cc] feat(dao): Loop 五文档体系 + 目标驱动归档 + 设计精神四维对齐
+- [cc] feat(skills): code-to-prototype §0.0 方向预检——设计领先时自动路由到 design-open
+- [cc] feat(skills): dao-code-to-prototype 反向可视化引擎
+- [cc] feat(skills): 设计对齐 Loop 全覆盖方法论——dao-design-open §1.5 + dao-loop §4 联动
+- [cc] feat(dao-loop): 新增 §7.5 Loop 续写机制——小修/Reopen/Fork 三层路由
+- [cc] feat(hooks): Playwright MCP 残留锁自动清理 hook
+- [cc] feat(loop): 谋线+造线显式 subagent 调度——主线程编排，subagent 执行
+- [cc] feat(infra): 命令 symlink 同步脚本 + 预飞命令检查
+- [cc] feat(hooks): scaffold-check 增加活跃 loop/plan 检测
+- [cc] feat(loop): §1.5 改为分发模型——调度台生成提示词，新会话执行
+- [cc] feat(loop): 新增 dao-loop skill + command — 双线程循环开发法
+- [cc] feat(rules): 新增 hooks 部署闭环规则
+- [cc] feat(deploy): Invoke-LinkClaude 新增 hooks 自动部署
+- [cc] feat(hooks): 新增 dao-timecode 时间码 hook
+- [cc] feat(hooks): glob-gate 增加 settings.json 和 windsurf-dao 文件修改的同步提醒
+- [cc] feat(hooks): scaffold-check 升级为全面双向同步漂移检测
+- [cc] feat(hooks): scaffold-check 增加 windsurf-dao hook 注册同步检测
+- [cc] feat(hooks): 新增 dao-scaffold-check SessionStart hook
+- [cc] feat(dao): 项目规范自动沉淀机制 + scaffold skill
+- [cc] feat(design-taste): 新增 §4.6 Icon 纪律
+- [cc] feat(skill): 新建 dao-design-qa + 拆分设计品味与QA流程
+- [cc] feat(mcp): 添加 Penpot MCP 安装脚本（SSE 方式）
+- [cc] feat(ccswitch): 续力规则升级「每答必续」+ 同步 windows-mcp 配置
+- [cc] feat(ccswitch): 状态栏增强 + /gs 命令 + commands 同步配置 + 归位规则
+- [cc] feat(hooks): dao-rhythm v2 试验版——CLOSING 收尾提醒 + 自报告就绪闭环
+- [cc] feat(hooks): dao-rhythm 节律 hook + glob-gate 前端扩展（自动行为体系 v1）
+- [cc] feat(config-sync): 新增 terminal scope 同步 Windows Terminal 配色/字体
+- [cc] feat(persona): Claude Code CLI persona injection system
+- [cc] feat(config-sync): codegraph MCP 全自动化 — CLI 安装/项目索引/换机零操作
+- [cc] feat(config-sync): 增强鲁棒性 — 错误处理/dry-run 预览/git 重试/JSON 验证
+- [cc] feat(scripts): 新增 dao-smoke 生态完整性自检脚本
+- [cc] feat(config-sync): 启用 Claude MCP 并纳管全部 server
+- feat: add dao.ps1 set-terminal — IDE default cmd.exe → Git Bash (#19)
+- [cc] feat(config-sync): 同步 cc-switch 配置、内置 sqlite3、补齐 Grep-first 权限与文档
+- [cc] feat(claude): statusline.sh 归位仓库,跨机自带状态栏
+- feat(config-sync): add Bash hook dao-tool-nudge to PostToolUse
+- [cc] feat(claude): /remove 命令 + 会话删除 hook 入仓（对齐 dao 命令/hook 同步约定）
+- [cc] feat(dao-cloud): 成本路由两种模式 + 执行前必问用户选模式 + 刷新知识库 note
+- feat(dao-cloud): add dao_keys GUI keystroke helper (#13)
+- feat(dao-cloud): focus/click/winshot/idle helper + 修正版「实时桌面交互礼仪」铁律 (#9)
+- feat(dao-cloud): 截屏 helper 入库 + 新机器自动重建（跨机器不丢） (#8)
+- feat: dao-cloud skill 持久化步骤增加自动创建 knowledge note (#4)
+- [cc] feat(skills): 添加 dao-memory 会话记忆技能
+- [cc] feat(config-sync): 本地插件市场纳入仓库,换机自动恢复
+- [cc] feat(config-sync): 同步全端 MCP 并增强体检
+- [cc] feat(config-sync): 收敛 MCP 下发并保护 Desktop Gateway token
+- [cc] feat(config-sync): cc-switch 配置备份/恢复/体检 + common 密钥脱敏
+- [cc] feat(dao): 通用配置自愈机制——settings.base 基线 + 三层兜底
+- [cc] feat(skills): 新增 dao-compliance-check 行为合规检查
+- [cc] feat(dao): link-claude 部署经文与 output style
+- [cc] feat(dao): 加 link-codex 让 codex 共用 claude/skills
+- [cc] feat(dao): commit subject 加 [cc] 标识铁律
+- feat(shell): 扩充终端韧性经验
+- feat(claude): 迁移 dao 体系至 Claude Code CLI(双栈共存)
+- feat(skills): add dao-goal anchor workflow
+- feat(dao.ps1): add link-rules / link-rules-all for cross-project rule propagation
+- feat(rules): add screen-state-coverage guideline to design-assets — every screen must show multiple interaction states (default/loading/error/hover/disabled) in one view
+- feat(rules): add project-structure + design-assets rules, update brainstorm skill
+- feat: add dao-decouple skill — six-dimension coupling analysis lens
+- feat(dao-ui-mockup): v0.3 加 selector-mapping 产出 · dogfooding 反馈
+- feat(skill+rule): html font-size 显式 16px 铁律 + 字号体系扫描
+- feat(dao-ui-mockup): v0.2 援 + 转换三档铁律 + skill ecosystem 整合
+- feat(autopilot+evolution): A+B lesson 上提评估关卡 - 修元 bug 沉淀不自动
+- feat(scaffold): git author 红线 - 不擅自设 local config (源自 TraceyU M1 教训)
+- feat(autopilot): 防批量跳过三补丁 - 单 task 闭环铁律段 + §2.1.1 涅槃门 + 反模式表
+- feat(dao-scaffold): 脚手架优先决策 skill
+- feat(dao-autopilot+dao-research): mode 状态机 + 资产盘点优先纪律
+- feat(rules): dao-mantra × superpowers-gate 互引升级
+- feat(dao): 道德经化系统升级 v3 — 11 关键词代谢 + 3 缺口 skill + 1 workflow
+- feat(rules): Plan Mode 硬门控 · 双层落地
+- feat(dao.ps1): status 输出补 stacks 计数
+- feat(skills): dao 完整化 superpowers 范式 — 补 5 新 skill + 升级 dao-pyramid
+- feat(skills+agents): superpowers → dao 内生方法论升格
+- feat: wire /dao-frontend-init into /dao-dev pipeline + add create-next-app phase
+- feat: rewrite dao-frontend-init as executable pipeline with phases + turbo + pitfall table
+- feat(de-layer): 新增'删 path 先赋量'决策原则 — 来自 wuganjiqie T165 OTT 误删教训
+- feat(de-layer): project awareness - auto-migrate CSV on session start
+- feat(evolution): post-migration cleanup - strip old md, keep CSV only
+- feat(evolution): auto-discover migration + section format parser
+- feat(evolution): add dao-evolution skill + integrate into all workflows
+- feat: dao-observability multi-environment coverage
+- feat: dao-observability skill + cycle/evolve integration
+- feat: hooks 统一管理 — dao-commit-msg 模板 + dao.ps1 hook 链接支持
+- feat(rules): add PowerShell terminal safety rules - ban 2>&1, use LASTEXITCODE, suppress Chinese ErrorRecord noise
+- feat(commit): commit message 融入版本标记规则 (vX.Y.Z)
+- feat(skill): dao-research integrates GitHub MCP for code-level research
+- feat(thread-tree): add thread-tree workflow with sedimentation and resolve mode
+- feat(autopilot): 项目感知探针 + TODO.md任务映射
+- feat(de-layer): 嵌入第一性原理审视为推理链第3步
+- feat(autopilot): 新增自动驾驶工作流 + 修复规则集成缺口
+- feat(rules): quota/trigger/AGENTS.md/Hooks/Skills/symlink/tavily
+- feat: add dao-ask-next-step rule - present next steps after every response
+- feat: use cmd /c mklink for symlinks, fix Join-Path PS5 compat, add copy fallback
+- feat: symlink-based deployment system with dao.ps1
+- feat: 完整体系同步 — 4规则/10工作流/5技能/8MCP配置
+
+### 修复与维护
+- docs(landing): 第 8 步达成（在途 PR 清零 + 旧账 9 张关闭）、第 4 步达成（#807 合并）、第 9/10 步状态更新
+- docs(landing): 第 8 步进度——PR#850 已合；派单闸挪到第 10 步开（dry-run 实测会刷屏）
+- docs(landing): 全权托管拍板进清单——第 8/9/10 步（在途清零、机器人说人话、派单验证收尾）+ 说人话判据（用户 2026-09-04 01:50 拍板）
+- docs(landing): 落地期执行方针进清单——清单驱动+特事特办，通了再回归派工（用户 2026-09-04 拍板）
+- chore(routing): ban deepseek-v4-pro——用户 2026-09-03 拍板，deepseek 只用 v4-flash
+- docs(server): 落地清单第1步达成——§9d 补 Contabo 实测六坑 (#796)
+- docs(landing): 落地清单对账——第5/7步达成、第4步前置已清，登记 09-03 晚新增运行时件指针
+- [cc] chore(routing): 审官首选临时切 gpt-5.6-luna——pqapi 故障过渡措施（#843） (#844)
+- [pi] fix: 审官身份消息失败不整树回滚（#826） (#827)
+- [grok] fix: 无头 Linux start=agent 落裸 shell 时探就绪并回退 --command (#805)
+- [grok] docs: 记录 2026-09-03 夜班服务器编排回岗 + 飞书 Phase 2 (#812)
+- [grok] fix: worker-done 结算态士兵仍起审官 + attach 继承 merge-policy (#804)
+- fix(pi): 本机 pi 装不上的真因是上游包 @mariozechner 占了 pi 命令——文档改口装 Mirasim 认的分支，哨兵加 pi-wrong-package
+- docs(new-machine): §13.2 记下「分完段还剩 6-7 秒关不掉的等待」——挖到这儿停手
+- docs(skill): dao-commit 补锚点 tag 规矩——tag 锚定仓 bump 时同 commit 打 v<to>（#795）
+- docs(new-machine): §13 补两个执行坑 + 提醒别拿别人的省时数字当预期
+- fix(onboard): mcp-slow-boot 补三处漏——项目级条目/uvx 没 Python/哨兵指错路
+- [cc] docs: 拍板记录——Electron 项目只发 portable 单形态
+- [cc] fix(test): 热路墙钟断言 1s→3s——按最吵的运行环境给余量
+- [claude] docs: #633 agent-first 半步记入服务器编排方向档（PR #788 关闭，搬家时重估）
+- [cc] docs: 编排只在 Linux 服务器的方向记录（落地清单第 0 步的落点，此前一直未跟踪）
+- [cc] docs: 服务器落地清单（7 步入口，一句话即可接上）
+- [cc] fix: 测试断言不得依赖 checkout 自身形态（onboard 造合成 worktree 根；watchdog 只认 [master] 标签不裸搜路径）
+- [cc] docs: 群聊→triage→派单四阶段方案（Phase 0，挂 #792；用户拍板按此走）
+- [cc] docs: 分支卫生只留一条命令，不立制度
+- [cc] docs: 切开两仓边界——INDEX 加 E 类（他仓真相源），代理分流归 ai-gateway-stack
+- [devin] docs: #771 派单链路实战验证记录 (#776)
+- [grok] fix: 验开工认 result.terminal.tail，主帅标题只动定界区 (#502)
+- fix(校准): 按判定行条数计算返工轮数
+- fix: replace chain C liveness checks with real evidence
+- [cc] docs(nogo): g2-rename-4gaps 解冻条件经用户确认；删 probe-deadman 死条目（守护对象已随 eff04f4 退役）
+- [cc] docs(dao): 单双门条替换为「状态仪式」(用户 2026-08-13 三轮打磨拍板)
+- [cc] docs(dao): 档位分配句改指顺位表,修与新法的口径撞车(#413 工兵未尽处①)
+- [cc] docs(dao): 帅节入法「可枚举决策一律表化」元原则(用户 2026-08-13 拍板)
+- [cc] docs(dao): 删「选项自动驾驶」机制句(用户二次拍板取消)+ 账本记 L53 遗忘事故
+- [cc] docs(dispatch): 卡片两迁条款扩帅席——总帅处置(打回/裁决/接手)同刻换棒协调者树备注(用户 2026-08-13 点名)
+- [cc] docs(dispatch): 入法卡片状态两迁——注入成功标 in-progress、开审标 in-review,与换棒 comment 同命令顺手带(用户 2026-08-13 拍板)
+- [cc] docs(dispatch): #390 复盘三处减法入法——spec 默认短档·对抗审按软/硬闸取档·收官链直配 automation(用户 2026-08-13 拍板);修 scoped 立法触发器盘符
+- [cc] docs(dao): 续力节「在线两态」当日迭代为「单双门分流」——问询判据从用户在线态改为决策可逆性(用户 2026-08-13 拍板)
+- [cc] docs(dao): 续力节入法「在线性两态」——苏醒即撤自动驾驶,派单编排三档菜单逐单问(用户 2026-08-13 拍板;memory 副本按归位判据删除)
+- [cc] fix(commands): dao-remove 命令内联 node -e 落成脚本文件（auto 模式适配）
+- [cc] chore(config-sync): 压缩阈值双档入源(帅500k/工兵350k)+清 DB 层 9 个指空 hook 注册
+- [cc] docs(new-machine): pi 配置节改真——#344 起随 config-sync 双轨,旧「全手动配」说明过时替换(履约 #344-NM 义务转移件)
+- [cc] docs(rules): 第二节加「闸红先审红因」——动作在变大而红因没被重审过即停手(树帅 340v2 实咬入法)
+- [cc] docs(dispatch): §三½ 树帅出生即无写工具——结构约束替代纪律(三犯定形:散文禁令对模型天性必输,违例动作从被禁止做成不存在)+ 开工报编排计划 + 孤军完工不收
+- [cc] docs(dispatch): §三½ 启动序改无条件链——发射前确认清零,验证后置到检查点(#350 首战实测)
+- [cc] docs(ops): 活档案补树帅角色行(#350 用户拍板:树帅位 Opus 5 档)
+- [cc] docs(evolution): L49-L51 + E15——零窗口三折定形与 doctor 清零一役入档
+- [cc] fix(config-sync): fetch MCP 注册钉 mcp<2——上游未锁依赖被 SDK 2.x 破坏（#342 ④）
+- [cc] refactor(config-sync): 删 env 三键判据——马斯克五步法第二步，删需求而非伺候需求
+- [cc] docs(evolution): L48——live settings 会被宿主以陈旧内存态整文件重写，持久面走下发
+- [cc] chore(config-sync): 快照对齐 DB——env 三键回归、fetch MCP 入册（#342 机修①②③）
+- [cc] docs(ops): 模型画像活档案落地——军衔制的可迭代形态,派活手册加指针(用户 2026-08-12 拍板:不写死定位表,记录感觉可随时更新)
+- [cc] fix(permissions): 随仓权限面 defaultMode 订正为 auto，.gitignore 堵 local 锁入仓缺口
+- [cc] chore(claude): 随仓携带工兵权限面——.claude/settings.json 定 defaultMode=auto
+- [cc] docs(evolution): 沉淀 2026-08-12 编排教训 L39-L45 + E14，两条提级行为层
+- [cc] docs(orca): 工兵切 auto mode 收紧到起手同一分钟，零窗口两路记录分类器实测拦死
+- [cc] fix(config): 快照 deny 补 Bash(grep:*) + 反查字段名订正
+- [cc] docs(orca): 合并链 -RepoPath 禁手抄，从 PR 反查 worktree
+- [cc] docs(orca): 工兵起手默认 auto mode 配方 + 卡滞先查模式芯片
+- [cc] docs(orca+dao): 立法两笔——选项自动驾驶（分工拍板时授予，四类永不自动）+ 工兵卡滞侦测不靠人眼
+- [cc] docs(orca): 补拓扑判据——树的谱系跟随工作独立性（指南 §placement 原话落地）
+- [cc] docs(orca): 观测节补一条实咬教训——input_accepted 是送到了不是跑起来了
+- [cc] docs(orca): 复核订正三处压缩失真——限定词不许在压缩里丢
+- [cc] docs(orca): 把 Orca 推荐派单模式写进规矩——worker-start 可见终端+收活循环成为体系缺省
+- [cc] fix(roster): Windows 下探测加 shell 解析——npm 垫片型 CLI（pi.cmd）此前被误报不在线
+- [cc] docs(evolution): L38——守卫类分歧先问删哪层，对抗复审同样会跳过这一问
+- [cc] docs(dao): 八句第2句原地升级——为道日损从姿态变成开工三问
+- [cc] docs(stacks): pi 压缩阈值随拍板收窄——worker 双模型 300k + keepRecent 32768（账实同步）
+- [cc] docs(evolution): 长窗 11 条教训归档 —— 新立 L32-L37 + 补 L21/L31，顺带修好一处让 L28 隐身的 CSV 引号
+- [cc] fix(tests): 场景 3 fixture 喂前行尾归一化——止血 master 在 CRLF 新鲜检出下 2 红（#211 合并态绿是 LF 工作区形态特定假绿，B1 同族）
+- [cc] docs(hooks): 探针重试档 15→20 分钟（用户 2026-08-09 拍板）——订正 probe-gate 注释里的频率记载三处
+- [cc] docs(harvest): 2026-08-09 清账窗收割归档——4 新立 + 3 修订 + 3 不收（10 路收割官全过核验）
+- [cc] docs(harvest): 收官窗收割归档——13 候选(7 新立/6 修订)待批 0/13 入库,台账初建+原始产出全文归档
+- [cc] docs(agent-guide): 军衔表尉档订正 sonnet→Opus 5——投影追平真相源 dao-dispatch(用户 2026-07-26 拍板),补真相源指针防再漂移
+- [cc] docs(hard-gates): 头注⑬补 #132 关单裁决——rename 四格漏报刻意不收（用户拍板 2026-08-07）
+- [cc] chore(config-sync): common_config_claude env 加 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80——auto-compact 默认 ~95% 才触发,提前到 80%(上限 ~83,超设被打回);DB/live/快照三处同落
+- [cc] docs(askuser): 拍板呈现补 STAR 条款——workitem 那条只盖 issue/PR/评论，拍板呈现掉在夹缝里（用户 2026-08-07 亲令，基线 1/1）
+- [cc] chore(clause-index): regen 追平 dao-powershell/dao-legislation 两笔直推——stale=1 曾致 SubagentStart 零条款渲染
+- [cc] docs(rules): 修 dao-legislation 指向空气的落点示例——mousse 那份 check-clauses-structure.ps1 已随 PR #535 收敛删除 (mousse #536)
+- [cc] docs(rules): dao-powershell 补第六坑——调 .ps1 拿退出码禁 -Command，它把 exit N 抹成 0/1
+- [cc] docs(user-actions): 撤掉 timeout 那条的暂缓标记——PR #130 已修并合入
+- [cc] docs(user-actions): 给 timeout 那条加暂缓标记——它自己会关掉那道自检 2/3 的发现
+- [cc] docs(user-actions): 补「把开会话体检超时 10→30」一条（用户 2026-08-04 拍板）
+- [cc] docs(config-sync): providers/ 陈旧快照已删（用户 2026-08-04 拍板）
+- [cc] fix(test): token-drift mutation 锚点用正则匹配行尾——写死 \n 在 CRLF 检出下恒不命中
+- [cc] chore(config-sync): 摘掉 Bash(grep:*) deny——G7 接管段首拦截,管道过滤放行(用户拍板 2026-08-02)
+- [cc] docs: 答产品型必答题——本仓是内部工具型项目(用户 2026-08-02 拍板)
+- [cc] chore(config-sync): 快照层同步 hook 注册四项——G6/MCP扩面/SubagentStart/Stop设计门(用户完全授权,AI 全程执行,备份已留)
+- [cc] docs(research): 三仓「自上而下」违反存量探查清单——30官/26发现/核验21/呈报17件三档
+- [cc] docs(specs): 批3补 10KB 可达性裁定——组合拳③+①,进位制 10KiB,残额呈裁(用户授权帅裁)
+- [cc] docs(specs): 知识归位节判据句蓝本——用户原话「自下而上同级无感知,自上而下每项目皆改造」
+- [cc] docs(specs): 批4再补「体检清单自我生长」——发现跨项目问题形态默认提议进清单,不当单仓待办(用户当场纠正反应层级)
+- [cc] docs(specs): 批4追加「每个项目自动检肥」通用检查项(用户拍板,治靠提醒会失忆)
+- [cc] docs(specs): 重写契约补批0基线——/context 实测 dao.md 28.1k tokens,目标面 29k,预计省 24k/session
+- [cc] docs(specs): dao 体系整体重写契约——用户批准的规划入仓(≤10KB硬闸/正文零台账/六类分流/五批次序)
+- [cc] docs: CLAUDE.md 声明 issue 派单中枢——scaffold conditional 开关打开,说人话无条件
+- [cc] docs(dao): 「人读载体说人话」去条件化——任何仓 issue/PR 无条件生效,不随中枢基建开关走(用户点名 2026-08-02)
+- [cc] docs(specs): 瘦身批收官——八项全合,批终态 59009B(82.3%),累计 -12370B
+- [cc] docs(specs): 瘦身批波1批账——七项全合,71379→62305B,返工记录+revert演练+波2判据
+- [cc] docs(specs): dao.md 瘦身批契约——八项全批,用户拍板 2026-08-02,八步铁序执行
+- [cc] docs(dao): 「目的否」条款重写——触发面扩为任何方案,四问过镜,拍板权归用户(当轮纠偏)
+- [cc] docs(dao): 天·觉新增「目的否」——提炼目的不遵做法,用户点名固化(2026-08-02)
+- [cc] docs(dao): 订正「改配置先认源与投影」——下发源是 providers.settings_config 非 common_config 镜像层(#49 实测)
+- [cc] docs(specs): P1-P8 执行结果写回提案——八步铁序首个完整批次收口(六PR全合/全量绿/记账:返工0回滚0演练2过)
+- [cc] docs(research): 四步铁序业界对照——DORA审批张力调和/小批量AI对冲/回滚演练/合并态门前移,改进版草案待用户拍板
+- [cc] docs(specs): dao 架构优化提案——双路调研合成 P1-P8(门控出文本层/作用域档/死闸检测/硬闸/整编/结构化/会话治理/AGENTS.md),呈用户拍板
+- [cc] docs(research): 规则架构外向调研·官方生态路——官方选型矩阵/paths作用域/三篇arxiv实证(禁令0%,大小无影响,+22.99pp)/caching经济学/S1-S10
+- [cc] fix(research): 调研报告真实落盘——上一 commit 归档的是 0 字节空文件(tasks/*.output 对正常结束 agent 恒 0 字节,本窗 A6 刚修的坑帅自己又踩一次,如实留痕)
+- [cc] docs(research): 规则架构外向调研·开源实践路——AGENTIF/context-rot/Vercel四档对照/AutoManual/9条策略候选(S1-S9)
+- [cc] fix(workflows): meta.whenToUse 拼接改单字面量——Workflow 工具校验 meta 纯字面量,BinaryExpression 整脚本拒载(收官跑收割实测)
+- [cc] docs(reshape): 重塑计划 202608——审计舰队 32 条确认发现汇成 A/B/C 三批(死链错处方/canonical化/正文瘦身),审计原文归档
+- [cc] docs(dao): 窗口时长＝派单时段（用户订正）+ 记死帅位一次四步全错
+- [cc] docs(evolution): L31 追加第 15-17 个面貌 + 一条收编判据
+- [cc] docs(dao): 续力条款加读法警告 + workflow 货架三条实测坑
+- [cc] docs(dao): 长窗④.5 截止是三段不是一刀（用户点名立）
+- [cc] docs(evolution): L31 追加第 14 个面貌（镜像的镜像）
+- [cc] docs(evolution): L31 收敛条目——「它没说谎，它答的是另一个问题」
+- [cc] docs(dao): 补 4 条判据 + 订正一条当日被证伪的叙述
+- [cc] docs(dao): 续力节补「豁免的是问，不是续」——补一个被豁免挖走的结构性保证
+- [cc] docs(dao): 收割 H3-2/H3-4/H3-9 上 dao —— 三条都是「看起来绿但没被验」的不同切面
+- [cc] docs(workflows): 修指向已改名脚本的死指针（mousse-cli issue #274）
+- [cc] docs(dao): 帅节补「工具面门」——派单前核 agent type 的工具集能不能做完定义性动作
+- [cc] fix(dao-design): 三条判据从孤儿副本搬回，然后删掉那份副本
+- [cc] fix(tests): 修头注里 SKIP 态断言数写错（11→14）
+- [cc] docs(dao): 退役区覆盖面必须按「计数已知/未知」分栏——原条款窄于实现
+- [cc] docs(tests): 头注补「盘上现状与本契约不符」的指针,防后人当漂移修掉
+- [cc] refactor(dao): 生态减法——删 1 合并 2 降级 4，判据一律用使用面
+- [cc] docs(dao): 经验分级判据 + 收割改挂长窗收官 + 用户命令表按「使用面」重整
+- [cc] docs(dao): 拍板必须说人话——用户亲令固化进续力节
+- [cc] docs(playbook): 蒸发测试补「同侪闸」——三镜改四镜，双闸皆过才算可防御
+- [cc] fix(tests): 守卫自己被 mutation 抓到——真相源判据从「文件里出现过」收紧为「是标题行」
+- [cc] fix(skills): TODO.md 存废改为有条件判据——07-22 那个补丁打在了不会被触发的地方
+- [cc] docs(tests): 测试头注「三分类」补齐为「四分类」
+- [cc] fix(hooks): 修 glob-gate 那条错的同步提醒——它已连续误导三名 subagent
+- [cc] fix(workflows): dao-harvest 只覆盖好实践的一半——与量化那一路重合度实测为 0
+- [cc] refactor(dao): 两条静默自检条款迁进备案清单，门控文档同步指针
+- [cc] refactor(codex): link-codex 退到只读——dao.ps1 彻底退出 ~/.codex/skills 写入业务
+- [cc] fix(dao): 解除读源码禁令——改为分场景+隔离纪律（用户挑战，判定用户对）
+- [cc] fix(dao): 时长换算公式作废——改「问题树而非时间表」（用户亲纠）
+- [cc] fix(codex): ~/.codex/skills 写入方归 cc-switch store——link-codex 退出争夺
+- [cc] docs(classics): 统一经文口径为王弼本——表述对齐实际注入源，不动经文本体
+- [cc] chore(themes): 删 dao-enhance 备选主题——用户勾选清理，生效主题 dao-dark 未动
+- [cc] chore(settings): 清掉 Coffee CLI 的 5 条 hook——竞品跟踪器退出本机 Claude 会话
+- [cc] fix(settings-drift): F3 补命令串全等判据——同名不同路径不再静默通过
+- [cc] refactor(hooks): F1 抽 hook-selfcheck 公共库——rule-echo/compact-log 改薄封装
+- [cc] docs(dao): D8 落档两件——SessionStart 预算表 + stacks 绝对根路径
+- [cc] fix(dao): D7 codex 悬空链清坟——unlink-codex 补「目标不存在即删」判据
+- [cc] chore(dao): D6-3 codex/入口卫生——dao-philosophy 死 prompt + 死参数/死壳清理
+- [cc] chore(config-sync): D6-2 lib 三死模块处理——两删一挂入口
+- [cc] chore(dao): D6-1 死资产清理——mcp/ 目录 + dao-commit-msg + sync-*.ps1
+- [cc] fix(hooks): D5 scaffold-check 检测器盲区修复——不再只认 .js 扩展名
+- [cc] fix(dao): D4 静默失败三连补告警——部署失败不再悄悄退出 0
+- [cc] refactor(dao.ps1): D3 退役段删除——settings.json 键位单归 cc-switch 引擎
+- [cc] fix(dao.ps1): D2 styles 送错门修正——同步目标改为 output-styles/
+- [cc] refactor(hooks): D1 单路径化——settings 注册直指仓库路径,删除拷贝层
+- [cc] fix(dao): 终审补刀——精确补回 b812b9b 误砍的五处判据
+- [cc] fix(dao): 消除「改配置认清源与投影」条款的循环指针
+- [cc] refactor(dao): 追加瘦身——为道日损式紧凑化，达成四文件≤22k验收线
+- [cc] refactor(dao): 规则-证据分离——压缩四条最长判据行，叙事迁 incident-narratives-202607.md
+- [cc] chore(hooks): 删除 dao-marshal-guard.mjs——写了部署了从未注册，14 天零生效
+- [cc] chore(config-sync): 快照注册 dao-rule-echo hook + 模型定价表同步
+- [cc] docs(dao): 补原生桌面能力兜底处方——PS+.NET 截图与 UIAutomation 元素级操控(均实测通过),坐实 windows-mcp 无不可替代能力
+- [cc] docs(dao): windows-mcp 全局禁用落档——用户二次点名(第一次未落档致 AI 照决策树续用)
+- [cc] fix(config-sync): 注册 dao-playwright-cleanup SessionStart hook——快照/DB/本机 settings.json 三方同步，消除启动漂移告警
+- [cc] docs(persona): fable5 系统提示词模型清单更新——Opus 4.8/Sonnet 4.6 → Opus 5/Sonnet 5（随 opus-5 档位升级对齐）
+- [cc] chore(config-sync): opus 档位升级至 claude-opus-5——env 默认模型改写 + 定价表新增条目（$5/$25，与 4.8 持平），cc-switch DB 已同步对齐
+- [cc] docs(dao): 通宵窗三教训沉淀——三明治规则样本更新+prompt 自提醒实践/主动轮询=亲手 Read 到终态(armed poller 第八例)/核验官输入禁静默截断
+- [cc] docs(outward-loop): §3 补启动权与实测义务条款——外向自检桌面状态必实测,启动已装竞品属自主动作(凭据/更新即停)
+- [cc] docs(dao): 三明治规则固化——ScheduleWakeup 永不作轮内末位工具调用（十踩规律：全部漏发均以其收尾）
+- [cc] docs(dao): 循环存续铁律固化——简报轮须同轮先设后继唤醒，禁「下轮再设」（第九坑，停摆 1h+ 实证）
+- [cc] docs(dao): 简报预记禁令固化——「已发」只准下轮核实后记账（第八踩）
+- [cc] fix(scaffold): TODO.md 清理建议加记账制豁免——查冲突 spike 抓获与 dao.md 帅节的结构性矛盾（活雷 #1 消解）
+- [cc] docs(dao): 收官简报铁序补硬步——唤醒首查简报真发否，ScheduleWakeup 收尾轮即未发（第六踩固化）
+- [cc] docs(dao): 长窗台账对时锚固化——以 ScheduleWakeup 实时为唯一锚禁推算（钟漂 ~2h 实证）
+- [cc] docs(dao): 停摆型条款补死——挂 Monitor 不算主动轮询（第七例新变体即堵）
+- [cc] docs(dao): 外向环落地——②.5 见底前外向自检（触发式+豁免口）+品·心法#3 issue 分层读+outward-loop playbook（用户点名反闭门造车，对抗审九处收硬后定稿）
+- [cc] docs(dao): 高性能档长窗心跳 1200-1800s→900s（用户拍板 2026-07-22 永久改，标准档不变）
+- [cc] docs(dao): 长窗排程补③.5 收官简报先行铁序——简报先于值守心跳+心跳prompt禁预写既成事实（单日两踩实证）
+- [cc] docs(dao): 防停摆②补「后台验证主动轮询」条款——等自后台停摆型四官次实证+次批零停摆坐实
+- [cc] docs(evolution): L29 增量⑤——EXIT 表漏列门变体（mousse #141 实证）
+- [cc] docs(evolution): L30 打包版专属 bug 错诊与根因验证口径（mousse #128 案）
+- [cc] docs(evolution): L29——帅复验管道假绿（bash 管道退出码取 tail 非 cargo，验证剧场实证与四防线）
+- [cc] docs(evolution): L28——自动化 shell 拉起 GUI 应用即环境污染（NO_COLOR 灰白实证）+DOM 截图盲区四防线
+- [cc] docs(evolution): L23 增量实证⑥——长路径删除 Git Bash 破解 + CWD 型不可见持有者两败即止（2026-07-20 十四孤儿树清理战）
+- [cc] docs(evolution): L23 增量实证——实现官自述回收不可信,收工条款升级 Get-CimInstance 自证(两批实测有效)
+- [cc] fix(dao): 品·产品之思重写——继承思考过程非结论(场景先行·有用为度,五问降级透镜库)+L27 提炼层级教训
+- [cc] docs(dao): 新增「品·产品之思」节——帅位产品设计五问蓝本（源:mousse 便签三型示例反推,用户令帅位继承其思考思路）
+- [cc] fix(dao): 长窗自主排程补时长循环条款——批次完成≠窗口完成（提前收窗实证）
+- [cc] docs(evolution): L26 派单令与项目规则冲突须显式声明覆盖（#95 越权自合实证）
+- [cc] docs(evolution): L25 长窗自主模式主会话心跳兜底（mousse-cli 夜战停摆实证）
+- [cc] docs(evolution): L24 并行派单 worktree 基点抽验（mousse-cli 批三 A 路基点事故实证）
+- [cc] docs(evolution): L22 subagent 复活会话边界分界 + L23 worktree 清理取证杀进程链（mousse-cli 2026-07-16 实战沉淀）
+- [cc] docs(evolution): L20修正——git通道故障SSH优先(比Git Data API简,push/fetch全走它)
+- [cc] docs(dao): L20-L21入库+前端UI测试分层处方(vitest视觉回归实证+AI工具负结论)
+- [cc] docs(evolution): L17-L19入库——审计官config污染/Tauri无feature连错dev server/PS会话CWD鬼树
+- [cc] fix(dao): 前端技术栈断链修复——scaffold门控+always_on自检+stacks强制链说明
+- [cc] docs(dao): 军衔四级制终稿——帅将校尉兵,一字一级语义同构
+- [cc] docs(dao): 职称体系定稿四级制——军师fable/将opus/兵sonnet/工兵haiku,strategist调档
+- [cc] docs(research): 军师报告——九大subagent模型档位Fable5时代评估
+- [cc] docs(dao): 职称名录细化为派单通报制——每次派将必带白话括注
+- [cc] docs(dao): 帅节增职称名录+首现括注机制（用户采纳 2026-07-12）
+- [cc] docs(dao): 多将并行拆分判据固化——两组实测(零相交+契约耦合)三判据+纵切禁令+加速令
+- [cc] docs(dao): Shell节增PS管道改写编码坑——含中文文件改写一律用编辑工具
+- [cc] docs(dao): 合职分级验证——实现全验/侦察分级抽验对抗验+终审不可让渡 + L15教训
+- [cc] docs(dao): 帅位六补丁——亲历上限/位分问/档位实证渐降/派单契约门/纠偏落档/帅位自检 + L14教训
+- [cc] refactor(agents): subagent 体系指挥官化——去 Devin 遗物，官方 orchestrator-workers 落地
+- [cc] fix(dao): 分支清理根源修复——解耦 PR 依赖 + 回溯式孤儿扫描
+- [cc] docs(dao): 查缺补漏——MIGRATION 核心章节重写 + 两处死引用清理
+- [cc] docs(dao): USAGE 终扫残余——Q5 计数与 skill 触发方式对齐手动模型
+- [cc] docs(dao): 查缺补漏——SKILL 断链修 + 三份活手册退役对齐 + L11/L12 教训
+- [cc] docs(dao): 波次四体系整治——dao.md 瘦身 + 教训回写 + 双栈退役声明
+- [cc] fix(dao): 设计同步门控 glob 修复 + dao-serve 归位
+- [cc] docs(evolution): L9 实机长任务源码冻结 + L10 截图回归确定性两律
+- [cc] fix(dao-design): OD协议层2改自托管优先——远程CDN是截图回归不确定源
+- [cc] fix(dao.ps1): skills 链接检测兼容 Junction——消除 partial 假警报
+- [cc] fix(dao-loop): 验证节奏加「运行验证」门控——bugfix Loop必须实际启动应用验证
+- [cc] docs(evolution): L6 选项数交叉校验 + L7 UUID自动发现
+- [cc] fix(dao-design): 模式选项数对齐 AskUserQuestion 硬限(≤4)
+- [cc] refactor(dao.ps1): 删除 Windsurf 死代码（link-global/link-rules/inventory 扫描）
+- [cc] docs(dao): 清理 .devin 退役后的文档引用
+- [cc] refactor(dao): 退役 .devin/ 双栈——Windsurf 已不用，为道日损
+- [cc] docs(evolution): E3 桌面端调试体系+意图升维 / L4 归属层前移 / L5 信号驱动
+- [cc] fix(dao-loop): 归档 worktree remove 前强制杀残留进程
+- [cc] fix(dao): 设计同步门控补盲——Glob worktree fallback + Loop 分支级 diff 定义
+- [cc] fix(dao): clarify cross-project _tmp root ownership rule
+- [cc] fix(dao): commands 和 hooks 中旧 skill 引用更新
+- [cc] refactor(dao): 三层架构修复 + 旧 skill 清理 + dao-loop 拆分
+- [cc] fix(dao-design-asset): 补三个结构缺口——§B.0自动注册CONTEXT/§C.0.6多草稿冲突检测/§C.2.5 token孤岛扫描
+- [cc] fix(dao-design-asset): 新增 §C.0 草稿发现，支持用功能名代替路径触发 §C
+- [cc] fix(design-sync): §0.2 图片输入处理——截图在会话上下文中可见，禁止从文件系统读取
+- [cc] docs(evolution): L3+E2 记录设计 skill 合并教训——跨 skill 耦合验证
+- [cc] fix(design-open): §P 补上 worktree 联动——OD 产出必须落草稿区
+- [cc] refactor(design): 设计 skill 10→6 合并——taste+layout→standards, sync+qa→open, promote+code-to-prototype→asset
+- [cc] chore(config-sync): 上行同步 — common_config_claude 对齐本地 settings.json
+- [cc] fix(dao-loop): 造线分支策略改用 worktree 隔离，修复跨 session 全局副作用
+- [cc] chore(config-sync): 添加 gh CLI 权限到 permissions.allow
+- [cc] chore(installer): 加 v3 版本标记便于截图排查
+- [cc] fix(installer): 不传路径参数，用 $PSScriptRoot 彻底避免引号问题
+- [cc] fix(installer): 尾部 \" 转义引号导致路径含非法字符
+- [cc] fix(installer): 检测 zip 内直接运行并提示先解压
+- [cc] fix(installer): PS1 藏入 _setup/ 子目录防误点
+- [cc] fix(installer): BAT 文件改纯 ASCII 防 cmd.exe 编码乱码
+- [cc] fix(mcp): Playwright MCP 强制 headless 模式
+- [cc] fix(dao-loop): 修正 Git 自动化表格中的章节引用
+- [cc] fix: 恢复误删的 dao-remove + gs 命令
+- [cc] refactor: autopilot/evolve 双栈残余表格压缩 — 文件角色表+错误类型表+反模式表→prose
+- [cc] refactor: dao-dev/superpowers/loop 双栈压缩 — subagent调度表+worktree代码块+孤儿表→prose
+- [cc] refactor: dao-commit/doc/goal 双栈表格压缩 — type表+文档类型表+反模式表+路由表→prose
+- [cc] chore: dao-slim-v2 Loop 归档 — 36轮40commits净删4132行
+- [cc] refactor: dao-autopilot 双栈同步压缩 — 评分表+反模式表→prose
+- [cc] chore: T36 完成, loop 进入 reviewing — 准备归档评估
+- [cc] docs: README skill 清单同步至当前状态 (38→17 skills, 去除 15+ 废弃引用)
+- [cc] refactor: T36c model_decision rules 压缩 — design-assets 96→70 + workflow-system 56→36
+- [cc] refactor: T36b always_on rules 压缩 — 399→276 行 (-31%)
+- [cc] refactor: T36 最终扫描 — AGENT_GUIDE 288→178 + stacks 双栈同步 + 孤儿文件归档
+- [cc] chore: T35 完成, STATUS.json 更新至 T36
+- [cc] refactor(skill): T35 双栈同步 — 最后 4 个 .devin/skills 压缩对齐
+- [cc] refactor(skill): T35 双栈同步 — 6 个 .devin/skills 压缩对齐 ccswitch
+- [cc] refactor(skill): dao-design-system .devin/ 双栈同步压缩 591→344 (-42%)
+- [cc] refactor(devin): dao-evolve 267→214 + dao-doc 182→133 — 12 code blocks 压缩对齐 ccswitch
+- [cc] refactor(devin): dao-dev 361→300 行 — 6 code blocks 压缩对齐 ccswitch
+- [cc] refactor(devin): dao-superpowers 272→190 行 — 5 code blocks 压缩 + 冗余执行模板删除
+- [cc] refactor(devin): dao-autopilot 579→389 行 + execution 60→50 行 — 格式块压缩对齐 ccswitch
+- [cc] refactor(rules+CLAUDE): T33 .devin/rules always-on + CLAUDE.md 格式压缩 (-55行)
+- [cc] chore(loop): T32 终态评估完成，全维度验收通过，Loop 进入 reviewing 待归档
+- [cc] chore(loop): T31 完成，STATUS 更新至 T32
+- [cc] refactor(agents): T31 全 8 agent profiles 格式压缩 1366→1187(-179)
+- [cc] refactor(commands): T30 superpowers 221→183(-38), evolve 228→219(-9)
+- [cc] refactor(commands): T29 dao-autopilot 三次压缩 392→344(-48)
+- [cc] refactor(skills+commands): T28 dao-loop 137→102(-35), design-qa 134→118(-16), layout 161→158(-3)
+- [cc] refactor(commands): T26-T27 dao-dev 351→301(-50), dao-autopilot 451→392(-59)
+- [cc] refactor(skills+commands): Phase 5 T21-T24 — 5 文件压缩 + 归档模板外置
+- [cc] refactor(commands): dao-evolve 272→228(-44), dao-superpowers 257→221(-36)
+- [cc] refactor(commands): dao-autopilot 577→451 行（-126）
+- [cc] chore(slim-v2): T17-T18 完成 — 双栈同步通过 + dao-smoke 54/54 全绿
+- [cc] refactor(.devin): T17 双栈同步 — 删除 dao-cycle/thread-tree + 引用更新
+- [cc] chore(slim-v2): T16 交叉引用扫描通过，ccswitch 侧无断链
+- [cc] refactor(commands): dao-cycle 并入 dao-dev §2.5 深度迭代模式
+- [cc] refactor(commands): T14 dao-thread-tree 并入 dao-autopilot
+- [cc] refactor(commands): T13 删除 dao-remove + gs（44 行，功能已被内置覆盖）
+- [cc] refactor(skill): T12 dao-code-to-prototype 压缩 369→243 行 (-34.1%)
+- [cc] refactor(skill): T11 dao-design-fidelity 压缩 390→232 行 (-40.5%)
+- [cc] refactor(skill): T10 dao-design-taste 压缩 419→308 行 (-26.5%)
+- [cc] refactor(design-open): T9 全面压缩 — SKILL.md 466→271 行(-42%)
+- [cc] refactor(design-system): T8 全面压缩 — SKILL.md 591→336 行(-43%)
+- [cc] refactor(dao-loop): T7 协议+调度+归档全面压缩 — SKILL.md 800→511 行(-36%)
+- [cc] refactor(dao-loop): T6 模板外置 — 4 套文档模板从 SKILL.md 提取到 templates/ 子目录
+- [cc] refactor(dao): T5 知识归位段压缩 — 判据树内联/项目结构委托 scaffold/Memory 精简
+- [cc] refactor(dao): T4 八句根基去章号 + 德·行止删除(衍生重述) + commit 规则精简
+- [cc] refactor(dao): T2+T3 产出归位压缩 + 浏览器门外置 + 续力门控精简
+- [cc] refactor(dao): T1 删除全局重复段 — 语言规则/知识归位表/产出语言 3 处去重
+- [cc] fix(skill): 设计验证流程永久修复 — Playwright 硬绑定 + 反就近写机制
+- [cc] fix(skill): dao-design-system 增加回写同步 — OD 修改后写回链接代码目录
+- [cc] fix(dao-loop): 嵌入 spec 三文件同步 + 验收比对归档门控
+- [cc] fix(deploy): Get-FileHash 改用 .NET MD5——修复 PS5.1/7 模块冲突
+- [cc] fix(code-to-prototype): §0.0 预检排除边缘状态计数
+- [cc] fix(dao): 续力门控感知——选项必须指向🔒必止门控，不跨过
+- [cc] fix(dao-loop): 🔒必止优先级声明——Auto Mode 不覆盖计划确认门控
+- [cc] chore(config-sync): sync cc-switch → snapshot (全部)
+- [cc] fix(docs): 修正工作流/命令计数（9→10 workflow, 10→12 command）
+- [cc] chore: 清理剩余 Pencil 引用（健康检查修复）
+- [cc] chore(config-sync): sync cc-switch → snapshot (全部)
+- [cc] chore: 清理 Pencil 残留 + 废弃 dao-session-sync
+- [cc] refactor(skills): 废弃3个旧UI skill，新建 dao-design-open 消费引擎
+- [cc] chore(mcp): 移除 pencil，新增 opendesign MCP
+- [cc] fix(loop): §1.5 分发铁律——默认分发，判断直接做需二次确认
+- [cc] chore(config-sync): sync cc-switch → snapshot (全部)
+- [cc] fix(config-sync): MCP 对齐——删 pencil、加 penpot/windows-mcp
+- [cc] fix(loop): 续力豁免——造线轮询禁用 AskUserQuestion
+- [cc] chore(config-sync): sync cc-switch → snapshot (全部)
+- [cc] fix(smoke): dao-loop + dao-project-scaffold 加入 CC_EXTRAS 白名单
+- [cc] chore(loop): 归档 skill-slim loop — _archive/ + HANDOFF.md
+- [cc] fix(loop): §1.5 计划确认展示分支名 feat/<topic>
+- [cc] docs(loop): command 流程补充 §2.5 计划确认步骤
+- [cc] fix(loop): 预飞后增加 Loop 计划确认检查点（§1.5）
+- [cc] fix(hooks): 移除 settings.json 快照 vs 部署的 hash 比较（假阳性）
+- [cc] refactor(dao): 项目标准结构检查从"建议"升级为首轮必检
+- [cc] refactor(devin): 同步项目结构新哲学——去 AGENT_GUIDE + 统一 plans/
+- [cc] chore(docs): docs/specs 历史设计文档 .windsurf→.devin 路径统一
+- [cc] refactor(dao): §7L 氛围编程范式 + .windsurf→.devin 引用迁移
+- [cc] refactor(skill): 重建 dao-design-taste 为 UI 全流程执行引擎
+- [cc] chore(config): 添加 computer-use-mcp 服务器配置
+- [cc] refactor(tooling): dao-sync.bat + dao.ps1 合二为一，统一入口 dao.bat
+- [cc] fix(deploy): link-claude 自愈 + dao-sync.bat 统一入口融合
+- [cc] refactor(evolution): 三层归位重构——行为层/记忆层/档案层分离
+- [cc] docs(evolution): T39-T41 + e032 沉淀 skill 精简/统一入口/Junction 自愈教训
+- [cc] refactor(skills): 38→7 skill 精简 + dao-sync 一键部署
+- [cc] fix(dao-sync): 废弃 github MCP 改用 gh CLI，预检加 gh/uvx 门
+- [cc] fix(dao-sync): setx PYTHONUTF8=1 消除新机器 Python 编码警告
+- [cc] fix(config-sync): preflight + 降级恢复，任何新机器下行不再阻塞
+- [cc] fix(persona): tune dao prompt — cite classics at decision points only
+- [cc] fix(persona): wrap both claude and reclaude entry points
+- fix(skill): revert dao-windsurf-extension name (keep B3 simplification)
+- [cc] fix(config-sync): codegraph MCP 用绝对路径启动，不依赖 PATH
+- [cc] fix(config-sync): codegraph MCP 用绝对路径启动，不依赖 PATH
+- [cc] refactor(skill): 去 Windsurf 特化，泛化为 VSCode 系 IDE 扩展开发 skill
+- [cc] chore(config-sync): default model opus-4-8 → opus-4-6
+- [cc] fix: 去除 PowerShell BOM 毒化链 — dao.ps1 WriteAllText + 快照去 BOM + doctor/snapshot 更新
+- docs(dao-cloud): add pitfalls - WindowStyle vs NoNewWindow, PS replace $, settings.json (#22)
+- fix(config-sync): remove invalid \$ escape in JSON (PowerShell artifact) (#21)
+- fix(config-sync): hooks path claude/ → ccswitch/ 同步重构
+- fix: gitignore config-sync/providers/ — prevent local token dir from showing as untracked (#20)
+- refactor: remove providers scope from config-sync, delete local-marketplaces (#18)
+- fix: unlink-claude also removes old claude/ symlinks
+- fix: Join-Path 3-arg syntax incompatible with PowerShell 5.1
+- fix: address Devin Review issues — preserve framework conventions
+- fix: update dao.ps1 references/ source path to docs/classics/
+- fix: correct stale path references after restructure
+- refactor: restructure project directories
+- docs: consolidate project documentation — remove fragmentation (#16)
+- refactor(config-sync): 融合 dao-sync 统一编排器（git 感知 + 三档护栏 + scope） (#15)
+- [cc] fix(claude): 移除失效的 statusline.sh，统一使用跨平台 statusline.js
+- [cc] fix(claude): statusline 重写为 Node.js 脚本，消除 jq/awk 依赖
+- [cc] docs(readme): 开头点明 Claude Code/Windsurf/Codex 三栈,避免读者误以为仅 Windsurf
+- [cc] refactor(repo): 结构合理化——删 3 项冗余 + 5 文档 .windsurf→.devin 对齐
+- [cc] docs(new-machine): 加「AI 自助安装/自检」一段式可执行块
+- [cc] refactor(claude): /remove 收敛为 /dao-remove，骑既有换机机制（删冗余 install.js）
+- [cc] docs(dao-cloud): 故障排查加 ERR_NGROK_3200 行（Hub 在/ngrok 断，云端无法自愈，别误报机器没开机）
+- [cc] fix(dao-cloud): 询问门改为「先问后连」+「先判断要不要本机」，消除问之前的准备浪费
+- [cc] refactor(dao-cloud): 询问门收窄到实质任务 + 模型杠杆标注用户侧 + 稀疏轮询提醒
+- docs(dao-cloud): trigger 词补「读 dao-cloud / dao-cloud / 连本机」 (#12)
+- docs(dao-cloud): §3.2 改为优先 devin_knowledge_manage 直接落库（suggest_knowledge 卡片不渲染的教训） (#11)
+- docs(dao-cloud): 新增 CONNECT.md 连接速查（仓库级持久化备份） (#10)
+- [cc] fix(config): 同步 Claude Code PowerShell 权限
+- docs: add CF-DaoHub ngrok fixed-URL guide + autostart scripts
+- [windsurf] docs(dao): 沉淀发布流程与终端静默诊断
+- [codex] docs(memory): 记录 dao-memory 验证复盘
+- [codex] fix(commit): 加强宿主前缀自检
+- [cc] fix(memory): 补充跨会话证据边界
+- [codex] fix(commit): 按宿主区分 AI 提交前缀
+- [cc] docs(config-sync): 加换机部署指南 NEW-MACHINE.md + 文档同步机制
+- [cc] fix(config-sync): 恢复 product-design 插件并去 codex 重复根键
+- [cc] fix(config-sync): 同步 Codex 插件启用配置
+- [cc] fix(config-sync): 识别 Claude-3p 运行态 MCP
+- [cc] chore(dao): 退役 dao-settings-sync,cc-switch 统一下发 + 修导出幂等
+- [cc] docs(config-sync): 补 config-sync 模块设计文档
+- [cc] chore(devin): 迁移 .windsurf 目录到 .devin
+- [cc] chore(evolution): 纳入演化记录数据文件
+- [cc] refactor(windsurf): 设计 skill 改造 + 治理同步到 .windsurf 栈
+- [cc] refactor(dao): link-codex 镜像 ~/.claude/skills 源 + 配套测试
+- [cc] chore(devin): 弃用 .devin 部署目录,删 agents 残留
+- [cc] refactor(skills): skill 治理——全景地图 + parallel 并入 pyramid
+- [cc] refactor(skills): 设计 skill 重构为 taste 基石范式
+- [cc] refactor(skill): dao-terminal-resilience 合并为唯一母体
+- [cc] refactor(dao): 删 dao-goal 命令,delegated-continuous 解耦授权源
+- fix(goal): suppress final ask in delegated continuous mode
+- fix(shell): harden workspace-anchored validation
+- fix(goal): inherit delegated continuous mode
+- fix(goal): auto-route dao goal execution
+- chore(mcp): 添加 Pencil MCP 服务配置
+- docs(rules): 合并 skill 规则并强化常驻铁律
+- refactor(rules): correct screen-state-coverage to use separate canvas frames per state (Figma/Storybook standard) — forbid embedding alternate states inside same component
+- refactor(global): remove subagent concurrency rule (obsolete)
+- docs(global_rules): 五·言 精简成 dao 风格短句 - 删会话标题(TitleLocalizer 管)和冗余表格
+- docs(global_rules): 五·言 重组成三层（显性必须/半显性推荐/隐性保留） + 边界判据
+- docs(global_rules): 五·言 扩展 文档命名中文化规则
+- docs(distill): e031 完整 dao-evolve 生命周期纪实
+- fix(dao-ui-mockup): verify-visual.mjs fontSize 阈值 1px -> 2px (dogfooding 反馈)
+- refactor(dao-evolve): 治本重构 · 删档 1 补丁铁律 · 加六·固 6.2 验证闭环 · 为道日损
+- docs(distill): T37 + e029 沉淀 shadcn 体系裂痕扫描铁律
+- docs(distill): T36 + e028 沉淀 dao-cycle 字号铁律全过程
+- fix(autopilot): §5.4 路径修正 + §6.1 stale 检测 - 修死 state.json 累积元 bug (T35)
+- fix(autopilot): §5.3 报告模板嵌入 lesson 上提评估占位符 (堵 reviewer 抓到的 P1 路径)
+- docs(dao): P3/P4 HTTP 与 CPU 100% 误诊模式 + superpowers 实战见证 (T176/T177/T183)
+- fix(autopilot): state.json 迁到 .dao-autopilot/ 避免屏蔽 sidecar rules
+- docs(usage): /dao-dev vs /dao-cycle 深化为 6 子小节
+- fix(docs): USAGE.md 移到根目录 + README 5 处主体引用 + T34 教训
+- docs: 用户视角使用手册 USAGE.md + README 入口 + 涪槃 typo 修
+- docs(dao-worktree): 纳入 e163 教训 — worktree 首次 install 前必清 node_modules
+- refactor(rules): superpowers-gate skill 名映射到 dao-* 实现 + plan 路径修正
+- refactor(rules): Plan Mode 与 superpowers 解耦 + 删假触发
+- chore(rules): 捡起遗留 WIP - execution.md 加"调查先行"条款
+- refactor(skills): dao-finish PR模板→指针 -17行
+- refactor(workflows): dev/autopilot 减法 -40行（断图链/书→/doc/state-schema/per-phase模板）
+- docs: MIGRATION.md 对齐当前架构（skills 24 / workflows 9 / stacks / v2 命名）
+- docs(dao): skills 15→24 同步 + AGENT_GUIDE v2 对齐 + 清除 systematic-debugging 残留
+- fix(dao): 减法后一致性修补 + turbo 统一 + cycle 交接判据
+- refactor(workflows): 为道日损——工作流减法 13→9 + stacks/ 新层
+- fix: 统一 14 个 skills 文件名为 SKILL.md（修复 Windsurf 面板不识别小写 skill.md）
+- docs: autopilot 新增「工件先行」原则——从实物推导方案，不从理论协议推导
+- refactor: enforce clean separation — dao=orchestration, skills-kit=execution
+- refactor: first-principles redesign of infra detection
+- chore(gitignore): 忽略 image/ 本地截图缓存目录
+- docs(evolution): T20-T23 重构教训 + e019 演化条目
+- docs: 同步门面文档至 v2 架构
+- refactor(skills+workflows): 移除德/道/法/术四层引用 对齐 v2 架构
+- refactor(rules): v2 9 文件 5 层架构重构 + global_rules 精简
+- docs(rules): 补充 SSH 远程命令防卡硬规则
+- chore(rules): 强化 ask_user_question 发送前门检查
+- refactor(rules): 精简 GPT rule/skill 边界补丁
+- refactor: model-patch-gpt.md 精简至只保留 ask_user_question 硬约束
+- refactor: 废弃 link 模式，Sidecar 唯一部署方式
+- refactor(rules): 回退GPT冗余膨胀 + 新增GPT执行补丁
+- refactor(evolution): CSV 成为演化知识单一真相源
+- docs(rules): 强化 ask_user_question 收尾协议，明确 /autopilot 豁免边界
+- docs(agent-guide): Sidecar 优先部署原则替代软链接机制
+- docs(rules): 完善渐进渗透原则的行为描述与反模式
+- fix(dao-cycle): 观相教训搜索+涅槃后教训提炼加 HARD GATE 硬门控
+- refactor(health-check): strip symlink checks, Sidecar makes them obsolete
+- refactor(health-check): remove migration logic, de-layer now owns it
+- chore: remove dead sequential-thinking MCP entry
+- refactor: 5 rules + 13 skills architecture
+- docs(skill): 新增平台探测方法论章节至 Windsurf 扩展技能
+- chore(rules): 更新 skills 索引，添加 express-typescript-api 条目
+- chore(workflow): dao-commit 加入主动版本检查门
+- docs(skills-index): add visual reference image
+- fix(cycle): 教训提炼和虚·归位标注为内观步骤，防止 ask-next-step 短路（T68）
+- fix(mcp): GitHub MCP - proxy bootstrap, dynamic paths, setGlobalDispatcher
+- refactor(docs): AGENT_GUIDE 瘦身，演化历史分离至 docs/evolution.md
+- fix(sync): 自动创建 .git/info/exclude 并修复空文件判断
+- fix(dao-commit): 临时文件写入系统临时目录并在提交后删除
+- chore: untrack .windsurf/autopilot/state.json + add to local exclude
+- docs(readme): 全面更新对齐当前体系
+- refactor(workflows): cycle/dev 无为化简化
+- chore: update dao-commit workflow
+- refactor(rules): 架构级减法 — 天层机制感知→model_decision/项目树→mechanism/always_on减60行
+- refactor(rules): 道德经损之又损 — 德层-13行/术层-13行/法层-5行
+- refactor(rules): 删ask-next-step重复豁免节
+- refactor(rules): 化繁为简 — 删Skills体系表/删workflow装饰列表/补dao-commit.md
+- fix(skills): remove invalid trigger field from all skills - skills use progressive disclosure not trigger
+- fix(rules): 将 ask-next-step 接入 always_on
+- refactor: unify to .windsurf/, refactor dao-cycle, fix references
+- docs: add project integration section to dao-shu-layer.md
+- docs: rewrite MIGRATION.md for local exclude + dao- prefix architecture
+- refactor: rename rules with dao- prefix (de/fa/shu-layer → dao-de/fa/shu-layer)
+- refactor: rename all workflows with dao- prefix for namespace consistency
+- docs: update MIGRATION.md with complete bootstrap flow (AGENT.md consolidation + gitignore)
+- refactor: rename skills/workflows with dao- prefix for cross-project migration
+- fix: skill name改回英文短横线格式(Windsurf要求lowercase alphanumeric with hyphens)
+- fix: skills添加name字段 + 调整trigger策略(扩展术/韧性术→always_on)
+
+### 其它
+- [pi] 步骤4：删 Windows 本机编排层（#807，拆3块并行） (#857)
+- [cc] 机器人说人话 + 收工关僵尸终端 + 主树跟主分支 timer（落地清单第 9 步） (#861)
+- [pi] 编排层熔断：连撞 3 次 cooldown、到点半开一针（#843） (#851)
+- [pi] 指挥官三洞：单轮派单上限 + 模型校验 + 建树串行化（#849） (#850)
+- [pi] 撞限流探测搬上服务器 + 接回自动换人（#833） (#834)
+- [pi] 步骤5：选型收拢——删厂商/换支路层（#828） (#830)
+- [pi] 步骤7：land 接 automations（#829） (#832)
+- [pi] dao-check 新增项：host/skills 符号链接检查（缺链零报警，#793） (#810)
+- [grok] 堵复审轮与终端错位五洞 (#815) (#820)
+- [pi] 飞书适配器块A：feishu-triage 长连接+群映射+systemd+server-check⑫+fixture（#801） (#806)
+- [pi] 飞书消歧逻辑（块B）：feishu-triage-core 判重/三问/建单/两档放行 + persona + 测试 (#801) (#803)
+- [cc] audit(drift): 两仓审查——决策落地只改了一处的两类漂移补齐，守卫栈文档收成冻结存根
+- [cc] 体系类改动加「先查归属，别先想做法」+ 8 条断链存量补进 strikes 基线
+- [cc] NEW-MACHINE 分支卫生节指到 land（原始命令保留作手搓备份）
+- [cc] land 收尾：哨兵加「主分支有未推提交」提醒行（探不出即沉默）；修远端清单误列 origin/HEAD 缩写
+- [cc] dao-check 停派工态门（4 项活探默认不跑，--full 全量）+ land 收工一条命令（推主分支/清已合并派生物，六道安全闸）
+- [cc] 审官质量标准落地：判绿前 7 条必核清单，三处「审读规矩」空指针指到实文件（8-24 前置清零）
+- [cc] CLAUDE.md 改写：常驻面只留停派工态的通用纪律，流程规矩迁 dispatch skill
+- [cc] onboard：换机一条幂等命令 + SessionStart 哨兵（绿=零输出）
+- [cc] 本机守卫/派工常驻面归零：方法论落服务器端（revert 本 commit 即恢复）
+- [grok] 实现 dao-commit：通用 commit 语义 + 版本号机制 (#789)
+- [devin] codex 补回车兜底 + soldier-book 纪律12 + 删垫片 (#785) (#786)
+- [devin] #782 devin launch 加权限旗标 (#784)
+- [marshal] 派工链路代码收口：#771 非交互 + #777 交互形态实现 (#780)
+- [devin] #777 devin 交互形态验证 (#779)
+- [devin] #762 派工执行体修复 + dao-cmd 按域拆分重构收口
+- [cursor] 拍板落档 + Linux 服务器底座实测：运行时搬服务器，Windows 转人工派单 (#764)
+- [cc] 合并 PR #761 派工重构及 review 修复到 master
+- [devin] README 目录导览补 dao.mjs board-archive / board-reset 条目 (#752) (#758)
+- [cursor] Q4 清零：docs/templates/derived 归档出主仓（挪 memory 仓 docs-archive/） (#750)
+- [cursor] memory 仓自动同步：memory-sync 脚本 + 挂 guard-keepalive 尾部（detached） (#749)
+- [cursor] Q5 机制化：孤儿测试闸（dao-check ㉖）+ 测试执行并行化 (#748)
+- [cursor] 账本种子回填 8-15～8-22 + 断流检查豁免名单（转 public 后 ⑰ 从 SKIP 变真跑） (#751)
+- [cursor] CI 省量：check.yml 换 ubuntu（2x→1x）+ push master 改每日 cron + 同 ref 取消在途 (#747)
+- [cursor] 清零收口：10 个未排期已消歧单挪进 ideas（#712 #641 #622 #612 #610 #605 #498 #491 #489 #728） (#746)
+- [cursor] 一张 PR 只许一个审官：失败不换厂，结算后不造卡 (#735)
+- [cursor] 起 agent 先读 Orca 桌面启动命令 (#737)
+- [cursor] 新增 dao.mjs board-archive / board-reset：重测派单前的盘面存档与清盘 (#745)
+- [cursor] 守卫救援：保活不再只认 master，自停留可读记录 (#742)
+- [cursor] [盘] 列出 Orca 盘上真实卡名 (#741)
+- [devin] #607 值守退出侦测：shouldAskExit 纯函数 + hook 注入结论 + 自拍登记 + 注入瘦身 [chain:standby-state#1] (#729)
+- [devin] #576 next 纯函数：[盘] 那行升级成动作候选 (#727)
+- [cursor] AGENTS.md 补 Cursor Cloud 环境说明：纯 Node 无依赖、跑法与云上注定红的项 (#706)
+- [grok] opencode 选型只留 ds 与 ox-alpha-free (#722)
+- [cursor] 消歧门只认正向「已消歧」，删除零使用过期标 (#724)
+- [cursor] 拍板说白话：选项禁内部词，推荐标（推荐） (#731)
+- [grok] 把第一轮丢掉的单记进 ideas (#726)
+- [qf] 微修 #732：pr-fast 分工表补 quick-fix 指针 (#740)
+- [devin] #682 微通道：quick-fix 原子脚本 + #679 闸 + 红线例外 (#730)
+- [cursor] 守卫机制修复：flow 去重刷屏 + 红项悬置超时升级 + draft 判绿显形 + 选型序文案分态 (#744)
+- [devin] #684 余量：修多仓盘面定界区认不出本仓 (#725)
+- [cursor] 认定后台子代理就是 pr-fast 执行面，不再要求用户新开聊天 (#723)
+- [devin] #631 reviewer-attach 树→dispatch 映射串号根治 (#721)
+- [devin] #707 Cursor 帅位适配：.cursor/hooks.json 三钩子（保活/盘面/派工闸） (#719)
+- [devin] #614 Run 生命周期机制化：身份标记 + gc 豁免 + 回滚回收 + 顺车只读 gc + 截断检测 (#710)
+- [cursor][chain:shuai-watchdog#1] 状态去重 + 帅位标题建议 (#716)
+- [cursor] 选型真相源迁 JSON（用户本地改即生效） (#720)
+- [cursor] 选型登记 ox-alpha-free：og 免费探路试用 (#718)
+- [cursor] NEW-MACHINE 补 Cursor skills 装法（~/.cursor/skills） (#717)
+- [cursor][chain:shuai-watchdog#1] 帅位看门狗：纯函数扫描 + 条件叫醒 (#715)
+- [cursor] 快路 GitHub 写动作改走 marshal (#714)
+- Merge pull request #713 from thoerwink8/thoerwink8/pr-fast-skill
+- [cursor] 帅位无人值守：合并权归帅写进派工手册 (#711)
+- [cursor] #708 devin 工人起法补 --respect-workspace-trust false (#709)
+- Merge pull request #705 from thoerwink8/cursor/close-issue-from-zero
+- Merge pull request #704 from thoerwink8/cursor/close-issue-grandfather-line
+- Merge pull request #703 from thoerwink8/cursor/close-issue-grandfather
+- Merge pull request #702 from thoerwink8/cursor/close-issue-baseline
+- Merge pull request #701 from thoerwink8/cursor/devin-start-field
+- Merge pull request #700 from thoerwink8/cursor/guard-heartbeat-stall
+- Merge pull request #698 from thoerwink8/cursor/code-review-fix-batch
+- Merge pull request #697 from thoerwink8/cursor/ledger-local-events
+- Merge pull request #696 from thoerwink8/thoerwink8/cursor/issue-693-shuai-trigger
+- Merge pull request #695 from thoerwink8/thoerwink8/fix-watchdog-flow-windowsHide
+- [pi] #686 flow 判据四件套：工人死亡检测 / notify自愈 / pendingShuai落GH / 复核绿不报帅 (#692)
+- [grok] #683 守卫计划任务保活 (#691)
+- [grok] #684 事件钩子同步帅位定界区 (#685)
+- [grok] #679 起审官同厂硬闸 (#680)
+- [grok] #688 deepseek 加回 + devin 通道优先 (#689)
+- [grok] #677 没审完别 worker_done (#678)
+- [grok] #675 验收要改时同步开下一跳 (#676)
+- [grok] #673 第四席 dao-watchdog：事故写 GitHub (#674)
+- [grok] #669 DeepSeek 两通道停派：全工种路由闸 (#671)
+- [grok] #667 删掉靠横幅给帅收信整层 (#672)
+- [grok] #665 守卫跑 origin/master：落后自停、合了就收树 (#666)
+- [grok] #551 #552 闭环结算：worker_done 真结算、第二轮复审能读信 (#670)
+- [grok] #633 三把钥匙：启动认进程、归档认 MERGED、信只发给活人 (#664)
+- [pi] #661 开工未提交必须失败回滚，垫片补回车退役 (#662)
+- [pi] #657 关单改走MERGED且check绿：删 Closes 自动关单 (#659)
+- [pi] #638 信箱台单台轮询全部在途 Run（+ #614 只读 gc 阈值行） (#655)
+- [pi] #652 扫描器按 gh MERGED+盘面树关树（可归档只加速；未跟踪文件不挡删） (#656)
+- [pi] #658 审官选型序恢复 GPT 顶位（在途不换） (#660)
+- [grok] #633 CI：dispatch --batch 起终端也复用默认空壳 (#654)
+- [pi] #645 空闲短门铃叫醒 (#647)
+- [pi] #651 认出 Cursor [Pasted text #N +M lines] 与未发出 follow-up (#653)
+- [pi] #648 登记 glm-5.2 并改审官选型序顶位 (#650)
+- Merge pull request #634 from thoerwink8/thoerwink8/ISSUE-633-工人-grok-4.6-633-空壳终端根治-注入复用默认终端
+- [grok] #646 capacity 指纹续命改 1/5/10 分试三次，第 4 次报帅不续 (#649)
+- [grok] #642 换机地图 host/machine + 仓外路径闸 (#643)
+- [grok] #619 粘贴卡死根治 (#639)
+- [grok] #637 自动归档执行器带验证闸 (#640)
+- [grok] dispatch --batch：只读工人共享 1 张卡 (#621)
+- [grok] 给 dispatch 加 --split 必填参数 (#613)
+- [grok] #630 watchdog 孤儿树检测接真删 (#632)
+- [grok] #635 租约退役改纯TTL判断 (#636)
+- [grok] #627 帅操作 issue 走 marshal 身份 (#628)
+- [grok] #625 审官合并去掉 --auto (#626)
+- Merge pull request #603 from thoerwink8/thoerwink8/601-补归档收口与草稿闸
+- [grok] #623 docs/ideas.md 追加7条 (#624)
+- [grok] 卡名归人眼、判据归字段 (#616)
+- Merge pull request #618 from thoerwink8/thoerwink8/615-接入-Cursor-管子层
+- [pi] tests/ 迁到 node:test（删自造 check() runner） (#609)
+- [grok] 拆提示词整层：注入只给指针，删三层折叠补丁 (#604)
+- [grok] 修返工归因与账本三态 (#599)
+- [grok] #593 收 Run 生命周期与求救通道 (#598)
+- [grok] 改对 RUN_REQUIRED_HINT：先 run-create，勿先试 run-use (#597)
+- [grok] #595 补归档收口三闸 (#596)
+- [grok] #586 审官按需起阶段二：接线拆旧路 (#592)
+- [grok] #588 返工：calibrate 去废行 + ledger-query + baselineAt (#594)
+- Merge pull request #582 from thoerwink8/thoerwink8/580-补-flow-心跳与守卫判据
+- Merge pull request #590 from thoerwink8/thoerwink8/588-strikes机械闸与worktree递归删
+- Merge pull request #587 from thoerwink8/thoerwink8/586-审官按需起阶段一-备零件
+- [grok] #583 承认即派：用户调用后走现有派单 (#585)
+- Merge pull request #584 from thoerwink8/thoerwink8/581-校准数据源换成账本
+- [grok] #575 补管道缺口：心跳/raw/守卫/reviewer-attach/Pasted+ALL_IDLE/完工契约/对齐master (#578)
+- [grok] #577 立禁串行规矩：阻塞项立刻并行派，「可能冲突」不是推迟理由 (#579)
+- [grok] #573 固化身份体系：gh-as 正式版 + 审官改走 approve + commit author 跟身份 (#574)
+- [pi] #564 盘面强制可见：注入轮询回归修复 + [盘] hook 摘要 + label 自动打 + 阈值口径 + 值守态同步 (#572)
+- 569 watchdog 降噪只减假阳不减真阳 + pi 静默换 provider 检测 + 权限确认框指纹 + BLIND 并进 (#571)
+- [pi] #567 master 被推当场跑 dao-check：push 触发面 + GH_TOKEN 给 github.token（⑭ 从永久 SKIP 变真跑） (#570)
+- [pi] #565 返工①：dry-run 不走消歧门（disambiguation 只作报告不影响退出码，修 CI 无 GH_TOKEN 假红——复现命令前后 259+1红 → 271+0红）+ 返工②：注入后开工验证改轮询（TUI 加载期不算开工回归钉；命中 Pasted Content 自动补回车救活，startedAfterEnter 留痕；仍在才回滚；工人/审官两处都覆盖）+ 测试共 272 过 (#568)
+- Merge pull request #566 from thoerwink8/thoerwink8/565-造-dao-project-skill-与消歧门门控
+- [cc] #561 #558 内容压三行迁进 docs/ideas.md；dao-check ⑭ 阈值 44→30 (#562)
+- Merge pull request #560 from thoerwink8/thoerwink8/流转器①地基
+- Merge pull request #557 from thoerwink8/thoerwink8/issue-解套-存量分流-新单判据
+- Merge pull request #555 from thoerwink8/thoerwink8/闸门改挂随仓-settings-路由表补-kimi-k3
+- Merge pull request #549 from thoerwink8/thoerwink8/544-修前置提醒链
+- Merge pull request #548 from thoerwink8/thoerwink8/组A-派工通道一次改到位
+- Merge pull request #519 from thoerwink8/feat/opencode-go-models
+- Merge pull request #542 from thoerwink8/thoerwink8/dispatch口径四条
+- Merge pull request #543 from thoerwink8/thoerwink8/memory搬家收尾-529
+- Merge pull request #538 from thoerwink8/thoerwink8/前置提醒-选型标通道
+- Merge pull request #528 from thoerwink8/thoerwink8/520-Go-限流自动切直连-ds
+- [cc] memory: 摘掉悬空索引行 verdict-handoff-must-land-at-target
+- [cc] memory: 通道不是模型身份、roles 是幽灵字段
+- Merge pull request #513 from thoerwink8/thoerwink8/508-接入CommandCode双链路
+- Merge pull request #514 from thoerwink8/thoerwink8/511-任务官放权落盘
+- [cc] memory: 提交 memory 要点名文件，别 add 整个目录
+- [cc] memory: command-code 做工人载具的三个坑
+- Merge pull request #515 from thoerwink8/thoerwink8/CLAUDE.md-写明-memory-例外
+- [cc] memory: 接链后首两条——接链要逐文件比内容
+- memory 同步入仓：补齐本机缺失并同步最新记忆
+- [pi] 救 memory 断链：本机 45 条与仓内合一 + dao-check ⑨ 本机 Junction 断链检查（#503） (#504)
+- [cc] 专注/值守三态状态机：skill + state.json + UserPromptSubmit hook (#490)
+- [pi] 信箱台身份判据：身份改用 run-show coordinator_handle（标题只出不进），拒绝顶替（#493） (#496)
+- [pi] 融合改造落地单：flow/watchdog 双瘦身 + 敏感路径越权报警 + SKILL 启动序重写 + pi 默认 flash 固化 + regrok 收录 (#463)
+- [cc] grill-ai skill：从零拷问兜底令入仓（#483） (#484)
+- [grok] 点将台接线：分时选型 CLI + 今日事件回填 (#468)
+- [grok] 信箱台幂等脚本：ensure 一键重建哑终端+中继+coordinator (#466)
+- Merge pull request #459 from thoerwink8/thoerwink8/流转器实现
+- Merge pull request #457 from thoerwink8/thoerwink8/看门狗收口454
+- Merge pull request #458 from thoerwink8/thoerwink8/制度-先垫后固
+- Merge pull request #456 from thoerwink8/thoerwink8/点将台实现
+- Merge pull request #450 from thoerwink8/dianjiangtai-design
+- Merge pull request #453 from thoerwink8/dispatch-carpool
+- Merge pull request #452 from thoerwink8/watchdog-formal
+- Merge pull request #449 from thoerwink8/fix-444-red-count
+- Merge pull request #446 from thoerwink8/routing-grok-build
+- Merge pull request #441 from thoerwink8/thoerwink8/collab-topology
+- Merge pull request #440 from thoerwink8/thoerwink8/model-routing
+- Merge pull request #439 from thoerwink8/thoerwink8/calibration-loop
+- Merge pull request #437 from thoerwink8/budget-gate
+- Merge pull request #436 from thoerwink8/thoerwink8/淘金落地-誊写
+- Merge pull request #435 from thoerwink8/lesson-same-channel
+- Merge pull request #432 from thoerwink8/rename-ccswitch-host
+- Merge pull request #431 from thoerwink8/slim-dao-field
+- Merge pull request #430 from thoerwink8/thoerwink8/机制回迁-誊写
+- Merge pull request #429 from thoerwink8/thoerwink8/大扫除-拆旧规则
+- Merge pull request #428 from thoerwink8/thoerwink8/rebirth-drafts-2
+- Merge pull request #426 from thoerwink8/thoerwink8/tpl-build
+- Merge pull request #420 from thoerwink8/thoerwink8/issue-417-dead-pointers
+- Merge pull request #419 from thoerwink8/thoerwink8/issue-408-unfreeze-trigger
+- Merge pull request #418 from thoerwink8/thoerwink8/issue-314-alwayson-ceiling
+- Merge pull request #415 from thoerwink8/thoerwink8/issue-413-legislation
+- Merge pull request #416 from thoerwink8/thoerwink8/issue-409-dispatch-gate
+- Merge pull request #414 from thoerwink8/thoerwink8/issue-412-section-names
+- Merge pull request #411 from thoerwink8/worktree-agent-a2929898aea4d385e
+- Merge pull request #403 from thoerwink8/thoerwink8/fix-284-archive-gate
+- Merge pull request #402 from thoerwink8/thoerwink8/fix-250-claim-runtime
+- Merge pull request #401 from thoerwink8/thoerwink8/guard-292-pointers
+- Merge pull request #400 from thoerwink8/thoerwink8/doctor-376
+- Merge pull request #399 from thoerwink8/thoerwink8/fix-ci-env-coupling
+- Merge pull request #394 from thoerwink8/thoerwink8/fix-385-roster-pi
+- Merge pull request #393 from thoerwink8/thoerwink8/fix-323-affected-tests
+- Merge pull request #395 from thoerwink8/thoerwink8/pwsh-387
+- Merge pull request #391 from thoerwink8/thoerwink8/lang-390
+- Merge pull request #383 from thoerwink8/thoerwink8/label-hooks-373
+- Merge pull request #386 from thoerwink8/thoerwink8/fix-364-pwsh
+- Merge pull request #380 from thoerwink8/thoerwink8/retro-legislation
+- Merge pull request #378 from thoerwink8/thoerwink8/treelord-360
+- Merge pull request #371 from thoerwink8/thoerwink8/doctor-366
+- Merge pull request #369 from thoerwink8/thoerwink8/treelord-340v2
+- Merge pull request #363 from thoerwink8/thoerwink8/watchdog-361
+- Merge pull request #357 from thoerwink8/thoerwink8/watchdog-348
+- Merge pull request #352 from thoerwink8/thoerwink8/pre-dispatch-349
+- Merge pull request #353 from thoerwink8/thoerwink8/pi-config-344
+- Merge pull request #355 from thoerwink8/docs/350-treelord-orchestration
+- Merge pull request #351 from thoerwink8/thoerwink8/ps7-switch-338
+- Merge pull request #345 from thoerwink8/thoerwink8/reliability-339
+- Merge pull request #343 from thoerwink8/thoerwink8/safeguard-guard-336
+- Merge pull request #341 from thoerwink8/thoerwink8/auto-mode-rewrite
+- Merge pull request #335 from thoerwink8/thoerwink8/dao-batch-e-debts
+- Merge pull request #333 from thoerwink8/thoerwink8/dao-batch-c-cleanup
+- Merge pull request #329 from thoerwink8/thoerwink8/dao-batch-b-rules
+- Merge pull request #328 from thoerwink8/thoerwink8/dao-batch-a-hooks
+- Merge pull request #327 from thoerwink8/thoerwink8/dao-batch-d-cleanup
+- Merge pull request #326 from thoerwink8/fix/issue-325-dao-check
+- Merge pull request #321 from thoerwink8/fix/issue-275-comment-cleanup
+- Merge pull request #319 from thoerwink8/fix/issue-260-265-gates-cleanup-assertions
+- Merge pull request #322 from thoerwink8/fix/issue-231-273-scaffold-behavior-assertions
+- Merge pull request #320 from thoerwink8/fix/issue-266-290-hardgates-assertions
+- Merge pull request #316 from thoerwink8/fix/issue-304-312-fabric-routing
+- Merge pull request #318 from thoerwink8/fix/issue-288-289-nogo-ledger-guards
+- Merge pull request #317 from thoerwink8/fix/issue-267-rule-echo-m3-sandbox
+- Merge pull request #313 from thoerwink8/fix/issue-259-clock-skew-anchor
+- Merge pull request #311 from thoerwink8/fix/ci-runner-red
+- Merge pull request #309 from thoerwink8/ds/dao-propagation
+- Merge pull request #307 from thoerwink8/pi/dao-redesign
+- Merge pull request #303 from thoerwink8/pi/issues-299-302
+- Merge pull request #285 from thoerwink8/feat/guard-methodology
+- Merge pull request #278 from thoerwink8/refactor/archive-form
+- Merge pull request #280 from thoerwink8/feat/comment-policy
+- Merge pull request #277 from thoerwink8/fix/tail-note-parity
+- Merge pull request #279 from thoerwink8/chore/comment-d-bucket
+- Merge pull request #276 from thoerwink8/fix/dogfood-gaps
+- Merge pull request #271 from thoerwink8/fix/256-scaffold-guards
+- Merge pull request #264 from thoerwink8/fix/250-runtime-bucket
+- Merge pull request #263 from thoerwink8/fix/253-rule-echo-worktree-state
+- Merge pull request #261 from thoerwink8/fix/254-g2-rerun-budget-coefficient
+- Merge pull request #252 from thoerwink8/feat/70-layer2-gates-merge-cleanup
+- Merge pull request #249 from thoerwink8/fix/210-mcp-health-hotpath-guard
+- Merge pull request #251 from thoerwink8/worktree-agent-addb138445d54d3e9
+- Merge pull request #255 from thoerwink8/fix/247-probe-gate-mirror-test-coverage
+- Merge pull request #258 from thoerwink8/worktree-agent-a78d6561753ee9af7
+- Merge pull request #246 from thoerwink8/worktree-agent-a3608b4b68d513fbe
+- Merge pull request #257 from thoerwink8/worktree-agent-a01c3d68b7f2af5b3
+- Merge pull request #237 from thoerwink8/worktree-agent-a4ea5f872d328de2a
+- Merge pull request #235 from thoerwink8/worktree-agent-aadd52c8d46a10dca
+- Merge pull request #240 from thoerwink8/fix/215-claim-collision
+- Merge pull request #248 from thoerwink8/worktree-agent-a477ba02c97ed275b
+- Merge pull request #241 from thoerwink8/fix/232-probe-gate-mirror-log
+- Merge pull request #244 from thoerwink8/worktree-agent-aab4d47ae8fa68002
+- Merge pull request #234 from thoerwink8/worktree-agent-a7eed6c73d1c9b07d
+- Merge pull request #242 from thoerwink8/fix/226-clause-guard-test-debt
+- Merge pull request #239 from thoerwink8/worktree-agent-ab890678616d0b3d4
+- Merge pull request #230 from thoerwink8/worktree-agent-acdb34991963337b0
+- Merge pull request #228 from thoerwink8/worktree-agent-ab84a1d446f5f464d
+- Merge pull request #229 from thoerwink8/worktree-agent-a00b9bd453d274b74
+- Merge pull request #227 from thoerwink8/worktree-agent-a7c7f3295ebd688e3
+- Merge pull request #224 from thoerwink8/fix/retire-judge-ledger-blindspot
+- Merge pull request #223 from thoerwink8/worktree-agent-aaeb254d0c551c866
+- Merge pull request #225 from thoerwink8/chore/issue-readability-batch-20260809
+- Merge pull request #222 from thoerwink8/docs/70-batch-J4-bom-workitem-numbers
+- Merge pull request #213 from thoerwink8/fix/203-209-run-tests-ps-marker-anchor
+- Merge pull request #221 from thoerwink8/chore/92-retire-fetch-opendesign-mcp
+- Merge pull request #220 from thoerwink8/worktree-agent-ae09eb9d2f8b41c85
+- Merge pull request #218 from thoerwink8/fix/171-drift-assertions-b
+- Merge pull request #216 from thoerwink8/fix/199-g2-candidate-side
+- Merge pull request #211 from thoerwink8/fix/198-claim-protocol-lawfix
+- Merge pull request #212 from thoerwink8/fix/201-210-mirror-sandbox-mcp-hotpath
+- Merge pull request #207 from thoerwink8/feat/92-mcp-health-doctor
+- Merge pull request #208 from thoerwink8/fix/194-heartbeat-tail-order
+- Merge pull request #205 from thoerwink8/fix/142-44-141-140-hook-nudge-scaffold-budget
+- Merge pull request #206 from thoerwink8/fix/121-94-65-48-83-misc-cleanup
+- Merge pull request #204 from thoerwink8/fix/152-149-144-arrears
+- Merge pull request #202 from thoerwink8/feat/dispatch-tier-sonnet5
+- Merge pull request #200 from thoerwink8/worktree-agent-a1d0970e74ffe3026
+- Merge pull request #197 from thoerwink8/fix/133-134-g2-io-and-junction-filter
+- Merge pull request #196 from thoerwink8/worktree-agent-a39a54d56989bccf9
+- Merge pull request #195 from thoerwink8/worktree-agent-aa910bf5dc74e554a
+- Merge pull request #192 from thoerwink8/fix/184-short-block-reason
+- Merge pull request #191 from thoerwink8/fix/188-gate-env-isolation
+- Merge pull request #189 from thoerwink8/feat/184-rate-limit-hooks
+- Merge pull request #185 from thoerwink8/fix/179-ps-tests-into-gate
+- Merge pull request #183 from thoerwink8/fix/176-ps-guard-coverage
+- Merge pull request #182 from thoerwink8/fix/173-secrets-exit-tiers
+- Merge pull request #181 from thoerwink8/fix/171-drift-assertions-a
+- Merge pull request #180 from thoerwink8/fix/163-guard-the-guards
+- Merge pull request #178 from thoerwink8/fix/177-scout-tools-anchor
+- Merge pull request #175 from thoerwink8/docs/harvest-landing-20260807
+- Merge pull request #168 from thoerwink8/feat/122-hybrid-delivery
+- Merge pull request #170 from thoerwink8/feat/148-acl-tiered-exit
+- Merge pull request #167 from thoerwink8/fix/58-drift-live-snap-root-normalize
+- Merge pull request #165 from thoerwink8/fix/162-stale-pointer-clause-nudge
+- Merge pull request #164 from thoerwink8/fix/clause-filter-mention-vs-use
+- Merge pull request #161 from thoerwink8/fix/157-159-assertion-design
+- Merge pull request #138 from thoerwink8/feat/135-secrets-step2
+- Merge pull request #156 from thoerwink8/fix/129-nudge-sandbox
+- Merge pull request #155 from thoerwink8/fix/host-failure-mode
+- Merge pull request #154 from thoerwink8/feat/session-resume
+- Merge pull request #150 from thoerwink8/fix/147-budget-residual
+- Merge pull request #146 from thoerwink8/fix/121-derived-artifact
+- Merge pull request #130 from thoerwink8/fix/127-scaffold-timeout
+- Merge pull request #143 from thoerwink8/fix/131-console-encoding
+- Merge pull request #117 from thoerwink8/fix/112-g2-residual
+- Merge pull request #128 from thoerwink8/fix/116-dead-gates-isolation
+- Merge pull request #125 from thoerwink8/fix/110-user-claudemd
+- Merge pull request #120 from thoerwink8/fix/103-mutation-anchor
+- Merge pull request #119 from thoerwink8/fix/109-verify-entry
+- Merge pull request #118 from thoerwink8/fix/114-merge-exitcode
+- Merge pull request #115 from thoerwink8/fix/82-fixture-isolation
+- Merge pull request #111 from thoerwink8/rewrite/b3-daomd
+- Merge pull request #106 from thoerwink8/fix/87-g2-detection
+- Merge pull request #105 from thoerwink8/fix/96-providers-stale
+- Merge pull request #102 from thoerwink8/topdown/a1112-checkers
+- Merge pull request #99 from thoerwink8/topdown/a1316-design
+- Merge pull request #98 from thoerwink8/topdown/a8-credential-redact
+- Merge pull request #97 from thoerwink8/topdown/a910-docs-workflow
+- Merge pull request #100 from thoerwink8/fix/guard-blind-spot
+- Merge pull request #93 from thoerwink8/fix/subagent-error-triage
+- Merge pull request #95 from thoerwink8/chore/deny-narrow-budget
+- Merge pull request #89 from thoerwink8/topdown/f1-officer-clauses
+- Merge pull request #90 from thoerwink8/fix/mask-unclosed-backtick
+- Merge pull request #88 from thoerwink8/rewrite/b2-ledger
+- Merge pull request #85 from thoerwink8/topdown/f2-product-question
+- Merge pull request #86 from thoerwink8/topdown/f3-desktop-refresh
+- Merge pull request #84 from thoerwink8/docs/hook-register-202608
+- Merge pull request #80 from thoerwink8/rewrite/b1-scoped-askuser
+- Merge pull request #81 from thoerwink8/rewrite/b1-design-gate
+- Merge pull request #79 from thoerwink8/rewrite/b1-subagent-clauses
+- Merge pull request #78 from thoerwink8/rewrite/b1-heartbeat
+- Merge pull request #77 from thoerwink8/rewrite/b1-matrix
+- Merge pull request #76 from thoerwink8/feat/dead-gates-providers
+- Merge pull request #74 from thoerwink8/feat/deny-drift
+- Merge pull request #75 from thoerwink8/feat/issue-hub-files
+- Merge pull request #73 from thoerwink8/fix/glob-gate-settings-path
+- Merge pull request #68 from thoerwink8/fix/g2-stderr-path
+- Merge pull request #66 from thoerwink8/slim/c-longwindow
+- Merge pull request #61 from thoerwink8/slim/b-dispatch-grep
+- Merge pull request #60 from thoerwink8/slim/b-hardgate-compress
+- Merge pull request #59 from thoerwink8/slim/b-pr-merge-notes
+- Merge pull request #54 from thoerwink8/slim/b-gui-verify
+- Merge pull request #62 from thoerwink8/slim/a-legislation
+- Merge pull request #52 from thoerwink8/slim/a-workitem
+- Merge pull request #51 from thoerwink8/feat/provider-hooks-drift
+- Merge pull request #46 from thoerwink8/arch/p4-budget-p8-agents
+- Merge pull request #47 from thoerwink8/arch/p6-clause-index
+- Merge pull request #45 from thoerwink8/arch/p2-scoped-rules
+- Merge pull request #43 from thoerwink8/arch/p1-hard-gates
+- Merge pull request #42 from thoerwink8/arch/p5-consolidate
+- Merge pull request #41 from thoerwink8/arch/p3-dead-gates
+- [cc] dao(验证): 四步铁序升级八步(用户拍板采纳改进版)——影响面速评/分档拍板/锚先破再验/revert演练/合并态门/基线对照/浸泡记账,细则存根化进 rules/dao-change-batch.md
+- [cc] dao(验证): 拍板执行批四步铁序——拍板先行/逐项测试/可回退/最终全量测试(用户点名固化,任何项目生效;业界对照调研在途改进版另呈)
+- Merge pull request #38 from thoerwink8/reshape/c-daomd-slim
+- Merge pull request #40 from thoerwink8/reshape/config-sync-fetch
+- Merge pull request #39 from thoerwink8/reshape/b-init-loop
+- Merge pull request #37 from thoerwink8/reshape/b-gates-templates
+- [cc] dao(指针): issue 中枢落地件指针改指 canonical(templates/labels+board+hub+scripts/bootstrap)——B1 落地后的收尾
+- Merge pull request #36 from thoerwink8/reshape/b1-issue-center
+- Merge pull request #35 from thoerwink8/reshape/a-stacks-agents
+- Merge pull request #34 from thoerwink8/reshape/a-daomd-fixes
+- [cc] dao(档位): workflow/agentType 官必须显式传 model——Explore 型不继承主会话档,静默掉 harness 默认 opus-4.8(用户点名事故 2026-08-01);当前代际锚点 Fable5>Opus5>Sonnet5>Haiku4.5
+- [cc] dao(次序): 体系改动 dao-first 再下沉——canonical PR 模板进 ccswitch/templates/,scaffold 指向它（用户点名纠正:先改内核再下沉,别先改项目）
+- [cc] scaffold: 登记 pr-template-star（product-type）——PR 模板 STAR 分层进跨项目核对；GitHub 对象半（标签/看板）仍待 dao-issue-center 引导脚本
+- [cc] dao(三态归位): 人读的载体用 STAR+说人话+折叠证据（用户点名,任意项目生效）
+- [cc] dao(帅): 热重载型验证从专用 worktree 起——冻结 main 靠纪律守不住,隔离构建才是彻底解（wave4 污染事故固化）
+- [cc] dao(帅): 「一眼对齐」hub 模式——pin 有上限时做总览 hub 单聚合 inbox，不挤 pin 槽（用户点名）
+- [cc] dao(帅): 在途水位线彻底解决三层——补水位提到每轮最前+自适应水位+识别串行资源瓶颈（用户第2次点名后固化）
+- [cc] test(codex): 给 5 个 skill 的「禁 AI 自动调用」声明补双向守卫
+- Merge pull request #33 from thoerwink8/feat/memory-truth-source-check
+- [cc] test(lib): 补 hook-selfcheck 库自证——堵住 F1 抽库后无人看守的 selfcheck 文案面
+- [cc] test(hooks): F2 补 dao-rhythm/dao-scaffold-check 两态测试 + node 测试聚合入口
+- [cc] merge: 刀E skills 域瘦身——open.md 拆分/模板收口/死路由修复
+- Merge pull request #32 from thoerwink8/feat/settings-drift-guard
+- Merge pull request #31 from thoerwink8/feat/rule-echo-hook
+- [cc] config(claude): 主模型升级为 claude-fable-5[1m] 长上下文变体
+- [cc] config(claude): 主模型改 Fable 5 + sonnet 档升 Sonnet 5 + effortLevel xhigh
+- Merge pull request #30 from thoerwink8/dao/cdp-port-contention
+- Merge pull request #29 from thoerwink8/dao/todo-triage
+- Merge pull request #28 from thoerwink8/dao/pr-first-dogfood
+- Merge pull request #27 from thoerwink8/fix/scaffold-check-stale-logic
+- Merge pull request #26 from thoerwink8/feat/settings-runtime-confirm-gate
+- Merge pull request #25 from thoerwink8/feat/dao-scaffold-artifact-exclude-checklist
+- [cc] sync(dao-design-asset): 同步 .devin 双栈
+- [cc] sync(dao-design-asset): .devin 同步 §C.0 草稿发现
+- [cc] sync(dao-design-asset): 同步 .devin 双栈与 ccswitch §C 一键发布实施保持一致
+- Merge pull request #24 from thoerwink8/feat/dao-ecosystem-cleanup
+- Merge pull request #23 from thoerwink8/feat/dao-fusion
+- [cc] merge: skill-slim loop 完成——playbook/taste 瘦身 + Go Gate 门控
+- [cc] refine(dao): 归位提醒新增「写入位置≠归属地」决策树
+- Merge branch 'master' of github.com:thoerwink8/windsurf-dao
+- dao-cloud skill: 新增§八 继续未完成会话（跨账号） (#7)
+- dao-cloud skill: 重写发现规则 + 全自动规范 + 双通道容灾 (#6)
+- Merge pull request #3 from thoerwink8/devin/1781265927-dao-cloud-fix-settings
+- Merge pull request #2 from thoerwink8/devin/1781256036-dao-cloud-skill
+- Merge pull request #1 from thoerwink8/devin/1781243484-plugin-primary-runbook
+- distill: add P1 upstream-reverse + P2 freeze-staleness patterns to dao-debug skill
+- evolve: 新增 C8 大文件内存阻塞模式 (de-layer + terminal-resilience)
+- revert: 移除续连守卫规则(错误方向的产物)，还原选项模板
+- upgrade(distill): add Git archaeology phase — git log -n 20, pattern detection, selective deep-dive, [git] source tag
+- upgrade(dao-debug): 死磕到底 — 三层螺旋×15武器, 融合systematic-debugging, 3圈硬上限
+- evolve: sync directory tree, complete workflow ecosystem, add dao-deploy skill
+- evolve: +dao-research skill, migrate session workflows, update directory tree
+- Merge branch 'master' of https://github.com/thoerwink8/windsurf-dao # Please enter a commit message to explain why this merge is necessary, # especially if it merges an updated upstream into a topic branch. # # Lines starting with '#' will be ignored, and an empty message aborts # the commit.
+- merge: autopilot/todo-w3-w4-optimize → master
+- 德层: 推理链增加边界突破步骤+资源优先增加逆向路径
+- Merge branch 'master' of https://github.com/chenxingyu0830/windsurf-dao
+- sync: 完整镜像同步道体系 + 新增windsurf-extension技能
+- init: 道德经驱动的AI配对编程方法论体系
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
