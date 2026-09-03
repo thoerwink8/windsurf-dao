@@ -49,6 +49,14 @@ before(async () => {
       res.end();
       return;
     }
+    if (mode === 'pqfail') {
+      // pqapi 实况：先发 `: PING` 心跳（不算内容、不算 error），再 response.failed
+      res.write(': PING\n\n');
+      res.write('event: response.failed\n');
+      res.write('data: {"type":"response.failed","response":{"error":{"code":"dispatch_queue_timeout","message":"request timed out in the dispatch queue"}}}\n\n');
+      res.end();
+      return;
+    }
     // openai 正常流：一段真 content
     res.write('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n');
     res.write('data: [DONE]\n\n');
@@ -144,6 +152,14 @@ describe('runProbe（判据：流式+真内容）', () => {
     const exists = () => true;
     const r = await runProbe(plan, { read, exists });
     assert.equal(r.state, 'green', JSON.stringify(r));
+  });
+  it('codex 流内 response.failed（心跳后失败）→ red，surface dispatch_queue_timeout', async () => {
+    const { runProbe } = await import(LIB);
+    const plan = { kind: 'codex-responses', url: `${base}/responses?mode=pqfail`, body: {}, target: 'direct:codex@pqapi/responses', authPath: 'INJECT' };
+    const read = (p) => (p === 'INJECT' ? JSON.stringify({ OPENAI_API_KEY: 'faketoken' }) : '');
+    const r = await runProbe(plan, { read, exists: () => true });
+    assert.equal(r.state, 'red', JSON.stringify(r));
+    assert.match(r.why, /dispatch_queue_timeout|流内失败/);
   });
   it('未知 provider（unscanned plan）→ unscanned', async () => {
     const { runProbe } = await import(LIB);

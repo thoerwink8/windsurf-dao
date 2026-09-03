@@ -244,6 +244,27 @@ function chunkHasContent(kind, line) {
   return extractDeltaContent(kind, obj).length > 0;
 }
 
+/** 流内错误事件（2xx 起流后中途失败）：codex response.failed / 各 API 的 error 体。
+ * 返回错误一句话（截短）或 null。pqapi 的 `: PING` 心跳不是 error（返回 null，继续等）。
+ * DECISIONS §61 教训：pqapi sol 排队时先发心跳、~30s 后才 response.failed；识别它才能
+ * 早判红，而不是傻等到超时（也不会把心跳误当真内容当绿）。 */
+function chunkError(line) {
+  const raw = line.startsWith('data:') ? line.slice(5).trim() : line.trim();
+  if (!raw || raw === '[DONE]' || raw.startsWith(':')) return null; // `:` 开头是 SSE 注释/心跳
+  let obj;
+  try { obj = JSON.parse(raw); } catch { return null; }
+  const err = obj.error
+    || (obj.response && obj.response.error)
+    || (obj.type === 'response.failed' && obj.response && obj.response.error)
+    || (obj.type === 'error' && obj.error);
+  if (err && (err.message || err.code || err.type)) {
+    const code = err.code || err.type || '';
+    return `${code ? `${code}: ` : ''}${String(err.message || '').slice(0, 120)}`.trim();
+  }
+  if (obj.type === 'response.failed') return 'response.failed';
+  return null;
+}
+
 /**
  * runProbe(plan, opts) → { state:'green'|'red'|'unscanned', code, ms, why }。
  * 真发一针流式；判据：2xx + 收到真内容 = green；2xx 空流 = red；非 2xx / 超时 / 网络 = red。
@@ -279,8 +300,9 @@ export async function runProbe(plan, { timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl
       try { snippet = (await res.text()).slice(0, 160).replace(/\s+/g, ' '); } catch { /* 忽略 */ }
       return { state: 'red', code, ms: Date.now() - t0, why: `HTTP ${code}${snippet ? ` ${snippet}` : ''}` };
     }
-    // 2xx：读流，收到真内容才算绿。
+    // 2xx：读流，收到真内容才算绿；中途 error 事件（如 pqapi response.failed）立即判红。
     let gotContent = false;
+    let streamErr = null;
     const body = res.body;
     if (body && typeof body.getReader === 'function') {
       const reader = body.getReader();
@@ -295,12 +317,16 @@ export async function runProbe(plan, { timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl
           const line = buf.slice(0, nl);
           buf = buf.slice(nl + 1);
           if (chunkHasContent(plan.kind, line)) { gotContent = true; break; }
+          const e = chunkError(line);
+          if (e) { streamErr = e; break; }
         }
-        if (gotContent) { try { await reader.cancel(); } catch { /* 忽略 */ } break; }
+        if (gotContent || streamErr) { try { await reader.cancel(); } catch { /* 忽略 */ } break; }
       }
-      if (!gotContent && buf) {
+      if (!gotContent && !streamErr && buf) {
         for (const line of buf.split('\n')) {
           if (chunkHasContent(plan.kind, line)) { gotContent = true; break; }
+          const e = chunkError(line);
+          if (e) { streamErr = e; break; }
         }
       }
     } else {
@@ -309,9 +335,12 @@ export async function runProbe(plan, { timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl
       try { text = await res.text(); } catch { /* 忽略 */ }
       for (const line of String(text).split('\n')) {
         if (chunkHasContent(plan.kind, line)) { gotContent = true; break; }
+        const e = chunkError(line);
+        if (e) { streamErr = e; break; }
       }
     }
     if (gotContent) return { state: 'green', code, ms: Date.now() - t0, why: '流式收到真内容' };
+    if (streamErr) return { state: 'red', code, ms: Date.now() - t0, why: `流内失败：${streamErr}` };
     return { state: 'red', code, ms: Date.now() - t0, why: `2xx 空流（${code} 但没收到真内容）` };
   } catch (e) {
     const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || e)));
