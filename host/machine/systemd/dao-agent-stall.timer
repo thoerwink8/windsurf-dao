@@ -1,0 +1,15 @@
+# /etc/systemd/system/dao-agent-stall.timer
+#
+# 15 分钟量级 + 连红 2 轮（#833 消歧：不许求快；一次抖动不是事故）。
+# 装法见同目录 dao-agent-stall.service 文件头。
+
+[Unit]
+Description=每 15 分钟扫一轮 agent 终端屏面（#833）
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

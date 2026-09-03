@@ -158,6 +158,9 @@ const ORCA_TIMEOUT_MS = 30000;
 // 'Remote Control disconnected 404' 是噪音（#471：忽略不阻塞），不进检测清单——处置矩阵留行记录决定。
 // 元素可以是普通字符串（大小写不敏感子串匹配）或正则字面量。
 const ERROR_FINGERPRINTS = [
+  'exceeded retry limit',  // #833：2026-09-03 PR #827 审官实咬（原表缺，屏面停在 429 不滚到 5/5）
+  'last status: 429',      // 同上
+  '429 Too Many Requests',
   'Retry failed',          // 盲考·Grok：代理链路断线重试全败（Retry failed after 3 attempts）
   'no serving account',    // 盲考·GPT：pqgpt 中转池无可用账号（池竭/限流）断流
   'stream disconnected',   // 盲考·GPT：中转站断流（与 Grok 的 clash 抖动是两种不同断流）

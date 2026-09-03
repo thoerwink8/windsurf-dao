@@ -441,6 +441,65 @@ function checkFeishuTriage() {
   return { state, detail: parts.join('；') };
 }
 
+// —— ⑮ 撞限流探测 timer（#833）——
+// 另起一项，不改 ⑧ automations 那行（#829 已占用）；⑭ 是指挥官自检（#800）。
+// 检查器自持判据，不 import agent-stall-detect。
+const PAD_STALL_SCRIPT = () => join(homedir(), 'bin', 'agent-stall-watch.mjs');
+
+/** 纯函数：systemctl list-timers 文本 + 垫片文件是否还在 → 三态。 */
+export function classifyAgentStallWatch({
+  probed = false,
+  reason = '',
+  timersText = '',
+  padScriptExists = null,
+  padScriptUnknown = false,
+} = {}) {
+  if (padScriptUnknown) {
+    return { state: UNKNOWN, detail: '垫片脚本在不在没查成' };
+  }
+  if (!probed) {
+    return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
+  }
+  const text = String(timersText || '');
+  const official = /\bdao-agent-stall\.timer\b/.test(text);
+  const padTimer = /\bagent-stall-watch\.timer\b/.test(text);
+  const padScript = padScriptExists === true;
+  if (padTimer || padScript) {
+    const bits = [];
+    if (padTimer) bits.push('agent-stall-watch.timer 还在');
+    if (padScript) bits.push('/home/orca/bin/agent-stall-watch.mjs 还在');
+    return {
+      state: RED,
+      detail: `撞限流垫片没退役（${bits.join('；')}）——落地即删，防影子制度`,
+    };
+  }
+  if (!official) {
+    return {
+      state: RED,
+      detail: 'dao-agent-stall.timer 不在册——sudo systemctl enable --now dao-agent-stall.timer（装法见 host/machine/systemd/dao-agent-stall.timer）',
+    };
+  }
+  return { state: OK, detail: 'dao-agent-stall.timer 在册，垫片已退役' };
+}
+
+function checkAgentStallWatch() {
+  const timers = run('systemctl', ['list-timers', '--all'], { timeout: 10000 });
+  let padExists = null;
+  let padUnknown = false;
+  try {
+    padExists = existsSync(PAD_STALL_SCRIPT());
+  } catch (e) {
+    padUnknown = true;
+  }
+  return classifyAgentStallWatch({
+    probed: timers.probed,
+    reason: timers.reason,
+    timersText: `${timers.stdout || ''}\n${timers.stderr || ''}`,
+    padScriptExists: padExists,
+    padScriptUnknown: padUnknown,
+  });
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -456,6 +515,7 @@ const CHECKS = [
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
   ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds],
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
+  ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
 ];
 
 function outPath() {
