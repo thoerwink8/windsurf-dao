@@ -30,13 +30,13 @@
 | 1 | 起 orca 无头运行时（AppImage + Xvfb + systemd + 防火墙） | `NEW-MACHINE.md` §9d（每条都在 Ubuntu 24.04 真跑过） | `orca serve --port 6768` 由 systemd 拉起；kill 后自动回来 | 已达成（2026-09-03，#797/#798） |
 | 2 | 服务器上装本仓 + 接线 + 凭据 | `NEW-MACHINE.md`（`git clone` + `node scripts/onboard.mjs`；凭据手动带，onboard 不碰） | `node scripts/dao-check.mjs --full` 绿 | 已达成（2026-09-03，#797/#798） |
 | 3 | 编排回岗：`--full` 设为常态；派工/审官流程整体恢复 | `host/skills/dispatch/SKILL.md`「编排态工作法」+ `host/skills/dispatch/review-standard.md` | 一单端到端：卡 → PR → 审官判绿 → 合并 | 已达成（2026-09-03，#797/#798） |
-| 4 | 删冻结件（五层判活链 / flow 常驻 / powershell 依赖等），用 systemd + automations 顶替 | `2026-08-24-...-from-zero.md` 的保留/删除清单；`2026-08-31-local-guards-retire-with-server.md` 恢复路径 | 故意 kill 进程后自动拉起的记录；被删机制的测试同 PR 删（孤儿测试闸会拦） | 已消歧（#807）；前置 #833/PR#834 已合（2026-09-03），待拆块派 |
+| 4 | 删冻结件（五层判活链 / flow 常驻 / powershell 依赖等），用 systemd + automations 顶替 | `2026-08-24-...-from-zero.md` 的保留/删除清单；`2026-08-31-local-guards-retire-with-server.md` 恢复路径 | 故意 kill 进程后自动拉起的记录；被删机制的测试同 PR 删（孤儿测试闸会拦） | 已达成（PR #857 合并 2026-09-04；返工 7 项红后合） |
 | 5 | 选型收拢：渠道降级唯一归网关，仓内 JSON 只留职责层；价目改从网关用量取数 | `2026-08-31-land-check-slim-review-standard.md` §4 | `docs/model-routing.json` 无 pipes 层且 dao-check 绿 | 已达成（PR #830 合并 2026-09-03）；价目/fx 另开单待拍 |
 | 6 | 群聊机器人 Phase 1→3（前置「审官质量标准」已于 2026-08-31 完成） | `2026-08-31-groupchat-triage-dispatch.md` | 按该文四阶段表逐阶段验收 | Phase 2 见 #801；Phase 3 待用户拍 |
 | 7 | land 接上 automations（合并后自动清理） | `2026-08-31-land-check-slim-review-standard.md` §3 | 服务器上 automations 调 `node scripts/land.mjs`，与本机同一条命令 | 已达成（PR #832 合并 2026-09-03） |
-| 8 | 在途 PR 清零 + 指挥官派单闸重开 | #849/PR#850、#843/PR#851、#852/PR#854、#807/PR#857 | 四张合并；watch-loop 垫片退役。**派单闸（commander-act）不在这步开**——dry-run 实测一开就派 2 单+给 9 张旧单刷 9 条待拍板，留到第 10 步 | 进行中（2026-09-04）：PR#850 已合（8659c1e） |
-| 9 | 机器人说人话 + 总控群能问「现状」 | `2026-08-31-groupchat-triage-dispatch.md` + 本页「说人话判据」 | 群里每条消息用户不查文档能看懂；在群里问「现状怎么样」30 秒内得到三行摘要 | 进行中（2026-09-04） |
-| 10 | 派单流程验证收尾 | `host/skills/dispatch/SKILL.md` | 一单真实派工：卡 → 工人 → PR → 审官判绿 → land 合并，全程无人工干预 | 待 8、9 完成 |
+| 8 | 在途 PR 清零 + 指挥官派单闸重开 | #849/PR#850、#843/PR#851、#852/PR#854、#807/PR#857 | 四张合并；watch-loop 垫片退役。**派单闸（commander-act）不在这步开**——dry-run 实测一开就派 2 单+给 9 张旧单刷 9 条待拍板，留到第 10 步 | **已达成**（2026-09-04）：#850/#851/#854/#857 + #861 全合；9 张旧账标「已顶替」关闭；watch-loop 垫片自杀 |
+| 9 | 机器人说人话 + 总控群能问「现状」 | `2026-08-31-groupchat-triage-dispatch.md` + 本页「说人话判据」 | 群里每条消息用户不查文档能看懂；在群里问「现状怎么样」30 秒内得到三行摘要 | 代码已合（#861 说人话闸 + #854 总控群对话）；**待服务器实测群里问一句** |
+| 10 | 派单流程验证收尾 | `host/skills/dispatch/SKILL.md` | 一单真实派工：卡 → 工人 → PR → 审官判绿 → land 合并，全程无人工干预 | 待第 9 步群里实测通过后开闸（#807 红2 的端到端验证并入本步） |
 
 ### 说人话判据（第 9 步用，用户 2026-09-04 原话：「飞书机器人说黑话，并且运转不流畅」）
 
