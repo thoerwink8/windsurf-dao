@@ -234,9 +234,9 @@ function execAction(action, { state, dryRun, log }) {
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
       const r = runOrShow(cmd, { dryRun, say, why: action.why });
-      if (dryRun || !r.ok) return r;
-      const settled = awaitDispatchResult(r.out, { say });
-      return settled;
+      if (dryRun) { say('  [dry] 真跑时会回读派工结果文件，失败则不发「已自动派单」并报帅'); return r; }
+      if (!r.ok) return r;
+      return awaitDispatchResult(r.out, { say });
     }
     case 'attach-reviewer': {
       // 走 blessed 路径 review-pending-drain（含归属/活性校验），一次清完队列。
@@ -317,6 +317,42 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
   return { ok: false, unscanned: false, error: String(doc.error || '执行体报失败但没给原因').slice(0, 200) };
 }
 
+/**
+ * 逐条执行动作，并管住一条纪律：**派工没成，就不许再发「已自动派单」**
+ * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
+ * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
+ */
+export function runActions(actions, { exec, log = [] } = {}) {
+  const failedIssues = new Set();
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action.kind === 'notify-hub' && action.issue != null && failedIssues.has(String(action.issue))) {
+      log.push(`· notify-hub 略：#${action.issue} 派工没成，不发「已自动派单」`);
+      continue;
+    }
+    log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
+    const r = exec(action);
+    // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
+    const failed = action.kind === 'dispatch' && action.issue != null
+      && (!r || (r.ok !== true) || r.dispatchFailed === true);
+    if (!failed) continue;
+    failedIssues.add(String(action.issue));
+    exec({
+      kind: 'escalate',
+      reason: r && r.unscanned ? 'dispatch-unscanned' : 'dispatch-failed',
+      issue: action.issue,
+      why: `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
+    });
+  }
+  return { log, failedIssues: [...failedIssues] };
+}
+
+/** 主线程同步睡。指挥官是 oneshot，阻塞期间本来也没别的事要做，所以不改 async 范式。
+ *  不用 spawnSync(node -e setTimeout)：起不来子进程时（服务器 fork EAGAIN/内存紧）它立刻返回，
+ *  循环就退化成满速热转直到预算耗尽；而且正常路径上一次等待要 80 次 node 冷启动。 */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /** 回读异步派工的真结果：轮询 resultPath 直到落盘或超时。 */
 function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, nowFn = Date.now } = {}) {
   const path = resultPathOf(stdout);
@@ -330,8 +366,7 @@ function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, no
       try { doc = JSON.parse(readFileSync(path, 'utf8')); } catch { doc = null; }
       if (doc) break;
     }
-    // 同步等：指挥官是 oneshot，阻塞在这里比留个「不知道成没成」的坑好
-    spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${stepMs})`], { timeout: stepMs + 5000 });
+    sleepSync(stepMs);
   }
   const verdict = classifyDispatchResult({ present, doc, waitedMs: nowFn() - t0 });
   say(`  派工真结果：${verdict.ok ? '成了（' + (verdict.card || '') + '）' : (verdict.unscanned ? '没查成——' : '失败——') + verdict.error}`);
@@ -477,27 +512,7 @@ function cmdAct(argv) {
   const log = [];
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
-  // 派工失败的那张单，它后面那条 notify-hub 不许再发「已自动派单」（2026-09-04 实咬：
-  // #787 派工其实失败了，群里照样收到「已自动派单 #787」——报喜不报忧比不报还坏）。
-  const failedIssues = new Set();
-  for (const action of actions) {
-    if (action.kind === 'notify-hub' && action.issue != null && failedIssues.has(String(action.issue))) {
-      log.push(`· notify-hub 略：#${action.issue} 派工没成，不发「已自动派单」`);
-      continue;
-    }
-    log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
-    const r = execAction(action, { state, dryRun, log });
-    if (action.kind === 'dispatch' && r && r.ok !== true && action.issue != null) {
-      failedIssues.add(String(action.issue));
-      // 报帅：派工没成要看得见，不能只躺在 journal 里
-      execAction({
-        kind: 'escalate',
-        reason: r.unscanned ? 'dispatch-unscanned' : 'dispatch-failed',
-        issue: action.issue,
-        why: `#${action.issue} 自动派工${r.unscanned ? '成没成没查成' : '失败'}：${r.error || ''}`,
-      }, { state, dryRun, log });
-    }
-  }
+  runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
   else {
