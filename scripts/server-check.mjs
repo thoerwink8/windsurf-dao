@@ -455,6 +455,7 @@ const CHECKS = [
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
   ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds],
+  ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
 ];
 
 function outPath() {

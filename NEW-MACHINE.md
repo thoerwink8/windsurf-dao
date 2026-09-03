@@ -357,6 +357,19 @@ node scripts/install-land-automation.mjs --dry-run  # 只看不动
 hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspace-mode existing`（不许 new-per-run）。
 `server-check` 第⑧项认这条：不在 / disable = 红；list 没查成 = 没查成。
 
+### 服务器指挥官（#800，眼睛常驻）
+
+服务器落地后装指挥官 timer（幂等，连跑两遍不产生第二份）：
+
+```bash
+sudo node scripts/commander.mjs install    # 写 commander-act/inventory 的 service+timer 到 /etc/systemd/system/
+                                            # 完了自动 daemon-reload + enable --now（非 root 会在写盘时失败退出并给命令）
+node scripts/commander.mjs status           # 自检三态：timer 在册且 enabled 才通（server-check 第⑭项也引它）
+```
+
+眼睛 = `commander-act.timer`（每 20 分钟 scan→decide→执行）+ `commander-inventory.timer`（每 6 小时盘点体检）。
+装法与边界见 `host/skills/commander/SKILL.md`；决策纯函数 `scripts/lib/commander-core.mjs`。
+
 ### 坑（都是实测踩的，别重踩）
 
 - **进程名是 `orca-ide`，不是 `orca`**（裸 `orca` 在 Linux 与屏幕阅读器撞名，orca 另装一个 dispatcher）。所以 `pkill -f 'orca-id[e]'`——按 `AppRun` 或 `orca` 去 pkill 会全打空，残留进程占着单实例锁。
