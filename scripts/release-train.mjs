@@ -3,7 +3,8 @@
 //
 //   node scripts/release-train.mjs plan               # 读现状 → 档位/下一个版本号，出 JSON，不写任何东西
 //   node scripts/release-train.mjs should-run         # 到发布点（周日 or 攒够）退 0，否则非 0（给 timer 当前置）
-//   node scripts/release-train.mjs release [--dry-run] # 打 tag + 写 CHANGELOG + gh release + hub-say 一句
+//   node scripts/release-train.mjs release [--dry-run] [--force] # 打 tag + 写 CHANGELOG + gh release + hub-say 一句
+//        未到发布点（should-run 会退非零那种）时 release 也拒发、什么都不写、退 2；--force 才强发。
 //   node scripts/release-train.mjs install [--dry-run] [--unit-dir D] [--user U] [--repo P] [--at HH:MM]
 //
 // 触发/档位/阈值真相源：docs/release-policy.json 的 version.train 与 version.bump_by_commit_type
@@ -140,7 +141,7 @@ function prependChangelog(repo, segment, { dryRun }) {
   return { file, written: true };
 }
 
-export function doRelease(repo, { now = new Date(), dryRun = false, say = console.log } = {}) {
+export function doRelease(repo, { now = new Date(), dryRun = false, force = false, say = console.log } = {}) {
   const plan = computePlan(repo, { now });
   if (!plan.policyOk) {
     say(`[发布列车] 策略没读成：${plan.policyError}`);
@@ -149,6 +150,17 @@ export function doRelease(repo, { now = new Date(), dryRun = false, say = consol
   if (!plan.level || !plan.next) {
     say(`[发布列车] 列车里没有会抬版本的提交（level=${plan.level}），不发版。`);
     return { ok: true, released: false, reason: 'no bumpable commits', plan };
+  }
+  // fail-closed：没到发布点（攒够 or 到周日）就不发，不写任何东西、非发布结果退出。
+  // `should-run` 是 timer 的前置；这里再兜一道，防手动/脚本绕过前置直接 release。
+  const gate = plan.shouldRelease || { release: false, reasons: ['没算出发布判据'] };
+  if (!gate.release && !force) {
+    const why = (gate.reasons || []).join('；') || '未到发布点';
+    say(`[发布列车] 未到发布点，不发（${dryRun ? '拟同' : ''}——什么都不写）：${why}。要强发加 --force。`);
+    return { ok: true, released: false, gated: true, plan };
+  }
+  if (!gate.release && force) {
+    say(`[发布列车] --force：绕过发布点判定（${(gate.reasons || []).join('；')}），强发。`);
   }
   const version = plan.next;
   const tag = plan.nextTag;
@@ -201,7 +213,7 @@ export function doRelease(repo, { now = new Date(), dryRun = false, say = consol
   }
 
   say(`[发布列车] ${dryRun ? '拟发版完成（未写任何东西）' : `发版完成 ${tag}`}`);
-  return { ok: true, released: !dryRun, dryRun, tag, version, plan, changelog: segment };
+  return { ok: true, released: !dryRun, gated: false, dryRun, tag, version, plan, changelog: segment };
 }
 
 // ── install：幂等 systemd timer ────────────────────────────────────
@@ -301,8 +313,10 @@ function main() {
   }
 
   if (cmd === 'release') {
-    const r = doRelease(repo, { dryRun: flag(argv, 'dry-run') });
-    process.exit(r.ok ? 0 : 1);
+    const r = doRelease(repo, { dryRun: flag(argv, 'dry-run'), force: flag(argv, 'force') });
+    if (!r.ok) process.exit(1);        // 策略/打 tag 等失败
+    if (r.gated) process.exit(2);      // 未到发布点、没写任何东西（明确的非发布结果）
+    process.exit(0);                   // 发了（或 dry-run 到点预演；或列车无可抬版本提交）
   }
 
   if (cmd === 'install') {
@@ -315,7 +329,7 @@ function main() {
     process.exit(0);
   }
 
-  process.stderr.write('usage: release-train.mjs <plan|should-run|release|install> [--dry-run] [--repo P] [--unit-dir D] [--user U] [--at HH:MM]\n');
+  process.stderr.write('usage: release-train.mjs <plan|should-run|release|install> [--dry-run] [--force] [--repo P] [--unit-dir D] [--user U] [--at HH:MM]\n');
   process.exit(2);
 }
 

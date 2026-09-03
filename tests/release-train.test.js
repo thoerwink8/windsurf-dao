@@ -139,7 +139,7 @@ describe('release-train-core', () => {
 });
 
 describe('release-train CLI（真 git 临时仓 e2e）', () => {
-  it('造 3 个 feat 合并：plan 不发版，release --dry-run 给出正确 tag 且不写盘', () => {
+  it('造 3 个 feat 合并（低于阈值 5）：plan 不发版，release 拒发、不写盘', () => {
     const dir = makeRepo([
       '[grok] feat: 加卡片来源 (#901)',
       '[cc] feat(policy): 读真相源 (#902)',
@@ -162,15 +162,49 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
       assert.deepEqual(tagsAfterPlan, ['v0.1.0']);
       assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')));
 
+      // fail-closed：未到发布点，release（非 dry-run）拒发、退非零、不打 tag、不写 CHANGELOG
+      // ——这就是审官在 956f8a2 上做的判别性实验的自动化版本。
+      const rel = spawnSync(process.execPath, [CLI, 'release', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      assert.notEqual(rel.status, 0, '未到发布点 release 必须非零退出，实际 status=' + rel.status + ' out=' + rel.stdout);
+      assert.ok(/未到发布点/.test(rel.stdout), rel.stdout);
+      assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0'], '未到发布点不该打 tag');
+      assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')), '未到发布点不该写 CHANGELOG');
+
+      // dry-run 也一样如实报「未到发布点，不发」、非零、不写盘
+      const dry = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      assert.notEqual(dry.status, 0, dry.stdout);
+      assert.ok(/未到发布点/.test(dry.stdout), dry.stdout);
+      assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0']);
+      assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')));
+
+      // --force 才强发；--dry-run --force 预演出正确 tag，仍不写盘
+      const forced = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--force', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      assert.equal(forced.status, 0, forced.stderr);
+      assert.ok(/v0\.2\.0/.test(forced.stdout), forced.stdout);
+      assert.ok(/--force/.test(forced.stdout), forced.stdout);
+      assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0'], '--dry-run --force 不该打 tag');
+      assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')), '--dry-run --force 不该写 CHANGELOG');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('到发布点（攒够 6 个合并）：release --dry-run 预演出正确 tag，非零仅在拒发时', () => {
+    // 6 个合并（含 feat）≥ 阈值 5 → shouldRelease.release=true，dry-run 预演 v0.2.0
+    const dir = makeRepo([
+      '[grok] feat: a (#1)', '[cc] fix: b (#2)', '[grok] feat: c (#3)',
+      '[cc] fix: d (#4)', '[grok] chore: e', '[cc] fix: f (#7)',
+    ]);
+    try {
+      const plan = JSON.parse(spawnSync(process.execPath, [CLI, 'plan', '--repo', dir], { encoding: 'utf8', windowsHide: true }).stdout);
+      assert.equal(plan.mergedCount, 6);
+      assert.equal(plan.shouldRelease.release, true, JSON.stringify(plan.shouldRelease));
       const rel = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8', windowsHide: true });
       assert.equal(rel.status, 0, rel.stderr);
       assert.ok(/v0\.2\.0/.test(rel.stdout), rel.stdout);
       assert.ok(/拟/.test(rel.stdout), rel.stdout);
-
-      // --dry-run 不写：仍无新 tag、无 CHANGELOG
-      const tagsAfterDry = git(dir, ['tag', '--list']).stdout.trim().split(/\s+/);
-      assert.deepEqual(tagsAfterDry, ['v0.1.0'], '--dry-run 不该打 tag');
-      assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')), '--dry-run 不该写 CHANGELOG');
+      assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0'], 'dry-run 不该打 tag');
+      assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
