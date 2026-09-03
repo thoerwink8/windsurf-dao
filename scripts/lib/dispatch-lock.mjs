@@ -6,9 +6,11 @@
 //
 // 实现：O_EXCL 锁文件（Linux flock 语义的可移植等价；本仓零依赖，node:fs 没有 flockSync）。
 // 锁文件默认 ~/.dao/locks/dispatch-worktree.lock（仓外）。内容写持锁 pid，
-// 持锁进程已死 → 拆过期锁（kill -9 不释放）。测试注入 lockPath / open / exists / pidAlive。
+// 持锁进程已死 → 拆过期锁（kill -9 不释放）。pid 读不出（open 到 write 之间被杀）或 pid 被无关进程
+// 复用时 pidAlive 判不出死活，兜底看锁文件 mtime：超过 staleMs 一律当过期拆（建树只要秒级，
+// 10 分钟远超正常持锁）。staleMs=0 关掉 mtime 判据、只信 pid。测试注入 lockPath / open / stat / pidAlive。
 
-import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -40,9 +42,18 @@ function readLockPid(path, { read = readFileSync, exists = existsSync } = {}) {
   } catch { return null; }
 }
 
+/** 锁文件年龄（ms）；stat 不成（刚被别人拆掉）→ null，不当过期。 */
+function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
+  try {
+    const st = stat(path);
+    const mtime = Number(st && st.mtimeMs);
+    return Number.isFinite(mtime) ? Math.max(0, now() - mtime) : null;
+  } catch { return null; }
+}
+
 /**
  * 拿排他锁。返回 { ok, path, release }；release 必须在 finally 调。
- * 超时 → ok:false。持锁 pid 已死 → 拆过期锁再抢。
+ * 超时 → ok:false。持锁 pid 已死、或锁文件 mtime 超过 staleMs → 拆过期锁再抢。
  */
 export function acquireWorktreeLock({
   lockPath,
@@ -56,6 +67,7 @@ export function acquireWorktreeLock({
   mkdir = mkdirSync,
   unlink = unlinkSync,
   exists = existsSync,
+  stat = statSync,
   pidAlive = defaultPidAlive,
   sleepFn = sleep,
   pid = process.pid,
@@ -87,8 +99,10 @@ export function acquireWorktreeLock({
       }
       const holder = readLockPid(path, { read, exists });
       const dead = holder != null && !pidAlive(holder);
-      const ageUnknown = holder == null;
-      if (dead || (ageUnknown && staleMs === 0)) {
+      // 年龄用真实时钟对 mtime，不用注入的 now（那是给超时循环的假钟）；测试改 stat 控年龄。
+      const age = staleMs > 0 ? lockAgeMs(path, { stat }) : null;
+      const expired = age != null && age >= staleMs;
+      if (dead || expired) {
         try { unlink(path); } catch { /* 别人抢先拆了 */ }
         continue;
       }

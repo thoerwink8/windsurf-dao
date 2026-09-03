@@ -39,6 +39,76 @@ describe('acquireWorktreeLock：互斥 + 死进程拆锁', () => {
   });
 });
 
+// staleMs 兜底：pid 读不出 / pid 被无关活进程复用时 pidAlive 判不出，靠 mtime 年龄拆锁。
+describe('acquireWorktreeLock：staleMs 过期锁按 mtime 拆', () => {
+  const MIN = 60 * 1000;
+  const statAged = (ageMs) => () => ({ mtimeMs: Date.now() - ageMs });
+
+  it('pid 读不出 + mtime 超 staleMs → 拆锁拿到', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-stale-nopid-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, ''); // open 到 write 之间被杀：锁在、pid 空
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 300, staleMs: 10 * MIN, sleepFn: () => {},
+      stat: statAged(11 * MIN), pidAlive: () => { throw new Error('pid 空不该问 pidAlive'); },
+    });
+    assert.equal(r.ok, true, '空 pid 的老锁应按 mtime 拆  →  ' + JSON.stringify(r));
+    r.release();
+  });
+
+  it('pid 读不出 + mtime 还新 → 不拆，等到超时', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-fresh-nopid-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, '');
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 60, staleMs: 10 * MIN, sleepFn: () => {},
+      stat: statAged(1 * MIN),
+    });
+    assert.equal(r.ok, false, '新锁不该被拆  →  ' + JSON.stringify(r));
+    assert.match(String(r.error), /超时/);
+    assert.equal(fs.existsSync(lockPath), true, '锁文件应原样留着');
+  });
+
+  it('pid 活着（可能是复用的无关进程）+ mtime 超 staleMs → 仍拆锁', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-stale-alive-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, String(process.pid));
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 300, staleMs: 10 * MIN, sleepFn: () => {},
+      stat: statAged(11 * MIN), pidAlive: () => true,
+    });
+    assert.equal(r.ok, true, '超龄锁不管 pid 活不活都拆  →  ' + JSON.stringify(r));
+    r.release();
+  });
+
+  it('staleMs=0 关掉 mtime 判据：pid 活着的老锁不拆', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-stale-off-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, String(process.pid));
+    let statCalls = 0;
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 60, staleMs: 0, sleepFn: () => {},
+      stat: () => { statCalls += 1; return { mtimeMs: 0 }; }, pidAlive: () => true,
+    });
+    assert.equal(r.ok, false, 'staleMs=0 只信 pid  →  ' + JSON.stringify(r));
+    assert.equal(statCalls, 0, 'staleMs=0 不该 stat');
+  });
+
+  it('默认 staleMs 是 10 分钟（真实 stat 路径）：刚写的锁不被拆', async () => {
+    const { acquireWorktreeLock, DEFAULT_STALE_MS } = await LOCK;
+    assert.equal(DEFAULT_STALE_MS, 10 * MIN);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-default-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, String(process.pid));
+    const r = acquireWorktreeLock({ lockPath, timeoutMs: 60, sleepFn: () => {}, pidAlive: () => true });
+    assert.equal(r.ok, false, '刚写的活锁默认不拆  →  ' + JSON.stringify(r));
+  });
+});
+
 describe('判别性实验：并发 3 进程抢锁全部成功，临界区不重叠', () => {
   it('3 个子进程同时抢同一把锁，全部进临界区且 maxInside=1', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-3p-'));
@@ -114,7 +184,11 @@ describe('reapStaleDispatchRunning：pid 死 / 超时 → 补 out.json 清 .runn
 });
 
 describe('判别性：执行体 SIGTERM → out.json 有失败记录', () => {
-  it('子进程写 .running 后被 SIGTERM，crash guard 落 crashed', () => {
+  it('子进程写 .running 后被 SIGTERM，crash guard 落 crashed', {
+    // Windows 没有信号：child.kill('SIGTERM') 直接 TerminateProcess，处理器跑不到，等价 kill -9
+    // （那条路归 reapStaleDispatchRunning 验）。执行体只跑 Linux（Contabo / CI），此形态只在那里验。
+    skip: process.platform === 'win32' ? 'Windows 无 SIGTERM 处理器，只在 Linux 验' : false,
+  }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-sigterm-'));
     const script = path.join(dir, 'crash-guard.mjs');
     const runner = path.join(dir, 'runner.mjs');
