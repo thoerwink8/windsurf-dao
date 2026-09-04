@@ -405,10 +405,17 @@ function wakeBrain(action, { state, dryRun, say }) {
   if (!handle) { say('  起了大脑但没拿到 handle——没查成'); return { ok: false, error: 'no-handle' }; }
   const sent = runCmd(['node', 'scripts/dao.mjs', 'send', '--terminal', handle, '--text', pointer, '--enter', '--agent', 'pi'], 60000);
   state.brainSessions = state.brainSessions || {};
+  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它，否则送失败就漏一个孤儿大脑。
   state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL };
+  if (!sent.ok) {
+    // 指针没送到 = 这次唤醒没发生：**不计预算**（审官红项 2026-09-04）。
+    // 递增会让「唤满三次转报帅」在大脑其实一次都没被告知的情况下提前触发——把投递故障算成大脑无能。
+    say(`  大脑起了但指针没送：${sent.error}——不计唤醒次数（没送达 ≠ 唤过），下一轮重试`);
+    return { ok: false, error: `指针没送达：${sent.error}`, handle };
+  }
   state.wakeCounts = state.wakeCounts || {};
   state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次）${sent.ok ? '，指针已送' : '，但指针没送：' + sent.error}`);
+  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
   return { ok: true, handle };
 }
 
