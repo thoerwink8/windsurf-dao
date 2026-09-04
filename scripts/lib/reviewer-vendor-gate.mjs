@@ -54,6 +54,45 @@ export function providerOf(modelId, models) {
 }
 
 /**
+ * 判据厂商：家族优先，注册表回落（#895）。
+ *
+ * 改这段前必须知道：「厂商可查」与「是派单候选」是两件事，从前混成一张表——models 由
+ * modelsFromJson() 从职责树（工人/审官/帅）派生，职责树是**派单候选表**。于是只要执行者
+ * 不是派单候选（帅位本体就是这种：#822 把 claude CLI 从选型移除），厂商就永远「没查成」、
+ * 同厂闸永远拒，快马单起不了审官（#890 至今零审查的机械原因）。
+ * 而 id 命名即家族，vendorFamilyOf('claude-opus-5') 本来就查得出 claude。
+ *
+ * 顺序：先 vendorFamilyOf(id)；查不出家族才回落注册表（落地 provider 本身是已登记家族时才认，
+ * gw/pqapi 这类网关 id 不是家族）。两条都查不出 → 仍 fail-closed：挡住报警，不许猜。
+ */
+export function resolveVendor(modelId, models) {
+  if (modelId == null || String(modelId).trim() === '') {
+    return { ok: false, state: 'unscanned', error: '模型 id 没查成' };
+  }
+  const id = String(modelId).trim();
+  const reg = providerOf(id, models); // 网关落地：仅诊断 + 家族回落源，不作判据
+  const provider = reg.ok ? reg.provider : null;
+  const fam = vendorFamilyOf(id);
+  if (fam) {
+    return { ok: true, id, vendor: fam, vendorSource: 'family', provider, registered: reg.ok };
+  }
+  const byProvider = provider ? vendorFamilyOf(provider) : null;
+  if (byProvider) {
+    return { ok: true, id, vendor: byProvider, vendorSource: 'registry', provider, registered: true };
+  }
+  return {
+    ok: false,
+    state: 'unscanned',
+    id,
+    provider,
+    registered: reg.ok,
+    error: reg.ok
+      ? `模型 ${id} 没查成真实供应商家族（id 前缀未登记 VENDOR_FAMILIES，注册表落地 ${provider} 也不是家族，不许猜）`
+      : `模型 ${id} 没查成真实供应商家族（id 前缀未登记 VENDOR_FAMILIES，路由表也没有，不许猜）`,
+  };
+}
+
+/**
  * 工人与审官不得同厂。
  * @returns {{
  *   ok: boolean,
@@ -77,29 +116,23 @@ export function assertCrossVendor({ workerId, reviewerId, models } = {}) {
   if (reviewerId == null || String(reviewerId).trim() === '') {
     return { ok: false, state: 'unscanned', error: '审官模型 id 没查成' };
   }
-  // providerOf 先保「id 在路由表且有落地 provider」（缺 → unscanned，不猜）；网关落地只作诊断。
-  const worker = providerOf(workerId, models);
+  // 判据 = 真实供应商家族（网关后面那一家），家族优先、注册表回落（#895）。
+  // 不再要求「必须是派单候选」——但家族查不出照旧 unscanned（fail-closed，不许猜）。
+  const worker = resolveVendor(workerId, models);
   if (!worker.ok) {
     return { ok: false, state: 'unscanned', error: `工人：${worker.error || '没查成厂商'}` };
   }
-  const reviewer = providerOf(reviewerId, models);
+  const reviewer = resolveVendor(reviewerId, models);
   if (!reviewer.ok) {
     return { ok: false, state: 'unscanned', error: `审官：${reviewer.error || '没查成厂商'}` };
   }
-  // 判据 = 真实供应商家族（网关后面那一家），不是网关落地 provider。
-  const workerVendor = vendorFamilyOf(worker.id);
-  if (!workerVendor) {
-    return { ok: false, state: 'unscanned', error: `工人 ${worker.id} 没查成真实供应商家族（VENDOR_FAMILIES 未登记，不许猜）` };
-  }
-  const reviewerVendor = vendorFamilyOf(reviewer.id);
-  if (!reviewerVendor) {
-    return { ok: false, state: 'unscanned', error: `审官 ${reviewer.id} 没查成真实供应商家族（VENDOR_FAMILIES 未登记，不许猜）` };
-  }
+  const workerVendor = worker.vendor;
+  const reviewerVendor = reviewer.vendor;
   if (workerVendor === reviewerVendor) {
     return {
       ok: false,
       state: 'same_vendor',
-      error: `工人 ${worker.id} 与审官 ${reviewer.id} 同厂（真实供应商 ${workerVendor}；网关落地 ${worker.provider}/${reviewer.provider}），审查必须换厂商`,
+      error: `工人 ${worker.id} 与审官 ${reviewer.id} 同厂（真实供应商 ${workerVendor}；网关落地 ${worker.provider || '没查成'}/${reviewer.provider || '没查成'}），审查必须换厂商`,
       workerId: worker.id,
       reviewerId: reviewer.id,
       workerVendor,

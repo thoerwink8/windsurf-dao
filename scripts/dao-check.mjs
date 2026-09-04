@@ -112,6 +112,7 @@ import {
 import {
   inspectNoReviewerRecreate, inspectNoReviewerRecreateFixtures,
 } from './lib/no-reviewer-recreate-check.mjs';
+import { inspectModelLabelNames } from './lib/model-label-name-check.mjs';
 import {
   inspectOrphanTests, inspectOrphanTestFixtures,
 } from './lib/orphan-test-check.mjs';
@@ -1401,6 +1402,7 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
+checkModelLabelNames();
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1785,6 +1787,32 @@ function checkVendorGateLive() {
     return;
   }
   green('起审官同厂硬闸还在（create/attach/worker-done/换人接线齐；dispatch 预检闸已删；审官不写死 forceCommand）');
+}
+
+// #895：model/* label 名必须能被 vendorFamilyOf 解析。label 名和家族命名规则对不上
+// （实咬：model/opus-5 缺 claude- 前缀）→ 同厂闸永远 unscanned → 那张单永远起不了审官。
+// 只查 label 名字，不查有没有单在用——名字留在仓里就还会被下一张单挑上。
+function checkModelLabelNames() {
+  const listed = runGhJson(['label', 'list', '--limit', '500', '--json', 'name']);
+  if (listed.unscanned) {
+    skip(`model/* label 命名：gh label list 没查成（${listed.error}）——本次没查成，不是绿`);
+    return;
+  }
+  const r = inspectModelLabelNames({ labelNames: listed.array });
+  if (r.unscanned) {
+    skip(`model/* label 命名：${r.error}`);
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `model/* label 名家族查不出 ${r.bad.length} 个`,
+      'label 名改成 model/<家族>-<版本>（gh label edit <旧名> --name <新名>，改名保留已挂的单）；'
+      + '或删掉不该在 model/* 命名空间里的（网关/执行面不是模型家族）。家族登记在 scripts/lib/reviewer-vendor-gate.mjs 的 VENDOR_FAMILIES',
+      r.bad.join('、'),
+    );
+    return;
+  }
+  green(`model/* label 命名与 vendorFamilyOf 一致（${r.scanned} 个全能查出家族）`);
 }
 
 function checkMachinePathSamples() {

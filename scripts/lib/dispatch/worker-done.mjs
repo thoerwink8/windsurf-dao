@@ -150,10 +150,22 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
-/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
+/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它。
+ * #895：显式 --reviewer 也要把署名 issue 的 label/refs 一起收回来——快马单没有 reviewer/* label
+ * （没走派单流程写不上），从前 explicit 分支直接返回、refs 为空，调用方（planWorkerDone）拿不到
+ * 单号与 model/* 就照旧拒，于是「--reviewer 也救不了」。gh 本身没查成（unscanned）仍照旧拒。 */
 export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
-  if (reviewer && String(reviewer).trim()) {
-    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+  const explicit = reviewer == null ? '' : String(reviewer).trim();
+  if (explicit) {
+    const collected = collectIssueLabelsFromPr({ pr, runGh });
+    if (!collected.ok && collected.unscanned) return collected;
+    return {
+      ok: true,
+      source: 'flag',
+      modelId: explicit,
+      refs: collected.ok ? collected.refs : [],
+      labels: collected.ok ? collected.labels : [],
+    };
   }
   const collected = collectIssueLabelsFromPr({ pr, runGh });
   if (!collected.ok) {
@@ -187,10 +199,11 @@ export function listPrReviews({ pr, runGh } = {}) {
 }
 
 /** 完工计划：按已有 review 条数分首审 / 返工。首审才建审官。 */
-export function planWorkerDone({ pr, body, runGh } = {}) {
+export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };
-  const resolved = resolveReviewerFromPr({ pr: n, runGh });
+  // #895：快马单没有 reviewer/* label，允许显式 --reviewer 指名审官（label 优先级不变：不传才自读）。
+  const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
   if (!issue) {

@@ -2646,7 +2646,7 @@ function cmdWorkerDone(args) {
     catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
   }
   const gh = ghRunner({ role: 'worker' });
-  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh });
+  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh, reviewer: args.reviewer });
   if (!plan.ok) fail(plan.error, plan);
 
   let parentId = args.parentWorktree || null;

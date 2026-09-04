@@ -23,6 +23,8 @@ const args = process.argv.slice(2);
 //   其余号 → 无 label。
 //   PR 42 正文 Closes #565；PR 43 Closes #568；PR 44 Closes #569；PR 46 Closes #565 且已有 review。
 //   #679：issue 570 无 model/*（PR 45）；issue 571 工人审官都是 grok（PR 47 同厂样本）。
+//   #895：issue 572 快马单——model/claude-opus-5（非派单候选，家族查得出）且**无 reviewer/***（PR 48）；
+//         issue 573 家族查不出的假 id model/mistral-large + reviewer/gpt-5.6-luna（PR 49，fail-closed 样本）。
 // 只实现测试用到的调用面；其它 gh 调用一律报错退出（fail-loud，不许静默返回假数据）。
 const ISSUE_LABELS = {
   '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }],
@@ -30,6 +32,8 @@ const ISSUE_LABELS = {
   '569': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'reviewer/claude-opus' }],
   '570': [{ name: '已消歧' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
   '571': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/grok-4.6' }],
+  '572': [{ name: '已消歧' }, { name: 'model/claude-opus-5' }, { name: 'type/写码' }],
+  '573': [{ name: '已消歧' }, { name: 'model/mistral-large' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }],
 };
 const REPO_LABELS = ['已消歧', '任务', 'model/grok-4.6', 'type/写码', 'reviewer/gpt-5.6-sol'];
 const PR_HEAD = {
@@ -124,6 +128,24 @@ if (args[0] === 'pr' && args[1] === 'view') {
     process.stdout.write(JSON.stringify({
       title: '同厂审官',
       body: 'Closes #571',
+      reviews: [],
+      ...PR_HEAD,
+    }));
+    process.exit(0);
+  }
+  if (n === '48') {
+    process.stdout.write(JSON.stringify({
+      title: '快马单：执行者是帅位本体，无 reviewer/* label',
+      body: 'Closes #572',
+      reviews: [],
+      ...PR_HEAD,
+    }));
+    process.exit(0);
+  }
+  if (n === '49') {
+    process.stdout.write(JSON.stringify({
+      title: '家族查不出的假 id',
+      body: 'Closes #573',
       reviews: [],
       ...PR_HEAD,
     }));
