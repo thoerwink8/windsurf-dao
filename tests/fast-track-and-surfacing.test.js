@@ -194,3 +194,48 @@ describe('待消歧标判别（纯函数）', () => {
     assert.equal(hasPendingLabel(null), false);
   });
 });
+
+
+describe('盘点三态不塌（#877 审官一轮红）', () => {
+  const INV = import(url('scripts/lib/commander-inventory.mjs'));
+
+  it('检查项计数：ok+red+unknown+due 等于总项数，没见过的状态算没查成', async () => {
+    const { tallyChecks } = await INV;
+    const got = tallyChecks([
+      { key: 'a', state: 'ok' }, { key: 'b', state: 'red' }, { key: 'c', state: 'unknown' },
+      { key: 'd', state: 'due' }, { key: 'e', state: 'quiet' }, { key: 'f', state: '天外飞仙' },
+    ]);
+    const c = got.counts;
+    assert.equal(c.total, 6);
+    assert.equal(c.ok + c.red + c.unknown + c.due, c.total, '四态之和必须等于总项数');
+    assert.equal(c.ok, 2, 'quiet 也算查过没事');
+    assert.equal(c.unknown, 2, '没见过的状态并进没查成，不许当 ok');
+  });
+
+  it('待消歧扫描：引用单状态读不到 → 整项是没查成，日志不打 ✓', async () => {
+    const { runInventory, CHECK_SYM, tallyChecks } = await INV;
+    assert.equal(typeof runInventory, 'function');
+    assert.equal(CHECK_SYM.unknown, '?');
+    assert.equal(CHECK_SYM.quiet, '✓');
+    // 一张待消歧单，时机行引用 #863 但 gh 读不出它的状态 → collectSurfacing 归入 unknown
+    const { surfaceState } = await INV;
+    const { collectSurfacing } = await PEND;
+    const got = collectSurfacing([{ issue: 818, timingRef: 863, blockerState: null }]);
+    const state = surfaceState(got);
+    assert.equal(state, 'unknown', '有没查成的就不能报安静（旧判据在这里报 quiet）');
+    assert.equal(surfaceState(collectSurfacing(null)), 'unknown', '整张单子都没扫成，更是没查成');
+    assert.equal(surfaceState({ scanned: true, due: [], notYet: [{}], unknown: [] }), 'quiet', '全查成且都没到时机才算安静');
+    assert.equal(surfaceState({ scanned: true, due: [{ issue: 1 }], notYet: [], unknown: [{}] }), 'due', '到时机优先端上来');
+    assert.equal(CHECK_SYM[state], '?', '没查成不许显示 ✓');
+    const tally = tallyChecks([{ key: 'pending-surface', state }]);
+    assert.equal(tally.counts.unknown, 1);
+    assert.equal(tally.counts.ok, 0);
+  });
+
+  it('待消歧单列不出来 → 没查成，且 due/unknown 字段仍是数组（调用方不会读到 undefined）', async () => {
+    const { collectSurfacing } = await PEND;
+    const got = collectSurfacing(null);
+    assert.equal(got.scanned, false, '没扫成不是「一个都没有」');
+    assert.ok(Array.isArray(got.due) && Array.isArray(got.unknown));
+  });
+});

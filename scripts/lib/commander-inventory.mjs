@@ -220,11 +220,12 @@ function scanPendingSurfacing({ runGh, REPO }) {
   const key = 'pending-surface';
   const r = runGh(['issue', 'list', '--repo', REPO, '--state', 'open', '--label', PENDING_LABEL,
     '--json', 'number,title,body,comments', '--limit', '100'], 30000);
-  if (!r.ok) return { state: 'unknown', key, detail: `待消歧单列不出来：${fmt(r.error)}`, due: [] };
+  const blind = (detail) => ({ state: 'unknown', key, detail, scanned: false, due: [], notYet: [], unknown: [] });
+  if (!r.ok) return blind(`待消歧单列不出来：${fmt(r.error)}`);
   let arr;
   try { arr = JSON.parse(r.out || '[]'); }
-  catch (e) { return { state: 'unknown', key, detail: `待消歧单列表不是 JSON：${e.message}`, due: [] }; }
-  if (!Array.isArray(arr)) return { state: 'unknown', key, detail: '待消歧单列表契约变了', due: [] };
+  catch (e) { return blind(`待消歧单列表不是 JSON：${e.message}`); }
+  if (!Array.isArray(arr)) return blind('待消歧单列表契约变了');
   const items = arr.map((it) => {
     const texts = [it?.body || '', ...(Array.isArray(it?.comments) ? it.comments.map((c) => (c && c.body) || '') : [])];
     const timing = parseTimingRef(texts);
@@ -237,7 +238,7 @@ function scanPendingSurfacing({ runGh, REPO }) {
   });
   const got = collectSurfacing(items);
   const detail = `待消歧单 ${items.length} 张：到时机 ${got.due.length}、还没到 ${got.notYet.length}、没查成 ${got.unknown.length}`;
-  return { state: got.due.length ? 'due' : 'quiet', key, detail, ...got };
+  return { state: surfaceState(got), key, detail, ...got };
 }
 
 function fmt(err) { return typeof err === 'string' ? err.slice(0, 120) : (err?.message || err?.code || JSON.stringify(err) || '').slice(0, 120); }
@@ -249,6 +250,34 @@ export function buildInventoryHubText(reds, { everyHours = 6 } = {}) {
   if (reds.length === 1) return `${head}\n${items[0]}`;
   return [head, ...items.map((t, i) => `${i + 1}）${t.replace(/\n/g, '\n   ')}`)].join('\n');
 }
+
+/** 待消歧扫描的整项状态。有一张没查成就得说出来：
+ *  报 quiet 会被打成 ✓，等于把「瞎了」显示成「查过没事」。 */
+export function surfaceState(got = {}) {
+  const due = Array.isArray(got.due) ? got.due : [];
+  const unknown = Array.isArray(got.unknown) ? got.unknown : [];
+  if (got.scanned === false) return 'unknown';
+  if (due.length) return 'due';
+  if (unknown.length) return 'unknown';
+  return 'quiet';
+}
+
+/** 检查项四态计数：ok + red + unknown + due 恒等于检查项总数。
+ *  没见过的状态一律算「没查成」——并进「查过没事」就是把瞎了当好了。 */
+export function tallyChecks(checks = []) {
+  const list = Array.isArray(checks) ? checks.filter(Boolean) : [];
+  const red = [], due = [], ok = [], unknown = [];
+  for (const c of list) {
+    if (c.state === 'red') red.push(c);
+    else if (c.state === 'due') due.push(c);
+    else if (c.state === 'ok' || c.state === 'quiet') ok.push(c);
+    else unknown.push(c);
+  }
+  return { total: list.length, red, due, ok, unknown,
+    counts: { total: list.length, red: red.length, due: due.length, ok: ok.length, unknown: unknown.length } };
+}
+
+export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
 export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }) {
@@ -262,11 +291,15 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     checkStalePrs({ runGh, REPO }),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
+    // 8. 待消歧到时机（#876 ③）：跟前 7 项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
+    scanPendingSurfacing({ runGh, REPO }),
   ];
-  const reds = checks.filter((c) => c.state === 'red');
-  const unknowns = checks.filter((c) => c.state === 'unknown');
+  const surface = checks[checks.length - 1];
+  const tally = tallyChecks(checks);
+  const reds = tally.red;
+  const unknowns = tally.unknown;
   const log = [];
-  for (const c of checks) log.push(`  ${c.state === 'ok' ? '✓' : c.state === 'red' ? 'X' : '?'} ${c.key} —— ${c.detail}`);
+  for (const c of checks) log.push(`  ${CHECK_SYM[c.state] || '?'} ${c.key} —— ${c.detail}`);
 
   // 群里一轮一条（去重键 = 红项集合；集合变了才再说一次），issue 仍逐项开。
   if (reds.length) {
@@ -287,18 +320,18 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     const opened = openEscalationIssue({ title: `[待拍板] 盘点：${c.key}`, body });
     log.push(`  ${opened.ok ? '开单 #' + opened.number : '开单失败：' + opened.error}：${c.key}`);
   }
-  // 待消歧到时机（#876 ③）：不进 reds——它不是「有东西坏了要开单」，是「有件事该找你聊了」。
-  const surface = scanPendingSurfacing({ runGh, REPO });
-  log.push(`  ${surface.state === 'due' ? '!' : surface.state === 'unknown' ? '?' : '✓'} ${surface.key} —— ${surface.detail}`);
+  // 到时机只提醒不开单——它不是「有东西坏了」，是「有件事该找你聊了」（上面开单的循环只走 red）。
   if (surface.state === 'due') {
     const text = ensurePlain(buildSurfacingHubText(surface.due), 'commander-inventory/待消歧');
     const r = hubOnce({ state, key: surfacingDedupKey(surface.due), text, dryRun });
     log.push(`  群：${r.sent ? (r.dryRun ? '[dry] ' : '') + '到时机提醒一条' : '略（' + (r.reason || r.error) + '）'}`);
   }
   if (!dryRun) saveState(state);
-  console.log(JSON.stringify({ dryRun, red: reds.length, unknown: unknowns.length, ok: checks.length - reds.length - unknowns.length,
+  console.log(JSON.stringify({ dryRun, ...tally.counts,
     checks: checks.map((c) => ({ key: c.key, state: c.state })),
-    surfacing: { state: surface.state, due: (surface.due || []).map((d) => d.issue) } }, null, 2));
+    surfacing: { state: surface.state,
+      due: (surface.due || []).map((d) => d.issue),
+      unknown: (surface.unknown || []).map((u) => (u && u.issue) ?? u) } }, null, 2));
   console.error(log.join('\n'));
   // 盘点本身不因异常非零（异常已开单）；探不到项不算失败——它只是提示 status 去看。
   process.exit(0);
