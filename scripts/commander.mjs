@@ -388,6 +388,7 @@ function wakeBrain(action, { state, dryRun, say }) {
     '你是服务器指挥官的「大脑」（一次性会话，#800）。',
     `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
     `处置目标：${action.target}（${action.why}）。`,
+    '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
     '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完打 exit 退出。',
   ].join('');
   const startCmd = ['node', 'scripts/dao.mjs', 'start', '--provider', 'gw', '--model', BRAIN_MODEL,

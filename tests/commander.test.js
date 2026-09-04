@@ -81,7 +81,7 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'approved-without-review'), '不许误报 approved-without-review');
   });
 
-  it('两条 CHANGES_REQUESTED + 白话正文（无判定行）→ escalate(two-red)，不是 noop（#857 红 1 判别）', async () => {
+  it('两条 CHANGES_REQUESTED + 白话正文（无判定行）→ 唤大脑给方案送达，不是 noop 也不直接报帅（#857 红 1 判别 + 2026-09-04 拍板）', async () => {
     const { decide } = await CORE;
     const pr = { number: 913, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
@@ -89,8 +89,10 @@ describe('decide：自己做（确定性）', () => {
       prReviews: { scanned: true, byPr: { 913: { reviews: [{ state: 'CHANGES_REQUESTED', body: '这里不对' }, { state: 'CHANGES_REQUESTED', body: '还是不对' }], bodies: ['这里不对', '还是不对'] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0);
-    assert.equal(byKind(r, 'wake-brain').length, 0, '两轮红不唤大脑');
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'two-red'), '两轮真 request-changes 必须 two-red 报帅');
+    const w = byKind(r, 'wake-brain');
+    assert.equal(w.length, 1, '两轮红先唤大脑给方案，不许晾着');
+    assert.match(w[0].why, /送达/, '指针必须带「送达」职责');
+    assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'two-red'), '唤醒预算没用完前不报帅');
   });
 
   it('判绿但 CI 红 → 不 merge，报帅 + 卡壳回流', async () => {
@@ -127,17 +129,18 @@ describe('decide：自己做（确定性）', () => {
 });
 
 describe('decide：报帅停手（永不自动）', () => {
-  it('审官两轮仍红 → escalate（不 merge、不 wake-brain）（判据②）', async () => {
-    const { decide } = await CORE;
+  it('审官两轮仍红且唤醒预算用完 → escalate two-red（不 merge、不再唤）（判据②）', async () => {
+    const { decide, WAKE_LIMIT } = await CORE;
     const pr = { number: 930, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
       prReviews: { scanned: true, byPr: { 930: { reviews: [{ state: 'CHANGES_REQUESTED', body: '三处要改' }, { state: 'CHANGES_REQUESTED', body: '还有两处' }] } } },
+      wakeCounts: { 'pr:930': WAKE_LIMIT },
     }));
     assert.equal(byKind(r, 'merge').length, 0, '两轮红绝不合');
-    assert.equal(byKind(r, 'wake-brain').length, 0, '两轮红不再唤大脑，直接报帅');
+    assert.equal(byKind(r, 'wake-brain').length, 0, '唤醒预算用完不再唤');
     const e = byKind(r, 'escalate');
-    assert.ok(e.some((a) => a.reason === 'two-red'), '要有 two-red 报帅');
+    assert.ok(e.some((a) => a.reason === 'two-red'), '预算用完要有 two-red 报帅换人');
   });
 
   it('COMMENT 近义变体不算判别态，不 escalate malformed', async () => {
@@ -278,9 +281,9 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
 
 describe('decide：自动路径边界（审官建议）', () => {
   it('任何输出的 kind 都在 ACTION_KINDS 内，绝不出现清树/写指纹/改 dao.mjs 类破坏动作', async () => {
-    const { decide, ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    const { decide, ACTION_KINDS, FORBIDDEN_AUTO_KINDS, WAKE_LIMIT } = await CORE;
     const allowed = new Set(ACTION_KINDS);
-    // 一份「样样都有」的态势：dispatch + merge + manual待拍板 + 一轮红wake + 两轮红报帅 + stall wake + review-pending
+    // 一份「样样都有」的态势：dispatch + merge + manual待拍板 + 一轮红wake + 两轮红唤满报帅 + stall wake + review-pending
     const situ = baseSituation({
       github: { scanned: true,
         issues: [{ number: 10, title: 'A', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }],
@@ -297,6 +300,7 @@ describe('decide：自动路径边界（审官建议）', () => {
       } },
       reviewPending: { scanned: true, items: [{ pr: 30, reviewer: 'gpt-5.6-sol', worker: 'wt' }] },
       stall: { scanned: true, strikes: { term_z: { strikes: 2 } } },
+      wakeCounts: { 'pr:23': WAKE_LIMIT }, // 两轮红那张唤满，保住 escalate 分支的覆盖
     });
     const r = decide(situ);
     for (const a of r.actions) {

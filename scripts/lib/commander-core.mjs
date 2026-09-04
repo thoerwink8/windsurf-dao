@@ -239,9 +239,14 @@ function collectCandidates(situation) {
 
     const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
-    if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
-      out.push(withNeeds(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }), N['wake-brain']));
-      out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
+    if (a.redRounds >= 2) { // 两轮红：先唤大脑给方案并送达（2026-09-04 拍板：帅位要负责给方案推闭环，不许晾着）；唤满才报帅换人
+      const woken = wakeCounts[`pr:${pr.number}`] || 0;
+      if (woken >= WAKE_LIMIT) {
+        out.push(withNeeds(esc(`PR #${pr.number} 审官 ${a.redRounds} 轮仍红、大脑推了 ${woken} 次没闭环——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds, woken }), N['wake-brain']));
+        out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红、推了 ${woken} 次没推动，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
+      } else {
+        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官 ${a.redRounds} 轮仍红——给出具体修复方案并送达工人/审官终端推动闭环，送不动才报帅` }, N['wake-brain']));
+      }
     } else if (a.redRounds === 1 && !a.latestGreen) { // 审官判红一轮 → 唤大脑；同单已唤满 → 转报帅
       const woken = wakeCounts[`pr:${pr.number}`] || 0;
       if (woken >= WAKE_LIMIT) {
