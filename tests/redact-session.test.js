@@ -27,6 +27,9 @@ const CANARY_BEARER = 'CANARYbearer.abc-123_xyz';
 // 43+ 字符、混大小写含数字 = 裸 token 的形状（无前缀，前缀模式抓不到它）
 const CANARY_HIGH = 'CANARYaB3' + 'xY7z'.repeat(9) + 'Q9';
 const WIN_PATH = String.raw`D:\frank\windsurf-dao\scripts\lib\redact.mjs`;
+const SPACED_WIN = String.raw`C:\Users\Jane Doe\windsurf dao\notes.txt`;
+const SPACED_UNC = String.raw`\\server\Jane Doe\share\secret.txt`;
+const SPACED_POSIX = '/home/Jane Doe/windsurf dao/secret.txt';
 const POSIX_HOME = '/home/orca/bin/hub-say';
 const POSIX_CUSER = '/c/Users/Administrator/.claude/settings.json';
 const REAL_SHA = '077f48b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7';
@@ -46,7 +49,10 @@ function mutantWithout(patternName) {
   const lines = rewired.split('\n');
   const at = lines.findIndex(l => l.includes(`name: '${patternName}'`));
   assert.ok(at >= 0, `变异手找不到模式 ${patternName} ⇒ EXTRA_PATTERNS 结构变了，变异自证失效`);
-  const reAt = lines.findIndex((l, i) => i > at && /^\s*re:\s*\//.test(l));
+  // 认 `re:` 行但不认它的**写法**：模式表里既有正则字面量（high-entropy）也有
+  // `new RegExp(...)`（三条路径——段规则要复用零件，拼不出字面量）。首版这里写死了 `re: /`，
+  // 改成 new RegExp 后变异手当场找不到行 ⇒ 变异自证整组失效。判据只认「有个 re: 键」。
+  const reAt = lines.findIndex((l, i) => i > at && /^\s*re:\s*\S/.test(l));
   assert.ok(reAt > at && reAt < at + 12, `变异手找不到 ${patternName} 的 re: 行 ⇒ 变异自证失效`);
   lines[reAt] = '    re: /(?!)/g,'; // 永不命中 = 这条规则被删掉了
   const file = path.join(SANDBOX, `mutant-no-${patternName}.mjs`);
@@ -79,6 +85,11 @@ describe('redact.mjs · 会话态脱敏', () => {
       ['POSIX /c/Users', `cfg ${POSIX_CUSER}`, POSIX_CUSER, 'posix-path'],
       ['POSIX /root', 'at /root/.ssh/config', '/root/.ssh/config', 'posix-path'],
       ['43+ 高熵串', `tok ${CANARY_HIGH} end`, CANARY_HIGH, 'high-entropy'],
+      // ↓ 审官 P1：首版三条路径正则在空格处截断、UNC 整条漏过。这四条是那次漏的形状。
+      ['Win 含空格（用户名+目录名都带空格）', SPACED_WIN, 'Jane Doe', 'win-path'],
+      ['Win 含空格 · 末段也带空格但有扩展名', String.raw`C:\Users\Jane Doe\my notes.txt`, 'Jane Doe', 'win-path'],
+      ['UNC 含空格', SPACED_UNC, 'Jane Doe', 'unc-path'],
+      ['POSIX 含空格', SPACED_POSIX, 'Jane Doe', 'posix-path'],
     ];
     for (const [label, input, secret, wantHit] of positives) {
       await t.test(`正控 ${label}`, () => {
@@ -140,11 +151,31 @@ describe('redact.mjs · 会话态脱敏', () => {
     assert.strictEqual(out.nested.nil, null);
   });
 
-  it('⑥ 变异自证：去掉一条规则 → 那条正控必须翻红', async (t) => {
+  it('⑦ 安全边界 · 写死现状的两格残留（收紧了这两条会红，红是好事）', async (t) => {
+    const { redact } = await LIB_LOAD;
+    // 这两条**不是**「应该这样」，是「目前就这样」。头注 🚧 段写明了为什么不再收紧
+    // （末段贪婪会吃掉整句话；正斜杠 UNC 与 URL 分不开）。谁真收紧了，这里翻红 ⇒ 改断言。
+    await t.test('末段带空格且无扩展名：敏感的用户名脱掉了，目录名尾巴留下', () => {
+      const out = redact(String.raw`C:\Users\Jane Doe\my secret folder`);
+      assert.ok(!out.includes('Jane Doe'), '用户名必须脱掉（这一半是硬要求）');
+      assert.strictEqual(out, '[REDACTED:win-path] secret folder', '边界变了就更新本断言与头注 🚧 段');
+    });
+    await t.test('正斜杠 UNC 刻意不认（与 URL 分不开）', () => {
+      assert.strictEqual(redact('//server/share/x'), '//server/share/x');
+      // 代价对照：认它就会把每条链接吃掉，所以负控里的 GitHub URL 必须活着
+      assert.strictEqual(
+        redact('see https://github.com/thoerwink8/windsurf-dao/pull/891'),
+        'see https://github.com/thoerwink8/windsurf-dao/pull/891'
+      );
+    });
+  });
+
+  it('⑧ 变异自证：去掉一条规则 → 那条正控必须翻红', async (t) => {
     const cases = [
       ['win-path', `file at ${WIN_PATH} done`, WIN_PATH],
       ['posix-path', `log in ${POSIX_HOME} now`, POSIX_HOME],
       ['high-entropy', `tok ${CANARY_HIGH} end`, CANARY_HIGH],
+      ['unc-path', `share at ${SPACED_UNC} here`, SPACED_UNC],
     ];
     for (const [name, input, secret] of cases) {
       await t.test(`删掉 ${name} → 正控失效（说明该断言有判别力）`, async () => {

@@ -105,7 +105,10 @@ function collectPrs(cwd) {
   });
   if (r.error || r.status !== 0) return null;
   try {
-    return JSON.parse(r.stdout || '[]').map(p => ({ number: p.number, ts: p.updatedAt, title: p.title }));
+    // `ts` 原样带上 updatedAt，**窗口过滤交给纯函数**（produceKeys 按 since 筛）——
+    // 首版没有这道过滤，一个很久以前仍 open 的 PR 每轮 Stop 都被算成本轮产出（审官 P2）。
+    // 过滤不放在这里是刻意的：判据要能被单测直接喂样本，采集侧换实现不该把它带走。
+    return JSON.parse(r.stdout || '[]').map(p => ({ number: p.number, ts: p.updatedAt, updatedAt: p.updatedAt, title: p.title }));
   } catch {
     return null;
   }
@@ -132,10 +135,13 @@ function readState(file) {
     return {
       since: typeof d.since === 'string' ? d.since : null,
       reminded: Array.isArray(d.reminded) ? d.reminded.map(String) : [],
+      // pending = 判过漏记、至今没被事件指向的产出键。**必须跨轮带着走**：产出只在落地那一轮
+      // 出现在 git 窗口里，不存下来的话下一轮就看不见它了，`remind` 永远不会发生（审官 P1 实咬）。
+      pending: Array.isArray(d.pending) ? d.pending.map(String) : [],
     };
   } catch {
     // 不在 / 坏了 ⇒ 当首轮。坏了不报错也不修：状态文件是缓存，重建即可。
-    return { since: null, reminded: [] };
+    return { since: null, reminded: [], pending: [] };
   }
 }
 
@@ -176,8 +182,15 @@ function main() {
     ? process.env.DAO_AUDIT_TIERS.split(',').map(s => s.trim()).filter(Boolean)
     : DEFAULT_TIERS;
 
-  const result = auditTurn({ produced, events, since, reminded: prev.reminded, tiers });
-  const next = { since: now, reminded: prev.reminded };
+  const result = auditTurn({
+    produced, events, since, tiers,
+    carry: prev.pending,
+    reminded: prev.reminded,
+    sessionId: payload.session_id ? String(payload.session_id) : null,
+  });
+  // `since` 照常推进（窗口只管「本轮新落地什么」），未补记的产出靠 pending 跨轮带走——
+  // 两者分开是这次修复的要点：把窗口拉长会让同一批 commit 反复报警，把产出存下来才对。
+  const next = { since: now, reminded: prev.reminded, pending: result.pending || [] };
 
   if (result.verdict === 'missing') {
     // 写前必过 redact：detail 里有 commit subject（人写的自由文本，最可能夹带凭据），
