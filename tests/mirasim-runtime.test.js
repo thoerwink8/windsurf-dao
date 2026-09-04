@@ -92,7 +92,7 @@ describe('契约断言', () => {
     // 判别点：拒派 = 没发；只抛错但已经把 prompt 发出去了，额度照烧
     assert.deepStrictEqual(wire.sent.filter(f => f.type === 'prompt'), []);
     assert.strictEqual(wire.sent.length, 0);
-    assert.strictEqual(wire.closed, true);
+    assert.strictEqual(wire.hungUp, true, '拒派后要主动挂断（hungUp 是假线 close() 的记账，见 fakeWire 注释）');
   });
 
   it('服务端没有这个执行体：同样拒派，不发 prompt', async () => {
