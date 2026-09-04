@@ -101,7 +101,7 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
 
 - 仓内 `ledger/events/` 只保留已合并历史，**不要再往那里写新事件**；`LEDGER_EVENTS_DIR=<目录>` 可临时改落点（测试用，覆盖时不播种子）。
-- 本机产生的新事件只在本机。跨机汇聚的方向是 dao-hub 按需拉取（已拍板，机制未实现）；汇聚上线前要带走旧机事件，就手动拷 `~/.dao/ledger/events/`——文件名由事件内容决定，同名即同一事件，直接合并拷贝安全。
+- 本机产生的新事件只在本机。要把别的机器的事件带过来，跑 `node scripts/ledger-sync.mjs --from <ssh 别名>`（判据 `scripts/lib/ledger-sync.mjs`；幂等，同名跳过，重跑零副作用）。文件名由事件内容决定，同名即同一事件，汇聚就是按文件名求并集。**没有中心汇聚仓**——拉到发起拉取的这台机器自己的 `~/.dao/ledger/events/`（2026-09-04 拍板，见 `docs/dianjiangtai-design.md` 文首实施状态注记）。
 
 ## 5. 模型配置
 

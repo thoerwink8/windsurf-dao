@@ -445,6 +445,19 @@ describe('ledger-sync：不完整一律 fail-closed（审官 #899）', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('回归：远端真是空目录（头 + 尾 END 0）仍判绿——fail-closed 不是「一律报红」', async () => {
+    const S = await SYNC;
+    // 上面三条把「不完整」全堵成非零；这条是反向判别力：协议齐、命令 0、真的 0 条，
+    // 必须还是 exit 0 且 remoteTotal 写 0（此时 0 是查过的结论，不是没查成的缺省值）。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-empty-'));
+    const r = S.pullFromHost({ host: 'fake', localDir: dir, run: fakeSsh(new Map()).run });
+    assert.strictEqual(r.remoteTotal, 0, '查过是空的 ⇒ remoteTotal 是 0，不是 null');
+    assert.strictEqual(r.unscanned.length, 0, '没有任何「没查成」');
+    assert.strictEqual(S.verdict([r]).code, 0, '空远端是绿，不许被 fail-closed 顺手带红');
+    assert.strictEqual(fs.readdirSync(dir).length, 0, '没有东西可拉，也别留临时件');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('判决口径只有一处：桶就是 SIGNAL_CLASS 的键，忘了归类 → fail-closed 判红', async () => {
     const S = await SYNC;
     const fresh = S.emptyResult({ host: 'x' });

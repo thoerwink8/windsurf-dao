@@ -6,7 +6,10 @@
 > `scripts/ledger-sync.mjs`（判据在 `scripts/lib/ledger-sync.mjs`，`node scripts/ledger-sync.mjs --from <ssh 别名>`）。
 > 原文写的是「走 dao-hub 按需拉取」：**按需拉取这个动作**照做了，但传输走既有 ssh 基建，
 > 没经 `dao-hub` 那个仓——它是 HTTP + 隧道形态的机器级 Agent Hub（要起 server、开端口），
-> 与本单「不引新依赖、不开新端口」的约束相撞。汇聚点最终是否落到 dao-hub 待帅位拍，本稿不改取舍。
+> 与本单「不引新依赖、不开新端口」的约束相撞。
+> 帅位 2026-09-04 拍板：**「走 dao-hub」是过期指针，汇聚点就是发起拉取的那台机器自己的
+> `~/.dao/ledger/events/`，没有中心仓**——与「账本本机化、事件不进 git」同源，也不引入
+> 「中心点一挂所有面同时瞎」的单点。下文原写「走 dao-hub 拉取」处已按此改正。
 >
 > **实施状态注记（2026-08-22）**：`derived/` 物化层从未落地（`recompute.mjs` 未造，三个 JSON 一直是空壳），选型实际直接扫事件流；空壳已在清零收口删除。文中 derived 相关段落视为未实施的设计意图，不是现行机制。
 
@@ -400,7 +403,7 @@ L0 输出必须引用它用过的事件 id，不允许写「感觉是模型不�
 | 2 | 统一美元记账，订阅月费摊销折算 | F18/B.2 摊销公式；事件带 `usd_cash`/`usd_economic` 双记账 |
 | 3 | 硬禁令与预算不被数据侵蚀 | `policy/bans.yml` 仅用户可写，F1 门闩先于评分；成本只做 `λ_c≈0.15` 有界特征、永不做闸门（B.1/C.1） |
 | 4 | 试用期/新模型探索保底 | F8 缺口 + C.3 确定性配额强制覆盖，无饿死无死刑 |
-| 5 | 记录本机优先、换机可汇聚、schema 可生长；三维 cell | A 一事件一文件落 `~/.dao/ledger/events/`（不进 git，仓内历史当种子；跨机走 dao-hub 拉取）；cell=(m,i,w)；事件闭集以 `schemas/events.schema.json` 为唯一权威、加类型先改它、只加字段不改语义 |
+| 5 | 记录本机优先、换机可汇聚、schema 可生长；三维 cell | A 一事件一文件落 `~/.dao/ledger/events/`（不进 git，仓内历史当种子；跨机走按需拉取 `scripts/ledger-sync.mjs`，拉到本机、无中心仓）；cell=(m,i,w)；事件闭集以 `schemas/events.schema.json` 为唯一权威、加类型先改它、只加字段不改语义 |
 | 6 | 版本升级旧账降格为先验 | F7 `w_version`：异版本只进 base_p 不进当前格，先验中心改 base_p、k0 不变 |
 | 7 | 结论门槛三分法 | D.1：成功合并→正样本；能力失败→负样本；环境中断→整单不入账 |
 | 8 | 归因决定入账（仅模型能力入能力账） | D.1 责任向量 `model_share` + 三本账分离；超支 `overrun_attr` 独立归因 |
