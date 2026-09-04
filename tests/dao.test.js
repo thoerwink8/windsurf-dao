@@ -1558,6 +1558,39 @@ describe('dao', () => {
         '#877 反例：从未见过任务书指纹、只有 Working → 仍超时 failed（#762 不回归）  →  ' + JSON.stringify(m));
     });
 
+    // #877 治本：pi session jsonl 直读当开工证明（orca worker-read 不认 pi）。
+    await t.test('#877 piSessionSlug：/ 全换 -，首尾 -/--', () => {
+      assert.strictEqual(S.piSessionSlug('/home/orca/windsurf-dao'), '--home-orca-windsurf-dao--');
+    });
+    {
+      const piHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-proof-'));
+      const cwd = '/home/orca/orca/workspaces/x/PR-877-审官';
+      const sessDir = path.join(piHome, '.pi', 'agent', 'sessions', S.piSessionSlug(cwd));
+      fs.mkdirSync(sessDir, { recursive: true });
+      const noneYet = S.piSessionProof({ cwd, sinceMs: Date.now() - 90000, home: piHome });
+      await t.test('#877 pi proof：目录空 → 不 proven 不 unscanned（继续轮询）', () => {
+        assert.ok(noneYet.ok === true && noneYet.proven === false && !noneYet.unscanned, JSON.stringify(noneYet));
+      });
+      const oldFile = path.join(sessDir, 'old.jsonl');
+      fs.writeFileSync(oldFile, '{"type":"message","message":{"role":"user","content":[]}}\n');
+      const past = new Date(Date.now() - 30 * 60 * 1000);
+      fs.utimesSync(oldFile, past, past);
+      const stale = S.piSessionProof({ cwd, sinceMs: Date.now() - 90000, home: piHome });
+      await t.test('#877 pi proof：只有 20 分钟前旧会话 → 不 proven（上一针残留不当证据）', () => {
+        assert.ok(stale.ok === true && stale.proven === false, JSON.stringify(stale));
+      });
+      fs.writeFileSync(path.join(sessDir, 'fresh.jsonl'),
+        '{"type":"session","version":3}\n{"type":"message","message":{"role":"user","content":[{"type":"text","text":"任务书"}]}}\n');
+      const proven = S.piSessionProof({ cwd, sinceMs: Date.now() - 90000, home: piHome });
+      await t.test('#877 pi proof：新 jsonl 含 role:user → proven（任务书已进上下文）', () => {
+        assert.ok(proven.ok === true && proven.proven === true && proven.source === 'pi-session', JSON.stringify(proven));
+      });
+      const noDir = S.piSessionProof({ cwd: '/no/such/tree', sinceMs: 0, home: piHome });
+      await t.test('#877 pi proof：session 目录不存在 → 不 proven 不 unscanned', () => {
+        assert.ok(noDir.ok === true && noDir.proven === false && !noDir.unscanned, JSON.stringify(noDir));
+      });
+    }
+
     const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
     await t.test('dao.mjs 不再调用 verifyInjectionPolling', () => {
       assert.ok(!/verifyInjectionPolling\(/.test(daoSrcPoll), 'dao.mjs 不再调用 verifyInjectionPolling');

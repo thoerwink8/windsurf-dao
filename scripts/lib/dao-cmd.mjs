@@ -724,6 +724,7 @@ import {
   isCursorStartChannel, stripCursorPasteResidue, cursorStartEvidence, unsubmittedPasteForStart,
   cursorUnsubmittedPaste, cursorFollowupEvidence, cursorUnsubmittedEvidence, pastedContentMatch,
   LEFTOVER_DISPATCH_RE, leftoverDispatchMatch, TUI_LOADING_RE, proofUnavailableReason,
+  WORKING_SCREEN_RE, piSessionSlug, piSessionProof,
   verifyInjection, verifyStartedPolling, verifyWorkerStarted,
 } from './dispatch/inject.mjs';
 export {
@@ -734,6 +735,7 @@ export {
   isCursorStartChannel, stripCursorPasteResidue, cursorStartEvidence, unsubmittedPasteForStart,
   cursorUnsubmittedPaste, cursorFollowupEvidence, cursorUnsubmittedEvidence, pastedContentMatch,
   LEFTOVER_DISPATCH_RE, leftoverDispatchMatch, TUI_LOADING_RE, proofUnavailableReason,
+  WORKING_SCREEN_RE, piSessionSlug, piSessionProof,
   verifyInjection, verifyStartedPolling, verifyWorkerStarted,
 } from './dispatch/inject.mjs';
 

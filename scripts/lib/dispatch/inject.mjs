@@ -6,6 +6,8 @@
 // 开工只认外部证据：worker-read 官方 transcript（source≠terminal）/ GitHub review /
 // proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { isModelRejectText } from '../next-launch.mjs';
 import { orcaErrorText } from '../orca-error.mjs';
 import { DEFAULT_PROBE_WAIT_MS } from './constants.mjs';
@@ -226,6 +228,42 @@ export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正�
 /** #877：屏面「正在干活」指纹（spinner / Working / esc to interrupt）。
  * 只用于已验过任务书指纹之后的降级判据——单独出现不算开工（防 #762 假绿）。 */
 export const WORKING_SCREEN_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\bWorking\b|esc to interrupt/i;
+
+/** pi 的 session 目录名：cwd 的 / 全换 -，首尾包一层 -/--（实测 /home/orca/windsurf-dao
+ * → --home-orca-windsurf-dao--）。 */
+export function piSessionSlug(cwd) {
+  return '-' + String(cwd || '').replace(/\/+$/, '').replace(/\//g, '-') + '--';
+}
+
+/** #877 治本：orca worker-read 不认 pi（provider_unsupported / session_not_reported），
+ * 而 pi 自己的 session jsonl 实时落盘且**只在任务书真正提交进上下文后**才写 user message——
+ * 未提交粘贴不落盘，是比刮屏强得多的开工证据（877 实测：被误杀的审官 jsonl 184KB）。
+ * 判据：cwd 对应 slug 目录里 mtime≥sinceMs 的 .jsonl 含 role:user 消息 → proven。
+ * 目录不在 / 没有新文件 = 还没证明（继续轮询），不是失败；读目录出错 = unscanned。 */
+export function piSessionProof({ cwd, sinceMs, home = process.env.HOME, fsImpl = fs } = {}) {
+  if (!cwd) return { ok: true, proven: false, reason: 'pi session proof 没给 cwd' };
+  const dir = path.join(String(home || ''), '.pi', 'agent', 'sessions', piSessionSlug(cwd));
+  let names;
+  try { names = fsImpl.readdirSync(dir); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: true, proven: false, reason: 'pi session 目录还没出现' };
+    return { ok: false, proven: false, unscanned: true, error: String((e && e.message) || e) };
+  }
+  const since = Number(sinceMs) || 0;
+  for (const n of names) {
+    if (!n.endsWith('.jsonl')) continue;
+    const p = path.join(dir, n);
+    let st;
+    try { st = fsImpl.statSync(p); } catch { continue; }
+    if (st.mtimeMs < since) continue;
+    let txt;
+    try { txt = fsImpl.readFileSync(p, 'utf8'); } catch { continue; }
+    if (/"type":\s*"message"/.test(txt) && /"role":\s*"user"/.test(txt)) {
+      return { ok: true, proven: true, source: 'pi-session', file: n, reason: 'pi session jsonl 含已提交任务书（role:user）' };
+    }
+  }
+  return { ok: true, proven: false, reason: 'pi session 无新落盘（任务书提交还没证明）' };
+}
 
 /** proof 不可用的可辨识 reason（#568 回归修法）：这两个值是 provider 级别不支持
  * transcript 证明（pi 实测 provider_unsupported / session_not_reported），

@@ -197,6 +197,8 @@ import {
   reviewerSpawnFailComment,
   verifyStartedPolling,
   verifyWorkerStarted,
+  piSessionProof,
+  proofUnavailableReason,
   verifyReviewerFiles,
   verifyReviewerTree,
   assessPrMergeable,
@@ -907,11 +909,24 @@ function readOnceHandle(handle) {
  * 禁止补回车。散步到 worker-start / reviewer-attach / 复用审官。
  * #680：cursor 通道忽略 [Pasted text] 残留，改认 Working/输出在动。
  * #762：expect 是任务书指纹，降级判绿前必须见它（否则 PS 提示符也会被当成开工）。 */
-function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider, expect }) {
+function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider, expect, cwd }) {
+  // #877：orca worker-read 不认 pi——proof 不可用且给了树路径时，直读 pi 的 session jsonl
+  // （只在任务书真提交后才落盘，未提交粘贴不写）。90s 回看窗：注入到这里间隔秒级，
+  // 而 attach 失败重试间隔 20 分钟，旧会话文件不会误入窗。
+  const sinceMs = Date.now() - 90_000;
+  const proofOnce = (id) => {
+    const p = workerStartProof(id);
+    if (p && p.proven) return p;
+    if (cwd && p && p.proven === false && proofUnavailableReason(p)) {
+      const pi = piSessionProof({ cwd, sinceMs });
+      if (pi.proven) return pi;
+    }
+    return p;
+  };
   return verifyStartedPolling({
     dispatchId,
     readOnce: () => readOnceHandle(handle),
-    proofOnce: workerStartProof,
+    proofOnce,
     timeoutMs,
     label,
     provider,
@@ -2570,6 +2585,7 @@ function reuseReviewerOnTerminal({
     label: '审官',
     timeoutMs: probeWaitMs(routing, launch.provider),
     provider: launch.provider,
+    cwd: String(reviewerWorktreeId).includes('::') ? String(reviewerWorktreeId).split('::')[1] : null,
   });
   if (!reviewerInject.ok) {
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
@@ -3649,6 +3665,7 @@ async function cmdReviewerCreate(args) {
     label: '审官',
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     provider: reviewerLaunch.provider,
+    cwd: reviewerPath,
   });
   if (!reviewerInject.ok) {
     failCreated(launched, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
@@ -4058,6 +4075,7 @@ function cmdReviewerAttach(args) {
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     provider: reviewerLaunch.provider,
     expect: reviewerExpectFingerprint(reviewerBook),
+    cwd: created.reviewerPath,
   });
   if (!reviewerInject.ok) {
     failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
