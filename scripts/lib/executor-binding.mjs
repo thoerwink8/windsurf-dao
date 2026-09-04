@@ -205,9 +205,16 @@ export function createOrcaBinding({ orca, argsWorktreeCreate, argsWorkerStart } 
  * 不符就抛且一帧 prompt 都不发——本层不再断第二遍（抄第二份判据必然走偏）。
  */
 export function createMirasimBinding({ runtime, policy } = {}) {
-  const rt = runtime || createRuntime();
+  // 钉版本的唯一真相源是策略（docs/model-routing.json 的 执行体.mirasim.钉版本）。
+  // 不传等于 runtime 拿库内常量当真相：改路由表钉版本不生效——服务升级后照旧拒新版本，
+  // 或策略已改新版本却继续放旧版本过（#884 审官 P1#5 实咬）。
+  // 策略没写（null）时才让 createRuntime 落库内默认，不在这里抄第二份默认值。
+  const rt = runtime || createRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined });
   return {
     name: 'mirasim',
+    // 判别用例要能证明「策略的钉版本真的传到了 runtime」，所以把实例摊出来；
+    // 不摊则只能读代码相信，那就是「执行到这行了」冒充「读回来的事实」。
+    runtime: rt,
     async worktreeCreate(spec = {}) {
       const repo = String(spec.repo || '').trim();
       const branch = String(spec.branch || '').trim();

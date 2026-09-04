@@ -1527,6 +1527,20 @@ async function cmdDispatch(args) {
  * 派前探针与熔断（那两条钉在 orca 的 provider 名上，归卡 D）。
  */
 async function cmdDispatchMirasim(args, routing, { policy }) {
+  // --task 是 orca 那条脊的语义（卡已在编排里，起工人接上去）；mirasim 侧「会话即卡」，
+  // 没有可接的既有 task。而上游的闸只要求「--spec 或 --task 至少有一个」，所以 --task
+  // 单飞会带着 spec:undefined 一路冲进 buildSoldierInject，崩在模板占位符上
+  //（#884 审官 P1#4 实咬：得 `模板 soldier-inject.md 占位符 {{SPEC}} 没给值` 栈）。
+  // 公开 CLI 不许崩栈：这里出结构化拒派。判据只放这一处（本函数是 mirasim 路唯一入口），
+  // 不在调用点抄第二份。要接 task 语义是卡 D/E 的事，不是在这里塞个空 spec 混过去。
+  if (!args.spec) {
+    fail('mirasim 执行体暂不支持 --task，给 --spec', {
+      executor: 'mirasim',
+      refused: true,
+      unsupported: '--task',
+      task: args.task ?? null,
+    });
+  }
   // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });

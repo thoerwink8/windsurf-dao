@@ -12,9 +12,12 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'executor-binding.mjs').replace(/\\/g, '/');
+// 只为读 PINNED_VERSION：判别用例要证明「策略钉的版本 ≠ 库内默认」，不能自己抄一份 0.0.282
+const RUNTIME_LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 const ROUTING_JSON = path.resolve(ROOT, 'docs', 'model-routing.json');
 
 // 策略夹具：形状照 docs/model-routing.json 的「执行体」节抄
@@ -346,5 +349,98 @@ describe('mirasim 绑定的边界', () => {
     const done = await b.waitForCompletion('claude:fake-uuid');
     assert.equal(done.status, 'done');
     assert.deepEqual(done.confirmedBy, ['snapshot', 'ledger']);
+  });
+});
+
+// #884 审官 P1#5：钉版本的真相源是策略，不是 mirasim-runtime.mjs 里的常量。
+// 判别力在「改策略要真的改到 runtime 手里」——只断 policy.mirasim.pinnedVersion
+// 读出来是 0.0.283 不算，那只证明 JSON 解析没坏；必须读回 runtime 自己的 config。
+describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
+  it('策略钉 0.0.283 → runtime.config.pinnedVersion 就是 0.0.283（不是库内 0.0.282）', async () => {
+    const S = await import(LIB);
+    const RT = await import(RUNTIME_LIB);
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: '0.0.283' }));
+    assert.equal(p.mirasim.pinnedVersion, '0.0.283');
+    // 不注入 runtime：走的正是 dao.mjs 的真路径（bindExecutor 只给 policy）。
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(
+      b.runtime.config.pinnedVersion, '0.0.283',
+      '策略改了钉版本却没传进 runtime：服务升级后照旧按旧版本拒派（#884 P1#5）',
+    );
+    assert.notEqual(
+      b.runtime.config.pinnedVersion, RT.PINNED_VERSION,
+      '夹具钉的版本必须与库内默认不同，否则这条断言分不出「传过去了」和「压根没传」',
+    );
+  });
+
+  it('策略没写钉版本 → 落库内默认，不落 null/undefined（否则契约断言判不了版本）', async () => {
+    const S = await import(LIB);
+    const RT = await import(RUNTIME_LIB);
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: undefined }));
+    assert.equal(p.mirasim.pinnedVersion, null, '策略没写就是 null，本层不替它编一个');
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(b.runtime.config.pinnedVersion, RT.PINNED_VERSION);
+  });
+
+  it('注入了 runtime 时用注入的那个，不被策略覆写（测试与调用方能自己接线）', async () => {
+    const S = await import(LIB);
+    const rt = fakeRuntime();
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: '0.0.283' }));
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    assert.equal(b.runtime, rt);
+  });
+
+  it('仓内真表的钉版本就是 runtime 拿到的那个（真表与代码不许各钉一个）', async () => {
+    const S = await import(LIB);
+    const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
+    const p = S.readExecutorPolicy(doc);
+    assert.equal(p.ok, true, p.error || '');
+    assert.ok(p.mirasim && p.mirasim.pinnedVersion, '真表里没钉版本 = 本次等于没查');
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(b.runtime.config.pinnedVersion, p.mirasim.pinnedVersion);
+  });
+});
+
+// #884 审官 P1#4：公开 CLI 不许崩栈。走真进程黑盒——用 dao.mjs 自己的出口判，
+// 不复用被测判据。判别力在「拿到的是结构化 ok:false，而不是模板异常的栈」。
+describe('dispatch --executor mirasim 拒 --task（#884 P1#4）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  // constrainDispatch 在执行体分岔之前就要 --model/--reviewer/--split，所以判别用例
+  // 必须把它们都给足，才能真的走到 mirasim 分支——少给一个就变成在测上游的闸。
+  const baseArgs = [
+    '--executor', 'mirasim', '--branch', 'dao-probe-task',
+    '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna',
+    '--split', 'no', '--split-reason', '#884 P1#4 判别用例',
+    '--dry-run',
+  ];
+  const runDao = (extra) => spawnSync(process.execPath, [DAO, 'dispatch', ...extra, ...baseArgs], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT, env: { ...process.env },
+  });
+
+  it('--task 没 --spec → 结构化拒派，绝不是 {{SPEC}} 模板崩栈', () => {
+    const r = runDao(['--task', 'task-1']);
+    assert.doesNotMatch(
+      String(r.stderr || ''), /占位符 \{\{SPEC\}\} 没给值/,
+      '仍在模板占位符上崩栈：公开 CLI 崩栈 = #884 P1#4 没修',
+    );
+    assert.doesNotMatch(String(r.stderr || ''), /at cmdDispatchMirasim/, '不许把 node 栈甩给用户');
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.equal(out.refused, true);
+    assert.equal(out.unsupported, '--task');
+    assert.equal(out.task, 'task-1');
+    assert.match(out.error, /暂不支持 --task/);
+    assert.equal(r.status, 1, '拒派要非零退出，否则脚本调用方看不出被拒');
+  });
+
+  it('给了 --spec 就照旧派（证明上一条拒的是缺 spec，不是把 mirasim 分支整条堵死）', () => {
+    const r = runDao(['--spec', '#884 P1#4 判别用例：证明 spec 路没被堵']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, true, out.error || '');
+    assert.equal(out.dryRun, true);
+    assert.equal(out.executor, 'mirasim');
+    assert.equal(out.agent, 'pi', 'grok-4.6/gw 应落 pi 族 direct 腿（#880 拍板）');
+    assert.ok(out.prompt && out.prompt.length > 0, 'spec 路必须真的渲出任务书');
+    assert.equal(r.status, 0);
   });
 });
