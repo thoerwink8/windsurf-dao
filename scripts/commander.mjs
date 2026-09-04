@@ -28,6 +28,7 @@ import {
 import { runOrca } from './lib/orca-run.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import { reviewPendingDir, listReviewPending } from './lib/dispatch/review-pending.mjs';
+import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest,
 } from './lib/commander-core.mjs';
@@ -429,6 +430,33 @@ function reapBrains({ state, dryRun, say, maxAgeMs = 30 * 60 * 1000 }) {
   state.brainSessions = sessions;
 }
 
+// ── 代拍：双向门待拍板单到期无人回复 → 唤大脑按推荐项执行（2026-09-04 拍板「双门制+超时代拍」）。
+// 判据全在 lib/daipai.mjs 纯函数里；这里只做 gh 取数 + 唤醒 + hub 留痕。没查成一律不代拍。──
+function runDaipai({ state, dryRun, say }) {
+  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body',
+    '门类：双向门', '--json', 'number', '--limit', '10'], 30000);
+  if (!found.ok) { say(`  代拍扫描没查成：${found.error}（没查成不代拍）`); return; }
+  let nums = [];
+  try { nums = JSON.parse(found.out || '[]').map((x) => x.number); } catch { say('  代拍扫描输出解析不了——没查成不代拍'); return; }
+  let fired = 0;
+  for (const n of nums) {
+    if (fired >= DAIPAI_MAX_PER_ROUND) { say(`  代拍到本轮上限 ${DAIPAI_MAX_PER_ROUND}，其余下轮`); break; }
+    const v = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'body,createdAt,comments'], 30000);
+    if (!v.ok) { say(`  代拍 #${n} 读不到——没查成跳过`); continue; }
+    let doc = null;
+    try { doc = JSON.parse(v.out); } catch { say(`  代拍 #${n} 输出解析不了——跳过`); continue; }
+    const cls = classifyDaipai({ body: doc.body, createdAt: doc.createdAt, comments: doc.comments });
+    if (!cls.daipai) { if (cls.unscanned) say(`  代拍 #${n} ${cls.why}——不代拍`); continue; }
+    const woken = (state.wakeCounts || {})[`daipai:issue-${n}`] || 0;
+    if (woken >= 2) { say(`  代拍 #${n} 已唤 ${woken} 次没闭环——不再唤，等人`); continue; }
+    hubOnce({ state, key: `daipai:${n}`, text: `[指挥官·代拍] 待拍板 #${n} 双向门到期无人回复，按单内推荐项代拍（可翻案）\n${issueLink(n)}`, dryRun });
+    wakeBrain({ target: `daipai:issue-${n}`, issue: n,
+      why: `待拍板 #${n} 双向门到期 ${Math.round(TWO_WAY_DEADLINE_MS / 3600000)} 小时无人回复——读单内「推荐项」在边界内执行，做完在单上评论「已代拍：做了什么、怎么翻案」；超边界就写明卡在哪、不动` },
+      { state, dryRun, say });
+    fired += 1;
+  }
+}
+
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
@@ -457,16 +485,24 @@ function escalateKey(a) {
 }
 function escalateTitle(a) { return `${a.reason}：${a.pr ? 'PR #' + a.pr : a.issue ? 'issue #' + a.issue : a.term || ''}`.trim(); }
 function escalateBody(a, marker) {
+  const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
+  const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
   return [
     `指挥官报帅（#800「报帅停手」）：`,
     ``,
     `- 原因：${a.reason}`,
     `- 详情：${a.why}`,
     a.pr ? `- PR：${prLink(a.pr)}` : a.issue ? `- issue：${issueLink(a.issue)}` : '',
+    door === 'two-way'
+      ? `- 门类：双向门（可翻案）——${hours} 小时无人回复，指挥官唤大脑按下面推荐项代拍并标「已代拍」`
+      : `- 门类：单向门（花钱/换人/不可逆）——只等拍板，超时不动（高风险超时=拒绝）`,
+    door === 'two-way' ? `- 推荐项：${a.recommend || '大脑边界内处置：定位问题 → 给方案 → 送达相关终端'}` : '',
     ``,
     `- 机制判定（处置人必填，2026-09-04 拍板）：这错在制度生效前还会再犯吗？会 → 机制改在哪（垫片/开单/PR 链接）；不会 → 为什么。答不出就写「没查成」，不许留空。`,
     ``,
-    `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
+    door === 'two-way'
+      ? `到期无人回复会代拍；要拦住就在本单说一句（任何回复都会拦住代拍）。查重标记（勿删）：${marker}`
+      : `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
   ].filter(Boolean).join('\n');
 }
 function openEscalationIssue({ title, body }) {
@@ -516,6 +552,7 @@ function cmdAct(argv) {
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
   runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
   else {
