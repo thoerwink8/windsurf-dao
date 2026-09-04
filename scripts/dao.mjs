@@ -242,6 +242,7 @@ import {
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
+import { readExecutorPolicy, judgeExecutorName, judgeAgentRoute, bindExecutor } from './lib/executor-binding.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -360,6 +361,50 @@ function refuseIfSameVendor({ workerId, reviewerId, routing }) {
   fail(formatVendorGateError(gate, next), {
     vendorGate: { ...gate, next: next.ok ? next.next : null, exhausted: !!next.exhausted },
   });
+}
+
+// ── 执行体分派（#880 卡 B）────────────────────────────────────────────────────
+//
+// dispatch / worktree-create / worker-start 三个动词都先过这里：按 executor 字段
+// 选绑定（orca / mirasim），调用方不知道底下是谁。orca 退役时删 mirasim 之外的
+// 分支和策略里的「默认: orca」，动词本身不改（#880 拍板的架构）。
+//
+// 策略没查成时不许落默认——「读失败」和「拍板选了 orca」在盘面上是两件事。
+
+/** 读执行体策略 + 定名字。任一环不成立当场拒派。 */
+function resolveExecutorOrFail(args, routing) {
+  const policy = readExecutorPolicy(routing?.raw);
+  const named = judgeExecutorName(args.executor, policy);
+  if (!named.ok) fail(named.error, { executor: { requested: args.executor || null } });
+  return { policy, executor: named.executor, source: named.source };
+}
+
+/** mirasim 侧要一个具体分支名。给不出就拒派，不猜——猜错会把两张卡塞进同一棵树。 */
+function mirasimBranchOrFail(args) {
+  const explicit = String(args.branch || '').trim();
+  if (explicit) return explicit;
+  const issue = String(args.issue || '').trim().replace(/^#/, '');
+  if (/^\d+$/.test(issue)) return `dao-${issue}`;
+  fail('mirasim 执行体要 --branch（没 --issue 就推不出默认分支名）；同一 issue 派第二张卡也要显式给，否则会撞同一棵树');
+}
+
+/** mirasim 侧的仓路径。默认本 checkout；跨树派单显式给 --repo。 */
+function mirasimRepoOrFail(args) {
+  const repo = String(args.repo || '').trim() || ROOT;
+  if (!repo) fail('mirasim 执行体要 --repo（仓路径）');
+  return repo;
+}
+
+/** dao 的 --model → mirasim 的族/执行体 agent/腿。缺配置报警拒派，不静默降级。 */
+function mirasimRouteOrFail(args, routing, policy) {
+  if (!args.model) {
+    fail('mirasim 执行体要显式 --model（族路由按 provider 认，--role 打分选型这条路还没接进来——见 #880 卡 B PR 正文）');
+  }
+  const hit = (routing?.models || []).find(m => m && m.id === args.model);
+  if (!hit) fail(`模型 ${args.model} 不在路由表`);
+  const route = judgeAgentRoute({ policy, model: hit.id, provider: hit.provider });
+  if (!route.ok) fail(route.error, { route: { model: hit.id, provider: hit.provider || null, family: route.family ?? null } });
+  return { ...route, model: hit.id, provider: hit.provider || null };
 }
 
 function constrainDispatch(args, routing) {
@@ -1347,6 +1392,10 @@ async function cmdDispatch(args) {
   if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
   if (!args.name && !args.dryRun) fail('dispatch 要 --name');
 
+  const ex = resolveExecutorOrFail(args, routing);
+  if (ex.executor === 'mirasim') return cmdDispatchMirasim(args, routing, ex);
+  // ↓ 以下是 orca 绑定（派工单 + detached 执行体那条脊；orca 退役时整段删）
+
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
   const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
@@ -1464,6 +1513,73 @@ async function cmdDispatch(args) {
     fail(`派工执行体没拉起来：${spawned.error}（派工单已留 ${written.paths.order}，重派请用 dispatch，不要手动 dispatch-exec 重跑——复用旧 Run 会 consumer_fenced，见 #762）`, { orderId: id, orderPath: written.paths.order });
   }
   emit({ ...queued, pid: spawned.pid });
+}
+
+/**
+ * mirasim 派一单（#880 卡 B）：建树 + 起会话，同步返回。
+ *
+ * 不走派工单队列——orca 那条脊的异步是因为起 TUI 要等屏、要探针；mirasim 的
+ * prompt 收到 accepted 就返回，本来就是异步的，再套一层队列只是多一个失败面。
+ * 会话即卡：观察面是用户自己的 Mirasim 客户端直连本服务器（#880 拍板）。
+ *
+ * 治理层照旧：消歧门、约束闸（reviewer/split/merge-policy）、注入字节闸都在。
+ * 还没接的（本卡范围外，见 PR 正文）：GitHub 侧打 label / 落派工评论、--role 打分选型、
+ * 派前探针与熔断（那两条钉在 orca 的 provider 名上，归卡 D）。
+ */
+async function cmdDispatchMirasim(args, routing, { policy }) {
+  // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
+  const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
+  if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
+  const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
+  if (!sliceGate.ok) fail(sliceGate.error, { missing: sliceGate.missing || [] });
+  if (splitGate.childCount > 0) {
+    fail('mirasim 执行体还不接拆块（父子树 + 多会话编排归卡 D/E）：本单请 --split no');
+  }
+  const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue });
+  if (!injectGate.ok) fail(injectGate.error, { injectGate });
+
+  const repo = mirasimRepoOrFail(args);
+  const branch = mirasimBranchOrFail(args);
+  const route = mirasimRouteOrFail(args, routing, policy);
+  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue });
+  const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: route.model });
+
+  // --dry-run 在碰执行体之前返回：预览一针都不许烧（额度撤不回来）。
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim',
+      card: cardName, issue: args.issue ?? null, repo, branch,
+      agent: route.agent, family: route.family, leg: route.leg, via: route.via, daoModel: route.model,
+      reviewer: args.reviewer ?? null, prompt,
+      note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
+    });
+  }
+
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
+
+  const binding = bindExecutor({ executor: 'mirasim', policy });
+  let r;
+  try {
+    r = await binding.dispatchOne({ repo, branch, prompt, model: route.model, provider: route.provider });
+  } catch (e) {
+    fail(`mirasim 派单失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch, card: cardName });
+  }
+  if (!r.ok) {
+    fail(`mirasim 派单失败: ${r.error}`, {
+      executor: 'mirasim', refused: !!r.refused, stage: r.stage || null, repo, branch, card: cardName,
+    });
+  }
+  emit({
+    ok: true, executor: 'mirasim',
+    card: cardName, issue: args.issue ?? null,
+    repo, branch, path: r.path, treeCreated: r.treeCreated,
+    sessionKey: r.sessionKey, taskId: r.taskId, startedAt: r.startedAt,
+    agent: r.agent, family: r.family, leg: r.leg, daoModel: r.daoModel,
+    reviewer: args.reviewer ?? null,
+    prompt,
+    note: '会话即卡：判完工用 mirasim-runtime 的 waitForCompletion（快照 + 账本交叉核）；GitHub 侧 label/评论本卡未接（见 #880 卡 B PR 正文）',
+  });
 }
 
 /**
@@ -3042,8 +3158,11 @@ function cmdStart(args) {
   });
 }
 
-function cmdWorktreeCreate(args) {
+async function cmdWorktreeCreate(args) {
   if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
+  const ex = resolveExecutorOrFail(args, loadOrFail());
+  if (ex.executor === 'mirasim') return cmdWorktreeCreateMirasim(args, ex);
+  // ↓ 以下是 orca 绑定（orca 退役时整段删）
   const r = orca(argsWorktreeCreate({
     name: assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model }),
     noParent: args.noParent,
@@ -3054,7 +3173,22 @@ function cmdWorktreeCreate(args) {
     comment: args.comment,
   }));
   if (!r.ok) fail(`worktree create 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  emit({ ok: true, json: r.json, executor: 'orca' });
+}
+
+/** mirasim 建树 = ensureWorkspace（幂等：同分支已有树就给路径，created:false）。 */
+async function cmdWorktreeCreateMirasim(args, { policy }) {
+  const repo = mirasimRepoOrFail(args);
+  const branch = mirasimBranchOrFail(args);
+  const binding = bindExecutor({ executor: 'mirasim', policy });
+  let r;
+  try { r = await binding.worktreeCreate({ repo, branch }); }
+  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
+  if (!r.ok) fail(`mirasim 建树失败: ${r.error}`, { executor: 'mirasim', repo, branch });
+  emit({
+    ok: true, executor: 'mirasim', repo, branch,
+    path: r.path, created: r.created, verified: r.verified,
+  });
 }
 
 function cmdLedgerQuery(args) {
@@ -3257,9 +3391,12 @@ function cmdTaskCreate(args) {
   emit({ ok: true, json: r.json, taskId: extractTaskId(r.json) });
 }
 
-function cmdWorkerStart(args) {
+async function cmdWorkerStart(args) {
   const routing = loadOrFail();
   constrainDispatch(args, routing);
+  const ex = resolveExecutorOrFail(args, routing);
+  if (ex.executor === 'mirasim') return cmdWorkerStartMirasim(args, routing, ex);
+  // ↓ 以下是 orca 绑定（orca 退役时整段删）
   if (!args.task) fail('worker-start 要 --task');
   if (!args.terminal) fail('worker-start 要 --terminal（不用 --agent，参数在启动模板里）');
   // 消歧门（#565）：worker-start 带 --issue 同样受门控（项化路径续派/换人时带号）。
@@ -3295,7 +3432,32 @@ function cmdWorkerStart(args) {
     provider: startProvider,
   });
   if (!injected.ok) fail(`注入后开工验证失败: ${injected.reason}`, { inject: injected });
-  emit({ ok: true, json: r.json, dispatchId, inject: injected });
+  emit({ ok: true, json: r.json, dispatchId, inject: injected, executor: 'orca' });
+}
+
+/**
+ * mirasim 起会话。mirasim 没有「可复用的终端」这个东西——一次 prompt 就是一条会话，
+ * 所以这里要的是树路径（--worktree）加任务书（--spec），不是 --task / --terminal。
+ * 消歧门照旧在碰执行体之前拦（#880：只换执行体，不动治理）。
+ */
+async function cmdWorkerStartMirasim(args, routing, { policy }) {
+  const workdir = String(args.worktree || '').trim();
+  if (!workdir) fail('mirasim worker-start 要 --worktree <树的绝对路径>（mirasim 侧没有终端 handle 这回事）');
+  if (!args.spec) fail('mirasim worker-start 要 --spec（任务书）');
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
+  const route = mirasimRouteOrFail(args, routing, policy);
+  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue });
+  const binding = bindExecutor({ executor: 'mirasim', policy });
+  let r;
+  try { r = await binding.workerStart({ workdir, prompt, model: route.model, provider: route.provider }); }
+  catch (e) { fail(`mirasim 起会话失败: ${String(e?.message || e)}`, { executor: 'mirasim', workdir }); }
+  if (!r.ok) fail(`mirasim 起会话失败: ${r.error}`, { executor: 'mirasim', refused: !!r.refused, workdir });
+  emit({
+    ok: true, executor: 'mirasim', workdir,
+    sessionKey: r.sessionKey, taskId: r.taskId, startedAt: r.startedAt,
+    agent: r.agent, family: r.family, leg: r.leg, daoModel: r.daoModel,
+  });
 }
 
 function cmdWorkerRelease(args) {
