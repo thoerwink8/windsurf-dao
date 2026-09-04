@@ -232,6 +232,64 @@ describe('读会话', () => {
     assert.strictEqual(v.missing, false);
     assert.match(v.errors.join(''), /别的会话/);
   });
+
+  // ── 返工判别（PR #883 审官）：顶层没 sessionKey 的订阅回执必须保住完整 snapshot ──
+  it('订阅回执没顶层 sessionKey：按所订阅的会话收，保住完整 snapshot（不退 meta/missing）', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'subscribe' ? [{
+      type: 'snapshot',   // 注意：故意不带顶层 sessionKey，只有内层 snapshot
+      seq: 7,
+      snapshot: {
+        phase: 'done', text: 'PONG', reasoning: '',
+        toolCalls: [{ id: 2, name: 'Bash', status: 'ok' }],
+        interactions: [], error: null, incomplete: false,
+      },
+    }] : []));
+    const rt = await runtimeWith(wire);
+    const view = await rt.readSession(KEY);
+    assert.strictEqual(view.via, 'snapshot', '没顶层 sessionKey 也得走 snapshot，不能退 meta');
+    assert.strictEqual(view.missing, false);
+    assert.strictEqual(view.partial, false, '拿到的是完整 snapshot，不是预览');
+    assert.strictEqual(view.phase, 'done');
+    assert.strictEqual(view.text, 'PONG');
+    assert.deepStrictEqual(view.toolCalls, [{ id: 2, name: 'Bash', status: 'ok' }]);
+    assert.strictEqual(view.seq, 7);
+    assert.ok(!wire.sent.some(f => f.type === 'listSessions'), '完整 snapshot 已到手，不该再退去查会话清单');
+  });
+
+  it('judgeSnapshot：顶层没 sessionKey 按上下文收；内层带的 sessionKey/uuid 若明确不匹配则拒', async () => {
+    const { judgeSnapshot } = await import(LIB);
+    // 顶层缺 sessionKey → 收
+    const ok = judgeSnapshot({ type: 'snapshot', seq: 1, snapshot: { phase: 'done' } }, KEY);
+    assert.strictEqual(ok.ok, true);
+    assert.strictEqual(ok.snapshot.phase, 'done');
+    // 内层 sessionKey 明确写了别的会话 → 拒
+    const badInnerKey = judgeSnapshot(
+      { type: 'snapshot', snapshot: { phase: 'done', sessionKey: 'claude:' + '0'.repeat(8) + '-0000-0000-0000-000000000000' } },
+      KEY,
+    );
+    assert.strictEqual(badInnerKey.ok, false);
+    assert.match(badInnerKey.errors.join(''), /内层 sessionKey.*别的会话/);
+    // 内层 uuid 明确不匹配 sessionKey 的 uuid 段 → 拒
+    const badInnerUuid = judgeSnapshot(
+      { type: 'snapshot', snapshot: { phase: 'done', uuid: '00000000-0000-0000-0000-000000000000' } },
+      KEY,
+    );
+    assert.strictEqual(badInnerUuid.ok, false);
+    assert.match(badInnerUuid.errors.join(''), /内层 uuid.*别的会话/);
+  });
+
+  it('订阅回执顶层写了别的会话：不当成本会话的快照（谓词跳过，退到没查成）', async () => {
+    // 顶层 sessionKey 明确是别的会话，且没有会话清单兜底 → readSession 报 missing，绝不拿它当本会话正文
+    const other = 'claude:' + '0'.repeat(8) + '-0000-0000-0000-000000000000';
+    const wire = fakeWire(goodState(), f => (f.type === 'subscribe' ? [{
+      type: 'snapshot', sessionKey: other, seq: 3, snapshot: { phase: 'done', text: '别的会话的正文' },
+    }] : []));
+    const rt = await runtimeWith(wire);
+    const view = await rt.readSession(KEY);
+    assert.notStrictEqual(view.via, 'snapshot', '别的会话的帧不能当本会话的 snapshot');
+    assert.strictEqual(view.missing, true);
+    assert.match(view.why, /没查成/);
+  });
 });
 
 describe('判完工交叉核', () => {

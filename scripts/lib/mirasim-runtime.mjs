@@ -146,6 +146,12 @@ export function judgeAccepted(msg) {
  *   订阅回执（跨连接读会话的正路）：{type:'snapshot', sessionKey, seq, snapshot:{…}}
  *   流式推送（边跑边推）：          {type:'session',  sessionKey, seq, patch:{full:{…}}}
  * msg 为空 = 服务端没回帧（missing，判「没查成」）。
+ *
+ * sessionKey 归属判定以「订阅时请求的 sessionKey」为上下文：
+ *   - 顶层缺 sessionKey（真机哪天改成不带）→ 按上下文收，不丢；
+ *   - 顶层明确存在且不匹配 → 拒（是别的会话的帧）；
+ *   - 内层 snapshot 若明确带 sessionKey/uuid（真机 0.0.282 两者都不带，用 sessionId/taskId/anchor 另一套 uuid，
+ *     不拿来对）→ 也核对一致，不匹配就拒。
  */
 export function judgeSnapshot(msg, sessionKey) {
   if (!msg || typeof msg !== 'object') {
@@ -160,8 +166,19 @@ export function judgeSnapshot(msg, sessionKey) {
   } else {
     errors.push(`帧类型不符：要 snapshot 或 session，收到 ${JSON.stringify(msg.type)}`);
   }
-  if (sessionKey && msg.sessionKey !== sessionKey) {
-    errors.push(`snapshot 是别的会话的：要 ${sessionKey}，收到 ${JSON.stringify(msg.sessionKey)}`);
+  // 顶层 sessionKey：缺就按上下文收，明确写了别的会话才拒。
+  if (sessionKey && typeof msg.sessionKey === 'string' && msg.sessionKey && msg.sessionKey !== sessionKey) {
+    errors.push(`snapshot 顶层是别的会话的：要 ${sessionKey}，收到 ${JSON.stringify(msg.sessionKey)}`);
+  }
+  // 内层若明确带 sessionKey/uuid 也核对一致（真机不带，这两条是防它哪天开始带）。
+  if (sessionKey && full && typeof full === 'object') {
+    if (typeof full.sessionKey === 'string' && full.sessionKey && full.sessionKey !== sessionKey) {
+      errors.push(`snapshot 内层 sessionKey 是别的会话的：要 ${sessionKey}，收到 ${JSON.stringify(full.sessionKey)}`);
+    }
+    const wantUuid = sessionUuid(sessionKey);
+    if (wantUuid && typeof full.uuid === 'string' && full.uuid && full.uuid !== wantUuid) {
+      errors.push(`snapshot 内层 uuid 是别的会话的：要 ${wantUuid}，收到 ${JSON.stringify(full.uuid)}`);
+    }
   }
   if (!errors.length && (!full || typeof full !== 'object')) {
     errors.push(`快照体形状不符：要对象，实际 ${JSON.stringify(full)}`);
@@ -666,7 +683,11 @@ export function createRuntime(opts = {}) {
   /**
    * 读会话。每次开新连接读——不靠 prompt 那条连接的推送（§72 实咬）。
    *
-   * 读的正路是 subscribe：它回 {type:'snapshot', snapshot:{…}}，正文、工具、问答都在里面。
+   * 读的正路是 subscribe：真机回 {type:'snapshot', sessionKey, seq, snapshot:{…}}——顶层带 sessionKey
+   * 且等于所订阅的会话（2026-09-04 真机实探，见 PR「协议真相」段）；正文、工具、问答都在内层 snapshot 里。
+   * 内层 snapshot 不带 sessionKey/uuid（它用 sessionId/taskId/anchor 另一套 uuid，跟 sessionKey 的 uuid 段无关，
+   * 不能拿去跟 sessionKey 对）。谓词与判官都以「所订阅的 sessionKey」为上下文：顶层缺 sessionKey 时按上下文收，
+   * 顶层明确存在且不匹配才丢——不然真机若哪天改成不带顶层 sessionKey，完整快照会被误丢、退成只有预览的 meta。
    * getSnapshot **不能**当跨连接的读法：它只在服务端手里有这条会话的缓存时才回帧，
    * 新连接上问一个刚起的会话会一帧都收不到（实咬：真烧的那一针连读 13 次全空，
    * 而账本里它 3.2 秒就 200 了——正是「没查成」被当成「没跑完」的那个坑）。
@@ -678,7 +699,9 @@ export function createRuntime(opts = {}) {
     try {
       wire.send({ type: 'subscribe', sessionKey });
       const msg = await wire.waitFor(
-        m => (m.type === 'snapshot' || m.type === 'session') && m.sessionKey === sessionKey,
+        // 顶层缺 sessionKey 时按所订阅的会话收；只有顶层明确写了别的会话才跳过（留给别的等待者）。
+        m => (m.type === 'snapshot' || m.type === 'session')
+          && (typeof m.sessionKey !== 'string' || m.sessionKey === '' || m.sessionKey === sessionKey),
         t.snapshot,
       );
       const shape = judgeSnapshot(msg, sessionKey);
