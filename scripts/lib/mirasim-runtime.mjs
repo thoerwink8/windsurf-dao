@@ -334,6 +334,16 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
   if (!phase) {
     return { status: 'unknown', confirmedBy: [], reason: '快照里没有 phase 字段，判不出跑到哪了（没查成）' };
   }
+  // partial=只有会话清单的预览（metaView）。终态判定 fail-closed：预览里的 completed/error
+  // 不许当完工或失败交差（PR #884/#887 审官同咬：completed meta + 成功账本行也不得 done）。
+  // running 放行——非终态不结算，误差无害。
+  if (view.partial === true && phase !== 'running') {
+    return {
+      status: 'unknown',
+      confirmedBy: [],
+      reason: `只读到会话清单的预览（partial，报 ${phase}）——正文没拿到，终态判定没查成`,
+    };
+  }
   if (FAILED_PHASES.has(phase)) {
     return { status: 'failed', confirmedBy: ['snapshot'], reason: `快照报 ${phase}${view.error ? `：${view.error}` : ''}` };
   }
@@ -751,9 +761,13 @@ export function createRuntime(opts = {}) {
     const wire = await open();
     try {
       wire.send({ type: 'interact', promptId: pending.promptId, action: 'answer', value: String(answer ?? '') });
-      // 服务端只在失败时回 error 帧；短窗内没 error 就算送进去了
+      // 服务端只在失败时回 error 帧；短窗内没 error 且连接还活着才算送进去了。
+      // 连接断了/出错时 waitFor 也回 null——那是「没查成」，不是成功（PR #884 审官实咬）。
       const err = await wire.waitFor(m => m.type === 'error', t.ack);
       if (err) return { ok: false, missing: false, promptId: pending.promptId, why: err.message || '回答被拒' };
+      if (wire.closed || wire.failure) {
+        return { ok: false, missing: false, promptId: pending.promptId, why: `连接断了（${wire.failure || 'closed'}），回答送没送到没查成` };
+      }
       return { ok: true, promptId: pending.promptId, questionId: pending.questionId };
     } finally {
       wire.close();
@@ -766,6 +780,9 @@ export function createRuntime(opts = {}) {
       wire.send({ type: 'stop', sessionKey });
       const err = await wire.waitFor(m => m.type === 'error', t.ack);
       if (err) return { ok: false, why: err.message || '停不下来' };
+      if (wire.closed || wire.failure) {
+        return { ok: false, why: `连接断了（${wire.failure || 'closed'}），stop 送没送到没查成` };
+      }
       return { ok: true, why: null };
     } finally {
       wire.close();

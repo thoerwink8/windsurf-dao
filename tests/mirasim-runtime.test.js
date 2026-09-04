@@ -43,7 +43,9 @@ function fakeWire(state, script = () => []) {
       const at = inbox.findIndex(pred);
       return at === -1 ? null : inbox.splice(at, 1)[0];
     },
-    close() { this.closed = true; },
+    // 真实连线里 closed 反映的是「对端/链路断了」（ws onclose），我们自己收尾的 close()
+    // 发生在所有判定之后；假线的 close() 只记账不置 closed，closed 由用例显式模拟断线时置。
+    close() { this.hungUp = true; },
   };
 }
 
@@ -306,6 +308,33 @@ describe('判完工交叉核', () => {
     assert.match(v.reason, /journal 未参与/);
   });
 
+  it('partial（会话清单预览）报 completed + 账本有成功行 → 仍不得 done（fail-closed）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const v = judgeCompletion({
+      view: { phase: 'done', text: '只是预览…', toolCalls: [], error: null, partial: true },
+      ledger: { readable: true, rows: [ledgerRow()] },
+      since: T0,
+    });
+    assert.strictEqual(v.status, 'unknown');
+    assert.match(v.reason, /partial|预览/);
+  });
+
+  it('partial 报 error 也不得判 failed——预览的终态一律没查成；running 放行', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const bad = judgeCompletion({
+      view: { phase: 'error', error: 'x', partial: true },
+      ledger: { readable: true, rows: [ledgerRow()] },
+      since: T0,
+    });
+    assert.strictEqual(bad.status, 'unknown');
+    const run = judgeCompletion({
+      view: { phase: 'running', partial: true },
+      ledger: { readable: true, rows: [] },
+      since: T0,
+    });
+    assert.strictEqual(run.status, 'running');
+  });
+
   it('快照 done 但账本读不到 → 没查成（交叉核没做成就不算成）', async () => {
     const { judgeCompletion } = await import(LIB);
     const v = judgeCompletion({
@@ -465,6 +494,29 @@ describe('问答与工作区', () => {
     assert.strictEqual(r.questionId, 'q2');
     const sent = wire.sent.find(f => f.type === 'interact');
     assert.deepStrictEqual(sent, { type: 'interact', promptId: 'p-live', action: 'answer', value: '选第二个' });
+  });
+
+  it('interact：发送后连接断了且无 error 回执 → 不许报成功（送没送到没查成）', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'subscribe' ? [{
+      type: 'snapshot',
+      sessionKey: KEY,
+      snapshot: { phase: 'waiting', interactions: [{ promptId: 'p1', questions: [{ id: 'q1' }] }] },
+    }] : []));
+    const rawSend = wire.send.bind(wire);
+    wire.send = (obj) => { rawSend(obj); if (obj.type === 'interact') wire.closed = true; };
+    const rt = await runtimeWith(wire);
+    const r = await rt.interact(KEY, '答');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.why, /连接断了|没查成/);
+  });
+
+  it('stopSession：连接带 failure 且无 error 回执 → 不许报成功', async () => {
+    const wire = fakeWire(goodState());
+    wire.failure = 'peer closed';
+    const rt = await runtimeWith(wire);
+    const r = await rt.stopSession(KEY);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.why, /连接断了|没查成/);
   });
 
   it('没有等回答的问题：直说，不乱回一个 promptId', async () => {
