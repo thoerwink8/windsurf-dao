@@ -4,7 +4,8 @@
 // 不进 git，见 ledger-home.mjs）；写一次即不可变（已存在/同内容均拒绝，
 // 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
-// 写入即校验：类型在闭集内、必填字段齐、attr 责任向量不变量（份额和=1 或全 0 且低置信）。
+// 写入即校验：类型在闭集内、必填字段齐、schema 声明的 enum 字段取值在闭集内、
+// attr 责任向量不变量（份额和=1 或全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
@@ -63,20 +64,24 @@ export function ulidFromMs(ms, entropyHex) {
   return out;
 }
 
-/** 事件类型闭集 + 每类型必填字段（派生自 schema oneOf，闭集 = oneOf[].title）。 */
+/** 事件类型闭集 + 每类型必填字段 + 每类型枚举字段（派生自 schema oneOf，闭集 = oneOf[].title）。 */
 export function schemaMeta(schema) {
   const closedSet = [];
   const requiredByType = new Map();
+  const enumsByType = new Map();
   const resolveRef = ref => {
     const name = ref.replace('#/definitions/', '');
     return schema.definitions ? schema.definitions[name] : null;
   };
-  const walk = (node, required) => {
+  const walk = (node, required, enums) => {
     if (!node) return;
-    if (node.$ref) return walk(resolveRef(node.$ref), required);
-    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required);
+    if (node.$ref) return walk(resolveRef(node.$ref), required, enums);
+    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required, enums);
     if (Array.isArray(node.required)) {
       for (const f of node.required) if (!RESERVED.includes(f)) required.add(f);
+    }
+    for (const [f, spec] of Object.entries(node.properties || {})) {
+      if (!RESERVED.includes(f) && Array.isArray(spec?.enum)) enums.set(f, spec.enum);
     }
   };
   for (const def of schema.oneOf || []) {
@@ -84,10 +89,43 @@ export function schemaMeta(schema) {
     if (!title) throw new Error('schema oneOf 条目缺 title（闭集派生依赖 title）');
     closedSet.push(title);
     const required = new Set();
-    walk(def, required);
+    const enums = new Map();
+    walk(def, required, enums);
     requiredByType.set(title, [...required]);
+    enumsByType.set(title, enums);
   }
-  return { closedSet, requiredByType, currentVersion: schema.version ?? 1 };
+  return { closedSet, requiredByType, enumsByType, currentVersion: schema.version ?? 1 };
+}
+
+// schema 声明了 enum 的字段，写入即校验取值——枚举清单只从 schema 读，本文件不另抄。
+// 缺字段不在这里报（归必填检查）；值为 null 时只有 schema 的 enum 里列了 null 才放行
+// （如 overrun_attr）。#891：phase/urgency/by 这类新枚举天然被这一条罩住。
+function enumInvariant(enums, p) {
+  for (const [field, allowed] of enums || []) {
+    if (p[field] === undefined) continue;
+    if (!allowed.includes(p[field])) {
+      throw new Error(
+        `字段 ${field} 取值非法 ${JSON.stringify(p[field])}；schema 允许 ${allowed.map(v => JSON.stringify(v)).join('/')}`,
+      );
+    }
+  }
+}
+
+// decision.pending 的跨字段不变量（#891）：推荐必须指向真实存在的选项，
+// 否则飞书卡片与用户一键选择拿不到那条 option，账面看着齐、拍板面是死的。
+function decisionInvariant(type, p) {
+  if (type !== 'decision.pending') return;
+  const opts = p.options;
+  if (!Array.isArray(opts) || opts.length < 2) {
+    throw new Error(`decision.pending 的 options 至少两条（实际 ${Array.isArray(opts) ? opts.length : typeof opts}）`);
+  }
+  const labels = opts.map(o => (o && typeof o === 'object' ? o.label : undefined));
+  if (labels.some(l => typeof l !== 'string' || l.trim() === '')) {
+    throw new Error('decision.pending 每条 option 必须有非空 label（用户看见并点的那句）');
+  }
+  if (!labels.includes(p.recommend)) {
+    throw new Error(`recommend ${JSON.stringify(p.recommend)} 不在 options 的 label 里（${labels.join('/')}）；推荐指向不存在的选项，一键选择会失效`);
+  }
 }
 
 function attrInvariant(type, p) {
@@ -131,6 +169,8 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
   if (missing.length) throw new Error(`事件 ${type} 缺必填字段: ${missing.join(', ')}`);
 
   attrInvariant(type, payload);
+  enumInvariant(meta.enumsByType.get(type), payload);
+  decisionInvariant(type, payload);
 
   const raw = { type, schema_version: meta.currentVersion, ts, machine, seq, ...payload };
   const event_id = sha256Hex(canonicalStringify(raw));

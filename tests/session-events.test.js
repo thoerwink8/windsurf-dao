@@ -1,0 +1,251 @@
+// tests/session-events.test.js —— #891 期一 W1：会话态事件三类型（session.state / decision.pending / decision.resolved）
+//
+// 判别力（本套存在的理由）：合法样本必须过，非法样本必须被拒——
+//   ① 每类型的必填字段逐个缺一，一个不漏地拒（不是只试一个字段）
+//   ② schema 声明的枚举写错（phase / identity / urgency / by）拒
+//   ③ decision.resolved 缺 target_decision_id 拒
+//   ④ decision.pending 的 recommend 落空 / options 不足两条 / option 缺 label 拒
+// 闭集唯一权威 = schemas/events.schema.json；本套另核 scripts/event-write.mjs 头注的
+// [闭集镜子] 段与它双向一致——镜子漂了就报红，这就是「不许在别处另抄清单」的那道警报。
+// 变异自证：把 schema 里某条必填删掉，本套必须翻红（证据贴 PR 正文）。
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('node:child_process');
+
+const REPO = path.resolve(__dirname, '..');
+const { buildEvent, writeEvent, schemaMeta } = require('../scripts/lib/event-writer.mjs');
+
+const schema = JSON.parse(fs.readFileSync(path.join(REPO, 'schemas', 'events.schema.json'), 'utf8'));
+const meta = schemaMeta(schema);
+const TS = '2026-09-04T10:00:00+08:00';
+const TS2 = '2026-09-04T10:30:00+08:00';
+const MACHINE = 'TEST-891';
+
+function throws(fn) {
+  try { fn(); return false; } catch { return true; }
+}
+function build(type, payload, over = {}) {
+  return buildEvent({ type, ts: TS, machine: MACHINE, seq: 0, payload, schema, ...over });
+}
+/** 逐个删必填字段，返回「没被拒」的字段名（应为空） */
+function requiredHoles(type, payload) {
+  return (meta.requiredByType.get(type) || []).filter(f => {
+    const p = { ...payload };
+    delete p[f];
+    return !throws(() => build(type, p));
+  });
+}
+
+// ── 夹具（形状真、值全假；不含任何真 key/token/绝对路径） ────────────────────
+const STATE = {
+  session_id: 's-891-w1',
+  identity: '工人',
+  phase: '沉默',
+  doing: '给事件闭集加三个类型',
+  next: '跑变异自证再交卷',
+  blocked: false,
+  pending_decision_id: null,
+  digest: '0f1e2d3c4b5a6978',
+  repo: 'windsurf-dao',
+  refs: ['#891'],
+};
+const PENDING = {
+  decision_id: 'd-891-1',
+  question: '三张卡先合哪张？',
+  options: [
+    { label: 'W1 先合', description: 'schema 是另两张的地基，先合少返工' },
+    { label: '等三张齐', description: '一次合完，但地基改动会连带改另两张' },
+  ],
+  recommend: 'W1 先合',
+  urgency: '急',
+  why: '另两张卡都读它派生的闭集',
+};
+const RESOLVED = {
+  target_decision_id: 'd-891-1',
+  chosen: 'W1 先合',
+  by: '用户',
+  note: '当场拍',
+};
+
+describe('session-events（#891 W1）', () => {
+  it('① 三类型进闭集，必填字段按 schema 派生', async (t) => {
+    await t.test('闭集含三个新类型', () => {
+      const miss = ['session.state', 'decision.pending', 'decision.resolved'].filter(x => !meta.closedSet.includes(x));
+      assert.ok(miss.length === 0, '闭集含三个新类型  →  缺 ' + miss.join(','));
+    });
+    await t.test('session.state 必填 = 八项（含 digest：播报闸去重靠它）', () => {
+      const got = [...meta.requiredByType.get('session.state')].sort().join('/');
+      const want = ['session_id', 'identity', 'phase', 'doing', 'next', 'blocked', 'pending_decision_id', 'digest'].sort().join('/');
+      assert.ok(got === want, 'session.state 必填 = 八项  →  ' + got);
+    });
+    await t.test('decision.pending 必填含 options/recommend/urgency', () => {
+      const req = meta.requiredByType.get('decision.pending');
+      assert.ok(['decision_id', 'question', 'options', 'recommend', 'urgency', 'why'].every(f => req.includes(f)), 'decision.pending 必填含 options/recommend/urgency  →  ' + req.join('/'));
+    });
+    await t.test('decision.resolved 必填含 target_decision_id/chosen/by', () => {
+      const req = meta.requiredByType.get('decision.resolved');
+      assert.ok(['target_decision_id', 'chosen', 'by'].every(f => req.includes(f)), 'decision.resolved 必填含 target_decision_id/chosen/by  →  ' + req.join('/'));
+    });
+  });
+
+  it('② 合法样本三类型全过', async (t) => {
+    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED]]) {
+      const ev = build(type, payload);
+      await t.test(`${type} 合法样本过，event_id 为 sha256 hex`, () => {
+        assert.ok(/^[0-9a-f]{64}$/.test(ev.event_id) && ev.type === type && ev.schema_version === 1, `${type} 合法样本过  →  ` + JSON.stringify(ev.event_id));
+      });
+    }
+    await t.test('session.state 可省 repo/refs（读端容忍缺字段）', () => {
+      const p = { ...STATE };
+      delete p.repo;
+      delete p.refs;
+      assert.ok(!throws(() => build('session.state', p)), 'session.state 可省 repo/refs');
+    });
+    await t.test('decision.resolved 可省 note', () => {
+      const p = { ...RESOLVED };
+      delete p.note;
+      assert.ok(!throws(() => build('decision.resolved', p)), 'decision.resolved 可省 note');
+    });
+  });
+
+  it('③ 必填缺一必被拒（逐字段，不是抽一个）', async (t) => {
+    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED]]) {
+      await t.test(`${type}：任一必填缺失都被拒`, () => {
+        const holes = requiredHoles(type, payload);
+        assert.ok(holes.length === 0, `${type}：任一必填缺失都被拒  →  漏拒 ` + holes.join(','));
+      });
+    }
+    await t.test('decision.resolved 缺 target_decision_id 明确被拒', () => {
+      const p = { ...RESOLVED };
+      delete p.target_decision_id;
+      assert.ok(throws(() => build('decision.resolved', p)), 'decision.resolved 缺 target_decision_id 明确被拒');
+    });
+  });
+
+  it('④ 枚举写错必被拒（取值闭集只从 schema 读）', async (t) => {
+    const cases = [
+      ['session.state', STATE, { phase: '在跑' }, 'phase 非闭集值'],
+      ['session.state', STATE, { phase: '' }, 'phase 空串'],
+      ['session.state', STATE, { identity: 'worker' }, 'identity 用了英文'],
+      ['decision.pending', PENDING, { urgency: '中' }, 'urgency 非急/缓'],
+      ['decision.resolved', RESOLVED, { by: '审官' }, 'by 非用户/帅'],
+    ];
+    for (const [type, base, bad, name] of cases) {
+      await t.test(`${type}：${name} → 拒`, () => {
+        assert.ok(throws(() => build(type, { ...base, ...bad })), `${type}：${name} → 拒`);
+      });
+    }
+    await t.test('phase 四个合法值逐个都过（枚举不是一刀切全拒）', () => {
+      const bad = ['在途', '沉默', '待拍', '收尾'].filter(ph => throws(() => build('session.state', { ...STATE, phase: ph })));
+      assert.ok(bad.length === 0, 'phase 四个合法值逐个都过  →  误拒 ' + bad.join(','));
+    });
+    await t.test('既有类型的枚举也照罩（job.handoff reason 写错 → 拒）', () => {
+      const ok = { job_id: 'j-891', from_model: 'a', to_model: 'b', reason: 'quota' };
+      assert.ok(!throws(() => build('job.handoff', ok)) && throws(() => build('job.handoff', { ...ok, reason: '换人' })), '既有类型的枚举也照罩');
+    });
+  });
+
+  it('⑤ decision.pending 的选项不变量', async (t) => {
+    await t.test('options 只有一条 → 拒（拍板至少两个选项）', () => {
+      assert.ok(throws(() => build('decision.pending', { ...PENDING, options: [{ label: 'W1 先合' }] })), 'options 只有一条 → 拒');
+    });
+    await t.test('option 缺 label → 拒', () => {
+      assert.ok(throws(() => build('decision.pending', { ...PENDING, options: [{ description: '只写了解释' }, { label: '等三张齐' }] })), 'option 缺 label → 拒');
+    });
+    await t.test('recommend 不在任何 label 里 → 拒（否则一键选择是死的）', () => {
+      assert.ok(throws(() => build('decision.pending', { ...PENDING, recommend: '都别合' })), 'recommend 不在任何 label 里 → 拒');
+    });
+    await t.test('option 只有 label（不写 description）仍合法', () => {
+      assert.ok(!throws(() => build('decision.pending', { ...PENDING, options: [{ label: 'W1 先合' }, { label: '等三张齐' }], recommend: 'W1 先合' })), 'option 只有 label 仍合法');
+    });
+  });
+
+  it('⑥ digest 才是内容维去重键（event_id 每轮必变）', async (t) => {
+    const a = build('session.state', STATE);
+    const b = build('session.state', STATE, { ts: TS2, seq: 7 });
+    await t.test('同状态不同轮：event_id 变而 digest 不变', () => {
+      assert.ok(a.event_id !== b.event_id && a.digest === b.digest, '同状态不同轮：event_id 变而 digest 不变  →  ' + `${a.event_id.slice(0, 8)}/${b.event_id.slice(0, 8)} digest=${a.digest}`);
+    });
+    await t.test('状态变了 digest 应由写口换新值（换 digest 即换去重键）', () => {
+      const c = build('session.state', { ...STATE, doing: '换活了', digest: 'a1b2c3d4e5f60718' });
+      assert.ok(c.digest !== a.digest, '状态变了 digest 换新值');
+    });
+  });
+
+  it('⑦ 落盘 + 读回自证 + 追加不改历史', async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-891-'));
+    const w = writeEvent({ dir, type: 'session.state', ts: TS, machine: MACHINE, seq: 0, payload: STATE, schema });
+    const back = JSON.parse(fs.readFileSync(w.path, 'utf8'));
+    await t.test('写出的文件读回来与内存事件一致（不打没读过的 ✓）', () => {
+      assert.ok(back.event_id === w.event.event_id && back.doing === STATE.doing && back.phase === '沉默', '写出的文件读回来与内存事件一致  →  ' + JSON.stringify(back.event_id));
+    });
+    await t.test('同内容重写被拒（写一次即不可变）', () => {
+      assert.ok(throws(() => writeEvent({ dir, type: 'session.state', ts: TS, machine: MACHINE, seq: 0, payload: STATE, schema })), '同内容重写被拒');
+    });
+    await t.test('同 session 下一轮再写一条合法（每轮末一条，不是每 job 一条）', () => {
+      const w2 = writeEvent({ dir, type: 'session.state', ts: TS2, machine: MACHINE, seq: 1, payload: { ...STATE, phase: '收尾', digest: 'b2c3d4e5f6071829' }, schema });
+      assert.ok(fs.existsSync(w2.path) && w2.path !== w.path, '同 session 下一轮再写一条合法');
+    });
+    await t.test('同 target 追加第二条 decision.resolved 合法（追加不改历史）', () => {
+      const r1 = writeEvent({ dir, type: 'decision.resolved', ts: TS, machine: MACHINE, seq: 2, payload: RESOLVED, schema });
+      const r2 = writeEvent({ dir, type: 'decision.resolved', ts: TS2, machine: MACHINE, seq: 3, payload: { ...RESOLVED, chosen: '等三张齐', note: '改主意' }, schema });
+      assert.ok(fs.existsSync(r1.path) && fs.existsSync(r2.path), '同 target 追加第二条 decision.resolved 合法');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('⑧ CLI 真写真读（event-write.mjs 端到端）', async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-891-cli-'));
+    const run = args => spawnSync(process.execPath, [path.join(REPO, 'scripts', 'event-write.mjs'), ...args], { encoding: 'utf8', cwd: REPO });
+    const ok = run(['--type', 'session.state', '--dir', dir, '--machine', MACHINE, '--ts', TS,
+      '--session-id', 's-891-cli', '--identity', '工人', '--phase', '沉默',
+      '--doing', 'CLI 读回自证', '--next', '交卷', '--blocked', 'false',
+      '--pending-decision-id', 'null', '--digest', 'c3d4e5f607182930',
+      '--repo', 'windsurf-dao', '--refs', '["#891"]']);
+    await t.test('CLI 写 session.state 退出码 0', () => {
+      assert.ok(ok.status === 0, 'CLI 写 session.state 退出码 0  →  ' + (ok.stderr || '').trim());
+    });
+    await t.test('CLI 写出的文件读回：event_id 在、字段在、null 没被写成字符串', () => {
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+      const ev = files.length === 1 ? JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8')) : null;
+      assert.ok(ev && /^[0-9a-f]{64}$/.test(ev.event_id) && ev.pending_decision_id === null && ev.blocked === false && ev.refs[0] === '#891',
+        'CLI 写出的文件读回  →  ' + JSON.stringify(ev && { id: ev.event_id.slice(0, 8), p: ev.pending_decision_id, b: ev.blocked }));
+    });
+    const bad = run(['--type', 'session.state', '--dir', dir, '--machine', MACHINE, '--ts', TS,
+      '--session-id', 's-891-bad', '--identity', '工人', '--phase', '瞎写',
+      '--doing', 'x', '--next', 'y', '--blocked', 'false',
+      '--pending-decision-id', 'null', '--digest', 'd4e5f60718293041']);
+    await t.test('CLI 写非法 phase 退出码非 0 且不落盘', () => {
+      const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+      assert.ok(bad.status !== 0 && n === 1, 'CLI 写非法 phase 退出码非 0 且不落盘  →  ' + `status=${bad.status} files=${n}`);
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('⑨ 派生注释镜子 = schema 闭集（不许在别处另抄清单）', async (t) => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'event-write.mjs'), 'utf8');
+    const lines = src.split(/\r?\n/);
+    const from = lines.findIndex(l => l.includes('[闭集镜子开始]'));
+    const to = lines.findIndex(l => l.includes('[闭集镜子结束]'));
+    await t.test('镜子段标记还在（被挪走/删掉即报警，不是静默通过）', () => {
+      assert.ok(from >= 0 && to > from, '镜子段标记还在  →  ' + `from=${from} to=${to}`);
+    });
+    // 只认「纯 ascii 小写 + 点 + 斜杠」的清单行：说明性中文行天然被排除，
+    // 类型名不带点的（incident）也收得到。
+    const mirrored = lines.slice(from + 1, to)
+      .map(l => l.replace(/^\s*\/\//, '').trim())
+      .filter(l => /^[a-z][a-z._ /]*$/.test(l))
+      .flatMap(l => l.split('/'))
+      .map(x => x.trim())
+      .filter(x => /^[a-z][a-z_]*(\.[a-z][a-z_]*)?$/.test(x));
+    await t.test('镜子与闭集双向一致（一多一少都红）', () => {
+      const a = [...new Set(mirrored)].sort().join(',');
+      const b = [...meta.closedSet].sort().join(',');
+      assert.ok(a === b && mirrored.length === meta.closedSet.length, '镜子与闭集双向一致  →  ' + `镜子=${a} 闭集=${b}`);
+    });
+  });
+});
