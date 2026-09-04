@@ -3173,10 +3173,14 @@ function cmdStart(args) {
 }
 
 async function cmdWorktreeCreate(args) {
-  if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
+  // 参数校验按执行体分岔（#884 审官 P1）：卡名是 orca 建树的必填项（树名就是卡名），mirasim
+  // 建树只吃 repo/branch。共享入口若再拿 orca 的必填项拦一道，dao-cmd.mjs USAGE 写的
+  // `worktree-create --executor mirasim --branch <分支>` 就永远进不了 mirasim 路径——
+  // 所以这道闸必须落在分岔之后、各自的分支里。
   const ex = resolveExecutorOrFail(args, loadOrFail());
   if (ex.executor === 'mirasim') return cmdWorktreeCreateMirasim(args, ex);
   // ↓ 以下是 orca 绑定（orca 退役时整段删）
+  if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
   const r = orca(argsWorktreeCreate({
     name: assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model }),
     noParent: args.noParent,

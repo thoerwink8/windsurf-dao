@@ -444,3 +444,54 @@ describe('dispatch --executor mirasim 拒 --task（#884 P1#4）', () => {
     assert.equal(r.status, 0);
   });
 });
+
+// #884 审官 P1：worktree-create 的共享入口曾在执行体分岔**之前**就无条件要 --name/--issue，
+// 于是 USAGE 里写的 mirasim 公开用法 `--executor mirasim --branch <分支>` 直接被拦在门外。
+// 判别力在「按文档那条命令跑，进的是 mirasim binding」——所以不能只断 ok:false（改坏了也 false），
+// 要断错误是从 mirasim 运行时**里面**冒出来的（读令牌那一步），且 detail 带 executor/repo/branch：
+// 那几个字段只有 cmdWorktreeCreateMirasim 会 emit，闸没让开根本走不到。
+// 端口钉一个没人监听的：令牌文件 local-59999.token 不存在 → 必定停在 readToken，
+// 既与这台机器今天有没有跑 mirasim 无关，也保证测试不会真去注册工作区／建树。
+describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  const runDao = (extra) => spawnSync(process.execPath, [DAO, 'worktree-create', ...extra], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT,
+    env: { ...process.env, MIRASIM_PORT: '59999' },
+  });
+
+  it('只给 --branch（无 --name/--issue）→ 走到 mirasim binding，不再被卡名闸拦下', () => {
+    const r = runDao(['--executor', 'mirasim', '--branch', 'dao-probe-884']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.doesNotMatch(
+      String(out.error || ''), /要 --name/,
+      '仍被 orca 的卡名闸拦在执行体分岔之前：文档写的 mirasim 用法进不去（#884 P1）',
+    );
+    assert.equal(out.executor, 'mirasim');
+    assert.equal(out.branch, 'dao-probe-884');
+    assert.ok(out.repo, '没 --repo 时要落默认仓路径');
+    assert.match(
+      String(out.error || ''), /mirasim 建树失败: 读不到回环会话令牌/,
+      '错误得来自 mirasim 运行时内部——这就是「binding 真被调到了」的证据',
+    );
+    assert.equal(r.status, 1, '连不上服务是「没查成」，要非零退出');
+  });
+
+  it('mirasim 自己的 --branch 闸还在（没 --branch 也没 --issue → 拒派，不猜分支名）', () => {
+    const r = runDao(['--executor', 'mirasim']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.match(out.error, /mirasim 执行体要 --branch/);
+    assert.equal(r.status, 1);
+  });
+
+  it('orca 侧的卡名闸没被顺手删掉（树名就是卡名，缺了照旧拒）', () => {
+    const r = runDao(['--executor', 'orca']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.match(
+      out.error, /worktree-create 要 --name/,
+      '把闸整条删了也能让上面两条过——这条是防那种「修法」的',
+    );
+    assert.equal(r.status, 1);
+  });
+});
