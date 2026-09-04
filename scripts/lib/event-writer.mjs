@@ -5,7 +5,8 @@
 // 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
 // 写入即校验：类型在闭集内、必填字段齐、schema 声明的 enum 字段取值在闭集内、
-// attr 责任向量不变量（份额和=1 或全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
+// schema 声明 minItems 的数组字段是数组且够条数、attr 责任向量不变量（份额和=1 或
+// 全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
@@ -64,24 +65,30 @@ export function ulidFromMs(ms, entropyHex) {
   return out;
 }
 
-/** 事件类型闭集 + 每类型必填字段 + 每类型枚举字段（派生自 schema oneOf，闭集 = oneOf[].title）。 */
+/**
+ * 事件类型闭集 + 每类型必填字段 + 每类型枚举字段 + 每类型数组下限
+ * （全部派生自 schema oneOf，闭集 = oneOf[].title；本文件不另抄任何清单或数字）。
+ */
 export function schemaMeta(schema) {
   const closedSet = [];
   const requiredByType = new Map();
   const enumsByType = new Map();
+  const minItemsByType = new Map();
   const resolveRef = ref => {
     const name = ref.replace('#/definitions/', '');
     return schema.definitions ? schema.definitions[name] : null;
   };
-  const walk = (node, required, enums) => {
+  const walk = (node, required, enums, mins) => {
     if (!node) return;
-    if (node.$ref) return walk(resolveRef(node.$ref), required, enums);
-    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required, enums);
+    if (node.$ref) return walk(resolveRef(node.$ref), required, enums, mins);
+    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required, enums, mins);
     if (Array.isArray(node.required)) {
       for (const f of node.required) if (!RESERVED.includes(f)) required.add(f);
     }
     for (const [f, spec] of Object.entries(node.properties || {})) {
-      if (!RESERVED.includes(f) && Array.isArray(spec?.enum)) enums.set(f, spec.enum);
+      if (RESERVED.includes(f)) continue;
+      if (Array.isArray(spec?.enum)) enums.set(f, spec.enum);
+      if (spec?.type === 'array' && Number.isInteger(spec.minItems)) mins.set(f, spec.minItems);
     }
   };
   for (const def of schema.oneOf || []) {
@@ -90,11 +97,13 @@ export function schemaMeta(schema) {
     closedSet.push(title);
     const required = new Set();
     const enums = new Map();
-    walk(def, required, enums);
+    const mins = new Map();
+    walk(def, required, enums, mins);
     requiredByType.set(title, [...required]);
     enumsByType.set(title, enums);
+    minItemsByType.set(title, mins);
   }
-  return { closedSet, requiredByType, enumsByType, currentVersion: schema.version ?? 1 };
+  return { closedSet, requiredByType, enumsByType, minItemsByType, currentVersion: schema.version ?? 1 };
 }
 
 // schema 声明了 enum 的字段，写入即校验取值——枚举清单只从 schema 读，本文件不另抄。
@@ -107,6 +116,23 @@ function enumInvariant(enums, p) {
       throw new Error(
         `字段 ${field} 取值非法 ${JSON.stringify(p[field])}；schema 允许 ${allowed.map(v => JSON.stringify(v)).join('/')}`,
       );
+    }
+  }
+}
+
+// schema 里声明了 minItems 的数组字段，写入即校验「是数组 + 够条数」。
+// 下限只从 schema 读（不在本文件抄数字）：改 schema 的 minItems 就是改判据，
+// 所以变异自证咬的是 schema 本身。声明 array 却给字符串必须拒——字符串也有 .length，
+// 只比长度会让 evidence: "exit_code=0" 蒙过去（#891 evidence 统一成数组时的实咬点）。
+function minItemsInvariant(mins, p) {
+  for (const [field, min] of mins || []) {
+    const v = p[field];
+    if (v === undefined) continue; // 缺字段归必填检查
+    if (!Array.isArray(v)) {
+      throw new Error(`字段 ${field} 必须是数组（schema 声明 array，至少 ${min} 项），实际 ${typeof v}`);
+    }
+    if (v.length < min) {
+      throw new Error(`字段 ${field} 至少 ${min} 项，实际 ${v.length} 项`);
     }
   }
 }
@@ -177,6 +203,7 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
 
   attrInvariant(type, payload);
   enumInvariant(meta.enumsByType.get(type), payload);
+  minItemsInvariant(meta.minItemsByType.get(type), payload);
   decisionInvariant(type, payload);
 
   const raw = { type, schema_version: meta.currentVersion, ts, machine, seq, ...payload };

@@ -76,7 +76,7 @@ const RESOLVED = {
 const MILESTONE = {
   kind: 'commit',
   repo: 'windsurf-dao',
-  evidence: 'exit_code=0；git 探头查到了',
+  evidence: ['exit_code=0', 'commit:a1b2c3d'],
   milestone_key: 'commit:a1b2c3d',
   branch: 'feat/891-session-events',
   commit: 'a1b2c3d',
@@ -109,7 +109,7 @@ const W5_OPEN = {
 const W5_MILESTONE_UNKNOWN = {
   kind: 'land',
   repo: 'windsurf-dao',
-  evidence: 'exit_code=0；git 探头没查成：not a git repository',
+  evidence: ['exit_code=0', 'git 探头没查成：not a git repository'],
   milestone_key: 'land:9f2a7c4d8e1b',
   branch: null,
   commit: null,
@@ -169,7 +169,7 @@ describe('session-events（#891 W1）', () => {
       assert.ok(!throws(() => build('decision.resolved', p)), 'decision.resolved 可省 note');
     });
     await t.test('session.milestone 只给必填四项也过（探头字段全不给）', () => {
-      const p = { kind: 'pr-merge', repo: 'windsurf-dao', evidence: 'exit_code=0', milestone_key: 'pr-merge:pr-893' };
+      const p = { kind: 'pr-merge', repo: 'windsurf-dao', evidence: ['exit_code=0'], milestone_key: 'pr-merge:pr-893' };
       assert.ok(!throws(() => build('session.milestone', p)), 'session.milestone 只给必填四项也过');
     });
   });
@@ -216,6 +216,24 @@ describe('session-events（#891 W1）', () => {
       const p = { ...MILESTONE };
       delete p.evidence;
       assert.ok(throws(() => build('session.milestone', p)), 'session.milestone 缺 evidence 明确被拒');
+    });
+    // evidence 统一成字符串数组（2026-09-04 帅位拍板：不留同名不同形）。下限从 schema 的
+    // minItems 读，本文件不抄数字——改坏 schema 的 minItems，下面这两条就是报警器。
+    await t.test('session.milestone 的 evidence 是空数组 → 拒（里程碑没证据就不该写）', () => {
+      assert.ok(throws(() => build('session.milestone', { ...MILESTONE, evidence: [] })), 'evidence 空数组 → 拒');
+    });
+    await t.test('session.milestone 的 evidence 写成字符串 → 拒（同名必须同形，注释不是闸）', () => {
+      assert.ok(throws(() => build('session.milestone', { ...MILESTONE, evidence: 'exit_code=0；git 探头查到了' })), 'evidence 写成字符串 → 拒');
+    });
+    await t.test('evidence 一项就够（单元素数组合法：信息一点不丢）', () => {
+      assert.ok(!throws(() => build('session.milestone', { ...MILESTONE, evidence: ['exit_code=0'] })), 'evidence 单元素数组合法');
+    });
+    await t.test('attr.* 的 evidence 与它同形（同一份数组形状，读端不必按 type 分支）', () => {
+      const attr = {
+        job_id: 'j-891', model: 'x', model_share: 1, brief_share: 0, coord_share: 0, env_share: 0,
+        overrun_attr: null, confidence: 0.9, evidence: ['c-j-891'], why: 'fixture',
+      };
+      assert.ok(!throws(() => build('attr.rule', attr)), 'attr.* 的 evidence 与它同形');
     });
   });
 
@@ -300,8 +318,9 @@ describe('session-events（#891 W1）', () => {
     await t.test('session.milestone 落盘读回：evidence/milestone_key 原样在', () => {
       const m = writeEvent({ dir, type: 'session.milestone', ts: TS, machine: MACHINE, seq: 4, payload: MILESTONE, schema });
       const mb = JSON.parse(fs.readFileSync(m.path, 'utf8'));
-      assert.ok(mb.event_id === m.event.event_id && mb.evidence === MILESTONE.evidence && mb.milestone_key === 'commit:a1b2c3d' && mb.pr_number === null,
-        'session.milestone 落盘读回  →  ' + JSON.stringify({ e: mb.evidence, k: mb.milestone_key, pr: mb.pr_number }));
+      assert.ok(mb.event_id === m.event.event_id && Array.isArray(mb.evidence) && mb.evidence.join('|') === MILESTONE.evidence.join('|')
+        && mb.milestone_key === 'commit:a1b2c3d' && mb.pr_number === null,
+      'session.milestone 落盘读回  →  ' + JSON.stringify({ e: mb.evidence, k: mb.milestone_key, pr: mb.pr_number }));
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -334,19 +353,26 @@ describe('session-events（#891 W1）', () => {
     const ms = run(['--type', 'session.milestone', '--dir', dir, '--machine', MACHINE, '--ts', TS2,
       '--kind', 'commit', '--repo', 'windsurf-dao', '--milestone-key', 'commit:a1b2c3d',
       '--commit', 'a1b2c3d', '--branch', 'feat/891-session-events', '--pr-number', 'null',
-      '--evidence', 'exit_code=0；git 探头查到了']);
-    await t.test('CLI 写 session.milestone 退出码 0 且读回一致', () => {
+      '--evidence', '["exit_code=0","commit:a1b2c3d"]']);
+    await t.test('CLI 写 session.milestone 退出码 0，evidence 读回是数组不是字符串', () => {
       const hit = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
         .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')))
         .find(e => e.type === 'session.milestone');
-      assert.ok(ms.status === 0 && hit && hit.milestone_key === 'commit:a1b2c3d' && hit.pr_number === null,
-        'CLI 写 session.milestone 退出码 0 且读回一致  →  ' + `status=${ms.status} ` + (ms.stderr || '').trim().slice(0, 120));
+      assert.ok(ms.status === 0 && hit && Array.isArray(hit.evidence) && hit.evidence.length === 2
+        && hit.milestone_key === 'commit:a1b2c3d' && hit.pr_number === null,
+      'CLI 写 session.milestone 退出码 0，evidence 读回是数组  →  ' + `status=${ms.status} ` + (ms.stderr || '').trim().slice(0, 120));
     });
     const badKind = run(['--type', 'session.milestone', '--dir', dir, '--machine', MACHINE, '--ts', TS,
-      '--kind', 'rebase', '--repo', 'windsurf-dao', '--milestone-key', 'k', '--evidence', 'exit_code=0']);
+      '--kind', 'rebase', '--repo', 'windsurf-dao', '--milestone-key', 'k', '--evidence', '["exit_code=0"]']);
     await t.test('CLI 写非法 kind 退出码非 0 且不落盘', () => {
       const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
       assert.ok(badKind.status !== 0 && n === 2, 'CLI 写非法 kind 退出码非 0 且不落盘  →  ' + `status=${badKind.status} files=${n}`);
+    });
+    const badEv = run(['--type', 'session.milestone', '--dir', dir, '--machine', MACHINE, '--ts', TS,
+      '--kind', 'commit', '--repo', 'windsurf-dao', '--milestone-key', 'k2', '--evidence', 'exit_code=0']);
+    await t.test('CLI 把 evidence 写成字符串 → 退出码非 0 且不落盘（字符串也有 length，只比长度会蒙过去）', () => {
+      const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+      assert.ok(badEv.status !== 0 && n === 2, 'CLI evidence 写成字符串 → 拒  →  ' + `status=${badEv.status} files=${n}`);
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });

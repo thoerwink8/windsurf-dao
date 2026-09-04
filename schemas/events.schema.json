@@ -425,12 +425,17 @@
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
-          "description": "里程碑：提交·落地·合并（#891 期一，字段形状随 W5 写口实测 PR #897）。写口 = Bash 的 PostToolUse，命令真成功才写；退出码没查成一律不写（fail-closed，不当成功）。为什么不复用 job.closed：那是能力账正样本、由收口路径独占写，它的必填 merged_by / usd_cash / usd_economic 在 git commit 落地那一刻一个都拿不到，硬凑只能填 unknown 去污染归因。故本类型的必填只留「动作完成那一刻真拿得到」的四项；git 探头没查成时 branch/commit/subject 记 null 并在 evidence 里写清没查成，不留假 ✓。",
+          "description": "里程碑：提交·落地·合并（#891 期一，字段形状随 W5 写口实测 PR #897）。写口 = Bash 的 PostToolUse，命令真成功才写；退出码没查成一律不写（fail-closed，不当成功）。为什么不复用 job.closed：那是能力账正样本、由收口路径独占写，它的必填 merged_by / usd_cash / usd_economic 在 git commit 落地那一刻一个都拿不到，硬凑只能填 unknown 去污染归因。故本类型的必填只留「动作完成那一刻真拿得到」的四项；git 探头没查成时 branch/commit/subject 记 null 并在 evidence 里加一条写清没查成，不留假 ✓。",
           "properties": {
             "type": { "const": "session.milestone" },
             "kind": { "enum": ["commit", "land", "pr-merge"], "description": "里程碑种类：commit=提交落地 / land=收工一条命令过了 / pr-merge=PR 合并" },
             "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不进事件（与 session.state 的 repo 同义）；拿不到记 null" },
-            "evidence": { "type": "string", "description": "成功判据的出处一句话，例如「exit_code=0；git 探头查到了」。同名提醒：attr.* / audit.* 的 evidence 是 event_id 数组，本字段是人读判据串——读端按 type 分支，别跨类型当同一形状使" },
+            "evidence": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "成功判据的出处，一项一条可复查的证据，如 [\"exit_code=0\", \"commit:a1b2c3d\"]，探头没查成时加一条写清（如 \"git 探头没查成：not a git repository\"）。形状与 attr.* / audit.* 的 evidence 一致（字符串数组）——同名同形，读端不必按 type 分支（2026-09-04 帅位拍板：不留会漂的形状，注释不是闸）。空数组写入即拒：里程碑没有证据就不该写"
+            },
             "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点（commit 短 sha / pr-<n> / 命令哈希）。同一动作重复触发靠它防重复计账" },
             "branch": { "type": ["string", "null"], "description": "git 探头没查成为 null" },
             "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
