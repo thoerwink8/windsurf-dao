@@ -11,7 +11,7 @@
 - [x] 故意违规样本当场拦下：`tests/fixtures/version-carrier/red/` 基线 `1.2.3` → 当前 `1.2.2`；`inspectVersionCarrierFixtures` kinds `{red:1,ok:1,empty:1}`
 - [x] `CLAUDE.md` L9 有 dao-commit 按需指针，不常驻注入
 - [x] 提交标题带宿主前缀（本跳 `[pi]`；原实现 #789 为 `[grok]`）
-- [x] `node scripts/dao-check.mjs` 在工人树 head `76f93a5` 复跑：退出码 0，末行形态 `dao check: 好的（104 项，7 项跳过，…s）`（本轮实测 53.7s；时长每次会变，不��它当哈希）。`dao-mode.test.js` 97/0、`redact.test.js` 47/0。审官树同基线复跑同样退出码 0 / 104 绿 7 跳过。CI check 绿（run 33803575961，对应上一 SHA `a914026`）。审官当时在 `a914026` 上看到 `不好（2 项红 / 102 项绿 / 7 项跳过）`（`dao-mode` 8 红 + `redact` 1 红）；这两套用仓内 `_tmp/` 沙箱，dao-check 池宽 6 并行，偶发踩踏可解释当时红、现在绿。不以当时瞬时红冒充当前结果。
+- [x] `node scripts/dao-check.mjs` 在**含本行的提交**上复跑：退出码 0，末行 `dao check: 好的（104 项，7 项跳过，…s）`（2026-09-04 实测 50.5s）。本 PR 自 `8f28c64` 起的提交只动本文档，不碰被测代码；审官在 `8f28c64` 复跑同命令得 `好的（104 项，7 项跳过，62.5s）`。历史备注：`a914026` 上曾见 dao-mode/redact 瞬时红（_tmp 沙箱并行踩踏），已随返工消失。
 
 ## 进展
 
