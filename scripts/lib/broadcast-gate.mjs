@@ -18,12 +18,30 @@
 // 事件顺序用账本全序键 (ts, machine, seq, event_id)（`ledger-query.compareEvents`），
 // 群按 chat_id 字典序遍历 ⇒ 同输入同输出，不吃 Map 迭代序。
 //
-// ── 类型闭集：派生，不另抄 ───────────────────────────────────────────────
+// ── 类型闭集与枚举：一律派生，不另抄 ──────────────────────────────────────
 // 事件类型闭集的唯一权威是 `schemas/events.schema.json`（闭集 = oneOf[].title）。
 // 本文件不持有类型清单，只经 `event-writer.schemaMeta(schema)` 派生（`deriveGateTypes`）。
-// 白名单三类里引用到的具体类型名（policy，不是清单）逐个对派生闭集核验：
-// schema 里没有 ⇒ 进 `missing`，`why` 里明说「该类本轮播不出去」——
-// 这是「没查成」，不是「没有这类事件」。
+// `decision.pending.urgency` 的取值枚举、`session.milestone.kind` 的取值枚举同样从
+// schema 里读（`propSchema`），不在本文件抄第二份。白名单里引用到的具体类型名
+// （policy，不是清单）逐个对派生闭集核验：schema 里没有 ⇒ 进 `missing`，
+// `why` 里明说「这个类型本轮播不出去」——这是「没查成」，不是「没有这类事件」。
+//
+// ── 按 W1 #893 最终事件契约接线（审官 PR #896 判 CHANGES_REQUESTED 后返工）────
+// ① 里程碑有**两个**类型，判据分开处理：
+//    · `session.milestone`（W5 #897 的写口：commit/land/pr-merge）——**没有 success 字段**，
+//      必填 kind/repo/evidence/milestone_key；本闸另要求 `milestone_key` 非空、
+//      `evidence` 非空数组（schema minItems=1），因为**去重主体就是 milestone_key**，
+//      缺了它去重会静默降级 ⇒ 缺就报「事件残缺没查成」，不拿它去播。
+//    · `job.closed`（历史类型，能力账正样本）——必须 `success === true`；
+//      `success === false` 是失败关单，只进账不播。
+// ② `decision.pending.urgency` 是**事件自己的字段**（枚举 急/缓/null），不是类的固定属性：
+//    急 ⇒ 即时插播；缓 ⇒ 攒到窗末；**null / 缺字段 ⇒ 按缓处理**，但 `why` 里记的是
+//    「没判过」不是「判过是缓」（#897 实测：AskUserQuestion 与 im_ask_user 的入参里
+//    都没有 urgency 这一位，写口只能记 null——账面不许伪造）。
+// ③ 主体（去重键的前半）按类型取专用字段，**不认通名 `subject`**：
+//    `session.milestone.subject` 是**提交标题**，不是主体——拿它当主体，两个同标题的
+//    提交会撞成一条、后一条永不播。主体一律取幂等/标识字段（milestone_key /
+//    decision_id / session_id / job_id / fingerprint）。
 //
 // ── 配置落点 ───────────────────────────────────────────────────────────
 // 沿用 `feishu-ops` 的群↔仓映射（`host/machine/feishu-groups.json` 占位模板 /
@@ -31,6 +49,10 @@
 // `loadBroadcastGroups()` 从同一份 JSON 里读它并补默认值，不另立文件。
 // 既有两个消费方对多出来的字段免疫：`feishu-triage.loadGroups` 只取 repo/kind，
 // `feishu-groups-check.parseGroupCatalog` 只取 chat_id。
+// **只有字段缺省才套默认值**：`broadcast` 出现但不是对象（`"bad"` / `[]` / `null`）、
+// 或 `subscribe` / `dailyBudget` 类型不对，一律进 `problems`——把写坏的配置静默
+// 套成「项目群全订阅 / 预算 20」，等于把「没读成」显示成「一切正常」（本仓反复实咬的病）。
+// 认不出的**多余键**故意不报：W5 接线可能加字段，报了会把前向兼容变成红。
 //
 // ── 调用方要做的两件事（本文件不做）───────────────────────────────────────
 // ① 把 `send[].dedupeKey` 记进下一轮的 `state.seen[chatId]`，把发出条数累加进
@@ -42,44 +64,82 @@ import { canonicalStringify, sha256Hex } from './dianjiangtai-core.mjs';
 import { schemaMeta } from './event-writer.mjs';
 import { compareEvents } from './ledger-query.mjs';
 
-// ── 三类白名单（闸2 的 policy；类型名逐个对派生闭集核验）─────────────────────
+// ── 三类白名单（闸2 的 policy；类型名与枚举逐个对 schema 核验）─────────────────
 
 export const CLASS_DECISION = 'decision.pending';
 export const CLASS_MILESTONE = 'milestone';
 export const CLASS_INCIDENT = 'incident';
-/** 播报三类，顺序固定（进 why / 默认订阅列表都靠它稳定）。 */
+/** 播报三类，顺序固定（进 why / 默认订阅列表 / 窗末批次顺序都靠它稳定）。 */
 export const BROADCAST_CLASSES = [CLASS_DECISION, CLASS_MILESTONE, CLASS_INCIDENT];
 
 export const URGENCY_INSTANT = '急';
 export const URGENCY_BATCH = '缓';
+/** urgency 取「事件自己说」的哨兵（对上 decision.pending.urgency 那一位）。 */
+const URGENCY_FROM_EVENT = '__from_event__';
 
 /** 去重键的字段分隔符：NUL，主体与 digest 都不可能含它 ⇒ 键不会歧义拼接。 */
 const KEY_SEP = '\u0000';
 
+function nonEmptyStr(v) {
+  return typeof v === 'string' && v.trim() !== '';
+}
+
 /**
- * 类 → { types（schema 闭集里的类型名）, urgency, match（事件级判据）, matchWhy }。
- * 里程碑不是一个事件类型：它是 job.closed 且 success=true（合并·落地）；
- * success=false 是失败关单，只进账不播（闸2 的反样本）。
+ * 播报面认识的类型表：**按类型**给判据（不是按类——里程碑有两个类型，判据不同）。
+ *   cls         这条类型归哪一播报类（闸2 白名单 / 闸5 订阅都按类）
+ *   subjectKeys 去重主体取哪个字段（幂等/标识字段，不认通名 subject）
+ *   urgency     固定急缓，或 URGENCY_FROM_EVENT = 读事件自己的 urgency
+ *   accept(e)   → true | 一句「为什么不该播」；判据不合就只进账
  */
-const CLASS_RULES = {
-  [CLASS_DECISION]: {
-    types: ['decision.pending'],
-    urgency: URGENCY_INSTANT,
-    match: () => true,
-    matchWhy: '待拍板即时插播',
+const TYPE_RULES = {
+  'decision.pending': {
+    cls: CLASS_DECISION,
+    subjectKeys: ['decision_id'],
+    urgency: URGENCY_FROM_EVENT,
+    accept: (e) => (nonEmptyStr(e.decision_id)
+      ? true
+      : '缺 decision_id（schema 必填，且它就是去重主体）⇒ 事件残缺，没查成，不拿它去播'),
   },
-  [CLASS_MILESTONE]: {
-    types: ['job.closed'],
+  'session.milestone': {
+    cls: CLASS_MILESTONE,
+    subjectKeys: ['milestone_key'],
     urgency: URGENCY_BATCH,
-    match: (e) => e.success === true,
-    matchWhy: 'job.closed 且 success=true 才算里程碑（合并·落地）',
+    accept: (e) => {
+      if (!nonEmptyStr(e.milestone_key)) {
+        return '缺 milestone_key（schema 必填的幂等键，且它就是去重主体）⇒ 事件残缺，没查成，不拿它去播';
+      }
+      if (!Array.isArray(e.evidence) || e.evidence.length === 0) {
+        return 'evidence 空或缺（schema minItems=1：里程碑没有证据就不该写）⇒ 没查成，不拿它去播';
+      }
+      return true;
+    },
   },
-  [CLASS_INCIDENT]: {
-    types: ['incident'],
+  'job.closed': {
+    cls: CLASS_MILESTONE,
+    subjectKeys: ['job_id'],
+    urgency: URGENCY_BATCH,
+    accept: (e) => {
+      if (!nonEmptyStr(e.job_id)) return '缺 job_id（去重主体）⇒ 没查成，不拿它去播';
+      return e.success === true
+        ? true
+        : 'success !== true（失败关单不是里程碑；合并·落地才算）⇒ 只进账不播';
+    },
+  },
+  incident: {
+    cls: CLASS_INCIDENT,
+    subjectKeys: ['fingerprint'],
     urgency: URGENCY_INSTANT,
-    match: () => true,
-    matchWhy: '事故即时插播',
+    accept: (e) => (nonEmptyStr(e.fingerprint)
+      ? true
+      : '缺 fingerprint（schema 必填，且它就是去重主体）⇒ 事件残缺，没查成，不拿它去播'),
   },
+};
+
+/** 每类的人读标签（进消息前缀与窗末摘要抬头）。 */
+const CLASS_LABEL = {
+  [CLASS_DECISION]: '待拍板',
+  [CLASS_MILESTONE]: '里程碑',
+  [CLASS_INCIDENT]: '事故',
 };
 
 /** 按群类型给的默认订阅（闸5：人多的群默认只订里程碑）。hub = 总控群，人最多。 */
@@ -93,11 +153,24 @@ export const DEFAULT_DAILY_BUDGET = { hub: 6, project: 20 };
 /** 预算溢出提示的去重主体（闸4 借闸1 的机制做到一天一条）。 */
 export const BUDGET_SUBJECT = '__budget_notice__';
 
-// ── 闭集派生 ──────────────────────────────────────────────────────────
+// ── 闭集与枚举派生 ─────────────────────────────────────────────────────
+
+/** 从 schema 的某个 oneOf 条目里取某个字段的子 schema（走 allOf，不解 $ref——本文件只要顶层字段）。 */
+export function propSchema(schema, title, prop) {
+  const def = ((schema && schema.oneOf) || []).find((d) => d && d.title === title);
+  if (!def) return null;
+  const nodes = Array.isArray(def.allOf) ? def.allOf : [def];
+  for (const n of nodes) {
+    const p = n && n.properties && n.properties[prop];
+    if (p) return p;
+  }
+  return null;
+}
 
 /**
- * 从 schema 派生：闭集、类型→类映射、policy 里引用但闭集没有的类型。
- * 唯一权威 = schemas/events.schema.json 的 oneOf[].title（经 schemaMeta）。
+ * 从 schema 派生：闭集、类型→类映射、缺的类型、以及两个取值枚举。
+ * 唯一权威 = schemas/events.schema.json（闭集 = oneOf[].title；枚举 = 字段自己的 enum）。
+ * enumOf 派生不出来时给 null，判定时按「枚举没派生成」说，不拿本文件的常量冒充权威。
  */
 export function deriveGateTypes(schema) {
   if (!schema || typeof schema !== 'object' || !Array.isArray(schema.oneOf)) {
@@ -107,31 +180,54 @@ export function deriveGateTypes(schema) {
   const set = new Set(closedSet);
   const typeToClass = new Map();
   const missing = [];
-  for (const cls of BROADCAST_CLASSES) {
-    for (const t of CLASS_RULES[cls].types) {
-      if (set.has(t)) typeToClass.set(t, cls);
-      else missing.push({ cls, type: t });
-    }
+  for (const type of Object.keys(TYPE_RULES)) {
+    if (set.has(type)) typeToClass.set(type, TYPE_RULES[type].cls);
+    else missing.push({ cls: TYPE_RULES[type].cls, type });
   }
-  return { closedSet: [...set].sort(), typeToClass, missing };
+  const enumOf = (title, prop) => {
+    const p = propSchema(schema, title, prop);
+    return p && Array.isArray(p.enum) ? [...p.enum] : null;
+  };
+  return {
+    closedSet: [...set].sort(),
+    typeToClass,
+    missing,
+    urgencyEnum: enumOf('decision.pending', 'urgency'),
+    milestoneKinds: enumOf('session.milestone', 'kind'),
+  };
 }
 
 // ── 闸1 的键：主体 + digest ────────────────────────────────────────────
 
-/** 主体：事件自报 subject 优先，否则按固定优先序取一个稳定标识。 */
+/**
+ * 主体兜底顺序（表里没有的类型才走到这儿）。
+ * **故意不含通名 `subject`**：`session.milestone.subject` 是提交标题，拿它当主体
+ * 会让两个同标题的提交撞成一条、后一条永不播。
+ */
+const GENERIC_SUBJECT_KEYS = [
+  'decision_id', 'milestone_key', 'session_id', 'job_id',
+  'pr_number', 'issue', 'fingerprint', 'target_decision_id', 'target_event_id', 'model',
+];
+
+/** 主体：先按类型取专用标识字段，再走兜底顺序。 */
 export function subjectOf(event) {
-  const order = ['subject', 'job_id', 'pr_number', 'issue', 'fingerprint', 'target_event_id', 'model'];
-  for (const k of order) {
+  const type = event && event.type;
+  const rule = TYPE_RULES[type];
+  const keys = rule ? [...rule.subjectKeys, ...GENERIC_SUBJECT_KEYS] : GENERIC_SUBJECT_KEYS;
+  for (const k of keys) {
     const v = event ? event[k] : null;
     if (v != null && String(v).trim() !== '') return `${k}=${String(v).trim()}`;
   }
-  return `type=${event && event.type ? event.type : ''}`;
+  return `type=${type || ''}`;
 }
 
 /** 易变字段（同一状态每轮都会变）——算 digest 时必须剔掉，否则每轮都是「新状态」。 */
 const VOLATILE = new Set(['ts', 'seq', 'event_id', 'machine', 'schema_version', 'digest']);
 
-/** 状态摘要哈希：事件自带 digest 优先（写口算过），否则拿去掉易变字段的规范化正文算。 */
+/**
+ * 状态摘要哈希：事件自带 `digest` 优先（`session.state` 的 schema 明说那一位就是
+ * 「播报闸内容维去重键的内容部分」，写口算好），否则拿去掉易变字段的规范化正文算。
+ */
 export function digestOf(event) {
   if (event && typeof event.digest === 'string' && event.digest.trim()) return event.digest.trim();
   const body = {};
@@ -146,23 +242,67 @@ export function dedupeKey(event) {
   return `${subjectOf(event)}${KEY_SEP}${digestOf(event)}`;
 }
 
+// ── 闸3 的急缓：读事件自己的 urgency ────────────────────────────────────
+
+/**
+ * 判一条事件走急还是缓。返回 { urgency, why, unjudged }。
+ * `unjudged=true` = 账面没判过（null/缺字段/值不认识），按缓走但不说成「判过是缓」。
+ */
+export function urgencyOf(event, derived) {
+  const type = event && event.type;
+  const rule = TYPE_RULES[type];
+  if (!rule) return { urgency: URGENCY_BATCH, unjudged: true, why: '类型不在播报面，按缓兜底' };
+  if (rule.urgency !== URGENCY_FROM_EVENT) {
+    return { urgency: rule.urgency, unjudged: false, why: `类型 ${type} 固定走${rule.urgency}` };
+  }
+  const has = Object.prototype.hasOwnProperty.call(event, 'urgency');
+  const raw = has ? event.urgency : undefined;
+  if (raw === URGENCY_INSTANT) {
+    return { urgency: URGENCY_INSTANT, unjudged: false, why: '事件自报 urgency=急 ⇒ 即时插播' };
+  }
+  if (raw === URGENCY_BATCH) {
+    return { urgency: URGENCY_BATCH, unjudged: false, why: '事件自报 urgency=缓 ⇒ 攒到窗末' };
+  }
+  if (raw === null || raw === undefined) {
+    return {
+      urgency: URGENCY_BATCH,
+      unjudged: true,
+      why: `urgency ${has ? '记的是 null' : '这一位没写'} = 写口没判过（#897 实测两种问用户的工具都拿不到）⇒ 按缓处理，不是「判过是缓」`,
+    };
+  }
+  const known = derived && Array.isArray(derived.urgencyEnum)
+    ? `schema 枚举=${derived.urgencyEnum.map((x) => String(x)).join('/')}`
+    : 'schema 里这一位的枚举没派生成';
+  return {
+    urgency: URGENCY_BATCH,
+    unjudged: true,
+    why: `urgency 值「${String(raw)}」不认识（${known}）⇒ 没查成，按缓处理`,
+  };
+}
+
 // ── 群订阅配置：读同一份群↔仓映射 ─────────────────────────────────────────
+
+function plainObject(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
 
 /**
  * 从已解析的 feishu-groups.json 取每群的 broadcast 节，补默认值。
  * `_` 开头的键是注释（沿用群映射表既有约定），不参与。
  * 返回 { groups, problems }：problems 非空即配置有毛病，调用方自己决定拒还是降级。
+ * **字段存在但类型不对 ⇒ 进 problems，不套默认值**：静默套默认等于把「没读成」
+ * 显示成「一切正常」，写坏的配置会变成错误的播报策略。
  */
 export function loadBroadcastGroups(groupsJson) {
   const problems = [];
-  if (!groupsJson || typeof groupsJson !== 'object' || Array.isArray(groupsJson)) {
+  if (!plainObject(groupsJson)) {
     return { groups: {}, problems: ['群映射表根不是对象 ⇒ 本次没读成，不是没有群'] };
   }
   const groups = {};
   for (const chatId of Object.keys(groupsJson).sort()) {
     if (chatId.startsWith('_')) continue;
     const v = groupsJson[chatId];
-    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+    if (!plainObject(v)) {
       problems.push(`群 ${chatId} 的映射不是对象`);
       continue;
     }
@@ -171,26 +311,32 @@ export function loadBroadcastGroups(groupsJson) {
       problems.push(`群 ${chatId} 的 kind 不认识：${String(v.kind)}`);
       continue;
     }
-    const b = v.broadcast && typeof v.broadcast === 'object' && !Array.isArray(v.broadcast) ? v.broadcast : {};
+    // broadcast 缺省 = 用默认；出现但不是对象 = 没读成，绝不静默当空配置
+    const hasB = Object.prototype.hasOwnProperty.call(v, 'broadcast');
+    if (hasB && !plainObject(v.broadcast)) {
+      problems.push(`群 ${chatId} 的 broadcast 不是对象（实际 ${JSON.stringify(v.broadcast)}）⇒ 没读成，不套默认值`);
+      continue;
+    }
+    const b = hasB ? v.broadcast : {};
     let subscribe;
-    if (b.subscribe === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(b, 'subscribe')) {
       subscribe = [...DEFAULT_SUBSCRIBE[kind]];
     } else if (!Array.isArray(b.subscribe)) {
-      problems.push(`群 ${chatId} 的 broadcast.subscribe 不是数组`);
+      problems.push(`群 ${chatId} 的 broadcast.subscribe 不是数组（实际 ${JSON.stringify(b.subscribe)}）⇒ 没读成，不套默认值`);
       continue;
     } else {
       const bad = b.subscribe.filter((c) => !BROADCAST_CLASSES.includes(c));
       if (bad.length) {
-        problems.push(`群 ${chatId} 订阅了不认识的类：${bad.join('/')}（认 ${BROADCAST_CLASSES.join('/')}）`);
+        problems.push(`群 ${chatId} 订阅了不认识的类：${bad.map((x) => String(x)).join('/')}（认 ${BROADCAST_CLASSES.join('/')}）`);
         continue;
       }
       subscribe = BROADCAST_CLASSES.filter((c) => b.subscribe.includes(c));
     }
     let dailyBudget;
-    if (b.dailyBudget === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(b, 'dailyBudget')) {
       dailyBudget = DEFAULT_DAILY_BUDGET[kind];
     } else if (!Number.isInteger(b.dailyBudget) || b.dailyBudget < 0) {
-      problems.push(`群 ${chatId} 的 broadcast.dailyBudget 要非负整数，实际 ${JSON.stringify(b.dailyBudget)}`);
+      problems.push(`群 ${chatId} 的 broadcast.dailyBudget 要非负整数，实际 ${JSON.stringify(b.dailyBudget)} ⇒ 没读成，不套默认值`);
       continue;
     } else {
       dailyBudget = b.dailyBudget;
@@ -228,9 +374,13 @@ function oneLine(s, cap = 160) {
   return t.length > cap ? `${t.slice(0, cap - 1)}…` : t;
 }
 
-/** 事件正文一句话：按固定优先序取第一个有值的字段，都没有就退回主体。 */
+/**
+ * 事件正文一句话：按固定优先序取第一个有值的字段，都没有就退回主体。
+ * 顺序照各类型的「那一句」排：question（待拍板）→ subject（里程碑的提交标题）
+ * → doing（会话态）→ summary/detail → why（事故的一句说明）→ title。
+ */
 export function eventHeadline(event) {
-  const order = ['summary', 'question', 'why', 'detail', 'title'];
+  const order = ['question', 'subject', 'doing', 'summary', 'detail', 'why', 'title'];
   for (const k of order) {
     const v = event ? event[k] : null;
     if (typeof v === 'string' && v.trim()) return oneLine(v);
@@ -249,24 +399,27 @@ export function renderMessage(event, cls) {
     const parts = [`[待拍板] ${eventHeadline(event)}`];
     if (Array.isArray(event.options) && event.options.length) {
       const labels = event.options
-        .map((o) => oneLine(typeof o === 'string' ? o : (o && (o.label || o.name)) || '', 40))
+        .map((o) => oneLine(typeof o === 'string' ? o : (o && o.label) || '', 40))
         .filter(Boolean);
       if (labels.length) parts.push(`选项：${labels.join(' / ')}`);
     }
-    if (event.recommend != null && String(event.recommend).trim()) {
-      parts.push(`推荐：${oneLine(event.recommend, 60)}`);
-    }
+    if (nonEmptyStr(event.recommend)) parts.push(`推荐：${oneLine(event.recommend, 60)}`);
     return parts.join('\n');
   }
-  return `[里程碑] ${eventHeadline(event)}`;
+  // 里程碑：session.milestone 有 kind（commit/land/pr-merge），job.closed 没有
+  const kindBit = nonEmptyStr(event.kind) ? `·${oneLine(event.kind, 16)}` : '';
+  return `[里程碑${kindBit}] ${eventHeadline(event)}`;
 }
 
-/** 窗末里程碑合成一条**三行**摘要（#891 闸3）。行数恒为 3，便于断言。 */
-export function renderDigest(items) {
+/**
+ * 窗末攒批合成一条**三行**摘要（#891 闸3）。行数恒为 3，便于断言。
+ * 按类分批：待拍板与里程碑各自一条，抬头不混——把待拍板塞进「里程碑」抬头会误标。
+ */
+export function renderDigest(items, cls = CLASS_MILESTONE) {
   const n = items.length;
   const head = items.slice(0, 3).map(({ event }) => oneLine(eventHeadline(event), 48));
   return [
-    `[里程碑] 窗末汇总 ${n} 条`,
+    `[${CLASS_LABEL[cls] || cls}] 窗末汇总 ${n} 条`,
     head.join('；') || '（无明细）',
     n > 3 ? `另有 ${n - 3} 条，@我问详情` : '明细 @我问详情',
   ].join('\n');
@@ -280,14 +433,14 @@ export function renderBudgetNotice(blockedCount) {
 // ── 主闸 ─────────────────────────────────────────────────────────────
 
 function normalizeState(state) {
-  const s = state && typeof state === 'object' ? state : {};
-  const day = typeof s.day === 'string' && s.day.trim() ? s.day.trim() : '';
+  const s = plainObject(state) ? state : {};
+  const day = nonEmptyStr(s.day) ? s.day.trim() : '';
   if (!day) throw new Error('state.day 必填（YYYY-MM-DD，调用方给「今天」；本文件不读时钟）');
   const seen = {};
-  for (const [k, v] of Object.entries(s.seen && typeof s.seen === 'object' ? s.seen : {})) {
+  for (const [k, v] of Object.entries(plainObject(s.seen) ? s.seen : {})) {
     seen[k] = new Set(Array.isArray(v) ? v : Object.keys(v || {}));
   }
-  const sentToday = s.sentToday && typeof s.sentToday === 'object' ? s.sentToday : {};
+  const sentToday = plainObject(s.sentToday) ? s.sentToday : {};
   return { day, windowClosing: s.windowClosing === true, seen, sentToday };
 }
 
@@ -295,7 +448,7 @@ function normalizeState(state) {
  * 五条闸的唯一判官。纯函数：不读时钟/文件/网络，不改入参。
  *
  * events —— 账本事件数组（原样，含 type/ts/machine/seq/event_id + 类型专属字段）
- * config —— { schema（解析后的 events schema，闭集派生用）,
+ * config —— { schema（解析后的 events schema，闭集与枚举派生用）,
  *             groups（loadBroadcastGroups 的产出）, render?, digestRender? }
  * state  —— { day: 'YYYY-MM-DD', windowClosing: bool,
  *             seen: { [chatId]: [dedupeKey…] }, sentToday: { [chatId]: N } }
@@ -310,8 +463,8 @@ export function decideBroadcast({ events, config, state } = {}) {
   if (!Array.isArray(events)) {
     throw new Error('events 必须是数组（本次没判成，不是没有事件）');
   }
-  const cfg = config && typeof config === 'object' ? config : {};
-  const groups = cfg.groups && typeof cfg.groups === 'object' ? cfg.groups : null;
+  const cfg = plainObject(config) ? config : {};
+  const groups = plainObject(cfg.groups) ? cfg.groups : null;
   if (!groups) throw new Error('config.groups 必填（loadBroadcastGroups 的产出）');
   const render = typeof cfg.render === 'function' ? cfg.render : renderMessage;
   const digestRender = typeof cfg.digestRender === 'function' ? cfg.digestRender : renderDigest;
@@ -341,10 +494,13 @@ export function decideBroadcast({ events, config, state } = {}) {
   };
 
   for (const m of derived.missing) {
-    why.push(`闸2 没查成：schema 闭集里没有「${m.type}」⇒「${m.cls}」这一类本轮播不出去（不是「没有这类事件」）`);
+    why.push(`闸2 没查成：schema 闭集里没有「${m.type}」⇒ 这个类型的事件本轮播不出去（不是「没有这类事件」）；它归「${m.cls}」类`);
+  }
+  if (!Array.isArray(derived.urgencyEnum)) {
+    why.push('闸3 没查成：schema 里 decision.pending.urgency 的枚举没派生成 ⇒ 认不出的取值只能按缓兜底');
   }
 
-  // 闸2：白名单三类（类型闭集派生自 schema，不另抄清单）
+  // 闸2：白名单三类（类型闭集派生自 schema，判据按类型分开）
   const ordered = [...events].sort(compareEvents);
   const passed = [];
   for (const e of ordered) {
@@ -355,14 +511,15 @@ export function decideBroadcast({ events, config, state } = {}) {
     }
     const cls = derived.typeToClass.get(type);
     if (!cls) {
-      drop(null, e, 2, `类型「${type}」不在播报白名单三类（${BROADCAST_CLASSES.join('/')}）⇒ 只进账不播`);
+      drop(null, e, 2, `类型「${type}」不在播报白名单（认 ${Object.keys(TYPE_RULES).sort().join('/')}）⇒ 只进账不播`);
       continue;
     }
-    if (!CLASS_RULES[cls].match(e)) {
-      drop(null, e, 2, `${type} 未达「${cls}」判据：${CLASS_RULES[cls].matchWhy} ⇒ 只进账不播`);
+    const verdict = TYPE_RULES[type].accept(e);
+    if (verdict !== true) {
+      drop(null, e, 2, `${type} 未达判据：${verdict}`);
       continue;
     }
-    passed.push({ event: e, cls });
+    passed.push({ event: e, cls, urg: urgencyOf(e, derived) });
   }
 
   // 闸5/1/3/4：逐群（chat_id 字典序，确定性）
@@ -377,8 +534,8 @@ export function decideBroadcast({ events, config, state } = {}) {
     const roundSeen = new Set(seen);
 
     const instant = [];
-    const batch = [];
-    for (const { event, cls } of passed) {
+    const batches = new Map(); // cls -> items[]（窗末按类各合一条，抬头不混）
+    for (const { event, cls, urg } of passed) {
       // 闸5：群维度订阅
       if (!subscribe.includes(cls)) {
         drop(chatId, event, 5, `本群未订阅「${cls}」（订阅=${subscribe.join('/') || '（空）'}）`);
@@ -396,13 +553,14 @@ export function decideBroadcast({ events, config, state } = {}) {
         continue;
       }
       roundSeen.add(key);
-      // 闸3：急缓分流
-      if (CLASS_RULES[cls].urgency === URGENCY_INSTANT) {
-        instant.push({ event, cls, key });
+      // 闸3：急缓分流——急看事件自己的 urgency，缓攒到窗末
+      if (urg.urgency === URGENCY_INSTANT) {
+        instant.push({ event, cls, key, urg });
       } else if (!st.windowClosing) {
-        drop(chatId, event, 3, '里程碑攒到窗末合成一条三行摘要（deferred：本轮不发，不是丢弃）', true);
+        drop(chatId, event, 3, `${urg.why}；非窗末 ⇒ 攒到窗末合成一条三行摘要（deferred：本轮不发，不是丢弃）`, true);
       } else {
-        batch.push({ event, cls, key });
+        if (!batches.has(cls)) batches.set(cls, []);
+        batches.get(cls).push({ event, cls, key, urg });
       }
     }
 
@@ -421,31 +579,35 @@ export function decideBroadcast({ events, config, state } = {}) {
           dedupeKey: it.key,
           eventIds: [it.event.event_id],
           gate: 3,
-          why: `${CLASS_RULES[it.cls].matchWhy}；预算 ${budget} 已用 ${budget - remaining}`,
+          why: `${it.urg.why}；预算 ${budget} 已用 ${budget - remaining}`,
         });
       } else {
         blocked.push(it);
         drop(chatId, it.event, 4, `今日预算 ${budget} 条已用满（进本轮前已用 ${used}）⇒ 只发「还有 X 条，@我问详情」`);
       }
     }
-    if (batch.length) {
+    // 窗末批次按 BROADCAST_CLASSES 固定顺序发，每类一条（确定性，不吃 Map 插入序）
+    for (const cls of BROADCAST_CLASSES) {
+      const batch = batches.get(cls);
+      if (!batch || batch.length === 0) continue;
       if (remaining > 0) {
         remaining -= 1;
+        const unjudged = batch.filter((b) => b.urg.unjudged).length;
         emit({
           chatId,
-          class: CLASS_MILESTONE,
+          class: cls,
           urgency: URGENCY_BATCH,
           kind: 'digest',
-          text: digestRender(batch),
+          text: digestRender(batch, cls),
           dedupeKey: batch.map((b) => b.key).join(KEY_SEP),
           eventIds: batch.map((b) => b.event.event_id),
           gate: 3,
-          why: `窗末把 ${batch.length} 条里程碑合成一条三行摘要；预算 ${budget} 已用 ${budget - remaining}`,
+          why: `窗末把 ${batch.length} 条「${cls}」合成一条三行摘要${unjudged ? `（其中 ${unjudged} 条 urgency 没判过，按缓收进来）` : ''}；预算 ${budget} 已用 ${budget - remaining}`,
         });
       } else {
         for (const it of batch) {
           blocked.push(it);
-          drop(chatId, it.event, 4, `今日预算 ${budget} 条已用满（进本轮前已用 ${used}）⇒ 里程碑摘要也不发`);
+          drop(chatId, it.event, 4, `今日预算 ${budget} 条已用满（进本轮前已用 ${used}）⇒ 「${cls}」窗末摘要也不发`);
         }
       }
     }
