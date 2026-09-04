@@ -464,6 +464,8 @@ function escalateBody(a, marker) {
     `- 详情：${a.why}`,
     a.pr ? `- PR：${prLink(a.pr)}` : a.issue ? `- issue：${issueLink(a.issue)}` : '',
     ``,
+    `- 机制判定（处置人必填，2026-09-04 拍板）：这错在制度生效前还会再犯吗？会 → 机制改在哪（垫片/开单/PR 链接）；不会 → 为什么。答不出就写「没查成」，不许留空。`,
+    ``,
     `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
   ].filter(Boolean).join('\n');
 }
