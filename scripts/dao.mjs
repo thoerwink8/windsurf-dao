@@ -176,6 +176,7 @@ import {
   buildReviewerInject,
   assertInjectText,
   assertDispatchInjectPlan,
+  mirasimVerbGuard,
   encodeSendText,
   runGh,
   stampIssueLabels,
@@ -4182,6 +4183,8 @@ function cmdReviewPendingDrain(args) {
 }
 
 function cmdSend(args) {
+  const mira = mirasimVerbGuard('send', { executor: args.executor });
+  if (mira.refuse) fail(mira.error, { mirasim: true, pointTo: mira.pointTo });
   if (args.text == null) fail('send 要 --text');
   let terminal = args.terminal || null;
   let resolved = null;
@@ -4216,6 +4219,8 @@ function cmdSend(args) {
  * 落库无结算效力 / 缺身份 / 错 pane 一律非零并报「未结算」。
  */
 function cmdNotify(args) {
+  const mira = mirasimVerbGuard('notify', { executor: args.executor, type: args.type });
+  if (mira.refuse) fail(mira.error, { mirasim: true, pointTo: mira.pointTo });
   const r = deliverMessage({
     to: args.to || null,
     subject: args.subject,
@@ -4506,6 +4511,8 @@ function cmdBoardReset(args) {
 }
 
 function cmdAsk(args) {
+  const mira = mirasimVerbGuard('ask', { executor: args.executor });
+  if (mira.refuse) fail(mira.error, { mirasim: true, pointTo: mira.pointTo });
   if (!args.question) fail('ask 要 --question');
   const parsedTimeout = parseAskTimeoutMs(args.timeoutMs);
   if (!parsedTimeout.ok) fail(parsedTimeout.error);
