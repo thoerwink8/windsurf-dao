@@ -8,6 +8,10 @@
 //   ④ decision.pending 的 recommend 落空 / options 只有一条 / option 缺 label 拒
 //   ⑤ W5 写口（#897）的真实 payload 必须过——「没查成」记 null 是合法的，
 //      拿不到的字段不设必填（形状对不上就等于每条事件静默丢，hook 侧永远 exit 0）
+//   ⑥ 数组元素对象里的字段（options[].label / description）类型也判到底，且判到盘上——
+//      build 抛而 writeEvent 照落等于没修，故非法样本另测「目录里一条没多」
+//   ⑦ milestone_key 是真拦得住的幂等键：同 key 改 ts/seq 重放不得落第二份，
+//      换 key / 换 repo 仍照落（一刀切全拒会让 hook 从第二个里程碑起全哑）
 // 闭集唯一权威 = schemas/events.schema.json；本套另核 scripts/event-write.mjs 头注的
 // [闭集镜子] 段与它双向一致——镜子漂了就报红，这就是「不许在别处另抄清单」的那道警报。
 // 变异自证：把 schema 里某条必填删掉，本套必须翻红（证据贴 PR 正文）。
@@ -448,6 +452,124 @@ describe('session-events（#891 W1）', () => {
       const bad = ['在途', '沉默', '待拍', '收尾'].filter(ph => throws(() => build('session.state', { ...STATE, phase: ph })));
       assert.ok(bad.length === 0, '纯 enum 字段不被误伤  →  误拒 ' + bad.join(','));
     });
+  });
+
+  // #893 审官红项 1：类型校验原先只派生到 items.type 第一层，「元素是对象」判完就收工，
+  // 对象里的字段没人管——options[].description 写 123 与 schema 声明的 string|null 相悖，
+  // 却一路落盘。嵌套处静默失效比没有校验更坏：它让人以为所有声明类型都受写入闸保护。
+  it('⑪ 数组元素对象里的字段也照 schema 判类型（嵌套不留静默洞）', async (t) => {
+    const nested = (opts) => ({ ...PENDING, options: opts, recommend: null });
+    await t.test('options[].description 写数字 → 拒（schema 声明 string|null）', () => {
+      assert.ok(throws(() => build('decision.pending', nested([{ label: 'A', description: 123 }, { label: 'B' }]))),
+        'options[].description 写数字 → 拒');
+    });
+    await t.test('报错点到出事那一格（options 第 1 项.description）与期望类型', () => {
+      let msg = '';
+      try { build('decision.pending', nested([{ label: 'A', description: 123 }, { label: 'B' }])); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('description') && msg.includes('第 1 项') && msg.includes('string') && msg.includes('null') && msg.includes('integer'),
+        '报错点到 options 第 1 项.description  →  ' + msg);
+    });
+    await t.test('第二条 option 出事也点得出（不是只看第一条）', () => {
+      let msg = '';
+      try { build('decision.pending', nested([{ label: 'A' }, { label: 'B', description: ['两句'] }])); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('第 2 项') && msg.includes('description'), '第二条 option 出事也点得出  →  ' + msg);
+    });
+    await t.test('options[].label 写数字 → 拒（声明 string）', () => {
+      assert.ok(throws(() => build('decision.pending', nested([{ label: 123 }, { label: 'B' }]))), 'options[].label 写数字 → 拒');
+    });
+    // 联合类型别在嵌套层被误伤：null 声明里列了就得放，字段不写更不该报类型错
+    await t.test('options[].description 记 null 合法（声明里列了 null）', () => {
+      assert.ok(!throws(() => build('decision.pending', nested([{ label: 'A', description: null }, { label: 'B', description: '有代价' }]))),
+        'options[].description 记 null 合法');
+    });
+    await t.test('options[].description 整个不写仍合法（缺字段归必填检查，不是类型错）', () => {
+      assert.ok(!throws(() => build('decision.pending', nested([{ label: 'A' }, { label: 'B' }]))), 'description 不写仍合法');
+    });
+    await t.test('option 多带 schema 没声明的字段仍合法（additionalProperties: true）', () => {
+      assert.ok(!throws(() => build('decision.pending', nested([{ label: 'A', hotkey: 1 }, { label: 'B' }]))), 'option 多带未声明字段仍合法');
+    });
+    // 「拒」必须是拒到盘上：build 抛而 writeEvent 照落，等于没修
+    await t.test('非法 description 不落盘（真写一次，目录里一条没多）', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-893-nest-'));
+      const bad = () => writeEvent({ dir, type: 'decision.pending', ts: TS, machine: MACHINE, seq: 0, schema,
+        payload: nested([{ label: 'A', description: 123 }, { label: 'B' }]) });
+      const rejected = throws(bad);
+      const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+      fs.rmSync(dir, { recursive: true, force: true });
+      assert.ok(rejected && n === 0, '非法 description 不落盘  →  ' + `rejected=${rejected} files=${n}`);
+    });
+    await t.test('CLI 写非法 description 退出码非 0 且不落盘', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-893-nest-cli-'));
+      const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'event-write.mjs'),
+        '--type', 'decision.pending', '--dir', dir, '--machine', MACHINE, '--ts', TS,
+        '--decision-id', 'd-893', '--question', '嵌套类型该不该判？',
+        '--options', '[{"label":"A","description":123},{"label":"B"}]',
+        '--recommend', 'null', '--urgency', 'null', '--why', 'null'], { encoding: 'utf8', cwd: REPO });
+      const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+      fs.rmSync(dir, { recursive: true, force: true });
+      assert.ok(r.status !== 0 && n === 0, 'CLI 写非法 description → 拒  →  ' + `status=${r.status} files=${n} ` + (r.stderr || '').trim().slice(0, 120));
+    });
+  });
+
+  // #893 审官红项 2：schema 说 milestone_key 是「同一动作重复触发靠它防重复计账」的幂等键，
+  // 而 event_id 是含 ts/seq 的整事件哈希——同一次 commit 换个时间戳重放就是另一个 event_id，
+  // 两份里程碑都进账。承诺是设计本意，故补写入闸实现，不收窄 schema。
+  it('⑫ milestone_key 是写入闸真拦的幂等键（改 ts/seq 重放拦得住）', async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-893-idem-'));
+    const put = (payload, over = {}) => writeEvent({ dir, type: 'session.milestone', ts: TS, machine: MACHINE, seq: 0, payload, schema, ...over });
+    const count = () => fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+    const first = put(MILESTONE);
+    await t.test('第一条正常落盘', () => {
+      assert.ok(fs.existsSync(first.path) && count() === 1, '第一条正常落盘  →  files=' + count());
+    });
+    // 审官的真写复现就是这一条：只改 ts/seq/evidence/subject，同 key 落了第二份
+    await t.test('同 key 改 ts/seq 且 payload 不同 → 拒，且目录里没多出文件', () => {
+      const before = count();
+      const rejected = throws(() => put({ ...MILESTONE, evidence: ['exit_code=0', 'commit:a1b2c3d', '第二次触发'], subject: '换了个标题' },
+        { ts: TS2, seq: 9 }));
+      assert.ok(rejected && count() === before, '同 key 重放 → 拒  →  ' + `rejected=${rejected} files=${count()}`);
+    });
+    await t.test('报错点名 milestone_key 与已在账的那个文件', () => {
+      let msg = '';
+      try { put({ ...MILESTONE, subject: '又一次' }, { ts: TS2, seq: 10 }); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('milestone_key') && msg.includes('commit:a1b2c3d') && msg.includes(path.basename(first.path)),
+        '报错点名 milestone_key 与已在账文件  →  ' + msg);
+    });
+    // 分工要说清：完全相同的重写连文件名都一样（熵取事件内容哈希），先撞「写一次即不可变」
+    // 那条；幂等键管的是「同一动作换了 ts/seq/描述」这一类——新闸补的是老闸拦不住的那半边。
+    await t.test('完全相同重写仍走既有不可变判据（新闸没顶掉老闸）', () => {
+      let msg = '';
+      try { put(MILESTONE); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('写一次即不可变') && !msg.includes('milestone_key'), '完全相同重写走既有判据  →  ' + msg);
+    });
+    // 不是一刀切全拒：换动作照落，否则 hook 从第二个里程碑起就全哑了
+    await t.test('换 milestone_key（真是另一件事）照样落盘', () => {
+      const w = put({ ...MILESTONE, kind: 'pr-merge', milestone_key: 'pr-merge:pr-893', pr_number: 893 }, { ts: TS2, seq: 11 });
+      assert.ok(fs.existsSync(w.path) && count() === 2, '换 key 照样落盘  →  files=' + count());
+    });
+    await t.test('同 key 不同 repo 照样落盘（land 的锚点是命令哈希，两个仓会撞）', () => {
+      const w = put({ ...MILESTONE, repo: 'another-repo' }, { ts: TS2, seq: 12 });
+      assert.ok(fs.existsSync(w.path) && count() === 3, '同 key 不同 repo 照样落盘  →  files=' + count());
+    });
+    await t.test('幂等键只挂声明了它的类型：session.state 每轮一条仍连写得下去', () => {
+      const a = writeEvent({ dir, type: 'session.state', ts: TS, machine: MACHINE, seq: 13, payload: STATE, schema });
+      const b = writeEvent({ dir, type: 'session.state', ts: TS2, machine: MACHINE, seq: 14, payload: { ...STATE, doing: '下一轮', digest: 'f60718293041a2b3' }, schema });
+      assert.ok(fs.existsSync(a.path) && fs.existsSync(b.path), 'session.state 连写两条仍合法');
+    });
+    await t.test('CLI 同 key 第二次退出码非 0 且不落盘', () => {
+      const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'w1-893-idem-cli-'));
+      const run = (over) => spawnSync(process.execPath, [path.join(REPO, 'scripts', 'event-write.mjs'),
+        '--type', 'session.milestone', '--dir', d2, '--machine', MACHINE,
+        '--kind', 'commit', '--repo', 'windsurf-dao', '--milestone-key', 'commit:deadbee',
+        '--commit', 'deadbee', ...over], { encoding: 'utf8', cwd: REPO });
+      const one = run(['--ts', TS, '--evidence', '["exit_code=0"]']);
+      const two = run(['--ts', TS2, '--evidence', '["exit_code=0","第二次触发"]']);
+      const n = fs.readdirSync(d2).filter(f => f.endsWith('.json')).length;
+      fs.rmSync(d2, { recursive: true, force: true });
+      assert.ok(one.status === 0 && two.status !== 0 && n === 1,
+        'CLI 同 key 第二次 → 拒  →  ' + `一=${one.status} 二=${two.status} files=${n} ` + (two.stderr || '').trim().slice(0, 120));
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('⑨ 派生注释镜子 = schema 闭集（不许在别处另抄清单）', async (t) => {

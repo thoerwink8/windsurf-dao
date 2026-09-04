@@ -436,7 +436,7 @@
               "minItems": 1,
               "description": "成功判据的出处，一项一条可复查的证据，如 [\"exit_code=0\", \"commit:a1b2c3d\"]，探头没查成时加一条写清（如 \"git 探头没查成：not a git repository\"）。形状与 attr.* / audit.* 的 evidence 一致（字符串数组）——同名同形，读端不必按 type 分支（2026-09-04 帅位拍板：不留会漂的形状，注释不是闸）。空数组写入即拒：里程碑没有证据就不该写"
             },
-            "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点（commit 短 sha / pr-<n> / 命令哈希）。同一动作重复触发靠它防重复计账" },
+            "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点（commit 短 sha / pr-<n> / 命令哈希）。同一动作重复触发靠它防重复计账——写入即校验：(type, milestone_key, repo) 已入账即拒，改 ts/seq 重放也拒（event_id 含 ts/seq，拦不住重放）。带 repo 是因为 land 那一支的锚点是命令哈希，同一条命令在两个仓跑出的哈希相同，不带 repo 会把第二个仓的真里程碑当重复吞掉" },
             "branch": { "type": ["string", "null"], "description": "git 探头没查成为 null" },
             "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
             "subject": { "type": ["string", "null"], "description": "提交标题；git 探头没查成为 null" },

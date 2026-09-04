@@ -5,9 +5,11 @@
 // 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
 // 写入即校验（判据一律从 schema 派生，本文件不抄清单/数字/类型名）：类型在闭集内、
-// 必填字段齐、enum 字段取值在闭集内、字段类型合 type 声明（含联合类型与数组元素）、
-// 声明 minItems 的数组够条数、attr 责任向量不变量（份额和=1 或全 0 且低置信）、
-// decision.pending 的 recommend 命中某条 option。
+// 必填字段齐、enum 字段取值在闭集内、字段类型合 type 声明（含联合类型、数组元素、
+// 以及数组元素对象里的字段——逐层递归到底）、声明 minItems 的数组够条数、
+// attr 责任向量不变量（份额和=1 或全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
+// 写入侧另有两道语义防重：每 job 一次性的类型、以及 schema 声明的幂等键（见 ONE_PER_JOB /
+// IDEMPOTENT_KEY）——event_id 含 ts/seq，光靠它拦不住「同一动作换个时间戳再记一笔」。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
@@ -75,6 +77,26 @@ function declaredTypes(spec) {
 }
 
 /**
+ * 一处 schema 声明 → 一棵类型形状树 { types, items, props }，items/props 再递归下去。
+ * 必须递归而不是只取一层：decision.pending 的 options 是 array of object，
+ * 「元素是对象」在第一层就判完了，而 options[].description 声明的 string|null 落在第二层——
+ * 只派生到 items.type 时嵌套字段写 123 照样落盘，schema 的类型承诺在嵌套处静默失效
+ * （#893 审官红项 1 实咬）。本函数只读 schema，类型名一个不抄。
+ * 三处都没声明就返回 null（如纯 enum 的 phase），调用方据此整字段不登记，交给 enumInvariant。
+ */
+function typeSpecOf(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  const types = declaredTypes(spec);
+  const items = typeSpecOf(spec.items);
+  let props = null;
+  for (const [f, sub] of Object.entries(spec.properties || {})) {
+    const s = typeSpecOf(sub);
+    if (s) (props ??= new Map()).set(f, s);
+  }
+  return types || items || props ? { types, items, props } : null;
+}
+
+/**
  * 事件类型闭集 + 每类型必填字段 + 每类型枚举字段 + 每类型数组下限 + 每类型字段类型
  * （全部派生自 schema oneOf，闭集 = oneOf[].title；本文件不另抄任何清单、数字或类型名）。
  */
@@ -100,8 +122,8 @@ export function schemaMeta(schema) {
       if (RESERVED.includes(f)) continue;
       if (Array.isArray(spec?.enum)) acc.enums.set(f, spec.enum);
       if (spec?.type === 'array' && Number.isInteger(spec.minItems)) acc.mins.set(f, spec.minItems);
-      const types = declaredTypes(spec);
-      if (types) acc.types.set(f, { types, items: declaredTypes(spec.items) });
+      const shape = typeSpecOf(spec);
+      if (shape) acc.types.set(f, shape);
     }
   };
   for (const def of schema.oneOf || []) {
@@ -142,22 +164,31 @@ function typeAllowed(actual, allowed) {
 //      （pending_decision_id / urgency 的 null 合法，pr_number 写 "12" 非法）；
 //   ② 数组先判「是数组」再判元素：typeof [] === 'object'，光看 typeof 会把数组当对象放过，
 //      跟上一轮 minItems 那个「字符串也有 .length」是同一个坑换了形状；
-//   ③ 字段整个不写 = 缺字段，归必填检查，这里不管（identity 拿不到就别写那一条靠它）。
+//   ③ 字段整个不写 = 缺字段，归必填检查，这里不管（identity 拿不到就别写那一条靠它）；
+//   ④ 数组元素若是对象，还要按 items.properties 继续往下判——「元素是对象」这一层判完
+//      不等于对象里的字段合法（#893 审官红项 1：options[].description 写 123 曾静默落盘）。
+// path 一路拼出来（refs 第 2 项 / options 第 1 项.description），报错要点到出事的那一格，
+// 而不是只报最外层字段名——嵌套结构里「options 类型非法」等于没说。
+function checkType(path, v, spec) {
+  if (!spec) return;
+  const actual = jsonTypeOf(v);
+  if (spec.types && !typeAllowed(actual, spec.types)) {
+    throw new Error(`字段 ${path} 类型非法：schema 声明 ${spec.types.join('|')}，实际 ${actual}`);
+  }
+  if (actual === 'array' && spec.items) {
+    for (let i = 0; i < v.length; i++) checkType(`${path} 第 ${i + 1} 项`, v[i], spec.items);
+  }
+  if (actual === 'object' && spec.props) {
+    for (const [f, sub] of spec.props) {
+      if (v[f] !== undefined) checkType(`${path}.${f}`, v[f], sub); // 不写 = 缺字段，归必填检查
+    }
+  }
+}
+
 function typeInvariant(types, p) {
   for (const [field, spec] of types || []) {
-    const v = p[field];
-    if (v === undefined) continue;
-    const actual = jsonTypeOf(v);
-    if (!typeAllowed(actual, spec.types)) {
-      throw new Error(`字段 ${field} 类型非法：schema 声明 ${spec.types.join('|')}，实际 ${actual}`);
-    }
-    if (actual !== 'array' || !spec.items) continue;
-    for (let i = 0; i < v.length; i++) {
-      const et = jsonTypeOf(v[i]);
-      if (!typeAllowed(et, spec.items)) {
-        throw new Error(`字段 ${field} 第 ${i + 1} 项类型非法：schema 声明 ${spec.items.join('|')}，实际 ${et}`);
-      }
-    }
+    if (p[field] === undefined) continue;
+    checkType(field, p[field], spec);
   }
 }
 
@@ -287,9 +318,34 @@ function scanJobType(dir, type, jobId) {
   return null;
 }
 
+// 语义幂等键：schema 把 session.milestone.milestone_key 定义成「同一动作重复触发靠它
+// 防重复计账」的键，但 event_id 是整个事件（含 ts/seq）的哈希——同一次 commit 换个时间戳
+// 重放就是另一个 event_id，两份里程碑都进账（#893 审官红项 2 真写复现出两个文件）。
+// 承诺是设计本意，所以补实现而不是收窄 schema：写入前按 (type, 键值, scope) 查重。
+//   scope 带 repo 的理由：milestone_key = kind + 落地锚点，land 那一支的锚点是命令哈希，
+//   同一条 `node scripts/land.mjs` 在两个仓跑出的哈希相同——不带 repo 会把第二个仓的
+//   真里程碑当重复吞掉。代价说清：repo 探头没查成记 null 时 null 自成一格，
+//   同 key 的 null 版与具名版会各落一份——那两条究竟是不是同一件事，账本此刻确实不知道，
+//   宁可留两条可查的记录，也不假装知道。
+const IDEMPOTENT_KEY = new Map([
+  ['session.milestone', { field: 'milestone_key', scope: ['repo'] }],
+]);
+
+function scanIdempotentKey(dir, event, { field, scope }) {
+  const key = event[field];
+  if (key === undefined || key === null) return null; // 缺键归必填检查，这里不管
+  if (!existsSync(dir)) return null;
+  for (const [f, e] of dirIndex(dir)) {
+    if (!e || e.type !== event.type || e[field] !== key) continue;
+    if (scope.every(s => (e[s] ?? null) === (event[s] ?? null))) return f;
+  }
+  return null;
+}
+
 /**
  * 写一事件一文件：<dir>/<ulid>-<machine>.json。
- * 三铁律守卫：①已存在同文件拒绝（写一次即不可变）；②同 event_id 已入账拒绝（防重复）。
+ * 三铁律守卫：①已存在同文件拒绝（写一次即不可变）；②同 event_id 已入账拒绝（防重复）；
+ * ③声明了幂等键的类型，同键已入账拒绝——event_id 含 ts/seq，②拦不住换时间戳重放。
  * 文件名确定性：熵取事件内容哈希（同一事件重跑得同一文件名，天然幂等报错）。
  */
 export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }) {
@@ -312,6 +368,15 @@ export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }
     : null;
   if (jobDup) {
     throw new Error(`该 job 已有 ${event.type} 事件（${jobDup}）；每 job 一次，防重复计账——重复派单请另立 job_id`);
+  }
+  const idem = IDEMPOTENT_KEY.get(event.type);
+  const keyDup = idem ? scanIdempotentKey(dir, event, idem) : null;
+  if (keyDup) {
+    const where = idem.scope.map(s => `${s}=${JSON.stringify(event[s] ?? null)}`).join(' ');
+    throw new Error(
+      `已有同 ${idem.field}=${JSON.stringify(event[idem.field])}（${where}）的 ${event.type} 事件（${keyDup}）；`
+      + `${idem.field} 是幂等键，同一动作重复触发只记一笔——真是另一件事请换 ${idem.field}`,
+    );
   }
   mkdirSync(dir, { recursive: true });
   // 原子写：先写同目录临时文件再 rename——进程中途崩溃留的是 .tmp 残件
