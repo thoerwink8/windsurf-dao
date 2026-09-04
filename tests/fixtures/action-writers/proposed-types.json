@@ -1,6 +1,7 @@
 {
-  "why": "W5（#891 动作触发写口）要写的三个事件类型在 schemas/events.schema.json 里还没有：decision.pending / decision.resolved 归 W1（issue #891 期一第 1 条只列了 session.state 与 decision.pending），session.milestone 是 W5 的提议（现有 job.closed 不能复用——它是能力账正样本，被收口路径独占写，从 Bash hook 抢写只能填 merged_by=unknown，会污染归因）。测试把这三条**追加**到真 schema 上组合出临时 schema，因此不复制真 schema 的任何内容，不会随它漂移。",
-  "retire": "这三条落进 schemas/events.schema.json 之后，本夹具连同 tests/action-writers.test.js 里的『指针自退役』那条断言一起删。那条断言就是本夹具的报警器：真 schema 一旦已含同名类型，它当场报红。",
+  "why": "W5（#891 动作触发写口）要写的三个事件类型，在本分支基线（master）的 schemas/events.schema.json 里还没有 —— 它们归 W1（PR #893）。本夹具是 **#893 合并前的临时替身**，形状照 #893 的 39d5556 逐字对齐（含帅位 2026-09-04 拍板的 evidence 字符串数组化）。测试只在真 schema 还没有该类型时才拿这里的定义补位（见 composedSchema），所以 #893 合并后真 schema 自动生效，这份夹具当场失效。",
+  "retire": "#893 合并后立刻删本文件 + tests/action-writers.test.js 里「提议类型夹具的自退役报警」整组断言。那组断言就是本夹具的报警器：真 schema 一旦含同名类型，它当场报红。",
+  "aligned_with": "PR #893 分支 feat/891-session-events @ 39d5556（含帅位拍板的 evidence 数组化）——2026-09-04 拿那棵树的真 schema + 真 event-writer 跑过 W5 实产，六条全过，见 PR #897 正文「联调实证」",
   "oneOf": [
     {
       "title": "decision.pending",
@@ -15,20 +16,23 @@
             "question": { "type": "string" },
             "options": {
               "type": "array",
+              "description": "空数组 = 开放问题（问用户的工具允许不给选项）；非空时至少两条（只有一条即拒）",
               "items": {
                 "type": "object",
                 "properties": {
                   "label": { "type": "string" },
                   "description": { "type": ["string", "null"] }
-                }
+                },
+                "required": ["label"],
+                "additionalProperties": true
               }
             },
-            "recommend": { "type": ["string", "null"], "description": "约定 = 第一个选项（AGENTS.md：推荐项放第一项）" },
-            "urgency": { "type": ["string", "null"], "description": "两种问用户的工具入参里都没有固定位 ⇒ 允许 null（没查成，不猜）" },
+            "recommend": { "type": ["string", "null"], "description": "非 null 时必须等于某条 option 的 label；开放问题或读不到就 null" },
+            "urgency": { "enum": ["急", "缓", null], "description": "null = 写口没查成（两种问用户的工具入参里都没有这一位），不是「判过是缓」" },
             "why": { "type": ["string", "null"] },
-            "asked_by": { "type": "string", "description": "触发写口的工具名" }
+            "asked_by": { "type": "string", "description": "W5 加的可选字段：触发写口的工具名" }
           },
-          "required": ["decision_id", "question", "options", "recommend", "urgency", "why", "asked_by"],
+          "required": ["decision_id", "question", "options", "recommend", "urgency", "why"],
           "additionalProperties": true
         }
       ]
@@ -42,12 +46,13 @@
           "description": "拍板结果：对上 decision.pending 那条。写口 = 同两个工具的 PostToolUse。",
           "properties": {
             "type": { "const": "decision.resolved" },
-            "target_decision_id": { "type": "string" },
-            "chosen": { "type": "array", "items": { "type": "string" } },
-            "freeform": { "type": "boolean", "description": "用户答的不在选项里（自由输入）" },
-            "by": { "type": "string" }
+            "target_decision_id": { "type": "string", "description": "指 pending 的 decision_id，不是 event_id" },
+            "chosen": { "type": "array", "items": { "type": "string" }, "description": "单选也是一元数组——不留字符串/数组两形让读端分支" },
+            "by": { "enum": ["用户", "帅"] },
+            "note": { "type": "string" },
+            "freeform": { "type": "boolean", "description": "W5 加的可选字段：用户答的不在选项里" }
           },
-          "required": ["target_decision_id", "chosen", "freeform", "by"],
+          "required": ["target_decision_id", "chosen", "by"],
           "additionalProperties": true
         }
       ]
@@ -58,17 +63,25 @@
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
-          "description": "里程碑（提交·落地·合并）。写口 = Bash 的 PostToolUse，命令真成功才写；evidence 记清这条 ✓ 从哪读回来。",
+          "description": "里程碑（提交·落地·合并）。写口 = Bash 的 PostToolUse，命令真成功才写。",
           "properties": {
             "type": { "const": "session.milestone" },
             "kind": { "enum": ["commit", "land", "pr-merge"] },
-            "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不产生（#891 要求路径不进事件）" },
+            "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不进事件" },
+            "evidence": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "成功判据的出处，一项一条可复查的证据（例：[\"exit_code=0\",\"commit:a1b2c3d\"]），探头没查成时加一条写清。帅位 2026-09-04 拍板与 attr.* / audit.* 的 evidence 统一成字符串数组——同名不同形是读端的坑。空数组写入即拒。"
+            },
+            "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点" },
             "branch": { "type": ["string", "null"] },
             "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
             "subject": { "type": ["string", "null"] },
             "pr_number": { "type": ["integer", "null"] },
-            "milestone_key": { "type": "string", "description": "幂等键：kind + 落地锚点" },
-            "evidence": { "type": "string", "description": "成功判据出处，例如 exit_code=0；git 探头查到了" }
+            "session_id": { "type": ["string", "null"] },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"], "description": "可选；判不出身份时整个字段别写，别写 null" },
+            "refs": { "type": "array", "items": { "type": "string" } }
           },
           "required": ["kind", "repo", "evidence", "milestone_key"],
           "additionalProperties": true

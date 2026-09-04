@@ -16,7 +16,12 @@
 //    本文件不重复实现（两份安全过滤器必然漂移，见 redact.js 头注）。
 // 5. 「没查成」与「查过没事」必须分开形：拿不到退出码 ⇒ bashOutcome().known=false ⇒
 //    **不写里程碑**（fail-closed），不是「当成功写」。里程碑 payload 的 evidence 字段永远
-//    写清这条 ✓ 是从哪读回来的。
+//    写清这条 ✓ 是从哪读回来的；它是**字符串数组**（与 attr.* / audit.* 的 evidence 同形，
+//    帅位 2026-09-04 拍板统一 —— 同名不同形是读端的坑）。
+//    ⚠ 写入侧（event-writer）**不校验 JSON Schema 的 type**，只校验必填、enum 与跨字段不变量
+//    （PR #893 自述）。所以本文件产出的形状与 schema 声明的 type 若对不上，事件照样落盘、
+//    没有任何东西会当场报警。报警器在 tests/action-writers.test.js 的
+//    「payload 形状必须符合权威 schema 声明」那一组：它拿 schema 声明的 type 逐字段核实产。
 // 6. 宿主字段名有两套说法（PostToolUse 的出参：官方文档写 tool_response，本机 hook 文档缓存
 //    写 tool_result），且 MCP 侧回包形状与内置工具不同 ⇒ 本文件对出参**逐形状试**，并把命中
 //    的形状名写进事件（chosen_source / evidence），读账的人因此分得清「读到了」与「读成什么样」。
@@ -160,6 +165,25 @@ export function normalizeAsk(toolName, toolInput) {
 }
 
 /**
+ * decision.pending 事件里 options / recommend 的合法形状（schema 的跨字段不变量，PR #893）：
+ * 空数组 = 开放问题（`im_ask_user` 可以不给选项），此时 recommend 必须 null；
+ * **只有一条即拒**（一个选项不叫拍板）。
+ * 单选项这一路降级成开放问题，但那条 label **不许静默丢** —— 塞进 options_note 留痕。
+ * 只用于 pending 的 payload；normalizeAsk 那边保持忠于入参（resolved 侧判 freeform 要用真选项）。
+ */
+export function pendingOptionsOf(item) {
+  const opts = (item && item.options) || [];
+  if (opts.length === 1) {
+    return {
+      options: [],
+      recommend: null,
+      options_note: `只有 1 个选项，按开放问题记（一个选项不叫拍板，schema 拒单选项）：${opts[0].label}`,
+    };
+  }
+  return { options: opts, recommend: opts.length ? item.recommend : null, options_note: null };
+}
+
+/**
  * decision_id：只由「同一次提问 Pre / Post 两侧都拿得到的东西」算 —— session_id + 工具名 +
  * 题干 + 选项 label + 题序。**刻意不含 ts**（Pre 与 Post 的 ts 必然不同，含了就对不上）。
  */
@@ -192,14 +216,16 @@ export function buildDecisionPending({ event, ts, redact } = {}) {
   if (!norm.ok) return { ok: false, writes: [], reason: norm.reason };
   const writes = norm.items.map(item => {
     const decisionId = decisionIdOf({ sessionId: e.session_id || e.sessionId, toolName, item });
+    const shape = pendingOptionsOf(item);
     return {
       type: DECISION_PENDING_TYPE,
       decision_id: decisionId,
       payload: redactDeep({
         decision_id: decisionId,
         question: item.question,
-        options: item.options,
-        recommend: item.recommend,
+        options: shape.options,
+        recommend: shape.recommend,
+        ...(shape.options_note ? { options_note: shape.options_note } : {}),
         urgency: item.urgency,
         why: item.why,
         why_source: item.why_source,
@@ -504,9 +530,13 @@ export function buildMilestone({ event, ts, redact, gitProbe } = {}) {
       git = { error: String(err && err.message ? err.message : err) };
     }
   }
+  // evidence 的每一项都要**可复查**（schema 的要求）：探头成了就记 commit:<短 sha>，
+  // 没成就记「没查成 + 原因」—— 不留「查过了」这种复查不了的空话。
   const probeNote = typeof gitProbe !== 'function'
     ? 'git 探头没给（不查）'
-    : (git && git.error ? `git 探头没查成：${String(git.error).slice(0, 80)}` : 'git 探头查到了');
+    : (git && git.error
+      ? `git 探头没查成：${String(git.error).slice(0, 80)}`
+      : (git && git.commit ? `commit:${git.commit}` : 'git 探头查到了但没给短 sha'));
   const anchor = (git && git.commit)
     || (hit.pr_number != null ? `pr-${hit.pr_number}` : hashOf({ command, ts }).slice(0, 12));
   return {
@@ -524,7 +554,9 @@ export function buildMilestone({ event, ts, redact, gitProbe } = {}) {
         pr_number: hit.pr_number,
         milestone_key: `${hit.kind}:${anchor}`,
         session_id: e.session_id || e.sessionId || null,
-        evidence: `${outcome.evidence}；${probeNote}`,
+        // evidence 是**字符串数组**（帅位 2026-09-04 拍板统一形状）：attr.* / audit.* 的
+        // evidence 早就是数组，同名不同形是读端的坑，注释挡不住。至少一项，空数组不合法。
+        evidence: [outcome.evidence, probeNote],
       }, redact),
     }],
   };

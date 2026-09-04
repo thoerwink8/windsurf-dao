@@ -1,9 +1,15 @@
 // 动作触发写口（#891 W5）：三个写口的正反样本 + 真落盘 + 幂等 + 脱敏。
 //
 // 判据只来自工具入参/出参与退出码——本测试里没有一条「猜用户说话方式」的样本。
-// 临时 schema 的造法：读真 schemas/events.schema.json，把 fixtures/action-writers/
-// proposed-types.json 的 oneOf **追加**上去（不复制真 schema 任何内容 ⇒ 不随它漂移）。
-// W1 把三个类型落进真 schema 之后，最后那条「指针自退役」断言会报红，提醒删夹具。
+//
+// 权威 schema 怎么来（composedSchema）：读真 schemas/events.schema.json，**只给真 schema 里
+// 还没有的类型**拿 fixtures/action-writers/proposed-types.json 补位。所以 W1（PR #893）合并后
+// 这套测试当场改用 W1 的真定义，不会出现「我的副本与权威各自演进」；同时最后那组「指针自退役」
+// 断言会报红，提醒删夹具。
+//
+// 另有一组「payload 形状必须符合权威 schema 声明」：写入侧只校验必填/enum/跨字段不变量，
+// **不校验 JSON Schema 的 type**（PR #893 自述）⇒ 两卡形状对不上时事件照样落盘且无人报警。
+// 那组就是这个静默漂移的报警器，并自带故意违规样本验判别力。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -25,10 +31,61 @@ const stubRedact = s => String(s)
   .replace(/[A-Za-z]:[\\/][^\s"']+/g, '[REDACTED:path]')
   .replace(/(?:^|(?<=\s))\/(?:home|Users|d|c)\/[^\s"']+/g, '[REDACTED:path]');
 
+/**
+ * 权威 schema：真 schema 优先，真 schema 还没有的类型才拿夹具补位（#893 合并后夹具自动失效，
+ * 测试当场改用 W1 的真定义 —— 不会出现「我的副本与权威各自演进」那种漂移）。
+ */
 function composedSchema() {
   const real = JSON.parse(fs.readFileSync(REAL_SCHEMA, 'utf8'));
   const proposed = JSON.parse(fs.readFileSync(PROPOSED, 'utf8'));
-  return { ...real, oneOf: [...real.oneOf, ...proposed.oneOf] };
+  const realTitles = new Set((real.oneOf || []).map(d => d.title));
+  const fill = proposed.oneOf.filter(d => !realTitles.has(d.title));
+  return { ...real, oneOf: [...real.oneOf, ...fill] };
+}
+
+/** 从权威 schema 抽某类型某字段的声明（测试自持解析，不复用 event-writer 的 schemaMeta）。 */
+function declOf(schema, title, field) {
+  const def = (schema.oneOf || []).find(d => d.title === title);
+  if (!def) return null;
+  for (const part of def.allOf || []) {
+    if (part && part.properties && part.properties[field]) return part.properties[field];
+  }
+  return null;
+}
+
+/**
+ * 测试侧的形状校验器：payload 每个字段是否符合权威 schema 声明的 type / enum。
+ * 为什么要它：写入侧（event-writer）只校验必填、enum 与跨字段不变量，**不校验 JSON Schema
+ * 的 type**（PR #893 自述）。所以「W5 写数组、schema 声明字符串」这类两卡对不上的漂移，
+ * 事件照样落盘、没有任何东西会当场报警 —— 这一组就是那个报警器。
+ * 自持解析（不 import 被检对象的 schemaMeta），返回违规清单（空 = 全合）。
+ */
+function shapeViolations(schema, title, payload) {
+  const jsType = v => (v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v));
+  const bad = [];
+  for (const [field, value] of Object.entries(payload || {})) {
+    const decl = declOf(schema, title, field);
+    if (!decl) continue; // schema 没声明的字段（additionalProperties: true）不管
+    if (Array.isArray(decl.enum)) {
+      if (!decl.enum.includes(value)) bad.push(`${field}: 值 ${JSON.stringify(value)} 不在 enum ${JSON.stringify(decl.enum)}`);
+      continue;
+    }
+    if (decl.type === undefined) continue;
+    const allowed = Array.isArray(decl.type) ? decl.type : [decl.type];
+    const actual = jsType(value);
+    const norm = actual === 'number' && Number.isInteger(value) ? ['number', 'integer'] : [actual];
+    if (!allowed.some(a => norm.includes(a))) {
+      bad.push(`${field}: 实产是 ${actual}，schema 声明 ${JSON.stringify(decl.type)}`);
+      continue;
+    }
+    if (actual === 'array' && decl.minItems != null && value.length < decl.minItems) {
+      bad.push(`${field}: 数组只有 ${value.length} 项，schema 要求至少 ${decl.minItems}`);
+    }
+    if (actual === 'array' && decl.items && decl.items.type === 'string' && value.some(x => typeof x !== 'string')) {
+      bad.push(`${field}: 数组里有非字符串项，schema 声明 items 是 string`);
+    }
+  }
+  return bad;
 }
 
 const ASK_INPUT = {
@@ -156,6 +213,54 @@ describe('action-writers · 写口 1 待拍板（PreToolUse）', () => {
   });
 });
 
+describe('action-writers · decision.pending 的 options 合法形状（schema 跨字段不变量，#893）', () => {
+  it('工具只给一个选项 ⇒ 降级成开放问题（空 options + recommend null），label 不静默丢', async (t) => {
+    const S = await AW_LOAD;
+    const one = {
+      question: '要不要现在合？',
+      hint: '只有一条路',
+      options: [{ label: '合', description: '没有别的选项' }],
+    };
+    const r = S.buildDecisionPending({
+      event: preEvent({ tool_name: 'mcp__mirasim__im_ask_user', tool_input: one }),
+      ts: TS,
+      redact: stubRedact,
+    });
+    const p = r.writes[0].payload;
+    await t.test('options 空 + recommend null（schema 拒单选项，也拒空 options 配非 null recommend）', () => {
+      assert.ok(Array.isArray(p.options) && p.options.length === 0 && p.recommend === null,
+        '降级形状  →  ' + JSON.stringify({ options: p.options, recommend: p.recommend }));
+    });
+    await t.test('被丢掉的那条 label 留在 options_note 里（不静默丢）', () => {
+      assert.ok(typeof p.options_note === 'string' && p.options_note.includes('合'),
+        'options_note  →  ' + JSON.stringify(p.options_note));
+    });
+  });
+
+  it('开放问题（工具不给选项）⇒ 空 options + recommend null', async (t) => {
+    const S = await AW_LOAD;
+    const r = S.buildDecisionPending({
+      event: preEvent({ tool_name: 'mcp__mirasim__im_ask_user', tool_input: { question: '你怎么看？', hint: '开放问题' } }),
+      ts: TS,
+      redact: stubRedact,
+    });
+    const p = r.writes[0].payload;
+    await t.test('空 options 配 recommend null，且没有 options_note（本来就没选项）', () => {
+      assert.ok(p.options.length === 0 && p.recommend === null && p.options_note === undefined,
+        '开放问题  →  ' + JSON.stringify({ options: p.options, recommend: p.recommend, note: p.options_note }));
+    });
+  });
+
+  it('两条及以上 ⇒ 原样保留，recommend 必命中某条 label', async (t) => {
+    const S = await AW_LOAD;
+    const p = S.buildDecisionPending({ event: preEvent(), ts: TS, redact: stubRedact }).writes[0].payload;
+    await t.test('recommend 在 options 的 label 里（schema 拒指向不存在的选项）', () => {
+      assert.ok(p.options.length === 2 && p.options.map(o => o.label).includes(p.recommend),
+        'recommend 命中  →  ' + JSON.stringify({ labels: p.options.map(o => o.label), recommend: p.recommend }));
+    });
+  });
+});
+
 describe('action-writers · 写口 2 拍板结果（PostToolUse）', () => {
   it('权威出参形状 responses[].selectedOptions[].label：chosen 对、对得上 Pre 侧、by=用户', async (t) => {
     const S = await AW_LOAD;
@@ -248,9 +353,11 @@ describe('action-writers · 写口 3 里程碑（Bash PostToolUse，真成功才
       assert.ok(r.ok && r.writes.length === 1 && r.writes[0].payload.kind === 'commit',
         'kind=commit  →  ' + JSON.stringify(r).slice(0, 200));
     });
-    await t.test('evidence 写清 exit_code=0 与 git 探头结果', () => {
+    await t.test('evidence 是字符串数组，每项可复查（exit_code=0 / commit:<短 sha>）', () => {
       const ev = r.writes[0].payload.evidence;
-      assert.ok(/exit_code=0/.test(ev) && /git 探头查到了/.test(ev), 'evidence  →  ' + ev);
+      assert.ok(Array.isArray(ev) && ev.length >= 1 && ev.every(x => typeof x === 'string')
+        && ev.some(x => /exit_code=0/.test(x)) && ev.some(x => x === 'commit:abc1234'),
+        'evidence  →  ' + JSON.stringify(ev));
     });
     await t.test('幂等键锚在真 sha 上', () => {
       assert.ok(r.writes[0].milestone_key === 'commit:abc1234', 'milestone_key  →  ' + r.writes[0].milestone_key);
@@ -332,7 +439,8 @@ describe('action-writers · 写口 3 里程碑（Bash PostToolUse，真成功才
     });
     await t.test('探头失败仍写事件，但字段是 null + evidence 标没查成', () => {
       const p = r.ok && r.writes[0].payload;
-      assert.ok(r.ok && p.commit === null && p.branch === null && /git 探头没查成/.test(p.evidence),
+      assert.ok(r.ok && p.commit === null && p.branch === null
+        && p.evidence.some(x => /git 探头没查成/.test(x)),
         '探头失败  →  ' + JSON.stringify(r.ok ? p : r.reason));
     });
   });
@@ -369,6 +477,89 @@ describe('action-writers · 脱敏是写入前置条件', () => {
     });
     await t.test('redact 返回非字符串 ⇒ 抛', () => {
       assert.throws(() => S.redactDeep({ a: 'x' }, () => 42), /拒绝裸写/, 'redact 返回非串');
+    });
+  });
+});
+
+describe('action-writers · payload 形状必须符合权威 schema 声明（写入侧不校验 type，这是报警器）', () => {
+  it('三个写口的实产逐字段合权威声明（type / enum / items / minItems）', async (t) => {
+    const S = await AW_LOAD;
+    const schema = composedSchema();
+    const pending = S.buildDecisionPending({ event: preEvent(), ts: TS, redact: stubRedact }).writes[0];
+    const resolved = S.buildDecisionResolved({
+      event: preEvent({ hook_event_name: 'PostToolUse', tool_response: { responses: [{ selectedOptions: [{ label: '每天 8 条 (Recommended)' }] }] } }),
+      ts: TS,
+      redact: stubRedact,
+    }).writes[0];
+    const milestone = S.buildMilestone({
+      event: bashEvent({ command: 'git commit -m "x"', output: { exit_code: 0, interrupted: false } }),
+      ts: TS,
+      redact: stubRedact,
+      gitProbe: () => ({ commit: 'abc1234', subject: 'x', branch: 'b' }),
+    }).writes[0];
+    for (const w of [pending, resolved, milestone]) {
+      const bad = shapeViolations(schema, w.type, w.payload);
+      await t.test(`${w.type} 实产合声明`, () => {
+        assert.ok(bad.length === 0, `${w.type} 与权威 schema 声明对不上  →  ` + bad.join('；'));
+      });
+    }
+  });
+
+  it('探头没查成那一路（三项 null）也合声明', async (t) => {
+    const S = await AW_LOAD;
+    const schema = composedSchema();
+    const w = S.buildMilestone({
+      event: bashEvent({ command: 'gh pr merge 897 --squash', output: { exit_code: 0, interrupted: false } }),
+      ts: TS,
+      redact: stubRedact,
+      gitProbe: () => ({ error: 'not a git repository' }),
+    }).writes[0];
+    await t.test('null 三项 + pr_number 整数 都合声明', () => {
+      const bad = shapeViolations(schema, w.type, w.payload);
+      assert.ok(bad.length === 0 && w.payload.pr_number === 897, '合声明  →  ' + (bad.join('；') || JSON.stringify(w.payload.pr_number)));
+    });
+  });
+
+  it('校验器有判别力：故意造两条违规实产，必须被点名', async (t) => {
+    const schema = composedSchema();
+    const evStr = shapeViolations(schema, 'session.milestone', { evidence: 'exit_code=0；git 探头查到了' });
+    await t.test('evidence 写成字符串 ⇒ 被点名（这正是本轮要改的那处）', () => {
+      assert.ok(evStr.length === 1 && /evidence/.test(evStr[0]), 'evidence 字符串  →  ' + JSON.stringify(evStr));
+    });
+    const bads = shapeViolations(schema, 'decision.pending', { urgency: '中' })
+      .concat(shapeViolations(schema, 'decision.resolved', { by: '机器人', chosen: 'A' }))
+      .concat(shapeViolations(schema, 'session.milestone', { evidence: [], identity: null }));
+    await t.test('urgency:"中" / by:"机器人" / chosen 是字符串 / evidence 空数组 / identity:null 五处全被点名', () => {
+      assert.ok(bads.length === 5, '违规清单  →  ' + JSON.stringify(bads));
+    });
+  });
+
+  it('by 只能是「用户」或「帅」，写口给的是用户', async (t) => {
+    const S = await AW_LOAD;
+    const schema = composedSchema();
+    const decl = declOf(schema, 'decision.resolved', 'by');
+    const w = S.buildDecisionResolved({
+      event: preEvent({ hook_event_name: 'PostToolUse', tool_response: { responses: [{ answer: '自由输入' }] } }),
+      ts: TS,
+      redact: stubRedact,
+    }).writes[0];
+    await t.test('权威 enum 含「用户」，实产就是它', () => {
+      assert.ok(decl.enum.includes(w.payload.by) && w.payload.by === '用户',
+        'by  →  ' + JSON.stringify({ enum: decl.enum, got: w.payload.by }));
+    });
+  });
+
+  it('单选项那一路：pending 降级不影响 resolved 的 freeform 判定（选项真相不丢）', async (t) => {
+    const S = await AW_LOAD;
+    const one = { question: '要不要现在合？', options: [{ label: '合' }] };
+    const picked = S.buildDecisionResolved({
+      event: preEvent({ tool_name: 'mcp__mirasim__im_ask_user', tool_input: one, hook_event_name: 'PostToolUse', tool_response: { responses: [{ selectedOptions: [{ label: '合' }] }] } }),
+      ts: TS,
+      redact: stubRedact,
+    }).writes[0].payload;
+    await t.test('用户选了那唯一选项 ⇒ freeform=false（不因 pending 降级而误判自由输入）', () => {
+      assert.ok(picked.freeform === false && picked.chosen[0] === '合',
+        'freeform  →  ' + JSON.stringify({ freeform: picked.freeform, chosen: picked.chosen }));
     });
   });
 });
@@ -476,7 +667,7 @@ describe('action-writers-hook · 真落盘 / 幂等 / 缺类型降级 / 不阻�
     });
     await t.test('kind/evidence 齐，事件里没有绝对路径', () => {
       const e = eventsIn(dir).find(x => x.type === 'session.milestone');
-      assert.ok(e && e.kind === 'commit' && /exit_code=0/.test(e.evidence)
+      assert.ok(e && e.kind === 'commit' && Array.isArray(e.evidence) && e.evidence.some(x => /exit_code=0/.test(x))
         && !/[A-Za-z]:[\\/]frank/.test(JSON.stringify(e)),
         '里程碑事件  →  ' + JSON.stringify(e));
     });
