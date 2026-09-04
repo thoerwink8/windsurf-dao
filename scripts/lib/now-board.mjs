@@ -32,6 +32,12 @@ export const AWAITING_CALL_LABEL = '待拍板';
 export const DEFAULT_WINDOW_HOURS = 6;
 /** 默认一屏。超了折叠成计数 + 「用 --json 看全部」。 */
 export const DEFAULT_MAX_LINES = 40;
+/**
+ * 结构下限 = 3 段 ×（标题 + 至少 1 条 + 折叠行 + 「没查成」行）。
+ * maxLines 给得比这还小时按这个走——如实按下限排，不假装满足一个排不出来的数。
+ * CLI 不给调行数的旗标（用户不会去敲它）；这个入口留给将来的机器人/看板。
+ */
+export const MIN_MAX_LINES = 12;
 
 // ── 三态信封 ────────────────────────────────────────────────────────────────
 
@@ -540,72 +546,93 @@ function emptyOrGapLine(state, emptyText, gaps, indent = '  ') {
   return [`${indent}查成的部分里没有；另有没查成的源，见下`];
 }
 
+/** 折叠一批「待你拍」条目成一行：按类计数，最多点名 2 类，其余归成「等 N 类」。 */
+function foldDecide(hidden) {
+  const byKind = new Map();
+  for (const it of hidden) byKind.set(it.kind, (byKind.get(it.kind) || 0) + 1);
+  const entries = [...byKind.entries()];
+  const named = entries.slice(0, 2).map(([k, n]) => `${n} 件${KIND_TEXT[k] || k}`);
+  const more = entries.length > 2 ? ` 等 ${entries.length} 类` : '';
+  return `  …另 ${hidden.length} 件（${named.join('、')}${more}），用 --json 看全部`;
+}
+
 /**
- * 人看的输出。默认不超过 maxLines 行；超了按 FOLDABLE 先折，再按段配额折。
- * 折叠只压条目，不压「没查成」——缺源永远看得见。
+ * 把三段拼成不超过 maxLines 行的输出。
+ *
+ * 行数账算得死：每段 = 标题 1 行 + 条目 n 行 + （有省略则）折叠 1 行 + 「没查成」0~1 行。
+ * 超预算就从**条目最多的那段**一行一行往下裁（同数时按 已落地 → 待你拍 → 在途 的序，
+ * 因为「在途」是这条命令的主角）。裁到每段各剩 1 行还超，就如实溢出——
+ * **绝不裁标题、绝不裁「没查成」**：缺源看不见比多几行糟得多。
+ * 早先按比例算配额那版在最坏情况实测超一行（30 张 PR + 三段都有缺源 → 41 行），
+ * 所以改成这套逐行裁的死账；测试用最坏样本盯着。
  */
-export function formatNow(board, { maxLines = DEFAULT_MAX_LINES } = {}) {
+function assemble(secs, maxLines) {
+  const shown = secs.map(s => s.rows.length);
+  const fixed = secs.reduce((n, s) => n + 1 + s.note.length, 0);
+  const total = () => fixed + shown.reduce((n, k, i) => n + k + (k < secs[i].rows.length ? 1 : 0), 0);
+  const tieOrder = [0, 2, 1];
+  while (total() > maxLines) {
+    let pick = -1;
+    let best = 0;
+    for (const i of tieOrder) {
+      if (shown[i] > 1 && shown[i] > best) { best = shown[i]; pick = i; }
+    }
+    if (pick < 0) break;
+    shown[pick] -= 1;
+  }
   const out = [];
+  secs.forEach((s, i) => {
+    out.push(s.head);
+    out.push(...s.rows.slice(0, shown[i]));
+    if (shown[i] < s.rows.length) out.push(s.fold(s.items.slice(shown[i])));
+    out.push(...s.note);
+  });
+  return out;
+}
+
+/** 人看的输出。默认一屏；折叠只压条目，不压「没查成」——缺源永远看得见。 */
+export function formatNow(board, { maxLines: want = DEFAULT_MAX_LINES } = {}) {
+  const maxLines = Math.max(MIN_MAX_LINES, Number(want) || DEFAULT_MAX_LINES);
   const b = board || {};
 
-  // 已落地
-  out.push(`已落地（近 ${b.windowHours ?? DEFAULT_WINDOW_HOURS} 小时）：`);
   const landed = b.landed || { state: 'unscanned', items: [], unscanned: [] };
-  if (landed.items.length === 0) out.push(...emptyOrGapLine(landed.state, '这段时间没有合并的 PR、master 也没有新提交', landed.unscanned));
-  else {
-    const quota = Math.max(3, Math.floor(maxLines * 0.2));
-    for (const it of landed.items.slice(0, quota)) {
-      out.push(it.kind === 'merged-pr'
-        ? `  #${it.pr} ${it.sha || '?'} ${clip(it.text, 60)}`
-        : `  ${it.sha} ${clip(it.text, 66)}`);
-    }
-    if (landed.items.length > quota) out.push(`  …另 ${landed.items.length - quota} 条，用 --json 看全部`);
-  }
-  out.push(...gapLines(landed.unscanned));
+  const landedSec = {
+    head: `已落地（近 ${b.windowHours ?? DEFAULT_WINDOW_HOURS} 小时）：`,
+    items: landed.items,
+    rows: landed.items.map(it => (it.kind === 'merged-pr'
+      ? `  #${it.pr} ${it.sha || '?'} ${clip(it.text, 60)}`
+      : `  ${it.sha} ${clip(it.text, 66)}`)),
+    fold: hidden => `  …另 ${hidden.length} 条，用 --json 看全部`,
+    note: landed.items.length === 0
+      ? emptyOrGapLine(landed.state, '这段时间没有合并的 PR、master 也没有新提交', landed.unscanned).concat(gapLines(landed.unscanned))
+      : gapLines(landed.unscanned),
+  };
 
-  // 在途
   const inflight = b.inflight || { state: 'unscanned', items: [], unscanned: [], counts: {} };
   const c = inflight.counts || {};
-  out.push(`在途（${inflight.state === 'unscanned' ? 'open PR 没查成' : `${c.open} 张 open PR：无审查 ${c.noReview} / 红 ${c.red} / 绿 ${c.green}${c.verdictUnscanned ? ` / 判定没查成 ${c.verdictUnscanned}` : ''}`}）：`);
-  if (inflight.items.length === 0) out.push(...emptyOrGapLine(inflight.state, '一张 open PR 都没有', inflight.unscanned));
-  else {
-    const quota = Math.max(5, Math.floor(maxLines * 0.45));
-    for (const row of inflight.items.slice(0, quota)) out.push(formatPrRow(row));
-    if (inflight.items.length > quota) out.push(`  …另 ${inflight.items.length - quota} 张，用 --json 看全部`);
-  }
-  out.push(...gapLines(inflight.unscanned));
+  const inflightSec = {
+    head: `在途（${inflight.state === 'unscanned' ? 'open PR 没查成' : `${c.open} 张 open PR：无审查 ${c.noReview} / 红 ${c.red} / 绿 ${c.green}${c.verdictUnscanned ? ` / 判定没查成 ${c.verdictUnscanned}` : ''}`}）：`,
+    items: inflight.items,
+    rows: inflight.items.map(formatPrRow),
+    fold: hidden => `  …另 ${hidden.length} 张，用 --json 看全部`,
+    note: inflight.items.length === 0
+      ? emptyOrGapLine(inflight.state, '一张 open PR 都没有', inflight.unscanned).concat(gapLines(inflight.unscanned))
+      : gapLines(inflight.unscanned),
+  };
 
-  // 待你拍
   const decide = b.decide || { state: 'unscanned', items: [], unscanned: [] };
-  const items = decide.items.slice().sort(
+  const decideItems = decide.items.slice().sort(
     (a, b2) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b2.kind),
   );
-  out.push(`待你拍（${decide.state === 'unscanned' ? '没查成' : items.length + ' 件'}）：`);
-  if (items.length === 0) out.push(...emptyOrGapLine(decide.state, '没有等你拍的事', decide.unscanned));
-  else {
-    // 预算：整屏减去已写的、减去这段的「没查成」一行、再给折叠行留最多 3 行。
-    const gapLine = decide.unscanned.length ? 1 : 0;
-    const reserve = Math.min(3, new Set(items.map(i => i.kind)).size);
-    const quota = Math.max(4, maxLines - out.length - gapLine - reserve);
-    const shown = items.slice(0, quota);
-    const rest = items.slice(quota);
-    for (const it of shown) out.push(`  ${it.why}`);
-    const folded = new Map();
-    for (const it of rest) folded.set(it.kind, (folded.get(it.kind) || 0) + 1);
-    const entries = [...folded.entries()];
-    // 折叠行总数必须 ≤ reserve（否则整屏会超一行——这条是实跑咬出来的）：
-    // 前 reserve-1 行按类报，剩下的全并成一行。
-    const perKind = Math.max(0, reserve - 1);
-    for (const [kind, n] of entries.slice(0, perKind)) {
-      out.push(`  另 ${n} 件${KIND_TEXT[kind] || kind}，用 --json 看全部`);
-    }
-    const tail = entries.slice(perKind);
-    if (tail.length) {
-      const n = tail.reduce((s, [, c]) => s + c, 0);
-      out.push(`  另 ${n} 件（${tail.length} 类），用 --json 看全部`);
-    }
-  }
-  out.push(...gapLines(decide.unscanned));
+  const decideSec = {
+    head: `待你拍（${decide.state === 'unscanned' ? '没查成' : decideItems.length + ' 件'}）：`,
+    items: decideItems,
+    rows: decideItems.map(it => `  ${it.why}`),
+    fold: foldDecide,
+    note: decideItems.length === 0
+      ? emptyOrGapLine(decide.state, '没有等你拍的事', decide.unscanned).concat(gapLines(decide.unscanned))
+      : gapLines(decide.unscanned),
+  };
 
-  return out.join('\n');
+  return assemble([landedSec, inflightSec, decideSec], maxLines).join('\n');
 }

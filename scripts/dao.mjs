@@ -4619,8 +4619,7 @@ async function cmdNow(args) {
     console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
     process.exit(0);
   }
-  const maxLines = args.lines != null && /^\d+$/.test(String(args.lines)) ? Number(args.lines) : DEFAULT_MAX_LINES;
-  process.stdout.write(`${formatNow(board, { maxLines })}\n`);
+  process.stdout.write(`${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
   process.exit(0);
 }
 

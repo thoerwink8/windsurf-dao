@@ -995,7 +995,7 @@ export const FLAGS_BY_VERB = {
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
-  now: new Set(['--json', '--hours', '--lines', '--host', '--no-server', '--help', '-h']),
+  now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1138,12 +1138,12 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   liveness [--path <工作树>]
   check-help
   next                        # 盘面动作候选一行（#576）：只读本地文件零 GitHub；standby 态不含「待消歧」
-  now [--json] [--hours N] [--lines N] [--host <ssh名>] [--no-server]
+  now [--json] [--hours N] [--host <ssh名>] [--no-server]
                   # 现状盘面三段（#891 形状）：已落地（近 N 小时合并的 PR / master 提交）
                   #   / 在途（每张 open PR 一行：判定+过期票、审官是谁、会话在不在、审官树 head 对不对得上、本机工人）
                   #   / 待你拍（待消歧|待拍板 issue、返工待复审、审官起不来、发散或冲突的分支）
                   # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
-                  # 只读零副作用；默认一屏（--lines 调），--json 给机器；每段末尾列哪些源没查成
+                  # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
                   # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成

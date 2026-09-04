@@ -349,6 +349,37 @@ describe('dao now：整盘与排版', () => {
     assert.ok(lines.some(l => /没查成/.test(l)), '折叠不许把「没查成」挤掉');
   });
 
+  it('最坏情况（三段全满 + 三段各有缺源）也不超预算；预算小于结构下限时按下限排', async () => {
+    const S = await load(BOARD);
+    const prs = [];
+    const byPr = {};
+    for (let i = 0; i < 30; i++) {
+      const n = 800 + i;
+      prs.push(prFixture({ number: n, headRefName: `feat/${n}`, mergeable: 'CONFLICTING' }));
+      byPr[n] = okEnv([review('CHANGES_REQUESTED', OLD)]);
+    }
+    const merged = [];
+    for (let i = 0; i < 20; i++) merged.push({ number: 700 + i, title: 'm', mergedAt: '2026-09-04T15:00:00Z', mergeCommitOid: HEAD });
+    const issues = [];
+    for (let i = 0; i < 40; i++) issues.push({ number: 600 + i, title: 't', labels: ['待拍板'] });
+    // 三段全满 + 三段各有缺源：这是排版的最坏情况，下限就按它定。
+    const b = S.renderNow({
+      now: NOW, prs: okEnv(prs), reviews: { byPr },
+      merged: { prs: okEnv(merged), commits: deadEnv('git 跑不了') },
+      issues: okEnv(issues), registries: deadEnv('ssh 连不上'),
+      worktrees: okEnv([]), sessions: deadEnv('ssh 连不上'),
+    });
+    const wide = S.formatNow(b).split('\n');
+    assert.ok(wide.length <= S.DEFAULT_MAX_LINES, `一屏 ${S.DEFAULT_MAX_LINES} 行，实际 ${wide.length}`);
+    const tiny = S.formatNow(b, { maxLines: 5 }).split('\n');
+    assert.ok(tiny.length <= S.MIN_MAX_LINES, `结构下限 ${S.MIN_MAX_LINES} 行，实际 ${tiny.length}`);
+    for (const lines of [wide, tiny]) {
+      assert.equal(lines.filter(l => /^(已落地|在途|待你拍)/.test(l)).length, 3, '三段标题一行都不许裁');
+      assert.equal(lines.filter(l => /^  没查成 \d+ 处/.test(l)).length, 3, '三段的「没查成」一行都不许裁');
+      assert.ok(lines.filter(l => /--json 看全部/.test(l)).length >= 1, '折叠必须留出口');
+    }
+  });
+
   it('已落地：窗口外的不算；squash 提交与它那张 PR 不重复报', async () => {
     const S = await load(BOARD);
     const b = board(await load(BOARD), {
