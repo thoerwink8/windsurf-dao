@@ -5,6 +5,7 @@
 // label 记「决定」：dispatch 记 issue，帅合并时同步到 PR（#564 + #586）。
 
 import { dispatchLabelNames, linkedIssueNumbers } from './worker-done.mjs';
+import { PENDING_LABEL } from '../pending-disambiguation.mjs';
 
 /** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
  * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
@@ -48,6 +49,8 @@ export function assembleCardName({ name, issue, pr, role, model } = {}) {
 // dispatch / worker-start 带 --issue 时，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
 // 三态必须分得开（#565 硬约束）：查成且有 label / 查成但没 label / 没查成（gh 失败）。
 // 没查成不许当有 label 放行——「没查成」当「查过没事」是事故类（#532 通用原则）。
+// #876：反向标「待消歧」与「已消歧」互斥且优先——带「待消歧」的单一律拒派，
+// 就算故意双标也拒（还没定怎么做的事，落了盘不等于可做）。到时机由盘点端上来请用户拍。
 export const DISAMBIGUATED_LABEL = '已消歧'; // 只认这一张；近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门（#565）
 export function checkIssueDisambiguated({ issue, runGh } = {}) {
   const n = String(issue ?? '').trim();
@@ -76,6 +79,13 @@ export function checkIssueDisambiguated({ issue, runGh } = {}) {
     };
   }
   const names = labels.map(l => l && l.name).filter(Boolean);
+  if (names.includes(PENDING_LABEL)) {
+    return {
+      ok: false, gated: true, issue: n, pending: true, labels: names,
+      error: `issue #${n} 带「${PENDING_LABEL}」label，拒派（#876：还没定怎么做的事，落了盘也不等于可做）。`
+        + `两个标同时在也按拒派算。等它到讨论时机、你拍了怎么消歧，把标换成「${DISAMBIGUATED_LABEL}」再派。`,
+    };
+  }
   if (!names.includes(DISAMBIGUATED_LABEL)) {
     return {
       ok: false, gated: true, issue: n, hasLabel: false, labels: names,
