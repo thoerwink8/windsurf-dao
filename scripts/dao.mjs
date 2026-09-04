@@ -4800,7 +4800,7 @@ async function cmdReviewerCreateMirasim(args) {
       soldierDispatchId: args.soldierDispatch != null ? String(args.soldierDispatch) : '',
       mergePolicy: args.mergePolicy || 'auto',
       mergeReason: args.mergeReason,
-      skipWait: true,
+      executor: 'mirasim',
     });
   } catch (e) { fail(`审官任务书渲染失败：${String(e.message || e)}`); }
 
@@ -4863,7 +4863,7 @@ async function cmdWorkerDoneMirasim(args) {
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
   const mkPrompt = (spec) => buildReviewerInject({
-    spec, issue: plan.issue, pr: String(plan.pr), soldierDispatchId: '', mergePolicy: 'auto', skipWait: true,
+    spec, issue: plan.issue, pr: String(plan.pr), mergePolicy: 'auto', executor: 'mirasim',
   });
   const repo = mirasimRepoRoot(args);
   const res = await mirasimWorkerDone({
