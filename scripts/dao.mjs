@@ -2550,7 +2550,8 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
   }
   // headless 下 task-create/worker-start 也要发送身份——与新建路同源（#762）：审官树里起哑协调
-  // 终端当 --from。给了 from 用给的；orca 终端里跑（run-current 能通）时 fromHandle 留空走原路。
+  // 终端当 --from，并用它自开新 Run（借士兵旧 Run 会 consumer_fenced：coordinator 是早已下班的
+  // 派工终端）。给了 from 用给的；orca 终端里跑（run-current 能通）时 fromHandle 留空走原路。
   let fromHandle = from || null;
   if (!fromHandle) {
     const cur = orca(argsRunCurrent());
@@ -2559,6 +2560,11 @@ function reuseReviewerOnTerminal({
       if (!coordTerm.ok) return { ok: false, reused: true, error: `复用审官协调终端没建成（headless 无发送身份）：${errText(coordTerm.error)}` };
       fromHandle = extractHandleFromCreate(coordTerm.json);
       if (!fromHandle) return { ok: false, reused: true, error: '复用审官协调终端没返回 handle（没查成）' };
+      const coordRun = orca(argsRunCreate({ objective: 'coordinator: dao review (reuse)', from: fromHandle }));
+      if (!coordRun.ok) return { ok: false, reused: true, error: `复用审官协调 Run 没建成（--from 哑终端）：${errText(coordRun.error)}` };
+      const coordRunId = extractRunId(coordRun.json);
+      if (!coordRunId) return { ok: false, reused: true, error: '复用审官协调 Run 没拿到 id（没查成）' };
+      runId = coordRunId;
     }
   }
   const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: !fromHandle, from: fromHandle || undefined });
