@@ -327,22 +327,62 @@ test('server-check 判别力', async (t) => {
       assert.ok(r.hit && String(r.hit).includes('grok.exe'), JSON.stringify(r));
     });
 
-    await t.test('isExecutableEntry：目录 / 无 x 位 / 有 x 位', () => {
-      assert.equal(isExecutableEntry('/x', {
+    await t.test('isExecutableEntry：目录 / 无 x 位 / 有 x 位（三态对象契约）', () => {
+      assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
         exists: () => true,
         stat: () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
-      }), false);
-      assert.equal(isExecutableEntry('/x', {
+      }), { executable: false });
+      assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
         exists: () => true,
         stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o644 }),
-      }), false);
-      assert.equal(isExecutableEntry('/x', {
+      }), { executable: false });
+      assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
         exists: () => true,
         stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o111 }),
-      }), true);
+      }), { executable: true });
+    });
+
+    await t.test('stat 抛 EACCES → {error}，不当 absent', () => {
+      const r = isExecutableEntry('/locked/x', {
+        platform: 'linux',
+        exists: () => true,
+        stat: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; },
+      });
+      assert.ok(r.error && r.error.includes('EACCES'), JSON.stringify(r));
+      assert.equal(r.executable, undefined);
+    });
+
+    await t.test('PATH 里有探不动的项且没命中 → probed:false（没查成不是 0 个）', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/locked:/usr/bin',
+        exists: (p) => String(p).startsWith('/locked'),
+        stat: (p) => {
+          if (String(p).startsWith('/locked')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+          const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
+        },
+      });
+      assert.equal(r.probed, false);
+      assert.equal(r.hit, null);
+      assert.match(r.reason, /探不动/);
+      assert.match(r.reason, /没查成不是 0 个/);
+    });
+
+    await t.test('探不动的项之外命中了 → 照常 hit（探错不拦真命中）', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/locked:/usr/bin',
+        exists: () => true,
+        stat: (p) => {
+          if (String(p).startsWith('/locked')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+          return { isDirectory: () => false, isFile: () => true, mode: 0o755 };
+        },
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, '/usr/bin/grok');
     });
   });
 

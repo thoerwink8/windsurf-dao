@@ -456,23 +456,25 @@ export function classifyRetiredClis({ probed, reason, found } = {}) {
   };
 }
 
-/** POSIX：不是目录且 mode 至少一个 execute bit。Windows：候选必须是文件，不是目录。 */
+/** POSIX：不是目录且 mode 至少一个 execute bit。Windows：候选必须是文件，不是目录。
+ *  三态：{ executable:true } / { executable:false } / { error }——EACCES、IO 错不许当 absent
+ *  （审官红项：不可读目录里若真藏着退役 CLI，吞错会让 ⑱ 错误判绿；探不到 ≠ 不存在）。 */
 export function isExecutableEntry(p, { platform, exists, stat } = {}) {
   const win = (platform || process.platform) === 'win32';
   const existsFn = typeof exists === 'function' ? exists : existsSync;
   const statFn = typeof stat === 'function' ? stat : statSync;
   try {
-    if (!existsFn(p)) return false;
+    if (!existsFn(p)) return { executable: false };
     const st = statFn(p);
-    if (!st || typeof st.isDirectory !== 'function' || st.isDirectory()) return false;
+    if (!st || typeof st.isDirectory !== 'function' || st.isDirectory()) return { executable: false };
     if (win) {
-      return typeof st.isFile === 'function' ? st.isFile() : true;
+      return { executable: typeof st.isFile === 'function' ? st.isFile() : true };
     }
     const mode = st.mode;
-    if (typeof mode !== 'number') return false;
-    return (mode & 0o111) !== 0;
-  } catch {
-    return false;
+    if (typeof mode !== 'number') return { executable: false };
+    return { executable: (mode & 0o111) !== 0 };
+  } catch (e) {
+    return { error: `${p}: ${e.code || e.message}` };
   }
 }
 
@@ -486,11 +488,18 @@ export function whichOnPath(name, opts = {}) {
   if (segs.length === 0) return { probed: false, reason: 'PATH 分段 0 个（没查成）', hit: null };
   const candidates = win ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
   const entryOpts = { platform, exists: opts.exists, stat: opts.stat };
+  const probeErrors = [];
   for (const dir of segs) {
     for (const file of candidates) {
       const p = join(dir, file);
-      if (isExecutableEntry(p, entryOpts)) return { probed: true, hit: p };
+      const r = isExecutableEntry(p, entryOpts);
+      if (r.error) { probeErrors.push(r.error); continue; }
+      if (r.executable) return { probed: true, hit: p };
     }
+  }
+  // 没命中但有 PATH 项探不动（EACCES/IO 错）：不许说「0 个」——那个探不动的目录里可能就藏着它
+  if (probeErrors.length) {
+    return { probed: false, reason: `${probeErrors.length} 个 PATH 项探不动（${probeErrors[0]}${probeErrors.length > 1 ? ' 等' : ''}），没查成不是 0 个`, hit: null };
   }
   return { probed: true, hit: null };
 }
