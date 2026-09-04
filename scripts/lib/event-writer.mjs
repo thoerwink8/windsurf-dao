@@ -4,9 +4,10 @@
 // 不进 git，见 ledger-home.mjs）；写一次即不可变（已存在/同内容均拒绝，
 // 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
-// 写入即校验：类型在闭集内、必填字段齐、schema 声明的 enum 字段取值在闭集内、
-// schema 声明 minItems 的数组字段是数组且够条数、attr 责任向量不变量（份额和=1 或
-// 全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
+// 写入即校验（判据一律从 schema 派生，本文件不抄清单/数字/类型名）：类型在闭集内、
+// 必填字段齐、enum 字段取值在闭集内、字段类型合 type 声明（含联合类型与数组元素）、
+// 声明 minItems 的数组够条数、attr 责任向量不变量（份额和=1 或全 0 且低置信）、
+// decision.pending 的 recommend 命中某条 option。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
@@ -65,45 +66,99 @@ export function ulidFromMs(ms, entropyHex) {
   return out;
 }
 
+/** schema 的 type 声明 → 允许类型数组（"string" 或 ["integer","null"] 都归一成数组）。 */
+function declaredTypes(spec) {
+  const t = spec?.type;
+  if (typeof t === 'string') return [t];
+  if (Array.isArray(t) && t.every(x => typeof x === 'string')) return [...t];
+  return null; // 没声明 type（如纯 enum 字段）⇒ 类型不管，交给 enumInvariant
+}
+
 /**
- * 事件类型闭集 + 每类型必填字段 + 每类型枚举字段 + 每类型数组下限
- * （全部派生自 schema oneOf，闭集 = oneOf[].title；本文件不另抄任何清单或数字）。
+ * 事件类型闭集 + 每类型必填字段 + 每类型枚举字段 + 每类型数组下限 + 每类型字段类型
+ * （全部派生自 schema oneOf，闭集 = oneOf[].title；本文件不另抄任何清单、数字或类型名）。
  */
 export function schemaMeta(schema) {
   const closedSet = [];
   const requiredByType = new Map();
   const enumsByType = new Map();
   const minItemsByType = new Map();
+  const typesByType = new Map();
   const resolveRef = ref => {
     const name = ref.replace('#/definitions/', '');
     return schema.definitions ? schema.definitions[name] : null;
   };
-  const walk = (node, required, enums, mins) => {
+  // acc = { required, enums, mins, types }：往下走时一路累积（allOf/$ref 都并进同一份）
+  const walk = (node, acc) => {
     if (!node) return;
-    if (node.$ref) return walk(resolveRef(node.$ref), required, enums, mins);
-    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required, enums, mins);
+    if (node.$ref) return walk(resolveRef(node.$ref), acc);
+    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, acc);
     if (Array.isArray(node.required)) {
-      for (const f of node.required) if (!RESERVED.includes(f)) required.add(f);
+      for (const f of node.required) if (!RESERVED.includes(f)) acc.required.add(f);
     }
     for (const [f, spec] of Object.entries(node.properties || {})) {
       if (RESERVED.includes(f)) continue;
-      if (Array.isArray(spec?.enum)) enums.set(f, spec.enum);
-      if (spec?.type === 'array' && Number.isInteger(spec.minItems)) mins.set(f, spec.minItems);
+      if (Array.isArray(spec?.enum)) acc.enums.set(f, spec.enum);
+      if (spec?.type === 'array' && Number.isInteger(spec.minItems)) acc.mins.set(f, spec.minItems);
+      const types = declaredTypes(spec);
+      if (types) acc.types.set(f, { types, items: declaredTypes(spec.items) });
     }
   };
   for (const def of schema.oneOf || []) {
     const title = def.title;
     if (!title) throw new Error('schema oneOf 条目缺 title（闭集派生依赖 title）');
     closedSet.push(title);
-    const required = new Set();
-    const enums = new Map();
-    const mins = new Map();
-    walk(def, required, enums, mins);
-    requiredByType.set(title, [...required]);
-    enumsByType.set(title, enums);
-    minItemsByType.set(title, mins);
+    const acc = { required: new Set(), enums: new Map(), mins: new Map(), types: new Map() };
+    walk(def, acc);
+    requiredByType.set(title, [...acc.required]);
+    enumsByType.set(title, acc.enums);
+    minItemsByType.set(title, acc.mins);
+    typesByType.set(title, acc.types);
   }
-  return { closedSet, requiredByType, enumsByType, minItemsByType, currentVersion: schema.version ?? 1 };
+  return { closedSet, requiredByType, enumsByType, minItemsByType, typesByType, currentVersion: schema.version ?? 1 };
+}
+
+/** 值的 JSON Schema 类型名。null 与数组各自单独一类——typeof 两者都报 'object'。 */
+function jsonTypeOf(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  switch (typeof v) {
+    case 'string': return 'string';
+    case 'boolean': return 'boolean';
+    case 'number': return Number.isInteger(v) ? 'integer' : 'number';
+    case 'object': return 'object';
+    default: return typeof v;
+  }
+}
+
+/** 实际类型是否落在声明的允许集内。整数也算 number（JSON Schema 里 integer ⊂ number）。 */
+function typeAllowed(actual, allowed) {
+  return allowed.includes(actual) || (actual === 'integer' && allowed.includes('number'));
+}
+
+// schema 声明了 type 的字段，写入即校验类型；类型名只从 schema 读，本文件不另抄。
+// 三个必须踩准的点（#891 W5 用真 writer 实测出的洞，四条形状漂移原先全静默落盘）：
+//   ① 联合类型（["integer","null"]）按声明逐个比——null 只在声明里列了才放行
+//      （pending_decision_id / urgency 的 null 合法，pr_number 写 "12" 非法）；
+//   ② 数组先判「是数组」再判元素：typeof [] === 'object'，光看 typeof 会把数组当对象放过，
+//      跟上一轮 minItems 那个「字符串也有 .length」是同一个坑换了形状；
+//   ③ 字段整个不写 = 缺字段，归必填检查，这里不管（identity 拿不到就别写那一条靠它）。
+function typeInvariant(types, p) {
+  for (const [field, spec] of types || []) {
+    const v = p[field];
+    if (v === undefined) continue;
+    const actual = jsonTypeOf(v);
+    if (!typeAllowed(actual, spec.types)) {
+      throw new Error(`字段 ${field} 类型非法：schema 声明 ${spec.types.join('|')}，实际 ${actual}`);
+    }
+    if (actual !== 'array' || !spec.items) continue;
+    for (let i = 0; i < v.length; i++) {
+      const et = jsonTypeOf(v[i]);
+      if (!typeAllowed(et, spec.items)) {
+        throw new Error(`字段 ${field} 第 ${i + 1} 项类型非法：schema 声明 ${spec.items.join('|')}，实际 ${et}`);
+      }
+    }
+  }
 }
 
 // schema 声明了 enum 的字段，写入即校验取值——枚举清单只从 schema 读，本文件不另抄。
@@ -203,6 +258,7 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
 
   attrInvariant(type, payload);
   enumInvariant(meta.enumsByType.get(type), payload);
+  typeInvariant(meta.typesByType.get(type), payload);
   minItemsInvariant(meta.minItemsByType.get(type), payload);
   decisionInvariant(type, payload);
 

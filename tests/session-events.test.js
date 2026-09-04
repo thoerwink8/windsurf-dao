@@ -377,6 +377,79 @@ describe('session-events（#891 W1）', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // W5（PR #897）拿真 event-writer 实测出的洞：除 evidence 外，其余字段的 type 声明
+  // 一律没人校验，四条形状漂移全静默落盘。静默失效正是本单要治的病，判据补在写入侧。
+  it('⑩ 字段类型合 schema 的 type 声明（W5 实测四条洞）', async (t) => {
+    const holes = [
+      ['decision.resolved', RESOLVED, { chosen: '每天 8 条' }, 'chosen 写成字符串（声明 array）'],
+      ['decision.pending', PENDING, { question: 12345 }, 'question 写成数字（声明 string）'],
+      ['session.milestone', MILESTONE, { pr_number: '893' }, 'pr_number 写成字符串（声明 integer|null）'],
+      ['session.milestone', MILESTONE, { repo: ['windsurf-dao'] }, 'repo 写成数组（声明 string|null）'],
+    ];
+    for (const [type, base, bad, name] of holes) {
+      await t.test(`${type}：${name} → 拒`, () => {
+        assert.ok(throws(() => build(type, { ...base, ...bad })), `${type}：${name} → 拒`);
+      });
+    }
+    await t.test('报错点名字段与期望类型（不是一句「类型不对」）', () => {
+      let msg = '';
+      try { build('session.milestone', { ...MILESTONE, pr_number: '893' }); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('pr_number') && msg.includes('integer') && msg.includes('string'), '报错点名字段与期望类型  →  ' + msg);
+    });
+
+    // 联合类型：声明里列了 null 的照放，没列的照拒——「null 一律拒」和「null 一律放」都是错的
+    await t.test('联合类型：pending_decision_id 记 null 合法（声明 string|null）', () => {
+      assert.ok(!throws(() => build('session.state', { ...STATE, pending_decision_id: null })), 'pending_decision_id 记 null 合法');
+    });
+    await t.test('联合类型：pending_decision_id 写数字仍拒', () => {
+      assert.ok(throws(() => build('session.state', { ...STATE, pending_decision_id: 42 })), 'pending_decision_id 写数字仍拒');
+    });
+    await t.test('联合类型：pr_number 记 null 合法、branch/commit/subject 记 null 合法', () => {
+      const p = { ...MILESTONE, pr_number: null, branch: null, commit: null, subject: null };
+      assert.ok(!throws(() => build('session.milestone', p)), '探头三项与 pr_number 记 null 合法');
+    });
+    await t.test('声明里没列 null 的字段写 null 仍拒（session.state.doing）', () => {
+      assert.ok(throws(() => build('session.state', { ...STATE, doing: null })), 'doing 写 null 仍拒');
+    });
+    await t.test('urgency: null 仍合法（走 enum 那条，不被类型校验误伤）', () => {
+      assert.ok(!throws(() => build('decision.pending', { ...PENDING, urgency: null })), 'urgency: null 仍合法');
+    });
+    await t.test('identity 整个字段不写仍合法（拿不到就别写，不是写 null）', () => {
+      const p = { ...MILESTONE };
+      delete p.identity;
+      assert.ok(!throws(() => build('session.milestone', p)) && throws(() => build('session.milestone', { ...MILESTONE, identity: null })),
+        'identity 不写合法 / 写 null 拒');
+    });
+
+    // typeof [] === 'object'：光看 typeof 会把数组当对象放过——与上一轮
+    // 「字符串也有 .length」是同一个坑换了形状，所以数组必须先判「是数组」
+    await t.test('声明 object 的字段收到数组 → 拒（typeof [] === object 这个坑）', () => {
+      const d = { job_id: 'j-891', model: 'x', identity: '工人', work_type: '写码', model_version: 'v', terminal: 't', decision_id: 'dd', price_snapshot: [] };
+      assert.ok(throws(() => build('job.dispatch', d)) && !throws(() => build('job.dispatch', { ...d, price_snapshot: {} })),
+        '声明 object 的字段收到数组 → 拒');
+    });
+    await t.test('数组元素类型也校验（refs 里混进数字 → 拒）', () => {
+      assert.ok(throws(() => build('session.state', { ...STATE, refs: ['#891', 42] })), 'refs 里混进数字 → 拒');
+    });
+    await t.test('数组元素报错点明第几项', () => {
+      let msg = '';
+      try { build('session.state', { ...STATE, refs: ['#891', 42] }); } catch (e) { msg = e.message; }
+      assert.ok(msg.includes('第 2 项') && msg.includes('refs'), '数组元素报错点明第几项  →  ' + msg);
+    });
+    await t.test('整数喂给声明 number 的字段合法（integer ⊂ number，别误伤）', () => {
+      const m = { job_id: 'j-891', model: 'x', token_in: 1, token_out: 2, cache_hit: 0, usd_cash: 1 };
+      assert.ok(!throws(() => build('job.meter', m)), '整数喂给 number 合法');
+    });
+    await t.test('小数喂给声明 integer 的字段 → 拒', () => {
+      const m = { job_id: 'j-891', model: 'x', token_in: 1.5, token_out: 2, cache_hit: 0, usd_cash: 1 };
+      assert.ok(throws(() => build('job.meter', m)), '小数喂给 integer → 拒');
+    });
+    await t.test('纯 enum 字段（无 type 声明）不被类型校验误伤：四个 phase 值仍全过', () => {
+      const bad = ['在途', '沉默', '待拍', '收尾'].filter(ph => throws(() => build('session.state', { ...STATE, phase: ph })));
+      assert.ok(bad.length === 0, '纯 enum 字段不被误伤  →  误拒 ' + bad.join(','));
+    });
+  });
+
   it('⑨ 派生注释镜子 = schema 闭集（不许在别处另抄清单）', async (t) => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'event-write.mjs'), 'utf8');
     const lines = src.split(/\r?\n/);
