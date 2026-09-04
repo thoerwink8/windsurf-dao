@@ -16,8 +16,10 @@
 //
 // 退出码三态（不许把没查成当通过）：
 //   0 = 拉过且没事（含「新增 0」的幂等复跑）
-//   1 = 真红：同名不同内容（有一边改过历史）或写盘/读回失败
-//   2 = 没查成：ssh 探不到、远端目录不在、流被截断、来件进不了账
+//   1 = 真红：同名不同内容（有一边改过历史）、写盘/读回失败，或判决表漏登记状态桶
+//   2 = 没查成：ssh 探不到、命令非零退出、远端目录不在或读不了、列表/内容流不完整、
+//       列表与取值对不上账（missing / lost）、来件进不了账
+// 归类口径只有一处：scripts/lib/ledger-sync.mjs 的 SIGNAL_CLASS。
 
 import { resolve } from 'node:path';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
@@ -78,10 +80,12 @@ if (asJson) {
       rejected: r.rejected.map(x => ({ name: x.name, why: x.why })),
       suspects: r.suspects,
       missing: r.missing,
+      lost: r.lost,
       ignored: r.ignored,
       writeFailures: r.writeFailures,
       unscanned: r.unscanned,
     })),
+    ...(v.unclassified ? { unclassified: v.unclassified, why: v.why } : {}),
   }) + '\n');
   process.exit(v.code);
 }
@@ -106,11 +110,13 @@ for (const r of results) {
     if (r.added.length > 10) process.stdout.write(`    …另 ${r.added.length - 10} 个\n`);
   }
   if (r.ignored.length) process.stdout.write(`  远端有 ${r.ignored.length} 个非事件文件，没拉：${r.ignored.slice(0, 3).join(' ')}\n`);
-  if (r.missing.length) process.stdout.write(`  远端列了但取不到 ${r.missing.length} 个（列表与取值之间被删）：${r.missing.slice(0, 3).join(' ')}\n`);
+  if (r.missing.length) process.stdout.write(`  没查成 远端列了但取不到 ${r.missing.length} 个（列表与取值之间被删）：${r.missing.slice(0, 3).map(m => m.name).join(' ')}\n`);
+  if (r.lost.length) process.stdout.write(`  没查成 名单对不上账 ${r.lost.length} 个：${r.lost.slice(0, 3).map(m => `${m.name}（${m.why}）`).join(' ')}\n`);
   if (r.suspects.length) process.stdout.write(`  名字与内容对不上 ${r.suspects.length} 个（就地脱敏过的老事件会这样，不拦）：${r.suspects.slice(0, 3).map(s => s.name).join(' ')}\n`);
   for (const c of r.conflicts) process.stdout.write(`  真红 冲突：${c.name} —— ${c.why}\n`);
   for (const x of r.rejected) process.stdout.write(`  没查成 进不了账：${x.name} —— ${x.why}\n`);
   for (const w of r.writeFailures) process.stdout.write(`  真红 写不进：${w.name} —— ${w.why}\n`);
 }
+if (v.unclassified) process.stdout.write(`\n判决表漏登记：${v.why}\n`);
 process.stdout.write(`\n结论：${v.state === 'ok' ? '拉过且没事' : v.state === 'red' ? '真红（要处置）' : '有没查成的（不是绿）'}\n`);
 process.exit(v.code);

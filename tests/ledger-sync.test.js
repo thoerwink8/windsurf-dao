@@ -35,30 +35,38 @@ function ev(over = {}) {
 const pretty = e => JSON.stringify(e, null, 2) + '\n';
 
 /** 假 ssh：按远端脚本里的哨兵判断问的是列表还是内容，用一份 name→text 的假远端账本作答。
- *  故意不复用被测的解析函数——自己 base64、自己拼哨兵行。 */
-function fakeSsh(remote, { noDir = false, truncate = false, noSentinel = false } = {}) {
+ *  故意不复用被测的解析函数——自己 base64、自己拼哨兵头尾行。 */
+function fakeSsh(remote, { noDir = false, truncate = false, noSentinel = false, noRead = false, listCode = 0, listTruncate = false, bundleCode = 0, dropMiss = false } = {}) {
   const calls = [];
   const run = (cmd, args, opts = {}) => {
     calls.push({ cmd, args, input: opts.input });
     const script = args[args.length - 1];
     if (noDir) return { probed: true, code: 3, stdout: 'DAO_LEDGER_NODIR\n', stderr: '' };
+    if (noRead) return { probed: true, code: 5, stdout: 'DAO_LEDGER_NOREAD\n', stderr: '' };
     if (noSentinel) return { probed: true, code: 255, stdout: '', stderr: 'ssh: connect timed out' };
     if (script.includes('DAO_LEDGER_LIST')) {
-      return { probed: true, code: 0, stdout: 'DAO_LEDGER_LIST v1\n' + [...remote.keys()].join('\n') + '\n', stderr: '' };
+      const names = [...remote.keys()];
+      if (listTruncate) return { probed: true, code: listCode, stdout: 'DAO_LEDGER_LIST v1\n', stderr: 'client_loop: send disconnect' };
+      return {
+        probed: true,
+        code: listCode,
+        stdout: 'DAO_LEDGER_LIST v1\n' + names.map(n => n + '\n').join('') + `DAO_LEDGER_LIST_END ${names.length}\n`,
+        stderr: listCode ? 'ls: I/O error on one entry' : '',
+      };
     }
     const want = String(opts.input || '').split('\n').filter(Boolean);
     let body = '';
     let n = 0;
     for (const f of want) {
       if (!remote.has(f)) {
-        body += `MISS ${f}\n`;
+        if (!dropMiss) body += `MISS ${f}\n`; // dropMiss：既不回内容也不回 MISS，模拟名单没送到
         continue;
       }
       body += `${f} ${Buffer.from(remote.get(f), 'utf8').toString('base64')}\n`;
       n += 1;
     }
     const tail = truncate ? `DAO_LEDGER_BUNDLE_END ${n + 1}\n` : `DAO_LEDGER_BUNDLE_END ${n}\n`;
-    return { probed: true, code: 0, stdout: 'DAO_LEDGER_BUNDLE v1\n' + body + tail, stderr: '' };
+    return { probed: true, code: bundleCode, stdout: 'DAO_LEDGER_BUNDLE v1\n' + body + tail, stderr: bundleCode ? 'base64: write error' : '' };
   };
   return { run, calls };
 }
@@ -203,16 +211,33 @@ describe('ledger-sync 远端命令与解析', () => {
     assert.throws(() => S.remoteDirExpr('~/$(rm -rf /)'), /不许出现的字符/, '注入面当场拒');
   });
 
-  it('列表解析：0 条与没查成分得开', async () => {
+  it('列表解析：0 条与没查成分得开；头行、尾行、尾行条数三道都得过', async () => {
     const S = await SYNC;
-    const empty = S.parseRemoteList('DAO_LEDGER_LIST v1\n');
-    assert.ok(!empty.unscanned && empty.names.length === 0, '有哨兵、0 条 = 查过是空的');
+    const empty = S.parseRemoteList('DAO_LEDGER_LIST v1\nDAO_LEDGER_LIST_END 0\n');
+    assert.ok(!empty.unscanned && empty.names.length === 0, '头尾哨兵都在、0 条 = 查过是空的');
     const gone = S.parseRemoteList('DAO_LEDGER_NODIR\n');
     assert.ok(gone.unscanned && /目录不在/.test(gone.error), '目录不在 = 没查成');
+    const noRead = S.parseRemoteList('DAO_LEDGER_NOREAD\n');
+    assert.ok(noRead.unscanned && /读不了/.test(noRead.error), '目录没权限 = 没查成，不是 0 条');
     const dead = S.parseRemoteList('');
     assert.ok(dead.unscanned && /没吐哨兵/.test(dead.error), '空输出 = 没查成，不是 0 条');
-    const two = S.parseRemoteList(`Warning: something\nDAO_LEDGER_LIST v1\n${NAME_A}\n${NAME_B}\n`);
+    // 审官 P1①：吐了头行就断线——旧协议这里会当成「远端 0 条」，静默漏事件
+    const headOnly = S.parseRemoteList('DAO_LEDGER_LIST v1\n');
+    assert.ok(headOnly.unscanned && /没尾行哨兵/.test(headOnly.error), '只有头行 = 流被截断，不是 0 条');
+    const short = S.parseRemoteList(`DAO_LEDGER_LIST v1\n${NAME_A}\nDAO_LEDGER_LIST_END 2\n`);
+    assert.ok(short.unscanned && /尾行说 2 个、实收 1 个/.test(short.error), '尾行条数对不上 = 列表不完整');
+    const after = S.parseRemoteList(`DAO_LEDGER_LIST v1\nDAO_LEDGER_LIST_END 0\n${NAME_A}\n`);
+    assert.ok(after.unscanned && /尾行之后还有内容/.test(after.error), '尾行之后还有行 = 协议乱了');
+    const two = S.parseRemoteList(`Warning: something\nDAO_LEDGER_LIST v1\n${NAME_A}\n${NAME_B}\nDAO_LEDGER_LIST_END 2\n`);
     assert.deepStrictEqual(two.names, [NAME_A, NAME_B], '哨兵之前的噪声行不算名字');
+  });
+
+  it('列表脚本不用 `ls | grep || true`（那个写法把列举错误吞成空列表）', async () => {
+    const S = await SYNC;
+    const script = S.remoteListScript();
+    assert.ok(!/\|\|\s*true/.test(script), '脚本里不许有 `|| true` 这种吞错误的尾巴');
+    assert.match(script, /DAO_LEDGER_NOREAD/, '先验目录可读可进（不可读时 glob 会退化成字面量，像空目录）');
+    assert.match(script, /DAO_LEDGER_LIST_END/, '列表要有尾行条数哨兵');
   });
 
   it('内容流解析：解码、MISS、截断（尾行条数对不上）都判得出', async () => {
@@ -317,10 +342,124 @@ describe('ledger-sync 落盘：真写、幂等、不覆盖', () => {
 
   it('三态判决：真红优先于没查成（红必须处置）', async () => {
     const S = await SYNC;
-    const base = { conflicts: [], writeFailures: [], unscanned: [], rejected: [] };
+    const base = S.emptyResult({ host: 'x' });
     assert.strictEqual(S.verdict([base]).code, 0, '什么都没有 = 绿');
     assert.strictEqual(S.verdict([{ ...base, rejected: [{}] }]).code, 2, '有进不了账的 = 没查成');
     assert.strictEqual(S.verdict([{ ...base, conflicts: [{}], unscanned: ['x'] }]).code, 1, '红与没查成同时在 → 报红');
     assert.strictEqual(S.verdict([{ ...base, writeFailures: [{}] }]).code, 1, '写不进 = 真红');
+  });
+});
+
+// ── 审官 #899 三条：同一种病的三个位置——「没查成」被当成「没有/成功」 ────────
+describe('ledger-sync：不完整一律 fail-closed（审官 #899）', () => {
+  const remoteWith = () => new Map([[NAME_A, pretty(ev())]]);
+
+  it('P1① 列表不完整/命令非零/目录没权限，一律 unscanned + exit 2，不当远端 0 条', async () => {
+    const S = await SYNC;
+    // ① ssh 吐了哨兵头就断线（审官实验 1：旧代码 remoteTotal=0 / unscanned=[] / exit 0）
+    let dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p1a-'));
+    const cut = S.pullFromHost({ host: 'fake', localDir: dir, run: fakeSsh(remoteWith(), { listTruncate: true, listCode: 1 }).run });
+    assert.strictEqual(cut.counts.added, 0, '没拉到东西');
+    assert.ok(cut.unscanned.length === 1 && /没尾行哨兵/.test(cut.unscanned[0]), '判成没查成，理由是流被截断');
+    assert.strictEqual(S.verdict([cut]).code, 2, 'exit 2，不是 0');
+    assert.notStrictEqual(cut.remoteTotal, 0, 'remoteTotal 不许写成 0（那等于宣称远端是空的）');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // ② 协议完整但命令非零退出 ⇒ 列举过程出过事，这份名单不许当全集
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p1b-'));
+    const nonZero = S.pullFromHost({ host: 'fake', localDir: dir, run: fakeSsh(new Map(), { listCode: 1 }).run });
+    assert.ok(nonZero.unscanned.length === 1 && /非零退出 exit 1/.test(nonZero.unscanned[0]), '非零退出必须点名');
+    assert.strictEqual(S.verdict([nonZero]).code, 2, '非零退出 = 没查成');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // ③ 远端目录没权限（不加 NOREAD 哨兵时，glob 退化成字面量，看着就像空目录）
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p1c-'));
+    const noRead = S.pullFromHost({ host: 'fake', localDir: dir, run: fakeSsh(remoteWith(), { noRead: true }).run });
+    assert.ok(noRead.unscanned.length === 1 && /读不了/.test(noRead.unscanned[0]), '没权限 = 没查成');
+    assert.strictEqual(S.verdict([noRead]).code, 2, 'exit 2');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // ④ 取内容那条命令非零退出，同样不许把这批当齐了
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p1d-'));
+    const bundleBad = S.pullFromHost({ host: 'fake', localDir: dir, run: fakeSsh(remoteWith(), { bundleCode: 4 }).run });
+    assert.ok(bundleBad.unscanned.some(u => /取内容命令非零退出 exit 4/.test(u)), '取内容非零退出要点名');
+    assert.strictEqual(S.verdict([bundleBad]).code, 2, 'exit 2');
+    assert.strictEqual(fs.readdirSync(dir).length, 0, '没查成时一个字节都别落盘');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('P1② 列表与取值对不上账（MISS / 请了没回）算没查成，不许报同步成功', async () => {
+    const S = await SYNC;
+    // 审官实验 2：列表列了 A，取值时 A 已被删——旧代码 missing.length=1 却 exit 0
+    let dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p2a-'));
+    const listOnly = new Map([[NAME_A, pretty(ev())]]);
+    const runner = fakeSsh(listOnly).run;
+    const wrapped = (cmd, args, opts) => {
+      if (String(args[args.length - 1]).includes('DAO_LEDGER_BUNDLE')) listOnly.delete(NAME_A); // 取值前远端删掉
+      return runner(cmd, args, opts);
+    };
+    const gone = S.pullFromHost({ host: 'fake', localDir: dir, run: wrapped });
+    assert.strictEqual(gone.counts.missing, 1, '远端列了却取不到，进 missing');
+    assert.strictEqual(gone.missing[0].name, NAME_A, 'missing 要带文件名');
+    assert.strictEqual(gone.counts.added, 0, '什么也没落盘');
+    assert.strictEqual(S.verdict([gone]).code, 2, 'missing 是唯一异常时也必须 exit 2（旧代码这里 exit 0）');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // 请过的名字既没回内容也没回 MISS ⇒ 名单没送到 / 流丢行
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p2b-'));
+    const listOnly2 = new Map([[NAME_A, pretty(ev())]]);
+    const runner2 = fakeSsh(listOnly2, { dropMiss: true }).run;
+    const wrapped2 = (cmd, args, opts) => {
+      if (String(args[args.length - 1]).includes('DAO_LEDGER_BUNDLE')) listOnly2.delete(NAME_A);
+      return runner2(cmd, args, opts);
+    };
+    const lost = S.pullFromHost({ host: 'fake', localDir: dir, run: wrapped2 });
+    assert.strictEqual(lost.counts.lost, 1, '请过却没回音，进 lost');
+    assert.strictEqual(S.verdict([lost]).code, 2, 'exit 2');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('P2③ 写盘/读回抛异常收成 writeFailures（带文件名与原因），不往外抛', async () => {
+    const S = await SYNC;
+    // ① 落点建不出来（父路径是个文件）：旧代码在 pullFromHost 里直接抛 ENOTDIR，--json 拿不到结果
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p3-'));
+    const blocker = path.join(base, 'blocker');
+    fs.writeFileSync(blocker, 'not a dir', 'utf8');
+    let r;
+    assert.doesNotThrow(() => {
+      r = S.pullFromHost({ host: 'fake', localDir: path.join(blocker, 'events'), run: fakeSsh(remoteWith()).run });
+    }, '不许把异常抛给调用方');
+    assert.strictEqual(r.counts.writeFailures, 1, '收成一条 writeFailures');
+    assert.match(r.writeFailures[0].why, /ENOTDIR|EEXIST|ENOENT/, '原因要带上系统错误码');
+    assert.ok(r.writeFailures[0].name, '要带落点名字');
+    assert.strictEqual(S.verdict([r]).code, 1, '写不进是真红 exit 1');
+
+    // ② writeIncoming 自己也不许抛：非法文件名（含 NUL）会让 writeFileSync 抛
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-p3b-'));
+    let w;
+    assert.doesNotThrow(() => {
+      w = S.writeIncoming({ dir, name: 'x .json', text: pretty(ev()) });
+    }, 'writeIncoming 不许抛');
+    assert.ok(!w.ok && /抛了/.test(w.why), '抛了就收成 ok:false 并说清');
+    fs.rmSync(base, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('判决口径只有一处：桶就是 SIGNAL_CLASS 的键，忘了归类 → fail-closed 判红', async () => {
+    const S = await SYNC;
+    const fresh = S.emptyResult({ host: 'x' });
+    const buckets = Object.keys(fresh).filter(k => Array.isArray(fresh[k])).sort();
+    assert.deepStrictEqual(buckets, Object.keys(S.SIGNAL_CLASS).sort(), '结果桶与判决表逐个对齐（加桶必须先归类）');
+    for (const [k, v] of Object.entries(S.SIGNAL_CLASS)) {
+      assert.ok(['ok', 'unscanned', 'red'].includes(v), `${k} 的归类必须是 ok/unscanned/red 之一，实际 ${v}`);
+    }
+    const sneaky = { ...S.emptyResult({ host: 'x' }), brandNewBucket: [{ name: 'z' }] };
+    const v = S.verdict([sneaky]);
+    assert.strictEqual(v.code, 1, '没归类的桶 → 判红，不是默认落进 ok');
+    assert.deepStrictEqual(v.unclassified, ['brandNewBucket'], '点名是哪个桶漏登记');
+    const typo = { ...S.emptyResult({ host: 'x' }) };
+    typo.counts = {};
+    assert.strictEqual(S.verdict([{ ...typo, added: [{ name: 'a' }] }]).code, 0, '正常的 ok 桶照样是绿（判别力在，不是一律报红）');
+    assert.strictEqual(S.verdict([]).code, 0, '零台机器 = 没有异常');
   });
 });

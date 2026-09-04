@@ -175,8 +175,11 @@ export function sortEvents(events) {
 // ── 远端命令层：脚本是纯函数（可测），执行走注入的 run（可假造）────────────
 
 export const LIST_SENTINEL = 'DAO_LEDGER_LIST v1';
+export const LIST_END_PREFIX = 'DAO_LEDGER_LIST_END';
 export const BUNDLE_SENTINEL = 'DAO_LEDGER_BUNDLE v1';
+export const BUNDLE_END_PREFIX = 'DAO_LEDGER_BUNDLE_END';
 export const NODIR_SENTINEL = 'DAO_LEDGER_NODIR';
+export const NOREAD_SENTINEL = 'DAO_LEDGER_NOREAD';
 export const DEFAULT_REMOTE_DIR = '~/.dao/ledger/events';
 
 /** POSIX sh 单引号转义。 */
@@ -198,13 +201,23 @@ export function remoteDirExpr(dir) {
   return shQuote(d);
 }
 
-/** 列远端事件名。哨兵头行区分「查过是 0 条」与「这次没查成」；目录不在 exit 3。 */
+/**
+ * 列远端事件名。头行哨兵 + **尾行条数**：少了尾行就是流被截断，条数对不上就是丢了行，
+ * 两种都判没查成，不许当「远端 0 条」（审官 P1①）。
+ *
+ * 不用 `ls | grep || true`：那个写法把列举错误（没权限、I/O 错）吞成空列表。
+ * 改成 glob 自己数，并在开头显式验目录可读可进——不可读时 glob 会退化成字面量、
+ * 看起来就像「空目录」，所以必须先拿 NOREAD 哨兵把这条路堵死。
+ */
 export function remoteListScript(dir) {
   return [
     `d=${remoteDirExpr(dir)}`,
     `[ -d "$d" ] || { echo ${NODIR_SENTINEL}; exit 3; }`,
+    `[ -r "$d" ] && [ -x "$d" ] || { echo ${NOREAD_SENTINEL}; exit 5; }`,
     `echo ${shQuote(LIST_SENTINEL)}`,
-    `ls -1 -- "$d" | grep -e '\\.json$' || true`,
+    'n=0',
+    'for f in "$d"/*.json; do [ -e "$f" ] || continue; printf ' + "'%s\\n'" + ' "${f##*/}"; n=$((n+1)); done',
+    `printf '${LIST_END_PREFIX} %s\\n' "$n"`,
   ].join('; ');
 }
 
@@ -213,6 +226,7 @@ export function remoteBundleScript(dir) {
   return [
     `d=${remoteDirExpr(dir)}`,
     `[ -d "$d" ] || { echo ${NODIR_SENTINEL}; exit 3; }`,
+    `[ -r "$d" ] && [ -x "$d" ] || { echo ${NOREAD_SENTINEL}; exit 5; }`,
     `echo ${shQuote(BUNDLE_SENTINEL)}`,
     'n=0',
     'while IFS= read -r f; do ' +
@@ -226,16 +240,42 @@ export function remoteBundleScript(dir) {
   ].join('; ');
 }
 
-/** 列表 stdout → 名字。没哨兵 = 没查成（ssh 掉了/远端 shell 不认，都不是「0 条」）。 */
+/**
+ * 列表 stdout → 名字。三道验：头行哨兵、尾行哨兵、尾行条数 == 实收行数。
+ * 任一不过都判没查成——ssh 吐了头行就断线、远端目录没权限，都不是「0 条」（审官 P1①）。
+ */
 export function parseRemoteList(stdout) {
   const lines = String(stdout == null ? '' : stdout).split(/\r?\n/);
   if (lines.some(l => l.trim() === NODIR_SENTINEL)) {
     return { unscanned: true, error: '远端账本目录不在', names: [] };
   }
+  if (lines.some(l => l.trim() === NOREAD_SENTINEL)) {
+    return { unscanned: true, error: '远端账本目录读不了（权限）——不是 0 条', names: [] };
+  }
   const at = lines.findIndex(l => l.trim() === LIST_SENTINEL);
   if (at < 0) return { unscanned: true, error: '远端没吐哨兵头行（命令没跑成，不是 0 条）', names: [] };
-  const names = lines.slice(at + 1).map(l => l.trim()).filter(Boolean);
-  return { unscanned: false, names };
+  const names = [];
+  let declared = null;
+  for (const raw of lines.slice(at + 1)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const end = new RegExp(`^${LIST_END_PREFIX} (\\d+)$`).exec(line);
+    if (end) {
+      declared = Number(end[1]);
+      continue;
+    }
+    if (declared !== null) {
+      return { unscanned: true, error: `尾行之后还有内容（协议乱了）：${line.slice(0, 40)}`, names };
+    }
+    names.push(line);
+  }
+  if (declared === null) {
+    return { unscanned: true, error: '列表没尾行哨兵（吐了头行就断了 ⇒ 流被截断，不是 0 条）', names };
+  }
+  if (declared !== names.length) {
+    return { unscanned: true, error: `尾行说 ${declared} 个、实收 ${names.length} 个（列表不完整）`, names };
+  }
+  return { unscanned: false, names, declared };
 }
 
 /** 打包 stdout → [{name,text}]。头行、尾行条数、base64 三处任一对不上都算没查成。 */
@@ -243,6 +283,9 @@ export function parseRemoteBundle(stdout) {
   const lines = String(stdout == null ? '' : stdout).split(/\r?\n/);
   if (lines.some(l => l.trim() === NODIR_SENTINEL)) {
     return { unscanned: true, error: '远端账本目录不在', files: [], missing: [] };
+  }
+  if (lines.some(l => l.trim() === NOREAD_SENTINEL)) {
+    return { unscanned: true, error: '远端账本目录读不了（权限）', files: [], missing: [] };
   }
   const at = lines.findIndex(l => l.trim() === BUNDLE_SENTINEL);
   if (at < 0) return { unscanned: true, error: '远端没吐哨兵头行（命令没跑成）', files: [], missing: [] };
@@ -309,19 +352,25 @@ export function localEventNames(dir) {
  */
 export function writeIncoming({ dir, name, text }) {
   const path = join(dir, name);
-  if (existsSync(path)) return { ok: false, why: '目标已存在，不覆盖' };
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  writeFileSync(tmp, text, 'utf8');
-  renameSync(tmp, path);
-  const back = eventIdentity(readFileSync(path, 'utf8'));
-  const want = eventIdentity(text);
-  if (!back.ok) return { ok: false, why: `读回不成：${back.why}`, path };
-  if (!want.ok) return { ok: false, why: `来件本身不成：${want.why}`, path };
-  if (back.fingerprint !== want.fingerprint) {
-    return { ok: false, why: '读回内容与来件不一致（落盘出问题）', path };
+  // 写盘/改名/读回都可能直接抛（盘满、权限、落点父路径是个文件）。抛出去 = 调用方
+  // 的 --json 不出结构化结果、逐件失败汇总也走不到，所以在这里就地收成 ok:false（审官 P2③）。
+  try {
+    if (existsSync(path)) return { ok: false, why: '目标已存在，不覆盖' };
+    mkdirSync(dir, { recursive: true });
+    const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+    writeFileSync(tmp, text, 'utf8');
+    renameSync(tmp, path);
+    const back = eventIdentity(readFileSync(path, 'utf8'));
+    const want = eventIdentity(text);
+    if (!back.ok) return { ok: false, why: `读回不成：${back.why}`, path };
+    if (!want.ok) return { ok: false, why: `来件本身不成：${want.why}`, path };
+    if (back.fingerprint !== want.fingerprint) {
+      return { ok: false, why: '读回内容与来件不一致（落盘出问题）', path };
+    }
+    return { ok: true, path, event_id: back.event.event_id, fingerprint: back.fingerprint };
+  } catch (e) {
+    return { ok: false, why: `写盘/读回抛了：${e && e.code ? e.code : String(e && e.message ? e.message : e).slice(0, 100)}`, path };
   }
-  return { ok: true, path, event_id: back.event.event_id, fingerprint: back.fingerprint };
 }
 
 /** 分批：一次 ssh 拉一批，名单走 stdin（不进 argv，长度不受命令行上限约束）。 */
@@ -329,6 +378,56 @@ export function chunk(list, size) {
   const step = Math.max(1, size);
   const out = [];
   for (let i = 0; i < (list || []).length; i += step) out.push(list.slice(i, i + step));
+  return out;
+}
+
+/**
+ * 三态判决的**唯一口径**：状态桶 → 归类。
+ *
+ * 判决只有这一处（审官三条是同一种病的三个位置：「没查成」被当成「没有/成功」）。
+ * 两头都钉住，忘了归类不可能静默变绿：
+ *  · `emptyResult()` 的桶就是这张表的键 —— 加桶必须先在这里归类；
+ *  · `verdict()` 遍历结果里**实际存在**的数组桶，遇到表上没有的键、或归类值不在
+ *    ok/unscanned/red 三档里（写错字也算），一律 fail-closed 判红。
+ *    **没有「默认落进 ok」这条路。**
+ */
+export const SIGNAL_CLASS = {
+  added: 'ok',
+  skipped: 'ok',
+  ignored: 'ok', // 远端的非事件文件（索引/临时件），本来就不该拉
+  suspects: 'ok', // 名字与内容对不上：就地脱敏过的老事件，点名不拦
+  unscanned: 'unscanned',
+  rejected: 'unscanned', // 来件进不了账（坏 JSON / 名字非法 / 同名文件比不了）
+  missing: 'unscanned', // 列表列了、逐件取值时没了 ⇒ 这次没汇聚成，不许报同步成功
+  lost: 'unscanned', // 请过但既没回内容也没回 MISS ⇒ 名单没送到 / 流丢行
+  conflicts: 'red',
+  writeFailures: 'red',
+};
+
+const SIGNAL_STATES = new Set(['ok', 'unscanned', 'red']);
+
+/** 结果骨架：桶由 SIGNAL_CLASS 的键生成，所以「有桶必有归类」。 */
+export function emptyResult({ host, remoteDir, localDir, verify, apply } = {}) {
+  const out = {
+    host: host ?? null,
+    remoteDir: remoteDir ?? null,
+    localDir: localDir ?? null,
+    verify: !!verify,
+    applied: !!apply,
+    remoteTotal: null,
+    counts: {},
+  };
+  for (const key of Object.keys(SIGNAL_CLASS)) {
+    out[key] = [];
+    out.counts[key] = 0;
+  }
+  return out;
+}
+
+/** 计数从桶现算，不手抄（手抄就会漏掉新桶）。 */
+export function recount(out) {
+  out.counts = {};
+  for (const key of Object.keys(SIGNAL_CLASS)) out.counts[key] = (out[key] || []).length;
   return out;
 }
 
@@ -346,47 +445,48 @@ export function pullFromHost({
   sshArgs = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20'],
   batch = 150,
 } = {}) {
-  const out = {
-    host,
-    remoteDir,
-    localDir,
-    verify: !!verify,
-    applied: !!apply,
-    remoteTotal: null,
-    unscanned: [],
-    added: [],
-    skipped: [],
-    conflicts: [],
-    rejected: [],
-    suspects: [],
-    missing: [],
-    ignored: [],
-    writeFailures: [],
-    counts: { added: 0, skipped: 0, conflicts: 0, rejected: 0 },
-  };
+  const out = emptyResult({ host, remoteDir, localDir, verify, apply });
   if (!host) {
     out.unscanned.push('没给 --from <ssh 别名>');
-    return out;
+    return recount(out);
   }
   const localList = localEventNames(localDir);
   if (localList.unscanned) {
     if (!apply) {
       out.unscanned.push(localList.error);
-      return out;
+      return recount(out);
     }
-    mkdirSync(localDir, { recursive: true }); // 首拉：本机还没这个目录，建了当空集算
+    // 首拉：本机还没这个目录，建了当空集算。建不出来（父路径是文件、没权限、盘满）
+    // 会直接抛——抛出去调用方就拿不到结构化结果了（审官 P2③），就地收成真红。
+    try {
+      mkdirSync(localDir, { recursive: true });
+    } catch (e) {
+      out.writeFailures.push({
+        name: String(localDir),
+        why: `本机落点建不出来：${e && e.code ? e.code : String(e && e.message ? e.message : e).slice(0, 100)}`,
+      });
+      return recount(out);
+    }
   }
   const localNames = localList.unscanned ? [] : localList.names;
 
   const listed = run('ssh', [...sshArgs, host, remoteListScript(remoteDir)]);
   if (!listed.probed) {
     out.unscanned.push(`ssh ${host} 没跑成：${listed.reason}`);
-    return out;
+    return recount(out);
   }
   const remote = parseRemoteList(listed.stdout);
   if (remote.unscanned) {
-    out.unscanned.push(`${host} 列表没查成：${remote.error}${listed.code ? `（exit ${listed.code}）` : ''}`);
-    return out;
+    out.unscanned.push(`${host} 列表没查成：${remote.error}（exit ${listed.code}）`);
+    return recount(out);
+  }
+  // 协议三道验都过了，但命令仍非零 ⇒ 列举过程出过事，一律当没查成，不许拿这份名单当全集。
+  if (listed.code !== 0) {
+    out.unscanned.push(
+      `${host} 列表命令非零退出 exit ${listed.code}（列举可能不全，不当 0 条）` +
+      `${listed.stderr ? `：${String(listed.stderr).trim().slice(0, 120)}` : ''}`
+    );
+    return recount(out);
   }
   out.remoteTotal = remote.names.length;
 
@@ -411,16 +511,32 @@ export function pullFromHost({
     const got = run('ssh', [...sshArgs, host, remoteBundleScript(remoteDir)], { input: names.join('\n') + '\n' });
     if (!got.probed) {
       out.unscanned.push(`ssh ${host} 取内容没跑成：${got.reason}`);
-      return out;
+      return recount(out);
     }
     const bundle = parseRemoteBundle(got.stdout);
     if (bundle.unscanned) {
-      out.unscanned.push(`${host} 取内容没查成：${bundle.error}`);
-      return out;
+      out.unscanned.push(`${host} 取内容没查成：${bundle.error}（exit ${got.code}）`);
+      return recount(out);
     }
-    out.missing.push(...bundle.missing);
+    if (got.code !== 0) {
+      out.unscanned.push(
+        `${host} 取内容命令非零退出 exit ${got.code}（这批可能不全）` +
+        `${got.stderr ? `：${String(got.stderr).trim().slice(0, 120)}` : ''}`
+      );
+      return recount(out);
+    }
+    // 逐件对账：请过的每个名字必须要么回内容、要么回 MISS。都没回 = 名单没送到 / 流丢行，
+    // 也不许当「就这些」。回了没请过的名字同样是协议乱了。
+    const back = new Set([...bundle.files.map(f => f.name), ...bundle.missing]);
+    for (const n of names) if (!back.has(n)) out.lost.push({ name: n, why: '请过但既没回内容也没回 MISS' });
+    const asked = new Set(names);
+    for (const f of bundle.files) {
+      if (!asked.has(f.name)) out.lost.push({ name: f.name, why: '没请过却回了内容（协议乱了）' });
+    }
+    out.missing.push(...bundle.missing.map(name => ({ name, why: '列表列了、取值时远端已没有' })));
     incoming.push(...bundle.files);
   }
+  if (out.lost.length) return recount(out); // 名单对不上账，后面别拿半份数据当结果
 
   const merged = mergeIncoming({ localTexts, incoming });
   out.conflicts = merged.conflicts;
@@ -439,20 +555,41 @@ export function pullFromHost({
     out.added = merged.added.map(i => ({ name: i.name, event_id: i.event.event_id, path: null }));
   }
 
-  out.counts = {
-    added: out.added.length,
-    skipped: out.skipped.length,
-    conflicts: out.conflicts.length,
-    rejected: out.rejected.length,
-  };
-  return out;
+  return recount(out);
 }
 
-/** 汇总多台机器 → 三态退出码：0 通 / 1 真红 / 2 没查成。真红优先（必须处置）。 */
+/**
+ * 汇总多台机器 → 三态退出码：0 通 / 1 真红 / 2 没查成。真红优先（必须处置）。
+ *
+ * 归类只查 SIGNAL_CLASS 这一张表，且**没有默认放过的分支**：桶不在表上、或归类值不是
+ * ok/unscanned/red，都进 unclassified 并判红。所以以后谁加了状态桶忘了归类，
+ * 拿到的是红加一句「判决表漏登记」，不是一个假绿。
+ */
 export function verdict(results) {
   const list = results || [];
-  const red = list.some(r => (r.conflicts || []).length || (r.writeFailures || []).length);
-  const unscanned = list.some(r => (r.unscanned || []).length || (r.rejected || []).length);
+  let red = false;
+  let unscanned = false;
+  const unclassified = new Set();
+  for (const r of list) {
+    for (const [key, value] of Object.entries(r || {})) {
+      if (!Array.isArray(value) || value.length === 0) continue;
+      const cls = SIGNAL_CLASS[key];
+      if (!SIGNAL_STATES.has(cls)) {
+        unclassified.add(key);
+        continue;
+      }
+      if (cls === 'red') red = true;
+      else if (cls === 'unscanned') unscanned = true;
+    }
+  }
+  if (unclassified.size) {
+    return {
+      code: 1,
+      state: 'red',
+      unclassified: [...unclassified],
+      why: `有没归类的状态桶（SIGNAL_CLASS 漏登记）：${[...unclassified].join('/')}——fail-closed 判红`,
+    };
+  }
   if (red) return { code: 1, state: 'red' };
   if (unscanned) return { code: 2, state: 'unscanned' };
   return { code: 0, state: 'ok' };
