@@ -458,13 +458,16 @@ export function classifyRetiredClis({ probed, reason, found } = {}) {
 
 /** POSIX：不是目录且 mode 至少一个 execute bit。Windows：候选必须是文件，不是目录。
  *  三态：{ executable:true } / { executable:false } / { error }——EACCES、IO 错不许当 absent
- *  （审官红项：不可读目录里若真藏着退役 CLI，吞错会让 ⑱ 错误判绿；探不到 ≠ 不存在）。 */
-export function isExecutableEntry(p, { platform, exists, stat } = {}) {
+ *  （审官红项：不可读目录里若真藏着退役 CLI，吞错会让 ⑱ 错误判绿；探不到 ≠ 不存在）。
+ *
+ *  别加 existsSync 前置！existsSync 内部吞掉所有 stat 错误一律返回 false，EACCES 会走成
+ *  「不存在」，永远进不了下面的 catch——三态塌回两态，⑱ 又开始把探不动当 0 个。
+ *  absent 只由错误码认定：ENOENT（没这个名）/ ENOTDIR（PATH 段不是目录）。
+ *  （2026-09-04 审官红项：上一版留着 existsSync 前置，单测靠注入 exists 绕过去才全绿。） */
+export function isExecutableEntry(p, { platform, stat } = {}) {
   const win = (platform || process.platform) === 'win32';
-  const existsFn = typeof exists === 'function' ? exists : existsSync;
   const statFn = typeof stat === 'function' ? stat : statSync;
   try {
-    if (!existsFn(p)) return { executable: false };
     const st = statFn(p);
     if (!st || typeof st.isDirectory !== 'function' || st.isDirectory()) return { executable: false };
     if (win) {
@@ -474,7 +477,9 @@ export function isExecutableEntry(p, { platform, exists, stat } = {}) {
     if (typeof mode !== 'number') return { executable: false };
     return { executable: (mode & 0o111) !== 0 };
   } catch (e) {
-    return { error: `${p}: ${e.code || e.message}` };
+    // 只有这两个码能证明「真没有」；其余（EACCES/EPERM/EIO/ELOOP…）= 没查成。
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return { executable: false };
+    return { error: `${p}: ${(e && (e.code || e.message)) || 'unknown'}` };
   }
 }
 
@@ -487,11 +492,15 @@ export function whichOnPath(name, opts = {}) {
   const segs = String(pathEnv).split(win ? ';' : ':').filter(Boolean);
   if (segs.length === 0) return { probed: false, reason: 'PATH 分段 0 个（没查成）', hit: null };
   const candidates = win ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
-  const entryOpts = { platform, exists: opts.exists, stat: opts.stat };
+  const entryOpts = { platform, stat: opts.stat };
+  // 拼路径要跟 platform 走，不跟宿主走：宿主 join 在 Windows 上会把 /usr/bin 拼成
+  // \usr\bin\grok，platform:'linux' 就成了摆设（本机跑 Linux 分支的单测因此假红）。
+  const sep = win ? '\\' : '/';
+  const joinFor = (dir, file) => `${String(dir).replace(/[/\\]+$/, '')}${sep}${file}`;
   const probeErrors = [];
   for (const dir of segs) {
     for (const file of candidates) {
-      const p = join(dir, file);
+      const p = joinFor(dir, file);
       const r = isExecutableEntry(p, entryOpts);
       if (r.error) { probeErrors.push(r.error); continue; }
       if (r.executable) return { probed: true, hit: p };

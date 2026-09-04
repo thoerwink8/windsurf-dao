@@ -268,15 +268,16 @@ test('server-check 判别力', async (t) => {
   });
 
   await t.test('#822 whichOnPath 只认可执行入口（审官红：同名目录/不可执行文件不许当命中）', async (t) => {
-    const posixDir = '/tmp/bin/grok';
+    // 假 fs 一律照真 fs 的说法：「不存在」只能由 stat 抛 ENOENT/ENOTDIR 表达，
+    // 不许再有 exists 接缝——那个接缝正是上一版把 EACCES 蒙成 absent 还全绿的原因。
+    const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+    const eacces = () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; };
     const posixFile = '/tmp/bin/grok';
-    const winDir = 'C:\\Tools\\grok.exe';
 
     await t.test('POSIX 同名目录 → 不命中', () => {
       const r = whichOnPath('grok', {
         platform: 'linux',
         pathEnv: '/tmp/bin',
-        exists: (p) => p === posixDir,
         stat: () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
       });
       assert.equal(r.probed, true);
@@ -287,19 +288,19 @@ test('server-check 判别力', async (t) => {
       const r = whichOnPath('grok', {
         platform: 'linux',
         pathEnv: '/tmp/bin',
-        exists: (p) => p === posixFile,
         stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o644 }),
       });
       assert.equal(r.probed, true);
       assert.equal(r.hit, null, JSON.stringify(r));
     });
 
-    await t.test('POSIX 真正可执行文件 → 命中', () => {
+    await t.test('POSIX 真正可执行文件 → 命中（拼路径跟 platform 走，不跟宿主走）', () => {
       const r = whichOnPath('grok', {
         platform: 'linux',
         pathEnv: '/tmp/bin',
-        exists: (p) => p === posixFile,
-        stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o755 }),
+        stat: (p) => (p === posixFile
+          ? { isDirectory: () => false, isFile: () => true, mode: 0o755 }
+          : enoent()),
       });
       assert.equal(r.probed, true);
       assert.equal(r.hit, posixFile, JSON.stringify(r));
@@ -309,7 +310,6 @@ test('server-check 判别力', async (t) => {
       const r = whichOnPath('grok', {
         platform: 'win32',
         pathEnv: 'C:\\Tools',
-        exists: (p) => p.replace(/\\/g, '/') === 'C:/Tools/grok.exe' || p === winDir,
         stat: () => ({ isDirectory: () => true, isFile: () => false }),
       });
       assert.equal(r.probed, true);
@@ -320,50 +320,71 @@ test('server-check 判别力', async (t) => {
       const r = whichOnPath('grok', {
         platform: 'win32',
         pathEnv: 'C:\\Tools',
-        exists: (p) => String(p).includes('grok.exe'),
-        stat: () => ({ isDirectory: () => false, isFile: () => true }),
+        stat: (p) => (String(p).endsWith('grok.exe')
+          ? { isDirectory: () => false, isFile: () => true }
+          : enoent()),
       });
       assert.equal(r.probed, true);
-      assert.ok(r.hit && String(r.hit).includes('grok.exe'), JSON.stringify(r));
+      assert.equal(r.hit, 'C:\\Tools\\grok.exe', JSON.stringify(r));
     });
 
     await t.test('isExecutableEntry：目录 / 无 x 位 / 有 x 位（三态对象契约）', () => {
       assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
-        exists: () => true,
         stat: () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
       }), { executable: false });
       assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
-        exists: () => true,
         stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o644 }),
       }), { executable: false });
       assert.deepEqual(isExecutableEntry('/x', {
         platform: 'linux',
-        exists: () => true,
         stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o111 }),
       }), { executable: true });
     });
 
-    await t.test('stat 抛 EACCES → {error}，不当 absent', () => {
-      const r = isExecutableEntry('/locked/x', {
+    await t.test('stat 抛 ENOENT / ENOTDIR → absent（executable:false，不算探不动）', () => {
+      assert.deepEqual(isExecutableEntry('/nope/x', { platform: 'linux', stat: enoent }), { executable: false });
+      assert.deepEqual(isExecutableEntry('/afile/x', {
         platform: 'linux',
-        exists: () => true,
-        stat: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; },
-      });
+        stat: () => { const e = new Error('ENOTDIR'); e.code = 'ENOTDIR'; throw e; },
+      }), { executable: false });
+    });
+
+    await t.test('stat 抛 EACCES → {error}，不当 absent', () => {
+      const r = isExecutableEntry('/locked/x', { platform: 'linux', stat: eacces });
       assert.ok(r.error && r.error.includes('EACCES'), JSON.stringify(r));
       assert.equal(r.executable, undefined);
+    });
+
+    // 判别测试（审官红项本体）：existsSync 内部吞 stat 错、EACCES 一律返回 false。
+    // 只要有人把 existsSync 前置加回来，EACCES 就会被当成 absent —— 这条会红。
+    // 传 exists:()=>false 模拟真 existsSync 在 EACCES 下的说法：结果必须仍是 unknown。
+    await t.test('审官红项：existsSync 前置不许回来——absent 只认错误码，exists 接缝说了不算', () => {
+      const r = isExecutableEntry('/locked/x', {
+        platform: 'linux',
+        exists: () => false, // 真 existsSync 在 EACCES 下就是这个答案
+        stat: eacces,
+      });
+      assert.equal(r.executable, undefined, `EACCES 被蒙成 absent 了：${JSON.stringify(r)}`);
+      assert.ok(r.error && r.error.includes('EACCES'), JSON.stringify(r));
+
+      // 同一颗毒药走完整条 whichOnPath：不许报「扫完 0 个」
+      const w = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/locked',
+        exists: () => false,
+        stat: eacces,
+      });
+      assert.equal(w.probed, false, `探不动却报了 probed:true：${JSON.stringify(w)}`);
+      assert.equal(w.hit, null);
     });
 
     await t.test('PATH 里有探不动的项且没命中 → probed:false（没查成不是 0 个）', () => {
       const r = whichOnPath('grok', {
         platform: 'linux',
         pathEnv: '/locked:/usr/bin',
-        exists: (p) => String(p).startsWith('/locked'),
-        stat: (p) => {
-          if (String(p).startsWith('/locked')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
-          const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
-        },
+        stat: (p) => (String(p).startsWith('/locked') ? eacces() : enoent()),
       });
       assert.equal(r.probed, false);
       assert.equal(r.hit, null);
@@ -375,9 +396,8 @@ test('server-check 判别力', async (t) => {
       const r = whichOnPath('grok', {
         platform: 'linux',
         pathEnv: '/locked:/usr/bin',
-        exists: () => true,
         stat: (p) => {
-          if (String(p).startsWith('/locked')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+          if (String(p).startsWith('/locked')) return eacces();
           return { isDirectory: () => false, isFile: () => true, mode: 0o755 };
         },
       });
