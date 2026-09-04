@@ -21,6 +21,17 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
 
+## 快马单的审官（2026-09-04 拍板，用户提「帅位来判」被否）
+
+框架单走快马（#877：type/体系 不进自动派单队列，主会话子代理闭环）时，**写码可以本地子代理，判定权永远不归帅位**：
+快马工人是 claude 族子代理、帅位也是 claude 族——帅位判官 = 同厂审查 + 编排者自审双重违规。
+实证 2026-09-04：luna 审官对快马产出连咬 6 条真红（partial 当正文 / 断线报成功 / `--task` 崩栈…），帅自审这些全进 master。
+
+- 判官照选型表换厂商，不因快马降格。
+- 起法不依赖 orca 卡态（快马树无士兵 dispatch，orca reviewer-attach 对不上——#880 实咬）：
+  正式路径 = `reviewer-create --pr <N> --executor mirasim`（#880 卡 C）；卡 C 未合并期间的垫片 = 帅位向既有审官终端直注复审请求（`dao.mjs send --terminal`），垫片在卡 C PR 正文登记、合并时退役。
+- 帅位对快马 PR 只有三种动作：催审（直注）、按审官红项组织返工、四条核对后合并（审官 APPROVED / CI 绿 / merge-policy / commit 对齐）。没有第四种。
+
 ## 帅操作 issue 的身份约定（#627）
 
 PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）同样走 marshal，不用裸 `gh issue`。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
