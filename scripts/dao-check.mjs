@@ -101,6 +101,7 @@ import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
@@ -1398,6 +1399,8 @@ checkDesignExamHarvestSamples();
 checkDesignExamHarvestLive();
 checkVendorGateSamples();
 checkVendorGateLive();
+checkLegsSamples();
+checkLegsLive();
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1673,6 +1676,52 @@ function checkDesignExamHarvestLive() {
     return;
   }
   green('盲考收卷纪律还在（起考轮盯产物收到完）');
+}
+
+// §73 四轴腿表：样本三态（红/绿/空=没查成）+ live（合法性 + 与职责树交叉核；单轴裸奔只报不拦）。
+function checkLegsSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'legs');
+  const readJson = (name) => {
+    try { return JSON.parse(readFileSync(join(dir, `${name}.json`), 'utf8')); } catch { return null; }
+  };
+  const r = inspectLegsFixtures({ readJson });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '腿表样本没查成' : '腿表样本失去判别力',
+      '恢复 tests/fixtures/legs/{red,ok,empty}.json：红必须校出错、绿必须干净、缺节必须判没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`腿表样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkLegsLive() {
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+  } catch (e) {
+    fail('腿表 live 没查成', '选型 JSON 读失败', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  const v = validateLegs(doc);
+  if (v.unscanned) {
+    fail('选型 JSON 没有 轴/腿 节', '§73：四轴腿表是选型真相源的一部分；补 轴 + 腿 节', ROUTING_POLICY_FILE);
+    return;
+  }
+  const c = crossCheckLegsTree(doc);
+  const problems = [...v.errors, ...c.errors];
+  if (problems.length) {
+    fail(
+      `腿表校验不过 ${problems.length} 处`,
+      '四轴合法组合见 §73；启用职责条目必须有对应在役腿（drop 走 dao leg，别手改一半）',
+      problems.slice(0, 8).join(' '),
+    );
+    return;
+  }
+  const n = nPlusOneReport(doc);
+  const warn = [...c.warnings, ...n.exposures];
+  green(`腿表 ${doc.腿.length} 条四轴合法、与职责树互证${warn.length ? `；单轴裸奔 ${n.exposures.length} 处（只报不拦，补腿归 #880 卡 H/B）` : ''}`);
 }
 
 function checkVendorGateSamples() {

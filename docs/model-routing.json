@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-03",
+  "updated": "2026-09-04",
   "工人": {
     "写码": {
       "模型": [
@@ -358,6 +358,185 @@
       "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等本单验收后",
       "约束": "启用中的厂商：GPT 模型必须 gpt；其余必须 gw。禁用条目可留旧 CLI 作退役记录",
       "拍板": "2026-09-03"
+    }
+  ],
+  "轴": {
+    "族": [
+      "claude",
+      "codex",
+      "pi"
+    ],
+    "供应商": [
+      "gw",
+      "pqapi",
+      "reclaude",
+      "mirasim"
+    ],
+    "执行侧": [
+      "orca",
+      "mirasim",
+      "cc-local",
+      "terminal"
+    ]
+  },
+  "腿": [
+    {
+      "id": "grok-4.6@gw/orca",
+      "模型": "grok-4.6",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw/grok-4.6"
+      },
+      "理由": "§73 迁移：写码/查证/方案整合现役主腿"
+    },
+    {
+      "id": "deepseek-v4-flash@gw/orca",
+      "模型": "deepseek-v4-flash",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-dspool/deepseek-v4-flash"
+      },
+      "理由": "§73 迁移：写码/方案 fallback"
+    },
+    {
+      "id": "gpt-5.6-sol@pqapi/orca",
+      "模型": "gpt-5.6-sol",
+      "族": "codex",
+      "供应商": "pqapi",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gpt"
+      },
+      "理由": "§73 迁移：方案主路/审官备选；codex 直连 pqapi（#843 熔断 key direct:codex@pqapi）；gpt 族后备顺位见 §72"
+    },
+    {
+      "id": "gpt-5.6-luna@gw/orca",
+      "模型": "gpt-5.6-luna",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-windsurf/gpt-5.6-luna"
+      },
+      "理由": "§73 迁移：审官过渡首选（#843）"
+    },
+    {
+      "id": "glm-5.2@gw/orca",
+      "模型": "glm-5.2",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-windsurf/glm-5-2"
+      },
+      "理由": "§73 迁移：方案/UI/审官候选"
+    },
+    {
+      "id": "gemini-3.7-flash@gw/orca",
+      "模型": "gemini-3.7-flash",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-windsurf/gemini-3-7-flash-high"
+      },
+      "理由": "§73 迁移：查证/UI 候选"
+    },
+    {
+      "id": "kimi-k3@gw/orca",
+      "模型": "kimi-k3",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-sub/kimi-k3-high"
+      },
+      "理由": "§73 迁移：UI/审官/判断候选"
+    },
+    {
+      "id": "composer-2.5@gw/orca",
+      "模型": "composer-2.5",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw-sub/composer-2.5"
+      },
+      "理由": "§73 迁移：UI 主选/判断候选"
+    },
+    {
+      "id": "claude-fable-5@reclaude/terminal",
+      "模型": "claude-fable-5",
+      "族": "claude",
+      "供应商": "reclaude",
+      "执行侧": "terminal",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "理由": "帅位现役腿（人工起的 reclaude 终端）；§73「帅位也是腿」"
+    },
+    {
+      "id": "claude-opus@reclaude/orca",
+      "模型": "claude-opus",
+      "族": "claude",
+      "供应商": "reclaude",
+      "执行侧": "orca",
+      "状态": "停用",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "claude",
+        "cli_model": "opus"
+      },
+      "停用原因": "审官位 2026-08-22 起禁用沿革；且 reclaude 号 2026-09-04 白天 400 抖动",
+      "停用日期": "2026-09-04"
+    },
+    {
+      "id": "claude-opus-5@mirasim/mirasim",
+      "模型": "claude-opus-5",
+      "族": "claude",
+      "供应商": "mirasim",
+      "执行侧": "mirasim",
+      "状态": "停用",
+      "拍板": "2026-09-04",
+      "停用原因": "卡 A 五动词已真烧验证，等 #880 卡 B 派工接线",
+      "停用日期": "2026-09-04"
+    },
+    {
+      "id": "claude-opus-5@reclaude/cc-local",
+      "模型": "claude-opus-5",
+      "族": "claude",
+      "供应商": "reclaude",
+      "执行侧": "cc-local",
+      "状态": "停用",
+      "拍板": "2026-09-04",
+      "停用原因": "等 #880 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工）",
+      "停用日期": "2026-09-04"
     }
   ]
 }

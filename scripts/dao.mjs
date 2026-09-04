@@ -207,6 +207,7 @@ import {
 } from './lib/dao-cmd.mjs';
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
@@ -4636,6 +4637,71 @@ function cmdBreaker(args) {
   emit({ ok: true, ...r });
 }
 
+/** §73 四轴腿表：status / drop / restore。drop 联动职责树禁用（引擎只读树）。 */
+async function cmdLeg(args) {
+  const { validateLegs, crossCheckLegsTree, nPlusOneReport, dropImpact, applyLegDrop, applyLegRestore, readLegs } =
+    await import('./lib/legs.mjs');
+  const file = ROUTING_POLICY_FILE;
+  const text = readFileSync(file, 'utf8');
+  const doc = JSON.parse(text);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const writeDoc = (nextDoc) => {
+    const out = JSON.stringify(nextDoc, null, 2).replace(/\n/g, eol) + eol;
+    JSON.parse(out); // 写前自证
+    writeFileSync(file, out, 'utf8');
+  };
+  const selector = args.key
+    ? { legIds: [args.key] }
+    : args.supplier ? { axis: '供应商', value: args.supplier }
+      : args.executor ? { axis: '执行侧', value: args.executor }
+        : args.family ? { axis: '族', value: args.family }
+          : args.model ? { axis: '模型', value: args.model }
+            : null;
+
+  const action = args.action || 'status';
+  if (action === 'status') {
+    const r = readLegs(doc);
+    if (!r.ok) fail(r.error);
+    const v = validateLegs(doc);
+    const c = crossCheckLegsTree(doc);
+    const n = nPlusOneReport(doc);
+    emit({
+      ok: v.ok && c.ok,
+      legs: r.legs.map(l => ({ id: l.id, 状态: l.状态, 族: l.族, 供应商: l.供应商, 执行侧: l.执行侧, ...(l.停用原因 ? { 停用原因: l.停用原因 } : {}) })),
+      errors: [...v.errors, ...c.errors],
+      warnings: [...v.warnings, ...c.warnings],
+      单轴裸奔: n.exposures,
+    }, v.ok && c.ok ? 0 : 1);
+    return;
+  }
+  if (action === 'drop') {
+    if (!selector) fail('drop 要指名腿（leg drop <腿id>）或轴（--supplier/--executor/--family/--model <值>）');
+    const impact = dropImpact(doc, selector);
+    if (!impact.ok) fail(impact.error || '影响面没算成');
+    if (args.dryRun) {
+      emit({ ok: true, dryRun: true, ...impact });
+      return;
+    }
+    if (impact.anyBlack && args.force !== true) {
+      fail('拆了会有工种全黑，拒拆（确要拆加 --force，并先想好谁顶上）', { impact });
+    }
+    const r = applyLegDrop(doc, selector, { why: args.why });
+    if (!r.ok) fail(r.error, { impact: r.impact });
+    writeDoc(r.doc);
+    emit({ ok: true, ...r.changes, impact: r.impact });
+    return;
+  }
+  if (action === 'restore') {
+    if (!args.key) fail('restore 要指名腿 id（leg restore <腿id>）');
+    const r = applyLegRestore(doc, args.key);
+    if (!r.ok) fail(r.error);
+    writeDoc(r.doc);
+    emit({ ok: true, ...r.changes });
+    return;
+  }
+  fail(`leg 只认 status / drop / restore，实际 ${action}`);
+}
+
 function main() {
   let args;
   try { args = parseArgs(process.argv); }
@@ -4679,6 +4745,7 @@ function main() {
     case 'ledger-query': return cmdLedgerQuery(args);
     case 'preflight': return cmdPreflight(args);
     case 'breaker': return cmdBreaker(args);
+    case 'leg': return cmdLeg(args);
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);

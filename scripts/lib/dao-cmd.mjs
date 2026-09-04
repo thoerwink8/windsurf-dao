@@ -928,7 +928,7 @@ export const VERBS = [
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
-  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'raw',
+  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight']);
@@ -942,6 +942,7 @@ export const FLAGS_BY_VERB = {
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),
+  leg: new Set(['--supplier', '--executor', '--family', '--model', '--why', '--force', '--dry-run', '--json', '--help', '-h']),
   'dispatch-exec': new Set(['--order', '--json', '--help', '-h']),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
@@ -1024,7 +1025,7 @@ export function parseArgs(argv) {
     const flag = a.split('=')[0];
     if (flag === '--help' || flag === '-h') { args.help = true; continue; }
     if (!flag.startsWith('--')) {
-      if (verb === 'breaker') { positionals.push(a); continue; }
+      if (verb === 'breaker' || verb === 'leg') { positionals.push(a); continue; }
       throw new Error(`未知参数: ${a}`);
     }
     if (!allowed.has(flag)) throw new Error(`未知参数: ${flag}`);
@@ -1040,7 +1041,7 @@ export function parseArgs(argv) {
     }
     args[ck] = val;
   }
-  if (verb === 'breaker') {
+  if (verb === 'breaker' || verb === 'leg') {
     args.action = positionals[0] || null;
     args.key = positionals[1] || null;
   }
@@ -1144,6 +1145,14 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   breaker trip <key> --hours N
                   # 手动熔断（#843）：立刻 open，冷却 N 小时。全部 open 时报帅 + 总控群一条
                   # 「现在探一针」走 preflight --model；后台只调这三条
+  leg status [--json]
+                  # 四轴腿表（§73）：列腿 + 单轴裸奔报告（某工种全部在役腿在一根轴上同值 = 拆它就全黑）
+  leg drop <腿id> --why <文> [--dry-run] [--force]
+  leg drop (--supplier|--executor|--family|--model) <值> --why <文> [--dry-run] [--force]
+                  # 拆腿=腿标停用+职责树里靠它的启用条目打禁用（记 禁用来源=leg:<id>，引擎只读树，不禁树就是空话）
+                  # 先算影响面：哪个工种会全黑；全黑拒拆，确要拆加 --force；--dry-run 只看影响面
+  leg restore <腿id>
+                  # 腿回在役；只解开「禁用来源=leg:<id>」的树条目，人手禁的不碰
   amend --issue <号> --why <一句话> [--pr <号>] [--by 帅|用户] [--model <id>]
                   # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕

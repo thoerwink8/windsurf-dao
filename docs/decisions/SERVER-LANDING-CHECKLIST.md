@@ -81,3 +81,18 @@
   - 派前探一针 + F15 接健康表（#842 / PR #845）；健康表由 ai-gateway-stack 探针写（其 DECISIONS §66）。
   - 编排层熔断 provider 级 cooldown（#843 / PR #851）；与网关侧熔断的边界见 ai-gateway-stack DECISIONS §67。
   - 审官首选临时切 gpt-5.6-luna（PR #844，pqapi 故障过渡；切回条件=#843 上线且 pqapi 恢复后再拍）。
+
+## 第 11 步：选型四轴 + 腿表（§73，用户 2026-09-04 拍板「按这版落，直接在本会话全落地」）
+
+依据与实测全在 ai-gateway-stack `docs/DECISIONS.md` §73；逐步进度在 `2026-09-04-four-axis-legs.md`（本页不重复）。
+落地形状（与早先草稿的差异：不做 provider→轴推导表，腿一条条显式登记——推导会把「没拍过板」藏进默认值）：
+
+- [x] `docs/model-routing.json` 新增 `轴`（三根轴的合法枚举）+ `腿`（12 条显式腿：8 在役 orca 腿、帅位 reclaude 终端腿、3 条停用腿——claude-opus@reclaude/orca、claude-opus-5@mirasim/mirasim 等卡 B、claude-opus-5@reclaude/cc-local 等卡 H）
+- [x] `scripts/lib/legs.mjs`（纯函数）：四轴合法性（§73 四条约束）/ 与职责树交叉核 / drop 影响面 / N+1 单轴裸奔报告 / drop・restore
+- [x] `dao.mjs leg status|drop|restore`：drop=腿停用+树条目联动禁用（记 禁用来源=leg:<id>；引擎只读树，不禁树就是空话）；影响面全黑拒拆除非 --force；restore 只解自己禁的
+- [x] dao-check：腿表样本（红/绿/空）+ live 两项，变异测试自证有牙（坏夹具→红、手改真表→红）
+- [x] 测试 tests/legs.test.js 24 绿；dao.test 639 绿（parseArgs 扩动词）；dao-check 绿项 106（3 红为本机存量，stash 验证与本活无关）
+- [ ] 试效果：leg drop --dry-run 按轴看影响面 / 真拆一条再 restore 往返
+- 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工 + 并发 1 + 掉号探针）**不在本步**——腿已登记为停用，等本步落完开工
+- 边界：A–F 卡接口不动；卡 B 的 `执行体` 节将并入腿表（B 变基时处理）；#822 规则「非GPT只走pi-gw」与 cc-local 腿启用相撞，启用前要用户重拍
+- 在途 PR #884/#885/#886/#887 让步等本步落完再变基（用户 2026-09-04：「仓库 issue 如果还需要的，先等这个内容完全落地」）

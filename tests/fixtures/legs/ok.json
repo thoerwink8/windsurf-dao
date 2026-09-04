@@ -1,0 +1,47 @@
+{
+  "updated": "2026-09-04",
+  "轴": {
+    "族": [
+      "claude",
+      "pi"
+    ],
+    "供应商": [
+      "gw",
+      "reclaude",
+      "mirasim"
+    ],
+    "执行侧": [
+      "orca",
+      "mirasim",
+      "cc-local"
+    ]
+  },
+  "工人": {
+    "写码": {
+      "模型": [
+        {
+          "id": "grok-4.6",
+          "顺位": 1,
+          "禁用": false,
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
+        }
+      ]
+    }
+  },
+  "腿": [
+    {
+      "id": "grok-4.6@gw/orca",
+      "模型": "grok-4.6",
+      "族": "pi",
+      "供应商": "gw",
+      "执行侧": "orca",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "gw",
+        "cli_model": "gw/grok-4.6"
+      }
+    }
+  ]
+}

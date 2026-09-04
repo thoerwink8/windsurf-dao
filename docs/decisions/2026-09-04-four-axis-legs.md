@@ -20,15 +20,15 @@
 
 - [x] 0. §73 写进 ai-gateway-stack DECISIONS 并提交（dd18f9f）
 - [x] 1. 本进度页立骨架 + #880 挂指针
-- [ ] 2. `scripts/lib/legs.mjs`：纯函数（读腿表 / 四轴合法性 / 与职责树交叉核 / drop 影响面 / N+1 报告）
-- [ ] 3. `docs/model-routing.json` 加 `轴` 枚举 + `腿` 节（从现役职责树逐条迁出，人工核对；新腿
+- [x] 2. `scripts/lib/legs.mjs`：纯函数（读腿表 / 四轴合法性 / 与职责树交叉核 / drop 影响面 / N+1 报告）
+- [x] 3. `docs/model-routing.json` 加 `轴` 枚举 + `腿` 节（从现役职责树逐条迁出，人工核对；新腿
       `claude-opus-5@mirasim`、`claude-opus-5@reclaude/cc-local`、帅位两腿一并登记，未接线的标停用）
-- [ ] 4. `dao.mjs leg` 动词接线（status / drop / restore，drop 联动职责树禁用）
-- [ ] 5. dao-check 新检查对（样本红/绿/空 + live：合法性 + 交叉核；N+1 单轴裸奔以警告行报，不判红——
+- [x] 4. `dao.mjs leg` 动词接线（status / drop / restore，drop 联动职责树禁用）
+- [x] 5. dao-check 新检查对（样本红/绿/空 + live：合法性 + 交叉核；N+1 单轴裸奔以警告行报，不判红——
       现状全部腿 executor=orca、多数 supplier=gw，判红会立即全红且当下无腿可补）
-- [ ] 6. 测试（tests/legs.test.js + 夹具）+ 全套 node --test + dao-check 绿
+- [x] 6. 测试（tests/legs.test.js + 夹具）+ 全套 node --test + dao-check 绿
 - [ ] 7. 提交 + land；本页勾完 + #880 进度表回写
-- [ ] 8. 试效果：`leg status` / `leg drop --dry-run`（按轴看影响面）/ 真 drop 一条再 restore
+- [x] 8. 试效果：`leg status` / `leg drop --dry-run`（按轴看影响面）/ 真 drop 一条再 restore
 
 ## 命名约定（先钉死，防两个「供应商」打架）
 
@@ -47,5 +47,11 @@
 5. 一条请求路径只挂一个供应商（env 注入与代理+CA 互斥）
 
 ## 记录
+
+- 2026-09-04 深夜：步骤 2–6、8 全过。实测记录：坏夹具/手改真表两次变异 dao-check 均翻红（检查有牙）；
+  `leg drop --executor orca --dry-run` 七工种全黑、不带 --force 被拒；真拆 gemini 腿 → 树条目联动禁用
+  （查证/UI 两处，禁用来源=leg:...）、引擎顺位实测跳过 gemini；restore 往返无残留。
+  legs 测试 24 绿、dao.test 639 绿、dao-check 106 绿（3 红为本机存量，stash 对照验证）。
+  纠了上一轮草稿两处：旧设计三节（腿默认/帅位/N+1豁免）删除并入显式腿表；sol 供应商 pqgpt→pqapi（#843 熔断 key 为证）。
 
 - 2026-09-04 深夜：§73 提交（ai-gateway-stack dd18f9f）；本页建立。
