@@ -618,6 +618,14 @@ const CHECKS = [
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
+  ['⑱ mirasim 执行体健康（版本/relay 模式/额度窗，#880 卡 D）', () => {
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'agent-stall-watch-mirasim.mjs'), '--health'], { timeout: 30000 });
+    if (!r.probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${r.reason}` };
+    const head = String(r.stdout || '').split('\n')[0].trim();
+    if (r.code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
+    if (r.code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+    return { state: RED, detail: `mirasim 健康红：${head}` };
+  }],
 ];
 
 function outPath() {
