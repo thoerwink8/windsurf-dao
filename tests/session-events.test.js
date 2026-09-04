@@ -205,6 +205,18 @@ describe('session-events（#891 W1）', () => {
       delete p.target_decision_id;
       assert.ok(throws(() => build('decision.resolved', p)), 'decision.resolved 缺 target_decision_id 明确被拒');
     });
+    // 这两条是硬钉：上面那个循环是从 schema 派生的，schema 被改软它跟着软；
+    // 幂等键与判据出处丢了，里程碑就成了「重复计账 + 说不出 ✓ 从哪来」。
+    await t.test('session.milestone 缺 milestone_key 明确被拒（幂等键丢了会重复计账）', () => {
+      const p = { ...MILESTONE };
+      delete p.milestone_key;
+      assert.ok(throws(() => build('session.milestone', p)), 'session.milestone 缺 milestone_key 明确被拒');
+    });
+    await t.test('session.milestone 缺 evidence 明确被拒（说不出 ✓ 从哪读回来就是打假 ✓）', () => {
+      const p = { ...MILESTONE };
+      delete p.evidence;
+      assert.ok(throws(() => build('session.milestone', p)), 'session.milestone 缺 evidence 明确被拒');
+    });
   });
 
   it('④ 枚举写错必被拒（取值闭集只从 schema 读）', async (t) => {
