@@ -499,7 +499,11 @@
       "执行侧": "terminal",
       "状态": "在役",
       "拍板": "2026-09-04",
-      "理由": "帅位现役腿（人工起的 reclaude 终端）；§73「帅位也是腿」"
+      "理由": "帅位现役腿（人工起的 reclaude 终端）；§73「帅位也是腿」",
+      "落地": {
+        "provider": "claude",
+        "cli_model": "fable"
+      }
     },
     {
       "id": "claude-opus@reclaude/orca",
@@ -537,6 +541,20 @@
       "拍板": "2026-09-04",
       "停用原因": "等 #880 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工）",
       "停用日期": "2026-09-04"
+    },
+    {
+      "id": "claude-opus-5@reclaude/terminal",
+      "模型": "claude-opus-5",
+      "族": "claude",
+      "供应商": "reclaude",
+      "执行侧": "terminal",
+      "状态": "在役",
+      "拍板": "2026-09-04",
+      "落地": {
+        "provider": "claude",
+        "cli_model": "opus"
+      },
+      "理由": "帅位现役腿（本机这个会话就是它）；§73「帅位也是腿」。2026-09-04 实咬：PR #890 起不了审官，报「模型 opus-5 不在路由表（没查成厂商）」——腿表登记了 fable 却漏了 opus-5，且树里一条都没有"
     }
   ]
 }
