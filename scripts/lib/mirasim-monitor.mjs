@@ -562,7 +562,7 @@ export function probeMirasimTarget({ agent, health } = {}) {
  * presence 只在连不上时才需要：它把「服务没在跑」和「我敲错端口/服务卡着」分开——
  * 前者可以推出「没有会话在用树」，后两者不行。
  */
-export async function probeMirasim({ open = openWire, port, homeDir, now = () => Date.now(), pinnedVersion = PINNED_VERSION, agents, serverPorts = liveServerPorts } = {}) {
+export async function probeMirasim({ open = openWire, port, homeDir, now = () => Date.now(), pinnedVersion = PINNED_VERSION, agents, serverPorts = liveServerPorts, listTimeoutMs = 15_000 } = {}) {
   const host = os.hostname();
   // 先读「本机哪些端口有服务」，据此定该敲哪个；这一读也是后面分辨
   // 「服务没在跑」和「我敲错了 / 服务卡着」的唯一依据。
@@ -590,7 +590,9 @@ export async function probeMirasim({ open = openWire, port, homeDir, now = () =>
   try {
     const state = wire.state || null;
     const relay = await wireGetRelay(wire);
-    const sessions = await wireListSessions(wire);
+    // 会话清单给足时间：真机 65 条、机器忙时 6 秒会超时，而超时=没查成=land 一棵树都不拆。
+    // 宁可这条命令多等几秒，也不要因为「等不及」就把树的保护判成没查成（2026-09-04 实咬）。
+    const sessions = await wireListSessions(wire, listTimeoutMs);
     const health = buildMirasimHealth({ state, relay, pinnedVersion });
     const usage = usageRecord({ relay, host, port: probedPort, now: now() });
     const routeAgents = agents || (health.agentRoutes ? Object.keys(health.agentRoutes) : []);

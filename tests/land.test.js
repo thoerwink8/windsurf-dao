@@ -10,6 +10,17 @@ const { spawnSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'land-core.mjs').replace(/\\/g, '/'));
 
+/**
+ * e2e 跑 land 的环境：把 home 指到空临时目录，让它看不到本机 mirasim 的回环令牌。
+ * 不这么隔离，land 会去问真机的 mirasim「哪些树在用」——那一问在整套测试并发时会超时，
+ * 于是 land 按规矩 fail-closed 一棵树都不拆，这条 e2e 就随机翻红（2026-09-04 实咬：
+ * 单跑绿、全量红）。测的是 land 的判据，不是这台机器今天 mirasim 忙不忙。
+ */
+function landEnv() {
+  const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'land-home-'));
+  return { ...process.env, HOME: emptyHome, USERPROFILE: emptyHome };
+}
+
 describe('land 决策层', () => {
   it('decideShip：派生分支拒绝、发散停手、领先推、落后快进、一致净', async () => {
     const { decideShip } = await CORE;
@@ -88,7 +99,7 @@ describe('land e2e（真 git 临时仓）', () => {
     g(work, 'worktree', 'add', path.join(tmp, 'wt-dirty'), 'wtd-b');
     fs.writeFileSync(path.join(tmp, 'wt-dirty', 'half.txt'), '半成品');
     commit('c2'); // master 领先 origin 1 个 → 该推
-    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], { encoding: 'utf8', env: landEnv() });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     // 推到了
     assert.equal(g(bare, 'rev-parse', 'master'), g(work, 'rev-parse', 'master'), '主分支要推上远端');
@@ -118,14 +129,14 @@ describe('land e2e（真 git 临时仓）', () => {
     g(work, 'push', '-u', 'origin', 'master');
     g(work, 'branch', 'merged-b');
     const land = path.join(REPO, 'scripts', 'land.mjs');
-    const has = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
+    const has = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8', env: landEnv() });
     assert.equal(has.status, 0, has.stdout + has.stderr);
     assert.match(has.stdout, /有活/);
     const branches = g(work, 'for-each-ref', 'refs/heads', '--format=%(refname:short)').split(/\r?\n/);
     assert.ok(branches.includes('merged-b'), 'precheck 不许真删：' + branches);
     const gone = spawnSync('git', ['-C', work, 'branch', '-d', 'merged-b'], { encoding: 'utf8' });
     assert.equal(gone.status, 0, gone.stderr);
-    const none = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
+    const none = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8', env: landEnv() });
     assert.notEqual(none.status, 0, none.stdout);
     assert.match(none.stdout, /没活/);
   });
@@ -136,7 +147,7 @@ describe('land e2e（真 git 临时仓）', () => {
     g('init', '-b', 'master', '.');
     spawnSync('git', ['-C', tmp, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'c'], { encoding: 'utf8' });
     g('checkout', '-b', 'feat');
-    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), tmp], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), tmp], { encoding: 'utf8', env: landEnv() });
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stdout, /派生分支/, '要说清为什么拒绝、该走哪条路');
   });
