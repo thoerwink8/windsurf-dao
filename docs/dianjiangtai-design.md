@@ -2,6 +2,12 @@
 
 > 本稿是「点将台」（多模型派单的记账与选型算法）的五方盲答合成稿。四份盲答（DS / Claude / GPT / Grok）与既有方案对照后，由用户在 issue #438 逐项拍板；本稿只做合成，不改取舍。合成口径与「和既有拍板有什么不同」见文末两张表。
 >
+> **实施状态注记（2026-09-04，issue #891 期二）**：A / A.2 的跨机汇聚已实现 =
+> `scripts/ledger-sync.mjs`（判据在 `scripts/lib/ledger-sync.mjs`，`node scripts/ledger-sync.mjs --from <ssh 别名>`）。
+> 原文写的是「走 dao-hub 按需拉取」：**按需拉取这个动作**照做了，但传输走既有 ssh 基建，
+> 没经 `dao-hub` 那个仓——它是 HTTP + 隧道形态的机器级 Agent Hub（要起 server、开端口），
+> 与本单「不引新依赖、不开新端口」的约束相撞。汇聚点最终是否落到 dao-hub 待帅位拍，本稿不改取舍。
+>
 > **实施状态注记（2026-08-22）**：`derived/` 物化层从未落地（`recompute.mjs` 未造，三个 JSON 一直是空壳），选型实际直接扫事件流；空壳已在清零收口删除。文中 derived 相关段落视为未实施的设计意图，不是现行机制。
 
 ## 总纲
@@ -10,7 +16,7 @@
 
 ## A. 存储形态：混合账本
 
-真相源是本机 `~/.dao/ledger/events/` 里**一事件一文件**的 append-only 事件账（不进 git；仓内 `ledger/events/` 只保留已合并历史，当新机的种子）；draft PR 正文只做人读镜子；物化层可丢可重算。跨机汇聚不靠 git，走 dao-hub 按需拉取（方向已拍板，机制未实现）。
+真相源是本机 `~/.dao/ledger/events/` 里**一事件一文件**的 append-only 事件账（不进 git；仓内 `ledger/events/` 只保留已合并历史，当新机的种子）；draft PR 正文只做人读镜子；物化层可丢可重算。跨机汇聚不靠 git，走按需拉取（`scripts/ledger-sync.mjs`，见文首实施状态注记）。
 
 ### A.1 三层结构（政策 / 事件 / 物化）+ 脚本
 
@@ -36,7 +42,7 @@
 
 ### A.2 三铁律（多机零冲突）+ 全序可重放
 
-事件账**本机优先**：每台机器写自己的 `~/.dao/ledger/events/`，不进 git、不随仓库走。跨机汇聚不靠 git merge，走 dao-hub 按需拉取（方向已拍板，机制未实现）；汇聚按文件名求并集，与当年 git merge 同一性质。
+事件账**本机优先**：每台机器写自己的 `~/.dao/ledger/events/`，不进 git、不随仓库走。跨机汇聚不靠 git merge，走按需拉取（`scripts/ledger-sync.mjs`，见文首实施状态注记）；汇聚按文件名求并集，与当年 git merge 同一性质。
 
 1. **一写一文件、文件名唯一**：`events/<ulid>-<machine>.json`，ULID 时间序 + 机器名，全局唯一。两台机器同时干活写的是不同文件，汇聚等于求并集，永不冲突。
 2. **写一次即不可变**：事件落盘后永不编辑；纠错另立新文件（`attr.retract`），不覆盖历史。
