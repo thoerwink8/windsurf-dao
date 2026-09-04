@@ -4601,6 +4601,29 @@ function cmdNext() {
   process.exit(0);
 }
 
+/**
+ * 现状盘面（用户 2026-09-04 亲口要的：「一直没反应，就没卡住了还是什么情况」）。
+ * 三段（已落地 / 在途 / 待你拍）+ 每段末尾列没查成的源。只读、零副作用。
+ * 判据全在 lib/now-board.mjs 的 renderNow（纯函数，机器人问现状将来直接调它）；
+ * 取数全在 lib/now-collect.mjs。本函数只负责把两边接起来 + 选人看还是机器看。
+ */
+async function cmdNow(args) {
+  const { collectNow } = await import('./lib/now-collect.mjs');
+  const { renderNow, formatNow, DEFAULT_WINDOW_HOURS, DEFAULT_MAX_LINES } = await import('./lib/now-board.mjs');
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const hours = args.hours != null && /^\d+$/.test(String(args.hours)) ? Number(args.hours) : DEFAULT_WINDOW_HOURS;
+  const host = args.noServer === true ? null : (args.host || 'contabo');
+  const raw = await collectNow({ cwd: root, host, windowHours: hours, now: Date.now() });
+  const board = renderNow({ ...raw, windowHours: hours });
+  if (args.json === true) {
+    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
+    process.exit(0);
+  }
+  const maxLines = args.lines != null && /^\d+$/.test(String(args.lines)) ? Number(args.lines) : DEFAULT_MAX_LINES;
+  process.stdout.write(`${formatNow(board, { maxLines })}\n`);
+  process.exit(0);
+}
+
 function cmdCheckHelp() {
   const sources = new Set();
   const report = checkHelpLiveness({
@@ -4755,6 +4778,7 @@ function main() {
     case 'leg': return cmdLeg(args);
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
+    case 'now': return cmdNow(args);
     case 'raw': return cmdRaw(args);
     default:
       console.error(`未知动词: ${args.verb}`);
