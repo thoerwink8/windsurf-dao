@@ -123,6 +123,13 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 
 返工完成后士兵仍调 `worker-done`（首行「返工完成」）。起审官失败（含士兵 dispatch 里不能再 worker-start 的深度限制）时，`worker-done` 把待办写入 `_flow/queue/review-pending/<pr>.json`（含 head、工人树、reviewer），不靠人手 `reviewer-attach`。指挥官 / automations 调 `dao.mjs review-pending-drain` 逐条 `reviewer-attach --skip-wait`。不要自己再派一张审官，也不要在已结算的审官 dispatch 上等复审。
 
+**失败不回滚树**（#815 第 6 洞）：`reviewer-attach` / `reviewer-create` 对 pi 类审官走与工人相同的 `--agent` 探就绪/回退（#805）。树已建成后，注入或开工验证失败**不许整树 rollback**——删了下次 `start --worktree path:` 就是 `selector_not_found`。留现场给人接手：
+
+```bash
+node scripts/dao.mjs start --model <审官模型> --worktree path:<审官树>
+node scripts/dao.mjs send --agent pi --text "读 host/skills/dispatch/templates/reviewer-book.md spec=审 PR #<N>"
+```
+
 **禁止**往**自己**已结算的 dispatch 发工作指令。士兵侧 `--to` 仍是注入参数里那个还活着的 id，不要改打别的地址、不要开下一跳。人走了才升级给帅。
 
 **确认送达才算收尾**：`notify` 非零 = 没送到或没结算，本单在面板上会一直挂着——

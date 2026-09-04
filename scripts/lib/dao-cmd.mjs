@@ -841,7 +841,7 @@ import {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone, preflightReviewer,
+  planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
@@ -849,7 +849,7 @@ export {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone, preflightReviewer,
+  planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs

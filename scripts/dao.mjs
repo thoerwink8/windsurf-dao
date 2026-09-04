@@ -131,6 +131,7 @@ import {
   RUN_REQUIRED_HINT,
   collectReviewerCardsForPr,
   planReviewerAttachReuse,
+  planReviewerKeepOnFail,
   prepareReviewerOriginRef,
   checkoutOriginRef,
   pickDispatchAgentTerminal,
@@ -422,6 +423,30 @@ function failCreated(created, error, extra = {}) {
   emit({ ok: false, error, screen, rollback, rollbackFailed, ...created, ...extra }, 1);
 }
 
+/** #815 第 6 洞：审官树已在就失败不回滚，留现场给人接手。还没有树才走 failCreated。 */
+function keepCreated(created, error, extra = {}) {
+  const keep = planReviewerKeepOnFail({
+    reviewerId: extra.reviewerId || created?.reviewerId,
+    reviewerPath: extra.reviewerPath || created?.reviewerPath,
+    reason: error,
+  });
+  if (!keep.keepTree) failCreated(created, error, extra);
+  const screen = extra.screen || snapshotHandleScreen(created.reviewerHandle || created.workerHandle);
+  emit({
+    ok: false,
+    ...created,
+    ...extra,
+    error,
+    screen,
+    keep: true,
+    keepTree: true,
+    rollback: false,
+    rollbackFailed: false,
+    warning: keep.warning,
+    keepPlan: keep,
+  }, 1);
+}
+
 function loadDispatchSlate({ model, role, routing, now, live }) {
   let selectOk = false;
   let selectError = null;
@@ -498,10 +523,12 @@ function findAgentTerminalHandle(worktreeId, wantAgentId) {
   return picked.handle || null;
 }
 
-function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand, daoTrace }) {
+function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand, daoTrace, preferAgent }) {
   // #823：Orca terminal create 不支持 Unix env。pi 网关扩展读 DAO_*，
   // 只能拼在 --command 前；--agent pi 由 Orca 起进程，带不上。
-  // 不改 toml start=agent（#802）；只在本跳有溯源头且目标是 pi 时走 command。
+  // 不改 toml start=agent（#802）；工人有溯源头且目标是 pi 时走 command。
+  // #815 第 6 洞：审官传 preferAgent，daoTrace 仍拼到 launch.command 供 #805 回退，
+  // 但起法保持 --agent（探就绪/校准覆盖审官侧），不许再逼成 command 把注入打进壳。
   if (daoTrace && shouldPrefixDaoTrace(launch || { command })) {
     const traced = applyDaoTraceToLaunch(launch || { command }, daoTrace);
     command = traced.command;
@@ -514,7 +541,7 @@ function launchAgentInWorktree({ worktreeId, title, command, launch, forceComman
   const found = findDefaultTerminalForLaunch(worktreeId);
   const plan = planLaunchFallback({ foundHandle: found.handle || null });
   if (plan.closeHandle) closeWorkerHandle(plan.closeHandle);
-  const mustCommand = forceCommand || !!(launch && launch.daoTrace);
+  const mustCommand = forceCommand || (!preferAgent && !!(launch && launch.daoTrace));
   if (spec.mode === 'agent' && !mustCommand) {
     return {
       ok: true,
@@ -3546,6 +3573,7 @@ async function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    preferAgent: true,
     daoTrace: daoTraceFor({
       role: 'reviewer',
       model: reviewerModel,
@@ -3569,7 +3597,7 @@ async function cmdReviewerCreate(args) {
       timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     });
     if (!revVerify.ok) {
-      failCreated(launched, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+      keepCreated(launched, '审官 TUI 未就绪', { verify: revVerify, reviewerId, reviewerPath, ...plan });
     }
   }
 
@@ -3656,7 +3684,7 @@ async function cmdReviewerCreate(args) {
   // codex 配 start=agent 但 launchAgentInWorktree 常退成 command 型（有 handle），冷启动要等就绪。
   if (!revTerm.deferred && launched.reviewerHandle) {
     const ready = orca(argsTerminalWait({ terminal: launched.reviewerHandle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, reviewerLaunch.provider) }));
-    if (!ready.ok) failCreated(launched, `审官 TUI 等就绪失败：${errText(ready.error)}`, plan);
+    if (!ready.ok) keepCreated(launched, `审官 TUI 等就绪失败：${errText(ready.error)}`, { reviewerId, reviewerPath, ...plan });
   }
 
   const revTask = taskCreateOnRun(reviewerBook, revRunId, { rebindSelf: true, from: revCoordHandle });
@@ -3677,11 +3705,11 @@ async function cmdReviewerCreate(args) {
     from: revCoordHandle,
     book: reviewerBook,
   });
-  if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
+  if (!revStarted.ok) keepCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { reviewerId, reviewerPath, ...plan, reviewerTaskId });
   launched.reviewerHandle = revStarted.handle;
   const reviewerDispatchId = revStarted.dispatchId;
   if (!reviewerDispatchId) {
-    failCreated(launched, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
+    keepCreated(launched, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { reviewerId, reviewerPath, ...plan, reviewerTaskId });
   }
 
   const reviewerInject = finishWorkerInject({
@@ -3693,8 +3721,8 @@ async function cmdReviewerCreate(args) {
     cwd: reviewerPath,
   });
   if (!reviewerInject.ok) {
-    failCreated(launched, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
-      ...plan, reviewerTaskId, reviewerInject,
+    keepCreated(launched, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
+      reviewerId, reviewerPath, ...plan, reviewerTaskId, reviewerInject,
     });
   }
   const reviewerProof = workerStartProof(reviewerDispatchId);
@@ -3768,7 +3796,7 @@ async function cmdReviewerCreate(args) {
  * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
  * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
  * finishWorkerInject（验开工证明）。换行按 agent 转码，不禁换行；硬闸只量我们那一半。
- * 不碰 raw，所以不会绕过开工验证。#661/#679：未提交粘贴不补回车；等 timeout 仍在框里才失败并删审官树。
+ * 不碰 raw，所以不会绕过开工验证。#661/#679：未提交粘贴不补回车。#815：树已建成后注入/开工验证失败不回滚，留现场接手。
  */
 function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');
@@ -3962,6 +3990,7 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    preferAgent: true,
     daoTrace: daoTraceFor({
       role: 'reviewer',
       model: args.reviewer,
@@ -3978,7 +4007,7 @@ function cmdReviewerAttach(args) {
       readOnce: () => readOnceHandle(created.reviewerHandle),
       timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     });
-    if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+    if (!revVerify.ok) keepCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
   }
 
   // #631：树→dispatch 映射是 issue 派工时写的（dispatch 绑 issue 树），
@@ -4066,7 +4095,7 @@ function cmdReviewerAttach(args) {
   // codex 配 start=agent 但 launchAgentInWorktree 常退成 command 型（有 handle），冷启动要等就绪。
   if (!revTerm.deferred && created.reviewerHandle && !args.skipWait) {
     const ready = orca(argsTerminalWait({ terminal: created.reviewerHandle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, reviewerLaunch.provider) }));
-    if (!ready.ok) failCreated(created, `审官 TUI 等就绪失败：${errText(ready.error)}`, plan);
+    if (!ready.ok) keepCreated(created, `审官 TUI 等就绪失败：${errText(ready.error)}`, plan);
   }
   const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true, from: reviewerFrom });
   if (!revTask.ok) {
@@ -4089,11 +4118,11 @@ function cmdReviewerAttach(args) {
     // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
     timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,
   });
-  if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
+  if (!revStarted.ok) keepCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   created.reviewerHandle = revStarted.handle;
   created.reviewerDispatchId = revStarted.dispatchId;
   if (!created.reviewerDispatchId) {
-    failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
+    keepCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
 
   const reviewerInject = finishWorkerInject({
@@ -4106,7 +4135,7 @@ function cmdReviewerAttach(args) {
     cwd: created.reviewerPath,
   });
   if (!reviewerInject.ok) {
-    failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
+    keepCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
       ...plan, reviewerTaskId, reviewerInject,
     });
   }

@@ -396,3 +396,45 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
     assert.ok(flags.has('--model'), 'reviewer-attach 必须允许 --model');
   });
 });
+
+describe('#815 ⑥ 审官注入失败不回滚树', () => {
+  it('#820/#821 实咬：pi 审官 120s 等不到开工证明后不得整树回滚', async () => {
+    const S = await S_LOAD;
+    const keep = S.planReviewerKeepOnFail({
+      reviewerId: 'wt_rev_815',
+      reviewerPath: '/tmp/PR-820-审官',
+      reason: '审官注入后开工验证失败: 120s 未见开工证明',
+    });
+    assert.ok(keep.ok && keep.keepTree === true && keep.rollback === false && keep.keep === true,
+      '树已建成必须 keepTree → ' + JSON.stringify(keep));
+    assert.ok(/不回滚/.test(keep.warning) && /start --model/.test(keep.warning),
+      '红项要提示接手命令 → ' + keep.warning);
+
+    const noTree = S.planReviewerKeepOnFail({
+      reason: '审官卡创建失败',
+    });
+    assert.ok(noTree.ok && noTree.keepTree === false && noTree.rollback === true,
+      '还没有树才允许回滚 → ' + JSON.stringify(noTree));
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    assert.ok(/function keepCreated/.test(daoSrc), '注入失败走 keepCreated 不是 failCreated');
+    assert.ok(!/failCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
+      'create/attach 不得因开工验证失败 failCreated');
+    assert.ok(/keepCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
+      '开工验证失败必须 keepCreated');
+    assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
+      'worker-start 失败也不得整树回滚');
+
+    const createSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerCreate'), daoSrc.indexOf('function cmdReviewerAttach'));
+    const attachSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerAttach'), daoSrc.indexOf('function cmdReviewerDone'));
+    assert.ok(/preferAgent:\s*true/.test(createSeg) && /preferAgent:\s*true/.test(attachSeg),
+      '审官 create/attach 必须 preferAgent，注入走 #805 --agent 探就绪');
+    const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
+    assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
+      'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
+
+    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
+    assert.ok(/失败不回滚树/.test(book) && /start --model/.test(book),
+      'reviewer-book 必须写失败不回滚 + 接手命令');
+  });
+});
