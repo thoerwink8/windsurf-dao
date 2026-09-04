@@ -2549,7 +2549,19 @@ function reuseReviewerOnTerminal({
   if (!runId) {
     return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
   }
-  const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: true });
+  // headless 下 task-create/worker-start 也要发送身份——与新建路同源（#762）：审官树里起哑协调
+  // 终端当 --from。给了 from 用给的；orca 终端里跑（run-current 能通）时 fromHandle 留空走原路。
+  let fromHandle = from || null;
+  if (!fromHandle) {
+    const cur = orca(argsRunCurrent());
+    if (!cur.ok) {
+      const coordTerm = orca(argsTerminalCreate({ worktree: reviewerWorktreeId, title: '派工协调（勿关）' }));
+      if (!coordTerm.ok) return { ok: false, reused: true, error: `复用审官协调终端没建成（headless 无发送身份）：${errText(coordTerm.error)}` };
+      fromHandle = extractHandleFromCreate(coordTerm.json);
+      if (!fromHandle) return { ok: false, reused: true, error: '复用审官协调终端没返回 handle（没查成）' };
+    }
+  }
+  const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: !fromHandle, from: fromHandle || undefined });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
       return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
@@ -2575,6 +2587,7 @@ function reuseReviewerOnTerminal({
     worktree: reviewerWorktreeId,
     launched: { handle, launch },
     run: runId,
+    from: fromHandle || undefined,
     book: reviewerBook,
   });
   if (!revStarted.ok) {
