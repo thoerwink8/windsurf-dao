@@ -36,6 +36,7 @@ import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { pruneDeadStrikes } from './lib/agent-stall-detect.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -134,15 +135,39 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
   }
 }
 
-function scanStall() {
-  if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 垫片没写，读不到 ≠ 无撞死` };
+/** 在世终端清单。读不到/契约变了都回 ok:false——由调用方按「没查成」处理，不当成「一个都没有」。 */
+function listLiveTerminals() {
+  const r = runOrca(['terminal', 'list', '--json'], { cwd: ROOT });
+  if (!r.ok) return { ok: false, error: `terminal list 没查成：${orcaErr(r.error)}` };
+  const terminals = r.json?.result?.terminals;
+  if (!Array.isArray(terminals)) return { ok: false, error: 'terminal list 没有 terminals 数组——没查成' };
+  return { ok: true, terminals };
+}
+
+/**
+ * 撞死指纹 + 僵尸条目剪除（#889→#908 实咬）。
+ * 终端关掉后条目没人清，decide 每轮当活撞死唤大脑、唤满开待拍板单，关了又开。
+ * 这里在读的一侧交叉核对在世终端清单：不在盘面的条目当场剪掉并写回文件。
+ * 清单没查成时一条不剪（fail-closed），宁可多报一轮也不抹掉真撞死。
+ */
+function scanStall({ file = STALL_FILE, live, write = writeFileSync } = {}) {
+  if (!existsSync(file)) return { scanned: false, error: `撞死指纹文件不在（${file}）——#833 垫片没写，读不到 ≠ 无撞死` };
+  let raw;
   try {
-    const strikes = JSON.parse(readFileSync(STALL_FILE, 'utf8'));
-    if (!strikes || typeof strikes !== 'object') return { scanned: false, error: '撞死指纹不是对象——没查成' };
-    return { scanned: true, strikes };
+    raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (e) {
     return { scanned: false, error: `撞死指纹读不了：${String(e.message || e)}` };
   }
+  if (!raw || typeof raw !== 'object') return { scanned: false, error: '撞死指纹不是对象——没查成' };
+  const gc = pruneDeadStrikes({ strikes: raw, live: live || listLiveTerminals() });
+  const out = { scanned: true, strikes: gc.strikes };
+  if (gc.pruned.length) out.pruned = gc.pruned;
+  if (gc.skipped) out.pruneSkipped = gc.skipped;
+  if (gc.changed) {
+    try { write(file, JSON.stringify(gc.strikes), 'utf8'); }
+    catch (e) { out.pruneWriteError = `僵尸条目写回失败（下轮再剪）：${String(e.message || e)}`; }
+  }
+  return out;
 }
 
 function orcaErr(err) {
@@ -607,4 +632,4 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey };
+export { buildSituation, situationHealth, escalateKey, scanStall };

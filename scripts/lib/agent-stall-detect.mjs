@@ -175,6 +175,46 @@ export function decideHitAction({
   };
 }
 
+/** 撞死条目的 key 与在世终端的身份串比对；宽松（后缀相等也算同一个），偏向「留着」。 */
+function sameTerminal(a, b) {
+  const left = String(a || '');
+  const right = String(b || '');
+  if (!left || !right) return false;
+  return left === right || left.endsWith(`::${right}`) || right.endsWith(`::${left}`);
+}
+
+/** 一条终端记录里所有可当身份用的串。 */
+function identitiesOf(t) {
+  if (!t || typeof t !== 'object') return [];
+  return [t.handle, t.id, t.terminalId, t.terminal].filter(Boolean).map(String);
+}
+
+/**
+ * 僵尸条目剪除（#889→#908 实咬）：撞死条目 × 在世终端清单交叉核对。
+ *
+ * 终端死掉/被关后条目留在状态文件里，指挥官每轮把它当活撞死报帅，关了又开。
+ * 剪除只在「清单确实查成了」时做——live.ok=false 一条不剪（「没查成」≠「终端不存在」），
+ * 宁可多报一轮，也不能因为读不到清单就把真撞死悄悄抹掉。
+ *
+ * @param {{ strikes?: object, live?: {ok:boolean, terminals?: any[], error?: any} }} input
+ * @returns {{ strikes: object, pruned: string[], changed: boolean, skipped: string|null }}
+ */
+export function pruneDeadStrikes({ strikes = {}, live = null } = {}) {
+  const src = strikes && typeof strikes === 'object' ? strikes : {};
+  if (!live || live.ok !== true || !Array.isArray(live.terminals)) {
+    const why = live && live.error ? String(live.error) : '终端清单没查成';
+    return { strikes: { ...src }, pruned: [], changed: false, skipped: why };
+  }
+  const alive = live.terminals.flatMap(identitiesOf);
+  const kept = {};
+  const pruned = [];
+  for (const [handle, info] of Object.entries(src)) {
+    if (alive.some((id) => sameTerminal(handle, id))) kept[handle] = info;
+    else pruned.push(handle);
+  }
+  return { strikes: kept, pruned, changed: pruned.length > 0, skipped: null };
+}
+
 export function reviewerPasserIds(routing) {
   return (routing?.models || [])
     .filter((m) => m && Array.isArray(m.roles) && m.roles.some((r) => r === '审查' || r === '审读'))
