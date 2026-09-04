@@ -151,15 +151,45 @@ describe('redact.mjs · 会话态脱敏', () => {
     assert.strictEqual(out.nested.nil, null);
   });
 
-  it('⑦ 安全边界 · 写死现状的两格残留（收紧了这两条会红，红是好事）', async (t) => {
+  it('⑦ 安全边界 · 空格不是终止符，代价与仍不认的那一格都钉在这里', async (t) => {
     const { redact } = await LIB_LOAD;
-    // 这两条**不是**「应该这样」，是「目前就这样」。头注 🚧 段写明了为什么不再收紧
-    // （末段贪婪会吃掉整句话；正斜杠 UNC 与 URL 分不开）。谁真收紧了，这里翻红 ⇒ 改断言。
-    await t.test('末段带空格且无扩展名：敏感的用户名脱掉了，目录名尾巴留下', () => {
-      const out = redact(String.raw`C:\Users\Jane Doe\my secret folder`);
-      assert.ok(!out.includes('Jane Doe'), '用户名必须脱掉（这一半是硬要求）');
-      assert.strictEqual(out, '[REDACTED:win-path] secret folder', '边界变了就更新本断言与头注 🚧 段');
+    // ── 终止符是引号 / 换行 / 句读，**不是单空格**（大脑一轮红）──────────────
+    // 「空格当终止符」那条路本身就是错的：用户名一旦是末段，它必漏一半。
+    //   `C:\Users\Jane Doe` → `[REDACTED:win-path] Doe`（中间修法的实咬）
+    // 所以下面这组的判据是**整条命中、marker 之后不留任何路径残字**。
+    const noResidue = [
+      ['末段就是带空格的用户名', String.raw`C:\Users\Jane Doe`, '[REDACTED:win-path]'],
+      ['末段带空格且无扩展名', String.raw`C:\Users\Jane Doe\my secret folder`, '[REDACTED:win-path]'],
+      ['POSIX 末段就是用户名', '/home/jane doe', '[REDACTED:posix-path]'],
+      ['UNC 末段带空格无扩展名', String.raw`\\server\Jane Doe\private share`, '[REDACTED:unc-path]'],
+      ['引号终止', `"${String.raw`C:\Users\Jane Doe\a b`}" 后面的话`, '"[REDACTED:win-path]" 后面的话'],
+      ['分号终止', String.raw`C:\Users\Jane Doe\a b; next`, '[REDACTED:win-path]; next'],
+      ['闭括号收尾终止', String.raw`(C:\Users\Jane Doe\a b)`, '([REDACTED:win-path])'],
+      ['换行终止', `${String.raw`C:\Users\Jane Doe`}\n下一行`, '[REDACTED:win-path]\n下一行'],
+      // 闭括号后面还接分隔符时属于路径 ⇒ 不留 `)\app\x.txt` 这种残段
+      ['Program Files (x86)', String.raw`C:\Program Files (x86)\app\x.txt`, '[REDACTED:win-path]'],
+      // 空格后面是新路径的开头 ⇒ 让出去，两条各自整条命中（否则留下 `:\c\d.txt` 半条）
+      ['同行两条路径各自整条', String.raw`C:\a\b.txt D:\c\d.txt`, '[REDACTED:win-path] [REDACTED:win-path]'],
+    ];
+    for (const [label, input, want] of noResidue) {
+      await t.test(`无残段 ${label}`, () => {
+        const out = redact(input);
+        assert.strictEqual(out, want, `${label}：marker 之后留下了路径残字 → ${JSON.stringify(out)}`);
+        for (const leak of ['Doe', 'doe', 'secret', 'share', 'x86', 'd.txt']) {
+          assert.ok(!out.includes(leak), `${label} 残留了 ${leak} → ${JSON.stringify(out)}`);
+        }
+      });
+    }
+
+    // ── 代价：路径后面没有句读隔开的字会被一起打码。刻意选的，不是漏 ──────────
+    await t.test('代价 · 紧跟在路径后面的半句话会被一起吃掉（宁多勿漏那一侧）', () => {
+      assert.strictEqual(
+        redact(String.raw`路径 C:\Users\Jane Doe\x.txt 已改好`),
+        '路径 [REDACTED:win-path]',
+        '边界变了就同步更新头注 🚧 段'
+      );
     });
+
     await t.test('正斜杠 UNC 刻意不认（与 URL 分不开）', () => {
       assert.strictEqual(redact('//server/share/x'), '//server/share/x');
       // 代价对照：认它就会把每条链接吃掉，所以负控里的 GitHub URL 必须活着
