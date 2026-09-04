@@ -1,7 +1,19 @@
 {
   "_comment": "群映射占位模板（真实 chat_id 不进仓）。dao-check 的 feishu-groups 项优先读 ~/.mirasim/keys/feishu-groups.json（实机映射，600，换机手动带），用 lark-cli im chats get --as bot 逐个确认群还在；查不到或已解散会报红并写出群名。没有实机映射则 SKIP「本机未接飞书」。红了：改实机那份，把失效 chat_id 换成还活着的群（lark-cli im +chat-list --as bot），或删掉已解散的那一行。_ 开头的键是注释，不参与映射。加项目只加一行；占位 key 等建好群后写进实机映射，不要写进本文件。hub 群由凭据 hubChatId 兜底。",
-  "oc_PLACEHOLDER_windsurf_dao": { "repo": "thoerwink8/windsurf-dao", "kind": "project" },
+  "_broadcast_comment": "每群可选 broadcast 节 = 播报闸的群订阅配置（issue #891 闸5，判官 scripts/lib/broadcast-gate.mjs 的 loadBroadcastGroups/decideBroadcast，别另立文件）。两个字段：subscribe = 订阅哪几类，认 decision.pending / milestone / incident 三个（顺序无关，按 BROADCAST_CLASSES 归一）；dailyBudget = 每日最多几条（非负整数，闸4 的硬上限——播报量由本配置决定，不由事件量决定，几百人的群不能被刷）。整节可省：省了按 kind 取默认——hub（总控群，人最多）只订 milestone、上限 6；project 三类全订、上限 20。改这里只改本机那份实机映射；本文件是占位模板，broadcast 节在这儿只当样例形状看。里程碑 = job.closed 且 success=true（合并·落地）；失败关单、job.meter 之类只进账不播。",
+  "oc_PLACEHOLDER_windsurf_dao": {
+    "repo": "thoerwink8/windsurf-dao",
+    "kind": "project",
+    "broadcast": { "subscribe": ["decision.pending", "milestone", "incident"], "dailyBudget": 20 }
+  },
   "oc_PLACEHOLDER_ai_gateway_stack": { "repo": "thoerwink8/ai-gateway-stack", "kind": "project" },
-  "oc_PLACEHOLDER_miraquota_win": { "repo": "thoerwink8/miraquota-win", "kind": "project" },
-  "oc_PLACEHOLDER_hub": { "kind": "hub" }
+  "oc_PLACEHOLDER_miraquota_win": {
+    "repo": "thoerwink8/miraquota-win",
+    "kind": "project",
+    "broadcast": { "subscribe": ["milestone", "incident"], "dailyBudget": 8 }
+  },
+  "oc_PLACEHOLDER_hub": {
+    "kind": "hub",
+    "broadcast": { "subscribe": ["milestone"], "dailyBudget": 6 }
+  }
 }
