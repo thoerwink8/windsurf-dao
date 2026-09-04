@@ -848,3 +848,11 @@ export const readSession = sessionKey => runtime().readSession(sessionKey);
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
+
+// ── 卡 D 用：开一条原始 ws ─────────────────────────────────────────────────
+// 监控/回收/健康要枚举会话、读 relay 帧，这些不在五动词里；但它们和五动词共用同一条
+// 连线层——这里只把 defaultConnect 暴露出去，绝不在别处另造第二份 ws 收发（CLAUDE.md）。
+// 返回的 wire 形状同五动词内部用的那条：{ send, waitFor, close, state, closed, failure }。
+export async function openWire({ homeDir = os.homedir(), port = DEFAULT_PORT, openTimeoutMs = 8_000, connect = defaultConnect } = {}) {
+  return connect({ homeDir, port: Number(port), openTimeoutMs });
+}

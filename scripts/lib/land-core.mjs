@@ -44,10 +44,11 @@ export function decideBranchDelete({ name, merged, isDefault, isCurrent, checked
 }
 
 /** 拆不拆这棵 git worktree。 */
-export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, detached }) {
+export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, mirasimManaged, detached }) {
   if (isMain) return { remove: false, reason: '主树' };
   if (isCurrent) return { remove: false, reason: '自己所在的树' };
   if (orcaManaged) return { remove: false, reason: 'orca 在管（有卡/agent）——删卡走编排闭环，land 不碰' };
+  if (mirasimManaged) return { remove: false, reason: 'mirasim 会话在用这棵树（listSessions 活动集）——回收走卡 D 的 GC，land 不碰' };
   if (isDefaultBranch) return { remove: false, reason: '挂着默认分支的树（如 mirasim 会话树）' };
   if (detached) return { remove: false, reason: 'HEAD 游离，判不了合没合并' };
   if (dirty) return { remove: false, reason: '有未提交改动——里面可能是别人半成品' };
