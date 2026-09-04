@@ -27,7 +27,7 @@
 - [x] 5. dao-check 新检查对（样本红/绿/空 + live：合法性 + 交叉核；N+1 单轴裸奔以警告行报，不判红——
       现状全部腿 executor=orca、多数 supplier=gw，判红会立即全红且当下无腿可补）
 - [x] 6. 测试（tests/legs.test.js + 夹具）+ 全套 node --test + dao-check 绿
-- [ ] 7. 提交 + land；本页勾完 + #880 进度表回写
+- [x] 7. 提交 + land；本页勾完 + #880 进度表回写
 - [x] 8. 试效果：`leg status` / `leg drop --dry-run`（按轴看影响面）/ 真 drop 一条再 restore
 
 ## 命名约定（先钉死，防两个「供应商」打架）
@@ -54,4 +54,5 @@
   legs 测试 24 绿、dao.test 639 绿、dao-check 106 绿（3 红为本机存量，stash 对照验证）。
   纠了上一轮草稿两处：旧设计三节（腿默认/帅位/N+1豁免）删除并入显式腿表；sol 供应商 pqgpt→pqapi（#843 熔断 key 为证）。
 
+- 2026-09-04 深夜（收口）：master 已推（feat ea35cce 变基后 + 测试可移植性修复），dao-check 110 项全绿——顺手清了本机三项存量红：worktree-rm 测试 Windows 盘符坑（修测试）、4 个 skill 缺发现面链（已建 SymbolicLink）、reviewer-fallback-luna 记忆缺闸（gate=scripts/lib/legs.mjs 的 N+1 单腿点名）。
 - 2026-09-04 深夜：§73 提交（ai-gateway-stack dd18f9f）；本页建立。
