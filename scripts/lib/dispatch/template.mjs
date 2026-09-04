@@ -105,8 +105,10 @@ function renderInjectTemplate(name, vars) {
   return stripInjectEof(renderDispatchTemplate(name, vars));
 }
 
-export function buildSoldierInject({ spec, issue } = {}) {
-  const text = renderInjectTemplate('soldier-inject.md', {
+export function buildSoldierInject({ spec, issue, executor } = {}) {
+  // #880 卡 F：executor==='mirasim' 选 mirasim 版任务书（去 orca 卡态/结算/Run）；默认 orca 不变。
+  const tpl = executor === 'mirasim' ? 'soldier-inject-mirasim.md' : 'soldier-inject.md';
+  const text = renderInjectTemplate(tpl, {
     SPEC: spec,
     ISSUE_REF: issue ? ` #${issue}` : '',
   });
@@ -120,7 +122,7 @@ export function buildSoldierInject({ spec, issue } = {}) {
  * 超长 --spec 当场 {ok:false}，不许抄两份。无 spec（已有 --task）跳过。
  * 头工人 / 子块都会渲染士兵注入，任一超限都拦。
  */
-export function assertDispatchInjectPlan({ spec, issue, headSpec, childSpecs } = {}) {
+export function assertDispatchInjectPlan({ spec, issue, headSpec, childSpecs, executor } = {}) {
   if (!spec) return { ok: true, skipped: true };
   const list = [headSpec == null ? String(spec) : String(headSpec)];
   if (Array.isArray(childSpecs)) {
@@ -128,7 +130,7 @@ export function assertDispatchInjectPlan({ spec, issue, headSpec, childSpecs } =
   }
   for (const item of list) {
     try {
-      buildSoldierInject({ spec: item, issue });
+      buildSoldierInject({ spec: item, issue, executor });
     } catch (e) {
       return { ok: false, error: String(e.message || e) };
     }
@@ -146,9 +148,11 @@ export function buildBatchInject({ spec, issue } = {}) {
   return text;
 }
 
-export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait, fallbackReason } = {}) {
+export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait, fallbackReason, executor } = {}) {
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
-  const text = renderInjectTemplate('reviewer-inject.md', {
+  // #880 卡 F：mirasim 版审官注入无 d=/s=/fb=（orchestration 才有），多余 vars 被 render 忽略。
+  const tpl = executor === 'mirasim' ? 'reviewer-inject-mirasim.md' : 'reviewer-inject.md';
+  const text = renderInjectTemplate(tpl, {
     SPEC: spec,
     ISSUE_REF: issue ? ` #${issue}` : '',
     PR: pr,

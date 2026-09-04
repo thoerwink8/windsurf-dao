@@ -873,6 +873,8 @@ export {
   INJECT_GATE_NOTE, injectUtf8Bytes, stripInjectEof, assertInjectText, assertInjectLen,
   buildSoldierInject, buildBatchInject, buildReviewerInject, assertDispatchInjectPlan,
 } from './dispatch/template.mjs';
+import { mirasimVerbGuard, MIRASIM_VERB_POINTERS } from './dispatch/mirasim-verbs.mjs';
+export { mirasimVerbGuard, MIRASIM_VERB_POINTERS };
 
 // ── 闭环投递（发不到必须炸，#548 红项 1）──────────────────────────
 //
@@ -971,11 +973,11 @@ export const FLAGS_BY_VERB = {
     '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
   'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
-  send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--json', '--help', '-h']),
+  send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
     '--task-id', '--dispatch-id', '--dispatch-capability', '--from',
-    '--files-modified', '--report-path',
+    '--files-modified', '--report-path', '--executor',
     '--json', '--help', '-h',
   ]),
   reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
@@ -983,7 +985,7 @@ export const FLAGS_BY_VERB = {
   'run-gc': new Set(['--apply', '--json', '--help', '-h']),
   'board-archive': new Set(['--out', '--json', '--help', '-h']),
   'board-reset': new Set(['--apply', '--out', '--json', '--help', '-h']),
-  ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--json', '--help', '-h']),
+  ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--executor', '--json', '--help', '-h']),
   'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
   'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
