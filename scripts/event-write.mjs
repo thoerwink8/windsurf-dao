@@ -8,7 +8,8 @@
 //   加/删类型改的是 schema，这几行必须跟着同步；对不上时 tests/session-events.test.js 报红。
 //   job.opened / job.dispatch / job.meter / job.handoff / job.closed / job.override / job.explore /
 //   attr.rule / attr.llm / attr.human / attr.retract / policy.patch / sub.usage / incident /
-//   audit.bypass / audit.stale / session.state / decision.pending / decision.resolved
+//   audit.bypass / audit.stale / session.state / decision.pending / decision.resolved /
+//   session.milestone
 // [闭集镜子结束]
 //
 // 用法（通用：任何 --key value 进 payload，值先试 JSON 解析，失败按字符串）：
@@ -30,7 +31,9 @@
 //       --options '[{"label":"W1 先合","description":"schema 是另两张的地基"},{"label":"等三张齐"}]' \
 //       --recommend "W1 先合" --urgency 急 --why "另两张都读它派生的闭集" --ts ...
 //   node scripts/event-write.mjs --type decision.resolved --target-decision-id d-001 \
-//       --chosen "W1 先合" --by 用户 --note "当场拍" --ts ...
+//       --chosen '["W1 先合"]' --by 用户 --note "当场拍" --ts ...
+//   node scripts/event-write.mjs --type session.milestone --kind commit --repo windsurf-dao \
+//       --milestone-key commit:a1b2c3d --commit a1b2c3d --evidence "exit_code=0；git 探头查到了" --ts ...
 //
 // 选项：--dir <目录>（默认本机 ~/.dao/ledger/events）--machine <机器名>（默认本机 hostname）
 //       --seq N（默认自动：本机最大 seq + 1）--schema <schema 路径>

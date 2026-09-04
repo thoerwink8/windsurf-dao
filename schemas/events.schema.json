@@ -373,28 +373,27 @@
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
-          "description": "待用户拍板（#891 期一）：一句话 + 选项 + 推荐，播报闸白名单三类之一（urgency=急 即时插播）。不变量（写入即校验）：options ≥2 条、每条有非空 label、recommend 必须命中某条 label——推荐指向不存在的选项会让飞书卡片的一键选择失效。",
+          "description": "待用户拍板（#891 期一）：一句话 + 选项 + 推荐，播报闸白名单三类之一（urgency=急 即时插播）。不变量（写入即校验）：每条 option 有非空 label；options 非空时至少两条（一个选项不叫拍板）；recommend 非 null 时必须命中某条 label——推荐指向不存在的选项会让飞书卡片的一键选择失效。options 允许空数组 = 开放问题（问用户的工具可以不给选项），此时 recommend 记 null。urgency / recommend / why 允许 null = 写口没查成（#897 实测：AskUserQuestion 与 im_ask_user 的入参里都没有 urgency 这一位）——宁记 null，不许伪造。",
           "properties": {
             "type": { "const": "decision.pending" },
             "decision_id": { "type": "string", "description": "本次拍板的标识；decision.resolved 用 target_decision_id 指回它" },
             "question": { "type": "string", "description": "一句话问题（说人话，见 plain-board skill）" },
             "options": {
               "type": "array",
-              "minItems": 2,
-              "description": "2—4 条清楚选项（全局约定）；label 是用户看见的那句，description 讲代价",
+              "description": "2—4 条清楚选项（全局约定）；label 是用户看见的那句，description 讲代价。空数组 = 开放问题（没有选项可点）；非空时至少两条",
               "items": {
                 "type": "object",
                 "properties": {
                   "label": { "type": "string", "description": "短选项名（用户看见并点的那句）" },
-                  "description": { "type": "string", "description": "一句话：这个选项的代价/后果" }
+                  "description": { "type": ["string", "null"], "description": "一句话：这个选项的代价/后果；写口读不到就 null" }
                 },
                 "required": ["label"],
                 "additionalProperties": true
               }
             },
-            "recommend": { "type": "string", "description": "推荐哪个（必须等于某条 option 的 label）" },
-            "urgency": { "enum": ["急", "缓"], "description": "急=即时插播；缓=攒到窗末合成一条摘要" },
-            "why": { "type": "string", "description": "一句话：为什么推荐这个" }
+            "recommend": { "type": ["string", "null"], "description": "推荐哪个（非 null 时必须等于某条 option 的 label）；开放问题或写口读不到就 null" },
+            "urgency": { "enum": ["急", "缓", null], "description": "急=即时插播；缓=攒到窗末合成一条摘要；null=写口没查成（#897 实测：两种问用户的工具入参里都没有这一位）。播报闸可把 null 当缓处理，但账面记的是「没判过」，不是「判过是缓」" },
+            "why": { "type": ["string", "null"], "description": "一句话：为什么推荐这个；写口读不到就 null（配 why_source 记清这句从哪读的）" }
           },
           "required": ["decision_id", "question", "options", "recommend", "urgency", "why"],
           "additionalProperties": true
@@ -411,11 +410,37 @@
           "properties": {
             "type": { "const": "decision.resolved" },
             "target_decision_id": { "type": "string", "description": "被拍的 decision.pending 的 decision_id" },
-            "chosen": { "type": "string", "description": "选中的 option label，或用户自输答案的原文" },
+            "chosen": { "type": "array", "items": { "type": "string" }, "description": "选中的 option label，或用户自输答案的原文；单选也是一元数组——形状对齐唯一写口（#897 的 responses[]），不留字符串/数组两形让读端分支" },
             "by": { "enum": ["用户", "帅"], "description": "谁拍的。帅=值守态按已过消歧门的规则代拍，不是用户点的" },
             "note": { "type": "string", "description": "一句话补充（可省）" }
           },
           "required": ["target_decision_id", "chosen", "by"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "session.milestone",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "里程碑：提交·落地·合并（#891 期一，字段形状随 W5 写口实测 PR #897）。写口 = Bash 的 PostToolUse，命令真成功才写；退出码没查成一律不写（fail-closed，不当成功）。为什么不复用 job.closed：那是能力账正样本、由收口路径独占写，它的必填 merged_by / usd_cash / usd_economic 在 git commit 落地那一刻一个都拿不到，硬凑只能填 unknown 去污染归因。故本类型的必填只留「动作完成那一刻真拿得到」的四项；git 探头没查成时 branch/commit/subject 记 null 并在 evidence 里写清没查成，不留假 ✓。",
+          "properties": {
+            "type": { "const": "session.milestone" },
+            "kind": { "enum": ["commit", "land", "pr-merge"], "description": "里程碑种类：commit=提交落地 / land=收工一条命令过了 / pr-merge=PR 合并" },
+            "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不进事件（与 session.state 的 repo 同义）；拿不到记 null" },
+            "evidence": { "type": "string", "description": "成功判据的出处一句话，例如「exit_code=0；git 探头查到了」。同名提醒：attr.* / audit.* 的 evidence 是 event_id 数组，本字段是人读判据串——读端按 type 分支，别跨类型当同一形状使" },
+            "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点（commit 短 sha / pr-<n> / 命令哈希）。同一动作重复触发靠它防重复计账" },
+            "branch": { "type": ["string", "null"], "description": "git 探头没查成为 null" },
+            "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
+            "subject": { "type": ["string", "null"], "description": "提交标题；git 探头没查成为 null" },
+            "pr_number": { "type": ["integer", "null"] },
+            "session_id": { "type": ["string", "null"], "description": "与 session.state 同义：哪个会话干的" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"], "description": "可选，与 job.* / session.state 同一枚举（不造 role 这类同义双名）。hook 侧判不出身份时整个字段别写——别写 null" },
+            "refs": { "type": "array", "items": { "type": "string" }, "description": "相关 issue/PR/commit 引用（与 session.state 的 refs 同义）" }
+          },
+          "required": ["kind", "repo", "evidence", "milestone_key"],
           "additionalProperties": true
         }
       ]

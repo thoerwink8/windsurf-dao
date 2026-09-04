@@ -1,10 +1,13 @@
-// tests/session-events.test.js —— #891 期一 W1：会话态事件三类型（session.state / decision.pending / decision.resolved）
+// tests/session-events.test.js —— #891 期一 W1：会话态事件四类型
+//   （session.state / decision.pending / decision.resolved / session.milestone）
 //
 // 判别力（本套存在的理由）：合法样本必须过，非法样本必须被拒——
 //   ① 每类型的必填字段逐个缺一，一个不漏地拒（不是只试一个字段）
-//   ② schema 声明的枚举写错（phase / identity / urgency / by）拒
+//   ② schema 声明的枚举写错（phase / identity / urgency / by / kind）拒
 //   ③ decision.resolved 缺 target_decision_id 拒
-//   ④ decision.pending 的 recommend 落空 / options 不足两条 / option 缺 label 拒
+//   ④ decision.pending 的 recommend 落空 / options 只有一条 / option 缺 label 拒
+//   ⑤ W5 写口（#897）的真实 payload 必须过——「没查成」记 null 是合法的，
+//      拿不到的字段不设必填（形状对不上就等于每条事件静默丢，hook 侧永远 exit 0）
 // 闭集唯一权威 = schemas/events.schema.json；本套另核 scripts/event-write.mjs 头注的
 // [闭集镜子] 段与它双向一致——镜子漂了就报红，这就是「不许在别处另抄清单」的那道警报。
 // 变异自证：把 schema 里某条必填删掉，本套必须翻红（证据贴 PR 正文）。
@@ -66,16 +69,59 @@ const PENDING = {
 };
 const RESOLVED = {
   target_decision_id: 'd-891-1',
-  chosen: 'W1 先合',
+  chosen: ['W1 先合'],
   by: '用户',
   note: '当场拍',
+};
+const MILESTONE = {
+  kind: 'commit',
+  repo: 'windsurf-dao',
+  evidence: 'exit_code=0；git 探头查到了',
+  milestone_key: 'commit:a1b2c3d',
+  branch: 'feat/891-session-events',
+  commit: 'a1b2c3d',
+  subject: 'feat(events): 事件闭集加会话态类型',
+  pr_number: null,
+  session_id: 's-891-w1',
+  refs: ['#891'],
+};
+// W5（PR #897）动作触发写口的真实 payload 形状：这三条必须原样过，
+// 否则它的 hook（永远 exit 0）会把每条事件静默丢掉。
+const W5_PENDING = {
+  decision_id: 'dec-b93ccbf33d37b82b',
+  question: '播报闸的每日预算上限定多少条？',
+  options: [{ label: '每天 8 条 (Recommended)', description: '按今晚事件量估' }, { label: '每天 20 条', description: '几乎不压' }],
+  recommend: '每天 8 条 (Recommended)',
+  urgency: null,
+  why: '按今晚事件量估',
+  why_source: 'recommend_description',
+  asked_by: 'AskUserQuestion',
+};
+const W5_OPEN = {
+  decision_id: 'dec-af7fee469aa7eba5',
+  question: '你想怎么办？',
+  options: [],
+  recommend: null,
+  urgency: null,
+  why: null,
+  asked_by: 'mcp__mirasim__im_ask_user',
+};
+const W5_MILESTONE_UNKNOWN = {
+  kind: 'land',
+  repo: 'windsurf-dao',
+  evidence: 'exit_code=0；git 探头没查成：not a git repository',
+  milestone_key: 'land:9f2a7c4d8e1b',
+  branch: null,
+  commit: null,
+  subject: null,
+  pr_number: null,
 };
 
 describe('session-events（#891 W1）', () => {
   it('① 三类型进闭集，必填字段按 schema 派生', async (t) => {
-    await t.test('闭集含三个新类型', () => {
-      const miss = ['session.state', 'decision.pending', 'decision.resolved'].filter(x => !meta.closedSet.includes(x));
-      assert.ok(miss.length === 0, '闭集含三个新类型  →  缺 ' + miss.join(','));
+    await t.test('闭集含四个新类型', () => {
+      const miss = ['session.state', 'decision.pending', 'decision.resolved', 'session.milestone'].filter(x => !meta.closedSet.includes(x));
+      assert.ok(miss.length === 0, '闭集含四个新类型  →  缺 ' + miss.join(','));
     });
     await t.test('session.state 必填 = 八项（含 digest：播报闸去重靠它）', () => {
       const got = [...meta.requiredByType.get('session.state')].sort().join('/');
@@ -90,10 +136,22 @@ describe('session-events（#891 W1）', () => {
       const req = meta.requiredByType.get('decision.resolved');
       assert.ok(['target_decision_id', 'chosen', 'by'].every(f => req.includes(f)), 'decision.resolved 必填含 target_decision_id/chosen/by  →  ' + req.join('/'));
     });
+    // 必填只留「动作完成那一刻真拿得到」的四项。job.closed 不能复用正是因为它的
+    // merged_by/usd_cash/usd_economic 那一刻一个都拿不到（#897 核过）——别重犯。
+    await t.test('session.milestone 必填 = kind/repo/evidence/milestone_key 四项，一项不多', () => {
+      const got = [...meta.requiredByType.get('session.milestone')].sort().join('/');
+      const want = ['kind', 'repo', 'evidence', 'milestone_key'].sort().join('/');
+      assert.ok(got === want, 'session.milestone 必填 = 四项  →  ' + got);
+    });
+    await t.test('session.milestone 不把 git 探头才知道的东西设必填（branch/commit/subject/pr_number 全可省）', () => {
+      const req = meta.requiredByType.get('session.milestone');
+      const wrong = ['branch', 'commit', 'subject', 'pr_number', 'merged_by', 'usd_cash', 'usd_economic'].filter(f => req.includes(f));
+      assert.ok(wrong.length === 0, 'session.milestone 不把探头字段设必填  →  误设 ' + wrong.join(','));
+    });
   });
 
   it('② 合法样本三类型全过', async (t) => {
-    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED]]) {
+    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED], ['session.milestone', MILESTONE]]) {
       const ev = build(type, payload);
       await t.test(`${type} 合法样本过，event_id 为 sha256 hex`, () => {
         assert.ok(/^[0-9a-f]{64}$/.test(ev.event_id) && ev.type === type && ev.schema_version === 1, `${type} 合法样本过  →  ` + JSON.stringify(ev.event_id));
@@ -110,10 +168,33 @@ describe('session-events（#891 W1）', () => {
       delete p.note;
       assert.ok(!throws(() => build('decision.resolved', p)), 'decision.resolved 可省 note');
     });
+    await t.test('session.milestone 只给必填四项也过（探头字段全不给）', () => {
+      const p = { kind: 'pr-merge', repo: 'windsurf-dao', evidence: 'exit_code=0', milestone_key: 'pr-merge:pr-893' };
+      assert.ok(!throws(() => build('session.milestone', p)), 'session.milestone 只给必填四项也过');
+    });
+  });
+
+  it('②b W5 写口（#897）的真实 payload 原样过', async (t) => {
+    const cases = [
+      ['decision.pending', W5_PENDING, 'urgency 记 null（两种问用户的工具入参都没这一位）'],
+      ['decision.pending', W5_OPEN, '开放问题：options 空、recommend null'],
+      ['session.milestone', W5_MILESTONE_UNKNOWN, 'git 探头没查成：三项 null，evidence 写清没查成'],
+    ];
+    for (const [type, payload, name] of cases) {
+      await t.test(`${type}：${name}`, () => {
+        let err = null;
+        try { build(type, payload); } catch (e) { err = e.message; }
+        assert.ok(err === null, `${type}：${name}  →  ` + err);
+      });
+    }
+    await t.test('kind 三个合法值逐个都过', () => {
+      const bad = ['commit', 'land', 'pr-merge'].filter(k => throws(() => build('session.milestone', { ...MILESTONE, kind: k })));
+      assert.ok(bad.length === 0, 'kind 三个合法值逐个都过  →  误拒 ' + bad.join(','));
+    });
   });
 
   it('③ 必填缺一必被拒（逐字段，不是抽一个）', async (t) => {
-    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED]]) {
+    for (const [type, payload] of [['session.state', STATE], ['decision.pending', PENDING], ['decision.resolved', RESOLVED], ['session.milestone', MILESTONE]]) {
       await t.test(`${type}：任一必填缺失都被拒`, () => {
         const holes = requiredHoles(type, payload);
         assert.ok(holes.length === 0, `${type}：任一必填缺失都被拒  →  漏拒 ` + holes.join(','));
@@ -131,8 +212,11 @@ describe('session-events（#891 W1）', () => {
       ['session.state', STATE, { phase: '在跑' }, 'phase 非闭集值'],
       ['session.state', STATE, { phase: '' }, 'phase 空串'],
       ['session.state', STATE, { identity: 'worker' }, 'identity 用了英文'],
-      ['decision.pending', PENDING, { urgency: '中' }, 'urgency 非急/缓'],
+      ['decision.pending', PENDING, { urgency: '中' }, 'urgency 非急/缓/null'],
       ['decision.resolved', RESOLVED, { by: '审官' }, 'by 非用户/帅'],
+      ['session.milestone', MILESTONE, { kind: 'rebase' }, 'kind 非 commit/land/pr-merge'],
+      ['session.milestone', MILESTONE, { kind: null }, 'kind 记 null（种类是那一刻就知道的，不许没查成）'],
+      ['session.milestone', MILESTONE, { identity: null }, 'identity 写 null（拿不到就整个字段别写）'],
     ];
     for (const [type, base, bad, name] of cases) {
       await t.test(`${type}：${name} → 拒`, () => {
@@ -150,8 +234,14 @@ describe('session-events（#891 W1）', () => {
   });
 
   it('⑤ decision.pending 的选项不变量', async (t) => {
-    await t.test('options 只有一条 → 拒（拍板至少两个选项）', () => {
+    await t.test('options 只有一条 → 拒（一个选项不叫拍板）', () => {
       assert.ok(throws(() => build('decision.pending', { ...PENDING, options: [{ label: 'W1 先合' }] })), 'options 只有一条 → 拒');
+    });
+    await t.test('options 空（开放问题）但给了 recommend → 拒（没选项可推荐 ≠ 推荐了个不存在的）', () => {
+      assert.ok(throws(() => build('decision.pending', { ...W5_OPEN, recommend: '随便' })), 'options 空但给了 recommend → 拒');
+    });
+    await t.test('options 不是数组 → 拒', () => {
+      assert.ok(throws(() => build('decision.pending', { ...PENDING, options: 'A/B' })), 'options 不是数组 → 拒');
     });
     await t.test('option 缺 label → 拒', () => {
       assert.ok(throws(() => build('decision.pending', { ...PENDING, options: [{ description: '只写了解释' }, { label: '等三张齐' }] })), 'option 缺 label → 拒');
@@ -192,8 +282,14 @@ describe('session-events（#891 W1）', () => {
     });
     await t.test('同 target 追加第二条 decision.resolved 合法（追加不改历史）', () => {
       const r1 = writeEvent({ dir, type: 'decision.resolved', ts: TS, machine: MACHINE, seq: 2, payload: RESOLVED, schema });
-      const r2 = writeEvent({ dir, type: 'decision.resolved', ts: TS2, machine: MACHINE, seq: 3, payload: { ...RESOLVED, chosen: '等三张齐', note: '改主意' }, schema });
+      const r2 = writeEvent({ dir, type: 'decision.resolved', ts: TS2, machine: MACHINE, seq: 3, payload: { ...RESOLVED, chosen: ['等三张齐'], note: '改主意' }, schema });
       assert.ok(fs.existsSync(r1.path) && fs.existsSync(r2.path), '同 target 追加第二条 decision.resolved 合法');
+    });
+    await t.test('session.milestone 落盘读回：evidence/milestone_key 原样在', () => {
+      const m = writeEvent({ dir, type: 'session.milestone', ts: TS, machine: MACHINE, seq: 4, payload: MILESTONE, schema });
+      const mb = JSON.parse(fs.readFileSync(m.path, 'utf8'));
+      assert.ok(mb.event_id === m.event.event_id && mb.evidence === MILESTONE.evidence && mb.milestone_key === 'commit:a1b2c3d' && mb.pr_number === null,
+        'session.milestone 落盘读回  →  ' + JSON.stringify({ e: mb.evidence, k: mb.milestone_key, pr: mb.pr_number }));
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -222,6 +318,23 @@ describe('session-events（#891 W1）', () => {
     await t.test('CLI 写非法 phase 退出码非 0 且不落盘', () => {
       const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
       assert.ok(bad.status !== 0 && n === 1, 'CLI 写非法 phase 退出码非 0 且不落盘  →  ' + `status=${bad.status} files=${n}`);
+    });
+    const ms = run(['--type', 'session.milestone', '--dir', dir, '--machine', MACHINE, '--ts', TS2,
+      '--kind', 'commit', '--repo', 'windsurf-dao', '--milestone-key', 'commit:a1b2c3d',
+      '--commit', 'a1b2c3d', '--branch', 'feat/891-session-events', '--pr-number', 'null',
+      '--evidence', 'exit_code=0；git 探头查到了']);
+    await t.test('CLI 写 session.milestone 退出码 0 且读回一致', () => {
+      const hit = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
+        .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')))
+        .find(e => e.type === 'session.milestone');
+      assert.ok(ms.status === 0 && hit && hit.milestone_key === 'commit:a1b2c3d' && hit.pr_number === null,
+        'CLI 写 session.milestone 退出码 0 且读回一致  →  ' + `status=${ms.status} ` + (ms.stderr || '').trim().slice(0, 120));
+    });
+    const badKind = run(['--type', 'session.milestone', '--dir', dir, '--machine', MACHINE, '--ts', TS,
+      '--kind', 'rebase', '--repo', 'windsurf-dao', '--milestone-key', 'k', '--evidence', 'exit_code=0']);
+    await t.test('CLI 写非法 kind 退出码非 0 且不落盘', () => {
+      const n = fs.readdirSync(dir).filter(f => f.endsWith('.json')).length;
+      assert.ok(badKind.status !== 0 && n === 2, 'CLI 写非法 kind 退出码非 0 且不落盘  →  ' + `status=${badKind.status} files=${n}`);
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });

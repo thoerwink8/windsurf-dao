@@ -113,17 +113,24 @@ function enumInvariant(enums, p) {
 
 // decision.pending 的跨字段不变量（#891）：推荐必须指向真实存在的选项，
 // 否则飞书卡片与用户一键选择拿不到那条 option，账面看着齐、拍板面是死的。
+// 空 options = 开放问题（问用户的工具允许不给选项，#897 实测），此时 recommend 必须是
+// null——「没有选项可推荐」和「推荐了一个不存在的选项」得分开说。
 function decisionInvariant(type, p) {
   if (type !== 'decision.pending') return;
   const opts = p.options;
-  if (!Array.isArray(opts) || opts.length < 2) {
-    throw new Error(`decision.pending 的 options 至少两条（实际 ${Array.isArray(opts) ? opts.length : typeof opts}）`);
-  }
+  if (!Array.isArray(opts)) throw new Error(`decision.pending 的 options 必须是数组（实际 ${typeof opts}）`);
+  if (opts.length === 1) throw new Error('decision.pending 的 options 只有一条（一个选项不叫拍板；开放问题写空数组）');
   const labels = opts.map(o => (o && typeof o === 'object' ? o.label : undefined));
   if (labels.some(l => typeof l !== 'string' || l.trim() === '')) {
     throw new Error('decision.pending 每条 option 必须有非空 label（用户看见并点的那句）');
   }
-  if (!labels.includes(p.recommend)) {
+  if (opts.length === 0) {
+    if (p.recommend != null) {
+      throw new Error(`开放问题（options 空）不能有 recommend，实际 ${JSON.stringify(p.recommend)}`);
+    }
+    return;
+  }
+  if (p.recommend != null && !labels.includes(p.recommend)) {
     throw new Error(`recommend ${JSON.stringify(p.recommend)} 不在 options 的 label 里（${labels.join('/')}）；推荐指向不存在的选项，一键选择会失效`);
   }
 }
