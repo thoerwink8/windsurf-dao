@@ -1,0 +1,79 @@
+{
+  "why": "W5（#891 动作触发写口）要写的三个事件类型在 schemas/events.schema.json 里还没有：decision.pending / decision.resolved 归 W1（issue #891 期一第 1 条只列了 session.state 与 decision.pending），session.milestone 是 W5 的提议（现有 job.closed 不能复用——它是能力账正样本，被收口路径独占写，从 Bash hook 抢写只能填 merged_by=unknown，会污染归因）。测试把这三条**追加**到真 schema 上组合出临时 schema，因此不复制真 schema 的任何内容，不会随它漂移。",
+  "retire": "这三条落进 schemas/events.schema.json 之后，本夹具连同 tests/action-writers.test.js 里的『指针自退役』那条断言一起删。那条断言就是本夹具的报警器：真 schema 一旦已含同名类型，它当场报红。",
+  "oneOf": [
+    {
+      "title": "decision.pending",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "待拍板：一句话 + 选项 + 推荐（#891 期一）。写口 = 问用户的工具的 PreToolUse。",
+          "properties": {
+            "type": { "const": "decision.pending" },
+            "decision_id": { "type": "string" },
+            "question": { "type": "string" },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string" },
+                  "description": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "recommend": { "type": ["string", "null"], "description": "约定 = 第一个选项（AGENTS.md：推荐项放第一项）" },
+            "urgency": { "type": ["string", "null"], "description": "两种问用户的工具入参里都没有固定位 ⇒ 允许 null（没查成，不猜）" },
+            "why": { "type": ["string", "null"] },
+            "asked_by": { "type": "string", "description": "触发写口的工具名" }
+          },
+          "required": ["decision_id", "question", "options", "recommend", "urgency", "why", "asked_by"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "decision.resolved",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "拍板结果：对上 decision.pending 那条。写口 = 同两个工具的 PostToolUse。",
+          "properties": {
+            "type": { "const": "decision.resolved" },
+            "target_decision_id": { "type": "string" },
+            "chosen": { "type": "array", "items": { "type": "string" } },
+            "freeform": { "type": "boolean", "description": "用户答的不在选项里（自由输入）" },
+            "by": { "type": "string" }
+          },
+          "required": ["target_decision_id", "chosen", "freeform", "by"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "session.milestone",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "里程碑（提交·落地·合并）。写口 = Bash 的 PostToolUse，命令真成功才写；evidence 记清这条 ✓ 从哪读回来。",
+          "properties": {
+            "type": { "const": "session.milestone" },
+            "kind": { "enum": ["commit", "land", "pr-merge"] },
+            "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不产生（#891 要求路径不进事件）" },
+            "branch": { "type": ["string", "null"] },
+            "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
+            "subject": { "type": ["string", "null"] },
+            "pr_number": { "type": ["integer", "null"] },
+            "milestone_key": { "type": "string", "description": "幂等键：kind + 落地锚点" },
+            "evidence": { "type": "string", "description": "成功判据出处，例如 exit_code=0；git 探头查到了" }
+          },
+          "required": ["kind", "repo", "evidence", "milestone_key"],
+          "additionalProperties": true
+        }
+      ]
+    }
+  ]
+}

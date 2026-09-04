@@ -9,6 +9,28 @@
             "timeout": 8
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion|mcp__mirasim__im_ask_user",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/action-writers-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion|mcp__mirasim__im_ask_user|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/action-writers-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [
