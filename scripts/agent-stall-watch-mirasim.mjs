@@ -22,7 +22,9 @@
 //   MIRASIM_STALL_STATE     覆盖连红账本路径
 //   MIRASIM_STALL_WATCHDOG  假评论脚本（argv: issue body），替 gh-as watchdog
 //
-// 退出码：0 扫完没事或已处理 / 1 有卡死处理但报帅/评论失败 / 2 没查成（连不上/枚举失败）。
+// 退出码：0 扫完没事或已处理并自证 / 1 查成了但动作失败（停不成、评论没落、删了没自证掉）
+//        / 2 没查成（连不上、枚举失败、或任一会话的关键读链路 unknown）。
+// 「没查成」与「查过没事」永不合并：任一会话读不到快照/账本，整条命令就是 2，不打绿。
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -91,6 +93,25 @@ function postComment({ issue, body }) {
   return { ok, detail: ok ? '评论已落' : `评论失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 200)}`, out: String(r.stdout || '').trim() };
 }
 
+/**
+ * 从工作树反查它**当前**在哪条分支。会话清单的 branch 字段是起会话时请求的那个，
+ * 真机 0.0.286 实测一半是 null、一半是 'master'，拿它当树的现状会既漏删又误删。
+ * 游离 HEAD / 不是 git 树 / 查不成 → null（没查成 → judgeGcWorktree 拒回收）。
+ */
+function branchOfWorktree(dir) {
+  if (!dir || !existsSync(dir)) return null;
+  const r = spawnSync('git', ['-C', dir, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8', timeout: 15000 });
+  if (r.error || r.status !== 0) return null; // 游离时 symbolic-ref 非零
+  const b = String(r.stdout || '').trim();
+  return b || null;
+}
+
+/** 树还在不在（删完回读自证用）。查不成回 null，与「不在了」分开。 */
+function treeExists(dir) {
+  if (!dir) return null;
+  try { return existsSync(dir); } catch { return null; }
+}
+
 /** 分支合没合并进 master：merged/未合并/没查成三态。 */
 function isBranchMerged(branch) {
   if (!branch) return null;
@@ -104,18 +125,24 @@ function isBranchMerged(branch) {
  * 扫一遍（可测核心）。deps 全注入，测试给假的：
  *   listSessions() / readSession(k) / readLedger(k) / stopSession(k)
  *   deleteSession(k,{removeWorktree}) / removeWorktree(path)
- *   isBranchMerged(branch) / postComment({issue,body}) / now()
+ *   isBranchMerged(branch) / branchOfWorktree(path) / treeExists(path)
+ *   postComment({issue,body}) / now()
  *   issueOf(session) —— 从会话推关联 issue（推不出用 fallbackIssue）
- * opts: { stallMs, ttlMs, dryRun, fallbackIssue }
- * 返回 { scanned, stalled[], gced[], escalated[], unscanned, nextState, exit }
+ * opts: { stallMs, ttlMs, dryRun, fallbackIssue, protectPaths }
+ * 返回 { scanned, stalled[], gced[], escalated[], live[], unknown[], unscanned, actionFailed, nextState, exit }
+ * exit：2 = 有没查成的（枚举失败 / 任一会话读链路 unknown）；1 = 查成了但动作失败
+ *      （停不成 / 评论没落 / 删了但回读没自证）；0 = 扫完且该做的都自证做成了。
  */
 export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
   const now = deps.now || (() => Date.now());
   const stallMs = opts.stallMs ?? STALL_MS;
   const ttlMs = opts.ttlMs ?? TTL_MS;
   const dryRun = !!opts.dryRun;
+  // 绝不回收的树：本仓根（主树）。真机会话的 workdir 里就有挂 master 的树，
+  // 没这道闸 + branch 反查一开，第一遍就能把主树删掉。
+  const protectPaths = opts.protectPaths ?? [REPO_ROOT];
   const nextState = { sessions: {} };
-  const out = { scanned: 0, stalled: [], gced: [], escalated: [], live: [], unscanned: false, actionFailed: false };
+  const out = { scanned: 0, stalled: [], gced: [], escalated: [], live: [], unknown: [], unscanned: false, actionFailed: false };
 
   const sessions = await deps.listSessions();
   if (!Array.isArray(sessions)) {
@@ -123,6 +150,7 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     return { ...out, nextState: prevState, exit: 2, reason: '枚举会话没查成（listSessions 没回 sessions 帧）' };
   }
   const active = activeWorkdirs(sessions);
+  const pendingVerify = []; // 删过、等回读自证的（「送进去了」≠「删掉了」）
 
   for (const s of sessions) {
     if (!s || typeof s.sessionKey !== 'string') continue;
@@ -135,26 +163,37 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     if (isTerminalPhase(phase)) {
       const g = judgeGcSession({ meta: s, now: now(), ttlMs });
       if (!g.gc) { nextState.sessions[key] = prev || { sig: null, sinceTs: now() }; continue; }
-      // 树 GC：分支已合并才连树删
+      // 树 GC：分支已合并才连树删。
+      // 会话清单的 branch 字段不能当树的现状（真机 0.0.286 实测 65 条：一半 null、一半 'master'），
+      // 所以从 workdir 反查它**当前**在哪条分支；反查不成 → null → judgeGcWorktree 拒（审官第 7 条）。
       let removeTree = false;
-      let treeReason = '';
-      if (s.workdir && s.branch && !active.has(s.workdir)) {
-        const merged = deps.isBranchMerged(s.branch);
-        const wj = judgeGcWorktree({ path: s.workdir, branch: s.branch, merged });
+      let treeBranch = null;
+      let treeReason = s.workdir ? 'workdir 还在活动集里，不动树' : '会话没登记 workdir，不动树';
+      if (s.workdir && !active.has(s.workdir)) {
+        treeBranch = deps.branchOfWorktree ? deps.branchOfWorktree(s.workdir) : null;
+        const merged = treeBranch ? deps.isBranchMerged(treeBranch) : null;
+        const wj = judgeGcWorktree({ path: s.workdir, branch: treeBranch, merged, protectedPaths: protectPaths });
         removeTree = wj.gc;
         treeReason = wj.reason;
       }
       if (dryRun) {
-        out.gced.push({ key, reason: g.reason, removeTree, treeReason, dryRun: true });
+        out.gced.push({ key, reason: g.reason, removeTree, treeBranch, treeReason, dryRun: true });
+        nextState.sessions[key] = prev || { sig: null, sinceTs: now() };
         continue;
       }
       const del = await deps.deleteSession(key, { removeWorktree: removeTree });
-      out.gced.push({ key, reason: g.reason, removeTree, treeReason, ok: del.ok, why: del.why });
-      // deleteSession 不带树、但树该回收时，补一刀 removeWorktree
-      if (del.ok && removeTree === false && s.workdir && s.branch && !active.has(s.workdir)) {
-        const merged = deps.isBranchMerged(s.branch);
-        if (merged === true && deps.removeWorktree) await deps.removeWorktree(s.workdir);
+      // ok:true 只说明「送进去了」；删成没成一律等下面回读清单/看树还在不在自证（注释承诺的那道回读）。
+      const rec = { key, reason: g.reason, removeTree, treeBranch, treeReason, ok: del.ok, why: del.why, verified: null, treeGone: null };
+      out.gced.push(rec);
+      if (!del.ok) {
+        // 明确失败 → 非零结果 + 保留状态可重试（审官第 4 条）
+        out.actionFailed = true;
+        nextState.sessions[key] = prev || { sig: null, sinceTs: now() };
+        continue;
       }
+      pendingVerify.push({ rec, key, prev, workdir: removeTree ? s.workdir : null });
+      // 这里**不再**在 judgeGcWorktree 说「不回收」之后补一刀 removeWorktree：
+      // 原来那段绕过判官重算 merged，会把保护名单里的树和挂默认分支的树删掉。
       continue;
     }
 
@@ -166,6 +205,14 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     const fp = errorFingerprint(view);
     const prevFp = prev?.errFp || null;
     nextState.sessions[key] = { sig: j.sig, sinceTs: j.sinceTs, errFp: fp };
+
+    // 关键读链路没查成 → 整条命令算「没查成」（审官第 8 条）：
+    // 不 stop、不报帅（连 view.error 都不可信）、不计入健康的「在跑」，并让 exit 变 2。
+    if (j.status === 'unknown') {
+      out.unknown.push({ key, reason: j.reason, gaps: j.gaps || [] });
+      out.unscanned = true;
+      continue;
+    }
 
     if (fp && prevFp && fp === prevFp) {
       const issue = (deps.issueOf ? deps.issueOf(s) : null) || opts.fallbackIssue;
@@ -196,6 +243,47 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     }
 
     out.live.push({ key, status: j.status, reason: j.reason });
+  }
+
+  // ── 删除后回读自证（本文件原注释承诺过、但一直没实现的那道；审官第 4 条）──────
+  // 一次回读清单核全部被删的会话；连树删的再看树路径还在不在。
+  // 三种结果：不在了=真删成；还在=没删成；读不回来=没查成。后两种都算 actionFailed（非零）。
+  if (pendingVerify.length) {
+    const after = await deps.listSessions();
+    const stillThere = Array.isArray(after)
+      ? new Set(after.map(x => (x && typeof x.sessionKey === 'string' ? x.sessionKey : null)).filter(Boolean))
+      : null;
+    for (const v of pendingVerify) {
+      if (stillThere === null) {
+        v.rec.verified = null;
+        v.rec.why = '删完回读清单没查成（listSessions 没回帧），删没删成不敢报';
+        out.actionFailed = true;
+      } else if (stillThere.has(v.key)) {
+        v.rec.verified = false;
+        v.rec.why = '回读清单里这条会话还在——没删成';
+        out.actionFailed = true;
+      } else {
+        v.rec.verified = true;
+      }
+      if (v.workdir) {
+        const exists = deps.treeExists ? deps.treeExists(v.workdir) : null;
+        if (exists === null) {
+          v.rec.treeGone = null;
+          v.rec.treeWhy = '树还在不在没查成';
+          out.actionFailed = true;
+        } else if (exists === true) {
+          v.rec.treeGone = false;
+          v.rec.treeWhy = '回读树路径还在——树没拆成';
+          out.actionFailed = true;
+        } else {
+          v.rec.treeGone = true;
+        }
+      }
+      // 没自证成的留着状态，下一轮可重试
+      if (v.rec.verified !== true || (v.workdir && v.rec.treeGone !== true)) {
+        nextState.sessions[v.key] = v.prev || { sig: null, sinceTs: now() };
+      }
+    }
   }
 
   const exit = out.unscanned ? 2 : out.actionFailed ? 1 : 0;
@@ -262,6 +350,8 @@ async function realDeps(runtime) {
     deleteSession: (k, o) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: !!o?.removeWorktree })),
     removeWorktree: p => withWire(w => wireRemoveWorktree(w, { path: p })),
     isBranchMerged,
+    branchOfWorktree,
+    treeExists,
     postComment,
     issueOf: s => issueFromBranch(s?.branch) || issueFromBranch(String(s?.workdir || '').split('/').pop()),
   };
@@ -303,11 +393,16 @@ async function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
   if (!args.dryRun) saveState(args.state, res.nextState);
-  console.log(`扫 ${res.scanned} 个会话：卡死 ${res.stalled.length}、报帅 ${res.escalated.length}、回收 ${res.gced.length}、在跑 ${res.live.length}`);
+  console.log(`扫 ${res.scanned} 个会话：卡死 ${res.stalled.length}、报帅 ${res.escalated.length}、回收 ${res.gced.length}、在跑 ${res.live.length}、没查成 ${res.unknown.length}`);
   for (const x of res.stalled) console.log(`· 卡死 ${x.key}：${x.reason}${x.stop ? `（停 ${x.stop.ok ? '成' : '败'}，停后 phase=${x.phaseAfter}）` : ''}`);
   for (const x of res.escalated) console.log(`· 报帅 ${x.key}：错误两连同 ${x.fp}`);
-  for (const x of res.gced) console.log(`· 回收 ${x.key}：${x.reason}${x.removeTree ? `（连树：${x.treeReason}）` : ''}`);
-  if (res.unscanned) console.log('（有没查成的项，见上）');
+  for (const x of res.gced) {
+    const verdict = x.dryRun ? '拟' : x.verified === true ? '回读自证：清单里没了' : x.verified === false ? '没删成（回读还在）' : x.ok === false ? `没删成：${x.why}` : `没查成：${x.why || '回读不回来'}`;
+    const tree = x.removeTree ? `（连树 ${x.treeBranch || '?'}：${x.treeGone === true ? '树已没' : x.treeGone === false ? '树还在' : x.dryRun ? x.treeReason : '树还在不在没查成'}）` : '';
+    console.log(`· 回收 ${x.key}：${x.reason} → ${verdict}${tree}`);
+  }
+  for (const x of res.unknown) console.log(`· 没查成 ${x.key}：${x.reason}（没 stop、不算在跑）`);
+  if (res.unscanned) console.log('（有没查成的项，见上——本轮不算「查过没事」）');
   process.exit(res.exit);
 }
 

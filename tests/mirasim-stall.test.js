@@ -109,8 +109,11 @@ describe('judgeGcWorktree —— 树回收', () => {
 });
 
 describe('buildMirasimHealth —— 健康段读真机', () => {
+  // available 是真机 0.0.286 的 relay 帧确实带的字段（boolean）——样本必须跟真机同形，
+  // 不然「样本齐了就 ok」会替真机放行一条 available:false 的腿（PR #885 审官第 5 条）。
   const relay = {
     mode: 'cloud',
+    available: true,
     agentRoutes: { claude: 'relay', codex: 'relay', kimi: 'relay', dsh: 'direct' },
     usage: { windows: [{ label: '5h', usedPercent: 4.6, remainingPercent: 95.4, status: 'allowed' }] },
   };
@@ -163,7 +166,7 @@ describe('activeWorkdirs / usageRecord / probeMirasimTarget', () => {
   });
   it('probeMirasimTarget：claude→relay 且窗读到 → ok；健康没采到 → 没查成', async () => {
     const { probeMirasimTarget, buildMirasimHealth } = await import(MON);
-    const health = buildMirasimHealth({ state: { version: '0.0.282' }, relay: { mode: 'cloud', agentRoutes: { claude: 'relay' }, usage: { windows: [{ label: '5h', usedPercent: 1 }] } } });
+    const health = buildMirasimHealth({ state: { version: '0.0.282' }, relay: { mode: 'cloud', available: true, agentRoutes: { claude: 'relay' }, usage: { windows: [{ label: '5h', usedPercent: 1 }] } } });
     const t = probeMirasimTarget({ agent: 'claude', health });
     assert.equal(t.target, 'mirasim:claude');
     assert.equal(t.state, 'ok');
