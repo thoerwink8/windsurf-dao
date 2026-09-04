@@ -1516,6 +1516,33 @@ async function cmdDispatch(args) {
 }
 
 /**
+ * mirasim 侧不接 --task（#884 审官 P1，二轮 + 三轮两次实咬）。
+ *
+ * --task 是 orca 那条脊的语义：卡已经在编排里了，起个工人接上去。mirasim 侧「会话即卡」，
+ * 没有可接的既有 task。上游 cmdDispatch 的闸只要求「--spec 或 --task 至少有一个」，所以两种
+ * 走法都得在这里拦死，少拦一种就是下面两个洞：
+ *   ① --task 单飞 → spec:undefined 一路冲进 buildSoldierInject，崩在模板占位符上
+ *      （二轮实咬：`模板 soldier-inject.md 占位符 {{SPEC}} 没给值` 的栈甩给用户）。
+ *   ② --task 与 --spec 同传 → 二轮的修法只判 !args.spec，于是返回 ok:true 并把 task 默默
+ *      丢掉，按 spec 派了一单调用方没要的活（三轮实咬）。
+ *
+ * 判据因此不看 spec：**只要 args.task 出现就结构化拒派**。公开参数不许静默忽略。
+ * 判据只放这一处，dispatch / worker-start 两个 mirasim 入口共用，不在调用点抄第二份。
+ * 要真接 task 语义是卡 D/E 的事，不是在这里塞个空 spec 混过去。
+ */
+function assertMirasimNoTask(args, verb) {
+  if (!args.task) return;
+  fail(`mirasim 执行体暂不支持 --task（会话即卡，没有可接的既有 task）：${verb} 只给 --spec`, {
+    executor: 'mirasim',
+    refused: true,
+    unsupported: '--task',
+    verb,
+    task: args.task,
+    // 三轮实咬的就是这条：spec 也给了照样拒，不许「有 spec 就当 task 不存在」。
+    specGiven: !!args.spec,
+  });
+}
+/**
  * mirasim 派一单（#880 卡 B）：建树 + 起会话，同步返回。
  *
  * 不走派工单队列——orca 那条脊的异步是因为起 TUI 要等屏、要探针；mirasim 的
@@ -1527,20 +1554,7 @@ async function cmdDispatch(args) {
  * 派前探针与熔断（那两条钉在 orca 的 provider 名上，归卡 D）。
  */
 async function cmdDispatchMirasim(args, routing, { policy }) {
-  // --task 是 orca 那条脊的语义（卡已在编排里，起工人接上去）；mirasim 侧「会话即卡」，
-  // 没有可接的既有 task。而上游的闸只要求「--spec 或 --task 至少有一个」，所以 --task
-  // 单飞会带着 spec:undefined 一路冲进 buildSoldierInject，崩在模板占位符上
-  //（#884 审官 P1#4 实咬：得 `模板 soldier-inject.md 占位符 {{SPEC}} 没给值` 栈）。
-  // 公开 CLI 不许崩栈：这里出结构化拒派。判据只放这一处（本函数是 mirasim 路唯一入口），
-  // 不在调用点抄第二份。要接 task 语义是卡 D/E 的事，不是在这里塞个空 spec 混过去。
-  if (!args.spec) {
-    fail('mirasim 执行体暂不支持 --task，给 --spec', {
-      executor: 'mirasim',
-      refused: true,
-      unsupported: '--task',
-      task: args.task ?? null,
-    });
-  }
+  assertMirasimNoTask(args, 'dispatch');
   // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
@@ -1549,13 +1563,18 @@ async function cmdDispatchMirasim(args, routing, { policy }) {
   if (splitGate.childCount > 0) {
     fail('mirasim 执行体还不接拆块（父子树 + 多会话编排归卡 D/E）：本单请 --split no');
   }
-  const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue });
+  // #884 审官 P1（三轮）：executor 必须传进闸——闸是靠渲染目标任务书来量字节的，
+  // 不传就等于按 orca 书量 mirasim 的单（两本书前缀差 8 字节，边界上会放过真正超限的 spec），
+  // 也就不算「核对过目标任务书」。渲染与闸必须同一本书，否则闸量的不是要发的东西。
+  const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   if (!injectGate.ok) fail(injectGate.error, { injectGate });
 
   const repo = mirasimRepoOrFail(args);
   const branch = mirasimBranchOrFail(args);
   const route = mirasimRouteOrFail(args, routing, policy);
-  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue });
+  // executor 不传就落 template.mjs 的 orca 默认（soldier-inject.md → soldier-book.md），
+  // 把没有 Orca 卡 / Run 的 mirasim 会话带回 orca 闭环（#884 审官 P1，三轮实咬）。
+  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: route.model });
 
   // --dry-run 在碰执行体之前返回：预览一针都不许烧（额度撤不回来）。
@@ -3461,11 +3480,14 @@ async function cmdWorkerStart(args) {
 async function cmdWorkerStartMirasim(args, routing, { policy }) {
   const workdir = String(args.worktree || '').trim();
   if (!workdir) fail('mirasim worker-start 要 --worktree <树的绝对路径>（mirasim 侧没有终端 handle 这回事）');
+  // 同 dispatch：--task 是 orca 语义，出现就拒，不许静默丢（#884 审官 P1，三轮）。
+  assertMirasimNoTask(args, 'worker-start');
   if (!args.spec) fail('mirasim worker-start 要 --spec（任务书）');
   const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   const route = mirasimRouteOrFail(args, routing, policy);
-  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue });
+  // 同 dispatch：不传 executor 就把 orca 任务书发进 mirasim 会话（#884 审官 P1，三轮）。
+  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.workerStart({ workdir, prompt, model: route.model, provider: route.provider }); }
