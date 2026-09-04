@@ -227,6 +227,24 @@ describe('#815 ③ 复用审官前 worker-read 核活性', () => {
     assert.ok(settled.ok && settled.action === 'create' && /已结算/.test(settled.reason),
       '已结算必须新建，不许复用死人 → ' + JSON.stringify(settled));
 
+    // 2026-09-05 实咬（#866/#868 复审 drain 全灭）：probe 回读若接的是 worker-read
+    // 的真实返回（result.dispatchId+terminal，没有 dispatch 块），结算判读必须报「没查成」
+    // 而不是误判——这条钉死数据契约：喂 worker-read 形状进来只能得 unscanned，
+    // 所以调用点（cmdReviewerAttach 的 probe 分支）必须用 worker-show。
+    const workerReadShape = {
+      ok: true,
+      json: {
+        result: {
+          dispatchId: 'ctx_rev',
+          source: 'terminal',
+          terminal: { handle: 'term_rev', status: 'running', tail: ['…'] },
+        },
+      },
+    };
+    const misfed = S.planReviewerAttachReuse({ cards, workers, workerRead: workerReadShape });
+    assert.ok(misfed.ok === false && misfed.unscanned === true && /result\.dispatch/.test(misfed.error),
+      'worker-read 形状（无 dispatch 块）必须判没查成，不许当已结算/未结算 → ' + JSON.stringify(misfed));
+
     const deadRead = {
       ok: true,
       json: {

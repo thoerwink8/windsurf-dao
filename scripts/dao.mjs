@@ -3861,7 +3861,10 @@ function cmdReviewerAttach(args) {
     workerRead: null,
   });
   if (reusePlan.action === 'probe') {
-    const wrReuse = orca(argsWorkerRead({ dispatch: reusePlan.dispatchId, source: 'auto' }));
+    // 结算/活性判读要 result.dispatch/worker/terminal 三块，只有 worker-show 全带；
+    // worker-read 返回的是 result.dispatchId+terminal（无 dispatch 块），喂进去必判「没查成」
+    // ——2026-09-05 实咬：#866/#868 复审 drain 全灭在这一格。
+    const wrReuse = orca(argsWorkerShow({ dispatch: reusePlan.dispatchId }));
     reusePlan = planReviewerAttachReuse({
       cards: cardsForReuse,
       workers: workersForReuse,
