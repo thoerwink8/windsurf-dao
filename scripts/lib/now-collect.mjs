@@ -12,7 +12,7 @@
 // （/home/orca/wt-unblock/_flow/mirasim/…）。这里只扫已知候选目录，扫不到由判官记「没查成」。
 // 改落点是 #880 卡 C 的范围，本动词不碰。
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -237,6 +237,62 @@ export function readRegistryDirs(dirs, { readdir = readdirSync, readFile = readF
   return { scanned: true, items, dirsScanned, dirsMissing, bad };
 }
 
+const OID_RE = /^[0-9a-f]{40}$/i;
+
+/**
+ * 本机登记有 treePath 就就地读 HEAD。lookup(treePath) → {scanned:true, oid} | {scanned:false, error}。
+ * 已有 scanned:true 的不覆盖；无路径 / 读失败才 scanned:false。零写入。
+ */
+export function fillTreeHeads(items, lookup) {
+  if (!Array.isArray(items)) return items;
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    if (it.treeHead && it.treeHead.scanned === true) continue;
+    const p = it.treePath == null ? '' : String(it.treePath).trim();
+    if (!p) {
+      it.treeHead = { scanned: false, error: '登记没写路径，审官树 HEAD 无从读' };
+      continue;
+    }
+    it.treeHead = lookup(p);
+  }
+  return items;
+}
+
+function defaultRunGit(treePath) {
+  const r = spawnSync('git', ['-c', 'safe.directory=*', '-C', treePath, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: GIT_TIMEOUT_MS,
+  });
+  if (r.error) return { ok: false, error: String(r.error.message || r.error) };
+  if (r.status !== 0) {
+    return { ok: false, error: String(r.stderr || '').trim().slice(0, 160) || `git 退出 ${r.status}` };
+  }
+  return { ok: true, out: r.stdout };
+}
+
+/**
+ * 读一棵审官树 HEAD。可注入 runGit / exists，测试不必真起 git 仓。
+ * 只加 `-c safe.directory=*` 这一次调用，不 fetch、不改 config。
+ */
+export function lookupGitHead(treePath, { runGit = defaultRunGit, exists = existsSync } = {}) {
+  const p = treePath == null ? '' : String(treePath).trim();
+  if (!p) return { scanned: false, error: '登记没写路径，审官树 HEAD 无从读' };
+  if (!exists(p)) return { scanned: false, error: `审官树 ${p} 不在（目录不存在，HEAD 没读到）` };
+  let r;
+  try { r = runGit(p); } catch (e) {
+    return { scanned: false, error: `审官树 ${p} 的 HEAD 没读到：${String(e && e.message || e)}` };
+  }
+  if (!r || r.ok !== true) {
+    return { scanned: false, error: `审官树 ${p} 的 HEAD 没读到：${(r && r.error) || 'git 没回'}` };
+  }
+  const oid = String(r.out || '').trim();
+  if (!OID_RE.test(oid)) {
+    return { scanned: false, error: `审官树 ${p} 的 HEAD 不是 40 位 hex（没查成）` };
+  }
+  return { scanned: true, oid };
+}
+
 // ── 服务器侧：登记 + 审官树 head + 活着的执行体（一次 ssh 拿全） ──────────────
 
 // 远端脚本用单引号数组拼，绝不放进 JS 模板串——${…} 会被 JS 先吃掉（本机实咬：
@@ -246,8 +302,10 @@ export function readRegistryDirs(dirs, { readdir = readdirSync, readFile = readF
 //     所以候选根是一串（$HOME / /home/orca / /root），扫到哪个算哪个。
 //  2. root 读 orca 的仓，git 报 dubious ownership 直接 fatal —— 每次调用现加
 //     `-c safe.directory="*"`（只影响这一次调用，不写任何配置，本动词零写入）。
-const REMOTE_SCRIPT = [
+export const REMOTE_SCRIPT = [
   'set -u',
+  'TPLIST=$(mktemp 2>/dev/null || echo /tmp/now-collect-tp.$$)',
+  ': > "$TPLIST"',
   'for root in "$HOME" /home/orca /root; do',
   '  for d in "$root"/windsurf-dao/_flow/mirasim "$root"/wt-*/_flow/mirasim "$root"/mirasim-worktrees/*/*/_flow/mirasim; do',
   '    case "$d" in *"*"*) continue;; esac',
@@ -256,12 +314,21 @@ const REMOTE_SCRIPT = [
   '      for f in "$d"/reviewer-*.json; do',
   '        [ -f "$f" ] || continue',
   '        printf "REG\\t%s\\t%s\\n" "$f" "$(base64 -w0 < "$f")"',
+  '        tp=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(\\"treePath\\") or \\"\\")" "$f" 2>/dev/null) || tp=',
+  '        if [ -z "$tp" ]; then tp=$(grep -o "\\"treePath\\":\\"[^\\"]*\\"" "$f" 2>/dev/null | head -n 1 | cut -d "\\"" -f 4); fi',
+  '        if [ -n "$tp" ]; then printf "%s\\n" "$tp" >> "$TPLIST"; fi',
   '      done',
   '    else',
   '      printf "DIRMISS\\t%s\\n" "$d"',
   '    fi',
   '  done',
   'done',
+  'sort -u "$TPLIST" -o "$TPLIST" 2>/dev/null || true',
+  'while IFS= read -r tp; do',
+  '  [ -n "$tp" ] || continue',
+  '  oid=$(git -c safe.directory="*" -C "$tp" rev-parse HEAD 2>/dev/null) || oid=-',
+  '  printf "TREE\\t%s\\t%s\\n" "$tp" "$oid"',
+  'done < "$TPLIST"',
   'for t in "$HOME"/mirasim-worktrees/*/* /home/orca/mirasim-worktrees/*/*; do',
   '  case "$t" in *"*"*) continue;; esac',
   '  [ -e "$t/.git" ] || continue',
@@ -270,8 +337,16 @@ const REMOTE_SCRIPT = [
   'done',
   'for p in /proc/[0-9]*; do',
   '  cwd=$(readlink "$p/cwd" 2>/dev/null) || continue',
-  '  case "$cwd" in *mirasim-worktrees*) printf "PROC\\t%s\\t%s\\n" "${p#/proc/}" "$cwd";; esac',
+  '  hit=0',
+  '  while IFS= read -r tp; do',
+  '    [ -n "$tp" ] || continue',
+  '    case "$cwd" in "$tp"|"$tp"/*) hit=1;; esac',
+  '  done < "$TPLIST"',
+  '  if [ "$hit" = 1 ]; then',
+  '    printf "PROC\\t%s\\t%s\\n" "$(basename "$p")" "$cwd"',
+  '  fi',
   'done',
+  'rm -f "$TPLIST"',
   'printf "END\\n"',
 ].join('\n');
 
@@ -304,6 +379,19 @@ export function parseRemoteScan(text) {
   return { regs, trees, procs, dirsScanned, dirsMissing, bad, ended };
 }
 
+/** 把远端 TREE 表贴到登记上。登记 treePath 不在表里 = 没查成（漏扫必须可见）。 */
+export function attachRemoteTreeHeads(regs, trees) {
+  const map = trees instanceof Map ? trees : new Map();
+  return (Array.isArray(regs) ? regs : []).map((reg) => {
+    const p = reg && reg.treePath ? String(reg.treePath) : '';
+    if (p && map.has(p)) return { ...reg, treeHead: { scanned: true, oid: map.get(p) } };
+    return {
+      ...reg,
+      treeHead: { scanned: false, error: `审官树 ${p || '(登记里没写路径)'} 的 HEAD 没读到` },
+    };
+  });
+}
+
 export async function fetchRemote({ host, cwd } = {}) {
   if (!host) {
     const why = '没给服务器名（--no-server 或本机不认识 contabo）';
@@ -321,12 +409,7 @@ export async function fetchRemote({ host, cwd } = {}) {
     const why = `${host} 的扫描没跑完（输出没收到结束标记，按没查成算）`;
     return { registries: { scanned: false, error: why }, sessions: { scanned: false, error: why } };
   }
-  const items = p.regs.map(reg => ({
-    ...reg,
-    treeHead: reg.treePath && p.trees.has(reg.treePath)
-      ? { scanned: true, oid: p.trees.get(reg.treePath) }
-      : { scanned: false, error: `审官树 ${reg.treePath || '(登记里没写路径)'} 的 HEAD 没读到` },
-  }));
+  const items = attachRemoteTreeHeads(p.regs, p.trees);
   return {
     registries: { scanned: true, items, dirsScanned: p.dirsScanned, dirsMissing: p.dirsMissing, bad: p.bad },
     sessions: { scanned: true, items: p.procs },
@@ -375,10 +458,7 @@ export async function collectNow({ cwd, host = 'contabo', windowHours = 6, now =
     worktreePaths: worktrees.scanned ? worktrees.items.map(w => w.path) : [],
   }));
   // 本机侧登记若带 treePath，就地读一次 HEAD（同步、只读；本机 git 很快）。
-  for (const it of localReg.items) {
-    if (it.treeHead) continue;
-    it.treeHead = { scanned: false, error: '本机侧没读审官树 HEAD' };
-  }
+  fillTreeHeads(localReg.items, (p) => lookupGitHead(p));
 
   return {
     prs,
