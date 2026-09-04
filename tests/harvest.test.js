@@ -49,6 +49,30 @@ describe('harvest 回流闸', () => {
       const r = scanHarvestSection('## 回流\n* **产物**: x\n1. 为什么通用：①a ②b\n- 落点：y\n');
       assert.deepEqual(r.missing, []);
     });
+
+    // 下面两条是被真语料咬出来的：收紧行边界后，已合并 PR #901 那个写得很规范的段
+    // 被判 thin（缺「为什么通用」）。闸把合规的段判红，比它原来漏掉不合规的段更坏。
+    await t.test('字段名后带括号限定语（`为什么通用（≥2 场景）`）照旧认', () => {
+      const r = scanHarvestSection('## 回流\n**产物**：x\n**为什么通用（≥2 场景）**：①a ②b\n**落点**：y\n');
+      assert.deepEqual(r.missing, [], JSON.stringify(r));
+    });
+    await t.test('标记行以冒号收尾、值写在下面几行（#901 实例形状）', () => {
+      const r = scanHarvestSection('## 回流\n**产物**：x\n**为什么通用（≥2 场景）**：\n1. 场景一\n2. 场景二\n\n**落点**：y\n');
+      assert.deepEqual(r.missing, [], JSON.stringify(r));
+      assert.match(r.fields['为什么通用'], /场景一/);
+    });
+    await t.test('换行取值撞到下一个标记就停 → 标记下面是空的，照旧判缺', () => {
+      const r = scanHarvestSection('## 回流\n- 产物：\n- 为什么通用：①a ②b\n- 落点：y\n- 已回流：abcdef1\n');
+      assert.deepEqual(r.missing, ['产物'], '空标记不许被下一行的值顶上：' + JSON.stringify(r));
+    });
+    await t.test('段末尾的空标记没有下文 → 判缺', () => {
+      const r = scanHarvestSection('## 回流\n- 产物：x\n- 为什么通用：①a ②b\n- 落点：\n');
+      assert.deepEqual(r.missing, ['落点'], JSON.stringify(r));
+    });
+    await t.test('括号限定语不给挤字段开后门（值里再挤别的字段仍不算）', () => {
+      const r = scanHarvestSection('## 回流\n产物（说明）：x；为什么通用：①a ②b；落点：y\n');
+      assert.deepEqual(r.missing, ['产物', '为什么通用', '落点'], JSON.stringify(r));
+    });
   });
 
   it('行边界负例：格式不合规的段一个都不许判 ok:true（#890 审官 P1）', async (t) => {

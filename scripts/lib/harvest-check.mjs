@@ -44,16 +44,34 @@ const FENCE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})/;
 const HEADING_RE = /^[ \t]{0,3}(#{1,6})[ \t]+(.*)$/;
 /** 行首可以有的装饰：列表符号 / 有序号 / 粗体开头。字段名必须紧跟其后。 */
 const LEAD = String.raw`^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+)?(?:\*\*|__)?`;
-/** 字段名后可以有的收尾粗体标记，然后必须是冒号。 */
-const AFTER_KEY = String.raw`(?:\*\*|__)?[ \t]*[：:][ \t]*`;
+/**
+ * 字段名与冒号之间允许的收尾装饰：粗体闭合，和一段括号限定语。
+ * 限定语这条是被真语料咬出来的——PR #901 写的是 `**为什么通用（≥2 场景）**：`，
+ * 而士兵任务书模板自己就把「（说得出 ≥2 个使用场景才算）」写在字段名后面。
+ * 只放行成对括号里的短限定语（不放行任意文字），行首锚不动：挤成一行照旧不算。
+ */
+const AFTER_KEY = String.raw`(?:\*\*|__)?(?:[（(【\[][^）)】\]\n]{0,60}[）)】\]])?(?:\*\*|__)?[ \t]*[：:][ \t]*`;
 
+/** 「行首独立字段标记」：只认标记本身，值可以空（留给下面的换行取值）。 */
+function fieldLabelRe(key) {
+  return new RegExp(`${LEAD}${key}${AFTER_KEY}`);
+}
 /** 「行首独立字段行」正则：`产物：x`、`- 产物：x`、`- **产物**：x` 都算；行尾挤进来的不算。 */
 function fieldLineRe(key) {
-  return new RegExp(`${LEAD}${key}${AFTER_KEY}(.+)$`);
+  return new RegExp(`${LEAD}${key}${AFTER_KEY}(.*)$`);
 }
-/** 「行首独立受理行」正则：证据必须自己占一行的行首，不能挂在别的字段行尾。 */
+/**
+ * 「行首独立受理行」正则：证据必须自己占一行的行首，不能挂在别的字段行尾。
+ * 受理证据不给换行取值——它就一个 sha / #N / 一句原因，写不下才是没写（`不回流：` 空着 = 没接）。
+ */
 function acceptLineRe(rule) {
   return new RegExp(`${LEAD}${rule.key}${AFTER_KEY}${rule.tail}`);
+}
+
+/** 这一行是不是「某个必填字段或受理证据的标记行」——换行取值到这里必须停。 */
+function isAnyLabelLine(text) {
+  return REQUIRED_FIELDS.some(k => fieldLabelRe(k).test(text))
+    || ACCEPT_RULES.some(r => fieldLabelRe(r.key).test(text));
 }
 
 /** 去掉 ATX 闭合井号（`## 回流 ##`）后的标题正文。 */
@@ -118,13 +136,22 @@ export function scanHarvestSection(body) {
   for (const key of REQUIRED_FIELDS) {
     const re = fieldLineRe(key);
     const others = REQUIRED_FIELDS.filter(k => k !== key);
-    for (const text of contentLines) {
-      const m = text.match(re);
+    for (let i = 0; i < contentLines.length; i++) {
+      const m = contentLines[i].match(re);
       if (!m) continue;
-      const val = String(m[1]).trim();
-      if (!val) continue;
+      let val = String(m[1]).trim();
       // 一行只放一个字段：值里再挤别的必填字段 = 三个字段挤成一行，不算三行体。
-      if (others.some(k => new RegExp(`${k}[ \\t]*[：:]`).test(val))) continue;
+      if (val && others.some(k => new RegExp(`${k}[ \\t]*[：:]`).test(val))) continue;
+      // 标记行以冒号收尾、值写在下面几行（Markdown 常见写法，PR #901 实例）：
+      // 往下找第一行有字的内容当值；撞到下一个字段/受理标记就停——那说明这个标记下面是空的。
+      if (!val) {
+        for (let j = i + 1; j < contentLines.length; j++) {
+          const next = contentLines[j];
+          if (isAnyLabelLine(next)) break;
+          if (next.trim()) { val = next.trim(); break; }
+        }
+      }
+      if (!val) continue;
       fields[key] = val;
       break;
     }
