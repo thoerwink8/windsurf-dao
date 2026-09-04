@@ -79,10 +79,111 @@ describe('③ ws 连上 ≠ 会话枚举成了；没探成就一棵树都不拆'
   });
   it('连令牌都没有（服务没在跑）→ 不 blocking：没有会话就没有它在用的树', async () => {
     const { judgeWorkdirProbe, SERVER_ABSENT_HINT } = await import(MON);
-    const r = judgeWorkdirProbe({ reachable: false, connectError: `${SERVER_ABSENT_HINT}，服务多半没在跑`, sessions: null });
+    // 「服务没在跑」只认全机 presence 的结论；光有那句错误文案不作数
+    const r = judgeWorkdirProbe({
+      reachable: false,
+      connectError: `${SERVER_ABSENT_HINT}，服务多半没在跑`,
+      sessions: null,
+      presence: { absent: true, why: '本机一个端口上都没有 mirasim 服务' },
+    });
     assert.equal(r.serverAbsent, true);
     assert.equal(r.blocking, false, '本机/CI 没起 mirasim 时 land 还得能清树');
     assert.equal(r.workdirs.size, 0);
+    const msgOnly = judgeWorkdirProbe({ reachable: false, connectError: `${SERVER_ABSENT_HINT}，服务多半没在跑`, sessions: null });
+    assert.equal(msgOnly.blocking, true, '没带 presence 就不许断言「没在跑」');
+  });
+  it('presence 没查成（读不到本机服务清单）→ blocking，不许当「服务没在跑」', async () => {
+    const { judgeWorkdirProbe } = await import(MON);
+    const r = judgeWorkdirProbe({ reachable: false, connectError: '读不到回环会话令牌，服务多半没在跑', sessions: null, presence: { absent: null, why: '本机服务清单没查成' } });
+    assert.equal(r.serverAbsent, false);
+    assert.equal(r.blocking, true);
+  });
+  it('judgeServerPresence：一份令牌都没有=真没服务；端口对不上≠没服务；读不到=没查成', async () => {
+    const { judgeServerPresence } = await import(MON);
+    assert.equal(judgeServerPresence({ probedPort: 4316, live: { readable: true, ports: [] } }).absent, true);
+    const wrongPort = judgeServerPresence({ probedPort: 4316, live: { readable: true, ports: [4970] } });
+    assert.equal(wrongPort.absent, false, '服务在 4970 上跑着，敲 4316 读不到令牌不等于没服务');
+    assert.match(wrongPort.why, /4970/);
+    assert.equal(judgeServerPresence({ probedPort: 4970, live: { readable: true, ports: [4970] } }).absent, false);
+    assert.equal(judgeServerPresence({ probedPort: 4316, live: { readable: false, ports: [], why: '读不到目录' } }).absent, null);
+    assert.equal(judgeServerPresence({}).absent, null);
+  });
+  it('敲错端口时 land 必须 blocking（否则服务上 65 条会话的树会被当没有）', async () => {
+    const { probeMirasim, judgeWorkdirProbe } = await import(MON);
+    const c = await probeMirasim({
+      open: async () => { const e = new Error('读不到回环会话令牌，服务多半没在跑'); throw e; },
+      port: 4316,
+      serverPorts: () => ({ readable: true, ports: [4970] }),
+    });
+    const r = judgeWorkdirProbe(c);
+    assert.equal(r.serverAbsent, false);
+    assert.equal(r.blocking, true, '敲错端口 = 看不见，不是没有');
+  });
+  it('真没服务时不 blocking（land 还得能清树）', async () => {
+    const { probeMirasim, judgeWorkdirProbe } = await import(MON);
+    const c = await probeMirasim({
+      open: async () => { throw new Error('读不到回环会话令牌，服务多半没在跑'); },
+      port: 4316,
+      serverPorts: () => ({ readable: true, ports: [] }),
+    });
+    assert.equal(judgeWorkdirProbe(c).blocking, false);
+  });
+  it('openWire 的端口解析跟 runtime 一条道（opts → MIRASIM_PORT → 默认）', async () => {
+    const { openWire } = await import('file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/'));
+    const seen = [];
+    const connect = async ({ port }) => { seen.push(port); return { close() {} }; };
+    const prev = process.env.MIRASIM_PORT;
+    try {
+      delete process.env.MIRASIM_PORT;
+      await openWire({ connect });
+      assert.equal(seen[0], 4316, '没给也没 env → 默认 4316');
+      process.env.MIRASIM_PORT = '4970';
+      await openWire({ connect });
+      assert.equal(seen[1], 4970, 'MIRASIM_PORT 必须生效——否则本机服务在 4970 时这条腿永远报「没在跑」');
+      await openWire({ connect, port: 5555 });
+      assert.equal(seen[2], 5555, 'opts.port 优先');
+    } finally {
+      if (prev === undefined) delete process.env.MIRASIM_PORT; else process.env.MIRASIM_PORT = prev;
+    }
+  });
+  it('resolveProbePort：端口是读出来的，不是猜的', async () => {
+    const { resolveProbePort } = await import(MON);
+    const one = { readable: true, ports: [4970] };
+    assert.equal(resolveProbePort({ live: one }).port, 4970, '本机只有 4970 在跑就该敲 4970，别死敲 4316');
+    assert.equal(resolveProbePort({ port: 5555, envPort: '4970', live: one }).port, 5555, '显式 port 最优先');
+    assert.equal(resolveProbePort({ envPort: '4970', live: { readable: true, ports: [] } }).port, 4970, 'MIRASIM_PORT 次优先');
+    assert.equal(resolveProbePort({ live: { readable: true, ports: [4316, 4970] } }).port, 4316, '在跑的里有默认就用默认');
+    assert.equal(resolveProbePort({ live: { readable: true, ports: [] } }).port, 4316, '一个都没在跑：仍按默认敲一下确认');
+    assert.equal(resolveProbePort({ live: { readable: false, ports: [] } }).port, 4316, '清单没查成：退默认');
+    const many = resolveProbePort({ live: { readable: true, ports: [4970, 5001] } });
+    assert.equal(many.port, null, '多个非默认端口不猜');
+    assert.match(many.why, /不猜|没查成/);
+  });
+  it('多端口不猜时 probeMirasim 不瞎敲，且下游 blocking', async () => {
+    const { probeMirasim, judgeWorkdirProbe } = await import(MON);
+    let opened = 0;
+    const c = await probeMirasim({
+      open: async () => { opened += 1; throw new Error('不该敲'); },
+      serverPorts: () => ({ readable: true, ports: [4970, 5001] }),
+    });
+    assert.equal(opened, 0, '端口没定下来就不许开线');
+    assert.equal(c.reachable, false);
+    assert.equal(judgeWorkdirProbe(c).blocking, true);
+  });
+  it('liveServerPorts：目录不存在=真没起过（是事实）；有令牌就报端口', async () => {
+    const { liveServerPorts } = await import('file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/'));
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-home-'));
+    const none = liveServerPorts(empty);
+    assert.equal(none.readable, true);
+    assert.deepEqual(none.ports, []);
+    const run = path.join(empty, '.mirasim', 'run');
+    fs.mkdirSync(run, { recursive: true });
+    fs.writeFileSync(path.join(run, 'local-4970.token'), 'x');
+    fs.writeFileSync(path.join(run, 'notes.txt'), 'x');
+    const found = liveServerPorts(empty);
+    assert.deepEqual(found.ports, [4970]);
   });
   it('SERVER_ABSENT_HINT 是指向卡 A 文案的指针——卡 A 改了文案这条就翻红', async () => {
     const { SERVER_ABSENT_HINT } = await import(MON);

@@ -358,7 +358,8 @@ async function realDeps(runtime) {
 }
 
 async function runHealth({ json }) {
-  const collected = await probeMirasim({ port: Number(process.env.MIRASIM_PORT) || 4316 });
+  // 端口解析统一交给卡 A 的 openWire（opts → MIRASIM_PORT → 默认），别在这儿再算一份
+  const collected = await probeMirasim({});
   writeJsonFile(USAGE_FILE, collected.usage);
   const h = collected.health;
   if (json) {
@@ -398,7 +399,10 @@ async function main(argv = process.argv.slice(2)) {
   for (const x of res.escalated) console.log(`· 报帅 ${x.key}：错误两连同 ${x.fp}`);
   for (const x of res.gced) {
     const verdict = x.dryRun ? '拟' : x.verified === true ? '回读自证：清单里没了' : x.verified === false ? '没删成（回读还在）' : x.ok === false ? `没删成：${x.why}` : `没查成：${x.why || '回读不回来'}`;
-    const tree = x.removeTree ? `（连树 ${x.treeBranch || '?'}：${x.treeGone === true ? '树已没' : x.treeGone === false ? '树还在' : x.dryRun ? x.treeReason : '树还在不在没查成'}）` : '';
+    // 树那一格无论删不删都要说清楚：不删的理由正是「有没有误删」的证据
+    const tree = x.removeTree
+      ? `（连树 ${x.treeBranch || '?'}：${x.treeGone === true ? '树已没' : x.treeGone === false ? '树还在' : x.dryRun ? x.treeReason : '树还在不在没查成'}）`
+      : `（不动树：${x.treeReason}）`;
     console.log(`· 回收 ${x.key}：${x.reason} → ${verdict}${tree}`);
   }
   for (const x of res.unknown) console.log(`· 没查成 ${x.key}：${x.reason}（没 stop、不算在跑）`);

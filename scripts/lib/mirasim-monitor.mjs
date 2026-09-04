@@ -26,7 +26,7 @@
 // 判官只吃入参、不碰 IO；wire 包装只收发、不判对错——判据不复用发消息那层。
 
 import os from 'node:os';
-import { openWire, PINNED_VERSION } from './mirasim-runtime.mjs';
+import { openWire, PINNED_VERSION, liveServerPorts, DEFAULT_PORT } from './mirasim-runtime.mjs';
 
 // 相位词表与 mirasim-runtime.mjs 对齐（那边没导出，这里各留一份，改了要一起改）。
 // runState 词表取自 server.cjs 实证：`runState = ok ? 'completed' : 'incomplete'`，
@@ -421,6 +421,44 @@ export function activeWorkdirs(sessions) {
 export const SERVER_ABSENT_HINT = '读不到回环会话令牌';
 
 /**
+ * 该敲哪个端口（纯函数）。别写死 4316 去猜：本机服务在 4970 时，敲 4316 读不到令牌，
+ * 会被说成「服务没在跑」，下游据此去删树（2026-09-04 实咬）。
+ * 令牌文件名就写着端口，这是**读得到的事实**，不用猜。
+ *  显式 port > MIRASIM_PORT > 只有一个在跑的端口 > 在跑的里含默认端口 > 默认端口
+ * 多个在跑且不含默认端口 ⇒ port:null（不猜，交给调用方按「没查成」处置）。
+ * 返回 {port, why}
+ */
+export function resolveProbePort({ port, envPort, live, defaultPort = DEFAULT_PORT } = {}) {
+  const explicit = Number(port);
+  if (Number.isFinite(explicit) && explicit > 0) return { port: explicit, why: `调用方指定 ${explicit}` };
+  const env = Number(envPort);
+  if (Number.isFinite(env) && env > 0) return { port: env, why: `MIRASIM_PORT=${env}` };
+  const ports = live && live.readable === true && Array.isArray(live.ports) ? live.ports : null;
+  if (!ports) return { port: Number(defaultPort), why: `本机服务端口没查成，退回默认 ${defaultPort}` };
+  if (ports.length === 1) return { port: ports[0], why: `本机只有一个 mirasim 在跑：${ports[0]}（令牌文件读回来的）` };
+  if (ports.includes(Number(defaultPort))) return { port: Number(defaultPort), why: `在跑的端口里有默认 ${defaultPort}` };
+  if (ports.length === 0) return { port: Number(defaultPort), why: `本机没有 mirasim 在跑，仍按默认 ${defaultPort} 敲一下确认` };
+  return { port: null, why: `本机有多个 mirasim 在跑（${ports.join('/')}）且都不是默认端口——不猜该敲哪个（没查成）` };
+}
+
+/**
+ * 「这台机器上到底有没有 mirasim 服务在跑」——只有这个能支撑「没有会话在用树」。
+ * 别拿「我敲的那个端口没令牌」代替它：本机服务在 4970 时去敲 4316 一样读不到令牌，
+ * 而那台服务上真有 65 条带 workdir 的会话（2026-09-04 实咬，这一版加的洞，当场堵掉）。
+ * 返回 {absent:true|false|null}；null = 连有没有都没查成（一律按看不见处理）。
+ */
+export function judgeServerPresence({ probedPort, live } = {}) {
+  if (!live || live.readable !== true) return { absent: null, why: live?.why || '本机有没有 mirasim 服务没查成' };
+  const ports = Array.isArray(live.ports) ? live.ports : [];
+  if (ports.length === 0) return { absent: true, why: '本机一个端口上都没有 mirasim 服务（回环令牌一份都没有）' };
+  const others = ports.filter(p => Number(p) !== Number(probedPort));
+  if (others.length) {
+    return { absent: false, why: `服务在 ${others.join('/')} 上跑着，我敲的是 ${probedPort}——端口对不上，不是「没有服务」` };
+  }
+  return { absent: false, why: `端口 ${probedPort} 上有服务（令牌在）` };
+}
+
+/**
  * land 删树前的前置闸（纯函数）。ws 连上了 ≠ 会话枚举成了：
  * listSessions 超时/没回帧时 sessions 是 null，activeWorkdirs 是空集——
  * 把它当「没有活动树」就会删掉正在用的树（审官第 3 条实咬）。
@@ -437,7 +475,9 @@ export const SERVER_ABSENT_HINT = '读不到回环会话令牌';
 export function judgeWorkdirProbe(collected) {
   const c = collected && typeof collected === 'object' ? collected : null;
   const connectError = typeof c?.connectError === 'string' ? c.connectError : '';
-  const serverAbsent = c?.reachable !== true && connectError.includes(SERVER_ABSENT_HINT);
+  // 「服务没在跑」只认 judgeServerPresence 的结论（看全机令牌），不认单个端口读不到令牌。
+  const presence = c?.presence && typeof c.presence === 'object' ? c.presence : { absent: null, why: '采集没带 presence（没查成）' };
+  const serverAbsent = c?.reachable !== true && presence.absent === true;
   const g = gapReport([
     { name: 'ws 连线', known: c?.reachable === true, why: connectError || '连不上回环 ws' },
     { name: '会话清单', known: Array.isArray(c?.sessions), why: 'listSessions 没回 sessions 帧（超时/无回帧）' },
@@ -446,7 +486,9 @@ export function judgeWorkdirProbe(collected) {
     probed: g.ok,
     blocking: !g.ok && !serverAbsent,
     serverAbsent,
-    why: serverAbsent ? `${connectError}——没有 mirasim 会话，也就没有它在用的树（空集是事实）` : g.why,
+    why: serverAbsent
+      ? `${presence.why}——没有 mirasim 会话，也就没有它在用的树（空集是事实）`
+      : `${g.why}${presence.absent === false ? `；${presence.why}` : ''}`,
     workdirs: g.ok && c.activeWorkdirs instanceof Set ? c.activeWorkdirs : new Set(),
   };
 }
@@ -512,37 +554,53 @@ export function probeMirasimTarget({ agent, health } = {}) {
  * 共用采集：连一次 ws，把 state / relay / sessions 一次读齐，产出健康段、额度记录、
  * 活动树集合、每 agent 探活。连不上不抛——返回 reachable:false + connectError，让调用方
  * 各自决定「没查成」怎么处置。
- *  opts: { open, port, homeDir, now, pinnedVersion, agents }
+ *  opts: { open, port, homeDir, now, pinnedVersion, agents, serverPorts }
  *    open —— 注入的开线函数（测试用假线）；默认用 runtime 的 openWire
+ *    serverPorts —— 注入的「本机哪些端口有服务」读法（测试用假的）；默认卡 A 的 liveServerPorts
+ * 端口解析交给 openWire（opts → MIRASIM_PORT → 默认），这里不再自己算一份。
  * ⚠️ reachable:true 只说明 ws 连上了。会话枚举成没成看 sessionsKnown（或过 judgeWorkdirProbe）。
+ * presence 只在连不上时才需要：它把「服务没在跑」和「我敲错端口/服务卡着」分开——
+ * 前者可以推出「没有会话在用树」，后两者不行。
  */
-export async function probeMirasim({ open = openWire, port, homeDir, now = () => Date.now(), pinnedVersion = PINNED_VERSION, agents } = {}) {
+export async function probeMirasim({ open = openWire, port, homeDir, now = () => Date.now(), pinnedVersion = PINNED_VERSION, agents, serverPorts = liveServerPorts } = {}) {
   const host = os.hostname();
+  // 先读「本机哪些端口有服务」，据此定该敲哪个；这一读也是后面分辨
+  // 「服务没在跑」和「我敲错了 / 服务卡着」的唯一依据。
+  let live;
+  try { live = serverPorts(homeDir); } catch (err) { live = { readable: false, ports: [], why: `本机服务清单没查成：${err?.message || err}` }; }
+  const picked = resolveProbePort({ port, envPort: process.env.MIRASIM_PORT, live });
+  const probedPort = picked.port;
+  const fail = (connectError) => ({
+    reachable: false, connectError, host, port: probedPort,
+    state: null, relay: null, sessions: null, sessionsKnown: false,
+    presence: judgeServerPresence({ probedPort, live }),
+    portWhy: picked.why,
+    health: buildMirasimHealth({ state: null, relay: null, connectError, pinnedVersion }),
+    usage: usageRecord({ relay: null, host, port: probedPort, now: now() }),
+    activeWorkdirs: new Set(), perAgent: {},
+  });
+  // 该敲哪个都没定下来：不瞎敲，直接报没查成（presence 会是 absent:false，下游 blocking）
+  if (probedPort == null) return fail(picked.why);
   let wire = null;
   try {
-    wire = await open({ homeDir, port });
+    wire = await open({ homeDir, port: probedPort });
   } catch (e) {
-    const connectError = e?.message || String(e);
-    const health = buildMirasimHealth({ state: null, relay: null, connectError, pinnedVersion });
-    return {
-      reachable: false, connectError, host, port: port ?? null,
-      state: null, relay: null, sessions: null, sessionsKnown: false,
-      health, usage: usageRecord({ relay: null, host, port, now: now() }),
-      activeWorkdirs: new Set(), perAgent: {},
-    };
+    return fail(e?.message || String(e));
   }
   try {
     const state = wire.state || null;
     const relay = await wireGetRelay(wire);
     const sessions = await wireListSessions(wire);
     const health = buildMirasimHealth({ state, relay, pinnedVersion });
-    const usage = usageRecord({ relay, host, port, now: now() });
+    const usage = usageRecord({ relay, host, port: probedPort, now: now() });
     const routeAgents = agents || (health.agentRoutes ? Object.keys(health.agentRoutes) : []);
     const perAgent = {};
     for (const a of routeAgents) perAgent[a] = probeMirasimTarget({ agent: a, health });
     return {
-      reachable: true, connectError: null, host, port: port ?? null,
+      reachable: true, connectError: null, host, port: probedPort,
       state, relay, sessions, sessionsKnown: Array.isArray(sessions),
+      presence: { absent: false, why: '连上了，服务就在跑' },
+      portWhy: picked.why,
       health, usage, activeWorkdirs: activeWorkdirs(sessions), perAgent,
     };
   } finally {
