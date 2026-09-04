@@ -20,6 +20,7 @@
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews } from './review-state.mjs';
+import { hasPendingLabel } from './pending-disambiguation.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'attach-reviewer', 'merge', 'land',
@@ -28,6 +29,10 @@ export const ACTION_KINDS = [
 
 // 报帅停手的默认门槛：同一单唤醒大脑到这个次数仍没闭环 → 转报帅（#800「同单三次唤醒仍没闭环」）。
 export const WAKE_LIMIT = 3;
+
+// 框架活的角色标（type/体系）。这类单不进自动派单队列，走快马：主会话子代理闭环（#876，用户 2026-09-04 拍板）。
+// 为什么不派：框架活要改的是派单机制本身，让派单机制去派它，等于让手术刀切自己。
+export const FRAMEWORK_ROLE = '体系';
 
 // 指挥官派单策略缺省（#849）：单轮上限 2；派前校验模型在当前选型内。
 export const COMMANDER_POLICY_DEFAULTS = {
@@ -177,6 +182,15 @@ function collectCandidates(situation) {
       const model = labelValue(issue, 'model/');
       const reviewer = labelValue(issue, 'reviewer/');
       const role = labelValue(issue, 'type/');
+      // #876 ②：带「待消歧」标的单一律不派，哪怕故意同时挂着「已消歧」。静默跳过——
+      // 该说的话由盘点在「时机到了」那天说一次（commander-inventory 的待消歧一项），这里天天喊没意义。
+      if (hasPendingLabel(issue?.labels)) continue;
+      // #876 ①：框架活（type/体系）不进自动派单队列，改回流一条「走快马」。
+      // 放在缺标签判据之前：框架单本就不该被要求补 model|reviewer，报帅催标签纯属噪音。
+      if (role === FRAMEWORK_ROLE) {
+        out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
+        continue;
+      }
       if (!model || !reviewer) {
         // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
         out.push(withNeeds(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
