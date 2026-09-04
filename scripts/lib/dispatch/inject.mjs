@@ -223,6 +223,10 @@ export function leftoverDispatchMatch(text) {
  * 绝不判绿，稳定轮数归零，继续等 proof/marker。 */
 export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正在启动|初始化|配置同步|请稍候|加载中|登录/i;
 
+/** #877：屏面「正在干活」指纹（spinner / Working / esc to interrupt）。
+ * 只用于已验过任务书指纹之后的降级判据——单独出现不算开工（防 #762 假绿）。 */
+export const WORKING_SCREEN_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\bWorking\b|esc to interrupt/i;
+
 /** proof 不可用的可辨识 reason（#568 回归修法）：这两个值是 provider 级别不支持
  * transcript 证明（pi 实测 provider_unsupported / session_not_reported），
  * **不是「工人没开工」**——此时降级到屏面判据（连续稳定轮）判绿。
@@ -309,6 +313,7 @@ export function verifyStartedPolling({
   let prevText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
+  let everSawExpect = false;
   const cursor = isCursorStartChannel(provider);
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
@@ -371,6 +376,7 @@ export function verifyStartedPolling({
     }
     const v = verifyInjection({ text, readError: read && read.error, expect });
     if (v.ok) {
+      if (String(expect ?? '').trim()) everSawExpect = true;
       if (TUI_LOADING_RE.test(text)) {
         stableRounds = 0;
       } else {
@@ -386,6 +392,25 @@ export function verifyStartedPolling({
             text,
           };
         }
+      }
+    } else if (
+      // #877：pi 干活时 TUI 屏面滚动，任务书指纹滚出屏外只剩 spinner——指纹曾验过 +
+      // 屏面在干活 + 无未提交粘贴（上面 leftover 已拦）= 开工。从未见过指纹仍不绿（#762）。
+      everSawExpect && proofUnavailable
+      && WORKING_SCREEN_RE.test(text) && !TUI_LOADING_RE.test(text)
+    ) {
+      stableRounds++;
+      if (stableRounds >= stableRoundsNeeded) {
+        return {
+          ok: true,
+          state: 'started',
+          proofFallback: true,
+          workingAfterInject: true,
+          proof: proofUnavailable,
+          reads, stableRounds,
+          elapsedMs: Date.now() - t0,
+          text,
+        };
       }
     }
     sleep(intervalMs);

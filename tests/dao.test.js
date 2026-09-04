@@ -1529,6 +1529,35 @@ describe('dao', () => {
         assert.ok(j.ok === false && j.state === 'failed' && /超时/.test(j.reason), 'proof 不可用 + 空屏 → 不许判绿，超时 failed  →  ' + JSON.stringify(j));
       });
 
+    // #877：pi 审官注入后屏面滚动，任务书指纹滚出屏外只剩 spinner——曾验过指纹 + Working = 开工。
+    const EXPECT_877 = '按 host/skills/dispatch/review-standard.md 审 PR #877';
+    const SPIN = ' ⠼ Working… (esc to interrupt)\n';
+    let readsK = 0;
+    const k = S.verifyStartedPolling({
+      dispatchId: 'ctx_k',
+      readOnce: () => {
+        readsK++;
+        return { ok: true, result: { terminal: { tail: [readsK <= 2 ? '任务书：' + EXPECT_877 + '\n' : SPIN] } } };
+      },
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官', expect: EXPECT_877,
+    });
+    await t.test('#877 指纹只闪 2 轮就滚屏、之后 Working → started（workingAfterInject）', () => {
+      assert.ok(k.ok === true && k.state === 'started' && k.workingAfterInject === true,
+        '#877 指纹只闪 2 轮就滚屏、之后 Working → started（workingAfterInject）  →  ' + JSON.stringify(k));
+    });
+
+    const m = S.verifyStartedPolling({
+      dispatchId: 'ctx_m',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [SPIN] } } }),
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '审官', expect: EXPECT_877,
+    });
+    await t.test('#877 反例：从未见过任务书指纹、只有 Working → 仍超时 failed（#762 不回归）', () => {
+      assert.ok(m.ok === false && m.state === 'failed' && /超时/.test(m.reason),
+        '#877 反例：从未见过任务书指纹、只有 Working → 仍超时 failed（#762 不回归）  →  ' + JSON.stringify(m));
+    });
+
     const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
     await t.test('dao.mjs 不再调用 verifyInjectionPolling', () => {
       assert.ok(!/verifyInjectionPolling\(/.test(daoSrcPoll), 'dao.mjs 不再调用 verifyInjectionPolling');
