@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork } from './lib/land-core.mjs';
+import { probeMirasim } from './lib/mirasim-monitor.mjs';
 
 const FLAGS = new Set(['--dry-run', '--has-work']);
 const DRY = process.argv.includes('--dry-run');
@@ -101,6 +102,18 @@ const orcaPaths = new Set();
   }
 }
 
+// mirasim 在管的树绝不碰（帅位 2026-09-04 补：orca 退役后 orcaManaged 恒 false，
+// 只剩「合并+干净」两闸会误删 mirasim 正在用的会话树）。读 listSessions 的活动会话 workdir 集；
+// 连不上（本机停派工态 / 服务没在跑）= 空集但记一笔「没查成」，不静默当没有活动树。
+const mirasimPaths = new Set();
+let mirasimUnprobed = false;
+try {
+  const collected = await probeMirasim({});
+  if (!collected.reachable) mirasimUnprobed = true;
+  for (const p of collected.activeWorkdirs) mirasimPaths.add(resolve(String(p)).toLowerCase());
+} catch { mirasimUnprobed = true; }
+if (mirasimUnprobed) say('[收工] 注：mirasim 活动树没查成（连不上 :4316），本轮不靠它保护树——只删已合并且干净的');
+
 const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
 );
@@ -124,6 +137,7 @@ for (let i = 0; i < worktrees.length; i++) {
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
     isDefaultBranch: w.branch === defaultBranch,
     orcaManaged: orcaPaths.has(abs.toLowerCase()),
+    mirasimManaged: mirasimPaths.has(abs.toLowerCase()),
     detached: w.detached,
   });
   if (!d.remove) { if (i > 0) say(`[收工] 留树 ${w.path}：${d.reason}`); continue; }
