@@ -327,8 +327,10 @@ describe('worktree-rm', () => {
     async (t) => {
       const S = await LIB_LOAD;
       const proc = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-835-proc-'));
-      const tree = '/tmp/ISSUE-835-tree';
-      const other = '/tmp/other-tree';
+      // path.resolve：Windows 的 readlink 会给符号链接目标补盘符（/tmp/x → D:\tmp\x），
+      // 目标必须先落成平台绝对路径，否则比较两边一个带盘符一个不带（2026-09-04 本机实咬）。
+      const tree = path.resolve('/tmp/ISSUE-835-tree');
+      const other = path.resolve('/tmp/other-tree');
       for (const [pid, target] of [['111', tree], ['222', `${tree} (deleted)`], ['333', other]]) {
         const dir = path.join(proc, pid);
         fs.mkdirSync(dir);
