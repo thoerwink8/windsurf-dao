@@ -9,7 +9,8 @@
 //            拆「分支已合并 + 树干净 + 非主树/非当前树/不挂默认分支 + orca 没在管」的 git worktree。
 // 不干什么（判断全在 scripts/lib/land-core.mjs，测试见 tests/land.test.js）：
 //   - 不在派生分支上代劳「进主分支」（那是 PR/审官闭环的活，编排态绕过它=绕过审查）；
-//   - 发散不自动 rebase；未合并/不干净/orca 在管的一律不删；删分支只用 -d（git 兜底拒未合并）。
+//   - 发散不自动 rebase；未合并/不干净/orca 在管/刚建还没提交过的一律不删（#898）；
+//     删分支只用 -d（git 兜底拒未合并）。
 // 为什么不是 post-commit hook：rebase/amend/cherry-pick 也触发 post-commit，会把中间态推上主分支；
 //   工人在编排树里的 commit 也会触发，等于绕过审官。收工是「一段活的结尾」，不是「每个 commit」。
 // 退出码：0 = 收工净（该运的运了、没有可清而未清的）；1 = 有事没收完（发散/检查红/在派生分支）。
@@ -105,6 +106,33 @@ const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
 );
 
+// 这条分支有过自己的提交吗：reflog 最老那条是创建点，tip 还在创建点上 = 从没提交过（#898）。
+// 空分支的 ref 与基点相等，git branch --merged 对它恒真——单靠可达判不出「没开始」。
+// 探不到（无 reflog / 命令失败）→ null = 没查成，判据层按「不许清」处理，不当成查过没事。
+const everCommittedCache = new Map();
+function branchEverCommitted(name) {
+  if (everCommittedCache.has(name)) return everCommittedCache.get(name);
+  let v = null;
+  const log = git(['reflog', 'show', '--format=%H', `refs/heads/${name}`]);
+  const tip = git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]).out;
+  if (log.status === 0 && tip) {
+    const entries = log.out.split(/\r?\n/).filter(Boolean);
+    const born = entries[entries.length - 1]; // reflog 新→旧，最后一条是创建点
+    if (born) v = born !== tip;
+  }
+  everCommittedCache.set(name, v);
+  return v;
+}
+
+// 分支被哪棵 worktree 占用：留树与删支共用这一份登记（#898 的实质——两处各判一套才出的洞）。
+// 只有 land 自己拆掉了那棵树，占用才随之解除（下面拆成功时 delete）。
+const checkedOut = new Map();
+for (const b of git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/)) {
+  const p = (b.match(/^worktree (.+)$/m) || [])[1];
+  const br = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1];
+  if (p && br) checkedOut.set(br, p);
+}
+
 const wtBlocks = git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/).filter(Boolean);
 const worktrees = wtBlocks.map((b) => {
   const path = (b.match(/^worktree (.+)$/m) || [])[1];
@@ -119,6 +147,7 @@ for (let i = 0; i < worktrees.length; i++) {
   const d = decideWorktreeRemove({
     branch: w.branch,
     merged: !!w.branch && mergedSet.has(w.branch),
+    everCommitted: w.branch ? branchEverCommitted(w.branch) : null,
     dirty: git(['status', '--porcelain'], { cwd: abs }).out !== '',
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
@@ -131,23 +160,19 @@ for (let i = 0; i < worktrees.length; i++) {
   if (HAS_WORK) { say(`[收工] 有活：拆树 ${w.path}（${d.reason}）`); continue; }
   if (DRY) { say(`[收工] [拟] 拆树 ${w.path}（${d.reason}）`); continue; }
   const r = git(['worktree', 'remove', w.path]);
+  if (r.status === 0 && w.branch) checkedOut.delete(w.branch); // 树真拆了，占用才解除
   say(r.status === 0 ? `[收工] 拆树 ${w.path}（${d.reason}）` : `[收工] 拆树失败 ${w.path}：${r.err.slice(0, 120)}`);
 }
 
-const checkedOut = new Map(); // 分支 → 占用它的树
-for (const b of git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/)) {
-  const p = (b.match(/^worktree (.+)$/m) || [])[1];
-  const br = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1];
-  if (p && br) checkedOut.set(br, p);
-}
 let deleteCount = 0;
 for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean)) {
   const d = decideBranchDelete({
     name,
     merged: mergedSet.has(name),
+    everCommitted: branchEverCommitted(name),
     isDefault: name === defaultBranch,
     isCurrent: name === branch,
-    checkedOutAt: checkedOut.get(name) !== undefined && resolve(checkedOut.get(name)).toLowerCase() !== resolve(root).toLowerCase() ? checkedOut.get(name) : '',
+    checkedOutAt: checkedOut.get(name) || '', // 任何注册中的树占用即留支（不再排除自己那棵）
   });
   if (!d.del) { if (!d.reason.includes('默认分支') && !d.reason.includes('当前分支')) say(`[收工] 留支 ${name}：${d.reason}`); continue; }
   deleteCount += 1;

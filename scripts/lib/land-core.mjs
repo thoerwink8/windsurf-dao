@@ -5,6 +5,8 @@
 //   1. 只运默认分支——派生分支的「进主分支」属于 PR/审官闭环，land 拒绝代劳（拒绝≠帮忙 rebase）。
 //   2. 只删「已合并进默认分支」的东西：分支用 git branch -d（未合并 git 自己会拒），
 //      worktree 还要求树干净 + 非主树 + 非当前树 + 不挂默认分支 + orca 没在管。
+//      「已合并」由 landedMerged 一个函数说了算（留树/删支同源，#898）：ref 可达之外还要求
+//      这条分支有过自己的提交——刚建还没提交的空分支 --merged 恒真，那是没开始不是干完了。
 //   3. 本地与远端发散 → 停手报告，不自动 rebase/merge（auto-merge-races 教训：追加会跟合并赛跑）。
 
 /** 哨兵那一行（收工提醒，非守卫）：只在默认分支确有未推提交时给一行；其余零输出。 */
@@ -34,17 +36,33 @@ export function decideShip({ branch, defaultBranch, ahead, behind, hasOrigin }) 
   return { action: 'clean', reason: '与远端一致，没有要运的' };
 }
 
-/** 删不删这条本地分支。merged = 已合并进默认分支（git branch --merged 的判定）。 */
-export function decideBranchDelete({ name, merged, isDefault, isCurrent, checkedOutAt }) {
+/**
+ * 「已合并」到底成不成立——留树与删支共用这一个判据（#898）。
+ * merged = git branch --merged 说 tip 从默认分支可达；
+ * everCommitted = 这条分支上有过自己的提交（tip 已离开创建基点）；null/false = 没有或没查成。
+ * 刚 `worktree add -b` 出来、还没提交的分支 ref 与基点相等，--merged 恒真——那是「还没开始」，
+ * 不是「干完合了」。#898 实咬：工人正在上面干活的空分支被当已合并清掉。
+ */
+export function landedMerged({ merged, everCommitted }) {
+  return merged === true && everCommitted === true;
+}
+
+/** 删不删这条本地分支。merged/everCommitted 见 landedMerged。 */
+export function decideBranchDelete({ name, merged, everCommitted, isDefault, isCurrent, checkedOutAt }) {
   if (isDefault) return { del: false, reason: '默认分支' };
   if (isCurrent) return { del: false, reason: '当前分支' };
   if (checkedOutAt) return { del: false, reason: `被 worktree 占用：${checkedOutAt}` };
   if (!merged) return { del: false, reason: '未合并——不是垃圾，是没做完的活' };
+  if (!landedMerged({ merged, everCommitted })) {
+    return { del: false, reason: everCommitted === null || everCommitted === undefined
+      ? '有没有自己的提交没查成——没查成不是查过没事'
+      : '还没有过自己的提交——是刚建没开始的活，不是已合并' };
+  }
   return { del: true, reason: '已合并进默认分支' };
 }
 
-/** 拆不拆这棵 git worktree。 */
-export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, detached }) {
+/** 拆不拆这棵 git worktree。merged/everCommitted 与删支共用 landedMerged（#898）。 */
+export function decideWorktreeRemove({ branch, merged, everCommitted, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, detached }) {
   if (isMain) return { remove: false, reason: '主树' };
   if (isCurrent) return { remove: false, reason: '自己所在的树' };
   if (orcaManaged) return { remove: false, reason: 'orca 在管（有卡/agent）——删卡走编排闭环，land 不碰' };
@@ -52,6 +70,9 @@ export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent,
   if (detached) return { remove: false, reason: 'HEAD 游离，判不了合没合并' };
   if (dirty) return { remove: false, reason: '有未提交改动——里面可能是别人半成品' };
   if (!merged) return { remove: false, reason: `分支 ${branch} 未合并` };
+  if (!landedMerged({ merged, everCommitted })) {
+    return { remove: false, reason: `分支 ${branch} 还没有过自己的提交——刚建的树，工人可能正在上面开工` };
+  }
   return { remove: true, reason: `分支 ${branch} 已合并且树干净` };
 }
 
