@@ -2539,9 +2539,13 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
 
-  const station = bindStation();
-  if (!station.ok) return { ok: false, reused: true, error: station.error };
-  if (!runId) runId = station.runId || null;
+  // 2026-09-05 实咬（#866 复审 drain）：headless（systemd/ssh，无 orca 终端）下 bindStation 的
+  // run-current 必报 no_active_sender_terminal；runId 已从士兵 dispatch 拿到时不需要它——只在缺 runId 时才绑。
+  if (!runId) {
+    const station = bindStation();
+    if (!station.ok) return { ok: false, reused: true, error: station.error };
+    runId = station.runId || null;
+  }
   if (!runId) {
     return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
   }
