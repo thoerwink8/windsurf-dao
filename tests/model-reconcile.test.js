@@ -93,6 +93,24 @@ test('⑤ 判别力：两道滤网真的在滤，不是摆设', () => {
   assert.ok(withoutNet.mismatches.length >= 2, `拿掉滤网应多出假红，实际 ${withoutNet.mismatches.length} 条`);
 });
 
+test('⑥ 近窗判别力：陈旧流量老化出窗，同一条记录在窗内必须还抓得住', () => {
+  // 实例场景：一次性探针跑了个此后被拍板「永不登记」的模型
+  const probeTs = '2026-09-05T15:32:00.000Z';
+  const stale = [rec({ agent: 'claude', model: 'claude-haiku-4-5-20251001', ts: probeTs })];
+
+  // 3 天后看：出窗，不再算数 → ok（腿表里没有它也不红）
+  const later = Date.parse(probeTs) + 72 * 3600 * 1000;
+  assert.equal(classifyReconcile({ legs: LEGS, records: stale, now: later }).state, 'ok');
+
+  // 判别力：同一条记录，1 小时后看必须还在窗内、照样红——否则说明窗口把「当前流量」也滤了
+  const soon = Date.parse(probeTs) + 3600 * 1000;
+  const fresh = classifyReconcile({ legs: LEGS, records: stale, now: soon });
+  assert.equal(fresh.state, 'red', '窗内的未登记腿必须红');
+
+  // 没时间戳的保守算在窗内（不许静默漏掉）
+  assert.equal(classifyReconcile({ legs: LEGS, records: [rec({ agent: 'codex', model: 'gpt-6-astra' })], now: later }).state, 'red');
+});
+
 test('解析与映射：坏行单独计数，供应商不猜', () => {
   const { records, badLines } = parseUsageNdjson('{"a":1}\n\n不是json\n{"b":2}\n');
   assert.equal(records.length, 2);

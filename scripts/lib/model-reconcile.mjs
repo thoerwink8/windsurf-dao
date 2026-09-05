@@ -53,9 +53,22 @@ export function usageToLeg(rec) {
   };
 }
 
-/** 只留「真的走过腿」的调用：打了上游 + 跑成了。 */
-export function billableRecords(records) {
-  return records.filter((r) => r && r.leg === 'relay' && r.status === 200);
+/**
+ * 只看最近这一窗——腿表是「现在什么在役」的登记，拿三周前的旧流量对今天的表，
+ * 会造出永远修不掉的红（实例：2026-09-05 帅位测了 4 次 haiku 探针，次日用户拍板
+ * haiku 落后模型永不登记——月账里那 4 条若一直算数，这条红要挂到月底才换账文件）。
+ * 窗口 48h：陈旧的一次性流量自己老化出窗，常役腿每天都有新流量、不受影响。
+ */
+export const RECENT_WINDOW_MS = 48 * 3600 * 1000;
+
+/** 只留「真的走过腿」的调用：打了上游 + 跑成了 + 在近窗内（没时间戳的保守算在窗内）。 */
+export function billableRecords(records, now = Date.now()) {
+  return records.filter((r) => {
+    if (!r || r.leg !== 'relay' || r.status !== 200) return false;
+    if (!r.ts) return true;
+    const t = Date.parse(r.ts);
+    return Number.isNaN(t) || now - t <= RECENT_WINDOW_MS;
+  });
 }
 
 const legId = (l) => `${l.模型}@${l.供应商}/${l.执行侧}`;
@@ -68,7 +81,7 @@ const legId = (l) => `${l.模型}@${l.供应商}/${l.执行侧}`;
  * @param {string} [why]              没读成时的原因，原样带进 detail
  * @returns {{state:'ok'|'red'|'unknown', detail:string, count?:number, mismatches?:object[]}}
  */
-export function classifyReconcile({ legs, records, why } = {}) {
+export function classifyReconcile({ legs, records, why, now = Date.now() } = {}) {
   if (!Array.isArray(legs)) {
     return { state: 'unknown', detail: `腿表没读成（${why || '原因不明'}）——不是 0 条腿` };
   }
@@ -76,7 +89,7 @@ export function classifyReconcile({ legs, records, why } = {}) {
     return { state: 'unknown', detail: `用量账没读成（${why || '原因不明'}）——不是 0 次调用` };
   }
 
-  const billable = billableRecords(records);
+  const billable = billableRecords(records, now);
   // 「这次没扫到任何样本」和「扫完查出 0 条」必须分得开：
   // 有记录但全被滤掉 = 扫完了确实没有可对账的调用（ok）；一条记录都没有 = 没扫到（unknown）。
   if (records.length === 0) {
