@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "builtAt": "2026-09-05T18:18:40.936Z",
-  "head": "c382dc9e43473efa5e54c5d174c3cbae2d4251fe",
+  "builtAt": "2026-09-05T18:24:01.801Z",
+  "head": "8f7e854b1539ac364971df61165e50156c679e3c",
   "entries": {
     "tests/agent-stall-watch.test.js": [
       "scripts/agent-stall-watch.mjs",
@@ -1341,6 +1341,9 @@
     "tests/stall-census.test.js": [
       "scripts/lib/plain-words.mjs",
       "scripts/lib/stall-census.mjs"
+    ],
+    "tests/test-impact.test.js": [
+      "scripts/lib/test-impact.mjs"
     ],
     "tests/timer-armed.test.js": [
       "scripts/feishu-triage.mjs",
