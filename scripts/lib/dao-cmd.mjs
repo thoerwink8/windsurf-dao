@@ -978,11 +978,13 @@ export const FLAGS_BY_VERB = {
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'worker-done': new Set([
     '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--from',
-    '--reviewer', '--dry-run', '--json', '--help', '-h',
+    '--reviewer', '--executor', '--branch', '--repo',
+    '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
-    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
+    '--executor', '--branch', '--repo', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([

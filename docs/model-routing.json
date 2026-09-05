@@ -556,5 +556,46 @@
       },
       "理由": "帅位现役腿（本机这个会话就是它）；§73「帅位也是腿」。2026-09-04 实咬：PR #890 起不了审官，报「模型 opus-5 不在路由表（没查成厂商）」——腿表登记了 fable 却漏了 opus-5，且树里一条都没有"
     }
-  ]
+  ],
+  "执行体": {
+    "默认": "orca",
+    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider；orca 通过验收后退役。旗标 --executor：reviewer-create/worker-done（卡 C）、dispatch/worktree-create/worker-start（卡 B）",
+    "orca": {
+      "说明": "现役运行时：Orca worktree + terminal"
+    },
+    "mirasim": {
+      "钉版本": "0.0.282",
+      "族": "mirasim-server",
+      "说明": "回环 ws 127.0.0.1:4316，systemd 常驻；起会话前契约断言 getState.version===钉版本，不符报警拒派不静默",
+      "模型前缀族": {
+        "gpt-5.6": "gpt",
+        "gpt": "gpt",
+        "codex": "codex",
+        "claude": "claude",
+        "pi": "pi"
+      },
+      "agentRoutes": {
+        "claude": {
+          "agent": "claude",
+          "mode": "relay",
+          "理由": "claude 族全 mirasim 云端 relay"
+        },
+        "gpt": {
+          "agent": "codex",
+          "mode": "relay",
+          "理由": "gpt 走 Codex；云端腿 relay（审官主路 gpt-5.6-luna）"
+        },
+        "codex": {
+          "agent": "codex",
+          "mode": "relay"
+        },
+        "pi": {
+          "agent": "pi",
+          "mode": "direct",
+          "理由": "pi 烧网关池，保 pqgpt 主路"
+        }
+      },
+      "注": "mirasim 服务端 agentsAvailable 只有 claude/codex/pi；未登记家族（kimi/glm/grok/gemini 等）judgeAgentRoute 一律拒派不猜。卡 B/D 扩 agent 时再补"
+    }
+  }
 }
