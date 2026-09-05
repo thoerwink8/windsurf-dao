@@ -600,6 +600,60 @@ function checkAgentStallWatch() {
   });
 }
 
+
+/**
+ * 每个 dao timer 都必须有「下一次」。2026-09-05 实咬：
+ * dao-agent-stall.timer 从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
+ * list-timers --all 里也照样列着——现有的 ⑮⑯ 两条检查全绿，#833 的自动换人整段无声停摆。
+ * 真相在 NEXT 那一列：显示 n/a，SubState=elapsed。只用单调时钟（OnBootSec/OnUnitActiveSec）
+ * 的 timer 停掉再起之后会进这个死态，永远不再有触发点。
+ *
+ * 判据只看一件事：这个 timer 有没有未来的触发时刻。有=活，没有=死。
+ * 与「装没装」「enable 没 enable」都无关——那两条正是当天全绿的原因。
+ *
+ * units：[{ unit, next }]，next 为 systemctl 的 NextElapseUSecRealtime（0 或 'n/a' 即无下一次）。
+ */
+export function classifyTimerArmed({ probed = false, reason = '', units = null } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
+  if (!Array.isArray(units)) return { state: UNKNOWN, detail: 'timer 清单没查成（不是数组）——不当成 0 个死' };
+  // 扫出 0 个 ≠ 全都健康：一个 dao timer 都没扫到，多半是判据或前缀失效。
+  if (units.length === 0) {
+    return { state: UNKNOWN, detail: '一个 dao timer 都没扫到——「没查成」不算「都没问题」' };
+  }
+  const dead = units.filter((u) => {
+    const n = u && u.next;
+    if (n == null) return true;
+    const t = String(n).trim();
+    return t === '' || t === '0' || t === 'n/a' || t === 'infinity';
+  });
+  if (dead.length) {
+    return {
+      state: RED,
+      detail: `${dead.length}/${units.length} 个 timer 没有下一次触发（${dead.map((u) => u.unit).join('、')}）——`
+        + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
+    };
+  }
+  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发` };
+}
+
+/** 扫盘面上的 dao/commander timer——不许手写清单，清单会过期。 */
+function checkTimerArmed() {
+  const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], { timeout: 10000 });
+  if (!list.probed) return classifyTimerArmed({ probed: false, reason: `systemctl 没跑成：${list.reason}` });
+  const names = [...String(list.stdout || '').matchAll(/\b((?:dao|commander)[a-z0-9-]*\.timer)\b/g)]
+    .map((m) => m[1]);
+  const units = [];
+  for (const unit of [...new Set(names)]) {
+    const p = run('systemctl', ['show', unit, '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
+    if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
+    const vals = String(p.stdout || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    // 两个点位任意一个有值就算有下一次；两个都空才是死态。
+    const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
+    units.push({ unit, next: alive ? vals.join('|') : null });
+  }
+  return classifyTimerArmed({ probed: true, units });
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -618,6 +672,7 @@ const CHECKS = [
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
+  ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
 ];
 
 function outPath() {

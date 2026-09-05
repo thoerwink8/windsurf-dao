@@ -1,0 +1,31 @@
+# /etc/systemd/system/dao-board-gc.service
+#
+# 僵尸卡自动回收（用户 2026-09-05：「自动去发现，自动去清理」）。
+# 判据在 scripts/lib/board-gc.mjs：活不需要了（PR 已合/已关、分支合进 master 等于没合、
+# 同 PR 重复卡）**且**卡上含子卡没有活着的进程，两条同时成立才清。
+# 有活可能丢的（分支不在远端还有本地提交/脏文件、合不干净判不了）只播报，不动手。
+#
+# --apply 就在这里：dry-run 版本没有回收作用，装成 dry-run 等于装了个不干活的机制。
+# 真正的安全绳是判据本身 + worktree-rm 的占用闸与账本孤本闸，不是「不加 --apply」。
+#
+# 装法与 dao-agent-stall 同套路：
+#   sudo bash scripts/install-board-gc.sh
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+# PATH 必须带 ~/.local/bin，否则 oneshot 找不到 orca。
+
+[Unit]
+Description=windsurf-dao board GC (zombie cards)
+After=network-online.target orca-serve.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/home/orca/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/board-gc.mjs --apply --say
+# 退出码 1 = 有卡要人判，这是正常输出不是故障；2 才是没查成。
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
