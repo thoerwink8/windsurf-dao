@@ -463,7 +463,17 @@ function main(argv = process.argv.slice(2)) {
       liveLines.push(`另有 ${escalated.length - MAX_LISTED} 个会话也卡了这么久，先不逐条列`);
     }
     const longStuck = Object.values(standing.memory).filter((v) => Number(v.tier) >= 0).length;
-    console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done}`
+    // 静默数要拆开报（2026-09-06）：采样面为了不漏 reclaude 终端**故意**放宽到全部终端
+    // （上面那段注释写了为什么），代价是每张卡默认几个没人用的 shell 也一起进了静默账。
+    // 混在一个数里，「23 个静默」看久了就是噪音，而噪音化的告警等于关掉的告警
+    // （memory downgrading-false-alarm-can-disable-the-guard）。
+    // 只拆报告、不动升级判据：escalate 仍按全集算，宁可多报也不漏报。
+    const isWorkSession = (s) => !!(s && (s.agentIdentity || s.driverState));
+    const silentWork = live.silent.filter(isWorkSession).length;
+    const silentIdle = live.counts.silent - silentWork;
+    console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent}`
+      + `（在干活的 ${silentWork} / 闲置终端 ${silentIdle}）`
+      + ` / 干完 ${live.counts.done}`
       + ` / 没查成 ${live.counts.unscanned}（静默里卡过 3 小时的 ${longStuck} 个，本轮升级播报 ${escalated.length} 条）`);
   }
 
