@@ -63,7 +63,7 @@ describe('僵尸卡：不许丢活', () => {
     const { planBoardGc } = await LOAD;
     const p = planBoardGc({
       worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/wip' })],
-      aliveWorktreeIds: NONE, prState: {}, branchState: { wip: { onRemote: false, ahead: 5, dirty: 0 } },
+      aliveWorktreeIds: NONE, prState: {}, branchState: { wip: { onRemote: false, ahead: 5, dirty: 0, contributes: true } },
     });
     assert.equal(p.zombies.length, 0);
     assert.equal(p.risky.length, 1);
@@ -83,7 +83,7 @@ describe('僵尸卡：不许丢活', () => {
     const { planBoardGc } = await LOAD;
     const p = planBoardGc({
       worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/wip' })],
-      aliveWorktreeIds: NONE, prState: {}, branchState: { wip: { onRemote: true, ahead: 5, dirty: 0 } },
+      aliveWorktreeIds: NONE, prState: {}, branchState: { wip: { onRemote: true, ahead: 5, dirty: 0, contributes: true } },
     });
     assert.equal(p.risky.length, 0);
     assert.equal(p.keep.length, 1);
@@ -262,5 +262,60 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {
     assert.ok((src.match(/process\.exit\(2\)/g) || []).length >= 4);
+  });
+});
+
+// 2026-09-05 实测：三支「无 PR + 有本地提交」的分支，git cherry 全报「未合入」，
+// 而内容其实早已由别的 PR 落进 master（同一件事的旧实现，rebase 后 patch-id 就对不上）。
+// 提交号比不出陈旧副本，只有内容比得出来。
+describe('陈旧副本分支：按内容判，不按提交号', () => {
+  it('合进 master 等于没合 → 可清，哪怕它有一堆本地提交', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/old' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { old: { onRemote: false, ahead: 5, dirty: 0, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 1);
+    assert.equal(p.zombies[0].kind, 'already-in-master');
+  });
+
+  it('真有 master 没有的内容 + 远端没备份 → risky，绝不自动删', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/old' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { old: { onRemote: false, ahead: 5, dirty: 0, contributes: true } },
+    });
+    assert.equal(p.zombies.length, 0);
+    assert.equal(p.risky.length, 1);
+  });
+
+  it('合不干净（有冲突）→ 判不了就是判不了，转 risky 不猜', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/old' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { old: { onRemote: false, ahead: 5, dirty: 0, contributes: null } },
+    });
+    assert.equal(p.zombies.length, 0);
+    assert.match(p.risky[0].why, /合不干净/);
+  });
+
+  it('未提交的改动不进内容判据——它不可能已经在 master 里', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#7 工人·x', branch: 'refs/heads/old' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { old: { onRemote: false, ahead: 0, dirty: 4, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 0, '脏文件在的时候 contributes:false 也不许判可清');
+    assert.match(p.risky[0].why, /未提交改动/);
+  });
+
+  it('驱动层真的去问了 merge-tree，不是拿提交数糊弄', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
+    assert.match(src, /merge-tree/);
+    assert.ok(!src.includes("['cherry'"), 'git cherry 会给出假的「未合入」，不许用它判');
   });
 });

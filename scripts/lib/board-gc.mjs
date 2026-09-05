@@ -170,10 +170,33 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState 
       });
       continue;
     }
+    // 没提交的改动永远不可能已经在 master 里，先判掉，不进后面的贡献判据。
+    if (dirty > 0 && !bs.onRemote) {
+      risky.push({ id, name, path: w.path || null, why: `无 PR，分支 ${branch} 不在远端且有 ${dirty} 个未提交改动——删了就没了，要人判` });
+      continue;
+    }
+    // 「有几个本地提交」不等于「有活会丢」：分支常常是同一件事的旧实现，master 已经用别的 PR 落了。
+    // 提交号比不出来（rebase / 重做后 patch-id 就变了，git cherry 会给出假的「未合入」），
+    // 只有内容比得出来：把分支合进 master 看树变不变。
+    //   contributes === false → 合进去等于没合，整支是陈旧副本 → 可清
+    //   contributes === true  → 真有 master 没有的东西 → 留着
+    //   contributes 缺失/null → 合不干净（有冲突），判不了 → 要人判，绝不自动删
+    if (bs.contributes === false) {
+      zombies.push({
+        id, name, path: w.path || null, kind: 'already-in-master',
+        why: `无 PR，分支 ${branch} 的 ${ahead} 个提交合进 master 等于没合（内容已全在）`,
+        children: descendants.length,
+      });
+      continue;
+    }
+    if (bs.contributes !== true) {
+      risky.push({ id, name, path: w.path || null, why: `无 PR，分支 ${branch} 有 ${ahead} 个提交但合不干净（有冲突），是不是陈旧副本判不了——要人判` });
+      continue;
+    }
     if (!bs.onRemote) {
       risky.push({
         id, name, path: w.path || null,
-        why: `无 PR，分支 ${branch} 不在远端却有 ${ahead} 个本地提交 / ${dirty} 个脏文件——删了就没了，要人判`,
+        why: `无 PR，分支 ${branch} 不在远端却有 ${ahead} 个 master 没有的提交——删了就没了，要人判`,
       });
       continue;
     }

@@ -82,10 +82,20 @@ function fetchBranchState(worktrees) {
     const ahead = g(['rev-list', '--count', 'origin/master..HEAD']);
     const dirty = g(['status', '--porcelain']);
     if (ahead.code !== 0 || dirty.code !== 0) continue; // 问不出就不记 → 判据侧会判「没查成」
+    // 这支到底给 master 添了东西没有：合一次看树变不变。比提交号可靠——
+    // 分支被 rebase 或重做过，patch-id 就变了，git cherry 会给出假的「未合入」（2026-09-05 实测三支全假）。
+    // 合不干净（有冲突）时留 null：判不了就是判不了，判据侧会转 risky。
+    let contributes = null;
+    const mt = g(['merge-tree', '--write-tree', 'origin/master', 'HEAD']);
+    if (mt.code === 0) {
+      const masterTree = g(['rev-parse', 'origin/master^{tree}']);
+      if (masterTree.code === 0) contributes = mt.out.trim().split('\n')[0].trim() !== masterTree.out.trim();
+    }
     map.set(branch, {
       onRemote: remote.code === 0 && remote.out.trim().length > 0,
       ahead: Number(ahead.out.trim()) || 0,
       dirty: dirty.out.trim() ? dirty.out.trim().split('\n').length : 0,
+      contributes,
     });
   }
   return map;
@@ -124,14 +134,22 @@ function main() {
     writeFileSync(statePath, JSON.stringify(progressed.memory, null, 2));
   } catch { /* 账本写不下只影响下一轮精度，不该拦住本轮判决 */ }
 
-  const live = scanLiveness({ sessions: progressed.sessions, thresholdMs: DEFAULT_SILENCE_MS });
+  // 阈值可按机器调；给了读不出数的值就用默认并说一声，不静默失效。
+  const raw = process.env.BOARD_GC_SILENCE_MIN;
+  let thresholdMs = DEFAULT_SILENCE_MS;
+  if (raw != null && raw !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) thresholdMs = n * 60000;
+    else console.error(`BOARD_GC_SILENCE_MIN=${raw} 读不出分钟数，用默认 ${DEFAULT_SILENCE_MS / 60000} 分钟`);
+  }
+  const live = scanLiveness({ sessions: progressed.sessions, thresholdMs });
   if (!live.ok) { console.error(`活性没查成：${live.error}`); process.exit(2); }
   // 「活着」= 判据说 active。silent / unscanned / done 都不算活着——
   // 特别是 done：干完的会话不该让它那张卡永远免死。
   const alive = new Set();
   for (const s2 of progressed.sessions) {
     if (!s2.worktreeId) continue;
-    if (assessLiveness(s2).state === 'active') alive.add(s2.worktreeId);
+    if (assessLiveness(s2, { thresholdMs }).state === 'active') alive.add(s2.worktreeId);
   }
 
   const prs = fetchPrState();
