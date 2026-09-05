@@ -64,7 +64,7 @@ function readStdinJson() {
 }
 
 function git(cwd, args, timeout = 5000) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout });
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout, windowsHide: true });
   if (r.error || r.status !== 0) return null; // null = 这条腿没查成，与「查到空」分得开
   return String(r.stdout || '');
 }
@@ -101,7 +101,7 @@ function collectDirty(cwd) {
 function collectPrs(cwd) {
   if (process.env.DAO_AUDIT_PR !== '1') return null;
   const r = spawnSync('gh', ['pr', 'list', '--limit', '5', '--json', 'number,updatedAt,title'], {
-    cwd, encoding: 'utf8', timeout: 5000,
+    cwd, encoding: 'utf8', timeout: 5000, windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   try {
