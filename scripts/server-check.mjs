@@ -19,7 +19,7 @@
 //   node scripts/server-check.mjs --self-test     故意造违规样本，验探测器真能拦（不碰真环境）
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter as PATH_DELIMITER, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -914,6 +914,63 @@ function checkRetiredCliOnPath() {
   });
 }
 
+
+// —— ⑳ 仓里的 systemd 单元 vs 机器上装着的（2026-09-05 巡检实咬）——
+//
+// 巡检第一次真跑就抓到：仓里把 OnCalendar 补进了 dao-agent-stall.timer，
+// 机器上 /etc/systemd/system/ 里仍是两天前那份。**改了仓 ≠ 装了机器**——
+// dao-sync 只拉代码、不装单元，而 tests/timer-armed.test.js 只扫仓里的文件，
+// 于是「检查全绿，修没有生效」。这一项就是补那一格。
+//
+// **只报不装**：dao-sync 现在跑 orca 身份，写不了 /etc；而让它能写，正是
+// 2026-09-05 堵掉的那条提权路（root 解释 orca 可写的仓内脚本）。装单元是人的动作。
+
+/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。 */
+export function classifyUnitDrift(pairs) {
+  if (!Array.isArray(pairs)) return { state: UNKNOWN, detail: '单元清单不是数组——没查成' };
+  // 扫出 0 个不是「都一致」，是判据失效（目录挪了、命名换了）
+  if (pairs.length === 0) return { state: UNKNOWN, detail: '一个单元都没扫到——没查成，不是「都一致」' };
+  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
+  // 不归一化这条会天天红成噪音，而噪音久了就没人看。归一化放判据层（一把尺在一处），
+  // 取数层只管把原文读出来。
+  const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
+  const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
+  const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
+  if (unreadable.length) {
+    const who = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
+    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${who.join('、')}——没查成，不是「一致」` };
+  }
+  if (drifted.length) {
+    return {
+      state: RED,
+      detail: `${drifted.length}/${pairs.length} 个单元仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`
+        + '——改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
+        + '指挥官那两个是代码生成的，sudo node scripts/commander.mjs install。装完 daemon-reload',
+    };
+  }
+  return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
+}
+
+function checkUnitDrift() {
+  const dir = join(REPO_ROOT, 'host', 'machine', 'systemd');
+  let names;
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `仓内单元目录读不了（${e.message || e}）——没查成` };
+  }
+  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
+  // 不归一化的话这条会天天红成噪音，而噪音久了就没人看。
+  const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
+  const pairs = names.map((name) => {
+    let repo = null; let live = null;
+    try { repo = (readFileSync(join(dir, name), 'utf8')); } catch { repo = null; }
+    try { live = (readFileSync(join('/etc/systemd/system', name), 'utf8')); } catch { live = null; }
+    return { name, repo, live };
+  });
+  return classifyUnitDrift(pairs);
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -934,6 +991,7 @@ const CHECKS = [
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
   ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
+  ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
 ];
 
 function outPath() {

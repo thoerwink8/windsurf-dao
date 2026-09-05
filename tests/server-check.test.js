@@ -621,3 +621,45 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
     });
   });
 });
+
+// ⑳ 仓里的 systemd 单元 vs 机器上装着的。2026-09-05 巡检第一次真跑就抓到：
+// 仓里把 OnCalendar 补进了 dao-agent-stall.timer，机器上仍是两天前那份——**改了仓 ≠ 装了机器**。
+// dao-sync 只拉代码不装单元，而 timer-armed 只扫仓里的文件，于是「检查全绿，修没有生效」。
+test('⑳ 单元漂移', async (t) => {
+  const { classifyUnitDrift } = await import('../scripts/server-check.mjs');
+
+  await t.test('内容一致 → ok（反证判据不是恒红）', () => {
+    const r = classifyUnitDrift([
+      { name: 'a.timer', repo: 'X', live: 'X' },
+      { name: 'b.service', repo: 'Y', live: 'Y' },
+    ]);
+    assert.equal(r.state, 'ok');
+    assert.match(r.detail, /2 个/, '要说清比了几个，否则「比了 0 个」和「都一致」长得一样');
+  });
+
+  await t.test('故意违规样本：仓里改了机器上没装 → red 并点名', () => {
+    const r = classifyUnitDrift([
+      { name: 'dao-agent-stall.timer', repo: 'OnCalendar=*:2/15\nOnBootSec=3min', live: 'OnBootSec=3min' },
+      { name: 'ok.timer', repo: 'Z', live: 'Z' },
+    ]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /dao-agent-stall\.timer/, '要点名是哪个，不能只给数字');
+    assert.match(r.detail, /install/, '要给修法');
+  });
+
+  await t.test('机器上压根没装 → unknown，不是 red 也不是 ok', () => {
+    const r = classifyUnitDrift([{ name: 'x.timer', repo: 'A', live: null }]);
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没装|没查成/);
+  });
+
+  await t.test('扫出 0 个 → unknown（判据失效，不是「都一致」）', () => {
+    assert.equal(classifyUnitDrift([]).state, 'unknown');
+    assert.equal(classifyUnitDrift(null).state, 'unknown');
+  });
+
+  await t.test('只差换行/首尾空白 → 不算漂移（避免天天红成噪音）', () => {
+    const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
+    assert.equal(r.state, 'ok');
+  });
+});
