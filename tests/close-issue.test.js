@@ -190,3 +190,36 @@ describe('close-issues sweep 制度', () => {
     });
   });
 });
+
+// ── 补丁链标记会被当成署名单号（2026-09-05 实咬 PR #893）──
+describe('署名单号解析不许把补丁链标记当成 issue 号', () => {
+  it('标题带 [chain:名#序号] 时，要落到正文的署名单号上', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    const pr = {
+      title: 'feat(events): 事件闭集加会话态三类型 [chain:session-visibility#0]',
+      body: '#891 期一 W1。署名 issue #891。',
+    };
+    assert.equal(attributedIssueNumber(pr), 891,
+      '链内序号不是 issue 号；错判成 0 会让查标签落空、复审永远派不出去（PR #893 实咬）');
+  });
+
+  it('#0 永远不是合法单号——issue 号从 1 起', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    assert.equal(attributedIssueNumber({ title: '修一处 #0', body: '' }), null,
+      '#0 一定是别的东西被误当成单号，宁可返回 null 让上游说「没查到」');
+  });
+
+  it('链内序号是正数时更要剥掉——否则它会冒充署名单号', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    // 标题里唯一的 #N 就是链内序号 2。不剥离就返回 2，而 2 号 issue 与本 PR 毫无关系：
+    // 查它的标签必然落空，复审静默派不出去（#893 同族，只是序号非 0 时 #0 那道闸拦不住）。
+    const pr = { title: '[cc] fix(x): 修一处 [chain:foo#2]', body: '署名 issue #888' };
+    assert.equal(attributedIssueNumber(pr), 888, '链内序号不是单号，要落到正文署名上');
+  });
+
+  it('判别力反证：标题里真的有单号时照旧优先用它', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '署名 issue #888' };
+    assert.equal(attributedIssueNumber(pr), 945, '别把整条标题优先规则一刀切废掉');
+  });
+});
