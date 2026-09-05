@@ -21,7 +21,7 @@
 //    插件 hooks.json 一次都没响）。本目录的 hooks.json 是 A 类声明，给 onboard Junction
 //    与 CI 建链用，不是承重墙。
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +34,27 @@ function readStdin() {
     return readFileSync(0, 'utf8');
   } catch {
     return '';
+  }
+}
+
+/**
+ * 仓里的 systemd unit 各自跑哪个脚本——第 3 条判据要用。
+ * 从 ExecStart 现扫，**不硬编清单**（手写的清单会过期，判例遍地都是）。
+ * 扫不到就返回空数组，纯函数那边据此不注：没查成 ≠ 没问题，但也不许据此臆测。
+ */
+function unitScripts() {
+  try {
+    const dir = join(OWN_REPO, 'host', 'machine', 'systemd');
+    if (!existsSync(dir)) return [];
+    const out = new Set();
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.service')) continue;
+      const text = readFileSync(join(dir, f), 'utf8');
+      for (const m of text.matchAll(/ExecStart=.*?([A-Za-z0-9_.-]+\.mjs)\b/g)) out.add(m[1]);
+    }
+    return [...out];
+  } catch {
+    return [];
   }
 }
 
@@ -56,7 +77,7 @@ async function main() {
   if (!S.BASH_TOOLS.includes(tool)) return;
 
   const command = S.bashCommand(event.tool_input || event.toolInput || {});
-  const notes = S.classifyBash(command);
+  const notes = S.classifyBash(command, { unitScripts: unitScripts() });
   const context = S.renderToolUseGate(notes);
   if (!context) return;
 

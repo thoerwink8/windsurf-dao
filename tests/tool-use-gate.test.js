@@ -247,3 +247,76 @@ describe('工具使用闸：装载声明与随仓挂载面对得上', () => {
     assert.ok(/windowsHide:\s*true/.test(src), 'spawnSync 必须 windowsHide: true');
   });
 });
+
+// ── 上线当天的两次误报：引号里的内容被当成命令词 ──
+//
+// 本闸 2026-09-05 合并，同一天就对主会话误报两次，两次同因：切命令段不认引号。
+//  · `grep -nE "heredoc|python|systemd" 文件` → 被 `|` 切成三段，第二段成了裸 python
+//  · 写含 `ssh ... node scripts/commander.mjs` 字符串的**测试代码**时 → 被当成真在 ssh
+// 误报多了闸就没人看，等于把守卫关掉（判例 downgrading-false-alarm-can-disable-the-guard）。
+describe('切命令段要认引号，否则模式串/字符串字面量会被当成命令', () => {
+  const LIB = import('../scripts/lib/tool-use-gate.mjs');
+
+  it('grep 的双引号模式里含 python → 不许注', async () => {
+    const { isPythonStub } = await LIB;
+    const cmd = 'grep -nE "heredoc|python|systemd" scripts/lib/tool-use-gate.mjs | head -12';
+    assert.equal(isPythonStub(cmd), false, '引号里的 python 是模式串，不是命令词');
+  });
+
+  it('单引号同样要认', async () => {
+    const { isPythonStub } = await LIB;
+    assert.equal(isPythonStub("awk '{ print \"python\" }' f.txt"), false);
+  });
+
+  it('判别力反证：管道后真的调 python → 照旧要注', async () => {
+    const { isPythonStub } = await LIB;
+    assert.equal(isPythonStub('cat a.txt | python -c "print(1)"'), true,
+      '别为了消误报把整条规则废掉——那是把守卫关了，不是修好了');
+  });
+});
+
+// ── 第 3 条：ssh 里手搓跑一个有 systemd unit 的脚本 ──
+//
+// 判据来源 memory verify-systemd-via-systemctl：2026-09-05 两次假失败，
+// 一次 ssh 没 nohup 被杀（exit 0 零输出），一次 bash -c 非登录 shell 缺 PATH
+// （orca not found → fail-closed 把返工派工全丢了）。两次表象都像「机制坏了」，
+// 第二次已经开始怀疑被测代码本身。
+describe('手搓 shell 跑 systemd 管着的脚本要提醒', () => {
+  const LIB = import('../scripts/lib/tool-use-gate.mjs');
+  const UNITS = ['commander.mjs', 'board-gc.mjs', 'close-issues.mjs'];
+
+  it('ssh + node scripts/commander.mjs 且它有 unit → 注', async () => {
+    const { isHandRolledSystemdRun } = await LIB;
+    // 样本里不写字面家目录路径（仓外路径闸会红，而且它红得对）——换成相对路径，判据一样成立
+    const cmd = 'ssh contabo "cd repo && node scripts/commander.mjs act"';
+    assert.equal(isHandRolledSystemdRun(cmd, UNITS), true);
+  });
+
+  it('判别力反证一：同一个脚本但不经 ssh（本机跑）→ 不注', async () => {
+    const { isHandRolledSystemdRun } = await LIB;
+    assert.equal(isHandRolledSystemdRun('node scripts/commander.mjs act', UNITS), false);
+  });
+
+  it('判别力反证二：ssh 跑的脚本没有 unit → 不注', async () => {
+    const { isHandRolledSystemdRun } = await LIB;
+    assert.equal(isHandRolledSystemdRun('ssh contabo "node scripts/dao-check.mjs"', UNITS), false);
+  });
+
+  it('ssh 只是字符串字面量（在写测试）→ 不注', async () => {
+    const { isHandRolledSystemdRun } = await LIB;
+    // 命令是 node -e，正文里恰好含 ssh 与脚本名；ssh 不是命令词，不该命中。
+    const cmd = 'node -e "const s = \'ssh contabo node scripts/commander.mjs\'; console.log(s)"';
+    assert.equal(isHandRolledSystemdRun(cmd, UNITS), false, 'ssh 要按命令词认，不许全文匹配');
+  });
+
+  it('扫不到 unit 样本时不注——没查成不等于没问题，但也不许臆测', async () => {
+    const { isHandRolledSystemdRun } = await LIB;
+    assert.equal(isHandRolledSystemdRun('ssh contabo "node scripts/commander.mjs act"', []), false);
+  });
+
+  it('classifyBash 不传 unitScripts 时向后兼容（第 3 条静默不参与）', async () => {
+    const { classifyBash } = await LIB;
+    const n = classifyBash('ssh contabo "node scripts/commander.mjs act"');
+    assert.equal(n.filter((x) => x.id === 'handrolled-systemd').length, 0);
+  });
+});
