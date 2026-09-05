@@ -22,6 +22,13 @@ import {
   classifyRequiredAgents,
   providerToAgentId,
   classifyLandAutomation,
+  parseProviderClis,
+  inServiceProviders,
+  retiredClis,
+  splitPathValue,
+  classifyExecutableEntry,
+  whichOnPath,
+  scanRetiredClis,
 } from '../scripts/server-check.mjs';
 
 test('server-check 判别力', async (t) => {
@@ -110,10 +117,16 @@ test('server-check 判别力', async (t) => {
   });
 
   await t.test('classifyAccountsResult', async (t) => {
-    await t.test('一个账号都没有 → red（派工起得来也登不上）', () => {
+    // 2026-09-05 改判：这条原本判真红「派工起得来终端也登不上」。实测推翻了它的前提——
+    // 服务器托管账号一直是 0，审官与工人却整天在跑：#822 之后全员走 pi + 网关 keyFile，
+    // orca 托管账号根本不在登录路径上。永远红的检查会把真红淹掉，比没有检查更糟。
+    // 判据保留（真回到 CLI 直连时还有用），但降成不报红，且必须说清「本机不走这条路」。
+    await t.test('一个账号都没有 → 不报红，但要说清本机不走这条登录路', () => {
       const r = classifyAccountsResult({ claude: { accounts: [] }, codex: { accounts: [] } });
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /account add/);
+      assert.notEqual(r.state, 'red', '前提已不成立，不许继续报一个谁也修不了的红');
+      assert.equal(r.empty, true, '0 个要显形，不能和「有账号」长得一样');
+      assert.match(r.detail, /不走这条登录路/);
+      assert.match(r.detail, /account add/, '真要改回 CLI 直连时，修法仍要写在这里');
     });
 
     await t.test('有账号 → ok，计数按厂商加总', () => {
@@ -384,5 +397,279 @@ test('⑰ 返工：env 文件解析 + 连不上判没查成 + 推理增量算真
     const r = classifyBotModelProbe({ probed: false, reason: '网关地址没查成（/etc/feishu-triage.env 里没有 ANTHROPIC_BASE_URL，环境变量里也没有）' });
     assert.equal(r.state, 'unknown');
     assert.doesNotMatch(r.detail, /不是编排机/);
+  });
+});
+
+// ⑲ 退役 CLI 还在 PATH（#960）。#868 在这段代码上四轮判红，四条坑逐条钉在下面。
+// 平台一律显式传（platform:'linux'），否则这套断言在 Windows 上跑的是另一条分支。
+test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', async (t) => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+  // 假 stat：present 里有就返回给定 mode，没有就抛 ENOENT。不碰真环境。
+  const statOf = (present) => (file) => {
+    if (!present.has(file)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+    return { isFile: () => true, mode: present.get(file) };
+  };
+  const throwingStat = (code) => () => { const e = new Error(code); e.code = code; throw e; };
+  const TOML = ['[providers.gw]', 'cli = "pi"', '[providers.devin]', 'cli = "devin"'].join('\n');
+  const JSON_DOC = { 工人: { 写码: { 模型: [{ id: 'x', 禁用: false, provider: 'gw' }] } } };
+  const scan = (over) => scanRetiredClis({
+    tomlText: TOML, routingDoc: JSON_DOC, platform: 'linux', delimiter: ':',
+    pathValue: '/usr/bin:/home/orca/bin', stat: statOf(new Map()), ...over,
+  });
+
+  await t.test('坑 1：找到文件 ≠ 能执行——没有可执行位不算命中', async (t) => {
+    await t.test('mode 644 → not-executable，不是 executable', () => {
+      const r = classifyExecutableEntry('/home/orca/bin/devin', {
+        platform: 'linux', stat: () => ({ isFile: () => true, mode: 0o644 }),
+      });
+      assert.equal(r.state, 'not-executable', 'PATH 目录里躺着的同名普通文件不该被当成 CLI');
+      assert.match(r.why, /644/);
+    });
+
+    await t.test('mode 755 → executable', () => {
+      const r = classifyExecutableEntry('/home/orca/bin/devin', {
+        platform: 'linux', stat: () => ({ isFile: () => true, mode: 0o755 }),
+      });
+      assert.equal(r.state, 'executable');
+    });
+
+    await t.test('整条链上：644 的 devin 不该让本项变红', () => {
+      const r = scan({ stat: statOf(new Map([['/home/orca/bin/devin', 0o644]])) });
+      assert.equal(r.state, 'ok', `不可执行的同名文件不该报警，实际：${r.detail}`);
+      assert.equal(r.count, 0);
+    });
+
+    await t.test('目录也叫 devin（不是普通文件）→ 不算命中', () => {
+      const r = classifyExecutableEntry('/home/orca/bin/devin', {
+        platform: 'linux', stat: () => ({ isFile: () => false, mode: 0o755 }),
+      });
+      assert.equal(r.state, 'absent');
+    });
+  });
+
+  await t.test('坑 2：EACCES 是「有但看不见」，不许当 absent', async (t) => {
+    for (const code of ['EACCES', 'EPERM']) {
+      await t.test(`${code} → unknown`, () => {
+        const r = classifyExecutableEntry('/root/bin/devin', { platform: 'linux', stat: throwingStat(code) });
+        assert.equal(r.state, 'unknown', `${code} 判成 absent 就是漏报`);
+        assert.notEqual(r.state, 'absent');
+      });
+    }
+
+    await t.test('ENOENT / ENOTDIR 才是真「没有」', () => {
+      for (const code of ['ENOENT', 'ENOTDIR']) {
+        assert.equal(classifyExecutableEntry('/x/devin', { platform: 'linux', stat: throwingStat(code) }).state, 'absent');
+      }
+    });
+
+    await t.test('整条链上：全 EACCES → 没查成，不是「扫完 0 条」', () => {
+      const r = scan({ stat: throwingStat('EACCES') });
+      assert.equal(r.state, 'unknown');
+      assert.match(r.detail, /没查成/);
+      assert.doesNotMatch(r.detail, /一个都不在 PATH 上/, '「看不见」不许说成「扫完没有」');
+    });
+  });
+
+  await t.test('坑 3：existsSync 遇权限错返 false——本节禁用它，判据必须自己看 e.code', async (t) => {
+    await t.test('源码里这一节不许出现 existsSync', () => {
+      const src = fs.readFileSync(path.join(REPO, 'scripts', 'server-check.mjs'), 'utf8');
+      const from = src.indexOf('export function classifyExecutableEntry');
+      const to = src.indexOf('export function scanRetiredClis');
+      assert.ok(from > 0 && to > from, '定位不到这一节（判据挪走了就该有人来改这条）');
+      assert.doesNotMatch(src.slice(from, to), /existsSync/, 'existsSync 分不出「没有」和「看不见」，本节不许用');
+    });
+
+    await t.test('whichOnPath 把看不见的位置记进 unknowns，而不是当没有', () => {
+      const w = whichOnPath('devin', { dirs: ['/root/bin'], platform: 'linux', stat: throwingStat('EACCES') });
+      assert.equal(w.hits.length, 0);
+      assert.equal(w.unknowns.length, 1, '看不见的位置必须显形，否则和「扫过没有」一模一样');
+      assert.match(w.unknowns[0].why, /EACCES/);
+    });
+  });
+
+  await t.test('坑 4：PATH 空段在 POSIX 里是当前目录，不许 filter(Boolean) 丢掉', async (t) => {
+    await t.test('a::b → 三段，中间那段是 .', () => {
+      const r = splitPathValue('/usr/bin::/home/orca/bin', { delimiter: ':', platform: 'linux' });
+      assert.equal(r.unscanned, false);
+      assert.deepEqual(r.dirs, ['/usr/bin', '.', '/home/orca/bin']);
+      assert.equal(r.dirs.length, '/usr/bin::/home/orca/bin'.split(':').filter(Boolean).length + 1,
+        'filter(Boolean) 会少一段——那一段正是当前目录');
+    });
+
+    await t.test('整条链上：devin 就在当前目录 → 照样查得出来', () => {
+      const r = scan({
+        pathValue: '/usr/bin::/home/orca/bin',
+        stat: statOf(new Map([['./devin', 0o755]])),
+      });
+      assert.equal(r.state, 'red', `空段被丢掉就漏报了：${r.detail}`);
+      assert.match(r.detail, /devin/);
+    });
+
+    await t.test('Windows 的空段该忽略（CreateProcess 不认当前目录这条老规矩）', () => {
+      const r = splitPathValue('C:\\a;;C:\\b', { delimiter: ';', platform: 'win32' });
+      assert.deepEqual(r.dirs, ['C:\\a', 'C:\\b']);
+    });
+
+    await t.test('PATH 读不到 → 没查成，不是「PATH 上没有」', () => {
+      assert.equal(splitPathValue('', { delimiter: ':', platform: 'linux' }).unscanned, true);
+      assert.equal(splitPathValue(undefined, { delimiter: ':', platform: 'linux' }).unscanned, true);
+    });
+  });
+
+  await t.test('清单从真相源推，不许手写', async (t) => {
+    await t.test('parseProviderClis 扫得出 [providers.*].cli，且不吃 launch_note 里的字', () => {
+      const toml = [
+        '[providers.gw]', 'cli = "pi"',
+        'launch_note = """', 'cli = "假的"', '"""',
+        '[providers.devin]', 'cli = "devin"',
+      ].join('\n');
+      const r = parseProviderClis(toml);
+      assert.equal(r.unscanned, false);
+      assert.deepEqual(r.clis, [{ provider: 'gw', cli: 'pi' }, { provider: 'devin', cli: 'devin' }]);
+    });
+
+    await t.test('一条 cli 都没扫到 → unscanned，不是 0 个 CLI', () => {
+      assert.equal(parseProviderClis('').unscanned, true);
+      assert.equal(parseProviderClis('updated = "2026-09-05"').unscanned, true);
+      assert.equal(parseProviderClis('[providers.gw]\nstart = "agent"').unscanned, true);
+    });
+
+    await t.test('inServiceProviders：禁用的不算，腿表只认「在役」', () => {
+      const r = inServiceProviders({
+        工人: { 写码: { 模型: [
+          { id: 'a', 禁用: false, provider: 'gw' },
+          { id: 'b', 禁用: true, provider: 'devin' },
+        ] } },
+        腿: [
+          { id: 'l1', 状态: '在役', 落地: { provider: 'claude' } },
+          { id: 'l2', 状态: '停用', 落地: { provider: 'cursor' } },
+        ],
+      });
+      assert.equal(r.unscanned, false);
+      assert.deepEqual([...r.providers].sort(), ['claude', 'gw']);
+    });
+
+    await t.test('一个在役 provider 都推不出来 → 没查成（不是「全退役」）', () => {
+      assert.equal(inServiceProviders({}).unscanned, true);
+      assert.equal(inServiceProviders(null).unscanned, true);
+      assert.equal(inServiceProviders({ 腿: [{ 状态: '停用', 落地: { provider: 'devin' } }] }).unscanned, true);
+    });
+
+    await t.test('一名多 provider：只要还有一个在役就不算退役（pi）', () => {
+      const clis = [
+        { provider: 'gw', cli: 'pi' },
+        { provider: 'opencode-go', cli: 'pi' },
+        { provider: 'devin', cli: 'devin' },
+      ];
+      const r = retiredClis({ clis, inService: ['gw'] });
+      assert.deepEqual(r.map((x) => x.cli), ['devin'], '天天在用的 pi 不许被报成退役');
+    });
+
+    await t.test('真文件推出来的清单：含 devin/cursor-agent/grok，不含 pi/codex', () => {
+      const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));
+      const svc = inServiceProviders(JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')));
+      assert.equal(cat.unscanned, false);
+      assert.equal(svc.unscanned, false);
+      const names = retiredClis({ clis: cat.clis, inService: svc.providers }).map((x) => x.cli);
+      for (const want of ['devin', 'cursor-agent', 'grok']) {
+        assert.ok(names.includes(want), `#822 退役的 ${want} 该在清单里，实际 ${JSON.stringify(names)}`);
+      }
+      for (const live of ['pi', 'codex']) {
+        assert.ok(!names.includes(live), `在役的 ${live} 不该进退役清单，实际 ${JSON.stringify(names)}`);
+      }
+    });
+  });
+
+  await t.test('三态在输出上分得开：查出问题 / 扫完 0 条 / 没查成', async (t) => {
+    await t.test('故意违规样本：PATH 上放一个可执行 devin → 红，点名 CLI 与目录', () => {
+      const r = scan({ stat: statOf(new Map([['/home/orca/bin/devin', 0o755]])) });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /devin/);
+      assert.match(r.detail, /\/home\/orca\/bin/, '报红必须说清在哪个目录，否则没法动手');
+      assert.equal(r.count, 1);
+    });
+
+    await t.test('反证：移走之后转绿（判据不是恒红）', () => {
+      const r = scan({ stat: statOf(new Map()) });
+      assert.equal(r.state, 'ok');
+      assert.equal(r.count, 0);
+      assert.match(r.detail, /扫了 \d+ 个退役 CLI/, '「扫完 0 条」要说清扫了什么，否则和「没扫」分不开');
+    });
+
+    await t.test('反证：在役的 pi 在 PATH 上也不许报（判据不是恒绿的反面——恒红）', () => {
+      const r = scan({ pathValue: '/usr/bin', stat: statOf(new Map([['/usr/bin/pi', 0o755]])) });
+      assert.equal(r.state, 'ok');
+    });
+
+    await t.test('一个退役 CLI 都推不出来 → 没查成，不是「都在役」', () => {
+      const r = scan({ tomlText: '[providers.gw]\ncli = "pi"' });
+      assert.equal(r.state, 'unknown');
+      assert.match(r.detail, /没查成/);
+    });
+
+    await t.test('启动模板 / 选型真相源没扫成 → 各自的没查成，话术能认出是哪一头', () => {
+      const a = scan({ tomlText: '' });
+      assert.equal(a.state, 'unknown');
+      assert.match(a.detail, /model-routing\.toml/);
+      const b = scan({ routingDoc: {} });
+      assert.equal(b.state, 'unknown');
+      assert.match(b.detail, /model-routing\.json/);
+    });
+
+    await t.test('命中和看不见同时存在 → 红优先（真查出问题不许被没查成盖住）', () => {
+      const r = scan({
+        pathValue: '/home/orca/bin:/root/bin',
+        stat: (file) => {
+          if (file === '/home/orca/bin/devin') return { isFile: () => true, mode: 0o755 };
+          const e = new Error('EACCES'); e.code = 'EACCES'; throw e;
+        },
+      });
+      assert.equal(r.state, 'red');
+    });
+  });
+});
+
+// ⑳ 仓里的 systemd 单元 vs 机器上装着的。2026-09-05 巡检第一次真跑就抓到：
+// 仓里把 OnCalendar 补进了 dao-agent-stall.timer，机器上仍是两天前那份——**改了仓 ≠ 装了机器**。
+// dao-sync 只拉代码不装单元，而 timer-armed 只扫仓里的文件，于是「检查全绿，修没有生效」。
+test('⑳ 单元漂移', async (t) => {
+  const { classifyUnitDrift } = await import('../scripts/server-check.mjs');
+
+  await t.test('内容一致 → ok（反证判据不是恒红）', () => {
+    const r = classifyUnitDrift([
+      { name: 'a.timer', repo: 'X', live: 'X' },
+      { name: 'b.service', repo: 'Y', live: 'Y' },
+    ]);
+    assert.equal(r.state, 'ok');
+    assert.match(r.detail, /2 个/, '要说清比了几个，否则「比了 0 个」和「都一致」长得一样');
+  });
+
+  await t.test('故意违规样本：仓里改了机器上没装 → red 并点名', () => {
+    const r = classifyUnitDrift([
+      { name: 'dao-agent-stall.timer', repo: 'OnCalendar=*:2/15\nOnBootSec=3min', live: 'OnBootSec=3min' },
+      { name: 'ok.timer', repo: 'Z', live: 'Z' },
+    ]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /dao-agent-stall\.timer/, '要点名是哪个，不能只给数字');
+    assert.match(r.detail, /install/, '要给修法');
+  });
+
+  await t.test('机器上压根没装 → unknown，不是 red 也不是 ok', () => {
+    const r = classifyUnitDrift([{ name: 'x.timer', repo: 'A', live: null }]);
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没装|没查成/);
+  });
+
+  await t.test('扫出 0 个 → unknown（判据失效，不是「都一致」）', () => {
+    assert.equal(classifyUnitDrift([]).state, 'unknown');
+    assert.equal(classifyUnitDrift(null).state, 'unknown');
+  });
+
+  await t.test('只差换行/首尾空白 → 不算漂移（避免天天红成噪音）', () => {
+    const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
+    assert.equal(r.state, 'ok');
   });
 });

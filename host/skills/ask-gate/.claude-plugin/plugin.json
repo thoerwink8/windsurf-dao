@@ -1,0 +1,7 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "ask-gate",
+  "version": "1.0.0",
+  "description": "问人闸：调 AskUserQuestion / im_ask_user 的那一刻，把 docs/release-policy.json 的 human_holds 判据注入上下文（用户 2026-09-05：文档就会不遵守）",
+  "skills": ["./"]
+}

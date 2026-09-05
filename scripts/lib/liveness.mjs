@@ -51,7 +51,11 @@ export function sessionFromOrcaTerminal(t) {
   return {
     id: String(t.handle),
     driver: t.agentIdentity ? 'orca' : 'reclaude',
-    label: String(t.title || t.displayName || t.handle),
+    // 卡名优先于终端标题。四家 CLI 都会盖掉 orca 设的标题，盖成一行 shell 提示符
+    // （memory cc-session-name-terminal-title），拿它当名字有两个后果：播报里是一串路径，
+    // 而且换人判据 parseReviewerCardName 认不出「PR-N-审官-模型」，静默审官全落到「只报警」——
+    // 2026-09-05 服务器 dry-run 实测 9 个静默审官一个都没换成人，就是死在这一格。
+    label: String(t.displayName || t.title || t.handle),
     worktreeId: t.worktreeId || null,
     agentIdentity: t.agentIdentity || null,
     lastProgressAt: at,
@@ -153,4 +157,58 @@ export function routeSilent(session) {
   return isReviewer
     ? { action: 'restart-reviewer', why: `审官会话静默：${session?.why || ''}` }
     : { action: 'escalate', why: `会话静默：${session?.why || ''}` };
+}
+
+// ── 推进签名：把「有输出」和「有推进」分开 ────────────────────────────────────
+//
+// 2026-09-05 实咬：盘面 45 个会话判 active，其中 37 个是 pi 的 TUI 在空转重画边框
+// （标题恒为 Pi ready，屏面只剩一条横线）。lastOutputAt 每次重画都刷新，
+// 于是「一个字没干的终端」永远是 active——假阳率 82%，僵尸卡因此永远清不掉。
+//
+// 不用「认那几个字」修：那是又一层指纹，pi 改一版横幅就静默失效。
+// 判据回到本模块开头那句话——**有没有可验证的推进**：把屏面内容做签名，跨轮比对。
+// 内容变了才叫推进；内容一模一样，不管它刷新多少次都不是。
+// 代价是要跨轮记账（第一轮只能记，判不了），换来的是与驱动、与厂商、与横幅文案全部无关。
+
+/** 屏面内容签名。标题 + 屏面正文，去掉纯装饰行（TUI 边框重画时长度会抖）与空白差异。 */
+export function progressSignature(session) {
+  const raw = `${session?.label || ''} ${session?.preview || ''}`;
+  const body = raw.replace(/[─-╿|=_.-]{8,}/g, '').replace(/\s+/g, ' ').trim();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < body.length; i += 1) {
+    h = Math.imul(h ^ body.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  return `${body.length}:${h.toString(36)}`;
+}
+
+/**
+ * 用上一轮的签名账本修正每个会话的「上次真推进」。
+ *
+ * 签名变了 → 这一轮有推进，since = now。
+ * 签名没变 → 屏上一个字没动，since 保持上一轮记的时刻（静默时长持续累加）。
+ * 账本里没有 → 第一次见，since = now（第一轮不冤枉谁，第二轮起才判得出静默）。
+ *
+ * 返回 { sessions, memory }：sessions 的 lastProgressAt 已被换成签名 since，
+ * memory 要落盘，下一轮传回来。
+ */
+export function applyProgressMemory({ sessions, memory, now = Date.now() } = {}) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const prev = memory && typeof memory === 'object' ? memory : {};
+  const next = {};
+  const out = [];
+  for (const s of list) {
+    if (!s || !s.id) { out.push(s); continue; }
+    const sig = progressSignature(s);
+    const old = prev[s.id];
+    const since = old && old.sig === sig && Number.isFinite(Number(old.since))
+      ? Number(old.since)
+      : now;
+    next[s.id] = { sig, since };
+    // 驱动报的 lastProgressAt 与签名 since 取更早的那个：驱动说它 10 小时没输出，
+    // 就不能因为「这是本轮第一次见到它」把它洗成刚刚才动过。
+    const reported = typeof s.lastProgressAt === 'number' ? s.lastProgressAt : null;
+    const merged = reported == null ? since : Math.min(reported, since);
+    out.push({ ...s, lastProgressAt: merged, progressSig: sig, progressSince: since });
+  }
+  return { sessions: out, memory: next };
 }

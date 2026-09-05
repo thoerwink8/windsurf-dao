@@ -9,7 +9,7 @@ import { prNumberFromWorktree, worktreeIdOf } from '../card-identity.mjs';
 import { assembleCardName } from './card.mjs';
 import { argsWorktreeCreate } from './args.mjs';
 import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
-import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
+import { assertCrossVendor, vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
 import { normalizePipes } from '../next-launch.mjs';
 import { availabilityFor } from '../provider-health.mjs';
 import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
@@ -564,21 +564,52 @@ export function currentReviewerSeat(routing) {
   return { ok: true, modelId: routing.reviewerOrder[0] };
 }
 
-/** 审官位只许当前 reviewerOrder[0] 那条（#843 过渡 = luna，常态 Codex）。换厂到别的当场拒。 */
+/**
+ * 审官位只许**与当前审官位同厂、且在审官顺位表里**的模型。异厂或表外一律拒。
+ *
+ * 2026-09-05 实咬（用户拍板放开同厂换顺位）：这道闸原本死钉 reviewerOrder[0]。
+ * 它的注释一直写着「不许换厂」，实现的却是「不许换任何」——于是 #833 的自动换人整条能力是零：
+ * 审官静默判死 → 按顺位挑下一个 gpt-5.6-sol → 被这道闸拒掉，服务器实测 10 个审官一个都没换成。
+ * 而 sol 与 luna 同属 GPT 一厂、同在审官顺位表里，本来就是彼此的备选。
+ *
+ * 为什么不放开成「顺位表里的都行」：表里的 kimi-k3 / glm-5.2 / grok-4.6 三条，
+ * 路由表自己的理由字段写的是「备选登记，**不顶审官位**」——那是数据里已有的事实，
+ * 放开会把它们抬进审官位，与 #822「审官只用 Codex（GPT 主路）」相撞。
+ * 同厂这条判据同时守住了两头：换人能换（luna↔sol），换厂仍然拒。
+ */
 export function assertReviewerSeat({ reviewerId, routing } = {}) {
   const seat = currentReviewerSeat(routing);
   if (!seat.ok) return seat;
   const got = reviewerId == null ? '' : String(reviewerId).trim();
   if (!got) return { ok: false, error: '没给审官模型' };
-  if (got !== String(seat.modelId)) {
+  if (got === String(seat.modelId)) return { ok: true, modelId: got, seat: seat.modelId };
+
+  const order = routing.reviewerOrder.map(String);
+  const seatVendor = vendorFamilyOf(seat.modelId);
+  const gotVendor = vendorFamilyOf(got);
+  // 家族查不出来 ⇒ 没查成，不许猜着放行。
+  if (!seatVendor || !gotVendor) {
     return {
-      ok: false,
-      error: `审官位只许 ${seat.modelId}（路由表当前审官位 reviewerOrder[0]），不许换厂到 ${got}`,
-      seat: seat.modelId,
-      requested: got,
+      ok: false, unscanned: true,
+      error: `审官位换人没查成：${!seatVendor ? seat.modelId : got} 认不出供应商家族，不许猜`,
+      seat: seat.modelId, requested: got,
     };
   }
-  return { ok: true, modelId: seat.modelId };
+  if (!order.includes(got)) {
+    return {
+      ok: false,
+      error: `审官位只许审官顺位表里的模型（${order.join(' → ')}），${got} 不在表里`,
+      seat: seat.modelId, requested: got,
+    };
+  }
+  if (gotVendor !== seatVendor) {
+    return {
+      ok: false,
+      error: `审官位只许同厂换顺位（当前 ${seat.modelId}／${seatVendor}），不许换厂到 ${got}／${gotVendor}`,
+      seat: seat.modelId, requested: got,
+    };
+  }
+  return { ok: true, modelId: got, seat: seat.modelId, switched: true };
 }
 
 /**

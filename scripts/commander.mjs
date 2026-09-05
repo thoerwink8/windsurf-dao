@@ -53,6 +53,9 @@ const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir(
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
 const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/home/orca/windsurf-dao';
+// 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
+// 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
+const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
 const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
@@ -84,6 +87,41 @@ function scanGithub() {
   const parsed = parseGithubGraphqlResponse(gh.out);
   if (!parsed.ok) return { scanned: false, error: parsed.error };
   return { scanned: true, issues: parsed.issues, prs: parsed.prs };
+}
+
+/**
+ * 别的仓有没有事挂着。**只感知，不派工**——派工链（worktree/终端/审官）只在本仓有。
+ *
+ * 2026-09-05：用户把 bot 的仓授权从 1 个扩到 6 个。在那之前帅位对别的仓完全无感：
+ * ai-gateway-stack 挂着 3 条 open issue 而它是本仓派工链的上游，网关坏了整条链跟着坏。
+ * 管辖清单不另外维护——**授权范围本身就是那张清单**：授权加一个仓这里自动多一个，
+ * 撤销自动少一个，不会像手写清单那样过期。
+ */
+function scanOtherRepos() {
+  const owner = String(REPO || '').split('/')[0];
+  if (!owner) return { scanned: false, error: 'REPO 里读不出 owner——没查成' };
+  const grab = (kind) => {
+    const gh = runGh(['search', kind, '--owner', owner, '--state', 'open',
+      '--limit', '100', '--json', 'repository,number,title'], 60000);
+    if (!gh.ok) return null;
+    try { const v = JSON.parse(gh.out); return Array.isArray(v) ? v : null; } catch { return null; }
+  };
+  const issues = grab('issues');
+  const prs = grab('prs');
+  if (issues == null || prs == null) return { scanned: false, error: '跨仓 search 没查成（授权或网络）' };
+  const mine = String(REPO);
+  const byRepo = new Map();
+  for (const [kind, list] of [['issue', issues], ['pr', prs]]) {
+    for (const x of list) {
+      const full = x?.repository?.nameWithOwner || x?.repository?.name;
+      if (!full || full === mine || String(full).endsWith('/' + mine.split('/')[1])) continue;
+      if (!byRepo.has(full)) byRepo.set(full, { repo: full, issues: 0, prs: 0, samples: [] });
+      const e = byRepo.get(full);
+      if (kind === 'issue') e.issues += 1; else e.prs += 1;
+      if (e.samples.length < 3) e.samples.push(`#${x.number} ${String(x.title || '').slice(0, 50)}`);
+    }
+  }
+  return { scanned: true, repos: [...byRepo.values()] };
 }
 
 function scanOrca() {
@@ -190,6 +228,7 @@ function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
   const reviewPending = scanReviewPending();
+  const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const policy = loadDispatchPolicy({ root: ROOT });
@@ -210,7 +249,7 @@ function buildSituation({ state } = {}) {
   const breakerIngest = ingestBreakerSignals();
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall,
+    github, orca, reviewPending, prReviews, stall, otherRepos,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
@@ -465,22 +504,30 @@ export function reworkBriefText(action) {
   ].join('\n');
 }
 
-/** 写红项全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。 */
-export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
-  const path = reworkBriefPath(action, { dir });
-  const text = reworkBriefText(action);
+/**
+ * 落一份任务书全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。
+ * 返工和巡检共用这一把尺：注入永远只给指针，全文永远落文件，而「落了」必须是读回来对上的那种落了。
+ */
+export function writeBriefVerified({ path, text, io: fsio = null, what = '任务书' }) {
   const writer = fsio || { mkdir: (d) => ensureDir(d), write: writeFileSync, read: readFileSync };
   try {
     writer.mkdir(dirname(path));
     writer.write(path, text, 'utf8');
   } catch (e) {
-    return { ok: false, unscanned: true, error: `红项全文写不下去（${path}）：${String(e.message || e).slice(0, 160)}` };
+    return { ok: false, unscanned: true, error: `${what}写不下去（${path}）：${String(e.message || e).slice(0, 160)}` };
   }
   let back = null;
   try { back = writer.read(path, 'utf8'); }
-  catch (e) { return { ok: false, unscanned: true, error: `红项全文写了读不回（${path}）：${String(e.message || e).slice(0, 160)}` }; }
-  if (back !== text) return { ok: false, unscanned: true, error: `红项全文读回对不上（${path}）——不拿半截任务书派工` };
+  catch (e) { return { ok: false, unscanned: true, error: `${what}写了读不回（${path}）：${String(e.message || e).slice(0, 160)}` }; }
+  if (back !== text) return { ok: false, unscanned: true, error: `${what}读回对不上（${path}）——不拿半截任务书派工` };
   return { ok: true, path, bytes: Buffer.byteLength(text, 'utf8') };
+}
+
+/** 写红项全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。 */
+export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
+  return writeBriefVerified({
+    path: reworkBriefPath(action, { dir }), text: reworkBriefText(action), io: fsio, what: '红项全文',
+  });
 }
 
 /** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
@@ -568,9 +615,12 @@ function dispatchRework(action, { state, dryRun, say }) {
 
 // 大脑：起一次性 pi 会话 + 注入指针文本；记进 state.brainSessions（含 handle），
 // 由后续 act 轮回收（会话干完自行 exit；没退的到期强关，保证「进程不在」有界）。
+// action.pointer / action.title 可覆写：巡检（cmdPatrol）用同一条起会话+登记+回收的路，
+// 只换注入那句话和卡名。**不许为别的用途另写一份 start/send/登记**——回收只认 state.brainSessions，
+// 另写一套就等于造一批没人回收的孤儿会话（本机那版巡检半天堆了几十个，就是这么来的）。
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
-  const pointer = [
+  const pointer = action.pointer || [
     '你是服务器指挥官的「大脑」（一次性会话，#800）。',
     `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
     `处置目标：${action.target}（${action.why}）。`,
@@ -578,7 +628,7 @@ function wakeBrain(action, { state, dryRun, say }) {
     '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完打 exit 退出。',
   ].join('');
   const startCmd = ['node', 'scripts/dao.mjs', 'start', '--provider', 'gw', '--model', BRAIN_MODEL,
-    '--worktree', BRAIN_WORKTREE, '--title', '指挥官大脑'];
+    '--worktree', BRAIN_WORKTREE, '--title', action.title || '指挥官大脑'];
   if (dryRun) {
     say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}\n    然后 dao.mjs send --terminal <handle> --enter --agent pi --text "<指针>"`);
     return { ok: true, dryRun: true };
@@ -607,7 +657,7 @@ function wakeBrain(action, { state, dryRun, say }) {
 }
 
 // 回收一次性大脑：会话已下班（终端读不到/idle）或超龄 → orca terminal close。保证进程不残留。
-function reapBrains({ state, dryRun, say, maxAgeMs = 30 * 60 * 1000 }) {
+function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
@@ -622,6 +672,247 @@ function reapBrains({ state, dryRun, say, maxAgeMs = 30 * 60 * 1000 }) {
     }
   }
   state.brainSessions = sessions;
+}
+
+// ── 巡检（2026-09-05）：定时脚本只找得到「见过的失败形态」。当天真正被翻出来的两个洞
+// （定时任务以 root 解释 orca 可写的脚本、活性判据的盲区）一个脚本都没报，是一个会话主动去翻才发现的。
+// 所以留一条「让一个会话定期去翻」的路，专找脚本查不出的那类。
+//
+// 改这段之前必须知道的四件事：
+//   · **注入只给指针**：任务书全文落仓外文件，注入那句话短到不会被 TUI 当成粘贴块坐在输入框里（#524）。
+//     写完读回自证（writeBriefVerified）——读不回就不唤醒，半截任务书比不唤更坏。
+//   · **回收不归巡检自己管**：会话登记进 state.brainSessions，act 每轮跑 reapBrains 超龄强关。
+//     所以会话实际寿命上限 = BRAIN_MAX_AGE_MS，任务书里写给它的分钟数必须是同一个常量算出来的。
+//   · **边界不能只写在任务书里**：嘱咐一个无人看管的会话「别乱改」等于没有边界。巡检的提交必须带
+//     PATROL_COMMIT_TAG，下一轮回头查这些提交碰过哪些文件，越界当场报帅。
+//   · **「没查成」要与「没发现」分开**：已有报告清单读不出来时，任务书里写的是「没查成，你自己去列」，
+//     不是「一条都没有」——后者会让巡检把已经报过的东西再报一遍。
+const PATROL_DIR = join(STATE_DIR, 'patrol');
+const PATROL_COMMIT_TAG = '[patrol]';
+const PATROL_ALLOW_PREFIX = 'docs/observations/';
+const PATROL_AUDIT_LOOKBACK_MS = 7 * 24 * 3600 * 1000; // 没有上次审计锚点时回看多久
+
+export function patrolBriefPath({ dir = null, now = new Date() } = {}) {
+  return join(dir || PATROL_DIR, `patrol-${now.toISOString().replace(/[:.]/g, '-')}.md`);
+}
+
+/** 已有报告清单。读不了 = 没查成，绝不退化成空数组——空数组会让巡检重复报已经报过的事。 */
+export function listObservations({ dir, io = null } = {}) {
+  const reader = io || { readdir: readdirSync };
+  try {
+    const files = reader.readdir(dir).filter((f) => /\.md$/i.test(String(f))).sort();
+    return { scanned: true, files };
+  } catch (e) {
+    return { scanned: false, error: `列不出已有报告（${dir}）：${String(e.message || e).slice(0, 160)}` };
+  }
+}
+
+/**
+ * 一批提交碰过的文件里，哪些越出了巡检的写入边界。
+ * 清单不是数组 = 没查成（不当成「没越界」——查不成和查过没事必须分得开）。
+ */
+export function patrolBoundaryViolations(files, { allow = PATROL_ALLOW_PREFIX } = {}) {
+  if (!Array.isArray(files)) return { scanned: false, error: '碰过的文件清单不是数组——没查成，不当成没越界' };
+  const norm = files.map((f) => String(f == null ? '' : f).trim().replace(/\\/g, '/')).filter(Boolean);
+  return { scanned: true, checked: norm.length, violations: norm.filter((f) => !f.startsWith(allow)) };
+}
+
+/** 回头查巡检自己的提交守没守住边界。git 查不成 → 没查成，不报「干净」。 */
+export function auditPatrolCommits({ sinceIso, run = null, tag = PATROL_COMMIT_TAG } = {}) {
+  const exec = run || ((argv) => runCmd(argv, 60000));
+  const listed = exec(['git', 'log', '--since', String(sinceIso), '-F', `--grep=${tag}`, '--format=%H']);
+  if (!listed.ok) return { scanned: false, error: `查不到巡检的提交：${listed.error}` };
+  const hashes = String(listed.out || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const offenders = [];
+  for (const h of hashes) {
+    // 必须带 -z：不带的话 git 对非 ASCII 文件名会**加引号 + 八进制转义**
+    // （`"docs/observations/2026-09-05-systemd\345\215\225..."`），前缀比对当场认不出它其实就在
+    // 允许目录下，于是巡检自己写的中文名报告被判成越界。2026-09-05 实咬——第一份巡检报告就撞上了。
+    // 解转义不是好办法（要处理引号、反斜杠、UTF-8 多字节）；让 git 直接吐原始路径才是。
+    const shown = exec(['git', 'show', '--name-only', '-z', '--format=', h]);
+    if (!shown.ok) return { scanned: false, error: `巡检提交 ${h.slice(0, 8)} 碰过哪些文件没查成：${shown.error}` };
+    const v = patrolBoundaryViolations(String(shown.out || '').split('\0'));
+    if (!v.scanned) return { scanned: false, error: v.error };
+    if (v.violations.length) offenders.push({ commit: h.slice(0, 8), files: v.violations.slice(0, 10) });
+  }
+  return { scanned: true, commits: hashes.length, offenders };
+}
+
+/**
+ * 巡检这一轮的退出码。三态必须分得开：
+ *   2 = 有面没查成（不知道有没有问题）  1 = 查出上轮越界（知道有问题，已报帅）  0 = 查过没事。
+ * 「没查成」优先级最高：它一旦被当成 0，systemctl 上就看不出这一轮其实什么都没查。
+ */
+export function patrolExitCode({ unscanned = [], outOfBounds = 0 } = {}) {
+  if (Array.isArray(unscanned) ? unscanned.length : unscanned) return 2;
+  return outOfBounds ? 1 : 0;
+}
+
+/** 注入那一句：短到不会被 TUI 当粘贴块，只说「全文在哪、先读它」。 */
+export function patrolInjectText(briefPath) {
+  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完打 exit 退出。`;
+}
+
+/** 巡检任务书全文。existing 是 listObservations 的三态结果，直接决定「已有报告」那一段怎么写。 */
+export function patrolBriefText({ obsDir = 'docs/observations', existing = null, maxAgeMs = BRAIN_MAX_AGE_MS,
+  commitTag = PATROL_COMMIT_TAG, allow = PATROL_ALLOW_PREFIX, now = new Date() } = {}) {
+  const today = now.toISOString().slice(0, 10);
+  const minutes = Math.round(maxAgeMs / 60000);
+  const known = existing && existing.scanned
+    ? (existing.files.length
+      ? ['已有报告（先逐个读一遍，重复的不要再报）：', ...existing.files.map((f) => `- ${obsDir}/${f}`)]
+      : [`已有报告：一条都没有（这是查过的结果，不是没查成）。`])
+    : [`已有报告：**没查成**——${(existing && existing.error) || '清单读不出来'}。`,
+      `你必须自己 \`ls ${obsDir}\` 确认；列不出来就不要写新报告，只回报「已有报告列不出来，这一轮没法判重复」。`];
+  return [
+    '# 机制巡检（一次性会话）',
+    '',
+    '你是这台服务器上的机制巡检。定时唤起，干完就退。**只写发现，不动手修。**',
+    '',
+    '## 为什么有你',
+    '',
+    '这台机器上另外几个定时任务都是判据写死的脚本，只找得到已经见过的失败形态。',
+    '2026-09-05 那天真正被翻出来的两个洞——定时任务以 root 身份解释一个人人可写的脚本（等于给每个',
+    '能写仓的执行体一条提权路）、以及巡检判「还活着」的判据有盲区——脚本一个都没报，',
+    '是一个会话主动去翻才翻出来的。你就是那个去翻的人。',
+    '',
+    '## 去找什么',
+    '',
+    '重点是**脚本查不出**的那四类：',
+    '',
+    '1. **机制上的漏洞**：有权限、有通道，但没有任何人在看的地方。',
+    '2. **装了没生效**：文件在、单元在册、检查也存在，可它实际上并没有在起作用。',
+    '3. **判据前提已不成立**：检查还在跑，而它赖以成立的那个前提早就变了——真相源搬走了、',
+    '   字段改名了、被检查的对象已经删了，于是它每次都绿，或者每次都红到没人看。',
+    '4. **两处规矩互相打架**：A 处要求这样、B 处要求那样，照哪边做都会违反另一边。',
+    '',
+    '从哪儿翻（翻不完是正常的，翻到哪就说到哪）：',
+    '',
+    '- 仓里的规矩（`CLAUDE.md`、`host/skills/`、`docs/decisions/`）与 `scripts/` 里真正的实现对不对得上',
+    '- `host/machine/systemd/` 里的单元与机器上的实际状态对不对得上：谁在跑、以谁的身份跑、下一次什么时候跑',
+    '- `tests/` 里的闸：判据还成立吗？它这次到底扫到样本了没有？',
+    '- 最近的提交（`git log`）里有没有「改了 A 没同改 B」',
+    '',
+    '## 发现写到哪',
+    '',
+    `一条发现一个文件，落 \`${obsDir}/${today}-<短名>.md\`（短名用中文或英文都行，能一眼认出是哪件事）。`,
+    '正文中文，三段写清：',
+    '',
+    '- **结论**：一句话说清哪里有洞',
+    '- **证据**：文件路径加行号、跑过的命令和它的真实输出。不许写「应该」「可能」——没验证的就标「没验证」',
+    '- **建议的最小改造**：删哪一层能让这个问题不存在',
+    '',
+    `写完必须 \`git add\` + \`git commit\` + \`git push\`。**不提交别的机器看不到，等于没写。**`,
+    `提交标题必须以 \`${commitTag}\` 开头——回头查你有没有守住边界，就靠这个标记找你的提交。`,
+    '',
+    '推不上去（别人先推了）就 `git pull --rebase` 再推。**不许留着不推**：这棵主树每 5 分钟要跟一次',
+    '主分支，走的是只许快进的合并；本地留一个没推上去的提交，那条同步从此每轮都失败——',
+    '你会用一份报告换掉整台机器的代码同步。推不上去又 rebase 不动，就 `git reset --soft HEAD~1`',
+    '把改动退回工作区，然后如实报告「写了但没推上去」，别硬来。',
+    '',
+    '## 不许重复报',
+    '',
+    ...known,
+    '',
+    '同一件事已经报过（哪怕换了个说法），或者那个文件里已经写了「处置：」，就不要再报一遍。',
+    '**没有新发现是正常结果**——这一轮就说一句「翻了哪几面、没有新发现」，不要为了交差凑一条。',
+    '',
+    '## 硬边界（越界就是事故）',
+    '',
+    '你没人看管，所以边界比产出重要：',
+    '',
+    `- 只许新建或修改 \`${allow}\` 底下的文件。别的文件一个字都不许改。`,
+    '- 不许改代码、不许改配置、不许改定时任务、不许 `sudo`、不许启停任何服务。',
+    '- 不许开 GitHub 单子或 PR，不许给单子和 PR 评论，不许合并、不许关单。',
+    '- 不许花钱：不许起别的模型会话、不许调付费接口、不许派工。',
+    `- 提交里只能有 \`${allow}\` 底下的文件。\`git status\` 里冒出别的改动就停手，在报告里写明你看见了什么。`,
+    '- 发现了问题**只描述，不动手**。想动手的那股冲动，正是这条边界要拦的东西。',
+    '',
+    `这条边界有人查：下一轮巡检会把带 \`${commitTag}\` 的提交逐个翻出来看碰过哪些文件，越界当场报帅。`,
+    '',
+    '## 时间与收尾',
+    '',
+    `你最多有 ${minutes} 分钟，到点会被强制关掉。所以顺序是：**先把最小的一份报告写完并推上去，再回头深挖**。`,
+    '干完打 `exit` 退出——退了才不占位子。',
+    '',
+  ].join('\n');
+}
+
+function cmdPatrol(argv) {
+  const dryRun = argv.includes('--dry-run');
+  const state = loadState();
+  const log = [];
+  const say = (m) => log.push(m);
+  const unscanned = [];
+
+  // ① 先回收上一轮的一次性会话。act 也会回收，这里再收一次是为了 act 停摆时巡检不至于自己堆孤儿。
+  reapBrains({ state, dryRun, say });
+
+  // ② 回头审上几轮巡检守没守住边界（边界不能只写在任务书里）。
+  state.patrol = state.patrol || {};
+  const sinceIso = state.patrol.lastAuditAt || new Date(Date.now() - PATROL_AUDIT_LOOKBACK_MS).toISOString();
+  const audit = auditPatrolCommits({ sinceIso });
+  let outOfBounds = 0;
+  if (!audit.scanned) {
+    unscanned.push(`越界审计：${audit.error}`);
+    say(`  越界审计没查成：${audit.error}——不报「干净」`);
+  } else {
+    outOfBounds = audit.offenders.length;
+    say(`  越界审计：${sinceIso} 起共 ${audit.commits} 个巡检提交，越界 ${outOfBounds} 个`);
+    for (const o of audit.offenders) {
+      execAction({
+        kind: 'escalate', reason: 'patrol-out-of-bounds', term: `patrol-${o.commit}`,
+        why: `巡检会话在提交 ${o.commit} 里改了 ${PATROL_ALLOW_PREFIX} 之外的文件（${o.files.join('、')}）`
+          + '——巡检只许写发现不许动手，这条边界破了要人判',
+      }, { state, dryRun, log });
+    }
+    if (!dryRun) state.patrol.lastAuditAt = nowIso();
+  }
+
+  // ③ 已有报告清单：读不出来就在任务书里明写「没查成」，不退化成「一条都没有」。
+  const obsRel = PATROL_ALLOW_PREFIX.replace(/\/$/, '');
+  const existing = listObservations({ dir: join(ROOT, ...obsRel.split('/')) });
+  if (!existing.scanned) { unscanned.push(existing.error); say(`  ${existing.error}`); }
+  else say(`  已有报告 ${existing.files.length} 份`);
+
+  // ④ 任务书落文件 + 读回自证；注入只给指针。
+  const briefPath = patrolBriefPath({});
+  const briefText = patrolBriefText({ obsDir: obsRel, existing });
+  if (dryRun) {
+    say(`[dry] 任务书会落 ${briefPath}（${Buffer.byteLength(briefText, 'utf8')} 字节），全文见下`);
+    say(briefText);
+    say(`[dry] 注入指针（${Buffer.byteLength(patrolInjectText(briefPath), 'utf8')} 字节）：${patrolInjectText(briefPath)}`);
+  }
+  const written = dryRun
+    ? { ok: true, path: briefPath, bytes: Buffer.byteLength(briefText, 'utf8') }
+    : writeBriefVerified({ path: briefPath, text: briefText, what: '巡检任务书' });
+  if (!written.ok) {
+    say(`  ${written.error}`);
+    console.log(JSON.stringify({ at: nowIso(), dryRun, woken: false, unscanned: [...unscanned, written.error] }, null, 2));
+    console.error(log.join('\n'));
+    process.exit(2);
+  }
+
+  // ⑤ 唤会话：复用大脑那条路（起会话 → 送指针 → 登记进 brainSessions 等回收）。
+  const woken = wakeBrain({
+    kind: 'wake-brain', target: 'patrol', title: '机制巡检', pointer: patrolInjectText(written.path),
+    why: '定时机制巡检：找脚本查不出的洞',
+  }, { state, dryRun, say });
+  if (!woken.ok && !dryRun) unscanned.push(`巡检会话没唤成：${woken.error || '没查成'}`);
+
+  if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（与 act 一致）
+  console.log(JSON.stringify({
+    at: nowIso(), dryRun,
+    brief: written.path, briefBytes: written.bytes,
+    knownObservations: existing.scanned ? existing.files.length : null,
+    auditedCommits: audit.scanned ? audit.commits : null,
+    outOfBounds,
+    woken: dryRun ? 'dry-run（没真起会话）' : woken.ok === true,
+    reapBy: '每轮 act 的 reapBrains，超龄强关',
+    unscanned,
+  }, null, 2));
+  console.error(log.join('\n'));
+  process.exit(patrolExitCode({ unscanned, outOfBounds }));
 }
 
 // ── 代拍：双向门待拍板单到期无人回复 → 唤大脑按推荐项执行（2026-09-04 拍板「双门制+超时代拍」）。
@@ -726,6 +1017,10 @@ function cmdScan() {
       prs: situation.github.scanned ? situation.github.prs.length : null,
       reviewPending: situation.reviewPending.scanned ? situation.reviewPending.items.length : null,
     },
+    // 跨仓只报数，不进 health：别的仓查不到不该拦住本仓这一轮（它是感知，不是本轮要处置的活）。
+    otherRepos: situation.otherRepos?.scanned
+      ? situation.otherRepos.repos.map((r) => `${r.repo}: ${r.issues} issue / ${r.prs} PR`)
+      : `没查成：${situation.otherRepos?.error || '缺节'}`,
   };
   console.log(JSON.stringify(summary, null, 2));
   process.exit(health.allScanned ? 0 : 2);
@@ -769,15 +1064,17 @@ function summarizeAction(a) {
   return o;
 }
 
-const CMDS = { scan: cmdScan, act: cmdAct };
+const CMDS = { scan: cmdScan, act: cmdAct, patrol: cmdPatrol };
 
 function main() {
   const [, , sub, ...rest] = process.argv;
   if (!sub || sub === '--help' || sub === '-h') {
-    console.log(`用法: node scripts/commander.mjs <scan|act|inventory|status|install> [--dry-run]
+    console.log(`用法: node scripts/commander.mjs <scan|act|patrol|inventory|status|install> [--dry-run]
 
   scan       眼睛：产态势 JSON 落 ~/.dao/commander/（三态退出：0 全查成 / 2 有没查成）
   act        scan → decide → 执行动作（--dry-run 只打印命令）
+  patrol     机制巡检：唤一个一次性会话去翻脚本查不出的洞，发现落 docs/observations/
+             （三态退出：0 唤起了 / 1 查出上轮巡检越界（已报帅） / 2 有面没查成；--dry-run 只打印计划与任务书全文）
   inventory  盘点体检：异常开「待拍板」单，正常静默（--dry-run 只打印）
   status     自检三态（0 通 / 1 红 / 2 没查成），供 server-check 一行引用
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);

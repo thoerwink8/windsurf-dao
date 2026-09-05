@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('node:fs');
 
 const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
 
@@ -53,9 +54,14 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
-  it('已消歧但缺 model/reviewer 标签 → escalate 不猜（不产 dispatch）', async () => {
+  // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
+  // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
+  // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。
+  // **洞是带着绿测试出厂的，这条测试就是钉住它的那颗钉子。**
+  // 真信号是**半标态**：有人打了一半停下。两个都没有 = 从没瞄准过派工车道，不是漏标。
+  it('已消歧且派工标只打了一半（有 model 没 reviewer） → escalate 不猜（不产 dispatch）', async () => {
     const { decide } = await CORE;
-    const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }] };
+    const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }] };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
     assert.equal(byKind(r, 'dispatch').length, 0, '缺标签绝不派');
     const e = byKind(r, 'escalate');
@@ -974,3 +980,39 @@ describe('decide：判绿按真 review 而非 reviewDecision（实咬）', () =>
   });
 });
 
+
+// 跨仓感知（2026-09-05）：用户把 bot 授权从 1 个仓扩到 6 个之前，帅位对别的仓完全无感——
+// ai-gateway-stack 挂着 3 条 open issue，而它正是本仓派工链的上游。
+describe('跨仓感知只感知不派工', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+
+  it('buildSituation 里真的采了这一面', () => {
+    assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
+    assert.match(src, /github, orca, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+  });
+
+  it('不维护管辖清单——授权范围就是清单', () => {
+    const i = src.indexOf('function scanOtherRepos');
+    const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
+    assert.match(fn, /--owner/, '用 owner 跨仓搜，授权能看见几个就是几个');
+    assert.ok(!/\[\s*'[a-z-]+\/[a-z-]+'\s*,/.test(fn), '不许出现手写的仓清单——清单会过期');
+  });
+
+  it('跨仓没查成不许拦住本轮：它不在 health 的必查清单里', () => {
+    const i = src.indexOf("const sections = ['github'");
+    const line = src.slice(i, i + 200);
+    assert.ok(!/otherRepos/.test(line),
+      '跨仓查不到是别人家的事，不该让本仓这一轮判成没查成');
+  });
+
+  it('没查成要显形，不许静默成「别的仓都没事」', () => {
+    assert.match(src, /otherRepos: situation\.otherRepos\?\.scanned[\s\S]{0,220}没查成/,
+      '摘要里没查成必须写出来——「没查成」和「都没事」分不开就等于没查');
+  });
+
+  it('自己这个仓不算「别的仓」', () => {
+    const i = src.indexOf('function scanOtherRepos');
+    const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
+    assert.match(fn, /full === mine/, '要把本仓排除掉，否则本仓的活会被当成跨仓提醒重报一遍');
+  });
+});

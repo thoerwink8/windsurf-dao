@@ -376,7 +376,9 @@ test('#833 正式账本路径 + timer 用 OnCalendar（空转实咬）', () => {
   assert.equal(/join\([^\n]*home[^\n]*\.agent-stall-watch\.json/.test(breaker), false);
   assert.match(watch, /PAD_STATE/);
   const timer = readFileSync(join(REPO, 'host', 'machine', 'systemd', 'dao-agent-stall.timer'), 'utf8');
-  assert.match(timer, /OnCalendar=\*:0\/15/);
-  assert.equal(/OnUnitActiveSec=/.test(timer), false,
-    'OnUnitActiveSec 会让 oneshot 在服务从未激活时 NEXT 变横杠');
+  // 判据是「有没有墙钟点位」，不是「哪一分钟」——分钟数换了这条不该红。
+  // 原来还断言「不许有 OnUnitActiveSec」，master 的 4ce2003 明确推翻了：病根是**只有**单调时钟，
+  // 不是有它；补上 OnCalendar 之后永远有下一次，两个触发器并存反而更稳（原委见那份 timer 的文件头）。
+  assert.match(timer, /^OnCalendar=/m,
+    '没有墙钟点位，oneshot 在服务从未激活时 NEXT 就是横杠，timer 在册却空转');
 });
