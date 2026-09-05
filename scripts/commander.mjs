@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -26,20 +26,26 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
-  reviewPendingDir, listReviewPending, writeReviewPending,
+  reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
+import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
-import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import {
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd,
+} from './lib/commander-verbs.mjs';
+import { stallWatchPath } from './lib/agent-stall-detect.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -48,10 +54,10 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
-const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || join(homedir(), '.agent-stall-watch.json');
+const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
-const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/home/orca/windsurf-dao';
+const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projects/windsurf-dao';
 // 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
 // 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
 const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
@@ -85,7 +91,42 @@ function scanGithub() {
   if (!gh.ok) return { scanned: false, error: gh.error };
   const parsed = parseGithubGraphqlResponse(gh.out);
   if (!parsed.ok) return { scanned: false, error: parsed.error };
-  return { scanned: true, issues: parsed.issues, prs: parsed.prs };
+  return {
+    scanned: true, issues: parsed.issues, prs: parsed.prs,
+    attributedIssues: scanAttributedIssues(parsed.issues, parsed.prs),
+  };
+}
+
+/**
+ * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为查它们的 reviewer/ 标签。
+ *
+ * 主查询是 `issues(states: OPEN)`，所以单子一关标签就查不到。2026-09-05 实咬：
+ * #945/#947/#909 的署名单 #833/#815/#889 都关了，标签明明带着 reviewer/gpt-5.6-luna，
+ * 指挥官每轮报「不猜审官」，三张交卷可合的 PR 无限期挂着。**单子关了不等于 PR 不用审。**
+ *
+ * 为什么不把主查询改成 OPEN+CLOSED：那张表按 UPDATED_AT 取前 100 条，掺进关闭单会把
+ * open 单挤出视野——修一个洞捅一个更大的。这里改成按需精确取，条数上限就是 open PR 数。
+ *
+ * 取回来的单**单独放一格**，绝不并进 issues：那是派工候选表，混进已关闭的「已消歧」单
+ * 会被当成新活派出去。取不到就留空，让上游照旧说「不猜审官」——查不到 ≠ 猜一个。
+ */
+function scanAttributedIssues(issues, prs) {
+  const have = new Set((issues || []).map((i) => i && i.number).filter(Boolean));
+  const want = new Set();
+  for (const pr of prs || []) {
+    const n = attributedIssueNumber(pr);
+    if (n != null && !have.has(n)) want.add(n);
+  }
+  const out = [];
+  for (const n of want) {
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    try {
+      const j = JSON.parse(r.out || '{}');
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+    } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
+  }
+  return out;
 }
 
 /**
@@ -179,7 +220,7 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
 }
 
 function scanStall() {
-  if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 垫片没写，读不到 ≠ 无撞死` };
+  if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 正式连红账本没写，读不到 ≠ 无撞死` };
   try {
     const strikes = JSON.parse(readFileSync(STALL_FILE, 'utf8'));
     if (!strikes || typeof strikes !== 'object') return { scanned: false, error: '撞死指纹不是对象——没查成' };
@@ -232,16 +273,25 @@ function buildSituation({ state } = {}) {
   const stall = scanStall();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
+  let routingModelRecords = null;
+  let reviewerOrder = null;
+  let workerOrder = null;
   let healthRedModels = [];
   let defaultWorkerModel = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
+    routingModelRecords = models;
+    reviewerOrder = reviewerSelectOrder(raw);
+    workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
   } catch {
     routingModels = null;
+    routingModelRecords = null;
+    reviewerOrder = null;
+    workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
   }
@@ -252,8 +302,13 @@ function buildSituation({ state } = {}) {
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
+    drainLedger: (state && state.drainLedger) || {},
+    openIssueLedger: (state && state.openIssueLedger) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
+    routingModelRecords,
+    reviewerOrder,
+    workerOrder,
     healthRedModels,
     defaultWorkerModel,
   };
@@ -279,7 +334,14 @@ function hubSay(text) {
   }
   if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  return { ok: true };
+  // 认回执，不认退出码。hub-say 打印飞书返回的 message_id——拿到它才算真送进群。
+  // 只看 exit 0 的话，「发成了」和「lark-cli 跑通了但飞书没收」长得一模一样，
+  // 而这条路一哑就是整条回流静默（本仓同形态判例：memory orca-send-succeeds-to-dead-handle）。
+  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
+  if (!messageId || messageId === 'null') {
+    return { ok: false, error: `hub-say 退出码 0 但没回 message_id——没送进群（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
+  }
+  return { ok: true, messageId };
 }
 
 function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
@@ -315,7 +377,15 @@ function execAction(action, { state, dryRun, log }) {
     case 'attach-reviewer': {
       // 走 blessed 路径 review-pending-drain（含归属/活性校验），一次清完队列。
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
-      return runOrShow(cmd, { dryRun, say, why: action.why });
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
+      if (action.pr != null) {
+        state.drainLedger = state.drainLedger || {};
+        const key = `pr:${action.pr}`;
+        const prev = state.drainLedger[key];
+        state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
+      }
+      return r;
     }
     case 'merge': {
       // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 合并 → 关单。
@@ -349,12 +419,101 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'escalate':
       return escalate(action, { state, dryRun, say });
+    case 'add-label':
+      return execAddLabel(action, { dryRun, say });
+    case 'retry-drain':
+      return execRetryDrain(action, { state, dryRun, say });
+    case 'open-issue':
+      return execOpenIssue(action, { state, dryRun, say });
+    case 'reap-ticket':
+      return execReapTicket(action, { state, dryRun, say });
     case 'noop':
       return { ok: true };
     default:
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+function execAddLabel(action, { dryRun, say }) {
+  const planned = planAddLabelCmd(action, { models: action.models });
+  if (!planned.ok) {
+    say(`  add-label 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  return runOrShow(planned.argv, { dryRun, say, why: action.why });
+}
+
+function execRetryDrain(action, { state, dryRun, say }) {
+  const planned = planRetryDrainCmd(action, {
+    queue: action.queue,
+    ledger: (state && state.drainLedger) || {},
+    nowMs: Date.parse(nowIso()) || 0,
+  });
+  if (!planned.ok) {
+    say(`  retry-drain 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
+  }
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  state.drainLedger = state.drainLedger || {};
+  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
+  state.drainLedger[planned.stateKey] = {
+    at: nowIso(), pr: planned.pr, tries: planned.tries,
+  };
+  return r;
+}
+
+// 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
+// 万一同号票再入队就直接从「已试 3 次」起步，一轮就 escalate。
+function execReapTicket(action, { state, dryRun, say }) {
+  const dir = reviewPendingDir({ root: ROOT });
+  const path = reviewPendingPath(dir, action.pr);
+  if (dryRun) { say(`[dry] 回收死票 ${path}`); return { ok: true, dryRun: true }; }
+  // 删之前正面核一次死活。decide 的判据是「不在开放列表里」（缺席），这里要的是「确实关了」（在场证据）——
+  // 缺席可能是查询窗口截断、可能是这一轮 API 抽风；删票不可逆，不拿在场证据不动手。
+  const st = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+  if (!st.ok) { say(`  死活没核成，不删票：PR #${action.pr}（${st.error}）`); return { ok: true, skipped: 'liveness-unscanned' }; }
+  const prState = String(st.out).trim();
+  if (prState !== 'MERGED' && prState !== 'CLOSED') {
+    say(`  PR #${action.pr} 实为 ${prState}，不是死票——不删（decide 的缺席判据这次不作数）`);
+    return { ok: true, skipped: 'still-open' };
+  }
+  let removed = false;
+  try { rmSync(path); removed = true; }
+  catch (e) { if (e?.code !== 'ENOENT') { say(`  回收死票失败：${String(e.message || e)}`); return { ok: false, error: String(e.message || e) }; } }
+  // 按 .pr 字段反查，不照抄键格式——键长什么样是 commander-verbs 的事，手打一份迟早对不上。
+  if (state && state.drainLedger) {
+    for (const [k, v] of Object.entries(state.drainLedger)) {
+      if (Number(v?.pr) === Number(action.pr)) delete state.drainLedger[k];
+    }
+  }
+  say(`  ${removed ? '回收死票' : '死票已不在'}：PR #${action.pr}`);
+  return { ok: true, removed };
+}
+
+function execOpenIssue(action, { state, dryRun, say }) {
+  ensureDir(STATE_DIR);
+  const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
+  const planned = planOpenIssueCmd({
+    ...action,
+    ledger: (state && state.openIssueLedger) || {},
+  }, { repo: REPO, bodyPath: bodyFile });
+  if (!planned.ok) {
+    say(`  open-issue 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  if (dryRun) {
+    say(`[dry] 转单 ${planned.title}（key=${planned.key}）\n    ${planned.argv.join(' ')}`);
+    return { ok: true, dryRun: true };
+  }
+  writeFileSync(bodyFile, planned.body, 'utf8');
+  const r = runCmd(planned.argv, 60000);
+  if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
+  const m = String(r.out).match(/\/issues\/(\d+)/);
+  state.openIssueLedger = state.openIssueLedger || {};
+  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
+  say(`  转单开了 #${m ? m[1] : '?'}`);
+  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -530,9 +689,16 @@ export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
 }
 
 /** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
-export function reworkCardName(action) { return `返工 PR #${action.pr}`; }
+// 卡名/摘要按返工种类分岔。工人会把 --spec 当任务边界读（memory spec-is-read-as-task-scope），
+// 所以解冲突的单绝不能写「照审官红项逐条改」——那张 PR 上一条红都没有，工人会去找不存在的东西。
+export function reworkCardName(action) {
+  return action.kind === 'rework' && action.conflict ? `解冲突 PR #${action.pr}` : `返工 PR #${action.pr}`;
+}
 export function reworkSpec(action, briefPath) {
-  return `返工 PR #${action.pr}：先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+  const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
+  return action.conflict
+    ? `解冲突 PR #${action.pr}：${checkout}；把 origin/master 合进来解冲突，硬边界与做法全文在 ${briefPath}，解完跑 dao-check 绿了再推。`
+    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
 }
 
 /**
@@ -569,8 +735,12 @@ function requestRereview(action, { state, dryRun, say }) {
   const w = writeReviewPending({ dir, ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
   state.reworkDispatched = state.reworkDispatched || {};
+  // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
+  // 不记 ok——「票写出去了」不是「判定落了」，2026-09-05 就是把这两件事记成一条账，
+  // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
   state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
+    tries: Number(action.tries) || 1,
   };
   say(`  已写复审待办 ${w.path}（drain 下一轮消费）`);
   return { ok: true, path: w.path };
@@ -595,7 +765,7 @@ function dispatchRework(action, { state, dryRun, say }) {
     '--issue', String(action.issue),
     '--name', reworkCardName(action),
     '--model', action.model, '--reviewer', action.reviewer,
-    '--split', 'no', '--split-reason', '指挥官自动返工：照审官红项逐条改（#931）',
+    '--split', 'no', '--split-reason', action.conflict ? '指挥官自动解冲突：只解冲突，不改范围外的东西' : '指挥官自动返工：照审官红项逐条改（#931）',
     '--spec', spec, '--allow-dup', '--confirm'];
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
@@ -655,22 +825,82 @@ function wakeBrain(action, { state, dryRun, say }) {
   return { ok: true, handle };
 }
 
-// 回收一次性大脑：会话已下班（终端读不到/idle）或超龄 → orca terminal close。保证进程不残留。
+// 一个大脑该留该关：**超龄不等于该杀**。
+// 2026-09-05 实咬：巡检 17:03 唤起大脑，17:51 被「超龄回收」关掉，全程零记录——
+// 它到底干了活还是从头到尾坐着，事后谁也说不出来（close --tab 之后 scrollback 就没了）。
+// 而 reapBrains 本来就在读屏面，只是把内容扔了、只留了个 rd.ok。
+//
+// 于是两件事一起补：
+//  · 超龄时先看**还在不在推进**（屏面签名跟上一轮比）。还在动就续命，续到硬顶为止——
+//    否则「杀掉一个正在干活的大脑」和「清掉一个卡死的」长得一模一样。
+//  · 关之前把最后屏面和「有没有产出过」记下来。零产出的唤醒必须留痕，不然这条链天天绿。
+export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signature, prev } = {}) {
+  if (readable === false) return { verdict: 'gone', reason: '读不到终端（已关或进程不在）' };
+  if (readable !== true) return { verdict: 'unknown', reason: '没查成：读屏面这一步本身没成' };
+  // Number(null) 是 0 且「有限」——不先挡掉 null/'' 的话，上限缺失会被当成「上限 0」，
+  // 于是每个大脑一读到就判超龄关掉，而日志上看起来完全正常。
+  const num = (v) => (v == null || v === '' ? NaN : Number(v));
+  const a = num(age);
+  const cap = num(maxAgeMs);
+  if (!Number.isFinite(a) || !Number.isFinite(cap)) {
+    return { verdict: 'unknown', reason: '年龄或上限不是数——判不了' };
+  }
+  const moved = prev != null && signature != null && String(prev) !== String(signature);
+  const everMoved = moved || (prev == null && signature != null);
+  if (a <= cap) return { verdict: 'keep', reason: '没到上限', moved, everMoved };
+  const hard = Number.isFinite(Number(hardCapMs)) ? Number(hardCapMs) : cap * 3;
+  if (a > hard) return { verdict: 'close', reason: `到硬顶 ${Math.round(hard / 60000)} 分钟，无论在不在动都关`, moved, everMoved };
+  if (moved) return { verdict: 'keep', reason: '超龄但屏面还在变——还在干活，续一轮', moved, everMoved };
+  return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
+}
+
+// 回收一次性大脑。判据在 classifyBrainReap，这里只负责取数、执行、留痕。
 function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
+  state.brainAudit = state.brainAudit || { closed: 0, silent: 0 };
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
     const rd = runOrca(['terminal', 'read', '--terminal', handle, '--screen', '--json'], { cwd: ROOT });
-    const gone = !rd.ok; // 读不到 = 终端已关/进程不在
-    const overAge = age > maxAgeMs;
-    if (gone) { delete sessions[handle]; say && say(`  大脑 ${handle} 已退（读不到终端），登记清除`); continue; }
-    if (overAge) {
-      if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    const screen = rd.ok ? brainScreenText(rd) : null;
+    const signature = screen == null ? null : progressSignature({ preview: screen });
+    const v = classifyBrainReap({
+      readable: rd.ok, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
+    });
+    if (v.verdict === 'gone') {
       delete sessions[handle];
-      say && say(`  大脑 ${handle} 超龄回收（close --tab）`);
+      say && say(`  大脑 ${handle} 已退（${v.reason}），登记清除${meta.everMoved ? '' : '——注意：全程没见它产出过东西'}`);
+      continue;
     }
+    if (v.verdict === 'unknown') { say && say(`  大脑 ${handle} 没查成：${v.reason}——留着，下一轮再判`); continue; }
+    if (v.verdict === 'keep') {
+      meta.sig = signature;
+      meta.everMoved = meta.everMoved || v.everMoved;
+      if (age > maxAgeMs) say && say(`  大脑 ${handle} ${v.reason}（已 ${Math.round(age / 60000)} 分钟）`);
+      continue;
+    }
+    // close：先留痕再关——close --tab 之后屏面就找不回来了
+    const silent = !(meta.everMoved || v.everMoved);
+    state.brainAudit.closed += 1;
+    if (silent) state.brainAudit.silent += 1;
+    if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    delete sessions[handle];
+    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}`);
+    if (silent && screen) say && say(`    最后屏面：${screen.replace(/s+/g, ' ').slice(-200)}`);
   }
   state.brainSessions = sessions;
+}
+
+/** 从 orca terminal read 的返回里取屏面文本。字段路径别猜——取不到就回 null（没查成）。 */
+export function brainScreenText(rd) {
+  const src = rd && (rd.json || rd.out || rd);
+  let j = src;
+  if (typeof src === 'string') { try { j = JSON.parse(src); } catch { return null; } }
+  const t = j && (j.result?.terminal || j.terminal || j.result || j);
+  if (!t) return null;
+  if (Array.isArray(t.tail)) return t.tail.join('\n');
+  if (typeof t.screen === 'string') return t.screen;
+  if (typeof t.content === 'string') return t.content;
+  return null;
 }
 
 // ── 巡检（2026-09-05）：定时脚本只找得到「见过的失败形态」。当天真正被翻出来的两个洞
@@ -951,15 +1181,38 @@ function escalate(action, { state, dryRun, say }) {
   }
   const key = escalateKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
+  // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
+  // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
+  // 账本写在本机、当场生效，没有延迟。
+  state.escalateLedger = state.escalateLedger || {};
+  const booked = state.escalateLedger[key];
+  if (booked && booked.issue) {
+    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
+    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
+  }
   // 查重：已有 open 带此标记的单 → 不重复开
   const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
-  if (found.ok) { try { const arr = JSON.parse(found.out || '[]'); if (arr.length) existing = arr[0].number; } catch { /* ignore */ } }
+  let searchOk = false;
+  if (found.ok) {
+    try { const arr = JSON.parse(found.out || '[]'); searchOk = true; if (arr.length) existing = arr[0].number; }
+    catch { searchOk = false; }
+  }
+  // 查重没查成 ≠ 没有重复。这是个**写**动作，fail-open 的代价是多开一张单，
+  // 而开单不可撤（只能关）。所以没查成一律不开——本轮静默，下轮查得成时再开。
+  // 实咬 2026-09-06：gh search 有索引延迟，同一 key 隔 20 分钟被开了两张（#973-#980 四对）。
+  if (!searchOk) {
+    say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
+    return { ok: true, skipped: 'dedup-unscanned' };
+  }
   const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
+  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
   return opened;
 }

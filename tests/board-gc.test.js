@@ -877,3 +877,27 @@ describe('收工令不许把没合的 salvage 分支当垃圾清掉', () => {
     assert.doesNotMatch(src, /'push', '--delete'|'--delete', 'origin'/, '收工令不许删远端分支');
   });
 });
+
+// 2026-09-06 实咬：worker-done-*.md 以「未跟踪文件」身份留在工人树里，
+// git worktree remove 见到未跟踪文件就拒删 → board-gc 一张干完的卡都回收不掉。
+// 这条 ignore 是那条清理路的地基，删掉它整条链会静默退回堵死状态（没有别的东西会报警）。
+describe('完工草稿必须被 ignore（否则 board-gc 清不掉任何一张干完的卡）', () => {
+  // 不起 git 进程：spawn 预算是只降不升的棘轮，为一条断言抬它等于废掉它。
+  // 「这条 pattern 真能让 worktree remove 通过」是 2026-09-06 一次性实验证明的
+  // （树里放 worker-done-999.md → remove 报 untracked 拒删；ignore 掉 → 同一条命令直接删成），
+  // 结论写在那次提交里。这里盯的是**那行被人删掉/改坏**，那才是会静默复发的事。
+  const ignoreFile = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
+  const lines = ignoreFile.split(/\r?\n/).map((l) => l.trim());
+
+  it('.gitignore 里有 worker-done-*.md 这一行', () => {
+    assert.ok(
+      lines.includes('worker-done-*.md'),
+      '这行没了 → 工人树留未跟踪完工草稿 → git worktree remove 拒删 → board-gc 一张干完的卡都清不掉',
+    );
+  });
+
+  // 判别力：别退化成「把 *.md 全 ignore 掉」那种糊涂修法。
+  it('没有把 .md 整类关掉', () => {
+    assert.ok(!lines.includes('*.md'), '*.md 全关会把文档一起吞掉，不是这条闸要的');
+  });
+});

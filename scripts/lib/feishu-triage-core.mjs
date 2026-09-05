@@ -39,6 +39,10 @@
 // 任何 deps 调用抛错 → 回「机器人暂时没法判断，稍后重试。」，不编造（补充 2）。
 
 import { readFileSync } from 'node:fs';
+import {
+  DEFAULT_PROFILE, profileAllows, looksLikeGreeting, safeGreetingReply, GREETING_FALLBACK,
+} from './feishu-group-profile.mjs';
+import { ensurePlain } from './plain-words.mjs';
 
 /** persona.md 全文 = deps.llm 的 system 段（补充 2：「prompt 的 system 段 = 此文件全文」）。 */
 export const PERSONA = readFileSync(
@@ -52,8 +56,8 @@ export const LLM_DOWN_REPLY = '机器人暂时没法判断，稍后重试。';
 export const HUB_GUIDANCE = '这里是总控群，需求请发到项目群。';
 /** #852：拍板意图但定位不到单号时问清，不猜。 */
 export const HUB_DECISION_ASK = '要拍板哪张单？回我编号（比如 #846）或那张单的链接，我把结论记上去。';
-/** #852：hub 对话意图集合（LLM 分类只认这四个，其余归 other）。 */
-export const HUB_INTENTS = ['situation', 'decision', 'new_request', 'other'];
+/** #852 / #875：hub 对话意图集合（LLM 分类只认这些，其余归 other）。greeting 不走盘点。 */
+export const HUB_INTENTS = ['greeting', 'situation', 'decision', 'new_request', 'other'];
 
 /** 三问固定表：key 进 llm JSON 与 ThreadState.answers，fallback 是 llm 没给追问时的兜底问法。 */
 export const THREE_QUESTIONS = [
@@ -163,6 +167,11 @@ async function triageInner(inbound, deps) {
         url: created.url,
         title,
         from: thread.originName || thread.originOpenId,
+        what: rendered.sections?.['现象'] || title,
+        impact: '还没拍板，不拍就不会开工',
+        recommend: '按这条需求推进',
+        why: '三问已经齐了',
+        deadline: '',
       });
     }
     return { replies: [{ rootId, text: createdReply(created, rendered.title, gate) }], actions, state: next };
@@ -187,21 +196,43 @@ async function triageInner(inbound, deps) {
 // 无状态：一条消息一答，不进 ThreadState 状态机（拍板留痕在 issue/PR 评论，
 // 消费记录在 hub_chat_record → ~/.dao/hub-chat/*.ndjson，由块 A 落盘）。
 
+function groupProfile(inbound) {
+  const p = inbound?.profile;
+  if (p && typeof p === 'object' && Array.isArray(p.intents)) return p;
+  return DEFAULT_PROFILE;
+}
+
+function hubSystem(inbound) {
+  const profile = groupProfile(inbound);
+  return `${PERSONA}
+
+## 本群人格（#875，按 chat_id 路由）
+${profile.persona}
+答什么：${profile.intents.join('、')}。超范围一律用这一句拒：「${profile.refuse}」
+问候闲聊只打招呼，不许甩盘点/待拍板列表。数据里没有的说没查到，不编。`;
+}
+
 async function triageHub(inbound, deps) {
   const { rootId } = inbound;
+  const profile = groupProfile(inbound);
   const allowed = a => Array.isArray(deps.hubChat?.allowedActions) && deps.hubChat.allowedActions.includes(a);
-  const reply = (text, rec) => ({
-    replies: [{ rootId, text }],
-    actions: [hubChatRecord(inbound, deps, { ...rec, reply: text })],
-    state: deps.state,
-  });
+  const reply = (text, rec) => {
+    const plain = ensurePlain(String(text ?? ''), 'feishu-triage-hub');
+    return {
+      replies: [{ rootId, text: plain }],
+      actions: [hubChatRecord(inbound, deps, { ...rec, reply: plain })],
+      state: deps.state,
+    };
+  };
+  const refuse = (intent) => reply(profile.refuse || DEFAULT_PROFILE.refuse, { intent });
 
   // ① 机器人在 hub 发起的待拍板 thread：回复即拍板，直落对应单（确定性，不走 LLM，不猜）。
   //    归属两条腿：块 A 的 hubPending 表（本进程发过的卡片）；话题根消息是机器人发的且带单链接（hub-say 旁路）。
   const pending = inbound.hubPending
     || (inbound.threadRoot?.fromBot ? extractIssueRef(inbound.threadRoot.text) : null);
   if (pending?.repo && pending?.number) {
-    if (!allowed('decision')) {
+    if (!allowed('decision') || !profileAllows(profile, 'decision')) {
+      if (!profileAllows(profile, 'decision')) return refuse('decision');
       return reply('总控群现在不收拍板，请直接到那张单下面留言。', { intent: 'decision' });
     }
     await deps.ghComment(pending.repo, pending.number, hubDecisionComment(inbound));
@@ -211,14 +242,49 @@ async function triageHub(inbound, deps) {
     );
   }
 
-  // ② LLM 分类意图（与项目群同款调用：PERSONA system + json；X-Dao-* 溯源头由块 A 的 llm 注入）。
+  // 短问候不走盘点（#875）：确定性闸，不靠 LLM 先甩一整段盘点。
+  if (looksLikeGreeting(inbound.text)) {
+    if (!profileAllows(profile, 'greeting')) return refuse('greeting');
+    let text = GREETING_FALLBACK;
+    try {
+      const raw = await deps.llm({
+        system: hubSystem(inbound),
+        user: hubGreetingPrompt(inbound),
+        daoTask: 'hub-chat',
+      });
+      text = safeGreetingReply(raw);
+    } catch {
+      text = GREETING_FALLBACK;
+    }
+    return reply(text, { intent: 'greeting' });
+  }
+
+  // ② LLM 分类意图（与项目群同款调用：PERSONA + 本群人格；X-Dao-* 溯源头由块 A 的 llm 注入）。
   const cls = await llmJson(() => deps.llm({
-    system: PERSONA, user: hubClassifyPrompt(inbound), json: true, daoTask: 'hub-chat',
+    system: hubSystem(inbound), user: hubClassifyPrompt(inbound), json: true, daoTask: 'hub-chat',
   }));
-  const intent = HUB_INTENTS.includes(cls.intent) ? cls.intent : 'other';
+  let intent = HUB_INTENTS.includes(cls.intent) ? cls.intent : 'other';
+  if (intent === 'other' && looksLikeGreeting(inbound.text)) intent = 'greeting';
+
+  if (!profileAllows(profile, intent)) return refuse(intent);
 
   // 新需求建单仍归项目群——HUB_GUIDANCE 唯一保留的分支（#852）。
   if (intent === 'new_request') return reply(HUB_GUIDANCE, { intent });
+
+  if (intent === 'greeting') {
+    let text = GREETING_FALLBACK;
+    try {
+      const raw = await deps.llm({
+        system: hubSystem(inbound),
+        user: hubGreetingPrompt(inbound),
+        daoTask: 'hub-chat',
+      });
+      text = safeGreetingReply(raw);
+    } catch {
+      text = GREETING_FALLBACK;
+    }
+    return reply(text, { intent });
+  }
 
   const context = await readHubContextVia(deps);
 
@@ -239,11 +305,14 @@ async function triageHub(inbound, deps) {
   }
 
   // situation / other：聚合盘面作答（只读，不新增动词——#852 后台管理接线③）。
-  if (!allowed('situation')) {
+  // other 默认不在群白名单里，上面 profileAllows 已拒；走到这里 = 这群允许 other。
+  if (intent === 'situation' && !allowed('situation')) {
     return reply('总控群现在不答盘面。', { intent });
   }
   const answer = await deps.llm({
-    system: PERSONA, user: hubAnswerPrompt(inbound, buildHubContextBlock(context)), daoTask: 'hub-chat',
+    system: hubSystem(inbound),
+    user: hubAnswerPrompt(inbound, buildHubContextBlock(context)),
+    daoTask: 'hub-chat',
   });
   const text = String(answer ?? '').trim();
   if (!text) throw new Error('llm 空回答，不编造');
@@ -292,12 +361,24 @@ function hubClassifyPrompt(inbound) {
     `总控群里 ${inbound.senderName || inbound.senderOpenId} @机器人 说：`,
     inbound.text,
     '',
-    '判断意图，四选一：',
+    '判断意图，五选一：',
+    '- greeting：问候/闲聊（你好、在吗、hi）——只打招呼，不给盘点',
     '- situation：问盘面/进展/供应商健康/某张单的状态（只读问答）',
     '- decision：对某张待拍板的单给出拍板/确认/选择',
     '- new_request：提出要建单的新需求（要做新东西/改代码）',
-    '- other：其他（临时指令、问用法、闲聊）',
+    '- other：超范围（写代码、改配置、闲聊之外的事）',
+    '「你好」一律 greeting，不要判 situation。',
     '返回 JSON：{"intent":"situation","issueNumber":846,"reason":"一句话"}（没提到单号则 issueNumber 为 null）',
+  ].join('\n');
+}
+
+function hubGreetingPrompt(inbound) {
+  return [
+    `总控群里 ${inbound.senderName || inbound.senderOpenId} 说：`,
+    inbound.text,
+    '',
+    '这是问候。用一两句人话打招呼，不要盘点、不要待拍板列表、不要单号清单。',
+    '参照口吻：友好、短、像真人。例如「在的，有事直接说。」',
   ].join('\n');
 }
 
@@ -309,7 +390,7 @@ function hubAnswerPrompt(inbound, contextBlock) {
     '机读盘面（聚合自各项目指挥官态势 + 供应商健康表 + 熔断表）：',
     contextBlock,
     '',
-    '用盘面数据回答；数据里没有的就说没查到，不编造。提到单子带编号。',
+    '用盘面数据回答；数据里没有的就说没查到，不编造。提到单子带编号。回答里点明出处（态势/健康表/熔断）。',
     '说人话（对方是老板不是运维）：三段式——出了什么事 / 对他有什么影响 / 打算怎么办（要不要他拍）。',
     '不出现路径、命令、pid、timer、gw:/leg:/direct: 这类内部代号；供应商线路用日常叫法（如「grok 模型池」「codex 审官直连」）。一条回复 ≤ 8 行。',
   ].join('\n');

@@ -526,8 +526,9 @@ describe('#679 起审官同厂硬闸', () => {
     });
     await t.test('检查已接进 dao-check（不接 = 规矩没有哨）', () => {
       const src = require('fs').readFileSync(path.join(REPO, 'scripts', 'dao-check.mjs'), 'utf8');
-      assert.ok(/checkModelLabelNames\(\);/.test(src) && /model-label-name-check\.mjs/.test(src),
-        'dao-check 没调 checkModelLabelNames');
+      assert.match(src, /checkModelLabelNames\(\)/);
+      assert.match(src, /model-label-name-check\.mjs/);
+      assert.match(src, /if \(FULL\) checkModelLabelNames\(\)/);
     });
   });
 });

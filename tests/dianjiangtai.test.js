@@ -6,7 +6,7 @@
 //   ③ 空账本冷启动不出 NaN（三轮返工红4 的退化规则逐条覆盖：μ_global 空→0.5、
 //      n_model=0→Q_parent=μ_global、σ_parent 空→先验 σ=√(1/12)）
 //   ④ 事件写入工具：ULID+机器名文件名、一事件一文件、写一次即不可变、attr 不变量
-// 外加：政策 YAML 解析、schema 闭集派生（= 设计 16 种事件类型）、配额覆盖、禁令门闩。
+// 外加：政策 YAML 解析、schema 闭集派生（= 设计 16 种 + #891 会话态 4 种 = 20 种）、配额覆盖、禁令门闩。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -404,9 +404,11 @@ describe('dianjiangtai', () => {
 
   it('④ 事件写入工具', async (t) => {
     const meta = schemaMeta(schema);
-    const DESIGN_TYPES = ["job.opened", "job.dispatch", "job.meter", "job.handoff", "job.closed", "job.override", "job.explore", "attr.rule", "attr.llm", "attr.human", "attr.retract", "policy.patch", "sub.usage", "incident", "audit.bypass", "audit.stale"];
-    await t.test('schema 闭集派生 = 设计 16 种事件类型', () => {
-      assert.ok(meta.closedSet.length === 16 && DESIGN_TYPES.every(t => meta.closedSet.includes(t)) && meta.closedSet.every(t => DESIGN_TYPES.includes(t)), 'schema 闭集派生 = 设计 16 种事件类型  →  ' + meta.closedSet.join(","));
+    // 设计 16 种（docs/dianjiangtai-design.md A.1）+ #891 期一会话态 4 种。此处是「别悄悄加类型」的钉子，
+    // 唯一权威仍是 schemas/events.schema.json；加类型要连这枚钉子一起改。
+    const DESIGN_TYPES = ["job.opened", "job.dispatch", "job.meter", "job.handoff", "job.closed", "job.override", "job.explore", "attr.rule", "attr.llm", "attr.human", "attr.retract", "policy.patch", "sub.usage", "incident", "audit.bypass", "audit.stale", "session.state", "decision.pending", "decision.resolved", "session.milestone"];
+    await t.test('schema 闭集派生 = 20 种事件类型（设计 16 + #891 会话态 4）', () => {
+      assert.ok(meta.closedSet.length === 20 && DESIGN_TYPES.every(t => meta.closedSet.includes(t)) && meta.closedSet.every(t => DESIGN_TYPES.includes(t)), 'schema 闭集派生 = 20 种事件类型（设计 16 + #891 会话态 4）  →  ' + meta.closedSet.join(","));
     });
     await t.test('schema 派生必填：job.dispatch 要求 decision_id/model/terminal 等', () => {
       assert.ok(["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"].every(f => meta.requiredByType.get("job.dispatch").includes(f)), 'schema 派生必填：job.dispatch 要求 decision_id/model/terminal 等');

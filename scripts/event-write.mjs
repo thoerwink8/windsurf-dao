@@ -4,9 +4,13 @@
 // 一事件一文件：<账本目录>/<ulid>-<machine>.json（默认本机 ~/.dao/ledger/events，不进 git）；
 // 写一次即不可变（已存在/同内容均拒绝，
 // 纠错另立 attr.retract）。类型闭集与必填字段派生自 schemas/events.schema.json（唯一权威）。
-// 事件类型闭集（schema 派生，非抄清单）：job.opened / job.dispatch / job.meter / job.handoff /
-//   job.closed / job.override / job.explore / attr.rule / attr.llm / attr.human / attr.retract /
-//   policy.patch / sub.usage / incident / audit.bypass / audit.stale
+// [闭集镜子开始]  下面这份清单是 schemas/events.schema.json 的 oneOf[].title 派生注释，不是第二份权威。
+//   加/删类型改的是 schema，这几行必须跟着同步；对不上时 tests/session-events.test.js 报红。
+//   job.opened / job.dispatch / job.meter / job.handoff / job.closed / job.override / job.explore /
+//   attr.rule / attr.llm / attr.human / attr.retract / policy.patch / sub.usage / incident /
+//   audit.bypass / audit.stale / session.state / decision.pending / decision.resolved /
+//   session.milestone
+// [闭集镜子结束]
 //
 // 用法（通用：任何 --key value 进 payload，值先试 JSON 解析，失败按字符串）：
 //   node scripts/event-write.mjs --type job.dispatch --job-id dj-001 --model deepseek-v4-flash \
@@ -20,6 +24,16 @@
 //   node scripts/event-write.mjs --type job.meter --job-id dj-001 --model deepseek-v4-flash \
 //       --token-in 12000 --token-out 3000 --cache-hit 4000 --usd-cash 0.05 --ts ...
 //   node scripts/event-write.mjs --type policy.patch --summary "..." --changed-files '["policy/models.yml"]' --ts ...
+//   node scripts/event-write.mjs --type session.state --session-id s-001 --identity 帅 --phase 沉默 \
+//       --doing "在盯 W1 交卷" --next "串行合三张卡" --blocked false --pending-decision-id null \
+//       --digest 0f1e2d3c4b5a6978 --repo windsurf-dao --refs '["#891"]' --ts ...
+//   node scripts/event-write.mjs --type decision.pending --decision-id d-001 --question "先合哪张卡？" \
+//       --options '[{"label":"W1 先合","description":"schema 是另两张的地基"},{"label":"等三张齐"}]' \
+//       --recommend "W1 先合" --urgency 急 --why "另两张都读它派生的闭集" --ts ...
+//   node scripts/event-write.mjs --type decision.resolved --target-decision-id d-001 \
+//       --chosen '["W1 先合"]' --by 用户 --note "当场拍" --ts ...
+//   node scripts/event-write.mjs --type session.milestone --kind commit --repo windsurf-dao \
+//       --milestone-key commit:a1b2c3d --commit a1b2c3d --evidence '["exit_code=0","commit:a1b2c3d"]' --ts ...
 //
 // 选项：--dir <目录>（默认本机 ~/.dao/ledger/events）--machine <机器名>（默认本机 hostname）
 //       --seq N（默认自动：本机最大 seq + 1）--schema <schema 路径>
