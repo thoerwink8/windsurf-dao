@@ -362,6 +362,11 @@ board-gc、agent-stall-watch、看板**全都按卡遍历**——没有卡的进
 - reclaude 设备授权：v1.3.0 已装 `/home/orca/.local/bin/reclaude`，PATH 通，差一次浏览器点击。
   **授权之前不许写 `agentLaunch` 键**——写了服务器每个 mirasim claude 会话都会去跑
   未登录的 reclaude，当场全死。接法见 `docs/observations/2026-09-05-mirasim叠reclaude的接法.md`。
+- **orca 产品退役窗口连带做：windsurf-dao 迁 `/srv/projects/`**（用户 2026-09-06 拍板「两步走」，
+  见 #944 决策链）。新项目已定 `/srv/projects/`（ai-gateway-stack、miraquota-win 2026-09-06 已克隆进驻，
+  mirasim 工作区已登记）；windsurf-dao 押后到退役窗口，因为那时本来就要动 systemd 单元——
+  迁移必须一次 PR 同时换：7 个 systemd 单元路径、automations、检查闸判据、`host/machine/INDEX.md`
+  （判例：搬走真相源而检查器判据钉在旧位置＝守卫变永远红的噪音）。
 
 #### 新身份
 
