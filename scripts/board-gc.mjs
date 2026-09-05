@@ -11,8 +11,8 @@
 // 本命令是它的反面——**只清确实不需要的那几张**，其余一张不动。
 //
 // 用法：
-//   node scripts/board-gc.mjs                 只列判决，不动盘面
-//   node scripts/board-gc.mjs --apply         真删（逐卡整树，复用 worktree-rm 的占用闸与账本孤本闸）
+//   node scripts/board-gc.mjs                 只列判决，不动盘面（一个 git 写动作都没有）
+//   node scripts/board-gc.mjs --apply         先推 salvage 备份再真删（逐卡整树，复用 worktree-rm 的占用闸与账本孤本闸）
 //   node scripts/board-gc.mjs --say           把判决播一条进总控群
 //
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBoardGc, formatBoardGc } from './lib/board-gc.mjs';
+import { planBoardGc, formatBoardGc, planSalvage, applySalvage } from './lib/board-gc.mjs';
 import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
   sessionFromOrcaTerminal,
@@ -145,6 +145,52 @@ function fetchBranchState(worktrees) {
   return map;
 }
 
+/**
+ * 把一张 risky 卡的本地提交推成 salvage 备份分支（#950）。返回 { pushed, branch, error }，
+ * 只有 pushed === true 才允许后面删树——删树不可逆，这条分支是唯一的备份。
+ *
+ * 四道闸，每道对着一种「以为推上去了其实没有」：
+ *   ① 读不出本地 HEAD ⇒ 失败。连推的是哪个 commit 都不知道，就没法验证推没推成。
+ *   ② 远端有没有同名分支查不出来 ⇒ 失败。「没查成」不许当「远端没有」——
+ *      当成没有就会去推，推到别人的备份上。
+ *   ③ 远端已有同名且不是同一个 commit ⇒ 失败，绝不覆盖：覆盖等于把上一次的备份冲掉。
+ *      （同一个 commit 视为已经救过，直接算成功，重跑不报错。）
+ *   ④ push 退出码非 0，或推完回查远端 ref 对不上本地 HEAD ⇒ 失败。
+ *      push 说成功不等于远端真有那个 commit（钩子改写、推到别的仓、代理吞掉），
+ *      要删树就得看着备份落地（memory verify-credential-on-real-endpoint）。
+ * 全程不用 --force / --force-with-lease：这条路上没有任何「该覆盖」的情形。
+ */
+function pushSalvage({ path, salvageBranch }) {
+  const g = (args, timeout = 120000) => run('git', ['-C', path, ...args], { timeout });
+  const ref = `refs/heads/${salvageBranch}`;
+  const head = g(['rev-parse', 'HEAD'], 20000);
+  if (head.failed || head.code !== 0) return { pushed: false, error: `读不出本地 HEAD：${head.err.trim().slice(0, 120)}` };
+  const local = head.out.trim();
+  if (!/^[0-9a-f]{7,}$/i.test(local)) return { pushed: false, error: `本地 HEAD 读出来不像 commit：${local.slice(0, 40)}` };
+
+  const remoteOid = () => {
+    const r = g(['ls-remote', 'origin', ref]);
+    if (r.failed || r.code !== 0) return { ok: false, error: `问不出远端有没有 ${salvageBranch}（exit=${r.code}）${r.err.trim().slice(0, 120)}` };
+    const line = r.out.trim().split(/\r?\n/).filter(Boolean)[0];
+    return { ok: true, oid: line ? line.split(/\s+/)[0] : null };
+  };
+
+  const before = remoteOid();
+  if (!before.ok) return { pushed: false, error: before.error };
+  if (before.oid && before.oid !== local) {
+    return { pushed: false, error: `远端已有 ${salvageBranch}（${before.oid.slice(0, 8)}）且不是同一个 commit——不覆盖别人的备份` };
+  }
+  if (before.oid === local) return { pushed: true, branch: salvageBranch, note: '远端已有同一个 commit，不用再推' };
+
+  const p = g(['push', 'origin', `HEAD:${ref}`], 180000);
+  if (p.failed || p.code !== 0) return { pushed: false, error: `push 失败（exit=${p.code}）${(p.err.trim() || p.out.trim()).slice(0, 160)}` };
+
+  const after = remoteOid();
+  if (!after.ok) return { pushed: false, error: `推完回查没查成：${after.error}` };
+  if (after.oid !== local) return { pushed: false, error: `推完回查对不上：远端 ${String(after.oid).slice(0, 8)}，本地 ${local.slice(0, 8)}` };
+  return { pushed: true, branch: salvageBranch };
+}
+
 function say(text) {
   const fake = process.env.BOARD_GC_SAY;
   if (fake) { run(process.execPath, [fake, text]); return; }
@@ -214,28 +260,51 @@ function main() {
     issueState: issues,
   });
 
-  if (args.json) { console.log(JSON.stringify(plan, null, 2)); }
-  else console.log(formatBoardGc(plan, { apply: args.apply }));
+  // risky 里「只差一条远端备份」的那几张：先推备份，推成的才并进可清名单（#950）。
+  // 干跑一个 git 写动作都不许有——所以整段挂在 --apply 里，干跑只在报告里说「会推哪条」。
+  let final = plan;
+  const jobs = planSalvage(plan);
+  if (args.apply && jobs.length) {
+    const results = new Map();
+    for (const j of jobs) {
+      const r = pushSalvage(j);
+      results.set(j.id, r);
+      console.log(`${r.pushed ? '已备份' : '救不了'} ${j.name} → ${j.salvageBranch}${r.pushed ? (r.note ? `（${r.note}）` : '') : '：' + r.error}`);
+    }
+    final = applySalvage(plan, results);
+  }
 
-  if (!plan.ok) process.exit(2);
+  if (args.json) { console.log(JSON.stringify(final, null, 2)); }
+  else console.log(formatBoardGc(final, { apply: args.apply }));
+
+  if (!final.ok) process.exit(2);
 
   if (args.apply) {
-    for (const z of plan.zombies) {
+    for (const z of final.zombies) {
       const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + (r.err.trim() || r.out.trim()).slice(0, 200)}`);
     }
   }
 
   if (args.say) {
-    const head = `盘面清理：僵尸 ${plan.zombies.length} 张${args.apply ? '（已清）' : '（只列未清）'}`
-      + `，要人判 ${plan.risky.length} 张，没查成 ${plan.unscanned.length} 张`;
-    const detail = plan.risky.length
-      ? '\n要人判：\n· ' + plan.risky.map((r) => `${r.name}｜${r.why}`).join('\n· ')
+    const head = `盘面清理：僵尸 ${final.zombies.length} 张${args.apply ? '（已清）' : '（只列未清）'}`
+      + `，要人判 ${final.risky.length} 张，没查成 ${final.unscanned.length} 张`;
+    const detail = final.risky.length
+      ? '\n要人判：\n· ' + final.risky.map((r) => `${r.name}｜${r.why}`).join('\n· ')
       : '';
-    if (plan.zombies.length || plan.risky.length) say(head + detail);
+    if (final.zombies.length || final.risky.length) say(head + detail);
   }
 
-  process.exit(plan.risky.length ? 1 : 0);
+  process.exit(final.risky.length ? 1 : 0);
 }
 
-main();
+// 直接跑才执行；被 import 时只暴露函数（测试要拿 pushSalvage 去真 git 仓上试「不覆盖」那条闸，
+// 而这种闸只有在真 git 上试过才算数）。Windows 上大小写与斜杠都可能不一致，按规范化后比。
+const sameFile = (a, b) => {
+  if (!a || !b) return false;
+  const norm = (p) => resolve(p).replace(/\\/g, '/');
+  return process.platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+};
+if (sameFile(process.argv[1], HERE)) main();
+
+export { pushSalvage };

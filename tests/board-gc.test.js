@@ -498,3 +498,382 @@ describe('判定已交付的审官子卡可以单独出列', () => {
     assert.equal(p.zombies.length, 0);
   });
 });
+
+// ── #950：risky 卡自动 salvage ────────────────────────────────────────────────
+// 2026-09-05 人工救 ISSUE-#852 / #874 的两步（先把提交推成 salvage/<单号>-<短名>，再删树）
+// 自动化。每条反例都对着一种「以为救了其实没救」：推失败还照删、脏文件根本推不上去、
+// 把上一次的备份覆盖掉。删树不可逆，salvage 分支是唯一的备份，所以判据取最严的一档。
+const { spawnSync } = require('node:child_process');
+const os = require('node:os');
+
+describe('salvage 分支名：看得出救的是哪张卡，且是条合法分支名', () => {
+  it('有单号有分支名 → salvage/<单号>-<分支名>（照抄人工救那两张卡的格式）', async () => {
+    const { salvageBranchName } = await LOAD;
+    assert.equal(salvageBranchName({ name: 'ISSUE-#852 群聊直连', branch: 'hub-chat' }), 'salvage/852-hub-chat');
+    assert.equal(salvageBranchName({ name: 'ISSUE-#874 帅位职责', branch: 'refs/heads/duty' }), 'salvage/874-duty');
+  });
+
+  it('分支名全是中文 → 退回单号，不拼出半截乱码', async () => {
+    const { salvageBranchName } = await LOAD;
+    assert.equal(salvageBranchName({ name: 'ISSUE-#874 帅位职责制度化落地', branch: '帅位职责' }), 'salvage/874');
+  });
+
+  it('没单号 → 用分支名，仍看得出从哪来', async () => {
+    const { salvageBranchName } = await LOAD;
+    assert.equal(salvageBranchName({ name: '临时试验', branch: 'wip-probe' }), 'salvage/wip-probe');
+  });
+
+  it('单号和分支名都拼不出字符 → null（名字猜不得，宁可不救）', async () => {
+    const { salvageBranchName } = await LOAD;
+    assert.equal(salvageBranchName({ name: '中文卡', branch: '中文分支' }), null);
+    assert.equal(salvageBranchName({}), null);
+  });
+
+  it('拼出来的必须是 git 收得下的分支名：无空格无 # 无 .. 不以 - 结尾', async () => {
+    const { salvageBranchName } = await LOAD;
+    for (const b of ['feat/a b#c..d', '../../etc/passwd', 'x'.repeat(120), 'trailing---']) {
+      const n = salvageBranchName({ name: 'ISSUE-#7 x', branch: b });
+      assert.match(n, /^salvage\/[A-Za-z0-9_-]+$/, `${b} → ${n}`);
+      assert.ok(!n.includes('..') && !n.endsWith('-'), n);
+      assert.ok(n.length < 64, `太长：${n}`);
+    }
+  });
+});
+
+describe('哪种 risky 卡能自动救（反证：正常那条必须真的走通）', () => {
+  const one = async (bs) => {
+    const { planBoardGc, planSalvage } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#852 群聊直连', branch: 'refs/heads/hub-chat' })],
+      aliveWorktreeIds: NONE, prState: {}, branchState: { 'hub-chat': bs },
+    });
+    return { p, jobs: planSalvage(p) };
+  };
+
+  it('无远端 + 有提交 + 树干净 → 标成可救，带上要推的分支名', async () => {
+    const { p, jobs } = await one({ onRemote: false, ahead: 5, dirty: 0, contributes: true });
+    assert.equal(p.risky.length, 1);
+    assert.equal(p.risky[0].salvage.branch, 'salvage/852-hub-chat');
+    assert.equal(jobs.length, 1, '正常情况必须真能派出救援任务，否则判据是恒拒');
+    assert.equal(jobs[0].path, '/w/a');
+  });
+
+  it('合不干净（判不了是不是陈旧副本）也能救——备份让「删了会丢」这个理由不成立', async () => {
+    const { p, jobs } = await one({ onRemote: false, ahead: 3, dirty: 0, contributes: null });
+    assert.match(p.risky[0].why, /合不干净/);
+    assert.equal(jobs.length, 1);
+  });
+
+  it('故意违规样本①：有未提交改动 → 不自动救，只播报（push 推不上没提交的东西）', async () => {
+    const { p, jobs } = await one({ onRemote: false, ahead: 2, dirty: 4, contributes: true });
+    assert.equal(p.risky.length, 1);
+    assert.equal(p.risky[0].salvage, undefined, '脏卡不许带救援标记');
+    assert.match(p.risky[0].salvageBlocked, /未提交改动/);
+    assert.equal(jobs.length, 0, '脏卡不许进救援名单');
+    assert.equal(p.zombies.length, 0);
+  });
+
+  it('故意违规样本②：脏卡就算被塞进一条「推成功」的结果，也一张都不删', async () => {
+    const { planBoardGc, applySalvage } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#852 群聊直连', branch: 'refs/heads/hub-chat' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { 'hub-chat': { onRemote: false, ahead: 2, dirty: 4, contributes: true } },
+    });
+    const after = applySalvage(p, { a: { pushed: true, branch: 'salvage/852-hub-chat' } });
+    assert.equal(after.zombies.length, 0, '没标可救的卡，伪造结果也不该让它变可清');
+    assert.equal(after.risky.length, 1);
+  });
+
+  it('分支已在远端 → 本来就有备份，不进 risky 也不救', async () => {
+    const { p, jobs } = await one({ onRemote: true, ahead: 5, dirty: 0, contributes: true });
+    assert.equal(p.risky.length, 0);
+    assert.equal(jobs.length, 0);
+    assert.equal(p.keep.length, 1);
+  });
+
+  it('分支在远端但合不干净 → 仍要人判，但不再推一条备份（已经有了）', async () => {
+    const { p, jobs } = await one({ onRemote: true, ahead: 4, dirty: 0, contributes: null });
+    assert.equal(p.risky.length, 1);
+    assert.match(p.risky[0].salvageBlocked, /已在远端/);
+    assert.equal(jobs.length, 0, '同一份内容不该在远端存两条');
+  });
+
+  it('卡上没有树路径 → 推不了，不救（理由要写出来，别让它无声无息挂着）', async () => {
+    const { planBoardGc, planSalvage } = await LOAD;
+    const w = card({ id: 'a', name: 'ISSUE-#852 群聊直连', branch: 'refs/heads/hub-chat' });
+    w.path = null;
+    const p = planBoardGc({
+      worktrees: [w], aliveWorktreeIds: NONE, prState: {},
+      branchState: { 'hub-chat': { onRemote: false, ahead: 5, dirty: 0, contributes: true } },
+    });
+    assert.match(p.risky[0].salvageBlocked, /树路径/);
+    assert.equal(planSalvage(p).length, 0);
+  });
+
+  it('干跑报告要说清「会推哪条」和「为什么没救」', async () => {
+    const { planBoardGc, formatBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'a', name: 'ISSUE-#852 群聊直连', branch: 'refs/heads/hub-chat' }),
+        card({ id: 'b', name: 'ISSUE-#853 脏树', branch: 'refs/heads/dirty-one' }),
+      ],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: {
+        'hub-chat': { onRemote: false, ahead: 5, dirty: 0, contributes: true },
+        'dirty-one': { onRemote: false, ahead: 1, dirty: 2, contributes: true },
+      },
+    });
+    const txt = formatBoardGc(p, { apply: false });
+    assert.match(txt, /可自动救：--apply 会先推 salvage\/852-hub-chat/);
+    assert.match(txt, /不自动救：.*未提交改动/);
+  });
+});
+
+describe('推成了才准清树（applySalvage 是删树前最后一道闸）', () => {
+  const plan = async () => {
+    const { planBoardGc } = await LOAD;
+    return planBoardGc({
+      worktrees: [card({ id: 'a', name: 'ISSUE-#852 群聊直连', branch: 'refs/heads/hub-chat' })],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { 'hub-chat': { onRemote: false, ahead: 5, dirty: 0, contributes: true } },
+    });
+  };
+
+  it('推成了 → 转判可清，说明里带上备份在哪（反证：这条路必须真能走通）', async () => {
+    const { applySalvage } = await LOAD;
+    const after = applySalvage(await plan(), new Map([['a', { pushed: true, branch: 'salvage/852-hub-chat' }]]));
+    assert.equal(after.risky.length, 0);
+    assert.equal(after.zombies.length, 1);
+    assert.equal(after.zombies[0].kind, 'salvaged');
+    assert.match(after.zombies[0].why, /salvage\/852-hub-chat/);
+  });
+
+  it('故意违规样本③：推失败 → 一张都不删，理由写进 risky', async () => {
+    const { applySalvage } = await LOAD;
+    const after = applySalvage(await plan(), { a: { pushed: false, error: '没网' } });
+    assert.equal(after.zombies.length, 0, 'push 没成功而树被删 = 活丢了');
+    assert.equal(after.risky.length, 1);
+    assert.match(after.risky[0].why, /自动 salvage 没成：没网/);
+  });
+
+  it('故意违规样本：压根没拿到推送结果 → 不删（没查成 ≠ 推成了）', async () => {
+    const { applySalvage } = await LOAD;
+    for (const r of [new Map(), {}, null, undefined, { a: null }, { a: 'ok' }]) {
+      const after = applySalvage(await plan(), r);
+      assert.equal(after.zombies.length, 0, `results=${JSON.stringify(r)} 不该删`);
+      assert.equal(after.risky.length, 1);
+    }
+  });
+
+  it('故意违规样本：pushed 是字符串 "true" → 不删（只认布尔真）', async () => {
+    const { applySalvage } = await LOAD;
+    const after = applySalvage(await plan(), { a: { pushed: 'true', branch: 'salvage/852-hub-chat' } });
+    assert.equal(after.zombies.length, 0);
+  });
+
+  it('故意违规样本：推成了但推的是另一条分支 → 不删（备份不在说好的地方）', async () => {
+    const { applySalvage } = await LOAD;
+    const after = applySalvage(await plan(), { a: { pushed: true, branch: 'salvage/别的' } });
+    assert.equal(after.zombies.length, 0);
+    assert.match(after.risky[0].why, /不是 salvage\/852-hub-chat/);
+  });
+
+  it('原本就判出来的僵尸、留着、没查成三节，救援一步都不动它们', async () => {
+    const { planBoardGc, applySalvage } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'z', name: 'PR-#10 工人·x' }),
+        card({ id: 'k', name: 'PR-#11 工人·y' }),
+        card({ id: 'u', name: 'PR-#12 工人·z' }),
+      ],
+      aliveWorktreeIds: NONE, prState: { 10: 'MERGED', 11: 'OPEN' }, branchState: {},
+    });
+    const after = applySalvage(p, new Map());
+    assert.deepEqual(after.zombies, p.zombies);
+    assert.deepEqual(after.keep, p.keep);
+    assert.deepEqual(after.unscanned, p.unscanned);
+  });
+
+  it('判决本身没跑成 → 原样退回，不凭空造出可清名单', async () => {
+    const { planBoardGc, applySalvage, planSalvage } = await LOAD;
+    const bad = planBoardGc({ worktrees: null, aliveWorktreeIds: new Set() });
+    assert.equal(applySalvage(bad, { a: { pushed: true } }).zombies.length, 0);
+    assert.equal(planSalvage(bad).length, 0);
+  });
+});
+
+// 上面几条都是纯函数层的判据。真正会把备份冲掉的是 git 那一步，所以这一节在真 git 仓上跑：
+// 临时建一个 bare 当 origin，造出「远端已有同名 salvage 分支」的违规样本，看它被不被拦。
+describe('pushSalvage 真 git：不覆盖、不谎报', () => {
+  const DRIVER = import('file://' + path.join(__dirname, '..', 'scripts', 'board-gc.mjs').replace(/\\/g, '/'));
+  const REF = 'refs/heads/salvage/900-probe';
+
+  const git = (cwd, args) => spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args],
+    { encoding: 'utf8', windowsHide: true });
+  const oidOnOrigin = (work) => {
+    const r = git(work, ['ls-remote', 'origin', REF]);
+    assert.equal(r.status, 0, r.stderr);
+    const line = r.stdout.trim().split(/\r?\n/).filter(Boolean)[0];
+    return line ? line.split(/\s+/)[0] : null;
+  };
+  const commit = (work, file, text) => {
+    fs.writeFileSync(path.join(work, file), text);
+    assert.equal(git(work, ['add', '-A']).status, 0);
+    assert.equal(git(work, ['commit', '-m', file]).status, 0);
+    return git(work, ['rev-parse', 'HEAD']).stdout.trim();
+  };
+
+  const withRepo = async (fn) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-salvage-'));
+    const origin = path.join(root, 'origin.git');
+    const work = path.join(root, 'work');
+    fs.mkdirSync(work);
+    assert.equal(spawnSync('git', ['init', '--bare', origin], { encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['init', work], { encoding: 'utf8' }).status, 0);
+    assert.equal(git(work, ['remote', 'add', 'origin', origin]).status, 0);
+    try { await fn({ root, origin, work }); }
+    finally { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响判定 */ } }
+  };
+
+  it('远端没有同名分支 → 推上去，且远端那条 ref 真的等于本地 HEAD（反证：正常路走得通）', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ work }) => {
+      const head = commit(work, 'a.txt', 'one');
+      const r = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(r.pushed, true, r.error);
+      assert.equal(r.branch, 'salvage/900-probe');
+      assert.equal(oidOnOrigin(work), head, '说推成了就得真在远端');
+    });
+  });
+
+  it('故意违规样本③：远端已有同名分支且是别的 commit → 判失败，远端那条一个字没变', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ work }) => {
+      const first = commit(work, 'a.txt', 'one');
+      assert.equal(git(work, ['push', 'origin', 'HEAD:' + REF]).status, 0, '先造出「上一次的备份」');
+      const second = commit(work, 'b.txt', 'two');
+      assert.notEqual(first, second);
+      const r = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(r.pushed, false);
+      assert.match(r.error, /不覆盖/);
+      assert.equal(oidOnOrigin(work), first, '上一次的备份被冲掉了——这正是不许发生的事');
+    });
+  });
+
+  it('远端已有同名分支且就是同一个 commit → 算已经救过，重跑不报错也不重推', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ work }) => {
+      const head = commit(work, 'a.txt', 'one');
+      assert.equal(pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' }).pushed, true);
+      const again = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(again.pushed, true);
+      assert.equal(oidOnOrigin(work), head);
+    });
+  });
+
+  it('故意违规样本：远端问不出来（origin 指向不存在的地方）→ 判失败，不当成「远端没有」', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ root, work }) => {
+      commit(work, 'a.txt', 'one');
+      assert.equal(git(work, ['remote', 'set-url', 'origin', path.join(root, 'no-such-repo.git')]).status, 0);
+      const r = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(r.pushed, false);
+      assert.match(r.error, /问不出|push 失败/);
+    });
+  });
+
+  it('故意违规样本：push 报成功、远端那条 ref 却不是本地 HEAD → 判失败（推完必须回查）', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ origin, work }) => {
+      const first = commit(work, 'a.txt', 'one');
+      const second = commit(work, 'b.txt', 'two');
+      // 远端收下推送后立刻把 ref 改回旧 commit（真实里对应钩子改写／推错仓／代理吞掉）：
+      // push 退出码照样是 0，而备份并不是我们以为的那个。只信退出码就会在这里删掉活。
+      fs.writeFileSync(path.join(origin, 'hooks', 'post-receive'),
+        '#!/bin/sh\ngit update-ref ' + REF + ' ' + first + '\n', { mode: 0o755 });
+      const r = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(r.pushed, false, 'push 说成功 ≠ 备份落在说好的地方');
+      assert.match(r.error, /回查对不上/);
+      assert.equal(oidOnOrigin(work), first);
+      assert.notEqual(oidOnOrigin(work), second);
+    });
+  });
+
+  it('故意违规样本：树里一个提交都没有 → 读不出 HEAD，判失败（不知道推的是什么就不推）', async () => {
+    const { pushSalvage } = await DRIVER;
+    await withRepo(async ({ work }) => {
+      const r = pushSalvage({ path: work, salvageBranch: 'salvage/900-probe' });
+      assert.equal(r.pushed, false);
+      assert.match(r.error, /HEAD/);
+    });
+  });
+});
+
+describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
+
+  it('pushSalvage 只有一处调用，且在 --apply 里面', () => {
+    const hits = src.match(/pushSalvage\(/g) || [];
+    assert.equal(hits.length, 2, '一处定义一处调用；多出来的调用可能跑在干跑路径上');
+    const i = src.indexOf('pushSalvage(j)');
+    assert.ok(i > -1, '找不到调用点，判据已失效');
+    assert.match(src.slice(Math.max(0, i - 300), i), /if \(args\.apply/);
+  });
+
+  it('干跑不许把 risky 转成可清：applySalvage 也在 --apply 里面', () => {
+    const i = src.indexOf('applySalvage(plan');
+    assert.ok(i > -1);
+    assert.match(src.slice(Math.max(0, i - 400), i), /if \(args\.apply/);
+  });
+
+  it('删树读的是救援之后的名单，不是原判决', () => {
+    const i = src.indexOf("'worktree-rm'");
+    assert.match(src.slice(Math.max(0, i - 300), i), /for \(const z of final\.zombies\)/);
+  });
+
+  it('永远不许 --force：这条路上没有任何该覆盖的情形', () => {
+    // 只看真传给 git 的参数（带引号的那种），不看注释里提到的字样——
+    // 注释解释「为什么不用 --force」是好事，被自己的注释判红就没人敢写解释了。
+    assert.doesNotMatch(src, /['"`]--force/);
+  });
+
+  it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {
+    assert.match(src, /planSalvage, applySalvage \} from '\.\/lib\/board-gc\.mjs'/);
+  });
+
+  it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
+    // 喂一个什么都不吐的假 orca：盘面查不成 → 退出码 2。如果 main 没跑，退出码会是 0，
+    // 命令看着还在、其实一轮都不干活——加那个开关最可能造成的正是这种静默失效。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-noorca-'));
+    const fake = path.join(dir, 'orca.mjs');
+    fs.writeFileSync(fake, '// 假 orca：一个字都不输出\n');
+    try {
+      const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
+        encoding: 'utf8', windowsHide: true, timeout: 60000,
+        env: { ...process.env, BOARD_GC_ORCA: fake },
+      });
+      assert.equal(r.status, 2, '盘面查不成该以 2 收场；如果是 0，多半是 main 根本没跑');
+      assert.match(String(r.stderr), /盘面没查成/);
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响判定 */ } }
+  });
+});
+
+// salvage 分支只保命、不开 PR——它永远不会「已合并」，收工令必须留着它。
+describe('收工令不许把没合的 salvage 分支当垃圾清掉', () => {
+  const LAND = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'land-core.mjs').replace(/\\/g, '/'));
+
+  it('未合并的 salvage 分支 → 不删', async () => {
+    const { decideBranchDelete } = await LAND;
+    const d = decideBranchDelete({ name: 'salvage/852-hub-chat', merged: false, isDefault: false, isCurrent: false, checkedOutAt: '' });
+    assert.equal(d.del, false);
+    assert.match(d.reason, /未合并/);
+  });
+
+  it('land.mjs 删本地分支只看「已合并进默认分支」，远端那节只列不删', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'land.mjs'), 'utf8');
+    assert.match(src, /'branch', '--merged'/, '删支判据必须是 --merged；换成别的判据就可能扫到 salvage');
+    assert.match(src, /只列不删/);
+    assert.doesNotMatch(src, /'push', '--delete'|'--delete', 'origin'/, '收工令不许删远端分支');
+  });
+});

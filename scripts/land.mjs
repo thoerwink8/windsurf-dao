@@ -18,7 +18,10 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork } from './lib/land-core.mjs';
+import {
+  decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork,
+  collectBranchMergeFacts,
+} from './lib/land-core.mjs';
 
 const FLAGS = new Set(['--dry-run', '--has-work']);
 const DRY = process.argv.includes('--dry-run');
@@ -119,6 +122,10 @@ for (let i = 0; i < worktrees.length; i++) {
   const d = decideWorktreeRemove({
     branch: w.branch,
     merged: !!w.branch && mergedSet.has(w.branch),
+    // squash 合并会产生全新 commit，原分支的提交在 master 里根本不存在，
+    // 所以 `--merged` 这类按提交号比对的判据必然判「没合」——审官树因此每合一个 PR 漏拆一棵（#839）。
+    // 按**内容**再问一次：合进去树变不变。变=真有没落地的活，不变=已经在里面了。
+    ...(w.branch ? (({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: w.branch, defaultBranch })) : { contributes: null, everHadContent: null }),
     dirty: git(['status', '--porcelain'], { cwd: abs }).out !== '',
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
@@ -145,6 +152,7 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
   const d = decideBranchDelete({
     name,
     merged: mergedSet.has(name),
+    ...(({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: name, defaultBranch })),
     isDefault: name === defaultBranch,
     isCurrent: name === branch,
     checkedOutAt: checkedOut.get(name) !== undefined && resolve(checkedOut.get(name)).toLowerCase() !== resolve(root).toLowerCase() ? checkedOut.get(name) : '',
@@ -153,7 +161,9 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
   deleteCount += 1;
   if (HAS_WORK) { say(`[收工] 有活：删支 ${name}`); continue; }
   if (DRY) { say(`[收工] [拟] 删支 ${name}`); continue; }
-  const r = git(['branch', '-d', name]); // -d：git 自己再拦一道未合并
+  // squash 之后 `branch -d` 必然拒绝（它也只认提交号），而那个拒绝正是 #839 的病。
+  // 只有按内容证明过「合进去等于没合」的才回 -D；其余一律 -d，保住「宁可删不掉不可删错」。
+  const r = git(['branch', d.flag || '-d', name]);
   say(r.status === 0 ? `[收工] 删支 ${name}` : `[收工] 删支失败 ${name}：${r.err.slice(0, 120)}`);
 }
 

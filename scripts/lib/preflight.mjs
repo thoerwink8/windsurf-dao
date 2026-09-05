@@ -298,6 +298,16 @@ export async function runPreflight({
       // 继续看后面有没有能探到绿的；没有再回退到它。
       continue;
     }
+    if (r.state === 'no_finish') {
+      // #953 新加的第四态：2xx + 有真内容，但没见到收尾事件。通道**是通的**，只是这一次流被掐了。
+      // 不许当绿（它掩盖的正是 `stream ended before message_stop` 那类故障），
+      // 也不许当红——判红会当场换模型，而网关偶尔漏一个收尾事件就把好通道换掉，
+      // 派工会莫名其妙地换人甚至停手（2026-09-05 实咬：加完这一态没接下游，dao.test.js 间歇红）。
+      // 走 unscanned 同样的保守路：先看后面有没有真绿的，没有再回退用它。
+      if (!firstUnscanned) firstUnscanned = c;
+      reasons[c.id] = [...(reasons[c.id] || []), `no_finish:${r.why || '没见到收尾'}`];
+      continue;
+    }
     // red：换下一位；记失败事件（判定在纯函数里）
     reasons[c.id] = [...(reasons[c.id] || []), `probe:red(${r.code ?? '—'})`];
     if (rec.target) {

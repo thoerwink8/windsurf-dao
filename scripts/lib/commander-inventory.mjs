@@ -352,13 +352,34 @@ export function runStatus({ rest, ROOT }) {
 }
 
 // ── install 子命令：幂等写 systemd service+timer ──
+
+// 单元里的 PATH 必须显式写死。systemd 不读 orca 的 shell profile，oneshot 拿到的 PATH 只有
+// /usr/bin:/bin，于是指挥官调 orca（bare name，见 lib/orca-run.mjs，没有绝对路径兜底）和
+// hub-say 全是 ENOENT——2026-09-03 实咬 #848：首轮 act 找不到 orca 被 unscanned fail-closed 拦下、
+// 群通知整轮静默，靠手糊的 drop-in 垫片才跑起来。同一坑 agent-stall-watch 已经踩过一次。
+// 值与 host/machine/systemd/*.service 里手写的那几个必须一致（tests/commander-install.test.js 盯着）。
+export const UNIT_PATH = '/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin';
+// 指挥官真正要在 PATH 里找到的外部命令住在哪。改 UNIT_PATH 前先确认这几条还在里面。
+export const UNIT_TOOL_DIRS = { orca: '/home/orca/.local/bin', 'hub-say': '/home/orca/bin' };
+
+// 2026-09-03 那两份 drop-in 垫片。正式模板带上 PATH 之后它们该退役——留着不会坏事，
+// 但它是影子制度：下次有人改 UNIT_PATH 会发现改了不生效。装机时看一眼，在就报一句。
+const PATH_SHIMS = [
+  '/etc/systemd/system/commander-act.service.d/path.conf',
+  '/etc/systemd/system/commander-inventory.service.d/path.conf',
+];
+/** 垫片还在不在（exists 可注入，供测试）。回空数组 = 查过没有，不是没查。 */
+export function findPathShims(exists = existsSync) {
+  return PATH_SHIMS.filter((p) => exists(p));
+}
+
 function unit(desc, execArgs) {
-  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/home/orca/windsurf-dao\nExecStart=/usr/bin/node ${execArgs}\n`;
+  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/home/orca/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
 function timer(desc, activeSec) {
   return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
 }
-const INSTALL_FILES = () => ({
+export const INSTALL_FILES = () => ({
   '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs act'),
   '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min'),
   '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs inventory'),
@@ -386,8 +407,13 @@ export function runInstall({ rest, ROOT }) {
   }
   const enableCmds = ['sudo systemctl daemon-reload',
     'sudo systemctl enable --now commander-act.timer commander-inventory.timer'];
-  console.log(JSON.stringify({ dryRun, changed, plan: plan.map((p) => p.trim()), enable: enableCmds }, null, 2));
+  const shims = findPathShims();
+  const retire = shims.length ? [`sudo rm -f ${shims.join(' ')}`, 'sudo systemctl daemon-reload'] : [];
+  console.log(JSON.stringify({ dryRun, changed, plan: plan.map((p) => p.trim()), enable: enableCmds, shims, retire }, null, 2));
   console.error(plan.join('\n'));
+  if (shims.length) {
+    console.error(`  PATH 垫片还在 ${shims.length} 份（模板已自带 PATH，它可以退役了）：\n    ${retire.join('\n    ')}`);
+  }
   if (changed && !dryRun) {
     // 连跑两遍不产生第二份：内容相同就不重写（上面已判）；enable 交给下面两条（幂等）。
     const dr = sh('systemctl', ['daemon-reload']);

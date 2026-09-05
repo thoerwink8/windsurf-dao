@@ -18,6 +18,11 @@
 //   - 分支不在远端、而树里还有本地提交或脏文件 ⇒ risky，只报不删。
 //     远端有分支 = 活已经在 GitHub 上，本地树删了也丢不了；远端没有 = 删了就没了。
 //     （memory deleted-card-process-outlived-it：判「安全删」不能只看外部产出。）
+//
+// risky 里「只差一条备份」的那一类可以自动救（#950）：先把提交推成 salvage/<单号>-<短名>，
+// 远端有了备份，「删了就没了」这个理由当场不成立，卡就能清。
+// 2026-09-05 人工救 ISSUE-#852 / #874 走的就是这两步，这里把它自动化。
+// 推与删的顺序不可换，也不可省：push 没成功而树删了 = 活真丢了（删树不可逆，salvage 是唯一备份）。
 
 import { worktreeIdOf, prNumberFromWorktree } from './card-identity.mjs';
 
@@ -63,6 +68,98 @@ function prVerdict(raw) {
   if (s === 'CLOSED') return 'done';
   if (s === 'OPEN') return 'open';
   return null;
+}
+
+/** 只留 [A-Za-z0-9_-]，其余一律并成一个 -。git 收中文分支名，但备份分支要的是好敲好认。 */
+function slugify(s) {
+  return String(s || '')
+    .replace(/^refs\/heads\//, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '');
+}
+
+/**
+ * salvage 分支名，形如 salvage/852-hub-chat。
+ * 格式照抄 2026-09-05 人工救那两张卡时用的（远端现存 salvage/852-hub-chat、salvage/874-duty），
+ * 不另发明一套——认得出是同一类东西，人才不会把它当垃圾删。
+ * 名字里必须留得下「从哪来」：有单号带单号，没单号就用源分支名。半年后看到一条 salvage
+ * 分支却说不出它救的是哪张卡，这条备份等于没有。
+ * 拼不出可用字符（比如分支名全是中文又没单号）就返回 null——名字猜不得，宁可不救。
+ */
+export function salvageBranchName({ name, branch } = {}) {
+  const issue = issueNumberFromCardName({ displayName: name });
+  // 分支名拼不出字符（比如全中文）才退回卡名；卡名开头的「ISSUE-#874」要先摘掉，
+  // 否则拼出 salvage/874-ISSUE-874 这种自己重复自己的名字。
+  const nameTail = String(name || '').replace(/^\s*ISSUE[-\s]*#?\d+[-\s]*/i, '');
+  const tail = (slugify(branch) || slugify(nameTail)).slice(0, 40).replace(/[-_]+$/, '');
+  const parts = [issue == null ? '' : String(issue), tail].filter(Boolean);
+  if (!parts.length) return null;
+  return `salvage/${parts.join('-')}`;
+}
+
+/**
+ * 这张 risky 卡能不能自动救。四个条件缺一不可：
+ *   - 有本地提交（ahead > 0）：没提交就没有东西可推。
+ *   - 没有未提交改动（dirty === 0）：push 推的是提交，脏文件推不上去。
+ *     那为什么不替它先提交一把再推？因为 GC 判不了那半截改动是废稿还是活，
+ *     一把 add -A 会把不该进库的东西（大文件、密钥、别人的半成品）一起提交，
+ *     而共用工作树里「顺手提交别人的改动」正是 memory uncommitted-work-gets-swept 那次事故。
+ *     救活的前提是知道在救什么——脏卡一律不自动救，仍然只播报给人判。
+ *   - 分支不在远端：已经在远端的本来就有备份，不用再造一条。
+ *   - 有树路径、拼得出名字：推不了的不硬推。
+ */
+export function salvageDecision({ name, branch, path, ahead, dirty, onRemote } = {}) {
+  if (!(Number(ahead) > 0)) return { ok: false, why: '没有本地提交，没东西可推' };
+  if (Number(dirty) > 0) return { ok: false, why: `有 ${dirty} 个未提交改动，push 救不了——只报不删` };
+  if (onRemote) return { ok: false, why: '分支已在远端，本来就有备份' };
+  if (!path) return { ok: false, why: '卡上没有树路径，推不了' };
+  const b = salvageBranchName({ name, branch });
+  if (!b) return { ok: false, why: '拼不出 salvage 分支名（卡名和分支名里没有可用字符）' };
+  return { ok: true, branch: b };
+}
+
+/** 从判决里挑出「能自动救的 risky 卡」交给驱动层去推。纯函数，一个 git 都不碰。 */
+export function planSalvage(plan) {
+  if (!plan || plan.ok !== true || !Array.isArray(plan.risky)) return [];
+  return plan.risky.filter((r) => r && r.salvage && r.salvage.branch).map((r) => ({
+    id: r.id, name: r.name, path: r.path, branch: r.branch, salvageBranch: r.salvage.branch,
+  }));
+}
+
+/** 推没推成的判据。只认 pushed === true，其余（没结果 / 'true' / false / 推到别处）一律算没成。 */
+function whyNotSalvaged(res, card) {
+  if (!res || typeof res !== 'object') return '没拿到推送结果';
+  if (res.pushed !== true) return String(res.error || '推送没报成功');
+  if (res.branch !== card.salvage.branch) return `推到的是 ${res.branch || '(没说)'}，不是 ${card.salvage.branch}`;
+  return null;
+}
+
+/**
+ * 把推送结果并回判决：推成了的卡转判可清，没推成的留在 risky 并写明为什么。
+ * 这个「一律留」是整条路上唯一挡在删树前面的闸——删树不可逆，而 salvage 分支是唯一备份，
+ * 所以判据取最严的一档：拿不到结果、结果不是布尔真、推到的分支对不上，全算没推成。
+ *
+ * @param results 卡 id → { pushed: true|false, branch, error }
+ */
+export function applySalvage(plan, results) {
+  if (!plan || plan.ok !== true) return plan;
+  const zombies = [...(plan.zombies || [])];
+  const risky = [];
+  for (const r of (plan.risky || [])) {
+    if (!r || !r.salvage) { risky.push(r); continue; }
+    const bad = whyNotSalvaged(lookup(results, r.id), r);
+    if (bad) {
+      risky.push({ ...r, why: `${r.why}｜自动 salvage 没成：${bad}`, salvageError: bad });
+      continue;
+    }
+    zombies.push({
+      id: r.id, name: r.name, path: r.path || null, kind: 'salvaged',
+      salvageBranch: r.salvage.branch,
+      why: `${r.salvage.ahead} 个本地提交已推到 ${r.salvage.branch}，远端有备份，删本地树不丢活`,
+    });
+  }
+  return { ...plan, zombies, risky };
 }
 
 /**
@@ -234,6 +331,15 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
     }
     const ahead = Number(bs.ahead) || 0;
     const dirty = Number(bs.dirty) || 0;
+    // risky 卡统一从这里出，顺手判它能不能自动救（#950）。能救的带 salvage.branch，
+    // 不能救的把理由写进 salvageBlocked——「为什么没自动救」要看得见，否则人只会看见它一直挂着。
+    const riskyCard = (why) => {
+      const d = salvageDecision({ name, branch, path: w.path || null, ahead, dirty, onRemote: !!bs.onRemote });
+      return {
+        id, name, path: w.path || null, branch, why,
+        ...(d.ok ? { salvage: { branch: d.branch, ahead } } : { salvageBlocked: d.why }),
+      };
+    };
     if (ahead === 0 && dirty === 0) {
       zombies.push({
         id, name, path: w.path || null, kind: 'empty-branch',
@@ -244,7 +350,7 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
     }
     // 没提交的改动永远不可能已经在 master 里，先判掉，不进后面的贡献判据。
     if (dirty > 0 && !bs.onRemote) {
-      risky.push({ id, name, path: w.path || null, why: `无 PR，分支 ${branch} 不在远端且有 ${dirty} 个未提交改动——删了就没了，要人判` });
+      risky.push(riskyCard(`无 PR，分支 ${branch} 不在远端且有 ${dirty} 个未提交改动——删了就没了，要人判`));
       continue;
     }
     // 「有几个本地提交」不等于「有活会丢」：分支常常是同一件事的旧实现，master 已经用别的 PR 落了。
@@ -262,14 +368,13 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
       continue;
     }
     if (bs.contributes !== true) {
-      risky.push({ id, name, path: w.path || null, why: `无 PR，分支 ${branch} 有 ${ahead} 个提交但合不干净（有冲突），是不是陈旧副本判不了——要人判` });
+      // 合不干净的也能救：不知道它是不是陈旧副本，但推一条备份之后「删了会丢」不再成立。
+      // 备份是把「判不了」变成「删了也不怕」，不是把「判不了」变成「判得了」。
+      risky.push(riskyCard(`无 PR，分支 ${branch} 有 ${ahead} 个提交但合不干净（有冲突），是不是陈旧副本判不了——要人判`));
       continue;
     }
     if (!bs.onRemote) {
-      risky.push({
-        id, name, path: w.path || null,
-        why: `无 PR，分支 ${branch} 不在远端却有 ${ahead} 个 master 没有的提交——删了就没了，要人判`,
-      });
+      risky.push(riskyCard(`无 PR，分支 ${branch} 不在远端却有 ${ahead} 个 master 没有的提交——删了就没了，要人判`));
       continue;
     }
     keep.push({ id, name, why: `无 PR，但分支 ${branch} 有 ${ahead} 个提交待处理（远端有备份）` });
@@ -289,7 +394,12 @@ export function formatBoardGc(plan, { apply = false } = {}) {
   }
   if (plan.risky.length) {
     L.push('', '## 要人判（有活可能丢，不自动删）');
-    for (const r of plan.risky) L.push(`- ${r.name}｜${r.why}`);
+    for (const r of plan.risky) {
+      L.push(`- ${r.name}｜${r.why}`);
+      // 干跑时把「本来能自动救」说出来，否则人看不出 --apply 会多做一步 push。
+      if (r.salvage && !apply) L.push(`  └ 可自动救：--apply 会先推 ${r.salvage.branch}（推成才清树）`);
+      if (r.salvageBlocked) L.push(`  └ 不自动救：${r.salvageBlocked}`);
+    }
   }
   if (plan.unscanned.length) {
     L.push('', '## 没查成（≠ 查过没事，本轮不动）');
