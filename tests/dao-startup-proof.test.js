@@ -642,7 +642,7 @@ describe('dao 开工验证', () => {
 
     await t.test('waitForOutJson 生产默认仍是 60s（#565 真派工不传 timeoutMs）', () => {
       const src = fs.readFileSync(path.join(__dirname, 'helpers', 'dao-harness.js'), 'utf8');
-      assert.ok(/function waitForOutJson\(resultPath, \{ timeoutMs = 60000/.test(src),
+      assert.match(src, /function waitForOutJson\(resultPath, \{ timeoutMs = 60000/,
         'waitForOutJson 默认必须 60000，不许砍到 5s');
     });
     await t.test('waitForOutJson 文件不在：短超时等到才放弃，不是立刻 null', () => {
