@@ -319,3 +319,48 @@ describe('陈旧副本分支：按内容判，不按提交号', () => {
     assert.ok(!src.includes("['cherry'"), 'git cherry 会给出假的「未合入」，不许用它判');
   });
 });
+
+// 2026-09-05 实测：ISSUE-#874 挂在主树下，静默 26 小时、分支是陈旧副本，
+// 却一轮都没进过判定名单——「子卡随父卡走」+「主树永不删」= 主树的子卡永不被判。
+describe('挂在主树下的卡要单独判（不然永远轮不到它）', () => {
+  it('主树的子卡按顶层卡判，能判成僵尸', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'm', name: 'master', main: true, kids: ['c'] }),
+        card({ id: 'c', name: 'ISSUE-#7 工人·x', parent: 'm', branch: 'refs/heads/old' }),
+      ],
+      aliveWorktreeIds: NONE, prState: {},
+      branchState: { old: { onRemote: false, ahead: 3, dirty: 0, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 1);
+    assert.equal(p.zombies[0].id, 'c');
+  });
+
+  it('普通父卡的子卡仍随父卡走，不单独出列', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'a', name: 'PR-#10 工人·x', kids: ['b'] }),
+        card({ id: 'b', name: 'PR-#10 审官·y', parent: 'a', branch: 'refs/heads/old' }),
+      ],
+      aliveWorktreeIds: NONE, prState: { 10: 'MERGED' },
+      branchState: { old: { onRemote: false, ahead: 0, dirty: 0, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 1);
+    assert.equal(p.zombies[0].id, 'a', '仍是整树一条，不是父子各一条');
+  });
+
+  it('主树的子卡活着照样不删', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'm', name: 'master', main: true, kids: ['c'] }),
+        card({ id: 'c', name: 'ISSUE-#7 工人·x', parent: 'm', branch: 'refs/heads/old' }),
+      ],
+      aliveWorktreeIds: new Set(['c']), prState: {},
+      branchState: { old: { onRemote: false, ahead: 3, dirty: 0, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 0);
+  });
+});

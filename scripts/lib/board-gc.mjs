@@ -107,8 +107,15 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState 
     if (w.isMainWorktree) { keep.push({ id, name, why: '主树永不删' }); continue; }
     if (w.isArchived) continue;
 
+    // 挂在主树下的卡按顶层卡判：主树永远不删，跟着它就是永远不被判——
+    // 2026-09-05 实测 ISSUE-#874 就卡在这里，静默 26 小时、分支是陈旧副本，却一轮都没进过名单。
+    const parent = w.parentWorktreeId
+      ? worktrees.find((x) => String(worktreeIdOf(x)) === String(w.parentWorktreeId))
+      : null;
+    const parentIsMain = !!(parent && parent.isMainWorktree);
+
     // 子卡：只有「重复卡」这一种理由能让它单独出列，其余随父卡整树走。
-    if (w.parentWorktreeId) {
+    if (w.parentWorktreeId && !parentIsMain) {
       if (!dupZombieIds.has(id)) continue;
       if (aliveWorktreeIds.has(id)) { keep.push({ id, name, why: '重复卡，但它上面还有活着的进程' }); continue; }
       zombies.push({ id, name, path: w.path || null, why: dupWhy.get(id), kind: 'duplicate' });
