@@ -247,7 +247,9 @@ describe('三态：ok / red / unscanned', () => {
   it('server-check 也能拿到同一把尺（㉓ 接线了没）', async () => {
     const S = await CHECK;
     assert.equal(typeof S.classifyGhEventBridge, 'function', 'server-check 没 re-export，㉓ 那一格就是空的');
-    assert.ok(Array.isArray(S.CHECKS) && S.CHECKS.some(([n]) => /GitHub 事件桥/.test(n)),
+    assert.equal(Array.isArray(S.CHECKS), true, 'CHECKS 不是数组，接线无从查');
+    const wired = S.CHECKS.filter(([n]) => /GitHub 事件桥/.test(n)).map(([n]) => n);
+    assert.deepEqual(wired, ['(23) GitHub 事件桥在守着（自证 ping 通，#956）'],
       'CHECKS 里没有事件桥那一格——re-export 了函数但没人调，等于没接线');
     assert.equal(S.classifyGhEventBridge({ probed: true, state: healthy(), now: NOW }).state, 'ok');
   });
