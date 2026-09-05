@@ -77,11 +77,13 @@ async function main() {
   for (const s of sessions.list) {
     // 只输出观测器要的字段：key / title / state / cwd（+ 有就带上活动时间）。
     console.log(JSON.stringify({
-      key: s.key ?? s.id ?? null,
+      // 字段名以 mirasim 实际返回为准（2026-09-05 实测：sessionKey / runState / updatedAt / workdir）。
+      // 早先按猜的名字取（key/state/cwd）全是 null，整条腿静默采不到——猜字段名的代价就是这个。
+      key: s.sessionKey ?? s.key ?? s.id ?? null,
       title: s.title ?? null,
-      state: s.state ?? null,
-      cwd: s.cwd ?? null,
-      lastActivityAt: s.lastActivityAt ?? s.updatedAt ?? null,
+      state: s.runState ?? s.state ?? null,
+      cwd: s.workdir ?? s.cwd ?? null,
+      lastActivityAt: s.seatAt ?? s.updatedAt ?? s.lastActivityAt ?? null,
     }));
   }
 }

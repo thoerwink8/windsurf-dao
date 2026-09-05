@@ -241,14 +241,16 @@ function silenceThresholdMs() {
  * mirasim 会话：走它本地 WS API 的 listSessions。拿不到就返回空数组并说一句——
  * 「没查成」由上面的 sampledNothing / unscanned 两格显形，这里不假装 0 条等于没事。
  */
-function mirasimSessions() {
+function mirasimSessions(notes) {
   // 指仓内脚本。此前这个能力只存在于服务器家目录里一个写着「用完即删」的临时脚本，
   // 指过去就是指向空气的指针（CLAUDE.md：留指针要配报警，配不了就别留）。
   const script = process.env.DAO_MIRASIM_LS || join(REPO_ROOT, 'scripts', 'mirasim-sessions.mjs');
   if (!existsSync(script)) return [];
   const r = spawnSync(process.execPath, [script, '--json'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
   if (r.error || r.status !== 0) {
-    say(`⚠️ mirasim 会话没查成：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 160)}`);
+    // 不在这里直接 say：那会绕过 dry-run 判断和一轮一条的合并，退回刷屏老路。
+    // 交给调用方汇总进本轮那一条消息里。
+    notes.push(`mirasim 会话没查成：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 160)}`);
     return [];
   }
   const out = [];
@@ -308,14 +310,15 @@ function main(argv = process.argv.slice(2)) {
       screen: screenOf(t.handle),
     });
   }
-  liveSessions.push(...mirasimSessions());
+  const driverNotes = [];
+  liveSessions.push(...mirasimSessions(driverNotes));
 
   // ② 发现判据（2026-09-05 拍板：删掉「靠认识错误字样」这一层）：
   // 唯一判据是「多久没有可验证的推进」。指纹只留作说明原因，不再决定报不报。
   const live = scanLiveness({ sessions: liveSessions, thresholdMs: silenceThresholdMs() });
   const seenSilent = loadState(livenessStatePath(args.state));
   const nextSilent = {};
-  const liveLines = [];
+  const liveLines = [...driverNotes];
   if (!live.ok) {
     liveLines.push(`会话活性没查成：${live.error}`);
   } else {
