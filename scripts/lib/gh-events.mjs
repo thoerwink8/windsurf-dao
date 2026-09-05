@@ -9,11 +9,13 @@
 //    签名是用来防「谁都能 POST 进来」的，而这里根本没有可以 POST 的入口。
 //    要是哪天有人把它改回 `--url`（起本地监听），签名校验必须一起加回来。
 //
-// 2. stdout 契约是两行一组（2026-09-05 在服务器上实测的）：
-//      [LOG] received event "pull_request"
-//      {"action":"closed",...}                 ← 整个负载压在一行
-//    前两行是开场白（notice: / Forwarding…），不是负载。解析器靠「先见到 [LOG] 行」
-//    才认下一行是负载，所以开场白不会被当成坏 JSON。
+// 2. stdout 上**只有负载**，一行一个 JSON。事件名那行（`[LOG] received event "push"`）
+//    和开场白（notice: / Forwarding…）全在 **stderr**。
+//    这一条是 2026-09-05 用 `1>o.log 2>e.log` 分流实测的——在那之前我用 `2>&1` 探的，
+//    两股混在一起看着像「事件名 + 负载两行一组」，照那个写的解析器把每一条负载都丢了
+//    （收到 4 个事件，counts.received 是 0）。**探流的时候不许合并 stderr。**
+//    所以事件类型只能从负载自身认（eventTypeOf）：跨两个管道配对本来也没有顺序保证，
+//    而且那行日志是给人看的，gh 换个版本就可能改写法。
 //
 // 3. 订阅哪些事件不是抄 issue 正文，是抄 SERVER-LANDING-CHECKLIST 那张判据表：
 //    表里「靠事件」的只有三行——审官判定落地、PR 合并关单、工人交卷起审官。
@@ -37,29 +39,36 @@ export const PING_INTERVAL_MS = 10 * 60 * 1000;
 export const HEARTBEAT_MS = 30 * 1000;
 
 /**
- * `gh webhook forward` 的 stdout 行解析器。
- * 有状态（要记住上一行的事件名），但不碰 IO，喂字符串就能测。
- * 返回 null = 这一行不是负载（开场白 / 事件名行本身）。
+ * 从负载本身认事件类型。事件名只在 stderr 上，跨管道配对没有顺序保证，所以只能这么认。
+ * 认不出来的一律 'unknown'——记下来但不触发任何动作，不猜。
+ */
+export function eventTypeOf(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  // ping 的签名：GitHub 每次连上和每次 /pings 都发它，负载里必有 zen + hook_id。
+  if (p.zen !== undefined && p.hook_id !== undefined) return 'ping';
+  // review 要排在 pull_request 前面——审官事件的负载里**也**有 pull_request。
+  if (p.review && p.pull_request) return 'pull_request_review';
+  // comment 存在说明是 review_comment / issue_comment 那一族，不是 PR 本身动了。
+  if (p.pull_request && p.action !== undefined && !p.comment) return 'pull_request';
+  return 'unknown';
+}
+
+/**
+ * `gh webhook forward` 的 stdout 行解析器。不碰 IO，喂字符串就能测。
+ * 返回 null = 这一行不是负载（空行，或 gh 哪天往 stdout 多打了一句人话）。
  */
 export function createForwardParser() {
-  let pendingType = null;
   return {
     push(line) {
-      const text = String(line == null ? '' : line);
-      const m = /^\[LOG\]\s+received event\s+"([^"]+)"\s*$/.exec(text.trim());
-      if (m) { pendingType = m[1]; return null; }
-      if (!pendingType) return null; // 还没见过事件名 → 是开场白，不是负载
-      const type = pendingType;
-      pendingType = null;
+      const text = String(line == null ? '' : line).trim();
+      if (!text || text[0] !== '{') return null;
       let payload = null;
       try { payload = JSON.parse(text); } catch {
         // 收到了但读不懂：**不能当没收到**。上层要记成 malformed 并报出来。
-        return { type, payload: null, malformed: true };
+        return { type: 'unknown', payload: null, malformed: true };
       }
-      return { type, payload, malformed: false };
+      return { type: eventTypeOf(payload), payload, malformed: false };
     },
-    /** 只给测试看内部状态用。 */
-    pending() { return pendingType; },
   };
 }
 

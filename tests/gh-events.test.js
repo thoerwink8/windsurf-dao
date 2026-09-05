@@ -37,39 +37,54 @@ function healthy(over = {}) {
 }
 
 describe('forward 的 stdout 怎么切成事件', () => {
-  // 实测的契约（2026-09-05 服务器上跑出来的）：两行一组，前面还有两行开场白。
-  const REAL = [
+  // 实测契约（2026-09-05，服务器上用 `1>o.log 2>e.log` 分流跑出来的）：
+  //   stdout —— 只有负载，一行一个 JSON
+  //   stderr —— notice: / Forwarding… / [LOG] received event "X"
+  // 这条回归的来历：最早我用 `2>&1` 探，两股混一起看着像「事件名+负载两行一组」，
+  // 照那个写的解析器把每一条负载都丢了（收到 4 个事件，counts.received 是 0）。
+  // 所以下面这些「事件名行」全部只该出现在 stderr，喂给解析器必须当噪音忽略。
+  const STDERR_ONLY = [
     'notice: no `--url` specified; printing webhook payloads to stdout',
     'Forwarding Webhook events from GitHub...',
     '[LOG] received event "ping"',
-    '{"zen":"Speak like a human.","hook_id":674864657}',
     '[LOG] received event "pull_request"',
-    '{"action":"closed","number":930,"pull_request":{"number":930,"merged":true}}',
   ];
 
-  it('开场白不算负载——不然启动就会记一条 malformed', async () => {
+  it('故意违规样本：把 stderr 那几行喂进来，一条都不许被当负载', async () => {
     const { createForwardParser } = await LIB;
     const p = createForwardParser();
-    assert.equal(p.push(REAL[0]), null);
-    assert.equal(p.push(REAL[1]), null);
+    for (const l of STDERR_ONLY) {
+      assert.equal(p.push(l), null, `「${l}」在 stderr 上，当负载解析就会记一条假的 malformed`);
+    }
   });
 
-  it('切得出事件类型和负载', async () => {
+  it('事件类型从负载自己认（事件名根本不在 stdout 上）', async () => {
     const { createForwardParser } = await LIB;
     const p = createForwardParser();
-    const got = REAL.map((l) => p.push(l)).filter(Boolean);
-    assert.deepEqual(got.map((e) => e.type), ['ping', 'pull_request']);
-    assert.equal(got[1].payload.number, 930);
-    assert.equal(got[0].payload.hook_id, 674864657);
+    const ping = p.push('{"zen":"Speak like a human.","hook_id":674864657}');
+    assert.equal(ping.type, 'ping');
+    assert.equal(ping.payload.hook_id, 674864657);
+
+    const pr = p.push('{"action":"closed","number":930,"pull_request":{"number":930,"merged":true}}');
+    assert.equal(pr.type, 'pull_request');
+    assert.equal(pr.payload.number, 930);
+
+    const rv = p.push('{"action":"submitted","review":{"state":"approved"},"pull_request":{"number":952}}');
+    assert.equal(rv.type, 'pull_request_review', 'review 必须排在 pull_request 前面——它的负载里也有 pull_request');
+  });
+
+  it('认不出来的负载判 unknown，不猜成某个会触发动作的类型', async () => {
+    const { eventTypeOf } = await LIB;
+    assert.equal(eventTypeOf({ ref: 'refs/heads/x', commits: [] }), 'unknown');
+    assert.equal(eventTypeOf({ action: 'created', comment: { id: 1 }, pull_request: { number: 9 } }), 'unknown',
+      'review_comment 那一族带 comment，不是 PR 本身动了');
+    assert.equal(eventTypeOf(null), 'unknown');
   });
 
   it('负载读不懂要显形成 malformed——「收到了但读不懂」不能等于「没收到」', async () => {
     const { createForwardParser } = await LIB;
-    const p = createForwardParser();
-    p.push('[LOG] received event "pull_request"');
-    const ev = p.push('{这不是 JSON');
+    const ev = createForwardParser().push('{这不是 JSON');
     assert.equal(ev.malformed, true);
-    assert.equal(ev.type, 'pull_request');
   });
 });
 
