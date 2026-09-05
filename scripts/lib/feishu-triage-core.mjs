@@ -60,10 +60,12 @@ export const HUB_DECISION_ASK = '要拍板哪张单？回我编号（比如 #846
 export const HUB_INTENTS = ['greeting', 'situation', 'decision', 'new_request', 'other'];
 
 /** 三问固定表：key 进 llm JSON 与 ThreadState.answers，fallback 是 llm 没给追问时的兜底问法。 */
+// 2026-09-05 实咬：项目群实测追问吐出「是否 docs/memory 该记？」——docs/memory 是仓里的目录名，
+// 用户不会这么说话。三问判据不动（缺一必问），只把问法换成人话。
 export const THREE_QUESTIONS = [
-  { key: 'done', label: '做到什么算做完', fallback: '做到什么算做完？需要可验证的结果。' },
-  { key: 'batch', label: '这批做还是以后', fallback: '这批做还是以后做？' },
-  { key: 'docs', label: '是否 docs/memory 该记', fallback: '要记进 docs/memory 吗？' },
+  { key: 'done', label: '做到什么样算做完', fallback: '做到什么样你就认它做完了？' },
+  { key: 'batch', label: '现在做还是先记着', fallback: '现在就做，还是先记着以后做？' },
+  { key: 'docs', label: '要不要写进文档', fallback: '这事要不要写进文档，方便以后查？' },
 ];
 
 const MAX_ASK_PER_ROUND = 2;
@@ -72,6 +74,26 @@ const MAX_RELATED_ON_MISS = 2;
 const MAX_QUERY_LEN = 300;
 const MAX_SUMMARY_LEN = 60;
 const MAX_PENDING_LISTED = 5;
+
+// 报帅单标题里的内部代号（commander-core 的 escalate reason）。标题是给机器查重用的，
+// 原样喂给 LLM 会被直译成「唤醒用尽」这种谁也看不懂的词（2026-09-05 实咬：用户问「现状怎么样了」，
+// 机器人答「#918 唤醒用尽」）。喂上下文之前先换成人话——改在源头，LLM 就看不到代号。
+const REASON_PLAIN = [
+  ['two-red', '审官连着判红'],
+  ['wake-exhausted', '反复推了都没动静'],
+  ['approved-without-review', '判绿记录对不上'],
+  ['missing-labels', '缺派工标签'],
+  ['unscanned', '没查成'],
+];
+
+/** 把标题里的内部代号换成人话。认不出的代号原样留着（不猜、不吞）。 */
+export function plainTitle(title) {
+  let t = String(title ?? '');
+  for (const [code, human] of REASON_PLAIN) {
+    t = t.replace(new RegExp(code.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'), 'gi'), human);
+  }
+  return t;
+}
 /** 消歧记录：判重候选 = gh search 返回的「前 10 条」。块 B 自己再截一道，A 多返回也不越界。 */
 const MAX_DEDUP_CANDIDATES = 10;
 
@@ -419,7 +441,7 @@ export function buildHubContextBlock(context = {}) {
         .some(l => (l && typeof l === 'object' ? l.name : l) === GATE_PENDING));
       if (pending.length > 0) {
         lines.push(`待拍板 ${pending.length} 张：`);
-        for (const i of pending.slice(0, MAX_PENDING_LISTED)) lines.push(`  #${i.number} ${i.title}`);
+        for (const i of pending.slice(0, MAX_PENDING_LISTED)) lines.push(`  #${i.number} ${plainTitle(i.title)}`);
       } else {
         lines.push('待拍板 0 张');
       }
@@ -532,7 +554,7 @@ function questionsPrompt(thread) {
     '飞书同一话题的会话记录：',
     transcriptOf(thread),
     '',
-    '三问：① 做到什么算做完（要可验证）② 这批做还是以后 ③ 是否 docs/memory 该记。',
+    '三问：① 做到什么样算做完（要能验证）② 现在做还是先记着 ③ 要不要写进文档。问法用大白话，不许出现目录名、路径、英文代号。',
     '判断每条是否已在口语里答了（答了就别再问）；没答的生成一句追问。',
     '返回 JSON：{"answers":{"done":{"answered":true,"text":"答案原文"},"batch":{"answered":false,"text":""},"docs":{"answered":true,"text":"答案原文"}},"questions":["没答的追问1","没答的追问2"]}',
   ].join('\n');
