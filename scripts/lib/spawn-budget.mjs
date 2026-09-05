@@ -12,7 +12,7 @@
 // 只是要看得见总量。降预算是显式动作——改这个数字本身就是一次记账。
 
 /** 当前允许的 spawnSync 调用总数。第二刀每做一批就把这个数改小，不许只加不减。 */
-export const SPAWN_BUDGET = 134;
+export const SPAWN_BUDGET = 136;
 
 /**
  * 数的是**调用**，不是「提到」。
@@ -28,7 +28,7 @@ export function countSpawnCalls(source) {
 }
 
 /** 预算的由来与目标，报警时原样打给人看——只报数字没人知道该怎么办。 */
-export const BUDGET_NOTE = '第二刀（spawn → 进程内调用）做到 134：dao.test 的早退型已转完（-18），'
+export const BUDGET_NOTE = '第二刀（spawn → 进程内调用）做到 136：dao.test 的早退型已转完（-18），board-gc 完工草稿 ignore 测例 +2；'
   + '剩下的是真建树/真发请求的动词，进程内跑会共享模块状态互相污染，转它们要先隔离状态；目标 ≤40';
 
 /**
