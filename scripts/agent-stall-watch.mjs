@@ -319,6 +319,7 @@ function main(argv = process.argv.slice(2)) {
   const seenSilent = loadState(livenessStatePath(args.state));
   const nextSilent = {};
   const liveLines = [...driverNotes];
+  const silentReviewers = [];
   if (!live.ok) {
     liveLines.push(`会话活性没查成：${live.error}`);
   } else {
@@ -337,6 +338,19 @@ function main(argv = process.argv.slice(2)) {
       if (seenSilent[key]) continue;
       fresh.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
         + `——${route.action === 'restart-reviewer' ? '当它死了，重起一个' : '交给你看'}`);
+      // 判死之后要真换人（用户 2026-09-05 拍板 #833）。此前这条能力挂在 #807 删掉的本机 watchdog 上，
+      // 删完就是零——PR #827 的审官撞 429 静默 9 小时零 review，最后是用户问了一句才发现。
+      // 换人的判据/顺序/同厂禁令都在 decideHitAction 里现成，这里只把静默会话喂进同一条路，不另造判断。
+      // 只喂**新判**的静默（上面 seenSilent 已挡掉重复），所以同一张卡不会每轮换一次人。
+      if (route.action === 'restart-reviewer') {
+        silentReviewers.push({
+          handle: sil.id,
+          displayName: String(sil.label || ''),
+          agentIdentity: sil.agentIdentity || null,
+          worktreeId: sil.worktreeId || null,
+          sig: `静默 ${Math.round((sil.silentMs || 0) / 60000)} 分钟`,
+        });
+      }
     }
     // 上限：一条消息最多列这么多，其余只给条数。第一次接上观测面时盘上会攒着几十个陈年静默，
     // 全列出来仍然是刷屏——只是从「每轮刷」变成「一次刷一屏」。
@@ -359,6 +373,12 @@ function main(argv = process.argv.slice(2)) {
   const need = Number(process.env.AGENT_STALL_STRIKES || 2);
   const round = scanRound({ agents, prevState: prev, strikesNeeded: need });
   saveState(args.state, round.nextState);
+  // 静默判死的审官走**同一条**换人路（用户 2026-09-05 拍板 #833）：
+  // 指纹命中和静默判死是两种发现方式，处置只有一套——判据/顺序/同厂禁令都在 decideHitAction 里，
+  // 在这里另写一套就是第二套判据。parentWorktreeId 现补，会话对象里没有。
+  for (const s of silentReviewers) {
+    round.reports.push({ ...s, parentWorktreeId: parentOf(ps, s.worktreeId) });
+  }
 
   if (round.unscanned) {
     say(`⚠️ 撞限流探测：${round.unscanned} 个终端屏面没读成（没查成，不是没事）`);

@@ -153,3 +153,24 @@ describe('静默播报有上限、按卡去重（实咬：一轮 66 条）', () 
     assert.match(block, /另有 \$\{fresh\.length - MAX_LISTED\}/, '超出部分要说清还有几条');
   });
 });
+
+// #833（用户 2026-09-05 拍板「接到今天新做的活性闸上」）：判死之后要真换人。
+// 此前这条能力挂在 #807 删掉的本机 watchdog 上，删完就是零——PR #827 的审官撞 429 静默 9 小时零 review。
+describe('静默审官接自动换人（#833）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+
+  it('新判静默的审官会被喂进换人路', () => {
+    assert.match(src, /silentReviewers\.push\(/, '静默审官要收集起来');
+    assert.match(src, /round\.reports\.push\(\{ \.\.\.s, parentWorktreeId/, '要喂进同一条 reports 路，不另造判断');
+  });
+  it('只喂新判的——去重在前，否则同一张卡每轮换一次人', () => {
+    const i = src.indexOf('silentReviewers.push(');
+    const before = src.slice(Math.max(0, i - 900), i);
+    assert.match(before, /if \(seenSilent\[key\]\) continue;/, '收集前必须先过去重');
+  });
+  it('换人判据仍走 decideHitAction，不在本文件另写一套', () => {
+    assert.match(src, /decideHitAction\(\{/);
+    const uses = (src.match(/planCapacitySwitch/g) || []).length;
+    assert.equal(uses, 0, '换人顺序/同厂禁令归 agent-stall-detect，本文件不许直接调');
+  });
+});
