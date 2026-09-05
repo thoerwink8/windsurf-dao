@@ -109,8 +109,10 @@ function scanPrReviews(prs) {
   let anyFail = null;
   for (const pr of prs || []) {
     if (!pr || pr.isDraft) continue; // draft 还没交卷，不抓
+    // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
+    // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
     const gh = runGh(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
-      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at}]'], 30000);
+      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at, commit_id: .commit_id}]'], 30000);
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
       const arr = JSON.parse(gh.out || '[]');
@@ -414,8 +416,11 @@ function wakeBrain(action, { state, dryRun, say }) {
     return { ok: false, error: `指针没送达：${sent.error}`, handle };
   }
   state.wakeCounts = state.wakeCounts || {};
-  state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
+  // 唤醒预算按 wakeKey 记账。PR 类的 wakeKey 带 head（`pr:<n>@<oid>`）——工人推了新 head
+  // 就是一张新账，旧 head 唤了几次不算在新 head 头上（#911：累计计数把返工中的单判成「推了 3 次没闭环」）。
+  const wakeKey = action.wakeKey || action.target;
+  state.wakeCounts[wakeKey] = (state.wakeCounts[wakeKey] || 0) + 1;
+  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[wakeKey]} 次），指针已送`);
   return { ok: true, handle };
 }
 
