@@ -324,9 +324,17 @@ async function runTests() {
     process.env.DAO_NO_NETWORK_LOG = join(d, `${Date.now()}-${process.pid}.ndjson`);
   }
   const allSuites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
+  if (allSuites.length === 0) {
+    // 这条判的是「tests/ 空了」——真·没查成。必须在裁剪之前判，
+    // 否则「裁剪后 0 套」会走到同一条红上，把「本次改动确实与测试无关」误报成「测试没了」
+    // （2026-09-06 实咬：只改 README 时报「一套测试都没扫到」）。
+    fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
+    return;
+  }
   const suites = selectSuites(allSuites);
   if (suites.length === 0) {
-    fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
+    green(`测试：本次改动与全部 ${allSuites.length} 套都无关（扫完是 0 条，不是没扫到）`);
+    reportNetworkViolations();
     return;
   }
   const results = [];
@@ -1491,7 +1499,13 @@ function checkNoAutoCloseLive() {
 // 「停派工态未跑」是第三种形：不是绿（没查）、也不是没查成（是故意不查），话面写明原因与开关。
 // 离线的样本/接线检查（夹具判别力、模板扫描）全部保留——它们不花网络，且守的约定还在仓里。
 const FULL = process.argv.includes('--full');
+// 快档标志：只有显式 --affected 才进快档。默认（不带旗标）仍跑全部，
+// 因为「跳过了什么」是静默的，得由调用方开口才生效。
+const AFFECTED = process.argv.includes('--affected');
 const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 node scripts/dao-check.mjs --full）`);
+// 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
+// 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
+const netParked = (name, why) => skip(`快档跳过：${name}——${why}（全量档 node scripts/dao-check.mjs --full 才跑）`);
 
 await runTests();
 checkSkillFrontmatter();
@@ -1541,7 +1555,8 @@ checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
-checkFeishuGroupsLive();
+if (FULL || !AFFECTED) checkFeishuGroupsLive();
+else netParked('飞书群有效性', '要打飞书 API，实测 11.3s');
 checkReleasePolicySamples();
 checkReleasePolicyLive();
 checkDispatchPolicySamples();
