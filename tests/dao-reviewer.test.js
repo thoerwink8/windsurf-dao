@@ -1082,3 +1082,38 @@ describe('dao 审官与完工', () => {
     });
   });
 });
+
+// 2026-09-06 实咬：#762 定过「worktree create 一律带 --repo」，只接在派工那条路上。
+// 仓从 /home/orca/windsurf-dao 迁到 /srv/projects/windsurf-dao 后，没接的四处当场全断
+// （orca 报 Missing repo selector），5 张复审票 drain 全挂，外面看到的却是「drain-exhausted」。
+// 这条闸盯的是「又有人新加了一个不带 repo 的建树点」——它是静默失效，没别的东西会报警。
+describe('建树一律带 repo 选择符（#762 的漏接面）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'dao.mjs'), 'utf8');
+
+  it('dao.mjs 里每个 argsWorktreeCreate({ 调用都带 repo', () => {
+    const bad = [];
+    const re = /argsWorktreeCreate\(\{/g;
+    let m;
+    while ((m = re.exec(src))) {
+      // 取这次调用的实参块（到配平的 `}` 为止），只看它自己有没有 repo:
+      let i = m.index + m[0].length;
+      let depth = 1;
+      while (i < src.length && depth > 0) {
+        if (src[i] === '{') depth += 1;
+        else if (src[i] === '}') depth -= 1;
+        i += 1;
+      }
+      const block = src.slice(m.index, i);
+      if (!/\brepo:/.test(block)) {
+        bad.push(src.slice(Math.max(0, m.index - 120), m.index).split('\n').pop().trim());
+      }
+    }
+    assert.deepEqual(bad, [], `这些建树点没带 repo，搬家/换 cwd 就会报 Missing repo selector：\n${bad.join('\n')}`);
+  });
+
+  it('选择符按 remote URL 解析，不按路径（路径匹配会被搬家打断）', () => {
+    const i = src.indexOf('function thisRepoSelector');
+    assert.ok(i > -1, 'thisRepoSelector 没了——建树点会各自散写一份解析');
+    assert.match(src.slice(i, i + 900), /remoteUrl:/);
+  });
+});
