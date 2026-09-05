@@ -358,6 +358,33 @@ test('闸3 反：urgency 值不在 schema 枚举 ⇒ 没查成，按缓兜底', 
   assert.match(held.why, /急\/缓\/null/, '理由里要带上从 schema 派生出来的枚举');
 });
 
+test('闸3 判别：schema 枚举不含「急」时 urgency=急 必须按缓+没查成（完整枚举对照仍即时）', async () => {
+  const groups = await twoGroups();
+  const e = pending('p1', '急');
+
+  // 对照：同一条事件、完整枚举必须仍即时插播。没有这条对照，会把「急永远不发」也测绿。
+  const full = await decide({ events: [e], groups, state: { windowClosing: false } });
+  const fullRows = sentTo(full, PROJ);
+  assert.strictEqual(fullRows.length, 1, '完整枚举下 urgency=急 必须即时插播');
+  assert.strictEqual(fullRows[0].kind, 'instant');
+  assert.strictEqual(fullRows[0].urgency, '急');
+
+  const { propSchema } = await gate();
+  const slim = JSON.parse(JSON.stringify(SCHEMA));
+  const p = propSchema(slim, 'decision.pending', 'urgency');
+  assert.ok(p && Array.isArray(p.enum) && p.enum.includes('急'), '改之前先确认完整 SCHEMA 含「急」');
+  p.enum = ['缓'];
+
+  const r = await decide({
+    events: [e], groups, state: { windowClosing: false }, config: { schema: slim },
+  });
+  assert.strictEqual(sentTo(r, PROJ).length, 0, '枚举不含急时，urgency=急 不许即时插播');
+  const held = droppedBy(r, 3, PROJ);
+  assert.strictEqual(held.length, 1, '闸 3 该拦下');
+  assert.strictEqual(held[0].deferred, true, '按缓攒到窗末，不是丢弃');
+  assert.match(held[0].why, /没查成/);
+});
+
 test('闸3：窗末按类各合一条三行摘要，抬头不混', async () => {
   const groups = await twoGroups();
   const events = [

@@ -257,12 +257,7 @@ export function urgencyOf(event, derived) {
   }
   const has = Object.prototype.hasOwnProperty.call(event, 'urgency');
   const raw = has ? event.urgency : undefined;
-  if (raw === URGENCY_INSTANT) {
-    return { urgency: URGENCY_INSTANT, unjudged: false, why: '事件自报 urgency=急 ⇒ 即时插播' };
-  }
-  if (raw === URGENCY_BATCH) {
-    return { urgency: URGENCY_BATCH, unjudged: false, why: '事件自报 urgency=缓 ⇒ 攒到窗末' };
-  }
+  // 1. null / 缺席单独说：枚举里有 null 只表示允许这个取值，不等于「判过是缓」
   if (raw === null || raw === undefined) {
     return {
       urgency: URGENCY_BATCH,
@@ -270,6 +265,23 @@ export function urgencyOf(event, derived) {
       why: `urgency ${has ? '记的是 null' : '这一位没写'} = 写口没判过（#897 实测两种问用户的工具都拿不到）⇒ 按缓处理，不是「判过是缓」`,
     };
   }
+  // 2. 急/缓放行前必须先过 schema 派生枚举。枚举没派生成则不要 includes 崩掉，沿用后面急/缓硬编码。
+  if (Array.isArray(derived && derived.urgencyEnum) && !derived.urgencyEnum.includes(raw)) {
+    const known = `schema 枚举=${derived.urgencyEnum.map((x) => String(x)).join('/')}`;
+    return {
+      urgency: URGENCY_BATCH,
+      unjudged: true,
+      why: `urgency 值「${String(raw)}」不在 schema 枚举、不认识（${known}）⇒ 没查成，按缓处理`,
+    };
+  }
+  // 3. 通过枚举核验之后，才急/缓放行（不要把这两支写在核验前面）
+  if (raw === URGENCY_INSTANT) {
+    return { urgency: URGENCY_INSTANT, unjudged: false, why: '事件自报 urgency=急 ⇒ 即时插播' };
+  }
+  if (raw === URGENCY_BATCH) {
+    return { urgency: URGENCY_BATCH, unjudged: false, why: '事件自报 urgency=缓 ⇒ 攒到窗末' };
+  }
+  // 4. 枚举里出现了本文件不认识的合法值
   const known = derived && Array.isArray(derived.urgencyEnum)
     ? `schema 枚举=${derived.urgencyEnum.map((x) => String(x)).join('/')}`
     : 'schema 里这一位的枚举没派生成';
