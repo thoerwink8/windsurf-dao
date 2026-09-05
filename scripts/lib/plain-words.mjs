@@ -21,6 +21,9 @@ const RULES = [
   { re: /\b(unscanned|escalate|dryRun|dry-run|worktree|orphan)\b/i, why: '内部英文代号' },
   { re: /\b(pool|leg|direct)\s*(红|绿)/i, why: '探针内部分类词（pool/leg/direct）' },
   { re: /\blive agent\b/i, why: '内部英文代号 live agent' },
+  // 报帅单的 escalate reason 代号（2026-09-05 实咬：机器人抄 issue 标题，把 wake-exhausted
+  // 直译成「唤醒用尽」发进群）。源头翻译在 feishu-triage-core 的 plainTitle；这条是兜底报警。
+  { re: /\b(two-red|wake-exhausted|approved-without-review|missing-labels)\b/i, why: '报帅单内部代号' },
 ];
 
 /** 返回 [{why, match}]；空数组 = 说人话。 */

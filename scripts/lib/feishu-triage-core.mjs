@@ -68,6 +68,26 @@ const MAX_RELATED_ON_MISS = 2;
 const MAX_QUERY_LEN = 300;
 const MAX_SUMMARY_LEN = 60;
 const MAX_PENDING_LISTED = 5;
+
+// 报帅单标题里的内部代号（commander-core 的 escalate reason）。标题是给机器查重用的，
+// 原样喂给 LLM 会被直译成「唤醒用尽」这种谁也看不懂的词（2026-09-05 实咬：用户问「现状怎么样了」，
+// 机器人答「#918 唤醒用尽」）。喂上下文之前先换成人话——改在源头，LLM 就看不到代号。
+const REASON_PLAIN = [
+  ['two-red', '审官连着判红'],
+  ['wake-exhausted', '反复推了都没动静'],
+  ['approved-without-review', '判绿记录对不上'],
+  ['missing-labels', '缺派工标签'],
+  ['unscanned', '没查成'],
+];
+
+/** 把标题里的内部代号换成人话。认不出的代号原样留着（不猜、不吞）。 */
+export function plainTitle(title) {
+  let t = String(title ?? '');
+  for (const [code, human] of REASON_PLAIN) {
+    t = t.replace(new RegExp(code.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'), 'gi'), human);
+  }
+  return t;
+}
 /** 消歧记录：判重候选 = gh search 返回的「前 10 条」。块 B 自己再截一道，A 多返回也不越界。 */
 const MAX_DEDUP_CANDIDATES = 10;
 
@@ -338,7 +358,7 @@ export function buildHubContextBlock(context = {}) {
         .some(l => (l && typeof l === 'object' ? l.name : l) === GATE_PENDING));
       if (pending.length > 0) {
         lines.push(`待拍板 ${pending.length} 张：`);
-        for (const i of pending.slice(0, MAX_PENDING_LISTED)) lines.push(`  #${i.number} ${i.title}`);
+        for (const i of pending.slice(0, MAX_PENDING_LISTED)) lines.push(`  #${i.number} ${plainTitle(i.title)}`);
       } else {
         lines.push('待拍板 0 张');
       }
