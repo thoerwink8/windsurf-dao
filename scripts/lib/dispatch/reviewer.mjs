@@ -221,8 +221,9 @@ export function isFastPathStandIn(w, pr) {
  * --base-branch 必须是 PR 分支（审官树跟着它建，被审代码才在树里，见 memory
  * reviewer-tree-must-contain-reviewed-code）；--no-parent 让它当顶层父卡。
  */
-export function fastPathStandInCreateArgs({ pr, issue, baseBranch, workerModel } = {}) {
+export function fastPathStandInCreateArgs({ pr, issue, baseBranch, workerModel, repo } = {}) {
   return argsWorktreeCreate({
+    repo,
     name: assembleCardName({ name: '工人替身（快马 PR）', pr, role: '辅助', model: workerModel }),
     noParent: true,
     setup: 'skip',

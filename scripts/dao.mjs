@@ -2134,6 +2134,7 @@ function cmdDispatchBatch(args) {
   const effects = {
     createWorktree({ name, issue }) {
       const r = orca(argsWorktreeCreate({
+        repo: repoSelectorOrFail('batch 建树'),
         name,
         issue,
         setup: 'skip',
@@ -3226,9 +3227,41 @@ function cmdStart(args) {
   });
 }
 
+// 本仓的 orca repo 选择符，一次解析全程复用。
+//
+// #762 定过「worktree create 一律带 --repo」，但只接在派工那一条路上；审官建树/接树、
+// batch、worktree-create 四处从来没带。仓从 /home/orca/windsurf-dao 迁到 /srv/projects/windsurf-dao
+// 之后这四处当场全断——orca 注册的仍是旧路径，cwd 落在新路径就报
+// `invalid_argument: Missing repo selector`（2026-09-06 实测：5 张复审票 drain 全挂在这句上，
+// 而外面看到的症状是「drain-exhausted，每轮开一张待拍板单」）。
+//
+// 匹配按 git remote URL 而不是路径：执行体可能跑在任意 worktree，路径匹配必然失配——
+// 这次的搬家正好就是那个「必然」。remote 没查成才 fallback 路径。
+// 「没查成」与「没注册」分开报，不许合流（resolveRepoSelector 自己保证）。
+let _repoSelCache;
+function thisRepoSelector() {
+  if (_repoSelCache !== undefined) return _repoSelCache;
+  const listed = orca(argsRepoList());
+  const remote = gitRemoteOriginUrl(ROOT);
+  _repoSelCache = listed.ok
+    ? resolveRepoSelector({
+        repos: listed.json?.result?.repos,
+        remoteUrl: remote.ok ? remote.url : undefined,
+      })
+    : { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(listed.error)}` };
+  return _repoSelCache;
+}
+/** 建树前取选择符；解析不出就当场 fail（没查成绝不静默建到别的仓去）。 */
+function repoSelectorOrFail(where) {
+  const r = thisRepoSelector();
+  if (!r.ok) fail(`${where}：本仓 repo 选择符没解析成：${r.error}`);
+  return r.selector;
+}
+
 function cmdWorktreeCreate(args) {
   if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
   const r = orca(argsWorktreeCreate({
+    repo: repoSelectorOrFail('worktree-create'),
     name: assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model }),
     noParent: args.noParent,
     setup: args.setup,
@@ -3670,6 +3703,7 @@ async function cmdReviewerCreate(args) {
   let standInCreated = false;
   if (fastPlan.fastPath && !resumedFromExisting && !standInId) {
     const madeStandIn = orca(fastPathStandInCreateArgs({
+      repo: repoSelectorOrFail('快马替身树'),
       pr: args.pr,
       issue: args.issue,
       baseBranch: originRef.baseBranch,
@@ -3684,6 +3718,7 @@ async function cmdReviewerCreate(args) {
 
   if (!resumedFromExisting) {
     const created = orca(argsWorktreeCreate({
+      repo: repoSelectorOrFail('reviewer-create'),
       name: revName,
       setup: 'skip',
       parentWorktree: parentSel,
@@ -4149,6 +4184,7 @@ function cmdReviewerAttach(args) {
 
   const created = {};
   const revWt = orca(argsWorktreeCreate({
+    repo: repoSelectorOrFail('reviewer-attach'),
     name: revName,
     setup: 'skip',
     parentWorktree: args.worktree,
