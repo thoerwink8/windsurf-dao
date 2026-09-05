@@ -31,8 +31,10 @@ describe('timer 有没有下一次触发', () => {
   it('反证：都有下一次就该绿——判据不是恒红', async () => {
     const S = await LOAD;
     const r = S.classifyTimerArmed({ probed: true, units: [
-      { unit: 'dao-sync.timer', next: '1788600000000000' },
-      { unit: 'commander-act.timer', next: '1788600900000000' },
+      // calendar 要显式给：不给就是「这一格没查成」，本闸会回 unknown 而不是 ok。
+      // 这里测的是「有没有下一次」这一维，所以把另一维钉成已知good。
+      { unit: 'dao-sync.timer', next: '1788600000000000', calendar: true },
+      { unit: 'commander-act.timer', next: '1788600900000000', calendar: true },
     ] });
     assert.equal(r.state, 'ok');
   });
@@ -155,5 +157,45 @@ describe('扫描面不许按名字前缀圈定', () => {
     assert.equal(S.isOurUnit(''), null, '读不到路径 = 没查成');
     assert.equal(S.isOurUnit(null), null);
     assert.equal(S.isOurUnit('/opt/weird/place/x.timer'), null, '没见过的落点不许猜成「不归我管」');
+  });
+});
+
+// 「现在还有下一次」不等于安全：只有单调时钟的 timer 停一次再起就进 active(elapsed)。
+// 2026-09-05 一天里两个单元先后咬过（dao-agent-stall 已死过、gw-remote-probe 是下一个）。
+describe('潜伏的死态：活着但没有墙钟点位', () => {
+  it('故意违规样本：有下一次、但 calendar=false → 必须红并点名', async () => {
+    const S = await LOAD;
+    const r = S.classifyTimerArmed({ probed: true, units: [
+      { unit: 'dao-sync.timer', next: '1788600000000000', calendar: true },
+      { unit: 'gw-remote-probe.timer', next: '1788600900000000', calendar: false },
+    ] });
+    assert.equal(r.state, 'red', '现在活着不代表安全——停一次就死，且死了没人报');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  it('反证：都有墙钟点位就该绿——判据不是恒红', async () => {
+    const S = await LOAD;
+    const r = S.classifyTimerArmed({ probed: true, units: [
+      { unit: 'dao-sync.timer', next: '1788600000000000', calendar: true },
+    ] });
+    assert.equal(r.state, 'ok');
+  });
+
+  it('单元文件读不出来 = 没查成，不许报成「缺 OnCalendar」', async () => {
+    const S = await LOAD;
+    const r = S.classifyTimerArmed({ probed: true, units: [
+      { unit: 'x.timer', next: '1788600000000000', calendar: null },
+    ] });
+    assert.equal(r.state, 'unknown');
+  });
+
+  it('已经死了优先于潜伏——先说最急的那条', async () => {
+    const S = await LOAD;
+    const r = S.classifyTimerArmed({ probed: true, units: [
+      { unit: 'a.timer', next: null, calendar: true },
+      { unit: 'b.timer', next: '1', calendar: false },
+    ] });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /没有下一次触发/);
   });
 });

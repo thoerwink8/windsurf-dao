@@ -645,7 +645,24 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
         + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
     };
   }
-  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发` };
+  // 「现在还有下一次」不等于安全。只有单调时钟（OnBootSec/OnUnitActiveSec）的 timer
+  // 停一次再起就进 active(elapsed)：显示 active+enabled 而永不触发。今天两个单元先后咬过。
+  // 已经死了 和 下次重启必死，是同一个缺陷的两个阶段——都在这一格报，别等它死了再说。
+  const latent = units.filter((u) => u && u.calendar === false);
+  if (latent.length) {
+    return {
+      state: RED,
+      detail: `${latent.length}/${units.length} 个 timer 现在还活着，但只有单调时钟、没有 OnCalendar`
+        + `（${latent.map((u) => u.unit).join('、')}）——停一次再起就会进 active(elapsed)：`
+        + '显示 active+enabled 却永不触发，而且没有任何东西会说一句。'
+        + '给单元加 OnCalendar；不归本仓的单元（如 gw-* 属网关仓）去它自己的仓改，改完重装。',
+    };
+  }
+  const unknownCal = units.filter((u) => u && u.calendar == null).length;
+  if (unknownCal) {
+    return { state: UNKNOWN, detail: `${unknownCal}/${units.length} 个 timer 的单元文件读不出来——「有没有 OnCalendar」这一格没查成` };
+  }
+  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发，且都有墙钟点位` };
 }
 
 /**
@@ -705,7 +722,11 @@ function checkTimerArmed() {
       .map((k) => kv.get(k) || '').filter(Boolean);
     // 两个点位任意一个有值就算有下一次；两个都空才是死态。
     const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
-    units.push({ unit, next: alive ? vals.join('|') : null });
+    // 有没有墙钟点位，只能读单元文件本身——`systemctl show` 的 TimersCalendar 在老版本上不稳。
+    // 读不到回 null（没查成），不回 false：那会把「没读着」报成「缺 OnCalendar」，是误报。
+    let calendar = null;
+    try { calendar = /^OnCalendar=/m.test(readFileSync(frag, 'utf8')); } catch { calendar = null; }
+    units.push({ unit, next: alive ? vals.join('|') : null, calendar });
   }
   if (units.length === 0 && skipped.length > 0) {
     // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
