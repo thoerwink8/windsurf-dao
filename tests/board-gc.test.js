@@ -877,3 +877,25 @@ describe('收工令不许把没合的 salvage 分支当垃圾清掉', () => {
     assert.doesNotMatch(src, /'push', '--delete'|'--delete', 'origin'/, '收工令不许删远端分支');
   });
 });
+
+// 2026-09-06 实咬：worker-done-*.md 以「未跟踪文件」身份留在工人树里，
+// git worktree remove 见到未跟踪文件就拒删 → board-gc 一张干完的卡都回收不掉。
+// 这条 ignore 是那条清理路的地基，删掉它整条链会静默退回堵死状态（没有别的东西会报警）。
+describe('完工草稿必须被 ignore（否则 board-gc 清不掉任何一张干完的卡）', () => {
+  it('worker-done-*.md 被 .gitignore 命中', () => {
+    const r = require('node:child_process').spawnSync(
+      'git', ['check-ignore', '-q', 'worker-done-999.md'],
+      { cwd: path.join(__dirname, '..') },
+    );
+    assert.equal(r.status, 0, 'worker-done-*.md 没被 ignore——board-gc 会退回「一张都清不掉」');
+  });
+
+  // 判别力：同目录下别的 .md 不该被这条规则误伤。
+  it('普通 .md 不受影响（这条 ignore 不是把 md 全关掉）', () => {
+    const r = require('node:child_process').spawnSync(
+      'git', ['check-ignore', '-q', 'README.md'],
+      { cwd: path.join(__dirname, '..') },
+    );
+    assert.notEqual(r.status, 0, 'README.md 不该被 ignore');
+  });
+});
