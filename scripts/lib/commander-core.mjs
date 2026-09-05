@@ -195,6 +195,13 @@ function hub(subject, moment, extra = {}) {
 // 态势的五节。scan 每节标 scanned:true/false。
 export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
 
+// 复审重试：上一票的宽限期与上限。
+// 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
+// commander-act 20 分钟一轮，45 分钟约等于「连着两轮都没等到判定才重发」。
+// 上限是为了别死循环——试满仍无判定就停手交人（判据：当前 head 判定仍是 0）。
+export const REREVIEW_GRACE_MIN = 45;
+export const MAX_REREVIEW_TRIES = 3;
+
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
 // notify-hub / land 是随附动作，产出处会用 _needs 显式继承主动作的依赖（下面 hub/withNeeds）。
 // escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
@@ -235,6 +242,8 @@ function collectCandidates(situation) {
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
+  // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
+  const nowMs = Date.parse(situation.at || '') || 0;
   let reworkThisRound = 0;
   const policy = resolveCommanderPolicy(situation.commanderPolicy);
   const enabledIds = situation.routingModels;
@@ -375,22 +384,44 @@ function collectCandidates(situation) {
       }
       continue;
     }
-    // 判过、但当前 head 上一条判定都没有 ⇒ 工人推了新 head 而没人叫审官复审。
-    // 2026-09-05 实咬：#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
-    // 于是「按当前 head 重算」把红清零 → 上面不派返工、下面不走合并，这一格空着，PR 就永远挂着。
-    // 这十小时里「复审推进」全是主会话手工做的。补上：写一张复审待办票，drain 自己会消费
-    //（缺士兵树时它走 reviewer-create 快马路，一 PR 一审官的闸在那边，不会建出第二张审官卡）。
-    if (a.judgedTotal > 0 && a.atHead === 0) {
+    // 当前 head 上一条判定都没有 ⇒ 要审官。历史上审过（复审）和从没审过（首审）是同一格，
+    // 别拆成两条规则：判据都是「当前 head 缺判定」，做法都是写一张复审待办票交给 drain。
+    //
+    // 2026-09-05 实咬两次，两次都是「记账记错了对象」：
+    //  一、#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
+    //     「按当前 head 重算」把红清零 → 不派返工也不走合并，这一格空着，PR 挂了 10 小时。
+    //  二、补上复审票之后仍然卡死：账本记的是「票写出去了」，可审官起来就死（裸 pi 落错 provider 401），
+    //     判定一条没落，而 `if (!reworkDispatched[rrKey])` 把这张 PR 永久挡在门外——
+    //     #894/#899/#905 的票 04:22 就"派成功"了，7 小时后当前 head 判定仍是 0，没有任何东西会重试。
+    //     这与同日 agent-stall-watch 换人账本犯的是同一个病（失败和成功记同一条账）。
+    //
+    // 所以这里不记 ok：**走到这个分支本身就是「上一次没落地」的证据**（判定真落了 a.atHead 就 > 0，
+    // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
+    // 试满仍无判定 ⇒ 停手报帅，不死循环。
+    if (a.atHead === 0) {
       const rrKey = `rereview:${pr.number}@${a.head}`;
-      if (!reworkDispatched[rrKey]) {
-        out.push(withNeeds({
-          kind: 'rereview', pr: pr.number, head: a.head,
-          issue: attributedIssueNumber(pr),
-          reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
-          stateKey: rrKey,
-          why: `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审`,
-        }, N['attach-reviewer']));
+      const prev = reworkDispatched[rrKey];
+      const tries = Number(prev?.tries) || 0;
+      const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
+      if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
+      const firstRound = a.judgedTotal === 0;
+      if (tries >= MAX_REREVIEW_TRIES) {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+          { reason: 'rereview-exhausted', pr: pr.number, head: a.head, tries },
+        ), N['attach-reviewer']));
+        continue;
       }
+      out.push(withNeeds({
+        kind: 'rereview', pr: pr.number, head: a.head,
+        issue: attributedIssueNumber(pr),
+        reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
+        stateKey: rrKey,
+        tries: tries + 1,
+        why: firstRound
+          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${a.head.slice(0, 8)} 没人审——叫审官`
+          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+      }, N['attach-reviewer']));
       continue;
     }
     // 当前 head 上最后一条判别态是红 → 派一个返工工人（#931：删掉「唤大脑翻译返工方向」整层）。

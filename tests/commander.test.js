@@ -1016,3 +1016,96 @@ describe('跨仓感知只感知不派工', () => {
     assert.match(fn, /full === mine/, '要把本仓排除掉，否则本仓的活会被当成跨仓提醒重报一遍');
   });
 });
+
+// ── 复审记账：记「派了」不记「成了」= 一次失败就永久卡死（2026-09-05 实咬第二次）──
+//
+// 第一次是 agent-stall-watch 的换人账本（10 个审官换人全失败，账本记成已处置，再不重试）。
+// 第二次就在这里：#894/#899/#905 的复审票 04:22 写成功，审官起来就死（裸 pi 落错 provider 401），
+// 7 小时后当前 head 判定仍是 0，而 `if (!reworkDispatched[rrKey])` 把这三张 PR 永久挡在门外。
+//
+// 判据的要害：**走到这个分支本身就是「上一次没落地」的证据**——判定真落了 atHead 就 > 0，进不来。
+// 所以不需要 ok 字段，只要 tries + 宽限期。
+describe('复审要能重试，因为「票写出去了」不等于「判定落了」', () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'f9adbffa1170c57559c64160081619acc328988f';
+  const OLD = 'b5e672ea046ee7ce65055a31926bd164f3e1f84f';
+  const NOW = '2026-09-05T12:00:00.000Z';
+  const ago = (min) => new Date(Date.parse(NOW) - min * 60000).toISOString();
+  const readyPr = (n, head, issue) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: head, body: `署名 issue #${issue}`,
+  });
+  const sit = (over) => baseSituation({ at: NOW, ...over });
+
+  it('①从没审过的 ready PR 也要叫审官——这一格原本整个空着（洞 A）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(947, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '交卷可合但一条判定都没有 = 要审官，不是无事可做');
+    assert.equal(rr[0].pr, 947);
+    assert.equal(rr[0].tries, 1);
+    assert.match(rr[0].why, /一条判定都没有/, '首审和复审的理由要分得开');
+  });
+
+  it('②上一票超过宽限期而判定仍是 0 → 重发，tries 累加（洞 C）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(400), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '票派过但判定没落 = 那次没成，必须再试');
+    assert.equal(rr[0].tries, 2, 'tries 要累加，否则永远试不满也永远不报帅');
+  });
+
+  it('③宽限期内不重发——审官可能正在看，别每轮塞一张票', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(10), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '10 分钟前刚派的票还在宽限期内');
+    assert.equal(byKind(r, 'escalate').length, 0, '宽限期内也不报帅');
+  });
+
+  it('④试满仍无判定 → 停手报帅，不死循环', async () => {
+    const { decide, MAX_REREVIEW_TRIES } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(905, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 905: { reviews: [redReview('一处', OLD)] } } },
+      reworkDispatched: { [`rereview:905@${HEAD}`]: { at: ago(400), pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '试满就别再派了');
+    const e = byKind(r, 'escalate');
+    assert.equal(e.length, 1, '停手要出声——静默停手和「没事」分不开');
+    assert.equal(e[0].reason, 'rereview-exhausted');
+  });
+
+  it('⑤判别力反证：判定已落在当前 head → 本分支一条都不产', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(886, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 886: { reviews: [redReview('要改', HEAD)] } } },
+      reworkDispatched: {},
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '当前 head 有判定了就不该再叫审官——否则这条规则没有判别力');
+  });
+
+  it('⑥态势没有 at 时不许把宽限期算成「早就过期」而狂发票', async () => {
+    const { decide } = await CORE;
+    const s = baseSituation({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: '2026-09-05T11:55:00.000Z', pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    });
+    delete s.at;
+    const r = decide(s);
+    // at 缺失 ⇒ nowMs=0 ⇒ ageMin 是大负数，Number.isFinite 为真且 < 宽限期 ⇒ 按「还在宽限期」处理，
+    // 宁可这一轮不发，也不要因为时钟读不到就每 20 分钟塞一张票。
+    assert.equal(byKind(r, 'rereview').length, 0, '时钟读不到时要保守，不许当成「早就该重发」');
+  });
+});

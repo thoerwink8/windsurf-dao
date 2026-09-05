@@ -570,8 +570,12 @@ function requestRereview(action, { state, dryRun, say }) {
   const w = writeReviewPending({ dir, ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
   state.reworkDispatched = state.reworkDispatched || {};
+  // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
+  // 不记 ok——「票写出去了」不是「判定落了」，2026-09-05 就是把这两件事记成一条账，
+  // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
   state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
+    tries: Number(action.tries) || 1,
   };
   say(`  已写复审待办 ${w.path}（drain 下一轮消费）`);
   return { ok: true, path: w.path };
