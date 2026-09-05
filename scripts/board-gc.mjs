@@ -70,6 +70,50 @@ function fetchPrState() {
   } catch (e) { return { ok: false, error: `gh pr list JSON 解析失败：${e.message}` }; }
 }
 
+/** issue 号 → OPEN/CLOSED。问不出来就整张表不给，判据自动不启用（没查成 ≠ 已关闭）。 */
+function fetchIssueState() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'gh-as.mjs'), 'marshal',
+    'issue', 'list', '--state', 'all', '--limit', '300', '--json', 'number,state']);
+  if (r.failed || r.code !== 0) return null;
+  try {
+    const list = JSON.parse(r.out);
+    if (!Array.isArray(list)) return null;
+    return new Map(list.map((i) => [Number(i.number), String(i.state || '').toUpperCase()]));
+  } catch { return null; }
+}
+
+/**
+ * PR 号 → 当前 head 上有没有判定。只问盘面上真出现过、且还 OPEN 的那几个 PR——
+ * 一个 PR 一次调用，全表问会很贵而且大部分用不上。
+ * 判定必须比对 commit oid：审官判绿只对它当时看的那个 commit 有效（memory review-green-must-match-head）。
+ * 任何一个问不出来 ⇒ 整张表不给，这条判据本轮不启用。
+ */
+function fetchPrJudgedAtHead(worktrees, prState) {
+  const want = new Set();
+  for (const w of worktrees || []) {
+    for (const m of String(w?.displayName || '').matchAll(/PR[-\s]*#?(\d+)/g)) {
+      const n = Number(m[1]);
+      if (prState.get(n) === 'OPEN') want.add(n);
+    }
+  }
+  if (!want.size) return new Map();
+  const map = new Map();
+  for (const n of want) {
+    const r = run(process.execPath, [join(ROOT, 'scripts', 'gh-as.mjs'), 'marshal',
+      'pr', 'view', String(n), '--json', 'headRefOid,reviews']);
+    if (r.failed || r.code !== 0) return null;
+    try {
+      const p = JSON.parse(r.out);
+      const head = p.headRefOid;
+      if (!head) return null;
+      const atHead = (p.reviews || []).filter(
+        (x) => ['APPROVED', 'CHANGES_REQUESTED'].includes(x.state) && x.commit && x.commit.oid === head);
+      map.set(n, atHead.length > 0);
+    } catch { return null; }
+  }
+  return map;
+}
+
 /** 每棵树问三句：分支在不在远端、相对 master 超前几个提交、有几个脏文件。任一句问不出就不记。 */
 function fetchBranchState(worktrees) {
   const map = new Map();
@@ -155,11 +199,19 @@ function main() {
   const prs = fetchPrState();
   if (!prs.ok) { console.error(`PR 状态没查成：${prs.error}`); process.exit(2); }
 
+  // 这两张表拿不到就是 null，判据自动不启用——少清几张，不会误清。
+  const judged = fetchPrJudgedAtHead(worktrees, prs.map);
+  const issues = fetchIssueState();
+  if (judged == null) console.error('提示：PR 当前 head 判定没查成，本轮不判「审官活已交付」');
+  if (issues == null) console.error('提示：issue 状态没查成，本轮不判「issue 已关闭」');
+
   const plan = planBoardGc({
     worktrees,
     aliveWorktreeIds: alive,
     prState: prs.map,
     branchState: fetchBranchState(worktrees),
+    prJudgedAtHead: judged,
+    issueState: issues,
   });
 
   if (args.json) { console.log(JSON.stringify(plan, null, 2)); }

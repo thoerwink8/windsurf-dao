@@ -192,3 +192,42 @@ describe('会话名：卡名压过终端标题（实咬：9 个静默审官一�
     assert.equal(S.sessionFromOrcaTerminal({ handle: 't', title: '帅位', lastOutputAt: min(1) }).label, '帅位');
   });
 });
+
+// #833 第三层闸（2026-09-05 实咬）：审官位闸修通之后换人**仍然**是零——
+// reviewer-create 返回 oneReviewerGate:reused，复用的正是那张死了 12 小时的审官卡。
+// 换人 = 先撤掉死的再立新的；少了前半步，前两层修了也白修。
+describe('换人要先撤死卡（#833 第三层）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+  const i = src.indexOf('function switchReviewer(');
+  const block = i > -1 ? src.slice(i, src.indexOf('\n}', src.indexOf('已换人')) + 2) : '';
+
+  it('找得到 switchReviewer——找不到就是判据失效，不是通过', () => {
+    assert.ok(i > -1 && block, 'agent-stall-watch.mjs 里没有 switchReviewer，本闸判据已失效');
+  });
+  it('立新审官之前先撤旧卡', () => {
+    const rmAt = block.indexOf("'worktree-rm'");
+    const createAt = block.indexOf("'reviewer-create'");
+    assert.ok(rmAt > -1, '没有撤旧卡这一步——reviewer-create 会复用死卡，换人永远是零');
+    assert.ok(createAt > -1 && rmAt < createAt, '撤旧卡必须在立新审官之前');
+  });
+  it('不许 --force：占用闸拦下就是判死判错了，当场停手不硬删', () => {
+    assert.ok(!/'--force'/.test(block),
+      'worktree-rm 不许带 --force——2026-09-04 实咬：force 删掉仍在 working 的树，底层进程没死还发了 21 条重复评论');
+    assert.match(block, /没有硬删|可能还活着/, '撤不掉要说清是「它可能还活着」，不是笼统的失败');
+  });
+  it('撤卡失败就不往下走，不留下「删了一半」的中间态', () => {
+    const rmAt = block.indexOf("'worktree-rm'");
+    const guard = block.slice(rmAt, block.indexOf("'reviewer-create'"));
+    assert.match(guard, /return \{ ok: false/, '撤卡失败必须直接返回，不许继续 create');
+  });
+  it('dry-run 一步都不许真做', () => {
+    assert.match(block, /if \(dryRun\)[\s\S]{0,200}return \{ ok: true, dryRun: true/,
+      'dry-run 必须在任何 spawnSync 之前返回');
+    const dryAt = block.indexOf('dryRun: true');
+    assert.ok(dryAt < block.indexOf('spawnSync'), 'dry-run 的返回必须排在第一次 spawnSync 之前');
+  });
+  it('判死的那张卡真的被传进来了——不传等于没撤', () => {
+    assert.match(src, /deadWorktreeId: hit\.worktreeId/,
+      '调用处要把判死的审官卡 id 传给 switchReviewer');
+  });
+});

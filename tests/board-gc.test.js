@@ -364,3 +364,92 @@ describe('挂在主树下的卡要单独判（不然永远轮不到它）', () =
     assert.equal(p.zombies.length, 0);
   });
 });
+
+// 2026-09-05 补两类死卡：PR 还开着不代表**这张卡**的活没完。
+// 盘面实况：12 张审官卡里 PR #884/#885 两张判定已落当前 head（活交付了），
+// ISSUE-#874 的单早关了卡还挂着——只判 PR 态的话这三张永远清不掉。
+describe('活已交付的卡也是僵尸（PR 还开着 ≠ 这张卡还有事做）', () => {
+  const card = (over = {}) => ({
+    id: 'wt_r', displayName: 'PR-#884 审官·gpt-5.6-luna', path: '/x', branch: 'refs/heads/PR-884-审官',
+    childWorktreeIds: [], ...over,
+  });
+  const base = { aliveWorktreeIds: new Set(), prState: new Map([[884, 'OPEN']]), branchState: new Map() };
+
+  it('审官判定已落当前 head + 无活口 → 判僵尸', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, worktrees: [card()], prJudgedAtHead: new Map([[884, true]]) });
+    assert.equal(p.zombies.length, 1, JSON.stringify(p));
+    assert.equal(p.zombies[0].kind, 'reviewer-delivered');
+  });
+
+  it('故意违规样本①：判定还没落 → 留着（这是「卡住」，归换人不归清理）', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, worktrees: [card()], prJudgedAtHead: new Map([[884, false]]) });
+    assert.equal(p.zombies.length, 0);
+    assert.equal(p.keep.length, 1);
+  });
+
+  it('故意违规样本②：判定表没查成 → 留着，不许当成「已交付」', async () => {
+    const S = await LOAD;
+    for (const t of [undefined, null, new Map()]) {
+      const p = S.planBoardGc({ ...base, worktrees: [card()], prJudgedAtHead: t });
+      assert.equal(p.zombies.length, 0, `prJudgedAtHead=${JSON.stringify(t)} 不该判僵尸`);
+    }
+  });
+
+  it('故意违规样本③：判定落了但树上还有活口 → 不删', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, aliveWorktreeIds: new Set(['wt_r']),
+      worktrees: [card()], prJudgedAtHead: new Map([[884, true]]) });
+    assert.equal(p.zombies.length, 0);
+  });
+
+  it('不是审官卡的，判定落没落都不按这条清（工人卡还要返工）', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base,
+      worktrees: [card({ displayName: 'PR-#884 工人·claude-opus-5 返工' })],
+      prJudgedAtHead: new Map([[884, true]]) });
+    assert.equal(p.zombies.length, 0);
+    assert.equal(p.keep.length, 1);
+  });
+});
+
+describe('issue 已关闭的无 PR 卡是僵尸', () => {
+  const card = (over = {}) => ({
+    id: 'wt_i', displayName: 'ISSUE-#874 帅位职责制度化落地', path: '/y',
+    branch: 'refs/heads/duty-solution-delivery', childWorktreeIds: [], ...over,
+  });
+  // 分支态给成「有东西没落地」——证明 issue 已关这条是自己判出来的，不是靠分支空。
+  const base = {
+    aliveWorktreeIds: new Set(), prState: new Map(),
+    branchState: new Map([['duty-solution-delivery', { onRemote: true, ahead: 3, dirty: 0, contributes: true }]]),
+  };
+
+  it('issue 已关 + 无 PR + 无活口 → 判僵尸', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, worktrees: [card()], issueState: new Map([[874, 'CLOSED']]) });
+    assert.equal(p.zombies.length, 1, JSON.stringify(p));
+    assert.equal(p.zombies[0].kind, 'issue-closed');
+  });
+
+  it('故意违规样本：issue 还开着 → 不清（分支有 3 个提交，走原来的留着）', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, worktrees: [card()], issueState: new Map([[874, 'OPEN']]) });
+    assert.equal(p.zombies.length, 0);
+  });
+
+  it('故意违规样本：issue 表没查成 → 不启用这条判据', async () => {
+    const S = await LOAD;
+    for (const t of [undefined, null, new Map()]) {
+      const p = S.planBoardGc({ ...base, worktrees: [card()], issueState: t });
+      assert.equal(p.zombies.filter((z) => z.kind === 'issue-closed').length, 0);
+    }
+  });
+
+  it('有活口就不删，issue 关了也不删', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, aliveWorktreeIds: new Set(['wt_i']),
+      worktrees: [card()], issueState: new Map([[874, 'CLOSED']]) });
+    assert.equal(p.zombies.length, 0);
+  });
+});

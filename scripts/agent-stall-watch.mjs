@@ -191,9 +191,34 @@ function workerModelOf({ ps, workers, worktreeId }) {
   return resolveActualWorkerModel({ labels: gh.labels });
 }
 
-function switchReviewer({ pr, reviewer, parentWorktree, dryRun }) {
-  if (dryRun) return { ok: true, dryRun: true, detail: `将换人：PR #${pr} → ${reviewer}` };
+/**
+ * 换人 = **先撤掉死的，再立新的**。少了前半步，换人这条路是零。
+ *
+ * 2026-09-05 实咬（#833 第三层闸）：审官位闸修通之后，reviewer-create 仍然换不成人——
+ * 它返回 `oneReviewerGate: reused`，复用的正是那张已经死了 12 小时的审官卡。
+ * 那道闸没写错：它是给「这个 PR 第一次起审官」用的，有卡就复用是对的。
+ * 错的是换人复用了「起审官」这条路，而换人的语义里本来就有「旧的不要了」这一步。
+ *
+ * 所以不给闸开口子（开了它以后就分不清是新起还是换人），在这里编排两步。
+ * 撤之前必须自己再确认一次那张卡没有活口——判死是上游给的，而删卡不可逆，
+ * 两件不可逆的事之间要有独立的一道确认（memory deleted-card-process-outlived-it：
+ * 卡删了底层进程还会活着跑完，那次是 --force 越过了占用闸）。
+ * 这里用不带 --force 的 worktree-rm，占用闸继续守着；它拒绝就说明判死判错了，当场停手。
+ */
+function switchReviewer({ pr, reviewer, parentWorktree, deadWorktreeId, dryRun }) {
+  if (dryRun) {
+    return { ok: true, dryRun: true, detail: `将换人：PR #${pr} → ${reviewer}${deadWorktreeId ? '（先撤死卡）' : ''}` };
+  }
   const hook = process.env.AGENT_STALL_SWITCH;
+  if (!hook && deadWorktreeId) {
+    const rm = spawnSync(process.execPath, [DAO, 'worktree-rm', '--worktree', deadWorktreeId],
+      { windowsHide: true, encoding: 'utf8', cwd: REPO_ROOT, timeout: 120000 });
+    if (rm.error || rm.status !== 0) {
+      const why = String(rm.error?.message || rm.stderr || `exit ${rm.status}`).trim().slice(0, 160);
+      // 占用闸拦下 = 这张卡其实还有活口 = 判死判错了。不硬删，报出来。
+      return { ok: false, dryRun: false, detail: `换人失败：撤不掉旧审官卡（${why}）——它可能还活着，没有硬删` };
+    }
+  }
   const cmd = hook
     ? [process.execPath, hook, '--pr', String(pr), '--reviewer', reviewer, ...(parentWorktree ? ['--parent-worktree', parentWorktree] : [])]
     : [process.execPath, DAO, 'reviewer-create', '--pr', String(pr), '--reviewer', reviewer, ...(parentWorktree ? ['--parent-worktree', parentWorktree] : [])];
@@ -426,6 +451,8 @@ function main(argv = process.argv.slice(2)) {
         pr: decision.pr,
         reviewer: decision.to,
         parentWorktree: hit.parentWorktreeId,
+        // 判死的就是这张审官卡；撤掉它，reviewer-create 才不会「复用」这具尸体。
+        deadWorktreeId: hit.worktreeId || null,
         dryRun: args.dryRun,
       });
       console.log(`· ${who} 命中 ${hit.sig} → ${sw.detail}（${decision.from} → ${decision.to}）`);

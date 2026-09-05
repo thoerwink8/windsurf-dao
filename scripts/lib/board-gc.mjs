@@ -38,6 +38,17 @@ export function descendantsOf(card, worktrees) {
   return { descendants: out, missing };
 }
 
+/** 审官卡：卡名带「审官」。命名规则见 assembleCardName（PR-#N 审官·模型）。 */
+function isReviewerCard(name) {
+  return /审官/.test(String(name || ''));
+}
+
+/** 卡名里的 issue 号。卡名形如「ISSUE-#874 …」或「ISSUE-891-复审894-工人替身树」。 */
+function issueNumberFromCardName(w) {
+  const m = String(w?.displayName || w?.name || '').match(/ISSUE[-\s]*#?(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
 function lookup(map, key) {
   if (key == null) return undefined;
   if (map instanceof Map) return map.get(key);
@@ -62,8 +73,11 @@ function prVerdict(raw) {
  *                         本模块不碰活性判据——一把尺只在一处）
  * @param prState          PR 号 → 'OPEN'|'MERGED'|'CLOSED'；查不到就别放进来（放进来的都算查成了）
  * @param branchState      分支名 → { onRemote, ahead, dirty }；同上
+ * @param prJudgedAtHead   PR 号 → true/false：当前 head 上有没有判定（审官卡的活算不算交付）。
+ *                         可不传；不传就不启用这条判据（没查成 ≠ 活已交付）
+ * @param issueState       issue 号 → 'OPEN'|'CLOSED'；同上，给无 PR 的卡判「事情结没结束」
  */
-export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState } = {}) {
+export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState, prJudgedAtHead, issueState } = {}) {
   if (!Array.isArray(worktrees)) {
     return { ok: false, error: '盘面没查成（worktrees 不是数组），一张都不判', zombies: [], keep: [], risky: [], unscanned: [] };
   }
@@ -149,6 +163,25 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState 
       }
       const stillOpen = verdicts.filter((x) => x.v === 'open');
       if (stillOpen.length) {
+        // PR 还开着，但**这张卡自己的活**可能已经交付了。审官卡就是这一类：
+        // 它的活是「给当前 head 落一个判定」，落了就到此为止，PR 后续合不合与它无关。
+        // 2026-09-05 盘面上 12 张审官卡里有 2 张（PR #884/#885）正是这个状态，
+        // 而只判 PR 态的话它们会永远留在盘面上。
+        // prJudgedAtHead 没传 / 查不到 ⇒ 不判，走原来的 keep（没查成 ≠ 活已交付）。
+        if (isReviewerCard(name) && prJudgedAtHead != null) {
+          const judged = stillOpen.map((x) => lookup(prJudgedAtHead, x.n));
+          if (judged.length && judged.every((v) => v === true)) {
+            zombies.push({
+              id, name, path: w.path || null, kind: 'reviewer-delivered',
+              why: `审官已给 PR ${stillOpen.map((x) => '#' + x.n).join('/')} 的当前 head 落了判定，活已交付且整树没有活着的进程`,
+              children: descendants.length,
+            });
+            continue;
+          }
+        }
+        // 为什么不顺手把「替身树／辅助树」也算进来（它们的目标 PR 已经交出去了）：
+        // PR 还开着就可能返工，而返工要用这棵树。删了不丢代码（远端有分支），但要重建。
+        // 判不准的不自动删——这一条留给人。
         keep.push({ id, name, why: `PR ${stillOpen.map((x) => '#' + x.n).join('/')} 还开着，活没完（卡住≠不需要）` });
         continue;
       }
@@ -158,6 +191,22 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState 
         children: descendants.length,
       });
       continue;
+    }
+
+    // 没有 PR：先看这张卡挂的 issue 是不是已经关了。关了 = 这件事结束了，卡没有理由再留着。
+    // 2026-09-05 盘面上的 ISSUE-#874（帅位职责制度化落地）就是这个状态：单早关了，卡还挂着。
+    // issueState 没传 / 查不到 ⇒ 不判，往下走分支判据（没查成 ≠ 已关闭）。
+    if (issueState != null) {
+      const issues = [...new Set(family.map(issueNumberFromCardName).filter((n) => n != null))];
+      const states = issues.map((n) => lookup(issueState, n));
+      if (issues.length && states.every((s) => String(s || '').toUpperCase() === 'CLOSED')) {
+        zombies.push({
+          id, name, path: w.path || null, kind: 'issue-closed',
+          why: `issue ${issues.map((n) => '#' + n).join('/')} 已关闭，无 PR，且整树没有活着的进程`,
+          children: descendants.length,
+        });
+        continue;
+      }
     }
 
     // 没有 PR：看分支里还有没有没落地的东西

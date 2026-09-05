@@ -85,6 +85,41 @@ function scanGithub() {
   return { scanned: true, issues: parsed.issues, prs: parsed.prs };
 }
 
+/**
+ * 别的仓有没有事挂着。**只感知，不派工**——派工链（worktree/终端/审官）只在本仓有。
+ *
+ * 2026-09-05：用户把 bot 的仓授权从 1 个扩到 6 个。在那之前帅位对别的仓完全无感：
+ * ai-gateway-stack 挂着 3 条 open issue 而它是本仓派工链的上游，网关坏了整条链跟着坏。
+ * 管辖清单不另外维护——**授权范围本身就是那张清单**：授权加一个仓这里自动多一个，
+ * 撤销自动少一个，不会像手写清单那样过期。
+ */
+function scanOtherRepos() {
+  const owner = String(REPO || '').split('/')[0];
+  if (!owner) return { scanned: false, error: 'REPO 里读不出 owner——没查成' };
+  const grab = (kind) => {
+    const gh = runGh(['search', kind, '--owner', owner, '--state', 'open',
+      '--limit', '100', '--json', 'repository,number,title'], 60000);
+    if (!gh.ok) return null;
+    try { const v = JSON.parse(gh.out); return Array.isArray(v) ? v : null; } catch { return null; }
+  };
+  const issues = grab('issues');
+  const prs = grab('prs');
+  if (issues == null || prs == null) return { scanned: false, error: '跨仓 search 没查成（授权或网络）' };
+  const mine = String(REPO);
+  const byRepo = new Map();
+  for (const [kind, list] of [['issue', issues], ['pr', prs]]) {
+    for (const x of list) {
+      const full = x?.repository?.nameWithOwner || x?.repository?.name;
+      if (!full || full === mine || String(full).endsWith('/' + mine.split('/')[1])) continue;
+      if (!byRepo.has(full)) byRepo.set(full, { repo: full, issues: 0, prs: 0, samples: [] });
+      const e = byRepo.get(full);
+      if (kind === 'issue') e.issues += 1; else e.prs += 1;
+      if (e.samples.length < 3) e.samples.push(`#${x.number} ${String(x.title || '').slice(0, 50)}`);
+    }
+  }
+  return { scanned: true, repos: [...byRepo.values()] };
+}
+
 function scanOrca() {
   const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
   if (!wt.ok) return { scanned: false, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
@@ -189,6 +224,7 @@ function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
   const reviewPending = scanReviewPending();
+  const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const policy = loadDispatchPolicy({ root: ROOT });
@@ -209,7 +245,7 @@ function buildSituation({ state } = {}) {
   const breakerIngest = ingestBreakerSignals();
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall,
+    github, orca, reviewPending, prReviews, stall, otherRepos,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
@@ -725,6 +761,10 @@ function cmdScan() {
       prs: situation.github.scanned ? situation.github.prs.length : null,
       reviewPending: situation.reviewPending.scanned ? situation.reviewPending.items.length : null,
     },
+    // 跨仓只报数，不进 health：别的仓查不到不该拦住本仓这一轮（它是感知，不是本轮要处置的活）。
+    otherRepos: situation.otherRepos?.scanned
+      ? situation.otherRepos.repos.map((r) => `${r.repo}: ${r.issues} issue / ${r.prs} PR`)
+      : `没查成：${situation.otherRepos?.error || '缺节'}`,
   };
   console.log(JSON.stringify(summary, null, 2));
   process.exit(health.allScanned ? 0 : 2);

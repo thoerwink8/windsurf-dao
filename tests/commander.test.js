@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('node:fs');
 
 const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
 
@@ -974,3 +975,39 @@ describe('decide：判绿按真 review 而非 reviewDecision（实咬）', () =>
   });
 });
 
+
+// 跨仓感知（2026-09-05）：用户把 bot 授权从 1 个仓扩到 6 个之前，帅位对别的仓完全无感——
+// ai-gateway-stack 挂着 3 条 open issue，而它正是本仓派工链的上游。
+describe('跨仓感知只感知不派工', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+
+  it('buildSituation 里真的采了这一面', () => {
+    assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
+    assert.match(src, /github, orca, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+  });
+
+  it('不维护管辖清单——授权范围就是清单', () => {
+    const i = src.indexOf('function scanOtherRepos');
+    const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
+    assert.match(fn, /--owner/, '用 owner 跨仓搜，授权能看见几个就是几个');
+    assert.ok(!/\[\s*'[a-z-]+\/[a-z-]+'\s*,/.test(fn), '不许出现手写的仓清单——清单会过期');
+  });
+
+  it('跨仓没查成不许拦住本轮：它不在 health 的必查清单里', () => {
+    const i = src.indexOf("const sections = ['github'");
+    const line = src.slice(i, i + 200);
+    assert.ok(!/otherRepos/.test(line),
+      '跨仓查不到是别人家的事，不该让本仓这一轮判成没查成');
+  });
+
+  it('没查成要显形，不许静默成「别的仓都没事」', () => {
+    assert.match(src, /otherRepos: situation\.otherRepos\?\.scanned[\s\S]{0,220}没查成/,
+      '摘要里没查成必须写出来——「没查成」和「都没事」分不开就等于没查');
+  });
+
+  it('自己这个仓不算「别的仓」', () => {
+    const i = src.indexOf('function scanOtherRepos');
+    const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
+    assert.match(fn, /full === mine/, '要把本仓排除掉，否则本仓的活会被当成跨仓提醒重报一遍');
+  });
+});
