@@ -95,3 +95,24 @@ FAQ 另一条：「**违规使用导致的损失不退**」。
 钉的是**显示名**不是 id：`ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL_NAME` 三个全是
 `Grok 4.6`，而 `..._MODEL` 三个 id 各不相同（opus-5[1m] / sonnet-5[1m] / haiku-4-5）。
 Linux 侧那次探针没打印 `_NAME` 变量，据此判「Linux 上不成立」证据不足。
+
+## 附：别拿两台机器的 setting.json 做整体对齐
+
+服务器 `setting.json` 顶层 12 个键，本机 34 个——**差的 23 个里只有 `agentLaunch` 是真缺口**，
+其余大多是「服务器本来就不该有」。照 diff 一把梭会坏三类东西：
+
+| 类 | 键 | 为什么不能搬 |
+|---|---|---|
+| 本机绝对路径 | `browserIdentitySourceDir`（Windows Chrome）、`guiBrowserBinary`（Edge） | 服务器上不存在 |
+| 本机网络 | `networkProxy` = `http://127.0.0.1:7890` | 那是本机的 clash，服务器没有，写了全断 |
+| **profile 引用** | `piModel` / `dshModel` / `guiModel` / `piGuiModel`，值形如 `profile:<uuid>` | **uuid 指的是本机 `models` 表里的条目**；服务器没有那张表，搬过去指向空气 |
+| 无显示面 | `guiAgentEnabled` / `guiBrowserMode` / `antigravity*` | 服务器无 DISPLAY（靠 orca 自起 Xvfb） |
+
+判据：服务器上 mirasim 今天跑完 12 个 codex 审官会话，**默认值本来就够用**。
+「缺了 22 个键」是错觉，不是配漏了——先查它是不是本来就不该有。
+
+## 附：上线顺序不能反
+
+**先授权，后写键。** 反过来 = 服务器每个 mirasim claude 会话都去跑一个未登录的 reclaude，
+启动即走设备授权流、当场全死，而卡面上仍显示 running（今天已经被这种「死了看起来像活着」
+咬过一次，见 `2026-09-05-审官全灭-裸pi落错provider.md`）。
