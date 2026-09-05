@@ -113,7 +113,7 @@ describe('ledger-sync 纯函数：名字与判等', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-name-'));
     const { path: p, event } = W.writeEvent({
       dir, type: 'incident', ts: '2026-09-04T10:00:00+08:00', machine: 'alpha', seq: 0,
-      payload: { fingerprint: 'ls-name-fixture', disposition: '记账', why: '名字由内容决定' }, schema: SCHEMA,
+      payload: { fingerprint: 'ls-name-fixture', disposition: '挂账待补', why: '名字由内容决定' }, schema: SCHEMA,
     });
     assert.strictEqual(S.expectedEventName(event), path.basename(p), '反推名字 == 真文件名');
     assert.notStrictEqual(S.expectedEventName({ ...event, seq: 1 }), path.basename(p), '改一个字段名字必须变');
