@@ -992,6 +992,14 @@ const CHECKS = [
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
   ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
   ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
+  ['㉑ mirasim 执行体健康（版本/relay 模式/额度窗，#880 卡 D）', () => {
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'agent-stall-watch-mirasim.mjs'), '--health'], { timeout: 30000 });
+    if (!r.probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${r.reason}` };
+    const head = String(r.stdout || '').split('\n')[0].trim();
+    if (r.code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
+    if (r.code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+    return { state: RED, detail: `mirasim 健康红：${head}` };
+  }],
 ];
 
 function outPath() {

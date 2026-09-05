@@ -29,7 +29,7 @@
 // 自己查自己查不出错——判完工的判据不复用发消息那一层的解析。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import os from 'node:os';
 
 /** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
@@ -848,3 +848,39 @@ export const readSession = sessionKey => runtime().readSession(sessionKey);
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
+
+// ── 卡 D 用：开一条原始 ws ─────────────────────────────────────────────────
+// 监控/回收/健康要枚举会话、读 relay 帧，这些不在五动词里；但它们和五动词共用同一条
+// 连线层——这里只把 defaultConnect 暴露出去，绝不在别处另造第二份 ws 收发（CLAUDE.md）。
+// 返回的 wire 形状同五动词内部用的那条：{ send, waitFor, close, state, closed, failure }。
+// 端口解析必须跟 runtime() 那条一模一样（opts → MIRASIM_PORT → 默认）：
+// 不然本机服务在 4970 时这条腿去敲 4316，读不到令牌，报「服务多半没在跑」——
+// 那是**没查成**被说成了「没有」，下游会拿它当「没有会话在用树」去删树（2026-09-04 实咬）。
+export async function openWire({ homeDir = os.homedir(), port, openTimeoutMs = 8_000, connect = defaultConnect } = {}) {
+  const p = Number(port || process.env.MIRASIM_PORT || DEFAULT_PORT);
+  return connect({ homeDir, port: p, openTimeoutMs });
+}
+
+/**
+ * 本机有哪些端口上确实有 mirasim 服务在跑。判据＝回环令牌文件（服务在跑才写、
+ * 一端口一份 ~/.mirasim/run/local-<port>.token）。
+ * 返回 {readable, ports:[number]}；readable=false ⇒ 连「有没有服务」都没查成，
+ * 调用方不许据此断言「没有服务」（那正是删树误判的入口）。
+ */
+export function liveServerPorts(homeDir = os.homedir()) {
+  const dir = dirname(tokenFile(homeDir, 0));
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    // 目录不存在 = 这台机器上从没起过 mirasim（是事实）；其它错 = 没查成
+    if (e?.code === 'ENOENT') return { readable: true, ports: [], why: `${dir} 不存在（这台机器没起过 mirasim）` };
+    return { readable: false, ports: [], why: `读不到 ${dir}：${e?.message || e}` };
+  }
+  const ports = [];
+  for (const n of names) {
+    const m = /^local-(\d{2,6})\.token$/.exec(n);
+    if (m) ports.push(Number(m[1]));
+  }
+  return { readable: true, ports, why: null };
+}
