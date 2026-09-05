@@ -92,7 +92,7 @@
 - [x] `dao.mjs leg status|drop|restore`：drop=腿停用+树条目联动禁用（记 禁用来源=leg:<id>；引擎只读树，不禁树就是空话）；影响面全黑拒拆除非 --force；restore 只解自己禁的
 - [x] dao-check：腿表样本（红/绿/空）+ live 两项，变异测试自证有牙（坏夹具→红、手改真表→红）
 - [x] 测试 tests/legs.test.js 24 绿；dao.test 639 绿（parseArgs 扩动词）；dao-check 绿项 106（3 红为本机存量，stash 验证与本活无关）
-- [ ] 试效果：leg drop --dry-run 按轴看影响面 / 真拆一条再 restore 往返
+- [x] 试效果（2026-09-05 值守实跑）：dry-run 看影响面对；全黑腿（grok-4.6@gw/orca，方案整合 1→0）拒拆✓；缺 --why 拒拆✓；真拆 glm-5.2@gw/orca 后 restore 往返，model-routing.json 回到零 diff、状态回在役✓
 - 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工 + 并发 1 + 掉号探针）**不在本步**——腿已登记为停用，等本步落完开工
 - 边界：A–F 卡接口不动；卡 B 的 `执行体` 节将并入腿表（B 变基时处理）；#822 与 cc-local 相撞已重拍（用户 2026-09-05 00:58：cc-local 开例外，Claude 族继续走 reclaude 链，#822「非GPT只走pi-gw」对 Claude 族不适用——当时拍的是工人选型，未考虑 Claude 凭据挂在 reclaude 链上）
 - 在途 PR #884/#885/#886/#887 让步等本步落完再变基（用户 2026-09-04：「仓库 issue 如果还需要的，先等这个内容完全落地」）
