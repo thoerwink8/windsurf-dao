@@ -65,7 +65,7 @@ function saveState(state) {
 
 // ── 眼睛：各面采集，每面标 scanned 或 unscanned（没查成 ≠ 空）──
 function runGh(args, timeout = 45000) {
-  const r = spawnSync(ghExecutable(), args, { encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  const r = spawnSync(ghExecutable(), args, { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
   if (r.error) return { ok: false, error: `gh 不可用：${r.error.message}` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `gh exit ${r.status}`).trim().slice(0, 240) };
   return { ok: true, out: String(r.stdout || '') };
@@ -203,7 +203,7 @@ function situationHealth(situation) {
 
 // ── 手：hub 回流（带去重）──
 function hubSay(text) {
-  const r = spawnSync('hub-say', [text], { encoding: 'utf8', timeout: 30000 });
+  const r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
   if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
   return { ok: true };
@@ -292,7 +292,7 @@ function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
 
 function runCmd(argv, timeout = 600000) {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  const r = spawnSync(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
   if (r.error) return { ok: false, error: `起不来：${r.error.message}` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
   return { ok: true, out: String(r.stdout || '') };

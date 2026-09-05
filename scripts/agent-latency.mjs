@@ -66,7 +66,7 @@ function once(extra = []) {
       '-p', PROMPT, '--model', MODEL,
       '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       ...extra,
-    ], {
+    ], { windowsHide: true,
       cwd: CWD, shell: true,
       // stdin 必须 ignore——见文件头「测量纪律」第一条
       stdio: ['ignore', 'pipe', 'pipe'],

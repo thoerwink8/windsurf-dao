@@ -28,14 +28,14 @@ const cwd = resolve(argPath || process.cwd());
 const say = (s) => process.stdout.write(s + '\n');
 
 function git(args, opts = {}) {
-  const r = spawnSync('git', ['-C', opts.cwd || root, ...args], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', opts.cwd || root, ...args], { windowsHide: true, encoding: 'utf8' });
   return { status: r.status ?? 1, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
 // ── 读盘面 ─────────────────────────────────────────────────────────
 let root = cwd;
 {
-  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) { say(`[收工] 这里不是 git 仓：${cwd}`); process.exit(1); }
   root = String(r.stdout).trim();
 }
@@ -71,7 +71,7 @@ if (!HAS_WORK && ship.action === 'push') {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
     else {
       say('[收工] 推之前跑检查…');
-      const c = spawnSync(process.execPath, [checkFile], { cwd: root, encoding: 'utf8' });
+      const c = spawnSync(process.execPath, [checkFile], { windowsHide: true, cwd: root, encoding: 'utf8' });
       const tail = String(c.stdout || '').trim().split(/\r?\n/).pop() || '';
       say(`[收工] 检查：${tail}`);
       if (c.status !== 0) { say('[收工] 检查红——不推，先修（master 必须能跑）'); process.exit(1); }
@@ -91,7 +91,7 @@ if (!HAS_WORK && ship.action === 'push') {
 const orcaPaths = new Set();
 {
   // orca 在管的树绝不碰（删卡走编排闭环）。orca 不在 = 空集，不算没查成——本机停派工态没有编排树。
-  const r = spawnSync('orca', ['worktree', 'list', '--json'], { encoding: 'utf8', timeout: 15000, shell: true });
+  const r = spawnSync('orca', ['worktree', 'list', '--json'], { windowsHide: true, encoding: 'utf8', timeout: 15000, shell: true });
   if (r.status === 0) {
     try {
       for (const w of JSON.parse(r.stdout)?.result?.worktrees || []) {

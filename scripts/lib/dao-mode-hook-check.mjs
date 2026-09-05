@@ -56,7 +56,7 @@ function readJson(file) {
 }
 
 function runRegistered(command, stateFile, pluginRoot) {
-  const r = spawnSync(command, {
+  const r = spawnSync(command, { windowsHide: true,
     shell: true,
     encoding: 'utf8',
     input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: 'dao check 自检' }),

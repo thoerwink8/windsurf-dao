@@ -26,7 +26,7 @@ const ROOT = process.cwd();
 const DECISION = 'docs/decisions/2026-08-21-close-issue-from-zero.md';
 
 function runGh(args) {
-  const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT, timeout: 30000 });
+  const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout: 30000 });
   if (r.error || (r.status !== 0 && r.status != null)) {
     return { ok: false, error: String(r.error?.message || r.stderr || `gh exit ${r.status}`).trim().slice(0, 200) };
   }

@@ -39,7 +39,7 @@ function run(cmd, args, { timeout = 30000, env } = {}) {
   // env：给需要带敏感值的子进程用——
   // 值放环境而不是 argv，因为 argv 就是 /proc/<pid>/cmdline，全局可读、ps aux 一眼看见；
   // /proc/<pid>/environ 只有属主读得到。
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, ...(env == null ? {} : { env }) });
+  const r = spawnSync(cmd, args, { windowsHide: true, encoding: 'utf8', timeout, ...(env == null ? {} : { env }) });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
