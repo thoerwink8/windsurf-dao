@@ -247,7 +247,7 @@ describe('换人失败要重试，成功才封账', () => {
   });
 
   it('办成了才封账；没办成的下一轮还试', () => {
-    assert.match(src, /prev\.ok === true \|\| prev\.action !== 'restart-reviewer'/,
+    assert.match(src, /prev\.ok === true[\s\S]{0,80}prev\.action !== 'restart-reviewer'/,
       '封账条件必须是「办成了」或「本来就只是报警」，不是「见过」');
   });
 
@@ -264,5 +264,13 @@ describe('换人失败要重试，成功才封账', () => {
     const a = src.indexOf('saveState(livenessStatePath');
     const b = src.indexOf("const prev = loadState(args.state);");
     assert.ok(a > -1 && b > a, '第一次落账要在 scanRound 之前');
+  });
+
+
+  it('旧账本（只有 at/minutes，没有 action/ok）不许被当成「已了结」', () => {
+    const src2 = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+    assert.match(src2, /prev\.action != null && prev\.action !== 'restart-reviewer'/,
+      '判 settled 要求 action 记过——老条目 action 是 undefined，'
+      + "不加这一层就会 `undefined !== 'restart-reviewer'` → 判已了结，换人失败的卡永远轮不到重试");
   });
 });

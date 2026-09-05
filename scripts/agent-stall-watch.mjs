@@ -384,7 +384,11 @@ function main(argv = process.argv.slice(2)) {
       // 盘面上看着「已处置」，实际一个都没换成。
       // 办成了/纯报警 → 就此打住；没办成 → 再试，最多 MAX_RETRY 轮，之后停手等人（免得每 15 分钟一次死循环）。
       const tries = Number(prev?.tries) || 0;
-      const settled = prev && (prev.ok === true || prev.action !== 'restart-reviewer');
+      // 旧账本没有 action/ok 两个字段（2026-09-05 之前只记 {at,minutes}）。
+      // 判 settled 必须要求 action **记过**：否则老条目一律 `undefined !== 'restart-reviewer'` → 判已了结，
+      // 那 10 个换人失败的审官就永远轮不到重试，等于这次修了个寂寞。
+      const settled = prev && (prev.ok === true
+        || (prev.action != null && prev.action !== 'restart-reviewer'));
       if (prev && (settled || tries >= MAX_SWITCH_RETRY)) {
         nextSilent[key] = { ...prev, minutes: Math.round((sil.silentMs || 0) / 60000) };
         continue;
