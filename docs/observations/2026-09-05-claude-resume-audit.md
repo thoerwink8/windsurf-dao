@@ -26,3 +26,5 @@
 验收方式：恢复同一会话后，控制链失败时能看到明确的 `resume-uncontrolled` 状态和阻断原因；控制链成功时能读到结构化身份、变更与结果证据，并能由帅位单独复核。
 
 上报记录：已按仓内约定尝试执行 `node scripts/dao.mjs ask` 通知帅位；发送失败，原始错误为 `run-current 没查成: orca 报错 runtime_unavailable: Could not read Orca runtime metadata at C:\\Users\\Administrator\\AppData\\Roaming\\orca\\orca-runtime.json. Start the Orca app first.` 因此本记录已落盘，但帅位的机器信箱尚未确认收到，不能把“已通知”当成成功。
+
+处置：Remote Control 400 导致「会话在跑 ≠ 帅位可接管」这条已确认属实，落成 issue（见下）。收件箱机制本身由本轮 dao-inbox skill 落地。

@@ -78,8 +78,20 @@ describe('onboard', () => {
       const { home, clone } = mkHome('perskill'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
       fs.rmSync(p); fs.mkdirSync(p);
-      fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
+      // 2026-09-05 起逐个比对全部 skill，不再拿 dispatch 一个当哨兵——只链一个不算绿。
+      const src = path.join(REPO, 'host', 'skills');
+      for (const n of fs.readdirSync(src)) {
+        if (!fs.existsSync(path.join(src, n, 'SKILL.md'))) continue;
+        fs.symlinkSync(path.join(src, n), path.join(p, n), 'junction');
+      }
       assert.equal((await ids(home)).length, 0, '逐个链接应绿');
+    });
+    await t.test('只链 dispatch、别的没链 → 仍判 skills-partial（实咬：新建 dao-inbox 后 onboard 照报全绿）', async () => {
+      const { home, clone } = mkHome('sentinel'); await linkMemory(home, clone, REPO); mkCreds(home);
+      const p = path.join(home, '.claude', 'skills');
+      fs.rmSync(p); fs.mkdirSync(p);
+      fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
+      assert.ok((await ids(home)).includes('skills-partial'), '只链一个不许判绿——这正是当天漏掉 dao-inbox 的那格');
     });
     await t.test('memory 未接 / 凭据缺失 一起报（主 clone 形态：.git 是目录）', async () => {
       // 本测试仓自己是 linked worktree（.git 是文件），会命中「worktree 不报 memory」的抑制；

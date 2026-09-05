@@ -78,8 +78,26 @@ export function checkSkillsLink({ root, home, dir = '.claude' }) {
   try { ds = lstatSync(join(linkPath, 'dispatch')); }
   catch { return { problem: { id: 'skills-partial', msg: `~/${dir}/skills 目录在但缺 dispatch 等链接（逐个链接不全）` } }; }
   if (ds.isSymbolicLink()) {
-    if (existsSync(join(linkPath, 'dispatch', 'SKILL.md'))) return {};
-    return { problem: { id: 'skills-dangling', msg: `~/${dir}/skills/dispatch 链接悬空` } };
+    if (!existsSync(join(linkPath, 'dispatch', 'SKILL.md'))) {
+      return { problem: { id: 'skills-dangling', msg: `~/${dir}/skills/dispatch 链接悬空` } };
+    }
+    // 逐个比对，不拿 dispatch 一个当哨兵（2026-09-05 实咬：新建 dao-inbox skill 后
+    // onboard 照报「全绿」，因为它只看 dispatch 在不在——「扫完 0 条」和「只扫了 1 个样本」分不开）。
+    const srcDir = join(root, 'host', 'skills');
+    let want;
+    try {
+      want = readdirSync(srcDir).filter((n) => existsSync(join(srcDir, n, 'SKILL.md')));
+    } catch (e) {
+      return { unscanned: `host/skills 读不了（${e.message || e}）——缺链没查成，不是没缺` };
+    }
+    if (!want.length) return { unscanned: 'host/skills 里一个 SKILL.md 都没扫到——没查成，不是没缺' };
+    const missing = want.filter((n) => {
+      try { return !lstatSync(join(linkPath, n)).isSymbolicLink(); } catch { return true; }
+    });
+    if (missing.length) {
+      return { problem: { id: 'skills-partial', msg: `~/${dir}/skills 缺 ${missing.length} 个链接：${missing.join('、')}` } };
+    }
+    return {};
   }
   return { problem: { id: 'skills-not-link', msg: `~/${dir}/skills/dispatch 是拷贝的真目录——会过期，人工并回后重链` } };
 }
