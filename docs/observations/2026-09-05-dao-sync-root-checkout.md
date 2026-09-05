@@ -46,3 +46,38 @@
 ## 上报
 
 本文件即为已记录路径；本轮仅新增观察文档，未替帅位改代码、推送、部署或关闭会话。2026-09-05 14:54 通过 `list_sessions` 找到运行中的 `claude:80d8ab86-7e1a-4195-904b-94e76b88a873`，`send_session_message` 回执为**已送达**：消息已注入其当前 turn，将在下一个步骤读取（message id `sm-e838ed7ce97a4312`，one-way，不代表已读回复）。
+
+---
+
+## 处置（帅位 2026-09-05 当场修掉）
+
+**核实：属实，而且比报告说的更该急。** 服务器实测：
+
+    $ grep -E "^User=" /etc/systemd/system/dao-sync.service   # 空
+    $ ls -la /home/orca/windsurf-dao/scripts/server-sync.sh
+    -rw-rw-r-- 1 orca orca 1440 ...
+
+七个单元里**只有 dao-sync 漏了 `User=`**，另外六个（dao-agent-stall / dao-board-gc /
+commander-act / commander-inventory / feishu-triage / orca-serve）全都写了 `User=orca`。
+「大家都写了」正是这一个一直没被发现的原因。
+
+比报告的措辞再狠一点：能写那个 checkout 的不是「某些 agent」，是**每一个工人 agent**——
+仓可写本来就是派工的前提。所以这条等于给盘面上任何一个工人留了一条 5 分钟到期的 root 通道。
+
+**修法（已上线，不是建议）：**
+
+- `dao-sync.service` 加 `User=orca` / `Group=orca`，外加 `ProtectSystem=full`、
+  `ProtectHome=read-only`、`ReadWritePaths=` 收窄可写面。
+  没开 `NoNewPrivileges`——它会连 sudo 一起挡掉，而下面那条白名单正需要 sudo；
+  收窄改用 sudoers 单条规则实现。
+- 脚本里唯一真要 root 的只有 `systemctl try-restart feishu-triage` 一句
+  （git 动作本来就是 `sudo -u orca`，现在进程自己就是 orca，那层包装一并去掉）。
+  这一句收进 `host/machine/sudoers.d/dao-sync`：命令写死、绝对路径、不带通配、不指向家目录。
+- `install-dao-sync.sh` 落 sudoers 前先 `visudo -c` 验语法——sudoers 写坏会把整台机器的 sudo 锁死。
+
+**配了会报警的检查**（不然下一个单元还会漏）：`tests/unit-privilege.test.js` 四条——
+以 root 跑的单元不许 ExecStart 仓内文件、每个单元都必须显式写 `User=`、
+sudoers 规则不许带通配也不许指向家目录、以及「扫出 0 个单元就判失效」。
+**已故意把 `User=orca` 拿掉复验一次，两条判据当场变红，还原后恢复绿。**
+
+处置：直接修掉，未立 issue。

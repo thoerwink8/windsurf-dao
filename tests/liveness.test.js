@@ -165,8 +165,11 @@ describe('静默审官接自动换人（#833）', () => {
   });
   it('只喂新判的——去重在前，否则同一张卡每轮换一次人', () => {
     const i = src.indexOf('silentReviewers.push(');
-    const before = src.slice(Math.max(0, i - 900), i);
-    assert.match(before, /if \(seenSilent\[key\]\) continue;/, '收集前必须先过去重');
+    const before = src.slice(Math.max(0, i - 1400), i);
+    // 去重条件在 2026-09-05 从「见过就跳」改成「办成了或试满了才跳」——
+    // 因为原来失败和成功记同一条账，一次换人失败就永远不再试。
+    assert.match(before, /if \(prev && \(settled \|\| tries >= MAX_SWITCH_RETRY\)\) \{[\s\S]{0,140}continue;/,
+      '收集前必须先过去重，且去重条件要看「办成没办成」不是「见没见过」');
   });
   it('换人判据仍走 decideHitAction，不在本文件另写一套', () => {
     assert.match(src, /decideHitAction\(\{/);
@@ -229,5 +232,37 @@ describe('换人要先撤死卡（#833 第三层）', () => {
   it('判死的那张卡真的被传进来了——不传等于没撤', () => {
     assert.match(src, /deadWorktreeId: hit\.worktreeId/,
       '调用处要把判死的审官卡 id 传给 switchReviewer');
+  });
+});
+
+// 2026-09-05 实咬：10 个审官换人全失败（exit 1），而失败和成功记的是同一条账，
+// 下一轮全被去重挡掉——**一次失败就永远不再试**。盘面上看着「已处置」，实际一个都没换成。
+describe('换人失败要重试，成功才封账', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+
+  it('账上记了办没办成，不只是「报过了」', () => {
+    assert.match(src, /tries: tries \+ 1, ok: null/, '新记一条要带尝试次数和「还不知道办没办成」');
+    assert.match(src, /switchLedger\[hit\.ledgerKey\] = sw\.ok === true/, '换人结果要回填');
+    assert.match(src, /nextSilent\[k\]\.ok = ok/, '回填要落到静默账上');
+  });
+
+  it('办成了才封账；没办成的下一轮还试', () => {
+    assert.match(src, /prev\.ok === true \|\| prev\.action !== 'restart-reviewer'/,
+      '封账条件必须是「办成了」或「本来就只是报警」，不是「见过」');
+  });
+
+  it('重试有上限——不然每 15 分钟死循环一次', () => {
+    assert.match(src, /const MAX_SWITCH_RETRY = \d+;/);
+    assert.match(src, /tries >= MAX_SWITCH_RETRY/, '到上限要停手等人');
+  });
+
+  it('dry-run 不许写账——写了下一轮真跑时会被自己的干跑记录挡掉', () => {
+    assert.match(src, /if \(!args\.dryRun && switchLedger/, '回填也要判 dryRun');
+  });
+
+  it('换人之前先落一次账：中途崩了本轮判过的静默不该丢', () => {
+    const a = src.indexOf('saveState(livenessStatePath');
+    const b = src.indexOf("const prev = loadState(args.state);");
+    assert.ok(a > -1 && b > a, '第一次落账要在 scanRound 之前');
   });
 });

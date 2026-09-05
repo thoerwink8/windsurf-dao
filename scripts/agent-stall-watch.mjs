@@ -191,6 +191,12 @@ function workerModelOf({ ps, workers, worktreeId }) {
   return resolveActualWorkerModel({ labels: gh.labels });
 }
 
+// 换人没办成最多再试这么多轮，之后停手等人——不然每 15 分钟死循环一次。
+const MAX_SWITCH_RETRY = 3;
+
+/** 本轮换人结果：账本键 → 办成没办成。跑完回写进静默账，决定下一轮还试不试。 */
+let switchLedger = null;
+
 /**
  * 换人 = **先撤掉死的，再立新的**。少了前半步，换人这条路是零。
  *
@@ -372,8 +378,21 @@ function main(argv = process.argv.slice(2)) {
       // 键带处置动作——从「交给你看」变成「重起一个」算新情况，值得再说一次。
       const key = `${sil.worktreeId || sil.id}|${route.action}`;
       if (nextSilent[key]) continue; // 同一张卡本轮已收
-      nextSilent[key] = { at: new Date().toISOString(), minutes: Math.round((sil.silentMs || 0) / 60000) };
-      if (seenSilent[key]) continue;
+      const prev = seenSilent[key];
+      // 记账要区分「说过了」和「办成了」。2026-09-05 实咬：10 个审官换人全失败（exit 1），
+      // 而失败和成功记的是同一条账，于是下一轮全被去重挡掉——**一次失败就永远不再试**，
+      // 盘面上看着「已处置」，实际一个都没换成。
+      // 办成了/纯报警 → 就此打住；没办成 → 再试，最多 MAX_RETRY 轮，之后停手等人（免得每 15 分钟一次死循环）。
+      const tries = Number(prev?.tries) || 0;
+      const settled = prev && (prev.ok === true || prev.action !== 'restart-reviewer');
+      if (prev && (settled || tries >= MAX_SWITCH_RETRY)) {
+        nextSilent[key] = { ...prev, minutes: Math.round((sil.silentMs || 0) / 60000) };
+        continue;
+      }
+      nextSilent[key] = {
+        at: new Date().toISOString(), minutes: Math.round((sil.silentMs || 0) / 60000),
+        action: route.action, tries: tries + 1, ok: null,
+      };
       fresh.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
         + `——${route.action === 'restart-reviewer' ? '当它死了，重起一个' : '交给你看'}`);
       // 判死之后要真换人（用户 2026-09-05 拍板 #833）。此前这条能力挂在 #807 删掉的本机 watchdog 上，
@@ -387,6 +406,8 @@ function main(argv = process.argv.slice(2)) {
           agentIdentity: sil.agentIdentity || null,
           worktreeId: sil.worktreeId || null,
           sig: `静默 ${Math.round((sil.silentMs || 0) / 60000)} 分钟`,
+          // 换人办没办成，回填到这条账上（见下面 lines 回写）。
+          ledgerKey: key,
         });
       }
     }
@@ -405,7 +426,10 @@ function main(argv = process.argv.slice(2)) {
     if (args.dryRun) console.log(`[dry] 本会发：${text}`);
     else say(text);
   }
+  // 先落一次账：下面 scanRound / 换人任何一步崩了，本轮判过的静默也不会丢，
+  // 不至于下一轮当成全新的再报一遍。换人结果稍后回填再落第二次。
   if (!args.dryRun) saveState(livenessStatePath(args.state), nextSilent);
+  switchLedger = {};
 
   const prev = loadState(args.state);
   const need = Number(process.env.AGENT_STALL_STRIKES || 2);
@@ -457,6 +481,8 @@ function main(argv = process.argv.slice(2)) {
       });
       console.log(`· ${who} 命中 ${hit.sig} → ${sw.detail}（${decision.from} → ${decision.to}）`);
       lines.push({ name: hit.displayName, action: 'switch', ok: sw.ok, from: decision.from, to: decision.to, detail: sw.detail });
+      // 办成没办成回填到静默账上：办成了就此打住，没办成下一轮还要再试（见上面 MAX_SWITCH_RETRY）。
+      if (hit.ledgerKey && switchLedger) switchLedger[hit.ledgerKey] = sw.ok === true;
       if (!sw.ok) failed += 1;
     } else if (decision.action === 'escalate') {
       console.log(`· ${who} 命中 ${hit.sig} → 报帅停手：${decision.reason}`);
@@ -465,6 +491,15 @@ function main(argv = process.argv.slice(2)) {
       console.log(`· ${who} 命中 ${hit.sig} → 只报警（${decision.reason}）`);
       lines.push({ name: hit.displayName, action: 'alert', reason: decision.reason });
     }
+  }
+
+  // 换人办成没办成回填静默账：办成的就此打住，没办成的下一轮还会再试（最多 MAX_SWITCH_RETRY 轮）。
+  // 不回填的话失败和成功记的是同一条账，下一轮全被去重挡掉——一次失败就永远不再试。
+  if (!args.dryRun && switchLedger && Object.keys(switchLedger).length) {
+    for (const [k, ok] of Object.entries(switchLedger)) {
+      if (nextSilent[k]) nextSilent[k].ok = ok;
+    }
+    saveState(livenessStatePath(args.state), nextSilent);
   }
 
   say(ensurePlain(buildStallReport({ failed, need, items: lines }), 'agent-stall-watch'));
