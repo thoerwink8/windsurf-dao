@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
 
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'liveness.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
@@ -106,5 +107,34 @@ describe('活性：扫一轮的三态可辨', () => {
     const sessions = [S.sessionFromOrcaTerminal({ handle: 'b', lastOutputAt: min(600) })];
     assert.equal(S.scanLiveness({ sessions, now: NOW }).counts.silent, 1);
     assert.equal(S.scanLiveness({ sessions, now: NOW, thresholdMs: 24 * 3600 * 1000 }).counts.silent, 0);
+  });
+});
+
+// 2026-09-05 实咬（用户截图：总控群被同一句话无限刷屏）：静默播报三个洞——
+// ①--dry-run 也真发；②每轮对同一个静默会话重发；③会话名直接播 shell 提示符里的路径。
+describe('静默播报不刷屏（实咬）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+  const i = src.indexOf('const live = scanLiveness');
+  // 窗口到活性块自己的收尾为止——放宽会扫进后面的撞限流代码，把别人的 say 算到本块头上。
+  const end = src.indexOf('saveState(livenessStatePath', i);
+  const block = i > -1 && end > i ? src.slice(i, end + 60) : '';
+
+  it('找得到活性块——找不到就是判据失效，不是通过', () => {
+    assert.ok(i > -1, 'agent-stall-watch.mjs 里没有活性块，本闸判据已失效');
+  });
+  it('dry-run 不许真发', () => {
+    assert.match(block, /if \(args\.dryRun\)/, '播报前必须先判 dryRun——我自己跑 --dry-run 时也把消息发进了群');
+  });
+  it('同一静默不重播：有去重记账且落盘', () => {
+    assert.match(block, /seenSilent\[key\]/, '要按会话记账去重');
+    assert.match(block, /saveState\(livenessStatePath/, '记账要落盘，否则下一轮又是新的');
+  });
+  it('一轮合成一条发，活性块里只有一处 say', () => {
+    assert.match(block, /liveLines\.length === 1 \? liveLines\[0\]/, '多条要合并成一段');
+    const says = (block.match(/\bsay\(/g) || []).length;
+    assert.ok(says <= 1, '活性块里只该有一处 say，现在有 ' + says + ' 处——每个发现各发一条就是刷屏');
+  });
+  it('会话名不许直接播 shell 提示符里的路径', () => {
+    assert.match(block, /plainLabel\(sil\)/, '播报要走 plainLabel，别直接用终端标题');
   });
 });

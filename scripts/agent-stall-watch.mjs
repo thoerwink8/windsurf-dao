@@ -218,6 +218,20 @@ function warnPadStillThere() {
 }
 
 /** 静默阈值（分钟）可用环境变量覆盖，便于按机器调；读不出数就用默认，不静默失效。 */
+function livenessStatePath(statePath) {
+  return String(statePath).replace(/\.json$/, '') + '-liveness.json';
+}
+
+// 会话名要说人话：终端标题常常就是一行 shell 提示符，直接播出去用户只看到一串路径
+// （服务器落地清单「说人话判据」：不出现路径/命令行）。取最后一段，去掉结尾的提示符。
+function plainLabel(sess) {
+  const raw = String(sess?.label || '').trim();
+  const looksLikePrompt = raw.includes('/') || /[$#]\s*$/.test(raw);
+  if (!looksLikePrompt) return `${sess.driver} 会话「${raw.slice(0, 40)}」`;
+  const tail = raw.split('/').filter(Boolean).pop() || raw;
+  return `${sess.driver} 会话「${tail.replace(/[$#]\s*$/, '').trim().slice(0, 40)}」`;
+}
+
 function silenceThresholdMs() {
   const n = Number(process.env.DAO_SILENCE_MINUTES);
   return Number.isFinite(n) && n > 0 ? n * 60000 : DEFAULT_SILENCE_MS;
@@ -299,21 +313,33 @@ function main(argv = process.argv.slice(2)) {
   // ② 发现判据（2026-09-05 拍板：删掉「靠认识错误字样」这一层）：
   // 唯一判据是「多久没有可验证的推进」。指纹只留作说明原因，不再决定报不报。
   const live = scanLiveness({ sessions: liveSessions, thresholdMs: silenceThresholdMs() });
+  const seenSilent = loadState(livenessStatePath(args.state));
+  const nextSilent = {};
+  const liveLines = [];
   if (!live.ok) {
-    say(`⚠️ 会话活性没查成：${live.error}`);
+    liveLines.push(`会话活性没查成：${live.error}`);
   } else {
-    if (live.sampledNothing) {
-      say('⚠️ 会话活性没查成：这一轮一个会话都没采到——不是「全都健康」');
-    }
-    if (live.counts.unscanned) {
-      say(`⚠️ 会话活性：${live.counts.unscanned} 个会话答不上「上次真动」（没查成，不当活着）`);
-    }
+    if (live.sampledNothing) liveLines.push('会话活性没查成：这一轮一个会话都没采到——不是「全都健康」');
+    if (live.counts.unscanned) liveLines.push(`${live.counts.unscanned} 个会话答不上「上次真动」（没查成，不当活着）`);
     for (const sil of live.silent) {
       const route = routeSilent(sil);
-      say(`${sil.driver} 会话「${String(sil.label).slice(0, 40)}」${sil.why}——${route.action === 'restart-reviewer' ? '判死重起' : '报帅'}`);
+      // 只报**新出现**的静默。2026-09-05 实咬：timer 每 15 分钟一轮、每个静默会话各发一条，
+      // 总控群被同一句话无限刷屏。键带处置动作——从「交给你看」变成「重起一个」算新情况，值得再说。
+      const key = `${sil.id}|${route.action}`;
+      nextSilent[key] = { at: new Date().toISOString(), minutes: Math.round((sil.silentMs || 0) / 60000) };
+      if (seenSilent[key]) continue;
+      liveLines.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
+        + `——${route.action === 'restart-reviewer' ? '当它死了，重起一个' : '交给你看'}`);
     }
     console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done} / 没查成 ${live.counts.unscanned}`);
   }
+  // 一轮只发一条：同轮多条发现合成一段（服务器落地清单「说人话判据」：不刷屏）。
+  if (liveLines.length) {
+    const text = liveLines.length === 1 ? liveLines[0] : `这一轮盘点发现 ${liveLines.length} 件事：\n· ${liveLines.join('\n· ')}`;
+    if (args.dryRun) console.log(`[dry] 本会发：${text}`);
+    else say(text);
+  }
+  if (!args.dryRun) saveState(livenessStatePath(args.state), nextSilent);
 
   const prev = loadState(args.state);
   const need = Number(process.env.AGENT_STALL_STRIKES || 2);
