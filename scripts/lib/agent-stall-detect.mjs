@@ -7,7 +7,13 @@
 // 2026-09-03 实咬：PR #827 审官屏面停在 `exceeded retry limit, last status: 429`，
 // watchdog ERROR_FINGERPRINTS 没有这两条，就算本机看门狗在跑也不报。
 
+import { join } from 'node:path';
 import { planCapacitySwitch, parseReviewerCardName } from './dianjiangtai-reviewer-slot.mjs';
+
+/** 正式连红账本。指挥官 / 熔断 / timer 都读这一处，禁止再默认 ~/.agent-stall-watch.json（那是 #833 退役垫片）。 */
+export function stallWatchPath(home) {
+  return join(home, '.dao', 'agent-stall-watch.json');
+}
 
 /** 撞限流/卡死指纹。字符串 = 大小写不敏感子串；正则按原样。 */
 export const STALL_FINGERPRINTS = [
