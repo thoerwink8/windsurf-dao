@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="dao-watchdog">
+  <title>dao-watchdog</title>
+  <!-- 家族规矩（照另三只反推的，见 host/brand/README.md）：
+       纯色底 + 一个白色扁平图形，无渐变、无描边、无外框，底色取 GitHub Primer。
+         marshal #bc4c00 三角 · worker #1a7f37 方块 · reviewer #0d419d 对勾 · watchdog #8250df 狗头
+       改这张之前先在 30px 下看一眼：评论列表就是那个尺寸，糊了等于没有。 -->
+  <rect width="200" height="200" fill="#8250df"/>
+
+  <g fill="#ffffff">
+    <!-- 耳朵：向外斜的三角。竖直细长会读成猫，外斜且底边宽才是狗 -->
+    <path d="M64 56 L28 30 L36 94 Z"/>
+    <path d="M136 56 L172 30 L164 94 Z"/>
+    <!-- 头骨：下缘收到 y=139，比口鼻窄一点，免得两侧鼓出多余的包 -->
+    <path d="M100 42 C133 42 153 63 153 94 C153 118 140 134 122 139 L78 139 C60 134 47 118 47 94 C47 63 67 42 100 42 Z"/>
+    <!-- 口鼻：往下探出头骨，这是狗与猫唯一可靠的区分特征 -->
+    <ellipse cx="100" cy="143" rx="31" ry="24"/>
+  </g>
+
+  <g fill="#8250df">
+    <!-- 眼睛留成底色负形 -->
+    <circle cx="76" cy="92" r="9"/>
+    <circle cx="124" cy="92" r="9"/>
+    <!-- 鼻头 + 一道嘴缝：30px 下会并成一小块，那样也还成立 -->
+    <path d="M100 138 C91 138 84 132 84 126 C84 121 91 119 100 119 C109 119 116 121 116 126 C116 132 109 138 100 138 Z"/>
+    <path d="M97 139 h6 v9 h-6 Z"/>
+  </g>
+</svg>

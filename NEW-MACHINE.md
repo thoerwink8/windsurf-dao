@@ -76,6 +76,13 @@ node --version
 
 `dao-watchdog` 要人在 GitHub 建（Settings → Developer settings → GitHub Apps → New GitHub App），工人**不**在 GitHub 上创建 App。装到本仓。权限只要能写评论：**Issues: Read and write**、**Pull requests: Read and write**、**Contents: Read-only**、**Checks: Read-only**。不要 Contents: Write（狗不许推码）。pem + json 放到 `~/.dao/apps/`。
 
+**2026-09-05 已建**：App ID `4840777`，装在 6 个仓（与 marshal 同范围）。上面这段规格是当时照着执行的，权限一字未改。换机只需拷 pem + json，不用重建 App；真丢了才照上面重建。建的时候踩到两个坑，记下来：
+
+- **Webhook 那个 `Active` 复选框默认是勾上的**，不取消就必填 Webhook URL。我们不用 webhook，取消勾选即可。
+- **传头像有一步藏起来的确认**：选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**。
+  只上传不点，页面显示 `Uploading…` 然后**静默失败**，头像仍是默认 identicon——看起来像传成了。
+  头像本身与家族规矩见 `host/brand/README.md`（图在 git 里，私钥不在）。
+
 验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 
 ```bash
