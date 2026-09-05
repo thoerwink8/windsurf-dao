@@ -1,0 +1,7 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "tool-use-gate",
+  "version": "1.0.0",
+  "description": "工具使用闸：Bash 那一刻把 heredoc 吞转义 / python 是 stub 两条判据注入上下文（用户 2026-09-05：做成闸）",
+  "skills": ["./"]
+}
