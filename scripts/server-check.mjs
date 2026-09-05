@@ -27,6 +27,7 @@ import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
 import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
+import { classifyGhEventBridge } from './lib/gh-events.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -1199,6 +1200,31 @@ function checkModelReconcile() {
   return { state: r.state, detail: `${r.detail}（${filesRead} 份账）`, ...(r.count === undefined ? {} : { count: r.count }) };
 }
 
+// —— ㉓ GitHub 事件桥还在守着（#956）——
+//
+// 这一项要答的问题很窄：**「桥悄悄停了」和「这段时间没有事发生」是不是分得开。**
+// 只数事件数分不开——安静的一小时和断线的一小时，事件数都是 0。
+// 桥每 10 分钟朝自己的 hook 打一次 ping，GitHub 从同一条通道送回来；
+// 那是一个自己造出来的样本，通道通时它一定不为 0。判绿的前提是「最近收到过 ping」。
+//
+// 判据放在 lib/gh-events.mjs（与机制同处，一把尺只在一处），这里只做取数并 re-export。
+// 取数不碰桥的任何解析逻辑：自己 readFileSync + JSON.parse，桥说自己好不算数。
+export { classifyGhEventBridge };
+
+function checkGhEventBridge() {
+  const path = process.env.GH_EVENTS_STATE || join(homedir(), '.dao', 'gh-events.json');
+  let state = null;
+  try { state = JSON.parse(readFileSync(path, 'utf8')); } catch (e) {
+    return classifyGhEventBridge({
+      probed: false,
+      reason: e.code === 'ENOENT'
+        ? `事件桥状态文件不在（${path}）——这台机器还没装：sudo bash scripts/install-dao-gh-events.sh`
+        : `事件桥状态文件读不了（${path}）：${e.message}`,
+    });
+  }
+  return classifyGhEventBridge({ probed: true, state });
+}
+
 const CHECKS = [
   // #984 退役牌（现在不删）：①④⑤⑥⑦⑧⑨⑩⑬ 是 orca 产品面。orca 按 #880 验收后退役
   // （用户 2026-09-06：「orca 要全撤了还检测它干嘛」）。工人仍从 orca 派（卡 B 返工 #982 在途），
@@ -1227,6 +1253,7 @@ const CHECKS = [
   // 名字里必须点明「mirasim 侧」：这条只看得见 mirasim 执行的调用，orca 侧（pi→gw）不经 mirasim、
   // 不在这两份账上。名字比覆盖面大 = 让人以为 orca 侧也查过了。
   ['(22) mirasim 侧实跑腿与选型腿表对得上（#944；orca 侧不在覆盖内）', checkModelReconcile],
+  ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
 ];
 
 function outPath() {
