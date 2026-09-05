@@ -88,7 +88,7 @@ function postComment({ issue, body }) {
   const cmd = hook
     ? [process.execPath, hook, String(issue), tmp]
     : [process.execPath, join(REPO_ROOT, 'scripts', 'gh-as.mjs'), 'watchdog', '--', 'issue', 'comment', String(issue), '--body-file', tmp];
-  const r = spawnSync(cmd[0], cmd.slice(1), { encoding: 'utf8', cwd: REPO_ROOT, timeout: 60000 });
+  const r = spawnSync(cmd[0], cmd.slice(1), { windowsHide: true, encoding: 'utf8', cwd: REPO_ROOT, timeout: 60000 });
   const ok = !r.error && r.status === 0;
   return { ok, detail: ok ? '评论已落' : `评论失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 200)}`, out: String(r.stdout || '').trim() };
 }
@@ -100,7 +100,7 @@ function postComment({ issue, body }) {
  */
 function branchOfWorktree(dir) {
   if (!dir || !existsSync(dir)) return null;
-  const r = spawnSync('git', ['-C', dir, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync('git', ['-C', dir, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
   if (r.error || r.status !== 0) return null; // 游离时 symbolic-ref 非零
   const b = String(r.stdout || '').trim();
   return b || null;
@@ -115,7 +115,7 @@ function treeExists(dir) {
 /** 分支合没合并进 master：merged/未合并/没查成三态。 */
 function isBranchMerged(branch) {
   if (!branch) return null;
-  const r = spawnSync('git', ['branch', '--merged', 'master', '--format=%(refname:short)'], { encoding: 'utf8', cwd: REPO_ROOT, timeout: 15000 });
+  const r = spawnSync('git', ['branch', '--merged', 'master', '--format=%(refname:short)'], { windowsHide: true, encoding: 'utf8', cwd: REPO_ROOT, timeout: 15000 });
   if (r.error || r.status !== 0) return null;
   const set = new Set(String(r.stdout || '').split(/\r?\n/).filter(Boolean));
   return set.has(branch);
