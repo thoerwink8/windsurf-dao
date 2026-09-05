@@ -276,6 +276,61 @@ grill-ai 落闸后用户拍板：**①删掉指纹层只判静默 ②走统一�
 因为 `checkSkillsLink` 只查「仓里的都链上了没」，不查反方向。已补反向判据并分成两个 id
 （悬空链 vs 外来目录，修法完全不同）。同一次扫描还捡出一条指向已删 skill 的悬空链。
 
+### 2026-09-05 傍晚：事件驱动主路落地（#956 第二步）
+
+节奏那一节定的形态「事件驱动主路 + 低频轮询兜底」，主路这一半做完了。
+
+**没开端口，也没花钱。** #956 正文假设「GitHub webhook 需要公网入口」，于是要 HTTP 端点 +
+`X-Hub-Signature-256` 校验。实测发现前提不成立：`gh webhook forward` 省略 `--url` 时
+把负载直接打到 **stdout**，hook 的投递地址是 GitHub 自家的 `webhook-forwarder.github.com`，
+本机拉一条**出站** wss 把投递取回来。于是：
+
+- 不要域名、不要证书、不要开端口 —— 三项花钱/要人拍板的前置一起消失。
+- 签名校验那一层不是「省了」，是**不存在**：签名防的是「谁都能往我的端点 POST」，
+  而这里没有可以 POST 的入口。`tests/gh-events.test.js` 有一条闸盯着源码里不许出现
+  `createServer` / `--url=` —— 哪天有人改回本地监听，签名校验必须同时补回来。
+- 形态跟飞书适配器是同一个：出站长连接，无公网回调。那才是能复用的东西（不是它的"入口"，
+  它根本没有入口）。
+
+**只订两类事件**，因为判据表里「靠事件」的只有三行，三行全是 PR 形状：
+`pull_request`（合并→关单、opened/ready/synchronize→起审官）、`pull_request_review`（判定落地）。
+`push` 订了没有哪一行会用，只会让 act 白醒 —— 不订。闸会验「订阅清单里每一类都得有人用」。
+
+**桥不判事，只提前叫人。** 收到事件就 `systemctl start --no-block` 已有的
+`dao-close-issues.service` / `commander-act.service`，判据仍在那两个脚本里。
+走 systemd 而不是直接 `node commander.mjs act`，是因为 commander 的 `state.json` 没有锁：
+事件那一次和定时器那一次撞上会互相盖写，丢 `wakeCounts` 就等于多起一个大脑（多花一次钱）。
+systemd 对同一个 oneshot 只留一个启动 job，第二次 start 自动并进去 —— 串行是白拿的。
+提频不烧钱这一条也复核过了：`wakeCounts` 按 **target** 记账（`stall:<term>` / `daipai:issue-<n>` /
+`patrol`），`WAKE_LIMIT=3` 是每个目标三次，不是每轮三次；叫得勤不会多烧。
+
+**兜底一个都没动。** `dao-close-issues.timer`（每小时）、`commander-act.timer`（20 分钟）原样留着，
+周期没拉长 —— 拉长是另一件事，等桥在生产上跑够久再说。闸里有一条直接盯着
+`dao-close-issues.timer` 还在不在，webhook 上线就把轮询关掉是这单最容易犯的错。
+
+**「它悄悄停了」和「没有事发生」怎么分开**（本仓口径，这单的核心）：光数事件数分不开 ——
+安静的一小时和断线的一小时，事件数都是 0。桥每 10 分钟朝自己的 hook 打一次 ping，
+GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道通时它一定不为 0。
+`server-check ㉑` 判绿的前提是「最近收到过 ping」，不是「没报错」：
+
+| 状态文件长什么样 | 判 |
+|---|---|
+| 心跳新鲜 + ping 最近回来过 | `ok`（0 个事件也绿 —— ping 通就说明是真的没事） |
+| 心跳停了 | `red`「它已经不在守着了」 |
+| 进程活着但 ping 迟到 | `red`「事件送不进来了，别当这段时间没事」 |
+| 起了 3 分钟以上一个 ping 都没有 | `red`「投递根本没进来」 |
+| 事件收到了但 `systemctl start` 失败 | `red` 并点名单元（多半 sudoers 没装） |
+| 状态文件不在 / 读不出对象 | `unknown`（没装 ≠ 没事） |
+
+**权限**：桥以 orca 跑，唯一要 root 的是 `systemctl start --no-block <那两个单元>`，
+走 `host/machine/sudoers.d/dao-gh-events` 里写死的两条（沿用 dao-sync 那条先例）。
+不带通配、不指家目录，闸逐条验。
+
+落点：判据 `scripts/lib/gh-events.mjs`（纯函数）／常驻 `scripts/gh-event-bridge.mjs`／
+单元 `host/machine/systemd/dao-gh-events.service`／白名单 `host/machine/sudoers.d/dao-gh-events`／
+装 `scripts/install-dao-gh-events.sh`（装完会等自证 ping 绕回来，等不到判失败）／
+闸 `tests/gh-events.test.js`。它是 server-check 的第 ㉑ 项——下一节记的「20 通」是加它之前的数。
+
 ### 2026-09-05：server-check 第一次全绿（20 通 / 0 红 / 0 没查成）
 
 清红的过程本身比结果值钱，两条都不是「按提示修一下」就完的：
