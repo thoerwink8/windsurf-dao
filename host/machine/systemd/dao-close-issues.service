@@ -1,0 +1,50 @@
+# /etc/systemd/system/dao-close-issues.service
+#
+# PR 合进来了，署名的那张 issue 自动关掉。
+#
+# 为什么需要它：2026-08-21 拍板把「唯一生产入口」定为 flow.mjs 的合后钩——PR 一合就判这一张。
+# 那个钩子 #807 已删。今天全仓只剩 commander.mjs 的 merge 动作会调 `close-issues.mjs --pr N`，
+# 于是**凡不是指挥官合的 PR**（人在 GitHub 上点 merge、land.mjs、帅位 gh pr merge），
+# 它的单就一直开着，延迟是无限大。2026-09-05 实测：服务器上关单定时器数量是 0，
+# 当天帅位手工关了 12 张——手工补正好把这个缺口盖住了，所以一直没人发现。
+#
+# 跑的是 --since-hours 6：只判「最近 6 小时内合进」的 PR，语义与合后钩一模一样
+# （对每张刚合进的 PR 各判一次），只是发现方式从「合并事件」换成「按合并时间取窗口」。
+#
+# 它**不是** sweep。sweep 扫全部历史 merged PR，2026-08-21 那次误重开了 58 个远古单，
+# 拍板明令「未经用户当轮授权禁止 agent 跑 sweep」。窗口按 mergedAt 卡死，够不着历史；
+# 边界是 close-issues.mjs 里 MAX_SINCE_HOURS 那个会被检查的数字，不是一句命名约定。
+#
+# 窗口 6 小时 > 触发间隔 1 小时，是故意的：机器停一阵、某轮失败、GitHub 抽风，
+# 下一轮自动把漏掉的补回来，不需要人记得补跑。重判一张已经关了的单是空操作
+# （closeIssueForPr 回 action:none），重叠不花代价。
+#
+# 关/重开动作以 dao-marshal[bot] 身份落（脚本里的 runGh 走 lib/gh.mjs）。
+# 无人看管的自动关单尤其不能记在用户本人名下——事后分不清是人拍的还是机器扫的。
+# 这台机器要有 ~/.dao/apps/marshal.{json,pem}，没有就 fail-loud 报「没装」，不退回裸 gh。
+#
+# 装法：sudo bash scripts/install-dao-close-issues.sh
+# 验：  systemctl list-timers | grep dao-close-issues
+#       journalctl -u dao-close-issues -n 30
+# 手动预演（不改任何 issue）：
+#       node scripts/close-issues.mjs --since-hours 6 --dry-run
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要把业务逻辑抄进 unit。
+# PATH 显式写死：systemd 不读 orca 的 shell profile，oneshot 拿到的 PATH 只有 /usr/bin:/bin。
+
+[Unit]
+Description=windsurf-dao close issues for recently merged PRs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/home/orca/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/close-issues.mjs --since-hours 6
+# 退出码非 0 = 有 PR 没查成或关单操作失败，单元进 failed，systemctl --failed 看得见。
+# 不设 SuccessExitStatus：这里没有「1 是正常输出」那一档，1 就是真出事了。
+StandardOutput=journal
+StandardError=journal

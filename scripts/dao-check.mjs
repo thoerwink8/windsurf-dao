@@ -112,6 +112,7 @@ import {
 import {
   inspectNoReviewerRecreate, inspectNoReviewerRecreateFixtures,
 } from './lib/no-reviewer-recreate-check.mjs';
+import { inspectModelLabelNames } from './lib/model-label-name-check.mjs';
 import {
   inspectOrphanTests, inspectOrphanTestFixtures,
 } from './lib/orphan-test-check.mjs';
@@ -206,7 +207,7 @@ function runOneSuite(dir, f) {
     let out = '';
     let child;
     try {
-      child = spawn(cmd, args, { cwd: ROOT });
+      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -290,7 +291,7 @@ function checkSkillFrontmatter() {
 const SECRET_SHAPED = /(?:^|[/.-])(?:secret|secrets|credential|credentials|token|password|apikey|api-key)[^/]*\.(?:json|ya?ml|txt|ini|conf|cfg|env)$|\.(?:pem|key|pfx|p12|jks|keystore)$|(?:^|\/)\.env(?:\.|$)/i;
 
 function checkSecretsNotTracked() {
-  const r = spawnSync('git', ['ls-files'], { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync('git', ['ls-files'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.status !== 0) {
     fail('git 追踪面读不出来', '本次没查成，不是没问题：在 git 仓库里跑 dao check', String(r.stderr || '').trim().slice(0, 160));
     return;
@@ -991,7 +992,7 @@ function closesNumbers(text) {
 }
 
 function runGhJson(args) {
-  const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.error) return { unscanned: true, error: `gh 不可用（${r.error.code}）` };
   if (r.status !== 0) return { unscanned: true, error: String(r.stderr || r.stdout || '').trim().slice(0, 100) };
   let doc;
@@ -1401,6 +1402,7 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
+checkModelLabelNames();
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1785,6 +1787,32 @@ function checkVendorGateLive() {
     return;
   }
   green('起审官同厂硬闸还在（create/attach/worker-done/换人接线齐；dispatch 预检闸已删；审官不写死 forceCommand）');
+}
+
+// #895：model/* label 名必须能被 vendorFamilyOf 解析。label 名和家族命名规则对不上
+// （实咬：model/opus-5 缺 claude- 前缀）→ 同厂闸永远 unscanned → 那张单永远起不了审官。
+// 只查 label 名字，不查有没有单在用——名字留在仓里就还会被下一张单挑上。
+function checkModelLabelNames() {
+  const listed = runGhJson(['label', 'list', '--limit', '500', '--json', 'name']);
+  if (listed.unscanned) {
+    skip(`model/* label 命名：gh label list 没查成（${listed.error}）——本次没查成，不是绿`);
+    return;
+  }
+  const r = inspectModelLabelNames({ labelNames: listed.array });
+  if (r.unscanned) {
+    skip(`model/* label 命名：${r.error}`);
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `model/* label 名家族查不出 ${r.bad.length} 个`,
+      'label 名改成 model/<家族>-<版本>（gh label edit <旧名> --name <新名>，改名保留已挂的单）；'
+      + '或删掉不该在 model/* 命名空间里的（网关/执行面不是模型家族）。家族登记在 scripts/lib/reviewer-vendor-gate.mjs 的 VENDOR_FAMILIES',
+      r.bad.join('、'),
+    );
+    return;
+  }
+  green(`model/* label 命名与 vendorFamilyOf 一致（${r.scanned} 个全能查出家族）`);
 }
 
 function checkMachinePathSamples() {

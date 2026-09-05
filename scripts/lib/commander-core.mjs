@@ -4,9 +4,15 @@
 // 手（act）逐条执行。判断全在这层，测试拿夹具钉判别力，不起真 orca / 真 GitHub。
 //
 // #800 三节判据逐条落这里：
-//   自己做（确定性，调 dao.mjs 现有动词）：dispatch / attach-reviewer / merge(+land)
-//   唤大脑（要判断，起一次性 pi）：审官判红一轮 / 撞死指纹 #833 没接住
-//   报帅停手（永不自动）：审官两轮仍红 / 缺 model|reviewer 标签 / 同单三次唤醒仍没闭环
+//   自己做（确定性，调 dao.mjs 现有动词）：dispatch / rework / attach-reviewer / merge(+land)
+//   唤大脑（要判断，起一次性 pi）：撞死指纹 #833 没接住 / 双向门到期代拍
+//   报帅停手（永不自动）：缺 model|reviewer 标签 / 撞死指纹三次唤醒仍没闭环
+//
+// #931（用户 2026-09-05 拍板，grill-ai 从零重推）：**判红这条路上的「唤大脑」整层删掉**。
+//   旧路 判红 → 唤大脑翻译返工方向 → 送达工人终端 → 唤满报帅：工人早已下班，方案没有接收者。
+//   新路 判红 → 直接派一个返工工人（kind:'rework'），任务书带审官红项**全文**（不摘要）。
+//   审官标准本来就要求红项写「文件:行号 + 现象 + 期望改法」，工人照着改即可，不需要中间那层翻译。
+//   撞死指纹 / 代拍两条路的 wake-brain **没动**——它们要判断的不是「怎么改代码」，#931 没拍过它们。
 //
 // 铁律（CLAUDE.md「自动检查」+ #800）：**situation 里任何一节 unscanned，对应正向动作一律不产，
 //   改产 escalate(reason:'unscanned')**。没查成 ≠ 空态势——空态势静默（noop），没查成要 fail-visible。
@@ -19,16 +25,21 @@
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
-import { analyzeGithubReviews } from './review-state.mjs';
+import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
+import { attributedIssueNumber } from './close-issue.mjs';
 
 export const ACTION_KINDS = [
-  'dispatch', 'attach-reviewer', 'merge', 'land',
+  'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
 ];
 
-// 报帅停手的默认门槛：同一单唤醒大脑到这个次数仍没闭环 → 转报帅（#800「同单三次唤醒仍没闭环」）。
+// 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
+// #931 后 PR 判红不再走唤醒预算（改直接派返工工人），这个门槛只管撞死指纹 / 代拍两条路。
 export const WAKE_LIMIT = 3;
+
+/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
+export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
 
 // 框架活的角色标（type/体系）。这类单不进自动派单队列，走快马：主会话子代理闭环（#876，用户 2026-09-04 拍板）。
 // 为什么不派：框架活要改的是派单机制本身，让派单机制去派它，等于让手术刀切自己。
@@ -110,6 +121,59 @@ export function analyzeReviews(reviews) {
 }
 
 /**
+ * 只数「打在当前 PR head 上」的红/绿。
+ *
+ * 判绿只对它当时看的那个 commit 有效（memory review-green-must-match-head）——反过来同样成立：
+ * 判红也只对当时那个 commit 有效。工人返工推了新 head，旧 review 挂在旧 commit 上，
+ * 不能再当「仍红」。#911–#918 一夜八张重复报帅单就是拿历史累计红轮数判出来的。
+ *
+ * 三种「没查成」，一律 fail-visible，**绝不**当成「head 变了所以清零」，也不当成「仍红」：
+ *   reviews-missing     —— 这张 PR 的 reviews 没抓到（既有契约：静默跳过，不臆测）
+ *   head-unscanned      —— PR headRefOid 没查成，无从判断红打在哪个 commit 上
+ *   commit-id-unscanned —— 有判别态 review 缺 commit_id，无从判断它属于哪个 commit
+ *
+ * 查成时返回 analyzeGithubReviews 的形态（redRounds/green/latestGreen/latestRed），
+ * 外加 head（当前 head）、judgedTotal（历史判别态总数）、atHead（其中打在当前 head 上的条数）、
+ * judged（打在当前 head 上的那几条 review 原件——返工任务书要拿红项**全文**，#931）。
+ */
+export function analyzeReviewsAtHead(reviews, head) {
+  if (!Array.isArray(reviews)) return { scanned: false, reason: 'reviews-missing' };
+  const h = typeof head === 'string' ? head.trim() : '';
+  if (!h) return { scanned: false, reason: 'head-unscanned' };
+  const judged = [];
+  for (const rv of reviews) {
+    const state = normalizeReviewState(rv);
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue; // COMMENTED 等不参与判别，缺 commit_id 也无所谓
+    const cid = rv && typeof rv === 'object' ? String(rv.commit_id || rv.commitId || '').trim() : '';
+    if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
+    judged.push({ rv, cid });
+  }
+  const atHead = judged.filter((x) => x.cid === h);
+  return {
+    ...analyzeGithubReviews(atHead.map((x) => x.rv)),
+    head: h,
+    judgedTotal: judged.length,
+    atHead: atHead.length,
+    judged: atHead.map((x) => x.rv),
+  };
+}
+
+/**
+ * 当前 head 上**最后一条**判红 review 的正文全文（#931：任务书带红项全文，不摘要）。
+ * 空正文 / 拿不到 = 没查成（返回 null）——审官判了红却没留正文，返工工人无从下手，
+ * 这时不许派工（「没查成」不许触发派工）。
+ */
+export function latestRedBody(judgedAtHead) {
+  const list = Array.isArray(judgedAtHead) ? judgedAtHead : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (normalizeReviewState(list[i]) !== 'CHANGES_REQUESTED') continue;
+    const body = list[i] && typeof list[i] === 'object' ? String(list[i].body || '') : '';
+    return body.trim() ? body : null;
+  }
+  return null;
+}
+
+/**
  * 从 prReviews.byPr[n] 取给 analyzeReviews 的入参：优先 `.reviews`（[{state, body}]，认 GitHub state），
  * 缺时才回退 `.bodies`（旧夹具的判定行字符串）。#807 后 reviewer-book 不再写「判定：」行，
  * 只喂 bodies 会把真 approve 判成 approved-without-review、两轮 request-changes 判成 noop。
@@ -137,7 +201,10 @@ export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews
 // 审官 #840 红①要求：不靠各分支散落 if 挡 unscanned，改在 decide 入口按此表统一 fail-closed。
 export const ACTION_NEEDS = {
   dispatch: ['github', 'orca', 'prReviews'],
+  // rework 也要建树起工人：orca 没查成时一律不派（与 dispatch 同口径 fail-closed）。
+  rework: ['github', 'orca', 'prReviews'],
   'attach-reviewer': ['github', 'reviewPending'],
+  rereview: ['github', 'prReviews'],
   merge: ['github', 'prReviews'],
   land: ['github', 'prReviews'],
   'wake-brain': ['github', 'prReviews', 'stall'],
@@ -167,6 +234,8 @@ function collectCandidates(situation) {
   const reviews = situation.prReviews || {};
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
+  const reworkDispatched = situation.reworkDispatched || {};
+  let reworkThisRound = 0;
   const policy = resolveCommanderPolicy(situation.commanderPolicy);
   const enabledIds = situation.routingModels;
   const redIds = situation.healthRedModels;
@@ -191,13 +260,37 @@ function collectCandidates(situation) {
         out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
         continue;
       }
-      if (!model || !reviewer) {
+      // 缺标签**只在半标态报**：有 model 没 reviewer，或反过来。两个都没有 = 静默跳过。
+      //
+      // 改这段之前必须知道的两件事：
+      //
+      // ① 为什么不是「缺任一就报」（2026-09-05 实咬）：进这个分支的门槛只有一条「已消歧」，
+      //    而帅位开**任何**记账单/体系单都按惯例打「已消歧」⇒ 每开一张新单，指挥官下一轮就为它
+      //    生一张「[待拍板] missing-labels」。#953 开单 06:49、#954 生成 06:56，隔 6 分钟；
+      //    当天关掉 4 张（#900/#946/#951/#954），转头又生 4 张（#957/#958/#959/#961）。
+      //    源单一直开着，报单就一直生——这不是漏标提醒，是自我繁殖。
+      //
+      // ② 为什么上面那条 type/体系 豁免接不住它——**鸡生蛋**：
+      //    type/* 的唯一自动写入方是 stampIssueLabels（scripts/lib/dispatch/card.mjs），
+      //    由 scripts/dao.mjs 在**派工成功之后**才调。也就是说，豁免的开关只有「被派过工」
+      //    才会自动打开，而这条豁免存在的目的**正是阻止派工**。新开的框架单永远等不到那一下。
+      //    别拿「手工打过 type/体系 的单确实安静」当反证（#904/#903/#902/#895/#888 都安静）：
+      //    那不是判据对，是有人替它手工打开了开关；没人手工打的单一律炸单。
+      //
+      // 判据本身：两个都没有 = 从来没人瞄准过派工车道（新开的单默认就长这样），不是漏标；
+      //          一个有一个没有 = 有人打了一半停下，那才是真信号。
+      //
+      // 「没查成」不会落进这里：labels 不是数组的 issue 在 inspectReadyQueue 就被挡掉了
+      // （labelNames 返回 null → 不进 ready，整节报 kind:'unscanned'），所以走到这一步的 null
+      // 一律是「查过、确实没这个标」，与「没查成」在出口上分得开。
+      if ((model || reviewer) && (!model || !reviewer)) {
         // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
-        out.push(withNeeds(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
+        out.push(withNeeds(esc(`#${n} 已消歧，但派工标只打了一半：有 ${model ? 'model/' : 'reviewer/'}、缺 ${!model ? 'model/' : 'reviewer/'}，不猜——报帅补标签`, {
           reason: 'missing-labels', issue: n, title: issue?.title || '',
         }), N.dispatch));
         continue;
       }
+      if (!model && !reviewer) continue; // 两个都没有：静默跳过（理由见上 ①②）
       const gate = assessDispatchModel(model, { policy, enabledIds, redIds });
       if (!gate.ok) {
         out.push(withNeeds(esc(`#${n} ${gate.why}`, {
@@ -224,47 +317,152 @@ function collectCandidates(situation) {
   for (const pr of gh.prs || []) {
     if (!pr || pr.number == null) continue;
 
-    if (prApprovedReady(pr)) { // 判绿 + 非 draft + MERGEABLE（manual 会被审官转 draft）
+    // 判绿判据只认**真 review**（2026-09-05 实咬）：原来这里的入口是 prApprovedReady，
+    // 它要 pr.reviewDecision === 'APPROVED'。而 reviewDecision 是 GitHub 按分支保护规则算的聚合值，
+    // 本仓没开分支保护 ⇒ 它恒为 null，判绿也 null、判红也 null。
+    // 后果是自动合并这条路**从来没通过电**：审官判绿了，指挥官这一格永远进不去，
+    // PR 就一直挂着等人。判红那一维同样在帅位盘面上隐形（shuai-scan 的 prRed 只看 CI）。
+    // 改成按当前 head 看真 review（analyzeReviewsAtHead，与下面判红同一判据，绿红一把尺）：
+    //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
+    //   · 没查成一律不合，与「查过确实没绿」分开。
+    const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
+    const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const mergeableNow = String(pr.mergeable || '').toUpperCase() === 'MERGEABLE';
+
+    if ((greenAtHead || decisionApproved) && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
       if (ci.red) { // 判绿却 CI 红：矛盾态，不自动合，报帅
         out.push(withNeeds(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }), N.merge));
         out.push(withNeeds(hub(`PR #${pr.number} 判绿但 CI 红，卡住了`, 'stuck', { pr: pr.number }), N.merge));
         continue;
       }
-      const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
-      if (!a.scanned) { // 该 PR 单独没抓到 reviews（section 可能 scanned 但这条 PR 的 fetch 缺）：不合，报没查成
-        out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
-        continue;
+      if (!greenAtHead) {
+        // 只有 reviewDecision 说绿、而当前 head 上看不到 APPROVED 时才走这条老路（既有契约不动）：
+        // 不带 head 复核一遍逐条 review，拿不到就报没查成，拿到但没绿就报 approved-without-review。
+        const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
+        if (!a.scanned) {
+          out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
+          continue;
+        }
+        if (!a.green && !a.latestGreen) {
+          out.push(withNeeds(esc(`PR #${pr.number} reviewDecision=APPROVED 但 reviews 里没有 APPROVED 状态——报帅`, { reason: 'approved-without-review', pr: pr.number }), N.merge));
+          continue;
+        }
       }
-      if (!a.green && !a.latestGreen) {
-        out.push(withNeeds(esc(`PR #${pr.number} reviewDecision=APPROVED 但 reviews 里没有 APPROVED 状态——报帅`, { reason: 'approved-without-review', pr: pr.number }), N.merge));
-        continue;
-      }
-      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿 + m=auto + CI 绿 + MERGEABLE' }, N.merge));
+      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE' }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
       continue;
     }
 
-    if (prApprovedDraft(pr)) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+    if ((greenAtHead || decisionApproved) && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
       continue;
     }
 
-    const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
-    if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
-    if (a.redRounds >= 2) { // 审官两轮仍红 = 换人信号，永不自动
-      out.push(withNeeds(esc(`PR #${pr.number} 审官两轮仍红（${a.redRounds} 轮）——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds }), N['wake-brain']));
-      out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
-    } else if (a.redRounds === 1 && !a.latestGreen) { // 审官判红一轮 → 唤大脑；同单已唤满 → 转报帅
-      const woken = wakeCounts[`pr:${pr.number}`] || 0;
-      if (woken >= WAKE_LIMIT) {
-        out.push(withNeeds(esc(`PR #${pr.number} 已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', pr: pr.number, woken }), N['wake-brain']));
-        out.push(withNeeds(hub(`PR #${pr.number} 唤大脑 ${woken} 次仍没闭环，等你`, 'stuck', { pr: pr.number }), N['wake-brain']));
-      } else {
-        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官判红一轮，返工方向要判` }, N['wake-brain']));
+    // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
+    const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    if (!a.scanned) {
+      // 「没查成」与「查过确实没红」必须分开。reviews-missing 沿用既有契约静默跳过；
+      // head / commit_id 没查成走 fail-visible 的 unscanned escalate（escalate 对 unscanned 是静默进 status，不开单不刷屏）。
+      if (a.reason !== 'reviews-missing') {
+        const headMissing = a.reason === 'head-unscanned';
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 的红要按当前 head 重算，但${headMissing ? ' PR headRefOid 没查成' : '有判别态 review 缺 commit_id'}——不清零、也不当仍红`,
+          { reason: 'unscanned', pr: pr.number, missing: [headMissing ? 'github' : 'prReviews'], detail: a.reason },
+        ), N.rework));
+      }
+      continue;
+    }
+    // 判过、但当前 head 上一条判定都没有 ⇒ 工人推了新 head 而没人叫审官复审。
+    // 2026-09-05 实咬：#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
+    // 于是「按当前 head 重算」把红清零 → 上面不派返工、下面不走合并，这一格空着，PR 就永远挂着。
+    // 这十小时里「复审推进」全是主会话手工做的。补上：写一张复审待办票，drain 自己会消费
+    //（缺士兵树时它走 reviewer-create 快马路，一 PR 一审官的闸在那边，不会建出第二张审官卡）。
+    if (a.judgedTotal > 0 && a.atHead === 0) {
+      const rrKey = `rereview:${pr.number}@${a.head}`;
+      if (!reworkDispatched[rrKey]) {
+        out.push(withNeeds({
+          kind: 'rereview', pr: pr.number, head: a.head,
+          issue: attributedIssueNumber(pr),
+          reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
+          stateKey: rrKey,
+          why: `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审`,
+        }, N['attach-reviewer']));
+      }
+      continue;
+    }
+    // 当前 head 上最后一条判别态是红 → 派一个返工工人（#931：删掉「唤大脑翻译返工方向」整层）。
+    // 旧红（打在旧 head）在上面 analyzeReviewsAtHead 里就已经不算数了，这里天然不会触发。
+    if (!a.latestRed) continue; // 没红 / 最后一条是绿 = 等审官或走合并路，本分支无事
+    const rkey = reworkKey(pr.number, a.head);
+    if (reworkDispatched[rkey]) continue; // 同一 PR 同一 head 只派一次：工人正在改，等它推新 head
+    // 红项全文取不到（审官判了红没留正文）= 没查成：不派、也不当成功。
+    const brief = latestRedBody(a.judged);
+    if (!brief) {
+      out.push(withNeeds(esc(
+        `PR #${pr.number} 当前 head ${a.head.slice(0, 8)} 上判了红，但最后一条判红 review 没有正文——返工工人无从下手，不派`,
+        { reason: 'unscanned', pr: pr.number, missing: ['prReviews'], detail: 'rework-brief-unscanned' },
+      ), N.rework));
+      continue;
+    }
+    // 返工工人的 model/reviewer 沿用**署名 issue 上的标签**（与原派工同源，不猜、不换厂）。
+    const issueNo = attributedIssueNumber(pr);
+    if (issueNo == null) {
+      out.push(withNeeds(esc(`PR #${pr.number} 判红要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
+      continue;
+    }
+    const rIssue = (gh.issues || []).find((i) => i && i.number === issueNo);
+    if (!rIssue) {
+      out.push(withNeeds(esc(
+        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关/超出扫描窗）——标签没查成，不派`,
+        { reason: 'unscanned', pr: pr.number, issue: issueNo, missing: ['github'], detail: 'rework-issue-unscanned' },
+      ), N.rework));
+      continue;
+    }
+    const rModel = labelValue(rIssue, 'model/');
+    const rReviewer = labelValue(rIssue, 'reviewer/');
+    if (!rModel || !rReviewer) {
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
+        reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
+      }), N.rework));
+      continue;
+    }
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    // 顶班（2026-09-05 实咬）：快马单的 model/ 标签常是主会话子代理的模型（claude-opus-5），
+    // 它在服务器腿表里没有可派的腿 → 返工永远派不出去，红项在 GitHub 上躺着没人接。
+    // 返工要的是「有人改」，不是「同一个人改」——原模型派不出就落回选型写码首选。
+    // 只对「这个模型不能派」两种原因顶班；「选型没查成」仍 fail-closed，因为那时连顶班人选也验不了。
+    let reworkModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        reworkModel = fb;
+        rGate = fbGate;
       }
     }
+    if (!rGate.ok) {
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
+      continue;
+    }
+    // 单轮上限沿用 maxDispatchPerRound（#849：无上限会刷单）。返工走**独立计数**而不是与新派单共用一个：
+    // 新派单循环在本函数更早处跑，共用一个计数会让 ready 队列长期把返工挤掉（判红的 PR 永远等不到人）。
+    // 独立计数同样封死刷单（每轮最多 maxDispatchPerRound 个返工工人），超出的排队下轮，不丢、不 escalate。
+    if (reworkThisRound >= policy.maxDispatchPerRound) continue;
+    reworkThisRound += 1;
+    out.push(withNeeds({
+      kind: 'rework', pr: pr.number, head: a.head, issue: issueNo,
+      model: reworkModel, reviewer: rReviewer, redRounds: a.redRounds,
+      title: pr.title || '', brief, reworkKey: rkey,
+      ...(substituted ? { substitutedModel: substituted } : {}),
+      why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`
+        + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
+    }, N.rework));
+    out.push(withNeeds(hub(`PR #${pr.number} 审官判红，已自动派返工工人（红项全文交给它，逐条改）`, 'dispatched', { pr: pr.number }), N.rework));
   }
 
   // ④ 撞死指纹 + #833 自动换人没接住 → wake-brain
@@ -285,12 +483,14 @@ function collectCandidates(situation) {
  * 纯函数：态势 → 动作清单。**入口总闸 fail-closed**（审官 #840 红①）。
  * situation 各节形态（scan 负责填，任一节没查成把 scanned 置 false + error）：
  *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
- *                    prs:[{number,title,isDraft,reviewDecision,mergeable,statusCheckRollup,body}], error }
+ *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
+ *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
  *   orca:          { scanned, worktrees:[...], error }
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }
- *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body}], bodies:[...] } }, error }（decide 优先 reviews）
+ *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
- *   wakeCounts:    { <target>: n }
+ *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
+ *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
  *
  * 契约：任一节 unscanned → 依赖它的动作一律不产，汇成**一条** escalate(reason:'unscanned', missing:[...])；
  *       依赖节全 scanned 的动作照常。全部 unscanned → 只有那一条 escalate、零正向动作。

@@ -117,7 +117,7 @@ export function hostProbeExec(cwd = process.cwd()) {
       }
     }
     if (name === 'node') {
-      const r = spawnSync(process.execPath, ['-e', "process.stdout.write('ok')"], {
+      const r = spawnSync(process.execPath, ['-e', "process.stdout.write('ok')"], { windowsHide: true,
         cwd, encoding: 'utf8', timeout: 15000,
       });
       return {
@@ -126,7 +126,7 @@ export function hostProbeExec(cwd = process.cwd()) {
       };
     }
     if (name === 'gh') {
-      const r = spawnSync('gh', ['--version'], {
+      const r = spawnSync('gh', ['--version'], { windowsHide: true,
         cwd, encoding: 'utf8', timeout: 15000,
       });
       const out = `${r.stdout || ''}${r.stderr || ''}`;

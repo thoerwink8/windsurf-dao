@@ -227,6 +227,24 @@ describe('#815 ③ 复用审官前 worker-read 核活性', () => {
     assert.ok(settled.ok && settled.action === 'create' && /已结算/.test(settled.reason),
       '已结算必须新建，不许复用死人 → ' + JSON.stringify(settled));
 
+    // 2026-09-05 实咬（#866/#868 复审 drain 全灭）：probe 回读若接的是 worker-read
+    // 的真实返回（result.dispatchId+terminal，没有 dispatch 块），结算判读必须报「没查成」
+    // 而不是误判——这条钉死数据契约：喂 worker-read 形状进来只能得 unscanned，
+    // 所以调用点（cmdReviewerAttach 的 probe 分支）必须用 worker-show。
+    const workerReadShape = {
+      ok: true,
+      json: {
+        result: {
+          dispatchId: 'ctx_rev',
+          source: 'terminal',
+          terminal: { handle: 'term_rev', status: 'running', tail: ['…'] },
+        },
+      },
+    };
+    const misfed = S.planReviewerAttachReuse({ cards, workers, workerRead: workerReadShape });
+    assert.ok(misfed.ok === false && misfed.unscanned === true && /result\.dispatch/.test(misfed.error),
+      'worker-read 形状（无 dispatch 块）必须判没查成，不许当已结算/未结算 → ' + JSON.stringify(misfed));
+
     const deadRead = {
       ok: true,
       json: {
@@ -378,3 +396,69 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
     assert.ok(flags.has('--model'), 'reviewer-attach 必须允许 --model');
   });
 });
+
+describe('#815 ⑥ 审官注入失败不回滚树', () => {
+  it('#820/#821 实咬：pi 审官 120s 等不到开工证明后不得整树回滚', async () => {
+    const S = await S_LOAD;
+    const keep = S.planReviewerKeepOnFail({
+      reviewerId: 'wt_rev_815',
+      reviewerPath: '/tmp/PR-820-审官',
+      reason: '审官注入后开工验证失败: 120s 未见开工证明',
+    });
+    assert.ok(keep.ok && keep.keepTree === true && keep.rollback === false && keep.keep === true,
+      '树已建成必须 keepTree → ' + JSON.stringify(keep));
+    assert.ok(/不回滚/.test(keep.warning) && /start --model/.test(keep.warning),
+      '红项要提示接手命令 → ' + keep.warning);
+
+    const noTree = S.planReviewerKeepOnFail({
+      reason: '审官卡创建失败',
+    });
+    assert.ok(noTree.ok && noTree.keepTree === false && noTree.rollback === true,
+      '还没有树才允许回滚 → ' + JSON.stringify(noTree));
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    assert.ok(/function keepCreated/.test(daoSrc), '注入失败走 keepCreated 不是 failCreated');
+    assert.ok(!/failCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
+      'create/attach 不得因开工验证失败 failCreated');
+    assert.ok(/keepCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
+      '开工验证失败必须 keepCreated');
+    assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
+      'worker-start 失败也不得整树回滚');
+
+    const createSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerCreate'), daoSrc.indexOf('function cmdReviewerAttach'));
+    const attachSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerAttach'), daoSrc.indexOf('function cmdReviewerDone'));
+    assert.ok(/preferAgent:\s*true/.test(createSeg) && /preferAgent:\s*true/.test(attachSeg),
+      '审官 create/attach 必须 preferAgent，注入走 #805 --agent 探就绪');
+    const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
+    assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
+      'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
+
+    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
+    assert.ok(/失败不回滚树/.test(book) && /start --model/.test(book),
+      'reviewer-book 必须写失败不回滚 + 接手命令');
+  });
+});
+
+// 2026-09-05 实咬 #884/#885/#886：帅位落的复审票 workerWorktree 为 null（活干在非 Orca 管理的树里），
+// drain 在计划层直接判「待办缺工人树」，三张 PR 的审官 10 小时起不来。缺树改走 reviewer-create 快马路（#927）。
+describe('复审待办：缺工人树走 reviewer-create（#884 实咬）', () => {
+  it('无工人树 → 计划成 reviewer-create，不再判失败', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ pr: '884', workerWorktree: null, reviewer: 'gpt-5.6-luna', issue: '880' });
+    assert.equal(plan.ok, true, '缺树不该判失败：' + JSON.stringify(plan));
+    assert.equal(plan.verb, 'reviewer-create');
+    assert.equal(plan.fastPath, true);
+    assert.deepEqual(plan.argv, ['reviewer-create', '--pr', '884', '--reviewer', 'gpt-5.6-luna', '--issue', '880']);
+  });
+  it('有工人树 → 仍走 reviewer-attach（快马路不许吞掉正常路）', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ pr: '900', workerWorktree: 'wt-abc', reviewer: 'gpt-5.6-luna' });
+    assert.equal(plan.verb, 'reviewer-attach');
+    assert.ok(plan.argv.includes('--worktree'));
+  });
+  it('缺 reviewer 仍判失败（缺树不等于什么都能猜）', async () => {
+    const S = await S_LOAD;
+    assert.equal(S.planReviewPendingDrain({ pr: '901', workerWorktree: null, reviewer: '' }).ok, false);
+  });
+});
+

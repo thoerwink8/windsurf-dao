@@ -128,13 +128,14 @@ function orcaBadge(doc) {
  *
  * 本文件作为 Claude 插件分发（CLAUDE_PLUGIN_ROOT 场景仓外没有 scripts/lib），必须自包含，
  * 不能 import 仓内共享实现。唯一真源是 scripts/lib/orca-run.mjs 的 runOrcaRaw——
- * 改 spawn 行为（timeout/回落）先改那边，再把本拷贝对齐。#807：不再传 windowsHide。
+ * 改 spawn 行为（timeout/回落）先改那边，再把本拷贝对齐。#807 曾删掉 windowsHide——本 hook 每轮
+ * 对话都跑，Windows 上就是每轮闪一个控制台窗（2026-09-05 用户实报）；非 Windows 上它是 no-op。
  */
 function runOrca(args) {
-  const direct = spawnSync('orca', args, { encoding: 'utf8', timeout: 20000 });
+  const direct = spawnSync('orca', args, { encoding: 'utf8', timeout: 20000, windowsHide: true });
   if (!direct.error) return direct;
   const line = ['orca', ...args.map(a => `"${String(a).replace(/"/g, '\\"')}"`)].join(' ');
-  return spawnSync(line, { encoding: 'utf8', shell: true, timeout: 20000 });
+  return spawnSync(line, { encoding: 'utf8', shell: true, timeout: 20000, windowsHide: true });
 }
 
 /** 返回一行人话，说明态标打上了还是跳过了、为什么。 */

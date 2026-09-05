@@ -66,6 +66,75 @@ describe('机制一：框架单不进自动派单队列（走快马）', () => {
   });
 });
 
+// 上面那条框架单豁免**只在有人手工打过 type/体系 时才生效**，而 type/* 的唯一自动写入方
+// （stampIssueLabels）要等派工成功之后才跑——豁免的开关只有「被派过工」才自动打开，
+// 而豁免的目的正是阻止派工。所以裸「已消歧」的新单一张都接不住，全靠下面这条判据兜。
+//
+// 判据：缺标签只在**半标态**报（有一个缺一个）；两个都没有 = 从没瞄准过派工车道 → 静默。
+// 下面两条是这条判据的判别对，缺哪一条都等于没证：
+//   · 红样本（改前会炸单）——只带「已消歧」、无 type/体系、两个标都没有 → 必须完全静默；
+//   · 正样本（防过度纠正）——半标态 → 必须照旧报帅，别把整条判据删没了。
+describe('缺标签只在半标态报（堵住 [待拍板] missing-labels 的自我繁殖）', () => {
+  it('红样本：只带「已消歧」、无 type/体系、model|reviewer 两个都没有 → 完全静默，不生报帅单', async () => {
+    const { decide } = await CORE;
+    // 现实原型：#950/#953/#956/#960——帅位新开的单默认就长这样，一天生了 #957/#958/#959/#961 四张。
+    const issue = { number: 960, title: '退役 CLI 还在 PATH 里没人报', labels: labels('已消歧') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(
+      byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels').length, 0,
+      '两个标都没有 = 从没瞄准过派工车道，不是漏标——报了就会天天为同一张单生新单',
+    );
+    assert.equal(byKind(r, 'dispatch').length, 0, '静默跳过不等于放行：没有 model 绝不许派');
+    assert.deepEqual(r.actions.map((a) => a.kind), ['noop'], '要的是「盘面无事」，不是换个 kind 继续刷屏');
+  });
+
+  it('正样本：半标态（有 model 没 reviewer）→ 照旧报帅补标签，且点名缺的是哪个', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 941, title: '有人打了一半停下', labels: labels('已消歧', 'model/grok-4.6') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1, '打了一半才是真信号，这条不许被上面那条红样本一起改没');
+    assert.equal(e[0].issue, 941);
+    assert.match(e[0].why, /reviewer\//, '要点名缺的是 reviewer/');
+    assert.equal(byKind(r, 'dispatch').length, 0, '缺 reviewer 绝不派');
+  });
+
+  it('正样本（反过来）：有 reviewer 没 model → 同样报帅', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 942, title: '反过来打了一半', labels: labels('已消歧', 'reviewer/gpt-5.6-luna') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1);
+    assert.match(e[0].why, /model\//, '要点名缺的是 model/');
+  });
+
+  it('半标态 + type/体系 → 仍走快马，不报补标签（框架豁免在缺标签判据之前）', async () => {
+    const { decide } = await CORE;
+    // 现实原型：#888（model/claude-opus-5，无 reviewer/，带 type/体系）——它是当前唯一的半标态开单，
+    // 但被框架豁免先接走，两条判据谁在前决定了它的去向，这里把顺序钉死。
+    const issue = { number: 888, title: '回流机制', labels: labels('已消歧', 'model/claude-opus-5', 'type/体系') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels').length, 0);
+    assert.equal(byKind(r, 'dispatch').length, 0);
+    const hub = byKind(r, 'notify-hub');
+    assert.equal(hub.length, 1);
+    assert.match(hub[0].subject, /快马/);
+  });
+
+  it('「没查成」与「查过没事」分得开：github 没查成 → fail-visible 的 unscanned，不是静默', async () => {
+    const { decide } = await CORE;
+    // 同一张裸「已消歧」单，只是这次盘面没查成。静默（noop）与没查成必须是两种不同出口，
+    // 否则「没查成」会被当成「查过、确实没标、跳过」而永远无人知晓。
+    const issue = { number: 960, title: '退役 CLI 还在 PATH 里没人报', labels: labels('已消歧') };
+    const r = decide(baseSituation({ github: { scanned: false, issues: [issue], prs: [], error: '断网' } }));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels').length, 0);
+    const un = byKind(r, 'escalate').filter((a) => a.reason === 'unscanned');
+    assert.equal(un.length, 1, '没查成要报出来');
+    assert.ok(un[0].missing.includes('github'));
+    assert.ok(!r.actions.some((a) => a.kind === 'noop'), '没查成绝不能长成「盘面无事」的样子');
+  });
+});
+
 describe('机制二·指挥官侧：待消歧拦派工（静默，不刷屏）', () => {
   it('判据 c：故意双标（待消歧 + 已消歧 + 标齐）→ 0 dispatch、0 回流、0 报帅', async () => {
     const { decide } = await CORE;

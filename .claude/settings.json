@@ -15,6 +15,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/host/skills/ask-gate/hooks/ask-gate.mjs\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/action-writers-hook.mjs\"",
             "timeout": 10
           }

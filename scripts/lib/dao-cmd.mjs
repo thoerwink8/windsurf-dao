@@ -260,8 +260,22 @@ export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLiv
  * worker-show 没查成 → 拒（不许把没查成当已结算）。
  * 找不到且无显式 id → 拒（给 --soldier-dispatch / --parent-worktree）。
  */
-export function planCreateSoldierDispatch({ explicitDispatch, found, dispatchLive } = {}) {
+export function planCreateSoldierDispatch({ explicitDispatch, found, dispatchLive, fastPath } = {}) {
   const explicit = String(explicitDispatch || '').trim() || null;
+
+  // 快马 PR（#880/#891）：确证扫完没有士兵树/dispatch 才会走到这里（判定在 planFastPathReviewer，
+  // 没查成一律停手，不进这条腿）。没有士兵可收件：d= 留空、s=1，红项按任务书直接上帅。
+  if (fastPath === true && !explicit) {
+    return {
+      ok: true,
+      soldierDispatchId: '',
+      skipIdentity: true,
+      skipWait: true,
+      fastPath: true,
+      reason: 'fast-path',
+      deadWarning: '快马 PR：扫完确实没有士兵 dispatch，不注入 d=，红项按任务书直接上帅转达',
+    };
+  }
   const foundId = found && found.ok ? String(found.dispatchId || '').trim() || null : null;
   const foundSettled = Boolean(
     found && found.ok === false && !found.unscanned && /已结算/.test(String(found.error || '')),
@@ -625,7 +639,7 @@ export function isCiEnv(env = process.env) {
 }
 
 export function orcaHelpAvailable(spawn = spawnSync) {
-  const r = spawn('orca', ['--help'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
     const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
@@ -652,7 +666,7 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 export function fetchOrcaHelp(cmd, spawn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const r = spawn('orca', [...parts, '--help'], { encoding: 'utf8', timeout: 20000 });
+  const r = spawn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
   if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
   const text = `${r.stdout || ''}${r.stderr || ''}`;
   if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
@@ -841,7 +855,9 @@ import {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone, preflightReviewer,
+  planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
+  planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
+  isFastPathStandIn, FASTPATH_STANDIN_MARK,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
@@ -849,7 +865,9 @@ export {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone, preflightReviewer,
+  planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
+  planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
+  isFastPathStandIn, FASTPATH_STANDIN_MARK,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
@@ -873,6 +891,8 @@ export {
   INJECT_GATE_NOTE, injectUtf8Bytes, stripInjectEof, assertInjectText, assertInjectLen,
   buildSoldierInject, buildBatchInject, buildReviewerInject, assertDispatchInjectPlan,
 } from './dispatch/template.mjs';
+import { mirasimVerbGuard, MIRASIM_VERB_POINTERS } from './dispatch/mirasim-verbs.mjs';
+export { mirasimVerbGuard, MIRASIM_VERB_POINTERS };
 
 // ── 闭环投递（发不到必须炸，#548 红项 1）──────────────────────────
 //
@@ -958,7 +978,7 @@ export const FLAGS_BY_VERB = {
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'worker-done': new Set([
     '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--from',
-    '--dry-run', '--json', '--help', '-h',
+    '--reviewer', '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
@@ -971,11 +991,11 @@ export const FLAGS_BY_VERB = {
     '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
   'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
-  send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--json', '--help', '-h']),
+  send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
     '--task-id', '--dispatch-id', '--dispatch-capability', '--from',
-    '--files-modified', '--report-path',
+    '--files-modified', '--report-path', '--executor',
     '--json', '--help', '-h',
   ]),
   reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
@@ -983,7 +1003,7 @@ export const FLAGS_BY_VERB = {
   'run-gc': new Set(['--apply', '--json', '--help', '-h']),
   'board-archive': new Set(['--out', '--json', '--help', '-h']),
   'board-reset': new Set(['--apply', '--out', '--json', '--help', '-h']),
-  ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--json', '--help', '-h']),
+  ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--executor', '--json', '--help', '-h']),
   'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
   'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
@@ -1074,10 +1094,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
-  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
+                  # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
   reviewer-done --pr <N> [--dry-run]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
