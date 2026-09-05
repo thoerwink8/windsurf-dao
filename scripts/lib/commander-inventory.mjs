@@ -376,14 +376,29 @@ export function findPathShims(exists = existsSync) {
 function unit(desc, execArgs) {
   return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/home/orca/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
-function timer(desc, activeSec) {
-  return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
+/**
+ * timer 模板。**`OnCalendar` 是必需的，不是冗余。**
+ *
+ * 2026-09-05 实咬两次：只写 `OnBootSec`/`OnUnitActiveSec` 这种单调时钟的 timer，
+ * 停掉再起之后会进 `active (elapsed)` 死态——`systemctl` 仍显示 active + enabled，
+ * `NEXT` 却是 `n/a`，永不再触发，而且没有任何东西报警。`dao-agent-stall` 就是这么
+ * 从 12:37 起无声停摆几小时的。挂一个墙钟点位，永远有下一次，这个死态就不存在。
+ *
+ * 这两个单元是**代码生成的**，不在 `host/machine/systemd/` 目录下，所以
+ * `tests/timer-armed.test.js` 和 `tests/unit-privilege.test.js` 两道静态闸都扫不到它们——
+ * 它们是这条判据的盲区，靠本函数自己守。改这里前先读那两个测试。
+ *
+ * @param calendar 墙钟点位。各单元错开分钟数，别都挂整点（整点是所有 timer 的默认落点）。
+ */
+function timer(desc, activeSec, calendar) {
+  return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnCalendar=${calendar}\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
 }
 export const INSTALL_FILES = () => ({
   '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs act'),
-  '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min'),
+  // :11/20 —— 错开 dao-sync(:1/5)、dao-agent-stall(:2/15)、dao-board-gc(:07)、dao-patrol(:23)
+  '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min', '*:11/20'),
   '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs inventory'),
-  '/etc/systemd/system/commander-inventory.timer': timer('指挥官盘点每 6 小时', '6h'),
+  '/etc/systemd/system/commander-inventory.timer': timer('指挥官盘点每 6 小时', '6h', '*-*-* 00,06,12,18:41:00'),
 });
 
 export function runInstall({ rest, ROOT }) {

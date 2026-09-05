@@ -57,3 +57,43 @@ describe('timer 有没有下一次触发', () => {
     }
   });
 });
+
+// 2026-09-05 服务器巡检（第一次真跑）抓到的：仓里的 unit 补了 OnCalendar，
+// **机器上还是两天前那份**——`dao-sync` 只拉代码不装单元。而两道静态闸只扫
+// `host/machine/systemd/*.timer`，对**代码生成**的单元一无所知：
+// `commander-act` / `commander-inventory` 由 `commander-inventory.mjs` 的模板写出来，
+// 不在那个目录，于是「检查全绿，修没有生效」。
+describe('代码生成的 systemd 单元也要过同一把尺', () => {
+  const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-inventory.mjs')
+    .split(path.sep).join('/');
+
+  it('生成的每个 .timer 都必须有 OnCalendar', async () => {
+    const M = await import(LIB);
+    const files = M.INSTALL_FILES();
+    const timers = Object.entries(files).filter(([p]) => p.endsWith('.timer'));
+    assert.ok(timers.length > 0, '一个生成的 .timer 都没扫到，本闸判据已失效');
+    for (const [p, text] of timers) {
+      assert.match(text, /^OnCalendar=/m,
+        `${p} 只有单调时钟——停掉再起会进 active(elapsed) 死态，显示 active+enabled 却永不触发`);
+    }
+  });
+
+  it('生成的每个 .service 都必须显式写 User=（不写就是 root）', async () => {
+    const M = await import(LIB);
+    const files = M.INSTALL_FILES();
+    const svcs = Object.entries(files).filter(([p]) => p.endsWith('.service'));
+    assert.ok(svcs.length > 0, '一个生成的 .service 都没扫到，本闸判据已失效');
+    for (const [p, text] of svcs) {
+      assert.match(text, /^User=/m,
+        `${p} 没写 User= —— systemd 默认 root，而它 ExecStart 的是 orca 可写的仓内脚本`);
+    }
+  });
+
+  it('墙钟点位互不相同——都挂同一分钟就是自己跟自己抢', async () => {
+    const M = await import(LIB);
+    const cals = Object.entries(M.INSTALL_FILES())
+      .filter(([p]) => p.endsWith('.timer'))
+      .map(([, t]) => (t.match(/^OnCalendar=(.+)$/m) || [])[1]);
+    assert.equal(new Set(cals).size, cals.length, `点位撞了：${cals.join(' / ')}`);
+  });
+});
