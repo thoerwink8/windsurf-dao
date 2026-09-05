@@ -292,29 +292,46 @@ function collectCandidates(situation) {
   for (const pr of gh.prs || []) {
     if (!pr || pr.number == null) continue;
 
-    if (prApprovedReady(pr)) { // 判绿 + 非 draft + MERGEABLE（manual 会被审官转 draft）
+    // 判绿判据只认**真 review**（2026-09-05 实咬）：原来这里的入口是 prApprovedReady，
+    // 它要 pr.reviewDecision === 'APPROVED'。而 reviewDecision 是 GitHub 按分支保护规则算的聚合值，
+    // 本仓没开分支保护 ⇒ 它恒为 null，判绿也 null、判红也 null。
+    // 后果是自动合并这条路**从来没通过电**：审官判绿了，指挥官这一格永远进不去，
+    // PR 就一直挂着等人。判红那一维同样在帅位盘面上隐形（shuai-scan 的 prRed 只看 CI）。
+    // 改成按当前 head 看真 review（analyzeReviewsAtHead，与下面判红同一判据，绿红一把尺）：
+    //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
+    //   · 没查成一律不合，与「查过确实没绿」分开。
+    const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
+    const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const mergeableNow = String(pr.mergeable || '').toUpperCase() === 'MERGEABLE';
+
+    if ((greenAtHead || decisionApproved) && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
       if (ci.red) { // 判绿却 CI 红：矛盾态，不自动合，报帅
         out.push(withNeeds(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }), N.merge));
         out.push(withNeeds(hub(`PR #${pr.number} 判绿但 CI 红，卡住了`, 'stuck', { pr: pr.number }), N.merge));
         continue;
       }
-      const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
-      if (!a.scanned) { // 该 PR 单独没抓到 reviews（section 可能 scanned 但这条 PR 的 fetch 缺）：不合，报没查成
-        out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
-        continue;
+      if (!greenAtHead) {
+        // 只有 reviewDecision 说绿、而当前 head 上看不到 APPROVED 时才走这条老路（既有契约不动）：
+        // 不带 head 复核一遍逐条 review，拿不到就报没查成，拿到但没绿就报 approved-without-review。
+        const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
+        if (!a.scanned) {
+          out.push(withNeeds(esc(`PR #${pr.number} 判绿待合并，但该 PR reviews 没查成`, { reason: 'unscanned', pr: pr.number, missing: ['prReviews'] }), N.merge));
+          continue;
+        }
+        if (!a.green && !a.latestGreen) {
+          out.push(withNeeds(esc(`PR #${pr.number} reviewDecision=APPROVED 但 reviews 里没有 APPROVED 状态——报帅`, { reason: 'approved-without-review', pr: pr.number }), N.merge));
+          continue;
+        }
       }
-      if (!a.green && !a.latestGreen) {
-        out.push(withNeeds(esc(`PR #${pr.number} reviewDecision=APPROVED 但 reviews 里没有 APPROVED 状态——报帅`, { reason: 'approved-without-review', pr: pr.number }), N.merge));
-        continue;
-      }
-      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿 + m=auto + CI 绿 + MERGEABLE' }, N.merge));
+      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE' }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
       continue;
     }
 
-    if (prApprovedDraft(pr)) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+    if ((greenAtHead || decisionApproved) && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
       continue;
     }

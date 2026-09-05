@@ -936,3 +936,37 @@ describe('返工命令：显式放行 issue 级去重', () => {
   });
 });
 
+// 2026-09-05 实咬：自动合并的唯一入口是 pr.reviewDecision==='APPROVED'，而这个字段由 GitHub 按分支保护规则算，
+// 本仓没开分支保护 ⇒ 恒为 null。审官判绿了，指挥官这一格永远进不去，PR 一直挂着等人——
+// 「全流程无人工干预」从来没通过电就是死在这里。判绿改成按当前 head 看真 review。
+describe('decide：判绿按真 review 而非 reviewDecision（实咬）', () => {
+  function greenSit(over = {}) {
+    const pr = {
+      number: 960, title: 'Z', isDraft: false, reviewDecision: null, mergeable: 'MERGEABLE',
+      headRefOid: 'h960', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+      ...(over.pr || {}),
+    };
+    return baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 960: { reviews: over.reviews !== undefined ? over.reviews
+        : [{ state: 'APPROVED', body: '看过了，可以合', commit_id: 'h960' }] } } },
+    });
+  }
+  it('reviewDecision 为 null 但当前 head 上是 APPROVED → 照样 merge', async () => {
+    const { decide } = await CORE;
+    const r = decide(greenSit());
+    assert.equal(byKind(r, 'merge').length, 1, 'reviewDecision 恒 null 的仓也必须能自动合');
+    assert.equal(byKind(r, 'land').length, 1);
+  });
+  it('绿打在旧 head 上 → 不合（判绿只对它当时看的那个 commit 有效）', async () => {
+    const { decide } = await CORE;
+    const r = decide(greenSit({ reviews: [{ state: 'APPROVED', body: '旧的', commit_id: 'old' }] }));
+    assert.equal(byKind(r, 'merge').length, 0);
+  });
+  it('当前 head 上是 CHANGES_REQUESTED → 不合，走返工', async () => {
+    const { decide } = await CORE;
+    const r = decide(greenSit({ reviews: [{ state: 'CHANGES_REQUESTED', body: '不行', commit_id: 'h960' }] }));
+    assert.equal(byKind(r, 'merge').length, 0);
+  });
+});
+
