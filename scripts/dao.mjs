@@ -2689,6 +2689,7 @@ function reuseReviewerOnTerminal({
 }
 
 function cmdWorkerDone(args) {
+  if (args.executor && args.executor !== 'orca') return cmdWorkerDoneMirasim(args);
   // #677：本命令只交 GitHub 卷 + 起审官。Orca 结算（notify --type worker_done）不走这里。
   // 成功退出后士兵 Dispatch 必须仍是 ready/waiting，不许 completed。失败不得假装已下班。
   if (!args.pr) fail('worker-done 要 --pr');
@@ -3371,6 +3372,7 @@ function cmdWorkerRead(args) {
 }
 
 async function cmdReviewerCreate(args) {
+  if (args.executor && args.executor !== 'orca') return cmdReviewerCreateMirasim(args);
   if (!args.pr) fail('reviewer-create 要 --pr');
 
   const gh = ghRunner({ role: 'reviewer' });
@@ -4823,6 +4825,289 @@ async function cmdLeg(args) {
     return;
   }
   fail(`leg 只认 status / drop / restore，实际 ${action}`);
+}
+
+// ── #880 卡 C：审官流的 mirasim 执行体路径 ─────────────────────────────────────
+// reviewer-create / worker-done 带 --executor mirasim 时走这里：不建 Orca 树/终端，改用
+// mirasim-runtime 五动词起审官会话。判定仍落 GitHub review（gh-as reviewer），不发明第二种。
+// 合并归一：executor-binding.mjs / docs/model-routing.json「执行体」节 与卡 B 归一（见 PR 正文）。
+import { readExecutorPolicy, judgeExecutorName, judgeAgentRoute, bindExecutor } from './lib/executor-binding.mjs';
+import {
+  mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
+  judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
+} from './lib/dispatch/reviewer-mirasim.mjs';
+
+/** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
+function mirasimRepoRoot(args) {
+  if (args && args.repo) return args.repo;
+  const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
+  if (r.status === 0) {
+    let g = String(r.stdout || '').trim();
+    if (g) {
+      if (!g.startsWith('/')) g = join(ROOT, g);
+      if (g.endsWith('/.git')) return dirname(g);
+      return g;
+    }
+  }
+  return ROOT;
+}
+
+/** 读回某树 HEAD 的 sha（读回自证的那一读；读不到抛，交判官判「没查成」）。 */
+function gitHeadOf(treePath) {
+  const r = spawnSync('git', ['-C', treePath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(String(r.stderr || '').trim() || `git rev-parse 失败 exit ${r.status}`);
+  return String(r.stdout || '').trim();
+}
+
+/**
+ * 把复用的审官树推到 PR 新 head（返工轮）。fail-visible：
+ *  - 树里有未提交改动 → 拒硬 reset（reset --hard 会吞掉别人的活），报错让人看见；
+ *  - 目标 oid 本地没有 → 报错（调用方在这之前已 fetch 过，走到这说明 fetch 没生效）。
+ * 写完读回自证：reset 后自己再 rev-parse 一次，对不上就说没同步成，不打假 ✓。
+ */
+function gitSyncTreeTo(treePath, oid) {
+  const want = String(oid || '').trim();
+  if (!want) return { ok: false, error: '没给要同步到的 oid（没查成）' };
+  const st = spawnSync('git', ['-C', treePath, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+  if (st.status !== 0) {
+    return { ok: false, error: `读审官树 ${treePath} 状态失败（没查成）：${String(st.stderr || '').trim().slice(0, 200)}` };
+  }
+  const dirty = String(st.stdout || '').trim();
+  if (dirty) {
+    return {
+      ok: false,
+      error: `审官树 ${treePath} 有未提交改动，拒硬同步（怕吞活）：${dirty.split('\n').slice(0, 3).join(' | ')}`,
+      dirty: dirty.split('\n').slice(0, 10),
+    };
+  }
+  const has = spawnSync('git', ['-C', treePath, 'cat-file', '-e', `${want}^{commit}`], { windowsHide: true, encoding: 'utf8' });
+  if (has.status !== 0) return { ok: false, error: `审官树里没有 ${want.slice(0, 12)} 这个 commit（fetch 没生效？没查成）` };
+  const rs = spawnSync('git', ['-C', treePath, 'reset', '--hard', want], { windowsHide: true, encoding: 'utf8' });
+  if (rs.status !== 0) {
+    return { ok: false, error: `reset --hard ${want.slice(0, 12)} 失败：${String(rs.stderr || '').trim().slice(0, 200)}` };
+  }
+  let after;
+  try { after = gitHeadOf(treePath); }
+  catch (e) { return { ok: false, error: `同步后读回 HEAD 失败（没查成）：${String(e?.message || e)}` }; }
+  if (after !== want && !after.startsWith(want) && !want.startsWith(after)) {
+    return { ok: false, error: `reset 报成功但读回 HEAD 还是 ${after.slice(0, 12)}（不打假 ✓）`, treeHead: after };
+  }
+  return { ok: true, treeHead: after, from: null, to: want };
+}
+
+/**
+ * 把 origin/<PR 分支> 取到本地，并把审官分支 reviewBranch 建/移到 PR head OID（等同 orca
+ * 「新树停在 PR head」，避开 PR 分支已被别的树 checkout 的撞车）。失败返回 {ok:false}。
+ *
+ * 该审官分支已被某棵树 checkout 时 git 不让 `branch -f`，这里如实跳过并回 checkedOut:true——
+ * 推那棵树的活归 gitSyncTreeTo（返工轮由编排层在 HEAD 闸上调），不是这里静默算完。
+ */
+function gitFetchRef(repo, prBranch, expectedOid, reviewBranch) {
+  const fe = spawnSync('git', ['-C', repo, 'fetch', 'origin', prBranch], { windowsHide: true, encoding: 'utf8', timeout: 90000 });
+  if (fe.status !== 0) return { ok: false, error: `git fetch origin ${prBranch} 失败：${String(fe.stderr || '').trim().slice(0, 200)}` };
+  const branch = reviewBranch || prBranch;
+  const target = expectedOid || `origin/${prBranch}`;
+  let checkedOut = false;
+  if (branch !== prBranch) {
+    // 该审官分支已被某树 checkout 就别硬移（git 不让）；推那棵树归 gitSyncTreeTo。
+    const wl = spawnSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+    const lines = wl.status === 0 ? String(wl.stdout || '').split('\n').map(x => x.trim()) : [];
+    checkedOut = lines.includes(`branch refs/heads/${branch}`);
+    if (!checkedOut) {
+      const br = spawnSync('git', ['-C', repo, 'branch', '-f', branch, target], { windowsHide: true, encoding: 'utf8' });
+      if (br.status !== 0) return { ok: false, error: `建审官分支 ${branch}@${String(target).slice(0, 12)} 失败：${String(br.stderr || '').trim().slice(0, 200)}` };
+    }
+  }
+  return { ok: true, branch, checkedOut, target: String(target) };
+}
+
+/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。 */
+function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
+  return lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue,
+    pr,
+    dispatchId: dispatchId || null,
+    // mirasim 路径没有 orca 卡，不给 worktreeSel（免得 lookup 去 orca 捞盘面）。
+  });
+}
+
+function mirasimRegistry() {
+  return defaultReviewerRegistry({
+    readFile: p => readFileSync(p, 'utf8'),
+    writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
+    mkdir: d => mkdirSync(d, { recursive: true }),
+    join,
+    flowDir: join(ROOT, '_flow', 'mirasim'),
+  });
+}
+
+async function cmdReviewerCreateMirasim(args) {
+  if (!args.pr) fail('reviewer-create 要 --pr');
+  const gh = ghRunner({ role: 'reviewer' });
+  const routing = loadOrFail();
+  const execPolicy = readExecutorPolicy(routing);
+  const named = judgeExecutorName(args.executor, execPolicy);
+  if (!named.ok) fail(named.error, { executor: args.executor });
+  const bind = bindExecutor({ executor: named.name, routing });
+  if (!bind.ok) fail(bind.error, { executor: named.name });
+
+  const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
+  if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
+  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
+  if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, pr: String(args.pr) });
+  const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
+  if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });
+
+  const issueRef = args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null;
+  // #886 审官第 4 条：merge-policy 从原派工恢复（显式旗标 > 账本 > 卡备注），不许硬编码 auto。
+  const policyPlan = mirasimMergePolicy(args, {
+    issue: issueRef, pr: args.pr, dispatchId: args.soldierDispatch || null,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, pr: String(args.pr) });
+  const books = buildMirasimReviewerPrompts({
+    pr: String(args.pr), issue: issueRef,
+    soldierDispatchId: args.soldierDispatch != null ? String(args.soldierDispatch) : '',
+    policyPlan, render: buildReviewerInject,
+  });
+  if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
+
+  const registry = mirasimRegistry();
+  // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
+  const existing = registry.read(args.pr);
+  if (existing.ok && existing.record && existing.record.sessionKey) {
+    // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
+    // 否则服务端一抽风就给同一个 PR 起第二个审官。
+    const peek = args.dryRun ? { view: null, why: 'dry-run 不探会话' } : await peekReviewerSession(bind.runtime, existing.record.sessionKey);
+    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: args.force });
+    if (reuse.reuse) {
+      emit({
+        ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
+        reviewer: picked.modelId, worker: worker.modelId, sessionKey: reuse.sessionKey,
+        agent: existing.record.agent || null, treePath: existing.record.treePath || null,
+        expectedOid: existing.record.expectedOid || null,
+        mergePolicy: books.mergePolicy, mergePolicySource: books.source,
+        reuse: { reuse: true, checked: reuse.checked, why: reuse.why, peekWhy: peek.why || null },
+        why: `${reuse.why}（要另起加 --force）`,
+      });
+    }
+  }
+
+  const repo = mirasimRepoRoot(args);
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim', pr: String(args.pr), reviewer: picked.modelId,
+      worker: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    });
+  }
+
+  const res = await mirasimReviewerCreate({
+    runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
+    prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+    syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+    pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
+    models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
+    reviewBranch: `dao-review-pr-${args.pr}`,
+  });
+  if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res });
+
+  // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
+  const w = registry.write(args.pr, {
+    pr: String(args.pr), sessionKey: res.sessionKey, agent: res.agent, treePath: res.treePath,
+    round: 'first', headRefName: res.headRefName, expectedOid: res.expectedOid,
+    treeHead: res.treeHead || null, ts: Date.now(),
+  });
+  if (!w || w.ok !== true) {
+    fail(
+      `审官会话已起（sessionKey=${res.sessionKey}）但写登记失败，判失败（fail-closed，不许当 created）：${(w && w.error) || '写盘没回 ok'}`,
+      { executor: 'mirasim', stage: 'registry', pr: String(args.pr), sessionKey: res.sessionKey, treePath: res.treePath, registryWrite: w || null },
+    );
+  }
+  emit({
+    ok: true, executor: 'mirasim', outcome: 'created', pr: String(args.pr),
+    reviewer: picked.modelId, worker: worker.modelId, sessionKey: res.sessionKey, taskId: res.taskId,
+    agent: res.agent, mode: res.mode, treePath: res.treePath, headRefName: res.headRefName,
+    expectedOid: res.expectedOid, treeHead: res.treeHead, mergeable: res.mergeable, treeSync: res.treeSync,
+    mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    registryWrite: w,
+  });
+}
+
+async function cmdWorkerDoneMirasim(args) {
+  if (!args.pr) fail('worker-done 要 --pr');
+  let body = args.body;
+  if (args.bodyFile) {
+    try { body = readFileSync(args.bodyFile, 'utf8'); }
+    catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
+  }
+  const gh = ghRunner({ role: 'worker' });
+  const ghR = ghRunner({ role: 'reviewer' });
+  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh });
+  if (!plan.ok) fail(plan.error, plan);
+  const routing = loadOrFail();
+  const execPolicy = readExecutorPolicy(routing);
+  const named = judgeExecutorName(args.executor, execPolicy);
+  if (!named.ok) fail(named.error);
+  const bind = bindExecutor({ executor: named.name, routing });
+  if (!bind.ok) fail(bind.error);
+
+  // 工人模型：跨厂闸与新起会话要。首审 plan.workerModel 有；返工轮从 PR 标签兜。
+  let workerModel = plan.workerModel;
+  if (!workerModel) {
+    const worker = resolveWorkerFromPr({ pr: args.pr, runGh: ghR });
+    workerModel = worker.ok ? worker.modelId : null;
+  }
+
+  // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
+  // 却给审官注入 m=auto，审官会绕过「需人工合并」的边界。
+  const policyPlan = mirasimMergePolicy(args, {
+    issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, ...plan });
+  const books = buildMirasimReviewerPrompts({
+    pr: String(plan.pr), issue: plan.issue,
+    soldierDispatchId: args.soldierDispatch != null ? String(args.soldierDispatch) : '',
+    policyPlan, render: buildReviewerInject,
+  });
+  if (!books.ok) fail(books.error, { policyPlan, ...plan });
+
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim', ...plan, workerModel,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    });
+  }
+
+  const postedIssue = postCommentOnce({ kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh });
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
+  if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
+
+  const repo = mirasimRepoRoot(args);
+  const res = await mirasimWorkerDone({
+    runtime: bind.runtime, gh: ghR, readTreeHead: gitHeadOf,
+    prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+    syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+    registry: mirasimRegistry(),
+    pr: String(plan.pr), repo,
+    prompt: books.prompt,
+    reworkPrompt: books.reworkPrompt,
+    reviewerModel: plan.reviewer, workerModel,
+    models: routing.models, mirasimPolicy: bind.mirasim, round: plan.round,
+    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force,
+  });
+  if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
+  emit({
+    ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
+    mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    postedIssue, postedPr, action: res.action, session: res.session || null, interact: res.interact || null,
+    sessionKey: res.sessionKey || res.session?.sessionKey || null, treeSync: res.treeSync || null,
+    reuse: res.reuse ? { reuse: res.reuse.reuse, checked: res.reuse.checked, why: res.reuse.why } : null,
+  });
 }
 
 function main() {

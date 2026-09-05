@@ -629,9 +629,9 @@ function checkAgentStallWatch() {
 export function classifyTimerArmed({ probed = false, reason = '', units = null } = {}) {
   if (!probed) return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
   if (!Array.isArray(units)) return { state: UNKNOWN, detail: 'timer 清单没查成（不是数组）——不当成 0 个死' };
-  // 扫出 0 个 ≠ 全都健康：一个 dao timer 都没扫到，多半是判据或前缀失效。
+  // 扫出 0 个 ≠ 全都健康：一个 timer 都没扫到，多半是判据或过滤失效。
   if (units.length === 0) {
-    return { state: UNKNOWN, detail: '一个 dao timer 都没扫到——「没查成」不算「都没问题」' };
+    return { state: UNKNOWN, detail: '一个 timer 都没扫到——「没查成」不算「都没问题」' };
   }
   const dead = units.filter((u) => {
     const n = u && u.next;
@@ -646,23 +646,95 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
         + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
     };
   }
-  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发` };
+  // 「现在还有下一次」不等于安全。只有单调时钟（OnBootSec/OnUnitActiveSec）的 timer
+  // 停一次再起就进 active(elapsed)：显示 active+enabled 而永不触发。今天两个单元先后咬过。
+  // 已经死了 和 下次重启必死，是同一个缺陷的两个阶段——都在这一格报，别等它死了再说。
+  const latent = units.filter((u) => u && u.calendar === false);
+  if (latent.length) {
+    return {
+      state: RED,
+      detail: `${latent.length}/${units.length} 个 timer 现在还活着，但只有单调时钟、没有 OnCalendar`
+        + `（${latent.map((u) => u.unit).join('、')}）——停一次再起就会进 active(elapsed)：`
+        + '显示 active+enabled 却永不触发，而且没有任何东西会说一句。'
+        + '给单元加 OnCalendar；不归本仓的单元（如 gw-* 属网关仓）去它自己的仓改，改完重装。',
+    };
+  }
+  const unknownCal = units.filter((u) => u && u.calendar == null).length;
+  if (unknownCal) {
+    return { state: UNKNOWN, detail: `${unknownCal}/${units.length} 个 timer 的单元文件读不出来——「有没有 OnCalendar」这一格没查成` };
+  }
+  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发，且都有墙钟点位` };
+}
+
+/**
+ * 这个单元是不是「我们装的」——判据是**单元文件落在哪**，不是它叫什么。
+ *
+ * 发行版的单元一律在 `/usr/lib/systemd/system/`（部分老系统 `/lib/systemd/system/`），
+ * 管理员/我们装的一律在 `/etc/systemd/system/`。这条界线是 systemd 自己定的，
+ * 不需要任何人维护名单，也天然覆盖将来别的仓装上来的单元。
+ *
+ * 读不到路径时回 null（没查成），**绝不回 false**——「不知道归谁」被当成「不归我管」，
+ * 正是漏报的做法。
+ */
+export function isOurUnit(fragmentPath) {
+  const s = String(fragmentPath || '').trim();
+  if (!s) return null;
+  if (/^\/(?:usr\/)?lib\/systemd\/system\//.test(s)) return false;
+  if (/^\/etc\/systemd\/system\//.test(s)) return true;
+  if (/^\/run\/systemd\//.test(s)) return false; // 运行时生成的，不归本仓
+  return null; // 没见过的落点：不猜，交给调用方当「没查成」
 }
 
 /** 扫盘面上的 dao/commander timer——不许手写清单，清单会过期。 */
 function checkTimerArmed() {
   const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], { timeout: 10000 });
   if (!list.probed) return classifyTimerArmed({ probed: false, reason: `systemctl 没跑成：${list.reason}` });
-  const names = [...String(list.stdout || '').matchAll(/\b((?:dao|commander)[a-z0-9-]*\.timer)\b/g)]
-    .map((m) => m[1]);
+  // 2026-09-05 服务器巡检自己抓到的：本闸原本只认 `dao*` / `commander*` 前缀，
+  // 于是 `gw-remote-probe.timer`（写 ~/.dao/provider-health.json，我们**读**它判派工可用性）
+  // 一直是单调时钟、不在扫描面里——它停掉再起就会进 active(elapsed) 死态，
+  // 而派工把过期健康表当 unknown 不拦。**按名字前缀圈定扫描面，等于只查自己认识的东西。**
+  // 头一版按 `dao*`/`commander*` 前缀圈定，漏了 `gw-remote-probe.timer`；改成「扫全机 + 排掉
+  // 发行版前缀」之后，立刻把 Ubuntu 自带的 `apport-autoreport` / `ua-timer` 判成红——
+  // **名字黑名单和名字白名单是同一个毛病**，都只覆盖「有人想得到的那些」。
+  //
+  // 换成结构判据：**看单元文件落在哪**。发行版的在 `/usr/lib/systemd/system/`，
+  // 我们（本仓 + 别的仓）装的一律在 `/etc/systemd/system/`。这个界线不靠任何人维护名单，
+  // 且天然覆盖将来别的仓装上来的单元——`gw-remote-probe` 正是这么被捞回来的。
+  const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)].map((m) => m[1]);
   const units = [];
+  const skipped = [];
   for (const unit of [...new Set(names)]) {
-    const p = run('systemctl', ['show', unit, '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
+    // 不加 `--value`：`systemctl show` 按**它自己的属性顺序**输出，不按命令行顺序，
+    // 靠下标取值会张冠李戴（第一版就把某个时间戳当成了单元路径）。按键名取，与顺序无关。
+    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
     if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
-    const vals = String(p.stdout || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const kv = new Map(String(p.stdout || '').split(/\r?\n/)
+      .map((l) => l.trim()).filter(Boolean)
+      .map((l) => { const i = l.indexOf('='); return i < 0 ? null : [l.slice(0, i), l.slice(i + 1).trim()]; })
+      .filter(Boolean));
+    const frag = kv.get('FragmentPath') || '';
+    if (!frag) return classifyTimerArmed({ probed: false, reason: `${unit} 读不到 FragmentPath——圈不出扫描面，不当「不归我管」` });
+    const mine = isOurUnit(frag);
+    if (mine === null) {
+      return classifyTimerArmed({ probed: false, reason: `${unit} 的单元文件落在没见过的地方（${frag}）——判不出归属，不当「不归我管」` });
+    }
+    if (!mine) { skipped.push(unit); continue; }
+    const vals = ['NextElapseUSecRealtime', 'NextElapseUSecMonotonic']
+      .map((k) => kv.get(k) || '').filter(Boolean);
     // 两个点位任意一个有值就算有下一次；两个都空才是死态。
     const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
-    units.push({ unit, next: alive ? vals.join('|') : null });
+    // 有没有墙钟点位，只能读单元文件本身——`systemctl show` 的 TimersCalendar 在老版本上不稳。
+    // 读不到回 null（没查成），不回 false：那会把「没读着」报成「缺 OnCalendar」，是误报。
+    let calendar = null;
+    try { calendar = /^OnCalendar=/m.test(readFileSync(frag, 'utf8')); } catch { calendar = null; }
+    units.push({ unit, next: alive ? vals.join('|') : null, calendar });
+  }
+  if (units.length === 0 && skipped.length > 0) {
+    // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
+    return classifyTimerArmed({
+      probed: false,
+      reason: `扫到 ${skipped.length} 个 timer，但没有一个装在 /etc/systemd/system——我们的单元一个都没装上？`,
+    });
   }
   return classifyTimerArmed({ probed: true, units });
 }

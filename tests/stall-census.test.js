@@ -212,3 +212,30 @@ describe('播报说人话（黑话拦在合并前，不是拦在群里）', () =
     }
   });
 });
+
+// 2026-09-05 当天引入、当天咬：无卡孤儿那一格读的是**真 /proc**，于是同为 Linux，
+// 自己的服务器上绿（进程都对得上卡）、GitHub runner 上红（对不上）——**机器状态漏进了单元夹具**。
+// 修法是给一个显式关闭口。而一个**能被静默关掉的检查等于没有检查**，所以关掉这件事必须留痕。
+describe('普查的关闭口不许静默', () => {
+  const { readFileSync } = require('node:fs');
+  const path2 = require('node:path');
+  const CLI = readFileSync(path2.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+
+  it('关掉时走的是 notApplicable，不是「查过没事」', () => {
+    const m = CLI.match(/const censusOff = [\s\S]{0,400}?readProcessCensus\(\);/);
+    assert.ok(m, '关闭口的形状变了，本闸判据已失效——请同步更新');
+    assert.match(m[0], /notApplicable: true/, '关掉必须落 notApplicable（skipped），绝不能落 ok');
+    assert.ok(!/ok: true/.test(m[0]), '关掉了还报 ok:true，就是把「没查」说成「没事」');
+  });
+
+  it('关闭原因要写进 detail，让人在输出里看得见是被关掉的', () => {
+    const m = CLI.match(/const censusOff = [\s\S]{0,400}?readProcessCensus\(\);/);
+    assert.match(m[0], /DAO_NOCARD_CENSUS/, 'detail 里要点名是哪个开关关的');
+    assert.match(m[0], /不是「查过没事」|不是「没问题」/, '要明说它不等于绿');
+  });
+
+  it('只有夹具关它——正式路径上不许出现默认关闭', () => {
+    assert.ok(!/DAO_NOCARD_CENSUS\s*\|\|\s*['"]off/.test(CLI),
+      '默认值成了 off，等于这一格永远不跑');
+  });
+});
