@@ -56,12 +56,14 @@ node --version
 
 四个 App 的 private key 只此一份，丢了要回 GitHub 重新生成。换机把 `~/.dao/apps/` 整目录拷过来，**不要**进 git。
 
+**服务器上 `~` 是服务用户的家，不是 root 的**（`/home/orca/.dao/apps/`）。用 root 登录搬运时 `scp ... root@host:/root/.dao/apps/` 落点是错的——`/root` 是 0700，orca 读不进去，而 orca 才是跑 orca-serve 和全部 timer 的身份。同理：**不要用 root 在服务用户目录里跑任何东西**（跑测试、clone、执行脚本），留下的 root 属主文件会让 orca 的 git 写操作和测试以各种不像权限问题的面目失败（2026-09-05 实咬：`.git/index` 落成 root、memory 的 `MEMORY.md` 落成 root、131 个测试沙箱文件落成 root，表现成 3 条测试红 + gen-index 静默 EACCES）。`server-check` 第 (21) 项常驻扫这个，修法 `sudo chown -R orca:orca <路径>`。
+
 | 文件 | 角色 | App ID | Installation ID |
 |---|---|---|---|
 | `reviewer.{pem,json}` | `dao-reviewer[bot]` 审官 | 4616659 | 154244051 |
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
-| `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 人建完填 json | 人建完填 json |
+| `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 4840777 | 159280695 |
 
 `*.json` 形态（数字不要加引号）：
 

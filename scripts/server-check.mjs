@@ -20,7 +20,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { delimiter as PATH_DELIMITER, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
@@ -1057,6 +1057,63 @@ function checkUnitDrift() {
   return classifyUnitDrift(pairs);
 }
 
+// —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
+//
+// 症状不像权限问题：`.git/index` 落成 root 后 orca 的 git 写操作失败，
+// memory 的 `MEMORY.md` 落成 root 后 gen-index 静默 EACCES，测试沙箱落成 root 后
+// 5 条测试红成「代码坏了」。三处表现各不相同，根因是同一个——**有人用 root
+// 在服务用户的目录里跑了东西**（sudo 跑测试、root 跑 clone/脚本都会）。
+//
+// 之所以要成一项常驻检查：它会复发（任何一次 root 误跑都重新种下），
+// 而且每次都伪装成别的病。修法永远是 `sudo chown -R <用户>:<用户> <路径>`。
+
+const SERVICE_USER = (() => { try { return userInfo().username; } catch { return process.env.USER || '<服务用户>'; } })();
+
+/** 纯函数：把扫描结果判成三态。扫不成 ≠ 干净。 */
+export function classifyRootOwned(scans) {
+  if (!Array.isArray(scans) || scans.length === 0) {
+    return { state: UNKNOWN, detail: '一个路径都没扫——没查成，不是「干净」' };
+  }
+  const failed = scans.filter((s) => !s.scanned);
+  if (failed.length) {
+    const who = failed.map((s) => `${s.path}(${s.reason || '未知'})`);
+    return { state: UNKNOWN, detail: `${failed.length}/${scans.length} 个路径没扫成：${who.join('、')}——没查成，不是「干净」` };
+  }
+  const dirty = scans.filter((s) => s.count > 0);
+  if (dirty.length) {
+    const who = dirty.map((s) => `${s.path} ${s.count} 个`);
+    return {
+      state: RED,
+      detail: `${dirty.length} 个路径下有 root 属主文件：${who.join('、')}`
+        + '——服务用户写不进去，git 操作与测试会以别的面目失败。'
+        + `修：sudo chown -R ${SERVICE_USER}:${SERVICE_USER} ${dirty.map((s) => s.path).join(' ')}`,
+    };
+  }
+  const total = scans.length;
+  return { state: OK, detail: `${total} 个路径扫完，0 个 root 属主文件（服务用户 ${SERVICE_USER} 全握有写权）` };
+}
+
+function checkRootOwnedInHome() {
+  // 只扫会致命的四处，不扫整个家目录（workspaces 下几十棵树，扫全家要分钟级）
+  const home = homedir();
+  const targets = [
+    REPO_ROOT,
+    join(home, 'windsurf-dao-memory'),
+    join(home, '.dao'),
+    join(home, '.claude'),
+  ];
+  const scans = targets.map((path) => {
+    if (!existsSync(path)) return { path, scanned: true, count: 0 };
+    // -print 逐行输出；退出码非 0 说明扫途中出过错，此时行数不可信
+    const r = run('find', [path, '-user', 'root', '-print'], { timeout: 60000 });
+    if (!r.probed) return { path, scanned: false, reason: r.reason };
+    if (r.code !== 0) return { path, scanned: false, reason: `find exit ${r.code}` };
+    const count = String(r.stdout || '').split('\n').filter((l) => l.trim()).length;
+    return { path, scanned: true, count };
+  });
+  return classifyRootOwned(scans);
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -1078,6 +1135,7 @@ const CHECKS = [
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
   ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
   ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
+  ['(21) 服务用户家目录没有 root 属主文件', checkRootOwnedInHome],
 ];
 
 function outPath() {
