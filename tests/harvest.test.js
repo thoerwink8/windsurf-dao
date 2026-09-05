@@ -28,7 +28,8 @@ describe('harvest 回流闸', () => {
     const { scanHarvestSection } = await import(LIB);
     await t.test('三行齐全 → missing 空', () => {
       const r = scanHarvestSection(full);
-      assert.ok(r.has && r.missing.length === 0, JSON.stringify(r));
+      assert.equal(r.has, true, JSON.stringify(r));
+      assert.deepEqual(r.missing, [], JSON.stringify(r));
     });
     await t.test('缺「落点」被点名', () => {
       const r = scanHarvestSection('## 回流\n- 产物：x\n- 为什么通用：①a ②b\n');
@@ -131,7 +132,9 @@ describe('harvest 回流闸', () => {
       assert.deepEqual(s.missing, ['产物', '为什么通用', '落点'], '挤一行不算三行体：' + JSON.stringify(s));
       assert.equal(s.accepted, false, '受理证据挤在同一行尾也不算接住：' + JSON.stringify(s));
       const v = judgeHarvest([{ number: 9, body }]);
-      assert.ok(!v.ok && v.thin.length === 1 && v.orphans.length === 1, JSON.stringify(v));
+      assert.equal(v.ok, false, JSON.stringify(v));
+      assert.equal(v.thin.length, 1, JSON.stringify(v));
+      assert.equal(v.orphans.length, 1, JSON.stringify(v));
     });
 
     await t.test('受理证据挤在别的字段行尾 → 不算接住（孤儿判红）', () => {
@@ -139,7 +142,8 @@ describe('harvest 回流闸', () => {
       const s = scanHarvestSection(body);
       assert.equal(s.accepted, false, '证据必须自己占一行的行首：' + JSON.stringify(s));
       const v = judgeHarvest([{ number: 9, body }]);
-      assert.ok(!v.ok && v.orphans.length === 1, JSON.stringify(v));
+      assert.equal(v.ok, false, JSON.stringify(v));
+      assert.equal(v.orphans.length, 1, JSON.stringify(v));
     });
 
     await t.test('受理证据挤在同一行的多个字段之间也不算', () => {
@@ -190,15 +194,18 @@ describe('harvest 回流闸', () => {
     const { judgeHarvest } = await import(LIB);
     await t.test('孤儿段判红并点名 PR 号', () => {
       const v = judgeHarvest([{ number: 7, body: full }]);
-      assert.ok(!v.ok && v.orphans[0].includes('#7'), JSON.stringify(v));
+      assert.equal(v.ok, false, JSON.stringify(v));
+      assert.match(v.orphans[0], /#7/);
     });
     await t.test('接住了就绿', () => {
       const v = judgeHarvest([{ number: 7, body: `${full}\n- 回流单：#888` }]);
-      assert.ok(v.ok && v.accepted.length === 1, JSON.stringify(v));
+      assert.equal(v.ok, true, JSON.stringify(v));
+      assert.equal(v.accepted.length, 1, JSON.stringify(v));
     });
     await t.test('没写段的 PR 不参与判定', () => {
       const v = judgeHarvest([{ number: 8, body: '普通 PR' }]);
-      assert.ok(v.ok && v.orphans.length === 0, JSON.stringify(v));
+      assert.equal(v.ok, true, JSON.stringify(v));
+      assert.equal(v.orphans.length, 0, JSON.stringify(v));
     });
   });
 
@@ -222,21 +229,27 @@ describe('harvest 回流闸', () => {
 
     await t.test('取满上限 → 没查成（不许报成全量通过）', () => {
       const r = judgeHarvestCoverage(HARVEST_LIVE_LIMIT);
-      assert.ok(!r.ok && r.unscanned && r.saturated, JSON.stringify(r));
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(r.unscanned, true, JSON.stringify(r));
+      assert.equal(r.saturated, true, JSON.stringify(r));
       assert.match(r.error, /截断|没查成/);
     });
     await t.test('超过上限（真被截断也当截断）→ 没查成', () => {
       const r = judgeHarvestCoverage(HARVEST_LIVE_LIMIT + 5);
-      assert.ok(!r.ok && r.unscanned, JSON.stringify(r));
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(r.unscanned, true, JSON.stringify(r));
     });
     await t.test('没摸到上限 → 覆盖面完整', () => {
       const r = judgeHarvestCoverage(HARVEST_LIVE_LIMIT - 1);
-      assert.ok(r.ok && !r.unscanned && !r.saturated, JSON.stringify(r));
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.unscanned, false, JSON.stringify(r));
+      assert.equal(r.saturated, false, JSON.stringify(r));
     });
     await t.test('条数不是非负整数 → 没查成，不是过', () => {
       for (const bad of [null, undefined, -1, 1.5, '30', NaN]) {
         const r = judgeHarvestCoverage(bad);
-        assert.ok(!r.ok && r.unscanned, `${String(bad)} 该判没查成：` + JSON.stringify(r));
+        assert.equal(r.ok, false, `${String(bad)} 该判没查成：` + JSON.stringify(r));
+        assert.equal(r.unscanned, true, `${String(bad)} 该判没查成：` + JSON.stringify(r));
       }
     });
     await t.test('老上限 30 已装不下现实（2026-09-04 实测近 7 天 40 个 merged PR）', () => {
@@ -250,11 +263,13 @@ describe('harvest 回流闸', () => {
       const at = args.indexOf('--limit');
       assert.ok(at >= 0, JSON.stringify(args));
       assert.equal(args[at + 1], String(HARVEST_LIVE_LIMIT));
-      assert.ok(args.includes('--search') && args.includes('merged:>=2026-08-28'), JSON.stringify(args));
+      assert.equal(args.includes('--search'), true, JSON.stringify(args));
+      assert.equal(args.includes('merged:>=2026-08-28'), true, JSON.stringify(args));
       assert.ok(args.includes('number,body,mergedAt'), '正文字段必须取，否则全空=没查成');
       // 判据默认值必须跟着同一个常量走：拿 args 里的 limit 反喂判据，必须判截断。
       const r = judgeHarvestCoverage(Number(args[at + 1]));
-      assert.ok(r.unscanned && r.saturated, JSON.stringify(r));
+      assert.equal(r.unscanned, true, JSON.stringify(r));
+      assert.equal(r.saturated, true, JSON.stringify(r));
     });
   });
 
@@ -262,7 +277,8 @@ describe('harvest 回流闸', () => {
     const { inspectHarvestFixtures } = await import(LIB);
     const r = inspectHarvestFixtures({ readJson: readFix });
     await t.test('red 判红 / ok 干净 / empty 没查成', () => {
-      assert.ok(r.ok && r.kinds.red > 0, JSON.stringify(r));
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.ok(r.kinds.red > 0, JSON.stringify(r));
     });
   });
 });
