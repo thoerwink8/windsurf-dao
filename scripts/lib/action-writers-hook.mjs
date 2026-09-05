@@ -65,7 +65,7 @@ export async function resolveRedact({ dir = SCRIPT_DIR } = {}) {
 export function gitProbeAt({ cwd } = {}) {
   const at = cwd ? String(cwd) : null;
   if (!at) return { error: 'hook 入参没给 cwd' };
-  const run = args => spawnSync('git', ['-C', at, ...args], { encoding: 'utf8', timeout: 5000 });
+  const run = args => spawnSync('git', ['-C', at, ...args], { encoding: 'utf8', timeout: 5000, windowsHide: true });
   const head = run(['log', '-1', '--pretty=%h%x1f%s']);
   if (head.error || head.status !== 0) {
     return { error: String(head.error?.message || head.stderr || `git exit ${head.status}`).trim().slice(0, 120) };
