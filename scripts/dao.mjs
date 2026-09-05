@@ -269,7 +269,7 @@ function ghRunner(opts = {}) {
   const fake = process.env.DAO_GH_FAKE;
   if (!fake) return (args) => runGh(args, opts);
   return (args) => {
-    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', timeout: 30000 });
+    const r = spawnSync(process.execPath, [fake, ...args], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
     if (r.error || (r.status !== 0 && r.status != null)) {
       return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
     }
@@ -2317,7 +2317,7 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
   if (reviewer) argv.push('--reviewer', String(reviewer));
   if (from) argv.push('--from', String(from));
   if (dryRun) argv.push('--dry-run');
-  const r = spawnSync(process.execPath, argv, {
+  const r = spawnSync(process.execPath, argv, { windowsHide: true,
     encoding: 'utf8',
     cwd: ROOT,
     env: process.env,
@@ -4215,7 +4215,7 @@ function cmdReviewPendingDrain(args) {
     dir,
     tickets,
     attach: (plan) => {
-      const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], {
+      const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], { windowsHide: true,
         encoding: 'utf8',
         cwd: ROOT,
         timeout: 600000,
@@ -4679,7 +4679,7 @@ function cmdRaw(args) {
   // #575 ②：记账只走 stderr，且压成一行——多行 spec 不能把 JSON 拆碎。
   const oneLine = argv.map(a => String(a).replace(/\s+/g, ' ')).join(' ');
   console.error(`[dao raw] 已记账 ${logPath}: ${oneLine}`);
-  const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit' });
+  const r = spawnSync(argv[0], argv.slice(1), { windowsHide: true, stdio: 'inherit' });
   process.exit(r.status == null ? 1 : r.status);
 }
 

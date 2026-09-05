@@ -11,7 +11,10 @@
 // 行为口径（收编时逐份核对后的统一版）：
 // - 先按精确文件名 spawn（不过 shell，参数里的中文/分号不会被 shell 再解析一次）；
 //   只有找不到可执行文件（spawn error）才退到 shell 拼单条命令试一次。
-// - 两条路径都带 timeout。#807：不再传 windowsHide（Linux 上无黑窗）。
+// - 两条路径都带 timeout 与 windowsHide。#807 曾以「Linux 上无黑窗」为由删掉 windowsHide——
+//   理由不成立：它在非 Windows 平台是 no-op，删了对 Linux 零收益，而本机（帅位/开发机）是
+//   Windows，每次 spawn 都闪一个控制台窗（2026-09-05 用户实报：「一直会闪开 cmd 还是 powershell」）。
+//   dao-mode 的 UserPromptSubmit hook 每轮对话都会走到这里，所以是每轮闪一次。
 // - 归一化：orca 的非零退出把结构化错误 JSON 打在 stdout（实测 terminal_handle_stale 的
 //   {ok:false, error:{code,message}} 在 stdout、stderr 为空）——先试解析，拿到 error 原样
 //   透传（错误码不丢，#580 审读红②返工）；拿不到再回落 stderr/exit N 字符串。
@@ -27,11 +30,13 @@ import { parseOrcaStdout } from './orca-stdout.mjs';
  * direct spawn 失败（找不到可执行文件）才 shell 回落；两条路径都 timeout。
  */
 export function runOrcaRaw(args, { timeout = 30000, cwd } = {}) {
-  const opts = { encoding: 'utf8', timeout, ...(cwd ? { cwd } : {}) };
+  const opts = { encoding: 'utf8', timeout, windowsHide: true, ...(cwd ? { cwd } : {}) };
   const direct = spawnSync('orca', args, opts);
   if (!direct.error) return direct;
   const line = ['orca', ...args.map((a) => `"${String(a).replace(/"/g, '\\"')}"`)].join(' ');
-  return spawnSync(line, { ...opts, shell: true });
+  // windowsHide 显式重写一遍（opts 里已有）：留给 tests/windows-hide.test.js 的文本判据——
+  // 靠 ...opts 继承是对的，但「每处 spawn 都看得见」才查得住，隐式继承下次删了没人报警。
+  return spawnSync(line, { ...opts, shell: true, windowsHide: true });
 }
 
 /**

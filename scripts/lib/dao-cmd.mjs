@@ -625,7 +625,7 @@ export function isCiEnv(env = process.env) {
 }
 
 export function orcaHelpAvailable(spawn = spawnSync) {
-  const r = spawn('orca', ['--help'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
     const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
@@ -652,7 +652,7 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 export function fetchOrcaHelp(cmd, spawn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const r = spawn('orca', [...parts, '--help'], { encoding: 'utf8', timeout: 20000 });
+  const r = spawn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
   if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
   const text = `${r.stdout || ''}${r.stderr || ''}`;
   if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);

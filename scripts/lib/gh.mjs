@@ -178,7 +178,7 @@ function defaultFetchSync(url, { method = 'GET', headers = {}, body } = {}) {
     const res = await fetch(spec.url, init);
     const text = await res.text();
     process.stdout.write(JSON.stringify({ status: res.status, body: text }));
-  `], {
+  `], { windowsHide: true,
     encoding: 'utf8',
     input: spec,
     timeout: 30000,
@@ -256,6 +256,7 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
   const opts = {
     cwd,
     env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token },
+    windowsHide: true,
   };
   if (inherit) opts.stdio = 'inherit';
   else opts.encoding = 'utf8';
@@ -346,7 +347,7 @@ export function formatWhoami(info) {
 
 function gitRun(cwd, args, gitImpl) {
   if (gitImpl) return gitImpl(args);
-  const r = spawnSync('git', ['-C', cwd, ...args], {
+  const r = spawnSync('git', ['-C', cwd, ...args], { windowsHide: true,
     encoding: 'utf8', timeout: 15000,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {
