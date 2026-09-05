@@ -686,18 +686,23 @@ function checkTimerArmed() {
   const units = [];
   const skipped = [];
   for (const unit of [...new Set(names)]) {
-    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
+    // 不加 `--value`：`systemctl show` 按**它自己的属性顺序**输出，不按命令行顺序，
+    // 靠下标取值会张冠李戴（第一版就把某个时间戳当成了单元路径）。按键名取，与顺序无关。
+    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
     if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
-    const frag = String(p.stdout || '').split(/\r?\n/)[0].trim();
+    const kv = new Map(String(p.stdout || '').split(/\r?\n/)
+      .map((l) => l.trim()).filter(Boolean)
+      .map((l) => { const i = l.indexOf('='); return i < 0 ? null : [l.slice(0, i), l.slice(i + 1).trim()]; })
+      .filter(Boolean));
+    const frag = kv.get('FragmentPath') || '';
     if (!frag) return classifyTimerArmed({ probed: false, reason: `${unit} 读不到 FragmentPath——圈不出扫描面，不当「不归我管」` });
     const mine = isOurUnit(frag);
     if (mine === null) {
       return classifyTimerArmed({ probed: false, reason: `${unit} 的单元文件落在没见过的地方（${frag}）——判不出归属，不当「不归我管」` });
     }
     if (!mine) { skipped.push(unit); continue; }
-    // 第 1 行是 FragmentPath（上面用掉了），点位从第 2 行起——不切掉它就恒真，
-    // 因为路径永远是个非空字符串，本闸会变成永远绿。
-    const vals = String(p.stdout || '').split(/\r?\n/).slice(1).map((x) => x.trim()).filter(Boolean);
+    const vals = ['NextElapseUSecRealtime', 'NextElapseUSecMonotonic']
+      .map((k) => kv.get(k) || '').filter(Boolean);
     // 两个点位任意一个有值就算有下一次；两个都空才是死态。
     const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
     units.push({ unit, next: alive ? vals.join('|') : null });
