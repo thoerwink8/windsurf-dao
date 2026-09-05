@@ -39,9 +39,12 @@ import {
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
-import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import {
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd,
+} from './lib/commander-verbs.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -269,16 +272,25 @@ function buildSituation({ state } = {}) {
   const stall = scanStall();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
+  let routingModelRecords = null;
+  let reviewerOrder = null;
+  let workerOrder = null;
   let healthRedModels = [];
   let defaultWorkerModel = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
+    routingModelRecords = models;
+    reviewerOrder = reviewerSelectOrder(raw);
+    workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
   } catch {
     routingModels = null;
+    routingModelRecords = null;
+    reviewerOrder = null;
+    workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
   }
@@ -289,8 +301,13 @@ function buildSituation({ state } = {}) {
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
+    drainLedger: (state && state.drainLedger) || {},
+    openIssueLedger: (state && state.openIssueLedger) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
+    routingModelRecords,
+    reviewerOrder,
+    workerOrder,
     healthRedModels,
     defaultWorkerModel,
   };
@@ -352,7 +369,15 @@ function execAction(action, { state, dryRun, log }) {
     case 'attach-reviewer': {
       // 走 blessed 路径 review-pending-drain（含归属/活性校验），一次清完队列。
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
-      return runOrShow(cmd, { dryRun, say, why: action.why });
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
+      if (action.pr != null) {
+        state.drainLedger = state.drainLedger || {};
+        const key = `pr:${action.pr}`;
+        const prev = state.drainLedger[key];
+        state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
+      }
+      return r;
     }
     case 'merge': {
       // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 合并 → 关单。
@@ -386,12 +411,71 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'escalate':
       return escalate(action, { state, dryRun, say });
+    case 'add-label':
+      return execAddLabel(action, { dryRun, say });
+    case 'retry-drain':
+      return execRetryDrain(action, { state, dryRun, say });
+    case 'open-issue':
+      return execOpenIssue(action, { state, dryRun, say });
     case 'noop':
       return { ok: true };
     default:
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+function execAddLabel(action, { dryRun, say }) {
+  const planned = planAddLabelCmd(action, { models: action.models });
+  if (!planned.ok) {
+    say(`  add-label 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  return runOrShow(planned.argv, { dryRun, say, why: action.why });
+}
+
+function execRetryDrain(action, { state, dryRun, say }) {
+  const planned = planRetryDrainCmd(action, {
+    queue: action.queue,
+    ledger: (state && state.drainLedger) || {},
+    nowMs: Date.parse(nowIso()) || 0,
+  });
+  if (!planned.ok) {
+    say(`  retry-drain 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
+  }
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  state.drainLedger = state.drainLedger || {};
+  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
+  state.drainLedger[planned.stateKey] = {
+    at: nowIso(), pr: planned.pr, tries: planned.tries,
+  };
+  return r;
+}
+
+function execOpenIssue(action, { state, dryRun, say }) {
+  ensureDir(STATE_DIR);
+  const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
+  const planned = planOpenIssueCmd({
+    ...action,
+    ledger: (state && state.openIssueLedger) || {},
+  }, { repo: REPO, bodyPath: bodyFile });
+  if (!planned.ok) {
+    say(`  open-issue 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  if (dryRun) {
+    say(`[dry] 转单 ${planned.title}（key=${planned.key}）\n    ${planned.argv.join(' ')}`);
+    return { ok: true, dryRun: true };
+  }
+  writeFileSync(bodyFile, planned.body, 'utf8');
+  const r = runCmd(planned.argv, 60000);
+  if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
+  const m = String(r.out).match(/\/issues\/(\d+)/);
+  state.openIssueLedger = state.openIssueLedger || {};
+  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
+  say(`  转单开了 #${m ? m[1] : '?'}`);
+  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
 }
 
 function dispatchName(title, issue) {

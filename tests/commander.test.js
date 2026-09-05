@@ -178,7 +178,9 @@ describe('decide：报帅停手（永不自动）', () => {
       wakeCounts: { 'stall:term_q': WAKE_LIMIT },
     }));
     assert.equal(byKind(r, 'wake-brain').length, 0);
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    // #971：唤满不再喊给空气，转 open-issue（原文+reason 进正文）。
+    assert.ok(byKind(r, 'open-issue').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'wake-exhausted').length, 0);
   });
 });
 
@@ -1080,9 +1082,10 @@ describe('复审要能重试，因为「票写出去了」不等于「判定落�
       reworkDispatched: { [`rereview:905@${HEAD}`]: { at: ago(400), pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
     }));
     assert.equal(byKind(r, 'rereview').length, 0, '试满就别再派了');
-    const e = byKind(r, 'escalate');
-    assert.equal(e.length, 1, '停手要出声——静默停手和「没事」分不开');
-    assert.equal(e[0].reason, 'rereview-exhausted');
+    const opened = byKind(r, 'open-issue');
+    assert.equal(opened.length, 1, '试满转单，不再喊给空气');
+    assert.equal(opened[0].reason, 'rereview-exhausted');
+    assert.equal(byKind(r, 'escalate').length, 0);
   });
 
   it('⑤判别力反证：判定已落在当前 head → 本分支一条都不产', async () => {
@@ -1140,6 +1143,7 @@ describe(`审官标签要在关闭的署名单上也查得到`, () => {
       github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(890, 888)] },
       prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
     }));
+    assert.equal(byKind(r, 'add-label').length, 0, '署名单都没有，补标签无从下手');
     const rr = byKind(r, 'rereview');
     assert.equal(rr.length, 1);
     assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
