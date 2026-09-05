@@ -271,3 +271,45 @@ describe('问人闸：hook 的装载声明与真相源对得上', () => {
     }
   });
 });
+
+// 2026-09-05 用户拍板：全局约定里补一行指针，指向 release-policy.json 说清「重大」的判据在哪。
+// 本仓硬规矩——**写了指针就要配一道会报警的检查；配不了就别留指针**。
+// 这一组守的就是那行指针：它提到的文件和字段真的还在吗？
+describe('全局约定里那行指针不许指向空气', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ROOT = path.join(__dirname, '..');
+  const guide = fs.readFileSync(path.join(ROOT, 'docs', 'global-CLAUDE.md'), 'utf8');
+
+  it('指针还在（有人删了它，这条闸就该红，而不是静默失去判据）', () => {
+    assert.match(guide, /docs\/release-policy\.json/,
+      '全局约定里没有指向 release-policy.json 的那行——「重大」两个字就又没有判据了');
+  });
+
+  it('它指的文件真的在，且能解析', () => {
+    const p = path.join(ROOT, 'docs', 'release-policy.json');
+    assert.ok(fs.existsSync(p), '指针指向的文件不在');
+    assert.doesNotThrow(() => JSON.parse(fs.readFileSync(p, 'utf8')), '指针指向的文件解析不了');
+  });
+
+  it('它点名的字段真的在——字段被改名时当场红，不许悄悄失效', () => {
+    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'release-policy.json'), 'utf8'));
+    assert.ok(Array.isArray(j.human_holds) && j.human_holds.length > 0,
+      'human_holds 不在或空了——指针里写的「四条红线」就没了着落');
+    assert.ok(j.confirm && typeof j.confirm === 'object', 'confirm 不在');
+    assert.equal(j.confirm.patch?.who, 'auto',
+      'confirm.patch.who 不再是 auto——指针里写的「patch 级 = 自己拍」已经不成立，两处说法漂开了');
+  });
+
+  it('指针里说的话和 JSON 里的实际内容对得上（防两处各写各的）', () => {
+    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'release-policy.json'), 'utf8'));
+    // 指针写「四条」，就必须真是四条；将来加减了红线，这里会先红，逼人同步措辞
+    const n = j.human_holds.length;
+    const cn = ['零','一','二','三','四','五','六','七','八','九','十'][n] || String(n);
+    // 只看 human_holds 后面紧跟的那段，别整篇搜——整篇搜会被别处偶然出现的同一个字蒙混过去
+    const at = guide.indexOf('human_holds');
+    const seg = at < 0 ? '' : guide.slice(at, at + 40);
+    assert.ok(seg.includes(cn + '条') || seg.includes(n + ' 条') || seg.includes(n + '条'),
+      `指针说的条数与 JSON 实际的 ${n} 条对不上（指针那段是「${seg.trim()}」）——改了红线要同步改那行字`);
+  });
+});
