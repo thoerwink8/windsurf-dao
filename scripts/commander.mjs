@@ -26,6 +26,7 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, listReviewPending, writeReviewPending,
@@ -655,22 +656,82 @@ function wakeBrain(action, { state, dryRun, say }) {
   return { ok: true, handle };
 }
 
-// 回收一次性大脑：会话已下班（终端读不到/idle）或超龄 → orca terminal close。保证进程不残留。
+// 一个大脑该留该关：**超龄不等于该杀**。
+// 2026-09-05 实咬：巡检 17:03 唤起大脑，17:51 被「超龄回收」关掉，全程零记录——
+// 它到底干了活还是从头到尾坐着，事后谁也说不出来（close --tab 之后 scrollback 就没了）。
+// 而 reapBrains 本来就在读屏面，只是把内容扔了、只留了个 rd.ok。
+//
+// 于是两件事一起补：
+//  · 超龄时先看**还在不在推进**（屏面签名跟上一轮比）。还在动就续命，续到硬顶为止——
+//    否则「杀掉一个正在干活的大脑」和「清掉一个卡死的」长得一模一样。
+//  · 关之前把最后屏面和「有没有产出过」记下来。零产出的唤醒必须留痕，不然这条链天天绿。
+export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signature, prev } = {}) {
+  if (readable === false) return { verdict: 'gone', reason: '读不到终端（已关或进程不在）' };
+  if (readable !== true) return { verdict: 'unknown', reason: '没查成：读屏面这一步本身没成' };
+  // Number(null) 是 0 且「有限」——不先挡掉 null/'' 的话，上限缺失会被当成「上限 0」，
+  // 于是每个大脑一读到就判超龄关掉，而日志上看起来完全正常。
+  const num = (v) => (v == null || v === '' ? NaN : Number(v));
+  const a = num(age);
+  const cap = num(maxAgeMs);
+  if (!Number.isFinite(a) || !Number.isFinite(cap)) {
+    return { verdict: 'unknown', reason: '年龄或上限不是数——判不了' };
+  }
+  const moved = prev != null && signature != null && String(prev) !== String(signature);
+  const everMoved = moved || (prev == null && signature != null);
+  if (a <= cap) return { verdict: 'keep', reason: '没到上限', moved, everMoved };
+  const hard = Number.isFinite(Number(hardCapMs)) ? Number(hardCapMs) : cap * 3;
+  if (a > hard) return { verdict: 'close', reason: `到硬顶 ${Math.round(hard / 60000)} 分钟，无论在不在动都关`, moved, everMoved };
+  if (moved) return { verdict: 'keep', reason: '超龄但屏面还在变——还在干活，续一轮', moved, everMoved };
+  return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
+}
+
+// 回收一次性大脑。判据在 classifyBrainReap，这里只负责取数、执行、留痕。
 function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
+  state.brainAudit = state.brainAudit || { closed: 0, silent: 0 };
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
     const rd = runOrca(['terminal', 'read', '--terminal', handle, '--screen', '--json'], { cwd: ROOT });
-    const gone = !rd.ok; // 读不到 = 终端已关/进程不在
-    const overAge = age > maxAgeMs;
-    if (gone) { delete sessions[handle]; say && say(`  大脑 ${handle} 已退（读不到终端），登记清除`); continue; }
-    if (overAge) {
-      if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    const screen = rd.ok ? brainScreenText(rd) : null;
+    const signature = screen == null ? null : progressSignature({ preview: screen });
+    const v = classifyBrainReap({
+      readable: rd.ok, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
+    });
+    if (v.verdict === 'gone') {
       delete sessions[handle];
-      say && say(`  大脑 ${handle} 超龄回收（close --tab）`);
+      say && say(`  大脑 ${handle} 已退（${v.reason}），登记清除${meta.everMoved ? '' : '——注意：全程没见它产出过东西'}`);
+      continue;
     }
+    if (v.verdict === 'unknown') { say && say(`  大脑 ${handle} 没查成：${v.reason}——留着，下一轮再判`); continue; }
+    if (v.verdict === 'keep') {
+      meta.sig = signature;
+      meta.everMoved = meta.everMoved || v.everMoved;
+      if (age > maxAgeMs) say && say(`  大脑 ${handle} ${v.reason}（已 ${Math.round(age / 60000)} 分钟）`);
+      continue;
+    }
+    // close：先留痕再关——close --tab 之后屏面就找不回来了
+    const silent = !(meta.everMoved || v.everMoved);
+    state.brainAudit.closed += 1;
+    if (silent) state.brainAudit.silent += 1;
+    if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    delete sessions[handle];
+    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}`);
+    if (silent && screen) say && say(`    最后屏面：${screen.replace(/s+/g, ' ').slice(-200)}`);
   }
   state.brainSessions = sessions;
+}
+
+/** 从 orca terminal read 的返回里取屏面文本。字段路径别猜——取不到就回 null（没查成）。 */
+export function brainScreenText(rd) {
+  const src = rd && (rd.json || rd.out || rd);
+  let j = src;
+  if (typeof src === 'string') { try { j = JSON.parse(src); } catch { return null; } }
+  const t = j && (j.result?.terminal || j.terminal || j.result || j);
+  if (!t) return null;
+  if (Array.isArray(t.tail)) return t.tail.join('\n');
+  if (typeof t.screen === 'string') return t.screen;
+  if (typeof t.content === 'string') return t.content;
+  return null;
 }
 
 // ── 巡检（2026-09-05）：定时脚本只找得到「见过的失败形态」。当天真正被翻出来的两个洞

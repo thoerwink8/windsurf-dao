@@ -329,4 +329,29 @@ GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道
 落点：判据 `scripts/lib/gh-events.mjs`（纯函数）／常驻 `scripts/gh-event-bridge.mjs`／
 单元 `host/machine/systemd/dao-gh-events.service`／白名单 `host/machine/sudoers.d/dao-gh-events`／
 装 `scripts/install-dao-gh-events.sh`（装完会等自证 ping 绕回来，等不到判失败）／
-闸 `tests/gh-events.test.js`。
+闸 `tests/gh-events.test.js`。它是 server-check 的第 ㉑ 项——下一节记的「20 通」是加它之前的数。
+
+### 2026-09-05：server-check 第一次全绿（20 通 / 0 红 / 0 没查成）
+
+清红的过程本身比结果值钱，两条都不是「按提示修一下」就完的：
+
+**⑳「仓里的单元和机器上装着的一致」第一次真跑，比出两个漂移，方向相反。**
+`feishu-triage.service` 是仓新机旧（照仓装到机器）；`orca-serve.service` 反过来——仓里那份
+从 #764 落档起没改过，而它落档时机器还没买。机器 09-02 装起来走的是另一条路：解包后的
+`AppRun` 而不是 AppImage，`--pairing-address 127.0.0.1` 而不是 `100.64.1.20`（**这台机器上
+根本没有那个网段的接口**）。照仓装才是把跑了三天的好的换成连不上的。
+**「仓是真相源」不是无条件的**——单元这类「装机时被现场改过」的东西，得先看哪份在跑。
+
+**⑲「退役 CLI 已不在 PATH」清不掉，因为有个没人知道的进程正握着它。**
+摘 `/usr/bin/grok` 前查了一下谁在用：一个 **09-03 17:03 起跑、活了整整两天**的 grok 进程，
+`events.jsonl` 末行是 `turn_ended: completed`（09-03 17:04）——干完一分钟后挂了两天。
+而 `orca terminal list` 的 59 条记录里**没有它**。
+
+这是「卡删了进程没死」的反面：**进程还在、卡已经不在**。后一面更难看见，因为
+board-gc、agent-stall-watch、看板**全都按卡遍历**——没有卡的进程不在任何人的定义域里。
+要发现它，遍历必须**从进程侧起**（`pgrep -af`）再回头对卡。同一批 `terminal list` 里还有
+**25 个终端静默超过 3 小时**（最久 16 小时），而 orca 自己的 `orphaned` 全是 `false`。
+两件事都在派子代理补机制（只报不自动杀——自动杀那条路咬过，见 memory）。
+
+摘 PATH 的做法：删 `/usr/bin` 的符号链接、留 `/usr/lib/node_modules` 本体，还原是一条
+`ln -s`，比 `npm uninstall` 便宜得多。
