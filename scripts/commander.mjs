@@ -30,8 +30,9 @@ import { ghExecutable } from './lib/gh.mjs';
 import { reviewPendingDir, listReviewPending } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest,
+  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
 } from './lib/commander-core.mjs';
+import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
@@ -191,6 +192,7 @@ function buildSituation({ state } = {}) {
     github, orca, reviewPending, prReviews, stall,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
+    reworkDispatched: (state && state.reworkDispatched) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
     healthRedModels,
@@ -263,6 +265,8 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
+    case 'rework':
+      return dispatchRework(action, { state, dryRun, say });
     case 'wake-brain':
       return wakeBrain(action, { state, dryRun, say });
     case 'notify-hub': {
@@ -325,28 +329,40 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
  * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
+export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
+
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
+  const failedPrs = new Set(); // 返工的随附回流按 PR 号挂，不按 issue（#931）
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action.kind === 'notify-hub' && action.issue != null && failedIssues.has(String(action.issue))) {
-      log.push(`· notify-hub 略：#${action.issue} 派工没成，不发「已自动派单」`);
+    if (action.kind === 'notify-hub'
+      && ((action.issue != null && failedIssues.has(String(action.issue)))
+        || (action.pr != null && failedPrs.has(String(action.pr))))) {
+      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 派工没成，不发喜报`);
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
     const r = exec(action);
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
-    const failed = action.kind === 'dispatch' && action.issue != null
+    const failed = DISPATCHING_KINDS.has(action.kind) && action.issue != null
       && (!r || (r.ok !== true) || r.dispatchFailed === true);
     if (!failed) continue;
     failedIssues.add(String(action.issue));
+    if (action.pr != null) failedPrs.add(String(action.pr));
+    const isRework = action.kind === 'rework';
     exec({
       kind: 'escalate',
-      reason: r && r.unscanned ? 'dispatch-unscanned' : 'dispatch-failed',
+      reason: r && r.unscanned
+        ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
+        : (isRework ? 'rework-failed' : 'dispatch-failed'),
       issue: action.issue,
-      why: `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
+      ...(action.pr != null ? { pr: action.pr } : {}),
+      why: isRework
+        ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
+        : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
     });
   }
-  return { log, failedIssues: [...failedIssues] };
+  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs] };
 }
 
 /** 主线程同步睡。指挥官是 oneshot，阻塞期间本来也没别的事要做，所以不改 async 范式。
@@ -383,6 +399,95 @@ function runOrShow(argv, { dryRun, say, why }) {
   return r;
 }
 
+// ── 返工（#931，用户 2026-09-05 拍板）：审官在**当前 head** 上判红 → 直接派一个返工工人。
+// 删掉了原来的「先唤大脑翻译返工方向、送达工人终端、唤满 WAKE_LIMIT 才报帅」整层——
+// 工人判红时早已下班，大脑的方案没有接收者（补丁链层 2 落闸，见 issue #931）。
+// 审官标准本就要求红项写「文件:行号 + 现象 + 期望改法」，工人照着改即可，中间那层翻译价值可疑。
+//
+// 硬约束（都是本仓交过学费的判据）：
+//   · 注入 ≤500 字节是硬闸（#602/#619），红项**全文**塞不进任务书 —— 全文落仓外文件，注入只给指针。
+//   · 写完必须**读回自证**：读不回 / 对不上 = 没查成，不派工（半截任务书比不派更坏）。
+//   · dispatch 是**异步**的（#787）：只看退出码 = 把「受理了」当「派成了」，必须回读结果文件判三态。
+//   · 同一 PR 同一 head 只派一次：记账落 state.reworkDispatched，**尝试即记**——
+//     失败/没查成不自动重派（重派会造重复工人），改由 runActions 报帅，人来决定。
+
+/** 红项全文的仓外落点（生成物不落进自己会读的仓内范围，CLAUDE.md）。 */
+export function reworkBriefPath(action, { dir = null } = {}) {
+  return join(dir || join(STATE_DIR, 'rework'), `pr-${action.pr}-${String(action.head || '').slice(0, 8)}.md`);
+}
+
+/** 红项全文正文：原样转录，不摘要、不改写（#931 的整个理由就是「别再让 AI 翻译一遍」）。 */
+export function reworkBriefText(action) {
+  return [
+    `# 返工任务：PR #${action.pr}`,
+    '',
+    `- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`,
+    `- 当前 head 上的判红轮数：${action.redRounds}`,
+    '- 下面是审官那条 CHANGES_REQUESTED review 的**正文全文**（未摘要、未改写）：',
+    '',
+    '---',
+    '',
+    String(action.brief || ''),
+    '',
+  ].join('\n');
+}
+
+/** 写红项全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。 */
+export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
+  const path = reworkBriefPath(action, { dir });
+  const text = reworkBriefText(action);
+  const writer = fsio || { mkdir: (d) => ensureDir(d), write: writeFileSync, read: readFileSync };
+  try {
+    writer.mkdir(dirname(path));
+    writer.write(path, text, 'utf8');
+  } catch (e) {
+    return { ok: false, unscanned: true, error: `红项全文写不下去（${path}）：${String(e.message || e).slice(0, 160)}` };
+  }
+  let back = null;
+  try { back = writer.read(path, 'utf8'); }
+  catch (e) { return { ok: false, unscanned: true, error: `红项全文写了读不回（${path}）：${String(e.message || e).slice(0, 160)}` }; }
+  if (back !== text) return { ok: false, unscanned: true, error: `红项全文读回对不上（${path}）——不拿半截任务书派工` };
+  return { ok: true, path, bytes: Buffer.byteLength(text, 'utf8') };
+}
+
+/** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
+export function reworkCardName(action) { return `返工 PR #${action.pr}`; }
+export function reworkSpec(action, briefPath) {
+  return `返工 PR #${action.pr}：先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+}
+
+function dispatchRework(action, { state, dryRun, say }) {
+  const written = writeReworkBrief(action);
+  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
+  const spec = reworkSpec(action, written.path);
+  // 注入字节闸先在本地过一遍：超限当场说清楚，别等后台执行体崩（dispatch 热路也会拦，这里只是早一步可读）。
+  try { buildSoldierInject({ spec, issue: action.issue }); }
+  catch (e) {
+    const error = `返工注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  const cmd = ['node', 'scripts/dao.mjs', 'dispatch',
+    '--issue', String(action.issue),
+    '--name', reworkCardName(action),
+    '--model', action.model, '--reviewer', action.reviewer,
+    '--split', 'no', '--split-reason', '指挥官自动返工：照审官红项逐条改（#931）',
+    '--spec', spec, '--confirm'];
+  if (dryRun) {
+    say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
+    return { ok: true, dryRun: true };
+  }
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  const verdict = started.ok ? awaitDispatchResult(started.out, { say }) : started;
+  // 尝试即记：同一 PR 同一 head 不再自动重派（重派会造重复工人）。成没成一起记下，便于人判。
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[action.reworkKey || reworkKey(action.pr, action.head)] = {
+    at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
+    brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
+  };
+  return verdict;
+}
+
 // 大脑：起一次性 pi 会话 + 注入指针文本；记进 state.brainSessions（含 handle），
 // 由后续 act 轮回收（会话干完自行 exit；没退的到期强关，保证「进程不在」有界）。
 function wakeBrain(action, { state, dryRun, say }) {
@@ -416,11 +521,10 @@ function wakeBrain(action, { state, dryRun, say }) {
     return { ok: false, error: `指针没送达：${sent.error}`, handle };
   }
   state.wakeCounts = state.wakeCounts || {};
-  // 唤醒预算按 wakeKey 记账。PR 类的 wakeKey 带 head（`pr:<n>@<oid>`）——工人推了新 head
-  // 就是一张新账，旧 head 唤了几次不算在新 head 头上（#911：累计计数把返工中的单判成「推了 3 次没闭环」）。
-  const wakeKey = action.wakeKey || action.target;
-  state.wakeCounts[wakeKey] = (state.wakeCounts[wakeKey] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[wakeKey]} 次），指针已送`);
+  // #931 后唤大脑只剩撞死指纹（`stall:<term>`）与代拍（`daipai:issue-<n>`）两条路，
+  // 都按 target 记账。PR 判红改走 rework（返工工人），不再有唤醒预算。
+  state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
+  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
   return { ok: true, handle };
 }
 
