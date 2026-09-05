@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
 import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
+import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -1114,6 +1115,46 @@ function checkRootOwnedInHome() {
   return classifyRootOwned(scans);
 }
 
+// 两台 mirasim 各记各的账：orca 那台（`执行体` 里钉的回环 4316）跑派工，root 那台跑帅位会话。
+// 只读其中一台会漏掉半边流量，而漏掉的那半边恰恰是「对不上」最容易发生的地方。
+const MIRASIM_ROOTS = [join(homedir(), '.mirasim'), '/home/orca/.mirasim', '/root/.mirasim'];
+
+/** ㉑ 选型腿表 vs 实际跑过的模型（#944）。真相源＝「腿」节，回执源＝mirasim 用量账。 */
+function checkModelReconcile() {
+  // 腿表自己解析，不 import lib/model-routing-json.mjs——
+  // 复用被检查对象的解析逻辑就等于自己查自己，它把字段读错时这条闸跟着一起错。
+  let legs = null; let legsWhy = null;
+  try {
+    const doc = JSON.parse(readFileSync(join(REPO_ROOT, 'docs', 'model-routing.json'), 'utf8'));
+    if (Array.isArray(doc['腿'])) legs = doc['腿'];
+    else legsWhy = '选型 JSON 里没有「腿」节（数组）';
+  } catch (e) {
+    legsWhy = `选型 JSON 读不了：${e.message || e}`;
+  }
+
+  const records = [];
+  const seenReal = new Set();
+  let filesRead = 0; const why = [];
+  for (const root of MIRASIM_ROOTS) {
+    const dir = join(root, 'insights');
+    let names;
+    try { names = readdirSync(dir).filter((n) => /^usage-.*\.ndjson$/.test(n)); } catch (e) { why.push(`${dir}: ${e.code || e.message}`); continue; }
+    for (const n of names) {
+      const p = join(dir, n);
+      // 同一台可能被两条路径指到（~ 与绝对路径），realpath 去重免得样本翻倍
+      let real; try { real = realpathSync(p); } catch { real = p; }
+      if (seenReal.has(real)) continue;
+      seenReal.add(real);
+      try { records.push(...parseUsageNdjson(readFileSync(real, 'utf8')).records); filesRead++; } catch (e) { why.push(`${n}: ${e.code || e.message}`); }
+    }
+  }
+  if (filesRead === 0) {
+    return { state: UNKNOWN, detail: `没读到任何 mirasim 用量账——没查成，不是「没有调用」（${why.join('；') || '候选目录都不在'}）` };
+  }
+  const r = classifyReconcile({ legs, records, why: legsWhy });
+  return { state: r.state, detail: `${r.detail}（${filesRead} 份账）`, ...(r.count === undefined ? {} : { count: r.count }) };
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -1136,6 +1177,9 @@ const CHECKS = [
   ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
   ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
   ['(21) 服务用户家目录没有 root 属主文件', checkRootOwnedInHome],
+  // 名字里必须点明「mirasim 侧」：这条只看得见 mirasim 执行的调用，orca 侧（pi→gw）不经 mirasim、
+  // 不在这两份账上。名字比覆盖面大 = 让人以为 orca 侧也查过了。
+  ['(22) mirasim 侧实跑腿与选型腿表对得上（#944；orca 侧不在覆盖内）', checkModelReconcile],
 ];
 
 function outPath() {
@@ -1193,6 +1237,31 @@ function selfTest() {
   if (okLand.state !== OK) failures.push(`在册且启用应判 ok，实际 ${okLand.state}`);
   const badShape = classifyLandAutomation(null);
   if (badShape.state !== UNKNOWN) failures.push(`契约不对应判 unknown，实际 ${badShape.state}`);
+
+  // #944：腿表标「停用」的腿实际在跑 —— 必须红；探针流量（非 200 / local 腿）不许被判成违规。
+  const RECON_LEGS = [
+    { 模型: 'claude-opus-5', 族: 'claude', 供应商: 'mirasim', 执行侧: 'mirasim', 状态: '停用' },
+    { 模型: 'gpt-5.6-sol', 族: 'codex', 供应商: 'mirasim', 执行侧: 'mirasim', 状态: '在役' },
+  ];
+  const usageRec = (o) => ({ leg: 'relay', status: 200, upstreamHost: 'relay.mirasim.ai', sessionId: 's', ...o });
+  const retired = classifyReconcile({ legs: RECON_LEGS, records: [usageRec({ agent: 'claude', model: 'claude-opus-5' })] });
+  if (retired.state !== RED || !/停用/.test(retired.detail)) {
+    failures.push(`停用腿在跑应判红并点名，实际 ${retired.state}：${retired.detail}`);
+  }
+  const unregistered = classifyReconcile({ legs: RECON_LEGS, records: [usageRec({ agent: 'codex', model: 'gpt-6-astra' })] });
+  if (unregistered.state !== RED || !/未登记腿/.test(unregistered.detail)) {
+    failures.push(`未登记腿在跑应判红，实际 ${unregistered.state}`);
+  }
+  const probesOnly = classifyReconcile({
+    legs: RECON_LEGS,
+    records: [usageRec({ agent: 'claude', model: 'claude-does-not-exist-9', status: 422 })],
+  });
+  if (probesOnly.state !== OK || probesOnly.count !== 0) {
+    failures.push(`全是探针流量应判 ok/0，实际 ${probesOnly.state}/${probesOnly.count}`);
+  }
+  if (classifyReconcile({ legs: RECON_LEGS, records: [] }).state !== UNKNOWN) {
+    failures.push('一条记录都没有应判 unknown（没扫到样本），不是 ok');
+  }
 
   // #960：退役 CLI 在 PATH。故意样本走同一条 scanRetiredClis，只把 stat 换成假的（不碰真环境）。
   const RETIRED_TOML = [
