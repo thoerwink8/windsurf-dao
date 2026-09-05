@@ -300,6 +300,49 @@
       ]
     }
   },
+  "执行体": {
+    "默认": "orca",
+    "拍板": "2026-09-04",
+    "理由": "#880：治理层留 dao，mirasim-server 只当执行体 provider；orca 通过验收（卡 E）后退役，届时把「默认」改成 mirasim 并删 orca 绑定",
+    "说明": "派工三动词（dispatch / worktree-create / worker-start）按这里分派绑定。缺该族配置 = 报警拒派，不静默降级——静默降级会把「这一族没人拍过板」变成「随便挑条腿烧额度」。",
+    "mirasim": {
+      "钉版本": "0.0.282",
+      "端口": 4316,
+      "族": {
+        "claude": "claude",
+        "gpt": "gpt",
+        "gw": "pi",
+        "opencode-go": "pi",
+        "deepseek": "pi"
+      },
+      "模型前缀族": {
+        "kimi-": "kimi"
+      },
+      "agentRoutes": {
+        "claude": {
+          "agent": "claude",
+          "腿": "relay",
+          "理由": "#880：claude 族烧 mirasim 云端 relay 额度（§72 实烧验证过这条腿）"
+        },
+        "gpt": {
+          "agent": "codex",
+          "腿": "relay",
+          "理由": "#880：gpt 云端腿走 relay；pqgpt 仍是主路，mirasim 是派单层第二顺位"
+        },
+        "pi": {
+          "agent": "pi",
+          "腿": "direct",
+          "理由": "#880：pi 烧网关池 direct，保 pqgpt 主路"
+        },
+        "kimi": {
+          "agent": "kimi",
+          "腿": "relay",
+          "理由": "#880：kimi 云端腿 relay",
+          "实测": "2026-09-04 探 0.0.282：agentsAvailable=claude/codex/pi，没装 kimi——落到这一族会被契约断言当场拒派。这是要的行为（报警拒派），不是静默降级。"
+        }
+      }
+    }
+  },
   "禁令": [
     {
       "id": "ban-deepseek-查证",

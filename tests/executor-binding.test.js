@@ -1,0 +1,773 @@
+// 派工三动词的执行体绑定（#880 卡 B）：策略读取、族路由、两个绑定的分派。
+//
+// 两个判别用例是本套的存在理由：
+//   ①「executor=mirasim 时一个 orca 命令都不发」——orca 假身会记账，调用次数必须是 0，
+//     同时假运行时必须真收到 ensureWorkspace + startSession。少了后半句，一个啥也不干
+//     的绑定也能让「没调 orca」通过，那就是「没扫到样本」冒充「查过没事」。
+//   ②「策略缺该族配置 → 报警拒派」——不光要 ok:false，还要证明**一个会话都没起**：
+//     静默降级的代价是烧掉的额度，而额度撤不回来。
+// 不碰真服务：连线层全用假身注入，测的是判据，不是那台机器今天在不在。
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert');
+const path = require('node:path');
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+
+const ROOT = path.resolve(__dirname, '..');
+const LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'executor-binding.mjs').replace(/\\/g, '/');
+// 只为读 PINNED_VERSION：判别用例要证明「策略钉的版本 ≠ 库内默认」，不能自己抄一份 0.0.282
+const RUNTIME_LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
+const ROUTING_JSON = path.resolve(ROOT, 'docs', 'model-routing.json');
+const ROUTING_LIB = require('node:url').pathToFileURL(path.resolve(ROOT, 'scripts', 'lib', 'model-routing-json.mjs')).href;
+
+// 真表里那个模型的 provider —— 判别用例一律从这里取，不许手打。
+// #884 审官 P1#1 的洞就是被手打的常量盖住的：真表里 gpt-5.6-luna 落在 gw（网关落地通道），
+// 而用例手打了 provider:'gpt'，于是「落地通道被当成厂商族」这件事测不出来，测试还全绿。
+let _models = null;
+async function realProvider(id) {
+  if (!_models) _models = (await import(ROUTING_LIB)).loadRoutingPolicy().models;
+  const hit = _models.find(m => m && m.id === id);
+  assert.ok(hit, `真表里没有模型 ${id}——本条等于没查（零样本不许冒充「查过没事」）`);
+  return hit.provider;
+}
+
+// 策略夹具：形状照 docs/model-routing.json 的「执行体」节抄
+function policyDoc(over = {}) {
+  return {
+    执行体: {
+      默认: 'orca',
+      mirasim: {
+        钉版本: '0.0.282',
+        族: { claude: 'claude', gpt: 'gpt', gw: 'pi' },
+        模型前缀族: { 'kimi-': 'kimi' },
+        agentRoutes: {
+          claude: { agent: 'claude', 腿: 'relay' },
+          gpt: { agent: 'codex', 腿: 'relay' },
+          pi: { agent: 'pi', 腿: 'direct' },
+          kimi: { agent: 'kimi', 腿: 'relay' },
+        },
+        ...over,
+      },
+    },
+  };
+}
+
+/** orca 假身：只记账，不干活。派 mirasim 时它的账必须是空的。 */
+function orcaSpy() {
+  const calls = [];
+  const fn = (argv) => { calls.push(argv); return { ok: true, json: { spy: true } }; };
+  fn.calls = calls;
+  return fn;
+}
+
+/** mirasim 假运行时：记下每个动词被叫了几次、拿到什么参数。 */
+function fakeRuntime(over = {}) {
+  const calls = { ensureWorkspace: [], startSession: [] };
+  return {
+    calls,
+    async ensureWorkspace(repo, branch) {
+      calls.ensureWorkspace.push({ repo, branch });
+      return over.workspace || { path: `/srv/trees/${branch}`, branch, created: true, verified: true };
+    },
+    async startSession(spec) {
+      calls.startSession.push(spec);
+      return over.session || { sessionKey: 'claude:fake-uuid', taskId: 't1', startedAt: 1788508356511 };
+    },
+    async readSession() { return { phase: 'done', missing: false }; },
+    async waitForCompletion() { return { status: 'done', confirmedBy: ['snapshot', 'ledger'] }; },
+    crossCheck() { return { ledger: { readable: true, rows: [] }, journal: { readable: false } }; },
+  };
+}
+
+const argsWtSpy = (o) => ['worktree', 'create', '--name', String(o.name || ''), '--json'];
+const argsWsSpy = (o) => ['orchestration', 'worker-start', '--task', String(o.task || ''), '--json'];
+
+describe('执行体策略读取', () => {
+  it('没有「执行体」节 = 没查成，不是「默认 orca」', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy({ 工人: {} });
+    assert.equal(p.ok, false);
+    assert.equal(p.unscanned, true);
+    assert.equal(p.default, null, '读失败时不许给出默认值——那等于让一次读失败替人拍板');
+    assert.match(p.error, /没查成/);
+  });
+
+  it('默认值不在白名单 → 不合法（且不是 unscanned）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy({ 执行体: { 默认: 'devin' } });
+    assert.equal(p.ok, false);
+    assert.equal(p.unscanned, false);
+    assert.match(p.error, /默认/);
+  });
+
+  it('夹具能读出四族与钉版本', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    assert.equal(p.ok, true);
+    assert.equal(p.default, 'orca');
+    assert.equal(p.mirasim.pinnedVersion, '0.0.282');
+    assert.deepEqual(Object.keys(p.mirasim.agentRoutes).sort(), ['claude', 'gpt', 'kimi', 'pi']);
+  });
+
+  it('仓内真表读得出来，且不是 0 条（零样本报红）', async () => {
+    const S = await import(LIB);
+    const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
+    const p = S.readExecutorPolicy(doc);
+    assert.equal(p.ok, true, p.error || '');
+    const n = Object.keys(p.mirasim.agentRoutes).length;
+    assert.ok(n > 0, '真表里 agentRoutes 一条都没有 = 本次等于没查');
+    // #880 拍板的腿：claude 云端 relay、pi 直烧网关池。provider 全从真表查（见 realProvider）。
+    // gpt 那条挪进了下面「族路由按模型族」——它今天还差一行拍板，不该混在本条里装绿。
+    assert.deepEqual(
+      S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: await realProvider('claude-opus') }),
+      { ok: true, family: 'claude', agent: 'claude', leg: 'relay', via: 'provider claude', error: null },
+    );
+    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).agent, 'pi');
+    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).leg, 'direct');
+  });
+});
+
+describe('执行体名字', () => {
+  it('显式 --executor 优先，且只认白名单', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    assert.equal(S.judgeExecutorName('mirasim', p).executor, 'mirasim');
+    assert.equal(S.judgeExecutorName('mirasim', p).source, 'flag');
+    const bad = S.judgeExecutorName('devin', p);
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /不认识/);
+  });
+
+  it('没给 --executor 就用策略默认；策略没查成时拒派而不落默认', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const ok = S.judgeExecutorName(undefined, p);
+    assert.equal(ok.executor, 'orca');
+    assert.equal(ok.source, 'policy');
+    const un = S.judgeExecutorName(undefined, S.readExecutorPolicy({}));
+    assert.equal(un.ok, false);
+    assert.equal(un.executor, null);
+    assert.match(un.error, /没查成/);
+  });
+});
+
+describe('族路由', () => {
+  it('模型前缀优先于 provider（kimi 自己成族，不被 gw 带成 pi）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const r = S.judgeAgentRoute({ policy: p, model: 'kimi-k3', provider: 'gw' });
+    assert.equal(r.family, 'kimi');
+    assert.equal(r.agent, 'kimi');
+    assert.match(r.via, /模型前缀/);
+  });
+
+  it('provider 没登记 → 拒派，错误里点名去哪儿拍板', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const r = S.judgeAgentRoute({ policy: p, model: 'composer-2.5', provider: 'cursor' });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /拒派/);
+    assert.match(r.error, /不静默降级/);
+    assert.match(r.error, /model-routing\.json/);
+  });
+
+  it('族认出来了但 agentRoutes 里没这一条 → 拒派并列出已登记的族', async () => {
+    const S = await import(LIB);
+    const doc = policyDoc();
+    delete doc.执行体.mirasim.agentRoutes.claude;
+    const p = S.readExecutorPolicy(doc);
+    const r = S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, false);
+    assert.equal(r.family, 'claude');
+    assert.match(r.error, /已登记的族/);
+  });
+
+  it('agentRoutes 是空的 → 没查成，不是「这一族不该派」', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc({ agentRoutes: {} }));
+    const r = S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /没查成/);
+  });
+
+  it('配置形状不全（缺腿）→ 拒派，不给一半的路由', async () => {
+    const S = await import(LIB);
+    const doc = policyDoc();
+    doc.执行体.mirasim.agentRoutes.claude = { agent: 'claude' };
+    const p = S.readExecutorPolicy(doc);
+    const r = S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /形状不符/);
+  });
+});
+
+describe('判别用例①：executor=mirasim 时一个 orca 命令都不发', () => {
+  it('派一单：orca 假身零调用，而 mirasim 侧两个动词都真被叫了', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const spy = orcaSpy();
+    const rt = fakeRuntime();
+    const binding = S.bindExecutor({
+      executor: 'mirasim',
+      policy: p,
+      runtime: rt,
+      orca: spy,
+      argsWorktreeCreate: argsWtSpy,
+      argsWorkerStart: argsWsSpy,
+    });
+    assert.equal(binding.name, 'mirasim');
+    const r = await binding.dispatchOne({
+      repo: '/home/orca/windsurf-dao',
+      branch: 'dao-880',
+      prompt: '读 host/skills/dispatch/templates/soldier-book.md spec=试一针 #880',
+      model: 'claude-opus',
+      provider: 'claude',
+    });
+    assert.equal(r.ok, true, r.error || '');
+    // 前半句：一个 orca 命令都没发
+    assert.equal(spy.calls.length, 0, `mirasim 路径发了 ${spy.calls.length} 条 orca 命令：${JSON.stringify(spy.calls)}`);
+    // 后半句：确实干了活（不然「没调 orca」是空转冒充的）
+    assert.equal(rt.calls.ensureWorkspace.length, 1);
+    assert.deepEqual(rt.calls.ensureWorkspace[0], { repo: '/home/orca/windsurf-dao', branch: 'dao-880' });
+    assert.equal(rt.calls.startSession.length, 1);
+    assert.equal(rt.calls.startSession[0].agent, 'claude', '族路由要把 agent 定成 claude');
+    assert.equal(rt.calls.startSession[0].workdir, '/srv/trees/dao-880');
+    assert.match(rt.calls.startSession[0].prompt, /soldier-book\.md/);
+    // 裁定里带着这一单实际走了哪条腿
+    assert.equal(r.sessionKey, 'claude:fake-uuid');
+    assert.equal(r.leg, 'relay');
+    assert.equal(r.family, 'claude');
+    assert.equal(r.path, '/srv/trees/dao-880');
+  });
+
+  it('对照组：executor=orca 时确实发 orca 命令（否则上一条会被空转蒙过去）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const spy = orcaSpy();
+    const binding = S.bindExecutor({
+      executor: 'orca',
+      policy: p,
+      orca: spy,
+      argsWorktreeCreate: argsWtSpy,
+      argsWorkerStart: argsWsSpy,
+    });
+    assert.equal(binding.name, 'orca');
+    const wt = await binding.worktreeCreate({ name: 'ISSUE-880-试' });
+    assert.equal(wt.ok, true);
+    const ws = await binding.workerStart({ task: 'task-1', terminal: 'term_x' });
+    assert.equal(ws.ok, true);
+    assert.equal(spy.calls.length, 2);
+    assert.deepEqual(spy.calls[0].slice(0, 2), ['worktree', 'create']);
+    assert.deepEqual(spy.calls[1].slice(0, 2), ['orchestration', 'worker-start']);
+  });
+
+  it('orca 绑定的 dispatch 明说走原有队列脊，不假装自己接了', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const binding = S.bindExecutor({
+      executor: 'orca', policy: p, orca: orcaSpy(),
+      argsWorktreeCreate: argsWtSpy, argsWorkerStart: argsWsSpy,
+    });
+    const r = await binding.dispatchOne({});
+    assert.equal(r.ok, false);
+    assert.match(r.error, /dispatch-exec/);
+  });
+});
+
+describe('判别用例②：策略缺该族配置 → 报警拒派，一个会话都不起', () => {
+  it('派单被拒时，ensureWorkspace 和 startSession 的调用次数都是 0', async () => {
+    const S = await import(LIB);
+    const doc = policyDoc();
+    delete doc.执行体.mirasim.族.gw;         // grok-4.6 走 gw，这一族没人拍过板
+    delete doc.执行体.mirasim.agentRoutes.pi;
+    const p = S.readExecutorPolicy(doc);
+    const rt = fakeRuntime();
+    const spy = orcaSpy();
+    const binding = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt, orca: spy, argsWorktreeCreate: argsWtSpy, argsWorkerStart: argsWsSpy });
+    const r = await binding.dispatchOne({
+      repo: '/home/orca/windsurf-dao', branch: 'dao-880',
+      prompt: '任务书', model: 'grok-4.6', provider: 'gw',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.refused, true);
+    assert.match(r.error, /拒派/);
+    assert.match(r.error, /不静默降级/);
+    // 这才是判据：拒派的意思是额度一分没烧、树一棵没建
+    assert.equal(rt.calls.startSession.length, 0, '拒派了却起了会话——那不叫拒派，叫烧完再报警');
+    assert.equal(rt.calls.ensureWorkspace.length, 0, '拒派了却先建了树——判据顺序错了');
+    assert.equal(spy.calls.length, 0);
+  });
+
+  it('worker-start 单独走也一样：先判族，判不过不起会话', async () => {
+    const S = await import(LIB);
+    const doc = policyDoc();
+    delete doc.执行体.mirasim.agentRoutes.pi;
+    const p = S.readExecutorPolicy(doc);
+    const rt = fakeRuntime();
+    const binding = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    const r = await binding.workerStart({ workdir: '/srv/trees/x', prompt: '任务书', model: 'grok-4.6', provider: 'gw' });
+    assert.equal(r.ok, false);
+    assert.equal(r.refused, true);
+    assert.equal(rt.calls.startSession.length, 0);
+  });
+
+  it('策略整体没查成时，绑定连建都建不出来（不许退到 orca 偷偷派）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy({});
+    assert.throws(
+      () => S.bindExecutor({ policy: p, orca: orcaSpy(), argsWorktreeCreate: argsWtSpy, argsWorkerStart: argsWsSpy }),
+      /没查成/,
+    );
+  });
+});
+
+describe('mirasim 绑定的边界', () => {
+  it('建树缺 repo/branch → 报错，不拿空串去建', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    const r = await b.worktreeCreate({ repo: '', branch: 'x' });
+    assert.equal(r.ok, false);
+    assert.equal(rt.calls.ensureWorkspace.length, 0);
+  });
+
+  it('起会话缺 workdir/prompt → 报错，且族判过了也不许起空会话', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    const r = await b.workerStart({ workdir: '/srv/x', prompt: '', model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, false);
+    assert.equal(rt.calls.startSession.length, 0);
+  });
+
+  it('已有同分支的树 → created:false（幂等，不重复建）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime({ workspace: { path: '/srv/trees/dao-880', branch: 'dao-880', created: false, verified: true } });
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    const r = await b.worktreeCreate({ repo: '/repo', branch: 'dao-880' });
+    assert.equal(r.ok, true);
+    assert.equal(r.created, false);
+  });
+
+  it('判完工的腿原样转给卡 A，不在本层抄第二份判据', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: fakeRuntime() });
+    const done = await b.waitForCompletion('claude:fake-uuid');
+    assert.equal(done.status, 'done');
+    assert.deepEqual(done.confirmedBy, ['snapshot', 'ledger']);
+  });
+});
+
+// #884 审官 P1#5：钉版本的真相源是策略，不是 mirasim-runtime.mjs 里的常量。
+// 判别力在「改策略要真的改到 runtime 手里」——只断 policy.mirasim.pinnedVersion
+// 读出来是 0.0.283 不算，那只证明 JSON 解析没坏；必须读回 runtime 自己的 config。
+describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
+  it('策略钉 0.0.283 → runtime.config.pinnedVersion 就是 0.0.283（不是库内 0.0.282）', async () => {
+    const S = await import(LIB);
+    const RT = await import(RUNTIME_LIB);
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: '0.0.283' }));
+    assert.equal(p.mirasim.pinnedVersion, '0.0.283');
+    // 不注入 runtime：走的正是 dao.mjs 的真路径（bindExecutor 只给 policy）。
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(
+      b.runtime.config.pinnedVersion, '0.0.283',
+      '策略改了钉版本却没传进 runtime：服务升级后照旧按旧版本拒派（#884 P1#5）',
+    );
+    assert.notEqual(
+      b.runtime.config.pinnedVersion, RT.PINNED_VERSION,
+      '夹具钉的版本必须与库内默认不同，否则这条断言分不出「传过去了」和「压根没传」',
+    );
+  });
+
+  it('策略没写钉版本 → 落库内默认，不落 null/undefined（否则契约断言判不了版本）', async () => {
+    const S = await import(LIB);
+    const RT = await import(RUNTIME_LIB);
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: undefined }));
+    assert.equal(p.mirasim.pinnedVersion, null, '策略没写就是 null，本层不替它编一个');
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(b.runtime.config.pinnedVersion, RT.PINNED_VERSION);
+  });
+
+  it('注入了 runtime 时用注入的那个，不被策略覆写（测试与调用方能自己接线）', async () => {
+    const S = await import(LIB);
+    const rt = fakeRuntime();
+    const p = S.readExecutorPolicy(policyDoc({ 钉版本: '0.0.283' }));
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    assert.equal(b.runtime, rt);
+  });
+
+  it('仓内真表的钉版本就是 runtime 拿到的那个（真表与代码不许各钉一个）', async () => {
+    const S = await import(LIB);
+    const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
+    const p = S.readExecutorPolicy(doc);
+    assert.equal(p.ok, true, p.error || '');
+    assert.ok(p.mirasim && p.mirasim.pinnedVersion, '真表里没钉版本 = 本次等于没查');
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    assert.equal(b.runtime.config.pinnedVersion, p.mirasim.pinnedVersion);
+  });
+});
+
+// #884 审官 P1#4：公开 CLI 不许崩栈。走真进程黑盒——用 dao.mjs 自己的出口判，
+// 不复用被测判据。判别力在「拿到的是结构化 ok:false，而不是模板异常的栈」。
+describe('dispatch --executor mirasim 拒 --task（#884 P1#4）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  // constrainDispatch 在执行体分岔之前就要 --model/--reviewer/--split，所以判别用例
+  // 必须把它们都给足，才能真的走到 mirasim 分支——少给一个就变成在测上游的闸。
+  const baseArgs = [
+    '--executor', 'mirasim', '--branch', 'dao-probe-task',
+    '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna',
+    '--split', 'no', '--split-reason', '#884 P1#4 判别用例',
+    '--dry-run',
+  ];
+  const runDao = (extra) => spawnSync(process.execPath, [DAO, 'dispatch', ...extra, ...baseArgs], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT, env: { ...process.env },
+  });
+
+  it('--task 没 --spec → 结构化拒派，绝不是 {{SPEC}} 模板崩栈', () => {
+    const r = runDao(['--task', 'task-1']);
+    assert.doesNotMatch(
+      String(r.stderr || ''), /占位符 \{\{SPEC\}\} 没给值/,
+      '仍在模板占位符上崩栈：公开 CLI 崩栈 = #884 P1#4 没修',
+    );
+    assert.doesNotMatch(String(r.stderr || ''), /at cmdDispatchMirasim/, '不许把 node 栈甩给用户');
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.equal(out.refused, true);
+    assert.equal(out.unsupported, '--task');
+    assert.equal(out.task, 'task-1');
+    assert.match(out.error, /暂不支持 --task/);
+    assert.equal(r.status, 1, '拒派要非零退出，否则脚本调用方看不出被拒');
+  });
+
+  // #884 审官 P1（三轮实咬）：二轮的修法只判 !args.spec，于是 --task 与 --spec 同传时
+  // 返回 ok:true 并把 task 默默丢掉，按 spec 派了一单调用方没要的活。公开参数不许静默忽略。
+  // 判别力：断的是「拒派 + 回执里带着被拒的 task」，不是只断 ok:false——把 spec 判据单独删掉
+  // 也能让上一条过，但这条会红在 specGiven 上。
+  it('--task 与 --spec 同传 → 照样拒派，绝不静默丢掉 task（#884 P1，三轮）', () => {
+    const r = runDao(['--task', 'task-ignored', '--spec', 'real spec']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false, '同传时返回 ok:true 就是把 task 默默丢了（三轮实咬的洞）');
+    assert.equal(out.refused, true);
+    assert.equal(out.unsupported, '--task');
+    assert.equal(out.task, 'task-ignored', '回执要把被拒的 task 原样报出来');
+    assert.equal(out.specGiven, true, '要说清「spec 也给了，照样拒」——这是判据不看 spec 的证据');
+    assert.equal(out.verb, 'dispatch');
+    assert.doesNotMatch(String(out.prompt || ''), /real spec/, '拒派不许还渲出任务书');
+    assert.equal(r.status, 1, '拒派要非零退出，否则脚本调用方看不出被拒');
+  });
+
+  it('给了 --spec 就照旧派（证明上一条拒的是缺 spec，不是把 mirasim 分支整条堵死）', () => {
+    const r = runDao(['--spec', '#884 P1#4 判别用例：证明 spec 路没被堵']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, true, out.error || '');
+    assert.equal(out.dryRun, true);
+    assert.equal(out.executor, 'mirasim');
+    assert.equal(out.agent, 'pi', 'grok-4.6/gw 应落 pi 族 direct 腿（#880 拍板）');
+    assert.ok(out.prompt && out.prompt.length > 0, 'spec 路必须真的渲出任务书');
+    assert.equal(r.status, 0);
+  });
+});
+
+// #884 审官 P1：worktree-create 的共享入口曾在执行体分岔**之前**就无条件要 --name/--issue，
+// 于是 USAGE 里写的 mirasim 公开用法 `--executor mirasim --branch <分支>` 直接被拦在门外。
+// 判别力在「按文档那条命令跑，进的是 mirasim binding」——所以不能只断 ok:false（改坏了也 false），
+// 要断错误是从 mirasim 运行时**里面**冒出来的（读令牌那一步），且 detail 带 executor/repo/branch：
+// 那几个字段只有 cmdWorktreeCreateMirasim 会 emit，闸没让开根本走不到。
+// 端口钉一个没人监听的：令牌文件 local-59999.token 不存在 → 必定停在 readToken，
+// 既与这台机器今天有没有跑 mirasim 无关，也保证测试不会真去注册工作区／建树。
+describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  const runDao = (extra) => spawnSync(process.execPath, [DAO, 'worktree-create', ...extra], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT,
+    env: { ...process.env, MIRASIM_PORT: '59999' },
+  });
+
+  it('只给 --branch（无 --name/--issue）→ 走到 mirasim binding，不再被卡名闸拦下', () => {
+    const r = runDao(['--executor', 'mirasim', '--branch', 'dao-probe-884']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.doesNotMatch(
+      String(out.error || ''), /要 --name/,
+      '仍被 orca 的卡名闸拦在执行体分岔之前：文档写的 mirasim 用法进不去（#884 P1）',
+    );
+    assert.equal(out.executor, 'mirasim');
+    assert.equal(out.branch, 'dao-probe-884');
+    assert.ok(out.repo, '没 --repo 时要落默认仓路径');
+    assert.match(
+      String(out.error || ''), /mirasim 建树失败: 读不到回环会话令牌/,
+      '错误得来自 mirasim 运行时内部——这就是「binding 真被调到了」的证据',
+    );
+    assert.equal(r.status, 1, '连不上服务是「没查成」，要非零退出');
+  });
+
+  it('mirasim 自己的 --branch 闸还在（没 --branch 也没 --issue → 拒派，不猜分支名）', () => {
+    const r = runDao(['--executor', 'mirasim']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.match(out.error, /mirasim 执行体要 --branch/);
+    assert.equal(r.status, 1);
+  });
+
+  it('orca 侧的卡名闸没被顺手删掉（树名就是卡名，缺了照旧拒）', () => {
+    const r = runDao(['--executor', 'orca']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.match(
+      out.error, /worktree-create 要 --name/,
+      '把闸整条删了也能让上面两条过——这条是防那种「修法」的',
+    );
+    assert.equal(r.status, 1);
+  });
+});
+
+// #884 审官 P1（三轮）：两个 mirasim 会话入口没把 executor 传给 buildSoldierInject，而
+// template.mjs 的默认是 orca 书，于是 dispatch/worker-start --executor mirasim 实际把
+// soldier-inject.md（→ soldier-book.md）发进会话，把没有 Orca 卡/Run 的 mirasim 会话带回
+// orca 闭环。注入闸同样没传 executor，等于「没核对目标任务书」。
+describe('mirasim 会话发的是 mirasim 任务书（#884 P1，三轮）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  const TEMPLATE = path.resolve(ROOT, 'scripts', 'lib', 'dispatch', 'template.mjs');
+  const T_LOAD = import('file://' + TEMPLATE.replace(/\\/g, '/'));
+  const baseArgs = [
+    '--executor', 'mirasim', '--branch', 'dao-probe-884-book',
+    '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna',
+    '--split', 'no', '--split-reason', '#884 P1 三轮判别用例',
+    '--dry-run',
+  ];
+  const runDispatch = (extra) => spawnSync(process.execPath, [DAO, 'dispatch', ...extra, ...baseArgs], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT, env: { ...process.env },
+  });
+
+  // 黑盒：走真进程、读 dao.mjs 自己 emit 的 prompt，不复用被测判据。
+  it('dispatch --executor mirasim 的最终 prompt 指 soldier-book-mirasim.md', () => {
+    const r = runDispatch(['--spec', '只做 prompt 路由判别，不启动会话']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, true, out.error || '');
+    assert.equal(out.executor, 'mirasim');
+    assert.match(
+      String(out.prompt || ''), /soldier-book-mirasim\.md/,
+      'mirasim 会话收到的必须是 mirasim 任务书',
+    );
+    assert.doesNotMatch(
+      String(out.prompt || ''), /templates\/soldier-book\.md/,
+      '指 orca 书 = 把没有 Orca 卡/Run 的 mirasim 会话带回 orca 闭环（#884 P1 三轮实咬）',
+    );
+    assert.equal(r.status, 0);
+  });
+
+  // 「注入闸核对了目标任务书」的判别用例：两本书前缀差 8 字节（-mirasim），所以存在一段
+  // spec 长度——按 orca 书量刚好不超、按 mirasim 书量已经超。闸不传 executor 就会放过它，
+  // 然后渲染那一步（已传 executor）抛出来，把栈甩给公开 CLI。这条同时钉住「闸与渲染同一本书」。
+  it('注入闸按 mirasim 书量字节：orca 刚好不超、mirasim 已超的 spec 当场拒派', async () => {
+    const { INJECT_MAX_BYTES, assertDispatchInjectPlan } = await T_LOAD;
+    const orcaPrefixBytes = Buffer.byteLength('读 host/skills/dispatch/templates/soldier-book.md spec=', 'utf8');
+    const spec = 'x'.repeat(INJECT_MAX_BYTES - orcaPrefixBytes);
+    // 先自证这条 spec 真的落在那段窗口里，否则本用例什么也没测。
+    assert.equal(assertDispatchInjectPlan({ spec }).ok, true, '按 orca 书量应刚好不超');
+    assert.equal(
+      assertDispatchInjectPlan({ spec, executor: 'mirasim' }).ok, false,
+      '按 mirasim 书量应已超——不超就说明窗口算错了，本用例失去判别力',
+    );
+
+    const r = runDispatch(['--spec', spec]);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false, '闸没按 mirasim 书量 → 这单被放过（#884 P1 三轮：闸没核目标任务书）');
+    assert.match(String(out.error || ''), /超过上限/);
+    assert.doesNotMatch(String(r.stderr || ''), /at cmdDispatchMirasim/, '闸与渲染不同书时会在这里甩栈');
+    assert.equal(r.status, 1);
+  });
+
+  // orca 默认路径逐字不变（审官明确要求钉一条）。纯函数这一层是渲染的唯一出处，
+  // 默认值被改成 mirasim 书时这条先红。
+  it('orca 默认渲染逐字不变（不传 executor 仍是 orca 书）', async () => {
+    const { buildSoldierInject } = await T_LOAD;
+    assert.equal(
+      buildSoldierInject({ spec: 'x', issue: '884' }),
+      '读 host/skills/dispatch/templates/soldier-book.md spec=x #884',
+      'orca 默认路径必须保持不变',
+    );
+  });
+
+  // 源码段判据：mirasim 的两个入口每一处渲染/闸都带 executor: 'mirasim'，orca 那两段一处都不带。
+  // 黑盒只盖得住 dispatch（worker-start 的 prompt 不 emit，起会话前就要连服务），所以
+  // worker-start 这一侧靠段内断言守。两面都断：漏传会红，误把 orca 也改成 mirasim 也会红。
+  it('两个 mirasim 入口的渲染与闸都显式传 executor；orca 两段一处都不传', () => {
+    const src = fs.readFileSync(path.resolve(ROOT, 'scripts', 'dao.mjs'), 'utf8');
+    const seg = (from, to) => {
+      const i = src.indexOf(from);
+      const j = src.indexOf(to, i + 1);
+      assert.ok(i > 0 && j > i, '段定位失败: ' + from);
+      return src.slice(i, j);
+    };
+    const CALL = /(?:buildSoldierInject|assertDispatchInjectPlan)\(\{[^}]*\}/g;
+    const mirasimSegs = {
+      cmdDispatchMirasim: seg('async function cmdDispatchMirasim(', 'async function runDispatchExecution('),
+      cmdWorkerStartMirasim: seg('async function cmdWorkerStartMirasim(', 'function cmdWorkerRelease('),
+    };
+    for (const [name, body] of Object.entries(mirasimSegs)) {
+      const calls = body.match(CALL) || [];
+      assert.ok(calls.length > 0, name + ' 段里一处渲染/闸都没找到 = 段定位错了');
+      for (const c of calls) {
+        assert.match(c, /executor: 'mirasim'/, name + ' 有一处没传 executor，会落 orca 默认书: ' + c);
+      }
+    }
+    const orcaSegs = {
+      热路: seg('async function cmdDispatch(args) {', 'function assertMirasimNoTask('),
+      执行体: seg('async function runDispatchExecution(', 'function cmdDispatchBatch('),
+    };
+    for (const [name, body] of Object.entries(orcaSegs)) {
+      for (const c of body.match(CALL) || []) {
+        assert.doesNotMatch(c, /executor:/, 'orca ' + name + ' 被塞了 executor，默认路径就变了: ' + c);
+      }
+    }
+  });
+
+  // worker-start 侧的 --task 也不许静默丢（与 dispatch 共用同一处判据）。
+  it('worker-start --executor mirasim 同传 --task/--spec 也拒派', () => {
+    const r = spawnSync(process.execPath, [DAO, 'worker-start',
+      '--executor', 'mirasim', '--worktree', ROOT,
+      '--task', 'task-ignored', '--spec', 'real spec',
+      // worker-start 不收 --split/--split-reason（收了会是「未知参数」，那就变成在测参数解析）
+      '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna',
+    ], { encoding: 'utf8', timeout: 60000, cwd: ROOT, env: { ...process.env, MIRASIM_PORT: '59999' } });
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.equal(out.refused, true);
+    assert.equal(out.unsupported, '--task');
+    assert.equal(out.verb, 'worker-start', '判据要认得出是哪个动词在拒');
+    assert.equal(out.specGiven, true);
+    assert.equal(r.status, 1);
+  });
+});
+
+// #884 审官 P1（四轮）：族路由按模型族认，且最长前缀赢。
+//
+// 四轮实咬：真表里 gpt-5.6-luna 的 provider 是 gw——那是网关**落地通道**，不是厂商族，
+// 于是它被送进 pi 直连腿，而不是 agentRoutes.gpt 声明的 codex/relay。
+// 落地通道不该决定厂商族，模型族必须优先；而模型族表一旦有多条前缀命中同一个 id，
+// 「命中即停」就等于让 JSON 的书写顺序替人拍板。
+describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () => {
+  it('两条前缀都命中时取最长的那条，与 JSON 书写顺序无关', async () => {
+    const S = await import(LIB);
+    // 同一份前缀表写两种顺序：命中即停的写法会跟着顺序变，最长前缀不会。
+    const forward = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-': 'pi', 'gpt-5.6-': 'gpt' } }));
+    const reverse = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-5.6-': 'gpt', 'gpt-': 'pi' } }));
+    for (const [order, p] of [['正序', forward], ['倒序', reverse]]) {
+      const r = S.judgeAgentRoute({ policy: p, model: 'gpt-5.6-luna', provider: 'gw' });
+      assert.equal(r.family, 'gpt', order + '时落到了 ' + r.family + '——书写顺序不许决定路由');
+      assert.equal(r.via, '模型前缀 gpt-5.6-', order + '时报的 via 是 ' + r.via);
+    }
+    // 短前缀单独在时照旧生效：证明上面赢的是「更长」，不是「gpt- 这条被忽略了」。
+    const onlyShort = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-': 'pi' } }));
+    assert.equal(S.judgeAgentRoute({ policy: onlyShort, model: 'gpt-5.6-luna', provider: 'gw' }).family, 'pi');
+  });
+
+  // 判据分两半，因为今天只有一半在本 PR 手里：
+  //   数据半边（docs/model-routing.json 加一行 "gpt-": "gpt"）属于改规则，等人拍板，本 PR 不动；
+  //   代码半边（模型族优先 + 最长前缀）已经就位，这里用「真表 + 那一行」证明它就位。
+  it('真表 + 待拍板的 "gpt-" 一行 → gpt-5.6-luna 走 gpt/codex/relay（代码已就位，只差那一行）', async () => {
+    const S = await import(LIB);
+    const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
+    const provider = await realProvider('gpt-5.6-luna');
+    assert.equal(provider, 'gw', '真表里它已经不落 gw 了——本条的前提变了，重判');
+
+    // 先钉住今天的数据缺口：真表的「模型前缀族」里没有任何一条能命中 gpt-5.6-luna。
+    // 拍板加上那一行之后本条会红——那正是提醒：删掉这一段，把下面改成直接读真表断言。
+    const pNow = S.readExecutorPolicy(doc);
+    const matched = Object.keys(pNow.mirasim.familyByModelPrefix).filter(k => 'gpt-5.6-luna'.startsWith(k));
+    assert.deepEqual(matched, [], '真表已登记 gpt 前缀 → 本条到期：改成直接读真表，别再垫夹具');
+
+    // 再证明代码这边已经就位。
+    const doc2 = JSON.parse(JSON.stringify(doc));
+    doc2.执行体.mirasim.模型前缀族['gpt-'] = 'gpt';
+    const p2 = S.readExecutorPolicy(doc2);
+    const r = S.judgeAgentRoute({ policy: p2, model: 'gpt-5.6-luna', provider });
+    assert.equal(r.family, 'gpt');
+    assert.equal(r.agent, 'codex');
+    assert.equal(r.leg, 'relay');
+    assert.match(r.via, /模型前缀/, 'via 还报 provider = 模型族没赢过落地通道');
+    // 同表里别的模型不受牵连（证明这一行只动 gpt 族，不是把 gw 整条改了）
+    assert.equal(S.judgeAgentRoute({ policy: p2, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).agent, 'pi');
+    assert.equal(S.judgeAgentRoute({ policy: p2, model: 'kimi-k3', provider: await realProvider('kimi-k3') }).agent, 'kimi');
+  });
+});
+
+// #884 审官 P1#2（四轮）：workerStart 算出了 model 却只把 {agent,workdir,prompt} 交给 runtime，
+// 服务端因此永远收不到具体模型；而回执里的 daoModel 是事后抄的同一个变量，证明不了送达。
+// 判别力必须落在「假运行时**捕获到的入参**」上——断回执字段的用例在漏传时照样是绿的，
+// 那就是「执行到这行了」冒充「读回来的事实」。
+describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', () => {
+  it('workerStart：runtime 捕获到的入参里带着 model', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession.length, 1);
+    assert.equal(rt.calls.startSession[0].model, 'claude-opus', 'runtime 没收到 model = 服务端收不到');
+    assert.equal(rt.calls.startSession[0].agent, 'claude', '族路由的结果照旧要传');
+  });
+
+  it('dispatchOne 那条路上 model 同样到得了 runtime', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.dispatchOne({
+      repo: '/repo', branch: 'dao-884', prompt: '任务书', model: 'claude-opus', provider: 'claude',
+    });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession.length, 1);
+    assert.equal(rt.calls.startSession[0].model, 'claude-opus', 'dispatchOne 自己那条路上又丢了一次');
+  });
+
+  it('没给 model 时不往帧里塞空串（族由 provider 认，model 缺就是缺）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', provider: 'claude' });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession[0].model, undefined, '空串会被 runtime 当成有值塞进帧里');
+  });
+});
+
+// #884 审官 P1#3（四轮）：mirasim 的 worker-start 少了 dispatch 那道注入闸，
+// 于是超长 --spec 让 buildSoldierInject 的异常直接甩成 Node 栈：stdout 空、退出 1、
+// 用户看到的是 at cmdWorkerStartMirasim。公开 CLI 不许这样报错。
+describe('worker-start --executor mirasim 超长 --spec 结构化拒派（#884 P1#3，四轮）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  // 士兵注入上限 500 字节；中文 3 字节 × 300 = 900，必定超限且与模板长度无关。
+  const LONG = '长'.repeat(300);
+  // 端口钉一个没人监听的：万一闸放行，也停在读令牌那一步，不会真去起会话烧额度。
+  const run = (extra) => spawnSync(process.execPath, [DAO, 'worker-start', ...extra], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT,
+    env: { ...process.env, MIRASIM_PORT: '59999' },
+  });
+  const base = ['--executor', 'mirasim', '--worktree', ROOT, '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--confirm'];
+
+  it('超长 --spec → JSON 拒派 + 退出 1，绝不甩 Node 栈', () => {
+    const r = run([...base, '--spec', LONG]);
+    assert.doesNotMatch(String(r.stderr || ''), /at cmdWorkerStartMirasim/, '还在甩 node 栈 = P1#3 没修');
+    assert.doesNotMatch(String(r.stderr || ''), /^Error: 注入/m, 'stderr 出现未捕获异常 = 没走 fail()');
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.equal(out.executor, 'mirasim');
+    assert.match(out.error, /超过上限/);
+    assert.ok(out.injectGate && out.injectGate.ok === false, '回执要点名是注入闸拒的');
+    assert.equal(r.status, 1, '拒派要非零退出，否则脚本调用方看不出被拒');
+  });
+
+  it('正常长度的 --spec 过得了这道闸（证明拒的是超长，不是把 worker-start 整条堵死）', () => {
+    const r = run([...base, '--spec', '#884 P1#3 判别用例：证明正常 spec 没被误伤']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false, '端口 59999 没人监听，本来就该失败——本条要的是「失败在别处」');
+    assert.doesNotMatch(String(out.error || ''), /超过上限/, '正常 spec 被注入闸误伤了');
+    assert.equal(out.executor, 'mirasim', '错误要从 mirasim 路径里出来，说明闸确实放行了');
+  });
+});

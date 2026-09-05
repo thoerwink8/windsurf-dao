@@ -959,6 +959,8 @@ export const FLAGS_BY_VERB = {
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--json', '--help', '-h',
+    // #880 卡 B：执行体绑定。--branch/--repo 只有 mirasim 路径读（orca 侧树名/分支由 orca 定）。
+    '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),
@@ -967,12 +969,15 @@ export const FLAGS_BY_VERB = {
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
     '--issue', '--comment', '--json', '--help', '-h',
+    '--executor', '--branch', '--repo',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--run', '--agent', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
+    // #880 卡 B：mirasim 路径没有终端 handle 这回事，要的是树路径 + 任务书。
+    '--executor', '--spec', '--branch', '--repo',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
@@ -1085,6 +1090,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+  worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]
+                  # #880 卡 B：mirasim 路径 = ensureWorkspace（幂等，同分支已有树就给路径）；--branch 缺时按 --issue 推 dao-<号>
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
@@ -1138,6 +1145,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色>) [--confirm] [--retry-of <id>]
+  worker-start --executor mirasim --worktree <树的绝对路径> --spec <任务书> --model <id> --reviewer <id> [--issue <号>]
+                  # #880 卡 B：mirasim 一次 prompt 就是一条会话，没有可复用的终端；族路由缺配置当场拒派
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]
