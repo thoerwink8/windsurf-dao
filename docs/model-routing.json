@@ -537,26 +537,6 @@
       "理由": "帅位会话就跑在这条腿上。2026-09-05 追认：标着「停用」而用量账里 13 次 / 11 个会话都是它，停用记录写的是「等 #880 卡 B 派工接线」——派工接线没等到，会话载体先用上了"
     },
     {
-      "id": "gpt-5.6-luna@mirasim/mirasim",
-      "模型": "gpt-5.6-luna",
-      "族": "codex",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-05",
-      "理由": "审官降级腿（pqapi 429 时落 luna，见 memory reviewer-fallback-luna-via-pi）经 mirasim relay 出去。2026-09-05 追认：用量账 685 次 / agent=codex，是 mirasim 侧最大流量腿，此前从未登记"
-    },
-    {
-      "id": "gpt-5.6-sol@mirasim/mirasim",
-      "模型": "gpt-5.6-sol",
-      "族": "codex",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-05",
-      "理由": "审官主腿在 mirasim 侧的落点（orca 侧那条是 gpt-5.6-sol@pqapi/orca）。2026-09-05 追认：用量账 3 次 / agent=codex"
-    },
-    {
       "id": "claude-opus-5@reclaude/cc-local",
       "模型": "claude-opus-5",
       "族": "claude",
