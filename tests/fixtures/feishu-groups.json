@@ -1,7 +1,22 @@
 {
   "_comment": "测试夹具：假 chat_id（#801 块A），对应 tests/fixtures/feishu-events.jsonl",
-  "oc_windsurf_dao": { "repo": "thoerwink8/windsurf-dao", "kind": "project" },
+  "oc_windsurf_dao": {
+    "repo": "thoerwink8/windsurf-dao",
+    "kind": "project",
+    "profile": {
+      "persona": "项目群：记需求、建单。",
+      "intents": ["greeting", "new_request", "situation"],
+      "refuse": "这事不归这个项目群。"
+    }
+  },
   "oc_ai_gateway_stack": { "repo": "thoerwink8/ai-gateway-stack", "kind": "project" },
   "oc_miraquota_win": { "repo": "thoerwink8/miraquota-win", "kind": "project" },
-  "oc_hub": { "kind": "hub" }
+  "oc_hub": {
+    "kind": "hub",
+    "profile": {
+      "persona": "总控群助手。问候闲聊只打招呼；明确问现状才给盘面。",
+      "intents": ["greeting", "situation", "decision", "new_request"],
+      "refuse": "这事不归我，去项目群开个单。"
+    }
+  }
 }
