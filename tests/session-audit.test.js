@@ -422,15 +422,24 @@ describe('session-audit-hook · 落点与真跑', () => {
     const sha = makeRepo(repo);
     const key = `commit:${sha.slice(0, 7)}`;
 
-    // 轮 1：账本目录不存在 ⇒ unscanned。hook 仍推进 since；本轮产出必须进 pending。
+    // 轮 1：账本目录不存在 ⇒ unscanned。本轮产出进 pending，且 since 不推进。
     const r1 = runHook(repo, { ledger, state, sessionId: 'unscan' });
     assert.strictEqual(r1.status, 0, `轮1 退出码应为 0：${r1.stderr}`);
     assert.strictEqual(r1.stdout.trim(), '', 'unscanned 不刷屏');
     assert.ok(!fs.existsSync(ledger) || bypasses(ledger).length === 0, '没查成不许写 audit.bypass');
     const st1 = JSON.parse(fs.readFileSync(path.join(state, 'unscan.json'), 'utf8'));
     assert.deepStrictEqual(st1.pending, [key], '首轮 unscanned 也要把本轮 commit 放进 pending');
+    assert.ok(st1.since, '状态文件应有 since');
+    const since1 = st1.since;
 
-    // 轮 2：账本恢复为空、无新产出。commit 已滚出 git 窗口，全靠 pending。
+    // 再跑一轮仍 unscanned：since 必须冻着（指挥官 round-1：账本没读成不要推进窗口）。
+    const r1b = runHook(repo, { ledger, state, sessionId: 'unscan' });
+    assert.strictEqual(r1b.status, 0);
+    const st1b = JSON.parse(fs.readFileSync(path.join(state, 'unscan.json'), 'utf8'));
+    assert.strictEqual(st1b.since, since1, '连续 unscanned 不许推进 since');
+    assert.deepStrictEqual(st1b.pending, [key]);
+
+    // 轮 2：账本恢复为空。unscanned 那轮不推进 since，commit 仍在 git 窗口；pending 是双保险。
     fs.mkdirSync(ledger, { recursive: true });
     const r2 = runHook(repo, { ledger, state, sessionId: 'unscan' });
     assert.strictEqual(r2.status, 0, `轮2 退出码应为 0：${r2.stderr}`);
@@ -439,6 +448,7 @@ describe('session-audit-hook · 落点与真跑', () => {
     assert.deepStrictEqual(bypasses(ledger)[0].evidence, [key]);
     const st2 = JSON.parse(fs.readFileSync(path.join(state, 'unscan.json'), 'utf8'));
     assert.deepStrictEqual(st2.pending, [key]);
+    assert.notStrictEqual(st2.since, since1, '账本读成后才推进 since（unscanned 那轮冻着）');
   });
 
   it('⑪ 真跑 · 写出的事件已脱敏（读回自证）', () => {

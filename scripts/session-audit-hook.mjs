@@ -190,7 +190,13 @@ function main() {
   });
   // `since` 照常推进（窗口只管「本轮新落地什么」），未补记的产出靠 pending 跨轮带走——
   // 两者分开是这次修复的要点：把窗口拉长会让同一批 commit 反复报警，把产出存下来才对。
-  const next = { since: now, reminded: prev.reminded, pending: result.pending || [] };
+  // 例外：账本没读成（unscanned）时**不要推进 since**。pending 已保住本轮键，冻窗口是双保险——
+  // 账本恢复后 git 窗口仍能看见那批 commit（指挥官 round-1 方案；审官原文「或等价地不要推进窗口」）。
+  const next = {
+    since: result.verdict === 'unscanned' ? since : now,
+    reminded: prev.reminded,
+    pending: result.pending || [],
+  };
 
   if (result.verdict === 'missing') {
     // 写前必过 redact：detail 里有 commit subject（人写的自由文本，最可能夹带凭据），
