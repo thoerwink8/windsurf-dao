@@ -639,7 +639,8 @@ export function isCiEnv(env = process.env) {
 }
 
 export function orcaHelpAvailable(spawn = spawnSync) {
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
+  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
+  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
     const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);

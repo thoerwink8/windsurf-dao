@@ -63,15 +63,21 @@ async function cliInProc(args, env) {
 const ROUTING_LOAD = S_LOAD.then(m => m.loadRouting());
 
 // async-launch：dispatch 热路只受理，拒派/失败落 <id>.out.json。等执行体结果落盘。
-function waitForOutJson(resultPath, { timeoutMs = 60000, stepMs = 250 } = {}) {
+// #984：timeoutMs / now / sleep 可注入。默认仍是 60s——#565 真派工等 <id>.out.json 不传 timeoutMs，
+// 短超时只在假钟用例里传入，不许把生产默认砍到 5s。
+function waitForOutJson(resultPath, { timeoutMs = 60000, stepMs = 250, now = Date.now, sleep } = {}) {
   if (!resultPath) return null;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const clock = typeof now === 'function' ? now : Date.now;
+  const nap = typeof sleep === 'function'
+    ? sleep
+    : (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  const deadline = clock() + timeoutMs;
+  while (clock() < deadline) {
     try {
       if (fs.existsSync(resultPath)) return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     } catch { /* 写一半的瞬态，下一轮再读 */ }
-    const wait = Math.min(stepMs, Math.max(0, deadline - Date.now()));
-    if (wait > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+    const wait = Math.min(stepMs, Math.max(0, deadline - clock()));
+    if (wait > 0) nap(wait);
   }
   return null;
 }

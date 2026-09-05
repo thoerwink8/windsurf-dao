@@ -594,4 +594,26 @@ describe('dao 派工硬闸', () => {
       assert.ok(/#611/.test(skill) && /dispatch --help/.test(skill) && !/能切 \+ 块数/.test(skill), 'skill 只留指针不复制判据全文');
     });
   });
+
+  it('#984：dispatch --dry-run 不打网', async (t) => {
+    const dry = spawnSync(process.execPath, [CLI,
+      'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      '--confirm', '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run',
+    ], { encoding: 'utf8', cwd: REPO });
+    let p = {};
+    try { p = JSON.parse((dry.stdout || '').trim().split(/\r?\n/).pop()); } catch { p = { raw: dry.stdout }; }
+    await t.test('dry-run 退出 0', () => {
+      assert.ok(dry.status === 0 && p.ok === true && p.dryRun === true, 'dry-run 退出 0  →  ' + JSON.stringify(p).slice(0, 300));
+    });
+    await t.test('dry-run 声明 skipped，不假装探过', () => {
+      assert.ok(p.preflight && p.preflight.skipped === true && /dry-run/.test(String(p.preflight.why || (p.preflight.reasons || []).join(','))),
+        'dry-run 不探网  →  ' + JSON.stringify(p.preflight));
+    });
+    await t.test('dao.mjs dry-run 默认不调 preflightWorkerSlate（要预览加 --preflight）', () => {
+      const src = fs.readFileSync(CLI, 'utf8');
+      const dryFn = src.slice(src.indexOf('if (args.dryRun) {'), src.indexOf('const queueDir'));
+      assert.ok(/dry-run 默认不探/.test(dryFn) && /args\.preflight === true/.test(dryFn),
+        'dry-run 默认不探、显式 --preflight 才探  →  ' + dryFn.slice(0, 280));
+    });
+  });
 });
