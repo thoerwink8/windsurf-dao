@@ -117,8 +117,16 @@ export function judgeAgentRoute({ policy, model, provider } = {}) {
   const providerId = String(provider || '').trim();
   let family = null;
   let via = null;
+  // 最长前缀优先（#884 审官 P1#1）：命中即停会让结果跟着 JSON 里的书写顺序走——
+  // 同时登记 "gpt-" 和 "gpt-5.6-" 时谁写在前面谁赢，而书写顺序不是任何人拍过的板。
+  // 取最长的一条 = 最具体的那条拍板，与顺序无关。
+  let hitPrefix = '';
   for (const [prefix, fam] of Object.entries(m.familyByModelPrefix || {})) {
-    if (modelId && modelId.startsWith(prefix)) { family = fam; via = `模型前缀 ${prefix}`; break; }
+    if (!modelId || !prefix || !modelId.startsWith(prefix)) continue;
+    if (prefix.length <= hitPrefix.length) continue;
+    hitPrefix = prefix;
+    family = fam;
+    via = `模型前缀 ${prefix}`;
   }
   if (!family && providerId && m.familyByProvider) {
     const hit = m.familyByProvider[providerId];
@@ -237,7 +245,11 @@ export function createMirasimBinding({ runtime, policy } = {}) {
       const workdir = String(spec.workdir || '').trim();
       const prompt = String(spec.prompt || '');
       if (!workdir || !prompt) return { ok: false, executor: 'mirasim', error: 'mirasim 起会话要 workdir 和 prompt（任务书）' };
-      const started = await rt.startSession({ agent: route.agent, workdir, prompt });
+      // #884 审官 P1#2：model 在上一行算出来却不往下传 = 服务端永远收不到具体模型，
+      // 而回执里的 daoModel 只是同一个变量抄了一遍，证明不了「发过」。
+      // 传的是 dao 的 model id；0.0.282 认不认这个覆盖是 #880 卡 C 登记的「没查成」，
+      // 本层不替它猜——runtime 只在有值时才把它放进帧里。
+      const started = await rt.startSession({ agent: route.agent, workdir, prompt, model: spec.model || undefined });
       return {
         ok: true,
         executor: 'mirasim',
@@ -247,8 +259,8 @@ export function createMirasimBinding({ runtime, policy } = {}) {
         agent: route.agent,
         family: route.family,
         leg: route.leg,
-        // dao 的 --model 在这条路上选的是「哪一族、哪个执行体 agent」，
-        // 不是上游那个具体模型 id——具体模型由执行体自己的配置决定（见 PR 正文「没查成」）。
+        // dao 的 --model 既定族/执行体 agent，也随帧发给服务端（见上面 startSession 的 model）。
+        // 这个字段只是回执上抄的一份：证明「发过」的是 startSession 的入参，不是它。
         daoModel: spec.model ?? null,
         native: started,
       };

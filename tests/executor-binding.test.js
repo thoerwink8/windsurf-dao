@@ -19,6 +19,18 @@ const LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'executor-binding.m
 // 只为读 PINNED_VERSION：判别用例要证明「策略钉的版本 ≠ 库内默认」，不能自己抄一份 0.0.282
 const RUNTIME_LIB = 'file://' + path.resolve(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 const ROUTING_JSON = path.resolve(ROOT, 'docs', 'model-routing.json');
+const ROUTING_LIB = require('node:url').pathToFileURL(path.resolve(ROOT, 'scripts', 'lib', 'model-routing-json.mjs')).href;
+
+// 真表里那个模型的 provider —— 判别用例一律从这里取，不许手打。
+// #884 审官 P1#1 的洞就是被手打的常量盖住的：真表里 gpt-5.6-luna 落在 gw（网关落地通道），
+// 而用例手打了 provider:'gpt'，于是「落地通道被当成厂商族」这件事测不出来，测试还全绿。
+let _models = null;
+async function realProvider(id) {
+  if (!_models) _models = (await import(ROUTING_LIB)).loadRoutingPolicy().models;
+  const hit = _models.find(m => m && m.id === id);
+  assert.ok(hit, `真表里没有模型 ${id}——本条等于没查（零样本不许冒充「查过没事」）`);
+  return hit.provider;
+}
 
 // 策略夹具：形状照 docs/model-routing.json 的「执行体」节抄
 function policyDoc(over = {}) {
@@ -105,15 +117,14 @@ describe('执行体策略读取', () => {
     assert.equal(p.ok, true, p.error || '');
     const n = Object.keys(p.mirasim.agentRoutes).length;
     assert.ok(n > 0, '真表里 agentRoutes 一条都没有 = 本次等于没查');
-    // #880 拍板的三条腿：claude 云端、gpt 云端、pi 直烧网关池
+    // #880 拍板的腿：claude 云端 relay、pi 直烧网关池。provider 全从真表查（见 realProvider）。
+    // gpt 那条挪进了下面「族路由按模型族」——它今天还差一行拍板，不该混在本条里装绿。
     assert.deepEqual(
-      S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: 'claude' }),
+      S.judgeAgentRoute({ policy: p, model: 'claude-opus', provider: await realProvider('claude-opus') }),
       { ok: true, family: 'claude', agent: 'claude', leg: 'relay', via: 'provider claude', error: null },
     );
-    assert.equal(S.judgeAgentRoute({ policy: p, model: 'gpt-5.6-luna', provider: 'gpt' }).agent, 'codex');
-    assert.equal(S.judgeAgentRoute({ policy: p, model: 'gpt-5.6-luna', provider: 'gpt' }).leg, 'relay');
-    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: 'gw' }).agent, 'pi');
-    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: 'gw' }).leg, 'direct');
+    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).agent, 'pi');
+    assert.equal(S.judgeAgentRoute({ policy: p, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).leg, 'direct');
   });
 });
 
@@ -630,5 +641,133 @@ describe('mirasim 会话发的是 mirasim 任务书（#884 P1，三轮）', () =
     assert.equal(out.verb, 'worker-start', '判据要认得出是哪个动词在拒');
     assert.equal(out.specGiven, true);
     assert.equal(r.status, 1);
+  });
+});
+
+// #884 审官 P1（四轮）：族路由按模型族认，且最长前缀赢。
+//
+// 四轮实咬：真表里 gpt-5.6-luna 的 provider 是 gw——那是网关**落地通道**，不是厂商族，
+// 于是它被送进 pi 直连腿，而不是 agentRoutes.gpt 声明的 codex/relay。
+// 落地通道不该决定厂商族，模型族必须优先；而模型族表一旦有多条前缀命中同一个 id，
+// 「命中即停」就等于让 JSON 的书写顺序替人拍板。
+describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () => {
+  it('两条前缀都命中时取最长的那条，与 JSON 书写顺序无关', async () => {
+    const S = await import(LIB);
+    // 同一份前缀表写两种顺序：命中即停的写法会跟着顺序变，最长前缀不会。
+    const forward = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-': 'pi', 'gpt-5.6-': 'gpt' } }));
+    const reverse = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-5.6-': 'gpt', 'gpt-': 'pi' } }));
+    for (const [order, p] of [['正序', forward], ['倒序', reverse]]) {
+      const r = S.judgeAgentRoute({ policy: p, model: 'gpt-5.6-luna', provider: 'gw' });
+      assert.equal(r.family, 'gpt', order + '时落到了 ' + r.family + '——书写顺序不许决定路由');
+      assert.equal(r.via, '模型前缀 gpt-5.6-', order + '时报的 via 是 ' + r.via);
+    }
+    // 短前缀单独在时照旧生效：证明上面赢的是「更长」，不是「gpt- 这条被忽略了」。
+    const onlyShort = S.readExecutorPolicy(policyDoc({ 模型前缀族: { 'gpt-': 'pi' } }));
+    assert.equal(S.judgeAgentRoute({ policy: onlyShort, model: 'gpt-5.6-luna', provider: 'gw' }).family, 'pi');
+  });
+
+  // 判据分两半，因为今天只有一半在本 PR 手里：
+  //   数据半边（docs/model-routing.json 加一行 "gpt-": "gpt"）属于改规则，等人拍板，本 PR 不动；
+  //   代码半边（模型族优先 + 最长前缀）已经就位，这里用「真表 + 那一行」证明它就位。
+  it('真表 + 待拍板的 "gpt-" 一行 → gpt-5.6-luna 走 gpt/codex/relay（代码已就位，只差那一行）', async () => {
+    const S = await import(LIB);
+    const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
+    const provider = await realProvider('gpt-5.6-luna');
+    assert.equal(provider, 'gw', '真表里它已经不落 gw 了——本条的前提变了，重判');
+
+    // 先钉住今天的数据缺口：真表的「模型前缀族」里没有任何一条能命中 gpt-5.6-luna。
+    // 拍板加上那一行之后本条会红——那正是提醒：删掉这一段，把下面改成直接读真表断言。
+    const pNow = S.readExecutorPolicy(doc);
+    const matched = Object.keys(pNow.mirasim.familyByModelPrefix).filter(k => 'gpt-5.6-luna'.startsWith(k));
+    assert.deepEqual(matched, [], '真表已登记 gpt 前缀 → 本条到期：改成直接读真表，别再垫夹具');
+
+    // 再证明代码这边已经就位。
+    const doc2 = JSON.parse(JSON.stringify(doc));
+    doc2.执行体.mirasim.模型前缀族['gpt-'] = 'gpt';
+    const p2 = S.readExecutorPolicy(doc2);
+    const r = S.judgeAgentRoute({ policy: p2, model: 'gpt-5.6-luna', provider });
+    assert.equal(r.family, 'gpt');
+    assert.equal(r.agent, 'codex');
+    assert.equal(r.leg, 'relay');
+    assert.match(r.via, /模型前缀/, 'via 还报 provider = 模型族没赢过落地通道');
+    // 同表里别的模型不受牵连（证明这一行只动 gpt 族，不是把 gw 整条改了）
+    assert.equal(S.judgeAgentRoute({ policy: p2, model: 'grok-4.6', provider: await realProvider('grok-4.6') }).agent, 'pi');
+    assert.equal(S.judgeAgentRoute({ policy: p2, model: 'kimi-k3', provider: await realProvider('kimi-k3') }).agent, 'kimi');
+  });
+});
+
+// #884 审官 P1#2（四轮）：workerStart 算出了 model 却只把 {agent,workdir,prompt} 交给 runtime，
+// 服务端因此永远收不到具体模型；而回执里的 daoModel 是事后抄的同一个变量，证明不了送达。
+// 判别力必须落在「假运行时**捕获到的入参**」上——断回执字段的用例在漏传时照样是绿的，
+// 那就是「执行到这行了」冒充「读回来的事实」。
+describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', () => {
+  it('workerStart：runtime 捕获到的入参里带着 model', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', model: 'claude-opus', provider: 'claude' });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession.length, 1);
+    assert.equal(rt.calls.startSession[0].model, 'claude-opus', 'runtime 没收到 model = 服务端收不到');
+    assert.equal(rt.calls.startSession[0].agent, 'claude', '族路由的结果照旧要传');
+  });
+
+  it('dispatchOne 那条路上 model 同样到得了 runtime', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.dispatchOne({
+      repo: '/repo', branch: 'dao-884', prompt: '任务书', model: 'claude-opus', provider: 'claude',
+    });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession.length, 1);
+    assert.equal(rt.calls.startSession[0].model, 'claude-opus', 'dispatchOne 自己那条路上又丢了一次');
+  });
+
+  it('没给 model 时不往帧里塞空串（族由 provider 认，model 缺就是缺）', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', provider: 'claude' });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession[0].model, undefined, '空串会被 runtime 当成有值塞进帧里');
+  });
+});
+
+// #884 审官 P1#3（四轮）：mirasim 的 worker-start 少了 dispatch 那道注入闸，
+// 于是超长 --spec 让 buildSoldierInject 的异常直接甩成 Node 栈：stdout 空、退出 1、
+// 用户看到的是 at cmdWorkerStartMirasim。公开 CLI 不许这样报错。
+describe('worker-start --executor mirasim 超长 --spec 结构化拒派（#884 P1#3，四轮）', () => {
+  const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
+  // 士兵注入上限 500 字节；中文 3 字节 × 300 = 900，必定超限且与模板长度无关。
+  const LONG = '长'.repeat(300);
+  // 端口钉一个没人监听的：万一闸放行，也停在读令牌那一步，不会真去起会话烧额度。
+  const run = (extra) => spawnSync(process.execPath, [DAO, 'worker-start', ...extra], {
+    encoding: 'utf8', timeout: 60000, cwd: ROOT,
+    env: { ...process.env, MIRASIM_PORT: '59999' },
+  });
+  const base = ['--executor', 'mirasim', '--worktree', ROOT, '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--confirm'];
+
+  it('超长 --spec → JSON 拒派 + 退出 1，绝不甩 Node 栈', () => {
+    const r = run([...base, '--spec', LONG]);
+    assert.doesNotMatch(String(r.stderr || ''), /at cmdWorkerStartMirasim/, '还在甩 node 栈 = P1#3 没修');
+    assert.doesNotMatch(String(r.stderr || ''), /^Error: 注入/m, 'stderr 出现未捕获异常 = 没走 fail()');
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false);
+    assert.equal(out.executor, 'mirasim');
+    assert.match(out.error, /超过上限/);
+    assert.ok(out.injectGate && out.injectGate.ok === false, '回执要点名是注入闸拒的');
+    assert.equal(r.status, 1, '拒派要非零退出，否则脚本调用方看不出被拒');
+  });
+
+  it('正常长度的 --spec 过得了这道闸（证明拒的是超长，不是把 worker-start 整条堵死）', () => {
+    const r = run([...base, '--spec', '#884 P1#3 判别用例：证明正常 spec 没被误伤']);
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.ok, false, '端口 59999 没人监听，本来就该失败——本条要的是「失败在别处」');
+    assert.doesNotMatch(String(out.error || ''), /超过上限/, '正常 spec 被注入闸误伤了');
+    assert.equal(out.executor, 'mirasim', '错误要从 mirasim 路径里出来，说明闸确实放行了');
   });
 });

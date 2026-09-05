@@ -3483,6 +3483,12 @@ async function cmdWorkerStartMirasim(args, routing, { policy }) {
   // 同 dispatch：--task 是 orca 语义，出现就拒，不许静默丢（#884 审官 P1，三轮）。
   assertMirasimNoTask(args, 'worker-start');
   if (!args.spec) fail('mirasim worker-start 要 --spec（任务书）');
+  // #884 审官 P1#3：这道闸 dispatch 有、worker-start 漏了，于是超长 --spec 把
+  // buildSoldierInject 的异常直接甩成 Node 栈（stdout 空、退出 1）——公开 CLI 不许这样报错。
+  // 闸和渲染必须用同一本任务书（executor: 'mirasim'），否则量的不是要发的东西。
+  // 放在消歧门之前：注定要拒的单不必先打一次 gh。
+  const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
+  if (!injectGate.ok) fail(injectGate.error, { injectGate, executor: 'mirasim' });
   const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   const route = mirasimRouteOrFail(args, routing, policy);
