@@ -265,18 +265,20 @@ describe('兜底与权限：两样最容易被顺手拆掉的东西', () => {
     }
   });
 
-  // 2026-09-05 实测：pkill 掉桥之后，仓上留着一个活 hook（子进程没收到 SIGTERM 就没机会删）。
-  // GitHub 一个仓最多 20 个 hook，而单元是 Restart=always——每硬重启一次多留一个，
-  // 攒满了桥就再也建不上，症状是「起来了但一个事件都收不到」，且没有任何东西会报错。
-  it('单元必须让子进程也收到 SIGTERM，否则每次重启在仓上漏一个 hook', () => {
+  // 2026-09-05 实测：pkill 掉桥之后，子进程 `gh webhook forward` **活了下来**，
+  // 连接还在、它建的 hook 还挂在仓上。GitHub 一个仓上限 20 个 hook，而单元是 Restart=always，
+  // 这种孤儿每积一个占一个名额；占满之后桥起得来、心跳照跳，就是一个事件都收不到——无声。
+  // （反证也测了：两个进程都 SIGKILL 时 hook 自己就没了，连接一断 GitHub 那边自己收摊。
+  //   所以要防的是孤儿，不是硬杀——别照直觉写成「硬杀会漏」。）
+  it('单元必须让整个 cgroup 都收到 SIGTERM，否则 forward 变孤儿、hook 占着名额不放', () => {
     const t = fs.readFileSync(path.join(ROOT, 'host', 'machine', 'systemd', 'dao-gh-events.service'), 'utf8');
     const mode = (t.match(/^KillMode=(.+)$/m) || [])[1];
-    assert.ok(mode, '没写 KillMode——默认值虽然对，但这条的代价是隐性的，要写出来');
+    assert.ok(mode, '没写 KillMode——默认值虽然对，但改错的代价是隐性的，要写出来');
     assert.equal(mode.trim(), 'control-group',
-      'mixed 只把 SIGTERM 给主进程，gh webhook forward 会被 SIGKILL，来不及删自己建的 hook');
+      'mixed 只把 SIGTERM 给主进程，gh webhook forward 会活下来变孤儿，连接和 hook 都还在');
   });
 
-  it('硬杀漏下的 hook，下次启动要扫掉——只扫 forwarder 那种，别的一根汗毛不许碰', async () => {
+  it('孤儿留下的 hook，下次启动要扫掉——只扫 forwarder 那种，别的一根汗毛不许碰', async () => {
     const B = await import(toUrl(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs')));
     const hooks = [
       { id: 1, config: { url: 'https://webhook-forwarder.github.com/hook' } },

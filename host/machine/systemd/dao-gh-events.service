@@ -50,13 +50,16 @@ ReadWritePaths=/home/orca/.dao /home/orca/.cache
 ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/gh-event-bridge.mjs
 Restart=always
 RestartSec=5
-# KillMode 必须是 control-group（默认值，这里写出来是因为写错的代价是隐性的）：
-# 桥的子进程 `gh webhook forward` 收到 SIGTERM 才会把自己在仓上建的 hook 删掉。
-# 用 mixed 的话只有主进程收得到 SIGTERM，子进程等超时被 SIGKILL——hook 留在仓上，
-# 而 Restart=always 每重启一次就多留一个。GitHub 一个仓最多 20 个 hook，攒满了桥就再也建不上。
-# 桥启动时还会顺手扫掉遗留的 forwarder hook（硬杀/断电那种没机会清理的情况）。
+# KillMode 必须是 control-group（这正好是默认值，写出来是因为改错的代价是隐性的）：
+# 要停的其实是**两个**进程——桥自己，和它 spawn 的 `gh webhook forward`。
+# 用 mixed 的话 SIGTERM 只给主进程，子进程活着不走：连接还在、它建的 hook 还挂在仓上。
+# 2026-09-05 实测就撞过一次（手跑调试时 pkill 了桥，事后 hook 还在）。
+# 配上 Restart=always，这种孤儿每积一个就占掉一个 hook 名额，GitHub 一个仓上限 20 个，
+# 占满之后桥起得来、心跳照跳，就是一个事件都收不到——无声。
+# （反过来，真把两个进程都 SIGKILL 掉时 hook 会自己消失：连接一断 GitHub 那边自己收摊。
+#   所以要防的是孤儿，不是硬杀。桥启动时还会再扫一遍兜底。）
 KillMode=control-group
-# 停的时候要等子进程把那次 hook 删完，别急着 SIGKILL。
+# 停的时候等子进程把那次 hook 删完再走，别急着 SIGKILL。
 TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal

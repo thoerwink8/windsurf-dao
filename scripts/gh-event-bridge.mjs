@@ -121,10 +121,15 @@ function cmdStatus(argv) {
   process.exit(v.state === 'ok' ? 0 : v.state === 'red' ? 1 : 2);
 }
 
-// `gh webhook forward` 建的 hook 长这样。它退出时会自己删掉，但那要它收得到 SIGTERM——
-// 硬杀 / OOM / 断电就没机会清，hook 留在仓上。而 Restart=always 每重启一次多留一个，
-// GitHub 一个仓最多 20 个，攒满了桥就再也建不上（症状是「起来了但一个事件都收不到」）。
-// 所以每次启动先扫一遍：还挂在仓上的 forwarder hook 一定是上一条命的遗物，删掉。
+// 启动时扫掉遗留的 forwarder hook。两条实测（2026-09-05，别照直觉推）：
+//   · 只 SIGTERM 桥、没管子进程 → **子进程活下来了**，连接还在、hook 还在仓上。
+//     这是真见过的那次（手跑调试时 pkill 桥，事后 `gh api .../hooks` 里还挂着一个）。
+//   · SIGKILL 桥和子进程 → hook **自己没了**。连接一断，GitHub 那边的 forwarder 自己收摊，
+//     不需要 gh 来删。所以「硬杀会漏 hook」这个直觉是错的。
+// 也就是说真正会漏的是**孤儿子进程**。systemd 那边用 KillMode=control-group 堵住了
+// （整个 cgroup 一起收 SIGTERM），这个扫描是给手跑调试、以及任何绕过 cgroup 的杀法兜底。
+// 代价一次 API 调用，换掉的是一个无声故障：仓上 hook 攒到 20 个上限之后，
+// 桥起得来、心跳照跳，就是一个事件都收不到。
 export const FORWARDER_HOST = 'webhook-forwarder.github.com';
 
 export function staleForwarderHooks(hooks) {
