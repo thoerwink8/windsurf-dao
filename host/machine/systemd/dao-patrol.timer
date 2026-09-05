@@ -1,0 +1,29 @@
+# /etc/systemd/system/dao-patrol.timer
+#
+# 6 小时一轮（00:23 / 06:23 / 12:23 / 18:23），一天 4 次。定这个数的三条理由：
+#
+# 1. 巡检找的是**攒出来的**问题——规矩和实现慢慢对不上、检查的前提悄悄变了——
+#    这类东西以天计，不是实时故障。求快只会一遍遍读同一份没变的仓。
+# 2. 每一轮是一整个模型会话，不是一条 grep。原来跑在本机的那版每 10 分钟一轮（一天 144 次），
+#    半天堆了几十个没人收的会话，用户手工删掉——频率过头本身就是那次事故的一半原因。
+# 3. **产出速度不能超过帅位消化速度**：发现落 docs/observations/，收件箱堆到 5 条就变成硬性
+#    指令占住帅位一整轮。一天 4 次已经在这条线上，再快就是给自己制造待办。
+#
+# 挂 :23 分：整点和 :00/:07 都已经被别的定时任务占了，错开省得抢；
+# 而且和 20 分钟一轮的指挥官错峰，少撞同一个状态文件。
+# 装法见同目录 dao-patrol.service 文件头。
+
+[Unit]
+Description=每 6 小时唤一次机制巡检
+
+[Timer]
+# OnCalendar 是必需的，不是冗余：只有 OnBootSec/OnUnitActiveSec 这种单调时钟的 timer，
+# 停掉再起会进 active (elapsed) 死态——显示 active+enabled，下一次触发却是 n/a，永不再跑，
+# 而且没有任何东西报警（2026-09-05 dao-agent-stall 就这么无声停了半天）。
+# 挂一个墙钟点位就永远有下一次。tests/timer-armed.test.js 与 server-check 的第 ⑱ 条守着它。
+OnCalendar=*-*-* 00/6:23:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

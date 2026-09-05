@@ -27,12 +27,12 @@ const SCRIPT_ROOT = resolve(dirname(HERE), '..');
 const say = (s) => process.stdout.write(s + '\n');
 
 function git(args, cwd) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const r = spawnSync('git', args, { windowsHide: true, cwd, encoding: 'utf8' });
   return { status: r.status ?? 1, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
 function orcaJson(args) {
-  const r = spawnSync('orca', args, { encoding: 'utf8', timeout: 30000 });
+  const r = spawnSync('orca', args, { windowsHide: true, encoding: 'utf8', timeout: 30000 });
   if (r.error) return { ok: false, error: `spawn 失败：${r.error.code || r.error.message}` };
   const text = String(r.stdout || '').trim();
   const start = text.indexOf('{');

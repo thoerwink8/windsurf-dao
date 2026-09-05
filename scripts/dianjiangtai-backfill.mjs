@@ -33,7 +33,7 @@ function usageAndExit(msg) {
 }
 
 function runGh(args) {
-  const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.error) throw new Error(`无法运行 gh：${r.error.message}`);
   if (r.status !== 0) {
     throw new Error(`gh 失败：${String(r.stderr || r.stdout || '').trim() || r.status}`);

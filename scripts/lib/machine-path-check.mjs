@@ -155,7 +155,7 @@ function walkDir(dir, prefix, acc) {
 }
 
 function gitToplevel(root) {
-  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: root });
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { windowsHide: true, encoding: 'utf8', cwd: root });
   if (r.status !== 0) return null;
   return String(r.stdout || '').trim().replace(/\\/g, '/');
 }
@@ -166,7 +166,7 @@ function listTracked(root, tracked) {
   const top = gitToplevel(root);
   const here = resolve(root).replace(/\\/g, '/');
   if (top && top.toLowerCase() === here.toLowerCase()) {
-    const r = spawnSync('git', ['ls-files'], { encoding: 'utf8', cwd: root });
+    const r = spawnSync('git', ['ls-files'], { windowsHide: true, encoding: 'utf8', cwd: root });
     if (r.status === 0) return { files: String(r.stdout || '').split(/\r?\n/).filter(Boolean) };
   }
   return { files: walkDir(root, '', []) };

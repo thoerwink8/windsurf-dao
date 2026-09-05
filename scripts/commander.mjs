@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -26,15 +26,25 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
-import { reviewPendingDir, listReviewPending } from './lib/dispatch/review-pending.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest,
+  reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
+  REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
+} from './lib/dispatch/review-pending.mjs';
+import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
+import { attributedIssueNumber } from './lib/close-issue.mjs';
+import {
+  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
 } from './lib/commander-core.mjs';
+import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
-import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import {
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd,
+} from './lib/commander-verbs.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -46,7 +56,10 @@ const STATE_PATH = join(STATE_DIR, 'state.json');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || join(homedir(), '.agent-stall-watch.json');
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
-const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/home/orca/windsurf-dao';
+const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projects/windsurf-dao';
+// 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
+// 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
+const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
 const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
@@ -64,7 +77,7 @@ function saveState(state) {
 
 // ── 眼睛：各面采集，每面标 scanned 或 unscanned（没查成 ≠ 空）──
 function runGh(args, timeout = 45000) {
-  const r = spawnSync(ghExecutable(), args, { encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  const r = spawnSync(ghExecutable(), args, { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
   if (r.error) return { ok: false, error: `gh 不可用：${r.error.message}` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `gh exit ${r.status}`).trim().slice(0, 240) };
   return { ok: true, out: String(r.stdout || '') };
@@ -77,7 +90,77 @@ function scanGithub() {
   if (!gh.ok) return { scanned: false, error: gh.error };
   const parsed = parseGithubGraphqlResponse(gh.out);
   if (!parsed.ok) return { scanned: false, error: parsed.error };
-  return { scanned: true, issues: parsed.issues, prs: parsed.prs };
+  return {
+    scanned: true, issues: parsed.issues, prs: parsed.prs,
+    attributedIssues: scanAttributedIssues(parsed.issues, parsed.prs),
+  };
+}
+
+/**
+ * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为查它们的 reviewer/ 标签。
+ *
+ * 主查询是 `issues(states: OPEN)`，所以单子一关标签就查不到。2026-09-05 实咬：
+ * #945/#947/#909 的署名单 #833/#815/#889 都关了，标签明明带着 reviewer/gpt-5.6-luna，
+ * 指挥官每轮报「不猜审官」，三张交卷可合的 PR 无限期挂着。**单子关了不等于 PR 不用审。**
+ *
+ * 为什么不把主查询改成 OPEN+CLOSED：那张表按 UPDATED_AT 取前 100 条，掺进关闭单会把
+ * open 单挤出视野——修一个洞捅一个更大的。这里改成按需精确取，条数上限就是 open PR 数。
+ *
+ * 取回来的单**单独放一格**，绝不并进 issues：那是派工候选表，混进已关闭的「已消歧」单
+ * 会被当成新活派出去。取不到就留空，让上游照旧说「不猜审官」——查不到 ≠ 猜一个。
+ */
+function scanAttributedIssues(issues, prs) {
+  const have = new Set((issues || []).map((i) => i && i.number).filter(Boolean));
+  const want = new Set();
+  for (const pr of prs || []) {
+    const n = attributedIssueNumber(pr);
+    if (n != null && !have.has(n)) want.add(n);
+  }
+  const out = [];
+  for (const n of want) {
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    try {
+      const j = JSON.parse(r.out || '{}');
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+    } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
+  }
+  return out;
+}
+
+/**
+ * 别的仓有没有事挂着。**只感知，不派工**——派工链（worktree/终端/审官）只在本仓有。
+ *
+ * 2026-09-05：用户把 bot 的仓授权从 1 个扩到 6 个。在那之前帅位对别的仓完全无感：
+ * ai-gateway-stack 挂着 3 条 open issue 而它是本仓派工链的上游，网关坏了整条链跟着坏。
+ * 管辖清单不另外维护——**授权范围本身就是那张清单**：授权加一个仓这里自动多一个，
+ * 撤销自动少一个，不会像手写清单那样过期。
+ */
+function scanOtherRepos() {
+  const owner = String(REPO || '').split('/')[0];
+  if (!owner) return { scanned: false, error: 'REPO 里读不出 owner——没查成' };
+  const grab = (kind) => {
+    const gh = runGh(['search', kind, '--owner', owner, '--state', 'open',
+      '--limit', '100', '--json', 'repository,number,title'], 60000);
+    if (!gh.ok) return null;
+    try { const v = JSON.parse(gh.out); return Array.isArray(v) ? v : null; } catch { return null; }
+  };
+  const issues = grab('issues');
+  const prs = grab('prs');
+  if (issues == null || prs == null) return { scanned: false, error: '跨仓 search 没查成（授权或网络）' };
+  const mine = String(REPO);
+  const byRepo = new Map();
+  for (const [kind, list] of [['issue', issues], ['pr', prs]]) {
+    for (const x of list) {
+      const full = x?.repository?.nameWithOwner || x?.repository?.name;
+      if (!full || full === mine || String(full).endsWith('/' + mine.split('/')[1])) continue;
+      if (!byRepo.has(full)) byRepo.set(full, { repo: full, issues: 0, prs: 0, samples: [] });
+      const e = byRepo.get(full);
+      if (kind === 'issue') e.issues += 1; else e.prs += 1;
+      if (e.samples.length < 3) e.samples.push(`#${x.number} ${String(x.title || '').slice(0, 50)}`);
+    }
+  }
+  return { scanned: true, repos: [...byRepo.values()] };
 }
 
 function scanOrca() {
@@ -108,8 +191,10 @@ function scanPrReviews(prs) {
   let anyFail = null;
   for (const pr of prs || []) {
     if (!pr || pr.isDraft) continue; // draft 还没交卷，不抓
+    // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
+    // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
     const gh = runGh(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
-      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at}]'], 30000);
+      '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at, commit_id: .commit_id}]'], 30000);
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
       const arr = JSON.parse(gh.out || '[]');
@@ -163,34 +248,68 @@ function loadHealthRedIds(models) {
   }
 }
 
+/**
+ * 选型里「写码」责任的首选在役模型 id——返工派不出原模型时的顶班人选。
+ * 只取顺位最小且未禁用的一条；读不到返回 null（调用侧按「没有顶班人选」走，不猜）。
+ */
+function pickDefaultWorkerModel(raw) {
+  const list = raw && raw['工人'] && raw['工人']['写码'] && Array.isArray(raw['工人']['写码']['模型'])
+    ? raw['工人']['写码']['模型'] : null;
+  if (!list) return null;
+  const live = list
+    .filter((m) => m && m.id && m['禁用'] !== true && typeof m['顺位'] === 'number')
+    .sort((a, b) => a['顺位'] - b['顺位']);
+  return live.length ? String(live[0].id) : null;
+}
+
 // 完整态势（scan 子命令与 act 共用）。
 function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
   const reviewPending = scanReviewPending();
+  const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
+  let routingModelRecords = null;
+  let reviewerOrder = null;
+  let workerOrder = null;
   let healthRedModels = [];
+  let defaultWorkerModel = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
+    routingModelRecords = models;
+    reviewerOrder = reviewerSelectOrder(raw);
+    workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
+    defaultWorkerModel = pickDefaultWorkerModel(raw);
   } catch {
     routingModels = null;
+    routingModelRecords = null;
+    reviewerOrder = null;
+    workerOrder = null;
     healthRedModels = [];
+    defaultWorkerModel = null;
   }
   const breakerIngest = ingestBreakerSignals();
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall,
+    github, orca, reviewPending, prReviews, stall, otherRepos,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
+    reworkDispatched: (state && state.reworkDispatched) || {},
+    drainLedger: (state && state.drainLedger) || {},
+    openIssueLedger: (state && state.openIssueLedger) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
+    routingModelRecords,
+    reviewerOrder,
+    workerOrder,
     healthRedModels,
+    defaultWorkerModel,
   };
 }
 
@@ -202,7 +321,16 @@ function situationHealth(situation) {
 
 // ── 手：hub 回流（带去重）──
 function hubSay(text) {
-  const r = spawnSync('hub-say', [text], { encoding: 'utf8', timeout: 30000 });
+  // hub-say 在服务器上装在 /home/orca/bin，而 systemd/ssh 的 PATH 里没有它——
+  // 只 spawn 裸名字会 ENOENT，回流总控群整条哑掉且只在日志里留一行（2026-09-05 实咬）。
+  let r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+  if (r.error && r.error.code === 'ENOENT') {
+    for (const cand of [process.env.DAO_HUB_SAY, '/home/orca/bin/hub-say'].filter(Boolean)) {
+      if (!existsSync(cand)) continue;
+      r = spawnSync(cand, [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+      break;
+    }
+  }
   if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
   return { ok: true };
@@ -241,7 +369,15 @@ function execAction(action, { state, dryRun, log }) {
     case 'attach-reviewer': {
       // 走 blessed 路径 review-pending-drain（含归属/活性校验），一次清完队列。
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
-      return runOrShow(cmd, { dryRun, say, why: action.why });
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
+      if (action.pr != null) {
+        state.drainLedger = state.drainLedger || {};
+        const key = `pr:${action.pr}`;
+        const prev = state.drainLedger[key];
+        state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
+      }
+      return r;
     }
     case 'merge': {
       // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 合并 → 关单。
@@ -260,6 +396,10 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
+    case 'rework':
+      return dispatchRework(action, { state, dryRun, say });
+    case 'rereview':
+      return requestRereview(action, { state, dryRun, say });
     case 'wake-brain':
       return wakeBrain(action, { state, dryRun, say });
     case 'notify-hub': {
@@ -271,12 +411,101 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'escalate':
       return escalate(action, { state, dryRun, say });
+    case 'add-label':
+      return execAddLabel(action, { dryRun, say });
+    case 'retry-drain':
+      return execRetryDrain(action, { state, dryRun, say });
+    case 'open-issue':
+      return execOpenIssue(action, { state, dryRun, say });
+    case 'reap-ticket':
+      return execReapTicket(action, { state, dryRun, say });
     case 'noop':
       return { ok: true };
     default:
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+function execAddLabel(action, { dryRun, say }) {
+  const planned = planAddLabelCmd(action, { models: action.models });
+  if (!planned.ok) {
+    say(`  add-label 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  return runOrShow(planned.argv, { dryRun, say, why: action.why });
+}
+
+function execRetryDrain(action, { state, dryRun, say }) {
+  const planned = planRetryDrainCmd(action, {
+    queue: action.queue,
+    ledger: (state && state.drainLedger) || {},
+    nowMs: Date.parse(nowIso()) || 0,
+  });
+  if (!planned.ok) {
+    say(`  retry-drain 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
+  }
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  state.drainLedger = state.drainLedger || {};
+  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
+  state.drainLedger[planned.stateKey] = {
+    at: nowIso(), pr: planned.pr, tries: planned.tries,
+  };
+  return r;
+}
+
+// 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
+// 万一同号票再入队就直接从「已试 3 次」起步，一轮就 escalate。
+function execReapTicket(action, { state, dryRun, say }) {
+  const dir = reviewPendingDir({ root: ROOT });
+  const path = reviewPendingPath(dir, action.pr);
+  if (dryRun) { say(`[dry] 回收死票 ${path}`); return { ok: true, dryRun: true }; }
+  // 删之前正面核一次死活。decide 的判据是「不在开放列表里」（缺席），这里要的是「确实关了」（在场证据）——
+  // 缺席可能是查询窗口截断、可能是这一轮 API 抽风；删票不可逆，不拿在场证据不动手。
+  const st = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+  if (!st.ok) { say(`  死活没核成，不删票：PR #${action.pr}（${st.error}）`); return { ok: true, skipped: 'liveness-unscanned' }; }
+  const prState = String(st.out).trim();
+  if (prState !== 'MERGED' && prState !== 'CLOSED') {
+    say(`  PR #${action.pr} 实为 ${prState}，不是死票——不删（decide 的缺席判据这次不作数）`);
+    return { ok: true, skipped: 'still-open' };
+  }
+  let removed = false;
+  try { rmSync(path); removed = true; }
+  catch (e) { if (e?.code !== 'ENOENT') { say(`  回收死票失败：${String(e.message || e)}`); return { ok: false, error: String(e.message || e) }; } }
+  // 按 .pr 字段反查，不照抄键格式——键长什么样是 commander-verbs 的事，手打一份迟早对不上。
+  if (state && state.drainLedger) {
+    for (const [k, v] of Object.entries(state.drainLedger)) {
+      if (Number(v?.pr) === Number(action.pr)) delete state.drainLedger[k];
+    }
+  }
+  say(`  ${removed ? '回收死票' : '死票已不在'}：PR #${action.pr}`);
+  return { ok: true, removed };
+}
+
+function execOpenIssue(action, { state, dryRun, say }) {
+  ensureDir(STATE_DIR);
+  const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
+  const planned = planOpenIssueCmd({
+    ...action,
+    ledger: (state && state.openIssueLedger) || {},
+  }, { repo: REPO, bodyPath: bodyFile });
+  if (!planned.ok) {
+    say(`  open-issue 校验拒：${planned.error}`);
+    return { ok: false, error: planned.error, code: planned.code };
+  }
+  if (dryRun) {
+    say(`[dry] 转单 ${planned.title}（key=${planned.key}）\n    ${planned.argv.join(' ')}`);
+    return { ok: true, dryRun: true };
+  }
+  writeFileSync(bodyFile, planned.body, 'utf8');
+  const r = runCmd(planned.argv, 60000);
+  if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
+  const m = String(r.out).match(/\/issues\/(\d+)/);
+  state.openIssueLedger = state.openIssueLedger || {};
+  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
+  say(`  转单开了 #${m ? m[1] : '?'}`);
+  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -291,7 +520,7 @@ function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
 
 function runCmd(argv, timeout = 600000) {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  const r = spawnSync(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
   if (r.error) return { ok: false, error: `起不来：${r.error.message}` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
   return { ok: true, out: String(r.stdout || '') };
@@ -322,28 +551,40 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
  * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
+export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
+
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
+  const failedPrs = new Set(); // 返工的随附回流按 PR 号挂，不按 issue（#931）
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action.kind === 'notify-hub' && action.issue != null && failedIssues.has(String(action.issue))) {
-      log.push(`· notify-hub 略：#${action.issue} 派工没成，不发「已自动派单」`);
+    if (action.kind === 'notify-hub'
+      && ((action.issue != null && failedIssues.has(String(action.issue)))
+        || (action.pr != null && failedPrs.has(String(action.pr))))) {
+      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 派工没成，不发喜报`);
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
     const r = exec(action);
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
-    const failed = action.kind === 'dispatch' && action.issue != null
+    const failed = DISPATCHING_KINDS.has(action.kind) && action.issue != null
       && (!r || (r.ok !== true) || r.dispatchFailed === true);
     if (!failed) continue;
     failedIssues.add(String(action.issue));
+    if (action.pr != null) failedPrs.add(String(action.pr));
+    const isRework = action.kind === 'rework';
     exec({
       kind: 'escalate',
-      reason: r && r.unscanned ? 'dispatch-unscanned' : 'dispatch-failed',
+      reason: r && r.unscanned
+        ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
+        : (isRework ? 'rework-failed' : 'dispatch-failed'),
       issue: action.issue,
-      why: `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
+      ...(action.pr != null ? { pr: action.pr } : {}),
+      why: isRework
+        ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
+        : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
     });
   }
-  return { log, failedIssues: [...failedIssues] };
+  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs] };
 }
 
 /** 主线程同步睡。指挥官是 oneshot，阻塞期间本来也没别的事要做，所以不改 async 范式。
@@ -380,18 +621,175 @@ function runOrShow(argv, { dryRun, say, why }) {
   return r;
 }
 
+// ── 返工（#931，用户 2026-09-05 拍板）：审官在**当前 head** 上判红 → 直接派一个返工工人。
+// 删掉了原来的「先唤大脑翻译返工方向、送达工人终端、唤满 WAKE_LIMIT 才报帅」整层——
+// 工人判红时早已下班，大脑的方案没有接收者（补丁链层 2 落闸，见 issue #931）。
+// 审官标准本就要求红项写「文件:行号 + 现象 + 期望改法」，工人照着改即可，中间那层翻译价值可疑。
+//
+// 硬约束（都是本仓交过学费的判据）：
+//   · 注入 ≤500 字节是硬闸（#602/#619），红项**全文**塞不进任务书 —— 全文落仓外文件，注入只给指针。
+//   · 写完必须**读回自证**：读不回 / 对不上 = 没查成，不派工（半截任务书比不派更坏）。
+//   · dispatch 是**异步**的（#787）：只看退出码 = 把「受理了」当「派成了」，必须回读结果文件判三态。
+//   · 同一 PR 同一 head 只派一次：记账落 state.reworkDispatched，**尝试即记**——
+//     失败/没查成不自动重派（重派会造重复工人），改由 runActions 报帅，人来决定。
+
+/** 红项全文的仓外落点（生成物不落进自己会读的仓内范围，CLAUDE.md）。 */
+export function reworkBriefPath(action, { dir = null } = {}) {
+  return join(dir || join(STATE_DIR, 'rework'), `pr-${action.pr}-${String(action.head || '').slice(0, 8)}.md`);
+}
+
+/** 红项全文正文：原样转录，不摘要、不改写（#931 的整个理由就是「别再让 AI 翻译一遍」）。 */
+export function reworkBriefText(action) {
+  return [
+    `# 返工任务：PR #${action.pr}`,
+    '',
+    `- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`,
+    `- 当前 head 上的判红轮数：${action.redRounds}`,
+    '- 下面是审官那条 CHANGES_REQUESTED review 的**正文全文**（未摘要、未改写）：',
+    '',
+    '---',
+    '',
+    String(action.brief || ''),
+    '',
+  ].join('\n');
+}
+
+/**
+ * 落一份任务书全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。
+ * 返工和巡检共用这一把尺：注入永远只给指针，全文永远落文件，而「落了」必须是读回来对上的那种落了。
+ */
+export function writeBriefVerified({ path, text, io: fsio = null, what = '任务书' }) {
+  const writer = fsio || { mkdir: (d) => ensureDir(d), write: writeFileSync, read: readFileSync };
+  try {
+    writer.mkdir(dirname(path));
+    writer.write(path, text, 'utf8');
+  } catch (e) {
+    return { ok: false, unscanned: true, error: `${what}写不下去（${path}）：${String(e.message || e).slice(0, 160)}` };
+  }
+  let back = null;
+  try { back = writer.read(path, 'utf8'); }
+  catch (e) { return { ok: false, unscanned: true, error: `${what}写了读不回（${path}）：${String(e.message || e).slice(0, 160)}` }; }
+  if (back !== text) return { ok: false, unscanned: true, error: `${what}读回对不上（${path}）——不拿半截任务书派工` };
+  return { ok: true, path, bytes: Buffer.byteLength(text, 'utf8') };
+}
+
+/** 写红项全文 + 读回自证。写不下去 / 读不回 / 对不上 → 没查成（不派、也不当成功）。 */
+export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
+  return writeBriefVerified({
+    path: reworkBriefPath(action, { dir }), text: reworkBriefText(action), io: fsio, what: '红项全文',
+  });
+}
+
+/** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
+// 卡名/摘要按返工种类分岔。工人会把 --spec 当任务边界读（memory spec-is-read-as-task-scope），
+// 所以解冲突的单绝不能写「照审官红项逐条改」——那张 PR 上一条红都没有，工人会去找不存在的东西。
+export function reworkCardName(action) {
+  return action.kind === 'rework' && action.conflict ? `解冲突 PR #${action.pr}` : `返工 PR #${action.pr}`;
+}
+export function reworkSpec(action, briefPath) {
+  const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
+  return action.conflict
+    ? `解冲突 PR #${action.pr}：${checkout}；把 origin/master 合进来解冲突，硬边界与做法全文在 ${briefPath}，解完跑 dao-check 绿了再推。`
+    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+}
+
+/**
+ * 叫审官复审：写一张复审待办票，交给已有的 review-pending drain 去消费。
+ * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧，
+ * 这里再判一遍就是第二套判据（2026-09-05：#890/#893/#896/#905 推了新 head 后没人叫审官，挂了 10 小时）。
+ * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]（与返工共用一张记账表，键前缀区分）。
+ */
+function requestRereview(action, { state, dryRun, say }) {
+  if (!action.reviewer) {
+    const error = `PR #${action.pr} 要复审，但署名 issue 上没有 reviewer/ 标签——不猜审官`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  const dir = reviewPendingDir({ root: ROOT });
+  const ticket = {
+    kind: REVIEW_PENDING_KIND,
+    v: REVIEW_PENDING_VERSION,
+    pr: String(action.pr),
+    head: { name: null, oid: action.head || null },
+    workerWorktree: null,
+    reviewer: String(action.reviewer),
+    issue: action.issue == null ? null : String(action.issue),
+    round: 'rereview',
+    workerModel: null,
+    soldierDispatch: null,
+    error: `指挥官自动叫复审：${action.why}`,
+    ts: nowIso(),
+  };
+  if (dryRun) {
+    say(`[dry] 写复审待办 ${dir}/${action.pr}.json（${action.why}）`);
+    return { ok: true, dryRun: true };
+  }
+  const w = writeReviewPending({ dir, ticket });
+  if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
+  state.reworkDispatched = state.reworkDispatched || {};
+  // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
+  // 不记 ok——「票写出去了」不是「判定落了」，2026-09-05 就是把这两件事记成一条账，
+  // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
+  state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
+    at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
+    tries: Number(action.tries) || 1,
+  };
+  say(`  已写复审待办 ${w.path}（drain 下一轮消费）`);
+  return { ok: true, path: w.path };
+}
+
+function dispatchRework(action, { state, dryRun, say }) {
+  const written = writeReworkBrief(action);
+  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
+  const spec = reworkSpec(action, written.path);
+  // 注入字节闸先在本地过一遍：超限当场说清楚，别等后台执行体崩（dispatch 热路也会拦，这里只是早一步可读）。
+  try { buildSoldierInject({ spec, issue: action.issue }); }
+  catch (e) {
+    const error = `返工注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  // --allow-dup：底层去重按 issue 判（#759 定的，卡名不补刀，因为自动卡名会变），
+  // 而快马多张 PR 共用一个署名 issue——同轮返工 #894 会把 #899 一起挡掉，第二张红没人接（2026-09-05 实咬）。
+  // 返工这条路自己已有更准的去重：state.reworkDispatched 按 PR+head「尝试即记」（上面第 510 行），
+  // 同一 PR 同一 head 永不重派。所以这里显式放行 issue 级去重，不动通用判据。
+  const cmd = ['node', 'scripts/dao.mjs', 'dispatch',
+    '--issue', String(action.issue),
+    '--name', reworkCardName(action),
+    '--model', action.model, '--reviewer', action.reviewer,
+    '--split', 'no', '--split-reason', action.conflict ? '指挥官自动解冲突：只解冲突，不改范围外的东西' : '指挥官自动返工：照审官红项逐条改（#931）',
+    '--spec', spec, '--allow-dup', '--confirm'];
+  if (dryRun) {
+    say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
+    return { ok: true, dryRun: true };
+  }
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  const verdict = started.ok ? awaitDispatchResult(started.out, { say }) : started;
+  // 尝试即记：同一 PR 同一 head 不再自动重派（重派会造重复工人）。成没成一起记下，便于人判。
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[action.reworkKey || reworkKey(action.pr, action.head)] = {
+    at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
+    brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
+  };
+  return verdict;
+}
+
 // 大脑：起一次性 pi 会话 + 注入指针文本；记进 state.brainSessions（含 handle），
 // 由后续 act 轮回收（会话干完自行 exit；没退的到期强关，保证「进程不在」有界）。
+// action.pointer / action.title 可覆写：巡检（cmdPatrol）用同一条起会话+登记+回收的路，
+// 只换注入那句话和卡名。**不许为别的用途另写一份 start/send/登记**——回收只认 state.brainSessions，
+// 另写一套就等于造一批没人回收的孤儿会话（本机那版巡检半天堆了几十个，就是这么来的）。
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
-  const pointer = [
+  const pointer = action.pointer || [
     '你是服务器指挥官的「大脑」（一次性会话，#800）。',
     `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
     `处置目标：${action.target}（${action.why}）。`,
+    '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
     '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完打 exit 退出。',
   ].join('');
   const startCmd = ['node', 'scripts/dao.mjs', 'start', '--provider', 'gw', '--model', BRAIN_MODEL,
-    '--worktree', BRAIN_WORKTREE, '--title', '指挥官大脑'];
+    '--worktree', BRAIN_WORKTREE, '--title', action.title || '指挥官大脑'];
   if (dryRun) {
     say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}\n    然后 dao.mjs send --terminal <handle> --enter --agent pi --text "<指针>"`);
     return { ok: true, dryRun: true };
@@ -403,29 +801,366 @@ function wakeBrain(action, { state, dryRun, say }) {
   if (!handle) { say('  起了大脑但没拿到 handle——没查成'); return { ok: false, error: 'no-handle' }; }
   const sent = runCmd(['node', 'scripts/dao.mjs', 'send', '--terminal', handle, '--text', pointer, '--enter', '--agent', 'pi'], 60000);
   state.brainSessions = state.brainSessions || {};
+  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它，否则送失败就漏一个孤儿大脑。
   state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL };
+  if (!sent.ok) {
+    // 指针没送到 = 这次唤醒没发生：**不计预算**（审官红项 2026-09-04）。
+    // 递增会让「唤满三次转报帅」在大脑其实一次都没被告知的情况下提前触发——把投递故障算成大脑无能。
+    say(`  大脑起了但指针没送：${sent.error}——不计唤醒次数（没送达 ≠ 唤过），下一轮重试`);
+    return { ok: false, error: `指针没送达：${sent.error}`, handle };
+  }
   state.wakeCounts = state.wakeCounts || {};
+  // #931 后唤大脑只剩撞死指纹（`stall:<term>`）与代拍（`daipai:issue-<n>`）两条路，
+  // 都按 target 记账。PR 判红改走 rework（返工工人），不再有唤醒预算。
   state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次）${sent.ok ? '，指针已送' : '，但指针没送：' + sent.error}`);
+  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
   return { ok: true, handle };
 }
 
-// 回收一次性大脑：会话已下班（终端读不到/idle）或超龄 → orca terminal close。保证进程不残留。
-function reapBrains({ state, dryRun, say, maxAgeMs = 30 * 60 * 1000 }) {
+// 一个大脑该留该关：**超龄不等于该杀**。
+// 2026-09-05 实咬：巡检 17:03 唤起大脑，17:51 被「超龄回收」关掉，全程零记录——
+// 它到底干了活还是从头到尾坐着，事后谁也说不出来（close --tab 之后 scrollback 就没了）。
+// 而 reapBrains 本来就在读屏面，只是把内容扔了、只留了个 rd.ok。
+//
+// 于是两件事一起补：
+//  · 超龄时先看**还在不在推进**（屏面签名跟上一轮比）。还在动就续命，续到硬顶为止——
+//    否则「杀掉一个正在干活的大脑」和「清掉一个卡死的」长得一模一样。
+//  · 关之前把最后屏面和「有没有产出过」记下来。零产出的唤醒必须留痕，不然这条链天天绿。
+export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signature, prev } = {}) {
+  if (readable === false) return { verdict: 'gone', reason: '读不到终端（已关或进程不在）' };
+  if (readable !== true) return { verdict: 'unknown', reason: '没查成：读屏面这一步本身没成' };
+  // Number(null) 是 0 且「有限」——不先挡掉 null/'' 的话，上限缺失会被当成「上限 0」，
+  // 于是每个大脑一读到就判超龄关掉，而日志上看起来完全正常。
+  const num = (v) => (v == null || v === '' ? NaN : Number(v));
+  const a = num(age);
+  const cap = num(maxAgeMs);
+  if (!Number.isFinite(a) || !Number.isFinite(cap)) {
+    return { verdict: 'unknown', reason: '年龄或上限不是数——判不了' };
+  }
+  const moved = prev != null && signature != null && String(prev) !== String(signature);
+  const everMoved = moved || (prev == null && signature != null);
+  if (a <= cap) return { verdict: 'keep', reason: '没到上限', moved, everMoved };
+  const hard = Number.isFinite(Number(hardCapMs)) ? Number(hardCapMs) : cap * 3;
+  if (a > hard) return { verdict: 'close', reason: `到硬顶 ${Math.round(hard / 60000)} 分钟，无论在不在动都关`, moved, everMoved };
+  if (moved) return { verdict: 'keep', reason: '超龄但屏面还在变——还在干活，续一轮', moved, everMoved };
+  return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
+}
+
+// 回收一次性大脑。判据在 classifyBrainReap，这里只负责取数、执行、留痕。
+function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
+  state.brainAudit = state.brainAudit || { closed: 0, silent: 0 };
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
     const rd = runOrca(['terminal', 'read', '--terminal', handle, '--screen', '--json'], { cwd: ROOT });
-    const gone = !rd.ok; // 读不到 = 终端已关/进程不在
-    const overAge = age > maxAgeMs;
-    if (gone) { delete sessions[handle]; say && say(`  大脑 ${handle} 已退（读不到终端），登记清除`); continue; }
-    if (overAge) {
-      if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    const screen = rd.ok ? brainScreenText(rd) : null;
+    const signature = screen == null ? null : progressSignature({ preview: screen });
+    const v = classifyBrainReap({
+      readable: rd.ok, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
+    });
+    if (v.verdict === 'gone') {
       delete sessions[handle];
-      say && say(`  大脑 ${handle} 超龄回收（close --tab）`);
+      say && say(`  大脑 ${handle} 已退（${v.reason}），登记清除${meta.everMoved ? '' : '——注意：全程没见它产出过东西'}`);
+      continue;
     }
+    if (v.verdict === 'unknown') { say && say(`  大脑 ${handle} 没查成：${v.reason}——留着，下一轮再判`); continue; }
+    if (v.verdict === 'keep') {
+      meta.sig = signature;
+      meta.everMoved = meta.everMoved || v.everMoved;
+      if (age > maxAgeMs) say && say(`  大脑 ${handle} ${v.reason}（已 ${Math.round(age / 60000)} 分钟）`);
+      continue;
+    }
+    // close：先留痕再关——close --tab 之后屏面就找不回来了
+    const silent = !(meta.everMoved || v.everMoved);
+    state.brainAudit.closed += 1;
+    if (silent) state.brainAudit.silent += 1;
+    if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    delete sessions[handle];
+    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}`);
+    if (silent && screen) say && say(`    最后屏面：${screen.replace(/s+/g, ' ').slice(-200)}`);
   }
   state.brainSessions = sessions;
+}
+
+/** 从 orca terminal read 的返回里取屏面文本。字段路径别猜——取不到就回 null（没查成）。 */
+export function brainScreenText(rd) {
+  const src = rd && (rd.json || rd.out || rd);
+  let j = src;
+  if (typeof src === 'string') { try { j = JSON.parse(src); } catch { return null; } }
+  const t = j && (j.result?.terminal || j.terminal || j.result || j);
+  if (!t) return null;
+  if (Array.isArray(t.tail)) return t.tail.join('\n');
+  if (typeof t.screen === 'string') return t.screen;
+  if (typeof t.content === 'string') return t.content;
+  return null;
+}
+
+// ── 巡检（2026-09-05）：定时脚本只找得到「见过的失败形态」。当天真正被翻出来的两个洞
+// （定时任务以 root 解释 orca 可写的脚本、活性判据的盲区）一个脚本都没报，是一个会话主动去翻才发现的。
+// 所以留一条「让一个会话定期去翻」的路，专找脚本查不出的那类。
+//
+// 改这段之前必须知道的四件事：
+//   · **注入只给指针**：任务书全文落仓外文件，注入那句话短到不会被 TUI 当成粘贴块坐在输入框里（#524）。
+//     写完读回自证（writeBriefVerified）——读不回就不唤醒，半截任务书比不唤更坏。
+//   · **回收不归巡检自己管**：会话登记进 state.brainSessions，act 每轮跑 reapBrains 超龄强关。
+//     所以会话实际寿命上限 = BRAIN_MAX_AGE_MS，任务书里写给它的分钟数必须是同一个常量算出来的。
+//   · **边界不能只写在任务书里**：嘱咐一个无人看管的会话「别乱改」等于没有边界。巡检的提交必须带
+//     PATROL_COMMIT_TAG，下一轮回头查这些提交碰过哪些文件，越界当场报帅。
+//   · **「没查成」要与「没发现」分开**：已有报告清单读不出来时，任务书里写的是「没查成，你自己去列」，
+//     不是「一条都没有」——后者会让巡检把已经报过的东西再报一遍。
+const PATROL_DIR = join(STATE_DIR, 'patrol');
+const PATROL_COMMIT_TAG = '[patrol]';
+const PATROL_ALLOW_PREFIX = 'docs/observations/';
+const PATROL_AUDIT_LOOKBACK_MS = 7 * 24 * 3600 * 1000; // 没有上次审计锚点时回看多久
+
+export function patrolBriefPath({ dir = null, now = new Date() } = {}) {
+  return join(dir || PATROL_DIR, `patrol-${now.toISOString().replace(/[:.]/g, '-')}.md`);
+}
+
+/** 已有报告清单。读不了 = 没查成，绝不退化成空数组——空数组会让巡检重复报已经报过的事。 */
+export function listObservations({ dir, io = null } = {}) {
+  const reader = io || { readdir: readdirSync };
+  try {
+    const files = reader.readdir(dir).filter((f) => /\.md$/i.test(String(f))).sort();
+    return { scanned: true, files };
+  } catch (e) {
+    return { scanned: false, error: `列不出已有报告（${dir}）：${String(e.message || e).slice(0, 160)}` };
+  }
+}
+
+/**
+ * 一批提交碰过的文件里，哪些越出了巡检的写入边界。
+ * 清单不是数组 = 没查成（不当成「没越界」——查不成和查过没事必须分得开）。
+ */
+export function patrolBoundaryViolations(files, { allow = PATROL_ALLOW_PREFIX } = {}) {
+  if (!Array.isArray(files)) return { scanned: false, error: '碰过的文件清单不是数组——没查成，不当成没越界' };
+  const norm = files.map((f) => String(f == null ? '' : f).trim().replace(/\\/g, '/')).filter(Boolean);
+  return { scanned: true, checked: norm.length, violations: norm.filter((f) => !f.startsWith(allow)) };
+}
+
+/** 回头查巡检自己的提交守没守住边界。git 查不成 → 没查成，不报「干净」。 */
+export function auditPatrolCommits({ sinceIso, run = null, tag = PATROL_COMMIT_TAG } = {}) {
+  const exec = run || ((argv) => runCmd(argv, 60000));
+  const listed = exec(['git', 'log', '--since', String(sinceIso), '-F', `--grep=${tag}`, '--format=%H']);
+  if (!listed.ok) return { scanned: false, error: `查不到巡检的提交：${listed.error}` };
+  const hashes = String(listed.out || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const offenders = [];
+  for (const h of hashes) {
+    // 必须带 -z：不带的话 git 对非 ASCII 文件名会**加引号 + 八进制转义**
+    // （`"docs/observations/2026-09-05-systemd\345\215\225..."`），前缀比对当场认不出它其实就在
+    // 允许目录下，于是巡检自己写的中文名报告被判成越界。2026-09-05 实咬——第一份巡检报告就撞上了。
+    // 解转义不是好办法（要处理引号、反斜杠、UTF-8 多字节）；让 git 直接吐原始路径才是。
+    const shown = exec(['git', 'show', '--name-only', '-z', '--format=', h]);
+    if (!shown.ok) return { scanned: false, error: `巡检提交 ${h.slice(0, 8)} 碰过哪些文件没查成：${shown.error}` };
+    const v = patrolBoundaryViolations(String(shown.out || '').split('\0'));
+    if (!v.scanned) return { scanned: false, error: v.error };
+    if (v.violations.length) offenders.push({ commit: h.slice(0, 8), files: v.violations.slice(0, 10) });
+  }
+  return { scanned: true, commits: hashes.length, offenders };
+}
+
+/**
+ * 巡检这一轮的退出码。三态必须分得开：
+ *   2 = 有面没查成（不知道有没有问题）  1 = 查出上轮越界（知道有问题，已报帅）  0 = 查过没事。
+ * 「没查成」优先级最高：它一旦被当成 0，systemctl 上就看不出这一轮其实什么都没查。
+ */
+export function patrolExitCode({ unscanned = [], outOfBounds = 0 } = {}) {
+  if (Array.isArray(unscanned) ? unscanned.length : unscanned) return 2;
+  return outOfBounds ? 1 : 0;
+}
+
+/** 注入那一句：短到不会被 TUI 当粘贴块，只说「全文在哪、先读它」。 */
+export function patrolInjectText(briefPath) {
+  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完打 exit 退出。`;
+}
+
+/** 巡检任务书全文。existing 是 listObservations 的三态结果，直接决定「已有报告」那一段怎么写。 */
+export function patrolBriefText({ obsDir = 'docs/observations', existing = null, maxAgeMs = BRAIN_MAX_AGE_MS,
+  commitTag = PATROL_COMMIT_TAG, allow = PATROL_ALLOW_PREFIX, now = new Date() } = {}) {
+  const today = now.toISOString().slice(0, 10);
+  const minutes = Math.round(maxAgeMs / 60000);
+  const known = existing && existing.scanned
+    ? (existing.files.length
+      ? ['已有报告（先逐个读一遍，重复的不要再报）：', ...existing.files.map((f) => `- ${obsDir}/${f}`)]
+      : [`已有报告：一条都没有（这是查过的结果，不是没查成）。`])
+    : [`已有报告：**没查成**——${(existing && existing.error) || '清单读不出来'}。`,
+      `你必须自己 \`ls ${obsDir}\` 确认；列不出来就不要写新报告，只回报「已有报告列不出来，这一轮没法判重复」。`];
+  return [
+    '# 机制巡检（一次性会话）',
+    '',
+    '你是这台服务器上的机制巡检。定时唤起，干完就退。**只写发现，不动手修。**',
+    '',
+    '## 为什么有你',
+    '',
+    '这台机器上另外几个定时任务都是判据写死的脚本，只找得到已经见过的失败形态。',
+    '2026-09-05 那天真正被翻出来的两个洞——定时任务以 root 身份解释一个人人可写的脚本（等于给每个',
+    '能写仓的执行体一条提权路）、以及巡检判「还活着」的判据有盲区——脚本一个都没报，',
+    '是一个会话主动去翻才翻出来的。你就是那个去翻的人。',
+    '',
+    '## 去找什么',
+    '',
+    '重点是**脚本查不出**的那四类：',
+    '',
+    '1. **机制上的漏洞**：有权限、有通道，但没有任何人在看的地方。',
+    '2. **装了没生效**：文件在、单元在册、检查也存在，可它实际上并没有在起作用。',
+    '3. **判据前提已不成立**：检查还在跑，而它赖以成立的那个前提早就变了——真相源搬走了、',
+    '   字段改名了、被检查的对象已经删了，于是它每次都绿，或者每次都红到没人看。',
+    '4. **两处规矩互相打架**：A 处要求这样、B 处要求那样，照哪边做都会违反另一边。',
+    '',
+    '从哪儿翻（翻不完是正常的，翻到哪就说到哪）：',
+    '',
+    '- 仓里的规矩（`CLAUDE.md`、`host/skills/`、`docs/decisions/`）与 `scripts/` 里真正的实现对不对得上',
+    '- `host/machine/systemd/` 里的单元与机器上的实际状态对不对得上：谁在跑、以谁的身份跑、下一次什么时候跑',
+    '- `tests/` 里的闸：判据还成立吗？它这次到底扫到样本了没有？',
+    '- 最近的提交（`git log`）里有没有「改了 A 没同改 B」',
+    '',
+    '## 发现写到哪',
+    '',
+    `一条发现一个文件，落 \`${obsDir}/${today}-<短名>.md\`（短名用中文或英文都行，能一眼认出是哪件事）。`,
+    '正文中文，三段写清：',
+    '',
+    '- **结论**：一句话说清哪里有洞',
+    '- **证据**：文件路径加行号、跑过的命令和它的真实输出。不许写「应该」「可能」——没验证的就标「没验证」',
+    '- **建议的最小改造**：删哪一层能让这个问题不存在',
+    '',
+    `写完必须 \`git add\` + \`git commit\` + \`git push\`。**不提交别的机器看不到，等于没写。**`,
+    `提交标题必须以 \`${commitTag}\` 开头——回头查你有没有守住边界，就靠这个标记找你的提交。`,
+    '',
+    '推不上去（别人先推了）就 `git pull --rebase` 再推。**不许留着不推**：这棵主树每 5 分钟要跟一次',
+    '主分支，走的是只许快进的合并；本地留一个没推上去的提交，那条同步从此每轮都失败——',
+    '你会用一份报告换掉整台机器的代码同步。推不上去又 rebase 不动，就 `git reset --soft HEAD~1`',
+    '把改动退回工作区，然后如实报告「写了但没推上去」，别硬来。',
+    '',
+    '## 不许重复报',
+    '',
+    ...known,
+    '',
+    '同一件事已经报过（哪怕换了个说法），或者那个文件里已经写了「处置：」，就不要再报一遍。',
+    '**没有新发现是正常结果**——这一轮就说一句「翻了哪几面、没有新发现」，不要为了交差凑一条。',
+    '',
+    '## 硬边界（越界就是事故）',
+    '',
+    '你没人看管，所以边界比产出重要：',
+    '',
+    `- 只许新建或修改 \`${allow}\` 底下的文件。别的文件一个字都不许改。`,
+    '- 不许改代码、不许改配置、不许改定时任务、不许 `sudo`、不许启停任何服务。',
+    '- 不许开 GitHub 单子或 PR，不许给单子和 PR 评论，不许合并、不许关单。',
+    '- 不许花钱：不许起别的模型会话、不许调付费接口、不许派工。',
+    `- 提交里只能有 \`${allow}\` 底下的文件。\`git status\` 里冒出别的改动就停手，在报告里写明你看见了什么。`,
+    '- 发现了问题**只描述，不动手**。想动手的那股冲动，正是这条边界要拦的东西。',
+    '',
+    `这条边界有人查：下一轮巡检会把带 \`${commitTag}\` 的提交逐个翻出来看碰过哪些文件，越界当场报帅。`,
+    '',
+    '## 时间与收尾',
+    '',
+    `你最多有 ${minutes} 分钟，到点会被强制关掉。所以顺序是：**先把最小的一份报告写完并推上去，再回头深挖**。`,
+    '干完打 `exit` 退出——退了才不占位子。',
+    '',
+  ].join('\n');
+}
+
+function cmdPatrol(argv) {
+  const dryRun = argv.includes('--dry-run');
+  const state = loadState();
+  const log = [];
+  const say = (m) => log.push(m);
+  const unscanned = [];
+
+  // ① 先回收上一轮的一次性会话。act 也会回收，这里再收一次是为了 act 停摆时巡检不至于自己堆孤儿。
+  reapBrains({ state, dryRun, say });
+
+  // ② 回头审上几轮巡检守没守住边界（边界不能只写在任务书里）。
+  state.patrol = state.patrol || {};
+  const sinceIso = state.patrol.lastAuditAt || new Date(Date.now() - PATROL_AUDIT_LOOKBACK_MS).toISOString();
+  const audit = auditPatrolCommits({ sinceIso });
+  let outOfBounds = 0;
+  if (!audit.scanned) {
+    unscanned.push(`越界审计：${audit.error}`);
+    say(`  越界审计没查成：${audit.error}——不报「干净」`);
+  } else {
+    outOfBounds = audit.offenders.length;
+    say(`  越界审计：${sinceIso} 起共 ${audit.commits} 个巡检提交，越界 ${outOfBounds} 个`);
+    for (const o of audit.offenders) {
+      execAction({
+        kind: 'escalate', reason: 'patrol-out-of-bounds', term: `patrol-${o.commit}`,
+        why: `巡检会话在提交 ${o.commit} 里改了 ${PATROL_ALLOW_PREFIX} 之外的文件（${o.files.join('、')}）`
+          + '——巡检只许写发现不许动手，这条边界破了要人判',
+      }, { state, dryRun, log });
+    }
+    if (!dryRun) state.patrol.lastAuditAt = nowIso();
+  }
+
+  // ③ 已有报告清单：读不出来就在任务书里明写「没查成」，不退化成「一条都没有」。
+  const obsRel = PATROL_ALLOW_PREFIX.replace(/\/$/, '');
+  const existing = listObservations({ dir: join(ROOT, ...obsRel.split('/')) });
+  if (!existing.scanned) { unscanned.push(existing.error); say(`  ${existing.error}`); }
+  else say(`  已有报告 ${existing.files.length} 份`);
+
+  // ④ 任务书落文件 + 读回自证；注入只给指针。
+  const briefPath = patrolBriefPath({});
+  const briefText = patrolBriefText({ obsDir: obsRel, existing });
+  if (dryRun) {
+    say(`[dry] 任务书会落 ${briefPath}（${Buffer.byteLength(briefText, 'utf8')} 字节），全文见下`);
+    say(briefText);
+    say(`[dry] 注入指针（${Buffer.byteLength(patrolInjectText(briefPath), 'utf8')} 字节）：${patrolInjectText(briefPath)}`);
+  }
+  const written = dryRun
+    ? { ok: true, path: briefPath, bytes: Buffer.byteLength(briefText, 'utf8') }
+    : writeBriefVerified({ path: briefPath, text: briefText, what: '巡检任务书' });
+  if (!written.ok) {
+    say(`  ${written.error}`);
+    console.log(JSON.stringify({ at: nowIso(), dryRun, woken: false, unscanned: [...unscanned, written.error] }, null, 2));
+    console.error(log.join('\n'));
+    process.exit(2);
+  }
+
+  // ⑤ 唤会话：复用大脑那条路（起会话 → 送指针 → 登记进 brainSessions 等回收）。
+  const woken = wakeBrain({
+    kind: 'wake-brain', target: 'patrol', title: '机制巡检', pointer: patrolInjectText(written.path),
+    why: '定时机制巡检：找脚本查不出的洞',
+  }, { state, dryRun, say });
+  if (!woken.ok && !dryRun) unscanned.push(`巡检会话没唤成：${woken.error || '没查成'}`);
+
+  if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（与 act 一致）
+  console.log(JSON.stringify({
+    at: nowIso(), dryRun,
+    brief: written.path, briefBytes: written.bytes,
+    knownObservations: existing.scanned ? existing.files.length : null,
+    auditedCommits: audit.scanned ? audit.commits : null,
+    outOfBounds,
+    woken: dryRun ? 'dry-run（没真起会话）' : woken.ok === true,
+    reapBy: '每轮 act 的 reapBrains，超龄强关',
+    unscanned,
+  }, null, 2));
+  console.error(log.join('\n'));
+  process.exit(patrolExitCode({ unscanned, outOfBounds }));
+}
+
+// ── 代拍：双向门待拍板单到期无人回复 → 唤大脑按推荐项执行（2026-09-04 拍板「双门制+超时代拍」）。
+// 判据全在 lib/daipai.mjs 纯函数里；这里只做 gh 取数 + 唤醒 + hub 留痕。没查成一律不代拍。──
+function runDaipai({ state, dryRun, say }) {
+  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body',
+    '门类：双向门', '--json', 'number', '--limit', '10'], 30000);
+  if (!found.ok) { say(`  代拍扫描没查成：${found.error}（没查成不代拍）`); return; }
+  let nums = [];
+  try { nums = JSON.parse(found.out || '[]').map((x) => x.number); } catch { say('  代拍扫描输出解析不了——没查成不代拍'); return; }
+  let fired = 0;
+  for (const n of nums) {
+    if (fired >= DAIPAI_MAX_PER_ROUND) { say(`  代拍到本轮上限 ${DAIPAI_MAX_PER_ROUND}，其余下轮`); break; }
+    const v = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'body,createdAt,comments'], 30000);
+    if (!v.ok) { say(`  代拍 #${n} 读不到——没查成跳过`); continue; }
+    let doc = null;
+    try { doc = JSON.parse(v.out); } catch { say(`  代拍 #${n} 输出解析不了——跳过`); continue; }
+    const cls = classifyDaipai({ body: doc.body, createdAt: doc.createdAt, comments: doc.comments });
+    if (!cls.daipai) { if (cls.unscanned) say(`  代拍 #${n} ${cls.why}——不代拍`); continue; }
+    const woken = (state.wakeCounts || {})[`daipai:issue-${n}`] || 0;
+    if (woken >= 2) { say(`  代拍 #${n} 已唤 ${woken} 次没闭环——不再唤，等人`); continue; }
+    hubOnce({ state, key: `daipai:${n}`, text: `[指挥官·代拍] 待拍板 #${n} 双向门到期无人回复，按单内推荐项代拍（可翻案）\n${issueLink(n)}`, dryRun });
+    wakeBrain({ target: `daipai:issue-${n}`, issue: n,
+      why: `待拍板 #${n} 双向门到期 ${Math.round(TWO_WAY_DEADLINE_MS / 3600000)} 小时无人回复——读单内「推荐项」在边界内执行，做完在单上评论「已代拍：做了什么、怎么翻案」；超边界就写明卡在哪、不动` },
+      { state, dryRun, say });
+    fired += 1;
+  }
 }
 
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
@@ -438,15 +1173,38 @@ function escalate(action, { state, dryRun, say }) {
   }
   const key = escalateKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
+  // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
+  // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
+  // 账本写在本机、当场生效，没有延迟。
+  state.escalateLedger = state.escalateLedger || {};
+  const booked = state.escalateLedger[key];
+  if (booked && booked.issue) {
+    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
+    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
+  }
   // 查重：已有 open 带此标记的单 → 不重复开
   const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
-  if (found.ok) { try { const arr = JSON.parse(found.out || '[]'); if (arr.length) existing = arr[0].number; } catch { /* ignore */ } }
+  let searchOk = false;
+  if (found.ok) {
+    try { const arr = JSON.parse(found.out || '[]'); searchOk = true; if (arr.length) existing = arr[0].number; }
+    catch { searchOk = false; }
+  }
+  // 查重没查成 ≠ 没有重复。这是个**写**动作，fail-open 的代价是多开一张单，
+  // 而开单不可撤（只能关）。所以没查成一律不开——本轮静默，下轮查得成时再开。
+  // 实咬 2026-09-06：gh search 有索引延迟，同一 key 隔 20 分钟被开了两张（#973-#980 四对）。
+  if (!searchOk) {
+    say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
+    return { ok: true, skipped: 'dedup-unscanned' };
+  }
   const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
+  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
   return opened;
 }
@@ -456,14 +1214,24 @@ function escalateKey(a) {
 }
 function escalateTitle(a) { return `${a.reason}：${a.pr ? 'PR #' + a.pr : a.issue ? 'issue #' + a.issue : a.term || ''}`.trim(); }
 function escalateBody(a, marker) {
+  const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
+  const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
   return [
     `指挥官报帅（#800「报帅停手」）：`,
     ``,
     `- 原因：${a.reason}`,
     `- 详情：${a.why}`,
     a.pr ? `- PR：${prLink(a.pr)}` : a.issue ? `- issue：${issueLink(a.issue)}` : '',
+    door === 'two-way'
+      ? `- 门类：双向门（可翻案）——${hours} 小时无人回复，指挥官唤大脑按下面推荐项代拍并标「已代拍」`
+      : `- 门类：单向门（花钱/换人/不可逆）——只等拍板，超时不动（高风险超时=拒绝）`,
+    door === 'two-way' ? `- 推荐项：${a.recommend || '大脑边界内处置：定位问题 → 给方案 → 送达相关终端'}` : '',
     ``,
-    `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
+    `- 机制判定（处置人必填，2026-09-04 拍板）：这错在制度生效前还会再犯吗？会 → 机制改在哪（垫片/开单/PR 链接）；不会 → 为什么。答不出就写「没查成」，不许留空。`,
+    ``,
+    door === 'two-way'
+      ? `到期无人回复会代拍；要拦住就在本单说一句（任何回复都会拦住代拍）。查重标记（勿删）：${marker}`
+      : `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
   ].filter(Boolean).join('\n');
 }
 function openEscalationIssue({ title, body }) {
@@ -493,6 +1261,10 @@ function cmdScan() {
       prs: situation.github.scanned ? situation.github.prs.length : null,
       reviewPending: situation.reviewPending.scanned ? situation.reviewPending.items.length : null,
     },
+    // 跨仓只报数，不进 health：别的仓查不到不该拦住本仓这一轮（它是感知，不是本轮要处置的活）。
+    otherRepos: situation.otherRepos?.scanned
+      ? situation.otherRepos.repos.map((r) => `${r.repo}: ${r.issues} issue / ${r.prs} PR`)
+      : `没查成：${situation.otherRepos?.error || '缺节'}`,
   };
   console.log(JSON.stringify(summary, null, 2));
   process.exit(health.allScanned ? 0 : 2);
@@ -513,6 +1285,7 @@ function cmdAct(argv) {
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
   runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
   else {
@@ -535,15 +1308,17 @@ function summarizeAction(a) {
   return o;
 }
 
-const CMDS = { scan: cmdScan, act: cmdAct };
+const CMDS = { scan: cmdScan, act: cmdAct, patrol: cmdPatrol };
 
 function main() {
   const [, , sub, ...rest] = process.argv;
   if (!sub || sub === '--help' || sub === '-h') {
-    console.log(`用法: node scripts/commander.mjs <scan|act|inventory|status|install> [--dry-run]
+    console.log(`用法: node scripts/commander.mjs <scan|act|patrol|inventory|status|install> [--dry-run]
 
   scan       眼睛：产态势 JSON 落 ~/.dao/commander/（三态退出：0 全查成 / 2 有没查成）
   act        scan → decide → 执行动作（--dry-run 只打印命令）
+  patrol     机制巡检：唤一个一次性会话去翻脚本查不出的洞，发现落 docs/observations/
+             （三态退出：0 唤起了 / 1 查出上轮巡检越界（已报帅） / 2 有面没查成；--dry-run 只打印计划与任务书全文）
   inventory  盘点体检：异常开「待拍板」单，正常静默（--dry-run 只打印）
   status     自检三态（0 通 / 1 红 / 2 没查成），供 server-check 一行引用
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);

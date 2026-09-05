@@ -56,12 +56,14 @@ node --version
 
 四个 App 的 private key 只此一份，丢了要回 GitHub 重新生成。换机把 `~/.dao/apps/` 整目录拷过来，**不要**进 git。
 
+**服务器上 `~` 是服务用户的家，不是 root 的**（`/home/orca/.dao/apps/`）。用 root 登录搬运时 `scp ... root@host:/root/.dao/apps/` 落点是错的——`/root` 是 0700，orca 读不进去，而 orca 才是跑 orca-serve 和全部 timer 的身份。同理：**不要用 root 在服务用户目录里跑任何东西**（跑测试、clone、执行脚本），留下的 root 属主文件会让 orca 的 git 写操作和测试以各种不像权限问题的面目失败（2026-09-05 实咬：`.git/index` 落成 root、memory 的 `MEMORY.md` 落成 root、131 个测试沙箱文件落成 root，表现成 3 条测试红 + gen-index 静默 EACCES）。`server-check` 第 (21) 项常驻扫这个，修法 `sudo chown -R orca:orca <路径>`。
+
 | 文件 | 角色 | App ID | Installation ID |
 |---|---|---|---|
 | `reviewer.{pem,json}` | `dao-reviewer[bot]` 审官 | 4616659 | 154244051 |
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
-| `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 人建完填 json | 人建完填 json |
+| `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 4840777 | 159280695 |
 
 `*.json` 形态（数字不要加引号）：
 
@@ -75,6 +77,13 @@ node --version
 - Installation ID：同一 App 页 → Install App → 点进这条安装，URL 末段就是；或用 App JWT 调 `GET /app/installations`。
 
 `dao-watchdog` 要人在 GitHub 建（Settings → Developer settings → GitHub Apps → New GitHub App），工人**不**在 GitHub 上创建 App。装到本仓。权限只要能写评论：**Issues: Read and write**、**Pull requests: Read and write**、**Contents: Read-only**、**Checks: Read-only**。不要 Contents: Write（狗不许推码）。pem + json 放到 `~/.dao/apps/`。
+
+**2026-09-05 已建**：App ID `4840777`，装在 6 个仓（与 marshal 同范围）。上面这段规格是当时照着执行的，权限一字未改。换机只需拷 pem + json，不用重建 App；真丢了才照上面重建。建的时候踩到两个坑，记下来：
+
+- **Webhook 那个 `Active` 复选框默认是勾上的**，不取消就必填 Webhook URL。我们不用 webhook，取消勾选即可。
+- **传头像有一步藏起来的确认**：选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**。
+  只上传不点，页面显示 `Uploading…` 然后**静默失败**，头像仍是默认 identicon——看起来像传成了。
+  头像本身与家族规矩见 `host/brand/README.md`（图在 git 里，私钥不在）。
 
 验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 
@@ -101,7 +110,7 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
 
 - 仓内 `ledger/events/` 只保留已合并历史，**不要再往那里写新事件**；`LEDGER_EVENTS_DIR=<目录>` 可临时改落点（测试用，覆盖时不播种子）。
-- 本机产生的新事件只在本机。跨机汇聚的方向是 dao-hub 按需拉取（已拍板，机制未实现）；汇聚上线前要带走旧机事件，就手动拷 `~/.dao/ledger/events/`——文件名由事件内容决定，同名即同一事件，直接合并拷贝安全。
+- 本机产生的新事件只在本机。要把别的机器的事件带过来，跑 `node scripts/ledger-sync.mjs --from <ssh 别名>`（判据 `scripts/lib/ledger-sync.mjs`；幂等，同名跳过，重跑零副作用）。文件名由事件内容决定，同名即同一事件，汇聚就是按文件名求并集。**没有中心汇聚仓**——拉到发起拉取的这台机器自己的 `~/.dao/ledger/events/`（2026-09-04 拍板，见 `docs/dianjiangtai-design.md` 文首实施状态注记）。
 
 ## 5. 模型配置
 
@@ -242,7 +251,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
-- 挂点已摘：随仓 `.claude/settings.json` 只剩 PreToolUse 派工闸 + SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。
+- 挂点已摘：随仓 `.claude/settings.json` 的 PreToolUse 是派工闸 + 问人闸（ask-gate）+ 工具使用闸（tool-use-gate，#969）+ SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。`~/.claude/settings.json` 归宿主自己，onboard 不能动。
 - #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + `orca automations` + `agent-stall-watch`。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
@@ -300,7 +309,7 @@ orca account add --help
 
 ```bash
 sudo useradd --system --create-home --shell /bin/bash orca   # 要能跑 agent CLI，别用 nologin
-sudo -u orca git clone https://github.com/thoerwink8/windsurf-dao.git /home/orca/windsurf-dao
+sudo -u orca git clone https://github.com/thoerwink8/windsurf-dao.git /srv/projects/windsurf-dao
 ```
 
 **② `serve` 的监听绑 `0.0.0.0`，`--pairing-address` 只是「广告给客户端的地址」，不改绑定。** 公网 IP 的机器上等于把一个能控制这台机器的 WebSocket 挂到公网。配对有设备令牌，但不要拿它当边界。两条路选一条：
@@ -379,7 +388,7 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
 - **AppImage 解包后 Electron 共享库可能缺**（2026-09-02 Contabo Ubuntu 24.04 干净机实测：`orca-ide: error while loading shared libraries: libatk-1.0.so.0`，前台 serve 直接 exit 127、永远等不到 ready）。装 `libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libcups2t64 libxkbcommon0 libatspi2.0-0t64 libxss1 libgl1`，验收 `ldd /opt/orca/squashfs-root/orca-ide | grep "not found"` 为空再起。
-- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/home/orca/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /home/orca/windsurf-dao`。
+- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/srv/projects/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /srv/projects/windsurf-dao`。
 - **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
 - **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
 - **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
@@ -390,7 +399,7 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 合并只进列车，版本号只由发布动作产生：到周日或攒够 `docs/release-policy.json` 的 `version.train.min_merged` 个合并就切一版（tag + GitHub Release + CHANGELOG 段 + 总控群一句）。装一次幂等 timer（每天一次跑 `should-run && release`，连跑不重复）：
 
 ```bash
-cd /home/orca/windsurf-dao
+cd /srv/projects/windsurf-dao
 node scripts/release-train.mjs plan            # 先看现状：档位/下一个版本号，什么都不写
 sudo node scripts/release-train.mjs install    # 写 /etc/systemd/system/release-train.{service,timer} + enable --now
 systemctl list-timers release-train.timer      # 在册且 enabled
@@ -709,6 +718,15 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.json 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
 
 派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
+
+同文件另外两道 PreToolUse 只注不拦（插件 `hooks.json` 那条路 2026-09-05 实证不响，所以跟派工闸一样挂随仓）：问人闸 `host/skills/ask-gate/hooks/ask-gate.mjs`（matcher 提问工具）、工具使用闸 `host/skills/tool-use-gate/hooks/tool-use-gate.mjs`（matcher `^Bash$`，#969：heredoc 吞转义 / `python` 是 stub）。验：
+
+```bash
+node -e 'process.stdout.write(JSON.stringify({hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"cat > a.mjs <<EOF\n/\\s+/\nEOF"}}))' | node host/skills/tool-use-gate/hooks/tool-use-gate.mjs
+# 应出 JSON，additionalContext 含「吞掉」，exit 0；没命中则 stdout 为空
+```
+
+`~/.claude/settings.json` 是红线文件，onboard 不能动、不能整文件覆写。
 
 ### 分支卫生：一条命令，不设规矩
 

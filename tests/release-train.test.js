@@ -245,3 +245,22 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
     }
   });
 });
+
+// 2026-09-05 实咬：发布列车打了 tag、提交了 CHANGELOG，却从不 push——服务器 master 每天与远端发散一次，
+// 之后每次部署都撞 "Not possible to fast-forward"，要人手工 rebase。这三条钉住「发完要推」与「推不动要出声」。
+describe('发布列车：发完要推（#12.10 实咬）', () => {
+  const src = fs.readFileSync(CLI, 'utf8');
+  it('release 路径里有 push --follow-tags', () => {
+    assert.match(src, /'push', '--follow-tags'/, '发版必须推送，否则本机领先远端，下次部署撞 fast-forward');
+  });
+  it('推不动要说出来，不许静默', () => {
+    const i = src.indexOf("'push', '--follow-tags'");
+    assert.ok(i > -1, '找不到 push——本闸判据失效，不是通过');
+    const near = src.slice(i, i + 700);
+    assert.match(near, /推送失败/, '推送失败必须 say 出来');
+  });
+  it('dry-run 只打印不推', () => {
+    assert.match(src, /\[拟\] git push --follow-tags/, 'dry-run 要有对应的拟态行');
+  });
+});
+

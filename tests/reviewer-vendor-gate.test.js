@@ -400,4 +400,134 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(noForceRed.ok === false && noForceRed.problems.length >= 1, JSON.stringify(noForceRed));
     });
   });
+
+  it('#895 厂商可查 ≠ 派单候选：家族优先、注册表回落，家族查不出仍挡住', async (t) => {
+    const { assertCrossVendor, resolveVendor } = await GATE_LOAD;
+    const { loadRoutingPolicy } = await POLICY_LOAD;
+    const liveModels = loadRoutingPolicy().models;
+    // 判别性核心：claude-opus-5 是帅位本体，#822 已把 claude CLI 从选型移除，所以它**不在**
+    // routing.models（职责树 = 派单候选表）。从前闸要求「必须是派单候选」→ 永远没查成 → 永远拒。
+    const notCandidate = liveModels.every(m => m.id !== 'claude-opus-5');
+    await t.test('前提：claude-opus-5 确实不是派单候选（不在 routing.models）', () => {
+      assert.ok(notCandidate, '前提变了：claude-opus-5 进了职责树，本组样本失去判别力  →  '
+        + JSON.stringify(liveModels.map(m => m.id)));
+    });
+    const cross = assertCrossVendor({ workerId: 'claude-opus-5', reviewerId: 'gpt-5.6-luna', models: liveModels });
+    await t.test('非派单候选的执行者查得出厂商 claude，异厂审官放行', () => {
+      assert.ok(cross.ok === true && cross.state === 'pass'
+        && cross.workerVendor === 'claude' && cross.reviewerVendor === 'gpt',
+      '#895 正样本应放行  →  ' + JSON.stringify(cross));
+    });
+    const sameFam = assertCrossVendor({ workerId: 'claude-opus-5', reviewerId: 'claude-opus', models: liveModels });
+    await t.test('同为 claude 家族（一个在表一个不在表）→ 同厂拒绝，不是没查成', () => {
+      assert.ok(sameFam.ok === false && sameFam.state === 'same_vendor'
+        && sameFam.workerVendor === 'claude' && sameFam.reviewerVendor === 'claude',
+      '#895 反样本应同厂拒  →  ' + JSON.stringify(sameFam));
+    });
+    const vend = resolveVendor('claude-opus-5', liveModels);
+    await t.test('厂商来自家族、不来自注册表（registered=false 也照样查得出）', () => {
+      assert.ok(vend.ok === true && vend.vendor === 'claude'
+        && vend.vendorSource === 'family' && vend.registered === false,
+      JSON.stringify(vend));
+    });
+    // fail-closed 不许放宽：家族查不出照旧挡住（这条就是变异自证的锚——改成放行即红）
+    const fake = assertCrossVendor({ workerId: 'mistral-large', reviewerId: 'gpt-5.6-luna', models: liveModels });
+    await t.test('家族查不出的假 id 仍被挡住（unscanned，不是放行、不是同厂）', () => {
+      assert.ok(fake.ok === false && fake.state === 'unscanned' && /没查成真实供应商家族/.test(fake.error),
+        'fail-closed 不许放宽  →  ' + JSON.stringify(fake));
+    });
+    const prefixless = assertCrossVendor({ workerId: 'opus-5', reviewerId: 'gpt-5.6-luna', models: liveModels });
+    await t.test('缺家族前缀的 opus-5（旧 label 名）仍被挡住——所以 label 要改名，不是放宽闸', () => {
+      assert.ok(prefixless.ok === false && prefixless.state === 'unscanned', JSON.stringify(prefixless));
+    });
+    // 回落注册表：id 前缀不是家族，但注册表落地 provider 本身是已登记家族 → 认它
+    const fallback = resolveVendor('mystery-1', [{ id: 'mystery-1', provider: 'claude' }]);
+    await t.test('回落注册表：落地 provider 是家族 → 认 provider，source=registry', () => {
+      assert.ok(fallback.ok === true && fallback.vendor === 'claude' && fallback.vendorSource === 'registry',
+        JSON.stringify(fallback));
+    });
+    const gwOnly = resolveVendor('mystery-1', [{ id: 'mystery-1', provider: 'gw' }]);
+    await t.test('落地 provider 是网关 id（gw）不算家族 → 仍没查成（一个 gw 后面挂着好几家）', () => {
+      assert.ok(gwOnly.ok === false && gwOnly.state === 'unscanned', JSON.stringify(gwOnly));
+    });
+    await t.test('三态仍互不相同', () => {
+      assert.ok(cross.state !== sameFam.state && sameFam.state !== fake.state && cross.state !== fake.state);
+    });
+  });
+
+  it('#895 CLI：快马单（执行者非派单候选、无 reviewer/* label）能用 --reviewer 起审官', async (t) => {
+    const env = { ...process.env, DAO_GH_FAKE: FAKE_GH };
+    // PR 48 → issue 572：model/claude-opus-5 且**无** reviewer/*（快马单没走派单流程，写不上）
+    const create = spawnSync(process.execPath, [
+      CLI, 'reviewer-create', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run',
+    ], { encoding: 'utf8', cwd: REPO, env });
+    const pCreate = payload(create);
+    await t.test('reviewer-create --reviewer 过闸：workerModel=claude-opus-5、厂商 claude vs gpt', () => {
+      assert.ok(create.status === 0 && pCreate.ok === true
+        && pCreate.workerModel === 'claude-opus-5'
+        && pCreate.vendorGate && pCreate.vendorGate.state === 'pass'
+        && pCreate.vendorGate.workerVendor === 'claude',
+      `status=${create.status} ` + JSON.stringify(pCreate).slice(0, 400));
+    });
+    // PR 49 → issue 573：家族查不出的假 id。fail-closed 不许因为本单放宽。
+    const blocked = spawnSync(process.execPath, [
+      CLI, 'reviewer-create', '--pr', '49', '--dry-run',
+    ], { encoding: 'utf8', cwd: REPO, env });
+    const pBlocked = payload(blocked);
+    await t.test('reviewer-create 家族查不出的工人 id → 非零且报没查成家族', () => {
+      assert.ok(blocked.status !== 0 && /没查成真实供应商家族/.test(String(pBlocked.error || '')),
+        `status=${blocked.status} ` + JSON.stringify(pBlocked).slice(0, 300));
+    });
+    const wdFlag = spawnSync(process.execPath, [
+      CLI, 'worker-done', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run',
+    ], { encoding: 'utf8', cwd: REPO, env });
+    const pWdFlag = payload(wdFlag);
+    await t.test('worker-done --reviewer：无 reviewer/* label 也能起审官（reviewerSource=flag）', () => {
+      assert.ok(wdFlag.status === 0 && pWdFlag.ok === true
+        && pWdFlag.reviewerSource === 'flag' && pWdFlag.reviewer === 'gpt-5.6-luna'
+        && pWdFlag.issue === 572 && pWdFlag.workerModel === 'claude-opus-5'
+        && pWdFlag.shouldCreate === true,
+      `status=${wdFlag.status} ` + JSON.stringify(pWdFlag).slice(0, 400));
+    });
+    const wdNoFlag = spawnSync(process.execPath, [
+      CLI, 'worker-done', '--pr', '48', '--dry-run',
+    ], { encoding: 'utf8', cwd: REPO, env });
+    const pWdNoFlag = payload(wdNoFlag);
+    await t.test('不传 --reviewer 仍自读 label：扫完 0 条 → 照旧拒（没放宽 label 那道）', () => {
+      assert.ok(wdNoFlag.status !== 0 && /没有 reviewer\/\* label/.test(String(pWdNoFlag.error || '')),
+        `status=${wdNoFlag.status} ` + JSON.stringify(pWdNoFlag).slice(0, 300));
+    });
+  });
+
+  it('#895 model/* label 命名检查：不合规名字报红，扫到 0 个 = 没查成', async (t) => {
+    const { inspectModelLabelNames } = await import(
+      'file://' + path.join(REPO, 'scripts', 'lib', 'model-label-name-check.mjs').replace(/\\/g, '/'));
+    const greenCase = inspectModelLabelNames({
+      labelNames: ['model/claude-opus-5', 'model/grok-4.6', { name: 'model/gpt-5.6-luna' }, 'type/写码'],
+    });
+    await t.test('全能查出家族 → 绿', () => {
+      assert.ok(greenCase.ok === true && greenCase.unscanned === false && greenCase.scanned === 3,
+        JSON.stringify(greenCase));
+    });
+    // 变异自证：造不合规 label 名（本仓实咬过的 model/opus-5、model/pi）→ 必须红
+    const red = inspectModelLabelNames({ labelNames: ['model/grok-4.6', 'model/opus-5', 'model/pi'] });
+    await t.test('model/opus-5（缺 claude- 前缀）与 model/pi（网关不是家族）被扫成红', () => {
+      assert.ok(red.ok === false && red.unscanned === false
+        && red.bad.includes('model/opus-5') && red.bad.includes('model/pi'),
+      JSON.stringify(red));
+    });
+    await t.test('扫到 0 个 model/* → 没查成，不是「都合规」', () => {
+      const none = inspectModelLabelNames({ labelNames: ['type/写码', '已消歧'] });
+      assert.ok(none.ok === false && none.unscanned === true && /0 个/.test(none.error), JSON.stringify(none));
+    });
+    await t.test('没拿到名单 → 没查成', () => {
+      const miss = inspectModelLabelNames({});
+      assert.ok(miss.ok === false && miss.unscanned === true, JSON.stringify(miss));
+    });
+    await t.test('检查已接进 dao-check（不接 = 规矩没有哨）', () => {
+      const src = require('fs').readFileSync(path.join(REPO, 'scripts', 'dao-check.mjs'), 'utf8');
+      assert.ok(/checkModelLabelNames\(\);/.test(src) && /model-label-name-check\.mjs/.test(src),
+        'dao-check 没调 checkModelLabelNames');
+    });
+  });
 });
