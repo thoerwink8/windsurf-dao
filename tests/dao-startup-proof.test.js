@@ -577,4 +577,84 @@ describe('dao 开工验证', () => {
     });
   });
 
+  it('#984：超时常量可注入；等超时才红，不许立刻杀', async (t) => {
+    const S = await S_LOAD;
+    const MARKER = '› [Pasted Content 4700 chars]\n';
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+
+    function fakeClock(startMs) {
+      let t = startMs;
+      return {
+        now: () => t,
+        sleep: (ms) => { t += Math.max(1, ms); },
+      };
+    }
+
+    await t.test('短超时：粘贴等到超时才 unsubmitted-paste，不是首拍即杀', () => {
+      const c = fakeClock(1_000);
+      let reads = 0;
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_984_short',
+        readOnce: () => { reads += 1; return { ok: true, result: { terminal: { tail: [MARKER] } } }; },
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: c.sleep, now: c.now, label: '审官',
+      });
+      assert.equal(r.ok, false);
+      assert.equal(r.state, 'unsubmitted-paste');
+      assert.equal(r.pasteSubmitted, false);
+      assert.ok(reads > 1, JSON.stringify({ r, reads }));
+      assert.ok(r.elapsedMs >= 50, JSON.stringify({ r, reads }));
+    });
+
+    await t.test('变异：同一套粘贴把超时改回 5000，轮数必须变多（注入真生效）', () => {
+      const short = fakeClock(1_000);
+      let shortReads = 0;
+      S.verifyStartedPolling({
+        dispatchId: 'ctx_984_var_short',
+        readOnce: () => { shortReads += 1; return { ok: true, result: { terminal: { tail: [MARKER] } } }; },
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: short.sleep, now: short.now, label: '审官',
+      });
+      const long = fakeClock(1_000);
+      let longReads = 0;
+      const longR = S.verifyStartedPolling({
+        dispatchId: 'ctx_984_var_long',
+        readOnce: () => { longReads += 1; return { ok: true, result: { terminal: { tail: [MARKER] } } }; },
+        proofOnce: unproven,
+        timeoutMs: 5000, intervalMs: 5, sleep: long.sleep, now: long.now, label: '审官',
+      });
+      assert.equal(longR.state, 'unsubmitted-paste');
+      assert.ok(longReads > shortReads * 10, JSON.stringify({ shortReads, longReads }));
+      assert.ok(longR.elapsedMs >= 5000, JSON.stringify({ elapsed: longR.elapsedMs }));
+    });
+
+    await t.test('waitAndVerify 空屏：短超时等到才失败，不是立刻红', () => {
+      const c = fakeClock(1_000);
+      let reads = 0;
+      const r = S.waitAndVerify({
+        readOnce: () => { reads += 1; return { text: '' }; },
+        timeoutMs: 40, intervalMs: 10, sleep: c.sleep, now: c.now,
+      });
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, '读了是空的');
+      assert.ok(reads > 1, JSON.stringify({ r, reads }));
+    });
+
+    await t.test('waitForOutJson 生产默认仍是 60s（#565 真派工不传 timeoutMs）', () => {
+      const src = fs.readFileSync(path.join(__dirname, 'helpers', 'dao-harness.js'), 'utf8');
+      assert.match(src, /function waitForOutJson\(resultPath, \{ timeoutMs = 60000/,
+        'waitForOutJson 默认必须 60000，不许砍到 5s');
+    });
+    await t.test('waitForOutJson 文件不在：短超时等到才放弃，不是立刻 null', () => {
+      const missing = path.join(os.tmpdir(), 'dao-984-missing-' + Date.now() + '.json');
+      const c = fakeClock(1_000);
+      let naps = 0;
+      const r = waitForOutJson(missing, {
+        timeoutMs: 30, stepMs: 10, now: c.now, sleep: (ms) => { naps += 1; c.sleep(ms); },
+      });
+      assert.equal(r, null);
+      assert.ok(naps > 1, JSON.stringify({ r, naps }));
+    });
+  });
+
 });

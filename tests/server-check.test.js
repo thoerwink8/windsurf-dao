@@ -8,6 +8,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import {
   classifyOrcaStdout,
   classifyRuntimeStatus,
@@ -29,7 +31,11 @@ import {
   classifyExecutableEntry,
   whichOnPath,
   scanRetiredClis,
+  DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SERVER_CHECK_SRC = resolve(HERE, '..', 'scripts', 'server-check.mjs');
 
 test('server-check 判别力', async (t) => {
   await t.test('classifyOrcaStdout', async (t) => {
@@ -672,4 +678,25 @@ test('⑳ 单元漂移', async (t) => {
     const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
     assert.equal(r.state, 'ok');
   });
+});
+
+test('#984 ⑪ 预算 60s + orca 面 9 项挂退役牌', () => {
+  assert.equal(DAO_CHECK_NESTED_TIMEOUT_MS, 60_000, '⑪ 预算必须是 60s——改回 180s/600s 这条要红');
+  const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+  assert.match(src, /timeout: DAO_CHECK_NESTED_TIMEOUT_MS/,
+    '⑪ 必须用命名常量，不许再写 180000/600000');
+  assert.doesNotMatch(src, /timeout:\s*180000/,
+    '⑪ 不许再写 180s 硬编码');
+  assert.match(src, /dao-check 自己 \$\{ms\}ms/,
+    '⑪ detail 必须带 dao-check 自己的耗时');
+  const retired = ['① orca 在 PATH', '④ runtime 可达', '⑤ worktree 面', '⑥ terminal 面',
+    '⑦ orchestration 面', '⑧ automations 面', '⑨ 本仓已注册进 orca', '⑩ 托管账号可用',
+    '⑬ start=agent'];
+  const lines = src.split(/\r?\n/);
+  for (const name of retired) {
+    const line = lines.find((l) => l.includes(name) && l.includes('退役条件：mirasim 派工实跑 + orca 退役'));
+    assert.ok(line, `${name} 必须挂退役牌`);
+  }
+  assert.match(src, /现在不删/,
+    '退役牌必须写现在不删');
 });

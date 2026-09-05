@@ -184,7 +184,17 @@ describe('dao 启动与活性', () => {
 
   it('② --submit 不存在（真 --help，禁 mock）', async (t) => {
     const S = await S_LOAD;
+    // 有 orca 走 live --help；无 orca / ETIMEDOUT 才夹具。不许永远塞 ENOENT（#984 返工红 3）。
+    const availNow = S.orcaHelpAvailable();
+    if (availNow.ok) await S.prefetchLiveHelp([...new Set(S.catalogUsedFlags().map((x) => x.cmd))]);
     const fetched = S.fetchHelpPreferLive('orchestration worker-start');
+    await t.test('有 orca 时走 live，无 orca 才夹具（禁永 ENOENT）', () => {
+      if (!availNow.ok) {
+        assert.equal(fetched.source, 'fixture', '无 orca 才夹具  →  ' + JSON.stringify(availNow));
+        return;
+      }
+      assert.equal(fetched.source, 'live', '有 orca 必须 live  →  ' + JSON.stringify({ availNow, source: fetched.source }));
+    });
     await t.test(`worker-start --help 有文本（源=${fetched.source}）`, () => {
       assert.ok(String(fetched.text).trim().length > 0, `worker-start --help 有文本（源=${fetched.source}）`);
     });
