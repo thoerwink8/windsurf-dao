@@ -104,11 +104,16 @@ export function verifyStarted(readJson) {
   return { ok: true, text, unscanned: false };
 }
 
-export function waitAndVerify({ readOnce, timeoutMs = DEFAULT_PROBE_WAIT_MS, intervalMs = 400, sleep = sleepSync } = {}) {
+export function waitAndVerify({
+  readOnce, timeoutMs = DEFAULT_PROBE_WAIT_MS, intervalMs = 400,
+  sleep = sleepSync, now = Date.now,
+} = {}) {
   if (typeof readOnce !== 'function') throw new Error('waitAndVerify 要 readOnce');
-  const t0 = Date.now();
+  // #984：timeoutMs / now / sleep 都可注入。测试给毫秒级假钟，不许改「等超时才判红」。
+  const clock = typeof now === 'function' ? now : Date.now;
+  const t0 = clock();
   let last = { ok: false, reason: '读了是空的', text: '', unscanned: false };
-  while (Date.now() - t0 < timeoutMs) {
+  while (clock() - t0 < timeoutMs) {
     last = verifyStarted(readOnce());
     if (last.ok) return last;
     if (last.reason === '有待确认提示' || last.reason === '没读成' || last.reason === '拒模') return last;
@@ -340,11 +345,14 @@ export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
   stableRoundsNeeded = 3, provider, expect,
+  now = Date.now,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
   }
-  const t0 = Date.now();
+  // #984：timeoutMs / now / sleep 都可注入。测试给毫秒级假钟，不许改「等超时才判红」。
+  const clock = typeof now === 'function' ? now : Date.now;
+  const t0 = clock();
   let reads = 0;
   let unscanned = null;
   let lastText = '';
@@ -353,7 +361,7 @@ export function verifyStartedPolling({
   let stableRounds = 0;
   let everSawExpect = false;
   const cursor = isCursorStartChannel(provider);
-  while (Date.now() - t0 < timeoutMs) {
+  while (clock() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
       if (proof && proof.ok && proof.proven) {
@@ -361,7 +369,7 @@ export function verifyStartedPolling({
           ok: true,
           state: 'started',
           proof, reads,
-          elapsedMs: Date.now() - t0,
+          elapsedMs: clock() - t0,
           text: lastText,
         };
       }
@@ -394,7 +402,7 @@ export function verifyStartedPolling({
             cursorStart: startEv.kind,
             proof: proofUnavailable || undefined,
             reads, stableRounds,
-            elapsedMs: Date.now() - t0,
+            elapsedMs: clock() - t0,
             text,
           };
         }
@@ -426,7 +434,7 @@ export function verifyStartedPolling({
             proofFallback: true,
             proof: proofUnavailable,
             reads, stableRounds,
-            elapsedMs: Date.now() - t0,
+            elapsedMs: clock() - t0,
             text,
           };
         }
@@ -446,7 +454,7 @@ export function verifyStartedPolling({
           workingAfterInject: true,
           proof: proofUnavailable,
           reads, stableRounds,
-          elapsedMs: Date.now() - t0,
+          elapsedMs: clock() - t0,
           text,
         };
       }
@@ -461,7 +469,7 @@ export function verifyStartedPolling({
       reason: UNSUBMITTED_PASTE_REASON,
       evidence: leftoverAtEnd.evidence,
       reads,
-      elapsedMs: Date.now() - t0,
+      elapsedMs: clock() - t0,
       text: lastText,
       pasteSubmitted: false,
     };
@@ -473,7 +481,7 @@ export function verifyStartedPolling({
     unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
     reads,
     stableRounds,
-    elapsedMs: Date.now() - t0,
+    elapsedMs: clock() - t0,
     text: lastText,
   };
 }

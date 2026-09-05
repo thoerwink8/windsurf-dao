@@ -89,6 +89,7 @@ function orcaJson(args, opts) {
 }
 
 function checkOrcaOnPath() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = run('orca', ['--help'], { timeout: 20000 });
   if (!r.probed) {
     return { state: UNKNOWN, detail: `${r.reason}——PATH 里没有 orca？serve 启动时会装到 ~/.local/bin，确认 PATH 带上它` };
@@ -126,6 +127,7 @@ export function classifyRuntimeStatus(result) {
 }
 
 function checkRuntimeReachable() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = orcaJson(['status', '--json'], { timeout: 30000 });
   if (r.state !== OK) return { ...r, detail: `status 本身没查成：${r.detail || ''}` };
   return classifyRuntimeStatus(r.payload?.result);
@@ -133,6 +135,7 @@ function checkRuntimeReachable() {
 
 /** 扫完是空的 → ok 但标 empty；没查成 → unknown。两者必须分得开。 */
 function checkListSurface(name, args, pick) {
+  // #984 退役牌：⑤⑥⑦ 走这条。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = orcaJson(args);
   if (r.state !== OK) return { ...r, detail: `${name}：${r.detail || ''}` };
   const list = pick(r.payload?.result);
@@ -165,6 +168,7 @@ export function classifyLandAutomation(list, name = LAND_AUTOMATION_NAME) {
 }
 
 function checkLandAutomation() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = orcaJson(['automations', 'list', '--json']);
   if (r.state !== OK) return { ...r, detail: `automations list：${r.detail || ''}` };
   const list = r.payload?.result?.automations;
@@ -178,6 +182,7 @@ function checkLandAutomation() {
 }
 
 function checkRepoRegistered() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = orcaJson(['repo', 'list', '--json']);
   if (r.state !== OK) return { ...r, detail: `repo list：${r.detail || ''}` };
   const repos = r.payload?.result?.repos;
@@ -235,6 +240,7 @@ export function classifyAccountsResult(result) {
 }
 
 function checkAccounts() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const r = orcaJson(['account', 'list', '--json']);
   if (r.state !== OK) return { ...r, detail: `account list：${r.detail || ''}` };
   return classifyAccountsResult(r.payload?.result);
@@ -252,15 +258,21 @@ function checkDisplay() {
   return { state: OK, detail: `无 DISPLAY，靠 orca 自起 Xvfb（${found}）` };
 }
 
+/** ⑪ 嵌套预算（#984）：dao.test 缩时后 dao-check 只要 ~15s，60s 够盖住余量。
+ *  超了本身就是要报的病，不是要等的事（600s/180s 都把调用方拖过 SIGKILL）。 */
+export const DAO_CHECK_NESTED_TIMEOUT_MS = 60_000;
+
 /** 嵌套跑仓库自检：只取退出码，不解析它的输出（不复用被检查对象的解析逻辑）。 */
 function checkRepoSelfCheck() {
-  // 预算 180s 不是 600s：2026-09-06 实咬——600s 的嵌套预算把调用方拖过它自己的超时被 SIGKILL，
-  // 外面只看到「卡 10 分钟没输出」。dao-check 正常 ~80s（其中 70s 是 dao.test.js，缩时另有单）；
-  // 超 180s 本身就是要报的病，不是要等的事。
-  const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'dao-check.mjs')], { timeout: 180000 });
-  if (!r.probed) return { state: UNKNOWN, detail: `dao-check 没跑成：${r.reason}` };
-  if (r.code !== 0) return { state: RED, detail: `dao-check 退出 ${r.code}（跑 node scripts/dao-check.mjs 看红项）` };
-  return { state: OK, detail: 'dao-check 退出 0' };
+  const t0 = Date.now();
+  const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'dao-check.mjs')], {
+    timeout: DAO_CHECK_NESTED_TIMEOUT_MS,
+  });
+  const ms = Date.now() - t0;
+  const took = `dao-check 自己 ${ms}ms`;
+  if (!r.probed) return { state: UNKNOWN, detail: `dao-check 没跑成：${r.reason}（${took}）` };
+  if (r.code !== 0) return { state: RED, detail: `dao-check 退出 ${r.code}（跑 node scripts/dao-check.mjs 看红项；${took}）` };
+  return { state: OK, detail: `dao-check 退出 0（${took}）` };
 }
 
 /** #802：检查器自己扫 TOML 文本，不 import launch.mjs / agent-ready.mjs。 */
@@ -393,6 +405,7 @@ function loadTuiAgentCatalog({ env = process.env, readFile } = {}) {
 }
 
 function checkOrcaAgentIds() {
+  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
   const routingPath = join(REPO_ROOT, 'docs', 'model-routing.toml');
   if (!existsSync(routingPath)) {
     return { state: UNKNOWN, detail: 'docs/model-routing.toml 不在（没查成）' };
@@ -1187,19 +1200,22 @@ function checkModelReconcile() {
 }
 
 const CHECKS = [
-  ['① orca 在 PATH', checkOrcaOnPath],
+  // #984 退役牌（现在不删）：①④⑤⑥⑦⑧⑨⑩⑬ 是 orca 产品面。orca 按 #880 验收后退役
+  // （用户 2026-09-06：「orca 要全撤了还检测它干嘛」）。工人仍从 orca 派（卡 B 返工 #982 在途），
+  // 盲删=退役前盲飞。删这 9 项的条件：mirasim 派工实跑 + orca 退役，到时一并删。
+  ['① orca 在 PATH', checkOrcaOnPath], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
   ['② 非 root 运行', checkNotRoot],
   ['③ 显示面（DISPLAY 或 Xvfb）', checkDisplay],
-  ['④ runtime 可达', checkRuntimeReachable],
-  ['⑤ worktree 面', () => checkListSurface('worktree ps', ['worktree', 'ps', '--json'], (x) => x?.worktrees)],
-  ['⑥ terminal 面', () => checkListSurface('terminal list', ['terminal', 'list', '--json'], (x) => x?.terminals)],
-  ['⑦ orchestration 面', () => checkListSurface('run-list', ['orchestration', 'run-list', '--json'], (x) => x?.runs)],
-  ['⑧ automations 面（land 在册且启用）', checkLandAutomation],
-  ['⑨ 本仓已注册进 orca', checkRepoRegistered],
-  ['⑩ 托管账号可用', checkAccounts],
+  ['④ runtime 可达', checkRuntimeReachable], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑤ worktree 面', () => checkListSurface('worktree ps', ['worktree', 'ps', '--json'], (x) => x?.worktrees)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑥ terminal 面', () => checkListSurface('terminal list', ['terminal', 'list', '--json'], (x) => x?.terminals)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑦ orchestration 面', () => checkListSurface('run-list', ['orchestration', 'run-list', '--json'], (x) => x?.runs)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑧ automations 面（land 在册且启用）', checkLandAutomation], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑨ 本仓已注册进 orca', checkRepoRegistered], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑩ 托管账号可用', checkAccounts], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
-  ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds],
+  ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],

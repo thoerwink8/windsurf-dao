@@ -89,7 +89,7 @@
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpus, homedir } from 'node:os';
+import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { runOrcaRaw } from './lib/orca-run.mjs';
@@ -215,7 +215,12 @@ function runOneSuite(dir, f) {
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
-      const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim() };
+      const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
+      const env = {
+        ...process.env,
+        NODE_COMPILE_CACHE: compileCache,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+      };
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
@@ -1634,7 +1639,7 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
-checkModelLabelNames();
+if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1643,7 +1648,7 @@ checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
-if (FULL || !AFFECTED) checkFeishuGroupsLive();
+if (FULL) checkFeishuGroupsLive();
 else netParked('飞书群有效性', '要打飞书 API，实测 11.3s');
 checkReleasePolicySamples();
 checkReleasePolicyLive();
