@@ -63,6 +63,6 @@
 
 - Claude 族终端一律经 reclaude 链路起（凭据挂在那条链上，裸 claude 会 login rejected）。
 - 审查换厂商；GPT 禁入 UI 类活（含复审），此禁令与「审查换厂商」相撞时禁令优先。
-- 派工选型读 `docs/model-routing.json`（2026-08-22 拍板选型只认 JSON；启动模板才在 model-routing.toml）。
+- 派工选型读 `docs/model-routing.json`（2026-08-22 拍板选型只认 JSON；启动模板才在 model-routing.toml）。**「腿」节帅位自己改**（2026-09-05 拍板，追认现实用）；「禁令/规则/轴」改动仍问人。
 
 > 本页常驻注入每轮对话，总量控制在 2000 token 以内；加行前先问删哪行。

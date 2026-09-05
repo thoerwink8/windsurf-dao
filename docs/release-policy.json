@@ -1,7 +1,7 @@
 {
   "updated": "2026-09-03",
   "_comment": "发布/确认/回滚/预算策略。用户 2026-09-03 拍板：AI 拍代码内一切，人只确认四样。看板后台管理将来读写本文件；任何改动走 PR。",
-  "human_holds": ["对用户发布(minor/major)", "花钱", "删数据", "改规则(协作约定/本文件/model-routing)"],
+  "human_holds": ["对用户发布(minor/major)", "花钱", "删数据", "改规则(协作约定/发布策略/选型禁令)"],
   "confirm": {
     "patch": { "who": "auto", "evidence": ["tests", "dao-check"] },
     "minor": { "who": "admin:1", "evidence": ["changelog", "tests", "dao-check"], "channel": "feishu-hub-card", "timeout_h": 24, "on_timeout": "hold" },
