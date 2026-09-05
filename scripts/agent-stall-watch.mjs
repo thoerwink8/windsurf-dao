@@ -28,7 +28,7 @@ import { issueNumberFromWorktree } from './lib/card-identity.mjs';
 import { resolveActualWorkerModel } from './lib/reviewer-vendor-gate.mjs';
 import { ensurePlain } from './lib/plain-words.mjs';
 import {
-  DEFAULT_SILENCE_MS, scanLiveness, routeSilent,
+  DEFAULT_SILENCE_MS, scanLiveness, routeSilent, applyProgressMemory,
   sessionFromOrcaTerminal, sessionFromMirasimSession,
 } from './lib/liveness.mjs';
 import {
@@ -222,6 +222,11 @@ function livenessStatePath(statePath) {
   return String(statePath).replace(/\.json$/, '') + '-liveness.json';
 }
 
+/** 屏面签名账本：跨轮比对「屏上内容有没有变过」，不是「有没有输出过」。 */
+function progressStatePath(statePath) {
+  return String(statePath).replace(/\.json$/, '') + '-progress.json';
+}
+
 // 会话名要说人话：终端标题常常就是一行 shell 提示符，直接播出去用户只看到一串路径
 // （服务器落地清单「说人话判据」：不出现路径/命令行）。取最后一段，去掉结尾的提示符。
 function plainLabel(sess) {
@@ -315,7 +320,15 @@ function main(argv = process.argv.slice(2)) {
 
   // ② 发现判据（2026-09-05 拍板：删掉「靠认识错误字样」这一层）：
   // 唯一判据是「多久没有可验证的推进」。指纹只留作说明原因，不再决定报不报。
-  const live = scanLiveness({ sessions: liveSessions, thresholdMs: silenceThresholdMs() });
+  // 先过屏面签名：TUI 空转重画会让 lastOutputAt 永远新鲜。2026-09-05 实测——盘面 45 个判 active，
+  // 其中 37 个是 pi 停在空会话界面反复重画边框，假阳率 82%，僵尸卡因此永远清不掉。
+  // 判据只认「屏上内容变没变」，与驱动、厂商、横幅文案全部无关。
+  const progressed = applyProgressMemory({
+    sessions: liveSessions,
+    memory: loadState(progressStatePath(args.state)),
+  });
+  if (!args.dryRun) saveState(progressStatePath(args.state), progressed.memory);
+  const live = scanLiveness({ sessions: progressed.sessions, thresholdMs: silenceThresholdMs() });
   const seenSilent = loadState(livenessStatePath(args.state));
   const nextSilent = {};
   const liveLines = [...driverNotes];
