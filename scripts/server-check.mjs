@@ -570,7 +570,17 @@ export function classifyAgentStallWatch({
       detail: 'dao-agent-stall.timer 不在册——sudo systemctl enable --now dao-agent-stall.timer（装法见 host/machine/systemd/dao-agent-stall.timer）',
     };
   }
-  return { state: OK, detail: 'dao-agent-stall.timer 在册，垫片已退役' };
+  const line = text.split(/\r?\n/).find((l) => /\bdao-agent-stall\.timer\b/.test(l));
+  if (line) {
+    const next = line.trim().split(/\s+/)[0];
+    if (next === '-' || /^n\/a$/i.test(next)) {
+      return {
+        state: RED,
+        detail: 'dao-agent-stall.timer 在册但 NEXT 是横杠（空转，探测等于没拉）——单元要用 OnCalendar，装完 list-timers 的 NEXT 必须是时间',
+      };
+    }
+  }
+  return { state: OK, detail: 'dao-agent-stall.timer 在册且 NEXT 不是横杠，垫片已退役' };
 }
 
 // ⑯ 主树跟主分支 + 机器人吃新码（scripts/server-sync.sh，落地清单第 9 步）。没这个 timer，合并了的代码到不了运行中的机器人。

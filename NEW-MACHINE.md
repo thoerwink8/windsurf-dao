@@ -292,6 +292,7 @@ orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
 # 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
+#   验：systemctl list-timers 里 dao-agent-stall.timer 的 NEXT 必须是时间，不能是 `-`（OnCalendar=*:0/15）
 ```
 
 ### 两条部署前必须先定的（踩过就晚了）

@@ -18,8 +18,12 @@ install -m 644 "$UNIT_DIR/dao-agent-stall.timer" /etc/systemd/system/dao-agent-s
 systemctl disable --now agent-stall-watch.timer 2>/dev/null || true
 rm -f /etc/systemd/system/agent-stall-watch.timer /etc/systemd/system/agent-stall-watch.service
 rm -f /home/orca/bin/agent-stall-watch.mjs
+rm -f /home/orca/.agent-stall-watch.json
 
 systemctl daemon-reload
 systemctl enable --now dao-agent-stall.timer
+# enable --now 只起 timer；oneshot + 从未激活的 service 会让 OnUnitActiveSec 空转。
+# OnCalendar 不依赖这一步，但当场起一次就能验第一轮，不用等下一个 :00/:15。
+systemctl start dao-agent-stall.service || true
 systemctl list-timers --all | grep -E 'dao-agent-stall|agent-stall-watch' || true
 echo "installed dao-agent-stall.timer"

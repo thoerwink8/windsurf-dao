@@ -2,13 +2,17 @@
 #
 # 15 分钟量级 + 连红 2 轮（#833 消歧：不许求快；一次抖动不是事故）。
 # 装法见同目录 dao-agent-stall.service 文件头。
+#
+# 不用 OnUnitActiveSec：oneshot 在服务从未激活时 NEXT 变 `-`、SubState=elapsed，
+# timer 在册但空转（#833 实咬：enable --now 只起 timer 不起 service）。
+# OnCalendar 按钙走，不依赖上一次 service 激活。
 
 [Unit]
 Description=每 15 分钟扫一轮 agent 终端屏面（#833）
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=15min
+OnCalendar=*:0/15
 Persistent=true
 
 [Install]

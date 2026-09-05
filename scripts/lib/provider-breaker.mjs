@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { stallWatchPath } from './agent-stall-detect.mjs';
 
 export const BREAKER_DEFAULTS = Object.freeze({
   windowHours: 24,
@@ -422,7 +423,7 @@ function healthDocFromHome(home, read, exists) {
 }
 
 function stallDocFromHome(home, read, exists) {
-  const path = process.env.AGENT_STALL_WATCH_FILE || join(home, '.agent-stall-watch.json');
+  const path = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(home);
   if (!exists(path)) return { present: false, strikes: {}, path };
   try {
     const strikes = JSON.parse(read(path, 'utf8'));

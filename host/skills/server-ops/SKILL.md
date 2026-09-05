@@ -22,7 +22,7 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 - 单元模板：`host/machine/systemd/dao-agent-stall.service` + `host/machine/systemd/dao-agent-stall.timer`（装法在 service 文件头）。
 - 幂等安装（要 root）：`sudo bash scripts/install-agent-stall-watch.sh`——登记正式 timer，并删 Contabo 垫片 `agent-stall-watch.timer` / `/home/orca/bin/agent-stall-watch.mjs`。
 - 一条命令：`node scripts/agent-stall-watch.mjs`（timer 调同一条；`--dry-run` 只打印）。
-- 探活：`systemctl list-timers` 里要有 `dao-agent-stall.timer`，且没有 `agent-stall-watch.timer`。`scripts/server-check.mjs` ⑮ 会红垫片或漏装。
+- 探活：`systemctl list-timers` 里要有 `dao-agent-stall.timer`，**NEXT 不能是 `-`**（在册但 elapsed 等于没拉），且没有 `agent-stall-watch.timer`。`scripts/server-check.mjs` ⑮ 会红垫片、漏装、或 NEXT 横杠。
 
 ## server-check 三态
 
