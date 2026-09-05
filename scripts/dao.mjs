@@ -1422,15 +1422,17 @@ async function cmdDispatch(args) {
       allowDup: args.allowDup === true,
       now,
     });
-    // #842 派前探一针预览：起终端前按健康表排序 + 逐位真探（红换下一位 / 全红报帅停手）。
-    let preflight = null;
-    try {
-      preflight = await preflightWorkerSlate({
-        slate: slatePack.slate, startIndex: slatePack.startIndex,
-        noPreflight: args.noPreflight === true, dispatchId: null, now,
-      });
-    } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
-    emit({ ok: true, dryRun: true, ...plan, disambiguation, dup, preflight });
+    // #984：dry-run 是纯规划，不打网。审官 dry-run 已经不探（#842 判据：探只在真起时生效）；
+    // 工人 dry-run 原先逐位真探，dao.test.js 二十多次 spawn 叠出 70s，外面再套 ⑪ 就是「卡 10 分钟」。
+    // 真派仍在执行体里探。预览只声明 skipped，不假装探过。
+    emit({
+      ok: true, dryRun: true, ...plan, disambiguation, dup,
+      preflight: {
+        skipped: true,
+        reasons: ['dry-run'],
+        notes: ['dry-run 不探网（#984）；真派在执行体里探'],
+      },
+    });
   }
 
   const queueDir = dispatchQueueDir({ root: ROOT });
