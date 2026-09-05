@@ -167,6 +167,20 @@ function loadHealthRedIds(models) {
   }
 }
 
+/**
+ * 选型里「写码」责任的首选在役模型 id——返工派不出原模型时的顶班人选。
+ * 只取顺位最小且未禁用的一条；读不到返回 null（调用侧按「没有顶班人选」走，不猜）。
+ */
+function pickDefaultWorkerModel(raw) {
+  const list = raw && raw['工人'] && raw['工人']['写码'] && Array.isArray(raw['工人']['写码']['模型'])
+    ? raw['工人']['写码']['模型'] : null;
+  if (!list) return null;
+  const live = list
+    .filter((m) => m && m.id && m['禁用'] !== true && typeof m['顺位'] === 'number')
+    .sort((a, b) => a['顺位'] - b['顺位']);
+  return live.length ? String(live[0].id) : null;
+}
+
 // 完整态势（scan 子命令与 act 共用）。
 function buildSituation({ state } = {}) {
   const github = scanGithub();
@@ -177,14 +191,17 @@ function buildSituation({ state } = {}) {
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let healthRedModels = [];
+  let defaultWorkerModel = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
     healthRedModels = loadHealthRedIds(models);
+    defaultWorkerModel = pickDefaultWorkerModel(raw);
   } catch {
     routingModels = null;
     healthRedModels = [];
+    defaultWorkerModel = null;
   }
   const breakerIngest = ingestBreakerSignals();
   return {
@@ -196,6 +213,7 @@ function buildSituation({ state } = {}) {
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
     healthRedModels,
+    defaultWorkerModel,
   };
 }
 

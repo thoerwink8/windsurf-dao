@@ -369,7 +369,22 @@ function collectCandidates(situation) {
       }), N.rework));
       continue;
     }
-    const rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    // 顶班（2026-09-05 实咬）：快马单的 model/ 标签常是主会话子代理的模型（claude-opus-5），
+    // 它在服务器腿表里没有可派的腿 → 返工永远派不出去，红项在 GitHub 上躺着没人接。
+    // 返工要的是「有人改」，不是「同一个人改」——原模型派不出就落回选型写码首选。
+    // 只对「这个模型不能派」两种原因顶班；「选型没查成」仍 fail-closed，因为那时连顶班人选也验不了。
+    let reworkModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        reworkModel = fb;
+        rGate = fbGate;
+      }
+    }
     if (!rGate.ok) {
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
       continue;
@@ -381,9 +396,11 @@ function collectCandidates(situation) {
     reworkThisRound += 1;
     out.push(withNeeds({
       kind: 'rework', pr: pr.number, head: a.head, issue: issueNo,
-      model: rModel, reviewer: rReviewer, redRounds: a.redRounds,
+      model: reworkModel, reviewer: rReviewer, redRounds: a.redRounds,
       title: pr.title || '', brief, reworkKey: rkey,
-      why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`,
+      ...(substituted ? { substitutedModel: substituted } : {}),
+      why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`
+        + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
     }, N.rework));
     out.push(withNeeds(hub(`PR #${pr.number} 审官判红，已自动派返工工人（红项全文交给它，逐条改）`, 'dispatched', { pr: pr.number }), N.rework));
   }

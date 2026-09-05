@@ -878,3 +878,47 @@ describe('派工失败不许发喜报（2026-09-04 实咬：#787 派工失败，
     assert.equal(seen.filter(a => a.kind === 'escalate').length, 1);
   });
 });
+
+// 顶班（2026-09-05 实咬 #894/#896/#899）：快马单标着 model/claude-opus-5，服务器腿表里没有可派的腿，
+// 返工被 escalate 掉，红项在 GitHub 上躺了 10 小时没人接。这三条钉死「派不出就顶班」而非「派不出就报帅」。
+describe('decide：返工模型顶班（#894 实咬）', () => {
+  function opusRework(over = {}) {
+    const issue = labeledIssue(950, { labels: [
+      { name: 'model/claude-opus-5' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] });
+    const pr = redPr(951, 'h951', 950);
+    return baseSituation({
+      github: { scanned: true, issues: [issue], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 951: { reviews: [redReview('这里不对', 'h951')] } } },
+      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash'],
+      defaultWorkerModel: 'grok-4.6',
+      ...over,
+    });
+  }
+
+  it('原模型不在选型 → 顶班写码首选，不报帅', async () => {
+    const { decide } = await CORE;
+    const r = decide(opusRework());
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1, '应当派返工而不是 escalate');
+    assert.equal(w[0].model, 'grok-4.6');
+    assert.equal(w[0].substitutedModel.from, 'claude-opus-5');
+    assert.match(w[0].why, /顶班 grok-4.6/);
+    assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
+  });
+
+  it('没有顶班人选 → 仍报帅（不许自己猜一个模型）', async () => {
+    const { decide } = await CORE;
+    const r = decide(opusRework({ defaultWorkerModel: null }));
+    assert.equal(byKind(r, 'rework').length, 0);
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
+  });
+
+  it('选型没查成 → 不顶班（顶班人选本身也验不了，fail-closed）', async () => {
+    const { decide } = await CORE;
+    const r = decide(opusRework({ routingModels: null }));
+    assert.equal(byKind(r, 'rework').length, 0);
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'model-routing-unscanned'));
+  });
+});
