@@ -33,6 +33,7 @@ import {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
+import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
 } from './lib/commander-core.mjs';
@@ -86,7 +87,42 @@ function scanGithub() {
   if (!gh.ok) return { scanned: false, error: gh.error };
   const parsed = parseGithubGraphqlResponse(gh.out);
   if (!parsed.ok) return { scanned: false, error: parsed.error };
-  return { scanned: true, issues: parsed.issues, prs: parsed.prs };
+  return {
+    scanned: true, issues: parsed.issues, prs: parsed.prs,
+    attributedIssues: scanAttributedIssues(parsed.issues, parsed.prs),
+  };
+}
+
+/**
+ * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为查它们的 reviewer/ 标签。
+ *
+ * 主查询是 `issues(states: OPEN)`，所以单子一关标签就查不到。2026-09-05 实咬：
+ * #945/#947/#909 的署名单 #833/#815/#889 都关了，标签明明带着 reviewer/gpt-5.6-luna，
+ * 指挥官每轮报「不猜审官」，三张交卷可合的 PR 无限期挂着。**单子关了不等于 PR 不用审。**
+ *
+ * 为什么不把主查询改成 OPEN+CLOSED：那张表按 UPDATED_AT 取前 100 条，掺进关闭单会把
+ * open 单挤出视野——修一个洞捅一个更大的。这里改成按需精确取，条数上限就是 open PR 数。
+ *
+ * 取回来的单**单独放一格**，绝不并进 issues：那是派工候选表，混进已关闭的「已消歧」单
+ * 会被当成新活派出去。取不到就留空，让上游照旧说「不猜审官」——查不到 ≠ 猜一个。
+ */
+function scanAttributedIssues(issues, prs) {
+  const have = new Set((issues || []).map((i) => i && i.number).filter(Boolean));
+  const want = new Set();
+  for (const pr of prs || []) {
+    const n = attributedIssueNumber(pr);
+    if (n != null && !have.has(n)) want.add(n);
+  }
+  const out = [];
+  for (const n of want) {
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    try {
+      const j = JSON.parse(r.out || '{}');
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+    } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
+  }
+  return out;
 }
 
 /**

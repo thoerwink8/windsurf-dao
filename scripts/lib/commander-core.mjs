@@ -202,6 +202,28 @@ export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews
 export const REREVIEW_GRACE_MIN = 45;
 export const MAX_REREVIEW_TRIES = 3;
 
+/**
+ * PR 该派哪个审官：查它署名 issue 上的 reviewer/ 标签。
+ *
+ * 两处快照都要看，因为它们装的是不同的东西：
+ *  · `github.issues` 只有 **open** 单（GraphQL `states: OPEN`）；
+ *  · `github.attributedIssues` 是「open PR 署名到、但不在上面那张表里」的单，多半是**已关闭**的。
+ *
+ * 2026-09-05 实咬：#945/#947/#909 的署名单 #833/#815/#889 早已关闭，标签明明带着 reviewer/，
+ * 可只查 open 快照就是查不到 → 每轮报「不猜审官」→ 三张交卷可合的 PR 无限期挂着。
+ * 单子关了不等于 PR 不用审。
+ *
+ * 已关闭的单**只用来查标签**，绝不并进 `github.issues`——那张表是派工候选表，
+ * 混进已关闭的「已消歧」单会被当成新活派出去。
+ */
+export function reviewerLabelFor(gh = {}, pr) {
+  const n = attributedIssueNumber(pr);
+  if (n == null) return null;
+  const hit = (gh.issues || []).find((i) => i && i.number === n)
+    || (gh.attributedIssues || []).find((i) => i && i.number === n);
+  return labelValue(hit, 'reviewer/');
+}
+
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
 // notify-hub / land 是随附动作，产出处会用 _needs 显式继承主动作的依赖（下面 hub/withNeeds）。
 // escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
@@ -415,7 +437,7 @@ function collectCandidates(situation) {
       out.push(withNeeds({
         kind: 'rereview', pr: pr.number, head: a.head,
         issue: attributedIssueNumber(pr),
-        reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
+        reviewer: reviewerLabelFor(gh, pr),
         stateKey: rrKey,
         tries: tries + 1,
         why: firstRound

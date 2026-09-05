@@ -1109,3 +1109,39 @@ describe('复审要能重试，因为「票写出去了」不等于「判定落�
     assert.equal(byKind(r, 'rereview').length, 0, '时钟读不到时要保守，不许当成「早就该重发」');
   });
 });
+
+// ── 署名单已关闭时标签查不到（2026-09-05 实咬 #945/#947/#909）──
+describe(`审官标签要在关闭的署名单上也查得到`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = '6bcdc231aa11bb22cc33dd44ee55ff6677889900';
+  const readyPr = (n, issue) => ({ number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: `署名 issue #${issue}` });
+
+  it('署名单已关闭（不在 open 快照）时，从 attributedIssues 里查到 reviewer/', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: {
+        scanned: true,
+        issues: [],  // #815 已关闭，不在 open 快照里
+        attributedIssues: [{ number: 815, title: '单 815', labels: [{ name: 'reviewer/gpt-5.6-luna' }] }],
+        prs: [readyPr(947, 815)],
+      },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, 'gpt-5.6-luna', '单子关了不等于 PR 不用审——标签得查得到');
+  });
+
+  it('判别力反证：两处都没有就是查不到，不许猜一个', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(890, 888)] },
+      prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+  });
+});
