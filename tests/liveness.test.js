@@ -174,3 +174,20 @@ describe('静默审官接自动换人（#833）', () => {
     assert.equal(uses, 0, '换人顺序/同厂禁令归 agent-stall-detect，本文件不许直接调');
   });
 });
+
+describe('会话名：卡名压过终端标题（实咬：9 个静默审官一个都没换成人）', () => {
+  it('有卡名时用卡名，不用被 CLI 盖成 shell 提示符的标题', async () => {
+    const S = await LOAD;
+    const s = S.sessionFromOrcaTerminal({
+      handle: 't', lastOutputAt: min(600),
+      title: 'orca@vmi:~/orca/workspaces/windsurf-dao/PR-894-审官-gpt-5.6-luna$',
+      displayName: 'PR-#894 审官·gpt-5.6-luna',
+    });
+    assert.equal(s.label, 'PR-#894 审官·gpt-5.6-luna',
+      '拿终端标题当名字，换人判据 parseReviewerCardName 就认不出审官卡，静默审官永远换不了人');
+  });
+  it('没有卡名才回落标题', async () => {
+    const S = await LOAD;
+    assert.equal(S.sessionFromOrcaTerminal({ handle: 't', title: '帅位', lastOutputAt: min(1) }).label, '帅位');
+  });
+});

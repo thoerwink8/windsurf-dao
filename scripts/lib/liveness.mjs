@@ -51,7 +51,11 @@ export function sessionFromOrcaTerminal(t) {
   return {
     id: String(t.handle),
     driver: t.agentIdentity ? 'orca' : 'reclaude',
-    label: String(t.title || t.displayName || t.handle),
+    // 卡名优先于终端标题。四家 CLI 都会盖掉 orca 设的标题，盖成一行 shell 提示符
+    // （memory cc-session-name-terminal-title），拿它当名字有两个后果：播报里是一串路径，
+    // 而且换人判据 parseReviewerCardName 认不出「PR-N-审官-模型」，静默审官全落到「只报警」——
+    // 2026-09-05 服务器 dry-run 实测 9 个静默审官一个都没换成人，就是死在这一格。
+    label: String(t.displayName || t.title || t.handle),
     worktreeId: t.worktreeId || null,
     agentIdentity: t.agentIdentity || null,
     lastProgressAt: at,
