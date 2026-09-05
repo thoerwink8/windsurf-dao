@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -29,7 +29,7 @@ import { runOrca } from './lib/orca-run.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
-  reviewPendingDir, listReviewPending, writeReviewPending,
+  reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -417,6 +417,8 @@ function execAction(action, { state, dryRun, log }) {
       return execRetryDrain(action, { state, dryRun, say });
     case 'open-issue':
       return execOpenIssue(action, { state, dryRun, say });
+    case 'reap-ticket':
+      return execReapTicket(action, { state, dryRun, say });
     case 'noop':
       return { ok: true };
     default:
@@ -451,6 +453,34 @@ function execRetryDrain(action, { state, dryRun, say }) {
     at: nowIso(), pr: planned.pr, tries: planned.tries,
   };
   return r;
+}
+
+// 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
+// 万一同号票再入队就直接从「已试 3 次」起步，一轮就 escalate。
+function execReapTicket(action, { state, dryRun, say }) {
+  const dir = reviewPendingDir({ root: ROOT });
+  const path = reviewPendingPath(dir, action.pr);
+  if (dryRun) { say(`[dry] 回收死票 ${path}`); return { ok: true, dryRun: true }; }
+  // 删之前正面核一次死活。decide 的判据是「不在开放列表里」（缺席），这里要的是「确实关了」（在场证据）——
+  // 缺席可能是查询窗口截断、可能是这一轮 API 抽风；删票不可逆，不拿在场证据不动手。
+  const st = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+  if (!st.ok) { say(`  死活没核成，不删票：PR #${action.pr}（${st.error}）`); return { ok: true, skipped: 'liveness-unscanned' }; }
+  const prState = String(st.out).trim();
+  if (prState !== 'MERGED' && prState !== 'CLOSED') {
+    say(`  PR #${action.pr} 实为 ${prState}，不是死票——不删（decide 的缺席判据这次不作数）`);
+    return { ok: true, skipped: 'still-open' };
+  }
+  let removed = false;
+  try { rmSync(path); removed = true; }
+  catch (e) { if (e?.code !== 'ENOENT') { say(`  回收死票失败：${String(e.message || e)}`); return { ok: false, error: String(e.message || e) }; } }
+  // 按 .pr 字段反查，不照抄键格式——键长什么样是 commander-verbs 的事，手打一份迟早对不上。
+  if (state && state.drainLedger) {
+    for (const [k, v] of Object.entries(state.drainLedger)) {
+      if (Number(v?.pr) === Number(action.pr)) delete state.drainLedger[k];
+    }
+  }
+  say(`  ${removed ? '回收死票' : '死票已不在'}：PR #${action.pr}`);
+  return { ok: true, removed };
 }
 
 function execOpenIssue(action, { state, dryRun, say }) {
@@ -1136,15 +1166,38 @@ function escalate(action, { state, dryRun, say }) {
   }
   const key = escalateKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
+  // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
+  // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
+  // 账本写在本机、当场生效，没有延迟。
+  state.escalateLedger = state.escalateLedger || {};
+  const booked = state.escalateLedger[key];
+  if (booked && booked.issue) {
+    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
+    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
+  }
   // 查重：已有 open 带此标记的单 → 不重复开
   const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
-  if (found.ok) { try { const arr = JSON.parse(found.out || '[]'); if (arr.length) existing = arr[0].number; } catch { /* ignore */ } }
+  let searchOk = false;
+  if (found.ok) {
+    try { const arr = JSON.parse(found.out || '[]'); searchOk = true; if (arr.length) existing = arr[0].number; }
+    catch { searchOk = false; }
+  }
+  // 查重没查成 ≠ 没有重复。这是个**写**动作，fail-open 的代价是多开一张单，
+  // 而开单不可撤（只能关）。所以没查成一律不开——本轮静默，下轮查得成时再开。
+  // 实咬 2026-09-06：gh search 有索引延迟，同一 key 隔 20 分钟被开了两张（#973-#980 四对）。
+  if (!searchOk) {
+    say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
+    return { ok: true, skipped: 'dedup-unscanned' };
+  }
   const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
+  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
   return opened;
 }

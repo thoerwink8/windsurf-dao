@@ -35,7 +35,7 @@ import {
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
-  'add-label', 'retry-drain', 'open-issue',
+  'add-label', 'retry-drain', 'open-issue', 'reap-ticket',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -251,6 +251,8 @@ export const ACTION_NEEDS = {
   'add-label': ['github'],
   'retry-drain': ['reviewPending'],
   'open-issue': [],
+  // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
+  'reap-ticket': ['github', 'reviewPending'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -378,8 +380,27 @@ function collectCandidates(situation) {
 
   // ② review-pending 入队 → 首次 attach-reviewer；票还在且有上次尝试账 → retry-drain（#971）
   // 走到重试分支本身就是「上次没成」的证据（派了 ≠ 成了）。宽限期内不重发；试满 escalate。
+  // 队列自己不认领存活，票就永远不死：PR 合了/关了，票还在，drain 永远消不掉，
+  // tries 打满后每一轮都开一张 [待拍板] 单。实咬 2026-09-06：#970/#972/#983 合并后
+  // 仍被开单，17 张噪音单全从这里来。存活判据只在 github 真扫到时才成立——
+  // 没扫到时 openPrs 是空集，把全部活票判成死票正是最坏的剪法。
+  // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
+  // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
+  // 那时「不在列表里」不再是死票的证据，一张都不剪。
+  const PR_WINDOW = 100;
+  const prList = gh.prs || [];
+  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
+  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
+    if (ghScanned && !openPrs.has(Number(it.pr))) {
+      out.push(withNeeds({
+        kind: 'reap-ticket', pr: it.pr,
+        why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
+      }, N['reap-ticket']));
+      continue;
+    }
     const drain = validateRetryDrain({
       pr: it.pr,
       queue: rp.items,

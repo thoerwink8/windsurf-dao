@@ -529,6 +529,10 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
       ...over,
     };
   }
+  // 队列里的票只有在 PR 真开着时才是活票——2026-09-06 加死票回收后，夹具必须把 PR 摆进开放列表。
+  function openPr(n) {
+    return { number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: `head${n}` };
+  }
 
   it('半标 + 能推出唯一审官 → add-label，不 escalate', async () => {
     const { decide } = await CORE;
@@ -563,6 +567,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
   it('队列里的票有上次账且过了宽限 → retry-drain，不是 attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(sit({
+      github: { scanned: true, issues: [], prs: [openPr(920)] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
       drainLedger: { 'pr:920': { at: OLD_AT, tries: 1 } },
     }));
@@ -587,6 +592,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     const { decide } = await CORE;
     const { MAX_DRAIN_TRIES } = await VERBS;
     const r = decide(sit({
+      github: { scanned: true, issues: [], prs: [openPr(920)] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
       drainLedger: { 'pr:920': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     }));

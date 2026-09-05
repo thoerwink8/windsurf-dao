@@ -138,6 +138,8 @@ describe('decide：自己做（确定性）', () => {
   it('review-pending 队列有条目 → attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
+      // PR 必须真在开放列表里，否则票是死票、该走 reap-ticket（2026-09-06 死票回收后此夹具才完整）。
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'abc' }] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-sol', worker: 'wt-x', head: 'abc' }] },
     }));
     const a = byKind(r, 'attach-reviewer');
@@ -1147,5 +1149,40 @@ describe(`审官标签要在关闭的署名单上也查得到`, () => {
     const rr = byKind(r, 'rereview');
     assert.equal(rr.length, 1);
     assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+  });
+});
+
+// ── 死票回收（2026-09-06 实咬：#970/#972/#983 合并后仍每轮开单，17 张噪音单的源头） ──
+describe('复审票存活：PR 合了/关了，票必须回收', () => {
+  it('票的 PR 不在开放列表 → reap-ticket，且不再产 retry-drain/escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [] }, // 一张开放 PR 都没有 = 票全是死的
+      reviewPending: { scanned: true, items: [{ pr: 983, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:983': { at: '2026-09-05T00:00:00Z', pr: 983, tries: 3 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket').map((a) => a.pr), [983]);
+    assert.deepEqual(byKind(r, 'retry-drain'), []);
+    assert.deepEqual(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted'), []);
+  });
+
+  it('票的 PR 还开着 → 不回收，照常走 drain', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [{ number: 890, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'aaa' }] },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:890': { at: '2026-09-05T00:00:00Z', pr: 890, tries: 1 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
+
+  // 红样本：github 没查成时把全部活票当死票剪掉，是这个改动最坏的失败形态。
+  it('github 没查成 → 一张票都不许回收（空集不等于「PR 都没了」）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: false, error: 'API 挂了' },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'x', worker: null }] },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
   });
 });
