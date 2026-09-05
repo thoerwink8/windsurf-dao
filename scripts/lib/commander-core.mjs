@@ -19,7 +19,7 @@
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
-import { analyzeGithubReviews } from './review-state.mjs';
+import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 
 export const ACTION_KINDS = [
@@ -107,6 +107,42 @@ export function analyzeReviews(reviews) {
     return { state: 'COMMENTED' };
   });
   return analyzeGithubReviews(mapped);
+}
+
+/**
+ * 只数「打在当前 PR head 上」的红/绿。
+ *
+ * 判绿只对它当时看的那个 commit 有效（memory review-green-must-match-head）——反过来同样成立：
+ * 判红也只对当时那个 commit 有效。工人返工推了新 head，旧 review 挂在旧 commit 上，
+ * 不能再当「仍红」。#911–#918 一夜八张重复报帅单就是拿历史累计红轮数判出来的。
+ *
+ * 三种「没查成」，一律 fail-visible，**绝不**当成「head 变了所以清零」，也不当成「仍红」：
+ *   reviews-missing     —— 这张 PR 的 reviews 没抓到（既有契约：静默跳过，不臆测）
+ *   head-unscanned      —— PR headRefOid 没查成，无从判断红打在哪个 commit 上
+ *   commit-id-unscanned —— 有判别态 review 缺 commit_id，无从判断它属于哪个 commit
+ *
+ * 查成时返回 analyzeGithubReviews 的形态（redRounds/green/latestGreen/latestRed），
+ * 外加 head（当前 head）、judgedTotal（历史判别态总数）、atHead（其中打在当前 head 上的条数）。
+ */
+export function analyzeReviewsAtHead(reviews, head) {
+  if (!Array.isArray(reviews)) return { scanned: false, reason: 'reviews-missing' };
+  const h = typeof head === 'string' ? head.trim() : '';
+  if (!h) return { scanned: false, reason: 'head-unscanned' };
+  const judged = [];
+  for (const rv of reviews) {
+    const state = normalizeReviewState(rv);
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue; // COMMENTED 等不参与判别，缺 commit_id 也无所谓
+    const cid = rv && typeof rv === 'object' ? String(rv.commit_id || rv.commitId || '').trim() : '';
+    if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
+    judged.push({ rv, cid });
+  }
+  const atHead = judged.filter((x) => x.cid === h);
+  return {
+    ...analyzeGithubReviews(atHead.map((x) => x.rv)),
+    head: h,
+    judgedTotal: judged.length,
+    atHead: atHead.length,
+  };
 }
 
 /**
@@ -251,23 +287,39 @@ function collectCandidates(situation) {
       continue;
     }
 
-    const a = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
-    if (!a.scanned) continue; // 该 PR 没抓到 reviews 数据：不臆测（总闸另按 prReviews 节 fail-closed）
+    // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不报帅、不唤大脑）。
+    const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    if (!a.scanned) {
+      // 「没查成」与「查过确实没红」必须分开。reviews-missing 沿用既有契约静默跳过；
+      // head / commit_id 没查成走 fail-visible 的 unscanned escalate（escalate 对 unscanned 是静默进 status，不开单不刷屏）。
+      if (a.reason !== 'reviews-missing') {
+        const headMissing = a.reason === 'head-unscanned';
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 的红要按当前 head 重算，但${headMissing ? ' PR headRefOid 没查成' : '有判别态 review 缺 commit_id'}——不清零、也不当仍红`,
+          { reason: 'unscanned', pr: pr.number, missing: [headMissing ? 'github' : 'prReviews'], detail: a.reason },
+        ), N['wake-brain']));
+      }
+      continue;
+    }
+    // 唤醒预算按 head 分桶：旧 head 唤过几次不算在新 head 头上。
+    // 为什么分桶而不是「head 变了就清零」：decide 是纯函数，清零要回写 state，
+    // 判据就又依赖可变状态、夹具测不出来；分桶零改写、旧桶自然失效，还留着历史可查。
+    const wakeKey = `pr:${pr.number}@${a.head}`;
     if (a.redRounds >= 2) { // 两轮红：先唤大脑给方案并送达（2026-09-04 拍板：帅位要负责给方案推闭环，不许晾着）；唤满才报帅换人
-      const woken = wakeCounts[`pr:${pr.number}`] || 0;
+      const woken = wakeCounts[wakeKey] || 0;
       if (woken >= WAKE_LIMIT) {
-        out.push(withNeeds(esc(`PR #${pr.number} 审官 ${a.redRounds} 轮仍红、大脑推了 ${woken} 次没闭环——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds, woken }), N['wake-brain']));
+        out.push(withNeeds(esc(`PR #${pr.number} 审官 ${a.redRounds} 轮仍红（都打在当前 head ${a.head.slice(0, 8)} 上）、大脑推了 ${woken} 次没闭环——报帅换人，不自动`, { reason: 'two-red', pr: pr.number, redRounds: a.redRounds, woken, head: a.head }), N['wake-brain']));
         out.push(withNeeds(hub(`PR #${pr.number} 审官两轮仍红、推了 ${woken} 次没推动，等你拍换人`, 'stuck', { pr: pr.number }), N['wake-brain']));
       } else {
-        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官 ${a.redRounds} 轮仍红——给出具体修复方案并送达工人/审官终端推动闭环，送不动才报帅` }, N['wake-brain']));
+        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, wakeKey, pr: pr.number, head: a.head, why: `PR #${pr.number} 审官 ${a.redRounds} 轮仍红（都打在当前 head 上）——给出具体修复方案并送达工人/审官终端推动闭环，送不动才报帅` }, N['wake-brain']));
       }
     } else if (a.redRounds === 1 && !a.latestGreen) { // 审官判红一轮 → 唤大脑；同单已唤满 → 转报帅
-      const woken = wakeCounts[`pr:${pr.number}`] || 0;
+      const woken = wakeCounts[wakeKey] || 0;
       if (woken >= WAKE_LIMIT) {
-        out.push(withNeeds(esc(`PR #${pr.number} 已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', pr: pr.number, woken }), N['wake-brain']));
+        out.push(withNeeds(esc(`PR #${pr.number} 在当前 head ${a.head.slice(0, 8)} 上已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', pr: pr.number, woken, head: a.head }), N['wake-brain']));
         out.push(withNeeds(hub(`PR #${pr.number} 唤大脑 ${woken} 次仍没闭环，等你`, 'stuck', { pr: pr.number }), N['wake-brain']));
       } else {
-        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, pr: pr.number, why: `PR #${pr.number} 审官判红一轮，返工方向要判` }, N['wake-brain']));
+        out.push(withNeeds({ kind: 'wake-brain', target: `pr:${pr.number}`, wakeKey, pr: pr.number, head: a.head, why: `PR #${pr.number} 审官判红一轮（打在当前 head 上），返工方向要判` }, N['wake-brain']));
       }
     }
   }
@@ -290,12 +342,14 @@ function collectCandidates(situation) {
  * 纯函数：态势 → 动作清单。**入口总闸 fail-closed**（审官 #840 红①）。
  * situation 各节形态（scan 负责填，任一节没查成把 scanned 置 false + error）：
  *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
- *                    prs:[{number,title,isDraft,reviewDecision,mergeable,statusCheckRollup,body}], error }
+ *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
+ *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
  *   orca:          { scanned, worktrees:[...], error }
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }
- *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body}], bodies:[...] } }, error }（decide 优先 reviews）
+ *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
- *   wakeCounts:    { <target>: n }
+ *   wakeCounts:    { <wakeKey>: n }——PR 类 wakeKey 是 `pr:<n>@<headRefOid>`（按 head 分桶），stall 类仍是 `stall:<term>`；
+ *                  act 侧按 action.wakeKey（缺则回退 target）记账
  *
  * 契约：任一节 unscanned → 依赖它的动作一律不产，汇成**一条** escalate(reason:'unscanned', missing:[...])；
  *       依赖节全 scanned 的动作照常。全部 unscanned → 只有那一条 escalate、零正向动作。
