@@ -183,6 +183,24 @@ describe('session-audit · 纯函数', () => {
     assert.ok(r.why.includes('没读成'));
   });
 
+  it('⑤ 审官返工 · unscanned 必须留下本轮产出键（否则 since 一推就静默漏报）', async (t) => {
+    const { auditTurn } = await LIB_LOAD;
+    const unscanned = { unscanned: true, error: '目录不在' };
+    await t.test('首轮无 carry、有新 commit ⇒ pending 含本轮键（不是只带走空 carry）', () => {
+      const r = auditTurn({ produced: { commits: [commit()] }, events: unscanned, since: T0 });
+      assert.strictEqual(r.verdict, 'unscanned');
+      assert.deepStrictEqual(r.missing, []);
+      assert.deepStrictEqual(r.pending, [KEY], '账本没读成也要把本轮可确定的产出放进 pending');
+    });
+    await t.test('下一轮 events=[]、无新产出 ⇒ missing，不是 silent', () => {
+      const r1 = auditTurn({ produced: { commits: [commit()] }, events: unscanned, since: T0 });
+      const r2 = auditTurn({ produced: {}, events: [], since: T1, carry: r1.pending });
+      assert.strictEqual(r2.verdict, 'missing', '账本恢复后仍应看见上一轮没扫到的产出');
+      assert.deepStrictEqual(r2.missing, [KEY]);
+      assert.deepStrictEqual(r2.pending, [KEY]);
+    });
+  });
+
   it('⑤ 三态不合并 · since 无法确定 ⇒ unscanned', async () => {
     const { auditTurn } = await LIB_LOAD;
     for (const bad of [undefined, null, '', 'not-a-date']) {
@@ -274,6 +292,8 @@ describe('session-audit · 纯函数', () => {
           ? 'missing-ancient-pr' : 'silent')],
       ['carry 被丢掉（remind 永不发生）', 'const keys = [...new Set([...keepCarry, ...fresh])].slice(-MAX_PENDING);', 'const keys = [...new Set([...fresh])].slice(-MAX_PENDING);',
         m => m.auditTurn({ produced: {}, events: [ev('audit.bypass', TM1, { detail: 'd', evidence: [KEY] })], since: T0, carry: [KEY] }).verdict],
+      ['unscanned 丢掉本轮产出（账本恢复后静默漏报）', 'verdict: \'unscanned\', ...nil, pending: keys,', 'verdict: \'unscanned\', ...nil, pending: keepCarry,',
+        m => m.auditTurn({ produced: { commits: [commit()] }, events: { unscanned: true, error: '目录不在' }, since: T0 }).pending.join(',')],
     ];
 
     // 每条变异体上，对应样本的判定必须**不同于**正确实现的判定。
@@ -284,6 +304,7 @@ describe('session-audit · 纯函数', () => {
       'relatedness 恒真（任意事件都算指向）': 'missing',
       '产出窗口过滤失效（远古 PR 又算本轮产出）': 'silent',
       'carry 被丢掉（remind 永不发生）': 'remind',
+      'unscanned 丢掉本轮产出（账本恢复后静默漏报）': KEY,
     };
     for (const [label, find, replace, probe] of mutations) {
       await t.test(`${label} ⇒ 翻红`, async () => {
@@ -391,6 +412,33 @@ describe('session-audit-hook · 落点与真跑', () => {
     assert.strictEqual(bypasses(ledger).length, 1, '补记后不该再写 audit.bypass');
     const st4 = JSON.parse(fs.readFileSync(path.join(state, 'life.json'), 'utf8'));
     assert.deepStrictEqual(st4.pending, [], '补记后 pending 要清空');
+  });
+
+  it('⑪ 审官返工 · 首轮账本 unscanned + 新 commit，下一轮空账本仍应 missing 不是 silent', () => {
+    const repo = freshSandbox('repo-unscan');
+    const ledger = path.join(SANDBOX, 'ledger-unscan-missing');
+    const state = freshSandbox('state-unscan');
+    fs.rmSync(ledger, { recursive: true, force: true });
+    const sha = makeRepo(repo);
+    const key = `commit:${sha.slice(0, 7)}`;
+
+    // 轮 1：账本目录不存在 ⇒ unscanned。hook 仍推进 since；本轮产出必须进 pending。
+    const r1 = runHook(repo, { ledger, state, sessionId: 'unscan' });
+    assert.strictEqual(r1.status, 0, `轮1 退出码应为 0：${r1.stderr}`);
+    assert.strictEqual(r1.stdout.trim(), '', 'unscanned 不刷屏');
+    assert.ok(!fs.existsSync(ledger) || bypasses(ledger).length === 0, '没查成不许写 audit.bypass');
+    const st1 = JSON.parse(fs.readFileSync(path.join(state, 'unscan.json'), 'utf8'));
+    assert.deepStrictEqual(st1.pending, [key], '首轮 unscanned 也要把本轮 commit 放进 pending');
+
+    // 轮 2：账本恢复为空、无新产出。commit 已滚出 git 窗口，全靠 pending。
+    fs.mkdirSync(ledger, { recursive: true });
+    const r2 = runHook(repo, { ledger, state, sessionId: 'unscan' });
+    assert.strictEqual(r2.status, 0, `轮2 退出码应为 0：${r2.stderr}`);
+    assert.strictEqual(r2.stdout.trim(), '', '判红那一轮不打印');
+    assert.strictEqual(bypasses(ledger).length, 1, '账本恢复后应补写 audit.bypass，而不是 silent');
+    assert.deepStrictEqual(bypasses(ledger)[0].evidence, [key]);
+    const st2 = JSON.parse(fs.readFileSync(path.join(state, 'unscan.json'), 'utf8'));
+    assert.deepStrictEqual(st2.pending, [key]);
   });
 
   it('⑪ 真跑 · 写出的事件已脱敏（读回自证）', () => {

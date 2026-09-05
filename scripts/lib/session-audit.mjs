@@ -29,6 +29,8 @@
 //
 // ── 三态分得开：不许把「没查成」记成「查过没事」──────────────────────────────
 // 账本读不成（目录不在 / 有文件不是 JSON）⇒ `verdict:'unscanned'`，**既不判红也不判绿**。
+// **本轮可确定的产出键仍进 pending**：hook 照常推进 since，不把键留下 ⇒ 账本恢复后
+// git 窗口已滚过，形成静默漏报（PR #894 审官返工实咬）。
 // 采集腿没查成（如 `gh pr list` 超时）由调用方填 `produced.unscanned`，本文件把它带进
 // `why` 并**只让它减少产出、绝不把红变绿**（少看见一条产出 ⇒ 顶多漏报；把没查成算成
 // 「没有产出」再判绿 ⇒ 谎报，方向不能反）。
@@ -177,19 +179,20 @@ export function auditTurn({
       why: `本轮起点无法确定（since=${JSON.stringify(since)}）⇒ 没查成，不判`,
     };
   }
+  const fresh = produceKeys(produced, tiers, since);
+  // 本轮新落地的 + 之前判过漏记还没补的。顺序：老的在前，超上限时老的先掉。
+  // unscanned 也必须走这道合并：hook 仍会推进 since，不把本轮键放进 pending
+  // ⇒ 账本恢复后 git 窗口已看不见这些 commit，形成静默漏报（PR #894 审官返工）。
+  const keys = [...new Set([...keepCarry, ...fresh])].slice(-MAX_PENDING);
   // 账本没读成 ⇒ 三态里的第三态。这里判绿就是把「没查成」记成「查过没事」。
-  // pending 原样带走：没读成不等于补记了。
+  // pending 带上本轮可确定的产出键：没读成不等于没有产出，更不等于补记了。
   if (!Array.isArray(events)) {
     const err = (events && events.error) || '账本事件不是数组';
     return {
-      verdict: 'unscanned', ...nil, pending: keepCarry,
+      verdict: 'unscanned', ...nil, pending: keys,
       why: `账本没读成（${String(err).slice(0, 120)}）⇒ 不判红也不判绿`,
     };
   }
-
-  const fresh = produceKeys(produced, tiers, since);
-  // 本轮新落地的 + 之前判过漏记还没补的。顺序：老的在前，超上限时老的先掉。
-  const keys = [...new Set([...keepCarry, ...fresh])].slice(-MAX_PENDING);
   const unscannedLegs = (produced && produced.unscanned) || [];
   const legNote = unscannedLegs.length ? `；采集没查成的腿：${unscannedLegs.join('/')}（只会漏报，不会把红变绿）` : '';
 
