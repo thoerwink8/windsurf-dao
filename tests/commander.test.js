@@ -1222,3 +1222,55 @@ describe('返工取标签：署名 issue 已关也要取得到', () => {
     assert.deepEqual(byKind(r, 'rework'), []);
   });
 });
+
+// ── 冲突态派工（2026-09-06 实咬：9 张 CONFLICTING PR 卡着，指挥官对它们零动作） ──
+describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
+  const conflictPr = (n, issue, over = {}) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `h${n}`,
+    body: `署名 issue #${issue}`, title: `PR ${n}`, ...over,
+  });
+  const sitWith = (pr, over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeledIssue(940)], prs: [pr] },
+    prReviews: { scanned: true, byPr: {} }, // 冲突 PR 常常一条 review 都没有
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('CONFLICTING + 非 draft → rework，任务书是解冲突，不产 rereview', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.match(w[0].brief, /解掉/);
+    assert.deepEqual(byKind(r, 'rereview'), [], '冲突 PR 不许叫审官——审官判不了它');
+  });
+
+  it('解冲突任务书必须写明不许整片覆盖（#902 反向删除判例）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    assert.match(byKind(r, 'rework')[0].brief, /--ours\/--theirs/);
+  });
+
+  // 红样本一：mergeable=UNKNOWN 是 GitHub 还在异步算，不是冲突。
+  it('mergeable=UNKNOWN → 不派解冲突（没查成 ≠ 有冲突）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // 红样本二：同一 head 已派过就不再派，否则每轮刷一个工人。
+  it('同一 head 已派过解冲突 → 不重复派', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940), {
+      reworkDispatched: { [reworkKey(950, 'h950')]: { at: '2026-09-05T00:00:00Z' } },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('draft 的冲突 PR → 不派（还没交卷，工人自己会解）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});

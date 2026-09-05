@@ -681,9 +681,16 @@ export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
 }
 
 /** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
-export function reworkCardName(action) { return `返工 PR #${action.pr}`; }
+// 卡名/摘要按返工种类分岔。工人会把 --spec 当任务边界读（memory spec-is-read-as-task-scope），
+// 所以解冲突的单绝不能写「照审官红项逐条改」——那张 PR 上一条红都没有，工人会去找不存在的东西。
+export function reworkCardName(action) {
+  return action.kind === 'rework' && action.conflict ? `解冲突 PR #${action.pr}` : `返工 PR #${action.pr}`;
+}
 export function reworkSpec(action, briefPath) {
-  return `返工 PR #${action.pr}：先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+  const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
+  return action.conflict
+    ? `解冲突 PR #${action.pr}：${checkout}；把 origin/master 合进来解冲突，硬边界与做法全文在 ${briefPath}，解完跑 dao-check 绿了再推。`
+    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
 }
 
 /**
@@ -750,7 +757,7 @@ function dispatchRework(action, { state, dryRun, say }) {
     '--issue', String(action.issue),
     '--name', reworkCardName(action),
     '--model', action.model, '--reviewer', action.reviewer,
-    '--split', 'no', '--split-reason', '指挥官自动返工：照审官红项逐条改（#931）',
+    '--split', 'no', '--split-reason', action.conflict ? '指挥官自动解冲突：只解冲突，不改范围外的东西' : '指挥官自动返工：照审官红项逐条改（#931）',
     '--spec', spec, '--allow-dup', '--confirm'];
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);

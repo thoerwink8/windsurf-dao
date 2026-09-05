@@ -423,6 +423,76 @@ function collectCandidates(situation) {
     out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
   }
 
+  // 返工工人的构造：判红和解冲突两条路共用。取 model/reviewer 一律从**署名 issue 的标签**来
+  // （与原派工同源，不猜、不换厂），任何一步取不到就报帅不派。
+  // 抽成闭包是因为「冲突」这条路必须在 analyzeReviewsAtHead 之前判——冲突 PR 常常一条 review 都没有，
+  // 而 reviews-missing 在下面是静默 continue，写在后面会被那一条吃掉。
+  function pushRework(pr, { brief, head, redRounds, why, hubText, conflict = false }) {
+    const rkey = reworkKey(pr.number, head);
+    if (reworkDispatched[rkey]) return; // 同一 PR 同一 head 只派一次：工人正在改，等它推新 head
+    const issueNo = attributedIssueNumber(pr);
+    if (issueNo == null) {
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
+      return;
+    }
+    // 走 attributedIssueOf 门面：它带了「开放单查不到就查 attributedIssues」的兜底，
+    // 而 attributedIssues 正是为「单关了但 PR 还要审/要返工」补的（点名的就是 #945/#833 这一对）。
+    const rIssue = attributedIssueOf(gh, pr);
+    if (!rIssue) {
+      out.push(withNeeds(esc(
+        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关且不在署名补取里）——标签没查成，不派`,
+        { reason: 'unscanned', pr: pr.number, issue: issueNo, missing: ['github'], detail: 'rework-issue-unscanned' },
+      ), N.rework));
+      return;
+    }
+    const rModel = labelValue(rIssue, 'model/');
+    const rReviewer = labelValue(rIssue, 'reviewer/');
+    if (!rModel || !rReviewer) {
+      const filled = maybeAddLabel(rIssue, situation, {
+        pr: pr.number,
+        why: `PR #${pr.number} 要返工，署名 issue #${issueNo} 半标——补唯一跨厂标签`,
+      }, N['add-label']);
+      if (filled) { out.push(filled); return; }
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
+        reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
+      }), N.rework));
+      return;
+    }
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    // 顶班（2026-09-05 实咬）：快马单的 model/ 标签常是主会话子代理的模型（claude-opus-5），
+    // 它在服务器腿表里没有可派的腿 → 返工永远派不出去，红项在 GitHub 上躺着没人接。
+    // 返工要的是「有人改」，不是「同一个人改」——原模型派不出就落回选型写码首选。
+    // 只对「这个模型不能派」两种原因顶班；「选型没查成」仍 fail-closed，因为那时连顶班人选也验不了。
+    let reworkModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        reworkModel = fb;
+        rGate = fbGate;
+      }
+    }
+    if (!rGate.ok) {
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
+      return;
+    }
+    // 单轮上限沿用 maxDispatchPerRound（#849：无上限会刷单）。返工走**独立计数**而不是与新派单共用一个：
+    // 新派单循环在本函数更早处跑，共用一个计数会让 ready 队列长期把返工挤掉（判红的 PR 永远等不到人）。
+    // 独立计数同样封死刷单（每轮最多 maxDispatchPerRound 个返工工人），超出的排队下轮，不丢、不 escalate。
+    if (reworkThisRound >= policy.maxDispatchPerRound) return;
+    reworkThisRound += 1;
+    out.push(withNeeds({
+      kind: 'rework', pr: pr.number, head, issue: issueNo,
+      model: reworkModel, reviewer: rReviewer, redRounds,
+      title: pr.title || '', brief, reworkKey: rkey, conflict,
+      ...(substituted ? { substitutedModel: substituted } : {}),
+      why: why + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
+    }, N.rework));
+    out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
+  }
+
   // ③ PR 驱动：判绿合并 / manual 待拍板 / 审官轮次
   for (const pr of gh.prs || []) {
     if (!pr || pr.number == null) continue;
@@ -468,6 +538,42 @@ function collectCandidates(situation) {
 
     if ((greenAtHead || decisionApproved) && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
+      continue;
+    }
+
+    // 冲突态：审官判不了冲突 PR——GitHub 对 CONFLICTING 连 CI 都不触发，叫审官必然白跑，
+    // drain 试满后每轮开一张 [待拍板] 单。这一格原本整个空着：指挥官只认 MERGEABLE（合并）
+    // 和判红（返工），CONFLICTING 从所有分支里漏掉，9 张 PR 卡在这里没有任何动作（2026-09-06 实测）。
+    // 必须排在下面 analyzeReviewsAtHead 之前：冲突 PR 常常一条 review 都没有，
+    // 而 reviews-missing 在下面是静默 continue，写在后面会被吃掉。
+    // 只认显式 CONFLICTING：UNKNOWN 是 GitHub 还在异步算，没查成 ≠ 有冲突。
+    if (String(pr.mergeable || '').toUpperCase() === 'CONFLICTING' && !pr.isDraft) {
+      const head = pr.headRefOid || '';
+      if (!head) {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 是 CONFLICTING 但 headRefOid 没查成——派不出解冲突工人`,
+          { reason: 'unscanned', pr: pr.number, missing: ['github'], detail: 'conflict-head-unscanned' },
+        ), N.rework));
+        continue;
+      }
+      pushRework(pr, {
+        head,
+        redRounds: 0,
+        conflict: true,
+        brief: [
+          `本单只做一件事：把 PR #${pr.number} 与 master 的冲突解掉，让它回到可合并状态。`,
+          ``,
+          `做法：把 origin/master 合进本分支，逐个冲突文件按「两边的意图都要保住」来解，`,
+          `解完跑 node scripts/dao-check.mjs，绿了再推。`,
+          ``,
+          `硬边界：`,
+          `- 不许用 --ours/--theirs 整片覆盖——master 上已合并的成果被反向删掉是本仓判例（#902）。`,
+          `- 不许借机改本单范围外的东西；解冲突就只解冲突。`,
+          `- 冲突文件在 master 侧被删除/拆分的（例如测试拆套），要把本分支的改动搬到新落点，不是把文件复活。`,
+        ].join('\n'),
+        why: `PR #${pr.number} 与 master 冲突（CONFLICTING）——审官判不了冲突 PR，先派工人解冲突`,
+        hubText: `PR #${pr.number} 与 master 冲突，已自动派工人解冲突`,
+      });
       continue;
     }
 
@@ -538,8 +644,6 @@ function collectCandidates(situation) {
     // 当前 head 上最后一条判别态是红 → 派一个返工工人（#931：删掉「唤大脑翻译返工方向」整层）。
     // 旧红（打在旧 head）在上面 analyzeReviewsAtHead 里就已经不算数了，这里天然不会触发。
     if (!a.latestRed) continue; // 没红 / 最后一条是绿 = 等审官或走合并路，本分支无事
-    const rkey = reworkKey(pr.number, a.head);
-    if (reworkDispatched[rkey]) continue; // 同一 PR 同一 head 只派一次：工人正在改，等它推新 head
     // 红项全文取不到（审官判了红没留正文）= 没查成：不派、也不当成功。
     const brief = latestRedBody(a.judged);
     if (!brief) {
@@ -549,71 +653,11 @@ function collectCandidates(situation) {
       ), N.rework));
       continue;
     }
-    // 返工工人的 model/reviewer 沿用**署名 issue 上的标签**（与原派工同源，不猜、不换厂）。
-    const issueNo = attributedIssueNumber(pr);
-    if (issueNo == null) {
-      out.push(withNeeds(esc(`PR #${pr.number} 判红要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
-      continue;
-    }
-    // 走 attributedIssueOf 门面：它已经带了「开放单查不到就查 attributedIssues」的兜底，
-    // 而 attributedIssues 正是为「单关了但 PR 还要审/要返工」补的（scanAttributedIssues 的注释
-    // 点名的就是 #945/#833 这一对）。这里原本手写单级查找，把那份兜底整个绕过去了——
-    // 结果 #945 每轮报「标签没查成，不派」，而标签一直好好挂在已关的 #833 上。
-    const rIssue = attributedIssueOf(gh, pr);
-    if (!rIssue) {
-      out.push(withNeeds(esc(
-        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关且不在署名补取里）——标签没查成，不派`,
-        { reason: 'unscanned', pr: pr.number, issue: issueNo, missing: ['github'], detail: 'rework-issue-unscanned' },
-      ), N.rework));
-      continue;
-    }
-    const rModel = labelValue(rIssue, 'model/');
-    const rReviewer = labelValue(rIssue, 'reviewer/');
-    if (!rModel || !rReviewer) {
-      const filled = maybeAddLabel(rIssue, situation, {
-        pr: pr.number,
-        why: `PR #${pr.number} 要返工，署名 issue #${issueNo} 半标——补唯一跨厂标签`,
-      }, N['add-label']);
-      if (filled) { out.push(filled); continue; }
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
-        reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
-      }), N.rework));
-      continue;
-    }
-    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
-    // 顶班（2026-09-05 实咬）：快马单的 model/ 标签常是主会话子代理的模型（claude-opus-5），
-    // 它在服务器腿表里没有可派的腿 → 返工永远派不出去，红项在 GitHub 上躺着没人接。
-    // 返工要的是「有人改」，不是「同一个人改」——原模型派不出就落回选型写码首选。
-    // 只对「这个模型不能派」两种原因顶班；「选型没查成」仍 fail-closed，因为那时连顶班人选也验不了。
-    let reworkModel = rModel;
-    let substituted = null;
-    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
-      const fb = situation.defaultWorkerModel;
-      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
-      if (fb && fbGate.ok) {
-        substituted = { from: rModel, to: fb, why: rGate.why };
-        reworkModel = fb;
-        rGate = fbGate;
-      }
-    }
-    if (!rGate.ok) {
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
-      continue;
-    }
-    // 单轮上限沿用 maxDispatchPerRound（#849：无上限会刷单）。返工走**独立计数**而不是与新派单共用一个：
-    // 新派单循环在本函数更早处跑，共用一个计数会让 ready 队列长期把返工挤掉（判红的 PR 永远等不到人）。
-    // 独立计数同样封死刷单（每轮最多 maxDispatchPerRound 个返工工人），超出的排队下轮，不丢、不 escalate。
-    if (reworkThisRound >= policy.maxDispatchPerRound) continue;
-    reworkThisRound += 1;
-    out.push(withNeeds({
-      kind: 'rework', pr: pr.number, head: a.head, issue: issueNo,
-      model: reworkModel, reviewer: rReviewer, redRounds: a.redRounds,
-      title: pr.title || '', brief, reworkKey: rkey,
-      ...(substituted ? { substitutedModel: substituted } : {}),
-      why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`
-        + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
-    }, N.rework));
-    out.push(withNeeds(hub(`PR #${pr.number} 审官判红，已自动派返工工人（红项全文交给它，逐条改）`, 'dispatched', { pr: pr.number }), N.rework));
+    pushRework(pr, {
+      brief, head: a.head, redRounds: a.redRounds,
+      why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`,
+      hubText: `PR #${pr.number} 审官判红，已自动派返工工人（红项全文交给它，逐条改）`,
+    });
   }
 
   // ④ 撞死指纹 + #833 自动换人没接住 → wake-brain
