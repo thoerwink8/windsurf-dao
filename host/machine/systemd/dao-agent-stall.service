@@ -7,12 +7,13 @@
 #   sudo install -m 644 host/machine/systemd/dao-agent-stall.service /etc/systemd/system/
 #   sudo install -m 644 host/machine/systemd/dao-agent-stall.timer /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now dao-agent-stall.timer
-#   systemctl list-timers | grep dao-agent-stall
+#   sudo systemctl start dao-agent-stall.service   # 当场扫一轮；enable --now 只起 timer
+#   systemctl list-timers | grep dao-agent-stall   # NEXT 不能是 `-`
 #
 # 退役垫片（落地即删，防影子制度）：
 #   sudo systemctl disable --now agent-stall-watch.timer
 #   sudo rm -f /etc/systemd/system/agent-stall-watch.timer /etc/systemd/system/agent-stall-watch.service
-#   rm -f /home/orca/bin/agent-stall-watch.mjs
+#   rm -f /home/orca/bin/agent-stall-watch.mjs /home/orca/.agent-stall-watch.json
 #   sudo systemctl daemon-reload
 #
 # WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
