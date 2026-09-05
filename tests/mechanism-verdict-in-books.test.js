@@ -22,6 +22,9 @@ const path = require('path');
 const REPO = path.resolve(__dirname, '..');
 const STANDARD = 'host/skills/dispatch/review-standard.md';   // 规矩原文（审官判红清单第 8 条）
 const SOLDIER = 'host/skills/dispatch/templates/soldier-book.md'; // 工人任务书（#929 补的就是这里）
+// mirasim 执行体版任务书。2026-09-05 补：#929 落地时它被漏掉了，
+// 于是**这条路上的工人看不到这道闸**——「只落一半的规矩」正是本单要治的病，却在本单自己身上又犯了一次。
+const SOLDIER_MIRASIM = 'host/skills/dispatch/templates/soldier-book-mirasim.md';
 const COMMANDER = 'scripts/commander.mjs';                     // 报帅单模板的必填栏
 
 // 一条规矩的四个要件。改措辞不红，少要件才红。
@@ -149,12 +152,34 @@ describe('#929 机制判定这条规矩，工人任务书里也得有', () => {
     assert.equal(ok.scanned, 2, '扫了几处要报出来，免得「扫了 0 处」被当成绿');
   });
 
-  it('② live：规矩原文 / 工人任务书 / 报帅单模板三处都有，且说的是同一件事', () => {
+  it('② live：规矩原文 / 两份工人任务书 / 报帅单模板四处都有，且说的是同一件事', () => {
+    // 2026-09-05 从三处扩到四处：mirasim 版任务书原本被漏掉，那条路上的工人看不到这道闸。
+    // 「只落一半的规矩」正是本单要治的病，而本单自己先犯了一次——所以这里钉死落点清单，
+    // 将来再多一份任务书，加进这个数组即可，漏加就会红在下面那条 scanned 断言上。
+    const SPOTS = [STANDARD, SOLDIER, SOLDIER_MIRASIM, COMMANDER];
     const files = {};
-    for (const rel of [STANDARD, SOLDIER, COMMANDER]) files[rel] = read(rel);
+    for (const rel of SPOTS) files[rel] = read(rel);
     const r = inspect({ files });
     assert.equal(r.kind, 'ok', 'live 必须绿  →  ' + JSON.stringify(r));
-    assert.equal(r.scanned, 3, '三处落点都要扫到，少一处就是没查成  →  ' + JSON.stringify(r));
+    assert.equal(r.scanned, SPOTS.length,
+      `${SPOTS.length} 处落点都要扫到，少一处就是没查成  →  ` + JSON.stringify(r));
+  });
+
+  it('② live 续：两份任务书都要有交卷闸那一行（#904 的闸只落一半 = 一半工人看不到）', () => {
+    for (const rel of [SOLDIER, SOLDIER_MIRASIM]) {
+      const text = read(rel);
+      assert.ok(text !== null, `读不到 ${rel} ⇒ 本条没查成，不是「没问题」`);
+      assert.match(text, /handoff-check/,
+        `${rel} 里没有 handoff-check —— 这条路上的工人交卷前不会跑契约闸，`
+        + '而实测一次过审率 0/9、红的全是那一类');
+    }
+  });
+
+  it('② live 续：审官标准里要有对应的必核条目（只有提示层没有判定层 = 没人查）', () => {
+    const standard = read(STANDARD);
+    assert.ok(standard !== null, `读不到 ${STANDARD} ⇒ 本条没查成`);
+    assert.match(standard, /handoff-check/,
+      '审官标准里没有交卷闸的必核条目——工人跑没跑没人核，闸就退化成建议');
   });
 
   it('③ live：任务书引用的「审官标准第 N 条」编号没漂', () => {

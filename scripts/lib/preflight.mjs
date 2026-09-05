@@ -5,6 +5,12 @@
 // 工人接线在 dispatch/launch.mjs（preflightWorkerSlate），审官在 dispatch/reviewer.mjs
 // （preflightReviewer）；两者都调本文件 runPreflight，DRY。
 //
+// 只有 red 会换人。unscanned / no_finish / timeout 三态都是**软态**：通道没说过一句「不行」，
+// 只是我们没拿到结论——先看后面有没有真绿的，全都没有就回退用第一个软态那位。
+// 探针本身只回四态，timeout 是本文件在 red 里再分出来的一态（#853）：探针把「我们自己等不及了」
+// 也算 red，而排队型网关首字节本来就慢（实测见 DISPATCH_POLICY_DEFAULTS 上方那张表），
+// 5s 预算让整个 gw-sub 组每次必红，当场换掉正在干活的人。判据见 isProbeTimeout。
+//
 // 状态：每次探结果追加 ~/.dao/preflight/<YYYY-MM-DD>.ndjson（登记在 host/machine/INDEX.md，A 类）。
 // 配置：docs/dispatch-policy.json 的 preflight 节；--no-preflight 单次覆盖并记账。
 
@@ -17,7 +23,23 @@ import { BREAKER_DEFAULTS, inspectAvailability, recordEvent, loadBreakerDoc } fr
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
 
-export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true };
+// timeoutMs 的来历（#853，2026-09-05 实测，别凭感觉改）：
+// 拿 provider-probe 的**同一条真实请求路径**对在役腿各探 8 针，量到首字节（= 首个 SSE 分片）
+// 与整针收口（内容 + 收尾事件）的耗时：
+//   grok-4.6@gw            首字节 0.76–1.10s   收口 1.5–2.9s
+//   deepseek-v4-flash@gw-dspool  0.78–2.27s        0.90–2.27s
+//   gpt-5.6-luna@gw-windsurf     1.38–1.65s        1.51–1.86s
+//   glm-5.2@gw-windsurf          1.20–2.14s        2.10–7.35s
+//   gemini-3.7-flash@gw-windsurf 2.38–4.89s        2.47–5.00s
+//   kimi-k3@gw-sub              10.06–15.20s      10.26–15.20s
+//   composer-2.5@gw-sub         10.80–16.54s      11.03–16.66s
+// 结论一：5000ms 不是「偶尔误判」，是把整个 gw-sub 组（kimi-k3 / composer-2.5）**每次必红**，
+//   并且刚好卡住 gemini 的上沿（实测 4889ms 首字节）。#853 的「误换位」由此而来。
+// 结论二：预算要盖住的是整针收口而不只是首字节（探针读到收尾事件才收口），实测最慢 16.66s。
+// 取 30000ms ≈ 实测最坏值的 1.8 倍，留出负载下的余量；仍在 validateDispatchPolicy 的 500–60000 内。
+// 代价：全部候选都挂住时最坏 maxCandidates(4) × 30s = 120s。可接受，因为超时已不再判红换人。
+// 真相源是 docs/dispatch-policy.json，本常量只是文件缺失时的兜底，两处必须同值。
+export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 30000, maxCandidates: 4, useHealthTable: true };
 export const COMMANDER_POLICY_DEFAULTS = { maxDispatchPerRound: 2, requireModelInRouting: true };
 export const BREAKER_POLICY_DEFAULTS = { ...BREAKER_DEFAULTS, overrides: {} };
 
@@ -154,6 +176,45 @@ function landingOf(entry) {
   return null;
 }
 
+// 超时容差：AbortController 那颗 setTimeout 可能提前几毫秒响，Windows 上 Date.now 粒度约 15ms。
+// 没有容差，一次「4998ms 被自己掐掉」会被当成真红——而它其实就是超时。
+export const PROBE_TIMEOUT_TOLERANCE_MS = 50;
+
+/** 回退时说清是哪一种软态（三种软态互不相同，不许在人话里合并）。 */
+const SOFT_LABEL = {
+  unscanned: '探不了',
+  no_finish: '有真内容但没见到收尾',
+  timeout: '超时，通道一句话都没表过态',
+};
+
+/**
+ * 探针回了 red，再问一句：是**上游说不行**，还是**我们自己等不及了**？（#853）
+ *
+ * 判据只吃结构化字段，不解析 why 里的中文——那句话改个措辞，判据就会静默失效：
+ *   · ms 摸到了我们自己给的预算 → 先响的是我们的秒表，不是上游的拒绝；
+ *   · 上游没给过「不行」的状态码（code 为空，或 2xx 起了流却没吐出内容）。
+ * 两条同时成立才算超时。401/403/429/5xx 这类真错误码一律照旧判红，快慢无关。
+ */
+export function isProbeTimeout(r, timeoutMs) {
+  if (!r || r.state !== 'red') return false;
+  const budget = Number(timeoutMs);
+  if (!Number.isFinite(budget) || budget <= 0) return false;
+  const ms = Number(r.ms);
+  if (!Number.isFinite(ms)) return false;
+  if (ms + PROBE_TIMEOUT_TOLERANCE_MS < budget) return false;
+  if (r.code == null) return true;
+  const code = Number(r.code);
+  return Number.isFinite(code) && code >= 200 && code < 300;
+}
+
+/** 这一针实际用的预算：probeOpts.timeoutMs 覆盖 policy.timeoutMs（与 doProbe 的拼法保持一致）。 */
+function effectiveTimeoutMs(policy, probeOpts) {
+  const fromOpts = Number(probeOpts && probeOpts.timeoutMs);
+  if (Number.isFinite(fromOpts) && fromOpts > 0) return fromOpts;
+  const fromPolicy = Number(policy && policy.timeoutMs);
+  return Number.isFinite(fromPolicy) && fromPolicy > 0 ? fromPolicy : DISPATCH_POLICY_DEFAULTS.timeoutMs;
+}
+
 /**
  * runPreflight —— 起 agent 前的探一针编排。纯逻辑 + 注入 probe/audit，可测。
  *
@@ -261,7 +322,9 @@ export async function runPreflight({
 
   // 逐位真探（上限 maxCandidates）。
   const budget = Math.max(1, Number(policy.maxCandidates) || DISPATCH_POLICY_DEFAULTS.maxCandidates);
-  let firstUnscanned = null;
+  const timeoutBudgetMs = effectiveTimeoutMs(policy, probeOpts);
+  let firstUnscanned = null;      // 第一个软态候选（探不了 / 没收尾 / 超时），全都没绿时回退用它
+  let firstSoftState = null;      // 它是哪一种软态——回退的人话里要说清，不许糊成一句「不可用」
   const tried = reordered.slice(0, budget);
   const breakerPol = policy.breaker || BREAKER_POLICY_DEFAULTS;
   for (const c of tried) {
@@ -284,6 +347,13 @@ export async function runPreflight({
     } catch (e) {
       r = { state: 'red', code: null, ms: null, why: `探针抛错：${String(e.message || e)}`, target: null };
     }
+    // #853：探针把「我们等不及了」也归进 red，而排队型网关首字节本来就慢——
+    // 实测 gw-sub 组（kimi-k3 / composer-2.5）首字节 10~16.5s，5s 预算下 100% 判红。
+    // 判红的代价不是慢一点，是**当场换人**：#853 实咬里 luna 正在审 PR #850/#851、通道好好的，
+    // 却被换成 glm。所以超时在这里升成独立一态，与 no_finish 同路（软态：不当绿、不换人、不记熔断）。
+    if (isProbeTimeout(r, timeoutBudgetMs)) {
+      r = { ...r, state: 'timeout', why: `${r.why || '超时'}（预算 ${timeoutBudgetMs}ms；上游未表态，不判红）` };
+    }
     const rec = { ts: (now instanceof Date ? now.toISOString() : new Date(now).toISOString()), target: r.target ?? target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null, why: r.why ?? null, dispatchId, role, model: c.id };
     doAudit(rec);
     probed.push({ id: c.id, ...rec });
@@ -293,9 +363,20 @@ export async function runPreflight({
     }
     if (r.state === 'unscanned') {
       // 探不了（grok Build / cursor / devin …）：不许当绿，但也没证据它挂了 → 按现状起，watchdog 兜底。
-      if (!firstUnscanned) firstUnscanned = c;
+      if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
       reasons[c.id] = [...(reasons[c.id] || []), `unscanned:${r.why || '探不了'}`];
       // 继续看后面有没有能探到绿的；没有再回退到它。
+      continue;
+    }
+    if (r.state === 'timeout') {
+      // #853 第五态：预算用完了，而上游连一句「不行」都没说过。
+      // 走 unscanned/no_finish 同样的保守路：先看后面有没有真绿的，没有再回退用它。
+      // **刻意不记熔断失败**——窗口内三次就 cooldown 24h，那正是把一次误判放大成
+      // 「整条腿被拉黑一天」的机制，也正是 #853 里换错人的来源。
+      // 已知代价：真正挂死（永不吐字）的上游因此不再被熔断拉黑，每次派工都要陪它耗满预算。
+      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-agent-stall 与 watchdog 兜。
+      if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
+      reasons[c.id] = [...(reasons[c.id] || []), `timeout:${r.why || '没等到'}`];
       continue;
     }
     if (r.state === 'no_finish') {
@@ -304,7 +385,7 @@ export async function runPreflight({
       // 也不许当红——判红会当场换模型，而网关偶尔漏一个收尾事件就把好通道换掉，
       // 派工会莫名其妙地换人甚至停手（2026-09-05 实咬：加完这一态没接下游，dao.test.js 间歇红）。
       // 走 unscanned 同样的保守路：先看后面有没有真绿的，没有再回退用它。
-      if (!firstUnscanned) firstUnscanned = c;
+      if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
       reasons[c.id] = [...(reasons[c.id] || []), `no_finish:${r.why || '没见到收尾'}`];
       continue;
     }
@@ -318,9 +399,11 @@ export async function runPreflight({
 
   // 没探到绿：有探不了的就按现状起它（保守：不因探不了而停摆）；否则全红 → 报帅停手。
   if (firstUnscanned) {
-    notes.push(`没探到绿，回退到探不了的 ${firstUnscanned.id}（按现状起，watchdog 兜底；不当绿）`);
+    const label = SOFT_LABEL[firstSoftState] || '软态';
+    notes.push(`没探到绿，回退到 ${firstUnscanned.id}（${label}：按现状起，watchdog 兜底；不当绿）`);
     return {
       ok: true, chosen: firstUnscanned.id, chosenLanding: firstUnscanned.landing, unscannedFallback: true,
+      fallbackState: firstSoftState,
       reordered: reordered.map(c => c.id), probed, hardBlocked, allRed: false, stop: false, skipped: false, reasons, notes,
     };
   }
@@ -363,7 +446,13 @@ export async function runPreflightCommand(args = {}, { routingModels, probe, hom
     if (av.state === 'half-open') doRecord({ type: 'probe', target, why: 'half-open 一针' });
   }
   const doProbe = probe || ((l) => probeLanding(l, { timeoutMs: policy.timeoutMs }));
-  const r = await doProbe(landing);
+  let r = await doProbe(landing);
+  // 与 runPreflight 同一条判据（#853）：超时是独立一态，不判红也不记熔断失败。
+  // 只读动词也要照办——否则人手探一针就能把一条正在排队的腿推进 cooldown。
+  const timeoutBudgetMs = effectiveTimeoutMs(policy, null);
+  if (isProbeTimeout(r, timeoutBudgetMs)) {
+    r = { ...r, state: 'timeout', why: `${r.why || '超时'}（预算 ${timeoutBudgetMs}ms；上游未表态，不判红）` };
+  }
   const rec = {
     ts: (now instanceof Date ? now : new Date()).toISOString(),
     target: r.target ?? target ?? null, state: r.state, code: r.code ?? null, ms: r.ms ?? null,
