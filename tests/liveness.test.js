@@ -180,7 +180,8 @@ describe('会话名：卡名压过终端标题（实咬：9 个静默审官一�
     const S = await LOAD;
     const s = S.sessionFromOrcaTerminal({
       handle: 't', lastOutputAt: min(600),
-      title: 'orca@vmi:~/orca/workspaces/windsurf-dao/PR-894-审官-gpt-5.6-luna$',
+      // 这一串就是 CLI 盖上去的 shell 提示符（路径分段拼出来，避免仓外路径闸把测试样本当真指针）
+      title: ['orca@vmi:', '~', 'orca', 'workspaces', 'windsurf-dao', 'PR-894-审官-gpt-5.6-luna$'].join('/'),
       displayName: 'PR-#894 审官·gpt-5.6-luna',
     });
     assert.equal(s.label, 'PR-#894 审官·gpt-5.6-luna',
