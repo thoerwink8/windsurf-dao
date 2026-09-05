@@ -57,3 +57,35 @@ describe('systemd 单元的权限边界', () => {
     }
   });
 });
+
+// 2026-09-05 实咬：install-dao-sync.sh 里有一句 `chmod +x scripts/server-sync.sh`，
+// 装完工作树就脏了（100644 → 100755）；而 dao-sync 自己走 `git merge --ff-only`，
+// 脏树直接 Aborting——**装一次安全修，服务器同步从此停摆**，单元还照样 exit 0。
+describe('装机脚本不许把工作树弄脏', () => {
+  const { execFileSync } = require('node:child_process');
+  const root = path.join(__dirname, '..');
+
+  it('装机脚本里不许 chmod 仓内文件——可执行位归 git 记', () => {
+    const dir = path.join(root, 'scripts');
+    const installers = fs.readdirSync(dir).filter((f) => /^install-.*\.sh$/.test(f));
+    assert.ok(installers.length > 0, '一个装机脚本都没扫到，本闸判据已失效');
+    for (const f of installers) {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8');
+      const bad = text.split(/\r?\n/).filter((l) =>
+        /^\s*chmod\b/.test(l) && /\$(ROOT|\{ROOT\})/.test(l));
+      assert.deepEqual(bad, [], `${f} 里 chmod 了仓内文件，装完树就脏、ff-only 同步会 Aborting：\n${bad.join('\n')}`);
+    }
+  });
+
+  it('该可执行的脚本，可执行位必须已经在 git 里', () => {
+    const out = execFileSync('git', ['ls-files', '-s', 'scripts/'], { cwd: root, encoding: 'utf8' });
+    const rows = out.split(/\r?\n/).filter(Boolean).map((l) => {
+      const [mode, , , file] = l.split(/\s+/);
+      return { mode, file };
+    });
+    const sh = rows.filter((r) => r.file.endsWith('.sh'));
+    assert.ok(sh.length > 0, '一个 .sh 都没扫到，本闸判据已失效');
+    const notExec = sh.filter((r) => r.mode !== '100755').map((r) => r.file);
+    assert.deepEqual(notExec, [], `这些 .sh 在 git 里不可执行，装机时就会有人去 chmod：${notExec.join('、')}`);
+  });
+});
