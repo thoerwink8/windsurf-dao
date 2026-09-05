@@ -1186,3 +1186,91 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
     assert.deepEqual(byKind(r, 'reap-ticket'), []);
   });
 });
+
+// ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，
+//    而标签一直挂在已关的 #833 上——attributedIssues 兜底写好了却被手写查找绕过） ──
+describe('返工取标签：署名 issue 已关也要取得到', () => {
+  const closedIssueSituation = (over = {}) => baseSituation({
+    github: {
+      scanned: true,
+      issues: [], // 署名单已关，不在开放列表里
+      attributedIssues: [{ number: 833, title: '已关的署名单', labels: [
+        { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' },
+      ] }],
+      prs: [redPr(945, 'headaaa', 833)],
+    },
+    prReviews: { scanned: true, byPr: { 945: { reviews: [redReview('红：这里要改', 'headaaa')] } } },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('署名单已关但在 attributedIssues 里 → 照常派返工，不报「标签没查成」', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation());
+    const unscanned = byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned');
+    assert.deepEqual(unscanned, [], '署名单标签取得到就不该报没查成');
+    assert.equal(byKind(r, 'rework').length, 1);
+  });
+
+  // 红样本：两处都查不到时仍必须报「没查成」，不许猜一个标签派出去。
+  it('两处都没有该单 → 仍报没查成，不猜', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation({
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [redPr(945, 'headaaa', 833)] },
+    }));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned').length, 1);
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});
+
+// ── 冲突态派工（2026-09-06 实咬：9 张 CONFLICTING PR 卡着，指挥官对它们零动作） ──
+describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
+  const conflictPr = (n, issue, over = {}) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `h${n}`,
+    body: `署名 issue #${issue}`, title: `PR ${n}`, ...over,
+  });
+  const sitWith = (pr, over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeledIssue(940)], prs: [pr] },
+    prReviews: { scanned: true, byPr: {} }, // 冲突 PR 常常一条 review 都没有
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('CONFLICTING + 非 draft → rework，任务书是解冲突，不产 rereview', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.match(w[0].brief, /解掉/);
+    assert.deepEqual(byKind(r, 'rereview'), [], '冲突 PR 不许叫审官——审官判不了它');
+  });
+
+  it('解冲突任务书必须写明不许整片覆盖（#902 反向删除判例）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    assert.match(byKind(r, 'rework')[0].brief, /--ours\/--theirs/);
+  });
+
+  // 红样本一：mergeable=UNKNOWN 是 GitHub 还在异步算，不是冲突。
+  it('mergeable=UNKNOWN → 不派解冲突（没查成 ≠ 有冲突）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // 红样本二：同一 head 已派过就不再派，否则每轮刷一个工人。
+  it('同一 head 已派过解冲突 → 不重复派', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940), {
+      reworkDispatched: { [reworkKey(950, 'h950')]: { at: '2026-09-05T00:00:00Z' } },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('draft 的冲突 PR → 不派（还没交卷，工人自己会解）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});
