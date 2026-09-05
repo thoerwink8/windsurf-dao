@@ -632,12 +632,19 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
   if (units.length === 0) {
     return { state: UNKNOWN, detail: '一个 timer 都没扫到——「没查成」不算「都没问题」' };
   }
-  const dead = units.filter((u) => {
+  // 「没有下一次」有两种，必须分开（2026-09-05 本闸自己误报过一次）：
+  //   SubState=running —— 它触发的服务此刻正在跑，服务跑完才排下一次，**这时没有下一次是对的**。
+  //                        commander-act 派工人一跑好几分钟，扫到执行中就会被报成死态。
+  //   其余（waiting / elapsed / dead）—— 没有下一次就是真死态，本闸要抓的正是它。
+  // 判据缺 SubState 这一维，等于把「正在干活」读成「已经死了」。
+  const noNext = (u) => {
     const n = u && u.next;
     if (n == null) return true;
     const t = String(n).trim();
     return t === '' || t === '0' || t === 'n/a' || t === 'infinity';
-  });
+  };
+  const running = units.filter((u) => u && String(u.subState || '') === 'running');
+  const dead = units.filter((u) => noNext(u) && String(u.subState || '') !== 'running');
   if (dead.length) {
     return {
       state: RED,
@@ -662,7 +669,8 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
   if (unknownCal) {
     return { state: UNKNOWN, detail: `${unknownCal}/${units.length} 个 timer 的单元文件读不出来——「有没有 OnCalendar」这一格没查成` };
   }
-  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发，且都有墙钟点位` };
+  const runNote = running.length ? `（其中 ${running.length} 个此刻服务正在跑：${running.map((u) => u.unit).join('、')}）` : '';
+  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发，且都有墙钟点位${runNote}` };
 }
 
 /**
@@ -705,7 +713,7 @@ function checkTimerArmed() {
   for (const unit of [...new Set(names)]) {
     // 不加 `--value`：`systemctl show` 按**它自己的属性顺序**输出，不按命令行顺序，
     // 靠下标取值会张冠李戴（第一版就把某个时间戳当成了单元路径）。按键名取，与顺序无关。
-    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
+    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'SubState', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
     if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
     const kv = new Map(String(p.stdout || '').split(/\r?\n/)
       .map((l) => l.trim()).filter(Boolean)
@@ -722,11 +730,17 @@ function checkTimerArmed() {
       .map((k) => kv.get(k) || '').filter(Boolean);
     // 两个点位任意一个有值就算有下一次；两个都空才是死态。
     const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
+    // SubState 分开「没有下一次」的两种：
+    //   waiting = 在岗等下一次 → 没有下一次就是死态（本闸要抓的）
+    //   running = 它触发的服务此刻正在跑 → 服务跑完才排下一次，**没有下一次是对的**
+    // 2026-09-05 本闸自己误报过一次：commander-act 派工人要跑好几分钟，
+    // 恰好扫到它执行中，就被报成死态。判据缺这一维，会把「正在干活」读成「已经死了」。
+    const subState = kv.get('SubState') || '';
     // 有没有墙钟点位，只能读单元文件本身——`systemctl show` 的 TimersCalendar 在老版本上不稳。
     // 读不到回 null（没查成），不回 false：那会把「没读着」报成「缺 OnCalendar」，是误报。
     let calendar = null;
     try { calendar = /^OnCalendar=/m.test(readFileSync(frag, 'utf8')); } catch { calendar = null; }
-    units.push({ unit, next: alive ? vals.join('|') : null, calendar });
+    units.push({ unit, next: alive ? vals.join('|') : null, calendar, subState });
   }
   if (units.length === 0 && skipped.length > 0) {
     // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
