@@ -469,7 +469,15 @@ function main(argv = process.argv.slice(2)) {
   // 而这类东西的定义就是「终端清单里没有它」——按卡遍历的扫描器一个都数不到。
   // 唯一看得见它的是操作系统的进程表。只报不杀（memory deleted-card-process-outlived-it：
   // 卡删了进程没死，对外发了 21 条重复评论），处置留给人和 board-gc。
-  const census = readProcessCensus();
+  // 2026-09-05 当天就咬了一次：这一格读的是**真 /proc**，于是同为 Linux，
+  // 我的服务器上绿（进程都对得上卡）、GitHub runner 上红（对不上）——
+  // **机器状态漏进了单元夹具**。CLI 夹具测的是「两轮 429 要不要换人」，跟无卡孤儿无关。
+  // 所以给一个显式关闭口，且**关掉这件事必须印在输出里**：
+  // 一个能被静默关掉的检查，等于没有检查。
+  const censusOff = String(process.env.DAO_NOCARD_CENSUS || '').toLowerCase() === 'off';
+  const census = censusOff
+    ? { ok: false, notApplicable: true, error: '本次显式关闭（DAO_NOCARD_CENSUS=off）——不是「查过没事」' }
+    : readProcessCensus();
   const graceMin = Number(process.env.DAO_NOCARD_GRACE_MINUTES);
   const noCard = census.ok
     ? classifyNoCardProcesses({

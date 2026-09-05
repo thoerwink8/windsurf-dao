@@ -268,6 +268,9 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
     AGENT_STALL_STATE: state,
     AGENT_STALL_STRIKES: '2',
     FAKE_SCREENS: screens,
+    // 本夹具测的是「两轮 429 要不要换人」，跟无卡孤儿无关；不关掉的话这一格会去读
+    // **真 /proc**，机器状态就漏进夹具：同为 Linux，服务器上绿、GitHub runner 上红。
+    DAO_NOCARD_CENSUS: 'off',
     SWITCH_LOG: log,
     SAY_LOG: sayLog,
   };
@@ -348,6 +351,9 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
     AGENT_STALL_STATE: state,
     AGENT_STALL_STRIKES: '2',
     FAKE_SCREENS: screens,
+    // 本夹具测的是「两轮 429 要不要换人」，跟无卡孤儿无关；不关掉的话这一格会去读
+    // **真 /proc**，机器状态就漏进夹具：同为 Linux，服务器上绿、GitHub runner 上红。
+    DAO_NOCARD_CENSUS: 'off',
     SWITCH_LOG: log,
     SAY_LOG: sayLog,
   };
