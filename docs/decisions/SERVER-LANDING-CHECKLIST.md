@@ -306,7 +306,7 @@ board-gc、agent-stall-watch、看板**全都按卡遍历**——没有卡的进
 用户要把活挪到法国那台 Linux 上接着干。此刻的实况，接班的先读这一节。
 
 **机器在哪**：Contabo，IP 13.140.184.255，ssh 别名 `contabo`，服务用户 `orca`，
-仓在 `/home/orca/windsurf-dao`。IP 归属地是**法国** Lauterbourg（Contabo 是德国公司，机房在法国边境）。
+仓在 `/srv/projects/windsurf-dao`。IP 归属地是**法国** Lauterbourg（Contabo 是德国公司，机房在法国边境）。
 
 **底座**：`server-check` 20 通 / 0 红 / 0 没查成；8 个 systemd timer 全 armed；
 本机与服务器 master 同步，两个仓工作树都干净。
@@ -362,11 +362,12 @@ board-gc、agent-stall-watch、看板**全都按卡遍历**——没有卡的进
 - reclaude 设备授权：v1.3.0 已装 `/home/orca/.local/bin/reclaude`，PATH 通，差一次浏览器点击。
   **授权之前不许写 `agentLaunch` 键**——写了服务器每个 mirasim claude 会话都会去跑
   未登录的 reclaude，当场全死。接法见 `docs/observations/2026-09-05-mirasim叠reclaude的接法.md`。
-- **orca 产品退役窗口连带做：windsurf-dao 迁 `/srv/projects/`**（用户 2026-09-06 拍板「两步走」，
-  见 #944 决策链）。新项目已定 `/srv/projects/`（ai-gateway-stack、miraquota-win 2026-09-06 已克隆进驻，
-  mirasim 工作区已登记）；windsurf-dao 押后到退役窗口，因为那时本来就要动 systemd 单元——
-  迁移必须一次 PR 同时换：7 个 systemd 单元路径、automations、检查闸判据、`host/machine/INDEX.md`
-  （判例：搬走真相源而检查器判据钉在旧位置＝守卫变永远红的噪音）。
+- **windsurf-dao 已迁 `/srv/projects/windsurf-dao`**（用户 2026-09-06 拍板当天迁，推翻同日早先的「押后」）。
+  同批：ai-gateway-stack、miraquota-win 克隆进驻 `/srv/projects/`，mirasim 工作区三条登记齐。
+  已同步换掉：10 个 /etc systemd 单元 + 仓内模板/脚本/测试/文档的路径（observations 判例不改史）。
+  **过渡件登记：`/home/orca/windsurf-dao` 是指向新址的软链**，护着在途 worktree（审官树/880 树）的
+  git 指针与未排查散点（orca automations 等）——**退役条件：在途树清空 + orca 产品退役，届时 rm 软链**
+  （用户 2026-09-06 明确不要旧路径长期依赖；目录硬链文件系统不允许，复制=两份真相源，故用软链过渡）。
 
 #### 新身份
 

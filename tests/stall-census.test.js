@@ -110,7 +110,7 @@ describe('无卡孤儿：按卡遍历的扫描器看不见的那一格', () => {
       processes: [
         proc(1, `${WS}/PR-909-审官-gpt-5.6-luna`, 8 * H),
         proc(2, `${WS}/ISSUE-891-工人/scripts`, 8 * H), // 子目录要收敛到卡目录
-        proc(3, '/home/orca/windsurf-dao', 8 * H),      // 主树不参与本闸
+        proc(3, '/srv/projects/windsurf-dao', 8 * H),      // 主树不参与本闸
       ],
     });
     assert.equal(r.state, 'ok');
@@ -152,7 +152,7 @@ describe('工作目录 → 卡', () => {
     const S = await LOAD;
     assert.equal(S.worktreeRootOf(`${WS}/PR-909-审官/a/b`).root, `${WS}/PR-909-审官`);
     assert.equal(S.worktreeRootOf(`${WS}/PR-909-审官`).card, 'PR-909-审官');
-    assert.equal(S.worktreeRootOf('/home/orca/windsurf-dao'), null);
+    assert.equal(S.worktreeRootOf('/srv/projects/windsurf-dao'), null);
     assert.equal(S.worktreeRootOf(WS), null, '仓这一层不是卡');
     assert.equal(S.worktreeRootOf(''), null);
   });

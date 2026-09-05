@@ -1560,7 +1560,7 @@ describe('dao', () => {
 
     // #877 治本：pi session jsonl 直读当开工证明（orca worker-read 不认 pi）。
     await t.test('#877 piSessionSlug：/ 全换 -，首尾 -/--', () => {
-      assert.strictEqual(S.piSessionSlug('/home/orca/windsurf-dao'), '--home-orca-windsurf-dao--');
+      assert.strictEqual(S.piSessionSlug('/srv/projects/windsurf-dao'), '--srv-projects-windsurf-dao--');
     });
     {
       const piHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-proof-'));

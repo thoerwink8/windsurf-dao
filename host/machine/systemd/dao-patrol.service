@@ -12,7 +12,7 @@
 #
 # 装法：sudo bash scripts/install-dao-patrol.sh
 #
-# User=orca 是硬要求，不是习惯：ExecStart 指的是 /home/orca/windsurf-dao 里的脚本，
+# User=orca 是硬要求，不是习惯：ExecStart 指的是 /srv/projects/windsurf-dao 里的脚本，
 # 那个仓每个执行体都能写；以 root 解释它，等于给每个能写仓的执行体一条 root 通道
 # （dao-sync 就是这么漏的，tests/unit-privilege.test.js 现在守着这一条）。
 # PATH 必须带 ~/.local/bin，否则回收一次性会话时找不到 orca。
@@ -25,9 +25,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=orca
-WorkingDirectory=/home/orca/windsurf-dao
+WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/commander.mjs patrol
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/commander.mjs patrol
 # 起一次性会话本身要等（起会话 3 分钟预算 + 送指针 1 分钟），默认 90 秒会把正常的一轮掐死。
 TimeoutStartSec=600
 # 退出码 1 = 查出上一轮巡检越界、已经报帅开单了，这是正常输出不是故障。

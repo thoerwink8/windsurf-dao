@@ -229,7 +229,7 @@ export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正�
  * 只用于已验过任务书指纹之后的降级判据——单独出现不算开工（防 #762 假绿）。 */
 export const WORKING_SCREEN_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\bWorking\b|esc to interrupt/i;
 
-/** pi 的 session 目录名：cwd 的 / 全换 -，首尾包一层 -/--（实测 /home/orca/windsurf-dao
+/** pi 的 session 目录名：cwd 的 / 全换 -，首尾包一层 -/--（实测 /srv/projects/windsurf-dao
  * → --home-orca-windsurf-dao--）。 */
 export function piSessionSlug(cwd) {
   return '-' + String(cwd || '').replace(/\/+$/, '').replace(/\//g, '-') + '--';

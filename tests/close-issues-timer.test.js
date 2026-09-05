@@ -51,15 +51,15 @@ describe('关单定时器：存在、且跑的是窗口补漏不是全量 sweep'
   });
 
   it('故意违规样本：sweep 版单元 / root 版单元都要被拦下', () => {
-    const sweepUnit = '[Service]\nUser=orca\nExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/close-issues.mjs --sweep --i-know-what-im-doing\n';
+    const sweepUnit = '[Service]\nUser=orca\nExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/close-issues.mjs --sweep --i-know-what-im-doing\n';
     const swept = auditCloseUnit(sweepUnit);
     assert.ok(swept.some((b) => /sweep/.test(b)), '全量 sweep 版本必须被拦住，实际：' + JSON.stringify(swept));
     assert.ok(swept.some((b) => /i-know-what-im-doing/.test(b)), '机器替人一直拍那个 flag 必须被拦住');
 
-    const rootUnit = '[Service]\nExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/close-issues.mjs --since-hours 6\n';
+    const rootUnit = '[Service]\nExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/close-issues.mjs --since-hours 6\n';
     assert.ok(auditCloseUnit(rootUnit).some((b) => /root/.test(b)), '不写 User= 就是 root，必须被拦住');
 
-    const noWindow = '[Service]\nUser=orca\nExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/close-issues.mjs\n';
+    const noWindow = '[Service]\nUser=orca\nExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/close-issues.mjs\n';
     assert.ok(auditCloseUnit(noWindow).some((b) => /since-hours/.test(b)), '不卡窗口的无人看管关单必须被拦住');
   });
 

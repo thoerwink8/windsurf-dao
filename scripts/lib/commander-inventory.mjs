@@ -374,7 +374,7 @@ export function findPathShims(exists = existsSync) {
 }
 
 function unit(desc, execArgs) {
-  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/home/orca/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
+  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
 /**
  * timer 模板。**`OnCalendar` 是必需的，不是冗余。**
@@ -394,10 +394,10 @@ function timer(desc, activeSec, calendar) {
   return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnCalendar=${calendar}\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
 }
 export const INSTALL_FILES = () => ({
-  '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs act'),
+  '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs act'),
   // :11/20 —— 错开 dao-sync(:1/5)、dao-agent-stall(:2/15)、dao-board-gc(:07)、dao-patrol(:23)
   '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min', '*:11/20'),
-  '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs inventory'),
+  '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs inventory'),
   '/etc/systemd/system/commander-inventory.timer': timer('指挥官盘点每 6 小时', '6h', '*-*-* 00,06,12,18:41:00'),
 });
 

@@ -309,7 +309,7 @@ orca account add --help
 
 ```bash
 sudo useradd --system --create-home --shell /bin/bash orca   # 要能跑 agent CLI，别用 nologin
-sudo -u orca git clone https://github.com/thoerwink8/windsurf-dao.git /home/orca/windsurf-dao
+sudo -u orca git clone https://github.com/thoerwink8/windsurf-dao.git /srv/projects/windsurf-dao
 ```
 
 **② `serve` 的监听绑 `0.0.0.0`，`--pairing-address` 只是「广告给客户端的地址」，不改绑定。** 公网 IP 的机器上等于把一个能控制这台机器的 WebSocket 挂到公网。配对有设备令牌，但不要拿它当边界。两条路选一条：
@@ -388,7 +388,7 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
 - **AppImage 解包后 Electron 共享库可能缺**（2026-09-02 Contabo Ubuntu 24.04 干净机实测：`orca-ide: error while loading shared libraries: libatk-1.0.so.0`，前台 serve 直接 exit 127、永远等不到 ready）。装 `libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libcups2t64 libxkbcommon0 libatspi2.0-0t64 libxss1 libgl1`，验收 `ldd /opt/orca/squashfs-root/orca-ide | grep "not found"` 为空再起。
-- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/home/orca/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /home/orca/windsurf-dao`。
+- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/srv/projects/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /srv/projects/windsurf-dao`。
 - **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
 - **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
 - **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
@@ -399,7 +399,7 @@ node scripts/commander.mjs status           # 自检三态：timer 在册且 ena
 合并只进列车，版本号只由发布动作产生：到周日或攒够 `docs/release-policy.json` 的 `version.train.min_merged` 个合并就切一版（tag + GitHub Release + CHANGELOG 段 + 总控群一句）。装一次幂等 timer（每天一次跑 `should-run && release`，连跑不重复）：
 
 ```bash
-cd /home/orca/windsurf-dao
+cd /srv/projects/windsurf-dao
 node scripts/release-train.mjs plan            # 先看现状：档位/下一个版本号，什么都不写
 sudo node scripts/release-train.mjs install    # 写 /etc/systemd/system/release-train.{service,timer} + enable --now
 systemctl list-timers release-train.timer      # 在册且 enabled

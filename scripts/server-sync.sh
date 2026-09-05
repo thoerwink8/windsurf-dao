@@ -5,7 +5,7 @@
 # orca 可写的脚本，等于给每个能写仓的 agent 一条 root 通道）。幂等：没新提交就什么都不做。
 # 唯一要 root 的是重启飞书机器人，走 /etc/sudoers.d/dao-sync 里那一条写死的白名单。
 set -euo pipefail
-REPO=/home/orca/windsurf-dao
+REPO=/srv/projects/windsurf-dao
 BOT_PATHS='^(scripts/feishu-triage\.mjs|scripts/lib/feishu-triage-core\.mjs|scripts/lib/plain-words\.mjs|host/skills/feishu-triage/)'
 
 g() { git -C "$REPO" "$@"; }   # 本进程就是 orca，不再需要 sudo -u

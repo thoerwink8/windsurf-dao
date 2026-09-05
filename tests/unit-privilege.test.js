@@ -1,7 +1,7 @@
 // systemd 单元不许以 root 解释仓里的脚本（2026-09-05 实咬）。
 //
 // dao-sync.service 原来没写 User=，systemd 默认 root，而它 ExecStart 的
-// /home/orca/windsurf-dao/scripts/server-sync.sh 躺在 orca 可写的 checkout 里
+// /srv/projects/windsurf-dao/scripts/server-sync.sh 躺在 orca 可写的 checkout 里
 // （实测 -rw-rw-r-- orca orca）。每一个工人 agent 都能写那个仓，改一行脚本，
 // 等 5 分钟定时器一响就是 root。当时另外 6 个单元全都写了 User=orca，只有这一个漏了——
 // 「大家都写了」正是它一直没被发现的原因。
@@ -12,7 +12,7 @@ const path = require('node:path');
 
 const DIR = path.join(__dirname, '..', 'host', 'machine', 'systemd');
 // 仓的部署落点。ExecStart 指进这里 = 那个文件是 orca（以及每个 agent）可写的。
-const CHECKOUT = '/home/orca/windsurf-dao';
+const CHECKOUT = '/srv/projects/windsurf-dao';
 
 function units() {
   return fs.readdirSync(DIR).filter((f) => f.endsWith('.service'))
