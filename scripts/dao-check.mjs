@@ -137,6 +137,7 @@ import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
+import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -225,6 +226,91 @@ function runOneSuite(dir, f) {
   });
 }
 
+// ── 只跑受影响的（#TIA，2026-09-06 用户拍板）────────────────────────────
+// 默认全量；`--affected` 才按影响地图裁剪。默认不裁是有意的——
+// 「漏跑」是静默的，所以要裁必须由调用方显式开口（land.mjs 本地开，CI 全量兜底）。
+//
+// 变更集口径（定错就是静默漏跑，这里写死不许猜）：
+//   origin/<默认分支>..HEAD 的改动  ∪  工作区未提交改动（含未跟踪）
+// 取并集是因为 land 是在 push 之前跑：只看已提交会漏掉刚改还没 commit 的，
+// 只看工作区会漏掉本地已经攒了几个 commit 的。
+
+function changedFilesForAffected() {
+  const out = new Set();
+  const run1 = (args) => {
+    const r = spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? (r.stdout || '') : null;
+  };
+  const base = (() => {
+    const head = run1(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    const b = head ? head.trim() : null;
+    if (b) return b;
+    for (const cand of ['origin/master', 'origin/main']) {
+      if (run1(['rev-parse', '--verify', '--quiet', cand]) != null) return cand;
+    }
+    return null;
+  })();
+  let scanned = false;
+  if (base) {
+    const committed = run1(['diff', '--name-only', `${base}...HEAD`]);
+    if (committed != null) { scanned = true; for (const l of committed.split('\n')) if (l.trim()) out.add(l.trim()); }
+  }
+  const dirty = run1(['status', '--porcelain', '-uall']);
+  if (dirty != null) {
+    scanned = true;
+    for (const l of dirty.split('\n')) {
+      const p = l.slice(3).trim();
+      if (!p) continue;
+      // 重命名形态 `old -> new`：两边都算改动
+      for (const seg of p.split(' -> ')) if (seg.trim()) out.add(seg.trim().replace(/^"|"$/g, ''));
+    }
+  }
+  return { scanned, files: [...out] };
+}
+
+/** 返回本轮要跑的测试文件名（不带 tests/ 前缀，与调用方一致）。 */
+function selectSuites(allSuites) {
+  if (!process.argv.includes('--affected')) return allSuites;
+  const all = allSuites.map(f => `tests/${f}`);
+  const { scanned, files } = changedFilesForAffected();
+  if (!scanned) {
+    green('影响面没算成（git 读不到）——按全量跑，不是「没有改动」');
+    return allSuites;
+  }
+  const map = readImpactMap();
+  const r = affectedTests({ map, changed: files, allTests: all });
+  if (r.mode === 'full') {
+    green(`影响面：全量（${r.why}）`);
+    return allSuites;
+  }
+  green(`影响面：${r.tests.length}/${all.length} 套（${r.why}）`);
+  return r.tests.map(t => t.replace(/^tests\//, ''));
+}
+
+function readImpactMap() {
+  const p = join(ROOT, 'tests', 'impact-map.json');
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+/** 地图健康度：漏登记/幽灵/太旧即红。**只在全量模式判**——裁剪模式下它是前置条件，另有把关。 */
+function checkImpactMapHealth() {
+  const dir = join(ROOT, 'tests');
+  if (!existsSync(dir)) return;
+  const all = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort().map(f => `tests/${f}`);
+  const map = readImpactMap();
+  if (!map) {
+    fail('影响地图不存在', '跑 node scripts/test-impact-map.mjs build 建图（没有它 --affected 只能退全量）', 'tests/impact-map.json');
+    return;
+  }
+  let dist = null;
+  const r = spawnSync('git', ['-C', ROOT, 'rev-list', '--count', `${map.head}..HEAD`], { encoding: 'utf8', windowsHide: true });
+  if (r.status === 0) dist = Number((r.stdout || '').trim());
+  const h = mapHealth({ map, allTests: all, headDistance: dist });
+  if (h.ok) green(`影响地图健康（${Object.keys(map.entries).length} 套在图，落后 HEAD ${dist ?? '?'} 个提交）`);
+  else fail('影响地图不健康', '跑 node scripts/test-impact-map.mjs build 重建', h.problems.join('；'));
+}
+
 async function runTests() {
   const dir = join(ROOT, 'tests');
   if (!existsSync(dir)) {
@@ -237,7 +323,8 @@ async function runTests() {
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
     process.env.DAO_NO_NETWORK_LOG = join(d, `${Date.now()}-${process.pid}.ndjson`);
   }
-  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
+  const allSuites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
+  const suites = selectSuites(allSuites);
   if (suites.length === 0) {
     fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
@@ -266,6 +353,9 @@ async function runTests() {
     }
   }
   reportNetworkViolations();
+  // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
+  // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
+  if (!process.argv.includes('--affected')) checkImpactMapHealth();
 }
 
 /** 读禁网闸的账：测试期有没有谁试图连外网。拦下不等于报警——调用方常把网络错吞了。 */
