@@ -74,7 +74,7 @@ export function searchWaiters(closedNumber, opts = {}) {
   ];
   const items = [];
   for (const [face, args] of faces) {
-    const out = spawnSync(gh, [...ghArgs, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    const out = spawnSync(gh, [...ghArgs, ...args], { windowsHide: true, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
     if (out.error || out.status !== 0) {
       const detail = String(out.stderr || (out.error && out.error.message) || `gh ${face} 调用异常`).trim().slice(0, 400);
       process.stderr.write(`::error::前置提醒搜索失败（gh ${face} list --search "${query}"）——本次没查成，不是搜到 0 条。\n${detail}\n`);
@@ -122,7 +122,7 @@ export function runNotify(closedNumber, opts = {}) {
     const body = buildComment(closedNumber, w);
     const tmpFile = join(tmpdir(), `notify-blocked-${w.number}-${process.pid}.md`);
     writeFileSync(tmpFile, body, 'utf8');
-    const r = spawnSync(gh, [...ghArgs, 'issue', 'comment', String(w.number), '--body-file', tmpFile], { encoding: 'utf8' });
+    const r = spawnSync(gh, [...ghArgs, 'issue', 'comment', String(w.number), '--body-file', tmpFile], { windowsHide: true, encoding: 'utf8' });
     unlinkSync(tmpFile);
     if (r.error || r.status !== 0) {
       failures.push({ number: w.number, detail: String(r.stderr || (r.error && r.error.message) || 'gh issue comment 失败').trim().slice(0, 300) });

@@ -1,0 +1,13 @@
+# /etc/sudoers.d/dao-sync —— orca 唯一被允许的 root 动作
+#
+# 来历（2026-09-05）：dao-sync.service 原来没写 User=，systemd 以 root 解释
+# /home/orca/windsurf-dao/scripts/server-sync.sh，而那个脚本在 orca 可写的 checkout 里。
+# 每一个工人 agent 都能写那个仓，改一行就能等定时器给它 root。
+# 单元已改成 User=orca；脚本里唯一真正要 root 的只有「重启飞书机器人」这一条，
+# 收窄成下面这一行白名单——命令写死，不带通配，orca 拿不到别的。
+#
+# 装：sudo install -m 440 host/machine/sudoers.d/dao-sync /etc/sudoers.d/dao-sync
+#     （install-dao-sync.sh 会做，并先 visudo -c 验语法——sudoers 写坏会把整台机器锁死）
+# 验：sudo -u orca sudo -n /usr/bin/systemctl try-restart feishu-triage   → 应当成功
+#     sudo -u orca sudo -n /usr/bin/systemctl restart orca-serve          → 应当被拒
+orca ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart feishu-triage

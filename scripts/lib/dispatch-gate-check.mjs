@@ -83,7 +83,7 @@ function cursorPayload(command) {
 }
 
 function runScript(script, { command, envExtra = {}, cursor = false } = {}) {
-  return spawnSync(process.execPath, [script], {
+  return spawnSync(process.execPath, [script], { windowsHide: true,
     encoding: 'utf8',
     input: cursor ? cursorPayload(command) : payload(command),
     timeout: 15000,
