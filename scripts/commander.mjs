@@ -225,7 +225,16 @@ function situationHealth(situation) {
 
 // ── 手：hub 回流（带去重）──
 function hubSay(text) {
-  const r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+  // hub-say 在服务器上装在 /home/orca/bin，而 systemd/ssh 的 PATH 里没有它——
+  // 只 spawn 裸名字会 ENOENT，回流总控群整条哑掉且只在日志里留一行（2026-09-05 实咬）。
+  let r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+  if (r.error && r.error.code === 'ENOENT') {
+    for (const cand of [process.env.DAO_HUB_SAY, '/home/orca/bin/hub-say'].filter(Boolean)) {
+      if (!existsSync(cand)) continue;
+      r = spawnSync(cand, [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+      break;
+    }
+  }
   if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
   return { ok: true };
@@ -485,12 +494,16 @@ function dispatchRework(action, { state, dryRun, say }) {
     say(`  ${error}`);
     return { ok: false, error };
   }
+  // --allow-dup：底层去重按 issue 判（#759 定的，卡名不补刀，因为自动卡名会变），
+  // 而快马多张 PR 共用一个署名 issue——同轮返工 #894 会把 #899 一起挡掉，第二张红没人接（2026-09-05 实咬）。
+  // 返工这条路自己已有更准的去重：state.reworkDispatched 按 PR+head「尝试即记」（上面第 510 行），
+  // 同一 PR 同一 head 永不重派。所以这里显式放行 issue 级去重，不动通用判据。
   const cmd = ['node', 'scripts/dao.mjs', 'dispatch',
     '--issue', String(action.issue),
     '--name', reworkCardName(action),
     '--model', action.model, '--reviewer', action.reviewer,
     '--split', 'no', '--split-reason', '指挥官自动返工：照审官红项逐条改（#931）',
-    '--spec', spec, '--confirm'];
+    '--spec', spec, '--allow-dup', '--confirm'];
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
     return { ok: true, dryRun: true };

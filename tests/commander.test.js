@@ -922,3 +922,17 @@ describe('decide：返工模型顶班（#894 实咬）', () => {
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'model-routing-unscanned'));
   });
 });
+
+// 2026-09-05 实咬：同轮返工 #894 与 #899 共用署名 issue #891，第二张被 issue 级去重挡掉，红没人接。
+// 返工的真去重在 state.reworkDispatched（PR+head，尝试即记），所以返工命令必须显式 --allow-dup。
+describe('返工命令：显式放行 issue 级去重', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+  it('dispatchRework 的命令带 --allow-dup', () => {
+    const i = src.indexOf('function dispatchRework');
+    assert.ok(i > -1, '找不到 dispatchRework——本闸判据失效，不是通过');
+    const body = src.slice(i, i + 2600);
+    assert.match(body, /'--allow-dup'/, '返工命令必须带 --allow-dup，否则同 issue 的第二张返工永远派不出去');
+    assert.match(body, /reworkDispatched/, '放行的前提是返工自己有 PR\+head 去重，这行没了就不该放行');
+  });
+});
+
