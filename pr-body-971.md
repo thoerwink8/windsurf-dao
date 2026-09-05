@@ -23,6 +23,18 @@
 - `tests/commander-verbs.test.js` 38 过 / 0 红（含 15 条校验逐条变异：摘掉即放行违规样本）。
 - `tests/commander.test.js` 77 过 / 0 红。
 - `node scripts/dao-check.mjs` 好的（135 项，7 项跳过）。
+- 返工：`git fetch origin && git rebase origin/master` 拿进 `12b5758` / `a00db477`。**没有**恢复 `SERVER-LANDING-CHECKLIST.md`（它不是被删的，是还没出生）。
+- 交卷闸（变基并 push 后，HEAD `63e12d4`）：
+
+```
+node scripts/handoff-check.mjs
+```
+
+```
+判定：通（4 通 / 0 红 / 0 没查成）——可以交卷
+```
+
+①基底含最新 origin/master ✓ ②相对 master 零删除 ✓ ④仓内指针都存在 ✓ ⑤自证基线＝审官所见（本地与 origin 同点 `63e12d4`）✓。`COVERAGE_GAPS`（平行卡字段、合并顺序）本闸盖不到，不假装过了。
 
 ### 上线证据（故意违规被当场拦下）
 
