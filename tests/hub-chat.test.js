@@ -406,7 +406,8 @@ describe('hub 对话块A（IO 薄壳，#852）', () => {
     await M.executeAction(client, { hubChatId: 'oc_hub' }, {
       type: 'hub_card', repo: DEFAULT_REPO, number: 846, url: 'u', title: 't', from: '用户',
     }, store);
-    assert.deepStrictEqual(store.hubPending.om_card_1, { repo: DEFAULT_REPO, number: 846 });
+    assert.equal(store.hubPending.om_card_1.repo, DEFAULT_REPO);
+    assert.equal(store.hubPending.om_card_1.number, 846);
   });
 
   it('createStateStore：hubPending 持久化（写→读回）', async () => {

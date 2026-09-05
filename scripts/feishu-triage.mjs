@@ -65,6 +65,15 @@ import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseProfile } from './lib/feishu-group-profile.mjs';
+import { ensurePlain } from './lib/plain-words.mjs';
+import {
+  buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
+} from './lib/feishu-hub-card.mjs';
+
+export {
+  buildHubCard, parseCardAction, cardCallbackResponse, buildDecidedHubCard, CHOICE_LABELS,
+} from './lib/feishu-hub-card.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -136,12 +145,14 @@ export function normalizeInbound(event, groups = {}) {
     ts: Number(msg.create_time) || Date.now(),
     repo,
     kind: mapping ? mapping.kind : null,
+    profile: mapping?.profile || null,
   };
 }
 
 // ---------------------------------------------------------------------------
 // 群映射表：{ "<chat_id>": { "repo": "...", "kind": "project" } | { "kind": "hub" } }
 // `_` 开头的键是注释（模板占位），不参与映射。
+// #875：每群可选 profile（persona / intents 白名单 / refuse）；缺省走 DEFAULT_PROFILE。
 export function loadGroups(file) {
   let j;
   try {
@@ -155,13 +166,14 @@ export function loadGroups(file) {
     if (!v || typeof v !== 'object' || Array.isArray(v)) {
       throw new Error(`群 ${chatId} 的映射不是对象`);
     }
+    const profile = parseProfile(v.profile, { chatId });
     if (v.kind === 'project') {
       if (typeof v.repo !== 'string' || !v.repo) {
         throw new Error(`群 ${chatId} 是 project 但缺 repo`);
       }
-      groups[chatId] = { repo: v.repo, kind: 'project' };
+      groups[chatId] = { repo: v.repo, kind: 'project', profile };
     } else if (v.kind === 'hub') {
-      groups[chatId] = { kind: 'hub' };
+      groups[chatId] = { kind: 'hub', profile };
     } else {
       throw new Error(`群 ${chatId} 的 kind 不认识：${v.kind}`);
     }
@@ -548,14 +560,20 @@ export function makeFeishuClient(sdk, creds) {
   return {
     // node-sdk：长连接是独立的 WSClient，事件经 EventDispatcher 注册（帅 2026-09-03 实况热修；正式修复见 PR #806 红项）
     _handler: null,
+    _cardHandler: null,
     async start() {
       const ws = new lark.WSClient({ appId, appSecret, loggerLevel: lark.LoggerLevel.info, domain: lark.Domain.Feishu });
       const dispatcher = new lark.EventDispatcher({}).register({
         'im.message.receive_v1': async (data) => { if (this._handler) await this._handler(data); },
+        // #875：卡片回传走同一条 WS 长连接，3 秒内把 toast/卡片回包 return 给 SDK。
+        'card.action.trigger': async (data) => {
+          if (this._cardHandler) return this._cardHandler(data);
+        },
       });
       await ws.start({ eventDispatcher: dispatcher });
     },
     onEvent(handler) { this._handler = handler; },
+    onCardAction(handler) { this._cardHandler = handler; },
     // 回同一话题：reply 到话题根消息（rootId）
     async reply(rootId, text) {
       const r = await client.im.v1.message.reply({
@@ -610,27 +628,20 @@ export function makeFeishuClient(sdk, creds) {
   };
 }
 
-// hub_card → 总控群互动卡片（待拍板）
-export function buildHubCard({ repo, number, url, title, from } = {}) {
+// buildHubCard 实现搬到 scripts/lib/feishu-hub-card.mjs（#875 回传按钮 + 拍板上下文）。
+
+function pendingFromAction(action) {
   return {
-    config: { wide_screen_mode: true },
-    header: {
-      title: { tag: 'plain_text', content: `待拍板：${repo || ''}#${number ?? ''}` },
-      template: 'orange',
-    },
-    elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: `**${title || ''}**\n来自：${from || '未知'}\n仓库：${repo || '-'}\n[查看 issue](${url || ''})`,
-        },
-      },
-      {
-        tag: 'action',
-        actions: [{ tag: 'button', text: { tag: 'plain_text', content: '去拍板' }, type: 'primary', url: url || '' }],
-      },
-    ],
+    repo: action.repo,
+    number: action.number,
+    url: action.url || '',
+    title: action.title || '',
+    from: action.from || '',
+    what: action.what || action.title || '',
+    impact: action.impact || '',
+    recommend: action.recommend || '',
+    why: action.why || '',
+    deadline: action.deadline || '',
   };
 }
 
@@ -649,9 +660,9 @@ export async function executeAction(client, creds, action, store = null) {
         return;
       }
       const cardMsgId = await client.sendCard(hubChatId, buildHubCard(action));
-      // #852：记卡片消息 id → 单号；该 thread 里的回复即拍板，直落对应单
+      // #852 / #875：记卡片消息 id → 单号与拍板上下文；点按钮或 thread 回复都能对回单
       if (cardMsgId && store && store.hubPending && action.repo && action.number) {
-        store.hubPending[cardMsgId] = { repo: action.repo, number: action.number };
+        store.hubPending[cardMsgId] = pendingFromAction(action);
       }
       log({ type: 'action-executed', actionType: 'hub_card', chatId: hubChatId });
       return;
@@ -664,7 +675,103 @@ export async function executeAction(client, creds, action, store = null) {
 // ---------------------------------------------------------------------------
 // 事件处理主链：归一化 → triage → replies 回话题 → actions 逐条执行 → 状态落盘
 // 返回 null = 事件不处理；否则返回 { inbound, replies, actions }（fixture 计数用）。
+export function cardActionAck(response) {
+  const toast = response?.toast && typeof response.toast === 'object'
+    ? { type: response.toast.type || 'info', content: String(response.toast.content || '').slice(0, 100) }
+    : { type: 'info', content: '已收到' };
+  return {
+    toast,
+    card: { type: 'raw', data: response?.card || buildHubCard({}) },
+  };
+}
+
+/** #875：card.action.trigger → 3 秒内 toast+卡片回包；随后落 gh 评论（不挡回包）。 */
+export async function handleCardAction(event, { store, deps, client = null } = {}) {
+  const parsed = parseCardAction(event);
+  if (!parsed) return null;
+  const pending = (parsed.messageId && store?.hubPending?.[parsed.messageId]) || null;
+  if (client?.userName && parsed.openId && !parsed.name) {
+    try { parsed.name = await client.userName(parsed.openId); } catch { /* 名字拿不到用 open_id */ }
+  }
+  const now = typeof deps?.now === 'function' ? deps.now() : Date.now();
+  const who = parsed.name || parsed.openId || '有人';
+  const response = cardCallbackResponse(parsed, { pending, now, who });
+  const ack = cardActionAck(response);
+
+  if (response.kind === 'ok' && parsed.messageId && store?.hubPending) {
+    const prev = pending || { repo: parsed.repo, number: parsed.number };
+    store.hubPending[parsed.messageId] = { ...prev, decided: response.decided };
+  }
+
+  const actions = [];
+  if (response.kind === 'ok') {
+    const repo = parsed.repo || pending?.repo;
+    const number = parsed.number || pending?.number;
+    const comment = cardDecisionComment({
+      who, choice: parsed.choice, chatId: parsed.chatId, messageId: parsed.messageId,
+    });
+    actions.push({ type: 'gh_comment', repo, number, body: comment });
+    if (parsed.choice === 'alternative') {
+      actions.push({
+        type: 'card_followup',
+        rootId: parsed.messageId,
+        text: ensurePlain(alternativeFollowup(), 'feishu-card-followup'),
+      });
+    }
+  }
+
+  log({
+    type: 'card_action',
+    kind: response.kind,
+    choice: parsed.choice,
+    issue: parsed.number || pending?.number || null,
+    toast: ack.toast,
+  });
+  return { parsed, response, ack, actions };
+}
+
+export async function applyCardActions(result, { store, deps, client = null } = {}) {
+  if (!result) return;
+  for (const a of result.actions || []) {
+    if (a.type === 'gh_comment' && a.repo && a.number && deps?.ghComment) {
+      try {
+        await deps.ghComment(a.repo, a.number, a.body);
+        log({ type: 'action', action: a });
+      } catch (e) {
+        warn(`拍板评论写失败（${a.repo}#${a.number}）：${e.message}`);
+        log({ type: 'action-error', actionType: 'gh_comment', message: String(e.message || e) });
+      }
+    } else if (a.type === 'card_followup' && a.rootId && a.text) {
+      if (client?.reply) {
+        try {
+          await client.reply(a.rootId, a.text);
+        } catch (e) {
+          warn(`换方案追问发失败：${e.message}`);
+        }
+      } else {
+        log({ type: 'reply', rootId: a.rootId, text: a.text });
+      }
+    } else {
+      log({ type: 'action', action: a });
+    }
+  }
+  if (store?.save) store.save();
+}
+
 export async function handleEvent(event, { groups, store, deps, triage, client, creds = null }) {
+  const cardParsed = parseCardAction(event);
+  if (cardParsed) {
+    const result = await handleCardAction(event, { store, deps, client });
+    if (!result) return null;
+    await applyCardActions(result, { store, deps, client });
+    return {
+      inbound: null,
+      replies: (result.actions || []).filter((a) => a.type === 'card_followup').map((a) => ({ rootId: a.rootId, text: a.text })),
+      actions: result.actions || [],
+      cardAck: result.ack,
+      cardKind: result.response?.kind,
+    };
+  }
   const inbound = normalizeInbound(event, groups);
   if (!inbound) {
     if (client) log({ type: 'skip', reason: 'normalize-null', eventType: event?.event_type || event?.header?.event_type || '', chatId: event?.message?.chat_id || event?.event?.message?.chat_id || '' });
@@ -800,6 +907,27 @@ export async function runLive({ groups, store, deps, creds, triage, coreSource }
       .then(() => handleEvent(event, { groups, store, deps, triage, client, creds }))
       .catch((e) => log({ type: 'error', message: String(e.message || e) }));
   });
+  // #875：卡片点击必须 3 秒内 return toast/卡片；gh 评论放到回包之后，不挡 SDK ack。
+  if (typeof client.onCardAction === 'function') {
+    client.onCardAction(async (event) => {
+      try {
+        const result = await handleCardAction(event, { store, deps, client });
+        const ack = result?.ack || cardActionAck({
+          toast: { type: 'error', content: '没记下' },
+          card: buildHubCard({}),
+        });
+        setImmediate(() => {
+          applyCardActions(result, { store, deps, client }).catch((e) => {
+            log({ type: 'error', message: String(e.message || e) });
+          });
+        });
+        return ack;
+      } catch (e) {
+        log({ type: 'error', message: String(e.message || e) });
+        return cardActionAck({ toast: { type: 'error', content: '没记下' }, card: buildHubCard({}) });
+      }
+    });
+  }
 
   const stop = () => {
     log({ type: 'stopping' });

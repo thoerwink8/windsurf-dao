@@ -9,6 +9,7 @@ description: 飞书 triage 机器人的人格与规则（persona.md 是 deps.llm
 
 - `persona.md` —— 机器人人格与九条规则。**deps.llm 的 system 段 = 此文件全文**（消歧记录·补充 2），块 B 在模块装载时读入 `PERSONA` 常量。改这里 = 改机器人语气与行为边界。
 - 判重、三问、建单、两档放行的逻辑在 `scripts/lib/feishu-triage-core.mjs`（纯函数 + 注入 deps，测试在 `tests/feishu-triage.test.js`）。
+- #875：hub 意图层（问候不甩盘点）+ 群 profile（`host/machine/feishu-groups.json`）+ 待拍板卡片回传（`scripts/lib/feishu-hub-card.mjs`，测试 `tests/feishu-intent-card.test.js`）。
 
 ## 维护纪律
 
