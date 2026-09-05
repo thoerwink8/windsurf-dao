@@ -28,6 +28,10 @@ import { issueNumberFromWorktree } from './lib/card-identity.mjs';
 import { resolveActualWorkerModel } from './lib/reviewer-vendor-gate.mjs';
 import { ensurePlain } from './lib/plain-words.mjs';
 import {
+  DEFAULT_SILENCE_MS, scanLiveness, routeSilent,
+  sessionFromOrcaTerminal, sessionFromMirasimSession,
+} from './lib/liveness.mjs';
+import {
   decideHitAction,
   reviewerOrderOf,
   reviewerPasserIds,
@@ -213,6 +217,38 @@ function warnPadStillThere() {
   }
 }
 
+/** 静默阈值（分钟）可用环境变量覆盖，便于按机器调；读不出数就用默认，不静默失效。 */
+function silenceThresholdMs() {
+  const n = Number(process.env.DAO_SILENCE_MINUTES);
+  return Number.isFinite(n) && n > 0 ? n * 60000 : DEFAULT_SILENCE_MS;
+}
+
+/**
+ * mirasim 会话：走它本地 WS API 的 listSessions。拿不到就返回空数组并说一句——
+ * 「没查成」由上面的 sampledNothing / unscanned 两格显形，这里不假装 0 条等于没事。
+ */
+function mirasimSessions() {
+  // 指仓内脚本。此前这个能力只存在于服务器家目录里一个写着「用完即删」的临时脚本，
+  // 指过去就是指向空气的指针（CLAUDE.md：留指针要配报警，配不了就别留）。
+  const script = process.env.DAO_MIRASIM_LS || join(REPO_ROOT, 'scripts', 'mirasim-sessions.mjs');
+  if (!existsSync(script)) return [];
+  const r = spawnSync(process.execPath, [script, '--json'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+  if (r.error || r.status !== 0) {
+    say(`⚠️ mirasim 会话没查成：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 160)}`);
+    return [];
+  }
+  const out = [];
+  for (const line of String(r.stdout || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const sess = sessionFromMirasimSession(JSON.parse(t));
+      if (sess) out.push(sess);
+    } catch { /* 不是会话行，跳过 */ }
+  }
+  return out;
+}
+
 function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   warnPadStillThere();
@@ -235,9 +271,19 @@ function main(argv = process.argv.slice(2)) {
     ? (wlR.json?.result?.workers || wlR.json?.result?.items || [])
     : [];
 
+  // 采样面（2026-09-05 拍板改）：**不再按 agentIdentity 过滤**。
+  // 旧代码这里是 `if (!t.agentIdentity) continue`——reclaude 起的终端没有这个字段，被整个跳过，
+  // 于是不是「漏报」而是「没采样」，两者在报告里长得一模一样（memory reclaude-workers-invisible-to-orchestration）。
   const agents = [];
+  const liveSessions = [];
   for (const t of terminals) {
-    if (!t || !t.agentIdentity || !t.handle) continue;
+    if (!t || !t.handle) continue;
+    const sess = sessionFromOrcaTerminal({
+      ...t,
+      displayName: displayNameOf(ps, t.worktreeId, t.title || t.handle),
+    });
+    if (sess) liveSessions.push(sess);
+    if (!t.agentIdentity) continue; // 指纹那条老路仍只看 agent 终端；活性判据看全部（上面已收）
     agents.push({
       handle: t.handle,
       title: t.title || t.handle,
@@ -247,6 +293,26 @@ function main(argv = process.argv.slice(2)) {
       displayName: displayNameOf(ps, t.worktreeId, t.title || t.handle),
       screen: screenOf(t.handle),
     });
+  }
+  liveSessions.push(...mirasimSessions());
+
+  // ② 发现判据（2026-09-05 拍板：删掉「靠认识错误字样」这一层）：
+  // 唯一判据是「多久没有可验证的推进」。指纹只留作说明原因，不再决定报不报。
+  const live = scanLiveness({ sessions: liveSessions, thresholdMs: silenceThresholdMs() });
+  if (!live.ok) {
+    say(`⚠️ 会话活性没查成：${live.error}`);
+  } else {
+    if (live.sampledNothing) {
+      say('⚠️ 会话活性没查成：这一轮一个会话都没采到——不是「全都健康」');
+    }
+    if (live.counts.unscanned) {
+      say(`⚠️ 会话活性：${live.counts.unscanned} 个会话答不上「上次真动」（没查成，不当活着）`);
+    }
+    for (const sil of live.silent) {
+      const route = routeSilent(sil);
+      say(`${sil.driver} 会话「${String(sil.label).slice(0, 40)}」${sil.why}——${route.action === 'restart-reviewer' ? '判死重起' : '报帅'}`);
+    }
+    console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done} / 没查成 ${live.counts.unscanned}`);
   }
 
   const prev = loadState(args.state);
