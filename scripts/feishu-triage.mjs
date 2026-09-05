@@ -685,14 +685,13 @@ export function cardActionAck(response) {
   };
 }
 
-/** #875：card.action.trigger → 3 秒内 toast+卡片回包；随后落 gh 评论（不挡回包）。 */
-export async function handleCardAction(event, { store, deps, client = null } = {}) {
+/** #875：card.action.trigger → 3 秒内 toast+卡片回包；随后落 gh 评论（不挡回包）。
+ *  整条回包+组评论不打网：名字只用事件里的 operator.user_name / open_id。
+ *  通讯录挂死不许进这条路径（#952 审官疑问：回包前 await userName 会拖过 3 秒闸）。 */
+export async function handleCardAction(event, { store, deps } = {}) {
   const parsed = parseCardAction(event);
   if (!parsed) return null;
   const pending = (parsed.messageId && store?.hubPending?.[parsed.messageId]) || null;
-  if (client?.userName && parsed.openId && !parsed.name) {
-    try { parsed.name = await client.userName(parsed.openId); } catch { /* 名字拿不到用 open_id */ }
-  }
   const now = typeof deps?.now === 'function' ? deps.now() : Date.now();
   const who = parsed.name || parsed.openId || '有人';
   const response = cardCallbackResponse(parsed, { pending, now, who });
@@ -728,6 +727,27 @@ export async function handleCardAction(event, { store, deps, client = null } = {
     toast: ack.toast,
   });
   return { parsed, response, ack, actions };
+}
+
+/** live 路径：先算出 ack 立刻 return 给 SDK，gh 评论 setImmediate 后跑。
+ *  通讯录永远不进这条路径——假 client.userName 挂死也必须在预算内回包。 */
+export async function liveCardAction(event, { store, deps, client = null, defer = setImmediate } = {}) {
+  try {
+    const result = await handleCardAction(event, { store, deps });
+    const ack = result?.ack || cardActionAck({
+      toast: { type: 'error', content: '没记下' },
+      card: buildHubCard({}),
+    });
+    defer(() => {
+      applyCardActions(result, { store, deps, client }).catch((e) => {
+        log({ type: 'error', message: String(e.message || e) });
+      });
+    });
+    return ack;
+  } catch (e) {
+    log({ type: 'error', message: String(e.message || e) });
+    return cardActionAck({ toast: { type: 'error', content: '没记下' }, card: buildHubCard({}) });
+  }
 }
 
 export async function applyCardActions(result, { store, deps, client = null } = {}) {
@@ -909,24 +929,7 @@ export async function runLive({ groups, store, deps, creds, triage, coreSource }
   });
   // #875：卡片点击必须 3 秒内 return toast/卡片；gh 评论放到回包之后，不挡 SDK ack。
   if (typeof client.onCardAction === 'function') {
-    client.onCardAction(async (event) => {
-      try {
-        const result = await handleCardAction(event, { store, deps, client });
-        const ack = result?.ack || cardActionAck({
-          toast: { type: 'error', content: '没记下' },
-          card: buildHubCard({}),
-        });
-        setImmediate(() => {
-          applyCardActions(result, { store, deps, client }).catch((e) => {
-            log({ type: 'error', message: String(e.message || e) });
-          });
-        });
-        return ack;
-      } catch (e) {
-        log({ type: 'error', message: String(e.message || e) });
-        return cardActionAck({ toast: { type: 'error', content: '没记下' }, card: buildHubCard({}) });
-      }
-    });
+    client.onCardAction((event) => liveCardAction(event, { store, deps, client }));
   }
 
   const stop = () => {
