@@ -61,6 +61,35 @@ describe('orphan-test-check', () => {
     });
   });
 
+  it('无扩展名的 require 要按 Node 的解析补候选（2026-09-06 实咬）', async (t) => {
+    const S = await LIB_LOAD;
+    await t.test('写了扩展名就只认它自己', () => {
+      assert.deepStrictEqual(S.resolveCandidates('tests/helpers/x.mjs'), ['tests/helpers/x.mjs']);
+    });
+    await t.test('没写扩展名给出 .js/.mjs/.cjs 与 index 候选', () => {
+      const c = S.resolveCandidates('tests/helpers/dao-harness');
+      assert.ok(c.includes('tests/helpers/dao-harness.js'));
+      assert.ok(c.includes('tests/helpers/dao-harness.mjs'));
+      assert.ok(c.includes('tests/helpers/dao-harness/index.js'));
+    });
+    await t.test('只有 .js 在盘上时不判孤儿', () => {
+      const r = S.inspectOrphanTests({
+        files: ['tests/a.test.js'],
+        readFile: () => `require('${"./helpers/" + "dao-harness"}');`,  // 拼起来：本文件在闸的扫描面内，写死会被当真引用
+        exists: (p) => p === 'tests/helpers/dao-harness.js',
+      });
+      assert.equal(r.orphans.length, 0);
+    });
+    await t.test('判别力：一个候选都不在，照样判孤儿', () => {
+      const r = S.inspectOrphanTests({
+        files: ['tests/a.test.js'],
+        readFile: () => `require('${"./helpers/" + "gone"}');`,        // 同上——2026-09-06 实咬：写死这行让闸把本套判成孤儿
+        exists: () => false,
+      });
+      assert.equal(r.orphans.length, 1);
+    });
+  });
+
   it('夹具判别力：red 抓孤儿 / ok 绿 / empty 没查成', async (t) => {
     const S = await LIB_LOAD;
     const r = S.inspectOrphanTestFixtures(path.join(__dirname, 'fixtures', 'orphan-test'));

@@ -129,8 +129,25 @@ export function planReviewPendingDrain(ticket) {
   const worktree = String(ticket.workerWorktree ?? '').trim();
   const reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
-  if (!worktree) return { ok: false, error: '待办缺工人树' };
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
+  if (!worktree) {
+    // 快马票（2026-09-05 实咬 #884/#885/#886）：活干在非 Orca 管理的树里，票上 workerWorktree 是 null。
+    // 此前这里直接判失败，三张 PR 的审官 10 小时起不来，而错误只出现在 drain 的返回里，没人看。
+    // #927 起 reviewer-create 自己会「确证无士兵树才建替身树当父卡」，所以缺树改走 create 路，不是拒绝。
+    // 注意仍然只在 worktree 缺失时走：有树就走 attach，别让快马路吞掉正常路的判据。
+    const createArgv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer];
+    if (ticket.issue) createArgv.push('--issue', String(ticket.issue));
+    return {
+      ok: true,
+      verb: 'reviewer-create',
+      argv: createArgv,
+      skipWait: true,
+      fastPath: true,
+      pr,
+      worktree: null,
+      reviewer,
+    };
+  }
   const argv = [
     'reviewer-attach',
     '--pr', pr,

@@ -4,6 +4,7 @@
 Description=每 5 分钟让服务器主树跟上主分支
 
 [Timer]
+OnCalendar=*:1/5
 OnBootSec=2min
 OnUnitActiveSec=5min
 Persistent=true

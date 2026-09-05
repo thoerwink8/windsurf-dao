@@ -39,9 +39,12 @@
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
 | D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
-| C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；本机新增事件要带走就手动拷（同名即同一事件，合并拷安全） |
+| C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
+| D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
+| A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。`test-impact-map.mjs build` 采覆盖率+读文件记录写 `map.json`，`dao-check --affected` 读它裁剪。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。CI 没有它即退全量，是安全降级。换机重生成 |
+| A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
 | A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
@@ -51,7 +54,9 @@
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
+| E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| D | ~/.pi | pi 产品根。子项见下行，不整目录镜像。onboard 只写 agent/extensions（dao-sync 单元的 ReadWritePaths 因此含这一条）；其余禁拷 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |

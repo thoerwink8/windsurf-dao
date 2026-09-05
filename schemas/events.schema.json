@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "点将台事件账 schema（唯一权威）",
   "version": 1,
-  "description": "事件类型闭集的唯一权威（设计 docs/dianjiangtai-design.md A.1）。加类型先改本文件：在 oneOf 里加一条带 title 的定义；只加字段不改语义翻转；读端容忍未知字段（additionalProperties: true）。事件类型闭集 = oneOf[].title，是它的派生枚举，任何实现不得另抄清单。公共字段：ts（ISO8601 带时区）/ machine（机器名）/ seq（本机单调计数）/ event_id（内容哈希，写入时计算）/ schema_version。全序排序键 = (ts, machine, seq, event_id) 字典序（A.2）。",
+  "description": "事件类型闭集的唯一权威（设计 docs/dianjiangtai-design.md A.1）。加类型先改本文件：在 oneOf 里加一条带 title 的定义；只加字段不改语义翻转；读端容忍未知字段（additionalProperties: true）。事件类型闭集 = oneOf[].title，是它的派生枚举，任何实现不得另抄清单。派生镜子只能是注释（scripts/event-write.mjs 头注的 [闭集镜子] 段），改本文件必须同步它；对不上由 tests/session-events.test.js 报红。公共字段：ts（ISO8601 带时区）/ machine（机器名）/ seq（本机单调计数）/ event_id（内容哈希，写入时计算）/ schema_version。全序排序键 = (ts, machine, seq, event_id) 字典序（A.2）。",
   "definitions": {
     "base": {
       "type": "object",
@@ -338,6 +338,114 @@
             "evidence": { "type": "array", "items": { "type": "string" } }
           },
           "required": ["model", "detail", "evidence"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "session.state",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "会话态快照（#891 期一）：帅位/工人每轮末写一条，把「干到哪/下一步/卡不卡」从会话上下文落到盘上（会话一断即失是本单起因）。同一 session_id 会有多条（每轮末一条），读端按全序 (ts, machine, seq, event_id) 取最后一条当当前态。身份沿用本 schema 既有专名 identity（与 job.* 同一枚举），不另造 role——同义双名会让读端认两个键。",
+          "properties": {
+            "type": { "const": "session.state" },
+            "session_id": { "type": "string", "description": "会话标识（同一终端会话内稳定）" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
+            "phase": { "enum": ["在途", "沉默", "待拍", "收尾"], "description": "在途=在干且有话说；沉默=干活中不播报；待拍=等用户拍板；收尾=交卷中" },
+            "doing": { "type": "string", "description": "一句话：当前在干什么" },
+            "next": { "type": "string", "description": "一句话：下一步" },
+            "blocked": { "type": "boolean", "description": "是否卡住。与 phase=待拍 不等价：等审官/等配额也 blocked 而 phase 仍是在途，故不能由 phase 推导" },
+            "pending_decision_id": { "type": ["string", "null"], "description": "正在等的 decision.pending 的 decision_id；不等则 null" },
+            "digest": { "type": "string", "description": "状态摘要哈希 = 播报闸内容维去重键的内容部分（去重键 =（主体, digest））。event_id 含 ts/seq 每轮必变、当不了去重键，故另立本字段。推荐算法：canonicalStringify({identity, phase, doing, next, blocked, pending_decision_id}) 求 sha256 取前 16 hex——同一状态重复上报得同一 digest" },
+            "repo": { "type": ["string", "null"], "description": "仓名（只写仓名，不写绝对路径：路径属脱敏面）" },
+            "refs": { "type": "array", "items": { "type": "string" }, "description": "相关 issue/PR/commit 引用（如 #891、PR #900、077f48b）" }
+          },
+          "required": ["session_id", "identity", "phase", "doing", "next", "blocked", "pending_decision_id", "digest"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "decision.pending",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "待用户拍板（#891 期一）：一句话 + 选项 + 推荐，播报闸白名单三类之一（urgency=急 即时插播）。不变量（写入即校验）：每条 option 有非空 label；options 非空时至少两条（一个选项不叫拍板）；recommend 非 null 时必须命中某条 label——推荐指向不存在的选项会让飞书卡片的一键选择失效。options 允许空数组 = 开放问题（问用户的工具可以不给选项），此时 recommend 记 null。urgency / recommend / why 允许 null = 写口没查成（#897 实测：AskUserQuestion 与 im_ask_user 的入参里都没有 urgency 这一位）——宁记 null，不许伪造。",
+          "properties": {
+            "type": { "const": "decision.pending" },
+            "decision_id": { "type": "string", "description": "本次拍板的标识；decision.resolved 用 target_decision_id 指回它" },
+            "question": { "type": "string", "description": "一句话问题（说人话，见 plain-board skill）" },
+            "options": {
+              "type": "array",
+              "description": "2—4 条清楚选项（全局约定）；label 是用户看见的那句，description 讲代价。空数组 = 开放问题（没有选项可点）；非空时至少两条",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string", "description": "短选项名（用户看见并点的那句）" },
+                  "description": { "type": ["string", "null"], "description": "一句话：这个选项的代价/后果；写口读不到就 null" }
+                },
+                "required": ["label"],
+                "additionalProperties": true
+              }
+            },
+            "recommend": { "type": ["string", "null"], "description": "推荐哪个（非 null 时必须等于某条 option 的 label）；开放问题或写口读不到就 null" },
+            "urgency": { "enum": ["急", "缓", null], "description": "急=即时插播；缓=攒到窗末合成一条摘要；null=写口没查成（#897 实测：两种问用户的工具入参里都没有这一位）。播报闸可把 null 当缓处理，但账面记的是「没判过」，不是「判过是缓」" },
+            "why": { "type": ["string", "null"], "description": "一句话：为什么推荐这个；写口读不到就 null（配 why_source 记清这句从哪读的）" }
+          },
+          "required": ["decision_id", "question", "options", "recommend", "urgency", "why"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "decision.resolved",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "拍板结果（#891 期一）：账本不可变，追加不改历史——不回填 decision.pending，另立本事件指回去。target 指 pending 的 decision_id 而非 event_id：同一次拍板可能被重复上报成多条 pending 事件。同一 target 若有多条（用户改主意），读端按全序取最后一条为准。",
+          "properties": {
+            "type": { "const": "decision.resolved" },
+            "target_decision_id": { "type": "string", "description": "被拍的 decision.pending 的 decision_id" },
+            "chosen": { "type": "array", "items": { "type": "string" }, "description": "选中的 option label，或用户自输答案的原文；单选也是一元数组——形状对齐唯一写口（#897 的 responses[]），不留字符串/数组两形让读端分支" },
+            "by": { "enum": ["用户", "帅"], "description": "谁拍的。帅=值守态按已过消歧门的规则代拍，不是用户点的" },
+            "note": { "type": "string", "description": "一句话补充（可省）" }
+          },
+          "required": ["target_decision_id", "chosen", "by"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "session.milestone",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "里程碑：提交·落地·合并（#891 期一，字段形状随 W5 写口实测 PR #897）。写口 = Bash 的 PostToolUse，命令真成功才写；退出码没查成一律不写（fail-closed，不当成功）。为什么不复用 job.closed：那是能力账正样本、由收口路径独占写，它的必填 merged_by / usd_cash / usd_economic 在 git commit 落地那一刻一个都拿不到，硬凑只能填 unknown 去污染归因。故本类型的必填只留「动作完成那一刻真拿得到」的四项；git 探头没查成时 branch/commit/subject 记 null 并在 evidence 里加一条写清没查成，不留假 ✓。",
+          "properties": {
+            "type": { "const": "session.milestone" },
+            "kind": { "enum": ["commit", "land", "pr-merge"], "description": "里程碑种类：commit=提交落地 / land=收工一条命令过了 / pr-merge=PR 合并" },
+            "repo": { "type": ["string", "null"], "description": "只放末段目录名——绝对路径不进事件（与 session.state 的 repo 同义）；拿不到记 null" },
+            "evidence": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "成功判据的出处，一项一条可复查的证据，如 [\"exit_code=0\", \"commit:a1b2c3d\"]，探头没查成时加一条写清（如 \"git 探头没查成：not a git repository\"）。形状与 attr.* / audit.* 的 evidence 一致（字符串数组）——同名同形，读端不必按 type 分支（2026-09-04 帅位拍板：不留会漂的形状，注释不是闸）。空数组写入即拒：里程碑没有证据就不该写"
+            },
+            "milestone_key": { "type": "string", "description": "幂等键 = kind + 落地锚点（commit 短 sha / pr-<n> / 命令哈希）。同一动作重复触发靠它防重复计账——写入即校验：(type, milestone_key, repo) 已入账即拒，改 ts/seq 重放也拒（event_id 含 ts/seq，拦不住重放）。带 repo 是因为 land 那一支的锚点是命令哈希，同一条命令在两个仓跑出的哈希相同，不带 repo 会把第二个仓的真里程碑当重复吞掉" },
+            "branch": { "type": ["string", "null"], "description": "git 探头没查成为 null" },
+            "commit": { "type": ["string", "null"], "description": "短 sha；git 探头没查成为 null" },
+            "subject": { "type": ["string", "null"], "description": "提交标题；git 探头没查成为 null" },
+            "pr_number": { "type": ["integer", "null"] },
+            "session_id": { "type": ["string", "null"], "description": "与 session.state 同义：哪个会话干的" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"], "description": "可选，与 job.* / session.state 同一枚举（不造 role 这类同义双名）。hook 侧判不出身份时整个字段别写——别写 null" },
+            "refs": { "type": "array", "items": { "type": "string" }, "description": "相关 issue/PR/commit 引用（与 session.state 的 refs 同义）" }
+          },
+          "required": ["kind", "repo", "evidence", "milestone_key"],
           "additionalProperties": true
         }
       ]

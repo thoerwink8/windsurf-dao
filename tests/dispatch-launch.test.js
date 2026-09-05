@@ -469,7 +469,9 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(calls.length === 1, 'spawnFn 调一次');
       const c = calls[0];
       assert.ok(c.argv.includes('dispatch-exec') && c.argv.includes('--order'), 'argv 带 dispatch-exec --order  →  ' + c.argv.join(' '));
-      assert.ok(c.opts.detached === true && c.opts.windowsHide !== true, 'detached，不再传 windowsHide');
+      // 2026-09-05 掉头：#807 曾把「不再传 windowsHide」写死进这条断言，等于把回归固化成契约。
+      // 本机（帅位）是 Windows，不带它每次 spawn 闪一个控制台窗；它在非 Windows 是 no-op。
+      assert.ok(c.opts.detached === true && c.opts.windowsHide === true, 'detached + windowsHide（Windows 不闪窗）');
       assert.ok(Array.isArray(c.opts.stdio) && c.opts.stdio[1] !== 'ignore' && c.opts.stdio[2] !== 'ignore',
         'stdout/stderr 进日志 fd');
       assert.ok(fs.existsSync(logPath), '日志文件已开');

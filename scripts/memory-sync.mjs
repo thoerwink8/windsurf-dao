@@ -44,7 +44,7 @@ function writeState(patch) {
 }
 
 function git(dir, args, timeout = 20000) {
-  const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', timeout });
+  const r = spawnSync('git', args, { windowsHide: true, cwd: dir, encoding: 'utf8', timeout });
   if (r.error || r.status !== 0) {
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200) };
   }

@@ -78,8 +78,20 @@ describe('onboard', () => {
       const { home, clone } = mkHome('perskill'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
       fs.rmSync(p); fs.mkdirSync(p);
-      fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
+      // 2026-09-05 起逐个比对全部 skill，不再拿 dispatch 一个当哨兵——只链一个不算绿。
+      const src = path.join(REPO, 'host', 'skills');
+      for (const n of fs.readdirSync(src)) {
+        if (!fs.existsSync(path.join(src, n, 'SKILL.md'))) continue;
+        fs.symlinkSync(path.join(src, n), path.join(p, n), 'junction');
+      }
       assert.equal((await ids(home)).length, 0, '逐个链接应绿');
+    });
+    await t.test('只链 dispatch、别的没链 → 仍判 skills-partial（实咬：新建 dao-inbox 后 onboard 照报全绿）', async () => {
+      const { home, clone } = mkHome('sentinel'); await linkMemory(home, clone, REPO); mkCreds(home);
+      const p = path.join(home, '.claude', 'skills');
+      fs.rmSync(p); fs.mkdirSync(p);
+      fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
+      assert.ok((await ids(home)).includes('skills-partial'), '只链一个不许判绿——这正是当天漏掉 dao-inbox 的那格');
     });
     await t.test('memory 未接 / 凭据缺失 一起报（主 clone 形态：.git 是目录）', async () => {
       // 本测试仓自己是 linked worktree（.git 是文件），会命中「worktree 不报 memory」的抑制；
@@ -379,5 +391,70 @@ describe('onboard', () => {
       const r = S.checkStatusLine({ home });
       assert.ok(r.unscanned && !r.problem, JSON.stringify(r));
     });
+  });
+});
+
+// 2026-09-05 实咬：一个 subagent 做验证时在 ~/.claude/skills 下留了 ask-gate-probe 真目录，
+// 里面带 hooks.json（PreToolUse 匹配 ^Bash$），在每一次 Bash 调用上真跑并往上下文注入一句暗号。
+// 原来的判据只查「仓里的 skill 都链上了没」，对「仓里没有、live 却有」的一无所知——
+// 也就是仓里所有检查都看不见的活 hook。同一次扫描还捡出一条指向已删 skill 的悬空链。
+describe('家目录里追溯不回本仓的 skill', () => {
+  // 逐个链接形态（真目录 + 每个 skill 一条链），才走得到反向那段判据
+  function mkPerLinkHome(tag) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `onboard-${tag}-`));
+    const live = path.join(home, '.claude', 'skills');
+    fs.mkdirSync(live, { recursive: true });
+    fs.copyFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), path.join(home, '.claude', 'CLAUDE.md'));
+    const src = path.join(REPO, 'host', 'skills');
+    for (const n of fs.readdirSync(src)) {
+      if (!fs.existsSync(path.join(src, n, 'SKILL.md'))) continue;
+      fs.symlinkSync(path.join(src, n), path.join(live, n), 'junction');
+    }
+    return { home, live };
+  }
+
+  it('全绿基线：逐个链接齐全时不报（反证判据不是恒红）', async () => {
+    const S = await LIB_LOAD;
+    const { home } = mkPerLinkHome('stray-ok');
+    assert.equal(S.checkSkillsLink({ root: REPO, home }).problem, undefined);
+  });
+
+  it('故意违规样本①：留一个带 hooks.json 的真目录 → 报 skills-stray 并点名', async () => {
+    const S = await LIB_LOAD;
+    const { home, live } = mkPerLinkHome('stray-probe');
+    const probe = path.join(live, 'ask-gate-probe', 'hooks');
+    fs.mkdirSync(probe, { recursive: true });
+    fs.writeFileSync(path.join(live, 'ask-gate-probe', 'SKILL.md'), '---\nname: ask-gate-probe\n---\n探针');
+    fs.writeFileSync(path.join(probe, 'hooks.json'), '{"hooks":{"PreToolUse":[]}}');
+    const r = S.checkSkillsLink({ root: REPO, home });
+    assert.equal(r.problem?.id, 'skills-stray');
+    assert.match(r.problem.msg, /ask-gate-probe/, '要点名是谁，不能只给个数字');
+    assert.match(r.problem.msg, /hooks\.json|影子/, '要说清危险在哪，否则人不知道该不该删');
+  });
+
+  it('故意违规样本②：链接指向已从仓里删掉的 skill → 报悬空，与外来分开', async () => {
+    const S = await LIB_LOAD;
+    const { home, live } = mkPerLinkHome('stray-dangle');
+    fs.symlinkSync(path.join(REPO, 'host', 'skills', 'webview-debug'),
+      path.join(live, 'webview-debug'), 'junction');
+    const r = S.checkSkillsLink({ root: REPO, home });
+    assert.equal(r.problem?.id, 'skills-dangling-stray', '悬空与外来必须是两个 id——修法完全不同');
+    assert.match(r.problem.msg, /webview-debug/);
+  });
+
+  it('白名单里的宿主自带 skill 不报（否则这条闸天天红，红久了就没人看）', async () => {
+    const S = await LIB_LOAD;
+    const { home, live } = mkPerLinkHome('stray-third');
+    for (const n of ['orca-cli', 'orchestration']) {
+      fs.mkdirSync(path.join(live, n), { recursive: true });
+      fs.writeFileSync(path.join(live, n, 'SKILL.md'), `---\nname: ${n}\n---\n宿主自带`);
+    }
+    assert.equal(S.checkSkillsLink({ root: REPO, home }).problem, undefined);
+  });
+
+  it('两个新 id 都归「只报不修」——删家目录里别人的东西不是 onboard 的活', async () => {
+    const S = await LIB_LOAD;
+    assert.ok(S.ONBOARD_REPORT_ONLY.has('skills-stray'));
+    assert.ok(S.ONBOARD_REPORT_ONLY.has('skills-dangling-stray'));
   });
 });

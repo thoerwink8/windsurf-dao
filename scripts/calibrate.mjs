@@ -334,7 +334,7 @@ function openDispatchCount(events) {
 }
 
 function tryGhPrTitle(number) {
-  const result = spawnSync('gh', ['pr', 'view', String(number), '--json', 'title,state,mergedAt,isDraft'], { encoding: 'utf8' });
+  const result = spawnSync('gh', ['pr', 'view', String(number), '--json', 'title,state,mergedAt,isDraft'], { windowsHide: true, encoding: 'utf8' });
   if (result.error || result.status !== 0) {
     return { ok: false, error: String(result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim().slice(0, 160) };
   }

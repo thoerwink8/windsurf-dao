@@ -40,7 +40,7 @@ export function wrapChild({ child, exec = null } = {}) {
   if (!child) return fail('子脚本没指定：argv[2] 要是 scripts/lib 下文件名或相对仓库根路径');
   const r = exec
     ? exec(child)
-    : spawnSync(process.execPath, [child], {
+    : spawnSync(process.execPath, [child], { windowsHide: true,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'], // 不继承 Cursor 经管道喂进来的载荷 stdin
         env: {

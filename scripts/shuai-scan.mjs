@@ -52,7 +52,7 @@ function fail(msg, code = 1) {
 }
 
 function runGh(args) {
-  const r = spawnSync(ghExecutable(), args, {
+  const r = spawnSync(ghExecutable(), args, { windowsHide: true,
     encoding: 'utf8',
     cwd: ROOT,
     timeout: 45000,
