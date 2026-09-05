@@ -4840,7 +4840,7 @@ import {
 /** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
 function mirasimRepoRoot(args) {
   if (args && args.repo) return args.repo;
-  const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
   if (r.status === 0) {
     let g = String(r.stdout || '').trim();
     if (g) {
@@ -4854,7 +4854,7 @@ function mirasimRepoRoot(args) {
 
 /** 读回某树 HEAD 的 sha（读回自证的那一读；读不到抛，交判官判「没查成」）。 */
 function gitHeadOf(treePath) {
-  const r = spawnSync('git', ['-C', treePath, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', treePath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(String(r.stderr || '').trim() || `git rev-parse 失败 exit ${r.status}`);
   return String(r.stdout || '').trim();
 }
@@ -4868,7 +4868,7 @@ function gitHeadOf(treePath) {
 function gitSyncTreeTo(treePath, oid) {
   const want = String(oid || '').trim();
   if (!want) return { ok: false, error: '没给要同步到的 oid（没查成）' };
-  const st = spawnSync('git', ['-C', treePath, 'status', '--porcelain'], { encoding: 'utf8' });
+  const st = spawnSync('git', ['-C', treePath, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
   if (st.status !== 0) {
     return { ok: false, error: `读审官树 ${treePath} 状态失败（没查成）：${String(st.stderr || '').trim().slice(0, 200)}` };
   }
@@ -4880,9 +4880,9 @@ function gitSyncTreeTo(treePath, oid) {
       dirty: dirty.split('\n').slice(0, 10),
     };
   }
-  const has = spawnSync('git', ['-C', treePath, 'cat-file', '-e', `${want}^{commit}`], { encoding: 'utf8' });
+  const has = spawnSync('git', ['-C', treePath, 'cat-file', '-e', `${want}^{commit}`], { windowsHide: true, encoding: 'utf8' });
   if (has.status !== 0) return { ok: false, error: `审官树里没有 ${want.slice(0, 12)} 这个 commit（fetch 没生效？没查成）` };
-  const rs = spawnSync('git', ['-C', treePath, 'reset', '--hard', want], { encoding: 'utf8' });
+  const rs = spawnSync('git', ['-C', treePath, 'reset', '--hard', want], { windowsHide: true, encoding: 'utf8' });
   if (rs.status !== 0) {
     return { ok: false, error: `reset --hard ${want.slice(0, 12)} 失败：${String(rs.stderr || '').trim().slice(0, 200)}` };
   }
@@ -4903,18 +4903,18 @@ function gitSyncTreeTo(treePath, oid) {
  * 推那棵树的活归 gitSyncTreeTo（返工轮由编排层在 HEAD 闸上调），不是这里静默算完。
  */
 function gitFetchRef(repo, prBranch, expectedOid, reviewBranch) {
-  const fe = spawnSync('git', ['-C', repo, 'fetch', 'origin', prBranch], { encoding: 'utf8', timeout: 90000 });
+  const fe = spawnSync('git', ['-C', repo, 'fetch', 'origin', prBranch], { windowsHide: true, encoding: 'utf8', timeout: 90000 });
   if (fe.status !== 0) return { ok: false, error: `git fetch origin ${prBranch} 失败：${String(fe.stderr || '').trim().slice(0, 200)}` };
   const branch = reviewBranch || prBranch;
   const target = expectedOid || `origin/${prBranch}`;
   let checkedOut = false;
   if (branch !== prBranch) {
     // 该审官分支已被某树 checkout 就别硬移（git 不让）；推那棵树归 gitSyncTreeTo。
-    const wl = spawnSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+    const wl = spawnSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
     const lines = wl.status === 0 ? String(wl.stdout || '').split('\n').map(x => x.trim()) : [];
     checkedOut = lines.includes(`branch refs/heads/${branch}`);
     if (!checkedOut) {
-      const br = spawnSync('git', ['-C', repo, 'branch', '-f', branch, target], { encoding: 'utf8' });
+      const br = spawnSync('git', ['-C', repo, 'branch', '-f', branch, target], { windowsHide: true, encoding: 'utf8' });
       if (br.status !== 0) return { ok: false, error: `建审官分支 ${branch}@${String(target).slice(0, 12)} 失败：${String(br.stderr || '').trim().slice(0, 200)}` };
     }
   }
