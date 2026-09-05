@@ -138,6 +138,7 @@ import {
 } from './lib/memory-strikes-check.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
+import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -364,6 +365,24 @@ async function runTests() {
   // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
   // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
   if (!process.argv.includes('--affected')) checkImpactMapHealth();
+  checkSpawnBudget();
+}
+
+/** 测试里起子进程的总量闸——「TIA 第二刀没做完」的报警器（scripts/lib/spawn-budget.mjs）。 */
+function checkSpawnBudget() {
+  const dir = join(ROOT, 'tests');
+  let counts;
+  try {
+    counts = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f))
+      .map(f => ({ file: f, count: countSpawnCalls(readFileSync(join(dir, f), 'utf8')) }));
+  } catch (e) {
+    fail('spawn 预算没查成', '读不到 tests/ 目录', String(e.message || e));
+    return;
+  }
+  const r = classifySpawnBudget(counts);
+  if (r.state === 'ok') green(`spawn 预算：${r.detail}`);
+  else if (r.state === 'red') fail('测试起子进程超预算', '把 spawn 改成进程内调用（TIA 第二刀），或显式降/调预算并说明', r.detail);
+  else fail('spawn 预算没查成', '扫描面坏了——不是「没有 spawn」', r.detail);
 }
 
 /** 读禁网闸的账：测试期有没有谁试图连外网。拦下不等于报警——调用方常把网络错吞了。 */

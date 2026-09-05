@@ -16,8 +16,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { affectedTests, buildMap, filesFromCoverage, mapHealth, MAP_VERSION } from './lib/test-impact.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { affectedTests, buildMap, filesFromCoverage, IGNORED_IN_MAP, mapHealth, MAP_VERSION } from './lib/test-impact.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -42,16 +42,33 @@ function gitOut(args, root = REPO_ROOT) {
 /** 跑一套测试并采覆盖率 → 它碰过的本仓文件。跑失败也照样回收（失败的套也有依赖信息）。 */
 export function sampleOne(testFile, { root = REPO_ROOT } = {}) {
   const covDir = mkdtempSync(join(tmpdir(), 'ti-cov-'));
+  const readLog = join(covDir, 'reads.txt');
+  const recorder = join(root, 'tests', 'helpers', 'record-reads.mjs');
   try {
     spawnSync(process.execPath, ['--test', join(root, testFile)], {
       cwd: root, encoding: 'utf8', windowsHide: true, timeout: 300000,
-      env: { ...process.env, NODE_V8_COVERAGE: covDir },
+      env: {
+        ...process.env,
+        NODE_V8_COVERAGE: covDir,
+        // 覆盖率只看得见执行过的 JS；数据文件（json/md/toml…）靠这个钩子记。
+        // 两者都经 NODE_OPTIONS/环境继承罩住 spawn 出去的 CLI。
+        DAO_READ_LOG: readLog,
+        DAO_READ_ROOT: root,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(recorder).href}`.trim(),
+      },
     });
     const docs = [];
     for (const f of existsSync(covDir) ? readdirSync(covDir) : []) {
+      if (f === 'reads.txt') continue;
       try { docs.push(JSON.parse(readFileSync(join(covDir, f), 'utf8'))); } catch { /* 半截文件跳过 */ }
     }
     const files = filesFromCoverage(docs, root);
+    if (existsSync(readLog)) {
+      for (const l of readFileSync(readLog, 'utf8').split('\n')) {
+        const rel = l.trim();
+        if (rel && !IGNORED_IN_MAP.some((re) => re.test(rel))) files.add(rel);
+      }
+    }
     files.delete(testFile);           // 自己不算依赖
     return { ok: docs.length > 0, files: [...files], coverageDocs: docs.length };
   } finally {

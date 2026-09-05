@@ -34,6 +34,9 @@ export const IGNORED_IN_MAP = [
   /(^|\/)node_modules\//,
   /^_tmp\//,
   /^tests\/fixtures\/.*\/(homes|sandbox)\//,
+  // 采样器自己不许出现在被采样的结果里——它每套都会被读到，进图等于每套都依赖它，
+  // 改一下它就触发全量（而它落在 tests/helpers/ 本来就是兜底面，已经会触发全量）。
+  /^tests\/helpers\/record-reads\.mjs$/,
 ];
 
 /** 一次覆盖率采集（一个目录下的 N 份 json）→ 它碰过的本仓文件集合。 */
