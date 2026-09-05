@@ -304,7 +304,10 @@ test('闸3 正：urgency=急 即时插播；事故固定即时', async () => {
   const r = await decide({ events: [pending('p1', '急'), incident('fp1')], groups, state: { windowClosing: false } });
   const rows = sentTo(r, PROJ);
   assert.strictEqual(rows.length, 2, '非窗末，急件也要出去');
-  assert.ok(rows.every((s) => s.kind === 'instant' && s.urgency === '急'));
+  for (const s of rows) {
+    assert.equal(s.kind, 'instant');
+    assert.equal(s.urgency, '急');
+  }
   assert.match(rows.find((s) => s.class === 'decision.pending').why, /事件自报 urgency=急/);
 });
 
@@ -372,7 +375,9 @@ test('闸3 判别：schema 枚举不含「急」时 urgency=急 必须按缓+没
   const { propSchema } = await gate();
   const slim = JSON.parse(JSON.stringify(SCHEMA));
   const p = propSchema(slim, 'decision.pending', 'urgency');
-  assert.ok(p && Array.isArray(p.enum) && p.enum.includes('急'), '改之前先确认完整 SCHEMA 含「急」');
+  assert.ok(p, '改之前先确认完整 SCHEMA 有 urgency');
+  assert.ok(Array.isArray(p.enum), 'urgency 必须是枚举');
+  assert.ok(p.enum.includes('急'), '改之前先确认完整 SCHEMA 含「急」');
   p.enum = ['缓'];
 
   const r = await decide({
@@ -394,7 +399,10 @@ test('闸3：窗末按类各合一条三行摘要，抬头不混', async () => {
   const r = await decide({ events, groups, state: { windowClosing: true } });
   const rows = sentTo(r, PROJ);
   assert.deepStrictEqual(rows.map((s) => s.class), ['decision.pending', 'milestone'], '按 BROADCAST_CLASSES 固定顺序');
-  assert.ok(rows.every((s) => s.kind === 'digest' && s.text.split('\n').length === 3), '每条恒三行');
+  for (const s of rows) {
+    assert.equal(s.kind, 'digest');
+    assert.equal(s.text.split('\n').length, 3, '每条恒三行');
+  }
   assert.match(rows[0].text, /^\[待拍板\] 窗末汇总 2 条/, '待拍板不许挂里程碑抬头');
   assert.match(rows[1].text, /^\[里程碑\] 窗末汇总 4 条/);
   assert.match(rows[1].text, /另有 1 条，@我问详情/);
@@ -461,10 +469,16 @@ test('输出恰好三个键，每条判定都有可读理由', async () => {
     groups, state: { windowClosing: false },
   });
   assert.deepStrictEqual(Object.keys(r).sort(), ['send', 'suppressed', 'why']);
-  for (const row of r.send) assert.ok(row.why && row.why.length > 0, '放行也要给理由');
+  for (const row of r.send) {
+    assert.equal(typeof row.why, 'string');
+    assert.ok(row.why.length > 0, '放行也要给理由');
+  }
   for (const row of r.suppressed) {
-    assert.ok(row.why && row.why.length > 0, '拦下必须给理由');
-    assert.ok(Number.isInteger(row.gate) && row.gate >= 1 && row.gate <= 5, `理由要指到具体哪条闸，实际 gate=${row.gate}`);
+    assert.equal(typeof row.why, 'string');
+    assert.ok(row.why.length > 0, '拦下必须给理由');
+    assert.equal(Number.isInteger(row.gate), true, `理由要指到具体哪条闸，实际 gate=${row.gate}`);
+    assert.ok(row.gate >= 1);
+    assert.ok(row.gate <= 5);
   }
   assert.ok(r.why.length >= r.send.length + r.suppressed.length, 'why 要覆盖到每条判定');
 });
