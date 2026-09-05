@@ -25,7 +25,7 @@
 //   problems  —— 查成了且有问题（每条带 id，onboard.mjs 按 id 决定修法）
 //   unscanned —— 没查成（读不了/真相源不在），与「查过没事」不同形
 
-import { lstatSync, realpathSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { lstatSync, realpathSync, readFileSync, existsSync, readdirSync, readlinkSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkMemoryLink, defaultHome } from './dao-memory-link-check.mjs';
@@ -38,7 +38,11 @@ const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
 
 /** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），
  *  别各写各的：一边算修不了、另一边还让它把退出码染红，就成了永远红的报警。 */
-export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot', 'statusline-dangling', 'pi-wrong-package']);
+export const ONBOARD_REPORT_ONLY = new Set([
+  'creds-missing', 'mcp-slow-boot', 'statusline-dangling', 'pi-wrong-package',
+  // 家目录里的外来/悬空 skill：删别人的东西不是 onboard 的活，看清楚再由人决定。
+  'skills-stray', 'skills-dangling-stray',
+]);
 
 /** ① 全局约定漂移。真相源读不到 = 没查成（不是绿）。 */
 export function checkGlobalClaude({ root, home }) {
@@ -59,6 +63,20 @@ export function checkGlobalClaude({ root, home }) {
  *  可修 id：skills-missing（目录不在）/ skills-partial（目录在但缺链接）/ skills-dangling（链接悬空）。
  *  只报不修：skills-not-link（dispatch 是拷贝的真目录，会过期，需人工并回）、
  *            skills-elsewhere（整目录链接指到的地方不是 skills 树）。 */
+/** 读符号链接的目标，读不到回空串——判据侧按「不是指进本仓」处理（宁可多报）。 */
+function readLinkSafe(p) {
+  try { return readlinkSync(p); } catch { return ''; }
+}
+
+/**
+ * 宿主自带、不归本仓的 skill——白名单要小，每一条都得写清为什么它可以不在本仓。
+ * 加一条之前先问：这真是宿主装的，还是某次实验留下来的残留？
+ */
+const THIRD_PARTY_SKILLS = new Set([
+  'orca-cli',        // Orca 应用自带（操作 worktree/终端/浏览器）
+  'orchestration',   // Orca 应用自带（多 agent 编排）
+]);
+
 export function checkSkillsLink({ root, home, dir = '.claude' }) {
   const linkPath = join(home, dir, 'skills');
   let st;
@@ -96,6 +114,52 @@ export function checkSkillsLink({ root, home, dir = '.claude' }) {
     });
     if (missing.length) {
       return { problem: { id: 'skills-partial', msg: `~/${dir}/skills 缺 ${missing.length} 个链接：${missing.join('、')}` } };
+    }
+
+    // 反方向也要查：live 目录里有没有**追溯不回本仓**的条目。
+    // 2026-09-05 实咬——一个 subagent 做验证时在 ~/.claude/skills 下留了 ask-gate-probe 真目录，
+    // 里面带 hooks.json，PreToolUse 匹配 `^Bash$`：它在每一次 Bash 调用上真跑，还往上下文注入一句暗号。
+    // 上面那半只查「仓里的都链上了没」，对这种「仓里没有、live 却有」的一无所知——
+    // 也就是本仓最忌的那种东西：仓里所有检查都看不见的活 hook（影子制度）。
+    let liveEntries;
+    try {
+      liveEntries = readdirSync(linkPath);
+    } catch (e) {
+      return { unscanned: `~/${dir}/skills 列不出来（${e.message || e}）——外来 skill 没查成，不是没有` };
+    }
+    // 两种残留的修法完全不同，话术不许混成一句：
+    //   悬空 —— 链接指进本仓，但那个 skill 已经从仓里删了。删链接即可，没有别的风险。
+    //   外来 —— 真目录、或链到别处。这种可能自带 hooks.json 在每次工具调用上真跑，要先看再删。
+    const dangling = [];
+    const foreign = [];
+    for (const n of liveEntries) {
+      if (want.includes(n)) continue;               // 本仓的，上面已经逐个验过
+      if (THIRD_PARTY_SKILLS.has(n)) continue;      // 宿主自带，白名单里写死了理由
+      let isLink = false;
+      try { isLink = lstatSync(join(linkPath, n)).isSymbolicLink(); }
+      catch { /* 读不到就按外来报，宁可多报 */ }
+      const pointsHere = isLink && existsSync(join(srcDir, n)) === false
+        && String(readLinkSafe(join(linkPath, n))).replace(/\\/g, '/').includes('/host/skills/');
+      if (pointsHere) dangling.push(n); else foreign.push(`${n}[${isLink ? '链' : '真目录'}]`);
+    }
+    if (dangling.length) {
+      return {
+        problem: {
+          id: 'skills-dangling-stray',
+          msg: `~/${dir}/skills 有 ${dangling.length} 个链接指向已从仓里删掉的 skill：${dangling.join('、')}`
+            + '——skill 删了链接没跟着删，删链接即可',
+        },
+      };
+    }
+    if (foreign.length) {
+      return {
+        problem: {
+          id: 'skills-stray',
+          msg: `~/${dir}/skills 有 ${foreign.length} 个追溯不回本仓的条目：${foreign.join('、')}`
+            + '——它们可能带着 hooks.json 在每次工具调用上真跑，而仓里没有任何检查看得见它们（影子制度）。'
+            + '先看清楚再决定：确认无用就删；确属宿主自带就加进 THIRD_PARTY_SKILLS 并写清理由',
+        },
+      };
     }
     return {};
   }
