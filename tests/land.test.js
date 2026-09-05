@@ -79,15 +79,24 @@ describe('land e2e（真 git 临时仓）', () => {
     const env = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
     const commit = (msg) => g(work, ...env, 'commit', '--allow-empty', '-m', msg);
     commit('c1'); g(work, 'push', '-u', 'origin', 'master');
-    // 已合并分支 merged-b；未合并分支 keep-b；已合并+干净的 worktree wt-m；脏的 worktree wt-dirty
-    g(work, 'branch', 'merged-b');
+    // 已合并分支 merged-b；未合并分支 keep-b；已合并+干净的 worktree wt-m；脏的 worktree wt-dirty；
+    // 刚建零提交的 fresh-b（无树）与 fresh-wt-b（干净树 wt-fresh）——#898 那两种「不该动」的形状。
+    // merged-b / wtm-b 要**真干过活再合进来**：拿零提交的书签当「已合并」样本，正是 #898 的病本身。
+    const mergeIn = (b) => { g(work, ...env, 'merge', '--no-ff', '-m', `merge ${b}`, b); };
+    g(work, 'checkout', '-b', 'merged-b'); commit('干完的活'); g(work, 'checkout', 'master'); mergeIn('merged-b');
     g(work, 'checkout', '-b', 'keep-b'); commit('unmerged'); g(work, 'checkout', 'master');
-    g(work, 'checkout', '-b', 'wtm-b'); g(work, 'checkout', 'master'); // 已合并（同点）
+    g(work, 'checkout', '-b', 'wtm-b'); commit('树里干完的活'); g(work, 'checkout', 'master'); mergeIn('wtm-b');
     g(work, 'worktree', 'add', path.join(tmp, 'wt-m'), 'wtm-b');
     g(work, 'checkout', '-b', 'wtd-b'); g(work, 'checkout', 'master');
     g(work, 'worktree', 'add', path.join(tmp, 'wt-dirty'), 'wtd-b');
     fs.writeFileSync(path.join(tmp, 'wt-dirty', 'half.txt'), '半成品');
-    commit('c2'); // master 领先 origin 1 个 → 该推
+    g(work, 'branch', 'fresh-b');                                        // 刚 branch 出来，零提交
+    g(work, 'worktree', 'add', '-b', 'fresh-wt-b', path.join(tmp, 'wt-fresh')); // 刚 worktree add -b，零提交且树干净
+    // 占用判据自己的样本：真已合并（上面那条「零提交」判据放行它），全靠「被树占用」这一条留住。
+    g(work, 'checkout', '-b', 'wtdm-b'); commit('干完的活·树还没清'); g(work, 'checkout', 'master'); mergeIn('wtdm-b');
+    g(work, 'worktree', 'add', path.join(tmp, 'wt-dm'), 'wtdm-b');
+    fs.writeFileSync(path.join(tmp, 'wt-dm', 'scratch.txt'), '还在试的东西');
+    commit('c2'); // master 领先 origin 1 个 → 该推；也让上面两条零提交支变成「主干上的严格祖先」（#898 真实时序）
     const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     // 推到了
@@ -100,6 +109,14 @@ describe('land e2e（真 git 临时仓）', () => {
     assert.ok(!fs.existsSync(path.join(tmp, 'wt-m')), '干净+已合并的树要拆');
     assert.ok(fs.existsSync(path.join(tmp, 'wt-dirty', 'half.txt')), '脏树一根毛都不许动');
     assert.match(r.stdout, /留树 .*wt-dirty/, '留脏树要说原因');
+    // #898：刚建、零提交的分支不是垃圾，是别人刚起的头
+    assert.ok(branches.includes('fresh-b'), '刚建零提交的支必须留（--merged 对它恒真，那是没开始不是干完了）：' + branches);
+    assert.ok(branches.includes('fresh-wt-b'), '刚 worktree add -b 出来的支必须留：' + branches);
+    assert.ok(fs.existsSync(path.join(tmp, 'wt-fresh')), '刚建的树必须留——树和支一起没，工人回来什么都不剩');
+    // 留树与删支共用同一份占用登记：树留下了，它的分支就必须跟着留下（#898 的实质）
+    assert.ok(branches.includes('wtdm-b'), '被留下的树，它的支必须跟着留——哪怕那条支真已合并：' + branches);
+    assert.match(r.stdout, /留支 wtdm-b：被 worktree 占用/, '留的理由必须是「占用」，不能是删失败后的将就');
+    assert.ok(fs.existsSync(path.join(tmp, 'wt-dm', 'scratch.txt')), '树里没提交的东西一根毛都不许动');
   });
 
   it('--has-work：有已合并支 → 0 且不删；净盘 → 非 0', () => {
@@ -114,9 +131,14 @@ describe('land e2e（真 git 临时仓）', () => {
     g(tmp, 'init', '--bare', '-b', 'master', bare);
     const work = path.join(tmp, 'work');
     g(tmp, 'clone', bare, work);
-    spawnSync('git', ['-C', work, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'c1'], { encoding: 'utf8' });
+    const env = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
+    const commit = (msg) => g(work, ...env, 'commit', '--allow-empty', '-m', msg);
+    commit('c1');
     g(work, 'push', '-u', 'origin', 'master');
-    g(work, 'branch', 'merged-b');
+    // 真干过活再合进来才算「已合并」——零提交的书签在 #898 之后一律留着，拿它当样本这条测试恒判「没活」。
+    g(work, 'checkout', '-b', 'merged-b'); commit('干完的活'); g(work, 'checkout', 'master');
+    g(work, ...env, 'merge', '--no-ff', '-m', 'merge merged-b', 'merged-b');
+    g(work, 'push', 'origin', 'master'); // 推平，让「有活」只可能来自那条可删的分支
     const land = path.join(REPO, 'scripts', 'land.mjs');
     const has = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
     assert.equal(has.status, 0, has.stdout + has.stderr);
@@ -324,5 +346,130 @@ describe('空提交撑的分支不许当成 squash 残支删掉', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'land.mjs'), 'utf8');
     const n = (src.match(/everHadContent/g) || []).length;
     assert.ok(n >= 2, `land.mjs 只出现 ${n} 处 everHadContent，删支和拆树两条路都要传`);
+  });
+});
+
+// #898（2026-09-04 实咬）：`git worktree add -b` 刚建出来、一个提交都还没有的分支，其 ref 就等于
+// master 的 ref，`git branch --merged` 对它恒真 → land 判「已合并」→ 删支。工人正在那棵树上干活。
+// 本单实测复现出更狠的一路：树还干净时**树和支一起没**，工人回来什么都不剩。
+// 判别力靠三样：零提交支必须留、真已合并支必须删（判据不许恒拒）、没查成必须第三态可辨。
+describe('零提交的新分支不是「已合并」（#898）', () => {
+  const j = async (over) => (await CORE).judgeBranchGone({ name: 'fix/895-vendor-gate', merged: true, ...over });
+
+  it('刚建、零提交 → 不删，理由要说清是「没开始」不是「没查成」', async () => {
+    const r = await j({ everHadContent: false });
+    assert.equal(r.gone, false);
+    assert.match(r.reason, /从来没有过自己的提交/);
+    assert.doesNotMatch(r.reason, /没查成/, '「没开始」不许说成「没查成」——两者处置不同');
+  });
+
+  it('反证：真干过活又合进主分支 → 照删（判据不许恒拒）', async () => {
+    const r = await j({ everHadContent: true });
+    assert.equal(r.gone, true);
+    assert.equal(r.how, 'ancestor');
+  });
+
+  it('故意违规样本：有没有过提交没查成 → 不删（删分支不可逆，一律 fail-closed）', async () => {
+    const r = await j({ everHadContent: null });
+    assert.equal(r.gone, false);
+    assert.match(r.reason, /没查成/);
+  });
+
+  it('老调用方没探（undefined）→ 维持改动前行为，不回归', async () => {
+    assert.equal((await j({})).gone, true);
+    assert.equal((await j({})).how, 'ancestor');
+    assert.notEqual((await j({ everHadContent: null })).gone, (await j({})).gone,
+      'null 与 undefined 混成一个，就等于把「没查成」当「没探」放行');
+  });
+
+  it('两道闸都吃这条事实：删支和拆树用的是同一把尺', async () => {
+    const { decideBranchDelete, decideWorktreeRemove } = await CORE;
+    const b = (o) => decideBranchDelete({ name: 'f', merged: true, isDefault: false, isCurrent: false, checkedOutAt: '', ...o });
+    assert.equal(b({ everHadContent: false }).del, false, '零提交支不许删');
+    assert.equal(b({ everHadContent: true }).del, true, '真已合并支照删');
+    const w = (o) => decideWorktreeRemove({ branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, orcaManaged: false, detached: false, ...o });
+    assert.equal(w({ everHadContent: false }).remove, false, '零提交支的树不许拆——那是刚开工的工位');
+    assert.match(w({ everHadContent: false }).reason, /从来没有过自己的提交/);
+    assert.equal(w({ everHadContent: true }).remove, true, '真已合并支的干净树照拆');
+  });
+
+  it('parseWorktrees / branchCheckedOutAt：占用登记只解析一次，两处共用', async () => {
+    const { parseWorktrees, branchCheckedOutAt } = await CORE;
+    const porcelain = [
+      'worktree D:/frank/windsurf-dao\nHEAD aaa\nbranch refs/heads/master',
+      'worktree D:/frank/wd-895-gate\nHEAD bbb\nbranch refs/heads/fix/895-vendor-gate',
+      'worktree D:/frank/wt-detached\nHEAD ccc\ndetached',
+    ].join('\n\n');
+    const wts = parseWorktrees(porcelain);
+    assert.equal(wts.length, 3, '三块都要认出来：' + JSON.stringify(wts));
+    assert.equal(wts[1].branch, 'fix/895-vendor-gate', '带斜杠的分支名不许被截断');
+    assert.equal(wts[2].detached, true);
+    assert.equal(wts[2].branch, '', 'detached 没有分支');
+    assert.equal(branchCheckedOutAt(wts, 'fix/895-vendor-gate'), 'D:/frank/wd-895-gate');
+    assert.equal(branchCheckedOutAt(wts, '没人占用的支'), '', '判据不许恒真：没占用要回空');
+    assert.equal(branchCheckedOutAt(wts, ''), '');
+    assert.equal(branchCheckedOutAt([], 'x'), '');
+    assert.equal(parseWorktrees('').length, 0, '空输入回空表，不许炸');
+  });
+
+  it('真 git：零提交支判「没开始」、真已合并支判「已合」——老判据在同一夹具上两个都判「已合」', async () => {
+    const { collectBranchMergeFacts, judgeBranchGone } = await CORE;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'land-898-'));
+    const env = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
+    const raw = (args) => {
+      const r = spawnSync('git', ['-C', tmp, ...env, ...args], { encoding: 'utf8' });
+      return { status: r.status ?? 1, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
+    };
+    const g = (...args) => {
+      const r = raw(args);
+      assert.equal(r.status, 0, `git ${args.join(' ')}\n${r.err}`);
+      return r.out;
+    };
+    const put = (f, s) => fs.writeFileSync(path.join(tmp, f), s);
+    g('init', '-b', 'master', '.');
+    put('a.txt', 'a\n'); g('add', '-A'); g('commit', '-m', 'c1');
+    // ① 刚建、零提交的支（`worktree add -b` 的形状），之后 master 继续往前走——#898 的真实时序
+    g('branch', 'fix/895-vendor-gate');
+    // ② 真干过活、合进 master 的支
+    g('checkout', '-b', 'landed-work');
+    put('b.txt', 'b\n'); g('add', '-A'); g('commit', '-m', '干完的活');
+    g('checkout', 'master');
+    g('merge', '--no-ff', '-m', 'merge landed-work', 'landed-work');
+    put('c.txt', 'c\n'); g('add', '-A'); g('commit', '-m', '帅位又在 master 上提交了一笔');
+
+    // 夹具必须是「老判据失手」的那一种，否则下面全是空转
+    const oldMerged = g('branch', '--merged', 'master', '--format=%(refname:short)').split(/\r?\n/);
+    assert.ok(oldMerged.includes('fix/895-vendor-gate'), '夹具没造对：老判据本该把零提交支也算进「已合并」');
+    assert.ok(oldMerged.includes('landed-work'), '夹具没造对：真已合并支本该在里面');
+    // 变异自证：把判据换回「和分叉点比内容」（改动前那一问），两条支的答案一模一样 → 分不开
+    for (const b of ['fix/895-vendor-gate', 'landed-work']) {
+      const base = g('merge-base', 'master', b);
+      assert.equal(raw(['diff', '--quiet', base, b]).status, 0,
+        `${b}：老那问对已进主分支的支恒答「无差异」——判据改回去这条测试必红`);
+    }
+
+    const facts = (b) => collectBranchMergeFacts({ git: raw, branch: b, defaultBranch: 'master' });
+    const fresh = facts('fix/895-vendor-gate');
+    assert.equal(fresh.ancestor, true, '零提交支的 tip 当然是祖先——这正是老判据被骗的地方');
+    assert.equal(fresh.everHadContent, false, '它从没走出过主干');
+    const fv = judgeBranchGone({ name: 'fix/895-vendor-gate', merged: true, contributes: fresh.contributes, everHadContent: fresh.everHadContent });
+    assert.equal(fv.gone, false, '刚建的支必须留着：' + fv.reason);
+
+    const done = facts('landed-work');
+    assert.equal(done.ancestor, true);
+    assert.equal(done.everHadContent, true, '它的提交是被合进来的，走出过自己的路');
+    const dv = judgeBranchGone({ name: 'landed-work', merged: true, contributes: done.contributes, everHadContent: done.everHadContent });
+    assert.equal(dv.gone, true, '真已合并的支必须照删（判据不许恒拒）：' + dv.reason);
+    assert.equal(raw(['branch', '-d', 'landed-work']).status, 0, '-d 删得掉，说明它确实是干完合了');
+  });
+
+  it('land.mjs 真的接了线：占用登记只解析一处，且拆树成功才解除占用', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'land.mjs'), 'utf8');
+    assert.ok(src.length > 2000, '源码没读到就不是「查过没事」');
+    const parses = (src.match(/worktree', 'list', '--porcelain'/g) || []).length;
+    assert.equal(parses, 1, `land.mjs 里 worktree porcelain 解析了 ${parses} 处——两处各写一遍正是 #898 这个洞`);
+    assert.match(src, /branchCheckedOutAt\(occupied,/, '删支的占用判据必须来自那份共用登记');
+    assert.match(src, /if \(r\.status === 0\) occupied = occupied\.filter/, '只有树真拆掉了，占用才解除');
+    assert.equal((src.match(/everHadContent/g) || []).length >= 2, true, '删支和拆树两条路都要把这条事实传下去');
   });
 });

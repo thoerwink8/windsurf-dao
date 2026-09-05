@@ -9,7 +9,7 @@
 //            拆「分支已合并 + 树干净 + 非主树/非当前树/不挂默认分支 + orca 没在管」的 git worktree。
 // 不干什么（判断全在 scripts/lib/land-core.mjs，测试见 tests/land.test.js）：
 //   - 不在派生分支上代劳「进主分支」（那是 PR/审官闭环的活，编排态绕过它=绕过审查）；
-//   - 发散不自动 rebase；未合并/不干净/orca 在管的一律不删；删分支只用 -d（git 兜底拒未合并）。
+//   - 发散不自动 rebase；未合并/不干净/orca 在管/被树占用/刚建还没提交过的（#898）一律不删。
 // 为什么不是 post-commit hook：rebase/amend/cherry-pick 也触发 post-commit，会把中间态推上主分支；
 //   工人在编排树里的 commit 也会触发，等于绕过审官。收工是「一段活的结尾」，不是「每个 commit」。
 // 退出码：0 = 收工净（该运的运了、没有可清而未清的）；1 = 有事没收完（发散/检查红/在派生分支）。
@@ -20,7 +20,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork,
-  collectBranchMergeFacts,
+  collectBranchMergeFacts, parseWorktrees, branchCheckedOutAt,
 } from './lib/land-core.mjs';
 
 const FLAGS = new Set(['--dry-run', '--has-work']);
@@ -108,12 +108,11 @@ const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
 );
 
-const wtBlocks = git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/).filter(Boolean);
-const worktrees = wtBlocks.map((b) => {
-  const path = (b.match(/^worktree (.+)$/m) || [])[1];
-  const wtBranch = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1] || '';
-  return { path, branch: wtBranch, detached: /^detached$/m.test(b) };
-}).filter(w => w.path);
+// 留树和删支读同一份 worktree 登记（#898：两处各解析一遍、各判一套占用，才出的「树留着支删了」）。
+// occupied 是「当下还占着分支的树」：只有 land 自己**真拆掉**了某棵树，占用才随之解除；
+// 拆失败 = 还占着（那正是 #898 现场的形状：树没拆成，分支却被删了）。
+const worktrees = parseWorktrees(git(['worktree', 'list', '--porcelain']).out);
+let occupied = worktrees.slice();
 
 let removeCount = 0;
 for (let i = 0; i < worktrees.length; i++) {
@@ -138,15 +137,10 @@ for (let i = 0; i < worktrees.length; i++) {
   if (HAS_WORK) { say(`[收工] 有活：拆树 ${w.path}（${d.reason}）`); continue; }
   if (DRY) { say(`[收工] [拟] 拆树 ${w.path}（${d.reason}）`); continue; }
   const r = git(['worktree', 'remove', w.path]);
+  if (r.status === 0) occupied = occupied.filter((x) => x.path !== w.path); // 真拆了才解除占用
   say(r.status === 0 ? `[收工] 拆树 ${w.path}（${d.reason}）` : `[收工] 拆树失败 ${w.path}：${r.err.slice(0, 120)}`);
 }
 
-const checkedOut = new Map(); // 分支 → 占用它的树
-for (const b of git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/)) {
-  const p = (b.match(/^worktree (.+)$/m) || [])[1];
-  const br = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1];
-  if (p && br) checkedOut.set(br, p);
-}
 let deleteCount = 0;
 for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean)) {
   const d = decideBranchDelete({
@@ -155,7 +149,8 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
     ...(({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: name, defaultBranch })),
     isDefault: name === defaultBranch,
     isCurrent: name === branch,
-    checkedOutAt: checkedOut.get(name) !== undefined && resolve(checkedOut.get(name)).toLowerCase() !== resolve(root).toLowerCase() ? checkedOut.get(name) : '',
+    // 任何注册中的树占用即留支（含主树；主树那条另有 isDefault/isCurrent 先拦，说法不冲突）。
+    checkedOutAt: branchCheckedOutAt(occupied, name),
   });
   if (!d.del) { if (!d.reason.includes('默认分支') && !d.reason.includes('当前分支')) say(`[收工] 留支 ${name}：${d.reason}`); continue; }
   deleteCount += 1;
