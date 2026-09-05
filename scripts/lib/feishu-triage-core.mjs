@@ -56,10 +56,12 @@ export const HUB_DECISION_ASK = '要拍板哪张单？回我编号（比如 #846
 export const HUB_INTENTS = ['situation', 'decision', 'new_request', 'other'];
 
 /** 三问固定表：key 进 llm JSON 与 ThreadState.answers，fallback 是 llm 没给追问时的兜底问法。 */
+// 2026-09-05 实咬：项目群实测追问吐出「是否 docs/memory 该记？」——docs/memory 是仓里的目录名，
+// 用户不会这么说话。三问判据不动（缺一必问），只把问法换成人话。
 export const THREE_QUESTIONS = [
-  { key: 'done', label: '做到什么算做完', fallback: '做到什么算做完？需要可验证的结果。' },
-  { key: 'batch', label: '这批做还是以后', fallback: '这批做还是以后做？' },
-  { key: 'docs', label: '是否 docs/memory 该记', fallback: '要记进 docs/memory 吗？' },
+  { key: 'done', label: '做到什么样算做完', fallback: '做到什么样你就认它做完了？' },
+  { key: 'batch', label: '现在做还是先记着', fallback: '现在就做，还是先记着以后做？' },
+  { key: 'docs', label: '要不要写进文档', fallback: '这事要不要写进文档，方便以后查？' },
 ];
 
 const MAX_ASK_PER_ROUND = 2;
@@ -471,7 +473,7 @@ function questionsPrompt(thread) {
     '飞书同一话题的会话记录：',
     transcriptOf(thread),
     '',
-    '三问：① 做到什么算做完（要可验证）② 这批做还是以后 ③ 是否 docs/memory 该记。',
+    '三问：① 做到什么样算做完（要能验证）② 现在做还是先记着 ③ 要不要写进文档。问法用大白话，不许出现目录名、路径、英文代号。',
     '判断每条是否已在口语里答了（答了就别再问）；没答的生成一句追问。',
     '返回 JSON：{"answers":{"done":{"answered":true,"text":"答案原文"},"batch":{"answered":false,"text":""},"docs":{"answered":true,"text":"答案原文"}},"questions":["没答的追问1","没答的追问2"]}',
   ].join('\n');

@@ -49,3 +49,36 @@ describe('报帅单代号 → 人话', () => {
     assert.match(src, /plainTitle\(i\.title\)/, '待拍板列表渲染必须过翻译');
   });
 });
+
+describe('三问问法必须是大白话', () => {
+  it('三问的兜底问法自己不许踩黑话闸（含仓内目录名）', async () => {
+    const [{ THREE_QUESTIONS }, { plainViolations }] = await Promise.all([
+      import(url('scripts/lib/feishu-triage-core.mjs')),
+      import(url('scripts/lib/plain-words.mjs')),
+    ]);
+    assert.equal(THREE_QUESTIONS.length, 3, '三问判据不许被改成两问/四问');
+    for (const q of THREE_QUESTIONS) {
+      assert.deepEqual(plainViolations(q.fallback), [], `三问「${q.key}」踩黑话：${q.fallback}`);
+      assert.deepEqual(plainViolations(q.label), [], `三问 label「${q.key}」踩黑话：${q.label}`);
+    }
+  });
+
+  it('判别力：仓内目录名会被拦（旧问法必须翻红）', async () => {
+    const { plainViolations } = await import(url('scripts/lib/plain-words.mjs'));
+    const v = plainViolations('要记进 docs/memory 吗？');
+    assert.ok(v.some(x => x.why === '仓内目录名'), '旧问法必须被拦 → ' + JSON.stringify(v));
+    assert.deepEqual(plainViolations('这事要不要写进文档，方便以后查？'), [], '人话不许误报');
+  });
+
+  it('LLM 提示词与人格文件同步（不许只改一处）', () => {
+    const fs = require('fs');
+    const core = fs.readFileSync(path.join(REPO, 'scripts/lib/feishu-triage-core.mjs'), 'utf8');
+    const persona = fs.readFileSync(path.join(REPO, 'host/skills/feishu-triage/persona.md'), 'utf8');
+    for (const src of [core, persona]) {
+      assert.doesNotMatch(src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n'),
+        /是否 docs\/memory 该记/, '旧问法残留');
+    }
+    assert.match(persona, /要不要写进文档/, 'persona 三问要跟上');
+    assert.match(core, /要不要写进文档/, 'LLM 提示词三问要跟上');
+  });
+});

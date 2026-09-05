@@ -24,6 +24,9 @@ const RULES = [
   // 报帅单的 escalate reason 代号（2026-09-05 实咬：机器人抄 issue 标题，把 wake-exhausted
   // 直译成「唤醒用尽」发进群）。源头翻译在 feishu-triage-core 的 plainTitle；这条是兜底报警。
   { re: /\b(two-red|wake-exhausted|approved-without-review|missing-labels)\b/i, why: '报帅单内部代号' },
+  // 仓内目录名（2026-09-05 实咬：三问追问吐出「是否 docs/memory 该记？」）。上面那条路径规则只查
+  // 绝对路径（/home、/etc、~/），仓内相对目录名照样是用户看不懂的东西。
+  { re: /\b(docs|scripts|tests|host)\/(memory|lib|skills|decisions)\b/i, why: '仓内目录名' },
 ];
 
 /** 返回 [{why, match}]；空数组 = 说人话。 */
