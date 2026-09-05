@@ -334,7 +334,14 @@ function hubSay(text) {
   }
   if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  return { ok: true };
+  // 认回执，不认退出码。hub-say 打印飞书返回的 message_id——拿到它才算真送进群。
+  // 只看 exit 0 的话，「发成了」和「lark-cli 跑通了但飞书没收」长得一模一样，
+  // 而这条路一哑就是整条回流静默（本仓同形态判例：memory orca-send-succeeds-to-dead-handle）。
+  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
+  if (!messageId || messageId === 'null') {
+    return { ok: false, error: `hub-say 退出码 0 但没回 message_id——没送进群（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
+  }
+  return { ok: true, messageId };
 }
 
 function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
