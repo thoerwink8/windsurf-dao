@@ -158,3 +158,18 @@ pi 审官降级腿拿不到指定模型、`review-pending` 票没写成、`land`
 `reuseSession: false` 泄漏。`droppedFlags` 算了没人读那条同样未做。
 
 status: done
+
+---
+
+处置：已修并验活（2026-09-05 帅位），无需开单。
+
+`~/.pi/agent/settings.json` 的 `defaultProvider` 由 `mirasim` 改为 `gw`，
+原文件备份 `~/.pi/agent/settings.json.bak-20260905`。改前已核 `gw` 在 `auth.json` 里有凭据。
+
+**根因订正**（比本文原稿更准，另见 commit 3478912）：不是「pi 缺 mirasim 凭据」，
+是 **pi 结构上够不着 mirasim**——mirasim 不是网关腿，它是载体（ADE），
+pi 的 7 个 provider 全是 `gw-*` 网关，不可能有也不该有 mirasim 这一条。
+把 pi 的默认值指向 mirasim 从一开始就是错配，不是凭据没配。
+
+验活：起 pi 终端发一句话，回话正常、无 401。当晚审官链路恢复，
+#886 于 19:21 判绿、19:22 自动合并。
