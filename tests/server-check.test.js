@@ -110,10 +110,16 @@ test('server-check 判别力', async (t) => {
   });
 
   await t.test('classifyAccountsResult', async (t) => {
-    await t.test('一个账号都没有 → red（派工起得来也登不上）', () => {
+    // 2026-09-05 改判：这条原本判真红「派工起得来终端也登不上」。实测推翻了它的前提——
+    // 服务器托管账号一直是 0，审官与工人却整天在跑：#822 之后全员走 pi + 网关 keyFile，
+    // orca 托管账号根本不在登录路径上。永远红的检查会把真红淹掉，比没有检查更糟。
+    // 判据保留（真回到 CLI 直连时还有用），但降成不报红，且必须说清「本机不走这条路」。
+    await t.test('一个账号都没有 → 不报红，但要说清本机不走这条登录路', () => {
       const r = classifyAccountsResult({ claude: { accounts: [] }, codex: { accounts: [] } });
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /account add/);
+      assert.notEqual(r.state, 'red', '前提已不成立，不许继续报一个谁也修不了的红');
+      assert.equal(r.empty, true, '0 个要显形，不能和「有账号」长得一样');
+      assert.match(r.detail, /不走这条登录路/);
+      assert.match(r.detail, /account add/, '真要改回 CLI 直连时，修法仍要写在这里');
     });
 
     await t.test('有账号 → ok，计数按厂商加总', () => {

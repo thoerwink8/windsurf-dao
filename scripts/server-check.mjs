@@ -216,7 +216,19 @@ export function classifyAccountsResult(result) {
   if (!Object.keys(counts).length) return { state: UNKNOWN, detail: 'account list 契约变了：认不出任何厂商键' };
   const shape = Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ');
   if (total === 0) {
-    return { state: RED, detail: `一个托管账号都没有（${shape}）——派工起得来终端也登不上，先 orca account add` };
+    // 2026-09-05 复审这条判据（本仓规矩：体检红项先问判据该不该在）。
+    // 它原本判真红「派工起得来终端也登不上」。而实测：这台机器托管账号一直是 0，
+    // 审官与工人却整天在跑——因为 #822 之后全员走 pi + 网关 keyFile，
+    // orca 的托管账号根本不在登录路径上了。判据的前提已经不成立。
+    //
+    // 不删这条：真回到 claude/codex CLI 直连时它还有用。降成「见」——
+    // 说清是「这台机器没用托管账号这条路」，而不是继续报一个谁也修不了的红。
+    // 永远红的检查会把真红淹掉，这比没有检查更糟。
+    return {
+      state: OK, count: 0, empty: true,
+      detail: `托管账号 0 个（${shape}）——本机不走这条登录路（#822 全员 pi + 网关 keyFile）。`
+        + '若改回 claude/codex CLI 直连，这里要先 orca account add',
+    };
   }
   return { state: OK, detail: `托管账号 ${total} 个（${shape}）`, count: total };
 }
