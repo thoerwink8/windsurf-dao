@@ -9,7 +9,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText } from './next-launch.mjs';
@@ -643,7 +643,8 @@ export function orcaHelpAvailable(spawn = spawnSync) {
   const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
+    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
+      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
     return { ok: false, missing, error: msg };
   }
   const text = `${r.stdout || ''}${r.stderr || ''}`;
@@ -664,13 +665,19 @@ export function helpCheckPolicy({ ci, orca } = {}) {
   return { action: 'fail', reason: (orca && orca.error) || 'orca --help 没查成' };
 }
 
-export function fetchOrcaHelp(cmd, spawn = spawnSync) {
+/** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
+const LIVE_HELP_CACHE = new Map();
+
+export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const r = spawn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+  const key = parts.join(' ');
+  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
+  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
   if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
   const text = `${r.stdout || ''}${r.stderr || ''}`;
   if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
+  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
   return text;
 }
 
@@ -679,9 +686,9 @@ export function helpFixturePath(cmd, root = ROOT) {
 }
 
 /** 先跑真 --help；orca 不在 PATH 时才用语料夹具（夹具必须是某次真 --help 落盘）。 */
-export function fetchHelpPreferLive(cmd, { spawn = spawnSync, root = ROOT } = {}) {
+export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = ROOT } = {}) {
   try {
-    return { text: fetchOrcaHelp(cmd, spawn), source: 'live' };
+    return { text: fetchOrcaHelp(cmd, spawnFn), source: 'live' };
   } catch (e) {
     const p = helpFixturePath(cmd, root);
     if (!existsSync(p)) throw new Error(`orca ${cmd} --help 没查成（${e.message}）且无夹具`);
@@ -689,6 +696,58 @@ export function fetchHelpPreferLive(cmd, { spawn = spawnSync, root = ROOT } = {}
     if (!String(text).trim()) throw new Error(`${p} 夹具是空的`);
     return { text, source: 'fixture' };
   }
+}
+
+function spawnOrcaHelpAsync(cmd) {
+  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
+  return new Promise((resolve, reject) => {
+    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.on('error', reject);
+    child.on('close', (status) => {
+      const text = `${stdout}${stderr}`;
+      if (status !== 0 && !String(text).trim()) {
+        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
+        return;
+      }
+      if (!String(text).trim()) {
+        reject(new Error(`orca ${cmd} --help 无输出`));
+        return;
+      }
+      resolve(text);
+    });
+  });
+}
+
+/**
+ * #984 返工：catalog 自检有 orca 时仍走 live，但不串行 29 次（~12s）。
+ * 池宽 6 并行打 --help，命中写进 LIVE_HELP_CACHE，随后 fetchHelpPreferLive 走缓存。
+ */
+export async function prefetchLiveHelp(cmds, { concurrency = 6 } = {}) {
+  const uniq = [...new Set((cmds || []).map((c) => String(c).trim()).filter(Boolean))];
+  const pending = uniq.filter((c) => !LIVE_HELP_CACHE.has(c));
+  if (pending.length === 0) return { ok: true, fetched: 0, cached: uniq.length };
+  let cursor = 0;
+  let fetched = 0;
+  let failed = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const cmd = pending[cursor++];
+      try {
+        const text = await spawnOrcaHelpAsync(cmd);
+        LIVE_HELP_CACHE.set(cmd, text);
+        fetched += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  return { ok: failed === 0, fetched, failed, cached: LIVE_HELP_CACHE.size };
 }
 
 export function checkHelpLiveness({ catalog, fetchHelp }) {
