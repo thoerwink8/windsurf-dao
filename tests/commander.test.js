@@ -303,7 +303,9 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
     }));
     assert.equal(byKind(r, 'escalate').length, 0, '旧 head 的红不许再报帅（#911 就是这么来的）');
     assert.equal(byKind(r, 'rework').length, 0, '旧 head 的红不许派返工工人（否则每轮刷一个）');
-    assert.deepEqual(kinds(r), ['noop'], '推了新 head = 回到等审官，本轮无事可做');
+    // 2026-09-05 改：'等审官'这个假设是错的——没有任何东西会去叫审官，PR 就此挂着（实咬 #890/#893/#896/#905 挂 10 小时）。
+    // 新意图：仍不返工、不报帅，但要产一条 rereview 去叫审官看新 head。
+    assert.deepEqual(kinds(r), ['rereview'], '推了新 head = 叫审官复审，不是干等');
   });
 
   it('②红就打在当前 head → 照常派返工工人（判别力反证：别把整条路一刀切废掉）', async () => {
@@ -440,8 +442,10 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
       github: { scanned: true, issues: [labeledIssue(700)], prs: [redPr(701, HEAD, 700)] },
       prReviews: { scanned: true, byPr: { 701: { reviews: [redReview(RED_FULL, OLDH), redReview('还有两处', OLDH)] } } },
     }));
-    assert.equal(byKind(r, 'rework').length, 0, '旧 head 的红不作数，回到等审官');
-    assert.deepEqual(kinds(r), ['noop']);
+    assert.equal(byKind(r, 'rework').length, 0, '旧 head 的红不作数，不派返工');
+    // 2026-09-05 改：原来这里钉的是 ['noop']——「回到等审官」。实咬证明没人会来叫审官，
+    // #890/#893/#896/#905 就这样挂了 10 小时。改成产 rereview。
+    assert.deepEqual(kinds(r), ['rereview'], '改叫审官复审——干等没人来');
   });
 
   it('④红项全文取不到（判了红没留正文）→ 按没查成走：不派、不报成功、不静默', async () => {

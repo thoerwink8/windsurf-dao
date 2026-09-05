@@ -30,7 +30,7 @@ import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
 
 export const ACTION_KINDS = [
-  'dispatch', 'rework', 'attach-reviewer', 'merge', 'land',
+  'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
 ];
 
@@ -204,6 +204,7 @@ export const ACTION_NEEDS = {
   // rework 也要建树起工人：orca 没查成时一律不派（与 dispatch 同口径 fail-closed）。
   rework: ['github', 'orca', 'prReviews'],
   'attach-reviewer': ['github', 'reviewPending'],
+  rereview: ['github', 'prReviews'],
   merge: ['github', 'prReviews'],
   land: ['github', 'prReviews'],
   'wake-brain': ['github', 'prReviews', 'stall'],
@@ -347,6 +348,24 @@ function collectCandidates(situation) {
           `PR #${pr.number} 的红要按当前 head 重算，但${headMissing ? ' PR headRefOid 没查成' : '有判别态 review 缺 commit_id'}——不清零、也不当仍红`,
           { reason: 'unscanned', pr: pr.number, missing: [headMissing ? 'github' : 'prReviews'], detail: a.reason },
         ), N.rework));
+      }
+      continue;
+    }
+    // 判过、但当前 head 上一条判定都没有 ⇒ 工人推了新 head 而没人叫审官复审。
+    // 2026-09-05 实咬：#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
+    // 于是「按当前 head 重算」把红清零 → 上面不派返工、下面不走合并，这一格空着，PR 就永远挂着。
+    // 这十小时里「复审推进」全是主会话手工做的。补上：写一张复审待办票，drain 自己会消费
+    //（缺士兵树时它走 reviewer-create 快马路，一 PR 一审官的闸在那边，不会建出第二张审官卡）。
+    if (a.judgedTotal > 0 && a.atHead === 0) {
+      const rrKey = `rereview:${pr.number}@${a.head}`;
+      if (!reworkDispatched[rrKey]) {
+        out.push(withNeeds({
+          kind: 'rereview', pr: pr.number, head: a.head,
+          issue: attributedIssueNumber(pr),
+          reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
+          stateKey: rrKey,
+          why: `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审`,
+        }, N['attach-reviewer']));
       }
       continue;
     }

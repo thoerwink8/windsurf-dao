@@ -27,7 +27,10 @@ import {
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
 import { ghExecutable } from './lib/gh.mjs';
-import { reviewPendingDir, listReviewPending } from './lib/dispatch/review-pending.mjs';
+import {
+  reviewPendingDir, listReviewPending, writeReviewPending,
+  REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
+} from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
@@ -294,6 +297,8 @@ function execAction(action, { state, dryRun, log }) {
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
       return dispatchRework(action, { state, dryRun, say });
+    case 'rereview':
+      return requestRereview(action, { state, dryRun, say });
     case 'wake-brain':
       return wakeBrain(action, { state, dryRun, say });
     case 'notify-hub': {
@@ -481,6 +486,47 @@ export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
 export function reworkCardName(action) { return `返工 PR #${action.pr}`; }
 export function reworkSpec(action, briefPath) {
   return `返工 PR #${action.pr}：先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+}
+
+/**
+ * 叫审官复审：写一张复审待办票，交给已有的 review-pending drain 去消费。
+ * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧，
+ * 这里再判一遍就是第二套判据（2026-09-05：#890/#893/#896/#905 推了新 head 后没人叫审官，挂了 10 小时）。
+ * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]（与返工共用一张记账表，键前缀区分）。
+ */
+function requestRereview(action, { state, dryRun, say }) {
+  if (!action.reviewer) {
+    const error = `PR #${action.pr} 要复审，但署名 issue 上没有 reviewer/ 标签——不猜审官`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  const dir = reviewPendingDir(ROOT);
+  const ticket = {
+    kind: REVIEW_PENDING_KIND,
+    v: REVIEW_PENDING_VERSION,
+    pr: String(action.pr),
+    head: { name: null, oid: action.head || null },
+    workerWorktree: null,
+    reviewer: String(action.reviewer),
+    issue: action.issue == null ? null : String(action.issue),
+    round: 'rereview',
+    workerModel: null,
+    soldierDispatch: null,
+    error: `指挥官自动叫复审：${action.why}`,
+    ts: nowIso(),
+  };
+  if (dryRun) {
+    say(`[dry] 写复审待办 ${dir}/${action.pr}.json（${action.why}）`);
+    return { ok: true, dryRun: true };
+  }
+  const w = writeReviewPending({ dir, ticket });
+  if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
+    at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
+  };
+  say(`  已写复审待办 ${w.path}（drain 下一轮消费）`);
+  return { ok: true, path: w.path };
 }
 
 function dispatchRework(action, { state, dryRun, say }) {
