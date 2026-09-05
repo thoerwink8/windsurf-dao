@@ -500,7 +500,7 @@ function requestRereview(action, { state, dryRun, say }) {
     say(`  ${error}`);
     return { ok: false, error };
   }
-  const dir = reviewPendingDir(ROOT);
+  const dir = reviewPendingDir({ root: ROOT });
   const ticket = {
     kind: REVIEW_PENDING_KIND,
     v: REVIEW_PENDING_VERSION,
