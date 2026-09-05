@@ -103,3 +103,26 @@ No journal files were opened due to insufficient permissions.
 删掉「我们在乎的 timer = 名字以 dao/commander 开头，或文件躺在 `host/machine/systemd/`」这一层。
 
 闸对 `/etc/systemd/system/` 里 ExecStart 指向本仓或 `/home/orca/bin/gw-remote-probe.mjs` 的每一个 timer 查 OnCalendar；扫出 0 个也红。`installTimer()` 那份模板加墙钟点位（错开已占用的 `:1/5`、`:2/15`、`:07`、`:11/20`、`:23`、`:41`），加完再装一次。journal 那道改读 `~/.dao/provider-health.json` 的 `updatedAt`（orca 写得进去、也读得出来），别再把「读不了 journal」写成「可能没这个单元」。
+
+---
+
+## 处置（2026-09-05，帅位）
+
+巡检这条报得准，而且抓的是**闸自己的盲点**，不是又一个漏装的单元。分两半处理：
+
+**闸的那一半，本仓改了。** `server-check` ⑱ 原本只认 `dao*` / `commander*` 前缀——
+**按名字前缀圈定扫描面，等于只查自己认识的东西**。现在扫机器上每一个 timer，
+只滤掉发行版自带的那些（`systemd-` / `apt-` / `logrotate` 等，它们的点位归 apt/systemd 管）。
+`tests/timer-armed.test.js` 加三条闸：故意违规样本（非 dao 前缀的 timer 死了必须点名报出）、
+采集正则不许退回前缀圈定（直接读源码里那条正则，并拿真实 `list-timers` 输出行验它采得到）、
+系统 timer 过滤器必须在（不滤会天天红成噪音）。突变回旧前缀 → 红 1 条。
+
+**单元本身，不归本仓。** `gw-remote-probe.timer` 是 `ai-gateway-stack` 的周期探针
+（`host/machine/INDEX.md` 第 47 行：`~/.dao/provider-health.json` 内容由它写、**本仓只读**）。
+E 类归属下**本仓不写装法**，所以这里不给它加 `OnCalendar`，
+要在 `ai-gateway-stack` 那边改。已在那边落单（见下）。
+
+在它被修好之前，⑱ 会一直把它报成红——**这是对的**：它写的健康表我们要读，
+它无声停摆时派工会把过期表当 unknown 而不拦。红着比看不见好。
+
+status: done

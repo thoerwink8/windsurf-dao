@@ -628,9 +628,9 @@ function checkAgentStallWatch() {
 export function classifyTimerArmed({ probed = false, reason = '', units = null } = {}) {
   if (!probed) return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
   if (!Array.isArray(units)) return { state: UNKNOWN, detail: 'timer 清单没查成（不是数组）——不当成 0 个死' };
-  // 扫出 0 个 ≠ 全都健康：一个 dao timer 都没扫到，多半是判据或前缀失效。
+  // 扫出 0 个 ≠ 全都健康：一个 timer 都没扫到，多半是判据或过滤失效。
   if (units.length === 0) {
-    return { state: UNKNOWN, detail: '一个 dao timer 都没扫到——「没查成」不算「都没问题」' };
+    return { state: UNKNOWN, detail: '一个 timer 都没扫到——「没查成」不算「都没问题」' };
   }
   const dead = units.filter((u) => {
     const n = u && u.next;
@@ -652,8 +652,15 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
 function checkTimerArmed() {
   const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], { timeout: 10000 });
   if (!list.probed) return classifyTimerArmed({ probed: false, reason: `systemctl 没跑成：${list.reason}` });
-  const names = [...String(list.stdout || '').matchAll(/\b((?:dao|commander)[a-z0-9-]*\.timer)\b/g)]
-    .map((m) => m[1]);
+  // 2026-09-05 服务器巡检自己抓到的：本闸原本只认 `dao*` / `commander*` 前缀，
+  // 于是 `gw-remote-probe.timer`（写 ~/.dao/provider-health.json，我们**读**它判派工可用性）
+  // 一直是单调时钟、不在扫描面里——它停掉再起就会进 active(elapsed) 死态，
+  // 而派工把过期健康表当 unknown 不拦。**按名字前缀圈定扫描面，等于只查自己认识的东西。**
+  // 现在扫机器上每一个 timer；systemd 自带的那些点位由发行版管，不归本仓判死。
+  const SYSTEM_TIMERS = /^(systemd-|apt-|dpkg-|man-db|logrotate|fstrim|e2scrub|motd-news|update-notifier|anacron|snapd)/;
+  const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)]
+    .map((m) => m[1])
+    .filter((n) => !SYSTEM_TIMERS.test(n));
   const units = [];
   for (const unit of [...new Set(names)]) {
     const p = run('systemctl', ['show', unit, '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });

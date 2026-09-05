@@ -97,3 +97,47 @@ describe('代码生成的 systemd 单元也要过同一把尺', () => {
     assert.equal(new Set(cals).size, cals.length, `点位撞了：${cals.join(' / ')}`);
   });
 });
+
+// 2026-09-05 巡检（服务器上的 LLM）自己抓到的：本闸原本只认 `dao*` / `commander*` 前缀。
+// `gw-remote-probe.timer` 写 `~/.dao/provider-health.json`——**我们读它判派工可用性**——
+// 却因为名字不带那两个前缀，从来不在扫描面里，至今还是单调时钟。
+// **按名字前缀圈定扫描面，等于只查自己认识的东西。**
+describe('扫描面不许按名字前缀圈定', () => {
+  it('故意违规样本：不带 dao/commander 前缀的 timer 死了，也必须报出来', async () => {
+    const S = await LOAD;
+    const r = S.classifyTimerArmed({ probed: true, units: [
+      { unit: 'dao-sync.timer', next: '1788600000000000' },
+      { unit: 'gw-remote-probe.timer', next: null },
+    ] });
+    assert.equal(r.state, 'red', '写健康表的探针死了，比 dao 自己的 timer 死了还危险——派工会拿过期表当 unknown');
+    assert.match(r.detail, /gw-remote-probe\.timer/, '要点名，不能只给个数字');
+  });
+
+  it('取数层：list-timers 的输出里，非 dao 前缀的 dao 生态 timer 要被采到', async () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'server-check.mjs'), 'utf8');
+    const m = src.match(/const names = \[\.\.\.String\(list\.stdout \|\| ''\)\.matchAll\((\/[^\n]*?\/g)\)/);
+    assert.ok(m, '采集正则的形状变了，本闸判据已失效——请同步更新');
+    assert.ok(!/dao\|commander/.test(m[1]),
+      `采集正则又退回按前缀圈定了：${m[1]}——前缀外的 timer 会重新变成盲区`);
+    // 真拿它跑一遍 systemd 的真实输出行，证明确实采得到
+    const re = new RegExp(m[1].slice(1, -2), 'g');
+    const line = 'Sat 2026-09-05 18:26:00 CST 5min Sat 2026-09-05 17:56:00 CST 25min ago gw-remote-probe.timer gw-remote-probe.service';
+    assert.ok([...line.matchAll(re)].some((x) => x[1] === 'gw-remote-probe.timer'),
+      '正则采不到 gw-remote-probe.timer');
+  });
+
+  it('发行版自带的 timer 不归本仓判死——它们的点位由 apt/systemd 管', async () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'server-check.mjs'), 'utf8');
+    const m = src.match(/const SYSTEM_TIMERS = (\/[^\n]*?\/);/);
+    assert.ok(m, '系统 timer 过滤器不见了——不滤会天天红成噪音，噪音久了就没人看');
+    const re = new RegExp(m[1].slice(1, -1));
+    for (const n of ['systemd-tmpfiles-clean.timer', 'apt-daily.timer', 'logrotate.timer', 'fstrim.timer']) {
+      assert.ok(re.test(n), `${n} 应被滤掉`);
+    }
+    for (const n of ['dao-sync.timer', 'gw-remote-probe.timer', 'commander-act.timer', 'feishu-x.timer']) {
+      assert.ok(!re.test(n), `${n} 不该被滤掉——它是我们自己生态里的`);
+    }
+  });
+});
