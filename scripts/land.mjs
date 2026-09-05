@@ -9,7 +9,7 @@
 //            拆「分支已合并 + 树干净 + 非主树/非当前树/不挂默认分支 + orca 没在管」的 git worktree。
 // 不干什么（判断全在 scripts/lib/land-core.mjs，测试见 tests/land.test.js）：
 //   - 不在派生分支上代劳「进主分支」（那是 PR/审官闭环的活，编排态绕过它=绕过审查）；
-//   - 发散不自动 rebase；未合并/不干净/orca 在管的一律不删；删分支只用 -d（git 兜底拒未合并）。
+//   - 发散不自动 rebase；未合并/不干净/orca 在管/被树占用/刚建还没提交过的（#898）一律不删。
 // 为什么不是 post-commit hook：rebase/amend/cherry-pick 也触发 post-commit，会把中间态推上主分支；
 //   工人在编排树里的 commit 也会触发，等于绕过审官。收工是「一段活的结尾」，不是「每个 commit」。
 // 退出码：0 = 收工净（该运的运了、没有可清而未清的）；1 = 有事没收完（发散/检查红/在派生分支）。
@@ -18,7 +18,10 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork } from './lib/land-core.mjs';
+import {
+  decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork,
+  collectBranchMergeFacts, parseWorktrees, branchCheckedOutAt,
+} from './lib/land-core.mjs';
 import { probeMirasim, judgeWorkdirProbe } from './lib/mirasim-monitor.mjs';
 
 const FLAGS = new Set(['--dry-run', '--has-work']);
@@ -29,14 +32,14 @@ const cwd = resolve(argPath || process.cwd());
 const say = (s) => process.stdout.write(s + '\n');
 
 function git(args, opts = {}) {
-  const r = spawnSync('git', ['-C', opts.cwd || root, ...args], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', opts.cwd || root, ...args], { windowsHide: true, encoding: 'utf8' });
   return { status: r.status ?? 1, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
 // ── 读盘面 ─────────────────────────────────────────────────────────
 let root = cwd;
 {
-  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) { say(`[收工] 这里不是 git 仓：${cwd}`); process.exit(1); }
   root = String(r.stdout).trim();
 }
@@ -72,7 +75,7 @@ if (!HAS_WORK && ship.action === 'push') {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
     else {
       say('[收工] 推之前跑检查…');
-      const c = spawnSync(process.execPath, [checkFile], { cwd: root, encoding: 'utf8' });
+      const c = spawnSync(process.execPath, [checkFile], { windowsHide: true, cwd: root, encoding: 'utf8' });
       const tail = String(c.stdout || '').trim().split(/\r?\n/).pop() || '';
       say(`[收工] 检查：${tail}`);
       if (c.status !== 0) { say('[收工] 检查红——不推，先修（master 必须能跑）'); process.exit(1); }
@@ -92,7 +95,7 @@ if (!HAS_WORK && ship.action === 'push') {
 const orcaPaths = new Set();
 {
   // orca 在管的树绝不碰（删卡走编排闭环）。orca 不在 = 空集，不算没查成——本机停派工态没有编排树。
-  const r = spawnSync('orca', ['worktree', 'list', '--json'], { encoding: 'utf8', timeout: 15000, shell: true });
+  const r = spawnSync('orca', ['worktree', 'list', '--json'], { windowsHide: true, encoding: 'utf8', timeout: 15000, shell: true });
   if (r.status === 0) {
     try {
       for (const w of JSON.parse(r.stdout)?.result?.worktrees || []) {
@@ -128,12 +131,11 @@ const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
 );
 
-const wtBlocks = git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/).filter(Boolean);
-const worktrees = wtBlocks.map((b) => {
-  const path = (b.match(/^worktree (.+)$/m) || [])[1];
-  const wtBranch = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1] || '';
-  return { path, branch: wtBranch, detached: /^detached$/m.test(b) };
-}).filter(w => w.path);
+// 留树和删支读同一份 worktree 登记（#898：两处各解析一遍、各判一套占用，才出的「树留着支删了」）。
+// occupied 是「当下还占着分支的树」：只有 land 自己**真拆掉**了某棵树，占用才随之解除；
+// 拆失败 = 还占着（那正是 #898 现场的形状：树没拆成，分支却被删了）。
+const worktrees = parseWorktrees(git(['worktree', 'list', '--porcelain']).out);
+let occupied = worktrees.slice();
 
 let removeCount = 0;
 for (let i = 0; i < worktrees.length; i++) {
@@ -142,6 +144,10 @@ for (let i = 0; i < worktrees.length; i++) {
   const d = decideWorktreeRemove({
     branch: w.branch,
     merged: !!w.branch && mergedSet.has(w.branch),
+    // squash 合并会产生全新 commit，原分支的提交在 master 里根本不存在，
+    // 所以 `--merged` 这类按提交号比对的判据必然判「没合」——审官树因此每合一个 PR 漏拆一棵（#839）。
+    // 按**内容**再问一次：合进去树变不变。变=真有没落地的活，不变=已经在里面了。
+    ...(w.branch ? (({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: w.branch, defaultBranch })) : { contributes: null, everHadContent: null }),
     dirty: git(['status', '--porcelain'], { cwd: abs }).out !== '',
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
@@ -156,29 +162,28 @@ for (let i = 0; i < worktrees.length; i++) {
   if (HAS_WORK) { say(`[收工] 有活：拆树 ${w.path}（${d.reason}）`); continue; }
   if (DRY) { say(`[收工] [拟] 拆树 ${w.path}（${d.reason}）`); continue; }
   const r = git(['worktree', 'remove', w.path]);
+  if (r.status === 0) occupied = occupied.filter((x) => x.path !== w.path); // 真拆了才解除占用
   say(r.status === 0 ? `[收工] 拆树 ${w.path}（${d.reason}）` : `[收工] 拆树失败 ${w.path}：${r.err.slice(0, 120)}`);
 }
 
-const checkedOut = new Map(); // 分支 → 占用它的树
-for (const b of git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\n\n/)) {
-  const p = (b.match(/^worktree (.+)$/m) || [])[1];
-  const br = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1];
-  if (p && br) checkedOut.set(br, p);
-}
 let deleteCount = 0;
 for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean)) {
   const d = decideBranchDelete({
     name,
     merged: mergedSet.has(name),
+    ...(({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: name, defaultBranch })),
     isDefault: name === defaultBranch,
     isCurrent: name === branch,
-    checkedOutAt: checkedOut.get(name) !== undefined && resolve(checkedOut.get(name)).toLowerCase() !== resolve(root).toLowerCase() ? checkedOut.get(name) : '',
+    // 任何注册中的树占用即留支（含主树；主树那条另有 isDefault/isCurrent 先拦，说法不冲突）。
+    checkedOutAt: branchCheckedOutAt(occupied, name),
   });
   if (!d.del) { if (!d.reason.includes('默认分支') && !d.reason.includes('当前分支')) say(`[收工] 留支 ${name}：${d.reason}`); continue; }
   deleteCount += 1;
   if (HAS_WORK) { say(`[收工] 有活：删支 ${name}`); continue; }
   if (DRY) { say(`[收工] [拟] 删支 ${name}`); continue; }
-  const r = git(['branch', '-d', name]); // -d：git 自己再拦一道未合并
+  // squash 之后 `branch -d` 必然拒绝（它也只认提交号），而那个拒绝正是 #839 的病。
+  // 只有按内容证明过「合进去等于没合」的才回 -D；其余一律 -d，保住「宁可删不掉不可删错」。
+  const r = git(['branch', d.flag || '-d', name]);
   say(r.status === 0 ? `[收工] 删支 ${name}` : `[收工] 删支失败 ${name}：${r.err.slice(0, 120)}`);
 }
 

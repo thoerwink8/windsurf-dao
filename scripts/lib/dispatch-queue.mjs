@@ -96,7 +96,8 @@ export function readDispatchOrder(orderPath) {
 
 /**
  * detached 拉起执行体：spawn detached + stdio 进 <id>.out.log（append）+ unref。
- * 父进程（dispatch 热路）退出后执行体照跑。#807：不再传 windowsHide。
+ * 父进程（dispatch 热路）退出后执行体照跑。#807 曾删掉 windowsHide（理由「Linux 上无黑窗」不成立：
+ * 非 Windows 平台它是 no-op，删了零收益，而 Windows 上每次 spawn 闪一个控制台窗）——2026-09-05 加回。
  */
 export function spawnDispatchExecutor({ scriptPath, orderPath, logPath, cwd, spawnFn = spawn, env } = {}) {
   if (!scriptPath) return { ok: false, error: 'spawn 执行体没给 scriptPath' };
@@ -116,6 +117,7 @@ export function spawnDispatchExecutor({ scriptPath, orderPath, logPath, cwd, spa
       cwd: cwd || process.cwd(),
       env: env || process.env,
       detached: true,
+      windowsHide: true,
       stdio: ['ignore', fd == null ? 'ignore' : fd, fd == null ? 'ignore' : fd],
     });
   } catch (e) {

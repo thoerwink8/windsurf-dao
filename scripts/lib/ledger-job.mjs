@@ -21,7 +21,7 @@ import { normalizeReviewState } from './review-state.mjs';
 const DEFAULT_ROOT = resolve(import.meta.dirname, '../..');
 
 function defaultGit(args, { cwd } = {}) {
-  const r = spawnSync('git', args, {
+  const r = spawnSync('git', args, { windowsHide: true, 
     encoding: 'utf8',
     cwd,
     timeout: 30000,

@@ -53,6 +53,7 @@
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| D | ~/.pi | pi 产品根。子项见下行，不整目录镜像。onboard 只写 agent/extensions（dao-sync 单元的 ReadWritePaths 因此含这一条）；其余禁拷 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |

@@ -138,3 +138,51 @@ describe('preflightReviewer（审官）', () => {
     assert.match(r.report, /停手报帅|一个 agent 都不起/);
   });
 });
+
+// #953 给探针加了第四态 no_finish（2xx + 有真内容，但没见到收尾事件）。
+// 2026-09-05 实咬：加了新态却没接下游——preflight 只认 green/unscanned，其余全落进 red 分支，
+// 于是网关偶尔漏一个收尾事件，好通道当场被判红换掉，dao.test.js 间歇变红。
+// 「加了一个状态」和「下游认得这个状态」是两件事，前者绿了不等于后者做了。
+describe('no_finish 不许被当成 red 换掉好通道（#953 接线）', () => {
+  it('第一位 no_finish、后面有真绿 → 选真绿的那位', async () => {
+    const { preflightWorkerSlate } = await import(LAUNCH);
+    const r = await preflightWorkerSlate({
+      slate: SLATE, startIndex: 0, policy: POLICY,
+      probe: fakeProbe({ A: 'no_finish', B: 'green', C: 'green' }),
+    });
+    assert.equal(r.stop, false);
+    assert.equal(r.chosen, 'B', '有真绿就用真绿——no_finish 不该顶替 green');
+  });
+
+  it('全是 no_finish → 不停手，回退用第一位（通道是通的，只是流被掐了）', async () => {
+    const { preflightWorkerSlate } = await import(LAUNCH);
+    const r = await preflightWorkerSlate({
+      slate: SLATE, startIndex: 0, policy: POLICY,
+      probe: fakeProbe({ A: 'no_finish', B: 'no_finish', C: 'no_finish' }),
+    });
+    assert.equal(r.stop, false, '收尾没见到 ≠ 上游挂了，不该报帅停手');
+    assert.ok(r.chosen, '要有回退人选，不能空手');
+  });
+
+  it('故意违规样本：全红仍必须停手——反证这条放行没把 red 一起放掉', async () => {
+    const { preflightWorkerSlate } = await import(LAUNCH);
+    // 一律回 red（不走 fakeProbe 的按 id 映射——第三位落地名是 gpt-5.6-sol，按 id 映射会漏成默认绿）
+    const r = await preflightWorkerSlate({
+      slate: SLATE, startIndex: 0, policy: POLICY,
+      probe: async () => ({ state: 'red', code: 403, ms: 1, why: '假 token', target: 't' }),
+    });
+    assert.equal(r.stop, true, 'no_finish 放行不许把 red 一起放掉');
+  });
+
+  it('no_finish 的原因要留痕，不许静默放过', async () => {
+    const { preflightWorkerSlate } = await import(LAUNCH);
+    const r = await preflightWorkerSlate({
+      slate: SLATE, startIndex: 0, policy: POLICY,
+      probe: fakeProbe({ A: 'no_finish', B: 'green', C: 'green' }),
+    });
+    // 包装层不透传 reasons，但 probed 是逐条事实，跳过的那位必须在里面留下 no_finish
+    const a = (r.probed || []).find((p) => p.model === 'A');
+    assert.ok(a, 'A 探过就要在 probed 里，否则查不出它被跳过');
+    assert.equal(a.state, 'no_finish', 'A 的态要如实记 no_finish，不许写成 red 或 green');
+  });
+});
