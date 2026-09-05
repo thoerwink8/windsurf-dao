@@ -29,7 +29,7 @@
 
 ## 三层发现面（提示 → 动作 → 机械）
 
-1. **提示层**：`host/skills/dispatch/templates/soldier-book.md` 交卷自查第 4 条（有通用产物 → 写段）。
+1. **提示层**：`host/skills/dispatch/templates/soldier-book.md` 交卷自查第 5 条（有通用产物 → 写段）。
 2. **动作层**：`host/skills/dispatch/SKILL.md`「终审接回流段」——合并时三种落法 + 回写证据。
 3. **机械层**：`scripts/lib/harvest-check.mjs` + dao-check 两项（样本三态常跑；live 在 `--full`，
    扫近 7 天 merged PR）。**孤儿回流段 = 有人发现了好东西但没人接** → 红，点名 PR 号。
