@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { checkGates, select } from './lib/dianjiangtai-core.mjs';
@@ -289,7 +289,24 @@ function setDispatchResultSink(sink) {
   dispatchResultSink = sink && sink.resultPath ? sink : null;
 }
 
+// ── 进程内调用（TIA 第二刀，2026-09-06）─────────────────────────────────
+// 测试原本每断言一次就 spawn 一个 `node dao.mjs <动词>`，一次 ~225ms；
+// 光启动费就占了 dao.test.js 的四成。进程内跑同一条 argv→输出 的路，
+// 省掉的只有进程边界，**契约覆盖一个字节都不少**。
+//
+// 为什么敢把 emit 的 process.exit 换成抛异常（改之前逐条查过）：
+//   · 300 处 emit/fail 全走这一个出口，exit 只有 12 处且集中；
+//   · 只有 2 个 finally 块，且不在 emit 可达路径上；
+//   · 空 catch 虽多，但都是 `try{unlinkSync}catch{}` 这种小块，不包业务逻辑。
+// process.exit 不跑 finally 而 throw 会跑——这是唯一的语义差，上面第 2 条已经核过。
+// CLI 形态（IN_PROCESS=false）行为一个字不变，抛出的信号在 main 顶层转回 process.exit。
+export class ExitSignal extends Error {
+  constructor(payload, code) { super('dao-cli-exit'); this.payload = payload; this.code = code; }
+}
+let IN_PROCESS = false;
+
 function emit(payload, exit = 0) {
+  if (IN_PROCESS) throw new ExitSignal(payload, exit);
   if (dispatchResultSink) {
     try {
       writeFileSync(dispatchResultSink.resultPath, JSON.stringify(payload, null, 2), 'utf8');
@@ -5224,14 +5241,16 @@ async function cmdWorkerDoneMirasim(args) {
   });
 }
 
-function main() {
+function main(argv = process.argv) {
   let args;
-  try { args = parseArgs(process.argv); }
+  try { args = parseArgs(argv); }
   catch (e) {
+    if (IN_PROCESS) throw new ExitSignal({ ok: false, error: String(e.message || e) }, 1);
     console.error(String(e.message || e));
     process.exit(1);
   }
   if (args.verb === 'help' || args.help) {
+    if (IN_PROCESS) throw new ExitSignal({ ok: true, usage: USAGE }, 0);
     process.stdout.write(USAGE);
     process.exit(0);
   }
@@ -5272,9 +5291,35 @@ function main() {
     case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);
     default:
+      if (IN_PROCESS) throw new ExitSignal({ ok: false, error: `未知动词: ${args.verb}` }, 1);
       console.error(`未知动词: ${args.verb}`);
       process.exit(1);
   }
 }
 
-main();
+/**
+ * 进程内跑一次 CLI。给测试用——省掉 ~225ms 的进程启动，走的是同一条 argv→输出。
+ * @param {string[]} args 动词及其后的参数（不含 node 与脚本路径）
+ * @returns {{status:number, payload:object|null, error?:string}}
+ *   payload 是 emit 本来要 JSON.stringify 出去的那个对象，直接给，不用再解析一遍。
+ */
+export async function runCliInProcess(args) {
+  IN_PROCESS = true;
+  try {
+    // **必须 await**：一半动词（cmdReviewerCreate 等）是 async，它们的 fail() 抛在 Promise 里。
+    // 同步 try/catch 接不住——首版就栽在这儿：同步返回「没 emit」，信号随后变成未捕获异常。
+    await main(['node', 'dao.mjs', ...args]);
+    // 走到这儿说明动词处理完了却没 emit——那是 CLI 的契约漏洞，如实报出来，不装成成功
+    return { status: 0, payload: null, error: '动词返回但没有 emit（CLI 契约漏洞）' };
+  } catch (e) {
+    if (e instanceof ExitSignal) return { status: e.code, payload: e.payload };
+    throw e;                       // 真异常照抛，不许被当成「CLI 报错」吞掉
+  } finally {
+    IN_PROCESS = false;
+  }
+}
+
+// 只有当自己就是入口时才跑 main——被 import 时（测试进程内调用）不许自动执行
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  main();
+}

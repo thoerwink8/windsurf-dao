@@ -29,6 +29,31 @@ const LIB = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
 // 本套验 routing 兜底，不读本机真 Orca 文件。Orca 叠层在 tests/orca-agent-cmds.test.js。
 process.env.ORCA_DATA_JSON = path.join(__dirname, 'fixtures', 'orca-agent-cmds', 'empty-overrides.json');
 const S_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
+
+// ── 进程内跑 CLI（TIA 第二刀，2026-09-06）───────────────────────────────
+// spawn 一次 `node dao.mjs` 要 ~225ms，进程内是 2ms——快 110 倍，而走的是同一条
+// argv→输出，契约覆盖不减。返回形状**故意对齐 spawnSync**（status/stdout），
+// 所以调用点的断言一个字都不用改。
+//
+// **只给「早退型」用**：参数校验、缺参、未知动词这类在做任何 I/O 之前就 emit 的路径。
+// 会真建树/真发请求的动词仍旧 spawn——进程内跑它们会共享模块状态（dispatchResultSink 等），
+// 测试之间互相污染，而每次 spawn 拿到的是干净进程。省下的那 200ms 不值这个风险。
+const DAO_LOAD = import('file://' + CLI.replace(/\\/g, '/'));
+async function cliInProc(args, env) {
+  const dao = await DAO_LOAD;
+  // env 覆盖：进程内没有独立环境，只能临时改再还原。**必须 finally 还原**，
+  // 否则一条用例的 DAO_GH_FAKE 会漏给后面所有用例——spawn 时进程一退就干净，这里不会。
+  const saved = env ? Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]])) : null;
+  if (env) for (const [k, v] of Object.entries(env)) process.env[k] = v;
+  try {
+    const r = await dao.runCliInProcess(args);
+    return { status: r.status, stdout: r.payload == null ? '' : JSON.stringify(r.payload), inProc: true };
+  } finally {
+    if (saved) for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+}
 const ROUTING_LOAD = S_LOAD.then(m => m.loadRouting());
 
 // async-launch：dispatch 热路只受理，拒派/失败落 <id>.out.json。等执行体结果落盘。
@@ -697,13 +722,13 @@ describe('dao', () => {
     // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
     const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
-    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliHas = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿', () => {
       assert.ok(cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, '消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿  →  ' + `status=${cliHas.status} ${String(pHas.error || '')}`);
     });
 
-    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliNo = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
     const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）', () => {
       assert.ok(cliNo.status === 0 && pNo.disambiguation && pNo.disambiguation.ok === false && pNo.disambiguation.hasLabel === false, '消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）  →  ' + `status=${cliNo.status} ${JSON.stringify(pNo)}`);
@@ -718,7 +743,7 @@ describe('dao', () => {
     const realQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-queue-'));
     const realLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-ledger-'));
     const realEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: realQueue, LEDGER_EVENTS_DIR: realLedger };
-    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
+    const cliReal = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
     const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rReal = waitForOutJson(pReal.resultPath) || {};
     await t.test('消歧门：真派工 --issue 559（无 label）→ 热路受理，执行体结果 ok:false 拒派', () => {
@@ -733,7 +758,7 @@ describe('dao', () => {
     });
 
     // worker-start 带 --issue 同样受门控：559 无 label → 在碰 orca 之前就被拦（非 0）。
-    const wsNo = spawnSync(process.execPath, [CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const wsNo = await cliInProc(['worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm'], cliEnv);
     const pWsNo = (() => { try { return JSON.parse((wsNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：worker-start --issue 559（无 label）→ 非 0 拒派', () => {
       assert.ok(wsNo.status !== 0 && /已消歧/.test(String(pWsNo.error || '')), '消歧门：worker-start --issue 559（无 label）→ 非 0 拒派  →  ' + `status=${wsNo.status} ${JSON.stringify(pWsNo)}`);
@@ -743,7 +768,7 @@ describe('dao', () => {
     });
 
     // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
+    const cliFail = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rFail = waitForOutJson(pFail.resultPath) || {};
     await t.test('消歧门：gh 失败（CI 无 token）真派工 → 执行体结果报「没查成」拒派', () => {
@@ -931,14 +956,14 @@ describe('dao', () => {
 
     // CLI 级：pr-sync-labels --pr 42（fake-gh 固定：正文 Closes #565，565 带 model/type）→ 退出 0。
     const FAKE_GH2 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
-    const cliSync = spawnSync(process.execPath, [CLI, 'pr-sync-labels', '--pr', '42'], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH2 } });
+    const cliSync = await cliInProc(['pr-sync-labels', '--pr', '42'], { DAO_GH_FAKE: FAKE_GH2 });
     const pSync = (() => { try { return JSON.parse((cliSync.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到',
       () => {
         assert.ok(cliSync.status === 0 && pSync.ok === true && (pSync.labels || []).includes('model/grok-4.6') && (pSync.labels || []).includes('type/写码'),
           'CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到  →  ' + `status=${cliSync.status} ${JSON.stringify(pSync)}`);
       });
-    const cliSyncNoRef = spawnSync(process.execPath, [CLI, 'pr-sync-labels', '--pr', '41'], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH2 } });
+    const cliSyncNoRef = await cliInProc(['pr-sync-labels', '--pr', '41'], { DAO_GH_FAKE: FAKE_GH2 });
     const pSyncNoRef = (() => { try { return JSON.parse((cliSyncNoRef.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('CLI pr-sync-labels 无署名单号 → 非 0 且说清',
       () => {
@@ -1096,11 +1121,11 @@ describe('dao', () => {
     await t.test('worker-done 已登记进 VERBS', () => {
       assert.ok(S.VERBS.includes('worker-done'), 'worker-done 已登记进 VERBS  →  ' + S.VERBS.join(','));
     });
-    const wdHelp = spawnSync(process.execPath, [CLI, 'worker-done', '--help'], { encoding: 'utf8', cwd: REPO });
+    const wdHelp = await cliInProc(['worker-done', '--help']);
     await t.test('worker-done 出现在 help', () => {
       assert.ok(/worker-done/.test(wdHelp.stdout || ''), 'worker-done 出现在 help  →  ' + (wdHelp.stdout || '').slice(0, 200));
     });
-    const wdMiss = spawnSync(process.execPath, [CLI, 'worker-done'], { encoding: 'utf8', cwd: REPO });
+    const wdMiss = await cliInProc(['worker-done']);
     const pWdMiss = (() => { try { return JSON.parse(wdMiss.stdout || '{}'); } catch { return {}; } })();
     await t.test('worker-done 缺 --pr → 非零', () => {
       assert.ok(wdMiss.status !== 0 && /--pr/.test(String(pWdMiss.error || wdMiss.stderr || '')), 'worker-done 缺 --pr → 非零  →  ' + JSON.stringify(pWdMiss));
@@ -2459,17 +2484,17 @@ describe('dao', () => {
     await t.test('#593 inbox-collect / run-gc / ask 已登记进 VERBS', () => {
       assert.ok(S.VERBS.includes('inbox-collect') && S.VERBS.includes('run-gc') && S.VERBS.includes('ask'), '#593 inbox-collect / run-gc / ask 已登记进 VERBS  →  ' + S.VERBS.join(','));
     });
-    const askZero = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', '0'], { encoding: 'utf8', cwd: REPO });
+    const askZero = await cliInProc(['ask', '--question', 'x', '--timeout-ms', '0']);
     const askZeroJ = (() => { try { return JSON.parse(askZero.stdout || '{}'); } catch { return {}; } })();
     await t.test('#598 红项3：--timeout-ms 0 非零且不空转', () => {
       assert.ok(askZero.status !== 0 && /正整数/.test(String(askZeroJ.error || askZero.stderr || '')), '#598 红项3：--timeout-ms 0 非零且不空转  →  ' + JSON.stringify(askZeroJ));
     });
-    const askNan = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', 'nope'], { encoding: 'utf8', cwd: REPO });
+    const askNan = await cliInProc(['ask', '--question', 'x', '--timeout-ms', 'nope']);
     const askNanJ = (() => { try { return JSON.parse(askNan.stdout || '{}'); } catch { return {}; } })();
     await t.test('#598 红项3：--timeout-ms 非数字 非零', () => {
       assert.ok(askNan.status !== 0 && /正整数/.test(String(askNanJ.error || '')), '#598 红项3：--timeout-ms 非数字 非零  →  ' + JSON.stringify(askNanJ));
     });
-    const askFrac = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', '1.5'], { encoding: 'utf8', cwd: REPO });
+    const askFrac = await cliInProc(['ask', '--question', 'x', '--timeout-ms', '1.5']);
     const askFracJ = (() => { try { return JSON.parse(askFrac.stdout || '{}'); } catch { return {}; } })();
     await t.test('#598 红项3：--timeout-ms 小数 非零', () => {
       assert.ok(askFrac.status !== 0 && /正整数/.test(String(askFracJ.error || '')), '#598 红项3：--timeout-ms 小数 非零  →  ' + JSON.stringify(askFracJ));
@@ -2595,21 +2620,21 @@ describe('dao', () => {
     await t.test('#575 ④ reviewer-attach 已登记进 VERBS', () => {
       assert.ok(S.VERBS.includes('reviewer-attach'), '#575 ④ reviewer-attach 已登记进 VERBS  →  ' + S.VERBS.join(','));
     });
-    const attachHelp = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--help'], { encoding: 'utf8', cwd: REPO });
+    const attachHelp = await cliInProc(['reviewer-attach', '--help']);
     await t.test('reviewer-attach 出现在 help', () => {
       assert.ok(/reviewer-attach/.test(attachHelp.stdout || ''), 'reviewer-attach 出现在 help  →  ' + (attachHelp.stdout || '').slice(0, 200));
     });
-    const attachMiss = spawnSync(process.execPath, [CLI, 'reviewer-attach'], { encoding: 'utf8', cwd: REPO });
+    const attachMiss = await cliInProc(['reviewer-attach']);
     const pAttach = (() => { try { return JSON.parse(attachMiss.stdout || '{}'); } catch { return {}; } })();
     await t.test('reviewer-attach 缺 --pr → 非零', () => {
       assert.ok(attachMiss.status !== 0 && /--pr/.test(String(pAttach.error || attachMiss.stderr || '')), 'reviewer-attach 缺 --pr → 非零  →  ' + JSON.stringify(pAttach));
     });
-    const attachMissWt = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--pr', '1'], { encoding: 'utf8', cwd: REPO });
+    const attachMissWt = await cliInProc(['reviewer-attach', '--pr', '1']);
     const pAttachWt = (() => { try { return JSON.parse(attachMissWt.stdout || '{}'); } catch { return {}; } })();
     await t.test('reviewer-attach 缺 --worktree → 非零', () => {
       assert.ok(attachMissWt.status !== 0 && /--worktree/.test(String(pAttachWt.error || attachMissWt.stderr || '')), 'reviewer-attach 缺 --worktree → 非零  →  ' + JSON.stringify(pAttachWt));
     });
-    const attachMissRev = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--pr', '1', '--worktree', 'w'], { encoding: 'utf8', cwd: REPO });
+    const attachMissRev = await cliInProc(['reviewer-attach', '--pr', '1', '--worktree', 'w']);
     const pAttachRev = (() => { try { return JSON.parse(attachMissRev.stdout || '{}'); } catch { return {}; } })();
     await t.test('reviewer-attach 缺 --reviewer → 非零', () => {
       assert.ok(attachMissRev.status !== 0 && /--reviewer/.test(String(pAttachRev.error || attachMissRev.stderr || '')), 'reviewer-attach 缺 --reviewer → 非零  →  ' + JSON.stringify(pAttachRev));
@@ -3175,11 +3200,11 @@ describe('dao', () => {
       assert.ok(/function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrcAlign), '#575 ⑦ reviewer-create 建树后试合');
     });
 
-    const revHelp = spawnSync(process.execPath, [CLI, 'reviewer-create', '--help'], { encoding: 'utf8', cwd: REPO });
+    const revHelp = await cliInProc(['reviewer-create', '--help']);
     await t.test('reviewer-create 出现在 help', () => {
       assert.ok(/reviewer-create/.test(revHelp.stdout || ''), 'reviewer-create 出现在 help  →  ' + (revHelp.stdout || '').slice(0, 200));
     });
-    const revMiss = spawnSync(process.execPath, [CLI, 'reviewer-create', '--name', 'x'], { encoding: 'utf8', cwd: REPO });
+    const revMiss = await cliInProc(['reviewer-create', '--name', 'x']);
     const pRevMiss = (() => { try { return JSON.parse(revMiss.stdout || '{}'); } catch { return {}; } })();
     await t.test('reviewer-create 缺 --pr → 非零', () => {
       assert.ok(revMiss.status !== 0 && /--pr/.test(String(pRevMiss.error || revMiss.stderr || '')), 'reviewer-create 缺 --pr → 非零  →  ' + JSON.stringify(pRevMiss));
