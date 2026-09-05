@@ -138,6 +138,8 @@ describe('decide：自己做（确定性）', () => {
   it('review-pending 队列有条目 → attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
+      // PR 必须真在开放列表里，否则票是死票、该走 reap-ticket（2026-09-06 死票回收后此夹具才完整）。
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'abc' }] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-sol', worker: 'wt-x', head: 'abc' }] },
     }));
     const a = byKind(r, 'attach-reviewer');
@@ -178,7 +180,9 @@ describe('decide：报帅停手（永不自动）', () => {
       wakeCounts: { 'stall:term_q': WAKE_LIMIT },
     }));
     assert.equal(byKind(r, 'wake-brain').length, 0);
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    // #971：唤满不再喊给空气，转 open-issue（原文+reason 进正文）。
+    assert.ok(byKind(r, 'open-issue').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'wake-exhausted').length, 0);
   });
 });
 
@@ -1014,5 +1018,171 @@ describe('跨仓感知只感知不派工', () => {
     const i = src.indexOf('function scanOtherRepos');
     const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
     assert.match(fn, /full === mine/, '要把本仓排除掉，否则本仓的活会被当成跨仓提醒重报一遍');
+  });
+});
+
+// ── 复审记账：记「派了」不记「成了」= 一次失败就永久卡死（2026-09-05 实咬第二次）──
+//
+// 第一次是 agent-stall-watch 的换人账本（10 个审官换人全失败，账本记成已处置，再不重试）。
+// 第二次就在这里：#894/#899/#905 的复审票 04:22 写成功，审官起来就死（裸 pi 落错 provider 401），
+// 7 小时后当前 head 判定仍是 0，而 `if (!reworkDispatched[rrKey])` 把这三张 PR 永久挡在门外。
+//
+// 判据的要害：**走到这个分支本身就是「上一次没落地」的证据**——判定真落了 atHead 就 > 0，进不来。
+// 所以不需要 ok 字段，只要 tries + 宽限期。
+describe('复审要能重试，因为「票写出去了」不等于「判定落了」', () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'f9adbffa1170c57559c64160081619acc328988f';
+  const OLD = 'b5e672ea046ee7ce65055a31926bd164f3e1f84f';
+  const NOW = '2026-09-05T12:00:00.000Z';
+  const ago = (min) => new Date(Date.parse(NOW) - min * 60000).toISOString();
+  const readyPr = (n, head, issue) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: head, body: `署名 issue #${issue}`,
+  });
+  const sit = (over) => baseSituation({ at: NOW, ...over });
+
+  it('①从没审过的 ready PR 也要叫审官——这一格原本整个空着（洞 A）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(947, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '交卷可合但一条判定都没有 = 要审官，不是无事可做');
+    assert.equal(rr[0].pr, 947);
+    assert.equal(rr[0].tries, 1);
+    assert.match(rr[0].why, /一条判定都没有/, '首审和复审的理由要分得开');
+  });
+
+  it('②上一票超过宽限期而判定仍是 0 → 重发，tries 累加（洞 C）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(400), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '票派过但判定没落 = 那次没成，必须再试');
+    assert.equal(rr[0].tries, 2, 'tries 要累加，否则永远试不满也永远不报帅');
+  });
+
+  it('③宽限期内不重发——审官可能正在看，别每轮塞一张票', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(10), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '10 分钟前刚派的票还在宽限期内');
+    assert.equal(byKind(r, 'escalate').length, 0, '宽限期内也不报帅');
+  });
+
+  it('④试满仍无判定 → 停手报帅，不死循环', async () => {
+    const { decide, MAX_REREVIEW_TRIES } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(905, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 905: { reviews: [redReview('一处', OLD)] } } },
+      reworkDispatched: { [`rereview:905@${HEAD}`]: { at: ago(400), pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '试满就别再派了');
+    const opened = byKind(r, 'open-issue');
+    assert.equal(opened.length, 1, '试满转单，不再喊给空气');
+    assert.equal(opened[0].reason, 'rereview-exhausted');
+    assert.equal(byKind(r, 'escalate').length, 0);
+  });
+
+  it('⑤判别力反证：判定已落在当前 head → 本分支一条都不产', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(886, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 886: { reviews: [redReview('要改', HEAD)] } } },
+      reworkDispatched: {},
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '当前 head 有判定了就不该再叫审官——否则这条规则没有判别力');
+  });
+
+  it('⑥态势没有 at 时不许把宽限期算成「早就过期」而狂发票', async () => {
+    const { decide } = await CORE;
+    const s = baseSituation({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: '2026-09-05T11:55:00.000Z', pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    });
+    delete s.at;
+    const r = decide(s);
+    // at 缺失 ⇒ nowMs=0 ⇒ ageMin 是大负数，Number.isFinite 为真且 < 宽限期 ⇒ 按「还在宽限期」处理，
+    // 宁可这一轮不发，也不要因为时钟读不到就每 20 分钟塞一张票。
+    assert.equal(byKind(r, 'rereview').length, 0, '时钟读不到时要保守，不许当成「早就该重发」');
+  });
+});
+
+// ── 署名单已关闭时标签查不到（2026-09-05 实咬 #945/#947/#909）──
+describe(`审官标签要在关闭的署名单上也查得到`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = '6bcdc231aa11bb22cc33dd44ee55ff6677889900';
+  const readyPr = (n, issue) => ({ number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: `署名 issue #${issue}` });
+
+  it('署名单已关闭（不在 open 快照）时，从 attributedIssues 里查到 reviewer/', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: {
+        scanned: true,
+        issues: [],  // #815 已关闭，不在 open 快照里
+        attributedIssues: [{ number: 815, title: '单 815', labels: [{ name: 'reviewer/gpt-5.6-luna' }] }],
+        prs: [readyPr(947, 815)],
+      },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, 'gpt-5.6-luna', '单子关了不等于 PR 不用审——标签得查得到');
+  });
+
+  it('判别力反证：两处都没有就是查不到，不许猜一个', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(890, 888)] },
+      prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'add-label').length, 0, '署名单都没有，补标签无从下手');
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+  });
+});
+
+// ── 死票回收（2026-09-06 实咬：#970/#972/#983 合并后仍每轮开单，17 张噪音单的源头） ──
+describe('复审票存活：PR 合了/关了，票必须回收', () => {
+  it('票的 PR 不在开放列表 → reap-ticket，且不再产 retry-drain/escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [] }, // 一张开放 PR 都没有 = 票全是死的
+      reviewPending: { scanned: true, items: [{ pr: 983, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:983': { at: '2026-09-05T00:00:00Z', pr: 983, tries: 3 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket').map((a) => a.pr), [983]);
+    assert.deepEqual(byKind(r, 'retry-drain'), []);
+    assert.deepEqual(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted'), []);
+  });
+
+  it('票的 PR 还开着 → 不回收，照常走 drain', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [{ number: 890, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'aaa' }] },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:890': { at: '2026-09-05T00:00:00Z', pr: 890, tries: 1 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
+
+  // 红样本：github 没查成时把全部活票当死票剪掉，是这个改动最坏的失败形态。
+  it('github 没查成 → 一张票都不许回收（空集不等于「PR 都没了」）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: false, error: 'API 挂了' },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'x', worker: null }] },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
   });
 });

@@ -28,10 +28,14 @@ import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
+import {
+  proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
+} from './commander-verbs.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
+  'add-label', 'retry-drain', 'open-issue', 'reap-ticket',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -195,6 +199,39 @@ function hub(subject, moment, extra = {}) {
 // 态势的五节。scan 每节标 scanned:true/false。
 export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
 
+// 复审重试：上一票的宽限期与上限。
+// 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
+// commander-act 20 分钟一轮，45 分钟约等于「连着两轮都没等到判定才重发」。
+// 上限是为了别死循环——试满仍无判定就停手交人（判据：当前 head 判定仍是 0）。
+export const REREVIEW_GRACE_MIN = 45;
+export const MAX_REREVIEW_TRIES = 3;
+
+/**
+ * PR 该派哪个审官：查它署名 issue 上的 reviewer/ 标签。
+ *
+ * 两处快照都要看，因为它们装的是不同的东西：
+ *  · `github.issues` 只有 **open** 单（GraphQL `states: OPEN`）；
+ *  · `github.attributedIssues` 是「open PR 署名到、但不在上面那张表里」的单，多半是**已关闭**的。
+ *
+ * 2026-09-05 实咬：#945/#947/#909 的署名单 #833/#815/#889 早已关闭，标签明明带着 reviewer/，
+ * 可只查 open 快照就是查不到 → 每轮报「不猜审官」→ 三张交卷可合的 PR 无限期挂着。
+ * 单子关了不等于 PR 不用审。
+ *
+ * 已关闭的单**只用来查标签**，绝不并进 `github.issues`——那张表是派工候选表，
+ * 混进已关闭的「已消歧」单会被当成新活派出去。
+ */
+export function attributedIssueOf(gh = {}, pr) {
+  const n = attributedIssueNumber(pr);
+  if (n == null) return null;
+  return (gh.issues || []).find((i) => i && i.number === n)
+    || (gh.attributedIssues || []).find((i) => i && i.number === n)
+    || null;
+}
+
+export function reviewerLabelFor(gh = {}, pr) {
+  return labelValue(attributedIssueOf(gh, pr), 'reviewer/');
+}
+
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
 // notify-hub / land 是随附动作，产出处会用 _needs 显式继承主动作的依赖（下面 hub/withNeeds）。
 // escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
@@ -211,6 +248,11 @@ export const ACTION_NEEDS = {
   'notify-hub': [],
   escalate: [],
   noop: [],
+  'add-label': ['github'],
+  'retry-drain': ['reviewPending'],
+  'open-issue': [],
+  // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
+  'reap-ticket': ['github', 'reviewPending'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -220,6 +262,29 @@ export const FORBIDDEN_AUTO_KINDS = new Set([
 ]);
 
 function withNeeds(action, needs) { return { ...action, _needs: needs }; }
+
+/** 半标能推出唯一跨厂值 → add-label；推不出保持 null，调用方报帅（查不到 ≠ 猜一个）。 */
+function maybeAddLabel(issue, situation, extra, needs) {
+  if (!issue || issue.number == null) return null;
+  const proposed = proposeAddLabel({
+    existingLabels: issue.labels,
+    models: situation.routingModelRecords,
+    reviewerOrder: situation.reviewerOrder,
+    workerOrder: situation.workerOrder,
+  });
+  if (!proposed.ok) return null;
+  return withNeeds({
+    kind: 'add-label',
+    issue: issue.number,
+    labels: proposed.labels,
+    existingLabels: issue.labels,
+    workerId: proposed.workerId,
+    reviewerId: proposed.reviewerId,
+    models: situation.routingModelRecords,
+    why: extra.why,
+    ...extra,
+  }, needs);
+}
 
 /**
  * 收集「候选动作」：各分支照常按数据产候选，正向动作带 _needs（依赖节），由入口总闸统一裁定产不产。
@@ -235,6 +300,8 @@ function collectCandidates(situation) {
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
+  // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
+  const nowMs = Date.parse(situation.at || '') || 0;
   let reworkThisRound = 0;
   const policy = resolveCommanderPolicy(situation.commanderPolicy);
   const enabledIds = situation.routingModels;
@@ -284,7 +351,11 @@ function collectCandidates(situation) {
       // （labelNames 返回 null → 不进 ready，整节报 kind:'unscanned'），所以走到这一步的 null
       // 一律是「查过、确实没这个标」，与「没查成」在出口上分得开。
       if ((model || reviewer) && (!model || !reviewer)) {
-        // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
+        // #971：半标且选型能推出唯一跨厂值 → 自己补，不再喊给空气。推不出仍报帅（查不到 ≠ 猜一个）。
+        const filled = maybeAddLabel(issue, situation, {
+          why: `#${n} 半标，补唯一跨厂标签（不猜）`,
+        }, N['add-label']);
+        if (filled) { out.push(filled); continue; }
         out.push(withNeeds(esc(`#${n} 已消歧，但派工标只打了一半：有 ${model ? 'model/' : 'reviewer/'}、缺 ${!model ? 'model/' : 'reviewer/'}，不猜——报帅补标签`, {
           reason: 'missing-labels', issue: n, title: issue?.title || '',
         }), N.dispatch));
@@ -307,9 +378,48 @@ function collectCandidates(situation) {
     }
   }
 
-  // ② review-pending 入队 → attach-reviewer（#815）
+  // ② review-pending 入队 → 首次 attach-reviewer；票还在且有上次尝试账 → retry-drain（#971）
+  // 走到重试分支本身就是「上次没成」的证据（派了 ≠ 成了）。宽限期内不重发；试满 escalate。
+  // 队列自己不认领存活，票就永远不死：PR 合了/关了，票还在，drain 永远消不掉，
+  // tries 打满后每一轮都开一张 [待拍板] 单。实咬 2026-09-06：#970/#972/#983 合并后
+  // 仍被开单，17 张噪音单全从这里来。存活判据只在 github 真扫到时才成立——
+  // 没扫到时 openPrs 是空集，把全部活票判成死票正是最坏的剪法。
+  // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
+  // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
+  // 那时「不在列表里」不再是死票的证据，一张都不剪。
+  const PR_WINDOW = 100;
+  const prList = gh.prs || [];
+  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
+  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
+    if (ghScanned && !openPrs.has(Number(it.pr))) {
+      out.push(withNeeds({
+        kind: 'reap-ticket', pr: it.pr,
+        why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
+      }, N['reap-ticket']));
+      continue;
+    }
+    const drain = validateRetryDrain({
+      pr: it.pr,
+      queue: rp.items,
+      ledger: situation.drainLedger || {},
+      nowMs,
+    });
+    if (drain.ok) {
+      out.push(withNeeds({
+        kind: 'retry-drain', pr: it.pr, tries: drain.tries, stateKey: drain.stateKey,
+        queue: rp.items,
+        why: `PR #${it.pr} 上次 drain 没成（票还在队列），重试第 ${drain.tries} 次`,
+      }, N['retry-drain']));
+      continue;
+    }
+    if (drain.code === 'grace') continue;
+    if (drain.code === 'exhausted') {
+      out.push(withNeeds(esc(drain.error, { reason: 'drain-exhausted', pr: it.pr, tries: drain.tries }), N['retry-drain']));
+      continue;
+    }
     out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
   }
 
@@ -375,22 +485,54 @@ function collectCandidates(situation) {
       }
       continue;
     }
-    // 判过、但当前 head 上一条判定都没有 ⇒ 工人推了新 head 而没人叫审官复审。
-    // 2026-09-05 实咬：#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
-    // 于是「按当前 head 重算」把红清零 → 上面不派返工、下面不走合并，这一格空着，PR 就永远挂着。
-    // 这十小时里「复审推进」全是主会话手工做的。补上：写一张复审待办票，drain 自己会消费
-    //（缺士兵树时它走 reviewer-create 快马路，一 PR 一审官的闸在那边，不会建出第二张审官卡）。
-    if (a.judgedTotal > 0 && a.atHead === 0) {
-      const rrKey = `rereview:${pr.number}@${a.head}`;
-      if (!reworkDispatched[rrKey]) {
-        out.push(withNeeds({
-          kind: 'rereview', pr: pr.number, head: a.head,
-          issue: attributedIssueNumber(pr),
-          reviewer: labelValue((gh.issues || []).find((i) => i && i.number === attributedIssueNumber(pr)), 'reviewer/'),
-          stateKey: rrKey,
-          why: `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审`,
-        }, N['attach-reviewer']));
+    // 当前 head 上一条判定都没有 ⇒ 要审官。历史上审过（复审）和从没审过（首审）是同一格，
+    // 别拆成两条规则：判据都是「当前 head 缺判定」，做法都是写一张复审待办票交给 drain。
+    //
+    // 2026-09-05 实咬两次，两次都是「记账记错了对象」：
+    //  一、#890/#893/#896/#905 的红全打在旧 commit 上，工人早改完推了新 head，
+    //     「按当前 head 重算」把红清零 → 不派返工也不走合并，这一格空着，PR 挂了 10 小时。
+    //  二、补上复审票之后仍然卡死：账本记的是「票写出去了」，可审官起来就死（裸 pi 落错 provider 401），
+    //     判定一条没落，而 `if (!reworkDispatched[rrKey])` 把这张 PR 永久挡在门外——
+    //     #894/#899/#905 的票 04:22 就"派成功"了，7 小时后当前 head 判定仍是 0，没有任何东西会重试。
+    //     这与同日 agent-stall-watch 换人账本犯的是同一个病（失败和成功记同一条账）。
+    //
+    // 所以这里不记 ok：**走到这个分支本身就是「上一次没落地」的证据**（判定真落了 a.atHead 就 > 0，
+    // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
+    // 试满仍无判定 ⇒ 停手报帅，不死循环。
+    if (a.atHead === 0) {
+      // #971：缺 reviewer/ 时先补标签。等宽限期不会让标签自己长出来；
+      // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。
+      const reviewer = reviewerLabelFor(gh, pr);
+      if (!reviewer) {
+        const filled = maybeAddLabel(attributedIssueOf(gh, pr), situation, {
+          pr: pr.number,
+          why: `PR #${pr.number} 要叫审官，但署名单缺 reviewer/——补唯一跨厂标签`,
+        }, N['add-label']);
+        if (filled) { out.push(filled); continue; }
       }
+      const rrKey = `rereview:${pr.number}@${a.head}`;
+      const prev = reworkDispatched[rrKey];
+      const tries = Number(prev?.tries) || 0;
+      const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
+      if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
+      const firstRound = a.judgedTotal === 0;
+      if (tries >= MAX_REREVIEW_TRIES) {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+          { reason: 'rereview-exhausted', pr: pr.number, head: a.head, tries },
+        ), N['attach-reviewer']));
+        continue;
+      }
+      out.push(withNeeds({
+        kind: 'rereview', pr: pr.number, head: a.head,
+        issue: attributedIssueNumber(pr),
+        reviewer,
+        stateKey: rrKey,
+        tries: tries + 1,
+        why: firstRound
+          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${a.head.slice(0, 8)} 没人审——叫审官`
+          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+      }, N['attach-reviewer']));
       continue;
     }
     // 当前 head 上最后一条判别态是红 → 派一个返工工人（#931：删掉「唤大脑翻译返工方向」整层）。
@@ -424,6 +566,11 @@ function collectCandidates(situation) {
     const rModel = labelValue(rIssue, 'model/');
     const rReviewer = labelValue(rIssue, 'reviewer/');
     if (!rModel || !rReviewer) {
+      const filled = maybeAddLabel(rIssue, situation, {
+        pr: pr.number,
+        why: `PR #${pr.number} 要返工，署名 issue #${issueNo} 半标——补唯一跨厂标签`,
+      }, N['add-label']);
+      if (filled) { out.push(filled); continue; }
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
         reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
       }), N.rework));
@@ -499,11 +646,16 @@ export function decide(situation = {}) {
   const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   const candidates = collectCandidates(situation);
   const actions = [];
+  const openLedger = situation.openIssueLedger || {};
   for (const cand of candidates) {
     const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
     const missing = needs.filter((s) => !situation[s]?.scanned);
     const { _needs, ...clean } = cand;
-    if (missing.length === 0) actions.push(clean);
+    if (missing.length === 0) {
+      // #971：能转成 open-issue 的 escalate 当场转；已开过返回 null；转不成保持原动作。
+      const next = escalateToOpenIssue(clean, { ledger: openLedger });
+      if (next) actions.push(next);
+    }
     // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条
   }
   // 入口总闸：有节没查成 → 一条合并 escalate，列全缺的节。没查成 ≠ 空态势，必须 fail-visible。
