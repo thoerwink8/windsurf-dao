@@ -33,3 +33,18 @@ if g diff --name-only "$before" "$after" | grep -qE "$BOT_PATHS"; then
   sudo -n /usr/bin/systemctl try-restart feishu-triage || echo "机器人重启没成（单元缺失或没权限），代码已更新、进程还跑旧码"
   echo "飞书机器人代码有变，已请求重启让它吃到新码"
 fi
+
+# 拉到新码之后重接家目录：新加的 skill、改过的 pi 扩展、动过的全局约定，
+# 光 git pull 是不会生效的——它们的落点在 ~/.claude 和 ~/.pi，不在仓里。
+# 2026-09-05 实咬：ask-gate skill 合进 master、服务器 5 分钟就拉到了，
+# 但 ~/.claude/skills 里没有它的链接，服务器 dao-check 当场红（server-check ⑪），
+# 而没有任何东西会自己把它接上——每加一个 skill 就要人上服务器补一次。
+# onboard 幂等，没漂移时只打一行「复查全绿」。
+# 失败不阻断本轮（机器人吃新码更急），但要在 journal 里说清是「接了」还是「没接成」；
+# 真正的报警面是 dao-check 的 skill 发现面硬闸，它红了 server-check ⑪ 就红。
+if out=$(cd "$REPO" && node scripts/onboard.mjs 2>&1); then
+  echo "家目录接线：已跑 onboard —— $(echo "$out" | tail -n 1)"
+else
+  echo "家目录接线：onboard 没跑成（退出码 $?），家目录可能还停在旧码上——去看 dao-check 的 skill 发现面"
+  echo "$out" | tail -n 5
+fi

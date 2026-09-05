@@ -29,7 +29,7 @@ Group=orca
 # NoNewPrivileges 会连 sudo 一起挡掉，所以这里不能开；用 sudoers 收窄到单条命令代替。
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/orca/windsurf-dao /home/orca/.dao /tmp
+ReadWritePaths=/home/orca/windsurf-dao /home/orca/.dao /home/orca/.claude /home/orca/.pi /tmp
 PrivateTmp=false
 ExecStart=/bin/bash /home/orca/windsurf-dao/scripts/server-sync.sh
 StandardOutput=journal
