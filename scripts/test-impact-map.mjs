@@ -14,14 +14,28 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { affectedTests, buildMap, filesFromCoverage, IGNORED_IN_MAP, mapHealth, MAP_VERSION } from './lib/test-impact.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
-export const MAP_PATH = join(REPO_ROOT, 'tests', 'impact-map.json');
+
+// 地图是**本机派生数据，不进 git**（2026-09-06 用户拍板，照行业通行做法改回来）。
+//
+// 首版提交进了仓里，两条都踩：
+//  · Nx/Bazel 提交的是「声明」（BUILD 文件），依赖图每次现算；Datadog/Azure 的覆盖率式
+//    TIA 确实要存，但存在服务端/流水线产物里，键在基线分支的那次跑，**不在版本库**。
+//  · 更打脸的是本仓自己的判例：`gen-index.mjs` 开头写着「MEMORY.md 是这个仓唯一的
+//    并发冲突点——两位主帅各写各的不会撞，撞的永远是这个共用索引」。
+//    66KB 的派生 JSON 提交进去就是第二个，而且它没法人工合并。
+//
+// 落 `~/.dao/test-impact/`，与 provider-health.json / preflight / ledger 同类。
+// CI 是全新 clone，没有地图 ⇒ affected 自动退全量——**这正是已拍板的分层**（CI 全量、本地快档），
+// 不需要额外机制去保证 CI 拿到地图。
+export const MAP_PATH = process.env.DAO_IMPACT_MAP
+  || join(homedir(), '.dao', 'test-impact', 'map.json');
 
 export function listTests(root = REPO_ROOT) {
   const dir = join(root, 'tests');

@@ -139,7 +139,6 @@ import {
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
-import { classifyDurations } from './lib/check-budget.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -290,8 +289,13 @@ function selectSuites(allSuites) {
   return r.tests.map(t => t.replace(/^tests\//, ''));
 }
 
+// 地图是本机派生数据，落 ~/.dao/test-impact/（不进 git，理由见 test-impact-map.mjs 头部）。
+// CI 是全新 clone、没有地图 ⇒ affected 自动退全量，这正是已拍板的分层。
+function impactMapPath() {
+  return process.env.DAO_IMPACT_MAP || join(homedir(), '.dao', 'test-impact', 'map.json');
+}
 function readImpactMap() {
-  const p = join(ROOT, 'tests', 'impact-map.json');
+  const p = impactMapPath();
   if (!existsSync(p)) return null;
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
 }
@@ -303,7 +307,8 @@ function checkImpactMapHealth() {
   const all = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort().map(f => `tests/${f}`);
   const map = readImpactMap();
   if (!map) {
-    fail('影响地图不存在', '跑 node scripts/test-impact-map.mjs build 建图（没有它 --affected 只能退全量）', 'tests/impact-map.json');
+    // 没有地图不是红：CI / 新机本来就没有，affected 会退全量，是安全的降级。
+    skip(`影响地图不在本机（${impactMapPath()}）——--affected 会退全量；要用快档先跑 node scripts/test-impact-map.mjs build`);
     return;
   }
   let dist = null;
@@ -363,20 +368,31 @@ async function runTests() {
       fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
     }
   }
-  // 耗时预算（棘轮）：新套必须快，老套只许更快。判据与来历见 lib/check-budget.mjs。
-  // 并行跑出来的墙钟会互相拖慢，所以只在**串行等价**的意义上判——池宽内的抖动由天花板的
-  // 1.6 倍余量吸收；真回归（成倍变慢）照样抓得到。
-  const durations = results.map(({ f, ms }) => ({ file: f, ms }));
-  const b = classifyDurations(durations);
-  if (b.state === 'ok') green(`测试耗时预算：${b.detail}`);
-  else if (b.state === 'red') fail('测试耗时超预算', '新机制默认要毫秒级；变慢的先查回归', b.detail);
-  else fail('测试耗时没查成', '拿不到墙钟——不是「都很快」', b.detail);
-
+  reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
   reportNetworkViolations();
   // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
   // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
   if (!process.argv.includes('--affected')) checkImpactMapHealth();
   checkSpawnBudget();
+}
+
+/**
+ * 测试耗时：**只报趋势，不当闸**（2026-09-06 用户拍板删掉墙钟硬闸）。
+ *
+ * 试过硬闸，做不到它要做的事：这台 6 核机 load average 5+，同一套两次跑差一倍
+ * （agent-stall-watch 3.7s / 7.7s）。为了不误报把阈值放到 3 倍，而 3 倍的闸
+ * **抓不到真正会发生的事**——新检查从 3s 慢慢爬到 8s 它一声不吭，只能抓「一次性慢 3 倍」
+ * 那种本来就显眼的情况。给人「有闸在管」的错觉，实际管不住，比没有更糟。
+ *
+ * 行业对性能也是这个路子：趋势跟踪，硬闸留给确定性的量——我们的确定性量是 spawn 预算。
+ */
+function reportTestDurations(durations) {
+  const measured = durations.filter(d => Number.isFinite(Number(d.ms)));
+  if (measured.length === 0) return;   // 裁剪后 0 套是常态，不报
+  const total = measured.reduce((s, d) => s + d.ms, 0);
+  const top = [...measured].sort((a, b) => b.ms - a.ms).slice(0, 3)
+    .map(d => `${d.file} ${(d.ms / 1000).toFixed(1)}s`).join('、');
+  green(`测试耗时：${measured.length} 套合计 ${(total / 1000).toFixed(1)}s（墙钟，受机器负载影响；最慢：${top}）`);
 }
 
 /** 测试里起子进程的总量闸——「TIA 第二刀没做完」的报警器（scripts/lib/spawn-budget.mjs）。 */

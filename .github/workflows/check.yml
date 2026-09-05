@@ -69,22 +69,7 @@ jobs:
           # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。
           GH_TOKEN: ${{ github.token }}
 
-      # 每日 cron 那趟顺手重建影响地图并检查漂移（2026-09-06 用户拍板保留每日全量）。
-      # 本地 land 走 --affected 跳过无关测试，而 affected 是拿这张地图算的——
-      # 地图漂了就会静默漏跑。重建放在这里是白捡：cron 那趟本来就要跑全部测试。
-      # **只报不改**：CI 不回写仓库（自动 commit 会和在途 PR 打架）；
-      # 有差异就红，由人跑 `node scripts/test-impact-map.mjs build` 重建后提交。
-      - name: 影响地图漂移检查（仅每日全量）
-        if: github.event_name == 'schedule'
-        shell: bash
-        run: |
-          set -e
-          cp tests/impact-map.json /tmp/impact-map.before.json
-          node scripts/test-impact-map.mjs build
-          if ! diff -q <(jq -S .entries /tmp/impact-map.before.json) <(jq -S .entries tests/impact-map.json) >/dev/null; then
-            echo "::error::影响地图漂了——仓里那份和实测重建的对不上，--affected 会静默漏跑测试。"
-            echo "修：本地跑 node scripts/test-impact-map.mjs build 并提交 tests/impact-map.json"
-            diff <(jq -S .entries /tmp/impact-map.before.json) <(jq -S .entries tests/impact-map.json) | head -40 || true
-            exit 1
-          fi
-          echo "影响地图与实测一致"
+      # 影响地图（TIA）不进 git，是每台机器自己的派生数据——所以 CI 这里**没有地图**，
+      # `--affected` 会自动退全量，正是已拍板的分层（CI 全量、本地快档）。
+      # CI 不需要建图，也不需要比对漂移：本地地图的时效由它自己的健康度判据管
+      # （落后 HEAD 太多即报），CI 的职责只是那道全量的网。
