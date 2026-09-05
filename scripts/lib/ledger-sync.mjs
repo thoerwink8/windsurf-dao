@@ -419,7 +419,7 @@ export function parseRemoteBundle(stdout, { requested } = {}) {
 
 /** 默认执行器：spawnSync。测试注入假的，不碰网。 */
 export function defaultRun(cmd, args, { input, timeout = 120000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', input, timeout, maxBuffer: 256 * 1024 * 1024 });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', input, timeout, maxBuffer: 256 * 1024 * 1024, windowsHide: true });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
