@@ -254,7 +254,10 @@ function checkDisplay() {
 
 /** 嵌套跑仓库自检：只取退出码，不解析它的输出（不复用被检查对象的解析逻辑）。 */
 function checkRepoSelfCheck() {
-  const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'dao-check.mjs')], { timeout: 600000 });
+  // 预算 180s 不是 600s：2026-09-06 实咬——600s 的嵌套预算把调用方拖过它自己的超时被 SIGKILL，
+  // 外面只看到「卡 10 分钟没输出」。dao-check 正常 ~80s（其中 70s 是 dao.test.js，缩时另有单）；
+  // 超 180s 本身就是要报的病，不是要等的事。
+  const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'dao-check.mjs')], { timeout: 180000 });
   if (!r.probed) return { state: UNKNOWN, detail: `dao-check 没跑成：${r.reason}` };
   if (r.code !== 0) return { state: RED, detail: `dao-check 退出 ${r.code}（跑 node scripts/dao-check.mjs 看红项）` };
   return { state: OK, detail: 'dao-check 退出 0' };
@@ -1335,12 +1338,16 @@ function main(argv = process.argv.slice(2)) {
   const results = [];
   for (const [name, fn] of CHECKS) {
     let r;
+    const t0 = Date.now();
     try {
       r = fn();
     } catch (e) {
       r = { state: UNKNOWN, detail: `检查自己抛了：${String(e.message).slice(0, 160)}` };
     }
-    results.push({ name, state: r.state, detail: r.detail || '', ...(r.count === undefined ? {} : { count: r.count }) });
+    // 每项记耗时：慢死和快通必须分得开——2026-09-06 实咬：⑪ 嵌套 dao-check 吃了几百秒，
+    // 外层看只是「没输出」，撞上调用方超时被 SIGKILL，从外面完全看不出是哪项在耗。
+    const ms = Date.now() - t0;
+    results.push({ name, state: r.state, ms, detail: r.detail || '', ...(r.count === undefined ? {} : { count: r.count }) });
   }
 
   const reds = results.filter((r) => r.state === RED);
@@ -1362,7 +1369,9 @@ function main(argv = process.argv.slice(2)) {
   else {
     for (const r of results) {
       const mark = r.state === OK ? '✓' : r.state === RED ? 'X' : '?';
-      console.log(`  ${mark}  ${r.name} —— ${r.detail}`);
+      // 超 30s 的项前面加 ⚠——慢死和快通必须一眼分得开
+      const slow = r.ms >= 30000 ? ` ⚠${(r.ms / 1000).toFixed(0)}s` : r.ms >= 3000 ? ` ${(r.ms / 1000).toFixed(1)}s` : '';
+      console.log(`  ${mark}  ${r.name}${slow} —— ${r.detail}`);
     }
     console.log(`\nserver check: ${verdict}（${payload.ok} 通 / ${payload.red} 红 / ${payload.unknown} 没查成）`);
   }
