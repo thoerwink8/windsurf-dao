@@ -599,8 +599,11 @@ describe('dao 开工验证', () => {
         proofOnce: unproven,
         timeoutMs: 50, intervalMs: 5, sleep: c.sleep, now: c.now, label: '审官',
       });
-      assert.ok(r.ok === false && r.state === 'unsubmitted-paste' && r.pasteSubmitted === false && reads > 1 && r.elapsedMs >= 50,
-        '短超时等到才红  →  ' + JSON.stringify({ r, reads }));
+      assert.equal(r.ok, false);
+      assert.equal(r.state, 'unsubmitted-paste');
+      assert.equal(r.pasteSubmitted, false);
+      assert.ok(reads > 1, JSON.stringify({ r, reads }));
+      assert.ok(r.elapsedMs >= 50, JSON.stringify({ r, reads }));
     });
 
     await t.test('变异：同一套粘贴把超时改回 5000，轮数必须变多（注入真生效）', () => {
@@ -620,8 +623,9 @@ describe('dao 开工验证', () => {
         proofOnce: unproven,
         timeoutMs: 5000, intervalMs: 5, sleep: long.sleep, now: long.now, label: '审官',
       });
-      assert.ok(longR.state === 'unsubmitted-paste' && longReads > shortReads * 10 && longR.elapsedMs >= 5000,
-        '长超时必须多转  →  ' + JSON.stringify({ shortReads, longReads, elapsed: longR.elapsedMs }));
+      assert.equal(longR.state, 'unsubmitted-paste');
+      assert.ok(longReads > shortReads * 10, JSON.stringify({ shortReads, longReads }));
+      assert.ok(longR.elapsedMs >= 5000, JSON.stringify({ elapsed: longR.elapsedMs }));
     });
 
     await t.test('waitAndVerify 空屏：短超时等到才失败，不是立刻红', () => {
@@ -631,8 +635,9 @@ describe('dao 开工验证', () => {
         readOnce: () => { reads += 1; return { text: '' }; },
         timeoutMs: 40, intervalMs: 10, sleep: c.sleep, now: c.now,
       });
-      assert.ok(r.ok === false && r.reason === '读了是空的' && reads > 1,
-        '空屏等到才失败  →  ' + JSON.stringify({ r, reads }));
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, '读了是空的');
+      assert.ok(reads > 1, JSON.stringify({ r, reads }));
     });
 
     await t.test('waitForOutJson 生产默认仍是 60s（#565 真派工不传 timeoutMs）', () => {
@@ -647,7 +652,8 @@ describe('dao 开工验证', () => {
       const r = waitForOutJson(missing, {
         timeoutMs: 30, stepMs: 10, now: c.now, sleep: (ms) => { naps += 1; c.sleep(ms); },
       });
-      assert.ok(r === null && naps > 1, '文件不在等到才放弃  →  ' + JSON.stringify({ r, naps }));
+      assert.equal(r, null);
+      assert.ok(naps > 1, JSON.stringify({ r, naps }));
     });
   });
 

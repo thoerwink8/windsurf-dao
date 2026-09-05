@@ -603,17 +603,19 @@ describe('dao 派工硬闸', () => {
     let p = {};
     try { p = JSON.parse((dry.stdout || '').trim().split(/\r?\n/).pop()); } catch { p = { raw: dry.stdout }; }
     await t.test('dry-run 退出 0', () => {
-      assert.ok(dry.status === 0 && p.ok === true && p.dryRun === true, 'dry-run 退出 0  →  ' + JSON.stringify(p).slice(0, 300));
+      assert.equal(dry.status, 0, JSON.stringify(p).slice(0, 300));
+      assert.equal(p.ok, true);
+      assert.equal(p.dryRun, true);
     });
     await t.test('dry-run 声明 skipped，不假装探过', () => {
-      assert.ok(p.preflight && p.preflight.skipped === true && /dry-run/.test(String(p.preflight.why || (p.preflight.reasons || []).join(','))),
-        'dry-run 不探网  →  ' + JSON.stringify(p.preflight));
+      assert.equal(p.preflight && p.preflight.skipped, true, JSON.stringify(p.preflight));
+      assert.match(String(p.preflight.why || (p.preflight.reasons || []).join(',')), /dry-run/);
     });
     await t.test('dao.mjs dry-run 默认不调 preflightWorkerSlate（要预览加 --preflight）', () => {
       const src = fs.readFileSync(CLI, 'utf8');
       const dryFn = src.slice(src.indexOf('if (args.dryRun) {'), src.indexOf('const queueDir'));
-      assert.ok(/dry-run 默认不探/.test(dryFn) && /args\.preflight === true/.test(dryFn),
-        'dry-run 默认不探、显式 --preflight 才探  →  ' + dryFn.slice(0, 280));
+      assert.match(dryFn, /dry-run 默认不探/);
+      assert.match(dryFn, /args\.preflight === true/);
     });
   });
 });
