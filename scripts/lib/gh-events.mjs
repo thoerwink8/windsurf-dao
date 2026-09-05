@@ -143,6 +143,15 @@ export const UNKNOWN = 'unknown';
 /** 刚起步时还没来得及收第一个 ping，别报红。 */
 export const STARTUP_GRACE_MS = 3 * 60 * 1000;
 
+/**
+ * 一小时内重连几次算「在抽风」。
+ * 这一格补的是自证 ping 盖不住的那种坏法：子进程反复断开重连，
+ * 每次能连上几分钟——ping 照样偶尔回得来，判据看着是绿的，
+ * 而每次断开的窗口里发生的事件是**真丢了**（GitHub 不会补投）。
+ * 6 次/小时 = 平均 10 分钟断一次，已经和 ping 周期同量级，再高就盖不住了。
+ */
+export const RESTART_CHURN_PER_HOUR = 6;
+
 const ageMin = (ms) => Math.round(ms / 60000);
 
 export function classifyGhEventBridge({
@@ -195,6 +204,17 @@ export function classifyGhEventBridge({
     };
   }
 
+  // 长连接在抽风：ping 偶尔回得来所以上面几条都放行，但每次断开窗口里的事件是真丢了。
+  const exits = Array.isArray(state.forward?.recentExits) ? state.forward.recentExits : [];
+  const churn = exits.map(at).filter((t) => t != null && now - t <= 60 * 60 * 1000).length;
+  if (churn >= RESTART_CHURN_PER_HOUR) {
+    return {
+      state: RED,
+      detail: `事件桥的长连接一小时内断了 ${churn} 次——ping 还偶尔回得来，所以别的判据都放行，`
+        + '但每次断开窗口里的事件 GitHub 不会补投，等于在丢事；journalctl -u dao-gh-events -n 100',
+    };
+  }
+
   // 收到事件却叫不动单元：多半 sudoers 没装。这是「事件到了但没用」，比不通更容易被忽略。
   const broken = Object.entries(state.triggers || {})
     .filter(([, t]) => t && Number(t.fails) > 0)
@@ -213,6 +233,7 @@ export function classifyGhEventBridge({
     state: OK,
     detail: `事件桥在守着（自证 ping ${ageMin(pingAge)} 分钟前刚回来）；`
       + `收到 ${Number(c.received) || 0} 条、触发 ${Number(c.routed) || 0} 次`
+      + (churn ? `，近一小时重连 ${churn} 次` : '')
       + (lastEvt
         ? `，最近一条 ${ageMin(now - lastEvt)} 分钟前（${state.lastEvent?.type}/${state.lastEvent?.action || '-'}）`
         : '，至今没有真事件——ping 通就说明是真的没事，不是断了'),

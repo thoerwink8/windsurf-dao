@@ -209,6 +209,31 @@ describe('三态：ok / red / unscanned', () => {
     assert.equal(classifyGhEventBridge({ probed: true, state: {} }).state, 'unknown', '没有心跳时刻就判不了死活');
   });
 
+  // 长连接自己会断，而「断了」和「没有事发生」长得一模一样——这单最该防的形状。
+  // 断得干脆（ping 收不回来）上面那条已经拦下了；难的是**断断续续**：
+  // 每次能连上几分钟，ping 照样偶尔回得来，所有判据都放行，而断开窗口里的事件真丢了
+  // （GitHub 不补投）。所以另立一格看重连频率。
+  it('故意违规样本：长连接一小时断 8 次——ping 还回得来，也必须红', async () => {
+    const { classifyGhEventBridge } = await LIB;
+    const exits = [];
+    for (let i = 1; i <= 8; i++) exits.push(ago(i * 6 * MIN));
+    const r = classifyGhEventBridge({
+      probed: true, now: NOW, state: healthy({ forward: { restarts: 8, recentExits: exits } }),
+    });
+    assert.equal(r.state, 'red', 'ping 通不代表没丢事——断开窗口里的事件 GitHub 不会补投');
+    assert.match(r.detail, /断了 8 次|丢事/);
+  });
+
+  it('反证：偶尔断一两次不算抽风，否则这格会天天红成噪音', async () => {
+    const { classifyGhEventBridge } = await LIB;
+    const r = classifyGhEventBridge({
+      probed: true, now: NOW,
+      state: healthy({ forward: { restarts: 9, recentExits: [ago(5 * MIN), ago(50 * MIN), ago(5 * 60 * MIN)] } }),
+    });
+    assert.equal(r.state, 'ok', '近一小时只断了 2 次，且累计 9 次是几个月攒的——不是抽风');
+    assert.match(r.detail, /重连 2 次/, '虽然判绿，也要把重连次数摆出来给人看见');
+  });
+
   it('故意违规样本：事件收到了却叫不动单元（sudoers 没装）——红，且点名是哪个', async () => {
     const { classifyGhEventBridge } = await LIB;
     const r = classifyGhEventBridge({

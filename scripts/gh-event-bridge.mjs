@@ -165,7 +165,9 @@ function runBridge({ dryRun, once }) {
     lastEvent: null,
     counts: { received: 0, routed: 0, ignored: 0, malformed: 0, pings: 0 },
     triggers: {},
-    forward: { restarts: 0, lastExitAt: null, lastExitCode: null },
+    // recentExits 存的是断开时刻，不是累计次数：跑了三个月自然会断过几次，
+    // 「在抽风」要看的是**近一小时断了几次**。留最近 20 条够算，不留成日志。
+    forward: { restarts: 0, lastExitAt: null, lastExitCode: null, recentExits: [] },
   };
   saveState(state);
 
@@ -248,6 +250,7 @@ function runBridge({ dryRun, once }) {
     child.on('exit', (code) => {
       state.forward.lastExitAt = nowIso();
       state.forward.lastExitCode = code;
+      state.forward.recentExits = [...(state.forward.recentExits || []), nowIso()].slice(-20);
       saveState(state);
       if (stopping) return;
       // forward 掉了就重连。**心跳照旧在跳**，所以光看心跳看不出通道断——
