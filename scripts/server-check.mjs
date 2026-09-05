@@ -1070,7 +1070,14 @@ function checkUnitDrift() {
 
 const SERVICE_USER = (() => { try { return userInfo().username; } catch { return process.env.USER || '<服务用户>'; } })();
 
-/** 纯函数：把扫描结果判成三态。扫不成 ≠ 干净。 */
+/**
+ * 纯函数：把扫描结果判成三态。扫不成 ≠ 干净。
+ *
+ * `skipped` 是「扫到了但进不去的子目录数」：find 对不可读子目录会打 stderr 并
+ * 以 exit 1 收尾，而测试沙箱**故意**造 0000 目录（`session-audit` 的 `ledger-ro`
+ * 就是），所以这条一定会发生。把它当「没查成」会让这一项周期性报噪音，
+ * 而噪音久了就没人看；当「干净」又会藏掉真污染。所以照实说：绿，但注明漏了几处。
+ */
 export function classifyRootOwned(scans) {
   if (!Array.isArray(scans) || scans.length === 0) {
     return { state: UNKNOWN, detail: '一个路径都没扫——没查成，不是「干净」' };
@@ -1091,7 +1098,9 @@ export function classifyRootOwned(scans) {
     };
   }
   const total = scans.length;
-  return { state: OK, detail: `${total} 个路径扫完，0 个 root 属主文件（服务用户 ${SERVICE_USER} 全握有写权）` };
+  const skipped = scans.reduce((n, s) => n + (s.skipped || 0), 0);
+  const tail = skipped ? `，另有 ${skipped} 个子目录进不去没扫（多半是测试故意造的只读目录）` : '';
+  return { state: OK, detail: `${total} 个路径扫完，0 个 root 属主文件（服务用户 ${SERVICE_USER} 全握有写权）${tail}` };
 }
 
 function checkRootOwnedInHome() {
@@ -1105,12 +1114,21 @@ function checkRootOwnedInHome() {
   ];
   const scans = targets.map((path) => {
     if (!existsSync(path)) return { path, scanned: true, count: 0 };
-    // -print 逐行输出；退出码非 0 说明扫途中出过错，此时行数不可信
     const r = run('find', [path, '-user', 'root', '-print'], { timeout: 60000 });
     if (!r.probed) return { path, scanned: false, reason: r.reason };
-    if (r.code !== 0) return { path, scanned: false, reason: `find exit ${r.code}` };
     const count = String(r.stdout || '').split('\n').filter((l) => l.trim()).length;
-    return { path, scanned: true, count };
+    // find 以 exit 1 收尾只说明「有东西没进去」，不说明扫出来的那些不可信。
+    // 逐行分辨：`Permission denied` 是可容忍的漏扫（记数照说），别的 stderr 才是真没查成。
+    // 先剔掉「回不到原 cwd」：那是调用方的 cwd 不可读（在 /root 里 sudo -u orca 跑就会），
+    // 与被扫路径无关，既不是漏扫也不是没查成。
+    const errs = String(r.stderr || '').split('\n')
+      .filter((l) => l.trim() && !/Failed to restore initial working directory/.test(l));
+    const denied = errs.filter((l) => /Permission denied/.test(l));
+    const other = errs.filter((l) => !/Permission denied/.test(l));
+    if (r.code !== 0 && other.length) {
+      return { path, scanned: false, reason: `find exit ${r.code}：${other[0].slice(0, 80)}` };
+    }
+    return { path, scanned: true, count, skipped: denied.length };
   });
   return classifyRootOwned(scans);
 }
