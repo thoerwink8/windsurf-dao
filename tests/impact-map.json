@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "builtAt": "2026-09-05T18:34:53.708Z",
-  "head": "d3f8af8ae7cb9cd6cd2e1e889acb295bffa690b8",
+  "builtAt": "2026-09-05T18:53:44.473Z",
+  "head": "5001bc3f3780187b2a955b0b305e4b2eb9ea4c75",
   "entries": {
     "tests/agent-stall-watch.test.js": [
       "scripts/agent-stall-watch.mjs",
@@ -163,6 +163,9 @@
     ],
     "tests/card-identity.test.js": [
       "scripts/lib/card-identity.mjs"
+    ],
+    "tests/check-budget.test.js": [
+      "scripts/lib/check-budget.mjs"
     ],
     "tests/close-issue.test.js": [
       "scripts/close-issues.mjs",

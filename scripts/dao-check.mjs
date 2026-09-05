@@ -139,6 +139,7 @@ import {
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
+import { classifyDurations } from './lib/check-budget.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -222,8 +223,9 @@ function runOneSuite(dir, f) {
     }
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
-    child.on('error', (e) => resolveOne({ f, status: 1, out: out + String(e && e.message ? e.message : e) }));
-    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, out }));
+    const t0 = Date.now();
+    child.on('error', (e) => resolveOne({ f, status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
+    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
 }
 
@@ -361,6 +363,15 @@ async function runTests() {
       fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
     }
   }
+  // 耗时预算（棘轮）：新套必须快，老套只许更快。判据与来历见 lib/check-budget.mjs。
+  // 并行跑出来的墙钟会互相拖慢，所以只在**串行等价**的意义上判——池宽内的抖动由天花板的
+  // 1.6 倍余量吸收；真回归（成倍变慢）照样抓得到。
+  const durations = results.map(({ f, ms }) => ({ file: f, ms }));
+  const b = classifyDurations(durations);
+  if (b.state === 'ok') green(`测试耗时预算：${b.detail}`);
+  else if (b.state === 'red') fail('测试耗时超预算', '新机制默认要毫秒级；变慢的先查回归', b.detail);
+  else fail('测试耗时没查成', '拿不到墙钟——不是「都很快」', b.detail);
+
   reportNetworkViolations();
   // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
   // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
