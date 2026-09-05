@@ -139,6 +139,7 @@ import {
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
+import { classifyAssertStyle } from './lib/assert-style.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -374,6 +375,31 @@ async function runTests() {
   // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
   if (!process.argv.includes('--affected')) checkImpactMapHealth();
   checkSpawnBudget();
+  checkAssertStyle();
+}
+
+/** 断言写法闸：新增的测试行里不许有复合 assert.ok（判据与来历见 lib/assert-style.mjs）。 */
+function checkAssertStyle() {
+  const { scanned, files } = changedFilesForAffected();
+  if (!scanned) { skip('断言写法：算不出本次改了哪些行（git 读不到）——没查成'); return; }
+  const testFiles = files.filter(f => /\.test\.(js|mjs|cjs)$/.test(f));
+  if (testFiles.length === 0) { green('断言写法：本次没改测试文件'); return; }
+
+  // 只取**新增**行：存量 1471 处复合断言不进判定面
+  const base = spawnSync('git', ['-C', ROOT, 'merge-base', 'HEAD', 'origin/master'], { encoding: 'utf8', windowsHide: true });
+  const ref = base.status === 0 ? (base.stdout || '').trim() : null;
+  const diffs = [];
+  for (const f of testFiles) {
+    const args = ref ? ['-C', ROOT, 'diff', '-U0', ref, '--', f] : ['-C', ROOT, 'diff', '-U0', '--', f];
+    const r = spawnSync('git', args, { encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) { skip(`断言写法：${f} 的 diff 没取到——没查成`); return; }
+    const added = (r.stdout || '').split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1));
+    diffs.push({ file: f, added });
+  }
+  const v = classifyAssertStyle(diffs);
+  if (v.state === 'ok') green(`断言写法：${v.detail}`);
+  else if (v.state === 'red') fail('新增了复合断言', '拆成最简条件，或改用 equal/deepEqual 让失败信息自带 diff（见 lib/assert-style.mjs）', v.detail);
+  else skip(`断言写法：${v.detail}`);
 }
 
 /**
