@@ -103,6 +103,10 @@ import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mj
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
+  judgeHarvest, inspectHarvestFixtures,
+  harvestLiveArgs, judgeHarvestCoverage, HARVEST_LIVE_LIMIT,
+} from './lib/harvest-check.mjs';
+import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
 import {
@@ -1403,6 +1407,8 @@ checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
 checkModelLabelNames();
+checkHarvestSamples();
+if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1678,6 +1684,64 @@ function checkDesignExamHarvestLive() {
     return;
   }
   green('盲考收卷纪律还在（起考轮盯产物收到完）');
+}
+
+// #888 回流闸：样本三态 + live（近 7 天已合并 PR 里的孤儿回流段）。
+function checkHarvestSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'harvest');
+  const readJson = (name) => {
+    try { return JSON.parse(readFileSync(join(dir, `${name}.json`), 'utf8')); } catch { return null; }
+  };
+  const r = inspectHarvestFixtures({ readJson });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '回流闸样本没查成' : '回流闸样本失去判别力',
+      '恢复 tests/fixtures/harvest/{red,ok,empty}.json：红必须判红、绿必须干净、空正文必须判没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`回流闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkHarvestLive() {
+  const since = new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10);
+  const got = runGhJson(harvestLiveArgs(since));
+  if (got.unscanned) {
+    fail('回流段 live 没查成', 'gh 可用再跑（没查成 ≠ 没有孤儿段）', got.error || '');
+    return;
+  }
+  // 覆盖面先判：条数摸到取数上限 = 结果可能被截断 = 没查成。
+  // 老版本硬编码 --limit 30，而近 7 天真实 merged PR 已 40 个（2026-09-04 实测），
+  // 被截掉的 10 个静默漏报，话面却报「近 7 天全量通过」——把「没查成」显示成「查过没事」。
+  const cov = judgeHarvestCoverage(got.array.length);
+  if (!cov.ok) {
+    fail(
+      '回流段 live 没查成（取数可能被截断）',
+      `把 HARVEST_LIVE_LIMIT（现 ${HARVEST_LIVE_LIMIT}）抬高或改分页取全；宁可报没查成，不许把部分扫描报成全量通过`,
+      cov.error || '',
+    );
+    return;
+  }
+  const v = judgeHarvest(got.array);
+  if (v.unscanned) {
+    fail('回流段 live 没查成', got.array.length ? '取到了 PR 但正文全空——检查 --json 字段与权限' : '', v.error || '');
+    return;
+  }
+  if (v.empty) {
+    parked(`回流段 live：近 7 天（${since} 起）没有已合并 PR，无从判断`);
+    return;
+  }
+  const problems = [...v.orphans, ...v.thin];
+  if (problems.length) {
+    fail(
+      `回流段没人接/不合规 ${problems.length} 处`,
+      '合并时收口官/帅要接单：段内回写「回流单：#N」或「已回流：<sha>」或「不回流：<原因>」；标题必须是独立的「## 回流」行（#888）',
+      problems.slice(0, 6).join(' '),
+    );
+    return;
+  }
+  green(`回流段 live：近 7 天 ${v.scanned} 个已合并 PR 全扫到（取数 ${cov.count}/上限 ${cov.limit}，未截断），回流段全有受理证据（${v.accepted.length} 条）`);
 }
 
 // §73 四轴腿表：样本三态（红/绿/空=没查成）+ live（合法性 + 与职责树交叉核；单轴裸奔只报不拦）。
