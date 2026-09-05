@@ -36,3 +36,22 @@ description: 问人闸——「什么时候该问用户、什么时候自己拍�
 ## 改判据
 
 改 `docs/release-policy.json` 本身就在 `human_holds` 的「改规则」里 ⇒ 必须问用户。判定代码在 `scripts/lib/ask-gate.mjs`（纯函数，`tests/ask-gate.test.js` 单测）；关键词从 JSON 现算，红线改一个字判据跟着改，不必动代码。
+
+## 挂在哪：实证结论（别再走一遍插件那条路）
+
+**挂随仓 `.claude/settings.json` 的 PreToolUse——插件目录那条路不响。**
+
+2026-09-05 实测：本 skill 按 `dao-mode` 的形做成了插件（`.claude-plugin/plugin.json` + `hooks/hooks.json`），
+宿主 `claude plugin details ask-gate` 报 `Status: ✔ loaded`、`Hooks (1) PreToolUse`——**但它一次都没响**。
+同形探针在无头会话里跑了 6 轮（PreToolUse 与 UserPromptSubmit、有无 matcher、临时目录与 skills 下真目录、
+连跑 3 个会话、带与不带跳过权限），哨兵文件一个字都没写。
+
+同一套环境下**随仓 `.claude/settings.json` 的 PreToolUse 真跑**（派工闸一直在那儿拦人）。
+改挂过去之后当场验通：一次真提问，注入文本进了上下文。
+
+推测差别在「新装的插件要交互式会话跑一次 `/reload-plugins` 才注册 hook」，但**没证实**——
+`hasTrustDialogAccepted` 与 `enabledPlugins` 两条都排除了（dao-mode 压根不在 enabledPlugins 里却照样响）。
+
+代价：随仓挂载**只在本仓生效**，别的项目里这道闸不响。要做到跨仓，得等插件那条路查清楚，
+或者把它写进全局 `~/.claude/settings.json`——而那个文件会被 cc-switch 覆写（memory `claude-settings-self-heal`），
+不是能随手改的地方。**这条限制是已知的，不是漏的。**
