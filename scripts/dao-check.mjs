@@ -86,11 +86,12 @@
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpus } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { runOrcaRaw } from './lib/orca-run.mjs';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
@@ -207,7 +208,12 @@ function runOneSuite(dir, f) {
     let out = '';
     let child;
     try {
-      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT });
+      // 测试期禁止出网（2026-09-06）：--import 预加载拦截器，NODE_OPTIONS 会继承给
+      // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
+      // 判据与来历见 tests/helpers/no-network.mjs 头部。
+      const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim() };
+      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -224,6 +230,12 @@ async function runTests() {
   if (!existsSync(dir)) {
     fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
     return;
+  }
+  // 禁网闸的账落仓外（检查器的输出不许落进自己会读的范围，否则报告变成下一轮输入）
+  if (!process.env.DAO_NO_NETWORK_LOG) {
+    const d = join(homedir(), '.dao', 'no-network');
+    if (!existsSync(d)) mkdirSync(d, { recursive: true });
+    process.env.DAO_NO_NETWORK_LOG = join(d, `${Date.now()}-${process.pid}.ndjson`);
   }
   const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
   if (suites.length === 0) {
@@ -253,6 +265,34 @@ async function runTests() {
       fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
     }
   }
+  reportNetworkViolations();
+}
+
+/** 读禁网闸的账：测试期有没有谁试图连外网。拦下不等于报警——调用方常把网络错吞了。 */
+function reportNetworkViolations() {
+  const log = process.env.DAO_NO_NETWORK_LOG;
+  if (!log) { fail('禁网闸没接上', '本次等于没查：runOneSuite 应设 DAO_NO_NETWORK_LOG 并挂 --import', ''); return; }
+  let lines = [];
+  if (existsSync(log)) {
+    try {
+      lines = readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+    } catch (e) {
+      fail('禁网闸的账读不了', '没查成，不是「没有违规」', String(e.message || e));
+      return;
+    }
+  }
+  if (lines.length === 0) { green('禁网闸：测试期 0 次外网连接尝试'); return; }
+  const byHost = new Map();
+  for (const v of lines) {
+    const k = `${v.host}:${v.port}`;
+    byHost.set(k, (byHost.get(k) || 0) + 1);
+  }
+  const who = [...byHost.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join('、');
+  fail(
+    `测试期有 ${lines.length} 次外网连接尝试`,
+    '单元测试不许打真实网络（慢+飘+不可复现）。注入假实现，或让被调的 CLI 默认不出网',
+    who + `｜首条 argv：${lines[0].argv || '未记'}`,
+  );
 }
 
 // ── ② skill 装载面 ──────────────────────────────────────────────────

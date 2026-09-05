@@ -955,14 +955,14 @@ export const VERBS = [
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight', 'preflight']);
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),

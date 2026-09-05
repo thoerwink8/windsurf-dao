@@ -1423,13 +1423,23 @@ async function cmdDispatch(args) {
       now,
     });
     // #842 派前探一针预览：起终端前按健康表排序 + 逐位真探（红换下一位 / 全红报帅停手）。
+    //
+    // **dry-run 默认不探**（2026-09-06 用户拍板）：探一次要打真网关、等 ~2.6s，而 dry-run 的语义是
+    // 「不做真事、只看计划」。实咬：这一针让 dao.test.js 跑 57s（全仓测试 80s 的大头），
+    // 且探针本身受网关排队影响会飘（#853），预览出来的结论未必是真派工时的结论。
+    // 要预览「探完会选谁」显式加 --preflight。真派工路径不受本开关影响，照探不误。
     let preflight = null;
-    try {
-      preflight = await preflightWorkerSlate({
-        slate: slatePack.slate, startIndex: slatePack.startIndex,
-        noPreflight: args.noPreflight === true, dispatchId: null, now,
-      });
-    } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
+    if (args.preflight === true) {
+      try {
+        preflight = await preflightWorkerSlate({
+          slate: slatePack.slate, startIndex: slatePack.startIndex,
+          noPreflight: args.noPreflight === true, dispatchId: null, now,
+        });
+      } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
+    } else {
+      // 不能留 null 或空对象——那会被读成「探过了、没事」。显式说没探。
+      preflight = { skipped: true, why: 'dry-run 默认不探（要预览加 --preflight）；真派工照探' };
+    }
     emit({ ok: true, dryRun: true, ...plan, disambiguation, dup, preflight });
   }
 
