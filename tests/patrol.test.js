@@ -134,8 +134,11 @@ describe('回头审巡检自己的提交', () => {
       run: runner({
         log: { ok: true, out: 'aaaaaaaa1111\nbbbbbbbb2222\n' },
         show: {
-          aaaaaaaa1111: { ok: true, out: 'docs/observations/ok.md\n' },
-          bbbbbbbb2222: { ok: true, out: 'docs/observations/x.md\nscripts/land.mjs\n' },
+          // git show 带 -z，文件之间是 NUL 不是换行。不带 -z 时 git 会把非 ASCII 文件名
+          // 加引号 + 八进制转义（`"docs/observations/2026-09-05-systemd\345\215\225…"`），
+          // 前缀比对当场认不出它其实就在允许目录下——2026-09-05 第一份中文名巡检报告就这么被判成越界。
+          aaaaaaaa1111: { ok: true, out: 'docs/observations/ok.md\0' },
+          bbbbbbbb2222: { ok: true, out: 'docs/observations/x.md\0scripts/land.mjs\0' },
         },
       }),
     });
@@ -146,11 +149,36 @@ describe('回头审巡检自己的提交', () => {
     assert.deepEqual(r.offenders[0].files, ['scripts/land.mjs']);
   });
 
+  // 2026-09-05 实咬：巡检第一次真跑，写的报告文件名是中文，越界审计把**它自己**判成了越界。
+  // 根因不在判据，在取数——`git show --name-only` 不带 -z 时会把非 ASCII 路径加引号 + 八进制转义。
+  // 这条钉死取数那一格：中文名的报告放在允许目录下，就必须判干净。
+  it('中文文件名的报告不许被判越界（取数要用 -z，不然 git 会转义）', async () => {
+    const M = await MOD();
+    const r = M.auditPatrolCommits({
+      sinceIso: '2026-09-01T00:00:00Z',
+      run: runner({
+        log: { ok: true, out: 'cccccccc3333\n' },
+        show: { cccccccc3333: { ok: true, out: 'docs/observations/2026-09-05-systemd单元仓改未装.md\0' } },
+      }),
+    });
+    assert.equal(r.scanned, true);
+    assert.equal(r.offenders.length, 0,
+      '中文名报告就在允许目录下，判成越界说明取数没用 -z、拿到的是转义过的路径');
+  });
+
+  it('取数命令必须带 -z——判据对了但取数错了，红的还是自己人', async () => {
+    const fs2 = require('node:fs');
+    const src = fs2.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+    const i = src.indexOf('export function auditPatrolCommits');
+    const fn = src.slice(i, src.indexOf('\n}', src.indexOf('offenders', i)) + 2);
+    assert.match(fn, /'--name-only', '-z'/, "git show 少了 -z，非 ASCII 文件名会被转义成认不出的样子");
+  });
+
   it('反证：全都只碰收件箱 → 干净', async () => {
     const M = await MOD();
     const r = M.auditPatrolCommits({
       sinceIso: '2026-09-01T00:00:00Z',
-      run: runner({ log: { ok: true, out: 'cccccccc3333\n' }, show: { cccccccc3333: { ok: true, out: 'docs/observations/y.md\n' } } }),
+      run: runner({ log: { ok: true, out: 'cccccccc3333\n' }, show: { cccccccc3333: { ok: true, out: 'docs/observations/y.md\0' } } }),
     });
     assert.equal(r.offenders.length, 0);
     assert.equal(r.commits, 1);

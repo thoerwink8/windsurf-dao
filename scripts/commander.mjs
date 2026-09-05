@@ -724,9 +724,13 @@ export function auditPatrolCommits({ sinceIso, run = null, tag = PATROL_COMMIT_T
   const hashes = String(listed.out || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const offenders = [];
   for (const h of hashes) {
-    const shown = exec(['git', 'show', '--name-only', '--format=', h]);
+    // 必须带 -z：不带的话 git 对非 ASCII 文件名会**加引号 + 八进制转义**
+    // （`"docs/observations/2026-09-05-systemd\345\215\225..."`），前缀比对当场认不出它其实就在
+    // 允许目录下，于是巡检自己写的中文名报告被判成越界。2026-09-05 实咬——第一份巡检报告就撞上了。
+    // 解转义不是好办法（要处理引号、反斜杠、UTF-8 多字节）；让 git 直接吐原始路径才是。
+    const shown = exec(['git', 'show', '--name-only', '-z', '--format=', h]);
     if (!shown.ok) return { scanned: false, error: `巡检提交 ${h.slice(0, 8)} 碰过哪些文件没查成：${shown.error}` };
-    const v = patrolBoundaryViolations(String(shown.out || '').split(/\r?\n/));
+    const v = patrolBoundaryViolations(String(shown.out || '').split('\0'));
     if (!v.scanned) return { scanned: false, error: v.error };
     if (v.violations.length) offenders.push({ commit: h.slice(0, 8), files: v.violations.slice(0, 10) });
   }
