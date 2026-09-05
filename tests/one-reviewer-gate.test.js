@@ -170,7 +170,8 @@ describe('一 PR 一审官闸', () => {
     const wdFn = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
     const createFn = (daoSrc.match(/function cmdReviewerCreate\([\s\S]*?\nfunction /) || [''])[0];
     assert.ok(wdFn && !/nextReviewerAfter/.test(wdFn), 'worker-done 仍换厂  →  ' + wdFn.slice(0, 200));
-    assert.ok(/planReviewerCreateAfterFail/.test(wdFn), 'worker-done 失败没停手报');
+    assert.ok(/planWorkerDoneAfterSpawnFail/.test(wdFn) || /finishWorkerDoneSpawnFail/.test(wdFn),
+      'worker-done 失败没停手报');
     assert.ok(/gateReviewerCreate/.test(createFn) && /assertReviewerSeat/.test(createFn),
       'reviewer-create 没过一审官闸');
     const gateAt = createFn.indexOf('gateReviewerCreate');

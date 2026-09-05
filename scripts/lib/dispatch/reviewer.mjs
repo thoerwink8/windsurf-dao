@@ -745,7 +745,8 @@ export function planReviewerCreateAfterFail({ error } = {}) {
   };
 }
 
-/** #675：起审官失败三态。terminal create 超时 / 注入未提交 / 没查成 必须分开。 */
+/** #675：起审官失败种类。terminal create 超时 / 注入未提交 / depth 限制 / 在途派单 / 没查成 必须分开。
+ * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。 */
 export function classifyReviewerSpawnError(error) {
   const t = String(error || '');
   if (/Timed out waiting for terminal handle|terminal create 失败|terminal create 超时/i.test(t)) {
@@ -754,7 +755,110 @@ export function classifyReviewerSpawnError(error) {
   if (/注入未提交|Pasted Content|Pasted text/i.test(t)) {
     return { kind: 'inject-unsubmitted', label: '注入未提交' };
   }
+  if (/Sub-worker dispatch is not permitted at depth|not permitted at depth\s*2/i.test(t)) {
+    return { kind: 'depth-limit', label: '工人终端 depth 限制，不许再派' };
+  }
+  if (/already has an active dispatch/i.test(t)) {
+    return { kind: 'active-dispatch', label: '审官终端已有在途派单' };
+  }
   return { kind: 'unscanned', label: '没查成' };
+}
+
+const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch']);
+
+/** 从 Orca「already has an active dispatch (ctx_…)」里抠已有 id。抠不到 = 没查成，不许猜。 */
+export function parseActiveDispatchId(error) {
+  const m = String(error || '').match(/already has an active dispatch \((ctx_[A-Za-z0-9_-]+)\)/i);
+  return m ? m[1] : null;
+}
+
+/** #815：depth 限制 / 在途派单 → 待办写成则 worker-done 成功交卷（queued），不是 fail。
+ * 待办没写成仍 fail。其它种类照旧停手报。 */
+export function planWorkerDoneAfterSpawnFail({ error, reviewPending } = {}) {
+  const cls = classifyReviewerSpawnError(error);
+  if (!REVIEW_PENDING_HANDOFF_KINDS.has(cls.kind)) {
+    return {
+      ok: false,
+      queued: false,
+      fail: true,
+      spawnKind: cls.kind,
+      error: `审官起败，停手报，不许换厂${error ? `：${error}` : ''}`,
+    };
+  }
+  if (!reviewPending || reviewPending.ok !== true) {
+    return {
+      ok: false,
+      queued: false,
+      fail: true,
+      spawnKind: cls.kind,
+      error: `审官起败（${cls.label}）但复审待办没写成：${reviewPending && reviewPending.error ? reviewPending.error : '没返回'}`,
+    };
+  }
+  return {
+    ok: true,
+    queued: true,
+    fail: false,
+    spawnKind: cls.kind,
+    label: cls.label,
+    reason: `审官起败（${cls.label}），已写入复审待办，交指挥官轮转`,
+    reviewPending,
+  };
+}
+
+/** #815：复用审官前先看树上有没有活 dispatch。有 → 跳过 worker-start（再派会撞 already has an active dispatch）。
+ * 已结算 → 仍走 worker-start 开新 Dispatch（#552）。没查成不许猜。 */
+export function planReuseExistingLiveDispatch({ found, dispatchLive } = {}) {
+  if (found == null) {
+    return { ok: false, unscanned: true, skipStart: false, error: '审官树 dispatch 没拿到（没查成，不许猜在途派单）' };
+  }
+  if (found.unscanned) {
+    return { ok: false, unscanned: true, skipStart: false, error: found.error || '审官树 dispatch 没查成' };
+  }
+  if (!found.ok || !found.dispatchId) {
+    return { ok: true, skipStart: false, reason: '审官树没有活 dispatch，走 worker-start' };
+  }
+  if (dispatchLive == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      skipStart: false,
+      error: `审官 dispatch ${found.dispatchId} 活性没查成，不许猜`,
+    };
+  }
+  if (!dispatchLive) {
+    return { ok: true, skipStart: false, reason: '旧审官已结算，走 worker-start 开新 Dispatch' };
+  }
+  return {
+    ok: true,
+    skipStart: true,
+    reviewerDispatchId: String(found.dispatchId).trim(),
+    reason: '审官终端已有在途派单，跳过 worker-start',
+  };
+}
+
+/** worker-start 已撞上在途派单时：沿用错误里的 ctx_ 或探针拿到的活 id，不许再派一张。 */
+export function planAfterWorkerStartActiveDispatch({ error, existingLiveDispatchId } = {}) {
+  const cls = classifyReviewerSpawnError(error);
+  if (cls.kind !== 'active-dispatch') {
+    return { ok: false, recover: false, spawnKind: cls.kind, error: error || 'worker-start 失败' };
+  }
+  const id = String(existingLiveDispatchId || parseActiveDispatchId(error) || '').trim();
+  if (!id) {
+    return {
+      ok: false,
+      recover: false,
+      spawnKind: cls.kind,
+      error: '审官终端已有在途派单，但没拿到已有 dispatch id（没查成）',
+    };
+  }
+  return {
+    ok: true,
+    recover: true,
+    skipStart: true,
+    spawnKind: cls.kind,
+    reviewerDispatchId: id,
+    reason: '审官终端已有在途派单，沿用已有 dispatch，跳过 worker-start',
+  };
 }
 
 export function reviewerSpawnFailComment({ error, retried = false } = {}) {
@@ -763,6 +867,19 @@ export function reviewerSpawnFailComment({ error, retried = false } = {}) {
     `交卷没开成审官下一跳：${cls.label}`,
     '',
     `worker-done 起审官失败（${cls.label}）。完工评论已落到 GitHub。${retried ? '同一命令已重试一次仍失败。' : ''}`.trim(),
+    String(error || ''),
+  ].join('\n');
+}
+
+/** #815：depth / 在途派单入队成功后的评论。不以「完工」打头（流转器只认工人自己的完工正文）。 */
+export function reviewerSpawnQueuedComment({ error, pr } = {}) {
+  const cls = classifyReviewerSpawnError(error);
+  const n = pr == null ? '' : String(pr).trim();
+  return [
+    `交卷已入复审队列：${cls.label}`,
+    '',
+    n ? `PR #${n} 待复审。工人终端起不了审官下一跳（${cls.label}），已写入 _flow/queue/review-pending/${n}.json。` : `工人终端起不了审官下一跳（${cls.label}），已写入复审待办。`,
+    '指挥官轮转会调 review-pending-drain，不靠人手 reviewer-attach。',
     String(error || ''),
   ].join('\n');
 }
