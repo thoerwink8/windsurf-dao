@@ -889,6 +889,79 @@ describe('派工失败不许发喜报（2026-09-04 实咬：#787 派工失败，
   });
 });
 
+describe('僵尸撞死条目剪除（2026-09-05 实咬：#889 关掉又开出 #908，死终端 term_338e13fb 早已不在盘面）', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+
+  function stallFile(content) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-gc-'));
+    const file = path.join(dir, 'agent-stall-watch.json');
+    fs.writeFileSync(file, JSON.stringify(content), 'utf8');
+    return file;
+  }
+
+  it('①死终端条目被剪、写回文件、decide 不报帅', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const file = stallFile({ term_338e13fb: { strikes: 3, sig: 'last status: 429' } });
+
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_live01' }] } });
+    assert.equal(stall.scanned, true);
+    assert.deepEqual(stall.strikes, {}, '死终端条目当场剪除');
+    assert.deepEqual(stall.pruned, ['term_338e13fb']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {}, '剪除要写回文件，否则下轮又冒出来');
+
+    const r = decide(baseSituation({ stall }));
+    assert.equal(byKind(r, 'wake-brain').length, 0, '僵尸条目不许唤大脑');
+    assert.equal(byKind(r, 'escalate').length, 0, '僵尸条目不许报帅（唤满就是这么开出 #908 的）');
+  });
+
+  it('②活终端条目照常保留并照常报（判别力：不是把 stall 一律掐了）', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const file = stallFile({ term_alive: { strikes: 2, sig: 'last status: 429' } });
+
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_alive' }, { handle: 'term_other' }] } });
+    assert.deepEqual(stall.strikes, { term_alive: { strikes: 2, sig: 'last status: 429' } });
+    assert.equal(stall.pruned, undefined, '没有可剪的就不报剪了什么');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { term_alive: { strikes: 2, sig: 'last status: 429' } }, '没变化不该改文件内容');
+
+    const w = byKind(decide(baseSituation({ stall })), 'wake-brain');
+    assert.equal(w.length, 1, '在世终端的撞死照常唤大脑');
+    assert.equal(w[0].target, 'stall:term_alive');
+  });
+
+  it('③终端清单没查成 → 一条不剪、不写文件、原样上报（「没查成」≠「终端不存在」）', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const before = { term_338e13fb: { strikes: 3, sig: 'last status: 429' } };
+    const file = stallFile(before);
+    let wrote = 0;
+
+    const stall = scanStall({
+      file,
+      live: { ok: false, error: 'terminal list 没查成：orca 不可用' },
+      write: () => { wrote += 1; },
+    });
+    assert.equal(stall.scanned, true);
+    assert.deepEqual(stall.strikes, before, '读不到清单时一条不剪');
+    assert.equal(wrote, 0, '不剪就不写回');
+    assert.match(stall.pruneSkipped, /没查成/, '要明说这轮没核对成，不能装作核对过了');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), before);
+
+    const w = byKind(decide(baseSituation({ stall })), 'wake-brain');
+    assert.equal(w.length, 1, '没核对成时宁可多报一轮，也不能悄悄抹掉真撞死');
+  });
+
+  it('④判别力：把交叉核对拿掉（清单里就有这个终端）→ ① 必须变成不剪', async () => {
+    const { scanStall } = await MOD();
+    const file = stallFile({ term_338e13fb: { strikes: 3, sig: 'last status: 429' } });
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_338e13fb' }] } });
+    assert.deepEqual(Object.keys(stall.strikes), ['term_338e13fb'], '剪除判据必须是「不在盘面」，不是「strikes 够大就删」');
+  });
+});
+
 // 顶班（2026-09-05 实咬 #894/#896/#899）：快马单标着 model/claude-opus-5，服务器腿表里没有可派的腿，
 // 返工被 escalate 掉，红项在 GitHub 上躺了 10 小时没人接。这三条钉死「派不出就顶班」而非「派不出就报帅」。
 describe('decide：返工模型顶班（#894 实咬）', () => {
