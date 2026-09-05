@@ -138,3 +138,18 @@ describe('静默播报不刷屏（实咬）', () => {
     assert.match(block, /plainLabel\(sil\)/, '播报要走 plainLabel，别直接用终端标题');
   });
 });
+
+describe('静默播报有上限、按卡去重（实咬：一轮 66 条）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'agent-stall-watch.mjs'), 'utf8');
+  const i = src.indexOf('const live = scanLiveness');
+  const end = src.indexOf('saveState(livenessStatePath', i);
+  const block = i > -1 && end > i ? src.slice(i, end + 60) : '';
+
+  it('按 worktree 去重，不按终端——一张卡好几个终端', () => {
+    assert.match(block, /sil\.worktreeId \|\| sil\.id/, '去重键要先用卡 id，终端 id 只作兜底');
+  });
+  it('一条消息有条数上限，超出只给条数', () => {
+    assert.match(block, /MAX_LISTED/, '缺上限：第一次接上观测面时几十条陈年静默会一次刷一屏');
+    assert.match(block, /另有 \$\{fresh\.length - MAX_LISTED\}/, '超出部分要说清还有几条');
+  });
+});

@@ -321,15 +321,26 @@ function main(argv = process.argv.slice(2)) {
   } else {
     if (live.sampledNothing) liveLines.push('会话活性没查成：这一轮一个会话都没采到——不是「全都健康」');
     if (live.counts.unscanned) liveLines.push(`${live.counts.unscanned} 个会话答不上「上次真动」（没查成，不当活着）`);
+    // 按**卡**去重再报，不按终端。一张卡有协调终端 + agent 终端好几个，
+    // 按终端报会让同一张卡在同一条消息里重复出现（2026-09-05 实咬截图里就是成对的重复行）。
+    const fresh = [];
     for (const sil of live.silent) {
       const route = routeSilent(sil);
-      // 只报**新出现**的静默。2026-09-05 实咬：timer 每 15 分钟一轮、每个静默会话各发一条，
-      // 总控群被同一句话无限刷屏。键带处置动作——从「交给你看」变成「重起一个」算新情况，值得再说。
-      const key = `${sil.id}|${route.action}`;
+      // 只报**新出现**的静默。timer 每 15 分钟一轮，不去重就是同一句话无限刷屏。
+      // 键带处置动作——从「交给你看」变成「重起一个」算新情况，值得再说一次。
+      const key = `${sil.worktreeId || sil.id}|${route.action}`;
+      if (nextSilent[key]) continue; // 同一张卡本轮已收
       nextSilent[key] = { at: new Date().toISOString(), minutes: Math.round((sil.silentMs || 0) / 60000) };
       if (seenSilent[key]) continue;
-      liveLines.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
+      fresh.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
         + `——${route.action === 'restart-reviewer' ? '当它死了，重起一个' : '交给你看'}`);
+    }
+    // 上限：一条消息最多列这么多，其余只给条数。第一次接上观测面时盘上会攒着几十个陈年静默，
+    // 全列出来仍然是刷屏——只是从「每轮刷」变成「一次刷一屏」。
+    const MAX_LISTED = 8;
+    liveLines.push(...fresh.slice(0, MAX_LISTED));
+    if (fresh.length > MAX_LISTED) {
+      liveLines.push(`另有 ${fresh.length - MAX_LISTED} 个会话也静默了，先不逐条列（多半是早该清掉的旧卡）`);
     }
     console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done} / 没查成 ${live.counts.unscanned}`);
   }
