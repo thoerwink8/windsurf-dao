@@ -26,20 +26,57 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { resolve, relative, basename, isAbsolute } from 'node:path';
 import { canonicalStringify, sha256Hex } from './dianjiangtai-core.mjs';
 import { ulidFromMs } from './event-writer.mjs';
 import { compareEvents } from './ledger-query.mjs';
 
 // ── 纯函数层：名字 / 判等 / 计划 / 分类 / 合并 / 排序 ───────────────────────
 
-/** 事件文件名形态：26 位 Crockford base32 的 ULID + `-` + 机器名 + `.json`。 */
-export const EVENT_NAME_RE = /^([0-9A-HJKMNP-TV-Z]{26})-(.+)\.json$/;
+/** 事件文件名形态：26 位 Crockford base32 的 ULID + `-` + 机器名 + `.json`。
+ *  机器名是**单段 basename**：不含 `/` `\\` NUL；另外 `isSafeEventName` 再禁 `..`。
+ *  `(.+)` 会把 `01…-../../outside.json` 认成合法事件名，join 之后逃出账本目录。 */
+export const EVENT_NAME_RE = /^([0-9A-HJKMNP-TV-Z]{26})-([^/\\\0]+)\.json$/;
+
+/** 来件名必须是账本目录里的单段文件名，不能带路径组件。远端即使受信也不许靠远端自觉。
+ *  含路径组件（`/` `\\` `..` NUL、绝对路径、非 basename）——列表/打包流里见到就整份作废。 */
+export function hasPathComponent(name) {
+  const s = String(name || '');
+  if (!s) return true;
+  return s.includes('/') || s.includes('\\') || s.includes('..') || s.includes('\0') || isAbsolute(s) || basename(s) !== s;
+}
+
+export function isSafeEventName(name) {
+  const s = String(name || '');
+  if (!EVENT_NAME_RE.test(s)) return false;
+  if (hasPathComponent(s)) return false;
+  if (/\s/.test(s)) return false; // bundle 按空格拆 name/base64，名字里不许有空白
+  return true;
+}
 
 export function parseEventName(name) {
-  const m = EVENT_NAME_RE.exec(String(name || ''));
+  if (!isSafeEventName(name)) return null;
+  const m = EVENT_NAME_RE.exec(String(name));
   if (!m) return null;
   return { ulid: m[1], machine: m[2] };
+}
+
+/** 来件名 → 账本目录内的绝对路径。逃出目录或名字非法一律 ok:false，不拼 path。 */
+export function eventPathInDir(dir, name) {
+  if (dir == null || dir === '') return { ok: false, why: '没给账本目录' };
+  if (!isSafeEventName(name)) {
+    return { ok: false, why: '文件名不是安全的 <ulid>-<machine>.json basename（禁 / \\ ..）' };
+  }
+  const root = resolve(String(dir));
+  const dest = resolve(root, name);
+  const rel = relative(root, dest);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    return { ok: false, why: `解析后的路径逃出账本目录：${name}` };
+  }
+  if (basename(dest) !== name) {
+    return { ok: false, why: `解析后的文件名与来件不一致：${name}` };
+  }
+  return { ok: true, path: dest };
 }
 
 /**
@@ -108,7 +145,9 @@ export function planFetch({ localNames = [], remoteNames = [], verify = false } 
  * conflict 是真红：同名意味着同一事件，内容却不同 ⇒ 有一边的历史被改过。
  */
 export function classifyIncoming({ name, text, localText }) {
-  if (!parseEventName(name)) return { name, action: 'reject', why: '文件名不是 <ulid>-<machine>.json' };
+  if (!isSafeEventName(name) || !parseEventName(name)) {
+    return { name, action: 'reject', why: '文件名不是安全的 <ulid>-<machine>.json basename（禁 / \\ ..）' };
+  }
   const id = eventIdentity(text);
   if (!id.ok) return { name, action: 'reject', why: id.why };
   const want = expectedEventName(id.event);
@@ -267,6 +306,15 @@ export function parseRemoteList(stdout) {
     if (declared !== null) {
       return { unscanned: true, error: `尾行之后还有内容（协议乱了）：${line.slice(0, 40)}`, names };
     }
+    // 含路径组件的名字不是「非事件忽略项」——那是逃逸，整份名单作废。
+    // `.dispatch-index` 这类本机索引仍进 names，由 planFetch 点名进 ignored。
+    if (hasPathComponent(line)) {
+      return {
+        unscanned: true,
+        error: `远端名单有路径逃逸/非法文件名：${line.slice(0, 80)}`,
+        names,
+      };
+    }
     names.push(line);
   }
   if (declared === null) {
@@ -279,7 +327,8 @@ export function parseRemoteList(stdout) {
 }
 
 /** 打包 stdout → [{name,text}]。头行、尾行条数、base64 三处任一对不上都算没查成。 */
-export function parseRemoteBundle(stdout) {
+export function parseRemoteBundle(stdout, { requested } = {}) {
+  const asked = requested == null ? null : new Set(requested);
   const lines = String(stdout == null ? '' : stdout).split(/\r?\n/);
   if (lines.some(l => l.trim() === NODIR_SENTINEL)) {
     return { unscanned: true, error: '远端账本目录不在', files: [], missing: [] };
@@ -301,13 +350,39 @@ export function parseRemoteBundle(stdout) {
       continue;
     }
     if (line.startsWith('MISS ')) {
-      missing.push(line.slice(5));
+      const missName = line.slice(5);
+      if (hasPathComponent(missName)) {
+        return {
+          unscanned: true,
+          error: `打包流 MISS 名有路径逃逸：${missName.slice(0, 80)}`,
+          files,
+          missing,
+        };
+      }
+      missing.push(missName);
       continue;
     }
     const sp = line.indexOf(' ');
     if (sp <= 0) return { unscanned: true, error: `打包流有认不出的行：${line.slice(0, 40)}`, files, missing };
     const name = line.slice(0, sp);
     const b64 = line.slice(sp + 1);
+    // 传输中的 name 必须是安全 basename，且必须在这次请求名单里；不靠列表端已经滤过。
+    if (!isSafeEventName(name)) {
+      return {
+        unscanned: true,
+        error: `打包流有路径逃逸/非法文件名：${name.slice(0, 80)}`,
+        files,
+        missing,
+      };
+    }
+    if (asked && !asked.has(name)) {
+      return {
+        unscanned: true,
+        error: `打包流回了没请过的名字：${name.slice(0, 80)}`,
+        files,
+        missing,
+      };
+    }
     let text;
     try {
       const buf = Buffer.from(b64, 'base64');
@@ -351,13 +426,22 @@ export function localEventNames(dir) {
  * 写完立刻从盘上读回来核 event_id 与规范化内容——✓ 只许来自读回的事实。
  */
 export function writeIncoming({ dir, name, text }) {
-  const path = join(dir, name);
+  // 写盘前再验一次名字与目录边界：列表端拦过不等于这里可以信任（bundle 拆名、远端构造）。
+  const located = eventPathInDir(dir, name);
+  if (!located.ok) return { ok: false, why: located.why };
+  const path = located.path;
   // 写盘/改名/读回都可能直接抛（盘满、权限、落点父路径是个文件）。抛出去 = 调用方
   // 的 --json 不出结构化结果、逐件失败汇总也走不到，所以在这里就地收成 ok:false（审官 P2③）。
   try {
     if (existsSync(path)) return { ok: false, why: '目标已存在，不覆盖' };
     mkdirSync(dir, { recursive: true });
-    const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+    // 临时件故意不是事件名（.tmp- 后缀），所以不走 eventPathInDir；仍必须落在同一目录。
+    const tmpName = `${basename(name)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+    const tmp = resolve(dir, tmpName);
+    const tmpRel = relative(resolve(dir), tmp);
+    if (tmpRel.startsWith('..') || isAbsolute(tmpRel) || basename(tmp) !== tmpName) {
+      return { ok: false, why: '临时件路径逃出账本目录', path };
+    }
     writeFileSync(tmp, text, 'utf8');
     renameSync(tmp, path);
     const back = eventIdentity(readFileSync(path, 'utf8'));
@@ -496,10 +580,11 @@ export function pullFromHost({
 
   const localTexts = new Map();
   for (const name of plan.fetch) {
-    const p = join(localDir, name);
-    if (existsSync(p)) {
+    const located = eventPathInDir(localDir, name);
+    if (!located.ok) continue; // 非法名进不了 fetch 计划；这里再挡一层
+    if (existsSync(located.path)) {
       try {
-        localTexts.set(name, readFileSync(p, 'utf8'));
+        localTexts.set(name, readFileSync(located.path, 'utf8'));
       } catch (e) {
         out.unscanned.push(`本机 ${name} 读不了：${String(e.message || e).slice(0, 80)}`);
       }
@@ -513,7 +598,7 @@ export function pullFromHost({
       out.unscanned.push(`ssh ${host} 取内容没跑成：${got.reason}`);
       return recount(out);
     }
-    const bundle = parseRemoteBundle(got.stdout);
+    const bundle = parseRemoteBundle(got.stdout, { requested: names });
     if (bundle.unscanned) {
       out.unscanned.push(`${host} 取内容没查成：${bundle.error}（exit ${got.code}）`);
       return recount(out);

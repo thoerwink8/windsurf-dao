@@ -79,6 +79,8 @@ describe('ledger-sync 纯函数：名字与判等', () => {
     assert.strictEqual(S.parseEventName('01M00DA3KG6KVJBXVSYEE1T5XR-alpha.json.tmp-9-ab'), null, '临时件不是事件');
     assert.strictEqual(S.parseEventName('short-alpha.json'), null, 'ULID 位数不够不是事件');
     assert.strictEqual(S.parseEventName('01I00DA3KG6KVJBXVSYEE1T5XR-alpha.json'), null, 'Crockford 不含 I');
+    assert.strictEqual(S.parseEventName('01M00DA3KG6KVJBXVSYEE1T5XR-../../outside.json'), null, '含 ../ 不是事件（路径逃逸）');
+    assert.strictEqual(S.parseEventName('01M00DA3KG6KVJBXVSYEE1T5XR-..\\outside.json'), null, '含 ..\\ 不是事件');
   });
 
   it('判等按规范化 JSON，不按字节：CRLF/LF、键序、缩进都不算不同', async () => {
@@ -440,7 +442,7 @@ describe('ledger-sync：不完整一律 fail-closed（审官 #899）', () => {
     assert.doesNotThrow(() => {
       w = S.writeIncoming({ dir, name: 'x .json', text: pretty(ev()) });
     }, 'writeIncoming 不许抛');
-    assert.ok(!w.ok && /抛了/.test(w.why), '抛了就收成 ok:false 并说清');
+    assert.ok(!w.ok && /安全|basename|抛了/.test(w.why), '非法名先拦或不抛，收成 ok:false');
     fs.rmSync(base, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -474,5 +476,85 @@ describe('ledger-sync：不完整一律 fail-closed（审官 #899）', () => {
     typo.counts = {};
     assert.strictEqual(S.verdict([{ ...typo, added: [{ name: 'a' }] }]).code, 0, '正常的 ok 桶照样是绿（判别力在，不是一律报红）');
     assert.strictEqual(S.verdict([]).code, 0, '零台机器 = 没有异常');
+  });
+});
+
+// ── 审官 #899 返工：远端文件名路径逃逸不许写出 localDir ────────
+describe('ledger-sync：来件名路径边界（审官 #899 返工）', () => {
+  const ULID = '01M00DA3KG6KVJBXVSYEE1T5XR';
+  const ESCAPE = ULID + '-../../outside.json';
+
+  it('含 ../ 的列表+bundle 判别：不写出 localDir，也不当 add', async () => {
+    const S = await SYNC;
+    const text = pretty(ev());
+
+    assert.strictEqual(S.isSafeEventName(ESCAPE), false, '逃逸名不是安全 basename');
+    assert.strictEqual(S.classifyIncoming({ name: ESCAPE, text }).action, 'reject', 'classify 拒，不当 add');
+    const located = S.eventPathInDir('/tmp/ledger-events', ESCAPE);
+    assert.ok(!located.ok, 'eventPathInDir 拒逃逸');
+    assert.ok(!located.path, '拒的时候不拼 path');
+
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-esc-'));
+    const dir = path.join(parent, 'events');
+    fs.mkdirSync(dir);
+    const outside = path.join(parent, 'outside.json');
+
+    let w;
+    assert.doesNotThrow(() => {
+      w = S.writeIncoming({ dir, name: ESCAPE, text });
+    }, 'writeIncoming 对逃逸名不许抛');
+    assert.ok(!w.ok, '逃逸名不写盘');
+    assert.ok(!fs.existsSync(outside), 'writeIncoming 不写出 localDir');
+    assert.deepStrictEqual(fs.readdirSync(dir), [], '账本目录也没落下逃逸名');
+
+    // 列表带 ../：整份名单 fail-closed，added=0（审官复现是 added=1 且 path 逃出）
+    const listed = S.pullFromHost({
+      host: 'fake',
+      localDir: dir,
+      run: fakeSsh(new Map([[ESCAPE, text]])).run,
+    });
+    assert.ok(listed.unscanned.some(u => /路径逃逸|非法文件名/.test(u)), '列表含 ../ 判没查成');
+    assert.strictEqual(listed.counts.added, 0, 'added 必须是 0');
+    assert.ok(!fs.existsSync(outside), '列表逃逸不写出 localDir');
+    assert.strictEqual(S.verdict([listed]).code, 2, 'exit 2');
+
+    // bundle 拆名：列表是合法名，打包流回逃逸名——校验放在写盘前，不靠列表端
+    const runner = fakeSsh(new Map([[NAME_A, text]])).run;
+    const wrapped = (cmd, args, opts) => {
+      const r = runner(cmd, args, opts);
+      if (String(args[args.length - 1]).includes('DAO_LEDGER_BUNDLE') && r.stdout) {
+        const b64 = Buffer.from(text, 'utf8').toString('base64');
+        r.stdout = 'DAO_LEDGER_BUNDLE v1\n' + ESCAPE + ' ' + b64 + '\nDAO_LEDGER_BUNDLE_END 1\n';
+      }
+      return r;
+    };
+    const bundled = S.pullFromHost({ host: 'fake', localDir: dir, run: wrapped });
+    assert.ok(
+      bundled.unscanned.some(u => /路径逃逸|非法文件名|没请过/.test(u)),
+      'bundle 逃逸名 / 非请求名判没查成'
+    );
+    assert.strictEqual(bundled.counts.added, 0, 'bundle 逃逸不当 add');
+    assert.ok(!fs.existsSync(outside), 'bundle 逃逸不写出 localDir');
+    assert.strictEqual(S.verdict([bundled]).code, 2, 'exit 2');
+
+    // 请求名单校验：打包流回了合法但没请过的名字，同样没查成（不靠列表端）
+    const extra = S.parseRemoteBundle(
+      'DAO_LEDGER_BUNDLE v1\n' + NAME_B + ' ' + Buffer.from(text, 'utf8').toString('base64') + '\nDAO_LEDGER_BUNDLE_END 1\n',
+      { requested: [NAME_A] }
+    );
+    assert.ok(extra.unscanned && /没请过/.test(extra.error), '传输中的 name 必须在请求名单里');
+
+    // 反向判别：合法名照样进账，不是一律拒写
+    const ok = S.pullFromHost({
+      host: 'fake',
+      localDir: dir,
+      run: fakeSsh(new Map([[NAME_A, text]])).run,
+    });
+    assert.strictEqual(ok.counts.added, 1, '合法名照样进账');
+    assert.ok(fs.existsSync(path.join(dir, NAME_A)), '落在 localDir 内');
+    assert.ok(!fs.existsSync(outside), '合法拉取也不碰目录外');
+    assert.ok(String(ok.added[0].path).startsWith(dir), '返回 path 在 localDir 下');
+
+    fs.rmSync(parent, { recursive: true, force: true });
   });
 });
