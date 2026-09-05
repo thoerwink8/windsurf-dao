@@ -29,27 +29,41 @@
 /** 一行里是不是「复合条件的 assert.ok」。只认 && —— || 往往是「二选一皆可」的合法写法。 */
 export const COMPOUND_OK_RE = /assert\.ok\s*\([^;]*&&/;
 
+/** 归一化：比对「这行以前存在过吗」时，缩进和行尾差异不算差异。 */
+const norm = (l) => String(l).trim();
+
 /**
  * @param {{file:string, added:string[]}[]} diffs 每个文件本次**新增**的行
- * @returns {{state:'ok'|'red'|'unknown', detail:string, hits?:object[]}}
+ * @param {string[]} [baselineLines] 改动前全部测试文件的行（判「搬运 vs 新写」用）
+ * @returns {{state:'ok'|'red'|'unknown', detail:string, hits?:object[], moved?:number}}
  */
-export function classifyAssertStyle(diffs) {
+export function classifyAssertStyle(diffs, baselineLines) {
   if (!Array.isArray(diffs)) return { state: 'unknown', detail: '拿不到 diff（没查成，不是「没有违规」）' };
+  // 搬运不算新写。git 的 -M 在这儿指望不上：拆一个大文件是「删 1 个 + 新增 6 个」的
+  // 一对多，重命名检测识别不了（2026-09-06 实咬：拆 dao.test.js 报出 416 处「新增」，
+  // 全是逐字搬过去的旧行）。所以直接拿改动前的全量行当基线：这一行以前在别处出现过
+  // ⇒ 是搬来的，不是这次写的。
+  const before = baselineLines ? new Set(baselineLines.map(norm)) : null;
   const hits = [];
+  let moved = 0;
   for (const d of diffs) {
     if (!d || !Array.isArray(d.added)) continue;
     if (!/\.test\.(js|mjs|cjs)$/.test(d.file)) continue;   // 只管测试文件
     for (const line of d.added) {
-      if (COMPOUND_OK_RE.test(line)) hits.push({ file: d.file, line: line.trim().slice(0, 90) });
+      if (!COMPOUND_OK_RE.test(line)) continue;
+      if (before && before.has(norm(line))) { moved++; continue; }
+      hits.push({ file: d.file, line: line.trim().slice(0, 90) });
     }
   }
+  const movedNote = moved ? `；${moved} 处是从别处搬来的旧行，不计` : '';
   if (hits.length === 0) {
-    return { state: 'ok', detail: `新增测试行里没有复合 assert.ok（扫了 ${diffs.length} 个文件）` };
+    return { state: 'ok', moved, detail: `新增测试行里没有复合 assert.ok（扫了 ${diffs.length} 个文件${movedNote}）` };
   }
   const shown = hits.slice(0, 3).map((h) => `${h.file}: ${h.line}`).join('；');
   return {
     state: 'red',
     hits,
-    detail: `${hits.length} 处新增的复合断言 —— ${shown}${hits.length > 3 ? ' …' : ''}`,
+    moved,
+    detail: `${hits.length} 处新增的复合断言${movedNote} —— ${shown}${hits.length > 3 ? ' …' : ''}`,
   };
 }

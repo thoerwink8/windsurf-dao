@@ -388,15 +388,31 @@ function checkAssertStyle() {
   // 只取**新增**行：存量 1471 处复合断言不进判定面
   const base = spawnSync('git', ['-C', ROOT, 'merge-base', 'HEAD', 'origin/master'], { encoding: 'utf8', windowsHide: true });
   const ref = base.status === 0 ? (base.stdout || '').trim() : null;
+  // `-M`（跟踪重命名/搬运）是硬要求，不是优化：拆文件时 git 默认把新文件的每一行
+  // 都算「新增」，存量断言会整批被判成新写的（2026-09-06 实咬：拆 dao.test.js 那次
+  // 一口气报 416 处，而那全是逐字搬过去的旧行）。带上 -M 后搬运不计入新增。
   const diffs = [];
   for (const f of testFiles) {
-    const args = ref ? ['-C', ROOT, 'diff', '-U0', ref, '--', f] : ['-C', ROOT, 'diff', '-U0', '--', f];
+    const args = ['-C', ROOT, 'diff', '-U0', '-M', ...(ref ? [ref] : []), '--', f];
     const r = spawnSync('git', args, { encoding: 'utf8', windowsHide: true });
     if (r.status !== 0) { skip(`断言写法：${f} 的 diff 没取到——没查成`); return; }
     const added = (r.stdout || '').split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1));
     diffs.push({ file: f, added });
   }
-  const v = classifyAssertStyle(diffs);
+  // 基线 = 改动前**全部**测试文件的行。用来分辨「搬来的旧行」与「这次新写的」。
+  // 取不到就退化成不给基线（宁可多报，不许漏报）。
+  let baseline = null;
+  if (ref) {
+    const ls = spawnSync('git', ['-C', ROOT, 'ls-tree', '-r', '--name-only', ref, 'tests/'], { encoding: 'utf8', windowsHide: true });
+    if (ls.status === 0) {
+      baseline = [];
+      for (const p of (ls.stdout || '').split('\n').filter(x => /\.test\.(js|mjs|cjs)$/.test(x))) {
+        const show = spawnSync('git', ['-C', ROOT, 'show', `${ref}:${p}`], { encoding: 'utf8', windowsHide: true });
+        if (show.status === 0) baseline.push(...(show.stdout || '').split('\n'));
+      }
+    }
+  }
+  const v = classifyAssertStyle(diffs, baseline);
   if (v.state === 'ok') green(`断言写法：${v.detail}`);
   else if (v.state === 'red') fail('新增了复合断言', '拆成最简条件，或改用 equal/deepEqual 让失败信息自带 diff（见 lib/assert-style.mjs）', v.detail);
   else skip(`断言写法：${v.detail}`);
