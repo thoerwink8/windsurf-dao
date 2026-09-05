@@ -43,16 +43,18 @@ description: 盲平行设计：重大设计岔路用异厂商多臂独立出方�
 两臂当场 503 空转。**根因不是不知道去哪查，是「以为自己知道所以没查」**——同一轮里我读过路由表，
 然后凭见过的其他模型归纳出一个前缀套上去。凡是需要手打的常量，早晚会被凭印象填。
 
-照抄这条，别自己构造（在仓根跑）：
+现成入口，照抄别构造（仓根跑，`--dry-run` 只算不起）：
 
 ```bash
-node -e "import('./scripts/lib/dispatch/launch.mjs').then(L=>{const r=L.loadRouting();
-for(const m of ['grok-4.6','gemini-3.7-flash','glm-5.2'])
-  console.log(m, '->', L.resolveLaunch({model:m, routing:r}).command)})"
+node scripts/dao.mjs start --model <模型id> --dry-run   # 输出 .command
 ```
 
-输出的 `command` 原样填进 `orca terminal create --command "cd <臂目录> && <command>"`。
-模型不在路由表会当场抛错——这正是要的：**没查成不许当查过**。
+把输出的 `command` **原样**填进 `orca terminal create --worktree <任一树> --command "cd <臂目录> && <command>"`
+（`cd` 到中性目录再起，agent 的 cwd 就在中性目录，仓内 CLAUDE.md 不会注入）。
+
+三条它替你办到、手拼办不到的事：模型不在路由表**当场报错**（没查成不许当查过）；
+通道前缀与 cli 模型名从路由表取（各模型前缀并不统一，`gw/` 与 `gw-windsurf/` 与 `gw-sub/` 都有）；
+命令自带 `DAO_TASK` / `DAO_ACTOR` 追踪前缀——手拼会把可观测性一起丢掉。
 
 - 考场用固定常驻目录（如 `orca/exam-arena/arm-*`）：目录信任框信任一次终身免弹，不要用会话级临时目录；启动序仍写明「注入前读屏，见信任框先放行」兜底（2026-08-14 实测，issue #443）。
 - 起灶后禁止盲等 tui-idle 超时——先 read 一眼屏面再决定等什么：tui-idle 分不清「弹窗等键」和「正在干活」。开工验证铁律：**读屏为准，等待为辅**（2026-08-14 实测，issue #443）。
