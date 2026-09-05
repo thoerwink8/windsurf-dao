@@ -27,6 +27,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { resolve, relative, basename, isAbsolute } from 'node:path';
+import { basename as posixBase } from 'node:path/posix';
+import { basename as winBase } from 'node:path/win32';
 import { canonicalStringify, sha256Hex } from './dianjiangtai-core.mjs';
 import { ulidFromMs } from './event-writer.mjs';
 import { compareEvents } from './ledger-query.mjs';
@@ -34,23 +36,29 @@ import { compareEvents } from './ledger-query.mjs';
 // ── 纯函数层：名字 / 判等 / 计划 / 分类 / 合并 / 排序 ───────────────────────
 
 /** 事件文件名形态：26 位 Crockford base32 的 ULID + `-` + 机器名 + `.json`。
- *  机器名是**单段 basename**：不含 `/` `\\` NUL；另外 `isSafeEventName` 再禁 `..`。
- *  `(.+)` 会把 `01…-../../outside.json` 认成合法事件名，join 之后逃出账本目录。 */
-export const EVENT_NAME_RE = /^([0-9A-HJKMNP-TV-Z]{26})-([^/\\\0]+)\.json$/;
+ *  machine 只许 `[A-Za-z0-9._-]`，整段不是 `.` / `..`。`(.+)` 会把 `01…-../../outside.json`
+ *  认成合法事件名，join 之后逃出账本目录。Linux 上 `\\` 不是分隔符，所以还要同时等于
+ *  posix/win32 basename，Windows 写法 `..\\..\\outside.json` 才拦得住。 */
+export const EVENT_NAME_RE = /^([0-9A-HJKMNP-TV-Z]{26})-([A-Za-z0-9._-]+)\.json$/;
 
 /** 来件名必须是账本目录里的单段文件名，不能带路径组件。远端即使受信也不许靠远端自觉。
- *  含路径组件（`/` `\\` `..` NUL、绝对路径、非 basename）——列表/打包流里见到就整份作废。 */
+ *  含路径组件（`/` `\\` NUL、绝对路径、非 basename）——列表/打包流里见到就整份作废。 */
 export function hasPathComponent(name) {
   const s = String(name || '');
   if (!s) return true;
-  return s.includes('/') || s.includes('\\') || s.includes('..') || s.includes('\0') || isAbsolute(s) || basename(s) !== s;
+  if (s.includes('/') || s.includes('\\') || s.includes('\0') || isAbsolute(s)) return true;
+  // Linux 上 `\\` 不是分隔符：平台 basename 拦不住 Windows 写法，必须双边验。
+  if (posixBase(s) !== s || winBase(s) !== s || basename(s) !== s) return true;
+  return false;
 }
 
 export function isSafeEventName(name) {
   const s = String(name || '');
-  if (!EVENT_NAME_RE.test(s)) return false;
-  if (hasPathComponent(s)) return false;
+  if (!s || hasPathComponent(s)) return false;
   if (/\s/.test(s)) return false; // bundle 按空格拆 name/base64，名字里不许有空白
+  const m = EVENT_NAME_RE.exec(s);
+  if (!m) return false;
+  if (m[2] === '.' || m[2] === '..') return false;
   return true;
 }
 
@@ -73,7 +81,7 @@ export function eventPathInDir(dir, name) {
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
     return { ok: false, why: `解析后的路径逃出账本目录：${name}` };
   }
-  if (basename(dest) !== name) {
+  if (posixBase(name) !== name || winBase(name) !== name || basename(dest) !== name) {
     return { ok: false, why: `解析后的文件名与来件不一致：${name}` };
   }
   return { ok: true, path: dest };
@@ -120,15 +128,20 @@ export function expectedEventName(event) {
  * 拉取计划：远端名字集 ∖ 本机名字集。
  * verify=true 时连本机已有的也一起拉回来比内容（审计用；默认不拉，同名即同一事件）。
  * 非事件名（.dispatch-index、临时件等）一律不拉，点名进 ignored。
+ * 形态像事件（.json）但 parseEventName 失败（含 ../ 等）进 rejected，不进 ignored。
  */
 export function planFetch({ localNames = [], remoteNames = [], verify = false } = {}) {
   const local = new Set(localNames);
   const fetch = [];
   const skip = [];
   const ignored = [];
+  const rejected = [];
   for (const name of remoteNames) {
     if (!parseEventName(name)) {
-      ignored.push(name);
+      // ignored 是给 .dispatch-index 这类「本来就不是事件」的 ok 桶。
+      // 形态像事件（.json）但名字不安全 → rejected，不许报「拉过且没事」。
+      if (/\.json$/i.test(String(name || ''))) rejected.push(name);
+      else ignored.push(name);
       continue;
     }
     if (!local.has(name)) fetch.push(name);
@@ -137,7 +150,7 @@ export function planFetch({ localNames = [], remoteNames = [], verify = false } 
   }
   fetch.sort();
   skip.sort();
-  return { fetch, skip, ignored, verify: !!verify };
+  return { fetch, skip, ignored, rejected, verify: !!verify };
 }
 
 /**
@@ -576,6 +589,10 @@ export function pullFromHost({
 
   const plan = planFetch({ localNames, remoteNames: remote.names, verify });
   out.ignored = plan.ignored;
+  out.rejected = (plan.rejected || []).map(name => ({
+    name,
+    why: '文件名不是安全的 <ulid>-<machine>.json',
+  }));
   if (!verify) out.skipped = plan.skip.map(name => ({ name, why: '同名跳过（未取内容）' }));
 
   const localTexts = new Map();
@@ -616,16 +633,22 @@ export function pullFromHost({
     for (const n of names) if (!back.has(n)) out.lost.push({ name: n, why: '请过但既没回内容也没回 MISS' });
     const asked = new Set(names);
     for (const f of bundle.files) {
-      if (!asked.has(f.name)) out.lost.push({ name: f.name, why: '没请过却回了内容（协议乱了）' });
+      if (!asked.has(f.name) || !parseEventName(f.name)) {
+        out.lost.push({
+          name: f.name,
+          why: parseEventName(f.name) ? '没请过却回了内容（协议乱了）' : 'bundle 文件名不安全，不得交给 mergeIncoming',
+        });
+        continue;
+      }
+      incoming.push(f);
     }
     out.missing.push(...bundle.missing.map(name => ({ name, why: '列表列了、取值时远端已没有' })));
-    incoming.push(...bundle.files);
   }
   if (out.lost.length) return recount(out); // 名单对不上账，后面别拿半份数据当结果
 
   const merged = mergeIncoming({ localTexts, incoming });
   out.conflicts = merged.conflicts;
-  out.rejected = merged.rejected;
+  out.rejected.push(...merged.rejected);
   out.suspects = merged.suspects;
   if (verify) out.skipped = merged.skipped;
   else out.skipped.push(...merged.skipped);

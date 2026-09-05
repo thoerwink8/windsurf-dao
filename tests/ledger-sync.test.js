@@ -557,4 +557,25 @@ describe('ledger-sync：来件名路径边界（审官 #899 返工）', () => {
 
     fs.rmSync(parent, { recursive: true, force: true });
   });
+
+  it('纯函数：含 ../ 或反斜杠 parseEventName 为 null；合法 hostname / FQDN 仍过', async () => {
+    const S = await SYNC;
+    const ULID = '01M00DA3KG6KVJBXVSYEE1T5XR';
+    const BAD_INSIDE = ULID + '-../../outside.json';
+    const BAD_OUTSIDE = ULID + '-../../../outside.json';
+    const BAD_WIN = ULID + '-..\\..\\outside.json';
+    assert.strictEqual(S.parseEventName(BAD_INSIDE), null, '斜杠路径组件不是事件名');
+    assert.strictEqual(S.parseEventName(BAD_OUTSIDE), null, '会写出父目录的名字也不是事件名');
+    assert.strictEqual(S.parseEventName(BAD_WIN), null, 'Windows 反斜杠写法同样 null（Linux 上 \\ 不是分隔符，要双边 basename）');
+    assert.strictEqual(S.parseEventName(ULID + '-..json'), null, 'machine 整段是 . 不行');
+    assert.strictEqual(S.parseEventName(ULID + '-...json'), null, 'machine 整段是 .. 不行');
+    assert.deepStrictEqual(S.parseEventName(NAME_A), { ulid: ULID, machine: 'alpha' }, '合法 NAME_A 仍解析出 machine:alpha');
+    assert.deepStrictEqual(S.parseEventName(ULID + '-vmi3551059.json'), { ulid: ULID, machine: 'vmi3551059' }, '真实 hostname 仍过');
+    assert.deepStrictEqual(S.parseEventName(ULID + '-host.example.com.json'), { ulid: ULID, machine: 'host.example.com' }, '带点的 FQDN 仍过（不要禁 .）');
+    const plan = S.planFetch({ remoteNames: [BAD_OUTSIDE, '.dispatch-index', NAME_A] });
+    assert.deepStrictEqual(plan.fetch, [NAME_A], '不安全名字不拉');
+    assert.ok(plan.rejected.includes(BAD_OUTSIDE), '形态像 .json 但不安全 → rejected，不是 ignored');
+    assert.deepStrictEqual(plan.ignored, ['.dispatch-index'], '.dispatch-index 仍走 ignored');
+    assert.strictEqual(S.classifyIncoming({ name: BAD_OUTSIDE, text: pretty(ev()) }).action, 'reject', 'classify 走 reject 不走 add');
+  });
 });
