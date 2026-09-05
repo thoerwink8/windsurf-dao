@@ -40,6 +40,7 @@ import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { stallWatchPath } from './lib/agent-stall-detect.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -48,7 +49,7 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
-const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || join(homedir(), '.agent-stall-watch.json');
+const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
 const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/home/orca/windsurf-dao';
@@ -179,7 +180,7 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
 }
 
 function scanStall() {
-  if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 垫片没写，读不到 ≠ 无撞死` };
+  if (!existsSync(STALL_FILE)) return { scanned: false, error: `撞死指纹文件不在（${STALL_FILE}）——#833 正式连红账本没写，读不到 ≠ 无撞死` };
   try {
     const strikes = JSON.parse(readFileSync(STALL_FILE, 'utf8'));
     if (!strikes || typeof strikes !== 'object') return { scanned: false, error: '撞死指纹不是对象——没查成' };

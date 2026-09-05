@@ -36,14 +36,16 @@ import {
   reviewerOrderOf,
   reviewerPasserIds,
   scanRound,
+  stallWatchPath,
 } from './lib/agent-stall-detect.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
 const DAO = join(REPO_ROOT, 'scripts', 'dao.mjs');
-const DEFAULT_STATE = join(homedir(), '.dao', 'agent-stall-watch.json');
+const DEFAULT_STATE = stallWatchPath(homedir());
 const PAD_SCRIPT = '/home/orca/bin/agent-stall-watch.mjs';
 const PAD_TIMER = 'agent-stall-watch.timer';
+const PAD_STATE = join(homedir(), '.agent-stall-watch.json');
 
 function parseArgs(argv) {
   const out = { dryRun: false, state: process.env.AGENT_STALL_STATE || DEFAULT_STATE };
@@ -241,6 +243,7 @@ function switchReviewer({ pr, reviewer, parentWorktree, deadWorktreeId, dryRun }
 function warnPadStillThere() {
   const bits = [];
   if (existsSync(PAD_SCRIPT)) bits.push(PAD_SCRIPT);
+  if (existsSync(PAD_STATE)) bits.push(PAD_STATE);
   const r = spawnSync('systemctl', ['list-timers', '--all'], { windowsHide: true, encoding: 'utf8', timeout: 8000 });
   if (!r.error && String(r.stdout || '').includes(PAD_TIMER)) bits.push(PAD_TIMER);
   if (bits.length) {

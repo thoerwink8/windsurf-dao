@@ -20,6 +20,7 @@ import {
   scanRound,
   decideHitAction,
   stateWindow,
+  stallWatchPath,
 } from '../scripts/lib/agent-stall-detect.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -359,4 +360,25 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
   const said = readFileSync(sayLog, 'utf8');
   assert.match(said, /先停手等你拍/); // 「报帅停手」是内部说法，群里改人话（2026-09-04）
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('#833 正式账本路径 + timer 用 OnCalendar（空转实咬）', () => {
+  assert.equal(stallWatchPath('/home/orca'), join('/home/orca', '.dao', 'agent-stall-watch.json'));
+  const commander = readFileSync(join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+  const breaker = readFileSync(join(REPO, 'scripts', 'lib', 'provider-breaker.mjs'), 'utf8');
+  const watch = readFileSync(CLI, 'utf8');
+  for (const [name, src] of [['commander', commander], ['breaker', breaker], ['watch', watch]]) {
+    assert.match(src, /stallWatchPath/,
+      `${name} 必须走 stallWatchPath，不能各写一份默认路径`);
+  }
+  // 默认账本不许再指垫片；watch 里 PAD_STATE 点名垫片是为了报警退役，不算默认读。
+  assert.equal(/join\([^\n]*homedir\(\)[^\n]*\.agent-stall-watch\.json/.test(commander), false);
+  assert.equal(/join\([^\n]*home[^\n]*\.agent-stall-watch\.json/.test(breaker), false);
+  assert.match(watch, /PAD_STATE/);
+  const timer = readFileSync(join(REPO, 'host', 'machine', 'systemd', 'dao-agent-stall.timer'), 'utf8');
+  // 判据是「有没有墙钟点位」，不是「哪一分钟」——分钟数换了这条不该红。
+  // 原来还断言「不许有 OnUnitActiveSec」，master 的 4ce2003 明确推翻了：病根是**只有**单调时钟，
+  // 不是有它；补上 OnCalendar 之后永远有下一次，两个触发器并存反而更稳（原委见那份 timer 的文件头）。
+  assert.match(timer, /^OnCalendar=/m,
+    '没有墙钟点位，oneshot 在服务从未激活时 NEXT 就是横杠，timer 在册却空转');
 });

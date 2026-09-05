@@ -278,13 +278,23 @@ test('server-check 判别力', async (t) => {
   });
 
   await t.test('classifyAgentStallWatch（⑮ #833，另起一项不改 automations 行）', async (t) => {
-    await t.test('正式 timer 在册且垫片不在 → ok', () => {
+    await t.test('正式 timer 在册、NEXT 是时间、垫片不在 → ok', () => {
       const r = classifyAgentStallWatch({
         probed: true,
-        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
+        timersText: 'Sat 2026-09-05 13:15:00 CST  14min Sat 2026-09-05 13:00:00 CST  1min ago dao-agent-stall.timer dao-agent-stall.service',
         padScriptExists: false,
       });
       assert.equal(r.state, 'ok');
+    });
+
+    await t.test('正式 timer 在册但 NEXT 是横杠 → red（空转，探测等于没拉）', () => {
+      const r = classifyAgentStallWatch({
+        probed: true,
+        timersText: '-                               - Sat 2026-09-05 12:37:14 CST            - dao-agent-stall.timer     dao-agent-stall.service',
+        padScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /NEXT/);
     });
 
     await t.test('垫片 timer 还在 → red（影子制度）', () => {
