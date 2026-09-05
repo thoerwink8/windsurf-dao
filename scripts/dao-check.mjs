@@ -207,7 +207,7 @@ function runOneSuite(dir, f) {
     let out = '';
     let child;
     try {
-      child = spawn(cmd, args, { cwd: ROOT });
+      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -291,7 +291,7 @@ function checkSkillFrontmatter() {
 const SECRET_SHAPED = /(?:^|[/.-])(?:secret|secrets|credential|credentials|token|password|apikey|api-key)[^/]*\.(?:json|ya?ml|txt|ini|conf|cfg|env)$|\.(?:pem|key|pfx|p12|jks|keystore)$|(?:^|\/)\.env(?:\.|$)/i;
 
 function checkSecretsNotTracked() {
-  const r = spawnSync('git', ['ls-files'], { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync('git', ['ls-files'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.status !== 0) {
     fail('git 追踪面读不出来', '本次没查成，不是没问题：在 git 仓库里跑 dao check', String(r.stderr || '').trim().slice(0, 160));
     return;
@@ -992,7 +992,7 @@ function closesNumbers(text) {
 }
 
 function runGhJson(args) {
-  const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.error) return { unscanned: true, error: `gh 不可用（${r.error.code}）` };
   if (r.status !== 0) return { unscanned: true, error: String(r.stderr || r.stdout || '').trim().slice(0, 100) };
   let doc;

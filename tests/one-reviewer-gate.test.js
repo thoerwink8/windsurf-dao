@@ -105,7 +105,10 @@ describe('一 PR 一审官闸', () => {
     assert.ok(reuse.action === 'reuse' && reuse.outcome === 'reused' && reuse.worktreeId === 'wt_rev', JSON.stringify(reuse));
   });
 
-  it('失败不换厂；审官位只许当前顺位1（#843 过渡 = gpt-5.6-luna）', async () => {
+  // 2026-09-05 用户拍板放开：审官位从「只许 reviewerOrder[0]」改成「同厂换顺位可以，换厂仍拒」。
+  // 起因是 #833 的自动换人整条能力是零——静默判死后挑下一顺位 gpt-5.6-sol，被这道闸拒掉，
+  // 服务器实测 10 个审官一个都没换成人。闸的注释一直写着「不许换厂」，实现的却是「不许换任何」。
+  it('审官位：同厂换顺位放行，换厂/表外仍拒（#833 换人靠这条）', async () => {
     const S = await S_LOAD;
     const stop = S.planReviewerCreateAfterFail({ error: 'ensure 超时' });
     assert.ok(stop.ok === false && stop.switchVendor === false && stop.retry === false
@@ -117,14 +120,25 @@ describe('一 PR 一审官闸', () => {
     assert.ok(seat.ok === true && seat.modelId === 'gpt-5.6-luna', JSON.stringify(seat));
     const pass = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-luna', routing });
     assert.ok(pass.ok === true, JSON.stringify(pass));
-    // 非顺位1（含 codex 主路 sol）当场拒：只许 reviewerOrder[0]，不许换厂/降级。
+
+    // 放行的那一条：同厂（GPT）、在顺位表里 → 换得成。这正是今天卡死 10 个审官的那一格。
     const sol = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing });
+    assert.ok(sol.ok === true && sol.switched === true && sol.modelId === 'gpt-5.6-sol', JSON.stringify(sol));
+
+    // 故意违规样本①：顺位表里但异厂——路由表自己写着「备选登记，不顶审官位」，必须仍被拦。
     const kimi = S.assertReviewerSeat({ reviewerId: 'kimi-k3', routing });
     const glm = S.assertReviewerSeat({ reviewerId: 'glm-5.2', routing });
     const grok = S.assertReviewerSeat({ reviewerId: 'grok-4.6', routing });
-    assert.ok(sol.ok === false && /不许换厂/.test(sol.error), JSON.stringify(sol));
-    assert.ok(kimi.ok === false && /不许换厂/.test(kimi.error), JSON.stringify(kimi));
-    assert.ok(glm.ok === false && grok.ok === false, JSON.stringify({ glm, grok }));
+    for (const [id, r] of [['kimi-k3', kimi], ['glm-5.2', glm], ['grok-4.6', grok]]) {
+      assert.ok(r.ok === false && /不许换厂/.test(r.error), `${id} 该被换厂闸拦下：${JSON.stringify(r)}`);
+    }
+    // 故意违规样本②：同厂但不在顺位表里 → 拒。放开的是「表内同厂」，不是「所有同厂」。
+    const offTable = S.assertReviewerSeat({ reviewerId: 'gpt-4.1-nobody', routing });
+    assert.ok(offTable.ok === false && /不在表里/.test(offTable.error), JSON.stringify(offTable));
+    // 故意违规样本③：家族认不出 → 没查成，不许猜着放行。
+    const weird = S.assertReviewerSeat({ reviewerId: '???', routing });
+    assert.ok(weird.ok === false && weird.unscanned === true && /没查成/.test(weird.error), JSON.stringify(weird));
+
     const miss = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing: null });
     const empty = S.currentReviewerSeat({ reviewerOrder: [] });
     assert.ok(miss.ok === false && miss.unscanned === true && /没查成/.test(miss.error), JSON.stringify(miss));

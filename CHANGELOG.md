@@ -2,6 +2,48 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v0.2.0 — 2026-09-04
+
+### 新功能
+- feat(commander): 大脑必须给方案并送达工人/审官，不许只报帅晾着 (#873)
+- [cc] feat(dispatch): 任务书 mirasim 化——按 executor 选书 + ask/notify/send 的 mirasim 分支（#880 卡 F） (#887)
+- feat(legs): §73 四轴腿表落地——轴/腿节+legs.mjs 纯函数+dao leg 三动词+dao-check 两检查
+- [cc] feat(mirasim): 执行体契约层五动词（#880 卡 A）——判完工必须账本交叉核 (#883)
+- [cc] feat(admit-push): 点破硬拦 hook 落到会被加载的地方（实咬：装在 skills/*/hooks/hooks.json 的闸一整轮是死的）
+
+### 修复与维护
+- [cc] fix(reviewer-reuse): headless 借士兵旧 Run 必 consumer_fenced——哑协调终端自开新 Run（与新建路 #762 全同源）
+- [cc] fix(reviewer-reuse): headless 下补发送身份——审官树起哑协调终端当 --from，task-create/worker-start 同源（#762 模式；实咬 #866 复审 drain 第二格）
+- [cc] fix(reviewer-reuse): headless 下 bindStation 只在缺 runId 时才调——run-current 无发送终端必死，士兵 dispatch 已给 runId 不需要它（实咬 #866 复审 drain）
+- [cc] fix(reviewer-attach): 复用探活改用 worker-show——worker-read 无 dispatch 块，结算判读必报没查成（实咬 #866/#868 复审 drain 全灭）
+- [cc] docs(decisions): 卡H×#822 相撞已重拍——cc-local 开例外，Claude 族走 reclaude 链（用户 2026-09-05 拍板）
+- fix(gate): 同厂闸的厂商查法家族优先——「厂商可查」不再要求「是派单候选」（#895） (#901)
+- fix(legs): 帅位腿登记实事——补 fable 腿落地、新增 opus-5 在役腿
+- docs(dispatch): 快马单审官制度化——判定权不归帅位（同厂+自审双违规），正式=卡C mirasim 审官、垫片=直注且登记退役（2026-09-04 拍板）
+- fix(test): 拒派挂断断言跟上假线 close() 语义改名（hungUp）——上一提交带红提交，复盘：提交前只跑了 grep 头两行没看 fail 行
+- fix(mirasim): 终态判定对 partial fail-closed + interact/stop 断线不报成功（#884/#887 审官共咬，洞在已合并的卡 A）
+- docs(legs): 进度页收口——master 已推、110 项全绿、本机三红清偿记录
+- fix(test): #835 假 /proc 夹具目标用平台绝对路径——Windows readlink 给符号链接目标补盘符，/tmp 裸串两边对不上（本机实咬）
+- chore(legs): 清上一轮草稿的夹具子目录（检查读平铺 json，子目录无人引用）
+- docs(legs): 四轴腿表落地进度页（§73，本会话直落）
+- [cc] fix(inject): pi 开工证明直读 session jsonl——刮屏判据第二次误杀后换路（实咬：#877 修屏面判据后 stableRounds:0，指纹在轮询开始前就滚出屏面）
+- [cc] fix(inject): 开工验证认「曾见指纹+屏面在干活」——pi 审官滚屏被误杀（实咬：#877 审官正常审查中被 120s 超时回滚，每 20 分钟重复一次）
+- docs(landing): 第 10 步首单闭环（#863 自动合并）+ 帅位职责制度化记录（PR #873，2026-09-04 拍板）
+- docs(landing): 第 10 步开闸 + 当轮咬出的三个洞（失败报成成功 / 禁令没处处生效 / 机器自造的红）已修并合
+- fix(dispatch): 被禁用的模型不许进降级 slate（实咬：deepseek-v4-pro 标了禁用仍排第 2 位，落到它必 503） (#864)
+- fix(check): 仓外路径闸不扫 CHANGELOG——生成物里的历史路径不是新指针（实咬：v0.1.0 一发，在途 PR 的 CI 全红） (#867)
+- docs(landing): 第 9 步达成——机器人说人话 + 总控群能问现状（服务器实测回话已录）
+
+### 其它
+- [pi] 审官注入失败不回滚树 (#815 第6洞) (#866)
+- 框架单走快马不进派单队列 + 待消歧到时机浮出水面（署名 issue #876） (#877)
+- [pi] 核 #787 dao-commit 已落地（测试派单） (#863)
+- [cc] 指挥官：异步派工要回读真结果（实咬：失败被报成成功） (#865)
+- release: v0.1.0
+- [cc] 机器人 llm 改流式 + ⑰ 模型探针（实咬：机器人哑了一天零报警） (#862)
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v0.1.0 — 2026-09-03
 
 ### 新功能

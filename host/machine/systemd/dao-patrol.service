@@ -1,0 +1,38 @@
+# /etc/systemd/system/dao-patrol.service
+#
+# 机制巡检：唤一个一次性会话去翻「脚本查不出」的洞（机制漏洞、装了没生效、
+# 判据前提已不成立、两处规矩打架），发现落 docs/observations/ 并提交推送，
+# 帅位下一轮被收件箱硬闸提醒去读（host/skills/dao-inbox/）。
+#
+# 为什么要它：这台机器上另外几个定时任务全是判据写死的脚本，只找得到见过的失败形态。
+# 2026-09-05 真正被翻出来的两个洞（本单元原先那个 root 提权、活性判据盲区）一个脚本都没报。
+#
+# 判据与任务书全文在 scripts/commander.mjs 的 patrol 段；改频率改 dao-patrol.timer，
+# 改任务书改那个函数——**不要把业务逻辑抄进本单元**。
+#
+# 装法：sudo bash scripts/install-dao-patrol.sh
+#
+# User=orca 是硬要求，不是习惯：ExecStart 指的是 /home/orca/windsurf-dao 里的脚本，
+# 那个仓每个执行体都能写；以 root 解释它，等于给每个能写仓的执行体一条 root 通道
+# （dao-sync 就是这么漏的，tests/unit-privilege.test.js 现在守着这一条）。
+# PATH 必须带 ~/.local/bin，否则回收一次性会话时找不到 orca。
+
+[Unit]
+Description=windsurf-dao mechanism patrol (LLM)
+After=network-online.target orca-serve.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/home/orca/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/commander.mjs patrol
+# 起一次性会话本身要等（起会话 3 分钟预算 + 送指针 1 分钟），默认 90 秒会把正常的一轮掐死。
+TimeoutStartSec=600
+# 退出码 1 = 查出上一轮巡检越界、已经报帅开单了，这是正常输出不是故障。
+# 2 = 没查成，**故意留成失败**：没查成要在 systemctl --failed 里看得见，
+# 不许跟「查过没事」长成一个样。
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal

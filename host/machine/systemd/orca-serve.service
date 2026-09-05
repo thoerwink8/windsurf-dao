@@ -32,11 +32,12 @@ Type=simple
 User=orca
 WorkingDirectory=/home/orca
 Environment=LIBGL_ALWAYS_SOFTWARE=1
-# --pairing-address 换成客户端能连到的地址（LAN / Tailscale / 反代 URL）。
-# 它只是「广告给客户端的地址」，不改监听绑定；* 0.0.0.0 :: 不许广告。
-# 容器/无 FUSE 环境把 ExecStart 换成解包后的 AppRun：
-#   /opt/orca/squashfs-root/AppRun serve --port 6768 --pairing-address <addr>
-ExecStart=/opt/orca/orca-linux.AppImage serve --port 6768 --pairing-address 100.64.1.20
+# --pairing-address 是「广告给客户端的地址」，不改监听绑定（恒 0.0.0.0:6768）；* 0.0.0.0 :: 不许广告。
+# 这两个值是机器上的实况（2026-09-02 装机起就这么跑，2026-09-05 由 server-check ⑳ 比对发现仓里写的是另一份）：
+#  · 走解包后的 AppRun，不走 AppImage。
+#  · 127.0.0.1 —— 这台没有 Tailscale 接口，原先写的 100.64.1.20 是装机前的设想，那个网段根本不存在。
+# 将来真的从 LAN/Tailscale/反代连进来，改这一行的地址，并且**装到机器上**（⑳ 会盯着两边一致）。
+ExecStart=/opt/orca/squashfs-root/AppRun serve --port 6768 --pairing-address 127.0.0.1
 StandardOutput=journal
 StandardError=journal
 # 优雅停只打主进程，让 orca 自己收掉它拥有的 Xvfb；超时才 cgroup 级 SIGKILL

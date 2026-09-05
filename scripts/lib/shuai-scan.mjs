@@ -42,6 +42,7 @@ query($owner: String!, $name: String!) {
         isDraft
         reviewDecision
         mergeable
+        headRefOid
         body
         commits(last: 1) {
           nodes {
@@ -139,6 +140,9 @@ export function normalizeGithubGraphql(data) {
       isDraft: !!p.isDraft,
       reviewDecision: p.reviewDecision || null,
       mergeable: p.mergeable || null,
+      // headRefOid：判「审官那条红/绿是不是打在当前 head 上」的必需字段（#911 起）。
+      // 取不到就是 null，判据侧按「没查成」走，绝不当成「head 变了」。
+      headRefOid: typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : null,
       body: p.body || '',
       state: 'OPEN',
       statusCheckRollup,
