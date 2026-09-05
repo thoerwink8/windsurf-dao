@@ -27,7 +27,7 @@
 喂 PreToolUse JSON 给 hook 进程（不是单元测试替身）：
 
 ```
-command = cat > tests/foo.test.js <<'EOF'\nconst re = /\s+/;\nEOF
+command = cat > tests/tool-use-gate.test.js <<'EOF'\nconst re = /\s+/;\nEOF
 → additionalContext 含「吞掉」，systemMessage 含 heredoc-escape，exit 0
 
 command = python -c "open(r\"a.txt\",\"w\").write(\"x\")"
