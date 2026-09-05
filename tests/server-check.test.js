@@ -404,6 +404,48 @@ test('server-check 判别力', async (t) => {
       assert.equal(r.probed, true);
       assert.equal(r.hit, '/usr/bin/grok');
     });
+
+    const execFile = () => ({ isDirectory: () => false, isFile: () => true, mode: 0o755 });
+
+    await t.test('PATH 空段展开为 .：":/tmp/bin" + 只有 ./grok 可执行 → hit === ./grok', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: ':/tmp/bin',
+        stat: (p) => (p === './grok' ? execFile() : enoent()),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, './grok', JSON.stringify(r));
+    });
+
+    await t.test('无空段不搜 cwd："/tmp/bin" + 只有 ./grok 可执行 → hit null', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/tmp/bin',
+        stat: (p) => (p === './grok' ? execFile() : enoent()),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, null, JSON.stringify(r));
+    });
+
+    await t.test('PATH=":" 探 cwd，不是「分段 0 个」', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: ':',
+        stat: (p) => (p === './grok' ? execFile() : enoent()),
+      });
+      assert.equal(r.probed, true, JSON.stringify(r));
+      assert.equal(r.hit, './grok', JSON.stringify(r));
+    });
+
+    await t.test('Windows 空段：";C:\\Tools" + 只有 .\\grok.exe → 命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'win32',
+        pathEnv: ';C:\\Tools',
+        stat: (p) => (p === '.\\grok.exe' ? { isDirectory: () => false, isFile: () => true } : enoent()),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, '.\\grok.exe', JSON.stringify(r));
+    });
   });
 
   await t.test('classifyFeishuTriage（⑫ #801）', async (t) => {

@@ -489,8 +489,9 @@ export function whichOnPath(name, opts = {}) {
   const platform = opts.platform ?? process.platform;
   if (!pathEnv) return { probed: false, reason: 'PATH 空（没查成）', hit: null };
   const win = platform === 'win32';
-  const segs = String(pathEnv).split(win ? ';' : ':').filter(Boolean);
-  if (segs.length === 0) return { probed: false, reason: 'PATH 分段 0 个（没查成）', hit: null };
+  // POSIX 空段 = cwd（`:` / `:/tmp` / `/tmp:`）；Windows `;` 同理。不要 filter(Boolean)，否则 cwd 里的退役 CLI 漏报。
+  // 拼路径走现有 joinFor：`.` + grok → `./grok`（Windows `.\grok.exe`），不要展开成 process.cwd()。
+  const segs = String(pathEnv).split(win ? ';' : ':').map((s) => (s === '' ? '.' : s));
   const candidates = win ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
   const entryOpts = { platform, stat: opts.stat };
   // 拼路径要跟 platform 走，不跟宿主走：宿主 join 在 Windows 上会把 /usr/bin 拼成
