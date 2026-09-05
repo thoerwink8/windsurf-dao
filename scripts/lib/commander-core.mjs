@@ -260,13 +260,37 @@ function collectCandidates(situation) {
         out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
         continue;
       }
-      if (!model || !reviewer) {
+      // 缺标签**只在半标态报**：有 model 没 reviewer，或反过来。两个都没有 = 静默跳过。
+      //
+      // 改这段之前必须知道的两件事：
+      //
+      // ① 为什么不是「缺任一就报」（2026-09-05 实咬）：进这个分支的门槛只有一条「已消歧」，
+      //    而帅位开**任何**记账单/体系单都按惯例打「已消歧」⇒ 每开一张新单，指挥官下一轮就为它
+      //    生一张「[待拍板] missing-labels」。#953 开单 06:49、#954 生成 06:56，隔 6 分钟；
+      //    当天关掉 4 张（#900/#946/#951/#954），转头又生 4 张（#957/#958/#959/#961）。
+      //    源单一直开着，报单就一直生——这不是漏标提醒，是自我繁殖。
+      //
+      // ② 为什么上面那条 type/体系 豁免接不住它——**鸡生蛋**：
+      //    type/* 的唯一自动写入方是 stampIssueLabels（scripts/lib/dispatch/card.mjs），
+      //    由 scripts/dao.mjs 在**派工成功之后**才调。也就是说，豁免的开关只有「被派过工」
+      //    才会自动打开，而这条豁免存在的目的**正是阻止派工**。新开的框架单永远等不到那一下。
+      //    别拿「手工打过 type/体系 的单确实安静」当反证（#904/#903/#902/#895/#888 都安静）：
+      //    那不是判据对，是有人替它手工打开了开关；没人手工打的单一律炸单。
+      //
+      // 判据本身：两个都没有 = 从来没人瞄准过派工车道（新开的单默认就长这样），不是漏标；
+      //          一个有一个没有 = 有人打了一半停下，那才是真信号。
+      //
+      // 「没查成」不会落进这里：labels 不是数组的 issue 在 inspectReadyQueue 就被挡掉了
+      // （labelNames 返回 null → 不进 ready，整节报 kind:'unscanned'），所以走到这一步的 null
+      // 一律是「查过、确实没这个标」，与「没查成」在出口上分得开。
+      if ((model || reviewer) && (!model || !reviewer)) {
         // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
-        out.push(withNeeds(esc(`#${n} 已消歧但缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
+        out.push(withNeeds(esc(`#${n} 已消歧，但派工标只打了一半：有 ${model ? 'model/' : 'reviewer/'}、缺 ${!model ? 'model/' : 'reviewer/'}，不猜——报帅补标签`, {
           reason: 'missing-labels', issue: n, title: issue?.title || '',
         }), N.dispatch));
         continue;
       }
+      if (!model && !reviewer) continue; // 两个都没有：静默跳过（理由见上 ①②）
       const gate = assessDispatchModel(model, { policy, enabledIds, redIds });
       if (!gate.ok) {
         out.push(withNeeds(esc(`#${n} ${gate.why}`, {

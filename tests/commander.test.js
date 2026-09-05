@@ -54,9 +54,14 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
-  it('已消歧但缺 model/reviewer 标签 → escalate 不猜（不产 dispatch）', async () => {
+  // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
+  // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
+  // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。
+  // **洞是带着绿测试出厂的，这条测试就是钉住它的那颗钉子。**
+  // 真信号是**半标态**：有人打了一半停下。两个都没有 = 从没瞄准过派工车道，不是漏标。
+  it('已消歧且派工标只打了一半（有 model 没 reviewer） → escalate 不猜（不产 dispatch）', async () => {
     const { decide } = await CORE;
-    const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }] };
+    const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }] };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
     assert.equal(byKind(r, 'dispatch').length, 0, '缺标签绝不派');
     const e = byKind(r, 'escalate');
