@@ -5,7 +5,9 @@
 // 审官位只许当前路由表 reviewerOrder[0]（现为 Codex），换厂当场拒。
 // 审官 dispatch 已结算：报帅，不许自动 reviewer-create / 换厂再造。
 
-import { prNumberFromWorktree } from '../card-identity.mjs';
+import { prNumberFromWorktree, worktreeIdOf } from '../card-identity.mjs';
+import { assembleCardName } from './card.mjs';
+import { argsWorktreeCreate } from './args.mjs';
 import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { normalizePipes } from '../next-launch.mjs';
@@ -183,6 +185,152 @@ export function gateReviewerCreate({ pr, parentId, worktrees, workers, terminals
     closedWorktrees: withHandles.map(c => c.worktreeId),
     error: REFUSE_EXISTING_REVIEWER,
     reason: '已有所以拒绝新建',
+  };
+}
+
+// ── 快马 PR（pr-fast）起审官 ───────────────────────────────────────────────
+// 快马 PR＝帅位/子代理直接写码开的 PR：没有 orca 士兵树，也没有 dispatch 记账。
+// 2026-09-05 值守实咬 8 次：reviewer-create 走到「士兵 dispatch」那格必报「找不到士兵
+// dispatch」并整树回滚，审官起不来；当晚十张 PR 全靠手工「替身树 + reviewer-attach
+// --skip-wait」补（#866 已判绿自动合并）。
+//
+// 改这段前必须知道：
+// 1. 「没查成」和「查过确实没有」必须分开。worktree list / worker-list 没查成一律 unscanned，
+//    绝不许当成快马 PR——那会把真断链掩盖成「正常的快马路」。
+// 2. 替身树是给审官卡当父卡的空壳，不是放被审代码的地方。被审代码在审官树里（base=PR 分支）。
+//    要它是因为一 PR 一审官闸（collectReviewerCardsForPr）只认「有父卡的子卡」：审官卡挂不上
+//    父卡就扫不到，闸当场失效。所以快马路补的是拓扑，不是代码。
+// 3. 没打本机制标记的 PR 树一律当士兵树走原路（照旧报「找不到士兵 dispatch」）——
+//    宁可停手报，也不把断链的士兵树当空气。
+export const FASTPATH_STANDIN_MARK = 'fastpath-standin';
+
+/** 替身树的卡 comment 标记。判「这是不是本机制建的替身树」只认它，不读卡名（#589）。 */
+export function fastPathStandInComment(pr) {
+  return `${FASTPATH_STANDIN_MARK}:PR-#${String(pr ?? '').trim()}`;
+}
+
+export function isFastPathStandIn(w, pr) {
+  const comment = String((w && w.comment) || '');
+  const n = String(pr ?? '').trim();
+  if (!comment || !/^\d+$/.test(n)) return false;
+  return new RegExp(`${FASTPATH_STANDIN_MARK}:PR-#?${n}(?!\\d)`).test(comment);
+}
+
+/**
+ * 快马替身树的建树命令。硬点两条：
+ * --base-branch 必须是 PR 分支（审官树跟着它建，被审代码才在树里，见 memory
+ * reviewer-tree-must-contain-reviewed-code）；--no-parent 让它当顶层父卡。
+ */
+export function fastPathStandInCreateArgs({ pr, issue, baseBranch, workerModel } = {}) {
+  return argsWorktreeCreate({
+    name: assembleCardName({ name: '工人替身（快马 PR）', pr, role: '辅助', model: workerModel }),
+    noParent: true,
+    setup: 'skip',
+    baseBranch,
+    issue,
+    comment: fastPathStandInComment(pr),
+  });
+}
+
+function branchTail(b) {
+  return String(b || '').trim().replace(/^refs\/heads\//, '').replace(/^origin\//, '');
+}
+
+function worktreeMatchesPr(w, pr, headRefName) {
+  if (prNumberFromWorktree(w) === Number(pr)) return true;
+  const tail = branchTail(headRefName);
+  return !!tail && branchTail(w && w.branch) === tail;
+}
+
+function worktreeHasDispatch(w, workers) {
+  const id = worktreeIdOf(w);
+  if (!id) return false;
+  return workers.some(x => worktreeIdMatches(x?.resource?.worktreeId, id) || worktreeIdMatches(x?.worktreeId, id));
+}
+
+/**
+ * 起审官前判这张 PR 有没有士兵树。四态必须分开：
+ * 帅显式给了选择器 / 扫到士兵树（走原路） / 扫完确实没有（快马路） / 没查成（停手）。
+ * 只有第三态才许建替身树。
+ */
+export function planFastPathReviewer({
+  pr, headRefName, explicitParent, explicitDispatch, worktrees, workers,
+} = {}) {
+  if (String(explicitParent || '').trim() || String(explicitDispatch || '').trim()) {
+    return {
+      ok: true,
+      fastPath: false,
+      mode: 'explicit',
+      reason: '帅显式给了 --parent-worktree / --soldier-dispatch，不判快马',
+    };
+  }
+  const n = Number(pr);
+  if (!Number.isInteger(n) || n <= 0) {
+    return { ok: false, unscanned: true, fastPath: false, mode: 'unscanned', error: '快马判定没给合法 PR 号（没查成）' };
+  }
+  if (!Array.isArray(worktrees)) {
+    return {
+      ok: false,
+      unscanned: true,
+      fastPath: false,
+      mode: 'unscanned',
+      error: `worktree list 没查成——不许当成快马 PR #${n}（没查成 ≠ 查过确实没有士兵树）`,
+    };
+  }
+  if (!Array.isArray(workers)) {
+    return {
+      ok: false,
+      unscanned: true,
+      fastPath: false,
+      mode: 'unscanned',
+      error: `worker-list 没查成——不许当成快马 PR #${n}（没查成 ≠ 查过确实没有士兵 dispatch）`,
+    };
+  }
+  // 审官卡自己也挂着这张 PR 号/分支，扫士兵树时要先摘掉——用闸自己的收集器，不另造判据。
+  const reviewerCards = collectReviewerCardsForPr({ pr: n, worktrees, workers });
+  if (!reviewerCards.ok) {
+    return { ok: false, unscanned: true, fastPath: false, mode: 'unscanned', error: reviewerCards.error };
+  }
+  const skip = new Set(reviewerCards.cards.map(c => c.worktreeId));
+
+  const candidates = worktrees.filter(w => w
+    && w.isMainWorktree !== true
+    && w.isArchived !== true
+    && !skip.has(worktreeIdOf(w))
+    && worktreeMatchesPr(w, n, headRefName));
+  const standIns = candidates.filter(w => isFastPathStandIn(w, n));
+  const soldiers = candidates.filter(w => !isFastPathStandIn(w, n));
+
+  if (soldiers.length) {
+    const booked = soldiers.filter(w => worktreeHasDispatch(w, workers));
+    const pick = booked[0] || soldiers[0];
+    return {
+      ok: true,
+      fastPath: false,
+      mode: 'soldier',
+      parentWorktree: worktreeIdOf(pick),
+      soldierBooked: booked.length > 0,
+      soldiers: soldiers.map(worktreeIdOf),
+      reason: `扫到 PR #${n} 的士兵树（${booked.length ? '有' : '无'} dispatch 记账），走原路不建替身树`,
+    };
+  }
+  if (standIns.length) {
+    return {
+      ok: true,
+      fastPath: true,
+      mode: 'fast-path',
+      standInId: worktreeIdOf(standIns[0]),
+      standInReused: true,
+      reason: `扫完 PR #${n} 只有本机制建的替身树，复用它当父卡（不再建第二棵）`,
+    };
+  }
+  return {
+    ok: true,
+    fastPath: true,
+    mode: 'fast-path',
+    standInId: null,
+    standInReused: false,
+    reason: `扫完确实没有 PR #${n} 的士兵树/dispatch 记账——快马 PR，建替身树当父卡`,
   };
 }
 
