@@ -190,6 +190,8 @@ import {
   planReviewerDone,
   resolveReviewerReuse,
   gateReviewerCreate,
+  planFastPathReviewer,
+  fastPathStandInCreateArgs,
   assertReviewerSeat,
   planReviewerCreateAfterFail,
   postIssueComment,
@@ -3458,7 +3460,29 @@ async function cmdReviewerCreate(args) {
     })
     : { ok: false, outcome: 'unscanned', unscanned: true, error: inputs.error };
 
-  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan, oneReviewerGate });
+  // 快马 PR 判定（#880/#891）：没给 --parent-worktree/--soldier-dispatch 时先扫盘面。
+  // 扫到士兵树 → 走原路；扫完确实没有 → 快马路（建替身树当父卡）；没查成 → 停手报，
+  // 绝不当成快马 PR（那会把真断链掩盖成正常）。
+  // inputs 是一把梭（worktree list / worker-list / terminal list 任一没查成就整体 false），
+  // 所以没查成时直接把真正失败的那条原文带出来，不许由判定器改口成别的清单没查成。
+  const fastPlan = inputs.ok
+    ? planFastPathReviewer({
+      pr: args.pr,
+      headRefName: baseBranch,
+      explicitParent: args.parentWorktree,
+      explicitDispatch: args.soldierDispatch,
+      worktrees: inputs.worktrees,
+      workers: inputs.workers,
+    })
+    : {
+      ok: false,
+      unscanned: true,
+      fastPath: false,
+      mode: 'unscanned',
+      error: `${inputs.error}——不许当成快马 PR #${args.pr}（没查成 ≠ 查过确实没有士兵树/dispatch）`,
+    };
+
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan, oneReviewerGate, fastPathPlan: fastPlan });
 
   if (oneReviewerGate.outcome === 'unscanned') {
     fail(oneReviewerGate.error, { outcome: 'unscanned', oneReviewerGate, ...plan });
@@ -3494,8 +3518,11 @@ async function cmdReviewerCreate(args) {
     reviewerPath = oneReviewerGate.worktreePath;
   }
 
+  if (!fastPlan.ok) fail(fastPlan.error, { outcome: 'unscanned', fastPathPlan: fastPlan, oneReviewerGate, ...plan });
+  let parentSel = args.parentWorktree || (fastPlan.mode === 'soldier' ? fastPlan.parentWorktree : null);
+
   const fetchCwd = reviewerFetchCwd({
-    parentSel: args.parentWorktree,
+    parentSel,
     worktrees: inputs.ok ? inputs.worktrees : null,
   });
   let originRef = prepareReviewerOriginRef({ branch: baseBranch, expectedOid, cwd: fetchCwd });
@@ -3503,11 +3530,30 @@ async function cmdReviewerCreate(args) {
   plan.baseBranch = originRef.baseBranch;
   plan.originOid = originRef.originOid;
 
+  // 快马路：审官卡必须有父卡，一 PR 一审官闸（collectReviewerCardsForPr）才扫得到它。
+  // 建一棵指向 PR 分支的空替身树当父卡，comment 打 fastpath-standin 标记便于复用与回收；
+  // 被审代码在审官树里（base=PR 分支），不靠这棵。
+  let standInId = fastPlan.fastPath ? (fastPlan.standInId || null) : null;
+  let standInCreated = false;
+  if (fastPlan.fastPath && !resumedFromExisting && !standInId) {
+    const madeStandIn = orca(fastPathStandInCreateArgs({
+      pr: args.pr,
+      issue: args.issue,
+      baseBranch: originRef.baseBranch,
+      workerModel: worker.modelId,
+    }));
+    if (!madeStandIn.ok) fail(`快马替身树创建失败: ${errText(madeStandIn.error)}`, { fastPathPlan: fastPlan, ...plan });
+    standInId = extractWorktreeId(madeStandIn.json);
+    if (!standInId) fail('快马替身树没返回 id（没查成）', { fastPathPlan: fastPlan, ...plan });
+    standInCreated = true;
+  }
+  if (standInId) parentSel = standInId;
+
   if (!resumedFromExisting) {
     const created = orca(argsWorktreeCreate({
       name: revName,
       setup: 'skip',
-      parentWorktree: args.parentWorktree,
+      parentWorktree: parentSel,
       baseBranch: originRef.baseBranch,
       issue: args.issue,
       comment: args.comment,
@@ -3526,6 +3572,8 @@ async function cmdReviewerCreate(args) {
   // 「已有但起不来」；留着才能再续）。新建卡失败照旧删（不留半成品）。
   const rmReviewerCard = () => {
     if (!resumedFromExisting) orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    // 本次建的替身树跟着审官卡一起退（先子后父）；复用到的旧替身树不动。
+    if (standInCreated && standInId) orca(argsWorktreeRm({ worktree: standInId, force: true }));
   };
 
   const env = envProbeWorktree(reviewerPath);
@@ -3565,9 +3613,11 @@ async function cmdReviewerCreate(args) {
   }
 
   // 续跑：launched 不带 reviewerId——failCreated 的回滚只关本次起的终端，不删已有卡。
+  // workerId 交给回滚器（planDispatchDestroy 最后删它）——本次建的替身树是审官卡的父卡，
+  // 审官起不来整树退时它必须一起退，不留孤儿空壳。复用到的旧替身树不进 launched。
   const launched = resumedFromExisting
     ? { reviewerHandle: null }
-    : { reviewerId, reviewerHandle: null };
+    : { reviewerId, reviewerHandle: null, ...(standInCreated && standInId ? { workerId: standInId } : {}) };
   const revTerm = launchAgentInWorktree({
     worktreeId: reviewerId,
     title: revName,
@@ -3603,15 +3653,17 @@ async function cmdReviewerCreate(args) {
 
   let foundDispatch = null;
   let soldierRunId = null;
-  if (args.parentWorktree) {
+  // 快马路上没有士兵可查（判定已在 planFastPathReviewer 确证），不再去 worker-list 找。
+  const soldierSel = fastPlan.fastPath ? null : parentSel;
+  if (soldierSel) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) {
       foundDispatch = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(wl.error)}` };
     } else {
-      foundDispatch = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
+      foundDispatch = findDispatchForWorktree(wl.json, soldierSel, resolveDispatchLastFailure);
       if (foundDispatch.ok) soldierRunId = foundDispatch.runId || null;
     }
-  } else if (!args.soldierDispatch) {
+  } else if (!args.soldierDispatch && !fastPlan.fastPath) {
     foundDispatch = { ok: false, error: '没给 --soldier-dispatch 或 --parent-worktree' };
   }
   const probeId = String(args.soldierDispatch || '').trim()
@@ -3634,6 +3686,7 @@ async function cmdReviewerCreate(args) {
     explicitDispatch: args.soldierDispatch,
     found: foundDispatch,
     dispatchLive: probeId ? dispatchLive : undefined,
+    fastPath: fastPlan.fastPath === true,
   });
   if (!soldierPlan.ok) failCreated(launched, soldierPlan.error, { found: foundDispatch, soldierPlan, ...plan });
   const soldierDispatchId = soldierPlan.soldierDispatchId || '';
@@ -3646,7 +3699,7 @@ async function cmdReviewerCreate(args) {
     issue: args.issue,
     pr: args.pr,
     dispatchId: soldierDispatchId || probeId || null,
-    worktreeSel: args.parentWorktree,
+    worktreeSel: parentSel,
     worktrees: inputs.ok ? inputs.worktrees : undefined,
   });
   if (!policyPlan.ok) failCreated(launched, policyPlan.error, { policyPlan, ...plan });
@@ -3661,6 +3714,8 @@ async function cmdReviewerCreate(args) {
       mergePolicy: policyPlan.mergePolicy,
       mergeReason: policyPlan.mergeReason,
       fallbackReason: policyPlan.fallbackReason,
+      // 快马路没有士兵会发完工：s=1，红项按任务书直接上帅（与手工 attach --skip-wait 同义）
+      skipWait: soldierPlan.skipWait === true,
     }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
@@ -3768,6 +3823,12 @@ async function cmdReviewerCreate(args) {
     ok: true,
     outcome: resumedFromExisting ? 'resumed' : 'created',
     resumedFromExisting,
+    // 快马路必须在返回里自报家门：谁在读这份 JSON，都能看出这张 PR 没有士兵、审官挂在替身树下。
+    fastPath: fastPlan.fastPath === true,
+    fastPathReason: fastPlan.fastPath === true ? fastPlan.reason : null,
+    fastPathPlan: fastPlan,
+    standInId,
+    standInCreated,
     ...plan,
     reviewerId,
     reviewerPath,
