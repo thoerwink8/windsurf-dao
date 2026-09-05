@@ -128,8 +128,24 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
       : null;
     const parentIsMain = !!(parent && parent.isMainWorktree);
 
-    // 子卡：只有「重复卡」这一种理由能让它单独出列，其余随父卡整树走。
+    // 子卡：只有两种理由能让它单独出列，其余随父卡整树走。
     if (w.parentWorktreeId && !parentIsMain) {
+      // 理由二：审官卡的判定已经落在当前 head——它的活交付完了。
+      // 审官树是独立一棵，产出（review）在 GitHub 上，删树不丢任何东西；
+      // 这就是 2026-08-22 已拍板的「审结即清树」，只是此前没人自动做。
+      // 不这么放行的话这条判据够不着：审官卡永远挂在工人卡下面，而工人卡的 PR 还开着 → 整树留着。
+      if (isReviewerCard(name) && prJudgedAtHead != null && !aliveWorktreeIds.has(id)) {
+        const myPrs = [...new Set([w, ...descendantsOf(w, worktrees).descendants]
+          .map(prNumberFromWorktree).filter((n) => n != null))];
+        const judged = myPrs.map((n) => lookup(prJudgedAtHead, n));
+        if (myPrs.length && judged.every((v) => v === true)) {
+          zombies.push({
+            id, name, path: w.path || null, kind: 'reviewer-delivered',
+            why: `审官已给 PR ${myPrs.map((n) => '#' + n).join('/')} 的当前 head 落了判定，活已交付且卡上没有活着的进程`,
+          });
+          continue;
+        }
+      }
       if (!dupZombieIds.has(id)) continue;
       if (aliveWorktreeIds.has(id)) { keep.push({ id, name, why: '重复卡，但它上面还有活着的进程' }); continue; }
       zombies.push({ id, name, path: w.path || null, why: dupWhy.get(id), kind: 'duplicate' });

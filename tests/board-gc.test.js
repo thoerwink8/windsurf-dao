@@ -453,3 +453,48 @@ describe('issue 已关闭的无 PR 卡是僵尸', () => {
     assert.equal(p.zombies.length, 0);
   });
 });
+
+// 审官卡永远挂在工人卡底下，而子卡原本只有「重复卡」一条出路——
+// 于是「审官活已交付」这条判据够不着它：工人卡的 PR 还开着，整树就留着。
+// 2026-08-22 已拍板「审结即清树」，这里把它自动化。
+describe('判定已交付的审官子卡可以单独出列', () => {
+  const parent = { id: 'wt_p', displayName: 'PR-#884 辅助·claude-opus 工人替身', path: '/p',
+    branch: 'refs/heads/wd-884', childWorktreeIds: ['wt_r'] };
+  const kid = { id: 'wt_r', displayName: 'PR-#884 审官·gpt-5.6-luna', path: '/r',
+    branch: 'refs/heads/PR-884-审官', parentWorktreeId: 'wt_p', childWorktreeIds: [] };
+  const base = {
+    worktrees: [parent, kid], aliveWorktreeIds: new Set(),
+    prState: new Map([[884, 'OPEN']]),
+    branchState: new Map([['wd-884', { onRemote: true, ahead: 1, dirty: 0, contributes: true }]]),
+  };
+
+  it('判定落了 → 审官子卡单独判僵尸，父卡照旧留着', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, prJudgedAtHead: new Map([[884, true]]) });
+    const z = p.zombies.filter((x) => x.kind === 'reviewer-delivered');
+    assert.equal(z.length, 1, JSON.stringify(p));
+    assert.equal(z[0].id, 'wt_r');
+    assert.ok(p.keep.some((k) => k.id === 'wt_p'), '父卡的 PR 还开着，不该被带走');
+  });
+
+  it('故意违规样本：审官卡上还有活口 → 不删', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, aliveWorktreeIds: new Set(['wt_r']),
+      prJudgedAtHead: new Map([[884, true]]) });
+    assert.equal(p.zombies.filter((x) => x.kind === 'reviewer-delivered').length, 0);
+  });
+
+  it('故意违规样本：判定还没落 → 不删（这是卡住，归换人）', async () => {
+    const S = await LOAD;
+    const p = S.planBoardGc({ ...base, prJudgedAtHead: new Map([[884, false]]) });
+    assert.equal(p.zombies.length, 0);
+  });
+
+  it('故意违规样本：不是审官的子卡，判定落了也不单独出列', async () => {
+    const S = await LOAD;
+    const worker = { ...kid, displayName: 'PR-#884 工人·claude-opus-5 返工' };
+    const p = S.planBoardGc({ ...base, worktrees: [parent, worker],
+      prJudgedAtHead: new Map([[884, true]]) });
+    assert.equal(p.zombies.length, 0);
+  });
+});
