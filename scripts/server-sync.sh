@@ -10,10 +10,16 @@ BOT_PATHS='^(scripts/feishu-triage\.mjs|scripts/lib/feishu-triage-core\.mjs|scri
 
 g() { git -C "$REPO" "$@"; }   # 本进程就是 orca，不再需要 sudo -u
 
+# 错误落 mktemp，不写固定的 /tmp/dao-sync.err：2026-09-05 单元从 root 改成 orca 之后，
+# 那个固定名字还是上一轮 root 建的、orca 写不进去，重定向失败让整个 if 判成「合并失败」——
+# 于是每一轮都报「主树无法快进」，同步实际停摆，而单元照样 exit 0 看着一切正常。
+ERRF=$(mktemp -t dao-sync.XXXXXX)
+trap 'rm -f "$ERRF"' EXIT
+
 before=$(g rev-parse HEAD)
 g fetch -q --prune origin
-if ! g merge -q --ff-only origin/master 2>/tmp/dao-sync.err; then
-  echo "主树无法快进（本地有未推提交或与远端发散），不动：$(head -c 200 /tmp/dao-sync.err)"
+if ! g merge -q --ff-only origin/master 2>"$ERRF"; then
+  echo "主树无法快进（本地有未推提交或与远端发散），不动：$(head -c 200 "$ERRF")"
   exit 0
 fi
 after=$(g rev-parse HEAD)
