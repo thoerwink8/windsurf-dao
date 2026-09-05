@@ -15,6 +15,7 @@
 //   AGENT_STALL_SAY      假报帅脚本（参数 = 文本）
 //   AGENT_STALL_STATE    覆盖账本路径
 //   AGENT_STALL_STRIKES  连红轮数（默认 2）
+//   DAO_NOCARD_GRACE_MINUTES  新起进程判「没有卡」前的宽限（默认 10 分钟）
 //
 // 退出码：0 扫完没事或已处理 / 1 有真红没处理完 / 2 没查成。
 
@@ -37,6 +38,10 @@ import {
   reviewerPasserIds,
   scanRound,
 } from './lib/agent-stall-detect.mjs';
+import {
+  NO_CARD_TIERS, SILENCE_TIERS,
+  classifyNoCardProcesses, noCardLine, planTierAlerts, readProcessCensus, standingLine,
+} from './lib/stall-census.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -258,6 +263,11 @@ function progressStatePath(statePath) {
   return String(statePath).replace(/\.json$/, '') + '-progress.json';
 }
 
+/** 升级档账本：哪些东西的哪一档已经说过了。与静默账分开——静默账管「首报+换人」，这本管「还没好」。 */
+function tierStatePath(statePath) {
+  return String(statePath).replace(/\.json$/, '') + '-tiers.json';
+}
+
 // 会话名要说人话：终端标题常常就是一行 shell 提示符，直接播出去用户只看到一串路径
 // （服务器落地清单「说人话判据」：不出现路径/命令行）。取最后一段，去掉结尾的提示符。
 function plainLabel(sess) {
@@ -363,6 +373,11 @@ function main(argv = process.argv.slice(2)) {
   const seenSilent = loadState(livenessStatePath(args.state));
   const nextSilent = {};
   const liveLines = [...driverNotes];
+  // 一条消息最多列这么多，其余只给条数。第一次接上观测面时盘上会攒着几十个陈年静默，
+  // 全列出来仍然是刷屏——只是从「每轮刷」变成「一次刷一屏」。
+  const MAX_LISTED = 8;
+  // 升级档账本（静默 / 无卡两本分开记），本轮末尾一次落盘。
+  const tierMemory = loadState(tierStatePath(args.state));
   const silentReviewers = [];
   if (!live.ok) {
     liveLines.push(`会话活性没查成：${live.error}`);
@@ -372,6 +387,9 @@ function main(argv = process.argv.slice(2)) {
     // 按**卡**去重再报，不按终端。一张卡有协调终端 + agent 终端好几个，
     // 按终端报会让同一张卡在同一条消息里重复出现（2026-09-05 实咬截图里就是成对的重复行）。
     const fresh = [];
+    // 本轮已经首报过的卡：它们不用再吃一次升级档，否则第一次见到一个躺了 10 小时的会话
+    // 会同时出「45 分钟没动」和「已经一天没动」两行，说的是同一件事。
+    const freshKeys = new Set();
     for (const sil of live.silent) {
       const route = routeSilent(sil);
       // 只报**新出现**的静默。timer 每 15 分钟一轮，不去重就是同一句话无限刷屏。
@@ -397,6 +415,7 @@ function main(argv = process.argv.slice(2)) {
         at: new Date().toISOString(), minutes: Math.round((sil.silentMs || 0) / 60000),
         action: route.action, tries: tries + 1, ok: null,
       };
+      freshKeys.add(String(sil.worktreeId || sil.id));
       fresh.push(`${plainLabel(sil)} 已经 ${Math.round((sil.silentMs || 0) / 60000)} 分钟没动`
         + `——${route.action === 'restart-reviewer' ? '当它死了，重起一个' : '交给你看'}`);
       // 判死之后要真换人（用户 2026-09-05 拍板 #833）。此前这条能力挂在 #807 删掉的本机 watchdog 上，
@@ -415,15 +434,83 @@ function main(argv = process.argv.slice(2)) {
         });
       }
     }
-    // 上限：一条消息最多列这么多，其余只给条数。第一次接上观测面时盘上会攒着几十个陈年静默，
-    // 全列出来仍然是刷屏——只是从「每轮刷」变成「一次刷一屏」。
-    const MAX_LISTED = 8;
     liveLines.push(...fresh.slice(0, MAX_LISTED));
     if (fresh.length > MAX_LISTED) {
       liveLines.push(`另有 ${fresh.length - MAX_LISTED} 个会话也静默了，先不逐条列（多半是早该清掉的旧卡）`);
     }
-    console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done} / 没查成 ${live.counts.unscanned}`);
+    // ③ 还挂着的老静默（2026-09-05 实咬）：上面那本静默账一旦记过 escalate 就判「已了结」，
+    // 换人失败 3 次的审官也停手——**报过一次就永久闭嘴**。当天服务器账本里躺着 minutes:972
+    // （16 小时没动）的条目，播报里一个字都没有；盘上 41 个静默，群里 0 条。
+    // 「静默 41」这个数只 console.log 进日志，日志没人读。
+    // 解法不是取消去重（那是刷屏），是升级档：跨过 3 小时 / 12 小时 / 一天 / 三天各说一次。
+    const standing = planTierAlerts({
+      items: live.silent.map((s) => ({
+        key: String(s.worktreeId || s.id),
+        label: plainLabel(s),
+        ms: s.silentMs || 0,
+      })),
+      memory: tierMemory.silence,
+      tiers: SILENCE_TIERS,
+    });
+    tierMemory.silence = standing.memory;
+    // 本轮首报过的不重复说，但档位照记——下一轮它就不会再被当成新的档。
+    const escalated = standing.alerts.filter((a) => !freshKeys.has(a.key));
+    liveLines.push(...escalated.slice(0, MAX_LISTED).map(standingLine));
+    if (escalated.length > MAX_LISTED) {
+      liveLines.push(`另有 ${escalated.length - MAX_LISTED} 个会话也卡了这么久，先不逐条列`);
+    }
+    const longStuck = Object.values(standing.memory).filter((v) => Number(v.tier) >= 0).length;
+    console.log(`活性：活 ${live.counts.active} / 静默 ${live.counts.silent} / 干完 ${live.counts.done}`
+      + ` / 没查成 ${live.counts.unscanned}（静默里卡过 3 小时的 ${longStuck} 个，本轮升级播报 ${escalated.length} 条）`);
   }
+
+  // ④ 无卡孤儿（2026-09-05 实咬 #829 的 grok：turn_ended 之后又挂了整整两天，一声没响）。
+  // 这一格与上面所有判据的区别是**采样面**：前面全部按 orca 的终端清单遍历，
+  // 而这类东西的定义就是「终端清单里没有它」——按卡遍历的扫描器一个都数不到。
+  // 唯一看得见它的是操作系统的进程表。只报不杀（memory deleted-card-process-outlived-it：
+  // 卡删了进程没死，对外发了 21 条重复评论），处置留给人和 board-gc。
+  const census = readProcessCensus();
+  const graceMin = Number(process.env.DAO_NOCARD_GRACE_MINUTES);
+  const noCard = census.ok
+    ? classifyNoCardProcesses({
+      terminals,
+      processes: census.processes,
+      ...(Number.isFinite(graceMin) && graceMin >= 0 ? { graceMs: graceMin * 60000 } : {}),
+    })
+    : { state: census.notApplicable ? 'skipped' : 'unscanned', detail: census.error, strays: [], sampled: 0 };
+  if (noCard.state === 'skipped') {
+    // 这台机器没有这一格可查（开发机跑 dao-check 会走到这里）。不进播报、不染退出码，
+    // 但**必须打出来**——「不适用」和「查过没事」在日志里也不许长一个样。
+    console.log(`没有卡的程序：${noCard.detail}`);
+  } else if (noCard.state === 'unscanned') {
+    // 没查成必须说，但不能每 15 分钟说一次——那是刷屏，刷屏的下场是没人看。
+    // 走同一套升级档：第一次就说，之后按「已经没查成多久」升级（6 小时 / 一天 / 三天）。
+    const since = Number(tierMemory.censusSince) || Date.now();
+    tierMemory.censusSince = since;
+    const nc = planTierAlerts({
+      items: [{ key: 'census', label: `没有卡的程序这一格没查成：${noCard.detail}`, ms: Date.now() - since }],
+      memory: tierMemory.censusTier,
+      tiers: NO_CARD_TIERS,
+    });
+    tierMemory.censusTier = nc.memory;
+    liveLines.push(...nc.alerts.map((a) => a.label));
+    console.log(`没有卡的程序：没查成——${noCard.detail}`);
+  } else {
+    delete tierMemory.censusSince;
+    delete tierMemory.censusTier;
+    const nc = planTierAlerts({
+      items: noCard.strays.map((s) => ({ key: s.root, label: noCardLine(s), ms: s.ageMs })),
+      memory: tierMemory.noCard,
+      tiers: NO_CARD_TIERS,
+    });
+    tierMemory.noCard = nc.memory;
+    liveLines.push(...nc.alerts.slice(0, MAX_LISTED).map((a) => a.label));
+    if (nc.alerts.length > MAX_LISTED) {
+      liveLines.push(`另有 ${nc.alerts.length - MAX_LISTED} 张卡也是这样，先不逐条列`);
+    }
+    console.log(`没有卡的程序：采到 ${noCard.sampled} 个在卡里跑的程序，${noCard.strays.length} 张卡认不回去（${noCard.state}）`);
+  }
+  if (!args.dryRun) saveState(tierStatePath(args.state), tierMemory);
   // 一轮只发一条：同轮多条发现合成一段（服务器落地清单「说人话判据」：不刷屏）。
   if (liveLines.length) {
     const text = liveLines.length === 1 ? liveLines[0] : `这一轮盘点发现 ${liveLines.length} 件事：\n· ${liveLines.join('\n· ')}`;
@@ -452,7 +539,9 @@ function main(argv = process.argv.slice(2)) {
 
   if (!round.reports.length) {
     console.log(`扫 ${round.scanned} 个 agent 终端，新报 0 条，没查成 ${round.unscanned} 个`);
-    process.exit(round.unscanned ? 2 : 0);
+    // 无卡那一格没查成也要进退出码——不然「进程表读不成」会以 0 收场，
+    // 而 0 在 systemd 眼里就是「这一轮查过没事」，正是本单要修的那种混淆。
+    process.exit(round.unscanned || noCard.state === 'unscanned' ? 2 : 0);
   }
 
   let routing;
@@ -508,7 +597,7 @@ function main(argv = process.argv.slice(2)) {
 
   say(ensurePlain(buildStallReport({ failed, need, items: lines }), 'agent-stall-watch'));
   console.log(`扫 ${round.scanned} 个 agent 终端，新报 ${round.reports.length} 条，没查成 ${round.unscanned} 个`);
-  process.exit(failed ? 1 : 0);
+  process.exit(failed ? 1 : (noCard.state === 'unscanned' ? 2 : 0));
 }
 
 /** 总控群文案（说人话，用户 2026-09-04 拍板）：技术细节（签名/句柄/身份）留在 journal，群里只说谁、怎么了、我做了什么。 */
