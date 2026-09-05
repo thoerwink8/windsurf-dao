@@ -1,12 +1,20 @@
 # /etc/systemd/system/dao-sync.service
 #
 # 服务器主树跟 origin/master + 机器人吃新码（脚本 scripts/server-sync.sh，落地清单第 9 步）。
-# 跑 root：只有 restart feishu-triage 需要；git 动作脚本内以 orca 身份执行。
+#
+# 2026-09-05 安全修（另一个会话巡检发现，帅位实测确认）：这个单元原来**没有 User=**，
+# systemd 默认以 root 解释 /home/orca/windsurf-dao/scripts/server-sync.sh，
+# 而那个脚本躺在 orca 可写的 checkout 里（`-rw-rw-r-- orca orca`）。
+# 于是任何能写这个仓的东西——也就是**每一个工人 agent**——改一行脚本，
+# 等 5 分钟定时器一响就拿到 root。服务器上另外 6 个单元全都写了 User=orca，只有这一个漏了。
+#
+# 现在跑 orca。脚本里唯一真正要 root 的是 `systemctl try-restart feishu-triage`，
+# 那一条走一条最小 sudoers 规则（host/machine/sudoers.d/dao-sync，只许这一条命令），
+# 不再让 root 去解释一个可变的脚本。
 #
 # 装（服务器）：sudo bash scripts/install-dao-sync.sh
-#   等价于：install -m 644 host/machine/systemd/dao-sync.{service,timer} /etc/systemd/system/
-#           systemctl daemon-reload && systemctl enable --now dao-sync.timer
 # 验：systemctl list-timers | grep dao-sync；journalctl -u dao-sync -n 5
+#     systemd-analyze security dao-sync.service
 
 [Unit]
 Description=windsurf-dao 主树跟主分支 + 飞书机器人吃新码
@@ -15,6 +23,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+User=orca
+Group=orca
+# 拿不到比 orca 更高的权限——除了下面 sudoers 白名单里那一条 systemctl。
+# NoNewPrivileges 会连 sudo 一起挡掉，所以这里不能开；用 sudoers 收窄到单条命令代替。
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/orca/windsurf-dao /home/orca/.dao /home/orca/.claude /home/orca/.pi /tmp
+PrivateTmp=false
 ExecStart=/bin/bash /home/orca/windsurf-dao/scripts/server-sync.sh
 StandardOutput=journal
 StandardError=journal

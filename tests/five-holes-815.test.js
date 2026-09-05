@@ -438,3 +438,27 @@ describe('#815 ⑥ 审官注入失败不回滚树', () => {
       'reviewer-book 必须写失败不回滚 + 接手命令');
   });
 });
+
+// 2026-09-05 实咬 #884/#885/#886：帅位落的复审票 workerWorktree 为 null（活干在非 Orca 管理的树里），
+// drain 在计划层直接判「待办缺工人树」，三张 PR 的审官 10 小时起不来。缺树改走 reviewer-create 快马路（#927）。
+describe('复审待办：缺工人树走 reviewer-create（#884 实咬）', () => {
+  it('无工人树 → 计划成 reviewer-create，不再判失败', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ pr: '884', workerWorktree: null, reviewer: 'gpt-5.6-luna', issue: '880' });
+    assert.equal(plan.ok, true, '缺树不该判失败：' + JSON.stringify(plan));
+    assert.equal(plan.verb, 'reviewer-create');
+    assert.equal(plan.fastPath, true);
+    assert.deepEqual(plan.argv, ['reviewer-create', '--pr', '884', '--reviewer', 'gpt-5.6-luna', '--issue', '880']);
+  });
+  it('有工人树 → 仍走 reviewer-attach（快马路不许吞掉正常路）', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ pr: '900', workerWorktree: 'wt-abc', reviewer: 'gpt-5.6-luna' });
+    assert.equal(plan.verb, 'reviewer-attach');
+    assert.ok(plan.argv.includes('--worktree'));
+  });
+  it('缺 reviewer 仍判失败（缺树不等于什么都能猜）', async () => {
+    const S = await S_LOAD;
+    assert.equal(S.planReviewPendingDrain({ pr: '901', workerWorktree: null, reviewer: '' }).ok, false);
+  });
+});
+

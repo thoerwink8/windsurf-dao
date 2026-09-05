@@ -193,6 +193,20 @@ export function doRelease(repo, { now = new Date(), dryRun = false, force = fals
     }
   }
 
+  // ②b 推上去。不推的话 tag 与 CHANGELOG 提交只活在这台机器上，服务器 master 每天与远端发散一次，
+  // 之后每一次部署都要人来 rebase（2026-09-05 实咬：`Not possible to fast-forward`，本地领先 1 落后 2）。
+  // 推不动必须大声说——静默失败会把发散攒到下一次部署才爆。
+  if (dryRun) {
+    say('[发布列车] [拟] git push --follow-tags origin HEAD');
+  } else {
+    const ps = git(repo, ['push', '--follow-tags', 'origin', 'HEAD']);
+    if (ps.status !== 0) {
+      say(`[发布列车] 推送失败（本机已领先远端，下次部署会撞 fast-forward）：${String(ps.err || ps.out).slice(0, 300)}`);
+    } else {
+      say('[发布列车] 已推送 CHANGELOG 提交与 tag');
+    }
+  }
+
   // ③ GitHub Release
   if (dryRun) {
     say(`[发布列车] [拟] gh release create ${tag} --title ${tag} --notes <CHANGELOG 段>`);

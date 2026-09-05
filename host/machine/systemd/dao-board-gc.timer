@@ -1,0 +1,20 @@
+# /etc/systemd/system/dao-board-gc.timer
+#
+# 一小时一轮。比 dao-agent-stall（15 分钟）慢，因为它每棵树要跑几条 git，
+# 而且盘面堆积是以天计的事，不需要求快。
+# 活性判据要跨轮比对屏面签名，头一轮只记账不判——所以第一次装上后一小时才有结论。
+# 挂在 :07 分而不是整点：整点是所有 timer 的默认落点，错开省得跟别人抢。
+# 装法见同目录 dao-board-gc.service 文件头。
+
+[Unit]
+Description=每小时回收一次僵尸卡
+
+[Timer]
+# 挂钟触发（OnCalendar），不是只有单调时钟：只有 OnBootSec/OnUnitActiveSec 的 timer
+# 停掉再起会进 active(elapsed) 死态，看着还在册其实永不触发，而且没人报警（timer-armed 闸就是为这个立的）。
+OnCalendar=*:07:00
+Persistent=true
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

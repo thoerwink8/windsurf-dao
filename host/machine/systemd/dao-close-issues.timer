@@ -1,0 +1,33 @@
+# /etc/systemd/system/dao-close-issues.timer
+#
+# 一小时一轮。为什么是一小时，不是更快也不是更慢：
+#   · 更快没意义——单晚关几十分钟没有人因此做错事；真正要紧的那一路（指挥官自己合的 PR）
+#     在 merge 动作里当场就调了 --pr N，压根不等这个定时器。这里补的是别人合的那些。
+#   · 更慢会让「合了但单还开着」的盘面噪音积一整天，帅位又得手工扫。
+#   · 每轮的代价：1 次 pr list + 1 次自证探针 + 窗口内每张 PR 各 1 次 pr view/issue view。
+#     这个仓一小时合不了几张，实测量级是十几次 API 调用——marshal 那把 token 的额度完全无感。
+#
+# 挂在 :23 分：服务器上 dao-sync 在 :01/:06/:11…、dao-board-gc 在 :07、
+# dao-agent-stall 在 :02/:17/:32/:47、commander-act 在 :16/:36/:56、gw-remote-probe 在 :18/:48。
+# :23 谁也不撞。RandomizedDelaySec 只有 60 秒，抖过去还是空的。
+#
+# OnCalendar 是必需的，不是冗余：2026-09-05 实咬——只有 OnBootSec/OnUnitActiveSec 这种单调时钟的
+# timer，停掉再起会进 active (elapsed) 死态，NEXT 显示 n/a 但状态仍是 active+enabled，
+# systemctl 看上去一切正常，而它再也不会触发，且没有任何东西报警。
+# 挂一个墙钟点位，永远有下一次，这个死态就不存在。tests/timer-armed.test.js 守着这条。
+#
+# Persistent=true：机器关过一段时间，开机后补跑一轮。配合 service 里 6 小时的窗口，
+# 停机半天以内的漏关都会被下一轮自己捡回来。
+#
+# 装法见同目录 dao-close-issues.service 文件头。
+
+[Unit]
+Description=每小时给刚合进的 PR 关一次单
+
+[Timer]
+OnCalendar=*:23:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

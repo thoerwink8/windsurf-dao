@@ -19,9 +19,9 @@
 //   node scripts/server-check.mjs --self-test     故意造违规样本，验探测器真能拦（不碰真环境）
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter as PATH_DELIMITER, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
@@ -216,7 +216,19 @@ export function classifyAccountsResult(result) {
   if (!Object.keys(counts).length) return { state: UNKNOWN, detail: 'account list 契约变了：认不出任何厂商键' };
   const shape = Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ');
   if (total === 0) {
-    return { state: RED, detail: `一个托管账号都没有（${shape}）——派工起得来终端也登不上，先 orca account add` };
+    // 2026-09-05 复审这条判据（本仓规矩：体检红项先问判据该不该在）。
+    // 它原本判真红「派工起得来终端也登不上」。而实测：这台机器托管账号一直是 0，
+    // 审官与工人却整天在跑——因为 #822 之后全员走 pi + 网关 keyFile，
+    // orca 的托管账号根本不在登录路径上了。判据的前提已经不成立。
+    //
+    // 不删这条：真回到 claude/codex CLI 直连时它还有用。降成「见」——
+    // 说清是「这台机器没用托管账号这条路」，而不是继续报一个谁也修不了的红。
+    // 永远红的检查会把真红淹掉，这比没有检查更糟。
+    return {
+      state: OK, count: 0, empty: true,
+      detail: `托管账号 0 个（${shape}）——本机不走这条登录路（#822 全员 pi + 网关 keyFile）。`
+        + '若改回 claude/codex CLI 直连，这里要先 orca account add',
+    };
   }
   return { state: OK, detail: `托管账号 ${total} 个（${shape}）`, count: total };
 }
@@ -600,6 +612,365 @@ function checkAgentStallWatch() {
   });
 }
 
+
+/**
+ * 每个 dao timer 都必须有「下一次」。2026-09-05 实咬：
+ * dao-agent-stall.timer 从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
+ * list-timers --all 里也照样列着——现有的 ⑮⑯ 两条检查全绿，#833 的自动换人整段无声停摆。
+ * 真相在 NEXT 那一列：显示 n/a，SubState=elapsed。只用单调时钟（OnBootSec/OnUnitActiveSec）
+ * 的 timer 停掉再起之后会进这个死态，永远不再有触发点。
+ *
+ * 判据只看一件事：这个 timer 有没有未来的触发时刻。有=活，没有=死。
+ * 与「装没装」「enable 没 enable」都无关——那两条正是当天全绿的原因。
+ *
+ * units：[{ unit, next }]，next 为 systemctl 的 NextElapseUSecRealtime（0 或 'n/a' 即无下一次）。
+ */
+export function classifyTimerArmed({ probed = false, reason = '', units = null } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
+  if (!Array.isArray(units)) return { state: UNKNOWN, detail: 'timer 清单没查成（不是数组）——不当成 0 个死' };
+  // 扫出 0 个 ≠ 全都健康：一个 dao timer 都没扫到，多半是判据或前缀失效。
+  if (units.length === 0) {
+    return { state: UNKNOWN, detail: '一个 dao timer 都没扫到——「没查成」不算「都没问题」' };
+  }
+  const dead = units.filter((u) => {
+    const n = u && u.next;
+    if (n == null) return true;
+    const t = String(n).trim();
+    return t === '' || t === '0' || t === 'n/a' || t === 'infinity';
+  });
+  if (dead.length) {
+    return {
+      state: RED,
+      detail: `${dead.length}/${units.length} 个 timer 没有下一次触发（${dead.map((u) => u.unit).join('、')}）——`
+        + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
+    };
+  }
+  return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发` };
+}
+
+/** 扫盘面上的 dao/commander timer——不许手写清单，清单会过期。 */
+function checkTimerArmed() {
+  const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], { timeout: 10000 });
+  if (!list.probed) return classifyTimerArmed({ probed: false, reason: `systemctl 没跑成：${list.reason}` });
+  const names = [...String(list.stdout || '').matchAll(/\b((?:dao|commander)[a-z0-9-]*\.timer)\b/g)]
+    .map((m) => m[1]);
+  const units = [];
+  for (const unit of [...new Set(names)]) {
+    const p = run('systemctl', ['show', unit, '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
+    if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
+    const vals = String(p.stdout || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    // 两个点位任意一个有值就算有下一次；两个都空才是死态。
+    const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
+    units.push({ unit, next: alive ? vals.join('|') : null });
+  }
+  return classifyTimerArmed({ probed: true, units });
+}
+
+// —— ⑲ 退役 CLI 还留在 PATH（#960）——
+//
+// 改这段前必须知道的四件事（#868 四轮判红全咬在这四条上，直接当验收清单）：
+//  1. 找到文件 ≠ 能执行：PATH 目录里躺着一个同名的说明文件不算「CLI 还在」，要判可执行位。
+//  2. EACCES 是「有这个东西但没权限看」，不是 absent——当成没有就是漏报。
+//  3. `existsSync` 遇权限错**不抛异常**，直接返 false：它分不出「没有」和「看不见」。
+//     所以本节一律 statSync + catch 看 e.code，禁用 existsSync。
+//  4. PATH 里的空段（`a::b`）在 POSIX 里表示当前目录，`.filter(Boolean)` 会把它悄悄丢掉。
+//
+// 清单不许手写（手写的清单会过期）。两头都从真相源推：
+//  · 「有哪些 agent CLI」← docs/model-routing.toml 的 [providers.*].cli（启动模板真相源，
+//    派工 argv 只听这张表）。检查器自己扫文本，不 import launch.mjs。
+//  · 「哪些还在役」    ← docs/model-routing.json（选型唯一真相源，2026-08-22 拍板）：
+//    角色表里 禁用 !== true 的条目 + 腿表里 状态 === '在役' 的条目，取它们的 provider。
+//  两者相减才是退役清单。routing 改了本项自动跟着改，不会留下第二份会过期的名单。
+//
+// 由此推出的一条反直觉但正确的结论：provider `claude` 的启动模板 cli 是 `reclaude`（裸 claude
+// 会 login rejected），而腿表 2026-09-04 把两条 claude@reclaude/terminal 登记成「在役」（帅位）。
+// 所以 reclaude 不进退役清单——哪怕 #822/#960 正文写着「claude CLI 已移除」。真相源比正文新。
+
+/** 检查器自持地扫 [providers.*].cli（不复用被检查对象的解析逻辑）。0 个 = 没查成，不是「没有 CLI」。 */
+export function parseProviderClis(tomlText) {
+  const text = String(tomlText || '');
+  if (!text.trim()) return { unscanned: true, clis: null, error: '启动模板空' };
+  if (!/^\[providers\./m.test(text)) return { unscanned: true, clis: null, error: '没扫到 [providers.*] 节' };
+  const clis = [];
+  let current = null;
+  let inTriple = false;
+  for (const line of text.split(/\r?\n/)) {
+    const triples = (line.match(/"""/g) || []).length;
+    if (inTriple) {
+      if (triples % 2 === 1) inTriple = false;
+      continue;
+    }
+    if (triples % 2 === 1) { inTriple = true; continue; }
+    const sec = line.match(/^\[providers\.([^\]]+)\]\s*$/);
+    if (sec) { current = sec[1]; continue; }
+    if (!current) continue;
+    const m = line.match(/^\s*cli\s*=\s*["']([^"']+)["']\s*(?:#.*)?$/);
+    if (m) clis.push({ provider: current, cli: m[1] });
+  }
+  if (clis.length === 0) {
+    return { unscanned: true, clis: null, error: '一个 [providers.*].cli 都没扫到（没查成，不是 0 个 CLI）' };
+  }
+  return { unscanned: false, clis };
+}
+
+/** 从选型真相源 model-routing.json 推「在役 provider」。0 个 = 没查成（不是「全退役了」）。 */
+export function inServiceProviders(routingDoc) {
+  if (!routingDoc || typeof routingDoc !== 'object' || Array.isArray(routingDoc)) {
+    return { unscanned: true, providers: null, error: 'routing 不是对象' };
+  }
+  const found = new Set();
+  const take = (entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const p = entry.provider || (entry.落地 && entry.落地.provider);
+    if (p) found.add(String(p));
+  };
+  // 角色表：<角色>.<工种>.模型[]，禁用 !== true 才算在役。
+  for (const role of Object.values(routingDoc)) {
+    if (!role || typeof role !== 'object' || Array.isArray(role)) continue;
+    for (const trade of Object.values(role)) {
+      if (!trade || typeof trade !== 'object' || !Array.isArray(trade.模型)) continue;
+      for (const m of trade.模型) if (m && m.禁用 !== true) take(m);
+    }
+  }
+  // 腿表（§73）：只认 状态 === '在役'。停用的腿留着是退役记录，不算在役。
+  if (Array.isArray(routingDoc.腿)) {
+    for (const leg of routingDoc.腿) if (leg && leg.状态 === '在役') take(leg);
+  }
+  if (found.size === 0) {
+    return { unscanned: true, providers: null, error: '一个在役 provider 都没推出来（没查成，不是「全退役」）' };
+  }
+  return { unscanned: false, providers: [...found] };
+}
+
+/** 退役 CLI = 启动模板里有、但它服务的 provider **一个都不在役**。
+ *  同一个二进制常服务多个 provider（pi 同时是在役 gw 与已退役 opencode-go 的 cli）——
+ *  只要还有一个在役就不算退役，否则会把天天在用的 pi 报成退役。 */
+export function retiredClis({ clis, inService } = {}) {
+  if (!Array.isArray(clis) || !Array.isArray(inService)) return [];
+  const live = new Set(inService.map(String));
+  const byCli = new Map();
+  for (const { provider, cli } of clis) {
+    if (!cli) continue;
+    if (!byCli.has(cli)) byCli.set(cli, { cli, providers: [], live: false });
+    const row = byCli.get(cli);
+    row.providers.push(provider);
+    if (live.has(String(provider))) row.live = true;
+  }
+  return [...byCli.values()]
+    .filter((r) => !r.live)
+    .map((r) => ({ cli: r.cli, providers: r.providers }))
+    .sort((a, b) => a.cli.localeCompare(b.cli));
+}
+
+/** PATH 拆段。坑 4：POSIX 的空段（`a::b` 中间那截）表示当前目录，`.filter(Boolean)` 会把它丢掉。 */
+export function splitPathValue(pathValue, { delimiter = ':', platform = process.platform } = {}) {
+  if (typeof pathValue !== 'string' || pathValue.length === 0) {
+    return { unscanned: true, dirs: null, error: 'PATH 为空或读不到（没查成，不是「PATH 上没有」）' };
+  }
+  const dirs = [];
+  for (const seg of pathValue.split(delimiter)) {
+    if (seg === '') {
+      // POSIX：空段 = 当前目录（execvp 的老规矩）。Windows 的 CreateProcess 忽略空段。
+      if (platform !== 'win32') dirs.push('.');
+      continue;
+    }
+    dirs.push(seg);
+  }
+  if (dirs.length === 0) return { unscanned: true, dirs: null, error: 'PATH 拆完一个目录都没有（没查成）' };
+  return { unscanned: false, dirs };
+}
+
+/** 一个候选路径是不是「能起来的执行体」。四态，绝不把「看不见」说成「没有」（坑 1/2/3）。 */
+export function classifyExecutableEntry(file, { stat, platform = process.platform } = {}) {
+  if (typeof stat !== 'function') return { state: 'unknown', why: '没给 stat（判不了）' };
+  let st;
+  try {
+    st = stat(file);
+  } catch (e) {
+    const code = (e && e.code) || '';
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'absent', why: code };
+    // 坑 2：EACCES/EPERM = 有这个位置但看不进去 → 没查成。判成 absent 就是漏报。
+    if (code === 'EACCES' || code === 'EPERM') {
+      return { state: 'unknown', why: `${code}：这个目录/文件看不进去，不当「没有」` };
+    }
+    return { state: 'unknown', why: code || String((e && e.message) || e).slice(0, 80) };
+  }
+  if (!st || typeof st.isFile !== 'function') return { state: 'unknown', why: 'stat 结果不认识（没查成）' };
+  if (!st.isFile()) return { state: 'absent', why: '不是普通文件' };
+  if (platform === 'win32') return { state: 'executable', why: 'win32 认扩展名（PATHEXT），没有可执行位' };
+  // 坑 1：找到文件不等于能执行。PATH 目录里躺着的同名说明文件/半截下载不该报警。
+  if (typeof st.mode !== 'number') return { state: 'unknown', why: 'stat 没给 mode，判不了可执行位' };
+  const perm = st.mode & 0o777;
+  if ((st.mode & 0o111) === 0) return { state: 'not-executable', why: `有文件但没可执行位（mode ${perm.toString(8)}）` };
+  return { state: 'executable', why: `mode ${perm.toString(8)}` };
+}
+
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
+/** 在给定的 PATH 目录里找一个二进制名。win32 要配 PATHEXT（裸名在 Windows 上起不来）。 */
+export function whichOnPath(name, { dirs, platform = process.platform, stat, pathExt } = {}) {
+  const hits = [];
+  const unknowns = [];
+  if (!Array.isArray(dirs)) return { hits, unknowns, dirs: 0 };
+  const sep = platform === 'win32' ? '\\' : '/';
+  const exts = platform === 'win32'
+    ? String(pathExt || DEFAULT_PATHEXT).split(';').map((x) => x.trim()).filter(Boolean)
+    : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const file = `${dir}${dir.endsWith(sep) ? '' : sep}${name}${ext}`;
+      const r = classifyExecutableEntry(file, { stat, platform });
+      if (r.state === 'executable') hits.push({ dir, file, why: r.why });
+      else if (r.state === 'unknown') unknowns.push({ dir, file, why: r.why });
+    }
+  }
+  return { hits, unknowns, dirs: dirs.length };
+}
+
+/** 三态收口。三者在输出上必须分得开：没查成 / 扫完 0 条 / 查出问题（本仓硬规矩）。 */
+export function scanRetiredClis({
+  tomlText, routingDoc, pathValue, platform = process.platform, delimiter, stat, pathExt,
+} = {}) {
+  const cat = parseProviderClis(tomlText);
+  if (cat.unscanned) {
+    return { state: UNKNOWN, detail: `启动模板（model-routing.toml）没扫成：${cat.error}——没查成，不是「没有退役 CLI」` };
+  }
+  const svc = inServiceProviders(routingDoc);
+  if (svc.unscanned) {
+    return { state: UNKNOWN, detail: `在役清单（model-routing.json）没推成：${svc.error}——没查成，不是「都在役」` };
+  }
+  const retired = retiredClis({ clis: cat.clis, inService: svc.providers });
+  if (retired.length === 0) {
+    return {
+      state: UNKNOWN,
+      detail: `一个退役 CLI 都没推出来（启动模板 ${cat.clis.length} 条 cli、在役 provider ${svc.providers.length} 个）`
+        + '——没查成，不是「扫完 0 条」',
+    };
+  }
+  const split = splitPathValue(pathValue, { delimiter, platform });
+  if (split.unscanned) return { state: UNKNOWN, detail: `PATH 没查成：${split.error}` };
+  const hits = [];
+  const unknowns = [];
+  for (const r of retired) {
+    const w = whichOnPath(r.cli, { dirs: split.dirs, platform, stat, pathExt });
+    for (const h of w.hits) hits.push({ cli: r.cli, providers: r.providers, ...h });
+    for (const u of w.unknowns) unknowns.push({ cli: r.cli, ...u });
+  }
+  const scope = `扫了 ${retired.length} 个退役 CLI（${retired.map((r) => r.cli).join('、')}）× ${split.dirs.length} 个 PATH 目录`;
+  if (hits.length) {
+    // 同一个名字可能在一个目录里命中多次（Windows 的 PATHEXT 一名多扩展、PATH 里同目录重复登记）。
+    // 报警要按「哪个 CLI 在哪些目录」说人话，命中明细留在 hits 里给排障。
+    const byCli = new Map();
+    for (const h of hits) {
+      if (!byCli.has(h.cli)) byCli.set(h.cli, { cli: h.cli, providers: h.providers, dirs: new Set() });
+      byCli.get(h.cli).dirs.add(h.dir);
+    }
+    const named = [...byCli.values()]
+      .map((g) => `${g.cli}（在 ${[...g.dirs].join('、')}，provider ${g.providers.join('/')} 已不在选型）`)
+      .join('；');
+    return {
+      state: RED,
+      count: byCli.size,
+      hits,
+      detail: `${scope}，查出 ${byCli.size} 个还在 PATH 上：${named}——卸载或从 PATH 摘掉。`
+        + '留着的后果不是多占点盘：派工回落时会静默启到一个不该再用的执行体，而没有任何东西会说一句',
+    };
+  }
+  if (unknowns.length) {
+    const named = unknowns.slice(0, 6).map((u) => `${u.file}（${u.why}）`).join('；');
+    return {
+      state: UNKNOWN,
+      count: 0,
+      unknowns,
+      detail: `${scope}：没命中，但有 ${unknowns.length} 个位置没看成（${named}）——「没查成」不算「扫完 0 条」`,
+    };
+  }
+  return { state: OK, count: 0, detail: `${scope}：一个都不在 PATH 上` };
+}
+
+function checkRetiredCliOnPath() {
+  const tomlPath = join(REPO_ROOT, 'docs', 'model-routing.toml');
+  const jsonPath = join(REPO_ROOT, 'docs', 'model-routing.json');
+  let tomlText;
+  let routingDoc;
+  try {
+    tomlText = readFileSync(tomlPath, 'utf8');
+  } catch (e) {
+    return { state: UNKNOWN, detail: `启动模板读不了（${String(e.code || e.message).slice(0, 60)}）：${tomlPath}` };
+  }
+  try {
+    routingDoc = JSON.parse(readFileSync(jsonPath, 'utf8'));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `选型真相源读不了/不是 JSON（${String(e.code || e.message).slice(0, 80)}）：${jsonPath}` };
+  }
+  return scanRetiredClis({
+    tomlText,
+    routingDoc,
+    pathValue: process.env.PATH || '',
+    platform: process.platform,
+    delimiter: PATH_DELIMITER,
+    stat: statSync,
+    pathExt: process.env.PATHEXT,
+  });
+}
+
+
+// —— ⑳ 仓里的 systemd 单元 vs 机器上装着的（2026-09-05 巡检实咬）——
+//
+// 巡检第一次真跑就抓到：仓里把 OnCalendar 补进了 dao-agent-stall.timer，
+// 机器上 /etc/systemd/system/ 里仍是两天前那份。**改了仓 ≠ 装了机器**——
+// dao-sync 只拉代码、不装单元，而 tests/timer-armed.test.js 只扫仓里的文件，
+// 于是「检查全绿，修没有生效」。这一项就是补那一格。
+//
+// **只报不装**：dao-sync 现在跑 orca 身份，写不了 /etc；而让它能写，正是
+// 2026-09-05 堵掉的那条提权路（root 解释 orca 可写的仓内脚本）。装单元是人的动作。
+
+/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。 */
+export function classifyUnitDrift(pairs) {
+  if (!Array.isArray(pairs)) return { state: UNKNOWN, detail: '单元清单不是数组——没查成' };
+  // 扫出 0 个不是「都一致」，是判据失效（目录挪了、命名换了）
+  if (pairs.length === 0) return { state: UNKNOWN, detail: '一个单元都没扫到——没查成，不是「都一致」' };
+  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
+  // 不归一化这条会天天红成噪音，而噪音久了就没人看。归一化放判据层（一把尺在一处），
+  // 取数层只管把原文读出来。
+  const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
+  const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
+  const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
+  if (unreadable.length) {
+    const who = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
+    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${who.join('、')}——没查成，不是「一致」` };
+  }
+  if (drifted.length) {
+    return {
+      state: RED,
+      detail: `${drifted.length}/${pairs.length} 个单元仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`
+        + '——改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
+        + '指挥官那两个是代码生成的，sudo node scripts/commander.mjs install。装完 daemon-reload',
+    };
+  }
+  return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
+}
+
+function checkUnitDrift() {
+  const dir = join(REPO_ROOT, 'host', 'machine', 'systemd');
+  let names;
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `仓内单元目录读不了（${e.message || e}）——没查成` };
+  }
+  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
+  // 不归一化的话这条会天天红成噪音，而噪音久了就没人看。
+  const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
+  const pairs = names.map((name) => {
+    let repo = null; let live = null;
+    try { repo = (readFileSync(join(dir, name), 'utf8')); } catch { repo = null; }
+    try { live = (readFileSync(join('/etc/systemd/system', name), 'utf8')); } catch { live = null; }
+    return { name, repo, live };
+  });
+  return classifyUnitDrift(pairs);
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -618,6 +989,9 @@ const CHECKS = [
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
+  ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
+  ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
+  ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
 ];
 
 function outPath() {
@@ -675,6 +1049,44 @@ function selfTest() {
   if (okLand.state !== OK) failures.push(`在册且启用应判 ok，实际 ${okLand.state}`);
   const badShape = classifyLandAutomation(null);
   if (badShape.state !== UNKNOWN) failures.push(`契约不对应判 unknown，实际 ${badShape.state}`);
+
+  // #960：退役 CLI 在 PATH。故意样本走同一条 scanRetiredClis，只把 stat 换成假的（不碰真环境）。
+  const RETIRED_TOML = [
+    '[providers.gw]', 'cli = "pi"',
+    '[providers.devin]', 'cli = "devin"',
+  ].join('\n');
+  const RETIRED_JSON = { 工人: { 写码: { 模型: [{ id: 'x', 禁用: false, provider: 'gw' }] } } };
+  const fakeStat = (present) => (file) => {
+    if (!present.has(file)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+    return { isFile: () => true, mode: present.get(file) };
+  };
+  const scanArgs = { tomlText: RETIRED_TOML, routingDoc: RETIRED_JSON, platform: 'linux', delimiter: ':' };
+  // ① 故意违规：PATH 上放一个可执行的 devin → 必须红，且点名 CLI 与目录。
+  const planted = scanRetiredClis({
+    ...scanArgs, pathValue: '/usr/bin:/home/orca/bin',
+    stat: fakeStat(new Map([['/home/orca/bin/devin', 0o755]])),
+  });
+  if (planted.state !== RED || !/devin/.test(planted.detail) || !/home\/orca\/bin/.test(planted.detail)) {
+    failures.push(`PATH 上有可执行 devin 应判红并点名，实际 ${planted.state}：${planted.detail}`);
+  }
+  // ② 反证：把它拿走必须转绿（判据不是恒红）。
+  const removed = scanRetiredClis({ ...scanArgs, pathValue: '/usr/bin:/home/orca/bin', stat: fakeStat(new Map()) });
+  if (removed.state !== OK || removed.count !== 0) {
+    failures.push(`移走后应转绿（扫完 0 条），实际 ${removed.state}：${removed.detail}`);
+  }
+  // ③ 反证：在役的 pi 就算在 PATH 上也不许报——不然天天在用的通道会被报成退役。
+  const livePi = scanRetiredClis({
+    ...scanArgs, pathValue: '/usr/bin', stat: fakeStat(new Map([['/usr/bin/pi', 0o755]])),
+  });
+  if (livePi.state !== OK) failures.push(`在役 pi 不该被报退役，实际 ${livePi.state}：${livePi.detail}`);
+  // ④ 坑 2/3：EACCES 是「看不见」不是「没有」——必须 unknown，且和「扫完 0 条」在话术上分得开。
+  const blind = scanRetiredClis({
+    ...scanArgs, pathValue: '/root/bin',
+    stat: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; },
+  });
+  if (blind.state !== UNKNOWN || !/没查成/.test(blind.detail)) {
+    failures.push(`EACCES 应判没查成，实际 ${blind.state}：${blind.detail}`);
+  }
 
   if (failures.length) {
     console.error('self-test 红：\n  - ' + failures.join('\n  - '));

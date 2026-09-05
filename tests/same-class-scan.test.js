@@ -1,4 +1,4 @@
-// 审官标准第 9 条「同类扫描」段闸（2026-09-05 拍板）。
+// 审官标准第 10 条「同类扫描」段闸（2026-09-05 拍板）。
 // 起因：用户原话「我不可能实时注意到……希望能有一个机制主动发现不合理的地方」。
 // 实咬：闪窗修复只改了 3 处热点，用户点破后才扩到全仓 61 处（PR #928）。
 //
@@ -26,7 +26,7 @@ grep -rn "foo(" scripts/ | grep -v null-check
 ## 进展
 全绿。`;
 
-describe('同类扫描段闸（审官标准第 9 条）', () => {
+describe('同类扫描段闸（审官标准第 10 条）', () => {
   it('齐全（段 + 命令 + 结论）→ pass', async () => {
     const { gateSameClassScan } = await load();
     const r = gateSameClassScan({ title: '[cc] fix(x): 修 A 处空指针', body: GOOD_BODY });
@@ -91,7 +91,7 @@ describe('同类扫描段闸（审官标准第 9 条）', () => {
     const fs = require('fs');
     const std = fs.readFileSync(path.join(REPO, 'host/skills/dispatch/review-standard.md'), 'utf8');
     const book = fs.readFileSync(path.join(REPO, 'host/skills/dispatch/templates/soldier-book.md'), 'utf8');
-    assert.match(std, /同类扫描/, '审官标准要有第 9 条');
+    assert.match(std, /同类扫描/, '审官标准要有第 10 条');
     assert.match(book, /同类扫描/, '工人任务书要写，否则只能靠审官判红后返工');
   });
 });

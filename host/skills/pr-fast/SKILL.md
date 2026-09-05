@@ -62,7 +62,9 @@ description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全�
 
 - **Cursor Multitask / 协调器（有子代理能力）**：写完任务书后，直接派**后台子代理**当执行面。把任务书 + 本 skill 路径 `host/skills/pr-fast/SKILL.md` 注入给子代理。子代理就是执行面：由它 `commit` / `push`。
 - **用户不在 Multitask、也没有子代理能力（兜底）**：才退回「新开 Agent 会话或新终端」。把任务书 + 本 skill 一并附上（或 `@` 引用）。
-- **CC / 终端**：在新终端执行；要审官闭环时用 `dispatch`，不要假装是快路。
+- **CC / 终端**：在新终端执行；整套工人+审官乒乓闭环仍走 `dispatch`，不要假装是快路。
+  快马 PR 只想补一个审官时，`dao.mjs reviewer-create --pr N` 直接起（扫完确证没有士兵树才走快马路，
+  返回带 `fastPath:true` 和原因）——不用手搓替身树。
 
 ### 3. 执行面：branch → 改 → 检 → push（不开 PR）
 

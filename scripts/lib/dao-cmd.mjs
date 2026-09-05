@@ -260,8 +260,22 @@ export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLiv
  * worker-show 没查成 → 拒（不许把没查成当已结算）。
  * 找不到且无显式 id → 拒（给 --soldier-dispatch / --parent-worktree）。
  */
-export function planCreateSoldierDispatch({ explicitDispatch, found, dispatchLive } = {}) {
+export function planCreateSoldierDispatch({ explicitDispatch, found, dispatchLive, fastPath } = {}) {
   const explicit = String(explicitDispatch || '').trim() || null;
+
+  // 快马 PR（#880/#891）：确证扫完没有士兵树/dispatch 才会走到这里（判定在 planFastPathReviewer，
+  // 没查成一律停手，不进这条腿）。没有士兵可收件：d= 留空、s=1，红项按任务书直接上帅。
+  if (fastPath === true && !explicit) {
+    return {
+      ok: true,
+      soldierDispatchId: '',
+      skipIdentity: true,
+      skipWait: true,
+      fastPath: true,
+      reason: 'fast-path',
+      deadWarning: '快马 PR：扫完确实没有士兵 dispatch，不注入 d=，红项按任务书直接上帅转达',
+    };
+  }
   const foundId = found && found.ok ? String(found.dispatchId || '').trim() || null : null;
   const foundSettled = Boolean(
     found && found.ok === false && !found.unscanned && /已结算/.test(String(found.error || '')),
@@ -842,6 +856,8 @@ import {
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
+  planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
+  isFastPathStandIn, FASTPATH_STANDIN_MARK,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
@@ -850,6 +866,8 @@ export {
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
+  planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
+  isFastPathStandIn, FASTPATH_STANDIN_MARK,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs

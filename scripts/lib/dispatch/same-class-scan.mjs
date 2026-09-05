@@ -1,10 +1,10 @@
-// scripts/lib/dispatch/same-class-scan.mjs —— 「同类扫描」段闸（审官标准第 9 条，2026-09-05 拍板）
+// scripts/lib/dispatch/same-class-scan.mjs —— 「同类扫描」段闸（审官标准第 10 条，2026-09-05 拍板）
 //
 // 改这段前必须知道：这条规则的起因是用户 2026-09-05 原话——「我不可能实时注意到……希望能有一个
 // 机制主动发现不合理的地方」。实咬：闪窗修复本来只改了 3 处热点，用户点破后才扩到全仓 61 处（PR #928）。
 //
 // 本闸只管**机械可判**的那部分：修复类 PR 的正文里，「同类扫描」段在不在、有没有给出命令与输出。
-// 「扫得对不对、结论站不站得住」是判断题，归审官（review-standard.md 第 9 条）——
+// 「扫得对不对、结论站不站得住」是判断题，归审官（review-standard.md 第 10 条）——
 // 机器拦「没写」，人拦「写得不对」，两层不重叠也不互相顶替。
 //
 // 三态必须分开（本仓通用判据）：
@@ -39,7 +39,7 @@ export function gateSameClassScan({ title, body, isFix } = {}) {
   const head = String(title ?? '');
   const fix = isFix == null ? FIX_TITLE_RE.test(head) : !!isFix;
   if (!fix) {
-    return { state: 'n/a', reason: '不是修复类 PR（标题无 fix/修复/实咬/回归），第 9 条不适用' };
+    return { state: 'n/a', reason: '不是修复类 PR（标题无 fix/修复/实咬/回归），第 10 条不适用' };
   }
   const missing = [];
   if (!SECTION_RE.test(text)) missing.push('「同类扫描」段');
@@ -51,7 +51,7 @@ export function gateSameClassScan({ title, body, isFix } = {}) {
     return {
       state: 'violation',
       missing,
-      reason: `修复类 PR 缺${missing.join('、')}——审官标准第 9 条：修一处就交卷，同类问题换个地方再咬`,
+      reason: `修复类 PR 缺${missing.join('、')}——审官标准第 10 条：修一处就交卷，同类问题换个地方再咬`,
     };
   }
   return { state: 'pass', reason: '同类扫描段齐全（段 + 命令 + 结论）' };
