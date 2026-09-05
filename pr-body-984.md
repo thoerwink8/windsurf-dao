@@ -34,3 +34,8 @@
 ### 机制判定
 
 这错在制度生效前还会再犯吗？**会**——检查器嵌套跑完整自检、dry-run 顺手打网、超时常量写死墙钟、默认档打飞书/gh，任何一项都会再把调用方拖过 SIGKILL。机制改在本 PR：超时可注入、dry-run 不探网、⑪ 预算收到 60s 且 detail 带自身耗时、orca 面先挂牌不盲删、默认档出网检查只在 `--full`。不会再靠「卡 10 分钟没输出」当唯一信号。
+
+### 返工（审官红 1 条，原 head 05393187）
+
+1. **基底又旧**：交卷闸 ① 真红——`05393187` 落后 `origin/master`。正确动作是把 master 拿进来，不是恢复 `scripts/agent-stall-watch.mjs`。本轮 `git merge origin/master`（审官允许 rebase 或 merge）：合入 `a2c194ff`（stall-watch 静默数拆开报）以及其间又落到 master 的 `aadb6ab0`（播报闸五条）。未改 stall-watch。
+2. **墙钟对照**（不计入红项）：本轮 `node scripts/dao-check.mjs` 末行：`dao check: 好的（153 项，9 项跳过，38.7s）`。相关套 `tests 453 / pass 452 / fail 0 / skipped 1`，`duration_ms 13158`。
