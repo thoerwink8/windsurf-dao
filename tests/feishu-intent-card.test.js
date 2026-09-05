@@ -286,4 +286,39 @@ describe('待拍板卡片回传（#875 ②⑤⑧）', () => {
     assert.ok(res.actions.some((a) => a.type === 'gh_comment'));
     assert.ok(res.replies.some((r) => /换成哪条/.test(r.text)));
   });
+
+  it('通讯录挂死也不挡回包：liveCardAction 50ms 内给出 toast（故意违规样本）', async () => {
+    const M = await ADAPTER;
+    const hung = new Promise(() => {});
+    let named = 0;
+    const client = {
+      userName: async () => { named += 1; return hung; },
+      reply: async () => { throw new Error('回包路径不该 reply'); },
+    };
+    const store = {
+      hubPending: { om_card_1: { repo: DEFAULT_REPO, number: 846, title: '盘点' } },
+      save() {},
+    };
+    const comments = [];
+    const deps = { now: () => Date.now(), ghComment: async (...a) => comments.push(a) };
+    const deferred = [];
+    const t0 = Date.now();
+    const ev = cardEvent({ choice: 'recommend' });
+    delete ev.event.operator.user_name;
+    const ack = await M.liveCardAction(ev, {
+      store, deps, client, defer: (fn) => deferred.push(fn),
+    });
+    const ms = Date.now() - t0;
+    assert.ok(ms < 50, `回包花了 ${ms}ms，通讯录挂死不该挡`);
+    assert.equal(named, 0, '回包路径不许打通讯录');
+    assert.equal(ack.toast.type, 'success');
+    assert.match(ack.toast.content, /按推荐执行/);
+    assert.match(ack.card.data.header.title.content, /已拍/);
+    assert.equal(comments.length, 0, 'gh 评论必须在回包之后');
+    assert.equal(deferred.length, 1);
+    await deferred[0]();
+    assert.equal(named, 0, '评论路径也不许等通讯录');
+    assert.equal(comments.length, 1);
+    assert.match(comments[0][2], /ou_user1|有人/);
+  });
 });
