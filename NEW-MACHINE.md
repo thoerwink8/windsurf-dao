@@ -292,6 +292,9 @@ orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
 # 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
+# GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
+#   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
+#   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
 ```
 
 ### 两条部署前必须先定的（踩过就晚了）

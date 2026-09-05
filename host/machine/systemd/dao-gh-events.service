@@ -1,0 +1,60 @@
+# /etc/systemd/system/dao-gh-events.service
+#
+# GitHub 事件桥（#956）：有人合了 PR、交了审官判定、推了新提交，那一刻就叫醒指挥官，
+# 不再等下一次轮询。跑的是 scripts/gh-event-bridge.mjs。
+#
+# 没有开任何端口。桥内部跑 `gh webhook forward`，那条命令往仓上建一个 hook
+# （投递地址是 GitHub 自家的 webhook-forwarder），再用一条**出站** wss 把投递拉回来。
+# 所以这台机器不需要域名、不需要证书、不对公网多暴露一个字节，也不花钱。
+# 谁要是把它改成本地监听（gh webhook forward --url=...），就必须同时补上
+# X-Hub-Signature-256 校验——那时才真的有一个「谁都能 POST 进来」的口子。
+#
+# 兜底没有省，也不许省：dao-close-issues.timer（每小时）和 commander-act.timer（每 20 分钟）
+# 原样留着。webhook 会丢（网络、重启、GitHub 抽风），桥停了只是退回定时器的节奏。
+# tests/gh-events.test.js 有一条闸守着「兜底 timer 还在」，把它删掉当场红。
+#
+# 怎么区分「桥悄悄停了」和「这段时间没有事发生」：桥每 10 分钟朝自己的 hook 打一次 ping，
+# GitHub 把它从同一条通道送回来——那是一个**自己造的样本**，通道通时样本一定不为 0。
+# server-check ㉑ 判绿的前提是「最近收到过 ping」，不是「没报错」。
+#
+# 装：sudo bash scripts/install-dao-gh-events.sh
+# 验：node scripts/gh-event-bridge.mjs status
+#     journalctl -u dao-gh-events -n 50
+#
+# 只有一个动作要 root：`systemctl start --no-block <单元>`。走 sudoers 白名单里写死的两条
+# （host/machine/sudoers.d/dao-gh-events），所以这里不能开 NoNewPrivileges——它会把 sudo 一起挡掉。
+#
+# 为什么叫单元而不是直接 `node scripts/commander.mjs act`：commander 的 state.json 没有锁，
+# 事件那一次和定时器那一次撞上会互相盖写（丢 wakeCounts = 多起一个大脑 = 多花一次钱）。
+# systemd 对同一个 oneshot 只留一个启动 job，第二次 start 自动并进去，串行是白拿的。
+
+[Unit]
+Description=windsurf-dao GitHub 事件桥：PR 一动就叫醒指挥官（issue #956）
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=orca
+Group=orca
+WorkingDirectory=/home/orca/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# 别让 gh 每次起来都去查自己有没有新版：那是一次没必要的出网，失败还会往 stderr 刷噪音。
+Environment=GH_NO_UPDATE_NOTIFIER=1
+ProtectSystem=full
+ProtectHome=read-only
+# 写得动的只有状态文件那个目录；gh 的缓存目录一起放开，否则它写不进去会往 stderr 刷。
+ReadWritePaths=/home/orca/.dao /home/orca/.cache
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/gh-event-bridge.mjs
+Restart=always
+RestartSec=5
+KillMode=mixed
+# 退出时 gh webhook forward 会自己把建的 hook 删掉，给它一点时间。
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# /etc/sudoers.d/dao-gh-events —— 事件桥唯一被允许的 root 动作（#956）
+#
+# 桥（scripts/gh-event-bridge.mjs，以 orca 跑）收到 GitHub 事件后要做的事只有一件：
+# 把已经装好的那两个 oneshot 单元**提前叫起来**，不等它们的定时器。
+# 判据仍在单元自己的脚本里，桥不带任何参数、不换命令。
+#
+# 为什么必须写死到具体单元名：`systemctl start` 后面换成别的单元名就是另一件事了。
+# 带通配（例如 dao-*）等于把「能起任何单元」给了 orca，而每个工人 agent 都能写那个仓。
+# tests/unit-privilege.test.js 守着「不许通配、要绝对路径、不许指家目录」。
+#
+# 装：sudo install -m 440 host/machine/sudoers.d/dao-gh-events /etc/sudoers.d/dao-gh-events
+#     （install-dao-gh-events.sh 会做，并先 visudo -c 验语法——sudoers 写坏会把整台机器锁死）
+# 验：sudo -u orca sudo -n /usr/bin/systemctl start --no-block dao-close-issues.service  → 应当成功
+#     sudo -u orca sudo -n /usr/bin/systemctl start --no-block orca-serve.service        → 应当被拒
+orca ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block dao-close-issues.service
+orca ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block commander-act.service

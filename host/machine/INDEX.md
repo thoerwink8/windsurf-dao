@@ -44,6 +44,7 @@
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
+| A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check ㉑ 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
 | A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
