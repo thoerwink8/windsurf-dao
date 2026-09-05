@@ -1186,3 +1186,39 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
     assert.deepEqual(byKind(r, 'reap-ticket'), []);
   });
 });
+
+// ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，
+//    而标签一直挂在已关的 #833 上——attributedIssues 兜底写好了却被手写查找绕过） ──
+describe('返工取标签：署名 issue 已关也要取得到', () => {
+  const closedIssueSituation = (over = {}) => baseSituation({
+    github: {
+      scanned: true,
+      issues: [], // 署名单已关，不在开放列表里
+      attributedIssues: [{ number: 833, title: '已关的署名单', labels: [
+        { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' },
+      ] }],
+      prs: [redPr(945, 'headaaa', 833)],
+    },
+    prReviews: { scanned: true, byPr: { 945: { reviews: [redReview('红：这里要改', 'headaaa')] } } },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('署名单已关但在 attributedIssues 里 → 照常派返工，不报「标签没查成」', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation());
+    const unscanned = byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned');
+    assert.deepEqual(unscanned, [], '署名单标签取得到就不该报没查成');
+    assert.equal(byKind(r, 'rework').length, 1);
+  });
+
+  // 红样本：两处都查不到时仍必须报「没查成」，不许猜一个标签派出去。
+  it('两处都没有该单 → 仍报没查成，不猜', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation({
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [redPr(945, 'headaaa', 833)] },
+    }));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned').length, 1);
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});

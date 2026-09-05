@@ -555,10 +555,14 @@ function collectCandidates(situation) {
       out.push(withNeeds(esc(`PR #${pr.number} 判红要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
       continue;
     }
-    const rIssue = (gh.issues || []).find((i) => i && i.number === issueNo);
+    // 走 attributedIssueOf 门面：它已经带了「开放单查不到就查 attributedIssues」的兜底，
+    // 而 attributedIssues 正是为「单关了但 PR 还要审/要返工」补的（scanAttributedIssues 的注释
+    // 点名的就是 #945/#833 这一对）。这里原本手写单级查找，把那份兜底整个绕过去了——
+    // 结果 #945 每轮报「标签没查成，不派」，而标签一直好好挂在已关的 #833 上。
+    const rIssue = attributedIssueOf(gh, pr);
     if (!rIssue) {
       out.push(withNeeds(esc(
-        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关/超出扫描窗）——标签没查成，不派`,
+        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关且不在署名补取里）——标签没查成，不派`,
         { reason: 'unscanned', pr: pr.number, issue: issueNo, missing: ['github'], detail: 'rework-issue-unscanned' },
       ), N.rework));
       continue;
