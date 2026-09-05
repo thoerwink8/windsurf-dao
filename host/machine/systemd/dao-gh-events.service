@@ -50,9 +50,14 @@ ReadWritePaths=/home/orca/.dao /home/orca/.cache
 ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/gh-event-bridge.mjs
 Restart=always
 RestartSec=5
-KillMode=mixed
-# 退出时 gh webhook forward 会自己把建的 hook 删掉，给它一点时间。
-TimeoutStopSec=20
+# KillMode 必须是 control-group（默认值，这里写出来是因为写错的代价是隐性的）：
+# 桥的子进程 `gh webhook forward` 收到 SIGTERM 才会把自己在仓上建的 hook 删掉。
+# 用 mixed 的话只有主进程收得到 SIGTERM，子进程等超时被 SIGKILL——hook 留在仓上，
+# 而 Restart=always 每重启一次就多留一个。GitHub 一个仓最多 20 个 hook，攒满了桥就再也建不上。
+# 桥启动时还会顺手扫掉遗留的 forwarder hook（硬杀/断电那种没机会清理的情况）。
+KillMode=control-group
+# 停的时候要等子进程把那次 hook 删完，别急着 SIGKILL。
+TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 

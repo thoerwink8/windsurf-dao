@@ -265,6 +265,30 @@ describe('兜底与权限：两样最容易被顺手拆掉的东西', () => {
     }
   });
 
+  // 2026-09-05 实测：pkill 掉桥之后，仓上留着一个活 hook（子进程没收到 SIGTERM 就没机会删）。
+  // GitHub 一个仓最多 20 个 hook，而单元是 Restart=always——每硬重启一次多留一个，
+  // 攒满了桥就再也建不上，症状是「起来了但一个事件都收不到」，且没有任何东西会报错。
+  it('单元必须让子进程也收到 SIGTERM，否则每次重启在仓上漏一个 hook', () => {
+    const t = fs.readFileSync(path.join(ROOT, 'host', 'machine', 'systemd', 'dao-gh-events.service'), 'utf8');
+    const mode = (t.match(/^KillMode=(.+)$/m) || [])[1];
+    assert.ok(mode, '没写 KillMode——默认值虽然对，但这条的代价是隐性的，要写出来');
+    assert.equal(mode.trim(), 'control-group',
+      'mixed 只把 SIGTERM 给主进程，gh webhook forward 会被 SIGKILL，来不及删自己建的 hook');
+  });
+
+  it('硬杀漏下的 hook，下次启动要扫掉——只扫 forwarder 那种，别的一根汗毛不许碰', async () => {
+    const B = await import(toUrl(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs')));
+    const hooks = [
+      { id: 1, config: { url: 'https://webhook-forwarder.github.com/hook' } },
+      { id: 2, config: { url: 'https://ci.example.com/gh' } },      // 别人的，不许动
+      { id: 3, config: {} },                                         // 没有 url，不许猜
+      { id: 4, config: { url: 'https://webhook-forwarder.github.com/hook' } },
+    ];
+    assert.deepEqual(B.staleForwarderHooks(hooks), [1, 4]);
+    assert.deepEqual(B.staleForwarderHooks(null), [], '查不到清单就别删——没查成不是「没有」');
+    assert.deepEqual(B.staleForwarderHooks([]), []);
+  });
+
   it('桥不许起本地监听：一旦改回 --url，签名校验就必须补回来', () => {
     const src = fs.readFileSync(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs'), 'utf8');
     assert.ok(!/createServer|--url=/.test(src),

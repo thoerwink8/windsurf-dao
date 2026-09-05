@@ -121,6 +121,32 @@ function cmdStatus(argv) {
   process.exit(v.state === 'ok' ? 0 : v.state === 'red' ? 1 : 2);
 }
 
+// `gh webhook forward` 建的 hook 长这样。它退出时会自己删掉，但那要它收得到 SIGTERM——
+// 硬杀 / OOM / 断电就没机会清，hook 留在仓上。而 Restart=always 每重启一次多留一个，
+// GitHub 一个仓最多 20 个，攒满了桥就再也建不上（症状是「起来了但一个事件都收不到」）。
+// 所以每次启动先扫一遍：还挂在仓上的 forwarder hook 一定是上一条命的遗物，删掉。
+export const FORWARDER_HOST = 'webhook-forwarder.github.com';
+
+export function staleForwarderHooks(hooks) {
+  if (!Array.isArray(hooks)) return [];
+  return hooks
+    .filter((h) => h && typeof h.config?.url === 'string' && h.config.url.includes(FORWARDER_HOST))
+    .map((h) => h.id)
+    .filter((id) => Number.isFinite(Number(id)));
+}
+
+function sweepStaleHooks() {
+  const list = spawnSync(FORWARD_CMD, ['api', `repos/${REPO}/hooks`], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  if (list.status !== 0) { out({ type: 'hook-sweep-skipped', why: String(list.stderr || '').trim().slice(0, 200) }); return; }
+  let hooks = null;
+  try { hooks = JSON.parse(list.stdout || '[]'); } catch { out({ type: 'hook-sweep-skipped', why: 'hook 清单解析不了' }); return; }
+  const stale = staleForwarderHooks(hooks);
+  for (const id of stale) {
+    const del = spawnSync(FORWARD_CMD, ['api', '-X', 'DELETE', `repos/${REPO}/hooks/${id}`], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+    out({ type: 'hook-swept', hookId: id, ok: del.status === 0, note: '上一条命留下的 forwarder hook' });
+  }
+}
+
 function runBridge({ dryRun, once }) {
   const state = {
     schema: 1,
@@ -232,16 +258,23 @@ function runBridge({ dryRun, once }) {
   const ping = setInterval(sendPing, PING_MS);
 
   function stop(code) {
+    if (stopping) return;
     stopping = true;
     clearInterval(beat); clearInterval(ping);
     for (const h of scheduled.values()) clearTimeout(h);
-    if (child && !child.killed) child.kill('SIGTERM'); // forward 退出时自己删掉建的 hook
     out({ type: 'stopping', code });
-    setTimeout(() => process.exit(code), 1500);
+    if (!child || child.exitCode !== null || child.killed) return process.exit(code);
+    // 等子进程真的退掉再走：它要用这段时间把自己建的 hook 从仓上删掉。
+    // 干等固定毫秒数是不够的（那是一次网络往返），所以听 exit；实在不退再硬走。
+    const bail = setTimeout(() => { out({ type: 'stop-timeout', note: 'forward 没按时退，hook 可能留在仓上，下次启动会扫掉' }); process.exit(code); }, 20000);
+    if (bail.unref) bail.unref();
+    child.on('exit', () => { clearTimeout(bail); process.exit(code); });
+    child.kill('SIGTERM');
   }
   process.on('SIGTERM', () => stop(0));
   process.on('SIGINT', () => stop(0));
 
+  sweepStaleHooks();
   startForward();
 }
 
