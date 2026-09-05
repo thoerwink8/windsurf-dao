@@ -28,10 +28,14 @@ import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
+import {
+  proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
+} from './commander-verbs.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
+  'add-label', 'retry-drain', 'open-issue',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -216,12 +220,16 @@ export const MAX_REREVIEW_TRIES = 3;
  * 已关闭的单**只用来查标签**，绝不并进 `github.issues`——那张表是派工候选表，
  * 混进已关闭的「已消歧」单会被当成新活派出去。
  */
-export function reviewerLabelFor(gh = {}, pr) {
+export function attributedIssueOf(gh = {}, pr) {
   const n = attributedIssueNumber(pr);
   if (n == null) return null;
-  const hit = (gh.issues || []).find((i) => i && i.number === n)
-    || (gh.attributedIssues || []).find((i) => i && i.number === n);
-  return labelValue(hit, 'reviewer/');
+  return (gh.issues || []).find((i) => i && i.number === n)
+    || (gh.attributedIssues || []).find((i) => i && i.number === n)
+    || null;
+}
+
+export function reviewerLabelFor(gh = {}, pr) {
+  return labelValue(attributedIssueOf(gh, pr), 'reviewer/');
 }
 
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
@@ -240,6 +248,9 @@ export const ACTION_NEEDS = {
   'notify-hub': [],
   escalate: [],
   noop: [],
+  'add-label': ['github'],
+  'retry-drain': ['reviewPending'],
+  'open-issue': [],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -249,6 +260,29 @@ export const FORBIDDEN_AUTO_KINDS = new Set([
 ]);
 
 function withNeeds(action, needs) { return { ...action, _needs: needs }; }
+
+/** 半标能推出唯一跨厂值 → add-label；推不出保持 null，调用方报帅（查不到 ≠ 猜一个）。 */
+function maybeAddLabel(issue, situation, extra, needs) {
+  if (!issue || issue.number == null) return null;
+  const proposed = proposeAddLabel({
+    existingLabels: issue.labels,
+    models: situation.routingModelRecords,
+    reviewerOrder: situation.reviewerOrder,
+    workerOrder: situation.workerOrder,
+  });
+  if (!proposed.ok) return null;
+  return withNeeds({
+    kind: 'add-label',
+    issue: issue.number,
+    labels: proposed.labels,
+    existingLabels: issue.labels,
+    workerId: proposed.workerId,
+    reviewerId: proposed.reviewerId,
+    models: situation.routingModelRecords,
+    why: extra.why,
+    ...extra,
+  }, needs);
+}
 
 /**
  * 收集「候选动作」：各分支照常按数据产候选，正向动作带 _needs（依赖节），由入口总闸统一裁定产不产。
@@ -315,7 +349,11 @@ function collectCandidates(situation) {
       // （labelNames 返回 null → 不进 ready，整节报 kind:'unscanned'），所以走到这一步的 null
       // 一律是「查过、确实没这个标」，与「没查成」在出口上分得开。
       if ((model || reviewer) && (!model || !reviewer)) {
-        // 缺标签是报帅信号（数据已 scanned 才分析得出），随 dispatch 同依赖，避免 github/orca 没查成时冒出。
+        // #971：半标且选型能推出唯一跨厂值 → 自己补，不再喊给空气。推不出仍报帅（查不到 ≠ 猜一个）。
+        const filled = maybeAddLabel(issue, situation, {
+          why: `#${n} 半标，补唯一跨厂标签（不猜）`,
+        }, N['add-label']);
+        if (filled) { out.push(filled); continue; }
         out.push(withNeeds(esc(`#${n} 已消歧，但派工标只打了一半：有 ${model ? 'model/' : 'reviewer/'}、缺 ${!model ? 'model/' : 'reviewer/'}，不猜——报帅补标签`, {
           reason: 'missing-labels', issue: n, title: issue?.title || '',
         }), N.dispatch));
@@ -338,9 +376,29 @@ function collectCandidates(situation) {
     }
   }
 
-  // ② review-pending 入队 → attach-reviewer（#815）
+  // ② review-pending 入队 → 首次 attach-reviewer；票还在且有上次尝试账 → retry-drain（#971）
+  // 走到重试分支本身就是「上次没成」的证据（派了 ≠ 成了）。宽限期内不重发；试满 escalate。
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
+    const drain = validateRetryDrain({
+      pr: it.pr,
+      queue: rp.items,
+      ledger: situation.drainLedger || {},
+      nowMs,
+    });
+    if (drain.ok) {
+      out.push(withNeeds({
+        kind: 'retry-drain', pr: it.pr, tries: drain.tries, stateKey: drain.stateKey,
+        queue: rp.items,
+        why: `PR #${it.pr} 上次 drain 没成（票还在队列），重试第 ${drain.tries} 次`,
+      }, N['retry-drain']));
+      continue;
+    }
+    if (drain.code === 'grace') continue;
+    if (drain.code === 'exhausted') {
+      out.push(withNeeds(esc(drain.error, { reason: 'drain-exhausted', pr: it.pr, tries: drain.tries }), N['retry-drain']));
+      continue;
+    }
     out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
   }
 
@@ -421,6 +479,16 @@ function collectCandidates(situation) {
     // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
     // 试满仍无判定 ⇒ 停手报帅，不死循环。
     if (a.atHead === 0) {
+      // #971：缺 reviewer/ 时先补标签。等宽限期不会让标签自己长出来；
+      // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。
+      const reviewer = reviewerLabelFor(gh, pr);
+      if (!reviewer) {
+        const filled = maybeAddLabel(attributedIssueOf(gh, pr), situation, {
+          pr: pr.number,
+          why: `PR #${pr.number} 要叫审官，但署名单缺 reviewer/——补唯一跨厂标签`,
+        }, N['add-label']);
+        if (filled) { out.push(filled); continue; }
+      }
       const rrKey = `rereview:${pr.number}@${a.head}`;
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
@@ -437,7 +505,7 @@ function collectCandidates(situation) {
       out.push(withNeeds({
         kind: 'rereview', pr: pr.number, head: a.head,
         issue: attributedIssueNumber(pr),
-        reviewer: reviewerLabelFor(gh, pr),
+        reviewer,
         stateKey: rrKey,
         tries: tries + 1,
         why: firstRound
@@ -477,6 +545,11 @@ function collectCandidates(situation) {
     const rModel = labelValue(rIssue, 'model/');
     const rReviewer = labelValue(rIssue, 'reviewer/');
     if (!rModel || !rReviewer) {
+      const filled = maybeAddLabel(rIssue, situation, {
+        pr: pr.number,
+        why: `PR #${pr.number} 要返工，署名 issue #${issueNo} 半标——补唯一跨厂标签`,
+      }, N['add-label']);
+      if (filled) { out.push(filled); continue; }
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
         reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
       }), N.rework));
@@ -552,11 +625,16 @@ export function decide(situation = {}) {
   const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   const candidates = collectCandidates(situation);
   const actions = [];
+  const openLedger = situation.openIssueLedger || {};
   for (const cand of candidates) {
     const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
     const missing = needs.filter((s) => !situation[s]?.scanned);
     const { _needs, ...clean } = cand;
-    if (missing.length === 0) actions.push(clean);
+    if (missing.length === 0) {
+      // #971：能转成 open-issue 的 escalate 当场转；已开过返回 null；转不成保持原动作。
+      const next = escalateToOpenIssue(clean, { ledger: openLedger });
+      if (next) actions.push(next);
+    }
     // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条
   }
   // 入口总闸：有节没查成 → 一条合并 escalate，列全缺的节。没查成 ≠ 空态势，必须 fail-visible。
