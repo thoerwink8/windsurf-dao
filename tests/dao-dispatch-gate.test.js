@@ -596,10 +596,10 @@ describe('dao 派工硬闸', () => {
   });
 
   it('#984：dispatch --dry-run 不打网', async (t) => {
-    const dry = spawnSync(process.execPath, [CLI,
+    const dry = await cliInProc([
       'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
       '--confirm', '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run',
-    ], { encoding: 'utf8', cwd: REPO });
+    ]);
     let p = {};
     try { p = JSON.parse((dry.stdout || '').trim().split(/\r?\n/).pop()); } catch { p = { raw: dry.stdout }; }
     await t.test('dry-run 退出 0', () => {
