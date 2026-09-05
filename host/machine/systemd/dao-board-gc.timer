@@ -12,7 +12,7 @@ Description=每小时回收一次僵尸卡
 [Timer]
 # 挂钟触发（OnCalendar），不是只有单调时钟：只有 OnBootSec/OnUnitActiveSec 的 timer
 # 停掉再起会进 active(elapsed) 死态，看着还在册其实永不触发，而且没人报警（timer-armed 闸就是为这个立的）。
-# OnCalendar 被我故意去掉，验闸
+OnCalendar=*:07:00
 Persistent=true
 RandomizedDelaySec=90
 
