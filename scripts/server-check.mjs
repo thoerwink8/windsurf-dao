@@ -648,6 +648,25 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
   return { state: OK, detail: `${units.length} 个 dao timer 都有下一次触发` };
 }
 
+/**
+ * 这个单元是不是「我们装的」——判据是**单元文件落在哪**，不是它叫什么。
+ *
+ * 发行版的单元一律在 `/usr/lib/systemd/system/`（部分老系统 `/lib/systemd/system/`），
+ * 管理员/我们装的一律在 `/etc/systemd/system/`。这条界线是 systemd 自己定的，
+ * 不需要任何人维护名单，也天然覆盖将来别的仓装上来的单元。
+ *
+ * 读不到路径时回 null（没查成），**绝不回 false**——「不知道归谁」被当成「不归我管」，
+ * 正是漏报的做法。
+ */
+export function isOurUnit(fragmentPath) {
+  const s = String(fragmentPath || '').trim();
+  if (!s) return null;
+  if (/^\/(?:usr\/)?lib\/systemd\/system\//.test(s)) return false;
+  if (/^\/etc\/systemd\/system\//.test(s)) return true;
+  if (/^\/run\/systemd\//.test(s)) return false; // 运行时生成的，不归本仓
+  return null; // 没见过的落点：不猜，交给调用方当「没查成」
+}
+
 /** 扫盘面上的 dao/commander timer——不许手写清单，清单会过期。 */
 function checkTimerArmed() {
   const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], { timeout: 10000 });
@@ -656,19 +675,39 @@ function checkTimerArmed() {
   // 于是 `gw-remote-probe.timer`（写 ~/.dao/provider-health.json，我们**读**它判派工可用性）
   // 一直是单调时钟、不在扫描面里——它停掉再起就会进 active(elapsed) 死态，
   // 而派工把过期健康表当 unknown 不拦。**按名字前缀圈定扫描面，等于只查自己认识的东西。**
-  // 现在扫机器上每一个 timer；systemd 自带的那些点位由发行版管，不归本仓判死。
-  const SYSTEM_TIMERS = /^(systemd-|apt-|dpkg-|man-db|logrotate|fstrim|e2scrub|motd-news|update-notifier|anacron|snapd)/;
-  const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)]
-    .map((m) => m[1])
-    .filter((n) => !SYSTEM_TIMERS.test(n));
+  // 头一版按 `dao*`/`commander*` 前缀圈定，漏了 `gw-remote-probe.timer`；改成「扫全机 + 排掉
+  // 发行版前缀」之后，立刻把 Ubuntu 自带的 `apport-autoreport` / `ua-timer` 判成红——
+  // **名字黑名单和名字白名单是同一个毛病**，都只覆盖「有人想得到的那些」。
+  //
+  // 换成结构判据：**看单元文件落在哪**。发行版的在 `/usr/lib/systemd/system/`，
+  // 我们（本仓 + 别的仓）装的一律在 `/etc/systemd/system/`。这个界线不靠任何人维护名单，
+  // 且天然覆盖将来别的仓装上来的单元——`gw-remote-probe` 正是这么被捞回来的。
+  const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)].map((m) => m[1]);
   const units = [];
+  const skipped = [];
   for (const unit of [...new Set(names)]) {
-    const p = run('systemctl', ['show', unit, '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
+    const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '--value'], { timeout: 8000 });
     if (!p.probed) return classifyTimerArmed({ probed: false, reason: `systemctl show ${unit} 没跑成` });
-    const vals = String(p.stdout || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const frag = String(p.stdout || '').split(/\r?\n/)[0].trim();
+    if (!frag) return classifyTimerArmed({ probed: false, reason: `${unit} 读不到 FragmentPath——圈不出扫描面，不当「不归我管」` });
+    const mine = isOurUnit(frag);
+    if (mine === null) {
+      return classifyTimerArmed({ probed: false, reason: `${unit} 的单元文件落在没见过的地方（${frag}）——判不出归属，不当「不归我管」` });
+    }
+    if (!mine) { skipped.push(unit); continue; }
+    // 第 1 行是 FragmentPath（上面用掉了），点位从第 2 行起——不切掉它就恒真，
+    // 因为路径永远是个非空字符串，本闸会变成永远绿。
+    const vals = String(p.stdout || '').split(/\r?\n/).slice(1).map((x) => x.trim()).filter(Boolean);
     // 两个点位任意一个有值就算有下一次；两个都空才是死态。
     const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
     units.push({ unit, next: alive ? vals.join('|') : null });
+  }
+  if (units.length === 0 && skipped.length > 0) {
+    // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
+    return classifyTimerArmed({
+      probed: false,
+      reason: `扫到 ${skipped.length} 个 timer，但没有一个装在 /etc/systemd/system——我们的单元一个都没装上？`,
+    });
   }
   return classifyTimerArmed({ probed: true, units });
 }

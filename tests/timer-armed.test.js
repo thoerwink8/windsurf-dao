@@ -127,17 +127,33 @@ describe('扫描面不许按名字前缀圈定', () => {
       '正则采不到 gw-remote-probe.timer');
   });
 
-  it('发行版自带的 timer 不归本仓判死——它们的点位由 apt/systemd 管', async () => {
-    const fs = require('node:fs');
-    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'server-check.mjs'), 'utf8');
-    const m = src.match(/const SYSTEM_TIMERS = (\/[^\n]*?\/);/);
-    assert.ok(m, '系统 timer 过滤器不见了——不滤会天天红成噪音，噪音久了就没人看');
-    const re = new RegExp(m[1].slice(1, -1));
-    for (const n of ['systemd-tmpfiles-clean.timer', 'apt-daily.timer', 'logrotate.timer', 'fstrim.timer']) {
-      assert.ok(re.test(n), `${n} 应被滤掉`);
+  // 扫描面圈定经过两轮翻车，两轮都是**按名字**圈：
+  //  一轮白名单（只认 `dao*`/`commander*`）→ 漏掉 gw-remote-probe.timer；
+  //  一轮黑名单（排掉想得到的发行版前缀）→ 把 apport-autoreport / ua-timer 判成红。
+  // 名字白名单和名字黑名单是同一个毛病：都只覆盖「有人想得到的那些」。
+  // 现在按**单元文件落在哪**判，这条界线是 systemd 自己定的，不靠任何人维护名单。
+  it('发行版自带的不归本仓判死，我们装的一个都不能漏——按落点判，不按名字', async () => {
+    const S = await LOAD;
+    for (const p of [
+      '/usr/lib/systemd/system/apport-autoreport.timer',
+      '/usr/lib/systemd/system/ua-timer.timer',
+      '/lib/systemd/system/logrotate.timer',
+    ]) {
+      assert.equal(S.isOurUnit(p), false, `${p} 是发行版的，点位由 apt/systemd 管`);
     }
-    for (const n of ['dao-sync.timer', 'gw-remote-probe.timer', 'commander-act.timer', 'feishu-x.timer']) {
-      assert.ok(!re.test(n), `${n} 不该被滤掉——它是我们自己生态里的`);
+    for (const p of [
+      '/etc/systemd/system/dao-sync.timer',
+      '/etc/systemd/system/gw-remote-probe.timer', // 别的仓装的，名字不带 dao 前缀
+      '/etc/systemd/system/commander-act.timer',
+    ]) {
+      assert.equal(S.isOurUnit(p), true, `${p} 是我们装的，漏了就是当初 gw-remote-probe 那种漏法`);
     }
+  });
+
+  it('归属判不出时回 null（没查成），绝不回 false——那就是漏报', async () => {
+    const S = await LOAD;
+    assert.equal(S.isOurUnit(''), null, '读不到路径 = 没查成');
+    assert.equal(S.isOurUnit(null), null);
+    assert.equal(S.isOurUnit('/opt/weird/place/x.timer'), null, '没见过的落点不许猜成「不归我管」');
   });
 });
