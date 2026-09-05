@@ -138,3 +138,23 @@ pi 的 `pi-gateway.json` 里 7 个 provider 全是 `gw-*` 网关腿（各自一�
 卡 B 的合并明写「orca 审官起不来，改由卡 C 的 mirasim 审官路径审」，卡 C 不通，整条链都卡着。
 而卡 C 自己也没人审，存在先有鸡还是先有蛋；破局点正是本次修复：401 修掉后旧 orca 审官路径
 **可能**已经能用，能用就先用它审出卡 C。（正在验，别当结论。）
+
+---
+
+## 处置（2026-09-05）
+
+- **止血已落**：服务器 `~/.pi/agent/settings.json` 的 `defaultProvider` 由 `mirasim` 改 `gw`，
+  起终端验过：回话正常、无 401。备份 `settings.json.bak-20260905`。
+- **「死了没人说」那一层另有落地**：`scripts/lib/stall-census.mjs` +
+  `tests/stall-census.test.js`（提交 `4bb2bf5`）——静默升级档 + 从进程侧遍历找无卡孤儿，
+  只报不杀。
+- **方向已记进 memory**：`mirasim-replaces-orca-except-reclaude`（除 reclaude 外所有腿走
+  mirasim 载体、orca 验收后退役，落点是 issue #880 而不是 `docs/decisions/`）。
+- **卡 C（#886 审官流 mirasim 化）当天已合进 master**，本文「先有鸡还是先有蛋」那一段
+  就此解开——不再需要用旧 orca 路径去审卡 C。
+
+**尚未处理、已单独留痕的**（本文「尚未处理，另开」那三条仍然有效）：
+pi 审官降级腿拿不到指定模型、`review-pending` 票没写成、`land` automation 的
+`reuseSession: false` 泄漏。`droppedFlags` 算了没人读那条同样未做。
+
+status: done
