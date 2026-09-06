@@ -5,7 +5,7 @@
 ## 怎么工作
 
 - 改动在 worktree 里做，做完再提交推 master——主树是两个帅位共用的，谁跑一次 `git add -A` 就会把对方的在途改动卷进自己的提交（2026-09-06 咬了两次，第二次连 commit message 都没提被卷走的三个文件）。
-- 改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。
+- 改完跑 `node scripts/dao-check.mjs --affected`（只跑与本次改动相关的，实测 3.7s；不带这个参数是全量 30s），绿了才算完，红了当场处理或如实报告。兜底不靠这一次：`land.mjs` 与 CI 各自还会跑。地图不在会有提示叫你先 `node scripts/test-impact-map.mjs build`——那句提示出现就照做，别当它是背景噪音。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
 - commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 用 `[pi]`，Codex 用 `[codex]`，Grok 用 `[grok]`。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
 - 验收/通过记录必须与被测代码同基线：记录「X 修好 / 测验通过」的提交必须包含被测代码本身（#766 教训：通过记录挂在旧基线会误导后人）。
