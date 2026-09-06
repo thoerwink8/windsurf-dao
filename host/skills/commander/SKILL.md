@@ -34,7 +34,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 ## 你能用的手（就这些，越界即停）
 
 - `node scripts/dao.mjs <verb>`：dispatch / reviewer-attach / worker-done / notify / reply / gate-create 等（用法 `node scripts/dao.mjs` 不带参数）。
-- 往单上落痕（返工方向、判断结论）：`node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>`（身份走 marshal，别用裸 gh 写动作；只读 view/list 可裸 gh）。
+- 往单上落痕（返工方向、判断结论）：`node scripts/issue-gateway.mjs comment --repo thoerwink8/windsurf-dao --issue <N> --body-file <文件> --host commander --idempotency-key <键>`（#792，身份由网关固定 marshal；只读 view/list 可裸 gh）。
 - 读：`gh` 只读、`orca terminal read`、仓内文件。
 
 ## 边界（硬红线，**不许**碰）

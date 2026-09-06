@@ -1,5 +1,7 @@
 闭环框架：工人读 `host/skills/dispatch/templates/soldier-book.md`，审官读 `host/skills/dispatch/templates/reviewer-book.md`。注入只给一行指针；pi/codex 未测，指针仍是兜底。
 
+GitHub Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792）。身份由网关固定 `dao-marshal[bot]`，不许裸 `gh issue create|comment|close|edit`，不许自选 token。幂等账与审计落 `~/.dao/issue-gateway`（不进 git）。
+
 ## 提问必须标推荐位
 
 每次 `AskUserQuestion`（以及同等的多选提问）三处都要写，不是三选一：

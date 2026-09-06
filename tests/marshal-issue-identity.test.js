@@ -47,7 +47,7 @@ describe('marshal-issue-identity', () => {
     });
 
     const admit = fs.readFileSync(path.join(REPO, 'host', 'skills', 'admit-push', 'SKILL.md'), 'utf8');
-    const bare = admit.replaceAll('gh-as.mjs marshal -- issue create', 'gh issue create');
+    const bare = admit.replaceAll('issue-gateway.mjs create', 'gh issue create');
     await t.test('负控样本：admit-push 里真有裸 gh issue create', () => {
       assert.ok(/\bgh issue create\b/.test(bare), '负控样本：admit-push 里真有裸 gh issue create');
     });

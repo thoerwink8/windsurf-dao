@@ -19,6 +19,11 @@ export const COORDINATOR_HINT = [
   '例外（#675）：工人 TUI bindStation 在 run-current 为 null 时对本窗 run-create；帅窗不许走这条。',
 ].join('');
 
+export const GH_ISSUE_WRITE_HINT = [
+  'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。',
+  '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete。',
+].join('');
+
 export function normalizeCmd(cmd) {
   return String(cmd || '').replace(/\s+/g, ' ').trim();
 }
@@ -151,6 +156,27 @@ export function isDaoMjsInvocation(stmt) {
   return toks.some(t => /(^|[\\/])dao\.mjs$/i.test(t));
 }
 
+/** 这句真正跑起来的程序是不是 issue-gateway.mjs（#792 唯一写入入口）。 */
+export function isIssueGatewayInvocation(stmt) {
+  const toks = bareTokens(stmt);
+  return toks.some(t => /(^|[\\/])issue-gateway\.mjs$/i.test(t));
+}
+
+const GH_ISSUE_WRITE_VERBS = /^(create|comment|close|edit|reopen|delete)$/;
+
+/** 裸 `gh issue <写动词>`。dao.mjs / issue-gateway.mjs / gh-as.mjs 不拦。 */
+export function isBareGhIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  const toks = bareTokens(stmt);
+  if (toks.some(t => /(^|[\\/])gh-as\.mjs$/i.test(t))) return false;
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])gh(\.exe)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'issue') continue;
+    if (GH_ISSUE_WRITE_VERBS.test(toks[i + 2])) return true;
+  }
+  return false;
+}
+
 /** 这句未加引号的 token 序列里有没有 orca orchestration (worker-start|task-create|dispatch)。 */
 export function isOrcaDispatchInvocation(stmt) {
   const toks = bareTokens(stmt);
@@ -222,6 +248,13 @@ export function decideGate(cmd) {
         block: true,
         command: normalizeCmd(cmd),
         message: `拦下帅窗抢 coordinator：${normalizeCmd(cmd)}\n${COORDINATOR_HINT}`,
+      };
+    }
+    if (isBareGhIssueWrite(stmt)) {
+      return {
+        block: true,
+        command: normalizeCmd(cmd),
+        message: `拦下裸 gh issue 写动作：${normalizeCmd(cmd)}\n${GH_ISSUE_WRITE_HINT}`,
       };
     }
   }

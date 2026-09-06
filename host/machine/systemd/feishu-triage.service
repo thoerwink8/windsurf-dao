@@ -41,6 +41,8 @@ User=orca
 #  · 另一份 600 root:root，放 ANTHROPIC_AUTH_TOKEN 等密钥，谁都别改成 644。
 EnvironmentFile=-/etc/feishu-triage.public.env
 EnvironmentFile=/etc/feishu-triage.env
+# #792：适配器不继承个人 GitHub token。Issue 写走 issue-gateway + marshal App 凭据。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 WorkingDirectory=/srv/projects/windsurf-dao
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/feishu-triage.mjs
 Restart=always

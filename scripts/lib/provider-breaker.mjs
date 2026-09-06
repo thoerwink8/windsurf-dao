@@ -377,13 +377,24 @@ export function defaultHubSay(text) {
 
 export function defaultOpenIssue({ title, body } = {}) {
   const r = spawnSync(process.execPath, [
-    join(import.meta.dirname, '..', 'gh-as.mjs'), 'marshal', '--',
-    'issue', 'create', '--title', String(title || ''), '--body', String(body || ''), '--label', '待拍板',
+    join(import.meta.dirname, '..', 'issue-gateway.mjs'), 'create',
+    '--title', String(title || ''), '--body', String(body || ''), '--label', '待拍板',
+    '--repo', 'thoerwink8/windsurf-dao',
+    '--host', 'breaker',
+    '--idempotency-key', 'breaker-all-open',
   ], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (r.error) return { ok: false, error: r.error.message };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 200) };
-  const m = String(r.stdout || '').match(/\/issues\/(\d+)/);
-  return { ok: true, number: m ? Number(m[1]) : null, out: r.stdout };
+  let number = null;
+  try {
+    const j = JSON.parse(String(r.stdout || '').trim().split('\n').pop() || '{}');
+    if (j && j.number) number = Number(j.number);
+  } catch { /* fall through */ }
+  if (number == null) {
+    const m = String(r.stdout || '').match(/\/issues\/(\d+)/);
+    number = m ? Number(m[1]) : null;
+  }
+  return { ok: true, number, out: r.stdout };
 }
 
 /** 全部 open：总控群一条 + 报帅开待拍板（均可注入；夹具不碰真通道）。 */

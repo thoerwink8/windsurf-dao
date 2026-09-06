@@ -462,7 +462,7 @@ function execAction(action, { state, dryRun, log }) {
 }
 
 function execAddLabel(action, { dryRun, say }) {
-  const planned = planAddLabelCmd(action, { models: action.models });
+  const planned = planAddLabelCmd(action, { models: action.models, repo: REPO });
   if (!planned.ok) {
     say(`  add-label 校验拒：${planned.error}`);
     return { ok: false, error: planned.error, code: planned.code };
@@ -535,11 +535,19 @@ function execOpenIssue(action, { state, dryRun, say }) {
   writeFileSync(bodyFile, planned.body, 'utf8');
   const r = runCmd(planned.argv, 60000);
   if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
-  const m = String(r.out).match(/\/issues\/(\d+)/);
+  let number = null;
+  try {
+    const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
+    if (j && j.number) number = Number(j.number);
+  } catch { /* 回执不是 JSON 时退回 URL */ }
+  if (number == null) {
+    const m = String(r.out).match(/\/issues\/(\d+)/);
+    number = m ? Number(m[1]) : null;
+  }
   state.openIssueLedger = state.openIssueLedger || {};
-  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
-  say(`  转单开了 #${m ? m[1] : '?'}`);
-  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
+  state.openIssueLedger[planned.key] = { at: nowIso(), number };
+  say(`  转单开了 #${number || '?'}`);
+  return { ok: true, number, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -1276,11 +1284,23 @@ function openEscalationIssue({ title, body }) {
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `escalate-${Date.now()}.md`);
   writeFileSync(bodyFile, body, 'utf8');
-  const r = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'create',
-    '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板'], 60000);
+  const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
+    || String(body || '').match(/查重标记[^\n]*/);
+  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
+    '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
+    '--host', 'commander', '--idempotency-key', key], 60000);
   if (!r.ok) return { ok: false, error: r.error };
-  const m = String(r.out).match(/\/issues\/(\d+)/);
-  return { ok: true, number: m ? Number(m[1]) : null };
+  let number = null;
+  try {
+    const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
+    if (j && j.number) number = Number(j.number);
+  } catch { /* 回执不是 JSON 时退回 URL */ }
+  if (number == null) {
+    const m = String(r.out).match(/\/issues\/(\d+)/);
+    number = m ? Number(m[1]) : null;
+  }
+  return { ok: true, number };
 }
 
 // ── 子命令 ──
