@@ -15,7 +15,7 @@
 #
 # 怎么区分「桥悄悄停了」和「这段时间没有事发生」：桥每 10 分钟朝自己的 hook 打一次 ping，
 # GitHub 把它从同一条通道送回来——那是一个**自己造的样本**，通道通时样本一定不为 0。
-# server-check ㉑ 判绿的前提是「最近收到过 ping」，不是「没报错」。
+# server-check ㉓ 判绿的前提是「最近收到过 ping」，不是「没报错」。
 #
 # 装：sudo bash scripts/install-dao-gh-events.sh
 # 验：node scripts/gh-event-bridge.mjs status
@@ -39,7 +39,7 @@ StartLimitBurst=10
 Type=simple
 User=orca
 Group=orca
-WorkingDirectory=/home/orca/windsurf-dao
+WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
 # 别让 gh 每次起来都去查自己有没有新版：那是一次没必要的出网，失败还会往 stderr 刷噪音。
 Environment=GH_NO_UPDATE_NOTIFIER=1
@@ -47,7 +47,7 @@ ProtectSystem=full
 ProtectHome=read-only
 # 写得动的只有状态文件那个目录；gh 的缓存目录一起放开，否则它写不进去会往 stderr 刷。
 ReadWritePaths=/home/orca/.dao /home/orca/.cache
-ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/gh-event-bridge.mjs
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gh-event-bridge.mjs
 Restart=always
 RestartSec=5
 # KillMode 必须是 control-group（这正好是默认值，写出来是因为改错的代价是隐性的）：

@@ -25,7 +25,7 @@ describe('巡检任务书：给会话的那份全文', () => {
       '机制上的漏洞', '装了没生效', '判据前提已不成立', '两处规矩互相打架', // 去找什么
       'docs/observations/', 'git add', 'git commit', 'git push',           // 写到哪
       '不要再报一遍',                                                        // 不许重复报
-      'exit',                                                              // 收尾
+      '自行结束会话',                                                        // 收尾（#1055：mirasim 没有 TUI exit）
     ]) assert.ok(text.includes(must), `任务书缺「${must}」`);
   });
 
@@ -331,7 +331,7 @@ describe('装法', () => {
 });
 
 describe('干跑：跑得出计划，且不真起会话', () => {
-  it('node scripts/commander.mjs patrol --dry-run → exit 0、有计划、没起会话', () => {
+  it('node scripts/commander.mjs patrol --dry-run → exit 0、有计划、没起会话，且起会话不含 orca 动词', () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'patrol-state-'));
     const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'commander.mjs'), 'patrol', '--dry-run'], {
       cwd: ROOT, encoding: 'utf8', timeout: 120000,
@@ -344,5 +344,15 @@ describe('干跑：跑得出计划，且不真起会话', () => {
     assert.ok(out.briefBytes > 500, '计划里要能看见任务书有多大');
     assert.ok(String(r.stderr).includes('机制巡检'), '干跑要把任务书全文打出来给人看');
     assert.deepEqual(fs.readdirSync(stateDir), [], '干跑不许留下任何文件（任务书和 state 都不落盘）');
+    // #1055：同一次 spawn 里顺手核起会话命令——不另起 spawnSync，不挪预算。
+    const plan = `${r.stdout || ''}\n${r.stderr || ''}`;
+    assert.match(plan, /dao\.mjs start --executor mirasim/,
+      '起会话必须走 dao.mjs start --executor mirasim');
+    assert.match(plan, /--prompt /,
+      'mirasim 是一步到位：prompt 就是注入，不许再拼 send 第二步');
+    for (const forbidden of ['--provider', 'send --terminal', 'terminal close', 'orca terminal', 'runOrca']) {
+      assert.ok(!plan.includes(forbidden),
+        `干跑计划里出现 orca 动词「${forbidden}」——切 mirasim 没切干净`);
+    }
   });
 });

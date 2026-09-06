@@ -4,7 +4,12 @@
 // 不进 git，见 ledger-home.mjs）；写一次即不可变（已存在/同内容均拒绝，
 // 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
-// 写入即校验：类型在闭集内、必填字段齐、attr 责任向量不变量（份额和=1 或全 0 且低置信）。
+// 写入即校验（判据一律从 schema 派生，本文件不抄清单/数字/类型名）：类型在闭集内、
+// 必填字段齐、enum 字段取值在闭集内、字段类型合 type 声明（含联合类型、数组元素、
+// 以及数组元素对象里的字段——逐层递归到底）、声明 minItems 的数组够条数、
+// attr 责任向量不变量（份额和=1 或全 0 且低置信）、decision.pending 的 recommend 命中某条 option。
+// 写入侧另有两道语义防重：每 job 一次性的类型、以及 schema 声明的幂等键（见 ONE_PER_JOB /
+// IDEMPOTENT_KEY）——event_id 含 ts/seq，光靠它拦不住「同一动作换个时间戳再记一笔」。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
@@ -63,31 +68,183 @@ export function ulidFromMs(ms, entropyHex) {
   return out;
 }
 
-/** 事件类型闭集 + 每类型必填字段（派生自 schema oneOf，闭集 = oneOf[].title）。 */
+/** schema 的 type 声明 → 允许类型数组（"string" 或 ["integer","null"] 都归一成数组）。 */
+function declaredTypes(spec) {
+  const t = spec?.type;
+  if (typeof t === 'string') return [t];
+  if (Array.isArray(t) && t.every(x => typeof x === 'string')) return [...t];
+  return null; // 没声明 type（如纯 enum 字段）⇒ 类型不管，交给 enumInvariant
+}
+
+/**
+ * 一处 schema 声明 → 一棵类型形状树 { types, items, props }，items/props 再递归下去。
+ * 必须递归而不是只取一层：decision.pending 的 options 是 array of object，
+ * 「元素是对象」在第一层就判完了，而 options[].description 声明的 string|null 落在第二层——
+ * 只派生到 items.type 时嵌套字段写 123 照样落盘，schema 的类型承诺在嵌套处静默失效
+ * （#893 审官红项 1 实咬）。本函数只读 schema，类型名一个不抄。
+ * 三处都没声明就返回 null（如纯 enum 的 phase），调用方据此整字段不登记，交给 enumInvariant。
+ */
+function typeSpecOf(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  const types = declaredTypes(spec);
+  const items = typeSpecOf(spec.items);
+  let props = null;
+  for (const [f, sub] of Object.entries(spec.properties || {})) {
+    const s = typeSpecOf(sub);
+    if (s) (props ??= new Map()).set(f, s);
+  }
+  return types || items || props ? { types, items, props } : null;
+}
+
+/**
+ * 事件类型闭集 + 每类型必填字段 + 每类型枚举字段 + 每类型数组下限 + 每类型字段类型
+ * （全部派生自 schema oneOf，闭集 = oneOf[].title；本文件不另抄任何清单、数字或类型名）。
+ */
 export function schemaMeta(schema) {
   const closedSet = [];
   const requiredByType = new Map();
+  const enumsByType = new Map();
+  const minItemsByType = new Map();
+  const typesByType = new Map();
   const resolveRef = ref => {
     const name = ref.replace('#/definitions/', '');
     return schema.definitions ? schema.definitions[name] : null;
   };
-  const walk = (node, required) => {
+  // acc = { required, enums, mins, types }：往下走时一路累积（allOf/$ref 都并进同一份）
+  const walk = (node, acc) => {
     if (!node) return;
-    if (node.$ref) return walk(resolveRef(node.$ref), required);
-    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, required);
+    if (node.$ref) return walk(resolveRef(node.$ref), acc);
+    if (Array.isArray(node.allOf)) for (const c of node.allOf) walk(c, acc);
     if (Array.isArray(node.required)) {
-      for (const f of node.required) if (!RESERVED.includes(f)) required.add(f);
+      for (const f of node.required) if (!RESERVED.includes(f)) acc.required.add(f);
+    }
+    for (const [f, spec] of Object.entries(node.properties || {})) {
+      if (RESERVED.includes(f)) continue;
+      if (Array.isArray(spec?.enum)) acc.enums.set(f, spec.enum);
+      if (spec?.type === 'array' && Number.isInteger(spec.minItems)) acc.mins.set(f, spec.minItems);
+      const shape = typeSpecOf(spec);
+      if (shape) acc.types.set(f, shape);
     }
   };
   for (const def of schema.oneOf || []) {
     const title = def.title;
     if (!title) throw new Error('schema oneOf 条目缺 title（闭集派生依赖 title）');
     closedSet.push(title);
-    const required = new Set();
-    walk(def, required);
-    requiredByType.set(title, [...required]);
+    const acc = { required: new Set(), enums: new Map(), mins: new Map(), types: new Map() };
+    walk(def, acc);
+    requiredByType.set(title, [...acc.required]);
+    enumsByType.set(title, acc.enums);
+    minItemsByType.set(title, acc.mins);
+    typesByType.set(title, acc.types);
   }
-  return { closedSet, requiredByType, currentVersion: schema.version ?? 1 };
+  return { closedSet, requiredByType, enumsByType, minItemsByType, typesByType, currentVersion: schema.version ?? 1 };
+}
+
+/** 值的 JSON Schema 类型名。null 与数组各自单独一类——typeof 两者都报 'object'。 */
+function jsonTypeOf(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  switch (typeof v) {
+    case 'string': return 'string';
+    case 'boolean': return 'boolean';
+    case 'number': return Number.isInteger(v) ? 'integer' : 'number';
+    case 'object': return 'object';
+    default: return typeof v;
+  }
+}
+
+/** 实际类型是否落在声明的允许集内。整数也算 number（JSON Schema 里 integer ⊂ number）。 */
+function typeAllowed(actual, allowed) {
+  return allowed.includes(actual) || (actual === 'integer' && allowed.includes('number'));
+}
+
+// schema 声明了 type 的字段，写入即校验类型；类型名只从 schema 读，本文件不另抄。
+// 三个必须踩准的点（#891 W5 用真 writer 实测出的洞，四条形状漂移原先全静默落盘）：
+//   ① 联合类型（["integer","null"]）按声明逐个比——null 只在声明里列了才放行
+//      （pending_decision_id / urgency 的 null 合法，pr_number 写 "12" 非法）；
+//   ② 数组先判「是数组」再判元素：typeof [] === 'object'，光看 typeof 会把数组当对象放过，
+//      跟上一轮 minItems 那个「字符串也有 .length」是同一个坑换了形状；
+//   ③ 字段整个不写 = 缺字段，归必填检查，这里不管（identity 拿不到就别写那一条靠它）；
+//   ④ 数组元素若是对象，还要按 items.properties 继续往下判——「元素是对象」这一层判完
+//      不等于对象里的字段合法（#893 审官红项 1：options[].description 写 123 曾静默落盘）。
+// path 一路拼出来（refs 第 2 项 / options 第 1 项.description），报错要点到出事的那一格，
+// 而不是只报最外层字段名——嵌套结构里「options 类型非法」等于没说。
+function checkType(path, v, spec) {
+  if (!spec) return;
+  const actual = jsonTypeOf(v);
+  if (spec.types && !typeAllowed(actual, spec.types)) {
+    throw new Error(`字段 ${path} 类型非法：schema 声明 ${spec.types.join('|')}，实际 ${actual}`);
+  }
+  if (actual === 'array' && spec.items) {
+    for (let i = 0; i < v.length; i++) checkType(`${path} 第 ${i + 1} 项`, v[i], spec.items);
+  }
+  if (actual === 'object' && spec.props) {
+    for (const [f, sub] of spec.props) {
+      if (v[f] !== undefined) checkType(`${path}.${f}`, v[f], sub); // 不写 = 缺字段，归必填检查
+    }
+  }
+}
+
+function typeInvariant(types, p) {
+  for (const [field, spec] of types || []) {
+    if (p[field] === undefined) continue;
+    checkType(field, p[field], spec);
+  }
+}
+
+// schema 声明了 enum 的字段，写入即校验取值——枚举清单只从 schema 读，本文件不另抄。
+// 缺字段不在这里报（归必填检查）；值为 null 时只有 schema 的 enum 里列了 null 才放行
+// （如 overrun_attr）。#891：phase/urgency/by 这类新枚举天然被这一条罩住。
+function enumInvariant(enums, p) {
+  for (const [field, allowed] of enums || []) {
+    if (p[field] === undefined) continue;
+    if (!allowed.includes(p[field])) {
+      throw new Error(
+        `字段 ${field} 取值非法 ${JSON.stringify(p[field])}；schema 允许 ${allowed.map(v => JSON.stringify(v)).join('/')}`,
+      );
+    }
+  }
+}
+
+// schema 里声明了 minItems 的数组字段，写入即校验「是数组 + 够条数」。
+// 下限只从 schema 读（不在本文件抄数字）：改 schema 的 minItems 就是改判据，
+// 所以变异自证咬的是 schema 本身。声明 array 却给字符串必须拒——字符串也有 .length，
+// 只比长度会让 evidence: "exit_code=0" 蒙过去（#891 evidence 统一成数组时的实咬点）。
+function minItemsInvariant(mins, p) {
+  for (const [field, min] of mins || []) {
+    const v = p[field];
+    if (v === undefined) continue; // 缺字段归必填检查
+    if (!Array.isArray(v)) {
+      throw new Error(`字段 ${field} 必须是数组（schema 声明 array，至少 ${min} 项），实际 ${typeof v}`);
+    }
+    if (v.length < min) {
+      throw new Error(`字段 ${field} 至少 ${min} 项，实际 ${v.length} 项`);
+    }
+  }
+}
+
+// decision.pending 的跨字段不变量（#891）：推荐必须指向真实存在的选项，
+// 否则飞书卡片与用户一键选择拿不到那条 option，账面看着齐、拍板面是死的。
+// 空 options = 开放问题（问用户的工具允许不给选项，#897 实测），此时 recommend 必须是
+// null——「没有选项可推荐」和「推荐了一个不存在的选项」得分开说。
+function decisionInvariant(type, p) {
+  if (type !== 'decision.pending') return;
+  const opts = p.options;
+  if (!Array.isArray(opts)) throw new Error(`decision.pending 的 options 必须是数组（实际 ${typeof opts}）`);
+  if (opts.length === 1) throw new Error('decision.pending 的 options 只有一条（一个选项不叫拍板；开放问题写空数组）');
+  const labels = opts.map(o => (o && typeof o === 'object' ? o.label : undefined));
+  if (labels.some(l => typeof l !== 'string' || l.trim() === '')) {
+    throw new Error('decision.pending 每条 option 必须有非空 label（用户看见并点的那句）');
+  }
+  if (opts.length === 0) {
+    if (p.recommend != null) {
+      throw new Error(`开放问题（options 空）不能有 recommend，实际 ${JSON.stringify(p.recommend)}`);
+    }
+    return;
+  }
+  if (p.recommend != null && !labels.includes(p.recommend)) {
+    throw new Error(`recommend ${JSON.stringify(p.recommend)} 不在 options 的 label 里（${labels.join('/')}）；推荐指向不存在的选项，一键选择会失效`);
+  }
 }
 
 function attrInvariant(type, p) {
@@ -131,6 +288,10 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
   if (missing.length) throw new Error(`事件 ${type} 缺必填字段: ${missing.join(', ')}`);
 
   attrInvariant(type, payload);
+  enumInvariant(meta.enumsByType.get(type), payload);
+  typeInvariant(meta.typesByType.get(type), payload);
+  minItemsInvariant(meta.minItemsByType.get(type), payload);
+  decisionInvariant(type, payload);
 
   const raw = { type, schema_version: meta.currentVersion, ts, machine, seq, ...payload };
   const event_id = sha256Hex(canonicalStringify(raw));
@@ -157,9 +318,34 @@ function scanJobType(dir, type, jobId) {
   return null;
 }
 
+// 语义幂等键：schema 把 session.milestone.milestone_key 定义成「同一动作重复触发靠它
+// 防重复计账」的键，但 event_id 是整个事件（含 ts/seq）的哈希——同一次 commit 换个时间戳
+// 重放就是另一个 event_id，两份里程碑都进账（#893 审官红项 2 真写复现出两个文件）。
+// 承诺是设计本意，所以补实现而不是收窄 schema：写入前按 (type, 键值, scope) 查重。
+//   scope 带 repo 的理由：milestone_key = kind + 落地锚点，land 那一支的锚点是命令哈希，
+//   同一条 `node scripts/land.mjs` 在两个仓跑出的哈希相同——不带 repo 会把第二个仓的
+//   真里程碑当重复吞掉。代价说清：repo 探头没查成记 null 时 null 自成一格，
+//   同 key 的 null 版与具名版会各落一份——那两条究竟是不是同一件事，账本此刻确实不知道，
+//   宁可留两条可查的记录，也不假装知道。
+const IDEMPOTENT_KEY = new Map([
+  ['session.milestone', { field: 'milestone_key', scope: ['repo'] }],
+]);
+
+function scanIdempotentKey(dir, event, { field, scope }) {
+  const key = event[field];
+  if (key === undefined || key === null) return null; // 缺键归必填检查，这里不管
+  if (!existsSync(dir)) return null;
+  for (const [f, e] of dirIndex(dir)) {
+    if (!e || e.type !== event.type || e[field] !== key) continue;
+    if (scope.every(s => (e[s] ?? null) === (event[s] ?? null))) return f;
+  }
+  return null;
+}
+
 /**
  * 写一事件一文件：<dir>/<ulid>-<machine>.json。
- * 三铁律守卫：①已存在同文件拒绝（写一次即不可变）；②同 event_id 已入账拒绝（防重复）。
+ * 三铁律守卫：①已存在同文件拒绝（写一次即不可变）；②同 event_id 已入账拒绝（防重复）；
+ * ③声明了幂等键的类型，同键已入账拒绝——event_id 含 ts/seq，②拦不住换时间戳重放。
  * 文件名确定性：熵取事件内容哈希（同一事件重跑得同一文件名，天然幂等报错）。
  */
 export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }) {
@@ -182,6 +368,15 @@ export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }
     : null;
   if (jobDup) {
     throw new Error(`该 job 已有 ${event.type} 事件（${jobDup}）；每 job 一次，防重复计账——重复派单请另立 job_id`);
+  }
+  const idem = IDEMPOTENT_KEY.get(event.type);
+  const keyDup = idem ? scanIdempotentKey(dir, event, idem) : null;
+  if (keyDup) {
+    const where = idem.scope.map(s => `${s}=${JSON.stringify(event[s] ?? null)}`).join(' ');
+    throw new Error(
+      `已有同 ${idem.field}=${JSON.stringify(event[idem.field])}（${where}）的 ${event.type} 事件（${keyDup}）；`
+      + `${idem.field} 是幂等键，同一动作重复触发只记一笔——真是另一件事请换 ${idem.field}`,
+    );
   }
   mkdirSync(dir, { recursive: true });
   // 原子写：先写同目录临时文件再 rename——进程中途崩溃留的是 .tmp 残件

@@ -19,6 +19,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/host/skills/tool-use-gate/hooks/tool-use-gate.mjs\"",
+            "timeout": 8
+          }
+        ]
       }
     ],
     "SessionStart": [

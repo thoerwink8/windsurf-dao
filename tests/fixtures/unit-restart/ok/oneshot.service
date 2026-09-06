@@ -1,0 +1,9 @@
+# 绿样本：oneshot 不要求 Restart=。
+
+[Unit]
+Description=ok oneshot
+
+[Service]
+Type=oneshot
+User=orca
+ExecStart=/bin/true

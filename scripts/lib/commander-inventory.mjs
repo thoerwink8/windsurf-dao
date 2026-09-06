@@ -1,8 +1,18 @@
 // scripts/lib/commander-inventory.mjs —— 指挥官「盘点体检 + 自检 + 装机」（#800）
 //
-// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/超龄PR/落地清单空列。
+// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列。
 // **它不自己修，只开单**——修要过用户放行（「盘点」与「自愈」的边界）。异常 → gh search 查重
 // （带 [commander-inventory] 标记）→ 开「待拍板」单；正常 → 静默。第二轮同一异常不重复开。
+//
+// #1004 发现层换成推进量后，原 8 项逐项裁定（删 vs 留）：
+//   stale-pr        覆盖→删。N 轮 head/合上/草稿/判定不变已含「N 天没人动」；日历阈值发现不了 #909 几小时卡死。
+//   orphan-cwd      留。/proc cwd(deleted) 是机器层，situation 快照里没有。
+//   term-vs-agent   留。terminal list vs worker-list，快照的 worktrees 对不上幽灵 agent。
+//   timers          留。指挥官 timer 关着是执行器死，不是盘面对象停滞。
+//   probe-red       留。网关探活 journal，快照不采。
+//   landing-empty   留。落地清单空状态列是文档债，不是 PR/单/树/票。
+//   stale-running   留。派工队列僵尸 .running，situation 不写这份队列。
+//   pending-surface 留。待消歧到时机是日历事件，不是「连续 N 轮同一状态」。
 //
 // 每项三态：ok / red / unknown。unknown（探不到，如 Windows 无 /proc、无 journalctl）绝不开单，
 // 也绝不当 ok——「没查成」经 status 三态可见，不刷屏、不埋根因。
@@ -15,10 +25,10 @@ import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
 } from './pending-disambiguation.mjs';
+import { fieldsFromInventory } from './hub-ask.mjs';
 
 const INV_MARKER = '[commander-inventory]';
 // 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
-const STALE_PR_DAYS = 14;
 
 function sh(cmd, args, timeout = 20000) {
   const r = spawnSync(cmd, args, { windowsHide: true, encoding: 'utf8', timeout });
@@ -139,28 +149,8 @@ function checkProbeJournal() {
   return { state: 'ok', detail: `探针 journal 无连红（结尾红 ${streak} 行）`, key: 'probe-red' };
 }
 
-// 5. 超龄 open PR：> STALE_PR_DAYS 天没更新。
-function checkStalePrs({ runGh, REPO }) {
-  const r = runGh(['pr', 'list', '--repo', REPO, '--state', 'open', '--json', 'number,title,updatedAt', '--limit', '100'], 30000);
-  if (!r.ok) return { state: 'unknown', detail: `pr list 没查成：${r.error}`, key: 'stale-pr' };
-  let arr;
-  try { arr = JSON.parse(r.out || '[]'); } catch (e) { return { state: 'unknown', detail: `pr list 输出不是 JSON：${e.message}`, key: 'stale-pr' }; }
-  const cutoff = Date.now() - STALE_PR_DAYS * 86400000;
-  const stale = arr.filter((p) => (Date.parse(p.updatedAt || '') || Date.now()) < cutoff);
-  if (stale.length) {
-    const list = stale.slice(0, 5).map((p) => '#' + p.number).join(' ');
-    return {
-      state: 'red', key: 'stale-pr',
-      detail: `超龄 PR ${stale.length} 张（>${STALE_PR_DAYS}天未动）：${list}`,
-      plain: {
-        what: `有 ${stale.length} 张 PR 超过 ${STALE_PR_DAYS} 天没人动：${list}`,
-        impact: '越拖越难合，还占着分支',
-        plan: '开单请你拍：继续做还是关掉',
-      },
-    };
-  }
-  return { state: 'ok', detail: `无超龄 PR（阈值 ${STALE_PR_DAYS} 天）`, key: 'stale-pr' };
-}
+// 5. 超龄 open PR（stale-pr）——#1004 裁定被推进量覆盖：N 轮 head/合上/草稿/判定都不变
+//    已经包含「14 天没人动」。日历阈值发现不了 #909 那种几小时卡死，留着是两条腿。已删。
 
 // 6. 落地清单状态列空着的步（读，不改——那是另两单的文件）。
 function checkLandingChecklist({ ROOT }) {
@@ -280,7 +270,7 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }) {
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
@@ -288,10 +278,10 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     checkTerminalVsAgents({ runOrca, ROOT }),
     checkTimers(),
     checkProbeJournal(),
-    checkStalePrs({ runGh, REPO }),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
-    // 8. 待消歧到时机（#876 ③）：跟前 7 项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
+    // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
+    // #1004 删掉 stale-pr 后这里一共 7 项。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];
@@ -313,12 +303,27 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
     let existing = null;
     if (found.ok) { try { const a = JSON.parse(found.out || '[]'); if (a.length) existing = a[0].number; } catch { /* ignore */ } }
-    if (existing) { log.push(`  报帅（待拍板 #${existing} 已在，不重开）：${c.key}`); continue; }
+    const askInv = (n) => {
+      if (typeof hubAskOnce !== 'function' || !n) return;
+      const planned = fieldsFromInventory({
+        repo: REPO, number: n, key: c.key, detail: c.detail,
+        url: `https://github.com/${REPO}/issues/${n}`,
+      });
+      if (!planned.ok) { log.push(`  待拍板卡拒发：${planned.error}`); return; }
+      const r = hubAskOnce({ state, key: `invcard:${c.key}`, fields: planned.fields, dryRun });
+      log.push(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + n : '待拍板卡略：' + (r.reason || r.error)}`);
+    };
+    if (existing) {
+      log.push(`  报帅（待拍板 #${existing} 已在，不重开）：${c.key}`);
+      askInv(existing);
+      continue;
+    }
     if (dryRun) { log.push(`  [dry] 开待拍板单：${c.key}（marker=${marker}）`); continue; }
     const body = [`指挥官盘点体检发现异常（#800，只开单不自修）：`, ``, `- 项：${c.key}`, `- 详情：${c.detail}`, ``,
       `修要过你放行。查重标记（勿删）：${marker}`].join('\n');
     const opened = openEscalationIssue({ title: `[待拍板] 盘点：${c.key}`, body });
     log.push(`  ${opened.ok ? '开单 #' + opened.number : '开单失败：' + opened.error}：${c.key}`);
+    if (opened.ok && opened.number) askInv(opened.number);
   }
   // 到时机只提醒不开单——它不是「有东西坏了」，是「有件事该找你聊了」（上面开单的循环只走 red）。
   if (surface.state === 'due') {
@@ -374,7 +379,7 @@ export function findPathShims(exists = existsSync) {
 }
 
 function unit(desc, execArgs) {
-  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/home/orca/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
+  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
 /**
  * timer 模板。**`OnCalendar` 是必需的，不是冗余。**
@@ -394,10 +399,10 @@ function timer(desc, activeSec, calendar) {
   return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnCalendar=${calendar}\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
 }
 export const INSTALL_FILES = () => ({
-  '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs act'),
-  // :11/20 —— 错开 dao-sync(:1/5)、dao-agent-stall(:2/15)、dao-board-gc(:07)、dao-patrol(:23)
+  '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs act'),
+  // :11/20 —— 错开 dao-sync(:1/5)、dao-progress-watch(:13/20)、dao-board-gc(:07)、dao-patrol(:23)
   '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min', '*:11/20'),
-  '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/home/orca/windsurf-dao/scripts/commander.mjs inventory'),
+  '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs inventory'),
   '/etc/systemd/system/commander-inventory.timer': timer('指挥官盘点每 6 小时', '6h', '*-*-* 00,06,12,18:41:00'),
 });
 

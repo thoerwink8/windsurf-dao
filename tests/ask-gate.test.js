@@ -313,3 +313,252 @@ describe('全局约定里那行指针不许指向空气', () => {
       `指针说的条数与 JSON 实际的 ${n} 条对不上（指针那段是「${seg.trim()}」）——改了红线要同步改那行字`);
   });
 });
+
+// ── 第二格（#965）：相关 issue 评论里有没有已拍板 ────────────────────────
+//
+// 故意违规样本就是本单这次：#944 正文里「若用户确认要 5.5」是拍板前的快照，
+// 用户纠正写在评论里。闸必须把那句纠正推到眼前，且只看评论不看正文。
+const FIXTURE_944 = path.join(REPO, 'tests', 'fixtures', 'ask-gate', 'issue-944-comments.json');
+
+function load944Comments() {
+  const doc = JSON.parse(fs.readFileSync(FIXTURE_944, 'utf8'));
+  return doc.comments;
+}
+
+describe('问人闸第二格：从提问文本抽 issue 号', () => {
+  it('认 #N / issue #N / 议题 #N / github issues URL，多个号去重保序', async () => {
+    const S = await LOAD;
+    assert.deepStrictEqual(S.extractIssueNumbers('对照 #944 和 issue #965'), [944, 965]);
+    assert.deepStrictEqual(S.extractIssueNumbers('议题 #944'), [944]);
+    assert.deepStrictEqual(
+      S.extractIssueNumbers('https://github.com/thoerwink8/windsurf-dao/issues/944'),
+      [944],
+    );
+    assert.deepStrictEqual(S.extractIssueNumbers('#944 再提一次 #944'), [944]);
+  });
+
+  it('不认 PR 号、不认没有井号的数字（5.5 不是 issue 号）', async () => {
+    const S = await LOAD;
+    assert.deepStrictEqual(S.extractIssueNumbers('PR #1074 要不要合'), []);
+    assert.deepStrictEqual(S.extractIssueNumbers('pull request #1074'), []);
+    assert.deepStrictEqual(
+      S.extractIssueNumbers('https://github.com/thoerwink8/windsurf-dao/pull/1074'),
+      [],
+    );
+    assert.deepStrictEqual(S.extractIssueNumbers('巡检模型用 5.5 还是 5.6'), []);
+    // PR 号和 issue 号混在一起：只收 issue
+    assert.deepStrictEqual(S.extractIssueNumbers('PR #1074 对照 #944'), [944]);
+  });
+
+  it('抽不到是空数组，不是「没拍过」——空是没得查', async () => {
+    const S = await LOAD;
+    assert.deepStrictEqual(S.extractIssueNumbers(''), []);
+    assert.deepStrictEqual(S.extractIssueNumbers(null), []);
+  });
+
+  it('fromEnd：对话记录从尾往前抽，后出现的号优先（历史单号不许挤掉这一问）', async () => {
+    const S = await LOAD;
+    const t = '先说 #100 再说 #200';
+    assert.deepStrictEqual(S.extractIssueNumbers(t), [100, 200]);
+    assert.deepStrictEqual(S.extractIssueNumbers(t, { fromEnd: true }), [200, 100]);
+  });
+});
+
+describe('问人闸第二格：一条评论算不算拍板痕迹', () => {
+  it('「## 用户拍板」标题形命中——#944 真实标题后面跟的是全角括号，\\b 认不出', async () => {
+    const S = await LOAD;
+    const heading = '## 用户拍板（2026-09-05）\n\n同意本单结论。';
+    assert.equal(S.isDecisionComment({ body: heading }), true);
+    assert.equal(S.isDecisionComment(heading), true);
+  });
+
+  it('订正词「此前已经对过」「不要再据此提问」也算命中（#944 评论正文就是这样）', async () => {
+    const S = await LOAD;
+    assert.equal(S.isDecisionComment({ body: '这一点此前已经对过。' }), true);
+    assert.equal(S.isDecisionComment({ body: '那句作废，不要再据此提问。' }), true);
+  });
+
+  it('反证：「待拍板 / 等用户拍板」是还没拍，空评论也不算', async () => {
+    const S = await LOAD;
+    assert.equal(S.isDecisionComment({ body: '## 待拍板\n还没问用户' }), false);
+    assert.equal(S.isDecisionComment({ body: '等用户拍板之后再改' }), false);
+    assert.equal(S.isDecisionComment({ body: '' }), false);
+    assert.equal(S.isDecisionComment({ body: '   ' }), false);
+  });
+
+  it('反证：正文快照里那句陈旧选项本身不是拍板痕迹（本格不查正文就是为了躲开它）', async () => {
+    const S = await LOAD;
+    const stale = '若用户确认要 5.5，先补登记与探针';
+    assert.equal(S.isDecisionComment({ body: stale }), false);
+  });
+});
+
+describe('问人闸第二格：评论列表三态不许并', () => {
+  it('decided —— #944 夹具至少一条命中，摘要里必须有用户那句纠正', async () => {
+    const S = await LOAD;
+    const v = S.classifyIssueDecisions(load944Comments());
+    assert.equal(v.verdict, 'decided');
+    assert.equal(v.hits.length >= 1, true, `hits=${v.hits.length}`);
+    const joined = v.hits.map((h) => h.summary).join('\n');
+    assert.match(joined, /5\.5/);
+    assert.match(joined, /不存在/);
+    assert.match(joined, /不要再据此提问/);
+  });
+
+  it('none —— 查到了评论但一条拍板都没有（「查过没有」）', async () => {
+    const S = await LOAD;
+    const v = S.classifyIssueDecisions([
+      { body: '跟进一下进度' },
+      { body: 'CI 绿了' },
+    ]);
+    assert.equal(v.verdict, 'none');
+    assert.deepStrictEqual(v.hits, []);
+    assert.match(v.why, /2 条/);
+  });
+
+  it('空数组是 none 不是 unscanned：「查到 0 条」是查过', async () => {
+    const S = await LOAD;
+    const v = S.classifyIssueDecisions([]);
+    assert.equal(v.verdict, 'none');
+  });
+
+  it('unscanned —— comments 不是数组（没查成，不是没拍过）', async () => {
+    const S = await LOAD;
+    const v = S.classifyIssueDecisions(null);
+    assert.equal(v.verdict, 'unscanned');
+    assert.match(v.why, /没查成/);
+    assert.match(v.why, /不是没拍过/);
+  });
+});
+
+describe('问人闸第二格：注入文本三形两两不同，「没查成」读不成「没拍过」', () => {
+  it('三态输出互不相同，unscanned 必须自带「没查成」并否掉「那就没拍过」', async () => {
+    const S = await LOAD;
+    const decided = S.classifyIssueDecisions(load944Comments());
+    const texts = {
+      decided: S.renderIssueDecision(decided, { issue: 944 }),
+      none: S.renderIssueDecision(S.classifyIssueDecisions([]), { issue: 944 }),
+      unscanned: S.renderIssueDecision(S.classifyIssueDecisions(null), { issue: 944 }),
+    };
+    assert.equal(new Set(Object.values(texts)).size, 3, '三态里有两形同形 ⇒ 这两种情况分不开');
+    assert.match(texts.unscanned, /没查成/);
+    assert.match(texts.unscanned, /不是「没拍过」/);
+    assert.match(texts.none, /查过没有/);
+    assert.match(texts.decided, /已经拍过/);
+    assert.match(texts.decided, /5\.5/);
+    assert.match(texts.decided, /不要再据此提问/);
+  });
+});
+
+describe('问人闸第二格：抽号 → 拉评论 → 渲染（fetchComments 由调用方注入，本层不 spawn）', () => {
+  it('故意违规样本：提问带 #944，夹具评论必须把用户纠正推到眼前', async () => {
+    const S = await LOAD;
+    const comments = load944Comments();
+    const out = S.lookupAndRenderDecisions({
+      text: '巡检模型用 5.5 还是 5.6？署名 issue #944',
+      fetchComments: (n) => {
+        assert.equal(n, 944);
+        return { comments };
+      },
+    });
+    assert.match(out, /已经拍过/);
+    assert.match(out, /#944/);
+    assert.match(out, /5\.5/);
+    assert.match(out, /不存在/);
+    assert.match(out, /不要再据此提问/);
+    assert.match(out, /此前已经对过/);
+  });
+
+  it('没有 issue 号 → unscanned（没得查），不许说成没拍过', async () => {
+    const S = await LOAD;
+    const out = S.lookupAndRenderDecisions({
+      text: '巡检模型用 5.5 还是 5.6？',
+      fetchComments: () => { throw new Error('不该去拉评论'); },
+    });
+    assert.match(out, /没查成/);
+    assert.match(out, /不是「没拍过」/);
+    assert.match(out, /没有 issue 号/);
+  });
+
+  it('提问原文没带号，才回落到 extraText（原事故：号在对话里，提问写的是 5.5 还是 5.6）', async () => {
+    const S = await LOAD;
+    const comments = load944Comments();
+    const out = S.lookupAndRenderDecisions({
+      text: '巡检模型用 5.5 还是 5.6？',
+      extraText: '对照 #944 的待拍板',
+      fetchComments: (n) => (n === 944 ? { comments } : { unscanned: `不该查 #${n}` }),
+    });
+    assert.match(out, /已经拍过（#944）/);
+  });
+
+  it('提问原文的号优先于 extraText 里的历史号', async () => {
+    const S = await LOAD;
+    const seen = [];
+    S.lookupAndRenderDecisions({
+      text: '对照 #965',
+      extraText: '历史 #944 #100',
+      fetchComments: (n) => { seen.push(n); return { comments: [] }; },
+    });
+    assert.deepStrictEqual(seen, [965]);
+  });
+
+  it('fetchComments 失败 / 抛错 → unscanned，不是 none', async () => {
+    const S = await LOAD;
+    const fail = S.lookupAndRenderDecisions({
+      text: '#944',
+      fetchComments: () => ({ unscanned: 'gh 跑不起来：ENOENT' }),
+    });
+    assert.match(fail, /没查成/);
+    assert.match(fail, /ENOENT/);
+    assert.match(fail, /不是「没拍过」/);
+
+    const threw = S.lookupAndRenderDecisions({
+      text: '#944',
+      fetchComments: () => { throw new Error('boom'); },
+    });
+    assert.match(threw, /没查成/);
+    assert.match(threw, /boom/);
+  });
+
+  it('没有 fetchComments → unscanned（没查成），不是假装查过没有', async () => {
+    const S = await LOAD;
+    const out = S.lookupAndRenderDecisions({ text: '#944' });
+    assert.match(out, /没查成/);
+    assert.match(out, /没有评论读取器/);
+  });
+});
+
+describe('问人闸第二格：边界——不建账本、不加 dao-check、不加新 hook 挂点', () => {
+  it('hooks.json 还是原来那一个 PreToolUse matcher，没有第二挂点', () => {
+    const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'host', 'skills', 'ask-gate', 'hooks', 'hooks.json'), 'utf8'));
+    const entries = doc.hooks.PreToolUse;
+    assert.equal(entries.length, 1);
+    assert.match(entries[0].matcher, /AskUserQuestion/);
+    assert.equal(entries[0].hooks.length, 1);
+  });
+
+  it('随仓 settings.json 的问人闸还是原来那一条，timeout 没另开挂点', () => {
+    const doc = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
+    const ask = doc.hooks.PreToolUse.filter((e) => /AskUserQuestion/.test(e.matcher || ''));
+    assert.equal(ask.length, 1);
+    assert.equal(ask[0].hooks.length, 1);
+    assert.match(ask[0].hooks[0].command, /ask-gate\.mjs/);
+  });
+
+  it('dao-check.mjs 没有为本格新增检查项（本单边界：不加 dao-check 项）', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao-check.mjs'), 'utf8');
+    assert.equal(/拍板回查|issueDecisions|lookupAndRenderDecisions/.test(src), false);
+  });
+
+  it('判据层不 spawn——拉评论是 hook 的事，lib 只吃注入进来的结果', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'ask-gate.mjs'), 'utf8');
+    assert.equal(/spawnSync|child_process/.test(src), false);
+  });
+
+  it('hook 拉的是 comments 不是 body——正文是快照，正是本格要躲开的那份', () => {
+    const src = fs.readFileSync(path.join(REPO, 'host', 'skills', 'ask-gate', 'hooks', 'ask-gate.mjs'), 'utf8');
+    assert.match(src, /'--json',\s*'comments'/);
+    assert.match(src, /只要 comments 字段，不要 body/);
+    assert.equal(/issue view[^\n]*--json[^\n]*body/.test(src), false);
+  });
+});

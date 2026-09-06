@@ -136,6 +136,7 @@ export function planTrigger({ lastFiredAt = null, now = Date.now(), cooldownMs =
 // 只数事件数分不开——安静的一小时和断线的一小时，事件数都是 0。
 // 所以桥每 10 分钟朝自己的 hook 打一次 ping：那是一个**自己造出来的样本**，
 // 通道通的时候它一定回得来。判绿的前提是「最近收到过 ping」，不是「没出错」。
+// server-check ㉓ 取这份状态文件，不复用桥自己的解析。
 export const OK = 'ok';
 export const RED = 'red';
 export const UNKNOWN = 'unknown';

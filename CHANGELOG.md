@@ -2,6 +2,227 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v1.0.0 — 2026-09-06
+
+### 破坏性变更
+- [cc] refactor(stall)!: 卡死发现删掉屏面指纹整层，改判盘面推进量 (#1067)
+
+### 新功能
+- [pi] feat(hub): 待拍板出站交互卡片，机器主动问用户（#1012） (#1018)
+- [cc] feat(check): 机器开的「待拍板」单堆积当场红——没这条闸，11 张噪音单是用户截图发现的 (#1090)
+- [cc] feat(commander): 派单改走机器余量准入 + ready 真优先级 (#1007) (#1064)
+- [cc] feat(check): 常驻 systemd 非 oneshot 必须 Restart=always（#1037） (#1040)
+- [cc] feat(commander): 唤会话/回收会话切 mirasim（#1055） (#1059)
+- [cc] feat: 问人闸再加一格——评论里已拍过就推到眼前 (#1074)
+- [cc] feat(nudge): 给「推一把」配上跑它的东西——无人值守前把发现与处置之间那截接上
+- [cc] feat(nudge): 卡住的工人不是死了，是在等一句话——补上「说一句继续」这个动作（垫片）
+- [cc] feat(mode): 编排态回岗——顺带堵上 land 会拆掉 mirasim 在管树的洞
+- [cc] feat(rule): 开单也算动手——一因一单，起因写进正文首行
+- [cc] feat(retire): orca 运行时退役完成——摘掉 commander 的 orca 闸，服务已停用
+- [cc] feat(mirasim): 审官也切过去——attach 那一整层随 orca 退役删掉
+- [cc] feat(check): 西瓜清单——长期目标每轮自动念一遍，判据机器算不靠人填
+- [cc] feat(mirasim): 切流量——派工默认走 mirasim，并给 orca 退役配上不会被遗忘的进度闸
+- [pi] feat(progress-stall): 看门狗从列举故障改成盘面推进量 (#1004) (#1010)
+- [cc] feat(commander): 已消歧+type/写码+双缺 → 报帅补标签（#1003） (#1025)
+- [cc] feat(mirasim): 派工 merge-policy 落账本——三个切流量前置里唯一的硬阻塞打通
+- [cc] feat(check): 竞争 PR 闸——两个开放 PR 新建同一文件就报，装上当场抓到一处真的
+- [cc] feat(gh-as): 身份表接上 refiner——凭据已验通，最后一节不该悬着
+- [cc] feat(mirasim): 派工路径落主干——实现在位，切流量是一行 + 三个前置
+- [cc] feat(browser): 服务器上给「只能人亲手点」的事留一条路——有头浏览器 + noVNC
+- [cc] feat(mirasim): 补六个 pi 族前缀——路由通了，但真机验针发现 pi 腿还不能搬
+- [cc] feat(brand): 第五只 bot 头像 dao-refiner——倒分叉，30px 下立得住
+- [pi] feat(事件驱动): PR 一动就叫醒指挥官，不等 20 分钟的下一轮（#956） (#997)
+- feat(now): dao now 现状盘面三段——已落地/在途/待你拍（用户 2026-09-04 亲口要） (#905)
+- feat(broadcast): 播报闸五条（纯函数）+ 群订阅配置沿用群↔仓映射（#891 W3） (#896)
+- [cc] feat(commander): 补上缺失的动词——PR 与 master 冲突时自动派工人解冲突
+
+### 修复与维护
+- [cc] fix(commander): 在途判据把「没查成」当成了「没有」——已消歧的单每 20 分钟被重复派一次 (#1075)
+- [cc] fix(reviewer): 帅位手开的 PR 起不了审官——同厂闸缺工人家族时用宿主前缀兜底 (#1079)
+- [grok] docs(inbox): Pi/Grok 缺 message_stop 已用 wireApi=chat 复测闭环
+- [cc] fix(gate): 消歧门只管开工不管返工——三条返工线卡在一个忘打的 label 上 (#1089)
+- [cc] fix(commander): 同步脊派工成了却判成「没查成」——一屏待拍板单全是假警报 (#1088)
+- [cc] fix(commander): 租约拦下的派工是背压不是失败——否则闸每拦一次就造一张噪音单 [chain:dispatch-overinvest#5·换方向] (#1086)
+- [cc] fix(dispatch): 一棵树只许一个会话在跑——重复起会话才是「撞上游容量」的原因 (#1085)
+- [cc] fix(executor): 切流量只翻了 dispatch 一处——审官起不来，所有 PR 都判不了绿 (#1071)
+- [cc] perf(TIA): 删掉「预建影响地图」整层——默认档翻成裁剪，图改成跑测试的副产物
+- [cc] refactor(stall)!: 卡死发现删掉屏面指纹整层，改判盘面推进量 (#1067)
+- [cc] chore(inbox): 那两个审官已被 f2fb0607 处置——留痕并认账我的判断不完整
+- [cc] chore(inbox): 补上真正的文件——上一条 eec69b4d 是空提交，消息说了文件没进去
+- [cc] fix(nudge): 审官树也要推——今天一张 PR 都没合，卡点在两个审官双双撞上游满载
+- [cc] chore(inbox): 屏面指纹层退役写进收件箱——两个审官撞额度顶等人拍
+- [cc] fix: list 上 mergeable=UNKNOWN 时单张重查（drain / 冲突判定） (#1062)
+- [cc] docs(check): CLAUDE.md 教的是慢命令——自检那行补上 --affected（30s → 3.7s）
+- [cc] chore(inbox): 处置 board-gc 与 stall 仍问 orca——一半当场修，一半落 #1065
+- [cc] fix(stall): 卡死巡检被退役的 orca 挡在门外——一放开就抓到 4 个卡死会话
+- [cc] fix(inbox): 收件箱从 Claude Code 的 hook 挪到 dao-check——原载体在服务器上根本没装
+- [cc] fix(check): 退役闸把 Orca 回收站数成了在途树——点开头的项跳过
+- [cc] docs(observations): orca-serve 干净退出不是故障——两个会话对着干的第一现场
+- [cc] fix(orca-serve): 干净退出也要拉起来——Restart=always，别让运行时静悄悄死掉
+- [cc] fix(mirasim): 交卷按「人在哪棵树里」认执行体——任务书漏旗标把工人送回了 orca 通道
+- [pi] fix(go-fallback): 渠道降级唯一归网关，PRIMARIES 去掉 gw/grok/xai (#841) (#1013)
+- [cc] docs(new-machine): dao-refiner 装完并验通——installationId 落档，附撞了 4 次的那个坑
+- [pi] fix: board-gc 报告按实清分段、dirty 只数 tracked（#1001） (#1005)
+- [cc] fix(strikes): 缺字段和缺闸分开报——合成一条提示会推人去造不需要的闸
+- [cc] chore(派单): 每轮上限 2→4——队列真有货了才调，上一轮队列是 0 没调
+- [cc] docs(new-machine): Linux 服务器装浏览器——PLAYWRIGHT_BROWSERS_PATH 不指 /opt 就是 root 装完 orca 用不了
+- [pi] fix(commander): attach-reviewer 账本键对齐 pr:<N>@<head>（#971） (#1002)
+- [cc] fix(commander): 撞死条目与在世终端交叉核对——死终端条目当场剪除，不再报帅 (#909)
+- [cc] fix(commander): drain 账本不带 head，试满计数永不重置——PR #909 一声不响卡死
+- [cc] docs(new-machine): 分支保护落档——合并闸挪到平台层，enforce_admins:false 是方案成立前提 (#998)
+- [cc] chore: 验分支保护不挡帅位直推（空提交，验完即在）
+- [patrol] docs(observations): miraquota-sync 以 root 解释 orca 可写脚本，提权闸按本仓目录扫不到
+- [cc] fix(commander): 返工派工失败后永不重试——PR #909 卡在一条 ok:false 的账上
+- [patrol] docs(observations): server-check 22 项活体闸无心跳，调通期 while 没转成常驻
+- [cc] fix(stall-watch): 静默数拆开报——「23 个静默」里 18 个是没人用的 shell
+- [cc] fix(hub): 回流认回执不认退出码——lark-cli 跑通 ≠ 飞书收到
+- [cc] fix(dispatch): 建树漏传 repo 选择符——仓一搬家，审官这条路当场全断
+- [cc] fix(board-gc): 完工标记把清理路整条堵死——一张干完的卡都回收不掉
+- [cc] fix(commander): 返工取标签绕过了「已关署名单」兜底——#945 每轮报没查成，标签一直在 #833 上
+- [cc] fix(commander): 复审票不认领存活，已合并 PR 的死票每轮开一张单——17 张噪音单的源头
+- [cc] fix(test): dispatch-lock 并发下随机红——测试等固定 250ms 而不是等真实条件
+
+### 其它
+- [patrol] land 的小时触发还钉在已停的 orca automations 上
+- [pi] 卡 B 绑定层合入：解冲突＋清四轮红项＋CI 绿（#982） (#1066)
+- [patrol] board-gc 与 stall 仍拿已退役的 orca 当盘面真相源
+- [patrol] 四套新单元从未装上机器，⑳ 把没装判成没查成
+- [cc] merge: 接住远端（本地是 dao-refiner 凭据落档）
+- [cc] merge: 接住 #881/#1011 的落地（本地是浏览器能力那条）
+- [pi] exhausted 改成 PR 属性：打标认输，不再开单（#1000） (#1008)
+- 回流机制 v1：好东西由 Agent 主动抽离，孤儿段判红（#888） (#890)
+- [pi] 检查耗时治理：dao.test 缩时、⑪ 预算重划、orca 面挂退役牌 (#984) (#985)
+- [pi] 撞限流探测真正拉活：timer 有 NEXT + 指挥官读正式账本（#833） (#945)
+- release: v0.3.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v0.3.0 — 2026-09-05
+
+### 新功能
+- [cc] feat(check-budget): 耗时棘轮——新机制默认要快，成倍恶化才红
+- [cc] feat(迁移): windsurf-dao 迁 /srv/projects——systemd 两侧、模板、测试、文档一次换齐（用户 2026-09-06 拍板当天迁）
+- feat(rule): 腿表归帅位自己改，禁令/规则/轴仍问人
+- [cc] feat(routing): 腿表补 5 条 mirasim 侧实跑腿——纸面追上事实（#944，用户 2026-09-06 拍板）
+- [cc] feat(server-check ㉑): mirasim 侧实跑腿与选型腿表对账（#944）
+- [pi] feat(commander): 服务器帅位三动词 add-label/retry-drain/open-issue（#971） (#972)
+- feat(server-check 21): root 属主污染服务用户目录——三种病一个根因，配常驻检查
+- feat(events): 事件闭集加会话态三类型（session.state/decision.pending/decision.resolved）[chain:session-visibility#0] (#893)
+- [cc] feat(brand): 建 dao-watchdog App + 四只 bot 头像收进仓
+- feat(ledger): 跨机账本汇聚落地——按需拉取（#891 W4） (#899)
+- feat(session-audit): 审计闸——有产出无事件即判漏记，写 audit.bypass；脱敏走 canonical 门面不造第二份 (#894)
+- [cc] feat(server-check): ⑱ 补「活着但没有墙钟点位」；顺手补 #886 合进来的 8 处 windowsHide
+- [cc] feat(server-check): ⑱ 补「活着但没有墙钟点位」——已经死了和下次重启必死，是同一缺陷的两个阶段
+- [cc] feat(mirasim): 审官流 mirasim 路径——reviewer-create/worker-done 起审官会话（#880 卡 C） (#886)
+- [cc] feat(盘点): 「没人再提这件事」的两种无声——报过一次就永久闭嘴，和压根不在采样面里
+- [cc] feat(server-check): ⑳ 仓里的 systemd 单元与机器上装着的一致——「改了仓 ≠ 装了机器」此前无人报警
+- [cc] feat(交卷闸): 一次过审率 0/9 的真因有闸了——四张真 PR 复跑全被拦下；顺手修「刚建的分支被当已合并删掉，树也一起没」
+- [cc] feat(问人闸): 「什么时候该问用户」从文档固化成会响的闸；顺带堵上家目录里看不见的影子 hook
+- [cc] feat(服务器闭环): 关单接线 + 巡检上服务器 + salvage 自动化 + squash 认得出；顺手补 no_finish 的下游（新态没人认，派工会莫名换人）
+- [cc] feat(换人,board-gc,跨仓): 换人补上「先撤死卡」这一步；两类活已交付的死卡进回收；帅位接跨仓感知
+- [cc] feat(board-gc): 接 systemd timer——每小时自扫自清，不再靠人想起来
+- [cc] feat(board-gc): 僵尸卡自动发现自动清理 + 修活性 82% 假阳（空转 TUI 被当成在干活）
+- [cc] feat(liveness): 静默判死的审官接自动换人——能力自 #807 删本机 watchdog 后一直是零（#833，用户 2026-09-05 拍板）
+- [cc] feat(inbox): 收件箱闸——别的会话落盘的发现每轮提醒、超时硬拦；顺手修 onboard 拿一个 skill 当哨兵导致新增 skill 永远报全绿（用户 2026-09-05 拍板）
+- [cc] feat(liveness): 会话活性统一接口——删掉「靠认识错误字样」发现层，改判静默；reclaude/mirasim 进采样面（#940，用户 2026-09-05 拍板）
+- [cc] feat(commander): 工人推了新 head 就叫审官复审——原来这一格是空的，四张 PR 挂了 10 小时（实咬 #890/#893/#896/#905）
+- [cc] feat(reviewer-fastpath): 快马 PR 自动起审官——确证无士兵树才建替身树当父卡，没查成一律停手 (#927)
+- [cc] feat(commander): 判红直接派返工工人——删掉「唤大脑」整层 [chain:rework-closure#0] (#938)
+
+### 修复与维护
+- [cc] fix(assert-style): 搬运不算新写——拆文件时 git 把存量整批当「新增」
+- [cc] refactor(tests): 拆 dao.test.js（4220 行）成 6 套 + 断言写法闸
+- [cc] perf(TIA 第二刀·首批): dao.mjs 可进程内调用，18 处 spawn 转掉（152→134）
+- [cc] perf(TIA 补齐): 数据文件依赖入图 + spawn 预算闸 + land 走快档 + cron 重建地图
+- [cc] fix(dao-check): 快档不打网络 + 「0 套相关」不再误报成「测试没了」
+- [cc] chore(TIA): 补 test-impact.test.js 入图——健康闸首次真接住（新测试漏登记即红）
+- [cc] perf(TIA 第一刀): 只跑受影响的测试——覆盖率影响地图 + --affected + 健康度闸
+- [cc] perf(dispatch,测试): dry-run 默认不探网关 + 测试期禁网闸——dao-check 80s→30s
+- [cc] fix(server-check): 每项打耗时（≥30s 标 ⚠）；⑪ 嵌套 dao-check 预算 600s→180s
+- [patrol] docs(observations): stall oneshot 在 failed，⑮ 只看 timer 在册仍绿
+- [cc] docs(落地清单): 目录两步走拍板落档——新项目进 /srv/projects，windsurf-dao 迁移押到 orca 退役窗口
+- [patrol] docs(observations): 发布列车 tag 没上远端，本机 tag 表被当成已发版
+- [cc] fix(legs): 腿 id 重复改聚合报次数；判别力测试补双向断言（交接任务 1）
+- fix(routing): 撤掉我 rebase 造出的 2 条重复腿
+- [cc] fix(routing+reconcile): 撤掉 haiku 腿（用户拍板：落后模型永不登记）；对账闸改只看近 48h
+- fix(server-check 21): 测试故意造的只读目录让 find exit 1，别把它当『没查成』
+- [cc] fix(index): ~/.mirasim/insights 登记进归属表（server-check ㉒ 只读对账，#944）
+- [cc] fix(test): ledger-sync fixture 的 disposition 取值一直非法，#893 上线枚举校验后现形
+- [cc] fix(onboard): memory 落点是空目录时崩在 unlinkSync（EISDIR）
+- [cc] docs(交接): 服务器清单补「2026-09-05 夜交接点」——本机帅位交给服务器
+- [cc] fix(server-check ⑱): 「正在跑」被读成「已经死了」——判据缺 SubState 这一维
+- [cc] fix(工具使用闸): 修上线当天的两次误报 + 补第 3 条（手搓 shell 跑 systemd 脚本）
+- [cc] fix(指挥官): 署名单已关闭时查不到 reviewer/ 标签——三张可合的 PR 无限期挂着
+- [cc] fix(署名解析): 补丁链标记里的 #N 被当成署名单号——PR #893 静默卡死的真因
+- [cc] fix(指挥官): 复审记账记「派了」不记「成了」——同一个病第二次犯
+- [cc] docs(补): 两台机器的 mirasim setting.json 不要整体对齐
+- [cc] docs(订正): mirasim 叠 reclaude 是一等公民设置，不是偶然——agentLaunch.claude.command
+- [cc] docs(观察): mirasim 能叠在 reclaude 上（本机实证），但那是偶然不是声明
+- [cc] docs(观察): mirasim 与 reclaude 都要当代理——结构互斥，不是配置没调对
+- [cc] docs(处置): 审官全灭那份收口——止血、报警层、方向 memory、卡 C 已合
+- [patrol] docs(处置): gw-remote-probe 已加墙钟点位；闸改按落点圈定；顺带记下它暴露的归属缺口
+- [cc] fix(server-check): systemctl show 按它自己的属性顺序输出，靠下标取值张冠李戴
+- [cc] fix(server-check): ⑱ 扫描面改按「单元文件落在哪」——名字白名单和名字黑名单是同一个毛病
+- [cc] fix(盘点): 单元夹具读了真 /proc——同是 Linux，自己服务器上绿、CI 上红
+- [cc] fix(server-check): ⑱ 按名字前缀圈定扫描面——等于只查自己认识的东西；服务器上的巡检自己抓到的
+- [cc] docs(订正): 把「pi 缺 mirasim 凭据」订正成「pi 结构上够不着 mirasim」——因果说反了
+- [patrol] docs(observations): gw-remote-probe 仍是单调时钟，OnCalendar 闸看不见它
+- [cc] fix(大脑回收): 超龄不等于该杀——顺手把「关掉前留一句它干过什么」补上；并记下审官全灭的真因
+- [cc] fix(orca-serve): 仓里那份 ExecStart 装上去 orca 就起不来——⑳ 第一次真跑就把它比出来了
+- [cc] fix(patrol): 越界审计把巡检自己判成了越界——git show 不带 -z 会把中文文件名转义成认不出的样子
+- [cc] fix(timer): 仓里改了机器上没装，而两道闸都看不见——服务器巡检第一次真跑就抓到我今天的修没生效
+- [cc] fix(交卷闸,派前探,退役CLI): 闸只落一半＝一半工人看不见；5000ms 让整个 gw-sub 组每次必红；退役 CLI 还躺在 PATH 上
+- [cc] docs(约定): 「重大」两个字终于有判据了——指向 release-policy.json，并配一道会报警的检查
+- [patrol] docs(observations): systemd 单元仓改未装、活体闸仍绿
+- [cc] fix(dao-sync): 接线改成每轮都跑——「有新提交才接」漏掉一整类断法
+- [cc] fix(路径闸): dao-sync 单元多写一个 ~/.pi，而它没在 INDEX 登记——闸当场判红
+- [cc] fix(commander): 缺标签只在半标态报——每开一张记账单就为它生一张待拍板单，一天生了 8 张
+- [cc] fix(dao-sync): 拉到新码不等于生效——skill/pi 扩展/全局约定的落点在家目录，没人接
+- [cc] docs(landing): 落 09-05 傍晚——帅位放手边界、节奏按「事件 vs 攒出来的」分、三次「装上了≠会跑」、影子 hook
+- [cc] fix(onboard): 家目录里追溯不回本仓的 skill 没人查——一个 subagent 留下的探针在每次 Bash 调用上真跑，仓里所有检查都看不见
+- [cc] fix(server-check): ⑩ 托管账号 0 判真红的前提已不成立——#822 全员走 pi + 网关 keyFile，orca 托管账号不在登录路径上
+- [cc] fix(board-gc): 判定已交付的审官子卡够不着——子卡原本只有「重复卡」一条出路，而审官永远挂在工人卡下
+- [cc] fix(换人): 旧账本没有 action 字段，settled 判据把它们全当「已了结」——那 10 个换人失败的审官永远轮不到重试
+- [cc] fix(装机): 装机脚本 chmod 仓内文件把树弄脏，dao-sync 的 ff-only 同步当场 Aborting——可执行位改由 git 记（100755）
+- [cc] fix(dao-sync): 错误文件改 mktemp——单元从 root 改 orca 后写不进上一轮 root 建的 /tmp/dao-sync.err，重定向失败让整个 if 判成「合并失败」，同步实际停摆而单元照样 exit 0
+- [cc] fix(安全,换人): dao-sync 以 root 解释 orca 可写脚本＝每个工人都有一条 root 通道；换人失败记成「已处置」，一次失败就永远不再试
+- [codex] docs(observation): 记录 dao-sync 提权风险
+- [cc] docs(observations): 收编 codex 的 Pi/Grok 收尾观察并处置——服务器没在复现，但探活「收到第一个 delta 就判绿」是真缺口（#953）
+- [cc] docs(landing): 落 09-05 下午——僵尸卡自动回收 + 活性 82% 假阳修复；risky 卡自动 salvage 仍是手工的（记账）
+- [cc] fix(timer,审官位): 只有单调时钟的 timer 会进 active(elapsed) 死态且无人报警；审官位闸把「不许换厂」实现成「不许换任何」，#833 换人能力一直是零
+- [cc] fix(board-gc): 挂在主树下的卡也要判——「子卡随父走」+「主树永不删」= 它永远轮不到
+- [cc] fix(board-gc): 陈旧副本按内容判——「有本地提交」不等于「有活会丢」
+- [cc] fix(test): 测试样本里的字面家目录路径拆开拼——仓外路径闸把它当成真指针判红（我上一条推之前 dao-check 已经红了，不该推）
+- [cc] fix(liveness): 会话名取卡名不取终端标题——CLI 把标题盖成 shell 提示符，换人判据认不出审官卡，9 个静默审官一个都没换成人（服务器 dry-run 实测）
+- [cc] docs(observations): 收编两份巡检观察记录——此前是未跟踪文件，issue 指过去就是指向空气
+- [cc] docs(landing): 落 09-05 中午——会话可观测性三驱动统一接口、刷屏事故四洞、提问工具可移植
+- [cc] fix(liveness): mirasim 字段名按实测改（sessionKey/runState/seatAt）——猜的名字全 null，整条腿静默采不到；驱动报错并进本轮那一条，不再绕过 dry-run
+- [cc] fix(liveness): 静默播报按卡去重 + 单条上限 8——一轮 66 条仍是刷屏，只是从每轮刷变成一次刷一屏
+- [cc] fix(liveness): 静默播报刷屏止血——dry-run 不发、同一静默只报一次、一轮合成一条、会话名去掉路径（用户 2026-09-05 实报）
+- [cc] fix(commander): reviewPendingDir 参数形态写错——rereview 落票当场崩（实咬即修）
+- [cc] fix(commander): 判绿按当前 head 的真 review，不再只认恒为 null 的 reviewDecision；发布列车发完要推（实咬：自动合并从没通过电、服务器每天与远端发散）
+- [cc] docs(landing): 第12步补 12.10/12.11 两洞 + 落 09-05 上午五处快马修复的实测记录
+- [cc] fix(drain): 复审票缺工人树改走 reviewer-create 快马路——#884/#885/#886 审官 10 小时起不来（实咬）
+- [cc] fix(commander): 返工显式 --allow-dup + hub-say 绝对路径兜底——同 issue 第二张返工派不出、总控群哑掉（实咬 #894/#899）
+- [cc] fix(commander): 返工派不出原模型就顶班写码首选——快马单的 claude-opus-5 没有腿，红项躺 10 小时没人接（实咬 #894/#896/#899）
+- [cc] docs(landing): 第12步帅位擦屁股职责表——手工顶替的九项欠账落盘，快马边界写死（用户 2026-09-05 点破）
+- [cc] fix(commander): 红与唤醒计数只算当前 head——工人推了新 head 旧红不再报帅（实咬 #911–#918 一夜八张重复单） (#926)
+- [cc] docs(design-exam): 起臂命令必须由 resolveLaunch 生成——手拼 4 次错 3 次（实咬 2026-09-05）
+- [cc] fix(windows): 全仓 spawn 补回 windowsHide——#807 以「Linux 无黑窗」为由删掉，本机每次 spawn 闪窗（用户 2026-09-05 实报） (#928)
+- [cc] docs(landing): 第11步试效果实跑通过——全黑拒拆/缺why拒拆/drop-restore 往返零 diff（值守 2026-09-05）
+
+### 其它
+- [cc] revert(TIA): 影响地图移出 git、删掉墙钟硬闸——两处不合行业通行做法，退回去
+- [pi] #981 量化帅位 cacheRead 注入面构成（只查证） (#983)
+- [pi] 工具使用闸：heredoc 吞转义 / python 是 stub（#969） (#970)
+- [pi] 复审轮 depth-2 / 在途派单入队交卷 (#815 余洞) (#947)
+- [pi] #875 补：卡片回包不打通讯录 + 拉起合入后进程 (#968)
+- [pi] 飞书机器人：意图层先理解再行动 + 待拍板卡片一键拍板（#875） (#952)
+- release: v0.2.0
+- [cc] test(gate): 起臂命令指针闸 + 自动驾驶选项闸——两条 memory 从「以后记得」变成会报警
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v0.2.0 — 2026-09-04
 
 ### 新功能

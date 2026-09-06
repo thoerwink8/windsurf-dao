@@ -11,14 +11,17 @@ const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'co
 function baseSituation(over = {}) {
   return {
     github: { scanned: true, issues: [], prs: [] },
+    // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。orca 段还留着给
+    // 没搬完的消费者读，但 fail-closed 总闸与「有没有人在做这张单」都只认 trees。
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: [] },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
     wakeCounts: {},
     reworkDispatched: {},
     // 旧夹具不测模型闸：默认关 requireModelInRouting，#849 新测显式打开。
-    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    commanderPolicy: { requireModelInRouting: false },
     routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
     healthRedModels: [],
     ...over,
@@ -54,11 +57,23 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
+  it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-900' }] },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '活执行者在就不能再派');
+  });
+
   // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
   // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
   // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。
   // **洞是带着绿测试出厂的，这条测试就是钉住它的那颗钉子。**
-  // 真信号是**半标态**：有人打了一半停下。两个都没有 = 从没瞄准过派工车道，不是漏标。
+  // 真信号是**半标态**：有人打了一半停下。两个都没有且无 type/ = 从没瞄准过派工车道，不是漏标（#1003 第三档：有非体系 type/ 的双缺要报）。
   it('已消歧且派工标只打了一半（有 model 没 reviewer） → escalate 不猜（不产 dispatch）', async () => {
     const { decide } = await CORE;
     const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }] };
@@ -138,11 +153,15 @@ describe('decide：自己做（确定性）', () => {
   it('review-pending 队列有条目 → attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
+      // PR 必须真在开放列表里，否则票是死票、该走 reap-ticket（2026-09-06 死票回收后此夹具才完整）。
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'abc' }] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-sol', worker: 'wt-x', head: 'abc' }] },
     }));
     const a = byKind(r, 'attach-reviewer');
     assert.equal(a.length, 1);
     assert.equal(a[0].pr, 920);
+    assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
+    assert.match(a[0].why, /来源没查成/, '旧夹具没带来源，不许倒向任一种');
   });
 });
 
@@ -178,7 +197,9 @@ describe('decide：报帅停手（永不自动）', () => {
       wakeCounts: { 'stall:term_q': WAKE_LIMIT },
     }));
     assert.equal(byKind(r, 'wake-brain').length, 0);
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    // #971：唤满不再喊给空气，转 open-issue（原文+reason 进正文）。
+    assert.ok(byKind(r, 'open-issue').some((a) => a.reason === 'wake-exhausted' && a.term === 'term_q'));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'wake-exhausted').length, 0);
   });
 });
 
@@ -249,16 +270,28 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('stall')));
   });
 
-  it('红①绕过d：orca.scanned=false + 当前 head 判红 → 不产 rework（返工也要建树，#931）', async () => {
+  // #931 原判据是「返工也要建树，orca 没查成就不产 rework」。2026-09-06 建树起工人切到
+  // mirasim 后这个前提没了：orca 查不到不影响返工能不能干成，继续拿它当闸就是把
+  // 「旧执行体的健康」变成新执行体的阻塞——实测 orca-serve 一停，commander 一个动作都不产。
+  // 判别力没丢：下一条钉的是 prReviews 没查成时仍然 fail-closed。
+  it('orca 没查成不再挡 rework——建树起工人已切 mirasim', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
       prReviews: { scanned: true, byPr: { 4: { reviews: [redReview('一处要改', 'h4')] } } },
       orca: { scanned: false, error: 'worktree ps 没查成' },
     }));
-    assert.equal(byKind(r, 'rework').length, 0, 'orca 没查成时 rework 一律不产');
-    assert.equal(byKind(r, 'notify-hub').length, 0, '随附回流也一并不产');
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('orca')));
+    assert.equal(byKind(r, 'rework').length, 1, 'orca 与返工已无关，照产');
+  });
+
+  it('prReviews 没查成 → rework 仍一律不产（fail-closed 判别力没随 orca 一起丢）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '判不出红项就不许派返工');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('prReviews')));
   });
 
   it('红①绕过c：prReviews.scanned=false + 已消歧 issue → 不产 dispatch/notify-hub', async () => {
@@ -276,18 +309,30 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
   });
 
   it('全部节 unscanned → 只有一条 escalate、零正向动作', async () => {
-    const { decide, ACTION_KINDS } = await CORE;
+    const { decide, ACTION_KINDS, SITUATION_SECTIONS } = await CORE;
     const r = decide({
-      github: { scanned: false }, orca: { scanned: false }, reviewPending: { scanned: false },
+      github: { scanned: false }, reviewPending: { scanned: false },
       prReviews: { scanned: false }, stall: { scanned: false }, wakeCounts: {},
     });
     assert.equal(r.actions.length, 1, '全 unscanned 只该有一条动作');
     assert.equal(r.actions[0].kind, 'escalate');
     assert.equal(r.actions[0].reason, 'unscanned');
-    assert.equal((r.actions[0].missing || []).length, 5, 'missing 列全五节');
+    assert.equal((r.actions[0].missing || []).length, SITUATION_SECTIONS.length, 'missing 列全必查节');
+    assert.ok(!(r.actions[0].missing || []).includes('orca'), '#1055：orca 退役后不进总闸');
     const positive = r.actions.filter((a) => !['escalate', 'noop'].includes(a.kind));
     assert.equal(positive.length, 0, '零正向动作');
     void ACTION_KINDS;
+  });
+
+  it('#1055：orca 没查成不再进 fail-closed 总闸（退役后这一节永远扫不出来）', async () => {
+    const { decide, SITUATION_SECTIONS } = await CORE;
+    assert.ok(!SITUATION_SECTIONS.includes('orca'), '必查清单不许再钉 orca');
+    const r = decide(baseSituation({
+      orca: { scanned: false, error: 'orca-serve disabled' },
+    }));
+    const un = byKind(r, 'escalate').filter((a) => a.reason === 'unscanned');
+    assert.equal(un.length, 0, '只缺 orca 不该合上总闸');
+    assert.ok(!kinds(r).includes('escalate') || !un.some((a) => (a.missing || []).includes('orca')));
   });
 });
 
@@ -494,13 +539,13 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const retired = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(700, { labels: [{ name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }] })], prs: [redPr(701, HEAD, 700)] },
       prReviews: reviews,
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
     }));
     assert.equal(byKind(retired, 'rework').length, 0, '模型不在选型不许派（#849 闸没被返工绕开）');
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  it('⑤单轮返工上限沿用 maxDispatchPerRound：超出的排队下轮，不丢也不 escalate', async () => {
+  it('⑤单轮返工上限沿用机器余量：超出的排队下轮，不丢也不 escalate', async () => {
     const { decide } = await CORE;
     const issues = [];
     const prs = [];
@@ -513,10 +558,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs },
       prReviews: { scanned: true, byPr },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const w = byKind(r, 'rework');
-    assert.equal(w.length, 2, `一轮最多派 maxDispatchPerRound 个返工工人，实际 ${w.length}`);
+    assert.equal(w.length, 2, `一轮最多派 admission.slots 个返工工人，实际 ${w.length}`);
     assert.deepEqual(w.map((a) => a.pr), [760, 761]);
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
     assert.equal(byKind(r, 'notify-hub').length, 2, '回流只跟着真派出去的那两个');
@@ -678,13 +724,14 @@ function readyIssue(n, model = 'grok-4.6') {
   };
 }
 
-describe('decide：单轮派单上限（#849）', () => {
-  it('15 张可派 → 一轮只派 maxDispatchPerRound 张，其余排队不 escalate', async () => {
+describe('decide：机器余量准入（#1007，替换 #849 每轮上限）', () => {
+  it('15 张可派 + slots=2 → 一轮只派 2 张，其余排队不 escalate', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 15 }, (_, i) => readyIssue(1000 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const d = byKind(r, 'dispatch');
     assert.equal(d.length, 2, `应只派 2 张，实际 ${d.length}`);
@@ -692,14 +739,14 @@ describe('decide：单轮派单上限（#849）', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason !== 'unscanned').length, 0, '超上限不 escalate');
   });
 
-  it('上限默认 2：不传 commanderPolicy 也截断', async () => {
+  it('夹具不传 admission → 不截断（旧测兼容；生产路径必填）', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 5 }, (_, i) => readyIssue(1100 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
       commanderPolicy: { requireModelInRouting: false },
     }));
-    assert.equal(byKind(r, 'dispatch').length, 2);
+    assert.equal(byKind(r, 'dispatch').length, 5);
   });
 });
 
@@ -709,7 +756,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1200, 'devin-deepseek-v4-flash-max');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
     }));
     assert.equal(byKind(r, 'dispatch').length, 0, '退役模型绝不派');
@@ -722,7 +769,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1201, 'deepseek-v4-flash');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       healthRedModels: ['deepseek-v4-flash'],
     }));
@@ -735,7 +782,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1202);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: null,
     }));
     assert.equal(byKind(r, 'dispatch').length, 0);
@@ -747,7 +794,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1203);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6'],
       healthRedModels: [],
     }));
@@ -889,6 +936,79 @@ describe('派工失败不许发喜报（2026-09-04 实咬：#787 派工失败，
   });
 });
 
+describe('僵尸撞死条目剪除（2026-09-05 实咬：#889 关掉又开出 #908，死终端 term_338e13fb 早已不在盘面）', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+
+  function stallFile(content) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-gc-'));
+    const file = path.join(dir, 'agent-stall-watch.json');
+    fs.writeFileSync(file, JSON.stringify(content), 'utf8');
+    return file;
+  }
+
+  it('①死终端条目被剪、写回文件、decide 不报帅', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const file = stallFile({ term_338e13fb: { strikes: 3, sig: 'last status: 429' } });
+
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_live01' }] } });
+    assert.equal(stall.scanned, true);
+    assert.deepEqual(stall.strikes, {}, '死终端条目当场剪除');
+    assert.deepEqual(stall.pruned, ['term_338e13fb']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {}, '剪除要写回文件，否则下轮又冒出来');
+
+    const r = decide(baseSituation({ stall }));
+    assert.equal(byKind(r, 'wake-brain').length, 0, '僵尸条目不许唤大脑');
+    assert.equal(byKind(r, 'escalate').length, 0, '僵尸条目不许报帅（唤满就是这么开出 #908 的）');
+  });
+
+  it('②活终端条目照常保留并照常报（判别力：不是把 stall 一律掐了）', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const file = stallFile({ term_alive: { strikes: 2, sig: 'last status: 429' } });
+
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_alive' }, { handle: 'term_other' }] } });
+    assert.deepEqual(stall.strikes, { term_alive: { strikes: 2, sig: 'last status: 429' } });
+    assert.equal(stall.pruned, undefined, '没有可剪的就不报剪了什么');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { term_alive: { strikes: 2, sig: 'last status: 429' } }, '没变化不该改文件内容');
+
+    const w = byKind(decide(baseSituation({ stall })), 'wake-brain');
+    assert.equal(w.length, 1, '在世终端的撞死照常唤大脑');
+    assert.equal(w[0].target, 'stall:term_alive');
+  });
+
+  it('③终端清单没查成 → 一条不剪、不写文件、原样上报（「没查成」≠「终端不存在」）', async () => {
+    const { scanStall } = await MOD();
+    const { decide } = await CORE;
+    const before = { term_338e13fb: { strikes: 3, sig: 'last status: 429' } };
+    const file = stallFile(before);
+    let wrote = 0;
+
+    const stall = scanStall({
+      file,
+      live: { ok: false, error: 'terminal list 没查成：orca 不可用' },
+      write: () => { wrote += 1; },
+    });
+    assert.equal(stall.scanned, true);
+    assert.deepEqual(stall.strikes, before, '读不到清单时一条不剪');
+    assert.equal(wrote, 0, '不剪就不写回');
+    assert.match(stall.pruneSkipped, /没查成/, '要明说这轮没核对成，不能装作核对过了');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), before);
+
+    const w = byKind(decide(baseSituation({ stall })), 'wake-brain');
+    assert.equal(w.length, 1, '没核对成时宁可多报一轮，也不能悄悄抹掉真撞死');
+  });
+
+  it('④判别力：把交叉核对拿掉（清单里就有这个终端）→ ① 必须变成不剪', async () => {
+    const { scanStall } = await MOD();
+    const file = stallFile({ term_338e13fb: { strikes: 3, sig: 'last status: 429' } });
+    const stall = scanStall({ file, live: { ok: true, terminals: [{ handle: 'term_338e13fb' }] } });
+    assert.deepEqual(Object.keys(stall.strikes), ['term_338e13fb'], '剪除判据必须是「不在盘面」，不是「strikes 够大就删」');
+  });
+});
+
 // 顶班（2026-09-05 实咬 #894/#896/#899）：快马单标着 model/claude-opus-5，服务器腿表里没有可派的腿，
 // 返工被 escalate 掉，红项在 GitHub 上躺了 10 小时没人接。这三条钉死「派不出就顶班」而非「派不出就报帅」。
 describe('decide：返工模型顶班（#894 实咬）', () => {
@@ -900,7 +1020,7 @@ describe('decide：返工模型顶班（#894 实咬）', () => {
     return baseSituation({
       github: { scanned: true, issues: [issue], prs: [pr] },
       prReviews: { scanned: true, byPr: { 951: { reviews: [redReview('这里不对', 'h951')] } } },
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       defaultWorkerModel: 'grok-4.6',
       ...over,
@@ -988,7 +1108,8 @@ describe('跨仓感知只感知不派工', () => {
 
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
-    assert.match(src, /github, orca, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /sessions, desiredJobs,/, '对账循环观测/期望集也要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
@@ -999,10 +1120,14 @@ describe('跨仓感知只感知不派工', () => {
   });
 
   it('跨仓没查成不许拦住本轮：它不在 health 的必查清单里', () => {
-    const i = src.indexOf("const sections = ['github'");
-    const line = src.slice(i, i + 200);
-    assert.ok(!/otherRepos/.test(line),
+    assert.match(src, /SITUATION_SECTIONS\.filter/,
+      'situationHealth 必须跟决策层同一份必查清单，不许再手写一份');
+    const i = src.indexOf('function situationHealth');
+    const fn = src.slice(i, src.indexOf('\n}', i) + 2);
+    assert.ok(!/otherRepos/.test(fn),
       '跨仓查不到是别人家的事，不该让本仓这一轮判成没查成');
+    assert.ok(!/'orca'/.test(fn),
+      '#1055：orca 退役后不许再写进 health 必查清单');
   });
 
   it('没查成要显形，不许静默成「别的仓都没事」', () => {
@@ -1014,5 +1139,638 @@ describe('跨仓感知只感知不派工', () => {
     const i = src.indexOf('function scanOtherRepos');
     const fn = src.slice(i, src.indexOf('\n}', src.indexOf('byRepo.values()')) + 2);
     assert.match(fn, /full === mine/, '要把本仓排除掉，否则本仓的活会被当成跨仓提醒重报一遍');
+  });
+});
+
+// ── 复审记账：记「派了」不记「成了」= 一次失败就永久卡死（2026-09-05 实咬第二次）──
+//
+// 第一次是 agent-stall-watch 的换人账本（10 个审官换人全失败，账本记成已处置，再不重试）。
+// 第二次就在这里：#894/#899/#905 的复审票 04:22 写成功，审官起来就死（裸 pi 落错 provider 401），
+// 7 小时后当前 head 判定仍是 0，而 `if (!reworkDispatched[rrKey])` 把这三张 PR 永久挡在门外。
+//
+// 判据的要害：**走到这个分支本身就是「上一次没落地」的证据**——判定真落了 atHead 就 > 0，进不来。
+// 所以不需要 ok 字段，只要 tries + 宽限期。
+describe('复审要能重试，因为「票写出去了」不等于「判定落了」', () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'f9adbffa1170c57559c64160081619acc328988f';
+  const OLD = 'b5e672ea046ee7ce65055a31926bd164f3e1f84f';
+  const NOW = '2026-09-05T12:00:00.000Z';
+  const ago = (min) => new Date(Date.parse(NOW) - min * 60000).toISOString();
+  const readyPr = (n, head, issue) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: head, body: `署名 issue #${issue}`,
+  });
+  const sit = (over) => baseSituation({ at: NOW, ...over });
+
+  it('①从没审过的 ready PR 也要叫审官——这一格原本整个空着（洞 A）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(947, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '交卷可合但一条判定都没有 = 要审官，不是无事可做');
+    assert.equal(rr[0].pr, 947);
+    assert.equal(rr[0].tries, 1);
+    assert.match(rr[0].why, /一条判定都没有/, '首审和复审的理由要分得开');
+  });
+
+  it('②上一票超过宽限期而判定仍是 0 → 重发，tries 累加（洞 C）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(400), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '票派过但判定没落 = 那次没成，必须再试');
+    assert.equal(rr[0].tries, 2, 'tries 要累加，否则永远试不满也永远不报帅');
+  });
+
+  it('③宽限期内不重发——审官可能正在看，别每轮塞一张票', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处要改', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: ago(10), pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '10 分钟前刚派的票还在宽限期内');
+    assert.equal(byKind(r, 'escalate').length, 0, '宽限期内也不报帅');
+  });
+
+  it('④试满仍无判定 → 停手报帅，不死循环', async () => {
+    const { decide, MAX_REREVIEW_TRIES } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(905, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 905: { reviews: [redReview('一处', OLD)] } } },
+      reworkDispatched: { [`rereview:905@${HEAD}`]: { at: ago(400), pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '试满就别再派了');
+    const marked = byKind(r, 'mark-exhausted');
+    assert.equal(marked.length, 1, '试满打认输标，不再开单');
+    assert.equal(marked[0].verb, 'rereview');
+    assert.equal(byKind(r, 'open-issue').length, 0);
+    assert.equal(byKind(r, 'escalate').length, 0);
+  });
+
+  it('⑤判别力反证：判定已落在当前 head → 本分支一条都不产', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(886, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 886: { reviews: [redReview('要改', HEAD)] } } },
+      reworkDispatched: {},
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '当前 head 有判定了就不该再叫审官——否则这条规则没有判别力');
+  });
+
+  it('⑥态势没有 at 时不许把宽限期算成「早就过期」而狂发票', async () => {
+    const { decide } = await CORE;
+    const s = baseSituation({
+      github: { scanned: true, issues: [labeledIssue(801)], prs: [readyPr(899, HEAD, 801)] },
+      prReviews: { scanned: true, byPr: { 899: { reviews: [redReview('两处', OLD)] } } },
+      reworkDispatched: { [`rereview:899@${HEAD}`]: { at: '2026-09-05T11:55:00.000Z', pr: 899, head: HEAD, kind: 'rereview', tries: 1 } },
+    });
+    delete s.at;
+    const r = decide(s);
+    // at 缺失 ⇒ nowMs=0 ⇒ ageMin 是大负数，Number.isFinite 为真且 < 宽限期 ⇒ 按「还在宽限期」处理，
+    // 宁可这一轮不发，也不要因为时钟读不到就每 20 分钟塞一张票。
+    assert.equal(byKind(r, 'rereview').length, 0, '时钟读不到时要保守，不许当成「早就该重发」');
+  });
+});
+
+// ── 署名单已关闭时标签查不到（2026-09-05 实咬 #945/#947/#909）──
+describe(`审官标签要在关闭的署名单上也查得到`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = '6bcdc231aa11bb22cc33dd44ee55ff6677889900';
+  const readyPr = (n, issue) => ({ number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: `署名 issue #${issue}` });
+
+  it('署名单已关闭（不在 open 快照）时，从 attributedIssues 里查到 reviewer/', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: {
+        scanned: true,
+        issues: [],  // #815 已关闭，不在 open 快照里
+        attributedIssues: [{ number: 815, title: '单 815', labels: [{ name: 'reviewer/gpt-5.6-luna' }] }],
+        prs: [readyPr(947, 815)],
+      },
+      prReviews: { scanned: true, byPr: { 947: { reviews: [] } } },
+    }));
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, 'gpt-5.6-luna', '单子关了不等于 PR 不用审——标签得查得到');
+  });
+
+  it('判别力反证：两处都没有就是查不到，不许猜一个', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-05T12:00:00.000Z',
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(890, 888)] },
+      prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'add-label').length, 0, '署名单都没有，补标签无从下手');
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1);
+    assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+  });
+});
+
+// ── 死票回收（2026-09-06 实咬：#970/#972/#983 合并后仍每轮开单，17 张噪音单的源头） ──
+describe('复审票存活：PR 合了/关了，票必须回收', () => {
+  it('票的 PR 不在开放列表 → reap-ticket，且不再产 retry-drain/escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [] }, // 一张开放 PR 都没有 = 票全是死的
+      reviewPending: { scanned: true, items: [{ pr: 983, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:983': { at: '2026-09-05T00:00:00Z', pr: 983, tries: 3 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket').map((a) => a.pr), [983]);
+    assert.deepEqual(byKind(r, 'retry-drain'), []);
+    assert.deepEqual(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted'), []);
+  });
+
+  it('票的 PR 还开着 → 不回收，照常走 drain', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [{ number: 890, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'aaa' }] },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:890': { at: '2026-09-05T00:00:00Z', pr: 890, tries: 1 } },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
+
+  // 红样本：github 没查成时把全部活票当死票剪掉，是这个改动最坏的失败形态。
+  it('github 没查成 → 一张票都不许回收（空集不等于「PR 都没了」）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: false, error: 'API 挂了' },
+      reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'x', worker: null }] },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
+});
+
+// ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，
+//    而标签一直挂在已关的 #833 上——attributedIssues 兜底写好了却被手写查找绕过） ──
+describe('返工取标签：署名 issue 已关也要取得到', () => {
+  const closedIssueSituation = (over = {}) => baseSituation({
+    github: {
+      scanned: true,
+      issues: [], // 署名单已关，不在开放列表里
+      attributedIssues: [{ number: 833, title: '已关的署名单', labels: [
+        { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' },
+      ] }],
+      prs: [redPr(945, 'headaaa', 833)],
+    },
+    prReviews: { scanned: true, byPr: { 945: { reviews: [redReview('红：这里要改', 'headaaa')] } } },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('署名单已关但在 attributedIssues 里 → 照常派返工，不报「标签没查成」', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation());
+    const unscanned = byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned');
+    assert.deepEqual(unscanned, [], '署名单标签取得到就不该报没查成');
+    assert.equal(byKind(r, 'rework').length, 1);
+  });
+
+  // 红样本：两处都查不到时仍必须报「没查成」，不许猜一个标签派出去。
+  it('两处都没有该单 → 仍报没查成，不猜', async () => {
+    const { decide } = await CORE;
+    const r = decide(closedIssueSituation({
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [redPr(945, 'headaaa', 833)] },
+    }));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'rework-issue-unscanned').length, 1);
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});
+
+// ── 冲突态派工（2026-09-06 实咬：9 张 CONFLICTING PR 卡着，指挥官对它们零动作） ──
+describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
+  const conflictPr = (n, issue, over = {}) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `h${n}`,
+    body: `署名 issue #${issue}`, title: `PR ${n}`, ...over,
+  });
+  const sitWith = (pr, over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeledIssue(940)], prs: [pr] },
+    prReviews: { scanned: true, byPr: {} }, // 冲突 PR 常常一条 review 都没有
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('CONFLICTING + 非 draft → rework，任务书是解冲突，不产 rereview', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.match(w[0].brief, /解掉/);
+    assert.deepEqual(byKind(r, 'rereview'), [], '冲突 PR 不许叫审官——审官判不了它');
+  });
+
+  it('解冲突任务书必须写明不许整片覆盖（#902 反向删除判例）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940)));
+    assert.match(byKind(r, 'rework')[0].brief, /--ours\/--theirs/);
+  });
+
+  // 红样本一：mergeable=UNKNOWN 是 GitHub 还在异步算，不是冲突。
+  it('mergeable=UNKNOWN → 不派解冲突（没查成 ≠ 有冲突）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // 红样本二：同一 head 已派过就不再派，否则每轮刷一个工人。
+  it('同一 head 已派过解冲突 → 不重复派', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940), {
+      reworkDispatched: { [reworkKey(950, 'h950')]: { at: '2026-09-05T00:00:00Z' } },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('观测面未接时，draft 的冲突 PR 维持旧契约不派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // #1056 / #1043 现场 A：draft 不是「有人在做」。4 张 CONFLICTING 全是 draft、一个活会话都没有。
+  it('draft 冲突 + 观测面扫完没有活会话 → 派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: true, items: [] },
+    }));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1, '没人在做的 draft 冲突必须派，不能再拿 draft 当活性');
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('draft 冲突 + 同 PR 有活会话 → 不派（真有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: {
+        scanned: true,
+        items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-review-pr-950', title: 'PR #950' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('draft 冲突 + 会话名单没查成 → 不派（查不成当有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: false, error: '连不上' },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // #1017：列表 mergeable 恒 UNKNOWN。未知态才单张重查；重查后的 CONFLICTING 要命中解冲突分支。
+  it('列表 UNKNOWN、单张 CONFLICTING → CONFLICTING 分支命中，派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [950]);
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('列表 UNKNOWN、单张也 UNKNOWN → 不派冲突工也不合并', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: () => ({ ok: true, mergeable: 'UNKNOWN' }),
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+    assert.deepEqual(byKind(r, 'merge'), []);
+  });
+
+  it('列表直接 MERGEABLE → 不发起单张重查', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'MERGEABLE' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [], '已知态不烧配额——即使重查会说 CONFLICTING 也不调');
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+});
+
+// #1029：状态别塞进总控消息流。hubSay 入队日报，写不进才算失败。
+describe('hubSay 入队日报，不直接发总控群', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+  const fn = src.slice(src.indexOf('function hubSay'), src.indexOf('function hubOnce'));
+
+  it('走 recordBroadcast，不 spawn hub-say', () => {
+    assert.match(fn, /recordBroadcast/);
+    assert.equal(fn.includes("spawnSync('hub-say'"), false);
+  });
+
+  it('入队失败才 ok:false', () => {
+    assert.match(fn, /if \(!r\.ok\) return \{ ok: false/);
+  });
+});
+
+// 2026-09-06 实咬：PR #909 的返工派工失败（署名单缺「已消歧」），账本记下 ok:false，
+// 而去重只看「账在不在」→ 这个 head 上永远不再重派。标签当天就补好了，它却再没动过。
+// 「派了 ≠ 成了」早为 drain 定过（tries+宽限+试满停手），只是没接到返工这条路上。
+describe('返工派工失败要能重试（派了 ≠ 成了）', () => {
+  const OLD = '2026-09-05T00:00:00.000Z';
+  const conflictPr = (n, issue) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `h${n}`,
+    body: `署名 issue #${issue}`, title: `PR ${n}`,
+  });
+  const sit = (ledgerEntry) => baseSituation({
+    at: '2026-09-06T12:00:00.000Z',
+    github: { scanned: true, issues: [labeledIssue(940)], prs: [conflictPr(950, 940)] },
+    prReviews: { scanned: true, byPr: {} },
+    orca: { scanned: true, worktrees: [] },
+    reworkDispatched: ledgerEntry ? { 'rework:950@h950': ledgerEntry } : {},
+  });
+
+  it('上次 ok:false 且过了宽限 → 重派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: 1 }));
+    assert.equal(byKind(r, 'rework').length, 1, '失败过的派工必须能再试');
+  });
+
+  it('上次 ok:true → 不重派（工人正在改）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: true, unscanned: false, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // 红样本：没查成时不知道有没有工人，重派会造重复工人 → 必须 fail-closed。
+  it('上次 unscanned:true → 不重派（没查成 ≠ 没派成）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: true, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('宽限期内不重派（别每轮刷一个工人）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: '2026-09-06T11:40:00.000Z', pr: 950, head: 'h950', ok: false, unscanned: false, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('试满 → escalate 停手交人，不再无限重试', async () => {
+    const { decide, MAX_REWORK_TRIES } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: MAX_REWORK_TRIES }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+    assert.equal(byKind(r, 'mark-exhausted').length, 1, '试满打认输标');
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 0);
+  });
+});
+
+// 2026-09-06 实咬（PR #909）：drain 因为**别的 bug**（建树漏传 repo 选择符）试满 3 次，
+// 那个 bug 修好后计数仍冻在 3——键是 `pr:909`，不带 head，没有任何东西会重置它。
+// 每轮判 exhausted → 转出的 open-issue 又被去重吃掉 → 一声不响永久卡死，票每轮重写从没人消费。
+// 三兄弟里 rereview/rework 的键都带 head，只有 drain 漏了。
+describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
+  const OLD = '2026-09-05T00:00:00.000Z';
+  const ticket = (pr, oid) => ({ pr, head: { name: null, oid }, reviewer: 'gpt-5.6-luna', worker: null });
+  const sit = (oid, ledger) => baseSituation({
+    at: '2026-09-06T12:00:00.000Z',
+    github: { scanned: true, issues: [], prs: [{ number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: oid }] },
+    reviewPending: { scanned: true, items: [ticket(909, oid)] },
+    drainLedger: ledger,
+  });
+
+  it('旧 head 试满，新 head 来了 → 照常 attach-reviewer，不判 exhausted', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('newhead111', { 'pr:909@oldhead999': { at: OLD, pr: '909', tries: 3 } }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '新 head 应重新给机会');
+    assert.deepEqual(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted'), []);
+  });
+
+  // 判别力：同一个 head 上试满，仍然必须停手——别把闸放宽成永不封顶。
+  it('同一 head 试满 → 仍判 exhausted 停手', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909@samehead': { at: OLD, pr: '909', tries: 3 } }));
+    assert.deepEqual(byKind(r, 'attach-reviewer'), []);
+    const stopped = byKind(r, 'mark-exhausted').length;
+    assert.equal(stopped, 1, '同 head 试满必须打认输标停手');
+    assert.equal(byKind(r, 'open-issue').length, 0);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted').length, 0);
+  });
+
+  it('同一 head 有账且过了宽限 → retry-drain，键带 head', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909@samehead': { at: OLD, pr: '909', tries: 1 } }));
+    const rd = byKind(r, 'retry-drain');
+    assert.equal(rd.length, 1);
+    assert.equal(rd[0].stateKey, 'pr:909@samehead', 'decide 与 execute 必须算出同一个键');
+    assert.equal(rd[0].head, 'samehead', '动作要把 head 带给执行侧');
+  });
+
+  it('票里拿不到 head → 退回旧键，不猜一个', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-06T12:00:00.000Z',
+      github: { scanned: true, issues: [], prs: [{ number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'x' }] },
+      reviewPending: { scanned: true, items: [{ pr: 909, head: null, reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:909': { at: OLD, pr: '909', tries: 1 } },
+    }));
+    assert.equal(byKind(r, 'retry-drain')[0]?.stateKey, 'pr:909');
+  });
+
+  // 判别力：执行侧若仍写旧键 pr:N，有 head 的票永远进不了 retry-drain。
+  // 这就是 #909 修 decide、漏 attach-reviewer 写侧之后的现场。
+  it('票带 head 但账只在旧键 pr:N → 不认，走 attach-reviewer（旧键不算数）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909': { at: OLD, pr: '909', tries: 1 } }));
+    assert.equal(byKind(r, 'retry-drain').length, 0, '旧键对不上 pr:909@samehead');
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '当没账，重新 attach 并应写新键');
+  });
+});
+
+describe('ticketHeadOid：两种票形态都要取得出', () => {
+  it('对象形态 {name,oid}', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid({ name: null, oid: 'abc' }), 'abc');
+  });
+  it('字符串形态', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid('abc'), 'abc');
+  });
+  it('取不出返回 null（不猜）', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid(null), null);
+    assert.equal(ticketHeadOid({ name: 'x' }), null);
+    assert.equal(ticketHeadOid('  '), null);
+  });
+});
+
+// #1014：复审票两个生产者，attach-reviewer 的 why 必须按写票时记下的来源说，不许写死、不许猜。
+describe('#1014 attach-reviewer why 按来源写', () => {
+  const sit = (item) => baseSituation({
+    github: { scanned: true, issues: [], prs: [{ number: 1014, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h1014' }] },
+    reviewPending: { scanned: true, items: [item] },
+  });
+
+  it('worker-done 失败写的票 → why 说工人起审官失败，且带 error 原文', async () => {
+    const { decide } = await CORE;
+    const err = 'Sub-worker dispatch is not permitted at depth 2';
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-w',
+      source: 'worker-done-fail', error: err,
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /工人起审官失败/);
+    assert.ok(a[0].why.includes(err), '必须带上 error 原文 → ' + a[0].why);
+  });
+
+  it('指挥官 rereview 写的票 → why 说按设计叫审官，不许出现「失败」', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: null,
+      source: 'commander-rereview',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /交卷可合但没人审，按设计叫审官/);
+    assert.ok(!/失败/.test(a[0].why), '指挥官自己写的票不许说失败 → ' + a[0].why);
+  });
+
+  it('没有来源字段的旧票 → why 说来源没查成，不许倒向任一种', async () => {
+    const { decide, attachReviewerWhy } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-x',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /来源没查成/);
+    assert.ok(!/工人起审官失败/.test(a[0].why), '旧票不许当成工人失败');
+    assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
+    assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
+    assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
+  });
+});
+
+// ── 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派 ──
+describe('对账循环：账上有人、名单里没有 → 重派', () => {
+  // 不打「已消歧」：这单已经有人派过（账上未结），不该再走 ready 队列那条新派路。
+  const labeled = {
+    number: 885, title: '卡 B 返工',
+    labels: [
+      { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+  const sit = (over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeled], prs: [] },
+    prReviews: { scanned: true, byPr: {} },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('期望集有未结 + 名单里没有活会话 → dispatch(reconcile)', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(d.length, 1);
+    assert.equal(d[0].issue, 885);
+  });
+
+  it('同一 issue 已有活会话 → 拒绝再派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-885' }] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+  });
+
+  it('会话名单没查成 → 零重派，只 escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: false, error: '连不上' },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'reconcile-unscanned').length, 1);
+  });
+
+  it('老夹具不挂 sessions/desiredJobs → 整段跳过，既有派工路不受影响', async () => {
+    const { decide } = await CORE;
+    const issue = {
+      number: 900, title: '补 X',
+      labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(byKind(r, 'dispatch').length, 1);
+    assert.equal(byKind(r, 'dispatch')[0].reconcile, undefined);
+  });
+});
+
+describe('对账循环 scan 真的接进态势', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+
+  it('buildSituation 采了 sessions 和 desiredJobs', () => {
+    assert.match(src, /const sessions = scanSessions\(\);/);
+    assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
+    assert.match(src, /sessions, desiredJobs,/);
+  });
+
+  it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
+    const i = src.indexOf('function scanDesiredJobs');
+    assert.ok(i > -1, '找不到 scanDesiredJobs');
+    const fn = src.slice(i, i + 700);
+    assert.match(fn, /readLedgerEvents/);
+    assert.ok(!/readDispatchEventsIndexed/.test(fn), '索引窗会把 10 分钟前的未结派工洗掉');
+  });
+
+  it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
+    assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
+  });
+});
+
+describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const prev = process.env.DAO_MIRASIM_LS;
+  const restore = () => {
+    if (prev === undefined) delete process.env.DAO_MIRASIM_LS;
+    else process.env.DAO_MIRASIM_LS = prev;
+  };
+
+  it('零输出脚本 exit 0 → scanned:false（审官判别实验）', async () => {
+    const { scanSessions } = await MOD();
+    const empty = path.join(__dirname, 'fixtures', 'unit-restart', 'empty', '.gitkeep');
+    process.env.DAO_MIRASIM_LS = empty;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, '零输出不许当成查成且空');
+      assert.match(String(r.error || ''), /没查成|协议帧|零输出/);
+    } finally { restore(); }
+  });
+
+  it('打了 type=sessions 协议帧且 0 行会话 → scanned:true items=[]（查成且空）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-ok-empty.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, true);
+      assert.deepEqual(r.items, []);
+    } finally { restore(); }
+  });
+
+  it('{type:sessions, sessions:null} → scanned:false（审官判别实验：不许折成空名单）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-null.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
+      assert.match(String(r.error || ''), /不是数组|没查成/);
+    } finally { restore(); }
   });
 });

@@ -20,7 +20,7 @@
 //
 // 「它悄悄停了」和「这段时间没有事发生」怎么分开：桥每 10 分钟朝自己的 hook 打一次 ping，
 // GitHub 会把这个 ping 从同一条通道送回来。那是一个**自己造的样本**——
-// 通道通的时候样本一定不为 0。server-check ㉑ 判绿的前提是「最近收到过 ping」，
+// 通道通的时候样本一定不为 0。server-check ㉓ 判绿的前提是「最近收到过 ping」，
 // 不是「没报错」。判据在 lib/gh-events.mjs 的 classifyGhEventBridge。
 //
 // 用法：

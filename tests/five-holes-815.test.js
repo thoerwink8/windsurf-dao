@@ -43,7 +43,7 @@ function initRepo(dir, message) {
 }
 
 describe('#815 ① 复审待办队列 + drain', () => {
-  it('worker-done 起败写队列；drain 调 reviewer-attach --skip-wait；空目录是扫完 0 不是没查成', async () => {
+  it('worker-done 起败写队列；drain 调 reviewer-create --executor mirasim；空目录是扫完 0 不是没查成', async () => {
     const S = await S_LOAD;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-'));
     const empty = S.listReviewPending(dir);
@@ -63,6 +63,7 @@ describe('#815 ① 复审待办队列 + drain', () => {
       round: 'rework',
       error: 'Sub-worker dispatch is not permitted at depth 2',
       workerModel: 'grok-4.6',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
     });
     assert.ok(built.ok, JSON.stringify(built));
     const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
@@ -72,12 +73,16 @@ describe('#815 ① 复审待办队列 + drain', () => {
     assert.ok(listed.ok && listed.scanned === 1 && listed.tickets[0].pr === '810', JSON.stringify(listed));
     assert.ok(listed.tickets[0].head.oid === 'abc1234def' && listed.tickets[0].workerWorktree === 'wt_worker',
       '待办必须含 head + 工人树 + reviewer → ' + JSON.stringify(listed.tickets[0]));
+    assert.equal(listed.tickets[0].source, S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, '工人失败票必须自报来源');
 
     const plan = S.planReviewPendingDrain(listed.tickets[0]);
     assert.ok(plan.ok && plan.skipWait === true, JSON.stringify(plan));
-    assert.ok(plan.argv.includes('reviewer-attach') && plan.argv.includes('--skip-wait'),
-      'drain 必须走 attach --skip-wait → ' + plan.argv.join(' '));
-    assert.ok(plan.argv.includes('--model') && plan.argv.includes('grok-4.6'),
+    // 2026-09-06 审官切 mirasim：attach 那条路是 orca 的世界观（审官挂在 Orca 卡管的树上），
+    // mirasim「会话即卡」没有可 attach 的对象，整层删掉。drain 统一走 create --executor mirasim。
+    assert.equal(plan.verb, 'reviewer-create', 'drain 必须走 create → ' + plan.argv.join(' '));
+    assert.ok(plan.argv.includes('mirasim'), '必须点名 mirasim 执行体 → ' + plan.argv.join(' '));
+    assert.ok(plan.skipWait === true, 'skipWait 仍要为真 → ' + JSON.stringify(plan));
+    assert.ok(!plan.argv.includes('--model') || plan.argv.includes('grok-4.6'),
       '待办带工人模型时 drain 传 --model → ' + plan.argv.join(' '));
 
     const calls = [];
@@ -86,7 +91,10 @@ describe('#815 ① 复审待办队列 + drain', () => {
       attach: (p) => { calls.push(p.argv.slice()); return { ok: true, pr: p.pr }; },
     });
     assert.ok(drained.ok && drained.scanned === 1 && drained.drained === 1, JSON.stringify(drained));
-    assert.ok(calls.length === 1 && calls[0].includes('--skip-wait'), JSON.stringify(calls));
+    // 审官切 mirasim 后 argv 里不再有 --skip-wait（那是 attach 路的旗标），
+    // 但 plan.skipWait 字段仍为真——调用方靠字段判，不靠旗标。
+    assert.equal(calls.length, 1, JSON.stringify(calls));
+    assert.ok(calls[0].includes('mirasim'), JSON.stringify(calls[0]));
     assert.ok(!fs.existsSync(path.join(dir, '810.json')), '成功后应删待办');
 
     const noAttach = S.drainReviewPending({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-u-')) });
@@ -96,9 +104,128 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(/writeReviewPendingOnFail/.test(daoSrc) && /reviewPending/.test(daoSrc),
       'worker-done 起败必须写队列');
+    assert.ok(/finishWorkerDoneSpawnFail/.test(daoSrc) && /queued-review-pending/.test(daoSrc),
+      'depth/在途派单入队后必须成功交卷');
     const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
     assert.ok(/复审轮走队列/.test(book) && /review-pending-drain/.test(book),
       'reviewer-book 必须写复审轮走队列');
+    assert.ok(/queued:true/.test(book.replace(/\s+/g, '')) || /queued:true/.test(book),
+      'reviewer-book 必须写成功交卷 queued');
+  });
+
+  it('#815 余洞：depth 2 / 在途派单不是没查成；待办写成则 queued 交卷', async () => {
+    const S = await S_LOAD;
+    const depthErr = 'Sub-worker dispatch is not permitted at depth 2 (max 1)';
+    const activeErr = 'Terminal term_rev already has an active dispatch (ctx_rev_806)';
+    const depth = S.classifyReviewerSpawnError(depthErr);
+    const active = S.classifyReviewerSpawnError(activeErr);
+    const miss = S.classifyReviewerSpawnError('worker-list 没查成');
+    assert.equal(depth.kind, 'depth-limit', JSON.stringify(depth));
+    assert.equal(active.kind, 'active-dispatch', JSON.stringify(active));
+    assert.equal(miss.kind, 'unscanned');
+    assert.ok(depth.label !== miss.label && active.label !== miss.label && !/没查成/.test(depth.label + active.label));
+
+    const parsed = S.parseActiveDispatchId(activeErr);
+    assert.equal(parsed, 'ctx_rev_806');
+    assert.equal(S.parseActiveDispatchId('already has an active dispatch'), null);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-q-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '814', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-sol', error: depthErr,
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+    });
+    const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
+    assert.ok(wrote.ok, JSON.stringify(wrote));
+
+    const queued = S.planWorkerDoneAfterSpawnFail({ error: depthErr, reviewPending: wrote });
+    assert.ok(queued.ok && queued.queued === true && queued.fail === false && queued.spawnKind === 'depth-limit',
+      'depth 2 待办写成必须成功交卷 → ' + JSON.stringify(queued));
+
+    const queuedActive = S.planWorkerDoneAfterSpawnFail({ error: activeErr, reviewPending: wrote });
+    assert.ok(queuedActive.ok && queuedActive.queued === true && queuedActive.spawnKind === 'active-dispatch',
+      '在途派单待办写成必须成功交卷 → ' + JSON.stringify(queuedActive));
+
+    const noTicket = S.planWorkerDoneAfterSpawnFail({ error: depthErr, reviewPending: { ok: false, error: '写盘失败' } });
+    assert.ok(noTicket.ok === false && noTicket.fail === true && /没写成/.test(noTicket.error),
+      '待办没写成仍 fail → ' + JSON.stringify(noTicket));
+
+    const timeout = S.planWorkerDoneAfterSpawnFail({
+      error: 'terminal create 超时', reviewPending: wrote,
+    });
+    assert.ok(timeout.ok === false && timeout.queued === false && timeout.spawnKind === 'terminal-timeout',
+      '超时不是入队种类 → ' + JSON.stringify(timeout));
+
+    const queuedBody = S.reviewerSpawnQueuedComment({ error: depthErr, pr: '814' });
+    assert.ok(/^交卷已入复审队列：/.test(queuedBody) && !/^完工/.test(queuedBody) && !/没查成/.test(queuedBody),
+      queuedBody.slice(0, 200));
+    assert.ok(/review-pending/.test(queuedBody) && /review-pending-drain/.test(queuedBody), queuedBody);
+  });
+
+  it('#815 余洞：审官终端已有活 dispatch → 跳过 worker-start', async () => {
+    const S = await S_LOAD;
+    const live = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_rev_806' },
+      dispatchLive: true,
+    });
+    assert.ok(live.ok && live.skipStart === true && live.reviewerDispatchId === 'ctx_rev_806',
+      '活 dispatch 必须跳过 start → ' + JSON.stringify(live));
+
+    const settled = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_old' },
+      dispatchLive: false,
+    });
+    assert.ok(settled.ok && settled.skipStart === false && /已结算/.test(settled.reason),
+      '已结算仍走 worker-start → ' + JSON.stringify(settled));
+
+    const none = S.planReuseExistingLiveDispatch({ found: { ok: false, error: '找不到' } });
+    assert.ok(none.ok && none.skipStart === false, JSON.stringify(none));
+
+    const unread = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_x' }, dispatchLive: null,
+    });
+    assert.ok(unread.ok === false && unread.unscanned === true && unread.skipStart === false,
+      '活性没查成不许猜 → ' + JSON.stringify(unread));
+
+    const recovered = S.planAfterWorkerStartActiveDispatch({
+      error: 'Terminal term_rev already has an active dispatch (ctx_rev_806)',
+    });
+    assert.ok(recovered.ok && recovered.recover === true && recovered.reviewerDispatchId === 'ctx_rev_806',
+      JSON.stringify(recovered));
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    const reuseFn = (daoSrc.match(/function reuseReviewerOnTerminal\([\s\S]*?\nfunction /) || [''])[0];
+    assert.ok(/planReuseExistingLiveDispatch/.test(reuseFn) && /skipStart/.test(reuseFn),
+      '复用路径必须先核在途派单再决定 worker-start');
+    assert.ok(/planAfterWorkerStartActiveDispatch/.test(reuseFn),
+      'worker-start 撞在途派单必须沿用已有 id');
+  });
+
+  it('#815 余洞：指挥官轮转消费队列，reviewer-attach 只调一次', async () => {
+    const S = await S_LOAD;
+    const commanderSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const attachCase = commanderSrc.slice(
+      commanderSrc.indexOf("case 'attach-reviewer'"),
+      commanderSrc.indexOf("case 'merge'"),
+    );
+    assert.ok(/review-pending-drain/.test(attachCase),
+      '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-cmd-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '806', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-sol',
+      error: 'Terminal term_rev already has an active dispatch (ctx_806)',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+    });
+    assert.ok(S.writeReviewPending({ dir, ticket: built.ticket }).ok);
+    const calls = [];
+    const drained = S.drainReviewPending({
+      dir,
+      attach: (p) => { calls.push(p.argv.slice()); return { ok: true, pr: p.pr }; },
+    });
+    assert.ok(drained.ok && drained.drained === 1 && calls.length === 1, JSON.stringify({ drained, calls }));
+    assert.ok(calls[0].includes('reviewer-create'), '审官已切 mirasim：drain 走 create 不走 attach');
+    assert.ok(calls[0].includes('mirasim'), '必须点名 mirasim 执行体');
+    assert.ok(!fs.existsSync(path.join(dir, '806.json')), '指挥官消费后待办应删');
   });
 
   it('不可删除路径：attach 成功但待办删不掉 → consume/drain 必须 ok:false，文件仍在', async () => {
@@ -109,6 +236,7 @@ describe('#815 ① 复审待办队列 + drain', () => {
       head: { name: 'ISSUE-815', oid: 'abc1234def' },
       workerWorktree: 'wt_worker',
       reviewer: 'gpt-5.6-sol',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
     });
     assert.ok(built.ok, JSON.stringify(built));
     const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
@@ -448,17 +576,78 @@ describe('复审待办：缺工人树走 reviewer-create（#884 实咬）', () =
     assert.equal(plan.ok, true, '缺树不该判失败：' + JSON.stringify(plan));
     assert.equal(plan.verb, 'reviewer-create');
     assert.equal(plan.fastPath, true);
-    assert.deepEqual(plan.argv, ['reviewer-create', '--pr', '884', '--reviewer', 'gpt-5.6-luna', '--issue', '880']);
+    assert.deepEqual(plan.argv, ['reviewer-create', '--pr', '884', '--reviewer', 'gpt-5.6-luna', '--executor', 'mirasim', '--issue', '880']);
   });
-  it('有工人树 → 仍走 reviewer-attach（快马路不许吞掉正常路）', async () => {
+  // 2026-09-06 审官切 mirasim：原来这条守的是「有树走 attach，别让快马路吞掉正常路」。
+  // 现在 attach 整层删了——mirasim「会话即卡」没有可 attach 的对象，有没有工人树都走 create。
+  // 工人树降级为排障线索（活干在哪），不再是审官的挂载点。
+  it('有工人树也走 create——attach 那层已随 orca 退役删掉', async () => {
     const S = await S_LOAD;
     const plan = S.planReviewPendingDrain({ pr: '900', workerWorktree: 'wt-abc', reviewer: 'gpt-5.6-luna' });
-    assert.equal(plan.verb, 'reviewer-attach');
-    assert.ok(plan.argv.includes('--worktree'));
+    assert.equal(plan.verb, 'reviewer-create');
+    assert.ok(plan.argv.includes('--executor'), plan.argv.join(' '));
+    assert.ok(plan.argv.includes('mirasim'), plan.argv.join(' '));
+    assert.ok(!plan.argv.includes('--worktree'), 'mirasim 审官不挂工人树');
+    assert.equal(plan.worktree, 'wt-abc', '树仍作为排障线索留在计划里');
   });
   it('缺 reviewer 仍判失败（缺树不等于什么都能猜）', async () => {
     const S = await S_LOAD;
     assert.equal(S.planReviewPendingDrain({ pr: '901', workerWorktree: null, reviewer: '' }).ok, false);
+  });
+});
+
+// #1014：复审票两个生产者各自填 source，不许只改一个调用点，也不许靠猜补来源。
+describe('#1014 复审票来源是写票时记下的事实', () => {
+  it('缺 source 拒写（新票不许再漏）', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1014', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-luna',
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /source/);
+  });
+
+  it('不认识的 source 拒写，不许收下再猜', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1014', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-luna', source: 'guess-from-comment',
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /不认识/);
+  });
+
+  it('指挥官 rereview 可以没有工人树（快马路）', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1014', workerWorktree: null, reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+    });
+    assert.ok(built.ok, JSON.stringify(built));
+    assert.equal(built.ticket.source, S.REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW);
+    assert.equal(built.ticket.workerWorktree, null);
+  });
+
+  it('工人失败票缺工人树仍拒写', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1014', workerWorktree: null, reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /工人树/);
+  });
+
+  it('两个生产者都填自己的 source，全流程 grep 不到写死归因', () => {
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    const commanderSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const coreSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'commander-core.mjs'), 'utf8');
+    assert.ok(/REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL/.test(daoSrc),
+      'writeReviewPendingOnFail 必须填 worker-done-fail');
+    assert.ok(/REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW/.test(commanderSrc),
+      'requestRereview 必须填 commander-rereview');
+    assert.ok(/attachReviewerWhy/.test(coreSrc), 'attach-reviewer 的 why 必须走分支函数');
+    assert.ok(!/工人已交卷、worker-done 起审官失败入队/.test(daoSrc + commanderSrc + coreSrc),
+      '写死的归因字符串必须从热路消失');
   });
 });
 

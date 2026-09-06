@@ -249,6 +249,8 @@ describe('feishu-triage-core（#801 块 B）', () => {
         type: 'hub_card', repo: 'thoerwink8/windsurf-dao', number: 42,
         url: 'https://github.com/thoerwink8/windsurf-dao/issues/42',
         title: '[飞书] 加群映射', from: '客户甲',
+        what: 'x', impact: '还没拍板，不拍就不会开工',
+        recommend: '按这条需求推进', why: '三问已经齐了', deadline: '',
       });
     });
     await t.test('回复注明待拍板', () => {
@@ -536,6 +538,24 @@ describe('#801 块A 飞书适配器', () => {
     assert.equal(inbound.repo, 'thoerwink8/windsurf-dao');
   });
 
+  it('normalizeInbound：私聊 chat_type=p2p → kind=p2p，不进群映射也当问答入口', async () => {
+    const M = await MOD;
+    const inbound = M.normalizeInbound({
+      event: {
+        sender: { sender_id: { open_id: 'ou_user1' }, sender_type: 'user', sender_name: '老板' },
+        message: {
+          message_id: 'om_p2p', chat_id: 'oc_p2p_unknown', chat_type: 'p2p',
+          message_type: 'text', content: '{"text":"现在怎么样了"}', create_time: '1725000000000',
+        },
+      },
+    }, M.loadGroups(GROUPS_FIXTURE));
+    assert.ok(inbound);
+    assert.equal(inbound.kind, 'p2p');
+    assert.equal(inbound.repo, null);
+    assert.equal(inbound.chatType, 'p2p');
+    assert.equal(inbound.text, '现在怎么样了');
+  });
+
   it('normalizeInbound：回复消息 rootId = root_id；hub 群 repo = null', async () => {
     const M = await MOD;
     const groups = M.loadGroups(GROUPS_FIXTURE);
@@ -598,6 +618,8 @@ describe('#801 块A 飞书适配器', () => {
     assert.throws(() => M.loadGroups(file), /kind/);
     fs.writeFileSync(file, JSON.stringify({ oc_c: { kind: 'project' } }));
     assert.throws(() => M.loadGroups(file), /repo/);
+    fs.writeFileSync(file, JSON.stringify({ oc_d: { kind: 'hub', profile: { intents: ['hack'] } } }));
+    assert.throws(() => M.loadGroups(file), /intents/, '故意写不认识的意图必须拦');
     fs.writeFileSync(file, 'not json');
     assert.throws(() => M.loadGroups(file), /读不了/);
   });
@@ -839,7 +861,15 @@ export async function triage(inbound, deps) {
     assert.equal(card.header.title.content, '待拍板：thoerwink8/a#42');
     assert.equal(card.header.template, 'orange');
     assert.match(card.elements[0].text.content, /小明/);
-    assert.equal(card.elements[1].actions[0].url, 'https://x/42');
+    assert.match(card.elements[0].text.content, /打开单子看/);
+    const btns = card.elements[1].actions;
+    assert.equal(btns.length, 3);
+    assert.equal(btns[0].behaviors[0].type, 'callback');
+    assert.equal(btns[0].value.choice, 'recommend');
+    assert.equal(btns[0].value.issue, '42');
+    assert.equal(btns[1].value.choice, 'wait');
+    assert.equal(btns[2].value.choice, 'alternative');
+    assert.equal(btns[0].url, undefined, '回传按钮不再用跳 GitHub 的 url');
   });
 
   // —— 返工轮契约测试（审官红①+红②、帅实况 1/2/5）——

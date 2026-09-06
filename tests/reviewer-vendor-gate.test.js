@@ -127,6 +127,23 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('有且仅有一个 model/* → 放行', () => {
       assert.ok(one.ok === true && one.modelId === 'grok-4.6', JSON.stringify(one));
     });
+    const dup = S.requireWorkerModel(['model/grok-4.6', 'type/写码', 'model/grok-4.6', 'reviewer/kimi-k3']);
+    await t.test('同名 model/* 出现两次（署两张单）→ 仍是一个模型', () => {
+      assert.equal(dup.ok, true);
+      assert.equal(dup.state, 'one');
+      assert.equal(dup.modelId, 'grok-4.6');
+    });
+    const many = S.requireWorkerModel(['model/grok-4.6', 'model/pi-v2']);
+    await t.test('两个不同的 model/* → many，不许猜', () => {
+      assert.equal(many.ok, false);
+      assert.equal(many.state, 'many');
+    });
+    const revDup = S.pickReviewer(['reviewer/kimi-k3', 'type/写码', 'reviewer/kimi-k3']);
+    await t.test('同名 reviewer/* 出现两次 → 仍是一个审官', () => {
+      assert.equal(revDup.ok, true);
+      assert.equal(revDup.state, 'one');
+      assert.equal(revDup.modelId, 'kimi-k3');
+    });
   });
 
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {
@@ -254,6 +271,12 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('无 Dispatch 时认唯一 model/*', () => {
       assert.ok(fromLabel.ok && fromLabel.source === 'label' && fromLabel.modelId === 'kimi-k3', JSON.stringify(fromLabel));
     });
+    const fromDup = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'model/kimi-k3'] });
+    await t.test('同名 model/* 收集两遍仍认唯一', () => {
+      assert.equal(fromDup.ok, true);
+      assert.equal(fromDup.source, 'label');
+      assert.equal(fromDup.modelId, 'kimi-k3');
+    });
     const unscanned = resolveActualWorkerModel({});
     await t.test('两边都没有 → 没查成，不许从卡名猜', () => {
       assert.ok(unscanned.ok === false && unscanned.state === 'unscanned' && /不许从卡名猜|没查成/.test(unscanned.error),
@@ -313,7 +336,7 @@ describe('#679 起审官同厂硬闸', () => {
   it('CLI：dispatch 预检不再闸同厂（2026-08-23 拍板），闸在 reviewer-attach/create', async (t) => {
     function dispatch(model, reviewer) {
       return spawnSync(process.execPath, [
-        CLI, 'dispatch', '--model', model, '--reviewer', reviewer, '--confirm',
+        CLI, 'dispatch', '--executor', 'orca', '--model', model, '--reviewer', reviewer, '--confirm',
         '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--dry-run',
       ], { encoding: 'utf8', cwd: REPO });
     }
@@ -479,7 +502,7 @@ describe('#679 起审官同厂硬闸', () => {
         `status=${blocked.status} ` + JSON.stringify(pBlocked).slice(0, 300));
     });
     const wdFlag = spawnSync(process.execPath, [
-      CLI, 'worker-done', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run',
+      CLI, 'worker-done', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run', '--executor', 'orca',
     ], { encoding: 'utf8', cwd: REPO, env });
     const pWdFlag = payload(wdFlag);
     await t.test('worker-done --reviewer：无 reviewer/* label 也能起审官（reviewerSource=flag）', () => {
@@ -490,7 +513,7 @@ describe('#679 起审官同厂硬闸', () => {
       `status=${wdFlag.status} ` + JSON.stringify(pWdFlag).slice(0, 400));
     });
     const wdNoFlag = spawnSync(process.execPath, [
-      CLI, 'worker-done', '--pr', '48', '--dry-run',
+      CLI, 'worker-done', '--pr', '48', '--dry-run', '--executor', 'orca',
     ], { encoding: 'utf8', cwd: REPO, env });
     const pWdNoFlag = payload(wdNoFlag);
     await t.test('不传 --reviewer 仍自读 label：扫完 0 条 → 照旧拒（没放宽 label 那道）', () => {
@@ -526,8 +549,9 @@ describe('#679 起审官同厂硬闸', () => {
     });
     await t.test('检查已接进 dao-check（不接 = 规矩没有哨）', () => {
       const src = require('fs').readFileSync(path.join(REPO, 'scripts', 'dao-check.mjs'), 'utf8');
-      assert.ok(/checkModelLabelNames\(\);/.test(src) && /model-label-name-check\.mjs/.test(src),
-        'dao-check 没调 checkModelLabelNames');
+      assert.match(src, /checkModelLabelNames\(\)/);
+      assert.match(src, /model-label-name-check\.mjs/);
+      assert.match(src, /if \(FULL\) checkModelLabelNames\(\)/);
     });
   });
 });

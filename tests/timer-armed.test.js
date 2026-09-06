@@ -1,5 +1,5 @@
 // dao timer 必须有「下一次」（2026-09-05 实咬）。
-// 当天 dao-agent-stall.timer 从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
+// 当天 dao-agent-stall.timer（该单元 2026-09-06 随屏面指纹层退役）从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
 // list-timers --all 里照样列着——server-check 的 ⑮⑯ 两条全绿，#833 的自动换人整段无声停摆。
 // 真相只在「有没有未来触发点」这一格：NEXT 显示 n/a，SubState=elapsed。
 const { describe, it } = require('node:test');
@@ -14,10 +14,10 @@ describe('timer 有没有下一次触发', () => {
     const S = await LOAD;
     const r = S.classifyTimerArmed({ probed: true, units: [
       { unit: 'dao-sync.timer', next: '1788600000000000' },
-      { unit: 'dao-agent-stall.timer', next: null },
+      { unit: 'dao-progress-watch.timer', next: null },
     ] });
     assert.equal(r.state, 'red');
-    assert.match(r.detail, /dao-agent-stall\.timer/, '要点名死掉的那个，不能只给个数字');
+    assert.match(r.detail, /dao-progress-watch\.timer/, '要点名死掉的那个，不能只给个数字');
   });
 
   it('systemd 的几种「没有下一次」写法都算死', async () => {
@@ -197,5 +197,61 @@ describe('潜伏的死态：活着但没有墙钟点位', () => {
     ] });
     assert.equal(r.state, 'red');
     assert.match(r.detail, /没有下一次触发/);
+  });
+});
+
+// ── 「没有下一次」的两种，必须分得开（2026-09-05 本闸自己误报过一次）──
+//
+// commander-act 派工人一跑好几分钟。扫描恰好落在它执行中，timer 的 SubState=running、
+// 两个 NextElapse 都空——判据只看「有没有下一次」，就把**正在干活**报成了**已经死了**。
+// 真死态是 SubState=elapsed/waiting 且没有下一次。少这一维，闸每天都会假报几次，
+// 而假报多了就没人看（判例 downgrading-false-alarm-can-disable-the-guard）。
+describe('timer 没有下一次：正在跑 vs 真死态', () => {
+  const MOD = import('../scripts/server-check.mjs');
+  const armed = (unit) => ({ unit, next: 'Sat 2026-09-05 22:36:00 CST', calendar: true, subState: 'waiting' });
+
+  it('SubState=running 且没有下一次 → 不报红（服务跑完才排下一次，这时没有是对的）', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      armed('dao-sync.timer'),
+      { unit: 'commander-act.timer', next: null, calendar: true, subState: 'running' },
+    ] });
+    assert.equal(r.state, 'ok', '正在干活不是死了');
+    assert.match(r.detail, /正在跑/, '要说出来有几个在跑，别静默——「没报红」和「没看见」得分得开');
+  });
+
+  it('判别力反证：SubState=waiting 且没有下一次 → 照旧判红（别为了消误报把闸关掉）', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      armed('dao-sync.timer'),
+      { unit: 'dao-progress-watch.timer', next: null, calendar: true, subState: 'waiting' },
+    ] });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /dao-progress-watch\.timer/);
+  });
+
+  it('SubState 读不到（空串）且没有下一次 → 判红，不当成「可能在跑」放过', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      { unit: 'dao-x.timer', next: null, calendar: true, subState: '' },
+    ] });
+    assert.equal(r.state, 'red', '读不到 SubState 时宁可报红——放过一个死 timer 的代价大得多');
+  });
+
+  it('正在跑的 timer 若缺 OnCalendar，潜伏红照报（两条判据互不遮蔽）', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      { unit: 'gw-remote-probe.timer', next: null, calendar: false, subState: 'running' },
+    ] });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /OnCalendar/);
+  });
+
+  it('SubState=elapsed（真死态的那个字面值）→ 判红', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      { unit: 'dao-board-gc.timer', next: null, calendar: true, subState: 'elapsed' },
+    ] });
+    assert.equal(r.state, 'red', 'elapsed 是 systemd 对死态的原话，要有一条直接钉它');
   });
 });

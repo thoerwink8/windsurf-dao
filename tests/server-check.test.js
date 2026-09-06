@@ -8,12 +8,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import {
   classifyOrcaStdout,
   classifyRuntimeStatus,
   classifyAccountsResult,
   classifyFeishuTriage,
-  classifyAgentStallWatch,
+  classifyStallWatchTimer,
   classifyBotModelProbe,
   parseEnvFile,
   UNPROBEABLE_CODES,
@@ -29,7 +31,11 @@ import {
   classifyExecutableEntry,
   whichOnPath,
   scanRetiredClis,
+  DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SERVER_CHECK_SRC = resolve(HERE, '..', 'scripts', 'server-check.mjs');
 
 test('server-check 判别力', async (t) => {
   await t.test('classifyOrcaStdout', async (t) => {
@@ -277,56 +283,77 @@ test('server-check 判别力', async (t) => {
     });
   });
 
-  await t.test('classifyAgentStallWatch（⑮ #833，另起一项不改 automations 行）', async (t) => {
-    await t.test('正式 timer 在册且垫片不在 → ok', () => {
-      const r = classifyAgentStallWatch({
+  await t.test('classifyStallWatchTimer（⑮ 卡死发现 timer：屏面指纹层退役后守 progress-watch）', async (t) => {
+    await t.test('progress-watch 在册、NEXT 是时间、退役件不在 → ok', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
-        padScriptExists: false,
+        timersText: 'Sat 2026-09-06 13:15:00 CST  14min Sat 2026-09-06 13:00:00 CST  1min ago dao-progress-watch.timer dao-progress-watch.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'ok');
     });
 
-    await t.test('垫片 timer 还在 → red（影子制度）', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('在册但 NEXT 是横杠 → red（空转，扫描等于没拉）', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
-        padScriptExists: false,
+        timersText: '-                               - Sat 2026-09-06 12:37:14 CST            - dao-progress-watch.timer     dao-progress-watch.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /垫片/);
+      assert.match(r.detail, /NEXT/);
     });
 
-    await t.test('垫片脚本还在 → red，即使正式 timer 已在', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('退役的 dao-agent-stall.timer 还在 → red，即使 progress-watch 已在册', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
-        padScriptExists: true,
-      });
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /agent-stall-watch\.mjs/);
-    });
-
-    await t.test('正式 timer 不在册 → red，带怎么起', () => {
-      const r = classifyAgentStallWatch({
-        probed: true,
-        timersText: 'Thu sysstat-collect.timer',
-        padScriptExists: false,
+        timersText: 'Thu dao-progress-watch.timer\nThu dao-agent-stall.timer dao-agent-stall.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /dao-agent-stall\.timer/);
     });
 
+    await t.test('Contabo 垫片 timer 还在 → red（影子制度）', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
+        retiredScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /垫片/);
+    });
+
+    await t.test('退役脚本还在 → red，即使 progress-watch 已在册', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu dao-progress-watch.timer dao-progress-watch.service',
+        retiredScriptExists: true,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /agent-stall-watch\.mjs/);
+    });
+
+    await t.test('progress-watch 不在册 → red，带怎么起', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu sysstat-collect.timer',
+        retiredScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /dao-progress-watch\.timer/);
+      assert.match(r.detail, /install-progress-watch/);
+    });
+
     await t.test('systemctl 探不到 → unknown，不当绿', () => {
-      const r = classifyAgentStallWatch({ probed: false, reason: 'spawn 失败：ENOENT' });
+      const r = classifyStallWatchTimer({ probed: false, reason: 'spawn 失败：ENOENT' });
       assert.equal(r.state, 'unknown');
     });
 
-    await t.test('垫片脚本没查成 → unknown', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('退役脚本没查成 → unknown', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-agent-stall.timer',
-        padScriptUnknown: true,
+        timersText: 'Thu dao-progress-watch.timer',
+        retiredScriptUnknown: true,
       });
       assert.equal(r.state, 'unknown');
     });
@@ -662,4 +689,25 @@ test('⑳ 单元漂移', async (t) => {
     const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
     assert.equal(r.state, 'ok');
   });
+});
+
+test('#984 ⑪ 预算 60s + orca 面 9 项挂退役牌', () => {
+  assert.equal(DAO_CHECK_NESTED_TIMEOUT_MS, 60_000, '⑪ 预算必须是 60s——改回 180s/600s 这条要红');
+  const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+  assert.match(src, /timeout: DAO_CHECK_NESTED_TIMEOUT_MS/,
+    '⑪ 必须用命名常量，不许再写 180000/600000');
+  assert.doesNotMatch(src, /timeout:\s*180000/,
+    '⑪ 不许再写 180s 硬编码');
+  assert.match(src, /dao-check 自己 \$\{ms\}ms/,
+    '⑪ detail 必须带 dao-check 自己的耗时');
+  const retired = ['① orca 在 PATH', '④ runtime 可达', '⑤ worktree 面', '⑥ terminal 面',
+    '⑦ orchestration 面', '⑧ automations 面', '⑨ 本仓已注册进 orca', '⑩ 托管账号可用',
+    '⑬ start=agent'];
+  const lines = src.split(/\r?\n/);
+  for (const name of retired) {
+    const line = lines.find((l) => l.includes(name) && l.includes('退役条件：mirasim 派工实跑 + orca 退役'));
+    assert.ok(line, `${name} 必须挂退役牌`);
+  }
+  assert.match(src, /现在不删/,
+    '退役牌必须写现在不删');
 });

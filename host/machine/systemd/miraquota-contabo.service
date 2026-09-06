@@ -1,0 +1,30 @@
+# /etc/systemd/system/miraquota-contabo.service
+#
+# Contabo 上 mirasim-server 烧掉的云端额度，推进 MiraQuota 多机页（#881）。
+# 脚本 scripts/miraquota-contabo-sync.mjs：问本机 getRelay，按 miraquota-win 的
+# machine/<名> 分片约定 force-push 到账本仓 machine/contabo。
+#
+# User=orca 是硬要求：ExecStart 指 /srv/projects/windsurf-dao 里的脚本，那个仓
+# 每个执行体都能写；以 root 解释它等于给每个能写仓的执行体一条 root 通道
+# （dao-sync / miraquota-sync 都这么漏过，tests/unit-privilege.test.js 守着）。
+#
+# 装（服务器）：sudo bash scripts/install-miraquota-contabo.sh
+# 验：systemctl list-timers | grep miraquota-contabo；NEXT 必须是时间不能是 `-`
+#     journalctl -u miraquota-contabo -n 5
+
+[Unit]
+Description=MiraQuota Contabo 采样器（getRelay → machine/contabo）
+After=network-online.target mirasim-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/miraquota-contabo-sync.mjs --once
+# 2 = 没查成（令牌不在 / 连不上）。故意留成失败：没查成要在 systemctl --failed 里看得见，
+# 不许跟「查过没事」长成一个样。
+StandardOutput=journal
+StandardError=journal

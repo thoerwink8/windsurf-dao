@@ -24,6 +24,7 @@
 // 2026-09-05 人工救 ISSUE-#852 / #874 走的就是这两步，这里把它自动化。
 // 推与删的顺序不可换，也不可省：push 没成功而树删了 = 活真丢了（删树不可逆，salvage 是唯一备份）。
 
+import { resolve } from 'node:path';
 import { worktreeIdOf, prNumberFromWorktree } from './card-identity.mjs';
 
 /** 卡 + 它的全部后代（用 childWorktreeIds 递归，认不出的子 id 也报出来）。 */
@@ -59,6 +60,84 @@ function lookup(map, key) {
   if (map instanceof Map) return map.get(key);
   if (map && typeof map === 'object') return map[key];
   return undefined;
+}
+
+/**
+ * 解析 `git status --porcelain`（#1001）。
+ * dirty = 非 `??` 行数（tracked 改动）；derived = `??` 行的文件名。
+ * 僵尸归类和 salvageDecision 必须走这里，不许各写一份
+ * （memory fix-landed-at-one-call-site-only）。
+ */
+export function parseGitStatusPorcelain(porcelain) {
+  const dirtyFiles = [];
+  const derived = [];
+  for (const line of String(porcelain || '').split(/\r?\n/)) {
+    if (!line) continue;
+    const rest = line.length >= 3 ? line.slice(3) : '';
+    let file = rest;
+    if (!line.startsWith('??')) {
+      const arrow = rest.lastIndexOf(' -> ');
+      if (arrow !== -1) file = rest.slice(arrow + 4);
+    }
+    if (file.startsWith('"') && file.endsWith('"') && file.length >= 2) {
+      file = file.slice(1, -1);
+    }
+    if (line.startsWith('??')) derived.push(file);
+    else dirtyFiles.push(file);
+  }
+  return { dirty: dirtyFiles.length, dirtyFiles, derived };
+}
+
+/**
+ * 两处判据的入口：有 porcelain 就解析，否则才信已经数好的 dirty/derived。
+ * salvageDecision 与 planBoardGc 都只许走这里。
+ */
+export function dirtFrom(input = {}) {
+  if (typeof input === 'string') return parseGitStatusPorcelain(input);
+  if (input && typeof input.porcelain === 'string') return parseGitStatusPorcelain(input.porcelain);
+  return {
+    dirty: Number(input && input.dirty) || 0,
+    dirtyFiles: Array.isArray(input && input.dirtyFiles) ? input.dirtyFiles : [],
+    derived: Array.isArray(input && input.derived) ? input.derived : [],
+  };
+}
+
+function derivedNote(z, { future = false } = {}) {
+  const d = Array.isArray(z && z.derived) ? z.derived : [];
+  if (!d.length) return '';
+  return `｜${future ? '将弃' : '弃'} ${d.length} 个派生物：${d.join('、')}`;
+}
+
+/** 派生物必须落在树内才许弃；路径逃出树外整批作废（没查成 ≠ 可弃）。 */
+export function resolveDiscardPaths(treePath, derived) {
+  if (!treePath) return { ok: false, error: '没有树路径，派生物弃不了', paths: [] };
+  const root = resolve(String(treePath)).replace(/\\/g, '/').replace(/\/+$/, '');
+  const paths = [];
+  for (const f of (Array.isArray(derived) ? derived : [])) {
+    if (!f) continue;
+    const abs = resolve(String(treePath), String(f)).replace(/\\/g, '/');
+    if (abs !== root && !abs.startsWith(root + '/')) {
+      return { ok: false, error: `派生物路径逃出树外：${f}`, paths: [] };
+    }
+    paths.push(resolve(String(treePath), String(f)));
+  }
+  return { ok: true, paths };
+}
+
+/**
+ * 把删树结果并回判决：报告头按实清 / 清不掉分段，不许再用判决数冒充结果数（#1001）。
+ * @param results 卡 id → { ok: true } | { ok: false, error }
+ */
+export function applyBoardGcRemoves(plan, results) {
+  if (!plan || plan.ok !== true) return plan;
+  const cleared = [];
+  const failed = [];
+  for (const z of (plan.zombies || [])) {
+    const r = lookup(results, z && z.id);
+    if (r && r.ok === true) cleared.push(z);
+    else failed.push({ ...z, removeError: String((r && (r.error || r.err)) || '没拿到删树结果') });
+  }
+  return { ...plan, cleared, failed };
 }
 
 /** PR 态归一：MERGED / CLOSED 算「活已了结」，OPEN 算「还需要」，其余当没查成。 */
@@ -109,9 +188,10 @@ export function salvageBranchName({ name, branch } = {}) {
  *   - 分支不在远端：已经在远端的本来就有备份，不用再造一条。
  *   - 有树路径、拼得出名字：推不了的不硬推。
  */
-export function salvageDecision({ name, branch, path, ahead, dirty, onRemote } = {}) {
+export function salvageDecision({ name, branch, path, ahead, dirty, onRemote, porcelain } = {}) {
   if (!(Number(ahead) > 0)) return { ok: false, why: '没有本地提交，没东西可推' };
-  if (Number(dirty) > 0) return { ok: false, why: `有 ${dirty} 个未提交改动，push 救不了——只报不删` };
+  const dirt = dirtFrom({ dirty, porcelain });
+  if (dirt.dirty > 0) return { ok: false, why: `有 ${dirt.dirty} 个未提交改动，push 救不了——只报不删` };
   if (onRemote) return { ok: false, why: '分支已在远端，本来就有备份' };
   if (!path) return { ok: false, why: '卡上没有树路径，推不了' };
   const b = salvageBranchName({ name, branch });
@@ -156,10 +236,58 @@ export function applySalvage(plan, results) {
     zombies.push({
       id: r.id, name: r.name, path: r.path || null, kind: 'salvaged',
       salvageBranch: r.salvage.branch,
+      derived: Array.isArray(r.derived) ? r.derived : [],
       why: `${r.salvage.ahead} 个本地提交已推到 ${r.salvage.branch}，远端有备份，删本地树不丢活`,
     });
   }
   return { ...plan, zombies, risky };
+}
+
+/**
+ * 候选僵尸过 dirty 闸：tracked 改动进 risky；未跟踪派生物只在已结算时随树清。
+ * 已结算 = 分支在远端，或相对 master 零提交（PR 已合/已关、无活口已在进入本函数前验过）。
+ */
+function classifyCandidate(entry, card, branchState) {
+  const branch = String((card && card.branch) || entry.branch || '').replace(/^refs\/heads\//, '');
+  const bs = lookup(branchState, branch);
+  const dirt = dirtFrom(bs || {});
+  const ahead = Number(bs && bs.ahead) || 0;
+  const onRemote = !!(bs && bs.onRemote);
+  const path = entry.path || (card && card.path) || null;
+  if (dirt.dirty > 0) {
+    const d = salvageDecision({
+      name: entry.name, branch, path, ahead, dirty: dirt.dirty,
+      porcelain: bs && bs.porcelain, onRemote,
+    });
+    return {
+      bucket: 'risky',
+      item: {
+        id: entry.id, name: entry.name, path, branch,
+        why: `${entry.why}｜有 ${dirt.dirty} 个 tracked 改动，不自动删——要人判`,
+        derived: dirt.derived,
+        ...(d.ok ? { salvage: { branch: d.branch, ahead } } : { salvageBlocked: d.why }),
+      },
+    };
+  }
+  if (dirt.derived.length) {
+    const settled = !!(bs && typeof bs === 'object' && (
+      bs.onRemote === true
+      || (Object.prototype.hasOwnProperty.call(bs, 'ahead') && Number(bs.ahead) === 0)
+    ));
+    if (!settled) {
+      return {
+        bucket: 'risky',
+        item: {
+          id: entry.id, name: entry.name, path, branch,
+          why: `${entry.why}｜有未跟踪派生物但已结算证据不全（分支未在远端且相对 master 不是零提交），不许弃也不许删`,
+          derived: dirt.derived,
+          salvageBlocked: '已结算证据不全，未跟踪文件不许弃',
+        },
+      };
+    }
+    return { bucket: 'zombie', item: { ...entry, path, derived: dirt.derived } };
+  }
+  return { bucket: 'zombie', item: entry };
 }
 
 /**
@@ -181,10 +309,11 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
   if (!(aliveWorktreeIds instanceof Set)) {
     return { ok: false, error: '活性没查成（没给 alive 集合），一张都不判', zombies: [], keep: [], risky: [], unscanned: [] };
   }
-  const zombies = [];
+  const candidates = [];
   const keep = [];
   const risky = [];
   const unscanned = [];
+  const zombies = candidates;
 
   const dupZombieIds = new Set();
   const dupWhy = new Map();
@@ -330,13 +459,17 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
       continue;
     }
     const ahead = Number(bs.ahead) || 0;
-    const dirty = Number(bs.dirty) || 0;
+    const dirt = dirtFrom(bs);
+    const dirty = dirt.dirty;
     // risky 卡统一从这里出，顺手判它能不能自动救（#950）。能救的带 salvage.branch，
     // 不能救的把理由写进 salvageBlocked——「为什么没自动救」要看得见，否则人只会看见它一直挂着。
     const riskyCard = (why) => {
-      const d = salvageDecision({ name, branch, path: w.path || null, ahead, dirty, onRemote: !!bs.onRemote });
+      const d = salvageDecision({
+        name, branch, path: w.path || null, ahead, dirty,
+        porcelain: bs.porcelain, onRemote: !!bs.onRemote,
+      });
       return {
-        id, name, path: w.path || null, branch, why,
+        id, name, path: w.path || null, branch, why, derived: dirt.derived,
         ...(d.ok ? { salvage: { branch: d.branch, ahead } } : { salvageBlocked: d.why }),
       };
     };
@@ -380,17 +513,49 @@ export function planBoardGc({ worktrees, aliveWorktreeIds, prState, branchState,
     keep.push({ id, name, why: `无 PR，但分支 ${branch} 有 ${ahead} 个提交待处理（远端有备份）` });
   }
 
-  return { ok: true, zombies, keep, risky, unscanned };
+  const classifiedZombies = [];
+  for (const z of candidates) {
+    const card = worktrees.find((x) => x && String(worktreeIdOf(x)) === String(z.id));
+    const c = classifyCandidate(z, card, branchState);
+    if (c.bucket === 'risky') risky.push(c.item);
+    else classifiedZombies.push(c.item);
+  }
+  return { ok: true, zombies: classifiedZombies, keep, risky, unscanned };
+}
+
+function cardLine(z, { apply = false } = {}) {
+  const extra = z.children ? `｜带 ${z.children} 张子卡` : '';
+  return `- ${z.name}｜${z.why}${extra}${derivedNote(z, { future: !apply })}`;
 }
 
 /** 渲染成人读报告。没查成的那节必须显形，不许装成「扫完是空的」。 */
 export function formatBoardGc(plan, { apply = false } = {}) {
   if (!plan || plan.ok !== true) return `盘面 GC 没跑成：${plan?.error || '未知原因'}`;
   const L = [];
-  L.push(`僵尸卡 ${plan.zombies.length} 张｜留着 ${plan.keep.length} 张｜要人判 ${plan.risky.length} 张｜没查成 ${plan.unscanned.length} 张`);
-  if (plan.zombies.length) {
-    L.push('', apply ? '## 已清' : '## 将清（--apply 才真删）');
-    for (const z of plan.zombies) L.push(`- ${z.name}｜${z.why}${z.children ? `｜带 ${z.children} 张子卡` : ''}`);
+  if (apply) {
+    const cleared = Array.isArray(plan.cleared) ? plan.cleared : [];
+    const failed = Array.isArray(plan.failed) ? plan.failed : [];
+    L.push(`判决僵尸 ${plan.zombies.length} 张｜实清 ${cleared.length} 张｜清不掉 ${failed.length} 张｜要人判 ${plan.risky.length} 张｜没查成 ${plan.unscanned.length} 张`);
+    L.push('', `## 已清（${cleared.length} 张）`);
+    if (cleared.length) {
+      for (const z of cleared) L.push(cardLine(z, { apply: true }));
+    } else {
+      L.push('- （本轮一张都没清成）');
+    }
+    L.push('', `## 清不掉（${failed.length} 张，附原因）`);
+    if (failed.length) {
+      for (const z of failed) {
+        L.push(`- ${z.name}｜${z.removeError || '清不掉'}${derivedNote(z, { apply: true })}`);
+      }
+    } else {
+      L.push('- （没有清不掉的）');
+    }
+  } else {
+    L.push(`僵尸卡 ${plan.zombies.length} 张｜留着 ${plan.keep.length} 张｜要人判 ${plan.risky.length} 张｜没查成 ${plan.unscanned.length} 张`);
+    if (plan.zombies.length) {
+      L.push('', '## 将清（--apply 才真删）');
+      for (const z of plan.zombies) L.push(cardLine(z, { apply: false }));
+    }
   }
   if (plan.risky.length) {
     L.push('', '## 要人判（有活可能丢，不自动删）');

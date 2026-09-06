@@ -174,3 +174,16 @@ close-issues :23、commander-inventory :41）。原文件备份 `gw-remote-probe
 某个仓并登记进 INDEX.md，要么明确判它是「机器本地、不进仓」并写清重装时怎么恢复。
 
 status: done
+
+---
+
+处置：已修，无需开单（2026-09-05 帅位）。
+
+1. **墙钟点位已补**：加 drop-in `/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf`，
+   `OnCalendar=*:07/30`。验证 `NextElapseUSecRealtime=Sat 2026-09-05 19:37:00 CST`——
+   从「只有单调时钟」变成「有墙钟点位」，再停再起能自己爬出来。
+2. **闸的扫描面已改**（commit 878910d，本报告指出的第二半）：⑱ 不再按 `dao|commander`
+   名字前缀圈定，改为扫机器上每一个 timer 并排除发行版自带的那批。
+   服务器实测：`9 个 dao timer 都有下一次触发，且都有墙钟点位`，server-check 20 通 0 红。
+
+本报告两条都成立，且都是巡检自己抓到我当天的活没落到机器上——这条闭环有效。
