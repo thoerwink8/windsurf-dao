@@ -1,5 +1,5 @@
 // dao timer 必须有「下一次」（2026-09-05 实咬）。
-// 当天 dao-agent-stall.timer 从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
+// 当天 dao-agent-stall.timer（该单元 2026-09-06 随屏面指纹层退役）从 12:37 起再没跑过，而 systemctl 说它 active + enabled，
 // list-timers --all 里照样列着——server-check 的 ⑮⑯ 两条全绿，#833 的自动换人整段无声停摆。
 // 真相只在「有没有未来触发点」这一格：NEXT 显示 n/a，SubState=elapsed。
 const { describe, it } = require('node:test');
@@ -14,10 +14,10 @@ describe('timer 有没有下一次触发', () => {
     const S = await LOAD;
     const r = S.classifyTimerArmed({ probed: true, units: [
       { unit: 'dao-sync.timer', next: '1788600000000000' },
-      { unit: 'dao-agent-stall.timer', next: null },
+      { unit: 'dao-progress-watch.timer', next: null },
     ] });
     assert.equal(r.state, 'red');
-    assert.match(r.detail, /dao-agent-stall\.timer/, '要点名死掉的那个，不能只给个数字');
+    assert.match(r.detail, /dao-progress-watch\.timer/, '要点名死掉的那个，不能只给个数字');
   });
 
   it('systemd 的几种「没有下一次」写法都算死', async () => {
@@ -224,10 +224,10 @@ describe('timer 没有下一次：正在跑 vs 真死态', () => {
     const { classifyTimerArmed } = await MOD;
     const r = classifyTimerArmed({ probed: true, units: [
       armed('dao-sync.timer'),
-      { unit: 'dao-agent-stall.timer', next: null, calendar: true, subState: 'waiting' },
+      { unit: 'dao-progress-watch.timer', next: null, calendar: true, subState: 'waiting' },
     ] });
     assert.equal(r.state, 'red');
-    assert.match(r.detail, /dao-agent-stall\.timer/);
+    assert.match(r.detail, /dao-progress-watch\.timer/);
   });
 
   it('SubState 读不到（空串）且没有下一次 → 判红，不当成「可能在跑」放过', async () => {

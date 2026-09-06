@@ -63,13 +63,18 @@ jobs:
             fi
           done
 
-      - run: node scripts/dao-check.mjs
+      # 显式 `--all-tests`：CI 是那道全量的网，不许依赖「碰巧没有地图所以退全量」这种隐含行为。
+      # 2026-09-06 dao-check 的默认档从全量翻成裁剪；CI 这条当时**不加旗标也仍是全量**
+      # （全新 clone 没有影响地图 ⇒ affectedTests 直接回 full），但那是涌现出来的正确，
+      # 不是写下来的意图——地图哪天进了缓存，CI 就会在没人察觉的情况下开始裁剪。
+      #
+      # 为什么不用 `--full`：它还会打开 7 项探网检查，那些至今没在 CI 跑过。
+      # 本次改的是「跑哪些测试」，顺手把 CI 的检查面也扩一倍是另一件事，不混进来。
+      - run: node scripts/dao-check.mjs --all-tests
         env:
           # #567：不给 token 时 gh 在 Actions 里必报「set the GH_TOKEN environment variable」，
           # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。
           GH_TOKEN: ${{ github.token }}
 
-      # 影响地图（TIA）不进 git，是每台机器自己的派生数据——所以 CI 这里**没有地图**，
-      # `--affected` 会自动退全量，正是已拍板的分层（CI 全量、本地快档）。
-      # CI 不需要建图，也不需要比对漂移：本地地图的时效由它自己的健康度判据管
-      # （落后 HEAD 太多即报），CI 的职责只是那道全量的网。
+      # 影响地图（TIA）不进 git，是每台机器自己的派生数据 ⇒ CI 这里没有地图，也不需要有。
+      # 它现在是 dao-check 跑测试的副产物，没有建图动作、没有健康闸、没有漂移比对。

@@ -86,7 +86,7 @@
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
-import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
@@ -143,7 +143,7 @@ import {
 import { judgeCompetingPrs, collectOpenPrNewFiles } from './lib/competing-prs.mjs';
 import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
-import { affectedTests, mapHealth } from './lib/test-impact.mjs';
+import { affectedTests, depsFromRun, mergeMapEntries } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
 
@@ -216,16 +216,31 @@ function runOneSuite(dir, f) {
     const args = ['--test', '--test-reporter=tap', p];
     let out = '';
     let child;
+    // 顺手采依赖（2026-09-06）：跑都跑了，把「这套碰过哪些文件」记下来并回影响地图。
+    // 实测只贵 8%（18 套 5049ms → 5445ms），换掉的是一个要人维护、建一次 110 秒的机制。
+    let covDir = null;
+    let readLog = null;
+    try {
+      covDir = mkdtempSync(join(tmpdir(), 'dao-ti-'));
+      readLog = join(covDir, 'reads.txt');
+    } catch { covDir = null; readLog = null; }   // 采不了就不采，测试照跑（采样是副产物，不是前提）
     try {
       // 测试期禁止出网（2026-09-06）：--import 预加载拦截器，NODE_OPTIONS 会继承给
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      // 覆盖率只看得见执行过的 JS；数据文件（json/md/toml…）靠 record-reads 记。
+      // 两者都经 NODE_OPTIONS/环境继承罩住 spawn 出去的 CLI。
+      const recorder = join(ROOT, 'tests', 'helpers', 'record-reads.mjs');
       const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
+      const imports = covDir
+        ? `--import ${pathToFileURL(guard).href} --import ${pathToFileURL(recorder).href}`
+        : `--import ${pathToFileURL(guard).href}`;
       const env = {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} ${imports}`.trim(),
+        ...(covDir ? { NODE_V8_COVERAGE: covDir, DAO_READ_LOG: readLog, DAO_READ_ROOT: ROOT } : {}),
       };
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
     } catch (e) {
@@ -235,14 +250,35 @@ function runOneSuite(dir, f) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const t0 = Date.now();
-    child.on('error', (e) => resolveOne({ f, status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
-    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, ms: Date.now() - t0, out }));
+    const finish = (extra) => {
+      let deps = null;
+      if (covDir) {
+        try {
+          deps = depsFromRun({
+            covDir, readLog, root: ROOT, testFile: `tests/${f}`,
+            io: { exists: existsSync, readDir: readdirSync, readFile: (x) => readFileSync(x, 'utf8') },
+          });
+        } catch { deps = null; }               // 采样出错不影响判定，只是这套下轮照跑
+        try { rmSync(covDir, { recursive: true, force: true }); } catch { /* 清不掉不影响判定 */ }
+      }
+      resolveOne({ f, deps, ...extra });
+    };
+    child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
+    child.on('close', (code) => finish({ status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
 }
 
-// ── 只跑受影响的（#TIA，2026-09-06 用户拍板）────────────────────────────
-// 默认全量；`--affected` 才按影响地图裁剪。默认不裁是有意的——
-// 「漏跑」是静默的，所以要裁必须由调用方显式开口（land.mjs 本地开，CI 全量兜底）。
+// ── 只跑受影响的（#TIA）────────────────────────────────────────────────
+// **默认就裁**（2026-09-06 用户拍板翻转过来的）。原设计是默认全量、`--affected` 才裁，
+// 理由是「漏跑是静默的，要裁必须调用方显式开口」。翻转的依据是实测：
+//   · CLAUDE.md 教给人的命令正是不带旗标那条 ⇒ 人和 AI 拿到的一直是 30s 的慢路，
+//     快档只有 land.mjs 自己在用。默认值就是实际行为，写在文档里的不算。
+//   · 「漏跑」这个担心已经由 affectedTests 规则 ④ 顶掉了：**不在图里的一律跑**，
+//     没有地图就整个退全量。裁剪只会跳过「图里明确说了不碰」的那些。
+// 全量：`--full`（同时打开要出网的那几项）。`--affected` 保留为等价别名，老调用不必改。
+//
+// 兜底仍是两处，不靠这一次：CI 每次 PR 全量（它是全新 clone、没有地图 ⇒ 自动退全量）、
+// land.mjs 推之前再跑一遍。
 //
 // 变更集口径（定错就是静默漏跑，这里写死不许猜）：
 //   origin/<默认分支>..HEAD 的改动  ∪  工作区未提交改动（含未跟踪）
@@ -284,7 +320,9 @@ function changedFilesForAffected() {
 
 /** 返回本轮要跑的测试文件名（不带 tests/ 前缀，与调用方一致）。 */
 function selectSuites(allSuites) {
-  if (!process.argv.includes('--affected')) return allSuites;
+  // 两个旗标是**两根轴**，别合并：`--all-tests` 只管跑全部测试（CI 用），
+  // `--full` 在它之上还打开要出网的那几项（帅位本地用）。CI 不该顺带被扩检查面。
+  if (process.argv.includes('--full') || process.argv.includes('--all-tests')) return allSuites;
   const all = allSuites.map(f => `tests/${f}`);
   const { scanned, files } = changedFilesForAffected();
   if (!scanned) {
@@ -302,7 +340,7 @@ function selectSuites(allSuites) {
 }
 
 // 地图是本机派生数据，落 ~/.dao/test-impact/（不进 git，理由见 test-impact-map.mjs 头部）。
-// CI 是全新 clone、没有地图 ⇒ affected 自动退全量，这正是已拍板的分层。
+// CI 是全新 clone、没有地图 ⇒ 自动退全量，这正是已拍板的分层。
 function impactMapPath() {
   return process.env.DAO_IMPACT_MAP || join(homedir(), '.dao', 'test-impact', 'map.json');
 }
@@ -312,23 +350,37 @@ function readImpactMap() {
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
 }
 
-/** 地图健康度：漏登记/幽灵/太旧即红。**只在全量模式判**——裁剪模式下它是前置条件，另有把关。 */
-function checkImpactMapHealth() {
-  const dir = join(ROOT, 'tests');
-  if (!existsSync(dir)) return;
-  const all = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort().map(f => `tests/${f}`);
-  const map = readImpactMap();
-  if (!map) {
-    // 没有地图不是红：CI / 新机本来就没有，affected 会退全量，是安全的降级。
-    skip(`影响地图不在本机（${impactMapPath()}）——--affected 会退全量；要用快档先跑 node scripts/test-impact-map.mjs build`);
+/**
+ * 把本轮跑过的那些套的依赖并回地图——地图是跑测试的副产物，没有独立的建图动作。
+ *
+ * 这里确实是「检查器往自己会读的文件里写东西」，本仓有一条规矩禁这个。豁免的理由要写清：
+ * 那条规矩防的是**输出回流进判据、命中数越跑越多**。地图不产判定、只决定跑哪几套，
+ * 而写错的方向是安全的——采不到就不写，不写就是「不在图里」，规则 ④ 让它下轮照跑。
+ * 唯一危险的写法是「写个空数组冒充无依赖」，depsFromRun 对此回 null、mergeMapEntries 跳过。
+ *
+ * `allTests` 只在全量跑时才传：裁剪跑没跑到的套不代表它不存在，拿它去剔条目会把图剃秃。
+ */
+function saveImpactMap(results, { allTests = null } = {}) {
+  const sampled = {};
+  for (const r of results) if (r && Array.isArray(r.deps)) sampled[`tests/${r.f}`] = r.deps;
+  if (Object.keys(sampled).length === 0) {
+    notes.push('影响地图：本轮一套依赖都没采到（不写图，这些套下轮照跑）');
     return;
   }
-  let dist = null;
-  const r = spawnSync('git', ['-C', ROOT, 'rev-list', '--count', `${map.head}..HEAD`], { encoding: 'utf8', windowsHide: true });
-  if (r.status === 0) dist = Number((r.stdout || '').trim());
-  const h = mapHealth({ map, allTests: all, headDistance: dist });
-  if (h.ok) green(`影响地图健康（${Object.keys(map.entries).length} 套在图，落后 HEAD ${dist ?? '?'} 个提交）`);
-  else fail('影响地图不健康', '跑 node scripts/test-impact-map.mjs build 重建', h.problems.join('；'));
+  const head = (() => {
+    const r = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? (r.stdout || '').trim() : null;
+  })();
+  const merged = mergeMapEntries({ map: readImpactMap(), sampled, head, allTests });
+  const p = impactMapPath();
+  try {
+    mkdirSync(join(p, '..'), { recursive: true });
+    writeFileSync(p, JSON.stringify(merged.map, null, 2) + '\n');
+    notes.push(`影响地图：本轮刷新 ${merged.written} 套（跑测试的副产物，无需建图）`);
+  } catch (e) {
+    // 写不了不影响判定——只是下轮还得多跑几套。
+    notes.push(`影响地图没写成（不影响本次判定，下轮会多跑几套）：${String(e.message || e).slice(0, 60)}`);
+  }
 }
 
 async function runTests() {
@@ -382,9 +434,8 @@ async function runTests() {
   }
   reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
   reportNetworkViolations();
-  // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
-  // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
-  if (!process.argv.includes('--affected')) checkImpactMapHealth();
+  // 跑都跑了，把依赖并回图。只有全量跑才敢拿 allTests 去剔已删的条目。
+  saveImpactMap(results, { allTests: suites.length === allSuites.length ? allSuites.map(f => `tests/${f}`) : null });
   checkSpawnBudget();
   checkAssertStyle();
 }
@@ -1884,10 +1935,12 @@ function checkNoAutoCloseLive() {
 // 的反面教材：状态变了、检查的话面没跟上，人就照着旧话面做判断）。
 //
 // 离线的样本/接线检查（夹具判别力、模板扫描）一直全跑——它们不花网络，守的约定也还在仓里。
+// 档位（2026-09-06 默认从「全量」翻成「裁剪」，理由写在 selectSuites 上面那段）：
+//   不带旗标      快档：只跑受影响的测试 + 不出网          ← 人和 land.mjs 走这条
+//   --all-tests   跑全部测试，仍不出网                    ← CI 走这条
+//   --full        跑全部测试 + 打开要出网的那几项          ← 帅位本地要全查时
+// `--affected` 是老调用留下的等价别名，行为与默认一致，不必特判。
 const FULL = process.argv.includes('--full');
-// 快档标志：只有显式 --affected 才进快档。默认（不带旗标）仍跑全部，
-// 因为「跳过了什么」是静默的，得由调用方开口才生效。
-const AFFECTED = process.argv.includes('--affected');
 // 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
 // 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
 const netParked = (name, why) => skip(`快档跳过：${name}——${why}（全量档 node scripts/dao-check.mjs --full 才跑）`);
@@ -2340,12 +2393,11 @@ function checkVendorGateLive() {
   const daoFile = join(ROOT, 'scripts', 'dao.mjs');
   const cmdFile = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
   const slotFile = join(ROOT, 'scripts', 'lib', 'dianjiangtai-reviewer-slot.mjs');
-  const stallFile = join(ROOT, 'scripts', 'agent-stall-watch.mjs');
-  if (![daoFile, cmdFile, slotFile, stallFile].every(existsSync)) {
+  if (![daoFile, cmdFile, slotFile].every(existsSync)) {
     fail(
       '同厂硬闸 live 扫描缺文件',
-      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs / agent-stall-watch.mjs；缺文件 = 没查成',
-      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)} stall=${existsSync(stallFile)}`,
+      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)}`,
     );
     return;
   }
@@ -2356,7 +2408,6 @@ function checkVendorGateLive() {
     daoSrc,
     cmdSrc: readFileSync(existsSync(constraintsFile) ? constraintsFile : cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
-    stallSrc: readFileSync(stallFile, 'utf8'),
   });
   if (r.unscanned) {
     fail('同厂硬闸 live 没查成', '给齐源文件再扫', r.error || '');

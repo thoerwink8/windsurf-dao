@@ -61,7 +61,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。#807 起本机信箱台 / 守卫保活已删，服务器承重面是 systemd + `orca automations` + `agent-stall-watch`。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`；**帅窗不许触发这条**。真信进 GitHub 与一次性 `orca orchestration inbox --json`；不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。心跳不准发到 Run（#667）。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
+派完即回对话态，帅不前台长等。#807 起本机信箱台 / 守卫保活已删，服务器承重面是 systemd + 指挥官 + `progress-watch`。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`；**帅窗不许触发这条**。真信进 GitHub 与一次性 `orca orchestration inbox --json`；不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。心跳不准发到 Run（#667）。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 
@@ -72,7 +72,7 @@ test "$(git branch --show-current)" = master \
 
 监听三分诊：收到「活动消失 / 疑似交卷」通知后，第一动作是读屏分诊终态，不得直接按交卷入队——交卷→收卷；报错→原地重试一次（输入框残留补回车）；卡死（错误指纹两连同）→换人不救（拍板 2026-08-14，issue #442）。
 
-事故路径的撞限流/卡弹窗探测由服务器 `scripts/agent-stall-watch.mjs`（#833，systemd timer）承担，不是本机 `watchdog.mjs`（#807 已删）。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长、工作树 git 证据、还有没有活跃执行者。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
+事故路径的卡死发现由服务器 `scripts/progress-watch.mjs`（systemd timer）承担：连续 N 轮同一对象同一状态即判卡，只叫醒帅位、不自动换人（2026-09-06 用户拍板删掉屏面指纹层 `agent-stall-watch`，撞限流换审官这条自动路径随之没有执行者）。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长、工作树 git 证据、还有没有活跃执行者。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
 
 **delete-ack-layer（2026-08-23）**：Orca 假 stall 会在约 6s 吊销 dispatch capability，原生 `orca orchestration send --type worker_done` 交卷会失败、审官起不来。士兵交卷只走 `dao.mjs worker-done --pr`（仓内起审官，不依赖 Orca 结算）。看门狗 `missing-reviewer` 从只报警升级为 `--dispose-actions` 下自动 `reviewer-create`（有 linked PR、工位已下班、无审官子卡；Devin `agents=[]` 要有 dispatch 记账且卡 `in-review` 才算下班，避免开工第二步刚开 PR 就误起）。
 
@@ -240,7 +240,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "短摘要：<目标 + 全部职责类别>" --model <id>
 ```
 
-`dispatch` 是 fire-and-forget + delete-all-ceremony（2026-08-23 两轮拍板，758-763 实证认账钟误杀能干活的工人）：**几秒钟派工，事前只留两件便宜又真挡事的**——消歧门（一次 label 读取，防派错 issue）+ 账本事前查重（10 分钟内同 issue 已有未结派工 → 拒派，防 #759 重复建卡；确要重派加 `--allow-dup`）。流程：消歧 label（~1s）→ 账本查重（~0s）→ 建工人卡 + git 身份（~2s）→ 起工人终端（~2s）→ task-create → `worker-start` 送任务书（<1s）→ 落 dispatch 记录（~0s）→ 返回「已派，未确认」。**删掉的事前层**：同厂闸（审官不存在时查空气，真闸挪到审官落地时）、每单环境自检（shell 探针）、同步看板（卡定界区 + master 全量重写）、gc 顺车（手动清用 `run-gc`）。**不等 TUI 就绪、不等 worker-start 认账**：传输错误（终端死 / agent 未配置）同步报错回滚；`agent_prompt_stalled` 类认账假阴性当「已送未确认」（字已进终端，763 实证报 stalled 的工人其实在跑）。开工/死亡确认交服务器 `agent-stall-watch`（#833）与 GitHub 完工信。**不建审官卡**（#586：工人完工 `worker-done` 才起）。
+`dispatch` 是 fire-and-forget + delete-all-ceremony（2026-08-23 两轮拍板，758-763 实证认账钟误杀能干活的工人）：**几秒钟派工，事前只留两件便宜又真挡事的**——消歧门（一次 label 读取，防派错 issue）+ 账本事前查重（10 分钟内同 issue 已有未结派工 → 拒派，防 #759 重复建卡；确要重派加 `--allow-dup`）。流程：消歧 label（~1s）→ 账本查重（~0s）→ 建工人卡 + git 身份（~2s）→ 起工人终端（~2s）→ task-create → `worker-start` 送任务书（<1s）→ 落 dispatch 记录（~0s）→ 返回「已派，未确认」。**删掉的事前层**：同厂闸（审官不存在时查空气，真闸挪到审官落地时）、每单环境自检（shell 探针）、同步看板（卡定界区 + master 全量重写）、gc 顺车（手动清用 `run-gc`）。**不等 TUI 就绪、不等 worker-start 认账**：传输错误（终端死 / agent 未配置）同步报错回滚；`agent_prompt_stalled` 类认账假阴性当「已送未确认」（字已进终端，763 实证报 stalled 的工人其实在跑）。开工/死亡确认交服务器 `progress-watch` 与 GitHub 完工信。**不建审官卡**（#586：工人完工 `worker-done` 才起）。
 
 启动 argv **只听仓内** `docs/model-routing.toml` 的 `[providers.*].launch`。Orca Desktop `agentDefaultArgs` 只拿来比较：桌面多的建议补进仓内，少的只报不删桌面，**不得盖掉仓内旗标**，也不要手改 `%APPDATA%\\orca\\profiles\\local-default\\orca-data.json`（Orca 开着会回写冲掉）。
 

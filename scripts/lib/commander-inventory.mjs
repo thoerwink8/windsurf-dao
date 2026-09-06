@@ -384,7 +384,7 @@ function timer(desc, activeSec, calendar) {
 }
 export const INSTALL_FILES = () => ({
   '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs act'),
-  // :11/20 —— 错开 dao-sync(:1/5)、dao-agent-stall(:2/15)、dao-board-gc(:07)、dao-patrol(:23)
+  // :11/20 —— 错开 dao-sync(:1/5)、dao-progress-watch(:13/20)、dao-board-gc(:07)、dao-patrol(:23)
   '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min', '*:11/20'),
   '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs inventory'),
   '/etc/systemd/system/commander-inventory.timer': timer('指挥官盘点每 6 小时', '6h', '*-*-* 00,06,12,18:41:00'),

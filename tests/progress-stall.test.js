@@ -66,6 +66,47 @@ describe('progress-detect：真实语料', () => {
   });
 });
 
+// 2026-09-06 用户拍板「删掉整层」后的判别性实验：orca 已退役，快照的 orca 段每轮都是
+// scanned:false。改动之前 extractObjects 拿它当硬门，装上 progress-watch 也只会每轮
+// exit 2——「能不能在 orca 段死掉的情况下判出停滞」就是这次改对没改对的唯一判据。
+describe('progress-detect：orca 段死了照样判（屏面指纹层退役）', () => {
+  it('orca 段 scanned:false 不再拖垮整轮——GitHub 面照判', async () => {
+    const S = await load(LIB);
+    const snaps = readFixture(STALL_FIXTURE).map((s) => ({
+      ...s,
+      orca: { scanned: false, error: 'Could not read Orca runtime metadata（已退役）' },
+    }));
+    const got = S.detectProgressStall(snaps, { minRounds: 5 });
+    assert.equal(got.scanned, true, got.error);
+    assert.equal(got.stalled, true);
+    const prIds = got.items.filter((i) => i.kind === 'pr').map((i) => String(i.id));
+    assert.equal(prIds.includes('909'), true, 'orca 段死了就判不出 PR #909：' + prIds.join(','));
+  });
+
+  it('树面整类不再产出对象——orca.worktrees 有货也不看', async () => {
+    const S = await load(LIB);
+    const snap = {
+      github: { scanned: true, prs: [], issues: [] },
+      orca: { scanned: true, worktrees: [{ worktreeId: 'w1', displayName: 'ISSUE-#1 工人', liveTerminalCount: 0 }] },
+      reviewPending: { scanned: true, items: [] },
+    };
+    const got = S.extractObjects(snap);
+    assert.equal(got.scanned, true, got.error);
+    assert.deepEqual(got.objects, []);
+    assert.equal(got.idle, true);
+  });
+
+  it('github / reviewPending 段没查成仍然是硬门（别把门全拆了）', async () => {
+    const S = await load(LIB);
+    const noGh = S.extractObjects({ github: { scanned: false, error: 'gh 超时' }, reviewPending: { scanned: true, items: [] } });
+    assert.equal(noGh.scanned, false);
+    assert.match(noGh.error, /gh 超时/);
+    const noRp = S.extractObjects({ github: { scanned: true, prs: [], issues: [] }, reviewPending: { scanned: false, error: '票面没读到' } });
+    assert.equal(noRp.scanned, false);
+    assert.match(noRp.error, /票面没读到/);
+  });
+});
+
 describe('progress-detect：误报闸与逐对象', () => {
   it('全空闲 20 轮不许报停滞', async () => {
     const S = await load(LIB);
@@ -236,6 +277,38 @@ describe('progress-watch：驱动三态', () => {
     assert.equal(b.ok, true, b.error);
     assert.equal(b.stalled, true);
     assert.equal(b.wake, false, '同一指纹不许再推');
+  });
+
+  // 认输推送从 agent-stall-watch 搬过来（那个宿主 2026-09-06 删了）。默认不接线：
+  // 它要打 gh，纯函数级测试不许出网，CLI 的 main() 才把真实现传进来。
+  it('认输 PR 有推送 → 报告带上它，并叫醒帅位（哪怕盘面没停滞）', async () => {
+    const W = await load(CLI);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-exhausted-'));
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(dir, `situation-2026-09-06T0${i}-00-00-000Z.json`), JSON.stringify(emptySnap()), 'utf8');
+    }
+    const state = path.join(dir, 'state.json');
+    const r = W.runProgressWatch({
+      dir, state, rounds: 5, dryRun: false,
+      exhaustedPush: ({ lines }) => { lines.push('PR #1018 自动化认输，等你拍'); return { ok: true, pushed: 1 }; },
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.stalled, false, '盘面空闲，停滞判定不该被认输推送带偏');
+    assert.equal(r.wake, true, '认输的 PR 需要人处置，必须叫醒');
+    assert.equal(r.wakeReason, 'exhausted');
+    assert.match(r.report, /PR #1018 自动化认输/);
+  });
+
+  it('不注入就不查认输——默认一个子进程都不起（不出网）', async () => {
+    const W = await load(CLI);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-noexh-'));
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(dir, `situation-2026-09-06T0${i}-00-00-000Z.json`), JSON.stringify(emptySnap()), 'utf8');
+    }
+    const r = W.runProgressWatch({ dir, state: path.join(dir, 'state.json'), rounds: 5, dryRun: false });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.exhausted, null);
+    assert.equal(r.wake, false);
   });
 });
 
