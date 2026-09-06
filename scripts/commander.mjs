@@ -412,14 +412,14 @@ function sendHubAsk(fields) {
   return { ok: true, messageId };
 }
 
-function hubAskOnce({ state, key, fields, now = Date.now(), dryRun }) {
+function hubAskOnce({ state, key, fields, now = Date.now(), dryRun, send = sendHubAsk }) {
   state.hubSeen = state.hubSeen || {};
   const last = Date.parse(state.hubSeen[key] || '') || 0;
   if (now - last < HUB_DEDUP_MS) return { sent: false, reason: '6 小时内已发过' };
   const planned = argvFromFields(fields || {});
   if (!planned.ok) return { sent: false, error: planned.error };
   if (dryRun) { state.hubSeen[key] = new Date(now).toISOString(); return { sent: true, dryRun: true }; }
-  const r = sendHubAsk(fields);
+  const r = send(fields);
   if (!r.ok) return { sent: false, error: r.error };
   state.hubSeen[key] = new Date(now).toISOString();
   return { sent: true, messageId: r.messageId };
@@ -1317,7 +1317,7 @@ function runDaipai({ state, dryRun, say }) {
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
-function escalate(action, { state, dryRun, say }) {
+function escalate(action, { state, dryRun, say, gh = runGh, send = sendHubAsk, openIssue = openEscalationIssue } = {}) {
   if (action.reason === 'unscanned') {
     say(`  没查成（静默进 status）：${action.why}`);
     return { ok: true, silent: true };
@@ -1330,13 +1330,19 @@ function escalate(action, { state, dryRun, say }) {
   state.escalateLedger = state.escalateLedger || {};
   const booked = state.escalateLedger[key];
   if (booked && booked.issue) {
-    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    const st = gh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
     if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
-    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    if (String(st.out).trim() === 'OPEN') {
+      say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`);
+      // OPEN 只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+      // 下一轮必须再走 askEscalateCard，否则机器主动问用户会永久哑掉。
+      askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
+      return { ok: true, issue: booked.issue };
+    }
     delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
   }
   // 查重：已有 open 带此标记的单 → 不重复开
-  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
+  const found = gh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
   let searchOk = false;
   if (found.ok) {
@@ -1352,22 +1358,22 @@ function escalate(action, { state, dryRun, say }) {
   }
   if (existing) {
     say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`);
-    askEscalateCard({ state, key, number: existing, action, dryRun, say });
+    askEscalateCard({ state, key, number: existing, action, dryRun, say, send });
     return { ok: true, issue: existing };
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
+  const opened = openIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
-  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say });
+  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
 }
-function askEscalateCard({ state, key, number, action, dryRun, say }) {
+function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
   const planned = fieldsFromEscalate({
     repo: REPO, number, why: action.why, reason: action.reason, recommend: action.recommend, url: issueLink(number),
   });
   if (!planned.ok) { say(`  待拍板卡拒发：${planned.error}`); return; }
-  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun });
+  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun, send });
   say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + number : '待拍板卡略：' + (r.reason || r.error)}`);
 }
 function escalateKey(a) {
@@ -1497,4 +1503,4 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey, scanStall };
+export { buildSituation, situationHealth, escalate, escalateKey, scanStall };

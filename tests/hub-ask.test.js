@@ -258,7 +258,61 @@ describe('指挥官：待拍板走卡片，普通播报仍是纯文字', () => {
     const fn = src.slice(i, src.indexOf('function escalateKey'));
     assert.match(fn, /askEscalateCard/);
     assert.match(fn, /opened\.ok && opened\.number/);
+    assert.match(fn, /String\(st\.out\)\.trim\(\) === 'OPEN'[\s\S]*askEscalateCard/);
     assert.equal(/hubOnce\(\{[\s\S]*esc:/.test(fn), false);
+  });
+
+  it('首次发卡失败、下一轮同 OPEN 单重试，不重开', async () => {
+    const { escalate, escalateKey } = await import(toUrl(path.join(ROOT, 'scripts', 'commander.mjs')));
+    const action = { kind: 'escalate', reason: 'missing-labels', why: '缺审官标', issue: 901 };
+    const key = escalateKey(action);
+    const state = { escalateLedger: {}, hubSeen: {} };
+    const sends = [];
+    const opens = [];
+    let sendOk = false;
+    const gh = (args) => {
+      if (args[0] === 'issue' && args[1] === 'view') return { ok: true, out: 'OPEN\n' };
+      if (args[0] === 'search') return { ok: true, out: '[]' };
+      return { ok: false, error: `unexpected gh ${args.join(' ')}` };
+    };
+    const send = (fields) => {
+      sends.push(fields);
+      return sendOk ? { ok: true, messageId: 'om_retry' } : { ok: false, error: '没送进群：飞书 500' };
+    };
+    const openIssue = (x) => {
+      opens.push(x);
+      return { ok: true, number: 42 };
+    };
+    const say = () => {};
+
+    const first = escalate(action, { state, dryRun: false, say, gh, send, openIssue });
+    assert.equal(first.ok, true);
+    assert.equal(first.number, 42);
+    assert.equal(opens.length, 1);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].number, 42);
+    assert.equal(state.escalateLedger[key].issue, 42);
+    assert.equal(state.hubSeen[`esc:${key}`], undefined, '失败不许盖去重戳');
+
+    const second = escalate(action, { state, dryRun: false, say, gh, send, openIssue });
+    assert.equal(second.ok, true);
+    assert.equal(second.issue, 42);
+    assert.equal(opens.length, 1, 'OPEN 单不重开');
+    assert.equal(sends.length, 2, '失败后下一轮必须重试发卡');
+    assert.equal(state.hubSeen[`esc:${key}`], undefined);
+
+    sendOk = true;
+    const third = escalate(action, { state, dryRun: false, say, gh, send, openIssue });
+    assert.equal(third.ok, true);
+    assert.equal(third.issue, 42);
+    assert.equal(opens.length, 1);
+    assert.equal(sends.length, 3);
+    assert.equal(typeof state.hubSeen[`esc:${key}`], 'string', '成功才盖去重戳');
+
+    const fourth = escalate(action, { state, dryRun: false, say, gh, send, openIssue });
+    assert.equal(fourth.ok, true);
+    assert.equal(opens.length, 1);
+    assert.equal(sends.length, 3, '已成功发送后 6h 内不重复卡');
   });
 
   it('sendHubAsk 认回执不认退出码', () => {
@@ -357,6 +411,58 @@ describe('熔断：有单号才 hubAsk，否则退回 hubSay', () => {
     assert.equal(esc.sent, true);
     assert.equal(asks.length, 0);
     assert.equal(hubs.length, 1);
+  });
+
+  it('开单成功 + 发卡失败 → 回退 hubSay，总控群不能哑', async () => {
+    const { applyEvent, escalateAllOpen, settleAllOpen } = await import(toUrl(path.join(ROOT, 'scripts', 'lib', 'provider-breaker.mjs')));
+    const T0 = Date.parse('2026-09-04T00:00:00Z');
+    const POL = { windowHours: 24, failuresToTrip: 1, cooldownHours: 24, halfOpenProbes: 1 };
+    let s = { targets: {} };
+    s = applyEvent(s, { type: 'trip', target: 'a', hours: 24 }, POL, T0);
+    s = applyEvent(s, { type: 'trip', target: 'b', hours: 24 }, POL, T0);
+    const hubs = [];
+    const asks = [];
+    const esc = escalateAllOpen({
+      doc: s, now: T0,
+      hubSay: (t) => { hubs.push(t); return { ok: true }; },
+      openIssue: () => ({ ok: true, number: 88 }),
+      hubAsk: (x) => { asks.push(x); return { ok: false, error: '没送进群：飞书 500' }; },
+    });
+    assert.equal(asks.length, 1);
+    assert.equal(asks[0].number, 88);
+    assert.equal(hubs.length, 1, '发卡失败必须回退纯文字');
+    assert.equal(esc.sent, true, '纯文字送达也算 sent');
+    assert.equal(esc.issue.number, 88);
+    assert.equal(esc.ask.ok, false);
+    assert.match(esc.ask.error, /没送进群/);
+    assert.equal(esc.hub.ok, true);
+
+    const settled = settleAllOpen(s, {
+      now: T0,
+      hubSay: (t) => { hubs.push(t); return { ok: true }; },
+      openIssue: () => ({ ok: true, number: 88 }),
+      hubAsk: (x) => { asks.push(x); return { ok: false, error: '没送进群：飞书 500' }; },
+    });
+    assert.equal(settled.escalate.sent, true);
+    assert.equal(typeof settled.doc.allOpenAlertedAt, 'string', '纯文字送达才盖去重戳');
+  });
+
+  it('开单成功 + 发卡失败 + 纯文字也失败 → 不盖戳，下次再试', async () => {
+    const { applyEvent, settleAllOpen } = await import(toUrl(path.join(ROOT, 'scripts', 'lib', 'provider-breaker.mjs')));
+    const T0 = Date.parse('2026-09-04T00:00:00Z');
+    const POL = { windowHours: 24, failuresToTrip: 1, cooldownHours: 24, halfOpenProbes: 1 };
+    let s = { targets: {} };
+    s = applyEvent(s, { type: 'trip', target: 'a', hours: 24 }, POL, T0);
+    s = applyEvent(s, { type: 'trip', target: 'b', hours: 24 }, POL, T0);
+    const settled = settleAllOpen(s, {
+      now: T0,
+      hubSay: () => ({ ok: false, error: 'hub-say exit 1' }),
+      openIssue: () => ({ ok: true, number: 88 }),
+      hubAsk: () => ({ ok: false, error: '没送进群：飞书 500' }),
+    });
+    assert.equal(settled.escalate.sent, false);
+    assert.equal(settled.escalate.ask.ok, false);
+    assert.equal(settled.doc.allOpenAlertedAt, undefined, '没送达不盖戳');
   });
 });
 
