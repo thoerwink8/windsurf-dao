@@ -38,8 +38,9 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
-  SITUATION_SECTIONS,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs,
 } from './lib/commander-core.mjs';
+import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
@@ -134,11 +135,11 @@ function scanAttributedIssues(issues, prs) {
   }
   const out = [];
   for (const n of want) {
-    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
     if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
     try {
       const j = JSON.parse(r.out || '{}');
-      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });
     } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
   }
   return out;
@@ -449,6 +450,7 @@ function buildSituation({ state } = {}) {
     healthRedModels = [];
     defaultWorkerModel = null;
   }
+  const askPolicy = loadPolicy({ root: ROOT });
   const breakerIngest = ingestBreakerSignals();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
@@ -470,6 +472,7 @@ function buildSituation({ state } = {}) {
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
+    askPolicy,
   };
 }
 
@@ -561,7 +564,8 @@ function execAction(action, { state, dryRun, log }) {
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
-        '--spec', dispatchSpec(action.issue), '--confirm'];
+        '--spec', dispatchSpec(action.issue), '--confirm',
+        ...dispatchMergePolicyArgs(action)];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
@@ -1087,7 +1091,8 @@ function dispatchRework(action, { state, dryRun, say }) {
     '--name', reworkCardName(action),
     '--model', action.model, '--reviewer', action.reviewer,
     '--split', 'no', '--split-reason', action.conflict ? '指挥官自动解冲突：只解冲突，不改范围外的东西' : '指挥官自动返工：照审官红项逐条改（#931）',
-    '--spec', spec, '--allow-dup', '--confirm'];
+    '--spec', spec, '--allow-dup', '--confirm',
+    ...dispatchMergePolicyArgs(action)];
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
     return { ok: true, dryRun: true };

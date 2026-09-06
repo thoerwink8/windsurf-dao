@@ -34,6 +34,7 @@ query($owner: String!, $name: String!) {
       nodes {
         number
         title
+        body
         updatedAt
         labels(first: 30) { nodes { name } }
       }
@@ -129,12 +130,19 @@ function rollupFromGraphqlCommit(commitNode) {
 export function normalizeGithubGraphql(data) {
   const repo = data?.repository;
   if (!repo) return { ok: false, error: 'GraphQL 没返回 repository——没扫成' };
-  const issues = (repo.issues?.nodes || []).map((i) => ({
-    number: i.number,
-    title: i.title,
-    updatedAt: i.updatedAt,
-    labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
-  }));
+  const issues = (repo.issues?.nodes || []).map((i) => {
+    const row = {
+      number: i.number,
+      title: i.title,
+      updatedAt: i.updatedAt,
+      labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
+    };
+    // #1094：human_holds 闸要读正文。键必须在——缺键是「没查成」，空串是「查过、正文空」。
+    if (Object.prototype.hasOwnProperty.call(i, 'body')) {
+      row.body = i.body == null ? '' : String(i.body);
+    }
+    return row;
+  });
   const prs = (repo.pullRequests?.nodes || []).map((p) => {
     const commit = p.commits?.nodes?.[0]?.commit;
     const statusCheckRollup = rollupFromGraphqlCommit(commit);
