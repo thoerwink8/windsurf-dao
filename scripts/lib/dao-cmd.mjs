@@ -1061,6 +1061,9 @@ export const FLAGS_BY_VERB = {
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
+    // --force：judgeReviewerSessionReuse 早就认它（一 PR 一审官的唯一逃生口），
+    // 漏在这张表里三个月，于是 reviewer-create 的失败文案「要另起加 --force」教的是一条走不通的路。
+    '--force',
     '--executor', '--branch', '--repo', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),

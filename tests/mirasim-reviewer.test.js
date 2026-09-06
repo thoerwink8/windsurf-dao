@@ -450,6 +450,16 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' }, force: true }).reuse, false);
   });
 
+  it('CLI 接线：reviewer-create 必须收得下 --force——纯函数认的逃生口，命令行传不进来等于没有', async () => {
+    const { parseArgs, FLAGS_BY_VERB } = await import('../scripts/lib/dao-cmd.mjs');
+    const parsed = parseArgs(['node', 'dao.mjs', 'reviewer-create', '--pr', '1070', '--force']);
+    assert.equal(parsed.force, true);
+    // 对账：凡是 judgeReviewerSessionReuse 认的逃生口，白名单里必须有同名 flag。
+    // 2026-09-07 实咬：白名单漏了 --force，而失败文案偏偏写着「要另起加 --force」——
+    // 判红只对旧 commit 有效的 PR 因此永远等不到复审，命令行还报「未知参数」。
+    assert.equal(FLAGS_BY_VERB['reviewer-create'].has('--force'), true);
+  });
+
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {
     const { mirasimWorkerDone } = await import(RM);
     const rig = reworkRig({ treeHead: HEAD });
