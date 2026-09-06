@@ -5,7 +5,8 @@
 // 并且需要建立一个能够自动清理的机制自动去发现，自动去清理」。
 //
 // 判据全在 scripts/lib/board-gc.mjs（纯函数、可测）。本文件只负责三件事：
-// 采事实（orca / gh / git）、把事实喂给判据、按判决调 dao.mjs worktree-rm。
+// 采事实（mirasim 树 + /proc 活树 + gh / git）、把事实喂给判据、按判决删树。
+// 盘面不再问 orca：退役后 worktree list 没有 result.worktrees，整轮 exit 2，回收假死（#1065）。
 //
 // 与 board-reset 的分工：board-reset 是「重测前一锅端」（所有非主树顶层卡）；
 // 本命令是它的反面——**只清确实不需要的那几张**，其余一张不动。
@@ -18,14 +19,13 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths } from './lib/board-gc.mjs';
-import {
-  DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
-  sessionFromOrcaTerminal,
-} from './lib/liveness.mjs';
+import { cardsFromMirasim, aliveIdsFromBusy } from './lib/board-gc-collect.mjs';
+import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
+import { busyTrees, checkTreeLease, scanSessionProcs, worktreesRoot } from './lib/dispatch/lease.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -44,17 +44,6 @@ function parseArgs(argv) {
 function run(cmd, args, { timeout = 60000 } = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 << 20 });
   return { code: r.status, out: String(r.stdout || ''), err: String(r.stderr || ''), failed: !!r.error };
-}
-
-function orcaJson(args) {
-  const bin = process.env.BOARD_GC_ORCA || 'orca';
-  const r = process.env.BOARD_GC_ORCA
-    ? run(process.execPath, [bin, ...args, '--json'])
-    : run(bin, [...args, '--json']);
-  const i = r.out.indexOf('{');
-  if (i < 0) return { ok: false, error: `没有 JSON（exit=${r.code}）${r.err.trim().slice(0, 160)}` };
-  try { return { ok: true, json: JSON.parse(r.out.slice(i)) }; }
-  catch (e) { return { ok: false, error: `JSON 解析失败：${e.message}` }; }
 }
 
 /** 一次 gh 调用把所有 PR 状态拿全。拿不全就整体判没查成，不逐个猜。 */
@@ -201,49 +190,51 @@ function say(text) {
   if (r.failed) run(process.execPath, ['/home/orca/bin/hub-say', text]);
 }
 
+function collectCards() {
+  const scanned = scanMirasimTrees({
+    root: worktreesRoot(),
+    readdir: readdirSync,
+    stat: statSync,
+    join,
+  });
+  const cards = cardsFromMirasim(scanned);
+  if (!cards.ok) return cards;
+  const worktrees = cards.worktrees.map((w) => {
+    const br = run('git', ['-C', w.path, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 20000 });
+    return { ...w, branch: br.code === 0 ? br.out.trim() : null };
+  });
+  return { ok: true, worktrees };
+}
+
+function removeTreeFallback(z) {
+  const path = z && z.path;
+  if (!path) return { ok: false, error: '没有树路径' };
+  const lease = checkTreeLease({ workdir: path });
+  if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
+  if (lease.verdict === 'held') return { ok: false, error: lease.why };
+  const rm = run('git', ['-C', ROOT, 'worktree', 'remove', '--force', path], { timeout: 60000 });
+  if (rm.code === 0) return { ok: true };
+  try {
+    rmSync(path, { force: true, recursive: true });
+    return { ok: true, note: `git worktree remove 失败后直接删目录：${(rm.err || rm.out).trim().slice(0, 80)}` };
+  } catch (e) {
+    return { ok: false, error: `删不掉 ${path}：${String(e && e.message || e).slice(0, 160)}` };
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const ps = orcaJson(['worktree', 'list']);
-  if (!ps.ok) { console.error(`盘面没查成：${ps.error}`); process.exit(2); }
-  const worktrees = ps.json?.result?.worktrees;
-  if (!Array.isArray(worktrees)) { console.error('盘面没查成：result.worktrees 不是数组'); process.exit(2); }
+  const collected = collectCards();
+  if (!collected.ok) { console.error(`盘面没查成：${collected.error}`); process.exit(2); }
+  const worktrees = collected.worktrees;
 
-  const tm = orcaJson(['terminal', 'list']);
-  if (!tm.ok) { console.error(`终端没查成：${tm.error}`); process.exit(2); }
-  const terminals = tm.json?.result?.terminals;
-  if (!Array.isArray(terminals)) { console.error('终端没查成：result.terminals 不是数组'); process.exit(2); }
-
-  // 活性用同一把尺（liveness.mjs），本文件不另写判据。
-  // 屏面签名账本与 agent-stall-watch 分开存：两条命令各自的采样节奏不同，混用会互相把 since 洗掉。
-  const sessions = terminals.map((t) => sessionFromOrcaTerminal(t)).filter(Boolean);
-  const statePath = process.env.BOARD_GC_STATE
-    || join(process.env.HOME || process.env.USERPROFILE || '.', '.dao', 'board-gc-progress.json');
-  let memory = {};
-  try { memory = JSON.parse(readFileSync(statePath, 'utf8')) || {}; } catch { memory = {}; }
-  const progressed = applyProgressMemory({ sessions, memory });
-  try {
-    mkdirSync(dirname(statePath), { recursive: true });
-    writeFileSync(statePath, JSON.stringify(progressed.memory, null, 2));
-  } catch { /* 账本写不下只影响下一轮精度，不该拦住本轮判决 */ }
-
-  // 阈值可按机器调；给了读不出数的值就用默认并说一声，不静默失效。
-  const raw = process.env.BOARD_GC_SILENCE_MIN;
-  let thresholdMs = DEFAULT_SILENCE_MS;
-  if (raw != null && raw !== '') {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) thresholdMs = n * 60000;
-    else console.error(`BOARD_GC_SILENCE_MIN=${raw} 读不出分钟数，用默认 ${DEFAULT_SILENCE_MS / 60000} 分钟`);
-  }
-  const live = scanLiveness({ sessions: progressed.sessions, thresholdMs });
-  if (!live.ok) { console.error(`活性没查成：${live.error}`); process.exit(2); }
-  // 「活着」= 判据说 active。silent / unscanned / done 都不算活着——
-  // 特别是 done：干完的会话不该让它那张卡永远免死。
-  const alive = new Set();
-  for (const s2 of progressed.sessions) {
-    if (!s2.worktreeId) continue;
-    if (assessLiveness(s2, { thresholdMs }).state === 'active') alive.add(s2.worktreeId);
-  }
+  const scan = scanSessionProcs();
+  if (!scan.ok) { console.error(`会话进程没查成：${scan.error}`); process.exit(2); }
+  const busy = busyTrees(scan.procs, { root: worktreesRoot() });
+  const liveIds = aliveIdsFromBusy(busy, worktrees);
+  if (!liveIds.ok) { console.error(`活性没查成：${liveIds.error}`); process.exit(2); }
+  const alive = liveIds.alive;
 
   const prs = fetchPrState();
   if (!prs.ok) { console.error(`PR 状态没查成：${prs.error}`); process.exit(2); }
@@ -302,7 +293,12 @@ function main() {
           continue;
         }
       }
-      const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      let r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      if (r.code !== 0) {
+        const fb = removeTreeFallback(z);
+        if (fb.ok) r = { code: 0, err: '', out: fb.note || '' };
+        else r = { code: 1, err: fb.error || r.err, out: r.out };
+      }
       const error = (r.err.trim() || r.out.trim()).slice(0, 200);
       results.set(z.id, r.code === 0 ? { ok: true } : { ok: false, error: error || `exit ${r.code}` });
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);

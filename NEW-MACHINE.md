@@ -379,6 +379,11 @@ orca account add --help
 #   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
 #   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
 #   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
+#   已关单/已合 PR 必须跳过（#1097）：`gh issue/pr view` 失败也 skip，不许把没查成当成还能推
+# 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
+#   采 mirasim 树 + /proc，不问 orca。验：journalctl -u dao-board-gc 不能再出现 `result.worktrees 不是数组`
+# 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
+#   验：systemctl list-timers 里 dao-refiner.timer 的 NEXT 必须是时间；unit 必须带 NO_COLOR=1 GH_NO_COLOR=1
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。

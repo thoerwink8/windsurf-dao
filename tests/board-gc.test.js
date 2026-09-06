@@ -248,9 +248,11 @@ describe('空转的 TUI 不算在推进', () => {
 
 describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
-  it('活性走 liveness.mjs，不另写一把尺', () => {
-    assert.match(src, /from '\.\/lib\/liveness\.mjs'/);
+  it('活性走 lease.mjs 的 /proc 活树，不另写一把尺、不问 orca', () => {
+    assert.match(src, /from '\.\/lib\/dispatch\/lease\.mjs'/);
+    assert.match(src, /scanMirasimTrees/);
     assert.doesNotMatch(src, /lastOutputAt\s*[<>]/, '别在驱动层直接拿时间戳比大小');
+    assert.doesNotMatch(src, /orcaJson\(\['worktree'/);
   });
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
@@ -832,10 +834,8 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
     assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
-  it('永远不许 --force：这条路上没有任何该覆盖的情形', () => {
-    // 只看真传给 git 的参数（带引号的那种），不看注释里提到的字样——
-    // 注释解释「为什么不用 --force」是好事，被自己的注释判红就没人敢写解释了。
-    assert.doesNotMatch(src, /['"`]--force/);
+  it('push 永远不许 --force；worktree remove --force 是删树不是覆盖远端', () => {
+    assert.doesNotMatch(src, /push[\s\S]{0,120}['"`]--force/);
   });
 
   it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {
@@ -843,19 +843,14 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
-    // 喂一个什么都不吐的假 orca：盘面查不成 → 退出码 2。如果 main 没跑，退出码会是 0，
-    // 命令看着还在、其实一轮都不干活——加那个开关最可能造成的正是这种静默失效。
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-noorca-'));
-    const fake = path.join(dir, 'orca.mjs');
-    fs.writeFileSync(fake, '// 假 orca：一个字都不输出\n');
-    try {
-      const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
-        encoding: 'utf8', windowsHide: true, timeout: 60000,
-        env: { ...process.env, BOARD_GC_ORCA: fake },
-      });
-      assert.equal(r.status, 2, '盘面查不成该以 2 收场；如果是 0，多半是 main 根本没跑');
-      assert.match(String(r.stderr), /盘面没查成/);
-    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响判定 */ } }
+    // 树根指到不存在的目录：采样面要么空盘面继续去问 gh，要么报没查成。
+    // 两种都是 main 跑了且非 0；如果是 0，多半是 main 根本没跑。
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
+      encoding: 'utf8', windowsHide: true, timeout: 60000,
+      env: { ...process.env, MIRASIM_WORKTREES: '/no/such/mirasim-worktrees-board-gc' },
+    });
+    assert.notEqual(r.status, 0, '如果是 0，多半是 main 根本没跑');
+    assert.match(String(r.stderr) + String(r.stdout), /没查成/);
   });
 });
 
