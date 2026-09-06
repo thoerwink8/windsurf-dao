@@ -146,6 +146,7 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(a.length, 1);
     assert.equal(a[0].pr, 920);
     assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
+    assert.match(a[0].why, /来源没查成/, '旧夹具没带来源，不许倒向任一种');
   });
 });
 
@@ -1497,5 +1498,52 @@ describe('ticketHeadOid：两种票形态都要取得出', () => {
     assert.equal(ticketHeadOid(null), null);
     assert.equal(ticketHeadOid({ name: 'x' }), null);
     assert.equal(ticketHeadOid('  '), null);
+  });
+});
+
+// #1014：复审票两个生产者，attach-reviewer 的 why 必须按写票时记下的来源说，不许写死、不许猜。
+describe('#1014 attach-reviewer why 按来源写', () => {
+  const sit = (item) => baseSituation({
+    github: { scanned: true, issues: [], prs: [{ number: 1014, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h1014' }] },
+    reviewPending: { scanned: true, items: [item] },
+  });
+
+  it('worker-done 失败写的票 → why 说工人起审官失败，且带 error 原文', async () => {
+    const { decide } = await CORE;
+    const err = 'Sub-worker dispatch is not permitted at depth 2';
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-w',
+      source: 'worker-done-fail', error: err,
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /工人起审官失败/);
+    assert.ok(a[0].why.includes(err), '必须带上 error 原文 → ' + a[0].why);
+  });
+
+  it('指挥官 rereview 写的票 → why 说按设计叫审官，不许出现「失败」', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: null,
+      source: 'commander-rereview',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /交卷可合但没人审，按设计叫审官/);
+    assert.ok(!/失败/.test(a[0].why), '指挥官自己写的票不许说失败 → ' + a[0].why);
+  });
+
+  it('没有来源字段的旧票 → why 说来源没查成，不许倒向任一种', async () => {
+    const { decide, attachReviewerWhy } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-x',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /来源没查成/);
+    assert.ok(!/工人起审官失败/.test(a[0].why), '旧票不许当成工人失败');
+    assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
+    assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
+    assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
   });
 });

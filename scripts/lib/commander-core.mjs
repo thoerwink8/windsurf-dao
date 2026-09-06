@@ -32,6 +32,11 @@ import {
   proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
+import {
+  REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+  REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  reviewPendingSourceOf,
+} from './dispatch/review-pending.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -49,6 +54,23 @@ export function ticketHeadOid(head) {
   if (typeof head === 'string') return head.trim() || null;
   const oid = head && typeof head === 'object' ? head.oid : null;
   return typeof oid === 'string' && oid.trim() ? oid.trim() : null;
+}
+
+/** #1014：attach-reviewer 的 why 按票上记下的来源写，不许写死、不许猜。
+ *  来源缺失/不认识 → 「来源没查成」；真失败要把 error 原文带上。 */
+export function attachReviewerWhy(ticket) {
+  const pr = ticket && ticket.pr != null ? ticket.pr : '?';
+  const source = reviewPendingSourceOf(ticket);
+  if (source === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL) {
+    const err = ticket && ticket.error != null && String(ticket.error).trim()
+      ? String(ticket.error).trim()
+      : '（票上没带 error）';
+    return `PR #${pr} 工人起审官失败：${err}`;
+  }
+  if (source === REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW) {
+    return `PR #${pr} 交卷可合但没人审，按设计叫审官`;
+  }
+  return `PR #${pr} 复审票来源没查成`;
 }
 
 /** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
@@ -449,7 +471,11 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(it.pr));
       continue;
     }
-    out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
+    out.push(withNeeds({
+      kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null,
+      head: it.head || null, source: it.source || null, error: it.error || null,
+      why: attachReviewerWhy(it),
+    }, N['attach-reviewer']));
   }
 
   // 返工工人的构造：判红和解冲突两条路共用。取 model/reviewer 一律从**署名 issue 的标签**来
@@ -737,7 +763,7 @@ function collectCandidates(situation) {
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
  *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
  *   orca:          { scanned, worktrees:[...], error }
- *   reviewPending: { scanned, items:[{pr,head,reviewer,worker}], error }
+ *   reviewPending: { scanned, items:[{pr,head,reviewer,worker,source,error}], error }
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
