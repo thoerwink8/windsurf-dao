@@ -64,7 +64,7 @@ node --version
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
 | `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 4840777 | 159280695 |
-| `refiner.{pem,json}` | `dao-refiner[bot]` 消歧官（#1006） | 4847459 | 待装（见下） |
+| `refiner.{pem,json}` | `dao-refiner[bot]` 消歧官（#1006） | 4847459 | 159447930 |
 
 `*.json` 形态（数字不要加引号）：
 
@@ -93,16 +93,32 @@ node --version
 即使被玩坏最大破坏是乱打标，而乱打标能一键筛出批量回退；这正是不让它共用 `marshal` 身份的全部理由
 （`marshal` 今天同时管开单/评论/关单/打「已消歧」授权标/**合并 PR**，授权与执行是同一把钥匙）。
 
-**还差两步**（做完把上表的「待装」换成真数字）：
+**2026-09-06 已装完并验通**（装到仓 + 私钥 + 头像，全程 playwright 驱动服务器上那个已登录的浏览器，
+见 §13c）。范围是**只装 `windsurf-dao` 一个仓**——与 marshal 的 6 仓不同，这是刻意的最小权限。
 
-1. **装到仓**：App 页 → Install App → 装到 `windsurf-dao`（与 marshal 同范围）。
-   装完点进那条安装，URL 末段就是 Installation ID。
-2. **私钥**：App 页底 → Generate a private key → 下载的 `.pem` 放到 `~/.dao/apps/refiner.pem`（`chmod 600`），
-   同目录写 `refiner.json`：`{ "appId": 4847459, "installationId": <数字>, "slug": "dao-refiner" }`。
-   **私钥不要贴进聊天、不要进 git。**
+验的方式不是 `gh-as --whoami`（它的角色名写死四个，`refiner` 要等 #1006 接），
+而是自己签 JWT 打真接口（memory `verify-credential-on-real-endpoint`）：
 
-头像在 `host/brand/bot-refiner.png`（矢量源 `bot-refiner.svg`）。上传时记得 §上面那条坑：
-选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**，只上传会静默失败。
+```
+/app                     → 200  slug=dao-refiner
+  permissions            → {"issues":"write","metadata":"read"}   ← 无 PR/Contents/Checks
+POST .../access_tokens   → 201
+/installation/repositories → thoerwink8/windsurf-dao（仅此一个）
+读 issue                 → 200
+```
+
+### 装的时候撞了 4 次的那个坑
+
+直接 `page.goto('/apps/dao-refiner/installations/new/permissions?...')` 提交，**必被拒**：
+横幅报 `This App has changed since you last viewed it. Please review and try again.`
+换新 profile、换时间点、确认没人在改 App，四次全一样——**这句提示是误导的，跟「App 被改过」无关**。
+
+真因：那个表单带着「你上次**查看**这个 App 时的指纹」，直跳 URL 的会话没有这条记录。
+解法是按人真实的点法走：**App 设置页 → Install App → 点 Install 链接 → 选仓 → 提交**，一次就过。
+另外那个 Install 是 `<a>` 不是 `<button>`，`getByRole('button')` 找不到它，按 href 定位。
+
+头像在 `host/brand/bot-refiner.png`（矢量源 `bot-refiner.svg`）。上传走 `input#upload-app-logo`，
+**必须再点 `Set new avatar`**——只上传会静默失败（§4b 上面那条坑，这次也确实要点才生效）。
 
 验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 

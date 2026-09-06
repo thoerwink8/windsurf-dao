@@ -991,6 +991,8 @@ export {
 
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
 } from './dispatch/review-pending.mjs';
@@ -1023,6 +1025,9 @@ export const FLAGS_BY_VERB = {
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
+    // mirasim 路径（#880 卡 B）：--executor 选执行体，--branch/--repo 是 mirasim 建树要的。
+    // 与 worker-done / reviewer-create 同名同义（卡 C 已加），别在这里另起名字。
+    '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),

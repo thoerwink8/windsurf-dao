@@ -140,6 +140,7 @@ import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
+import { judgeCompetingPrs, collectOpenPrNewFiles } from './lib/competing-prs.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
@@ -1226,6 +1227,44 @@ function closesNumbers(text) {
   return found;
 }
 
+// ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
+// 两个开放 PR 新建同一个文件 = 两份独立实现，合并时必然作废一个。判据与来历见
+// scripts/lib/competing-prs.mjs 头部（#884/#886/#986 三份实现撞在一起那次）。
+function checkCompetingPrsSamples() {
+  // 判别力：红样本必须红、绿样本必须绿。判据被改松（比如「同名就放行」）这里当场红。
+  const red = judgeCompetingPrs({
+    prs: [{ number: 1, newPaths: ['a.mjs'] }, { number: 2, newPaths: ['a.mjs'] }],
+  });
+  const clean = judgeCompetingPrs({
+    prs: [{ number: 1, newPaths: ['a.mjs'] }, { number: 2, newPaths: ['b.mjs'] }],
+  });
+  const blind = judgeCompetingPrs({ prs: [{ number: 1 }] });   // 缺清单必须判没查成
+  const bad = [];
+  if (red.kind !== 'red') bad.push(`红样本没红（${red.kind}）`);
+  if (clean.kind !== 'ok') bad.push(`绿样本没绿（${clean.kind}）`);
+  if (blind.kind !== 'unscanned') bad.push(`缺文件清单没判没查成（${blind.kind}）`);
+  if (bad.length) { fail('竞争 PR 闸没判别力', '判据被改松了，先修判据再谈盘面', bad.join('；')); return; }
+  green('竞争 PR 闸样本红/绿/没查成各 1（有判别力）');
+}
+
+function checkCompetingPrsLive() {
+  const runGh = (args) => {
+    const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout: 60000 });
+    if (r.error || r.status !== 0) return { ok: false, error: String(r.stderr || r.error?.code || '').slice(0, 100) };
+    try { return { ok: true, json: JSON.parse(r.stdout) }; }
+    catch (e) { return { ok: false, error: `输出不是 JSON（${String(e.message || e).slice(0, 60)}）` }; }
+  };
+  const got = collectOpenPrNewFiles({ runGh, mainHas: (p) => existsSync(join(ROOT, p)) });
+  if (got.unscanned) { fail('竞争 PR 闸没查成', '不是「没有冲突」——gh 没取到数据', got.error); return; }
+  const v = judgeCompetingPrs({ prs: got.prs });
+  if (v.kind === 'unscanned') { fail('竞争 PR 闸没查成', '判定拿不到完整清单', v.error || ''); return; }
+  if (v.kind === 'red') {
+    fail(v.line, '两份实现只能活一个：先定谁作废（关掉或改范围），别等合并时才发现', v.collisions.map(c => `${c.path}: ${c.prs.map(n => '#' + n).join(',')}`).join('；'));
+    return;
+  }
+  green(v.line);
+}
+
 function runGhJson(args) {
   const r = spawnSync('gh', args, { windowsHide: true, encoding: 'utf8', cwd: ROOT });
   if (r.error) return { unscanned: true, error: `gh 不可用（${r.error.code}）` };
@@ -1654,6 +1693,8 @@ checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+checkCompetingPrsSamples();
+if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
