@@ -311,6 +311,10 @@ let IN_PROCESS = false;
 function emit(payload, exit = 0) {
   if (IN_PROCESS) throw new ExitSignal(payload, exit);
   if (dispatchResultSink) {
+    // 挂了结果槽就在 stdout 里盖上 resultPath——调用方（指挥官 resultPathOf）靠它把「受理」
+    // 接到「结果」。盖在这一个出口上，而不是让每个 emit/fail 调用点各自记得带：
+    // 派工路径上光 fail 就十几处，靠人记必漏一处，而漏的那处长得跟「没查成」一模一样。
+    payload = { ...payload, resultPath: dispatchResultSink.resultPath };
     try {
       writeFileSync(dispatchResultSink.resultPath, JSON.stringify(payload, null, 2), 'utf8');
     } catch (e) {
@@ -1477,6 +1481,43 @@ async function cmdDispatchMirasim(args, routing, gate) {
     return;
   }
 
+  // ── 派工单进队列（2026-09-06 补）──────────────────────────────────────────
+  // mirasim 这条路是同步的，本来不需要 orca 那套「热路写单 + detached 执行体」的异步中转。
+  // 但队列不只是异步用的中转站，它同时是**派工这件事发生过的唯一记录**，有两个下游在读：
+  //   · 指挥官读回派工结果，靠 stdout 里的 resultPath（commander.mjs resultPathOf → classifyDispatchResult）；
+  //   · 盘面判「这单在不在途」，靠队列里有没有未结的单（listDispatchOrders / recentQueueDup）。
+  // 2026-09-06 17:10 切流量时这条路没接队列，两个下游同时瞎掉：三个半小时里指挥官把每一张
+  // **派成了**的单都判成「成没成没查成」，开出 6 张待拍板单（#1049/#1050/#1053/#1054/#1060/#1061），
+  // 而且因为看不见在途，#1007 被重派 6 次、同一棵树上叠了 10 个会话。
+  // 所以同步路径也写单：写的是同一份契约，不是给同步路径补一层异步。
+  const mirasimQueueDir = dispatchQueueDir({ root: ROOT });
+  const order = writeDispatchOrder({
+    dir: mirasimQueueDir,
+    id: newDispatchOrderId({ now: new Date() }),
+    args: {
+      name: args.name, issue: args.issue, spec: args.spec, model: args.model, role: args.role,
+      reviewer: args.reviewer, executor: 'mirasim', repo, branch,
+      mergePolicy: args.mergePolicy, mergeReason: args.mergeReason,
+    },
+    plan: {
+      executor: 'mirasim', workerCard: cardName, repo, branch,
+      agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
+    },
+    dedup: { issue: args.issue ? String(args.issue).trim() : null, terminal: 'mirasim', name: cardName },
+  });
+  if (!order.ok) fail(order.error, { executor: 'mirasim' });
+  // 结果槽先挂，再写开工标记：挂上之后每个出口（含下面几个 fail 的拒派路径）都会先把结果
+  // 落 out.json、删掉标记再退出。同步路径没有「受理了但结果还没落盘」这个中间态，
+  // **失败也必须结算**——不结算的单永远停在 pending，在盘面上就是一张永不退场的在途单，
+  // 把这个 issue 后续的派工全挡死。进程被 kill -9 打断时标记留在盘上，由
+  // commander-inventory 的 reapStaleDispatchRunning 补写失败记录（同 orca 那条脊，#849）。
+  setDispatchResultSink({ resultPath: order.paths.result, runningPath: order.paths.running });
+  try {
+    writeFileSync(order.paths.running, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }, null, 2), 'utf8');
+  } catch (e) {
+    fail(`派工开工标记写不了 ${order.paths.running}：${String(e?.message || e)}`, { executor: 'mirasim' });
+  }
+
   const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
 
@@ -1531,7 +1572,9 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   emit({
     ok: true, executor: 'mirasim',
-    card: cardName, issue: args.issue ?? null,
+    // workerCard 与 card 同值：读回口 classifyDispatchResult 取的是 workerCard（orca 那条脊的字段名），
+    // 只写 card 的话指挥官读回来卡名是空的——字段路径别猜，两条路对齐（判例 orca-json-field-paths）。
+    card: cardName, workerCard: cardName, issue: args.issue ?? null,
     repo, branch, path: tree.path, treeCreated: tree.created,
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,

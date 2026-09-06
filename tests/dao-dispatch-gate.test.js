@@ -617,7 +617,12 @@ describe('dao 派工硬闸', () => {
     });
     await t.test('dao.mjs dry-run 默认不调 preflightWorkerSlate（要预览加 --preflight）', () => {
       const src = fs.readFileSync(CLI, 'utf8');
-      const dryFn = src.slice(src.indexOf('if (args.dryRun) {'), src.indexOf('const queueDir'));
+      // 切片锚点取 orca 那条脊自己的函数体，不拿 `const queueDir` 这种会重名的行当界桩：
+      // 2026-09-06 mirasim 路径新增一个队列目录变量落在它前面，切片当场缩到空，这条测试
+      // 报的却是「dry-run 会偷偷打网」——查错方向差着十万八千里。
+      const orcaSpine = src.indexOf('async function cmdDispatch(args)');
+      const dryFn = src.slice(src.indexOf('if (args.dryRun) {', orcaSpine), src.indexOf('const queueDir', orcaSpine));
+      assert.ok(dryFn.length > 0, '切片为空：锚点失配了，先确认 cmdDispatch 里这两个界桩还在');
       assert.match(dryFn, /dry-run 默认不探/);
       assert.match(dryFn, /args\.preflight === true/);
     });
@@ -629,7 +634,7 @@ describe('dao 派工硬闸', () => {
 // 这几条判据是 #884 审官三轮实咬换来的。那个 PR 因为与卡 C 重复实现 executor-binding
 // 而冲突搁浅，实现按主干 API 重写落到 master，判据必须跟着搬——否则三轮的教训随 PR 一起丢。
 describe('mirasim 单轨派工硬闸', () => {
-  const { assert, fs, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
+  const { assert, fs, os, path, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
   const base = ['--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--split', 'no', '--split-reason', '单测'];
   const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
   const payload = (r) => {
@@ -673,6 +678,51 @@ describe('mirasim 单轨派工硬闸', () => {
     for (const 字段 of ["identity: '工人'", 'merge_policy:', 'issue_number:', "terminal: 'mirasim'"]) {
       assert.ok(fn.includes(字段), `账本写口少了审官要查的字段：${字段}`);
     }
+  });
+
+  // ── 读回口契约（2026-09-06 实咬）──────────────────────────────────────────
+  // 17:10 切流量那一刀只改了「派工走哪条路」，没改「结果怎么读回来」：mirasim 这条路不写
+  // 派工单、stdout 里没有 resultPath，而指挥官 commander.mjs 的 resultPathOf 只认那个字段。
+  // 后果不是派工失败——是**派成了但读不回**：三个半小时里每一张派成的单都被判成
+  // 「成没成没查成」，开出 6 张待拍板单（#1049/#1050/#1053/#1054/#1060/#1061），
+  // 同时因为队列里没有在途记录，#1007 被重派 6 次、同一棵树上叠了 10 个会话。
+  //
+  // 断的是两个模块中间那条缝，所以这条测试必须同时握住两边：真跑一次 CLI，
+  // 把它**真正的 stdout** 喂给指挥官**真正的解析函数**。任何一边单独测都发现不了。
+  // 用 559（假 gh 判它无「已消歧」标）是为了让它停在消歧门——落单之后、碰 mirasim 之前，
+  // 既验到「失败也结算」这半，又保证单测不会真去建树起会话。
+  it('派工结果读得回来：stdout 里的 resultPath 能被指挥官解出，且失败也结算', async () => {
+    const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dq-mirasim-'));
+    const r = spawnSync(process.execPath, [CLI, 'dispatch',
+      '--issue', '559', '--name', 't', ...base, '--spec', 's', '--confirm',
+    ], {
+      encoding: 'utf8',
+      cwd: REPO,
+      env: {
+        ...process.env,
+        DAO_GH_FAKE: path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs'),
+        DAO_DISPATCH_QUEUE_DIR: queueDir,
+      },
+    });
+
+    const commander = await import('file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const got = commander.resultPathOf(r.stdout);
+    assert.ok(got, `指挥官从 mirasim 的 stdout 里解不出 resultPath —— 这正是 2026-09-06 断掉的那条缝。stdout=${r.stdout}`);
+
+    // 结果必须真落盘：只在 stdout 里印一个路径而文件不在，读回口一样是「没查成」。
+    assert.equal(fs.existsSync(got), true, `resultPath 指向的文件不存在：${got}`);
+    const doc = JSON.parse(fs.readFileSync(got, 'utf8'));
+    assert.equal(doc.ok, false, '停在消歧门的单应结算为失败');
+
+    // 三态要分得开：失败 ≠ 没查成。指挥官据此决定「报失败」还是「下一轮再看」。
+    const verdict = commander.classifyDispatchResult({ present: true, doc, waitedMs: 0 });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.unscanned, false);
+
+    // 派工单落了队列，且没有留下 .running——不结算的单会永远算在途，把这个 issue 后续派工挡死。
+    const names = fs.readdirSync(queueDir);
+    assert.equal(names.filter((n) => /^dq-.+\.json$/.test(n) && !n.endsWith('.out.json')).length, 1, `派工单没落队列：${names.join(',')}`);
+    assert.deepEqual(names.filter((n) => n.endsWith('.running')), [], '开工标记没删，这单会一直算在途');
   });
 
   // 切流量开关（#880 卡 E）。这条不是测行为，是**守住别偷偷切**：三个前置没接完就把
