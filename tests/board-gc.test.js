@@ -1070,6 +1070,7 @@ describe('board-gc #1001：dirty 只数 tracked，报告按实清分段', () => 
     assert.doesNotMatch(src, /dirty\.out\.trim\(\)\.split/);
     const i = src.indexOf('applyBoardGcRemoves');
     const j = src.lastIndexOf('formatBoardGc');
-    assert.ok(i > -1 && j > i, '报告必须在并回实清结果之后出，否则标题又会撒谎');
+    assert.notEqual(i, -1, '驱动层必须调 applyBoardGcRemoves 并回实清');
+    assert.ok(j > i, '报告必须在并回实清结果之后出，否则标题又会撒谎');
   });
 });
