@@ -1,0 +1,23 @@
+{
+  "baselinePr": 0,
+  "prs": [
+    {
+      "number": 2001,
+      "author": { "login": "dao-worker[bot]" },
+      "mergedBy": { "login": "dao-marshal[bot]" },
+      "reviews": [{ "state": "APPROVED" }]
+    },
+    {
+      "number": 2002,
+      "author": { "login": "dao-marshal[bot]" },
+      "mergedBy": { "login": "dao-marshal[bot]" },
+      "reviews": [{ "state": "APPROVED" }]
+    },
+    {
+      "number": 2003,
+      "author": { "login": "dao-marshal[bot]" },
+      "mergedBy": { "login": "thoerwink8" },
+      "reviews": []
+    }
+  ]
+}
