@@ -6,6 +6,7 @@
 
 import { dispatchLabelNames, linkedIssueNumbers } from './worker-done.mjs';
 import { PENDING_LABEL } from '../pending-disambiguation.mjs';
+import { attributedIssueNumber } from '../close-issue.mjs';
 
 /** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
  * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
@@ -52,6 +53,43 @@ export function assembleCardName({ name, issue, pr, role, model } = {}) {
 // #876：反向标「待消歧」与「已消歧」互斥且优先——带「待消歧」的单一律拒派，
 // 就算故意双标也拒（还没定怎么做的事，落了盘不等于可做）。到时机由盘点端上来请用户拍。
 export const DISAMBIGUATED_LABEL = '已消歧'; // 只认这一张；近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门（#565）
+
+// ── 返工豁免（用户 2026-09-06 拍板「走 3：改闸」）────────────────────────────
+//
+// 实咬：PR #1070 / #1075 / #1079 判红或冲突要返工，指挥官派返工工人，被消歧门拒：
+// 「issue #1063 缺『已消歧』label，拒派」。三张署名单都是**机器自己开的返工单**，
+// 正文里起因、现状、实咬写得整整齐齐，model/reviewer 标也齐——只差那个标。
+// 于是三条返工线全停，而 #1063 本身正是「噪音单去重」的修法，噪音机器也就停不下来。
+//
+// 为什么是「改闸」而不是「补标」：消歧门问的是**开工前想清楚了吗**。而 PR 已经存在，
+// 意味着这活早就开工了——代码就在 diff 里，方向是看得见的既成事实。此时再拦，
+// 拦的是收尾不是开工，纯属拦错了地方。原单第一次派工时已经过过这道门了。
+//
+// 判据不靠调用方自称「我是返工」（那种标志迟早被随手带上），而是**可核查的事实**：
+// 这张 issue 是不是某个开放 PR 的署名 issue。署名判据复用 close-issue 的
+// attributedIssueNumber，不另造一份。
+//
+// 边界，三条都钉了测试：
+//   · 「待消歧」标仍然拦——那是明确说「还没定怎么做」，跟忘打标是两回事。
+//   · PR 列表没查成 ⇒ **不豁免**，照旧要标。「没查成」不许变成放行。
+//   · 新活自然进不来：ready 队列的条件本就含「无在途 PR」，有 PR 的单根本不会被当新活派。
+//     所以这条豁免在构造上就只覆盖返工，不需要额外的开关。
+function reworkExemption({ issue, runGh }) {
+  const r = runGh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body']);
+  if (!r.ok) return { exempt: false, unscanned: true, why: `开放 PR 列表没查成：${r.error}` };
+  let prs;
+  try { prs = JSON.parse(r.out); } catch {
+    return { exempt: false, unscanned: true, why: 'PR 列表返回不是 JSON——没查成' };
+  }
+  if (!Array.isArray(prs)) return { exempt: false, unscanned: true, why: 'PR 列表不是数组——没查成' };
+  const want = Number(issue);
+  for (const pr of prs) {
+    if (attributedIssueNumber(pr) === want) {
+      return { exempt: true, pr: pr.number, why: `#${issue} 是开放 PR #${pr.number} 的署名单——活已开工，消歧门是开工前的门，不在这里拦` };
+    }
+  }
+  return { exempt: false, why: `#${issue} 不是任何开放 PR 的署名单——是新活，照旧要过消歧门` };
+}
 export function checkIssueDisambiguated({ issue, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!n) return { ok: true, gated: false, issue: null };
@@ -87,9 +125,17 @@ export function checkIssueDisambiguated({ issue, runGh } = {}) {
     };
   }
   if (!names.includes(DISAMBIGUATED_LABEL)) {
+    // 返工豁免：活已开工（有开放 PR 署名它）就不再拦——判据与理由见 reworkExemption。
+    // 放在「待消歧」判据之后：那张标是明确的「还没定」，豁免不许越过它。
+    const ex = reworkExemption({ issue: n, runGh });
+    if (ex.exempt) {
+      return { ok: true, gated: true, issue: n, hasLabel: false, labels: names, reworkExempt: true, pr: ex.pr, why: ex.why };
+    }
     return {
       ok: false, gated: true, issue: n, hasLabel: false, labels: names,
+      ...(ex.unscanned ? { exemptionUnscanned: true, exemptionWhy: ex.why } : {}),
       error: `issue #${n} 缺「${DISAMBIGUATED_LABEL}」label，拒派（fail-close，忘打标是拦住不是放行）。`
+        + (ex.unscanned ? `返工豁免也没查成（${ex.why}）——没查成不放行。` : '')
         + `去该 issue 补消歧记录（岔路清单 + 结论 + 依据，依据要用户拍的或有旧拍板可依，见 dao-project skill 第二节），`
         + `再打「${DISAMBIGUATED_LABEL}」label 后重试派工。`,
     };

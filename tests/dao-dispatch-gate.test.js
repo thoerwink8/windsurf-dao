@@ -740,3 +740,63 @@ describe('mirasim 单轨派工硬闸', () => {
     assert.equal(p.sessionKey, undefined);
   });
 });
+
+// ── #1055：指挥官一次性会话的 dao 动词（start / session-read / session-stop）──
+// 走 cliInProc（进程内），不新增 spawnSync——超 spawn 预算会让 dao-check 红。
+describe('#1055 dao start/session 动词切 mirasim', () => {
+  it('FLAGS 登记了 start 的 mirasim 旗标和 session-read / session-stop', async () => {
+    const S = await S_LOAD;
+    assert.ok(S.FLAGS_BY_VERB.start.has('--prompt'));
+    assert.ok(S.FLAGS_BY_VERB.start.has('--executor'));
+    assert.ok(S.VERBS.includes('session-read'));
+    assert.ok(S.VERBS.includes('session-stop'));
+    assert.ok(S.FLAGS_BY_VERB['session-read'].has('--session'));
+    assert.ok(S.FLAGS_BY_VERB['session-stop'].has('--session'));
+  });
+
+  const payloadOf = (r) => {
+    try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
+    catch { return { raw: r.stdout, err: r.error, status: r.status }; }
+  };
+
+  it('start --executor mirasim --dry-run 不烧额度、返回 executor=mirasim', async () => {
+    const r = await cliInProc(['start', '--executor', 'mirasim', '--model', 'grok-4.6', '--prompt', 'ping', '--dry-run']);
+    const p = payloadOf(r);
+    assert.equal(r.status, 0, JSON.stringify(p));
+    assert.equal(p.ok, true);
+    assert.equal(p.dryRun, true);
+    assert.equal(p.executor, 'mirasim');
+    assert.equal(p.sessionKey, undefined);
+    assert.ok(p.agent, 'dry-run 要把 agent 落点打出来');
+  });
+
+  it('start --executor mirasim 缺 --prompt 当场拒，不静默走 orca 脊', async () => {
+    const r = await cliInProc(['start', '--executor', 'mirasim', '--model', 'grok-4.6', '--dry-run']);
+    const p = payloadOf(r);
+    assert.notEqual(r.status, 0);
+    assert.equal(p.ok, false);
+    assert.match(String(p.error), /--prompt/);
+  });
+
+  it('没给 --executor 也没给 --prompt 时 start --dry-run 仍走 orca 语义（存量测针）', async () => {
+    const r = await cliInProc(['start', '--provider', 'gpt', '--worktree', 'active', '--dry-run']);
+    const p = payloadOf(r);
+    assert.equal(r.status, 0, JSON.stringify(p));
+    assert.equal(p.executor, undefined);
+    assert.ok(p.command, 'orca 路 dry-run 要打 launch 命令');
+  });
+
+  it('session-read / session-stop 缺 --session 当场拒', async () => {
+    for (const verb of ['session-read', 'session-stop']) {
+      const r = await cliInProc([verb]);
+      const p = payloadOf(r);
+      assert.notEqual(r.status, 0, verb);
+      assert.match(String(p.error || r.stdout), /--session/);
+    }
+  });
+
+  it('dao.mjs 里 orca 绑定整段删的标记还在——本单不做代码清理', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /↓↓↓ 以下是 orca 绑定/);
+  });
+});
