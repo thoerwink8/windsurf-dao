@@ -110,19 +110,23 @@ export function inspectStrikes({ entries, baselineNames, baselineAt } = {}) {
   if (!Array.isArray(entries)) {
     return {
       kind: 'unscanned', error: '没给 entries 数组',
-      violations: [], notes: [], scanned: 0,
+      violations: [], missingFields: [], ungated: [], notes: [], scanned: 0,
       line: 'strikes 闸：没查成（没给条目）',
     };
   }
   if (entries.length === 0) {
     return {
       kind: 'unscanned', error: '一套 memory 都没扫到',
-      violations: [], notes: [], scanned: 0,
+      violations: [], missingFields: [], ungated: [], notes: [], scanned: 0,
       line: 'strikes 闸：扫到 0 条——没查成，不是绿',
     };
   }
   const base = new Set(baselineNames || []);
   const violations = [];
+  // 两种违规的修法完全不同：缺字段是「补两行」，strikes≥2 无闸才是「造闸」。
+  // 合成一条提示会把 strikes=1 的条目推去造它根本不需要的闸（2026-09-06 实咬）。
+  const missingFields = [];
+  const ungated = [];
   const notes = [];
   const bad = [];
   for (const e of entries) {
@@ -141,10 +145,12 @@ export function inspectStrikes({ entries, baselineNames, baselineAt } = {}) {
     if (inScope) {
       if (!f.hasStrikesKey || !f.hasGateKey) {
         violations.push(`${e.name}: 基准后条目缺 strikes/gate 字段`);
+        missingFields.push(e.name);
         continue;
       }
       if (f.strikes >= STRIKES_THRESHOLD && !f.gate) {
         violations.push(`${e.name}: strikes=${f.strikes} 但 gate 空`);
+        ungated.push(e.name);
       }
     } else if (f.strikes != null && f.strikes >= STRIKES_THRESHOLD && !f.gate) {
       notes.push(`${e.name}: 存量 strikes=${f.strikes} 待补闸`);
@@ -154,19 +160,22 @@ export function inspectStrikes({ entries, baselineNames, baselineAt } = {}) {
     return {
       kind: 'unscanned',
       error: `frontmatter 读失败 ${bad.length} 处：${bad.slice(0, 3).join('；')}`,
-      violations, notes, scanned: entries.length,
+      violations, missingFields, ungated, notes, scanned: entries.length,
       line: `strikes 闸：没查成（${bad[0]}）`,
     };
   }
   if (violations.length) {
+    const bits = [];
+    if (missingFields.length) bits.push(`${missingFields.length} 条缺 strikes/gate 字段`);
+    if (ungated.length) bits.push(`${ungated.length} 条 strikes≥${STRIKES_THRESHOLD} 无闸`);
     return {
-      kind: 'red', violations, notes, scanned: entries.length,
-      line: `strikes 闸：${violations.length} 条未配闸（${violations.join('；')}）`,
+      kind: 'red', violations, missingFields, ungated, notes, scanned: entries.length,
+      line: `strikes 闸：${bits.join('，')}（${violations.join('；')}）`,
     };
   }
   const noteBit = notes.length ? `，存量待补闸 ${notes.length}` : '';
   return {
-    kind: 'ok', violations, notes, scanned: entries.length,
+    kind: 'ok', violations, missingFields, ungated, notes, scanned: entries.length,
     line: `strikes 闸：对照 ${entries.length} 条，基准后无「≥${STRIKES_THRESHOLD} 且无闸」${noteBit}`,
   };
 }

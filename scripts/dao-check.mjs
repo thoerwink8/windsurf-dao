@@ -1477,7 +1477,15 @@ function checkStrikesLive() {
     return;
   }
   if (r.kind === 'red') {
-    fail(r.line, '给这条 memory 配机械闸（hook/检查器/工具改造/主动注入），把路径写入 metadata.gate', r.violations.join('；'));
+    const fixes = [];
+    // 缺字段 ≠ 缺闸：strikes=1 的条目补两行就完了，别照着「配闸」去造它不需要的东西。
+    if (r.missingFields.length) {
+      fixes.push("frontmatter 的 metadata 补两行：strikes: <撞第几次> 和 gate: ''（还没配闸就留空串）");
+    }
+    if (r.ungated.length) {
+      fixes.push('撞满 2 次的这几条要配机械闸（hook/检查器/工具改造/主动注入），把路径写进 metadata.gate');
+    }
+    fail(r.line, fixes.join('；'), r.violations.join('；'));
     return;
   }
   if (r.notes.length) notes.push(`strikes 存量待补闸 ${r.notes.length}：${r.notes.slice(0, 6).join('；')}`);
