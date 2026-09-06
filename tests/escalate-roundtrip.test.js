@@ -144,10 +144,9 @@ describe('红②：无账本 + 已有 OPEN 单 + 新对象 → 必须真的在�
       state,
       dryRun: false,
       say: () => {},
-      io: {
-        runGh: fakeGh([]),
-        runCmd: (argv) => { calls.push(argv); return { ok: true }; },
-      },
+      gh: fakeGh([]),
+      cmd: (argv) => { calls.push(argv); return { ok: true }; },
+      send: () => ({ ok: true }),
     });
     assert.equal(r.ok, true);
     assert.equal(r.issue, 555);
@@ -166,10 +165,9 @@ describe('红②：无账本 + 已有 OPEN 单 + 新对象 → 必须真的在�
       state,
       dryRun: false,
       say: () => {},
-      io: {
-        runGh: fakeGh([{ body: '指挥官：同一原因又命中一个对象。\n\n- 新增：issue #900\n' }]),
-        runCmd: (argv) => { calls.push(argv); return { ok: true }; },
-      },
+      gh: fakeGh([{ body: '指挥官：同一原因又命中一个对象。\n\n- 新增：issue #900\n' }]),
+      cmd: (argv) => { calls.push(argv); return { ok: true }; },
+      send: () => ({ ok: true }),
     });
     assert.equal(r.ok, true);
     assert.equal(calls.length, 0, '同一个对象被刷了第二条评论');
@@ -184,10 +182,9 @@ describe('红②：无账本 + 已有 OPEN 单 + 新对象 → 必须真的在�
       state,
       dryRun: false,
       say: () => {},
-      io: {
-        runGh: fakeGh([], { viewOk: false }),
-        runCmd: (argv) => { calls.push(argv); return { ok: true }; },
-      },
+      gh: fakeGh([], { viewOk: false }),
+      cmd: (argv) => { calls.push(argv); return { ok: true }; },
+      send: () => ({ ok: true }),
     });
     assert.equal(r.skipped, 'append-unscanned');
     assert.equal(calls.length, 0);
@@ -201,10 +198,9 @@ describe('红②：无账本 + 已有 OPEN 单 + 新对象 → 必须真的在�
       state,
       dryRun: false,
       say: () => {},
-      io: {
-        runGh: fakeGh([]),
-        runCmd: () => ({ ok: false, error: 'gh comment 502' }),
-      },
+      gh: fakeGh([]),
+      cmd: () => ({ ok: false, error: 'gh comment 502' }),
+      send: () => ({ ok: true }),
     });
     assert.equal(r.ok, false);
     assert.equal(state.escalateLedger[key], undefined);

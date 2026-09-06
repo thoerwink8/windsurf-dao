@@ -53,11 +53,15 @@ import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
 } from './lib/exhausted.mjs';
+import {
+  argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
+} from './lib/hub-ask.mjs';
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -76,7 +80,7 @@ const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projec
 // 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
 // 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
 const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
-const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
+const HUB_DEDUP_MS = OPEN_ISSUE_CARD_DEDUP_MS; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
 const nowIso = () => new Date().toISOString();
@@ -318,8 +322,14 @@ function scanPrReviews(prs) {
 function ingestBreakerSignals({ now = Date.now() } = {}) {
   try {
     const policy = loadDispatchPolicy({ root: ROOT });
-    const health = runBreakerCommand({ action: 'ingest-health' }, { now, policy: policy.breaker });
-    const stall = runBreakerCommand({ action: 'ingest-stall' }, { now, policy: policy.breaker });
+    const hubAsk = ({ number, text }) => {
+      const planned = fieldsFromBreaker({ repo: REPO, number, text, url: issueLink(number) });
+      if (!planned.ok) return { ok: false, error: planned.error };
+      return sendHubAsk(planned.fields);
+    };
+    const inj = { now, policy: policy.breaker, hubAsk };
+    const health = runBreakerCommand({ action: 'ingest-health' }, inj);
+    const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
     return { ok: true, health, stall };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
@@ -438,6 +448,7 @@ function buildSituation({ state } = {}) {
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
+    hubSeen: (state && state.hubSeen) || {},
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
@@ -488,6 +499,38 @@ function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
   if (!r.ok) return { sent: false, error: r.error };
   state.hubSeen[key] = new Date(now).toISOString();
   return { sent: true };
+}
+
+/** 待拍板出站卡片。缺 {repo, number} 拒发；认回执，不认退出码。普通播报仍走 hubOnce/hubSay。 */
+function sendHubAsk(fields) {
+  const planned = argvFromFields(fields);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const script = hubAskScriptPath(ROOT);
+  const r = spawnSync(process.execPath, [script, ...planned.args], {
+    windowsHide: true, encoding: 'utf8', timeout: 30000, cwd: ROOT, env: process.env,
+  });
+  if (r.error) return { ok: false, error: `没送进群：hub-ask 起不来：${r.error.message}` };
+  if (r.status !== 0) {
+    return { ok: false, error: `没送进群：${String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 200)}` };
+  }
+  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
+  if (!messageId || messageId === 'null') {
+    return { ok: false, error: `没送进群：hub-ask 退出码 0 但没回 message_id（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
+  }
+  return { ok: true, messageId };
+}
+
+function hubAskOnce({ state, key, fields, now = Date.now(), dryRun, send = sendHubAsk }) {
+  state.hubSeen = state.hubSeen || {};
+  const last = Date.parse(state.hubSeen[key] || '') || 0;
+  if (now - last < HUB_DEDUP_MS) return { sent: false, reason: '6 小时内已发过' };
+  const planned = argvFromFields(fields || {});
+  if (!planned.ok) return { sent: false, error: planned.error };
+  if (dryRun) { state.hubSeen[key] = new Date(now).toISOString(); return { sent: true, dryRun: true }; }
+  const r = send(fields);
+  if (!r.ok) return { sent: false, error: r.error };
+  state.hubSeen[key] = new Date(now).toISOString();
+  return { sent: true, messageId: r.messageId };
 }
 
 // ── 手：执行一条动作。dryRun 只回它要跑的命令，不动真环境 ──
@@ -692,7 +735,17 @@ function execMarkExhausted(action, { dryRun, say }) {
   return { ok: true, labeled: true, commented: true };
 }
 
-function execOpenIssue(action, { state, dryRun, say }) {
+function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
+  // 账本已有 OPEN：只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+  // 下一轮 decide 仍会产 existing 动作，这里再走 askEscalateCard。
+  if (action.existing && action.number) {
+    const key = openIssueDedupKey(action.reason, action.target);
+    say(`  转单已在 #${action.number}（账本查重，不重开）`);
+    askEscalateCard({
+      state, key, number: action.number, action, dryRun, say, send,
+    });
+    return { ok: true, number: action.number, key, existing: true };
+  }
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
   const planned = planOpenIssueCmd({
@@ -711,10 +764,16 @@ function execOpenIssue(action, { state, dryRun, say }) {
   const r = runCmd(planned.argv, 60000);
   if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
   const m = String(r.out).match(/\/issues\/(\d+)/);
+  const number = m ? Number(m[1]) : null;
   state.openIssueLedger = state.openIssueLedger || {};
-  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
-  say(`  转单开了 #${m ? m[1] : '?'}`);
-  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
+  state.openIssueLedger[planned.key] = { at: nowIso(), number };
+  say(`  转单开了 #${number || '?'}`);
+  if (number) {
+    askEscalateCard({
+      state, key: planned.key, number, action, dryRun: false, say, send,
+    });
+  }
+  return { ok: true, number, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -1515,11 +1574,11 @@ function alreadyAppended({ issue, target, gh = runGh }) {
   return { unscanned: false, found: comments.some((c) => String(c?.body || '').includes(mark)) };
 }
 
-// io 是测试用的接缝（默认就是真家伙）：没有它，「无账本 + 已有 OPEN 单 + 新对象」
-// 这条路只能靠读源码验，而它恰恰是要证明「真的发出了那条评论」。写法同 lib/dispatch/lease.mjs。
-function escalate(action, { state, dryRun, say, io = null } = {}) {
-  const gh = (io && io.runGh) || runGh;
-  const cmd = (io && io.runCmd) || runCmd;
+// 接缝沿用本文件既有的那套（gh / send / openIssue），只补一个 cmd——
+// 「无账本 + 已有 OPEN 单 + 新对象」那条路要证明「真的发出了那条评论」，靠读源码验不了。
+// 不另造第二套注入约定：tests/hub-ask.test.js 已经在用这套。
+function escalate(action, { state, dryRun, say,
+  gh = runGh, cmd = runCmd, send = sendHubAsk, openIssue = openEscalationIssue } = {}) {
   const key = escalateDedupKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
   // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
@@ -1549,6 +1608,9 @@ function escalate(action, { state, dryRun, say, io = null } = {}) {
   }
   if (verdict.verdict === 'noop') {
     say(`  报帅（${verdict.why}，不重开也不追加）：${action.why}`);
+    // OPEN 只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+    // 下一轮必须再走 askEscalateCard，否则机器主动问用户会永久哑掉。
+    askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
     return { ok: true, issue: booked.issue };
   }
   if (verdict.verdict === 'append') {
@@ -1564,6 +1626,7 @@ function escalate(action, { state, dryRun, say, io = null } = {}) {
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
     state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
     say(`  报帅追加进 #${booked.issue}：${verdict.target}（同因不新开）`);
+    askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
     return { ok: true, issue: booked.issue, appended: verdict.target };
   }
   if (booked && booked.issue && bookedState && bookedState !== 'OPEN') {
@@ -1584,8 +1647,6 @@ function escalate(action, { state, dryRun, say, io = null } = {}) {
     say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
     return { ok: true, skipped: 'dedup-unscanned' };
   }
-  const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
-  hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) {
     // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。两件事都要做：
     //   ① 把本次对象**追加到那张单上**——只写账本不留言，用户在单里永远看不到后来的对象；
@@ -1620,12 +1681,14 @@ function escalate(action, { state, dryRun, say, io = null } = {}) {
     }
     state.escalateLedger[key] = { issue: existing, at: nowIso(), objects: isNew ? [...prevObjs, t] : prevObjs };
     say(`  报帅（待拍板 #${existing} 已在，不重开；${isNew ? '已追加 ' + t + '，' : ''}已写回账本）：${action.why}`);
+    askEscalateCard({ state, key, number: existing, action, dryRun, say, send });
     return { ok: true, issue: existing };
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
+  const opened = openIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
+  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
 }
 /**
@@ -1661,6 +1724,17 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
   }
   return { ok: true, closed: r.toClose.length };
+}
+
+// 机器主动问用户那条路（master 侧长出来的）：开单/已有单都要发卡。
+// OPEN 只免重开，不免发卡——首次发卡失败时 hubAskOnce 不会盖去重戳，下一轮还要再走一次。
+function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
+  const planned = fieldsFromEscalate({
+    repo: REPO, number, why: action.why, reason: action.reason, recommend: action.recommend, url: issueLink(number),
+  });
+  if (!planned.ok) { say(`  待拍板卡拒发：${planned.error}`); return; }
+  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun, send });
+  say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + number : '待拍板卡略：' + (r.reason || r.error)}`);
 }
 
 // 标题只写原因，不写对象——**对象会不断增加**，写进标题第二个对象来的那一刻它就是错的。
@@ -1793,7 +1867,7 @@ function main() {
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);
     process.exit(0);
   }
-  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }));
+  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
   if (sub === 'status') return import('./lib/commander-inventory.mjs').then((m) => m.runStatus({ rest, ROOT }));
   if (sub === 'install') return import('./lib/commander-inventory.mjs').then((m) => m.runInstall({ rest, ROOT }));
   const fn = CMDS[sub];
@@ -1805,8 +1879,8 @@ const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
 export {
-  buildSituation, situationHealth, escalateDedupKey, scanStall,
+  buildSituation, situationHealth, escalate, escalateDedupKey, execOpenIssue, scanStall,
   countInflightWorkers,
   reapBrains,
-  escalate, alreadyAppended,
+  alreadyAppended,
 };
