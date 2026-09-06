@@ -58,10 +58,20 @@ describe('判据真的接在 escalate 上', () => {
   it('轮末收敛接在动作跑完之后（连续轮与关单都要等本轮原因齐了才算数）', () => {
     const s = src();
     const runIdx = s.indexOf('runActions(actions,');
-    const recIdx = s.indexOf('reconcileEscalations({ actions, situation, state');
+    const recIdx = s.indexOf('reconcileEscalations({');
     assert.notEqual(runIdx, -1, 'runActions 调用点没找到，锚点失配了');
     assert.notEqual(recIdx, -1, 'reconcileEscalations 调用点没找到——收敛根本没接线');
     assert.equal(recIdx > runIdx, true, '收敛接在了 runActions 之前：那时本轮有哪些原因还没定');
+  });
+
+  // 光「接在后面」不够：喂进去的必须是静态动作 **加上** 执行中动态产生的升级动作。
+  // 只喂 decide 的数组，等于告诉收敛「dispatch-unscanned 这类原因本轮没出现过」——
+  // 连续计数每轮归零，已有同因 OPEN 单还会被误关。行为闸在 tests/escalate-roundtrip.test.js。
+  it('收敛的输入含 runActions 动态产生的升级动作', () => {
+    const s = src();
+    assert.match(s, /const ran = runActions\(actions,/, 'runActions 的返回值被丢掉了，动态原因取不到');
+    assert.match(s, /actions:\s*\[\.\.\.actions,\s*\.\.\.\(ran\.generated \|\| \[\]\)\]/,
+      '轮末收敛还是只喂 decide 的静态数组：动态原因每轮当成「没出现过」，计数归零 + 已有单被误关');
   });
 
   // 回归闸：改回字符串相等就是把 6 张单的路重新打开。

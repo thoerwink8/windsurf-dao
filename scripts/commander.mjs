@@ -800,6 +800,10 @@ export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
   const failedPrs = new Set(); // 返工的随附回流按 PR 号挂，不按 issue（#931）
+  // 执行中动态生成的 escalate 动作要还给调用方：轮末 reconcileEscalations 只认它拿到的数组，
+  // 拿不到这些原因就等于「本轮没出现过」——连续计数每轮归零（第 N 轮永远到不了），
+  // 而且已有的同因 OPEN 单会被判成「本轮已消失」自动关掉。
+  const generated = [];
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action.kind === 'notify-hub'
       && ((action.issue != null && failedIssues.has(String(action.issue)))
@@ -824,7 +828,7 @@ export function runActions(actions, { exec, log = [] } = {}) {
     failedIssues.add(String(action.issue));
     if (action.pr != null) failedPrs.add(String(action.pr));
     const isRework = action.kind === 'rework';
-    exec({
+    const escalation = {
       kind: 'escalate',
       reason: r && r.unscanned
         ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
@@ -834,9 +838,11 @@ export function runActions(actions, { exec, log = [] } = {}) {
       why: isRework
         ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
         : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
-    });
+    };
+    generated.push(escalation);
+    exec(escalation);
   }
-  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs] };
+  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs], generated };
 }
 
 /** 主线程同步睡。指挥官是 oneshot，阻塞期间本来也没别的事要做，所以不改 async 范式。
@@ -1488,7 +1494,32 @@ function runDaipai({ state, dryRun, say }) {
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
-function escalate(action, { state, dryRun, say }) {
+/**
+ * 这个对象是不是已经追加到那张单上了。
+ *
+ * 只给「账本里没这条键、但 GitHub 上已有单」那条路用：那时本地没有任何记录
+ * 能证明说过没说过，唯一的真相在单上。判据是 appendCommentBody 写死的那行
+ * 「新增：<对象>」——它是这条评论里唯一稳定的锚。
+ *
+ * 读不到评论一律判「没查成」：把「查不到」当成「没说过」会每轮刷一条重复评论。
+ */
+function alreadyAppended({ issue, target, gh = runGh }) {
+  if (!target) return { unscanned: false, found: true }; // 没有对象要追加，等同已处理
+  const r = gh(['issue', 'view', String(issue), '--repo', REPO, '--json', 'comments'], 30000);
+  if (!r.ok) return { unscanned: true, error: r.error };
+  let comments;
+  try { comments = JSON.parse(r.out || '{}').comments; }
+  catch { return { unscanned: true, error: 'issue comments 返回非 JSON' }; }
+  if (!Array.isArray(comments)) return { unscanned: true, error: 'issue comments 不是数组' };
+  const mark = `新增：${target}`;
+  return { unscanned: false, found: comments.some((c) => String(c?.body || '').includes(mark)) };
+}
+
+// io 是测试用的接缝（默认就是真家伙）：没有它，「无账本 + 已有 OPEN 单 + 新对象」
+// 这条路只能靠读源码验，而它恰恰是要证明「真的发出了那条评论」。写法同 lib/dispatch/lease.mjs。
+function escalate(action, { state, dryRun, say, io = null } = {}) {
+  const gh = (io && io.runGh) || runGh;
+  const cmd = (io && io.runCmd) || runCmd;
   const key = escalateDedupKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
   // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
@@ -1499,7 +1530,7 @@ function escalate(action, { state, dryRun, say }) {
   // 已记单的实时状态：核不出来必须传 null（判据据此走 fail-closed，不开单）。
   let bookedState = null;
   if (booked && booked.issue) {
-    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    const st = gh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
     if (st.ok) bookedState = String(st.out).trim() || null;
   }
   // 判据是纯函数（scripts/lib/escalate-group.mjs）：四个出口分得开，测试直接喂。
@@ -1527,7 +1558,7 @@ function escalate(action, { state, dryRun, say }) {
     const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
     ensureDir(STATE_DIR);
     writeFileSync(bodyFile, body, 'utf8');
-    const r = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(booked.issue),
+    const r = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(booked.issue),
       '--repo', REPO, '--body-file', bodyFile], 60000);
     if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
@@ -1539,7 +1570,7 @@ function escalate(action, { state, dryRun, say }) {
     delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
   }
   // 查重：已有 open 带此标记的单 → 不重复开
-  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
+  const found = gh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
   let searchOk = false;
   if (found.ok) {
@@ -1556,16 +1587,39 @@ function escalate(action, { state, dryRun, say }) {
   const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) {
-    // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。**必须写回账本**：
-    // 不写回，下一轮又走到这里，每个新对象都当成第一次，对象清单永远攒不起来
-    // （追加那条路一次都进不去）。写回时把本次对象一并并进去，幂等。
-    if (!dryRun) {
-      const t = escalateTarget(action);
-      const prevObjs = Array.isArray(booked?.objects) ? booked.objects : [];
-      const objects = t && !prevObjs.includes(t) ? [...prevObjs, t] : prevObjs;
-      state.escalateLedger[key] = { issue: existing, at: nowIso(), objects };
+    // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。两件事都要做：
+    //   ① 把本次对象**追加到那张单上**——只写账本不留言，用户在单里永远看不到后来的对象；
+    //   ② 写回账本——不写回，下一轮又走到这里，每个新对象都当成第一次，清单永远攒不起来。
+    // 顺序不能反：留言成了才记账本。记早了而留言失败，下轮会以为说过了，那个对象就永远不会被提起。
+    const t = escalateTarget(action);
+    const prevObjs = Array.isArray(booked?.objects) ? booked.objects : [];
+    const isNew = Boolean(t) && !prevObjs.includes(t);
+    if (dryRun) {
+      say(`[dry] 报帅（待拍板 #${existing} 已在，不重开${isNew ? '；追加 ' + t : ''}）：${action.why}`);
+      return { ok: true, dryRun: true, issue: existing };
     }
-    say(`  报帅（待拍板 #${existing} 已在，不重开；已写回账本）：${action.why}`);
+    if (isNew) {
+      const seen = alreadyAppended({ issue: existing, target: t, gh });
+      if (seen.unscanned) {
+        // 没查成不许写账本：写了就等于宣称「这个对象已经说过」，而我们并不知道。
+        say(`  追加没查成（读不到 #${existing} 的评论，本轮不追加也不写账本，下轮再试）：${seen.error}`);
+        return { ok: true, skipped: 'append-unscanned' };
+      }
+      if (!seen.found) {
+        const body = appendCommentBody({ target: t, objects: [...prevObjs, t], why: action.why, at: nowIso() });
+        ensureDir(STATE_DIR);
+        const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
+        writeFileSync(bodyFile, body, 'utf8');
+        const put = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(existing),
+          '--repo', REPO, '--body-file', bodyFile], 60000);
+        if (!put.ok) {
+          say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
+          return { ok: false, error: put.error };
+        }
+      }
+    }
+    state.escalateLedger[key] = { issue: existing, at: nowIso(), objects: isNew ? [...prevObjs, t] : prevObjs };
+    say(`  报帅（待拍板 #${existing} 已在，不重开；${isNew ? '已追加 ' + t + '，' : ''}已写回账本）：${action.why}`);
     return { ok: true, issue: existing };
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
@@ -1690,10 +1744,16 @@ function cmdAct(argv) {
   const log = [];
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
-  runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  const ran = runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
   // 轮末收敛（#1063）：数连续轮 + 把本轮已不再出现的原因自动关单。必须在动作跑完之后，
   // 因为「本轮有哪些原因」要等 decide 的动作全部落地才算数。
-  reconcileEscalations({ actions, situation, state, dryRun, say: (m) => log.push(m) });
+  // 输入必须是 decide 的静态动作 **加上** runActions 执行中动态产生的升级动作：
+  // 派工/返工失败那条路的原因只在执行时才知道（dispatch-unscanned / rework-failed…），
+  // 只喂 decide 的数组就等于告诉收敛「这些原因本轮没出现」。
+  reconcileEscalations({
+    actions: [...actions, ...(ran.generated || [])],
+    situation, state, dryRun, say: (m) => log.push(m),
+  });
   runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
@@ -1748,4 +1808,5 @@ export {
   buildSituation, situationHealth, escalateDedupKey, scanStall,
   countInflightWorkers,
   reapBrains,
+  escalate, alreadyAppended,
 };
