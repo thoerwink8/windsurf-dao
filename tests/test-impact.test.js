@@ -68,6 +68,30 @@ test('⑥ 算不出来就退全量——三种情形一条都不许静默放行'
   }
 });
 
+test('⑥′ 新增的源文件必须退全量——按目录扫的测试认得它，地图不认', () => {
+  // 2026-09-06 当场咬到的：新加 host/machine/systemd/dao-nudge-stalled.timer 之后，
+  // timer-armed.test.js（按目录扫 *.timer）没被选中，因为地图记的是采样那刻的具体文件名。
+  const r = affectedTests({
+    map: MAP, changed: ['host/machine/systemd/dao-nudge-stalled.timer'],
+    allTests: ALL, added: ['host/machine/systemd/dao-nudge-stalled.timer'],
+  });
+  assert.equal(r.mode, 'full');
+  assert.match(r.why, /采样时还不存在/);
+
+  // 同一个文件，如果不是本次新增（早就在仓里、只是没测试碰过）⇒ 0 套才是对的，不许过度保守
+  const old = affectedTests({ map: MAP, changed: ['host/machine/systemd/dao-nudge-stalled.timer'], allTests: ALL, added: [] });
+  assert.equal(old.mode, 'affected');
+  assert.deepEqual(old.tests, []);
+
+  // 新增的是测试文件 ⇒ 走规则②跑它自己，不该整个退全量
+  const newTest = affectedTests({
+    map: MAP, changed: ['tests/brand-new.test.js'],
+    allTests: [...ALL, 'tests/brand-new.test.js'], added: ['tests/brand-new.test.js'],
+  });
+  assert.equal(newTest.mode, 'affected');
+  assert.ok(newTest.tests.includes('tests/brand-new.test.js'));
+});
+
 test('⑦ 0 命中必须带理由，不许光秃秃地判「没事」', () => {
   const r = affectedTests({ map: MAP, changed: ['README.md'], allTests: ALL });
   assert.equal(r.mode, 'affected');

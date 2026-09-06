@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // host/skills/ask-gate/hooks/ask-gate.mjs —— PreToolUse 钩子：正要问用户的那一刻，把判据推到眼前。
 //
-// 改这个文件前必须知道的六条：
+// 改这个文件前必须知道的七条：
 //
 // 1. 它**永不拦**。走的是 hookSpecificOutput.additionalContext（宿主明写「非报错反馈通道」），
 //    不是 exit 2 也不是 permissionDecision:deny。拦错了 AI 就问不了用户，而用户可能正等着被问——
@@ -25,8 +25,12 @@
 //
 // 6. 判据住在被观测的那个仓里。本机全局装载面点到的是 windsurf-dao 的副本，但当前工作的
 //    可能是别的仓——所以优先用**当前仓**自己的 lib 与策略文件，没有才回落到本 skill 随附的那份。
+//
+// 7. 第二格（#965）只查评论、不查正文。正文是快照。拉评论走 gh issue view --json comments，
+//    失败一律 unscanned。本文件是唯一 spawn 的地方；判据与渲染在 scripts/lib/ask-gate.mjs。
 
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -98,19 +102,74 @@ async function main() {
 
   const text = S.askToolText(event.tool_input || event.toolInput || {});
   const verdict = S.classifyAsk({ text, policy });
-  const context = S.renderAskGate(verdict, { policy, tool });
+  let context = S.renderAskGate(verdict, { policy, tool });
+
+  // 第二格（#965）：相关 issue 的评论里有没有已拍板。正文是快照，不查正文。
+  // 提问原文没带号时，才回落到 transcript 末尾——原事故提问写的是「5.5 还是 5.6」，号在对话里。
+  const extraText = readTranscriptTail(event);
+  const decisionBlock = S.lookupAndRenderDecisions({
+    text,
+    extraText,
+    fetchComments: (n) => fetchIssueComments(n, root || event.cwd || process.cwd()),
+  });
+  if (decisionBlock) context = `${context}\n${decisionBlock}`;
+  const alreadyDecided = /这件事已经拍过/.test(decisionBlock);
 
   if (verdict.verdict === 'ask') {
     // 放行不啰嗦：命中红线就一行，说明凭哪条命中的，好让 AI 知道自己被算过一次。
-    emit({ context });
+    // 第二格查到已拍过时，用户同一屏也该看见——否则又是一次打扰。
+    emit({ context, warning: alreadyDecided ? '[问人闸] 相关 issue 评论里已经拍过，先看注入的原文再决定问不问' : undefined });
     return;
   }
   emit({
     context,
-    warning: verdict.verdict === 'unscanned'
-      ? `[问人闸] 该不该问你，这次没查成：${verdict.why}`
-      : `[问人闸] 这次提问不在「永远问人」的四条里（${verdict.why}）`,
+    warning: alreadyDecided
+      ? '[问人闸] 相关 issue 评论里已经拍过，先看注入的原文再决定问不问'
+      : verdict.verdict === 'unscanned'
+        ? `[问人闸] 该不该问你，这次没查成：${verdict.why}`
+        : `[问人闸] 这次提问不在「永远问人」的四条里（${verdict.why}）`,
   });
+}
+
+/** 读会话 transcript 末尾。没有路径 / 读失败 → 空串（没查成走第二格自己的三态，不在这里发明）。 */
+function readTranscriptTail(event) {
+  const p = event.transcript_path || event.transcriptPath;
+  if (!p || !existsSync(p)) return '';
+  try {
+    const raw = readFileSync(p, 'utf8');
+    return raw.length > 32_000 ? raw.slice(-32_000) : raw;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 拉一个 issue 的评论。失败一律 unscanned，不许把「gh 挂了」说成「没拍过」。
+ * 只要 comments 字段，不要 body——正文是快照，正是本格要躲开的那份。
+ */
+function fetchIssueComments(n, cwd) {
+  try {
+    const r = spawnSync('gh', ['issue', 'view', String(n), '--json', 'comments'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 4000,
+      windowsHide: true,
+    });
+    if (r.error) return { unscanned: `gh 跑不起来：${String(r.error.message).slice(0, 80)}` };
+    if (r.status !== 0) {
+      return { unscanned: `gh 失败：${String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 120)}` };
+    }
+    let parsed;
+    try { parsed = JSON.parse(r.stdout); } catch (e) {
+      return { unscanned: `评论 JSON 解析不了：${String(e.message).slice(0, 80)}` };
+    }
+    if (!Array.isArray(parsed?.comments)) {
+      return { unscanned: 'gh 没返回 comments 数组——没查成，不是没拍过' };
+    }
+    return { comments: parsed.comments };
+  } catch (e) {
+    return { unscanned: `读评论抛错：${String(e && e.message ? e.message : e).slice(0, 80)}` };
+  }
 }
 
 // 任何异常都不许非零退出、不许写 stderr——stderr + 非零在别的 hook 语义里会变成拦截。
