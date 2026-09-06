@@ -5,6 +5,8 @@
 1. **AI 协作约定**：根目录的 `CLAUDE.md`，一页纸写清楚 AI 在这个仓库里怎么工作——改动在 worktree 里做、改完跑自检、出问题先回退、全程说人话；派工链上的流程规矩收在 dispatch skill。
 2. **一条自检命令**：`node scripts/dao-check.mjs`，检查仓库现在好不好——测试跑不跑得过、技能能不能加载、密钥有没有不小心进 git。退出码 0 就是好，非 0 就是有要修的事。
 
+单独跑测试：`node --test tests/*.test.js`，单套复现 `node --test tests/<名>.test.js`。**别写 `node --test tests/`**——Node 24 会把目录当模块报 `MODULE_NOT_FOUND`。本仓无 `package.json`、无第三方依赖（只用 `node:` 内置模块），Node ≥ 20.11 直接跑，不必 `npm install`。
+
 历史文档（调研底稿、证据稿、旧拍板档案、项目模板、道德经源文本）已归档到私有仓 `thoerwink8/windsurf-dao-memory` 的 `docs-archive/`（2026-08-22 清零收口）；本机接上 memory Junction 后即可随时翻阅，见 `NEW-MACHINE.md`「接上 memory」节。
 
 ## 目录导览
