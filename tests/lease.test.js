@@ -183,7 +183,10 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
     const src = fs.readFileSync(RT, 'utf8');
     const a = src.indexOf('async function startSession(');
     const b = src.indexOf('async function readSession(', a);
-    assert.ok(a >= 0 && b > a, 'startSession/readSession 锚点找不到了——切片没取成，不是「检查通过」');
+    // 锚点两头分开断言：合成一条 ok(a>=0 && b>a) 失败时看不出是哪头没找到。
+    assert.notEqual(a, -1, 'startSession 锚点找不到了——切片没取成，不是「检查通过」');
+    assert.notEqual(b, -1, 'readSession 锚点找不到了——切片没取成，不是「检查通过」');
+    assert.ok(b > a, `readSession(${b}) 应当排在 startSession(${a}) 后面`);
     const fn = src.slice(a, b);
     assert.ok(fn.length > 400, `切片只有 ${fn.length} 字符，锚点多半失效了`);
     return { src, fn };
