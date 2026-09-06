@@ -57,6 +57,18 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
+  it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-900' }] },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '活执行者在就不能再派');
+  });
+
   // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
   // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
   // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。
@@ -1097,6 +1109,7 @@ describe('跨仓感知只感知不派工', () => {
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
     assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /sessions, desiredJobs,/, '对账循环观测/期望集也要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
@@ -1377,9 +1390,40 @@ describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
     assert.deepEqual(byKind(r, 'rework'), []);
   });
 
-  it('draft 的冲突 PR → 不派（还没交卷，工人自己会解）', async () => {
+  it('观测面未接时，draft 的冲突 PR 维持旧契约不派', async () => {
     const { decide } = await CORE;
     const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // #1056 / #1043 现场 A：draft 不是「有人在做」。4 张 CONFLICTING 全是 draft、一个活会话都没有。
+  it('draft 冲突 + 观测面扫完没有活会话 → 派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: true, items: [] },
+    }));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1, '没人在做的 draft 冲突必须派，不能再拿 draft 当活性');
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('draft 冲突 + 同 PR 有活会话 → 不派（真有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: {
+        scanned: true,
+        items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-review-pr-950', title: 'PR #950' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('draft 冲突 + 会话名单没查成 → 不派（查不成当有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: false, error: '连不上' },
+    }));
     assert.deepEqual(byKind(r, 'rework'), []);
   });
 
@@ -1611,5 +1655,127 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
     assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
     assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
+  });
+});
+
+// ── 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派 ──
+describe('对账循环：账上有人、名单里没有 → 重派', () => {
+  // 不打「已消歧」：这单已经有人派过（账上未结），不该再走 ready 队列那条新派路。
+  const labeled = {
+    number: 885, title: '卡 B 返工',
+    labels: [
+      { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+  const sit = (over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeled], prs: [] },
+    prReviews: { scanned: true, byPr: {} },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('期望集有未结 + 名单里没有活会话 → dispatch(reconcile)', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(d.length, 1);
+    assert.equal(d[0].issue, 885);
+  });
+
+  it('同一 issue 已有活会话 → 拒绝再派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-885' }] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+  });
+
+  it('会话名单没查成 → 零重派，只 escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: false, error: '连不上' },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'reconcile-unscanned').length, 1);
+  });
+
+  it('老夹具不挂 sessions/desiredJobs → 整段跳过，既有派工路不受影响', async () => {
+    const { decide } = await CORE;
+    const issue = {
+      number: 900, title: '补 X',
+      labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(byKind(r, 'dispatch').length, 1);
+    assert.equal(byKind(r, 'dispatch')[0].reconcile, undefined);
+  });
+});
+
+describe('对账循环 scan 真的接进态势', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+
+  it('buildSituation 采了 sessions 和 desiredJobs', () => {
+    assert.match(src, /const sessions = scanSessions\(\);/);
+    assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
+    assert.match(src, /sessions, desiredJobs,/);
+  });
+
+  it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
+    const i = src.indexOf('function scanDesiredJobs');
+    assert.ok(i > -1, '找不到 scanDesiredJobs');
+    const fn = src.slice(i, i + 700);
+    assert.match(fn, /readLedgerEvents/);
+    assert.ok(!/readDispatchEventsIndexed/.test(fn), '索引窗会把 10 分钟前的未结派工洗掉');
+  });
+
+  it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
+    assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
+  });
+});
+
+describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const prev = process.env.DAO_MIRASIM_LS;
+  const restore = () => {
+    if (prev === undefined) delete process.env.DAO_MIRASIM_LS;
+    else process.env.DAO_MIRASIM_LS = prev;
+  };
+
+  it('零输出脚本 exit 0 → scanned:false（审官判别实验）', async () => {
+    const { scanSessions } = await MOD();
+    const empty = path.join(__dirname, 'fixtures', 'unit-restart', 'empty', '.gitkeep');
+    process.env.DAO_MIRASIM_LS = empty;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, '零输出不许当成查成且空');
+      assert.match(String(r.error || ''), /没查成|协议帧|零输出/);
+    } finally { restore(); }
+  });
+
+  it('打了 type=sessions 协议帧且 0 行会话 → scanned:true items=[]（查成且空）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-ok-empty.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, true);
+      assert.deepEqual(r.items, []);
+    } finally { restore(); }
+  });
+
+  it('{type:sessions, sessions:null} → scanned:false（审官判别实验：不许折成空名单）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-null.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
+      assert.match(String(r.error || ''), /不是数组|没查成/);
+    } finally { restore(); }
   });
 });

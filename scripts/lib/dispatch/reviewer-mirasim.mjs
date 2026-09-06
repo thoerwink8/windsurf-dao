@@ -83,6 +83,15 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} 服务端查不到，登记失效 → 可新建：${view.why || ''}`.trim() };
   }
   const phase = view.phase == null ? '' : String(view.phase).trim().toLowerCase();
+  const runState = view.runState == null ? '' : String(view.runState).trim().toLowerCase();
+  // #1056：runState incomplete / incomplete 标记不是在役。phase=done 只说明那一轮结束了，
+  // 会话自己已经卡死（Selected model is at capacity / 30 分钟计时）。复用 = 把 PR 锁死在死审官上。
+  if (view.incomplete === true || phase === 'incomplete' || runState === 'incomplete') {
+    return {
+      reuse: false, sessionKey: key, checked: true,
+      why: `会话 ${key} runState=incomplete（一轮卡死，不是在役）→ 可新建`,
+    };
+  }
   if (phase && DEAD_PHASES.has(phase)) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} phase=${phase}（已废）→ 可新建` };
   }

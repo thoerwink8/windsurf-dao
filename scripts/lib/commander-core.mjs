@@ -39,6 +39,9 @@ import {
 } from './dispatch/review-pending.mjs';
 import { resolveMergeable } from './dispatch/git.mjs';
 import {
+  hasLiveExecutor, sessionListForLiveness, planReconcile,
+} from './session-reconcile.mjs';
+import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
 } from './admission.mjs';
 
@@ -357,12 +360,12 @@ function collectCandidates(situation) {
 
   // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
   // #1007：闸是机器余量，不是「每轮派几个」。容量没查成 → 一张都不派（fail-close）。
-  //
   // 树面来自 situation.trees（mirasim，见 lib/mirasim-trees.mjs），**不再是 orca.worktrees**。
   // 2026-09-06 实咬：orca 退役后那一段恒 scanned:false，而这里原来写着 `orca.worktrees || []`
   // ——「没查成」被洗成「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次。
   // 现在**不给兜底空数组**：树面没查成就让 inspectReadyQueue 判 unscanned，一张都不派。
   // 少派一轮是可恢复的，重复派工烧掉的额度和两个工人打架不是。
+  // 「有没有活执行者」仍只问下面 hasLiveExecutor（#1056 唯一活性口），不拿卡面猜。
   const treeFace = situation.trees;
   const ready = treeFace && treeFace.scanned === true
     ? inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: treeFace.worktrees })
@@ -490,6 +493,13 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
+      // #1056：活性只问这一处。同一 issue 已有活执行者（或名单没查成）→ 不派。
+      // 观测面未接入（老夹具）live.live=false，既有派工路不受影响。
+      const live = hasLiveExecutor({
+        sessions: sessionListForLiveness(situation),
+        issue: n,
+      });
+      if (live.live) continue;
       // 新活只能用「留给收尾之后剩下的」那部分名额，且照样要从共用池里领一个。
       if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
         reportAdmission(N.dispatch);
@@ -729,7 +739,17 @@ function collectCandidates(situation) {
     // 而 reviews-missing 在下面是静默 continue，写在后面会被吃掉。
     // 只认显式 CONFLICTING：UNKNOWN 是 GitHub 还在异步算，没查成 ≠ 有冲突。
     // mergeableState 已经过 resolveMergeable：列表 UNKNOWN 时单张重查后再判。
-    if (mergeableState === 'CONFLICTING' && !pr.isDraft) {
+    // #1056 / #1043：draft 不是「有人在做」。4 张 CONFLICTING 全是 draft、一个活会话都没有，
+    // 却被 !pr.isDraft 整批挡在门外。改问活执行者；查不成当有人在做（不往活树上再塞人）。
+    // 观测面未接入（老夹具）维持旧契约：draft 不派。
+    if (mergeableState === 'CONFLICTING') {
+      const live = hasLiveExecutor({
+        sessions: sessionListForLiveness(situation),
+        pr: pr.number,
+        issue: attributedIssueNumber(pr),
+      });
+      if (live.live) continue; // 有人在做，或会话名单没查成——不派
+      if (live.unavailable && pr.isDraft) continue; // 观测面未接：draft 维持旧契约
       const head = pr.headRefOid || '';
       if (!head) {
         out.push(withNeeds(esc(
@@ -845,6 +865,59 @@ function collectCandidates(situation) {
     });
   }
 
+  // ⑤ 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派。
+  // 观测面和期望集都没挂上（老夹具）→ 整段跳过，既有动作不受影响。
+  // sessions 不进 SITUATION_SECTIONS：名单没查成只挡住重派，不许把合并/叫审官整轮停掉。
+  if (situation.sessions != null || situation.desiredJobs != null) {
+    const desired = situation.desiredJobs;
+    // 差集重派也起会话，吃同一份机器余量。夹具没给 admission 时 slotsLeft=Infinity，
+    // 退回旧缺省 2（#849），不按已退役的 maxDispatchPerRound 键。
+    const reconcileCap = Number.isFinite(slotsLeft) ? Math.max(0, slotsLeft) : 2;
+    const plan = planReconcile({
+      desired: desired && desired.unscanned ? null : (desired && desired.items),
+      sessions: sessionListForLiveness(situation),
+      openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
+      alreadyQueued: out.map((a) => a.issue).filter((n) => Number.isInteger(n)),
+      maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
+      dispatchedThisRound: 0,
+    });
+    if (plan.unscanned) {
+      out.push(withNeeds(esc(plan.reports[0] || '对账循环没查成——当有人在做，不重派', {
+        reason: 'unscanned', detail: 'reconcile-unscanned',
+      }), N.dispatch));
+    }
+    for (const rd of plan.redispatches) {
+      const issue = (gh.issues || []).find((i) => i && i.number === rd.issue);
+      const model = labelValue(issue, 'model/');
+      const reviewer = labelValue(issue, 'reviewer/');
+      if (!issue || !model || !reviewer) {
+        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但 model/reviewer 没查成，不猜`, {
+          reason: 'missing-labels', issue: rd.issue,
+        }), N.dispatch));
+        continue;
+      }
+      const rGate = assessDispatchModel(model, { policy, enabledIds, redIds });
+      if (!rGate.ok) {
+        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但${rGate.why}`, {
+          reason: rGate.reason, issue: rd.issue, model,
+        }), N.dispatch));
+        continue;
+      }
+      if (!takeSlot()) {
+        reportAdmission(N.dispatch);
+        continue;
+      }
+      out.push(withNeeds({
+        kind: 'dispatch', issue: rd.issue, model, reviewer,
+        role: labelValue(issue, 'type/') || null,
+        title: issue.title || '',
+        why: rd.why,
+        reconcile: true,
+      }, N.dispatch));
+      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派`, 'dispatched', { issue: rd.issue }), N.dispatch));
+    }
+  }
+
   // ④ 撞死指纹 + #833 自动换人没接住 → wake-brain
   for (const [term, info] of Object.entries(stall.strikes || {})) {
     if (!info || (info.strikes || 0) < 2) continue;
@@ -869,6 +942,8 @@ function collectCandidates(situation) {
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker,source,error}], error }
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
+ *   sessions:      { scanned, items:[{key,title,state,cwd}], error } —— #1056 观测集；不进 SITUATION_SECTIONS
+ *   desiredJobs:   { unscanned, items:[{job_id,issue,pr,identity,model}], error } —— #1056 期望集（未结 job.dispatch）
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
  *   viewMergeable:  (prNumber) => string | {ok, mergeable, error} —— #1017 列表 UNKNOWN 时单张重查；不注入则 UNKNOWN 保持没查成

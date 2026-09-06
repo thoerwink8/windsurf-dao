@@ -1061,7 +1061,7 @@ export const FLAGS_BY_VERB = {
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
-    '--executor', '--branch', '--repo', '--json', '--help', '-h',
+    '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([

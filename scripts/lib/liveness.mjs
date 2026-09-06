@@ -16,6 +16,8 @@
 //
 // 驱动适配器只需回答一句话：这个会话上次真动是什么时候（外加驱动自己知道的终态）。
 
+import { shouldRestartReviewer } from './session-reconcile.mjs';
+
 /** 默认静默阈值：45 分钟。够长到不误伤长思考/长跑测试，够短到不至于像今天那样躺 10 小时。 */
 export const DEFAULT_SILENCE_MS = 45 * 60 * 1000;
 
@@ -74,8 +76,11 @@ export function sessionFromMirasimSession(s) {
   if (!s || !s.key) return null;
   const raw = s.state == null ? '' : String(s.state).toLowerCase();
   const terminal = DRIVER_TERMINAL_STATES.get(raw) || null;
+  // incomplete = mirasim 自己的 30 分钟计时：一轮跑完在等下一句话。这是确定的「卡住」，
+  // 不是「没时间戳所以没查成」——2026-09-06 五个工人全是这个态，推一句「继续」就活了。
+  const stalledTurn = raw === 'incomplete';
   const at = parseAt(s.lastActivityAt ?? s.updatedAt ?? s.ts);
-  const unscanned = !terminal && at == null;
+  const unscanned = !terminal && !stalledTurn && at == null;
   return {
     id: String(s.key),
     driver: 'mirasim',
@@ -105,6 +110,14 @@ export function assessLiveness(session, { now = Date.now(), thresholdMs = DEFAUL
   }
   const terminal = DRIVER_TERMINAL_STATES.get(String(session.driverState || '').toLowerCase());
   if (terminal) return { state: 'done', why: `驱动自报 ${session.driverState}` };
+  // incomplete = mirasim 自己判「这一轮卡在等下一句话」。阈值还没到也是卡住——
+  // 不认这一档，routeSilent 的 nudge 永远喂不到今天那种 30 分钟计时样本。
+  const rawState = String(session.driverState || '').toLowerCase();
+  if (rawState === 'incomplete') {
+    const at = parseAt(session.lastProgressAt);
+    const silentMs = at == null ? 0 : Math.max(0, now - at);
+    return { state: 'silent', silentMs, why: 'mirasim 自报 incomplete（一轮跑完在等下一句话）' };
+  }
   const at = parseAt(session.lastProgressAt);
   if (at == null) {
     return { state: 'unscanned', why: '拿不到上次真动时间——没查成，不当活着' };
@@ -148,15 +161,34 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
 }
 
 /**
- * 静默会话按角色分流。审官静默 ⇒ 判死重起（走复审待办队列，一 PR 一审官的闸在那边）；
- * 其余静默 ⇒ 报帅。不在这里直接动手，只给动作意图，执行归调用方。
+ * 静默会话按角色分流。不在这里直接动手，只给动作意图，执行归调用方。
+ *
+ *   审官静默 ⇒ 先问目标 PR 还开着吗（#1043 现场 B / shouldRestartReviewer）：
+ *     已合并/关闭 → skip，不重起不报警；还开着 / 名单没查成 → restart-reviewer
+ *   其余静默 ⇒ 先推一句「继续」（#1056：工人没死，是跑完一轮在等下一句话）
+ *
+ * 垫片 `nudge-stalled.mjs` 退役后，这一档就是对账循环的差集动作入口。
+ * 推不动才由调用方升到重派；本函数不越级。
  */
-export function routeSilent(session) {
-  const label = String(session?.label || '');
-  const isReviewer = /审官|reviewer/i.test(label);
-  return isReviewer
-    ? { action: 'restart-reviewer', why: `审官会话静默：${session?.why || ''}` }
-    : { action: 'escalate', why: `会话静默：${session?.why || ''}` };
+export function routeSilent(session, { openPrs } = {}) {
+  const text = [session?.label, session?.title, session?.cwd, session?.workdir, session?.worktreeId]
+    .map((x) => String(x || '')).join(' ');
+  const isReviewer = /审官|reviewer|dao-review-pr-\d+/i.test(text);
+  if (!isReviewer) {
+    return { action: 'nudge', why: `会话静默：${session?.why || ''}——先推一句继续，推不动才重派` };
+  }
+  // 同一份 session 交给 shouldRestartReviewer：title / cwd 里的 PR 号不能被短 label 盖掉。
+  // openPrs 没给 = 名单没查成，按现场 B 仍可报警（漏报一次比给已合并 PR 重起审官便宜）。
+  const gate = shouldRestartReviewer(session, { openPrs });
+  if (!gate.restart) {
+    return { action: 'skip', why: gate.why, pr: gate.pr || null };
+  }
+  return {
+    action: 'restart-reviewer',
+    why: `审官会话静默：${session?.why || ''}`,
+    pr: gate.pr || null,
+    unscanned: gate.unscanned || false,
+  };
 }
 
 // ── 推进签名：把「有输出」和「有推进」分开 ────────────────────────────────────
