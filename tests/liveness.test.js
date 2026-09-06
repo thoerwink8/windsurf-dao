@@ -149,6 +149,16 @@ describe('routeSilent：已合并 PR 不重起审官（#1056 / #1043 现场 B）
     const r = S.routeSilent({ label: '工人 ISSUE-#885', why: '静默' }, { openPrs: [] });
     assert.equal(r.action, 'nudge');
   });
+
+  it('审官判别实验：短 label=「审官」、PR 号在 title 里——已关闭也不重起（不能用短 label 盖掉 title）', async () => {
+    const S = await LOAD;
+    const r = S.routeSilent(
+      { label: '审官', title: '按审官任务书审 PR #1025' },
+      { openPrs: [1018] },
+    );
+    assert.equal(r.action, 'skip', '审官实验：routeSilent({label:审官}) + 已关 PR 不得 restart-reviewer');
+    assert.notEqual(r.action, 'restart-reviewer');
+  });
 });
 
 describe('会话名：卡名压过终端标题（实咬：9 个静默审官一个都没换成人）', () => {

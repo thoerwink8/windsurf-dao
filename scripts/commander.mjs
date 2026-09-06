@@ -58,6 +58,7 @@ import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
 import { desiredFromEvents } from './lib/session-reconcile.mjs';
+import { acceptSessionsFrame } from './mirasim-sessions.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -192,9 +193,11 @@ function scanOrca() {
 }
 
 /**
- * 观测集（#1056）：mirasim 会话名单。exit 2 = 没查成（连不上 / 没 token），
- * exit 0 打 0 行 = 查成且空。两态分不开就会把「没查成」当成「一个活人都没有」去重派。
- * 不进 SITUATION_SECTIONS：名单没查成只挡住差集重派，不许把合并/叫审官整轮停掉。
+ * 观测集（#1056）：mirasim 会话名单。exit 2 = 没查成（连不上 / 没 token / 帧形状不对），
+ * exit 0 且打出合法 type=sessions 协议帧（sessions 必须是数组）= 查成；count:0 也算查成。
+ * 零输出 / 坏 JSON / sessions 不是数组一律 scanned:false。两态分不开就会把「没查成」
+ * 当成「一个活人都没有」去重派。不进 SITUATION_SECTIONS：名单没查成只挡住差集重派，
+ * 不许把合并/叫审官整轮停掉。
  */
 function scanSessions() {
   const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
@@ -211,25 +214,23 @@ function scanSessions() {
       error: String(r.stderr || r.stdout || `mirasim-sessions exit ${r.status}`).trim().slice(0, 240),
     };
   }
-  const items = [];
-  let sawFrame = false;
+  let frame = null;
   for (const line of String(r.stdout || '').split(/\r?\n/)) {
     const t = line.trim();
-    if (!t.startsWith('{')) continue;
+    if (!t) continue;
     let obj;
     try { obj = JSON.parse(t); } catch {
       return { scanned: false, error: '会话名单有坏 JSON——观测面没查成，不许折成空名单' };
     }
-    if (obj && obj.type === 'sessions') {
-      sawFrame = true;
-      continue;
-    }
-    items.push(obj);
+    const accepted = acceptSessionsFrame(obj);
+    if (accepted.skip) continue;
+    if (!accepted.ok) return { scanned: false, error: accepted.why };
+    frame = accepted;
   }
-  if (!sawFrame) {
+  if (!frame) {
     return { scanned: false, error: '会话名单没打 type=sessions 协议帧（零输出/坏形状）——观测面没查成，不许折成空名单' };
   }
-  return { scanned: true, items };
+  return { scanned: true, items: frame.list };
 }
 
 /**

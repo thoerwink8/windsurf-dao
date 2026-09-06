@@ -1763,4 +1763,15 @@ describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单
       assert.deepEqual(r.items, []);
     } finally { restore(); }
   });
+
+  it('{type:sessions, sessions:null} → scanned:false（审官判别实验：不许折成空名单）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-null.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
+      assert.match(String(r.error || ''), /不是数组|没查成/);
+    } finally { restore(); }
+  });
 });

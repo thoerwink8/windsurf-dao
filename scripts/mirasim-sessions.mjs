@@ -92,21 +92,19 @@ async function main() {
   });
 
   if (!sessions.ok) bail(sessions.why);
-  // 协议帧先打：scanSessions 靠它区分「查成且空」和「零输出没查成」。
-  console.log(JSON.stringify({ type: 'sessions', count: sessions.list.length }));
+  const mapped = sessions.list.map((s) => ({
+    // 字段名以 mirasim 实际返回为准（2026-09-05 实测：sessionKey / runState / updatedAt / workdir）。
+    // 早先按猜的名字取（key/state/cwd）全是 null，整条腿静默采不到——猜字段名的代价就是这个。
+    key: s.sessionKey ?? s.key ?? s.id ?? null,
+    title: s.title ?? null,
+    state: s.runState ?? s.state ?? null,
+    cwd: s.workdir ?? s.cwd ?? null,
+    lastActivityAt: s.seatAt ?? s.updatedAt ?? s.lastActivityAt ?? null,
+  }));
+  // 协议帧必须带 sessions 数组：scanSessions 靠 acceptSessionsFrame 区分「查成且空」和「零输出/null」。
+  console.log(JSON.stringify({ type: 'sessions', sessions: mapped, count: mapped.length }));
   if (countOnly) return;
-  for (const s of sessions.list) {
-    // 只输出观测器要的字段：key / title / state / cwd（+ 有就带上活动时间）。
-    console.log(JSON.stringify({
-      // 字段名以 mirasim 实际返回为准（2026-09-05 实测：sessionKey / runState / updatedAt / workdir）。
-      // 早先按猜的名字取（key/state/cwd）全是 null，整条腿静默采不到——猜字段名的代价就是这个。
-      key: s.sessionKey ?? s.key ?? s.id ?? null,
-      title: s.title ?? null,
-      state: s.runState ?? s.state ?? null,
-      cwd: s.workdir ?? s.cwd ?? null,
-      lastActivityAt: s.seatAt ?? s.updatedAt ?? s.lastActivityAt ?? null,
-    }));
-  }
+  for (const s of mapped) console.log(JSON.stringify(s));
 }
 
 const HERE = fileURLToPath(import.meta.url);

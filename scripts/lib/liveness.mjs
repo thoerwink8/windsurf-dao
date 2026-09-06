@@ -171,18 +171,15 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
  * 推不动才由调用方升到重派；本函数不越级。
  */
 export function routeSilent(session, { openPrs } = {}) {
-  const label = String(session?.label || session?.title || '');
-  const isReviewer = /审官|reviewer/i.test(label);
+  const text = [session?.label, session?.title, session?.cwd, session?.workdir, session?.worktreeId]
+    .map((x) => String(x || '')).join(' ');
+  const isReviewer = /审官|reviewer|dao-review-pr-\d+/i.test(text);
   if (!isReviewer) {
     return { action: 'nudge', why: `会话静默：${session?.why || ''}——先推一句继续，推不动才重派` };
   }
-  // #1056 / #1043 现场 B：已合并/关闭的 PR 不重起。openPrs 没给 = 名单没查成，
-  // shouldRestartReviewer 按现场 B 仍可报警（漏报一次比给已合并 PR 重起审官便宜）。
-  const gate = shouldRestartReviewer({
-    title: label,
-    cwd: session?.cwd || session?.workdir || session?.worktreeId,
-    key: session?.key || session?.id,
-  }, { openPrs });
+  // 同一份 session 交给 shouldRestartReviewer：title / cwd 里的 PR 号不能被短 label 盖掉。
+  // openPrs 没给 = 名单没查成，按现场 B 仍可报警（漏报一次比给已合并 PR 重起审官便宜）。
+  const gate = shouldRestartReviewer(session, { openPrs });
   if (!gate.restart) {
     return { action: 'skip', why: gate.why, pr: gate.pr || null };
   }
