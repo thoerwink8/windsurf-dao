@@ -3,7 +3,7 @@
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
 // preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
 // breaker：windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 整数 1–5；overrides 按 target 覆盖同范围。
-// commander：requireModelInRouting 布尔；loadThreshold 0.1~2、memReserveMb 256~16384（都是余量参数，不是「派几个」）。
+// commander：requireModelInRouting 布尔；loadThreshold 0.1~2、memReserveMb 256~16384、conservativeWorkerMb 64~4096、minSamplePairs 整数 1~32、sampleWindow 整数 2~64（都是余量参数，不是「派几个」）。
 // 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮）。缺 commander 节不拦（#842 旧夹具兼容）。
 // hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
 // upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
@@ -53,6 +53,14 @@ export function inspectDispatchPolicySource(src) {
       if (cm.conservativeWorkerMb !== undefined) {
         const w = Number(cm.conservativeWorkerMb);
         if (!Number.isFinite(w) || w < 64 || w > 4096) problems.push(`conservativeWorkerMb 越界（要 64~4096，实际 ${cm.conservativeWorkerMb}）`);
+      }
+      if (cm.minSamplePairs !== undefined) {
+        const p = cm.minSamplePairs;
+        if (!Number.isInteger(p) || p < 1 || p > 32) problems.push(`minSamplePairs 越界（要整数 1~32，实际 ${cm.minSamplePairs}）`);
+      }
+      if (cm.sampleWindow !== undefined) {
+        const s = cm.sampleWindow;
+        if (!Number.isInteger(s) || s < 2 || s > 64) problems.push(`sampleWindow 越界（要整数 2~64，实际 ${cm.sampleWindow}）`);
       }
     }
   }

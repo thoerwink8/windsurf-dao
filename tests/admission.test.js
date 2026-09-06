@@ -3,10 +3,14 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 
 const REPO = path.resolve(__dirname, '..');
-const ADMIT = import('file://' + path.join(REPO, 'scripts', 'lib', 'admission.mjs').replace(/\\/g, '/'));
-const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
+const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
+const ADMIT = import(toUrl(path.join(REPO, 'scripts', 'lib', 'admission.mjs')));
+const CORE = import(toUrl(path.join(REPO, 'scripts', 'lib', 'commander-core.mjs')));
+const POLICY_CHECK = import(toUrl(path.join(REPO, 'scripts', 'lib', 'dispatch-policy-check.mjs')));
+const COMMANDER = () => import(toUrl(path.join(REPO, 'scripts', 'commander.mjs')));
 
 function meminfo(availKb) {
   return `MemTotal:       12247040 kB\nMemFree:          1000000 kB\nMemAvailable:    ${availKb} kB\n`;
@@ -367,5 +371,214 @@ describe('全流程 grep 不到派几个的可填常量', () => {
     const { COMMANDER_POLICY_DEFAULTS } = await CORE;
     assert.equal(Object.prototype.hasOwnProperty.call(COMMANDER_POLICY_DEFAULTS, 'maxDispatchPerRound'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(COMMANDER_POLICY_DEFAULTS, 'maxInFlightWorkers'), false);
+  });
+});
+
+describe('classifyMirasimTreePath / countLiveWorkersFromSessionFacts', () => {
+  it('两层路径认出工人 / 审官；临时目录不猜', async () => {
+    const { classifyMirasimTreePath } = await ADMIT;
+    assert.deepEqual(classifyMirasimTreePath('/home/orca/mirasim-worktrees/windsurf-dao/dao-1007'), {
+      kind: '工人', n: 1007, id: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1007',
+    });
+    assert.deepEqual(classifyMirasimTreePath('/home/orca/mirasim-worktrees/windsurf-dao/dao-1007-2'), {
+      kind: '工人', n: 1007, id: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1007-2',
+    });
+    assert.deepEqual(classifyMirasimTreePath('/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1064'), {
+      kind: '审官', n: 1064, id: '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1064',
+    });
+    assert.equal(classifyMirasimTreePath('/home/orca/mirasim-worktrees/windsurf-dao'), null);
+    assert.equal(classifyMirasimTreePath('/tmp/dao-1064-check'), null);
+  });
+
+  it('只数对上 active 会话的工人树；僵尸 / 审官 / 一层仓目录不算', async () => {
+    const { countLiveWorkersFromSessionFacts } = await ADMIT;
+    const root = '/home/orca/mirasim-worktrees/windsurf-dao';
+    const treePaths = [
+      root, // 一层仓目录：认不出，不进在途
+      `${root}/dao-1007`,
+      `${root}/dao-1008`,
+      `${root}/dao-review-pr-1064`,
+      `${root}/tmp-scratch`,
+    ];
+    const r = countLiveWorkersFromSessionFacts({
+      treePaths,
+      sessionFacts: [
+        { cwd: `${root}/dao-1007`, state: 'active' },
+        { cwd: `${root}/dao-1008`, state: 'silent' }, // 僵尸，不算真工人
+        { cwd: `${root}/dao-review-pr-1064`, state: 'active' }, // 审官不算
+        { cwd: `${root}/dao-1007/scripts`, state: 'active' }, // 同一棵树，不双计
+      ],
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.count, 1);
+  });
+
+  it('工人树对上 unscanned 会话 → 整闸 fail-close，不当成目录数', async () => {
+    const { countLiveWorkersFromSessionFacts } = await ADMIT;
+    const tree = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1007';
+    const r = countLiveWorkersFromSessionFacts({
+      treePaths: [tree],
+      sessionFacts: [{ cwd: tree, state: 'unscanned' }],
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.count, null);
+    assert.match(r.error, /没查成/);
+  });
+
+  it('会话事实不是数组 → 不当成 0 在途', async () => {
+    const { countLiveWorkersFromSessionFacts } = await ADMIT;
+    const r = countLiveWorkersFromSessionFacts({
+      treePaths: ['/home/orca/mirasim-worktrees/windsurf-dao/dao-1007'],
+      sessionFacts: null,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.count, null);
+  });
+});
+
+function writeTree(root, rel) {
+  fs.mkdirSync(path.join(root, rel), { recursive: true });
+  return path.join(root, rel);
+}
+function writeSession(root, agent, id, rec) {
+  const dir = path.join(root, agent, id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'record.json'), JSON.stringify(rec), 'utf8');
+}
+
+describe('enumerateMirasimWorktrees / collectMirasimSessionFacts / countInflightWorkers', () => {
+  it('两层枚举；一层仓目录本身不进清单', async () => {
+    const { enumerateMirasimWorktrees } = await COMMANDER();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-trees-'));
+    writeTree(root, 'windsurf-dao/dao-1007');
+    writeTree(root, 'windsurf-dao/dao-1008');
+    writeTree(root, 'windsurf-dao/dao-review-pr-1064');
+    writeTree(root, 'other-repo/dao-1010');
+    const r = enumerateMirasimWorktrees(root);
+    assert.equal(r.ok, true);
+    const names = r.paths.map((p) => p.replace(/\\/g, '/').split('/').slice(-2).join('/')).sort();
+    assert.deepEqual(names, [
+      'other-repo/dao-1010',
+      'windsurf-dao/dao-1007',
+      'windsurf-dao/dao-1008',
+      'windsurf-dao/dao-review-pr-1064',
+    ]);
+    assert.ok(!r.paths.some((p) => /windsurf-dao$/.test(p.replace(/\\/g, '/'))),
+      '一层仓目录不许进清单——那会把多棵树算成 1');
+  });
+
+  it('工作树根不在 → fail-close，不当成 0 在途', async () => {
+    const { enumerateMirasimWorktrees } = await COMMANDER();
+    const r = enumerateMirasimWorktrees(path.join(os.tmpdir(), 'mira-missing-' + Date.now()));
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('record 读不了 → 整闸没查成，不当成活着', async () => {
+    const { collectMirasimSessionFacts } = await COMMANDER();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-sess-'));
+    const dir = path.join(root, 'pi', 'bad');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'record.json'), '{not-json', 'utf8');
+    const r = collectMirasimSessionFacts(root);
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.error, /record 读不了/);
+  });
+
+  it('生产入口：orca 卡面空时按会话存活数，不按仓目录数、不把僵尸当活', async () => {
+    const { countInflightWorkers } = await COMMANDER();
+    const trees = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-inflight-t-'));
+    const sess = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-inflight-s-'));
+    const w1 = writeTree(trees, 'windsurf-dao/dao-1007');
+    const w2 = writeTree(trees, 'windsurf-dao/dao-1008');
+    writeTree(trees, 'windsurf-dao/dao-review-pr-1064');
+    writeSession(sess, 'pi', 'alive', {
+      sessionId: 'alive', workdir: w1, runState: 'incomplete',
+      updatedAt: new Date().toISOString(),
+    });
+    writeSession(sess, 'pi', 'zombie', {
+      sessionId: 'zombie', workdir: w2, runState: 'incomplete',
+      updatedAt: '2020-01-01T00:00:00.000Z', // 远超静默阈值 → silent，不算真工人
+    });
+    writeSession(sess, 'pi', 'reviewer', {
+      sessionId: 'reviewer',
+      workdir: path.join(trees, 'windsurf-dao', 'dao-review-pr-1064'),
+      runState: 'incomplete',
+      updatedAt: new Date().toISOString(),
+    });
+    const r = countInflightWorkers({ worktrees: [], treeRoot: trees, sessionsRoot: sess });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.count, 1, '只算 active 工人；僵尸 + 审官 + 仓目录都不算');
+  });
+
+  it('orca 只返回主树时仍走 mirasim 会话数，不当成 0 在途放开闸', async () => {
+    const { countInflightWorkers } = await COMMANDER();
+    const trees = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-main-t-'));
+    const sess = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-main-s-'));
+    const w1 = writeTree(trees, 'windsurf-dao/dao-1007');
+    writeSession(sess, 'pi', 'alive', {
+      sessionId: 'alive', workdir: w1, runState: 'incomplete',
+      updatedAt: new Date().toISOString(),
+    });
+    const r = countInflightWorkers({
+      worktrees: [{ id: 'main', isMainWorktree: true, displayName: 'master' }],
+      treeRoot: trees,
+      sessionsRoot: sess,
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.count, 1);
+  });
+});
+
+describe('dispatch-policy-check：minSamplePairs / sampleWindow 故意违规当场拦', () => {
+  const BASE = {
+    preflight: { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true },
+    breaker: { windowHours: 24, failuresToTrip: 3, cooldownHours: 24, halfOpenProbes: 1 },
+    hubChat: {
+      enabled: true,
+      allowedActions: ['situation', 'decision', 'guide'],
+      upstream: { redThreshold: 2, decisions: true, digest: false },
+    },
+  };
+
+  it('minSamplePairs: 0 红，不是绿后静默回退', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, minSamplePairs: 0 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, false);
+    assert.ok(r.problems.some((p) => /minSamplePairs/.test(p)), JSON.stringify(r.problems));
+  });
+
+  it('sampleWindow: 1 红', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, sampleWindow: 1 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, false);
+    assert.ok(r.problems.some((p) => /sampleWindow/.test(p)), JSON.stringify(r.problems));
+  });
+
+  it('合范围的余量参数过校验', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: {
+        requireModelInRouting: true,
+        loadThreshold: 0.85,
+        memReserveMb: 1536,
+        conservativeWorkerMb: 400,
+        minSamplePairs: 4,
+        sampleWindow: 12,
+      },
+    }));
+    assert.equal(r.ok, true, JSON.stringify(r.problems));
   });
 });
