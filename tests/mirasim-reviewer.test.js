@@ -555,6 +555,75 @@ describe('#886 ③登记写失败 fail-closed', () => {
   });
 });
 
+// 默认执行体 2026-09-06 从 orca 翻成 mirasim（docs/model-routing.json 的「执行体.默认」）。
+// 这条守两件事：默认真的是 mirasim，以及**闸跟着一起搬过去了**——翻默认那一刻 mirasim 路上
+// 还没有 #679 同厂闸，不补就等于顺手把闸关了（memory bypassing-wrapper-loses-its-checks）。
+describe('默认执行体 = mirasim，且同厂闸跟着搬过去了', () => {
+  const fs = require('node:fs');
+  const CLI = path.resolve(__dirname, '..', 'scripts', 'dao.mjs');
+
+  it('路由表的默认执行体是 mirasim——orca 运行时已不在，留它当默认等于默认走一条不存在的路', () => {
+    const routing = require(path.resolve(__dirname, '..', 'docs', 'model-routing.json'));
+    assert.equal(routing.执行体.默认, 'mirasim');
+  });
+
+  it('mirasim 起审官这条路上有 refuseIfSameVendor，不是只有 orca 路有', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const i = src.indexOf('async function cmdReviewerCreateMirasim(');
+    assert.ok(i > -1, 'cmdReviewerCreateMirasim 没了——本闸判据已失效，不是通过');
+    const block = src.slice(i, src.indexOf('\n}\n', i) + 3);
+    assert.match(block, /refuseIfSameVendor\(/, '同厂闸没跟过来：工人审官同厂会被放行');
+    assert.match(block, /assertReviewerSeat\(/, '审官位闸也要在');
+  });
+
+  it('mirasim worker-done 把 --reviewer 旗标传下去（#895 快马单）', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const i = src.indexOf('async function cmdWorkerDoneMirasim(');
+    assert.ok(i > -1, 'cmdWorkerDoneMirasim 没了——本闸判据已失效，不是通过');
+    const block = src.slice(i, i + 1200);
+    assert.match(block, /planWorkerDone\(\{[^}]*reviewer: args\.reviewer/,
+      '漏传 --reviewer：快马单没有 reviewer/* label，在这条路上会一律被拒');
+  });
+});
+
+// 2026-09-06 实咬：登记表落点是 `join(ROOT, '_flow', 'mirasim')`，ROOT = 谁在跑这条命令那棵树。
+// 主树里跑 `reviewer-create --pr 1040` 判 reused；换一棵 worktree 跑同一条命令，目录是空的 →
+// 判「没有审官」→ 重复起会话。烧额度，还直接破掉「一 PR 一审官」。
+// 这条守落点本身：它必须跨树共享（~/.dao/），不许跟着 ROOT 走。
+describe('审官登记表落点必须跨树共享', () => {
+  const fs = require('node:fs');
+  const CLI = path.resolve(__dirname, '..', 'scripts', 'dao.mjs');
+
+  it('flowDir 落在 ~/.dao/ 下，不跟着 ROOT 走', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const i = src.indexOf('function mirasimRegistry(');
+    assert.ok(i > -1, 'mirasimRegistry 没了——本闸判据已失效，不是通过');
+    const block = src.slice(i, src.indexOf('\n}', i) + 2);
+    assert.match(block, /flowDir:\s*join\(homedir\(\),\s*'\.dao',\s*'mirasim'\)/,
+      '登记表要落 ~/.dao/mirasim');
+    assert.equal(/flowDir:\s*join\(ROOT/.test(block), false,
+      'flowDir 又跟着 ROOT 走了——换棵树跑就会把已有审官判成没有，重复起会话');
+  });
+
+  it('同一个 PR 在两棵树上问，答案必须一样（registry 只认 pr，不认 cwd）', async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const mk = () => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); },
+      mkdir: () => {},
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const w = mk().write('1040', { pr: '1040', sessionKey: 'codex:abc' });
+    assert.equal(w.ok, true);
+    // 「另一棵树」= 另一个 registry 实例，同一个 flowDir。
+    const got = mk().read('1040');
+    assert.equal(got.ok, true, '换个实例就读不到了——落点没共享');
+    assert.equal(got.record.sessionKey, 'codex:abc');
+  });
+});
+
 describe('#886 ④审官任务书的 m= 来自原派工（buildMirasimReviewerPrompts）', () => {
   const render = (o) => `读书 ${o.spec} p=${o.pr} m=${o.mergePolicy}${o.mergePolicy === 'manual' && o.mergeReason ? ` r=${o.mergeReason}` : ''}`;
 

@@ -1565,11 +1565,10 @@ async function cmdDispatch(args) {
   // 回退一行：改回 false。orca 那条脊原样留着——它还在服务 32 棵在途树的 worker-done，
   // 存量流干之前不许删（判例 platform-adapter-deleted-while-still-used）。
   // 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
-  const MIRASIM_IS_ONLY_PATH = true;
-  // 显式 `--executor orca` 仍走旧脊：它还在服务 32 棵在途树，测试也要能点名测它
-  // （切流量 ≠ 旧路立刻失效，那会让在途工人无处交卷）。存量流干后 orca 那段整体删，
-  // 届时这个分支、这个常量、下面那条脊一起消失——**别把它当长期开关维护**。
-  if (args.executor !== 'orca' && (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim')) {
+  // 常量与判据都在模块级（见 executorFromCwd 下方的 MIRASIM_IS_ONLY_PATH / routeToMirasim）：
+  // 2026-09-06 实咬——它原来是这里的局部常量，于是这个开关只翻了 dispatch 一处，
+  // reviewer-create 还要求显式 --executor，帅位在主树里起审官永远落回 orca 老脊。
+  if (routeToMirasim(args)) {
     return cmdDispatchMirasim(args, routing, gate);
   }
 
@@ -3042,9 +3041,38 @@ function executorFromCwd(cwd) {
   return /(^|\/)mirasim-worktrees\//.test(p) ? 'mirasim' : null;
 }
 
+// ── 切流量开关（#880 卡 E，2026-09-06 翻）─────────────────────────────────────
+// 一步到位换 mirasim = 把这个 false 改成 true，删掉 orca 那几段。回退一行：改回 false。
+// 验收判据「v2 真实派单一轮无人工干预」已达成：issue #1003 → mirasim 派工 → 工人开出
+// PR #1025 → 交卷 → 审官 APPROVED → 已合并，全程 orca 侧零参与。
+// 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
+//
+// **必须是模块级、必须三个动词共用**（2026-09-06 实咬）：它原来是 cmdDispatch 里的局部常量，
+// 于是这个开关只翻了 dispatch 一处——`reviewer-create` 仍要求显式 `--executor` 才走 mirasim，
+// 帅位在主树里起审官就永远落回 orca 老脊，被那条脊的 `orca worktree list` fail-close 拒掉，
+// **所有 PR 都判不了绿**。这是 memory fix-landed-at-one-call-site-only 的标准形状：
+// 切换动作只接了一个调用点，另一条路照旧坏着，而「我已经切过了」这个念头让人更查不到。
+// 再加动词时用 routeToMirasim，不要就地再写一遍条件。
+const MIRASIM_IS_ONLY_PATH = true;
+
+/**
+ * 这一次调用该走 mirasim 还是 orca 老脊。
+ * 显式 `--executor orca` 仍走旧脊（切流量 ≠ 旧路立刻失效，测试也要能点名测它）；
+ * 其余一律 mirasim。存量流干后 orca 那几段整体删，届时本函数与常量一起消失——
+ * **别把它当长期开关维护**。
+ */
+function routeToMirasim(args = {}) {
+  if (args.executor === 'orca') return false;
+  return MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim';
+}
+
 function cmdWorkerDone(args) {
-  const executor = args.executor || executorFromCwd(process.cwd());
-  if (executor && executor !== 'orca') return cmdWorkerDoneMirasim({ ...args, executor });
+  // cwd 兜底留着：工人在 mirasim 树里漏了 --executor 也要走对（#880 卡 E 验收当场咬过）。
+  // 但它只是兜底，不是判据——真正的默认由 routeToMirasim 给，否则帅位在主树里替工人交卷
+  // 会静默落回 orca 老脊。
+  if (routeToMirasim(args)) {
+    return cmdWorkerDoneMirasim({ ...args, executor: args.executor || executorFromCwd(process.cwd()) || 'mirasim' });
+  }
   // #677：本命令只交 GitHub 卷 + 起审官。Orca 结算（notify --type worker_done）不走这里。
   // 成功退出后士兵 Dispatch 必须仍是 ready/waiting，不许 completed。失败不得假装已下班。
   if (!args.pr) fail('worker-done 要 --pr');
@@ -3741,7 +3769,7 @@ function cmdWorkerRead(args) {
 }
 
 async function cmdReviewerCreate(args) {
-  if (args.executor && args.executor !== 'orca') return cmdReviewerCreateMirasim(args);
+  if (routeToMirasim(args)) return cmdReviewerCreateMirasim(args);
   if (!args.pr) fail('reviewer-create 要 --pr');
 
   const gh = ghRunner({ role: 'reviewer' });
@@ -5339,13 +5367,24 @@ function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
   });
 }
 
+/**
+ * PR → 审官会话登记。落点必须**跨树共享**，不能跟着 ROOT 走。
+ *
+ * 2026-09-06 实咬：原来是 `join(ROOT, '_flow', 'mirasim')`，而 ROOT 是「谁在跑这条命令」
+ * 那棵树。主树里跑 `reviewer-create --pr 1040` 读到登记 → 判 reused；换一棵 worktree 跑
+ * 同一条命令 → 目录是空的 → 判「没有审官」→ 重复起会话。这既烧额度，也直接破掉
+ * 「一 PR 一审官」（memory one-pr-one-reviewer）。
+ *
+ * 同时它本来就该在 `~/.dao/` 下：CLAUDE.md「派生数据不进 git（影响地图、账本、健康表都落
+ * ~/.dao/）」。`_flow/` 虽然被 .gitignore 挡住了，但落在仓内就一定跟着树分叉。
+ */
 function mirasimRegistry() {
   return defaultReviewerRegistry({
     readFile: p => readFileSync(p, 'utf8'),
     writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
     mkdir: d => mkdirSync(d, { recursive: true }),
     join,
-    flowDir: join(ROOT, '_flow', 'mirasim'),
+    flowDir: join(homedir(), '.dao', 'mirasim'),
   });
 }
 
@@ -5363,8 +5402,14 @@ async function cmdReviewerCreateMirasim(args) {
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
   if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  // #679 同厂硬闸：orca 路一直有，mirasim 路原来没有。2026-09-06 把默认执行体翻成 mirasim
+  // 的那一刻，不补这一句就等于顺手关掉了这道闸——切流量必须把闸一起搬过去，
+  // 否则「闸还在代码里」和「闸还在这条路上」是两回事（memory bypassing-wrapper-loses-its-checks）。
+  const vendorGate = refuseIfSameVendor({
+    workerId: worker.modelId, reviewerId: picked.modelId, routing,
+  });
   const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
-  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, pr: String(args.pr) });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
   const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
   if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });
 
@@ -5406,7 +5451,8 @@ async function cmdReviewerCreateMirasim(args) {
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim', pr: String(args.pr), reviewer: picked.modelId,
-      worker: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      worker: worker.modelId, workerModel: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      vendorGate, reviewerSeat: seat,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
     });
   }
@@ -5452,7 +5498,10 @@ async function cmdWorkerDoneMirasim(args) {
   }
   const gh = ghRunner({ role: 'worker' });
   const ghR = ghRunner({ role: 'reviewer' });
-  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh });
+  // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
+  // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
+  // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
+  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh, reviewer: args.reviewer });
   if (!plan.ok) fail(plan.error, plan);
   const routing = loadOrFail();
   const execPolicy = readExecutorPolicy(routing);

@@ -686,6 +686,28 @@ describe('mirasim 单轨派工硬闸', () => {
     assert.ok(src.includes('PR #1025'), '验收依据（哪一单验的）被删了');
   });
 
+  // 2026-09-06 实咬：这个开关原来是 cmdDispatch 里的**局部**常量，于是只翻了 dispatch 一处。
+  // reviewer-create 仍写着 `args.executor && args.executor !== 'orca'`——不点名就落回 orca 老脊，
+  // 被那条脊的 `orca worktree list` fail-close 拒掉，所有 PR 都判不了绿。
+  // 这条守的是「三个动词共用同一判据」，不是「某个动词写对了」。
+  it('切流量判据只有一处：三个动词都走 routeToMirasim，没人就地再写一遍条件', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /^const MIRASIM_IS_ONLY_PATH = true;$/m, '常量必须在模块级，局部常量只能翻一个动词');
+    assert.match(src, /function routeToMirasim\(/, '判据要收成一个函数');
+    const calls = (src.match(/routeToMirasim\(args\)/g) || []).length;
+    assert.equal(calls, 3, `dispatch / worker-done / reviewer-create 三处都要走它，现在 ${calls} 处`);
+    // 就地重写的老形状不许再出现（正则直接钉那句原文）。
+    assert.equal(/args\.executor && args\.executor !== 'orca'/.test(src), false,
+      'reviewer-create 那种就地条件回来了——它会让不带 --executor 的调用落回 orca');
+  });
+
+  it('显式 --executor orca 仍能点名走旧脊（切流量 ≠ 旧路立刻失效）', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const fn = src.slice(src.indexOf('function routeToMirasim('), src.indexOf('function routeToMirasim(') + 260);
+    assert.match(fn, /args\.executor === 'orca'/, 'orca 逃生口没了，在途树无处交卷');
+    assert.match(fn, /return false/, 'orca 分支要真的回 false');
+  });
+
   it('orca 那条脊还留着——32 棵在途树的 worker-done 还靠它', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     // 切流量 ≠ 删旧路。存量流干前删掉，在途工人交卷就没有落点了。
