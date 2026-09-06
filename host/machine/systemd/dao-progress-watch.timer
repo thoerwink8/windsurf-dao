@@ -2,7 +2,7 @@
 #
 # 20 分钟一轮。为什么是 20 不是更快：判据要连续 N=5 轮同一对象同一状态，
 # 原料是 commander-act 每 20 分钟写一份 situation-*.json——扫得比写快只会
-# 一遍遍读同一份没变的快照。挂 :13 分：dao-sync(:1/5)、dao-agent-stall(:2/15)、
+# 一遍遍读同一份没变的快照。挂 :13 分：dao-sync(:1/5)、
 # dao-board-gc(:07)、commander-act(:11/20)、dao-patrol(:23) 都不撞。
 # 装法见同目录 dao-progress-watch.service 文件头。
 #

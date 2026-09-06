@@ -10,8 +10,6 @@ const GATE_CALL = /assertCrossVendor\s*\(/;
 const REFUSE_CALL = /refuseIfSameVendor\s*\(/;
 const NEXT_WORKER = /nextReviewerAfter\s*\([\s\S]{0,240}workerId/;
 const CAP_WORKER = /planCapacitySwitch\s*\([\s\S]{0,240}workerId/;
-const WD_ACTUAL = /resolveActualWorkerModel\s*\(/;
-const WD_CARD = /parseWorkerModelFromCard/;
 
 function chunk(src, re) {
   const m = String(src || '').match(re);
@@ -31,9 +29,12 @@ export function inspectReviewerNoForceCommand({ daoSrc } = {}) {
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 
-export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, stallSrc } = {}) {
-  if (daoSrc == null || cmdSrc == null || slotSrc == null || stallSrc == null) {
-    return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/agent-stall-watch 正文（没查成）' };
+// 2026-09-06：换人执行面（agent-stall-watch 的 switchReviewer / workerModelOf）随屏面指纹
+// 整层退役，那三条判据一并删掉——守一个已经不存在的执行路径，只会永远红或永远绿。
+// 自动换审官这件事现在没有执行者：progress-watch 只发现并叫醒帅位，换人由人或指挥官做。
+export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
+  if (daoSrc == null || cmdSrc == null || slotSrc == null) {
+    return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot 正文（没查成）' };
   }
   const problems = [];
   // dispatch 预检不再钉同厂闸（delete-all-ceremony）：只要求 resolveDispatchConstraints 还在。
@@ -72,15 +73,6 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, stallSrc } = 
     problems.push('planCapacitySwitch 换人没带 workerId');
   }
 
-  const exec = chunk(stallSrc, /function switchReviewer\b[\s\S]*?\nfunction /);
-  if (!exec) problems.push('找不到 switchReviewer');
-  const workerFn = chunk(stallSrc, /function workerModelOf\b[\s\S]*?\nfunction /);
-  if (!workerFn) problems.push('找不到 workerModelOf');
-  else if (!WD_ACTUAL.test(workerFn) && !WD_ACTUAL.test(stallSrc)) {
-    problems.push('agent-stall-watch 没从 Dispatch/标签读实际工人模型');
-  }
-  if (WD_CARD.test(stallSrc)) problems.push('agent-stall-watch 仍从卡名 parseWorkerModelFromCard 读工人模型');
-
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 
@@ -95,7 +87,6 @@ export function inspectVendorGateFixtures(root) {
       daoSrc: join(dir, 'dao.mjs'),
       cmdSrc: join(dir, 'dao-cmd.mjs'),
       slotSrc: join(dir, 'slot.mjs'),
-      stallSrc: join(dir, 'agent-stall-watch.mjs'),
     };
     const out = {};
     let present = 0;
