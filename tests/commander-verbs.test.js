@@ -41,7 +41,7 @@ describe('#971 形状对齐：drain 账本与复审同一套 tries', () => {
     assert.deepEqual([...FORBIDDEN_AUTO_KINDS].sort(), [
       'edit-dao', 'merge-force', 'rm-tree', 'worktree-remove', 'worktree-rm', 'write-fingerprint',
     ].sort());
-    for (const k of ['add-label', 'retry-drain', 'open-issue']) {
+    for (const k of ['add-label', 'retry-drain', 'open-issue', 'mark-exhausted']) {
       assert.ok(ACTION_KINDS.includes(k), `${k} 必须进白名单`);
       assert.ok(!FORBIDDEN_AUTO_KINDS.has(k), `${k} 不许进禁用表`);
     }
@@ -588,7 +588,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     assert.equal(r.actions.filter((a) => a.kind === 'attach-reviewer').length, 0);
   });
 
-  it('drain 试满 → open-issue（drain-exhausted），不再喊给空气', async () => {
+  it('drain 试满 → mark-exhausted（#1000 认输是 PR 属性，不再开单）', async () => {
     const { decide } = await CORE;
     const { MAX_DRAIN_TRIES } = await VERBS;
     const r = decide(sit({
@@ -596,10 +596,10 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
       drainLedger: { 'pr:920': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     }));
-    const opened = r.actions.filter((a) => a.kind === 'open-issue');
-    assert.equal(opened.length, 1, JSON.stringify(r.actions));
-    assert.equal(opened[0].reason, 'drain-exhausted');
-    assert.ok(opened[0].original);
+    const marked = r.actions.filter((a) => a.kind === 'mark-exhausted');
+    assert.equal(marked.length, 1, JSON.stringify(r.actions));
+    assert.equal(marked[0].verb, 'drain');
+    assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
   });
 
   it('已开过的 open-issue 去重：账本有键就不再产', async () => {
@@ -648,7 +648,7 @@ describe('drainLedgerKey：decide 与 execute 同一门面', () => {
 describe('执行层真接了三个动词（不是只测纯函数）', () => {
   it('commander.mjs 的 switch 有三个 case，且动手前走 plan*Cmd', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
-    for (const k of ["case 'add-label':", "case 'retry-drain':", "case 'open-issue':"]) {
+    for (const k of ["case 'add-label':", "case 'retry-drain':", "case 'open-issue':", "case 'mark-exhausted':"]) {
       assert.ok(src.includes(k), `executor 缺 ${k}`);
     }
     for (const fn of ['planAddLabelCmd', 'planRetryDrainCmd', 'planOpenIssueCmd']) {
