@@ -1,23 +1,25 @@
 #!/usr/bin/env node
-// scripts/test-impact-map.mjs —— 建/查「测试 → 它碰过哪些本仓文件」的影响地图
+// scripts/test-impact-map.mjs —— 查「测试 → 它碰过哪些本仓文件」的影响地图
 //
-// 判据与设计前提在 scripts/lib/test-impact.mjs 头部，本文件只管采集与落盘。
+// 判据与设计前提在 scripts/lib/test-impact.mjs 头部。
 //
-// 用法：
-//   node scripts/test-impact-map.mjs build          逐套跑测试 + 采覆盖率，重建地图（慢，分钟级）
-//   node scripts/test-impact-map.mjs build --only a.test.js,b.test.js   只重建这几套（增量补图）
-//   node scripts/test-impact-map.mjs show           打印地图概况
-//   node scripts/test-impact-map.mjs health         只做健康度判定（给 dao-check 用，退出码 0/1）
+// **本文件不再建图**（2026-09-06 用户拍板，整段删掉「预建地图」这个机制）。
+// 原来这里有 `build`（逐套跑测试采覆盖率，实测 1 分 50 秒）和 `health`（健康度判定）。
+// 两个一起构成了一笔税：每加一个测试文件，图就被判成不健康，下一个人得先付 110 秒才能继续。
+// 实测代价是帅位一轮里为它烧掉 5.5 分钟，然后干脆退回全量档——**快档越贵，人越不用快档**。
 //
-// 建图什么时候跑：每日 cron 的全量那一次顺手重建（那次本来就要跑全部测试，白捡）。
-// 平时新增测试后可以 `build --only <新文件>` 增量补，不用等一天。
+// 现在地图是 `dao-check` 跑测试时的副产物（跑哪套采哪套，实测只贵 8%），
+// 而「不在图里」由 affectedTests 规则 ④ 兜住：不知道就跑。于是不需要建、也不需要判健康。
+//
+// 用法只剩一个：
+//   node scripts/test-impact-map.mjs show           打印地图概况（排查用）
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { affectedTests, buildMap, filesFromCoverage, IGNORED_IN_MAP, mapHealth, MAP_VERSION } from './lib/test-impact.mjs';
+import { fileURLToPath } from 'node:url';
+import { affectedTests, MAP_VERSION } from './lib/test-impact.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -53,72 +55,6 @@ function gitOut(args, root = REPO_ROOT) {
   return r.status === 0 ? (r.stdout || '').trim() : null;
 }
 
-/** 跑一套测试并采覆盖率 → 它碰过的本仓文件。跑失败也照样回收（失败的套也有依赖信息）。 */
-export function sampleOne(testFile, { root = REPO_ROOT } = {}) {
-  const covDir = mkdtempSync(join(tmpdir(), 'ti-cov-'));
-  const readLog = join(covDir, 'reads.txt');
-  const recorder = join(root, 'tests', 'helpers', 'record-reads.mjs');
-  try {
-    spawnSync(process.execPath, ['--test', join(root, testFile)], {
-      cwd: root, encoding: 'utf8', windowsHide: true, timeout: 300000,
-      env: {
-        ...process.env,
-        NODE_V8_COVERAGE: covDir,
-        // 覆盖率只看得见执行过的 JS；数据文件（json/md/toml…）靠这个钩子记。
-        // 两者都经 NODE_OPTIONS/环境继承罩住 spawn 出去的 CLI。
-        DAO_READ_LOG: readLog,
-        DAO_READ_ROOT: root,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(recorder).href}`.trim(),
-      },
-    });
-    const docs = [];
-    for (const f of existsSync(covDir) ? readdirSync(covDir) : []) {
-      if (f === 'reads.txt') continue;
-      try { docs.push(JSON.parse(readFileSync(join(covDir, f), 'utf8'))); } catch { /* 半截文件跳过 */ }
-    }
-    const files = filesFromCoverage(docs, root);
-    if (existsSync(readLog)) {
-      for (const l of readFileSync(readLog, 'utf8').split('\n')) {
-        const rel = l.trim();
-        if (rel && !IGNORED_IN_MAP.some((re) => re.test(rel))) files.add(rel);
-      }
-    }
-    files.delete(testFile);           // 自己不算依赖
-    return { ok: docs.length > 0, files: [...files], coverageDocs: docs.length };
-  } finally {
-    try { rmSync(covDir, { recursive: true, force: true }); } catch { /* 清不掉不影响判定 */ }
-  }
-}
-
-function cmdBuild(argv) {
-  const onlyIdx = argv.indexOf('--only');
-  const only = onlyIdx >= 0 ? String(argv[onlyIdx + 1] || '').split(',').map((s) => s.trim()).filter(Boolean) : null;
-  const all = listTests();
-  const targets = only ? only.map((f) => (f.startsWith('tests/') ? f : `tests/${f}`)) : all;
-  if (targets.length === 0) { console.error('一套测试都没扫到——本次没查成，不是「没有测试」'); return 2; }
-
-  const prev = readMap();
-  const entries = only && prev && prev.entries ? { ...prev.entries } : {};
-  let noSample = 0;
-  for (let i = 0; i < targets.length; i++) {
-    const t = targets[i];
-    process.stderr.write(`\r建图 ${i + 1}/${targets.length} ${t.padEnd(46)}`);
-    const r = sampleOne(t);
-    if (!r.ok) { noSample++; continue; }        // 一份覆盖率都没落 = 没采成，不写空数组冒充「无依赖」
-    entries[t] = r.files;
-  }
-  process.stderr.write('\n');
-  // 只重建部分时，把已删测试从旧图里剔掉
-  for (const k of Object.keys(entries)) if (!all.includes(k)) delete entries[k];
-
-  const map = buildMap({ entries, head: gitOut(['rev-parse', 'HEAD']) });
-  mkdirSync(dirname(MAP_PATH), { recursive: true });
-  writeFileSync(MAP_PATH, JSON.stringify(map, null, 2) + '\n');
-  const n = Object.keys(map.entries).length;
-  console.log(`影响地图已写：${n} 套测试，平均依赖 ${(Object.values(map.entries).reduce((s, a) => s + a.length, 0) / (n || 1)).toFixed(1)} 个文件${noSample ? `；${noSample} 套没采到覆盖率（未入图，健康检查会报）` : ''}`);
-  return 0;
-}
-
 function cmdShow() {
   const map = readMap();
   if (!map) { console.error(`地图不在：${MAP_PATH}`); return 1; }
@@ -129,29 +65,20 @@ function cmdShow() {
   return 0;
 }
 
-function cmdHealth() {
-  const map = readMap();
-  const all = listTests();
-  let dist = null;
-  if (map && map.head) {
-    const c = gitOut(['rev-list', '--count', `${map.head}..HEAD`]);
-    dist = c == null ? null : Number(c);
-  }
-  const h = mapHealth({ map, allTests: all, headDistance: dist });
-  if (h.ok) { console.log(`影响地图健康：${Object.keys(map.entries).length} 套在图、落后 HEAD ${dist ?? '?'} 个提交`); return 0; }
-  for (const p of h.problems) console.error(`地图不健康：${p}`);
-  return 1;
-}
-
 function main(argv = process.argv.slice(2)) {
   const cmd = argv[0] || 'show';
-  if (cmd === 'build') return cmdBuild(argv);
   if (cmd === 'show') return cmdShow();
-  if (cmd === 'health') return cmdHealth();
-  console.error('用法：node scripts/test-impact-map.mjs build|show|health');
+  // build / health 已删（2026-09-06）：地图改成 dao-check 跑测试的副产物，不再需要建、也不判健康。
+  // 老调用会打到这里——明说去哪，别只回一句「用法」让人以为敲错了。
+  if (cmd === 'build' || cmd === 'health') {
+    console.error(`${cmd} 已删：影响地图现在是 dao-check 跑测试时的副产物，不用建、也不判健康。`);
+    console.error('要让图变全：跑一次 node scripts/dao-check.mjs --full（顺手把每套的依赖都采一遍）。');
+    return 2;
+  }
+  console.error('用法：node scripts/test-impact-map.mjs show');
   return 2;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(HERE)) process.exit(main());
 
-export { affectedTests, mapHealth, MAP_VERSION };
+export { affectedTests, MAP_VERSION };

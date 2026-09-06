@@ -15,6 +15,15 @@ fi
 
 install -m 644 "$UNIT_DIR/dao-progress-watch.service" /etc/systemd/system/dao-progress-watch.service
 install -m 644 "$UNIT_DIR/dao-progress-watch.timer" /etc/systemd/system/dao-progress-watch.timer
+
+# 屏面指纹层 2026-09-06 整层退役（用户拍板）。卸载放这里而不是单独一个脚本：
+# 装新的那一刻就是旧的该走的时候，分成两条命令就会只跑一条。server-check ⑮ 守着这三件。
+systemctl disable --now dao-agent-stall.timer 2>/dev/null || true
+systemctl disable --now agent-stall-watch.timer 2>/dev/null || true
+rm -f /etc/systemd/system/dao-agent-stall.timer /etc/systemd/system/dao-agent-stall.service
+rm -f /etc/systemd/system/agent-stall-watch.timer /etc/systemd/system/agent-stall-watch.service
+rm -f /home/orca/bin/agent-stall-watch.mjs
+
 systemctl daemon-reload
 systemctl enable --now dao-progress-watch.timer
 # enable --now 只起 timer；oneshot + 从未激活的 service 会让 OnUnitActiveSec 空转。

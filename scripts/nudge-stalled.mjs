@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // 推一把卡住的工人。**垫片**——正式的家是 issue #1056 的对账循环，合并时本脚本退役。
 //
-// 为什么需要它：`agent-stall-watch` 现在查得出卡死了（d4872eb1 放开了被退役 orca 挡住的
-// mirasim 采样面），但它对非审官会话的处置只有 `escalate`——报帅，不动手
-// （见 scripts/lib/liveness.mjs 的 routeSilent）。于是盘面上会一直挂着「某某静默 N 分钟」，
-// 没有任何东西让它继续。
+// 为什么需要它：盘面上会一直挂着「某某静默 N 分钟」，却没有任何东西让它继续——
+// 发现和处置之间断了一截。（原文这里指的是 agent-stall-watch 的 escalate 只报帅不动手；
+// 那一层 2026-09-06 已整层删除，见 chain:agent-stall#7。今天的发现面是
+// scripts/progress-watch.mjs 的盘面推进量，同样只叫醒帅位、不动手，缺口没变。）
 //
 // 而 2026-09-06 实测：卡住的工人**没死**。record.json 里 `runState: incomplete` /
 // `runDetail: pi turn stalled past 30 minutes`，但最后一条 turn 是 `phase: done`，
@@ -12,8 +12,9 @@
 // 所以处置是**说一句「继续」**，不是重派：重派会丢掉它已经读完的上下文，白烧一遍额度。
 // 当天五个（#1007 #1017 #1052 #1055 #1056）推完全部回到 running。
 //
-// 探测面不自己造：卡死清单从 mirasim 落盘的 record.json 直接读（它是会话的所有者），
-// 只做一件 agent-stall-watch 没做的事——发那一句话。
+// 探测面不自己造：卡死清单从 mirasim 落盘的 record.json 直接读（它是会话的所有者）。
+// 这也是屏面指纹层删掉之后**会话级**判卡的唯一去处——progress-watch 看的是盘面对象
+// （PR / issue / 复审票），看不见「某个会话跑完一轮在等话」。两个面互补，别合并。
 //
 //   node scripts/nudge-stalled.mjs                  列出卡住的派工树，不动手
 //   node scripts/nudge-stalled.mjs --go             逐个推一把
@@ -118,7 +119,7 @@ for (const { rec } of stalled) {
     const r = await rt.startSession({ agent, workdir: rec.workdir, prompt });
     console.log(`[推一把] ${who} 推了：${r.sessionKey}`);
   } catch (e) {
-    // 推不动就如实说，不吞——下一轮 agent-stall-watch 还会把它报出来。
+    // 推不动就如实说，不吞——它下一轮还在 incomplete，本命令再跑一次照样看得见。
     console.error(`[推一把] ${who} 推不动：${String(e.message || e).slice(0, 160)}`);
   }
 }

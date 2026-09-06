@@ -3,6 +3,14 @@
 // 发现层：连续 N 轮同一对象同一状态 ⇒ 卡住，不管日志多漂亮。
 // shuai-watchdog 链的发现层被本单替换；执行层（换人）不动。
 //
+// 2026-09-06 用户拍板：屏面指纹那一整层（agent-stall-watch）退役，本文件成为
+// 卡死发现的唯一判据。同时删掉树面——它的采样源是已退役的 orca，留着只会让
+// 每一轮都判「没查成」。判据全部落在 GitHub 面（PR / issue / 复审票），这也是
+// 行业做法（超时判死，不猜执行体在干什么）。
+//
+// 树面没了之后，「已消歧的 issue 是否已派出」只按 PR 判。前提是编排态下工人
+// 开工即建 draft PR（dispatch skill 硬规矩）——那条规矩没了，这里会误报。
+//
 // 纯函数：吃一串快照，吐停滞判决。一个 IO 都不碰。
 // 「没查成」和「没停滞」必须不同形——读不清就说没查成，不许当成没事。
 
@@ -45,17 +53,6 @@ function prJudged(snapshot, number) {
   return reviews.some((r) => JUDGED.has(normDecision(r && r.state)));
 }
 
-function treeLive(w) {
-  return Number(w && w.liveTerminalCount) > 0 || !!(w && w.hasAttachedPty);
-}
-
-function treeId(w) {
-  if (w && w.worktreeId) return String(w.worktreeId);
-  if (w && w.path) return String(w.path);
-  if (w && w.displayName) return String(w.displayName);
-  return null;
-}
-
 function ticketHead(item) {
   const head = item && item.head;
   if (head == null) return '';
@@ -64,15 +61,10 @@ function ticketHead(item) {
   return String(head);
 }
 
-function issueHasInflight(number, { worktrees, prs }) {
+function issueHasInflight(number, { prs }) {
   const n = Number(number);
   if (!Number.isFinite(n)) return false;
   const needle = new RegExp(`(?:^|[^0-9])#${n}(?:[^0-9]|$)`);
-  for (const w of worktrees) {
-    if (Number(w && w.linkedIssue) === n) return true;
-    const name = String((w && w.displayName) || '');
-    if (needle.test(name) || name.includes(`ISSUE-#${n}`) || name.includes(`ISSUE-${n}`)) return true;
-  }
   for (const p of prs) {
     const title = String((p && p.title) || '');
     const body = String((p && p.body) || '');
@@ -83,31 +75,26 @@ function issueHasInflight(number, { worktrees, prs }) {
 
 /**
  * 一份快照抽出逐对象签名。任一关键段没查成 → unscanned。
- * 对象：开放 PR / 已消歧且未派出的 issue / 非主工人树 / 复审票。
+ * 对象：开放 PR / 已消歧且未派出的 issue / 复审票。
+ * 快照的 orca 段**故意不读**：它是已退役执行体的采样面，读了就是每轮没查成。
  */
 export function extractObjects(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') {
     return { scanned: false, error: '快照不是对象（没查成）', objects: [], idle: false };
   }
   const github = snapshot.github;
-  const orca = snapshot.orca;
   const rp = snapshot.reviewPending;
   if (!github || github.scanned !== true) {
     return { scanned: false, error: String((github && github.error) || 'github 段没查成'), objects: [], idle: false };
-  }
-  if (!orca || orca.scanned !== true) {
-    return { scanned: false, error: String((orca && orca.error) || 'orca 段没查成'), objects: [], idle: false };
   }
   if (!rp || rp.scanned !== true) {
     return { scanned: false, error: String((rp && rp.error) || 'reviewPending 段没查成'), objects: [], idle: false };
   }
   const prs = asList(github.prs);
   const issues = asList(github.issues);
-  const worktrees = asList(orca.worktrees);
   const tickets = asList(rp.items);
   if (!prs) return { scanned: false, error: 'github.prs 不是数组（没查成）', objects: [], idle: false };
   if (!issues) return { scanned: false, error: 'github.issues 不是数组（没查成）', objects: [], idle: false };
-  if (!worktrees) return { scanned: false, error: 'orca.worktrees 不是数组（没查成）', objects: [], idle: false };
   if (!tickets) return { scanned: false, error: 'reviewPending.items 不是数组（没查成）', objects: [], idle: false };
 
   const prReviews = snapshot.prReviews;
@@ -135,21 +122,6 @@ export function extractObjects(snapshot) {
     });
   }
 
-  const trees = worktrees.filter((w) => w && !w.isMainWorktree && w.isArchived !== true);
-  for (const w of trees) {
-    const id = treeId(w);
-    if (!id) continue;
-    const live = treeLive(w);
-    objects.push({
-      kind: 'tree',
-      id,
-      key: `tree:${id}`,
-      sig: live ? 'live' : 'dead',
-      live,
-      displayName: w.displayName ? String(w.displayName) : '',
-    });
-  }
-
   for (const t of tickets) {
     if (!t || t.pr == null) continue;
     const head = ticketHead(t);
@@ -170,7 +142,7 @@ export function extractObjects(snapshot) {
       return { scanned: false, error: `issue #${it.number} 的 label 不是数组（没查成）`, objects: [], idle: false };
     }
     if (!names.includes(DISAMBIGUATED_LABEL)) continue;
-    if (issueHasInflight(it.number, { worktrees: trees, prs })) continue;
+    if (issueHasInflight(it.number, { prs })) continue;
     objects.push({
       kind: 'issue',
       id: String(it.number),
@@ -208,10 +180,6 @@ export function formatStallItem(item, rounds) {
   if (item.kind === 'issue') {
     return `#${item.id} 已消歧但连续 ${n} 轮没派出工人、也没有在途 PR`;
   }
-  if (item.kind === 'tree') {
-    const name = item.displayName ? `「${String(item.displayName).slice(0, 36)}」` : item.id;
-    return `工人树 ${name} 连续 ${n} 轮在、但没有活进程`;
-  }
   if (item.kind === 'ticket') {
     return `复审票 PR #${item.pr}@${shortOid(item.headOid)} 连续 ${n} 轮还在队列`;
   }
@@ -222,7 +190,7 @@ export function formatStallItem(item, rounds) {
  * 吃一串快照，吐停滞判决。
  * 粒度是逐对象签名，不是整盘、也不是聚合计数：对象 A 停、对象 B 动 ⇒ 只报 A。
  * 票 1↔0 抖动不得把仍冻结的 PR 藏掉。
- * 误报闸：全空闲（0 PR / 0 已消歧 / 0 票 / 0 树）不算停滞。
+ * 误报闸：全空闲（0 PR / 0 已消歧 / 0 票）不算停滞。
  */
 export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS } = {}) {
   if (!Array.isArray(snapshots)) {
@@ -289,14 +257,8 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
       if (!cur || cur.sig !== prev.sig) frozen.delete(key);
     }
   }
-  const frozenList = [...frozen.values()];
-  // 树只有「在、但没活进程」才算停滞；一直活着的树不是卡住。
-  const items = frozenList
-    .filter((o) => o.kind !== 'tree' || o.sig === 'dead')
-    .map((o) => ({ ...o, why: formatStallItem(o, need) }));
+  const items = [...frozen.values()].map((o) => ({ ...o, why: formatStallItem(o, need) }));
   if (!items.length) {
-    const onlyLiveTrees = frozenList.length > 0
-      && frozenList.every((o) => o.kind === 'tree' && o.sig === 'live');
     return {
       scanned: true,
       stalled: false,
@@ -304,7 +266,7 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
       items: [],
       rounds: need,
       fingerprint: null,
-      reason: onlyLiveTrees ? 'live-only' : 'progress',
+      reason: 'progress',
     };
   }
   return {

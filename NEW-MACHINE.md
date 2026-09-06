@@ -324,7 +324,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
 - 挂点已摘：随仓 `.claude/settings.json` 的 PreToolUse 是派工闸 + 问人闸（ask-gate）+ 工具使用闸（tool-use-gate，#969）+ SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。`~/.claude/settings.json` 归宿主自己，onboard 不能动。
-- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + `orca automations` + `agent-stall-watch`。
+- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + 指挥官 + `progress-watch`（2026-09-06 屏面指纹层 `agent-stall-watch` 整层退役，orca 已不在承重面上）。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
@@ -372,11 +372,14 @@ for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/
 orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
-# 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
-# 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
+# 卡死发现 = 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
 #   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
+#   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
+# 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
+#   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
+#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
+#   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
-#   验：systemctl list-timers 里 dao-agent-stall.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:2/15）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。

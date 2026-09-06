@@ -73,11 +73,11 @@ if (!HAS_WORK && ship.action === 'push') {
   if (existsSync(checkFile)) {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
     else {
-      // 快档（--affected）：只跑与本次改动相关的测试 + 跳过要出网的检查。
-      // 兜底靠两处，不靠这一次：CI 每次 PR 跑、每日 cron 跑全量并重建影响地图。
-      // 想在本地跑全量：`node scripts/dao-check.mjs`（不带旗标即全量）。
+      // 快档是 dao-check 的默认档（2026-09-06 翻转）：只跑与本次改动相关的测试 + 跳过要出网的检查。
+      // 这里不再传 `--affected`——那个旗标现在是等价别名，传了只会让人以为默认是全量。
+      // 兜底靠两处，不靠这一次：CI 每次 PR 跑（全新 clone 无地图 ⇒ 自动全量）、本地可敲 `--full`。
       say('[收工] 推之前跑检查（快档：只跑受影响的）…');
-      const c = spawnSync(process.execPath, [checkFile, '--affected'], { windowsHide: true, cwd: root, encoding: 'utf8' });
+      const c = spawnSync(process.execPath, [checkFile], { windowsHide: true, cwd: root, encoding: 'utf8' });
       const tail = String(c.stdout || '').trim().split(/\r?\n/).pop() || '';
       say(`[收工] 检查：${tail}`);
       if (c.status !== 0) { say('[收工] 检查红——不推，先修（master 必须能跑）'); process.exit(1); }
