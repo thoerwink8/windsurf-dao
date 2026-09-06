@@ -41,4 +41,12 @@ lark-cli im +messages-send --as bot --chat-id oc_xxx --text "<正文>"
 3. 凭据文件是否在、权限是否 600
 4. `lark-cli` 是否用了 `--as bot`
 
-话题状态在 `~/.dao/feishu-threads.json`（运行时自建，可丢可重算）。
+话题状态在 `~/.dao/feishu-threads.json`（运行时自建，可丢可重算）。日报队列在 `~/.dao/broadcast-digest.json`。
+
+## 私聊
+
+手机飞书点开机器人即可问答（`chat_type=p2p`，走总帅对话，不进群映射）。开发者后台要勾上「接收私聊消息」——事件仍是 `im.message.receive_v1`，代码已经收。
+
+## 日报
+
+总控群每天最多一张 Card JSON 2.0「道·日报」。心跳/发布/熔断先入队，换日且有变化才发；完全没变化一个字都不发。看待拍板按钮和群菜单走同一条取数（GitHub「待拍板」标签）。

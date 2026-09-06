@@ -1417,23 +1417,18 @@ describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
   });
 });
 
-// 2026-09-06：hubSay 原本只看退出码，把 lark-cli 打印的 message_id 扔了。
-// 「发成了」和「lark-cli 跑通但飞书没收」在退出码上长得一模一样，而回流一哑是整条静默。
-// 这里用源码断言钉住「认回执」这件事——真发一条属于集成面，不进单测。
-describe('hubSay 认回执不认退出码', () => {
+// #1029：状态别塞进总控消息流。hubSay 入队日报，写不进才算失败。
+describe('hubSay 入队日报，不直接发总控群', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
   const fn = src.slice(src.indexOf('function hubSay'), src.indexOf('function hubOnce'));
 
-  it('读了 stdout 里的 message_id', () => {
-    assert.match(fn, /messageId/, 'hubSay 没取 message_id——退出码 0 就当发成了');
+  it('走 recordBroadcast，不 spawn hub-say', () => {
+    assert.match(fn, /recordBroadcast/);
+    assert.equal(fn.includes("spawnSync('hub-say'"), false);
   });
 
-  it('拿不到 message_id 判失败（不许当成功）', () => {
-    assert.match(fn, /if \(!messageId[\s\S]{0,80}return \{ ok: false/);
-  });
-
-  it('字符串 "null" 也算没拿到（jq -q 取不到字段时打的就是它）', () => {
-    assert.match(fn, /messageId === 'null'/);
+  it('入队失败才 ok:false', () => {
+    assert.match(fn, /if \(!r\.ok\) return \{ ok: false/);
   });
 });
 
