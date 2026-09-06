@@ -43,6 +43,8 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：关单不读个人 GH_TOKEN，写动作走 issue-gateway。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/close-issues.mjs --since-hours 6
 # 退出码非 0 = 有 PR 没查成或关单操作失败，单元进 failed，systemctl --failed 看得见。
 # 不设 SuccessExitStatus：这里没有「1 是正常输出」那一档，1 就是真出事了。

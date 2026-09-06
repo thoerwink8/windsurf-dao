@@ -39,6 +39,7 @@
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
 | D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
+| D | ~/.dao/issue-gateway | #792 Issue 写入网关的幂等账与审计（`idempotency/` + `audit/audit.ndjson`）。运行时自建，不进 git，换机不拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |

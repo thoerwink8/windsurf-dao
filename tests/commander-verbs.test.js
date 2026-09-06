@@ -204,10 +204,11 @@ describe('add-label 校验：合法放行 / 违规被拒', () => {
       models: MODELS,
     });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual(r.argv, [
-      'node', 'scripts/gh-as.mjs', 'marshal', '--',
-      'issue', 'edit', '971', '--add-label', 'reviewer/gpt-5.6-luna',
-    ]);
+    assert.equal(r.argv[1], 'scripts/issue-gateway.mjs');
+    assert.ok(r.argv.includes('edit-labels'));
+    assert.ok(r.argv.includes('--idempotency-key'));
+    assert.ok(!r.argv.includes('--identity'));
+    assert.ok(r.argv.includes('reviewer/gpt-5.6-luna'));
   });
 });
 
@@ -328,13 +329,15 @@ describe('open-issue 校验：原文+reason、三问、去重', () => {
     assert.equal(r.code, 'unscanned-silent');
   });
 
-  it('planOpenIssueCmd：gh-as marshal + --body-file，不许 --body', async () => {
+  it('planOpenIssueCmd：issue-gateway + --body-file，不许 --body / --identity', async () => {
     const { planOpenIssueCmd } = await VERBS;
     const r = planOpenIssueCmd(base, { repo: 'thoerwink8/windsurf-dao', bodyPath: '/tmp/x.md' });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.ok(r.argv.includes('marshal'));
+    assert.equal(r.argv[1], 'scripts/issue-gateway.mjs');
     assert.ok(r.argv.includes('--body-file'));
     assert.ok(!r.argv.includes('--body'));
+    assert.ok(!r.argv.includes('--identity'));
+    assert.ok(r.argv.includes('--idempotency-key'));
     assert.ok(r.argv.includes('待拍板'));
   });
 });
@@ -654,7 +657,8 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     for (const fn of ['planAddLabelCmd', 'planRetryDrainCmd', 'planOpenIssueCmd']) {
       assert.ok(src.includes(fn), `executor 缺 ${fn}（校验层没接到手上）`);
     }
-    assert.ok(/gh-as\.mjs/.test(src) && /marshal/.test(src), '写动作要走 gh-as');
+    assert.ok(/issue-gateway\.mjs/.test(src), 'Issue 写动作要走 issue-gateway（#792）');
+    assert.ok(/marshal/.test(src), 'PR 合并等仍走 marshal 身份');
   });
 
   it('attach-reviewer 记账走 drainLedgerKey + ticketHeadOid，不许手写旧键 pr:<N>', () => {

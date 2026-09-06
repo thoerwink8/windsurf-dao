@@ -92,6 +92,23 @@ describe('dispatch-gate', () => {
       assert.ok(/工人 TUI/.test(COORDINATOR_HINT) && /帅窗不许/.test(COORDINATOR_HINT),
         '#675 COORDINATOR_HINT 例外  →  ' + COORDINATOR_HINT);
     });
+    const ghCreate = decideGate('gh issue create --title t --body b');
+    await t.test('#792 decideGate 拦裸 gh issue create', () => {
+      assert.equal(ghCreate.block, true);
+      assert.match(ghCreate.message, /issue-gateway/);
+    });
+    const ghView = decideGate('gh issue view 1');
+    await t.test('#792 只读 gh issue view 放行', () => {
+      assert.equal(ghView.block, false);
+    });
+    const gw = decideGate('node scripts/issue-gateway.mjs create --repo thoerwink8/windsurf-dao --title t --host claude --idempotency-key k');
+    await t.test('#792 issue-gateway 入口放行', () => {
+      assert.equal(gw.block, false);
+    });
+    const ghas = decideGate('node scripts/gh-as.mjs marshal -- issue create --title t');
+    await t.test('#792 gh-as 过渡入口不拦（网关内部仍走它）', () => {
+      assert.equal(ghas.block, false);
+    });
     await t.test('dao.mjs dispatch 不是旁路', () => {
       assert.ok(isDispatchBypass('node scripts/dao.mjs dispatch --name x') === false, 'dao.mjs dispatch 不是旁路');
     });
@@ -196,6 +213,8 @@ describe('dispatch-gate', () => {
       ['拦 run-use', 'orca orchestration run-use --id run_x', 'deny', /coordinator/],
       ['放行普通 inbox', 'orca orchestration inbox --json', 'allow', null],
       ['放行逃生口 raw', 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t', 'allow', null],
+      ['拦裸 gh issue create', 'gh issue create --title t --body b', 'deny', /issue-gateway/],
+      ['放行只读 gh issue view', 'gh issue view 1', 'allow', null],
     ];
     for (const [label, cmd, expect, re] of cases) {
       const r = runCursorGate(CURSOR_HOOK, cmd);

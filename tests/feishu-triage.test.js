@@ -797,10 +797,19 @@ export async function triage(inbound, deps) {
     assert.equal(withIssue['X-Dao-Task'], 'thoerwink8/windsurf-dao#42', '已建单带号');
   });
 
-  it('deps 的 gh 三件套：搜索 / 建单 / 追评（假 gh）', async () => {
+  it('deps 的 gh 三件套：搜索走只读 gh，建单/追评走 issue-gateway', async () => {
     const M = await MOD;
     const nodeRun = (bin, args, opts) => M.runGh(process.execPath, [bin, ...args], opts);
-    const deps = M.makeGhDeps({ ghBin: FAKE_GH, run: nodeRun });
+    const writes = [];
+    const applyWrite = (req) => {
+      writes.push(req);
+      if (req.repo === 'thoerwink8/fail-repo') return { ok: false, stage: 'allowlist', error: '仓库不在允许列表' };
+      if (req.action === 'issue_create') {
+        return { ok: true, number: 42, url: 'https://github.com/thoerwink8/windsurf-dao/issues/42' };
+      }
+      return { ok: true };
+    };
+    const deps = M.makeGhDeps({ ghBin: FAKE_GH, run: nodeRun, applyWrite });
 
     const hits = await deps.ghSearch('thoerwink8/windsurf-dao', '会话');
     assert.equal(hits.length, 2);
@@ -810,14 +819,20 @@ export async function triage(inbound, deps) {
 
     const created = await deps.ghCreateIssue('thoerwink8/windsurf-dao', {
       title: '[飞书] 测试单', body: '现象\n期望', labels: ['任务', '已消歧'],
+      idempotency_key: 'feishu:oc:om:create',
     });
-    assert.equal(created.number, 9001);
+    assert.equal(created.number, 42);
+    assert.equal(writes[0].action, 'issue_create');
+    assert.equal(writes[0].host, 'feishu-triage');
+    assert.equal(writes[0].idempotency_key, 'feishu:oc:om:create');
 
-    const ok = await deps.ghComment('thoerwink8/windsurf-dao', 9001, '已在 #9001 下补充');
+    const ok = await deps.ghComment('thoerwink8/windsurf-dao', 42, '已在 #42 下补充', { idempotency_key: 'feishu:oc:om:comment' });
     assert.equal(ok, true);
+    assert.equal(writes[1].action, 'issue_comment');
 
     await assert.rejects(() => deps.ghSearch('thoerwink8/windsurf-dao', 'FAIL'), /gh search 失败/);
-    await assert.rejects(() => deps.ghCreateIssue('thoerwink8/fail-repo', { title: 'x', body: 'y' }), /issue create 失败/);
+    await assert.rejects(() => deps.ghCreateIssue('thoerwink8/fail-repo', { title: 'x', body: 'y', idempotency_key: 'k' }), /issue-gateway create 失败/);
+    await assert.rejects(() => deps.ghCreateIssue('thoerwink8/windsurf-dao', { title: 'x', body: 'y' }), /idempotency_key/);
   });
 
   it('buildDeps：allowOpenIds 来自凭据，state 是 Map', async () => {
@@ -892,16 +907,21 @@ export async function triage(inbound, deps) {
     assert.equal(inbound.text, '帮我看看 802 单', '@_user_N 占位符剥掉、多空格归一');
   });
 
-  it('ghCreateIssue 契约：不带 --json，stdout URL 取号；假 gh 遇未知参数失败', async () => {
+  it('ghCreateIssue 走网关：缺幂等键失败；假写入器回执缺 number 也失败', async () => {
     const M = await MOD;
     const nodeRun = (bin, args, opts) => M.runGh(process.execPath, [bin, ...args], opts);
-    const deps = M.makeGhDeps({ ghBin: FAKE_GH, run: nodeRun });
-
-    const created = await deps.ghCreateIssue('thoerwink8/windsurf-dao', { title: 't', body: 'b', labels: ['任务'] });
-    assert.equal(created.number, 9001);
-    assert.equal(created.url, 'https://github.com/thoerwink8/windsurf-dao/issues/9001');
-
-    // 判别性：真 gh issue create 收到 --json 报 unknown flag，假 gh 必须同样失败（审官红①）
+    const deps = M.makeGhDeps({
+      ghBin: FAKE_GH, run: nodeRun,
+      applyWrite: (req) => ({ ok: true, url: 'https://github.com/thoerwink8/windsurf-dao/issues/1' }),
+    });
+    await assert.rejects(
+      () => deps.ghCreateIssue('thoerwink8/windsurf-dao', { title: 't', body: 'b', labels: ['任务'] }),
+      /idempotency_key/,
+    );
+    await assert.rejects(
+      () => deps.ghCreateIssue('thoerwink8/windsurf-dao', { title: 't', body: 'b', idempotency_key: 'k' }),
+      /回执不完整/,
+    );
     const withJson = M.runGh(process.execPath, [FAKE_GH, 'issue', 'create', '--repo', 'thoerwink8/x', '--title', 't', '--body', 'b', '--json', 'number,url']);
     assert.equal(withJson.ok, false, '假 gh 必须拦下 --json');
     assert.match(withJson.stderr, /--json/);

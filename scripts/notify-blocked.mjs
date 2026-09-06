@@ -30,6 +30,7 @@ import { writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
 // 只认 `Blocked-by: #N` 一种写法（#526 拍板）。词边界保证 #497 不会误吞 #4970；
 // 大小写敏感，小写 blocked-by / 全角冒号都不算数，逼写法收敛成唯一形态。
@@ -118,14 +119,29 @@ export function runNotify(closedNumber, opts = {}) {
   }
 
   const failures = [];
+  const commentIssue = opts.commentIssue;
   for (const w of waiters) {
     const body = buildComment(closedNumber, w);
-    const tmpFile = join(tmpdir(), `notify-blocked-${w.number}-${process.pid}.md`);
-    writeFileSync(tmpFile, body, 'utf8');
-    const r = spawnSync(gh, [...ghArgs, 'issue', 'comment', String(w.number), '--body-file', tmpFile], { windowsHide: true, encoding: 'utf8' });
-    unlinkSync(tmpFile);
-    if (r.error || r.status !== 0) {
-      failures.push({ number: w.number, detail: String(r.stderr || (r.error && r.error.message) || 'gh issue comment 失败').trim().slice(0, 300) });
+    let failed = false;
+    let detail = '';
+    if (typeof commentIssue === 'function') {
+      const r = commentIssue({ number: w.number, body, closedNumber, waiter: w });
+      if (!r || r.ok === false) {
+        failed = true;
+        detail = String((r && (r.error || r.detail)) || 'issue-gateway comment 失败').trim().slice(0, 300);
+      }
+    } else {
+      const tmpFile = join(tmpdir(), `notify-blocked-${w.number}-${process.pid}.md`);
+      writeFileSync(tmpFile, body, 'utf8');
+      const r = spawnSync(gh, [...ghArgs, 'issue', 'comment', String(w.number), '--body-file', tmpFile], { windowsHide: true, encoding: 'utf8' });
+      unlinkSync(tmpFile);
+      if (r.error || r.status !== 0) {
+        failed = true;
+        detail = String(r.stderr || (r.error && r.error.message) || 'gh issue comment 失败').trim().slice(0, 300);
+      }
+    }
+    if (failed) {
+      failures.push({ number: w.number, detail });
     } else {
       console.log(`前置提醒已发：#${w.number}（等 #${closedNumber}）`);
     }
@@ -149,6 +165,15 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv
 if (isMain) {
   const n = Number(process.argv[2]);
   if (!Number.isInteger(n) || n <= 0) usageAndExit(`要一个合法的 issue 或 PR 号（已关闭/已合并的），实际：${process.argv[2] || '(空)'}`);
-  const res = runNotify(n);
+  const res = runNotify(n, {
+    commentIssue: ({ number, body, closedNumber }) => applyIssueWrite({
+      action: 'issue_comment',
+      repo: process.env.GITHUB_REPOSITORY || 'thoerwink8/windsurf-dao',
+      issue: number,
+      body,
+      host: 'notify-blocked',
+      idempotency_key: `notify-blocked:${closedNumber}->${number}`,
+    }),
+  });
   process.exit(res.ok ? 0 : 1);
 }

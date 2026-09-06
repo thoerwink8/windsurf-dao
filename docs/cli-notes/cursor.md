@@ -13,6 +13,10 @@ agent 型（`start = "agent"`）。`[Pasted text #N]` 是**提交后显示残留
 - **Windows shim 禁止 `for /f in ('dir')` / `findstr`**（#633：会弹可见 cmd）。
 - **CLI 不支持命令行传 prompt**（`--single-use` 是 worker pool 别名），任务靠 Orca 注入；注入收不到（只贴不发）就诚实失败回滚。
 
+## GitHub Issue 写（#792）
+
+写 Issue 只走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`。
+
 ## 正确起法
 
 `cursor-agent --model {model} --force --trust`（launch 模板），agent 型走 `worker-start --agent cursor`。

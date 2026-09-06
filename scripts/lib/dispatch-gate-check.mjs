@@ -176,6 +176,21 @@ function checkClaudeMount(root) {
       problems.push(`逃生口 raw 应放行，实际 ${raw.status}`);
     }
 
+    const ghWrite = runScript(script, { command: 'gh issue create --title t --body b' });
+    if (ghWrite.status !== 2) {
+      problems.push(`裸 gh issue create 应 exit 2，实际 ${ghWrite.status}`);
+    } else if (!/issue-gateway/.test(`${ghWrite.stderr || ''}${ghWrite.stdout || ''}`)) {
+      problems.push(`拦住裸 gh issue 但没指出 issue-gateway：${command}`);
+    }
+    const ghView = runScript(script, { command: 'gh issue view 1' });
+    if (ghView.status !== 0) {
+      problems.push(`只读 gh issue view 应放行，实际 ${ghView.status}`);
+    }
+    const gwOk = runScript(script, { command: 'node scripts/issue-gateway.mjs create --repo thoerwink8/windsurf-dao --title t --host claude --idempotency-key k' });
+    if (gwOk.status !== 0) {
+      problems.push(`issue-gateway 入口应放行，实际 ${gwOk.status}`);
+    }
+
     // #575 ③：放行判据是「实际执行的命令」，不是整串关键词。故意把 dao.mjs raw
     // 写进 echo 字符串再裸跑 worker-start——旧闸会放行，新闸必须仍 exit 2。
     const decoy = runScript(script, {
@@ -300,6 +315,17 @@ function checkCursorMount(root) {
     const rawDoc = cursorResponse(raw);
     if (!rawDoc || rawDoc.permission !== 'allow') {
       problems.push(`Cursor 面逃生口 raw 应 allow：${String(raw.stdout || '').slice(0, 120)}`);
+    }
+
+    const ghWrite = runScript(script, { command: 'gh issue create --title t --body b', cursor: true });
+    const ghWriteDoc = cursorResponse(ghWrite);
+    if (!ghWriteDoc || ghWriteDoc.permission !== 'deny' || !/issue-gateway/.test(JSON.stringify(ghWriteDoc))) {
+      problems.push(`Cursor 面裸 gh issue create 应 deny 且指出 issue-gateway：${String(ghWrite.stdout || '').slice(0, 120)}`);
+    }
+    const ghView = runScript(script, { command: 'gh issue view 1', cursor: true });
+    const ghViewDoc = cursorResponse(ghView);
+    if (!ghViewDoc || ghViewDoc.permission !== 'allow') {
+      problems.push(`Cursor 面只读 gh issue view 应 allow：${String(ghView.stdout || '').slice(0, 120)}`);
     }
 
     const crashed = runScript(script, {

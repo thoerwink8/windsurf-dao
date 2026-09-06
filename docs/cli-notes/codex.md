@@ -6,6 +6,10 @@
 
 Codex 是 **agent 型**（`start = "agent"`）：必须走 `worker-start --agent codex`，由 orca 官方协议发送任务书（自动提交）。**不要 `terminal create --command` 再粘贴——Codex 把粘贴显示成 `[Pasted Content]` 永不发送**（#680 实证，2026-08-25 再踩）。
 
+## GitHub Issue 写（#792）
+
+写 Issue 只走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`。
+
 ## 正确起法（#680 拍板）
 
 ```

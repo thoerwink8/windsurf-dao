@@ -27,6 +27,8 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：巡逻开单走 issue-gateway，不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/commander.mjs patrol
 # 起一次性会话本身要等（起会话 3 分钟预算 + 送指针 1 分钟），默认 90 秒会把正常的一轮掐死。
 TimeoutStartSec=600

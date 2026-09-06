@@ -195,16 +195,25 @@ export function validateAddLabel(input = {}) {
 }
 
 /** 纯函数：校验过了才给出 gh-as argv。issue 优先（派工读的是署名单上的标）。 */
-export function planAddLabelCmd(action = {}, { models } = {}) {
+export function planAddLabelCmd(action = {}, { models, repo } = {}) {
   const v = validateAddLabel({ ...action, models: models || action.models });
   if (!v.ok) return v;
   if (action.issue == null && action.pr == null) {
     return fail('no-target', 'add-label 要 issue 或 pr 号');
   }
-  const sub = action.issue != null
-    ? ['issue', 'edit', String(action.issue)]
-    : ['pr', 'edit', String(action.pr)];
-  const argv = ['node', 'scripts/gh-as.mjs', v.role, '--', ...sub];
+  if (action.issue != null) {
+    const targetRepo = repo || action.repo || 'thoerwink8/windsurf-dao';
+    const argv = [
+      'node', 'scripts/issue-gateway.mjs', 'edit-labels',
+      '--repo', targetRepo,
+      '--issue', String(action.issue),
+      '--host', 'commander',
+      '--idempotency-key', `commander-add-label:${action.issue}:${v.labels.join(',')}`,
+    ];
+    for (const lab of v.labels) argv.push('--add', lab);
+    return { ok: true, argv, role: v.role, labels: v.labels, workerId: v.workerId, reviewerId: v.reviewerId };
+  }
+  const argv = ['node', 'scripts/gh-as.mjs', v.role, '--', 'pr', 'edit', String(action.pr)];
   for (const lab of v.labels) argv.push('--add-label', lab);
   return { ok: true, argv, role: v.role, labels: v.labels, workerId: v.workerId, reviewerId: v.reviewerId };
 }
@@ -496,12 +505,13 @@ export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {
   return {
     ok: true,
     argv: [
-      'node', 'scripts/gh-as.mjs', v.role, '--',
-      'issue', 'create',
+      'node', 'scripts/issue-gateway.mjs', 'create',
       '--repo', repo,
       '--title', rendered.title,
       '--body-file', bodyPath,
       '--label', '待拍板',
+      '--host', 'commander',
+      '--idempotency-key', `commander-open-issue:${v.key}`,
     ],
     role: v.role,
     key: v.key,

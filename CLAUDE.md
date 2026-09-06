@@ -4,7 +4,7 @@
 
 ## 怎么工作（停派工态）
 
-- 帅直接在 master 提交推送；改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。
+- 帅直接在 master 提交推送；改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792），不许裸 `gh issue` 写。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
 - commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 用 `[pi]`，Codex 用 `[codex]`，Grok 用 `[grok]`。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
 - 验收/通过记录必须与被测代码同基线：记录「X 修好 / 测验通过」的提交必须包含被测代码本身（#766 教训：通过记录挂在旧基线会误导后人）。

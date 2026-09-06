@@ -78,7 +78,7 @@ export function closeDecision(pr) {
  * 对单个 PR 执行关单判定并落动作。
  * 返回 { ok, action, reason, issue?, pr?, dryRun? }。
  */
-export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
+export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 'thoerwink8/windsurf-dao' } = {}) {
   const number = String((pr && (pr.number ?? pr.pr)) ?? '');
   const issue = attributedIssueNumber(pr);
   if (!issue) return { ok: true, action: 'none', reason: '无署名单号', pr: number };
@@ -111,6 +111,20 @@ export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
   if (!expectOpen && String(issueState).toUpperCase() !== 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 未关(${issueState})，无需重开`, issue, pr: number };
   if (dryRun) return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason, dryRun: true };
   const verb = dec.action === 'close' ? 'close' : 'reopen';
+  if (typeof writeIssue === 'function') {
+    const op = writeIssue({
+      action: verb === 'close' ? 'issue_close' : 'issue_reopen',
+      repo,
+      issue,
+      host: 'close-issues',
+      idempotency_key: `close-issues:${verb}:pr-${number}:issue-${issue}`,
+      reason: verb === 'close' ? 'completed' : undefined,
+    });
+    if (!op || !op.ok) {
+      return { ok: false, action: dec.action, error: `issue-gateway ${verb} #${issue} 失败：${op && op.error ? op.error : '没查成'}`, issue, pr: number };
+    }
+    return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason };
+  }
   const op = runGh(['issue', verb, String(issue)]);
   if (!op.ok) return { ok: false, action: dec.action, error: `gh issue ${verb} #${issue} 失败：${op.error}`, issue, pr: number };
   return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason };
