@@ -229,7 +229,11 @@ function hub(subject, moment, extra = {}) {
 }
 
 // 态势的五节。scan 每节标 scanned:true/false。
-export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
+// 2026-09-06 `orca` → `trees`：orca 运行时已 disabled，它**永远**没查成，
+// 于是 fail-closed 总闸从「读不到盘面就别乱动」退化成「每一轮都别动」。
+// 一个恒红的闸等于没有闸，而且它压掉的是真该做的动作。
+// `orca` 段仍在态势里（还有没搬完的消费者读它），但不再决定这一轮能不能动手。
+export const SITUATION_SECTIONS = ['github', 'trees', 'reviewPending', 'prReviews', 'stall'];
 
 // 复审重试：上一票的宽限期与上限。
 // 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
@@ -352,7 +356,20 @@ function collectCandidates(situation) {
 
   // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
   // #849：本轮最多派 maxDispatchPerRound 张，超出的排队下轮再派（不丢、不 escalate）。
-  const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
+  //
+  // 树面来自 situation.trees（mirasim，见 lib/mirasim-trees.mjs），**不再是 orca.worktrees**。
+  // 2026-09-06 实咬：orca 退役后那一段恒 scanned:false，而这里原来写着 `orca.worktrees || []`
+  // ——「没查成」被洗成「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次。
+  // 现在**不给兜底空数组**：树面没查成就让 inspectReadyQueue 判 unscanned，一张都不派。
+  // 少派一轮是可恢复的，重复派工烧掉的额度和两个工人打架不是。
+  const treeFace = situation.trees;
+  const ready = treeFace && treeFace.scanned === true
+    ? inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: treeFace.worktrees })
+    : {
+      kind: 'unscanned',
+      ready: null,
+      line: `可立即起：没查成（${(treeFace && treeFace.error) || '树面没给'}，≠ 扫完是 0）`,
+    };
   if (ready.kind === 'ready') {
     let dispatchedThisRound = 0;
     for (const n of ready.ready) {

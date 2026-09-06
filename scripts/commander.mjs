@@ -26,6 +26,7 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
@@ -177,6 +178,21 @@ function scanOrca() {
   return { scanned: true, worktrees };
 }
 
+/**
+ * 在途派工的采样面（2026-09-06 起）。orca 段已恒 scanned:false，而它原来是「这张 issue
+ * 有没有人在做」的唯一依据——调用处一句 `orca.worktrees || []` 就把「没查成」洗成
+ * 「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次（#965 当场撞上）。
+ * 换成 mirasim 自己的树目录：它是这些树的所有者，读不了目录才是没查成。
+ */
+function scanTrees() {
+  return scanMirasimTrees({
+    repo: REPO.split('/')[1] || undefined,
+    readdir: (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name),
+    exists: existsSync,
+    join,
+  });
+}
+
 function scanReviewPending() {
   let dir;
   try { dir = reviewPendingDir({ root: ROOT }); }
@@ -297,6 +313,7 @@ function pickDefaultWorkerModel(raw) {
 function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
+  const trees = scanTrees();
   const reviewPending = scanReviewPending();
   const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
@@ -330,7 +347,7 @@ function buildSituation({ state } = {}) {
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall, otherRepos,
+    github, orca, trees, reviewPending, prReviews, stall, otherRepos,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -347,8 +364,13 @@ function buildSituation({ state } = {}) {
   };
 }
 
+// 关键节：任一没查成 → fail-closed 总闸压掉依赖它的动作。
+// 2026-09-06 把 `orca` 换成 `trees`：orca 运行时已 disabled，它**永远**是没查成，
+// 于是这道总闸从「读不到盘面就别乱动」退化成「每一轮都别动」——一个恒红的闸等于没有闸，
+// 而且它压掉的是真该做的动作（判例：dao-check「体检红项先问判据该不该在」）。
+// `orca` 段仍留在态势里给还没搬完的消费者读，但不再决定这一轮能不能动手。
 function situationHealth(situation) {
-  const sections = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
+  const sections = ['github', 'trees', 'reviewPending', 'prReviews', 'stall'];
   const unscanned = sections.filter((s) => !situation[s]?.scanned);
   return { unscanned, allScanned: unscanned.length === 0 };
 }

@@ -17,7 +17,9 @@ const PLAIN = import(url('scripts/lib/plain-words.mjs'));
 function baseSituation(over = {}) {
   return {
     github: { scanned: true, issues: [], prs: [] },
+    // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: [] },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
