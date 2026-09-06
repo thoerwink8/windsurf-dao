@@ -127,3 +127,19 @@ orca.error = worktree ps 没查成：Could not read Orca runtime metadata at /ho
 删掉「盘面 = orca worktree/terminal list」这一层。
 
 board-gc 和 stall 的盘面改问已经在跑的那份（`git worktree list` + mirasim 会话表，stall 后半段已经会采）。orca CLI 回 `runtime_unavailable` 不当成「没查成就整轮退出」——运行时退役后这是稳态，不是瞬时故障。⑮ 对 `--failed` 里的本仓 oneshot 读上一轮 `ExecMainStatus`：2 就红，并点名是「没查成」。`After=orca-serve.service` 随退役一起删，否则注释还在说「PATH 必须带 ~/.local/bin，否则找不到 orca」。
+
+---
+
+处置：#1065（board-gc 换盘面源）。三半分别落地：
+
+- **stall 已修**，提交 `d4872eb1`：`main()` 第一步那一刀改成「取不到当空集」，
+  跟紧随其后的 ps / workers 用同一种写法。**放开的当下就抓到 4 个卡死会话**——
+  121 分钟 1 个、134 分钟 1 个、3 小时以上 2 个（含审官 PR #1018 / #101 / #102）。
+  本观察的价值在这里得到实证：这四个会话在修好之前无人知晓。
+- **board-gc 落 #1065**。换盘面源要给 `planBoardGc` 重做字段映射、牵动它的测试，
+  超过顺手改的边界。单里写明硬边界（判据不动、救活备份不能丢、不许把 orca 拉回来）
+  和判别性验收（列不出当前 20+ 棵 mirasim 树就是没接上，不是「没有僵尸」）。
+- **⑮ 只问 timer 在册不读 `ExecMainStatus`** 归 #1051 —— 那张伞单第 2 条就是它，不另开单。
+
+`After=orca-serve.service` 归 `orca-retire` 的删代码阶段（前置是测试对等审计，
+见 `docs/initiatives.json` 的 `next_action`）。
