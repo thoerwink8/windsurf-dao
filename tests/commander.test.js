@@ -1417,3 +1417,72 @@ describe('返工派工失败要能重试（派了 ≠ 成了）', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 1);
   });
 });
+
+// 2026-09-06 实咬（PR #909）：drain 因为**别的 bug**（建树漏传 repo 选择符）试满 3 次，
+// 那个 bug 修好后计数仍冻在 3——键是 `pr:909`，不带 head，没有任何东西会重置它。
+// 每轮判 exhausted → 转出的 open-issue 又被去重吃掉 → 一声不响永久卡死，票每轮重写从没人消费。
+// 三兄弟里 rereview/rework 的键都带 head，只有 drain 漏了。
+describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
+  const OLD = '2026-09-05T00:00:00.000Z';
+  const ticket = (pr, oid) => ({ pr, head: { name: null, oid }, reviewer: 'gpt-5.6-luna', worker: null });
+  const sit = (oid, ledger) => baseSituation({
+    at: '2026-09-06T12:00:00.000Z',
+    github: { scanned: true, issues: [], prs: [{ number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: oid }] },
+    reviewPending: { scanned: true, items: [ticket(909, oid)] },
+    drainLedger: ledger,
+  });
+
+  it('旧 head 试满，新 head 来了 → 照常 attach-reviewer，不判 exhausted', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('newhead111', { 'pr:909@oldhead999': { at: OLD, pr: '909', tries: 3 } }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '新 head 应重新给机会');
+    assert.deepEqual(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted'), []);
+  });
+
+  // 判别力：同一个 head 上试满，仍然必须停手——别把闸放宽成永不封顶。
+  it('同一 head 试满 → 仍判 exhausted 停手', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909@samehead': { at: OLD, pr: '909', tries: 3 } }));
+    assert.deepEqual(byKind(r, 'attach-reviewer'), []);
+    const stopped = byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted').length
+      + byKind(r, 'open-issue').filter((a) => a.reason === 'drain-exhausted').length;
+    assert.equal(stopped, 1, '同 head 试满必须停手交人');
+  });
+
+  it('同一 head 有账且过了宽限 → retry-drain，键带 head', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909@samehead': { at: OLD, pr: '909', tries: 1 } }));
+    const rd = byKind(r, 'retry-drain');
+    assert.equal(rd.length, 1);
+    assert.equal(rd[0].stateKey, 'pr:909@samehead', 'decide 与 execute 必须算出同一个键');
+    assert.equal(rd[0].head, 'samehead', '动作要把 head 带给执行侧');
+  });
+
+  it('票里拿不到 head → 退回旧键，不猜一个', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      at: '2026-09-06T12:00:00.000Z',
+      github: { scanned: true, issues: [], prs: [{ number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'x' }] },
+      reviewPending: { scanned: true, items: [{ pr: 909, head: null, reviewer: 'gpt-5.6-luna', worker: null }] },
+      drainLedger: { 'pr:909': { at: OLD, pr: '909', tries: 1 } },
+    }));
+    assert.equal(byKind(r, 'retry-drain')[0]?.stateKey, 'pr:909');
+  });
+});
+
+describe('ticketHeadOid：两种票形态都要取得出', () => {
+  it('对象形态 {name,oid}', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid({ name: null, oid: 'abc' }), 'abc');
+  });
+  it('字符串形态', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid('abc'), 'abc');
+  });
+  it('取不出返回 null（不猜）', async () => {
+    const { ticketHeadOid } = await CORE;
+    assert.equal(ticketHeadOid(null), null);
+    assert.equal(ticketHeadOid({ name: 'x' }), null);
+    assert.equal(ticketHeadOid('  '), null);
+  });
+});

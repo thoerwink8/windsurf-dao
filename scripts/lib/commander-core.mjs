@@ -42,6 +42,14 @@ export const ACTION_KINDS = [
 // #931 后 PR 判红不再走唤醒预算（改直接派返工工人），这个门槛只管撞死指纹 / 代拍两条路。
 export const WAKE_LIMIT = 3;
 
+/** 复审票里的 head：写票一侧给的是 {name, oid}，别处可能是字符串。取不出返回 null（不猜）。
+ *  drain 账本的键要用它，decide 与 execute 两侧必须走同一个门面，否则算出来的键对不上。 */
+export function ticketHeadOid(head) {
+  if (typeof head === 'string') return head.trim() || null;
+  const oid = head && typeof head === 'object' ? head.oid : null;
+  return typeof oid === 'string' && oid.trim() ? oid.trim() : null;
+}
+
 /** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
 export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
 
@@ -405,15 +413,19 @@ function collectCandidates(situation) {
       }, N['reap-ticket']));
       continue;
     }
+    // 票里的 head 有两种形态：字符串，或 {name, oid}（写票的一侧给的是后者）。
+    // 取不出就传 null——退回旧键，不是猜一个。
+    const itHead = ticketHeadOid(it.head);
     const drain = validateRetryDrain({
       pr: it.pr,
+      head: itHead,
       queue: rp.items,
       ledger: situation.drainLedger || {},
       nowMs,
     });
     if (drain.ok) {
       out.push(withNeeds({
-        kind: 'retry-drain', pr: it.pr, tries: drain.tries, stateKey: drain.stateKey,
+        kind: 'retry-drain', pr: it.pr, head: itHead, tries: drain.tries, stateKey: drain.stateKey,
         queue: rp.items,
         why: `PR #${it.pr} 上次 drain 没成（票还在队列），重试第 ${drain.tries} 次`,
       }, N['retry-drain']));
