@@ -82,7 +82,7 @@
 // ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
 //    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
-//    commander（maxDispatchPerRound 1~20、requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。
+//    commander（requireModelInRouting 布尔；loadThreshold / memReserveMb 是余量参数不是「派几个」；缺 commander 不拦以兼容旧夹具）。
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 // ㉜ 常驻 systemd 必须 Restart=always（#1037）：仓内 host/machine/systemd/*.service
