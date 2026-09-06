@@ -83,13 +83,16 @@ const memRegistry = () => {
 };
 
 describe('executor-binding', () => {
-  it('readExecutorPolicy 读到 mirasim 节；缺节回退默认 orca', async () => {
+  it('readExecutorPolicy 读到 mirasim 节；缺节是没查成，不是默认 orca', async () => {
     const { readExecutorPolicy } = await import(EB);
     const p = readExecutorPolicy(ROUTING);
+    assert.equal(p.ok, true);
     assert.equal(p.default, 'orca');
     assert.ok(p.mirasim && p.mirasim.agentRoutes);
     const none = readExecutorPolicy({ raw: {} });
-    assert.equal(none.default, 'orca');
+    assert.equal(none.ok, false);
+    assert.equal(none.unscanned, true);
+    assert.equal(none.default, null, '缺节不许落默认 orca——那等于一次读失败替人拍板');
     assert.equal(none.mirasim, null);
     assert.equal(none.scanned, false);
   });

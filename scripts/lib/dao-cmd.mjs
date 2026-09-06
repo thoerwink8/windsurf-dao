@@ -1040,12 +1040,16 @@ export const FLAGS_BY_VERB = {
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
     '--issue', '--comment', '--json', '--help', '-h',
+    // #880 卡 B：mirasim 路径只吃 --executor/--branch/--repo，卡名闸在分岔之后。
+    '--executor', '--branch', '--repo',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--run', '--agent', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
+    // #880 卡 B：mirasim 路径要 --executor/--spec（会话即卡，没有 --task/--terminal）。
+    '--executor', '--spec',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
@@ -1167,6 +1171,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #1055：强关 mirasim 会话；commander 超龄回收走这条
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+                  # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
@@ -1221,6 +1226,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色>) [--confirm] [--retry-of <id>]
+                  # mirasim：worker-start --executor mirasim --worktree <树路径> --spec <文> --model <id> --reviewer <id> --confirm（不要 --task；会话即卡，#884 P1）
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]
