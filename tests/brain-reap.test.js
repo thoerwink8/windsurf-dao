@@ -173,7 +173,7 @@ describe('#1055 取数切 mirasim，判据一个字不动', () => {
   it('#1055：SITUATION_SECTIONS 不再钉 orca（fail-closed 总闸不许常开）', async () => {
     const CORE = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').split(path.sep).join('/'));
     assert.ok(!CORE.SITUATION_SECTIONS.includes('orca'));
-    assert.deepEqual(CORE.SITUATION_SECTIONS, ['github', 'reviewPending', 'prReviews', 'stall']);
+    assert.deepEqual(CORE.SITUATION_SECTIONS, ['github', 'trees', 'reviewPending', 'prReviews', 'stall']);
   });
 
   it('classifyBrainReap 的判据签名与分支没被动过', () => {

@@ -545,7 +545,9 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
   function sit(over) {
     return {
       github: { scanned: true, issues: [], prs: [] },
+      // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。
       orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
       reviewPending: { scanned: true, items: [] },
       prReviews: { scanned: true, byPr: {} },
       stall: { scanned: true, strikes: {} },

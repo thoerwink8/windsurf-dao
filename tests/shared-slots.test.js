@@ -26,6 +26,7 @@ function situation({ issues = [], ticket = [], slots = null } = {}) {
   return {
     github: { scanned: true, issues, prs: ticket.map((t) => ({ number: t.pr, title: `PR ${t.pr}`, isDraft: false })) },
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: ticket },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
