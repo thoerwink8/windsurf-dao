@@ -28,7 +28,7 @@ import { pathToFileURL } from 'node:url';
 import { createRuntime } from './lib/mirasim-runtime.mjs';
 import { ghAs } from './lib/gh.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
-import { runNudge } from './lib/nudge-stalled.mjs';
+import { runNudge, classifyPrListScan, nudgeExitCode, PR_LIST_LIMIT } from './lib/nudge-stalled.mjs';
 
 const argv = process.argv.slice(2);
 const GO = argv.includes('--go');
@@ -111,15 +111,16 @@ function lookupIssue(n) {
 
 function loadAllPrs() {
   if (allPrsCache) return allPrsCache;
+  // gh pr list 不翻页：--limit N 取满 N 条就是截断。本仓 856 个 PR 时 --limit 100
+  // 只回 100 条，署名 PR 被当成「没有」→ judgeNudge 对非 master 工人返回 go。
+  // 同一把尺：limit 跟 classify 用同一个 PR_LIST_LIMIT；取满 = 没查全 = unscanned。
   const got = ghJson(
-    ['pr', 'list', '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,headRefName'],
+    ['pr', 'list', '--state', 'all', '--limit', String(PR_LIST_LIMIT), '--json', 'number,title,body,state,headRefName'],
     'PR 面',
   );
   allPrsCache = !got.ok
     ? { ok: false, error: got.error }
-    : Array.isArray(got.value)
-      ? { ok: true, items: got.value }
-      : { ok: false, error: 'PR 面不是数组（没查成）' };
+    : classifyPrListScan({ ok: true, items: got.value, limit: PR_LIST_LIMIT });
   return allPrsCache;
 }
 
@@ -187,6 +188,8 @@ if (isMain) {
     log: (s) => console.log(s),
     error: (s) => console.error(s),
   });
-  // 没查成要在 systemctl --failed 里看得见，不许跟「没有卡住的 / 全跳过」长成一个样。
-  if (out.unscanned.length) process.exit(2);
+  // 没查成 exit 2、起会话失败 exit 1，要在 systemctl --failed 里看得见。
+  // busy 背压是 skip（exit 0），不许跟 mirasim unavailable 长成一个样。
+  const code = nudgeExitCode(out);
+  if (code) process.exit(code);
 }

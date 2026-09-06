@@ -32,7 +32,9 @@ User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/nudge-stalled.mjs --go
-# 退出码 2 = 没查成（会话档案目录读不了 / 一个会话都没扫到），故意留成失败：
-# 「没扫到」要在 systemctl --failed 里看得见，不许跟「没有卡住的」长成一个样。
+# 退出码 2 = 没查成（会话档案读不了 / PR 列表截断 / 闸面没查成）。
+# 退出码 1 = 起会话失败（mirasim unavailable / 契约 / 上游拒绝，不是 busy）。
+# busy 背压是 skip、exit 0。故意留成失败的，要在 systemctl --failed 里看得见，
+# 不许跟「没有卡住的 / 全跳过 / 推成功」长成一个样。
 StandardOutput=journal
 StandardError=journal

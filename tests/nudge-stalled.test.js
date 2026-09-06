@@ -469,5 +469,130 @@ describe('文件头与代码一致：人退了才起新的；#1056 合并时退�
     assert.match(src, /人退了才起新的/);
     assert.match(src, /#1056/);
     assert.match(src, /已关 issue \/ 已合 PR/);
+    assert.match(src, /退出码 1 = 起会话失败/);
+    assert.match(src, /busy 背压是 skip/);
+  });
+});
+
+describe('PR 列表截断 ≠ 没有该单 PR（#1102 红项 1）', () => {
+  it('取满 limit 条 → 没查全，不是完整空列表', async () => {
+    const { classifyPrListScan } = await import(LIB);
+    const truncated = classifyPrListScan({
+      ok: true,
+      items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+      limit: 100,
+    });
+    assert.equal(truncated.ok, false);
+    assert.match(truncated.error, /截断|没查全/);
+    const completeEmpty = classifyPrListScan({ ok: true, items: [], limit: 100 });
+    assert.equal(completeEmpty.ok, true);
+    assert.equal(completeEmpty.items.length, 0);
+    const complete99 = classifyPrListScan({
+      ok: true,
+      items: Array.from({ length: 99 }, (_, i) => ({ number: i + 1 })),
+      limit: 100,
+    });
+    assert.equal(complete99.ok, true);
+    assert.equal(complete99.items.length, 99);
+  });
+
+  it('截断的 PR 面进 runNudge：非 master 工人 unscanned，零起会话', async () => {
+    const { runNudge } = await import(LIB);
+    const started = [];
+    const TREE_1097 = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1097';
+    const out = await runNudge({
+      go: true,
+      records: [{ workdir: TREE_1097, runState: 'incomplete', updatedAt: '2026-09-07T03:37:00Z', agent: 'pi' }],
+      exists: () => true,
+      lookupIssue: () => issue('OPEN'),
+      lookupPrs: () => ({ ok: false, error: 'PR 面取满 100 条（列表被截断，没查全）' }),
+      readBranch: () => branch('dao-1097'),
+      checkLease: () => lease('free'),
+      startSession: async (a) => { started.push(a); return { sessionKey: 'should-not' }; },
+      workerPrompt: '继续',
+      reviewPrompt: '继续审',
+    });
+    assert.equal(started.length, 0, '截断不许当成没有 PR 去起会话');
+    assert.equal(out.started.length, 0);
+    assert.equal(out.unscanned.length, 1);
+    assert.match(out.unscanned[0].reason, /没查成|没查全|截断/);
+  });
+
+  it('完整空列表仍允许未开 PR 的工人（分支闸无对象）', async () => {
+    const { judgeNudge } = await import(LIB);
+    const got = judgeNudge({
+      id: id('工人', 1097),
+      issue: issue('OPEN'),
+      prs: prs([]),
+      branch: branch('dao-1097'),
+      lease: lease('free'),
+    });
+    assert.equal(got.action, 'go');
+  });
+
+  it('垫片 loadAllPrs 用 PR_LIST_LIMIT，取满即 classify 截断', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /classifyPrListScan/);
+    assert.match(src, /PR_LIST_LIMIT/);
+    assert.doesNotMatch(src, /--limit', '100'/);
+  });
+});
+
+describe('起会话失败可机器识别（#1102 红项 2）', () => {
+  it('startSession 抛普通错误 → out.failed，不是成功收尾', async () => {
+    const { runNudge, nudgeExitCode } = await import(LIB);
+    const out = await runNudge({
+      go: true,
+      records: [{ workdir: TREE_1056, runState: 'incomplete', updatedAt: '2026-09-07T03:37:00Z', agent: 'pi' }],
+      exists: () => true,
+      lookupIssue: () => issue('OPEN'),
+      lookupPrs: () => prs([OPEN_1056]),
+      readBranch: () => branch('dao-1056'),
+      checkLease: () => lease('free'),
+      startSession: async () => { throw new Error('mirasim unavailable'); },
+      workerPrompt: '继续',
+      reviewPrompt: '继续审',
+    });
+    assert.equal(out.started.length, 0);
+    assert.equal(out.skipped.length, 0);
+    assert.equal(out.unscanned.length, 0);
+    assert.equal(out.failed.length, 1);
+    assert.match(out.failed[0].reason, /mirasim unavailable/);
+    assert.equal(nudgeExitCode(out), 1);
+  });
+
+  it('busy 背压仍是 skip、exit 0，跟真实失败分得开', async () => {
+    const { runNudge, nudgeExitCode } = await import(LIB);
+    const err = new Error('租约被占，拒起会话');
+    err.detail = { busy: true };
+    const out = await runNudge({
+      go: true,
+      records: [{ workdir: TREE_1056, runState: 'incomplete', updatedAt: '2026-09-07T03:37:00Z', agent: 'pi' }],
+      exists: () => true,
+      lookupIssue: () => issue('OPEN'),
+      lookupPrs: () => prs([OPEN_1056]),
+      readBranch: () => branch('dao-1056'),
+      checkLease: () => lease('free'),
+      startSession: async () => { throw err; },
+      workerPrompt: '继续',
+      reviewPrompt: '继续审',
+    });
+    assert.equal(out.failed.length, 0);
+    assert.equal(out.skipped[0].kind, 'held');
+    assert.equal(nudgeExitCode(out), 0);
+  });
+
+  it('nudgeExitCode：没查成 2 优先于失败 1，成功/跳过 0', async () => {
+    const { nudgeExitCode } = await import(LIB);
+    assert.equal(nudgeExitCode({ unscanned: [{}], failed: [{}] }), 2);
+    assert.equal(nudgeExitCode({ unscanned: [], failed: [{}] }), 1);
+    assert.equal(nudgeExitCode({ unscanned: [], failed: [], started: [{}] }), 0);
+    assert.equal(nudgeExitCode({}), 0);
+  });
+
+  it('垫片收尾走 nudgeExitCode，失败不再静默 exit 0', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /nudgeExitCode/);
+    assert.match(src, /if \(code\) process\.exit\(code\)/);
   });
 });

@@ -13,6 +13,43 @@ import { basename } from 'node:path';
 import { attributedIssueNumber } from './close-issue.mjs';
 import { identifyTreeDir } from './mirasim-trees.mjs';
 
+// gh pr list 不翻页。取满 limit 条 = 可能被截断，截断后「没有该单 PR」是假阴性，
+// 会把非 master 且查不到开放 PR 的工人判成 go，绕过分支闸。本仓 856 个 PR 时
+// `--limit 100` 实锤只回 100 条（PR #1102 审官红项 1）。
+export const PR_LIST_LIMIT = 10000;
+
+/**
+ * PR 列表是否查全。ok 且条数 < limit 才算完整；取满 / 非数组 / 没查成 → 没查全。
+ */
+export function classifyPrListScan({ ok, error, items, limit = PR_LIST_LIMIT } = {}) {
+  if (ok !== true) {
+    return { ok: false, error: error || 'PR 面没查成' };
+  }
+  if (!Array.isArray(items)) {
+    return { ok: false, error: 'PR 面不是数组（没查成）' };
+  }
+  if (!Number.isInteger(limit) || limit <= 0) {
+    return { ok: false, error: 'PR 面 limit 不是正整数（没查成）' };
+  }
+  if (items.length >= limit) {
+    return {
+      ok: false,
+      error: `PR 面取满 ${limit} 条（列表被截断，没查全）`,
+    };
+  }
+  return { ok: true, items };
+}
+
+/**
+ * timer 退出码：没查成 2，起会话失败 1，busy 背压 / 跳过 / 成功 0。
+ * systemd 只看得见非零；busy 不是失败，不能跟 mirasim unavailable 长成一个样。
+ */
+export function nudgeExitCode(out = {}) {
+  if (Array.isArray(out.unscanned) && out.unscanned.length) return 2;
+  if (Array.isArray(out.failed) && out.failed.length) return 1;
+  return 0;
+}
+
 export function idOfTree(workdir) {
   const name = basename(String(workdir || '').replace(/\/+$/, ''));
   const id = identifyTreeDir(name);
@@ -225,7 +262,7 @@ export async function runNudge({
   error = () => {},
 } = {}) {
   const stalled = collectStalled(records, { exists, only });
-  const out = { stalled: stalled.length, started: [], skipped: [], unscanned: [] };
+  const out = { stalled: stalled.length, started: [], skipped: [], unscanned: [], failed: [] };
   if (!stalled.length) {
     log('[推一把] 没有卡住的树');
     return out;
@@ -275,7 +312,9 @@ export async function runNudge({
         out.skipped.push({ id, kind: 'held', reason });
         log(`[推一把] ${reason}`);
       } else {
-        error(`[推一把] ${who} 推不动：${String(e.message || e).slice(0, 160)}`);
+        const reason = `${who} 推不动：${String(e.message || e).slice(0, 160)}`;
+        out.failed.push({ id, reason });
+        error(`[推一把] ${reason}`);
       }
     }
   }
