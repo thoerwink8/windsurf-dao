@@ -93,7 +93,8 @@ describe('buildDailyCard：Card JSON 2.0 结构', () => {
     const card = buildDailyCard({ day: '2026-09-07', snapshot: snap(), repo: 'thoerwink8/windsurf-dao' });
     assert.equal(DAILY_CARD_SCHEMA, '2.0');
     assert.equal(card.schema, '2.0');
-    assert.ok(card.body && Array.isArray(card.body.elements));
+    assert.ok(card.body);
+    assert.equal(Array.isArray(card.body.elements), true);
     assert.equal(card.elements, undefined);
   });
 
