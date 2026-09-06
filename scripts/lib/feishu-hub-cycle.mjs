@@ -51,6 +51,14 @@ export function snapshotFromSituation(situation, { headlines = [] } = {}) {
       error: str(situation && situation.github && situation.github.error) || 'GitHub 没查成',
     };
   }
+  // admission.unscanned 是「查了没查成」，不是「没有这一节」。
+  // 没查成的在跑工人印进日报会把空当成 0。GitHub 绿、准入红 → 整张不发。
+  if (situation.admission && situation.admission.unscanned === true) {
+    return {
+      scanned: false,
+      error: str(situation.admission.why || situation.admission.error) || '在跑工人没查成',
+    };
+  }
   const issues = Array.isArray(situation.github.issues) ? situation.github.issues : [];
   const prs = Array.isArray(situation.github.prs) ? situation.github.prs : [];
   const pending = issues.filter((i) => labelNames(i).includes(AWAITING_CALL_LABEL)).length;

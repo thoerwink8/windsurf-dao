@@ -89,18 +89,38 @@ export function snapshotDigest(snapshot) {
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex').slice(0, 16);
 }
 
+function kpiOnly(snapshot) {
+  const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  return {
+    pending: s.pending ?? null,
+    openPrs: s.openPrs ?? null,
+    workers: s.workers ?? null,
+    conflicts: s.conflicts ?? null,
+    headlines: [],
+  };
+}
+
+function hasHeadlines(snapshot) {
+  const list = snapshot && Array.isArray(snapshot.headlines) ? snapshot.headlines : [];
+  return list.some((h) => str(h));
+}
+
 /**
  * 没查成不发（不许印一张全是 0 的假报）。
  * 上一期没有 → 发（首期）。
  * digest 相同 → 不发。
+ * 本期队列空、数字也没变 → 不发「这一期没有新事」的空报
+ * （发过之后队列会被清空，跨日不能把「头条消失」当成新闻）。
  */
 export function shouldSend(curr, prev) {
   if (!curr || curr.scanned !== true) {
     return { send: false, why: '没查成，不发假报' };
   }
   if (!prev) return { send: true, why: '首期' };
-  const a = snapshotDigest(curr);
-  const b = snapshotDigest(prev);
+  const currForDigest = hasHeadlines(curr) ? curr : kpiOnly(curr);
+  const prevForDigest = hasHeadlines(curr) ? prev : kpiOnly(prev);
+  const a = snapshotDigest(currForDigest);
+  const b = snapshotDigest(prevForDigest);
   if (a === b) return { send: false, why: '与上一期无变化' };
   return { send: true, why: '有变化' };
 }

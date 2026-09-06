@@ -60,6 +60,29 @@ describe('shouldSend：没查成 / 无变化 / 首期', () => {
     const r = shouldSend(snap({ headlines: ['新的一条'] }), snap());
     assert.equal(r.send, true);
   });
+
+  it('上期有头条、这期队列空且数字没变 → 不发空报', async () => {
+    const { shouldSend, planDailySend } = await LIB;
+    const prev = snap({ headlines: ['心跳：连续 7 天静默'] });
+    const curr = snap({ headlines: [] });
+    const r = shouldSend(curr, prev);
+    assert.equal(r.send, false);
+    assert.match(r.why, /无变化/);
+    const planned = planDailySend({
+      snapshot: curr,
+      previous: prev,
+      lastSentDay: '2026-09-06',
+      today: '2026-09-07',
+    });
+    assert.equal(planned.send, false);
+  });
+
+  it('队列空但待拍板数字变了 → 仍发', async () => {
+    const { shouldSend } = await LIB;
+    const r = shouldSend(snap({ headlines: [], pending: 1 }), snap({ headlines: ['旧头条'], pending: 5 }));
+    assert.equal(r.send, true);
+    assert.equal(r.why, '有变化');
+  });
 });
 
 describe('planDailySend：一天只发一张', () => {

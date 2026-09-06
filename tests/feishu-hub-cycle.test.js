@@ -35,6 +35,28 @@ describe('githubFromSituation / snapshotFromSituation', () => {
     assert.equal(s.scanned, false);
   });
 
+  it('admission.unscanned → 整张 scanned:false，不发假报', async () => {
+    const { snapshotFromSituation, planHubCycle } = await LIB;
+    const sit = {
+      github: { scanned: true, issues: [], prs: [] },
+      admission: { unscanned: true, why: '在途数没查成，不派' },
+    };
+    const s = snapshotFromSituation(sit);
+    assert.equal(s.scanned, false);
+    assert.match(s.error, /在跑工人没查成|在途数没查成/);
+    const r = planHubCycle({
+      situation: sit,
+      repo: REPO,
+      hubPending: {},
+      policy: await policy(),
+      digestState: { queue: { day: '', items: [] }, lastSentDay: '', lastSnapshot: null },
+      now: '2026-09-07',
+    });
+    assert.equal(r.daily.send, false);
+    assert.match(r.daily.why, /没查成/);
+    assert.equal(r.snapshot.workers, undefined);
+  });
+
   it('待拍板件数从标签数，冲突从 mergeable', async () => {
     const { snapshotFromSituation } = await LIB;
     const s = snapshotFromSituation(situation({
