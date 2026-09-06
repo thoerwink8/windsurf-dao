@@ -231,10 +231,13 @@ function hub(subject, moment, extra = {}) {
 }
 
 // 态势的必查节。scan 每节标 scanned:true/false。
-// #1055：orca 运行时 2026-09-06 退役，这一节再也不可能被扫出来。留在必查清单里
-// fail-closed 总闸就永远合上（每天最后一行都是「没查成的节：orca」）——搬走真相源、
-// 检查器判据还钉在旧位置。观察面若还扫，不进本清单、不当闸。
-export const SITUATION_SECTIONS = ['github', 'reviewPending', 'prReviews', 'stall'];
+// 2026-09-06 `orca` → `trees`：orca 运行时已 disabled，它**永远**没查成，
+// 于是 fail-closed 总闸从「读不到盘面就别乱动」退化成「每一轮都别动」。
+// 一个恒红的闸等于没有闸，而且它压掉的是真该做的动作。
+// `orca` 段仍在态势里（还有没搬完的消费者读它），但不再决定这一轮能不能动手。
+// `trees` 进清单：树面没查成 ≠ 没有在途工人，少派一轮可恢复，重复派工不可恢复。
+// #1055：必查清单只认这一处——situationHealth 跟决策层同一份，复制一份会再钉死。
+export const SITUATION_SECTIONS = ['github', 'trees', 'reviewPending', 'prReviews', 'stall'];
 
 // 复审重试：上一票的宽限期与上限。
 // 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
@@ -342,7 +345,6 @@ function maybeAddLabel(issue, situation, extra, needs) {
 function collectCandidates(situation) {
   const out = [];
   const gh = situation.github || {};
-  const orca = situation.orca || {};
   const rp = situation.reviewPending || {};
   const reviews = situation.prReviews || {};
   const stall = situation.stall || {};
@@ -358,9 +360,20 @@ function collectCandidates(situation) {
 
   // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
   // #1007：闸是机器余量，不是「每轮派几个」。容量没查成 → 一张都不派（fail-close）。
-  // #1055：orca 已退役，scanned=false 不能把整个 ready 队列停掉。卡面排除仍走 worktrees||[]；
-  // 「有没有活执行者」只问下面 hasLiveExecutor（#1056 唯一活性口），不再拿 orca 卡面猜。
-  const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
+  // 树面来自 situation.trees（mirasim，见 lib/mirasim-trees.mjs），**不再是 orca.worktrees**。
+  // 2026-09-06 实咬：orca 退役后那一段恒 scanned:false，而这里原来写着 `orca.worktrees || []`
+  // ——「没查成」被洗成「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次。
+  // 现在**不给兜底空数组**：树面没查成就让 inspectReadyQueue 判 unscanned，一张都不派。
+  // 少派一轮是可恢复的，重复派工烧掉的额度和两个工人打架不是。
+  // 「有没有活执行者」仍只问下面 hasLiveExecutor（#1056 唯一活性口），不拿卡面猜。
+  const treeFace = situation.trees;
+  const ready = treeFace && treeFace.scanned === true
+    ? inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: treeFace.worktrees })
+    : {
+      kind: 'unscanned',
+      ready: null,
+      line: `可立即起：没查成（${(treeFace && treeFace.error) || '树面没给'}，≠ 扫完是 0）`,
+    };
   const admission = situation.admission;
   // 生产路径 buildSituation 必填 admission。夹具缺席 = 不限张（旧测兼容，不当成 0 放开闸的反面）。
   let dispatchSlots = Infinity;
@@ -943,13 +956,16 @@ export function decide(situation = {}) {
   const candidates = collectCandidates(situation);
   const actions = [];
   const openLedger = situation.openIssueLedger || {};
+  const hubSeen = situation.hubSeen || {};
+  const nowMs = Date.parse(situation.at || '') || 0;
   for (const cand of candidates) {
     const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
     const missing = needs.filter((s) => !situation[s]?.scanned);
     const { _needs, ...clean } = cand;
     if (missing.length === 0) {
-      // #971：能转成 open-issue 的 escalate 当场转；已开过返回 null；转不成保持原动作。
-      const next = escalateToOpenIssue(clean, { ledger: openLedger });
+      // #971：能转成 open-issue 的 escalate 当场转。账本只免重开，不免发卡：
+      // 已有 OPEN 且没有成功 hubSeen 戳时，仍产 existing 动作去重试卡。
+      const next = escalateToOpenIssue(clean, { ledger: openLedger, hubSeen, now: nowMs });
       if (next) actions.push(next);
     }
     // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条

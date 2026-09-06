@@ -34,6 +34,7 @@ function baseSituation(over = {}) {
   return {
     github: { scanned: true, issues: [], prs: [] },
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: [] },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },

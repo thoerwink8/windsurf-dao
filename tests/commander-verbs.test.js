@@ -337,6 +337,38 @@ describe('open-issue 校验：原文+reason、三问、去重', () => {
     assert.ok(!r.argv.includes('--body'));
     assert.ok(r.argv.includes('待拍板'));
   });
+
+  it('escalateToOpenIssue：账本有 OPEN 但无 hubSeen → existing 重试卡，不重开', async () => {
+    const { escalateToOpenIssue, OPEN_ISSUE_CARD_DEDUP_MS } = await VERBS;
+    const action = {
+      kind: 'escalate',
+      reason: 'wake-exhausted',
+      why: base.original,
+      term: 'term_q',
+    };
+    const ledger = { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } };
+    const retry = escalateToOpenIssue(action, { ledger, hubSeen: {}, now: PAST });
+    assert.equal(retry && retry.kind, 'open-issue');
+    assert.equal(retry.existing, true);
+    assert.equal(retry.number, 900);
+    assert.equal(retry.reason, 'wake-exhausted');
+
+    const fresh = escalateToOpenIssue(action, {
+      ledger,
+      hubSeen: { 'esc:wake-exhausted+term_q': FRESH_AT },
+      now: PAST,
+    });
+    assert.equal(fresh, null, '成功后 6 小时内不再发');
+
+    const expiredAt = PAST + OPEN_ISSUE_CARD_DEDUP_MS + 1;
+    const expired = escalateToOpenIssue(action, {
+      ledger,
+      hubSeen: { 'esc:wake-exhausted+term_q': new Date(PAST).toISOString() },
+      now: expiredAt,
+    });
+    assert.equal(expired && expired.existing, true, '过了 6 小时可以再发');
+    assert.equal(expired.number, 900);
+  });
 });
 
 describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
@@ -513,7 +545,9 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
   function sit(over) {
     return {
       github: { scanned: true, issues: [], prs: [] },
+      // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。
       orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
       reviewPending: { scanned: true, items: [] },
       prReviews: { scanned: true, byPr: {} },
       stall: { scanned: true, strikes: {} },
@@ -602,12 +636,28 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
   });
 
-  it('已开过的 open-issue 去重：账本有键就不再产', async () => {
+  it('已开过的 open-issue：账本免重开，没成功发卡戳则重试卡', async () => {
     const { decide, WAKE_LIMIT } = await CORE;
     const r = decide(sit({
       stall: { scanned: true, strikes: { term_q: { strikes: 2 } } },
       wakeCounts: { 'stall:term_q': WAKE_LIMIT },
       openIssueLedger: { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } },
+    }));
+    const oi = r.actions.filter((a) => a.kind === 'open-issue');
+    assert.equal(oi.length, 1, JSON.stringify(r.actions));
+    assert.equal(oi[0].existing, true);
+    assert.equal(oi[0].number, 900);
+    assert.equal(oi[0].reason, 'wake-exhausted');
+    assert.equal(r.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);
+  });
+
+  it('已开过且发卡成功 6 小时内：不再产 open-issue', async () => {
+    const { decide, WAKE_LIMIT } = await CORE;
+    const r = decide(sit({
+      stall: { scanned: true, strikes: { term_q: { strikes: 2 } } },
+      wakeCounts: { 'stall:term_q': WAKE_LIMIT },
+      openIssueLedger: { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } },
+      hubSeen: { 'esc:wake-exhausted+term_q': FRESH_AT },
     }));
     assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
     assert.equal(r.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);

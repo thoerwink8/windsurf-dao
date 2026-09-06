@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -26,8 +26,8 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
-import { parseWorktrees } from './lib/land-core.mjs';
-import { progressSignature, assessLiveness, sessionFromOrcaTerminal, sessionFromMirasimSession } from './lib/liveness.mjs';
+import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
+import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
@@ -49,11 +49,15 @@ import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
 } from './lib/exhausted.mjs';
+import {
+  argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
+} from './lib/hub-ask.mjs';
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
@@ -76,7 +80,7 @@ const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projec
 // 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
 // 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
 const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
-const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
+const HUB_DEDUP_MS = OPEN_ISSUE_CARD_DEDUP_MS; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
 const nowIso = () => new Date().toISOString();
@@ -249,6 +253,22 @@ function scanDesiredJobs() {
   return desiredFromEvents(listed.events);
 }
 
+/**
+ * 在途派工的采样面（2026-09-06 起）。orca 段已恒 scanned:false，而它原来是「这张 issue
+ * 有没有人在做」的唯一依据——调用处一句 `orca.worktrees || []` 就把「没查成」洗成
+ * 「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次（#965 当场撞上）。
+ * 换成 mirasim 自己的树目录：它是这些树的所有者，读不了目录才是没查成。
+ */
+function scanTrees() {
+  return scanMirasimTrees({
+    repo: REPO.split('/')[1] || undefined,
+    readdir: (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name),
+    // statSync 而不是 existsSync：后者在权限错误时也回 false，会把「读不了」洗成「没有树」。
+    stat: statSync,
+    join,
+  });
+}
+
 function readText(path) {
   try { return readFileSync(path, 'utf8'); }
   catch (e) { return { error: String(e.message || e) }; }
@@ -375,8 +395,14 @@ function scanPrReviews(prs) {
 function ingestBreakerSignals({ now = Date.now() } = {}) {
   try {
     const policy = loadDispatchPolicy({ root: ROOT });
-    const health = runBreakerCommand({ action: 'ingest-health' }, { now, policy: policy.breaker });
-    const stall = runBreakerCommand({ action: 'ingest-stall' }, { now, policy: policy.breaker });
+    const hubAsk = ({ number, text }) => {
+      const planned = fieldsFromBreaker({ repo: REPO, number, text, url: issueLink(number) });
+      if (!planned.ok) return { ok: false, error: planned.error };
+      return sendHubAsk(planned.fields);
+    };
+    const inj = { now, policy: policy.breaker, hubAsk };
+    const health = runBreakerCommand({ action: 'ingest-health' }, inj);
+    const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
     return { ok: true, health, stall };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
@@ -455,6 +481,7 @@ function pickDefaultWorkerModel(raw) {
 function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
+  const trees = scanTrees();
   const reviewPending = scanReviewPending();
   const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
@@ -490,7 +517,7 @@ function buildSituation({ state } = {}) {
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall, otherRepos,
+    github, orca, trees, reviewPending, prReviews, stall, otherRepos,
     sessions, desiredJobs,
     viewMergeable,
     breakerIngest,
@@ -498,6 +525,7 @@ function buildSituation({ state } = {}) {
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
+    hubSeen: (state && state.hubSeen) || {},
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
@@ -509,6 +537,11 @@ function buildSituation({ state } = {}) {
   };
 }
 
+// 关键节：任一没查成 → fail-closed 总闸压掉依赖它的动作。
+// 2026-09-06 把 `orca` 换成 `trees`：orca 运行时已 disabled，它**永远**是没查成，
+// 于是这道总闸从「读不到盘面就别乱动」退化成「每一轮都别动」——一个恒红的闸等于没有闸，
+// 而且它压掉的是真该做的动作（判例：dao-check「体检红项先问判据该不该在」）。
+// `orca` 段仍留在态势里给还没搬完的消费者读，但不再决定这一轮能不能动手。
 function situationHealth(situation) {
   // 必查清单只认 SITUATION_SECTIONS（#1055：orca 退役后不在清单里，复制一份会再钉死）。
   const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
@@ -548,6 +581,38 @@ function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
   if (!r.ok) return { sent: false, error: r.error };
   state.hubSeen[key] = new Date(now).toISOString();
   return { sent: true };
+}
+
+/** 待拍板出站卡片。缺 {repo, number} 拒发；认回执，不认退出码。普通播报仍走 hubOnce/hubSay。 */
+function sendHubAsk(fields) {
+  const planned = argvFromFields(fields);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const script = hubAskScriptPath(ROOT);
+  const r = spawnSync(process.execPath, [script, ...planned.args], {
+    windowsHide: true, encoding: 'utf8', timeout: 30000, cwd: ROOT, env: process.env,
+  });
+  if (r.error) return { ok: false, error: `没送进群：hub-ask 起不来：${r.error.message}` };
+  if (r.status !== 0) {
+    return { ok: false, error: `没送进群：${String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 200)}` };
+  }
+  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
+  if (!messageId || messageId === 'null') {
+    return { ok: false, error: `没送进群：hub-ask 退出码 0 但没回 message_id（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
+  }
+  return { ok: true, messageId };
+}
+
+function hubAskOnce({ state, key, fields, now = Date.now(), dryRun, send = sendHubAsk }) {
+  state.hubSeen = state.hubSeen || {};
+  const last = Date.parse(state.hubSeen[key] || '') || 0;
+  if (now - last < HUB_DEDUP_MS) return { sent: false, reason: '6 小时内已发过' };
+  const planned = argvFromFields(fields || {});
+  if (!planned.ok) return { sent: false, error: planned.error };
+  if (dryRun) { state.hubSeen[key] = new Date(now).toISOString(); return { sent: true, dryRun: true }; }
+  const r = send(fields);
+  if (!r.ok) return { sent: false, error: r.error };
+  state.hubSeen[key] = new Date(now).toISOString();
+  return { sent: true, messageId: r.messageId };
 }
 
 // ── 手：执行一条动作。dryRun 只回它要跑的命令，不动真环境 ──
@@ -754,7 +819,17 @@ function execMarkExhausted(action, { dryRun, say }) {
   return { ok: true, labeled: true, commented: true };
 }
 
-function execOpenIssue(action, { state, dryRun, say }) {
+function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
+  // 账本已有 OPEN：只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+  // 下一轮 decide 仍会产 existing 动作，这里再走 askEscalateCard。
+  if (action.existing && action.number) {
+    const key = openIssueDedupKey(action.reason, action.target);
+    say(`  转单已在 #${action.number}（账本查重，不重开）`);
+    askEscalateCard({
+      state, key, number: action.number, action, dryRun, say, send,
+    });
+    return { ok: true, number: action.number, key, existing: true };
+  }
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
   const planned = planOpenIssueCmd({
@@ -773,10 +848,16 @@ function execOpenIssue(action, { state, dryRun, say }) {
   const r = runCmd(planned.argv, 60000);
   if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
   const m = String(r.out).match(/\/issues\/(\d+)/);
+  const number = m ? Number(m[1]) : null;
   state.openIssueLedger = state.openIssueLedger || {};
-  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
-  say(`  转单开了 #${m ? m[1] : '?'}`);
-  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
+  state.openIssueLedger[planned.key] = { at: nowIso(), number };
+  say(`  转单开了 #${number || '?'}`);
+  if (number) {
+    askEscalateCard({
+      state, key: planned.key, number, action, dryRun: false, say, send,
+    });
+  }
+  return { ok: true, number, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -1550,7 +1631,7 @@ function runDaipai({ state, dryRun, say }) {
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
-function escalate(action, { state, dryRun, say }) {
+function escalate(action, { state, dryRun, say, gh = runGh, send = sendHubAsk, openIssue = openEscalationIssue } = {}) {
   if (action.reason === 'unscanned') {
     say(`  没查成（静默进 status）：${action.why}`);
     return { ok: true, silent: true };
@@ -1563,13 +1644,19 @@ function escalate(action, { state, dryRun, say }) {
   state.escalateLedger = state.escalateLedger || {};
   const booked = state.escalateLedger[key];
   if (booked && booked.issue) {
-    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    const st = gh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
     if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
-    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    if (String(st.out).trim() === 'OPEN') {
+      say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`);
+      // OPEN 只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+      // 下一轮必须再走 askEscalateCard，否则机器主动问用户会永久哑掉。
+      askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
+      return { ok: true, issue: booked.issue };
+    }
     delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
   }
   // 查重：已有 open 带此标记的单 → 不重复开
-  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
+  const found = gh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
   let searchOk = false;
   if (found.ok) {
@@ -1583,14 +1670,25 @@ function escalate(action, { state, dryRun, say }) {
     say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
     return { ok: true, skipped: 'dedup-unscanned' };
   }
-  const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
-  hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
-  if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
+  if (existing) {
+    say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`);
+    askEscalateCard({ state, key, number: existing, action, dryRun, say, send });
+    return { ok: true, issue: existing };
+  }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
+  const opened = openIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
+  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
+}
+function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
+  const planned = fieldsFromEscalate({
+    repo: REPO, number, why: action.why, reason: action.reason, recommend: action.recommend, url: issueLink(number),
+  });
+  if (!planned.ok) { say(`  待拍板卡拒发：${planned.error}`); return; }
+  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun, send });
+  say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + number : '待拍板卡略：' + (r.reason || r.error)}`);
 }
 function escalateKey(a) {
   const t = a.pr != null ? `pr-${a.pr}` : a.issue != null ? `issue-${a.issue}` : a.term ? `term-${a.term}` : 'x';
@@ -1708,7 +1806,7 @@ function main() {
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);
     process.exit(0);
   }
-  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }));
+  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
   if (sub === 'status') return import('./lib/commander-inventory.mjs').then((m) => m.runStatus({ rest, ROOT }));
   if (sub === 'install') return import('./lib/commander-inventory.mjs').then((m) => m.runInstall({ rest, ROOT }));
   const fn = CMDS[sub];
@@ -1720,7 +1818,7 @@ const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
 export {
-  buildSituation, situationHealth, escalateKey, scanStall,
+  buildSituation, situationHealth, escalate, escalateKey, execOpenIssue, scanStall,
   countInflightWorkers,
   reapBrains,
   scanSessions, scanDesiredJobs,

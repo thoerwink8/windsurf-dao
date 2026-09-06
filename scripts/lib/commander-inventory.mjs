@@ -25,6 +25,7 @@ import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
 } from './pending-disambiguation.mjs';
+import { fieldsFromInventory } from './hub-ask.mjs';
 
 const INV_MARKER = '[commander-inventory]';
 // 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
@@ -269,7 +270,7 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }) {
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
@@ -302,12 +303,27 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
     let existing = null;
     if (found.ok) { try { const a = JSON.parse(found.out || '[]'); if (a.length) existing = a[0].number; } catch { /* ignore */ } }
-    if (existing) { log.push(`  报帅（待拍板 #${existing} 已在，不重开）：${c.key}`); continue; }
+    const askInv = (n) => {
+      if (typeof hubAskOnce !== 'function' || !n) return;
+      const planned = fieldsFromInventory({
+        repo: REPO, number: n, key: c.key, detail: c.detail,
+        url: `https://github.com/${REPO}/issues/${n}`,
+      });
+      if (!planned.ok) { log.push(`  待拍板卡拒发：${planned.error}`); return; }
+      const r = hubAskOnce({ state, key: `invcard:${c.key}`, fields: planned.fields, dryRun });
+      log.push(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + n : '待拍板卡略：' + (r.reason || r.error)}`);
+    };
+    if (existing) {
+      log.push(`  报帅（待拍板 #${existing} 已在，不重开）：${c.key}`);
+      askInv(existing);
+      continue;
+    }
     if (dryRun) { log.push(`  [dry] 开待拍板单：${c.key}（marker=${marker}）`); continue; }
     const body = [`指挥官盘点体检发现异常（#800，只开单不自修）：`, ``, `- 项：${c.key}`, `- 详情：${c.detail}`, ``,
       `修要过你放行。查重标记（勿删）：${marker}`].join('\n');
     const opened = openEscalationIssue({ title: `[待拍板] 盘点：${c.key}`, body });
     log.push(`  ${opened.ok ? '开单 #' + opened.number : '开单失败：' + opened.error}：${c.key}`);
+    if (opened.ok && opened.number) askInv(opened.number);
   }
   // 到时机只提醒不开单——它不是「有东西坏了」，是「有件事该找你聊了」（上面开单的循环只走 red）。
   if (surface.state === 'due') {

@@ -344,9 +344,9 @@ export function saveBreakerDoc(doc, { home = os.homedir(), write = writeFileSync
  * 所有改熔断表的入口（recordEvent / ingest-health / ingest-stall）都必须走这里，
  * 别在外面另写一份「先 stamp 再 escalate」——那正是 PR #851 审官咬出来的洞。
  */
-export function settleAllOpen(doc, { now, hubSay, openIssue, dryRun = false } = {}) {
+export function settleAllOpen(doc, { now, hubSay, openIssue, hubAsk, dryRun = false } = {}) {
   const ms = nowMs(now);
-  const escalate = escalateAllOpen({ doc, now: ms, hubSay, openIssue, dryRun });
+  const escalate = escalateAllOpen({ doc, now: ms, hubSay, openIssue, hubAsk, dryRun });
   let next = doc;
   if (escalate.sent && !escalate.dryRun) next = stampAllOpenAlert(doc, ms, true);
   else if (!allTargetsOpen(doc, ms) && doc && doc.allOpenAlertedAt) next = stampAllOpenAlert(doc, ms, false);
@@ -358,11 +358,11 @@ export function settleAllOpen(doc, { now, hubSay, openIssue, dryRun = false } = 
  * 全部 open 的通知在这里面发（hubSay / openIssue 可注入，夹具不碰真通道）。
  */
 export function recordEvent(event, {
-  home = os.homedir(), now, policy, read, exists, write, rename, hubSay, openIssue, dryRun = false,
+  home = os.homedir(), now, policy, read, exists, write, rename, hubSay, openIssue, hubAsk, dryRun = false,
 } = {}) {
   const loaded = loadBreakerDoc({ home, read, exists });
   const applied = applyEvent(loaded.doc, event, policy, now);
-  const { doc, alert, escalate } = settleAllOpen(applied, { now, hubSay, openIssue, dryRun });
+  const { doc, alert, escalate } = settleAllOpen(applied, { now, hubSay, openIssue, hubAsk, dryRun });
   saveBreakerDoc(doc, { home, write, rename });
   const key = event && event.target != null ? String(event.target) : null;
   return { ok: true, doc, target: key ? doc.targets[key] : null, alert, escalate, path: breakerPath(home) };
@@ -388,18 +388,33 @@ export function defaultOpenIssue({ title, body } = {}) {
 
 /** 全部 open：总控群一条 + 报帅开待拍板（均可注入；夹具不碰真通道）。 */
 export function escalateAllOpen({
-  doc, now, hubSay = defaultHubSay, openIssue = defaultOpenIssue, dryRun = false,
+  doc, now, hubSay = defaultHubSay, openIssue = defaultOpenIssue, hubAsk, dryRun = false,
 } = {}) {
   const plan = planAllOpenAlert(doc, now);
   if (!plan.alert) return { sent: false, reason: plan.reason || '并非全部 open', plan };
   const text = plan.text;
-  if (dryRun) return { sent: true, dryRun: true, text, hub: { ok: true, dryRun: true }, issue: { ok: true, dryRun: true }, plan };
-  const hub = hubSay(text);
+  if (dryRun) {
+    return {
+      sent: true, dryRun: true, text,
+      hub: { ok: true, dryRun: true }, issue: { ok: true, dryRun: true }, plan,
+    };
+  }
+  // 待拍板必须先有单号才能发卡（#1012：缺 {repo, number} 拒发）。
+  // 开单失败、或有单号但发卡失败，都退回纯文字——总控群不能哑掉。
+  // 去重戳只在实际送达后盖（settleAllOpen 看 sent）；发卡失败信息留在 ask 里。
   const issue = openIssue({
     title: '[待拍板] 编排层熔断：全部路径 open',
     body: `${text}\n\n查重标记（勿删）：[breaker-all-open]`,
   });
-  return { sent: !!(hub && hub.ok), text, hub, issue, plan };
+  let hub;
+  let ask = null;
+  if (issue && issue.ok && issue.number && typeof hubAsk === 'function') {
+    ask = hubAsk({ number: issue.number, text });
+    hub = ask && ask.ok ? ask : hubSay(text);
+  } else {
+    hub = hubSay(text);
+  }
+  return { sent: !!(hub && hub.ok), text, hub, issue, plan, ask };
 }
 
 /** 从落地 / 指纹 info 尽量解析 target；认不出返回 null，不许猜。 */
@@ -436,7 +451,7 @@ function stallDocFromHome(home, read, exists) {
 /** dao.mjs breaker 动词：reset / trip / ingest-health / ingest-stall。时钟由调用方传入。 */
 export function runBreakerCommand(args = {}, {
   home = os.homedir(), now, policy, read = readFileSync, exists = existsSync,
-  write, rename, hubSay, openIssue, resolveTarget, dryRun = false,
+  write, rename, hubSay, openIssue, hubAsk, resolveTarget, dryRun = false,
 } = {}) {
   const ms = now != null ? nowMs(now) : (() => { throw new Error('breaker 命令必须传入 now'); })();
   const pol = policy || BREAKER_DEFAULTS;
@@ -457,7 +472,7 @@ export function runBreakerCommand(args = {}, {
     }
     const rec = recordEvent(
       { type: 'trip', target: key, hours, why: `手动熔断 ${hours}h` },
-      { home, now: ms, policy: pol, read, exists, write, rename, hubSay, openIssue, dryRun },
+      { home, now: ms, policy: pol, read, exists, write, rename, hubSay, openIssue, hubAsk, dryRun },
     );
     return { ok: true, action: 'trip', key, hours, target: rec.target, doc: rec.doc, path: rec.path, alert: rec.alert, escalate: rec.escalate };
   }
@@ -466,7 +481,7 @@ export function runBreakerCommand(args = {}, {
     if (!h.present) return { ok: true, action: 'ingest-health', skipped: true, reason: '健康表不在' };
     if (!h.doc) return { ok: false, error: `健康表读不了：${h.error || '不是对象'}` };
     const ingested = ingestHealthTable(h.doc, loaded.doc, pol, ms);
-    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, dryRun });
+    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, hubAsk, dryRun });
     saveBreakerDoc(doc, { home, write, rename });
     return { ok: true, action: 'ingest-health', doc, path: breakerPath(home), alert, escalate };
   }
@@ -476,7 +491,7 @@ export function runBreakerCommand(args = {}, {
     if (s.error) return { ok: false, error: `撞死指纹读不了：${s.error}` };
     const resolve = resolveTarget || ((term, info) => stallTargetOf(term, info));
     const ingested = ingestStall(s.strikes, loaded.doc, pol, ms, { resolveTarget: resolve });
-    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, dryRun });
+    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, hubAsk, dryRun });
     saveBreakerDoc(doc, { home, write, rename });
     return { ok: true, action: 'ingest-stall', doc, path: breakerPath(home), alert, escalate };
   }
