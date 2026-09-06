@@ -39,7 +39,7 @@
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
-| D | ~/mirasim-worktrees | mirasim 派工树根（#880）。`scripts/commander.mjs` 在 orca 卡面空时数这里的目录当在途工人数（#1007 准入）。运行态，换机不拷 |
+| D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
 | A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
@@ -67,6 +67,7 @@
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |
 | E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
 | E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
 | E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |
