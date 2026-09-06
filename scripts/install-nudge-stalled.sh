@@ -8,7 +8,7 @@
 # 退役怎么做（#1056 落地时）：
 #   sudo systemctl disable --now dao-nudge-stalled.timer
 #   sudo rm -f /etc/systemd/system/dao-nudge-stalled.{timer,service}
-#   git rm scripts/nudge-stalled.mjs scripts/install-nudge-stalled.sh host/machine/systemd/dao-nudge-stalled.*
+#   git rm scripts/nudge-stalled.mjs scripts/lib/nudge-stalled.mjs scripts/install-nudge-stalled.sh host/machine/systemd/dao-nudge-stalled.*  # 闸跟垫片一起走
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
