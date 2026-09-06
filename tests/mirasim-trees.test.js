@@ -18,13 +18,16 @@ const CORE = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'comman
 /**
  * 假文件系统：dirs 是 { 路径: [子目录名] }。没列的路径 = ENOENT（确实不存在）。
  * statThrows 是 { 路径: 错误码 }——模拟权限错误这类「探不了」，它与 ENOENT 必须不同命运。
+ * files 是路径集合：stat 成功但 isDirectory()=false——采样面损坏，不许当成「确实不存在」。
  */
-function fakeIo(dirs, { readdirThrows, statThrows = {} } = {}) {
+function fakeIo(dirs, { readdirThrows, statThrows = {}, files = [] } = {}) {
+  const fileSet = new Set(files);
   return {
     join: (...xs) => xs.join('/'),
     stat: (p) => {
       const code = statThrows[p];
       if (code) { const e = new Error(code); e.code = code; throw e; }
+      if (fileSet.has(p)) return { isDirectory: () => false };
       if (!Object.prototype.hasOwnProperty.call(dirs, p)) {
         const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
       }
@@ -117,6 +120,24 @@ describe('scanMirasimTrees：扫完是 0 与没查成必须不同形', () => {
     assert.match(r.error, /EACCES/);
   });
 
+  // 审官 PR #1075 复审红项 1：stat 成功但不是目录时 probeDir 曾回 kind:'no'，
+  // 根路径被洗成 empty:true、仓路径被静默跳过，decide() 仍派工。
+  it('**判别性**：树根是普通文件 → scanned:false，不许当成空盘面', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const r = scanMirasimTrees({ root: '/m', ...fakeIo({}, { files: ['/m'] }) });
+    assert.equal(r.scanned, false, '根路径存在但不是目录却报了空盘面 → 所有单都会被重复派');
+    assert.match(r.error, /不是目录/);
+    assert.equal(r.empty, undefined, '不许打 empty 标——那是「确实没有」的标');
+  });
+
+  it('**判别性**：仓路径是普通文件 → scanned:false，不许静默跳过', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const io = fakeIo({ '/m': ['windsurf-dao'] }, { files: ['/m/windsurf-dao'] });
+    const r = scanMirasimTrees({ root: '/m', repo: 'windsurf-dao', ...io });
+    assert.equal(r.scanned, false, '仓路径是文件却跳过 = 它下面的树全不算在途 = 全被重复派');
+    assert.match(r.error, /不是目录/);
+  });
+
   it('ENOENT 与 EACCES 命运不同：前者是空盘面，后者是没查成', async () => {
     const { probeDir } = await import(LIB);
     const mk = (code) => (p) => { const e = new Error(code); e.code = code; throw e; };
@@ -126,7 +147,9 @@ describe('scanMirasimTrees：扫完是 0 与没查成必须不同形', () => {
     assert.equal(probeDir(mk('EPERM'), '/x').kind, 'unscanned');
     assert.equal(probeDir(mk('EIO'), '/x').kind, 'unscanned');
     assert.equal(probeDir(() => ({ isDirectory: () => true }), '/x').kind, 'yes');
-    assert.equal(probeDir(() => ({ isDirectory: () => false }), '/x').kind, 'no', '是文件不是目录 = 没有这个树目录');
+    const fileHit = probeDir(() => ({ isDirectory: () => false }), '/x');
+    assert.equal(fileHit.kind, 'unscanned', 'stat 成功但不是目录 = 采样面损坏，不许当成 no');
+    assert.match(fileHit.error, /不是目录/);
     assert.equal(probeDir(null, '/x').kind, 'unscanned');
   });
 
@@ -189,5 +212,25 @@ describe('decide：在途判据只认 trees，树面没查成就一张都不派'
     const { actions } = decide(sit());
     const esc = actions.find((a) => a.kind === 'escalate' && a.reason === 'unscanned');
     assert.equal(esc, undefined, 'orca 不该再出现在关键节里');
+  });
+
+  it('**判别性**：树根是普通文件的同一态势 → 不产生 dispatch', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const { decide } = await import(CORE);
+    const trees = scanMirasimTrees({ root: '/m', ...fakeIo({}, { files: ['/m'] }) });
+    assert.equal(trees.scanned, false);
+    const { actions } = decide(sit({ trees }));
+    assert.equal(actions.filter((a) => a.kind === 'dispatch').length, 0,
+      '根路径是文件却派了 → 没查成被洗成没有');
+  });
+
+  it('**判别性**：仓路径是普通文件的同一态势 → 不产生 dispatch', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const { decide } = await import(CORE);
+    const trees = scanMirasimTrees({ root: '/m', repo: 'windsurf-dao', ...fakeIo({ '/m': ['windsurf-dao'] }, { files: ['/m/windsurf-dao'] }) });
+    assert.equal(trees.scanned, false);
+    const { actions } = decide(sit({ trees }));
+    assert.equal(actions.filter((a) => a.kind === 'dispatch').length, 0,
+      '仓路径是文件却派了 → 没查成被洗成没有');
   });
 });

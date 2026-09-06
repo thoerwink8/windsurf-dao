@@ -33,7 +33,9 @@ export function identifyTreeDir(name) {
  * 目录探测三态。**不能用 `existsSync`**（审官 PR #1075 判红第 1 条实咬）：
  * 它在权限错误等 stat 失败时同样回 false，于是「目录不可访问」又被洗成「没有树」——
  * 正是本文件要消除的那个 fail-open，换个地方原样复现。
- * 只有 ENOENT / ENOTDIR 才算「确实不存在」，其它错误一律没查成。
+ * 只有 ENOENT / ENOTDIR 才算「确实不存在」。stat 成功但目标不是目录 = 采样面损坏，
+ * 必须 unscanned——当成 no 会让根路径产出 empty:true、仓路径被静默跳过，随后 decide() 照派。
+ * 其它错误一律没查成。
  *
  * @param {(p:string)=>any} stat 抛错时错误对象要带 code（node:fs 的 statSync 就是）
  * @returns {{kind:'yes'|'no'|'unscanned', error?:string}}
@@ -43,7 +45,7 @@ export function probeDir(stat, path) {
   try {
     const st = stat(path);
     if (st && typeof st.isDirectory === 'function' && !st.isDirectory()) {
-      return { kind: 'no' };
+      return { kind: 'unscanned', error: `${path} 存在但不是目录（没查成）` };
     }
     return { kind: 'yes' };
   } catch (e) {
