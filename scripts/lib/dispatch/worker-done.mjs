@@ -125,10 +125,51 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
     let parsed;
     try { parsed = JSON.parse(iv.out); }
     catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
-    const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
+    // 缺字段 / null / 非数组 = 没查成，不是「扫完 0 条」。把它们归一成 []
+    // 会让宿主前缀兜底把「没查成」变成「查过了是 claude」（PR #1079 审官红项 2）。
+    if (!parsed || !Array.isArray(parsed.labels)) {
+      return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 缺 labels 数组（没查成，不许当扫完 0 条）` };
+    }
+    const names = parsed.labels.map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
-  return { ok: true, unscanned: false, refs, labels: collected };
+  return { ok: true, unscanned: false, refs, labels: collected, title: String(meta.title || '') };
+}
+
+/**
+ * 宿主前缀 → 真实供应商家族（起审官同厂闸的兜底来源，2026-09-06）。
+ *
+ * 为什么需要它：同厂闸要知道工人是谁，来源只有署名单的 `model/*` 标签，而那个标签的唯一
+ * 自动写入方是 `stampIssueLabels`——**派工成功之后**才调。于是工人开的 PR 天然有标签，
+ * **帅位手开的 PR 一个都没有**，起审官当场拒（「扫完没有 model/*」），PR 就停在没人审，
+ * 每 45 分钟重试一次、3 次后永远停住。实咬：PR #1070。
+ *
+ * 判据用 commit/PR 标题的宿主前缀（CLAUDE.md「commit 标题以宿主标识开头」）。它定不到
+ * 具体模型，但**定得到家族**，而同厂闸要的正是家族（vendorFamilyOf 按 id 前缀取家族，
+ * 家族名本身就是合法 id）。定不到就拒——不猜。
+ *
+ * **`pi` 故意不在表里**：pi 是多供应商宿主，上游报错时会在 1 毫秒内静默切到同 model id
+ * 的另一个 provider（判例 memory `pi-silent-provider-fallback`），家族推不出来。
+ * 漏登记一个宿主的代价是「照旧拒绝起审官」（今天的行为），猜错一个家族的代价是
+ * **同厂闸放行了同厂审官**——两边不对称，所以这张表宁缺勿滥。
+ */
+export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze(Object.assign(Object.create(null), {
+  cc: 'claude',   // Claude Code：只跑 Anthropic 模型
+  codex: 'gpt',   // Codex CLI：只跑 OpenAI 模型
+  grok: 'grok',   // xAI
+}));
+
+/** 从标题首个 `[宿主]` 前缀推家族。推不出返回 {ok:false}——调用方按「没查成」处置，不许猜。 */
+export function vendorFamilyFromHostPrefix(title) {
+  const m = /^\s*\[([a-z0-9_-]+)\]/i.exec(String(title || ''));
+  if (!m) return { ok: false, why: '标题没有 [宿主] 前缀' };
+  const host = m[1].toLowerCase();
+  // 只认表的自有键。普通对象上 `[constructor]` / `[__proto__]` 会命中原型、返回 ok:true
+  //（后者 family 甚至是对象），把「推不出就拒」变成放行（PR #1079 审官红项 1）。
+  if (!Object.hasOwn(HOST_PREFIX_VENDOR_FAMILY, host)) {
+    return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
+  }
+  return { ok: true, host, family: HOST_PREFIX_VENDOR_FAMILY[host] };
 }
 
 export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
@@ -146,7 +187,34 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   }
   if (!collected.ok) return collected;
   const picked = requireWorkerModel(collected.labels);
-  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  if (picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  // 标签这条路走不通时的兜底，**只对「扫完确实没有 model/*」这一种**：
+  //   · state 'unscanned'（标签列表没拿到）不兜底——没查成必须继续拒，兜底会把「查不成」
+  //     变成「查过了是 claude」，正是 fail-closed 最怕的那种降级；
+  //   · state 'many'（多个 model/*）不兜底——那是要人消歧的真歧义，猜一个只会掩盖它。
+  if (picked.state === 'none') {
+    const guess = vendorFamilyFromHostPrefix(collected.title);
+    if (guess.ok) {
+      return {
+        ok: true,
+        state: 'one',
+        source: 'host-prefix',
+        // 家族名本身是合法 id：vendorFamilyOf('claude') === 'claude'。不编造具体版本号——
+        // 宿主前缀定得到家族，定不到型号，而同厂闸只要家族。
+        modelId: guess.family,
+        host: guess.host,
+        refs: collected.refs,
+        labels: collected.labels,
+      };
+    }
+    return {
+      ...picked,
+      source: 'label',
+      error: `${picked.error}；宿主前缀也推不出家族（${guess.why}）`,
+      refs: collected.refs,
+      labels: collected.labels,
+    };
+  }
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
@@ -218,8 +286,13 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
+  // 首审起审官要过同厂闸，工人家族必须有着落。不能只对 resolved.labels 调
+  // requireWorkerModel——那会把「扫完没有 model/*」直接拒掉，到不了
+  // resolveWorkerFromPr 的宿主前缀兜底（实咬：PR #1079 审官红项 1，复现
+  // 无 model/*、标题 [cc] 的手开 PR 在 worker-done 计划阶段就被拒）。
+  // 返工轮不起第二个审官，工人型号缺了也不挡交卷。
   const workerPick = shouldCreate
-    ? requireWorkerModel(resolved.labels)
+    ? resolveWorkerFromPr({ pr: n, runGh })
     : pickModel(resolved.labels || []);
   if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
@@ -236,6 +309,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
     workerModel: workerPick.ok ? workerPick.modelId : null,
+    workerSource: workerPick.ok ? (workerPick.source || null) : null,
     comment,
     reviewerCreate: shouldCreate
       ? {
