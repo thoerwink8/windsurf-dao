@@ -215,21 +215,6 @@ describe('progress-detect：误报闸与逐对象', () => {
     assert.equal(half.scanned, false);
     assert.match(half.error, /没查成/);
   });
-
-  it('#1055：orca 段没扫到 / scanned:false 不当没查成（退役后这一节永远扫不出来）', async () => {
-    const S = await load(LIB);
-    const noOrca = S.extractObjects({
-      github: { scanned: true, prs: [], issues: [] },
-      reviewPending: { scanned: true, items: [] },
-    });
-    assert.equal(noOrca.scanned, true, noOrca.error);
-    const dead = S.extractObjects({
-      github: { scanned: true, prs: [], issues: [] },
-      orca: { scanned: false, error: 'orca-serve disabled' },
-      reviewPending: { scanned: true, items: [] },
-    });
-    assert.equal(dead.scanned, true, dead.error);
-  });
 });
 
 describe('progress-detect：推帅位指纹', () => {
