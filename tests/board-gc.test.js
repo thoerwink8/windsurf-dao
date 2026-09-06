@@ -259,6 +259,11 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.ok(i > -1, '找不到兜底调用');
     assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
   });
+  it('调 gh 时剥掉 FORCE_COLOR / CLICOLOR_FORCE，否则 --json 会被刷成非 JSON', () => {
+    assert.match(src, /NO_COLOR/);
+    assert.match(src, /delete env\.FORCE_COLOR/);
+    assert.match(src, /delete env\.CLICOLOR_FORCE/);
+  });
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
   });

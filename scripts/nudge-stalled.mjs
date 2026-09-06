@@ -113,7 +113,11 @@ function readGhState(kind, n) {
   const args = kind === '审官'
     ? ['pr', 'view', String(n), '--json', 'state', '-q', '.state']
     : ['issue', 'view', String(n), '--json', 'state', '-q', '.state'];
-  const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 20000, windowsHide: true, env: { ...process.env, NO_COLOR: '1', GH_NO_COLOR: '1' } });
+  const env = { ...process.env, NO_COLOR: '1', GH_NO_COLOR: '1', TERM: 'dumb' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
+  const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 20000, windowsHide: true, env });
   if (r.status !== 0) return { unscanned: true, state: null };
   return { unscanned: false, state: String(r.stdout || '').trim() };
 }
