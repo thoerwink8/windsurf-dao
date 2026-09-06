@@ -57,8 +57,12 @@ import {
 } from './lib/exhausted.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
+  runHubAsk, sendCardViaLarkCli, pendingFromAsk,
 } from './lib/hub-ask.mjs';
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
+import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
+import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
+import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -486,26 +490,11 @@ function situationHealth(situation) {
 
 // ── 手：hub 回流（带去重）──
 function hubSay(text) {
-  // hub-say 在服务器上装在 /home/orca/bin，而 systemd/ssh 的 PATH 里没有它——
-  // 只 spawn 裸名字会 ENOENT，回流总控群整条哑掉且只在日志里留一行（2026-09-05 实咬）。
-  let r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-  if (r.error && r.error.code === 'ENOENT') {
-    for (const cand of [process.env.DAO_HUB_SAY, '/home/orca/bin/hub-say'].filter(Boolean)) {
-      if (!existsSync(cand)) continue;
-      r = spawnSync(cand, [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-      break;
-    }
-  }
-  if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
-  if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  // 认回执，不认退出码。hub-say 打印飞书返回的 message_id——拿到它才算真送进群。
-  // 只看 exit 0 的话，「发成了」和「lark-cli 跑通了但飞书没收」长得一模一样，
-  // 而这条路一哑就是整条回流静默（本仓同形态判例：memory orca-send-succeeds-to-dead-handle）。
-  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
-  if (!messageId || messageId === 'null') {
-    return { ok: false, error: `hub-say 退出码 0 但没回 message_id——没送进群（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
-  }
-  return { ok: true, messageId };
+  // #1029：状态别塞进总控消息流。心跳/发布/熔断进日报队列，换日才合成一张卡。
+  // 入队成功就是回执——真送到飞书是日报卡那一次。队列写不进才算失败。
+  const r = recordBroadcast(text, { source: 'commander', now: new Date() });
+  if (!r.ok) return { ok: false, error: r.error || '日报队列写不进' };
+  return { ok: true, queued: true, messageId: r.messageId };
 }
 
 function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
@@ -1686,6 +1675,57 @@ function cmdScan() {
   process.exit(health.allScanned ? 0 : 2);
 }
 
+function runHubProjection({ situation, dryRun, log }) {
+  const say = (m) => log.push(m);
+  let creds;
+  try { creds = loadCredentials(DEFAULT_CREDS); } catch (e) {
+    say(`  飞书对账跳过：${e.message}`);
+    return;
+  }
+  const hubChatId = creds.hubChatId;
+  if (!hubChatId) { say('  飞书对账跳过：凭据无 hubChatId'); return; }
+  let policy;
+  try { policy = loadAskPolicy(readFileSync(join(ROOT, 'docs', 'release-policy.json'), 'utf8')); }
+  catch (e) { policy = { unscanned: `release-policy 读不了：${e.message}` }; }
+  const store = createStateStore(DEFAULT_STATE);
+  const digestState = loadDigestState();
+  const plan = planHubCycle({
+    situation, repo: REPO, hubPending: store.hubPending, policy, digestState, now: new Date(),
+  });
+  if (dryRun) {
+    say(`  飞书对账（预演）actions=${(plan.reconcile.actions || []).length} daily=${plan.daily.send ? '发' : plan.daily.why}`);
+    return;
+  }
+  const applied = applyHubCycle(plan, {
+    issueCard: (a) => {
+      const fields = pendingFromAsk(a.issue || {});
+      return runHubAsk(fields, {
+        store,
+        send: (card) => sendCardViaLarkCli({ chatId: hubChatId, card }),
+      });
+    },
+    decideCard: ({ messageId, card }) => updateCardViaLark({ messageId, card }),
+    digestLine: ({ text }) => recordBroadcast(text, { source: 'hub', now: new Date() }),
+    sendDaily: ({ card, snapshot, day }) => {
+      const r = sendCardViaLark({ chatId: hubChatId, card });
+      if (r.ok) {
+        digestState.lastSentDay = day;
+        digestState.lastSnapshot = snapshot;
+        digestState.lastMessageId = r.messageId;
+        digestState.queue = { day, items: [] };
+        saveDigestState(digestState);
+      }
+      return r;
+    },
+  });
+  if (store.save) store.save();
+  if (applied.reconcile.unscanned) say(`  飞书对账没查成：${applied.reconcile.error}`);
+  else say(`  飞书对账 ${applied.reconcile.results.length} 步`);
+  if (applied.daily.sent) say(`  日报已发 ${applied.daily.messageId}`);
+  else if (applied.daily.error) say(`  日报没发出：${applied.daily.error}`);
+  else say(`  日报未发：${applied.daily.why}`);
+}
+
 function cmdAct(argv) {
   const dryRun = argv.includes('--dry-run');
   const state = loadState();
@@ -1711,6 +1751,7 @@ function cmdAct(argv) {
       if (r.sent || r.ok) { state.lastHeartbeatAt = nowIso(); log.push(`  心跳已发（${hb.reason}）`); }
     }
   }
+  runHubProjection({ situation, dryRun, log });
   if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,

@@ -99,6 +99,18 @@ function makeDeps(over = {}) {
 }
 
 describe('hub 对话（#852 总帅入口）', () => {
+  it('私聊 p2p 问盘面：走对话路径，不回指路', async () => {
+    const S = await CORE;
+    const ANSWER = '待拍板 1 张：#846。';
+    const { deps } = makeDeps({
+      llm: scriptedLlm([{ intent: 'situation', issueNumber: null }, ANSWER]),
+    });
+    const out = await S.triage(hubInbound({ kind: 'p2p', chatId: 'oc_p2p' }), deps);
+    assert.strictEqual(out.replies.length, 1);
+    assert.strictEqual(out.replies[0].text, ANSWER);
+    assert.notStrictEqual(out.replies[0].text, S.HUB_GUIDANCE);
+  });
+
   it('问盘面：不回 HUB_GUIDANCE，回答经聚合盘面（态势/健康表内容进了 prompt）', async (t) => {
     const S = await CORE;
     const ANSWER = '在途 issues 2 张；待拍板 1 张：#846；grokpool 红 1 路，其余正常。';

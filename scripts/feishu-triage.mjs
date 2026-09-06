@@ -70,6 +70,13 @@ import { ensurePlain } from './lib/plain-words.mjs';
 import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
+import { isDailyListPending } from './lib/feishu-daily-card.mjs';
+import {
+  MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent,
+} from './lib/hub-pending.mjs';
+import { parsePolicy } from './lib/ask-gate.mjs';
+import { runMenuList } from './lib/feishu-hub-cycle.mjs';
+import { sendCardViaLark, sendTextViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
 
 export {
   buildHubCard, parseCardAction, cardCallbackResponse, buildDecidedHubCard, CHOICE_LABELS,
@@ -133,9 +140,12 @@ export function normalizeInbound(event, groups = {}) {
   }
   if (!text) return null;
   const mapping = groups[chatId];
+  const chatType = String(msg.chat_type || '').trim();
+  const isP2p = chatType === 'p2p';
   const repo = mapping && mapping.kind === 'project' ? mapping.repo : null;
   return {
     chatId,
+    chatType,
     rootId: msg.root_id || messageId,
     parentId: msg.parent_id || '',
     messageId,
@@ -144,7 +154,8 @@ export function normalizeInbound(event, groups = {}) {
     text,
     ts: Number(msg.create_time) || Date.now(),
     repo,
-    kind: mapping ? mapping.kind : null,
+    // 私聊不进群映射：当总帅问答入口（手机端点开机器人就能问）。
+    kind: isP2p ? 'p2p' : (mapping ? mapping.kind : null),
     profile: mapping?.profile || null,
   };
 }
@@ -569,6 +580,8 @@ export function makeFeishuClient(sdk, creds) {
         'card.action.trigger': async (data) => {
           if (this._cardHandler) return this._cardHandler(data);
         },
+        // #1029：群输入框下方「看待拍板」菜单。
+        'application.bot.menu_v6': async (data) => { if (this._handler) await this._handler(data); },
       });
       await ws.start({ eventDispatcher: dispatcher });
     },
@@ -593,6 +606,22 @@ export function makeFeishuClient(sdk, creds) {
       return r.data?.message_id || '';
     },
     // #852：取单条消息（hub thread 回复时判话题根归属：机器人发的 + 带单链接 = 待拍板 thread）。
+    async updateCard(messageId, card) {
+      const r = await client.im.v1.message.patch({
+        path: { message_id: messageId },
+        data: { content: JSON.stringify(card) },
+      });
+      if (r.code !== 0) throw new Error(`im.v1.message.patch 失败：code=${r.code} msg=${r.msg}`);
+      return messageId;
+    },
+    async sendText(chatId, text) {
+      const r = await client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) },
+      });
+      if (r.code !== 0) throw new Error(`im.v1.message.create 失败：code=${r.code} msg=${r.msg}`);
+      return r.data?.message_id || '';
+    },
     async fetchMessage(messageId) {
       const r = await client.im.v1.message.get({ path: { message_id: messageId } });
       if (r.code !== 0) throw new Error(`im.v1.message.get 失败：code=${r.code} msg=${r.msg}`);
@@ -778,8 +807,83 @@ export async function applyCardActions(result, { store, deps, client = null } = 
   if (store?.save) store.save();
 }
 
+export function hubRepoFromGroups(groups, fallback = 'thoerwink8/windsurf-dao') {
+  const src = groups && typeof groups === 'object' ? groups : {};
+  for (const v of Object.values(src)) {
+    if (v && typeof v === 'object' && v.kind === 'project' && v.repo) return String(v.repo);
+  }
+  return fallback;
+}
+
+export function loadAskPolicyDoc(root = REPO_ROOT) {
+  const file = join(root, 'docs', 'release-policy.json');
+  try {
+    return parsePolicy(readFileSync(file, 'utf8'));
+  } catch (e) {
+    return { unscanned: `release-policy 读不了：${String(e.message || e).slice(0, 80)}` };
+  }
+}
+
+export function listPendingGithub(repo, { ghBin = process.env.FEISHU_GH || 'gh', run = runGh } = {}) {
+  const r = run(ghBin, listPendingIssueArgs(repo));
+  return githubFromIssueList({
+    ok: !!r.ok,
+    out: r.stdout,
+    error: r.reason || r.stderr || String(r.code ?? ''),
+    repo,
+  });
+}
+
+export async function handleListPending({ groups, store, creds, chatId, client = null }) {
+  const repo = hubRepoFromGroups(groups);
+  const github = listPendingGithub(repo);
+  const policy = loadAskPolicyDoc();
+  const target = chatId || creds?.hubChatId || '';
+  const bumpCard = ({ messageId, card }) => {
+    if (!messageId || !card) return { ok: false, error: '没有要更新的卡' };
+    return updateCardViaLark({ messageId, card });
+  };
+  const issueCard = (a) => {
+    if (!target) return { ok: false, error: '没送进群：缺群号' };
+    const card = buildHubCard(a.issue || {});
+    const r = sendCardViaLark({ chatId: target, card });
+    if (r && r.ok && store?.hubPending && a.issue) {
+      store.hubPending[r.messageId] = {
+        repo: a.issue.repo, number: a.issue.number, title: a.issue.title,
+        url: a.issue.url, what: a.issue.title,
+      };
+      if (store.save) store.save();
+    }
+    return r;
+  };
+  const { plan, applied } = runMenuList({
+    github, hubPending: store?.hubPending, policy, repo, bumpCard, issueCard,
+  });
+  const text = plan.text || applied.text || '';
+  if (text && target && (plan.empty || plan.unscanned)) {
+    if (client?.sendText) {
+      try { await client.sendText(target, text); } catch (e) { warn(`看待拍板回执失败：${e.message}`); }
+    } else {
+      sendTextViaLark({ chatId: target, text });
+    }
+  }
+  log({ type: 'menu', eventKey: MENU_LIST_PENDING, empty: !!plan.empty, unscanned: !!plan.unscanned, text });
+  return { inbound: null, replies: text ? [{ rootId: '', text }] : [], actions: plan.actions || [], plan, applied };
+}
+
 export async function handleEvent(event, { groups, store, deps, triage, client, creds = null }) {
+  const menu = parseMenuEvent(event);
+  if (menu) {
+    if (!menu.ok || !menu.known) {
+      log({ type: 'skip', reason: 'menu-unknown', eventKey: menu.eventKey || '' });
+      return null;
+    }
+    return handleListPending({ groups, store, creds, chatId: menu.chatId, client });
+  }
   const cardParsed = parseCardAction(event);
+  if (cardParsed && isDailyListPending(cardParsed.rawValue)) {
+    return handleListPending({ groups, store, creds, chatId: cardParsed.chatId, client });
+  }
   if (cardParsed) {
     const result = await handleCardAction(event, { store, deps, client });
     if (!result) return null;
@@ -806,7 +910,7 @@ export async function handleEvent(event, { groups, store, deps, triage, client, 
   }
   // #852 hub 待拍板 thread 归属：先查 hubPending 表（本进程发过的卡）；查不到且是 thread 回复，
   // 取话题根消息给块B 判（机器人发起 + 带单链接 = 拍板直落）。取不到 = 没查成，走 LLM 分类不猜归属。
-  if (inbound.kind === 'hub') {
+  if (inbound.kind === 'hub' || inbound.kind === 'p2p') {
     const pend = store?.hubPending?.[inbound.rootId];
     if (pend) {
       inbound.hubPending = pend;

@@ -26,6 +26,7 @@ import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
   sessionFromOrcaTerminal,
 } from './lib/liveness.mjs';
+import { recordBroadcast } from './lib/broadcast-io.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -197,8 +198,7 @@ function pushSalvage({ path, salvageBranch }) {
 function say(text) {
   const fake = process.env.BOARD_GC_SAY;
   if (fake) { run(process.execPath, [fake, text]); return; }
-  const r = run('hub-say', [text]);
-  if (r.failed) run(process.execPath, ['/home/orca/bin/hub-say', text]);
+  recordBroadcast(String(text), { source: 'board-gc', now: new Date() });
 }
 
 function main() {

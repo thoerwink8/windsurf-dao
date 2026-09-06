@@ -538,6 +538,24 @@ describe('#801 块A 飞书适配器', () => {
     assert.equal(inbound.repo, 'thoerwink8/windsurf-dao');
   });
 
+  it('normalizeInbound：私聊 chat_type=p2p → kind=p2p，不进群映射也当问答入口', async () => {
+    const M = await MOD;
+    const inbound = M.normalizeInbound({
+      event: {
+        sender: { sender_id: { open_id: 'ou_user1' }, sender_type: 'user', sender_name: '老板' },
+        message: {
+          message_id: 'om_p2p', chat_id: 'oc_p2p_unknown', chat_type: 'p2p',
+          message_type: 'text', content: '{"text":"现在怎么样了"}', create_time: '1725000000000',
+        },
+      },
+    }, M.loadGroups(GROUPS_FIXTURE));
+    assert.ok(inbound);
+    assert.equal(inbound.kind, 'p2p');
+    assert.equal(inbound.repo, null);
+    assert.equal(inbound.chatType, 'p2p');
+    assert.equal(inbound.text, '现在怎么样了');
+  });
+
   it('normalizeInbound：回复消息 rootId = root_id；hub 群 repo = null', async () => {
     const M = await MOD;
     const groups = M.loadGroups(GROUPS_FIXTURE);
