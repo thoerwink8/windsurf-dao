@@ -31,11 +31,12 @@ import { attributedIssueNumber } from './close-issue.mjs';
 import {
   proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
 } from './commander-verbs.mjs';
+import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
-  'add-label', 'retry-drain', 'open-issue', 'reap-ticket',
+  'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -265,6 +266,8 @@ export const ACTION_NEEDS = {
   'open-issue': [],
   // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
   'reap-ticket': ['github', 'reviewPending'],
+  // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
+  'mark-exhausted': ['github'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -403,6 +406,7 @@ function collectCandidates(situation) {
   const prList = gh.prs || [];
   const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
   const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
@@ -413,6 +417,8 @@ function collectCandidates(situation) {
       }, N['reap-ticket']));
       continue;
     }
+    const livePr = (gh.prs || []).find((p) => p && Number(p.number) === Number(it.pr));
+    if (livePr && prHasStuckLabel(livePr)) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     // 票里的 head 有两种形态：字符串，或 {name, oid}（写票的一侧给的是后者）。
     // 取不出就传 null——退回旧键，不是猜一个。
     const itHead = ticketHeadOid(it.head);
@@ -433,7 +439,14 @@ function collectCandidates(situation) {
     }
     if (drain.code === 'grace') continue;
     if (drain.code === 'exhausted') {
-      out.push(withNeeds(esc(drain.error, { reason: 'drain-exhausted', pr: it.pr, tries: drain.tries }), N['retry-drain']));
+      // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
+      if (livePr && prHasStuckLabel(livePr)) continue;
+      const tries = Number(drain.tries) || 0;
+      out.push(withNeeds(buildMarkExhausted({
+        pr: it.pr, verb: 'drain', tries, head: itHead,
+        why: drain.error,
+      }), N['mark-exhausted']));
+      exhaustedThisRound.add(Number(it.pr));
       continue;
     }
     out.push(withNeeds({ kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null, head: it.head || null, why: `PR #${it.pr} 工人已交卷、worker-done 起审官失败入队` }, N['attach-reviewer']));
@@ -460,10 +473,12 @@ function collectCandidates(situation) {
       const ageMin = (nowMs - (Date.parse(prev.at || '') || 0)) / 60000;
       if (Number.isFinite(ageMin) && ageMin < REWORK_RETRY_GRACE_MIN) return;
       if (tries >= MAX_REWORK_TRIES) {
-        out.push(withNeeds(esc(
-          `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
-          { reason: 'rework-exhausted', pr: pr.number, head, tries },
-        ), N.rework));
+        if (prHasStuckLabel(pr)) return;
+        out.push(withNeeds(buildMarkExhausted({
+          pr: pr.number, verb: 'rework', tries, head,
+          why: `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
+        }), N['mark-exhausted']));
+        exhaustedThisRound.add(Number(pr.number));
         return;
       }
     }
@@ -533,6 +548,9 @@ function collectCandidates(situation) {
   // ③ PR 驱动：判绿合并 / manual 待拍板 / 审官轮次
   for (const pr of gh.prs || []) {
     if (!pr || pr.number == null) continue;
+    // #1000：认输 / 等用户是 PR 属性。指挥官见到就跳过，不再机械重试（省额度）。
+    // 合并路仍走——帅位关掉或去掉标之后自然回来；标还在时也不自动合一张已经认输的 PR。
+    if (prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number))) continue;
 
     // 判绿判据只认**真 review**（2026-09-05 实咬）：原来这里的入口是 prApprovedReady，
     // 它要 pr.reviewDecision === 'APPROVED'。而 reviewDecision 是 GitHub 按分支保护规则算的聚合值，
@@ -660,10 +678,11 @@ function collectCandidates(situation) {
       if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
       const firstRound = a.judgedTotal === 0;
       if (tries >= MAX_REREVIEW_TRIES) {
-        out.push(withNeeds(esc(
-          `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
-          { reason: 'rereview-exhausted', pr: pr.number, head: a.head, tries },
-        ), N['attach-reviewer']));
+        out.push(withNeeds(buildMarkExhausted({
+          pr: pr.number, verb: 'rereview', tries, head: a.head,
+          why: `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+        }), N['mark-exhausted']));
+        exhaustedThisRound.add(Number(pr.number));
         continue;
       }
       out.push(withNeeds({

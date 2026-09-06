@@ -24,6 +24,7 @@
 
 import { PENDING_LABEL } from './pending-disambiguation.mjs';
 import { DISAMBIGUATED_LABEL } from './dispatch/card.mjs';
+import { EXHAUSTED_LABEL, WAITING_USER_LABEL, prHasExhaustedLabel, prHasWaitingUserLabel } from './exhausted.mjs';
 
 /** 「待拍板」标：飞书 triage 与帅位共用的那张（feishu-triage-core 的 GATE_ALLOWED 的对立面）。 */
 export const AWAITING_CALL_LABEL = '待拍板';
@@ -257,6 +258,17 @@ export function assessPr({ pr, reviews, registries, sessions, worktrees } = {}) 
   if (mergeable === 'CONFLICTING') {
     needs.push({ kind: 'conflicting', why: `#${number} 跟 master 冲突了，合不上——要先解冲突` });
   }
+  if (prHasWaitingUserLabel(pr)) {
+    needs.push({
+      kind: 'pr-waiting-user',
+      why: `#${number} 挂着「${WAITING_USER_LABEL}」——自动化认输后升级给你拍`,
+    });
+  } else if (prHasExhaustedLabel(pr)) {
+    needs.push({
+      kind: 'pr-exhausted',
+      why: `#${number} 挂着「${EXHAUSTED_LABEL}」——自动化认输了，要你拍：去掉该标 / 换成「${WAITING_USER_LABEL}」 / 关掉 PR`,
+    });
+  }
 
   return {
     pr: number,
@@ -476,7 +488,8 @@ export function renderNow({
 // ── 排版（默认给人看；--json 给机器） ───────────────────────────────────────
 
 const KIND_ORDER = [
-  'conflicting', 'rework-awaiting-recheck', 'stale-green', 'reviewer-down',
+  'conflicting', 'pr-exhausted', 'pr-waiting-user',
+  'rework-awaiting-recheck', 'stale-green', 'reviewer-down',
   'reviewer-unknown', 'reviewer-session-unknown', 'reviewer-tree-behind',
   'issue-awaiting-call', 'issue-pending-disambiguation', 'branch-diverged',
   'green-awaiting-land', 'issue-not-disambiguated',
@@ -486,6 +499,8 @@ const KIND_ORDER = [
 // 折叠行里的说人话名字（用户自己会说的词，不是 kind 代号）。
 const KIND_TEXT = {
   conflicting: '合不上（跟 master 冲突）',
+  'pr-exhausted': '自动化认输的 PR',
+  'pr-waiting-user': '认输后等你拍的 PR',
   'rework-awaiting-recheck': '返工完了没人复审',
   'stale-green': '绿票投在旧代码上',
   'reviewer-down': '审官进程不在了',

@@ -43,6 +43,7 @@ query($owner: String!, $name: String!) {
         reviewDecision
         mergeable
         headRefOid
+        labels(first: 30) { nodes { name } }
         body
         commits(last: 1) {
           nodes {
@@ -143,6 +144,8 @@ export function normalizeGithubGraphql(data) {
       // headRefOid：判「审官那条红/绿是不是打在当前 head 上」的必需字段（#911 起）。
       // 取不到就是 null，判据侧按「没查成」走，绝不当成「head 变了」。
       headRefOid: typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : null,
+      // #1000：认输是 PR 属性。与 issue 同形：节点缺就空数组（GraphQL 查成时字段总会在）。
+      labels: (p.labels?.nodes || []).map((l) => ({ name: l.name })),
       body: p.body || '',
       state: 'OPEN',
       statusCheckRollup,

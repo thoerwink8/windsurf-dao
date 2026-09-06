@@ -24,9 +24,10 @@ export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
 export const DRAIN_GRACE_MIN = 45;
 export const MAX_DRAIN_TRIES = 3;
 
-/** 会转成 open-issue 的 escalate 理由。unscanned / missing-labels 不在这里（前者静默，后者走 add-label）。 */
+/** 会转成 open-issue 的 escalate 理由。unscanned / missing-labels 不在这里（前者静默，后者走 add-label）。
+ *  #1000：drain/rereview/rework 的 exhausted 改打 PR 标，不再开单。wake-exhausted 是终端不是 PR，仍走开单。 */
 export const OPEN_ISSUE_REASONS = new Set([
-  'wake-exhausted', 'drain-exhausted', 'rereview-exhausted',
+  'wake-exhausted',
 ]);
 
 export const CHECKS = {
