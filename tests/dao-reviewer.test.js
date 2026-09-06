@@ -350,7 +350,7 @@ describe('dao 审官与完工', () => {
       assert.ok(wdMiss.status !== 0 && /--pr/.test(String(pWdMiss.error || wdMiss.stderr || '')), 'worker-done 缺 --pr → 非零  →  ' + JSON.stringify(pWdMiss));
     });
 
-    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--dry-run'], {
+    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--dry-run', '--executor', 'orca'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -365,7 +365,7 @@ describe('dao 审官与完工', () => {
         'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
       });
 
-    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--dry-run'], {
+    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--dry-run', '--executor', 'orca'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWdRework = (() => { try { return JSON.parse((cliWdRework.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
