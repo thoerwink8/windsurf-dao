@@ -63,6 +63,58 @@ describe('大脑该留该关', () => {
   });
 });
 
+describe('#1055 返工：session-read 坏帧不许当可读（没查成要留着）', () => {
+  it('故意坏帧：31 分钟龄、phase:null、无正文 → readable 不给，超龄也不关', async () => {
+    const { interpretBrainSessionView, classifyBrainReap } = await LOAD;
+    const rd = interpretBrainSessionView({
+      ok: true, executor: 'mirasim', sessionKey: 'pi:deadbeef',
+      phase: null, text: '', toolCalls: [], error: null,
+      missing: false, partial: false, via: 'snapshot',
+      why: '快照体形状不符：要对象，实际 undefined',
+      readable: true, // dao.mjs 在 missing!==true 时会标这个，适配器不许信
+    });
+    assert.equal(rd.readable, undefined, '形状错误帧不许 readable:true');
+    assert.match(String(rd.error), /形状不符/);
+    const v = classifyBrainReap({
+      readable: rd.readable, age: 31 * MIN, maxAgeMs: CAP, hardCapMs: 90 * MIN,
+      signature: null, prev: null,
+    });
+    assert.equal(v.verdict, 'unknown', '超龄坏帧必须 unknown，不能 close');
+    assert.notEqual(v.verdict, 'close');
+  });
+
+  it('phase 缺失 / 未知 / 契约 why / 无法确认的 partial → readable 不给', async () => {
+    const { interpretBrainSessionView } = await LOAD;
+    const missPhase = interpretBrainSessionView({ missing: false, phase: null, text: '', why: null });
+    assert.equal(missPhase.readable, undefined);
+    const unknownPhase = interpretBrainSessionView({ missing: false, phase: 'incomplete', text: 'x' });
+    assert.equal(unknownPhase.readable, undefined);
+    const contract = interpretBrainSessionView({
+      missing: false, phase: 'running', why: '快照体形状不符：要对象，实际 null',
+    });
+    assert.equal(contract.readable, undefined, 'why 标明契约错误时即使有 phase 也不信');
+    const partialDone = interpretBrainSessionView({
+      missing: false, phase: 'done', partial: true, text: '只是预览',
+    });
+    assert.equal(partialDone.readable, undefined, 'partial 终态无法确认');
+    const partialNull = interpretBrainSessionView({ missing: false, phase: null, partial: true });
+    assert.equal(partialNull.readable, undefined);
+  });
+
+  it('有效运行态 / 终态 / 明确 missing 才给 true/false', async () => {
+    const { interpretBrainSessionView } = await LOAD;
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'running' }).readable, true);
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'streaming' }).readable, true);
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'waiting' }).readable, true);
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'queued' }).readable, true);
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'running', partial: true }).readable, true,
+      'partial 但 phase=running 是确认过的运行态');
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'done' }).readable, false);
+    assert.equal(interpretBrainSessionView({ missing: false, phase: 'error' }).readable, false);
+    assert.equal(interpretBrainSessionView({ missing: true, phase: null, why: '会话清单里没有' }).readable, false);
+  });
+});
+
 describe('屏面取数：字段路径别猜，取不到要回 null', () => {
   it('三种真实形状都取得出', async () => {
     const { brainScreenText } = await LOAD;

@@ -26,6 +26,7 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { parseWorktrees } from './lib/land-core.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
@@ -962,6 +963,37 @@ export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signatur
   return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
 }
 
+const BRAIN_LIVE_PHASES = new Set(['running', 'streaming', 'waiting', 'queued']);
+const BRAIN_DONE_PHASES = new Set([
+  'done', 'complete', 'completed', 'error', 'failed', 'aborted', 'cancelled', 'canceled',
+]);
+
+/** 把 session-read 的 JSON 判成 {readable}。dao.mjs 在 missing!==true 时会标 readable:true，
+ *  适配器不许信那一列——形状错误 / 未知 phase / 无法确认的 partial 都是没查成。 */
+export function interpretBrainSessionView(view) {
+  if (!view || typeof view !== 'object') {
+    return { ok: false, readable: undefined, error: 'session-read 输出不是对象', view: view ?? null };
+  }
+  const why = typeof view.why === 'string' ? view.why : '';
+  if (/形状不符|契约/.test(why)) {
+    return { ok: true, readable: undefined, error: why, view };
+  }
+  if (view.missing === true) {
+    return { ok: true, readable: false, error: why || 'missing', view };
+  }
+  const phase = typeof view.phase === 'string' && view.phase.trim() ? view.phase.trim() : null;
+  if (view.partial === true && !BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: undefined, error: why || 'partial', view, phase };
+  }
+  if (BRAIN_DONE_PHASES.has(phase)) {
+    return { ok: true, readable: false, error: `phase=${phase}`, view, phase };
+  }
+  if (BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: true, error: null, view, phase };
+  }
+  return { ok: true, readable: undefined, error: phase ? `未知 phase=${phase}` : 'phase 缺失', view, phase };
+}
+
 /** 同步读一次 mirasim 会话。spawnSync 调 dao.mjs session-read，不把 commander 改成 async。 */
 function readBrainSession(sessionKey) {
   const r = runCmd(['node', 'scripts/dao.mjs', 'session-read', '--session', sessionKey], 60000);
@@ -969,16 +1001,7 @@ function readBrainSession(sessionKey) {
   if (!r.ok) return { ok: false, readable: undefined, error: r.error, view: null };
   let view = null;
   try { view = JSON.parse(r.out); } catch { return { ok: false, readable: undefined, error: 'session-read 输出不是 JSON', view: null }; }
-  if (!view || typeof view !== 'object') return { ok: false, readable: undefined, error: 'session-read 输出不是对象', view: null };
-  // missing=true：服务端明确说不认识这条会话 → 已退（readable:false）。
-  // 命令本身失败 / 输出不可解析 → 没查成（readable 不给，classifyBrainReap 判 unknown）。
-  if (view.missing === true) return { ok: true, readable: false, error: view.why || 'missing', view };
-  const phase = typeof view.phase === 'string' ? view.phase : null;
-  const done = phase === 'done' || phase === 'complete' || phase === 'completed'
-    || phase === 'error' || phase === 'failed' || phase === 'aborted'
-    || phase === 'cancelled' || phase === 'canceled';
-  if (done) return { ok: true, readable: false, error: `phase=${phase}`, view, phase };
-  return { ok: true, readable: true, error: null, view, phase };
+  return interpretBrainSessionView(view);
 }
 
 function stopBrainSession(sessionKey) {
