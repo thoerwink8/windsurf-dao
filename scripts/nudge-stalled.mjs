@@ -34,10 +34,31 @@ const CONTINUE = [
   '做完照任务书交卷（提交 + 推分支 + PR 正文写验收）。',
 ].join('\n');
 
-/** 树路径反查 issue 号（`.../dao-1056` → 1056）。对不上回 null，不猜。 */
-function issueOfTree(workdir) {
-  const m = /(?:^|\/)dao-(\d+)(?:-\d+)?$/.exec(String(workdir || ''));
-  return m ? Number(m[1]) : null;
+// 审官的活是「判」不是「写」，交卷方式也不同，所以不能给它上面那套话。
+// 上一轮多半是撞上游满载中断的（Selected model is at capacity），不是它判完了。
+const REVIEW_CONTINUE = [
+  '继续审。你上一轮没跑完就中断了（多半是上游满载），审查还没交卷——接着审，别重新开始。',
+  '先说一句你已经看过哪些文件、还剩什么没看，然后接着看。',
+  '判完照审官任务书交卷：逐条给判定，判绿或判红都要落到 PR review 上，别只在会话里说。',
+].join('\n');
+
+/**
+ * 树路径反查它在盘面上的身份。两种树都要认：
+ *   `.../dao-1056`         工人树      → {kind:'工人', n:1056}
+ *   `.../dao-review-pr-1040` 审官树    → {kind:'审官', n:1040}
+ * 认不出回 null，不猜——临时会话没有单号，也就没有重派路径，不该被推。
+ *
+ * 审官树一开始漏了，而那正是最要命的一类：审官卡死 ⇒ 没有判绿 ⇒ **什么都合不了**。
+ * 2026-09-06 实测两个审官（PR #1018 / #1040）双双停在
+ * 「Selected model is at capacity」，当天一张 PR 都没合就是这么来的。
+ */
+function idOfTree(workdir) {
+  const s = String(workdir || '');
+  const r = /(?:^|\/)dao-review-pr-(\d+)$/.exec(s);
+  if (r) return { kind: '审官', n: Number(r[1]), label: `PR #${r[1]}` };
+  const w = /(?:^|\/)dao-(\d+)(?:-\d+)?$/.exec(s);
+  if (w) return { kind: '工人', n: Number(w[1]), label: `#${w[1]}` };
+  return null;
 }
 
 function readRecords(root) {
@@ -71,7 +92,7 @@ function readRecords(root) {
 const records = readRecords(SESSIONS);
 const latest = new Map();
 for (const r of records) {
-  if (!r.workdir || issueOfTree(r.workdir) == null) continue;
+  if (!r.workdir || idOfTree(r.workdir) == null) continue;
   if (!existsSync(r.workdir)) continue; // 树已经清掉了就不是「没人管」，是收拾过了
   const at = Date.parse(r.updatedAt || '') || 0;
   const prev = latest.get(r.workdir);
@@ -80,21 +101,24 @@ for (const r of records) {
 
 const stalled = [...latest.values()]
   .filter(x => x.rec.runState === 'incomplete')
-  .filter(x => !only || String(issueOfTree(x.rec.workdir)) === String(only))
+  .filter(x => !only || String(idOfTree(x.rec.workdir).n) === String(only))
   .sort((a, b) => a.at - b.at);
 
-if (!stalled.length) { console.log('[推一把] 没有卡住的派工树'); process.exit(0); }
+if (!stalled.length) { console.log('[推一把] 没有卡住的树'); process.exit(0); }
 
 for (const { rec } of stalled) {
-  const issue = issueOfTree(rec.workdir);
+  const id = idOfTree(rec.workdir);
   const agent = rec.agent || 'pi';
-  if (!GO) { console.log(`[推一把·预览] #${issue} ${agent} ${rec.workdir}（${rec.runDetail || rec.runState}）`); continue; }
+  const who = `${id.kind} ${id.label}`;
+  if (!GO) { console.log(`[推一把·预览] ${who} ${agent}（${rec.runDetail || rec.runState}）`); continue; }
   try {
     const rt = createRuntime({ homeDir: '/home/orca' });
-    const r = await rt.startSession({ agent, workdir: rec.workdir, prompt: CONTINUE });
-    console.log(`[推一把] #${issue} 推了：${r.sessionKey}`);
+    // 审官不能给「接着写代码」那套话——它的活是判，交卷方式也不同。
+    const prompt = id.kind === '审官' ? REVIEW_CONTINUE : CONTINUE;
+    const r = await rt.startSession({ agent, workdir: rec.workdir, prompt });
+    console.log(`[推一把] ${who} 推了：${r.sessionKey}`);
   } catch (e) {
     // 推不动就如实说，不吞——下一轮 agent-stall-watch 还会把它报出来。
-    console.error(`[推一把] #${issue} 推不动：${String(e.message || e).slice(0, 160)}`);
+    console.error(`[推一把] ${who} 推不动：${String(e.message || e).slice(0, 160)}`);
   }
 }
