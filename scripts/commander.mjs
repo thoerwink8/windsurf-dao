@@ -46,6 +46,9 @@ import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
+import {
+  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
+} from './lib/exhausted.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -453,6 +456,8 @@ function execAction(action, { state, dryRun, log }) {
       return execOpenIssue(action, { state, dryRun, say });
     case 'reap-ticket':
       return execReapTicket(action, { state, dryRun, say });
+    case 'mark-exhausted':
+      return execMarkExhausted(action, { dryRun, say });
     case 'noop':
       return { ok: true };
     default:
@@ -515,6 +520,68 @@ function execReapTicket(action, { state, dryRun, say }) {
   }
   say(`  ${removed ? '回收死票' : '死票已不在'}：PR #${action.pr}`);
   return { ok: true, removed };
+}
+
+function execMarkExhausted(action, { dryRun, say }) {
+  const pr = action.pr;
+  if (pr == null) {
+    say('  mark-exhausted 缺 pr，不动手');
+    return { ok: false, error: 'mark-exhausted 要 pr' };
+  }
+  const comment = action.comment || exhaustedComment({
+    pr, verb: action.verb, tries: action.tries, head: action.head,
+  });
+  const st = runGh(['pr', 'view', String(pr), '--repo', REPO, '--json', 'labels,state'], 20000);
+  if (!st.ok) {
+    say(`  认输标没查成，本轮不打：PR #${pr}（${st.error}）`);
+    return { ok: true, skipped: 'labels-unscanned' };
+  }
+  let labels = [];
+  let prState = '';
+  try {
+    const j = JSON.parse(st.out || '{}');
+    labels = Array.isArray(j.labels) ? j.labels.map((l) => l && l.name).filter(Boolean) : [];
+    prState = String(j.state || '');
+  } catch {
+    say(`  认输标解析失败，本轮不打：PR #${pr}`);
+    return { ok: true, skipped: 'labels-unscanned' };
+  }
+  if (prState && prState !== 'OPEN') {
+    say(`  PR #${pr} 已是 ${prState}，不打认输标`);
+    return { ok: true, skipped: 'not-open' };
+  }
+  if (labels.includes(EXHAUSTED_LABEL) || labels.includes(WAITING_USER_LABEL)) {
+    say(`  PR #${pr} 已有认输/等用户标，不重复评论`);
+    return { ok: true, skipped: 'already-labeled' };
+  }
+  if (dryRun) {
+    say(`[dry] 给 PR #${pr} 打「${EXHAUSTED_LABEL}」并评论（${action.verb} 试了 ${action.tries} 次）`);
+    return { ok: true, dryRun: true };
+  }
+  ensureDir(STATE_DIR);
+  const created = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
+    'label', 'create', EXHAUSTED_LABEL, '--repo', REPO,
+    '--description', '自动化认输：机械重试无解，等帅位三选一', '--color', 'B60205'], 20000);
+  if (!created.ok && !/already exists/i.test(String(created.error || ''))) {
+    say(`  建认输标失败：${created.error}`);
+    return created;
+  }
+  const tagged = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
+    'pr', 'edit', String(pr), '--repo', REPO, '--add-label', EXHAUSTED_LABEL], 20000);
+  if (!tagged.ok) {
+    say(`  打认输标失败：${tagged.error}`);
+    return tagged;
+  }
+  const bodyFile = join(STATE_DIR, `exhausted-${pr}-${Date.now()}.md`);
+  writeFileSync(bodyFile, comment, 'utf8');
+  const commented = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
+    'pr', 'comment', String(pr), '--repo', REPO, '--body-file', bodyFile], 20000);
+  if (!commented.ok) {
+    say(`  认输标已打、评论失败：${commented.error}`);
+    return { ok: true, labeled: true, commented: false, error: commented.error };
+  }
+  say(`  PR #${pr} 已打「${EXHAUSTED_LABEL}」并评论（${action.verb} × ${action.tries}）`);
+  return { ok: true, labeled: true, commented: true };
 }
 
 function execOpenIssue(action, { state, dryRun, say }) {

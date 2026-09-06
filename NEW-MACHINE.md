@@ -64,6 +64,7 @@ node --version
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
 | `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 4840777 | 159280695 |
+| `refiner.{pem,json}` | `dao-refiner[bot]` 消歧官（#1006） | 4847459 | 待装（见下） |
 
 `*.json` 形态（数字不要加引号）：
 
@@ -84,6 +85,24 @@ node --version
 - **传头像有一步藏起来的确认**：选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**。
   只上传不点，页面显示 `Uploading…` 然后**静默失败**，头像仍是默认 identicon——看起来像传成了。
   头像本身与家族规矩见 `host/brand/README.md`（图在 git 里，私钥不在）。
+
+**2026-09-06 建 `dao-refiner`**：App ID `4847459`，Client ID `Iv23liT2oH1Nba2zyd3Q`，用户在自己浏览器里建的
+（建 App 必须以账号所有者身份在 github.com 完成，没有 API 路径能绕过；服务器装了 Playwright 也不行，
+卡的是登录态不是浏览器）。权限**只要两项**：**Issues: Read and write**、**Metadata: Read-only**——
+不要 Pull requests、不要 Contents、不要 Checks。消歧官只碰 issue 的标和评论，
+即使被玩坏最大破坏是乱打标，而乱打标能一键筛出批量回退；这正是不让它共用 `marshal` 身份的全部理由
+（`marshal` 今天同时管开单/评论/关单/打「已消歧」授权标/**合并 PR**，授权与执行是同一把钥匙）。
+
+**还差两步**（做完把上表的「待装」换成真数字）：
+
+1. **装到仓**：App 页 → Install App → 装到 `windsurf-dao`（与 marshal 同范围）。
+   装完点进那条安装，URL 末段就是 Installation ID。
+2. **私钥**：App 页底 → Generate a private key → 下载的 `.pem` 放到 `~/.dao/apps/refiner.pem`（`chmod 600`），
+   同目录写 `refiner.json`：`{ "appId": 4847459, "installationId": <数字>, "slug": "dao-refiner" }`。
+   **私钥不要贴进聊天、不要进 git。**
+
+头像在 `host/brand/bot-refiner.png`（矢量源 `bot-refiner.svg`）。上传时记得 §上面那条坑：
+选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**，只上传会静默失败。
 
 验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 

@@ -43,6 +43,9 @@ import {
   NO_CARD_TIERS, SILENCE_TIERS,
   classifyNoCardProcesses, noCardLine, planTierAlerts, readProcessCensus, standingLine,
 } from './lib/stall-census.mjs';
+import {
+  planExhaustedPush, exhaustedPushPath,
+} from './lib/exhausted.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -532,6 +535,8 @@ function main(argv = process.argv.slice(2)) {
     console.log(`没有卡的程序：采到 ${noCard.sampled} 个在卡里跑的程序，${noCard.strays.length} 张卡认不回去（${noCard.state}）`);
   }
   if (!args.dryRun) saveState(tierStatePath(args.state), tierMemory);
+  // #1000：带「卡死/自动化认输」的 PR 推帅位一次，账本键 pushed:<pr>@<head>。
+  pushExhaustedToShuai({ dryRun: args.dryRun, lines: liveLines });
   // 一轮只发一条：同轮多条发现合成一段（服务器落地清单「说人话判据」：不刷屏）。
   if (liveLines.length) {
     const text = liveLines.length === 1 ? liveLines[0] : `这一轮盘点发现 ${liveLines.length} 件事：\n· ${liveLines.join('\n· ')}`;
@@ -645,4 +650,57 @@ function buildStallReport({ failed, need, items }) {
 const isDirect = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirect) main();
 
-export { main, parseArgs, workerModelOf, buildStallReport };
+function fetchOpenPrsForExhausted() {
+  const hook = process.env.AGENT_STALL_GH_PRS;
+  if (hook) {
+    const r = spawnSync(process.execPath, [hook], {
+      windowsHide: true, encoding: 'utf8', timeout: 15000,
+    });
+    if (r.error || r.status !== 0) return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 160) };
+    try {
+      const v = JSON.parse(String(r.stdout || ''));
+      if (!Array.isArray(v)) return { ok: false, error: '假 gh 没给数组' };
+      return { ok: true, prs: v };
+    } catch (e) {
+      return { ok: false, error: `假 gh JSON 解析失败：${String(e.message).slice(0, 80)}` };
+    }
+  }
+  const r = runGh(['pr', 'list', '--state', 'open', '--limit', '100',
+    '--json', 'number,title,headRefOid,labels'], { role: 'watchdog' });
+  if (!r.ok) {
+    const r2 = runGh(['pr', 'list', '--state', 'open', '--limit', '100',
+      '--json', 'number,title,headRefOid,labels'], { role: 'worker' });
+    if (!r2.ok) return { ok: false, error: r.error || r2.error };
+    try {
+      const v = JSON.parse(r2.out || '[]');
+      return Array.isArray(v) ? { ok: true, prs: v } : { ok: false, error: 'gh 没给数组' };
+    } catch (e) {
+      return { ok: false, error: String(e.message).slice(0, 80) };
+    }
+  }
+  try {
+    const v = JSON.parse(r.out || '[]');
+    return Array.isArray(v) ? { ok: true, prs: v } : { ok: false, error: 'gh 没给数组' };
+  } catch (e) {
+    return { ok: false, error: String(e.message).slice(0, 80) };
+  }
+}
+
+function pushExhaustedToShuai({ dryRun, lines }) {
+  const got = fetchOpenPrsForExhausted();
+  if (!got.ok) {
+    lines.push(`自动化认输的 PR 没查成：${got.error}`);
+    return { ok: false, error: got.error };
+  }
+  const ledgerPath = process.env.AGENT_STALL_EXHAUSTED_LEDGER || exhaustedPushPath(homedir());
+  const ledger = loadState(ledgerPath);
+  const plan = planExhaustedPush({ prs: got.prs, ledger });
+  for (const p of plan.pushes) {
+    lines.push(p.text);
+    if (!dryRun) ledger[p.key] = { at: new Date().toISOString(), pr: p.pr, head: p.head };
+  }
+  if (!dryRun && plan.pushes.length) saveState(ledgerPath, ledger);
+  return { ok: true, pushed: plan.pushes.length, skipped: plan.skipped.length };
+}
+
+export { main, parseArgs, workerModelOf, buildStallReport, pushExhaustedToShuai, planExhaustedPush };

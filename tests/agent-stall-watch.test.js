@@ -388,3 +388,11 @@ test('#833 正式账本路径 + timer 用 OnCalendar（空转实咬）', () => {
   assert.match(timer, /^OnCalendar=/m,
     '没有墙钟点位，oneshot 在服务从未激活时 NEXT 就是横杠，timer 在册却空转');
 });
+
+test('#1000 看门狗接认输推送：账本键带 @head，接线走 planExhaustedPush', () => {
+  const watch = readFileSync(CLI, 'utf8');
+  assert.match(watch, /planExhaustedPush/);
+  assert.match(watch, /exhaustedPushPath/);
+  assert.match(watch, /pushExhaustedToShuai/);
+  assert.match(watch, /pushed:<pr>@<head>/);
+});

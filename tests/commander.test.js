@@ -1158,9 +1158,10 @@ describe('复审要能重试，因为「票写出去了」不等于「判定落�
       reworkDispatched: { [`rereview:905@${HEAD}`]: { at: ago(400), pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
     }));
     assert.equal(byKind(r, 'rereview').length, 0, '试满就别再派了');
-    const opened = byKind(r, 'open-issue');
-    assert.equal(opened.length, 1, '试满转单，不再喊给空气');
-    assert.equal(opened[0].reason, 'rereview-exhausted');
+    const marked = byKind(r, 'mark-exhausted');
+    assert.equal(marked.length, 1, '试满打认输标，不再开单');
+    assert.equal(marked[0].verb, 'rereview');
+    assert.equal(byKind(r, 'open-issue').length, 0);
     assert.equal(byKind(r, 'escalate').length, 0);
   });
 
@@ -1415,7 +1416,8 @@ describe('返工派工失败要能重试（派了 ≠ 成了）', () => {
     const { decide, MAX_REWORK_TRIES } = await CORE;
     const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: MAX_REWORK_TRIES }));
     assert.deepEqual(byKind(r, 'rework'), []);
-    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 1);
+    assert.equal(byKind(r, 'mark-exhausted').length, 1, '试满打认输标');
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 0);
   });
 });
 
@@ -1445,9 +1447,10 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
     const { decide } = await CORE;
     const r = decide(sit('samehead', { 'pr:909@samehead': { at: OLD, pr: '909', tries: 3 } }));
     assert.deepEqual(byKind(r, 'attach-reviewer'), []);
-    const stopped = byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted').length
-      + byKind(r, 'open-issue').filter((a) => a.reason === 'drain-exhausted').length;
-    assert.equal(stopped, 1, '同 head 试满必须停手交人');
+    const stopped = byKind(r, 'mark-exhausted').length;
+    assert.equal(stopped, 1, '同 head 试满必须打认输标停手');
+    assert.equal(byKind(r, 'open-issue').length, 0);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'drain-exhausted').length, 0);
   });
 
   it('同一 head 有账且过了宽限 → retry-drain，键带 head', async () => {
