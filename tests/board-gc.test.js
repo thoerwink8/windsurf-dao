@@ -848,11 +848,15 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
-    // 树根指到不存在的目录：采样面要么空盘面继续去问 gh，要么报没查成。
-    // 两种都是 main 跑了且非 0；如果是 0，多半是 main 根本没跑。
+    // 树根不存在 = 查成了的空盘面，接着去问 gh。把凭据目录指到不存在处，
+    // 问 gh 必没查成——不依赖本机有没有装 marshal（装了会走通、exit 0，本断言就飘）。
     const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
       encoding: 'utf8', windowsHide: true, timeout: 60000,
-      env: { ...process.env, MIRASIM_WORKTREES: '/no/such/mirasim-worktrees-board-gc' },
+      env: {
+        ...process.env,
+        MIRASIM_WORKTREES: '/no/such/mirasim-worktrees-board-gc',
+        DAO_APPS_DIR: '/no/such/dao-apps-board-gc',
+      },
     });
     assert.notEqual(r.status, 0, '如果是 0，多半是 main 根本没跑');
     assert.match(String(r.stderr) + String(r.stdout), /没查成/);
