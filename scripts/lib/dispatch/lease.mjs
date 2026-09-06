@@ -30,9 +30,16 @@
 // （dao dispatch / dao start / 审官 create / 推一把）全从那一道门过，装在门里绕不开。
 
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 /** 认 mirasim 服务进程用的字样。取自它自己的 argv：`…/mirasim-server/<版本>/server.cjs`。 */
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
+
+/** 派工树根 `~/mirasim-worktrees`（登记在 host/machine/INDEX.md D 类）。布局 `<根>/<仓>/<分支>`。 */
+export function worktreesRoot(home = homedir()) {
+  return process.env.MIRASIM_WORKTREES || join(home, 'mirasim-worktrees');
+}
 
 /**
  * 「树里有人在干活」的原因名。**它是背压，不是失败**——调用方要能把它跟真失败分开：
@@ -150,14 +157,16 @@ export function judgeTreeLease({ workdir, procs } = {}) {
  * @param {string} root  只数这个根下面的树（默认 mirasim 的工作树根）
  * @returns {{ok:true, trees:string[], count:number}|{ok:false,unscanned:true,error:string}}
  */
-export function busyTrees(procs, { root = 'mirasim-worktrees' } = {}) {
+export function busyTrees(procs, { root = worktreesRoot() } = {}) {
   if (!Array.isArray(procs)) {
     return { ok: false, unscanned: true, error: '没拿到进程观测数组——在途数不当成 0（fail-close）' };
   }
+  const base = String(root).replace(/\/+$/, '');
   const seen = new Set();
   for (const p of procs) {
     const cwd = String((p && p.cwd) || '').replace(/\/+$/, '');
-    if (!cwd || !cwd.includes(root)) continue;
+    // 前缀要带斜杠：光比 includes('mirasim-worktrees') 会把 /tmp/mirasim-worktrees-fake 也算进来。
+    if (!cwd || !cwd.startsWith(`${base}/`)) continue;
     seen.add(cwd);
   }
   const trees = [...seen].sort();

@@ -475,7 +475,8 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
-      if (dispatchedThisRound >= dispatchSlots) {
+      // 新活只能用「留给收尾之后剩下的」那部分名额，且照样要从共用池里领一个。
+      if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
         reportAdmission(N.dispatch);
         continue; // 余量用尽 / 没查成：排队下轮，不丢、不 escalate
       }
@@ -525,6 +526,8 @@ function collectCandidates(situation) {
       nowMs,
     });
     if (drain.ok) {
+      // 重试 drain 同样是起一个审官会话，同样领名额（判据见 slotsLeft 那段）。
+      if (!takeSlot()) { reportAdmission(N['retry-drain']); continue; }
       out.push(withNeeds({
         kind: 'retry-drain', pr: it.pr, head: itHead, tries: drain.tries, stateKey: drain.stateKey,
         queue: rp.items,
@@ -544,6 +547,9 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(it.pr));
       continue;
     }
+    // 起审官也是起会话，也吃同一份 CPU 和内存——2026-09-06 实测 137 个会话里审官占 53 个。
+    // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
+    if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
     out.push(withNeeds({
       kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null,
       head: it.head || null, source: it.source || null, error: it.error || null,
@@ -629,9 +635,10 @@ function collectCandidates(situation) {
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
       return;
     }
-    // 返工也走机器余量，独立计数——新派单循环在本函数更早处跑，共用会让 ready 把返工挤掉。
-    // 余量用尽排队下轮，不丢、不 escalate。夹具没给 admission 时 dispatchSlots=Infinity，返工不限张（旧测兼容）。
-    if (reworkThisRound >= dispatchSlots) {
+    // 返工属于「收尾」，从共用池领名额（不再各管各的独立上限）。
+    // 之前担心的「新派单把返工挤掉」由 finishReserve 解决：收尾的需求先扣，新活只用剩下的。
+    // 余量用尽排队下轮，不丢、不 escalate。夹具没给 admission 时 slotsLeft=Infinity（旧测兼容）。
+    if (!takeSlot()) {
       reportAdmission(N.rework);
       return;
     }
@@ -790,6 +797,8 @@ function collectCandidates(situation) {
         exhaustedThisRound.add(Number(pr.number));
         continue;
       }
+      // 复审也是起审官会话，同样领名额（理由同 attach-reviewer）。
+      if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
       out.push(withNeeds({
         kind: 'rereview', pr: pr.number, head: a.head,
         issue: attributedIssueNumber(pr),
