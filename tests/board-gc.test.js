@@ -258,7 +258,7 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   it('默认不删：要 --apply 才调 worktree-rm', () => {
     const i = src.indexOf("'worktree-rm'");
     assert.ok(i > -1, '找不到 worktree-rm 调用，判据已失效');
-    assert.match(src.slice(Math.max(0, i - 400), i), /if \(args\.apply\)/);
+    assert.match(src.slice(Math.max(0, i - 1600), i), /if \(args\.apply\)/);
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {
     assert.ok((src.match(/process\.exit\(2\)/g) || []).length >= 4);
@@ -829,7 +829,7 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
 
   it('删树读的是救援之后的名单，不是原判决', () => {
     const i = src.indexOf("'worktree-rm'");
-    assert.match(src.slice(Math.max(0, i - 300), i), /for \(const z of final\.zombies\)/);
+    assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
   it('永远不许 --force：这条路上没有任何该覆盖的情形', () => {
@@ -839,7 +839,7 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {
-    assert.match(src, /planSalvage, applySalvage \} from '\.\/lib\/board-gc\.mjs'/);
+    assert.match(src, /planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths \} from '\.\/lib\/board-gc\.mjs'/);
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
@@ -899,5 +899,177 @@ describe('完工草稿必须被 ignore（否则 board-gc 清不掉任何一张�
   // 判别力：别退化成「把 *.md 全 ignore 掉」那种糊涂修法。
   it('没有把 .md 整类关掉', () => {
     assert.ok(!lines.includes('*.md'), '*.md 全关会把文档一起吞掉，不是这条闸要的');
+  });
+
+  it('没有给 pr-body-<N> 加 ignore（#1001 不许走那条路）', () => {
+    assert.ok(
+      !lines.some((l) => /^pr-body-/.test(l) || l === 'pr-body-*.md' || l === '/pr-body-*.md'),
+      '再加 pr-body-<N> 治不了 tracked 改动，也枚举不完工人随手起的文件名（.flow-pr-body.md 是已有的第 1 条，不算本单新加）',
+    );
+  });
+});
+
+// ── #1001：判定说删 10 张、实清 2 张，报告头却写「已清」 ─────────────────────
+// 2026-09-06 实咬：脏树进了 zombies，orca 见脏拒删，报告仍写「已清」。
+// 拍板选 2：dirty 只数 tracked；?? 是派生物，已结算才弃，且必须列出文件名。
+describe('board-gc #1001：dirty 只数 tracked，报告按实清分段', () => {
+  const porcelainUntracked = '?? pr-body-945.md\n?? worker-done-945.md\n';
+  const porcelainTracked = ' M README.md\n?? pr-body-945.md\n';
+
+  it('parseGitStatusPorcelain：?? 不进 dirty，文件名单独进 derived', async () => {
+    const { parseGitStatusPorcelain } = await LOAD;
+    const mixed = parseGitStatusPorcelain(porcelainTracked);
+    assert.equal(mixed.dirty, 1);
+    assert.deepEqual(mixed.derived, ['pr-body-945.md']);
+    const only = parseGitStatusPorcelain(porcelainUntracked);
+    assert.equal(only.dirty, 0);
+    assert.deepEqual(only.derived, ['pr-body-945.md', 'worker-done-945.md']);
+  });
+
+  it('三棵已结算僵尸：干净清、只含派生物清且列出文件名、tracked 改动进要人判', async () => {
+    const { planBoardGc, formatBoardGc, applyBoardGcRemoves } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'a', name: 'PR-#10 工人·干净', branch: 'refs/heads/a' }),
+        card({ id: 'b', name: 'PR-#11 工人·派生物', branch: 'refs/heads/b' }),
+        card({ id: 'c', name: 'PR-#12 工人·tracked', branch: 'refs/heads/c' }),
+      ],
+      aliveWorktreeIds: NONE,
+      prState: { 10: 'MERGED', 11: 'MERGED', 12: 'MERGED' },
+      branchState: {
+        a: { onRemote: true, ahead: 0, dirty: 0 },
+        b: { onRemote: true, ahead: 0, porcelain: porcelainUntracked, dirty: 2 },
+        c: { onRemote: true, ahead: 0, porcelain: porcelainTracked, dirty: 2 },
+      },
+    });
+    assert.equal(p.zombies.length, 2, JSON.stringify(p));
+    assert.ok(p.zombies.some((z) => z.id === 'a'));
+    const b = p.zombies.find((z) => z.id === 'b');
+    assert.ok(b, '只含未跟踪派生物的应仍是僵尸');
+    assert.deepEqual(b.derived, ['pr-body-945.md', 'worker-done-945.md']);
+    assert.equal(p.risky.length, 1);
+    assert.equal(p.risky[0].id, 'c');
+    assert.match(p.risky[0].why, /tracked 改动/);
+
+    const after = applyBoardGcRemoves(p, { a: { ok: true }, b: { ok: true } });
+    assert.equal(after.cleared.length, 2);
+    assert.equal(after.failed.length, 0);
+    const txt = formatBoardGc(after, { apply: true });
+    assert.match(txt, /## 已清（2 张）/);
+    assert.match(txt, /## 清不掉（0 张，附原因）/);
+    assert.match(txt, /弃 2 个派生物：pr-body-945.md、worker-done-945.md/);
+    assert.match(txt, /要人判 1 张/);
+    assert.doesNotMatch(txt, /## 已清\n/, '不许再用一个无数字的「已清」盖住两种结局');
+  });
+
+  it('报告头数字必须跟实清走：两棵判可清、只成一棵 → 已清 1 不是 2', async () => {
+    const { planBoardGc, formatBoardGc, applyBoardGcRemoves } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'a', name: 'PR-#10 工人·x' }),
+        card({ id: 'b', name: 'PR-#11 工人·y' }),
+      ],
+      aliveWorktreeIds: NONE, prState: { 10: 'MERGED', 11: 'MERGED' }, branchState: {},
+    });
+    assert.equal(p.zombies.length, 2);
+    const after = applyBoardGcRemoves(p, {
+      a: { ok: true },
+      b: { ok: false, error: 'git 见脏拒删' },
+    });
+    const txt = formatBoardGc(after, { apply: true });
+    assert.match(txt, /判决僵尸 2 张｜实清 1 张｜清不掉 1 张/);
+    assert.match(txt, /## 已清（1 张）/);
+    assert.match(txt, /## 清不掉（1 张，附原因）/);
+    assert.match(txt, /git 见脏拒删/);
+    assert.doesNotMatch(txt, /## 已清（2 张）/);
+  });
+
+  it('忘了并回删树结果就出报告 → 已清必须是 0，不许拿判决数冒充', async () => {
+    const { planBoardGc, formatBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'PR-#10 工人·x' }), card({ id: 'b', name: 'PR-#11 工人·y' })],
+      aliveWorktreeIds: NONE, prState: { 10: 'MERGED', 11: 'MERGED' }, branchState: {},
+    });
+    const txt = formatBoardGc(p, { apply: true });
+    assert.match(txt, /## 已清（0 张）/);
+    assert.match(txt, /判决僵尸 2 张｜实清 0 张/);
+  });
+
+  it('反例一：PR 还开着，即使只有未跟踪文件也不许清', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'PR-#10 工人·x', branch: 'refs/heads/a' })],
+      aliveWorktreeIds: NONE, prState: { 10: 'OPEN' },
+      branchState: { a: { onRemote: true, ahead: 0, porcelain: porcelainUntracked, dirty: 2 } },
+    });
+    assert.equal(p.zombies.length, 0);
+    assert.ok(p.keep.some((k) => k.id === 'a'));
+  });
+
+  it('反例二：三棵全干净时要人判 0 张，不许把干净树塞进 risky 求稳', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [
+        card({ id: 'a', name: 'PR-#10 工人·x' }),
+        card({ id: 'b', name: 'PR-#11 工人·y' }),
+        card({ id: 'c', name: 'PR-#12 工人·z' }),
+      ],
+      aliveWorktreeIds: NONE,
+      prState: { 10: 'MERGED', 11: 'MERGED', 12: 'CLOSED' },
+      branchState: {},
+    });
+    assert.equal(p.zombies.length, 3);
+    assert.equal(p.risky.length, 0);
+  });
+
+  it('反例三：salvageDecision 若改回数所有行，这条必须红（两处共用 dirtFrom）', async () => {
+    const { salvageDecision, dirtFrom } = await LOAD;
+    const porcelain = porcelainUntracked;
+    const parsed = dirtFrom({ porcelain });
+    assert.equal(parsed.dirty, 0, '?? 不得计入 dirty');
+    assert.equal(parsed.derived.length, 2);
+    const d = salvageDecision({
+      name: 'ISSUE-#852 群聊直连', branch: 'hub-chat', path: '/w/a',
+      ahead: 5, dirty: 2, porcelain, onRemote: false,
+    });
+    assert.equal(d.ok, true, 'dirty 数字若按旧定义数所有行会是 2，这条就会被挡');
+    const lib = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'board-gc.mjs'), 'utf8');
+    const salvageBody = lib.slice(lib.indexOf('export function salvageDecision'), lib.indexOf('export function planSalvage'));
+    const classifyBody = lib.slice(lib.indexOf('function classifyCandidate'), lib.indexOf('export function planBoardGc'));
+    assert.match(salvageBody, /dirtFrom\(/);
+    assert.match(classifyBody, /dirtFrom\(/);
+    assert.doesNotMatch(salvageBody, /Number\(dirty\)\s*>\s*0/,
+      'salvageDecision 不许绕过 dirtFrom 直接数 dirty');
+  });
+
+  it('已结算证据不全：未跟踪派生物 + 分支不在远端 + 还有本地提交 → 不许弃不许删', async () => {
+    const { planBoardGc } = await LOAD;
+    const p = planBoardGc({
+      worktrees: [card({ id: 'a', name: 'PR-#10 工人·x', branch: 'refs/heads/a' })],
+      aliveWorktreeIds: NONE, prState: { 10: 'MERGED' },
+      branchState: { a: { onRemote: false, ahead: 3, porcelain: porcelainUntracked, contributes: false } },
+    });
+    assert.equal(p.zombies.length, 0, JSON.stringify(p));
+    assert.equal(p.risky.length, 1);
+    assert.match(p.risky[0].why, /已结算证据不全/);
+  });
+
+  it('resolveDiscardPaths：树内文件放行，逃出树外整批作废', async () => {
+    const { resolveDiscardPaths } = await LOAD;
+    const ok = resolveDiscardPaths('/w/a', ['pr-body-945.md']);
+    assert.equal(ok.ok, true);
+    assert.ok(ok.paths[0].replace(/\\/g, '/').endsWith('/w/a/pr-body-945.md'));
+    const bad = resolveDiscardPaths('/w/a', ['../../etc/passwd']);
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /逃出树外/);
+  });
+
+  it('驱动层采 dirty 也走 dirtFrom，不在现场数所有行', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
+    assert.match(src, /dirtFrom\(\{ porcelain:/);
+    assert.doesNotMatch(src, /dirty\.out\.trim\(\)\.split/);
+    const i = src.indexOf('applyBoardGcRemoves');
+    const j = src.lastIndexOf('formatBoardGc');
+    assert.ok(i > -1 && j > i, '报告必须在并回实清结果之后出，否则标题又会撒谎');
   });
 });
