@@ -14,6 +14,20 @@ export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
 export const REVIEW_PENDING_DIR_REL = join('_flow', 'queue', 'review-pending');
 
+// #1014：复审票有两个生产者。来源必须是写票时记下的事实，读侧不许猜。
+export const REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL = 'worker-done-fail';
+export const REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW = 'commander-rereview';
+export const REVIEW_PENDING_SOURCES = new Set([
+  REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+  REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+]);
+
+/** 票上的来源只认写票时记下的那两个值；缺/空/不认识一律 null（来源没查成，不猜）。 */
+export function reviewPendingSourceOf(ticket) {
+  const s = ticket && typeof ticket.source === 'string' ? ticket.source.trim() : '';
+  return REVIEW_PENDING_SOURCES.has(s) ? s : null;
+}
+
 export function reviewPendingDir({ root, env } = {}) {
   const e = env || process.env;
   const override = e.DAO_REVIEW_PENDING_DIR;
@@ -30,15 +44,21 @@ export function reviewPendingPath(dir, pr) {
 }
 
 export function buildReviewPendingTicket({
-  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts,
+  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
-  if (!workerWorktree || !String(workerWorktree).trim()) {
-    return { ok: false, error: '复审待办要工人树' };
-  }
   if (!reviewer || !String(reviewer).trim()) {
     return { ok: false, error: '复审待办要 reviewer' };
+  }
+  const src = typeof source === 'string' ? source.trim() : '';
+  if (!src) return { ok: false, error: '复审待办要 source（worker-done-fail | commander-rereview）' };
+  if (!REVIEW_PENDING_SOURCES.has(src)) {
+    return { ok: false, error: `复审待办来源不认识：${source}` };
+  }
+  // 工人失败票必须有树；指挥官 rereview 按设计可以没有（快马路，#927）。
+  if (src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL && (!workerWorktree || !String(workerWorktree).trim())) {
+    return { ok: false, error: '复审待办要工人树' };
   }
   const oid = head?.oid || head?.headRefOid || null;
   const name = head?.name || head?.headRefName || null;
@@ -50,13 +70,14 @@ export function buildReviewPendingTicket({
       v: REVIEW_PENDING_VERSION,
       pr: n,
       head: { name: name || null, oid: oid || null },
-      workerWorktree: String(workerWorktree).trim(),
+      workerWorktree: workerWorktree && String(workerWorktree).trim() ? String(workerWorktree).trim() : null,
       reviewer: String(reviewer).trim(),
       issue: issue == null || String(issue).trim() === '' ? null : String(issue).trim(),
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
       error: error ? String(error) : null,
+      source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
     },
   };
