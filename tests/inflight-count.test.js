@@ -18,7 +18,10 @@ const path = require('node:path');
 
 const LEASE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
 
-const W = '/home/orca/mirasim-worktrees/windsurf-dao';
+// 夹具用**显式给定**的树根，不读机器家目录——写死 /home/orca 只在这台机器绿
+// （实测：本机 39/39 绿、CI 4 条红，因为 CI 跑在 runner 家目录下）。
+const ROOT = '/fake-home/mirasim-worktrees';
+const W = `${ROOT}/windsurf-dao`;
 
 describe('busyTrees：一棵树算一个在途', () => {
   it('一棵树里十几个子进程只算一个（不按进程数）', async () => {
@@ -30,7 +33,7 @@ describe('busyTrees：一棵树算一个在途', () => {
       { pid: 3, comm: 'node', cwd: `${W}/dao-982` },
       { pid: 4, comm: 'git', cwd: `${W}/dao-982` },
     ];
-    const got = busyTrees(procs);
+    const got = busyTrees(procs, { root: ROOT });
     assert.equal(got.count, 1);
     assert.deepEqual(got.trees, [`${W}/dao-982`]);
   });
@@ -42,7 +45,7 @@ describe('busyTrees：一棵树算一个在途', () => {
       { pid: 1, comm: 'pi', cwd: `${W}/dao-982` },
       { pid: 2, comm: 'codex', cwd: `${W}/dao-review-pr-1018` },
       { pid: 3, comm: 'codex', cwd: `${W}/dao-review-pr-1071` },
-    ]);
+    ], { root: ROOT });
     assert.equal(got.count, 3, '审官被漏掉的话分母就少一半');
     assert.equal(got.trees.includes(`${W}/dao-review-pr-1018`), true);
   });
@@ -53,7 +56,7 @@ describe('busyTrees：一棵树算一个在途', () => {
       { pid: 1, comm: 'pi', cwd: `${W}/dao-982` },
       { pid: 2, comm: 'codex', cwd: '/tmp/dao-review-1064-baseline' },
       { pid: 3, comm: 'node', cwd: '/srv/projects/windsurf-dao' },
-    ]);
+    ], { root: ROOT });
     assert.equal(got.count, 1);
   });
 
@@ -63,7 +66,7 @@ describe('busyTrees：一棵树算一个在途', () => {
     const got = busyTrees([
       { pid: 1, comm: 'pi', cwd: '/home/orca/mirasim-worktrees-fake/x' },
       { pid: 2, comm: 'pi', cwd: '/home/orca/mirasim-worktrees' },
-    ]);
+    ], { root: ROOT });
     assert.equal(got.count, 0, '根目录本身和同名前缀目录都不是工作树');
   });
 
@@ -74,7 +77,7 @@ describe('busyTrees：一棵树算一个在途', () => {
 
   it('一个进程都没有 → 0（这是查成了，不是没查成）', async () => {
     const { busyTrees } = await LEASE;
-    const got = busyTrees([]);
+    const got = busyTrees([], { root: ROOT });
     assert.equal(got.ok, true);
     assert.equal(got.count, 0);
   });
@@ -119,7 +122,7 @@ describe('与租约闸同源（不许各造一份判据）', () => {
       { pid: 1, comm: 'pi', cwd: `${W}/dao-982` },
       { pid: 2, comm: 'codex', cwd: `${W}/dao-review-pr-1018` },
     ];
-    const busy = busyTrees(procs);
+    const busy = busyTrees(procs, { root: ROOT });
     for (const t of busy.trees) {
       assert.equal(judgeTreeLease({ workdir: t, procs }).verdict, 'held', `${t} 被算成在途，租约却说它空着`);
     }
