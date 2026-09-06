@@ -1287,7 +1287,12 @@ function checkOrcaRetirement() {
     for (const repo of readdirSync(ws)) {
       const d = join(ws, repo);
       if (!statSync(d).isDirectory()) continue;
-      for (const t of readdirSync(d)) trees.push(`${repo}/${t}`);
+      // 跳过点开头的项：Orca 自己在这层放 .orca-worktree-trash（回收站），它不是在途树。
+      // 2026-09-06 实咬：树清到 0 了闸还报 1 棵——判据把回收站数成了活。
+      for (const t of readdirSync(d)) {
+        if (t.startsWith('.')) continue;
+        trees.push(`${repo}/${t}`);
+      }
     }
   } catch (e) {
     // 数不出来就说没查成，不许当成「清零了」——那会让人以为可以删了
