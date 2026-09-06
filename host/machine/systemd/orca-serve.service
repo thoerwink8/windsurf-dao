@@ -42,7 +42,12 @@ StandardOutput=journal
 StandardError=journal
 # 优雅停只打主进程，让 orca 自己收掉它拥有的 Xvfb；超时才 cgroup 级 SIGKILL
 KillMode=mixed
-Restart=on-failure
+# always 不是 on-failure：运行时守护进程没有「干净退出」这种静止态，退出码 0 一样是「它没了」。
+# 2026-09-06 实咬：今天崩了三次，前两次退出码非 0 被 on-failure 拉起来了，第三次
+# 「Deactivated successfully」(status=0) 就没人管——orca 死了 5 分钟，指挥官整条链
+# fail-close 停摆，盘面上只有一条 escalate:unscanned，看不出是运行时没了。
+# 唯一该停下等人的是 exit 3（单实例锁占住 profile），由下面那行单独豁免，重启多少次都没用。
+Restart=always
 RestartPreventExitStatus=3
 RestartSec=5
 
