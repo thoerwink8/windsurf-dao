@@ -47,6 +47,7 @@
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
+| D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
 | A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。**没有建图动作**——`dao-check` 跑测试时顺手采依赖写 `map.json`，下次跑就用它裁剪；不在图里的一律照跑。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。删了不用管，跑一次就自己长回来 |
