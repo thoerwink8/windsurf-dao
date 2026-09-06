@@ -652,6 +652,11 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
   }
   if (!doc || typeof doc !== 'object') return { ok: false, unscanned: true, error: '派工结果不是 JSON（没查成）' };
   if (doc.ok === true) return { ok: true, card: doc.workerCard || '', issue: doc.issue || '' };
+  // 第四态：背压。树里已经有人在干活（租约闸），这不是失败，排队下一轮即可。
+  // 跟失败分不开的后果：每轮为「这轮先不派」开一张待拍板单，正是刚清掉的那类噪音单。
+  if (doc.busy === true) {
+    return { ok: false, busy: true, unscanned: false, error: String(doc.error || '树里有人在干活').slice(0, 200) };
+  }
   return { ok: false, unscanned: false, error: String(doc.error || '执行体报失败但没给原因').slice(0, 200) };
 }
 
@@ -675,6 +680,14 @@ export function runActions(actions, { exec, log = [] } = {}) {
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
     const r = exec(action);
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
+    // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
+    // 仍要进 failedIssues（不发「已自动派单」喜报——毕竟没派出去），但**不报帅、不开单**。
+    if (DISPATCHING_KINDS.has(action.kind) && action.issue != null && r && r.busy === true) {
+      log.push(`  这轮先不派：${(r.error || '树里有人在干活')}——排队下一轮，不报帅（背压不是失败）`);
+      failedIssues.add(String(action.issue));
+      if (action.pr != null) failedPrs.add(String(action.pr));
+      continue;
+    }
     const failed = DISPATCHING_KINDS.has(action.kind) && action.issue != null
       && (!r || (r.ok !== true) || r.dispatchFailed === true);
     if (!failed) continue;

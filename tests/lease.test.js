@@ -211,7 +211,10 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
   it('默认判据是真闸，不是空函数', async () => {
     const { src } = 切出();
     assert.match(src, /opts\.leaseCheck \|\| checkTreeLease/, '默认值被换掉，闸就等于没装');
-    assert.match(src, /import \{ checkTreeLease \} from '\.\/dispatch\/lease\.mjs'/);
+    // 只钉「checkTreeLease 来自 lease.mjs」这个意思，不钉具名导入列表的逐字形状——
+    // 钉逐字的后果实测过：同文件加一个导出（LEASE_BUSY_REASON）就把这条测试弄红，
+    // 而闸本身一点没坏。判据要盯住会出事的那件事，不是盯住代码长什么样。
+    assert.match(src, /import \{[^}]*\bcheckTreeLease\b[^}]*\} from '\.\/dispatch\/lease\.mjs'/);
   });
 });
 

@@ -31,7 +31,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { checkTreeLease } from './dispatch/lease.mjs';
+import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 
 /** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
 export const PINNED_VERSION = '0.0.282';
@@ -677,7 +677,12 @@ export function createRuntime(opts = {}) {
       throw new MirasimUnavailableError(`租约没查成，拒起会话：${lease.error}`, { workdir });
     }
     if (lease.verdict === 'held') {
-      throw new MirasimRejectedError(`租约被占，拒起会话：${lease.why}`, { workdir, holder: lease.holder });
+      // busy=true 是给调用方的**背压**标记，不是失败：树里有人在干活，下一轮再来就行。
+      // 不标它，指挥官会把「这轮先不派」当成 dispatch-failed 去开一张待拍板单——
+      // 那正是本仓刚花一整晚清掉的那种噪音单。
+      throw new MirasimRejectedError(`租约被占，拒起会话：${lease.why}`, {
+        workdir, holders: lease.holders || [], busy: true, reason: LEASE_BUSY_REASON,
+      });
     }
 
     const wire = await open();

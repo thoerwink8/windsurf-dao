@@ -1491,8 +1491,11 @@ async function cmdDispatchMirasim(args, routing, gate) {
       model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
     });
   } catch (e) {
+    // 租约被占是**背压**不是失败：树里有人在干活，排队下一轮就行。busy 原样透出去，
+    // 指挥官据此不开待拍板单（不标它就会每轮开一张噪音单，见 lease.mjs 的 LEASE_BUSY_REASON）。
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
       executor: 'mirasim', repo, branch, path: tree.path, card: cardName, agent: route.agent,
+      ...(e?.detail?.busy === true ? { busy: true, reason: e.detail.reason, holders: e.detail.holders } : {}),
     });
   }
 
@@ -5672,6 +5675,7 @@ async function cmdStartMirasim(args) {
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
       executor: 'mirasim', repo, branch, workdir, agent: route.agent,
+      ...(e?.detail?.busy === true ? { busy: true, reason: e.detail.reason, holders: e.detail.holders } : {}),
     });
   }
   emit({
