@@ -22,6 +22,11 @@ function labelNameOf(item) {
   return '';
 }
 
+/** 一张 PR 署两张单会把同一份 model/* / reviewer/* 收集两遍；同名不是歧义。 */
+function uniqueNames(names) {
+  return [...new Set(names)];
+}
+
 /**
  * 从 label 列表读出唯一的审官模型。无 IO、可复算。
  * 三态必须输出不同的话：查到一个 / 没有 reviewer/* / 有多个。
@@ -35,9 +40,9 @@ export function pickReviewer(labels) {
       error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
     };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return {
       ok: false,
@@ -68,9 +73,9 @@ export function pickModel(labels) {
   if (labels == null || !Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
   }
