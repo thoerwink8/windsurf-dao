@@ -292,14 +292,10 @@ export function validateRetryDrain(input = {}) {
   const notQueued = gated('retry-drain.queue', !inQueue, fail('not-in-queue', `PR #${pr} 不在复审队列里，不许凭空造票`), C);
   if (notQueued) return notQueued;
 
-  // 键带 head，与 rereview:<pr>@<head> / rework:<pr>@<head> 对齐。
-  // 不带 head 的后果实测过（2026-09-06，PR #909）：drain 因为**别的 bug**（建树漏传 repo 选择符）
-  // 试满 3 次，那个 bug 修好之后计数仍冻在 3——没有任何东西会重置它。于是每轮判 exhausted，
-  // 转出去的 open-issue 又被去重吃掉，整件事**一声不响地永久卡死**：票每轮重写，从没人消费。
-  // 新 head = 工人推了新东西 = 新局面，理应重新给它三次机会；三兄弟里只有 drain 漏了这一条。
-  // 拿不到 head 时退回旧键：那是「没查成」，不该顺手改变它的行为（此时仍是每 PR 一个计数）。
-  const headOid = typeof input.head === 'string' && input.head.trim() ? input.head.trim() : null;
-  const key = headOid ? `pr:${pr}@${headOid}` : `pr:${pr}`;
+  // 键带 head，与 rereview:<pr>@<head> / rework:<pr>@<head> 对齐。走 drainLedgerKey，
+  // 不在 decide / execute 各写一份——#909 修了 decide 侧、漏了 attach-reviewer 写侧，
+  // 账记到另一个格子，票还在队列却永远走不进 retry-drain。
+  const key = drainLedgerKey(pr, input.head);
   const ledger = input.ledger && typeof input.ledger === 'object' ? input.ledger : {};
   const prev = ledger[key];
   const never = gated(
@@ -406,6 +402,15 @@ export function threeQuestionsFor(reason, why) {
 
 export function openIssueDedupKey(reason, target) {
   return `${String(reason || '')}+${String(target || '')}`;
+}
+
+/** drain 账本键：有 head 写 pr:<pr>@<head>，拿不到退回 pr:<pr>（没查成，不猜）。
+ *  decide 与 execute 必须走这一个门面——#909 修了 decide 侧、漏了 attach-reviewer 写侧，
+ *  账记到另一个格子，票还在队列却永远走不进 retry-drain。 */
+export function drainLedgerKey(pr, head) {
+  const p = pr == null ? '' : String(pr).trim();
+  const headOid = typeof head === 'string' && head.trim() ? head.trim() : null;
+  return headOid ? `pr:${p}@${headOid}` : `pr:${p}`;
 }
 
 /**

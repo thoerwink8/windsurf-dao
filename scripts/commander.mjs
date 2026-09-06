@@ -35,7 +35,7 @@ import {
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey,
+  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
@@ -43,7 +43,7 @@ import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOr
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 
@@ -403,9 +403,11 @@ function execAction(action, { state, dryRun, log }) {
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
       const r = runOrShow(cmd, { dryRun, say, why: action.why });
       // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
+      // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
+      // #909 修了 decide 侧、漏了这一处写侧：账记到 pr:N，decide 去看 pr:N@head，永远 never-attempted。
       if (action.pr != null) {
         state.drainLedger = state.drainLedger || {};
-        const key = `pr:${action.pr}`;
+        const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
         const prev = state.drainLedger[key];
         state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
       }
