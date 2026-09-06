@@ -28,16 +28,16 @@ description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全�
 
 ## 帅窗 vs 执行面（硬规矩）
 
-主会话红线精神保留：**帅窗禁止 git 写**（`commit` / `push` 等）。快路例外见 `host/skills/dispatch/SKILL.md`「主会话红线」旁指针——开 PR 等 GitHub 写动作走 **marshal**，不算「手碰 git」。
+主会话红线按**位置**禁，不按角色禁（#1093）：**主树禁 git 写**；**帅窗在自己 worktree 里可以 `commit`/`push`**。开 PR 等 GitHub 写动作走 **marshal**。**判定权永远不归帅位**——帅窗自审自合仍禁；**帅位不得合并 reviews=0 的 PR**。
 
 **执行面可以是后台子代理。** 帅窗（当前协调会话，含 Cursor Multitask）写完任务书后，直接派后台子代理干活。不要把「请用户新开 Agent 会话」当成唯一或必经路径。
 
 | 谁 | 做什么 | 禁止 |
 | --- | --- | --- |
 | **执行面**（后台子代理；兜底才是新会话/新终端） | `checkout -b` → 改码 → `dao-check` → `push` | **`gh pr create`**、worker 开 PR、裸 `gh` 退路 |
-| **帅窗** | 写任务书、派执行面；`gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | 自己动手 git 写（commit/push）；**裸 `gh`**（必须 marshal） |
+| **帅窗** | 写任务书、派执行面；自己 worktree 里 `commit`/`push`；`gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | **主树上 git 写**；**自审自合**；**合并 reviews=0 的 PR**；**裸 `gh`**（必须 marshal） |
 
-帅窗自己仍然禁止 `git commit` / `git push`——即使用户催，也不在帅窗手碰 git；派后台子代理当执行面去做。`create` / `ready` / `comment` / `merge` 留在帅窗走 marshal。不要把用户支去新开一个聊天窗口。
+帅窗在自己 worktree 里可以 `git commit` / `git push`（#1093 B1a）。**主树仍禁 git 写**（防的是共用主树 `git add -A` 卷走另一位帅的在途改动）。`create` / `ready` / `comment` / `merge` 留在帅窗走 marshal。**判定权永远不归帅位**：有独立跨厂审官 APPROVED 之前不许合。**帅位不得合并 reviews=0 的 PR。** 不要把用户支去新开一个聊天窗口。
 
 ## 流程（按序）
 
@@ -99,7 +99,7 @@ node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
 
 PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致）。**不写 issue 号、不署名 issue**——本路没有 issue；关单脚本不适用。作者应为 **`dao-marshal[bot]`**。
 
-- 开出 draft 后，帅窗只读 diff / CI / `dao-check` 结果，不在帅窗补 commit / push。
+- 开出 draft 后，帅窗只读 diff / CI / `dao-check` 结果。补码在自己 worktree 里 `commit`/`push`，**主树仍禁 git 写**。
 - 执行面自查通过、帅窗确认验收后：`marshal -- pr ready <N>`。
 - **用户在触发快路时已拍板要做的活** ⇒ 执行面 push 后，帅窗 marshal 开 draft → 自查/`dao-check` → ready → **终审通过即** `pr merge --squash --delete-branch`，**不要**再问用户「要不要合」/「要合的话说一声」。
 - **例外才停手问用户**：CI 红、本单 `dao-check` 新红、体系类、或用户当轮明说「先别合」。
@@ -122,7 +122,7 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 ## 不要做的
 
 - 不要为快路加 hook、dao-check 新项、租约文件、接力状态。
-- 不要在帅窗里 `git commit` / `git push`；要写 git 就派执行面（后台子代理）。
+- 不要在**主树**里 `git commit` / `git push`；帅窗在自己 worktree 里可以写。不要自审自合，不要合并 reviews=0 的 PR。
 - 不要把用户支去新开聊天当必经路径；有子代理就派子代理。
 - 不要在执行面开 PR（含 worker / 裸 `gh`）；不要用裸 `gh` 做 create/ready/comment/merge。
 - 不要把体系类改动包装成「极速模式」绕过 manual merge 与 PR 三问。
