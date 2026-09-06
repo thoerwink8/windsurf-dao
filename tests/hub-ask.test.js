@@ -254,18 +254,23 @@ describe('指挥官：待拍板走卡片，普通播报仍是纯文字', () => {
   });
 
   it('escalate 开出单号后才 hubAskOnce', () => {
-    const i = src.indexOf('function escalate(');
-    const fn = src.slice(i, src.indexOf('function escalateKey'));
+    const i = src.indexOf('function escalate(action');
+    const fn = src.slice(i, src.indexOf('function reconcileEscalations'));
     assert.match(fn, /askEscalateCard/);
     assert.match(fn, /opened\.ok && opened\.number/);
-    assert.match(fn, /String\(st\.out\)\.trim\(\) === 'OPEN'[\s\S]*askEscalateCard/);
+    // 已有 OPEN 单不重开，但**照样要发卡**。#1063 把「已有 OPEN」拆成了两条出口
+    // （对象已登记 = noop、同因新对象 = append），两条都得发——漏一条，机器主动问用户就哑一半。
+    assert.match(fn, /verdict === 'noop'[\s\S]*?askEscalateCard/);
+    assert.match(fn, /verdict === 'append'[\s\S]*?askEscalateCard/);
+    // 账本没键、gh 却搜到已有单那条路同样要发卡。
+    assert.match(fn, /if \(existing\)[\s\S]*?askEscalateCard/);
     assert.equal(/hubOnce\(\{[\s\S]*esc:/.test(fn), false);
   });
 
   it('首次发卡失败、下一轮同 OPEN 单重试，不重开', async () => {
-    const { escalate, escalateKey } = await import(toUrl(path.join(ROOT, 'scripts', 'commander.mjs')));
+    const { escalate, escalateDedupKey } = await import(toUrl(path.join(ROOT, 'scripts', 'commander.mjs')));
     const action = { kind: 'escalate', reason: 'missing-labels', why: '缺审官标', issue: 901 };
-    const key = escalateKey(action);
+    const key = escalateDedupKey(action); // #1063：键按原因，不再带对象号
     const state = { escalateLedger: {}, hubSeen: {} };
     const sends = [];
     const opens = [];
