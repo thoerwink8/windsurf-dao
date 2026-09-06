@@ -45,6 +45,7 @@ import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
@@ -69,7 +70,7 @@ const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projec
 // 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
 // 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
 const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
-const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
+const HUB_DEDUP_MS = OPEN_ISSUE_CARD_DEDUP_MS; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
 const nowIso = () => new Date().toISOString();
@@ -346,6 +347,7 @@ function buildSituation({ state } = {}) {
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
+    hubSeen: (state && state.hubSeen) || {},
     commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
     routingModels,
     routingModelRecords,
@@ -631,7 +633,17 @@ function execMarkExhausted(action, { dryRun, say }) {
   return { ok: true, labeled: true, commented: true };
 }
 
-function execOpenIssue(action, { state, dryRun, say }) {
+function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
+  // 账本已有 OPEN：只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+  // 下一轮 decide 仍会产 existing 动作，这里再走 askEscalateCard。
+  if (action.existing && action.number) {
+    const key = openIssueDedupKey(action.reason, action.target);
+    say(`  转单已在 #${action.number}（账本查重，不重开）`);
+    askEscalateCard({
+      state, key, number: action.number, action, dryRun, say, send,
+    });
+    return { ok: true, number: action.number, key, existing: true };
+  }
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
   const planned = planOpenIssueCmd({
@@ -656,7 +668,7 @@ function execOpenIssue(action, { state, dryRun, say }) {
   say(`  转单开了 #${number || '?'}`);
   if (number) {
     askEscalateCard({
-      state, key: planned.key, number, action, dryRun: false, say,
+      state, key: planned.key, number, action, dryRun: false, say, send,
     });
   }
   return { ok: true, number, key: planned.key };
@@ -1507,4 +1519,4 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalate, escalateKey, scanStall };
+export { buildSituation, situationHealth, escalate, escalateKey, execOpenIssue, scanStall };

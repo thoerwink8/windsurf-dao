@@ -800,13 +800,16 @@ export function decide(situation = {}) {
   const candidates = collectCandidates(situation);
   const actions = [];
   const openLedger = situation.openIssueLedger || {};
+  const hubSeen = situation.hubSeen || {};
+  const nowMs = Date.parse(situation.at || '') || 0;
   for (const cand of candidates) {
     const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
     const missing = needs.filter((s) => !situation[s]?.scanned);
     const { _needs, ...clean } = cand;
     if (missing.length === 0) {
-      // #971：能转成 open-issue 的 escalate 当场转；已开过返回 null；转不成保持原动作。
-      const next = escalateToOpenIssue(clean, { ledger: openLedger });
+      // #971：能转成 open-issue 的 escalate 当场转。账本只免重开，不免发卡：
+      // 已有 OPEN 且没有成功 hubSeen 戳时，仍产 existing 动作去重试卡。
+      const next = escalateToOpenIssue(clean, { ledger: openLedger, hubSeen, now: nowMs });
       if (next) actions.push(next);
     }
     // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条

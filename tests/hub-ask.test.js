@@ -315,6 +315,78 @@ describe('指挥官：待拍板走卡片，普通播报仍是纯文字', () => {
     assert.equal(sends.length, 3, '已成功发送后 6h 内不重复卡');
   });
 
+  it('open-issue 开单成功 + 首次发卡失败 → 下一轮不重开、会重试卡；成功后 6h 内不再发', async () => {
+    const { decide, WAKE_LIMIT } = await import(toUrl(path.join(ROOT, 'scripts', 'lib', 'commander-core.mjs')));
+    const { execOpenIssue } = await import(toUrl(path.join(ROOT, 'scripts', 'commander.mjs')));
+    const sit = {
+      github: { scanned: true, issues: [], prs: [] },
+      orca: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [] },
+      prReviews: { scanned: true, byPr: {} },
+      stall: { scanned: true, strikes: { term_q: { strikes: 2 } } },
+      wakeCounts: { 'stall:term_q': WAKE_LIMIT },
+      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+      routingModels: ['grok-4.6'],
+      healthRedModels: [],
+      at: '2026-09-05T12:00:00.000Z',
+    };
+
+    const first = decide(sit);
+    const created = first.actions.filter((a) => a.kind === 'open-issue');
+    assert.equal(created.length, 1, JSON.stringify(first.actions));
+    assert.equal(created[0].existing, undefined);
+    assert.equal(created[0].reason, 'wake-exhausted');
+    assert.equal(created[0].term, 'term_q');
+
+    const afterOpen = {
+      ...sit,
+      openIssueLedger: { 'wake-exhausted+term_q': { at: '2026-09-05T10:00:00.000Z', number: 900 } },
+    };
+    const second = decide(afterOpen);
+    const retry = second.actions.filter((a) => a.kind === 'open-issue');
+    assert.equal(retry.length, 1, '开单成功但卡没送到，下一轮必须重试卡');
+    assert.equal(retry[0].existing, true);
+    assert.equal(retry[0].number, 900);
+    assert.equal(second.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);
+
+    const sends = [];
+    let sendOk = false;
+    const send = (fields) => {
+      sends.push(fields);
+      return sendOk ? { ok: true, messageId: 'om_open_retry' } : { ok: false, error: '没送进群：飞书 500' };
+    };
+    const state = { hubSeen: {}, openIssueLedger: afterOpen.openIssueLedger };
+    const say = () => {};
+
+    const failed = execOpenIssue(retry[0], { state, dryRun: false, say, send });
+    assert.equal(failed.ok, true);
+    assert.equal(failed.existing, true);
+    assert.equal(failed.number, 900);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].number, 900);
+    assert.equal(state.hubSeen['esc:wake-exhausted+term_q'], undefined, '失败不许盖去重戳');
+    assert.equal(state.openIssueLedger['wake-exhausted+term_q'].number, 900, '不重开');
+
+    const third = decide({ ...afterOpen, hubSeen: state.hubSeen });
+    const retryAgain = third.actions.filter((a) => a.kind === 'open-issue');
+    assert.equal(retryAgain.length, 1, '仍无成功戳，继续重试');
+    assert.equal(retryAgain[0].existing, true);
+
+    sendOk = true;
+    const okSend = execOpenIssue(retryAgain[0], { state, dryRun: false, say, send });
+    assert.equal(okSend.ok, true);
+    assert.equal(sends.length, 2);
+    assert.equal(typeof state.hubSeen['esc:wake-exhausted+term_q'], 'string', '成功才盖去重戳');
+
+    const fourth = decide({
+      ...afterOpen,
+      hubSeen: state.hubSeen,
+      at: '2026-09-05T12:30:00.000Z',
+    });
+    assert.equal(fourth.actions.filter((a) => a.kind === 'open-issue').length, 0, '成功后 6h 内不再发');
+    assert.equal(sends.length, 2);
+  });
+
   it('sendHubAsk 认回执不认退出码', () => {
     const fn = src.slice(src.indexOf('function sendHubAsk'), src.indexOf('function hubAskOnce'));
     assert.match(fn, /messageId/);
