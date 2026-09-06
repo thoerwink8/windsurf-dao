@@ -6,17 +6,19 @@
 //
 // 用法：
 //   node scripts/mirasim-sessions.mjs            每行一个会话 JSON
-//   node scripts/mirasim-sessions.mjs --count    只打条数
+//   node scripts/mirasim-sessions.mjs --count    只打协议帧（含 count），不打会话行
 //
-// 退出码：0 查成（0 条也算查成）/ 2 没查成（连不上 / 拿不到 token / 超时）。
-// 「0 条」与「没查成」必须分得开——前者 exit 0 且打印 0，后者 exit 2 并说清为什么。
+// 退出码：0 查成（0 条也算查成）/ 2 没查成（连不上 / 拿不到 token / 超时 / 帧形状不对）。
+// 「0 条」与「没查成」必须分得开——前者 exit 0 且先打一条 type=sessions 的协议帧（count:0），
+// 后者 exit 2 并说清为什么。零输出、sessions 不是数组、坏 JSON 一律没查成，不许折成空名单。
 //
 // 端口与 token：mirasim 本地 API 把 token 写在 ~/.mirasim/run/local-<port>.token。
 // 端口默认 4316，可用 MIRASIM_PORT 覆盖。
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.MIRASIM_PORT || 4316);
 const RUN_DIR = process.env.MIRASIM_RUN_DIR || join(homedir(), '.mirasim', 'run');
@@ -25,6 +27,18 @@ const TIMEOUT_MS = Number(process.env.MIRASIM_LS_TIMEOUT_MS || 8000);
 function bail(why) {
   console.error(`mirasim 会话没查成：${why}`);
   process.exit(2);
+}
+
+/** sessions 帧形状闸。不是数组（含 null）= 没查成，不许折成 []。其它 type 跳过。 */
+export function acceptSessionsFrame(f) {
+  if (!f || f.type !== 'sessions') return { skip: true };
+  if (!Array.isArray(f.sessions)) {
+    return {
+      ok: false,
+      why: `sessions 帧 sessions 不是数组（${f.sessions == null ? 'null' : typeof f.sessions}）——没查成，不许折成空名单`,
+    };
+  }
+  return { ok: true, list: f.sessions };
 }
 
 function readToken() {
@@ -62,18 +76,25 @@ async function main() {
     };
     ws.onmessage = (ev) => {
       let f;
-      try { f = JSON.parse(ev.data); } catch { return; }
-      if (f && f.type === 'sessions') {
+      try { f = JSON.parse(ev.data); } catch {
         clearTimeout(timer);
-        try { ws.close(); } catch { /* 已经拿到数据，关不掉不影响 */ }
-        resolve({ ok: true, list: Array.isArray(f.sessions) ? f.sessions : [] });
+        try { ws.close(); } catch { /* 已经判定形状不对 */ }
+        resolve({ ok: false, why: 'sessions 帧不是 JSON' });
+        return;
       }
+      const accepted = acceptSessionsFrame(f);
+      if (accepted.skip) return;
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* 已经拿到数据，关不掉不影响 */ }
+      resolve(accepted.ok ? { ok: true, list: accepted.list } : { ok: false, why: accepted.why });
     };
     ws.onopen = () => ws.send(JSON.stringify({ type: 'listSessions' }));
   });
 
   if (!sessions.ok) bail(sessions.why);
-  if (countOnly) { console.log(sessions.list.length); return; }
+  // 协议帧先打：scanSessions 靠它区分「查成且空」和「零输出没查成」。
+  console.log(JSON.stringify({ type: 'sessions', count: sessions.list.length }));
+  if (countOnly) return;
   for (const s of sessions.list) {
     // 只输出观测器要的字段：key / title / state / cwd（+ 有就带上活动时间）。
     console.log(JSON.stringify({
@@ -88,4 +109,6 @@ async function main() {
   }
 }
 
-main().catch((e) => bail(String(e?.message || e)));
+const HERE = fileURLToPath(import.meta.url);
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
+if (isDirectRun) main().catch((e) => bail(String(e?.message || e)));

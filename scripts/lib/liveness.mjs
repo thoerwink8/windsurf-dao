@@ -16,6 +16,8 @@
 //
 // 驱动适配器只需回答一句话：这个会话上次真动是什么时候（外加驱动自己知道的终态）。
 
+import { shouldRestartReviewer } from './session-reconcile.mjs';
+
 /** 默认静默阈值：45 分钟。够长到不误伤长思考/长跑测试，够短到不至于像今天那样躺 10 小时。 */
 export const DEFAULT_SILENCE_MS = 45 * 60 * 1000;
 
@@ -161,18 +163,35 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
 /**
  * 静默会话按角色分流。不在这里直接动手，只给动作意图，执行归调用方。
  *
- *   审官静默 ⇒ 判死重起（走复审待办队列，一 PR 一审官的闸在那边）
+ *   审官静默 ⇒ 先问目标 PR 还开着吗（#1043 现场 B / shouldRestartReviewer）：
+ *     已合并/关闭 → skip，不重起不报警；还开着 / 名单没查成 → restart-reviewer
  *   其余静默 ⇒ 先推一句「继续」（#1056：工人没死，是跑完一轮在等下一句话）
  *
  * 垫片 `nudge-stalled.mjs` 退役后，这一档就是对账循环的差集动作入口。
  * 推不动才由调用方升到重派；本函数不越级。
  */
-export function routeSilent(session) {
-  const label = String(session?.label || '');
+export function routeSilent(session, { openPrs } = {}) {
+  const label = String(session?.label || session?.title || '');
   const isReviewer = /审官|reviewer/i.test(label);
-  return isReviewer
-    ? { action: 'restart-reviewer', why: `审官会话静默：${session?.why || ''}` }
-    : { action: 'nudge', why: `会话静默：${session?.why || ''}——先推一句继续，推不动才重派` };
+  if (!isReviewer) {
+    return { action: 'nudge', why: `会话静默：${session?.why || ''}——先推一句继续，推不动才重派` };
+  }
+  // #1056 / #1043 现场 B：已合并/关闭的 PR 不重起。openPrs 没给 = 名单没查成，
+  // shouldRestartReviewer 按现场 B 仍可报警（漏报一次比给已合并 PR 重起审官便宜）。
+  const gate = shouldRestartReviewer({
+    title: label,
+    cwd: session?.cwd || session?.workdir || session?.worktreeId,
+    key: session?.key || session?.id,
+  }, { openPrs });
+  if (!gate.restart) {
+    return { action: 'skip', why: gate.why, pr: gate.pr || null };
+  }
+  return {
+    action: 'restart-reviewer',
+    why: `审官会话静默：${session?.why || ''}`,
+    pr: gate.pr || null,
+    unscanned: gate.unscanned || false,
+  };
 }
 
 // ── 推进签名：把「有输出」和「有推进」分开 ────────────────────────────────────

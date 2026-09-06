@@ -212,10 +212,22 @@ function scanSessions() {
     };
   }
   const items = [];
+  let sawFrame = false;
   for (const line of String(r.stdout || '').split(/\r?\n/)) {
     const t = line.trim();
     if (!t.startsWith('{')) continue;
-    try { items.push(JSON.parse(t)); } catch { /* 不是会话行，跳过 */ }
+    let obj;
+    try { obj = JSON.parse(t); } catch {
+      return { scanned: false, error: '会话名单有坏 JSON——观测面没查成，不许折成空名单' };
+    }
+    if (obj && obj.type === 'sessions') {
+      sawFrame = true;
+      continue;
+    }
+    items.push(obj);
+  }
+  if (!sawFrame) {
+    return { scanned: false, error: '会话名单没打 type=sessions 协议帧（零输出/坏形状）——观测面没查成，不许折成空名单' };
   }
   return { scanned: true, items };
 }

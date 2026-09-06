@@ -1733,3 +1733,34 @@ describe('对账循环 scan 真的接进态势', () => {
     assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
   });
 });
+
+describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const prev = process.env.DAO_MIRASIM_LS;
+  const restore = () => {
+    if (prev === undefined) delete process.env.DAO_MIRASIM_LS;
+    else process.env.DAO_MIRASIM_LS = prev;
+  };
+
+  it('零输出脚本 exit 0 → scanned:false（审官判别实验）', async () => {
+    const { scanSessions } = await MOD();
+    const empty = path.join(__dirname, 'fixtures', 'unit-restart', 'empty', '.gitkeep');
+    process.env.DAO_MIRASIM_LS = empty;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, '零输出不许当成查成且空');
+      assert.match(String(r.error || ''), /没查成|协议帧|零输出/);
+    } finally { restore(); }
+  });
+
+  it('打了 type=sessions 协议帧且 0 行会话 → scanned:true items=[]（查成且空）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-ok-empty.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, true);
+      assert.deepEqual(r.items, []);
+    } finally { restore(); }
+  });
+});

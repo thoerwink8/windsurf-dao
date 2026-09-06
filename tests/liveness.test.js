@@ -113,6 +113,44 @@ describe('活性：扫一轮的三态可辨', () => {
   });
 });
 
+describe('routeSilent：已合并 PR 不重起审官（#1056 / #1043 现场 B）', () => {
+  it('PR #1025 已不在开放名单 → skip，不是 restart-reviewer', async () => {
+    const S = await LOAD;
+    const s = {
+      label: '审官', title: '按审官任务书审 PR #1025',
+      cwd: '/x/dao-review-pr-1025', why: '静默',
+    };
+    const r = S.routeSilent(s, { openPrs: [1018] });
+    assert.equal(r.action, 'skip', '已合并 PR 不许重起');
+    assert.notEqual(r.action, 'restart-reviewer');
+  });
+
+  it('PR 还开着 → 仍 restart-reviewer（判别力：不是把审官静默一律掐了）', async () => {
+    const S = await LOAD;
+    const s = {
+      label: '审官', title: '按审官任务书审 PR #1018',
+      cwd: '/x/dao-review-pr-1018', why: '静默',
+    };
+    const r = S.routeSilent(s, { openPrs: [1018] });
+    assert.equal(r.action, 'restart-reviewer');
+    assert.equal(r.pr, 1018);
+  });
+
+  it('开放名单没给 → 仍可报警（现场 B 的 fail 方向）', async () => {
+    const S = await LOAD;
+    const s = { label: '审官', title: '按审官任务书审 PR #1025', why: '静默' };
+    const r = S.routeSilent(s);
+    assert.equal(r.action, 'restart-reviewer');
+    assert.equal(r.unscanned, true);
+  });
+
+  it('工人静默不走审官闸', async () => {
+    const S = await LOAD;
+    const r = S.routeSilent({ label: '工人 ISSUE-#885', why: '静默' }, { openPrs: [] });
+    assert.equal(r.action, 'nudge');
+  });
+});
+
 describe('会话名：卡名压过终端标题（实咬：9 个静默审官一个都没换成人）', () => {
   it('有卡名时用卡名，不用被 CLI 盖成 shell 提示符的标题', async () => {
     const S = await LOAD;

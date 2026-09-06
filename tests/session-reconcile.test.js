@@ -224,3 +224,27 @@ describe('审官静默：先问 PR 还开着吗（现场 B）', () => {
     assert.equal(r.unscanned, true);
   });
 });
+
+describe('sessions 帧形状：null / 非数组 = 没查成，不许折成空名单', () => {
+  const SESS = import('file://' + path.join(__dirname, '..', 'scripts', 'mirasim-sessions.mjs').replace(/\\/g, '/'));
+
+  it('{type:sessions, sessions:null} → ok:false', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({ type: 'sessions', sessions: null });
+    assert.equal(r.ok, false);
+    assert.match(r.why, /不是数组/);
+  });
+
+  it('{type:sessions, sessions:[]} → ok:true 空名单（查成且空）', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({ type: 'sessions', sessions: [] });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.list, []);
+  });
+
+  it('其它 type 跳过，不当成 sessions 帧', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({ type: 'state' });
+    assert.equal(r.skip, true);
+  });
+});
