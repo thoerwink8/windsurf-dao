@@ -304,7 +304,13 @@ describe('dao 审官与完工', () => {
       });
 
     const FAKE_GH3 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
-    const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--dry-run'], {
+    // 下面这几条测的是 **orca 那条脊**的输出契约（files / mergeable / oneReviewerGate /
+    // 嵌套调 reviewer-create）。2026-09-06 默认执行体翻成 mirasim 之后必须显式 `--executor orca`
+    // 点名，否则它们测的是 mirasim 路——那条路的返回形状本来就不同（不嵌套调 reviewer-create），
+    // 于是红的是「测试钉错了路」而不是「代码坏了」。
+    // mirasim 路自己的契约在 tests/mirasim-reviewer.test.js 与 tests/dao-dispatch-gate.test.js。
+    // orca 脊整体删除时，这几条跟着删。
+    const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--executor', 'orca', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pPick = (() => { try { return JSON.parse((cliPick.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -314,7 +320,7 @@ describe('dao 审官与完工', () => {
           'CLI reviewer-create --pr 42 --dry-run 打印出自读选型  →  ' + `status=${cliPick.status} ${JSON.stringify(pPick)} stderr=${cliPick.stderr}`);
       });
 
-    const cliNone = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '43', '--dry-run'], {
+    const cliNone = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '43', '--executor', 'orca', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pNone = (() => { try { return JSON.parse((cliNone.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -324,7 +330,7 @@ describe('dao 审官与完工', () => {
           'CLI reviewer-create 没有 reviewer/* → 非 0 且话面是「没有」  →  ' + `status=${cliNone.status} ${JSON.stringify(pNone)}`);
       });
 
-    const cliMany = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '44', '--dry-run'], {
+    const cliMany = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '44', '--executor', 'orca', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pMany = (() => { try { return JSON.parse((cliMany.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -350,7 +356,7 @@ describe('dao 审官与完工', () => {
       assert.ok(wdMiss.status !== 0 && /--pr/.test(String(pWdMiss.error || wdMiss.stderr || '')), 'worker-done 缺 --pr → 非零  →  ' + JSON.stringify(pWdMiss));
     });
 
-    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--dry-run', '--executor', 'orca'], {
+    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--executor', 'orca', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -365,7 +371,7 @@ describe('dao 审官与完工', () => {
         'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
       });
 
-    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--dry-run', '--executor', 'orca'], {
+    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--executor', 'orca', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWdRework = (() => { try { return JSON.parse((cliWdRework.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();

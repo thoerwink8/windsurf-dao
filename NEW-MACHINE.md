@@ -375,6 +375,10 @@ orca account add --help
 # 卡死发现 = 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
 #   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
 #   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
+# 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
+#   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
+#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
+#   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。

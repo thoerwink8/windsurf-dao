@@ -294,6 +294,9 @@ function runOneSuite(dir, f) {
 
 function changedFilesForAffected() {
   const out = new Set();
+  // 「新增」要单独记：采样那一刻不存在的文件，地图里不可能有它的依赖信息。
+  // 按目录扫的测试（timer-armed 扫 host/machine/systemd/*.timer）认得新文件，地图不认 ⇒ 会漏跑。
+  const added = new Set();
   const run1 = (args) => {
     const r = spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', windowsHide: true });
     return r.status === 0 ? (r.stdout || '') : null;
@@ -311,6 +314,9 @@ function changedFilesForAffected() {
   if (base) {
     const committed = run1(['diff', '--name-only', `${base}...HEAD`]);
     if (committed != null) { scanned = true; for (const l of committed.split('\n')) if (l.trim()) out.add(l.trim()); }
+    // 已提交那半里哪些是新增：--diff-filter=A
+    const addedCommitted = run1(['diff', '--name-only', '--diff-filter=A', `${base}...HEAD`]);
+    if (addedCommitted != null) for (const l of addedCommitted.split('\n')) if (l.trim()) added.add(l.trim());
   }
   const dirty = run1(['status', '--porcelain', '-uall']);
   if (dirty != null) {
@@ -318,11 +324,17 @@ function changedFilesForAffected() {
     for (const l of dirty.split('\n')) {
       const p = l.slice(3).trim();
       if (!p) continue;
+      const xy = l.slice(0, 2);
       // 重命名形态 `old -> new`：两边都算改动
       for (const seg of p.split(' -> ')) if (seg.trim()) out.add(seg.trim().replace(/^"|"$/g, ''));
+      // `??` 未跟踪、`A ` 已暂存的新增：都是「采样时不存在」
+      if (xy === '??' || xy[0] === 'A') {
+        const last = p.split(' -> ').pop().trim().replace(/^"|"$/g, '');
+        if (last) added.add(last);
+      }
     }
   }
-  return { scanned, files: [...out] };
+  return { scanned, files: [...out], added: [...added] };
 }
 
 /** 返回本轮要跑的测试文件名（不带 tests/ 前缀，与调用方一致）。 */
@@ -331,13 +343,13 @@ function selectSuites(allSuites) {
   // `--full` 在它之上还打开要出网的那几项（帅位本地用）。CI 不该顺带被扩检查面。
   if (process.argv.includes('--full') || process.argv.includes('--all-tests')) return allSuites;
   const all = allSuites.map(f => `tests/${f}`);
-  const { scanned, files } = changedFilesForAffected();
+  const { scanned, files, added } = changedFilesForAffected();
   if (!scanned) {
     green('影响面没算成（git 读不到）——按全量跑，不是「没有改动」');
     return allSuites;
   }
   const map = readImpactMap();
-  const r = affectedTests({ map, changed: files, allTests: all });
+  const r = affectedTests({ map, changed: files, allTests: all, added });
   if (r.mode === 'full') {
     green(`影响面：全量（${r.why}）`);
     return allSuites;

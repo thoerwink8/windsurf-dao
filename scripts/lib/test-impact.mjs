@@ -79,6 +79,7 @@ export function buildMap({ entries, head, now = new Date() }) {
  *
  * 四条判定，顺序即优先级：
  *  ① 改动落在**兜底面**（下面 ALWAYS_FULL）⇒ 全量，因为影响面算不出来
+ *  ①' **本次新增的非测试文件 ⇒ 也全量**（采样那一刻它还不存在，没有任何依赖信息）
  *  ② 改的就是某个测试文件本身 ⇒ 跑它
  *  ③ 图里有测试碰过这个文件 ⇒ 跑那些测试
  *  ④ **图里根本没有这套测试 ⇒ 也跑**（没有依赖信息就不许判它无关）
@@ -87,6 +88,14 @@ export function buildMap({ entries, head, now = new Date() }) {
  * 靠另一条红项提醒人去重建地图来兜——**把安全性押在人会不会照做上**。
  * 现在方向反过来：不知道就跑。代价是新机第一次全量（本来就该），换来的是
  * 地图彻底不需要维护——没有建图动作、没有健康闸、没有那 110 秒的税。
+ *
+ * ①' 是同一天当场咬出来的、跟 ④ 同一个道理的另一半（主语从「测试」换成「源文件」）：
+ * 我新加了 `host/machine/systemd/dao-nudge-stalled.timer`，而 `timer-armed.test.js` 是
+ * **按目录扫** `host/machine/systemd/*.timer` 的——地图里记的却是采样那一刻读到的那几个
+ * 具体文件名，新文件不在其中 ⇒ 那套测试没被选中 ⇒ **静默漏跑**。
+ * 判据只认「本次新增」，不认「在图里查不到」：一个早就存在、却没有任何测试碰过的文件
+ * （README.md 之类）算出 0 套是对的；而采样时还不存在的文件，是真的没有依据。
+ * 代价：新增一个源文件那次全量跑一遍，跑完它就进图了。低频，换的是不漏。
  *
  * 返回 `{ mode:'full'|'affected', tests:[...], why }`——**永远不返回空集加 mode:'affected'**
  * 而不说明理由：静默跑 0 个测试与「查过没事」在输出上必须分得开。
@@ -99,7 +108,7 @@ export const ALWAYS_FULL = [
   /^\.github\/workflows\//,
 ];
 
-export function affectedTests({ map, changed, allTests = [] }) {
+export function affectedTests({ map, changed, allTests = [], added = [] }) {
   const tests = new Set();
   const changedList = (changed || []).filter(Boolean);
   if (changedList.length === 0) {
@@ -109,6 +118,11 @@ export function affectedTests({ map, changed, allTests = [] }) {
     if (ALWAYS_FULL.some((re) => re.test(f))) {
       return { mode: 'full', tests: [...allTests], why: `${f} 落在兜底面（影响面算不出来）` };
     }
+  }
+  // ①' 新增的非测试文件：采样时它还不存在，按目录扫的测试认得它、地图却不认。
+  const newSrc = (added || []).filter(Boolean).filter((f) => !/\.test\.(js|mjs|cjs)$/.test(f));
+  if (newSrc.length) {
+    return { mode: 'full', tests: [...allTests], why: `新增文件 ${newSrc[0]}${newSrc.length > 1 ? ` 等 ${newSrc.length} 个` : ''}——采样时还不存在，没有依赖信息` };
   }
   if (!map || map.version !== MAP_VERSION || !map.entries) {
     return { mode: 'full', tests: [...allTests], why: '没有可用的影响地图（没查成，按全量走）' };
