@@ -222,8 +222,8 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
   ```bash
   ls ~/.pi/agent/extensions/go-fallback.ts ~/.pi/agent/extensions/go-fallback-core.mjs   # 都在即生效（pi 每次启动扫 extensions/ 目录）
   ```
-- 行为：只在主通道（`opencode-go`）上动作；命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连后 `pi.setModel` + followUp 续跑，会话上下文完整保留。直连凭据缺失时明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
-- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARY`（主通道，默认 `opencode-go`）、`PI_GO_FALLBACK_PROVIDER`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。
+- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连 DeepSeek 前必须探余额，402 / 没钱不算降级、明确报错。直连凭据缺失时同样明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
 - 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
   ```bash
   node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景

@@ -1440,7 +1440,7 @@ function mirasimRouteOrFail(model, mirasimPolicy) {
  * 收到 accepted 就返回，本来就是异步的，再套一层队列只是多一个失败面。
  * 会话即卡：观察面是用户自己的 Mirasim 客户端直连本服务器（#880 拍板）。
  */
-async function cmdDispatchMirasim(args, routing) {
+async function cmdDispatchMirasim(args, routing, gate) {
   assertMirasimNoTask(args, 'dispatch');
   // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
@@ -1494,6 +1494,39 @@ async function cmdDispatchMirasim(args, routing) {
     });
   }
 
+  // merge-policy 必须落账本：审官侧 lookupReviewerMergePolicy 按 flag > ledger > comment >
+  // fallback('auto') 恢复。不写这条，审官对每张单都拿 fallback 的 auto——**显式派成 manual
+  // 的单会被自动合并**（#886 审官第 4 条明令不许硬编码 auto，fallback 虽有 source 标注但结果一样）。
+  // 复用 orca 那条脊同一个写口，字段对齐：审官按 job.dispatch + identity=工人 + issue_number 找。
+  let ledger = null;
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    ledger = writeJobDispatch({
+      ...ctx,
+      ts: beijingIsoFrom(new Date()),
+      jobId: dispatchJobId(sess.sessionKey),
+      model: args.model,
+      identity: '工人',
+      workType: (gate && gate.role) || '写码',
+      terminal: 'mirasim',
+      extra: {
+        source: 'dao-dispatch-mirasim',
+        dispatch_id: sess.sessionKey,
+        executor: 'mirasim',
+        agent: route.agent,
+        merge_policy: (gate && gate.mergePolicy) || 'auto',
+        ...((gate && gate.mergeReason) ? { merge_reason: gate.mergeReason } : {}),
+        ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
+        card_name: cardName,
+        branch,
+      },
+    });
+    if (!ledger.ok && !ledger.skipped) console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
+  } catch (e) {
+    ledger = { ok: false, error: String(e.message || e) };
+    console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
+  }
+
   emit({
     ok: true, executor: 'mirasim',
     card: cardName, issue: args.issue ?? null,
@@ -1501,7 +1534,9 @@ async function cmdDispatchMirasim(args, routing) {
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
     reviewer: args.reviewer ?? null,
-    note: '会话即卡：交卷=PR 存在+判据绿（#880 卡 F）；GitHub 侧 label/评论未接（卡 D）',
+    mergePolicy: (gate && gate.mergePolicy) || 'auto',
+    ledgerWritten: !!(ledger && ledger.ok),
+    note: '会话即卡：交卷=PR 存在+判据绿（#880 卡 F）；GitHub 侧 label/评论未接（降级项，不断链）',
   });
 }
 
@@ -1513,16 +1548,19 @@ async function cmdDispatch(args) {
   if (!args.name && !args.dryRun) fail('dispatch 要 --name');
 
   // ── 切流量开关（#880 卡 E）────────────────────────────────────────────────
-  // 一步到位换 mirasim = 把下面这个 false 改成 true，删掉 orca 那段。**现在还不能改**，
-  // 三个前置没满足，2026-09-06 实测（改成 true 时 dao-dispatch-gate 红 36 条，就是它们）：
-  //   ① merge-policy 不落账本 —— 审官侧 lookupReviewerMergePolicy 从账本恢复，dispatch
-  //      不写就查不到，审官拿不到原派工的合并策略（#886 审官第 4 条明令不许硬编码 auto）。
-  //   ② 派前探针 / 熔断没接 —— 那两条钉在 orca 的 provider 名上（#843/#845），归卡 D。
-  //   ③ GitHub 侧 label / 派工评论没接 —— 盘面看不见派了什么，归卡 D。
-  // 前置全绿之前保持 orca：切早了不是"激进"，是把治理层顺手关掉。
+  // 一步到位换 mirasim = 把下面这个 false 改成 true，删掉 orca 那段。三个前置的实况：
+  //   ① merge-policy 落账本 —— **2026-09-06 已接通并真机验过**：写 job.dispatch(identity=工人)，
+  //      审官侧 pickMergePolicyFromLedger 读回 state:'one'。不接的话审官对每单都拿 fallback 的
+  //      auto，显式派成 manual 的单会被自动合并——这是三条里唯一的硬阻塞。
+  //   ② 派前探针 / 熔断没接 —— 钉在 orca 的 provider 名上（#843/#845）。**降级项不断链**：
+  //      派工照跑，只是撞到坏模型时不会提前发现。
+  //   ③ GitHub 侧 label / 派工评论没接 —— **降级项不断链**：闭环靠 PR 署名走，不靠 label；
+  //      代价是盘面看不见派了什么。
+  // 还差最后一道才该翻：真派一单、mirasim 工人自己干完并开出 PR（#880 卡 E 的验收判据）。
+  // 翻早了不是"激进"，是把没验过的路径设成唯一路径。
   // 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
   const MIRASIM_IS_ONLY_PATH = false;
-  if (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim') return cmdDispatchMirasim(args, routing);
+  if (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim') return cmdDispatchMirasim(args, routing, gate);
 
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
