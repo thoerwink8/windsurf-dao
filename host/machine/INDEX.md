@@ -49,7 +49,7 @@
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
-| A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。`test-impact-map.mjs build` 采覆盖率+读文件记录写 `map.json`，`dao-check --affected` 读它裁剪。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。CI 没有它即退全量，是安全降级。换机重生成 |
+| A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。**没有建图动作**——`dao-check` 跑测试时顺手采依赖写 `map.json`，下次跑就用它裁剪；不在图里的一律照跑。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。删了不用管，跑一次就自己长回来 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
