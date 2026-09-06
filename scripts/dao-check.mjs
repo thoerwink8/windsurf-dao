@@ -38,7 +38,7 @@
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
 // ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
-// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
+// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡且没挂「将来某版」 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 // ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
@@ -102,7 +102,7 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
-import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
+import { inspectReadyQueue, isDeferredIssue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
@@ -1613,7 +1613,7 @@ function runOrcaWorktrees() {
 
 function loadOpenBoard() {
   return {
-    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels']),
+    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,milestone']),
     prs: runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']),
     worktrees: runOrcaWorktrees(),
   };
@@ -1663,7 +1663,8 @@ function checkOpenIssueCount(board) {
     fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${typeof issues.array[0]}`);
     return;
   }
-  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number));
+  // #966：挂「将来某版」的单保持 OPEN 以便一次列全，但不算当前待办——不进积压阈值。
+  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number) && !isDeferredIssue(i));
   const n = backlog.length;
   if (n > max) {
     fail(`open 未在做单 ${n} 张，超阈值 ${max}（共 ${issues.array.length} 张 open，${inPr.size} 张有在途 PR、${inCard.size} 张有本地卡）`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number,title,body');
@@ -1708,7 +1709,7 @@ function checkPendingBoardBacklog(board) {
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
-// 已消歧 + 无在途 PR/卡 → 打「有 N 个可立即起的单没起」。帅可能有正当理由
+// 已消歧 + 无在途 PR/卡 + 没挂「将来某版」→ 打「有 N 个可立即起的单没起」。帅可能有正当理由
 // （并发满、真依赖），所以不翻转退出码；今晚的病是它完全不可见。
 // 解析在 ready-queue-check.mjs，不复用 ⑭ 的 closesNumbers。
 // 并发上限随 #576 落地，本项不发明数字。#576 的 next 接手列表后本项退役。

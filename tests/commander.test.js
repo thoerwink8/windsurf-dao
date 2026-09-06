@@ -57,6 +57,29 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
+  it('#966 已消歧且标齐但挂「将来某版」→ 不派、不报缺标', async () => {
+    const { decide } = await CORE;
+    const issue = {
+      number: 819,
+      title: '先过渡',
+      labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' },
+        { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+      milestone: { title: '将来某版' },
+    };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '推迟档不许派');
+    assert.equal(byKind(r, 'escalate').length, 0, '推迟档不是漏标');
+  });
+
+  it('#966 指挥官任务书写明推迟档交帅挂档、自己不关不派', () => {
+    const txt = fs.readFileSync(path.join(__dirname, '..', 'host', 'skills', 'commander', 'SKILL.md'), 'utf8');
+    assert.match(txt, /将来某版/);
+    assert.match(txt, /先过渡、将来再接/);
+    assert.match(txt, /自己不关、不派/);
+  });
+
   // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
   // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
   // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。

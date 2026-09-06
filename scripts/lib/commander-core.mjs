@@ -20,7 +20,7 @@
 //
 // 复用已测原语（不重造）：
 //   shuai-scan.mjs   prApprovedReady / prApprovedDraft / prChecksRed —— PR 判绿/待拍板/CI 红
-//   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 = 可立即起
+//   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 + 没挂「将来某版」 = 可立即起
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';

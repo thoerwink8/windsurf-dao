@@ -183,6 +183,46 @@ describe('ready-queue', () => {
     });
   });
 
+  it('#966 挂「将来某版」的已消歧单不是可立即起', async (t) => {
+    const Q = await LIB_LOAD;
+    const deferred = {
+      ...issue(819, ['已消歧', '任务']),
+      milestone: { title: '将来某版' },
+    };
+    const current = {
+      ...issue(10, ['已消歧']),
+      milestone: { title: '当前在做' },
+    };
+    const r = Q.inspectReadyQueue({
+      issues: [deferred, current, issue(11, ['已消歧'])],
+      prs: [],
+      worktrees: [],
+    });
+    await t.test('列出当前档和没挂档，不列将来某版', () => {
+      assert.equal(r.kind, 'ready');
+      assert.deepStrictEqual(r.ready, [10, 11]);
+    });
+    await t.test('可见行不点名被推迟的单', () => {
+      assert.match(r.line, /#10/);
+      assert.match(r.line, /#11/);
+      assert.equal(/#819/.test(r.line), false);
+    });
+    await t.test('只有将来某版 → 扫完 0，不是没查成', async () => {
+      const only = Q.inspectReadyQueue({
+        issues: [deferred],
+        prs: [],
+        worktrees: [],
+      });
+      assert.equal(only.kind, 'zero');
+      assert.match(only.line, /可立即起 0 个/);
+      assert.equal(/可立即起：没查成/.test(only.line), false);
+    });
+    await t.test('缺 milestone 字段不当成推迟（旧夹具）', () => {
+      assert.equal(Q.milestoneTitleOf(issue(1, ['已消歧'])), null);
+      assert.equal(Q.isDeferredIssue(issue(1, ['已消歧'])), false);
+    });
+  });
+
   it('#577 dispatch skill 四件里的规矩原文还在', async (t) => {
     const txt = fs.readFileSync(SKILL, 'utf8');
     await t.test('skill 写了立刻并行派', () => {
@@ -199,6 +239,11 @@ describe('ready-queue', () => {
     });
     await t.test('skill 写清 next 可立即起必须是列表', () => {
       assert.ok(/这些都可以现在起，不是让你挑一个/.test(txt), 'skill 写清 next 可立即起必须是列表  →  缺给 #576 的那句');
+    });
+    await t.test('#966 版本档约定写在 dispatch skill，不另造文件', () => {
+      assert.match(txt, /将来某版/);
+      assert.match(txt, /先过渡、将来再接/);
+      assert.match(txt, /--milestone "将来某版"/);
     });
   });
 });

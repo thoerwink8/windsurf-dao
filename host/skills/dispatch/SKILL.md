@@ -42,6 +42,7 @@ node scripts/gh-as.mjs marshal -- issue create --title "..." --body-file <文件
 node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>
 node scripts/gh-as.mjs marshal -- issue close <N> --comment "..."
 node scripts/gh-as.mjs marshal -- issue edit <N> --add-label "已消歧"
+node scripts/gh-as.mjs marshal -- issue edit <N> --milestone "将来某版"
 ```
 
 Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。
@@ -175,6 +176,8 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `node scripts/dao.mjs worktree-rm --worktree <卡>`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
 
 issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 issue，合并后**由关单脚本关**并引用落点 PR——关单只认 `node scripts/close-issues.mjs`（署名 issue 的 PR 已 MERGED **且** check 全绿才 `issue close`，红着合进的不关、已关的重开，见 issue #657），**不认 GitHub `Closes`/`Fixes` 自动关单**，不允许任何正文模板教写关单关键词。拍板写进真正对应的 issue/PR，禁止把不相干拍板塞进同一张 issue，没有对应载体宁可开小 issue（拍板归位）；「落点 PR 已 merged 但 issue 未关」的自动闸在 #442 看门狗审计清单。
+
+版本档（#966，拍板 2026-09-07 3A）：GitHub Milestone 两档——`当前在做`（现在或近期）/ `将来某版`（要做但不是现在）。**「先过渡、将来再接」必须挂 `将来某版`，不挂就是没交代。** 单保持 OPEN，好让 `gh issue list --milestone 将来某版` 一次列全；派工队列与「未在做」积压都不认这一档。不造标签、不造文件。挂档走 marshal：`issue edit <N> --milestone "将来某版"`。
 
 终审核对垫片退役：PR 正文登记的垫片（临时 Monitor / 手动流程）合并时当场退役换正式版，防影子制度（拍板 2026-08-15）。
 
