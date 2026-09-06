@@ -58,7 +58,19 @@ export const HUMAN_DECISION_REASONS = new Set([
 ]);
 
 /**
- * 「没查成」class：这一类一律不开单。
+ * 「没查成」连续多少轮才值得开单（#1063）。
+ *
+ * 为什么不是「永久静默」：`unscanned` 的语义本来就是「下一轮再看」，偶发一次不该惊动人；
+ * 但**一直没查成**是真问题，永久静默会把它悄悄吞掉——那正是 fail-close 最怕的降级。
+ * 3 轮 ≈ 1 小时（指挥官 20 分钟一轮）。
+ *
+ * 判的是**轮数**不是墙钟：轮数是确定性的量，墙钟在有负载的机器上两次能差一倍
+ * （判例 memory `wall-clock-cannot-be-a-gate`）。
+ */
+export const UNSCANNED_STREAK_TO_OPEN = 3;
+
+/**
+ * 「没查成」class：这一类不立刻开单。
  *
  * 判前缀不判相等——`dispatch-unscanned` / `rework-unscanned` 都是「没查成」的具体位置，
  * 语义与裸 `unscanned` 完全一致（都由 `r.unscanned` 派生）。**新增任何 `<动作>-unscanned`
@@ -104,10 +116,18 @@ export function escalateTarget(action) {
  *   noop      有活单，对象也登记过 —— 什么都不做（同一件事不重复说）
  *   unscanned 已记单的状态核不出来 —— 不开单（开单是写动作、不可撤，fail-closed 向「不开」）
  */
-export function judgeEscalation(action, { booked = null, bookedState = null } = {}) {
+export function judgeEscalation(action, { booked = null, bookedState = null, streak = 0 } = {}) {
   const target = escalateTarget(action);
   if (isUnscannedReason(action?.reason)) {
-    return { verdict: 'silent', why: '「没查成」class 只进 status，不开单', target };
+    // 前 N-1 轮只进 status；连续到第 N 轮说明不是偶发，照常走下面的开单/追加判定。
+    if (streak < UNSCANNED_STREAK_TO_OPEN) {
+      return {
+        verdict: 'silent',
+        why: `「没查成」连续第 ${streak} 轮（满 ${UNSCANNED_STREAK_TO_OPEN} 轮才开单），本轮只进 status`,
+        target,
+        streak,
+      };
+    }
   }
   if (!booked || !booked.issue) {
     return { verdict: 'open', why: '这个原因还没有活着的单', target, objects: target ? [target] : [] };
@@ -129,6 +149,59 @@ export function judgeEscalation(action, { booked = null, bookedState = null } = 
     };
   }
   return { verdict: 'noop', why: `#${booked.issue} 在管同一个原因，对象也已登记`, target, objects: seen };
+}
+
+/** 从去重键还原原因名（键形如 `escalate/<reason>`）。认不出返回 null。 */
+export function reasonOfKey(key) {
+  const m = /^escalate\/(.+)$/.exec(String(key || ''));
+  return m ? m[1] : null;
+}
+
+/**
+ * 一轮结束时的收敛（#1063）：数连续轮、把消失的原因收掉。纯函数。
+ *
+ * @param {string[]} reasonsThisRound 本轮 decide 产出的全部 escalate 原因
+ * @param {object} streak    上一轮的连续计数 `{ <reason>: 轮数 }`
+ * @param {object} ledger    升级账本 `{ 'escalate/<reason>': { issue, objects } }`
+ * @param {boolean} allScanned 本轮态势是否全部查成
+ * @returns {{streak:object, toClose:Array<{reason,issue,key}>, skipped:string|null}}
+ *
+ * **没全查成就不收敛**（fail-closed，这条是要害）：入口总闸会因为某一面没查成而不产依赖它的
+ * 动作，于是原因会「凭空消失」。拿这种消失去关单，等于把 GitHub 上的单按扫描故障关掉。
+ * 所以只在全查成的轮次里收敛；没查成的轮次连计数都不动（否则连续轮数会被扫描故障洗掉）。
+ */
+export function reconcileEscalationRound({
+  reasonsThisRound = [], streak = {}, ledger = {}, allScanned = false,
+} = {}) {
+  const seen = new Set((reasonsThisRound || []).filter(Boolean).map(String));
+  if (!allScanned) {
+    return { streak, toClose: [], skipped: '本轮有面没查成——不收敛也不清计数（消失可能是扫描故障，不是问题解决了）' };
+  }
+  const next = {};
+  for (const r of seen) next[r] = (Number(streak?.[r]) || 0) + 1;
+  const toClose = [];
+  for (const key of Object.keys(ledger || {})) {
+    const reason = reasonOfKey(key);
+    if (!reason || seen.has(reason)) continue;
+    const entry = ledger[key];
+    if (entry && entry.issue) toClose.push({ reason, issue: entry.issue, key });
+  }
+  return { streak: next, toClose, skipped: null };
+}
+
+/** 自动关单的留言。必须写清是被哪条原因收敛掉的——关单要可追溯（#1063 硬边界）。 */
+export function closeCommentBody({ reason, objects, at }) {
+  return [
+    `指挥官：这条原因本轮已不再出现，自动收敛关单。`,
+    ``,
+    `- 原因：${reason}`,
+    `- 关单前受影响：${(objects || []).join('、') || '（没记到对象）'}`,
+    `- 判据：态势**全部查成**的一轮里，decide 没有再产出这条原因。`,
+    `  （没查成的轮次不收敛——那种「消失」可能是扫描故障，不是问题解决了）`,
+    ``,
+    `又发生的话会重新开一张，不会静默。`,
+    at ? `\n时间：${at}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 /** 追加评论的正文。只说新增了谁、现在一共影响谁——不复述原因（原因在单里）。 */

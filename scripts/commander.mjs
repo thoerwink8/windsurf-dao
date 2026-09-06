@@ -36,6 +36,7 @@ import {
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
+  reconcileEscalationRound, closeCommentBody, escalateTarget,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
@@ -1292,7 +1293,9 @@ function escalate(action, { state, dryRun, say }) {
     if (st.ok) bookedState = String(st.out).trim() || null;
   }
   // 判据是纯函数（scripts/lib/escalate-group.mjs）：四个出口分得开，测试直接喂。
-  const verdict = judgeEscalation(action, { booked, bookedState });
+  // streak = 这条原因连续出现到第几轮（含本轮），由轮末的 reconcileEscalationRound 维护。
+  const streak = (Number(state.escalateStreak?.[action.reason]) || 0) + 1;
+  const verdict = judgeEscalation(action, { booked, bookedState, streak });
   if (verdict.verdict === 'silent') {
     // 「没查成」class 只进 status。判前缀不判相等——2026-09-06 相等判据漏掉
     // dispatch-unscanned / rework-unscanned，一个缺陷刷出 6 张待拍板单。
@@ -1342,13 +1345,60 @@ function escalate(action, { state, dryRun, say }) {
   }
   const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
-  if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
+  if (existing) {
+    // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。**必须写回账本**：
+    // 不写回，下一轮又走到这里，每个新对象都当成第一次，对象清单永远攒不起来
+    // （追加那条路一次都进不去）。写回时把本次对象一并并进去，幂等。
+    if (!dryRun) {
+      const t = escalateTarget(action);
+      const prevObjs = Array.isArray(booked?.objects) ? booked.objects : [];
+      const objects = t && !prevObjs.includes(t) ? [...prevObjs, t] : prevObjs;
+      state.escalateLedger[key] = { issue: existing, at: nowIso(), objects };
+    }
+    say(`  报帅（待拍板 #${existing} 已在，不重开；已写回账本）：${action.why}`);
+    return { ok: true, issue: existing };
+  }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
   return opened;
 }
+/**
+ * 轮末收敛：连续轮计数 + 原因消失自动关单（#1063）。
+ *
+ * 判据是纯函数 reconcileEscalationRound，这里只负责取数与执行 gh 动作。
+ * 关单留言写清被哪条原因收敛——关单必须可追溯（#1063 硬边界）。
+ */
+function reconcileEscalations({ actions, situation, state, dryRun, say }) {
+  const reasonsThisRound = (actions || [])
+    .filter((a) => a && a.kind === 'escalate' && a.reason)
+    .map((a) => String(a.reason));
+  const health = situationHealth(situation);
+  const r = reconcileEscalationRound({
+    reasonsThisRound,
+    streak: state.escalateStreak || {},
+    ledger: state.escalateLedger || {},
+    allScanned: health.allScanned,
+  });
+  if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
+  if (!dryRun) state.escalateStreak = r.streak;
+  for (const item of r.toClose) {
+    if (dryRun) { say(`[dry] 收敛关单 #${item.issue}（原因 ${item.reason} 本轮已消失）`); continue; }
+    const entry = (state.escalateLedger || {})[item.key] || {};
+    const body = closeCommentBody({ reason: item.reason, objects: entry.objects, at: nowIso() });
+    ensureDir(STATE_DIR);
+    const bodyFile = join(STATE_DIR, `escalate-close-${Date.now()}.md`);
+    writeFileSync(bodyFile, body, 'utf8');
+    const closed = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'close', String(item.issue),
+      '--repo', REPO, '--comment', body, '--reason', 'completed'], 60000);
+    if (!closed.ok) { say(`  收敛关单失败（#${item.issue}，账本不动，下轮再试）：${closed.error}`); continue; }
+    delete state.escalateLedger[item.key];
+    say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
+  }
+  return { ok: true, closed: r.toClose.length };
+}
+
 // 标题只写原因，不写对象——**对象会不断增加**，写进标题第二个对象来的那一刻它就是错的。
 // 受影响清单在正文里滚动（业界形态：一条告警 + 受影响对象清单，不是每个对象一条告警）。
 function escalateTitle(a) { return String(a.reason || '').trim(); }
@@ -1431,6 +1481,9 @@ function cmdAct(argv) {
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
   runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  // 轮末收敛（#1063）：数连续轮 + 把本轮已不再出现的原因自动关单。必须在动作跑完之后，
+  // 因为「本轮有哪些原因」要等 decide 的动作全部落地才算数。
+  reconcileEscalations({ actions, situation, state, dryRun, say: (m) => log.push(m) });
   runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();

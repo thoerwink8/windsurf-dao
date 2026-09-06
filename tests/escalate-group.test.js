@@ -52,7 +52,16 @@ describe('判据真的接在 escalate 上', () => {
   const src = () => fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
 
   it('escalate 走 judgeEscalation，不再自己判', () => {
-    assert.match(src(), /judgeEscalation\(action, \{ booked, bookedState \}\)/);
+    assert.match(src(), /judgeEscalation\(action, \{ booked, bookedState, streak \}\)/);
+  });
+
+  it('轮末收敛接在动作跑完之后（连续轮与关单都要等本轮原因齐了才算数）', () => {
+    const s = src();
+    const runIdx = s.indexOf('runActions(actions,');
+    const recIdx = s.indexOf('reconcileEscalations({ actions, situation, state');
+    assert.notEqual(runIdx, -1, 'runActions 调用点没找到，锚点失配了');
+    assert.notEqual(recIdx, -1, 'reconcileEscalations 调用点没找到——收敛根本没接线');
+    assert.equal(recIdx > runIdx, true, '收敛接在了 runActions 之前：那时本轮有哪些原因还没定');
   });
 
   // 回归闸：改回字符串相等就是把 6 张单的路重新打开。
@@ -186,6 +195,74 @@ describe('穷举闸：新 escalate 原因必须被分类', () => {
     const { isUnscannedReason, HUMAN_DECISION_REASONS } = await LIB;
     const 串味 = [...HUMAN_DECISION_REASONS].filter(isUnscannedReason);
     assert.deepEqual(串味, [], `这些既在拍板表里又是「没查成」class：${串味.join('、')}`);
+  });
+});
+
+// #1063 验收第二条，逐字照抄：前 2 轮不开单、第 3 轮开**一张**、第 4 轮把新对象
+// 追加进同一张而不是新开。这里跑的是真实四轮序列，不是四条孤立断言。
+describe('#1063 验收：连续 unscanned 的四轮', () => {
+  it('silent, silent, open×1, append×1', async () => {
+    const { judgeEscalation } = await LIB;
+    const 轮 = [
+      { reason: 'dispatch-unscanned', issue: 1007 },
+      { reason: 'dispatch-unscanned', issue: 1007 },
+      { reason: 'dispatch-unscanned', issue: 1007 },
+      { reason: 'dispatch-unscanned', issue: 982 }, // 第 4 轮换了个对象
+    ];
+    let booked = null; let streak = 0;
+    const 判决 = [];
+    for (const a of 轮) {
+      streak += 1;
+      const v = judgeEscalation(a, { booked, bookedState: booked ? 'OPEN' : null, streak });
+      判决.push(v.verdict);
+      if (v.verdict === 'open') booked = { issue: 777, objects: v.objects };
+      if (v.verdict === 'append') booked = { issue: 777, objects: v.objects };
+    }
+    assert.deepEqual(判决, ['silent', 'silent', 'open', 'append']);
+    assert.equal(booked.issue, 777, '第 4 轮不许新开单');
+    assert.deepEqual(booked.objects, ['issue #1007', 'issue #982'], '两个对象都要在清单里');
+  });
+
+  it('阈值是轮数不是墙钟（改常量就改行为，判据看得见）', async () => {
+    const { UNSCANNED_STREAK_TO_OPEN } = await LIB;
+    assert.equal(UNSCANNED_STREAK_TO_OPEN, 3);
+  });
+});
+
+describe('#1063 验收：原因消失 → 自动关单', () => {
+  const ledger = { 'escalate/missing-labels': { issue: 900, objects: ['issue #1'] } };
+
+  it('全查成的一轮里原因没再出现 → 关那张单', async () => {
+    const { reconcileEscalationRound } = await LIB;
+    const r = reconcileEscalationRound({ reasonsThisRound: [], streak: { 'missing-labels': 2 }, ledger, allScanned: true });
+    assert.deepEqual(r.toClose, [{ reason: 'missing-labels', issue: 900, key: 'escalate/missing-labels' }]);
+    assert.deepEqual(r.streak, {}, '消失的原因连续计数要清零');
+  });
+
+  it('原因还在 → 不关，且连续计数 +1', async () => {
+    const { reconcileEscalationRound } = await LIB;
+    const r = reconcileEscalationRound({ reasonsThisRound: ['missing-labels'], streak: { 'missing-labels': 2 }, ledger, allScanned: true });
+    assert.deepEqual(r.toClose, []);
+    assert.equal(r.streak['missing-labels'], 3);
+  });
+
+  // 要害：入口总闸会因为某一面没查成而不产依赖它的动作，原因于是「凭空消失」。
+  // 拿这种消失去关单 = 按扫描故障关掉 GitHub 上的单；连计数也不能动，否则连续轮被洗掉。
+  it('本轮有面没查成 → 既不关单也不动计数', async () => {
+    const { reconcileEscalationRound } = await LIB;
+    const before = { 'missing-labels': 2 };
+    const r = reconcileEscalationRound({ reasonsThisRound: [], streak: before, ledger, allScanned: false });
+    assert.deepEqual(r.toClose, []);
+    assert.equal(r.streak, before, '没查成的轮次连计数都不许动');
+    assert.match(r.skipped, /没查成/);
+  });
+
+  it('关单留言写清被哪条原因收敛（可追溯是硬边界）', async () => {
+    const { closeCommentBody } = await LIB;
+    const body = closeCommentBody({ reason: 'missing-labels', objects: ['issue #1', 'issue #2'] });
+    assert.match(body, /missing-labels/);
+    assert.match(body, /issue #1、issue #2/);
+    assert.match(body, /没查成的轮次不收敛/);
   });
 });
 

@@ -98,6 +98,7 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
@@ -1590,10 +1591,30 @@ function runOrcaWorktrees() {
 
 function loadOpenBoard() {
   return {
-    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels']),
+    // author 是「同一起因只许一张 OPEN 单」那道检查的必需字段：用它分「机器/帅位开的」
+    // 与「用户本人开的」，后者不纳入。少这个字段那道检查只能判没查成（#1063 ②）。
+    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,author,createdAt']),
     prs: runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']),
     worktrees: runOrcaWorktrees(),
   };
+}
+
+// 同一起因只许一张 OPEN 单（#1063 ②）。判据是纯函数 inspectCauseSlugs，这里只取数与报形。
+// 落点选 dao-check 不选 Claude Code hook：本机 ~/.claude/settings.json 一条 hook 都没有，
+// hook 型载体在这台服务器上根本不装（收件箱就是因此从 hook 挪过来，commit d48ecc5d）。
+function checkCauseSlugLive(board) {
+  const issues = board.issues;
+  if (issues.unscanned) {
+    skip(`同一起因只许一张 OPEN 单：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
+    return;
+  }
+  const got = inspectCauseSlugs({ issues: issues.array });
+  if (got.kind === 'unscanned') { skip(got.line); return; }
+  if (got.kind === 'red') {
+    fail('同一起因有多张 OPEN 单 / 机器单缺起因行', got.line);
+    return;
+  }
+  green(got.line);
 }
 
 function checkOpenIssueCount(board) {
@@ -1976,9 +1997,11 @@ if (FULL) {
   const openBoard = loadOpenBoard();
   checkOpenIssueCount(openBoard);
   checkReadyQueue(openBoard);
+  checkCauseSlugLive(openBoard);
 } else {
   netParked('open 单数量阈值', '要打 gh issue list');
   netParked('可立即起但没起', '要打 gh issue list');
+  netParked('同一起因只许一张 OPEN 单', '要打 gh issue list');
 }
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
