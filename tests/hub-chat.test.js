@@ -429,7 +429,7 @@ describe('dispatch-policy hubChat 校验（#852，dao-check 用）', () => {
     const BASE = {
       preflight: { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true },
       breaker: { windowHours: 24, failuresToTrip: 3, cooldownHours: 24, halfOpenProbes: 1 },
-      commander: { maxDispatchPerRound: 2, requireModelInRouting: true },
+      commander: { requireModelInRouting: true, loadThreshold: 0.85, memReserveMb: 1536 },
     };
     const ok = C.inspectDispatchPolicySource(JSON.stringify({ ...BASE, hubChat: HUB_POLICY }));
     assert.strictEqual(ok.ok, true, JSON.stringify(ok.problems));

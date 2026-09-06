@@ -82,9 +82,13 @@
 // ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
 //    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
-//    commander（maxDispatchPerRound 1~20、requireModelInRouting 布尔；缺 commander 不拦以兼容旧夹具）。
+//    commander（requireModelInRouting 布尔；loadThreshold / memReserveMb 是余量参数不是「派几个」；缺 commander 不拦以兼容旧夹具）。
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
+// ㉜ 常驻 systemd 必须 Restart=always（#1037）：仓内 host/machine/systemd/*.service
+//    凡不是 Type=oneshot 的必须 Restart=always。只看仓里的模板，不打机器。
+//    RestartPreventExitStatus= 允许存在且不影响判定。检查器自持解析，不复用被检查对象。
+//    红/绿/空夹具验判别力；0 个 .service = 没查成，不是「0 个违规」。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -133,6 +137,9 @@ import {
 import {
   inspectDispatchPolicyFixtures, inspectDispatchPolicyLive,
 } from './lib/dispatch-policy-check.mjs';
+import {
+  inspectUnitRestartDir, inspectUnitRestartFixtures,
+} from './lib/unit-restart-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1279,6 +1286,22 @@ function checkCardCommentSamples() {
 
 const OPEN_ISSUE_MAX_DEFAULT = 30;
 
+// 机器自己开的 `[待拍板]` 单堆多少张算失控（2026-09-06 实咬）。
+//
+// 那晚堆到 11 张，**其中 10 张是假警报**，而没有任何东西在盯这个数——是用户截了张图
+// 才发现的。上面那条 OPEN_ISSUE_MAX 盯的是「未在做的单」总量（阈值 30），
+// 待拍板混在里面根本顶不到线。两个量测的不是一件事：
+//   backlog  —— 人还没排上队的活（涨了说明该分流）
+//   待拍板   —— **机器向人求助的速率超过了人的处理速率**（涨了说明机器在刷噪音）
+//
+// 5 张这个数不是现拍的：CLAUDE.md 收件箱那节早就用「堆到 5 条」当硬性处置线，沿用同一个数，
+// 不另立一个。
+//
+// 只拦数量，不拦「等了多久」：一张真的在等用户的单，用户出门两天它就超龄了，
+// 那不是违规（wall-clock 当闸必然误报，本仓已有判例）。年龄只报出来给人看。
+const PENDING_BOARD_MAX_DEFAULT = 5;
+const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
+
 /** PR/标题/正文里的署名 issue 号（新规范「署名 issue #N」+ 旧 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
 function closesNumbers(text) {
   const found = [];
@@ -1649,6 +1672,41 @@ function checkOpenIssueCount(board) {
   green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
 }
 
+/**
+ * 机器开的 `[待拍板]` 单堆积（2026-09-06 实咬：堆到 11 张、10 张假警报、无人发现）。
+ *
+ * 这条盯的是**机器向人求助的速率**，跟上面的 backlog 阈值不是一件事。
+ * 「没查成」与「0 张」必须分得开：gh 挂了要 skip，不许当成绿。
+ */
+function checkPendingBoardBacklog(board) {
+  const max = Number(process.env.DAO_CHECK_PENDING_MAX ?? PENDING_BOARD_MAX_DEFAULT);
+  if (!Number.isFinite(max) || max < 0) {
+    fail('待拍板阈值没查成', `DAO_CHECK_PENDING_MAX 不是非负数: ${process.env.DAO_CHECK_PENDING_MAX}`);
+    return;
+  }
+  const issues = board.issues;
+  if (issues.unscanned) {
+    skip(`待拍板堆积：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
+    return;
+  }
+  if (issues.array.some((i) => !i || typeof i.title !== 'string')) {
+    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title 的对象数组）');
+    return;
+  }
+  const pending = issues.array.filter((i) => PENDING_TITLE_RE.test(i.title));
+  const n = pending.length;
+  if (n > max) {
+    const 样 = pending.slice(0, 3).map((i) => `#${i.number}`).join(' ');
+    fail(
+      `机器开的「待拍板」单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
+      '先判每张是不是假警报：假警报要去修产生它的那条判据，不是关掉了事；真要人拍的才留着',
+      'gh issue list --state open --limit 500 --json number,title | grep 待拍板',
+    );
+    return;
+  }
+  green(`机器开的「待拍板」单 ${n}/${max} 张`);
+}
+
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
 // 已消歧 + 无在途 PR/卡 → 打「有 N 个可立即起的单没起」。帅可能有正当理由
 // （并发满、真依赖），所以不翻转退出码；今晚的病是它完全不可见。
@@ -1975,9 +2033,11 @@ checkCardCommentSamples();
 if (FULL) {
   const openBoard = loadOpenBoard();
   checkOpenIssueCount(openBoard);
+  checkPendingBoardBacklog(openBoard);
   checkReadyQueue(openBoard);
 } else {
   netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('待拍板堆积', '要打 gh issue list');
   netParked('可立即起但没起', '要打 gh issue list');
 }
 checkCompletionSignalAlive();
@@ -2019,6 +2079,8 @@ checkReleasePolicySamples();
 checkReleasePolicyLive();
 checkDispatchPolicySamples();
 checkDispatchPolicyLive();
+checkUnitRestartSamples();
+checkUnitRestartLive();
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -2052,6 +2114,53 @@ function checkDispatchPolicyLive() {
     return;
   }
   green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
+}
+
+function checkUnitRestartSamples() {
+  const r = inspectUnitRestartFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '常驻 Restart=always 闸样本没查成' : '常驻 Restart=always 闸样本对不上',
+      '恢复 tests/fixtures/unit-restart/{red,ok,empty}：红=Type=simple+Restart=on-failure 必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`常驻 Restart=always 闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkUnitRestartLive() {
+  const dir = join(ROOT, 'host', 'machine', 'systemd');
+  if (!existsSync(dir)) {
+    fail('常驻 Restart=always 闸 live 没查成', '恢复 host/machine/systemd/；目录不在 = 没查成，不是 0 个违规', dir);
+    return;
+  }
+  const r = inspectUnitRestartDir({
+    dirRel: 'host/machine/systemd',
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (r.unscanned) {
+    fail(
+      '常驻 Restart=always 闸 live 没查成',
+      'host/machine/systemd/*.service 要扫得到；0 个 = 没查成，不是 0 个违规',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `常驻 systemd 缺 Restart=always ${r.violations.length} 个`,
+      '非 oneshot 必须 Restart=always（干净退出也要拉起来；RestartPreventExitStatus= 是正当豁免，不影响判定）',
+      r.violations.map((v) => `${v.file}: ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
 }
 
 function checkReleasePolicySamples() {

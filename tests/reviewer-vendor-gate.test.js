@@ -479,7 +479,7 @@ describe('#679 起审官同厂硬闸', () => {
         `status=${blocked.status} ` + JSON.stringify(pBlocked).slice(0, 300));
     });
     const wdFlag = spawnSync(process.execPath, [
-      CLI, 'worker-done', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run',
+      CLI, 'worker-done', '--pr', '48', '--reviewer', 'gpt-5.6-luna', '--dry-run', '--executor', 'orca',
     ], { encoding: 'utf8', cwd: REPO, env });
     const pWdFlag = payload(wdFlag);
     await t.test('worker-done --reviewer：无 reviewer/* label 也能起审官（reviewerSource=flag）', () => {
@@ -490,7 +490,7 @@ describe('#679 起审官同厂硬闸', () => {
       `status=${wdFlag.status} ` + JSON.stringify(pWdFlag).slice(0, 400));
     });
     const wdNoFlag = spawnSync(process.execPath, [
-      CLI, 'worker-done', '--pr', '48', '--dry-run',
+      CLI, 'worker-done', '--pr', '48', '--dry-run', '--executor', 'orca',
     ], { encoding: 'utf8', cwd: REPO, env });
     const pWdNoFlag = payload(wdNoFlag);
     await t.test('不传 --reviewer 仍自读 label：扫完 0 条 → 照旧拒（没放宽 label 那道）', () => {

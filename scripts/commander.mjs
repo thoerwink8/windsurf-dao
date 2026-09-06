@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,7 +27,7 @@ import {
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
 import { parseWorktrees } from './lib/land-core.mjs';
-import { progressSignature } from './lib/liveness.mjs';
+import { progressSignature, assessLiveness, sessionFromOrcaTerminal, sessionFromMirasimSession } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
@@ -42,6 +42,8 @@ import {
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
+import { admitCapacity } from './lib/admission.mjs';
+import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
@@ -65,6 +67,8 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
+const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
+  || join(homedir(), '.dao', 'admission', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -177,10 +181,101 @@ function scanOtherRepos() {
 
 function scanOrca() {
   const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) return { scanned: false, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  if (!wt.ok) {
+    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
+    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
+    // 在途工人改由 scanAdmission 按 mirasim 两层工作树 + 会话存活事实数。
+    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  }
   const worktrees = wt.json?.result?.worktrees;
   if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
   return { scanned: true, worktrees };
+}
+
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); }
+  catch (e) { return { error: String(e.message || e) }; }
+}
+
+function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
+  if (!existsSync(file)) return [];
+  let src;
+  try { src = readFileSync(file, 'utf8'); }
+  catch { return []; }
+  const out = [];
+  for (const line of src.split(/\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* 坏行跳过 */ }
+  }
+  return out;
+}
+
+function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 在途数 = 现在有几棵树被会话占着（#1007）。
+ *
+ * 判据换成租约闸那把尺（lib/dispatch/lease.mjs 的 /proc 扫描），删掉了原来的三层取数：
+ * 两层枚举工作树、读 mirasim 会话档案、再兜一层 orca 卡面取 max。删掉的理由各自成立：
+ *
+ *  · **orca 那层早就死了**（本机 orca 已退役，`orca worktree list` 每轮 exit 2）——
+ *    取 max 意味着它一坏就把整闸拖成 fail-close。
+ *  · **会话档案那层判据是错的**：record.json 的 runPid 是 mirasim-server 自己的 pid，
+ *    而 updatedAt 不随会话推进刷新，两个字段都撑不起活性判定（见 memory
+ *    mirasim-runpid-is-server-pid）。
+ *  · **审官被漏掉了**：原来 `isReviewerCard` 把审官树跳过，可审官吃同一份 CPU 和内存——
+ *    2026-09-06 那晚 137 个会话里审官占 53 个，分母少一半，算出来的余量必然偏大。
+ *
+ * 现在只有一把尺：一棵树里有会话进程在干活就算一个在途，工人审官一视同仁。
+ */
+function countInflightWorkers() {
+  const r = checkInFlight();
+  if (!r.ok) return r;
+  return { ok: true, count: r.count, trees: r.trees };
+}
+
+/**
+ * 机器余量准入。纯判定在 admission.mjs；这里只读 /proc 和在途数。
+ * 在途数读 mirasim 两层工作树 + 会话存活事实；核实不了 fail-close，不按目录数猜、不把僵尸当活。
+ */
+function scanAdmission({ worktrees, policy } = {}) {
+  const memRaw = readText('/proc/meminfo');
+  const loadRaw = readText('/proc/loadavg');
+  if (memRaw && memRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
+  }
+  if (loadRaw && loadRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  }
+  const nproc = cpus()?.length;
+  const inflight = countInflightWorkers({ worktrees });
+  if (!inflight.ok) {
+    return { ok: false, unscanned: true, slots: 0, why: inflight.error };
+  }
+  const samples = loadAdmissionSamples();
+  const cap = admitCapacity({
+    meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
+    nproc,
+    inFlight: inflight.count,
+    samples,
+    policy,
+  });
+  if (cap.ok && Number.isFinite(cap.memAvailableMb)) {
+    appendAdmissionSample({
+      at: nowIso(),
+      inFlight: inflight.count,
+      memAvailableMb: cap.memAvailableMb,
+      loadNorm: cap.loadNorm,
+    });
+  }
+  return { ...cap, inFlight: inflight.count };
 }
 
 function scanReviewPending() {
@@ -350,7 +445,8 @@ function buildSituation({ state } = {}) {
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
     hubSeen: (state && state.hubSeen) || {},
-    commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
+    commanderPolicy: policy.commander || { requireModelInRouting: true },
+    admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
     reviewerOrder,
@@ -704,6 +800,36 @@ export function resultPathOf(stdout) {
   } catch { return null; }
 }
 
+/**
+ * 同步派工的成功判据（#1087 实咬）。
+ *
+ * 两条派工脊的出口形状**不一样**，而回读逻辑只认得其中一条：
+ *   orca（异步，已退役）  `{queued:true, async:true, resultPath:'…out.json'}` —— 真结果稍后落盘
+ *   mirasim（同步，现役） `{ok:true, executor:'mirasim', sessionKey:'pi:uuid', card:'…'}` —— 会话当场就起好了
+ *
+ * mirasim 那条没有 resultPath，于是 `resultPathOf` 回 null，回读一律判「拿不到 resultPath
+ * ——成没成没查成」，接着报帅开一张 `[待拍板] dispatch-unscanned` 单。**而那次派工其实成了**：
+ * 会话已经在跑，sessionKey 就在输出里。2026-09-06 一晚上刷出 6 张这种单（#1069/#1072/#1073/
+ * #1078/#1081/#1083/#1084/#1087…），全是假警报，而且开单去重按对象不按原因，一张 PR 一张单。
+ *
+ * 判据要严：`ok===true` **且**拿得到 sessionKey 才算同步成了。只有 ok 没有 sessionKey 时
+ * 仍判没查成——「没有结果文件」和「有结果、就在这一帧里」必须靠正面证据分开，不能靠猜。
+ *
+ * @returns {{sync:true, sessionKey, card, issue}|null}
+ */
+export function judgeSyncDispatch(stdout) {
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let j;
+  try { j = JSON.parse(text.slice(start)); } catch { return null; }
+  if (!j || typeof j !== 'object' || j.ok !== true) return null;
+  if (typeof j.resultPath === 'string' && j.resultPath) return null; // 异步脊，走回读那条路
+  const key = typeof j.sessionKey === 'string' ? j.sessionKey.trim() : '';
+  if (!key) return null; // 没有会话号 = 没有正面证据，仍判没查成
+  return { sync: true, sessionKey: key, card: j.card || j.workerCard || '', issue: j.issue ?? '' };
+}
+
 /** 纯函数：把 out.json 的内容判成三态。没落盘 = 没查成（既不算成也不算败）。 */
 export function classifyDispatchResult({ present, doc, waitedMs }) {
   if (!present) {
@@ -711,6 +837,11 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
   }
   if (!doc || typeof doc !== 'object') return { ok: false, unscanned: true, error: '派工结果不是 JSON（没查成）' };
   if (doc.ok === true) return { ok: true, card: doc.workerCard || '', issue: doc.issue || '' };
+  // 第四态：背压。树里已经有人在干活（租约闸），这不是失败，排队下一轮即可。
+  // 跟失败分不开的后果：每轮为「这轮先不派」开一张待拍板单，正是刚清掉的那类噪音单。
+  if (doc.busy === true) {
+    return { ok: false, busy: true, unscanned: false, error: String(doc.error || '树里有人在干活').slice(0, 200) };
+  }
   return { ok: false, unscanned: false, error: String(doc.error || '执行体报失败但没给原因').slice(0, 200) };
 }
 
@@ -734,6 +865,14 @@ export function runActions(actions, { exec, log = [] } = {}) {
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
     const r = exec(action);
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
+    // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
+    // 仍要进 failedIssues（不发「已自动派单」喜报——毕竟没派出去），但**不报帅、不开单**。
+    if (DISPATCHING_KINDS.has(action.kind) && action.issue != null && r && r.busy === true) {
+      log.push(`  这轮先不派：${(r.error || '树里有人在干活')}——排队下一轮，不报帅（背压不是失败）`);
+      failedIssues.add(String(action.issue));
+      if (action.pr != null) failedPrs.add(String(action.pr));
+      continue;
+    }
     const failed = DISPATCHING_KINDS.has(action.kind) && action.issue != null
       && (!r || (r.ok !== true) || r.dispatchFailed === true);
     if (!failed) continue;
@@ -764,6 +903,9 @@ function sleepSync(ms) {
 
 /** 回读异步派工的真结果：轮询 resultPath 直到落盘或超时。 */
 function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, nowFn = Date.now } = {}) {
+  // mirasim 是同步脊：会话当场起好，没有结果文件要等（判据与实咬见 judgeSyncDispatch）。
+  const sync = judgeSyncDispatch(stdout);
+  if (sync) { say(`  派工真结果：成了（同步脊，会话 ${sync.sessionKey}）`); return { ok: true, card: sync.card, issue: sync.issue, sync: true }; }
   const path = resultPathOf(stdout);
   if (!path) { say('  派工受理了，但输出里没有结果文件路径——成没成没查成'); return { ok: false, unscanned: true, error: '拿不到 resultPath' }; }
   const t0 = nowFn();
@@ -1587,4 +1729,8 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalate, escalateKey, execOpenIssue, scanStall, reapBrains };
+export {
+  buildSituation, situationHealth, escalate, escalateKey, execOpenIssue, scanStall,
+  countInflightWorkers,
+  reapBrains,
+};
