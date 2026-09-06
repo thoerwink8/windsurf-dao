@@ -30,9 +30,16 @@
 // （dao dispatch / dao start / 审官 create / 推一把）全从那一道门过，装在门里绕不开。
 
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 /** 认 mirasim 服务进程用的字样。取自它自己的 argv：`…/mirasim-server/<版本>/server.cjs`。 */
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
+
+/** 派工树根 `~/mirasim-worktrees`（登记在 host/machine/INDEX.md D 类）。布局 `<根>/<仓>/<分支>`。 */
+export function worktreesRoot(home = homedir()) {
+  return process.env.MIRASIM_WORKTREES || join(home, 'mirasim-worktrees');
+}
 
 /**
  * 「树里有人在干活」的原因名。**它是背压，不是失败**——调用方要能把它跟真失败分开：
@@ -133,6 +140,47 @@ export function judgeTreeLease({ workdir, procs } = {}) {
     holders: holders.map((h) => ({ pid: h.pid, comm: h.comm || null })),
     why: `${tree} 已经有 ${holders.length} 个会话进程在干活（${holders.map((h) => `${h.comm || '?'} pid ${h.pid}`).join('、')}）`,
   };
+}
+
+/**
+ * 现在有几棵树被占着——**在制品的真分母**（#1007）。
+ *
+ * 为什么用「被占的树数」而不是「进程数」：一个会话会顺手拉起 git / bash / node 一堆子进程
+ * （实测一棵树能有十几个），按进程数算会把同一个会话数很多遍。一棵树 = 一个在干活的会话，
+ * 这是与租约闸同一把尺，不另造判据。
+ *
+ * **审官树照数不误。** 原来的准入把审官排除在外（`isReviewerCard` 跳过），那是错的分母：
+ * 审官吃同一份 CPU 和内存，而 2026-09-06 那晚 137 个会话里审官占 53 个。分母漏掉一半，
+ * 算出来的余量必然偏大，闸也就形同虚设。
+ *
+ * @param {Array<{pid,comm,cwd}>} procs
+ * @param {string} root  只数这个根下面的树（默认 mirasim 的工作树根）
+ * @returns {{ok:true, trees:string[], count:number}|{ok:false,unscanned:true,error:string}}
+ */
+export function busyTrees(procs, { root = worktreesRoot() } = {}) {
+  if (!Array.isArray(procs)) {
+    return { ok: false, unscanned: true, error: '没拿到进程观测数组——在途数不当成 0（fail-close）' };
+  }
+  const base = String(root).replace(/\/+$/, '');
+  const seen = new Set();
+  for (const p of procs) {
+    const cwd = String((p && p.cwd) || '').replace(/\/+$/, '');
+    // 前缀要带斜杠：光比 includes('mirasim-worktrees') 会把 /tmp/mirasim-worktrees-fake 也算进来。
+    if (!cwd || !cwd.startsWith(`${base}/`)) continue;
+    seen.add(cwd);
+  }
+  const trees = [...seen].sort();
+  return { ok: true, trees, count: trees.length };
+}
+
+/**
+ * 生产入口：扫 /proc + 数在途。给派单准入用（#1007）。
+ * 没查成 ⇒ ok:false，调用方必须收紧到不派——读不到 ≠ 可以随便派。
+ */
+export function checkInFlight({ io, root } = {}) {
+  const scan = scanSessionProcs(io || {});
+  if (!scan.ok) return { ok: false, unscanned: true, error: scan.error };
+  return { ...busyTrees(scan.procs, root ? { root } : {}), noServer: scan.noServer === true };
 }
 
 /**

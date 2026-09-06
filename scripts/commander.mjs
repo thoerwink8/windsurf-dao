@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,7 +27,7 @@ import {
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
 import { parseWorktrees } from './lib/land-core.mjs';
-import { progressSignature } from './lib/liveness.mjs';
+import { progressSignature, assessLiveness, sessionFromOrcaTerminal, sessionFromMirasimSession } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
@@ -42,6 +42,8 @@ import {
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
+import { admitCapacity } from './lib/admission.mjs';
+import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
@@ -64,6 +66,8 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
+const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
+  || join(homedir(), '.dao', 'admission', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -176,7 +180,12 @@ function scanOtherRepos() {
 
 function scanOrca() {
   const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) return { scanned: false, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  if (!wt.ok) {
+    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
+    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
+    // 在途工人改由 scanAdmission 按 mirasim 两层工作树 + 会话存活事实数。
+    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  }
   const worktrees = wt.json?.result?.worktrees;
   if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
   return { scanned: true, worktrees };
@@ -225,6 +234,92 @@ function scanDesiredJobs() {
     return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
   }
   return desiredFromEvents(listed.events);
+}
+
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); }
+  catch (e) { return { error: String(e.message || e) }; }
+}
+
+function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
+  if (!existsSync(file)) return [];
+  let src;
+  try { src = readFileSync(file, 'utf8'); }
+  catch { return []; }
+  const out = [];
+  for (const line of src.split(/\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* 坏行跳过 */ }
+  }
+  return out;
+}
+
+function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 在途数 = 现在有几棵树被会话占着（#1007）。
+ *
+ * 判据换成租约闸那把尺（lib/dispatch/lease.mjs 的 /proc 扫描），删掉了原来的三层取数：
+ * 两层枚举工作树、读 mirasim 会话档案、再兜一层 orca 卡面取 max。删掉的理由各自成立：
+ *
+ *  · **orca 那层早就死了**（本机 orca 已退役，`orca worktree list` 每轮 exit 2）——
+ *    取 max 意味着它一坏就把整闸拖成 fail-close。
+ *  · **会话档案那层判据是错的**：record.json 的 runPid 是 mirasim-server 自己的 pid，
+ *    而 updatedAt 不随会话推进刷新，两个字段都撑不起活性判定（见 memory
+ *    mirasim-runpid-is-server-pid）。
+ *  · **审官被漏掉了**：原来 `isReviewerCard` 把审官树跳过，可审官吃同一份 CPU 和内存——
+ *    2026-09-06 那晚 137 个会话里审官占 53 个，分母少一半，算出来的余量必然偏大。
+ *
+ * 现在只有一把尺：一棵树里有会话进程在干活就算一个在途，工人审官一视同仁。
+ */
+function countInflightWorkers() {
+  const r = checkInFlight();
+  if (!r.ok) return r;
+  return { ok: true, count: r.count, trees: r.trees };
+}
+
+/**
+ * 机器余量准入。纯判定在 admission.mjs；这里只读 /proc 和在途数。
+ * 在途数读 mirasim 两层工作树 + 会话存活事实；核实不了 fail-close，不按目录数猜、不把僵尸当活。
+ */
+function scanAdmission({ worktrees, policy } = {}) {
+  const memRaw = readText('/proc/meminfo');
+  const loadRaw = readText('/proc/loadavg');
+  if (memRaw && memRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
+  }
+  if (loadRaw && loadRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  }
+  const nproc = cpus()?.length;
+  const inflight = countInflightWorkers({ worktrees });
+  if (!inflight.ok) {
+    return { ok: false, unscanned: true, slots: 0, why: inflight.error };
+  }
+  const samples = loadAdmissionSamples();
+  const cap = admitCapacity({
+    meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
+    nproc,
+    inFlight: inflight.count,
+    samples,
+    policy,
+  });
+  if (cap.ok && Number.isFinite(cap.memAvailableMb)) {
+    appendAdmissionSample({
+      at: nowIso(),
+      inFlight: inflight.count,
+      memAvailableMb: cap.memAvailableMb,
+      loadNorm: cap.loadNorm,
+    });
+  }
+  return { ...cap, inFlight: inflight.count };
 }
 
 function scanReviewPending() {
@@ -390,7 +485,8 @@ function buildSituation({ state } = {}) {
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
-    commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
+    commanderPolicy: policy.commander || { requireModelInRouting: true },
+    admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
     reviewerOrder,
@@ -1610,4 +1706,9 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey, scanStall, reapBrains, scanSessions, scanDesiredJobs };
+export {
+  buildSituation, situationHealth, escalateKey, scanStall,
+  countInflightWorkers,
+  reapBrains,
+  scanSessions, scanDesiredJobs,
+};
