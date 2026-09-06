@@ -194,6 +194,14 @@ describe('gh-as', () => {
     await t.test('watchdog 在角色表', () => {
       assert.ok(G.ROLES.includes('watchdog') && G.ROLE_META.watchdog.slug === 'dao-watchdog', 'watchdog 在角色表  →  ' + G.ROLES.join(','));
     });
+    await t.test('refiner 在角色表', () => {
+      assert.equal(G.ROLE_META.refiner?.slug, 'dao-refiner');
+    });
+    // 判别性：消歧官的存在理由就是「坏了也只能乱打标」。
+    // 这三样任何一个被加进来，那个理由就没了——所以逐个钉死，不是笼统断言「权限很少」。
+    await t.test('refiner 只有 issues:write，没有 PR/contents/checks', () => {
+      assert.deepEqual(G.ROLE_META.refiner.expectedPermissions, { issues: 'write' });
+    });
     await t.test('watchdog 不许 contents:write', () => {
       assert.ok(G.ROLE_META.watchdog.expectedPermissions.contents === 'read', 'watchdog contents=read  →  ' + JSON.stringify(G.ROLE_META.watchdog.expectedPermissions));
     });

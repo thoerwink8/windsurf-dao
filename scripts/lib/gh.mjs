@@ -17,7 +17,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-export const ROLES = ['reviewer', 'worker', 'marshal', 'watchdog'];
+export const ROLES = ['reviewer', 'worker', 'marshal', 'watchdog', 'refiner'];
 
 // 权限表以 issue #573 正文为准。metadata:read 是 GitHub 给每个 installation token
 // 自动加上的，不算我们声明的权限，比对时忽略。
@@ -75,6 +75,18 @@ export const ROLE_META = {
       pull_requests: 'write',
       issues: 'write',
       checks: 'read',
+    },
+  },
+  // 消歧官（#1006）。权限是全家最窄的一份，这不是省事是设计：
+  // 「已消歧」是**授权派工**的 fail-close 闸，机器能打它，就必须能一键筛出机器打的那些并批量回退。
+  // 给它 pull_requests / contents / checks 里的任何一个，这个理由就不成立了。
+  // 装的范围也窄：只装 windsurf-dao 一个仓（marshal 是 6 个），见 NEW-MACHINE §4b。
+  refiner: {
+    slug: 'dao-refiner',
+    name: 'dao-refiner[bot]',
+    email: 'dao-refiner[bot]@users.noreply.github.com',
+    expectedPermissions: {
+      issues: 'write',
     },
   },
 };
