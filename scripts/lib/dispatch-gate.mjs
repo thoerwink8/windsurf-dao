@@ -1,10 +1,16 @@
 // 派工闸门（#546 #517）：拦裸 orca 派工命令。
+// #948：同一入口再问控制面闸（判定逻辑在 ./control-plane-gate.mjs，这里不复制分类）。
 //
 // Claude Code 的命令型 hook：只有 exit 2 拦得住动作；崩溃 / exit 1 / 超时在宿主眼里全是放行。
 // 所以本文件任何异常都转成 exit 2（fail-closed）。「崩了」和「判通过」不许同形。
 // 用法：hook 读 stdin 的 PreToolUse JSON；测试也可 argv 传入命令。
 
 import { readFileSync } from 'node:fs';
+import {
+  collectEvidence,
+  decideControlPlane,
+  probeControlPlane,
+} from './control-plane-gate.mjs';
 
 export const GATE_HINT = [
   '派工只走 node scripts/dao.mjs dispatch（用法：node scripts/dao.mjs dispatch --help）。',
@@ -206,7 +212,7 @@ export function isHumanCoordinatorBind(stmt) {
   return false;
 }
 
-export function decideGate(cmd) {
+export function decideGate(cmd, { probe = null, evidence = null } = {}) {
   const statements = splitShellStatements(cmd);
   const parts = statements.length ? statements : [String(cmd || '')];
   for (const stmt of parts) {
@@ -225,12 +231,40 @@ export function decideGate(cmd) {
       };
     }
   }
-  if (!isDispatchBypass(cmd)) return { block: false, command: normalizeCmd(cmd) };
+  if (isDispatchBypass(cmd)) {
+    return {
+      block: true,
+      command: normalizeCmd(cmd),
+      message: `拦下裸 orca 派工：${normalizeCmd(cmd)}\n${GATE_HINT}`,
+    };
+  }
+  // #948：控制面明确不可达时拦对外写。探测没查成不拦（没查成 ≠ 断了）。
+  const cp = decideControlPlane({ cmd, probe, evidence });
+  if (cp.block) {
+    return {
+      block: true,
+      command: normalizeCmd(cmd),
+      message: cp.message,
+      controlPlane: cp,
+    };
+  }
   return {
-    block: true,
+    block: false,
     command: normalizeCmd(cmd),
-    message: `拦下裸 orca 派工：${normalizeCmd(cmd)}\n${GATE_HINT}`,
+    note: cp.note || '',
+    controlPlane: cp,
   };
+}
+
+function parseHookEvent(stdinText) {
+  const text = String(stdinText || '').trim();
+  if (!text || text[0] !== '{') return null;
+  try {
+    const doc = JSON.parse(text);
+    return doc && typeof doc === 'object' ? doc : null;
+  } catch {
+    return null;
+  }
 }
 
 export function runAsHook({ stdinText = '', argv = [], env = process.env } = {}) {
@@ -238,9 +272,13 @@ export function runAsHook({ stdinText = '', argv = [], env = process.env } = {})
     const crash = env && (env.DISPATCH_GATE_CRASH === '1' || env.DISPATCH_GATE_CRASH === 'true');
     if (crash) throw new Error('dispatch-gate 故意崩（DISPATCH_GATE_CRASH）');
     const cmd = commandFromHookInput(stdinText, argv);
-    const decision = decideGate(cmd);
+    const event = parseHookEvent(stdinText);
+    const probe = probeControlPlane({ env });
+    const evidence = collectEvidence({ env, event });
+    const decision = decideGate(cmd, { probe, evidence });
     if (decision.block) return { exit: 2, stderr: decision.message, command: decision.command };
-    return { exit: 0, stderr: '', command: decision.command };
+    // 探测没查成：放行，但 stderr 写清「没查成 ≠ 断了」，避免一次抖动被当成绿灯。
+    return { exit: 0, stderr: decision.note || '', command: decision.command };
   } catch (e) {
     return {
       exit: 2,
