@@ -34,8 +34,13 @@ const ROUTING = { models: MODELS, raw: { 执行体: { 默认: 'orca', mirasim: M
 const HEAD = 'a'.repeat(40);
 
 // 假 gh：pr view 回 PR head；pr view reviews 回给定 reviews。
-function fakeGh({ headRefName = 'feat/x', headRefOid = HEAD, mergeable = 'MERGEABLE', reviews = [] } = {}) {
-  return (argv) => {
+// #1017：多字段 view 的 mergeable 常恒 UNKNOWN；单张 `--json mergeable` 才有真值。
+function fakeGh({
+  headRefName = 'feat/x', headRefOid = HEAD, mergeable = 'MERGEABLE',
+  viewedMergeable, reviews = [],
+} = {}) {
+  const calls = { viewMergeable: 0 };
+  const gh = (argv) => {
     const a = argv.join(' ');
     if (a.includes('pr view') && a.includes('headRefName')) {
       return { ok: true, out: JSON.stringify({ headRefName, headRefOid, mergeable }) };
@@ -43,8 +48,16 @@ function fakeGh({ headRefName = 'feat/x', headRefOid = HEAD, mergeable = 'MERGEA
     if (a.includes('pr view') && a.includes('reviews')) {
       return { ok: true, out: JSON.stringify({ reviews }) };
     }
+    // 单张只查 mergeable（不含 headRefName）——#1017 重查走这条。
+    if (a.includes('pr view') && a.includes('mergeable')) {
+      calls.viewMergeable += 1;
+      const v = viewedMergeable !== undefined ? viewedMergeable : mergeable;
+      return { ok: true, out: JSON.stringify({ mergeable: v }) };
+    }
     return { ok: true, out: '{}' };
   };
+  gh.calls = calls;
+  return gh;
 }
 
 // 假 runtime：记下 startSession 调了几次，返回一个 sessionKey。
@@ -624,5 +637,35 @@ describe('#886 ⑤mergeable 硬闸（复用 assessPrMergeable）', () => {
     assert.equal(res.ok, false);
     assert.equal(res.stage, 'rework:mergeable');
     assert.equal(rig.calls.interact.length, 0);
+  });
+
+  it('#1017 列表 UNKNOWN、单张 MERGEABLE → drain 放行，且真走了单张重查', async () => {
+    const { mirasimReviewerCreate } = await import(RM);
+    const rig = reworkRig({ treeHead: HEAD });
+    const gh = fakeGh({ mergeable: 'UNKNOWN', viewedMergeable: 'MERGEABLE' });
+    const res = await mirasimReviewerCreate({ ...reworkArgs(rig), gh, pr: '884' });
+    assert.equal(res.ok, true);
+    assert.equal(res.mergeable, 'MERGEABLE');
+    assert.equal(gh.calls.viewMergeable, 1);
+  });
+
+  it('#1017 列表 UNKNOWN、单张也 UNKNOWN → 不放行（fail-close 仍在）', async () => {
+    const { mirasimReviewerCreate } = await import(RM);
+    const rig = reworkRig({ treeHead: HEAD });
+    const gh = fakeGh({ mergeable: 'UNKNOWN', viewedMergeable: 'UNKNOWN' });
+    const res = await mirasimReviewerCreate({ ...reworkArgs(rig), gh, pr: '884' });
+    assert.equal(res.ok, false);
+    assert.equal(res.stage, 'mergeable');
+    assert.equal(rig.calls.ensure.length, 0);
+    assert.equal(gh.calls.viewMergeable, 1);
+  });
+
+  it('#1017 列表直接 MERGEABLE → 不发起单张重查', async () => {
+    const { mirasimReviewerCreate } = await import(RM);
+    const rig = reworkRig({ treeHead: HEAD });
+    const gh = fakeGh({ mergeable: 'MERGEABLE', viewedMergeable: 'CONFLICTING' });
+    const res = await mirasimReviewerCreate({ ...reworkArgs(rig), gh, pr: '884' });
+    assert.equal(res.ok, true);
+    assert.equal(gh.calls.viewMergeable, 0, '已知态不烧配额');
   });
 });
