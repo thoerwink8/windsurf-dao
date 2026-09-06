@@ -31,6 +31,8 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/nudge-stalled.mjs --go
 # 退出码 2 = 没查成（会话档案目录读不了 / 一个会话都没扫到），故意留成失败：
 # 「没扫到」要在 systemctl --failed 里看得见，不许跟「没有卡住的」长成一个样。

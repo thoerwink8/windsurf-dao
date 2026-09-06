@@ -24,6 +24,8 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/board-gc.mjs --apply --say
 # 退出码 1 = 有卡要人判，这是正常输出不是故障；2 才是没查成。
 SuccessExitStatus=0 1

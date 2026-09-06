@@ -42,7 +42,12 @@ function parseArgs(argv) {
 }
 
 function run(cmd, args, { timeout = 60000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 << 20 });
+  // FORCE_COLOR / CLICOLOR_FORCE 会让 gh --json 刷成非 JSON。oneshot 没有 TTY 也挡不住它。
+  const env = { ...process.env, NO_COLOR: '1', GH_NO_COLOR: '1', TERM: 'dumb' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 << 20, env });
   return { code: r.status, out: String(r.stdout || ''), err: String(r.stderr || ''), failed: !!r.error };
 }
 
