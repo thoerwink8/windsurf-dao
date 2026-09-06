@@ -91,6 +91,29 @@ describe('验收 1：边界清楚 → 无岔路，打齐三标', () => {
     assert.notEqual(r.reviewer, 'grok-4.6');
     assert.equal(r.reviewer.startsWith('gpt-'), true);
   });
+
+  it('带文件名的「改成/换成」是架构活 → forks，不打 已消歧', async () => {
+    const { classifyIssue, planIssue, VERDICT, DISAMBIGUATED_LABEL } = await CORE;
+    const titles = [
+      '把 commander.mjs 改成事件驱动',
+      '把 close-issues.mjs 换成 sweep',
+      '把 scripts/dao.mjs 改为异步发射',
+    ];
+    for (const title of titles) {
+      const cls = classifyIssue({ number: 11, title, body: '', labels: [] });
+      assert.equal(cls.verdict, VERDICT.forks, title);
+      assert.notEqual(cls.verdict, VERDICT.clear, title);
+      const plan = planIssue({
+        issue: { number: 11, title, body: '', labels: [] },
+        comments: [],
+        routingDoc: ROUTING,
+      });
+      assert.equal(plan.verdict, VERDICT.forks, title);
+      assert.equal(plan.labelsToAdd.includes(DISAMBIGUATED_LABEL), false, title);
+    }
+    const still = classifyIssue(issue(1));
+    assert.equal(still.verdict, VERDICT.clear);
+  });
 });
 
 describe('验收 2：真有岔路（#999 形）→ 要人拍，不许打 已消歧', () => {
@@ -438,6 +461,14 @@ describe('选型 JSON 加了消歧角色，通道是 gw/grok-4.6', () => {
     assert.equal(first.id, 'grok-4.6');
     assert.equal(first.provider, 'gw');
     assert.equal(first.cli_model, 'gw/grok-4.6');
+  });
+
+  it('pickDispatchLabels 打的是下一跳工人（写码），不读 工人.消歧', async () => {
+    const { pickDispatchLabels } = await CORE;
+    const r = pickDispatchLabels({ labels: [], routingDoc: ROUTING });
+    assert.equal(r.ok, true);
+    assert.equal(r.type, '写码');
+    assert.equal(r.model, 'grok-4.6');
   });
 });
 

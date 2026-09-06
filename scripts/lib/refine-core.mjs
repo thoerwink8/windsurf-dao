@@ -118,7 +118,8 @@ export function hasForkSignal(text) {
 
 /**
  * 无岔路的窄门。只认「单点、可验证、没有第二种合格产物」的机械活。
- * 验收样例：「把 X 函数的错误信息换成人话」。
+ * 验收样例：「把 X 函数的错误信息换成人话」——点名一处函数、一处提示文案、只换字。
+ * 「把 foo.mjs 改成/换成/改为 …」是架构活，合格执行者不会做出同一个东西，必须走 forks。
  * 扩门 = 自己给自己发派工许可，所以默认否。
  */
 export function isClearMechanical(title, body) {
@@ -127,10 +128,13 @@ export function isClearMechanical(title, body) {
   const text = `${t}\n${b}`;
   if (hasForkSignal(text)) return false;
   if (/[？?]/.test(t) && /要不要|该不该|还是/.test(t)) return false;
+  const fileRewrite = /把\s*\S[\s\S]{0,80}\.(mjs|js|cjs)\b[\s\S]{0,40}(换成|改成|改为)/;
+  if (fileRewrite.test(t) || fileRewrite.test(b)) return false;
   const namedSwap = /把\s*\S[\s\S]{0,60}(换成|改成|改为)/.test(t)
     || /把\s*\S[\s\S]{0,60}(换成|改成|改为)/.test(b);
-  const namedTarget = /函数/.test(text) || /\.(mjs|js|cjs)\b/.test(text) || /错误信息/.test(text);
-  return namedSwap && namedTarget;
+  const namedFunction = /函数/.test(text);
+  const copyOnly = /错误信息|提示文案/.test(text);
+  return namedSwap && namedFunction && copyOnly;
 }
 
 /** 从正文抠「要你拍」下面的编号项。抠不出就交 conservativeForks，不许编造细节。 */
@@ -238,7 +242,9 @@ export function classifyIssue(issue) {
 
 /**
  * 无岔路要打的 model/ + reviewer/。值只读选型 JSON。
- * 工种取 type/，缺省写码。审官必须与工人跨厂，推不出 → 没查成，不许猜同厂。
+ * 工种取被消歧那张单的 type/，缺省写码——这是给下一跳工人打的标。
+ * `工人.消歧` 槽位是消歧官本人的选型（谁来跑 refiner），pickDispatchLabels 不读它。
+ * 审官必须与工人跨厂，推不出 → 没查成，不许猜同厂。
  */
 export function pickDispatchLabels({ labels, routingDoc, models } = {}) {
   if (!routingDoc || typeof routingDoc !== 'object') {
