@@ -1,0 +1,2080 @@
+{
+  "comment": "PR #909 因 drain 账本不带 head 零日志卡死窗口（commit df87014a）。只抽判据字段。",
+  "snapshots": [
+    {
+      "at": "2026-09-06T02:31:14.027Z",
+      "github": {
+        "scanned": true,
+        "prs": [
+          {
+            "number": 964,
+            "headRefOid": "f5159b07b290bb9fab87c612098536f0c82fe05c",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 986,
+            "headRefOid": "c1e575ad92c3f5b407aedb71564a29a9bca1c094",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 885,
+            "headRefOid": "3388e17ab0445f00c8535c1ec25a3beff9fc6fe2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 884,
+            "headRefOid": "e7c2fc3a1c9ccb26b80a541b8750c58f995735b2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 897,
+            "headRefOid": "69ded6ac49b79f49b88623d082e48b52401a0042",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 909,
+            "headRefOid": "e1113ced6b0b340becd50d53cd4b19288f74fe53",
+            "mergeable": "CONFLICTING",
+            "isDraft": false,
+            "reviewDecision": null
+          },
+          {
+            "number": 930,
+            "headRefOid": "1d01a6343aca3f9a50b675b32b9923a65b20bd65",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 919,
+            "headRefOid": "548efb8e34d4d1c27382267a87f3a968c6babe61",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          }
+        ],
+        "issues": [
+          {
+            "number": 996,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 995,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 982,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 944,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 971,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 967,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 955,
+            "labels": [
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 819,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 948,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 966,
+            "labels": []
+          },
+          {
+            "number": 965,
+            "labels": [
+              {
+                "name": "已消歧"
+              }
+            ]
+          },
+          {
+            "number": 818,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 904,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 902,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 881,
+            "labels": [
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 853,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 841,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 816,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 792,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          }
+        ]
+      },
+      "orca": {
+        "scanned": true,
+        "worktrees": [
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-撞限流探测搬上服务器-接回自动换人-807-拆出-先搬后删",
+            "displayName": "PR-#945 工人·grok-4.6 撞限流探测搬上服务器 + 接回自动换人（#807 拆出，先搬后删）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-返工-PR-945",
+            "displayName": "PR-#945 工人·grok-4.6 返工 PR #945",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-891-ISSUE-891-快马896-工人替身树",
+            "displayName": "PR-#896 工人·claude-opus-5 ISSUE-891-快马896-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 891,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-956-工人-grok-4.6-服务器帅位要-24-小时不停干活-事件驱动主路-低频轮询兜底-替掉现在纯轮询的节奏",
+            "displayName": "PR-#997 工人·grok-4.6 服务器帅位要 24 小时不停干活：事件驱动主路 + 低频轮询兜底，替掉现在纯轮询的节奏",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 956,
+            "linkedPR": {
+              "number": 997,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-982-工人-grok-4.6-PR-884-880-卡-B-返工-解冲突-清四轮红项-CI-绿-mirasim-全迁的第一块地基",
+            "displayName": "PR-#986 工人·grok-4.6 PR #884（#880 卡 B）返工：解冲突＋清四轮红项＋CI 绿——mirasim 全迁的第一块地基",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 982,
+            "linkedPR": {
+              "number": 986,
+              "state": "draft"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-984-工人-grok-4.6-返工-PR-985",
+            "displayName": "PR-#985 工人·grok-4.6 返工 PR #985",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 984,
+            "linkedPR": {
+              "number": 985,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-971-工人-grok-4.6-服务器帅位期1-给它三个动词-补标签-重试drain-转单-让-escalate-有接收方",
+            "displayName": "ISSUE-#971 工人·grok-4.6 服务器帅位期1：给它三个动词（补标签/重试drain/转单），让 escalate 有接收方",
+            "liveTerminalCount": 3,
+            "hasAttachedPty": true,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 971,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-ISSUE-888-复审890-工人替身树",
+            "displayName": "ISSUE-#888 ISSUE-888-复审890-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-解冲突-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 解冲突 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-返工-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 返工 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-889-ISSUE-889-审909-工人替身树",
+            "displayName": "ISSUE-#889 ISSUE-889-审909-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-884-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#884 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-885-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#885 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-909-审官-gpt-5.6-luna",
+            "displayName": "PR-#909 审官·gpt-5.6-luna",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          }
+        ]
+      },
+      "reviewPending": {
+        "scanned": true,
+        "items": [
+          {
+            "pr": 909,
+            "head": {
+              "oid": "e1113ced6b0b340becd50d53cd4b19288f74fe53"
+            }
+          }
+        ]
+      },
+      "prReviews": {
+        "scanned": true,
+        "byPr": {
+          "909": {
+            "judged": false
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-09-06T02:51:08.762Z",
+      "github": {
+        "scanned": true,
+        "prs": [
+          {
+            "number": 964,
+            "headRefOid": "f5159b07b290bb9fab87c612098536f0c82fe05c",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 986,
+            "headRefOid": "c1e575ad92c3f5b407aedb71564a29a9bca1c094",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 885,
+            "headRefOid": "3388e17ab0445f00c8535c1ec25a3beff9fc6fe2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 884,
+            "headRefOid": "e7c2fc3a1c9ccb26b80a541b8750c58f995735b2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 897,
+            "headRefOid": "69ded6ac49b79f49b88623d082e48b52401a0042",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 909,
+            "headRefOid": "e1113ced6b0b340becd50d53cd4b19288f74fe53",
+            "mergeable": "CONFLICTING",
+            "isDraft": false,
+            "reviewDecision": null
+          },
+          {
+            "number": 930,
+            "headRefOid": "1d01a6343aca3f9a50b675b32b9923a65b20bd65",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 919,
+            "headRefOid": "548efb8e34d4d1c27382267a87f3a968c6babe61",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          }
+        ],
+        "issues": [
+          {
+            "number": 996,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 995,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 982,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 944,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 971,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 967,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 955,
+            "labels": [
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 819,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 948,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 966,
+            "labels": []
+          },
+          {
+            "number": 965,
+            "labels": [
+              {
+                "name": "已消歧"
+              }
+            ]
+          },
+          {
+            "number": 818,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 904,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 902,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 881,
+            "labels": [
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 853,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 841,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 816,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 792,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          }
+        ]
+      },
+      "orca": {
+        "scanned": true,
+        "worktrees": [
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-撞限流探测搬上服务器-接回自动换人-807-拆出-先搬后删",
+            "displayName": "PR-#945 工人·grok-4.6 撞限流探测搬上服务器 + 接回自动换人（#807 拆出，先搬后删）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-返工-PR-945",
+            "displayName": "PR-#945 工人·grok-4.6 返工 PR #945",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-891-ISSUE-891-快马896-工人替身树",
+            "displayName": "PR-#896 工人·claude-opus-5 ISSUE-891-快马896-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 891,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-956-工人-grok-4.6-服务器帅位要-24-小时不停干活-事件驱动主路-低频轮询兜底-替掉现在纯轮询的节奏",
+            "displayName": "PR-#997 工人·grok-4.6 服务器帅位要 24 小时不停干活：事件驱动主路 + 低频轮询兜底，替掉现在纯轮询的节奏",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 956,
+            "linkedPR": {
+              "number": 997,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-982-工人-grok-4.6-PR-884-880-卡-B-返工-解冲突-清四轮红项-CI-绿-mirasim-全迁的第一块地基",
+            "displayName": "PR-#986 工人·grok-4.6 PR #884（#880 卡 B）返工：解冲突＋清四轮红项＋CI 绿——mirasim 全迁的第一块地基",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 982,
+            "linkedPR": {
+              "number": 986,
+              "state": "draft"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-984-工人-grok-4.6-返工-PR-985",
+            "displayName": "PR-#985 工人·grok-4.6 返工 PR #985",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 984,
+            "linkedPR": {
+              "number": 985,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-971-工人-grok-4.6-服务器帅位期1-给它三个动词-补标签-重试drain-转单-让-escalate-有接收方",
+            "displayName": "ISSUE-#971 工人·grok-4.6 服务器帅位期1：给它三个动词（补标签/重试drain/转单），让 escalate 有接收方",
+            "liveTerminalCount": 3,
+            "hasAttachedPty": true,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 971,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-ISSUE-888-复审890-工人替身树",
+            "displayName": "ISSUE-#888 ISSUE-888-复审890-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-解冲突-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 解冲突 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-返工-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 返工 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-889-ISSUE-889-审909-工人替身树",
+            "displayName": "ISSUE-#889 ISSUE-889-审909-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-884-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#884 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-885-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#885 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-909-审官-gpt-5.6-luna",
+            "displayName": "PR-#909 审官·gpt-5.6-luna",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          }
+        ]
+      },
+      "reviewPending": {
+        "scanned": true,
+        "items": [
+          {
+            "pr": 909,
+            "head": {
+              "oid": "e1113ced6b0b340becd50d53cd4b19288f74fe53"
+            }
+          }
+        ]
+      },
+      "prReviews": {
+        "scanned": true,
+        "byPr": {
+          "909": {
+            "judged": false
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-09-06T03:11:12.373Z",
+      "github": {
+        "scanned": true,
+        "prs": [
+          {
+            "number": 964,
+            "headRefOid": "f5159b07b290bb9fab87c612098536f0c82fe05c",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 986,
+            "headRefOid": "c1e575ad92c3f5b407aedb71564a29a9bca1c094",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 885,
+            "headRefOid": "3388e17ab0445f00c8535c1ec25a3beff9fc6fe2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 884,
+            "headRefOid": "e7c2fc3a1c9ccb26b80a541b8750c58f995735b2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 897,
+            "headRefOid": "69ded6ac49b79f49b88623d082e48b52401a0042",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 909,
+            "headRefOid": "e1113ced6b0b340becd50d53cd4b19288f74fe53",
+            "mergeable": "CONFLICTING",
+            "isDraft": false,
+            "reviewDecision": null
+          },
+          {
+            "number": 930,
+            "headRefOid": "1d01a6343aca3f9a50b675b32b9923a65b20bd65",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 919,
+            "headRefOid": "548efb8e34d4d1c27382267a87f3a968c6babe61",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          }
+        ],
+        "issues": [
+          {
+            "number": 996,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 995,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 982,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 944,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 971,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 967,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 955,
+            "labels": [
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 819,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 948,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 966,
+            "labels": []
+          },
+          {
+            "number": 965,
+            "labels": [
+              {
+                "name": "已消歧"
+              }
+            ]
+          },
+          {
+            "number": 818,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 904,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 902,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 881,
+            "labels": [
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 853,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 841,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 816,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 792,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          }
+        ]
+      },
+      "orca": {
+        "scanned": true,
+        "worktrees": [
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-撞限流探测搬上服务器-接回自动换人-807-拆出-先搬后删",
+            "displayName": "PR-#945 工人·grok-4.6 撞限流探测搬上服务器 + 接回自动换人（#807 拆出，先搬后删）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-返工-PR-945",
+            "displayName": "PR-#945 工人·grok-4.6 返工 PR #945",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-891-ISSUE-891-快马896-工人替身树",
+            "displayName": "PR-#896 工人·claude-opus-5 ISSUE-891-快马896-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 891,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-956-工人-grok-4.6-服务器帅位要-24-小时不停干活-事件驱动主路-低频轮询兜底-替掉现在纯轮询的节奏",
+            "displayName": "PR-#997 工人·grok-4.6 服务器帅位要 24 小时不停干活：事件驱动主路 + 低频轮询兜底，替掉现在纯轮询的节奏",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 956,
+            "linkedPR": {
+              "number": 997,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-982-工人-grok-4.6-PR-884-880-卡-B-返工-解冲突-清四轮红项-CI-绿-mirasim-全迁的第一块地基",
+            "displayName": "PR-#986 工人·grok-4.6 PR #884（#880 卡 B）返工：解冲突＋清四轮红项＋CI 绿——mirasim 全迁的第一块地基",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 982,
+            "linkedPR": {
+              "number": 986,
+              "state": "draft"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-984-工人-grok-4.6-返工-PR-985",
+            "displayName": "PR-#985 工人·grok-4.6 返工 PR #985",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 984,
+            "linkedPR": {
+              "number": 985,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-971-工人-grok-4.6-服务器帅位期1-给它三个动词-补标签-重试drain-转单-让-escalate-有接收方",
+            "displayName": "ISSUE-#971 工人·grok-4.6 服务器帅位期1：给它三个动词（补标签/重试drain/转单），让 escalate 有接收方",
+            "liveTerminalCount": 3,
+            "hasAttachedPty": true,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 971,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-ISSUE-888-复审890-工人替身树",
+            "displayName": "ISSUE-#888 ISSUE-888-复审890-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-解冲突-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 解冲突 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-返工-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 返工 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-889-ISSUE-889-审909-工人替身树",
+            "displayName": "ISSUE-#889 ISSUE-889-审909-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-884-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#884 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-885-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#885 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-909-审官-gpt-5.6-luna",
+            "displayName": "PR-#909 审官·gpt-5.6-luna",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          }
+        ]
+      },
+      "reviewPending": {
+        "scanned": true,
+        "items": [
+          {
+            "pr": 909,
+            "head": {
+              "oid": "e1113ced6b0b340becd50d53cd4b19288f74fe53"
+            }
+          }
+        ]
+      },
+      "prReviews": {
+        "scanned": true,
+        "byPr": {
+          "909": {
+            "judged": false
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-09-06T03:31:11.414Z",
+      "github": {
+        "scanned": true,
+        "prs": [
+          {
+            "number": 964,
+            "headRefOid": "f5159b07b290bb9fab87c612098536f0c82fe05c",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 986,
+            "headRefOid": "c1e575ad92c3f5b407aedb71564a29a9bca1c094",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 885,
+            "headRefOid": "3388e17ab0445f00c8535c1ec25a3beff9fc6fe2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 884,
+            "headRefOid": "e7c2fc3a1c9ccb26b80a541b8750c58f995735b2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 897,
+            "headRefOid": "69ded6ac49b79f49b88623d082e48b52401a0042",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 909,
+            "headRefOid": "e1113ced6b0b340becd50d53cd4b19288f74fe53",
+            "mergeable": "CONFLICTING",
+            "isDraft": false,
+            "reviewDecision": null
+          },
+          {
+            "number": 930,
+            "headRefOid": "1d01a6343aca3f9a50b675b32b9923a65b20bd65",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 919,
+            "headRefOid": "548efb8e34d4d1c27382267a87f3a968c6babe61",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          }
+        ],
+        "issues": [
+          {
+            "number": 996,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 995,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 982,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 944,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 971,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 967,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 955,
+            "labels": [
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 819,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 948,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 966,
+            "labels": []
+          },
+          {
+            "number": 965,
+            "labels": [
+              {
+                "name": "已消歧"
+              }
+            ]
+          },
+          {
+            "number": 818,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 904,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 902,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 881,
+            "labels": [
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 853,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 841,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 816,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 792,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          }
+        ]
+      },
+      "orca": {
+        "scanned": true,
+        "worktrees": [
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-撞限流探测搬上服务器-接回自动换人-807-拆出-先搬后删",
+            "displayName": "PR-#945 工人·grok-4.6 撞限流探测搬上服务器 + 接回自动换人（#807 拆出，先搬后删）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-返工-PR-945",
+            "displayName": "PR-#945 工人·grok-4.6 返工 PR #945",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-891-ISSUE-891-快马896-工人替身树",
+            "displayName": "PR-#896 工人·claude-opus-5 ISSUE-891-快马896-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 891,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-956-工人-grok-4.6-服务器帅位要-24-小时不停干活-事件驱动主路-低频轮询兜底-替掉现在纯轮询的节奏",
+            "displayName": "PR-#997 工人·grok-4.6 服务器帅位要 24 小时不停干活：事件驱动主路 + 低频轮询兜底，替掉现在纯轮询的节奏",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 956,
+            "linkedPR": {
+              "number": 997,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-982-工人-grok-4.6-PR-884-880-卡-B-返工-解冲突-清四轮红项-CI-绿-mirasim-全迁的第一块地基",
+            "displayName": "PR-#986 工人·grok-4.6 PR #884（#880 卡 B）返工：解冲突＋清四轮红项＋CI 绿——mirasim 全迁的第一块地基",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 982,
+            "linkedPR": {
+              "number": 986,
+              "state": "draft"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-984-工人-grok-4.6-返工-PR-985",
+            "displayName": "PR-#985 工人·grok-4.6 返工 PR #985",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 984,
+            "linkedPR": {
+              "number": 985,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-971-工人-grok-4.6-服务器帅位期1-给它三个动词-补标签-重试drain-转单-让-escalate-有接收方",
+            "displayName": "ISSUE-#971 工人·grok-4.6 服务器帅位期1：给它三个动词（补标签/重试drain/转单），让 escalate 有接收方",
+            "liveTerminalCount": 3,
+            "hasAttachedPty": true,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 971,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-ISSUE-888-复审890-工人替身树",
+            "displayName": "ISSUE-#888 ISSUE-888-复审890-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-解冲突-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 解冲突 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-返工-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 返工 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-889-ISSUE-889-审909-工人替身树",
+            "displayName": "ISSUE-#889 ISSUE-889-审909-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-884-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#884 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-885-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#885 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-909-审官-gpt-5.6-luna",
+            "displayName": "PR-#909 审官·gpt-5.6-luna",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          }
+        ]
+      },
+      "reviewPending": {
+        "scanned": true,
+        "items": [
+          {
+            "pr": 909,
+            "head": {
+              "oid": "e1113ced6b0b340becd50d53cd4b19288f74fe53"
+            }
+          }
+        ]
+      },
+      "prReviews": {
+        "scanned": true,
+        "byPr": {
+          "909": {
+            "judged": false
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-09-06T03:51:07.261Z",
+      "github": {
+        "scanned": true,
+        "prs": [
+          {
+            "number": 964,
+            "headRefOid": "f5159b07b290bb9fab87c612098536f0c82fe05c",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 986,
+            "headRefOid": "c1e575ad92c3f5b407aedb71564a29a9bca1c094",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 885,
+            "headRefOid": "3388e17ab0445f00c8535c1ec25a3beff9fc6fe2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 884,
+            "headRefOid": "e7c2fc3a1c9ccb26b80a541b8750c58f995735b2",
+            "mergeable": "CONFLICTING",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 897,
+            "headRefOid": "69ded6ac49b79f49b88623d082e48b52401a0042",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 909,
+            "headRefOid": "e1113ced6b0b340becd50d53cd4b19288f74fe53",
+            "mergeable": "CONFLICTING",
+            "isDraft": false,
+            "reviewDecision": null
+          },
+          {
+            "number": 930,
+            "headRefOid": "1d01a6343aca3f9a50b675b32b9923a65b20bd65",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          },
+          {
+            "number": 919,
+            "headRefOid": "548efb8e34d4d1c27382267a87f3a968c6babe61",
+            "mergeable": "MERGEABLE",
+            "isDraft": true,
+            "reviewDecision": null
+          }
+        ],
+        "issues": [
+          {
+            "number": 996,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 995,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 982,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 944,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 971,
+            "labels": [
+              {
+                "name": "type/写码"
+              },
+              {
+                "name": "model/grok-4.6"
+              },
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              },
+              {
+                "name": "reviewer/gpt-5.6-luna"
+              }
+            ]
+          },
+          {
+            "number": 967,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 955,
+            "labels": [
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 819,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 948,
+            "labels": [
+              {
+                "name": "待拍板"
+              }
+            ]
+          },
+          {
+            "number": 966,
+            "labels": []
+          },
+          {
+            "number": 965,
+            "labels": [
+              {
+                "name": "已消歧"
+              }
+            ]
+          },
+          {
+            "number": 818,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "待消歧"
+              }
+            ]
+          },
+          {
+            "number": 904,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 902,
+            "labels": [
+              {
+                "name": "已消歧"
+              },
+              {
+                "name": "type/体系"
+              }
+            ]
+          },
+          {
+            "number": 881,
+            "labels": [
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 853,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 841,
+            "labels": [
+              {
+                "name": "任务"
+              },
+              {
+                "name": "type/写码"
+              }
+            ]
+          },
+          {
+            "number": 816,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          },
+          {
+            "number": 792,
+            "labels": [
+              {
+                "name": "任务"
+              }
+            ]
+          }
+        ]
+      },
+      "orca": {
+        "scanned": true,
+        "worktrees": [
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-撞限流探测搬上服务器-接回自动换人-807-拆出-先搬后删",
+            "displayName": "PR-#945 工人·grok-4.6 撞限流探测搬上服务器 + 接回自动换人（#807 拆出，先搬后删）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-833-工人-grok-4.6-返工-PR-945",
+            "displayName": "PR-#945 工人·grok-4.6 返工 PR #945",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 833,
+            "linkedPR": {
+              "number": 945,
+              "state": "merged"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-891-ISSUE-891-快马896-工人替身树",
+            "displayName": "PR-#896 工人·claude-opus-5 ISSUE-891-快马896-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 891,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-956-工人-grok-4.6-服务器帅位要-24-小时不停干活-事件驱动主路-低频轮询兜底-替掉现在纯轮询的节奏",
+            "displayName": "PR-#997 工人·grok-4.6 服务器帅位要 24 小时不停干活：事件驱动主路 + 低频轮询兜底，替掉现在纯轮询的节奏",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 956,
+            "linkedPR": {
+              "number": 997,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-982-工人-grok-4.6-PR-884-880-卡-B-返工-解冲突-清四轮红项-CI-绿-mirasim-全迁的第一块地基",
+            "displayName": "PR-#986 工人·grok-4.6 PR #884（#880 卡 B）返工：解冲突＋清四轮红项＋CI 绿——mirasim 全迁的第一块地基",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 982,
+            "linkedPR": {
+              "number": 986,
+              "state": "draft"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-984-工人-grok-4.6-返工-PR-985",
+            "displayName": "PR-#985 工人·grok-4.6 返工 PR #985",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 984,
+            "linkedPR": {
+              "number": 985,
+              "state": "open"
+            }
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-971-工人-grok-4.6-服务器帅位期1-给它三个动词-补标签-重试drain-转单-让-escalate-有接收方",
+            "displayName": "ISSUE-#971 工人·grok-4.6 服务器帅位期1：给它三个动词（补标签/重试drain/转单），让 escalate 有接收方",
+            "liveTerminalCount": 3,
+            "hasAttachedPty": true,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 971,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-ISSUE-888-复审890-工人替身树",
+            "displayName": "ISSUE-#888 ISSUE-888-复审890-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-解冲突-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 解冲突 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-888-工人-grok-4.6-返工-PR-890",
+            "displayName": "PR-#890 工人·grok-4.6 返工 PR #890",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-review",
+            "linkedIssue": 888,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/ISSUE-889-ISSUE-889-审909-工人替身树",
+            "displayName": "ISSUE-#889 ISSUE-889-审909-工人替身树",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-884-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#884 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-885-辅助-claude-opus-工人替身-快马-PR",
+            "displayName": "PR-#885 辅助·claude-opus 工人替身（快马 PR）",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 880,
+            "linkedPR": null
+          },
+          {
+            "worktreeId": "aa226580-4e9b-40e8-8fa5-24ef107cc309::/home/orca/orca/workspaces/windsurf-dao/PR-909-审官-gpt-5.6-luna",
+            "displayName": "PR-#909 审官·gpt-5.6-luna",
+            "liveTerminalCount": 0,
+            "hasAttachedPty": false,
+            "workspaceStatus": "in-progress",
+            "linkedIssue": 889,
+            "linkedPR": null
+          }
+        ]
+      },
+      "reviewPending": {
+        "scanned": true,
+        "items": [
+          {
+            "pr": 909,
+            "head": {
+              "oid": "e1113ced6b0b340becd50d53cd4b19288f74fe53"
+            }
+          }
+        ]
+      },
+      "prReviews": {
+        "scanned": true,
+        "byPr": {
+          "909": {
+            "judged": false
+          }
+        }
+      }
+    }
+  ]
+}

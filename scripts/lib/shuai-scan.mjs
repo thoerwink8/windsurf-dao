@@ -1,4 +1,8 @@
-// scripts/lib/shuai-scan.mjs —— 帅位看门狗纯函数层（chain:shuai-watchdog#1）
+// scripts/lib/shuai-scan.mjs —— 执行层共用件（chain:shuai-watchdog#1 / progress-stall#0）
+//
+// #1004：盯盘发现层已换到 progress-detect.mjs / progress-watch.mjs。本文件不再是
+// 叫醒主路。留下的 detectAnomalies / evaluateScan 只给测试回归和 commander 的
+// PR 判绿/CI 红共用件；scripts/shuai-scan.mjs CLI 主路不再调用它们。
 //
 // 采集与判定分离：tests 注入 fixture/mock，CLI 只负责 IO。
 // 「扫完 0 条」与「没扫成」必须不同形——任何 unscanned 维度整轮 fail-loud。

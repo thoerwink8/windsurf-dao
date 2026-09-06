@@ -52,6 +52,7 @@
 | A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check (23) 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
 | A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
+| D | ~/.dao/progress-watch.json | 盘面推进量看门狗账本（#1004）。`progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |

@@ -2,7 +2,6 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -191,25 +190,24 @@ describe('shuai-scan 标题建议', () => {
 });
 
 describe('shuai-scan CLI 契约', () => {
-  it('规则坏 JSON → 非零 + stderr，无 sentinel', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shuai-scan-bad-'));
-    const badRules = path.join(tmp, 'bad.json');
-    fs.writeFileSync(badRules, '{ nope', 'utf8');
-    const r = spawnSync(process.execPath, [CLI, '--rules', badRules], { encoding: 'utf8', cwd: REPO });
-    assert.notStrictEqual(r.status, 0);
+  it('快照目录空 → 非零 + stderr，无 sentinel（主路已换推进量，不再读 rules/gh）', async () => {
+    const C = await import('file://' + CLI.replace(/\\/g, '/'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shuai-scan-empty-'));
+    const r = C.runShuaiScan(['node', CLI, '--dir', tmp, '--state', path.join(tmp, 'state.json')]);
+    assert.notStrictEqual(r.exit, 0);
     assert.ok((r.stderr || '').trim().length > 0);
     assert.ok(!(r.stdout || '').includes('AGENT_LOOP_TICK_PANMIAN'));
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('gh 鉴权失败 → 非零 + stderr，无 sentinel', () => {
-    const r = spawnSync(process.execPath, [CLI], {
-      encoding: 'utf8',
-      cwd: REPO,
-      env: { ...process.env, GH_TOKEN: 'invalid-token-on-purpose', GITHUB_TOKEN: 'invalid-token-on-purpose' },
-    });
-    assert.notStrictEqual(r.status, 0);
+  it('快照文件损坏 → 非零 + stderr，无 sentinel', async () => {
+    const C = await import('file://' + CLI.replace(/\\/g, '/'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shuai-scan-bad-'));
+    fs.writeFileSync(path.join(tmp, 'situation-2026-09-06T00-00-00-000Z.json'), '{', 'utf8');
+    const r = C.runShuaiScan(['node', CLI, '--dir', tmp, '--state', path.join(tmp, 'state.json')]);
+    assert.notStrictEqual(r.exit, 0);
     assert.ok((r.stderr || '').trim().length > 0);
     assert.ok(!(r.stdout || '').includes('AGENT_LOOP_TICK_PANMIAN'));
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

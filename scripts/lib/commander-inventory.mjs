@@ -1,8 +1,18 @@
 // scripts/lib/commander-inventory.mjs —— 指挥官「盘点体检 + 自检 + 装机」（#800）
 //
-// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/超龄PR/落地清单空列。
+// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列。
 // **它不自己修，只开单**——修要过用户放行（「盘点」与「自愈」的边界）。异常 → gh search 查重
 // （带 [commander-inventory] 标记）→ 开「待拍板」单；正常 → 静默。第二轮同一异常不重复开。
+//
+// #1004 发现层换成推进量后，原 8 项逐项裁定（删 vs 留）：
+//   stale-pr        覆盖→删。N 轮 head/合上/草稿/判定不变已含「N 天没人动」；日历阈值发现不了 #909 几小时卡死。
+//   orphan-cwd      留。/proc cwd(deleted) 是机器层，situation 快照里没有。
+//   term-vs-agent   留。terminal list vs worker-list，快照的 worktrees 对不上幽灵 agent。
+//   timers          留。指挥官 timer 关着是执行器死，不是盘面对象停滞。
+//   probe-red       留。网关探活 journal，快照不采。
+//   landing-empty   留。落地清单空状态列是文档债，不是 PR/单/树/票。
+//   stale-running   留。派工队列僵尸 .running，situation 不写这份队列。
+//   pending-surface 留。待消歧到时机是日历事件，不是「连续 N 轮同一状态」。
 //
 // 每项三态：ok / red / unknown。unknown（探不到，如 Windows 无 /proc、无 journalctl）绝不开单，
 // 也绝不当 ok——「没查成」经 status 三态可见，不刷屏、不埋根因。
@@ -18,7 +28,6 @@ import {
 
 const INV_MARKER = '[commander-inventory]';
 // 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
-const STALE_PR_DAYS = 14;
 
 function sh(cmd, args, timeout = 20000) {
   const r = spawnSync(cmd, args, { windowsHide: true, encoding: 'utf8', timeout });
@@ -139,28 +148,8 @@ function checkProbeJournal() {
   return { state: 'ok', detail: `探针 journal 无连红（结尾红 ${streak} 行）`, key: 'probe-red' };
 }
 
-// 5. 超龄 open PR：> STALE_PR_DAYS 天没更新。
-function checkStalePrs({ runGh, REPO }) {
-  const r = runGh(['pr', 'list', '--repo', REPO, '--state', 'open', '--json', 'number,title,updatedAt', '--limit', '100'], 30000);
-  if (!r.ok) return { state: 'unknown', detail: `pr list 没查成：${r.error}`, key: 'stale-pr' };
-  let arr;
-  try { arr = JSON.parse(r.out || '[]'); } catch (e) { return { state: 'unknown', detail: `pr list 输出不是 JSON：${e.message}`, key: 'stale-pr' }; }
-  const cutoff = Date.now() - STALE_PR_DAYS * 86400000;
-  const stale = arr.filter((p) => (Date.parse(p.updatedAt || '') || Date.now()) < cutoff);
-  if (stale.length) {
-    const list = stale.slice(0, 5).map((p) => '#' + p.number).join(' ');
-    return {
-      state: 'red', key: 'stale-pr',
-      detail: `超龄 PR ${stale.length} 张（>${STALE_PR_DAYS}天未动）：${list}`,
-      plain: {
-        what: `有 ${stale.length} 张 PR 超过 ${STALE_PR_DAYS} 天没人动：${list}`,
-        impact: '越拖越难合，还占着分支',
-        plan: '开单请你拍：继续做还是关掉',
-      },
-    };
-  }
-  return { state: 'ok', detail: `无超龄 PR（阈值 ${STALE_PR_DAYS} 天）`, key: 'stale-pr' };
-}
+// 5. 超龄 open PR（stale-pr）——#1004 裁定被推进量覆盖：N 轮 head/合上/草稿/判定都不变
+//    已经包含「14 天没人动」。日历阈值发现不了 #909 那种几小时卡死，留着是两条腿。已删。
 
 // 6. 落地清单状态列空着的步（读，不改——那是另两单的文件）。
 function checkLandingChecklist({ ROOT }) {
@@ -288,10 +277,10 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
     checkTerminalVsAgents({ runOrca, ROOT }),
     checkTimers(),
     checkProbeJournal(),
-    checkStalePrs({ runGh, REPO }),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
-    // 8. 待消歧到时机（#876 ③）：跟前 7 项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
+    // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
+    // #1004 删掉 stale-pr 后这里一共 7 项。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];
