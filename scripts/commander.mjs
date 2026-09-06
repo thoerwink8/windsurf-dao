@@ -773,11 +773,15 @@ function dispatchRework(action, { state, dryRun, say }) {
   }
   const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
   const verdict = started.ok ? awaitDispatchResult(started.out, { say }) : started;
-  // 尝试即记：同一 PR 同一 head 不再自动重派（重派会造重复工人）。成没成一起记下，便于人判。
+  // 尝试即记：派成了就不再重派（重派会造重复工人）。**没派成的要记次数**——
+  // decide 侧按 ok/unscanned 判该不该重试，靠 tries 封顶（不记次数的话上限永远咬不住）。
   state.reworkDispatched = state.reworkDispatched || {};
-  state.reworkDispatched[action.reworkKey || reworkKey(action.pr, action.head)] = {
+  const rkey = action.reworkKey || reworkKey(action.pr, action.head);
+  const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
+  state.reworkDispatched[rkey] = {
     at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
+    tries: prevTries + 1,
   };
   return verdict;
 }

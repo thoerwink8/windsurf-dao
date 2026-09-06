@@ -1294,3 +1294,53 @@ describe('hubSay 认回执不认退出码', () => {
     assert.match(fn, /messageId === 'null'/);
   });
 });
+
+// 2026-09-06 实咬：PR #909 的返工派工失败（署名单缺「已消歧」），账本记下 ok:false，
+// 而去重只看「账在不在」→ 这个 head 上永远不再重派。标签当天就补好了，它却再没动过。
+// 「派了 ≠ 成了」早为 drain 定过（tries+宽限+试满停手），只是没接到返工这条路上。
+describe('返工派工失败要能重试（派了 ≠ 成了）', () => {
+  const OLD = '2026-09-05T00:00:00.000Z';
+  const conflictPr = (n, issue) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `h${n}`,
+    body: `署名 issue #${issue}`, title: `PR ${n}`,
+  });
+  const sit = (ledgerEntry) => baseSituation({
+    at: '2026-09-06T12:00:00.000Z',
+    github: { scanned: true, issues: [labeledIssue(940)], prs: [conflictPr(950, 940)] },
+    prReviews: { scanned: true, byPr: {} },
+    orca: { scanned: true, worktrees: [] },
+    reworkDispatched: ledgerEntry ? { 'rework:950@h950': ledgerEntry } : {},
+  });
+
+  it('上次 ok:false 且过了宽限 → 重派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: 1 }));
+    assert.equal(byKind(r, 'rework').length, 1, '失败过的派工必须能再试');
+  });
+
+  it('上次 ok:true → 不重派（工人正在改）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: true, unscanned: false, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // 红样本：没查成时不知道有没有工人，重派会造重复工人 → 必须 fail-closed。
+  it('上次 unscanned:true → 不重派（没查成 ≠ 没派成）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: true, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('宽限期内不重派（别每轮刷一个工人）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ at: '2026-09-06T11:40:00.000Z', pr: 950, head: 'h950', ok: false, unscanned: false, tries: 1 }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('试满 → escalate 停手交人，不再无限重试', async () => {
+    const { decide, MAX_REWORK_TRIES } = await CORE;
+    const r = decide(sit({ at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: MAX_REWORK_TRIES }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 1);
+  });
+});

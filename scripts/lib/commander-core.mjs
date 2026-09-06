@@ -205,6 +205,10 @@ export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews
 // 上限是为了别死循环——试满仍无判定就停手交人（判据：当前 head 判定仍是 0）。
 export const REREVIEW_GRACE_MIN = 45;
 export const MAX_REREVIEW_TRIES = 3;
+// 返工派工失败后的重试节奏。与 drain / 复审同一套语义（45 分钟宽限、试满 3 次停手交人），
+// 故意不另造一套数字：三条路犯的是同一个「派了 ≠ 成了」，节奏不同只会让人以为它们是三件事。
+export const REWORK_RETRY_GRACE_MIN = 45;
+export const MAX_REWORK_TRIES = 3;
 
 /**
  * PR 该派哪个审官：查它署名 issue 上的 reviewer/ 标签。
@@ -429,7 +433,28 @@ function collectCandidates(situation) {
   // 而 reviews-missing 在下面是静默 continue，写在后面会被那一条吃掉。
   function pushRework(pr, { brief, head, redRounds, why, hubText, conflict = false }) {
     const rkey = reworkKey(pr.number, head);
-    if (reworkDispatched[rkey]) return; // 同一 PR 同一 head 只派一次：工人正在改，等它推新 head
+    // 「派了 ≠ 成了」这条早就为 drain 定过（tries + 宽限 + 试满 escalate），却没接到返工这条路上：
+    // 原判据只看「这条账在不在」，不看它成没成。于是一次**失败**的派工（ok:false，压根没造出工人）
+    // 也会把这个 PR 在这个 head 上永久挡住。2026-09-06 实咬：PR #909 的返工 21:11 因署名单缺
+    // 「已消歧」被拒派，标签当天就补上了，可它再也没被重派过——head 没变，账在，永远静默。
+    // 账本里 ok 字段一直都在记，只是没人读。
+    const prev = reworkDispatched[rkey];
+    if (prev) {
+      if (prev.ok === true) return;        // 真派出去了：工人正在改，等它推新 head
+      if (prev.unscanned === true) return; // 没查成：不知道有没有工人，fail-closed 不重派（重派会造重复工人）
+      // 明确失败：上次没有工人被造出来，可以重试。但要宽限期 + 上限，
+      // 否则失败原因没解决时会每轮刷一次（#849 刷单教训）。
+      const tries = Number(prev.tries) || 1;
+      const ageMin = (nowMs - (Date.parse(prev.at || '') || 0)) / 60000;
+      if (Number.isFinite(ageMin) && ageMin < REWORK_RETRY_GRACE_MIN) return;
+      if (tries >= MAX_REWORK_TRIES) {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
+          { reason: 'rework-exhausted', pr: pr.number, head, tries },
+        ), N.rework));
+        return;
+      }
+    }
     const issueNo = attributedIssueNumber(pr);
     if (issueNo == null) {
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
