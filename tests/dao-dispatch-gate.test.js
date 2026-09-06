@@ -17,7 +17,10 @@ describe('dao 派工硬闸', () => {
     }
     function dispatch(extra, opts = {}) {
       const args = opts.raw ? extra : withSplit(extra);
-      return spawnSync(process.execPath, [CLI, 'dispatch', ...args], { encoding: 'utf8', cwd: REPO });
+      // 2026-09-06 切流量后 dispatch 默认走 mirasim。本套守的是 **orca 那条脊**的硬闸——
+      // 它还在服务 32 棵在途树，存量流干前必须继续被测，所以显式点名 orca。
+      // mirasim 路径的对等硬闸另有一套（本文件末「mirasim 单轨派工硬闸」）。
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'orca', ...args], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -281,13 +284,13 @@ describe('dao 派工硬闸', () => {
     // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
     const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
-    const cliHas = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
+    const cliHas = await cliInProc(['dispatch', '--executor', 'orca', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿', () => {
       assert.ok(cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, '消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿  →  ' + `status=${cliHas.status} ${String(pHas.error || '')}`);
     });
 
-    const cliNo = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
+    const cliNo = await cliInProc(['dispatch', '--executor', 'orca', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
     const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）', () => {
       assert.ok(cliNo.status === 0 && pNo.disambiguation && pNo.disambiguation.ok === false && pNo.disambiguation.hasLabel === false, '消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）  →  ' + `status=${cliNo.status} ${JSON.stringify(pNo)}`);
@@ -302,7 +305,7 @@ describe('dao 派工硬闸', () => {
     const realQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-queue-'));
     const realLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-ledger-'));
     const realEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: realQueue, LEDGER_EVENTS_DIR: realLedger };
-    const cliReal = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
+    const cliReal = await cliInProc(['dispatch', '--executor', 'orca', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
     const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rReal = waitForOutJson(pReal.resultPath) || {};
     await t.test('消歧门：真派工 --issue 559（无 label）→ 热路受理，执行体结果 ok:false 拒派', () => {
@@ -327,7 +330,7 @@ describe('dao 派工硬闸', () => {
     });
 
     // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = await cliInProc(['dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
+    const cliFail = await cliInProc(['dispatch', '--executor', 'orca', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], realEnv);
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rFail = waitForOutJson(pFail.resultPath) || {};
     await t.test('消歧门：gh 失败（CI 无 token）真派工 → 执行体结果报「没查成」拒派', () => {
@@ -351,7 +354,8 @@ describe('dao 派工硬闸', () => {
   it('#611 dispatch --split 必填（fail-close + 三单回归 + 建卡计划）', async (t) => {
     const S = await S_LOAD;
     function dispatchRaw(extra) {
-      return spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+      // 同上：本套测 orca 那条脊，切流量后要显式点名（默认已是 mirasim）。
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'orca', ...extra], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -597,7 +601,7 @@ describe('dao 派工硬闸', () => {
 
   it('#984：dispatch --dry-run 不打网', async (t) => {
     const dry = await cliInProc([
-      'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      'dispatch', '--executor', 'orca', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
       '--confirm', '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run',
     ]);
     let p = {};
@@ -674,12 +678,18 @@ describe('mirasim 单轨派工硬闸', () => {
   // 切流量开关（#880 卡 E）。这条不是测行为，是**守住别偷偷切**：三个前置没接完就把
   // MIRASIM_IS_ONLY_PATH 改 true，等于顺手关掉 merge-policy 恢复 / 探针熔断 / 盘面可见性。
   // 真接完了，改这行 + 改这条测试是同一次动作，逼人正面回答「前置满足了吗」。
-  it('切流量开关仍关着，且前置清单没被悄悄删掉', () => {
+  it('已切流量：派工默认走 mirasim，且回退路径与验收依据还在注释里', () => {
     const src = fs.readFileSync(CLI, 'utf8');
-    assert.match(src, /const MIRASIM_IS_ONLY_PATH = false;/);
-    for (const 前置 of ['merge-policy 落账本', '派前探针 / 熔断没接', 'label / 派工评论没接', '真派一单']) {
-      assert.ok(src.includes(前置), `切换前置清单少了一条：${前置}`);
-    }
+    assert.match(src, /const MIRASIM_IS_ONLY_PATH = true;/);
+    // 切换是可逆的，回退依据不许被后人清掉——否则出事时没人知道怎么退。
+    assert.ok(src.includes('回退一行：改回 false'), '回退说明被删了');
+    assert.ok(src.includes('PR #1025'), '验收依据（哪一单验的）被删了');
+  });
+
+  it('orca 那条脊还留着——32 棵在途树的 worker-done 还靠它', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    // 切流量 ≠ 删旧路。存量流干前删掉，在途工人交卷就没有落点了。
+    assert.match(src, /orca 绑定（派工单 \+ detached 执行体那条脊/);
   });
 
   it('--task 单飞：结构化拒派，不让 spec:undefined 崩在模板占位符上', () => {

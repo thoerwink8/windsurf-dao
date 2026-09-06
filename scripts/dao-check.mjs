@@ -1227,6 +1227,41 @@ function closesNumbers(text) {
   return found;
 }
 
+// ── orca 退役进度（2026-09-06 切流量后常驻）─────────────────────────────────────
+//
+// 为什么是一条 check 而不是一张 issue：#880 的进度表是「这条线唯一的实时状态面」，
+// 结果它过期了整整一张卡（卡 C 09-05 就合了，表上还写着未完成），2026-09-06 我被它
+// 误导两次。**跨会话的待办挂在人身上就会遗忘，挂在每次都跑的检查上才不会。**
+//
+// 判据是「当场可数的事实」——orca workspaces 下还剩几棵树，不是谁填的进度百分比。
+// 清零 = 存量流干 = 可以执行退役清单（停服务 + 删 dao.mjs 里标了边界的那条脊）。
+function checkOrcaRetirement() {
+  const home = process.env.HOME || '/home/orca';
+  const ws = join(home, 'orca', 'workspaces');
+  if (!existsSync(ws)) {
+    green('orca 退役：workspaces 目录已不在——存量清零，可执行退役清单（dao.mjs 里搜「整段删」）');
+    return;
+  }
+  let trees = [];
+  try {
+    for (const repo of readdirSync(ws)) {
+      const d = join(ws, repo);
+      if (!statSync(d).isDirectory()) continue;
+      for (const t of readdirSync(d)) trees.push(`${repo}/${t}`);
+    }
+  } catch (e) {
+    // 数不出来就说没查成，不许当成「清零了」——那会让人以为可以删了
+    fail('orca 退役进度没查成', '读不了 orca workspaces，别据此判断能不能删', String(e.message || e).slice(0, 80));
+    return;
+  }
+  if (trees.length === 0) {
+    green('orca 退役：存量树已清零——可以停 orca-serve 并执行退役清单（dao.mjs 里搜「整段删」）');
+    return;
+  }
+  notes.push(`orca 退役进行中：还有 ${trees.length} 棵在途树（派工已切 mirasim，只减不增）。清零后才停服务、删那条脊`);
+  green(`orca 退役进度：在途树 ${trees.length} 棵（新活已全走 mirasim）`);
+}
+
 // ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
 // 两个开放 PR 新建同一个文件 = 两份独立实现，合并时必然作废一个。判据与来历见
 // scripts/lib/competing-prs.mjs 头部（#884/#886/#986 三份实现撞在一起那次）。
@@ -1693,6 +1728,7 @@ checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+checkOrcaRetirement();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
 checkNoReviewerRecreateSamples();

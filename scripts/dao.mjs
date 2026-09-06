@@ -1556,11 +1556,24 @@ async function cmdDispatch(args) {
   //      派工照跑，只是撞到坏模型时不会提前发现。
   //   ③ GitHub 侧 label / 派工评论没接 —— **降级项不断链**：闭环靠 PR 署名走，不靠 label；
   //      代价是盘面看不见派了什么。
-  // 还差最后一道才该翻：真派一单、mirasim 工人自己干完并开出 PR（#880 卡 E 的验收判据）。
-  // 翻早了不是"激进"，是把没验过的路径设成唯一路径。
+  // **2026-09-06 已翻**。#880 卡 E 的验收判据「v2 真实派单一轮无人工干预」达成：
+  // issue #1003 → mirasim 派工 → 工人自己干完开出 PR #1025 → 交卷 → 审官 APPROVED → 已合并，
+  // 全程 orca 侧零参与（orca workspaces 下始终没有 1025 的卡）。
+  // 验收当场暴露并修掉的断点：交卷漏 `--executor` 会被送回 orca 通道**且报退出码 0**（见 executorFromCwd）。
+  // 回退一行：改回 false。orca 那条脊原样留着——它还在服务 32 棵在途树的 worker-done，
+  // 存量流干之前不许删（判例 platform-adapter-deleted-while-still-used）。
   // 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
-  const MIRASIM_IS_ONLY_PATH = false;
-  if (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim') return cmdDispatchMirasim(args, routing, gate);
+  const MIRASIM_IS_ONLY_PATH = true;
+  // 显式 `--executor orca` 仍走旧脊：它还在服务 32 棵在途树，测试也要能点名测它
+  // （切流量 ≠ 旧路立刻失效，那会让在途工人无处交卷）。存量流干后 orca 那段整体删，
+  // 届时这个分支、这个常量、下面那条脊一起消失——**别把它当长期开关维护**。
+  if (args.executor !== 'orca' && (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim')) {
+    return cmdDispatchMirasim(args, routing, gate);
+  }
+
+  // ↓↓↓ 以下是 orca 绑定（派工单 + detached 执行体那条脊）——orca 退役时整段删 ↓↓↓
+  // 标出边界是为了让最后那一刀是「删一段」而不是「在 160 处引用里挑」。
+  // 删除前提：orca workspaces 下的在途树清零（它们的 worker-done 还落在这条脊上）。
 
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
