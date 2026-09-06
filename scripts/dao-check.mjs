@@ -37,7 +37,8 @@
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
-// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
+// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿；
+//    #966 推迟档不进分母——夹具红/绿验判别力（快档也跑，live 仍只 --full）
 // ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡且没挂「将来某版」 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
@@ -105,7 +106,8 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
-import { inspectReadyQueue, isDeferredIssue } from './lib/ready-queue-check.mjs';
+import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
+import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
@@ -1309,18 +1311,6 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 const PENDING_BOARD_MAX_DEFAULT = 5;
 const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
 
-/** PR/标题/正文里的署名 issue 号（新规范「署名 issue #N」+ 旧 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
-function closesNumbers(text) {
-  const found = [];
-  const re = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const t = Number(m[1] ?? m[2]);
-    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
-  }
-  return found;
-}
-
 // ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
 //
 // 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
@@ -1626,58 +1616,47 @@ function loadOpenBoard() {
   };
 }
 
+function checkOpenIssueCountSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'open-issue-count');
+  const r = inspectOpenIssueCountFixtures(dir);
+  if (r.unscanned) {
+    fail('open 单数量样本没查成', '本次没查成：恢复 tests/fixtures/open-issue-count/ 超阈红 + 推迟不进分母的绿', r.error);
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `open 单数量样本对不上${r.problems && r.problems.length ? ` ${r.problems.length} 处` : ''}`,
+      '故意超阈必须红；同一份再加「将来某版」分母不变；推迟档顶满阈值必须绿',
+      (r.problems && r.problems.join(' ')) || r.error,
+    );
+    return;
+  }
+  green(`open 单数量样本 ${r.kinds.red + r.kinds.ok} 份（超阈红 ${r.kinds.red} / 推迟不进分母绿 ${r.kinds.ok}）`);
+}
+
 function checkOpenIssueCount(board) {
-  const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
-  if (!Number.isFinite(max) || max < 0) {
-    fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
+  const maxRaw = process.env.DAO_CHECK_OPEN_ISSUE_MAX;
+  const max = Number(maxRaw || OPEN_ISSUE_MAX_DEFAULT);
+  const r = inspectOpenIssueCount({
+    issues: board.issues,
+    prs: board.prs,
+    worktrees: board.worktrees,
+    max,
+    maxRaw,
+  });
+  if (r.kind === 'unscanned') {
+    skip(r.line);
     return;
   }
-  const issues = board.issues;
-  if (issues.unscanned) {
-    skip(`open 单数量阈值：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
+  if (r.kind === 'invalid') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  const prs = board.prs;
-  if (prs.unscanned) {
-    skip(`open 单数量阈值：open PR 面没查成（${prs.error}）——在途排除做不全，不是绿`);
+  if (r.kind === 'red') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  const wt = board.worktrees;
-  if (wt.unscanned) {
-    skip('open 单数量阈值：worktree 卡面没查成（orca 不可用或输出畸形）——少这张卡面会把在途单算成积压，本次没查成，不是绿');
-    return;
-  }
-  const cards = [];
-  for (const w of wt.worktrees) {
-    if (!w || w.isMainWorktree || w.isArchived) continue;
-    const name = String(w.displayName || '');
-    const linked = typeof w.linkedIssue === 'number' ? w.linkedIssue
-      : (w.linkedIssue && typeof w.linkedIssue.number === 'number' ? w.linkedIssue.number : null);
-    const zone = String(w.comment || '').match(/｜\[([^\]]*)\]/);
-    const zoneN = zone && zone[1].match(/#(\d+)/);
-    const issueName = name.match(/ISSUE-#?(\d+)/);
-    const oldName = name.match(/^#(\d+)/);
-    const n = linked || (zoneN ? Number(zoneN[1]) : null) || (issueName ? Number(issueName[1]) : null)
-      || (oldName ? Number(oldName[1]) : null);
-    if (n) cards.push(n);
-  }
-  const inPr = new Set();
-  for (const p of prs.array) {
-    for (const n of closesNumbers(`${p.title || ''}\n${p.body || ''}`)) inPr.add(n);
-  }
-  const inCard = new Set(cards);
-  if (issues.array.some(i => !i || typeof i.number !== 'number')) {
-    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${typeof issues.array[0]}`);
-    return;
-  }
-  // #966：挂「将来某版」的单保持 OPEN 以便一次列全，但不算当前待办——不进积压阈值。
-  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number) && !isDeferredIssue(i));
-  const n = backlog.length;
-  if (n > max) {
-    fail(`open 未在做单 ${n} 张，超阈值 ${max}（共 ${issues.array.length} 张 open，${inPr.size} 张有在途 PR、${inCard.size} 张有本地卡）`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number,title,body');
-    return;
-  }
-  green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
+  green(r.line);
 }
 
 /**
@@ -2038,13 +2017,14 @@ checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
+checkOpenIssueCountSamples();
 if (FULL) {
   const openBoard = loadOpenBoard();
   checkOpenIssueCount(openBoard);
   checkPendingBoardBacklog(openBoard);
   checkReadyQueue(openBoard);
 } else {
-  netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('open 单数量阈值 live', '要打 gh issue list');
   netParked('待拍板堆积', '要打 gh issue list');
   netParked('可立即起但没起', '要打 gh issue list');
 }
