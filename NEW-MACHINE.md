@@ -194,6 +194,8 @@ gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆
 
 Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
 
+**手起的会话（人直接敲 `claude`，不经 Mirasim / cc-switch）另设 `autoCompactWindow=200000`**，落在那台机器 `~/.claude/settings.json`（2026-09-07 用户拍板）。依据是当晚一次 7 小时帅位长会话的实测：967 次调用、cacheRead 2.96 亿 / output 69 万 = **428×**，单次 cacheRead 中位 287,889，而静态注入面（CLAUDE.md + skills 清单 + memory 索引 + CLI 内置）只占 45,606——**84% 是会话历史累积**，砍约定文件最多打七折，压窗口才动得了数量级。上面 500k 那条管的是 cc-switch 下发链路，两条互不覆盖；Mirasim 起的会话走它自己的 `--settings` 临时文件（当时实测强写 800000），改本机 settings 对它无效。
+
 ## 6. pi 怎么配
 
 pi 是 DeepSeek 系工人的 CLI。装与验：
@@ -491,7 +493,9 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 ### 搬过去之后本仓的红项变化（实测）
 
-orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+
+（这段是 2026-09 初的实测快照。当时那批红项清单记在仓根 `AGENTS.md` 里，该文件已随注入面瘦身删除——判断真回归不靠清单，靠基线：先在**未改动**的 master 上跑一遍，多出来的红才是你引入的。）
 
 ## 10. 接上 memory
 
