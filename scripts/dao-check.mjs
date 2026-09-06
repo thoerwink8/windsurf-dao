@@ -141,6 +141,7 @@ import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
 import { judgeCompetingPrs, collectOpenPrNewFiles } from './lib/competing-prs.mjs';
+import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, mapHealth } from './lib/test-impact.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
@@ -1227,6 +1228,52 @@ function closesNumbers(text) {
   return found;
 }
 
+// ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
+//
+// 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
+// ——global-CLAUDE.md 写着「每轮由全局 hook 提醒」，两个 settings.json 里一个 inbox 字样都没有，
+// 所以那两条 open 的 observation 躺了一天没人管。文档说有、实际没有，又一次「上游就绪≠下游执行」。
+//
+// 更根本的问题是载体选错了：UserPromptSubmit 是 Claude Code 独有的，而执行体已经全在 mirasim 上
+// （codex / pi 会话根本没有这种 hook）。把「会不会被读到」押在某一个客户端的钩子上，
+// 换个执行体就静默失效。
+//
+// 所以挪到 dao-check：它是帅位每次 land 的必经之路，与客户端无关。判据复用 inbox.mjs 的
+// assessInbox（不另造第二套口径）：超时 / 堆积 / 未提交 → block 判红，否则只念一遍。
+function checkInbox() {
+  const dir = join(ROOT, 'docs', 'observations');
+  if (!existsSync(dir)) { green('收件箱：docs/observations 不在——本仓没这条通道'); return; }
+  let docs = [];
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.md')) continue;
+      const p = join(dir, name);
+      const parsed = parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs });
+      if (parsed) docs.push(parsed);
+    }
+  } catch (e) {
+    fail('收件箱没查成', '读不了 docs/observations——不是「没有新东西」', String(e.message || e).slice(0, 80));
+    return;
+  }
+  // 未提交的最危险：落盘了但别的机器看不到，等于没写（这条通道的立身之本就是进 git）。
+  const st = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--', 'docs/observations'], { encoding: 'utf8', windowsHide: true });
+  const untracked = st.status === 0
+    ? String(st.stdout || '').split(/\r?\n/).filter(l => l.startsWith('??')).map(l => l.slice(3).trim()).filter(Boolean)
+    : [];
+  const assessed = assessInbox({ docs, untracked });
+  if (assessed.unscanned) { fail('收件箱没查成', assessed.lines.join('；'), ''); return; }
+  if (assessed.mode === 'block') {
+    fail(`收件箱要先处置：${assessed.pending.length} 条未处置（超时 ${assessed.overdue.length}，未提交 ${untracked.length}）`,
+      '每条落成 issue、或文件里加一行「处置：<结论>」、或 status 标 wontfix 加理由；未提交的先 git add',
+      assessed.lines.slice(0, 3).join('；'));
+    return;
+  }
+  if (assessed.mode === 'notice') {
+    for (const l of assessed.lines) notes.push(`收件箱：${l}`);
+  }
+  green(`收件箱：对照 ${docs.length} 条，未处置 ${assessed.pending.length}`);
+}
+
 // ── 西瓜清单（2026-09-06）─────────────────────────────────────────────────────
 //
 // 用户点破的真问题：风险不是忘了某一件事，是长期目标被日常小事挤掉，两天后彻底遗忘。
@@ -1819,6 +1866,7 @@ checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+checkInbox();
 checkInitiatives();
 checkOrcaRetirement();
 checkCompetingPrsSamples();
