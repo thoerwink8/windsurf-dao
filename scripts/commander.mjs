@@ -645,6 +645,36 @@ export function resultPathOf(stdout) {
   } catch { return null; }
 }
 
+/**
+ * 同步派工的成功判据（#1087 实咬）。
+ *
+ * 两条派工脊的出口形状**不一样**，而回读逻辑只认得其中一条：
+ *   orca（异步，已退役）  `{queued:true, async:true, resultPath:'…out.json'}` —— 真结果稍后落盘
+ *   mirasim（同步，现役） `{ok:true, executor:'mirasim', sessionKey:'pi:uuid', card:'…'}` —— 会话当场就起好了
+ *
+ * mirasim 那条没有 resultPath，于是 `resultPathOf` 回 null，回读一律判「拿不到 resultPath
+ * ——成没成没查成」，接着报帅开一张 `[待拍板] dispatch-unscanned` 单。**而那次派工其实成了**：
+ * 会话已经在跑，sessionKey 就在输出里。2026-09-06 一晚上刷出 6 张这种单（#1069/#1072/#1073/
+ * #1078/#1081/#1083/#1084/#1087…），全是假警报，而且开单去重按对象不按原因，一张 PR 一张单。
+ *
+ * 判据要严：`ok===true` **且**拿得到 sessionKey 才算同步成了。只有 ok 没有 sessionKey 时
+ * 仍判没查成——「没有结果文件」和「有结果、就在这一帧里」必须靠正面证据分开，不能靠猜。
+ *
+ * @returns {{sync:true, sessionKey, card, issue}|null}
+ */
+export function judgeSyncDispatch(stdout) {
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let j;
+  try { j = JSON.parse(text.slice(start)); } catch { return null; }
+  if (!j || typeof j !== 'object' || j.ok !== true) return null;
+  if (typeof j.resultPath === 'string' && j.resultPath) return null; // 异步脊，走回读那条路
+  const key = typeof j.sessionKey === 'string' ? j.sessionKey.trim() : '';
+  if (!key) return null; // 没有会话号 = 没有正面证据，仍判没查成
+  return { sync: true, sessionKey: key, card: j.card || j.workerCard || '', issue: j.issue ?? '' };
+}
+
 /** 纯函数：把 out.json 的内容判成三态。没落盘 = 没查成（既不算成也不算败）。 */
 export function classifyDispatchResult({ present, doc, waitedMs }) {
   if (!present) {
@@ -718,6 +748,9 @@ function sleepSync(ms) {
 
 /** 回读异步派工的真结果：轮询 resultPath 直到落盘或超时。 */
 function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, nowFn = Date.now } = {}) {
+  // mirasim 是同步脊：会话当场起好，没有结果文件要等（判据与实咬见 judgeSyncDispatch）。
+  const sync = judgeSyncDispatch(stdout);
+  if (sync) { say(`  派工真结果：成了（同步脊，会话 ${sync.sessionKey}）`); return { ok: true, card: sync.card, issue: sync.issue, sync: true }; }
   const path = resultPathOf(stdout);
   if (!path) { say('  派工受理了，但输出里没有结果文件路径——成没成没查成'); return { ok: false, unscanned: true, error: '拿不到 resultPath' }; }
   const t0 = nowFn();
