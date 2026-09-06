@@ -1388,12 +1388,140 @@ function buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routin
  *   4. 返回「已受理」（结果落 _flow/queue/<id>.out.json；开工/死亡确认交 watchdog 与 inbox.log）
  * 消歧门、账本查重、建 worktree、terminal create、送字、记账全在执行体（判断逻辑不变，只换执行位置）。
  */
+// ── mirasim 派工（#880 卡 B 的实现，按主干 executor-binding 重写）──────────────
+//
+// 为什么没有 `--executor` 旗标：卡 B 原设计是双轨（旗标选 orca/mirasim），但旗标要每个
+// 调用方记得传，而 commander 的 execAction 从来没传过——代码合了两天，自动派工一次都没
+// 走过 mirasim（2026-09-06 查实）。旗标式切换在这里等于没有切换。所以按用户拍板走
+// 「一步到位」：dispatch 只有 mirasim 这一条路，orca 那条脊留给在途存量自然流干。
+//
+// 下面这两条判据是 #884 审官三轮实咬换来的，重写时逐条搬过来了，别当样板注释删掉。
+
+/**
+ * mirasim 侧不接 --task（#884 审官 P1，二轮 + 三轮两次实咬）。
+ *
+ * --task 是 orca 那条脊的语义：卡已经在编排里，起个工人接上去。mirasim「会话即卡」，
+ * 没有可接的既有 task。两种走法都得拦死，少拦一种就是两个洞：
+ *   ① --task 单飞 → spec:undefined 冲进 buildSoldierInject，崩在模板占位符上。
+ *   ② --task 与 --spec 同传 → 只判 !args.spec 的话会返回 ok 并把 task 默默丢掉，
+ *      按 spec 派了一单调用方没要的活。
+ * 判据因此不看 spec：**只要 args.task 出现就结构化拒派**。公开参数不许静默忽略。
+ */
+function assertMirasimNoTask(args, verb) {
+  if (!args.task) return;
+  fail(`mirasim 执行体不接 --task（会话即卡，没有可接的既有 task）：${verb} 只给 --spec`, {
+    executor: 'mirasim', refused: true, unsupported: '--task', verb, task: args.task,
+    specGiven: !!args.spec,   // 三轮实咬：spec 也给了照样拒
+  });
+}
+
+/** mirasim 侧要一个具体分支名。给不出就拒派，不猜——猜错会把两张卡塞进同一棵树。 */
+function mirasimBranchOrFail(args) {
+  const explicit = String(args.branch || '').trim();
+  if (explicit) return explicit;
+  const issue = String(args.issue || '').trim().replace(/^#/, '');
+  if (/^\d+$/.test(issue)) return `dao-${issue}`;
+  fail('mirasim 要 --branch（没 --issue 就推不出默认分支名）；同一 issue 派第二张卡也要显式给，否则会撞同一棵树');
+}
+
+/** dao 的 --model → mirasim 的 agent 落点。缺登记报警拒派，不静默降级。 */
+function mirasimRouteOrFail(model, mirasimPolicy) {
+  if (!model) fail('mirasim 要显式 --model（--role 打分选型这条路还没接进来，见 #880 卡 B）');
+  const route = judgeAgentRoute(model, mirasimPolicy);
+  if (!route.ok) fail(route.error, { route: { model, family: route.family ?? null } });
+  return route;
+}
+
+/**
+ * mirasim 派一单：建树 + 起会话，同步返回。
+ *
+ * 不走派工单队列——orca 那条脊的异步是因为起 TUI 要等屏、要探针；mirasim 的 prompt
+ * 收到 accepted 就返回，本来就是异步的，再套一层队列只是多一个失败面。
+ * 会话即卡：观察面是用户自己的 Mirasim 客户端直连本服务器（#880 拍板）。
+ */
+async function cmdDispatchMirasim(args, routing) {
+  assertMirasimNoTask(args, 'dispatch');
+  // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
+  const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
+  if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
+  const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
+  if (!sliceGate.ok) fail(sliceGate.error, { missing: sliceGate.missing || [] });
+  if (splitGate.childCount > 0) fail('mirasim 还不接拆块（父子树 + 多会话编排归 #880 卡 D/E）：本单请 --split no');
+
+  // executor 必须传进闸——闸靠渲染目标任务书来量字节，不传就是按 orca 书量 mirasim 的单
+  // （两本书前缀差 8 字节，边界上会放过真正超限的 spec）。渲染与闸必须同一本书。
+  const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
+  if (!injectGate.ok) fail(injectGate.error, { injectGate });
+
+  const bind = bindExecutor({ executor: 'mirasim', routing });
+  if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
+  const main = resolveMainWorktreeRoot({ from: ROOT });
+  const repo = String(args.repo || '').trim() || (main.ok ? main.root : ROOT);
+  const branch = mirasimBranchOrFail(args);
+  const route = mirasimRouteOrFail(args.model, bind.mirasim);
+  const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
+  const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model });
+
+  // --dry-run 在碰执行体之前返回：预览一针都不许烧（额度撤不回来）。
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim',
+      card: cardName, issue: args.issue ?? null, repo, branch,
+      agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
+      reviewer: args.reviewer ?? null,
+      note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
+    });
+    return;
+  }
+
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
+
+  let tree;
+  try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
+  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
+
+  let sess;
+  try {
+    sess = await bind.runtime.startSession({
+      agent: route.agent, workdir: tree.path, prompt,
+      model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
+    });
+  } catch (e) {
+    fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
+      executor: 'mirasim', repo, branch, path: tree.path, card: cardName, agent: route.agent,
+    });
+  }
+
+  emit({
+    ok: true, executor: 'mirasim',
+    card: cardName, issue: args.issue ?? null,
+    repo, branch, path: tree.path, treeCreated: tree.created,
+    sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
+    agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
+    reviewer: args.reviewer ?? null,
+    note: '会话即卡：交卷=PR 存在+判据绿（#880 卡 F）；GitHub 侧 label/评论未接（卡 D）',
+  });
+}
+
 async function cmdDispatch(args) {
   if (args.batch) return cmdDispatchBatch(args);
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
   if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
   if (!args.name && !args.dryRun) fail('dispatch 要 --name');
+
+  // ── 切流量开关（#880 卡 E）────────────────────────────────────────────────
+  // 一步到位换 mirasim = 把下面这个 false 改成 true，删掉 orca 那段。**现在还不能改**，
+  // 三个前置没满足，2026-09-06 实测（改成 true 时 dao-dispatch-gate 红 36 条，就是它们）：
+  //   ① merge-policy 不落账本 —— 审官侧 lookupReviewerMergePolicy 从账本恢复，dispatch
+  //      不写就查不到，审官拿不到原派工的合并策略（#886 审官第 4 条明令不许硬编码 auto）。
+  //   ② 派前探针 / 熔断没接 —— 那两条钉在 orca 的 provider 名上（#843/#845），归卡 D。
+  //   ③ GitHub 侧 label / 派工评论没接 —— 盘面看不见派了什么，归卡 D。
+  // 前置全绿之前保持 orca：切早了不是"激进"，是把治理层顺手关掉。
+  // 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
+  const MIRASIM_IS_ONLY_PATH = false;
+  if (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim') return cmdDispatchMirasim(args, routing);
 
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });

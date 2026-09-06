@@ -1023,6 +1023,9 @@ export const FLAGS_BY_VERB = {
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
+    // mirasim 路径（#880 卡 B）：--executor 选执行体，--branch/--repo 是 mirasim 建树要的。
+    // 与 worker-done / reviewer-create 同名同义（卡 C 已加），别在这里另起名字。
+    '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),

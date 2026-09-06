@@ -619,3 +619,58 @@ describe('dao 派工硬闸', () => {
     });
   });
 });
+
+// ── mirasim 单轨派工（#880 卡 B，2026-09-06 一步到位落主干）────────────────────
+//
+// 这几条判据是 #884 审官三轮实咬换来的。那个 PR 因为与卡 C 重复实现 executor-binding
+// 而冲突搁浅，实现按主干 API 重写落到 master，判据必须跟着搬——否则三轮的教训随 PR 一起丢。
+describe('mirasim 单轨派工硬闸', () => {
+  const { assert, fs, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
+  const base = ['--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--split', 'no', '--split-reason', '单测'];
+  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+  const payload = (r) => {
+    try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
+    catch { return { raw: r.stdout, err: r.stderr }; }
+  };
+
+  it('--executor mirasim 走 mirasim 路径', () => {
+    const p = payload(run(['--issue', '1006', '--name', 't', ...base, '--spec', 's', '--dry-run']));
+    assert.equal(p.ok, true, JSON.stringify(p));
+    assert.equal(p.executor, 'mirasim');
+  });
+
+  // 切流量开关（#880 卡 E）。这条不是测行为，是**守住别偷偷切**：三个前置没接完就把
+  // MIRASIM_IS_ONLY_PATH 改 true，等于顺手关掉 merge-policy 恢复 / 探针熔断 / 盘面可见性。
+  // 真接完了，改这行 + 改这条测试是同一次动作，逼人正面回答「前置满足了吗」。
+  it('切流量开关仍关着，且前置清单没被悄悄删掉', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /const MIRASIM_IS_ONLY_PATH = false;/);
+    for (const 前置 of ['merge-policy 不落账本', '派前探针 / 熔断没接', 'label / 派工评论没接']) {
+      assert.ok(src.includes(前置), `切换前置清单少了一条：${前置}`);
+    }
+  });
+
+  it('--task 单飞：结构化拒派，不让 spec:undefined 崩在模板占位符上', () => {
+    const p = payload(run(['--issue', '1006', '--name', 't', ...base, '--task', 'abc', '--dry-run']));
+    assert.equal(p.ok, false);
+    assert.equal(p.unsupported, '--task');
+  });
+
+  it('--task 与 --spec 同传：照样拒，不许「有 spec 就当 task 不存在」把活默默换掉', () => {
+    const p = payload(run(['--issue', '1006', '--name', 't', ...base, '--spec', 's', '--task', 'abc']));
+    assert.equal(p.ok, false);
+    assert.equal(p.specGiven, true);   // 三轮实咬的正是这一条
+  });
+
+  it('推不出分支名就拒派，不猜——猜错会把两张卡塞进同一棵树', () => {
+    const p = payload(run(['--name', 't', ...base, '--spec', 's', '--dry-run']));
+    assert.equal(p.ok, false);
+    assert.match(String(p.error), /--branch/);
+  });
+
+  it('dry-run 一针都不烧：不建树、不起会话', () => {
+    const p = payload(run(['--issue', '1006', '--name', 't', ...base, '--spec', 's', '--dry-run']));
+    assert.equal(p.dryRun, true);
+    assert.equal(p.sessionKey, undefined);
+  });
+});
