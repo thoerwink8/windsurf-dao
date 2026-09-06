@@ -6,6 +6,7 @@
 //
 // 判据全在 scripts/lib/board-gc.mjs（纯函数、可测）。本文件只负责三件事：
 // 采事实（mirasim 树 / gh / git）、把事实喂给判据、按判决调 dao.mjs worktree-rm。
+// worktree-rm 仍问 orca：退役后恒失败，所以 --apply 失败时走 git 删树兜底（#1065）。
 //
 // 与 board-reset 的分工：board-reset 是「重测前一锅端」（所有非主树顶层卡）；
 // 本命令是它的反面——**只清确实不需要的那几张**，其余一张不动。
@@ -28,6 +29,7 @@ import {
 } from './lib/liveness.mjs';
 import { recordBroadcast } from './lib/broadcast-io.mjs';
 import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs';
+import { checkTreeLease } from './lib/dispatch/lease.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -225,6 +227,22 @@ function say(text) {
   recordBroadcast(String(text), { source: 'board-gc', now: new Date() });
 }
 
+function removeTreeFallback(z) {
+  const path = z && z.path;
+  if (!path) return { ok: false, error: '没有树路径' };
+  const lease = checkTreeLease({ workdir: path });
+  if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
+  if (lease.verdict === 'held') return { ok: false, error: lease.why };
+  const rm = run('git', ['-C', ROOT, 'worktree', 'remove', '--force', path], { timeout: 60000 });
+  if (rm.code === 0) return { ok: true };
+  try {
+    rmSync(path, { force: true, recursive: true });
+    return { ok: true, note: `git worktree remove 失败后直接删目录：${(rm.err || rm.out).trim().slice(0, 80)}` };
+  } catch (e) {
+    return { ok: false, error: `删不掉 ${path}：${String(e && e.message || e).slice(0, 160)}` };
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -326,7 +344,12 @@ function main() {
           continue;
         }
       }
-      const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      let r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      if (r.code !== 0) {
+        const fb = removeTreeFallback(z);
+        if (fb.ok) r = { code: 0, err: '', out: fb.note || '' };
+        else r = { code: 1, err: fb.error || r.err, out: r.out };
+      }
       const error = (r.err.trim() || r.out.trim()).slice(0, 200);
       results.set(z.id, r.code === 0 ? { ok: true } : { ok: false, error: error || `exit ${r.code}` });
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);

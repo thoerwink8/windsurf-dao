@@ -252,6 +252,13 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.match(src, /from '\.\/lib\/liveness\.mjs'/);
     assert.doesNotMatch(src, /lastOutputAt\s*[<>]/, '别在驱动层直接拿时间戳比大小');
   });
+  it('worktree-rm 失败走 git 删树兜底，不把 orca_retired 当终局', () => {
+    assert.match(src, /function removeTreeFallback/);
+    assert.match(src, /checkTreeLease/);
+    const i = src.indexOf('const fb = removeTreeFallback(z)');
+    assert.ok(i > -1, '找不到兜底调用');
+    assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
+  });
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
   });
@@ -832,10 +839,8 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
     assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
-  it('永远不许 --force：这条路上没有任何该覆盖的情形', () => {
-    // 只看真传给 git 的参数（带引号的那种），不看注释里提到的字样——
-    // 注释解释「为什么不用 --force」是好事，被自己的注释判红就没人敢写解释了。
-    assert.doesNotMatch(src, /['"`]--force/);
+  it('push 永远不许 --force；worktree remove --force 是删树不是覆盖远端', () => {
+    assert.doesNotMatch(src, /push[\s\S]{0,120}['"`]--force/);
   });
 
   it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {

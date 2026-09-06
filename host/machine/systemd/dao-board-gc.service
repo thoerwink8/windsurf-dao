@@ -13,6 +13,7 @@
 #
 # WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
 # PATH 显式写死：systemd 不读用户 shell profile。
+# worktree-rm 退役后走 git 删树兜底（#1065）。
 
 [Unit]
 Description=windsurf-dao board GC (zombie cards)
