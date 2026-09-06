@@ -1,15 +1,16 @@
 # windsurf-dao 协作约定
 
-这个仓库是 AI 协作约定的家。**当前处于停派工态**（2026-08-31 拍板，见 `docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：编排、派工、审官整条流程迁往 Linux 服务器，服务器落地前本机不编排。流程类规矩已收进 dispatch skill（`host/skills/dispatch/SKILL.md`），派单前按需读，不再常驻本页。
+这个仓库是 AI 协作约定的家。**当前处于编排态**（2026-09-06 拍板，见 `docs/decisions/2026-09-06-orchestration-mode-restored.md`）：编排、派工、审官跑在 Linux 服务器上，执行体是 mirasim，Orca 已退役。流程类规矩收在 dispatch skill（`host/skills/dispatch/SKILL.md`），派单前按需读，不常驻本页。
 
-## 怎么工作（停派工态）
+## 怎么工作
 
-- 帅直接在 master 提交推送；改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。
+- 改动在 worktree 里做，做完再提交推 master——主树是两个帅位共用的，谁跑一次 `git add -A` 就会把对方的在途改动卷进自己的提交（2026-09-06 咬了两次，第二次连 commit message 都没提被卷走的三个文件）。
+- 改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
 - commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 用 `[pi]`，Codex 用 `[codex]`，Grok 用 `[grok]`。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
 - 验收/通过记录必须与被测代码同基线：记录「X 修好 / 测验通过」的提交必须包含被测代码本身（#766 教训：通过记录挂在旧基线会误导后人）。
 - 改动影响新机安装时，同一次提交里更新 NEW-MACHINE.md；拿不准就更新——漏更比多更代价大。换机 = `git clone` + `node scripts/onboard.mjs`（幂等，坏了重跑即修）。
-- 恢复编排后（服务器落地），draft PR 起步、PR 正文写验收、审官判绿、开新单三问等流程规矩整体回岗——全文在 dispatch skill「编排态工作法」节。
+- 派工链上的规矩（draft PR 起步、PR 正文写验收、审官判绿、开新单三问）已回岗——全文在 dispatch skill「编排态工作法」节。
 
 ## 体系类改动
 

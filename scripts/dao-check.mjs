@@ -1875,17 +1875,19 @@ function checkNoAutoCloseLive() {
 }
 
 
-// 停派工态门（2026-08-31 dbfa323 / docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
-// ⑦⑭⑮⑰-live 四项是**派工节奏与外部盘面的活探**（orca --help、gh 盘面、账本对 GitHub），
-// 守的是「正在编排」这件事；本机停派工后它们只贡献网络抖动和耗时。默认不跑，
-// `--full` 跑全量（编排回岗 / 服务器上把 --full 设为常态）。
-// 「停派工态未跑」是第三种形：不是绿（没查）、也不是没查成（是故意不查），话面写明原因与开关。
-// 离线的样本/接线检查（夹具判别力、模板扫描）全部保留——它们不花网络，且守的约定还在仓里。
+// 全量档：活探类检查（gh 盘面、账本对 GitHub、跑子进程要 --help）只在 --full 跑。
+//
+// 2026-09-06 编排态回岗（用户拍板），原「停派工态门」的话面已删。那道门 2026-08-31 立时
+// 说的是「本机不编排，这些活探只贡献网络抖动」；如今 mirasim 派工恢复、指挥官在自动派工，
+// 那句话每跑一次就误导一次。**行为上它从来没挡住什么**——这几项本就在 `if (FULL)` 里，
+// parked() 只是 else 分支的措辞；删的是过期的理由，不是判据（migration-half-done-breaks-checks
+// 的反面教材：状态变了、检查的话面没跟上，人就照着旧话面做判断）。
+//
+// 离线的样本/接线检查（夹具判别力、模板扫描）一直全跑——它们不花网络，守的约定也还在仓里。
 const FULL = process.argv.includes('--full');
 // 快档标志：只有显式 --affected 才进快档。默认（不带旗标）仍跑全部，
 // 因为「跳过了什么」是静默的，得由调用方开口才生效。
 const AFFECTED = process.argv.includes('--affected');
-const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 node scripts/dao-check.mjs --full）`);
 // 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
 // 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
 const netParked = (name, why) => skip(`快档跳过：${name}——${why}（全量档 node scripts/dao-check.mjs --full 才跑）`);
@@ -1898,7 +1900,7 @@ checkResidentBudget();
 checkRoutingProvidersToml();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
-if (FULL) await checkCommandHelp(); else parked('命令库 --help 参数存活');
+if (FULL) await checkCommandHelp(); else netParked('命令库 --help 参数存活', '要逐条起子进程跑 --help');
 checkModeHookAlive();
 checkDispatchGateAlive();
 checkMemoryLinkAlive();
@@ -1910,13 +1912,13 @@ if (FULL) {
   checkOpenIssueCount(openBoard);
   checkReadyQueue(openBoard);
 } else {
-  parked('open 单数量阈值');
-  parked('可立即起但没起');
+  netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('可立即起但没起', '要打 gh issue list');
 }
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
 checkLedgerGapSamples();
-if (FULL) checkLedgerGapLive(); else parked('账本断流差集 live');
+if (FULL) checkLedgerGapLive(); else netParked('账本断流差集 live', '要拿账本对 GitHub');
 checkStrikesSamples();
 checkStrikesLive();
 checkMachinePathSamples();
@@ -1931,7 +1933,7 @@ checkLegsSamples();
 checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
-if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
 checkInbox();
 checkRepoOwnership();
 checkInitiatives();
@@ -2259,7 +2261,8 @@ function checkHarvestLive() {
     return;
   }
   if (v.empty) {
-    parked(`回流段 live：近 7 天（${since} 起）没有已合并 PR，无从判断`);
+    // 「没有样本」不是「查过没事」：近 7 天一个合并 PR 都没有时，这项没有判据可依。
+    skip(`回流段 live：近 7 天（${since} 起）没有已合并 PR，没有样本可判`);
     return;
   }
   const problems = [...v.orphans, ...v.thin];
