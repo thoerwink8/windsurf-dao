@@ -188,12 +188,11 @@ describe('dao 对 orca 的面', () => {
         && /startOrcaWorker\(\{[\s\S]*?from: coordHandle/.test(execFn),
         '#762 task-create / worker-start 都带 --from 协调哑终端（detached 无发送者终端）  →  ' + execFn.slice(0, 900));
     });
-    await t.test('#762 worktree create 带 --repo id:<本仓>（外部主树不再 Missing repo selector）', () => {
+    await t.test('#762 worktree create 带 --repo 选择符（外部主树不再 Missing repo selector）', () => {
       const execFn = daoSrc.slice(daoSrc.indexOf('function runDispatchExecution'), daoSrc.indexOf('function cmdDispatchBatch'));
-      assert.ok(/argsRepoList\(\)/.test(execFn) && /resolveRepoSelector\(\{/.test(execFn) && /gitRemoteOriginUrl\(ROOT\)/.test(execFn),
-        '#762 执行体解析 repo 选择符（remote 匹配）  →  ' + execFn.slice(0, 500));
-      assert.ok(/repo: repoResolved\.selector/.test(execFn) && /repo: created\.repoSelector/.test(execFn),
-        '#762 工人卡与子卡都带 --repo  →  ' + execFn.slice(0, 600));
+      assert.match(execFn, /resolveTargetRepoSelector\(/);
+      assert.match(execFn, /repo: repoResolved\.selector/);
+      assert.match(execFn, /repo: created\.repoSelector/);
     });
     await t.test('#762 resolveRepoSelector：remote 命中 / 路径兜底 / 冲突 / 0 条 / 多条 / 没查成 分开报', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-sel-'));

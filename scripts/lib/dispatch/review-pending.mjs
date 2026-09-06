@@ -44,7 +44,7 @@ export function reviewPendingPath(dir, pr) {
 }
 
 export function buildReviewPendingTicket({
-  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source,
+  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source, repo,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
@@ -76,6 +76,7 @@ export function buildReviewPendingTicket({
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
+      repo: repo && String(repo).trim() ? String(repo).trim() : null,
       error: error ? String(error) : null,
       source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
@@ -158,6 +159,7 @@ export function planReviewPendingDrain(ticket) {
     // 注意仍然只在 worktree 缺失时走：有树就走 attach，别让快马路吞掉正常路的判据。
     const createArgv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer];
     if (ticket.issue) createArgv.push('--issue', String(ticket.issue));
+    if (ticket.repo) createArgv.push('--repo', String(ticket.repo));
     return {
       ok: true,
       verb: 'reviewer-create',
@@ -179,6 +181,7 @@ export function planReviewPendingDrain(ticket) {
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
   if (ticket.workerModel) argv.push('--model', String(ticket.workerModel));
+  if (ticket.repo) argv.push('--repo', String(ticket.repo));
   return {
     ok: true,
     verb: 'reviewer-attach',

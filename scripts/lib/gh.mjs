@@ -259,15 +259,18 @@ export function ghExecutable() {
   return process.platform === 'win32' ? 'gh.exe' : 'gh';
 }
 
-export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
+export function spawnGh(args, { token, cwd, inherit = false, spawnImpl, repo } = {}) {
   if (!Array.isArray(args) || args.length === 0) {
     return { ok: false, error: '缺 gh 参数' };
   }
   const spawn = spawnImpl || spawnSync;
   const exe = ghExecutable();
+  const env = { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token };
+  const ghRepo = repo && String(repo).trim();
+  if (ghRepo) env.GH_REPO = ghRepo;
   const opts = {
     cwd,
-    env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token },
+    env,
     windowsHide: true,
   };
   if (inherit) opts.stdio = 'inherit';
@@ -290,7 +293,7 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
 export function ghAs(role, args, opts = {}) {
   const tok = resolveToken(role, opts);
   if (!tok.ok) return tok;
-  return spawnGh(args, { token: tok.token, cwd: opts.cwd, inherit: opts.inherit, spawnImpl: opts.spawnImpl });
+  return spawnGh(args, { token: tok.token, cwd: opts.cwd, inherit: opts.inherit, spawnImpl: opts.spawnImpl, repo: opts.repo });
 }
 
 // 扫完 0 条差异 vs 没扫成：actual 读不到 → unscanned；扫到且完全吻合 → mismatches=[]。

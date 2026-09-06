@@ -121,7 +121,10 @@ export function findDispatchForTask(workerListJson, taskId) {
   return { ok: true, dispatchId: hits[hits.length - 1].dispatchId, scanned: workers.length };
 }
 // #762 拆分：repo 选择符移到 scripts/lib/dispatch/repo.mjs（保持对外 API 不变）
-export { argsRepoList, normalizeRepoRemote, resolveRepoSelector } from './dispatch/repo.mjs';
+export {
+  argsRepoList, normalizeRepoRemote, resolveRepoSelector,
+  parseOwnerNameRepo, githubRemoteUrlOf, withGhRepo, assertRepoAuthorized,
+} from './dispatch/repo.mjs';
 
 // #762 拆分：worktree 生命周期域移到 scripts/lib/dispatch/worktree.mjs（保持对外 API 不变）
 import {
@@ -1025,8 +1028,8 @@ export const FLAGS_BY_VERB = {
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
-    // mirasim 路径（#880 卡 B）：--executor 选执行体，--branch/--repo 是 mirasim 建树要的。
-    // 与 worker-done / reviewer-create 同名同义（卡 C 已加），别在这里另起名字。
+    // --repo：orca 路径是 owner/name（#1024 跨仓）；mirasim 路径仍是建树用的本地根（#880 卡 B）。
+    // 与 worker-done / reviewer-create 同名同义，别在这里另起名字。
     '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
@@ -1059,9 +1062,10 @@ export const FLAGS_BY_VERB = {
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--repo',
+    '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--repo', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1143,10 +1147,11 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup] [--repo owner/name]
                   # 异步发射（2026-08-23 async-launch 拍板）：热路只做参数校验+写派工单到 _flow/queue/+拉起 detached 执行体，<1s 返回「已受理」；
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
+                  # --repo owner/name：跨仓派工（#1024）。不传仍是本仓。目标仓不在该 role 的 installation 里就拒，报「这个仓没授权给 <role>」，不许回落本仓
   dispatch-exec --order <派工单路径>
                   # 内部动词：dispatch 拉起的后台执行体；结果落 <id>.out.json（派工失败请重派，不要手动重跑——复用旧 Run 会 consumer_fenced，见 #762）
   dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
@@ -1157,7 +1162,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run] [--repo owner/name]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
@@ -1166,7 +1171,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
-  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
@@ -1174,7 +1179,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   reviewer-done --pr <N> [--dry-run]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>]
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>] [--repo owner/name]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
                   # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
@@ -1184,7 +1189,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
                   # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
+  review-pending-drain [--pr <N>] [--repo owner/name]
                   # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
                   # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
                   # 扫完 0 条是空转成功，目录读不了才没查成

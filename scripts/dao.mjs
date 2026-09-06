@@ -60,6 +60,10 @@ import {
   argsWorktreePs,
   argsRepoList,
   resolveRepoSelector,
+  parseOwnerNameRepo,
+  githubRemoteUrlOf,
+  withGhRepo,
+  assertRepoAuthorized,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   resolveWorktreeSelector,
@@ -217,7 +221,7 @@ import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
-import { applyGitIdentity } from './lib/gh.mjs';
+import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -272,9 +276,12 @@ function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
  * 生产不设该变量。opts.role 在真 gh 路径透传给 runGh（#573 App 身份）。 */
 function ghRunner(opts = {}) {
   const fake = process.env.DAO_GH_FAKE;
+  const repo = opts.repo && String(opts.repo).trim();
   if (!fake) return (args) => runGh(args, opts);
   return (args) => {
-    const r = spawnSync(process.execPath, [fake, ...args], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    const pinned = withGhRepo(args, repo);
+    if (!pinned.ok) return { ok: false, error: pinned.error };
+    const r = spawnSync(process.execPath, [fake, ...pinned.args], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
     if (r.error || (r.status !== 0 && r.status != null)) {
       return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
     }
@@ -511,10 +518,10 @@ function closeWorkerHandle(handle) {
 }
 
 /** #823：起 pi 时要带的溯源头。Orca terminal create 不支持 Unix env，只能拼在 launch 命令前。 */
-function daoTraceFor({ role, model, issue, pr, run, fallback } = {}) {
+function daoTraceFor({ role, model, issue, pr, run, fallback, repo } = {}) {
   const r = String(role || '').trim().toLowerCase();
   return {
-    repo: DEFAULT_DAO_REPO,
+    repo: repo || DEFAULT_DAO_REPO,
     issue,
     pr,
     role,
@@ -1524,6 +1531,9 @@ async function cmdDispatch(args) {
   const MIRASIM_IS_ONLY_PATH = false;
   if (MIRASIM_IS_ONLY_PATH || args.executor === 'mirasim') return cmdDispatchMirasim(args, routing);
 
+  // #1024：跨仓闸在热路（格式非法 / 没授权 / 没查成 当场拒，不写派工单）。不传 --repo 一字不变。
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'worker', where: 'dispatch' });
+
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
   const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
@@ -1560,7 +1570,7 @@ async function cmdDispatch(args) {
   if (args.dryRun) {
     // dry-run 预览保留消歧报告与查重透出（查重走索引增量读，不扫全量账本）；
     // 门控对预览无意义——disambiguation/dup 只作报告，不影响退出码（#565 返工）。
-    const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+    const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner({ repo: targetRepo.ownerName || undefined }) });
     const dup = precheckDispatchDup({
       issue: args.issue,
       terminal: workerLaunch.provider,
@@ -1612,6 +1622,7 @@ async function cmdDispatch(args) {
       allowDup: args.allowDup === true,
       noPreflight: args.noPreflight === true,
       now: args.now,
+      repo: targetRepo.ownerName || undefined,
     },
     plan,
     dedup: {
@@ -1821,9 +1832,13 @@ async function runDispatchExecution(order, { queueDir } = {}) {
   });
   if (!injectGate.ok) fail(injectGate.error, { injectGate, orderId: order.id, ...plan });
 
+  // #1024：执行体再过一遍跨仓闸（有人可能绕过热路直接 dispatch-exec）。不传 --repo 一字不变。
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'worker', where: 'dispatch-exec' });
+  const ghRepo = targetRepo.ownerName || undefined;
+
   // 消歧门（#565）：带 --issue 的派工，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
   // 在一切建卡动作之前拦（被拦下时什么都不会创建）。gh 查失败单独报「没查成」，不许当有 label 放行。
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner({ repo: ghRepo }) });
   if (!disambiguation.ok) {
     fail(disambiguation.error, { disambiguation, orderId: order.id, ...plan });
   }
@@ -1854,19 +1869,11 @@ async function runDispatchExecution(order, { queueDir } = {}) {
 
   const created = { childIds: [], childHandles: [], children: [], dispatchIds: [], taskIds: [] };
 
-  // #762：worktree create 一律带 --repo id:<本仓>，避免从外部主树建卡报 Missing repo selector。
-  // 匹配按 git remote URL（执行体可能跑在任意 worktree，路径匹配会失配）；remote 没查成再 fallback 路径。
-  // repo list 没查成 / 0 条 / 多条 → 分开报（不许把「没查成」当「没注册」）。
-  const repoListed = orca(argsRepoList());
-  const repoRemote = gitRemoteOriginUrl(ROOT);
-  const repoResolved = repoListed.ok
-    ? resolveRepoSelector({
-        repos: repoListed.json?.result?.repos,
-        remoteUrl: repoRemote.ok ? repoRemote.url : undefined,
-      })
-    : { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(repoListed.error)}` };
+  // #762：worktree create 一律带 --repo 选择符，避免从外部主树建卡报 Missing repo selector。
+  // #1024：--repo owner/name 走目标仓 remote 匹配（不许路径兜底回落本仓）；不传仍是本仓。
+  const repoResolved = resolveTargetRepoSelector(ghRepo);
   if (!repoResolved.ok) {
-    fail(`本仓 repo 选择符没解析成：${repoResolved.error}`, { orderId: order.id, ...plan, repoResolved, repoRemote: repoRemote.ok ? repoRemote.url : repoRemote.error });
+    fail(`repo 选择符没解析成：${repoResolved.error}`, { orderId: order.id, ...plan, repoResolved, repo: ghRepo || null });
   }
   created.repoSelector = repoResolved.selector;
 
@@ -1972,7 +1979,7 @@ async function runDispatchExecution(order, { queueDir } = {}) {
     title: args.name,
     created,
     promptFile,
-    daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
+    daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue, repo: ghRepo }),
   });
   if (!launched.ok) {
     failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, orderId: order.id, ...plan });
@@ -2086,7 +2093,7 @@ async function runDispatchExecution(order, { queueDir } = {}) {
           worktreeId,
           title,
           created: scratch,
-          daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
+          daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue, repo: ghRepo }),
         });
         if (!childLaunch.ok) {
           return { ok: false, error: childLaunch.error || '子工人 TUI 未就绪', handle: scratch.workerHandle };
@@ -2151,7 +2158,7 @@ async function runDispatchExecution(order, { queueDir } = {}) {
     model: plan.model,
     role: gate.role,
     reviewer: gate.reviewer,
-    runGh: ghRunner({ role: 'marshal' }),
+    runGh: ghRunner({ role: 'marshal', repo: ghRepo }),
   });
   if (!labels.ok && !labels.skipped) {
     console.error(`[dao] dispatch label 没打上（派工本身成功）：${labels.error}`);
@@ -2247,7 +2254,9 @@ function cmdDispatchBatch(args) {
   if (!cap.ok) fail(cap.error);
   plan.workerLaunch = launch.command;
 
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'worker', where: 'dispatch --batch' });
+  const ghRepo = targetRepo.ownerName || undefined;
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner({ repo: ghRepo }) });
   if (args.dryRun) {
     emit({ ok: true, dryRun: true, ...plan, disambiguation });
   }
@@ -2263,7 +2272,7 @@ function cmdDispatchBatch(args) {
   const effects = {
     createWorktree({ name, issue }) {
       const r = orca(argsWorktreeCreate({
-        repo: repoSelectorOrFail('batch 建树'),
+        repo: repoSelectorOrFail('batch 建树', ghRepo),
         name,
         issue,
         setup: 'skip',
@@ -2287,7 +2296,7 @@ function cmdDispatchBatch(args) {
         title,
         command: launch.command,
         launch,
-        daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue }),
+        daoTrace: daoTraceFor({ role: 'worker', model: plan.model, issue: args.issue, repo: ghRepo }),
       });
       if (!term.ok) return { ok: false, error: term.error };
       if (term.deferred) {
@@ -2469,7 +2478,7 @@ function invokeReviewerCreateHealed(opts) {
   return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
-function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from } = {}) {
+function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from, repo } = {}) {
   const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr)];
   if (name) argv.push('--name', String(name));
   if (parentWorktree) argv.push('--parent-worktree', String(parentWorktree));
@@ -2477,6 +2486,7 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
   if (issue) argv.push('--issue', String(issue));
   if (reviewer) argv.push('--reviewer', String(reviewer));
   if (from) argv.push('--from', String(from));
+  if (repo) argv.push('--repo', String(repo));
   if (dryRun) argv.push('--dry-run');
   const r = spawnSync(process.execPath, argv, { windowsHide: true,
     encoding: 'utf8',
@@ -2547,7 +2557,7 @@ function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
 }
 
 function writeReviewPendingOnFail({
-  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh,
+  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh, repo,
 } = {}) {
   try {
     let head = { name: null, oid: null };
@@ -2562,7 +2572,7 @@ function writeReviewPendingOnFail({
     }
     const built = buildReviewPendingTicket({
       pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
-      source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+      repo, source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
     });
     if (!built.ok) return built;
     return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });
@@ -2681,7 +2691,7 @@ function loadReviewerReuseInputs() {
 }
 
 function reuseReviewerOnTerminal({
-  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue, from,
+  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue, from, repo,
 } = {}) {
   if (dryRun) {
     return {
@@ -2698,7 +2708,7 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: '复用审官缺 worktree / handle' };
   }
 
-  const gh = ghRunner({ role: 'reviewer' });
+  const gh = ghRunner({ role: 'reviewer', repo });
   const meta = gh(['pr', 'view', String(pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) return { ok: false, reused: true, error: `复用审官读 PR #${pr} 失败：${meta.error}` };
   let head;
@@ -2978,7 +2988,9 @@ function cmdWorkerDone(args) {
     try { body = readFileSync(args.bodyFile, 'utf8'); }
     catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
   }
-  const gh = ghRunner({ role: 'worker' });
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'worker', where: 'worker-done' });
+  const ghRepo = targetRepo.ownerName || undefined;
+  const gh = ghRunner({ role: 'worker', repo: ghRepo });
   const plan = planWorkerDone({ pr: args.pr, body, runGh: gh, reviewer: args.reviewer });
   if (!plan.ok) fail(plan.error, plan);
 
@@ -3074,6 +3086,7 @@ function cmdWorkerDone(args) {
         issue: plan.issue,
         reviewer: plan.reviewer,
         from: args.from,
+        repo: ghRepo,
         dryRun: true,
       });
       if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
@@ -3087,6 +3100,7 @@ function cmdWorkerDone(args) {
         reviewer: plan.reviewer,
         issue: plan.issue,
         from: args.from,
+        repo: ghRepo,
         dryRun: true,
       });
     }
@@ -3122,6 +3136,7 @@ function cmdWorkerDone(args) {
       issue: plan.issue,
       reviewer: plan.reviewer,
       from: args.from,
+      repo: ghRepo,
       dryRun: false,
     };
     create = invokeReviewerCreate(createOpts);
@@ -3132,7 +3147,7 @@ function cmdWorkerDone(args) {
       const reviewPending = writeReviewPendingOnFail({
         pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
         round: plan.round, error: create.error, workerModel: plan.workerModel,
-        soldierDispatch: args.soldierDispatch, runGh: gh,
+        soldierDispatch: args.soldierDispatch, runGh: gh, repo: ghRepo,
       });
       finishWorkerDoneSpawnFail({
         error: create.error, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
@@ -3149,6 +3164,7 @@ function cmdWorkerDone(args) {
       reviewer: plan.reviewer,
       issue: plan.issue,
       from: args.from,
+      repo: ghRepo,
       dryRun: false,
     });
     const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
@@ -3164,6 +3180,7 @@ function cmdWorkerDone(args) {
         reviewer: plan.reviewer,
         issue: plan.issue,
         from: args.from,
+        repo: ghRepo,
         dryRun: false,
       });
       // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路。#807 起本机守卫保活已删。
@@ -3191,6 +3208,7 @@ function cmdWorkerDone(args) {
         reviewer: plan.reviewer,
         issue: plan.issue,
         from: args.from,
+        repo: ghRepo,
         dryRun: false,
       });
       if (retriedReuse.ok) {
@@ -3199,7 +3217,7 @@ function cmdWorkerDone(args) {
         const reviewPending = writeReviewPendingOnFail({
           pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
           round: plan.round, error: reused.error, workerModel: plan.workerModel,
-          soldierDispatch: args.soldierDispatch, runGh: gh,
+          soldierDispatch: args.soldierDispatch, runGh: gh, repo: ghRepo,
         });
         finishWorkerDoneSpawnFail({
           error: reused.error, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
@@ -3216,7 +3234,7 @@ function cmdWorkerDone(args) {
     const reviewPending = writeReviewPendingOnFail({
       pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
       round: plan.round, error: refuseErr, workerModel: plan.workerModel,
-      soldierDispatch: args.soldierDispatch, runGh: gh,
+      soldierDispatch: args.soldierDispatch, runGh: gh, repo: ghRepo,
     });
     finishWorkerDoneSpawnFail({
       error: refuseErr, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
@@ -3381,11 +3399,60 @@ function thisRepoSelector() {
     : { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(listed.error)}` };
   return _repoSelCache;
 }
+
+/**
+ * #1024：--repo owner/name 解析成 orca 选择符。不传仍走 thisRepoSelector（本仓）。
+ * 跨仓只许 remote 命中，不许路径兜底回落本仓。orca 没注册该仓 = 拒派，不是回落。
+ */
+function resolveTargetRepoSelector(ownerName) {
+  const parsed = parseOwnerNameRepo(ownerName);
+  if (!parsed.ok) return parsed;
+  if (parsed.omitted) return thisRepoSelector();
+  const listed = orca(argsRepoList());
+  if (!listed.ok) {
+    return { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(listed.error)}` };
+  }
+  return resolveRepoSelector({
+    repos: listed.json?.result?.repos,
+    remoteUrl: githubRemoteUrlOf(parsed.ownerName),
+    allowPath: false,
+    label: parsed.ownerName,
+  });
+}
+
 /** 建树前取选择符；解析不出就当场 fail（没查成绝不静默建到别的仓去）。 */
-function repoSelectorOrFail(where) {
-  const r = thisRepoSelector();
-  if (!r.ok) fail(`${where}：本仓 repo 选择符没解析成：${r.error}`);
+function repoSelectorOrFail(where, ownerName) {
+  const r = ownerName ? resolveTargetRepoSelector(ownerName) : thisRepoSelector();
+  if (!r.ok) fail(`${where}：repo 选择符没解析成：${r.error}`);
   return r.selector;
+}
+
+/**
+ * #1024：跨仓闸。不传 --repo 直接放行（本仓路径一字不变）。
+ * 传了：格式非法当场拒；installation 没授权拒；名单没扫成报「没查成」。
+ * dry-run 也拦格式，授权闸 dry-run 同样拦（回落会让人以为派出了）。
+ */
+function assertCrossRepoOrFail(raw, { role = 'worker', where = 'dispatch' } = {}) {
+  const parsed = parseOwnerNameRepo(raw);
+  if (!parsed.ok) fail(parsed.error);
+  if (parsed.omitted) return { ok: true, omitted: true, ownerName: null };
+  let info;
+  try {
+    info = whoami(role);
+  } catch (e) {
+    fail(`${where}：目标仓 ${parsed.ownerName} 没查成（不是「这个仓不存在」）：whoami 抛了 ${String(e?.message || e)}`);
+  }
+  if (!info || info.ok !== true) {
+    fail(`${where}：目标仓 ${parsed.ownerName} 没查成（不是「这个仓不存在」）：${(info && info.error) || 'whoami 没回 ok'}`);
+  }
+  const gate = assertRepoAuthorized({
+    ownerName: parsed.ownerName,
+    role,
+    repositories: info.repositories,
+    repoScan: info.repoScan,
+  });
+  if (!gate.ok) fail(gate.error, { repo: parsed.ownerName, role, repoScan: info.repoScan });
+  return { ok: true, omitted: false, ownerName: parsed.ownerName, authorized: true, role };
 }
 
 function cmdWorktreeCreate(args) {
@@ -3669,7 +3736,9 @@ async function cmdReviewerCreate(args) {
   if (args.executor && args.executor !== 'orca') return cmdReviewerCreateMirasim(args);
   if (!args.pr) fail('reviewer-create 要 --pr');
 
-  const gh = ghRunner({ role: 'reviewer' });
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'reviewer-create' });
+  const ghRepo = targetRepo.ownerName || undefined;
+  const gh = ghRunner({ role: 'reviewer', repo: ghRepo });
   const meta = gh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
@@ -3833,7 +3902,7 @@ async function cmdReviewerCreate(args) {
   let standInCreated = false;
   if (fastPlan.fastPath && !resumedFromExisting && !standInId) {
     const madeStandIn = orca(fastPathStandInCreateArgs({
-      repo: repoSelectorOrFail('快马替身树'),
+      repo: repoSelectorOrFail('快马替身树', ghRepo),
       pr: args.pr,
       issue: args.issue,
       baseBranch: originRef.baseBranch,
@@ -3848,7 +3917,7 @@ async function cmdReviewerCreate(args) {
 
   if (!resumedFromExisting) {
     const created = orca(argsWorktreeCreate({
-      repo: repoSelectorOrFail('reviewer-create'),
+      repo: repoSelectorOrFail('reviewer-create', ghRepo),
       name: revName,
       setup: 'skip',
       parentWorktree: parentSel,
@@ -3927,6 +3996,7 @@ async function cmdReviewerCreate(args) {
       model: reviewerModel,
       issue: args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null,
       pr: args.pr,
+      repo: ghRepo,
     }),
   });
   if (!revTerm.ok) {
@@ -4161,6 +4231,8 @@ function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');
   if (!args.worktree) fail('reviewer-attach 要 --worktree（工人卡）');
   if (!args.reviewer) fail('reviewer-attach 要 --reviewer（审官模型 id）');
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'reviewer-attach' });
+  const ghRepo = targetRepo.ownerName || undefined;
 
   const routing = loadOrFail();
   let reviewerLaunch;
@@ -4171,7 +4243,7 @@ function cmdReviewerAttach(args) {
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) fail(cap.error);
 
-  const gh = ghRunner({ role: 'reviewer' });
+  const gh = ghRunner({ role: 'reviewer', repo: ghRepo });
   const meta = gh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
@@ -4296,6 +4368,7 @@ function cmdReviewerAttach(args) {
       reviewer: args.reviewer,
       issue: args.issue || (Array.isArray(worker.refs) ? worker.refs[0] : null),
       from: args.from,
+      repo: ghRepo,
       dryRun: false,
     });
     if (!reused.ok) fail(reused.error, { reused, reusePlan, ...plan });
@@ -4314,7 +4387,7 @@ function cmdReviewerAttach(args) {
 
   const created = {};
   const revWt = orca(argsWorktreeCreate({
-    repo: repoSelectorOrFail('reviewer-attach'),
+    repo: repoSelectorOrFail('reviewer-attach', ghRepo),
     name: revName,
     setup: 'skip',
     parentWorktree: args.worktree,
@@ -4356,6 +4429,7 @@ function cmdReviewerAttach(args) {
       model: args.reviewer,
       issue: args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null,
       pr: args.pr,
+      repo: ghRepo,
     }),
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
@@ -4555,6 +4629,8 @@ function cmdReviewerDone(args) {
 }
 
 function cmdReviewPendingDrain(args) {
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'review-pending-drain' });
+  const ghRepo = targetRepo.ownerName || undefined;
   const dir = reviewPendingDir({ root: ROOT });
   const listed = listReviewPending(dir);
   if (!listed.ok) fail(listed.error, listed);
@@ -4575,7 +4651,9 @@ function cmdReviewPendingDrain(args) {
     dir,
     tickets,
     attach: (plan) => {
-      const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], { windowsHide: true,
+      const argv = [...plan.argv];
+      if (ghRepo && !argv.includes('--repo')) argv.push('--repo', ghRepo);
+      const spawned = spawnSync(process.execPath, [self, ...argv, '--json'], { windowsHide: true,
         encoding: 'utf8',
         cwd: ROOT,
         timeout: 600000,

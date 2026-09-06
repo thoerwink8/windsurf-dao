@@ -311,12 +311,14 @@ export function parseDiffNameStatus(text) {
   return mustExist;
 }
 
-export function runGh(args, { cwd, role } = {}) {
+export function runGh(args, { cwd, role, repo } = {}) {
   // role 有值 → 走 GitHub App 身份（#573）。其余裸调用先保持本人 gh，全量替换另开单。
-  if (role) return ghAs(role, args, { cwd });
-  const r = spawnSync('gh', args, { windowsHide: true,
-    encoding: 'utf8', timeout: 30000, cwd,
-  });
+  // #1024：跨仓时 GH_REPO 钉死目标仓；不传则不设（cwd 语义一字不变）。
+  if (role) return ghAs(role, args, { cwd, repo });
+  const opts = { windowsHide: true, encoding: 'utf8', timeout: 30000, cwd };
+  const ghRepo = repo && String(repo).trim();
+  if (ghRepo) opts.env = { ...process.env, GH_REPO: ghRepo };
+  const r = spawnSync('gh', args, opts);
   if (r.error || (r.status !== 0 && r.status != null)) {
     return { ok: false, error: String(r.error?.message || r.stderr || `gh exit ${r.status}`).trim().slice(0, 240) };
   }
