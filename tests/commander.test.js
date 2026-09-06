@@ -11,7 +11,10 @@ const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'co
 function baseSituation(over = {}) {
   return {
     github: { scanned: true, issues: [], prs: [] },
+    // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。orca 段还留着给
+    // 没搬完的消费者读，但 fail-closed 总闸与「有没有人在做这张单」都只认 trees。
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: [] },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
@@ -1093,7 +1096,7 @@ describe('跨仓感知只感知不派工', () => {
 
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
-    assert.match(src, /github, orca, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
