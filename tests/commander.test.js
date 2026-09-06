@@ -18,7 +18,7 @@ function baseSituation(over = {}) {
     wakeCounts: {},
     reworkDispatched: {},
     // 旧夹具不测模型闸：默认关 requireModelInRouting，#849 新测显式打开。
-    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    commanderPolicy: { requireModelInRouting: false },
     routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
     healthRedModels: [],
     ...over,
@@ -524,13 +524,13 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const retired = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(700, { labels: [{ name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }] })], prs: [redPr(701, HEAD, 700)] },
       prReviews: reviews,
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
     }));
     assert.equal(byKind(retired, 'rework').length, 0, '模型不在选型不许派（#849 闸没被返工绕开）');
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  it('⑤单轮返工上限沿用 maxDispatchPerRound：超出的排队下轮，不丢也不 escalate', async () => {
+  it('⑤单轮返工上限沿用机器余量：超出的排队下轮，不丢也不 escalate', async () => {
     const { decide } = await CORE;
     const issues = [];
     const prs = [];
@@ -543,10 +543,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs },
       prReviews: { scanned: true, byPr },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const w = byKind(r, 'rework');
-    assert.equal(w.length, 2, `一轮最多派 maxDispatchPerRound 个返工工人，实际 ${w.length}`);
+    assert.equal(w.length, 2, `一轮最多派 admission.slots 个返工工人，实际 ${w.length}`);
     assert.deepEqual(w.map((a) => a.pr), [760, 761]);
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
     assert.equal(byKind(r, 'notify-hub').length, 2, '回流只跟着真派出去的那两个');
@@ -708,13 +709,14 @@ function readyIssue(n, model = 'grok-4.6') {
   };
 }
 
-describe('decide：单轮派单上限（#849）', () => {
-  it('15 张可派 → 一轮只派 maxDispatchPerRound 张，其余排队不 escalate', async () => {
+describe('decide：机器余量准入（#1007，替换 #849 每轮上限）', () => {
+  it('15 张可派 + slots=2 → 一轮只派 2 张，其余排队不 escalate', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 15 }, (_, i) => readyIssue(1000 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const d = byKind(r, 'dispatch');
     assert.equal(d.length, 2, `应只派 2 张，实际 ${d.length}`);
@@ -722,14 +724,14 @@ describe('decide：单轮派单上限（#849）', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason !== 'unscanned').length, 0, '超上限不 escalate');
   });
 
-  it('上限默认 2：不传 commanderPolicy 也截断', async () => {
+  it('夹具不传 admission → 不截断（旧测兼容；生产路径必填）', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 5 }, (_, i) => readyIssue(1100 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
       commanderPolicy: { requireModelInRouting: false },
     }));
-    assert.equal(byKind(r, 'dispatch').length, 2);
+    assert.equal(byKind(r, 'dispatch').length, 5);
   });
 });
 
@@ -739,7 +741,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1200, 'devin-deepseek-v4-flash-max');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
     }));
     assert.equal(byKind(r, 'dispatch').length, 0, '退役模型绝不派');
@@ -752,7 +754,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1201, 'deepseek-v4-flash');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       healthRedModels: ['deepseek-v4-flash'],
     }));
@@ -765,7 +767,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1202);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: null,
     }));
     assert.equal(byKind(r, 'dispatch').length, 0);
@@ -777,7 +779,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1203);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6'],
       healthRedModels: [],
     }));
@@ -1003,7 +1005,7 @@ describe('decide：返工模型顶班（#894 实咬）', () => {
     return baseSituation({
       github: { scanned: true, issues: [issue], prs: [pr] },
       prReviews: { scanned: true, byPr: { 951: { reviews: [redReview('这里不对', 'h951')] } } },
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       defaultWorkerModel: 'grok-4.6',
       ...over,
