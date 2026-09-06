@@ -16,7 +16,7 @@ import { analyzeGithubReviews } from '../review-state.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { listPrReviews } from './worker-done.mjs';
 import { judgeAgentRoute } from '../executor-binding.mjs';
-import { assessPrMergeable } from './git.mjs';
+import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
 
 /** readSession 回的 phase 里代表「这条会话已经废了」的那几个。废了才准新建，别的一律复用。 */
 const DEAD_PHASES = new Set(['error', 'failed', 'aborted', 'cancelled', 'canceled']);
@@ -235,7 +235,12 @@ export async function mirasimReviewerCreate({
 
   // 3b. mergeable 硬闸（复用 orca 路径同一判据 assessPrMergeable，#575 ⑦）：
   //     UNKNOWN 不是绿、CONFLICTING 要先 rebase。**建树/起会话之前**就拒，别让审官白审。
-  const mergeable = assessPrMergeable(head.mergeable);
+  //     #1017：多字段 view 上 mergeable 常恒 UNKNOWN，未知态才单张只查 mergeable。
+  const resolved = resolveMergeable(
+    { number: pr, mergeable: head.mergeable },
+    { viewMergeable: (n) => fetchPrMergeable(gh, n) },
+  );
+  const mergeable = assessPrMergeable(resolved.mergeable);
   if (!mergeable.ok) {
     return { ok: false, stage: 'mergeable', error: mergeable.error, mergeable, expectedOid: head.expectedOid, headRefName: head.headRefName };
   }
@@ -426,7 +431,11 @@ export async function mirasimWorkerDone({
   // interact 还是新起一针。不同步就 interact = 让审官审旧代码（审官第 1 条 + 帅位实咬）。
   const prHead = readPrHead(gh, pr);
   if (!prHead.ok) return { ok: false, stage: 'rework:pr-read', error: prHead.error, round: theRound, reviewCount, sessionKey };
-  const mergeable = assessPrMergeable(prHead.mergeable);
+  const resolved = resolveMergeable(
+    { number: pr, mergeable: prHead.mergeable },
+    { viewMergeable: (n) => fetchPrMergeable(gh, n) },
+  );
+  const mergeable = assessPrMergeable(resolved.mergeable);
   if (!mergeable.ok) {
     return { ok: false, stage: 'rework:mergeable', error: mergeable.error, mergeable, round: theRound, reviewCount, sessionKey };
   }

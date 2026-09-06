@@ -77,6 +77,83 @@ export function assessPrMergeable(raw) {
   };
 }
 
+const KNOWN_MERGEABLE = new Set(['MERGEABLE', 'CONFLICTING']);
+
+/** 列表 / 多字段 view 上的 mergeable 常恒 UNKNOWN（#1017）。只认 MERGEABLE / CONFLICTING 为已知态。 */
+export function listedMergeable(raw) {
+  const v = String(raw ?? '').trim().toUpperCase();
+  return KNOWN_MERGEABLE.has(v) ? v : (v || null);
+}
+
+/**
+ * 单张只查 mergeable。#1017 实据：`--json mergeable` 能拿真值，
+ * 和 headRefName / headRefOid 等一起查仍返 UNKNOWN。
+ */
+export function fetchPrMergeable(runGh, pr) {
+  if (typeof runGh !== 'function') return { ok: false, error: 'fetchPrMergeable 没给 gh 执行器' };
+  if (pr == null || String(pr).trim() === '') return { ok: false, error: 'fetchPrMergeable 没给 PR 号' };
+  const r = runGh(['pr', 'view', String(pr), '--json', 'mergeable']);
+  if (!r || r.ok !== true) {
+    return { ok: false, error: (r && r.error) || `gh pr view #${pr} mergeable 失败` };
+  }
+  let j;
+  try { j = JSON.parse(r.out); }
+  catch {
+    return { ok: false, error: `gh pr view #${pr} mergeable 返回非 JSON：${String(r.out || '').slice(0, 80)}` };
+  }
+  return { ok: true, mergeable: j && j.mergeable != null ? j.mergeable : null };
+}
+
+/**
+ * #1017：先用列表里的值；UNKNOWN / 空才单张重查。
+ * 不许把 UNKNOWN 当 MERGEABLE；重查仍 UNKNOWN 就把 UNKNOWN 交上游（fail-close）。
+ * viewMergeable 注入：测试夹具 / 生产走 fetchPrMergeable。
+ */
+export function resolveMergeable(pr, { viewMergeable } = {}) {
+  const listed = String(pr && pr.mergeable != null ? pr.mergeable : '').trim().toUpperCase();
+  if (KNOWN_MERGEABLE.has(listed)) {
+    return { mergeable: listed, listed, refreshed: false };
+  }
+  if (listed && listed !== 'UNKNOWN') {
+    return { mergeable: listed, listed, refreshed: false };
+  }
+  if (typeof viewMergeable !== 'function') {
+    return { mergeable: listed || null, listed: listed || null, refreshed: false };
+  }
+  const n = pr && (pr.number != null ? pr.number : pr.pr);
+  let raw;
+  try {
+    raw = viewMergeable(n);
+  } catch (e) {
+    return {
+      mergeable: listed || null,
+      listed: listed || null,
+      refreshed: true,
+      unscanned: true,
+      error: `单张 mergeable 重查抛了：${String(e && e.message || e)}`,
+    };
+  }
+  if (raw && typeof raw === 'object' && raw.ok === false) {
+    return {
+      mergeable: listed || null,
+      listed: listed || null,
+      refreshed: true,
+      unscanned: true,
+      error: raw.error || '单张 mergeable 没查成',
+    };
+  }
+  const viewedRaw = typeof raw === 'string' ? raw
+    : raw && typeof raw === 'object' ? raw.mergeable
+    : raw;
+  const viewed = String(viewedRaw ?? '').trim().toUpperCase();
+  return {
+    mergeable: viewed || listed || null,
+    listed: listed || null,
+    viewed: viewed || null,
+    refreshed: true,
+  };
+}
+
 function gitRun(cwd, args, runGit) {
   if (typeof runGit === 'function') return runGit(args);
   return gitCapture(cwd, args);

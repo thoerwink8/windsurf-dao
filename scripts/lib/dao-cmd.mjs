@@ -816,11 +816,13 @@ export {
 // #762 拆分：git / gh 执行域移到 scripts/lib/dispatch/git.mjs（保持对外 API 不变）
 import {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
+  listedMergeable, fetchPrMergeable, resolveMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
   parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';
 export {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
+  listedMergeable, fetchPrMergeable, resolveMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
   parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';

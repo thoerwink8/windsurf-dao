@@ -1361,6 +1361,39 @@ describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
     const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
     assert.deepEqual(byKind(r, 'rework'), []);
   });
+
+  // #1017：列表 mergeable 恒 UNKNOWN。未知态才单张重查；重查后的 CONFLICTING 要命中解冲突分支。
+  it('列表 UNKNOWN、单张 CONFLICTING → CONFLICTING 分支命中，派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [950]);
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('列表 UNKNOWN、单张也 UNKNOWN → 不派冲突工也不合并', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: () => ({ ok: true, mergeable: 'UNKNOWN' }),
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+    assert.deepEqual(byKind(r, 'merge'), []);
+  });
+
+  it('列表直接 MERGEABLE → 不发起单张重查', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'MERGEABLE' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [], '已知态不烧配额——即使重查会说 CONFLICTING 也不调');
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
 });
 
 // 2026-09-06：hubSay 原本只看退出码，把 lark-cli 打印的 message_id 扔了。
