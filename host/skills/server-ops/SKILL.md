@@ -17,6 +17,13 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 - 日志：`journalctl -u orca-serve`
 - 探活：`orca status --json`。**恒返回 `ok:true`**，真信号在 `result.runtime.reachable`。只看 `ok` 会在 orca 已死时报绿。`ok:false` 时退出码仍是 0。不要用 `orca --version` 探活（会占单实例锁）。清锁与其它坑见 §9d。
 
+## MiraQuota 多机页 Contabo 接入（#881）
+
+- 单元模板：`host/machine/systemd/miraquota-contabo.service` + `host/machine/systemd/miraquota-contabo.timer`（装法在 service 文件头）。
+- 幂等安装（要 root）：`sudo bash scripts/install-miraquota-contabo.sh`。装完自己验 NEXT，并以 orca 跑一次 `--dry-run`。
+- 一条命令：`node scripts/miraquota-contabo-sync.mjs --once`（timer 调同一条；`--dry-run` 只打印）。
+- 探活：`systemctl list-timers` 里要有 `miraquota-contabo.timer`，**NEXT 不能是 `-`**。多机页出现 `contabo`，额度数对得上 `getRelay` 的 usage windows。
+
 ## 撞限流探测（#833）
 
 - 单元模板：`host/machine/systemd/dao-agent-stall.service` + `host/machine/systemd/dao-agent-stall.timer`（装法在 service 文件头）。
