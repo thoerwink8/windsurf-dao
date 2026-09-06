@@ -12,11 +12,11 @@
 #   sudo bash scripts/install-board-gc.sh
 #
 # WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
-# PATH 必须带 ~/.local/bin，否则 oneshot 找不到 orca。
+# 盘面采 mirasim 树 + /proc，不再问 orca（#1065）。PATH 仍带 ~/.local/bin，oneshot 没有用户 profile。
 
 [Unit]
 Description=windsurf-dao board GC (zombie cards)
-After=network-online.target orca-serve.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -24,6 +24,8 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/board-gc.mjs --apply --say
 # 退出码 1 = 有卡要人判，这是正常输出不是故障；2 才是没查成。
 SuccessExitStatus=0 1

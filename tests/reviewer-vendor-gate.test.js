@@ -127,6 +127,11 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('有且仅有一个 model/* → 放行', () => {
       assert.ok(one.ok === true && one.modelId === 'grok-4.6', JSON.stringify(one));
     });
+    const dup = S.requireWorkerModel(['model/grok-4.6', 'model/grok-4.6', 'type/写码']);
+    await t.test('同名 model/* 两次 → 放行（署两张单都会打同一条）', () => {
+      assert.equal(dup.ok, true);
+      assert.equal(dup.modelId, 'grok-4.6');
+    });
   });
 
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {

@@ -22,7 +22,9 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createRuntime } from './lib/mirasim-runtime.mjs';
+import { shouldSkipNudge } from './lib/nudge-skip.mjs';
 
 const argv = process.argv.slice(2);
 const GO = argv.includes('--go');
@@ -107,10 +109,35 @@ const stalled = [...latest.values()]
 
 if (!stalled.length) { console.log('[推一把] 没有卡住的树'); process.exit(0); }
 
+function readGhState(kind, n) {
+  const args = kind === '审官'
+    ? ['pr', 'view', String(n), '--json', 'state', '-q', '.state']
+    : ['issue', 'view', String(n), '--json', 'state', '-q', '.state'];
+  const env = { ...process.env, NO_COLOR: '1', GH_NO_COLOR: '1', TERM: 'dumb' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
+  const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 20000, windowsHide: true, env });
+  if (r.status !== 0) return { unscanned: true, state: null };
+  return { unscanned: false, state: String(r.stdout || '').trim() };
+}
+
 for (const { rec } of stalled) {
   const id = idOfTree(rec.workdir);
   const agent = rec.agent || 'pi';
   const who = `${id.kind} ${id.label}`;
+  const gh = readGhState(id.kind, id.n);
+  const skip = shouldSkipNudge({
+    kind: id.kind,
+    issueState: id.kind === '工人' ? gh.state : null,
+    prState: id.kind === '审官' ? gh.state : null,
+    issueUnscanned: id.kind === '工人' && gh.unscanned,
+    prUnscanned: id.kind === '审官' && gh.unscanned,
+  });
+  if (skip.skip) {
+    console.log(`[推一把·跳过] ${who}（${skip.why}）`);
+    continue;
+  }
   if (!GO) { console.log(`[推一把·预览] ${who} ${agent}（${rec.runDetail || rec.runState}）`); continue; }
   try {
     const rt = createRuntime({ homeDir: '/home/orca' });

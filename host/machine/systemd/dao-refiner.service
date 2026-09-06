@@ -30,6 +30,8 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/refiner.mjs
 # 退出码 2 = 没查成，必须在 systemctl --failed 里看得见。
 # 不设 SuccessExitStatus：这里没有「1 是正常输出」那一档。
