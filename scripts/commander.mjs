@@ -34,6 +34,9 @@ import {
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
+import {
+  isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
+} from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
@@ -1275,21 +1278,51 @@ function runDaipai({ state, dryRun, say }) {
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
 function escalate(action, { state, dryRun, say }) {
-  if (action.reason === 'unscanned') {
-    say(`  没查成（静默进 status）：${action.why}`);
-    return { ok: true, silent: true };
-  }
-  const key = escalateKey(action);
+  const key = escalateDedupKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
   // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
   // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
   // 账本写在本机、当场生效，没有延迟。
   state.escalateLedger = state.escalateLedger || {};
   const booked = state.escalateLedger[key];
+  // 已记单的实时状态：核不出来必须传 null（判据据此走 fail-closed，不开单）。
+  let bookedState = null;
   if (booked && booked.issue) {
     const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
-    if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
-    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    if (st.ok) bookedState = String(st.out).trim() || null;
+  }
+  // 判据是纯函数（scripts/lib/escalate-group.mjs）：四个出口分得开，测试直接喂。
+  const verdict = judgeEscalation(action, { booked, bookedState });
+  if (verdict.verdict === 'silent') {
+    // 「没查成」class 只进 status。判前缀不判相等——2026-09-06 相等判据漏掉
+    // dispatch-unscanned / rework-unscanned，一个缺陷刷出 6 张待拍板单。
+    say(`  没查成（静默进 status）：${action.why}`);
+    return { ok: true, silent: true };
+  }
+  if (verdict.verdict === 'unscanned') {
+    say(`  ${verdict.why}：${action.why}`);
+    return { ok: true, skipped: 'dedup-unscanned' };
+  }
+  if (verdict.verdict === 'noop') {
+    say(`  报帅（${verdict.why}，不重开也不追加）：${action.why}`);
+    return { ok: true, issue: booked.issue };
+  }
+  if (verdict.verdict === 'append') {
+    // 按原因聚合：同因新对象追加进那张单，不新开（Alertmanager group_by / PagerDuty dedup_key）。
+    if (dryRun) { say(`[dry] 报帅追加进 #${booked.issue}：${verdict.target}`); return { ok: true, dryRun: true, issue: booked.issue }; }
+    const body = appendCommentBody({ target: verdict.target, objects: verdict.objects, why: action.why, at: nowIso() });
+    const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
+    ensureDir(STATE_DIR);
+    writeFileSync(bodyFile, body, 'utf8');
+    const r = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(booked.issue),
+      '--repo', REPO, '--body-file', bodyFile], 60000);
+    if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
+    // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
+    state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
+    say(`  报帅追加进 #${booked.issue}：${verdict.target}（同因不新开）`);
+    return { ok: true, issue: booked.issue, appended: verdict.target };
+  }
+  if (booked && booked.issue && bookedState && bookedState !== 'OPEN') {
     delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
   }
   // 查重：已有 open 带此标记的单 → 不重复开
@@ -1311,24 +1344,29 @@ function escalate(action, { state, dryRun, say }) {
   hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
   if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
-  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
+  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
+  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
   return opened;
 }
-function escalateKey(a) {
-  const t = a.pr != null ? `pr-${a.pr}` : a.issue != null ? `issue-${a.issue}` : a.term ? `term-${a.term}` : 'x';
-  return `escalate/${a.reason}/${t}`;
-}
-function escalateTitle(a) { return `${a.reason}：${a.pr ? 'PR #' + a.pr : a.issue ? 'issue #' + a.issue : a.term || ''}`.trim(); }
-function escalateBody(a, marker) {
+// 标题只写原因，不写对象——**对象会不断增加**，写进标题第二个对象来的那一刻它就是错的。
+// 受影响清单在正文里滚动（业界形态：一条告警 + 受影响对象清单，不是每个对象一条告警）。
+function escalateTitle(a) { return String(a.reason || '').trim(); }
+function escalateBody(a, marker, verdict) {
   const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
   const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
+  const objects = (verdict && verdict.objects) || [];
   return [
+    // 首行写起因（CLAUDE.md「同一 slug 只许有一张 OPEN 单」的落法）。以前只有人开的单写，
+    // 机器开的不写——规则于是只约束了人。slug 用 reason，与去重键同源，不另起名字。
+    `起因：${a.reason}`,
+    ``,
     `指挥官报帅（#800「报帅停手」）：`,
     ``,
     `- 原因：${a.reason}`,
     `- 详情：${a.why}`,
+    // 受影响对象是**清单**，会随后续命中在评论里追加——一条告警带清单，不是一个对象一条告警。
+    objects.length ? `- 受影响：${objects.join('、')}` : '',
     a.pr ? `- PR：${prLink(a.pr)}` : a.issue ? `- issue：${issueLink(a.issue)}` : '',
     door === 'two-way'
       ? `- 门类：双向门（可翻案）——${hours} 小时无人回复，指挥官唤大脑按下面推荐项代拍并标「已代拍」`
@@ -1443,4 +1481,4 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey, scanStall };
+export { buildSituation, situationHealth, escalateDedupKey, scanStall };

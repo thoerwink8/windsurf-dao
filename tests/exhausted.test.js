@@ -253,10 +253,13 @@ describe('#1000 dao now：待你拍列出两个卡死标', () => {
 });
 
 describe('#1000 硬边界：不许改 escalate 去重', () => {
-  it('commander.mjs 的 escalateLedger / escalateKey 还在', () => {
+  // 本条守的是「去重机制还在」，不是「函数还叫那个名」。2026-09-06 去重键从
+  // 「原因＋对象」改成「原因」（一个原因刷 6 张单的那次），判据跟着搬去 escalate-group.mjs，
+  // 名字随之改成 escalateDedupKey——机制本身一个字没少，守的东西不变。
+  it('commander.mjs 的 escalateLedger / 去重键判据还在', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     assert.match(src, /state\.escalateLedger/);
-    assert.match(src, /function escalateKey/);
+    assert.match(src, /escalateDedupKey\(action\)/);
     assert.match(src, /function escalate\(/);
   });
   it('ACTION_KINDS 含 mark-exhausted，FORBIDDEN 没放宽', async () => {
