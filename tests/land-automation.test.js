@@ -27,8 +27,8 @@ describe('land automation 安装规格', () => {
 
   it('prompt 只下令跑 land，不写业务逻辑；precheck 是 --has-work', async () => {
     const { landPrompt, landPrecheckCommand, LAND_AUTOMATION_NAME, LAND_AUTOMATION_TRIGGER } = await LIB;
-    const landJs = '/home/orca/windsurf-dao/scripts/land.mjs';
-    const repo = '/home/orca/windsurf-dao';
+    const landJs = '/srv/projects/windsurf-dao/scripts/land.mjs';
+    const repo = '/srv/projects/windsurf-dao';
     const prompt = landPrompt(landJs, repo);
     assert.match(prompt, /land\.mjs/);
     assert.match(prompt, /原样贴回/);

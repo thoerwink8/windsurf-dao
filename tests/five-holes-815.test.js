@@ -96,9 +96,125 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(/writeReviewPendingOnFail/.test(daoSrc) && /reviewPending/.test(daoSrc),
       'worker-done 起败必须写队列');
+    assert.ok(/finishWorkerDoneSpawnFail/.test(daoSrc) && /queued-review-pending/.test(daoSrc),
+      'depth/在途派单入队后必须成功交卷');
     const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
     assert.ok(/复审轮走队列/.test(book) && /review-pending-drain/.test(book),
       'reviewer-book 必须写复审轮走队列');
+    assert.ok(/queued:true/.test(book.replace(/\s+/g, '')) || /queued:true/.test(book),
+      'reviewer-book 必须写成功交卷 queued');
+  });
+
+  it('#815 余洞：depth 2 / 在途派单不是没查成；待办写成则 queued 交卷', async () => {
+    const S = await S_LOAD;
+    const depthErr = 'Sub-worker dispatch is not permitted at depth 2 (max 1)';
+    const activeErr = 'Terminal term_rev already has an active dispatch (ctx_rev_806)';
+    const depth = S.classifyReviewerSpawnError(depthErr);
+    const active = S.classifyReviewerSpawnError(activeErr);
+    const miss = S.classifyReviewerSpawnError('worker-list 没查成');
+    assert.equal(depth.kind, 'depth-limit', JSON.stringify(depth));
+    assert.equal(active.kind, 'active-dispatch', JSON.stringify(active));
+    assert.equal(miss.kind, 'unscanned');
+    assert.ok(depth.label !== miss.label && active.label !== miss.label && !/没查成/.test(depth.label + active.label));
+
+    const parsed = S.parseActiveDispatchId(activeErr);
+    assert.equal(parsed, 'ctx_rev_806');
+    assert.equal(S.parseActiveDispatchId('already has an active dispatch'), null);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-q-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '814', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-sol', error: depthErr,
+    });
+    const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
+    assert.ok(wrote.ok, JSON.stringify(wrote));
+
+    const queued = S.planWorkerDoneAfterSpawnFail({ error: depthErr, reviewPending: wrote });
+    assert.ok(queued.ok && queued.queued === true && queued.fail === false && queued.spawnKind === 'depth-limit',
+      'depth 2 待办写成必须成功交卷 → ' + JSON.stringify(queued));
+
+    const queuedActive = S.planWorkerDoneAfterSpawnFail({ error: activeErr, reviewPending: wrote });
+    assert.ok(queuedActive.ok && queuedActive.queued === true && queuedActive.spawnKind === 'active-dispatch',
+      '在途派单待办写成必须成功交卷 → ' + JSON.stringify(queuedActive));
+
+    const noTicket = S.planWorkerDoneAfterSpawnFail({ error: depthErr, reviewPending: { ok: false, error: '写盘失败' } });
+    assert.ok(noTicket.ok === false && noTicket.fail === true && /没写成/.test(noTicket.error),
+      '待办没写成仍 fail → ' + JSON.stringify(noTicket));
+
+    const timeout = S.planWorkerDoneAfterSpawnFail({
+      error: 'terminal create 超时', reviewPending: wrote,
+    });
+    assert.ok(timeout.ok === false && timeout.queued === false && timeout.spawnKind === 'terminal-timeout',
+      '超时不是入队种类 → ' + JSON.stringify(timeout));
+
+    const queuedBody = S.reviewerSpawnQueuedComment({ error: depthErr, pr: '814' });
+    assert.ok(/^交卷已入复审队列：/.test(queuedBody) && !/^完工/.test(queuedBody) && !/没查成/.test(queuedBody),
+      queuedBody.slice(0, 200));
+    assert.ok(/review-pending/.test(queuedBody) && /review-pending-drain/.test(queuedBody), queuedBody);
+  });
+
+  it('#815 余洞：审官终端已有活 dispatch → 跳过 worker-start', async () => {
+    const S = await S_LOAD;
+    const live = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_rev_806' },
+      dispatchLive: true,
+    });
+    assert.ok(live.ok && live.skipStart === true && live.reviewerDispatchId === 'ctx_rev_806',
+      '活 dispatch 必须跳过 start → ' + JSON.stringify(live));
+
+    const settled = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_old' },
+      dispatchLive: false,
+    });
+    assert.ok(settled.ok && settled.skipStart === false && /已结算/.test(settled.reason),
+      '已结算仍走 worker-start → ' + JSON.stringify(settled));
+
+    const none = S.planReuseExistingLiveDispatch({ found: { ok: false, error: '找不到' } });
+    assert.ok(none.ok && none.skipStart === false, JSON.stringify(none));
+
+    const unread = S.planReuseExistingLiveDispatch({
+      found: { ok: true, dispatchId: 'ctx_x' }, dispatchLive: null,
+    });
+    assert.ok(unread.ok === false && unread.unscanned === true && unread.skipStart === false,
+      '活性没查成不许猜 → ' + JSON.stringify(unread));
+
+    const recovered = S.planAfterWorkerStartActiveDispatch({
+      error: 'Terminal term_rev already has an active dispatch (ctx_rev_806)',
+    });
+    assert.ok(recovered.ok && recovered.recover === true && recovered.reviewerDispatchId === 'ctx_rev_806',
+      JSON.stringify(recovered));
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    const reuseFn = (daoSrc.match(/function reuseReviewerOnTerminal\([\s\S]*?\nfunction /) || [''])[0];
+    assert.ok(/planReuseExistingLiveDispatch/.test(reuseFn) && /skipStart/.test(reuseFn),
+      '复用路径必须先核在途派单再决定 worker-start');
+    assert.ok(/planAfterWorkerStartActiveDispatch/.test(reuseFn),
+      'worker-start 撞在途派单必须沿用已有 id');
+  });
+
+  it('#815 余洞：指挥官轮转消费队列，reviewer-attach 只调一次', async () => {
+    const S = await S_LOAD;
+    const commanderSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const attachCase = commanderSrc.slice(
+      commanderSrc.indexOf("case 'attach-reviewer'"),
+      commanderSrc.indexOf("case 'merge'"),
+    );
+    assert.ok(/review-pending-drain/.test(attachCase),
+      '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-cmd-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '806', workerWorktree: 'wt_w', reviewer: 'gpt-5.6-sol',
+      error: 'Terminal term_rev already has an active dispatch (ctx_806)',
+    });
+    assert.ok(S.writeReviewPending({ dir, ticket: built.ticket }).ok);
+    const calls = [];
+    const drained = S.drainReviewPending({
+      dir,
+      attach: (p) => { calls.push(p.argv.slice()); return { ok: true, pr: p.pr }; },
+    });
+    assert.ok(drained.ok && drained.drained === 1 && calls.length === 1, JSON.stringify({ drained, calls }));
+    assert.ok(calls[0].includes('reviewer-attach') && calls[0].includes('--skip-wait'));
+    assert.ok(!fs.existsSync(path.join(dir, '806.json')), '指挥官消费后待办应删');
   });
 
   it('不可删除路径：attach 成功但待办删不掉 → consume/drain 必须 ok:false，文件仍在', async () => {

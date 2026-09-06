@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { checkGates, select } from './lib/dianjiangtai-core.mjs';
@@ -193,12 +193,14 @@ import {
   planFastPathReviewer,
   fastPathStandInCreateArgs,
   assertReviewerSeat,
-  planReviewerCreateAfterFail,
   postIssueComment,
   postPrComment,
   postCommentOnce,
-  classifyReviewerSpawnError,
   reviewerSpawnFailComment,
+  reviewerSpawnQueuedComment,
+  planWorkerDoneAfterSpawnFail,
+  planReuseExistingLiveDispatch,
+  planAfterWorkerStartActiveDispatch,
   verifyStartedPolling,
   verifyWorkerStarted,
   piSessionProof,
@@ -287,7 +289,24 @@ function setDispatchResultSink(sink) {
   dispatchResultSink = sink && sink.resultPath ? sink : null;
 }
 
+// ── 进程内调用（TIA 第二刀，2026-09-06）─────────────────────────────────
+// 测试原本每断言一次就 spawn 一个 `node dao.mjs <动词>`，一次 ~225ms；
+// 光启动费就占了 dao.test.js 的四成。进程内跑同一条 argv→输出 的路，
+// 省掉的只有进程边界，**契约覆盖一个字节都不少**。
+//
+// 为什么敢把 emit 的 process.exit 换成抛异常（改之前逐条查过）：
+//   · 300 处 emit/fail 全走这一个出口，exit 只有 12 处且集中；
+//   · 只有 2 个 finally 块，且不在 emit 可达路径上；
+//   · 空 catch 虽多，但都是 `try{unlinkSync}catch{}` 这种小块，不包业务逻辑。
+// process.exit 不跑 finally 而 throw 会跑——这是唯一的语义差，上面第 2 条已经核过。
+// CLI 形态（IN_PROCESS=false）行为一个字不变，抛出的信号在 main 顶层转回 process.exit。
+export class ExitSignal extends Error {
+  constructor(payload, code) { super('dao-cli-exit'); this.payload = payload; this.code = code; }
+}
+let IN_PROCESS = false;
+
 function emit(payload, exit = 0) {
+  if (IN_PROCESS) throw new ExitSignal(payload, exit);
   if (dispatchResultSink) {
     try {
       writeFileSync(dispatchResultSink.resultPath, JSON.stringify(payload, null, 2), 'utf8');
@@ -1421,13 +1440,23 @@ async function cmdDispatch(args) {
       now,
     });
     // #842 派前探一针预览：起终端前按健康表排序 + 逐位真探（红换下一位 / 全红报帅停手）。
+    //
+    // **dry-run 默认不探**（2026-09-06 用户拍板 / #984）：探一次要打真网关、等 ~2.6s，而 dry-run 的语义是
+    // 「不做真事、只看计划」。实咬：这一针让 dao.test.js 跑 57–70s（全仓测试 80s 的大头），
+    // 且探针本身受网关排队影响会飘（#853），预览出来的结论未必是真派工时的结论。
+    // 要预览「探完会选谁」显式加 --preflight。真派工路径不受本开关影响，照探不误。
     let preflight = null;
-    try {
-      preflight = await preflightWorkerSlate({
-        slate: slatePack.slate, startIndex: slatePack.startIndex,
-        noPreflight: args.noPreflight === true, dispatchId: null, now,
-      });
-    } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
+    if (args.preflight === true) {
+      try {
+        preflight = await preflightWorkerSlate({
+          slate: slatePack.slate, startIndex: slatePack.startIndex,
+          noPreflight: args.noPreflight === true, dispatchId: null, now,
+        });
+      } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
+    } else {
+      // 不能留 null 或空对象——那会被读成「探过了、没事」。显式说没探。
+      preflight = { skipped: true, why: 'dry-run 默认不探（要预览加 --preflight）；真派工照探', reasons: ['dry-run'] };
+    }
     emit({ ok: true, dryRun: true, ...plan, disambiguation, dup, preflight });
   }
 
@@ -2105,6 +2134,7 @@ function cmdDispatchBatch(args) {
   const effects = {
     createWorktree({ name, issue }) {
       const r = orca(argsWorktreeCreate({
+        repo: repoSelectorOrFail('batch 建树'),
         name,
         issue,
         setup: 'skip',
@@ -2411,6 +2441,47 @@ function writeReviewPendingOnFail({
   }
 }
 
+/** #815：depth 限制 / 在途派单写完待办就成功交卷；其它种类仍 fail。emit/fail 都会退出。
+ * #552 复用失败：禁止回退已结算 dispatch，不吞掉再投死信箱。 */
+function finishWorkerDoneSpawnFail({
+  error, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs, extra = {}, retried = true,
+} = {}) {
+  const handoff = planWorkerDoneAfterSpawnFail({ error, reviewPending });
+  const gh = ghRunner({ role: 'worker' });
+  if (handoff.queued) {
+    const queuedBody = reviewerSpawnQueuedComment({ error, pr: plan.pr });
+    postIssueComment({ issue: plan.issue, body: queuedBody, runGh: gh });
+    postPrComment({ pr: plan.pr, body: queuedBody, runGh: gh });
+    if (parentId) {
+      setWorkerCardProgress(parentId, '交卷了，复审待指挥官轮转', reuseInputs && reuseInputs.worktrees);
+    }
+    emit({
+      ok: true,
+      queued: true,
+      commentPosted: true,
+      settled: false,
+      ...plan,
+      postedIssue,
+      postedPr,
+      reviewPending,
+      ...extra,
+      spawnKind: handoff.spawnKind,
+      outcome: 'queued-review-pending',
+      reason: handoff.reason,
+    });
+  }
+  const failBody = reviewerSpawnFailComment({ error, retried });
+  postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
+  postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
+  if (parentId) {
+    setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs && reuseInputs.worktrees);
+  }
+  fail(handoff.error, {
+    ...plan, commentPosted: true, postedIssue, postedPr,
+    reviewPending, spawnKind: handoff.spawnKind, ...extra,
+  });
+}
+
 function reviewerFetchCwd({ parentSel, worktrees } = {}) {
   if (parentSel && Array.isArray(worktrees)) {
     const wt = findWorktreeBySel(worktrees, parentSel);
@@ -2568,46 +2639,6 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
 
-  // 2026-09-05 实咬（#866 复审 drain）：headless（systemd/ssh，无 orca 终端）下 bindStation 的
-  // run-current 必报 no_active_sender_terminal；runId 已从士兵 dispatch 拿到时不需要它——只在缺 runId 时才绑。
-  if (!runId) {
-    const station = bindStation();
-    if (!station.ok) return { ok: false, reused: true, error: station.error };
-    runId = station.runId || null;
-  }
-  if (!runId) {
-    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
-  }
-  // headless 下 task-create/worker-start 也要发送身份——与新建路同源（#762）：审官树里起哑协调
-  // 终端当 --from，并用它自开新 Run（借士兵旧 Run 会 consumer_fenced：coordinator 是早已下班的
-  // 派工终端）。给了 from 用给的；orca 终端里跑（run-current 能通）时 fromHandle 留空走原路。
-  let fromHandle = from || null;
-  if (!fromHandle) {
-    const cur = orca(argsRunCurrent());
-    if (!cur.ok) {
-      const coordTerm = orca(argsTerminalCreate({ worktree: reviewerWorktreeId, title: '派工协调（勿关）' }));
-      if (!coordTerm.ok) return { ok: false, reused: true, error: `复用审官协调终端没建成（headless 无发送身份）：${errText(coordTerm.error)}` };
-      fromHandle = extractHandleFromCreate(coordTerm.json);
-      if (!fromHandle) return { ok: false, reused: true, error: '复用审官协调终端没返回 handle（没查成）' };
-      const coordRun = orca(argsRunCreate({ objective: 'coordinator: dao review (reuse)', from: fromHandle }));
-      if (!coordRun.ok) return { ok: false, reused: true, error: `复用审官协调 Run 没建成（--from 哑终端）：${errText(coordRun.error)}` };
-      const coordRunId = extractRunId(coordRun.json);
-      if (!coordRunId) return { ok: false, reused: true, error: '复用审官协调 Run 没拿到 id（没查成）' };
-      runId = coordRunId;
-    }
-  }
-  const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: !fromHandle, from: fromHandle || undefined });
-  if (!revTask.ok) {
-    if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
-      return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
-    }
-    return { ok: false, reused: true, error: `复用审官 task-create 失败: ${errText(revTask.error)}` };
-  }
-  const reviewerTaskId = extractTaskId(revTask.json);
-  if (!reviewerTaskId) {
-    return { ok: false, reused: true, error: '复用审官 task-create 没拿到 taskId（要 result.task.id，不是最外层 id）' };
-  }
-
   // routing/launch 提前解析：startOrcaWorker 的 codex 补回车兜底（#785）要靠 launch.provider
   // 判断走不走，复用路原来只传 { handle }，provider 拿不到 → codex 审官卡 [Pasted Content] 不补。
   let routing;
@@ -2617,39 +2648,157 @@ function reuseReviewerOnTerminal({
   try { launch = resolveLaunch({ model: reviewer, routing, root: ROOT }); }
   catch { launch = { provider: 'gpt' }; }
 
-  const revStarted = startOrcaWorker({
-    task: reviewerTaskId,
-    worktree: reviewerWorktreeId,
-    launched: { handle, launch },
-    run: runId,
-    from: fromHandle || undefined,
-    book: reviewerBook,
-  });
-  if (!revStarted.ok) {
-    return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${revStarted.error}（必须带 --worktree 指审官树）` };
+  // #815：审官终端已有在途派单时再 worker-start 必撞 already has an active dispatch。
+  // 先 worker-list 核树上活 dispatch；活的就跳过 task-create/start，把复审任务书送到现有终端。
+  let existingReviewerFound = { ok: false, error: '还没查审官树 dispatch' };
+  const existingWl = orca(argsWorkerList());
+  if (!existingWl.ok) {
+    existingReviewerFound = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(existingWl.error)}` };
+  } else {
+    existingReviewerFound = findDispatchForWorktree(existingWl.json, reviewerWorktreeId, resolveDispatchLastFailure);
   }
-  const reviewerDispatchId = revStarted.dispatchId;
-  if (!reviewerDispatchId) {
-    return { ok: false, reused: true, error: '复用审官 worker-start 没拿到 dispatch id（没查成，不是已开工）' };
+  let existingReviewerLive;
+  if (existingReviewerFound.ok && existingReviewerFound.dispatchId) {
+    const shownExisting = orca(argsWorkerShow({ dispatch: existingReviewerFound.dispatchId }));
+    if (!shownExisting.ok) {
+      existingReviewerLive = null;
+      existingReviewerFound = {
+        ok: false,
+        unscanned: true,
+        error: `审官 dispatch ${existingReviewerFound.dispatchId} worker-show 没查成：${errText(shownExisting.error)}`,
+      };
+    } else {
+      const d = shownExisting.json?.result?.dispatch || {};
+      const w = shownExisting.json?.result?.worker || {};
+      existingReviewerLive = isLiveDispatchRecipient({
+        workerState: w.state || d.status,
+        dispatchStatus: d.status,
+        lastFailure: d.last_failure,
+      });
+    }
+  }
+  const skipStartPlan = planReuseExistingLiveDispatch({
+    found: existingReviewerFound,
+    dispatchLive: existingReviewerLive,
+  });
+  if (!skipStartPlan.ok) {
+    return { ok: false, reused: true, error: skipStartPlan.error, skipStartPlan, found: existingReviewerFound };
   }
 
-  const reviewerInject = finishWorkerInject({
-    handle,
-    dispatchId: reviewerDispatchId,
-    label: '审官',
-    timeoutMs: probeWaitMs(routing, launch.provider),
-    provider: launch.provider,
-    cwd: String(reviewerWorktreeId).includes('::') ? String(reviewerWorktreeId).split('::')[1] : null,
-  });
-  if (!reviewerInject.ok) {
-    return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
+  let reviewerDispatchId;
+  let reviewerTaskId = null;
+  let reviewerInject = { ok: true, skipped: true, reason: '沿用在途派单，不重验开工' };
+  let skipStart = false;
+  let fromHandle = from || null;
+  if (skipStartPlan.skipStart) {
+    skipStart = true;
+    reviewerDispatchId = skipStartPlan.reviewerDispatchId;
+    const sent = orca(argsTerminalSend({ terminal: handle, text: reviewerBook, enter: true }));
+    if (!sent.ok) {
+      return {
+        ok: false,
+        reused: true,
+        skipStart: true,
+        error: `复用审官已有在途派单，任务书没送到终端：${errText(sent.error)}`,
+        reviewerDispatchId,
+      };
+    }
+    reviewerInject = { ok: true, skipped: true, sent: true, reason: skipStartPlan.reason };
+  } else {
+    // 2026-09-05 实咬（#866 复审 drain）：headless（systemd/ssh，无 orca 终端）下 bindStation 的
+    // run-current 必报 no_active_sender_terminal；runId 已从士兵 dispatch 拿到时不需要它——只在缺 runId 时才绑。
+    if (!runId) {
+      const station = bindStation();
+      if (!station.ok) return { ok: false, reused: true, error: station.error };
+      runId = station.runId || null;
+    }
+    if (!runId) {
+      return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
+    }
+    // headless 下 task-create/worker-start 也要发送身份——与新建路同源（#762）：审官树里起哑协调
+    // 终端当 --from，并用它自开新 Run（借士兵旧 Run 会 consumer_fenced：coordinator 是早已下班的
+    // 派工终端）。给了 from 用给的；orca 终端里跑（run-current 能通）时 fromHandle 留空走原路。
+    if (!fromHandle) {
+      const cur = orca(argsRunCurrent());
+      if (!cur.ok) {
+        const coordTerm = orca(argsTerminalCreate({ worktree: reviewerWorktreeId, title: '派工协调（勿关）' }));
+        if (!coordTerm.ok) return { ok: false, reused: true, error: `复用审官协调终端没建成（headless 无发送身份）：${errText(coordTerm.error)}` };
+        fromHandle = extractHandleFromCreate(coordTerm.json);
+        if (!fromHandle) return { ok: false, reused: true, error: '复用审官协调终端没返回 handle（没查成）' };
+        const coordRun = orca(argsRunCreate({ objective: 'coordinator: dao review (reuse)', from: fromHandle }));
+        if (!coordRun.ok) return { ok: false, reused: true, error: `复用审官协调 Run 没建成（--from 哑终端）：${errText(coordRun.error)}` };
+        const coordRunId = extractRunId(coordRun.json);
+        if (!coordRunId) return { ok: false, reused: true, error: '复用审官协调 Run 没拿到 id（没查成）' };
+        runId = coordRunId;
+      }
+    }
+    const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: !fromHandle, from: fromHandle || undefined });
+    if (!revTask.ok) {
+      if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
+        return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
+      }
+      return { ok: false, reused: true, error: `复用审官 task-create 失败: ${errText(revTask.error)}` };
+    }
+    reviewerTaskId = extractTaskId(revTask.json);
+    if (!reviewerTaskId) {
+      return { ok: false, reused: true, error: '复用审官 task-create 没拿到 taskId（要 result.task.id，不是最外层 id）' };
+    }
+
+    const revStarted = startOrcaWorker({
+      task: reviewerTaskId,
+      worktree: reviewerWorktreeId,
+      launched: { handle, launch },
+      run: runId,
+      from: fromHandle || undefined,
+      book: reviewerBook,
+    });
+    if (!revStarted.ok) {
+      const recovered = planAfterWorkerStartActiveDispatch({
+        error: revStarted.error,
+        existingLiveDispatchId: existingReviewerFound.ok ? existingReviewerFound.dispatchId : null,
+      });
+      if (!recovered.ok) {
+        return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${revStarted.error}（必须带 --worktree 指审官树）` };
+      }
+      skipStart = true;
+      reviewerDispatchId = recovered.reviewerDispatchId;
+      const sent = orca(argsTerminalSend({ terminal: handle, text: reviewerBook, enter: true }));
+      if (!sent.ok) {
+        return {
+          ok: false,
+          reused: true,
+          skipStart: true,
+          error: `审官终端已有在途派单，任务书没送到终端：${errText(sent.error)}`,
+          reviewerDispatchId,
+        };
+      }
+      reviewerInject = { ok: true, skipped: true, sent: true, recovered: true, reason: recovered.reason };
+    } else {
+      reviewerDispatchId = revStarted.dispatchId;
+      if (!reviewerDispatchId) {
+        return { ok: false, reused: true, error: '复用审官 worker-start 没拿到 dispatch id（没查成，不是已开工）' };
+      }
+      reviewerInject = finishWorkerInject({
+        handle,
+        dispatchId: reviewerDispatchId,
+        label: '审官',
+        timeoutMs: probeWaitMs(routing, launch.provider),
+        provider: launch.provider,
+        cwd: String(reviewerWorktreeId).includes('::') ? String(reviewerWorktreeId).split('::')[1] : null,
+      });
+      if (!reviewerInject.ok) {
+        return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
+      }
+    }
   }
 
   const identity = deliverReviewerIdentity({
     soldierDispatchId,
     reviewerDispatchId,
     hop: 'worker-done→士兵（复用审官身份）',
-    body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
+    body: skipStart
+      ? `复用原审官终端在途派单。dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`
+      : `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
     from,
     worktreeId: reviewerWorktreeId,
   });
@@ -2666,7 +2815,7 @@ function reuseReviewerOnTerminal({
       workType: '审查',
       terminal: launch.provider || 'dao',
       prNumber: Number(pr),
-      extra: { source: 'worker-done-reuse', worktreeId: reviewerWorktreeId, reused: true },
+      extra: { source: skipStart ? 'worker-done-reuse-live' : 'worker-done-reuse', worktreeId: reviewerWorktreeId, reused: true, skipStart },
     });
   } catch (e) {
     ledger = { ok: false, error: String(e.message || e) };
@@ -2676,19 +2825,21 @@ function reuseReviewerOnTerminal({
     ok: true,
     invoked: true,
     reused: true,
+    skipStart,
     reviewerId: reviewerWorktreeId,
     reviewerHandle: handle,
     reviewerDispatchId,
-    reviewerTaskId,
+    reviewerTaskId: skipStart ? null : reviewerTaskId,
     soldierDispatchId,
     inject: reviewerInject,
     identity,
     ledger,
-    reason: '新 Task 注入老审官终端，不建卡',
+    reason: skipStart ? '审官终端已有在途派单，跳过 worker-start' : '新 Task 注入老审官终端，不建卡',
   };
 }
 
 function cmdWorkerDone(args) {
+  if (args.executor && args.executor !== 'orca') return cmdWorkerDoneMirasim(args);
   // #677：本命令只交 GitHub 卷 + 起审官。Orca 结算（notify --type worker_done）不走这里。
   // 成功退出后士兵 Dispatch 必须仍是 ready/waiting，不许 completed。失败不得假装已下班。
   if (!args.pr) fail('worker-done 要 --pr');
@@ -2848,23 +2999,14 @@ function cmdWorkerDone(args) {
     if (create.ok) {
       create = { ...create, reviewer: plan.reviewer };
     } else {
-      const stop = planReviewerCreateAfterFail({ error: create.error });
-      const cls = classifyReviewerSpawnError(create.error);
-      const failBody = reviewerSpawnFailComment({ error: create.error, retried: true });
-      postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
-      postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
-      if (parentId) {
-        setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
-      }
       const reviewPending = writeReviewPendingOnFail({
         pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
         round: plan.round, error: create.error, workerModel: plan.workerModel,
         soldierDispatch: args.soldierDispatch, runGh: gh,
       });
-      fail(stop.error, {
-        ...plan, commentPosted: true, postedIssue, postedPr,
-        reviewerCreate: create, reuse, spawnKind: cls.kind,
-        switchVendor: false, outcome: 'stop', reviewPending,
+      finishWorkerDoneSpawnFail({
+        error: create.error, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
+        extra: { reviewerCreate: create, reuse, switchVendor: false, outcome: 'stop' },
       });
     }
   } else if (shouldReuse) {
@@ -2924,41 +3066,32 @@ function cmdWorkerDone(args) {
       if (retriedReuse.ok) {
         reused = { ...retriedReuse, retried: true };
       } else {
-        const cls = classifyReviewerSpawnError(reused.error);
-        const failBody = reviewerSpawnFailComment({ error: reused.error, retried: true });
-        postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
-        postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
-        if (parentId) {
-          setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
-        }
         const reviewPending = writeReviewPendingOnFail({
           pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
           round: plan.round, error: reused.error, workerModel: plan.workerModel,
           soldierDispatch: args.soldierDispatch, runGh: gh,
         });
-        fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
-          ...plan, commentPosted: true, postedIssue, postedPr,
-          reviewerCreate: create, reviewerReuse: { ...reused, invoked: true, reuseFailed: true, retried: true }, reuse,
-          spawnKind: cls.kind, reviewPending,
+        finishWorkerDoneSpawnFail({
+          error: reused.error, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
+          extra: {
+            reviewerCreate: create,
+            reviewerReuse: { ...reused, invoked: true, reuseFailed: true, retried: true },
+            reuse,
+          },
         });
       }
     }
   } else if (reuse.action === 'refuse') {
     const refuseErr = reuse.error || reuse.reason || '已有审官树/审官卡，拒绝新建';
-    const failBody = reviewerSpawnFailComment({ error: refuseErr, retried: false });
-    postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
-    postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
-    if (parentId) {
-      setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
-    }
     const reviewPending = writeReviewPendingOnFail({
       pr: plan.pr, parentId, reviewer: plan.reviewer, issue: plan.issue,
       round: plan.round, error: refuseErr, workerModel: plan.workerModel,
       soldierDispatch: args.soldierDispatch, runGh: gh,
     });
-    fail(refuseErr, {
-      ...plan, commentPosted: true, postedIssue, postedPr,
-      outcome: 'refused-existing', reuse, reviewerCreate: create, reviewPending,
+    finishWorkerDoneSpawnFail({
+      error: refuseErr, reviewPending, plan, postedIssue, postedPr, parentId, reuseInputs,
+      extra: { outcome: 'refused-existing', reuse, reviewerCreate: create },
+      retried: false,
     });
   }
 
@@ -3094,9 +3227,41 @@ function cmdStart(args) {
   });
 }
 
+// 本仓的 orca repo 选择符，一次解析全程复用。
+//
+// #762 定过「worktree create 一律带 --repo」，但只接在派工那一条路上；审官建树/接树、
+// batch、worktree-create 四处从来没带。仓从 /home/orca/windsurf-dao 迁到 /srv/projects/windsurf-dao
+// 之后这四处当场全断——orca 注册的仍是旧路径，cwd 落在新路径就报
+// `invalid_argument: Missing repo selector`（2026-09-06 实测：5 张复审票 drain 全挂在这句上，
+// 而外面看到的症状是「drain-exhausted，每轮开一张待拍板单」）。
+//
+// 匹配按 git remote URL 而不是路径：执行体可能跑在任意 worktree，路径匹配必然失配——
+// 这次的搬家正好就是那个「必然」。remote 没查成才 fallback 路径。
+// 「没查成」与「没注册」分开报，不许合流（resolveRepoSelector 自己保证）。
+let _repoSelCache;
+function thisRepoSelector() {
+  if (_repoSelCache !== undefined) return _repoSelCache;
+  const listed = orca(argsRepoList());
+  const remote = gitRemoteOriginUrl(ROOT);
+  _repoSelCache = listed.ok
+    ? resolveRepoSelector({
+        repos: listed.json?.result?.repos,
+        remoteUrl: remote.ok ? remote.url : undefined,
+      })
+    : { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(listed.error)}` };
+  return _repoSelCache;
+}
+/** 建树前取选择符；解析不出就当场 fail（没查成绝不静默建到别的仓去）。 */
+function repoSelectorOrFail(where) {
+  const r = thisRepoSelector();
+  if (!r.ok) fail(`${where}：本仓 repo 选择符没解析成：${r.error}`);
+  return r.selector;
+}
+
 function cmdWorktreeCreate(args) {
   if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
   const r = orca(argsWorktreeCreate({
+    repo: repoSelectorOrFail('worktree-create'),
     name: assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model }),
     noParent: args.noParent,
     setup: args.setup,
@@ -3371,6 +3536,7 @@ function cmdWorkerRead(args) {
 }
 
 async function cmdReviewerCreate(args) {
+  if (args.executor && args.executor !== 'orca') return cmdReviewerCreateMirasim(args);
   if (!args.pr) fail('reviewer-create 要 --pr');
 
   const gh = ghRunner({ role: 'reviewer' });
@@ -3537,6 +3703,7 @@ async function cmdReviewerCreate(args) {
   let standInCreated = false;
   if (fastPlan.fastPath && !resumedFromExisting && !standInId) {
     const madeStandIn = orca(fastPathStandInCreateArgs({
+      repo: repoSelectorOrFail('快马替身树'),
       pr: args.pr,
       issue: args.issue,
       baseBranch: originRef.baseBranch,
@@ -3551,6 +3718,7 @@ async function cmdReviewerCreate(args) {
 
   if (!resumedFromExisting) {
     const created = orca(argsWorktreeCreate({
+      repo: repoSelectorOrFail('reviewer-create'),
       name: revName,
       setup: 'skip',
       parentWorktree: parentSel,
@@ -4016,6 +4184,7 @@ function cmdReviewerAttach(args) {
 
   const created = {};
   const revWt = orca(argsWorktreeCreate({
+    repo: repoSelectorOrFail('reviewer-attach'),
     name: revName,
     setup: 'skip',
     parentWorktree: args.worktree,
@@ -4717,6 +4886,28 @@ function cmdNext() {
   process.exit(0);
 }
 
+/**
+ * 现状盘面（用户 2026-09-04 亲口要的：「一直没反应，就没卡住了还是什么情况」）。
+ * 三段（已落地 / 在途 / 待你拍）+ 每段末尾列没查成的源。只读、零副作用。
+ * 判据全在 lib/now-board.mjs 的 renderNow（纯函数，机器人问现状将来直接调它）；
+ * 取数全在 lib/now-collect.mjs。本函数只负责把两边接起来 + 选人看还是机器看。
+ */
+async function cmdNow(args) {
+  const { collectNow } = await import('./lib/now-collect.mjs');
+  const { renderNow, formatNow, DEFAULT_WINDOW_HOURS, DEFAULT_MAX_LINES } = await import('./lib/now-board.mjs');
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const hours = args.hours != null && /^\d+$/.test(String(args.hours)) ? Number(args.hours) : DEFAULT_WINDOW_HOURS;
+  const host = args.noServer === true ? null : (args.host || 'contabo');
+  const raw = await collectNow({ cwd: root, host, windowHours: hours, now: Date.now() });
+  const board = renderNow({ ...raw, windowHours: hours });
+  if (args.json === true) {
+    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
+    process.exit(0);
+  }
+  process.stdout.write(`${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
+  process.exit(0);
+}
+
 function cmdCheckHelp() {
   const sources = new Set();
   const report = checkHelpLiveness({
@@ -4825,14 +5016,299 @@ async function cmdLeg(args) {
   fail(`leg 只认 status / drop / restore，实际 ${action}`);
 }
 
-function main() {
+// ── #880 卡 C：审官流的 mirasim 执行体路径 ─────────────────────────────────────
+// reviewer-create / worker-done 带 --executor mirasim 时走这里：不建 Orca 树/终端，改用
+// mirasim-runtime 五动词起审官会话。判定仍落 GitHub review（gh-as reviewer），不发明第二种。
+// 合并归一：executor-binding.mjs / docs/model-routing.json「执行体」节 与卡 B 归一（见 PR 正文）。
+import { readExecutorPolicy, judgeExecutorName, judgeAgentRoute, bindExecutor } from './lib/executor-binding.mjs';
+import {
+  mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
+  judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
+} from './lib/dispatch/reviewer-mirasim.mjs';
+
+/** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
+function mirasimRepoRoot(args) {
+  if (args && args.repo) return args.repo;
+  const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
+  if (r.status === 0) {
+    let g = String(r.stdout || '').trim();
+    if (g) {
+      if (!g.startsWith('/')) g = join(ROOT, g);
+      if (g.endsWith('/.git')) return dirname(g);
+      return g;
+    }
+  }
+  return ROOT;
+}
+
+/** 读回某树 HEAD 的 sha（读回自证的那一读；读不到抛，交判官判「没查成」）。 */
+function gitHeadOf(treePath) {
+  const r = spawnSync('git', ['-C', treePath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(String(r.stderr || '').trim() || `git rev-parse 失败 exit ${r.status}`);
+  return String(r.stdout || '').trim();
+}
+
+/**
+ * 把复用的审官树推到 PR 新 head（返工轮）。fail-visible：
+ *  - 树里有未提交改动 → 拒硬 reset（reset --hard 会吞掉别人的活），报错让人看见；
+ *  - 目标 oid 本地没有 → 报错（调用方在这之前已 fetch 过，走到这说明 fetch 没生效）。
+ * 写完读回自证：reset 后自己再 rev-parse 一次，对不上就说没同步成，不打假 ✓。
+ */
+function gitSyncTreeTo(treePath, oid) {
+  const want = String(oid || '').trim();
+  if (!want) return { ok: false, error: '没给要同步到的 oid（没查成）' };
+  const st = spawnSync('git', ['-C', treePath, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+  if (st.status !== 0) {
+    return { ok: false, error: `读审官树 ${treePath} 状态失败（没查成）：${String(st.stderr || '').trim().slice(0, 200)}` };
+  }
+  const dirty = String(st.stdout || '').trim();
+  if (dirty) {
+    return {
+      ok: false,
+      error: `审官树 ${treePath} 有未提交改动，拒硬同步（怕吞活）：${dirty.split('\n').slice(0, 3).join(' | ')}`,
+      dirty: dirty.split('\n').slice(0, 10),
+    };
+  }
+  const has = spawnSync('git', ['-C', treePath, 'cat-file', '-e', `${want}^{commit}`], { windowsHide: true, encoding: 'utf8' });
+  if (has.status !== 0) return { ok: false, error: `审官树里没有 ${want.slice(0, 12)} 这个 commit（fetch 没生效？没查成）` };
+  const rs = spawnSync('git', ['-C', treePath, 'reset', '--hard', want], { windowsHide: true, encoding: 'utf8' });
+  if (rs.status !== 0) {
+    return { ok: false, error: `reset --hard ${want.slice(0, 12)} 失败：${String(rs.stderr || '').trim().slice(0, 200)}` };
+  }
+  let after;
+  try { after = gitHeadOf(treePath); }
+  catch (e) { return { ok: false, error: `同步后读回 HEAD 失败（没查成）：${String(e?.message || e)}` }; }
+  if (after !== want && !after.startsWith(want) && !want.startsWith(after)) {
+    return { ok: false, error: `reset 报成功但读回 HEAD 还是 ${after.slice(0, 12)}（不打假 ✓）`, treeHead: after };
+  }
+  return { ok: true, treeHead: after, from: null, to: want };
+}
+
+/**
+ * 把 origin/<PR 分支> 取到本地，并把审官分支 reviewBranch 建/移到 PR head OID（等同 orca
+ * 「新树停在 PR head」，避开 PR 分支已被别的树 checkout 的撞车）。失败返回 {ok:false}。
+ *
+ * 该审官分支已被某棵树 checkout 时 git 不让 `branch -f`，这里如实跳过并回 checkedOut:true——
+ * 推那棵树的活归 gitSyncTreeTo（返工轮由编排层在 HEAD 闸上调），不是这里静默算完。
+ */
+function gitFetchRef(repo, prBranch, expectedOid, reviewBranch) {
+  const fe = spawnSync('git', ['-C', repo, 'fetch', 'origin', prBranch], { windowsHide: true, encoding: 'utf8', timeout: 90000 });
+  if (fe.status !== 0) return { ok: false, error: `git fetch origin ${prBranch} 失败：${String(fe.stderr || '').trim().slice(0, 200)}` };
+  const branch = reviewBranch || prBranch;
+  const target = expectedOid || `origin/${prBranch}`;
+  let checkedOut = false;
+  if (branch !== prBranch) {
+    // 该审官分支已被某树 checkout 就别硬移（git 不让）；推那棵树归 gitSyncTreeTo。
+    const wl = spawnSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+    const lines = wl.status === 0 ? String(wl.stdout || '').split('\n').map(x => x.trim()) : [];
+    checkedOut = lines.includes(`branch refs/heads/${branch}`);
+    if (!checkedOut) {
+      const br = spawnSync('git', ['-C', repo, 'branch', '-f', branch, target], { windowsHide: true, encoding: 'utf8' });
+      if (br.status !== 0) return { ok: false, error: `建审官分支 ${branch}@${String(target).slice(0, 12)} 失败：${String(br.stderr || '').trim().slice(0, 200)}` };
+    }
+  }
+  return { ok: true, branch, checkedOut, target: String(target) };
+}
+
+/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。 */
+function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
+  return lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue,
+    pr,
+    dispatchId: dispatchId || null,
+    // mirasim 路径没有 orca 卡，不给 worktreeSel（免得 lookup 去 orca 捞盘面）。
+  });
+}
+
+function mirasimRegistry() {
+  return defaultReviewerRegistry({
+    readFile: p => readFileSync(p, 'utf8'),
+    writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
+    mkdir: d => mkdirSync(d, { recursive: true }),
+    join,
+    flowDir: join(ROOT, '_flow', 'mirasim'),
+  });
+}
+
+async function cmdReviewerCreateMirasim(args) {
+  if (!args.pr) fail('reviewer-create 要 --pr');
+  const gh = ghRunner({ role: 'reviewer' });
+  const routing = loadOrFail();
+  const execPolicy = readExecutorPolicy(routing);
+  const named = judgeExecutorName(args.executor, execPolicy);
+  if (!named.ok) fail(named.error, { executor: args.executor });
+  const bind = bindExecutor({ executor: named.name, routing });
+  if (!bind.ok) fail(bind.error, { executor: named.name });
+
+  const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
+  if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
+  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
+  if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, pr: String(args.pr) });
+  const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
+  if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });
+
+  const issueRef = args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null;
+  // #886 审官第 4 条：merge-policy 从原派工恢复（显式旗标 > 账本 > 卡备注），不许硬编码 auto。
+  const policyPlan = mirasimMergePolicy(args, {
+    issue: issueRef, pr: args.pr, dispatchId: args.soldierDispatch || null,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, pr: String(args.pr) });
+  const books = buildMirasimReviewerPrompts({
+    pr: String(args.pr), issue: issueRef,
+    soldierDispatchId: args.soldierDispatch != null ? String(args.soldierDispatch) : '',
+    policyPlan, render: buildReviewerInject,
+  });
+  if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
+
+  const registry = mirasimRegistry();
+  // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
+  const existing = registry.read(args.pr);
+  if (existing.ok && existing.record && existing.record.sessionKey) {
+    // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
+    // 否则服务端一抽风就给同一个 PR 起第二个审官。
+    const peek = args.dryRun ? { view: null, why: 'dry-run 不探会话' } : await peekReviewerSession(bind.runtime, existing.record.sessionKey);
+    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: args.force });
+    if (reuse.reuse) {
+      emit({
+        ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
+        reviewer: picked.modelId, worker: worker.modelId, sessionKey: reuse.sessionKey,
+        agent: existing.record.agent || null, treePath: existing.record.treePath || null,
+        expectedOid: existing.record.expectedOid || null,
+        mergePolicy: books.mergePolicy, mergePolicySource: books.source,
+        reuse: { reuse: true, checked: reuse.checked, why: reuse.why, peekWhy: peek.why || null },
+        why: `${reuse.why}（要另起加 --force）`,
+      });
+    }
+  }
+
+  const repo = mirasimRepoRoot(args);
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim', pr: String(args.pr), reviewer: picked.modelId,
+      worker: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    });
+  }
+
+  const res = await mirasimReviewerCreate({
+    runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
+    prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+    syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+    pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
+    models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
+    reviewBranch: `dao-review-pr-${args.pr}`,
+  });
+  if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res });
+
+  // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
+  const w = registry.write(args.pr, {
+    pr: String(args.pr), sessionKey: res.sessionKey, agent: res.agent, treePath: res.treePath,
+    round: 'first', headRefName: res.headRefName, expectedOid: res.expectedOid,
+    treeHead: res.treeHead || null, ts: Date.now(),
+  });
+  if (!w || w.ok !== true) {
+    fail(
+      `审官会话已起（sessionKey=${res.sessionKey}）但写登记失败，判失败（fail-closed，不许当 created）：${(w && w.error) || '写盘没回 ok'}`,
+      { executor: 'mirasim', stage: 'registry', pr: String(args.pr), sessionKey: res.sessionKey, treePath: res.treePath, registryWrite: w || null },
+    );
+  }
+  emit({
+    ok: true, executor: 'mirasim', outcome: 'created', pr: String(args.pr),
+    reviewer: picked.modelId, worker: worker.modelId, sessionKey: res.sessionKey, taskId: res.taskId,
+    agent: res.agent, mode: res.mode, treePath: res.treePath, headRefName: res.headRefName,
+    expectedOid: res.expectedOid, treeHead: res.treeHead, mergeable: res.mergeable, treeSync: res.treeSync,
+    mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    registryWrite: w,
+  });
+}
+
+async function cmdWorkerDoneMirasim(args) {
+  if (!args.pr) fail('worker-done 要 --pr');
+  let body = args.body;
+  if (args.bodyFile) {
+    try { body = readFileSync(args.bodyFile, 'utf8'); }
+    catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
+  }
+  const gh = ghRunner({ role: 'worker' });
+  const ghR = ghRunner({ role: 'reviewer' });
+  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh });
+  if (!plan.ok) fail(plan.error, plan);
+  const routing = loadOrFail();
+  const execPolicy = readExecutorPolicy(routing);
+  const named = judgeExecutorName(args.executor, execPolicy);
+  if (!named.ok) fail(named.error);
+  const bind = bindExecutor({ executor: named.name, routing });
+  if (!bind.ok) fail(bind.error);
+
+  // 工人模型：跨厂闸与新起会话要。首审 plan.workerModel 有；返工轮从 PR 标签兜。
+  let workerModel = plan.workerModel;
+  if (!workerModel) {
+    const worker = resolveWorkerFromPr({ pr: args.pr, runGh: ghR });
+    workerModel = worker.ok ? worker.modelId : null;
+  }
+
+  // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
+  // 却给审官注入 m=auto，审官会绕过「需人工合并」的边界。
+  const policyPlan = mirasimMergePolicy(args, {
+    issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, ...plan });
+  const books = buildMirasimReviewerPrompts({
+    pr: String(plan.pr), issue: plan.issue,
+    soldierDispatchId: args.soldierDispatch != null ? String(args.soldierDispatch) : '',
+    policyPlan, render: buildReviewerInject,
+  });
+  if (!books.ok) fail(books.error, { policyPlan, ...plan });
+
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim', ...plan, workerModel,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    });
+  }
+
+  const postedIssue = postCommentOnce({ kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh });
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
+  if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
+
+  const repo = mirasimRepoRoot(args);
+  const res = await mirasimWorkerDone({
+    runtime: bind.runtime, gh: ghR, readTreeHead: gitHeadOf,
+    prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+    syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+    registry: mirasimRegistry(),
+    pr: String(plan.pr), repo,
+    prompt: books.prompt,
+    reworkPrompt: books.reworkPrompt,
+    reviewerModel: plan.reviewer, workerModel,
+    models: routing.models, mirasimPolicy: bind.mirasim, round: plan.round,
+    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force,
+  });
+  if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
+  emit({
+    ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
+    mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+    postedIssue, postedPr, action: res.action, session: res.session || null, interact: res.interact || null,
+    sessionKey: res.sessionKey || res.session?.sessionKey || null, treeSync: res.treeSync || null,
+    reuse: res.reuse ? { reuse: res.reuse.reuse, checked: res.reuse.checked, why: res.reuse.why } : null,
+  });
+}
+
+function main(argv = process.argv) {
   let args;
-  try { args = parseArgs(process.argv); }
+  try { args = parseArgs(argv); }
   catch (e) {
+    if (IN_PROCESS) throw new ExitSignal({ ok: false, error: String(e.message || e) }, 1);
     console.error(String(e.message || e));
     process.exit(1);
   }
   if (args.verb === 'help' || args.help) {
+    if (IN_PROCESS) throw new ExitSignal({ ok: true, usage: USAGE }, 0);
     process.stdout.write(USAGE);
     process.exit(0);
   }
@@ -4871,11 +5347,38 @@ function main() {
     case 'leg': return cmdLeg(args);
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
+    case 'now': return cmdNow(args);
     case 'raw': return cmdRaw(args);
     default:
+      if (IN_PROCESS) throw new ExitSignal({ ok: false, error: `未知动词: ${args.verb}` }, 1);
       console.error(`未知动词: ${args.verb}`);
       process.exit(1);
   }
 }
 
-main();
+/**
+ * 进程内跑一次 CLI。给测试用——省掉 ~225ms 的进程启动，走的是同一条 argv→输出。
+ * @param {string[]} args 动词及其后的参数（不含 node 与脚本路径）
+ * @returns {{status:number, payload:object|null, error?:string}}
+ *   payload 是 emit 本来要 JSON.stringify 出去的那个对象，直接给，不用再解析一遍。
+ */
+export async function runCliInProcess(args) {
+  IN_PROCESS = true;
+  try {
+    // **必须 await**：一半动词（cmdReviewerCreate 等）是 async，它们的 fail() 抛在 Promise 里。
+    // 同步 try/catch 接不住——首版就栽在这儿：同步返回「没 emit」，信号随后变成未捕获异常。
+    await main(['node', 'dao.mjs', ...args]);
+    // 走到这儿说明动词处理完了却没 emit——那是 CLI 的契约漏洞，如实报出来，不装成成功
+    return { status: 0, payload: null, error: '动词返回但没有 emit（CLI 契约漏洞）' };
+  } catch (e) {
+    if (e instanceof ExitSignal) return { status: e.code, payload: e.payload };
+    throw e;                       // 真异常照抛，不许被当成「CLI 报错」吞掉
+  } finally {
+    IN_PROCESS = false;
+  }
+}
+
+// 只有当自己就是入口时才跑 main——被 import 时（测试进程内调用）不许自动执行
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  main();
+}

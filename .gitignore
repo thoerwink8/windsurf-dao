@@ -6,6 +6,12 @@ _scratch/
 _flow/
 # PR 正文草稿（进 PR body 的文书，不进 git）
 .flow-pr-body.md
+# 完工报告草稿：工人写它、`dao.mjs worker-done --body` 读它，读完使命就结束，从来不该被提交。
+# 不 ignore 的后果实测过（2026-09-06）：它以「未跟踪文件」的身份留在工人树里，
+# 而 git worktree remove 见到未跟踪文件就拒删 → board-gc 每一张干完的卡都回收不掉 →
+# 僵尸卡越积越多 → agent-stall-watch 再把它们当「静默会话」报警。
+# 一个完工标记，把清理路整条堵死。修法不是给删树加 --force（那条禁令有它的道理），是让草稿别装成待提交。
+worker-done-*.md
 # 测试夹具与复现沙箱（跑完即删；崩溃残留也不该进版本库）
 # 刻意不放 _tmp/：被测 hook dao-rule-echo.js 的 EXCLUDE 把 _tmp/_scratch 判为非规则面
 tests/.fixtures-scope*/

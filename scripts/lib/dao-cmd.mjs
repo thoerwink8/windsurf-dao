@@ -9,7 +9,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText } from './next-launch.mjs';
@@ -639,10 +639,12 @@ export function isCiEnv(env = process.env) {
 }
 
 export function orcaHelpAvailable(spawn = spawnSync) {
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
+  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
+  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
+    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
+      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
     return { ok: false, missing, error: msg };
   }
   const text = `${r.stdout || ''}${r.stderr || ''}`;
@@ -663,13 +665,19 @@ export function helpCheckPolicy({ ci, orca } = {}) {
   return { action: 'fail', reason: (orca && orca.error) || 'orca --help 没查成' };
 }
 
-export function fetchOrcaHelp(cmd, spawn = spawnSync) {
+/** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
+const LIVE_HELP_CACHE = new Map();
+
+export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const r = spawn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+  const key = parts.join(' ');
+  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
+  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
   if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
   const text = `${r.stdout || ''}${r.stderr || ''}`;
   if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
+  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
   return text;
 }
 
@@ -678,9 +686,9 @@ export function helpFixturePath(cmd, root = ROOT) {
 }
 
 /** 先跑真 --help；orca 不在 PATH 时才用语料夹具（夹具必须是某次真 --help 落盘）。 */
-export function fetchHelpPreferLive(cmd, { spawn = spawnSync, root = ROOT } = {}) {
+export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = ROOT } = {}) {
   try {
-    return { text: fetchOrcaHelp(cmd, spawn), source: 'live' };
+    return { text: fetchOrcaHelp(cmd, spawnFn), source: 'live' };
   } catch (e) {
     const p = helpFixturePath(cmd, root);
     if (!existsSync(p)) throw new Error(`orca ${cmd} --help 没查成（${e.message}）且无夹具`);
@@ -688,6 +696,58 @@ export function fetchHelpPreferLive(cmd, { spawn = spawnSync, root = ROOT } = {}
     if (!String(text).trim()) throw new Error(`${p} 夹具是空的`);
     return { text, source: 'fixture' };
   }
+}
+
+function spawnOrcaHelpAsync(cmd) {
+  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
+  return new Promise((resolve, reject) => {
+    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.on('error', reject);
+    child.on('close', (status) => {
+      const text = `${stdout}${stderr}`;
+      if (status !== 0 && !String(text).trim()) {
+        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
+        return;
+      }
+      if (!String(text).trim()) {
+        reject(new Error(`orca ${cmd} --help 无输出`));
+        return;
+      }
+      resolve(text);
+    });
+  });
+}
+
+/**
+ * #984 返工：catalog 自检有 orca 时仍走 live，但不串行 29 次（~12s）。
+ * 池宽 6 并行打 --help，命中写进 LIVE_HELP_CACHE，随后 fetchHelpPreferLive 走缓存。
+ */
+export async function prefetchLiveHelp(cmds, { concurrency = 6 } = {}) {
+  const uniq = [...new Set((cmds || []).map((c) => String(c).trim()).filter(Boolean))];
+  const pending = uniq.filter((c) => !LIVE_HELP_CACHE.has(c));
+  if (pending.length === 0) return { ok: true, fetched: 0, cached: uniq.length };
+  let cursor = 0;
+  let fetched = 0;
+  let failed = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const cmd = pending[cursor++];
+      try {
+        const text = await spawnOrcaHelpAsync(cmd);
+        LIVE_HELP_CACHE.set(cmd, text);
+        fetched += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  return { ok: failed === 0, fetched, failed, cached: LIVE_HELP_CACHE.size };
 }
 
 export function checkHelpLiveness({ catalog, fetchHelp }) {
@@ -852,22 +912,26 @@ export {
 import {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
-  classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
+  classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
+  parseActiveDispatchId, planWorkerDoneAfterSpawnFail, planReuseExistingLiveDispatch,
+  planAfterWorkerStartActiveDispatch,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
-  classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
+  classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
+  parseActiveDispatchId, planWorkerDoneAfterSpawnFail, planReuseExistingLiveDispatch,
+  planAfterWorkerStartActiveDispatch,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
@@ -947,18 +1011,18 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight', 'preflight', 'no-server']);
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
   breaker: new Set(['--hours', '--json', '--dry-run', '--help', '-h']),
@@ -978,11 +1042,13 @@ export const FLAGS_BY_VERB = {
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'worker-done': new Set([
     '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--from',
-    '--reviewer', '--dry-run', '--json', '--help', '-h',
+    '--reviewer', '--executor', '--branch', '--repo',
+    '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
-    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
+    '--executor', '--branch', '--repo', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
@@ -1013,6 +1079,7 @@ export const FLAGS_BY_VERB = {
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
+  now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1114,7 +1181,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
   review-pending-drain [--pr <N>]
                   # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
-                  # worker-done 起审官失败时写队列；扫完 0 条是空转成功，目录读不了才没查成
+                  # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
+                  # 扫完 0 条是空转成功，目录读不了才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -1156,6 +1224,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   liveness [--path <工作树>]
   check-help
   next                        # 盘面动作候选一行（#576）：只读本地文件零 GitHub；standby 态不含「待消歧」
+  now [--json] [--hours N] [--host <ssh名>] [--no-server]
+                  # 现状盘面三段（#891 形状）：已落地（近 N 小时合并的 PR / master 提交）
+                  #   / 在途（每张 open PR 一行：判定+过期票、审官是谁、会话在不在、审官树 head 对不对得上、本机工人）
+                  #   / 待你拍（待消歧|待拍板 issue、返工待复审、审官起不来、发散或冲突的分支）
+                  # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
+                  # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
+                  # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   preflight --model <id> [--json]

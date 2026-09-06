@@ -275,3 +275,161 @@ grill-ai 落闸后用户拍板：**①删掉指纹层只判静默 ②走统一�
 匹配 `^Bash$`——**在每一次 Bash 调用上真跑**，往上下文注入一句暗号。仓里所有检查都看不见它，
 因为 `checkSkillsLink` 只查「仓里的都链上了没」，不查反方向。已补反向判据并分成两个 id
 （悬空链 vs 外来目录，修法完全不同）。同一次扫描还捡出一条指向已删 skill 的悬空链。
+
+### 2026-09-05：server-check 第一次全绿（20 通 / 0 红 / 0 没查成）
+
+清红的过程本身比结果值钱，两条都不是「按提示修一下」就完的：
+
+**⑳「仓里的单元和机器上装着的一致」第一次真跑，比出两个漂移，方向相反。**
+`feishu-triage.service` 是仓新机旧（照仓装到机器）；`orca-serve.service` 反过来——仓里那份
+从 #764 落档起没改过，而它落档时机器还没买。机器 09-02 装起来走的是另一条路：解包后的
+`AppRun` 而不是 AppImage，`--pairing-address 127.0.0.1` 而不是 `100.64.1.20`（**这台机器上
+根本没有那个网段的接口**）。照仓装才是把跑了三天的好的换成连不上的。
+**「仓是真相源」不是无条件的**——单元这类「装机时被现场改过」的东西，得先看哪份在跑。
+
+**⑲「退役 CLI 已不在 PATH」清不掉，因为有个没人知道的进程正握着它。**
+摘 `/usr/bin/grok` 前查了一下谁在用：一个 **09-03 17:03 起跑、活了整整两天**的 grok 进程，
+`events.jsonl` 末行是 `turn_ended: completed`（09-03 17:04）——干完一分钟后挂了两天。
+而 `orca terminal list` 的 59 条记录里**没有它**。
+
+这是「卡删了进程没死」的反面：**进程还在、卡已经不在**。后一面更难看见，因为
+board-gc、agent-stall-watch、看板**全都按卡遍历**——没有卡的进程不在任何人的定义域里。
+要发现它，遍历必须**从进程侧起**（`pgrep -af`）再回头对卡。同一批 `terminal list` 里还有
+**25 个终端静默超过 3 小时**（最久 16 小时），而 orca 自己的 `orphaned` 全是 `false`。
+两件事都在派子代理补机制（只报不自动杀——自动杀那条路咬过，见 memory）。
+
+摘 PATH 的做法：删 `/usr/bin` 的符号链接、留 `/usr/lib/node_modules` 本体，还原是一条
+`ln -s`，比 `npm uninstall` 便宜得多。
+
+### 2026-09-05 夜：交接点（本机帅位 → 服务器帅位）
+
+用户要把活挪到法国那台 Linux 上接着干。此刻的实况，接班的先读这一节。
+
+**机器在哪**：Contabo，IP 13.140.184.255，ssh 别名 `contabo`，服务用户 `orca`，
+仓在 `/srv/projects/windsurf-dao`。IP 归属地是**法国** Lauterbourg（Contabo 是德国公司，机房在法国边境）。
+
+**底座**：`server-check` 20 通 / 0 红 / 0 没查成；8 个 systemd timer 全 armed；
+本机与服务器 master 同步，两个仓工作树都干净。
+
+#### 这一轮跑通的（第一次）
+
+自转链完整走了一圈，全自动、无人工介入：
+
+```
+工人推新 head → 指挥官发现当前 head 无判定 → 写复审票
+  → drain 起审官 → 审官判定
+     → 判绿：自动合并 + 删分支      （#886 #947 #968 三张这么合的）
+     → 判红：自动派返工工人          （#894 #899 这么修的）
+```
+
+#### 修掉的三个断点（都在 `commander-core.mjs` / `close-issue.mjs`）
+
+1. **「从没审过」整格空着**：判据是 `judgedTotal > 0 && atHead === 0`，
+   于是交卷可合、零判定的 PR 没有任何规则接住。已并成一条：当前 head 缺判定就叫审官。
+2. **账本记「派了」不记「成了」**：复审票写出去就记账，审官起来即死（裸 pi 落错 provider 401），
+   判定一条没落而账本认为已办完——`#894/#899/#905` 三张因此永久卡死，没有任何东西会重试。
+   改成记 `tries` + 45 分钟宽限期，试满 3 次 escalate 停手。
+   **走到重试分支本身就是上一次没成的证据**，所以不需要 `ok` 字段。
+3. **补丁链标记被当成署名单号**：PR 标题 `[chain:session-visibility#0]` 里的 `#0` 被
+   `attributedIssueNumber` 标题优先取走，正文里正确的「署名 issue #891」根本轮不到
+   → 查不到 `reviewer/` 标签 → 复审静默派不出去。已剥离 `[chain:...]` 且 `#0` 不认。
+
+#### 在途
+
+| 东西 | 状态 | 下一步 |
+|---|---|---|
+| **PR #972** | 工人已交卷，ready、MERGEABLE、**当前 head 零判定** | 起审官。这是 #971（服务器帅位期 1 三动词）的成果 |
+| PR #945 | ready，零判定 | 同上 |
+| #909 #905 #896 #893 #890 | ready，判定都打在旧 commit | 复审票机制会自己接（宽限期 45 分钟） |
+| #964 #930 #919 #897 #885 #884 | draft | #884/#885 属 #880 mirasim 迁移，见下 |
+| ISSUE-833 工人 | 终端在，agent 已退 | 查它交卷没有 |
+
+#### mirasim 迁移（#880）卡在哪
+
+卡 A ✅ 合 · **卡 C（#886）✅ 合**（审官流 mirasim 路径，2026-09-05 19:22 自动合并）·
+卡 B（#884）草稿等审 · 卡 D（#885）草稿 · 卡 E/F 未开工。
+
+腿表里 `claude-opus-5@mirasim/mirasim` 仍是「停用」，停用原因写的是「等卡 B 接线」。
+用户当天拍板 **先试老路**（不改腿，用 orca 审官），已验证老路可走——卡 C 就是这么审完合的。
+
+#### 等用户拍的（不许替他决定）
+
+- **#948** `resume-uncontrolled`：会话能跑能推能部署，而 Remote Control 返 400。
+  我的建议是先只记结构化证据，硬闸不上（判错会锁死整条链）。
+- **#819** Windows 录像员（三选项，其中一个要花钱）。
+- **#955** 人设层：用户已选 A（当字典存档，用到再取），效果测试还没跑。
+  库已 clone 在本机 `D:\frank\_ref\agency-agents`，**不在服务器上**。
+- reclaude 设备授权：v1.3.0 已装 `/home/orca/.local/bin/reclaude`，PATH 通，差一次浏览器点击。
+  **授权之前不许写 `agentLaunch` 键**——写了服务器每个 mirasim claude 会话都会去跑
+  未登录的 reclaude，当场全死。接法见 `docs/observations/2026-09-05-mirasim叠reclaude的接法.md`。
+- **windsurf-dao 已迁 `/srv/projects/windsurf-dao`**（用户 2026-09-06 拍板当天迁，推翻同日早先的「押后」）。
+  同批：ai-gateway-stack、miraquota-win 克隆进驻 `/srv/projects/`，mirasim 工作区三条登记齐。
+  已同步换掉：10 个 /etc systemd 单元 + 仓内模板/脚本/测试/文档的路径（observations 判例不改史）。
+  **过渡件登记：`/home/orca/windsurf-dao` 是指向新址的软链**，护着在途 worktree（审官树/880 树）的
+  git 指针与未排查散点（orca automations 等）——**退役条件：在途树清空 + orca 产品退役，届时 rm 软链**
+  （用户 2026-09-06 明确不要旧路径长期依赖；目录硬链文件系统不允许，复制=两份真相源，故用软链过渡）。
+
+#### 新身份
+
+`dao-watchdog` App 建好了（App ID `4840777`，装 6 个仓，凭据两台机器都装了）。
+它是「机器自动动作」的身份，服务器帅位将来用它而不是 `marshal`，GitHub 历史才分得清谁做的。
+现在三个动词的 role 是参数、默认 `marshal`，改一个参数就能切。
+
+### 2026-09-06：事件驱动主路落地（#956 第二步，接盘遗弃草稿 #964）
+
+节奏那一节定的形态「事件驱动主路 + 低频轮询兜底」，主路这一半做完了。
+
+**没开端口，也没花钱。** #956 正文假设「GitHub webhook 需要公网入口」，于是要 HTTP 端点 +
+`X-Hub-Signature-256` 校验。实测发现前提不成立：`gh webhook forward` 省略 `--url` 时
+把负载直接打到 **stdout**，hook 的投递地址是 GitHub 自家的 `webhook-forwarder.github.com`，
+本机拉一条**出站** wss 把投递取回来。于是：
+
+- 不要域名、不要证书、不要开端口 —— 三项花钱/要人拍板的前置一起消失。
+- 签名校验那一层不是「省了」，是**不存在**：签名防的是「谁都能往我的端点 POST」，
+  而这里没有可以 POST 的入口。`tests/gh-events.test.js` 有一条闸盯着源码里不许出现
+  `createServer` / `--url=` —— 哪天有人改回本地监听，签名校验必须同时补回来。
+- 形态跟飞书适配器是同一个：出站长连接，无公网回调。那才是能复用的东西（不是它的"入口"，
+  它根本没有入口）。
+
+**只订两类事件**，因为判据表里「靠事件」的只有三行，三行全是 PR 形状：
+`pull_request`（合并→关单、opened/ready/synchronize→起审官）、`pull_request_review`（判定落地）。
+`push` 订了没有哪一行会用，只会让 act 白醒 —— 不订。闸会验「订阅清单里每一类都得有人用」。
+
+**桥不判事，只提前叫人。** 收到事件就 `systemctl start --no-block` 已有的
+`dao-close-issues.service` / `commander-act.service`，判据仍在那两个脚本里。
+走 systemd 而不是直接 `node commander.mjs act`，是因为 commander 的 `state.json` 没有锁：
+事件那一次和定时器那一次撞上会互相盖写，丢 `wakeCounts` 就等于多起一个大脑（多花一次钱）。
+systemd 对同一个 oneshot 只留一个启动 job，第二次 start 自动并进去 —— 串行是白拿的。
+提频不烧钱这一条也复核过了：`wakeCounts` 按 **target** 记账（`stall:<term>` / `daipai:issue-<n>` /
+`patrol`），`WAKE_LIMIT=3` 是每个目标三次，不是每轮三次；叫得勤不会多烧。
+
+**兜底一个都没动。** `dao-close-issues.timer`（每小时）、`commander-act.timer`（20 分钟）原样留着，
+周期没拉长 —— 拉长是另一件事，等桥在生产上跑够久再说。闸里有一条直接盯着
+`dao-close-issues.timer` 还在不在，webhook 上线就把轮询关掉是这单最容易犯的错。
+
+**「它悄悄停了」和「没有事发生」怎么分开**（本仓口径，这单的核心）：光数事件数分不开 ——
+安静的一小时和断线的一小时，事件数都是 0。桥每 10 分钟朝自己的 hook 打一次 ping，
+GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道通时它一定不为 0。
+`server-check (23)` 判绿的前提是「最近收到过 ping」，不是「没报错」：
+
+| 状态文件长什么样 | 判 |
+|---|---|
+| 心跳新鲜 + ping 最近回来过 | `ok`（0 个事件也绿 —— ping 通就说明是真的没事） |
+| 心跳停了 | `red`「它已经不在守着了」 |
+| 进程活着但 ping 迟到 | `red`「事件送不进来了，别当这段时间没事」 |
+| 起了 3 分钟以上一个 ping 都没有 | `red`「投递根本没进来」 |
+| 事件收到了但 `systemctl start` 失败 | `red` 并点名单元（多半 sudoers 没装） |
+| 状态文件不在 / 读不出对象 | `unknown`（没装 ≠ 没事） |
+
+**权限**：桥以 orca 跑，唯一要 root 的是 `systemctl start --no-block <那两个单元>`，
+走 `host/machine/sudoers.d/dao-gh-events` 里写死的两条（沿用 dao-sync 那条先例）。
+不带通配、不指家目录，闸逐条验。
+
+落点：判据 `scripts/lib/gh-events.mjs`（纯函数）／常驻 `scripts/gh-event-bridge.mjs`／
+单元 `host/machine/systemd/dao-gh-events.service`／白名单 `host/machine/sudoers.d/dao-gh-events`／
+装 `scripts/install-dao-gh-events.sh`（装完会等自证 ping 绕回来，等不到判失败）／
+闸 `tests/gh-events.test.js`。它是 server-check 的第 (23) 项（(21)(22) 已被家目录属主与 mirasim 腿表占用）。
+
+**本 PR 没有在生产上装任何东西。** 合并后执行 `sudo bash scripts/install-dao-gh-events.sh`。
+遗弃草稿 PR #964 的分支 `feat/956-gh-event-bridge` 原样保留；本跳是按帅位 2026-09-06 05:40
+值守记录在当前 master 上重做（单元路径已改到 `/srv/projects/windsurf-dao`）。

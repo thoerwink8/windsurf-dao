@@ -86,11 +86,12 @@
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpus } from 'node:os';
+import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { runOrcaRaw } from './lib/orca-run.mjs';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
@@ -102,6 +103,10 @@ import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
+import {
+  judgeHarvest, inspectHarvestFixtures,
+  harvestLiveArgs, judgeHarvestCoverage, HARVEST_LIVE_LIMIT,
+} from './lib/harvest-check.mjs';
 import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
@@ -136,6 +141,9 @@ import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
+import { affectedTests, mapHealth } from './lib/test-impact.mjs';
+import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
+import { classifyAssertStyle } from './lib/assert-style.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -207,16 +215,118 @@ function runOneSuite(dir, f) {
     let out = '';
     let child;
     try {
-      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT });
+      // 测试期禁止出网（2026-09-06）：--import 预加载拦截器，NODE_OPTIONS 会继承给
+      // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
+      // 判据与来历见 tests/helpers/no-network.mjs 头部。
+      const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
+      const env = {
+        ...process.env,
+        NODE_COMPILE_CACHE: compileCache,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+      };
+      child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
     }
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
-    child.on('error', (e) => resolveOne({ f, status: 1, out: out + String(e && e.message ? e.message : e) }));
-    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, out }));
+    const t0 = Date.now();
+    child.on('error', (e) => resolveOne({ f, status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
+    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
+}
+
+// ── 只跑受影响的（#TIA，2026-09-06 用户拍板）────────────────────────────
+// 默认全量；`--affected` 才按影响地图裁剪。默认不裁是有意的——
+// 「漏跑」是静默的，所以要裁必须由调用方显式开口（land.mjs 本地开，CI 全量兜底）。
+//
+// 变更集口径（定错就是静默漏跑，这里写死不许猜）：
+//   origin/<默认分支>..HEAD 的改动  ∪  工作区未提交改动（含未跟踪）
+// 取并集是因为 land 是在 push 之前跑：只看已提交会漏掉刚改还没 commit 的，
+// 只看工作区会漏掉本地已经攒了几个 commit 的。
+
+function changedFilesForAffected() {
+  const out = new Set();
+  const run1 = (args) => {
+    const r = spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? (r.stdout || '') : null;
+  };
+  const base = (() => {
+    const head = run1(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    const b = head ? head.trim() : null;
+    if (b) return b;
+    for (const cand of ['origin/master', 'origin/main']) {
+      if (run1(['rev-parse', '--verify', '--quiet', cand]) != null) return cand;
+    }
+    return null;
+  })();
+  let scanned = false;
+  if (base) {
+    const committed = run1(['diff', '--name-only', `${base}...HEAD`]);
+    if (committed != null) { scanned = true; for (const l of committed.split('\n')) if (l.trim()) out.add(l.trim()); }
+  }
+  const dirty = run1(['status', '--porcelain', '-uall']);
+  if (dirty != null) {
+    scanned = true;
+    for (const l of dirty.split('\n')) {
+      const p = l.slice(3).trim();
+      if (!p) continue;
+      // 重命名形态 `old -> new`：两边都算改动
+      for (const seg of p.split(' -> ')) if (seg.trim()) out.add(seg.trim().replace(/^"|"$/g, ''));
+    }
+  }
+  return { scanned, files: [...out] };
+}
+
+/** 返回本轮要跑的测试文件名（不带 tests/ 前缀，与调用方一致）。 */
+function selectSuites(allSuites) {
+  if (!process.argv.includes('--affected')) return allSuites;
+  const all = allSuites.map(f => `tests/${f}`);
+  const { scanned, files } = changedFilesForAffected();
+  if (!scanned) {
+    green('影响面没算成（git 读不到）——按全量跑，不是「没有改动」');
+    return allSuites;
+  }
+  const map = readImpactMap();
+  const r = affectedTests({ map, changed: files, allTests: all });
+  if (r.mode === 'full') {
+    green(`影响面：全量（${r.why}）`);
+    return allSuites;
+  }
+  green(`影响面：${r.tests.length}/${all.length} 套（${r.why}）`);
+  return r.tests.map(t => t.replace(/^tests\//, ''));
+}
+
+// 地图是本机派生数据，落 ~/.dao/test-impact/（不进 git，理由见 test-impact-map.mjs 头部）。
+// CI 是全新 clone、没有地图 ⇒ affected 自动退全量，这正是已拍板的分层。
+function impactMapPath() {
+  return process.env.DAO_IMPACT_MAP || join(homedir(), '.dao', 'test-impact', 'map.json');
+}
+function readImpactMap() {
+  const p = impactMapPath();
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+/** 地图健康度：漏登记/幽灵/太旧即红。**只在全量模式判**——裁剪模式下它是前置条件，另有把关。 */
+function checkImpactMapHealth() {
+  const dir = join(ROOT, 'tests');
+  if (!existsSync(dir)) return;
+  const all = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort().map(f => `tests/${f}`);
+  const map = readImpactMap();
+  if (!map) {
+    // 没有地图不是红：CI / 新机本来就没有，affected 会退全量，是安全的降级。
+    skip(`影响地图不在本机（${impactMapPath()}）——--affected 会退全量；要用快档先跑 node scripts/test-impact-map.mjs build`);
+    return;
+  }
+  let dist = null;
+  const r = spawnSync('git', ['-C', ROOT, 'rev-list', '--count', `${map.head}..HEAD`], { encoding: 'utf8', windowsHide: true });
+  if (r.status === 0) dist = Number((r.stdout || '').trim());
+  const h = mapHealth({ map, allTests: all, headDistance: dist });
+  if (h.ok) green(`影响地图健康（${Object.keys(map.entries).length} 套在图，落后 HEAD ${dist ?? '?'} 个提交）`);
+  else fail('影响地图不健康', '跑 node scripts/test-impact-map.mjs build 重建', h.problems.join('；'));
 }
 
 async function runTests() {
@@ -225,9 +335,24 @@ async function runTests() {
     fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
     return;
   }
-  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
-  if (suites.length === 0) {
+  // 禁网闸的账落仓外（检查器的输出不许落进自己会读的范围，否则报告变成下一轮输入）
+  if (!process.env.DAO_NO_NETWORK_LOG) {
+    const d = join(homedir(), '.dao', 'no-network');
+    if (!existsSync(d)) mkdirSync(d, { recursive: true });
+    process.env.DAO_NO_NETWORK_LOG = join(d, `${Date.now()}-${process.pid}.ndjson`);
+  }
+  const allSuites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
+  if (allSuites.length === 0) {
+    // 这条判的是「tests/ 空了」——真·没查成。必须在裁剪之前判，
+    // 否则「裁剪后 0 套」会走到同一条红上，把「本次改动确实与测试无关」误报成「测试没了」
+    // （2026-09-06 实咬：只改 README 时报「一套测试都没扫到」）。
     fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
+    return;
+  }
+  const suites = selectSuites(allSuites);
+  if (suites.length === 0) {
+    green(`测试：本次改动与全部 ${allSuites.length} 套都无关（扫完是 0 条，不是没扫到）`);
+    reportNetworkViolations();
     return;
   }
   const results = [];
@@ -253,6 +378,116 @@ async function runTests() {
       fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
     }
   }
+  reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
+  reportNetworkViolations();
+  // 地图健康只在全量模式判：裁剪模式下它是前置条件（不健康就退全量了），
+  // 在裁剪模式重复判会让「因为地图坏所以退全量」的那次又红一遍，噪音。
+  if (!process.argv.includes('--affected')) checkImpactMapHealth();
+  checkSpawnBudget();
+  checkAssertStyle();
+}
+
+/** 断言写法闸：新增的测试行里不许有复合 assert.ok（判据与来历见 lib/assert-style.mjs）。 */
+function checkAssertStyle() {
+  const { scanned, files } = changedFilesForAffected();
+  if (!scanned) { skip('断言写法：算不出本次改了哪些行（git 读不到）——没查成'); return; }
+  const testFiles = files.filter(f => /\.test\.(js|mjs|cjs)$/.test(f));
+  if (testFiles.length === 0) { green('断言写法：本次没改测试文件'); return; }
+
+  // 只取**新增**行：存量 1471 处复合断言不进判定面
+  const base = spawnSync('git', ['-C', ROOT, 'merge-base', 'HEAD', 'origin/master'], { encoding: 'utf8', windowsHide: true });
+  const ref = base.status === 0 ? (base.stdout || '').trim() : null;
+  // `-M`（跟踪重命名/搬运）是硬要求，不是优化：拆文件时 git 默认把新文件的每一行
+  // 都算「新增」，存量断言会整批被判成新写的（2026-09-06 实咬：拆 dao.test.js 那次
+  // 一口气报 416 处，而那全是逐字搬过去的旧行）。带上 -M 后搬运不计入新增。
+  const diffs = [];
+  for (const f of testFiles) {
+    const args = ['-C', ROOT, 'diff', '-U0', '-M', ...(ref ? [ref] : []), '--', f];
+    const r = spawnSync('git', args, { encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) { skip(`断言写法：${f} 的 diff 没取到——没查成`); return; }
+    const added = (r.stdout || '').split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1));
+    diffs.push({ file: f, added });
+  }
+  // 基线 = 改动前**全部**测试文件的行。用来分辨「搬来的旧行」与「这次新写的」。
+  // 取不到就退化成不给基线（宁可多报，不许漏报）。
+  let baseline = null;
+  if (ref) {
+    const ls = spawnSync('git', ['-C', ROOT, 'ls-tree', '-r', '--name-only', ref, 'tests/'], { encoding: 'utf8', windowsHide: true });
+    if (ls.status === 0) {
+      baseline = [];
+      for (const p of (ls.stdout || '').split('\n').filter(x => /\.test\.(js|mjs|cjs)$/.test(x))) {
+        const show = spawnSync('git', ['-C', ROOT, 'show', `${ref}:${p}`], { encoding: 'utf8', windowsHide: true });
+        if (show.status === 0) baseline.push(...(show.stdout || '').split('\n'));
+      }
+    }
+  }
+  const v = classifyAssertStyle(diffs, baseline);
+  if (v.state === 'ok') green(`断言写法：${v.detail}`);
+  else if (v.state === 'red') fail('新增了复合断言', '拆成最简条件，或改用 equal/deepEqual 让失败信息自带 diff（见 lib/assert-style.mjs）', v.detail);
+  else skip(`断言写法：${v.detail}`);
+}
+
+/**
+ * 测试耗时：**只报趋势，不当闸**（2026-09-06 用户拍板删掉墙钟硬闸）。
+ *
+ * 试过硬闸，做不到它要做的事：这台 6 核机 load average 5+，同一套两次跑差一倍
+ * （agent-stall-watch 3.7s / 7.7s）。为了不误报把阈值放到 3 倍，而 3 倍的闸
+ * **抓不到真正会发生的事**——新检查从 3s 慢慢爬到 8s 它一声不吭，只能抓「一次性慢 3 倍」
+ * 那种本来就显眼的情况。给人「有闸在管」的错觉，实际管不住，比没有更糟。
+ *
+ * 行业对性能也是这个路子：趋势跟踪，硬闸留给确定性的量——我们的确定性量是 spawn 预算。
+ */
+function reportTestDurations(durations) {
+  const measured = durations.filter(d => Number.isFinite(Number(d.ms)));
+  if (measured.length === 0) return;   // 裁剪后 0 套是常态，不报
+  const total = measured.reduce((s, d) => s + d.ms, 0);
+  const top = [...measured].sort((a, b) => b.ms - a.ms).slice(0, 3)
+    .map(d => `${d.file} ${(d.ms / 1000).toFixed(1)}s`).join('、');
+  green(`测试耗时：${measured.length} 套合计 ${(total / 1000).toFixed(1)}s（墙钟，受机器负载影响；最慢：${top}）`);
+}
+
+/** 测试里起子进程的总量闸——「TIA 第二刀没做完」的报警器（scripts/lib/spawn-budget.mjs）。 */
+function checkSpawnBudget() {
+  const dir = join(ROOT, 'tests');
+  let counts;
+  try {
+    counts = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f))
+      .map(f => ({ file: f, count: countSpawnCalls(readFileSync(join(dir, f), 'utf8')) }));
+  } catch (e) {
+    fail('spawn 预算没查成', '读不到 tests/ 目录', String(e.message || e));
+    return;
+  }
+  const r = classifySpawnBudget(counts);
+  if (r.state === 'ok') green(`spawn 预算：${r.detail}`);
+  else if (r.state === 'red') fail('测试起子进程超预算', '把 spawn 改成进程内调用（TIA 第二刀），或显式降/调预算并说明', r.detail);
+  else fail('spawn 预算没查成', '扫描面坏了——不是「没有 spawn」', r.detail);
+}
+
+/** 读禁网闸的账：测试期有没有谁试图连外网。拦下不等于报警——调用方常把网络错吞了。 */
+function reportNetworkViolations() {
+  const log = process.env.DAO_NO_NETWORK_LOG;
+  if (!log) { fail('禁网闸没接上', '本次等于没查：runOneSuite 应设 DAO_NO_NETWORK_LOG 并挂 --import', ''); return; }
+  let lines = [];
+  if (existsSync(log)) {
+    try {
+      lines = readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+    } catch (e) {
+      fail('禁网闸的账读不了', '没查成，不是「没有违规」', String(e.message || e));
+      return;
+    }
+  }
+  if (lines.length === 0) { green('禁网闸：测试期 0 次外网连接尝试'); return; }
+  const byHost = new Map();
+  for (const v of lines) {
+    const k = `${v.host}:${v.port}`;
+    byHost.set(k, (byHost.get(k) || 0) + 1);
+  }
+  const who = [...byHost.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join('、');
+  fail(
+    `测试期有 ${lines.length} 次外网连接尝试`,
+    '单元测试不许打真实网络（慢+飘+不可复现）。注入假实现，或让被调的 CLI 默认不出网',
+    who + `｜首条 argv：${lines[0].argv || '未记'}`,
+  );
 }
 
 // ── ② skill 装载面 ──────────────────────────────────────────────────
@@ -1361,7 +1596,13 @@ function checkNoAutoCloseLive() {
 // 「停派工态未跑」是第三种形：不是绿（没查）、也不是没查成（是故意不查），话面写明原因与开关。
 // 离线的样本/接线检查（夹具判别力、模板扫描）全部保留——它们不花网络，且守的约定还在仓里。
 const FULL = process.argv.includes('--full');
+// 快档标志：只有显式 --affected 才进快档。默认（不带旗标）仍跑全部，
+// 因为「跳过了什么」是静默的，得由调用方开口才生效。
+const AFFECTED = process.argv.includes('--affected');
 const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 node scripts/dao-check.mjs --full）`);
+// 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
+// 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
+const netParked = (name, why) => skip(`快档跳过：${name}——${why}（全量档 node scripts/dao-check.mjs --full 才跑）`);
 
 await runTests();
 checkSkillFrontmatter();
@@ -1402,7 +1643,9 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
-checkModelLabelNames();
+if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
+checkHarvestSamples();
+if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
@@ -1411,7 +1654,8 @@ checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
-checkFeishuGroupsLive();
+if (FULL) checkFeishuGroupsLive();
+else netParked('飞书群有效性', '要打飞书 API，实测 11.3s');
 checkReleasePolicySamples();
 checkReleasePolicyLive();
 checkDispatchPolicySamples();
@@ -1678,6 +1922,64 @@ function checkDesignExamHarvestLive() {
     return;
   }
   green('盲考收卷纪律还在（起考轮盯产物收到完）');
+}
+
+// #888 回流闸：样本三态 + live（近 7 天已合并 PR 里的孤儿回流段）。
+function checkHarvestSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'harvest');
+  const readJson = (name) => {
+    try { return JSON.parse(readFileSync(join(dir, `${name}.json`), 'utf8')); } catch { return null; }
+  };
+  const r = inspectHarvestFixtures({ readJson });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '回流闸样本没查成' : '回流闸样本失去判别力',
+      '恢复 tests/fixtures/harvest/{red,ok,empty}.json：红必须判红、绿必须干净、空正文必须判没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`回流闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkHarvestLive() {
+  const since = new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10);
+  const got = runGhJson(harvestLiveArgs(since));
+  if (got.unscanned) {
+    fail('回流段 live 没查成', 'gh 可用再跑（没查成 ≠ 没有孤儿段）', got.error || '');
+    return;
+  }
+  // 覆盖面先判：条数摸到取数上限 = 结果可能被截断 = 没查成。
+  // 老版本硬编码 --limit 30，而近 7 天真实 merged PR 已 40 个（2026-09-04 实测），
+  // 被截掉的 10 个静默漏报，话面却报「近 7 天全量通过」——把「没查成」显示成「查过没事」。
+  const cov = judgeHarvestCoverage(got.array.length);
+  if (!cov.ok) {
+    fail(
+      '回流段 live 没查成（取数可能被截断）',
+      `把 HARVEST_LIVE_LIMIT（现 ${HARVEST_LIVE_LIMIT}）抬高或改分页取全；宁可报没查成，不许把部分扫描报成全量通过`,
+      cov.error || '',
+    );
+    return;
+  }
+  const v = judgeHarvest(got.array);
+  if (v.unscanned) {
+    fail('回流段 live 没查成', got.array.length ? '取到了 PR 但正文全空——检查 --json 字段与权限' : '', v.error || '');
+    return;
+  }
+  if (v.empty) {
+    parked(`回流段 live：近 7 天（${since} 起）没有已合并 PR，无从判断`);
+    return;
+  }
+  const problems = [...v.orphans, ...v.thin];
+  if (problems.length) {
+    fail(
+      `回流段没人接/不合规 ${problems.length} 处`,
+      '合并时收口官/帅要接单：段内回写「回流单：#N」或「已回流：<sha>」或「不回流：<原因>」；标题必须是独立的「## 回流」行（#888）',
+      problems.slice(0, 6).join(' '),
+    );
+    return;
+  }
+  green(`回流段 live：近 7 天 ${v.scanned} 个已合并 PR 全扫到（取数 ${cov.count}/上限 ${cov.limit}，未截断），回流段全有受理证据（${v.accepted.length} 条）`);
 }
 
 // §73 四轴腿表：样本三态（红/绿/空=没查成）+ live（合法性 + 与职责树交叉核；单轴裸奔只报不拦）。

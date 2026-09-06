@@ -16,7 +16,7 @@
 //
 // exit 0 = 修完复查全绿；exit 1 = 还有剩（含 dry-run 查出问题）。
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, rmdirSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { checkOnboard, repoRootOfThisFile, ONBOARD_REPORT_ONLY, PI_EXTENSIONS } from './lib/onboard-check.mjs';
 import { checkMemoryLink, defaultHome, encodeProjectDir, originUrlFromConfig, repoSlugFromUrl, MEMORY_REPO_SLUG } from './lib/dao-memory-link-check.mjs';
@@ -77,7 +77,9 @@ function fixMemory(id) {
     return;
   }
   act(`接 memory Junction ${linkPath} → ${candidate}`, () => {
-    if (st) unlinkSync(linkPath); // 悬空链接或空目录占位
+    // 悬空链接和空目录占位要分开清：unlink 删不了目录（EISDIR）。
+    // 目录一律走 rmdirSync——它拒绝非空目录，是第 75 行守卫之后的第二道保险。
+    if (st) st.isSymbolicLink() ? unlinkSync(linkPath) : rmdirSync(linkPath);
     mkdirSync(dirname(linkPath), { recursive: true });
     symlinkSync(candidate, linkPath, 'junction');
   });

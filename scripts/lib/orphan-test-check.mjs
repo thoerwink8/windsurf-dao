@@ -36,6 +36,19 @@ function normRef(ref) {
  * 纯判官：给测试文件清单 + 读文件 + 查存在，出孤儿名单。
  * files: 相对 root 的路径列表（tests/xxx.test.js）；readFile/exists 由调用方注入。
  */
+/**
+ * 一个引用可能落到哪些真实文件上。带扩展名的只认它自己（写了 .mjs 就该有 .mjs）；
+ * 没写扩展名的按 Node 的解析顺序给候选，任一存在即不算孤儿。
+ */
+export function resolveCandidates(resolved) {
+  if (/\.[cm]?js$/.test(resolved)) return [resolved];
+  return [
+    resolved,
+    `${resolved}.js`, `${resolved}.mjs`, `${resolved}.cjs`,
+    `${resolved}/index.js`, `${resolved}/index.mjs`, `${resolved}/index.cjs`,
+  ];
+}
+
 export function inspectOrphanTests({ files, readFile, exists } = {}) {
   if (!Array.isArray(files)) return { ok: false, unscanned: true, error: '没给测试文件清单（没查成）' };
   const tests = files.filter(f => /(^|\/)tests?\/[^/]+\.test\.(js|mjs|cjs)$/i.test(f));
@@ -71,7 +84,10 @@ export function inspectOrphanTests({ files, readFile, exists } = {}) {
       const resolved = parts.join('/');
       if (!resolved) continue;
       scannedRefs++;
-      if (!exists(resolved)) orphans.push({ test: tf, ref, resolved });
+      // Node 的 require/import 会替你补扩展名与 index：`require('./helpers/x')` 命中
+      // x.js / x.mjs / x.cjs / x/index.js。闸只按原样查存在就会把它们全判成孤儿
+      // （2026-09-06 实咬：dao.test.js 拆分后抽出 helpers/dao-harness.js，六套齐红）。
+      if (!resolveCandidates(resolved).some((c) => exists(c))) orphans.push({ test: tf, ref, resolved });
     }
   }
   return { ok: orphans.length === 0, unscanned: false, orphans, scanned: tests.length, scannedRefs, dynamic };
