@@ -1227,6 +1227,46 @@ function closesNumbers(text) {
   return found;
 }
 
+// ── 西瓜清单（2026-09-06）─────────────────────────────────────────────────────
+//
+// 用户点破的真问题：风险不是忘了某一件事，是长期目标被日常小事挤掉，两天后彻底遗忘。
+// 「再写一个文档记着」解决不了——文档会和人一起遗忘（#880 的进度表就是活证据，
+// 它写着卡 C 未完成而实际早就合了，2026-09-06 连着误导两次）。
+//
+// 所以这条 check 做三件事，每次跑 dao-check 都做：
+//   ① 把西瓜念一遍——不需要谁记得去看板上翻
+//   ② 在制品超上限就红——Little's Law：同时做的越多，每件完成得越慢
+//   ③ **守住 done_when 的判据指针**：check 字段指的函数必须真存在。
+//      指向空气的指针比没有更糟（本仓约定），而这类指针最容易在重构里悄悄失效。
+function checkInitiatives() {
+  const file = join(ROOT, 'docs', 'initiatives.json');
+  if (!existsSync(file)) { skip('西瓜清单：docs/initiatives.json 不在——本项没查成'); return; }
+  let doc;
+  try { doc = JSON.parse(readFileSync(file, 'utf8')); }
+  catch (e) { fail('西瓜清单读不了', 'initiatives.json 不是合法 JSON', String(e.message || e).slice(0, 80)); return; }
+  const list = Array.isArray(doc.initiatives) ? doc.initiatives : null;
+  if (!list) { fail('西瓜清单没查成', 'initiatives.json 缺 initiatives[] 数组', ''); return; }
+  const active = list.filter(i => i && i.status === 'active');
+  const limit = Number(doc.wip_limit) || 3;
+
+  // 判据指针失效检查：done_when 靠 check 指的那个函数来算，函数没了就等于这条目标没人盯着。
+  const src = readFileSync(new URL(import.meta.url), 'utf8');
+  const dangling = active.filter(i => i.check && !src.includes(`function ${i.check}`));
+  if (dangling.length) {
+    fail(`西瓜清单有 ${dangling.length} 条判据指向空气`, '被指的检查函数没了——这条目标其实没人在盯，补回函数或改 check 字段',
+      dangling.map(i => `${i.id} → ${i.check}()`).join('；'));
+    return;
+  }
+  if (active.length > limit) {
+    fail(`在制品超上限：${active.length} 个西瓜同时在推（上限 ${limit}）`,
+      '先完成一个再开新的。别提高上限来消红——那是业界记录的头号反模式',
+      active.map(i => i.id).join('；'));
+    return;
+  }
+  for (const i of active) notes.push(`西瓜「${i.name}」：完成判据 = ${i.done_when}`);
+  green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着`);
+}
+
 // ── orca 退役进度（2026-09-06 切流量后常驻）─────────────────────────────────────
 //
 // 为什么是一条 check 而不是一张 issue：#880 的进度表是「这条线唯一的实时状态面」，
@@ -1728,6 +1768,7 @@ checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+checkInitiatives();
 checkOrcaRetirement();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');

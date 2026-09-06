@@ -1,0 +1,28 @@
+{
+  "updated": "2026-09-06",
+  "_comment": "西瓜清单：正在推进的长期目标。日常小事不进这里——进来的必须是「丢了会疼」的那种。",
+  "_why": "2026-09-06 用户点破：真正的风险不是忘了某一件事，是长期目标被日常小事挤掉，两天后彻底遗忘。业界把这叫 long-running initiatives that never end，解法是 Portfolio Kanban 的在制品上限（Little's Law：cycle time = WIP / throughput，同时做的越多，每件完成得越慢）。",
+  "_判据必须机器可算": "done_when 只写「能当场算出真假」的事实。人填的百分比会过期——#880 的进度表就是这么死的：它写着卡 C 未完成，实际早就合了，2026-09-06 连着误导了两次。判据是事实就不可能骗人。",
+  "wip_limit": 3,
+  "_wip_limit_why": "上限的意义在于「满了就不许开新的」。业界记录的两个反模式：① 不断提高上限来证明没超；② 拿长期宽泛的任务当填充物。加新的之前先问能不能先完成一个。",
+  "initiatives": [
+    {
+      "id": "orca-retire",
+      "name": "Orca 退役，执行体全部换成 mirasim",
+      "why": "用户 2026-09-05 拍板（memory: mirasim-replaces-orca-except-reclaude）；伞单 #880",
+      "done_when": "orca workspaces 下 0 棵树 且 orca-serve 已 disabled 且 dao.mjs 里标了「整段删」的那条脊已删",
+      "check": "checkOrcaRetirement",
+      "status": "active",
+      "started": "2026-09-04"
+    },
+    {
+      "id": "branch-hygiene",
+      "name": "分支寿命收短：竞争 PR 与长命分支不再堆积",
+      "why": "2026-09-06 实咬：#884/#986 两份实现撞车，1339 行白做；盘面一度 13 个开放 PR、5 个冲突、最老的挂了两天。业界数据：三成 PR 属于 competing pull requests。",
+      "done_when": "开放 PR 中 mergeable=CONFLICTING 的数量为 0 且最老的开放 PR 不超过 2 天",
+      "check": "checkCompetingPrsLive",
+      "status": "active",
+      "started": "2026-09-06"
+    }
+  ]
+}
