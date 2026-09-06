@@ -61,6 +61,7 @@
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |
+| D | ~/.cache/ms-playwright | playwright 浏览器二进制的**默认**落点，per-user——Linux 服务器上别用它，装到 `/opt/ms-playwright` 让 root/orca 共用（NEW-MACHINE §13b）。不拷、不进 git |
 | B | ~/.orca/agent-hooks | Orca 状态 hook。现机已装的保持现状；模板已随 #807 删（cursor hook 那份，cursor-agent 退出选型） |
 | D | ~/AppData/Roaming/orca | Orca Desktop 本机画像。派工启动听仓内 launch；这份文件只拿来比较，禁拷、禁改、不进 git |
 | D | ~/AppData/Roaming/Devin | Devin 桌面端 user-data-dir。派工走 CLI 非交互形态，桌面端不参与 |

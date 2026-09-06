@@ -658,6 +658,26 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
 
+## 13b. Linux 服务器上的浏览器（2026-09-06 装，Ubuntu 24.04 实测）
+
+Windows 侧默认有 Chrome，playwright MCP 装上就能用；**Linux 无头机上一个浏览器都没有**，
+装了 `@playwright/mcp` 也只是个空壳——它启动时找不到浏览器二进制直接失败。
+
+```bash
+npm install -g @playwright/mcp playwright                     # bin 是 playwright-mcp / playwright
+export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright             # 关键：见下
+playwright install --with-deps chromium                        # apt 装系统库 + 下浏览器，约 400MB
+```
+
+- **`PLAYWRIGHT_BROWSERS_PATH` 不能省**。默认落 `~/.cache/ms-playwright`，是 per-user 的：
+  root 装完 orca 起不来（判例 memory `root-owned-files-in-service-home`）。装到 `/opt` 755，
+  两个用户共用一份。**起 MCP / 跑脚本时同样要带这个变量**，只在装的时候带等于没装。
+- 这台机器无 GUI 无 X，用的是 chrome-headless-shell，`chromium.launch()` 默认 headless 即可，
+  不需要 xvfb。
+- 验（别只看 `--help`，那不碰浏览器）：真起一次 `chromium.launch()` 打开 `https://example.com`
+  截图；MCP 侧做一次 stdio `initialize` + `tools/list` + `browser_navigate`，
+  拿到 `Page Title: Example Domain` 才算通。
+
 ## 13.1 「模型好慢」先分段，别先查网络
 
 2026-09-01 两台机同一天各栽一次：用户报「模型好慢」，两边都先去查网关、查 Clash、查节点，
