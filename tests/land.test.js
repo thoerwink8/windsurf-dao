@@ -55,9 +55,9 @@ describe('land 决策层', () => {
 
   it('decideWorktreeRemove：六道闸每道单独拦得住', async () => {
     const { decideWorktreeRemove } = await CORE;
-    const ok = { branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, orcaManaged: false, detached: false };
+    const ok = { branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, executorManaged: false, detached: false };
     assert.equal(decideWorktreeRemove(ok).remove, true, '全绿样本必须可删，否则闸没判别力');
-    for (const [k, v] of [['merged', false], ['dirty', true], ['isMain', true], ['isCurrent', true], ['isDefaultBranch', true], ['orcaManaged', true], ['detached', true]]) {
+    for (const [k, v] of [['merged', false], ['dirty', true], ['isMain', true], ['isCurrent', true], ['isDefaultBranch', true], ['executorManaged', true], ['detached', true]]) {
       assert.equal(decideWorktreeRemove({ ...ok, [k]: v }).remove, false, `${k}=${v} 必须拦`);
     }
   });
@@ -229,13 +229,13 @@ describe('land 认 squash 合并（#839）', () => {
     assert.equal(b({ contributes: false, isCurrent: true }).del, false, '当前分支闸仍在最前面');
     assert.equal(b({ contributes: false, checkedOutAt: 'C:/x' }).del, false, '被树占用闸仍在');
 
-    const w = (o) => decideWorktreeRemove({ branch: 'PR-820-审官-x', merged: false, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, orcaManaged: false, detached: false, ...o });
+    const w = (o) => decideWorktreeRemove({ branch: 'PR-820-审官-x', merged: false, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, executorManaged: false, detached: false, ...o });
     assert.equal(w({ contributes: false }).remove, true, 'squash 支的审官树要拆');
     assert.equal(w({ contributes: true }).remove, false);
     assert.equal(w({ contributes: null }).remove, false);
     assert.match(w({ contributes: null }).reason, /没查成/);
     assert.equal(w({ contributes: false, dirty: true }).remove, false, '脏树闸仍在 squash 判据前面');
-    assert.equal(w({ contributes: false, orcaManaged: true }).remove, false, 'orca 在管仍不碰');
+    assert.equal(w({ contributes: false, executorManaged: true }).remove, false, '执行体在管仍不碰');
   });
 
   it('collectBranchMergeFacts：git 答不上来 ⇒ contributes:null，绝不当成 false', async () => {
@@ -387,7 +387,7 @@ describe('零提交的新分支不是「已合并」（#898）', () => {
     const b = (o) => decideBranchDelete({ name: 'f', merged: true, isDefault: false, isCurrent: false, checkedOutAt: '', ...o });
     assert.equal(b({ everHadContent: false }).del, false, '零提交支不许删');
     assert.equal(b({ everHadContent: true }).del, true, '真已合并支照删');
-    const w = (o) => decideWorktreeRemove({ branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, orcaManaged: false, detached: false, ...o });
+    const w = (o) => decideWorktreeRemove({ branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, executorManaged: false, detached: false, ...o });
     assert.equal(w({ everHadContent: false }).remove, false, '零提交支的树不许拆——那是刚开工的工位');
     assert.match(w({ everHadContent: false }).reason, /从来没有过自己的提交/);
     assert.equal(w({ everHadContent: true }).remove, true, '真已合并支的干净树照拆');

@@ -53,6 +53,7 @@ import {
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
 } from './lib/hub-ask.mjs';
+import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -334,9 +335,12 @@ function buildSituation({ state } = {}) {
     defaultWorkerModel = null;
   }
   const breakerIngest = ingestBreakerSignals();
+  // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
+  const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
     at: nowIso(), repo: REPO,
     github, orca, reviewPending, prReviews, stall, otherRepos,
+    viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},

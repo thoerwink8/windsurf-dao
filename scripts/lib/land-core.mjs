@@ -223,10 +223,10 @@ export function decideBranchDelete({ name, merged, contributes, everHadContent, 
 }
 
 /** 拆不拆这棵 git worktree。合没合并与删分支同一把尺（审官树漏拆和审官分支漏删是同一个病）。 */
-export function decideWorktreeRemove({ branch, merged, contributes, everHadContent, prState, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, detached }) {
+export function decideWorktreeRemove({ branch, merged, contributes, everHadContent, prState, dirty, isMain, isCurrent, isDefaultBranch, executorManaged, detached }) {
   if (isMain) return { remove: false, reason: '主树' };
   if (isCurrent) return { remove: false, reason: '自己所在的树' };
-  if (orcaManaged) return { remove: false, reason: 'orca 在管（有卡/agent）——删卡走编排闭环，land 不碰' };
+  if (executorManaged) return { remove: false, reason: '执行体在管（mirasim-worktrees 下）——拆树走编排闭环，land 不碰' };
   if (isDefaultBranch) return { remove: false, reason: '挂着默认分支的树（如 mirasim 会话树）' };
   if (detached) return { remove: false, reason: 'HEAD 游离，判不了合没合并' };
   if (dirty) return { remove: false, reason: '有未提交改动——里面可能是别人半成品' };
