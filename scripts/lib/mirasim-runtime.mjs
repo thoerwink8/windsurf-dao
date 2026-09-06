@@ -31,6 +31,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
+import { checkTreeLease } from './dispatch/lease.mjs';
 
 /** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
 export const PINNED_VERSION = '0.0.282';
@@ -573,6 +574,8 @@ export function createRuntime(opts = {}) {
   const ledgerIo = opts.ledgerIo || defaultLedgerIo;
   const journalRead = opts.journalRead;
   const now = opts.now || (() => Date.now());
+  // 租约判据可注入：单测给假的，生产读盘。默认必须是真闸——不给就不检查等于没有闸。
+  const leaseCheck = opts.leaseCheck || checkTreeLease;
   const t = {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
@@ -663,6 +666,20 @@ export function createRuntime(opts = {}) {
     if (!agent || !workdir || !prompt) {
       throw new MirasimRejectedError('起会话要同时给 agent / workdir / prompt');
     }
+
+    // 租约闸：一棵树同时只许一个会话在跑（lib/dispatch/lease.mjs 有实测起因）。
+    // 装在这里而不是各调用点——四个调用点（dao dispatch / dao start / 审官 create /
+    // 推一把）全从这道门过，装在门里绕不开。放在连线之前：占着的树连 ws 都不开。
+    const lease = leaseCheck({ workdir });
+    if (!lease.ok) {
+      // 没查成 ⇒ 拒起（fail-close）。放行的代价实测是一棵树 15 个会话；
+      // 拒起的代价是这轮不派、下轮再来，而且报得出来。
+      throw new MirasimUnavailableError(`租约没查成，拒起会话：${lease.error}`, { workdir });
+    }
+    if (lease.verdict === 'held') {
+      throw new MirasimRejectedError(`租约被占，拒起会话：${lease.why}`, { workdir, holder: lease.holder });
+    }
+
     const wire = await open();
     try {
       // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
