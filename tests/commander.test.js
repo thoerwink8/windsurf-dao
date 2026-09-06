@@ -145,6 +145,7 @@ describe('decide：自己做（确定性）', () => {
     const a = byKind(r, 'attach-reviewer');
     assert.equal(a.length, 1);
     assert.equal(a[0].pr, 920);
+    assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
   });
 });
 
@@ -1467,6 +1468,15 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
       drainLedger: { 'pr:909': { at: OLD, pr: '909', tries: 1 } },
     }));
     assert.equal(byKind(r, 'retry-drain')[0]?.stateKey, 'pr:909');
+  });
+
+  // 判别力：执行侧若仍写旧键 pr:N，有 head 的票永远进不了 retry-drain。
+  // 这就是 #909 修 decide、漏 attach-reviewer 写侧之后的现场。
+  it('票带 head 但账只在旧键 pr:N → 不认，走 attach-reviewer（旧键不算数）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit('samehead', { 'pr:909': { at: OLD, pr: '909', tries: 1 } }));
+    assert.equal(byKind(r, 'retry-drain').length, 0, '旧键对不上 pr:909@samehead');
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '当没账，重新 attach 并应写新键');
   });
 });
 

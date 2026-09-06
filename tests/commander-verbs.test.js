@@ -634,6 +634,17 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
   });
 });
 
+describe('drainLedgerKey：decide 与 execute 同一门面', () => {
+  it('有 head → pr:<pr>@<head>；拿不到 → 退回 pr:<pr>', async () => {
+    const { drainLedgerKey } = await VERBS;
+    assert.equal(drainLedgerKey(909, 'abc'), 'pr:909@abc');
+    assert.equal(drainLedgerKey('909', '  abc  '), 'pr:909@abc');
+    assert.equal(drainLedgerKey(909, null), 'pr:909');
+    assert.equal(drainLedgerKey(909, ''), 'pr:909');
+    assert.equal(drainLedgerKey(909, '   '), 'pr:909');
+  });
+});
+
 describe('执行层真接了三个动词（不是只测纯函数）', () => {
   it('commander.mjs 的 switch 有三个 case，且动手前走 plan*Cmd', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
@@ -644,6 +655,16 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
       assert.ok(src.includes(fn), `executor 缺 ${fn}（校验层没接到手上）`);
     }
     assert.ok(/gh-as\.mjs/.test(src) && /marshal/.test(src), '写动作要走 gh-as');
+  });
+
+  it('attach-reviewer 记账走 drainLedgerKey + ticketHeadOid，不许手写旧键 pr:<N>', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const i = src.indexOf("case 'attach-reviewer':");
+    assert.ok(i > -1, '找不到 attach-reviewer case');
+    const body = src.slice(i, src.indexOf("case 'merge':", i));
+    assert.match(body, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
+    assert.match(body, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {
