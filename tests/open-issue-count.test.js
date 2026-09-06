@@ -59,6 +59,7 @@ describe('open-issue-count ⑭', () => {
     const Q = await LOAD;
     const r = Q.inspectOpenIssueCountFixtures(FIX);
     assert.equal(r.ok, true, r.error || JSON.stringify(r.problems));
-    assert.ok(r.kinds.red >= 1 && r.kinds.ok >= 1, JSON.stringify(r.kinds));
+    assert.equal(r.kinds.red, 2, JSON.stringify(r.kinds));
+    assert.equal(r.kinds.ok, 1, JSON.stringify(r.kinds));
   });
 });
