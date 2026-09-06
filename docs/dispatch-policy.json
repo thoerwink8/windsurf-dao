@@ -15,7 +15,7 @@
     "overrides": {}
   },
   "commander": {
-    "maxDispatchPerRound": 2,
+    "maxDispatchPerRound": 4,
     "requireModelInRouting": true
   },
   "hubChat": {
