@@ -639,13 +639,26 @@ describe('mirasim 单轨派工硬闸', () => {
     assert.equal(p.executor, 'mirasim');
   });
 
+  // merge-policy 落账本（2026-09-06 接通，真机验过审官能读回）。
+  // 审官侧 lookupReviewerMergePolicy 按 flag > ledger > comment > fallback('auto') 恢复：
+  // 不写这条账本，审官对每张单都拿 fallback 的 auto——**显式派成 manual 的单会被自动合并**。
+  // 判据钉在写口的字段形状上：审官按 job.dispatch + identity=工人 + issue_number 找，少一个就找不回。
+  it('mirasim 派工把 merge-policy 落账本，字段与审官的查法对齐', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const fn = src.slice(src.indexOf('async function cmdDispatchMirasim'), src.indexOf('async function cmdDispatch(args)'));
+    assert.match(fn, /writeJobDispatch\(/);
+    for (const 字段 of ["identity: '工人'", 'merge_policy:', 'issue_number:', "terminal: 'mirasim'"]) {
+      assert.ok(fn.includes(字段), `账本写口少了审官要查的字段：${字段}`);
+    }
+  });
+
   // 切流量开关（#880 卡 E）。这条不是测行为，是**守住别偷偷切**：三个前置没接完就把
   // MIRASIM_IS_ONLY_PATH 改 true，等于顺手关掉 merge-policy 恢复 / 探针熔断 / 盘面可见性。
   // 真接完了，改这行 + 改这条测试是同一次动作，逼人正面回答「前置满足了吗」。
   it('切流量开关仍关着，且前置清单没被悄悄删掉', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     assert.match(src, /const MIRASIM_IS_ONLY_PATH = false;/);
-    for (const 前置 of ['merge-policy 不落账本', '派前探针 / 熔断没接', 'label / 派工评论没接']) {
+    for (const 前置 of ['merge-policy 落账本', '派前探针 / 熔断没接', 'label / 派工评论没接', '真派一单']) {
       assert.ok(src.includes(前置), `切换前置清单少了一条：${前置}`);
     }
   });
