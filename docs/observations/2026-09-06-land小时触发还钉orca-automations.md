@@ -1,4 +1,13 @@
+---
+title: 收工 land 的小时触发仍钉在已停的 orca automations 上
+status: done
+issue: 1051
+date: 2026-09-06
+---
+
 # 机制巡检：收工 land 的小时触发仍钉在已停的 orca automations 上
+
+处置：#1051（挂回统领单，作第 7 条同形，未另开单）。判据与前 6 条完全一致——**grep 那个单元名，只有定义和文档、没有第三处真的在跑它**：`LAND_AUTOMATION_TRIGGER = 'hourly'` 只出现在安装脚本和 NEW-MACHINE 里，机器上既无 timer、无 cron、`orca automations list` 返 `runtime_unavailable`。⑧ 那格因此永远是「没查成」，不是红。本页第 6 节「建议的最小改造」直接作为 #1051 这一条的做法输入。留言见 #1051。
 
 ## 结论
 

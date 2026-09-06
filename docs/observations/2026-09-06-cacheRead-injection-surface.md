@@ -1,11 +1,15 @@
 ---
 title: 帅位 cacheRead 注入面构成（#981）
-status: open
+status: done
 issue: 981
 date: 2026-09-06
 ---
 
 # 帅位每轮 cacheRead 注入面构成（只查证）
+
+处置：#981 已 CLOSED，本页就是它的交付物，查证到此为止。第 5 节那张削减表**一条都没做，也没开单**——七项里六项要改 `CLAUDE.md` / skills 清单 / Mirasim 启动模板，全部落在 `docs/release-policy.json` 的 `human_holds`「改规则」上，机器不许自己拍；剩下一项（帅位 cwd 别落在大 git 树）是启动方式，同样归人。**不开待拍板单是有意的**：#1090 刚给「机器开的待拍板单堆积」装了红闸，再开一张就是造噪音。要动这件事时直接读本页 §5 的优先级表，按「每轮 token / 是否动约定」从上往下拍。
+
+一句话结论先留在这里，省得下次重查：**砍文件最多打七折，打不掉数量级**——地板 ~4–5.5 万/轮里有 ~2.9 万是 CLI 内置 system+工具 schema，砍不到；真正造出 77× 的是轮数 N × 地板，要动的是 `autoCompactWindow`（Mirasim 起会话时强写 800000，live settings 改了无效）。
 
 署名 issue #981。本页是查证报告，**没改** `CLAUDE.md` / `settings.json` / skills。砍哪一行由用户拍。
 
