@@ -3366,7 +3366,13 @@ function cmdWorkerDone(args) {
   });
 }
 
-function cmdStart(args) {
+async function cmdStart(args) {
+  // #1055：指挥官一次性会话切 mirasim。prompt 本身就是注入，不需要 orca 那套 start+send 两步。
+  // 显式 --executor orca 仍走旧脊（存量调试 / 测试点名）。没给 executor 且没给 prompt 时保持 orca 语义，
+  // 免得把现有 `dao start --provider gpt --worktree … --dry-run` 测针改成 mirasim。
+  if (args.executor === 'mirasim' || (args.prompt && args.executor !== 'orca')) {
+    return cmdStartMirasim(args);
+  }
   let routing;
   try { routing = loadRouting(); }
   catch (e) { fail(String(e.message || e)); }
@@ -5516,6 +5522,109 @@ async function cmdWorkerDoneMirasim(args) {
   });
 }
 
+/**
+ * #1055：指挥官一次性会话的 mirasim 起法。
+ *
+ * orca 是两步（start 起 TUI + send 注入指针）。mirasim 是一步：prompt 本身就是注入，
+ * 收到 accepted 就返回 sessionKey。workdir 优先 --worktree（已经是路径时直接用），
+ * 否则 ensureWorkspace(repo, branch) 建/复用树。
+ */
+async function cmdStartMirasim(args) {
+  if (!args.prompt) fail('start --executor mirasim 要 --prompt（注入本身就是起会话的那一帧）');
+  if (!args.model) fail('start --executor mirasim 要 --model');
+  const routing = loadOrFail();
+  const bind = bindExecutor({ executor: 'mirasim', routing });
+  if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
+  const route = mirasimRouteOrFail(args.model, bind.mirasim);
+
+  let workdir = typeof args.worktree === 'string' && args.worktree.includes('/')
+    ? args.worktree.replace(/^path:/, '')
+    : '';
+  const repo = mirasimRepoRoot(args);
+  const branch = args.branch || gitBranchName(ROOT).branch || 'master';
+
+  if (args.dryRun) {
+    emit({
+      ok: true, dryRun: true, executor: 'mirasim',
+      agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
+      repo, branch, workdir: workdir || '(ensureWorkspace 后才有)',
+      promptBytes: Buffer.byteLength(String(args.prompt), 'utf8'),
+      note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
+    });
+    return;
+  }
+
+  if (!workdir) {
+    try {
+      const tree = await bind.runtime.ensureWorkspace(repo, branch);
+      workdir = tree.path;
+    } catch (e) {
+      fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch });
+    }
+  }
+
+  let sess;
+  try {
+    sess = await bind.runtime.startSession({
+      agent: route.agent, workdir, prompt: args.prompt,
+      model: args.model, clientRef: `dao-start-${Date.now()}`,
+    });
+  } catch (e) {
+    fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
+      executor: 'mirasim', repo, branch, workdir, agent: route.agent,
+    });
+  }
+  emit({
+    ok: true, executor: 'mirasim',
+    sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
+    handle: sess.sessionKey, // 兼容指挥官旧字段：brainSessions 的键就是这个
+    agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
+    repo, branch, workdir,
+  });
+}
+
+async function cmdSessionRead(args) {
+  if (!args.session) fail('session-read 要 --session <sessionKey>');
+  const routing = loadOrFail();
+  const bind = bindExecutor({ executor: 'mirasim', routing });
+  if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
+  let view;
+  try { view = await bind.runtime.readSession(args.session); }
+  catch (e) {
+    fail(`session-read 没查成: ${String(e?.message || e)}`, { executor: 'mirasim', sessionKey: args.session });
+  }
+  emit({
+    ok: true, executor: 'mirasim', sessionKey: args.session,
+    phase: view.phase ?? null,
+    text: view.text ?? '',
+    toolCalls: view.toolCalls ?? [],
+    error: view.error ?? null,
+    missing: view.missing === true,
+    partial: view.partial === true,
+    via: view.via ?? null,
+    why: view.why ?? null,
+    readable: view.missing !== true,
+  });
+}
+
+async function cmdSessionStop(args) {
+  if (!args.session) fail('session-stop 要 --session <sessionKey>');
+  const routing = loadOrFail();
+  const bind = bindExecutor({ executor: 'mirasim', routing });
+  if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
+  let stopped;
+  try { stopped = await bind.runtime.stopSession(args.session); }
+  catch (e) {
+    fail(`session-stop 没查成: ${String(e?.message || e)}`, { executor: 'mirasim', sessionKey: args.session });
+  }
+  emit({
+    ok: stopped && stopped.ok === true,
+    executor: 'mirasim', sessionKey: args.session,
+    stopped: !!(stopped && stopped.ok),
+    why: (stopped && stopped.why) || null,
+  }, stopped && stopped.ok === true ? 0 : 1);
+}
+
 function main(argv = process.argv) {
   let args;
   try { args = parseArgs(argv); }
@@ -5533,6 +5642,8 @@ function main(argv = process.argv) {
     case 'dispatch': return cmdDispatch(args);
     case 'dispatch-exec': return cmdDispatchExec(args);
     case 'start': return cmdStart(args);
+    case 'session-read': return cmdSessionRead(args);
+    case 'session-stop': return cmdSessionStop(args);
     case 'worktree-create': return cmdWorktreeCreate(args);
     case 'worktree-rm': return cmdWorktreeRm(args);
     case 'task-create': return cmdTaskCreate(args);

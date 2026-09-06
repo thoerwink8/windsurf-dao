@@ -96,6 +96,13 @@ export function extractObjects(snapshot) {
   if (!prs) return { scanned: false, error: 'github.prs 不是数组（没查成）', objects: [], idle: false };
   if (!issues) return { scanned: false, error: 'github.issues 不是数组（没查成）', objects: [], idle: false };
   if (!tickets) return { scanned: false, error: 'reviewPending.items 不是数组（没查成）', objects: [], idle: false };
+  // #1055：orca 运行时已退役，这一段不再是必查节。没扫到 / 扫失败 = 没有 orca 工人树，不是没查成。
+  // 仍扫到且 scanned 时，worktrees 必须是数组——形状不对才是没查成。
+  let worktrees = [];
+  if (orca && orca.scanned === true) {
+    worktrees = asList(orca.worktrees);
+    if (!worktrees) return { scanned: false, error: 'orca.worktrees 不是数组（没查成）', objects: [], idle: false };
+  }
 
   const prReviews = snapshot.prReviews;
   if (prReviews && typeof prReviews === 'object' && 'scanned' in prReviews && prReviews.scanned !== true) {
