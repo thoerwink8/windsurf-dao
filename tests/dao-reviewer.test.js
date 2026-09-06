@@ -212,6 +212,12 @@ describe('dao 审官与完工', () => {
     await t.test('pickReviewer 有多个 → many，不许猜', () => {
       assert.ok(many.ok === false && many.state === 'many' && /多个 reviewer/.test(many.error), 'pickReviewer 有多个 → many，不许猜  →  ' + JSON.stringify(many));
     });
+    const dup = S.pickReviewer(['reviewer/gpt-5.6-sol', 'reviewer/gpt-5.6-sol']);
+    await t.test('同名 reviewer/* 两次 → 一个，不是歧义', () => {
+      assert.equal(dup.ok, true);
+      assert.equal(dup.state, 'one');
+      assert.equal(dup.modelId, 'gpt-5.6-sol');
+    });
     const unscanned = S.pickReviewer(null);
     await t.test('pickReviewer 没拿到列表 → unscanned，和「扫完 0 条」不同话',
       () => {
