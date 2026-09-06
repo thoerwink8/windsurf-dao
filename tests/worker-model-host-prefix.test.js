@@ -9,6 +9,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const WD = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'worker-done.mjs').replace(/\\/g, '/'));
@@ -52,9 +53,11 @@ describe('宿主前缀 → 供应商家族', () => {
 
 describe('resolveWorkerFromPr 什么时候才许兜底', () => {
   // 假 gh：按 PR 标题与 issue 标签造三种局面，不出网。
-  const fakeGh = ({ title, labels, issueOk = true }) => (args) => {
+  // reviews 一并带上——planWorkerDone 会再调一次 pr view --json reviews，
+  // 缺数组会被当成没查成，测不到首审兜底。
+  const fakeGh = ({ title, labels, issueOk = true, reviews = [] }) => (args) => {
     if (args[0] === 'pr' && args[1] === 'view') {
-      return { ok: true, out: JSON.stringify({ title, body: '署名 issue #999' }) };
+      return { ok: true, out: JSON.stringify({ title, body: '署名 issue #999', reviews }) };
     }
     if (args[0] === 'issue' && args[1] === 'view') {
       if (!issueOk) return { ok: false, error: 'gh 挂了' };
@@ -103,5 +106,81 @@ describe('resolveWorkerFromPr 什么时候才许兜底', () => {
     assert.equal(got.ok, false);
     assert.match(got.error, /扫完没有 model/);
     assert.match(got.error, /宿主前缀也推不出家族/);
+  });
+});
+
+// 审官红项 1（PR #1079）：首审入口 planWorkerDone 原先直接对 resolved.labels 调
+// requireWorkerModel，宿主前缀兜底接在 resolveWorkerFromPr 上根本走不到。
+// 复现就是这条——无 model/*、标题 [cc]、已有 reviewer/* 的手开 PR。
+describe('planWorkerDone 首审也走宿主前缀兜底', () => {
+  const fakeGh = ({ title, labels, issueOk = true, reviews = [] }) => (args) => {
+    if (args[0] === 'pr' && args[1] === 'view') {
+      return { ok: true, out: JSON.stringify({ title, body: '署名 issue #999', reviews }) };
+    }
+    if (args[0] === 'issue' && args[1] === 'view') {
+      if (!issueOk) return { ok: false, error: 'gh 挂了' };
+      return { ok: true, out: JSON.stringify({ labels: labels.map((name) => ({ name })) }) };
+    }
+    throw new Error('未预期的 gh 调用：' + args.join(' '));
+  };
+
+  it('无 model/* 的 [cc] 手开 PR → 首审产出家族模型，不拒', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1079',
+      runGh: fakeGh({
+        title: '[cc] manual PR',
+        labels: ['reviewer/gpt-5.6-sol', 'type/写码'],
+        reviews: [],
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.round, 'first');
+    assert.equal(got.shouldCreate, true);
+    assert.equal(got.workerModel, 'claude');
+    assert.equal(got.workerSource, 'host-prefix');
+    assert.equal(got.reviewer, 'gpt-5.6-sol');
+  });
+
+  it('多个 model/* → 首审仍拒（fail-closed，不拿前缀消歧）', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1079',
+      runGh: fakeGh({
+        title: '[cc] x',
+        labels: ['model/grok-4.6', 'model/kimi-k3', 'reviewer/gpt-5.6-sol'],
+        reviews: [],
+      }),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.state, 'many');
+  });
+
+  it('标签没查成 → 首审仍拒（fail-closed，不许兜成 claude）', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1079',
+      runGh: fakeGh({ title: '[cc] x', labels: [], issueOk: false, reviews: [] }),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+  });
+
+  // 机制闸：宿主前缀兜底只许接在 resolveWorkerFromPr 这一处。生产代码再直接调
+  // requireWorkerModel，等于又开一条「扫完没有 model/* 就拒、到不了兜底」的入口——
+  // 正是本单首审漏接的形状。tests/ 可以调（钉三态），scripts/ 不行。
+  it('生产代码里 requireWorkerModel 只许 resolveWorkerFromPr 调', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'worker-done.mjs'), 'utf8');
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const def = stripped.match(/export function requireWorkerModel\s*\(/g) || [];
+    const calls = stripped.match(/requireWorkerModel\s*\(/g) || [];
+    assert.equal(def.length, 1, 'requireWorkerModel 定义应恰好一处');
+    assert.equal(calls.length, 2, `生产调用应只有定义 + resolveWorkerFromPr 内部一处，实际 ${calls.length}`);
+    assert.match(stripped, /export function resolveWorkerFromPr[\s\S]*requireWorkerModel\s*\(/,
+      '剩下那一处调用必须在 resolveWorkerFromPr 里');
+    assert.doesNotMatch(stripped, /export function planWorkerDone[\s\S]*requireWorkerModel\s*\(/,
+      'planWorkerDone 不得再直接调 requireWorkerModel');
   });
 });

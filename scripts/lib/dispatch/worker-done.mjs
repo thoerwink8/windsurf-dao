@@ -278,8 +278,13 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
+  // 首审起审官要过同厂闸，工人家族必须有着落。不能只对 resolved.labels 调
+  // requireWorkerModel——那会把「扫完没有 model/*」直接拒掉，到不了
+  // resolveWorkerFromPr 的宿主前缀兜底（实咬：PR #1079 审官红项 1，复现
+  // 无 model/*、标题 [cc] 的手开 PR 在 worker-done 计划阶段就被拒）。
+  // 返工轮不起第二个审官，工人型号缺了也不挡交卷。
   const workerPick = shouldCreate
-    ? requireWorkerModel(resolved.labels)
+    ? resolveWorkerFromPr({ pr: n, runGh })
     : pickModel(resolved.labels || []);
   if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
@@ -296,6 +301,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
     workerModel: workerPick.ok ? workerPick.modelId : null,
+    workerSource: workerPick.ok ? (workerPick.source || null) : null,
     comment,
     reviewerCreate: shouldCreate
       ? {
