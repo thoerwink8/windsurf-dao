@@ -24,7 +24,7 @@ function baseSituation(over = {}) {
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
     wakeCounts: {},
-    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    commanderPolicy: { requireModelInRouting: false },
     routingModels: ['grok-4.6', 'claude-opus'],
     healthRedModels: [],
     ...over,
