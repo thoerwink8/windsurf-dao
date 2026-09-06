@@ -1,0 +1,17 @@
+{
+  "baselinePr": 0,
+  "prs": [
+    {
+      "number": 1001,
+      "author": { "login": "dao-marshal[bot]" },
+      "mergedBy": { "login": "dao-marshal[bot]" },
+      "reviews": []
+    },
+    {
+      "number": 1002,
+      "author": { "login": "dao-worker[bot]" },
+      "mergedBy": { "login": "dao-marshal[bot]" },
+      "reviews": [{ "state": "APPROVED" }]
+    }
+  ]
+}

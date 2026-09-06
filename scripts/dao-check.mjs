@@ -89,6 +89,9 @@
 //    凡不是 Type=oneshot 的必须 Restart=always。只看仓里的模板，不打机器。
 //    RestartPreventExitStatus= 允许存在且不影响判定。检查器自持解析，不复用被检查对象。
 //    红/绿/空夹具验判别力；0 个 .service = 没查成，不是「0 个违规」。
+// ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
+//    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
+//    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -148,6 +151,10 @@ import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
 import { judgeCompetingPrs, collectOpenPrNewFiles } from './lib/competing-prs.mjs';
+import {
+  inspectMarshalSelfMerge, inspectMarshalSelfMergeFixtures,
+  MARSHAL_SELFMERGE_BASELINE_PR,
+} from './lib/marshal-selfmerge-check.mjs';
 import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { affectedTests, depsFromRun, mergeMapEntries } from './lib/test-impact.mjs';
@@ -2081,6 +2088,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkMarshalSelfMergeSamples();
+if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -2161,6 +2170,50 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkMarshalSelfMergeSamples() {
+  const r = inspectMarshalSelfMergeFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '帅位 reviews=0 自合并闸样本没查成' : '帅位 reviews=0 自合并闸样本对不上',
+      '恢复 tests/fixtures/marshal-selfmerge/{red,ok,empty}.json：红=marshal 自合 reviews=0 必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`帅位 reviews=0 自合并闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkMarshalSelfMergeLive() {
+  const listed = runGhJson([
+    'pr', 'list', '--state', 'merged', '--limit', '100',
+    '--json', 'number,author,mergedBy,reviews',
+  ]);
+  if (listed.unscanned) {
+    skip(`帅位 reviews=0 自合并：gh pr list 没查成（${listed.error}），本次没查成，不是绿`);
+    return;
+  }
+  const r = inspectMarshalSelfMerge({
+    prs: listed.array,
+    baselinePr: MARSHAL_SELFMERGE_BASELINE_PR,
+  });
+  if (r.unscanned) {
+    skip(r.line);
+    return;
+  }
+  if (r.kind === 'red') {
+    fail(
+      r.line,
+      '判定权不归帅位：reviews=0 的自合并当场红。补独立跨厂审官再合，或把存量交给 marshal-selfmerged-audit',
+      (r.violations || []).map((v) => `#${v.number}`).join(' '),
+    );
+    return;
+  }
+  green(r.line);
 }
 
 function checkReleasePolicySamples() {
