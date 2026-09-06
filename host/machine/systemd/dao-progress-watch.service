@@ -1,0 +1,33 @@
+# /etc/systemd/system/dao-progress-watch.service
+#
+# 盘面推进量看门狗（#1004 / chain:progress-stall#0）：读最近 N 份
+# ~/.dao/commander/situation-*.json，连续 N 轮同一对象同一状态 ⇒ 卡住，
+# stdout 首行 AGENT_LOOP_TICK_PANMIAN 叫醒帅位。不许 escalate 开单。
+#
+# 这是盯盘发现层的主路。旧 shuai-scan CLI 现在也转调本脚本；本单元保证
+# 没人亲手跑 `dao now` 时也会扫。commander-act 继续写快照，本单元只读。
+#
+# 装（服务器，orca 用户；与 dao-board-gc 同一套路）：
+#   sudo bash scripts/install-progress-watch.sh
+#   sudo systemctl start dao-progress-watch.service   # 当场扫一轮；enable --now 只起 timer
+#   systemctl list-timers | grep dao-progress-watch   # NEXT 不能是 `-`
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+# PATH 必须带 ~/.local/bin，否则 oneshot 找不到 orca。
+
+[Unit]
+Description=windsurf-dao board progress stall watch (issue #1004)
+After=network-online.target orca-serve.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/progress-watch.mjs
+# 退出码 2 = 没查成（快照目录空 / 文件坏），故意留成失败：没查成要在
+# systemctl --failed 里看得见，不许跟「查过没事」长成一个样。
+# 0 = 扫过（有停滞已打哨兵，或没停滞静默）。
+StandardOutput=journal
+StandardError=journal

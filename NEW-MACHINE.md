@@ -357,6 +357,8 @@ orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
 # 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
+# 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
+#   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
 #   验：systemctl list-timers 里 dao-agent-stall.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:2/15）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh

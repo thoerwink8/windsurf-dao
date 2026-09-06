@@ -1,124 +1,89 @@
 #!/usr/bin/env node
-// scripts/shuai-scan.mjs —— 帅位看门狗 CLI（chain:shuai-watchdog#1）
+// scripts/shuai-scan.mjs —— 帅位看门狗 CLI（chain:progress-stall#0）
 //
-// #1004：发现层已换到 scripts/progress-watch.mjs（chain:progress-stall#0）。本 CLI 的异常清单
-// 不再是盯盘主路；留下的是执行层共用件（叫醒哨兵 / PR 判绿 / 状态去重）。
+// #1004：发现层从「列举故障种类」换成盘面推进量。本 CLI 不再跑 evaluateScan /
+// detectAnomalies；主路吃 runProgressWatch，判出停滞才打 AGENT_LOOP_TICK_PANMIAN。
+// lib/shuai-scan.mjs 留下的是执行层共用件（PR 判绿 / CI 红 / 状态去重），不是盯盘主路。
 //
-// 纯采集 + 纯判定，零 AI。有内容且相对上一轮有变化 → stdout 首行 AGENT_LOOP_TICK_PANMIAN + 摘要；
-// 无变化或无可报内容 → 零输出 exit 0；没扫成 → stderr + 非零，不许输出 sentinel。
-//
-// 状态去重：哈希落盘 os.tmpdir()/shuai-scan-last.json（SHUAI_SCAN_STATE 可覆盖）。
-// 帅位标题：摘要末行「帅位标题建议：…」；rename_chat 由帅被叫醒后执行。
+// 有停滞且指纹变了 → stdout 首行 AGENT_LOOP_TICK_PANMIAN + 摘要；
+// 无停滞 / 同一指纹 → 零输出 exit 0；没查成 → stderr + 非零，不许输出 sentinel。
 
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { runOrca } from './lib/orca-run.mjs';
-import { ghExecutable } from './lib/gh.mjs';
-import {
-  SENTINEL,
-  DEFAULT_REPO,
-  defaultStatePath,
-  loadRulesFile,
-  collectOrcaBoard,
-  evaluateScan,
-  decideOutput,
-  readLastState,
-  writeLastState,
-  buildGithubGraphqlArgs,
-  parseGithubGraphqlResponse,
-} from './lib/shuai-scan.mjs';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_RULES = join(ROOT, 'docs', 'shuai-scan-rules.json');
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+import { SENTINEL, runProgressWatch } from './progress-watch.mjs';
 
 function parseArgs(argv) {
   const args = {
-    repo: process.env.SHUAI_SCAN_REPO || DEFAULT_REPO,
-    rules: process.env.SHUAI_SCAN_RULES || DEFAULT_RULES,
-    state: process.env.SHUAI_SCAN_STATE || defaultStatePath(),
+    dir: process.env.PROGRESS_WATCH_DIR || '',
+    state: process.env.PROGRESS_WATCH_STATE || process.env.SHUAI_SCAN_STATE || '',
+    rounds: 0,
     help: false,
+    json: false,
+    dryRun: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') args.help = true;
-    else if (a === '--repo') args.repo = argv[++i] || '';
-    else if (a === '--rules') args.rules = argv[++i] || '';
+    else if (a === '--json') args.json = true;
+    else if (a === '--dry-run') args.dryRun = true;
+    else if (a === '--dir') args.dir = argv[++i] || '';
     else if (a === '--state') args.state = argv[++i] || '';
+    else if (a === '--rounds') {
+      const n = Number(argv[++i]);
+      if (Number.isFinite(n) && n > 0) args.rounds = Math.floor(n);
+    }
   }
   return args;
 }
 
-function fail(msg, code = 1) {
-  console.error(String(msg || '帅位扫描失败').trim());
-  process.exit(code);
-}
-
-function runGh(args) {
-  const r = spawnSync(ghExecutable(), args, { windowsHide: true,
-    encoding: 'utf8',
-    cwd: ROOT,
-    timeout: 45000,
-    env: process.env,
-  });
-  if (r.error) return { ok: false, error: `gh 不可用：${r.error.message}` };
-  if (r.status !== 0) {
-    return { ok: false, error: String(r.stderr || r.stdout || `gh exit ${r.status}`).trim().slice(0, 240) };
-  }
-  return { ok: true, out: String(r.stdout || '') };
-}
-
-function collectGithub(repo) {
-  const spec = buildGithubGraphqlArgs(repo);
-  if (!spec.ok) return spec;
-  const gh = runGh(spec.args);
-  if (!gh.ok) return { ok: false, error: `GitHub 没扫成：${gh.error}` };
-  const parsed = parseGithubGraphqlResponse(gh.out);
-  if (!parsed.ok) return parsed;
-  return parsed;
-}
-
-function main() {
-  const args = parseArgs(process.argv);
+export function runShuaiScan(argv = process.argv) {
+  const args = parseArgs(argv);
   if (args.help) {
-    console.log(`用法: node scripts/shuai-scan.mjs [--repo owner/name] [--rules path] [--state path]
+    return {
+      exit: 0,
+      stdout: `用法: node scripts/shuai-scan.mjs [--dir 快照目录] [--state 账本] [--rounds N] [--dry-run] [--json]
 
-有内容且相对上一轮有变化 → stdout 首行 ${SENTINEL} + 摘要（含帅位标题建议行）；
-无变化或无可报内容 → 零输出 exit 0；
-没扫成 → stderr + 非零（不许输出 sentinel）。
+有停滞且指纹变了 → stdout 首行 ${SENTINEL} + 摘要；
+无停滞 / 同一指纹 → 零输出 exit 0；
+没查成 → stderr + 非零（不许输出 sentinel）。
 
-环境变量：SHUAI_SCAN_REPO / SHUAI_SCAN_RULES / SHUAI_SCAN_STATE`);
-    process.exit(0);
+环境变量：PROGRESS_WATCH_DIR / PROGRESS_WATCH_STATE / SHUAI_SCAN_STATE\n`,
+      stderr: '',
+    };
   }
 
-  const rulesLoaded = loadRulesFile(args.rules);
-  if (!rulesLoaded.ok) fail(rulesLoaded.error);
+  const opts = { dryRun: args.dryRun, json: args.json };
+  if (args.dir) opts.dir = resolve(args.dir);
+  if (args.state) opts.state = resolve(args.state);
+  if (args.rounds > 0) opts.rounds = args.rounds;
 
-  const github = collectGithub(args.repo);
-  if (!github.ok) fail(github.error);
-
-  const orca = collectOrcaBoard({ runOrca: (cmd) => runOrca(cmd, { cwd: ROOT }), root: ROOT });
-  if (!orca.ok) fail(orca.error);
-
-  const result = evaluateScan({ rules: rulesLoaded.rules, orca, github });
-  if (!result.ok) fail(result.error);
-
-  const lastState = readLastState(args.state);
-  const decision = decideOutput({ result, lastState });
-  if (!decision.ok) fail(decision.error);
-
-  if (!decision.emit) {
-    process.exit(0);
+  const result = runProgressWatch(opts);
+  let stdout = '';
+  if (args.json) {
+    stdout += `${JSON.stringify({
+      ok: result.ok,
+      scanned: result.scanned,
+      stalled: result.stalled || false,
+      wake: result.wake,
+      reason: result.reason || result.error,
+      items: (result.items || []).map((i) => ({ kind: i.kind, id: i.id })),
+      error: result.error || null,
+    }, null, 2)}\n`;
   }
-
-  const written = writeLastState(args.state, {
-    hash: result.stateHash,
-    summary: result.summary,
-  });
-  if (!written.ok) fail(written.error);
-
-  process.stdout.write(`${SENTINEL}\n${result.summary}\n`);
-  process.exit(0);
+  if (!result.ok) {
+    return {
+      exit: result.exit || 2,
+      stdout,
+      stderr: `${result.report || result.error || '没查成'}\n`,
+    };
+  }
+  if (result.wake) stdout += `${SENTINEL}\n${result.report}\n`;
+  return { exit: 0, stdout, stderr: '' };
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const r = runShuaiScan(process.argv);
+  if (r.stdout) process.stdout.write(r.stdout);
+  if (r.stderr) process.stderr.write(r.stderr);
+  process.exit(r.exit);
+}

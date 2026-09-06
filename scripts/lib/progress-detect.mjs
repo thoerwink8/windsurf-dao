@@ -220,7 +220,8 @@ export function formatStallItem(item, rounds) {
 
 /**
  * 吃一串快照，吐停滞判决。
- * 粒度是逐对象签名，不是聚合计数：PR 换人但总数仍是 8 ≠ 停滞。
+ * 粒度是逐对象签名，不是整盘、也不是聚合计数：对象 A 停、对象 B 动 ⇒ 只报 A。
+ * 票 1↔0 抖动不得把仍冻结的 PR 藏掉。
  * 误报闸：全空闲（0 PR / 0 已消歧 / 0 票 / 0 树）不算停滞。
  */
 export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS } = {}) {
@@ -276,25 +277,26 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
       reason: 'idle',
     };
   }
-  const first = serializeObjects(extracted[0].objects);
+  // 逐对象独立数连续相同 sig 的轮次。整盘签名变了也要继续看：旁边有推进不能把冻着的对象藏掉。
+  const frozen = new Map();
+  for (const o of extracted[0].objects) {
+    frozen.set(o.key, o);
+  }
   for (let i = 1; i < extracted.length; i++) {
-    if (serializeObjects(extracted[i].objects) !== first) {
-      return {
-        scanned: true,
-        stalled: false,
-        error: null,
-        items: [],
-        rounds: need,
-        fingerprint: null,
-        reason: 'progress',
-      };
+    const now = new Map(extracted[i].objects.map((o) => [o.key, o]));
+    for (const [key, prev] of frozen) {
+      const cur = now.get(key);
+      if (!cur || cur.sig !== prev.sig) frozen.delete(key);
     }
   }
-  // 整盘对象签名没变。树只有「在、但没活进程」才算停滞；一直活着的树不是卡住。
-  const items = extracted[0].objects
+  const frozenList = [...frozen.values()];
+  // 树只有「在、但没活进程」才算停滞；一直活着的树不是卡住。
+  const items = frozenList
     .filter((o) => o.kind !== 'tree' || o.sig === 'dead')
     .map((o) => ({ ...o, why: formatStallItem(o, need) }));
   if (!items.length) {
+    const onlyLiveTrees = frozenList.length > 0
+      && frozenList.every((o) => o.kind === 'tree' && o.sig === 'live');
     return {
       scanned: true,
       stalled: false,
@@ -302,7 +304,7 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
       items: [],
       rounds: need,
       fingerprint: null,
-      reason: 'live-only',
+      reason: onlyLiveTrees ? 'live-only' : 'progress',
     };
   }
   return {
@@ -311,7 +313,7 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
     error: null,
     items,
     rounds: need,
-    fingerprint: stallFingerprint(extracted[0].objects, need),
+    fingerprint: stallFingerprint(items, need),
     reason: 'stalled',
   };
 }

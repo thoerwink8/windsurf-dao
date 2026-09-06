@@ -252,7 +252,8 @@ function main(argv = process.argv.slice(2)) {
   if (args.help) {
     console.log(`用法: node scripts/progress-watch.mjs [--dir 快照目录] [--state 账本] [--rounds N] [--dry-run] [--json]
 
-连续 N 轮盘面对象签名不变（且并非全空闲）→ stdout 首行 ${SENTINEL} + 摘要；
+连续 N 轮同一对象签名不变（且并非全空闲）→ stdout 首行 ${SENTINEL} + 摘要；
+对象 A 停、对象 B 动 → 只报 A；
 同一指纹不重推；指纹变了再推。
 快照读不出 / 目录空 → stderr「没查成」+ exit 2（不许当成没停滞）。`);
     process.exit(0);
