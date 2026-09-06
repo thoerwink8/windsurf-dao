@@ -50,6 +50,9 @@ import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
 } from './lib/exhausted.mjs';
+import {
+  argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
+} from './lib/hub-ask.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -216,8 +219,14 @@ function scanPrReviews(prs) {
 function ingestBreakerSignals({ now = Date.now() } = {}) {
   try {
     const policy = loadDispatchPolicy({ root: ROOT });
-    const health = runBreakerCommand({ action: 'ingest-health' }, { now, policy: policy.breaker });
-    const stall = runBreakerCommand({ action: 'ingest-stall' }, { now, policy: policy.breaker });
+    const hubAsk = ({ number, text }) => {
+      const planned = fieldsFromBreaker({ repo: REPO, number, text, url: issueLink(number) });
+      if (!planned.ok) return { ok: false, error: planned.error };
+      return sendHubAsk(planned.fields);
+    };
+    const inj = { now, policy: policy.breaker, hubAsk };
+    const health = runBreakerCommand({ action: 'ingest-health' }, inj);
+    const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
     return { ok: true, health, stall };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
@@ -382,6 +391,38 @@ function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
   if (!r.ok) return { sent: false, error: r.error };
   state.hubSeen[key] = new Date(now).toISOString();
   return { sent: true };
+}
+
+/** 待拍板出站卡片。缺 {repo, number} 拒发；认回执，不认退出码。普通播报仍走 hubOnce/hubSay。 */
+function sendHubAsk(fields) {
+  const planned = argvFromFields(fields);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const script = hubAskScriptPath(ROOT);
+  const r = spawnSync(process.execPath, [script, ...planned.args], {
+    windowsHide: true, encoding: 'utf8', timeout: 30000, cwd: ROOT, env: process.env,
+  });
+  if (r.error) return { ok: false, error: `没送进群：hub-ask 起不来：${r.error.message}` };
+  if (r.status !== 0) {
+    return { ok: false, error: `没送进群：${String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 200)}` };
+  }
+  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
+  if (!messageId || messageId === 'null') {
+    return { ok: false, error: `没送进群：hub-ask 退出码 0 但没回 message_id（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
+  }
+  return { ok: true, messageId };
+}
+
+function hubAskOnce({ state, key, fields, now = Date.now(), dryRun }) {
+  state.hubSeen = state.hubSeen || {};
+  const last = Date.parse(state.hubSeen[key] || '') || 0;
+  if (now - last < HUB_DEDUP_MS) return { sent: false, reason: '6 小时内已发过' };
+  const planned = argvFromFields(fields || {});
+  if (!planned.ok) return { sent: false, error: planned.error };
+  if (dryRun) { state.hubSeen[key] = new Date(now).toISOString(); return { sent: true, dryRun: true }; }
+  const r = sendHubAsk(fields);
+  if (!r.ok) return { sent: false, error: r.error };
+  state.hubSeen[key] = new Date(now).toISOString();
+  return { sent: true, messageId: r.messageId };
 }
 
 // ── 手：执行一条动作。dryRun 只回它要跑的命令，不动真环境 ──
@@ -605,10 +646,16 @@ function execOpenIssue(action, { state, dryRun, say }) {
   const r = runCmd(planned.argv, 60000);
   if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
   const m = String(r.out).match(/\/issues\/(\d+)/);
+  const number = m ? Number(m[1]) : null;
   state.openIssueLedger = state.openIssueLedger || {};
-  state.openIssueLedger[planned.key] = { at: nowIso(), number: m ? Number(m[1]) : null };
-  say(`  转单开了 #${m ? m[1] : '?'}`);
-  return { ok: true, number: m ? Number(m[1]) : null, key: planned.key };
+  state.openIssueLedger[planned.key] = { at: nowIso(), number };
+  say(`  转单开了 #${number || '?'}`);
+  if (number) {
+    askEscalateCard({
+      state, key: planned.key, number, action, dryRun: false, say,
+    });
+  }
+  return { ok: true, number, key: planned.key };
 }
 
 function dispatchName(title, issue) {
@@ -1303,14 +1350,25 @@ function escalate(action, { state, dryRun, say }) {
     say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
     return { ok: true, skipped: 'dedup-unscanned' };
   }
-  const link = action.pr ? prLink(action.pr) : action.issue ? issueLink(action.issue) : '';
-  hubOnce({ state, key: `esc:${key}`, text: `[指挥官·待拍板] ${action.why}${link ? '\n' + link : ''}`, dryRun });
-  if (existing) { say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`); return { ok: true, issue: existing }; }
+  if (existing) {
+    say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`);
+    askEscalateCard({ state, key, number: existing, action, dryRun, say });
+    return { ok: true, issue: existing };
+  }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
+  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say });
   return opened;
+}
+function askEscalateCard({ state, key, number, action, dryRun, say }) {
+  const planned = fieldsFromEscalate({
+    repo: REPO, number, why: action.why, reason: action.reason, recommend: action.recommend, url: issueLink(number),
+  });
+  if (!planned.ok) { say(`  待拍板卡拒发：${planned.error}`); return; }
+  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun });
+  say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + number : '待拍板卡略：' + (r.reason || r.error)}`);
 }
 function escalateKey(a) {
   const t = a.pr != null ? `pr-${a.pr}` : a.issue != null ? `issue-${a.issue}` : a.term ? `term-${a.term}` : 'x';
@@ -1428,7 +1486,7 @@ function main() {
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);
     process.exit(0);
   }
-  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }));
+  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
   if (sub === 'status') return import('./lib/commander-inventory.mjs').then((m) => m.runStatus({ rest, ROOT }));
   if (sub === 'install') return import('./lib/commander-inventory.mjs').then((m) => m.runInstall({ rest, ROOT }));
   const fn = CMDS[sub];
