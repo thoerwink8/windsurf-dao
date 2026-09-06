@@ -364,9 +364,7 @@ function collectCandidates(situation) {
         out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
         continue;
       }
-      // 缺标签**只在半标态报**：有 model 没 reviewer，或反过来。两个都没有 = 静默跳过。
-      //
-      // 改这段之前必须知道的两件事：
+      // 缺标签三档（#1003）。硬边界：不许改回「缺任一就报」。
       //
       // ① 为什么不是「缺任一就报」（2026-09-05 实咬）：进这个分支的门槛只有一条「已消歧」，
       //    而帅位开**任何**记账单/体系单都按惯例打「已消歧」⇒ 每开一张新单，指挥官下一轮就为它
@@ -374,15 +372,22 @@ function collectCandidates(situation) {
       //    当天关掉 4 张（#900/#946/#951/#954），转头又生 4 张（#957/#958/#959/#961）。
       //    源单一直开着，报单就一直生——这不是漏标提醒，是自我繁殖。
       //
-      // ② 为什么上面那条 type/体系 豁免接不住它——**鸡生蛋**：
+      // ② 为什么上面那条 type/体系 豁免接不住裸「已消歧」——**鸡生蛋**：
       //    type/* 的唯一自动写入方是 stampIssueLabels（scripts/lib/dispatch/card.mjs），
       //    由 scripts/dao.mjs 在**派工成功之后**才调。也就是说，豁免的开关只有「被派过工」
       //    才会自动打开，而这条豁免存在的目的**正是阻止派工**。新开的框架单永远等不到那一下。
       //    别拿「手工打过 type/体系 的单确实安静」当反证（#904/#903/#902/#895/#888 都安静）：
       //    那不是判据对，是有人替它手工打开了开关；没人手工打的单一律炸单。
+      //    所以无 type/ + 两个都没有，必须继续静默。
       //
-      // 判据本身：两个都没有 = 从来没人瞄准过派工车道（新开的单默认就长这样），不是漏标；
-      //          一个有一个没有 = 有人打了一半停下，那才是真信号。
+      // ③ 但注释 ② 同时点出了分得开的信号（#1003 实咬 #1000/#1001）：
+      //    新开的单上如果出现 type/写码（或其他非 type/体系 的 type 标），一定是人手打的——
+      //    stampIssueLabels 派工成功之后才写 type/*，记账单/体系单不会长出 type/写码。
+      //    那就是明确瞄准了派工车道：两个都缺也要报帅，不能再跟记账单混成一档静默跳过。
+      //
+      // 三档：半标（有一个缺一个）→ 报（或 #971 能推出唯一跨厂值就自己补）；
+      //       两个都没有 + 人手打过非体系 type/ → 报；
+      //       两个都没有 + 无 type/ → 静默（记账单）。
       //
       // 「没查成」不会落进这里：labels 不是数组的 issue 在 inspectReadyQueue 就被挡掉了
       // （labelNames 返回 null → 不进 ready，整节报 kind:'unscanned'），所以走到这一步的 null
@@ -398,7 +403,15 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
-      if (!model && !reviewer) continue; // 两个都没有：静默跳过（理由见上 ①②）
+      if (!model && !reviewer) {
+        // 框架活已在上面 continue。走到这里的 role 只可能是人手打的非体系 type/，或根本没有。
+        if (role) {
+          out.push(withNeeds(esc(`#${n} 已消歧且带 type/${role}，但 model/ 和 reviewer/ 都没有——人手瞄准了派工车道却没打派工标，不猜——报帅补标签`, {
+            reason: 'missing-labels', issue: n, title: issue?.title || '',
+          }), N.dispatch));
+        }
+        continue; // 无 type/：记账单，静默（理由见上 ①②）
+      }
       const gate = assessDispatchModel(model, { policy, enabledIds, redIds });
       if (!gate.ok) {
         out.push(withNeeds(esc(`#${n} ${gate.why}`, {
