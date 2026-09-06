@@ -321,9 +321,9 @@ describe('feishu-triage-core（#801 块 B）', () => {
       }
     });
     await t.test('三问答案带原文', () => {
-      assert.ok(body.includes('- 做到什么算做完：部署完在群里确认即可'), '→ ' + body);
-      assert.ok(body.includes('- 这批做还是以后：这批做'), '→ ' + body);
-      assert.ok(body.includes('- 是否 docs/memory 该记：不用记'), '→ ' + body);
+      assert.ok(body.includes('- 做到什么样算做完：部署完在群里确认即可'), '→ ' + body);
+      assert.ok(body.includes('- 现在做还是先记着：这批做'), '→ ' + body);
+      assert.ok(body.includes('- 要不要写进文档：不用记'), '→ ' + body);
     });
     await t.test('来源消息 = chat_id + message_id，不贴聊天全文', () => {
       assert.ok(body.includes('- chat_id：oc_project'), '→ ' + body);
