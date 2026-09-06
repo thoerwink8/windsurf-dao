@@ -1,19 +1,22 @@
 # windsurf-dao 协作约定
 
-这个仓库是 AI 协作约定的家。**当前处于停派工态**（2026-08-31 拍板，见 `docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：编排、派工、审官整条流程迁往 Linux 服务器，服务器落地前本机不编排。流程类规矩已收进 dispatch skill（`host/skills/dispatch/SKILL.md`），派单前按需读，不再常驻本页。
+这个仓库是 AI 协作约定的家。**当前处于编排态**（2026-09-06 拍板，见 `docs/decisions/2026-09-06-orchestration-mode-restored.md`）：编排、派工、审官跑在 Linux 服务器上，执行体是 mirasim，Orca 已退役。流程类规矩收在 dispatch skill（`host/skills/dispatch/SKILL.md`），派单前按需读，不常驻本页。
 
-## 怎么工作（停派工态）
+## 怎么工作
 
-- 帅直接在 master 提交推送；改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。
+- 改动在 worktree 里做，做完再提交推 master——主树是两个帅位共用的，谁跑一次 `git add -A` 就会把对方的在途改动卷进自己的提交（2026-09-06 咬了两次，第二次连 commit message 都没提被卷走的三个文件）。
+- 改完跑 `node scripts/dao-check.mjs --affected`（只跑与本次改动相关的，实测 3.7s；不带这个参数是全量 30s），绿了才算完，红了当场处理或如实报告。兜底不靠这一次：`land.mjs` 与 CI 各自还会跑。地图不在会有提示叫你先 `node scripts/test-impact-map.mjs build`——那句提示出现就照做，别当它是背景噪音。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
 - commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 用 `[pi]`，Codex 用 `[codex]`，Grok 用 `[grok]`。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
 - 验收/通过记录必须与被测代码同基线：记录「X 修好 / 测验通过」的提交必须包含被测代码本身（#766 教训：通过记录挂在旧基线会误导后人）。
 - 改动影响新机安装时，同一次提交里更新 NEW-MACHINE.md；拿不准就更新——漏更比多更代价大。换机 = `git clone` + `node scripts/onboard.mjs`（幂等，坏了重跑即修）。
-- 恢复编排后（服务器落地），draft PR 起步、PR 正文写验收、审官判绿、开新单三问等流程规矩整体回岗——全文在 dispatch skill「编排态工作法」节。
+- 派工链上的规矩（draft PR 起步、PR 正文写验收、审官判绿、开新单三问）已回岗——全文在 dispatch skill「编排态工作法」节。
 
 ## 体系类改动
 
-**先查归属，别先想做法**：家目录落点看 `host/machine/INDEX.md`（A 类归本仓、E 类归他仓且本仓不写装法），其余先 `grep -rn "<关键词>" <目标仓>`——边界多半已经拍过板。2026-09-01 漏了这一步，设计出的方案正撞在 INDEX 的 E 类登记上，整轮返工（判例 memory `ownership-before-design`）。
+**先查归属，别先想做法**：家目录落点看 `host/machine/INDEX.md`（A 类归本仓、E 类归他仓且本仓不写装法），其余先 `grep -rn "<关键词>" <目标仓>`——边界多半已经拍过板（判例 memory `ownership-before-design`）。
+
+**开单也算动手：先查起因，别先开单**（2026-09-06 用户拍板立规）。新开 issue 前必须查这个**起因**是不是已有单在管：`git log --all --grep="chain:"` + 搜已有统领单。判据是**起因能不能写成同一句话**，不是症状像不像；统领单哪怕已 CLOSED、落地 PR 还在 draft，也是挂回去，不另开。落法：机器与帅位开的单，正文首行写 `起因：<slug>`（复用补丁链 slug），**同一 slug 只许有一张 OPEN 单**——闸见「自动检查」节，判例 memory `six-issues-are-one-layer`。
 
 改变协作方式、增加规则、新增流程，或新造长驻机制（跨会话留进程或状态文件的东西）的改动，必须回答：
 

@@ -209,6 +209,8 @@ import {
   verifyReviewerFiles,
   verifyReviewerTree,
   assessPrMergeable,
+  fetchPrMergeable,
+  resolveMergeable,
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
@@ -2755,7 +2757,12 @@ function reuseReviewerOnTerminal({
   let head;
   try { head = JSON.parse(meta.out); }
   catch { return { ok: false, reused: true, error: `复用审官读 PR #${pr} 返回不是 JSON` }; }
-  const mergeable = assessPrMergeable(head?.mergeable);
+  // #1017：多字段 view 的 mergeable 常恒 UNKNOWN，未知态才单张只查 mergeable。
+  const resolved = resolveMergeable(
+    { number: pr, mergeable: head?.mergeable },
+    { viewMergeable: (n) => fetchPrMergeable(gh, n) },
+  );
+  const mergeable = assessPrMergeable(resolved.mergeable);
   if (!mergeable.ok) return { ok: false, reused: true, error: mergeable.error, mergeable };
 
   let foundDispatch = null;
@@ -3747,7 +3754,12 @@ async function cmdReviewerCreate(args) {
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
   // #575 ⑦：建树前查 mergeable。UNKNOWN 不是绿。rebase 会改 sha 让 APPROVED 失效，只能先对齐再审。
-  const mergeable = assessPrMergeable(head?.mergeable);
+  // #1017：多字段 view 的 mergeable 常恒 UNKNOWN，未知态才单张只查 mergeable。
+  const resolved = resolveMergeable(
+    { number: args.pr, mergeable: head?.mergeable },
+    { viewMergeable: (n) => fetchPrMergeable(gh, n) },
+  );
+  const mergeable = assessPrMergeable(resolved.mergeable);
   if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
   const fileList = gh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);
@@ -4248,7 +4260,12 @@ function cmdReviewerAttach(args) {
   const baseBranch = head?.headRefName;
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
-  const mergeable = assessPrMergeable(head?.mergeable);
+  // #1017：多字段 view 的 mergeable 常恒 UNKNOWN，未知态才单张只查 mergeable。
+  const resolved = resolveMergeable(
+    { number: args.pr, mergeable: head?.mergeable },
+    { viewMergeable: (n) => fetchPrMergeable(gh, n) },
+  );
+  const mergeable = assessPrMergeable(resolved.mergeable);
   if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
   const fileList = gh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);

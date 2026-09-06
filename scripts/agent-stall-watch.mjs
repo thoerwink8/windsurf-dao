@@ -321,16 +321,12 @@ function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   warnPadStillThere();
 
+  // orca 于 2026-09-06 退役：运行时不在是**稳态**，不是瞬时故障，所以这里不再 exit 2。
+  // 原来那一刀切在 main() 第一步，把本文件下面写好装好的 mirasimSessions() 采样面
+  // 永远挡在后面——单元每轮 exit 2 进 --failed，而「装了但够不到」在日志里长得像「查了没事」。
+  // 取不到就当空集，跟紧随其后的 ps / workers 用同一种写法。
   const listed = orca(['terminal', 'list', '--json']);
-  if (!listed.ok) {
-    say(`⚠️ 撞限流探测没查成：terminal list 读不到（${listed.error}）`);
-    process.exit(2);
-  }
-  const terminals = listed.json?.result?.terminals;
-  if (!Array.isArray(terminals)) {
-    say('⚠️ 撞限流探测没查成：terminal list 契约变了（result.terminals 不是数组）');
-    process.exit(2);
-  }
+  const terminals = Array.isArray(listed.json?.result?.terminals) ? listed.json.result.terminals : [];
 
   const psR = orca(['worktree', 'ps', '--json']);
   const ps = psR.ok && Array.isArray(psR.json?.result?.worktrees) ? psR.json.result.worktrees : [];

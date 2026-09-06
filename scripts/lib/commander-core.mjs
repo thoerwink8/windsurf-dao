@@ -37,6 +37,7 @@ import {
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
   reviewPendingSourceOf,
 } from './dispatch/review-pending.mjs';
+import { resolveMergeable } from './dispatch/git.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -606,7 +607,10 @@ function collectCandidates(situation) {
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
-    const mergeableNow = String(pr.mergeable || '').toUpperCase() === 'MERGEABLE';
+    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
+    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
+    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
+    const mergeableNow = mergeableState === 'MERGEABLE';
 
     if ((greenAtHead || decisionApproved) && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
@@ -645,7 +649,8 @@ function collectCandidates(situation) {
     // 必须排在下面 analyzeReviewsAtHead 之前：冲突 PR 常常一条 review 都没有，
     // 而 reviews-missing 在下面是静默 continue，写在后面会被吃掉。
     // 只认显式 CONFLICTING：UNKNOWN 是 GitHub 还在异步算，没查成 ≠ 有冲突。
-    if (String(pr.mergeable || '').toUpperCase() === 'CONFLICTING' && !pr.isDraft) {
+    // mergeableState 已经过 resolveMergeable：列表 UNKNOWN 时单张重查后再判。
+    if (mergeableState === 'CONFLICTING' && !pr.isDraft) {
       const head = pr.headRefOid || '';
       if (!head) {
         out.push(withNeeds(esc(
@@ -785,6 +790,7 @@ function collectCandidates(situation) {
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
+ *   viewMergeable:  (prNumber) => string | {ok, mergeable, error} —— #1017 列表 UNKNOWN 时单张重查；不注入则 UNKNOWN 保持没查成
  *
  * 契约：任一节 unscanned → 依赖它的动作一律不产，汇成**一条** escalate(reason:'unscanned', missing:[...])；
  *       依赖节全 scanned 的动作照常。全部 unscanned → 只有那一条 escalate、零正向动作。

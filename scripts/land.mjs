@@ -94,18 +94,16 @@ if (!HAS_WORK && ship.action === 'push') {
 }
 
 // ── ② 清理：worktree 先（占着分支），分支后 ─────────────────────────
-const orcaPaths = new Set();
-{
-  // orca 在管的树绝不碰（删卡走编排闭环）。orca 不在 = 空集，不算没查成——本机停派工态没有编排树。
-  const r = spawnSync('orca', ['worktree', 'list', '--json'], { windowsHide: true, encoding: 'utf8', timeout: 15000, shell: true });
-  if (r.status === 0) {
-    try {
-      for (const w of JSON.parse(r.stdout)?.result?.worktrees || []) {
-        if (w?.path) orcaPaths.add(resolve(String(w.path)).toLowerCase());
-      }
-    } catch { /* 输出畸形当空集：只影响多留不影响误删 */ }
-  }
-}
+// 执行体在管的树绝不碰（拆树走编排闭环）。判据是路径：mirasim 建的树全部落在
+// `<家目录>/mirasim-worktrees/<仓>/<分支>`，跟 dao.mjs 的 executorFromCwd 用同一把尺。
+//
+// 2026-09-06 换掉了原来的 `orca worktree list --json`：orca 退役后那条命令恒返空集，
+// 而这里的「空集」被读成「没有任何树需要保护」——保护面会静默消失，land 就可能拆掉
+// mirasim 工人正在里面干活的树。判据钉在一个会消失的外部命令上，是
+// migration-half-done-breaks-checks 的同款：搬走了真相源，判据还留在旧位置。
+//
+// 路径判据没有「查不到」这一态：要么在那个目录下，要么不在，离线可判、不起子进程。
+const isExecutorManaged = (abs) => /[\\/]mirasim-worktrees[\\/]/.test(abs);
 
 const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
@@ -132,7 +130,7 @@ for (let i = 0; i < worktrees.length; i++) {
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
     isDefaultBranch: w.branch === defaultBranch,
-    orcaManaged: orcaPaths.has(abs.toLowerCase()),
+    executorManaged: isExecutorManaged(abs),
     detached: w.detached,
   });
   if (!d.remove) { if (i > 0) say(`[收工] 留树 ${w.path}：${d.reason}`); continue; }
