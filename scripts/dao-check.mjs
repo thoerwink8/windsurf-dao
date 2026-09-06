@@ -86,7 +86,7 @@
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
 
-import { readdirSync, readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
@@ -1298,8 +1298,40 @@ function checkOrcaRetirement() {
     green('orca 退役：存量树已清零——可以停 orca-serve 并执行退役清单（dao.mjs 里搜「整段删」）');
     return;
   }
-  notes.push(`orca 退役进行中：还有 ${trees.length} 棵在途树（派工已切 mirasim，只减不增）。清零后才停服务、删那条脊`);
-  green(`orca 退役进度：在途树 ${trees.length} 棵（新活已全走 mirasim）`);
+  // 趋势闸：退役中的目标，量的必须是**单调**的。今天实咬（2026-09-06）——我在切流量，
+  // 另一个会话看见 orca-serve 干净退出判成故障、加了 Restart=always 拉回来。两边都没错，
+  // 缺的是「有人在往反方向走」这件事会自己叫出来。
+  //
+  // 判据不能是「谁改了哪个文件」（那个改动当下是对的），只能是**结果量**：
+  // 树数不减反增 = 还有调用方在往 orca 派活 = 退役被逆转，这才是要红的。
+  // 基线落 ~/.dao/（派生数据不进 git），首次跑只建基线不判。
+  const stateFile = join(home, '.dao', 'orca-retire-progress.json');
+  let prev = null;
+  try { if (existsSync(stateFile)) prev = JSON.parse(readFileSync(stateFile, 'utf8')); } catch { prev = null; }
+  // 写失败不许静默：基线记不下 = 趋势闸永远在「首次」，看起来一直绿其实一次都没比过。
+  // 2026-09-06 实咬：writeFileSync 漏在 import 外，catch 把它吞了，闸装了等于没装。
+  const writeState = () => {
+    try {
+      mkdirSync(join(home, '.dao'), { recursive: true });
+      writeFileSync(stateFile, JSON.stringify({ trees: trees.length, at: new Date().toISOString() }, null, 2));
+      return null;
+    } catch (e) { return String(e.message || e).slice(0, 80); }
+  };
+  const before = prev && Number.isInteger(prev.trees) ? prev.trees : null;
+  const writeErr = writeState();
+  if (writeErr) {
+    fail('orca 退役趋势闸记不下基线', '基线写不进去就永远比不出趋势——闸装了等于没装，先修落点', `${stateFile}: ${writeErr}`);
+    return;
+  }
+  if (before != null && trees.length > before) {
+    fail(`orca 退役被逆转：在途树从 ${before} 涨到 ${trees.length}`,
+      '退役中的量只该减。查是谁又往 orca 派了活——多半是某个调用方还没切到 mirasim',
+      `上次 ${prev.at}：${before} 棵；现在 ${trees.length} 棵`);
+    return;
+  }
+  const trend = before == null ? '（首次，已建基线）' : before === trees.length ? '（持平）' : `（上次 ${before}，在减）`;
+  notes.push(`orca 退役进行中：还有 ${trees.length} 棵在途树${trend}。清零后才停服务、删那条脊`);
+  green(`orca 退役进度：在途树 ${trees.length} 棵${trend}`);
 }
 
 // ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
