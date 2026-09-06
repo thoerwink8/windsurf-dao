@@ -374,7 +374,7 @@ export async function runPreflight({
       // **刻意不记熔断失败**——窗口内三次就 cooldown 24h，那正是把一次误判放大成
       // 「整条腿被拉黑一天」的机制，也正是 #853 里换错人的来源。
       // 已知代价：真正挂死（永不吐字）的上游因此不再被熔断拉黑，每次派工都要陪它耗满预算。
-      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-agent-stall 与 watchdog 兜。
+      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-progress-watch 兜。
       if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
       reasons[c.id] = [...(reasons[c.id] || []), `timeout:${r.why || '没等到'}`];
       continue;

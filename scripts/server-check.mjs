@@ -562,55 +562,59 @@ function checkBotModel() {
   return classifyBotModelProbe(probeBotModel());
 }
 
-// —— ⑮ 撞限流探测 timer（#833）——
+// —— ⑮ 卡死发现 timer ——
 // 另起一项，不改 ⑧ automations 那行（#829 已占用）；⑭ 是指挥官自检（#800）。
-// 检查器自持判据，不 import agent-stall-detect。
-const PAD_STALL_SCRIPT = () => join(homedir(), 'bin', 'agent-stall-watch.mjs');
+//
+// 2026-09-06 用户拍板「删掉整层」后，这一格守的对象换了：屏面指纹那套
+// （dao-agent-stall + /home/orca/bin 垫片）整层退役，卡死发现只剩 dao-progress-watch。
+// 三个退役件全进影子清单——机器上还留着任何一个，就是没卸干净的影子制度。
+const RETIRED_STALL_SCRIPT = () => join(homedir(), 'bin', 'agent-stall-watch.mjs');
+const RETIRED_TIMERS = [
+  { re: /\bagent-stall-watch\.timer\b/, what: 'agent-stall-watch.timer（Contabo 垫片）' },
+  { re: /\bdao-agent-stall\.timer\b/, what: 'dao-agent-stall.timer（屏面指纹层，已退役）' },
+];
 
-/** 纯函数：systemctl list-timers 文本 + 垫片文件是否还在 → 三态。 */
-export function classifyAgentStallWatch({
+/** 纯函数：systemctl list-timers 文本 + 退役脚本是否还在 → 三态。 */
+export function classifyStallWatchTimer({
   probed = false,
   reason = '',
   timersText = '',
-  padScriptExists = null,
-  padScriptUnknown = false,
+  retiredScriptExists = null,
+  retiredScriptUnknown = false,
 } = {}) {
-  if (padScriptUnknown) {
-    return { state: UNKNOWN, detail: '垫片脚本在不在没查成' };
+  if (retiredScriptUnknown) {
+    return { state: UNKNOWN, detail: '退役脚本在不在没查成' };
   }
   if (!probed) {
     return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
   }
   const text = String(timersText || '');
-  const official = /\bdao-agent-stall\.timer\b/.test(text);
-  const padTimer = /\bagent-stall-watch\.timer\b/.test(text);
-  const padScript = padScriptExists === true;
-  if (padTimer || padScript) {
-    const bits = [];
-    if (padTimer) bits.push('agent-stall-watch.timer 还在');
-    if (padScript) bits.push('/home/orca/bin/agent-stall-watch.mjs 还在');
+  const official = /\bdao-progress-watch\.timer\b/.test(text);
+  const leftovers = RETIRED_TIMERS.filter((t) => t.re.test(text)).map((t) => t.what);
+  if (retiredScriptExists === true) leftovers.push('/home/orca/bin/agent-stall-watch.mjs');
+  if (leftovers.length) {
     return {
       state: RED,
-      detail: `撞限流垫片没退役（${bits.join('；')}）——落地即删，防影子制度`,
+      detail: `退役件没卸干净（${leftovers.join('；')}）——落地即删，防影子制度`,
     };
   }
   if (!official) {
     return {
       state: RED,
-      detail: 'dao-agent-stall.timer 不在册——sudo systemctl enable --now dao-agent-stall.timer（装法见 host/machine/systemd/dao-agent-stall.timer）',
+      detail: 'dao-progress-watch.timer 不在册——sudo bash scripts/install-progress-watch.sh（装法见 host/machine/systemd/dao-progress-watch.service 文件头）',
     };
   }
-  const line = text.split(/\r?\n/).find((l) => /\bdao-agent-stall\.timer\b/.test(l));
+  const line = text.split(/\r?\n/).find((l) => /\bdao-progress-watch\.timer\b/.test(l));
   if (line) {
     const next = line.trim().split(/\s+/)[0];
     if (next === '-' || /^n\/a$/i.test(next)) {
       return {
         state: RED,
-        detail: 'dao-agent-stall.timer 在册但 NEXT 是横杠（空转，探测等于没拉）——单元要用 OnCalendar，装完 list-timers 的 NEXT 必须是时间',
+        detail: 'dao-progress-watch.timer 在册但 NEXT 是横杠（空转，扫描等于没拉）——单元要用 OnCalendar，装完 list-timers 的 NEXT 必须是时间',
       };
     }
   }
-  return { state: OK, detail: 'dao-agent-stall.timer 在册且 NEXT 不是横杠，垫片已退役' };
+  return { state: OK, detail: 'dao-progress-watch.timer 在册且 NEXT 不是横杠，屏面指纹层已退役' };
 }
 
 // ⑯ 主树跟主分支 + 机器人吃新码（scripts/server-sync.sh，落地清单第 9 步）。没这个 timer，合并了的代码到不了运行中的机器人。
@@ -622,21 +626,21 @@ function checkDaoSync() {
   return { state: RED, detail: `dao-sync.timer=${st || 'unknown'}——sudo bash scripts/install-dao-sync.sh` };
 }
 
-function checkAgentStallWatch() {
+function checkStallWatchTimer() {
   const timers = run('systemctl', ['list-timers', '--all'], { timeout: 10000 });
-  let padExists = null;
-  let padUnknown = false;
+  let retiredExists = null;
+  let retiredUnknown = false;
   try {
-    padExists = existsSync(PAD_STALL_SCRIPT());
+    retiredExists = existsSync(RETIRED_STALL_SCRIPT());
   } catch (e) {
-    padUnknown = true;
+    retiredUnknown = true;
   }
-  return classifyAgentStallWatch({
+  return classifyStallWatchTimer({
     probed: timers.probed,
     reason: timers.reason,
     timersText: `${timers.stdout || ''}\n${timers.stderr || ''}`,
-    padScriptExists: padExists,
-    padScriptUnknown: padUnknown,
+    retiredScriptExists: retiredExists,
+    retiredScriptUnknown: retiredUnknown,
   });
 }
 
@@ -1243,7 +1247,7 @@ const CHECKS = [
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
   ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
-  ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
+  ['⑮ 卡死发现 timer 在册且屏面指纹层已退役', checkStallWatchTimer],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
