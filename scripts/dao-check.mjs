@@ -1285,6 +1285,37 @@ function checkInbox() {
 //   ② 在制品超上限就红——Little's Law：同时做的越多，每件完成得越慢
 //   ③ **守住 done_when 的判据指针**：check 字段指的函数必须真存在。
 //      指向空气的指针比没有更糟（本仓约定），而这类指针最容易在重构里悄悄失效。
+// 仓内属主：谁写的盘，谁就是属主。2026-09-06 第三次实咬——
+// 前两次归因都错了。我以为坑是「用 root 跑命令」，配的对策是「仓内命令一律 sudo -u orca」；
+// 可 Claude Code 的 Edit/Write **不是 bash 命令**，它由宿主进程直接写盘，而宿主跑在 root 下。
+// 对策从没覆盖这条路径（memory: fix-landed-at-one-call-site-only 同款）。
+//
+// 后果不长得像属主问题：测试报 EACCES unlink（sandbox 删不掉旧文件）、land 报
+// could not read Username for 'https://github.com'（看起来像认证坏了）。判据只能是属主本身。
+//
+// 只在 Linux 上查，且只有当仓的属主不是当前用户时才有意义——单用户机器上人人都是 owner。
+function checkRepoOwnership() {
+  if (process.platform === 'win32') { skip('仓内属主：Windows 无 uid 概念，本项跳过'); return; }
+  const r = spawnSync('find', ['.', '-user', 'root', '-not', '-path', './.git/*', '-not', '-path', './node_modules/*', '-print'],
+    { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  if (r.error || (r.status != null && r.status > 1)) {
+    fail('仓内属主没查成', 'find 跑不起来——别据此判断干净', String(r.error?.message || r.stderr || '').slice(0, 80));
+    return;
+  }
+  const owned = String(r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean);
+  // 仓本身就归 root 的机器（比如个人开发机）不该被这条闸打扰：判据是「仓目录属主 ≠ root 却有 root 文件」。
+  let repoOwner = null;
+  try { repoOwner = statSync(ROOT).uid; } catch { repoOwner = null; }
+  if (repoOwner === 0) { skip(`仓内属主：仓本身归 root（${owned.length} 个 root 文件属正常），本项跳过`); return; }
+  if (owned.length) {
+    fail(`仓内有 ${owned.length} 个 root 属主文件`,
+      `跑 chown -R $(stat -c %U:%G .) . 修。根因多半是拿 root 身份改了文件——Claude Code 的 Edit/Write 走宿主进程，宿主是 root 时写出来的就是 root 文件，跟命令加不加 sudo 无关`,
+      owned.slice(0, 5).join('、') + (owned.length > 5 ? ` …等 ${owned.length} 个` : ''));
+    return;
+  }
+  green('仓内属主：扫完 0 个 root 属主文件');
+}
+
 function checkInitiatives() {
   const file = join(ROOT, 'docs', 'initiatives.json');
   if (!existsSync(file)) { skip('西瓜清单：docs/initiatives.json 不在——本项没查成'); return; }
@@ -1310,8 +1341,23 @@ function checkInitiatives() {
       active.map(i => i.id).join('；'));
     return;
   }
-  for (const i of active) notes.push(`西瓜「${i.name}」：完成判据 = ${i.done_when}`);
-  green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着`);
+  // 缺 next_action 就是「不知道下一步干什么」。2026-09-06 实咬：用户问「有没有讨论过还没做的」，
+  // 清单答不上——它只记了完成判据。done_when 判「完了没」，next_action 答「现在轮到干什么」，缺一不可。
+  const noNext = active.filter(i => !String(i.next_action || '').trim());
+  if (noNext.length) {
+    fail(`西瓜清单有 ${noNext.length} 条不知道下一步干什么`,
+      '给它补 next_action（和 next_action_as_of 日期）——只有完成判据的清单答不出「还剩什么没做」',
+      noNext.map(i => i.id).join('；'));
+    return;
+  }
+  const today = Date.parse(new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10));
+  for (const i of active) {
+    const asOf = Date.parse(String(i.next_action_as_of || ''));
+    const days = Number.isFinite(asOf) ? Math.floor((today - asOf) / 86400000) : null;
+    const stamp = days == null ? '（没写 as_of，鲜度不明）' : days <= 0 ? '（今天更新）' : `（${days} 天前写的）`;
+    notes.push(`西瓜「${i.name}」\n    完成判据：${i.done_when}\n    下一步${stamp}：${i.next_action}`);
+  }
+  green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
 // ── orca 退役进度（2026-09-06 切流量后常驻）─────────────────────────────────────
@@ -1322,6 +1368,16 @@ function checkInitiatives() {
 //
 // 判据是「当场可数的事实」——orca workspaces 下还剩几棵树，不是谁填的进度百分比。
 // 清零 = 存量流干 = 可以执行退役清单（停服务 + 删 dao.mjs 里标了边界的那条脊）。
+// 代码面的 orca 引用有多少。只数 scripts/ 与 tests/：docs/decisions 与 docs/observations
+// 是判例档案，记的是当时发生过什么，删掉等于篡改历史——它们里的 orca 字样永远保留。
+// grep 退出码：0=找到、1=一个没找到（正常清零）、>1=真出错（要报没查成，不许当成 0）。
+function countOrcaCodeRefs() {
+  const r = spawnSync('grep', ['-rilE', 'orca', 'scripts', 'tests'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  if (r.error) return { unscanned: true, error: String(r.error.message || r.error).slice(0, 80) };
+  if (r.status != null && r.status > 1) return { unscanned: true, error: `grep 退出码 ${r.status}：${String(r.stderr || '').slice(0, 60)}` };
+  return { files: String(r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean) };
+}
+
 function checkOrcaRetirement() {
   const home = process.env.HOME || '/home/orca';
   const ws = join(home, 'orca', 'workspaces');
@@ -1357,11 +1413,21 @@ function checkOrcaRetirement() {
       green('orca 退役：存量树已清零——下一步 systemctl disable orca-serve');
       return;
     }
-    if (!spineGone) {
-      green(`orca 退役：树清零 + 服务已 ${enabled || '停用'}——只剩删代码（dao.mjs 里搜「整段删」那段）`);
+    const refs = countOrcaCodeRefs();
+    if (refs.unscanned) {
+      fail('orca 代码引用没数成', '数不出来就别说删干净了——先修 grep 调用', refs.error);
       return;
     }
-    green('orca 退役：判据三条全满足（树 0 / 服务停用 / 脊已删）——这个西瓜可以从 initiatives.json 摘了');
+    if (!spineGone) {
+      green(`orca 退役：树清零 + 服务已 ${enabled || '停用'}——只剩删代码（dao.mjs 里搜「整段删」那段，另有 ${refs.files.length} 个文件还引用 orca）`);
+      return;
+    }
+    if (refs.files.length) {
+      green(`orca 退役：树 0 / 服务停用 / 脊已删——scripts+tests 下还有 ${refs.files.length} 个文件引用 orca`);
+      notes.push(`orca 代码残留 ${refs.files.length} 个文件：${refs.files.slice(0, 6).join('、')}${refs.files.length > 6 ? ' …' : ''}`);
+      return;
+    }
+    green('orca 退役：判据四条全满足（树 0 / 服务停用 / 脊已删 / 代码零引用）——这个西瓜可以从 initiatives.json 摘了');
     return;
   }
   // 趋势闸：退役中的目标，量的必须是**单调**的。今天实咬（2026-09-06）——我在切流量，
@@ -1809,17 +1875,19 @@ function checkNoAutoCloseLive() {
 }
 
 
-// 停派工态门（2026-08-31 dbfa323 / docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
-// ⑦⑭⑮⑰-live 四项是**派工节奏与外部盘面的活探**（orca --help、gh 盘面、账本对 GitHub），
-// 守的是「正在编排」这件事；本机停派工后它们只贡献网络抖动和耗时。默认不跑，
-// `--full` 跑全量（编排回岗 / 服务器上把 --full 设为常态）。
-// 「停派工态未跑」是第三种形：不是绿（没查）、也不是没查成（是故意不查），话面写明原因与开关。
-// 离线的样本/接线检查（夹具判别力、模板扫描）全部保留——它们不花网络，且守的约定还在仓里。
+// 全量档：活探类检查（gh 盘面、账本对 GitHub、跑子进程要 --help）只在 --full 跑。
+//
+// 2026-09-06 编排态回岗（用户拍板），原「停派工态门」的话面已删。那道门 2026-08-31 立时
+// 说的是「本机不编排，这些活探只贡献网络抖动」；如今 mirasim 派工恢复、指挥官在自动派工，
+// 那句话每跑一次就误导一次。**行为上它从来没挡住什么**——这几项本就在 `if (FULL)` 里，
+// parked() 只是 else 分支的措辞；删的是过期的理由，不是判据（migration-half-done-breaks-checks
+// 的反面教材：状态变了、检查的话面没跟上，人就照着旧话面做判断）。
+//
+// 离线的样本/接线检查（夹具判别力、模板扫描）一直全跑——它们不花网络，守的约定也还在仓里。
 const FULL = process.argv.includes('--full');
 // 快档标志：只有显式 --affected 才进快档。默认（不带旗标）仍跑全部，
 // 因为「跳过了什么」是静默的，得由调用方开口才生效。
 const AFFECTED = process.argv.includes('--affected');
-const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 node scripts/dao-check.mjs --full）`);
 // 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
 // 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
 const netParked = (name, why) => skip(`快档跳过：${name}——${why}（全量档 node scripts/dao-check.mjs --full 才跑）`);
@@ -1832,7 +1900,7 @@ checkResidentBudget();
 checkRoutingProvidersToml();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
-if (FULL) await checkCommandHelp(); else parked('命令库 --help 参数存活');
+if (FULL) await checkCommandHelp(); else netParked('命令库 --help 参数存活', '要逐条起子进程跑 --help');
 checkModeHookAlive();
 checkDispatchGateAlive();
 checkMemoryLinkAlive();
@@ -1844,13 +1912,13 @@ if (FULL) {
   checkOpenIssueCount(openBoard);
   checkReadyQueue(openBoard);
 } else {
-  parked('open 单数量阈值');
-  parked('可立即起但没起');
+  netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('可立即起但没起', '要打 gh issue list');
 }
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
 checkLedgerGapSamples();
-if (FULL) checkLedgerGapLive(); else parked('账本断流差集 live');
+if (FULL) checkLedgerGapLive(); else netParked('账本断流差集 live', '要拿账本对 GitHub');
 checkStrikesSamples();
 checkStrikesLive();
 checkMachinePathSamples();
@@ -1865,8 +1933,9 @@ checkLegsSamples();
 checkLegsLive();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
-if (FULL) checkHarvestLive(); else parked('回流段孤儿 live（要 gh）');
+if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
 checkInbox();
+checkRepoOwnership();
 checkInitiatives();
 checkOrcaRetirement();
 checkCompetingPrsSamples();
@@ -2192,7 +2261,8 @@ function checkHarvestLive() {
     return;
   }
   if (v.empty) {
-    parked(`回流段 live：近 7 天（${since} 起）没有已合并 PR，无从判断`);
+    // 「没有样本」不是「查过没事」：近 7 天一个合并 PR 都没有时，这项没有判据可依。
+    skip(`回流段 live：近 7 天（${since} 起）没有已合并 PR，没有样本可判`);
     return;
   }
   const problems = [...v.orphans, ...v.thin];

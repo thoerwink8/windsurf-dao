@@ -3,15 +3,20 @@
   "_comment": "西瓜清单：正在推进的长期目标。日常小事不进这里——进来的必须是「丢了会疼」的那种。",
   "_why": "2026-09-06 用户点破：真正的风险不是忘了某一件事，是长期目标被日常小事挤掉，两天后彻底遗忘。业界把这叫 long-running initiatives that never end，解法是 Portfolio Kanban 的在制品上限（Little's Law：cycle time = WIP / throughput，同时做的越多，每件完成得越慢）。",
   "_判据必须机器可算": "done_when 只写「能当场算出真假」的事实。人填的百分比会过期——#880 的进度表就是这么死的：它写着卡 C 未完成，实际早就合了，2026-09-06 连着误导了两次。判据是事实就不可能骗人。",
+  "_录入触发": "什么时刻必须往这里加（缺了触发条件的规矩不会被执行，见 memory: rule-without-trigger-is-not-a-rule）：① 用户说出「我担心这件事被忘掉」或「这是最终目的」——当场录，不等会话结束；② 开伞单（一张 issue 拆出三张以上子单）——开单同时录；③ 发现某件事已经跨了 3 天以上还在推、却不属于任何 initiative——要么录，要么当场砍掉。",
+  "_next_action_why": "2026-09-06 实咬：用户问「有没有什么讨论过还没做的」，说明清单答不上这个问题——它只记了「做完没有」，没记「下一步是什么」。done_when 判完成，next_action 答「现在轮到干什么」，两个都要有。next_action 会过期，所以它旁边必须写 as_of 日期，dao-check 念出来时带上。",
   "wip_limit": 3,
   "_wip_limit_why": "上限的意义在于「满了就不许开新的」。业界记录的两个反模式：① 不断提高上限来证明没超；② 拿长期宽泛的任务当填充物。加新的之前先问能不能先完成一个。",
   "initiatives": [
     {
       "id": "orca-retire",
       "name": "Orca 退役，执行体全部换成 mirasim",
-      "why": "用户 2026-09-05 拍板（memory: mirasim-replaces-orca-except-reclaude）；伞单 #880",
-      "done_when": "orca workspaces 下 0 棵树 且 orca-serve 已 disabled 且 dao.mjs 里标了「整段删」的那条脊已删",
+      "why": "用户 2026-09-05 拍板（memory: mirasim-replaces-orca-except-reclaude）；伞单 #880。用户 2026-09-06 补了两条明确要求：服务器上的 orca 全卸载删除、仓库里关于 orca 的全删除。",
+      "done_when": "orca workspaces 下 0 棵树 且 orca-serve 已 disabled 且 dao.mjs 里标了「整段删」的那条脊已删 且 scripts/ 与 tests/ 下引用 orca 的文件数为 0",
+      "_docs_不算": "docs/decisions 与 docs/observations 是判例档案，记录的是当时发生过什么，删掉等于篡改历史——它们里的 orca 字样永远保留，不进判据。",
       "check": "checkOrcaRetirement",
+      "next_action": "删 orca 代码前先做测试对等审计：orca 侧 291 条测试（dao-orca-surface 256 / orca-agent-cmds 28 / orca-error 7）随代码一起删掉后，mirasim 侧 82 条（runtime 41 / reviewer 34 / books 7）能否覆盖同样的判据面。删掉保护而没有等价替代 = 净损失。审计结论出来前不动删除。",
+      "next_action_as_of": "2026-09-06",
       "status": "active",
       "started": "2026-09-04"
     },
@@ -21,6 +26,19 @@
       "why": "2026-09-06 实咬：#884/#986 两份实现撞车，1339 行白做；盘面一度 13 个开放 PR、5 个冲突、最老的挂了两天。业界数据：三成 PR 属于 competing pull requests。",
       "done_when": "开放 PR 中 mergeable=CONFLICTING 的数量为 0 且最老的开放 PR 不超过 2 天",
       "check": "checkCompetingPrsLive",
+      "next_action": "#884/#986 已因被现实超越而关闭。剩 #885（mirasim 保活判死+GC+额度健康段）——它的 GC 与额度健康段确实不在 master，有独立价值，但长期 CONFLICTING；等 #1059 落地（会碰 commander 同一片）后判：解冲突还是砍分支重派。",
+      "next_action_as_of": "2026-09-06",
+      "status": "active",
+      "started": "2026-09-06"
+    },
+    {
+      "id": "machine-speaks-first",
+      "name": "机器主动开口：收件箱与待拍板不再等人来问",
+      "why": "2026-09-06 用户拍板走方案 1（收件箱超时未处置 → 唤一次性会话做分诊）。根因是收件箱原本挂在 Claude Code 的 hook 上，而服务器上根本没装那个载体——写进去的东西没有任何人会读。用户的原话：收件箱不该依赖更多载体，要依附 mirasim 和未来的 reClaude。",
+      "done_when": "docs/observations 下无 status 缺失且超 24 小时未处置的条目 且 commander 的唤会话/回收会话不含任何 orca 动词",
+      "check": "checkInbox",
+      "next_action": "前置在跑：#1055（PR #1059 draft 已开）把 wakeBrain/reapBrains 切 mirasim。它落地后，分诊会话就是照 patrol 的模式再加一个 target——不是新机制。在那之前不要另起炉灶。",
+      "next_action_as_of": "2026-09-06",
       "status": "active",
       "started": "2026-09-06"
     }
