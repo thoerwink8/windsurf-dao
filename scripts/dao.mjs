@@ -4895,11 +4895,13 @@ function cmdNext() {
 async function cmdNow(args) {
   const { collectNow } = await import('./lib/now-collect.mjs');
   const { renderNow, formatNow, DEFAULT_WINDOW_HOURS, DEFAULT_MAX_LINES } = await import('./lib/now-board.mjs');
+  const { collectProgressStalls } = await import('./progress-watch.mjs');
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const hours = args.hours != null && /^\d+$/.test(String(args.hours)) ? Number(args.hours) : DEFAULT_WINDOW_HOURS;
   const host = args.noServer === true ? null : (args.host || 'contabo');
   const raw = await collectNow({ cwd: root, host, windowHours: hours, now: Date.now() });
-  const board = renderNow({ ...raw, windowHours: hours });
+  const progressStalls = collectProgressStalls();
+  const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
     console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
     process.exit(0);

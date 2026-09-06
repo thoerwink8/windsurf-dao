@@ -1,5 +1,8 @@
 // scripts/lib/shuai-scan.mjs —— 帅位看门狗纯函数层（chain:shuai-watchdog#1）
 //
+// #1004：发现层已换到 progress-detect.mjs（chain:progress-stall#0）。本文件留下的是
+// 执行层共用件（SENTINEL / PR 判绿/CI 红 / 状态去重），不是再列故障种类。
+//
 // 采集与判定分离：tests 注入 fixture/mock，CLI 只负责 IO。
 // 「扫完 0 条」与「没扫成」必须不同形——任何 unscanned 维度整轮 fail-loud。
 

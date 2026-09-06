@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // scripts/shuai-scan.mjs —— 帅位看门狗 CLI（chain:shuai-watchdog#1）
 //
+// #1004：发现层已换到 scripts/progress-watch.mjs（chain:progress-stall#0）。本 CLI 的异常清单
+// 不再是盯盘主路；留下的是执行层共用件（叫醒哨兵 / PR 判绿 / 状态去重）。
+//
 // 纯采集 + 纯判定，零 AI。有内容且相对上一轮有变化 → stdout 首行 AGENT_LOOP_TICK_PANMIAN + 摘要；
 // 无变化或无可报内容 → 零输出 exit 0；没扫成 → stderr + 非零，不许输出 sentinel。
 //
