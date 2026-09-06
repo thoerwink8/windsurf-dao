@@ -4,8 +4,9 @@
 # ~/.dao/commander/situation-*.json，连续 N 轮同一对象同一状态 ⇒ 卡住，
 # stdout 首行 AGENT_LOOP_TICK_PANMIAN 叫醒帅位。不许 escalate 开单。
 #
-# 这是盯盘发现层的主路。旧 shuai-scan CLI 现在也转调本脚本；本单元保证
-# 没人亲手跑 `dao now` 时也会扫。commander-act 继续写快照，本单元只读。
+# 卡死发现的**唯一**定时面（2026-09-06 用户拍板：屏面指纹层 dao-agent-stall 整层退役）。
+# 旧 shuai-scan CLI 现在也转调本脚本；本单元保证没人亲手跑 `dao now` 时也会扫。
+# commander-act 继续写快照，本单元只读。顺带把「自动化认输的 PR」按 @head 推帅位一次。
 #
 # 装（服务器，orca 用户；与 dao-board-gc 同一套路）：
 #   sudo bash scripts/install-progress-watch.sh
@@ -13,11 +14,13 @@
 #   systemctl list-timers | grep dao-progress-watch   # NEXT 不能是 `-`
 #
 # WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
-# PATH 必须带 ~/.local/bin，否则 oneshot 找不到 orca。
+#
+# 原料是 commander-act 每 20 分钟写的快照——那个 timer 停了，本单元只会每轮 exit 2。
+# 两个 timer 是一条链，别单独看这一个的绿。
 
 [Unit]
 Description=windsurf-dao board progress stall watch (issue #1004)
-After=network-online.target orca-serve.service
+After=network-online.target commander-act.service
 Wants=network-online.target
 
 [Service]

@@ -2340,12 +2340,11 @@ function checkVendorGateLive() {
   const daoFile = join(ROOT, 'scripts', 'dao.mjs');
   const cmdFile = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
   const slotFile = join(ROOT, 'scripts', 'lib', 'dianjiangtai-reviewer-slot.mjs');
-  const stallFile = join(ROOT, 'scripts', 'agent-stall-watch.mjs');
-  if (![daoFile, cmdFile, slotFile, stallFile].every(existsSync)) {
+  if (![daoFile, cmdFile, slotFile].every(existsSync)) {
     fail(
       '同厂硬闸 live 扫描缺文件',
-      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs / agent-stall-watch.mjs；缺文件 = 没查成',
-      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)} stall=${existsSync(stallFile)}`,
+      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)}`,
     );
     return;
   }
@@ -2356,7 +2355,6 @@ function checkVendorGateLive() {
     daoSrc,
     cmdSrc: readFileSync(existsSync(constraintsFile) ? constraintsFile : cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
-    stallSrc: readFileSync(stallFile, 'utf8'),
   });
   if (r.unscanned) {
     fail('同厂硬闸 live 没查成', '给齐源文件再扫', r.error || '');
