@@ -127,6 +127,23 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('有且仅有一个 model/* → 放行', () => {
       assert.ok(one.ok === true && one.modelId === 'grok-4.6', JSON.stringify(one));
     });
+    const dup = S.requireWorkerModel(['model/grok-4.6', 'type/写码', 'model/grok-4.6', 'reviewer/kimi-k3']);
+    await t.test('同名 model/* 出现两次（署两张单）→ 仍是一个模型', () => {
+      assert.equal(dup.ok, true);
+      assert.equal(dup.state, 'one');
+      assert.equal(dup.modelId, 'grok-4.6');
+    });
+    const many = S.requireWorkerModel(['model/grok-4.6', 'model/pi-v2']);
+    await t.test('两个不同的 model/* → many，不许猜', () => {
+      assert.equal(many.ok, false);
+      assert.equal(many.state, 'many');
+    });
+    const revDup = S.pickReviewer(['reviewer/kimi-k3', 'type/写码', 'reviewer/kimi-k3']);
+    await t.test('同名 reviewer/* 出现两次 → 仍是一个审官', () => {
+      assert.equal(revDup.ok, true);
+      assert.equal(revDup.state, 'one');
+      assert.equal(revDup.modelId, 'kimi-k3');
+    });
   });
 
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {
@@ -253,6 +270,12 @@ describe('#679 起审官同厂硬闸', () => {
     const fromLabel = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'type/写码'] });
     await t.test('无 Dispatch 时认唯一 model/*', () => {
       assert.ok(fromLabel.ok && fromLabel.source === 'label' && fromLabel.modelId === 'kimi-k3', JSON.stringify(fromLabel));
+    });
+    const fromDup = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'model/kimi-k3'] });
+    await t.test('同名 model/* 收集两遍仍认唯一', () => {
+      assert.equal(fromDup.ok, true);
+      assert.equal(fromDup.source, 'label');
+      assert.equal(fromDup.modelId, 'kimi-k3');
     });
     const unscanned = resolveActualWorkerModel({});
     await t.test('两边都没有 → 没查成，不许从卡名猜', () => {

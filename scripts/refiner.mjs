@@ -27,6 +27,7 @@ import { ensurePlain } from './lib/plain-words.mjs';
 import {
   planRound, VERDICT, FRAMEWORK_ROLE,
 } from './lib/refine-core.mjs';
+import { recordBroadcast } from './lib/broadcast-io.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -115,15 +116,9 @@ export function loadComments(runGh, number) {
 export function defaultSay(text) {
   const line = String(text || '');
   if (!line) return { ok: true, skipped: true };
-  let r = spawnSync('hub-say', [line], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-  if (r.error && r.error.code === 'ENOENT') {
-    r = spawnSync('/home/orca/bin/hub-say', [line], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-  }
-  if (r.error) return { ok: false, error: `推给用户没成：${r.error.message}` };
-  if (r.status !== 0) {
-    return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  }
-  return { ok: true };
+  const r = recordBroadcast(line, { source: 'refiner', now: new Date() });
+  if (!r.ok) return { ok: false, error: `推给用户没成：${r.error}` };
+  return { ok: true, queued: true, messageId: r.messageId };
 }
 
 function commentViaFile(runGh, number, body) {
