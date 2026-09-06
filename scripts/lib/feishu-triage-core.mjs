@@ -94,9 +94,9 @@ export async function triage(inbound, deps) {
 async function triageInner(inbound, deps) {
   const { rootId, repo } = inbound;
   if (!repo) {
-    // #852 总帅入口：hub 群且 hubChat 开着 → 对话路径。
+    // #852 总帅入口：hub 群或私聊，且 hubChat 开着 → 对话路径。
     // 未映射群 / hubChat 关着 → 维持旧行为：指路，不留状态。
-    if (inbound.kind === 'hub' && deps.hubChat?.enabled === true) {
+    if ((inbound.kind === 'hub' || inbound.kind === 'p2p') && deps.hubChat?.enabled === true) {
       return triageHub(inbound, deps);
     }
     return { replies: [{ rootId, text: HUB_GUIDANCE }], actions: [], state: deps.state };
