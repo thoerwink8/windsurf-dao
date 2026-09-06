@@ -294,18 +294,30 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
   });
 
   it('全部节 unscanned → 只有一条 escalate、零正向动作', async () => {
-    const { decide, ACTION_KINDS } = await CORE;
+    const { decide, ACTION_KINDS, SITUATION_SECTIONS } = await CORE;
     const r = decide({
-      github: { scanned: false }, orca: { scanned: false }, reviewPending: { scanned: false },
+      github: { scanned: false }, reviewPending: { scanned: false },
       prReviews: { scanned: false }, stall: { scanned: false }, wakeCounts: {},
     });
     assert.equal(r.actions.length, 1, '全 unscanned 只该有一条动作');
     assert.equal(r.actions[0].kind, 'escalate');
     assert.equal(r.actions[0].reason, 'unscanned');
-    assert.equal((r.actions[0].missing || []).length, 5, 'missing 列全五节');
+    assert.equal((r.actions[0].missing || []).length, SITUATION_SECTIONS.length, 'missing 列全必查节');
+    assert.ok(!(r.actions[0].missing || []).includes('orca'), '#1055：orca 退役后不进总闸');
     const positive = r.actions.filter((a) => !['escalate', 'noop'].includes(a.kind));
     assert.equal(positive.length, 0, '零正向动作');
     void ACTION_KINDS;
+  });
+
+  it('#1055：orca 没查成不再进 fail-closed 总闸（退役后这一节永远扫不出来）', async () => {
+    const { decide, SITUATION_SECTIONS } = await CORE;
+    assert.ok(!SITUATION_SECTIONS.includes('orca'), '必查清单不许再钉 orca');
+    const r = decide(baseSituation({
+      orca: { scanned: false, error: 'orca-serve disabled' },
+    }));
+    const un = byKind(r, 'escalate').filter((a) => a.reason === 'unscanned');
+    assert.equal(un.length, 0, '只缺 orca 不该合上总闸');
+    assert.ok(!kinds(r).includes('escalate') || !un.some((a) => (a.missing || []).includes('orca')));
   });
 });
 
@@ -1092,10 +1104,14 @@ describe('跨仓感知只感知不派工', () => {
   });
 
   it('跨仓没查成不许拦住本轮：它不在 health 的必查清单里', () => {
-    const i = src.indexOf("const sections = ['github'");
-    const line = src.slice(i, i + 200);
-    assert.ok(!/otherRepos/.test(line),
+    assert.match(src, /SITUATION_SECTIONS\.filter/,
+      'situationHealth 必须跟决策层同一份必查清单，不许再手写一份');
+    const i = src.indexOf('function situationHealth');
+    const fn = src.slice(i, src.indexOf('\n}', i) + 2);
+    assert.ok(!/otherRepos/.test(fn),
       '跨仓查不到是别人家的事，不该让本仓这一轮判成没查成');
+    assert.ok(!/'orca'/.test(fn),
+      '#1055：orca 退役后不许再写进 health 必查清单');
   });
 
   it('没查成要显形，不许静默成「别的仓都没事」', () => {

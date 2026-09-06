@@ -5,7 +5,7 @@
 // 「决策」在纯函数 scripts/lib/commander-core.mjs（decide），「大脑」是 act 起的一次性 pi 会话。
 //
 // 子命令：
-//   scan            读 GitHub / Orca / 队列 / 撞死指纹 → 态势 JSON，落 ~/.dao/commander/situation-<ts>.json
+//   scan            读 GitHub / 队列 / 撞死指纹 → 态势 JSON，落 ~/.dao/commander/situation-<ts>.json
 //   act [--dry-run] scan → decide → 逐条执行动作（--dry-run 只打印）
 //   inventory [--dry-run]  盘点体检：孤儿进程/终端登记/timer/探针连红/超龄PR/落地清单空列 → 异常开「待拍板」单
 //   status [--json] 自检三态（0 通 / 1 红 / 2 没查成），供 server-check 一行引用
@@ -26,6 +26,7 @@ import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
 import { runOrca } from './lib/orca-run.mjs';
+import { parseWorktrees } from './lib/land-core.mjs';
 import { progressSignature, assessLiveness, sessionFromOrcaTerminal, sessionFromMirasimSession } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
@@ -37,6 +38,7 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
+  SITUATION_SECTIONS,
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
@@ -541,8 +543,8 @@ function buildSituation({ state } = {}) {
 }
 
 function situationHealth(situation) {
-  const sections = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
-  const unscanned = sections.filter((s) => !situation[s]?.scanned);
+  // 必查清单只认 SITUATION_SECTIONS（#1055：orca 退役后不在清单里，复制一份会再钉死）。
+  const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   return { unscanned, allScanned: unscanned.length === 0 };
 }
 
@@ -1075,11 +1077,22 @@ function dispatchRework(action, { state, dryRun, say }) {
   return verdict;
 }
 
-// 大脑：起一次性 pi 会话 + 注入指针文本；记进 state.brainSessions（含 handle），
-// 由后续 act 轮回收（会话干完自行 exit；没退的到期强关，保证「进程不在」有界）。
+// 大脑：起一次性 mirasim 会话 + 注入指针文本；记进 state.brainSessions（键是 sessionKey），
+// 由后续 act 轮回收（会话干完自行退；没退的到期强关，保证「进程不在」有界）。
 // action.pointer / action.title 可覆写：巡检（cmdPatrol）用同一条起会话+登记+回收的路，
 // 只换注入那句话和卡名。**不许为别的用途另写一份 start/send/登记**——回收只认 state.brainSessions，
 // 另写一套就等于造一批没人回收的孤儿会话（本机那版巡检半天堆了几十个，就是这么来的）。
+//
+// #1055：orca 退役后这条路切到 mirasim。mirasim 是一步到位——prompt 本身就是注入，
+// 不需要 orca 那套 start + send 两步。commander 调用链保持同步（spawnSync 调 dao.mjs），
+// 不许把 cmdAct / cmdPatrol 改成 async（会牵动退出码三态，server-check 读它）。
+function brainStartCmd(pointer, title) {
+  return ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', BRAIN_MODEL,
+    '--worktree', BRAIN_WORKTREE, '--prompt', pointer,
+    '--title', title || '指挥官大脑'];
+}
+
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
   const pointer = action.pointer || [
@@ -1087,34 +1100,30 @@ function wakeBrain(action, { state, dryRun, say }) {
     `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
     `处置目标：${action.target}（${action.why}）。`,
     '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
-    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完打 exit 退出。',
+    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
   ].join('');
-  const startCmd = ['node', 'scripts/dao.mjs', 'start', '--provider', 'gw', '--model', BRAIN_MODEL,
-    '--worktree', BRAIN_WORKTREE, '--title', action.title || '指挥官大脑'];
+  const startCmd = brainStartCmd(pointer, action.title);
   if (dryRun) {
-    say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}\n    然后 dao.mjs send --terminal <handle> --enter --agent pi --text "<指针>"`);
+    say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}`);
     return { ok: true, dryRun: true };
   }
   const started = runCmd(startCmd, 180000);
   if (!started.ok) { say(`  大脑起不来：${started.error}`); return { ok: false, error: started.error }; }
   let handle = null;
-  try { handle = JSON.parse(started.out).handle; } catch { /* 下面报没拿到 */ }
-  if (!handle) { say('  起了大脑但没拿到 handle——没查成'); return { ok: false, error: 'no-handle' }; }
-  const sent = runCmd(['node', 'scripts/dao.mjs', 'send', '--terminal', handle, '--text', pointer, '--enter', '--agent', 'pi'], 60000);
+  try {
+    const j = JSON.parse(started.out);
+    handle = j.sessionKey || j.handle || null;
+  } catch { /* 下面报没拿到 */ }
+  if (!handle) { say('  起了大脑但没拿到 sessionKey——没查成'); return { ok: false, error: 'no-handle' }; }
   state.brainSessions = state.brainSessions || {};
-  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它，否则送失败就漏一个孤儿大脑。
-  state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL };
-  if (!sent.ok) {
-    // 指针没送到 = 这次唤醒没发生：**不计预算**（审官红项 2026-09-04）。
-    // 递增会让「唤满三次转报帅」在大脑其实一次都没被告知的情况下提前触发——把投递故障算成大脑无能。
-    say(`  大脑起了但指针没送：${sent.error}——不计唤醒次数（没送达 ≠ 唤过），下一轮重试`);
-    return { ok: false, error: `指针没送达：${sent.error}`, handle };
-  }
+  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它。
+  // mirasim 路径上 prompt 就是注入，起成 = 指针已送；不再有「起了但没送达」的中间态。
+  state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL, executor: 'mirasim' };
   state.wakeCounts = state.wakeCounts || {};
   // #931 后唤大脑只剩撞死指纹（`stall:<term>`）与代拍（`daipai:issue-<n>`）两条路，
   // 都按 target 记账。PR 判红改走 rework（返工工人），不再有唤醒预算。
   state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
+  say(`  大脑已起 sessionKey=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
   return { ok: true, handle };
 }
 
@@ -1147,17 +1156,64 @@ export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signatur
   return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
 }
 
+const BRAIN_LIVE_PHASES = new Set(['running', 'streaming', 'waiting', 'queued']);
+const BRAIN_DONE_PHASES = new Set([
+  'done', 'complete', 'completed', 'error', 'failed', 'aborted', 'cancelled', 'canceled',
+]);
+
+/** 把 session-read 的 JSON 判成 {readable}。dao.mjs 在 missing!==true 时会标 readable:true，
+ *  适配器不许信那一列——形状错误 / 未知 phase / 无法确认的 partial 都是没查成。 */
+export function interpretBrainSessionView(view) {
+  if (!view || typeof view !== 'object') {
+    return { ok: false, readable: undefined, error: 'session-read 输出不是对象', view: view ?? null };
+  }
+  const why = typeof view.why === 'string' ? view.why : '';
+  if (/形状不符|契约/.test(why)) {
+    return { ok: true, readable: undefined, error: why, view };
+  }
+  if (view.missing === true) {
+    return { ok: true, readable: false, error: why || 'missing', view };
+  }
+  const phase = typeof view.phase === 'string' && view.phase.trim() ? view.phase.trim() : null;
+  if (view.partial === true && !BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: undefined, error: why || 'partial', view, phase };
+  }
+  if (BRAIN_DONE_PHASES.has(phase)) {
+    return { ok: true, readable: false, error: `phase=${phase}`, view, phase };
+  }
+  if (BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: true, error: null, view, phase };
+  }
+  return { ok: true, readable: undefined, error: phase ? `未知 phase=${phase}` : 'phase 缺失', view, phase };
+}
+
+/** 同步读一次 mirasim 会话。spawnSync 调 dao.mjs session-read，不把 commander 改成 async。 */
+function readBrainSession(sessionKey) {
+  const r = runCmd(['node', 'scripts/dao.mjs', 'session-read', '--session', sessionKey], 60000);
+  // 命令没成 / 输出不可解析 = 没查成。readable 不给 false——false 会被判 gone，只删登记留下孤儿会话。
+  if (!r.ok) return { ok: false, readable: undefined, error: r.error, view: null };
+  let view = null;
+  try { view = JSON.parse(r.out); } catch { return { ok: false, readable: undefined, error: 'session-read 输出不是 JSON', view: null }; }
+  return interpretBrainSessionView(view);
+}
+
+function stopBrainSession(sessionKey) {
+  return runCmd(['node', 'scripts/dao.mjs', 'session-stop', '--session', sessionKey], 60000);
+}
+
 // 回收一次性大脑。判据在 classifyBrainReap，这里只负责取数、执行、留痕。
+// #1055：取数从刮屏换成 dao.mjs session-read（phase / 正文），
+// 强关从关标签换成 dao.mjs session-stop。判据函数一个字不动。
 function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
   state.brainAudit = state.brainAudit || { closed: 0, silent: 0 };
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
-    const rd = runOrca(['terminal', 'read', '--terminal', handle, '--screen', '--json'], { cwd: ROOT });
-    const screen = rd.ok ? brainScreenText(rd) : null;
+    const rd = readBrainSession(handle);
+    const screen = rd.view ? brainScreenText(rd.view) : null;
     const signature = screen == null ? null : progressSignature({ preview: screen });
     const v = classifyBrainReap({
-      readable: rd.ok, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
+      readable: rd.readable, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
     });
     if (v.verdict === 'gone') {
       delete sessions[handle];
@@ -1171,28 +1227,40 @@ function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
       if (age > maxAgeMs) say && say(`  大脑 ${handle} ${v.reason}（已 ${Math.round(age / 60000)} 分钟）`);
       continue;
     }
-    // close：先留痕再关——close --tab 之后屏面就找不回来了
+    // close：先留痕再关——stop 之后正文就找不回来了
     const silent = !(meta.everMoved || v.everMoved);
     state.brainAudit.closed += 1;
     if (silent) state.brainAudit.silent += 1;
-    if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    let stopped = { ok: true, dryRun: true };
+    if (!dryRun) {
+      stopped = stopBrainSession(handle);
+      if (!stopped.ok) {
+        say && say(`  大脑 ${handle} 该关但 stopSession 没成：${stopped.error}——登记留下，下一轮再关（不许只删登记）`);
+        continue;
+      }
+    }
     delete sessions[handle];
-    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}`);
-    if (silent && screen) say && say(`    最后屏面：${screen.replace(/s+/g, ' ').slice(-200)}`);
+    const stopNote = dryRun ? '（dry-run 没真关）' : 'stopSession 已返回 ok';
+    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}；${stopNote}`);
+    if (silent && screen) say && say(`    最后屏面：${screen.replace(/\s+/g, ' ').slice(-200)}`);
   }
   state.brainSessions = sessions;
 }
 
-/** 从 orca terminal read 的返回里取屏面文本。字段路径别猜——取不到就回 null（没查成）。 */
+/** 从会话读返回里取正文。字段路径别猜——取不到就回 null（没查成）。
+ *  #1055：mirasim session-read 的正路是顶层 `text`；orca 终端形状仍认，给存量测试/对照。 */
 export function brainScreenText(rd) {
   const src = rd && (rd.json || rd.out || rd);
   let j = src;
   if (typeof src === 'string') { try { j = JSON.parse(src); } catch { return null; } }
-  const t = j && (j.result?.terminal || j.terminal || j.result || j);
+  if (!j || typeof j !== 'object') return null;
+  if (typeof j.text === 'string' && j.text) return j.text;
+  const t = j.result?.terminal || j.terminal || j.result || j;
   if (!t) return null;
   if (Array.isArray(t.tail)) return t.tail.join('\n');
   if (typeof t.screen === 'string') return t.screen;
   if (typeof t.content === 'string') return t.content;
+  if (typeof t.text === 'string' && t.text) return t.text;
   return null;
 }
 
@@ -1272,7 +1340,7 @@ export function patrolExitCode({ unscanned = [], outOfBounds = 0 } = {}) {
 
 /** 注入那一句：短到不会被 TUI 当粘贴块，只说「全文在哪、先读它」。 */
 export function patrolInjectText(briefPath) {
-  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完打 exit 退出。`;
+  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完自行结束会话。`;
 }
 
 /** 巡检任务书全文。existing 是 listObservations 的三态结果，直接决定「已有报告」那一段怎么写。 */
@@ -1355,7 +1423,7 @@ export function patrolBriefText({ obsDir = 'docs/observations', existing = null,
     '## 时间与收尾',
     '',
     `你最多有 ${minutes} 分钟，到点会被强制关掉。所以顺序是：**先把最小的一份报告写完并推上去，再回头深挖**。`,
-    '干完打 `exit` 退出——退了才不占位子。',
+    '干完自行结束会话——退了才不占位子。',
     '',
   ].join('\n');
 }
@@ -1639,4 +1707,5 @@ if (isDirectRun) main();
 export {
   buildSituation, situationHealth, escalateKey, scanStall,
   enumerateMirasimWorktrees, collectMirasimSessionFacts, countInflightWorkers,
+  reapBrains,
 };

@@ -227,8 +227,11 @@ function hub(subject, moment, extra = {}) {
   return { kind: 'notify-hub', subject, moment, ...extra };
 }
 
-// 态势的五节。scan 每节标 scanned:true/false。
-export const SITUATION_SECTIONS = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
+// 态势的必查节。scan 每节标 scanned:true/false。
+// #1055：orca 运行时 2026-09-06 退役，这一节再也不可能被扫出来。留在必查清单里
+// fail-closed 总闸就永远合上（每天最后一行都是「没查成的节：orca」）——搬走真相源、
+// 检查器判据还钉在旧位置。观察面若还扫，不进本清单、不当闸。
+export const SITUATION_SECTIONS = ['github', 'reviewPending', 'prReviews', 'stall'];
 
 // 复审重试：上一票的宽限期与上限。
 // 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
@@ -276,7 +279,8 @@ export const ACTION_NEEDS = {
   // MIRASIM_IS_ONLY_PATH），orca 节查不查得到都不影响这两个动作能不能干成。
   // 摘之前实测过后果：orca-serve 一停，这里的 fail-closed 让 commander 一个动作都不产，
   // 整条自动化停摆——依赖表没跟上执行体切换，就成了退役的最后一道锁。
-  // orca 仍留在 SITUATION_SECTIONS 里当观察面（退役期要看它还剩什么），只是不再当闸。
+  // #1055：orca 也不再进 SITUATION_SECTIONS——只摘 ACTION_NEEDS 不够，总闸按节清单
+  // 合上，退役后每天仍刷「没查成的节：orca」。
   dispatch: ['github', 'prReviews'],
   rework: ['github', 'prReviews'],
   'attach-reviewer': ['github', 'reviewPending'],
@@ -820,7 +824,7 @@ function collectCandidates(situation) {
  *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
  *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
- *   orca:          { scanned, worktrees:[...], error }
+ *   orca:          观察面（#1055 起不进必查清单；退役后 scanned:false 不当闸）
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker,source,error}], error }
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
