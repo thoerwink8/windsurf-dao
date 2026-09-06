@@ -70,22 +70,45 @@ describe('机制一：框架单不进自动派单队列（走快马）', () => {
 // （stampIssueLabels）要等派工成功之后才跑——豁免的开关只有「被派过工」才自动打开，
 // 而豁免的目的正是阻止派工。所以裸「已消歧」的新单一张都接不住，全靠下面这条判据兜。
 //
-// 判据：缺标签只在**半标态**报（有一个缺一个）；两个都没有 = 从没瞄准过派工车道 → 静默。
-// 下面两条是这条判据的判别对，缺哪一条都等于没证：
-//   · 红样本（改前会炸单）——只带「已消歧」、无 type/体系、两个标都没有 → 必须完全静默；
-//   · 正样本（防过度纠正）——半标态 → 必须照旧报帅，别把整条判据删没了。
-describe('缺标签只在半标态报（堵住 [待拍板] missing-labels 的自我繁殖）', () => {
-  it('红样本：只带「已消歧」、无 type/体系、model|reviewer 两个都没有 → 完全静默，不生报帅单', async () => {
+// 判据三档（#1003；硬边界：不许改回「缺任一就报」）：
+//   · 半标态（有一个缺一个）→ 报帅（或 #971 能推出唯一跨厂值就自己补）；
+//   · 两个都没有 + 人手打过非体系 type/ → 报帅（#1000/#1001 实咬：标了 type/写码 以为派出去了）；
+//   · 两个都没有 + 无 type/ → 静默（记账单；2026-09-05 关 4 张生 4 张的自我繁殖坑）。
+// B（无 type/）和 C（type/体系）是判别性反例：把它们也报出来 = 自我繁殖坑复现。
+describe('缺标签三档（堵住自我繁殖，同时把瞄准派工车道的双缺报出来）', () => {
+  it('B 红样本：只带「已消歧」、无任何 type/、model|reviewer 两个都没有 → 完全静默，不生报帅单', async () => {
     const { decide } = await CORE;
-    // 现实原型：#950/#953/#956/#960——帅位新开的单默认就长这样，一天生了 #957/#958/#959/#961 四张。
+    // 现实原型：#950/#953/#956/#960——帅位新开的记账单默认就长这样，一天生了 #957/#958/#959/#961 四张。
     const issue = { number: 960, title: '退役 CLI 还在 PATH 里没人报', labels: labels('已消歧') };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
     assert.equal(
       byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels').length, 0,
-      '两个标都没有 = 从没瞄准过派工车道，不是漏标——报了就会天天为同一张单生新单',
+      '无 type/ + 两个标都没有 = 记账单，不是漏标——报了就会天天为同一张单生新单',
     );
     assert.equal(byKind(r, 'dispatch').length, 0, '静默跳过不等于放行：没有 model 绝不许派');
     assert.deepEqual(r.actions.map((a) => a.kind), ['noop'], '要的是「盘面无事」，不是换个 kind 继续刷屏');
+  });
+
+  it('A：已消歧 + type/写码、两个都没有 → 报帅补标签（人手瞄准了派工车道）', async () => {
+    const { decide } = await CORE;
+    // 现实原型：#1000/#1001——帅位标了 已消歧 + type/写码，以为派出去了，两轮 commander-act 静默。
+    const issue = { number: 1000, title: 'exhausted 没有出口', labels: labels('已消歧', 'type/写码') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1, '人手打过 type/写码 = 瞄准了派工车道，双缺必须报');
+    assert.equal(e[0].issue, 1000);
+    assert.match(e[0].why, /type\/写码/);
+    assert.equal(byKind(r, 'dispatch').length, 0, '双缺绝不派');
+  });
+
+  it('A 旁路：已消歧 + type/查证（非体系 type）、两个都没有 → 同样报帅', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 1003, title: '别的非体系 type', labels: labels('已消歧', 'type/查证') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1, '任何非体系 type/ 都算瞄准了派工车道');
+    assert.equal(e[0].issue, 1003);
+    assert.equal(byKind(r, 'dispatch').length, 0);
   });
 
   it('正样本：半标态（有 model 没 reviewer）→ 照旧报帅补标签，且点名缺的是哪个', async () => {
@@ -97,6 +120,17 @@ describe('缺标签只在半标态报（堵住 [待拍板] missing-labels 的自
     assert.equal(e[0].issue, 941);
     assert.match(e[0].why, /reviewer\//, '要点名缺的是 reviewer/');
     assert.equal(byKind(r, 'dispatch').length, 0, '缺 reviewer 绝不派');
+  });
+
+  it('D：已消歧 + type/写码 + 只有 model → 维持现有半标报法', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 941, title: '半标且瞄准了车道', labels: labels('已消歧', 'type/写码', 'model/grok-4.6') };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1, '半标报法不因多了 type/写码 而变');
+    assert.equal(e[0].issue, 941);
+    assert.match(e[0].why, /reviewer\//);
+    assert.equal(byKind(r, 'dispatch').length, 0);
   });
 
   it('正样本（反过来）：有 reviewer 没 model → 同样报帅', async () => {
