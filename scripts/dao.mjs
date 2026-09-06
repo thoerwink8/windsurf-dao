@@ -3006,8 +3006,25 @@ function reuseReviewerOnTerminal({
   };
 }
 
+/**
+ * 交卷动作的执行体：显式 --executor 优先，没给就按「人在哪棵树里」认。
+ *
+ * 2026-09-06 实咬：mirasim 工人按任务书交卷，书上那行命令没带 `--executor mirasim`，
+ * 于是走了 orca 那条脊——起审官失败，**却报退出码 0**，工人看着像交卷成功了，
+ * 实际审官一条上游调用都没发出去、登记也没写，PR 静默等着没人审。
+ *
+ * 光把旗标补进任务书不够：「记得传旗标」是必漏的手工动作（判例 hand-typed-constant-will-be-wrong，
+ * 同一形状今天撞了三次）。工人在哪棵树里是**当场可查的事实**，就别让它去记。
+ * 判据用 mirasim runtime 自己建树的根（ensureWorkspace 落点），不是猜路径。
+ */
+function executorFromCwd(cwd) {
+  const p = String(cwd || '').replace(/\\/g, '/');
+  return /(^|\/)mirasim-worktrees\//.test(p) ? 'mirasim' : null;
+}
+
 function cmdWorkerDone(args) {
-  if (args.executor && args.executor !== 'orca') return cmdWorkerDoneMirasim(args);
+  const executor = args.executor || executorFromCwd(process.cwd());
+  if (executor && executor !== 'orca') return cmdWorkerDoneMirasim({ ...args, executor });
   // #677：本命令只交 GitHub 卷 + 起审官。Orca 结算（notify --type worker_done）不走这里。
   // 成功退出后士兵 Dispatch 必须仍是 ready/waiting，不许 completed。失败不得假装已下班。
   if (!args.pr) fail('worker-done 要 --pr');

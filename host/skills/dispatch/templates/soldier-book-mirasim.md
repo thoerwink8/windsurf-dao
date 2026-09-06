@@ -56,8 +56,13 @@
 2. **调原子完工命令**——发完工/返工评论，并按需起审官：
 
    ```bash
-   node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件>
+   node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
    ```
+
+   **`--executor mirasim` 一个字都不能少**（2026-09-06 实咬）：`worker-done` 的分岔判据是
+   `args.executor && args.executor !== 'orca'`，不传就默认走 orca 那条脊——你人在 mirasim 会话里，
+   却被送回 orca 的交卷通道，起审官必然失败，而且**它会报退出码 0**，你看着像交卷成功了。
+   那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
    命令自己看盘面起/复用审官。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。

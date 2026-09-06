@@ -639,6 +639,25 @@ describe('mirasim 单轨派工硬闸', () => {
     assert.equal(p.executor, 'mirasim');
   });
 
+  // 交卷执行体按「人在哪棵树里」认（2026-09-06 实咬）：任务书那行 worker-done 漏了
+  // --executor mirasim，mirasim 工人被送回 orca 交卷通道，起审官失败却报退出码 0。
+  // 光把旗标补进文档不够——「记得传旗标」是必漏的手工动作，判据必须落在代码里。
+  it('worker-done 不给 --executor 时，按 cwd 认出 mirasim 树', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    assert.match(src, /function executorFromCwd/);
+    assert.match(src, /args\.executor \|\| executorFromCwd\(process\.cwd\(\)\)/);
+  });
+
+  it('cwd 判据只认 mirasim-worktrees 这一段，不被相似前缀骗过', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const m = src.match(/return (\/\(\^\|\\\/\)mirasim-worktrees\\\/\/)\.test\(p\)/);
+    assert.ok(m, '判据正则被改了，重新确认边界：mirasim-worktrees-fake 不许判成 mirasim');
+    const re = new RegExp('(^|/)mirasim-worktrees/');
+    assert.equal(re.test('/home/orca/mirasim-worktrees/windsurf-dao/dao-1003'), true);
+    assert.equal(re.test('/home/orca/orca/workspaces/windsurf-dao/ISSUE-1'), false);
+    assert.equal(re.test('/home/orca/mirasim-worktrees-fake/x'), false);
+  });
+
   // merge-policy 落账本（2026-09-06 接通，真机验过审官能读回）。
   // 审官侧 lookupReviewerMergePolicy 按 flag > ledger > comment > fallback('auto') 恢复：
   // 不写这条账本，审官对每张单都拿 fallback 的 auto——**显式派成 manual 的单会被自动合并**。
