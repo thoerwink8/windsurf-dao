@@ -128,7 +128,40 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
     const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
-  return { ok: true, unscanned: false, refs, labels: collected };
+  return { ok: true, unscanned: false, refs, labels: collected, title: String(meta.title || '') };
+}
+
+/**
+ * 宿主前缀 → 真实供应商家族（起审官同厂闸的兜底来源，2026-09-06）。
+ *
+ * 为什么需要它：同厂闸要知道工人是谁，来源只有署名单的 `model/*` 标签，而那个标签的唯一
+ * 自动写入方是 `stampIssueLabels`——**派工成功之后**才调。于是工人开的 PR 天然有标签，
+ * **帅位手开的 PR 一个都没有**，起审官当场拒（「扫完没有 model/*」），PR 就停在没人审，
+ * 每 45 分钟重试一次、3 次后永远停住。实咬：PR #1070。
+ *
+ * 判据用 commit/PR 标题的宿主前缀（CLAUDE.md「commit 标题以宿主标识开头」）。它定不到
+ * 具体模型，但**定得到家族**，而同厂闸要的正是家族（vendorFamilyOf 按 id 前缀取家族，
+ * 家族名本身就是合法 id）。定不到就拒——不猜。
+ *
+ * **`pi` 故意不在表里**：pi 是多供应商宿主，上游报错时会在 1 毫秒内静默切到同 model id
+ * 的另一个 provider（判例 memory `pi-silent-provider-fallback`），家族推不出来。
+ * 漏登记一个宿主的代价是「照旧拒绝起审官」（今天的行为），猜错一个家族的代价是
+ * **同厂闸放行了同厂审官**——两边不对称，所以这张表宁缺勿滥。
+ */
+export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze({
+  cc: 'claude',   // Claude Code：只跑 Anthropic 模型
+  codex: 'gpt',   // Codex CLI：只跑 OpenAI 模型
+  grok: 'grok',   // xAI
+});
+
+/** 从标题首个 `[宿主]` 前缀推家族。推不出返回 {ok:false}——调用方按「没查成」处置，不许猜。 */
+export function vendorFamilyFromHostPrefix(title) {
+  const m = /^\s*\[([a-z0-9_-]+)\]/i.exec(String(title || ''));
+  if (!m) return { ok: false, why: '标题没有 [宿主] 前缀' };
+  const host = m[1].toLowerCase();
+  const family = HOST_PREFIX_VENDOR_FAMILY[host];
+  if (!family) return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
+  return { ok: true, host, family };
 }
 
 export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
@@ -146,7 +179,34 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   }
   if (!collected.ok) return collected;
   const picked = requireWorkerModel(collected.labels);
-  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  if (picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  // 标签这条路走不通时的兜底，**只对「扫完确实没有 model/*」这一种**：
+  //   · state 'unscanned'（标签列表没拿到）不兜底——没查成必须继续拒，兜底会把「查不成」
+  //     变成「查过了是 claude」，正是 fail-closed 最怕的那种降级；
+  //   · state 'many'（多个 model/*）不兜底——那是要人消歧的真歧义，猜一个只会掩盖它。
+  if (picked.state === 'none') {
+    const guess = vendorFamilyFromHostPrefix(collected.title);
+    if (guess.ok) {
+      return {
+        ok: true,
+        state: 'one',
+        source: 'host-prefix',
+        // 家族名本身是合法 id：vendorFamilyOf('claude') === 'claude'。不编造具体版本号——
+        // 宿主前缀定得到家族，定不到型号，而同厂闸只要家族。
+        modelId: guess.family,
+        host: guess.host,
+        refs: collected.refs,
+        labels: collected.labels,
+      };
+    }
+    return {
+      ...picked,
+      source: 'label',
+      error: `${picked.error}；宿主前缀也推不出家族（${guess.why}）`,
+      refs: collected.refs,
+      labels: collected.labels,
+    };
+  }
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
