@@ -135,6 +135,7 @@ export function judgeNudge({ id, issue, prs, branch, lease } = {}) {
   }
 
   // ② 租约 held = 人还在。startSession 会再起一条，正是 #1007 一晚 18 次的环路。
+  // ok:true 只认精确的 free/held；缺 verdict / unknown 当没查成（fail-close，PR #1102 红项）。
   if (!lease || lease.ok !== true) {
     const err = (lease && lease.error) || '没给租约面';
     return { action: 'unscanned', kind: 'lease', reason: `${who} 租约没查成，不推：${err}` };
@@ -144,6 +145,14 @@ export function judgeNudge({ id, issue, prs, branch, lease } = {}) {
       action: 'skip',
       kind: 'held',
       reason: `${who} 人还在，不另起一条：${lease.why || '租约 held'}`,
+    };
+  }
+  if (lease.verdict !== 'free') {
+    const seen = Object.prototype.hasOwnProperty.call(lease, 'verdict') ? JSON.stringify(lease.verdict) : '缺';
+    return {
+      action: 'unscanned',
+      kind: 'lease',
+      reason: `${who} 租约没查成，不推：verdict 不是 free/held（${seen}）`,
     };
   }
 

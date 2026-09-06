@@ -318,6 +318,56 @@ describe('没查成 ≠ 没有：unscanned 不许起会话', () => {
     assert.equal(got.kind, 'lease');
   });
 
+  it('租约成功信封缺 verdict → unscanned，不当成 free（#1102 红项）', async () => {
+    const { judgeNudge } = await import(LIB);
+    const got = judgeNudge({
+      id: id('工人', 1056),
+      issue: issue('OPEN'),
+      prs: prs([OPEN_1056]),
+      branch: branch('dao-1056'),
+      lease: { ok: true },
+    });
+    assert.equal(got.action, 'unscanned');
+    assert.equal(got.kind, 'lease');
+    assert.match(got.reason, /没查成/);
+  });
+
+  it('租约 ok:true 但 verdict unknown → unscanned，不当成 go', async () => {
+    const { judgeNudge } = await import(LIB);
+    const got = judgeNudge({
+      id: id('工人', 1056),
+      issue: issue('OPEN'),
+      prs: prs([OPEN_1056]),
+      branch: branch('dao-1056'),
+      lease: { ok: true, verdict: 'unknown' },
+    });
+    assert.equal(got.action, 'unscanned');
+    assert.equal(got.kind, 'lease');
+    assert.match(got.reason, /没查成/);
+  });
+
+  it('runNudge：ok:true 但缺/非法 verdict 零起会话，exit 2', async () => {
+    const { runNudge, nudgeExitCode } = await import(LIB);
+    for (const broken of [{ ok: true }, { ok: true, verdict: 'unknown' }]) {
+      const started = [];
+      const out = await runNudge({
+        go: true,
+        records: [{ workdir: TREE_1056, runState: 'incomplete', updatedAt: '2026-09-07T03:37:00Z', agent: 'pi' }],
+        exists: () => true,
+        lookupIssue: () => issue('OPEN'),
+        lookupPrs: () => prs([OPEN_1056]),
+        readBranch: () => branch('dao-1056'),
+        checkLease: () => broken,
+        startSession: async (a) => { started.push(a); return { sessionKey: 'no' }; },
+        workerPrompt: '继续',
+        reviewPrompt: '继续审',
+      });
+      assert.equal(started.length, 0);
+      assert.equal(out.unscanned.length, 1);
+      assert.equal(nudgeExitCode(out), 2);
+    }
+  });
+
   it('runNudge 对 unscanned 零起会话，并记进 out.unscanned', async () => {
     const { runNudge } = await import(LIB);
     const started = [];
