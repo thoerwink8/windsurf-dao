@@ -35,6 +35,13 @@ import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
 
 /**
+ * 「树里有人在干活」的原因名。**它是背压，不是失败**——调用方要能把它跟真失败分开：
+ * 真失败该报帅开单，背压只该排队下一轮。分不开的后果实测过：指挥官会为每一次
+ * 「这轮先不派」开一张待拍板单，那正是 2026-09-06 清掉的那类噪音单。
+ */
+export const LEASE_BUSY_REASON = 'lease-held';
+
+/**
  * 扫 /proc，列出「在某棵树里干活的会话进程」。
  *
  * @returns {{ok:true, procs:Array<{pid:number,comm:string,cwd:string}>, resolved:number, total:number}
