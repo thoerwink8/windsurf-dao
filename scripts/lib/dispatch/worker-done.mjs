@@ -125,7 +125,12 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
     let parsed;
     try { parsed = JSON.parse(iv.out); }
     catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
-    const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
+    // 缺字段 / null / 非数组 = 没查成，不是「扫完 0 条」。把它们归一成 []
+    // 会让宿主前缀兜底把「没查成」变成「查过了是 claude」（PR #1079 审官红项 2）。
+    if (!parsed || !Array.isArray(parsed.labels)) {
+      return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 缺 labels 数组（没查成，不许当扫完 0 条）` };
+    }
+    const names = parsed.labels.map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
   return { ok: true, unscanned: false, refs, labels: collected, title: String(meta.title || '') };
@@ -148,20 +153,23 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
  * 漏登记一个宿主的代价是「照旧拒绝起审官」（今天的行为），猜错一个家族的代价是
  * **同厂闸放行了同厂审官**——两边不对称，所以这张表宁缺勿滥。
  */
-export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze({
+export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze(Object.assign(Object.create(null), {
   cc: 'claude',   // Claude Code：只跑 Anthropic 模型
   codex: 'gpt',   // Codex CLI：只跑 OpenAI 模型
   grok: 'grok',   // xAI
-});
+}));
 
 /** 从标题首个 `[宿主]` 前缀推家族。推不出返回 {ok:false}——调用方按「没查成」处置，不许猜。 */
 export function vendorFamilyFromHostPrefix(title) {
   const m = /^\s*\[([a-z0-9_-]+)\]/i.exec(String(title || ''));
   if (!m) return { ok: false, why: '标题没有 [宿主] 前缀' };
   const host = m[1].toLowerCase();
-  const family = HOST_PREFIX_VENDOR_FAMILY[host];
-  if (!family) return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
-  return { ok: true, host, family };
+  // 只认表的自有键。普通对象上 `[constructor]` / `[__proto__]` 会命中原型、返回 ok:true
+  //（后者 family 甚至是对象），把「推不出就拒」变成放行（PR #1079 审官红项 1）。
+  if (!Object.hasOwn(HOST_PREFIX_VENDOR_FAMILY, host)) {
+    return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
+  }
+  return { ok: true, host, family: HOST_PREFIX_VENDOR_FAMILY[host] };
 }
 
 export function resolveWorkerFromPr({ pr, runGh, model } = {}) {

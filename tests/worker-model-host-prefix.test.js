@@ -40,6 +40,19 @@ describe('宿主前缀 → 供应商家族', () => {
     assert.equal(vendorFamilyFromHostPrefix(null).ok, false);
   });
 
+  // 审官红项 1（PR #1079）：普通对象上 HOST_PREFIX_VENDOR_FAMILY[host] 会命中原型。
+  // [constructor] → ok:true 无 family；[__proto__] → ok:true 且 family 是对象。
+  it('原型属性 [constructor] / [__proto__] 必须推不出（fail-closed）', async () => {
+    const { vendorFamilyFromHostPrefix } = await WD;
+    const ctor = vendorFamilyFromHostPrefix('[constructor] x');
+    assert.equal(ctor.ok, false, JSON.stringify(ctor));
+    assert.equal(ctor.host, 'constructor');
+    const proto = vendorFamilyFromHostPrefix('[__proto__] x');
+    assert.equal(proto.ok, false, JSON.stringify(proto));
+    assert.equal(proto.host, '__proto__');
+    assert.notEqual(typeof proto.family, 'object');
+  });
+
   // 兜底产出的 modelId 必须能被同厂闸真的解析出家族——这是两个模块之间的契约，
   // 只测「返回了 claude」不够，得测同厂闸拿到它算得出 claude。
   it('兜底产出的 id 能被 vendorFamilyOf 解析（跨模块契约）', async () => {
@@ -89,6 +102,56 @@ describe('resolveWorkerFromPr 什么时候才许兜底', () => {
     const got = resolveWorkerFromPr({ pr: '1', runGh: fakeGh({ title: '[cc] x', labels: [], issueOk: false }) });
     assert.equal(got.ok, false);
     assert.equal(got.unscanned, true);
+  });
+
+  // 审官红项 2（PR #1079）：labels 缺失 / null / 非数组被归一成 []，标题 [cc]
+  // 就会走宿主前缀兜底返回 claude。没查成 ≠ 扫完 0 条。
+  const malformedGh = (issueOut) => (args) => {
+    if (args[0] === 'pr' && args[1] === 'view') {
+      return { ok: true, out: JSON.stringify({ title: '[cc] x', body: '署名 issue #999', reviews: [] }) };
+    }
+    if (args[0] === 'issue' && args[1] === 'view') {
+      return { ok: true, out: issueOut };
+    }
+    throw new Error('未预期的 gh 调用：' + args.join(' '));
+  };
+
+  it('issue JSON 缺 labels / labels:null / 非数组 → unscanned，不兜底', async () => {
+    const { resolveWorkerFromPr, collectIssueLabelsFromPr, planWorkerDone } = await WD;
+    for (const [name, out] of [
+      ['缺字段 {}', '{}'],
+      ['labels:null', JSON.stringify({ labels: null })],
+      ['labels 非数组', JSON.stringify({ labels: 'model/claude' })],
+    ]) {
+      const collected = collectIssueLabelsFromPr({ pr: '1', runGh: malformedGh(out) });
+      assert.equal(collected.ok, false, `${name} collect 应拒 → ${JSON.stringify(collected)}`);
+      assert.equal(collected.unscanned, true, `${name} 应标 unscanned`);
+      const resolved = resolveWorkerFromPr({ pr: '1', runGh: malformedGh(out) });
+      assert.equal(resolved.ok, false, `${name} resolve 应拒 → ${JSON.stringify(resolved)}`);
+      assert.equal(resolved.unscanned, true, `${name} resolve 应 unscanned，不得兜成 claude`);
+      assert.notEqual(resolved.source, 'host-prefix');
+      const planned = planWorkerDone({
+        pr: '1079',
+        runGh: malformedGh(out),
+      });
+      assert.equal(planned.ok, false, `${name} 首审应拒 → ${JSON.stringify(planned)}`);
+      assert.equal(planned.unscanned, true, `${name} 首审应 unscanned`);
+    }
+  });
+
+  it('真实空数组仍是「扫完 0 条」，标题 [cc] 才许兜底', async () => {
+    const { collectIssueLabelsFromPr, resolveWorkerFromPr } = await WD;
+    const collected = collectIssueLabelsFromPr({
+      pr: '1',
+      runGh: fakeGh({ title: '[cc] x', labels: [] }),
+    });
+    assert.equal(collected.ok, true, JSON.stringify(collected));
+    assert.equal(collected.unscanned, false);
+    assert.deepEqual(collected.labels, []);
+    const got = resolveWorkerFromPr({ pr: '1', runGh: fakeGh({ title: '[cc] x', labels: [] }) });
+    assert.equal(got.ok, true);
+    assert.equal(got.source, 'host-prefix');
+    assert.equal(got.modelId, 'claude');
   });
 
   it('多个 model/* → 不兜底（那是要人消歧的真歧义）', async () => {
