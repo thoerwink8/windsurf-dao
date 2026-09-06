@@ -369,6 +369,23 @@ function collectCandidates(situation) {
     dispatchSlots = 0;
     admissionUnscanned = true;
   }
+  // #1007 二期：**起会话的动作共用一个预算**，不是各管各的。
+  // 审官现在算进在途分母（它吃同一份 CPU 和内存），那它就必须同样消耗名额——
+  // 只改分母不改消耗，等于让新派单被限住、审官照旧不限张，闸只挡了一半。
+  //
+  // 优先级是「收尾先于开新」（工作队列常识：在制品堆着不收尾，吞吐只会更差）。
+  // 复审票的数量本轮一开始就知道，所以先把名额留出来，剩下的才给新派单；
+  // 返工与复审共用剩余额度，谁先跑到谁先拿。
+  let slotsLeft = dispatchSlots;
+  const finishReserve = Math.min(slotsLeft, (rp.items || []).length);
+  const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
+  /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
+  const takeSlot = () => {
+    if (slotsLeft <= 0) return false;
+    slotsLeft -= 1;
+    return true;
+  };
+
   let admissionReported = false;
   const reportAdmission = (kind) => {
     if (admissionReported) return;

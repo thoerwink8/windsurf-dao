@@ -12,11 +12,6 @@
 // 垫片 maxDispatchPerRound 本单退役：策略里不再有「派几个」可填常量。
 // 安全余量、负载阈值是「留多少余量」，不是「派几个」。
 
-/** 审官卡：卡名带「审官」。与 board-gc 同一条，不另造一份判据。 */
-function isReviewerCard(name) {
-  return /审官/.test(String(name || ''));
-}
-
 /** 安全余量 / 负载阈值——「留多少余量」，不是「派几个」。 */
 export const ADMISSION_DEFAULTS = {
   // 实测 2026-09-06：12 个工人把 6 核打到 loadavg 6.29（归一化 ≈ 1.05）、空闲 10%。
@@ -137,119 +132,20 @@ export function estimateWorkerMb(samples, { minPairs = ADMISSION_DEFAULTS.minSam
   return { ok: true, workerMb: median, pairs: used.length };
 }
 
-/**
- * 在途真工人。跟 board-gc 同一把尺：
- *   - 主树 / 归档不算
- *   - 审官卡不算（审官不是烧机器的工人）
- *   - 僵尸卡（zombieIds）不算成真工人
- *   - 活着看 aliveIds：至少有一个会话判 active 的卡
- * worktrees / aliveIds / zombieIds 任一不是预期类型 → unscanned（fail-close，不当成 0 在途）。
+/*
+ * 在途数不在本文件算了（#1007 二期）。原来这里有四个函数：isReviewerCard /
+ * countLiveWorkers / classifyMirasimTreePath / countLiveWorkersFromSessionFacts，
+ * 整层删掉，三条理由各自成立：
+ *
+ *  1. 分母是错的——isReviewerCard 把审官树跳过，可审官吃同一份 CPU 和内存。
+ *     2026-09-06 实测 137 个会话里审官 53 个；漏掉一半分母，余量必然算大。
+ *  2. 判据是错的——靠 mirasim 的 record.json 推活性，而它的 runPid 是 server 自己的
+ *     pid、updatedAt 不随推进刷新（memory mirasim-runpid-is-server-pid）。
+ *  3. 自己查自己——用 mirasim 的记账判「mirasim 有几个会话在跑」。
+ *
+ * 现在只有一把尺：lib/dispatch/lease.mjs 的 busyTrees / checkInFlight，从 /proc 直读，
+ * 工人审官一视同仁，与租约闸同源。
  */
-export function countLiveWorkers({ worktrees, aliveIds, zombieIds } = {}) {
-  if (!Array.isArray(worktrees)) {
-    return { ok: false, unscanned: true, error: '盘面没查成（worktrees 不是数组），在途数不当成 0', count: null };
-  }
-  if (!(aliveIds instanceof Set)) {
-    return { ok: false, unscanned: true, error: '活性没查成（没给 alive 集合），在途数不当成 0', count: null };
-  }
-  if (!(zombieIds instanceof Set)) {
-    return { ok: false, unscanned: true, error: '僵尸名单没查成（没给 zombie 集合），在途数不当成 0', count: null };
-  }
-  let count = 0;
-  for (const w of worktrees) {
-    if (!w || w.isMainWorktree === true || w.isArchived) continue;
-    const id = w.worktreeId || w.id;
-    if (!id) continue;
-    const name = w.displayName || w.name || '';
-    if (isReviewerCard(name)) continue;
-    if (zombieIds.has(id)) continue;
-    if (!aliveIds.has(id)) continue;
-    count += 1;
-  }
-  return { ok: true, count };
-}
-
-function normPath(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-/**
- * mirasim 工作树路径 → 工人 / 审官。布局是 `~/mirasim-worktrees/<仓>/<分支>`。
- * 认不出不猜（临时目录、baseline 树不是在途工人）。
- */
-export function classifyMirasimTreePath(p) {
-  const s = normPath(p);
-  const r = /(?:^|\/)dao-review-pr-(\d+)$/.exec(s);
-  if (r) return { kind: '审官', n: Number(r[1]), id: s };
-  const w = /(?:^|\/)dao-(\d+)(?:-\d+)?$/.exec(s);
-  if (w) return { kind: '工人', n: Number(w[1]), id: s };
-  return null;
-}
-
-function matchTreePath(cwd, treePaths) {
-  const c = normPath(cwd);
-  if (!c) return null;
-  let best = null;
-  for (const p of treePaths) {
-    const t = normPath(p);
-    if (!t) continue;
-    if (c === t || c.startsWith(`${t}/`)) {
-      if (!best || t.length > best.length) best = t;
-    }
-  }
-  return best;
-}
-
-/**
- * 用会话存活事实数在途真工人。treePaths 是两层枚举出来的绝对路径；
- * sessionFacts 是已经过 liveness 判定的 { cwd, state }。
- * 任一工人树对上 unscanned 会话 → 整闸 fail-close，不按目录数、不按「全部 alive」猜。
- */
-export function countLiveWorkersFromSessionFacts({ treePaths, sessionFacts } = {}) {
-  if (!Array.isArray(treePaths)) {
-    return { ok: false, unscanned: true, error: '工作树清单没查成，在途数不当成 0', count: null };
-  }
-  if (!Array.isArray(sessionFacts)) {
-    return { ok: false, unscanned: true, error: '会话存活事实没查成，在途数不当成 0', count: null };
-  }
-  const worktrees = [];
-  for (const p of treePaths) {
-    const c = classifyMirasimTreePath(p);
-    if (!c) continue;
-    worktrees.push({
-      id: c.id,
-      path: c.id,
-      displayName: c.kind === '审官' ? `PR-${c.n} 审官` : `ISSUE-${c.n} 工人`,
-      isMainWorktree: false,
-      isArchived: false,
-    });
-  }
-  const byTree = new Map();
-  for (const fact of sessionFacts) {
-    if (!fact) continue;
-    const tree = matchTreePath(fact.cwd, treePaths);
-    if (!tree) continue;
-    if (!byTree.has(tree)) byTree.set(tree, []);
-    byTree.get(tree).push(fact.state);
-  }
-  const aliveIds = new Set();
-  const zombieIds = new Set();
-  for (const w of worktrees) {
-    if (isReviewerCard(w.displayName)) continue;
-    const states = byTree.get(w.id) || [];
-    if (states.includes('unscanned')) {
-      return {
-        ok: false,
-        unscanned: true,
-        error: `工作树 ${w.id} 活性没查成，在途数不当成猜测`,
-        count: null,
-      };
-    }
-    if (states.includes('active')) aliveIds.add(w.id);
-    else if (states.length) zombieIds.add(w.id);
-  }
-  return countLiveWorkers({ worktrees, aliveIds, zombieIds });
-}
 
 /**
  * 还能收几个工人。纯函数，喂快照。

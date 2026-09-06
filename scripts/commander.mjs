@@ -42,7 +42,8 @@ import {
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
-import { admitCapacity, countLiveWorkers, countLiveWorkersFromSessionFacts } from './lib/admission.mjs';
+import { admitCapacity } from './lib/admission.mjs';
+import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
@@ -213,124 +214,26 @@ function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
   } catch { /* 样本写不进不挡本轮判定 */ }
 }
 
-/** 两层枚举 `~/mirasim-worktrees/<仓>/<分支>`。读不了整闸 fail-close，不按一层仓目录数。 */
-function enumerateMirasimWorktrees(root) {
-  if (!root) return { ok: false, unscanned: true, error: 'mirasim 工作树根没给，在途数没查成' };
-  if (!existsSync(root)) {
-    return { ok: false, unscanned: true, error: `mirasim 工作树根不在（${root}）——在途数没查成` };
-  }
-  let repos;
-  try {
-    repos = readdirSync(root, { withFileTypes: true });
-  } catch (e) {
-    return { ok: false, unscanned: true, error: `工作树根读不了：${String(e.message || e).slice(0, 120)}` };
-  }
-  const paths = [];
-  for (const repo of repos) {
-    if (!repo.isDirectory() || repo.name.startsWith('.')) continue;
-    const repoPath = join(root, repo.name);
-    let kids;
-    try {
-      kids = readdirSync(repoPath, { withFileTypes: true });
-    } catch (e) {
-      return { ok: false, unscanned: true, error: `仓目录 ${repo.name} 读不了：${String(e.message || e).slice(0, 120)}` };
-    }
-    for (const k of kids) {
-      if (!k.isDirectory() || k.name.startsWith('.')) continue;
-      paths.push(join(repoPath, k.name));
-    }
-  }
-  return { ok: true, paths };
-}
-
-/** 读 mirasim 会话档案，用 liveness 同一把尺判 active / silent / done / unscanned。 */
-function collectMirasimSessionFacts(root) {
-  if (!root) return { ok: false, unscanned: true, error: 'mirasim 会话档案根没给，在途数没查成' };
-  if (!existsSync(root)) {
-    return { ok: false, unscanned: true, error: `mirasim 会话档案不在（${root}）——在途数没查成` };
-  }
-  let agents;
-  try {
-    agents = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.'));
-  } catch (e) {
-    return { ok: false, unscanned: true, error: `会话档案读不了：${String(e.message || e).slice(0, 120)}` };
-  }
-  const facts = [];
-  for (const agent of agents) {
-    let ids;
-    try {
-      ids = readdirSync(join(root, agent.name), { withFileTypes: true }).filter((d) => d.isDirectory());
-    } catch (e) {
-      return { ok: false, unscanned: true, error: `会话目录 ${agent.name} 读不了：${String(e.message || e).slice(0, 120)}` };
-    }
-    for (const id of ids) {
-      const recPath = join(root, agent.name, id.name, 'record.json');
-      let rec;
-      try { rec = JSON.parse(readFileSync(recPath, 'utf8')); }
-      catch (e) {
-        return { ok: false, unscanned: true, error: `会话 ${agent.name}/${id.name} record 读不了，不当成活着` };
-      }
-      const cwd = rec && (rec.workdir || rec.cwd);
-      if (!cwd) continue; // 对不上工作树的会话不进在途，不把整闸打成没查成
-      const session = sessionFromMirasimSession({
-        key: rec.sessionId || rec.sessionKey || `${agent.name}:${id.name}`,
-        title: rec.title,
-        state: rec.runState ?? rec.state,
-        cwd,
-        lastActivityAt: rec.updatedAt ?? rec.lastActivityAt,
-      });
-      if (!session) {
-        return { ok: false, unscanned: true, error: `会话 ${agent.name}/${id.name} 转不成存活事实` };
-      }
-      facts.push({ cwd, state: assessLiveness(session).state });
-    }
-  }
-  return { ok: true, facts };
-}
-
-function inflightFromOrcaCards(worktrees) {
-  const trees = Array.isArray(worktrees) ? worktrees : [];
-  const workers = trees.filter((w) => w && !w.isMainWorktree && !w.isArchived);
-  if (!workers.length) return { ok: true, count: 0, empty: true };
-  const live = listLiveTerminals();
-  if (!live.ok) {
-    return { ok: false, unscanned: true, error: live.error || 'orca 终端清单没查成，在途数不当成猜测' };
-  }
-  const aliveIds = new Set();
-  const zombieIds = new Set();
-  for (const t of live.terminals) {
-    const s = sessionFromOrcaTerminal(t);
-    if (!s) {
-      return { ok: false, unscanned: true, error: 'orca 终端转不成会话，在途数不当成猜测' };
-    }
-    const a = assessLiveness(s);
-    const id = s.worktreeId;
-    if (!id) continue;
-    if (a.state === 'unscanned') {
-      return { ok: false, unscanned: true, error: `orca 卡 ${id} 活性没查成，在途数不当成猜测` };
-    }
-    if (a.state === 'active') aliveIds.add(id);
-    else zombieIds.add(id);
-  }
-  return countLiveWorkers({ worktrees: trees, aliveIds, zombieIds });
-}
-
-function countInflightWorkers({ worktrees, treeRoot, sessionsRoot } = {}) {
-  const root = treeRoot || process.env.MIRASIM_WORKTREES || join(homedir(), 'mirasim-worktrees');
-  const sessRoot = sessionsRoot || process.env.MIRASIM_SESSIONS || join(homedir(), '.mirasim', 'sessions');
-  const listed = enumerateMirasimWorktrees(root);
-  if (!listed.ok) return listed;
-  const sessions = collectMirasimSessionFacts(sessRoot);
-  if (!sessions.ok) return sessions;
-  const mira = countLiveWorkersFromSessionFacts({
-    treePaths: listed.paths,
-    sessionFacts: sessions.facts,
-  });
-  if (!mira.ok) return mira;
-  const orca = inflightFromOrcaCards(worktrees);
-  if (!orca.ok) return orca;
-  if (orca.empty) return mira;
-  return { ok: true, count: Math.max(mira.count, orca.count) };
+/**
+ * 在途数 = 现在有几棵树被会话占着（#1007）。
+ *
+ * 判据换成租约闸那把尺（lib/dispatch/lease.mjs 的 /proc 扫描），删掉了原来的三层取数：
+ * 两层枚举工作树、读 mirasim 会话档案、再兜一层 orca 卡面取 max。删掉的理由各自成立：
+ *
+ *  · **orca 那层早就死了**（本机 orca 已退役，`orca worktree list` 每轮 exit 2）——
+ *    取 max 意味着它一坏就把整闸拖成 fail-close。
+ *  · **会话档案那层判据是错的**：record.json 的 runPid 是 mirasim-server 自己的 pid，
+ *    而 updatedAt 不随会话推进刷新，两个字段都撑不起活性判定（见 memory
+ *    mirasim-runpid-is-server-pid）。
+ *  · **审官被漏掉了**：原来 `isReviewerCard` 把审官树跳过，可审官吃同一份 CPU 和内存——
+ *    2026-09-06 那晚 137 个会话里审官占 53 个，分母少一半，算出来的余量必然偏大。
+ *
+ * 现在只有一把尺：一棵树里有会话进程在干活就算一个在途，工人审官一视同仁。
+ */
+function countInflightWorkers() {
+  const r = checkInFlight();
+  if (!r.ok) return r;
+  return { ok: true, count: r.count, trees: r.trees };
 }
 
 /**
@@ -1719,6 +1622,6 @@ if (isDirectRun) main();
 
 export {
   buildSituation, situationHealth, escalateKey, scanStall,
-  enumerateMirasimWorktrees, collectMirasimSessionFacts, countInflightWorkers,
+  countInflightWorkers,
   reapBrains,
 };

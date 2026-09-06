@@ -136,6 +136,45 @@ export function judgeTreeLease({ workdir, procs } = {}) {
 }
 
 /**
+ * 现在有几棵树被占着——**在制品的真分母**（#1007）。
+ *
+ * 为什么用「被占的树数」而不是「进程数」：一个会话会顺手拉起 git / bash / node 一堆子进程
+ * （实测一棵树能有十几个），按进程数算会把同一个会话数很多遍。一棵树 = 一个在干活的会话，
+ * 这是与租约闸同一把尺，不另造判据。
+ *
+ * **审官树照数不误。** 原来的准入把审官排除在外（`isReviewerCard` 跳过），那是错的分母：
+ * 审官吃同一份 CPU 和内存，而 2026-09-06 那晚 137 个会话里审官占 53 个。分母漏掉一半，
+ * 算出来的余量必然偏大，闸也就形同虚设。
+ *
+ * @param {Array<{pid,comm,cwd}>} procs
+ * @param {string} root  只数这个根下面的树（默认 mirasim 的工作树根）
+ * @returns {{ok:true, trees:string[], count:number}|{ok:false,unscanned:true,error:string}}
+ */
+export function busyTrees(procs, { root = 'mirasim-worktrees' } = {}) {
+  if (!Array.isArray(procs)) {
+    return { ok: false, unscanned: true, error: '没拿到进程观测数组——在途数不当成 0（fail-close）' };
+  }
+  const seen = new Set();
+  for (const p of procs) {
+    const cwd = String((p && p.cwd) || '').replace(/\/+$/, '');
+    if (!cwd || !cwd.includes(root)) continue;
+    seen.add(cwd);
+  }
+  const trees = [...seen].sort();
+  return { ok: true, trees, count: trees.length };
+}
+
+/**
+ * 生产入口：扫 /proc + 数在途。给派单准入用（#1007）。
+ * 没查成 ⇒ ok:false，调用方必须收紧到不派——读不到 ≠ 可以随便派。
+ */
+export function checkInFlight({ io, root } = {}) {
+  const scan = scanSessionProcs(io || {});
+  if (!scan.ok) return { ok: false, unscanned: true, error: scan.error };
+  return { ...busyTrees(scan.procs, root ? { root } : {}), noServer: scan.noServer === true };
+}
+
+/**
  * 生产入口：扫 /proc + 判。三态返回。
  *
  * @returns {{ok:true, verdict:'free'|'held', ...}|{ok:false, unscanned:true, error:string}}
