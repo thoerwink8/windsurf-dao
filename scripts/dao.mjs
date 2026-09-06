@@ -5709,7 +5709,9 @@ async function cmdStartMirasim(args) {
   const routing = loadOrFail();
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
-  const route = mirasimRouteOrFail(args.model, bind.mirasim);
+  // #1059 合入时仍按旧签名 (model, mirasimPolicy) 调；本 PR 已把 mirasimRouteOrFail
+  // 收成 (args, routing, policy)，不改这一处 dry-run 会在「要显式 --model」上假红。
+  const route = mirasimRouteOrFail(args, routing, bind.policy);
 
   let workdir = typeof args.worktree === 'string' && args.worktree.includes('/')
     ? args.worktree.replace(/^path:/, '')
