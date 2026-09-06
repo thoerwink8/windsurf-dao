@@ -143,6 +143,7 @@ import {
   writeReviewPending,
   listReviewPending,
   drainReviewPending,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -2433,6 +2434,7 @@ function writeReviewPendingOnFail({
     }
     const built = buildReviewPendingTicket({
       pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
+      source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
     });
     if (!built.ok) return built;
     return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });

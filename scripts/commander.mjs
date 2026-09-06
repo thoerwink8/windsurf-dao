@@ -30,7 +30,8 @@ import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
-  REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION,
+  buildReviewPendingTicket,
+  REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
@@ -183,6 +184,7 @@ function scanReviewPending() {
   if (!listed.ok) return { scanned: false, error: listed.error };
   const items = (listed.tickets || []).map((t) => ({
     pr: Number(t.pr), head: t.head || null, reviewer: t.reviewer || null, worker: t.workerWorktree || null,
+    source: t.source || null, error: t.error || null,
   }));
   return { scanned: true, items };
 }
@@ -807,25 +809,22 @@ function requestRereview(action, { state, dryRun, say }) {
     return { ok: false, error };
   }
   const dir = reviewPendingDir({ root: ROOT });
-  const ticket = {
-    kind: REVIEW_PENDING_KIND,
-    v: REVIEW_PENDING_VERSION,
-    pr: String(action.pr),
+  const built = buildReviewPendingTicket({
+    pr: action.pr,
     head: { name: null, oid: action.head || null },
     workerWorktree: null,
-    reviewer: String(action.reviewer),
-    issue: action.issue == null ? null : String(action.issue),
+    reviewer: action.reviewer,
+    issue: action.issue,
     round: 'rereview',
-    workerModel: null,
-    soldierDispatch: null,
-    error: `指挥官自动叫复审：${action.why}`,
+    source: REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
     ts: nowIso(),
-  };
+  });
+  if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
     say(`[dry] 写复审待办 ${dir}/${action.pr}.json（${action.why}）`);
     return { ok: true, dryRun: true };
   }
-  const w = writeReviewPending({ dir, ticket });
+  const w = writeReviewPending({ dir, ticket: built.ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
   state.reworkDispatched = state.reworkDispatched || {};
   // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
