@@ -16,6 +16,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { stallWatchPath } from './agent-stall-detect.mjs';
+import { recordBroadcast } from './broadcast-io.mjs';
 
 export const BREAKER_DEFAULTS = Object.freeze({
   windowHours: 24,
@@ -369,10 +370,9 @@ export function recordEvent(event, {
 }
 
 export function defaultHubSay(text) {
-  const r = spawnSync('hub-say', [String(text)], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
-  if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}` };
-  if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  return { ok: true };
+  const r = recordBroadcast(String(text), { source: 'breaker', now: new Date() });
+  if (!r.ok) return { ok: false, error: r.error || '日报队列写不进' };
+  return { ok: true, queued: true, messageId: r.messageId };
 }
 
 export function defaultOpenIssue({ title, body } = {}) {
