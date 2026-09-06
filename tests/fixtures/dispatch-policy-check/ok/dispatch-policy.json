@@ -12,8 +12,9 @@
     "halfOpenProbes": 1
   },
   "commander": {
-    "maxDispatchPerRound": 2,
-    "requireModelInRouting": true
+    "requireModelInRouting": true,
+    "loadThreshold": 0.85,
+    "memReserveMb": 1536
   },
   "hubChat": {
     "enabled": true,

@@ -38,6 +38,9 @@ import {
   reviewPendingSourceOf,
 } from './dispatch/review-pending.mjs';
 import { resolveMergeable } from './dispatch/git.mjs';
+import {
+  prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
+} from './admission.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -81,26 +84,22 @@ export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
 // 为什么不派：框架活要改的是派单机制本身，让派单机制去派它，等于让手术刀切自己。
 export const FRAMEWORK_ROLE = '体系';
 
-// 指挥官派单策略缺省（#849）：单轮上限 2；派前校验模型在当前选型内。
+// 指挥官派单策略缺省（#1007）：机器余量准入，不再有「每轮派几个」常量。
 export const COMMANDER_POLICY_DEFAULTS = {
-  maxDispatchPerRound: 2,
   requireModelInRouting: true,
+  loadThreshold: 0.85,
+  memReserveMb: 1536,
+  conservativeWorkerMb: 400,
+  minSamplePairs: 4,
+  sampleWindow: 12,
 };
 
-/** 归一 commander 节：maxDispatchPerRound 整数 1~20，越界/缺失用缺省。 */
+/** 归一 commander 节。旧键 maxDispatchPerRound 读到打「已改名」提示，不按它限流。 */
 export function resolveCommanderPolicy(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const n = Number(src.maxDispatchPerRound);
-  const max = Number.isInteger(n) && n >= 1 && n <= 20
-    ? n
-    : COMMANDER_POLICY_DEFAULTS.maxDispatchPerRound;
-  return {
-    maxDispatchPerRound: max,
-    requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
-      ? src.requireModelInRouting
-      : COMMANDER_POLICY_DEFAULTS.requireModelInRouting,
-  };
+  return resolveAdmissionPolicy(raw);
 }
+
+export { RENAMED_KEY_HINT };
 
 /**
  * 派前模型闸（#849）：不在当前选型 → 不派；健康表 red → 不派。
@@ -351,11 +350,42 @@ function collectCandidates(situation) {
   const N = ACTION_NEEDS;
 
   // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
-  // #849：本轮最多派 maxDispatchPerRound 张，超出的排队下轮再派（不丢、不 escalate）。
+  // #1007：闸是机器余量，不是「每轮派几个」。容量没查成 → 一张都不派（fail-close）。
   const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
+  const admission = situation.admission;
+  // 生产路径 buildSituation 必填 admission。夹具缺席 = 不限张（旧测兼容，不当成 0 放开闸的反面）。
+  let dispatchSlots = Infinity;
+  let admissionUnscanned = false;
+  if (admission && admission.ok === false) {
+    dispatchSlots = 0;
+    admissionUnscanned = true;
+  } else if (admission && Number.isInteger(admission.slots)) {
+    dispatchSlots = Math.max(0, admission.slots);
+  } else if (admission != null) {
+    dispatchSlots = 0;
+    admissionUnscanned = true;
+  }
+  let admissionReported = false;
+  const reportAdmission = (kind) => {
+    if (admissionReported) return;
+    admissionReported = true;
+    if (admissionUnscanned) {
+      out.push(withNeeds(esc(`派单准入没查成：${admission?.why || '机器信号读不到'}——不派（fail-close）`, {
+        reason: 'admission-unscanned',
+      }), kind));
+    } else if (dispatchSlots === 0) {
+      out.push(withNeeds(hub(`机器余量不够，这轮不派新单（${admission?.why || 'slots=0'}）`, 'decide'), kind));
+    }
+  };
+  const renamedHint = Array.isArray(policy.renamedKeyHints) && policy.renamedKeyHints[0]
+    ? policy.renamedKeyHints[0] : null;
   if (ready.kind === 'ready') {
+    const readyIssues = ready.ready
+      .map((n) => (gh.issues || []).find((i) => i && i.number === n))
+      .filter(Boolean);
+    const ordered = prioritizeReady(readyIssues, { openIssues: gh.issues || [], openPrs: gh.prs || [] });
     let dispatchedThisRound = 0;
-    for (const n of ready.ready) {
+    for (const n of ordered) {
       const issue = (gh.issues || []).find((i) => i && i.number === n);
       const model = labelValue(issue, 'model/');
       const reviewer = labelValue(issue, 'reviewer/');
@@ -424,10 +454,14 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
-      if (dispatchedThisRound >= policy.maxDispatchPerRound) {
-        continue; // 超上限：排队下轮，不丢、不 escalate（#849 消歧）
+      if (dispatchedThisRound >= dispatchSlots) {
+        reportAdmission(N.dispatch);
+        continue; // 余量用尽 / 没查成：排队下轮，不丢、不 escalate
       }
       dispatchedThisRound += 1;
+      if (renamedHint && dispatchedThisRound === 1) {
+        out.push(withNeeds(hub(renamedHint, 'decide'), N.dispatch));
+      }
       out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
       out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
     }
@@ -574,10 +608,12 @@ function collectCandidates(situation) {
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
       return;
     }
-    // 单轮上限沿用 maxDispatchPerRound（#849：无上限会刷单）。返工走**独立计数**而不是与新派单共用一个：
-    // 新派单循环在本函数更早处跑，共用一个计数会让 ready 队列长期把返工挤掉（判红的 PR 永远等不到人）。
-    // 独立计数同样封死刷单（每轮最多 maxDispatchPerRound 个返工工人），超出的排队下轮，不丢、不 escalate。
-    if (reworkThisRound >= policy.maxDispatchPerRound) return;
+    // 返工也走机器余量，独立计数——新派单循环在本函数更早处跑，共用会让 ready 把返工挤掉。
+    // 余量用尽排队下轮，不丢、不 escalate。夹具没给 admission 时 dispatchSlots=Infinity，返工不限张（旧测兼容）。
+    if (reworkThisRound >= dispatchSlots) {
+      reportAdmission(N.rework);
+      return;
+    }
     reworkThisRound += 1;
     out.push(withNeeds({
       kind: 'rework', pr: pr.number, head, issue: issueNo,

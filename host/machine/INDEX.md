@@ -39,6 +39,8 @@
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
+| D | ~/mirasim-worktrees | mirasim 派工树根（#880）。`scripts/commander.mjs` 在 orca 卡面空时数这里的目录当在途工人数（#1007 准入）。运行态，换机不拷 |
+| A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |

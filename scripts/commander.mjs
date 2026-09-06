@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +40,7 @@ import {
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
+import { admitCapacity, countLiveWorkers } from './lib/admission.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
@@ -59,6 +60,8 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
+const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
+  || join(homedir(), '.dao', 'admission', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -171,10 +174,100 @@ function scanOtherRepos() {
 
 function scanOrca() {
   const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) return { scanned: false, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  if (!wt.ok) {
+    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
+    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
+    // 在途工人改由 scanAdmission 从 mirasim 工作树目录数。
+    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  }
   const worktrees = wt.json?.result?.worktrees;
   if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
   return { scanned: true, worktrees };
+}
+
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); }
+  catch (e) { return { error: String(e.message || e) }; }
+}
+
+function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
+  if (!existsSync(file)) return [];
+  let src;
+  try { src = readFileSync(file, 'utf8'); }
+  catch { return []; }
+  const out = [];
+  for (const line of src.split(/\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* 坏行跳过 */ }
+  }
+  return out;
+}
+
+function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 机器余量准入。纯判定在 admission.mjs；这里只读 /proc 和在途数。
+ * orca 退役后 worktree ps 常失败——失败时在途数 unscanned，整闸 fail-close 不派。
+ */
+function scanAdmission({ worktrees, policy } = {}) {
+  const memRaw = readText('/proc/meminfo');
+  const loadRaw = readText('/proc/loadavg');
+  if (memRaw && memRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
+  }
+  if (loadRaw && loadRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  }
+  const nproc = cpus()?.length;
+  const trees = Array.isArray(worktrees) ? worktrees : [];
+  let inflight;
+  if (trees.length) {
+    inflight = countLiveWorkers({
+      worktrees: trees,
+      aliveIds: new Set(trees
+        .filter((w) => w && !w.isMainWorktree && !w.isArchived)
+        .map((w) => w.worktreeId || w.id)
+        .filter(Boolean)),
+      zombieIds: new Set(),
+    });
+  } else {
+    // orca 卡面空：改数 mirasim 工作树目录。数不到 → fail-close，不当成 0 在途放开闸。
+    const root = process.env.MIRASIM_WORKTREES || join(homedir(), 'mirasim-worktrees');
+    try {
+      const names = readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'));
+      inflight = { ok: true, count: names.length };
+    } catch (e) {
+      inflight = { ok: false, unscanned: true, error: `在途工作树没查成：${String(e.message || e).slice(0, 120)}` };
+    }
+  }
+  if (!inflight.ok) {
+    return { ok: false, unscanned: true, slots: 0, why: inflight.error };
+  }
+  const samples = loadAdmissionSamples();
+  const cap = admitCapacity({
+    meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
+    nproc,
+    inFlight: inflight.count,
+    samples,
+    policy,
+  });
+  if (cap.ok && Number.isFinite(cap.memAvailableMb)) {
+    appendAdmissionSample({
+      at: nowIso(),
+      inFlight: inflight.count,
+      memAvailableMb: cap.memAvailableMb,
+      loadNorm: cap.loadNorm,
+    });
+  }
+  return { ...cap, inFlight: inflight.count };
 }
 
 function scanReviewPending() {
@@ -337,7 +430,8 @@ function buildSituation({ state } = {}) {
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
-    commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
+    commanderPolicy: policy.commander || { requireModelInRouting: true },
+    admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
     reviewerOrder,
