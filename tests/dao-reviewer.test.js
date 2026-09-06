@@ -226,6 +226,30 @@ describe('dao 审官与完工', () => {
         'pickReviewer 三态话面互不相同  →  ' + JSON.stringify({ none: none.error, many: many.error }));
       });
 
+    // 同值重复 ≠ 歧义（PR #1103 实咬）：PR 署名两张 issue 时 collectIssueLabelsFromPr 把两张的
+    // label 拼在一起，两张都写 model/grok-4.6 就被数成 2，判「有多个，不许猜」，审官永远起不来。
+    // 判据本身不动：不同值仍然拒绝。下面四条把「重复」和「打架」钉成两件事。
+    const dupRev = S.pickReviewer(['reviewer/gpt-5.6-luna', 'type/写码', 'reviewer/gpt-5.6-luna']);
+    await t.test('pickReviewer 同一个值出现两次 → 仍是 one，不当成歧义', () => {
+      assert.equal(dupRev.state, 'one');
+      assert.equal(dupRev.modelId, 'gpt-5.6-luna');
+    });
+    const conflictRev = S.pickReviewer(['reviewer/gpt-5.6-luna', 'reviewer/kimi-k3', 'reviewer/gpt-5.6-luna']);
+    await t.test('pickReviewer 去重后仍有两个不同值 → 照旧 many，不许猜', () => {
+      assert.equal(conflictRev.state, 'many');
+      assert.deepEqual(conflictRev.labels, ['reviewer/gpt-5.6-luna', 'reviewer/kimi-k3']);
+    });
+    const dupModel = S.pickModel(['model/grok-4.6', '已消歧', 'model/grok-4.6']);
+    await t.test('pickModel 同一个值出现两次 → 仍是 one，不当成歧义', () => {
+      assert.equal(dupModel.state, 'one');
+      assert.equal(dupModel.modelId, 'grok-4.6');
+    });
+    const conflictModel = S.pickModel(['model/grok-4.6', 'model/claude-opus', 'model/grok-4.6']);
+    await t.test('pickModel 去重后仍有两个不同值 → 照旧 many，不许猜', () => {
+      assert.equal(conflictModel.state, 'many');
+      assert.deepEqual(conflictModel.labels, ['model/grok-4.6', 'model/claude-opus']);
+    });
+
     const lnRev = S.dispatchLabelNames({ model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol' });
     await t.test('label 名含 reviewer/<id>', () => {
       assert.ok(lnRev.includes('reviewer/gpt-5.6-sol') && lnRev.includes('model/grok-4.6'), 'label 名含 reviewer/<id>  →  ' + JSON.stringify(lnRev));
