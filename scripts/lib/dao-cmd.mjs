@@ -1012,7 +1012,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 // ── CLI 参数 ────────────────────────────────────────────────────────
 
 export const VERBS = [
-  'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
+  'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
@@ -1023,7 +1023,9 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
-  start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
+  'session-read': new Set(['--session', '--json', '--help', '-h']),
+  'session-stop': new Set(['--session', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
@@ -1160,7 +1162,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
-                  # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
+                  # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
+  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--dry-run]
+                  # #1055：mirasim 一步到位起一次性会话（prompt 就是注入，不要 start+send 两步）；返回 sessionKey
+  session-read --session <sessionKey>
+                  # #1055：同步读 mirasim 会话（phase / text）；commander reapBrains 的取数路
+  session-stop --session <sessionKey>
+                  # #1055：强关 mirasim 会话；commander 超龄回收走这条
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
                   # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
