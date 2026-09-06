@@ -105,6 +105,43 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 
 `dao-worker` 的 `pull_requests` 现在是 write，因为自动开 PR 的 workflow 还没写（#480）。workflow 上线后降回 read——不做这一步，权限隔离是装饰。
 
+### 分支保护：合并闸在平台上，不在代码里（2026-09-06 用户拍板）
+
+`master` 开了分支保护，required status check = **`check`**（`dao-check` workflow 的 job 名）。
+
+**为什么必须在平台层**：合并有两条路——指挥官的 `merge` 动作带 `prChecksRed` 闸，
+而**审官判绿后自己合**（`reviewer-book` 的 `merge-policy: auto`）走的是裸 `gh pr merge`，没有任何 CI 闸。
+2026-09-05 实咬：PR #972 的 `dao-check` 判 FAILURE（真红，1 项），审官判绿后 41 秒被 `dao-marshal[bot]` 合入。
+后果不止是脏代码进主干——`close-issues` 判「合进但 check 红的不关」，于是署名单 #971 **永远关不掉**，
+带着「已消歧」被指挥官每轮重新派工，无限烧额度。
+
+把闸写进每一条合并路，就永远要靠下一个写路的人记得（同形态本仓已记录五例，
+memory `fix-landed-at-one-call-site-only`）。平台闸没有这个问题：任何身份、任何路径都绕不过。
+
+**关键配置：`enforce_admins: false`，这不是偷懒，是方案成立的前提。**
+
+| 身份 | 干什么 | 受不受闸 |
+|---|---|---|
+| `thoerwink8`（仓主，admin） | 帅位直推 master（本仓工作法） | **不受**——admin 可绕过 |
+| `dao-marshal[bot]`（GitHub App） | 审官/指挥官合 PR | **受**——App 不是 admin，红 PR 合不进去 |
+
+两者身份不同，所以一条配置同时满足「直推照旧」和「机器人合不了红」。
+`enforce_admins` 若设成 true，帅位直推会被自己的闸挡死；若给 marshal 加 bypass，
+审官那条路又原样绕过去了——**这两个坑都踩过一遍才定的这版**。
+
+`strict: false`（不要求分支与 master 同步）：开 true 会让每张 PR 合并前都被迫 rebase，
+在多张 PR 并行时互相踩，churn 远大于收益。
+
+装/查/改：
+
+```bash
+gh api repos/thoerwink8/windsurf-dao/branches/master/protection            # 查
+gh api -X PUT repos/OWNER/REPO/branches/master/protection --input p.json   # 装
+gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆（应急）
+```
+
+**公开仓免费**。本仓 `private=false`，所以这条不花钱。私有仓要 Pro/Team。
+
 ## 4c. 账本事件（~/.dao/ledger/events/）
 
 点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
