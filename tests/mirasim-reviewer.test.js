@@ -444,6 +444,10 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'aborted' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' } }).reuse, true);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'done' } }).reuse, true);
+    // #1056：incomplete 不是在役。phase=done 只说那一轮结束了，会话已经卡死再复用 = 把 PR 锁死在死审官上。
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'done', incomplete: true } }).reuse, false);
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'incomplete' } }).reuse, false);
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, runState: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' }, force: true }).reuse, false);
   });
 

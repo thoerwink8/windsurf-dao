@@ -53,6 +53,9 @@ import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
 } from './lib/exhausted.mjs';
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { readLedgerEvents } from './lib/ledger-query.mjs';
+import { desiredFromEvents } from './lib/session-reconcile.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -179,6 +182,51 @@ function scanOrca() {
   return { scanned: true, worktrees };
 }
 
+/**
+ * 观测集（#1056）：mirasim 会话名单。exit 2 = 没查成（连不上 / 没 token），
+ * exit 0 打 0 行 = 查成且空。两态分不开就会把「没查成」当成「一个活人都没有」去重派。
+ * 不进 SITUATION_SECTIONS：名单没查成只挡住差集重派，不许把合并/叫审官整轮停掉。
+ */
+function scanSessions() {
+  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  if (!existsSync(script)) {
+    return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
+  }
+  const r = spawnSync(process.execPath, [script], {
+    windowsHide: true, encoding: 'utf8', timeout: 20000, cwd: ROOT, env: process.env,
+  });
+  if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
+  if (r.status !== 0) {
+    return {
+      scanned: false,
+      error: String(r.stderr || r.stdout || `mirasim-sessions exit ${r.status}`).trim().slice(0, 240),
+    };
+  }
+  const items = [];
+  for (const line of String(r.stdout || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try { items.push(JSON.parse(t)); } catch { /* 不是会话行，跳过 */ }
+  }
+  return { scanned: true, items };
+}
+
+/**
+ * 期望集（#1056）：事件账里未结的 job.dispatch。不新造台账——账已经有了，本单只读。
+ * 全量读（readLedgerEvents），不用 10 分钟去重窗的索引——差集要的是「现在该在的人」，
+ * 裁掉 10 分钟前的未结派工等于把死工人洗成「账上没有」。
+ */
+function scanDesiredJobs() {
+  let dir;
+  try { dir = ensureLocalLedger({ root: ROOT }).dir; }
+  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, items: [] }; }
+  const listed = readLedgerEvents(dir);
+  if (listed.unscanned) {
+    return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
+  }
+  return desiredFromEvents(listed.events);
+}
+
 function scanReviewPending() {
   let dir;
   try { dir = reviewPendingDir({ root: ROOT }); }
@@ -303,6 +351,8 @@ function buildSituation({ state } = {}) {
   const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
+  const sessions = scanSessions();
+  const desiredJobs = scanDesiredJobs();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let routingModelRecords = null;
@@ -333,6 +383,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, reviewPending, prReviews, stall, otherRepos,
+    sessions, desiredJobs,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -400,7 +451,9 @@ function execAction(action, { state, dryRun, log }) {
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
-        '--spec', dispatchSpec(action.issue), '--confirm'];
+        '--spec', dispatchSpec(action.issue), '--confirm',
+        // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
+        ...(action.reconcile ? ['--allow-dup'] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
@@ -1511,4 +1564,4 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey, scanStall, reapBrains };
+export { buildSituation, situationHealth, escalateKey, scanStall, reapBrains, scanSessions, scanDesiredJobs };

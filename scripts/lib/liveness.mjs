@@ -74,8 +74,11 @@ export function sessionFromMirasimSession(s) {
   if (!s || !s.key) return null;
   const raw = s.state == null ? '' : String(s.state).toLowerCase();
   const terminal = DRIVER_TERMINAL_STATES.get(raw) || null;
+  // incomplete = mirasim 自己的 30 分钟计时：一轮跑完在等下一句话。这是确定的「卡住」，
+  // 不是「没时间戳所以没查成」——2026-09-06 五个工人全是这个态，推一句「继续」就活了。
+  const stalledTurn = raw === 'incomplete';
   const at = parseAt(s.lastActivityAt ?? s.updatedAt ?? s.ts);
-  const unscanned = !terminal && at == null;
+  const unscanned = !terminal && !stalledTurn && at == null;
   return {
     id: String(s.key),
     driver: 'mirasim',
@@ -105,6 +108,14 @@ export function assessLiveness(session, { now = Date.now(), thresholdMs = DEFAUL
   }
   const terminal = DRIVER_TERMINAL_STATES.get(String(session.driverState || '').toLowerCase());
   if (terminal) return { state: 'done', why: `驱动自报 ${session.driverState}` };
+  // incomplete = mirasim 自己判「这一轮卡在等下一句话」。阈值还没到也是卡住——
+  // 不认这一档，routeSilent 的 nudge 永远喂不到今天那种 30 分钟计时样本。
+  const rawState = String(session.driverState || '').toLowerCase();
+  if (rawState === 'incomplete') {
+    const at = parseAt(session.lastProgressAt);
+    const silentMs = at == null ? 0 : Math.max(0, now - at);
+    return { state: 'silent', silentMs, why: 'mirasim 自报 incomplete（一轮跑完在等下一句话）' };
+  }
   const at = parseAt(session.lastProgressAt);
   if (at == null) {
     return { state: 'unscanned', why: '拿不到上次真动时间——没查成，不当活着' };
@@ -148,15 +159,20 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
 }
 
 /**
- * 静默会话按角色分流。审官静默 ⇒ 判死重起（走复审待办队列，一 PR 一审官的闸在那边）；
- * 其余静默 ⇒ 报帅。不在这里直接动手，只给动作意图，执行归调用方。
+ * 静默会话按角色分流。不在这里直接动手，只给动作意图，执行归调用方。
+ *
+ *   审官静默 ⇒ 判死重起（走复审待办队列，一 PR 一审官的闸在那边）
+ *   其余静默 ⇒ 先推一句「继续」（#1056：工人没死，是跑完一轮在等下一句话）
+ *
+ * 垫片 `nudge-stalled.mjs` 退役后，这一档就是对账循环的差集动作入口。
+ * 推不动才由调用方升到重派；本函数不越级。
  */
 export function routeSilent(session) {
   const label = String(session?.label || '');
   const isReviewer = /审官|reviewer/i.test(label);
   return isReviewer
     ? { action: 'restart-reviewer', why: `审官会话静默：${session?.why || ''}` }
-    : { action: 'escalate', why: `会话静默：${session?.why || ''}` };
+    : { action: 'nudge', why: `会话静默：${session?.why || ''}——先推一句继续，推不动才重派` };
 }
 
 // ── 推进签名：把「有输出」和「有推进」分开 ────────────────────────────────────

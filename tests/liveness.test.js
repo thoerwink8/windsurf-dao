@@ -54,19 +54,20 @@ describe('活性：mirasim 驱动', () => {
     assert.equal(S.assessLiveness(s, { now: NOW }).state, 'done');
   });
 
-  it('incomplete 且没有活动时间戳 → unscanned（明说缺时间戳，不猜还活着）', async () => {
+  it('incomplete 且没有活动时间戳 → silent（一轮跑完在等下一句话，不是没查成）', async () => {
     const S = await LOAD;
     const s = S.sessionFromMirasimSession({ key: 'codex:2', title: 'x', state: 'incomplete' });
     const a = S.assessLiveness(s, { now: NOW });
-    assert.equal(a.state, 'unscanned');
-    assert.match(a.why, /没有活动时间戳|没查成/);
+    assert.equal(a.state, 'silent');
+    assert.match(a.why, /incomplete/);
+    assert.equal(S.routeSilent(s).action, 'nudge', '工人 incomplete 先推一句继续');
   });
 
-  it('有活动时间戳就按时间判', async () => {
+  it('incomplete 不管时间戳新不新都是 silent——阈值还没到也是卡在等话', async () => {
     const S = await LOAD;
     const fresh = S.sessionFromMirasimSession({ key: 'k', state: 'incomplete', lastActivityAt: min(3) });
     const stale = S.sessionFromMirasimSession({ key: 'k', state: 'incomplete', lastActivityAt: min(500) });
-    assert.equal(S.assessLiveness(fresh, { now: NOW }).state, 'active');
+    assert.equal(S.assessLiveness(fresh, { now: NOW }).state, 'silent');
     assert.equal(S.assessLiveness(stale, { now: NOW }).state, 'silent');
   });
 });
