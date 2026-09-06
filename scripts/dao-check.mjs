@@ -1300,7 +1300,21 @@ function checkOrcaRetirement() {
     return;
   }
   if (trees.length === 0) {
-    green('orca 退役：存量树已清零——可以停 orca-serve 并执行退役清单（dao.mjs 里搜「整段删」）');
+    // 判据写的是「0 棵树 且 orca-serve 已 disabled 且那条脊已删」，就得三样都算。
+    // 只数树会让闸一直喊「可以停服务了」——即使早就停了，判据与检查对不上（本仓 #880
+    // 进度表同款病：说的和查的不是一回事）。
+    const unit = spawnSync('systemctl', ['is-enabled', 'orca-serve'], { encoding: 'utf8', windowsHide: true });
+    const enabled = String(unit.stdout || '').trim();
+    const spineGone = !readFileSync(join(ROOT, 'scripts', 'dao.mjs'), 'utf8').includes('orca 退役时整段删');
+    if (enabled === 'enabled') {
+      green('orca 退役：存量树已清零——下一步 systemctl disable orca-serve');
+      return;
+    }
+    if (!spineGone) {
+      green(`orca 退役：树清零 + 服务已 ${enabled || '停用'}——只剩删代码（dao.mjs 里搜「整段删」那段）`);
+      return;
+    }
+    green('orca 退役：判据三条全满足（树 0 / 服务停用 / 脊已删）——这个西瓜可以从 initiatives.json 摘了');
     return;
   }
   // 趋势闸：退役中的目标，量的必须是**单调**的。今天实咬（2026-09-06）——我在切流量，

@@ -272,9 +272,13 @@ export function reviewerLabelFor(gh = {}, pr) {
 // escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
 // 审官 #840 红①要求：不靠各分支散落 if 挡 unscanned，改在 decide 入口按此表统一 fail-closed。
 export const ACTION_NEEDS = {
-  dispatch: ['github', 'orca', 'prReviews'],
-  // rework 也要建树起工人：orca 没查成时一律不派（与 dispatch 同口径 fail-closed）。
-  rework: ['github', 'orca', 'prReviews'],
+  // 2026-09-06 摘掉 orca 依赖：派工/返工的建树起工人已切 mirasim（dao.mjs 的
+  // MIRASIM_IS_ONLY_PATH），orca 节查不查得到都不影响这两个动作能不能干成。
+  // 摘之前实测过后果：orca-serve 一停，这里的 fail-closed 让 commander 一个动作都不产，
+  // 整条自动化停摆——依赖表没跟上执行体切换，就成了退役的最后一道锁。
+  // orca 仍留在 SITUATION_SECTIONS 里当观察面（退役期要看它还剩什么），只是不再当闸。
+  dispatch: ['github', 'prReviews'],
+  rework: ['github', 'prReviews'],
   'attach-reviewer': ['github', 'reviewPending'],
   rereview: ['github', 'prReviews'],
   merge: ['github', 'prReviews'],

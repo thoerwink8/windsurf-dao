@@ -255,16 +255,28 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('stall')));
   });
 
-  it('红①绕过d：orca.scanned=false + 当前 head 判红 → 不产 rework（返工也要建树，#931）', async () => {
+  // #931 原判据是「返工也要建树，orca 没查成就不产 rework」。2026-09-06 建树起工人切到
+  // mirasim 后这个前提没了：orca 查不到不影响返工能不能干成，继续拿它当闸就是把
+  // 「旧执行体的健康」变成新执行体的阻塞——实测 orca-serve 一停，commander 一个动作都不产。
+  // 判别力没丢：下一条钉的是 prReviews 没查成时仍然 fail-closed。
+  it('orca 没查成不再挡 rework——建树起工人已切 mirasim', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
       prReviews: { scanned: true, byPr: { 4: { reviews: [redReview('一处要改', 'h4')] } } },
       orca: { scanned: false, error: 'worktree ps 没查成' },
     }));
-    assert.equal(byKind(r, 'rework').length, 0, 'orca 没查成时 rework 一律不产');
-    assert.equal(byKind(r, 'notify-hub').length, 0, '随附回流也一并不产');
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('orca')));
+    assert.equal(byKind(r, 'rework').length, 1, 'orca 与返工已无关，照产');
+  });
+
+  it('prReviews 没查成 → rework 仍一律不产（fail-closed 判别力没随 orca 一起丢）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '判不出红项就不许派返工');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('prReviews')));
   });
 
   it('红①绕过c：prReviews.scanned=false + 已消歧 issue → 不产 dispatch/notify-hub', async () => {
