@@ -1,0 +1,13 @@
+# 故意违规样本（#1037）：Type=simple + Restart=on-failure。
+# 干净退出（status=0）时 systemd 撒手，运行时静悄悄躺死。
+# 闸必须当场拦住这一份——合并证据是拦截记录，不是「已加上」。
+
+[Unit]
+Description=deliberately wrong resident unit
+
+[Service]
+Type=simple
+User=orca
+ExecStart=/bin/true
+Restart=on-failure
+RestartSec=5
