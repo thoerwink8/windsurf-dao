@@ -170,6 +170,21 @@
           "cli_model": "gw-windsurf/gemini-3-7-flash-high"
         }
       ]
+    },
+    "消歧": {
+      "模型": [
+        {
+          "id": "grok-4.6",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-09-06 用户当场指定 grok（xAI）做消歧官；通道沿用 gw/grok-4.6（#1006）",
+          "拍板": "2026-09-06",
+          "status": "试用",
+          "trial_since": "2026-09-06",
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
+        }
+      ]
     }
   },
   "审官": {

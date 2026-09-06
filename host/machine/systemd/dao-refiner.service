@@ -1,0 +1,37 @@
+# /etc/systemd/system/dao-refiner.service
+#
+# 消歧官：给「已消歧」这道只有读没有写的闸补上执行者（#1006）。
+# 判据在 scripts/lib/refine-core.mjs：边界清楚才打三标进队；有岔路打「待拍板」
+# 并评论列岔路；type/体系 与「待消歧」一律不打标。拿不准要人拍，不许猜。
+#
+# GitHub 读失败退出 2（没查成）。不许把没查成当成「这轮 0 张待消歧」。
+# 写下失败退出 1。查成（含真的 0 张）退出 0。
+#
+# 身份默认 marshal（指挥官今天打标走的就是它）。日后切 dao-refiner[bot]
+# 改 ExecStart 加 --as <role>，不改判定。
+#
+# 装法：sudo bash scripts/install-dao-refiner.sh
+# 验：  systemctl list-timers | grep dao-refiner
+#       journalctl -u dao-refiner -n 30
+# 手动预演（不改任何 issue）：
+#       node scripts/refiner.mjs --dry-run
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要把业务逻辑抄进 unit。
+# PATH 显式写死：systemd 不读 orca 的 shell profile。
+
+[Unit]
+Description=windsurf-dao backlog refiner (disambiguation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/refiner.mjs
+# 退出码 2 = 没查成，必须在 systemctl --failed 里看得见。
+# 不设 SuccessExitStatus：这里没有「1 是正常输出」那一档。
+StandardOutput=journal
+StandardError=journal
