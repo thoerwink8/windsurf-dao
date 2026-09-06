@@ -18,10 +18,10 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBoardGc, formatBoardGc, planSalvage, applySalvage } from './lib/board-gc.mjs';
+import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths } from './lib/board-gc.mjs';
 import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
   sessionFromOrcaTerminal,
@@ -135,10 +135,13 @@ function fetchBranchState(worktrees) {
       const masterTree = g(['rev-parse', 'origin/master^{tree}']);
       if (masterTree.code === 0) contributes = mt.out.trim().split('\n')[0].trim() !== masterTree.out.trim();
     }
+    const dirt = dirtFrom({ porcelain: dirty.out });
     map.set(branch, {
       onRemote: remote.code === 0 && remote.out.trim().length > 0,
       ahead: Number(ahead.out.trim()) || 0,
-      dirty: dirty.out.trim() ? dirty.out.trim().split('\n').length : 0,
+      dirty: dirt.dirty,
+      derived: dirt.derived,
+      porcelain: dirty.out,
       contributes,
     });
   }
@@ -274,25 +277,52 @@ function main() {
     final = applySalvage(plan, results);
   }
 
+  if (!final.ok) {
+    if (args.json) console.log(JSON.stringify(final, null, 2));
+    else console.log(formatBoardGc(final, { apply: args.apply }));
+    process.exit(2);
+  }
+
+  if (args.apply) {
+    const results = new Map();
+    for (const z of final.zombies) {
+      if (Array.isArray(z.derived) && z.derived.length) {
+        const disc = resolveDiscardPaths(z.path, z.derived);
+        if (!disc.ok) {
+          results.set(z.id, { ok: false, error: disc.error });
+          console.log(`清不掉 ${z.name}：${disc.error}`);
+          continue;
+        }
+        try {
+          for (const p of disc.paths) rmSync(p, { force: true, recursive: true });
+        } catch (e) {
+          const msg = `弃派生物失败：${String(e && e.message || e).slice(0, 160)}`;
+          results.set(z.id, { ok: false, error: msg });
+          console.log(`清不掉 ${z.name}：${msg}`);
+          continue;
+        }
+      }
+      const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      const error = (r.err.trim() || r.out.trim()).slice(0, 200);
+      results.set(z.id, r.code === 0 ? { ok: true } : { ok: false, error: error || `exit ${r.code}` });
+      console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);
+    }
+    final = applyBoardGcRemoves(final, results);
+  }
+
   if (args.json) { console.log(JSON.stringify(final, null, 2)); }
   else console.log(formatBoardGc(final, { apply: args.apply }));
 
-  if (!final.ok) process.exit(2);
-
-  if (args.apply) {
-    for (const z of final.zombies) {
-      const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
-      console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + (r.err.trim() || r.out.trim()).slice(0, 200)}`);
-    }
-  }
-
   if (args.say) {
-    const head = `盘面清理：僵尸 ${final.zombies.length} 张${args.apply ? '（已清）' : '（只列未清）'}`
-      + `，要人判 ${final.risky.length} 张，没查成 ${final.unscanned.length} 张`;
+    const clearedN = args.apply ? (final.cleared || []).length : final.zombies.length;
+    const failedN = args.apply ? (final.failed || []).length : 0;
+    const head = args.apply
+      ? `盘面清理：实清 ${clearedN} 张，清不掉 ${failedN} 张，要人判 ${final.risky.length} 张，没查成 ${final.unscanned.length} 张`
+      : `盘面清理：僵尸 ${final.zombies.length} 张（只列未清），要人判 ${final.risky.length} 张，没查成 ${final.unscanned.length} 张`;
     const detail = final.risky.length
       ? '\n要人判：\n· ' + final.risky.map((r) => `${r.name}｜${r.why}`).join('\n· ')
       : '';
-    if (final.zombies.length || final.risky.length) say(head + detail);
+    if (clearedN || failedN || final.zombies.length || final.risky.length) say(head + detail);
   }
 
   process.exit(final.risky.length ? 1 : 0);

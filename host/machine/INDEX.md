@@ -41,6 +41,8 @@
 | D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
+| C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
+| C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
 | A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。`test-impact-map.mjs build` 采覆盖率+读文件记录写 `map.json`，`dao-check --affected` 读它裁剪。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。CI 没有它即退全量，是安全降级。换机重生成 |
@@ -57,6 +59,11 @@
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
+| E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
+| E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |
+| D | ~/.miraquota/contabo-install.json | #881 采样器自己的 installId（不跟 hostname 那行共用，合并按 installId 去重）。运行时自建，换机不拷 |
+| D | ~/.miraquota/contabo-sync-repo | #881 采样器覆盖式发布用的本地 git 工作目录。运行时自建，换机不拷 |
 | D | ~/.pi | pi 产品根。子项见下行，不整目录镜像。onboard 只写 agent/extensions（dao-sync 单元的 ReadWritePaths 因此含这一条）；其余禁拷 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
