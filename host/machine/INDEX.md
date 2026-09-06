@@ -57,6 +57,11 @@
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
+| E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
+| E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |
+| D | ~/.miraquota/contabo-install.json | #881 采样器自己的 installId（不跟 hostname 那行共用，合并按 installId 去重）。运行时自建，换机不拷 |
+| D | ~/.miraquota/contabo-sync-repo | #881 采样器覆盖式发布用的本地 git 工作目录。运行时自建，换机不拷 |
 | D | ~/.pi | pi 产品根。子项见下行，不整目录镜像。onboard 只写 agent/extensions（dao-sync 单元的 ReadWritePaths 因此含这一条）；其余禁拷 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
