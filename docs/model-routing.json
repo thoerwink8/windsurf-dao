@@ -618,8 +618,8 @@
     }
   ],
   "执行体": {
-    "默认": "orca",
-    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider；orca 通过验收后退役。旗标 --executor：reviewer-create/worker-done（卡 C）、dispatch/worktree-create/worker-start（卡 B）",
+    "默认": "mirasim",
+    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。2026-09-06 默认从 orca 翻成 mirasim——orca 运行时已 disabled，留着 orca 当默认等于所有不带 --executor 的调用都落进一条不存在的路（实咬：reviewer-create 报 orca not found，所有 PR 判不了绿）。显式 --executor orca 仍可点名走旧脊。",
     "orca": {
       "说明": "现役运行时：Orca worktree + terminal"
     },
