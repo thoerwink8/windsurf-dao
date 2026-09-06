@@ -85,6 +85,10 @@
 //    commander（requireModelInRouting 布尔；loadThreshold / memReserveMb 是余量参数不是「派几个」；缺 commander 不拦以兼容旧夹具）。
 //    检查器自持解析，不 import preflight.mjs；红/绿/空夹具验判别力；
 //    文件不在 / JSON 坏 / 缺 preflight 或 hubChat 节 = 没查成（hubChat 取值见 #852）。缺 breaker / 越界 = 红。
+// ㉜ 常驻 systemd 必须 Restart=always（#1037）：仓内 host/machine/systemd/*.service
+//    凡不是 Type=oneshot 的必须 Restart=always。只看仓里的模板，不打机器。
+//    RestartPreventExitStatus= 允许存在且不影响判定。检查器自持解析，不复用被检查对象。
+//    红/绿/空夹具验判别力；0 个 .service = 没查成，不是「0 个违规」。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -133,6 +137,9 @@ import {
 import {
   inspectDispatchPolicyFixtures, inspectDispatchPolicyLive,
 } from './lib/dispatch-policy-check.mjs';
+import {
+  inspectUnitRestartDir, inspectUnitRestartFixtures,
+} from './lib/unit-restart-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -2019,6 +2026,8 @@ checkReleasePolicySamples();
 checkReleasePolicyLive();
 checkDispatchPolicySamples();
 checkDispatchPolicyLive();
+checkUnitRestartSamples();
+checkUnitRestartLive();
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -2052,6 +2061,53 @@ function checkDispatchPolicyLive() {
     return;
   }
   green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
+}
+
+function checkUnitRestartSamples() {
+  const r = inspectUnitRestartFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '常驻 Restart=always 闸样本没查成' : '常驻 Restart=always 闸样本对不上',
+      '恢复 tests/fixtures/unit-restart/{red,ok,empty}：红=Type=simple+Restart=on-failure 必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`常驻 Restart=always 闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkUnitRestartLive() {
+  const dir = join(ROOT, 'host', 'machine', 'systemd');
+  if (!existsSync(dir)) {
+    fail('常驻 Restart=always 闸 live 没查成', '恢复 host/machine/systemd/；目录不在 = 没查成，不是 0 个违规', dir);
+    return;
+  }
+  const r = inspectUnitRestartDir({
+    dirRel: 'host/machine/systemd',
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (r.unscanned) {
+    fail(
+      '常驻 Restart=always 闸 live 没查成',
+      'host/machine/systemd/*.service 要扫得到；0 个 = 没查成，不是 0 个违规',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `常驻 systemd 缺 Restart=always ${r.violations.length} 个`,
+      '非 oneshot 必须 Restart=always（干净退出也要拉起来；RestartPreventExitStatus= 是正当豁免，不影响判定）',
+      r.violations.map((v) => `${v.file}: ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
 }
 
 function checkReleasePolicySamples() {
