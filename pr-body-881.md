@@ -17,7 +17,7 @@
 
 | 仓 | 命中 | 结论 |
 |---|---|---|
-| `miraquota-win` | `provider/lib/ledger-sync.mjs` 写 `HEAD:machine/${machineId}`；`docs/MULTI-MACHINE.md` 是契约 | **分片格式与 git 通道的家在这边** |
+| `miraquota-win` | `provider/lib/ledger-sync.mjs` 写 `HEAD:machine/${machineId}`；那边的多机文档是契约 | **分片格式与 git 通道的家在这边** |
 | `windsurf-dao` | 零实现（只有 INDEX / 运维便签提到仓外路径） | **本仓不发明格式** |
 | 本机 `~/.miraquota/sync.json` | 不存在（帅位已查证；在用户 Windows 上） | 不能从本机配置读 remote |
 | 远端 `thoerwink8/miraquota-ledger` | 已有 `machine/c02957cxy`、`machine/desktop-get3dbc`、`machine/vmi3551059` | 格式从实物反推 |
