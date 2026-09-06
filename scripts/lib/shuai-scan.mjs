@@ -34,6 +34,7 @@ query($owner: String!, $name: String!) {
       nodes {
         number
         title
+        body
         updatedAt
         labels(first: 30) { nodes { name } }
         milestone { title }
@@ -133,6 +134,9 @@ export function normalizeGithubGraphql(data) {
   const issues = (repo.issues?.nodes || []).map((i) => ({
     number: i.number,
     title: i.title,
+    // body：待拍板过滤复用 ask-gate，正文里的「依据：花钱」必须带到发卡口（#1103 返工）。
+    // 取不到当空串，不许把字段整个丢掉——下游会只剩标题，红线命中全变成 auto。
+    body: i.body || '',
     updatedAt: i.updatedAt,
     labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
     // #966：派工队列跳过「将来某版」。缺字段当没挂档（旧夹具 / 没查到），不当成推迟。
