@@ -3761,15 +3761,16 @@ function cmdTaskCreate(args) {
 async function cmdWorkerStart(args) {
   const routing = loadOrFail();
   constrainDispatch(args, routing);
+  // 消歧门（#565）：两条脊共用，必须在分岔 / --task 闸之前。
+  // #1071 把默认执行体翻成 mirasim 之后，这道门若留在 orca 分支里，
+  // 带 --issue 的 worker-start 会先被 「不接 --task」拦下——治理门被执行体闸掩盖（#880：只换执行体，不动治理）。
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   const ex = resolveExecutorOrFail(args, routing);
   if (ex.executor === 'mirasim') return cmdWorkerStartMirasim(args, routing, ex);
   // ↓ 以下是 orca 绑定（orca 退役时整段删）
   if (!args.task) fail('worker-start 要 --task');
   if (!args.terminal) fail('worker-start 要 --terminal（不用 --agent，参数在启动模板里）');
-  // 消歧门（#565）：worker-start 带 --issue 同样受门控（项化路径续派/换人时带号）。
-  // 在碰 orca 之前拦：被拦下时不会起任何终端/任务。
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
-  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   // #559 ②：worker_done 后同一终端续 Dispatch 走 worker-start --task <next> --terminal <handle>，
   // 不用 --worktree（工作区由终端决定，官方：Reuse an existing agent only with --terminal <handle>）。
   // #615 缺口：retry-of 复用同一终端、同一条 launch，接不上 nextLaunch。
@@ -3813,8 +3814,7 @@ async function cmdWorkerStartMirasim(args, routing, { policy }) {
   // 同 dispatch：--task 是 orca 语义，出现就拒，不许静默丢（#884 审官 P1，三轮）。
   assertMirasimNoTask(args, 'worker-start');
   if (!args.spec) fail('mirasim worker-start 要 --spec（任务书）');
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
-  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
+  // 消歧门在 cmdWorkerStart 入口（分岔前）已拦过一遍。
   // #884 审官 P1#3（四轮）：超长 --spec 必须在渲染前结构化拒派，不许 buildSoldierInject 甩栈。
   const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   if (!injectGate.ok) fail(injectGate.error, { injectGate, executor: 'mirasim' });
