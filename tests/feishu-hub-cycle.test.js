@@ -8,6 +8,7 @@ const ROOT = path.resolve(__dirname, '..');
 const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
 const LIB = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'feishu-hub-cycle.mjs')));
 const ASK = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'ask-gate.mjs')));
+const SCAN = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'shuai-scan.mjs')));
 
 const REPO = 'thoerwink8/windsurf-dao';
 const POLICY_TEXT = fs.readFileSync(path.join(ROOT, 'docs', 'release-policy.json'), 'utf8');
@@ -137,5 +138,49 @@ describe('planHubCycle', () => {
       assert.equal(applied.daily.sent, false);
       assert.match(applied.daily.error, /没送进群/);
     }
+  });
+});
+
+describe('GraphQL 归一化把 issue 正文交给发卡过滤', () => {
+  it('标题普通、正文「依据：花钱」、待拍板 → ask / 发卡', async () => {
+    const { GITHUB_GRAPHQL, normalizeGithubGraphql } = await SCAN;
+    const { planHubCycle } = await LIB;
+    assert.match(GITHUB_GRAPHQL, /issues\([\s\S]*?nodes \{[\s\S]*?\bbody\b/);
+
+    const gh = normalizeGithubGraphql({
+      repository: {
+        issues: {
+          nodes: [{
+            number: 1103,
+            title: '随便修一下',
+            body: '依据：花钱',
+            updatedAt: '2026-09-07T00:00:00Z',
+            labels: { nodes: [{ name: '待拍板' }] },
+          }],
+        },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(gh.ok, true);
+    assert.equal(gh.issues.length, 1);
+    assert.equal(gh.issues[0].body, '依据：花钱');
+
+    const r = planHubCycle({
+      situation: {
+        github: { scanned: true, issues: gh.issues, prs: gh.prs },
+        admission: { inFlight: 0 },
+      },
+      repo: REPO,
+      hubPending: {},
+      policy: await policy(),
+      digestState: { queue: { day: '', items: [] }, lastSentDay: '', lastSnapshot: null },
+      now: '2026-09-07',
+    });
+    assert.equal(r.reconcile.ok, true);
+    assert.equal(r.reconcile.actions.length, 1);
+    assert.equal(r.reconcile.actions[0].kind, 'issue');
+    assert.equal(r.reconcile.actions[0].issue.number, 1103);
+    assert.equal(r.reconcile.actions[0].issue.body, '依据：花钱');
+    assert.match(r.reconcile.actions[0].why, /human_holds/);
   });
 });
