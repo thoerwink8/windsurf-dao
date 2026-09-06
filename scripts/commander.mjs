@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -188,7 +188,8 @@ function scanTrees() {
   return scanMirasimTrees({
     repo: REPO.split('/')[1] || undefined,
     readdir: (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name),
-    exists: existsSync,
+    // statSync 而不是 existsSync：后者在权限错误时也回 false，会把「读不了」洗成「没有树」。
+    stat: statSync,
     join,
   });
 }

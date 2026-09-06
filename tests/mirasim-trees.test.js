@@ -15,13 +15,23 @@ const path = require('node:path');
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-trees.mjs').replace(/\\/g, '/');
 const CORE = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/');
 
-/** 假文件系统：dirs 是 { 路径: [子目录名] }。没列的路径 = 不存在。 */
-function fakeIo(dirs, { throwOn } = {}) {
+/**
+ * 假文件系统：dirs 是 { 路径: [子目录名] }。没列的路径 = ENOENT（确实不存在）。
+ * statThrows 是 { 路径: 错误码 }——模拟权限错误这类「探不了」，它与 ENOENT 必须不同命运。
+ */
+function fakeIo(dirs, { readdirThrows, statThrows = {} } = {}) {
   return {
     join: (...xs) => xs.join('/'),
-    exists: (p) => Object.prototype.hasOwnProperty.call(dirs, p),
+    stat: (p) => {
+      const code = statThrows[p];
+      if (code) { const e = new Error(code); e.code = code; throw e; }
+      if (!Object.prototype.hasOwnProperty.call(dirs, p)) {
+        const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
+      }
+      return { isDirectory: () => true };
+    },
     readdir: (p) => {
-      if (throwOn && p === throwOn) throw new Error('EACCES');
+      if (readdirThrows && p === readdirThrows) throw new Error('EACCES');
       return dirs[p] || [];
     },
   };
@@ -71,7 +81,7 @@ describe('scanMirasimTrees：扫完是 0 与没查成必须不同形', () => {
 
   it('目录读不了 → scanned:false（不许当成没有树）', async () => {
     const { scanMirasimTrees } = await import(LIB);
-    const io = fakeIo({ '/m': ['windsurf-dao'], '/m/windsurf-dao': ['dao-965'] }, { throwOn: '/m/windsurf-dao' });
+    const io = fakeIo({ '/m': ['windsurf-dao'], '/m/windsurf-dao': ['dao-965'] }, { readdirThrows: '/m/windsurf-dao' });
     const r = scanMirasimTrees({ root: '/m', ...io });
     assert.equal(r.scanned, false);
     assert.match(r.error, /没查成/);
@@ -83,6 +93,51 @@ describe('scanMirasimTrees：扫完是 0 与没查成必须不同形', () => {
     const r = scanMirasimTrees({ root: '/m' });
     assert.equal(r.scanned, false);
     assert.match(r.error, /没查成/);
+  });
+
+  // 审官 PR #1075 判红第 1 条：`existsSync` 在权限错误时也回 false，
+  // 于是「目录不可访问」又被洗成「没有树」——本文件要消除的 fail-open，换个地方原样复现。
+  it('**判别性**：树根 EACCES → scanned:false，不许当成空盘面', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const io = fakeIo({ '/m': ['windsurf-dao'] }, { statThrows: { '/m': 'EACCES' } });
+    const r = scanMirasimTrees({ root: '/m', ...io });
+    assert.equal(r.scanned, false, '树根读不了却报了空盘面 → 所有单都会被重复派');
+    assert.match(r.error, /EACCES/);
+    assert.equal(r.empty, undefined, '不许打 empty 标——那是「确实没有」的标');
+  });
+
+  it('**判别性**：仓目录 EACCES → scanned:false，不许静默跳过', async () => {
+    const { scanMirasimTrees } = await import(LIB);
+    const io = fakeIo(
+      { '/m': ['windsurf-dao'], '/m/windsurf-dao': ['dao-965'] },
+      { statThrows: { '/m/windsurf-dao': 'EACCES' } },
+    );
+    const r = scanMirasimTrees({ root: '/m', ...io });
+    assert.equal(r.scanned, false, '跳过这个仓目录 = 它下面的树全不算在途 = 全被重复派');
+    assert.match(r.error, /EACCES/);
+  });
+
+  it('ENOENT 与 EACCES 命运不同：前者是空盘面，后者是没查成', async () => {
+    const { probeDir } = await import(LIB);
+    const mk = (code) => (p) => { const e = new Error(code); e.code = code; throw e; };
+    assert.equal(probeDir(mk('ENOENT'), '/x').kind, 'no');
+    assert.equal(probeDir(mk('ENOTDIR'), '/x').kind, 'no');
+    assert.equal(probeDir(mk('EACCES'), '/x').kind, 'unscanned');
+    assert.equal(probeDir(mk('EPERM'), '/x').kind, 'unscanned');
+    assert.equal(probeDir(mk('EIO'), '/x').kind, 'unscanned');
+    assert.equal(probeDir(() => ({ isDirectory: () => true }), '/x').kind, 'yes');
+    assert.equal(probeDir(() => ({ isDirectory: () => false }), '/x').kind, 'no', '是文件不是目录 = 没有这个树目录');
+    assert.equal(probeDir(null, '/x').kind, 'unscanned');
+  });
+
+  it('commander.mjs 用的是 statSync 不是 existsSync（判据别只活在 lib 里）', async () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+    const i = src.indexOf('function scanTrees(');
+    assert.ok(i > -1, 'scanTrees 没了——本闸判据已失效，不是通过');
+    const block = src.slice(i, src.indexOf('\n}', i) + 2);
+    assert.match(block, /stat: statSync/, '传 existsSync 会把权限错误洗成「没有树」');
+    assert.equal(/exists:\s*existsSync/.test(block), false, 'existsSync 又回来了');
   });
 });
 

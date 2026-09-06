@@ -30,19 +30,48 @@ export function identifyTreeDir(name) {
 }
 
 /**
+ * 目录探测三态。**不能用 `existsSync`**（审官 PR #1075 判红第 1 条实咬）：
+ * 它在权限错误等 stat 失败时同样回 false，于是「目录不可访问」又被洗成「没有树」——
+ * 正是本文件要消除的那个 fail-open，换个地方原样复现。
+ * 只有 ENOENT / ENOTDIR 才算「确实不存在」，其它错误一律没查成。
+ *
+ * @param {(p:string)=>any} stat 抛错时错误对象要带 code（node:fs 的 statSync 就是）
+ * @returns {{kind:'yes'|'no'|'unscanned', error?:string}}
+ */
+export function probeDir(stat, path) {
+  if (typeof stat !== 'function') return { kind: 'unscanned', error: '没给 stat（没查成）' };
+  try {
+    const st = stat(path);
+    if (st && typeof st.isDirectory === 'function' && !st.isDirectory()) {
+      return { kind: 'no' };
+    }
+    return { kind: 'yes' };
+  } catch (e) {
+    const code = e && e.code ? String(e.code) : '';
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'no' };
+    return { kind: 'unscanned', error: `${path} 探不了：${code || String(e?.message || e)}（没查成）` };
+  }
+}
+
+/**
  * 扫 mirasim 在管的树，产出与 orca 盘面兼容的形状（`linkedIssue` / `displayName`），
  * 好让 cardNumbersFromWorktrees 这类既有判定器不用改。
  *
- * @param {{root?:string, repo?:string, readdir:(p:string)=>string[], exists:(p:string)=>boolean, join:(...xs:string[])=>string}} io
+ * @param {{root?:string, repo?:string, readdir:(p:string)=>string[], stat:(p:string)=>any, join:(...xs:string[])=>string}} io
  * @returns {{scanned:boolean, error?:string, worktrees:Array}}
  */
-export function scanMirasimTrees({ root = DEFAULT_MIRASIM_ROOT, repo, readdir, exists, join } = {}) {
-  if (typeof readdir !== 'function' || typeof exists !== 'function' || typeof join !== 'function') {
+export function scanMirasimTrees({ root = DEFAULT_MIRASIM_ROOT, repo, readdir, stat, join } = {}) {
+  if (typeof readdir !== 'function' || typeof stat !== 'function' || typeof join !== 'function') {
     return { scanned: false, error: 'scanMirasimTrees 没拿到 io（没查成，不许当成没有树）', worktrees: [] };
   }
   if (!root) return { scanned: false, error: 'mirasim 树根没给（没查成）', worktrees: [] };
-  if (!exists(root)) {
-    // 根目录不在 = 这台机器上没有 mirasim 在管树，这是**查成了**的空盘面，不是没查成。
+  const rootProbe = probeDir(stat, root);
+  if (rootProbe.kind === 'unscanned') {
+    return { scanned: false, error: `mirasim 树根${rootProbe.error}`, worktrees: [] };
+  }
+  if (rootProbe.kind === 'no') {
+    // 根目录**确实不存在** = 这台机器上没有 mirasim 在管树，这是查成了的空盘面。
+    // 「读不了」走上面那支，不到这里。
     return { scanned: true, worktrees: [], empty: true, why: `树根不在：${root}` };
   }
   let repos;
@@ -54,7 +83,12 @@ export function scanMirasimTrees({ root = DEFAULT_MIRASIM_ROOT, repo, readdir, e
   const worktrees = [];
   for (const r of repos) {
     const dir = join(root, r);
-    if (!exists(dir)) continue;
+    const probe = probeDir(stat, dir);
+    // 仓目录读不了不许静默跳过：跳过 = 它下面的树全不算在途 = 全被重复派。
+    if (probe.kind === 'unscanned') {
+      return { scanned: false, error: `mirasim 仓目录${probe.error}`, worktrees: [] };
+    }
+    if (probe.kind === 'no') continue;
     let names;
     try {
       names = readdir(dir);
