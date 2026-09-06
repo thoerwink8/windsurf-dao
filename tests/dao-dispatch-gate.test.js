@@ -18,7 +18,8 @@ describe('dao 派工硬闸', () => {
     function dispatch(extra, opts = {}) {
       const args = opts.raw ? extra : withSplit(extra);
       // 2026-09-06 切流量后 dispatch 默认走 mirasim。本套守的是 **orca 那条脊**的硬闸——
-      // 它还在服务 32 棵在途树，存量流干前必须继续被测，所以显式点名 orca。
+      // 它已经没有服务对象（2026-09-06 实测 orca 树 0 棵、运行时不在），但代码还在，
+      // 删之前必须继续被测，所以显式点名 orca。
       // mirasim 路径的对等硬闸另有一套（本文件末「mirasim 单轨派工硬闸」）。
       return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'orca', ...args], { encoding: 'utf8', cwd: REPO });
     }
@@ -708,9 +709,10 @@ describe('mirasim 单轨派工硬闸', () => {
     assert.match(fn, /return false/, 'orca 分支要真的回 false');
   });
 
-  it('orca 那条脊还留着——32 棵在途树的 worker-done 还靠它', () => {
+  it('orca 那条脊还留着——删之前要能被显式点名测到', () => {
     const src = fs.readFileSync(CLI, 'utf8');
-    // 切流量 ≠ 删旧路。存量流干前删掉，在途工人交卷就没有落点了。
+    // 切流量 ≠ 删旧路。2026-09-06 实测已无在途 orca 树，但代码删除要走单独一刀，
+    // 不在切流量这一步顺手做（判例 platform-adapter-deleted-while-still-used）。
     assert.match(src, /orca 绑定（派工单 \+ detached 执行体那条脊/);
   });
 

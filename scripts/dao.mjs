@@ -42,7 +42,7 @@ import {
   spawnDispatchExecutor,
   writeDispatchOrder,
 } from './lib/dispatch-queue.mjs';
-import { withWorktreeLockSync } from './lib/dispatch-lock.mjs';
+import { withWorktreeLockSync, withWorktreeLock, defaultLockPath } from './lib/dispatch-lock.mjs';
 import {
   ROOT,
   USAGE,
@@ -1562,7 +1562,9 @@ async function cmdDispatch(args) {
   // issue #1003 → mirasim 派工 → 工人自己干完开出 PR #1025 → 交卷 → 审官 APPROVED → 已合并，
   // 全程 orca 侧零参与（orca workspaces 下始终没有 1025 的卡）。
   // 验收当场暴露并修掉的断点：交卷漏 `--executor` 会被送回 orca 通道**且报退出码 0**（见 executorFromCwd）。
-  // 回退一行：改回 false。orca 那条脊原样留着——它还在服务 32 棵在途树的 worker-done，
+  // 回退一行：改回 false。orca 那条脊原样留着，但 2026-09-06 实测它已经没有服务对象：
+  //   /home/orca/workspaces 下 0 棵树、orca-serve inactive、orca 不在 PATH、runtime.json 不存在。
+  //   「还在服务 32 棵在途树」是更早的说法，别再照抄——留着它是为了显式 --executor orca 还能被测，
   // 存量流干之前不许删（判例 platform-adapter-deleted-while-still-used）。
   // 判据不靠人记：tests/dao-dispatch-gate.test.js「mirasim 单轨派工硬闸」那套跟着这行走。
   // 常量与判据都在模块级（见 executorFromCwd 下方的 MIRASIM_IS_ONLY_PATH / routeToMirasim）：
@@ -2521,8 +2523,17 @@ function invokeReviewerCreateHealed(opts) {
   return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
+/**
+ * 从 **orca 旧脊** 里嵌套调 reviewer-create。
+ *
+ * `--executor orca` 必须显式带上（审官 PR #1071 判红第 1 条实咬）：默认执行体 2026-09-06
+ * 翻成 mirasim 之后，无旗标的嵌套调用会被 `routeToMirasim` 送到 mirasim 路，
+ * 于是旧脊拿回一个形状不对的返回（没有 `reviewerDispatchId`），而 exit code 还是 0——
+ * 「走错路」和「走对了」长得一模一样。
+ * 存量 orca 士兵的任务书里本来就不带 executor，这条不显式贯穿，它们交卷就会被误吞。
+ */
 function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from } = {}) {
-  const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr)];
+  const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr), '--executor', 'orca'];
   if (name) argv.push('--name', String(name));
   if (parentWorktree) argv.push('--parent-worktree', String(parentWorktree));
   if (soldierDispatch) argv.push('--soldier-dispatch', String(soldierDispatch));
@@ -5378,6 +5389,17 @@ function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
  * 同时它本来就该在 `~/.dao/` 下：CLAUDE.md「派生数据不进 git（影响地图、账本、健康表都落
  * ~/.dao/）」。`_flow/` 虽然被 .gitignore 挡住了，但落在仓内就一定跟着树分叉。
  */
+/**
+ * 一 PR 一把锁。**登记本身不是互斥**（审官 PR #1071 判红第 2 条实咬）：
+ * `read → 起会话 → write` 之间没有原子 claim，两棵树并发跑 reviewer-create 时
+ * 都能在对方写盘前读到 missing，于是各起一个 session，后写覆盖前写——
+ * 登记看着只有一条，额度已经烧了两份，「一 PR 一审官」名存实亡。
+ * 锁文件按 PR 分，复用既有的 O_EXCL 原语（持锁进程死了自动拆），不另造一套。
+ */
+function reviewerLockPath(pr) {
+  return join(dirname(defaultLockPath()), `reviewer-${String(pr)}.lock`);
+}
+
 function mirasimRegistry() {
   return defaultReviewerRegistry({
     readFile: p => readFileSync(p, 'utf8'),
@@ -5457,22 +5479,51 @@ async function cmdReviewerCreateMirasim(args) {
     });
   }
 
-  const res = await mirasimReviewerCreate({
-    runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
-    prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
-    syncTree: (p, oid) => gitSyncTreeTo(p, oid),
-    pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
-    models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
-    reviewBranch: `dao-review-pr-${args.pr}`,
-  });
+  // 起会话 + 写登记必须在同一把 per-PR 锁里，并在锁内**再读一次登记**（double-check）：
+  // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
+  const guarded = await withWorktreeLock(async () => {
+    const again = registry.read(args.pr);
+    if (!args.force && again.ok && again.record && again.record.sessionKey) {
+      return { raced: true, record: again.record };
+    }
+    const created = await mirasimReviewerCreate({
+      runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
+      prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+      syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+      pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
+      models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
+      reviewBranch: `dao-review-pr-${args.pr}`,
+    });
+    if (!created.ok) return { res: created };
+    // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
+    return { res: created, w: registry.write(args.pr, {
+      pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+      round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
+      treeHead: created.treeHead || null, ts: Date.now(),
+    }) };
+  }, { lockPath: reviewerLockPath(args.pr) });
+
+  // 锁没拿到 = 没查成，不是「可以起」。硬失败，别在没有互斥的情况下烧第二份额度。
+  if (guarded && guarded.ok === false && guarded.locked === false) {
+    fail(`审官锁没拿到（${guarded.error}）——不在没有互斥的情况下起会话`, {
+      executor: 'mirasim', stage: 'lock', pr: String(args.pr),
+    });
+  }
+  if (guarded.raced) {
+    emit({
+      ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
+      reviewer: picked.modelId, worker: worker.modelId, sessionKey: guarded.record.sessionKey,
+      agent: guarded.record.agent || null, treePath: guarded.record.treePath || null,
+      expectedOid: guarded.record.expectedOid || null,
+      mergePolicy: books.mergePolicy, mergePolicySource: books.source,
+      reuse: { reuse: true, checked: false, why: '锁内复查发现别的进程刚起过（并发抢锁）' },
+      why: '锁内复查：这个 PR 已经有审官会话了（要另起加 --force）',
+    });
+  }
+  const res = guarded.res;
+  const w = guarded.w;
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res });
 
-  // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
-  const w = registry.write(args.pr, {
-    pr: String(args.pr), sessionKey: res.sessionKey, agent: res.agent, treePath: res.treePath,
-    round: 'first', headRefName: res.headRefName, expectedOid: res.expectedOid,
-    treeHead: res.treeHead || null, ts: Date.now(),
-  });
   if (!w || w.ok !== true) {
     fail(
       `审官会话已起（sessionKey=${res.sessionKey}）但写登记失败，判失败（fail-closed，不许当 created）：${(w && w.error) || '写盘没回 ok'}`,
