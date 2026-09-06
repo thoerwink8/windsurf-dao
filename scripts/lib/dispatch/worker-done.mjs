@@ -22,6 +22,18 @@ function labelNameOf(item) {
   return '';
 }
 
+/** 同名出现两次不算歧义：一张 PR 署两张单，两张都打了 model/grok-4.6（#1104 实咬）。 */
+function uniqueNames(names) {
+  const seen = new Set();
+  const out = [];
+  for (const n of names) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
 /**
  * 从 label 列表读出唯一的审官模型。无 IO、可复算。
  * 三态必须输出不同的话：查到一个 / 没有 reviewer/* / 有多个。
@@ -35,9 +47,9 @@ export function pickReviewer(labels) {
       error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
     };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return {
       ok: false,
@@ -68,9 +80,9 @@ export function pickModel(labels) {
   if (labels == null || !Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
   }

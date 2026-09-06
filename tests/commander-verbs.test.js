@@ -714,6 +714,7 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     const body = src.slice(i, src.indexOf("case 'merge':", i));
     assert.match(body, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
     assert.match(body, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    assert.match(body, /'--pr'/, 'drain 必须带本张 PR，毒票不许拖死队列里别的 PR');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
   });
 
