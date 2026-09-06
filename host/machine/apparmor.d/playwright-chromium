@@ -1,0 +1,15 @@
+# Ubuntu 23.10+ 默认 kernel.apparmor_restrict_unprivileged_userns=1，
+# 非特权进程建不了 user namespace，chromium 的沙箱因此起不来，直接 FATAL: No usable sandbox。
+#
+# 两条路：--no-sandbox（把沙箱整个关掉）或本文件（只给这一个二进制放行 userns）。
+# 选后者的理由：这个浏览器的用途正是让人在里面登录 GitHub，沙箱在那一刻最该在。
+# 关沙箱等于「为了能装锁，先把门拆了」。
+#
+# 官方说明：chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
+abi <abi/4.0>,
+include <tunables/global>
+
+profile playwright-chromium /opt/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) {
+  userns,
+  include if exists <local/playwright-chromium>
+}

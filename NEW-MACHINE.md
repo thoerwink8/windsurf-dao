@@ -697,6 +697,68 @@ playwright install --with-deps chromium                        # apt 装系统�
   截图；MCP 侧做一次 stdio `initialize` + `tools/list` + `browser_navigate`，
   拿到 `Page Title: Example Domain` 才算通。
 
+## 13c. 有头浏览器 + VNC：给「只能人亲手点」的事留一条路（2026-09-06）
+
+§13b 那套是无头的，够跑脚本。但有些事**没有 API，只能在浏览器里以账号所有者身份点**——
+建 GitHub App 就是（GitHub 没有 `POST /apps`，PAT 权限再大也建不出来），
+而登录要人输密码和 2FA，无头过不了这一关。
+
+```bash
+sudo -u orca -H env PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+  bash scripts/vnc-browser.sh start [URL]     # 起虚拟屏 + openbox + chromium + x11vnc
+bash scripts/vnc-browser.sh status            # 五格全「活」才算通
+bash scripts/vnc-browser.sh stop              # 用完就停
+```
+
+两条连法：
+
+- **网页（推荐，什么都不用装）**：`sudo bash scripts/vnc-browser.sh web-start` 起 noVNC 桥，
+  然后在任意电脑开 `https://13-140-184-255.sslip.io:6080/vnc.html?autoconnect=1&resize=scale`。
+- **SSH 隧道**（端口不对外时）：`ssh -N -L 5900:127.0.0.1:5900 <ssh 目标>`，VNC 客户端连 `127.0.0.1:5900`。
+
+**密码和 2FA 只经过用户的键盘和那块虚拟屏**，不进日志、不进 AI 上下文。
+登录态落 `~/.dao/browser-profile`，之后脚本带 `--user-data-dir` 指同一处就是已登录状态。
+
+包：`xvfb`（`playwright install --with-deps` 顺带装）、`x11vnc`、`openbox`、`x11-utils`、`novnc`、`websockify`、`certbot`。
+
+**刻意不做成 systemd 常驻**：一块随时可连的远程桌面是长期攻击面，而它一年用不了几次。
+要用现起，用完停（`stop` 会一并关掉 6080 的 ufw 放行）。
+
+### 网页入口的三个决定
+
+1. **必须真证书，不许自签让人点「继续」**。这块屏的用途就是让人在里面输 GitHub 密码和 2FA；
+   自签 + 点继续 = 训练自己忽略证书警告，而那正是中间人攻击唯一需要的东西。
+   域名不用买：**sslip.io** 把 IP 编进域名直接解析（`13-140-184-255.sslip.io`）。
+   **别换 nip.io / duckdns.org**——那两个的 SNI 被整域阻断（judgement memory `sni-blocklist-nipio-duckdns`）。
+   拿证书：临时 `ufw allow 80/tcp` → `certbot certonly --standalone -d <host>` → 立刻 `ufw delete allow 80/tcp`。
+2. **网页桥归 root，不给 orca 补 sudo**。它要读 letsencrypt 私钥、绑端口、改 ufw，
+   但每个工人 agent 都能写这个仓——放宽 orca 的 sudo 等于给所有工人一条提权路
+   （同样的道理写在 `host/machine/sudoers.d/dao-sync` 里，那条也是命令写死不带通配）。
+   所以分两段：X + 浏览器归 orca（`start`），网页桥归 root（`web-start`）。
+3. **每次 start 重新拼 pem**。certbot 自动续期会换 `live/` 的内容；只在第一次拼，
+   续期后就拿着过期证书起服务，而浏览器只会说「证书无效」，不会说「你该重拼了」。
+
+验（外部视角，别只看进程活着）：
+`curl -o /dev/null -w "%{http_code} %{ssl_verify_result}" https://<host>:6080/vnc.html`
+要拿到 `200 0`——`ssl_verify_result=0` 才是证书真的被信任。
+
+### 两个坑（都实咬过）
+
+1. **Ubuntu 23.10+ 会让 chromium 直接 FATAL: No usable sandbox**。
+   真因是 `kernel.apparmor_restrict_unprivileged_userns=1`，非特权进程建不了 user namespace。
+   **不要用 `--no-sandbox` 绕**——这个浏览器的用途正是让人在里面登录 GitHub，
+   沙箱在那一刻最该在，关掉等于「为了装锁先把门拆了」。
+   正解是给这一个二进制单独放行：`/etc/apparmor.d/playwright-chromium`
+   （`profile ... /opt/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) { userns, }`），
+   装完 `apparmor_parser -r` 加载。**这个文件在 /etc，不在仓里，重装机器要照上面重建。**
+2. **chromium 的目录名两种都要认**：老版 `chrome-linux`，playwright 1.6x 起是 `chrome-linux64`。
+   写死一种，另一种就报「找不到浏览器」而真因是版本差异。
+
+**验（别只看进程活着）**：`xwininfo -root -tree | grep -i chrom` 的窗口标题就是页面标题，
+拿到 `"Sign in to GitHub · GitHub - ..."` 才算真加载了。
+第一次跑时脚本把 chromium 的 stderr 丢进了 `/dev/null`，面上只显示「浏览器那格是停的」，
+查不出为什么——现在日志落 `~/.dao/vnc/chrome.log`，起不来会把最后几行打出来。
+
 ## 13.1 「模型好慢」先分段，别先查网络
 
 2026-09-01 两台机同一天各栽一次：用户报「模型好慢」，两边都先去查网关、查 Clash、查节点，
