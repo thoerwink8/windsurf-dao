@@ -1,3 +1,5 @@
+处置：#1104
+
 # 机制巡检：dao-nudge-stalled 文件在 /etc、timer 是 disabled，⑱ 按 list-timers 扫所以看不见
 
 ## 结论
