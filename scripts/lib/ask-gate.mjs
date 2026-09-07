@@ -1,6 +1,6 @@
 // scripts/lib/ask-gate.mjs —— 「这件事该问用户，还是我自己拍」的判据。
 //
-// 改这段代码前必须知道的五条：
+// 改这段代码前必须知道的六条：
 //
 // 1. 判据早就有了，缺的是触发。docs/release-policy.json（用户 2026-09-03 拍板）里
 //    human_holds 那四条就是「永远问人」的全集，confirm.patch.who=auto 就是「其余自己拍」。
@@ -20,6 +20,12 @@
 //
 // 5. 语义判断不在这里。「这件事算不算花钱」是 AI 自己交代的（写一句「依据：花钱」），
 //    本模块只验「依据在不在四条里」。想让机器自动判语义 = 假阳假阴，比没有更糟。
+//
+// 6. 第二格（#965）：提问那一刻再看相关 issue 的**评论**里有没有拍板。
+//    正文是快照，待拍板选项复制进去就会过期（#944 的 5.5/5.6：用户纠正过，结论在评论里，
+//    读正文的人照着陈旧选项又问了一遍）。三态：decided / none / unscanned。
+//    没有 issue 号、网络失败都是 unscanned——「没查成」不许说成「没拍过」。
+//    本文件仍然不 spawn；拉评论是 hook 的事，结果注入进来再判。
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -250,3 +256,140 @@ function normKey(s) {
     .replace(/（/g, '(').replace(/）/g, ')')
     .replace(/\s+/g, '');
 }
+
+// ── 第二格：相关 issue 评论里有没有已拍板（#965）────────────────────────
+
+/**
+ * 从提问文本里抽 issue 号。只认明确写法，不猜：
+ *   #944 / issue #944 / 署名 issue #944 / github.com/.../issues/944
+ * 多个号全收（去重保序）。抽不到返回空数组——空不是「没拍过」，是「没得查」。
+ *
+ * 故意不认 PR 路径（/pull/N）：PR 号和 issue 号不是同一个空间，拿去查评论会查错对象。
+ * 也不认「5.5」这种没有井号的数字。
+ */
+export function extractIssueNumbers(text, { fromEnd = false } = {}) {
+  // PR #N / pull #N 先抹掉：PR 号和 issue 号不是同一个空间，拿去查评论会查错对象。
+  const s = String(text ?? '').replace(/\b(?:pr|pull request|pull)\s*#\s*\d+/gi, '');
+  const all = [];
+  const re = /(?:github\.com\/[\w.-]+\/[\w.-]+\/issues\/|(?:issue|议题)\s*#\s*|#)(\d+)/gi;
+  let m;
+  while ((m = re.exec(s))) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0) all.push(n);
+  }
+  const src = fromEnd ? all.slice().reverse() : all;
+  const found = [];
+  for (const n of src) {
+    if (!found.includes(n)) found.push(n);
+  }
+  return found;
+}
+
+/**
+ * 一条评论算不算「拍板痕迹」。认标题形（「用户拍板」）和正文里的订正词（「作废」「此前已经对过」）。
+ * 机器不判语义——命中就把原文摘要推到眼前，让 AI 自己读。漏一条真拍板 = 还会再问一次；
+ * 误中一条闲聊 = 多一段字，不拦提问。这个方向是安全侧。
+ */
+export function isDecisionComment(comment) {
+  const body = String(comment?.body ?? comment ?? '');
+  if (!body.trim()) return false;
+  // 「## 用户拍板」是落盘标题形。JS 的 \\b 认的是 [A-Za-z0-9_]，中文后面
+  // 跟「（」或换行都不是字边界，写 \\b 等于这条永远匹配不上（#944 标题就是「用户拍板（日期）」）。
+  // 「待拍板 / 等用户拍板」是还没拍——要的是「用户拍板」这四个字当标题，不是「拍板」两个字。
+  if (/(?:^|\n)#+\s*用户拍板/.test(body)) return true;
+  return /此前已经对过|不要再据此提问/.test(body);
+}
+
+/** 拍板评论压成给 AI 看的几行。太长截断，但第一段（通常是结论）必须留下。 */
+export function summarizeDecision(comment, { max = 480 } = {}) {
+  const body = String(comment?.body ?? comment ?? '').replace(/\r\n/g, '\n').trim();
+  if (!body) return '';
+  // 整段压空白再截：第一段常常只是「## 用户拍板（日期）」，结论在第二段（#944 的 5.5 纠正就是这样）。
+  const flat = body.replace(/\s+/g, ' ').trim();
+  return flat.length <= max ? flat : flat.slice(0, max - 1) + '…';
+}
+
+/**
+ * 评论列表上的三态判定。纯函数：给什么评论判什么，不碰网络。
+ *
+ *   decided   —— 至少一条评论命中拍板痕迹，hits 带着摘要
+ *   none      —— 评论查到了，一条都没命中（「查过没有」）
+ *   unscanned —— comments 不是数组（没查成）。空数组是 none，不是 unscanned：
+ *                「查到 0 条评论」是查过，「没拿到列表」是没查成，两形不许并。
+ */
+export function classifyIssueDecisions(comments) {
+  if (!Array.isArray(comments)) {
+    return { verdict: 'unscanned', why: '评论列表没拿到——没查成，不是没拍过' };
+  }
+  const hits = comments.filter(isDecisionComment).map((c) => ({
+    body: String(c?.body ?? c ?? ''),
+    summary: summarizeDecision(c),
+  })).filter((h) => h.summary);
+  if (hits.length) {
+    return {
+      verdict: 'decided',
+      hits,
+      why: `评论里有 ${hits.length} 条拍板痕迹`,
+    };
+  }
+  return { verdict: 'none', hits: [], why: `查过 ${comments.length} 条评论，没有拍板痕迹` };
+}
+
+/**
+ * 第二格渲染成给 AI 看的字。三态各自不同形：
+ *   decided   —— 把拍板原文摘要推到眼前，要求别再拿陈旧正文问一遍
+ *   none      —— 一句「查过没有」，不啰嗦
+ *   unscanned —— 必须自带「没查成」，并当场否掉「那就没拍过」这条读法
+ */
+export function renderIssueDecision(verdict, { issue } = {}) {
+  const who = issue ? `（#${issue}）` : '';
+  if (!verdict || verdict.verdict === 'unscanned') {
+    return [
+      `[问人闸·拍板] 没查成${who}：${verdict?.why || '评论没读到'}`,
+      `  「没查成」不是「没拍过」。这次拿不准就当拍过——先把评论查到再决定问不问。`,
+    ].join('\n');
+  }
+  if (verdict.verdict === 'none') {
+    return `[问人闸·拍板] 查过没有${who}：${verdict.why}。`;
+  }
+  const lines = (verdict.hits || []).slice(0, 3).map((h, i) => `    ${i + 1}. ${h.summary}`);
+  return [
+    `[问人闸·拍板] 这件事已经拍过${who}：${verdict.why}。`,
+    `  评论原文摘要：`,
+    ...lines,
+    `  · 先读这些再决定问不问。正文是快照，待拍板的选项复制进去就会过期——拿陈旧正文再问一遍，花的是用户的时间。`,
+    `  · 用户已经纠正过的结论，不要当成还待决。`,
+  ].join('\n');
+}
+
+/**
+ * 抽号 → 拉评论 → 渲染。fetchComments 由 hook 注入（本文件不 spawn）。
+ * fetchComments(n) 契约：{ comments: array } 或 { unscanned: string }；抛错也当没查成。
+ */
+export function lookupAndRenderDecisions({ text, extraText, fetchComments, maxIssues = 2 } = {}) {
+  // 提问原文优先：对话记录里会堆着历史单号，不能让旧号把这一问的号挤掉。
+  let issues = extractIssueNumbers(text);
+  if (!issues.length && extraText) issues = extractIssueNumbers(extraText, { fromEnd: true });
+  if (!issues.length) {
+    return renderIssueDecision({ verdict: 'unscanned', why: '提问上下文里没有 issue 号——没得查' });
+  }
+  const blocks = [];
+  for (const n of issues.slice(0, maxIssues)) {
+    let got;
+    try {
+      got = typeof fetchComments === 'function' ? fetchComments(n) : { unscanned: '没有评论读取器' };
+    } catch (e) {
+      got = { unscanned: `读评论抛错：${String(e && e.message ? e.message : e).slice(0, 80)}` };
+    }
+    if (!got || got.unscanned || !Array.isArray(got.comments)) {
+      blocks.push(renderIssueDecision(
+        { verdict: 'unscanned', why: got?.unscanned || '评论列表没拿到——没查成，不是没拍过' },
+        { issue: n },
+      ));
+      continue;
+    }
+    blocks.push(renderIssueDecision(classifyIssueDecisions(got.comments), { issue: n }));
+  }
+  return blocks.join('\n');
+}
+

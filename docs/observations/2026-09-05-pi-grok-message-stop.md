@@ -38,3 +38,10 @@
 这正是本仓「区分『扫完 0 条』和『没扫到』」那条规矩的同一种病：把「开了个头」当成「跑完了」。
 
 处置：#953
+
+## 处置续（2026-09-07）
+
+编排机 Mirasim 0.0.295 已实打：根因是动态 provider 把 Grok 标成 Anthropic；钉 `wireApi=chat`
+后 Pi/Claude/GUI 走 Chat 桥。五张 New API 日常卡 × Claude/Pi/GUI 的 PONG 全绿（Pi×Grok 2.2s）。
+原装 `pi-gateway.ts` 的 grok 组本来就是 `openai-completions`，与 Mirasim 注入是两条线。
+矩阵落在 `ai-gateway-stack/docs/MIRASIM.md`「现行 PONG 矩阵」。

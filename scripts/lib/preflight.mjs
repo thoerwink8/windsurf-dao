@@ -40,19 +40,41 @@ const ROOT = resolve(import.meta.dirname, '..', '..');
 // 代价：全部候选都挂住时最坏 maxCandidates(4) × 30s = 120s。可接受，因为超时已不再判红换人。
 // 真相源是 docs/dispatch-policy.json，本常量只是文件缺失时的兜底，两处必须同值。
 export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 30000, maxCandidates: 4, useHealthTable: true };
-export const COMMANDER_POLICY_DEFAULTS = { maxDispatchPerRound: 2, requireModelInRouting: true };
+export const COMMANDER_POLICY_DEFAULTS = {
+  requireModelInRouting: true,
+  loadThreshold: 0.85,
+  memReserveMb: 1536,
+  conservativeWorkerMb: 400,
+  minSamplePairs: 4,
+  sampleWindow: 12,
+};
 export const BREAKER_POLICY_DEFAULTS = { ...BREAKER_DEFAULTS, overrides: {} };
+
+function clampNum(v, lo, hi, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < lo || n > hi) return fallback;
+  return n;
+}
 
 function parseCommanderSection(cm) {
   const src = cm && typeof cm === 'object' ? cm : {};
-  const n = Number(src.maxDispatchPerRound);
+  const renamedKeyHints = [];
+  if (Object.prototype.hasOwnProperty.call(src, 'maxDispatchPerRound')) {
+    renamedKeyHints.push('maxDispatchPerRound 已改名：上限不再是「每轮派几个」，改成机器余量准入（#1007）');
+  }
+  if (Object.prototype.hasOwnProperty.call(src, 'maxInFlightWorkers')) {
+    renamedKeyHints.push('maxInFlightWorkers 也不再是可填上限：在制品由机器余量动态算，这个键被忽略（#1007）');
+  }
   return {
-    maxDispatchPerRound: Number.isInteger(n) && n >= 1 && n <= 20
-      ? n
-      : COMMANDER_POLICY_DEFAULTS.maxDispatchPerRound,
     requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
       ? src.requireModelInRouting
       : COMMANDER_POLICY_DEFAULTS.requireModelInRouting,
+    loadThreshold: clampNum(src.loadThreshold, 0.1, 2, COMMANDER_POLICY_DEFAULTS.loadThreshold),
+    memReserveMb: clampNum(src.memReserveMb, 256, 16384, COMMANDER_POLICY_DEFAULTS.memReserveMb),
+    conservativeWorkerMb: clampNum(src.conservativeWorkerMb, 64, 4096, COMMANDER_POLICY_DEFAULTS.conservativeWorkerMb),
+    minSamplePairs: Math.round(clampNum(src.minSamplePairs, 1, 32, COMMANDER_POLICY_DEFAULTS.minSamplePairs)),
+    sampleWindow: Math.round(clampNum(src.sampleWindow, 2, 64, COMMANDER_POLICY_DEFAULTS.sampleWindow)),
+    renamedKeyHints,
   };
 }
 
@@ -97,7 +119,8 @@ export function loadDispatchPolicy({ root = ROOT, read = readFileSync, exists = 
 /**
  * 校验 preflight + commander 取值范围（dao-check 自持，不 import 消费方）。
  * enabled/useHealthTable 必须布尔；timeoutMs ∈ [500, 60000]；maxCandidates 整数 ∈ [1, 12]。
- * commander.maxDispatchPerRound 整数 ∈ [1, 20]；requireModelInRouting 必须布尔。
+ * commander.requireModelInRouting 必须布尔；loadThreshold 0.1~2、memReserveMb 256~16384。
+ * 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮），但不按它们限流。
  * 缺 commander 节不算没查成（#842 旧文件兼容），但 live 文件应有。
  */
 export function validateDispatchPolicy(doc) {
@@ -128,8 +151,18 @@ export function validateDispatchPolicy(doc) {
     if (typeof cm !== 'object') problems.push('commander 必须是对象');
     else {
       if (typeof cm.requireModelInRouting !== 'boolean') problems.push('requireModelInRouting 必须 true/false');
-      const m = Number(cm.maxDispatchPerRound);
-      if (!Number.isInteger(m) || m < 1 || m > 20) problems.push(`maxDispatchPerRound 越界（要整数 1~20，实际 ${cm.maxDispatchPerRound}）`);
+      if (cm.loadThreshold !== undefined) {
+        const t = Number(cm.loadThreshold);
+        if (!Number.isFinite(t) || t < 0.1 || t > 2) problems.push(`loadThreshold 越界（要 0.1~2，实际 ${cm.loadThreshold}）`);
+      }
+      if (cm.memReserveMb !== undefined) {
+        const m = Number(cm.memReserveMb);
+        if (!Number.isFinite(m) || m < 256 || m > 16384) problems.push(`memReserveMb 越界（要 256~16384，实际 ${cm.memReserveMb}）`);
+      }
+      if (cm.conservativeWorkerMb !== undefined) {
+        const w = Number(cm.conservativeWorkerMb);
+        if (!Number.isFinite(w) || w < 64 || w > 4096) problems.push(`conservativeWorkerMb 越界（要 64~4096，实际 ${cm.conservativeWorkerMb}）`);
+      }
     }
   }
   return { ok: problems.length === 0, unscanned: false, problems };
@@ -374,7 +407,7 @@ export async function runPreflight({
       // **刻意不记熔断失败**——窗口内三次就 cooldown 24h，那正是把一次误判放大成
       // 「整条腿被拉黑一天」的机制，也正是 #853 里换错人的来源。
       // 已知代价：真正挂死（永不吐字）的上游因此不再被熔断拉黑，每次派工都要陪它耗满预算。
-      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-agent-stall 与 watchdog 兜。
+      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-progress-watch 兜。
       if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
       reasons[c.id] = [...(reasons[c.id] || []), `timeout:${r.why || '没等到'}`];
       continue;

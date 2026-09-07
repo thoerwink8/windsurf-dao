@@ -71,7 +71,7 @@ function parseJson(text, what) {
 
 // ── open PR ─────────────────────────────────────────────────────────────────
 
-const PR_FIELDS = 'number,title,isDraft,reviewDecision,headRefOid,headRefName,mergeable,updatedAt';
+const PR_FIELDS = 'number,title,isDraft,reviewDecision,headRefOid,headRefName,mergeable,updatedAt,labels';
 
 export async function fetchOpenPrs({ cwd, limit = 60 } = {}) {
   const r = await run('gh', ['pr', 'list', '--state', 'open', '--limit', String(limit), '--json', PR_FIELDS], { cwd });

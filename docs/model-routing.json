@@ -170,6 +170,21 @@
           "cli_model": "gw-windsurf/gemini-3-7-flash-high"
         }
       ]
+    },
+    "消歧": {
+      "模型": [
+        {
+          "id": "grok-4.6",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-09-06 用户当场指定 grok（xAI）做消歧官；通道沿用 gw/grok-4.6（#1006）",
+          "拍板": "2026-09-06",
+          "status": "试用",
+          "trial_since": "2026-09-06",
+          "provider": "gw",
+          "cli_model": "gw/grok-4.6"
+        }
+      ]
     }
   },
   "审官": {
@@ -603,8 +618,8 @@
     }
   ],
   "执行体": {
-    "默认": "orca",
-    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider；orca 通过验收后退役。旗标 --executor：reviewer-create/worker-done（卡 C）、dispatch/worktree-create/worker-start（卡 B）",
+    "默认": "mirasim",
+    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。2026-09-06 默认从 orca 翻成 mirasim——orca 运行时已 disabled，留着 orca 当默认等于所有不带 --executor 的调用都落进一条不存在的路（实咬：reviewer-create 报 orca not found，所有 PR 判不了绿）。显式 --executor orca 仍可点名走旧脊。",
     "orca": {
       "说明": "现役运行时：Orca worktree + terminal"
     },
@@ -617,7 +632,13 @@
         "gpt": "gpt",
         "codex": "codex",
         "claude": "claude",
-        "pi": "pi"
+        "pi": "pi",
+        "grok": "pi",
+        "deepseek": "pi",
+        "glm": "pi",
+        "gemini": "pi",
+        "kimi": "pi",
+        "composer": "pi"
       },
       "agentRoutes": {
         "claude": {
@@ -640,7 +661,8 @@
           "理由": "pi 烧网关池，保 pqgpt 主路"
         }
       },
-      "注": "mirasim 服务端 agentsAvailable 只有 claude/codex/pi；未登记家族（kimi/glm/grok/gemini 等）judgeAgentRoute 一律拒派不猜。卡 B/D 扩 agent 时再补"
+      "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",
+      "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现"
     }
   }
 }

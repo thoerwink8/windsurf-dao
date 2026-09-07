@@ -1,0 +1,18 @@
+# /etc/systemd/system/miraquota-contabo.timer —— 每 10 分钟。
+# 装法见 miraquota-contabo.service 文件头。
+
+[Unit]
+Description=每 10 分钟把 Contabo mirasim-server 额度推进 MiraQuota 多机页
+
+[Timer]
+# OnCalendar 是必需的，不是冗余：只有 OnBootSec/OnUnitActiveSec 这种单调时钟的 timer，
+# 停掉再起会进 active(elapsed) 死态——显示 active+enabled，下一次触发却是 n/a，永不再跑，
+# 而且没有任何东西报警（2026-09-05 dao-agent-stall 就这么无声停了半天）。
+# 挂 :04 起每 10 分钟：错开 dao-sync :01、dao-agent-stall :02、dao-board-gc :07、
+# dao-close-issues :23。tests/timer-armed.test.js 守 OnCalendar。
+OnCalendar=*:4/10
+OnBootSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

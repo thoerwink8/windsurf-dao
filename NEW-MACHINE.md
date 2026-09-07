@@ -64,6 +64,7 @@ node --version
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
 | `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 4840777 | 159280695 |
+| `refiner.{pem,json}` | `dao-refiner[bot]` 消歧官（#1006） | 4847459 | 159447930 |
 
 `*.json` 形态（数字不要加引号）：
 
@@ -84,6 +85,40 @@ node --version
 - **传头像有一步藏起来的确认**：选完文件会弹「Crop your new avatar」，**必须点 `Set new avatar`**。
   只上传不点，页面显示 `Uploading…` 然后**静默失败**，头像仍是默认 identicon——看起来像传成了。
   头像本身与家族规矩见 `host/brand/README.md`（图在 git 里，私钥不在）。
+
+**2026-09-06 建 `dao-refiner`**：App ID `4847459`，Client ID `Iv23liT2oH1Nba2zyd3Q`，用户在自己浏览器里建的
+（建 App 必须以账号所有者身份在 github.com 完成，没有 API 路径能绕过；服务器装了 Playwright 也不行，
+卡的是登录态不是浏览器）。权限**只要两项**：**Issues: Read and write**、**Metadata: Read-only**——
+不要 Pull requests、不要 Contents、不要 Checks。消歧官只碰 issue 的标和评论，
+即使被玩坏最大破坏是乱打标，而乱打标能一键筛出批量回退；这正是不让它共用 `marshal` 身份的全部理由
+（`marshal` 今天同时管开单/评论/关单/打「已消歧」授权标/**合并 PR**，授权与执行是同一把钥匙）。
+
+**2026-09-06 已装完并验通**（装到仓 + 私钥 + 头像，全程 playwright 驱动服务器上那个已登录的浏览器，
+见 §13c）。范围是**只装 `windsurf-dao` 一个仓**——与 marshal 的 6 仓不同，这是刻意的最小权限。
+
+验的方式不是 `gh-as --whoami`（它的角色名写死四个，`refiner` 要等 #1006 接），
+而是自己签 JWT 打真接口（memory `verify-credential-on-real-endpoint`）：
+
+```
+/app                     → 200  slug=dao-refiner
+  permissions            → {"issues":"write","metadata":"read"}   ← 无 PR/Contents/Checks
+POST .../access_tokens   → 201
+/installation/repositories → thoerwink8/windsurf-dao（仅此一个）
+读 issue                 → 200
+```
+
+### 装的时候撞了 4 次的那个坑
+
+直接 `page.goto('/apps/dao-refiner/installations/new/permissions?...')` 提交，**必被拒**：
+横幅报 `This App has changed since you last viewed it. Please review and try again.`
+换新 profile、换时间点、确认没人在改 App，四次全一样——**这句提示是误导的，跟「App 被改过」无关**。
+
+真因：那个表单带着「你上次**查看**这个 App 时的指纹」，直跳 URL 的会话没有这条记录。
+解法是按人真实的点法走：**App 设置页 → Install App → 点 Install 链接 → 选仓 → 提交**，一次就过。
+另外那个 Install 是 `<a>` 不是 `<button>`，`getByRole('button')` 找不到它，按 href 定位。
+
+头像在 `host/brand/bot-refiner.png`（矢量源 `bot-refiner.svg`）。上传走 `input#upload-app-logo`，
+**必须再点 `Set new avatar`**——只上传会静默失败（§4b 上面那条坑，这次也确实要点才生效）。
 
 验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 
@@ -187,8 +222,8 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
   ```bash
   ls ~/.pi/agent/extensions/go-fallback.ts ~/.pi/agent/extensions/go-fallback-core.mjs   # 都在即生效（pi 每次启动扫 extensions/ 目录）
   ```
-- 行为：只在主通道（`opencode-go`）上动作；命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连后 `pi.setModel` + followUp 续跑，会话上下文完整保留。直连凭据缺失时明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
-- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARY`（主通道，默认 `opencode-go`）、`PI_GO_FALLBACK_PROVIDER`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。
+- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连 DeepSeek 前必须探余额，402 / 没钱不算降级、明确报错。直连凭据缺失时同样明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
 - 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
   ```bash
   node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景
@@ -289,7 +324,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
 - 挂点已摘：随仓 `.claude/settings.json` 的 PreToolUse 是派工闸 + 问人闸（ask-gate）+ 工具使用闸（tool-use-gate，#969）+ SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。`~/.claude/settings.json` 归宿主自己，onboard 不能动。
-- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + `orca automations` + `agent-stall-watch`。
+- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + 指挥官 + `progress-watch`（2026-09-06 屏面指纹层 `agent-stall-watch` 整层退役，orca 已不在承重面上）。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
@@ -337,8 +372,14 @@ for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/
 orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
-# 撞限流探测（#833）：sudo bash scripts/install-agent-stall-watch.sh（单元 host/machine/systemd/dao-agent-stall.*）
-#   验：systemctl list-timers 里 dao-agent-stall.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:2/15）
+# 卡死发现 = 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
+#   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
+#   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
+# 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
+#   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
+#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
+#   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
+# MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
@@ -678,6 +719,68 @@ playwright install --with-deps chromium                        # apt 装系统�
   截图；MCP 侧做一次 stdio `initialize` + `tools/list` + `browser_navigate`，
   拿到 `Page Title: Example Domain` 才算通。
 
+## 13c. 有头浏览器 + VNC：给「只能人亲手点」的事留一条路（2026-09-06）
+
+§13b 那套是无头的，够跑脚本。但有些事**没有 API，只能在浏览器里以账号所有者身份点**——
+建 GitHub App 就是（GitHub 没有 `POST /apps`，PAT 权限再大也建不出来），
+而登录要人输密码和 2FA，无头过不了这一关。
+
+```bash
+sudo -u orca -H env PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+  bash scripts/vnc-browser.sh start [URL]     # 起虚拟屏 + openbox + chromium + x11vnc
+bash scripts/vnc-browser.sh status            # 五格全「活」才算通
+bash scripts/vnc-browser.sh stop              # 用完就停
+```
+
+两条连法：
+
+- **网页（推荐，什么都不用装）**：`sudo bash scripts/vnc-browser.sh web-start` 起 noVNC 桥，
+  然后在任意电脑开 `https://13-140-184-255.sslip.io:6080/vnc.html?autoconnect=1&resize=scale`。
+- **SSH 隧道**（端口不对外时）：`ssh -N -L 5900:127.0.0.1:5900 <ssh 目标>`，VNC 客户端连 `127.0.0.1:5900`。
+
+**密码和 2FA 只经过用户的键盘和那块虚拟屏**，不进日志、不进 AI 上下文。
+登录态落 `~/.dao/browser-profile`，之后脚本带 `--user-data-dir` 指同一处就是已登录状态。
+
+包：`xvfb`（`playwright install --with-deps` 顺带装）、`x11vnc`、`openbox`、`x11-utils`、`novnc`、`websockify`、`certbot`。
+
+**刻意不做成 systemd 常驻**：一块随时可连的远程桌面是长期攻击面，而它一年用不了几次。
+要用现起，用完停（`stop` 会一并关掉 6080 的 ufw 放行）。
+
+### 网页入口的三个决定
+
+1. **必须真证书，不许自签让人点「继续」**。这块屏的用途就是让人在里面输 GitHub 密码和 2FA；
+   自签 + 点继续 = 训练自己忽略证书警告，而那正是中间人攻击唯一需要的东西。
+   域名不用买：**sslip.io** 把 IP 编进域名直接解析（`13-140-184-255.sslip.io`）。
+   **别换 nip.io / duckdns.org**——那两个的 SNI 被整域阻断（judgement memory `sni-blocklist-nipio-duckdns`）。
+   拿证书：临时 `ufw allow 80/tcp` → `certbot certonly --standalone -d <host>` → 立刻 `ufw delete allow 80/tcp`。
+2. **网页桥归 root，不给 orca 补 sudo**。它要读 letsencrypt 私钥、绑端口、改 ufw，
+   但每个工人 agent 都能写这个仓——放宽 orca 的 sudo 等于给所有工人一条提权路
+   （同样的道理写在 `host/machine/sudoers.d/dao-sync` 里，那条也是命令写死不带通配）。
+   所以分两段：X + 浏览器归 orca（`start`），网页桥归 root（`web-start`）。
+3. **每次 start 重新拼 pem**。certbot 自动续期会换 `live/` 的内容；只在第一次拼，
+   续期后就拿着过期证书起服务，而浏览器只会说「证书无效」，不会说「你该重拼了」。
+
+验（外部视角，别只看进程活着）：
+`curl -o /dev/null -w "%{http_code} %{ssl_verify_result}" https://<host>:6080/vnc.html`
+要拿到 `200 0`——`ssl_verify_result=0` 才是证书真的被信任。
+
+### 两个坑（都实咬过）
+
+1. **Ubuntu 23.10+ 会让 chromium 直接 FATAL: No usable sandbox**。
+   真因是 `kernel.apparmor_restrict_unprivileged_userns=1`，非特权进程建不了 user namespace。
+   **不要用 `--no-sandbox` 绕**——这个浏览器的用途正是让人在里面登录 GitHub，
+   沙箱在那一刻最该在，关掉等于「为了装锁先把门拆了」。
+   正解是给这一个二进制单独放行：`/etc/apparmor.d/playwright-chromium`
+   （`profile ... /opt/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) { userns, }`），
+   装完 `apparmor_parser -r` 加载。**这个文件在 /etc，不在仓里，重装机器要照上面重建。**
+2. **chromium 的目录名两种都要认**：老版 `chrome-linux`，playwright 1.6x 起是 `chrome-linux64`。
+   写死一种，另一种就报「找不到浏览器」而真因是版本差异。
+
+**验（别只看进程活着）**：`xwininfo -root -tree | grep -i chrom` 的窗口标题就是页面标题，
+拿到 `"Sign in to GitHub · GitHub - ..."` 才算真加载了。
+第一次跑时脚本把 chromium 的 stderr 丢进了 `/dev/null`，面上只显示「浏览器那格是停的」，
+查不出为什么——现在日志落 `~/.dao/vnc/chrome.log`，起不来会把最后几行打出来。
+
 ## 13.1 「模型好慢」先分段，别先查网络
 
 2026-09-01 两台机同一天各栽一次：用户报「模型好慢」，两边都先去查网关、查 Clash、查节点，
@@ -824,4 +927,4 @@ git ls-remote --heads origin | sed 's|.*refs/heads/||' \
 node scripts/dao-check.mjs
 ```
 
-退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。
+退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。手机私聊机器人要在飞书开发者后台勾「接收私聊消息」（事件仍是 `im.message.receive_v1`，适配器已收 `chat_type=p2p`）。日报队列落 `~/.dao/broadcast-digest.json`，换机不用拷。

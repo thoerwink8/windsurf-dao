@@ -82,27 +82,24 @@ describe('说人话闸', () => {
     assert.match(text, /某某异常/);
   });
 
-  it('限流探测报告：换人成功/失败/停手/只提醒四态，零黑话、无句柄', async () => {
-    const { buildStallReport } = await import(url('scripts/agent-stall-watch.mjs'));
+  // 屏面指纹层 2026-09-06 退役，卡死报告的说人话面换成 progress-watch 的盘面推进量报告。
+  it('盘面停滞报告：停滞/有推进/空闲/没查成四态，零黑话、无句柄', async () => {
+    const { formatReport } = await import(url('scripts/progress-watch.mjs'));
     const { plainViolations } = await import(url('scripts/lib/plain-words.mjs'));
-    const text = buildStallReport({
-      failed: 1, need: 2,
+    const stalled = formatReport({
+      scanned: true, stalled: true, rounds: 5,
       items: [
-        { name: 'PR-851-审官【luna】term_9d5d7780-c28a', action: 'switch', ok: true, from: 'gpt-5.6-luna', to: 'gpt-5.6-sol' },
-        { name: 'PR-850-审官', action: 'switch', ok: false, from: 'a', to: 'b', detail: '换人失败：上游没响应' },
-        { name: 'ISSUE-807-工人', action: 'escalate', reason: '选型序走完' },
-        { name: 'ISSUE-843-工人', action: 'alert', reason: '不是审官，不自动换' },
+        { kind: 'pr', id: '1018', why: 'PR #1018 连续 5 轮没动（head abc123def456、无审官判定、草稿）' },
+        { kind: 'issue', id: '1065', why: '#1065 已消歧但连续 5 轮没派出工人、也没有在途 PR' },
       ],
     });
-    assert.match(text, /^有 1 个卡住的工人换人没成功/);
-    assert.match(text, /已换成 gpt-5.6-sol/);
-    assert.match(text, /没换成——上游没响应/);
-    assert.match(text, /先停手等你拍/);
-    assert.match(text, /先只提醒不换人/);
-    assert.doesNotMatch(text, /term_|【/);
-    assert.deepEqual(plainViolations(text), [], text);
-    assert.match(buildStallReport({ failed: 0, need: 2, items: [{ name: 'a', action: 'switch', ok: true, from: 'x', to: 'y' }] }), /已按备选顺序换人/);
-    assert.match(buildStallReport({ failed: 0, need: 2, items: [{ name: 'a', action: 'alert', reason: 'r' }] }), /这次没换人/); // 审官疑问4：没换成事实别说换了
+    assert.match(stalled, /盘面停滞 5 轮/);
+    assert.match(stalled, /PR #1018/);
+    assert.doesNotMatch(stalled, /term_|【/);
+    assert.deepEqual(plainViolations(stalled), [], stalled);
+    assert.match(formatReport({ scanned: true, stalled: false, reason: 'progress' }), /盘面有推进/);
+    assert.match(formatReport({ scanned: true, stalled: false, reason: 'idle' }), /盘面空闲/);
+    assert.match(formatReport({ scanned: false, error: '快照目录是空的（没查成，不是没停滞）' }), /没查成/);
   });
 
   it('机器人人格文件带说人话规则与口吻参照', () => {

@@ -24,10 +24,14 @@ export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
 export const DRAIN_GRACE_MIN = 45;
 export const MAX_DRAIN_TRIES = 3;
 
-/** 会转成 open-issue 的 escalate 理由。unscanned / missing-labels 不在这里（前者静默，后者走 add-label）。 */
+/** 会转成 open-issue 的 escalate 理由。unscanned / missing-labels 不在这里（前者静默，后者走 add-label）。
+ *  #1000：drain/rereview/rework 的 exhausted 改打 PR 标，不再开单。wake-exhausted 是终端不是 PR，仍走开单。 */
 export const OPEN_ISSUE_REASONS = new Set([
-  'wake-exhausted', 'drain-exhausted', 'rereview-exhausted',
+  'wake-exhausted',
 ]);
+
+/** 与 commander.mjs HUB_DEDUP_MS 同值：发卡成功后 6 小时内不重发。 */
+export const OPEN_ISSUE_CARD_DEDUP_MS = 6 * 3600 * 1000;
 
 export const CHECKS = {
   'add-label.role': true,
@@ -519,13 +523,55 @@ export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {
   };
 }
 
-/** decide 把可转的 escalate 换成 open-issue；转不成保持原动作。 */
-export function escalateToOpenIssue(action, { ledger } = {}) {
+/** 发卡去重戳：与 execOpenIssue / askEscalateCard 的 hubAskOnce key 同一格子。 */
+export function openIssueCardSeenKey(dedupKey) {
+  return `esc:${String(dedupKey || '')}`;
+}
+
+function bookedOpenIssueNumber(entry) {
+  const n = Number(entry && entry.number);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+function cardStillFresh(hubSeen, dedupKey, now) {
+  const last = Date.parse((hubSeen && hubSeen[openIssueCardSeenKey(dedupKey)]) || '') || 0;
+  if (!last) return false;
+  const nowMs = typeof now === 'number' && Number.isFinite(now) ? now : 0;
+  if (!nowMs) return true; // 有戳没时钟：不当过期，免刷屏
+  return nowMs - last < OPEN_ISSUE_CARD_DEDUP_MS;
+}
+
+/** decide 把可转的 escalate 换成 open-issue；转不成保持原动作。
+ *  账本只免重开，不免发卡：已有 OPEN 且没有成功 hubSeen 戳时，仍产 existing 动作去重试卡。 */
+export function escalateToOpenIssue(action, { ledger, hubSeen, now } = {}) {
   if (!action || action.kind !== 'escalate') return action;
   if (!OPEN_ISSUE_REASONS.has(action.reason)) return action;
   const answers = threeQuestionsFor(action.reason, action.why);
   if (!answers) return action;
   const target = action.pr != null ? `pr-${action.pr}` : action.issue != null ? `issue-${action.issue}` : action.term || '';
+  const key = openIssueDedupKey(action.reason, target);
+  const booked = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  if (booked) {
+    // 已开过：不许再走旧 escalate 开第二张。卡没送到就继续产 existing 去重试。
+    const number = bookedOpenIssueNumber(booked);
+    if (!number) return null;
+    if (cardStillFresh(hubSeen, key, now)) return null;
+    return {
+      kind: 'open-issue',
+      reason: action.reason,
+      original: action.why,
+      target,
+      answers,
+      issue: action.issue,
+      pr: action.pr,
+      term: action.term,
+      title: action.title,
+      why: action.why,
+      role: action.role,
+      existing: true,
+      number,
+    };
+  }
   const v = validateOpenIssue({
     reason: action.reason,
     original: action.why,
@@ -535,7 +581,6 @@ export function escalateToOpenIssue(action, { ledger } = {}) {
     role: action.role,
   });
   if (!v.ok) {
-    // 已开过：吞掉，不许再走旧 escalate 开第二张。其它校验拒：保持 escalate（人不猜）。
     if (v.code === 'dup') return null;
     return action;
   }
