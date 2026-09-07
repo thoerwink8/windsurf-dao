@@ -374,6 +374,8 @@ orca account add --help
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
 # 卡死发现 = 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
 #   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
+# 看板阶段超时（#818 墙钟闸，跟推进量不是同一把尺）：sudo bash scripts/install-board-watch.sh（单元 host/machine/systemd/dao-board-watch.*）
+#   验：list-timers 里 dao-board-watch.timer 的 NEXT 必须是时间（OnCalendar 现行 *:19/20）
 #   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
 # 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
 #   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮

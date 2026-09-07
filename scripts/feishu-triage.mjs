@@ -67,6 +67,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseProfile } from './lib/feishu-group-profile.mjs';
 import { ensurePlain } from './lib/plain-words.mjs';
+import { collectBoard } from './lib/board-collect.mjs';
+import { formatBoardTable } from './lib/board-v0.mjs';
 import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
@@ -527,7 +529,7 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh 
 // + #852：hubChat 策略与 hubContext 聚合读盘）
 export function buildDeps({
   creds = null, store, gateway = process.env.ANTHROPIC_BASE_URL || '', ghBin, run, fetchImpl,
-  hubChat = null, hubContext = null,
+  hubChat = null, hubContext = null, boardTable = null,
 } = {}) {
   const gh = makeGhDeps({ ghBin, run });
   const daoTraceRef = { current: null, store };
@@ -541,6 +543,10 @@ export function buildDeps({
     llm: makeLlm({ gateway, fetchImpl, traceRef: daoTraceRef }),
     hubChat: hubChat ?? loadHubChatPolicy(),
     hubContext: hubContext ?? (async () => readHubContext()),
+    boardTable: boardTable ?? (async () => {
+      const { board } = await collectBoard({ cwd: REPO_ROOT, root: REPO_ROOT });
+      return formatBoardTable(board);
+    }),
     daoTraceRef,
   };
 }

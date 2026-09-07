@@ -4139,6 +4139,23 @@ async function cmdNow(args) {
   process.exit(0);
 }
 
+/**
+ * 看板 v0（#818）：一张表。判据在 lib/board-v0.mjs，取数在 lib/board-collect.mjs。
+ * 总控群「状态」走同一张表，不另造判据。
+ */
+async function cmdBoard(args) {
+  const { collectBoard } = await import('./lib/board-collect.mjs');
+  const { formatBoardTable } = await import('./lib/board-v0.mjs');
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const { board, elapsedMs } = await collectBoard({ cwd: root, root, now: new Date().toISOString() });
+  if (args.json === true) {
+    console.log(JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2));
+    process.exit(0);
+  }
+  process.stdout.write(`${formatBoardTable(board)}\n`);
+  process.exit(0);
+}
+
 function cmdCheckHelp() {
   const sources = new Set();
   const report = checkHelpLiveness({
@@ -4785,6 +4802,7 @@ function main(argv = process.argv) {
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
     case 'now': return cmdNow(args);
+    case 'board': return cmdBoard(args);
     case 'raw': return cmdRaw(args);
     default:
       if (IN_PROCESS) throw new ExitSignal({ ok: false, error: `未知动词: ${args.verb}` }, 1);

@@ -1,4 +1,4 @@
-// scripts/lib/dispatch-policy-check.mjs — docs/dispatch-policy.json 的 preflight + breaker + commander + hubChat 节校验（#842 / #843 / #849 / #852）
+// scripts/lib/dispatch-policy-check.mjs — docs/dispatch-policy.json 的 preflight + breaker + commander + hubChat + board 节校验（#842 / #843 / #849 / #852 / #818）
 //
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
 // preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
@@ -7,6 +7,7 @@
 // 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮）。缺 commander 节不拦（#842 旧夹具兼容）。
 // hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
 // upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
+// board（#818 看板 v0）：workerWallHoursMax ∈ [0.25,168]；channel 若有必为非空字符串。缺 board 节兼容旧夹具；真身 docs/dispatch-policy.json 必须带。
 // 三态可分：文件不在 / 坏 JSON / 缺 preflight 或 hubChat 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -88,7 +89,29 @@ export function inspectDispatchPolicySource(src) {
     if (typeof up.decisions !== 'boolean') problems.push('hubChat.upstream.decisions 必须 true/false');
     if (typeof up.digest !== 'boolean') problems.push('hubChat.upstream.digest 必须 true/false');
   }
+  problems.push(...inspectBoardSection(doc.board));
   return { ok: problems.length === 0, unscanned: false, problems };
+}
+
+function inspectBoardSection(board) {
+  // 缺节兼容旧夹具（#842/#852 样本）；有节才验范围。真身 docs/dispatch-policy.json 必须带。
+  if (board == null) return [];
+  if (typeof board !== 'object' || Array.isArray(board)) return ['board 必须是对象'];
+  const problems = [];
+  if (board.workerWallHoursMax === undefined) {
+    problems.push('board 缺 workerWallHoursMax');
+  } else {
+    const w = Number(board.workerWallHoursMax);
+    if (!Number.isFinite(w) || w < 0.25 || w > 168) {
+      problems.push(`board.workerWallHoursMax 越界（要 0.25~168，实际 ${board.workerWallHoursMax}）`);
+    }
+  }
+  if (board.channel !== undefined) {
+    if (typeof board.channel !== 'string' || !board.channel.trim()) {
+      problems.push('board.channel 必须是非空字符串');
+    }
+  }
+  return problems;
 }
 
 function inspectBreakerFields(obj, prefix) {
@@ -136,17 +159,27 @@ function inspectBreakerSection(br) {
   return problems;
 }
 
-function inspectFile(file) {
+function inspectFile(file, { requireBoard = false } = {}) {
   if (!existsSync(file)) return { ok: false, unscanned: true, problems: [`文件不在：${file}`] };
   let src;
   try { src = readFileSync(file, 'utf8'); }
   catch (e) { return { ok: false, unscanned: true, problems: [`读失败：${String(e.message || e).slice(0, 120)}`] }; }
-  return inspectDispatchPolicySource(src);
+  const r = inspectDispatchPolicySource(src);
+  if (r.unscanned || !r.ok) return r;
+  if (!requireBoard) return r;
+  // 真身必须带 board 节（#818）；夹具仍可缺（inspectDispatchPolicySource 兼容旧样本）。
+  let doc;
+  try { doc = JSON.parse(src); }
+  catch { return r; }
+  if (doc.board == null) {
+    return { ok: false, unscanned: false, problems: ['真身 dispatch-policy.json 缺 board 节（#818）'] };
+  }
+  return r;
 }
 
 export function inspectDispatchPolicyLive(root) {
   if (!root) return { ok: false, unscanned: true, problems: ['没给仓库根（没查成）'] };
-  return inspectFile(join(root, POLICY_REL));
+  return inspectFile(join(root, POLICY_REL), { requireBoard: true });
 }
 
 /** 夹具判别力：red 必须拦（ok:false 非 unscanned）、ok 必须绿、empty 必须没查成。 */

@@ -40,7 +40,7 @@
 
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_PROFILE, profileAllows, looksLikeGreeting, safeGreetingReply, GREETING_FALLBACK,
+  DEFAULT_PROFILE, profileAllows, looksLikeGreeting, looksLikeStatusQuery, safeGreetingReply, GREETING_FALLBACK,
 } from './feishu-group-profile.mjs';
 import { ensurePlain } from './plain-words.mjs';
 
@@ -240,6 +240,25 @@ async function triageHub(inbound, deps) {
       `已记到 #${pending.number}（${shortRepo(pending.repo)}）：${sentence(oneSentence(inbound.text))}`,
       { intent: 'decision', landedTo: `${pending.repo}#${pending.number}` },
     );
+  }
+
+  // 「状态」回表（#818）：确定性闸，不靠 LLM 编盘面。问候仍不甩表。
+  if (looksLikeStatusQuery(inbound.text)) {
+    if (!profileAllows(profile, 'situation') || !allowed('situation')) {
+      if (!profileAllows(profile, 'situation')) return refuse('situation');
+      return reply('总控群现在不答盘面。', { intent: 'situation' });
+    }
+    if (typeof deps.boardTable !== 'function') {
+      return reply('看板这会儿读不到。', { intent: 'situation' });
+    }
+    let table;
+    try { table = await deps.boardTable(); }
+    catch (e) {
+      return reply(`看板没查成：${String(e && e.message || e).slice(0, 80)}`, { intent: 'situation' });
+    }
+    const text = String(table ?? '').trim();
+    if (!text) return reply('看板这会儿读不到。', { intent: 'situation' });
+    return reply(text, { intent: 'situation' });
   }
 
   // 短问候不走盘点（#875）：确定性闸，不靠 LLM 先甩一整段盘点。

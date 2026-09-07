@@ -28,5 +28,9 @@
       "decisions": true,
       "digest": false
     }
+  },
+  "board": {
+    "workerWallHoursMax": 4,
+    "channel": "feishu-hub"
   }
 }
