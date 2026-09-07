@@ -22,7 +22,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths } from './lib/board-gc.mjs';
+import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths, descendantsOf } from './lib/board-gc.mjs';
+import { worktreeIdOf } from './lib/card-identity.mjs';
 import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
   sessionFromMirasimSession,
@@ -234,19 +235,48 @@ function say(text) {
   recordBroadcast(String(text), { source: 'board-gc', now: new Date() });
 }
 
+/** 整树 path：显式 treePaths 优先；否则从盘面后代收集。有子卡却拿不齐 path → 没查成，不许删。 */
+function collectFallbackPaths(z, worktrees) {
+  if (Array.isArray(z && z.treePaths)) {
+    const paths = [...new Set(z.treePaths.filter(Boolean))];
+    if (!paths.length) return { ok: false, error: '整树 path 没给，未删' };
+    return { ok: true, paths };
+  }
+  if (Array.isArray(worktrees) && z && z.id) {
+    const root = worktrees.find((w) => String(worktreeIdOf(w)) === String(z.id))
+      || worktrees.find((w) => w && w.path && z.path && w.path === z.path);
+    if (root) {
+      const { descendants, missing } = descendantsOf(root, worktrees);
+      if (missing.length) return { ok: false, error: `有 ${missing.length} 个子卡 path 没查成，未删` };
+      const paths = [...new Set([root, ...descendants].map((w) => w && w.path).filter(Boolean))];
+      if (!paths.length) return { ok: false, error: '整树 path 没查成，未删' };
+      if (descendants.length && paths.length < 1 + descendants.length) {
+        return { ok: false, error: '有子卡但没拿到全部 path，未删' };
+      }
+      return { ok: true, paths };
+    }
+  }
+  if (!z || !z.path) return { ok: false, error: '没有树路径' };
+  if (Number(z.children) > 0) return { ok: false, error: '有子卡但没拿到子卡 path，未删' };
+  return { ok: true, paths: [z.path] };
+}
+
 function removeTreeFallback(z, opts = {}) {
-  const path = z && z.path;
-  if (!path) return { ok: false, error: '没有树路径' };
+  const collected = collectFallbackPaths(z, opts.worktrees);
+  if (!collected.ok) return collected;
+  const paths = collected.paths;
   const leaseCheck = opts.leaseCheck || checkTreeLease;
   const strayCheck = opts.strayCheck || listStrayLedgerEvents;
   const rmDir = opts.rmDir || rmSync;
-  const lease = leaseCheck({ workdir: path });
-  if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
-  if (lease.verdict === 'held') return { ok: false, error: lease.why };
+  for (const workdir of paths) {
+    const lease = leaseCheck({ workdir });
+    if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
+    if (lease.verdict === 'held') return { ok: false, error: lease.why };
+  }
   // 对照集合与 worktree-rm 同一处：本机 ~/.dao/ledger/events，不是仓内 ledger/。
   const eventsDir = opts.mainEventsDir || ensureLocalLedger({ root: ROOT }).dir;
   const stray = strayCheck({
-    treePaths: [path],
+    treePaths: paths,
     mainEventsDir: eventsDir,
     readdir: opts.readdir,
     exists: opts.exists,
@@ -255,16 +285,22 @@ function removeTreeFallback(z, opts = {}) {
   if (stray.stray && stray.stray.length) {
     return { ok: false, error: formatStrayLedgerError(stray.stray) };
   }
-  const rm = typeof opts.gitRm === 'function'
-    ? opts.gitRm(path)
-    : run('git', ['-C', ROOT, 'worktree', 'remove', '--force', path], { timeout: 60000 });
-  if (rm.code === 0) return { ok: true };
-  try {
-    rmDir(path, { force: true, recursive: true });
-    return { ok: true, note: `git worktree remove 失败后直接删目录：${(rm.err || rm.out).trim().slice(0, 80)}` };
-  } catch (e) {
-    return { ok: false, error: `删不掉 ${path}：${String(e && e.message || e).slice(0, 160)}` };
+  // 子卡先于父卡（paths[0] 是根）。
+  const order = paths.slice().reverse();
+  let lastNote = '';
+  for (const p of order) {
+    const rm = typeof opts.gitRm === 'function'
+      ? opts.gitRm(p)
+      : run('git', ['-C', ROOT, 'worktree', 'remove', '--force', p], { timeout: 60000 });
+    if (rm && rm.code === 0) continue;
+    try {
+      rmDir(p, { force: true, recursive: true });
+      lastNote = `git worktree remove 失败后直接删目录：${((rm && (rm.err || rm.out)) || '').trim().slice(0, 80)}`;
+    } catch (e) {
+      return { ok: false, error: `删不掉 ${p}：${String(e && e.message || e).slice(0, 160)}` };
+    }
   }
+  return lastNote ? { ok: true, note: lastNote } : { ok: true };
 }
 
 /**
@@ -383,7 +419,7 @@ function main() {
       }
       let r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
       if (r.code !== 0) {
-        const fb = removeTreeFallback(z);
+        const fb = removeTreeFallback(z, { worktrees });
         if (fb.ok) r = { code: 0, err: '', out: fb.note || '' };
         else r = { code: 1, err: fb.error || r.err, out: r.out };
       }

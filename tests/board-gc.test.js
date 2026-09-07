@@ -257,7 +257,7 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   it('worktree-rm 失败走 git 删树兜底，不把 orca_retired 当终局', () => {
     assert.match(src, /function removeTreeFallback/);
     assert.match(src, /checkTreeLease/);
-    const i = src.indexOf('const fb = removeTreeFallback(z)');
+    const i = src.indexOf('const fb = removeTreeFallback(z');
     assert.ok(i > -1, '找不到兜底调用');
     assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
   });
@@ -359,6 +359,47 @@ describe('removeTreeFallback：账本孤本闸 fail-closed', () => {
     assert.equal(gitRmCalled, true);
     fs.rmSync(workerDir, { recursive: true, force: true });
     fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('孤本只在子卡目录 → 拒绝，不调删除，子树还在', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-parent-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-child-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-main-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json'), '{"type":"job.dispatch"}');
+    const removed = [];
+    const r = removeTreeFallback({
+      path: parentDir,
+      treePaths: [parentDir, childDir],
+    }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { removed.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: (p) => { removed.push(`rm:${p}`); },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /child-orphan\.json/);
+    assert.equal(removed.length, 0, '子卡有孤本不许走到删除');
+    assert.ok(fs.existsSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json')));
+    assert.ok(fs.existsSync(parentDir));
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('标明有子卡却没给子卡 path → 没查成，不删', async () => {
+    const removeTreeFallback = await fallback();
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: '/tmp/gc-parent-only', children: 1 }, {
+      leaseCheck: free,
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /子卡/);
+    assert.equal(gitRmCalled, false);
   });
 });
 
@@ -933,7 +974,8 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {
-    assert.match(src, /planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths \} from '\.\/lib\/board-gc\.mjs'/);
+    assert.match(src, /planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths/);
+    assert.match(src, /from '\.\/lib\/board-gc\.mjs'/);
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
