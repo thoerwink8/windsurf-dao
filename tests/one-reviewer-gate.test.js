@@ -238,5 +238,7 @@ describe('一 PR 一审官闸', () => {
       'worker-done 失败没停手报');
     assert.ok(/assertReviewerSeat/.test(createFn) || /refuseIfSameVendor/.test(createFn),
       'reviewer-create 没过同厂/审官位闸');
+    assert.match(createFn, /planReviewerOnCapacityDeath/,
+      'reviewer-create 没按死因取下一位——闸口放行了，生产路径仍拿标签上的死人去起');
   });
 });

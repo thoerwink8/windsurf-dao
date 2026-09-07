@@ -454,6 +454,22 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, runState: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' }, force: true }).reuse, false);
+    // #1122：phase=done 但带着满载死因，不是审完了——复用会把 PR 锁死在死审官上。
+    const cap = judgeReviewerSessionReuse({
+      record: rec,
+      view: { missing: false, phase: 'done', error: 'Selected model is at capacity. Please try a different model.' },
+    });
+    assert.equal(cap.reuse, false, JSON.stringify(cap));
+    assert.match(cap.why, /at capacity/);
+    const stall = judgeReviewerSessionReuse({
+      record: rec,
+      view: { missing: false, phase: 'done', error: 'pi turn stalled past 30 minutes' },
+    });
+    assert.equal(stall.reuse, false, JSON.stringify(stall));
+    // 正常完工（error 空）仍复用——例外口不是常开。
+    assert.equal(judgeReviewerSessionReuse({
+      record: rec, view: { missing: false, phase: 'done', error: '' },
+    }).reuse, true);
   });
 
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {

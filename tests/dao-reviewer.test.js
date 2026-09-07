@@ -79,6 +79,15 @@ describe('dao 审官与完工', () => {
       assert.match(seg, /reviewer: picked\.modelId/);
       assert.match(daoSrc, /readReviewerDeathNote/);
       assert.match(seg, /capacityFailover/);
+      // 闸口只回答「点名过不过」不够：生产路径必须自己按顺位取下一位。
+      assert.match(seg, /planReviewerOnCapacityDeath/);
+      assert.match(daoSrc, /planReviewerOnCapacityDeath/);
+      assert.match(seg, /forceNew/);
+      assert.match(seg, /planned\.switched/);
+      assert.match(seg, /force: forceNew/);
+      const wd = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
+      const wdSeg = daoSrc.slice(wd, wd + 5000);
+      assert.match(wdSeg, /planReviewerOnCapacityDeath/, 'worker-done 也要按死因换人，不只 reviewer-create');
       assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
         'refused-existing 不该再直接 fail 死循环');
     });

@@ -258,6 +258,82 @@ describe('#679 起审官同厂硬闸', () => {
     });
   });
 
+  it('#1122 生产路径选人：标签还钉着死人时按顺位取下一位', async (t) => {
+    const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
+    const base = {
+      deadModelId: 'gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
+      workerId: 'grok-4.6',
+      order,
+    };
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+
+    await t.test('请求仍是刚死的那位 → 自动换成下一位', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, true);
+    });
+
+    await t.test('没点名（标签空）→ 也取下一位，不卡在闸口', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: '',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+    });
+
+    await t.test('点名正好是下一位 → 放行', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+    });
+
+    await t.test('点名跳级 → 拒', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'glm-5.2',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /不许跳级点名/);
+    });
+
+    await t.test('死因不是满载 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: '审官判红' },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, false);
+    });
+
+    await t.test('没交凭证 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({ requested: 'gpt-5.6-sol' });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+    });
+
+    await t.test('下一档就是工人那一厂 → 拒（#679 不许破）', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: DEAD, workerId: 'kimi-k3' },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /同厂/);
+    });
+  });
+
   it('fallback 实际模型与卡名过期：按实际工人闸，不读卡名', async (t) => {
     const order = await reviewerOrder();
     const {

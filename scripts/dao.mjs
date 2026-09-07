@@ -248,7 +248,7 @@ import {
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
-import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -4425,20 +4425,35 @@ async function cmdReviewerCreateMirasim(args) {
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
   if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
-  // #679 同厂硬闸：orca 路一直有，mirasim 路原来没有。2026-09-06 把默认执行体翻成 mirasim
-  // 的那一刻，不补这一句就等于顺手关掉了这道闸——切流量必须把闸一起搬过去，
-  // 否则「闸还在代码里」和「闸还在这条路上」是两回事（memory bypassing-wrapper-loses-its-checks）。
-  const vendorGate = refuseIfSameVendor({
-    workerId: worker.modelId, reviewerId: picked.modelId, routing,
-  });
   // #1122 换厂凭证：只有「上一位审官的会话死于满载/看门狗」才配得上跨厂。
   // 证据从登记在案的那个会话上取——不是一个调用方能自己声明的旗标。
   const failover = await readReviewerDeathNote(bind.runtime, args);
+  const failoverCtx = failover.deadError ? {
+    deadModelId: failover.deadModelId,
+    deadError: failover.deadError,
+    workerId: worker.modelId,
+    models: routing.models || [],
+    passerIds: reviewerOrderOf(routing),
+    order: reviewerOrderOf(routing),
+  } : null;
+  // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
+  const planned = planReviewerOnCapacityDeath({
+    requested: picked.modelId, capacityFailover: failoverCtx,
+  });
+  if (!planned.ok) fail(planned.error, { capacityPlan: planned, pr: String(args.pr) });
+  picked.modelId = planned.reviewerId;
+  // #679 同厂硬闸：orca 路一直有，mirasim 路原来没有。2026-09-06 把默认执行体翻成 mirasim
+  // 的那一刻，不补这一句就等于顺手关掉了这道闸——切流量必须把闸一起搬过去，
+  // 否则「闸还在代码里」和「闸还在这条路上」是两回事（memory bypassing-wrapper-loses-its-checks）。
+  // 闸在选人之后：换厂前标签上的死人可能与工人同厂，先闸会把退路自己砍掉。
+  const vendorGate = refuseIfSameVendor({
+    workerId: worker.modelId, reviewerId: picked.modelId, routing,
+  });
   const seat = assertReviewerSeat({
     reviewerId: picked.modelId, routing,
-    capacityFailover: failover.deadError ? { ...failover, workerId: worker.modelId } : null,
+    capacityFailover: failoverCtx,
   });
-  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, capacityPlan: planned, pr: String(args.pr) });
   const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
   if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });
 
@@ -4456,13 +4471,16 @@ async function cmdReviewerCreateMirasim(args) {
   if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
 
   const registry = mirasimRegistry();
+  // 撞满载换厂必须另起：登记里还是刚死的那位，不带 force 会被一 PR 一审官闸当成「已有」复用。
+  // 证据已经在 planned.switched 上——不是调用方声明的旗标。
+  const forceNew = args.force === true || planned.switched === true;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
   const existing = registry.read(args.pr);
   if (existing.ok && existing.record && existing.record.sessionKey) {
     // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
     // 否则服务端一抽风就给同一个 PR 起第二个审官。
     const peek = args.dryRun ? { view: null, why: 'dry-run 不探会话' } : await peekReviewerSession(bind.runtime, existing.record.sessionKey);
-    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: args.force });
+    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: forceNew });
     if (reuse.reuse) {
       emit({
         ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
@@ -4492,7 +4510,7 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr);
-    if (!args.force && again.ok && again.record && again.record.sessionKey) {
+    if (!forceNew && again.ok && again.record && again.record.sessionKey) {
       return { raced: true, record: again.record };
     }
     const created = await mirasimReviewerCreate({
@@ -4580,6 +4598,22 @@ async function cmdWorkerDoneMirasim(args) {
     const worker = resolveWorkerFromPr({ pr: args.pr, runGh: ghR });
     workerModel = worker.ok ? worker.modelId : null;
   }
+  // #1122：登记会话死于满载时按顺位换下一位，再过同厂闸。闸必须在选人之后，
+  // 否则标签上的死人会把退路自己砍掉。
+  const failover = await readReviewerDeathNote(bind.runtime, args);
+  const failoverCtx = failover.deadError ? {
+    deadModelId: failover.deadModelId,
+    deadError: failover.deadError,
+    workerId: workerModel,
+    models: routing.models || [],
+    passerIds: reviewerOrderOf(routing),
+    order: reviewerOrderOf(routing),
+  } : null;
+  const planned = planReviewerOnCapacityDeath({
+    requested: plan.reviewer, capacityFailover: failoverCtx,
+  });
+  if (!planned.ok) fail(planned.error, { capacityPlan: planned, ...plan });
+  plan.reviewer = planned.reviewerId;
   refuseIfSameVendor({ workerId: workerModel, reviewerId: plan.reviewer, routing });
 
   // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
@@ -4619,7 +4653,7 @@ async function cmdWorkerDoneMirasim(args) {
     reworkPrompt: books.reworkPrompt,
     reviewerModel: plan.reviewer, workerModel,
     models: routing.models, mirasimPolicy: bind.mirasim, round: plan.round,
-    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force,
+    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force === true || planned.switched === true,
   });
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
   emit({

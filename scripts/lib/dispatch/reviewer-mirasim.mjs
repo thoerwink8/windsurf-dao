@@ -14,6 +14,7 @@
 
 import { analyzeGithubReviews } from '../review-state.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
+import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
 import { judgeAgentRoute } from '../executor-binding.mjs';
 import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
@@ -94,6 +95,14 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
   }
   if (phase && DEAD_PHASES.has(phase)) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} phase=${phase}（已废）→ 可新建` };
+  }
+  // #1122：phase=done 但带着满载/看门狗死因，不是「审完了」——复用 = 把 PR 锁死在死审官上。
+  // 空 error 仍复用：那才是正常完工，换厂例外口不是常开。
+  if (isCapacityDeath(view.error)) {
+    return {
+      reuse: false, sessionKey: key, checked: true,
+      why: `会话 ${key} 死于「${String(view.error).trim().slice(0, 60)}」→ 可新建（撞满载换厂）`,
+    };
   }
   return { reuse: true, sessionKey: key, checked: true, phase: phase || null, why: `登记里有在役会话 ${key}，复用（一 PR 一审官）` };
 }

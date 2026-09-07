@@ -7,3 +7,6 @@ export function judgeCapacityFailover({ requested, capacityFailover } = {}) {
   if (!deadError) return { ok: false, unscanned: true };
   return nextReviewerAfter({ workerId });
 }
+export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}) {
+  return judgeCapacityFailover({ requested, capacityFailover });
+}

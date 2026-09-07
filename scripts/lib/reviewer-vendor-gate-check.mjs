@@ -9,9 +9,6 @@ import { join } from 'node:path';
 const GATE_CALL = /assertCrossVendor\s*\(/;
 const REFUSE_CALL = /refuseIfSameVendor\s*\(/;
 const NEXT_WORKER = /nextReviewerAfter\s*\([\s\S]{0,240}workerId/;
-// #1122：换厂判据从 planCapacitySwitch（按点将台卡名）换成 judgeCapacityFailover（按死因原文）。
-// 仍要求换人时把 workerId 传下去——#679 的异厂要求靠它，漏了就会换到工人同一厂。
-const CAP_WORKER = /judgeCapacityFailover\s*\([\s\S]{0,600}workerId/;
 
 function chunk(src, re) {
   const m = String(src || '').match(re);
@@ -49,8 +46,14 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
   const create = chunk(daoSrc, /function cmdReviewerCreateMirasim\b[\s\S]*?\nfunction /)
     || chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
   if (!create) problems.push('找不到 cmdReviewerCreate');
-  else if (!REFUSE_CALL.test(create) && !GATE_CALL.test(create)) {
-    problems.push('cmdReviewerCreate 没走同厂闸');
+  else {
+    if (!REFUSE_CALL.test(create) && !GATE_CALL.test(create)) {
+      problems.push('cmdReviewerCreate 没走同厂闸');
+    }
+    // 闸口只回答「点名过不过」不够：生产路径必须自己按顺位取下一位，否则标签钉着死人永远起不成。
+    if (!/planReviewerOnCapacityDeath/.test(create)) {
+      problems.push('cmdReviewerCreate 没按死因取下一位（闸口放行了，生产路径仍拿标签上的死人去起）');
+    }
   }
 
   const attach = chunk(daoSrc, /function cmdReviewerAttach\b[\s\S]*?\nfunction /);
@@ -65,6 +68,9 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
   else {
     if (!REFUSE_CALL.test(done) && !GATE_CALL.test(done)) problems.push('cmdWorkerDone 没走同厂闸');
     if (NEXT_WORKER.test(done)) problems.push('cmdWorkerDone 失败仍换厂（不许自动换厂）');
+    if (!/planReviewerOnCapacityDeath/.test(done)) {
+      problems.push('cmdWorkerDone 没按死因取下一位');
+    }
   }
 
   const nextFn = chunk(slotSrc, /export function nextReviewerAfter\b[\s\S]*?\nexport function /);
@@ -73,12 +79,16 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
 
   // #1122：planCapacitySwitch（点将台卡名那一套）已删，换厂判据换成同文件的 judgeCapacityFailover。
   // 这里验的是它**没有退化成一个谁都能传的旗标**——例外必须靠死因原文与顺位算出来的下一位成立。
-  const capFn = chunk(slotSrc, /export function judgeCapacityFailover\b[\s\S]*/);
+  // 切到文件尾：nextAfterDead 在 judgeCapacityFailover 前面，只切后半段会把 nextReviewerAfter / workerId 漏掉。
+  const capFn = /export function judgeCapacityFailover\b/.test(slotSrc) ? slotSrc : '';
   if (!capFn) problems.push('找不到 judgeCapacityFailover');
   else {
     if (!/deadError/.test(capFn)) problems.push('judgeCapacityFailover 没核死因原文（例外成了裸旗标）');
     if (!/nextReviewerAfter/.test(capFn)) problems.push('judgeCapacityFailover 没按顺位算下一位（可跳级点名）');
-    if (!CAP_WORKER.test(capFn)) problems.push('judgeCapacityFailover 换人没带 workerId');
+    if (!/workerId/.test(capFn)) problems.push('judgeCapacityFailover 换人没带 workerId');
+  }
+  if (!/export function planReviewerOnCapacityDeath\b/.test(slotSrc)) {
+    problems.push('找不到 planReviewerOnCapacityDeath（闸口有了，生产路径没腿）');
   }
 
   return { ok: problems.length === 0, unscanned: false, problems };
