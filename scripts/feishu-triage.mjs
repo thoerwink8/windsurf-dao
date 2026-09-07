@@ -70,7 +70,9 @@ import { ensurePlain } from './lib/plain-words.mjs';
 import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
-import { isDailyListPending } from './lib/feishu-daily-card.mjs';
+import {
+  isDailyAction, isDailyListPending, dailyCallbackResponse,
+} from './lib/feishu-daily-card.mjs';
 import {
   MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent,
 } from './lib/hub-pending.mjs';
@@ -708,6 +710,11 @@ export function cardActionAck(response) {
   const toast = response?.toast && typeof response.toast === 'object'
     ? { type: response.toast.type || 'info', content: String(response.toast.content || '').slice(0, 100) }
     : { type: 'info', content: '已收到' };
+  // 日报卡按钮只 toast、不换卡（card === null）。缺 card 字段才回落到空待拍板卡——
+  // 那是待拍板路径出错时的兜底，不许把日报卡点没。
+  if (response && Object.prototype.hasOwnProperty.call(response, 'card') && response.card == null) {
+    return { toast };
+  }
   return {
     toast,
     card: { type: 'raw', data: response?.card || buildHubCard({}) },
@@ -720,6 +727,18 @@ export function cardActionAck(response) {
 export async function handleCardAction(event, { store, deps } = {}) {
   const parsed = parseCardAction(event);
   if (!parsed) return null;
+  // 日报卡按钮：toast 一句，不写 GitHub、不改待拍板卡、不记 hubPending。
+  if (isDailyAction(parsed.rawValue)) {
+    const response = dailyCallbackResponse(parsed.rawValue);
+    const ack = cardActionAck(response);
+    log({
+      type: 'card_action',
+      kind: response.kind,
+      action: parsed.rawValue && parsed.rawValue.action || null,
+      toast: ack.toast,
+    });
+    return { parsed, response, ack, actions: [] };
+  }
   const pending = (parsed.messageId && store?.hubPending?.[parsed.messageId]) || null;
   const now = typeof deps?.now === 'function' ? deps.now() : Date.now();
   const who = parsed.name || parsed.openId || '有人';
@@ -760,7 +779,9 @@ export async function handleCardAction(event, { store, deps } = {}) {
 
 /** live 路径：先算出 ack 立刻 return 给 SDK，gh 评论 setImmediate 后跑。
  *  通讯录永远不进这条路径——假 client.userName 挂死也必须在预算内回包。 */
-export async function liveCardAction(event, { store, deps, client = null, defer = setImmediate } = {}) {
+export async function liveCardAction(event, {
+  store, deps, client = null, defer = setImmediate, groups, creds,
+} = {}) {
   try {
     const result = await handleCardAction(event, { store, deps });
     const ack = result?.ack || cardActionAck({
@@ -771,6 +792,14 @@ export async function liveCardAction(event, { store, deps, client = null, defer 
       applyCardActions(result, { store, deps, client }).catch((e) => {
         log({ type: 'error', message: String(e.message || e) });
       });
+      // 「看待拍板」真正去拉 GitHub / 发卡，必须在 3 秒回包之后——打网不许挡 toast。
+      if (isDailyListPending(result?.parsed?.rawValue)) {
+        handleListPending({
+          groups, store, creds, chatId: result.parsed.chatId, client,
+        }).catch((e) => {
+          log({ type: 'error', message: String(e.message || e) });
+        });
+      }
     });
     return ack;
   } catch (e) {
@@ -881,19 +910,25 @@ export async function handleEvent(event, { groups, store, deps, triage, client, 
     return handleListPending({ groups, store, creds, chatId: menu.chatId, client });
   }
   const cardParsed = parseCardAction(event);
-  if (cardParsed && isDailyListPending(cardParsed.rawValue)) {
-    return handleListPending({ groups, store, creds, chatId: cardParsed.chatId, client });
-  }
   if (cardParsed) {
     const result = await handleCardAction(event, { store, deps, client });
     if (!result) return null;
     await applyCardActions(result, { store, deps, client });
+    let listed = null;
+    if (isDailyListPending(cardParsed.rawValue)) {
+      listed = await handleListPending({ groups, store, creds, chatId: cardParsed.chatId, client });
+    }
     return {
       inbound: null,
-      replies: (result.actions || []).filter((a) => a.type === 'card_followup').map((a) => ({ rootId: a.rootId, text: a.text })),
-      actions: result.actions || [],
+      replies: [
+        ...(result.actions || []).filter((a) => a.type === 'card_followup').map((a) => ({ rootId: a.rootId, text: a.text })),
+        ...(listed && listed.replies ? listed.replies : []),
+      ],
+      actions: [...(result.actions || []), ...((listed && listed.actions) || [])],
       cardAck: result.ack,
       cardKind: result.response?.kind,
+      plan: listed && listed.plan,
+      applied: listed && listed.applied,
     };
   }
   const inbound = normalizeInbound(event, groups);
@@ -1033,7 +1068,7 @@ export async function runLive({ groups, store, deps, creds, triage, coreSource }
   });
   // #875：卡片点击必须 3 秒内 return toast/卡片；gh 评论放到回包之后，不挡 SDK ack。
   if (typeof client.onCardAction === 'function') {
-    client.onCardAction((event) => liveCardAction(event, { store, deps, client }));
+    client.onCardAction((event) => liveCardAction(event, { store, deps, client, groups, creds }));
   }
 
   const stop = () => {
