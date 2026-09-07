@@ -13,10 +13,16 @@
 //
 // 三态必须分得开：
 //   unscanned —— 没查成（清单空 / 探头失败 / 保护 JSON 读不成布尔）
-//   skip      —— 缺 gh / 401/403（不是绿）
+//   skip      —— 缺 gh / 连 branches 摘要都 401/403（不是绿）
 //   red       —— 进了判定面，但缺闸或形状错（缺保护、contexts 不对、enforce_admins/strict 为 true）
 //   ok        —— 判定面上每个仓形状都对
 // 空清单不许当绿。
+//
+// live / CI 打 GET repos/:slug/branches/master（contents:read 够）。
+// 完整 GET .../protection 要 Administration，CI token 和四个 App 都是 403，
+// SKIP 仍绿 = 闸被关掉也没人报警。装闸脚本继续走完整 /protection。
+// 摘要看得见：protected、required_status_checks.contexts、enforcement_level。
+// strict 不在摘要里——live 盖不住「有人把 strict 拨成 true」。
 
 import { join } from 'node:path';
 
@@ -233,6 +239,70 @@ export function judgeProtection(protection) {
   return { kind: 'ok', why: '形状对', contexts, enforce_admins: admins.value, strict: strict.value };
 }
 
+/** GET branches/:name 摘要的 enforcement_level → 是否 enforce_admins。 */
+export function enforceAdminsFromLevel(level) {
+  if (level === 'non_admins' || level === 'off') return { ok: true, value: false };
+  if (level === 'everyone') return { ok: true, value: true };
+  return { ok: false, value: level };
+}
+
+/**
+ * 纯函数：给 GET branches/master 那种摘要 JSON（不要完整 protection 对象）。
+ * 绿 / 缺保护 / contexts 错 / enforcement_level=everyone。
+ * strict 不在摘要里——live 盖不住「有人把 strict 拨成 true」，装闸脚本走完整 /protection。
+ */
+export function judgeBranchSummary(branch) {
+  if (branch == null) {
+    return { kind: 'unscanned', why: '分支摘要不是对象（没查成）' };
+  }
+  if (!isPlainObject(branch)) {
+    return { kind: 'unscanned', why: '分支摘要不是对象（没查成）' };
+  }
+  if (branch.protected === false) {
+    return { kind: 'red', why: '缺保护' };
+  }
+  if (branch.protected !== true) {
+    return { kind: 'unscanned', why: 'protected 不是布尔（没查成）' };
+  }
+  const inner = isPlainObject(branch.protection) ? branch.protection : null;
+  if (!inner) {
+    return { kind: 'red', why: '缺保护' };
+  }
+  const contexts = contextsOf(inner);
+  if (contexts == null) {
+    return { kind: 'red', why: '缺 required_status_checks.contexts' };
+  }
+  const rsc = inner.required_status_checks;
+  const level = isPlainObject(rsc) ? rsc.enforcement_level : undefined;
+  const admins = enforceAdminsFromLevel(level);
+  if (!admins.ok) {
+    return { kind: 'unscanned', why: 'enforcement_level 读不成（没查成）' };
+  }
+  const problems = [];
+  if (!sameContexts(contexts)) {
+    problems.push(`required contexts=[${contexts.join(',')}]，要 [${REQUIRED_CONTEXTS.join(',')}]`);
+  }
+  if (admins.value !== REQUIRE_ENFORCE_ADMINS) {
+    problems.push(`enforcement_level=${level}（enforce_admins=${admins.value}），要 non_admins`);
+  }
+  if (problems.length) {
+    return {
+      kind: 'red',
+      why: problems.join('；'),
+      contexts,
+      enforce_admins: admins.value,
+      enforcement_level: level,
+    };
+  }
+  return {
+    kind: 'ok',
+    why: '形状对',
+    contexts,
+    enforce_admins: admins.value,
+    enforcement_level: level,
+  };
+}
+
 /**
  * 把 gh api 一次调用的结果收成 skip / 404缺保护 / 保护 JSON / 没查成。
  * 调用方 spawn，本函数不碰网络。
@@ -276,10 +346,54 @@ export function classifyProtectionProbe({ error, status, stdout, stderr, httpSta
 }
 
 /**
- * 一仓：元数据过滤 → 探头 → 形状。
- * probe 已分类（classifyProtectionProbe 的返回），或直接给 protection。
+ * 把 GET branches/master 一次调用的结果收成 skip / 摘要 JSON / 没查成。
+ * 403/ENOENT 只留给「连摘要都读不到」——那才是真没查成。
+ * protected=false 走 judgeBranchSummary，是红不是 skip。
  */
-export function judgeRepoGate({ slug, meta, protection, probe } = {}) {
+export function classifyBranchProbe({ error, status, stdout, stderr, httpStatus } = {}) {
+  const err = error || null;
+  const msg = String((err && (err.message || err.code)) || '');
+  if (err && (err.code === 'ENOENT' || /ENOENT/i.test(msg))) {
+    return { kind: 'skip', why: 'gh 不可用（ENOENT）' };
+  }
+  const trimmedOut = String(stdout || '').trim();
+  const trimmedErr = String(stderr || '').trim();
+  let doc = null;
+  for (const chunk of [trimmedOut, trimmedErr]) {
+    if (!chunk) continue;
+    const i = chunk.indexOf('{');
+    if (i < 0) continue;
+    try { doc = JSON.parse(chunk.slice(i)); break; } catch { /* 下一片 */ }
+  }
+  const http = Number(httpStatus)
+    || Number(doc && doc.status)
+    || null;
+  const combined = `${msg}\n${trimmedOut}\n${trimmedErr}`;
+  const failed = Boolean(err) || (status != null && status !== 0);
+  if (failed || http === 401 || http === 403) {
+    if (/401|403/.test(String(http)) || /HTTP\s*403|HTTP\s*401|Upgrade to GitHub Pro|Resource not accessible|Bad credentials|authentication/i.test(combined)) {
+      return { kind: 'skip', why: `无权限（${http || '401/403'}）` };
+    }
+    if (http === 404 || (doc && doc.message === 'Not Found')) {
+      return { kind: 'unscanned', why: '分支摘要 404（没查成）' };
+    }
+    return {
+      kind: 'unscanned',
+      why: `探头失败（exit ${status ?? 'error'}）：${(trimmedErr || trimmedOut || msg).slice(0, 160)}`,
+    };
+  }
+  if (!isPlainObject(doc)) {
+    return { kind: 'unscanned', why: '分支摘要不是对象（没查成）' };
+  }
+  return { kind: 'ok', branch: doc };
+}
+
+/**
+ * 一仓：元数据过滤 → 探头 → 形状。
+ * probe 已分类（classifyProtectionProbe / classifyBranchProbe 的返回），
+ * 或直接给 protection / summary（GET branches/master 那种摘要）。
+ */
+export function judgeRepoGate({ slug, meta, protection, probe, summary } = {}) {
   const name = String(slug || '(无名)');
   const surface = inJudgmentSurface(meta);
   if (surface.unscanned) {
@@ -296,9 +410,17 @@ export function judgeRepoGate({ slug, meta, protection, probe } = {}) {
       return { slug: name, kind: 'red', why: `${name}：缺保护` };
     }
     if (p.kind === 'ok') {
+      if (p.branch) {
+        const j = judgeBranchSummary(p.branch);
+        return { slug: name, kind: j.kind, why: `${name}：${j.why}` };
+      }
       const j = judgeProtection(p.protection);
       return { slug: name, kind: j.kind, why: `${name}：${j.why}` };
     }
+  }
+  if (summary !== undefined) {
+    const j = judgeBranchSummary(summary);
+    return { slug: name, kind: j.kind, why: `${name}：${j.why}` };
   }
   const j = judgeProtection(protection);
   return { slug: name, kind: j.kind, why: `${name}：${j.why}` };
@@ -524,7 +646,11 @@ export function protectionPutPayload() {
 
 /**
  * live：本仓 master 保护形状。探头（gh api）由调用方注入。
- * 缺 gh / 401/403 → skip（不是绿）。清单空 / 探头失败 → unscanned。
+ * 打 GET repos/:slug/branches/master（contents:read 够，CI / App 都能读）。
+ * 完整 /protection 要 Administration，CI 上 403 → SKIP 仍绿，闸被关也没人报警。
+ * 缺 gh / 连摘要都 401/403 → skip（不是绿）。清单空 / 探头失败 → unscanned。
+ * protected=false / contexts 错 / enforcement_level=everyone → 红。
+ * strict 不在摘要里——live 盖不住「有人把 strict 拨成 true」；装闸脚本走完整 /protection。
  * 只查这一个仓——别的公开活仓（如 miraquota-win）刻意没装闸，
  * 扫进判定面会让 dao-check 永远红。扫描面本身由 collectManagedRepos 在夹具/目录检里验。
  */
@@ -548,7 +674,7 @@ export function inspectThisRepoProtection({ originSlug, meta, spawnGh } = {}) {
     : { private: false, archived: false, has_pages: false, name };
   let raw;
   try {
-    raw = spawnGh(['api', `repos/${slug}/branches/master/protection`]);
+    raw = spawnGh(['api', `repos/${slug}/branches/master`]);
   } catch (e) {
     return {
       ok: false, unscanned: true, skip: false,
@@ -556,6 +682,6 @@ export function inspectThisRepoProtection({ originSlug, meta, spawnGh } = {}) {
       violations: [], scanned: 0, judged: 0,
     };
   }
-  const probe = classifyProtectionProbe(raw || {});
+  const probe = classifyBranchProbe(raw || {});
   return inspectBranchProtection({ repos: [{ slug, meta: repoMeta, probe }] });
 }

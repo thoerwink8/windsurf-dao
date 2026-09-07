@@ -95,7 +95,10 @@
 // ㉞ 合并闸形状（#999）：在管公开活仓该有 master 保护，形状必须是
 //    required=["check"]、enforce_admins=false、strict=false。扫描面从 INDEX E 类 /
 //    群映射 / 发布策略并出，不手写仓名单。live 只验本仓（别的公开仓如 miraquota-win
-//    刻意没装闸，扫进去会永远红）。缺 gh / 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
+//    刻意没装闸，扫进去会永远红）。live 打 GET branches/master（CI contents:read 够）；
+//    完整 /protection 要 Administration，CI/App 403 → SKIP 仍绿 = 闸不存在。
+//    缺 gh / 连摘要都 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
+//    strict 不在摘要里，live 盖不住「有人把 strict 拨成 true」——装闸脚本走完整 /protection。
 //    不造分发器：配置动作用 scripts/apply-branch-protection.mjs，一次一个仓。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -2012,7 +2015,7 @@ function checkBranchProtectionLive() {
   if (r.unscanned) {
     fail(
       '合并闸 live 没查成',
-      'gh api repos/.../branches/master/protection 要能跑；失败不是没问题',
+      'gh api repos/.../branches/master 要能跑（contents:read）；连摘要都读不到才是没查成',
       r.error || '',
     );
     return;
@@ -2020,7 +2023,7 @@ function checkBranchProtectionLive() {
   if (!r.ok) {
     fail(
       `本仓 master 合并闸形状不对 ${(r.violations || []).length} 处`,
-      'required=["check"]、enforce_admins=false、strict=false；装：node scripts/apply-branch-protection.mjs --repo OWNER/REPO',
+      'required=["check"]、enforcement_level=non_admins（=enforce_admins:false）；装：node scripts/apply-branch-protection.mjs --repo OWNER/REPO',
       (r.violations || []).map((v) => v.why).join('；'),
     );
     return;

@@ -5,7 +5,8 @@
 //   故意违规必须拦：缺保护、required contexts 不对、enforce_admins: true、strict: true；
 //   绿样本必须绿；空清单 / 探头失败 = 没查成，不是绿；
 //   扫描面不手写仓名单；归档 / 私有 / Pages 站不进判定面；
-//   live：本仓 master 形状对得上；缺 gh / 无权限 SKIP 不是绿；
+//   live：打 GET branches/master 摘要（CI contents:read 够），本仓形状对得上；
+//   缺 gh / 连摘要都无权限 SKIP 不是绿；protected=false 必须红，不能 SKIP；
 //   检查器自持解析，不 import INDEX / 群映射 / 发布策略的消费方。
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,6 +26,22 @@ function okShape(over = {}) {
 
 function publicMeta(name) {
   return { private: false, archived: false, has_pages: false, name: name || 'live' };
+}
+
+/** GET repos/:slug/branches/master 那种摘要，不是完整 protection 对象。 */
+function branchSummary({ protected: prot = true, contexts = ['check'], level = 'non_admins' } = {}) {
+  return {
+    name: 'master',
+    protected: prot,
+    protection: {
+      enabled: prot,
+      required_status_checks: {
+        checks: contexts.map((c) => ({ context: c })),
+        contexts,
+        enforcement_level: level,
+      },
+    },
+  };
 }
 
 describe('branch-protection-check', () => {
@@ -268,11 +285,65 @@ describe('branch-protection-check', () => {
     const noProbe = S.inspectThisRepoProtection({ originSlug: 'thoerwink8/windsurf-dao' });
     assert.equal(noProbe.unscanned, true);
 
+    const seen = [];
     const green = S.inspectThisRepoProtection({
       originSlug: 'thoerwink8/windsurf-dao',
-      spawnGh: () => ({ status: 0, stdout: JSON.stringify(okShape()), stderr: '' }),
+      spawnGh: (args) => {
+        seen.push(args);
+        return { status: 0, stdout: JSON.stringify(branchSummary()), stderr: '' };
+      },
     });
     assert.equal(green.ok, true);
     assert.equal(green.skip, false);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].includes('repos/thoerwink8/windsurf-dao/branches/master'), true);
+    assert.equal(JSON.stringify(seen).includes('/protection'), false);
+  });
+
+  it('judgeBranchSummary：摘要 JSON 分出绿 / 缺保护 / contexts 错 / everyone', async () => {
+    const S = await LOAD;
+
+    const green = S.judgeBranchSummary(branchSummary());
+    assert.equal(green.kind, 'ok');
+    assert.equal(green.enforcement_level, 'non_admins');
+
+    const missing = S.judgeBranchSummary(branchSummary({
+      protected: false, contexts: [], level: 'off',
+    }));
+    assert.equal(missing.kind, 'red');
+    assert.match(missing.why, /缺保护/);
+
+    const badCtx = S.judgeBranchSummary(branchSummary({ contexts: ['ci'] }));
+    assert.equal(badCtx.kind, 'red');
+    assert.match(badCtx.why, /required contexts/);
+
+    const everyone = S.judgeBranchSummary(branchSummary({ level: 'everyone' }));
+    assert.equal(everyone.kind, 'red');
+    assert.match(everyone.why, /everyone/);
+
+    const liveMissing = S.inspectThisRepoProtection({
+      originSlug: 'thoerwink8/windsurf-dao',
+      spawnGh: () => ({
+        status: 0,
+        stdout: JSON.stringify(branchSummary({ protected: false, contexts: [], level: 'off' })),
+        stderr: '',
+      }),
+    });
+    assert.equal(liveMissing.ok, false);
+    assert.equal(liveMissing.skip, false);
+    assert.equal(liveMissing.unscanned, false);
+    assert.equal(liveMissing.violations.length, 1);
+    assert.match(liveMissing.violations[0].why, /缺保护/);
+
+    const skip403 = S.inspectThisRepoProtection({
+      originSlug: 'thoerwink8/windsurf-dao',
+      spawnGh: () => ({
+        status: 1,
+        stdout: '',
+        stderr: JSON.stringify({ message: 'Resource not accessible by integration' }),
+      }),
+    });
+    assert.equal(skip403.skip, true);
+    assert.equal(skip403.ok, false);
   });
 });
