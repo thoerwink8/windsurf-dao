@@ -2,13 +2,15 @@
 //
 // 改这段前必须知道：worker-done 在士兵 dispatch 里起审官会撞 Orca 深度限制
 // （Sub-worker dispatch is not permitted at depth 2）。起败时把待办落到
-// _flow/queue/review-pending/<pr>.json，指挥官 / automations 调
-// review-pending-drain 逐条 reviewer-attach --skip-wait。
+// _flow/queue/review-pending/<pr>.json（本仓）或 <owner>__<name>__<pr>.json（跨仓）。
+// 指挥官 / automations 调 review-pending-drain 逐条 reviewer-attach --skip-wait。
 // 扫完 0 条 ≠ 没扫成：目录不在或空是 scanned:0；目录读不了才 unscanned。
+// #1024 复审：文件名必须带仓，两个仓的同号 PR 不许共用 12.json。
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { dispatchQueueDir } from '../dispatch-queue.mjs';
+import { repoPrKey } from './repo.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
@@ -39,8 +41,15 @@ export function reviewPendingDir({ root, env } = {}) {
   return join(root, REVIEW_PENDING_DIR_REL);
 }
 
-export function reviewPendingPath(dir, pr) {
-  return join(dir, `${String(pr).trim()}.json`);
+const REVIEW_PENDING_FILE_RE = /^(?:\d+|[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+__\d+)\.json$/;
+
+export function reviewPendingPath(dir, pr, repo) {
+  const keyed = repoPrKey({ repo, pr });
+  if (!keyed.ok) {
+    // 键没做成不许回落到纯 PR 号（两个仓同号会串票）。
+    return join(dir, `.invalid-${String(pr ?? '').trim()}.json`);
+  }
+  return join(dir, `${keyed.stem}.json`);
 }
 
 export function buildReviewPendingTicket({
@@ -63,6 +72,12 @@ export function buildReviewPendingTicket({
   const oid = head?.oid || head?.headRefOid || null;
   const name = head?.name || head?.headRefName || null;
   const when = ts instanceof Date ? ts : new Date(ts || Date.now());
+  let repoField = null;
+  if (repo != null && String(repo) !== '') {
+    const keyed = repoPrKey({ repo, pr: n });
+    if (!keyed.ok) return { ok: false, error: keyed.error };
+    repoField = keyed.ownerName;
+  }
   return {
     ok: true,
     ticket: {
@@ -76,7 +91,7 @@ export function buildReviewPendingTicket({
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
-      repo: repo && String(repo).trim() ? String(repo).trim() : null,
+      repo: repoField,
       error: error ? String(error) : null,
       source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
@@ -89,7 +104,9 @@ export function writeReviewPending({ dir, ticket } = {}) {
   if (!ticket || ticket.kind !== REVIEW_PENDING_KIND || !ticket.pr) {
     return { ok: false, error: '不是复审待办（kind/pr 对不上）' };
   }
-  const path = reviewPendingPath(dir, ticket.pr);
+  const keyed = repoPrKey({ repo: ticket.repo, pr: ticket.pr });
+  if (!keyed.ok) return { ok: false, error: keyed.error };
+  const path = reviewPendingPath(dir, ticket.pr, ticket.repo);
   try {
     mkdirSync(dir, { recursive: true });
     const tmp = `${path}.tmp-${process.pid}`;
@@ -131,7 +148,7 @@ export function listReviewPending(dir) {
   }
   const tickets = [];
   for (const name of names) {
-    if (!/^\d+\.json$/.test(name)) continue;
+    if (!REVIEW_PENDING_FILE_RE.test(name)) continue;
     const read = readReviewPending(join(dir, name));
     if (!read.ok) return { ok: false, unscanned: true, error: read.error, tickets };
     tickets.push(read.ticket);
@@ -202,7 +219,7 @@ export function consumeReviewPending({ dir, ticket, attach } = {}) {
     };
   }
   if (dir && ticket?.pr) {
-    const pendingPath = reviewPendingPath(dir, ticket.pr);
+    const pendingPath = reviewPendingPath(dir, ticket.pr, ticket.repo);
     try {
       unlinkSync(pendingPath);
     } catch (e) {

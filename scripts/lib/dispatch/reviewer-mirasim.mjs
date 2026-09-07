@@ -17,6 +17,7 @@ import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { listPrReviews } from './worker-done.mjs';
 import { judgeAgentRoute } from '../executor-binding.mjs';
 import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
+import { repoPrKey } from './repo.mjs';
 
 /** readSession 回的 phase 里代表「这条会话已经废了」的那几个。废了才准新建，别的一律复用。 */
 const DEAD_PHASES = new Set(['error', 'failed', 'aborted', 'cancelled', 'canceled']);
@@ -340,25 +341,43 @@ export async function mirasimReviewerCreate({
 
 // ── PR→会话 登记（rework 轮找回审官会话） ─────────────────────────────────────
 
-/** 默认登记 IO：_flow/mirasim/reviewer-<pr>.json。测试注入内存版。 */
+/** 默认登记 IO：~/.dao/mirasim/reviewer-<pr>.json（本仓）或 reviewer-<owner>__<name>__<pr>.json（跨仓）。测试注入内存版。 */
 export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flowDir } = {}) {
   const dir = flowDir;
-  const path = (pr) => join(dir, `reviewer-${pr}.json`);
+  const loc = (pr, repo) => {
+    const keyed = repoPrKey({ repo, pr });
+    if (!keyed.ok) return keyed;
+    return { ok: true, path: join(dir, `reviewer-${keyed.stem}.json`), keyed };
+  };
   return {
-    read(pr) {
+    read(pr, repo) {
+      const place = loc(pr, repo);
+      if (!place.ok) return { ok: false, missing: true, why: place.error };
       try {
-        const t = readFile(path(pr));
+        const t = readFile(place.path);
         const j = JSON.parse(t);
-        return { ok: true, record: j };
+        if (place.keyed.scoped) {
+          const recRepo = j && j.repo ? String(j.repo).trim() : '';
+          if (!recRepo || recRepo.toLowerCase() !== place.keyed.ownerName.toLowerCase()) {
+            return {
+              ok: false,
+              missing: true,
+              why: `PR ${pr} 的审官登记不是 ${place.keyed.ownerName}（旧无仓或不匹配），跨仓请求不复用`,
+            };
+          }
+        }
+        return { ok: true, record: j, path: place.path };
       } catch (e) {
         return { ok: false, missing: true, why: `没有 PR ${pr} 的审官会话登记：${String(e?.message || e)}` };
       }
     },
     write(pr, record) {
+      const place = loc(pr, record && record.repo);
+      if (!place.ok) return { ok: false, error: place.error };
       try {
         mkdir(dir);
-        writeFile(path(pr), JSON.stringify(record, null, 2));
-        return { ok: true, path: path(pr) };
+        writeFile(place.path, JSON.stringify(record, null, 2));
+        return { ok: true, path: place.path };
       } catch (e) {
         return { ok: false, error: `写审官会话登记失败：${String(e?.message || e)}` };
       }
@@ -374,7 +393,7 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flow
  */
 export async function mirasimWorkerDone({
   runtime, gh, readTreeHead, prepareRef, syncTree, registry,
-  pr, repo, prompt, reworkPrompt, reworkAnswer, reviewBranch,
+  pr, repo, ownerName, prompt, reworkPrompt, reworkAnswer, reviewBranch,
   reviewerModel, workerModel, models, mirasimPolicy,
   round, force, now = () => Date.now(),
 } = {}) {
@@ -394,7 +413,7 @@ export async function mirasimWorkerDone({
     theRound = listed.count > 0 ? 'rework' : 'first';
   }
 
-  const existing = registry.read(pr);
+  const existing = registry.read(pr, ownerName);
   const record = existing.ok ? existing.record : null;
   const sessionKey = record && record.sessionKey ? String(record.sessionKey) : '';
 
@@ -427,7 +446,7 @@ export async function mirasimWorkerDone({
     });
     if (!created.ok) return { ...created, stage: `create:${created.stage}`, round: theRound, reviewCount, reuse };
     const w = writeReviewerRecord({
-      registry, pr, created, round: theRound, prevSessionKey: sessionKey || null, now,
+      registry, pr, ownerName, created, round: theRound, prevSessionKey: sessionKey || null, now,
     });
     if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, reuse };
     return {
@@ -502,7 +521,7 @@ export async function mirasimWorkerDone({
   // 树已在新 head：登记里的 expectedOid 也要跟上（帅位实咬：它还是首轮的值，下一轮又对不上）。
   const refreshed = registry.write(pr, {
     ...record,
-    pr: String(pr), sessionKey, treePath,
+    pr: String(pr), repo: ownerName || record.repo || null, sessionKey, treePath,
     round: theRound, headRefName: prHead.headRefName, expectedOid: prHead.expectedOid,
     treeHead, ts: now(),
   });
@@ -540,7 +559,7 @@ export async function mirasimWorkerDone({
     prompt: reworkPrompt || prompt, now,
   });
   if (!created.ok) return { ...created, stage: `rework:${created.stage}`, round: theRound, reviewCount, treeSync };
-  const w = writeReviewerRecord({ registry, pr, created, round: theRound, prevSessionKey: sessionKey, now });
+  const w = writeReviewerRecord({ registry, pr, ownerName, created, round: theRound, prevSessionKey: sessionKey, now });
   if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, treeSync };
   return { ok: true, action: 'reworked-new', round: theRound, reviewCount, session: created, registryWrite: w.write, treeSync };
 }
@@ -567,9 +586,10 @@ export async function peekReviewerSession(runtime, sessionKey) {
  * 于是重试会把「没持久化」当成「没有 session」再起第二个会话。这里把写失败翻成 ok:false，
  * 并把已起的 sessionKey 一并交出——人能顺着这个 key 收摊，不至于起了会话又丢了线头。
  */
-function writeReviewerRecord({ registry, pr, created, round, prevSessionKey, now }) {
+function writeReviewerRecord({ registry, pr, ownerName, created, round, prevSessionKey, now }) {
   const rec = {
-    pr: String(pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+    pr: String(pr), repo: ownerName ? String(ownerName) : null,
+    sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
     round, headRefName: created.headRefName, expectedOid: created.expectedOid,
     treeHead: created.treeHead || null,
     ...(prevSessionKey ? { prevSessionKey } : {}),

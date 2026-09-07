@@ -180,6 +180,34 @@ export function resolveLocalCheckout({ ownerName, projectsRoot = '/srv/projects'
   return { ok: true, ownerName: parsed.ownerName, localPath, name: parsed.name };
 }
 
+/**
+ * #1024 复审：跨仓持久化/互斥键（审官登记、锁、复审待办共用）。
+ * 本仓（不传 --repo）仍用纯 PR 号，存量 `12.json` / `reviewer-12.json` 一字不变。
+ * 显式 owner/name 用 `owner__name__pr`（`__` 不在 owner/name 字符集里，也不会被仓外路径闸扫成 `~/…`）。
+ * 非法 --repo 当场拒，不许 trim 成半截键，也不许回落到纯 PR 号。
+ */
+export function repoPrKey({ repo, pr } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, error: 'repoPrKey 要 PR 号' };
+  if (!/^\d+$/.test(n)) return { ok: false, error: `repoPrKey PR 号非法：「${n}」` };
+  if (repo == null || String(repo) === '') {
+    return { ok: true, key: n, stem: n, scoped: false, ownerName: null, pr: n };
+  }
+  const parsed = parseOwnerNameRepo(repo);
+  if (!parsed.ok) return parsed;
+  if (parsed.omitted) {
+    return { ok: true, key: n, stem: n, scoped: false, ownerName: null, pr: n };
+  }
+  return {
+    ok: true,
+    key: `${parsed.ownerName}#${n}`,
+    stem: `${parsed.owner}__${parsed.name}__${n}`,
+    scoped: true,
+    ownerName: parsed.ownerName,
+    pr: n,
+  };
+}
+
 /** 把 owner/name 收成 git remote 形态，给 resolveRepoSelector 的 remoteUrl。 */
 export function githubRemoteUrlOf(ownerName) {
   const s = String(ownerName || '').trim();

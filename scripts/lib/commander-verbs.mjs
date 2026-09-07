@@ -355,7 +355,9 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
   if (!v.ok) return v;
   return {
     ok: true,
-    argv: ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
+    argv: action.repo
+      ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr), '--repo', String(action.repo)]
+      : ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
     pr: v.pr,
     tries: v.tries,
     stateKey: v.stateKey,

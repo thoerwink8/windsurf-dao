@@ -124,7 +124,7 @@ export function findDispatchForTask(workerListJson, taskId) {
 export {
   argsRepoList, normalizeRepoRemote, resolveRepoSelector,
   parseOwnerNameRepo, githubRemoteUrlOf, withGhRepo, assertRepoAuthorized,
-  looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout,
+  looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout, repoPrKey,
 } from './dispatch/repo.mjs';
 
 // #762 拆分：worktree 生命周期域移到 scripts/lib/dispatch/worktree.mjs（保持对外 API 不变）

@@ -64,6 +64,7 @@ import {
   assertRepoAuthorized,
   splitRepoTarget,
   resolveLocalCheckout,
+  repoPrKey,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   resolveWorktreeSelector,
@@ -2578,7 +2579,7 @@ function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
 }
 
 function writeReviewPendingOnFail({
-  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh,
+  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh, repo,
 } = {}) {
   try {
     let head = { name: null, oid: null };
@@ -2593,7 +2594,7 @@ function writeReviewPendingOnFail({
     }
     const built = buildReviewPendingTicket({
       pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
-      source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+      source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo,
     });
     if (!built.ok) return built;
     return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });
@@ -3730,9 +3731,16 @@ function cmdReviewPendingDrain(args) {
   const dir = reviewPendingDir({ root: ROOT });
   const listed = listReviewPending(dir);
   if (!listed.ok) fail(listed.error, listed);
-  const tickets = args.pr
-    ? listed.tickets.filter(t => String(t.pr) === String(args.pr))
-    : listed.tickets;
+  const tickets = listed.tickets.filter(t => {
+    if (args.pr && String(t.pr) !== String(args.pr)) return false;
+    const ticketRepo = t.repo ? String(t.repo).trim() : '';
+    if (ghRepo) {
+      // 显式跨仓 drain 只吃该仓的票；无仓旧票不当成目标仓。
+      return ticketRepo.toLowerCase() === String(ghRepo).toLowerCase();
+    }
+    if (args.pr) return !ticketRepo; // --pr 不带 --repo = 本仓，不顺手清掉跨仓同号票
+    return true;
+  });
   if (args.dryRun) {
     emit({
       ok: true,
@@ -4447,10 +4455,14 @@ function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
  * `read → 起会话 → write` 之间没有原子 claim，两棵树并发跑 reviewer-create 时
  * 都能在对方写盘前读到 missing，于是各起一个 session，后写覆盖前写——
  * 登记看着只有一条，额度已经烧了两份，「一 PR 一审官」名存实亡。
- * 锁文件按 PR 分，复用既有的 O_EXCL 原语（持锁进程死了自动拆），不另造一套。
+ * 锁文件按仓+PR 分（本仓仍是 reviewer-<pr>.lock），复用既有的 O_EXCL 原语
+ * （持锁进程死了自动拆），不另造一套。两个仓的同号 PR 不许共用一把锁。
  */
-function reviewerLockPath(pr) {
-  return join(dirname(defaultLockPath()), `reviewer-${String(pr)}.lock`);
+function reviewerLockPath(pr, repo) {
+  const keyed = repoPrKey({ repo, pr });
+  // 键没做成不许回落到纯 PR 号（两个仓同号会共用一把锁）。
+  const stem = keyed.ok ? keyed.stem : `.invalid-${String(pr ?? '').trim()}`;
+  return join(dirname(defaultLockPath()), `reviewer-${stem}.lock`);
 }
 
 function mirasimRegistry() {
@@ -4503,8 +4515,10 @@ async function cmdReviewerCreateMirasim(args) {
   if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
 
   const registry = mirasimRegistry();
+  const ownerName = targetRepo.ownerName || null;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  const existing = registry.read(args.pr);
+  // #1024：键是仓+PR，跨仓同号不复用别仓的会话。
+  const existing = registry.read(args.pr, ownerName);
   if (existing.ok && existing.record && existing.record.sessionKey) {
     // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
     // 否则服务端一抽风就给同一个 PR 起第二个审官。
@@ -4539,7 +4553,7 @@ async function cmdReviewerCreateMirasim(args) {
   // 起会话 + 写登记必须在同一把 per-PR 锁里，并在锁内**再读一次登记**（double-check）：
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
-    const again = registry.read(args.pr);
+    const again = registry.read(args.pr, ownerName);
     if (!args.force && again.ok && again.record && again.record.sessionKey) {
       return { raced: true, record: again.record };
     }
@@ -4554,11 +4568,11 @@ async function cmdReviewerCreateMirasim(args) {
     if (!created.ok) return { res: created };
     // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
     return { res: created, w: registry.write(args.pr, {
-      pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+      pr: String(args.pr), repo: ownerName, sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
       round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
       treeHead: created.treeHead || null, ts: Date.now(),
     }) };
-  }, { lockPath: reviewerLockPath(args.pr) });
+  }, { lockPath: reviewerLockPath(args.pr, ownerName) });
 
   // 锁没拿到 = 没查成，不是「可以起」。硬失败，别在没有互斥的情况下烧第二份额度。
   if (guarded && guarded.ok === false && guarded.locked === false) {
@@ -4659,7 +4673,7 @@ async function cmdWorkerDoneMirasim(args) {
     prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
     syncTree: (p, oid) => gitSyncTreeTo(p, oid),
     registry: mirasimRegistry(),
-    pr: String(plan.pr), repo,
+    pr: String(plan.pr), repo, ownerName: targetRepo.ownerName || null,
     prompt: books.prompt,
     reworkPrompt: books.reworkPrompt,
     reviewerModel: plan.reviewer, workerModel,

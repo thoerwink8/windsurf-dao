@@ -658,12 +658,12 @@ describe('审官登记表落点必须跨树共享', () => {
     assert.ok(i > -1, '函数没了——本闸判据已失效，不是通过');
     const block = src.slice(i, src.indexOf('\n}\n', i) + 3);
     assert.match(block, /withWorktreeLock\(/, '临界区没上锁');
-    assert.match(block, /lockPath: reviewerLockPath\(args\.pr\)/, '锁要按 PR 分，全局一把会把不同 PR 串起来');
+    assert.match(block, /lockPath: reviewerLockPath\(args\.pr, ownerName\)/, '锁要按仓+PR 分，两个仓同号不许共用一把锁');
     const lockAt = block.indexOf('withWorktreeLock(');
     const createAt = block.indexOf('mirasimReviewerCreate(');
     const writeAt = block.indexOf('registry.write(');
     assert.equal(lockAt < createAt && createAt < writeAt, true, '起会话与写登记都要在锁内');
-    assert.match(block, /const again = registry\.read\(args\.pr\)/, '锁内必须复查——锁外那次挡不住「正在起的」');
+    assert.match(block, /const again = registry\.read\(args\.pr, ownerName\)/, '锁内复查必须带仓——只认 PR 号会把别仓会话当自己的');
     assert.match(block, /stage: 'lock'/, '锁没拿到要硬失败，不许当成可以起');
   });
 
@@ -683,6 +683,47 @@ describe('审官登记表落点必须跨树共享', () => {
     const got = mk().read('1040');
     assert.equal(got.ok, true, '换个实例就读不到了——落点没共享');
     assert.equal(got.record.sessionKey, 'codex:abc');
+  });
+
+  it('**判别性**：两个仓同一 PR 号写登记互不覆盖；跨仓不复用无仓旧登记',
+    async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const mk = () => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); },
+      mkdir: () => {},
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const reg = mk();
+    const wa = reg.write('12', { pr: '12', repo: 'org/a', sessionKey: 'codex:a', treePath: '/wt-a' });
+    const wb = reg.write('12', { pr: '12', repo: 'org/b', sessionKey: 'codex:b', treePath: '/wt-b' });
+    assert.equal(wa.ok, true, JSON.stringify(wa));
+    assert.equal(wb.ok, true, JSON.stringify(wb));
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-12.json'), false, '跨仓登记不许落到纯 PR 号');
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-org__a__12.json'), true);
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-org__b__12.json'), true);
+
+    const ra = mk().read('12', 'org/a');
+    const rb = mk().read('12', 'org/b');
+    assert.equal(ra.ok, true, JSON.stringify(ra));
+    assert.equal(rb.ok, true, JSON.stringify(rb));
+    assert.equal(ra.record.sessionKey, 'codex:a');
+    assert.equal(rb.record.sessionKey, 'codex:b');
+    assert.equal(ra.record.treePath, '/wt-a');
+    assert.notEqual(ra.record.sessionKey, rb.record.sessionKey);
+
+    mk().write('12', { pr: '12', sessionKey: 'codex:home' });
+    const cross = mk().read('12', 'org/a');
+    assert.equal(cross.ok, true);
+    assert.equal(cross.record.sessionKey, 'codex:a', '有仓请求不许读到本仓 reviewer-12.json');
+    const stale = mk();
+    store.set('/home/orca/.dao/mirasim/reviewer-org__c__12.json', JSON.stringify({ pr: '12', sessionKey: 'codex:old' }));
+    const noRepo = stale.read('12', 'org/c');
+    assert.equal(noRepo.ok, false, JSON.stringify(noRepo));
+    assert.equal(noRepo.missing, true);
+    assert.match(String(noRepo.why), /不复用/);
   });
 });
 

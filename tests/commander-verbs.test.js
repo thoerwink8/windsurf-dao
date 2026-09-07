@@ -264,6 +264,18 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     assert.equal(r.ok, true);
     assert.deepEqual(r.argv, ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', '905']);
   });
+
+  it('planRetryDrainCmd：票上有仓 → argv 带 --repo，不顺手清掉别仓同号票', async () => {
+    const { planRetryDrainCmd } = await VERBS;
+    const r = planRetryDrainCmd(
+      { pr: 905, repo: 'org/a' },
+      { queue: queued, ledger: ledgerOk, nowMs: PAST },
+    );
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.argv, [
+      'node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', '905', '--repo', 'org/a',
+    ]);
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {

@@ -331,3 +331,109 @@ describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () =
     assert.match(done, /const repo = targetRepo\.localPath/);
   });
 });
+
+describe('#1024 复审：跨仓按仓+PR 键，同号不串',
+  () => {
+  it('repoPrKey：本仓纯 PR 号；跨仓 owner__name__pr；非法 repo 当场拒',
+    async () => {
+    const S = await S_LOAD;
+    const home = S.repoPrKey({ pr: '12' });
+    assert.equal(home.ok, true);
+    assert.equal(home.stem, '12');
+    assert.equal(home.scoped, false);
+    assert.equal(home.key, '12');
+
+    const a = S.repoPrKey({ repo: 'org/a', pr: '12' });
+    const b = S.repoPrKey({ repo: 'org/b', pr: '12' });
+    assert.equal(a.ok, true);
+    assert.equal(b.ok, true);
+    assert.equal(a.stem, 'org__a__12');
+    assert.equal(b.stem, 'org__b__12');
+    assert.notEqual(a.stem, b.stem);
+    assert.notEqual(a.stem, home.stem);
+
+    const bad = S.repoPrKey({ repo: ' org/a', pr: '12' });
+    assert.equal(bad.ok, false);
+    assert.match(String(bad.error), /带空格/);
+  });
+
+  it('两个仓同一 PR 号写待办互不覆盖；list 两张都在',
+    async () => {
+    const S = await S_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-1024-pending-'));
+    const a = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt-a', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo: 'org/a',
+    });
+    const b = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt-b', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo: 'org/b',
+    });
+    assert.equal(a.ok, true);
+    assert.equal(b.ok, true);
+    const wa = S.writeReviewPending({ dir, ticket: a.ticket });
+    const wb = S.writeReviewPending({ dir, ticket: b.ticket });
+    assert.equal(wa.ok, true, JSON.stringify(wa));
+    assert.equal(wb.ok, true, JSON.stringify(wb));
+    assert.equal(fs.existsSync(path.join(dir, '12.json')), false, '跨仓票不许落到纯 PR 号文件');
+    assert.equal(fs.existsSync(path.join(dir, 'org__a__12.json')), true);
+    assert.equal(fs.existsSync(path.join(dir, 'org__b__12.json')), true);
+    const listed = S.listReviewPending(dir);
+    assert.equal(listed.ok, true);
+    assert.equal(listed.scanned, 2);
+    const repos = listed.tickets.map((t) => t.repo).sort();
+    assert.deepEqual(repos, ['org/a', 'org/b']);
+    const storedA = JSON.parse(fs.readFileSync(path.join(dir, 'org__a__12.json'), 'utf8'));
+    assert.equal(storedA.repo, 'org/a');
+    assert.equal(storedA.workerWorktree, 'wt-a');
+  });
+
+  it('本仓待办仍写 12.json（不传 --repo 一字不变）',
+    async () => {
+    const S = await S_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-1024-home-'));
+    const built = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+    });
+    const wrote = S.writeReviewPending({ dir, ticket: built.ticket });
+    assert.equal(wrote.ok, true);
+    assert.equal(fs.existsSync(path.join(dir, '12.json')), true);
+  });
+
+  it('消费 org/a#12 只删那张票，org/b#12 还在',
+    async () => {
+    const S = await S_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-1024-consume-'));
+    const a = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt-a', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo: 'org/a',
+    });
+    const b = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt-b', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo: 'org/b',
+    });
+    assert.equal(S.writeReviewPending({ dir, ticket: a.ticket }).ok, true);
+    assert.equal(S.writeReviewPending({ dir, ticket: b.ticket }).ok, true);
+    const consumed = S.consumeReviewPending({
+      dir, ticket: a.ticket, attach: () => ({ ok: true }),
+    });
+    assert.equal(consumed.ok, true, JSON.stringify(consumed));
+    assert.equal(fs.existsSync(path.join(dir, 'org__a__12.json')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'org__b__12.json')), true);
+    assert.equal(fs.existsSync(path.join(dir, '12.json')), false);
+  });
+
+  it('非法 --repo 造票当场拒，不许落到 12.json',
+    async () => {
+    const S = await S_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-1024-bad-'));
+    const bad = S.buildReviewPendingTicket({
+      pr: '12', workerWorktree: 'wt', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo: ' org/a',
+    });
+    assert.equal(bad.ok, false);
+    assert.match(String(bad.error), /带空格/);
+    assert.equal(fs.existsSync(path.join(dir, '12.json')), false);
+  });
+});
