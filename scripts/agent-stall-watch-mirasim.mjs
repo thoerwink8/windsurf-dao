@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/agent-stall-watch-mirasim.mjs —— mirasim 会话保活与回收（#880 卡 D）
 //
-// 现役 scripts/agent-stall-watch.mjs（#833）靠刮 orca 屏面判卡死；mirasim 没有屏面，
+// 现役卡死发现是 scripts/progress-watch.mjs（#833 屏面指纹层已退役）。mirasim 没有屏面，
 // 这条路只看「该发生的事有没有发生」：phase 还在跑，但账本行数没涨、快照正文没变超过阈值
 // → 判卡死 → stopSession + 在关联 issue 落一条人话评论（复用 watchdog 报警形状）。
 // 顺带做会话 GC（终态过 TTL → deleteSession，分支已合并再连树一起删）与健康段落盘。
