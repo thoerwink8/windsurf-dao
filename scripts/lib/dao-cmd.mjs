@@ -124,6 +124,7 @@ export function findDispatchForTask(workerListJson, taskId) {
 export {
   argsRepoList, normalizeRepoRemote, resolveRepoSelector,
   parseOwnerNameRepo, githubRemoteUrlOf, withGhRepo, assertRepoAuthorized,
+  looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout,
 } from './dispatch/repo.mjs';
 
 // #762 拆分：worktree 生命周期域移到 scripts/lib/dispatch/worktree.mjs（保持对外 API 不变）
@@ -1032,8 +1033,8 @@ export const FLAGS_BY_VERB = {
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
-    // --repo：orca 路径是 owner/name（#1024 跨仓）；mirasim 路径仍是建树用的本地根（#880 卡 B）。
-    // 与 worker-done / reviewer-create 同名同义，别在这里另起名字。
+    // --repo：跨仓 owner/name（#1024）。mirasim 默认路把 owner/name 与本地 checkout 拆开，
+    // 不再把 GitHub 选择符原样塞给 ensureWorkspace。与 worker-done / reviewer-create 同名同义。
     '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),

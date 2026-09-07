@@ -18,7 +18,7 @@ describe('#1024 parseOwnerNameRepo / withGhRepo / assertRepoAuthorized', () => {
     assert.equal(S.parseOwnerNameRepo(undefined).omitted, true);
     assert.equal(S.parseOwnerNameRepo(null).omitted, true);
     assert.equal(S.parseOwnerNameRepo('').omitted, true);
-    assert.equal(S.parseOwnerNameRepo('  ').omitted, true);
+    // 纯空白不是「没传」，是带空格的非法格式（#1028 审官红 2）。
     const keep = S.withGhRepo(['issue', 'view', '1'], undefined);
     assert.equal(keep.ok, true);
     assert.deepEqual(keep.args, ['issue', 'view', '1']);
@@ -43,6 +43,16 @@ describe('#1024 parseOwnerNameRepo / withGhRepo / assertRepoAuthorized', () => {
       const r = S.parseOwnerNameRepo(bad);
       assert.equal(r.ok, false, bad);
       assert.match(String(r.error), /格式非法/);
+    }
+  });
+
+  it('格式非法：首空格 / 尾空格 / 首尾同时有空格当场拒，不许 trim 后收下', async () => {
+    const S = await S_LOAD;
+    for (const bad of [' thoerwink8/ws-cleaner', 'thoerwink8/ws-cleaner ', ' thoerwink8/ws-cleaner ', '  ']) {
+      const r = S.parseOwnerNameRepo(bad);
+      assert.equal(r.ok, false, JSON.stringify(bad));
+      assert.equal(r.omitted, undefined, JSON.stringify(bad));
+      assert.match(String(r.error), /带空格/);
     }
   });
 
@@ -161,6 +171,20 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     assert.equal(p.ok, false);
     assert.match(String(p.error), /带空格/);
   });
+
+  it('CLI：--repo 首空格 / 尾空格当场拒，不许 trim 后当合法仓', async () => {
+    for (const repo of [' thoerwink8/ws-cleaner', 'thoerwink8/ws-cleaner ']) {
+      const r = await cliInProc([
+        'dispatch', '--name', '跨仓', '--issue', '1024', '--model', 'grok-4.6',
+        '--reviewer', 'gpt-5.6-luna', '--spec', 'x', '--split', 'no', '--split-reason', '单测',
+        '--repo', repo, '--dry-run',
+      ]);
+      assert.equal(r.status, 1, JSON.stringify(repo));
+      const p = JSON.parse(r.stdout);
+      assert.equal(p.ok, false, JSON.stringify(repo));
+      assert.match(String(p.error), /带空格/);
+    }
+  });
 });
 
 describe('#1024 drain 计划带票上的 --repo', () => {
@@ -192,5 +216,109 @@ describe('#1024 drain 计划带票上的 --repo', () => {
     assert.equal(plan.argv.includes('mirasim'), true);
     assert.equal(plan.argv.includes('--repo'), true);
     assert.equal(plan.argv.includes('thoerwink8/ws-cleaner'), true);
+  });
+});
+
+describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () => {
+  it('splitRepoTarget：不传=本仓；路径走 path；owner/name 不塞 localPath', async () => {
+    const S = await S_LOAD;
+    const omitted = S.splitRepoTarget(undefined, { root: '/srv/projects/windsurf-dao' });
+    assert.equal(omitted.ok, true);
+    assert.equal(omitted.omitted, true);
+    assert.equal(omitted.kind, 'omitted');
+    assert.equal(omitted.ownerName, null);
+    assert.equal(omitted.localPath, '/srv/projects/windsurf-dao');
+
+    const p = S.splitRepoTarget('/home/orca/windsurf-dao');
+    assert.equal(p.ok, true);
+    assert.equal(p.kind, 'path');
+    assert.equal(p.ownerName, null);
+    assert.equal(p.localPath, '/home/orca/windsurf-dao');
+
+    const n = S.splitRepoTarget('thoerwink8/ws-cleaner');
+    assert.equal(n.ok, true);
+    assert.equal(n.kind, 'ownerName');
+    assert.equal(n.ownerName, 'thoerwink8/ws-cleaner');
+    assert.equal(n.localPath, null);
+
+    const bad = S.splitRepoTarget(' thoerwink8/ws-cleaner');
+    assert.equal(bad.ok, false);
+    assert.match(String(bad.error), /带空格/);
+  });
+
+  it('resolveLocalCheckout：owner/name → /srv/projects/<name>；不在报没查成，不许原样返回 owner/name', async () => {
+    const S = await S_LOAD;
+    const miss = S.resolveLocalCheckout({
+      ownerName: 'thoerwink8/ws-cleaner',
+      projectsRoot: '/tmp/not-a-projects-root-1024',
+      exists: () => false,
+    });
+    assert.equal(miss.ok, false);
+    assert.equal(miss.unscanned, true);
+    assert.equal(miss.localPath, '/tmp/not-a-projects-root-1024/ws-cleaner');
+    assert.match(miss.error, /没查成/);
+    assert.match(miss.error, /不许把 owner\/name 当路径/);
+    assert.doesNotMatch(miss.error, /^这个仓不存在/);
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-1024-checkout-'));
+    const hit = S.resolveLocalCheckout({
+      ownerName: 'thoerwink8/ws-cleaner',
+      projectsRoot: root,
+      exists: (p) => p === path.join(root, 'ws-cleaner'),
+      isGit: () => true,
+    });
+    assert.equal(hit.ok, true);
+    assert.equal(hit.localPath, path.join(root, 'ws-cleaner'));
+    assert.equal(hit.ownerName, 'thoerwink8/ws-cleaner');
+    assert.notEqual(hit.localPath, 'thoerwink8/ws-cleaner');
+
+    const notGit = S.resolveLocalCheckout({
+      ownerName: 'thoerwink8/ws-cleaner',
+      projectsRoot: root,
+      exists: () => true,
+      isGit: () => false,
+    });
+    assert.equal(notGit.ok, false);
+    assert.equal(notGit.unscanned, true);
+    assert.match(notGit.error, /不是 git 仓/);
+  });
+
+  it('默认 mirasim 路：ensureWorkspace 吃本地路径，gh 钉目标仓，不再把 owner/name 当路径', () => {
+    const src = fs.readFileSync(DAO, 'utf8');
+    assert.doesNotMatch(src, /const repo = String\(args\.repo \|\| ''\)\.trim\(\) \|\| ROOT/);
+
+    const resolve = src.slice(
+      src.indexOf('function resolveMirasimRepoTarget'),
+      src.indexOf('function mirasimRepoOrFail'),
+    );
+    assert.match(resolve, /splitRepoTarget\(/);
+    assert.match(resolve, /assertCrossRepoOrFail\(/);
+    assert.match(resolve, /resolveLocalCheckout\(/);
+
+    const dispatch = src.slice(
+      src.indexOf('async function cmdDispatchMirasim'),
+      src.indexOf('async function cmdDispatch(args)'),
+    );
+    assert.match(dispatch, /resolveMirasimRepoTarget\(/);
+    assert.match(dispatch, /const repo = targetRepo\.localPath/);
+    assert.match(dispatch, /ensureWorkspace\(repo, branch\)/);
+    assert.match(dispatch, /ghRunnerForTarget\(targetRepo\)/);
+
+    const reviewer = src.slice(
+      src.indexOf('async function cmdReviewerCreateMirasim'),
+      src.indexOf('async function cmdWorkerDoneMirasim'),
+    );
+    assert.match(reviewer, /resolveMirasimRepoTarget\(/);
+    assert.match(reviewer, /ghRunnerForTarget\(targetRepo, \{ role: 'reviewer' \}\)/);
+    assert.match(reviewer, /const repo = targetRepo\.localPath/);
+
+    const done = src.slice(
+      src.indexOf('async function cmdWorkerDoneMirasim'),
+      src.indexOf('async function cmdStartMirasim'),
+    );
+    assert.match(done, /resolveMirasimRepoTarget\(/);
+    assert.match(done, /ghRunnerForTarget\(targetRepo, \{ role: 'worker' \}\)/);
+    assert.match(done, /ghRunnerForTarget\(targetRepo, \{ role: 'reviewer' \}\)/);
+    assert.match(done, /const repo = targetRepo\.localPath/);
   });
 });

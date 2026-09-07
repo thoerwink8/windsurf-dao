@@ -3,7 +3,8 @@
 // 改这段前必须知道：派工执行体可能跑在任意 worktree，repo 选择符必须按
 // git remote URL 匹配（路径匹配会失配）。0 条 / 多条 / 没查成必须分开报。
 
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { ROOT } from './constants.mjs';
 
 /** #762：worktree create 带 --repo 选择符，避免 Orca 从外部主树建卡报 Missing repo selector。 */
@@ -86,11 +87,12 @@ export function resolveRepoSelector({ repos, root, remoteUrl, allowPath = true, 
   return { ok: true, repoId: id, selector: `id:${id}`, matchedBy: remoteHits > 0 ? 'remote' : 'path' };
 }
 
-/** #1024：--repo 只认 owner/name。缺 owner、带空格、路径、URL、半截选择符一律当场拒。 */
+/** #1024：--repo 只认 owner/name。缺 owner、带空格（含首尾）、路径、URL、半截选择符一律当场拒。 */
 export function parseOwnerNameRepo(raw) {
   if (raw == null) return { ok: true, omitted: true, ownerName: null };
-  const s = String(raw).trim();
+  const s = String(raw);
   if (!s) return { ok: true, omitted: true, ownerName: null };
+  // 先查原始串任意空白，再 trim。trim 后再查会把首尾空格静默吃掉，验收标准要当场拒。
   if (/\s/.test(s)) {
     return { ok: false, error: `--repo 格式非法（带空格）：「${s}」。只要 owner/name，不许拼半截选择符` };
   }
@@ -105,6 +107,77 @@ export function parseOwnerNameRepo(raw) {
     return { ok: false, error: `--repo 格式非法（缺 owner 或形态不对）：「${s}」。只要 owner/name` };
   }
   return { ok: true, omitted: false, owner: m[1], name: m[2], ownerName: `${m[1]}/${m[2]}` };
+}
+
+/** 绝对路径 / 相对路径 / Windows 盘符。owner/name 不是路径。 */
+export function looksLikeLocalRepoPath(raw) {
+  const s = String(raw || '');
+  if (!s) return false;
+  if (s.startsWith('/') || s.startsWith('.') || s.includes('\\')) return true;
+  if (/^[A-Za-z]:[\\\/]/.test(s)) return true;
+  return false;
+}
+
+/**
+ * #1024 返工：把 --repo 拆成 GitHub owner/name 与 runtime 本地 checkout。
+ * owner/name 只给 gh / 授权闸；本地路径只给 ensureWorkspace。两套不许混。
+ * 不传 = 本仓（gh 不钉仓，本地用 ROOT）。路径与 owner/name 互斥。
+ */
+export function splitRepoTarget(raw, { root } = {}) {
+  if (raw == null) {
+    return { ok: true, omitted: true, ownerName: null, localPath: root || null, kind: 'omitted' };
+  }
+  const s = String(raw);
+  if (!s) return { ok: true, omitted: true, ownerName: null, localPath: root || null, kind: 'omitted' };
+  if (looksLikeLocalRepoPath(s)) {
+    return { ok: true, omitted: false, ownerName: null, localPath: s, kind: 'path' };
+  }
+  const parsed = parseOwnerNameRepo(s);
+  if (!parsed.ok) return parsed;
+  if (parsed.omitted) {
+    return { ok: true, omitted: true, ownerName: null, localPath: root || null, kind: 'omitted' };
+  }
+  return {
+    ok: true,
+    omitted: false,
+    ownerName: parsed.ownerName,
+    owner: parsed.owner,
+    name: parsed.name,
+    localPath: null,
+    kind: 'ownerName',
+  };
+}
+
+/**
+ * GitHub owner/name → 本机主 clone 路径。约定 /srv/projects/<name>（NEW-MACHINE / INDEX）。
+ * 目录不在或不是 git 仓 = 没查成，不许把 owner/name 原样交给 ensureWorkspace。
+ */
+export function resolveLocalCheckout({ ownerName, projectsRoot = '/srv/projects', exists, isGit } = {}) {
+  const parsed = parseOwnerNameRepo(ownerName);
+  if (!parsed.ok) return parsed;
+  if (parsed.omitted) return { ok: false, error: 'resolveLocalCheckout 没给 owner/name' };
+  const localPath = join(projectsRoot, parsed.name);
+  const here = typeof exists === 'function' ? exists(localPath) : existsSync(localPath);
+  if (!here) {
+    return {
+      ok: false,
+      unscanned: true,
+      ownerName: parsed.ownerName,
+      localPath,
+      error: `目标仓 ${parsed.ownerName} 本地 checkout 没查成（不是「这个仓不存在」）：${localPath} 不在。ensureWorkspace 要本地路径，不许把 owner/name 当路径`,
+    };
+  }
+  const gitHere = typeof isGit === 'function' ? isGit(localPath) : existsSync(join(localPath, '.git'));
+  if (!gitHere) {
+    return {
+      ok: false,
+      unscanned: true,
+      ownerName: parsed.ownerName,
+      localPath,
+      error: `目标仓 ${parsed.ownerName} 本地 checkout 没查成（不是「这个仓不存在」）：${localPath} 不是 git 仓`,
+    };
+  }
+  return { ok: true, ownerName: parsed.ownerName, localPath, name: parsed.name };
 }
 
 /** 把 owner/name 收成 git remote 形态，给 resolveRepoSelector 的 remoteUrl。 */

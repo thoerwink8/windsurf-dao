@@ -64,6 +64,8 @@ import {
   githubRemoteUrlOf,
   withGhRepo,
   assertRepoAuthorized,
+  splitRepoTarget,
+  resolveLocalCheckout,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   resolveWorktreeSelector,
@@ -1442,11 +1444,43 @@ function mirasimBranchOrFail(args) {
   fail('mirasim 执行体要 --branch（没 --issue 就推不出默认分支名）；同一 issue 派第二张卡也要显式给，否则会撞同一棵树');
 }
 
-/** mirasim 侧的仓路径。默认本 checkout；跨树派单显式给 --repo。 */
-function mirasimRepoOrFail(args) {
-  const repo = String(args.repo || '').trim() || ROOT;
-  if (!repo) fail('mirasim 执行体要 --repo（仓路径）');
-  return repo;
+/**
+ * #1024 返工：mirasim 路把 GitHub owner/name 和 runtime 本地路径拆开。
+ * owner/name → 授权闸 + gh --repo；本地路径才给 ensureWorkspace。
+ * 不传 --repo = 本仓（gh 不钉仓，本地 ROOT）。路径仍给 #880 卡 B 建树用。
+ */
+function resolveMirasimRepoTarget(args, { role = 'worker', where = 'dispatch', defaultLocal } = {}) {
+  const split = splitRepoTarget(args && args.repo, { root: defaultLocal || ROOT });
+  if (!split.ok) fail(split.error);
+  if (split.kind === 'path') {
+    const localPath = String(split.localPath || '').trim();
+    if (!localPath) fail('mirasim 执行体要 --repo（仓路径）');
+    return { ok: true, omitted: false, ownerName: null, localPath, kind: 'path' };
+  }
+  if (split.omitted) {
+    return { ok: true, omitted: true, ownerName: null, localPath: defaultLocal || ROOT, kind: 'omitted' };
+  }
+  const gated = assertCrossRepoOrFail(split.ownerName, { role, where });
+  const checkout = resolveLocalCheckout({ ownerName: gated.ownerName });
+  if (!checkout.ok) fail(checkout.error, { repo: gated.ownerName, role });
+  return {
+    ok: true,
+    omitted: false,
+    ownerName: gated.ownerName,
+    localPath: checkout.localPath,
+    kind: 'ownerName',
+    authorized: true,
+    role: gated.role,
+  };
+}
+
+/** 兼容旧调用点：只返回 runtime 本地路径。跨仓 owner/name 不再原样返回。 */
+function mirasimRepoOrFail(args, opts) {
+  return resolveMirasimRepoTarget(args, opts).localPath;
+}
+
+function ghRunnerForTarget(target, opts = {}) {
+  return ghRunner({ ...opts, repo: target && target.ownerName ? target.ownerName : undefined });
 }
 
 /** dao 的 --model → mirasim 的族/执行体 agent/腿。缺配置报警拒派，不静默降级。 */
@@ -1470,18 +1504,8 @@ function mirasimRouteOrFail(args, routing, policy) {
  */
 async function cmdDispatchMirasim(args, routing, gate) {
   assertMirasimNoTask(args, 'dispatch');
-  // #1024：热路已是 mirasim。--repo 不传 = 本仓；owner/name 走过仓闸；
-  // 本地路径仍给 #880 卡 B 建树用（FLAGS 注释：同名旗标两条语义）。非法格式当场拒。
-  {
-    const parsed = parseOwnerNameRepo(args.repo);
-    if (!parsed.ok) {
-      const s = String(args.repo || '').trim();
-      const looksLikePath = s.startsWith('/') || s.startsWith('.') || s.includes('\\');
-      if (!looksLikePath) fail(parsed.error);
-    } else if (!parsed.omitted) {
-      assertCrossRepoOrFail(args.repo, { role: 'worker', where: 'dispatch' });
-    }
-  }
+  // #1024 返工：owner/name 走授权闸并解析成本地 checkout；路径仍给建树；不传 = 本仓。
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'dispatch' });
   // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
@@ -1496,7 +1520,8 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
-  const repo = mirasimRepoOrFail(args);
+  const repo = targetRepo.localPath;
+  const ghRepo = targetRepo.ownerName || undefined;
   const branch = mirasimBranchOrFail(args);
   const route = mirasimRouteOrFail(args, routing, bind.policy);
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
@@ -1506,7 +1531,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
-      card: cardName, issue: args.issue ?? null, repo, branch,
+      card: cardName, issue: args.issue ?? null, repo, ghRepo: ghRepo || null, branch,
       agent: route.agent, family: route.family, leg: route.leg, mode: route.mode, via: route.via, daoModel: args.model,
       reviewer: args.reviewer ?? null, prompt,
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
@@ -1514,12 +1539,12 @@ async function cmdDispatchMirasim(args, routing, gate) {
     return;
   }
 
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunnerForTarget(targetRepo) });
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
 
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
-  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
+  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, ghRepo: ghRepo || null, branch }); }
 
   let sess;
   try {
@@ -1572,7 +1597,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   emit({
     ok: true, executor: 'mirasim',
     card: cardName, issue: args.issue ?? null,
-    repo, branch, path: tree.path, treeCreated: tree.created,
+    repo, ghRepo: ghRepo || null, branch, path: tree.path, treeCreated: tree.created,
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
     reviewer: args.reviewer ?? null,
@@ -3633,7 +3658,8 @@ async function cmdWorktreeCreate(args) {
 
 /** mirasim 建树 = ensureWorkspace（幂等：同分支已有树就给路径，created:false）。 */
 async function cmdWorktreeCreateMirasim(args, { policy }) {
-  const repo = mirasimRepoOrFail(args);
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worktree-create' });
+  const repo = targetRepo.localPath;
   const branch = mirasimBranchOrFail(args);
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
@@ -3641,7 +3667,7 @@ async function cmdWorktreeCreateMirasim(args, { policy }) {
   catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
   if (!r.ok) fail(`mirasim 建树失败: ${r.error}`, { executor: 'mirasim', repo, branch });
   emit({
-    ok: true, executor: 'mirasim', repo, branch,
+    ok: true, executor: 'mirasim', repo, ghRepo: targetRepo.ownerName || null, branch,
     path: r.path, created: r.created, verified: r.verified,
   });
 }
@@ -5455,9 +5481,8 @@ import {
   judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
-/** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
-function mirasimRepoRoot(args) {
-  if (args && args.repo) return args.repo;
+/** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
+function thisCheckoutRoot() {
   const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
   if (r.status === 0) {
     let g = String(r.stdout || '').trim();
@@ -5468,6 +5493,11 @@ function mirasimRepoRoot(args) {
     }
   }
   return ROOT;
+}
+
+/** 主 clone 根（PR 分支所在的 git 仓）：跨仓解析本地 checkout，否则本树。 */
+function mirasimRepoRoot(args, opts) {
+  return resolveMirasimRepoTarget(args, opts).localPath || thisCheckoutRoot();
 }
 
 /** 读回某树 HEAD 的 sha（读回自证的那一读；读不到抛，交判官判「没查成」）。 */
@@ -5585,7 +5615,8 @@ function mirasimRegistry() {
 
 async function cmdReviewerCreateMirasim(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
-  const gh = ghRunner({ role: 'reviewer' });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'reviewer', where: 'reviewer-create', defaultLocal: thisCheckoutRoot() });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   const routing = loadOrFail();
   const execPolicy = readExecutorPolicy(routing);
   const named = judgeExecutorName(args.executor, execPolicy);
@@ -5642,11 +5673,12 @@ async function cmdReviewerCreateMirasim(args) {
     }
   }
 
-  const repo = mirasimRepoRoot(args);
+  const repo = targetRepo.localPath;
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim', pr: String(args.pr), reviewer: picked.modelId,
       worker: worker.modelId, workerModel: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      ghRepo: targetRepo.ownerName || null,
       vendorGate, reviewerSeat: seat,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
     });
@@ -5720,8 +5752,9 @@ async function cmdWorkerDoneMirasim(args) {
     try { body = readFileSync(args.bodyFile, 'utf8'); }
     catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
   }
-  const gh = ghRunner({ role: 'worker' });
-  const ghR = ghRunner({ role: 'reviewer' });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
+  const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
@@ -5766,7 +5799,7 @@ async function cmdWorkerDoneMirasim(args) {
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
-  const repo = mirasimRepoRoot(args);
+  const repo = targetRepo.localPath;
   const res = await mirasimWorkerDone({
     runtime: bind.runtime, gh: ghR, readTreeHead: gitHeadOf,
     prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
@@ -5809,14 +5842,15 @@ async function cmdStartMirasim(args) {
   let workdir = typeof args.worktree === 'string' && args.worktree.includes('/')
     ? args.worktree.replace(/^path:/, '')
     : '';
-  const repo = mirasimRepoRoot(args);
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'start', defaultLocal: thisCheckoutRoot() });
+  const repo = targetRepo.localPath;
   const branch = args.branch || gitBranchName(ROOT).branch || 'master';
 
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
       agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
-      repo, branch, workdir: workdir || '(ensureWorkspace 后才有)',
+      repo, ghRepo: targetRepo.ownerName || null, branch, workdir: workdir || '(ensureWorkspace 后才有)',
       promptBytes: Buffer.byteLength(String(args.prompt), 'utf8'),
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
     });
