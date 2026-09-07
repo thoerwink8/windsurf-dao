@@ -52,6 +52,7 @@ import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
+import { judgeBaseFreshness, OK, RED, UNKNOWN } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
@@ -652,13 +653,26 @@ function execAction(action, { state, dryRun, log }) {
       return r;
     }
     case 'merge': {
-      // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 合并 → 关单。
+      // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 过合并闸 → 合并 → 关单。
+      // 合并闸（#1117）：① 基底含最新 master 从交卷时刻挪到这里。审查期间 master 必然会动，
+      // 在交卷时刻要求基底最新是活锁；但**合进去之前**基底不对齐是真会坏事的，所以判在这一刻。
+      // 退出码三态照 handoff-check 的惯例：非 0 一律不合（2 = 没查成，同样不放行）。
       const steps = [
         ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
         ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
         ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
       ];
-      if (dryRun) { say(`[dry] merge #${action.pr}（${action.why}）：\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`); return { ok: true, dryRun: true }; }
+      if (dryRun) {
+        say(`[dry] merge #${action.pr}（${action.why}）：\n    合并闸 ①（基底含最新 master）`
+          + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
+        return { ok: true, dryRun: true };
+      }
+      const gate = judgeMergeFreshness(action.pr);
+      if (gate.state !== OK) {
+        // 红和没查成一样不合。合并闸拦下不是失败，是背压——照 #1086 的口径，不开噪音单。
+        say(`  合并闸拦下 #${action.pr}（${gate.state === RED ? '真红' : '没查成'}）：${gate.detail.split('\n')[0]}`);
+        return { ok: true, blocked: true, gate: gate.state, why: gate.detail };
+      }
       for (const s of steps) {
         const r = runCmd(s);
         if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error }; }
@@ -699,6 +713,61 @@ function execAction(action, { state, dryRun, log }) {
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+/**
+ * 合并闸 ①：这张 PR 的 head 含不含最新 master（issue #1117）。
+ *
+ * 判据本身**不在这里**——复用 scripts/lib/handoff-check.mjs 的纯函数 judgeBaseFreshness，
+ * 本函数只采事实。两处各写一遍判据必然会分叉，而分叉的那天没人会发现（判据只在红的时候才被读）。
+ *
+ * 采事实用裸 git，不走仓内任何 git 封装：检查器复用被检查对象的解析＝自己查自己。
+ * 三态照原样传出去：不是祖先 ⇒ 红；merge-base 没跑成 / 拉不到远端 ⇒ 没查成（同样不放行）。
+ */
+export function judgeMergeFreshness(pr, { run = runCmd } = {}) {
+  const headRef = (() => {
+    const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'view', String(pr), '--json', 'headRefName', '-q', '.headRefName']);
+    return r.ok ? String(r.out).trim() : null;
+  })();
+  if (!headRef) return { state: UNKNOWN, detail: `查不到 PR #${pr} 的 head 分支名——没查成，不放行` };
+
+  // 两边都要显式 refspec 强制拉：不拉的判绿只能证明「比我缓存的那个 master 新」。
+  let fetched = true;
+  let fetchError = '';
+  for (const b of ['master', headRef]) {
+    const f = run(['git', 'fetch', '--quiet', 'origin', `+refs/heads/${b}:refs/remotes/origin/${b}`]);
+    if (!f.ok) { fetched = false; fetchError = `拉 ${b} 失败：${f.error}`; }
+  }
+
+  const resolved = run(['git', 'rev-parse', '--verify', '--quiet', `origin/${headRef}^{commit}`]);
+  const baseOk = run(['git', 'rev-parse', '--verify', '--quiet', 'origin/master^{commit}']);
+  if (!resolved.ok || !baseOk.ok) {
+    return judgeBaseFreshness({ baseRef: 'origin/master', baseResolved: false });
+  }
+  const head = String(resolved.out).trim();
+
+  // git 的三态在 runCmd 里被压成了 ok/!ok：exit 1（不是祖先）和 exit 128（跑不起来）
+  // 在这里长得一样，所以必须另外确认「这条命令确实跑成了」，否则「没查成」会被当成「不是祖先」。
+  const anc = run(['git', 'merge-base', '--is-ancestor', 'origin/master', head]);
+  let isAncestor = anc.ok ? true : null;
+  if (!anc.ok) {
+    const probe = run(['git', 'merge-base', 'origin/master', head]);
+    if (probe.ok) isAncestor = false;  // merge-base 本身跑得通 ⇒ 上一条的非 0 是「不是祖先」
+  }
+
+  const facts = { baseRef: 'origin/master', baseResolved: true, fetched, fetchError, isAncestor };
+  if (isAncestor === false) {
+    const log = run(['git', 'log', '--format=%H%x09%s', '-n', '200', `${head}..origin/master`]);
+    facts.missingCommits = log.ok
+      ? String(log.out).split(/\r?\n/).filter(Boolean).map((l) => {
+        const [sha, ...rest] = l.split('\t');
+        return { sha, subject: rest.join('\t') };
+      })
+      : [];
+    const df = run(['git', 'diff', '--name-only', `${head}...origin/master`]);
+    facts.missingFiles = df.ok ? String(df.out).split(/\r?\n/).filter(Boolean) : [];
+  }
+  return judgeBaseFreshness(facts);
 }
 
 function execAddLabel(action, { dryRun, say }) {
