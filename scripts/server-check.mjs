@@ -1100,6 +1100,14 @@ const CHECKS = [
   ['(21) 服务用户家目录没有 root 属主文件', checkRootOwnedInHome],
   ['(22) mirasim 侧实跑腿与选型腿表对得上（#944）', checkModelReconcile],
   ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
+  ['(24) mirasim 执行体健康（版本/relay 模式/额度窗，#880 卡 D）', () => {
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'agent-stall-watch-mirasim.mjs'), '--health'], { timeout: 30000 });
+    if (!r.probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${r.reason}` };
+    const head = String(r.stdout || '').split('\n')[0].trim();
+    if (r.code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
+    if (r.code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+    return { state: RED, detail: `mirasim 健康红：${head}` };
+  }],
 ];
 
 function outPath() {
