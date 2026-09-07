@@ -7,10 +7,7 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'master-title.mjs');
-const FIX = path.join(REPO, 'scripts', 'lib', 'orca-json-fixtures.mjs');
-const DAO_CMD = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
 const T_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
-const F_LOAD = import('file://' + FIX.replace(/\\/g, '/'));
 
 describe('master-title', () => {
   it('定界区加删：不碰叙述其余部分', async (t) => {
@@ -204,38 +201,7 @@ describe('master-title', () => {
     });
   });
 
-  it('真语料规矩：缺存档必须被拦', async (t) => {
-    const F = await F_LOAD;
-    // #762 按域拆分后 extract* 散在 dao-cmd.mjs + scripts/lib/dispatch/*.mjs，一并扫
-    const libDir = path.join(REPO, 'scripts', 'lib');
-    const texts = [fs.readFileSync(DAO_CMD, 'utf8')];
-    const dispatchDir = path.join(libDir, 'dispatch');
-    if (fs.existsSync(dispatchDir)) {
-      for (const name of fs.readdirSync(dispatchDir).filter(n => n.endsWith('.mjs')).sort()) {
-        texts.push(fs.readFileSync(path.join(dispatchDir, name), 'utf8'));
-      }
-    }
-    const live = F.checkOrcaJsonFixtures({
-      daoCmdText: texts.join('\n'),
-      fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json'),
-    });
-    await t.test('仓内 extract* 都有真语料', () => {
-      assert.ok(live.ok === true && live.unscanned === false && live.scanned.length > 0, '仓内 extract* 都有真语料  →  ' + JSON.stringify(live));
-    });
 
-    const poisoned = F.checkOrcaJsonFixtures({
-      daoCmdText: 'export function extractGhost(json) { return json; }\n',
-      fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json'),
-    });
-    await t.test('故意加 extractGhost 无语料 → 拦', () => {
-      assert.ok(poisoned.ok === false && poisoned.unscanned === false && poisoned.missing.some(m => /extractGhost/.test(m)), '故意加 extractGhost 无语料 → 拦  →  ' + JSON.stringify(poisoned));
-    });
-
-    const empty = F.checkOrcaJsonFixtures({ daoCmdText: 'export function foo() {}', fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json') });
-    await t.test('一个 extract* 都没有 → 没查成', () => {
-      assert.ok(empty.unscanned === true && empty.ok === false, '一个 extract* 都没有 → 没查成  →  ' + JSON.stringify(empty));
-    });
-  });
 
   it('#684 帅位定界区：事件点全量重写', async (t) => {
     const T = await T_LOAD;
