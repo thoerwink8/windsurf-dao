@@ -1,3 +1,5 @@
+处置：#1115 只删仓；机器上 orca-serve 仍 loaded/disabled，卸载要 root，本轮没动
+
 # 机制巡检：orca-serve 从仓里删了，机器上还在；退役闸只扫仓所以全绿
 
 ## 结论
