@@ -2,6 +2,36 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.0.0 — 2026-09-07
+
+### 破坏性变更
+- [grok] feat!: 删影响地图与 orca 派工脊，执行体只剩 mirasim (#1115)
+
+### 新功能
+- [grok] feat(lifecycle): 短命会话 + 核绿后 squash (#1134)
+- [grok] feat!: 删影响地图与 orca 派工脊，执行体只剩 mirasim (#1115)
+- [cc] feat(hub): 总控群播报改成 Card JSON 2.0 日报卡（#1052） (#1058)
+- [cc] feat(reconcile): 对账循环——未结 dispatch ∖ 活会话差集重派（#1056） (#1057)
+- [grok] feat(hub): 飞书私聊问答 + 总控群日报卡（#1029 #1052） (#1103)
+
+### 修复与维护
+- [pi] fix(nudge): 已关单/人还在/错分支不许再推一把 (#1102)
+- [grok] fix(watchdog): board-gc 不再问 orca，推一把跳过已关单 (#1104)
+- [cc] fix(handoff): 交卷闸 ① 降级为合并闸——基底新旧只在合并那一刻要紧（#1117） (#1119)
+- [cc] fix(escalate): 噪音单的根因是判据写窄了三个字——没查成不开单、去重按原因不按对象（#1063） (#1070)
+- [cc] docs: 落地清单补记事件驱动主路（实现已在 #997） (#964)
+
+### 其它
+- [patrol] 执行体只剩 mirasim，指挥官派工指针仍钉 orca 士兵书
+- [patrol] #1056 合了对账不推卡住的活人；routeSilent 是死代码
+- [patrol] orca-serve 从仓里删了，机器上还在；退役闸只扫仓所以全绿
+- [pi] 事后复审：帅位自写自合的 5 个 PR（#1092） (#1112)
+- [patrol] nudge timer 装了却 disabled；关单脚本把重开的单再关上
+- [cc] 帅窗红线改靶：禁主树写、不禁 worktree 里 commit/push（#1093） (#1100)
+- release: v1.0.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v1.0.0 — 2026-09-06
 
 ### 破坏性变更
