@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-06",
+  "updated": "2026-09-08",
   "_comment": "西瓜清单：正在推进的长期目标。日常小事不进这里——进来的必须是「丢了会疼」的那种。",
   "_why": "2026-09-06 用户点破：真正的风险不是忘了某一件事，是长期目标被日常小事挤掉，两天后彻底遗忘。业界把这叫 long-running initiatives that never end，解法是 Portfolio Kanban 的在制品上限（Little's Law：cycle time = WIP / throughput，同时做的越多，每件完成得越慢）。",
   "_判据必须机器可算": "done_when 只写「能当场算出真假」的事实。人填的百分比会过期——#880 的进度表就是这么死的：它写着卡 C 未完成，实际早就合了，2026-09-06 连着误导了两次。判据是事实就不可能骗人。",
@@ -41,6 +41,17 @@
       "next_action_as_of": "2026-09-06",
       "status": "active",
       "started": "2026-09-06"
+    },
+    {
+      "id": "ephemeral-lifecycle",
+      "name": "短命会话：交卷即杀、核绿即合、独立钟退役",
+      "why": "用户 2026-09-07 拍板。核绿后又因 master 领先整轮返工；6 核上会话待着占内存；看门狗拆成多个独立钟。统领单 #1133。",
+      "done_when": "dao-check 的 checkEphemeralLifecycle 绿（交卷热路 session-stop、仓内无 nudge-stalled 生产文件、审官 mirasim 书无 pr merge、指挥官调用 runProgressWatch、合并闸 ① 只报不拦）",
+      "check": "checkEphemeralLifecycle",
+      "next_action": "已完成：#1134 合入，#1133 已关，独立钟已卸。",
+      "next_action_as_of": "2026-09-08",
+      "status": "done",
+      "started": "2026-09-07"
     }
   ]
 }
