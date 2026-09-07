@@ -174,7 +174,8 @@ describe('#1024 drain 计划带票上的 --repo', () => {
     });
     assert.equal(plan.ok, true);
     assert.equal(plan.verb, 'reviewer-create');
-    assert.ok(plan.argv.includes('--executor') && plan.argv.includes('mirasim'), plan.argv.join(' '));
+    assert.equal(plan.argv.includes('--executor'), true);
+    assert.equal(plan.argv.includes('mirasim'), true);
     assert.equal(plan.argv.includes('--repo'), true);
     assert.equal(plan.argv.includes('thoerwink8/ws-cleaner'), true);
   });
@@ -187,7 +188,8 @@ describe('#1024 drain 计划带票上的 --repo', () => {
     });
     assert.equal(plan.ok, true);
     assert.equal(plan.verb, 'reviewer-create');
-    assert.ok(plan.argv.includes('--executor') && plan.argv.includes('mirasim'), plan.argv.join(' '));
+    assert.equal(plan.argv.includes('--executor'), true);
+    assert.equal(plan.argv.includes('mirasim'), true);
     assert.equal(plan.argv.includes('--repo'), true);
     assert.equal(plan.argv.includes('thoerwink8/ws-cleaner'), true);
   });
