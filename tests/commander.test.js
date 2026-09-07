@@ -80,6 +80,20 @@ describe('decide：自己做（确定性）', () => {
     assert.match(txt, /自己不关、不派/);
   });
 
+  it('incomplete 会话 → 先 stop-session，不常驻', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [
+        { key: 'pi:dead', state: 'incomplete', cwd: '/x/dao-900' },
+        { key: 'pi:live', state: 'running', cwd: '/x/dao-901' },
+      ] },
+    }));
+    const stops = byKind(r, 'stop-session');
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0].sessionKey, 'pi:dead');
+    assert.equal(stops.filter((s) => s.sessionKey === 'pi:live').length, 0);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
@@ -379,7 +393,26 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
     assert.equal(byKind(r, 'rework').length, 0, '旧 head 的红不许派返工工人（否则每轮刷一个）');
     // 2026-09-05 改：'等审官'这个假设是错的——没有任何东西会去叫审官，PR 就此挂着（实咬 #890/#893/#896/#905 挂 10 小时）。
     // 新意图：仍不返工、不报帅，但要产一条 rereview 去叫审官看新 head。
-    assert.deepEqual(kinds(r), ['rereview'], '推了新 head = 叫审官复审，不是干等');
+    assert.deepEqual(kinds(r), ['rereview'], '旧红 + 新 head 没判定 = 同一轮再看，不是对接 master');
+  });
+
+  it('旧 head 核绿、新 head 没判定 + MERGEABLE → 直接合，不再审', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'newhead000000000000000000000000000000bbb';
+    const OLD = 'oldhead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: OLD },
+      ] } } },
+    }));
+    assert.ok(byKind(r, 'merge').length >= 1, `应 squash，实得 ${kinds(r)}`);
+    assert.equal(byKind(r, 'rereview').length, 0, '对接 master 不许再叫审官');
   });
 
   it('②红就打在当前 head → 照常派返工工人（判别力反证：别把整条路一刀切废掉）', async () => {
@@ -1076,16 +1109,17 @@ describe('decide：返工模型顶班（#894 实咬）', () => {
   });
 });
 
-// 2026-09-05 实咬：同轮返工 #894 与 #899 共用署名 issue #891，第二张被 issue 级去重挡掉，红没人接。
-// 返工的真去重在 state.reworkDispatched（PR+head，尝试即记），所以返工命令必须显式 --allow-dup。
-describe('返工命令：显式放行 issue 级去重', () => {
+// 返工不再新派工（短命会话：原树 start）。去重仍靠 reworkDispatched（PR+head）。
+describe('返工命令：原树短会话，不新派工', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
-  it('dispatchRework 的命令带 --allow-dup', () => {
+  it('dispatchRework 起原树会话，记账仍走 reworkDispatched', () => {
     const i = src.indexOf('function dispatchRework');
     assert.ok(i > -1, '找不到 dispatchRework——本闸判据失效，不是通过');
-    const body = src.slice(i, i + 2600);
-    assert.match(body, /'--allow-dup'/, '返工命令必须带 --allow-dup，否则同 issue 的第二张返工永远派不出去');
-    assert.match(body, /reworkDispatched/, '放行的前提是返工自己有 PR\+head 去重，这行没了就不该放行');
+    const body = src.slice(i, i + 4500);
+    assert.match(body, /findDaoTree/, '必须先找到原工人树');
+    assert.match(body, /dao\.mjs', 'start'/, '返工应在原树起短会话');
+    assert.match(src, /function rememberRework/);
+    assert.doesNotMatch(body, /'--allow-dup'/, '不再走 dispatch 新派工');
   });
 });
 
@@ -1111,10 +1145,11 @@ describe('decide：判绿按真 review 而非 reviewDecision（实咬）', () =>
     assert.equal(byKind(r, 'merge').length, 1, 'reviewDecision 恒 null 的仓也必须能自动合');
     assert.equal(byKind(r, 'land').length, 1);
   });
-  it('绿打在旧 head 上 → 不合（判绿只对它当时看的那个 commit 有效）', async () => {
+  it('绿打在旧 head 上 + MERGEABLE → squash（对接 master，不再审）', async () => {
     const { decide } = await CORE;
     const r = decide(greenSit({ reviews: [{ state: 'APPROVED', body: '旧的', commit_id: 'old' }] }));
-    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'merge').length, 1, '落后可合的 PR 应直接 squash');
+    assert.equal(byKind(r, 'rereview').length, 0);
   });
   it('当前 head 上是 CHANGES_REQUESTED → 不合，走返工', async () => {
     const { decide } = await CORE;
@@ -1753,6 +1788,17 @@ describe('对账循环 scan 真的接进态势', () => {
 
   it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
     assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
+  });
+
+  it('rereview 写完票当场 drain --pr，不等下一轮', () => {
+    const i = src.indexOf('function requestRereview');
+    assert.ok(i > -1, '找不到 requestRereview');
+    const fn = src.slice(i, src.indexOf('function drainReviewPending', i));
+    assert.match(fn, /drainReviewPending/, '写完必须当场 drain');
+    assert.doesNotMatch(fn, /drain 下一轮消费/, '不许再把审官推到下一轮');
+    const drain = src.slice(src.indexOf('function drainReviewPending'), src.indexOf('function drainReviewPending') + 900);
+    assert.match(drain, /review-pending-drain/);
+    assert.match(drain, /--pr/);
   });
 });
 

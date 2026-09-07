@@ -398,15 +398,16 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
     assert.doesNotMatch(String(b.stdout || ''), /AGENT_LOOP_TICK_PANMIAN/);
   });
 
-  it('timer 单元进 INDEX 装机面：service 调 progress-watch，timer 有 OnCalendar', () => {
-    const unitDir = path.join(REPO, 'host', 'machine', 'systemd');
-    const service = fs.readFileSync(path.join(unitDir, 'dao-progress-watch.service'), 'utf8');
-    const timer = fs.readFileSync(path.join(unitDir, 'dao-progress-watch.timer'), 'utf8');
-    assert.match(service, /ExecStart=.*scripts\/progress-watch\.mjs/);
-    assert.match(service, /^User=orca$/m);
-    assert.match(timer, /^OnCalendar=/m);
+  it('独立 timer 已退役：安装脚本卸载，指挥官每轮自己跑', () => {
     const installer = fs.readFileSync(path.join(REPO, 'scripts', 'install-progress-watch.sh'), 'utf8');
-    assert.match(installer, /dao-progress-watch\.timer/);
+    assert.match(installer, /disable --now dao-progress-watch\.timer/);
+    assert.match(installer, /retired dao-progress-watch\.timer/);
+    assert.doesNotMatch(installer, /enable --now dao-progress-watch/);
+    const unitDir = path.join(REPO, 'host', 'machine', 'systemd');
+    assert.equal(fs.existsSync(path.join(unitDir, 'dao-progress-watch.service')), false);
+    assert.equal(fs.existsSync(path.join(unitDir, 'dao-progress-watch.timer')), false);
+    const commander = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(commander, /runProgressWatch\s*\(/);
     const index = fs.readFileSync(path.join(REPO, 'host', 'machine', 'INDEX.md'), 'utf8');
     assert.match(index, /~\/\.dao\/progress-watch\.json/);
   });

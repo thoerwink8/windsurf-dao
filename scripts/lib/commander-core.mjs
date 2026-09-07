@@ -41,6 +41,7 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
+import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
 } from './admission.mjs';
@@ -49,6 +50,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
+  'stop-session',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -304,6 +306,7 @@ export const ACTION_NEEDS = {
   'reap-ticket': ['github', 'reviewPending'],
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
+  'stop-session': [],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -694,14 +697,21 @@ function collectCandidates(situation) {
     //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
     //   · 没查成一律不合，与「查过确实没绿」分开。
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const readyToLand = approvedToLand({
+      greenAtHead,
+      decisionApproved,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment: lastJudgmentOf(allA),
+    });
     // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
     const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
     const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
     const mergeableNow = mergeableState === 'MERGEABLE';
 
-    if ((greenAtHead || decisionApproved) && !pr.isDraft && mergeableNow) {
+    if (readyToLand && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
       if (ci.red) { // 判绿却 CI 红：矛盾态，不自动合，报帅
         out.push(withNeeds(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }), N.merge));
@@ -721,13 +731,18 @@ function collectCandidates(situation) {
           continue;
         }
       }
-      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE' }, N.merge));
+      out.push(withNeeds({
+        kind: 'merge', pr: pr.number, title: pr.title || '',
+        why: greenAtHead
+          ? '审官判绿（当前 head）+ CI 绿 + MERGEABLE'
+          : '审官已放行（head 因对接 master 变了，不再审）+ CI 绿 + MERGEABLE',
+      }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
       continue;
     }
 
-    if ((greenAtHead || decisionApproved) && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+    if (readyToLand && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
       continue;
     }
@@ -773,11 +788,14 @@ function collectCandidates(situation) {
           `- 不许借机改本单范围外的东西；解冲突就只解冲突。`,
           `- 冲突文件在 master 侧被删除/拆分的（例如测试拆套），要把本分支的改动搬到新落点，不是把文件复活。`,
         ].join('\n'),
-        why: `PR #${pr.number} 与 master 冲突（CONFLICTING）——审官判不了冲突 PR，先派工人解冲突`,
-        hubText: `PR #${pr.number} 与 master 冲突，已自动派工人解冲突`,
+        why: `PR #${pr.number} 与 master 冲突（CONFLICTING）——脚本先自动合，合不上再在原树起短会话`,
+        hubText: `PR #${pr.number} 与 master 冲突，先自动合入 master`,
       });
       continue;
     }
+
+    // 审官已经放行：head 变了只因对接 master。不要因为当前 head 零判定再叫一轮审官。
+    if (readyToLand) continue;
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
@@ -929,7 +947,21 @@ function collectCandidates(situation) {
     }
   }
 
-  return out;
+  // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
+  // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  const stops = [];
+  for (const s of sessionListForLiveness(situation) || []) {
+    const raw = String((s && (s.state || s.runState || s.driverState)) || '').toLowerCase();
+    if (raw !== 'incomplete') continue;
+    const key = s && (s.key || s.id || s.sessionKey);
+    if (!key) continue;
+    stops.push(withNeeds({
+      kind: 'stop-session',
+      sessionKey: String(key),
+      why: '一轮说完，会话不常驻',
+    }, ACTION_NEEDS['stop-session']));
+  }
+  return stops.concat(out);
 }
 
 /**

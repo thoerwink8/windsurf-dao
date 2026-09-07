@@ -7,7 +7,7 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 ## 拓扑
 
-master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 按需起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名给人眼看（格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`），程序判据不读卡名。
+master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 入队，指挥官按空位起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名给人眼看（格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`），程序判据不读卡名。
 
 多块活（能拆成几块、各够一个工人干一阵的）走 `host/skills/dao-project/SKILL.md` 的项化路径（项卡 + 多 worker 子卡 + 各自审官 + 收口官，消歧门门控），本页不复制；单卡场景仍走本页。
 
@@ -62,18 +62,18 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。#807 起本机信箱台 / 守卫保活已删，服务器承重面是 systemd + 指挥官 + `progress-watch`。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`；**帅窗不许触发这条**。真信进 GitHub 与一次性 `orca orchestration inbox --json`；不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。心跳不准发到 Run（#667）。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
+派完即回对话态，帅不前台长等。#807 起本机信箱台 / 守卫保活已删，服务器承重面是 systemd + 指挥官（盘面推进量并进 `commander-act`）。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`；**帅窗不许触发这条**。真信进 GitHub 与一次性 `orca orchestration inbox --json`；不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。心跳不准发到 Run（#667）。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 
 - **编排层**：`worker_done` 是触发器、GitHub PR 存在是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
-- **流转器（#575 ⑥ 订正）**：交棒发到 **issue comment** 首行「完工」（issue 一直在，不绑 push）。工人发评论走 `node scripts/dao.mjs worker-done --pr <N> --body-file <文件>`（#586：同时按需起审官），格式见 worker-brief。#807 起本机 `flow.mjs` 已删，完工信号契约钉在 soldier-book / 本页 / `scripts/lib/review-state.mjs`。
+- **流转器（#575 ⑥ 订正）**：交棒发到 **issue comment** 首行「完工」（issue 一直在，不绑 push）。工人发评论走 `node scripts/dao.mjs worker-done --pr <N> --body-file <文件>`（只入队、不起审官），格式见 worker-brief。#807 起本机 `flow.mjs` 已删，完工信号契约钉在 soldier-book-mirasim / 本页 / `scripts/lib/review-state.mjs`。
 
 向用户汇报工位状态前，先实刷 orca worktree ps 的 agents[].state 与 gh pr 状态——凭上次印象汇报会状态失真（2026-08-14 三次实测，issue #443）。
 
 监听三分诊：收到「活动消失 / 疑似交卷」通知后，第一动作是读屏分诊终态，不得直接按交卷入队——交卷→收卷；报错→原地重试一次（输入框残留补回车）；卡死（错误指纹两连同）→换人不救（拍板 2026-08-14，issue #442）。
 
-事故路径的卡死发现由服务器 `scripts/progress-watch.mjs`（systemd timer）承担：连续 N 轮同一对象同一状态即判卡，只叫醒帅位、不自动换人（2026-09-06 用户拍板删掉屏面指纹层 `agent-stall-watch`，撞限流换审官这条自动路径随之没有执行者）。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长、工作树 git 证据、还有没有活跃执行者。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
+事故路径的卡死发现由指挥官每轮跑 `scripts/progress-watch.mjs` 承担：连续 N 轮同一对象同一状态即判卡，只叫醒帅位、不自动换人（2026-09-06 用户拍板删掉屏面指纹层 `agent-stall-watch`；2026-09-07 独立 timer 并进 `commander-act`）。**活性判据只用「该发生的事有没有发生」**：非 spinner 真实内容是否在增长、工作树 git 证据、还有没有活跃执行者。工人/审官的 git 环境已由仓库级 `core.editor true` + `core.pager cat` 兜底（NEW-MACHINE §8b），git 不会再拉起 vim/less 挂死。
 
 **delete-ack-layer（2026-08-23）**：Orca 假 stall 会在约 6s 吊销 dispatch capability，原生 `orca orchestration send --type worker_done` 交卷会失败、审官起不来。士兵交卷只走 `dao.mjs worker-done --pr`（仓内起审官，不依赖 Orca 结算）。看门狗 `missing-reviewer` 从只报警升级为 `--dispose-actions` 下自动 `reviewer-create`（有 linked PR、工位已下班、无审官子卡；Devin `agents=[]` 要有 dispatch 记账且卡 `in-review` 才算下班，避免开工第二步刚开 PR 就误起）。
 
@@ -197,10 +197,10 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 **已接成机器闭环（#546 追加第五件，用户拍板；#559 换官方原语 + 审官红项修正拓扑）**：`dao.mjs dispatch` 用 **Dispatch id**（不再用 terminal handle）接线：
 
-- 士兵任务书（`host/skills/dispatch/templates/soldier-book.md`）**不内嵌**审官 dispatch id——派工那一刻审官还不存在。士兵完工调 `dao.mjs worker-done --pr N`（发完工 comment + 按需起审官），不要自己 notify。
-- 审官任务书（`host/skills/dispatch/templates/reviewer-book.md`）内嵌**士兵 dispatch id**——`reviewer-create` 先查到士兵真 id 再渲染，结构上不可能出现 `dispatch:undefined`；审官红项 `notify --to dispatch:<士兵 id>` 发回士兵。
+- 士兵任务书（`host/skills/dispatch/templates/soldier-book-mirasim.md`）**不内嵌**审官 dispatch id——派工那一刻审官还不存在。士兵完工调 `dao.mjs worker-done --pr N`（发完工 comment + 入队），不要自己 notify。orca 版 `soldier-book.md` 已退役。
+- 审官任务书（`host/skills/dispatch/templates/reviewer-book-mirasim.md`）判定落到 GitHub review；红项写进 `--request-changes` 正文。orca 版 `reviewer-book.md` 已退役。
 - 闭环三跳（士兵→审官、审官→士兵、审官→帅）的发信口只有 `node scripts/dao.mjs notify` 一个：裸 `orca orchestration send` 对**不存在的收件人**也返回 exit 0 / `ok:true` / `delivered_at:null`，链断和链走完在帅眼里都是「没有消息」。`notify` 先证收件人在（terminal 读的 `terminal_handle_stale` / run-show 的 `run_not_found` / worker-show 的 `dispatch_not_found`）、再发、再核回执与落库，四关缺一即非零退出并打「链断」。`delivered_at` 只报出不当判据。**士兵↔审官互发一律 `--to dispatch:<id>`**（官方结构化收件箱，worker 的下一步 `orchestration check` 会收到）；审官→帅用 `run:<Run id>`。
-- 审官任务书还写：乒乓两轮仍红才上帅（上帅时带士兵 dispatch id，帅换人走 `worker-start --retry-of`）；绿 → 按 merge-policy 收口：auto 自己 `gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
+- 审官任务书还写：乒乓两轮仍红才上帅（上帅时带士兵 dispatch id，帅换人走 `worker-start --retry-of`）；绿 → `--approve` 落到 GitHub，合入由指挥官 squash（审官不许自己合）；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
 - 归档由帅侧关卡执行（#665：MERGED 扫描收树；可归档只加速）。审官不能 rm 自己所在的树，只负责把「可归档」通知到帅。
 - 模板是原则 + 「以当时的任务书为准」，不复制会随 #530 过时的具体职责（#507 教训）。
 
