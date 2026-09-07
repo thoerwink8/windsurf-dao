@@ -49,6 +49,20 @@ function walkMd(dir, prefix, acc) {
   return acc;
 }
 
+function walkScripts(dir, prefix, acc) {
+  if (!existsSync(dir)) return acc;
+  for (const name of readdirSync(dir)) {
+    if (name === 'node_modules') continue;
+    const p = join(dir, name);
+    const rel = prefix ? `${prefix}/${name}` : name;
+    let st;
+    try { st = statSync(p); } catch { continue; }
+    if (st.isDirectory()) walkScripts(p, rel, acc);
+    else if (/\.(mjs|js)$/.test(name) && st.isFile()) acc.push(rel);
+  }
+  return acc;
+}
+
 function hasBareWrite(text) {
   return String(text || '').split(/\r?\n/).some((line) => {
     if (/issue-gateway|gh-as\.mjs/.test(line) && BARE_WRITE_RE.test(line)) return false;
@@ -168,11 +182,82 @@ export function checkNoBareGhIssueWrite({ root, files, extraRels } = {}) {
   };
 }
 
+/** 网关自己写 GitHub；闸/身份检查只引用被拦的命令，不是生产写点。 */
+export const CODE_WRITE_EXEMPT = [
+  'scripts/issue-gateway.mjs',
+  'scripts/lib/issue-gateway.mjs',
+  'scripts/lib/dispatch-gate.mjs',
+  'scripts/lib/dispatch-gate-check.mjs',
+  'scripts/lib/issue-gateway-check.mjs',
+  'scripts/lib/marshal-issue-identity-check.mjs',
+];
+
+const CODE_WRITE_RES = [
+  /\[['"]issue['"]\s*,\s*['"](create|comment|close|edit|reopen|delete)['"]/,
+  /(?:runGh|ghAs|runMarshal)\([^\n]{0,80}['"]issue['"]\s*,\s*['"](create|comment|close|edit|reopen|delete)['"]/,
+  /gh-as\.mjs['"][^\n]{0,240}['"]issue['"][^\n]{0,80}['"](create|comment|close|edit|reopen|delete)/,
+  /spawnSync\([^\n]{0,160}['"]issue['"]\s*,\s*['"](create|comment|close|edit|reopen|delete)/,
+];
+
+/** 生产脚本里绕过网关的 Issue 写调用。少扫一处就红；0 个文件 = 没查成。 */
+export function checkNoBareIssueWriteInCode({ root, files, extraRels, exempt } = {}) {
+  if (!root && !files) return { fail: ['没给仓库根', 'checkNoBareIssueWriteInCode 要 root', ''] };
+  let rels;
+  if (Array.isArray(extraRels)) rels = extraRels;
+  else if (files) {
+    rels = Object.keys(files).filter((k) => /\.(mjs|js)$/.test(k));
+  } else {
+    rels = walkScripts(join(root, 'scripts'), 'scripts', []);
+  }
+  if (rels.length === 0) {
+    return { fail: ['一个生产脚本都没扫到', '0 个样本 = 本次等于没查，不是绿', 'scripts/'] };
+  }
+  const skip = new Set(Array.isArray(exempt) ? exempt : CODE_WRITE_EXEMPT);
+  const hits = [];
+  for (const rel of rels) {
+    if (skip.has(rel.replace(/\\/g, '/'))) continue;
+    const loaded = readRel(root || '', rel, files);
+    if (loaded.missing) {
+      return { fail: [`文件读不到：${rel}`, '读失败不是 0 条违规', loaded.path || rel] };
+    }
+    const lines = String(loaded.text || '').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/issue-gateway/.test(line)) continue;
+      if (/^\s*(\/\/|\*)/.test(line)) continue;
+      for (const re of CODE_WRITE_RES) {
+        if (re.test(line)) {
+          hits.push({ rel, line: i + 1, excerpt: line.trim().slice(0, 160) });
+          break;
+        }
+      }
+    }
+  }
+  if (hits.length) {
+    return {
+      fail: [
+        `生产脚本还有 ${hits.length} 处绕过 issue-gateway 写 Issue`,
+        'create/comment/close/reopen/edit 一律走网关；PR 评论/打标可以继续 gh-as',
+        hits.slice(0, 6).map((h) => `${h.rel}:${h.line}`).join('；'),
+      ],
+      scanned: rels.length,
+      hits,
+    };
+  }
+  return {
+    green: `生产 Issue 写点 0 处绕过网关（扫了 ${rels.length} 个脚本）`,
+    scanned: rels.length,
+    hits: [],
+  };
+}
+
 export function checkIssueGatewayAlive({ root, files } = {}) {
   const surfaces = checkIssueGatewaySurfaces({ root, files });
   if (surfaces.fail) return surfaces;
   const bare = checkNoBareGhIssueWrite({ root, files });
   if (bare.fail) return bare;
+  const code = checkNoBareIssueWriteInCode({ root, files });
+  if (code.fail) return code;
   const cli = readRel(root || '', 'scripts/issue-gateway.mjs', files);
   if (cli.missing) {
     return { fail: ['唯一入口 scripts/issue-gateway.mjs 不在', '恢复该文件；入口不在 = 没查成', cli.path || 'scripts/issue-gateway.mjs'] };
@@ -192,8 +277,8 @@ export function checkIssueGatewayAlive({ root, files } = {}) {
     return { fail: ['网关源码里还有裸 gh + 个人 token 退路', '缺凭据必须 fail-loud，不许退回个人 gh', 'scripts/lib/issue-gateway.mjs'] };
   }
   return {
-    green: `${surfaces.green}；${bare.green}`,
-    scanned: (surfaces.scanned || 0) + (bare.scanned || 0),
+    green: `${surfaces.green}；${bare.green}；${code.green}`,
+    scanned: (surfaces.scanned || 0) + (bare.scanned || 0) + (code.scanned || 0),
   };
 }
 

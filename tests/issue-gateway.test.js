@@ -248,6 +248,63 @@ describe('issue-gateway 写入契约', () => {
     const body = G.embedIdempotencyMarker('正文', key);
     assert.equal(G.extractIdempotencyMarker(body), key);
   });
+
+  it('close/reopen 回读 {} 缺 state → fail-closed，不是绿', async () => {
+    const G = await LIB_LOAD;
+    const dir = tmp();
+    const fake = fakeMarshal({ view: {} });
+    const z = G.issueClose({
+      repo: 'thoerwink8/windsurf-dao', issue: 42, reason: 'completed',
+      host: 'linux', idempotency_key: 'z-empty',
+    }, { dir, runMarshal: fake.runMarshal });
+    assert.equal(z.ok, false);
+    assert.equal(z.stage, 'gh_readback');
+    assert.match(z.error, /没有 state/);
+
+    const o = G.issueReopen({
+      repo: 'thoerwink8/windsurf-dao', issue: 42,
+      host: 'linux', idempotency_key: 'o-empty',
+    }, { dir, runMarshal: fake.runMarshal });
+    assert.equal(o.ok, false);
+    assert.equal(o.stage, 'gh_readback');
+  });
+
+  it('幂等账写失败不得盖回 ok:true', async () => {
+    const G = await LIB_LOAD;
+    const dir = tmp();
+    // 把 idempotency 占成文件：mkdir 失败；audit 目录仍可写，stage 才是幂等账而不是审计。
+    fs.writeFileSync(path.join(dir, 'idempotency'), 'not-a-dir');
+    const fake = fakeMarshal();
+    const r = G.issueCreate(baseCreate({ idempotency_key: 'store-fail' }), {
+      dir, runMarshal: fake.runMarshal,
+    });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.stage, 'idempotency_store');
+    assert.equal(r.landed, true);
+    assert.equal(r.number, 42);
+    assert.match(r.error, /人工按 URL/);
+  });
+
+  it('审计目录不可写 → 不得报告成功', async () => {
+    const G = await LIB_LOAD;
+    const root = tmp();
+    const dir = path.join(root, 'gw');
+    fs.mkdirSync(path.join(dir, 'audit'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'audit', 'audit.ndjson'), 'x');
+    fs.chmodSync(path.join(dir, 'audit', 'audit.ndjson'), 0o444);
+    const fake = fakeMarshal();
+    let r;
+    try {
+      r = G.issueCreate(baseCreate({ idempotency_key: 'aud-ro' }), {
+        dir, runMarshal: fake.runMarshal,
+      });
+    } finally {
+      try { fs.chmodSync(path.join(dir, 'audit', 'audit.ndjson'), 0o644); } catch { /* restore */ }
+    }
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.stage, 'audit');
+    assert.match(r.error, /审计写失败/);
+  });
 });
 
 describe('issue-gateway CLI', () => {

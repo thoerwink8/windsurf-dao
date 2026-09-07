@@ -1043,4 +1043,31 @@ describe('llm 流式（2026-09-04：非流式 + 60s 在 grok 排队时必超时�
     await M.makeLlm({ gateway: 'https://gw.example', keyPath: keyFile, fetchImpl, timeoutMs: 1234 })({ system: 's', user: 'u' });
     assert.ok(seenSignal && typeof seenSignal.aborted === 'boolean', '流式路径也带 AbortSignal');
   });
+
+  it('卡片拍板：真实 makeGhDeps 必须带幂等键，缺键失败', async () => {
+    const M = await MOD;
+    const writes = [];
+    const applyWrite = (req) => { writes.push(req); return { ok: true, number: req.issue }; };
+    const deps = M.makeGhDeps({ applyWrite });
+    const store = { hubPending: { om_card_1: { repo: 'thoerwink8/windsurf-dao', number: 846 } }, save() {} };
+    const event = {
+      schema: '2.0',
+      header: { event_type: 'card.action.trigger', event_id: 'e-card' },
+      event: {
+        operator: { open_id: 'ou_x', user_name: '老板' },
+        action: { tag: 'button', value: { issue: '846', choice: 'recommend', repo: 'thoerwink8/windsurf-dao' } },
+        context: { open_message_id: 'om_card_1', open_chat_id: 'oc_hub' },
+        token: 'tok_1',
+      },
+    };
+    const handled = await M.handleCardAction(event, { store, deps });
+    assert.equal(handled.response.kind, 'ok');
+    const gh = handled.actions.find((a) => a.type === 'gh_comment');
+    assert.ok(gh && gh.idempotency_key, JSON.stringify(handled.actions));
+    await M.applyCardActions(handled, { store, deps });
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].action, 'issue_comment');
+    assert.equal(writes[0].idempotency_key, gh.idempotency_key);
+    await assert.rejects(() => deps.ghComment('thoerwink8/windsurf-dao', 846, 'x'), /idempotency_key/);
+  });
 });

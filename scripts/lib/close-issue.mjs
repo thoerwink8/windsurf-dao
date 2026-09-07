@@ -111,21 +111,19 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   if (!expectOpen && String(issueState).toUpperCase() !== 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 未关(${issueState})，无需重开`, issue, pr: number };
   if (dryRun) return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason, dryRun: true };
   const verb = dec.action === 'close' ? 'close' : 'reopen';
-  if (typeof writeIssue === 'function') {
-    const op = writeIssue({
-      action: verb === 'close' ? 'issue_close' : 'issue_reopen',
-      repo,
-      issue,
-      host: 'close-issues',
-      idempotency_key: `close-issues:${verb}:pr-${number}:issue-${issue}`,
-      reason: verb === 'close' ? 'completed' : undefined,
-    });
-    if (!op || !op.ok) {
-      return { ok: false, action: dec.action, error: `issue-gateway ${verb} #${issue} 失败：${op && op.error ? op.error : '没查成'}`, issue, pr: number };
-    }
-    return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason };
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, action: dec.action, error: `issue-gateway 没注入，不许退回裸 gh issue ${verb}`, issue, pr: number };
   }
-  const op = runGh(['issue', verb, String(issue)]);
-  if (!op.ok) return { ok: false, action: dec.action, error: `gh issue ${verb} #${issue} 失败：${op.error}`, issue, pr: number };
+  const op = writeIssue({
+    action: verb === 'close' ? 'issue_close' : 'issue_reopen',
+    repo,
+    issue,
+    host: 'close-issues',
+    idempotency_key: `close-issues:${verb}:pr-${number}:issue-${issue}`,
+    reason: verb === 'close' ? 'completed' : undefined,
+  });
+  if (!op || !op.ok) {
+    return { ok: false, action: dec.action, error: `issue-gateway ${verb} #${issue} 失败：${op && op.error ? op.error : '没查成'}`, issue, pr: number };
+  }
   return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason };
 }

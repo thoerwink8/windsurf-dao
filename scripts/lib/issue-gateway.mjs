@@ -122,7 +122,9 @@ export function parseCommentUrl(text) {
 }
 
 function fail(stage, error, extra = {}) {
-  return { ok: false, stage, error: String(error || '失败'), ...extra };
+  // ok/stage/error 必须压过 extra：写幂等账失败时会把已落 GitHub 的 result 带进来，
+  // 那里面的 ok:true 不得把失败盖回成功（#1015 审官第 6 条）。
+  return { ...extra, ok: false, stage, error: String(error || '失败') };
 }
 
 function storeKey(action, repo, idempotencyKey) {
@@ -318,7 +320,10 @@ function performClose(req, deps) {
   const viewed = readIssue(req.repo, req.issue, deps);
   if (!viewed.ok) return viewed;
   const state = String(viewed.json.state || '').toUpperCase();
-  if (state && state !== 'CLOSED') {
+  if (!state) {
+    return fail('gh_readback', 'close 后回读没有 state——没查成，不是已关闭');
+  }
+  if (state !== 'CLOSED') {
     return fail('incomplete_receipt', `close 后状态是 ${viewed.json.state || '?'}，不是 CLOSED`);
   }
   // close 不拿 issue.author 当写入身份：工人开的单也要能关。可验证的是状态变成 CLOSED。
@@ -341,7 +346,10 @@ function performReopen(req, deps) {
   const viewed = readIssue(req.repo, req.issue, deps);
   if (!viewed.ok) return viewed;
   const state = String(viewed.json.state || '').toUpperCase();
-  if (state && state !== 'OPEN') {
+  if (!state) {
+    return fail('gh_readback', 'reopen 后回读没有 state——没查成，不是已重开');
+  }
+  if (state !== 'OPEN') {
     return fail('incomplete_receipt', `reopen 后状态是 ${viewed.json.state || '?'}，不是 OPEN`);
   }
   return {
@@ -421,7 +429,21 @@ export function applyIssueWrite(raw, deps = {}) {
       replay: !!result.replay,
       author: result.author || null,
     };
-    try { writeAudit(dir, rec); } catch { /* 审计写失败不把成功改成失败；检查器另盯目录 */ }
+    try {
+      writeAudit(dir, rec);
+    } catch (e) {
+      const err = `审计写失败：${String(e.message || e).slice(0, 120)}`;
+      if (result.ok || result.number) {
+        return {
+          ...result,
+          ok: false,
+          stage: 'audit',
+          error: `${err}；对象可能已落 GitHub${result.url ? `（${result.url}）` : ''}，需人工按 URL 处置`,
+          audit: rec,
+        };
+      }
+      return { ...result, ok: false, audit: rec, auditError: err };
+    }
     return { ...result, audit: rec };
   };
 
@@ -456,7 +478,11 @@ export function applyIssueWrite(raw, deps = {}) {
     try {
       writeStore(dir, id, { ok: true, at: auditBase.ts, result: { ...result, replay: false } });
     } catch (e) {
-      return finish(fail('idempotency_store', `幂等账写失败：${String(e.message || e).slice(0, 120)}`, result));
+      return finish(fail(
+        'idempotency_store',
+        `幂等账写失败：${String(e.message || e).slice(0, 120)}；对象已落 GitHub${result.url ? `（${result.url}）` : ''}，需人工按 URL 处置`,
+        { number: result.number, url: result.url, author: result.author, landed: true },
+      ));
     }
   }
   return finish(result);

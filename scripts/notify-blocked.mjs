@@ -26,9 +26,6 @@
 // 用法：node scripts/notify-blocked.mjs <closedIssueOrPrNumber>
 
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
@@ -124,20 +121,14 @@ export function runNotify(closedNumber, opts = {}) {
     const body = buildComment(closedNumber, w);
     let failed = false;
     let detail = '';
-    if (typeof commentIssue === 'function') {
+    if (typeof commentIssue !== 'function') {
+      failed = true;
+      detail = 'notify-blocked 没注入 issue-gateway 写入器，不许退回裸 gh issue comment';
+    } else {
       const r = commentIssue({ number: w.number, body, closedNumber, waiter: w });
       if (!r || r.ok === false) {
         failed = true;
         detail = String((r && (r.error || r.detail)) || 'issue-gateway comment 失败').trim().slice(0, 300);
-      }
-    } else {
-      const tmpFile = join(tmpdir(), `notify-blocked-${w.number}-${process.pid}.md`);
-      writeFileSync(tmpFile, body, 'utf8');
-      const r = spawnSync(gh, [...ghArgs, 'issue', 'comment', String(w.number), '--body-file', tmpFile], { windowsHide: true, encoding: 'utf8' });
-      unlinkSync(tmpFile);
-      if (r.error || r.status !== 0) {
-        failed = true;
-        detail = String(r.stderr || (r.error && r.error.message) || 'gh issue comment 失败').trim().slice(0, 300);
       }
     }
     if (failed) {

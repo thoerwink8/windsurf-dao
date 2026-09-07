@@ -772,7 +772,13 @@ export async function handleCardAction(event, { store, deps } = {}) {
     const comment = cardDecisionComment({
       who, choice: parsed.choice, chatId: parsed.chatId, messageId: parsed.messageId,
     });
-    actions.push({ type: 'gh_comment', repo, number, body: comment });
+    actions.push({
+      type: 'gh_comment',
+      repo,
+      number,
+      body: comment,
+      idempotency_key: `feishu-card:${parsed.messageId || parsed.chatId || 'unknown'}:${parsed.choice || 'ok'}`,
+    });
     if (parsed.choice === 'alternative') {
       actions.push({
         type: 'card_followup',
@@ -828,7 +834,9 @@ export async function applyCardActions(result, { store, deps, client = null } = 
   for (const a of result.actions || []) {
     if (a.type === 'gh_comment' && a.repo && a.number && deps?.ghComment) {
       try {
-        await deps.ghComment(a.repo, a.number, a.body);
+        await deps.ghComment(a.repo, a.number, a.body, {
+          idempotency_key: a.idempotency_key,
+        });
         log({ type: 'action', action: a });
       } catch (e) {
         warn(`拍板评论写失败（${a.repo}#${a.number}）：${e.message}`);

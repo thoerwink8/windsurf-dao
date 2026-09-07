@@ -100,16 +100,18 @@ describe('close-issue 判定', () => {
       }
       return { ok: true, json: {} };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: Number(req.issue) }; };
     await t.test('绿→issue close', () => {
-      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'close' && r.issue === 9);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'close' && a[2] === '9'), '应调 issue close #9  →  ' + JSON.stringify(calls));
+      assert.ok(writes.some(w => w.action === 'issue_close' && String(w.issue) === '9'), '应调 issue-gateway close #9  →  ' + JSON.stringify(writes));
     });
-    calls.length = 0;
+    writes.length = 0;
     await t.test('红且单已关→issue reopen', () => {
-      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'reopen' && r.issue === 10);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'reopen' && a[2] === '10'), '应调 issue reopen #10  →  ' + JSON.stringify(calls));
+      assert.ok(writes.some(w => w.action === 'issue_reopen' && String(w.issue) === '10'), '应调 issue-gateway reopen #10  →  ' + JSON.stringify(writes));
     });
     calls.length = 0;
     await t.test('红但单没关→不动', () => {

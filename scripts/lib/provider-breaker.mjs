@@ -375,13 +375,20 @@ export function defaultHubSay(text) {
   return { ok: true, queued: true, messageId: r.messageId };
 }
 
-export function defaultOpenIssue({ title, body } = {}) {
+/** 熔断全开报警的幂等键：按 episode/window 区分，同一窗口重试复用，过 6h 再报新单。 */
+export function breakerAllOpenIdempotencyKey(now) {
+  const ms = nowMs(now);
+  const window = Math.floor(ms / ALL_OPEN_DEDUP_MS);
+  return `breaker-all-open:${window}`;
+}
+
+export function defaultOpenIssue({ title, body, now } = {}) {
   const r = spawnSync(process.execPath, [
     join(import.meta.dirname, '..', 'issue-gateway.mjs'), 'create',
     '--title', String(title || ''), '--body', String(body || ''), '--label', '待拍板',
     '--repo', 'thoerwink8/windsurf-dao',
     '--host', 'breaker',
-    '--idempotency-key', 'breaker-all-open',
+    '--idempotency-key', breakerAllOpenIdempotencyKey(now ?? Date.now()),
   ], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (r.error) return { ok: false, error: r.error.message };
   if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 200) };
@@ -416,6 +423,7 @@ export function escalateAllOpen({
   const issue = openIssue({
     title: '[待拍板] 编排层熔断：全部路径 open',
     body: `${text}\n\n查重标记（勿删）：[breaker-all-open]`,
+    now,
   });
   let hub;
   let ask = null;

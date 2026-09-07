@@ -75,8 +75,8 @@ describe('marshal-issue-identity', () => {
     await t.test('dispatch 打 issue label 走 marshal', () => {
       assert.ok(/stampIssueLabels\(\{[\s\S]*?runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)/.test(daoSrc), 'dispatch 打 issue label 走 marshal');
     });
-    await t.test('amend 发 issue 评论走 marshal', () => {
-      assert.ok(/postIssueComment\(\{\s*issue,\s*body,\s*runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)\s*\}\)/.test(daoSrc), 'amend 发 issue 评论走 marshal');
+    await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
+      assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);
     });
   });
 });

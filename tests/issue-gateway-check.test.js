@@ -68,4 +68,23 @@ describe('issue-gateway-check 全宿主面', () => {
     assert.ok(r.fail);
     assert.match(r.fail.join(' '), /不在|没查|少接/);
   });
+
+  it('生产脚本绕过网关写 Issue → 红', async () => {
+    const { checkNoBareIssueWriteInCode } = await CHECK_LOAD;
+    const r = checkNoBareIssueWriteInCode({
+      root: REPO,
+      extraRels: ['scripts/x.mjs'],
+      files: { 'scripts/x.mjs': "runGh(['issue', 'comment', n, '--body', body]);\n" },
+      exempt: [],
+    });
+    assert.ok(r.fail, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /绕过|comment/);
+  });
+
+  it('生产脚本 0 个文件 → 没查成', async () => {
+    const { checkNoBareIssueWriteInCode } = await CHECK_LOAD;
+    const r = checkNoBareIssueWriteInCode({ root: REPO, extraRels: [] });
+    assert.ok(r.fail);
+    assert.match(r.fail.join(' '), /没扫到|没查/);
+  });
 });

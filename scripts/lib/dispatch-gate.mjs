@@ -90,6 +90,8 @@ export function splitShellStatements(cmd) {
     if (c === '&' && s[i + 1] === '&') { flush(); i++; continue; }
     if (c === '|' && s[i + 1] === '|') { flush(); i++; continue; }
     if (c === '|') { flush(); continue; }
+    // 单个 & 是后台作业：前后两段都会真跑，必须拆开分别判定（#1015 审官第 4 条）。
+    if (c === '&') { flush(); continue; }
     buf += c;
   }
   flush();
