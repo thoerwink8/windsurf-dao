@@ -4384,6 +4384,33 @@ function mirasimRegistry() {
   });
 }
 
+/**
+ * 取「上一位审官是谁、死于什么」——#1122 换厂凭证的唯一来源。
+ *
+ * 读不到一律回空死因：那样 assertReviewerSeat 会走老规矩（只许同厂换顺位），
+ * 也就是**没查成时不放宽**。把「读不到」当成「死于满载」会让换厂变成常开的后门。
+ */
+async function readReviewerDeathNote(runtime, args) {
+  if (args.dryRun) return { deadModelId: null, deadError: '' };
+  try {
+    const rec = mirasimRegistry().read(args.pr);
+    const key = rec && rec.ok && rec.record ? rec.record.sessionKey : '';
+    if (!key) return { deadModelId: null, deadError: '' };
+    const peek = await peekReviewerSession(runtime, key);
+    const view = peek && peek.view;
+    // 只有终态会话的死因才算数：还在跑的那个不是「死了」，是「没审完」。
+    if (!view || view.missing === true || String(view.phase || '').toLowerCase() === 'running') {
+      return { deadModelId: null, deadError: '' };
+    }
+    return {
+      deadModelId: rec.record.reviewer || null,
+      deadError: view.error == null ? '' : String(view.error).trim(),
+    };
+  } catch {
+    return { deadModelId: null, deadError: '' };
+  }
+}
+
 async function cmdReviewerCreateMirasim(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   const gh = ghRunner({ role: 'reviewer' });
@@ -4404,7 +4431,13 @@ async function cmdReviewerCreateMirasim(args) {
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: picked.modelId, routing,
   });
-  const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
+  // #1122 换厂凭证：只有「上一位审官的会话死于满载/看门狗」才配得上跨厂。
+  // 证据从登记在案的那个会话上取——不是一个调用方能自己声明的旗标。
+  const failover = await readReviewerDeathNote(bind.runtime, args);
+  const seat = assertReviewerSeat({
+    reviewerId: picked.modelId, routing,
+    capacityFailover: failover.deadError ? { ...failover, workerId: worker.modelId } : null,
+  });
   if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
   const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
   if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });

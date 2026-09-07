@@ -10,6 +10,7 @@ import { assembleCardName } from './card.mjs';
 import { argsWorktreeCreate } from './args.mjs';
 import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
 import { assertCrossVendor, vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
+import { judgeCapacityFailover } from '../dianjiangtai-reviewer-slot.mjs';
 import { normalizePipes } from '../next-launch.mjs';
 import { availabilityFor } from '../provider-health.mjs';
 import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
@@ -577,8 +578,19 @@ export function currentReviewerSeat(routing) {
  * 路由表自己的理由字段写的是「备选登记，**不顶审官位**」——那是数据里已有的事实，
  * 放开会把它们抬进审官位，与 #822「审官只用 Codex（GPT 主路）」相撞。
  * 同厂这条判据同时守住了两头：换人能换（luna↔sol），换厂仍然拒。
+ *
+ * 2026-09-07 用户拍板开了一个**凭证据成立**的例外（#1122）：上一位审官的会话**死于满载/看门狗**时
+ * 准许换厂。病是量出来的——当天 13 个审官 8 个死于 `at capacity`，而 GPT 一厂在顺位表里只有
+ * luna（满载）与 sol（熔断器 open），同厂无处可换，14 张 ready PR 里 11 张拿不到判定、
+ * master 两小时没前进。#822「审官只用 Codex」在一厂全灭时等于「不审」，那不是它的本意。
+ *
+ * 例外**不是一个旗标**：谁都能传的旗标 = 谁都能绕开审官位约束去点一个弱模型。
+ * 要换厂就得交出死掉那个会话的死因原文，且目标必须等于 nextReviewerAfter 算出来的**下一位**
+ * ——不许跳级点名。#679 的异厂要求由 nextReviewerAfter 内部的 assertCrossVendor 继续守着。
+ *
+ * @param capacityFailover 换厂凭证 {deadModelId, deadError, workerId, models, passerIds}；不传＝走老规矩
  */
-export function assertReviewerSeat({ reviewerId, routing } = {}) {
+export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {}) {
   const seat = currentReviewerSeat(routing);
   if (!seat.ok) return seat;
   const got = reviewerId == null ? '' : String(reviewerId).trim();
@@ -604,9 +616,30 @@ export function assertReviewerSeat({ reviewerId, routing } = {}) {
     };
   }
   if (gotVendor !== seatVendor) {
+    // 候选池由路由表补齐，调用方只需交出「上一位是谁、死于什么」——少一个能填错的入参，
+    // 也不让调用方有机会自带一份宽松的候选池把顺位绕开。
+    const pass = judgeCapacityFailover({
+      requested: got,
+      capacityFailover: capacityFailover && {
+        deadModelId: capacityFailover.deadModelId || seat.modelId,
+        deadError: capacityFailover.deadError,
+        workerId: capacityFailover.workerId,
+        models: Array.isArray(routing.models) ? routing.models : [],
+        passerIds: order,
+        order,
+      },
+    });
+    if (pass.ok) {
+      return {
+        ok: true, modelId: got, seat: seat.modelId, switched: true,
+        crossVendor: true, failover: 'capacity', why: pass.why,
+      };
+    }
     return {
       ok: false,
-      error: `审官位只许同厂换顺位（当前 ${seat.modelId}／${seatVendor}），不许换厂到 ${got}／${gotVendor}`,
+      unscanned: pass.unscanned === true,
+      error: `审官位只许同厂换顺位（当前 ${seat.modelId}／${seatVendor}），不许换厂到 ${got}／${gotVendor}`
+        + `——换厂只在上一位死于满载/看门狗时成立：${pass.error}`,
       seat: seat.modelId, requested: got,
     };
   }
