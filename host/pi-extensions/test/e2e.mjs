@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// go-fallback 端到端验收（issue #520）
+// go-fallback 端到端验收（issue #520；#841 后仍只覆盖 opencode-go → 直连这条原功能）
 //
 // 用法（在仓库根或本目录）：
 //   node host/pi-extensions/test/e2e.mjs              # 硬限流（quota）场景：首轮放行、随后 429 额度耗尽
 //   node host/pi-extensions/test/e2e.mjs rate-limit   # 瞬时限流场景：全程 429 rate_limit_error
 //   node host/pi-extensions/test/e2e.mjs no-creds     # 直连凭据缺失场景（预期明确报错、不许静默降级成功）
+//
+// #841 判别性（gw 连续 403 不切 / og 仍切）不在本脚本：本脚本靠 PI_GO_FALLBACK_PRIMARY=fake-go
+// 覆盖主通道，若改成 PRIMARY=gw 等于把 bug 加回来。默认 PRIMARIES 不含 gw 的断言在
+// tests/go-fallback.test.js（改前旧列表会 switch、现行默认 ignore）。
 //
 // 干的事：
 //   1. 造一个一次性 pi 环境（PI_CODING_AGENT_DIR / 会话目录独立，不碰本机 ~/.pi/agent）

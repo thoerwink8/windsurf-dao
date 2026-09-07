@@ -198,12 +198,15 @@ describe('判别性：执行体 SIGTERM → out.json 有失败记录', () => {
 import { writeFileSync, unlinkSync } from 'node:fs';
 const running = process.argv[2];
 const result = process.argv[3];
-writeFileSync(running, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
 const once = (why) => {
   writeFileSync(result, JSON.stringify({ ok: false, crashed: true, error: why }));
   try { unlinkSync(running); } catch {}
 };
+// 先挂处理器再写 .running：父进程以 .running 出现为「可以发信号了」的判据，
+// 顺序反过来就存在一个窗口——.running 已在、处理器还没挂上，此时收到 SIGTERM
+// 走默认行为直接终止，不写结果（父进程看到的就是 NO_RESULT）。
 process.on('SIGTERM', () => { once('执行体收到 SIGTERM'); process.exit(1); });
+writeFileSync(running, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
 setTimeout(() => {}, 30000);
 `);
     fs.writeFileSync(runner, `
@@ -213,7 +216,12 @@ const script = process.argv[2];
 const running = process.argv[3];
 const result = process.argv[4];
 const child = spawn(process.execPath, [script, running, result], { stdio: 'ignore' });
-await new Promise((r) => setTimeout(r, 250));
+// 等**真实条件**（.running 出现 = 子进程已就绪），不等固定时长。
+// 原来是 setTimeout(250)：机器忙时子进程还没起来就挨刀，走默认终止不写结果，
+// 父进程报 NO_RESULT——2026-09-06 实测 6 路并发下每几轮就随机红一次。
+const deadline = Date.now() + 8000;
+while (!existsSync(running) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+if (!existsSync(running)) { console.error('CHILD_NEVER_READY'); process.exit(5); }
 child.kill('SIGTERM');
 await new Promise((r) => child.once('exit', r));
 if (!existsSync(result)) { console.error('NO_RESULT'); process.exit(2); }

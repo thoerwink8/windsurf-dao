@@ -1,0 +1,38 @@
+# /etc/systemd/system/dao-nudge-stalled.service
+#
+# **垫片，随 issue #1056（对账循环）合并时整套退役。** 装它是因为无人值守时这条链是断的：
+# 卡死查得出来（dao-progress-watch 每 20 分钟扫盘面推进量），但**没有任何东西去处置**——
+# progress-watch 只叫醒帅位，帅位不在就一整夜没人动手。
+#
+# 处置为什么是「说一句继续」而不是重派（2026-09-06 实测）：
+#   record.json → runState: incomplete / runDetail: pi turn stalled past 30 minutes
+#   turns.jsonl → 最后一条 phase: done，正文停在「设计已对齐…」
+# 工人没死，是跑完一轮在等下一句话。重派会丢掉它已经读完的上下文，白烧一遍额度。
+# 当天五个工人（#1007 #1017 #1052 #1055 #1056）和两个审官（PR #1018 #1040）推完全部回到 running。
+#
+# 与 dao-progress-watch 的分工，别合并：
+#   progress-watch  看**盘面对象**（PR / issue / 复审票）连续几轮没推进 → 叫醒帅位
+#   本单元          看**会话**（mirasim 的 record.json）跑完一轮在等话 → 直接推一句
+# 前者看不见「某个会话在等话」，后者看不见「这张 PR 三小时没人碰」。两个面互补。
+#
+# 装（服务器，orca 用户）：
+#   sudo bash scripts/install-nudge-stalled.sh
+#   systemctl list-timers | grep dao-nudge-stalled   # NEXT 不能是 `-`
+#
+# 退役：#1056 落地后，删本单元 + 删 scripts/nudge-stalled.mjs。那张单正文里已登记。
+
+[Unit]
+Description=windsurf-dao nudge stalled sessions (垫片，随 #1056 退役)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/nudge-stalled.mjs --go
+# 退出码 2 = 没查成（会话档案目录读不了 / 一个会话都没扫到），故意留成失败：
+# 「没扫到」要在 systemctl --failed 里看得见，不许跟「没有卡住的」长成一个样。
+StandardOutput=journal
+StandardError=journal

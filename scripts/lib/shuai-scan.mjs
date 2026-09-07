@@ -1,4 +1,8 @@
-// scripts/lib/shuai-scan.mjs —— 帅位看门狗纯函数层（chain:shuai-watchdog#1）
+// scripts/lib/shuai-scan.mjs —— 执行层共用件（chain:shuai-watchdog#1 / progress-stall#0）
+//
+// #1004：盯盘发现层已换到 progress-detect.mjs / progress-watch.mjs。本文件不再是
+// 叫醒主路。留下的 detectAnomalies / evaluateScan 只给测试回归和 commander 的
+// PR 判绿/CI 红共用件；scripts/shuai-scan.mjs CLI 主路不再调用它们。
 //
 // 采集与判定分离：tests 注入 fixture/mock，CLI 只负责 IO。
 // 「扫完 0 条」与「没扫成」必须不同形——任何 unscanned 维度整轮 fail-loud。
@@ -30,6 +34,7 @@ query($owner: String!, $name: String!) {
       nodes {
         number
         title
+        body
         updatedAt
         labels(first: 30) { nodes { name } }
       }
@@ -43,6 +48,7 @@ query($owner: String!, $name: String!) {
         reviewDecision
         mergeable
         headRefOid
+        labels(first: 30) { nodes { name } }
         body
         commits(last: 1) {
           nodes {
@@ -127,6 +133,9 @@ export function normalizeGithubGraphql(data) {
   const issues = (repo.issues?.nodes || []).map((i) => ({
     number: i.number,
     title: i.title,
+    // body：待拍板过滤复用 ask-gate，正文里的「依据：花钱」必须带到发卡口（#1103 返工）。
+    // 取不到当空串，不许把字段整个丢掉——下游会只剩标题，红线命中全变成 auto。
+    body: i.body || '',
     updatedAt: i.updatedAt,
     labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
   }));
@@ -143,6 +152,8 @@ export function normalizeGithubGraphql(data) {
       // headRefOid：判「审官那条红/绿是不是打在当前 head 上」的必需字段（#911 起）。
       // 取不到就是 null，判据侧按「没查成」走，绝不当成「head 变了」。
       headRefOid: typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : null,
+      // #1000：认输是 PR 属性。与 issue 同形：节点缺就空数组（GraphQL 查成时字段总会在）。
+      labels: (p.labels?.nodes || []).map((l) => ({ name: l.name })),
       body: p.body || '',
       state: 'OPEN',
       statusCheckRollup,

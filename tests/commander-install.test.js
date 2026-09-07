@@ -38,8 +38,8 @@ describe('指挥官 systemd 单元模板（#848）', () => {
     const { UNIT_TOOL_DIRS } = await INV;
     // 2026-09-03 服务器上真跑的那份（#848 现场原样）
     const before = ['[Unit]', 'Description=指挥官 act', '', '[Service]', 'Type=oneshot', 'User=orca',
-      'WorkingDirectory=/home/orca/windsurf-dao',
-      'ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/commander.mjs act', ''].join('\n');
+      'WorkingDirectory=/srv/projects/windsurf-dao',
+      'ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/commander.mjs act', ''].join('\n');
     const v = pathVerdict(before, UNIT_TOOL_DIRS);
     assert.equal(v.ok, false, '没 PATH 的老模板本该被拦——拦不住说明这把尺恒真');
     assert.match(v.why, /没有 Environment=PATH=/);

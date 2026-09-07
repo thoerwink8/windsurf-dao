@@ -54,6 +54,15 @@ describe('legs', () => {
       const v = S.validateLegs(mk(bad));
       assert.ok(v.errors.some(e => /id .*与四轴不符/.test(e)), v.errors.join('|'));
     });
+    await t.test('id 重复即红，且报出现次数（两个帅位并发补腿实咬）', () => {
+      // 同一条腿抄三份——rebase 缝合的真实形态
+      const dup = legOf('grok-4.6', 'pi', 'gw', 'orca');
+      const v = S.validateLegs({ ...base, 腿: [...base.腿, dup, dup] });
+      assert.ok(v.errors.some(e => /id 重复：grok-4\.6@gw\/orca 共出现 3 次/.test(e)), v.errors.join('|'));
+      // 判别力：不重复时这条错误不许出现
+      const clean = S.validateLegs(base);
+      assert.ok(!clean.errors.some(e => /id 重复/.test(e)), clean.errors.join('|'));
+    });
   });
 
   it('交叉核：启用条目没有在役腿 → 错；空转腿 → 警告不拦', async (t) => {

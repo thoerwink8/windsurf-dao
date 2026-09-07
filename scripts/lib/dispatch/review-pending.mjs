@@ -14,6 +14,20 @@ export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
 export const REVIEW_PENDING_DIR_REL = join('_flow', 'queue', 'review-pending');
 
+// #1014：复审票有两个生产者。来源必须是写票时记下的事实，读侧不许猜。
+export const REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL = 'worker-done-fail';
+export const REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW = 'commander-rereview';
+export const REVIEW_PENDING_SOURCES = new Set([
+  REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+  REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+]);
+
+/** 票上的来源只认写票时记下的那两个值；缺/空/不认识一律 null（来源没查成，不猜）。 */
+export function reviewPendingSourceOf(ticket) {
+  const s = ticket && typeof ticket.source === 'string' ? ticket.source.trim() : '';
+  return REVIEW_PENDING_SOURCES.has(s) ? s : null;
+}
+
 export function reviewPendingDir({ root, env } = {}) {
   const e = env || process.env;
   const override = e.DAO_REVIEW_PENDING_DIR;
@@ -30,15 +44,21 @@ export function reviewPendingPath(dir, pr) {
 }
 
 export function buildReviewPendingTicket({
-  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts,
+  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
-  if (!workerWorktree || !String(workerWorktree).trim()) {
-    return { ok: false, error: '复审待办要工人树' };
-  }
   if (!reviewer || !String(reviewer).trim()) {
     return { ok: false, error: '复审待办要 reviewer' };
+  }
+  const src = typeof source === 'string' ? source.trim() : '';
+  if (!src) return { ok: false, error: '复审待办要 source（worker-done-fail | commander-rereview）' };
+  if (!REVIEW_PENDING_SOURCES.has(src)) {
+    return { ok: false, error: `复审待办来源不认识：${source}` };
+  }
+  // 工人失败票必须有树；指挥官 rereview 按设计可以没有（快马路，#927）。
+  if (src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL && (!workerWorktree || !String(workerWorktree).trim())) {
+    return { ok: false, error: '复审待办要工人树' };
   }
   const oid = head?.oid || head?.headRefOid || null;
   const name = head?.name || head?.headRefName || null;
@@ -50,13 +70,14 @@ export function buildReviewPendingTicket({
       v: REVIEW_PENDING_VERSION,
       pr: n,
       head: { name: name || null, oid: oid || null },
-      workerWorktree: String(workerWorktree).trim(),
+      workerWorktree: workerWorktree && String(workerWorktree).trim() ? String(workerWorktree).trim() : null,
       reviewer: String(reviewer).trim(),
       issue: issue == null || String(issue).trim() === '' ? null : String(issue).trim(),
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
       error: error ? String(error) : null,
+      source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
     },
   };
@@ -130,41 +151,29 @@ export function planReviewPendingDrain(ticket) {
   const reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
-  if (!worktree) {
-    // 快马票（2026-09-05 实咬 #884/#885/#886）：活干在非 Orca 管理的树里，票上 workerWorktree 是 null。
-    // 此前这里直接判失败，三张 PR 的审官 10 小时起不来，而错误只出现在 drain 的返回里，没人看。
-    // #927 起 reviewer-create 自己会「确证无士兵树才建替身树当父卡」，所以缺树改走 create 路，不是拒绝。
-    // 注意仍然只在 worktree 缺失时走：有树就走 attach，别让快马路吞掉正常路的判据。
-    const createArgv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer];
-    if (ticket.issue) createArgv.push('--issue', String(ticket.issue));
-    return {
-      ok: true,
-      verb: 'reviewer-create',
-      argv: createArgv,
-      skipWait: true,
-      fastPath: true,
-      pr,
-      worktree: null,
-      reviewer,
-    };
-  }
-  const argv = [
-    'reviewer-attach',
-    '--pr', pr,
-    '--worktree', worktree,
-    '--reviewer', reviewer,
-    '--skip-wait',
-  ];
+  // 审官统一走 mirasim（2026-09-06 切流量第二步）。
+  //
+  // 原来这里按「票上有没有工人树」分两条路：有树 attach 到那棵树，没树才 create。
+  // 那个分岔是 orca 的世界观——审官要挂在一棵 Orca 卡管理的树上。mirasim 是「会话即卡」，
+  // 没有可 attach 的对象，**整条 attach 路在这边不存在**，所以不是改判据，是删掉一层。
+  //
+  // 为什么现在能删：mirasim 审官路径当天验过两次（PR #1013 读代码跑核验、PR #1025 判出 APPROVED
+  // 并已合并），树 HEAD 与 PR headRefOid 对得上，merge-policy 从账本恢复得回来。
+  //
+  // 不切的代价是实测出来的：dispatch 切了而审官没切，orca 树数不减反增——
+  // 17:27 又冒出一棵 `PR-1018-审官-…-2`（连编号都说明是第二次起），退役直接被逆转。
+  const argv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer, '--executor', 'mirasim'];
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
-  if (ticket.workerModel) argv.push('--model', String(ticket.workerModel));
   return {
     ok: true,
-    verb: 'reviewer-attach',
+    verb: 'reviewer-create',
     argv,
     skipWait: true,
+    fastPath: true,
     pr,
-    worktree,
+    // 票上的工人树只做记录：mirasim 审官不挂在它上面，但排障时要知道活干在哪
+    worktree: worktree || null,
     reviewer,
   };
 }

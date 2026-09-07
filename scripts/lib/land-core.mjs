@@ -224,13 +224,15 @@ export function decideBranchDelete({ name, merged, contributes, everHadContent, 
 
 /**
  * 拆不拆这棵 git worktree。合没合并与删分支同一把尺（审官树漏拆和审官分支漏删是同一个病）。
+ * executorManaged —— 路径落在 mirasim-worktrees 下（master 换掉 orcaManaged 之后的执行体闸）。
+ * mirasimManaged —— listSessions 活动集里的树（回收走卡 D 的 GC）。
  * mirasimUnprobed —— mirasim 活动树**没探成**（连不上，或 ws 连上了但 listSessions 没回帧）。
  * 这时候「没有活动树」和「看不见活动树」分不开，一棵都不拆（PR #885 审官第 3 条）。
  */
-export function decideWorktreeRemove({ branch, merged, contributes, everHadContent, prState, dirty, isMain, isCurrent, isDefaultBranch, orcaManaged, mirasimManaged, mirasimUnprobed, detached }) {
+export function decideWorktreeRemove({ branch, merged, contributes, everHadContent, prState, dirty, isMain, isCurrent, isDefaultBranch, executorManaged, mirasimManaged, mirasimUnprobed, detached }) {
   if (isMain) return { remove: false, reason: '主树' };
   if (isCurrent) return { remove: false, reason: '自己所在的树' };
-  if (orcaManaged) return { remove: false, reason: 'orca 在管（有卡/agent）——删卡走编排闭环，land 不碰' };
+  if (executorManaged) return { remove: false, reason: '执行体在管（mirasim-worktrees 下）——拆树走编排闭环，land 不碰' };
   if (mirasimManaged) return { remove: false, reason: 'mirasim 会话在用这棵树（listSessions 活动集）——回收走卡 D 的 GC，land 不碰' };
   if (mirasimUnprobed) return { remove: false, reason: 'mirasim 活动树没探成——分不清「没有活动树」和「看不见」，这一轮不拆树' };
   if (isDefaultBranch) return { remove: false, reason: '挂着默认分支的树（如 mirasim 会话树）' };

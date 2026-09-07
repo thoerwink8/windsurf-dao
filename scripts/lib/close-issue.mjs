@@ -23,12 +23,21 @@ export function attributedIssueNumbers(text) {
   return found;
 }
 
-/** 单个署名 issue 号：标题 #N 优先（与 flow.ticketIssueNumber 同口径），再正文署名/关单词。 */
+/**
+ * 单个署名 issue 号：标题 #N 优先（与 flow.ticketIssueNumber 同口径），再正文署名/关单词。
+ *
+ * 标题先剥掉补丁链标记 `[chain:<名>#<序号>]`——那里的 #N 是链内序号，不是 issue 号。
+ * 2026-09-05 实咬：PR #893 标题结尾 `[chain:session-visibility#0]`，标题优先把 0 当成署名单号，
+ * 于是正文里正确的「署名 issue #891」根本轮不到，查不到 reviewer/ 标签 → 复审永远派不出去。
+ * 症状是完全静默的：PR 挂着、指挥官每轮说「不猜审官」、没有任何地方指向标题。
+ *
+ * 同时挡掉 #0：issue 号从 1 起，`#0` 一定是别的东西被误当成了单号。
+ */
 export function attributedIssueNumber(pr) {
-  const title = String((pr && pr.title) || '');
+  const title = String((pr && pr.title) || '').replace(/\[chain:[^\]]*\]/gi, '');
   const t = title.match(/#(\d+)/);
-  if (t) return Number(t[1]);
-  const nums = attributedIssueNumbers((pr && pr.body) || '');
+  if (t && Number(t[1]) > 0) return Number(t[1]);
+  const nums = attributedIssueNumbers((pr && pr.body) || '').filter((n) => n > 0);
   return nums.length ? nums[0] : null;
 }
 
