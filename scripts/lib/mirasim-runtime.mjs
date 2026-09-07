@@ -584,6 +584,12 @@ export function createRuntime(opts = {}) {
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125）：名单是**全量枚举**，
+    // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
+    // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
+    // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    list: opts.listTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || 30_000),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -848,10 +854,37 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 会话名单（#1125）。readSession 内部一直在用这一帧当兜底，只是没往外露。
+   *
+   * 为什么现在加第六个动词：#880 冻结五个动词是为了「orca 退役时删绑定、不改调用方」，
+   * orca 已随 #1115 退役，那个理由没了。而「现在有几个审官真在跑」只有这一帧答得出——
+   * 登记文件会留下死会话（#1121），进程会被服务端重新拉起来变成残壳，两个都不算数。
+   *
+   * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
+   * 把上游池子拉满，那正是 #1125 要治的病。
+   */
+  async function listSessions() {
+    const wire = await open();
+    try {
+      wire.send({ type: 'listSessions' });
+      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!msg || !Array.isArray(msg.sessions)) {
+        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      }
+      return { ok: true, missing: false, sessions: msg.sessions };
+    } catch (e) {
+      return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
     readSession,
+    listSessions,
     interact,
     stopSession,
     waitForCompletion,

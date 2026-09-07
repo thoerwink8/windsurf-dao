@@ -954,9 +954,11 @@ export {
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────

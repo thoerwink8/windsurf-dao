@@ -341,10 +341,27 @@ export async function mirasimReviewerCreate({
 // ── PR→会话 登记（rework 轮找回审官会话） ─────────────────────────────────────
 
 /** 默认登记 IO：_flow/mirasim/reviewer-<pr>.json。测试注入内存版。 */
-export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flowDir } = {}) {
+export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, join, flowDir } = {}) {
   const dir = flowDir;
   const path = (pr) => join(dir, `reviewer-${pr}.json`);
   return {
+    /**
+     * 全部登记（#1125 数在役审官要）。**读不了目录回 null，不回空数组**——
+     * 「一条都没有」和「没读成」在下游是两种判决：前者可以拉满，后者一张都不许拉。
+     */
+    listAll() {
+      if (typeof readdir !== 'function') return null;
+      let names;
+      try { names = readdir(dir); } catch { return null; }
+      const out = [];
+      for (const f of names) {
+        const m = /^reviewer-(\d+)\.json$/.exec(String(f));
+        if (!m) continue;
+        const r = this.read(m[1]);
+        if (r.ok && r.record) out.push(r.record);
+      }
+      return out;
+    },
     read(pr) {
       try {
         const t = readFile(path(pr));
