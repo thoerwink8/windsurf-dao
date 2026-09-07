@@ -144,6 +144,10 @@ import {
   listReviewPending,
   drainReviewPending,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  countLiveReviewers,
+  planReviewAdmission,
+  DEFAULT_REVIEWER_CAP,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -3653,21 +3657,63 @@ function cmdReviewerDone(args) {
   });
 }
 
-function cmdReviewPendingDrain(args) {
+/**
+ * 这一轮能拉几张（#1125）。IO 都在这儿，判据在 review-pending.mjs 的两个纯函数里。
+ *
+ * 「在役几个」只认**会话名单**里的 runState：登记文件满地都是「登记还在、会话早死」（#1121），
+ * 进程也不算数——会话死后 mirasim 会把进程重新拉起来，那一针永远不动（残壳）。
+ * 名单读不到 ⇒ 没查成 ⇒ 这一轮拉 0 张，票留在队列，不许当成「0 个在跑」去拉满。
+ */
+async function admitReviewPull(tickets) {
+  const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
+  const limit = Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_REVIEWER_CAP;
+  let sessions = null;
+  try {
+    const routing = loadRouting();
+    const bind = bindExecutor({ executor: 'mirasim', routing });
+    if (bind.ok) {
+      const listed = await bind.runtime.listSessions();
+      if (listed && Array.isArray(listed.sessions)) sessions = listed.sessions;
+    }
+  } catch { sessions = null; }   // 读不到就是没查成，下面按没查成处理
+
+  const records = mirasimRegistry().listAll ? mirasimRegistry().listAll() : null;
+  const counted = countLiveReviewers({ records, sessions });
+  return planReviewAdmission({ tickets, liveReviewers: counted.count, cap: limit });
+}
+
+async function cmdReviewPendingDrain(args) {
   const dir = reviewPendingDir({ root: ROOT });
   const listed = listReviewPending(dir);
   if (!listed.ok) fail(listed.error, listed);
-  const tickets = args.pr
+  const all = args.pr
     ? listed.tickets.filter(t => String(t.pr) === String(args.pr))
     : listed.tickets;
+
+  // #1125：闸放在这里而不是指挥官里——`review-pending-drain` 是唯一的拉取入口，
+  // 手工跑和指挥官跑必须受同一道闸。放到调用方就会有第二条绕过去的路。
+  // --pr 指名单张时不受上限约束：那是人明确要拉这一张，属于逃生口。
+  const admit = args.pr
+    ? { ok: true, pull: all, held: [], why: `--pr ${args.pr} 指名单张，不过并发上限` }
+    : await admitReviewPull(all);
+  if (!admit.ok) {
+    // 没查成不放行，但也不是失败：票都还在队列，下一轮再来。
+    emit({ ok: true, drained: 0, held: admit.held.length, unscanned: true, why: admit.why, dir });
+    return;
+  }
+  const tickets = admit.pull;
+
   if (args.dryRun) {
     emit({
       ok: true,
       dryRun: true,
       scanned: tickets.length,
+      held: admit.held.length,
+      why: admit.why,
       tickets,
       dir,
     });
+    return;
   }
   const self = fileURLToPath(import.meta.url);
   const drained = drainReviewPending({
@@ -3693,7 +3739,7 @@ function cmdReviewPendingDrain(args) {
     },
   });
   if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
-  emit(drained);
+  emit({ ...drained, held: admit.held.length, why: admit.why, dir });
 }
 
 function cmdSend(args) {
@@ -4379,6 +4425,7 @@ function mirasimRegistry() {
     readFile: p => readFileSync(p, 'utf8'),
     writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
     mkdir: d => mkdirSync(d, { recursive: true }),
+    readdir: d => readdirSync(d),
     join,
     flowDir: join(homedir(), '.dao', 'mirasim'),
   });
@@ -4562,6 +4609,9 @@ async function cmdWorkerDoneMirasim(args) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim', settled: false, ...plan, workerModel,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+      ...(plan.round === 'first'
+        ? { action: 'queued-for-review', why: '首审 dry-run：将入待审队列，不起审官（#1125）' }
+        : {}),
     });
     return;
   }
@@ -4570,6 +4620,38 @@ async function cmdWorkerDoneMirasim(args) {
   if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
+
+  // #1125 主路：首审**只入队，不起审官**。
+  //
+  // 病：起审官原来发生在工人交卷那一刻，于是**生产端决定了消费端的并发**——工人跑得多快，
+  // 审官就被起得多快，而没有任何人在看上游还剩多少容量。2026-09-07 实测 13 个工人在跑、
+  // 26 张开放 PR，而 gptpool 只剩一条腿（约 3 个并发），13 个审官里 8 个死于 at capacity。
+  //
+  // 队列本身早就有（#815），但当初是给 Orca depth 2 限制做的**起败兜底**，Orca 已随 #1115
+  // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
+  //
+  // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
+  if (plan.round === 'first') {
+    const dir = reviewPendingDir({ root: ROOT });
+    const built = buildReviewPendingTicket({
+      pr: String(plan.pr), issue: plan.issue, reviewer: plan.reviewer, round: plan.round,
+      workerModel, soldierDispatch: args.soldierDispatch || null,
+      workerWorktree: mirasimRepoRoot(args),
+      source: REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+    });
+    if (!built.ok) fail(built.error, { ...plan, postedIssue, postedPr });
+    const wrote = writeReviewPending({ dir, ticket: built.ticket });
+    // 写票失败 fail-closed：报 ok 而票没落盘 = 这张 PR 从此没人管，比起审官失败更难发现。
+    if (!wrote.ok) fail(wrote.error, { ...plan, postedIssue, postedPr });
+    emit({
+      ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+      postedIssue, postedPr, action: 'queued-for-review',
+      reviewPending: { path: wrote.path, source: built.ticket.source },
+      why: '首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官',
+    });
+    return;
+  }
 
   const repo = mirasimRepoRoot(args);
   const res = await mirasimWorkerDone({

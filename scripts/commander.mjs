@@ -641,7 +641,7 @@ function execAction(action, { state, dryRun, log }) {
       return awaitDispatchResult(r.out, { say });
     }
     case 'attach-reviewer': {
-      // 走 blessed 路径 review-pending-drain（含归属/活性校验），一次清完队列。
+      // 走 blessed 路径 review-pending-drain。#1125 起 drain 自己按在役审官数拉，拉满即停，不是一次清完。
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
       const r = runOrShow(cmd, { dryRun, say, why: action.why });
       // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。

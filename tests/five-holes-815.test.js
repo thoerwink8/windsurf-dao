@@ -644,9 +644,21 @@ describe('#1014 复审票来源是写票时记下的事实', () => {
       'writeReviewPendingOnFail 必须填 worker-done-fail');
     assert.ok(/REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW/.test(commanderSrc),
       'requestRereview 必须填 commander-rereview');
+    assert.ok(/REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF/.test(daoSrc),
+      '#1125 首审入队必须填 worker-done-handoff');
     assert.ok(/attachReviewerWhy/.test(coreSrc), 'attach-reviewer 的 why 必须走分支函数');
     assert.ok(!/工人已交卷、worker-done 起审官失败入队/.test(daoSrc + commanderSrc + coreSrc),
       '写死的归因字符串必须从热路消失');
+  });
+
+  it('#1125 首审入队票缺工人树仍拒写', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1125', workerWorktree: null, reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /工人树/);
   });
 });
 
