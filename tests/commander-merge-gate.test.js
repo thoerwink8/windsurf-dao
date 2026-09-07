@@ -126,7 +126,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
   }
   const silent = () => {};
 
-  it('① 红时不调 pr merge（调用序列里没有它）', async () => {
+  it('① 红仍 squash（落后 ≠ 冲突）', async () => {
     const { execMerge } = await CMD;
     const { RED } = await HC;
     const { calls, run } = spyRun();
@@ -134,14 +134,13 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
       { pr: 1234, why: '判绿可合' },
       { say: silent, run, judge: () => ({ state: RED, detail: '本树切自旧 origin/master' }) },
     );
-    assert.equal(r.blocked, true);
-    assert.equal(r.gate, RED);
-    assert.equal(r.calls.length, 0);
-    assert.ok(!calls.some((c) => /pr merge/.test(c)), `① 红仍调了 pr merge：${calls.join(' | ')}`);
-    assert.ok(!calls.some((c) => /pr-sync-labels/.test(c)), '闸没过就不该动手');
+    assert.equal(r.ok, true);
+    assert.equal(r.blocked, undefined);
+    assert.ok(calls.some((c) => /pr merge/.test(c)), `① 红应仍 squash：${calls.join(' | ')}`);
+    assert.ok(calls.some((c) => /pr-sync-labels/.test(c)), 'squash 前仍要同步 label');
   });
 
-  it('① 没查成同样不合，不是「通」', async () => {
+  it('① 没查成同样不拦 squash', async () => {
     const { execMerge } = await CMD;
     const { UNKNOWN } = await HC;
     const { calls, run } = spyRun();
@@ -149,9 +148,8 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
       { pr: 1234 },
       { say: silent, run, judge: () => ({ state: UNKNOWN, detail: '拉不到远端' }) },
     );
-    assert.equal(r.blocked, true);
-    assert.equal(r.gate, UNKNOWN);
-    assert.ok(!calls.some((c) => /pr merge/.test(c)));
+    assert.equal(r.ok, true);
+    assert.ok(calls.some((c) => /pr merge/.test(c)));
   });
 
   it('① 通才走 pr merge，且 merge 在 sync-labels 之后', async () => {
@@ -171,10 +169,9 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     assert.equal(syncAt < mergeAt, true, 'label 同步必须在 merge 之前');
   });
 
-  it('判别力：把 ① 从 merge 档拿掉，上面那条「① 红就不合」必须当场红', async () => {
+  it('squash 档 ① 只报不判（落后不拦合入）', async () => {
     const { GATES } = await HC;
-    assert.deepEqual(GATES.merge.advisory, [],
-      'merge 档若把 ① 放进 advisory，execMerge 会在 ① 红时仍去 pr merge——那正是本单要防的');
+    assert.deepEqual(GATES.merge.advisory, ['①']);
     assert.deepEqual(GATES.handoff.advisory, ['①']);
   });
 });

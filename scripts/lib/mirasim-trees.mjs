@@ -9,7 +9,7 @@
 // 采样面换成 mirasim 自己的工作树目录（它是这些树的所有者）。
 // 「读不了目录」和「目录下没有树」必须分得开——前者是没查成，后者才是真的没有。
 //
-// 路径形状（推一把闸 scripts/lib/nudge-stalled.mjs 的 idOfTree 调本函数，垫片退役时以本文件为准）：
+// 路径形状（树 id 只认这一处）：
 //   <root>/<repo>/dao-<N>            工人树
 //   <root>/<repo>/dao-<N>-2          同一单的第 2 棵（重派/解冲突）
 //   <root>/<repo>/dao-review-pr-<N>  审官树（挂 PR 号，不是 issue 号）
