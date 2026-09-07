@@ -96,7 +96,63 @@ describe('issue-gateway-check 全宿主面', () => {
       files: { 'host/machine/systemd/dao-refiner.service': '[Service]\nUser=orca\nExecStart=/usr/bin/node scripts/refiner.mjs\n' },
     });
     assert.equal(Boolean(r.fail), true, JSON.stringify(r));
-    assert.match(r.fail.join(' '), /没卸|GH_TOKEN/);
+    assert.match(r.fail.join(' '), /没卸|GH_TOKEN|GH_CONFIG_DIR/);
+  });
+
+  it('自动化单元卸了 token 但仍读 ~/.config/gh → 红', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({
+      root: REPO,
+      extraRels: ['host/machine/systemd/dao-refiner.service'],
+      files: {
+        'host/machine/systemd/dao-refiner.service':
+          '[Service]\nUser=orca\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nExecStart=/usr/bin/node scripts/refiner.mjs\n',
+      },
+    });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /GH_CONFIG_DIR|没卸/);
+  });
+
+  it('写 Issue 的单元卸 token + GH_CONFIG_DIR=/var/empty → 绿', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({
+      root: REPO,
+      extraRels: ['host/machine/systemd/dao-refiner.service'],
+      files: {
+        'host/machine/systemd/dao-refiner.service':
+          '[Service]\nUser=orca\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nEnvironment=GH_CONFIG_DIR=/var/empty\nExecStart=/usr/bin/node scripts/refiner.mjs\n',
+      },
+    });
+    assert.equal(Boolean(r.fail), false, JSON.stringify(r));
+    assert.match(String(r.green || ''), /1\/1/);
+  });
+
+  it('dao-gh-events 设了 GH_CONFIG_DIR=/var/empty → 红（webhook forward 依赖个人 gh 登录）', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({
+      root: REPO,
+      extraRels: ['host/machine/systemd/dao-gh-events.service'],
+      files: {
+        'host/machine/systemd/dao-gh-events.service':
+          '[Service]\nUser=orca\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nEnvironment=GH_CONFIG_DIR=/var/empty\nExecStart=/usr/bin/node scripts/gh-event-bridge.mjs\n',
+      },
+    });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /GH_CONFIG_DIR|没卸/);
+  });
+
+  it('dao-gh-events 只卸 token、不设 GH_CONFIG_DIR → 绿', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({
+      root: REPO,
+      extraRels: ['host/machine/systemd/dao-gh-events.service'],
+      files: {
+        'host/machine/systemd/dao-gh-events.service':
+          '[Service]\nUser=orca\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nExecStart=/usr/bin/node scripts/gh-event-bridge.mjs\n',
+      },
+    });
+    assert.equal(Boolean(r.fail), false, JSON.stringify(r));
+    assert.match(String(r.green || ''), /1\/1/);
   });
 
   it('一个 systemd 单元都没扫到 → 没查成', async () => {

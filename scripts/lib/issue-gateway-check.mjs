@@ -252,8 +252,9 @@ export function checkNoBareIssueWriteInCode({ root, files, extraRels, exempt } =
 }
 
 const UNSET_PERSONAL_TOKEN_RE = /^UnsetEnvironment=.*\bGH_TOKEN\b.*\bGITHUB_TOKEN\b/m;
+const BLIND_PERSONAL_GH_RE = /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m;
 
-/** 自动化单元不许继承个人 GH_TOKEN（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
+/** 自动化单元不许继承个人 GH_TOKEN，也不许读 ~/.config/gh（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
 export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
   if (!root && !files) return { fail: ['没给仓库根', 'checkNoPersonalTokenInUnits 要 root', ''] };
   let rels;
@@ -276,13 +277,19 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
     if (loaded.missing) {
       return { fail: [`单元读不到：${rel}`, '读失败不是 0 条违规', loaded.path || rel] };
     }
-    if (!UNSET_PERSONAL_TOKEN_RE.test(String(loaded.text || ''))) hits.push(rel);
+    const text = String(loaded.text || '');
+    const base = rel.replace(/\\/g, '/').split('/').pop();
+    const hasUnset = UNSET_PERSONAL_TOKEN_RE.test(text);
+    const hasBlind = BLIND_PERSONAL_GH_RE.test(text);
+    // gh-event-bridge 必须用个人 gh 登录做 webhook forward，不能挡 ~/.config/gh。
+    const isGhEvents = base === 'dao-gh-events.service';
+    if (!hasUnset || (isGhEvents ? hasBlind : !hasBlind)) hits.push(rel);
   }
   if (hits.length) {
     return {
       fail: [
-        `自动化单元 ${hits.length} 个没卸个人 GH_TOKEN`,
-        '每个 host/machine/systemd/*.service 都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN；少一处就红',
+        `自动化单元 ${hits.length} 个没卸个人 GitHub 凭据`,
+        '每个单元都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN；写 Issue 的单元还要 Environment=GH_CONFIG_DIR=/var/empty（dao-gh-events 反过来：不许设 GH_CONFIG_DIR=/var/empty，webhook forward 仍读个人 gh 登录）。少一处就红',
         hits.slice(0, 8).join('；'),
       ],
       scanned: rels.length,
@@ -290,7 +297,7 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
     };
   }
   return {
-    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（少一处就红）`,
+    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（写 Issue 的不读 ~/.config/gh；少一处就红）`,
     scanned: rels.length,
     hits: [],
   };

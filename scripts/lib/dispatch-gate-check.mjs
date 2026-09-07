@@ -190,6 +190,16 @@ function checkClaudeMount(root) {
     if (gwOk.status !== 0) {
       problems.push(`issue-gateway 入口应放行，实际 ${gwOk.status}`);
     }
+    const ghasWrite = runScript(script, { command: 'node scripts/gh-as.mjs marshal -- issue create --title t' });
+    if (ghasWrite.status !== 2) {
+      problems.push(`gh-as 写 Issue 应 exit 2，实际 ${ghasWrite.status}`);
+    } else if (!/issue-gateway/.test(`${ghasWrite.stderr || ''}${ghasWrite.stdout || ''}`)) {
+      problems.push('拦住 gh-as 写 Issue 但没指出 issue-gateway');
+    }
+    const ghasPr = runScript(script, { command: 'node scripts/gh-as.mjs worker -- pr create --draft' });
+    if (ghasPr.status !== 0) {
+      problems.push(`gh-as 开 PR 应放行，实际 ${ghasPr.status}`);
+    }
 
     // #575 ③：放行判据是「实际执行的命令」，不是整串关键词。故意把 dao.mjs raw
     // 写进 echo 字符串再裸跑 worker-start——旧闸会放行，新闸必须仍 exit 2。
@@ -326,6 +336,16 @@ function checkCursorMount(root) {
     const ghViewDoc = cursorResponse(ghView);
     if (!ghViewDoc || ghViewDoc.permission !== 'allow') {
       problems.push(`Cursor 面只读 gh issue view 应 allow：${String(ghView.stdout || '').slice(0, 120)}`);
+    }
+    const ghasWrite = runScript(script, { command: 'node scripts/gh-as.mjs marshal -- issue create --title t', cursor: true });
+    const ghasWriteDoc = cursorResponse(ghasWrite);
+    if (!ghasWriteDoc || ghasWriteDoc.permission !== 'deny' || !/issue-gateway/.test(JSON.stringify(ghasWriteDoc))) {
+      problems.push(`Cursor 面 gh-as 写 Issue 应 deny 且指出 issue-gateway：${String(ghasWrite.stdout || '').slice(0, 120)}`);
+    }
+    const ghasPr = runScript(script, { command: 'node scripts/gh-as.mjs worker -- pr create --draft', cursor: true });
+    const ghasPrDoc = cursorResponse(ghasPr);
+    if (!ghasPrDoc || ghasPrDoc.permission !== 'allow') {
+      problems.push(`Cursor 面 gh-as 开 PR 应 allow：${String(ghasPr.stdout || '').slice(0, 120)}`);
     }
 
     const crashed = runScript(script, {

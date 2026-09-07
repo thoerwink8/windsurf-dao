@@ -21,7 +21,7 @@ export const COORDINATOR_HINT = [
 
 export const GH_ISSUE_WRITE_HINT = [
   'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。',
-  '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete。',
+  '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete，也不许经 gh-as 自选身份。',
 ].join('');
 
 export function normalizeCmd(cmd) {
@@ -166,9 +166,27 @@ export function isIssueGatewayInvocation(stmt) {
 
 const GH_ISSUE_WRITE_VERBS = /^(create|comment|close|edit|reopen|delete)$/;
 
-/** 裸 `gh issue <写动词>`。dao.mjs / issue-gateway.mjs / gh-as.mjs 不拦。 */
+function restAfterGhAs(toks) {
+  const idx = toks.findIndex((t) => /(^|[\\/])gh-as\.mjs$/i.test(t));
+  if (idx < 0) return null;
+  return toks.slice(idx + 1).filter((t) => t !== '--');
+}
+
+/** `gh-as.mjs <role> -- issue <写动词>`。网关内部走 lib ghAs()，不经这条 CLI。 */
+export function isGhAsIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  const rest = restAfterGhAs(bareTokens(stmt));
+  if (!rest) return false;
+  for (let i = 0; i < rest.length - 1; i++) {
+    if (rest[i] === 'issue' && GH_ISSUE_WRITE_VERBS.test(rest[i + 1])) return true;
+  }
+  return false;
+}
+
+/** 裸 `gh issue <写动词>`。dao.mjs / issue-gateway.mjs 不拦；gh-as 写 Issue 另见 isGhAsIssueWrite。 */
 export function isBareGhIssueWrite(stmt) {
   if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  if (isGhAsIssueWrite(stmt)) return false;
   const toks = bareTokens(stmt);
   if (toks.some(t => /(^|[\\/])gh-as\.mjs$/i.test(t))) return false;
   for (let i = 0; i < toks.length - 2; i++) {
@@ -252,7 +270,7 @@ export function decideGate(cmd) {
         message: `拦下帅窗抢 coordinator：${normalizeCmd(cmd)}\n${COORDINATOR_HINT}`,
       };
     }
-    if (isBareGhIssueWrite(stmt)) {
+    if (isBareGhIssueWrite(stmt) || isGhAsIssueWrite(stmt)) {
       return {
         block: true,
         command: normalizeCmd(cmd),

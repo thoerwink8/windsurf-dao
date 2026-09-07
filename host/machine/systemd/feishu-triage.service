@@ -43,6 +43,8 @@ EnvironmentFile=-/etc/feishu-triage.public.env
 EnvironmentFile=/etc/feishu-triage.env
 # #792：适配器不继承个人 GitHub token。Issue 写走 issue-gateway + marshal App 凭据。
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
+Environment=GH_CONFIG_DIR=/var/empty
 WorkingDirectory=/srv/projects/windsurf-dao
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/feishu-triage.mjs
 Restart=always

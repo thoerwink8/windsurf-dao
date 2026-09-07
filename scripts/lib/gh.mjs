@@ -22,6 +22,23 @@ import { spawnSync } from 'node:child_process';
 
 export const ROLES = ['reviewer', 'worker', 'marshal', 'watchdog', 'refiner'];
 
+// #792：Issue 写动作只走 issue-gateway。gh-as CLI 见这些动词就拒，身份不能自选。
+// 网关内部仍走 ghAs()（本函数不拦）——拦的是调用者手里的 CLI。
+export const ISSUE_WRITE_VERBS = ['create', 'comment', 'close', 'edit', 'reopen', 'delete'];
+
+/** gh 参数里是不是 `issue <写动词>`。只认子命令，不扫任意字符串。 */
+export function isGhIssueWriteArgs(args) {
+  if (!Array.isArray(args)) return false;
+  const filtered = args.filter((a) => a !== '--');
+  for (let i = 0; i < filtered.length - 1; i++) {
+    if (filtered[i] === 'issue' && ISSUE_WRITE_VERBS.includes(filtered[i + 1])) return true;
+  }
+  return false;
+}
+
+export const ISSUE_WRITE_VIA_GATEWAY =
+  'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。身份由网关固定 dao-marshal[bot]，不许经 gh-as 自选身份。';
+
 // 权限表以 issue #573 正文为准。metadata:read 是 GitHub 给每个 installation token
 // 自动加上的，不算我们声明的权限，比对时忽略。
 //
