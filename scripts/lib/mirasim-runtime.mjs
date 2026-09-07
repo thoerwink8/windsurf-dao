@@ -361,6 +361,25 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       reason: `快照报 ${phase} 但带着 incomplete 标记${view.error ? `：${view.error}` : '（半截收尾）'}`,
     };
   }
+  // 会话被杀死时，快照**不变成失败态**——死因只写进 error，phase 照样是 done（#1121 实咬）：
+  //   "pi turn stalled past 30 minutes"                  工人被 30 分钟回合看门狗掐死
+  //   "Selected model is at capacity. Please try …"      审官撞上游满载
+  // 上面那条 incomplete 只是个旁证，而且不稳定：同一个死因，2026-09-07 有时带 incomplete
+  // 被判 failed，有时不带就判成完工。死因的**唯一**可靠载体是 error 本身，所以判它。
+  //
+  // 方向是 fail-closed 的：判 failed 而实际干完了 ⇒ 多一次重派，浪费额度，无害；
+  // 判 done 而实际被杀 ⇒ 静默搁浅，当天演了 11 次（3 个工人 + 8 个审官），
+  // 盘面/账本/gh 三处都显示「做完了」，只有进工作树 git status 才看得出一个字没写。
+  // 实证：所有真交付了成果的会话 error 都是 null；11 个带 error 的一个产出都没有。
+  const deathNote = view.error == null ? '' : String(view.error).trim();
+  if (deathNote) {
+    return {
+      status: 'failed',
+      confirmedBy: ['snapshot'],
+      reason: `快照报 ${phase}，但会话带着死因：${deathNote}——被打断的一针不算完工`,
+      error: deathNote,
+    };
+  }
 
   // 到这里 snapshot 说完工了。单凭它不算——§72 实咬过它跟服务端真实状态能对不上。
   if (!ledger || ledger.readable !== true) {

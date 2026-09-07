@@ -308,6 +308,50 @@ describe('判完工交叉核', () => {
     assert.match(v.reason, /journal 未参与/);
   });
 
+  // #1121：被杀死的会话 phase 照样是 done，死因只写进 error。两条死因串是 2026-09-07
+  // 从真会话上抄下来的原文，不是编的——工人 3 次、审官 8 次，全天 11 次判成「完工」。
+  const STALL_ERR = 'pi turn stalled past 30 minutes';
+  const CAPACITY_ERR = 'Selected model is at capacity. Please try a different model.';
+
+  for (const [name, err] of [['回合看门狗掐死工人', STALL_ERR], ['审官撞上游满载', CAPACITY_ERR]]) {
+    it(`#1121 ${name}：phase=done 但带死因 → failed（账本有成功行也不许判 done）`, async () => {
+      const { judgeCompletion } = await import(LIB);
+      const v = judgeCompletion({
+        // 账本里**有**起针后的成功行：会话被杀前已经打了几十个工具调用，
+        // 交叉核拦不住这一类——所以判据必须落在 error 上。
+        view: { phase: 'done', text: '读了一堆，什么也没写', toolCalls: [], error: err },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'failed');
+      assert.notStrictEqual(v.status, 'done');
+      assert.strictEqual(v.error, err, '死因原文不许被吞掉');
+      assert.ok(v.reason.includes(err), `reason 要带上死因原文，实际：${v.reason}`);
+    });
+  }
+
+  it('#1121 反证：phase=done 且 error 为空 → 照旧走交叉核判 done（这条不是恒红）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    for (const empty of [null, undefined, '', '   ']) {
+      const v = judgeCompletion({
+        view: { phase: 'done', text: 'PONG', toolCalls: [], error: empty },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'done', `error=${JSON.stringify(empty)} 时应判 done`);
+    }
+  });
+
+  it('#1121 非终态不受影响：phase=running 带 error 仍判 running（不提前结算）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const v = judgeCompletion({
+      view: { phase: 'running', error: CAPACITY_ERR },
+      ledger: { readable: true, rows: [] },
+      since: T0,
+    });
+    assert.strictEqual(v.status, 'running');
+  });
+
   it('partial（会话清单预览）报 completed + 账本有成功行 → 仍不得 done（fail-closed）', async () => {
     const { judgeCompletion } = await import(LIB);
     const v = judgeCompletion({
