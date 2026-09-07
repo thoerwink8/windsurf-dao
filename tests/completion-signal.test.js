@@ -25,17 +25,19 @@ describe('completion-signal', () => {
       assert.ok(!!empty.fail && /不在|没查/.test(empty.fail[0] + empty.fail[1]), '文件不在 → 没查成（不是绿）  →  ' + JSON.stringify(empty));
     });
 
-    const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
+    const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book-mirasim.md'), 'utf8');
     const broken = brief.replaceAll('完工', '已完成');
-    await t.test('负控样本：soldier-book 里已没有「完工」二字', () => {
-      assert.ok(!broken.includes('完工') && broken.includes('已完成'), '负控样本：soldier-book 里已没有「完工」二字');
+    await t.test('负控样本：soldier-book-mirasim 里已没有「完工」二字', () => {
+      assert.equal(broken.includes('完工'), false);
+      assert.equal(broken.includes('已完成'), true);
     });
     const mutated = checkCompletionSignal({
       root: REPO,
-      files: { 'host/skills/dispatch/templates/soldier-book.md': broken },
+      files: { 'host/skills/dispatch/templates/soldier-book-mirasim.md': broken },
     });
-    await t.test('把 soldier-book 的「完工」改成「已完成」→ 必须报红', () => {
-      assert.ok(!!mutated.fail && /对不上|已完成|完工/.test(mutated.fail.join(' ')), '把 soldier-book 的「完工」改成「已完成」→ 必须报红  →  ' + JSON.stringify(mutated));
+    await t.test('把 soldier-book-mirasim 的「完工」改成「已完成」→ 必须报红', () => {
+      assert.ok(mutated.fail);
+      assert.match(mutated.fail.join(' '), /对不上|已完成|完工/);
     });
 
     const skill = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'SKILL.md'), 'utf8');

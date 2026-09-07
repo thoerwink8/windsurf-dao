@@ -207,8 +207,18 @@ describe('#815 ① 复审待办队列 + drain', () => {
       commanderSrc.indexOf("case 'attach-reviewer'"),
       commanderSrc.indexOf("case 'merge'"),
     );
-    assert.ok(/review-pending-drain/.test(attachCase),
-      '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
+    assert.ok(/drainReviewPending/.test(attachCase),
+      '指挥官 attach-reviewer 必须走 drainReviewPending → ' + attachCase.slice(0, 240));
+    assert.ok(/function drainReviewPending/.test(commanderSrc)
+      && /review-pending-drain/.test(commanderSrc),
+      'drainReviewPending 必须带 --pr 调 review-pending-drain');
+    const rrFn = commanderSrc.slice(
+      commanderSrc.indexOf('function requestRereview'),
+      commanderSrc.indexOf('function drainReviewPending'),
+    );
+    assert.ok(/drainReviewPending/.test(rrFn),
+      'rereview 写完票当场 drain，不等下一轮 → ' + rrFn.slice(-240));
+    assert.ok(!/drain 下一轮消费/.test(rrFn), '不许再把审官推到下一轮');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-cmd-'));
     const built = S.buildReviewPendingTicket({

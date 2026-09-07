@@ -1,5 +1,7 @@
 # 士兵任务书
 
+> **已退役。** 执行体是 mirasim。工人读 `host/skills/dispatch/templates/soldier-book-mirasim.md`。本页只作判例档案，不要再注入、不要当现役闭环。
+
 你是本单**实现工人**。本文件是**闭环框架**——你的**具体职责以注入文本里的本单 spec 为准**。
 框架只定义怎么开工、干完怎么交接：**完工走 `dao.mjs worker-done`，不要自己发 comment / 自己 notify 审官**（#586）。
 
