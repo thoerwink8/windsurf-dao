@@ -73,11 +73,8 @@ if (!HAS_WORK && ship.action === 'push') {
   if (existsSync(checkFile)) {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
     else {
-      // 快档（--affected）：只跑与本次改动相关的测试 + 跳过要出网的检查。
-      // 兜底靠两处，不靠这一次：CI 每次 PR 跑、每日 cron 跑全量并重建影响地图。
-      // 想在本地跑全量：`node scripts/dao-check.mjs`（不带旗标即全量）。
-      say('[收工] 推之前跑检查（快档：只跑受影响的）…');
-      const c = spawnSync(process.execPath, [checkFile, '--affected'], { windowsHide: true, cwd: root, encoding: 'utf8' });
+      say('[收工] 推之前跑检查（全部测试 + 不出网）…');
+      const c = spawnSync(process.execPath, [checkFile], { windowsHide: true, cwd: root, encoding: 'utf8' });
       const tail = String(c.stdout || '').trim().split(/\r?\n/).pop() || '';
       say(`[收工] 检查：${tail}`);
       if (c.status !== 0) { say('[收工] 检查红——不推，先修（master 必须能跑）'); process.exit(1); }
@@ -94,18 +91,16 @@ if (!HAS_WORK && ship.action === 'push') {
 }
 
 // ── ② 清理：worktree 先（占着分支），分支后 ─────────────────────────
-const orcaPaths = new Set();
-{
-  // orca 在管的树绝不碰（删卡走编排闭环）。orca 不在 = 空集，不算没查成——本机停派工态没有编排树。
-  const r = spawnSync('orca', ['worktree', 'list', '--json'], { windowsHide: true, encoding: 'utf8', timeout: 15000, shell: true });
-  if (r.status === 0) {
-    try {
-      for (const w of JSON.parse(r.stdout)?.result?.worktrees || []) {
-        if (w?.path) orcaPaths.add(resolve(String(w.path)).toLowerCase());
-      }
-    } catch { /* 输出畸形当空集：只影响多留不影响误删 */ }
-  }
-}
+// 执行体在管的树绝不碰（拆树走编排闭环）。判据是路径：mirasim 建的树全部落在
+// `<家目录>/mirasim-worktrees/<仓>/<分支>`，跟 dao.mjs 的 executorFromCwd 用同一把尺。
+//
+// 2026-09-06 换掉了原来的 `orca worktree list --json`：orca 退役后那条命令恒返空集，
+// 而这里的「空集」被读成「没有任何树需要保护」——保护面会静默消失，land 就可能拆掉
+// mirasim 工人正在里面干活的树。判据钉在一个会消失的外部命令上，是
+// migration-half-done-breaks-checks 的同款：搬走了真相源，判据还留在旧位置。
+//
+// 路径判据没有「查不到」这一态：要么在那个目录下，要么不在，离线可判、不起子进程。
+const isExecutorManaged = (abs) => /[\\/]mirasim-worktrees[\\/]/.test(abs);
 
 const mergedSet = new Set(
   git(['branch', '--merged', defaultBranch, '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean),
@@ -132,7 +127,7 @@ for (let i = 0; i < worktrees.length; i++) {
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
     isDefaultBranch: w.branch === defaultBranch,
-    orcaManaged: orcaPaths.has(abs.toLowerCase()),
+    executorManaged: isExecutorManaged(abs),
     detached: w.detached,
   });
   if (!d.remove) { if (i > 0) say(`[收工] 留树 ${w.path}：${d.reason}`); continue; }
@@ -165,29 +160,9 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
   say(r.status === 0 ? `[收工] 删支 ${name}` : `[收工] 删支失败 ${name}：${r.err.slice(0, 120)}`);
 }
 
-// ── ③ 僵尸终端：orca 登记着但工位目录已不在的终端，关掉（只认目录确实不存在；orca 不在 = 跳过） ──
-let zombieCount = 0;
-{
-  const r = spawnSync('orca', ['terminal', 'list', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 15000, shell: true });
-  let terminals = null;
-  if (r.status === 0) { try { terminals = JSON.parse(r.stdout)?.result?.terminals; } catch { /* 畸形当没查成 */ } }
-  if (Array.isArray(terminals)) {
-    for (const t of terminals) {
-      const p = String(t?.worktreePath || (String(t?.worktreeId || '').split('::')[1] || ''));
-      const d = decideTerminalClose({ path: p, exists: p ? existsSync(p) : null });
-      if (!d.close) continue;
-      zombieCount += 1;
-      if (HAS_WORK) { say(`[收工] 有活：关僵尸终端 ${t.handle}（${d.reason}）`); continue; }
-      if (DRY) { say(`[收工] [拟] 关僵尸终端 ${t.handle}（${d.reason}）`); continue; }
-      const c = spawnSync('orca', ['terminal', 'close', '--terminal', String(t.handle), '--tab'], { encoding: 'utf8', windowsHide: true, timeout: 15000, shell: true });
-      say(c.status === 0 ? `[收工] 关僵尸终端 ${t.handle}（${d.reason}）` : `[收工] 关僵尸终端失败 ${t.handle}：${String(c.stderr || c.stdout).slice(0, 120)}`);
-    }
-  }
-}
-
 if (HAS_WORK) {
-  const work = hasLandWork({ shipAction: ship.action, removeCount, deleteCount, zombieCount });
-  say(work ? `[收工] 有活（运=${ship.action} 拆树=${removeCount} 删支=${deleteCount} 僵尸终端=${zombieCount}）` : '[收工] 没活');
+  const work = hasLandWork({ shipAction: ship.action, removeCount, deleteCount, zombieCount: 0 });
+  say(work ? `[收工] 有活（运=${ship.action} 拆树=${removeCount} 删支=${deleteCount}）` : '[收工] 没活');
   process.exit(work ? 0 : 2);
 }
 

@@ -16,6 +16,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { stallWatchPath } from './agent-stall-detect.mjs';
+import { recordBroadcast } from './broadcast-io.mjs';
 
 export const BREAKER_DEFAULTS = Object.freeze({
   windowHours: 24,
@@ -369,10 +370,9 @@ export function recordEvent(event, {
 }
 
 export function defaultHubSay(text) {
-  const r = spawnSync('hub-say', [String(text)], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
-  if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}` };
-  if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  return { ok: true };
+  const r = recordBroadcast(String(text), { source: 'breaker', now: new Date() });
+  if (!r.ok) return { ok: false, error: r.error || '日报队列写不进' };
+  return { ok: true, queued: true, messageId: r.messageId };
 }
 
 export function defaultOpenIssue({ title, body } = {}) {
@@ -400,18 +400,21 @@ export function escalateAllOpen({
     };
   }
   // 待拍板必须先有单号才能发卡（#1012：缺 {repo, number} 拒发）。
-  // 开单失败时退回纯文字，总控群不能哑掉。
+  // 开单失败、或有单号但发卡失败，都退回纯文字——总控群不能哑掉。
+  // 去重戳只在实际送达后盖（settleAllOpen 看 sent）；发卡失败信息留在 ask 里。
   const issue = openIssue({
     title: '[待拍板] 编排层熔断：全部路径 open',
     body: `${text}\n\n查重标记（勿删）：[breaker-all-open]`,
   });
   let hub;
+  let ask = null;
   if (issue && issue.ok && issue.number && typeof hubAsk === 'function') {
-    hub = hubAsk({ number: issue.number, text });
+    ask = hubAsk({ number: issue.number, text });
+    hub = ask && ask.ok ? ask : hubSay(text);
   } else {
     hub = hubSay(text);
   }
-  return { sent: !!(hub && hub.ok), text, hub, issue, plan };
+  return { sent: !!(hub && hub.ok), text, hub, issue, plan, ask };
 }
 
 /** 从落地 / 指纹 info 尽量解析 target；认不出返回 null，不许猜。 */

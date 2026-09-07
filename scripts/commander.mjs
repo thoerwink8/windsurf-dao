@@ -5,7 +5,7 @@
 // 「决策」在纯函数 scripts/lib/commander-core.mjs（decide），「大脑」是 act 起的一次性 pi 会话。
 //
 // 子命令：
-//   scan            读 GitHub / Orca / 队列 / 撞死指纹 → 态势 JSON，落 ~/.dao/commander/situation-<ts>.json
+//   scan            读 GitHub / 队列 / 撞死指纹 → 态势 JSON，落 ~/.dao/commander/situation-<ts>.json
 //   act [--dry-run] scan → decide → 逐条执行动作（--dry-run 只打印）
 //   inventory [--dry-run]  盘点体检：孤儿进程/终端登记/timer/探针连红/超龄PR/落地清单空列 → 异常开「待拍板」单
 //   status [--json] 自检三态（0 通 / 1 红 / 2 没查成），供 server-check 一行引用
@@ -16,16 +16,19 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
-import { runOrca } from './lib/orca-run.mjs';
+function runOrca() {
+  return { ok: false, error: { code: 'orca_retired', message: 'orca 已退役' } };
+}
+import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
 import {
@@ -34,17 +37,25 @@ import {
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
+import {
+  isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
+  reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
+} from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
+  SITUATION_SECTIONS,
 } from './lib/commander-core.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
+import { admitCapacity } from './lib/admission.mjs';
+import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
@@ -52,7 +63,16 @@ import {
 } from './lib/exhausted.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
+  runHubAsk, sendCardViaLarkCli, pendingFromAsk,
 } from './lib/hub-ask.mjs';
+import { fetchPrMergeable } from './lib/dispatch/git.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { readLedgerEvents } from './lib/ledger-query.mjs';
+import { desiredFromEvents } from './lib/session-reconcile.mjs';
+import { acceptSessionsFrame } from './mirasim-sessions.mjs';
+import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
+import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
+import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -61,6 +81,8 @@ const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
 const STATE_PATH = join(STATE_DIR, 'state.json');
+const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
+  || join(homedir(), '.dao', 'admission', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -68,15 +90,20 @@ const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projec
 // 一次性会话的寿命上限。**改这个数就等于改巡检任务书里写给会话的那个数**——
 // 任务书按它算「先落最小报告再深挖」的时间预算，两处对不上就是在骗那个会话。
 const BRAIN_MAX_AGE_MS = 30 * 60 * 1000;
-const HUB_DEDUP_MS = 6 * 3600 * 1000; // 同一条回流 6 小时内不重发
+const HUB_DEDUP_MS = OPEN_ISSUE_CARD_DEDUP_MS; // 同一条回流 6 小时内不重发
 
 function ensureDir(d) { if (!existsSync(d)) mkdirSync(d, { recursive: true }); }
 const nowIso = () => new Date().toISOString();
 
 // ── 状态 state.json（可注入时钟便于测试；这里只做 IO）──
 function loadState() {
-  try { return JSON.parse(readFileSync(STATE_PATH, 'utf8')); }
-  catch { return {}; }
+  try {
+    const s = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    if (s && typeof s === 'object' && s.escalateLedger) {
+      s.escalateLedger = migrateEscalateLedger(s.escalateLedger);
+    }
+    return s;
+  } catch { return {}; }
 }
 function saveState(state) {
   ensureDir(STATE_DIR);
@@ -173,10 +200,174 @@ function scanOtherRepos() {
 
 function scanOrca() {
   const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) return { scanned: false, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  if (!wt.ok) {
+    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
+    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
+    // 在途工人改由 scanAdmission 按 mirasim 两层工作树 + 会话存活事实数。
+    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
+  }
   const worktrees = wt.json?.result?.worktrees;
   if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
   return { scanned: true, worktrees };
+}
+
+/**
+ * 观测集（#1056）：mirasim 会话名单。exit 2 = 没查成（连不上 / 没 token / 帧形状不对），
+ * exit 0 且打出合法 type=sessions 协议帧（sessions 必须是数组）= 查成；count:0 也算查成。
+ * 零输出 / 坏 JSON / sessions 不是数组一律 scanned:false。两态分不开就会把「没查成」
+ * 当成「一个活人都没有」去重派。不进 SITUATION_SECTIONS：名单没查成只挡住差集重派，
+ * 不许把合并/叫审官整轮停掉。
+ */
+function scanSessions() {
+  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  if (!existsSync(script)) {
+    return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
+  }
+  const r = spawnSync(process.execPath, [script], {
+    windowsHide: true, encoding: 'utf8', timeout: 20000, cwd: ROOT, env: process.env,
+  });
+  if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
+  if (r.status !== 0) {
+    return {
+      scanned: false,
+      error: String(r.stderr || r.stdout || `mirasim-sessions exit ${r.status}`).trim().slice(0, 240),
+    };
+  }
+  let frame = null;
+  for (const line of String(r.stdout || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch {
+      return { scanned: false, error: '会话名单有坏 JSON——观测面没查成，不许折成空名单' };
+    }
+    const accepted = acceptSessionsFrame(obj);
+    if (accepted.skip) continue;
+    if (!accepted.ok) return { scanned: false, error: accepted.why };
+    frame = accepted;
+  }
+  if (!frame) {
+    return { scanned: false, error: '会话名单没打 type=sessions 协议帧（零输出/坏形状）——观测面没查成，不许折成空名单' };
+  }
+  return { scanned: true, items: frame.list };
+}
+
+/**
+ * 期望集（#1056）：事件账里未结的 job.dispatch。不新造台账——账已经有了，本单只读。
+ * 全量读（readLedgerEvents），不用 10 分钟去重窗的索引——差集要的是「现在该在的人」，
+ * 裁掉 10 分钟前的未结派工等于把死工人洗成「账上没有」。
+ */
+function scanDesiredJobs() {
+  let dir;
+  try { dir = ensureLocalLedger({ root: ROOT }).dir; }
+  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, items: [] }; }
+  const listed = readLedgerEvents(dir);
+  if (listed.unscanned) {
+    return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
+  }
+  return desiredFromEvents(listed.events);
+}
+
+/**
+ * 在途派工的采样面（2026-09-06 起）。orca 段已恒 scanned:false，而它原来是「这张 issue
+ * 有没有人在做」的唯一依据——调用处一句 `orca.worktrees || []` 就把「没查成」洗成
+ * 「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次（#965 当场撞上）。
+ * 换成 mirasim 自己的树目录：它是这些树的所有者，读不了目录才是没查成。
+ */
+function scanTrees() {
+  return scanMirasimTrees({
+    repo: REPO.split('/')[1] || undefined,
+    readdir: (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name),
+    // statSync 而不是 existsSync：后者在权限错误时也回 false，会把「读不了」洗成「没有树」。
+    stat: statSync,
+    join,
+  });
+}
+
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); }
+  catch (e) { return { error: String(e.message || e) }; }
+}
+
+function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
+  if (!existsSync(file)) return [];
+  let src;
+  try { src = readFileSync(file, 'utf8'); }
+  catch { return []; }
+  const out = [];
+  for (const line of src.split(/\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* 坏行跳过 */ }
+  }
+  return out;
+}
+
+function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 在途数 = 现在有几棵树被会话占着（#1007）。
+ *
+ * 判据换成租约闸那把尺（lib/dispatch/lease.mjs 的 /proc 扫描），删掉了原来的三层取数：
+ * 两层枚举工作树、读 mirasim 会话档案、再兜一层 orca 卡面取 max。删掉的理由各自成立：
+ *
+ *  · **orca 那层早就死了**（本机 orca 已退役，`orca worktree list` 每轮 exit 2）——
+ *    取 max 意味着它一坏就把整闸拖成 fail-close。
+ *  · **会话档案那层判据是错的**：record.json 的 runPid 是 mirasim-server 自己的 pid，
+ *    而 updatedAt 不随会话推进刷新，两个字段都撑不起活性判定（见 memory
+ *    mirasim-runpid-is-server-pid）。
+ *  · **审官被漏掉了**：原来 `isReviewerCard` 把审官树跳过，可审官吃同一份 CPU 和内存——
+ *    2026-09-06 那晚 137 个会话里审官占 53 个，分母少一半，算出来的余量必然偏大。
+ *
+ * 现在只有一把尺：一棵树里有会话进程在干活就算一个在途，工人审官一视同仁。
+ */
+function countInflightWorkers() {
+  const r = checkInFlight();
+  if (!r.ok) return r;
+  return { ok: true, count: r.count, trees: r.trees };
+}
+
+/**
+ * 机器余量准入。纯判定在 admission.mjs；这里只读 /proc 和在途数。
+ * 在途数读 mirasim 两层工作树 + 会话存活事实；核实不了 fail-close，不按目录数猜、不把僵尸当活。
+ */
+function scanAdmission({ worktrees, policy } = {}) {
+  const memRaw = readText('/proc/meminfo');
+  const loadRaw = readText('/proc/loadavg');
+  if (memRaw && memRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
+  }
+  if (loadRaw && loadRaw.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  }
+  const nproc = cpus()?.length;
+  const inflight = countInflightWorkers({ worktrees });
+  if (!inflight.ok) {
+    return { ok: false, unscanned: true, slots: 0, why: inflight.error };
+  }
+  const samples = loadAdmissionSamples();
+  const cap = admitCapacity({
+    meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
+    nproc,
+    inFlight: inflight.count,
+    samples,
+    policy,
+  });
+  if (cap.ok && Number.isFinite(cap.memAvailableMb)) {
+    appendAdmissionSample({
+      at: nowIso(),
+      inFlight: inflight.count,
+      memAvailableMb: cap.memAvailableMb,
+      loadNorm: cap.loadNorm,
+    });
+  }
+  return { ...cap, inFlight: inflight.count };
 }
 
 function scanReviewPending() {
@@ -305,10 +496,13 @@ function pickDefaultWorkerModel(raw) {
 function buildSituation({ state } = {}) {
   const github = scanGithub();
   const orca = scanOrca();
+  const trees = scanTrees();
   const reviewPending = scanReviewPending();
   const otherRepos = scanOtherRepos();
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
+  const sessions = scanSessions();
+  const desiredJobs = scanDesiredJobs();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let routingModelRecords = null;
@@ -334,15 +528,21 @@ function buildSituation({ state } = {}) {
     defaultWorkerModel = null;
   }
   const breakerIngest = ingestBreakerSignals();
+  // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
+  const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
     at: nowIso(), repo: REPO,
-    github, orca, reviewPending, prReviews, stall, otherRepos,
+    github, orca, trees, reviewPending, prReviews, stall, otherRepos,
+    sessions, desiredJobs,
+    viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
-    commanderPolicy: policy.commander || { maxDispatchPerRound: 2, requireModelInRouting: true },
+    hubSeen: (state && state.hubSeen) || {},
+    commanderPolicy: policy.commander || { requireModelInRouting: true },
+    admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
     reviewerOrder,
@@ -352,34 +552,24 @@ function buildSituation({ state } = {}) {
   };
 }
 
+// 关键节：任一没查成 → fail-closed 总闸压掉依赖它的动作。
+// 2026-09-06 把 `orca` 换成 `trees`：orca 运行时已 disabled，它**永远**是没查成，
+// 于是这道总闸从「读不到盘面就别乱动」退化成「每一轮都别动」——一个恒红的闸等于没有闸，
+// 而且它压掉的是真该做的动作（判例：dao-check「体检红项先问判据该不该在」）。
+// `orca` 段仍留在态势里给还没搬完的消费者读，但不再决定这一轮能不能动手。
 function situationHealth(situation) {
-  const sections = ['github', 'orca', 'reviewPending', 'prReviews', 'stall'];
-  const unscanned = sections.filter((s) => !situation[s]?.scanned);
+  // 必查清单只认 SITUATION_SECTIONS（#1055：orca 退役后不在清单里，复制一份会再钉死）。
+  const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   return { unscanned, allScanned: unscanned.length === 0 };
 }
 
 // ── 手：hub 回流（带去重）──
 function hubSay(text) {
-  // hub-say 在服务器上装在 /home/orca/bin，而 systemd/ssh 的 PATH 里没有它——
-  // 只 spawn 裸名字会 ENOENT，回流总控群整条哑掉且只在日志里留一行（2026-09-05 实咬）。
-  let r = spawnSync('hub-say', [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-  if (r.error && r.error.code === 'ENOENT') {
-    for (const cand of [process.env.DAO_HUB_SAY, '/home/orca/bin/hub-say'].filter(Boolean)) {
-      if (!existsSync(cand)) continue;
-      r = spawnSync(cand, [text], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
-      break;
-    }
-  }
-  if (r.error) return { ok: false, error: `hub-say 起不来：${r.error.message}（服务器上在 /home/orca/bin）` };
-  if (r.status !== 0) return { ok: false, error: String(r.stderr || `hub-say exit ${r.status}`).trim().slice(0, 200) };
-  // 认回执，不认退出码。hub-say 打印飞书返回的 message_id——拿到它才算真送进群。
-  // 只看 exit 0 的话，「发成了」和「lark-cli 跑通了但飞书没收」长得一模一样，
-  // 而这条路一哑就是整条回流静默（本仓同形态判例：memory orca-send-succeeds-to-dead-handle）。
-  const messageId = String(r.stdout || '').trim().replace(/^"|"$/g, '');
-  if (!messageId || messageId === 'null') {
-    return { ok: false, error: `hub-say 退出码 0 但没回 message_id——没送进群（stdout=${String(r.stdout || '').trim().slice(0, 80)}）` };
-  }
-  return { ok: true, messageId };
+  // #1029：状态别塞进总控消息流。心跳/发布/熔断进日报队列，换日才合成一张卡。
+  // 入队成功就是回执——真送到飞书是日报卡那一次。队列写不进才算失败。
+  const r = recordBroadcast(text, { source: 'commander', now: new Date() });
+  if (!r.ok) return { ok: false, error: r.error || '日报队列写不进' };
+  return { ok: true, queued: true, messageId: r.messageId };
 }
 
 function hubOnce({ state, key, text, now = Date.now(), dryRun }) {
@@ -412,14 +602,14 @@ function sendHubAsk(fields) {
   return { ok: true, messageId };
 }
 
-function hubAskOnce({ state, key, fields, now = Date.now(), dryRun }) {
+function hubAskOnce({ state, key, fields, now = Date.now(), dryRun, send = sendHubAsk }) {
   state.hubSeen = state.hubSeen || {};
   const last = Date.parse(state.hubSeen[key] || '') || 0;
   if (now - last < HUB_DEDUP_MS) return { sent: false, reason: '6 小时内已发过' };
   const planned = argvFromFields(fields || {});
   if (!planned.ok) return { sent: false, error: planned.error };
   if (dryRun) { state.hubSeen[key] = new Date(now).toISOString(); return { sent: true, dryRun: true }; }
-  const r = sendHubAsk(fields);
+  const r = send(fields);
   if (!r.ok) return { sent: false, error: r.error };
   state.hubSeen[key] = new Date(now).toISOString();
   return { sent: true, messageId: r.messageId };
@@ -435,7 +625,9 @@ function execAction(action, { state, dryRun, log }) {
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
-        '--spec', dispatchSpec(action.issue), '--confirm'];
+        '--spec', dispatchSpec(action.issue), '--confirm',
+        // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
+        ...(action.reconcile ? ['--allow-dup'] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
@@ -627,7 +819,17 @@ function execMarkExhausted(action, { dryRun, say }) {
   return { ok: true, labeled: true, commented: true };
 }
 
-function execOpenIssue(action, { state, dryRun, say }) {
+function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
+  // 账本已有 OPEN：只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+  // 下一轮 decide 仍会产 existing 动作，这里再走 askEscalateCard。
+  if (action.existing && action.number) {
+    const key = openIssueDedupKey(action.reason, action.target);
+    say(`  转单已在 #${action.number}（账本查重，不重开）`);
+    askEscalateCard({
+      state, key, number: action.number, action, dryRun, say, send,
+    });
+    return { ok: true, number: action.number, key, existing: true };
+  }
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `open-issue-${Date.now()}.md`);
   const planned = planOpenIssueCmd({
@@ -652,7 +854,7 @@ function execOpenIssue(action, { state, dryRun, say }) {
   say(`  转单开了 #${number || '?'}`);
   if (number) {
     askEscalateCard({
-      state, key: planned.key, number, action, dryRun: false, say,
+      state, key: planned.key, number, action, dryRun: false, say, send,
     });
   }
   return { ok: true, number, key: planned.key };
@@ -686,6 +888,36 @@ export function resultPathOf(stdout) {
   } catch { return null; }
 }
 
+/**
+ * 同步派工的成功判据（#1087 实咬）。
+ *
+ * 两条派工脊的出口形状**不一样**，而回读逻辑只认得其中一条：
+ *   orca（异步，已退役）  `{queued:true, async:true, resultPath:'…out.json'}` —— 真结果稍后落盘
+ *   mirasim（同步，现役） `{ok:true, executor:'mirasim', sessionKey:'pi:uuid', card:'…'}` —— 会话当场就起好了
+ *
+ * mirasim 那条没有 resultPath，于是 `resultPathOf` 回 null，回读一律判「拿不到 resultPath
+ * ——成没成没查成」，接着报帅开一张 `[待拍板] dispatch-unscanned` 单。**而那次派工其实成了**：
+ * 会话已经在跑，sessionKey 就在输出里。2026-09-06 一晚上刷出 6 张这种单（#1069/#1072/#1073/
+ * #1078/#1081/#1083/#1084/#1087…），全是假警报，而且开单去重按对象不按原因，一张 PR 一张单。
+ *
+ * 判据要严：`ok===true` **且**拿得到 sessionKey 才算同步成了。只有 ok 没有 sessionKey 时
+ * 仍判没查成——「没有结果文件」和「有结果、就在这一帧里」必须靠正面证据分开，不能靠猜。
+ *
+ * @returns {{sync:true, sessionKey, card, issue}|null}
+ */
+export function judgeSyncDispatch(stdout) {
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let j;
+  try { j = JSON.parse(text.slice(start)); } catch { return null; }
+  if (!j || typeof j !== 'object' || j.ok !== true) return null;
+  if (typeof j.resultPath === 'string' && j.resultPath) return null; // 异步脊，走回读那条路
+  const key = typeof j.sessionKey === 'string' ? j.sessionKey.trim() : '';
+  if (!key) return null; // 没有会话号 = 没有正面证据，仍判没查成
+  return { sync: true, sessionKey: key, card: j.card || j.workerCard || '', issue: j.issue ?? '' };
+}
+
 /** 纯函数：把 out.json 的内容判成三态。没落盘 = 没查成（既不算成也不算败）。 */
 export function classifyDispatchResult({ present, doc, waitedMs }) {
   if (!present) {
@@ -693,6 +925,11 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
   }
   if (!doc || typeof doc !== 'object') return { ok: false, unscanned: true, error: '派工结果不是 JSON（没查成）' };
   if (doc.ok === true) return { ok: true, card: doc.workerCard || '', issue: doc.issue || '' };
+  // 第四态：背压。树里已经有人在干活（租约闸），这不是失败，排队下一轮即可。
+  // 跟失败分不开的后果：每轮为「这轮先不派」开一张待拍板单，正是刚清掉的那类噪音单。
+  if (doc.busy === true) {
+    return { ok: false, busy: true, unscanned: false, error: String(doc.error || '树里有人在干活').slice(0, 200) };
+  }
   return { ok: false, unscanned: false, error: String(doc.error || '执行体报失败但没给原因').slice(0, 200) };
 }
 
@@ -706,6 +943,10 @@ export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
   const failedPrs = new Set(); // 返工的随附回流按 PR 号挂，不按 issue（#931）
+  // 执行中动态生成的 escalate 动作要还给调用方：轮末 reconcileEscalations 只认它拿到的数组，
+  // 拿不到这些原因就等于「本轮没出现过」——连续计数每轮归零（第 N 轮永远到不了），
+  // 而且已有的同因 OPEN 单会被判成「本轮已消失」自动关掉。
+  const generated = [];
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action.kind === 'notify-hub'
       && ((action.issue != null && failedIssues.has(String(action.issue)))
@@ -716,13 +957,21 @@ export function runActions(actions, { exec, log = [] } = {}) {
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
     const r = exec(action);
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
+    // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
+    // 仍要进 failedIssues（不发「已自动派单」喜报——毕竟没派出去），但**不报帅、不开单**。
+    if (DISPATCHING_KINDS.has(action.kind) && action.issue != null && r && r.busy === true) {
+      log.push(`  这轮先不派：${(r.error || '树里有人在干活')}——排队下一轮，不报帅（背压不是失败）`);
+      failedIssues.add(String(action.issue));
+      if (action.pr != null) failedPrs.add(String(action.pr));
+      continue;
+    }
     const failed = DISPATCHING_KINDS.has(action.kind) && action.issue != null
       && (!r || (r.ok !== true) || r.dispatchFailed === true);
     if (!failed) continue;
     failedIssues.add(String(action.issue));
     if (action.pr != null) failedPrs.add(String(action.pr));
     const isRework = action.kind === 'rework';
-    exec({
+    const escalation = {
       kind: 'escalate',
       reason: r && r.unscanned
         ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
@@ -732,9 +981,11 @@ export function runActions(actions, { exec, log = [] } = {}) {
       why: isRework
         ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
         : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
-    });
+    };
+    generated.push(escalation);
+    exec(escalation);
   }
-  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs] };
+  return { log, failedIssues: [...failedIssues], failedPrs: [...failedPrs], generated };
 }
 
 /** 主线程同步睡。指挥官是 oneshot，阻塞期间本来也没别的事要做，所以不改 async 范式。
@@ -746,6 +997,9 @@ function sleepSync(ms) {
 
 /** 回读异步派工的真结果：轮询 resultPath 直到落盘或超时。 */
 function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, nowFn = Date.now } = {}) {
+  // mirasim 是同步脊：会话当场起好，没有结果文件要等（判据与实咬见 judgeSyncDispatch）。
+  const sync = judgeSyncDispatch(stdout);
+  if (sync) { say(`  派工真结果：成了（同步脊，会话 ${sync.sessionKey}）`); return { ok: true, card: sync.card, issue: sync.issue, sync: true }; }
   const path = resultPathOf(stdout);
   if (!path) { say('  派工受理了，但输出里没有结果文件路径——成没成没查成'); return { ok: false, unscanned: true, error: '拿不到 resultPath' }; }
   const t0 = nowFn();
@@ -925,11 +1179,22 @@ function dispatchRework(action, { state, dryRun, say }) {
   return verdict;
 }
 
-// 大脑：起一次性 pi 会话 + 注入指针文本；记进 state.brainSessions（含 handle），
-// 由后续 act 轮回收（会话干完自行 exit；没退的到期强关，保证「进程不在」有界）。
+// 大脑：起一次性 mirasim 会话 + 注入指针文本；记进 state.brainSessions（键是 sessionKey），
+// 由后续 act 轮回收（会话干完自行退；没退的到期强关，保证「进程不在」有界）。
 // action.pointer / action.title 可覆写：巡检（cmdPatrol）用同一条起会话+登记+回收的路，
 // 只换注入那句话和卡名。**不许为别的用途另写一份 start/send/登记**——回收只认 state.brainSessions，
 // 另写一套就等于造一批没人回收的孤儿会话（本机那版巡检半天堆了几十个，就是这么来的）。
+//
+// #1055：orca 退役后这条路切到 mirasim。mirasim 是一步到位——prompt 本身就是注入，
+// 不需要 orca 那套 start + send 两步。commander 调用链保持同步（spawnSync 调 dao.mjs），
+// 不许把 cmdAct / cmdPatrol 改成 async（会牵动退出码三态，server-check 读它）。
+function brainStartCmd(pointer, title) {
+  return ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', BRAIN_MODEL,
+    '--worktree', BRAIN_WORKTREE, '--prompt', pointer,
+    '--title', title || '指挥官大脑'];
+}
+
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
   const pointer = action.pointer || [
@@ -937,34 +1202,30 @@ function wakeBrain(action, { state, dryRun, say }) {
     `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
     `处置目标：${action.target}（${action.why}）。`,
     '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
-    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完打 exit 退出。',
+    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
   ].join('');
-  const startCmd = ['node', 'scripts/dao.mjs', 'start', '--provider', 'gw', '--model', BRAIN_MODEL,
-    '--worktree', BRAIN_WORKTREE, '--title', action.title || '指挥官大脑'];
+  const startCmd = brainStartCmd(pointer, action.title);
   if (dryRun) {
-    say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}\n    然后 dao.mjs send --terminal <handle> --enter --agent pi --text "<指针>"`);
+    say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}`);
     return { ok: true, dryRun: true };
   }
   const started = runCmd(startCmd, 180000);
   if (!started.ok) { say(`  大脑起不来：${started.error}`); return { ok: false, error: started.error }; }
   let handle = null;
-  try { handle = JSON.parse(started.out).handle; } catch { /* 下面报没拿到 */ }
-  if (!handle) { say('  起了大脑但没拿到 handle——没查成'); return { ok: false, error: 'no-handle' }; }
-  const sent = runCmd(['node', 'scripts/dao.mjs', 'send', '--terminal', handle, '--text', pointer, '--enter', '--agent', 'pi'], 60000);
+  try {
+    const j = JSON.parse(started.out);
+    handle = j.sessionKey || j.handle || null;
+  } catch { /* 下面报没拿到 */ }
+  if (!handle) { say('  起了大脑但没拿到 sessionKey——没查成'); return { ok: false, error: 'no-handle' }; }
   state.brainSessions = state.brainSessions || {};
-  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它，否则送失败就漏一个孤儿大脑。
-  state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL };
-  if (!sent.ok) {
-    // 指针没送到 = 这次唤醒没发生：**不计预算**（审官红项 2026-09-04）。
-    // 递增会让「唤满三次转报帅」在大脑其实一次都没被告知的情况下提前触发——把投递故障算成大脑无能。
-    say(`  大脑起了但指针没送：${sent.error}——不计唤醒次数（没送达 ≠ 唤过），下一轮重试`);
-    return { ok: false, error: `指针没送达：${sent.error}`, handle };
-  }
+  // 会话登记与送达无关：进程已经起来了，回收（reapBrains）必须认得它。
+  // mirasim 路径上 prompt 就是注入，起成 = 指针已送；不再有「起了但没送达」的中间态。
+  state.brainSessions[handle] = { startedAt: nowIso(), target: action.target, model: BRAIN_MODEL, executor: 'mirasim' };
   state.wakeCounts = state.wakeCounts || {};
   // #931 后唤大脑只剩撞死指纹（`stall:<term>`）与代拍（`daipai:issue-<n>`）两条路，
   // 都按 target 记账。PR 判红改走 rework（返工工人），不再有唤醒预算。
   state.wakeCounts[action.target] = (state.wakeCounts[action.target] || 0) + 1;
-  say(`  大脑已起 handle=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
+  say(`  大脑已起 sessionKey=${handle}（唤醒第 ${state.wakeCounts[action.target]} 次），指针已送`);
   return { ok: true, handle };
 }
 
@@ -997,17 +1258,64 @@ export function classifyBrainReap({ readable, age, maxAgeMs, hardCapMs, signatur
   return { verdict: 'close', reason: '超龄且屏面一轮没动——没在干活', moved, everMoved };
 }
 
+const BRAIN_LIVE_PHASES = new Set(['running', 'streaming', 'waiting', 'queued']);
+const BRAIN_DONE_PHASES = new Set([
+  'done', 'complete', 'completed', 'error', 'failed', 'aborted', 'cancelled', 'canceled',
+]);
+
+/** 把 session-read 的 JSON 判成 {readable}。dao.mjs 在 missing!==true 时会标 readable:true，
+ *  适配器不许信那一列——形状错误 / 未知 phase / 无法确认的 partial 都是没查成。 */
+export function interpretBrainSessionView(view) {
+  if (!view || typeof view !== 'object') {
+    return { ok: false, readable: undefined, error: 'session-read 输出不是对象', view: view ?? null };
+  }
+  const why = typeof view.why === 'string' ? view.why : '';
+  if (/形状不符|契约/.test(why)) {
+    return { ok: true, readable: undefined, error: why, view };
+  }
+  if (view.missing === true) {
+    return { ok: true, readable: false, error: why || 'missing', view };
+  }
+  const phase = typeof view.phase === 'string' && view.phase.trim() ? view.phase.trim() : null;
+  if (view.partial === true && !BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: undefined, error: why || 'partial', view, phase };
+  }
+  if (BRAIN_DONE_PHASES.has(phase)) {
+    return { ok: true, readable: false, error: `phase=${phase}`, view, phase };
+  }
+  if (BRAIN_LIVE_PHASES.has(phase)) {
+    return { ok: true, readable: true, error: null, view, phase };
+  }
+  return { ok: true, readable: undefined, error: phase ? `未知 phase=${phase}` : 'phase 缺失', view, phase };
+}
+
+/** 同步读一次 mirasim 会话。spawnSync 调 dao.mjs session-read，不把 commander 改成 async。 */
+function readBrainSession(sessionKey) {
+  const r = runCmd(['node', 'scripts/dao.mjs', 'session-read', '--session', sessionKey], 60000);
+  // 命令没成 / 输出不可解析 = 没查成。readable 不给 false——false 会被判 gone，只删登记留下孤儿会话。
+  if (!r.ok) return { ok: false, readable: undefined, error: r.error, view: null };
+  let view = null;
+  try { view = JSON.parse(r.out); } catch { return { ok: false, readable: undefined, error: 'session-read 输出不是 JSON', view: null }; }
+  return interpretBrainSessionView(view);
+}
+
+function stopBrainSession(sessionKey) {
+  return runCmd(['node', 'scripts/dao.mjs', 'session-stop', '--session', sessionKey], 60000);
+}
+
 // 回收一次性大脑。判据在 classifyBrainReap，这里只负责取数、执行、留痕。
+// #1055：取数从刮屏换成 dao.mjs session-read（phase / 正文），
+// 强关从关标签换成 dao.mjs session-stop。判据函数一个字不动。
 function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
   const sessions = state.brainSessions || {};
   state.brainAudit = state.brainAudit || { closed: 0, silent: 0 };
   for (const [handle, meta] of Object.entries(sessions)) {
     const age = Date.now() - (Date.parse(meta.startedAt || '') || 0);
-    const rd = runOrca(['terminal', 'read', '--terminal', handle, '--screen', '--json'], { cwd: ROOT });
-    const screen = rd.ok ? brainScreenText(rd) : null;
+    const rd = readBrainSession(handle);
+    const screen = rd.view ? brainScreenText(rd.view) : null;
     const signature = screen == null ? null : progressSignature({ preview: screen });
     const v = classifyBrainReap({
-      readable: rd.ok, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
+      readable: rd.readable, age, maxAgeMs, hardCapMs: maxAgeMs * 3, signature, prev: meta.sig,
     });
     if (v.verdict === 'gone') {
       delete sessions[handle];
@@ -1021,28 +1329,40 @@ function reapBrains({ state, dryRun, say, maxAgeMs = BRAIN_MAX_AGE_MS }) {
       if (age > maxAgeMs) say && say(`  大脑 ${handle} ${v.reason}（已 ${Math.round(age / 60000)} 分钟）`);
       continue;
     }
-    // close：先留痕再关——close --tab 之后屏面就找不回来了
+    // close：先留痕再关——stop 之后正文就找不回来了
     const silent = !(meta.everMoved || v.everMoved);
     state.brainAudit.closed += 1;
     if (silent) state.brainAudit.silent += 1;
-    if (!dryRun) runOrca(['terminal', 'close', '--terminal', handle, '--tab'], { cwd: ROOT });
+    let stopped = { ok: true, dryRun: true };
+    if (!dryRun) {
+      stopped = stopBrainSession(handle);
+      if (!stopped.ok) {
+        say && say(`  大脑 ${handle} 该关但 stopSession 没成：${stopped.error}——登记留下，下一轮再关（不许只删登记）`);
+        continue;
+      }
+    }
     delete sessions[handle];
-    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}`);
-    if (silent && screen) say && say(`    最后屏面：${screen.replace(/s+/g, ' ').slice(-200)}`);
+    const stopNote = dryRun ? '（dry-run 没真关）' : 'stopSession 已返回 ok';
+    say && say(`  大脑 ${handle} 关掉（${v.reason}）：目标 ${meta.target || '?'}，${silent ? '**全程零产出**——这次唤醒等于没发生' : '期间有产出'}；${stopNote}`);
+    if (silent && screen) say && say(`    最后屏面：${screen.replace(/\s+/g, ' ').slice(-200)}`);
   }
   state.brainSessions = sessions;
 }
 
-/** 从 orca terminal read 的返回里取屏面文本。字段路径别猜——取不到就回 null（没查成）。 */
+/** 从会话读返回里取正文。字段路径别猜——取不到就回 null（没查成）。
+ *  #1055：mirasim session-read 的正路是顶层 `text`；orca 终端形状仍认，给存量测试/对照。 */
 export function brainScreenText(rd) {
   const src = rd && (rd.json || rd.out || rd);
   let j = src;
   if (typeof src === 'string') { try { j = JSON.parse(src); } catch { return null; } }
-  const t = j && (j.result?.terminal || j.terminal || j.result || j);
+  if (!j || typeof j !== 'object') return null;
+  if (typeof j.text === 'string' && j.text) return j.text;
+  const t = j.result?.terminal || j.terminal || j.result || j;
   if (!t) return null;
   if (Array.isArray(t.tail)) return t.tail.join('\n');
   if (typeof t.screen === 'string') return t.screen;
   if (typeof t.content === 'string') return t.content;
+  if (typeof t.text === 'string' && t.text) return t.text;
   return null;
 }
 
@@ -1122,7 +1442,7 @@ export function patrolExitCode({ unscanned = [], outOfBounds = 0 } = {}) {
 
 /** 注入那一句：短到不会被 TUI 当粘贴块，只说「全文在哪、先读它」。 */
 export function patrolInjectText(briefPath) {
-  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完打 exit 退出。`;
+  return `你是这台服务器的机制巡检会话（一次性）。任务书全文在 ${briefPath}，先完整读它再动手，别照这一句话开工。做完自行结束会话。`;
 }
 
 /** 巡检任务书全文。existing 是 listObservations 的三态结果，直接决定「已有报告」那一段怎么写。 */
@@ -1205,7 +1525,7 @@ export function patrolBriefText({ obsDir = 'docs/observations', existing = null,
     '## 时间与收尾',
     '',
     `你最多有 ${minutes} 分钟，到点会被强制关掉。所以顺序是：**先把最小的一份报告写完并推上去，再回头深挖**。`,
-    '干完打 `exit` 退出——退了才不占位子。',
+    '干完自行结束会话——退了才不占位子。',
     '',
   ].join('\n');
 }
@@ -1317,26 +1637,88 @@ function runDaipai({ state, dryRun, say }) {
 // 报帅：unscanned-class 只进态势/status（静默，不刷屏——「没查成」靠 status 三态可见）；
 // 报帅停手 class（two-red / missing-labels / malformed / wake-exhausted / approved-but-ci-red）
 // → hub 一条（去重）+ 开「待拍板」单（gh search 查重，不重复开）。
-function escalate(action, { state, dryRun, say }) {
-  if (action.reason === 'unscanned') {
-    say(`  没查成（静默进 status）：${action.why}`);
-    return { ok: true, silent: true };
-  }
-  const key = escalateKey(action);
+/**
+ * 这个对象是不是已经追加到那张单上了。
+ *
+ * 只给「账本里没这条键、但 GitHub 上已有单」那条路用：那时本地没有任何记录
+ * 能证明说过没说过，唯一的真相在单上。判据是 appendCommentBody 写死的那行
+ * 「新增：<对象>」——它是这条评论里唯一稳定的锚。
+ *
+ * 读不到评论一律判「没查成」：把「查不到」当成「没说过」会每轮刷一条重复评论。
+ */
+function alreadyAppended({ issue, target, gh = runGh }) {
+  if (!target) return { unscanned: false, found: true }; // 没有对象要追加，等同已处理
+  const r = gh(['issue', 'view', String(issue), '--repo', REPO, '--json', 'comments'], 30000);
+  if (!r.ok) return { unscanned: true, error: r.error };
+  let comments;
+  try { comments = JSON.parse(r.out || '{}').comments; }
+  catch { return { unscanned: true, error: 'issue comments 返回非 JSON' }; }
+  if (!Array.isArray(comments)) return { unscanned: true, error: 'issue comments 不是数组' };
+  const mark = `新增：${target}`;
+  return { unscanned: false, found: comments.some((c) => String(c?.body || '').includes(mark)) };
+}
+
+// 接缝沿用本文件既有的那套（gh / send / openIssue），只补一个 cmd——
+// 「无账本 + 已有 OPEN 单 + 新对象」那条路要证明「真的发出了那条评论」，靠读源码验不了。
+// 不另造第二套注入约定：tests/hub-ask.test.js 已经在用这套。
+function escalate(action, { state, dryRun, say,
+  gh = runGh, cmd = runCmd, send = sendHubAsk, openIssue = openEscalationIssue } = {}) {
+  const key = escalateDedupKey(action);
   const marker = `[commander-inventory] ${key}`; // 与盘点体检共用查重标记
   // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
   // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
   // 账本写在本机、当场生效，没有延迟。
-  state.escalateLedger = state.escalateLedger || {};
+  // 旧键 `escalate/<原因>/<对象>` 必须先折进新键，否则 booked 找不到、会再开一张。
+  state.escalateLedger = migrateEscalateLedger(state.escalateLedger || {});
   const booked = state.escalateLedger[key];
+  // 已记单的实时状态：核不出来必须传 null（判据据此走 fail-closed，不开单）。
+  let bookedState = null;
   if (booked && booked.issue) {
-    const st = runGh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
-    if (!st.ok) { say(`  查重没查成（账本记着 #${booked.issue}，核不出状态，本轮不开单）：${action.why}`); return { ok: true, skipped: 'dedup-unscanned' }; }
-    if (String(st.out).trim() === 'OPEN') { say(`  报帅（待拍板 #${booked.issue} 已在，账本查重，不重开）：${action.why}`); return { ok: true, issue: booked.issue }; }
+    const st = gh(['issue', 'view', String(booked.issue), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    if (st.ok) bookedState = String(st.out).trim() || null;
+  }
+  // 判据是纯函数（scripts/lib/escalate-group.mjs）：四个出口分得开，测试直接喂。
+  // streak = 这条原因连续出现到第几轮（含本轮），由轮末的 reconcileEscalationRound 维护。
+  const streak = (Number(state.escalateStreak?.[action.reason]) || 0) + 1;
+  const verdict = judgeEscalation(action, { booked, bookedState, streak });
+  if (verdict.verdict === 'silent') {
+    // 「没查成」class 只进 status。判前缀不判相等——2026-09-06 相等判据漏掉
+    // dispatch-unscanned / rework-unscanned，一个缺陷刷出 6 张待拍板单。
+    say(`  没查成（静默进 status）：${action.why}`);
+    return { ok: true, silent: true };
+  }
+  if (verdict.verdict === 'unscanned') {
+    say(`  ${verdict.why}：${action.why}`);
+    return { ok: true, skipped: 'dedup-unscanned' };
+  }
+  if (verdict.verdict === 'noop') {
+    say(`  报帅（${verdict.why}，不重开也不追加）：${action.why}`);
+    // OPEN 只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
+    // 下一轮必须再走 askEscalateCard，否则机器主动问用户会永久哑掉。
+    askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
+    return { ok: true, issue: booked.issue };
+  }
+  if (verdict.verdict === 'append') {
+    // 按原因聚合：同因新对象追加进那张单，不新开（Alertmanager group_by / PagerDuty dedup_key）。
+    if (dryRun) { say(`[dry] 报帅追加进 #${booked.issue}：${verdict.target}`); return { ok: true, dryRun: true, issue: booked.issue }; }
+    const body = appendCommentBody({ target: verdict.target, objects: verdict.objects, why: action.why, at: nowIso() });
+    const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
+    ensureDir(STATE_DIR);
+    writeFileSync(bodyFile, body, 'utf8');
+    const r = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(booked.issue),
+      '--repo', REPO, '--body-file', bodyFile], 60000);
+    if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
+    // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
+    state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
+    say(`  报帅追加进 #${booked.issue}：${verdict.target}（同因不新开）`);
+    askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
+    return { ok: true, issue: booked.issue, appended: verdict.target };
+  }
+  if (booked && booked.issue && bookedState && bookedState !== 'OPEN') {
     delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
   }
   // 查重：已有 open 带此标记的单 → 不重复开
-  const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
+  const found = gh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
   let existing = null;
   let searchOk = false;
   if (found.ok) {
@@ -1351,38 +1733,114 @@ function escalate(action, { state, dryRun, say }) {
     return { ok: true, skipped: 'dedup-unscanned' };
   }
   if (existing) {
-    say(`  报帅（待拍板 #${existing} 已在，不重开）：${action.why}`);
-    askEscalateCard({ state, key, number: existing, action, dryRun, say });
+    // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。两件事都要做：
+    //   ① 把本次对象**追加到那张单上**——只写账本不留言，用户在单里永远看不到后来的对象；
+    //   ② 写回账本——不写回，下一轮又走到这里，每个新对象都当成第一次，清单永远攒不起来。
+    // 顺序不能反：留言成了才记账本。记早了而留言失败，下轮会以为说过了，那个对象就永远不会被提起。
+    const t = escalateTarget(action);
+    const prevObjs = Array.isArray(booked?.objects) ? booked.objects : [];
+    const isNew = Boolean(t) && !prevObjs.includes(t);
+    if (dryRun) {
+      say(`[dry] 报帅（待拍板 #${existing} 已在，不重开${isNew ? '；追加 ' + t : ''}）：${action.why}`);
+      return { ok: true, dryRun: true, issue: existing };
+    }
+    if (isNew) {
+      const seen = alreadyAppended({ issue: existing, target: t, gh });
+      if (seen.unscanned) {
+        // 没查成不许写账本：写了就等于宣称「这个对象已经说过」，而我们并不知道。
+        say(`  追加没查成（读不到 #${existing} 的评论，本轮不追加也不写账本，下轮再试）：${seen.error}`);
+        return { ok: true, skipped: 'append-unscanned' };
+      }
+      if (!seen.found) {
+        const body = appendCommentBody({ target: t, objects: [...prevObjs, t], why: action.why, at: nowIso() });
+        ensureDir(STATE_DIR);
+        const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
+        writeFileSync(bodyFile, body, 'utf8');
+        const put = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(existing),
+          '--repo', REPO, '--body-file', bodyFile], 60000);
+        if (!put.ok) {
+          say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
+          return { ok: false, error: put.error };
+        }
+      }
+    }
+    state.escalateLedger[key] = { issue: existing, at: nowIso(), objects: isNew ? [...prevObjs, t] : prevObjs };
+    say(`  报帅（待拍板 #${existing} 已在，不重开；${isNew ? '已追加 ' + t + '，' : ''}已写回账本）：${action.why}`);
+    askEscalateCard({ state, key, number: existing, action, dryRun, say, send });
     return { ok: true, issue: existing };
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openEscalationIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker) });
-  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso() };
+  const opened = openIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
+  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
   say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
-  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say });
+  if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
 }
-function askEscalateCard({ state, key, number, action, dryRun, say }) {
+/**
+ * 轮末收敛：连续轮计数 + 原因消失自动关单（#1063）。
+ *
+ * 判据是纯函数 reconcileEscalationRound，这里只负责取数与执行 gh 动作。
+ * 关单留言写清被哪条原因收敛——关单必须可追溯（#1063 硬边界）。
+ */
+function reconcileEscalations({ actions, situation, state, dryRun, say }) {
+  const reasonsThisRound = (actions || [])
+    .filter((a) => a && a.kind === 'escalate' && a.reason)
+    .map((a) => String(a.reason));
+  const health = situationHealth(situation);
+  state.escalateLedger = migrateEscalateLedger(state.escalateLedger || {});
+  const r = reconcileEscalationRound({
+    reasonsThisRound,
+    streak: state.escalateStreak || {},
+    ledger: state.escalateLedger,
+    allScanned: health.allScanned,
+  });
+  if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
+  if (!dryRun) state.escalateStreak = r.streak;
+  for (const item of r.toClose) {
+    if (dryRun) { say(`[dry] 收敛关单 #${item.issue}（原因 ${item.reason} 本轮已消失）`); continue; }
+    const entry = (state.escalateLedger || {})[item.key] || {};
+    const body = closeCommentBody({ reason: item.reason, objects: entry.objects, at: nowIso() });
+    ensureDir(STATE_DIR);
+    const bodyFile = join(STATE_DIR, `escalate-close-${Date.now()}.md`);
+    writeFileSync(bodyFile, body, 'utf8');
+    const closed = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'close', String(item.issue),
+      '--repo', REPO, '--comment', body, '--reason', 'completed'], 60000);
+    if (!closed.ok) { say(`  收敛关单失败（#${item.issue}，账本不动，下轮再试）：${closed.error}`); continue; }
+    delete state.escalateLedger[item.key];
+    say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
+  }
+  return { ok: true, closed: r.toClose.length };
+}
+
+// 机器主动问用户那条路（master 侧长出来的）：开单/已有单都要发卡。
+// OPEN 只免重开，不免发卡——首次发卡失败时 hubAskOnce 不会盖去重戳，下一轮还要再走一次。
+function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
   const planned = fieldsFromEscalate({
     repo: REPO, number, why: action.why, reason: action.reason, recommend: action.recommend, url: issueLink(number),
   });
   if (!planned.ok) { say(`  待拍板卡拒发：${planned.error}`); return; }
-  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun });
+  const r = hubAskOnce({ state, key: `esc:${key}`, fields: planned.fields, dryRun, send });
   say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + '待拍板卡 #' + number : '待拍板卡略：' + (r.reason || r.error)}`);
 }
-function escalateKey(a) {
-  const t = a.pr != null ? `pr-${a.pr}` : a.issue != null ? `issue-${a.issue}` : a.term ? `term-${a.term}` : 'x';
-  return `escalate/${a.reason}/${t}`;
-}
-function escalateTitle(a) { return `${a.reason}：${a.pr ? 'PR #' + a.pr : a.issue ? 'issue #' + a.issue : a.term || ''}`.trim(); }
-function escalateBody(a, marker) {
+
+// 标题只写原因，不写对象——**对象会不断增加**，写进标题第二个对象来的那一刻它就是错的。
+// 受影响清单在正文里滚动（业界形态：一条告警 + 受影响对象清单，不是每个对象一条告警）。
+function escalateTitle(a) { return String(a.reason || '').trim(); }
+function escalateBody(a, marker, verdict) {
   const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
   const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
+  const objects = (verdict && verdict.objects) || [];
   return [
+    // 首行写起因（CLAUDE.md「同一 slug 只许有一张 OPEN 单」的落法）。以前只有人开的单写，
+    // 机器开的不写——规则于是只约束了人。slug 用 reason，与去重键同源，不另起名字。
+    `起因：${a.reason}`,
+    ``,
     `指挥官报帅（#800「报帅停手」）：`,
     ``,
     `- 原因：${a.reason}`,
     `- 详情：${a.why}`,
+    // 受影响对象是**清单**，会随后续命中在评论里追加——一条告警带清单，不是一个对象一条告警。
+    objects.length ? `- 受影响：${objects.join('、')}` : '',
     a.pr ? `- PR：${prLink(a.pr)}` : a.issue ? `- issue：${issueLink(a.issue)}` : '',
     door === 'two-way'
       ? `- 门类：双向门（可翻案）——${hours} 小时无人回复，指挥官唤大脑按下面推荐项代拍并标「已代拍」`
@@ -1432,6 +1890,57 @@ function cmdScan() {
   process.exit(health.allScanned ? 0 : 2);
 }
 
+function runHubProjection({ situation, dryRun, log }) {
+  const say = (m) => log.push(m);
+  let creds;
+  try { creds = loadCredentials(DEFAULT_CREDS); } catch (e) {
+    say(`  飞书对账跳过：${e.message}`);
+    return;
+  }
+  const hubChatId = creds.hubChatId;
+  if (!hubChatId) { say('  飞书对账跳过：凭据无 hubChatId'); return; }
+  let policy;
+  try { policy = loadAskPolicy(readFileSync(join(ROOT, 'docs', 'release-policy.json'), 'utf8')); }
+  catch (e) { policy = { unscanned: `release-policy 读不了：${e.message}` }; }
+  const store = createStateStore(DEFAULT_STATE);
+  const digestState = loadDigestState();
+  const plan = planHubCycle({
+    situation, repo: REPO, hubPending: store.hubPending, policy, digestState, now: new Date(),
+  });
+  if (dryRun) {
+    say(`  飞书对账（预演）actions=${(plan.reconcile.actions || []).length} daily=${plan.daily.send ? '发' : plan.daily.why}`);
+    return;
+  }
+  const applied = applyHubCycle(plan, {
+    issueCard: (a) => {
+      const fields = pendingFromAsk(a.issue || {});
+      return runHubAsk(fields, {
+        store,
+        send: (card) => sendCardViaLarkCli({ chatId: hubChatId, card }),
+      });
+    },
+    decideCard: ({ messageId, card }) => updateCardViaLark({ messageId, card }),
+    digestLine: ({ text }) => recordBroadcast(text, { source: 'hub', now: new Date() }),
+    sendDaily: ({ card, snapshot, day }) => {
+      const r = sendCardViaLark({ chatId: hubChatId, card });
+      if (r.ok) {
+        digestState.lastSentDay = day;
+        digestState.lastSnapshot = snapshot;
+        digestState.lastMessageId = r.messageId;
+        digestState.queue = { day, items: [] };
+        saveDigestState(digestState);
+      }
+      return r;
+    },
+  });
+  if (store.save) store.save();
+  if (applied.reconcile.unscanned) say(`  飞书对账没查成：${applied.reconcile.error}`);
+  else say(`  飞书对账 ${applied.reconcile.results.length} 步`);
+  if (applied.daily.sent) say(`  日报已发 ${applied.daily.messageId}`);
+  else if (applied.daily.error) say(`  日报没发出：${applied.daily.error}`);
+  else say(`  日报未发：${applied.daily.why}`);
+}
+
 function cmdAct(argv) {
   const dryRun = argv.includes('--dry-run');
   const state = loadState();
@@ -1446,7 +1955,16 @@ function cmdAct(argv) {
   const log = [];
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
-  runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  const ran = runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  // 轮末收敛（#1063）：数连续轮 + 把本轮已不再出现的原因自动关单。必须在动作跑完之后，
+  // 因为「本轮有哪些原因」要等 decide 的动作全部落地才算数。
+  // 输入必须是 decide 的静态动作 **加上** runActions 执行中动态产生的升级动作：
+  // 派工/返工失败那条路的原因只在执行时才知道（dispatch-unscanned / rework-failed…），
+  // 只喂 decide 的数组就等于告诉收敛「这些原因本轮没出现」。
+  reconcileEscalations({
+    actions: [...actions, ...(ran.generated || [])],
+    situation, state, dryRun, say: (m) => log.push(m),
+  });
   runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
@@ -1457,6 +1975,7 @@ function cmdAct(argv) {
       if (r.sent || r.ok) { state.lastHeartbeatAt = nowIso(); log.push(`  心跳已发（${hb.reason}）`); }
     }
   }
+  runHubProjection({ situation, dryRun, log });
   if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,
@@ -1497,4 +2016,10 @@ function main() {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { buildSituation, situationHealth, escalateKey, scanStall };
+export {
+  buildSituation, situationHealth, escalate, escalateDedupKey, execOpenIssue, scanStall,
+  countInflightWorkers,
+  reapBrains,
+  alreadyAppended,
+  scanSessions, scanDesiredJobs,
+};

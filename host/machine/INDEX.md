@@ -18,6 +18,10 @@
 
 闸把仓外路径收到「家目录下两段」（`AppData` 三段）。本表按同一把钥匙写。
 
+> Linux 服务器上 `~` = `/home/orca`。这个 `orca` 是**系统用户名**，跟已退役的 Orca 工具没关系——
+> 派工树落在 `/home/orca/mirasim-worktrees/` 不代表它还在用 Orca。用户名不改（改了要动 systemd
+> 单元、家目录属主、一堆绝对路径），所以这条消歧长期有效。
+
 | 类 | 路径 | 看 |
 |---|---|---|
 | A | ~/.claude | 产品根。子项见下行，不要整目录镜像 |
@@ -35,6 +39,8 @@
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
+| D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
+| A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
@@ -43,15 +49,17 @@
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
+| D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
-| A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。`test-impact-map.mjs build` 采覆盖率+读文件记录写 `map.json`，`dao-check --affected` 读它裁剪。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。CI 没有它即退全量，是安全降级。换机重生成 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
+| A | ~/.dao/broadcast-digest.json | 飞书日报队列（#1029/#1052）。心跳/发布/熔断先入队，换日合成一张 Card 2.0 日报卡发到总控群。运行时自建，不进 git，换机重生成 |
 | A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check (23) 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
 | A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
+| D | ~/.dao/progress-watch.json | 盘面推进量看门狗账本（#1004）。`progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
@@ -59,6 +67,7 @@
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
+| E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |
 | E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
 | E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
 | E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |

@@ -1,0 +1,12 @@
+# 绿样本：常驻 + Restart=always。RestartPreventExitStatus 允许存在且不影响判定。
+
+[Unit]
+Description=ok resident
+
+[Service]
+Type=simple
+User=orca
+ExecStart=/bin/true
+Restart=always
+RestartPreventExitStatus=3
+RestartSec=5

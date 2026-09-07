@@ -151,41 +151,29 @@ export function planReviewPendingDrain(ticket) {
   const reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
-  if (!worktree) {
-    // 快马票（2026-09-05 实咬 #884/#885/#886）：活干在非 Orca 管理的树里，票上 workerWorktree 是 null。
-    // 此前这里直接判失败，三张 PR 的审官 10 小时起不来，而错误只出现在 drain 的返回里，没人看。
-    // #927 起 reviewer-create 自己会「确证无士兵树才建替身树当父卡」，所以缺树改走 create 路，不是拒绝。
-    // 注意仍然只在 worktree 缺失时走：有树就走 attach，别让快马路吞掉正常路的判据。
-    const createArgv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer];
-    if (ticket.issue) createArgv.push('--issue', String(ticket.issue));
-    return {
-      ok: true,
-      verb: 'reviewer-create',
-      argv: createArgv,
-      skipWait: true,
-      fastPath: true,
-      pr,
-      worktree: null,
-      reviewer,
-    };
-  }
-  const argv = [
-    'reviewer-attach',
-    '--pr', pr,
-    '--worktree', worktree,
-    '--reviewer', reviewer,
-    '--skip-wait',
-  ];
+  // 审官统一走 mirasim（2026-09-06 切流量第二步）。
+  //
+  // 原来这里按「票上有没有工人树」分两条路：有树 attach 到那棵树，没树才 create。
+  // 那个分岔是 orca 的世界观——审官要挂在一棵 Orca 卡管理的树上。mirasim 是「会话即卡」，
+  // 没有可 attach 的对象，**整条 attach 路在这边不存在**，所以不是改判据，是删掉一层。
+  //
+  // 为什么现在能删：mirasim 审官路径当天验过两次（PR #1013 读代码跑核验、PR #1025 判出 APPROVED
+  // 并已合并），树 HEAD 与 PR headRefOid 对得上，merge-policy 从账本恢复得回来。
+  //
+  // 不切的代价是实测出来的：dispatch 切了而审官没切，orca 树数不减反增——
+  // 17:27 又冒出一棵 `PR-1018-审官-…-2`（连编号都说明是第二次起），退役直接被逆转。
+  const argv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer, '--executor', 'mirasim'];
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
-  if (ticket.workerModel) argv.push('--model', String(ticket.workerModel));
   return {
     ok: true,
-    verb: 'reviewer-attach',
+    verb: 'reviewer-create',
     argv,
     skipWait: true,
+    fastPath: true,
     pr,
-    worktree,
+    // 票上的工人树只做记录：mirasim 审官不挂在它上面，但排障时要知道活干在哪
+    worktree: worktree || null,
     reviewer,
   };
 }

@@ -94,9 +94,9 @@ export async function triage(inbound, deps) {
 async function triageInner(inbound, deps) {
   const { rootId, repo } = inbound;
   if (!repo) {
-    // #852 总帅入口：hub 群且 hubChat 开着 → 对话路径。
+    // #852 总帅入口：hub 群或私聊，且 hubChat 开着 → 对话路径。
     // 未映射群 / hubChat 关着 → 维持旧行为：指路，不留状态。
-    if (inbound.kind === 'hub' && deps.hubChat?.enabled === true) {
+    if ((inbound.kind === 'hub' || inbound.kind === 'p2p') && deps.hubChat?.enabled === true) {
       return triageHub(inbound, deps);
     }
     return { replies: [{ rootId, text: HUB_GUIDANCE }], actions: [], state: deps.state };
@@ -426,7 +426,8 @@ export function buildHubContextBlock(context = {}) {
     } else {
       lines.push(`github 面没查成：${gh?.error || '未扫'}`);
     }
-    for (const [key, label] of [['orca', '工人树'], ['reviewPending', '复审队列'], ['stall', '卡死探测']]) {
+    // #1055：orca 运行时已退役，工人树那面再也不可能扫成——报「工人树面没查成」是永远红的噪音。
+    for (const [key, label] of [['reviewPending', '复审队列'], ['stall', '卡死探测']]) {
       const sec = s[key];
       if (sec && sec.scanned === false) lines.push(`${label} 面没查成：${sec.error || ''}`);
     }

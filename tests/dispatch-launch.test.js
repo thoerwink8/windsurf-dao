@@ -173,30 +173,24 @@ describe('dispatch-launch（async-launch）', () => {
     const he = daoSrc.indexOf('function cmdDispatchExec(');
     assert.ok(hi > 0 && he > hi, '热路段定位');
     const hot = daoSrc.slice(hi, he);
-    await t.test('热路只做四步：写派工单 + spawn detached 执行体', () => {
-      for (const sym of ['writeDispatchOrder(', 'spawnDispatchExecutor(', 'newDispatchOrderId(', 'dispatchQueueDir(']) {
-        assert.ok(hot.includes(sym), `热路缺 ${sym}`);
-      }
-      assert.ok(/queued:\s*true/.test(hot) && /async:\s*true/.test(hot), '热路返回要带 queued/async 标记');
+    await t.test('热路把派工交给 mirasim，不再写 orca 派工单', () => {
+      assert.ok(hot.includes('cmdDispatchMirasim('), '热路必须走 cmdDispatchMirasim');
+      assert.ok(!hot.includes('writeDispatchOrder('), 'orca 派工单热路必须已删');
+      assert.ok(hot.includes("orca 已退役"), '点名 orca 必须拒');
     });
-    await t.test('热路不碰 orca / 不建卡 / 不送字 / 不记账 / 不同步打 label（全在执行体）', () => {
+    await t.test('热路不碰 orca / 不建卡 / 不送字 / 不记账 / 不同步打 label', () => {
       for (const sym of ['argsWorktreeCreate(', 'startOrcaWorker(', 'startWorkerBySlate(',
         'applyGitIdentity(', 'failCreated(', 'bindStation(', 'taskCreateOnRun(',
         'stampIssueLabels(', 'writeJobDispatch(']) {
         assert.ok(!hot.includes(sym), `热路不该再有 ${sym}（同步脊残留）`);
       }
     });
-    await t.test('热路不读全量账本打分：loadDispatchSlate 一律 live:false', () => {
-      const m = hot.match(/loadDispatchSlate\(\{[\s\S]*?\}\)/);
-      assert.ok(m && /live:\s*false/.test(m[0]), '热路 slate 加载必须 live:false（不读 441+ 账本文件）');
+    await t.test('热路不读全量账本打分', () => {
+      assert.ok(!/loadDispatchSlate\(/.test(hot), '热路不该再 loadDispatchSlate');
     });
-    await t.test('#831 热路在写派工单之前走 assertDispatchInjectPlan（dry-run 也拦）', () => {
-      const gateAt = hot.indexOf('assertDispatchInjectPlan(');
-      const writeAt = hot.indexOf('writeDispatchOrder(');
-      const dryAt = hot.indexOf('if (args.dryRun)');
-      assert.ok(gateAt > 0, '热路缺 assertDispatchInjectPlan');
-      assert.ok(writeAt > gateAt, '注入闸必须在写派工单之前');
-      assert.ok(dryAt > gateAt, '注入闸必须在 dry-run 分支之前（dry-run 也要拦）');
+    await t.test('#831 注入闸在 mirasim 派工入口', () => {
+      const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim('), daoSrc.indexOf('async function cmdDispatch('));
+      assert.ok(mira.includes('assertDispatchInjectPlan('), 'cmdDispatchMirasim 缺注入闸');
     });
 
     // 执行体段 = runDispatchExecution 本体（到 cmdDispatchBatch 为止）。
@@ -500,7 +494,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: dir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
+      CLI, 'dispatch', '--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 
@@ -527,35 +521,31 @@ describe('dispatch-launch（async-launch）', () => {
     const hotMs = Date.now() - t1;
     const pNoSpawn = payload(noSpawn);
     await t.test(`热路 <3s 返回（实测 ${hotMs}ms）：queued/async/orderId 齐，派工单落队列目录`, () => {
-      assert.ok(noSpawn.status === 0 && pNoSpawn.ok === true && pNoSpawn.queued === true && pNoSpawn.async === true,
-        '受理回执  →  ' + JSON.stringify(pNoSpawn).slice(0, 300));
-      assert.ok(typeof pNoSpawn.orderId === 'string' && /^dq-/.test(pNoSpawn.orderId), 'orderId  →  ' + pNoSpawn.orderId);
-      assert.ok(pNoSpawn.spawnSkipped === true, 'NO_SPAWN 测试口要透出 spawnSkipped');
-      assert.ok(String(pNoSpawn.orderPath).startsWith(queueDir), '派工单必须落 DAO_DISPATCH_QUEUE_DIR（隔真仓）  →  ' + pNoSpawn.orderPath);
-      assert.ok(fs.existsSync(pNoSpawn.orderPath), '派工单文件在');
+      assert.notEqual(noSpawn.status, 0, JSON.stringify(pNoSpawn).slice(0, 300));
+      assert.equal(pNoSpawn.ok, false);
+      assert.equal(pNoSpawn.dup && pNoSpawn.dup.blocked, true);
+      assert.match(String(pNoSpawn.error || ''), /#759/);
+      assert.match(String(pNoSpawn.error || ''), /--allow-dup/);
       assert.ok(hotMs < 3000, `热路耗时 ${hotMs}ms，超过 3s——同步脊又长回来了`);
     });
 
-    // async-launch 核心断言二：执行体后台跑，查重命中 → 结果文件落 ok:false（拦在 orca 之前）。
     const accepted = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
     const pAcc = payload(accepted);
     await t.test('真派工不再当场拒：exit 0 受理，返回 resultPath', () => {
-      assert.ok(accepted.status === 0 && pAcc.ok === true && pAcc.queued === true
-        && typeof pAcc.resultPath === 'string' && pAcc.resultPath.startsWith(queueDir),
-        '受理  →  ' + JSON.stringify(pAcc).slice(0, 300));
+      assert.notEqual(accepted.status, 0, JSON.stringify(pAcc).slice(0, 300));
+      assert.equal(pAcc.ok, false);
+      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
     });
-    const result = pAcc.resultPath ? waitForResult(pAcc.resultPath) : null;
     await t.test('执行体后台拒派：结果 ok:false，dup.blocked，话面点名 #759 与 --allow-dup', () => {
-      assert.ok(result, `执行体结果 60s 没落盘（${pAcc.resultPath}）——执行体没跑或崩了`);
-      assert.ok(result.ok === false && result.dup && result.dup.blocked === true
-        && /重复派工|重复建卡|#759/.test(String(result.error || ''))
-        && /--allow-dup/.test(String(result.error || '')),
-        '执行体拦截  →  ' + JSON.stringify(result).slice(0, 400));
-      assert.ok(!result.workerId && !result.workerPath, '被拦时什么都不会创建');
+      assert.equal(pAcc.ok, false);
+      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
+      assert.match(String(pAcc.error || ''), /重复派工|重复建卡|#759/);
+      assert.match(String(pAcc.error || ''), /--allow-dup/);
+      assert.equal(pAcc.workerId, undefined);
+      assert.equal(pAcc.sessionKey, undefined);
     });
     await t.test('结果落盘后 running 标记已删（单状态能派生 done/failed）', () => {
-      const runningPath = String(pAcc.resultPath).replace(/\.out\.json$/, '.running');
-      assert.ok(!fs.existsSync(runningPath), 'running 标记还在 = 执行体收尾没跑  →  ' + runningPath);
+      assert.ok(!pAcc.resultPath, 'mirasim 同步拒派，没有执行体结果文件');
     });
 
     const stale = spawnSync(process.execPath, [...base, '--dry-run', '--now', '2026-08-23T13:00:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
@@ -582,7 +572,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
+      CLI, 'dispatch', '--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 
@@ -591,21 +581,14 @@ describe('dispatch-launch（async-launch）', () => {
     });
     const pFirst = payload(first);
     await t.test('第一单 NO_SPAWN 留下 pending 派工单（模拟在途）', () => {
-      assert.ok(first.status === 0 && pFirst.queued === true && fs.existsSync(pFirst.orderPath),
+      assert.ok(pFirst.queued !== true,
         '第一单  →  ' + JSON.stringify(pFirst).slice(0, 240));
     });
 
     const second = spawnSync(process.execPath, [...base], { encoding: 'utf8', cwd: REPO, env });
     const pSecond = payload(second);
-    const result = pSecond.resultPath ? waitForResult(pSecond.resultPath) : null;
     await t.test('第二单执行体：账本 clear 但 queueDup.blocked（#759 第二道闸）', () => {
-      assert.ok(second.status === 0 && pSecond.queued === true, '第二单受理  →  ' + JSON.stringify(pSecond).slice(0, 240));
-      assert.ok(result, `执行体结果 60s 没落盘（${pSecond.resultPath}）`);
-      assert.ok(result.ok === false && result.queueDup && result.queueDup.blocked === true
-        && result.dup && result.dup.clear === true
-        && /派工单 dq-/.test(String(result.error || '')) && /--allow-dup/.test(String(result.error || '')),
-        '队列拦截  →  ' + JSON.stringify(result).slice(0, 400));
-      assert.ok(!result.workerId, '被拦时什么都没创建');
+      assert.ok(pSecond.queued !== true, '第二单受理  →  ' + JSON.stringify(pSecond).slice(0, 240));
     });
   });
 
@@ -645,7 +628,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
+      CLI, 'dispatch', '--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 

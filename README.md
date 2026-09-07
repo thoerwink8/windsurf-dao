@@ -1,8 +1,8 @@
 # windsurf-dao
 
-这个仓库装一样东西：**AI 和人一起干活的协作机制**——约定、自检，以及（停派工态冻结中的）派工闭环与守卫。
+这个仓库装一样东西：**AI 和人一起干活的协作机制**——约定、自检，以及跑在 Linux 服务器上的派工闭环与守卫。
 
-1. **AI 协作约定**：根目录的 `CLAUDE.md`，一页纸写清楚 AI 在这个仓库里怎么工作——停派工态下帅直接在 master 提交推送、改完跑自检、出问题先回退、全程说人话；编排态的流程规矩收在 dispatch skill。
+1. **AI 协作约定**：根目录的 `CLAUDE.md`，一页纸写清楚 AI 在这个仓库里怎么工作——改动在 worktree 里做、改完跑自检、出问题先回退、全程说人话；派工链上的流程规矩收在 dispatch skill。
 2. **一条自检命令**：`node scripts/dao-check.mjs`，检查仓库现在好不好——测试跑不跑得过、技能能不能加载、密钥有没有不小心进 git。退出码 0 就是好，非 0 就是有要修的事。
 
 历史文档（调研底稿、证据稿、旧拍板档案、项目模板、道德经源文本）已归档到私有仓 `thoerwink8/windsurf-dao-memory` 的 `docs-archive/`（2026-08-22 清零收口）；本机接上 memory Junction 后即可随时翻阅，见 `NEW-MACHINE.md`「接上 memory」节。
@@ -14,7 +14,7 @@
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
 | `scripts/dao.mjs` | 派工闭环的命令入口；盘面子命令 `board-archive` / `board-reset`（重测派单前的存档与清盘）：`board-archive` 全量存档卡片/终端/workers/Run/信箱到本机 `~/.dao/board-archive/`（不进 git），`board-reset` 默认 dry-run 只列将删的卡，加 `--apply` 先存档再删盘 |
-| `scripts/agent-stall-watch.mjs` | 服务器撞限流/卡弹窗探测（#833）：读 `orca terminal list` 屏面指纹，连红后换人/报帅。本机 `watchdog.mjs` / `flow.mjs` / 守卫保活 #807 已删 |
+| `scripts/progress-watch.mjs` | 卡死发现的唯一定时面：读指挥官态势快照，连续 N 轮同一对象同一状态即判卡，叫醒帅位。2026-09-06 用户拍板删掉屏面指纹整层（`agent-stall-watch.mjs` 及其自动换人），改用超时判死，不猜执行体屏幕上写了什么 |
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/global-CLAUDE.md` | 用户级 `~/.claude/CLAUDE.md` 的真相源副本：换机跑 `node scripts/onboard.mjs` 自动同步（漂移由 SessionStart 哨兵报），git 不带机器配置 |

@@ -618,11 +618,8 @@
     }
   ],
   "执行体": {
-    "默认": "orca",
-    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider；orca 通过验收后退役。旗标 --executor：reviewer-create/worker-done（卡 C）、dispatch/worktree-create/worker-start（卡 B）",
-    "orca": {
-      "说明": "现役运行时：Orca worktree + terminal"
-    },
+    "默认": "mirasim",
+    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。orca 产品面已退役，执行体只剩 mirasim。",
     "mirasim": {
       "钉版本": "0.0.282",
       "族": "mirasim-server",

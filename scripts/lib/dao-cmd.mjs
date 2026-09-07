@@ -638,18 +638,8 @@ export function isCiEnv(env = process.env) {
   return env.GITHUB_ACTIONS === 'true' || env.CI === 'true';
 }
 
-export function orcaHelpAvailable(spawn = spawnSync) {
-  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
-  if (r.error) {
-    const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
-      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
-    return { ok: false, missing, error: msg };
-  }
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) return { ok: false, missing: false, error: 'orca --help 无输出' };
-  return { ok: true, missing: false };
+export function orcaHelpAvailable() {
+  return { ok: false, missing: true, error: 'orca 已退役' };
 }
 
 /**
@@ -668,17 +658,8 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 /** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
 const LIVE_HELP_CACHE = new Map();
 
-export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const key = parts.join(' ');
-  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
-  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
-  if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
-  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
-  return text;
+export function fetchOrcaHelp(cmd) {
+  throw new Error(`orca 已退役，${cmd} --help 不再有对象`);
 }
 
 export function helpFixturePath(cmd, root = ROOT) {
@@ -699,28 +680,7 @@ export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = RO
 }
 
 function spawnOrcaHelpAsync(cmd) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  return new Promise((resolve, reject) => {
-    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.on('error', reject);
-    child.on('close', (status) => {
-      const text = `${stdout}${stderr}`;
-      if (status !== 0 && !String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
-        return;
-      }
-      if (!String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 无输出`));
-        return;
-      }
-      resolve(text);
-    });
-  });
+  return Promise.reject(new Error(`orca 已退役，${cmd} --help 不再有对象`));
 }
 
 /**
@@ -816,11 +776,13 @@ export {
 // #762 拆分：git / gh 执行域移到 scripts/lib/dispatch/git.mjs（保持对外 API 不变）
 import {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
+  listedMergeable, fetchPrMergeable, resolveMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
   parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';
 export {
   gitCapture, gitHeadOid, gitBranchName, gitRemoteOriginUrl, assessPrMergeable,
+  listedMergeable, fetchPrMergeable, resolveMergeable,
   trialMergeMaster, verifyReviewerTree, verifyReviewerFiles, parseGhPullFiles,
   parseDiffNameStatus, runGh, originRefForBranch, prepareReviewerOriginRef, checkoutOriginRef,
 } from './dispatch/git.mjs';
@@ -1010,7 +972,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 // ── CLI 参数 ────────────────────────────────────────────────────────
 
 export const VERBS = [
-  'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
+  'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
@@ -1021,7 +983,9 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
-  start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
+  'session-read': new Set(['--session', '--json', '--help', '-h']),
+  'session-stop': new Set(['--session', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
@@ -1036,12 +1000,16 @@ export const FLAGS_BY_VERB = {
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
     '--issue', '--comment', '--json', '--help', '-h',
+    // #880 卡 B：mirasim 路径只吃 --executor/--branch/--repo，卡名闸在分岔之后。
+    '--executor', '--branch', '--repo',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--run', '--agent', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
+    // #880 卡 B：mirasim 路径要 --executor/--spec（会话即卡，没有 --task/--terminal）。
+    '--executor', '--spec',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
@@ -1053,7 +1021,7 @@ export const FLAGS_BY_VERB = {
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
-    '--executor', '--branch', '--repo', '--json', '--help', '-h',
+    '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
@@ -1154,9 +1122,16 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
-                  # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
+                  # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
+  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--dry-run]
+                  # #1055：mirasim 一步到位起一次性会话（prompt 就是注入，不要 start+send 两步）；返回 sessionKey
+  session-read --session <sessionKey>
+                  # #1055：同步读 mirasim 会话（phase / text）；commander reapBrains 的取数路
+  session-stop --session <sessionKey>
+                  # #1055：强关 mirasim 会话；commander 超龄回收走这条
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+                  # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
@@ -1211,6 +1186,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色>) [--confirm] [--retry-of <id>]
+                  # mirasim：worker-start --executor mirasim --worktree <树路径> --spec <文> --model <id> --reviewer <id> --confirm（不要 --task；会话即卡，#884 P1）
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]

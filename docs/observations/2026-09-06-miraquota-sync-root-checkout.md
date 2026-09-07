@@ -111,3 +111,5 @@ server-check ⑳（`scripts/server-check.mjs:1068-1085`）同样只扫 `host/mac
 删掉「有提权风险的单元 = 文件躺在本仓 `host/machine/systemd/`，且 ExecStart 指进 `/srv/projects/windsurf-dao`」这一层。
 
 闸对 `/etc/systemd/system/` 里每一个 `ExecStart` 指向 orca 可写路径的单元查 `User=`：没写或写 root 就红，扫出 0 个也红。结构判据已经在 ⑱ 的 `isOurUnit(fragmentPath)` 里（`scripts/server-check.mjs:714-720`），提权闸复用同一把尺，不要另维护一份目录白名单。单元本身加 `User=orca`（以及生成它的 `deploy-linux.mjs` 模板），是 `miraquota-win` 的事——本仓不写那份装法，但本仓的闸必须能看见这台机器上正在跑的那一份。
+
+处置：#1051（四条同一形状「装了但没生效」，收进伞单一起判）
