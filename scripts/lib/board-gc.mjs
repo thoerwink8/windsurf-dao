@@ -293,7 +293,7 @@ function classifyCandidate(entry, card, branchState) {
 /**
  * 扫一轮盘面，判每张顶层卡是「僵尸 / 留着 / 有风险 / 没查成」。
  *
- * @param worktrees        orca ps 的 worktrees
+ * @param worktrees        mirasim 树面（scanMirasimTrees 的 worktrees）
  * @param aliveWorktreeIds Set：至少有一个会话判 active 的卡 id（由 liveness 算好传进来，
  *                         本模块不碰活性判据——一把尺只在一处）
  * @param prState          PR 号 → 'OPEN'|'MERGED'|'CLOSED'；查不到就别放进来（放进来的都算查成了）
