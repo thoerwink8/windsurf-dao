@@ -252,6 +252,8 @@ describe('mirasimWorkerDone 编排', () => {
     assert.equal(res.ok, true);
     assert.equal(res.action, 'created');
     assert.ok(reg.store.get('883').sessionKey);
+    // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
+    assert.equal(reg.store.get('883').reviewer, 'gpt-5.6-luna');
     assert.equal(rt.calls.start.length, 1);
   });
 

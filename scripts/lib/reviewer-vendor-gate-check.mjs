@@ -9,7 +9,9 @@ import { join } from 'node:path';
 const GATE_CALL = /assertCrossVendor\s*\(/;
 const REFUSE_CALL = /refuseIfSameVendor\s*\(/;
 const NEXT_WORKER = /nextReviewerAfter\s*\([\s\S]{0,240}workerId/;
-const CAP_WORKER = /planCapacitySwitch\s*\([\s\S]{0,240}workerId/;
+// #1122：换厂判据从 planCapacitySwitch（按点将台卡名）换成 judgeCapacityFailover（按死因原文）。
+// 仍要求换人时把 workerId 传下去——#679 的异厂要求靠它，漏了就会换到工人同一厂。
+const CAP_WORKER = /judgeCapacityFailover\s*\([\s\S]{0,600}workerId/;
 
 function chunk(src, re) {
   const m = String(src || '').match(re);
@@ -69,10 +71,14 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
   if (!nextFn) problems.push('找不到 nextReviewerAfter');
   else if (!/workerId/.test(nextFn)) problems.push('nextReviewerAfter 不跳过工人那一厂');
 
-  const capFn = chunk(slotSrc, /export function planCapacitySwitch\b[\s\S]*/);
-  if (!capFn) problems.push('找不到 planCapacitySwitch');
-  else if (!CAP_WORKER.test(capFn) && !/workerId/.test(capFn)) {
-    problems.push('planCapacitySwitch 换人没带 workerId');
+  // #1122：planCapacitySwitch（点将台卡名那一套）已删，换厂判据换成同文件的 judgeCapacityFailover。
+  // 这里验的是它**没有退化成一个谁都能传的旗标**——例外必须靠死因原文与顺位算出来的下一位成立。
+  const capFn = chunk(slotSrc, /export function judgeCapacityFailover\b[\s\S]*/);
+  if (!capFn) problems.push('找不到 judgeCapacityFailover');
+  else {
+    if (!/deadError/.test(capFn)) problems.push('judgeCapacityFailover 没核死因原文（例外成了裸旗标）');
+    if (!/nextReviewerAfter/.test(capFn)) problems.push('judgeCapacityFailover 没按顺位算下一位（可跳级点名）');
+    if (!CAP_WORKER.test(capFn)) problems.push('judgeCapacityFailover 换人没带 workerId');
   }
 
   return { ok: problems.length === 0, unscanned: false, problems };

@@ -99,20 +99,54 @@ export function parseWorkerModelFromCard(name) {
   return { ok: true, model: m[1] };
 }
 
-/** capacity 四档续命之后：能换人就换，认不出审官卡才报帅。#679：跳过工人那一厂。 */
-export function planCapacitySwitch({ displayName, models = [], passerIds = [], workerId, order = [] } = {}) {
-  const parsed = parseReviewerCardName(displayName);
-  if (!parsed.ok) {
-    return { ok: false, action: 'escalate', error: parsed.error };
+// planCapacitySwitch 已删（#1122）：它按点将台卡名（`PR-#N 审官·模型`）解析，
+// 而 #1115 删掉 orca 派工脊后 mirasim 路根本没有卡，它也就没有了任何生产调用方——
+// 只剩单测和一个「验它还存在」的检查器在维持它活着的假象。
+// 换厂的判据换成下面这个 judgeCapacityFailover：不认卡名，只认死因原文。
+
+// 死于「这一针根本没跑成」的两类原文，2026-09-07 从真会话上抄的：
+//   "Selected model is at capacity. Please try a different model."   上游满载
+//   "pi turn stalled past 30 minutes"                                 回合看门狗
+// 只认这两类。别的失败（判红、写错、被拒）不是换厂的理由——换厂治的是「这一厂现在跑不动」，
+// 不是「这个模型审得不好」。判据写宽了，换厂就会变成挑模型的后门。
+const CAPACITY_DEATH_RE = /at capacity|turn stalled|rate limit|too many requests|\b429\b|overloaded/i;
+
+/**
+ * 撞满载换厂的凭证成不成立（#1122，2026-09-07 用户拍板开的例外）。纯判据，不碰 IO。
+ *
+ * 例外**不是一个旗标**：谁都能传的旗标 = 谁都能绕开审官位约束去点一个弱模型。
+ * 三件都要过：① 死因是满载/看门狗那一类；② 算得出下一位；③ 请求的就是算出来那一位。
+ * #679 的异厂要求由 nextReviewerAfter 内部的 assertCrossVendor 继续守着。
+ */
+export function judgeCapacityFailover({ requested, capacityFailover } = {}) {
+  const f = capacityFailover;
+  if (!f || typeof f !== 'object') return { ok: false, error: '没交换厂凭证' };
+
+  const deadError = f.deadError == null ? '' : String(f.deadError).trim();
+  if (!deadError) {
+    // 没给死因和「死因不是满载」不是一回事：前者是没查成，后者是查过不该换。
+    return { ok: false, unscanned: true, error: '没给上一位审官的死因原文（没查成，不许猜着放行）' };
   }
-  if (workerId == null || String(workerId).trim() === '') {
-    return { ok: false, action: 'escalate', unscanned: true, error: '没查成工人模型，不许换人' };
+  if (!CAPACITY_DEATH_RE.test(deadError)) {
+    return { ok: false, error: `上一位的死因不是满载/看门狗那一类（${deadError.slice(0, 80)}）` };
   }
+  // 没查成工人模型就不许换：nextReviewerAfter 只在拿得到 workerId 时才跑同厂闸，
+  // 不给它就会安静地按纯顺位挑下一位，而那一位可能正是工人那一厂——#679 被绕开且无声。
+  if (f.workerId == null || String(f.workerId).trim() === '') {
+    return { ok: false, unscanned: true, error: '没查成工人模型，不许换人（换过去可能撞上工人同厂）' };
+  }
+
   const next = nextReviewerAfter({
-    currentId: parsed.model, models, passerIds, workerId, order,
+    currentId: f.deadModelId,
+    models: f.models || [],
+    passerIds: f.passerIds || [],
+    workerId: f.workerId,
+    order: f.order || [],
   });
-  if (!next.ok) {
-    return { ok: false, action: 'escalate', error: next.error, exhausted: !!next.exhausted };
+  if (!next.ok) return { ok: false, unscanned: next.unscanned === true, error: next.error };
+  if (String(requested) !== String(next.next)) {
+    // 不许跳级：算出来该换 A，却来点名 B，那就是绕开顺位挑模型。
+    return { ok: false, error: `按顺位该换 ${next.next}，请求的却是 ${requested}——不许跳级点名` };
   }
-  return { ok: true, action: 'switch', pr: parsed.pr, from: parsed.model, to: next.next };
+  return { ok: true, why: `上一位 ${f.deadModelId} 死于「${deadError.slice(0, 60)}」，按顺位换 ${next.next}` };
 }

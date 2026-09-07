@@ -817,19 +817,30 @@ describe('dianjiangtai', () => {
       const n = slot.nextReviewerAfter({ currentId: "kimi-k3", models, passerIds: ["gpt-5.6-sol", "kimi-k3"], order: REVIEWER_ORDER });
       assert.ok(n.ok === false && n.exhausted === true, '选型序走完 → 没法再换  →  ' + JSON.stringify(n));
     });
-    await t.test('planCapacitySwitch 认审官卡并换人', () => {
-      const p = slot.planCapacitySwitch({
-        displayName: "PR-#664 审官·gpt-5.6-sol",
-        models,
-        passerIds: ["gpt-5.6-sol", "kimi-k3"],
-        workerId: "grok-4.6",
-        order: REVIEWER_ORDER,
+    // #1122：planCapacitySwitch（按点将台卡名）已删，换厂改按死因原文判。
+    await t.test('judgeCapacityFailover 凭死因换人', () => {
+      const p = slot.judgeCapacityFailover({
+        requested: "kimi-k3",
+        capacityFailover: {
+          deadModelId: "gpt-5.6-sol",
+          deadError: "Selected model is at capacity. Please try a different model.",
+          models,
+          passerIds: ["gpt-5.6-sol", "kimi-k3"],
+          workerId: "grok-4.6",
+          order: REVIEWER_ORDER,
+        },
       });
-      assert.ok(p.ok && p.action === "switch" && p.to === "kimi-k3" && p.pr === 664, 'planCapacitySwitch 认审官卡并换人  →  ' + JSON.stringify(p));
+      assert.equal(p.ok, true, 'judgeCapacityFailover 凭死因换人  →  ' + JSON.stringify(p));
     });
-    await t.test('planCapacitySwitch 卡名不是审官 → 报帅', () => {
-      const p = slot.planCapacitySwitch({ displayName: "#452 - 看门狗正式版", models, passerIds: ["gpt-5.6-sol"], order: REVIEWER_ORDER });
-      assert.ok(p.ok === false && p.action === "escalate", 'planCapacitySwitch 卡名不是审官 → 报帅  →  ' + JSON.stringify(p));
+    await t.test('judgeCapacityFailover 死因不是满载 → 拒', () => {
+      const p = slot.judgeCapacityFailover({
+        requested: "kimi-k3",
+        capacityFailover: {
+          deadModelId: "gpt-5.6-sol", deadError: "审官判红",
+          models, passerIds: ["gpt-5.6-sol"], workerId: "grok-4.6", order: REVIEWER_ORDER,
+        },
+      });
+      assert.equal(p.ok, false, 'judgeCapacityFailover 死因不是满载 → 拒  →  ' + JSON.stringify(p));
     });
     function policyProviderOf(modelId) {
       const m = (policy.models || []).find(x => x && x.id === modelId);

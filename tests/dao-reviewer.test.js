@@ -75,6 +75,10 @@ describe('dao 审官与完工', () => {
       const seg = daoSrc.slice(i, i + 9000);
       assert.match(seg, /outcome: 'reused'/);
       assert.match(seg, /judgeReviewerSessionReuse/);
+      // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
+      assert.match(seg, /reviewer: picked\.modelId/);
+      assert.match(daoSrc, /readReviewerDeathNote/);
+      assert.match(seg, /capacityFailover/);
       assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
         'refused-existing 不该再直接 fail 死循环');
     });

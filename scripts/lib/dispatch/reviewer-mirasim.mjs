@@ -427,7 +427,7 @@ export async function mirasimWorkerDone({
     });
     if (!created.ok) return { ...created, stage: `create:${created.stage}`, round: theRound, reviewCount, reuse };
     const w = writeReviewerRecord({
-      registry, pr, created, round: theRound, prevSessionKey: sessionKey || null, now,
+      registry, pr, created, round: theRound, prevSessionKey: sessionKey || null, now, reviewerModel,
     });
     if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, reuse };
     return {
@@ -506,6 +506,8 @@ export async function mirasimWorkerDone({
     round: theRound, headRefName: prHead.headRefName, expectedOid: prHead.expectedOid,
     treeHead, ts: now(),
   });
+  // 注：这里 `...record` 打头，所以上一轮记下的 reviewer 会被带过来——复审换不换人由调用方决定，
+  // 不在这里猜。#1122 的换厂链读的就是这一栏。
   if (!refreshed || refreshed.ok !== true) {
     return {
       ok: false, stage: 'rework:registry', round: theRound, reviewCount, sessionKey, treePath, treeSync,
@@ -540,7 +542,7 @@ export async function mirasimWorkerDone({
     prompt: reworkPrompt || prompt, now,
   });
   if (!created.ok) return { ...created, stage: `rework:${created.stage}`, round: theRound, reviewCount, treeSync };
-  const w = writeReviewerRecord({ registry, pr, created, round: theRound, prevSessionKey: sessionKey, now });
+  const w = writeReviewerRecord({ registry, pr, created, round: theRound, prevSessionKey: sessionKey, now, reviewerModel });
   if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, treeSync };
   return { ok: true, action: 'reworked-new', round: theRound, reviewCount, session: created, registryWrite: w.write, treeSync };
 }
@@ -567,9 +569,11 @@ export async function peekReviewerSession(runtime, sessionKey) {
  * 于是重试会把「没持久化」当成「没有 session」再起第二个会话。这里把写失败翻成 ok:false，
  * 并把已起的 sessionKey 一并交出——人能顺着这个 key 收摊，不至于起了会话又丢了线头。
  */
-function writeReviewerRecord({ registry, pr, created, round, prevSessionKey, now }) {
+function writeReviewerRecord({ registry, pr, created, round, prevSessionKey, now, reviewerModel }) {
   const rec = {
     pr: String(pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+    // reviewer：#1122 换厂链靠它认「上一位是谁」。漏了它链子就卡在第一格（见 dao.mjs 同名注释）。
+    ...(reviewerModel ? { reviewer: reviewerModel } : {}),
     round, headRefName: created.headRefName, expectedOid: created.expectedOid,
     treeHead: created.treeHead || null,
     ...(prevSessionKey ? { prevSessionKey } : {}),
