@@ -42,6 +42,14 @@ const PR_HEAD = {
   mergeable: 'MERGEABLE',
 };
 
+function prPayload(n, extra) {
+  const issue = {
+    42: '565', 43: '568', 44: '569', 45: '570', 46: '565', 47: '571', 48: '572', 49: '573',
+  }[String(n)];
+  const labels = issue ? (ISSUE_LABELS[issue] || []) : [];
+  return { reviews: [], labels, ...PR_HEAD, ...extra };
+}
+
 if (args[0] === 'issue' && args[1] === 'view' && args[3] === '--json' && args[4] === 'labels') {
   const n = args[2];
   if (n === '999') {
@@ -76,79 +84,64 @@ if (args[0] === 'label' && args[1] === 'create') {
 if (args[0] === 'pr' && args[1] === 'view') {
   const n = args[2];
   if (n === '42') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '修注入轮询回归',
       body: 'Closes #565\n验收：测试 306 过',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '41') {
-    process.stdout.write(JSON.stringify({ title: '无署名', body: '改动：修复登录', reviews: [], ...PR_HEAD }));
+    process.stdout.write(JSON.stringify(prPayload(n, { title: '无署名', body: '改动：修复登录' })));
     process.exit(0);
   }
   if (n === '43') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '无审官 label',
       body: 'Closes #568',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '44') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '两个审官 label',
       body: 'Closes #569',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '46') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '返工轮',
       body: 'Closes #565',
       reviews: [{ id: 1, body: '判定：红 1 项' }],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '45') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '无工人模型',
       body: 'Closes #570',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '47') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '同厂审官',
       body: 'Closes #571',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '48') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '快马单：执行者是帅位本体，无 reviewer/* label',
       body: 'Closes #572',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   if (n === '49') {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(prPayload(n, {
       title: '家族查不出的假 id',
       body: 'Closes #573',
-      reviews: [],
-      ...PR_HEAD,
-    }));
+    })));
     process.exit(0);
   }
   process.stderr.write(`fake-gh: 未预期的 PR ${n}`);

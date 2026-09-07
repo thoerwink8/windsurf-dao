@@ -1,0 +1,193 @@
+// tests/pr-label-truth.test.js —— #1116：真相源 = PR 自己的 label
+//
+// 用户 2026-09-07 拍板删掉「从 issue 标签反推派工决定」这一层。
+// 决定在 dispatch 写一次（model + reviewer + branch）；消费方按 PR head 分支打标，
+// 之后只读 PR label。读不到就拒，不回退去读 issue、不猜家族。
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WD = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'worker-done.mjs').replace(/\\/g, '/'));
+const CARD = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'card.mjs').replace(/\\/g, '/'));
+const ROOT = path.join(__dirname, '..');
+
+function ghLog() {
+  const calls = [];
+  const runGh = (args) => {
+    calls.push(args.slice());
+    return { ok: true, out: '{}' };
+  };
+  return { calls, runGh };
+}
+
+describe('pickWorkerDispatchByBranch', () => {
+  it('按分支精确命中工人 dispatch，带 reviewer', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const events = [
+      { type: 'job.dispatch', identity: '审官', branch: 'dao-1116', model: 'gpt-5.6-luna' },
+      { type: 'job.dispatch', identity: '工人', branch: 'dao-other', model: 'kimi-k3', reviewer: 'x' },
+      { type: 'job.dispatch', identity: '工人', branch: 'dao-1116', model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码' },
+    ];
+    const got = pickWorkerDispatchByBranch(events, 'dao-1116');
+    assert.equal(got.ok, true);
+    assert.equal(got.model, 'grok-4.6');
+    assert.equal(got.reviewer, 'gpt-5.6-luna');
+  });
+
+  it('查不到 → 需人工打标，不猜', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const none = pickWorkerDispatchByBranch([], 'hand-opened');
+    assert.equal(none.ok, false);
+    assert.equal(none.state, 'none');
+    assert.match(none.error, /需人工打标/);
+    const unscanned = pickWorkerDispatchByBranch(null, 'dao-1');
+    assert.equal(unscanned.state, 'unscanned');
+  });
+});
+
+describe('stampPrLabelsFromDispatch', () => {
+  it('按 head 分支打 model/* reviewer/*，gh 序列没有 issue view', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const { ensureRepoLabels } = await CARD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x', body: '署名 issue #1116', labels: [], headRefName: 'dao-1116',
+          }),
+        };
+      }
+      if (args[0] === 'label' && args[1] === 'list') {
+        return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }]) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '1118',
+      runGh,
+      events: [{
+        type: 'job.dispatch', identity: '工人', branch: 'dao-1116',
+        model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码',
+      }],
+      ensureLabels: ensureRepoLabels,
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.ok(r.labels.includes('model/grok-4.6'));
+    assert.ok(r.labels.includes('reviewer/gpt-5.6-luna'));
+    assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), true);
+    assert.equal(calls.some((a) => a.includes('model/grok-4.6')), true);
+    assert.ok(!calls.some((a) => a[0] === 'issue'), JSON.stringify(calls));
+  });
+
+  it('已有同名 label 幂等，不再 edit', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x', body: '署名 issue #1',
+            labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }],
+            headRefName: 'dao-1',
+          }),
+        };
+      }
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '1',
+      runGh,
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-1', model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
+    });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.add, []);
+    assert.ok(!calls.some((a) => a[1] === 'edit'));
+  });
+
+  it('判别力：把打标事件拿掉，起审官当场红', async () => {
+    const { stampPrLabelsFromDispatch, resolveReviewerFromPr, resolveWorkerFromPr } = await WD;
+    const runGh = (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: '[cc] 手开', body: '署名 issue #1070', labels: [], headRefName: 'hand-1070',
+          }),
+        };
+      }
+      throw new Error('未预期 ' + args.join(' '));
+    };
+    const stamped = stampPrLabelsFromDispatch({ pr: '1070', runGh, events: [] });
+    assert.equal(stamped.ok, false);
+    assert.match(stamped.error, /需人工打标/);
+    const rev = resolveReviewerFromPr({ pr: '1070', runGh });
+    assert.equal(rev.ok, false);
+    assert.match(rev.error, /需人工打标/);
+    const worker = resolveWorkerFromPr({ pr: '1070', runGh });
+    assert.equal(worker.ok, false);
+    assert.match(worker.error, /需人工打标/);
+  });
+});
+
+describe('选型路径零残留', () => {
+  it('四处删除在仓内 grep 零命中（生产代码）', () => {
+    const banned = [
+      'collectIssueLabelsFromPr',
+      'vendorFamilyFromHostPrefix',
+      'HOST_PREFIX_VENDOR_FAMILY',
+      'function uniqueNames',
+    ];
+    const hits = [];
+    const walk = (dir) => {
+      for (const name of fs.readdirSync(dir)) {
+        if (name === 'node_modules' || name === '.git') continue;
+        const p = path.join(dir, name);
+        const st = fs.statSync(p);
+        if (st.isDirectory()) walk(p);
+        else if (/\.(mjs|js|md)$/.test(name) && !name.includes('CHANGELOG')) {
+          const text = fs.readFileSync(p, 'utf8');
+          for (const needle of banned) {
+            if (text.includes(needle) && !p.includes(`${path.sep}tests${path.sep}`)) {
+              hits.push(`${p}: ${needle}`);
+            }
+          }
+        }
+      }
+    };
+    walk(path.join(ROOT, 'scripts'));
+    walk(path.join(ROOT, 'host'));
+    assert.deepEqual(hits, [], hits.join('\n'));
+  });
+
+  it('ready-queue-check 的 linkedIssueNumbers 是 re-export，不是第二份正则', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'ready-queue-check.mjs'), 'utf8');
+    assert.match(src, /import \{ linkedIssueNumbers \} from '\.\/dispatch\/worker-done\.mjs'/);
+    assert.doesNotMatch(src, /const CLOSES_RE/);
+    assert.doesNotMatch(src, /export function linkedIssueNumbers/);
+  });
+
+  it('job.dispatch schema 有 reviewer 与 branch', () => {
+    const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'schemas', 'events.schema.json'), 'utf8'));
+    const variants = schema.oneOf || schema.anyOf || [];
+    const job = variants.find((x) => x.title === 'job.dispatch');
+    assert.ok(job, 'schema 缺 job.dispatch');
+    const props = job.allOf[1].properties;
+    assert.ok(props.reviewer, 'schema 缺 reviewer');
+    assert.ok(props.branch, 'schema 缺 branch');
+  });
+
+  it('mirasim 派工写口带 reviewer + branch', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'dao.mjs'), 'utf8');
+    const fn = src.slice(src.indexOf('async function cmdDispatchMirasim'), src.indexOf('async function cmdDispatch(args)'));
+    assert.match(fn, /reviewer: args\.reviewer/);
+    assert.match(fn, /branch,/);
+  });
+});

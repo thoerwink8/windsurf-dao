@@ -56,8 +56,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
     闸过了再 `node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`。合完进第 2 步。
   - `m=manual`（例外，前言带 `r=` 理由）：**你不许合**。判绿后先把 PR 转 draft（机器可读的「禁止合并」态）：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，然后在 review 正文写「需人工合并，理由：<r= 的值>」，交帅合并。
-  - 合并前（两条路都跑）：`node scripts/dao.mjs pr-sync-labels --pr <PR号>`——把署名 issue 的 `model/*` `type/*` label
-    同步到 PR（#564）；非零退出 = 没同步成，查报错补上再合并，不许带空 label 合。
+  - 合并前（两条路都跑）：`node scripts/dao.mjs pr-sync-labels --pr <PR号>`——按 PR head 分支从账本打 `model/*` `type/*` `reviewer/*` 到 PR（#1116；查不到需人工打标，不读 issue）；非零退出 = 没打成，查报错补上再合并，不许带空 label 合。
 
 ### 2. 收尾（mirasim 版：无 orchestration 结算）
 

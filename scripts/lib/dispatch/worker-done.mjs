@@ -1,8 +1,9 @@
 // scripts/lib/dispatch/worker-done.mjs —— 完工结算 + label 选型域（#762 拆分）
 //
 // 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工，首审才建审官。
-// label 记「决定」：dispatch 成功时把 model/<模型> type/<角色> reviewer/<审官>
-// 打到目标 issue；工人完工时用 pickReviewer / requireWorkerModel 复算。
+// 决定在 dispatch 那一刻完整落账（model + reviewer + branch）；PR 上的
+// model/* / reviewer/* 是给人看、也是选型唯一真相源（#1116）。
+// 选型只读 PR 自己的 label——不读 issue、不从宿主前缀猜家族。
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
@@ -22,15 +23,11 @@ function labelNameOf(item) {
   return '';
 }
 
-/** 一张 PR 署两张单会把同一份 model/* / reviewer/* 收集两遍；同名不是歧义。 */
-function uniqueNames(names) {
-  return [...new Set(names)];
-}
-
 /**
  * 从 label 列表读出唯一的审官模型。无 IO、可复算。
  * 三态必须输出不同的话：查到一个 / 没有 reviewer/* / 有多个。
  * 后两者都算没查成，不许猜一个。没拿到列表（null/非数组）和「扫完 0 条」也要分开。
+ * #1116：真相源是一张 PR 自己的 label，不再对多源拼接做去重。
  */
 export function pickReviewer(labels) {
   if (labels == null || !Array.isArray(labels)) {
@@ -40,9 +37,9 @@ export function pickReviewer(labels) {
       error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
     };
   }
-  const hits = uniqueNames(labels
+  const hits = labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length));
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length);
   if (hits.length === 0) {
     return {
       ok: false,
@@ -73,9 +70,9 @@ export function pickModel(labels) {
   if (labels == null || !Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
   }
-  const hits = uniqueNames(labels
+  const hits = labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length));
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length);
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
   }
@@ -108,78 +105,161 @@ export function requireWorkerModel(labels) {
   return { ...pick, error: `${pick.error}，拒绝起审官` };
 }
 
-export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
+/** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
+ * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。
+ * #1116：仓里原先两份正则（本文件认「关联」，ready-queue-check 不认）收成这一份。 */
+export function linkedIssueNumbers(text) {
+  const found = [];
+  const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const t = Number(m[1]);
+    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
+  }
+  return found;
+}
+
+function parseJsonOut(raw, what) {
+  try { return { ok: true, value: JSON.parse(raw) }; }
+  catch { return { ok: false, error: `${what} 返回非 JSON：${String(raw).slice(0, 120)}` }; }
+}
+
+/** 只读一张 PR 自己的 label + 标题/正文（给署名 issue 发完工 comment 用）。不读 issue。 */
+export function collectPrLabels({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
-  if (!n) return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没给 PR 号' };
+  if (!n) return { ok: false, unscanned: true, error: 'collectPrLabels 没给 PR 号' };
   if (typeof runGh !== 'function') {
-    return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没拿到 gh 执行器（没查成，不许猜）' };
+    return { ok: false, unscanned: true, error: 'collectPrLabels 没拿到 gh 执行器（没查成，不许猜）' };
   }
-  const view = runGh(['pr', 'view', n, '--json', 'title,body']);
+  const view = runGh(['pr', 'view', n, '--json', 'title,body,labels,headRefName']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
-  let meta;
-  try { meta = JSON.parse(view.out); }
-  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
-  const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
-  if (!refs.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 issue label（没查成，不许猜）` };
+  const parsed = parseJsonOut(view.out, `gh pr view #${n}`);
+  if (!parsed.ok) return { ok: false, unscanned: true, error: parsed.error };
+  const meta = parsed.value;
+  if (!meta || !Array.isArray(meta.labels)) {
+    return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 labels 数组（没查成，不许当扫完 0 条）` };
   }
-  const collected = [];
-  for (const issueNum of refs) {
-    const iv = runGh(['issue', 'view', String(issueNum), '--json', 'labels']);
-    if (!iv.ok) return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 失败：${iv.error}` };
-    let parsed;
-    try { parsed = JSON.parse(iv.out); }
-    catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
-    // 缺字段 / null / 非数组 = 没查成，不是「扫完 0 条」。把它们归一成 []
-    // 会让宿主前缀兜底把「没查成」变成「查过了是 claude」（PR #1079 审官红项 2）。
-    if (!parsed || !Array.isArray(parsed.labels)) {
-      return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 缺 labels 数组（没查成，不许当扫完 0 条）` };
-    }
-    const names = parsed.labels.map(labelNameOf).filter(Boolean);
-    collected.push(...names);
+  const labels = meta.labels.map(labelNameOf).filter(Boolean);
+  const title = String(meta.title || '');
+  const body = String(meta.body || '');
+  return {
+    ok: true,
+    unscanned: false,
+    labels,
+    title,
+    body,
+    headRefName: String(meta.headRefName || ''),
+    refs: linkedIssueNumbers(`${title}\n${body}`),
+  };
+}
+
+/** 工人 job.dispatch：identity=工人，且带 branch。多条取最新一条（账本已按 ts 排）。 */
+export function pickWorkerDispatchByBranch(events, branch) {
+  const want = String(branch || '').trim();
+  if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
+  if (events == null || !Array.isArray(events)) {
+    return { ok: false, state: 'unscanned', error: '账本事件列表没拿到（没查成，不许猜）' };
   }
-  return { ok: true, unscanned: false, refs, labels: collected, title: String(meta.title || '') };
+  const hits = events.filter((e) => {
+    if (!e || e.type !== 'job.dispatch') return false;
+    if (e.identity && e.identity !== '工人') return false;
+    return String(e.branch || '').trim() === want;
+  });
+  if (hits.length === 0) {
+    return {
+      ok: false,
+      state: 'none',
+      error: `账本没有分支 ${want} 的工人 job.dispatch——这不是派工链上的 PR，需人工打标`,
+    };
+  }
+  const hit = hits[hits.length - 1];
+  const model = String(hit.model || '').trim();
+  const reviewer = String(hit.reviewer || '').trim();
+  const role = String(hit.work_type || hit.role || '').trim();
+  if (!model) {
+    return { ok: false, state: 'none', error: `分支 ${want} 的 job.dispatch 缺 model——需人工打标` };
+  }
+  return {
+    ok: true,
+    state: 'one',
+    event: hit,
+    model,
+    reviewer: reviewer || null,
+    role: role || DEFAULT_DISPATCH_TYPE,
+    branch: want,
+  };
 }
 
 /**
- * 宿主前缀 → 真实供应商家族（起审官同厂闸的兜底来源，2026-09-06）。
- *
- * 为什么需要它：同厂闸要知道工人是谁，来源只有署名单的 `model/*` 标签，而那个标签的唯一
- * 自动写入方是 `stampIssueLabels`——**派工成功之后**才调。于是工人开的 PR 天然有标签，
- * **帅位手开的 PR 一个都没有**，起审官当场拒（「扫完没有 model/*」），PR 就停在没人审，
- * 每 45 分钟重试一次、3 次后永远停住。实咬：PR #1070。
- *
- * 判据用 commit/PR 标题的宿主前缀（CLAUDE.md「commit 标题以宿主标识开头」）。它定不到
- * 具体模型，但**定得到家族**，而同厂闸要的正是家族（vendorFamilyOf 按 id 前缀取家族，
- * 家族名本身就是合法 id）。定不到就拒——不猜。
- *
- * **`pi` 故意不在表里**：pi 是多供应商宿主，上游报错时会在 1 毫秒内静默切到同 model id
- * 的另一个 provider（判例 memory `pi-silent-provider-fallback`），家族推不出来。
- * 漏登记一个宿主的代价是「照旧拒绝起审官」（今天的行为），猜错一个家族的代价是
- * **同厂闸放行了同厂审官**——两边不对称，所以这张表宁缺勿滥。
+ * PR head 分支 → 账本工人 dispatch → 把 model/* reviewer/* type/* 打到这张 PR。
+ * 幂等：已有同名 label 不再加。查不到记录 ⇒ 明确报「需人工打标」，不猜、不读 issue。
  */
-export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze(Object.assign(Object.create(null), {
-  cc: 'claude',   // Claude Code：只跑 Anthropic 模型
-  codex: 'gpt',   // Codex CLI：只跑 OpenAI 模型
-  grok: 'grok',   // xAI
-}));
-
-/** 从标题首个 `[宿主]` 前缀推家族。推不出返回 {ok:false}——调用方按「没查成」处置，不许猜。 */
-export function vendorFamilyFromHostPrefix(title) {
-  const m = /^\s*\[([a-z0-9_-]+)\]/i.exec(String(title || ''));
-  if (!m) return { ok: false, why: '标题没有 [宿主] 前缀' };
-  const host = m[1].toLowerCase();
-  // 只认表的自有键。普通对象上 `[constructor]` / `[__proto__]` 会命中原型、返回 ok:true
-  //（后者 family 甚至是对象），把「推不出就拒」变成放行（PR #1079 审官红项 1）。
-  if (!Object.hasOwn(HOST_PREFIX_VENDOR_FAMILY, host)) {
-    return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
+export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'stampPrLabelsFromDispatch 没给 PR 号' };
+  if (typeof runGh !== 'function') {
+    return { ok: false, unscanned: true, error: 'stampPrLabelsFromDispatch 没拿到 gh 执行器（没查成，不许猜）' };
   }
-  return { ok: true, host, family: HOST_PREFIX_VENDOR_FAMILY[host] };
+  const collected = collectPrLabels({ pr: n, runGh });
+  if (!collected.ok) return collected;
+  const branch = collected.headRefName;
+  if (!branch) {
+    return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 headRefName（没查成，不许猜）` };
+  }
+  const picked = pickWorkerDispatchByBranch(events, branch);
+  if (!picked.ok) {
+    return {
+      ...picked,
+      pr: n,
+      branch,
+      skipped: picked.state === 'none',
+      error: picked.error,
+    };
+  }
+  const names = dispatchLabelNames({
+    model: picked.model,
+    role: picked.role,
+    reviewer: picked.reviewer,
+  });
+  const existing = collected.labels;
+  const add = names.filter((name) => !existing.includes(name));
+  const skipped = names.filter((name) => existing.includes(name)).map((name) => ({ name, reason: 'already' }));
+  if (add.length) {
+    if (typeof ensureLabels === 'function') {
+      const ensured = ensureLabels({ names: add, runGh });
+      if (!ensured || !ensured.ok) {
+        return {
+          ok: false,
+          unscanned: !!(ensured && ensured.unscanned),
+          error: (ensured && ensured.error) || 'ensureRepoLabels 失败',
+          pr: n,
+          branch,
+        };
+      }
+    }
+    const flags = [];
+    for (const name of add) flags.push('--add-label', name);
+    const edit = runGh(['pr', 'edit', n, ...flags]);
+    if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}`, pr: n, branch };
+  }
+  return {
+    ok: true,
+    pr: n,
+    branch,
+    names,
+    add,
+    skipped,
+    labels: names,
+    model: picked.model,
+    reviewer: picked.reviewer,
+    role: picked.role,
+    refs: collected.refs,
+  };
 }
 
 export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   const explicit = model == null ? '' : String(model).trim();
-  const collected = collectIssueLabelsFromPr({ pr, runGh });
+  const collected = collectPrLabels({ pr, runGh });
   if (explicit) {
     if (!collected.ok && collected.unscanned) return collected;
     return {
@@ -193,29 +273,11 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   if (!collected.ok) return collected;
   const picked = requireWorkerModel(collected.labels);
   if (picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
-  // 标签这条路走不通时的兜底，**只对「扫完确实没有 model/*」这一种**：
-  //   · state 'unscanned'（标签列表没拿到）不兜底——没查成必须继续拒，兜底会把「查不成」
-  //     变成「查过了是 claude」，正是 fail-closed 最怕的那种降级；
-  //   · state 'many'（多个 model/*）不兜底——那是要人消歧的真歧义，猜一个只会掩盖它。
   if (picked.state === 'none') {
-    const guess = vendorFamilyFromHostPrefix(collected.title);
-    if (guess.ok) {
-      return {
-        ok: true,
-        state: 'one',
-        source: 'host-prefix',
-        // 家族名本身是合法 id：vendorFamilyOf('claude') === 'claude'。不编造具体版本号——
-        // 宿主前缀定得到家族，定不到型号，而同厂闸只要家族。
-        modelId: guess.family,
-        host: guess.host,
-        refs: collected.refs,
-        labels: collected.labels,
-      };
-    }
     return {
       ...picked,
       source: 'label',
-      error: `${picked.error}；宿主前缀也推不出家族（${guess.why}）`,
+      error: `${picked.error}——PR 上没有 model/*，需人工打标（不读 issue、不猜家族）`,
       refs: collected.refs,
       labels: collected.labels,
     };
@@ -223,14 +285,15 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
-/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它。
- * #895：显式 --reviewer 也要把署名 issue 的 label/refs 一起收回来——快马单没有 reviewer/* label
+/** 只读 PR 自己的 label，再走 pickReviewer。传了 explicit 就用它。
+ * #895：显式 --reviewer 也要把 PR 的 label/refs 一起收回来——快马单没有 reviewer/* label
  * （没走派单流程写不上），从前 explicit 分支直接返回、refs 为空，调用方（planWorkerDone）拿不到
- * 单号与 model/* 就照旧拒，于是「--reviewer 也救不了」。gh 本身没查成（unscanned）仍照旧拒。 */
+ * 单号与 model/* 就照旧拒，于是「--reviewer 也救不了」。gh 本身没查成（unscanned）仍照旧拒。
+ * #1116：不再读 issue label、不从宿主前缀猜家族。 */
 export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   const explicit = reviewer == null ? '' : String(reviewer).trim();
   if (explicit) {
-    const collected = collectIssueLabelsFromPr({ pr, runGh });
+    const collected = collectPrLabels({ pr, runGh });
     if (!collected.ok && collected.unscanned) return collected;
     return {
       ok: true,
@@ -240,16 +303,15 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
       labels: collected.ok ? collected.labels : [],
     };
   }
-  const collected = collectIssueLabelsFromPr({ pr, runGh });
-  if (!collected.ok) {
-    if (!collected.unscanned && /没有署名单号/.test(collected.error || '')) {
-      const n = String(pr ?? '').trim();
-      return { ...collected, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
-    }
-    return collected;
-  }
+  const collected = collectPrLabels({ pr, runGh });
+  if (!collected.ok) return collected;
   const picked = pickReviewer(collected.labels);
-  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  if (!picked.ok) {
+    const extra = picked.state === 'none'
+      ? '——PR 上没有 reviewer/*，需人工打标（不读 issue、不猜家族）'
+      : '';
+    return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels, error: `${picked.error}${extra}` };
+  }
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
@@ -262,13 +324,12 @@ export function listPrReviews({ pr, runGh } = {}) {
   }
   const view = runGh(['pr', 'view', n, '--json', 'reviews']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 失败：${view.error}` };
-  let parsed;
-  try { parsed = JSON.parse(view.out); }
-  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 返回非 JSON` }; }
-  if (!parsed || !Array.isArray(parsed.reviews)) {
+  const parsed = parseJsonOut(view.out, `gh pr view #${n} reviews`);
+  if (!parsed.ok) return { ok: false, unscanned: true, error: parsed.error };
+  if (!parsed.value || !Array.isArray(parsed.value.reviews)) {
     return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 reviews 数组（没查成，不许当 0 条）` };
   }
-  return { ok: true, reviews: parsed.reviews, count: parsed.reviews.length };
+  return { ok: true, reviews: parsed.value.reviews, count: parsed.value.reviews.length };
 }
 
 /** 完工计划：按已有 review 条数分首审 / 返工。首审才建审官。 */
@@ -291,11 +352,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
-  // 首审起审官要过同厂闸，工人家族必须有着落。不能只对 resolved.labels 调
-  // requireWorkerModel——那会把「扫完没有 model/*」直接拒掉，到不了
-  // resolveWorkerFromPr 的宿主前缀兜底（实咬：PR #1079 审官红项 1，复现
-  // 无 model/*、标题 [cc] 的手开 PR 在 worker-done 计划阶段就被拒）。
-  // 返工轮不起第二个审官，工人型号缺了也不挡交卷。
+  // 首审起审官要过同厂闸，工人型号必须落在 PR 自己的 model/* 上。
+  // 没有就不猜家族、不读 issue（#1116）。返工轮不起第二个审官，工人型号缺了也不挡交卷。
   const workerPick = shouldCreate
     ? resolveWorkerFromPr({ pr: n, runGh })
     : pickModel(resolved.labels || []);
@@ -401,17 +459,4 @@ export function pickWorkerDoneDispatchId({ create, reused, existingDispatchId } 
     };
   }
   return { ok: false, reviewerDispatchId: null, source: null, error: '没有审官 dispatch 可投' };
-}
-
-/** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
- * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。 */
-export function linkedIssueNumbers(text) {
-  const found = [];
-  const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const t = Number(m[1]);
-    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
-  }
-  return found;
 }

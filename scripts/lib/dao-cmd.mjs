@@ -850,22 +850,22 @@ export {
   DISAMBIGUATED_LABEL, checkIssueDisambiguated, assembleCardName,
 } from './dispatch/card.mjs';
 
-// ── #564 label 自动打：dispatch 记 issue，帅合并时同步到 PR ─────────
-// calibrate 读的是 PR 上的 model/* 与 type/*（每 label 必须有程序读它）；派工时 PR 还不存在，
-// 所以：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue；帅合并时由
-// `dao pr-sync-labels --pr <N>` 从 issue 同步到 PR。角色缺省写码（dispatch 默认写码类派工）。
-// #586：审官选型另记 reviewer/<模型>。label 记「决定」，工人完工时用 pickReviewer 复算。
+// ── #564 / #1116 label：决定在 dispatch 那一刻写进账本（model + reviewer + branch）。
+// 工人交卷 / 起审官前按 PR head 分支从账本打到 PR；选型只读 PR 自己的 label。
+// `dao pr-sync-labels --pr <N>` 是同一条打标动作（幂等）。查不到账本记录 ⇒ 需人工打标，不读 issue。
 
 // #762 拆分：完工结算 + label 选型域移到 scripts/lib/dispatch/worker-done.mjs（保持对外 API 不变）
 import {
   DEFAULT_DISPATCH_TYPE, REVIEWER_LABEL_PREFIX, dispatchLabelNames,
-  pickReviewer, pickModel, requireWorkerModel, collectIssueLabelsFromPr,
+  pickReviewer, pickModel, requireWorkerModel, collectPrLabels,
+  stampPrLabelsFromDispatch, pickWorkerDispatchByBranch,
   resolveWorkerFromPr, resolveReviewerFromPr, listPrReviews, planWorkerDone,
   completeWorkerDoneNotify, pickWorkerDoneDispatchId, linkedIssueNumbers,
 } from './dispatch/worker-done.mjs';
 export {
   DEFAULT_DISPATCH_TYPE, REVIEWER_LABEL_PREFIX, dispatchLabelNames,
-  pickReviewer, pickModel, requireWorkerModel, collectIssueLabelsFromPr,
+  pickReviewer, pickModel, requireWorkerModel, collectPrLabels,
+  stampPrLabelsFromDispatch, pickWorkerDispatchByBranch,
   resolveWorkerFromPr, resolveReviewerFromPr, listPrReviews, planWorkerDone,
   completeWorkerDoneNotify, pickWorkerDoneDispatchId, linkedIssueNumbers,
 } from './dispatch/worker-done.mjs';
@@ -1163,7 +1163,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
                   # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
                   # 扫完 0 条是空转成功，目录读不了才没查成
-  pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
+  pr-sync-labels --pr <N>   # 合并前：PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116；查不到需人工打标）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）

@@ -83,7 +83,9 @@
             "split": { "description": "派工 --split 取值：no 或 ≥2 的整数（#611）" },
             "split_reason": { "type": ["string", "null"], "description": "--split no 的理由；N 时可空（#611）" },
             "merge_policy": { "enum": ["auto", "manual"], "description": "派工 merge-policy（#799：审官 create/attach 继承）" },
-            "merge_reason": { "type": ["string", "null"], "description": "merge-policy=manual 的理由" }
+            "merge_reason": { "type": ["string", "null"], "description": "merge-policy=manual 的理由" },
+            "reviewer": { "type": ["string", "null"], "description": "派工那一刻选定的审官模型（#1116：决定写一次，消费方只读这一处）" },
+            "branch": { "type": ["string", "null"], "description": "工人 PR head 分支，选型打标的直接键（#1116）" }
           },
           "required": ["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"],
           "additionalProperties": true

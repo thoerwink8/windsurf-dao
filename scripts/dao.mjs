@@ -182,7 +182,8 @@ import {
   encodeSendText,
   runGh,
   stampIssueLabels,
-  syncPrLabelsFromIssue,
+  stampPrLabelsFromDispatch,
+  ensureRepoLabels,
   resolveReviewerFromPr,
   resolveWorkerFromPr,
   planWorkerDone,
@@ -1558,6 +1559,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
         ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
         card_name: cardName,
         branch,
+        reviewer: args.reviewer ?? null,
       },
     });
     if (!ledger.ok && !ledger.skipped) console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
@@ -2095,9 +2097,8 @@ async function runDispatchExecution(order, { queueDir } = {}) {
   // 不再全量重写 master 卡。建卡时 --issue 已带进 linkedIssue，归属证据够看板扫；
   // master 定界区仍在 worktree-rm / 合并时重写（#684 清卡同钩保留）。
 
-  // #564 label 自动打：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue（best-effort，
-  // 失败只报告不翻转派工结果——label 是校准数据源，但回滚一个成功的派工代价更大；帅合并时
-  // 用 pr-sync-labels 从 issue 同步到 PR）。gh 没查成 != 查过没事：失败也要说清楚。
+  // #564 label 自动打：dispatch 成功时把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（给人看盘面，best-effort，
+  // 失败只报告不翻转派工结果）。选型真相源是 PR 自己的 label（#1116）：交卷/起审官前按 head 分支从账本打到 PR。
   // 身份走 marshal：这是帅进程里写 issue（#627），裸 gh 会记成 thoerwink8。
   // async-launch：打 label 挪进执行体（事后），不在热路。
   const labels = stampIssueLabels({
@@ -2138,6 +2139,8 @@ async function runDispatchExecution(order, { queueDir } = {}) {
         : {}),
       ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
       card_name: plan.workerCard,
+      reviewer: gate.reviewer ?? null,
+      branch: args.branch || null,
       ...(workerPreflight && workerPreflight.hardBlocked && workerPreflight.hardBlocked.length
         ? { cooldown: workerPreflight.hardBlocked.map(b => `${b.id}:${b.label}`).join(';') }
         : {}),
@@ -2300,8 +2303,31 @@ function cmdDispatchBatch(args) {
   });
 }
 
+function loadDispatchEventsForStamp() {
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    if (listed.unscanned) return { ok: false, unscanned: true, error: listed.error, events: [] };
+    return { ok: true, events: listed.events || [] };
+  } catch (e) {
+    return { ok: false, unscanned: true, error: String(e.message || e), events: [] };
+  }
+}
+
+/** #1116：PR head 分支 → 账本 dispatch → 打标。查不到记录不猜。 */
+function stampPrFromLedger({ pr, runGh } = {}) {
+  const listed = loadDispatchEventsForStamp();
+  if (!listed.ok) return listed;
+  return stampPrLabelsFromDispatch({
+    pr,
+    runGh,
+    events: listed.events,
+    ensureLabels: ensureRepoLabels,
+  });
+}
+
 function cmdPrSyncLabels(args) {
-  const r = syncPrLabelsFromIssue({ pr: args.pr, runGh: ghRunner() });
+  const r = stampPrFromLedger({ pr: args.pr, runGh: ghRunner() });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
 }
@@ -4394,6 +4420,13 @@ async function cmdReviewerCreateMirasim(args) {
   const bind = bindExecutor({ executor: named.name, routing });
   if (!bind.ok) fail(bind.error, { executor: named.name });
 
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
+  // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
+
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
@@ -4525,6 +4558,11 @@ async function cmdWorkerDoneMirasim(args) {
   }
   const gh = ghRunner({ role: 'worker' });
   const ghR = ghRunner({ role: 'reviewer' });
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
