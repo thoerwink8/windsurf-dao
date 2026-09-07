@@ -52,7 +52,10 @@ import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
-import { judgeBaseFreshness, OK, RED, UNKNOWN } from './lib/handoff-check.mjs';
+import {
+  judgeBaseFreshness, partitionByGate, verdictFromItems,
+  RED, UNKNOWN,
+} from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
@@ -652,34 +655,8 @@ function execAction(action, { state, dryRun, log }) {
       }
       return r;
     }
-    case 'merge': {
-      // 判绿 + m=auto + CI 绿 + mergeable：先同步 label（校准数据源）→ 过合并闸 → 合并 → 关单。
-      // 合并闸（#1117）：① 基底含最新 master 从交卷时刻挪到这里。审查期间 master 必然会动，
-      // 在交卷时刻要求基底最新是活锁；但**合进去之前**基底不对齐是真会坏事的，所以判在这一刻。
-      // 退出码三态照 handoff-check 的惯例：非 0 一律不合（2 = 没查成，同样不放行）。
-      const steps = [
-        ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
-        ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
-        ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
-      ];
-      if (dryRun) {
-        say(`[dry] merge #${action.pr}（${action.why}）：\n    合并闸 ①（基底含最新 master）`
-          + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
-        return { ok: true, dryRun: true };
-      }
-      const gate = judgeMergeFreshness(action.pr);
-      if (gate.state !== OK) {
-        // 红和没查成一样不合。合并闸拦下不是失败，是背压——照 #1086 的口径，不开噪音单。
-        say(`  合并闸拦下 #${action.pr}（${gate.state === RED ? '真红' : '没查成'}）：${gate.detail.split('\n')[0]}`);
-        return { ok: true, blocked: true, gate: gate.state, why: gate.detail };
-      }
-      for (const s of steps) {
-        const r = runCmd(s);
-        if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error }; }
-      }
-      say(`  已合并 #${action.pr} 并关单`);
-      return { ok: true };
-    }
+    case 'merge':
+      return execMerge(action, { dryRun, say });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
@@ -713,6 +690,44 @@ function execAction(action, { state, dryRun, log }) {
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+/**
+ * 合并动作：闸过了才 `pr merge`。闸红 / 没查成都不合（背压，不开噪音单）。
+ *
+ * 闸走 `partitionByGate(..., 'merge')`：① 在这一档才算数。把 ① 从 merge 档挪走，
+ * 「① 红就不调 pr merge」那条夹具会当场绿不起来——那就是本单要的判别力（#1117）。
+ *
+ * run / judge 可注入，测试才能钉调用序列、不必起真 git。
+ */
+export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+  const steps = [
+    ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
+    ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
+    ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
+  ];
+  if (dryRun) {
+    say(`[dry] merge #${action.pr}（${action.why || ''}）：\n    合并闸 ①（基底含最新 master）`
+      + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
+    return { ok: true, dryRun: true, calls: [] };
+  }
+  const freshness = judge(action.pr, { run });
+  const item = { id: '①', name: '基底含最新 master', ...freshness };
+  const split = partitionByGate([item], 'merge');
+  const v = verdictFromItems(split.judged);
+  if (v.exit !== 0) {
+    const state = freshness.state;
+    say(`  合并闸拦下 #${action.pr}（${state === RED ? '真红' : '没查成'}）：${String(freshness.detail || '').split('\n')[0]}`);
+    return { ok: true, blocked: true, gate: state, why: freshness.detail, calls: [] };
+  }
+  const calls = [];
+  for (const s of steps) {
+    calls.push(s);
+    const r = run(s);
+    if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls }; }
+  }
+  say(`  已合并 #${action.pr} 并关单`);
+  return { ok: true, calls };
 }
 
 /**

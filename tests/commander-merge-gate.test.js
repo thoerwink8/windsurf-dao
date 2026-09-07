@@ -10,6 +10,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
@@ -112,4 +113,84 @@ describe('#1117 合并闸：judgeMergeFreshness 采事实', () => {
     });
     assert.equal(r.state, UNKNOWN);
   });
+});
+
+describe('#1117 合并闸：execMerge 调用序列', () => {
+  function spyRun() {
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv.join(' '));
+      return { ok: true, out: '' };
+    };
+    return { calls, run };
+  }
+  const silent = () => {};
+
+  it('① 红时不调 pr merge（调用序列里没有它）', async () => {
+    const { execMerge } = await CMD;
+    const { RED } = await HC;
+    const { calls, run } = spyRun();
+    const r = execMerge(
+      { pr: 1234, why: '判绿可合' },
+      { say: silent, run, judge: () => ({ state: RED, detail: '本树切自旧 origin/master' }) },
+    );
+    assert.equal(r.blocked, true);
+    assert.equal(r.gate, RED);
+    assert.equal(r.calls.length, 0);
+    assert.ok(!calls.some((c) => /pr merge/.test(c)), `① 红仍调了 pr merge：${calls.join(' | ')}`);
+    assert.ok(!calls.some((c) => /pr-sync-labels/.test(c)), '闸没过就不该动手');
+  });
+
+  it('① 没查成同样不合，不是「通」', async () => {
+    const { execMerge } = await CMD;
+    const { UNKNOWN } = await HC;
+    const { calls, run } = spyRun();
+    const r = execMerge(
+      { pr: 1234 },
+      { say: silent, run, judge: () => ({ state: UNKNOWN, detail: '拉不到远端' }) },
+    );
+    assert.equal(r.blocked, true);
+    assert.equal(r.gate, UNKNOWN);
+    assert.ok(!calls.some((c) => /pr merge/.test(c)));
+  });
+
+  it('① 通才走 pr merge，且 merge 在 sync-labels 之后', async () => {
+    const { execMerge } = await CMD;
+    const { OK } = await HC;
+    const { calls, run } = spyRun();
+    const r = execMerge(
+      { pr: 1234 },
+      { say: silent, run, judge: () => ({ state: OK, detail: '基底含最新 origin/master' }) },
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.blocked, undefined);
+    const mergeAt = calls.findIndex((c) => /pr merge/.test(c));
+    const syncAt = calls.findIndex((c) => /pr-sync-labels/.test(c));
+    assert.ok(mergeAt >= 0, '通了必须真调 pr merge');
+    assert.ok(syncAt >= 0 && syncAt < mergeAt, 'label 同步必须在 merge 之前');
+  });
+
+  it('判别力：把 ① 从 merge 档拿掉，上面那条「① 红就不合」必须当场红', async () => {
+    const { GATES } = await HC;
+    assert.deepEqual(GATES.merge.advisory, [],
+      'merge 档若把 ① 放进 advisory，execMerge 会在 ① 红时仍去 pr merge——那正是本单要防的');
+    assert.deepEqual(GATES.handoff.advisory, ['①']);
+  });
+});
+
+describe('#1117 审官任务书不许拿 ① 当交卷红', () => {
+  const BOOKS = [
+    'host/skills/dispatch/templates/reviewer-book-mirasim.md',
+    'host/skills/dispatch/templates/reviewer-book.md',
+    'host/skills/dispatch/review-standard.md',
+  ];
+  for (const rel of BOOKS) {
+    it(`${rel} 写明 ① 不许当交卷红`, () => {
+      const text = fs.readFileSync(path.join(REPO, rel), 'utf8');
+      assert.match(text, /不许拿它判红/,
+        `${rel} 没写「不许拿它判红」——审官会按旧口径把基底过期当红项`);
+      assert.doesNotMatch(text, /交卷闸四条全绿才算通过/,
+        `${rel} 还残留「交卷闸四条全绿」——那正是本单要拆掉的活锁口径`);
+    });
+  }
 });

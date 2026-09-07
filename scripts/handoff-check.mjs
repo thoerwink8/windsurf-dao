@@ -10,10 +10,12 @@
 // 一件都不核本树自洽——那是 dao-check 和单元测试的活，重复做只会多花时间不多抓一条。
 //
 // 退出码三态（照 scripts/server-check.mjs 的惯例，不许把没查成当通过）：
-//   0 = 四件都查过且通    1 = 有真红（查成了，结果不对）    2 = 有没查成（判不了 ⇒ 不放行）
+//   0 = 本档计入判定的条目都查过且通    1 = 有真红    2 = 有没查成（判不了 ⇒ 不放行）
+// #1117：交卷档（默认）① 只报不判；合并档（--gate merge）四条全判。
 //
 // 用法：
-//   node scripts/handoff-check.mjs                    交卷前在自己的树里跑
+//   node scripts/handoff-check.mjs                    交卷前在自己的树里跑（默认 --gate handoff）
+//   node scripts/handoff-check.mjs --gate merge       合并前跑（① 计入判定）
 //   node scripts/handoff-check.mjs --json             一行 JSON（给脚本读）
 //   node scripts/handoff-check.mjs --no-fetch         不联网（① 最多只能判到「没查成」）
 //   node scripts/handoff-check.mjs --body-file <路径>  拿本地文件当 PR 正文核删除说明

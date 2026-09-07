@@ -440,11 +440,12 @@ test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { t
       assert.equal(r.exit, 0);
     });
 
-    await t.test('没查成也不放行：基线 ref 指到不存在的东西 → 退出 2，不是 0', () => {
+    await t.test('没查成也不放行：基线 ref 指到不存在的东西 → ① 结论是没查成；交卷档不判 ①，但 ②④ 同样没查成所以仍退出 2', () => {
       const r = runCli(work, 'clean', ['--base', 'origin/no-such-branch'], g);
       assert.ok(r.payload, `没拿到 JSON：${r.stdout}${r.stderr}`);
       assert.equal(item(r.payload, '①').state, UNKNOWN);
-      assert.equal(r.exit, 2);
+      assert.equal(judged(r.payload, '①'), undefined, '交卷档 ① 只报不判');
+      assert.equal(r.exit, 2, '解不出基线时 ②④ 也没查成，交卷档照样不放行');
     });
 
     // #1117 验收：把 ① 降级不能顺手把整条闸弄软，也不能让「没查成」变成「通」。
