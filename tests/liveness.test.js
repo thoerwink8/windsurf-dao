@@ -54,19 +54,20 @@ describe('活性：mirasim 驱动', () => {
     assert.equal(S.assessLiveness(s, { now: NOW }).state, 'done');
   });
 
-  it('incomplete 且没有活动时间戳 → unscanned（明说缺时间戳，不猜还活着）', async () => {
+  it('incomplete 且没有活动时间戳 → silent（一轮跑完在等下一句话，不是没查成）', async () => {
     const S = await LOAD;
     const s = S.sessionFromMirasimSession({ key: 'codex:2', title: 'x', state: 'incomplete' });
     const a = S.assessLiveness(s, { now: NOW });
-    assert.equal(a.state, 'unscanned');
-    assert.match(a.why, /没有活动时间戳|没查成/);
+    assert.equal(a.state, 'silent');
+    assert.match(a.why, /incomplete/);
+    assert.equal(S.routeSilent(s).action, 'nudge', '工人 incomplete 先推一句继续');
   });
 
-  it('有活动时间戳就按时间判', async () => {
+  it('incomplete 不管时间戳新不新都是 silent——阈值还没到也是卡在等话', async () => {
     const S = await LOAD;
     const fresh = S.sessionFromMirasimSession({ key: 'k', state: 'incomplete', lastActivityAt: min(3) });
     const stale = S.sessionFromMirasimSession({ key: 'k', state: 'incomplete', lastActivityAt: min(500) });
-    assert.equal(S.assessLiveness(fresh, { now: NOW }).state, 'active');
+    assert.equal(S.assessLiveness(fresh, { now: NOW }).state, 'silent');
     assert.equal(S.assessLiveness(stale, { now: NOW }).state, 'silent');
   });
 });
@@ -109,6 +110,54 @@ describe('活性：扫一轮的三态可辨', () => {
     const sessions = [S.sessionFromOrcaTerminal({ handle: 'b', lastOutputAt: min(600) })];
     assert.equal(S.scanLiveness({ sessions, now: NOW }).counts.silent, 1);
     assert.equal(S.scanLiveness({ sessions, now: NOW, thresholdMs: 24 * 3600 * 1000 }).counts.silent, 0);
+  });
+});
+
+describe('routeSilent：已合并 PR 不重起审官（#1056 / #1043 现场 B）', () => {
+  it('PR #1025 已不在开放名单 → skip，不是 restart-reviewer', async () => {
+    const S = await LOAD;
+    const s = {
+      label: '审官', title: '按审官任务书审 PR #1025',
+      cwd: '/x/dao-review-pr-1025', why: '静默',
+    };
+    const r = S.routeSilent(s, { openPrs: [1018] });
+    assert.equal(r.action, 'skip', '已合并 PR 不许重起');
+    assert.notEqual(r.action, 'restart-reviewer');
+  });
+
+  it('PR 还开着 → 仍 restart-reviewer（判别力：不是把审官静默一律掐了）', async () => {
+    const S = await LOAD;
+    const s = {
+      label: '审官', title: '按审官任务书审 PR #1018',
+      cwd: '/x/dao-review-pr-1018', why: '静默',
+    };
+    const r = S.routeSilent(s, { openPrs: [1018] });
+    assert.equal(r.action, 'restart-reviewer');
+    assert.equal(r.pr, 1018);
+  });
+
+  it('开放名单没给 → 仍可报警（现场 B 的 fail 方向）', async () => {
+    const S = await LOAD;
+    const s = { label: '审官', title: '按审官任务书审 PR #1025', why: '静默' };
+    const r = S.routeSilent(s);
+    assert.equal(r.action, 'restart-reviewer');
+    assert.equal(r.unscanned, true);
+  });
+
+  it('工人静默不走审官闸', async () => {
+    const S = await LOAD;
+    const r = S.routeSilent({ label: '工人 ISSUE-#885', why: '静默' }, { openPrs: [] });
+    assert.equal(r.action, 'nudge');
+  });
+
+  it('审官判别实验：短 label=「审官」、PR 号在 title 里——已关闭也不重起（不能用短 label 盖掉 title）', async () => {
+    const S = await LOAD;
+    const r = S.routeSilent(
+      { label: '审官', title: '按审官任务书审 PR #1025' },
+      { openPrs: [1018] },
+    );
+    assert.equal(r.action, 'skip', '审官实验：routeSilent({label:审官}) + 已关 PR 不得 restart-reviewer');
+    assert.notEqual(r.action, 'restart-reviewer');
   });
 });
 
