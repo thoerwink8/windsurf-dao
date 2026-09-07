@@ -4254,6 +4254,7 @@ async function cmdLeg(args) {
 import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
   judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
+  reviewerMustReplaceDead, judgeReviewerCreateRace,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
@@ -4471,9 +4472,11 @@ async function cmdReviewerCreateMirasim(args) {
   if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
 
   const registry = mirasimRegistry();
-  // 撞满载换厂必须另起：登记里还是刚死的那位，不带 force 会被一 PR 一审官闸当成「已有」复用。
-  // 证据已经在 planned.switched 上——不是调用方声明的旗标。
-  const forceNew = args.force === true || planned.switched === true;
+  // 撞满载必须另起：登记里还是刚死的那位，不带 force 会被一 PR 一审官闸当成「已有」复用。
+  // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
+  const forceNew = reviewerMustReplaceDead({
+    force: args.force, switched: planned.switched, deadError: failover.deadError,
+  });
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
   const existing = registry.read(args.pr);
   if (existing.ok && existing.record && existing.record.sessionKey) {
@@ -4510,9 +4513,14 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr);
-    if (!forceNew && again.ok && again.record && again.record.sessionKey) {
-      return { raced: true, record: again.record };
-    }
+    // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
+    const racePeek = (again.ok && again.record && again.record.sessionKey && !args.dryRun)
+      ? await peekReviewerSession(bind.runtime, again.record.sessionKey)
+      : { view: null };
+    const race = judgeReviewerCreateRace({
+      forceNew, record: again.ok ? again.record : null, view: racePeek.view,
+    });
+    if (race.raced) return { raced: true, record: again.record };
     const created = await mirasimReviewerCreate({
       runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
       prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
@@ -4653,7 +4661,9 @@ async function cmdWorkerDoneMirasim(args) {
     reworkPrompt: books.reworkPrompt,
     reviewerModel: plan.reviewer, workerModel,
     models: routing.models, mirasimPolicy: bind.mirasim, round: plan.round,
-    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force === true || planned.switched === true,
+    reviewBranch: `dao-review-pr-${plan.pr}`, force: reviewerMustReplaceDead({
+      force: args.force, switched: planned.switched, deadError: failover.deadError,
+    }),
   });
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
   emit({

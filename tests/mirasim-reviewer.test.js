@@ -472,6 +472,31 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     }).reuse, true);
   });
 
+  it('#1122 点名已是下一位时锁内不许把满载死会话当 raced 复用', async () => {
+    const { reviewerMustReplaceDead, judgeReviewerCreateRace } = await import(RM);
+    const rec = { sessionKey: 'codex:dead-sol', reviewer: 'gpt-5.6-sol' };
+    const deadView = {
+      missing: false, phase: 'done',
+      error: 'Selected model is at capacity. Please try a different model.',
+    };
+    // requested=kimi、dead=sol：plan 返回 switched:false，另起仍必须为真。
+    assert.equal(reviewerMustReplaceDead({
+      force: false, switched: false, deadError: deadView.error,
+    }), true);
+    assert.equal(reviewerMustReplaceDead({
+      force: false, switched: false, deadError: '',
+    }), false);
+    const race = judgeReviewerCreateRace({ forceNew: true, record: rec, view: deadView });
+    assert.equal(race.raced, false, JSON.stringify(race));
+    const raceReuse = judgeReviewerCreateRace({ forceNew: false, record: rec, view: deadView });
+    assert.equal(raceReuse.raced, false, JSON.stringify(raceReuse),
+      '锁内复查即使不带 forceNew，满载死会话也不许当 raced');
+    const live = judgeReviewerCreateRace({
+      forceNew: false, record: rec, view: { missing: false, phase: 'running' },
+    });
+    assert.equal(live.raced, true, JSON.stringify(live));
+  });
+
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {
     const { mirasimWorkerDone } = await import(RM);
     const rig = reworkRig({ treeHead: HEAD });

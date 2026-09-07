@@ -108,6 +108,34 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
 }
 
 /**
+ * 满载/看门狗死会话必须另起，不依赖 requested 是否刚好等于下一位。
+ *
+ * `planReviewerOnCapacityDeath` 在「点名正好是下一位」时返回 switched:false。
+ * 若另起只认 switched，锁内会把刚死的那位当成「并发抢锁已起过」复用掉。
+ */
+export function reviewerMustReplaceDead({ force, switched, deadError } = {}) {
+  return force === true || switched === true || isCapacityDeath(deadError);
+}
+
+/**
+ * 锁内复查：有 sessionKey 不等于「并发已起」。
+ * 满载/看门狗死会话走同一套 judgeReviewerSessionReuse，不算 raced。
+ */
+export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
+  if (forceNew === true) {
+    return { raced: false, why: '必须另起（force / 换厂 / 满载死会话）' };
+  }
+  if (!record || !record.sessionKey) {
+    return { raced: false, why: '锁内复查没有 sessionKey' };
+  }
+  const reuse = judgeReviewerSessionReuse({ record, view, force: false });
+  if (reuse.reuse) {
+    return { raced: true, record, sessionKey: reuse.sessionKey, why: reuse.why };
+  }
+  return { raced: false, why: reuse.why };
+}
+
+/**
  * 审官任务书的 merge-policy 必须来自原派工，不许硬编码 auto。
  * policyPlan 就是 resolveReviewerMergePolicy 的返回（显式旗标 > 账本 > 卡备注 > 回退 auto）。
  * 读不出合法策略 → 当场拒渲染（宁可不派，也不给审官注入错的合并边界）。

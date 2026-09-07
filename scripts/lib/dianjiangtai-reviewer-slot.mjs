@@ -186,7 +186,15 @@ export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}
     return { ok: true, reviewerId: requestedId, switched: false };
   }
   const next = nextAfterDead(f);
-  if (!next.ok) return next;
+  if (!next.ok) {
+    // 没查成上一位是谁 → 不换厂，不是把起审官打死。
+    // 存量登记合入前没有 reviewer 栏：会话读得到满载原文、登记没有「是谁」，
+    // 若把 unscanned 往上抛，reviewer-create / worker-done 整条 fail——比合之前更起不成。
+    if (f.deadModelId == null || String(f.deadModelId).trim() === '') {
+      return { ok: true, reviewerId: requestedId, switched: false };
+    }
+    return next;
+  }
   if (requestedId && requestedId !== String(next.next)) {
     const order = Array.isArray(f.order) && f.order.length ? f.order.map(String) : (f.passerIds || []).map(String);
     const iReq = order.indexOf(requestedId);

@@ -83,11 +83,14 @@ describe('dao 审官与完工', () => {
       assert.match(seg, /planReviewerOnCapacityDeath/);
       assert.match(daoSrc, /planReviewerOnCapacityDeath/);
       assert.match(seg, /forceNew/);
-      assert.match(seg, /planned\.switched/);
-      assert.match(seg, /force: forceNew/);
+      assert.match(seg, /reviewerMustReplaceDead/);
+      assert.match(seg, /judgeReviewerCreateRace/);
+      assert.equal(/!forceNew && again\.ok && again\.record && again\.record\.sessionKey/.test(seg), false,
+        '锁内不许只看 sessionKey 当 raced——满载死会话会被当成并发已起');
       const wd = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
       const wdSeg = daoSrc.slice(wd, wd + 5000);
       assert.match(wdSeg, /planReviewerOnCapacityDeath/, 'worker-done 也要按死因换人，不只 reviewer-create');
+      assert.match(wdSeg, /reviewerMustReplaceDead/, 'worker-done 另起也不许只绑 switched');
       assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
         'refused-existing 不该再直接 fail 死循环');
     });

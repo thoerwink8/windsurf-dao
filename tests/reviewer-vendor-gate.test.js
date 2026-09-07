@@ -289,13 +289,14 @@ describe('#679 起审官同厂硬闸', () => {
       assert.equal(r.reviewerId, 'kimi-k3');
     });
 
-    await t.test('点名正好是下一位 → 放行', () => {
+    await t.test('点名正好是下一位 → 放行（switched=false，另起不绑这一位）', () => {
       const r = slot.planReviewerOnCapacityDeath({
         requested: 'kimi-k3',
         capacityFailover: { ...base, deadError: DEAD },
       });
       assert.equal(r.ok, true, JSON.stringify(r));
       assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, false);
     });
 
     await t.test('点名跳级 → 拒', () => {
@@ -346,6 +347,16 @@ describe('#679 起审官同厂硬闸', () => {
       });
       assert.equal(r.ok, false, JSON.stringify(r));
       assert.match(r.error, /同厂/);
+    });
+
+    await t.test('满载死因但没查成上一位是谁 → 不换厂，不是把起审官打死', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: { ...base, deadModelId: null, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-luna');
     });
   });
 
