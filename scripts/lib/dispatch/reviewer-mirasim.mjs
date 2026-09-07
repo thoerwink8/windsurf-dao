@@ -413,7 +413,7 @@ export async function mirasimWorkerDone({
   runtime, gh, readTreeHead, prepareRef, syncTree, registry,
   pr, repo, prompt, reworkPrompt, reworkAnswer, reviewBranch,
   reviewerModel, workerModel, models, mirasimPolicy,
-  round, force, now = () => Date.now(),
+  round, force, enqueueOnly = false, now = () => Date.now(),
 } = {}) {
   if (typeof gh !== 'function') return { ok: false, stage: 'inputs', error: '要注入 gh 执行器' };
   if (!pr) return { ok: false, stage: 'inputs', error: '要 --pr' };
@@ -443,6 +443,15 @@ export async function mirasimWorkerDone({
     reuse = judgeReviewerSessionReuse({ record, view: peek.view, force });
     reuse.view = peek.view;
     if (peek.why) reuse.peekWhy = peek.why;
+  }
+
+  // 短命会话：交卷只入队，审官由指挥官按空位 drain。旧的起会话/interact 路留给单测。
+  if (enqueueOnly) {
+    return {
+      ok: true, action: 'queued', round: theRound, reviewCount,
+      sessionKey: sessionKey || null, reuse,
+      why: 'worker-done 只入队，不起审官会话',
+    };
   }
 
   // 首审轮 + 已有在役会话 → 复用，不再起第二个（幂等重试的正解）。
