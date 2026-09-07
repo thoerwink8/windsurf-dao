@@ -59,6 +59,7 @@ SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入�
 最终基线：`origin/master` = `c3673ad9617805d3b9dc0c4dcc0068b23934aefd`
 合入点：`c43287e34`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
 代码点：`9daf5644e`（`[cc] fix(issue-gateway): 现役士兵书接上网关，少接一面就红`）
+推送点：`2050ab39e`（本地与 origin/dao-792 同点）
 
 推送后、工作区干净时实测 `node scripts/handoff-check.mjs`（交卷档）末行：
 
