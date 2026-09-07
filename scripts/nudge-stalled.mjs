@@ -28,7 +28,7 @@ import { pathToFileURL } from 'node:url';
 import { createRuntime } from './lib/mirasim-runtime.mjs';
 import { ghAs } from './lib/gh.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
-import { runNudge, classifyPrListScan, nudgeExitCode, PR_LIST_LIMIT } from './lib/nudge-stalled.mjs';
+import { runNudge, collectPrListPages, normalizeListedPr, nudgeExitCode, PR_LIST_LIMIT, PR_LIST_PAGE_SIZE } from './lib/nudge-stalled.mjs';
 
 const argv = process.argv.slice(2);
 const GO = argv.includes('--go');
@@ -111,16 +111,32 @@ function lookupIssue(n) {
 
 function loadAllPrs() {
   if (allPrsCache) return allPrsCache;
-  // gh pr list 不翻页：--limit N 取满 N 条就是截断。本仓 856 个 PR 时 --limit 100
-  // 只回 100 条，署名 PR 被当成「没有」→ judgeNudge 对非 master 工人返回 go。
-  // 同一把尺：limit 跟 classify 用同一个 PR_LIST_LIMIT；取满 = 没查全 = unscanned。
-  const got = ghJson(
-    ['pr', 'list', '--state', 'all', '--limit', String(PR_LIST_LIMIT), '--json', 'number,title,body,state,headRefName'],
-    'PR 面',
-  );
-  allPrsCache = !got.ok
-    ? { ok: false, error: got.error }
-    : classifyPrListScan({ ok: true, items: got.value, limit: PR_LIST_LIMIT });
+  // 不分页的 `gh pr list --limit 10000 --json ...body...` 在本仓实测 3.1MiB，
+  // spawnSync 默认 1MiB 直接 ENOBUFS，整次扫描变 unscanned（PR #1102 红项）。
+  // 正路：REST 按页取（每页 PR_LIST_PAGE_SIZE），每页单独 spawn；任一页没查成
+  // 或最后一页取满且总条数摸到 PR_LIST_LIMIT → 没查全。spawnGh 另有 64MiB 上限，
+  // 超限仍是 error，不是静默截断。
+  const pages = [];
+  const pageSize = PR_LIST_PAGE_SIZE;
+  const limit = PR_LIST_LIMIT;
+  const maxPages = Math.ceil(limit / pageSize);
+  for (let page = 1; page <= maxPages; page++) {
+    const got = ghJson(
+      ['api', `repos/{owner}/{repo}/pulls?state=all&per_page=${pageSize}&page=${page}`],
+      `PR 面第 ${page} 页`,
+    );
+    if (!got.ok) {
+      allPrsCache = { ok: false, error: got.error };
+      return allPrsCache;
+    }
+    if (!Array.isArray(got.value)) {
+      allPrsCache = { ok: false, error: `PR 面第 ${page} 页不是数组（没查成）` };
+      return allPrsCache;
+    }
+    pages.push({ ok: true, items: got.value.map(normalizeListedPr) });
+    if (got.value.length < pageSize) break;
+  }
+  allPrsCache = collectPrListPages(pages, { pageSize, limit });
   return allPrsCache;
 }
 

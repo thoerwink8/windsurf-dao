@@ -580,11 +580,128 @@ describe('PR 列表截断 ≠ 没有该单 PR（#1102 红项 1）', () => {
     assert.equal(got.action, 'go');
   });
 
-  it('垫片 loadAllPrs 用 PR_LIST_LIMIT，取满即 classify 截断', () => {
+  it('垫片 loadAllPrs 分页取 PR，取满总上限即没查全', () => {
     const src = fs.readFileSync(CLI, 'utf8');
-    assert.match(src, /classifyPrListScan/);
+    assert.match(src, /collectPrListPages/);
     assert.match(src, /PR_LIST_LIMIT/);
+    assert.match(src, /PR_LIST_PAGE_SIZE/);
+    assert.match(src, /repos\/\{owner\}\/\{repo\}\/pulls/);
     assert.doesNotMatch(src, /--limit', '100'/);
+    assert.doesNotMatch(src, /--limit', String\(PR_LIST_LIMIT\)/);
+  });
+});
+
+describe('PR 面分页：大输出走分页，截断仍 unscanned（#1102 红项）', () => {
+  it('REST closed+merged_at → MERGED；open 原样；gh pr list 的 MERGED 原样', async () => {
+    const { normalizeListedPr } = await import(LIB);
+    const restMerged = normalizeListedPr({
+      number: 1057,
+      state: 'closed',
+      title: 'feat (#1056)',
+      body: '署名 issue #1056',
+      merged_at: '2026-09-07T00:00:00Z',
+      head: { ref: 'dao-1056' },
+    });
+    assert.equal(restMerged.state, 'MERGED');
+    assert.equal(restMerged.headRefName, 'dao-1056');
+    assert.equal(restMerged.number, 1057);
+    const restOpen = normalizeListedPr({
+      number: 1102,
+      state: 'open',
+      title: 'fix',
+      body: '署名 issue #1097',
+      merged_at: null,
+      head: { ref: 'dao-1097' },
+    });
+    assert.equal(restOpen.state, 'OPEN');
+    assert.equal(restOpen.headRefName, 'dao-1097');
+    const cliMerged = normalizeListedPr({
+      number: 1057,
+      state: 'MERGED',
+      title: 'feat (#1056)',
+      body: '署名 issue #1056',
+      headRefName: 'dao-1056',
+    });
+    assert.equal(cliMerged.state, 'MERGED');
+    assert.equal(cliMerged.headRefName, 'dao-1056');
+    const restClosed = normalizeListedPr({
+      number: 999,
+      state: 'closed',
+      title: 'nope',
+      body: '',
+      merged_at: null,
+      head: { ref: 'x' },
+    });
+    assert.equal(restClosed.state, 'CLOSED');
+  });
+
+  it('两页未满 → 完整列表', async () => {
+    const { collectPrListPages } = await import(LIB);
+    const got = collectPrListPages([
+      { ok: true, items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })) },
+      { ok: true, items: Array.from({ length: 30 }, (_, i) => ({ number: i + 101 })) },
+    ], { pageSize: 100, limit: 10000 });
+    assert.equal(got.ok, true);
+    assert.equal(got.items.length, 130);
+    assert.equal(got.items[0].number, 1);
+    assert.equal(got.items[129].number, 130);
+  });
+
+  it('最后一页取满且总条数摸到 limit → 截断', async () => {
+    const { collectPrListPages } = await import(LIB);
+    const got = collectPrListPages([
+      { ok: true, items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })) },
+    ], { pageSize: 100, limit: 100 });
+    assert.equal(got.ok, false);
+    assert.match(got.error, /截断|没查全/);
+  });
+
+  it('最后一页取满但总条数未到 limit → 仍没查全（可能还有下一页）', async () => {
+    const { collectPrListPages } = await import(LIB);
+    const got = collectPrListPages([
+      { ok: true, items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })) },
+    ], { pageSize: 100, limit: 10000 });
+    assert.equal(got.ok, false);
+    assert.match(got.error, /没查全/);
+  });
+
+  it('中间一页没查成 → 整次没查全，已取的页不算数', async () => {
+    const { collectPrListPages } = await import(LIB);
+    const got = collectPrListPages([
+      { ok: true, items: Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })) },
+      { ok: false, error: '执行 gh 失败: spawnSync gh ENOBUFS' },
+    ], { pageSize: 100, limit: 10000 });
+    assert.equal(got.ok, false);
+    assert.match(got.error, /ENOBUFS|没查成/);
+  });
+
+  it('空页是扫完，不是没查成', async () => {
+    const { collectPrListPages } = await import(LIB);
+    const got = collectPrListPages([{ ok: true, items: [] }], { pageSize: 100, limit: 10000 });
+    assert.equal(got.ok, true);
+    assert.equal(got.items.length, 0);
+  });
+
+  it('分页截断进 runNudge：非 master 工人 unscanned，零起会话', async () => {
+    const { runNudge } = await import(LIB);
+    const started = [];
+    const TREE_1097 = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1097';
+    const out = await runNudge({
+      go: true,
+      records: [{ workdir: TREE_1097, runState: 'incomplete', updatedAt: '2026-09-07T03:37:00Z', agent: 'pi' }],
+      exists: () => true,
+      lookupIssue: () => issue('OPEN'),
+      lookupPrs: () => ({ ok: false, error: 'PR 面最后一页取满 100 条（可能还有下一页，没查全）' }),
+      readBranch: () => branch('dao-1097'),
+      checkLease: () => lease('free'),
+      startSession: async (a) => { started.push(a); return { sessionKey: 'should-not' }; },
+      workerPrompt: '继续',
+      reviewPrompt: '继续审',
+    });
+    assert.equal(started.length, 0);
+    assert.equal(out.started.length, 0);
+    assert.equal(out.unscanned.length, 1);
+    assert.match(out.unscanned[0].reason, /没查成|没查全/);
   });
 });
 

@@ -13,10 +13,33 @@ import { basename } from 'node:path';
 import { attributedIssueNumber } from './close-issue.mjs';
 import { identifyTreeDir } from './mirasim-trees.mjs';
 
-// gh pr list 不翻页。取满 limit 条 = 可能被截断，截断后「没有该单 PR」是假阴性，
-// 会把非 master 且查不到开放 PR 的工人判成 go，绕过分支闸。本仓 856 个 PR 时
-// `--limit 100` 实锤只回 100 条（PR #1102 审官红项 1）。
+// gh pr list 单次不翻页。取满 pageSize 条 = 可能被截断，必须再翻一页；
+// 总条数摸到 PR_LIST_LIMIT 仍当没查全。截断后「没有该单 PR」是假阴性，
+// 会把非 master 且查不到开放 PR 的工人判成 go，绕过分支闸。
+// 本仓 856 个 PR 时 `--limit 100` 实锤只回 100 条；带 body 一次取 10000
+// 又把默认 1MiB 缓冲打成 ENOBUFS（PR #1102 审官红项 1）。分页 + 每页小缓冲
+// 是正路；取满总上限仍 unscanned。闸本身不出网，分页接线在垫片。
 export const PR_LIST_LIMIT = 10000;
+export const PR_LIST_PAGE_SIZE = 100;
+
+/**
+ * REST /pulls 的 state 只有 open/closed；合过的靠 merged_at 认 MERGED。
+ * `gh pr list --json state` 已经是 OPEN/MERGED/CLOSED，原样留下。
+ */
+export function normalizeListedPr(p) {
+  if (!p || typeof p !== 'object') return p;
+  const mergedAt = p.merged_at || p.mergedAt || null;
+  let state = String(p.state || '').toUpperCase();
+  if (state === 'CLOSED' && mergedAt) state = 'MERGED';
+  const headRefName = p.headRefName || (p.head && p.head.ref) || '';
+  return {
+    number: p.number,
+    title: p.title,
+    body: p.body,
+    state,
+    headRefName,
+  };
+}
 
 /**
  * PR 列表是否查全。ok 且条数 < limit 才算完整；取满 / 非数组 / 没查成 → 没查全。
@@ -38,6 +61,51 @@ export function classifyPrListScan({ ok, error, items, limit = PR_LIST_LIMIT } =
     };
   }
   return { ok: true, items };
+}
+
+/**
+ * 把分页结果收成一次完整扫描。
+ * 任一页没查成 / 非数组 → 没查全；最后一页取满 pageSize 且总条数摸到 limit → 截断。
+ * 空页是扫完（完整空列表），不是没查成。
+ */
+export function collectPrListPages(pages, { pageSize = PR_LIST_PAGE_SIZE, limit = PR_LIST_LIMIT } = {}) {
+  if (!Array.isArray(pages)) {
+    return { ok: false, error: 'PR 面分页不是数组（没查成）' };
+  }
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    return { ok: false, error: 'PR 面 pageSize 不是正整数（没查成）' };
+  }
+  if (!Number.isInteger(limit) || limit <= 0) {
+    return { ok: false, error: 'PR 面 limit 不是正整数（没查成）' };
+  }
+  const items = [];
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    if (!page || page.ok !== true) {
+      return { ok: false, error: (page && page.error) || `PR 面第 ${i + 1} 页没查成` };
+    }
+    if (!Array.isArray(page.items)) {
+      return { ok: false, error: `PR 面第 ${i + 1} 页不是数组（没查成）` };
+    }
+    items.push(...page.items);
+    if (items.length > limit) {
+      return {
+        ok: false,
+        error: `PR 面取满 ${limit} 条（列表被截断，没查全）`,
+      };
+    }
+    if (page.items.length < pageSize) {
+      return classifyPrListScan({ ok: true, items, limit });
+    }
+  }
+  if (pages.length === 0) {
+    return classifyPrListScan({ ok: true, items: [], limit });
+  }
+  // 最后一页刚好满页：可能还有下一页没取。没查全，不许当完整。
+  const why = items.length >= limit
+    ? `PR 面取满 ${limit} 条（列表被截断，没查全）`
+    : `PR 面最后一页取满 ${pageSize} 条（可能还有下一页，没查全）`;
+  return { ok: false, error: why };
 }
 
 /**
