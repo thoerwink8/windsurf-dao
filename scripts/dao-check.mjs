@@ -1250,10 +1250,11 @@ function checkEphemeralLifecycle() {
   if (handoff && !/merge:\s*\{\s*advisory:\s*\[[^\]]*['"]①['"]/.test(handoff.replace(/\s+/g, ' '))) {
     problems.push('合并闸 ① 没标 advisory');
   }
-  if (gone('scripts/nudge-stalled.mjs')) problems.push('scripts/nudge-stalled.mjs 还在仓里');
-  if (gone('scripts/lib/nudge-stalled.mjs')) problems.push('scripts/lib/nudge-stalled.mjs 还在仓里');
-  if (gone('host/machine/systemd/dao-nudge-stalled.timer')) problems.push('dao-nudge-stalled.timer 单元还在仓里');
-  if (gone('host/machine/systemd/dao-progress-watch.timer')) problems.push('dao-progress-watch.timer 单元还在仓里');
+  // 已删/退役路径：行里必须带「已删」字，否则交卷闸 ④ 把负向检查当成指向空气的指针。
+  if (gone('scripts/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 垫片还在仓里');
+  if (gone('scripts/lib/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 闸还在仓里');
+  if (gone('host/machine/systemd/dao-nudge-stalled.timer')) problems.push('已删的 nudge timer 单元还在仓里');
+  if (gone('host/machine/systemd/dao-progress-watch.timer')) problems.push('已删的 progress-watch timer 单元还在仓里');
   if (nudgeInstall && !/disable --now dao-nudge-stalled/.test(nudgeInstall)) problems.push('nudge 安装脚本没改成卸载');
   if (progressInstall && !/disable --now dao-progress-watch/.test(progressInstall)) problems.push('progress-watch 安装脚本没改成卸载');
   if (!gone('scripts/land.mjs') || !gone('scripts/close-issues.mjs')) {
