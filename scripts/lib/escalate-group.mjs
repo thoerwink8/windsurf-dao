@@ -84,9 +84,11 @@ export function isUnscannedReason(reason) {
 /**
  * 去重键 = 原因。**对象不进键**——进键就是按发射源聚合，一个原因刷 N 张单。
  *
- * 旧键形如 `escalate/dispatch-unscanned/issue-1007`，新键是 `escalate/dispatch-unscanned`。
- * 旧账本条目匹配不上新键：不做迁移是有意的——旧键指向的单要么已关（本就该重开），
- * 要么是 unscanned class（现在根本不开单），没有需要抢救的在途状态。
+ * 旧键形如 `escalate/missing-labels/issue-1007`，新键是 `escalate/missing-labels`。
+ * 旧账本**必须**折进新键：不折的话，收敛会把旧单当成「本轮已消失」关掉，
+ * 同时 escalate 按新键找不到账本、再开一张——同一原因两张单，正是本单要修的形
+ * （审官 PR #1070 第 4 轮红②；机器上确实还留着 `escalate/missing-labels/issue-1007`）。
+ * 折法见 `reasonOfKey` / `migrateEscalateLedger`。
  */
 export function escalateDedupKey(action) {
   return `escalate/${String(action?.reason || 'x')}`;
@@ -151,10 +153,69 @@ export function judgeEscalation(action, { booked = null, bookedState = null, str
   return { verdict: 'noop', why: `#${booked.issue} 在管同一个原因，对象也已登记`, target, objects: seen };
 }
 
-/** 从去重键还原原因名（键形如 `escalate/<reason>`）。认不出返回 null。 */
+/**
+ * 从去重键还原原因名。新旧两种键都认：
+ *   新 `escalate/<reason>`
+ *   旧 `escalate/<reason>/<对象>`（对象形如 `issue-1007` / `pr-1040` / `term-grok-1` / `x`）
+ * 认不出返回 null。旧键不剥对象的话，reason 会变成 `missing-labels/issue-1007`，
+ * 跟本轮真正的 `missing-labels` 对不上，收敛就会把还在的原因当成消失。
+ */
 export function reasonOfKey(key) {
-  const m = /^escalate\/(.+)$/.exec(String(key || ''));
-  return m ? m[1] : null;
+  const raw = String(key || '');
+  const m = /^escalate\/(.+)$/.exec(raw);
+  if (!m) return null;
+  const rest = m[1];
+  const cut = rest.replace(/\/(?:issue-\d+|pr-\d+|term-[^/]+|x)$/, '');
+  return cut || null;
+}
+
+/** 旧键尾巴上的对象标识 → 清单里用的那种写法。认不出返回 null，不硬造。 */
+export function objectOfLegacyKey(key) {
+  const raw = String(key || '');
+  const m = /^escalate\/[^/]+\/(issue-(\d+)|pr-(\d+)|term-([^/]+)|x)$/.exec(raw);
+  if (!m) return null;
+  if (m[2]) return `issue #${m[2]}`;
+  if (m[3]) return `PR #${m[3]}`;
+  if (m[4]) return m[4];
+  return null; // `x` = 当时没对象，清单里不占一格
+}
+
+function mergeLedgerEntry(into, from, extraObject) {
+  const objects = [];
+  const seen = new Set();
+  const push = (o) => {
+    if (!o || seen.has(o)) return;
+    seen.add(o);
+    objects.push(o);
+  };
+  for (const o of Array.isArray(into?.objects) ? into.objects : []) push(o);
+  for (const o of Array.isArray(from?.objects) ? from.objects : []) push(o);
+  push(extraObject);
+  const issue = into?.issue ?? from?.issue;
+  const at = into?.at || from?.at;
+  return { ...(from || {}), ...(into || {}), issue, objects, ...(at ? { at } : {}) };
+}
+
+/**
+ * 把旧键折进新键。纯函数，不改入参。
+ *
+ * 同一原因多条旧键（一个对象一条）合成一条，对象清单并在一起；
+ * 已经是新键的条目原样留下，旧键带来的对象追加进去。
+ * 认不出的键原样留下——乱改等于把账本洗掉，比留着更糟。
+ */
+export function migrateEscalateLedger(ledger) {
+  const out = {};
+  for (const [key, entry] of Object.entries(ledger || {})) {
+    const reason = reasonOfKey(key);
+    if (!reason) {
+      out[key] = entry;
+      continue;
+    }
+    const canonical = `escalate/${reason}`;
+    const extra = key === canonical ? null : objectOfLegacyKey(key);
+    out[canonical] = mergeLedgerEntry(out[canonical], entry, extra);
+  }
+  return out;
 }
 
 /**
@@ -179,11 +240,14 @@ export function reconcileEscalationRound({
   }
   const next = {};
   for (const r of seen) next[r] = (Number(streak?.[r]) || 0) + 1;
+  // 先把旧键折进新键，再判消失。不折的话 `escalate/missing-labels/issue-1007`
+  // 会被剥成另一个原因，本轮明明还有 missing-labels 也会进 toClose。
+  const canon = migrateEscalateLedger(ledger);
   const toClose = [];
-  for (const key of Object.keys(ledger || {})) {
+  for (const key of Object.keys(canon)) {
     const reason = reasonOfKey(key);
     if (!reason || seen.has(reason)) continue;
-    const entry = ledger[key];
+    const entry = canon[key];
     if (entry && entry.issue) toClose.push({ reason, issue: entry.issue, key });
   }
   return { streak: next, toClose, skipped: null };

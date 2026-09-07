@@ -246,3 +246,41 @@ describe('alreadyAppended：三个出口分得开', () => {
     assert.equal(got.unscanned, true);
   });
 });
+
+// 审官第 4 轮红②后半：同样一份旧账本喂给 escalate()，不许再开一张。
+describe('红②后半：旧键账本在途 → escalate 不新开', () => {
+  it('账本只有 escalate/missing-labels/issue-1007 时，同因新对象走追加不走开单', async () => {
+    const { escalate, escalateDedupKey } = await CMD;
+    const action = { kind: 'escalate', reason: 'missing-labels', why: '缺审官标', issue: 1063 };
+    const key = escalateDedupKey(action);
+    const state = {
+      escalateLedger: {
+        'escalate/missing-labels/issue-1007': { issue: 900, objects: ['issue #1007'] },
+      },
+      hubSeen: { [`esc:${key}`]: new Date().toISOString() },
+    };
+    const opens = [];
+    const comments = [];
+    const r = escalate(action, {
+      state,
+      dryRun: false,
+      say: () => {},
+      gh: (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'view') return { ok: true, out: 'OPEN\n' };
+        if (argv[0] === 'search') return { ok: true, out: '[]' };
+        return { ok: false, error: `没夹具：${argv.join(' ')}` };
+      },
+      cmd: (argv) => { comments.push(argv); return { ok: true }; },
+      send: () => ({ ok: true }),
+      openIssue: (x) => { opens.push(x); return { ok: true, number: 42 }; },
+    });
+    assert.equal(opens.length, 0, '旧键没折进新键：escalate 找不到账本，又开了一张');
+    assert.equal(r.issue, 900);
+    assert.equal(r.appended, 'issue #1063');
+    assert.equal(comments.length, 1);
+    assert.equal(state.escalateLedger[key].issue, 900);
+    assert.deepEqual(state.escalateLedger[key].objects, ['issue #1007', 'issue #1063']);
+    assert.equal(state.escalateLedger['escalate/missing-labels/issue-1007'], undefined,
+      '旧键还在：下一轮收敛会把它当另一个原因');
+  });
+});

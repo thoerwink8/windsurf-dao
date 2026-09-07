@@ -276,6 +276,91 @@ describe('#1063 验收：原因消失 → 自动关单', () => {
   });
 });
 
+// 审官 PR #1070 第 4 轮红②：旧键 `escalate/<原因>/<对象>` 不被规范化时，
+// reasonOfKey 会把 `missing-labels/issue-1007` 当成另一个原因——本轮明明还有
+// missing-labels，旧单进 toClose；同时新键找不到账本，escalate 再开一张。
+describe('旧账本键必须折进新键（审官第 4 轮红②）', () => {
+  const 旧账本 = {
+    'escalate/missing-labels/issue-1007': { issue: 900, objects: ['issue #1007'] },
+  };
+
+  it('reasonOfKey 剥掉旧键尾巴上的对象', async () => {
+    const { reasonOfKey } = await LIB;
+    assert.equal(reasonOfKey('escalate/missing-labels'), 'missing-labels');
+    assert.equal(reasonOfKey('escalate/missing-labels/issue-1007'), 'missing-labels');
+    assert.equal(reasonOfKey('escalate/dispatch-unscanned/pr-1040'), 'dispatch-unscanned');
+    assert.equal(reasonOfKey('escalate/wake-exhausted/term-grok-1'), 'wake-exhausted');
+    assert.equal(reasonOfKey('escalate/two-red/x'), 'two-red');
+    assert.equal(reasonOfKey('not-a-key'), null);
+  });
+
+  it('objectOfLegacyKey 把尾巴还原成清单写法', async () => {
+    const { objectOfLegacyKey } = await LIB;
+    assert.equal(objectOfLegacyKey('escalate/missing-labels/issue-1007'), 'issue #1007');
+    assert.equal(objectOfLegacyKey('escalate/x/pr-1040'), 'PR #1040');
+    assert.equal(objectOfLegacyKey('escalate/wake-exhausted/term-grok-1'), 'grok-1');
+    assert.equal(objectOfLegacyKey('escalate/two-red/x'), null);
+    assert.equal(objectOfLegacyKey('escalate/missing-labels'), null);
+  });
+
+  it('migrate：一条旧键 → 新键，对象从尾巴补进清单', async () => {
+    const { migrateEscalateLedger } = await LIB;
+    const got = migrateEscalateLedger(旧账本);
+    assert.deepEqual(Object.keys(got), ['escalate/missing-labels']);
+    assert.equal(got['escalate/missing-labels'].issue, 900);
+    assert.deepEqual(got['escalate/missing-labels'].objects, ['issue #1007']);
+  });
+
+  it('migrate：同一原因多条旧键合成一条，对象并在一起', async () => {
+    const { migrateEscalateLedger } = await LIB;
+    const got = migrateEscalateLedger({
+      'escalate/missing-labels/issue-1007': { issue: 900, objects: [] },
+      'escalate/missing-labels/issue-1063': { issue: 900, objects: [] },
+      'escalate/missing-labels': { issue: 900, objects: ['issue #1'] },
+    });
+    assert.deepEqual(Object.keys(got), ['escalate/missing-labels']);
+    assert.equal(got['escalate/missing-labels'].issue, 900);
+    assert.deepEqual(
+      [...got['escalate/missing-labels'].objects].sort(),
+      ['issue #1', 'issue #1007', 'issue #1063'],
+    );
+  });
+
+  it('审官最小复现：旧账本 + 本轮仍有该原因 → 不进 toClose', async () => {
+    const { reconcileEscalationRound } = await LIB;
+    const r = reconcileEscalationRound({
+      reasonsThisRound: ['missing-labels'],
+      streak: {},
+      ledger: 旧账本,
+      allScanned: true,
+    });
+    assert.deepEqual(r.toClose, [], '旧键被当成另一个原因关掉了——正是第 4 轮红②');
+  });
+
+  it('旧账本 + 原因真的消失 → 仍关，且 key 是新键（关完账本能对上）', async () => {
+    const { reconcileEscalationRound } = await LIB;
+    const r = reconcileEscalationRound({
+      reasonsThisRound: [],
+      streak: { 'missing-labels': 2 },
+      ledger: 旧账本,
+      allScanned: true,
+    });
+    assert.deepEqual(r.toClose, [{ reason: 'missing-labels', issue: 900, key: 'escalate/missing-labels' }]);
+  });
+
+  // 判别性：把 reasonOfKey 退回「整段 rest 都当原因」（修之前的样子），
+  // 同一份旧账本必须进 toClose——夹具没失真。
+  it('判别性：旧 reasonOfKey 会把还在的原因当成消失', async () => {
+    const greedy = (key) => {
+      const m = /^escalate\/(.+)$/.exec(String(key || ''));
+      return m ? m[1] : null;
+    };
+    const reason = greedy('escalate/missing-labels/issue-1007');
+    assert.equal(reason, 'missing-labels/issue-1007');
+    assert.equal(reason === 'missing-labels', false, '夹具失真了：旧剥法本该对不上');
+  });
+});
+
 // 回放 2026-09-06 17:11—19:51 的真实序列。旧行为：6 张单。新行为：0 张。
 describe('回放那一晚：同一个原因、6 个对象', () => {
   const 那一晚 = [

@@ -37,7 +37,7 @@ import {
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
-  reconcileEscalationRound, closeCommentBody, escalateTarget,
+  reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
@@ -95,8 +95,13 @@ const nowIso = () => new Date().toISOString();
 
 // ── 状态 state.json（可注入时钟便于测试；这里只做 IO）──
 function loadState() {
-  try { return JSON.parse(readFileSync(STATE_PATH, 'utf8')); }
-  catch { return {}; }
+  try {
+    const s = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    if (s && typeof s === 'object' && s.escalateLedger) {
+      s.escalateLedger = migrateEscalateLedger(s.escalateLedger);
+    }
+    return s;
+  } catch { return {}; }
 }
 function saveState(state) {
   ensureDir(STATE_DIR);
@@ -1661,7 +1666,8 @@ function escalate(action, { state, dryRun, say,
   // 本地账本是查重主路，gh search 只作补充：search 有索引延迟（分钟级），
   // 刚开的单搜不到就会再开一张——#973-#980 那四对重复单就是这么来的。
   // 账本写在本机、当场生效，没有延迟。
-  state.escalateLedger = state.escalateLedger || {};
+  // 旧键 `escalate/<原因>/<对象>` 必须先折进新键，否则 booked 找不到、会再开一张。
+  state.escalateLedger = migrateEscalateLedger(state.escalateLedger || {});
   const booked = state.escalateLedger[key];
   // 已记单的实时状态：核不出来必须传 null（判据据此走 fail-closed，不开单）。
   let bookedState = null;
@@ -1779,10 +1785,11 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     .filter((a) => a && a.kind === 'escalate' && a.reason)
     .map((a) => String(a.reason));
   const health = situationHealth(situation);
+  state.escalateLedger = migrateEscalateLedger(state.escalateLedger || {});
   const r = reconcileEscalationRound({
     reasonsThisRound,
     streak: state.escalateStreak || {},
-    ledger: state.escalateLedger || {},
+    ledger: state.escalateLedger,
     allScanned: health.allScanned,
   });
   if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
