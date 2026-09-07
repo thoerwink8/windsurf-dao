@@ -119,6 +119,9 @@ export function checkMarshalIssueIdentity({ root, files, skills } = {}) {
       };
     }
     for (const h of findBareWrites(loaded.text)) {
+      // 同一行已指向 issue-gateway / gh-as.mjs = 禁止句，不是教裸写（#792 士兵书）。
+      const line = String(loaded.text || '').split(/\r?\n/)[h.line - 1] || '';
+      if (/issue-gateway|gh-as\.mjs/.test(line)) continue;
       hits.push({ rel, ...h });
     }
   }

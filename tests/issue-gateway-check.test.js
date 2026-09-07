@@ -27,6 +27,19 @@ describe('issue-gateway-check 全宿主面', () => {
     assert.match(r.fail.join(' '), /没扫到|没查/);
   });
 
+  it('少接 soldier-book-mirasim → 红（现役工人第一份书，不是「别处有」就算过）', async () => {
+    const { checkIssueGatewaySurfaces, HOST_SURFACES } = await CHECK_LOAD;
+    const files = {};
+    for (const s of HOST_SURFACES) {
+      const p = path.join(REPO, s.rel);
+      files[s.rel] = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+    }
+    files['host/skills/dispatch/templates/soldier-book-mirasim.md'] = '# 无网关\n';
+    const r = checkIssueGatewaySurfaces({ root: REPO, files });
+    assert.ok(r.fail, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /soldier-book-mirasim|少接/);
+  });
+
   it('少接 AGENTS.md → 红（不是「别处有」就算过）', async () => {
     const { checkIssueGatewaySurfaces, HOST_SURFACES } = await CHECK_LOAD;
     const files = {};

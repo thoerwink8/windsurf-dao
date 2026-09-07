@@ -20,6 +20,8 @@ export const HOST_SURFACES = [
   { id: 'cli-notes-claude', rel: 'docs/cli-notes/claude.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'cli-notes-cursor', rel: 'docs/cli-notes/cursor.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'cli-notes-feishu', rel: 'docs/cli-notes/feishu.md', kind: 'resident-md', must: 'issue-gateway' },
+  { id: 'soldier-book', rel: 'host/skills/dispatch/templates/soldier-book.md', kind: 'resident-md', must: 'issue-gateway' },
+  { id: 'soldier-book-mirasim', rel: 'host/skills/dispatch/templates/soldier-book-mirasim.md', kind: 'resident-md', must: 'issue-gateway' },
 ];
 
 const GATEWAY_MARK = 'issue-gateway';

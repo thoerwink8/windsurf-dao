@@ -7,6 +7,10 @@
 
 以派工注入文本里的「本单 spec」为准（权威范围）。本文件不复制每单不同的职责。
 
+## GitHub Issue 写（#792）
+
+写 Issue（开单 / 评论 / 关单 / 打标）只走 `node scripts/issue-gateway.mjs`，身份由网关固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`，不许经 `gh-as` 自选身份。PR 侧继续 `gh-as.mjs worker`。
+
 ## 派工前读 CLI 教学（#762）
 
 你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`。开工前先读它——每个 CLI 的正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：devin 要 wait tui-idle、codex 要 --agent，文档早有，现场重推浪费 1 小时）。

@@ -62,6 +62,20 @@ describe('marshal-issue-identity', () => {
       assert.ok(!!bareMut.fail && /裸 gh issue|create/.test(bareMut.fail.join(' ')), 'admit-push 写回裸 gh issue create → 必须报红  →  ' + JSON.stringify(bareMut));
     });
 
+    const forbidLine = checkMarshalIssueIdentity({
+      root: REPO,
+      files: {
+        'host/skills/dispatch/SKILL.md': dispatch,
+        'host/skills/dispatch/templates/soldier-book.md':
+          '写 Issue 只走 `node scripts/issue-gateway.mjs`。不许裸 `gh issue create|comment|close|edit`。\n',
+      },
+      skills: ['host/skills/dispatch/SKILL.md', 'host/skills/dispatch/templates/soldier-book.md'],
+    });
+    await t.test('同一行指向 issue-gateway 的禁止句不算教裸写', () => {
+      assert.equal(forbidLine.fail, undefined, JSON.stringify(forbidLine));
+      assert.match(String(forbidLine.green || ''), /0 处裸写/);
+    });
+
     const noSkills = checkMarshalIssueIdentity({
       root: REPO,
       files: { 'host/skills/dispatch/SKILL.md': dispatch },
