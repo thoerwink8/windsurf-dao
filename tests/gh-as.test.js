@@ -139,6 +139,34 @@ describe('gh-as', () => {
     await t.test('GH_TOKEN 盖住本人', () => {
       assert.ok(calls[0].opts.env.GH_TOKEN === 't-live', 'GH_TOKEN 盖住本人  →  ' + String(calls[0].opts.env.GH_TOKEN));
     });
+    await t.test('剥掉 CLICOLOR_FORCE / FORCE_COLOR，否则 --json 不是 JSON', () => {
+      const env = calls[0].opts.env;
+      assert.equal(env.NO_COLOR, '1');
+      assert.equal(env.FORCE_COLOR, undefined);
+      assert.equal(env.CLICOLOR_FORCE, undefined);
+    });
+    await t.test('默认 maxBuffer 是明确上限，不是 spawnSync 的 1MiB', () => {
+      assert.equal(G.GH_SPAWN_MAX_BUFFER, 64 * 1024 * 1024);
+      assert.equal(calls[0].opts.maxBuffer, G.GH_SPAWN_MAX_BUFFER);
+    });
+
+    const tight = [];
+    const spawnTight = (cmd, args, opts) => {
+      tight.push(opts);
+      const err = new Error('spawnSync gh ENOBUFS');
+      err.code = 'ENOBUFS';
+      return { status: null, stdout: '', stderr: '', error: err };
+    };
+    const blown = G.ghAs('worker', ['pr', 'list', '--state', 'all', '--json', 'body'], {
+      dir, spawnImpl: spawnTight, maxBuffer: 1024,
+    });
+    await t.test('调用方可覆盖 maxBuffer', () => {
+      assert.equal(tight[0].maxBuffer, 1024);
+    });
+    await t.test('超限 ENOBUFS 是 error，不是静默截断', () => {
+      assert.equal(blown.ok, false);
+      assert.match(blown.error, /ENOBUFS/);
+    });
   });
 
   it('换 token / whoami：扫成 vs 没扫成', async (t) => {
