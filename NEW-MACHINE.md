@@ -379,9 +379,10 @@ orca account add --help
 #   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
 # 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
 #   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
-#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
+#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete）。正路做不到往旧会话说话，
+#   只能起新会话：**人退了才起新的**；已关 issue / 已合 PR / 人还在 / 错分支一律不推（#1097）。闸在 scripts/lib/nudge-stalled.mjs。
 #   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
-#   已关单/已合 PR 必须跳过（#1097）：`gh issue/pr view` 失败也 skip，不许把没查成当成还能推
+#   已关单/已合 PR 必须跳过（#1097）；issue/PR 没查成是 unscanned（exit 2），不许把没查成当成还能推
 # 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
 #   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
 # 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
