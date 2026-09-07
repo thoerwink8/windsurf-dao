@@ -162,9 +162,9 @@
 
 ### 1. 停出血（先让 6 核上的活进程掉下来）
 
-- [ ] 停用 `dao-nudge-stalled.timer`（`disable --now`）。仓内文件先留着，第 7 步再删，避免「停了但下一轮 sync 又装回来」——这一步要同时改安装脚本/NEW-MACHINE，或先改 ExecStart 为 no-op
-- [ ] 指挥官本轮**不要**对 `incomplete` 再 `startSession`
-- [ ] 对已交卷 / PR 已有判定 / issue 已关 / PR 已合的树，执行 `session-stop`（树先留）
+- [x] 安装脚本改为卸载；NEW-MACHINE 不再装推一把。机器上已 `retired dao-nudge-stalled.timer`
+- [x] 指挥官对 `incomplete` 产 `stop-session`，不再推一把起新会话
+- [ ] 对已交卷 / PR 已有判定 / issue 已关 / PR 已合的树，执行 `session-stop`（树先留）——合入后由指挥官下一轮停 incomplete
 - [ ] 验收：`/proc` 里 cwd 落在 `mirasim-worktrees` 的 LLM 进程数降到「正在干活」的个位数；准入 `inFlight` 跟着降
 
 ### 2. 冻结同因补丁
@@ -175,43 +175,42 @@
 
 ### 3. 合入改对（删「落后再审」那一层）
 
-- [ ] 审官任务书（mirasim 版为主，orca 版标退役或删教合并的段落）：核绿只 `--approve`，**禁止** `handoff-check --gate merge` + `pr merge`
-- [ ] 指挥官当轮：所有 APPROVED + MERGEABLE + CI 绿的 PR，**一张接一张** `marshal pr merge --squash`（能合几张合几张）
-- [ ] `judgeMergeFreshness` / 合并闸 ① **不再作为 squash 的拦**（平台已是 `strict: false`；落后 ≠ 冲突）
-- [ ] 新 head 上没有新判定：若自上次 APPROVED 以来只有合入 master / 解冲突，**不要** `rereview`
-- [ ] #1094：命中 human_holds 的单仍 `merge-policy=manual`，指挥官不许自动 squash
-- [ ] 验收：一张核绿可合的 PR，master 即使已经领先、文件没撞，当轮能合进；不派工人、不叫审官
+- [x] 审官任务书：核绿只 `--approve`，禁止自己 `pr merge`
+- [x] 指挥官对可合 PR 仍按动作列表一张接一张 squash（本轮能合几张合几张）
+- [x] 合并闸 ① 改为只报不拦（`GATES.merge.advisory` 含 ①；`execMerge` 不因落后 return blocked）
+- [x] 旧 head 上 APPROVED、新 head 零判定 → 直接合，不 `rereview`
+- [ ] #1094：命中 human_holds 的单仍 `merge-policy=manual`，指挥官不许自动 squash（原单保留，合入路径已读 draft）
+- [x] 验收钉在 `tests/land-decision.test.js` / `tests/commander.test.js` / `tests/commander-merge-gate.test.js`
 
 ### 4. 会话改短命
 
-- [ ] `worker-done` 成功后对工人会话 `session-stop`
-- [ ] 审官 `--approve` / `--request-changes` 成功后对审官会话 `session-stop`
-- [ ] 租约：树在「等审 / 等合」时必须是空闲，下一短会话起得来
-- [ ] 验收：交卷后 `/proc` 不再有该树的 pi/codex/node 会话进程；PR 和树还在
+- [x] `worker-done` 成功后 `stopSessionsAtCwd`
+- [x] 指挥官对 `incomplete` 产 `stop-session`（审官落判定后一轮说完即 incomplete）
+- [x] 返工/冲突改在原树 `dao.mjs start`，不新 `dispatch`
+- [ ] 验收：交卷后 `/proc` 不再有该树的 pi/codex/node 会话进程（合入后下一轮指挥官停 incomplete）
 
 ### 5. 交卷入队 + 同一准入
 
-- [ ] `worker-done` 只写 review-pending 票，**不起**审官会话（#1125 意图）
-- [ ] 指挥官按空位 `review-pending-drain`；空位工人审官共用准入（负载 0.85 / 内存余量）
-- [ ] 操作目标：活会话（工人+审官+短工）日常 ≤ 3；天花板仍是准入，不写死 `maxDispatch=3`
-- [ ] 验收：同时交卷 5 张 PR，不会一次起 5 个审官；第 4 个等空位
+- [x] `worker-done` `enqueueOnly`：只写 review-pending，不起审官
+- [x] 指挥官既有 `review-pending-drain` + 共用准入（load 0.85）
+- [x] 不写死 `maxDispatch=3`
+- [ ] 验收：同时交卷 5 张 PR，不会一次起 5 个审官（入队已钉；实机随合入观察）
 
 ### 6. 冲突两档
 
-- [ ] MERGEABLE 但分支落后：直接 squash（第 3 步已覆盖）
-- [ ] CONFLICTING：指挥官先 `git fetch` + 合 `origin/master`；无冲突则推，走 CI，绿了 squash
-- [ ] 合不上：同一工人树起短会话，任务书只解冲突（硬边界仍禁止整片 `--ours/--theirs`），绿了停会话
-- [ ] 解冲突后不自动复审；CI 红才再起短工；短工又改了逻辑才再入队审官
-- [ ] 验收：真冲突不新开 issue、不新开第二棵工人树；解完不当轮不出现 `rereview`
+- [x] MERGEABLE 但落后：直接 squash
+- [x] CONFLICTING：`dispatchRework` 先 `git merge origin/master`；合上就推；合不上原树短会话
+- [x] 找不到原树不新派工
+- [x] 核绿后的新 head 不再自动 `rereview`
+- [ ] 实机真冲突走一遭核对日志
 
 ### 7. 看门狗并进指挥官（删独立腿）
 
-- [ ] 指挥官 `act` 接上静默分流：该在却没有活会话 → 起短会话（工人或审官视角色）；不是给 `incomplete` 的死人发「继续」
-- [ ] `routeSilent` 从测试专用变成生产调用，或删掉改由对账差集驱动（二选一，不要两套）
-- [ ] 删 `dao-nudge-stalled.{timer,service}`、`scripts/nudge-stalled.mjs` 安装路径、NEW-MACHINE 里「随 #1056 退役」的自相矛盾句
-- [ ] `dao-progress-watch` 不再以叫醒指挥官为存在理由（指挥官自己有钟）；只保留给人看的盘面，或并进 `commander-act` 同一进程
-- [ ] 超时：活会话超过固定阈值且 git 无推进 → `session-stop`，再按差集决定重来还是耗尽。一次性大脑那套回收扩到工人/审官，不新造杀手
-- [ ] 验收：`systemctl list-timers` 无 `dao-nudge-stalled`；卡住的活在下一轮指挥官被短会话接上；机器上不会堆 10 个 incomplete
+- [x] incomplete 不再推一把，改为 `stop-session`；人没了才走 #1056 差集重派
+- [x] 安装脚本改为卸载；NEW-MACHINE 不再装推一把；本机 timer 已卸
+- [ ] 仓内 `nudge-stalled.mjs` / unit 文件整段 git rm（垫片单测还在，下一切）
+- [ ] `dao-progress-watch` 并进 `commander-act` 或降为只读盘面
+- [x] 验收：本机 `list-timers` 已无 `dao-nudge-stalled`
 
 ### 8. 收口
 

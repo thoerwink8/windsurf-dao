@@ -252,11 +252,11 @@ test('档位：① 在交卷档只报不判，在合并档才算数（#1117）',
     assert.equal(verdictFromItems(s.judged).exit, 0);
   });
 
-  await t.test('合并档：四条全判 ⇒ ① 的红这时候才拦得住', () => {
+  await t.test('合并档：① 也只报不判（squash 落后不拦）', () => {
     const s = partitionByGate(items, 'merge');
-    assert.deepEqual(s.judged.map((i) => i.id), ['①', '②', '④', '⑤']);
-    assert.deepEqual(s.advisory, []);
-    assert.equal(verdictFromItems(s.judged).exit, 1);
+    assert.deepEqual(s.judged.map((i) => i.id), ['②', '④', '⑤']);
+    assert.deepEqual(s.advisory.map((i) => i.id), ['①']);
+    assert.equal(verdictFromItems(s.judged).exit, 0);
   });
 
   await t.test('降级只挪 ①：②④⑤ 红在两档都拦得住', () => {
@@ -265,9 +265,9 @@ test('档位：① 在交卷档只报不判，在合并档才算数（#1117）',
     assert.equal(verdictFromItems(partitionByGate(dirty, 'merge').judged).exit, 1);
   });
 
-  await t.test('① 没查成时，合并档照样不放行（不许降成「通」）', () => {
+  await t.test('① 没查成时，合并档仍放行（squash 不靠祖先检查）', () => {
     const unk = [{ id: '①', state: UNKNOWN }, { id: '②', state: OK }, { id: '④', state: OK }, { id: '⑤', state: OK }];
-    assert.equal(verdictFromItems(partitionByGate(unk, 'merge').judged).exit, 2);
+    assert.equal(verdictFromItems(partitionByGate(unk, 'merge').judged).exit, 0);
   });
 
   await t.test('认不得的档位一律抛，不许退回默认档', () => {
@@ -397,13 +397,13 @@ test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { t
       assert.equal(r.exit, 0);
     });
 
-    await t.test('同一条分支换 --gate merge → ① 计入判定、判红、退出 1', () => {
+    await t.test('同一条分支换 --gate merge → ① 只报不判，落后不拦 squash', () => {
       const r = runCli(work, 'stale', ['--gate', 'merge'], g);
       assert.ok(r.payload, `没拿到 JSON：${r.stdout}${r.stderr}`);
       assert.equal(r.payload.gate, 'merge');
-      assert.equal(judged(r.payload, '①').state, RED);
-      assert.deepEqual(r.payload.advisory, []);
-      assert.equal(r.exit, 1);
+      assert.equal(item(r.payload, '①').state, RED);
+      assert.equal(judged(r.payload, '①'), undefined, '① 进 advisory');
+      assert.equal(r.exit, 0);
     });
 
     await t.test('坏样本二 反向删除 → ② 红（正文没有删除说明）', () => {
@@ -463,15 +463,17 @@ test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { t
       assert.equal(handoff.exit, 1);
 
       const merge = runCli(work, 'stale', ['--body-file', body, '--gate', 'merge'], g);
-      assert.equal(judged(merge.payload, '①').state, RED);
+      assert.equal(item(merge.payload, '①').state, RED, '① 仍要查出来');
+      assert.equal(judged(merge.payload, '①'), undefined, '① 不进判定');
       assert.equal(judged(merge.payload, '②').state, RED);
       assert.equal(merge.exit, 1);
     });
 
-    await t.test('merge 档里「没查成」仍是不放行，不是「通」', () => {
+    await t.test('merge 档里基线没查成：① 不拦，②④ 没查成仍不放行', () => {
       const r = runCli(work, 'clean', ['--base', 'origin/no-such-branch', '--gate', 'merge'], g);
-      assert.equal(judged(r.payload, '①').state, UNKNOWN);
-      assert.equal(r.exit, 2, '拉不到基线时 ① 必须 fail-closed');
+      assert.equal(item(r.payload, '①').state, UNKNOWN);
+      assert.equal(judged(r.payload, '①'), undefined);
+      assert.equal(r.exit, 2, '解不出基线时 ②④ 仍没查成');
     });
 
     await t.test('档位写错不许静默退回默认档（那会把合并闸悄悄降成交卷闸）', () => {

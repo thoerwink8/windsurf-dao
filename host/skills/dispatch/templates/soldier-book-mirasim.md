@@ -65,7 +65,7 @@
    那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
-   命令自己看盘面起/复用审官。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
+   命令只发完工评论并把审官待办入队，**不起审官会话**。指挥官按空位拉审官。交卷成功后本会话会被停掉（树留着）。不要 `notify --type worker_done`、不要取 Run id、不要写卡备注。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，先照报错修，修不好升级给帅；退出码 0 才算交卷成功。
 4. 交卷后**等审**：审官红项会经 GitHub（`--request-changes` review）打回。你自己读 PR 的 review 状态判有没有被打回——
    红了逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。

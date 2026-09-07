@@ -49,12 +49,11 @@ import {
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
-import { checkInFlight } from './lib/dispatch/lease.mjs';
+import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import {
-  judgeBaseFreshness, partitionByGate, verdictFromItems,
-  RED, UNKNOWN,
+  judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
@@ -658,6 +657,16 @@ function execAction(action, { state, dryRun, log }) {
       }
       return r;
     }
+    case 'stop-session': {
+      if (!action.sessionKey) {
+        say('  stop-session 没有 sessionKey');
+        return { ok: false, error: 'stop-session 没有 sessionKey' };
+      }
+      return runOrShow(
+        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
+        { dryRun, say, why: action.why },
+      );
+    }
     case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
@@ -696,11 +705,7 @@ function execAction(action, { state, dryRun, log }) {
 }
 
 /**
- * 合并动作：闸过了才 `pr merge`。闸红 / 没查成都不合（背压，不开噪音单）。
- *
- * 闸走 `partitionByGate(..., 'merge')`：① 在这一档才算数。把 ① 从 merge 档挪走，
- * 「① 红就不调 pr merge」那条夹具会当场绿不起来——那就是本单要的判别力（#1117）。
- *
+ * 合并动作：squash 打到此刻 master。① 基底落后只报不拦（ephemeral-lifecycle）。
  * run / judge 可注入，测试才能钉调用序列、不必起真 git。
  */
 export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
@@ -710,18 +715,14 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
   ];
   if (dryRun) {
-    say(`[dry] merge #${action.pr}（${action.why || ''}）：\n    合并闸 ①（基底含最新 master）`
+    say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
+  // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
-  const item = { id: '①', name: '基底含最新 master', ...freshness };
-  const split = partitionByGate([item], 'merge');
-  const v = verdictFromItems(split.judged);
-  if (v.exit !== 0) {
-    const state = freshness.state;
-    say(`  合并闸拦下 #${action.pr}（${state === RED ? '真红' : '没查成'}）：${String(freshness.detail || '').split('\n')[0]}`);
-    return { ok: true, blocked: true, gate: state, why: freshness.detail, calls: [] };
+  if (freshness && freshness.state && freshness.state !== 'ok') {
+    say(`  ① 基底落后（不拦 squash）：${String(freshness.detail || freshness.state).split('\n')[0]}`);
   }
   const calls = [];
   for (const s of steps) {
@@ -730,7 +731,7 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls }; }
   }
   say(`  已合并 #${action.pr} 并关单`);
-  return { ok: true, calls };
+  return { ok: true, calls, freshness };
 }
 
 /**
@@ -1226,35 +1227,24 @@ function requestRereview(action, { state, dryRun, say }) {
   return { ok: true, path: w.path };
 }
 
-function dispatchRework(action, { state, dryRun, say }) {
-  const written = writeReworkBrief(action);
-  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
-  const spec = reworkSpec(action, written.path);
-  // 注入字节闸先在本地过一遍：超限当场说清楚，别等后台执行体崩（dispatch 热路也会拦，这里只是早一步可读）。
-  try { buildSoldierInject({ spec, issue: action.issue }); }
-  catch (e) {
-    const error = `返工注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
-    say(`  ${error}`);
-    return { ok: false, error };
+function findDaoTree(issue, pr) {
+  const root = worktreesRoot();
+  const names = [];
+  if (issue != null) names.push(`dao-${issue}`);
+  if (pr != null) names.push(`dao-${pr}`);
+  if (!names.length) return null;
+  let repos;
+  try { repos = readdirSync(root); } catch { return null; }
+  for (const repo of repos) {
+    for (const n of names) {
+      const p = join(root, repo, n);
+      if (existsSync(p)) return p;
+    }
   }
-  // --allow-dup：底层去重按 issue 判（#759 定的，卡名不补刀，因为自动卡名会变），
-  // 而快马多张 PR 共用一个署名 issue——同轮返工 #894 会把 #899 一起挡掉，第二张红没人接（2026-09-05 实咬）。
-  // 返工这条路自己已有更准的去重：state.reworkDispatched 按 PR+head「尝试即记」（上面第 510 行），
-  // 同一 PR 同一 head 永不重派。所以这里显式放行 issue 级去重，不动通用判据。
-  const cmd = ['node', 'scripts/dao.mjs', 'dispatch',
-    '--issue', String(action.issue),
-    '--name', reworkCardName(action),
-    '--model', action.model, '--reviewer', action.reviewer,
-    '--split', 'no', '--split-reason', action.conflict ? '指挥官自动解冲突：只解冲突，不改范围外的东西' : '指挥官自动返工：照审官红项逐条改（#931）',
-    '--spec', spec, '--allow-dup', '--confirm'];
-  if (dryRun) {
-    say(`[dry] rework PR #${action.pr}（${action.why}）：\n    红项全文 ${written.path}（${written.bytes} 字节，已读回自证）\n    ${cmd.join(' ')}\n    [dry] 真跑时回读派工结果文件判三态，失败则不发「已派返工工人」并报帅`);
-    return { ok: true, dryRun: true };
-  }
-  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
-  const verdict = started.ok ? awaitDispatchResult(started.out, { say }) : started;
-  // 尝试即记：派成了就不再重派（重派会造重复工人）。**没派成的要记次数**——
-  // decide 侧按 ok/unscanned 判该不该重试，靠 tries 封顶（不记次数的话上限永远咬不住）。
+  return null;
+}
+
+function rememberRework(state, action, written, verdict) {
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
@@ -1263,7 +1253,56 @@ function dispatchRework(action, { state, dryRun, say }) {
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
     tries: prevTries + 1,
   };
-  return verdict;
+}
+
+function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
+  const written = writeReworkBrief(action);
+  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
+  const spec = reworkSpec(action, written.path);
+  try { buildSoldierInject({ spec, issue: action.issue }); }
+  catch (e) {
+    const error = `返工注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  const tree = findDaoTree(action.issue, action.pr);
+  if (action.conflict && tree && !dryRun) {
+    const fetch = run(['git', '-C', tree, 'fetch', '--quiet', 'origin', 'master']);
+    if (fetch.ok) {
+      const merged = run(['git', '-C', tree, 'merge', 'origin/master', '--no-edit']);
+      if (merged.ok) {
+        const pushed = run(['git', '-C', tree, 'push', 'origin', 'HEAD']);
+        if (pushed.ok) {
+          say(`  自动合入 master 成功，已推 PR #${action.pr}（不起人）`);
+          const verdict = { ok: true, integrated: true };
+          rememberRework(state, action, written, verdict);
+          return verdict;
+        }
+        say(`  自动合上了但推失败：${pushed.error}`);
+      } else {
+        say(`  自动合不上，原树起短会话`);
+      }
+    } else {
+      say(`  拉 origin/master 失败，改走短会话：${fetch.error}`);
+    }
+  }
+  if (!tree) {
+    const error = `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
+    say(`  ${error}`);
+    const verdict = { ok: false, unscanned: true, error };
+    rememberRework(state, action, written, verdict);
+    return verdict;
+  }
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', action.model,
+    '--worktree', tree, '--prompt', spec];
+  if (dryRun) {
+    say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
+    return { ok: true, dryRun: true, tree };
+  }
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  rememberRework(state, action, written, started);
+  return started;
 }
 
 // 大脑：起一次性 mirasim 会话 + 注入指针文本；记进 state.brainSessions（键是 sessionKey），
