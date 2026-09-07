@@ -311,7 +311,7 @@ systemd 对同一个 oneshot 只留一个启动 job，第二次 start 自动并�
 **「它悄悄停了」和「没有事发生」怎么分开**（本仓口径，这单的核心）：光数事件数分不开 ——
 安静的一小时和断线的一小时，事件数都是 0。桥每 10 分钟朝自己的 hook 打一次 ping，
 GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道通时它一定不为 0。
-`server-check ㉑` 判绿的前提是「最近收到过 ping」，不是「没报错」：
+`server-check ㉑`（**历史编号**：落档当日事件桥是第 21 项；其后插入 (21) 家目录 root-owned、(22) mirasim 选型对账，现 `scripts/server-check.mjs` CHECKS 里是第 (23) 项）判绿的前提是「最近收到过 ping」，不是「没报错」：
 
 | 状态文件长什么样 | 判 |
 |---|---|
@@ -329,7 +329,7 @@ GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道
 落点：判据 `scripts/lib/gh-events.mjs`（纯函数）／常驻 `scripts/gh-event-bridge.mjs`／
 单元 `host/machine/systemd/dao-gh-events.service`／白名单 `host/machine/sudoers.d/dao-gh-events`／
 装 `scripts/install-dao-gh-events.sh`（装完会等自证 ping 绕回来，等不到判失败）／
-闸 `tests/gh-events.test.js`。它是 server-check 的第 ㉑ 项——下一节记的「20 通」是加它之前的数。
+闸 `tests/gh-events.test.js`。它当时是 server-check 的第 ㉑ 项（历史编号；现为第 (23) 项，(21)(22) 已被家目录属主与 mirasim 腿表占用）——下一节记的「20 通」是加它之前的数。
 
 ### 2026-09-05：server-check 第一次全绿（20 通 / 0 红 / 0 没查成）
 
