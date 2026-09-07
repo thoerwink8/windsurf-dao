@@ -164,14 +164,17 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
 });
 
 describe('#1024 drain 计划带票上的 --repo', () => {
-  it('待办有 repo → attach argv 带 --repo', async () => {
+  // master 把 drain 统一成 reviewer-create --executor mirasim（attach 随 orca 退役删掉）。
+  // #1024 要保住的是票上的 --repo 仍进 argv；有没有工人树都一样。
+  it('待办有 repo → create argv 带 --repo（有工人树也走 create）', async () => {
     const S = await S_LOAD;
     const plan = S.planReviewPendingDrain({
       pr: '12', workerWorktree: 'wt-abc', reviewer: 'gpt-5.6-luna',
       repo: 'thoerwink8/ws-cleaner',
     });
     assert.equal(plan.ok, true);
-    assert.equal(plan.verb, 'reviewer-attach');
+    assert.equal(plan.verb, 'reviewer-create');
+    assert.ok(plan.argv.includes('--executor') && plan.argv.includes('mirasim'), plan.argv.join(' '));
     assert.equal(plan.argv.includes('--repo'), true);
     assert.equal(plan.argv.includes('thoerwink8/ws-cleaner'), true);
   });
@@ -184,6 +187,7 @@ describe('#1024 drain 计划带票上的 --repo', () => {
     });
     assert.equal(plan.ok, true);
     assert.equal(plan.verb, 'reviewer-create');
+    assert.ok(plan.argv.includes('--executor') && plan.argv.includes('mirasim'), plan.argv.join(' '));
     assert.equal(plan.argv.includes('--repo'), true);
     assert.equal(plan.argv.includes('thoerwink8/ws-cleaner'), true);
   });

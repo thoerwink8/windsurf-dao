@@ -356,6 +356,7 @@ function withinWindow(ts, now, hours) {
  */
 export function renderNow({
   prs, reviews, merged, issues, registries, worktrees, sessions,
+  progressStalls,
   now, windowHours = DEFAULT_WINDOW_HOURS,
 } = {}) {
   const at = now instanceof Date ? now : new Date(now || Date.now());
@@ -468,6 +469,19 @@ export function renderNow({
     if (v.unscanned) { pushGap(decideGaps, `${v.branch || v.path} 的远端对比`, v.why); continue; }
     decideItems.push({ kind: v.kind, why: v.why, path: v.path, branch: v.branch });
   }
+  // 盘面推进量（#1004）：没查成进缺口，查成的停滞对象进待你拍。没给这一路 = 旧调用方，不硬加缺口。
+  if (progressStalls !== undefined) {
+    const stallT = tri(progressStalls);
+    if (stallT.state === 'unscanned') pushGap(decideGaps, '盘面推进量', stallT.why);
+    for (const it of stallT.items) {
+      decideItems.push({
+        kind: 'progress-stall',
+        why: it && it.why ? String(it.why) : '盘面对象连续多轮没动',
+        objectKind: it && it.objectKind ? it.objectKind : null,
+        id: it && it.id != null ? it.id : null,
+      });
+    }
+  }
   const decide = {
     state: sectionState({
       // 待你拍没有单一主源：PR 与 issue 全没查成时这段才等于没查。
@@ -488,6 +502,7 @@ export function renderNow({
 // ── 排版（默认给人看；--json 给机器） ───────────────────────────────────────
 
 const KIND_ORDER = [
+  'progress-stall',
   'conflicting', 'pr-exhausted', 'pr-waiting-user',
   'rework-awaiting-recheck', 'stale-green', 'reviewer-down',
   'reviewer-unknown', 'reviewer-session-unknown', 'reviewer-tree-behind',
@@ -498,6 +513,7 @@ const KIND_ORDER = [
 
 // 折叠行里的说人话名字（用户自己会说的词，不是 kind 代号）。
 const KIND_TEXT = {
+  'progress-stall': '盘面卡住没推进',
   conflicting: '合不上（跟 master 冲突）',
   'pr-exhausted': '自动化认输的 PR',
   'pr-waiting-user': '认输后等你拍的 PR',

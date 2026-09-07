@@ -29,24 +29,32 @@
  *
  * 配置（默认即生产值，测试环境可用环境变量覆盖）：
  *   PI_GO_FALLBACK_PRIMARIES / PI_GO_FALLBACK_PRIMARY
- *     主通道 provider 列表（逗号分隔），默认 "opencode-go,mirasim,gw,grok,xai"
+ *     主通道 provider 列表（逗号分隔），默认 "opencode-go,mirasim"
+ *     （#841：不含 gw/grok/xai——网关错误归网关自己降级，扩展不插第二层）
  *   PI_GO_FALLBACK_PROVIDERS / PI_GO_FALLBACK_PROVIDER
- *     降级目标 provider 列表（逗号分隔），默认 "deepseek,opencode-go,gw,xai"
+ *     降级目标 provider 列表（逗号分隔），默认 "deepseek"
+ *     切到 deepseek 前必须探余额，402 / 没钱不算降级。
  *   PI_GO_FALLBACK_MODEL     降级目标默认模型（同 id 不存在时兜底），默认 "deepseek-v4-flash"
  *   PI_GO_FALLBACK_TRANSIENT_AFTER  transient 错误连续失败几次后降级，默认 2
+ *   PI_GO_FALLBACK_BALANCE_URL  余额探针地址（测试注入；默认 DeepSeek /user/balance）
  *
- * 纯逻辑（恢复决策）在 go-fallback-core.mjs（node 22 可测），本文件只做运行时接线。
+ * 纯逻辑在 go-fallback-core.mjs（node 22 可测），本文件只做运行时接线。
  */
 
-import { planRestore, classifyFallbackError } from "./go-fallback-core.mjs";
+import {
+  planRestore,
+  classifyFallbackError,
+  resolveProviderLists,
+  planSwitch,
+  needsBalanceProbe,
+  probeDeepseekBalance,
+  planFallbackTarget,
+  DEFAULT_TRANSIENT_AFTER,
+} from "./go-fallback-core.mjs";
 
-// 可用逗号分隔多个主通道；默认覆盖原 Go、Mirasim 注入通道和本地 gw 扩展。
-const PRIMARIES = (process.env.PI_GO_FALLBACK_PRIMARIES || process.env.PI_GO_FALLBACK_PRIMARY || "opencode-go,mirasim,gw,grok,xai")
-  .split(",").map((s) => s.trim()).filter(Boolean);
-const FALLBACK_PROVIDERS = (process.env.PI_GO_FALLBACK_PROVIDERS || process.env.PI_GO_FALLBACK_PROVIDER || "deepseek,opencode-go,gw,xai")
-  .split(",").map((s) => s.trim()).filter(Boolean);
+const { primaries: PRIMARIES, fallbacks: FALLBACK_PROVIDERS } = resolveProviderLists(process.env);
 const FALLBACK_MODEL = process.env.PI_GO_FALLBACK_MODEL || "deepseek-v4-flash";
-const TRANSIENT_AFTER = Number(process.env.PI_GO_FALLBACK_TRANSIENT_AFTER || 2);
+const TRANSIENT_AFTER = Number(process.env.PI_GO_FALLBACK_TRANSIENT_AFTER || DEFAULT_TRANSIENT_AFTER);
 
 let consecutiveErrors = 0;
 let lastSignature = "";
@@ -120,12 +128,23 @@ function restoreDefaults() {
   }
 }
 
+function readDeepseekKey() {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const auth = JSON.parse(fs.readFileSync(path.join(agentDir(), "auth.json"), "utf8"));
+    const rec = auth && auth.deepseek;
+    if (!rec) return "";
+    return rec.key || rec.apiKey || "";
+  } catch {
+    return "";
+  }
+}
+
 export default function (pi) {
   pi.on("agent_end", async (event, ctx) => {
-    // 只在主通道（Go）上动作；切过去之后 provider 变了，天然不会循环。
+    // 只在主通道（Go / mirasim）上动作；网关 gw/grok/xai 不在 PRIMARIES 默认里（#841）。
     const model = ctx.model;
-    if (!model || !PRIMARIES.includes(model.provider)) return;
-
     const msgs = Array.isArray(event.messages) ? event.messages : [];
     let errMsg = null;
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -142,29 +161,48 @@ export default function (pi) {
 
     const text = String(errMsg.errorMessage);
     const kind = classifyFallbackError(text);
-    if (!kind) {
-      consecutiveErrors = 0;
-      return;
-    }
-
-    const signature = `${model.provider}/${model.id}::${text.slice(0, 160)}`;
+    const signature = `${(model && model.provider) || "?"}/${(model && model.id) || "?"}::${text.slice(0, 160)}`;
     consecutiveErrors = signature === lastSignature ? consecutiveErrors + 1 : 1;
     lastSignature = signature;
 
-    if (kind === "transient" && consecutiveErrors < TRANSIENT_AFTER) {
+    const decision = planSwitch({
+      provider: model && model.provider,
+      primaries: PRIMARIES,
+      kind,
+      consecutive: consecutiveErrors,
+      transientAfter: TRANSIENT_AFTER,
+    });
+    if (decision.action === "ignore") {
+      if (decision.reason === "unclassified") consecutiveErrors = 0;
+      return;
+    }
+    if (decision.action === "wait") {
       console.error(
         `[go-fallback] 瞬时错误第 ${consecutiveErrors}/${TRANSIENT_AFTER} 次，先让 pi 内置重试: ${text.slice(0, 140)}`
       );
       return;
     }
 
-    // 找降级模型：同 id 优先，找不到用默认兜底模型。
+    // 找降级模型：同 id 优先，找不到用默认兜底模型。deepseek 必须余额探针过才用。
     let fallback = null;
     for (const provider of FALLBACK_PROVIDERS) {
-      if (provider === model.provider) continue;
+      // 没探过的 deepseek 先探再判；别的备用（测试 fake-ds）直接用。
+      let probe = null;
+      if (needsBalanceProbe(provider)) {
+        probe = await probeDeepseekBalance({
+          apiKey: readDeepseekKey(),
+          url: process.env.PI_GO_FALLBACK_BALANCE_URL,
+        });
+        if (!probe.ok) {
+          console.error(`[go-fallback] deepseek 余额探针未过（${probe.reason}），不算降级`);
+        }
+      }
+      const use = planFallbackTarget({ provider, currentProvider: model.provider, probe });
+      if (use.action !== "use") continue;
       fallback = ctx.modelRegistry.find(provider, model.id) ||
         ctx.modelRegistry.find(provider, FALLBACK_MODEL);
       if (fallback && fallback.provider !== model.provider) break;
+      fallback = null;
     }
     if (!fallback) {
       ctx.ui.notify(

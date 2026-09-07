@@ -72,3 +72,5 @@ $ pgrep -af 'scripts/server-check'
 删掉「调通期手搓 `while` 循环 = 落地后还在看」这一层。
 
 要么给 server-check 配一个和指挥官盘点同级的 oneshot timer（退出码 1/2 进 `--failed`，扫不到上一轮也红），要么让已经在跑的 `commander-inventory` 直接调它、红项走现有开单通道。扫描面扫出 0 次运行（输出目录不存在、timer 不在册）必须红，不能靠人想起才跑。
+
+处置：#1051（四条同一形状「装了但没生效」，收进伞单一起判）

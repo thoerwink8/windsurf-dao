@@ -15,7 +15,7 @@ import {
   classifyRuntimeStatus,
   classifyAccountsResult,
   classifyFeishuTriage,
-  classifyAgentStallWatch,
+  classifyStallWatchTimer,
   classifyBotModelProbe,
   parseEnvFile,
   UNPROBEABLE_CODES,
@@ -283,66 +283,77 @@ test('server-check 判别力', async (t) => {
     });
   });
 
-  await t.test('classifyAgentStallWatch（⑮ #833，另起一项不改 automations 行）', async (t) => {
-    await t.test('正式 timer 在册、NEXT 是时间、垫片不在 → ok', () => {
-      const r = classifyAgentStallWatch({
+  await t.test('classifyStallWatchTimer（⑮ 卡死发现 timer：屏面指纹层退役后守 progress-watch）', async (t) => {
+    await t.test('progress-watch 在册、NEXT 是时间、退役件不在 → ok', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Sat 2026-09-05 13:15:00 CST  14min Sat 2026-09-05 13:00:00 CST  1min ago dao-agent-stall.timer dao-agent-stall.service',
-        padScriptExists: false,
+        timersText: 'Sat 2026-09-06 13:15:00 CST  14min Sat 2026-09-06 13:00:00 CST  1min ago dao-progress-watch.timer dao-progress-watch.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'ok');
     });
 
-    await t.test('正式 timer 在册但 NEXT 是横杠 → red（空转，探测等于没拉）', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('在册但 NEXT 是横杠 → red（空转，扫描等于没拉）', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: '-                               - Sat 2026-09-05 12:37:14 CST            - dao-agent-stall.timer     dao-agent-stall.service',
-        padScriptExists: false,
+        timersText: '-                               - Sat 2026-09-06 12:37:14 CST            - dao-progress-watch.timer     dao-progress-watch.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /NEXT/);
     });
 
-    await t.test('垫片 timer 还在 → red（影子制度）', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('退役的 dao-agent-stall.timer 还在 → red，即使 progress-watch 已在册', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
-        padScriptExists: false,
-      });
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /垫片/);
-    });
-
-    await t.test('垫片脚本还在 → red，即使正式 timer 已在', () => {
-      const r = classifyAgentStallWatch({
-        probed: true,
-        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
-        padScriptExists: true,
-      });
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /agent-stall-watch\.mjs/);
-    });
-
-    await t.test('正式 timer 不在册 → red，带怎么起', () => {
-      const r = classifyAgentStallWatch({
-        probed: true,
-        timersText: 'Thu sysstat-collect.timer',
-        padScriptExists: false,
+        timersText: 'Thu dao-progress-watch.timer\nThu dao-agent-stall.timer dao-agent-stall.service',
+        retiredScriptExists: false,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /dao-agent-stall\.timer/);
     });
 
+    await t.test('Contabo 垫片 timer 还在 → red（影子制度）', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
+        retiredScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /垫片/);
+    });
+
+    await t.test('退役脚本还在 → red，即使 progress-watch 已在册', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu dao-progress-watch.timer dao-progress-watch.service',
+        retiredScriptExists: true,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /agent-stall-watch\.mjs/);
+    });
+
+    await t.test('progress-watch 不在册 → red，带怎么起', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu sysstat-collect.timer',
+        retiredScriptExists: false,
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /dao-progress-watch\.timer/);
+      assert.match(r.detail, /install-progress-watch/);
+    });
+
     await t.test('systemctl 探不到 → unknown，不当绿', () => {
-      const r = classifyAgentStallWatch({ probed: false, reason: 'spawn 失败：ENOENT' });
+      const r = classifyStallWatchTimer({ probed: false, reason: 'spawn 失败：ENOENT' });
       assert.equal(r.state, 'unknown');
     });
 
-    await t.test('垫片脚本没查成 → unknown', () => {
-      const r = classifyAgentStallWatch({
+    await t.test('退役脚本没查成 → unknown', () => {
+      const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-agent-stall.timer',
-        padScriptUnknown: true,
+        timersText: 'Thu dao-progress-watch.timer',
+        retiredScriptUnknown: true,
       });
       assert.equal(r.state, 'unknown');
     });

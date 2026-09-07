@@ -20,7 +20,7 @@ function baseSituation(over = {}) {
     stall: { scanned: true, strikes: {} },
     wakeCounts: {},
     reworkDispatched: {},
-    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    commanderPolicy: { requireModelInRouting: false },
     routingModels: ['grok-4.6', 'gpt-5.6-sol'],
     healthRedModels: [],
     at: '2026-09-06T12:00:00.000Z',

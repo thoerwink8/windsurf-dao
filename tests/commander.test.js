@@ -11,14 +11,17 @@ const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'co
 function baseSituation(over = {}) {
   return {
     github: { scanned: true, issues: [], prs: [] },
+    // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。orca 段还留着给
+    // 没搬完的消费者读，但 fail-closed 总闸与「有没有人在做这张单」都只认 trees。
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: [] },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
     wakeCounts: {},
     reworkDispatched: {},
     // 旧夹具不测模型闸：默认关 requireModelInRouting，#849 新测显式打开。
-    commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: false },
+    commanderPolicy: { requireModelInRouting: false },
     routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
     healthRedModels: [],
     ...over,
@@ -54,11 +57,23 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(!kinds(r).includes('noop'), '有动作就不是 noop');
   });
 
+  it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-900' }] },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '活执行者在就不能再派');
+  });
+
   // 2026-09-05 改夹具（断言一条没动）：原来用的是「只带 已消歧、两个派工标都没有」的单，
   // 而那正是坏行为的样子——它断言这种单必须炸单，于是每开一张记账单，指挥官下一轮就为它
   // 生一张 missing-labels 待拍板单（实测 #953 开单 6 分钟后 #954 就出来了，一天生了 8 张）。
   // **洞是带着绿测试出厂的，这条测试就是钉住它的那颗钉子。**
-  // 真信号是**半标态**：有人打了一半停下。两个都没有 = 从没瞄准过派工车道，不是漏标。
+  // 真信号是**半标态**：有人打了一半停下。两个都没有且无 type/ = 从没瞄准过派工车道，不是漏标（#1003 第三档：有非体系 type/ 的双缺要报）。
   it('已消歧且派工标只打了一半（有 model 没 reviewer） → escalate 不猜（不产 dispatch）', async () => {
     const { decide } = await CORE;
     const issue = { number: 901, title: 'Y', labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }] };
@@ -255,16 +270,28 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('stall')));
   });
 
-  it('红①绕过d：orca.scanned=false + 当前 head 判红 → 不产 rework（返工也要建树，#931）', async () => {
+  // #931 原判据是「返工也要建树，orca 没查成就不产 rework」。2026-09-06 建树起工人切到
+  // mirasim 后这个前提没了：orca 查不到不影响返工能不能干成，继续拿它当闸就是把
+  // 「旧执行体的健康」变成新执行体的阻塞——实测 orca-serve 一停，commander 一个动作都不产。
+  // 判别力没丢：下一条钉的是 prReviews 没查成时仍然 fail-closed。
+  it('orca 没查成不再挡 rework——建树起工人已切 mirasim', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
       prReviews: { scanned: true, byPr: { 4: { reviews: [redReview('一处要改', 'h4')] } } },
       orca: { scanned: false, error: 'worktree ps 没查成' },
     }));
-    assert.equal(byKind(r, 'rework').length, 0, 'orca 没查成时 rework 一律不产');
-    assert.equal(byKind(r, 'notify-hub').length, 0, '随附回流也一并不产');
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('orca')));
+    assert.equal(byKind(r, 'rework').length, 1, 'orca 与返工已无关，照产');
+  });
+
+  it('prReviews 没查成 → rework 仍一律不产（fail-closed 判别力没随 orca 一起丢）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(903)], prs: [redPr(4, 'h4', 903)] },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '判不出红项就不许派返工');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned' && (a.missing || []).includes('prReviews')));
   });
 
   it('红①绕过c：prReviews.scanned=false + 已消歧 issue → 不产 dispatch/notify-hub', async () => {
@@ -282,18 +309,30 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
   });
 
   it('全部节 unscanned → 只有一条 escalate、零正向动作', async () => {
-    const { decide, ACTION_KINDS } = await CORE;
+    const { decide, ACTION_KINDS, SITUATION_SECTIONS } = await CORE;
     const r = decide({
-      github: { scanned: false }, orca: { scanned: false }, reviewPending: { scanned: false },
+      github: { scanned: false }, reviewPending: { scanned: false },
       prReviews: { scanned: false }, stall: { scanned: false }, wakeCounts: {},
     });
     assert.equal(r.actions.length, 1, '全 unscanned 只该有一条动作');
     assert.equal(r.actions[0].kind, 'escalate');
     assert.equal(r.actions[0].reason, 'unscanned');
-    assert.equal((r.actions[0].missing || []).length, 5, 'missing 列全五节');
+    assert.equal((r.actions[0].missing || []).length, SITUATION_SECTIONS.length, 'missing 列全必查节');
+    assert.ok(!(r.actions[0].missing || []).includes('orca'), '#1055：orca 退役后不进总闸');
     const positive = r.actions.filter((a) => !['escalate', 'noop'].includes(a.kind));
     assert.equal(positive.length, 0, '零正向动作');
     void ACTION_KINDS;
+  });
+
+  it('#1055：orca 没查成不再进 fail-closed 总闸（退役后这一节永远扫不出来）', async () => {
+    const { decide, SITUATION_SECTIONS } = await CORE;
+    assert.ok(!SITUATION_SECTIONS.includes('orca'), '必查清单不许再钉 orca');
+    const r = decide(baseSituation({
+      orca: { scanned: false, error: 'orca-serve disabled' },
+    }));
+    const un = byKind(r, 'escalate').filter((a) => a.reason === 'unscanned');
+    assert.equal(un.length, 0, '只缺 orca 不该合上总闸');
+    assert.ok(!kinds(r).includes('escalate') || !un.some((a) => (a.missing || []).includes('orca')));
   });
 });
 
@@ -500,13 +539,13 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const retired = decide(baseSituation({
       github: { scanned: true, issues: [labeledIssue(700, { labels: [{ name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }] })], prs: [redPr(701, HEAD, 700)] },
       prReviews: reviews,
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
     }));
     assert.equal(byKind(retired, 'rework').length, 0, '模型不在选型不许派（#849 闸没被返工绕开）');
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  it('⑤单轮返工上限沿用 maxDispatchPerRound：超出的排队下轮，不丢也不 escalate', async () => {
+  it('⑤单轮返工上限沿用机器余量：超出的排队下轮，不丢也不 escalate', async () => {
     const { decide } = await CORE;
     const issues = [];
     const prs = [];
@@ -519,10 +558,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs },
       prReviews: { scanned: true, byPr },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const w = byKind(r, 'rework');
-    assert.equal(w.length, 2, `一轮最多派 maxDispatchPerRound 个返工工人，实际 ${w.length}`);
+    assert.equal(w.length, 2, `一轮最多派 admission.slots 个返工工人，实际 ${w.length}`);
     assert.deepEqual(w.map((a) => a.pr), [760, 761]);
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
     assert.equal(byKind(r, 'notify-hub').length, 2, '回流只跟着真派出去的那两个');
@@ -684,13 +724,14 @@ function readyIssue(n, model = 'grok-4.6') {
   };
 }
 
-describe('decide：单轮派单上限（#849）', () => {
-  it('15 张可派 → 一轮只派 maxDispatchPerRound 张，其余排队不 escalate', async () => {
+describe('decide：机器余量准入（#1007，替换 #849 每轮上限）', () => {
+  it('15 张可派 + slots=2 → 一轮只派 2 张，其余排队不 escalate', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 15 }, (_, i) => readyIssue(1000 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 2, requireModelInRouting: false },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 2 },
     }));
     const d = byKind(r, 'dispatch');
     assert.equal(d.length, 2, `应只派 2 张，实际 ${d.length}`);
@@ -698,14 +739,14 @@ describe('decide：单轮派单上限（#849）', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason !== 'unscanned').length, 0, '超上限不 escalate');
   });
 
-  it('上限默认 2：不传 commanderPolicy 也截断', async () => {
+  it('夹具不传 admission → 不截断（旧测兼容；生产路径必填）', async () => {
     const { decide } = await CORE;
     const issues = Array.from({ length: 5 }, (_, i) => readyIssue(1100 + i));
     const r = decide(baseSituation({
       github: { scanned: true, issues, prs: [] },
       commanderPolicy: { requireModelInRouting: false },
     }));
-    assert.equal(byKind(r, 'dispatch').length, 2);
+    assert.equal(byKind(r, 'dispatch').length, 5);
   });
 });
 
@@ -715,7 +756,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1200, 'devin-deepseek-v4-flash-max');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
     }));
     assert.equal(byKind(r, 'dispatch').length, 0, '退役模型绝不派');
@@ -728,7 +769,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1201, 'deepseek-v4-flash');
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       healthRedModels: ['deepseek-v4-flash'],
     }));
@@ -741,7 +782,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1202);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: null,
     }));
     assert.equal(byKind(r, 'dispatch').length, 0);
@@ -753,7 +794,7 @@ describe('decide：派前模型校验（#849）', () => {
     const issue = readyIssue(1203);
     const r = decide(baseSituation({
       github: { scanned: true, issues: [issue], prs: [] },
-      commanderPolicy: { maxDispatchPerRound: 4, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6'],
       healthRedModels: [],
     }));
@@ -979,7 +1020,7 @@ describe('decide：返工模型顶班（#894 实咬）', () => {
     return baseSituation({
       github: { scanned: true, issues: [issue], prs: [pr] },
       prReviews: { scanned: true, byPr: { 951: { reviews: [redReview('这里不对', 'h951')] } } },
-      commanderPolicy: { maxDispatchPerRound: 20, requireModelInRouting: true },
+      commanderPolicy: { requireModelInRouting: true },
       routingModels: ['grok-4.6', 'deepseek-v4-flash'],
       defaultWorkerModel: 'grok-4.6',
       ...over,
@@ -1067,7 +1108,8 @@ describe('跨仓感知只感知不派工', () => {
 
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
-    assert.match(src, /github, orca, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
+    assert.match(src, /sessions, desiredJobs,/, '对账循环观测/期望集也要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
@@ -1078,10 +1120,14 @@ describe('跨仓感知只感知不派工', () => {
   });
 
   it('跨仓没查成不许拦住本轮：它不在 health 的必查清单里', () => {
-    const i = src.indexOf("const sections = ['github'");
-    const line = src.slice(i, i + 200);
-    assert.ok(!/otherRepos/.test(line),
+    assert.match(src, /SITUATION_SECTIONS\.filter/,
+      'situationHealth 必须跟决策层同一份必查清单，不许再手写一份');
+    const i = src.indexOf('function situationHealth');
+    const fn = src.slice(i, src.indexOf('\n}', i) + 2);
+    assert.ok(!/otherRepos/.test(fn),
       '跨仓查不到是别人家的事，不该让本仓这一轮判成没查成');
+    assert.ok(!/'orca'/.test(fn),
+      '#1055：orca 退役后不许再写进 health 必查清单');
   });
 
   it('没查成要显形，不许静默成「别的仓都没事」', () => {
@@ -1344,30 +1390,89 @@ describe('PR 与 master 冲突 → 派解冲突工人，不叫审官', () => {
     assert.deepEqual(byKind(r, 'rework'), []);
   });
 
-  it('draft 的冲突 PR → 不派（还没交卷，工人自己会解）', async () => {
+  it('观测面未接时，draft 的冲突 PR 维持旧契约不派', async () => {
     const { decide } = await CORE;
     const r = decide(sitWith(conflictPr(950, 940, { isDraft: true })));
     assert.deepEqual(byKind(r, 'rework'), []);
   });
+
+  // #1056 / #1043 现场 A：draft 不是「有人在做」。4 张 CONFLICTING 全是 draft、一个活会话都没有。
+  it('draft 冲突 + 观测面扫完没有活会话 → 派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: true, items: [] },
+    }));
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1, '没人在做的 draft 冲突必须派，不能再拿 draft 当活性');
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('draft 冲突 + 同 PR 有活会话 → 不派（真有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: {
+        scanned: true,
+        items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-review-pr-950', title: 'PR #950' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  it('draft 冲突 + 会话名单没查成 → 不派（查不成当有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { isDraft: true }), {
+      sessions: { scanned: false, error: '连不上' },
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
+
+  // #1017：列表 mergeable 恒 UNKNOWN。未知态才单张重查；重查后的 CONFLICTING 要命中解冲突分支。
+  it('列表 UNKNOWN、单张 CONFLICTING → CONFLICTING 分支命中，派解冲突工人', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [950]);
+    const w = byKind(r, 'rework');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].pr, 950);
+    assert.equal(w[0].conflict, true);
+  });
+
+  it('列表 UNKNOWN、单张也 UNKNOWN → 不派冲突工也不合并', async () => {
+    const { decide } = await CORE;
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'UNKNOWN' }), {
+      viewMergeable: () => ({ ok: true, mergeable: 'UNKNOWN' }),
+    }));
+    assert.deepEqual(byKind(r, 'rework'), []);
+    assert.deepEqual(byKind(r, 'merge'), []);
+  });
+
+  it('列表直接 MERGEABLE → 不发起单张重查', async () => {
+    const { decide } = await CORE;
+    const seen = [];
+    const r = decide(sitWith(conflictPr(950, 940, { mergeable: 'MERGEABLE' }), {
+      viewMergeable: (n) => { seen.push(n); return { ok: true, mergeable: 'CONFLICTING' }; },
+    }));
+    assert.deepEqual(seen, [], '已知态不烧配额——即使重查会说 CONFLICTING 也不调');
+    assert.deepEqual(byKind(r, 'rework'), []);
+  });
 });
 
-// 2026-09-06：hubSay 原本只看退出码，把 lark-cli 打印的 message_id 扔了。
-// 「发成了」和「lark-cli 跑通但飞书没收」在退出码上长得一模一样，而回流一哑是整条静默。
-// 这里用源码断言钉住「认回执」这件事——真发一条属于集成面，不进单测。
-describe('hubSay 认回执不认退出码', () => {
+// #1029：状态别塞进总控消息流。hubSay 入队日报，写不进才算失败。
+describe('hubSay 入队日报，不直接发总控群', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
   const fn = src.slice(src.indexOf('function hubSay'), src.indexOf('function hubOnce'));
 
-  it('读了 stdout 里的 message_id', () => {
-    assert.match(fn, /messageId/, 'hubSay 没取 message_id——退出码 0 就当发成了');
+  it('走 recordBroadcast，不 spawn hub-say', () => {
+    assert.match(fn, /recordBroadcast/);
+    assert.equal(fn.includes("spawnSync('hub-say'"), false);
   });
 
-  it('拿不到 message_id 判失败（不许当成功）', () => {
-    assert.match(fn, /if \(!messageId[\s\S]{0,80}return \{ ok: false/);
-  });
-
-  it('字符串 "null" 也算没拿到（jq -q 取不到字段时打的就是它）', () => {
-    assert.match(fn, /messageId === 'null'/);
+  it('入队失败才 ok:false', () => {
+    assert.match(fn, /if \(!r\.ok\) return \{ ok: false/);
   });
 });
 
@@ -1545,5 +1650,127 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
     assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
     assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
+  });
+});
+
+// ── 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派 ──
+describe('对账循环：账上有人、名单里没有 → 重派', () => {
+  // 不打「已消歧」：这单已经有人派过（账上未结），不该再走 ready 队列那条新派路。
+  const labeled = {
+    number: 885, title: '卡 B 返工',
+    labels: [
+      { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+  const sit = (over = {}) => baseSituation({
+    github: { scanned: true, issues: [labeled], prs: [] },
+    prReviews: { scanned: true, byPr: {} },
+    orca: { scanned: true, worktrees: [] },
+    ...over,
+  });
+
+  it('期望集有未结 + 名单里没有活会话 → dispatch(reconcile)', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(d.length, 1);
+    assert.equal(d[0].issue, 885);
+  });
+
+  it('同一 issue 已有活会话 → 拒绝再派', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-885' }] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+  });
+
+  it('会话名单没查成 → 零重派，只 escalate', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: false, error: '连不上' },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885 }] },
+    }));
+    assert.deepEqual(byKind(r, 'dispatch').filter((a) => a.reconcile), []);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'reconcile-unscanned').length, 1);
+  });
+
+  it('老夹具不挂 sessions/desiredJobs → 整段跳过，既有派工路不受影响', async () => {
+    const { decide } = await CORE;
+    const issue = {
+      number: 900, title: '补 X',
+      labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
+    assert.equal(byKind(r, 'dispatch').length, 1);
+    assert.equal(byKind(r, 'dispatch')[0].reconcile, undefined);
+  });
+});
+
+describe('对账循环 scan 真的接进态势', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+
+  it('buildSituation 采了 sessions 和 desiredJobs', () => {
+    assert.match(src, /const sessions = scanSessions\(\);/);
+    assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
+    assert.match(src, /sessions, desiredJobs,/);
+  });
+
+  it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
+    const i = src.indexOf('function scanDesiredJobs');
+    assert.ok(i > -1, '找不到 scanDesiredJobs');
+    const fn = src.slice(i, i + 700);
+    assert.match(fn, /readLedgerEvents/);
+    assert.ok(!/readDispatchEventsIndexed/.test(fn), '索引窗会把 10 分钟前的未结派工洗掉');
+  });
+
+  it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
+    assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
+  });
+});
+
+describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const prev = process.env.DAO_MIRASIM_LS;
+  const restore = () => {
+    if (prev === undefined) delete process.env.DAO_MIRASIM_LS;
+    else process.env.DAO_MIRASIM_LS = prev;
+  };
+
+  it('零输出脚本 exit 0 → scanned:false（审官判别实验）', async () => {
+    const { scanSessions } = await MOD();
+    const empty = path.join(__dirname, 'fixtures', 'unit-restart', 'empty', '.gitkeep');
+    process.env.DAO_MIRASIM_LS = empty;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, '零输出不许当成查成且空');
+      assert.match(String(r.error || ''), /没查成|协议帧|零输出/);
+    } finally { restore(); }
+  });
+
+  it('打了 type=sessions 协议帧且 0 行会话 → scanned:true items=[]（查成且空）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-ok-empty.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, true);
+      assert.deepEqual(r.items, []);
+    } finally { restore(); }
+  });
+
+  it('{type:sessions, sessions:null} → scanned:false（审官判别实验：不许折成空名单）', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-null.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
+      assert.match(String(r.error || ''), /不是数组|没查成/);
+    } finally { restore(); }
   });
 });
