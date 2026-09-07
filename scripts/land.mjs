@@ -73,10 +73,7 @@ if (!HAS_WORK && ship.action === 'push') {
   if (existsSync(checkFile)) {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
     else {
-      // 快档是 dao-check 的默认档（2026-09-06 翻转）：只跑与本次改动相关的测试 + 跳过要出网的检查。
-      // 这里不再传 `--affected`——那个旗标现在是等价别名，传了只会让人以为默认是全量。
-      // 兜底靠两处，不靠这一次：CI 每次 PR 跑（全新 clone 无地图 ⇒ 自动全量）、本地可敲 `--full`。
-      say('[收工] 推之前跑检查（快档：只跑受影响的）…');
+      say('[收工] 推之前跑检查（全部测试 + 不出网）…');
       const c = spawnSync(process.execPath, [checkFile], { windowsHide: true, cwd: root, encoding: 'utf8' });
       const tail = String(c.stdout || '').trim().split(/\r?\n/).pop() || '';
       say(`[收工] 检查：${tail}`);
@@ -163,29 +160,9 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
   say(r.status === 0 ? `[收工] 删支 ${name}` : `[收工] 删支失败 ${name}：${r.err.slice(0, 120)}`);
 }
 
-// ── ③ 僵尸终端：orca 登记着但工位目录已不在的终端，关掉（只认目录确实不存在；orca 不在 = 跳过） ──
-let zombieCount = 0;
-{
-  const r = spawnSync('orca', ['terminal', 'list', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 15000, shell: true });
-  let terminals = null;
-  if (r.status === 0) { try { terminals = JSON.parse(r.stdout)?.result?.terminals; } catch { /* 畸形当没查成 */ } }
-  if (Array.isArray(terminals)) {
-    for (const t of terminals) {
-      const p = String(t?.worktreePath || (String(t?.worktreeId || '').split('::')[1] || ''));
-      const d = decideTerminalClose({ path: p, exists: p ? existsSync(p) : null });
-      if (!d.close) continue;
-      zombieCount += 1;
-      if (HAS_WORK) { say(`[收工] 有活：关僵尸终端 ${t.handle}（${d.reason}）`); continue; }
-      if (DRY) { say(`[收工] [拟] 关僵尸终端 ${t.handle}（${d.reason}）`); continue; }
-      const c = spawnSync('orca', ['terminal', 'close', '--terminal', String(t.handle), '--tab'], { encoding: 'utf8', windowsHide: true, timeout: 15000, shell: true });
-      say(c.status === 0 ? `[收工] 关僵尸终端 ${t.handle}（${d.reason}）` : `[收工] 关僵尸终端失败 ${t.handle}：${String(c.stderr || c.stdout).slice(0, 120)}`);
-    }
-  }
-}
-
 if (HAS_WORK) {
-  const work = hasLandWork({ shipAction: ship.action, removeCount, deleteCount, zombieCount });
-  say(work ? `[收工] 有活（运=${ship.action} 拆树=${removeCount} 删支=${deleteCount} 僵尸终端=${zombieCount}）` : '[收工] 没活');
+  const work = hasLandWork({ shipAction: ship.action, removeCount, deleteCount, zombieCount: 0 });
+  say(work ? `[收工] 有活（运=${ship.action} 拆树=${removeCount} 删支=${deleteCount}）` : '[收工] 没活');
   process.exit(work ? 0 : 2);
 }
 

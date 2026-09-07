@@ -74,8 +74,8 @@ describe('ops-skill-pointers', () => {
     assert.equal(zero.kind, 'unscanned', '抽到 0 条必须没查成  →  ' + JSON.stringify(zero));
 
     const ok = inspectPointers({
-      files: { 'host/skills/server-ops/SKILL.md': '装法见 `NEW-MACHINE.md` 与 `host/machine/systemd/orca-serve.service`。' },
-      exists: (p) => p === 'NEW-MACHINE.md' || p === 'host/machine/systemd/orca-serve.service',
+      files: { 'host/skills/server-ops/SKILL.md': '装法见 `NEW-MACHINE.md` 与 `host/machine/systemd/dao-land.service`。' },
+      exists: (p) => p === 'NEW-MACHINE.md' || p === 'host/machine/systemd/dao-land.service',
     });
     assert.equal(ok.kind, 'ok', '落点齐必须绿  →  ' + JSON.stringify(ok));
   });

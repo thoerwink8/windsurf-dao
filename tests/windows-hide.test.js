@@ -82,11 +82,11 @@ describe('Windows 不闪控制台窗（全仓覆盖）', () => {
   });
 
   it('判别力：缺 windowsHide 的样本必须被这套逻辑判红', () => {
-    const fake = "const r = spawnSync('orca', args, { encoding: 'utf8', timeout: 20000 });";
+    const fake = "const r = spawnSync('git', args, { encoding: 'utf8', timeout: 20000 });";
     const sites = spawnSites(fake);
     assert.equal(sites.length, 1, '样本应识别出 1 处 spawn');
     assert.equal(hasHide(fake, sites[0]), false, '缺 windowsHide 的样本必须判红——否则这道检查是摆设');
-    const good = "const r = spawnSync('orca', args, { encoding: 'utf8', windowsHide: true });";
+    const good = "const r = spawnSync('git', args, { encoding: 'utf8', windowsHide: true });";
     assert.equal(hasHide(good, spawnSites(good)[0]), true, '带了的不许误报');
   });
 

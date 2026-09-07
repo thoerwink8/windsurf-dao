@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { runOrcaRaw } from './orca-run.mjs';
+
 import { displayNumberFromWorktree } from './card-identity.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -117,9 +117,8 @@ export function boardLine(summary) {
   return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit} · 盘面 ${fmtOnBoard(summary.onBoard)}`;
 }
 
-// spawn 唯一真源在 scripts/lib/orca-run.mjs——raw 结果由本文件调用点自己解析。
-function runOrca(args) {
-  return runOrcaRaw(args, { timeout: ORCA_TIMEOUT_MS });
+function runOrca() {
+  return { status: 1, error: { code: 'orca_retired' }, stdout: '', stderr: 'orca 已退役' };
 }
 
 function loadCache() {
