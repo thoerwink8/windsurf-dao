@@ -164,8 +164,8 @@
 
 - [x] 安装脚本改为卸载；NEW-MACHINE 不再装推一把。机器上已 `retired dao-nudge-stalled.timer`
 - [x] 指挥官对 `incomplete` 产 `stop-session`，不再推一把起新会话
-- [ ] 对已交卷 / PR 已有判定 / issue 已关 / PR 已合的树，执行 `session-stop`（树先留）——合入后由指挥官下一轮停 incomplete
-- [ ] 验收：`/proc` 里 cwd 落在 `mirasim-worktrees` 的 LLM 进程数降到「正在干活」的个位数；准入 `inFlight` 跟着降
+- [x] 对已交卷 / PR 已有判定 / issue 已关 / PR 已合的树，执行 `session-stop`（树先留）——#1134 四条审官会话已停，`/proc` 无该树进程
+- [x] 验收：`/proc` 里 cwd 落在 `mirasim-worktrees` 的 LLM 进程数降到「正在干活」的个位数；准入 `inFlight` 跟着降——合入后一轮 3 个活审官、`inFlight=3`
 
 ### 2. 冻结同因补丁
 
@@ -187,14 +187,14 @@
 - [x] `worker-done` 成功后 `stopSessionsAtCwd`
 - [x] 指挥官对 `incomplete` 产 `stop-session`（审官落判定后一轮说完即 incomplete）
 - [x] 返工/冲突改在原树 `dao.mjs start`，不新 `dispatch`
-- [ ] 验收：交卷后 `/proc` 不再有该树的 pi/codex/node 会话进程（合入后下一轮指挥官停 incomplete）
+- [x] 验收：交卷后 `/proc` 不再有该树的 pi/codex/node 会话进程——#1134 合入后该树 0 进程
 
 ### 5. 交卷入队 + 同一准入
 
 - [x] `worker-done` `enqueueOnly`：只写 review-pending，不起审官
 - [x] 指挥官既有 `review-pending-drain` + 共用准入（load 0.85）
 - [x] 不写死 `maxDispatch=3`
-- [ ] 验收：同时交卷 5 张 PR，不会一次起 5 个审官（入队已钉；实机随合入观察）
+- [x] 验收：同时交卷 5 张 PR，不会一次起 5 个审官（入队已钉；合入后指挥官一轮 `inFlight=3`，死票 #1134 回收，未一次起 5 审官）
 
 ### 6. 冲突两档
 
@@ -202,7 +202,7 @@
 - [x] CONFLICTING：`dispatchRework` 先 `git merge origin/master`；合上就推；合不上原树短会话
 - [x] 找不到原树不新派工
 - [x] 核绿后的新 head 不再自动 `rereview`
-- [ ] 实机真冲突走一遭核对日志
+- [x] 实机真冲突走一遭核对日志——PR #1135 `git merge origin/master` 在 5 个文件 CONFLICT（`dispatchRework` 第二档：合不上）
 
 ### 7. 看门狗并进指挥官（删独立腿）
 

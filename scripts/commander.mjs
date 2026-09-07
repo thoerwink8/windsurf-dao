@@ -228,7 +228,9 @@ function scanSessions() {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
   const r = spawnSync(process.execPath, [script], {
-    windowsHide: true, encoding: 'utf8', timeout: 20000, cwd: ROOT, env: process.env,
+    windowsHide: true, encoding: 'utf8', timeout: 20000, cwd: ROOT,
+    // 脚本默认 8s 在本机刮名单会超时，指挥官整轮把 incomplete 当成「名单没查成」放过。
+    env: { ...process.env, MIRASIM_LS_TIMEOUT_MS: process.env.MIRASIM_LS_TIMEOUT_MS || '15000' },
   });
   if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
   if (r.status !== 0) {
