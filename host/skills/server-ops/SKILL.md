@@ -33,13 +33,12 @@ v0 零界面（#818）：一张表 + 墙钟超 `docs/dispatch-policy.json` 的 `
 
 2026-09-06 用户拍板删掉屏面指纹整层：不再读执行体屏幕猜它卡没卡，改成超时判死——
 连续 N 轮同一对象（PR / 已消歧 issue / 复审票）同一状态就是卡住，判据全在 GitHub 面。
-发现只叫醒帅位，**不自动换审官**（换人执行面随那一层一起删了）。
+2026-09-07 并进 `commander-act`：不再另开 timer。发现只叫醒帅位，**不自动换审官**。
 
-- 单元模板：`host/machine/systemd/dao-progress-watch.service` + `.timer`（装法在 service 文件头）。
-- 幂等安装（要 root）：`sudo bash scripts/install-progress-watch.sh`。
-- 一条命令：`node scripts/progress-watch.mjs`（timer 调同一条；`--dry-run` 只打印）。
-- 原料是指挥官每 20 分钟写的 `~/.dao/commander/situation-*.json`——`commander-act.timer` 停了它就永远「没查成」（exit 2），两个 timer 是一条链。
-- 探活：`systemctl list-timers` 里要有 `dao-progress-watch.timer`，**NEXT 不能是 `-`**（在册但 elapsed 等于没拉）。`scripts/server-check.mjs` ⑮ 会红漏装、NEXT 横杠，以及三个退役件（`dao-agent-stall.timer` / `agent-stall-watch.timer` / `/home/orca/bin/agent-stall-watch.mjs`）任一还在。
+- 一条命令：`node scripts/progress-watch.mjs`（指挥官每轮调同一份；`--dry-run` 只打印）。
+- 原料是指挥官每 20 分钟写的 `~/.dao/commander/situation-*.json`——`commander-act.timer` 停了它就永远「没查成」。
+- 机器上若还留着独立钟：`sudo bash scripts/install-progress-watch.sh`（脚本已改成卸载）。
+- 探活：`systemctl list-timers --all` 里**没有** `dao-progress-watch.timer` / `dao-nudge-stalled.timer`。`scripts/server-check.mjs` ⑮ 会红独立钟还在、屏面指纹退役件还在、或指挥官没调用 `runProgressWatch`。
 
 ## server-check 三态
 
