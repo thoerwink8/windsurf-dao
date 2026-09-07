@@ -714,6 +714,9 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     const body = src.slice(i, src.indexOf("case 'merge':", i));
     assert.match(body, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
     assert.match(body, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    // #1125：attach-reviewer 不带 --pr，走容量闸。带了就变逃生口、不过上限。
+    // #1104 毒票隔离：pickReviewer 同名去重；单张失败下一轮 retry-drain 仍带 --pr。
+    assert.ok(!/'--pr'/.test(body), 'attach-reviewer 不带 --pr，否则容量闸被冲掉');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
   });
 

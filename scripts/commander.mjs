@@ -642,6 +642,8 @@ function execAction(action, { state, dryRun, log }) {
     }
     case 'attach-reviewer': {
       // 走 blessed 路径 review-pending-drain。#1125 起 drain 自己按在役审官数拉，拉满即停，不是一次清完。
+      // 不带 --pr：带了就走逃生口、不过并发上限，容量闸形同虚设。
+      // #1104 毒票（同名 model/* 两次）已在 pickReviewer 同名去重；单张失败下一轮走 retry-drain（仍带 --pr 隔离）。
       const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
       const r = runOrShow(cmd, { dryRun, say, why: action.why });
       // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
