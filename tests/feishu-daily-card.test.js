@@ -2,12 +2,15 @@
 // 无变化不发、没查成不发假报、状态色必须图标+文字。
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
 const LIB = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'feishu-daily-card.mjs')));
 const PLAIN = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'plain-words.mjs')));
+const HUB_CARD = import(toUrl(path.join(ROOT, 'scripts', 'lib', 'feishu-hub-card.mjs')));
+const ADAPTER = import(toUrl(path.join(ROOT, 'scripts', 'feishu-triage.mjs')));
 
 function snap(over = {}) {
   return {
@@ -19,6 +22,21 @@ function snap(over = {}) {
     headlines: ['合并 4 张', '卡住 1 处'],
     ...over,
   };
+}
+
+function flattenCardText(card) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (typeof n.content === 'string') out.push(n.content);
+    if (Array.isArray(n)) {
+      for (const x of n) visit(x);
+      return;
+    }
+    for (const v of Object.values(n)) visit(v);
+  };
+  visit(card);
+  return out.join('\n');
 }
 
 describe('shouldSend：没查成 / 无变化 / 首期', () => {
@@ -148,52 +166,85 @@ describe('buildDailyCard：Card JSON 2.0 结构', () => {
     const { buildDailyCard } = await LIB;
     const prev = snap({ pending: 5, openPrs: 15, workers: 5, conflicts: 4 });
     const card = buildDailyCard({ day: '2026-09-07', snapshot: snap(), previous: prev });
-    const hero = card.body.elements.find((e) => e.tag === 'markdown' && /待拍板/.test(e.content || ''));
-    assert.ok(hero);
-    assert.match(hero.content, /\*\*待拍板 5 件\*\*/);
-    const sets = card.body.elements.filter((e) => e.tag === 'column_set');
-    assert.equal(sets.length, 1);
-    assert.equal(sets[0].columns.length, 4);
-    const texts = sets[0].columns.map((c) => c.elements[0].content);
-    assert.equal(texts.some((t) => t.includes('↑ +2')), true, '开放 PR 15→17 该有 +2');
-    assert.equal(texts.some((t) => t.includes('↓ -3')), true, '在跑工人 5→2 该有 -3');
-    assert.equal(texts.some((t) => t.includes('持平')), true);
+    const blobs = flattenCardText(card);
+    assert.match(blobs, /待拍板 5 件/);
+    assert.match(blobs, /这是今天唯一需要你动手的东西/);
+    const sets = [];
+    const visit = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (n.tag === 'column_set') sets.push(n);
+      if (Array.isArray(n)) { for (const x of n) visit(x); return; }
+      for (const v of Object.values(n)) visit(v);
+    };
+    visit(card);
+    const kpi = sets.find((s) => s.columns && s.columns.length === 4);
+    assert.equal(kpi != null, true);
+    assert.equal(kpi.columns.length, 4);
+    const texts = kpi.columns.map((c) => (c.elements || []).map((e) => e.content).join('\n'));
+    assert.equal(texts.some((t) => t.includes('↑ 上一期 +2')), true, '开放 PR 15→17 该有 +2');
+    assert.equal(texts.some((t) => t.includes('↓ 上一期 -3')), true, '在跑工人 5→2 该有 -3');
+    assert.equal(texts.some((t) => t.includes('持平 · 上一期')), true);
+    for (const set of sets) {
+      assert.equal(set.columns.length <= 4, true, `列数 ${set.columns.length} 超过 4`);
+    }
   });
 
-  it('看待拍板按钮走 callback，不是链接', async () => {
-    const { buildDailyCard, DAILY_CALLBACK_LIST_PENDING } = await LIB;
+  it('两个按钮都走 callback，不走链接', async () => {
+    const { buildDailyCard, DAILY_CALLBACK_LIST_PENDING, DAILY_CALLBACK_LIST_PRS, DAILY_KIND } = await LIB;
     const card = buildDailyCard({ day: '2026-09-07', snapshot: snap() });
-    const btn = card.body.elements.find((e) => e.tag === 'button' && e.text && e.text.content === '看待拍板');
-    assert.ok(btn);
-    assert.equal(btn.behaviors[0].type, 'callback');
-    assert.equal(btn.behaviors[0].value.action, DAILY_CALLBACK_LIST_PENDING);
-    const link = card.body.elements.find((e) => e.tag === 'button' && e.text && e.text.content === '看全部 PR');
-    assert.equal(link.behaviors[0].type, 'open_url');
+    const btns = [];
+    const visit = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (n.tag === 'button') btns.push(n);
+      if (Array.isArray(n)) { for (const x of n) visit(x); return; }
+      for (const v of Object.values(n)) visit(v);
+    };
+    visit(card);
+    assert.equal(btns.length, 2);
+    assert.equal(btns[0].text.content, '看待拍板');
+    assert.equal(btns[1].text.content, '看全部 PR');
+    for (const b of btns) {
+      assert.equal(b.behaviors[0].type, 'callback');
+      assert.equal(b.value.kind, DAILY_KIND);
+      assert.equal(b.url, undefined);
+      assert.equal(b.behaviors[0].value.action, b.value.action);
+    }
+    assert.equal(btns[0].value.action, DAILY_CALLBACK_LIST_PENDING);
+    assert.equal(btns[1].value.action, DAILY_CALLBACK_LIST_PRS);
+    assert.equal(btns[0].type, 'primary_filled');
+    assert.equal(Object.prototype.hasOwnProperty.call(card, 'template_id'), false);
   });
 
   it('正文说人话', async () => {
     const { buildDailyCard } = await LIB;
     const { plainViolations } = await PLAIN;
     const card = buildDailyCard({ day: '2026-09-07', snapshot: snap(), nowLabel: '19:12' });
-    const blobs = [
-      card.header.title.content,
-      card.header.subtitle.content,
-      ...card.body.elements.flatMap((e) => {
-        if (e.content) return [e.content];
-        if (e.elements) return e.elements.map((x) => x.content).filter(Boolean);
-        if (e.columns) return e.columns.flatMap((c) => (c.elements || []).map((x) => x.content));
-        if (e.text) return [e.text.content];
-        return [];
-      }),
-    ].join('\n');
-    assert.deepEqual(plainViolations(blobs), []);
+    assert.deepEqual(plainViolations(flattenCardText(card)), []);
+  });
+
+  it('空事项不把存量当新闻；schema 2.0 用 width_mode 不用 1.0 的 wide_screen_mode', async () => {
+    const { buildDailyCard } = await LIB;
+    const card = buildDailyCard({
+      day: '2026-09-07',
+      snapshot: snap({ headlines: [] }),
+    });
+    const text = flattenCardText(card);
+    assert.match(text, /数字有变，没有新的具体事项/);
+    assert.equal(text.includes('这一期没有新事'), false);
+    assert.equal(card.config.width_mode, 'default');
+    assert.equal(card.config.wide_screen_mode, undefined);
+    assert.equal(card.body.direction, 'vertical');
   });
 });
 
 describe('delta / headlines', () => {
-  it('没有上一期写首期', async () => {
+  it('没有上一期写首期；有变化写对比哪一期', async () => {
     const { deltaText } = await LIB;
     assert.equal(deltaText(5, null), '首期');
+    assert.equal(deltaText(5, 3), '↑ 上一期 +2');
+    assert.equal(deltaText(1, 4), '↓ 上一期 -3');
+    assert.equal(deltaText(2, 2), '持平 · 上一期');
+    assert.equal(deltaText(null, 1), '没查成');
   });
 
   it('队列条目用人话来源，最多 5 行外加一条折叠', async () => {
@@ -210,5 +261,94 @@ describe('delta / headlines', () => {
     assert.equal(lines[0], '心跳：连续 7 天静默');
     assert.equal(lines.length, 6);
     assert.match(lines[5], /另有 1 条/);
+  });
+});
+
+function dailyEvent({ action = 'list_pending', pending = 5, openPrs = 17 } = {}) {
+  return {
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger', event_id: 'e-daily' },
+    event: {
+      operator: { open_id: 'ou_user1', user_name: '老板' },
+      action: { tag: 'button', value: { kind: 'daily', action, pending, openPrs } },
+      context: { open_message_id: 'om_daily_1', open_chat_id: 'oc_hub' },
+      token: 'tok_d',
+    },
+  };
+}
+
+describe('待拍板卡仍是 Card 1.0：本单不许顺手重写', () => {
+  it('buildHubCard 没有 schema 2.0', async () => {
+    const H = await HUB_CARD;
+    const card = H.buildHubCard({ repo: 'thoerwink8/windsurf-dao', number: 1052, title: '日报卡' });
+    assert.equal(card.schema, undefined);
+    assert.equal(Array.isArray(card.elements), true);
+    assert.equal(card.body, undefined);
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'feishu-hub-card.mjs'), 'utf8');
+    assert.match(src, /Card 1\.0/);
+    assert.equal(src.includes("schema: '2.0'"), false);
+  });
+});
+
+describe('日报卡按钮回传不改待拍板路径', () => {
+  it('点看待拍板：toast 一句、不换卡、不写 GitHub', async () => {
+    const M = await ADAPTER;
+    const comments = [];
+    const store = { hubPending: {}, save() { store.saved = true; } };
+    const res = await M.handleCardAction(dailyEvent(), {
+      store,
+      deps: { now: () => Date.now(), ghComment: async (...a) => comments.push(a) },
+    });
+    assert.equal(res.response.kind, 'daily');
+    assert.equal(res.ack.toast.type, 'info');
+    assert.match(res.ack.toast.content, /待拍板 5 件/);
+    assert.equal(res.ack.card, undefined);
+    assert.equal(res.actions.length, 0);
+    assert.equal(comments.length, 0);
+    assert.equal(store.hubPending.om_daily_1, undefined);
+  });
+
+  it('live 回包 3 秒内只 toast，不把日报卡换成空待拍板卡', async () => {
+    const M = await ADAPTER;
+    const comments = [];
+    const deferred = [];
+    const ack = await M.liveCardAction(dailyEvent({ action: 'list_prs', openPrs: 17 }), {
+      store: { hubPending: {}, save() {} },
+      deps: { now: () => Date.now(), ghComment: async (...a) => comments.push(a) },
+      client: { sendText: async () => { throw new Error('回包路径不该发网'); } },
+      defer: (fn) => deferred.push(fn),
+    });
+    assert.equal(ack.toast.type, 'info');
+    assert.match(ack.toast.content, /开放 PR 17/);
+    assert.equal(ack.card, undefined);
+    assert.equal(comments.length, 0);
+    assert.equal(deferred.length, 1);
+  });
+
+  it('待拍板卡回传仍走原路径（对照：本单没把两张卡搅在一起）', async () => {
+    const M = await ADAPTER;
+    const comments = [];
+    const store = {
+      hubPending: { om_card_1: { repo: 'thoerwink8/windsurf-dao', number: 846, title: '盘点' } },
+      save() {},
+    };
+    const res = await M.handleEvent({
+      schema: '2.0',
+      header: { event_type: 'card.action.trigger', event_id: 'e-card' },
+      event: {
+        operator: { open_id: 'ou_user1', user_name: '老板' },
+        action: { tag: 'button', value: { issue: '846', choice: 'recommend', repo: 'thoerwink8/windsurf-dao' } },
+        context: { open_message_id: 'om_card_1', open_chat_id: 'oc_hub' },
+      },
+    }, {
+      groups: {}, store,
+      deps: { now: () => Date.now(), ghComment: async (...a) => comments.push(a) },
+      triage: async () => { throw new Error('不该走消息 triage'); },
+      client: null,
+    });
+    assert.equal(res.cardKind, 'ok');
+    assert.equal(res.cardAck.card.type, 'raw');
+    assert.match(res.cardAck.card.data.header.title.content, /已拍/);
+    assert.equal(comments.length, 1);
   });
 });
