@@ -228,7 +228,9 @@ function scanSessions() {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
   const r = spawnSync(process.execPath, [script], {
-    windowsHide: true, encoding: 'utf8', timeout: 20000, cwd: ROOT, env: process.env,
+    windowsHide: true, encoding: 'utf8', timeout: 40000, cwd: ROOT,
+    // 15s 在本机仍会偶发超时，指挥官整轮把 incomplete 当成「名单没查成」放过。
+    env: { ...process.env, MIRASIM_LS_TIMEOUT_MS: process.env.MIRASIM_LS_TIMEOUT_MS || '30000' },
   });
   if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
   if (r.status !== 0) {
@@ -640,25 +642,8 @@ function execAction(action, { state, dryRun, log }) {
       if (!r.ok) return r;
       return awaitDispatchResult(r.out, { say });
     }
-    case 'attach-reviewer': {
-      // 走 blessed 路径 review-pending-drain（含归属/活性校验）。必须带 --pr：
-      // 全队列一把清时，一张毒票（同名 model/* 出现两次）会让别的 PR 也起不了审官（#1104 实咬）。
-      const cmd = action.pr != null
-        ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
-        : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
-      if (action.repo) cmd.push('--repo', String(action.repo));
-      const r = runOrShow(cmd, { dryRun, say, why: action.why });
-      // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
-      // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
-      // #909 修了 decide 侧、漏了这一处写侧：账记到 pr:N，decide 去看 pr:N@head，永远 never-attempted。
-      if (action.pr != null) {
-        state.drainLedger = state.drainLedger || {};
-        const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
-        const prev = state.drainLedger[key];
-        state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
-      }
-      return r;
-    }
+    case 'attach-reviewer':
+      return drainReviewPending(action, { state, dryRun, say });
     case 'stop-session': {
       if (!action.sessionKey) {
         say('  stop-session 没有 sessionKey');
@@ -668,8 +653,7 @@ function execAction(action, { state, dryRun, log }) {
         ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
         { dryRun, say, why: action.why },
       );
-    }
-    case 'merge':
+    }    case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
@@ -1189,10 +1173,10 @@ export function reworkSpec(action, briefPath) {
 }
 
 /**
- * 叫审官复审：写一张复审待办票，交给已有的 review-pending drain 去消费。
- * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧，
- * 这里再判一遍就是第二套判据（2026-09-05：#890/#893/#896/#905 推了新 head 后没人叫审官，挂了 10 小时）。
- * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]（与返工共用一张记账表，键前缀区分）。
+ * 叫审官复审：写一张复审待办票，当场走 review-pending-drain --pr。
+ * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧。
+ * 写完等下一轮才 drain，审官会再睡 20 分钟（#1104 / 今晚 1134.json）。
+ * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]。
  */
 function requestRereview(action, { state, dryRun, say }) {
   if (!action.reviewer) {
@@ -1215,7 +1199,7 @@ function requestRereview(action, { state, dryRun, say }) {
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
     say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
-    return { ok: true, dryRun: true };
+    return drainReviewPending(action, { state, dryRun, say });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
@@ -1227,8 +1211,26 @@ function requestRereview(action, { state, dryRun, say }) {
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
-  say(`  已写复审待办 ${w.path}（drain 下一轮消费）`);
-  return { ok: true, path: w.path };
+  say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
+  return drainReviewPending(action, { state, dryRun, say });
+}
+
+/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。 */
+function drainReviewPending(action, { state, dryRun, say }) {
+  const cmd = action.pr != null
+    ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
+    : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+  if (action.repo) cmd.push('--repo', String(action.repo));
+  const r = runOrShow(cmd, { dryRun, say, why: action.why });
+  // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
+  // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
+  if (action.pr != null) {
+    state.drainLedger = state.drainLedger || {};
+    const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
+    const prev = state.drainLedger[key];
+    state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
+  }
+  return r;
 }
 
 function findDaoTree(issue, pr) {

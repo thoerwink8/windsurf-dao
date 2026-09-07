@@ -63,4 +63,10 @@ describe('ephemeral-lifecycle', () => {
     assert.equal(existsSync(join(REPO, 'scripts/land.mjs')), true);
     assert.equal(existsSync(join(REPO, 'scripts/close-issues.mjs')), true);
   });
+
+  it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {
+    assert.match(read('scripts/mirasim-sessions.mjs'), /MIRASIM_LS_TIMEOUT_MS \|\| 30000/);
+    assert.match(read('scripts/commander.mjs'), /MIRASIM_LS_TIMEOUT_MS: process\.env\.MIRASIM_LS_TIMEOUT_MS \|\| '30000'/);
+    assert.match(read('scripts/commander.mjs'), /timeout:\s*40000/);
+  });
 });

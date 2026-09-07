@@ -724,10 +724,14 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     const i = src.indexOf("case 'attach-reviewer':");
     assert.ok(i > -1, '找不到 attach-reviewer case');
     const body = src.slice(i, src.indexOf("case 'merge':", i));
-    assert.match(body, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
-    assert.match(body, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
-    assert.match(body, /'--pr'/, 'drain 必须带本张 PR，毒票不许拖死队列里别的 PR');
-    assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
+    assert.match(body, /drainReviewPending\(/, 'attach-reviewer 必须走同一处 drain');
+    const drainI = src.indexOf('function drainReviewPending');
+    assert.ok(drainI > -1, '找不到 drainReviewPending');
+    const drain = src.slice(drainI, drainI + 1200);
+    assert.match(drain, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
+    assert.match(drain, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    assert.match(drain, /'--pr'/, 'drain 必须带本张 PR，毒票不许拖死队列里别的 PR');
+    assert.ok(!/`pr:\$\{action\.pr\}`/.test(drain), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {

@@ -1783,6 +1783,17 @@ describe('对账循环 scan 真的接进态势', () => {
   it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
     assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
   });
+
+  it('rereview 写完票当场 drain --pr，不等下一轮', () => {
+    const i = src.indexOf('function requestRereview');
+    assert.ok(i > -1, '找不到 requestRereview');
+    const fn = src.slice(i, src.indexOf('function drainReviewPending', i));
+    assert.match(fn, /drainReviewPending/, '写完必须当场 drain');
+    assert.doesNotMatch(fn, /drain 下一轮消费/, '不许再把审官推到下一轮');
+    const drain = src.slice(src.indexOf('function drainReviewPending'), src.indexOf('function drainReviewPending') + 900);
+    assert.match(drain, /review-pending-drain/);
+    assert.match(drain, /--pr/);
+  });
 });
 
 describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单', () => {
