@@ -8,7 +8,10 @@ import { createHash } from 'node:crypto';
 import { ensurePlain } from './plain-words.mjs';
 
 export const DAILY_CARD_SCHEMA = '2.0';
+export const DAILY_KIND = 'daily';
 export const DAILY_CALLBACK_LIST_PENDING = 'list_pending';
+export const DAILY_CALLBACK_LIST_PRS = 'list_prs';
+export const PERIOD_LABEL = '上一期';
 export const SOURCE_LABELS = {
   heartbeat: '心跳',
   breaker: '熔断',
@@ -37,12 +40,13 @@ export function formatDayTitle(day) {
   return `${Number(m[2])} 月 ${Number(m[3])} 日`;
 }
 
-export function deltaText(curr, prev) {
+export function deltaText(curr, prev, { periodLabel = PERIOD_LABEL } = {}) {
+  if (curr == null || !Number.isFinite(Number(curr))) return '没查成';
   if (prev == null || !Number.isFinite(Number(prev))) return '首期';
   const d = Number(curr) - Number(prev);
-  if (d === 0) return '持平';
-  if (d > 0) return `↑ +${d}`;
-  return `↓ ${d}`;
+  if (d === 0) return `持平 · ${periodLabel}`;
+  if (d > 0) return `↑ ${periodLabel} +${d}`;
+  return `↓ ${periodLabel} ${d}`;
 }
 
 export function toneOf({ pending, stuck } = {}) {
@@ -136,33 +140,30 @@ export function planDailySend({ snapshot, previous, lastSentDay, today } = {}) {
 
 function kpiColumn(label, value, delta) {
   const shown = value == null ? '没查成' : String(value);
-  const md = `**${label}**\n${shown}\n${delta}`;
   return {
     tag: 'column',
     width: 'weighted',
     weight: 1,
-    vertical_align: 'top',
-    elements: [{ tag: 'markdown', content: ensurePlain(md, 'feishu-daily-card/kpi') }],
+    padding: '8px',
+    vertical_spacing: '2px',
+    background_style: 'grey-50',
+    elements: [
+      { tag: 'markdown', content: ensurePlain(`**${label}**`, 'feishu-daily-card/kpi-label'), text_align: 'center', text_size: 'notation' },
+      { tag: 'markdown', content: ensurePlain(shown, 'feishu-daily-card/kpi-value'), text_align: 'center' },
+      { tag: 'markdown', content: ensurePlain(delta, 'feishu-daily-card/kpi-delta'), text_align: 'center', text_size: 'notation' },
+    ],
   };
 }
 
-function callbackButton(label, action, type) {
+function callbackButton(label, action, type, extra = {}) {
+  const value = { kind: DAILY_KIND, action, ...extra };
   return {
     tag: 'button',
     text: { tag: 'plain_text', content: label },
     type,
     width: 'default',
-    behaviors: [{ type: 'callback', value: { action } }],
-  };
-}
-
-function linkButton(label, url) {
-  return {
-    tag: 'button',
-    text: { tag: 'plain_text', content: label },
-    type: 'default',
-    width: 'default',
-    behaviors: [{ type: 'open_url', default_url: url }],
+    value,
+    behaviors: [{ type: 'callback', value }],
   };
 }
 
@@ -185,21 +186,45 @@ export function buildDailyCard({
   const headlines = Array.isArray(snapshot.headlines) ? snapshot.headlines.filter(Boolean).slice(0, 6) : [];
   const happened = headlines.length
     ? headlines.map((h) => `- ${h}`).join('\n')
-    : '- 这一期没有新事';
-  const prUrl = str(repo) ? `https://github.com/${str(repo)}/pulls` : 'https://github.com/thoerwink8/windsurf-dao/pulls';
+    : '数字有变，没有新的具体事项';
   const note = ['数据截止', str(nowLabel) || str(day), '只在有变化时推送'].filter(Boolean).join(' · ');
+  const counts = {
+    pending: pending == null ? undefined : pending,
+    openPrs: openPrs == null ? undefined : openPrs,
+  };
 
   const elements = [
     {
-      tag: 'markdown',
-      content: ensurePlain(`**待拍板 ${heroN} 件**\n${heroHint}`, 'feishu-daily-card/hero'),
+      tag: 'column_set',
+      flex_mode: 'none',
+      margin: '0px 0px 12px 0px',
+      columns: [{
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        padding: '12px',
+        vertical_spacing: '2px',
+        background_style: 'grey-50',
+        elements: [
+          {
+            tag: 'markdown',
+            content: ensurePlain(`## 待拍板 ${heroN}${pending == null ? '' : ' 件'}`, 'feishu-daily-card/hero'),
+            text_align: 'center',
+          },
+          {
+            tag: 'markdown',
+            content: ensurePlain(heroHint, 'feishu-daily-card/hero-hint'),
+            text_align: 'center',
+            text_size: 'notation',
+          },
+        ],
+      }],
     },
-    { tag: 'hr' },
     {
       tag: 'column_set',
-      flex_mode: 'bisect',
-      background_style: 'grey',
+      flex_mode: 'none',
       horizontal_spacing: '8px',
+      margin: '0px 0px 12px 0px',
       columns: [
         kpiColumn('开放 PR', openPrs, deltaText(openPrs, previous && previous.openPrs)),
         kpiColumn('待拍板', pending, deltaText(pending, previous && previous.pending)),
@@ -207,33 +232,84 @@ export function buildDailyCard({
         kpiColumn('冲突 PR', conflicts, deltaText(conflicts, previous && previous.conflicts)),
       ],
     },
-    { tag: 'hr' },
     {
       tag: 'markdown',
       content: ensurePlain(`**本期发生了什么**\n${happened}`, 'feishu-daily-card/happened'),
+      margin: '0px 0px 12px 0px',
     },
     {
       tag: 'note',
       elements: [{ tag: 'plain_text', content: ensurePlain(note, 'feishu-daily-card/note') }],
     },
-    callbackButton('看待拍板', DAILY_CALLBACK_LIST_PENDING, 'primary'),
-    linkButton('看全部 PR', prUrl),
+    {
+      tag: 'column_set',
+      flex_mode: 'bisect',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [callbackButton('看待拍板', DAILY_CALLBACK_LIST_PENDING, 'primary_filled', counts)],
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [callbackButton('看全部 PR', DAILY_CALLBACK_LIST_PRS, 'default', counts)],
+        },
+      ],
+    },
   ];
 
   return {
     schema: DAILY_CARD_SCHEMA,
-    config: { wide_screen_mode: true },
+    config: { width_mode: 'default', update_multi: true },
     header: {
       title: { tag: 'plain_text', content: `道·日报 · ${formatDayTitle(day)}` },
       subtitle: { tag: 'plain_text', content: `${tone.icon} ${tone.status}` },
       template: tone.template,
-      icon: { tag: 'standard_icon', token: 'newspaper_outlined' },
+      icon: { tag: 'standard_icon', token: 'calendar_colorful' },
     },
-    body: { elements },
+    body: { direction: 'vertical', padding: '12px 12px 20px 12px', elements },
   };
+}
+
+export function isDailyAction(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  if (str(v.kind) === DAILY_KIND) return true;
+  const action = str(v.action);
+  return action === DAILY_CALLBACK_LIST_PENDING || action === DAILY_CALLBACK_LIST_PRS;
 }
 
 export function isDailyListPending(value) {
   const v = value && typeof value === 'object' ? value : {};
-  return str(v.action) === DAILY_CALLBACK_LIST_PENDING;
+  return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PENDING;
+}
+
+export function isDailyListPrs(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PRS;
+}
+
+/** 日报卡按钮：toast 一句，不改卡、不写 GitHub。card === null 告诉回包路径别换待拍板卡。 */
+export function dailyCallbackResponse(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  const action = str(v.action);
+  if (action === DAILY_CALLBACK_LIST_PENDING) {
+    const n = num(v.pending);
+    const content = n == null
+      ? '去 GitHub 看带「待拍板」标签的单'
+      : (n > 0 ? `待拍板 ${n} 件，去 GitHub 看带这个标签的单` : '现在没有待拍板');
+    return { kind: DAILY_KIND, toast: { type: 'info', content }, card: null };
+  }
+  if (action === DAILY_CALLBACK_LIST_PRS) {
+    const n = num(v.openPrs);
+    const content = n == null ? '去 GitHub 看开放的 PR' : `开放 PR ${n} 张，去 GitHub 看`;
+    return { kind: DAILY_KIND, toast: { type: 'info', content }, card: null };
+  }
+  return {
+    kind: DAILY_KIND,
+    toast: { type: 'error', content: '这个按钮我没认出来' },
+    card: null,
+  };
 }
