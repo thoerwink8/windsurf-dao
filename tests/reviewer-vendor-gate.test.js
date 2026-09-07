@@ -307,6 +307,21 @@ describe('#679 起审官同厂硬闸', () => {
       assert.match(r.error, /不许跳级点名/);
     });
 
+    await t.test('标签钉着更早一跳（luna）而刚死的是 sol → 取 kimi，不当跳级', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: {
+          ...base,
+          deadError: DEAD,
+          passerIds: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+          order: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+        },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, true);
+    });
+
     await t.test('死因不是满载 → 原样返回，不换', () => {
       const r = slot.planReviewerOnCapacityDeath({
         requested: 'gpt-5.6-sol',

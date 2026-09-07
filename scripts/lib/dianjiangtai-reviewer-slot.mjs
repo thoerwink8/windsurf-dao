@@ -175,7 +175,8 @@ export function judgeCapacityFailover({ requested, capacityFailover } = {}) {
  * luna 去起，永远过不了「请求的必须等于下一位」。本函数才是换厂的腿：
  *   - 没点名、或点的就是刚死的那位 → 取下一位（标签还钉着死人，这是默认路径）
  *   - 点名的正好是下一位 → 放行
- *   - 点名跳级 → 拒
+ *   - 点名是更靠前的（标签还钉着更早一跳死掉的那位）→ 仍取下一位
+ *   - 点名比算出的下一位更靠后，或不在表里 → 跳级，拒
  * 没满载死因 → 原样返回 requested，不换。
  */
 export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}) {
@@ -186,9 +187,14 @@ export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}
   }
   const next = nextAfterDead(f);
   if (!next.ok) return next;
-  const named = requestedId && requestedId !== next.deadModelId;
-  if (named && requestedId !== String(next.next)) {
-    return { ok: false, error: `按顺位该换 ${next.next}，请求的却是 ${requestedId}——不许跳级点名` };
+  if (requestedId && requestedId !== String(next.next)) {
+    const order = Array.isArray(f.order) && f.order.length ? f.order.map(String) : (f.passerIds || []).map(String);
+    const iReq = order.indexOf(requestedId);
+    const iNext = order.indexOf(String(next.next));
+    // 跳级 = 点了更弱的（顺位更靠后），或点了表外的。标签钉着更早一跳（luna 死了换 sol，sol 又死了标签还写着 luna）不是跳级。
+    if (iReq < 0 || iNext < 0 || iReq > iNext) {
+      return { ok: false, error: `按顺位该换 ${next.next}，请求的却是 ${requestedId}——不许跳级点名` };
+    }
   }
   return {
     ok: true,
