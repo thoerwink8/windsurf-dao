@@ -265,9 +265,14 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
   }
   const spawn = spawnImpl || spawnSync;
   const exe = ghExecutable();
+  // CLICOLOR_FORCE / FORCE_COLOR 会让 gh --json 刷成非 JSON（看门狗干跑实咬）。
+  const env = { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token, NO_COLOR: '1', GH_NO_COLOR: '1' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
   const opts = {
     cwd,
-    env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token },
+    env,
     windowsHide: true,
   };
   if (inherit) opts.stdio = 'inherit';
