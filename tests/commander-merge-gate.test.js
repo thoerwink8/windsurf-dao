@@ -166,8 +166,9 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     assert.equal(r.blocked, undefined);
     const mergeAt = calls.findIndex((c) => /pr merge/.test(c));
     const syncAt = calls.findIndex((c) => /pr-sync-labels/.test(c));
-    assert.ok(mergeAt >= 0, '通了必须真调 pr merge');
-    assert.ok(syncAt >= 0 && syncAt < mergeAt, 'label 同步必须在 merge 之前');
+    assert.notEqual(mergeAt, -1, '通了必须真调 pr merge');
+    assert.notEqual(syncAt, -1, '通了必须先同步 label');
+    assert.equal(syncAt < mergeAt, true, 'label 同步必须在 merge 之前');
   });
 
   it('判别力：把 ① 从 merge 档拿掉，上面那条「① 红就不合」必须当场红', async () => {
