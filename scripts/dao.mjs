@@ -4507,6 +4507,10 @@ async function cmdReviewerCreateMirasim(args) {
     // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
     return { res: created, w: registry.write(args.pr, {
       pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+      // reviewer 这一栏是 #1122 换厂链能不能往前走的前提：不记下**这一位是谁**，
+      // 下一轮只能拿审官位顶位（luna）当「上一位」，于是 luna→sol 之后永远还是算出 sol，
+      // 链子卡在第一格。实咬：sol 也撞满载后，换厂仍报「按顺位该换 gpt-5.6-sol」。
+      reviewer: picked.modelId,
       round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
       treeHead: created.treeHead || null, ts: Date.now(),
     }) };
