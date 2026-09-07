@@ -4,8 +4,10 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'board-gc.mjs').replace(/\\/g, '/');
+const CLI = 'file://' + path.join(__dirname, '..', 'scripts', 'board-gc.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
 const LIVE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'liveness.mjs').replace(/\\/g, '/'));
 
@@ -259,6 +261,18 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.ok(i > -1, '找不到兜底调用');
     assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
   });
+  it('兜底删树前过账本孤本闸，有 stray / 没查成都不许删', () => {
+    const start = src.indexOf('function removeTreeFallback');
+    const end = src.indexOf('\nfunction ', start + 1);
+    const body = src.slice(start, end);
+    assert.match(body, /listStrayLedgerEvents/);
+    assert.match(body, /formatStrayLedgerError/);
+    const strayAt = body.indexOf('listStrayLedgerEvents');
+    const rmAt = body.indexOf("worktree', 'remove'");
+    assert.ok(strayAt > -1, '找不到 listStrayLedgerEvents');
+    assert.ok(rmAt > -1, '找不到 git worktree remove');
+    assert.ok(rmAt > strayAt, '孤本闸必须在 git worktree remove 之前');
+  });
   it('采卡时用 git 填 branch，否则 OPEN 无 PR 的卡全是「分支 (未知) 没查成」', () => {
     assert.match(src, /function withGitBranch/);
     assert.match(src, /branch', '--show-current'/);
@@ -281,6 +295,70 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {
     assert.ok((src.match(/process\.exit\(2\)/g) || []).length >= 4);
+  });
+});
+
+describe('removeTreeFallback：账本孤本闸 fail-closed', () => {
+  const free = () => ({ ok: true, verdict: 'free' });
+  async function fallback() {
+    const { removeTreeFallback } = await import(CLI);
+    return removeTreeFallback;
+  }
+
+  it('树内有未进本机账本的 events/*.json → 拒绝，不调 git rm、不 rmSync', async () => {
+    const removeTreeFallback = await fallback();
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-stray-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-stray-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(workerDir, 'ledger', 'events', 'orphan-gc.json'), '{"type":"job.dispatch"}');
+    let gitRmCalled = false;
+    let rmDirCalled = false;
+    const r = removeTreeFallback({ path: workerDir }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+      rmDir: () => { rmDirCalled = true; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /orphan-gc\.json/);
+    assert.equal(gitRmCalled, false, '有孤本不许走到 git worktree remove');
+    assert.equal(rmDirCalled, false, '有孤本不许 rmSync');
+    assert.ok(fs.existsSync(path.join(workerDir, 'ledger', 'events', 'orphan-gc.json')));
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('账本没查成 → 拒绝，不删', async () => {
+    const removeTreeFallback = await fallback();
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: '/tmp/gc-unscanned' }, {
+      leaseCheck: free,
+      strayCheck: () => ({ ok: false, unscanned: true, stray: [], error: '主树账本目录没给，兜底没查成' }),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /没查成/);
+    assert.equal(gitRmCalled, false);
+  });
+
+  it('无孤本才走到 git worktree remove', async () => {
+    const removeTreeFallback = await fallback();
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-clean-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-clean-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: workerDir }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+      rmDir: () => { throw new Error('gitRm 已成功，不该 rmSync'); },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(gitRmCalled, true);
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
   });
 });
 
@@ -523,7 +601,6 @@ describe('判定已交付的审官子卡可以单独出列', () => {
 // 自动化。每条反例都对着一种「以为救了其实没救」：推失败还照删、脏文件根本推不上去、
 // 把上一次的备份覆盖掉。删树不可逆，salvage 分支是唯一的备份，所以判据取最严的一档。
 const { spawnSync } = require('node:child_process');
-const os = require('node:os');
 
 describe('salvage 分支名：看得出救的是哪张卡，且是条合法分支名', () => {
   it('有单号有分支名 → salvage/<单号>-<分支名>（照抄人工救那两张卡的格式）', async () => {

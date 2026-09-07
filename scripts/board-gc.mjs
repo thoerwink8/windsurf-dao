@@ -30,6 +30,8 @@ import {
 import { recordBroadcast } from './lib/broadcast-io.mjs';
 import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
+import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -232,16 +234,33 @@ function say(text) {
   recordBroadcast(String(text), { source: 'board-gc', now: new Date() });
 }
 
-function removeTreeFallback(z) {
+function removeTreeFallback(z, opts = {}) {
   const path = z && z.path;
   if (!path) return { ok: false, error: '没有树路径' };
-  const lease = checkTreeLease({ workdir: path });
+  const leaseCheck = opts.leaseCheck || checkTreeLease;
+  const strayCheck = opts.strayCheck || listStrayLedgerEvents;
+  const rmDir = opts.rmDir || rmSync;
+  const lease = leaseCheck({ workdir: path });
   if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
   if (lease.verdict === 'held') return { ok: false, error: lease.why };
-  const rm = run('git', ['-C', ROOT, 'worktree', 'remove', '--force', path], { timeout: 60000 });
+  // 对照集合与 worktree-rm 同一处：本机 ~/.dao/ledger/events，不是仓内 ledger/。
+  const eventsDir = opts.mainEventsDir || ensureLocalLedger({ root: ROOT }).dir;
+  const stray = strayCheck({
+    treePaths: [path],
+    mainEventsDir: eventsDir,
+    readdir: opts.readdir,
+    exists: opts.exists,
+  });
+  if (!stray.ok) return { ok: false, error: `账本兜底没查成，未删：${stray.error}` };
+  if (stray.stray && stray.stray.length) {
+    return { ok: false, error: formatStrayLedgerError(stray.stray) };
+  }
+  const rm = typeof opts.gitRm === 'function'
+    ? opts.gitRm(path)
+    : run('git', ['-C', ROOT, 'worktree', 'remove', '--force', path], { timeout: 60000 });
   if (rm.code === 0) return { ok: true };
   try {
-    rmSync(path, { force: true, recursive: true });
+    rmDir(path, { force: true, recursive: true });
     return { ok: true, note: `git worktree remove 失败后直接删目录：${(rm.err || rm.out).trim().slice(0, 80)}` };
   } catch (e) {
     return { ok: false, error: `删不掉 ${path}：${String(e && e.message || e).slice(0, 160)}` };
@@ -402,4 +421,4 @@ const sameFile = (a, b) => {
 };
 if (sameFile(process.argv[1], HERE)) main();
 
-export { pushSalvage };
+export { pushSalvage, removeTreeFallback };
