@@ -9,6 +9,8 @@
 //            拆「分支已合并 + 树干净 + 非主树/非当前树/不挂默认分支 + orca 没在管」的 git worktree。
 // 不干什么（判断全在 scripts/lib/land-core.mjs，测试见 tests/land.test.js）：
 //   - 不在派生分支上代劳「进主分支」（那是 PR/审官闭环的活，编排态绕过它=绕过审查）；
+//     #1117 的合并闸（handoff-check --gate merge）因此挂在 commander 的 merge 动作上，不挂这里——
+//     本命令从不 `pr merge`，只快进默认分支、清已合并的支和树；
 //   - 发散不自动 rebase；未合并/不干净/orca 在管/被树占用/刚建还没提交过的（#898）一律不删。
 // 为什么不是 post-commit hook：rebase/amend/cherry-pick 也触发 post-commit，会把中间态推上主分支；
 //   工人在编排树里的 commit 也会触发，等于绕过审官。收工是「一段活的结尾」，不是「每个 commit」。
