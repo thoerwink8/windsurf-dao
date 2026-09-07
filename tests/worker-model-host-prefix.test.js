@@ -163,6 +163,39 @@ describe('resolveWorkerFromPr 什么时候才许兜底', () => {
     assert.notEqual(got.source, 'host-prefix');
   });
 
+  it('同名 model/* 出现两次 → 一个模型，不是歧义', async () => {
+    const { pickModel, requireWorkerModel } = await WD;
+    const labels = ['model/grok-4.6', 'type/写码', 'model/grok-4.6'];
+    const picked = pickModel(labels);
+    assert.equal(picked.ok, true);
+    assert.equal(picked.modelId, 'grok-4.6');
+    const req = requireWorkerModel(labels);
+    assert.equal(req.ok, true);
+    assert.equal(req.modelId, 'grok-4.6');
+  });
+
+  it('#1104：署两张单都是 model/grok-4.6 → 起审官放行，不许当成两个模型', async () => {
+    const { resolveWorkerFromPr } = await WD;
+    const byIssue = {
+      1065: ['model/grok-4.6', 'type/写码'],
+      1097: ['model/grok-4.6', 'type/写码'],
+    };
+    const runGh = (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { ok: true, out: JSON.stringify({ title: '[grok] fix', body: '署名 issue #1065、署名 issue #1097' }) };
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        const names = byIssue[Number(args[2])] || [];
+        return { ok: true, out: JSON.stringify({ labels: names.map((name) => ({ name })) }) };
+      }
+      throw new Error('未预期的 gh 调用：' + args.join(' '));
+    };
+    const got = resolveWorkerFromPr({ pr: '1104', runGh });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.modelId, 'grok-4.6');
+    assert.deepEqual(got.refs, [1065, 1097]);
+  });
+
   it('没标签又推不出家族（[pi]）→ 照旧拒绝，且理由带上两条', async () => {
     const { resolveWorkerFromPr } = await WD;
     const got = resolveWorkerFromPr({ pr: '1', runGh: fakeGh({ title: '[pi] x', labels: ['type/写码'] }) });

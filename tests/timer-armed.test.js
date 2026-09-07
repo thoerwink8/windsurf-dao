@@ -115,6 +115,17 @@ describe('扫描面不许按名字前缀圈定', () => {
     assert.match(r.detail, /gw-remote-probe\.timer/, '要点名，不能只给个数字');
   });
 
+  it('取数层：/etc 里的 .timer 必须进扫描面，不能只信 list-timers', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'server-check.mjs'), 'utf8');
+    const i = src.indexOf('function checkTimerArmed');
+    assert.ok(i > -1, '找不到 checkTimerArmed');
+    const body = src.slice(i, i + 2500);
+    assert.match(body, /readdirSync\('\/etc\/systemd\/system'\)/,
+      'disabled 的 timer 不进 list-timers，只扫那张表会把「装了没启用」读成绿（#1104）');
+    assert.match(body, /\.timer/, '扫描面必须是 /etc 的 .timer，不是随便一个目录');
+  });
+
   it('取数层：list-timers 的输出里，非 dao 前缀的 dao 生态 timer 要被采到', async () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'server-check.mjs'), 'utf8');
