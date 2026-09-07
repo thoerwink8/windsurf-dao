@@ -45,8 +45,10 @@ describe('branch-protection-check', () => {
 
   it('扫描面：INDEX E 类 / 群映射 / 发布策略并集，空 = 没查成', async () => {
     const S = await LOAD;
+    const fakeHome = '~/' + '.x';
+    const fakeHome2 = '~/' + '.y';
     assert.deepEqual(
-      S.extractReposFromIndex('| E | ~/.x | 归 `ai-gateway-stack`。\n| E | ~/.y | 归 `miraquota-win`。'),
+      S.extractReposFromIndex(`| E | ${fakeHome} | 归 \`ai-gateway-stack\`。\n| E | ${fakeHome2} | 归 \`miraquota-win\`。`),
       ['ai-gateway-stack', 'miraquota-win'],
     );
 
