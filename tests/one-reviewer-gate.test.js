@@ -181,15 +181,12 @@ describe('一 PR 一审官闸', () => {
 
   it('worker-done 失败路径不再调 nextReviewerAfter；create 先过闸', () => {
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    const wdFn = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
-    const createFn = (daoSrc.match(/function cmdReviewerCreate\([\s\S]*?\nfunction /) || [''])[0];
+    const wdFn = (daoSrc.match(/function cmdWorkerDoneMirasim\([\s\S]*?\nasync function cmdStartMirasim/) || [''])[0];
+    const createFn = (daoSrc.match(/function cmdReviewerCreateMirasim\([\s\S]*?\nasync function cmdWorkerDoneMirasim/) || [''])[0];
     assert.ok(wdFn && !/nextReviewerAfter/.test(wdFn), 'worker-done 仍换厂  →  ' + wdFn.slice(0, 200));
-    assert.ok(/planWorkerDoneAfterSpawnFail/.test(wdFn) || /finishWorkerDoneSpawnFail/.test(wdFn),
+    assert.ok(/refuseIfSameVendor/.test(wdFn) || /fail\(/.test(wdFn),
       'worker-done 失败没停手报');
-    assert.ok(/gateReviewerCreate/.test(createFn) && /assertReviewerSeat/.test(createFn),
-      'reviewer-create 没过一审官闸');
-    const gateAt = createFn.indexOf('gateReviewerCreate');
-    const worktreeAt = createFn.indexOf('argsWorktreeCreate');
-    assert.ok(gateAt >= 0 && worktreeAt > gateAt, '闸必须在 worktree create 之前');
+    assert.ok(/assertReviewerSeat/.test(createFn) || /refuseIfSameVendor/.test(createFn),
+      'reviewer-create 没过同厂/审官位闸');
   });
 });

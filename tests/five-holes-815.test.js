@@ -553,10 +553,9 @@ describe('#815 ⑥ 审官注入失败不回滚树', () => {
     assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
       'worker-start 失败也不得整树回滚');
 
-    const createSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerCreate'), daoSrc.indexOf('function cmdReviewerAttach'));
-    const attachSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerAttach'), daoSrc.indexOf('function cmdReviewerDone'));
-    assert.ok(/preferAgent:\s*true/.test(createSeg) && /preferAgent:\s*true/.test(attachSeg),
-      '审官 create/attach 必须 preferAgent，注入走 #805 --agent 探就绪');
+    const createSeg = daoSrc.slice(daoSrc.indexOf('async function cmdReviewerCreateMirasim'), daoSrc.indexOf('async function cmdWorkerDoneMirasim'));
+    assert.doesNotMatch(createSeg, /launchAgentInWorktree\(/);
+    assert.match(createSeg, /mirasimReviewerCreate\(/);
     const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
     assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
       'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
