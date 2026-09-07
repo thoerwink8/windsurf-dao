@@ -1,4 +1,4 @@
-// scripts/lib/spawn-budget.mjs —— 测试里起子进程的预算闸（TIA 第二刀的防忘装置）
+// scripts/lib/spawn-budget.mjs —— 测试里起子进程的预算闸
 //
 // 来历（2026-09-06 用户拍板「两刀都要做，但后面肯定会忘记」）：
 // 第二刀是把 196 处 `spawnSync(node, [CLI, ...])` 改成进程内调用——
