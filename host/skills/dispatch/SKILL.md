@@ -15,15 +15,15 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 ## 主会话红线
 
-凡开 branch/PR 必派。主会话手不碰 git，无例外——空提交开 PR 的文书也归工人。
+凡开 branch/PR 必派。**主树禁 git 写**（共用主树 `git add -A` 会卷走另一位帅的在途改动）；**帅窗在自己 worktree 里可以 `commit`/`push`**（#1093 B1a）。空提交开 PR 的文书仍归工人——派工路径不改。
 
-快路例外（`host/skills/pr-fast/SKILL.md`）：branch/commit/push 仍不在帅窗；开 PR 等 GitHub 写走 marshal，不算「手碰 git」。
+快路（`host/skills/pr-fast/SKILL.md`）：执行面可在自己 worktree 里 branch/commit/push；开 PR 等 GitHub 写走 marshal。**判定权永远不归帅位**；**帅位不得合并 reviews=0 的 PR**。
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
 
 ## 快马单的审官（2026-09-04 拍板，用户提「帅位来判」被否）
 
-框架单走快马（#877：type/体系 不进自动派单队列，主会话子代理闭环）时，**写码可以本地子代理，判定权永远不归帅位**：
+框架单走快马（#877：type/体系 不进自动派单队列，主会话子代理闭环）时，**写码可以本地子代理**，**判定权永远不归帅位**（#1093：本条不松；帅位不得合并 reviews=0 的 PR）：
 快马工人是 claude 族子代理、帅位也是 claude 族——帅位判官 = 同厂审查 + 编排者自审双重违规。
 实证 2026-09-04：luna 审官对快马产出连咬 6 条真红（partial 当正文 / 断线报成功 / `--task` 崩栈…），帅自审这些全进 master。
 
@@ -349,7 +349,7 @@ node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer 
 - 判定绿之前不要发 worker_done。交卷后身份继续收信。过早结算会让红项打进死人（#677）。
 - 派工走哪条通道看一件事：产出要进 git（commit/PR）的必走 Orca 编排；只读不落盘的查证类才可用会话内子代理。
 - 怀疑工人越权时，先读它自己的会话记录（~/.claude/projects/<项目>/<会话>/subagents/agent-*.jsonl，用户中途插话有固定签名 "The user sent a new message while you were working"）；找到证据前不回滚、不指控。
-- 凡要开 branch/PR 的改动一律派工人，主会话手不碰 git。
+- 凡要开 branch/PR 的改动一律派工人。**主树禁 git 写**；帅窗在自己 worktree 里可以 `commit`/`push`。**判定权永远不归帅位**；**帅位不得合并 reviews=0 的 PR**。
 - 起工人的完整启动序和判断工人是否完成的方法见 dispatch skill；纲领是：注入前先证终端就绪，注入后回读，确认任务书完整显示在屏上；**开工与活性判据只用「该发生的事有没有发生」**（worker-start receipt、产物/提交出现），不用 token 计数/cursor 增量/屏面指纹——spinner 重绘会骗过全部屏面指标（#500）。
 
 ## 编排态工作法（2026-08-31 自 CLAUDE.md 迁入；2026-09-06 回岗生效）
