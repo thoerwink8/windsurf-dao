@@ -1,9 +1,8 @@
 // scripts/lib/executor-binding.mjs —— 派工三动词的执行体绑定层（#880 卡 B）
 //
 // 改这段前必须知道：
-// - 调用方（dao.mjs 的 dispatch / worktree-create / worker-start）只说 executor 是谁，
-//   底下走 orca 还是 mirasim 由本文件决定。orca 退役那天删 createOrcaBinding 和策略里
-//   「默认: orca」，调用方一行不改——这是 #880 拍的架构。
+// - 调用方（dao.mjs 的 dispatch / worktree-create / worker-start）只说 executor 是谁。
+//   执行体只剩 mirasim。
 // - 策略只认 docs/model-routing.json 的「执行体」节。TOML 里不许有第二份（选型唯一真相源）。
 // - 缺该族配置 = 报警拒派。静默降级会把「这一族没人拍过板」变成「随便挑条腿烧额度」，
 //   而烧掉的额度撤不回来。判别用例钉住这条：拒派时**一个会话都不许起**。
@@ -22,7 +21,7 @@
 
 import { createRuntime, PINNED_VERSION } from './mirasim-runtime.mjs';
 
-export const EXECUTORS = ['orca', 'mirasim'];
+export const EXECUTORS = ['mirasim'];
 
 /** 策略节在选型 JSON 里的键名。改这里要同步 docs/model-routing.json。 */
 export const EXECUTOR_POLICY_KEY = '执行体';
@@ -100,7 +99,6 @@ export function readExecutorPolicy(routingOrRaw) {
     error: null,
     default: dflt,
     mirasim: normalizeMirasim(node.mirasim),
-    orca: (node.orca) || { 说明: '现役运行时（Orca worktree + terminal）' },
     raw: node,
     why: null,
   };
@@ -291,51 +289,6 @@ function resolveFamilyRoute({ mirasim, model, provider, emptyRoutesError }) {
 }
 
 /**
- * orca 绑定。执行器与 argv 组装都靠注入——本层不 import dao.mjs（会成环），
- * 也不自己拼 argv（那是 lib/dispatch/args.mjs 的事，抄第二份必然走偏）。
- */
-export function createOrcaBinding({ orca, argsWorktreeCreate, argsWorkerStart } = {}) {
-  if (typeof orca !== 'function') throw new Error('createOrcaBinding 要 orca 执行器');
-  if (typeof argsWorktreeCreate !== 'function') throw new Error('createOrcaBinding 要 argsWorktreeCreate');
-  if (typeof argsWorkerStart !== 'function') throw new Error('createOrcaBinding 要 argsWorkerStart');
-  return {
-    name: 'orca',
-    async worktreeCreate(spec = {}) {
-      const r = orca(argsWorktreeCreate({
-        name: spec.name,
-        noParent: spec.noParent,
-        setup: spec.setup,
-        parentWorktree: spec.parentWorktree,
-        baseBranch: spec.baseBranch,
-        issue: spec.issue,
-        comment: spec.comment,
-        repo: spec.repo,
-      }));
-      if (!r || r.ok !== true) return { ok: false, executor: 'orca', error: r?.error ?? 'worktree create 失败', native: r?.json ?? null };
-      return { ok: true, executor: 'orca', path: null, branch: null, created: true, native: r.json };
-    },
-    async workerStart(spec = {}) {
-      const r = orca(argsWorkerStart({
-        task: spec.task,
-        worktree: spec.worktree,
-        terminal: spec.terminal,
-        retryOf: spec.retryOf,
-        run: spec.run,
-      }));
-      if (!r || r.ok !== true) return { ok: false, executor: 'orca', error: r?.error ?? 'worker-start 失败', native: r?.json ?? null };
-      return { ok: true, executor: 'orca', native: r.json };
-    },
-    async dispatchOne() {
-      return {
-        ok: false,
-        executor: 'orca',
-        error: 'orca 的 dispatch 走 dao.mjs 原有队列脊（dispatch 写派工单 → dispatch-exec 后台执行），不经本绑定；orca 退役时那段整体删',
-      };
-    },
-  };
-}
-
-/**
  * mirasim 绑定。三个动词都落在卡 A 冻结的五动词上，签名一字不改。
  * 契约断言（钉版本 + 帧形状 + 执行体在不在）在 ensureWorkspace / startSession 里面，
  * 不符就抛且一帧 prompt 都不发——本层不再断第二遍（抄第二份判据必然走偏）。
@@ -421,9 +374,6 @@ export function bindExecutor(opts = {}) {
     const policy = readExecutorPolicy(opts.routing);
     const named = judgeExecutorName(opts.executor, policy);
     if (!named.ok) return { ok: false, error: named.error, policy };
-    if (named.executor === 'orca') {
-      return { ok: true, executor: 'orca', name: 'orca', runtime: null, policy };
-    }
     const runtimeFactory = opts.runtimeFactory || createRuntime;
     const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || PINNED_VERSION;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
@@ -444,10 +394,5 @@ export function bindExecutor(opts = {}) {
 
   const named = judgeExecutorName(opts.executor, opts.policy);
   if (!named.ok) throw new Error(named.error);
-  if (named.executor === 'mirasim') return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy });
-  return createOrcaBinding({
-    orca: opts.orca,
-    argsWorktreeCreate: opts.argsWorktreeCreate,
-    argsWorkerStart: opts.argsWorkerStart,
-  });
+  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy });
 }

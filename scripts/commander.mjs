@@ -25,7 +25,9 @@ import { fileURLToPath } from 'node:url';
 import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
-import { runOrca } from './lib/orca-run.mjs';
+function runOrca() {
+  return { ok: false, error: { code: 'orca_retired', message: 'orca 已退役' } };
+}
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
