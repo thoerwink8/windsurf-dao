@@ -216,8 +216,8 @@
 
 - [x] 士兵/审官 mirasim 任务书与代码同基线；orca 版任务书整页标退役
 - [x] `land` / `close-issues` / `board-gc` 仍作旁路幂等补漏，不重新承担「下一步谁干活」
-- [ ] 统领单在 `done_when` 机器可算为真后，走 `close-issues.mjs` 关
-- [ ] 本页看板全部勾完；initiatives 那条 `status: done`
+- [x] 统领单在 `done_when` 机器可算为真后，走 `close-issues.mjs` 关——#1133 已 CLOSED（`dao-close-issues.timer` 对 PR #1134 窗口判定）
+- [x] 本页看板全部勾完；initiatives 那条 `status: done`
 
 ---
 
