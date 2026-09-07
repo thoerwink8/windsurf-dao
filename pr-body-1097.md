@@ -32,41 +32,33 @@
 4. 垫片头、service 头都写「人退了才起新的」；#1056 退役路径仍在 install 脚本里。
 5. 红项 1（上一轮）：`classifyPrListScan` 取满 limit 即没查全；截断走 unscanned。
 6. 红项 2（上一轮）：`runNudge` 把非 busy 错误写入 `out.failed`；CLI 走 `nudgeExitCode`。
-7. 合入当前 `origin/master`（含 #1057 `e3a3c66` 对账循环），`handoff-check` 真实输出见下。
+7. 合入当前 `origin/master`（含 #1070 `9139c6f` 与 patrol `a50a445`），`handoff-check` 真实输出见下。
 8. 租约 `ok:true` 后只接受 `verdict === 'free'` 或 `'held'`；缺 verdict / `unknown` 返回 `unscanned`。
 9. ENOBUFS：`loadAllPrs` 改 REST `/pulls` 分页（`PR_LIST_PAGE_SIZE=100`），`spawnGh` 默认 `maxBuffer=64MiB`（`GH_SPAWN_MAX_BUFFER`），超限仍是 error。
-10. 本轮：审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 从「错分支跳过」改成「将推」。
+10. 审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 从「错分支跳过」改成「将推」。
 
 `node --test tests/nudge-stalled.test.js tests/gh-as.test.js`：107 过 / 0 红（本套 47 + gh-as 60）。
 `node --test tests/nudge-stalled.test.js`：47 过 / 0 红。
 
-### 真实预览（本轮：审官树不再被错分支闸误伤）
+### 真实预览（本轮：仓内交卷材料跟上 GitHub 正文）
 
-`node scripts/nudge-stalled.mjs`（预览、不带 `--go`），exit 0。#1063 仍 skip 错分支；审官 PR #1102 进入将推：
+`node scripts/nudge-stalled.mjs`（预览、不带 `--go`），exit 0。已关单 skip；审官树在 `dao-review-pr-<N>` 进入将推（不是错分支）；租约 held 记「人还在」：
 
 ```
-[推一把·预览] 工人 #1012 的 issue #1012 已关，不推
 [推一把·预览] 工人 #1007 的 issue #1007 已关，不推
-[推一把·预览] 工人 #1063 树在 dao-1063，该单 PR #1070 head 是 fix-escalate-noise，不在错误分支上继续
-[推一把·预览] 工人 #1094 pi 将推（pi turn stalled past 30 minutes）
-[推一把·预览] 工人 #1029 的 issue #1029 已关，不推
-[推一把·预览] 工人 #818 pi 将推（pi turn stalled past 30 minutes）
-[推一把·预览] 工人 #948 pi 将推（pi turn stalled past 30 minutes）
-[推一把·预览] 工人 #967 pi 将推（pi turn stalled past 30 minutes）
-[推一把·预览] 工人 #999 pi 将推（pi turn stalled past 30 minutes）
-[推一把·预览] 工人 #1029 的 issue #1029 已关，不推
-[推一把·预览] 工人 #1065 的 issue #1065 已关，不推
-[推一把·预览] 工人 #1024 pi 将推（Internal error during token generation）
-[推一把·预览] 工人 #792 树在 dao-792，该单 PR #1015 head 是 thoerwink8/ISSUE-792-工人-grok-4.6-收口跨宿主-GitHub-写权限-AI-只经-Bot-网关操作-Issue，不在错误分支上继续
+[推一把·预览] 审官 PR #1028 codex 将推（Selected model is at capacity. Please try a different model.）
+[推一把·预览] 审官 PR #1106 codex 将推（Selected model is at capacity. Please try a different model.）
+[推一把·预览] 审官 PR #1098 codex 将推（Selected model is at capacity. Please try a different model.）
+[推一把·预览] 审官 PR #1015 codex 将推（Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisi…）
+[推一把·预览] 审官 PR #1099 codex 将推（Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisi…）
 [推一把·预览] 审官 PR #1102 codex 将推（Selected model is at capacity. Please try a different model.）
-[推一把·预览] 工人 #1052 的 issue #1052 已关，不推
-[推一把·预览] 工人 #1024 树在 dao-1024，该单 PR #1028 head 是 thoerwink8/ISSUE-1024-工人-grok-4.6-派单只有一个仓的射程-dispatch-没有-repo-推广到全部仓-在能力上就做不到，不在错误分支上继续
+[推一把·预览] 审官 PR #1110 人还在，不另起一条：/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1110 已经有 3 个会话进程在干活（node pid 3300146、codex pid 3300175、codex-code-mode pid 3303877）
 EXIT:0
 ```
 
 ### handoff-check 真实输出
 
-提交并推送后重跑，贴与 HEAD 同点的完整输出（见本 PR 最新正文修订）。
+提交并推送后重跑，把与新 HEAD 同点的完整输出贴进 GitHub PR 正文（本文件同步）。上一轮工人树 `e0b391d` 四项绿；本轮补的是仓内这份材料不再留占位。
 
 ## 机制判定
 
@@ -79,6 +71,10 @@ EXIT:0
 ENOBUFS 还会再犯：会。`spawnSync` 默认 1MiB，本仓带 body 的全量 `pr list` 实测 3.1MiB 就打成 ENOBUFS。处置两层：① REST `/pulls` 分页；② `spawnGh` 明确 64MiB 上限，超限仍是 error。
 
 本轮（审官树被错分支闸误伤）还会再犯：会。`reviewer-create` 把审官树建在 `dao-review-pr-<N>`，不能复用工人 PR head（会撞）。闸却拿 PR head 去对树分支，真实预览把卡住的审官 PR #1102 判成 skip。处置：审官分支闸认审官树名或 PR head；回归锁住「树在 dao-review-pr-N → go」。
+
+交卷闸跟不上最新 master 还会再犯：会。master 前进后工人树旧基底会把 handoff-check ① 打红，而 PR 正文若钉死旧 HEAD 输出，审官复核会对不上。上一轮把 `#1070` 与 patrol `a50a445` merge 进来。
+
+仓内交卷材料跟 GitHub 正文分叉还会再犯：会。上一轮用 `gh pr edit` 把绿输出写进 GitHub，仓内 `pr-body-1097.md` 仍是「提交后重跑」占位；审官点名的就是这份文件。本轮把真实预览与判定写回仓内，push 后再把与新 HEAD 同点的 handoff 输出贴进 GitHub 正文。
 
 ## 回流
 
