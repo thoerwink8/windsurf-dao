@@ -1,0 +1,35 @@
+# /etc/systemd/system/gw-remote-probe.service
+#
+# 编排机上的供应商探活（#967）：流式探网关池 / HK 逐腿口 / codex 直连，
+# 把结果原子写进 ~/.dao/provider-health.json，派工读它判可用性。
+# 红了报总控群。凭据不外扩——飞书与 hub-say 只在 Contabo，所以探针也住这里，
+# 不跟网关仓走。
+#
+# User=orca 是硬要求：ExecStart 指 /srv/projects/windsurf-dao 里的脚本，那个仓
+# 每个执行体都能写；以 root 解释它等于给每个能写仓的执行体一条 root 通道
+# （tests/unit-privilege.test.js 守着）。
+#
+# 装（服务器）：sudo bash scripts/install-gw-remote-probe.sh
+# 验：systemctl list-timers | grep gw-remote-probe；NEXT 必须是时间不能是 `-`
+#     journalctl -u gw-remote-probe -n 5
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+# 旧 --install（脚本自己写 /etc）已退役：那份模板没有 OnCalendar。
+
+[Unit]
+Description=网关供应商探活（流式 + 校验内容）：落健康表给编排层读，红了报总控群
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs
+# 退出码 0 = 探过（红项走报警 + 健康表，不算探针失败）。
+# 1 = 探针自己跑不动（一把 pool key 都读不到）或 --strict 且有红。
+# 没查成要在 systemctl --failed 里看得见，不许跟「查过没事」长成一个样。
+StandardOutput=journal
+StandardError=journal

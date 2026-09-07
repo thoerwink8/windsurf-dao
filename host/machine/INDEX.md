@@ -58,7 +58,10 @@
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
 | A | ~/.dao/broadcast-digest.json | 飞书日报队列（#1029/#1052）。心跳/发布/熔断先入队，换日合成一张 Card 2.0 日报卡发到总控群。运行时自建，不进 git，换机重生成 |
 | A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check (23) 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
-| A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
+| A | ~/.dao/provider-health.json | 网关健康表（#842 消费 / #967 写入）。`scripts/gw-remote-probe.mjs` 周期探针写、派工只读判可用性；契约见 dispatch skill。不进 git |
+| D | ~/bin/gw-remote-probe.mjs | #967 收进仓前的本机落点（同目录依赖 `~/bin/probe-health.mjs`）。仓内真相源 `scripts/gw-remote-probe.mjs`；systemd ExecStart 走仓内脚本。禁拷、不进 git |
+| D | ~/bin/probe-health.mjs | #967 收进仓前与探针同目录的健康表纯函数。仓内真相源 `scripts/lib/probe-health.mjs`。禁拷、不进 git |
+| D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | D | ~/.dao/progress-watch.json | 盘面推进量看门狗账本（#1004）。`progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
