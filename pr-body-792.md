@@ -51,14 +51,14 @@
 
 真机：#1120 create/comment/edit-labels/close 均 ok；create+comment 重放 `replay:true`；`--identity` exit 2；缺幂等键 exit 1。验完已关。
 
-## 交卷闸（返工：跟上 #1134 短命会话，解 modify/delete）
+## 交卷闸（返工：跟上 patrol 回流观察，当前 head 待审）
 
-审官已批 head `9246d085` 的代码，不合入——GitHub `mergeable=CONFLICTING`：`dao-nudge-stalled.service` / `dao-progress-watch.service` 在 origin/master（#1134）删除、本分支改过凭据隔离。本轮合入 origin/master，按 master 退役独立钟（删那两套单元），网关红线留在仍活着的 9 个单元。自动合并的士兵书 / AGENTS / dispatch skill / commander / dao.mjs 两边意图都在（网关节 + 短命会话入队停会话）。
+审官已批 head `9246d085` 的代码，不合入——其后合入 #1134 解 modify/delete，GitHub 已 `MERGEABLE`。本轮再合入 origin/master 的 patrol 观察（#888 回流提示层钉退役士兵书），无冲突。网关代码未改；身份链闸仍绿。当前 head 还没有 review（上一轮 APPROVE 钉在 `9246d085`）。
 
 SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入点 + 判定末行为准，GitHub `headRefOid` 是审官所见。
 
-最终基线：`origin/master` = `0c325f97076a58d45201cd23c1415718fb26a8ff`
-合入点：`f177f78f3`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
+最终基线：`origin/master` = `955b9ec1734e2a32c1d035b7e06eaf4064d6f686`
+合入点：`c6794974c`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
 
 推送后、工作区干净时实测 `node scripts/handoff-check.mjs`（交卷档）末行：
 
@@ -72,7 +72,7 @@ SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入�
 判定：通（3 通 / 0 红 / 0 没查成）——可以合并
 ```
 
-GitHub：`mergeable=MERGEABLE` / `mergeStateStatus=BLOCKED`（等审官 APPROVED；本轮代码已跟上 master）。
+GitHub：合入后重查 `mergeable` / CI；本轮代码已跟上 origin/master。
 
 ## 体系类改动
 
