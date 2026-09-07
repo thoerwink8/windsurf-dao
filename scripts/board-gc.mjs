@@ -248,6 +248,19 @@ function removeTreeFallback(z) {
   }
 }
 
+/**
+ * mirasim 扫盘面不带 branch。判据用 w.branch 查 branchState，空着就整张
+ * 「分支 (未知) 的状态没查成」，OPEN 无 PR 的工人卡永远清不掉。
+ * 游离 HEAD 没有分支名，用 detached:<path> 当键，远端同名一定不存在。
+ */
+function withGitBranch(w) {
+  if (!w || !w.path) return w;
+  const show = run('git', ['-C', w.path, 'branch', '--show-current'], { timeout: 20000 });
+  const named = show.code === 0 ? show.out.trim() : '';
+  if (named) return { ...w, branch: named };
+  return { ...w, branch: `detached:${w.path}` };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -258,8 +271,8 @@ function main() {
     join,
   });
   if (!trees.scanned) { console.error(`盘面没查成：${trees.error}`); process.exit(2); }
-  const worktrees = trees.worktrees;
-  if (!Array.isArray(worktrees)) { console.error('盘面没查成：mirasim 树面不是数组'); process.exit(2); }
+  if (!Array.isArray(trees.worktrees)) { console.error('盘面没查成：mirasim 树面不是数组'); process.exit(2); }
+  const worktrees = trees.worktrees.map(withGitBranch);
 
   const listed = listMirasimSessions();
   if (!listed.ok) { console.error(`会话没查成：${listed.error}`); process.exit(2); }

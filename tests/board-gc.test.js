@@ -259,6 +259,13 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.ok(i > -1, '找不到兜底调用');
     assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
   });
+  it('采卡时用 git 填 branch，否则 OPEN 无 PR 的卡全是「分支 (未知) 没查成」', () => {
+    assert.match(src, /function withGitBranch/);
+    assert.match(src, /branch', '--show-current'/);
+    assert.match(src, /trees\.worktrees\.map\(withGitBranch\)/);
+    const i = src.indexOf('fetchBranchState(worktrees)');
+    assert.ok(i > -1, '找不到 fetchBranchState 调用，本闸在量空气');
+  });
   it('调 gh 时剥掉 FORCE_COLOR / CLICOLOR_FORCE，否则 --json 会被刷成非 JSON', () => {
     assert.match(src, /NO_COLOR/);
     assert.match(src, /delete env\.FORCE_COLOR/);
