@@ -843,17 +843,17 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
-    // 喂一个什么都不吐的假 orca：盘面查不成 → 退出码 2。如果 main 没跑，退出码会是 0，
+    // 树根存在但不是目录 → 盘面没查成 → 退出码 2。如果 main 没跑，退出码会是 0，
     // 命令看着还在、其实一轮都不干活——加那个开关最可能造成的正是这种静默失效。
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-noorca-'));
-    const fake = path.join(dir, 'orca.mjs');
-    fs.writeFileSync(fake, '// 假 orca：一个字都不输出\n');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-notadir-'));
+    const notDir = path.join(dir, 'not-a-dir');
+    fs.writeFileSync(notDir, 'x');
     try {
       const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
         encoding: 'utf8', windowsHide: true, timeout: 60000,
-        env: { ...process.env, BOARD_GC_ORCA: fake },
+        env: { ...process.env, BOARD_GC_TREES: notDir },
       });
-      assert.equal(r.status, 2, '盘面查不成该以 2 收场；如果是 0，多半是 main 根本没跑');
+      assert.equal(r.status, 2, '盘面没查成该以 2 收场；如果是 0，多半是 main 根本没跑');
       assert.match(String(r.stderr), /盘面没查成/);
     } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响判定 */ } }
   });
