@@ -32,47 +32,35 @@
 4. 垫片头、service 头都写「人退了才起新的」；#1056 退役路径仍在 install 脚本里。
 5. 红项 1（上一轮）：`classifyPrListScan` 取满 limit 即没查全；截断走 unscanned。
 6. 红项 2（上一轮）：`runNudge` 把非 busy 错误写入 `out.failed`；CLI 走 `nudgeExitCode`。
-7. 交卷闸跟 #1117：① 不进交卷判定。本轮合入 `origin/master` `#1119`（交卷闸①降级）只为让审官任务书与闸同点；不为对齐基底再交一轮。真实输出见下。
+7. 交卷闸跟 #1117：① 不进交卷判定。本轮合入 `origin/master` `#1104` 是解冲突（PR 当时 `CONFLICTING`），不是为对齐基底再交一轮。真实输出见下。
 8. 租约 `ok:true` 后只接受 `verdict === 'free'` 或 `'held'`；缺 verdict / `unknown` 返回 `unscanned`。
 9. ENOBUFS：`loadAllPrs` 改 REST `/pulls` 分页（`PR_LIST_PAGE_SIZE=100`），`spawnGh` 默认 `maxBuffer=64MiB`（`GH_SPAWN_MAX_BUFFER`），超限仍是 error。
-10. 审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 从「错分支跳过」改成「将推」。
+10. 审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 仍是将推，不是错分支。
 
-`node --test tests/nudge-stalled.test.js tests/gh-as.test.js`：107 过 / 0 红（本套 47 + gh-as 60）。
-`node --test tests/nudge-stalled.test.js`：47 过 / 0 红。
+本轮（合入 #1104）：master 上 `shouldSkipNudge` 只拦已关/已合，本单完整闸（人还在 / 错分支 / 截断 unscanned / 失败 exit 1）盖住那条接线；`spawnGh` 同时保留 64MiB 缓冲和剥 CLICOLOR。NEW-MACHINE 把「没查成也 skip」改成 unscanned / exit 2，跟闸同口径。`scripts/lib/nudge-skip.mjs` 仍在仓里（#1104 测试还引它），生产垫片不再走那条路。
 
-### 真实预览（本轮：仓内交卷材料跟上 GitHub 正文）
+`node --test tests/nudge-stalled.test.js tests/nudge-skip.test.js tests/gh-as.test.js`：113 过 / 0 红（本套 47 + skip 5 + gh-as 61）。
+`node scripts/dao-check.mjs`：退出码 0（188 项，13 项跳过）。
+
+### 真实预览（本轮：合入 #1104 后）
 
 `node scripts/nudge-stalled.mjs`（预览、不带 `--go`），exit 0。已关单 skip；审官树在 `dao-review-pr-<N>` 进入将推（不是错分支）；租约 held 记「人还在」：
 
 ```
 [推一把·预览] 工人 #1007 的 issue #1007 已关，不推
-[推一把·预览] 审官 PR #1028 codex 将推（Selected model is at capacity. Please try a different model.）
-[推一把·预览] 审官 PR #1106 codex 将推（Selected model is at capacity. Please try a different model.）
-[推一把·预览] 审官 PR #1098 codex 将推（Selected model is at capacity. Please try a different model.）
-[推一把·预览] 审官 PR #1015 codex 将推（Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisi…）
-[推一把·预览] 审官 PR #1099 codex 将推（Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisi…）
-[推一把·预览] 审官 PR #1102 codex 将推（Selected model is at capacity. Please try a different model.）
-[推一把·预览] 审官 PR #1110 人还在，不另起一条：/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1110 已经有 3 个会话进程在干活（node pid 3300146、codex pid 3300175、codex-code-mode pid 3303877）
+[推一把·预览] 工人 #1065 的 issue #1065 已关，不推
+[推一把·预览] 审官 PR #1102 codex 将推（exceeded retry limit, last status: 429 Too Many Requests, request id: 23ba51ece6ebdc91d912c9c62b233862）
+[推一把·预览] 审官 PR #1015 codex 将推（exceeded retry limit, last status: 429 Too Many Requests, request id: b04125ddf8639cb5ff03ba5658254aaf）
+[推一把·预览] 工人 #1121 pi 将推（Internal error during token generation）
+[推一把·预览] 审官 PR #1110 人还在，不另起一条：/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1110 已经有 2 个会话进程在干活（node pid 3985178、codex pid 3985187）
+[推一把·预览] 审官 PR #1107 人还在，不另起一条：/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1107 已经有 2 个会话进程在干活（node pid 3986064、codex pid 3986101）
+[推一把·预览] 审官 PR #1108 人还在，不另起一条：/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1108 已经有 2 个会话进程在干活（node pid 3990614、codex pid 3990640）
 EXIT:0
 ```
 
-### handoff-check 真实输出（工人树 dao-1097，HEAD `e3179dc`）
+### handoff-check 真实输出（工人树 dao-1097）
 
-`node scripts/handoff-check.mjs`（交卷档，① 只报不判）：
-
-```
-交卷闸：dao-1097 vs origin/master（已拉远端）
-  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1486 行里的 6 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1097 同点（e3179dc）
-
-合并前还要过的（查了，但不进本次判定）：
-  ✓  ① 基底含最新 master —— 基底含最新 origin/master
-  ↑ 这几条归合并闸：`node scripts/handoff-check.mjs --gate merge`。
-    它们红不挡交卷，也不该被审官拿来判红——基底新旧在审查期间必然会过期（#1117）。
-
-判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
-```
+`node scripts/handoff-check.mjs`（交卷档，① 只报不判）。完整输出贴在 push 之后、与 HEAD 同点的那一轮。
 
 ## 机制判定
 
@@ -89,6 +77,8 @@ ENOBUFS 还会再犯：会。`spawnSync` 默认 1MiB，本仓带 body 的全量 
 交卷闸①钉在交卷时刻还会再犯：会。master 一天前进约 22 次、一轮审查约 35 分钟，审查结束时基底过期的概率约一半——本单就被这件事打回过三轮。处置不在本单：#1117 / PR #1119 把 ① 降成合并闸，交卷档只报不判。审官标准第 9 条已写明不许拿 ① 判红。本轮合入 `#1119` 后，交卷只核 ②④⑤。
 
 仓内交卷材料跟 GitHub 正文分叉还会再犯：会。上一轮用 `gh pr edit` 把绿输出写进 GitHub，仓内 `pr-body-1097.md` 仍是占位；审官点名的就是这份文件。本轮把真实预览写回仓内，push 后贴与 HEAD 同点的 handoff 输出。
+
+跟 #1104 撞车还会再犯：会。#1104 先合进 master，只拦已关/已合，本单闸更完整；两边都改 `nudge-stalled.mjs` / `gh.mjs` / service。本轮 merge 时保留本单完整闸，并入剥 CLICOLOR 与 NO_COLOR。
 
 ## 回流
 
