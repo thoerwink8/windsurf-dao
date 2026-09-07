@@ -167,13 +167,16 @@ memory `fix-landed-at-one-call-site-only`）。平台闸没有这个问题：任
 `strict: false`（不要求分支与 master 同步）：开 true 会让每张 PR 合并前都被迫 rebase，
 在多张 PR 并行时互相踩，churn 远大于收益。
 
-装/查/改：
+装/查/改：走幂等脚本（一次一个仓，**不是分发器**——#999 实测照搬本仓配置会把 CI 不在 PR 上跑的仓永久锁死）：
 
 ```bash
-gh api repos/thoerwink8/windsurf-dao/branches/master/protection            # 查
-gh api -X PUT repos/OWNER/REPO/branches/master/protection --input p.json   # 装
-gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆（应急）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --check     # 查（形状对 exit 0，不对 exit 1）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --dry-run   # 只打印将 PUT 的载荷
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO             # 装（已对则零副作用）
+gh api -X DELETE repos/OWNER/REPO/branches/master/protection           # 拆（应急，不走脚本）
 ```
+
+装之前先验：该仓 `check` workflow 在 `pull_request` 上跑、且当前是绿的。PUT 要 admin，用你自己的 `gh`，不要走 `gh-as worker`。
 
 **公开仓免费**。本仓 `private=false`，所以这条不花钱。私有仓要 Pro/Team。
 
