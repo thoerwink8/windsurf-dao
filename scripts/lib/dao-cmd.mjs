@@ -642,18 +642,8 @@ export function isCiEnv(env = process.env) {
   return env.GITHUB_ACTIONS === 'true' || env.CI === 'true';
 }
 
-export function orcaHelpAvailable(spawn = spawnSync) {
-  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
-  if (r.error) {
-    const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
-      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
-    return { ok: false, missing, error: msg };
-  }
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) return { ok: false, missing: false, error: 'orca --help 无输出' };
-  return { ok: true, missing: false };
+export function orcaHelpAvailable() {
+  return { ok: false, missing: true, error: 'orca 已退役' };
 }
 
 /**
@@ -672,17 +662,8 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 /** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
 const LIVE_HELP_CACHE = new Map();
 
-export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const key = parts.join(' ');
-  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
-  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
-  if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
-  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
-  return text;
+export function fetchOrcaHelp(cmd) {
+  throw new Error(`orca 已退役，${cmd} --help 不再有对象`);
 }
 
 export function helpFixturePath(cmd, root = ROOT) {
@@ -703,28 +684,7 @@ export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = RO
 }
 
 function spawnOrcaHelpAsync(cmd) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  return new Promise((resolve, reject) => {
-    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.on('error', reject);
-    child.on('close', (status) => {
-      const text = `${stdout}${stderr}`;
-      if (status !== 0 && !String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
-        return;
-      }
-      if (!String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 无输出`));
-        return;
-      }
-      resolve(text);
-    });
-  });
+  return Promise.reject(new Error(`orca 已退役，${cmd} --help 不再有对象`));
 }
 
 /**

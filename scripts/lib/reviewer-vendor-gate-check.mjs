@@ -44,7 +44,8 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
     problems.push('找不到 resolveDispatchConstraints');
   }
 
-  const create = chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
+  const create = chunk(daoSrc, /function cmdReviewerCreateMirasim\b[\s\S]*?\nfunction /)
+    || chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
   if (!create) problems.push('找不到 cmdReviewerCreate');
   else if (!REFUSE_CALL.test(create) && !GATE_CALL.test(create)) {
     problems.push('cmdReviewerCreate 没走同厂闸');
@@ -56,7 +57,8 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
     problems.push('cmdReviewerAttach 没走同厂闸');
   }
 
-  const done = chunk(daoSrc, /function cmdWorkerDone\b[\s\S]*?\nfunction /);
+  const done = chunk(daoSrc, /function cmdWorkerDoneMirasim\b[\s\S]*?\nfunction /)
+    || chunk(daoSrc, /function cmdWorkerDone\b[\s\S]*?\nfunction /);
   if (!done) problems.push('找不到 cmdWorkerDone');
   else {
     if (!REFUSE_CALL.test(done) && !GATE_CALL.test(done)) problems.push('cmdWorkerDone 没走同厂闸');

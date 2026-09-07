@@ -135,17 +135,26 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
 
   it('热路把 --repo 写进派工单；执行体再过闸；审官/交卷/drain 都调 assertCrossRepoOrFail', () => {
     const src = fs.readFileSync(DAO, 'utf8');
-    const hot = src.slice(src.indexOf('function cmdDispatch('), src.indexOf('function cmdDispatchExec('));
-    assert.match(hot, /assertCrossRepoOrFail\(/);
-    assert.match(hot, /repo: targetRepo\.ownerName/);
-    const exec = src.slice(src.indexOf('function runDispatchExecution('), src.indexOf('function cmdDispatchBatch('));
-    assert.match(exec, /assertCrossRepoOrFail\(/);
-    assert.match(exec, /resolveTargetRepoSelector\(/);
-    assert.match(src, /function cmdWorkerDone[\s\S]*assertCrossRepoOrFail/);
-    assert.match(src, /function cmdReviewerCreate[\s\S]*assertCrossRepoOrFail/);
+    // #1115 删了 orca 派工单脊：cmdDispatch 只转 mirasim。闸在 resolveMirasimRepoTarget 里。
+    const dispatch = src.slice(
+      src.indexOf('async function cmdDispatchMirasim'),
+      src.indexOf('async function cmdDispatch(args)'),
+    );
+    assert.match(dispatch, /resolveMirasimRepoTarget\(/);
+    assert.match(src, /function resolveMirasimRepoTarget[\s\S]*assertCrossRepoOrFail\(/);
     assert.match(src, /function cmdReviewerAttach[\s\S]*assertCrossRepoOrFail/);
     assert.match(src, /function cmdReviewPendingDrain[\s\S]*assertCrossRepoOrFail/);
     assert.match(src, /if \(repo\) argv\.push\('--repo'/);
+    const reviewer = src.slice(
+      src.indexOf('async function cmdReviewerCreateMirasim'),
+      src.indexOf('async function cmdWorkerDoneMirasim'),
+    );
+    assert.match(reviewer, /resolveMirasimRepoTarget\(/);
+    const done = src.slice(
+      src.indexOf('async function cmdWorkerDoneMirasim'),
+      src.indexOf('async function cmdStartMirasim'),
+    );
+    assert.match(done, /resolveMirasimRepoTarget\(/);
   });
 
   it('CLI：非法 --repo 热路当场拒，不写派工单', async () => {

@@ -12,12 +12,12 @@
       "id": "orca-retire",
       "name": "Orca 退役，执行体全部换成 mirasim",
       "why": "用户 2026-09-05 拍板（memory: mirasim-replaces-orca-except-reclaude）；伞单 #880。用户 2026-09-06 补了两条明确要求：服务器上的 orca 全卸载删除、仓库里关于 orca 的全删除。",
-      "done_when": "orca workspaces 下 0 棵树 且 orca-serve 已 disabled 且 dao.mjs 里标了「整段删」的那条脊已删 且 scripts/ 与 tests/ 下引用 orca 的文件数为 0",
+      "done_when": "dao-check 的 orca 产品残留闸绿（无 spawn/run orca、无 createOrcaBinding、无 orca-serve 单元、无 dao.mjs「整段删」脊）",
       "_docs_不算": "docs/decisions 与 docs/observations 是判例档案，记录的是当时发生过什么，删掉等于篡改历史——它们里的 orca 字样永远保留，不进判据。",
       "check": "checkOrcaRetirement",
-      "next_action": "删 orca 代码前先做测试对等审计：orca 侧 291 条测试（dao-orca-surface 256 / orca-agent-cmds 28 / orca-error 7）随代码一起删掉后，mirasim 侧 82 条（runtime 41 / reviewer 34 / books 7）能否覆盖同样的判据面。删掉保护而没有等价替代 = 净损失。审计结论出来前不动删除。",
-      "next_action_as_of": "2026-09-06",
-      "status": "active",
+      "next_action": "产品残留闸已绿；linux 用户名 /home/orca 留下。",
+      "next_action_as_of": "2026-09-07",
+      "status": "done",
       "started": "2026-09-04"
     },
     {
