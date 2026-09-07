@@ -82,7 +82,7 @@ export function inspectOpenIssueCount({ issues, prs, worktrees, max, maxRaw } = 
   if (worktrees && worktrees.unscanned) {
     return {
       kind: 'unscanned',
-      line: 'open 单数量阈值：worktree 卡面没查成（orca 不可用或输出畸形）——少这张卡面会把在途单算成积压，本次没查成，不是绿',
+      line: 'open 单数量阈值：worktree 卡面没查成（mirasim 树面没扫成）——少这张卡面会把在途单算成积压，本次没查成，不是绿',
     };
   }
 

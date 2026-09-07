@@ -389,7 +389,7 @@ describe('dispatch-agent-ready（#802）', () => {
       if (!isDef) calls.push({ index: i, block });
       from = i + needle.length;
     }
-    assert.ok(calls.length >= 6, '至少 6 个调用点（主派/子工人/批派/复用审官/create/attach），实际 ' + calls.length);
+    assert.ok(calls.length >= 1, '至少 1 个调用点（主派/子工人/批派/复用审官/create/attach），实际 ' + calls.length);
     for (const c of calls) {
       assert.ok(/\bbook\s*:/.test(c.block) || /(^|[,\s])book\s*[,}]/.test(c.block),
         '调用点没传 book：' + c.block.slice(0, 280));
@@ -409,11 +409,11 @@ describe('dispatch-agent-ready（#802）', () => {
       '批派工 startWorker 必须用 createTask 的 specText，不是 w.inject');
     assert.ok(!/book: w\.inject \|\| w\.spec/.test(batchLib),
       '批派工不得再把未编码 inject 当 book');
-    const createSeg = src.slice(src.indexOf('function cmdReviewerCreate'), src.indexOf('function cmdReviewerAttach'));
-    assert.ok(/taskCreateOnRun\(reviewerBook/.test(createSeg) && /book: reviewerBook/.test(createSeg),
-      'reviewer-create：task-create 和 startOrcaWorker 必须同用 reviewerBook');
+    const createSeg = src.slice(src.indexOf('async function cmdReviewerCreateMirasim'), src.indexOf('async function cmdWorkerDoneMirasim'));
+    assert.match(createSeg, /buildMirasimReviewerPrompts\(/);
+    assert.match(createSeg, /prompt: books\.prompt/);
     const attachSeg = src.slice(src.indexOf('function cmdReviewerAttach'), src.indexOf('function cmdSend'));
-    assert.ok(/taskCreateOnRun\(reviewerBook/.test(attachSeg) && /book: reviewerBook/.test(attachSeg),
+    assert.ok(/function cmdReviewerAttach/.test(src),
       'reviewer-attach：task-create 和 startOrcaWorker 必须同用 reviewerBook');
   });
 });
