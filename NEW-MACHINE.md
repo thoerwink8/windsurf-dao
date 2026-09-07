@@ -434,17 +434,15 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 # 落 ~/.dao/server-check/checks.jsonl（仓外，不会成为下一轮输入）
 ```
 
-### land automation（#829）
+### land timer（#829）
 
-合并后自动清理走 `orca automations` 调同一条 `node scripts/land.mjs`，不另写服务器版。换机 / 重跑：
+合并后自动清理走 systemd hourly 调同一条 `node scripts/land.mjs`。换机 / 重跑：
 
 ```bash
-node scripts/install-land-automation.mjs            # 幂等：同名 0 条 create、1 条 edit，不造第二条
-node scripts/install-land-automation.mjs --dry-run  # 只看不动
+sudo bash scripts/install-land.sh
 ```
 
-hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspace-mode existing`（不许 new-per-run）。
-`server-check` 第⑧项认这条：不在 / disable = 红；list 没查成 = 没查成。
+`server-check` 第⑧项认 `dao-land.timer`：不在 / disable = 红；systemctl 没探到 = 没查成。
 
 ### 服务器指挥官（#800，眼睛常驻）
 
@@ -927,4 +925,4 @@ git ls-remote --heads origin | sed 's|.*refs/heads/||' \
 node scripts/dao-check.mjs
 ```
 
-退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。
+退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。手机私聊机器人要在飞书开发者后台勾「接收私聊消息」（事件仍是 `im.message.receive_v1`，适配器已收 `chat_type=p2p`）。日报队列落 `~/.dao/broadcast-digest.json`，换机不用拷。
