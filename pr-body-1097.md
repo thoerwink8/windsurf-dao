@@ -15,7 +15,7 @@
 
 5. PR 列表查不全时返回 `unscanned`，不许把截断当成「没有该单 PR」去 `go`。
 6. `startSession` 普通失败写入 `failed` 并以非零退出；busy 背压仍是 skip / exit 0。
-7. 工人树含最新 `origin/master`，`handoff-check` 四项通过，正文贴真实输出。
+7. `node scripts/handoff-check.mjs` 交卷档通过（② 零删除 / ④ 指针 / ⑤ 自证＝审官所见）；① 基底新旧只报不判，归 `--gate merge`（#1117）。正文贴真实输出。
 8. 租约成功信封只认精确的 `verdict: 'free'` / `'held'`；缺失或未知值返回 `unscanned`，`runNudge` 零起会话并以 exit 2 收尾。
 9. 完整 PR 扫描在真实数据量下成功返回（分页 / 明确上限缓冲）；ENOBUFS 不再把开放、未合并、free、分支匹配的树全部打成 `unscanned` / exit 2。修完后重跑真实 `node scripts/nudge-stalled.mjs`，证明该推的树能进入 `go`。
 10. 审官树在 `dao-review-pr-<N>`（不是工人 PR head）必须能推；不许把审官工作树当成错分支整批跳过。
@@ -32,7 +32,7 @@
 4. 垫片头、service 头都写「人退了才起新的」；#1056 退役路径仍在 install 脚本里。
 5. 红项 1（上一轮）：`classifyPrListScan` 取满 limit 即没查全；截断走 unscanned。
 6. 红项 2（上一轮）：`runNudge` 把非 busy 错误写入 `out.failed`；CLI 走 `nudgeExitCode`。
-7. 合入当前 `origin/master`（含 #1070 `9139c6f` 与 patrol `a50a445`），`handoff-check` 真实输出见下。
+7. 交卷闸跟 #1117：① 不进交卷判定。本轮合入 `origin/master` `#1119`（交卷闸①降级）只为让审官任务书与闸同点；不为对齐基底再交一轮。真实输出见下。
 8. 租约 `ok:true` 后只接受 `verdict === 'free'` 或 `'held'`；缺 verdict / `unknown` 返回 `unscanned`。
 9. ENOBUFS：`loadAllPrs` 改 REST `/pulls` 分页（`PR_LIST_PAGE_SIZE=100`），`spawnGh` 默认 `maxBuffer=64MiB`（`GH_SPAWN_MAX_BUFFER`），超限仍是 error。
 10. 审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 从「错分支跳过」改成「将推」。
@@ -58,7 +58,7 @@ EXIT:0
 
 ### handoff-check 真实输出
 
-提交并推送后重跑，把与新 HEAD 同点的完整输出贴进 GitHub PR 正文（本文件同步）。上一轮工人树 `e0b391d` 四项绿；本轮补的是仓内这份材料不再留占位。
+push 后重跑，贴与 HEAD 同点的完整输出（见本 PR 最新正文修订）。
 
 ## 机制判定
 
@@ -72,9 +72,9 @@ ENOBUFS 还会再犯：会。`spawnSync` 默认 1MiB，本仓带 body 的全量 
 
 本轮（审官树被错分支闸误伤）还会再犯：会。`reviewer-create` 把审官树建在 `dao-review-pr-<N>`，不能复用工人 PR head（会撞）。闸却拿 PR head 去对树分支，真实预览把卡住的审官 PR #1102 判成 skip。处置：审官分支闸认审官树名或 PR head；回归锁住「树在 dao-review-pr-N → go」。
 
-交卷闸跟不上最新 master 还会再犯：会。master 前进后工人树旧基底会把 handoff-check ① 打红，而 PR 正文若钉死旧 HEAD 输出，审官复核会对不上。上一轮把 `#1070` 与 patrol `a50a445` merge 进来。
+交卷闸①钉在交卷时刻还会再犯：会。master 一天前进约 22 次、一轮审查约 35 分钟，审查结束时基底过期的概率约一半——本单就被这件事打回过三轮。处置不在本单：#1117 / PR #1119 把 ① 降成合并闸，交卷档只报不判。审官标准第 9 条已写明不许拿 ① 判红。本轮合入 `#1119` 后，交卷只核 ②④⑤。
 
-仓内交卷材料跟 GitHub 正文分叉还会再犯：会。上一轮用 `gh pr edit` 把绿输出写进 GitHub，仓内 `pr-body-1097.md` 仍是「提交后重跑」占位；审官点名的就是这份文件。本轮把真实预览与判定写回仓内，push 后再把与新 HEAD 同点的 handoff 输出贴进 GitHub 正文。
+仓内交卷材料跟 GitHub 正文分叉还会再犯：会。上一轮用 `gh pr edit` 把绿输出写进 GitHub，仓内 `pr-body-1097.md` 仍是占位；审官点名的就是这份文件。本轮把真实预览写回仓内，push 后贴与 HEAD 同点的 handoff 输出。
 
 ## 回流
 
