@@ -8,6 +8,9 @@
 //      带换行的 --body / --comment 会被拆开（实测 gh issue close --comment "多行"
 //      报 accepts 1 arg(s), received 10）。gh 在 Windows 上是 gh.exe，直接 spawn。
 //   2. 凭据缺失要 fail-loud，报「这台机器没装」而不是「配置错了」——处置完全不同。
+//   3. spawnSync 默认 maxBuffer=1MiB。本仓 `gh pr list --json ...body...` 实测 3.1MiB
+//      就 ENOBUFS（PR #1102 红项）：整次扫描变 unscanned，正常树永远推不动。
+//      超限是 error、不是静默截断；缓冲只是上限，查不全仍 fail-close。
 //
 // App token 硬性 1 小时过期。缓存剩余不足 10 分钟即重换，免得长任务跑一半 401。
 
@@ -259,19 +262,31 @@ export function ghExecutable() {
   return process.platform === 'win32' ? 'gh.exe' : 'gh';
 }
 
-export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
+// spawnSync 默认 1MiB。本仓带 body 的全量 pr list 实测 3.1MiB 就 ENOBUFS（PR #1102）。
+// 64MiB 是明确上限：够当前数据量、超限仍是 error（不是静默截断）。调用方可覆盖。
+export const GH_SPAWN_MAX_BUFFER = 64 * 1024 * 1024;
+
+export function spawnGh(args, { token, cwd, inherit = false, spawnImpl, maxBuffer } = {}) {
   if (!Array.isArray(args) || args.length === 0) {
     return { ok: false, error: '缺 gh 参数' };
   }
   const spawn = spawnImpl || spawnSync;
   const exe = ghExecutable();
+  // CLICOLOR_FORCE / FORCE_COLOR 会让 gh --json 刷成非 JSON（看门狗干跑实咬）。
+  const env = { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token, NO_COLOR: '1', GH_NO_COLOR: '1' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
   const opts = {
     cwd,
-    env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token },
+    env,
     windowsHide: true,
   };
   if (inherit) opts.stdio = 'inherit';
-  else opts.encoding = 'utf8';
+  else {
+    opts.encoding = 'utf8';
+    opts.maxBuffer = Number.isInteger(maxBuffer) && maxBuffer > 0 ? maxBuffer : GH_SPAWN_MAX_BUFFER;
+  }
   // 故意不设 shell。见文件头坑 1。
   const r = spawn(exe, args, opts);
   if (r.error) return { ok: false, error: `执行 gh 失败: ${r.error.message}` };
@@ -290,7 +305,13 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
 export function ghAs(role, args, opts = {}) {
   const tok = resolveToken(role, opts);
   if (!tok.ok) return tok;
-  return spawnGh(args, { token: tok.token, cwd: opts.cwd, inherit: opts.inherit, spawnImpl: opts.spawnImpl });
+  return spawnGh(args, {
+    token: tok.token,
+    cwd: opts.cwd,
+    inherit: opts.inherit,
+    spawnImpl: opts.spawnImpl,
+    maxBuffer: opts.maxBuffer,
+  });
 }
 
 // 扫完 0 条差异 vs 没扫成：actual 读不到 → unscanned；扫到且完全吻合 → mismatches=[]。

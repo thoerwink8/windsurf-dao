@@ -4,11 +4,11 @@
 # 卡死查得出来（dao-progress-watch 每 20 分钟扫盘面推进量），但**没有任何东西去处置**——
 # progress-watch 只叫醒帅位，帅位不在就一整夜没人动手。
 #
-# 处置为什么是「说一句继续」而不是重派（2026-09-06 实测）：
-#   record.json → runState: incomplete / runDetail: pi turn stalled past 30 minutes
-#   turns.jsonl → 最后一条 phase: done，正文停在「设计已对齐…」
-# 工人没死，是跑完一轮在等下一句话。重派会丢掉它已经读完的上下文，白烧一遍额度。
-# 当天五个工人（#1007 #1017 #1052 #1055 #1056）和两个审官（PR #1018 #1040）推完全部回到 running。
+# 正路做不到「往旧会话说话」：interact 只答会话里等着的问题，塞不进等下一轮的嘴里，
+# 所以本垫片只能起新会话。闸的意思是：**人退了才起新的**；已关 issue / 已合 PR /
+# 人还在（租约 held）/ 树不在该单 PR head 上，一律不推。
+# 2026-09-07 实锤：没这三道闸时一次推了 6 棵（含已关 #1012/#1007、停在 master 的 #1063）。
+# 判据在 scripts/lib/nudge-stalled.mjs。#1056 对账循环合并时本垫片整套退役。 本单元只跑垫片，不起会话的决策不在这里。
 #
 # 与 dao-progress-watch 的分工，别合并：
 #   progress-watch  看**盘面对象**（PR / issue / 复审票）连续几轮没推进 → 叫醒帅位
@@ -19,7 +19,7 @@
 #   sudo bash scripts/install-nudge-stalled.sh
 #   systemctl list-timers | grep dao-nudge-stalled   # NEXT 不能是 `-`
 #
-# 退役：#1056 落地后，删本单元 + 删 scripts/nudge-stalled.mjs。那张单正文里已登记。
+# 退役：#1056 落地后，删本单元 + 删 scripts/nudge-stalled.mjs 和 scripts/lib/nudge-stalled.mjs。那张单正文里已登记。
 
 [Unit]
 Description=windsurf-dao nudge stalled sessions (垫片，随 #1056 退役)
@@ -31,8 +31,12 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/nudge-stalled.mjs --go
-# 退出码 2 = 没查成（会话档案目录读不了 / 一个会话都没扫到），故意留成失败：
-# 「没扫到」要在 systemctl --failed 里看得见，不许跟「没有卡住的」长成一个样。
+# 退出码 2 = 没查成（会话档案读不了 / PR 列表截断 / 闸面没查成）。
+# 退出码 1 = 起会话失败（mirasim unavailable / 契约 / 上游拒绝，不是 busy）。
+# busy 背压是 skip、exit 0。故意留成失败的，要在 systemctl --failed 里看得见，
+# 不许跟「没有卡住的 / 全跳过 / 推成功」长成一个样。
 StandardOutput=journal
 StandardError=journal

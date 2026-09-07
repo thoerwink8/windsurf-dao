@@ -1,28 +1,34 @@
 #!/usr/bin/env node
 // 推一把卡住的工人。**垫片**——正式的家是 issue #1056 的对账循环，合并时本脚本退役。
 //
+// 正路做不到「往旧会话说话」：interact 只答会话里等着的问题，塞不进等下一轮的嘴里，
+// 所以本垫片只能起新会话。闸的意思是：**人退了才起新的**；已关 issue / 已合 PR /
+// 人还在（租约 held）/ 树不在该单 PR head 上，一律不推。
+// 2026-09-07 实锤：没这三道闸时一次推了 6 棵（含已关 #1012/#1007、停在 master 的 #1063），
+// 同一晚 #1007 被推过 18 次。判据在 scripts/lib/nudge-stalled.mjs，本文件只接线。
+// #1056 对账循环合并时本垫片整套退役，在那之前这三道闸就是正门。
+//
 // 为什么需要它：盘面上会一直挂着「某某静默 N 分钟」，却没有任何东西让它继续——
 // 发现和处置之间断了一截。（原文这里指的是 agent-stall-watch 的 escalate 只报帅不动手；
 // 那一层 2026-09-06 已整层删除，见 chain:agent-stall#7。今天的发现面是
 // scripts/progress-watch.mjs 的盘面推进量，同样只叫醒帅位、不动手，缺口没变。）
-//
-// 而 2026-09-06 实测：卡住的工人**没死**。record.json 里 `runState: incomplete` /
-// `runDetail: pi turn stalled past 30 minutes`，但最后一条 turn 是 `phase: done`，
-// 正文停在「设计已对齐…」——它跑完一轮在等下一句话，没人说话就被 30 分钟计时判成卡死。
-// 所以处置是**说一句「继续」**，不是重派：重派会丢掉它已经读完的上下文，白烧一遍额度。
-// 当天五个（#1007 #1017 #1052 #1055 #1056）推完全部回到 running。
 //
 // 探测面不自己造：卡死清单从 mirasim 落盘的 record.json 直接读（它是会话的所有者）。
 // 这也是屏面指纹层删掉之后**会话级**判卡的唯一去处——progress-watch 看的是盘面对象
 // （PR / issue / 复审票），看不见「某个会话跑完一轮在等话」。两个面互补，别合并。
 //
 //   node scripts/nudge-stalled.mjs                  列出卡住的派工树，不动手
-//   node scripts/nudge-stalled.mjs --go             逐个推一把
+//   node scripts/nudge-stalled.mjs --go             逐个推一把（过闸才起新会话）
 //   node scripts/nudge-stalled.mjs --go --only 1056 只推一个
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { createRuntime } from './lib/mirasim-runtime.mjs';
+import { ghAs } from './lib/gh.mjs';
+import { checkTreeLease } from './lib/dispatch/lease.mjs';
+import { runNudge, collectPrListPages, normalizeListedPr, nudgeExitCode, PR_LIST_LIMIT, PR_LIST_PAGE_SIZE } from './lib/nudge-stalled.mjs';
 
 const argv = process.argv.slice(2);
 const GO = argv.includes('--go');
@@ -42,25 +48,6 @@ const REVIEW_CONTINUE = [
   '先说一句你已经看过哪些文件、还剩什么没看，然后接着看。',
   '判完照审官任务书交卷：逐条给判定，判绿或判红都要落到 PR review 上，别只在会话里说。',
 ].join('\n');
-
-/**
- * 树路径反查它在盘面上的身份。两种树都要认：
- *   `.../dao-1056`         工人树      → {kind:'工人', n:1056}
- *   `.../dao-review-pr-1040` 审官树    → {kind:'审官', n:1040}
- * 认不出回 null，不猜——临时会话没有单号，也就没有重派路径，不该被推。
- *
- * 审官树一开始漏了，而那正是最要命的一类：审官卡死 ⇒ 没有判绿 ⇒ **什么都合不了**。
- * 2026-09-06 实测两个审官（PR #1018 / #1040）双双停在
- * 「Selected model is at capacity」，当天一张 PR 都没合就是这么来的。
- */
-function idOfTree(workdir) {
-  const s = String(workdir || '');
-  const r = /(?:^|\/)dao-review-pr-(\d+)$/.exec(s);
-  if (r) return { kind: '审官', n: Number(r[1]), label: `PR #${r[1]}` };
-  const w = /(?:^|\/)dao-(\d+)(?:-\d+)?$/.exec(s);
-  if (w) return { kind: '工人', n: Number(w[1]), label: `#${w[1]}` };
-  return null;
-}
 
 function readRecords(root) {
   let agents;
@@ -88,38 +75,137 @@ function readRecords(root) {
   return out;
 }
 
-// 按树取**最近那条**记录判：旧的 running 盖不住新的 incomplete（dao-1017 实咬——
-// running 停在 11:31、incomplete 停在 11:49，按「有活就算活」会漏掉真正卡住的那条）。
-const records = readRecords(SESSIONS);
-const latest = new Map();
-for (const r of records) {
-  if (!r.workdir || idOfTree(r.workdir) == null) continue;
-  if (!existsSync(r.workdir)) continue; // 树已经清掉了就不是「没人管」，是收拾过了
-  const at = Date.parse(r.updatedAt || '') || 0;
-  const prev = latest.get(r.workdir);
-  if (!prev || at > prev.at) latest.set(r.workdir, { at, rec: r });
+function ghJson(args, what) {
+  let lastErr = `${what} 没查成`;
+  for (const role of ['worker', 'watchdog']) {
+    const r = ghAs(role, args);
+    if (!r.ok) {
+      lastErr = r.error || `${role} ${what} 失败`;
+      continue;
+    }
+    try {
+      return { ok: true, value: JSON.parse(r.out || '') };
+    } catch (e) {
+      return { ok: false, error: `${what} 不是 JSON：${String(e.message).slice(0, 80)}` };
+    }
+  }
+  return { ok: false, error: lastErr };
 }
 
-const stalled = [...latest.values()]
-  .filter(x => x.rec.runState === 'incomplete')
-  .filter(x => !only || String(idOfTree(x.rec.workdir).n) === String(only))
-  .sort((a, b) => a.at - b.at);
+const issueCache = new Map();
+const reviewerPrCache = new Map();
+let allPrsCache = null;
 
-if (!stalled.length) { console.log('[推一把] 没有卡住的树'); process.exit(0); }
+function lookupIssue(n) {
+  const k = String(n);
+  if (issueCache.has(k)) return issueCache.get(k);
+  const got = ghJson(['issue', 'view', k, '--json', 'state'], `issue #${k}`);
+  const out = !got.ok
+    ? { ok: false, error: got.error }
+    : (got.value && got.value.state != null)
+      ? { ok: true, state: got.value.state }
+      : { ok: false, error: `issue #${k} 没读到 state（没查成）` };
+  issueCache.set(k, out);
+  return out;
+}
 
-for (const { rec } of stalled) {
-  const id = idOfTree(rec.workdir);
-  const agent = rec.agent || 'pi';
-  const who = `${id.kind} ${id.label}`;
-  if (!GO) { console.log(`[推一把·预览] ${who} ${agent}（${rec.runDetail || rec.runState}）`); continue; }
-  try {
-    const rt = createRuntime({ homeDir: '/home/orca' });
-    // 审官不能给「接着写代码」那套话——它的活是判，交卷方式也不同。
-    const prompt = id.kind === '审官' ? REVIEW_CONTINUE : CONTINUE;
-    const r = await rt.startSession({ agent, workdir: rec.workdir, prompt });
-    console.log(`[推一把] ${who} 推了：${r.sessionKey}`);
-  } catch (e) {
-    // 推不动就如实说，不吞——它下一轮还在 incomplete，本命令再跑一次照样看得见。
-    console.error(`[推一把] ${who} 推不动：${String(e.message || e).slice(0, 160)}`);
+function loadAllPrs() {
+  if (allPrsCache) return allPrsCache;
+  // 不分页的 `gh pr list --limit 10000 --json ...body...` 在本仓实测 3.1MiB，
+  // spawnSync 默认 1MiB 直接 ENOBUFS，整次扫描变 unscanned（PR #1102 红项）。
+  // 正路：REST 按页取（每页 PR_LIST_PAGE_SIZE），每页单独 spawn；任一页没查成
+  // 或最后一页取满且总条数摸到 PR_LIST_LIMIT → 没查全。spawnGh 另有 64MiB 上限，
+  // 超限仍是 error，不是静默截断。
+  const pages = [];
+  const pageSize = PR_LIST_PAGE_SIZE;
+  const limit = PR_LIST_LIMIT;
+  const maxPages = Math.ceil(limit / pageSize);
+  for (let page = 1; page <= maxPages; page++) {
+    const got = ghJson(
+      ['api', `repos/{owner}/{repo}/pulls?state=all&per_page=${pageSize}&page=${page}`],
+      `PR 面第 ${page} 页`,
+    );
+    if (!got.ok) {
+      allPrsCache = { ok: false, error: got.error };
+      return allPrsCache;
+    }
+    if (!Array.isArray(got.value)) {
+      allPrsCache = { ok: false, error: `PR 面第 ${page} 页不是数组（没查成）` };
+      return allPrsCache;
+    }
+    pages.push({ ok: true, items: got.value.map(normalizeListedPr) });
+    if (got.value.length < pageSize) break;
   }
+  allPrsCache = collectPrListPages(pages, { pageSize, limit });
+  return allPrsCache;
+}
+
+function lookupPrs(id) {
+  if (id.kind === '审官') {
+    const k = String(id.n);
+    if (reviewerPrCache.has(k)) return reviewerPrCache.get(k);
+    const got = ghJson(
+      ['pr', 'view', k, '--json', 'number,state,headRefName,title,body'],
+      `PR #${k}`,
+    );
+    const out = !got.ok
+      ? { ok: false, error: got.error }
+      : (got.value && got.value.number != null)
+        ? { ok: true, items: [got.value] }
+        : { ok: false, error: `PR #${k} 没读到（没查成）` };
+    reviewerPrCache.set(k, out);
+    return out;
+  }
+  return loadAllPrs();
+}
+
+function readBranch(workdir) {
+  const r = spawnSync('git', ['-C', workdir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+  });
+  if (r.error || r.status !== 0) {
+    return {
+      ok: false,
+      error: String(r.error?.message || r.stderr || `git exit ${r.status}`).trim().slice(0, 160),
+    };
+  }
+  const name = String(r.stdout || '').trim();
+  if (!name) return { ok: false, error: 'git 没给出分支名（没查成）' };
+  return { ok: true, name };
+}
+
+function checkLease(workdir) {
+  return checkTreeLease({ workdir });
+}
+
+let runtime = null;
+async function startSession(args) {
+  if (!runtime) runtime = createRuntime({ homeDir: '/home/orca' });
+  return runtime.startSession(args);
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const records = readRecords(SESSIONS);
+  const out = await runNudge({
+    go: GO,
+    only,
+    records,
+    exists: existsSync,
+    lookupIssue,
+    lookupPrs,
+    readBranch,
+    checkLease,
+    startSession,
+    workerPrompt: CONTINUE,
+    reviewPrompt: REVIEW_CONTINUE,
+    log: (s) => console.log(s),
+    error: (s) => console.error(s),
+  });
+  // 没查成 exit 2、起会话失败 exit 1，要在 systemctl --failed 里看得见。
+  // busy 背压是 skip（exit 0），不许跟 mirasim unavailable 长成一个样。
+  const code = nudgeExitCode(out);
+  if (code) process.exit(code);
 }
