@@ -22,21 +22,9 @@ function labelNameOf(item) {
   return '';
 }
 
-/**
- * 挑出某前缀的 label 并**按值去重**。
- *
- * 去重不是优化，是判据的一部分：`collectIssueLabelsFromPr` 会把 PR 署名的**多张** issue
- * 的 label 拼成一个列表，所以同一个值天然会出现多次。不去重就会把「两张单都说 grok-4.6」
- * 数成 2，判成「有多个，不许猜」——那不是歧义，是同一个选择被说了两遍。
- * 真歧义（两个**不同**的值）去重后仍是 2，仍然拒绝，判据一字未变。
- */
-function distinctPrefixed(labels, prefix) {
-  const seen = new Set();
-  for (const item of labels) {
-    const name = labelNameOf(item);
-    if (name.startsWith(prefix) && name.length > prefix.length) seen.add(name);
-  }
-  return [...seen];
+/** 一张 PR 署两张单会把同一份 model/* / reviewer/* 收集两遍；同名不是歧义。 */
+function uniqueNames(names) {
+  return [...new Set(names)];
 }
 
 /**
@@ -52,7 +40,9 @@ export function pickReviewer(labels) {
       error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
     };
   }
-  const hits = distinctPrefixed(labels, REVIEWER_LABEL_PREFIX);
+  const hits = uniqueNames(labels
+    .map(labelNameOf)
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return {
       ok: false,
@@ -83,7 +73,9 @@ export function pickModel(labels) {
   if (labels == null || !Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
   }
-  const hits = distinctPrefixed(labels, MODEL_LABEL_PREFIX);
+  const hits = uniqueNames(labels
+    .map(labelNameOf)
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
   }

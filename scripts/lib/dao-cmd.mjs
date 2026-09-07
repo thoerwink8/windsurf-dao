@@ -1058,14 +1058,10 @@ export const FLAGS_BY_VERB = {
     '--reviewer', '--executor', '--branch', '--repo',
     '--dry-run', '--json', '--help', '-h',
   ]),
-  // --force：cmdReviewerCreateMirasim 早就读 args.force（复用判据 judgeReviewerSessionReuse 的
-  // 第三个入参），复用时打印的话面也写着「要另起加 --force」——但这张表里没有它，parseArgs 把
-  // `--force` 当未知参数拒掉，args.force 恒 undefined。**它自己指的逃生门打不开。**
-  // 后果不是少个开关：返工后的 PR 一旦登记过审官会话，复审就再也起不来（#1057/#1070/#1096/#1098 实咬）。
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
-    '--executor', '--branch', '--repo', '--json', '--force', '--help', '-h',
+    '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
