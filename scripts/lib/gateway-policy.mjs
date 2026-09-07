@@ -32,6 +32,7 @@ export function loadPolicy(file) {
   if (missing.length) throw new Error(`gateway-policy 缺节：${missing.join('、')}（${found}）`);
   const noWhy = SECTIONS.filter((s) => typeof policy[s].why !== 'string' || !policy[s].why);
   if (noWhy.length) throw new Error(`gateway-policy 这些节缺 why：${noWhy.join('、')}`);
+  checkProbeTargets(policy.probe);
   if (!Array.isArray(policy.pools.list) || !policy.pools.list.length) throw new Error('pools.list 不能为空');
   for (const pool of policy.pools.list) {
     if (!pool.alias || !pool.group || !Array.isArray(pool.legs) || !pool.legs.length) {
@@ -67,11 +68,26 @@ export function checkPriorityGradient(policy) {
   }
 }
 
+// probe.targets 是池探针的唯一探测面。缺失/空数组/条目缺 group·model 都必须 fail-closed：
+// 否则 probePlan 会派出 pools:[]，主流程仍写新 updatedAt 并以 rc=0 退出，把旧的池健康当成刚更新的。
+export function checkProbeTargets(probe) {
+  const targets = probe && probe.targets;
+  if (!Array.isArray(targets) || !targets.length) {
+    throw new Error('probe.targets 不能为空');
+  }
+  for (const t of targets) {
+    if (!t || typeof t !== 'object' || !t.group || !t.model) {
+      throw new Error('probe.targets 条目缺 group/model');
+    }
+  }
+}
+
 // 探针探测面从策略派生：pool / leg / direct 三类 target 一处算。
 // 健康表 key 前缀（gw:/leg:/direct:）是两仓共用契约，本仓 #842 按前缀分类消费。
 export function probePlan(policy) {
   const p = policy.probe || {};
-  const pools = (p.targets || []).map((t) => ({
+  checkProbeTargets(p);
+  const pools = p.targets.map((t) => ({
     key: `gw:${t.group}/${t.model}`, kind: 'pool', group: t.group, model: t.model,
   }));
   const legs = [];

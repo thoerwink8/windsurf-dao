@@ -32,7 +32,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { loadPolicy, probePlan } from "./lib/gateway-policy.mjs";
-import { buildHealthTable, mergeLegHealth, computeAlerts, plainTarget, buildRedAlert } from "./lib/probe-health.mjs";
+import { buildHealthTable, mergeLegHealth, computeAlerts, plainTarget, buildRedAlert, responsesEventHasContent } from "./lib/probe-health.mjs";
 
 const argv = process.argv.slice(2);
 // #967：旧 --install 写出的 timer 只有单调时钟。必须在读策略之前拦——这条旗标不该去碰网关。
@@ -151,12 +151,9 @@ async function probeDirect(direct) {
         const payload = line.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
         try {
-          const obj = JSON.parse(payload);
-          const type = obj.type || "";
-          // responses 流：output_text.delta 是可见正文，reasoning*.delta 是推理活口（§61 都算通）
-          if (/(?:output_text|reasoning[a-z_]*)\.delta$/.test(type) && typeof obj.delta === "string" && obj.delta.length) got = true;
-          // 有的实现把内容塞在 response.completed 的 output 里，兜一手
-          else if (type === "response.completed" && JSON.stringify(obj.response?.output || "").length > 40) got = true;
+          // responses 流：output_text/reasoning delta，或 completed.output 里的非空 content/text/reasoning。
+          // 空 content:[] 的 completed 不算通（长度兜底会把空消息判绿）。
+          if (responsesEventHasContent(JSON.parse(payload))) got = true;
         } catch { /* 非 JSON data 行，跳过 */ }
         if (got) break;
       }

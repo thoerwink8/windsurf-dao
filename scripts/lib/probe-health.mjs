@@ -105,3 +105,35 @@ export function computeAlerts(table, prevAlerted, strikesToAlert) {
   const nextAlerted = [...new Set([...alerted, ...newlyBad])].filter(k => nowRedSet.has(k));
   return { newlyBad, recovered, nowRed, nextAlerted };
 }
+
+// responses 流：只有非空 content/text/reasoning 才算真内容。
+// 禁止用 JSON.stringify(output).length 兜底——空 content:[] 的 completed 事件序列化也很容易超过 40 字符。
+const CONTENT_KEYS = ['content', 'text', 'reasoning', 'reasoning_content'];
+
+function hasNamedText(node, viaNamed, depth) {
+  if (node == null || depth > 10) return false;
+  if (typeof node === 'string') return viaNamed && node.length > 0;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      if (hasNamedText(item, viaNamed, depth + 1)) return true;
+    }
+    return false;
+  }
+  if (typeof node !== 'object') return false;
+  for (const k of CONTENT_KEYS) {
+    if (k in node && hasNamedText(node[k], true, depth + 1)) return true;
+  }
+  return false;
+}
+
+export function responsesOutputHasContent(output) {
+  return hasNamedText(output, false, 0);
+}
+
+export function responsesEventHasContent(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const type = obj.type || '';
+  if (/(?:output_text|reasoning[a-z_]*)\.delta$/.test(type) && typeof obj.delta === 'string' && obj.delta.length) return true;
+  if (type === 'response.completed') return responsesOutputHasContent(obj.response && obj.response.output);
+  return false;
+}

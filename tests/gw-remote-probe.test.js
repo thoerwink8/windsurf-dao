@@ -116,6 +116,91 @@ describe('探针纯函数：探测面从策略派生', () => {
     fs.writeFileSync(f, JSON.stringify({ pools: { why: 'x', list: [{ alias: 'a', group: 'g', legs: [{ nameLike: 'n', priority: 1 }] }] } }));
     assert.throws(() => loadPolicy(f), /缺节/);
   });
+
+  it('probe 有 why 但缺 targets → loadPolicy / probePlan 都抛', async () => {
+    const { loadPolicy, probePlan } = await import(POLICY);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-policy-'));
+    const f = path.join(dir, 'gateway-policy.json');
+    const policy = {
+      pools: {
+        why: 'ok',
+        list: [{ alias: 'a', group: 'testpool', legs: [{ nameLike: 'n', priority: 1 }] }],
+      },
+      probe: { why: 'ok', intervalMin: 30, strikesToAlert: 2, heartbeatDays: 7 },
+    };
+    fs.writeFileSync(f, JSON.stringify(policy));
+    assert.throws(() => loadPolicy(f), /probe\.targets 不能为空/);
+    assert.throws(() => probePlan(policy), /probe\.targets 不能为空/);
+  });
+
+  it('probe.targets 空数组或条目缺 group/model → 抛', async () => {
+    const { probePlan } = await import(POLICY);
+    const base = miniPolicy();
+    assert.throws(() => probePlan({ ...base, probe: { ...base.probe, targets: [] } }), /probe\.targets 不能为空/);
+    assert.throws(
+      () => probePlan({ ...base, probe: { ...base.probe, targets: [{ group: 'testpool' }] } }),
+      /probe\.targets 条目缺 group\/model/,
+    );
+  });
+
+  it('缺 targets 的策略跑主流程：非零退出，不写新健康表', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-probe-notargets-'));
+    const policyFile = path.join(dir, 'gateway-policy.json');
+    const healthFile = path.join(dir, 'provider-health.json');
+    const oldTable = JSON.stringify({
+      updatedAt: '2026-09-01T00:00:00Z',
+      intervalMin: 30,
+      targets: { 'gw:testpool/model': { kind: 'pool', state: 'green', why: 'old' } },
+    }, null, 2);
+    fs.writeFileSync(healthFile, oldTable);
+    fs.writeFileSync(policyFile, JSON.stringify({
+      pools: {
+        why: 'ok',
+        list: [{ alias: 'a', group: 'testpool', legs: [{ nameLike: 'n', priority: 1 }] }],
+      },
+      probe: { why: 'ok', intervalMin: 30, strikesToAlert: 2, heartbeatDays: 7 },
+    }));
+    const r = spawnSync(process.execPath, [SCRIPT], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      env: { ...process.env, GW_POLICY: policyFile, GW_HEALTH_FILE: healthFile },
+    });
+    assert.notEqual(r.status, 0);
+    assert.match(String(r.stderr || ''), /probe\.targets 不能为空/);
+    assert.equal(fs.readFileSync(healthFile, 'utf8'), oldTable);
+  });
+});
+
+describe('直连 responses：空 content 不算通', () => {
+  it('response.completed + content:[] 即使序列化很长也是红', async () => {
+    const { responsesEventHasContent } = await import(HEALTH);
+    const empty = {
+      type: 'response.completed',
+      response: {
+        id: 'resp_empty_content_padding_xxxxx',
+        output: [{ type: 'message', role: 'assistant', content: [] }],
+      },
+    };
+    assert.equal(JSON.stringify(empty.response.output).length > 40, true);
+    assert.equal(responsesEventHasContent(empty), false);
+  });
+
+  it('completed 里有非空 text / output_text.delta 才算通', async () => {
+    const { responsesEventHasContent } = await import(HEALTH);
+    assert.equal(responsesEventHasContent({
+      type: 'response.completed',
+      response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] },
+    }), true);
+    assert.equal(responsesEventHasContent({
+      type: 'response.output_text.delta',
+      delta: 'ok',
+    }), true);
+    assert.equal(responsesEventHasContent({
+      type: 'response.output_text.delta',
+      delta: '',
+    }), false);
+  });
 });
 
 describe('systemd 单元与装机脚本', () => {
