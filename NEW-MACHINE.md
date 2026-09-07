@@ -437,17 +437,15 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 # 落 ~/.dao/server-check/checks.jsonl（仓外，不会成为下一轮输入）
 ```
 
-### land automation（#829）
+### land timer（#829）
 
-合并后自动清理走 `orca automations` 调同一条 `node scripts/land.mjs`，不另写服务器版。换机 / 重跑：
+合并后自动清理走 systemd hourly 调同一条 `node scripts/land.mjs`。换机 / 重跑：
 
 ```bash
-node scripts/install-land-automation.mjs            # 幂等：同名 0 条 create、1 条 edit，不造第二条
-node scripts/install-land-automation.mjs --dry-run  # 只看不动
+sudo bash scripts/install-land.sh
 ```
 
-hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspace-mode existing`（不许 new-per-run）。
-`server-check` 第⑧项认这条：不在 / disable = 红；list 没查成 = 没查成。
+`server-check` 第⑧项认 `dao-land.timer`：不在 / disable = 红；systemctl 没探到 = 没查成。
 
 ### 服务器指挥官（#800，眼睛常驻）
 
