@@ -50,7 +50,17 @@
 
 ## 交卷闸
 
-`node scripts/handoff-check.mjs` 在推远端后重跑，输出贴下面。
+`node scripts/handoff-check.mjs`（head `5e5aa9b`）：
+
+```
+交卷闸：dao-792 vs origin/master（已拉远端）
+  ✓  ① 基底含最新 master —— 基底含最新 origin/master
+  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1963 行里的 20 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（5e5aa9b）
+
+判定：通（4 通 / 0 红 / 0 没查成）——可以交卷
+```
 
 ## 体系类改动
 
