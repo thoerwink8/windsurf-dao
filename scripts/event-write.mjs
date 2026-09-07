@@ -37,6 +37,8 @@
 //
 // 选项：--dir <目录>（默认本机 ~/.dao/ledger/events）--machine <机器名>（默认本机 hostname）
 //       --seq N（默认自动：本机最大 seq + 1）--schema <schema 路径>
+// --dir 与 --schema 都**相对仓库根**解析（下面的 ROOT），不是相对 cwd。给相对路径会写进
+// <仓库根>/<你给的路径> 污染工作树；测试/演示写事件请给绝对路径。
 
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
