@@ -329,6 +329,9 @@ describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () =
     assert.match(done, /ghRunnerForTarget\(targetRepo, \{ role: 'worker' \}\)/);
     assert.match(done, /ghRunnerForTarget\(targetRepo, \{ role: 'reviewer' \}\)/);
     assert.match(done, /const repo = targetRepo\.localPath/);
+    assert.match(done, /writeReviewPendingOnFail\(/);
+    assert.match(done, /source:\s*REVIEW_PENDING_SOURCE_WORKER_DONE/);
+    assert.match(done, /repo:\s*targetRepo\.ownerName/);
   });
 });
 

@@ -167,8 +167,8 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
  *     已合并/关闭 → skip，不重起不报警；还开着 / 名单没查成 → restart-reviewer
  *   其余静默 ⇒ 先推一句「继续」（#1056：工人没死，是跑完一轮在等下一句话）
  *
- * 垫片 `nudge-stalled.mjs` 退役后，这一档就是对账循环的差集动作入口。
- * 推不动才由调用方升到重派；本函数不越级。
+ * incomplete 由指挥官 `stop-session`；人没了才走对账循环差集重派。
+ * 本函数只给意图，不越级动手。
  */
 export function routeSilent(session, { openPrs } = {}) {
   const text = [session?.label, session?.title, session?.cwd, session?.workdir, session?.worktreeId]

@@ -407,25 +407,29 @@ function checkBotModel() {
   return classifyBotModelProbe(probeBotModel());
 }
 
-// —— ⑮ 卡死发现 timer ——
+// —— ⑮ 卡死发现已并进指挥官 ——
 // 另起一项，不改 ⑧ automations 那行（#829 已占用）；⑭ 是指挥官自检（#800）。
 //
-// 2026-09-06 用户拍板「删掉整层」后，这一格守的对象换了：屏面指纹那套
-// （dao-agent-stall + /home/orca/bin 垫片）整层退役，卡死发现只剩 dao-progress-watch。
-// 三个退役件全进影子清单——机器上还留着任何一个，就是没卸干净的影子制度。
+// ephemeral-lifecycle：盘面推进量不再独立 timer，commander-act 每轮自己跑。
+// 独立钟（progress-watch / nudge-stalled / 屏面指纹）任一还在 list-timers 或 /etc，
+// 就是没卸干净的影子制度。没并进指挥官也红——「timer 不在」不能当成「已经并进去了」。
 const RETIRED_STALL_SCRIPT = () => join(homedir(), 'bin', 'agent-stall-watch.mjs');
 const RETIRED_TIMERS = [
   { re: /\bagent-stall-watch\.timer\b/, what: 'agent-stall-watch.timer（Contabo 垫片）' },
   { re: /\bdao-agent-stall\.timer\b/, what: 'dao-agent-stall.timer（屏面指纹层，已退役）' },
+  { re: /\bdao-nudge-stalled\.timer\b/, what: 'dao-nudge-stalled.timer（推一把垫片，已退役）' },
+  { re: /\bdao-progress-watch\.timer\b/, what: 'dao-progress-watch.timer（已并进 commander-act）' },
 ];
 
-/** 纯函数：systemctl list-timers 文本 + 退役脚本是否还在 → 三态。 */
+/** 纯函数：list-timers 文本 + 退役脚本 + 是否并进指挥官 → 三态。 */
 export function classifyStallWatchTimer({
   probed = false,
   reason = '',
   timersText = '',
   retiredScriptExists = null,
   retiredScriptUnknown = false,
+  progressWatchFolded = false,
+  leftoverUnitFiles = [],
 } = {}) {
   if (retiredScriptUnknown) {
     return { state: UNKNOWN, detail: '退役脚本在不在没查成' };
@@ -434,32 +438,25 @@ export function classifyStallWatchTimer({
     return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
   }
   const text = String(timersText || '');
-  const official = /\bdao-progress-watch\.timer\b/.test(text);
   const leftovers = RETIRED_TIMERS.filter((t) => t.re.test(text)).map((t) => t.what);
   if (retiredScriptExists === true) leftovers.push('/home/orca/bin/agent-stall-watch.mjs');
+  for (const name of leftoverUnitFiles || []) {
+    const n = String(name || '').trim();
+    if (n && !leftovers.some((x) => x.includes(n))) leftovers.push(`/etc/systemd/system/${n}`);
+  }
   if (leftovers.length) {
     return {
       state: RED,
       detail: `退役件没卸干净（${leftovers.join('；')}）——落地即删，防影子制度`,
     };
   }
-  if (!official) {
+  if (!progressWatchFolded) {
     return {
       state: RED,
-      detail: 'dao-progress-watch.timer 不在册——sudo bash scripts/install-progress-watch.sh（装法见 host/machine/systemd/dao-progress-watch.service 文件头）',
+      detail: '盘面推进量还没并进 commander-act——scripts/commander.mjs 应调用 runProgressWatch；独立钟不许再装',
     };
   }
-  const line = text.split(/\r?\n/).find((l) => /\bdao-progress-watch\.timer\b/.test(l));
-  if (line) {
-    const next = line.trim().split(/\s+/)[0];
-    if (next === '-' || /^n\/a$/i.test(next)) {
-      return {
-        state: RED,
-        detail: 'dao-progress-watch.timer 在册但 NEXT 是横杠（空转，扫描等于没拉）——单元要用 OnCalendar，装完 list-timers 的 NEXT 必须是时间',
-      };
-    }
-  }
-  return { state: OK, detail: 'dao-progress-watch.timer 在册且 NEXT 不是横杠，屏面指纹层已退役' };
+  return { state: OK, detail: '盘面推进量已并进指挥官，独立 progress-watch / 推一把 / 屏面指纹钟已退役' };
 }
 
 // ⑯ 主树跟主分支 + 机器人吃新码（scripts/server-sync.sh，落地清单第 9 步）。没这个 timer，合并了的代码到不了运行中的机器人。
@@ -480,12 +477,29 @@ function checkStallWatchTimer() {
   } catch (e) {
     retiredUnknown = true;
   }
+  let folded = false;
+  try {
+    folded = /\brunProgressWatch\s*\(/.test(readFileSync(join(REPO_ROOT, 'scripts', 'commander.mjs'), 'utf8'));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `指挥官源码没查成：${String(e && e.message || e).slice(0, 80)}` };
+  }
+  const leftoverUnitFiles = [];
+  for (const name of [
+    'dao-progress-watch.timer', 'dao-progress-watch.service',
+    'dao-nudge-stalled.timer', 'dao-nudge-stalled.service',
+  ]) {
+    try {
+      if (existsSync(join('/etc/systemd/system', name))) leftoverUnitFiles.push(name);
+    } catch { /* 单个文件读失败不当没查成：list-timers 那面还在 */ }
+  }
   return classifyStallWatchTimer({
     probed: timers.probed,
     reason: timers.reason,
     timersText: `${timers.stdout || ''}\n${timers.stderr || ''}`,
     retiredScriptExists: retiredExists,
     retiredScriptUnknown: retiredUnknown,
+    progressWatchFolded: folded,
+    leftoverUnitFiles,
   });
 }
 
@@ -1091,7 +1105,7 @@ const CHECKS = [
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
-  ['⑮ 卡死发现 timer 在册且屏面指纹层已退役', checkStallWatchTimer],
+  ['⑮ 卡死发现已并进指挥官且独立钟已退役', checkStallWatchTimer],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],

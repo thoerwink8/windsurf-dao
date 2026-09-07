@@ -19,9 +19,11 @@ export const REVIEW_PENDING_DIR_REL = join('_flow', 'queue', 'review-pending');
 // #1014：复审票有两个生产者。来源必须是写票时记下的事实，读侧不许猜。
 export const REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL = 'worker-done-fail';
 export const REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW = 'commander-rereview';
+export const REVIEW_PENDING_SOURCE_WORKER_DONE = 'worker-done';
 export const REVIEW_PENDING_SOURCES = new Set([
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
 ]);
 
 /** 票上的来源只认写票时记下的那两个值；缺/空/不认识一律 null（来源没查成，不猜）。 */
@@ -61,12 +63,13 @@ export function buildReviewPendingTicket({
     return { ok: false, error: '复审待办要 reviewer' };
   }
   const src = typeof source === 'string' ? source.trim() : '';
-  if (!src) return { ok: false, error: '复审待办要 source（worker-done-fail | commander-rereview）' };
+  if (!src) return { ok: false, error: '复审待办要 source（worker-done | worker-done-fail | commander-rereview）' };
   if (!REVIEW_PENDING_SOURCES.has(src)) {
     return { ok: false, error: `复审待办来源不认识：${source}` };
   }
   // 工人失败票必须有树；指挥官 rereview 按设计可以没有（快马路，#927）。
-  if (src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL && (!workerWorktree || !String(workerWorktree).trim())) {
+  if ((src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL || src === REVIEW_PENDING_SOURCE_WORKER_DONE)
+    && (!workerWorktree || !String(workerWorktree).trim())) {
     return { ok: false, error: '复审待办要工人树' };
   }
   const oid = head?.oid || head?.headRefOid || null;
