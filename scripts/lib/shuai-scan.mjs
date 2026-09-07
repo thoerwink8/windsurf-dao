@@ -137,7 +137,9 @@ export function normalizeGithubGraphql(data) {
       updatedAt: i.updatedAt,
       labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
     };
-    // #1094：human_holds 闸要读正文。键必须在——缺键是「没查成」，空串是「查过、正文空」。
+    // #1094 / #1103：human_holds 闸和待拍板过滤都要读正文。
+    // 键必须在——缺键是「没查成」（#1094 闸走 manual），空串是「查过、正文空」。
+    // 有键就必须留下，不许整字段丢掉（#1103：下游只剩标题，红线命中会漏）。
     if (Object.prototype.hasOwnProperty.call(i, 'body')) {
       row.body = i.body == null ? '' : String(i.body);
     }
