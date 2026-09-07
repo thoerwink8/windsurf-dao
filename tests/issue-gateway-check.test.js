@@ -84,7 +84,25 @@ describe('issue-gateway-check 全宿主面', () => {
   it('生产脚本 0 个文件 → 没查成', async () => {
     const { checkNoBareIssueWriteInCode } = await CHECK_LOAD;
     const r = checkNoBareIssueWriteInCode({ root: REPO, extraRels: [] });
-    assert.ok(r.fail);
+    assert.equal(Boolean(r.fail), true);
+    assert.match(r.fail.join(' '), /没扫到|没查/);
+  });
+
+  it('自动化单元没卸个人 token → 红', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({
+      root: REPO,
+      extraRels: ['host/machine/systemd/dao-refiner.service'],
+      files: { 'host/machine/systemd/dao-refiner.service': '[Service]\nUser=orca\nExecStart=/usr/bin/node scripts/refiner.mjs\n' },
+    });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /没卸|GH_TOKEN/);
+  });
+
+  it('一个 systemd 单元都没扫到 → 没查成', async () => {
+    const { checkNoPersonalTokenInUnits } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({ root: REPO, extraRels: [] });
+    assert.equal(Boolean(r.fail), true);
     assert.match(r.fail.join(' '), /没扫到|没查/);
   });
 });

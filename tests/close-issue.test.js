@@ -132,6 +132,13 @@ describe('close-issue 判定', () => {
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'close'), '绿但单已关不应重复 close  →  ' + JSON.stringify(calls));
     });
     calls.length = 0;
+    await t.test('绿该关但没注入 writeIssue → fail-closed，不许退回裸 gh issue close', () => {
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      assert.equal(r.ok, false);
+      assert.match(String(r.error), /issue-gateway 没注入/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
+    });
+    calls.length = 0;
     await t.test('#1065：还有 OPEN 署名 PR → 本张合了也不关', () => {
       const ghOpen = (args) => {
         calls.push(args.slice());

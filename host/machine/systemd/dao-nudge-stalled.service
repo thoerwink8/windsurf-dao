@@ -33,6 +33,8 @@ WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NO_COLOR=1
 Environment=GH_NO_COLOR=1
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/nudge-stalled.mjs --go
 # 退出码 2 = 没查成（会话档案读不了 / PR 列表截断 / 闸面没查成）。
 # 退出码 1 = 起会话失败（mirasim unavailable / 契约 / 上游拒绝，不是 busy）。

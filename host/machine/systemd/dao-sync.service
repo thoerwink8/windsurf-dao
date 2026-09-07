@@ -25,6 +25,8 @@ Wants=network-online.target
 Type=oneshot
 User=orca
 Group=orca
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 # 拿不到比 orca 更高的权限——除了下面 sudoers 白名单里那一条 systemctl。
 # NoNewPrivileges 会连 sudo 一起挡掉，所以这里不能开；用 sudoers 收窄到单条命令代替。
 ProtectSystem=full

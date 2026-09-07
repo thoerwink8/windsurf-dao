@@ -251,6 +251,51 @@ export function checkNoBareIssueWriteInCode({ root, files, extraRels, exempt } =
   };
 }
 
+const UNSET_PERSONAL_TOKEN_RE = /^UnsetEnvironment=.*\bGH_TOKEN\b.*\bGITHUB_TOKEN\b/m;
+
+/** 自动化单元不许继承个人 GH_TOKEN（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
+export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
+  if (!root && !files) return { fail: ['没给仓库根', 'checkNoPersonalTokenInUnits 要 root', ''] };
+  let rels;
+  if (Array.isArray(extraRels)) rels = extraRels;
+  else if (files) {
+    rels = Object.keys(files).filter((k) => k.endsWith('.service'));
+  } else {
+    const dir = join(root, 'host', 'machine', 'systemd');
+    if (!existsSync(dir)) {
+      return { fail: ['systemd 单元目录不在', '恢复 host/machine/systemd/；目录不在 = 没查成', dir] };
+    }
+    rels = readdirSync(dir).filter((n) => n.endsWith('.service')).map((n) => `host/machine/systemd/${n}`);
+  }
+  if (rels.length === 0) {
+    return { fail: ['一个 systemd 单元都没扫到', '0 个样本 = 本次等于没查，不是绿', 'host/machine/systemd/*.service'] };
+  }
+  const hits = [];
+  for (const rel of rels) {
+    const loaded = readRel(root || '', rel, files);
+    if (loaded.missing) {
+      return { fail: [`单元读不到：${rel}`, '读失败不是 0 条违规', loaded.path || rel] };
+    }
+    if (!UNSET_PERSONAL_TOKEN_RE.test(String(loaded.text || ''))) hits.push(rel);
+  }
+  if (hits.length) {
+    return {
+      fail: [
+        `自动化单元 ${hits.length} 个没卸个人 GH_TOKEN`,
+        '每个 host/machine/systemd/*.service 都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN；少一处就红',
+        hits.slice(0, 8).join('；'),
+      ],
+      scanned: rels.length,
+      hits,
+    };
+  }
+  return {
+    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（少一处就红）`,
+    scanned: rels.length,
+    hits: [],
+  };
+}
+
 export function checkIssueGatewayAlive({ root, files } = {}) {
   const surfaces = checkIssueGatewaySurfaces({ root, files });
   if (surfaces.fail) return surfaces;
@@ -258,6 +303,8 @@ export function checkIssueGatewayAlive({ root, files } = {}) {
   if (bare.fail) return bare;
   const code = checkNoBareIssueWriteInCode({ root, files });
   if (code.fail) return code;
+  const units = checkNoPersonalTokenInUnits({ root, files });
+  if (units.fail) return units;
   const cli = readRel(root || '', 'scripts/issue-gateway.mjs', files);
   if (cli.missing) {
     return { fail: ['唯一入口 scripts/issue-gateway.mjs 不在', '恢复该文件；入口不在 = 没查成', cli.path || 'scripts/issue-gateway.mjs'] };
@@ -277,8 +324,8 @@ export function checkIssueGatewayAlive({ root, files } = {}) {
     return { fail: ['网关源码里还有裸 gh + 个人 token 退路', '缺凭据必须 fail-loud，不许退回个人 gh', 'scripts/lib/issue-gateway.mjs'] };
   }
   return {
-    green: `${surfaces.green}；${bare.green}；${code.green}`,
-    scanned: (surfaces.scanned || 0) + (bare.scanned || 0) + (code.scanned || 0),
+    green: `${surfaces.green}；${bare.green}；${code.green}；${units.green}`,
+    scanned: (surfaces.scanned || 0) + (bare.scanned || 0) + (code.scanned || 0) + (units.scanned || 0),
   };
 }
 
