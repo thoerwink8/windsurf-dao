@@ -380,6 +380,11 @@ orca account add --help
 #   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete）。正路做不到往旧会话说话，
 #   只能起新会话：**人退了才起新的**；已关 issue / 已合 PR / 人还在 / 错分支一律不推（#1097）。闸在 scripts/lib/nudge-stalled.mjs。
 #   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
+#   已关单/已合 PR 必须跳过（#1097）；issue/PR 没查成是 unscanned（exit 2），不许把没查成当成还能推
+# 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
+#   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
+# 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
+#   验：systemctl list-timers 里 dao-refiner.timer 的 NEXT 必须是时间；unit 必须带 NO_COLOR=1 GH_NO_COLOR=1
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
