@@ -1,4 +1,4 @@
-// dao-check ㉝：在管公开活仓的合并闸形状（issue #999）。
+// dao-check ㉞：在管公开活仓的合并闸形状（issue #999）。
 //
 // 病：分支保护是静默漂移——有人在 GitHub 网页上关掉 / 从未装上，没有任何东西报警。
 // 本仓已落地（PR #998）：required=["check"]、enforce_admins=false、strict=false。

@@ -1,4 +1,4 @@
-// 合并闸形状（dao-check ㉝，issue #999）
+// 合并闸形状（dao-check ㉞，issue #999）
 //
 // 验 scripts/lib/branch-protection-check.mjs：
 //   纯函数三态：绿（形状对）/ 红（缺闸或形状错）/ 没查成（空清单、探头失败、字段读不成）；

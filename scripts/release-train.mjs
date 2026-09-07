@@ -26,6 +26,7 @@ import {
   normalizeWeekday,
 } from './lib/release-train-core.mjs';
 import { compareCarrierVersion } from './lib/version-carrier-check.mjs';
+import { recordBroadcast } from './lib/broadcast-io.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_DEFAULT = resolve(__dirname, '..');
@@ -222,8 +223,8 @@ export function doRelease(repo, { now = new Date(), dryRun = false, force = fals
   if (dryRun) {
     say(`[发布列车] [拟] hub-say：${line}`);
   } else {
-    const hub = spawnSync('/home/orca/bin/hub-say', [line], { windowsHide: true, encoding: 'utf8' });
-    if ((hub.status ?? 1) !== 0) say(`[发布列车] hub-say 失败（不阻断发版）：${String(hub.stderr || hub.stdout || '').slice(0, 160)}`);
+    const hub = recordBroadcast(line, { source: 'release', now: new Date() });
+    if (!hub.ok) say(`[发布列车] 日报入队失败（不阻断发版）：${String(hub.error || '').slice(0, 160)}`);
   }
 
   say(`[发布列车] ${dryRun ? '拟发版完成（未写任何东西）' : `发版完成 ${tag}`}`);

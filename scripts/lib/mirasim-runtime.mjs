@@ -239,12 +239,14 @@ export function readSessionView(snapshot) {
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
 export function metaView(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
+  const runState = typeof m.runState === 'string' ? m.runState.trim().toLowerCase() : '';
   return {
     phase: normPhase(m.runState),
     text: typeof m.preview === 'string' ? m.preview : '',
     toolCalls: [],
-    error: null,
-    incomplete: false,
+    error: typeof m.runDetail === 'string' && m.runDetail ? m.runDetail : null,
+    incomplete: runState === 'incomplete' || m.incomplete === true,
+    runState: runState || null,
     partial: true,
   };
 }
