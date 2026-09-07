@@ -105,13 +105,15 @@ describe('close-issue 判定', () => {
     await t.test('绿→issue close', () => {
       const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'close' && r.issue === 9);
-      assert.ok(writes.some(w => w.action === 'issue_close' && String(w.issue) === '9'), '应调 issue-gateway close #9  →  ' + JSON.stringify(writes));
+      assert.equal(writes[0]?.action, 'issue_close');
+      assert.equal(String(writes[0]?.issue), '9');
     });
     writes.length = 0;
     await t.test('红且单已关→issue reopen', () => {
       const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'reopen' && r.issue === 10);
-      assert.ok(writes.some(w => w.action === 'issue_reopen' && String(w.issue) === '10'), '应调 issue-gateway reopen #10  →  ' + JSON.stringify(writes));
+      assert.equal(writes[0]?.action, 'issue_reopen');
+      assert.equal(String(writes[0]?.issue), '10');
     });
     calls.length = 0;
     await t.test('红但单没关→不动', () => {

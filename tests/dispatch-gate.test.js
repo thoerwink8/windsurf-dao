@@ -175,7 +175,8 @@ describe('dispatch-gate', () => {
       });
       const bgBare = runGate(script, 'node scripts/issue-gateway.mjs create --repo x/y --title t --host h --idempotency-key k & gh issue create --title x');
       await t.test(`${label} 后台 & 夹带裸 gh issue create → exit 2`, () => {
-        assert.ok(bgBare.status === 2 && /issue-gateway/.test(bgBare.stderr || ''), `${label} 后台 & 夹带裸 gh issue create → exit 2  →  status=${bgBare.status} ${bgBare.stderr}`);
+        assert.equal(bgBare.status, 2);
+        assert.match(bgBare.stderr || '', /issue-gateway/);
       });
       const send = runGate(script, 'orca orchestration send --type heartbeat --subject alive');
       await t.test(`${label} #667 心跳 → exit 2`, () => {

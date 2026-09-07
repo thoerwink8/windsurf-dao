@@ -1063,7 +1063,8 @@ describe('llm 流式（2026-09-04：非流式 + 60s 在 grok 排队时必超时�
     const handled = await M.handleCardAction(event, { store, deps });
     assert.equal(handled.response.kind, 'ok');
     const gh = handled.actions.find((a) => a.type === 'gh_comment');
-    assert.ok(gh && gh.idempotency_key, JSON.stringify(handled.actions));
+    assert.ok(gh, JSON.stringify(handled.actions));
+    assert.ok(gh.idempotency_key);
     await M.applyCardActions(handled, { store, deps });
     assert.equal(writes.length, 1);
     assert.equal(writes[0].action, 'issue_comment');

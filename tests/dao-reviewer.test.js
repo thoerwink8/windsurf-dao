@@ -41,8 +41,10 @@ describe('dao 审官与完工', () => {
         kind: 'issue', number: '752', body: '完工：PR #758', runGh,
         writeIssue, host: 'worker-done', idempotency_key: 'worker-done:issue:758:752',
       });
-      assert.ok(r.ok === true && !r.skipped && writes.length === 1 && writes[0].action === 'issue_comment',
-        '没发过真发  →  ' + JSON.stringify({ r, writes }));
+      assert.equal(r.ok, true);
+      assert.equal(r.skipped, undefined);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].action, 'issue_comment');
     });
 
     await t.test('postCommentOnce：评论列表没查成 → ok:false unscanned（不许当没发过放行）', () => {
@@ -70,8 +72,8 @@ describe('dao 审官与完工', () => {
     await t.test('cmdWorkerDone 完工评论走 postCommentOnce（幂等）', () => {
       const i = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
       const seg = daoSrc.slice(i, i + 8000);
-      assert.ok(/postCommentOnce\(\{\s*kind: 'issue'/.test(seg) && /postCommentOnce\(\{ kind: 'pr'/.test(seg),
-        'worker-done 完工评论要幂等');
+      assert.match(seg, /postCommentOnce\(\{\s*kind: 'issue'/);
+      assert.match(seg, /postCommentOnce\(\{ kind: 'pr'/);
     });
     await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
       const i = daoSrc.indexOf('async function cmdReviewerCreateMirasim(');
@@ -138,7 +140,8 @@ describe('dao 审官与完工', () => {
     });
     const noWrite = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
     await t.test('打标没网关写入器 → 报没查成', () => {
-      assert.ok(noWrite.ok === false && noWrite.unscanned === true, '打标没网关写入器 → 报没查成  →  ' + JSON.stringify(noWrite));
+      assert.equal(noWrite.ok, false);
+      assert.equal(noWrite.unscanned, true);
     });
     const skip = S.stampIssueLabels({ issue: '', model: 'grok-4.6', runGh: recGh });
     await t.test('打标没合法 issue 号 → skipped 不瞎打', () => {
