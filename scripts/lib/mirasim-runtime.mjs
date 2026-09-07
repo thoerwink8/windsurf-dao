@@ -816,6 +816,20 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  async function listSessions() {
+    const wire = await open();
+    try {
+      wire.send({ type: 'listSessions' });
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
+      if (!listed || !Array.isArray(listed.sessions)) {
+        return { ok: false, unscanned: true, sessions: [], error: '会话清单没回 sessions 数组（没查成）' };
+      }
+      return { ok: true, sessions: listed.sessions };
+    } finally {
+      wire.close();
+    }
+  }
+
   async function stopSession(sessionKey) {
     const wire = await open();
     try {
@@ -870,6 +884,7 @@ export function createRuntime(opts = {}) {
     ensureWorkspace,
     startSession,
     readSession,
+    listSessions,
     interact,
     stopSession,
     waitForCompletion,
@@ -888,5 +903,6 @@ export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo,
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
+export const listSessions = () => runtime().listSessions();
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
