@@ -913,7 +913,9 @@ function checkRetiredCliOnPath() {
 // **只报不装**：dao-sync 现在跑 orca 身份，写不了 /etc；而让它能写，正是
 // 2026-09-05 堵掉的那条提权路（root 解释 orca 可写的仓内脚本）。装单元是人的动作。
 
-/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。 */
+/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。
+ * 已比对且漂了的优先于没比成：#1104 合进的 dao-board-gc.service 机器上还 After=orca-serve，
+ * 但 nudge/land 没装让整项走 unknown，漂移被盖住。没装仍是 unknown（本函数不装单元）。 */
 export function classifyUnitDrift(pairs) {
   if (!Array.isArray(pairs)) return { state: UNKNOWN, detail: '单元清单不是数组——没查成' };
   // 扫出 0 个不是「都一致」，是判据失效（目录挪了、命名换了）
@@ -924,17 +926,21 @@ export function classifyUnitDrift(pairs) {
   const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
   const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
   const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
-  if (unreadable.length) {
-    const who = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
-    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${who.join('、')}——没查成，不是「一致」` };
-  }
+  const unreadWho = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
   if (drifted.length) {
+    const unreadBit = unreadable.length
+      ? `；另外 ${unreadable.length} 个没比成：${unreadWho.join('、')}`
+      : '';
     return {
       state: RED,
       detail: `${drifted.length}/${pairs.length} 个单元仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`
+        + unreadBit
         + '——改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
         + '指挥官那两个是代码生成的，sudo node scripts/commander.mjs install。装完 daemon-reload',
     };
+  }
+  if (unreadable.length) {
+    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${unreadWho.join('、')}——没查成，不是「一致」` };
   }
   return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
 }
