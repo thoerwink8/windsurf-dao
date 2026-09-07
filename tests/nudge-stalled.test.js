@@ -288,6 +288,38 @@ describe('③ 树不在该单 PR head 上不许继续', () => {
     assert.equal(got.action, 'skip');
     assert.equal(got.kind, 'wrong-branch');
   });
+
+  it('审官树在 dao-review-pr-N（不是 PR head）→ go，不许把审官树当成错分支', async () => {
+    const { judgeNudge } = await import(LIB);
+    const got = judgeNudge({
+      id: id('审官', 1102),
+      prs: prs([{ number: 1102, state: 'OPEN', headRefName: 'dao-1097' }]),
+      branch: branch('dao-review-pr-1102'),
+      lease: lease('free'),
+    });
+    assert.equal(got.action, 'go');
+  });
+
+  it('--go：审官树在 dao-review-pr-N 真起一次', async () => {
+    const { runNudge } = await import(LIB);
+    const TREE_1102 = '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1102';
+    const started = [];
+    const out = await runNudge({
+      go: true,
+      records: [{ workdir: TREE_1102, runState: 'incomplete', updatedAt: '2026-09-07T01:11:00Z', agent: 'codex' }],
+      exists: () => true,
+      lookupPrs: () => prs([{ number: 1102, state: 'OPEN', headRefName: 'dao-1097' }]),
+      readBranch: () => branch('dao-review-pr-1102'),
+      checkLease: () => lease('free'),
+      startSession: async (a) => { started.push(a); return { sessionKey: 'rev' }; },
+      workerPrompt: '继续',
+      reviewPrompt: '继续审',
+    });
+    assert.equal(started.length, 1);
+    assert.equal(out.started.length, 1);
+    assert.equal(started[0].prompt, '继续审');
+    assert.equal(started[0].agent, 'codex');
+  });
 });
 
 describe('没查成 ≠ 没有：unscanned 不许起会话', () => {

@@ -16,6 +16,9 @@
 5. PR 列表查不全时返回 `unscanned`，不许把截断当成「没有该单 PR」去 `go`。
 6. `startSession` 普通失败写入 `failed` 并以非零退出；busy 背压仍是 skip / exit 0。
 7. 工人树含最新 `origin/master`，`handoff-check` 四项通过，正文贴真实输出。
+8. 租约成功信封只认精确的 `verdict: 'free'` / `'held'`；缺失或未知值返回 `unscanned`，`runNudge` 零起会话并以 exit 2 收尾。
+9. 完整 PR 扫描在真实数据量下成功返回（分页 / 明确上限缓冲）；ENOBUFS 不再把开放、未合并、free、分支匹配的树全部打成 `unscanned` / exit 2。修完后重跑真实 `node scripts/nudge-stalled.mjs`，证明该推的树能进入 `go`。
+10. 审官树在 `dao-review-pr-<N>`（不是工人 PR head）必须能推；不许把审官工作树当成错分支整批跳过。
 
 ## 进展
 
@@ -27,37 +30,58 @@
 2. 同套「lease held → skip held」+「startSession 抛 busy 也记成 held」：人还在零起会话。
 3. 同套「#1063 停在 master、PR head 是 fix-escalate-noise → skip wrong-branch」：错分支不推。
 4. 垫片头、service 头都写「人退了才起新的」；#1056 退役路径仍在 install 脚本里。
-5. 红项 1：`classifyPrListScan` 取满 limit 即没查全；`loadAllPrs` 用 `PR_LIST_LIMIT`（10000）且截断走 unscanned。回归：「取满 limit 条 → 没查全」+「截断的 PR 面进 runNudge：非 master 工人 unscanned，零起会话」。审官实验 `prs: {ok:true, items:[]}` 仍是完整空列表（允许未开 PR），截断是 `ok:false`。
-6. 红项 2：`runNudge` 把非 busy 错误写入 `out.failed`；CLI 走 `nudgeExitCode`（unscanned→2，failed→1，busy/成功→0）。回归：「startSession 抛 mirasim unavailable → failed + exit 1」+「busy 仍 skip + exit 0」。
-7. 本轮唯一红项：已 merge 当前 `origin/master`（含 #1112 `7e1e5ef`、#1103 `ae19999`），`handoff-check` 真实输出见下。仓内计数跟到本轮：`dao-check` 188 项、本套 35 条。
+5. 红项 1（上一轮）：`classifyPrListScan` 取满 limit 即没查全；截断走 unscanned。
+6. 红项 2（上一轮）：`runNudge` 把非 busy 错误写入 `out.failed`；CLI 走 `nudgeExitCode`。
+7. 合入当前 `origin/master`（含 #1057 `e3a3c66` 对账循环），`handoff-check` 真实输出见下。
+8. 租约 `ok:true` 后只接受 `verdict === 'free'` 或 `'held'`；缺 verdict / `unknown` 返回 `unscanned`。
+9. ENOBUFS：`loadAllPrs` 改 REST `/pulls` 分页（`PR_LIST_PAGE_SIZE=100`），`spawnGh` 默认 `maxBuffer=64MiB`（`GH_SPAWN_MAX_BUFFER`），超限仍是 error。
+10. 本轮：审官分支闸认 `dao-review-pr-<N>`（或 PR head）。回归：「审官树在 dao-review-pr-N → go」+「--go 真起一次」。真实预览里 PR #1102 从「错分支跳过」改成「将推」。
 
-`node --test tests/nudge-stalled.test.js`：35 过 / 0 红。
-`node scripts/dao-check.mjs`：退出码 0（188 项，含本套 35 条）。
+`node --test tests/nudge-stalled.test.js tests/gh-as.test.js`：107 过 / 0 红（本套 47 + gh-as 60）。
+`node --test tests/nudge-stalled.test.js`：47 过 / 0 红。
 
-### handoff-check 真实输出（工人树 dao-1097，HEAD `f01c464`）
+### 真实预览（本轮：审官树不再被错分支闸误伤）
 
-合入 master 并 push 后、更新本文件之前跑的闸。本文件提交会再挪一次 HEAD；GitHub PR 正文以 push 之后、与审官所见同点的那一份为准。
+`node scripts/nudge-stalled.mjs`（预览、不带 `--go`），exit 0。#1063 仍 skip 错分支；审官 PR #1102 进入将推：
 
 ```
-交卷闸：dao-1097 vs origin/master（已拉远端）
-  ✓  ① 基底含最新 master —— 基底含最新 origin/master
-  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1095 行里的 6 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1097 同点（f01c464）
-
-判定：通（4 通 / 0 红 / 0 没查成）——可以交卷
+[推一把·预览] 工人 #1012 的 issue #1012 已关，不推
+[推一把·预览] 工人 #1007 的 issue #1007 已关，不推
+[推一把·预览] 工人 #1063 树在 dao-1063，该单 PR #1070 head 是 fix-escalate-noise，不在错误分支上继续
+[推一把·预览] 工人 #1094 pi 将推（pi turn stalled past 30 minutes）
+[推一把·预览] 工人 #1029 的 issue #1029 已关，不推
+[推一把·预览] 工人 #818 pi 将推（pi turn stalled past 30 minutes）
+[推一把·预览] 工人 #948 pi 将推（pi turn stalled past 30 minutes）
+[推一把·预览] 工人 #967 pi 将推（pi turn stalled past 30 minutes）
+[推一把·预览] 工人 #999 pi 将推（pi turn stalled past 30 minutes）
+[推一把·预览] 工人 #1029 的 issue #1029 已关，不推
+[推一把·预览] 工人 #1065 的 issue #1065 已关，不推
+[推一把·预览] 工人 #1024 pi 将推（Internal error during token generation）
+[推一把·预览] 工人 #792 树在 dao-792，该单 PR #1015 head 是 thoerwink8/ISSUE-792-工人-grok-4.6-收口跨宿主-GitHub-写权限-AI-只经-Bot-网关操作-Issue，不在错误分支上继续
+[推一把·预览] 审官 PR #1102 codex 将推（Selected model is at capacity. Please try a different model.）
+[推一把·预览] 工人 #1052 的 issue #1052 已关，不推
+[推一把·预览] 工人 #1024 树在 dao-1024，该单 PR #1028 head 是 thoerwink8/ISSUE-1024-工人-grok-4.6-派单只有一个仓的射程-dispatch-没有-repo-推广到全部仓-在能力上就做不到，不在错误分支上继续
+EXIT:0
 ```
+
+### handoff-check 真实输出
+
+提交并推送后重跑，贴与 HEAD 同点的完整输出（见本 PR 最新正文修订）。
 
 ## 机制判定
 
 这错在制度生效前还会再犯吗？会。根因是 timer 只看 mirasim 的 `runState: incomplete`，不问盘面（issue/PR 终态、租约、分支）。本单把这三道闸装进推一把本身。
 
-返工轮两条也是制度洞：① `gh pr list --limit 100` 在 856 个 PR 的仓上截断，分支闸被假阴性绕过；② 起会话失败只打日志、exit 0，systemd 看不见。截断当没查成、失败非零退出，这两条闸现在就在正门上。#1056 对账循环落地时本垫片整套退役，在那之前这些闸就是正门。
+返工轮两条也是制度洞：① `gh pr list --limit 100` 在 856 个 PR 的仓上截断，分支闸被假阴性绕过；② 起会话失败只打日志、exit 0，systemd 看不见。截断当没查成、失败非零退出，这两条闸现在就在正门上。
 
-本轮（交卷闸落后 master）还会再犯：会。master 在审的窗口里继续合单，工人树不跟上就会把旧时点的 handoff 输出当证据。处置是合入当前 `origin/master` 再跑闸，正文只贴与 HEAD 同点的输出。
+租约形状损坏还会再犯：会。`ok:true` 被当成「观测完整」，缺 verdict / `unknown` 仍 `go`。处置是成功信封只认精确的 `free`/`held`。
+
+ENOBUFS 还会再犯：会。`spawnSync` 默认 1MiB，本仓带 body 的全量 `pr list` 实测 3.1MiB 就打成 ENOBUFS。处置两层：① REST `/pulls` 分页；② `spawnGh` 明确 64MiB 上限，超限仍是 error。
+
+本轮（审官树被错分支闸误伤）还会再犯：会。`reviewer-create` 把审官树建在 `dao-review-pr-<N>`，不能复用工人 PR head（会撞）。闸却拿 PR head 去对树分支，真实预览把卡住的审官 PR #1102 判成 skip。处置：审官分支闸认审官树名或 PR head；回归锁住「树在 dao-review-pr-N → go」。
 
 ## 回流
 
-- 产物：`judgeNudge` / `runNudge` / `classifyPrListScan` / `nudgeExitCode`——「这棵 incomplete 的树该不该起新会话」三态（go / skip / unscanned），加上失败可机器识别。
-- 为什么通用：① 本垫片每 20 分钟推一把；② #1056 对账循环若把「30 分钟 stalled」写进「该在却不在」，必须过同一把尺，否则今晚这环路会写进正门。
-- 建议落点：留原仓；#1056 合入时闸文件跟垫片一起退役或收进对账循环，不要另造一份。
+- 产物：`judgeNudge` / `runNudge` / `classifyPrListScan` / `collectPrListPages` / `nudgeExitCode` / `GH_SPAWN_MAX_BUFFER`——「这棵 incomplete 的树该不该起新会话」三态（go / skip / unscanned），加上大输出分页与明确缓冲上限；审官树名与工人 PR head 分开认。
+- 为什么通用：① 本垫片每 20 分钟推一把；② 仓内其它 `ghAs` 大输出路径同样会撞默认 1MiB（board-gc / close-issues / dao-check 的 pr list）。
+- 建议落点：`GH_SPAWN_MAX_BUFFER` 已落在 `scripts/lib/gh.mjs` 统一入口；分页收口与审官树名闸留在本垫片，#1056 退役时一起收或删。

@@ -242,13 +242,24 @@ export function judgeNudge({ id, issue, prs, branch, lease } = {}) {
   let expectedPr = null;
   if (id.kind === '审官') {
     const pr = prs.items.find((p) => Number(p && p.number) === id.n);
-    expected = branchName(pr && pr.headRefName);
+    const prHead = branchName(pr && pr.headRefName);
     expectedPr = pr && pr.number;
-    if (!expected) {
+    // 审官树建在 dao-review-pr-<N>（reviewer-create 的 reviewBranch），
+    // 不能拿工人的 PR head 分支名去对——复用会撞。预览实锤：
+    // PR #1102 树在 dao-review-pr-1102、head 是 dao-1097，旧闸把卡住的审官全跳过。
+    const reviewBranch = `dao-review-pr-${id.n}`;
+    if (!prHead) {
       return {
         action: 'unscanned',
         kind: 'branch',
         reason: `${who} 的 PR head 分支名没读到，对不上树（没查成）`,
+      };
+    }
+    if (current !== reviewBranch && current !== prHead) {
+      return {
+        action: 'skip',
+        kind: 'wrong-branch',
+        reason: `${who} 树在 ${current}，审官树应在 ${reviewBranch}（该单 PR #${expectedPr} head 是 ${prHead}），不在错误分支上继续`,
       };
     }
   } else {
