@@ -627,6 +627,18 @@ test('⑳ 单元漂移', async (t) => {
     assert.match(r.detail, /没装|没查成/);
   });
 
+  await t.test('已装却漂了 + 另几个没装 → red（没装不许把漂移盖成没查成）', () => {
+    const r = classifyUnitDrift([
+      { name: 'dao-board-gc.service', repo: 'After=network-online.target', live: 'After=network-online.target leftover-runtime.service' },
+      { name: 'dao-nudge-stalled.timer', repo: 'OnCalendar=*:0/20', live: null },
+      { name: 'dao-land.timer', repo: 'OnCalendar=hourly', live: null },
+    ]);
+    assert.equal(r.state, 'red', '漂移被没装盖成 unknown 就会让 #1104 的单元永远不装');
+    assert.match(r.detail, /dao-board-gc\.service/, '要点名漂了的那个');
+    assert.match(r.detail, /dao-nudge-stalled\.timer/, '没装的也要列，免得以为只漂了一份');
+    assert.match(r.detail, /install/, '要给修法');
+  });
+
   await t.test('扫出 0 个 → unknown（判据失效，不是「都一致」）', () => {
     assert.equal(classifyUnitDrift([]).state, 'unknown');
     assert.equal(classifyUnitDrift(null).state, 'unknown');

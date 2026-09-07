@@ -1,9 +1,10 @@
 ---
 title: 帅位 cacheRead 注入面构成（#981）
-status: open
+status: done
 issue: 981
 date: 2026-09-06
 ---
+处置：#981
 
 # 帅位每轮 cacheRead 注入面构成（只查证）
 
