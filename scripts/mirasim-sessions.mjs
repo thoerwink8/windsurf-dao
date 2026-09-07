@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.MIRASIM_PORT || 4316);
 const RUN_DIR = process.env.MIRASIM_RUN_DIR || join(homedir(), '.mirasim', 'run');
-const TIMEOUT_MS = Number(process.env.MIRASIM_LS_TIMEOUT_MS || 8000);
+const TIMEOUT_MS = Number(process.env.MIRASIM_LS_TIMEOUT_MS || 15000);
 
 function bail(why) {
   console.error(`mirasim 会话没查成：${why}`);
