@@ -50,18 +50,18 @@
 
 ## 交卷闸（返工：跟上 origin/master）
 
-审官红项：正文钉的是旧 head `5e5aa9b` / 「4 通」，当时基底仍是 `a50a445`，`origin/master` 已到 `6968fe1`（#1117/#1119：交卷闸 ① 降级为合并闸）。本轮已把 `origin/master` 合入本分支。
+审官红项：正文钉的是旧 head `5e5aa9b` / 「4 通」，当时基底仍是 `a50a445`，`origin/master` 已到 `6968fe1`（#1117/#1119：交卷闸 ① 降级为合并闸）。本轮已把 `origin/master` 合入本分支。SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入点 + 判定末行为准，GitHub `headRefOid` 是审官所见。
 
 最终基线：`origin/master` = `6968fe18ec8d9b62de8c107468f7f65cdae9955a`
-合入后 head：`d8c7f7a80648139e56b75577f4051970e5908207`（`[cc] merge: origin/master into dao-792`）
+合入点：`d8c7f7a80648139e56b75577f4051970e5908207`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
 
-`node scripts/handoff-check.mjs`（交卷档，head `d8c7f7a`）：
+合入推送后、工作区干净时实测 `node scripts/handoff-check.mjs`（交卷档）：
 
 ```
 交卷闸：dao-792 vs origin/master（已拉远端）
   ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1973 行里的 20 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（d8c7f7a）
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1994 行里的 20 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点
 
 合并前还要过的（查了，但不进本次判定）：
   ✓  ① 基底含最新 master —— 基底含最新 origin/master
@@ -71,15 +71,9 @@
 判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
 ```
 
-`node scripts/handoff-check.mjs --gate merge`（合并档，同一 head）：
+同点 `node scripts/handoff-check.mjs --gate merge`（合并档）末行：
 
 ```
-合并闸：dao-792 vs origin/master（已拉远端）
-  ✓  ① 基底含最新 master —— 基底含最新 origin/master
-  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1973 行里的 20 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（d8c7f7a）
-
 判定：通（4 通 / 0 红 / 0 没查成）——可以合并
 ```
 
