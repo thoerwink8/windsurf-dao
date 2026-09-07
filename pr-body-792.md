@@ -12,10 +12,10 @@
 - [x] 身份错误、Bot 凭据缺失、GitHub 查询失败、作者回读失败均 fail-closed；没有任何路径退回个人 `gh`。缺幂等键 → `missing_idempotency` exit 1。
 - [x] 同一 `idempotency_key` 重放 create/comment 不产生重复对象，并返回原结果。#1120 create/comment 第二次均为 `"replay":true`，number/url 不变。
 - [x] 故意从 Claude / Cursor 入口跑裸 `gh issue` 写动作：hook 当场拒绝；无 hook 的后台服务只暴露网关且不读个人 token。`dispatch-gate` 含单个 `&` 拆分；Claude + Cursor 入口均有负控。
-- [x] 自动化服务单元不注入个人 `GH_TOKEN`；写入只走 GitHub App 凭据。仓内 `host/machine/systemd/*.service` 11/11 均 `UnsetEnvironment=GH_TOKEN GITHUB_TOKEN`。写 Issue 的 10 个单元另设 `GH_CONFIG_DIR=/var/empty`（token 卸了 `~/.config/gh` 个人登录还能用）；`dao-gh-events` 反过来——不许设空目录，webhook forward 仍读个人 gh 登录。少一处就红；0 个文件 = 没查成。
+- [x] 自动化服务单元不注入个人 `GH_TOKEN`；写入只走 GitHub App 凭据。仓内 `host/machine/systemd/*.service` 9/9 均 `UnsetEnvironment=GH_TOKEN GITHUB_TOKEN`（#1134 退役 nudge-stalled / progress-watch 独立钟后从 11 减到 9）。写 Issue 的单元另设 `GH_CONFIG_DIR=/var/empty`（token 卸了 `~/.config/gh` 个人登录还能用）；`dao-gh-events` 反过来——不许设空目录，webhook forward 仍读个人 gh 登录。少一处就红；0 个文件 = 没查成。
 - [x] 每次调用生成可查询的结构化审计记录（宿主、动作、幂等键、目标、Bot 身份、URL、失败阶段）。落 `~/.dao/issue-gateway/audit/audit.ndjson`（不进 git）。
 - [x] #790 回归：作者验证不是 Bot 时调用结果必须失败。`tests/issue-gateway.test.js`「作者是个人账号必须失败」。
-- [x] 遍历全部宿主配置面的闸：少接一处就红；「扫完 0 条」和「没查成」分开。dao-check：`跨宿主 Issue 写入面 13/13 已接到网关（少一处就红）；裸 gh issue 写动作 0 处（扫了 44 个面）；生产 Issue 写点 0 处绕过网关（扫了 171 个脚本）；自动化单元不继承个人 token 11/11（写 Issue 的不读 ~/.config/gh；少一处就红）`。
+- [x] 遍历全部宿主配置面的闸：少接一处就红；「扫完 0 条」和「没查成」分开。dao-check：`跨宿主 Issue 写入面 13/13 已接到网关（少一处就红）；裸 gh issue 写动作 0 处（扫了 44 个面）；生产 Issue 写点 0 处绕过网关（扫了 169 个脚本）；自动化单元不继承个人 token 9/9（写 Issue 的不读 ~/.config/gh；少一处就红）`。
 - [x] `node --test tests/issue-gateway.test.js tests/issue-gateway-check.test.js tests/dispatch-gate.test.js tests/marshal-issue-identity.test.js tests/gh-as.test.js tests/machine-path.test.js` 绿；`node scripts/dao-check.mjs` 新增身份链检查通过（云环境仅剩 `~/.claude/skills` 不是目录，非本单回归）。
 
 ## 进展
@@ -30,6 +30,7 @@
 - [x] 真实 GitHub 验收 + 负控（#1120）
 - [x] gh-as CLI / hook 拦 Issue 写（身份不能自选）；单元不读 ~/.config/gh
 - [x] 自查 / dao-check / handoff-check
+- [x] 合入 origin/master（#1134/#1136）：modify/delete 按 master 退役独立钟，网关红线留在仍活着的 9 个单元
 
 ## 审官 8 条（head `2584003b` 打回）怎么修的
 
@@ -46,20 +47,18 @@
 
 本轮目标测试：`issue-gateway` 17 pass；`issue-gateway-check` + `dispatch-gate` + `gh-as` + `machine-path` 174 pass / 0 fail；`marshal-issue-identity` 绿。
 
-`node scripts/dao-check.mjs`：190 项绿 / 1 项红 / 13 项跳过。红的是云环境 `~/.claude/skills` 不是目录（AGENTS.md 写明的环境差，非本单回归）。身份链检查绿：`跨宿主 Issue 写入面 13/13 已接到网关（少一处就红）；裸 gh issue 写动作 0 处（扫了 44 个面）；生产 Issue 写点 0 处绕过网关（扫了 171 个脚本）；自动化单元不继承个人 token 11/11（写 Issue 的不读 ~/.config/gh；少一处就红）`。
+`node scripts/dao-check.mjs`：191 项绿 / 1 项红 / 13 项跳过。红的是云环境 `~/.claude/skills` 不是目录（AGENTS.md 写明的环境差，非本单回归）。身份链检查绿：`跨宿主 Issue 写入面 13/13 已接到网关（少一处就红）；裸 gh issue 写动作 0 处（扫了 44 个面）；生产 Issue 写点 0 处绕过网关（扫了 169 个脚本）；自动化单元不继承个人 token 9/9（写 Issue 的不读 ~/.config/gh；少一处就红）`。
 
 真机：#1120 create/comment/edit-labels/close 均 ok；create+comment 重放 `replay:true`；`--identity` exit 2；缺幂等键 exit 1。验完已关。
 
-## 交卷闸（返工：现役士兵书接上网关）
+## 交卷闸（返工：跟上 #1134 短命会话，解 modify/delete）
 
-本轮把工人第一份指令（`soldier-book.md` / `soldier-book-mirasim.md`）列入宿主面清单；少接一面就红。身份闸对齐：同一行已指向 `issue-gateway` 的禁止句不算教裸写。
+审官已批 head `9246d085` 的代码，不合入——GitHub `mergeable=CONFLICTING`：`dao-nudge-stalled.service` / `dao-progress-watch.service` 在 origin/master（#1134）删除、本分支改过凭据隔离。本轮合入 origin/master，按 master 退役独立钟（删那两套单元），网关红线留在仍活着的 9 个单元。自动合并的士兵书 / AGENTS / dispatch skill / commander / dao.mjs 两边意图都在（网关节 + 短命会话入队停会话）。
 
 SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入点 + 判定末行为准，GitHub `headRefOid` 是审官所见。
 
-最终基线：`origin/master` = `c3673ad9617805d3b9dc0c4dcc0068b23934aefd`
-合入点：`c43287e34`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
-代码点：`9daf5644e`（`[cc] fix(issue-gateway): 现役士兵书接上网关，少接一面就红`）
-推送点：`2050ab39e`（本地与 origin/dao-792 同点）
+最终基线：`origin/master` = `0c325f97076a58d45201cd23c1415718fb26a8ff`
+合入点：`f177f78f3`（`[cc] merge: origin/master into dao-792`，merge-base = origin/master）
 
 推送后、工作区干净时实测 `node scripts/handoff-check.mjs`（交卷档）末行：
 
@@ -70,8 +69,10 @@ SHA 不钉死当前 tip（随后续 docs 提交会过期，#971）；以合入�
 同点 `node scripts/handoff-check.mjs --gate merge`（合并档）末行：
 
 ```
-判定：通（4 通 / 0 红 / 0 没查成）——可以合并
+判定：通（3 通 / 0 红 / 0 没查成）——可以合并
 ```
+
+GitHub：`mergeable=MERGEABLE` / `mergeStateStatus=BLOCKED`（等审官 APPROVED；本轮代码已跟上 master）。
 
 ## 体系类改动
 
