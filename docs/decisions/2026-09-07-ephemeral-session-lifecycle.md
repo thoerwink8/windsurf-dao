@@ -155,10 +155,10 @@
 ### 0. 立账（本步产出就是本文 + 一张统领单）
 
 - [x] 方案写成 `docs/decisions/2026-09-07-ephemeral-session-lifecycle.md`
-- [ ] 开统领 issue：首行 `起因：ephemeral-lifecycle`，正文含本文指针、上表关/留/并、操作目标 3 个活任务
-- [ ] 统领单打 `已消歧`（岔路已在会话里拍：短命会话、squash 连续合、指挥官合入、真冲突短工）
-- [ ] `docs/initiatives.json` 加一条（当前 WIP 2/3，可加），`done_when` 必须机器可算，例如：交卷/审官判定热路必 `session-stop`、`dao-nudge-stalled.timer` 不在 `list-timers`、审官任务书不再教 `pr merge`
-- [ ] 观察条目写处置：`2026-09-07-1056合了对账不推卡住的活人.md`、`2026-09-07-nudge装了却disabled-⑱看不见.md` → `处置：#统领单`
+- [x] 开统领 issue：#1133，首行 `起因：ephemeral-lifecycle`
+- [x] 统领单打 `已消歧`（岔路已在会话里拍：短命会话、squash 连续合、指挥官合入、真冲突短工）
+- [x] `docs/initiatives.json` 加 `ephemeral-lifecycle`，`done_when` 钉 `checkEphemeralLifecycle`
+- [x] 观察条目写处置：`2026-09-07-1056合了对账不推卡住的活人.md`、`2026-09-07-nudge装了却disabled-⑱看不见.md`、`2026-09-07-指挥官派工指针仍钉orca士兵书.md` → `处置：#1133`
 
 ### 1. 停出血（先让 6 核上的活进程掉下来）
 
@@ -179,7 +179,7 @@
 - [x] 指挥官对可合 PR 仍按动作列表一张接一张 squash（本轮能合几张合几张）
 - [x] 合并闸 ① 改为只报不拦（`GATES.merge.advisory` 含 ①；`execMerge` 不因落后 return blocked）
 - [x] 旧 head 上 APPROVED、新 head 零判定 → 直接合，不 `rereview`
-- [ ] #1094：命中 human_holds 的单仍 `merge-policy=manual`，指挥官不许自动 squash（原单保留，合入路径已读 draft）
+- [x] #1094：命中 human_holds 的单仍 `merge-policy=manual`，指挥官不许自动 squash（原单保留，合入路径已读 draft）
 - [x] 验收钉在 `tests/land-decision.test.js` / `tests/commander.test.js` / `tests/commander-merge-gate.test.js`
 
 ### 4. 会话改短命
@@ -208,14 +208,14 @@
 
 - [x] incomplete 不再推一把，改为 `stop-session`；人没了才走 #1056 差集重派
 - [x] 安装脚本改为卸载；NEW-MACHINE 不再装推一把；本机 timer 已卸
-- [ ] 仓内 `nudge-stalled.mjs` / unit 文件整段 git rm（垫片单测还在，下一切）
-- [ ] `dao-progress-watch` 并进 `commander-act` 或降为只读盘面
+- [x] 仓内 `nudge-stalled.mjs` / unit 文件整段 git rm（垫片单测一并走）
+- [x] `dao-progress-watch` 并进 `commander-act`；独立单元 git rm，安装脚本改卸载
 - [x] 验收：本机 `list-timers` 已无 `dao-nudge-stalled`
 
 ### 8. 收口
 
-- [ ] 士兵/审官 mirasim 任务书与代码同基线；orca 版任务书要么删掉合并/Run id 段落，要么整页标退役
-- [ ] `land` / `close-issues` / `board-gc` 仍作旁路幂等补漏，不重新承担「下一步谁干活」
+- [x] 士兵/审官 mirasim 任务书与代码同基线；orca 版任务书整页标退役
+- [x] `land` / `close-issues` / `board-gc` 仍作旁路幂等补漏，不重新承担「下一步谁干活」
 - [ ] 统领单在 `done_when` 机器可算为真后，走 `close-issues.mjs` 关
 - [ ] 本页看板全部勾完；initiatives 那条 `status: done`
 

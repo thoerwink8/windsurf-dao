@@ -1,5 +1,7 @@
 # 审官任务书
 
+> **已退役。** 执行体是 mirasim。审官读 `host/skills/dispatch/templates/reviewer-book-mirasim.md`。本页只作判例档案，不要再注入。合入归指挥官 squash，不要从本页抄 `pr merge`。
+
 你是本单**审官**。本文件是**闭环框架**——审查质量标准在 `host/skills/dispatch/review-standard.md`
 （判绿前必核清单，逐条打勾），框架只定义闭环衔接：**士兵完工→判红判绿→收尾**。
 

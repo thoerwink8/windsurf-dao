@@ -76,6 +76,7 @@ import { acceptSessionsFrame } from './mirasim-sessions.mjs';
 import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
+import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -953,8 +954,8 @@ function dispatchName(title, issue) {
   return t || `处理 issue #${issue}`;
 }
 function dispatchSpec(issue) {
-  // spec ≤ 500 字节，只给指针（正文在 issue，闭环在 soldier-book）。
-  return `本单职责见 issue #${issue} 正文（权威范围）；闭环框架见 host/skills/dispatch/templates/soldier-book.md。指挥官自动派工（#800）。`;
+  // spec ≤ 500 字节，只给指针（正文在 issue，闭环在 soldier-book-mirasim）。
+  return `本单职责见 issue #${issue} 正文（权威范围）；闭环框架见 host/skills/dispatch/templates/soldier-book-mirasim.md。指挥官自动派工（#800）。`;
 }
 function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
@@ -2079,6 +2080,25 @@ function cmdAct(argv) {
 
   const { actions } = decide(situation);
   const log = [];
+  // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
+  const progressWatch = runProgressWatch({
+    dir: STATE_DIR,
+    dryRun,
+    exhaustedPush: dryRun ? null : pushExhaustedToShuai,
+  });
+  if (!progressWatch.ok) {
+    log.push(`  盘面推进量没查成：${progressWatch.error || progressWatch.report}`);
+  } else if (progressWatch.wake) {
+    log.push(`  盘面停滞：${progressWatch.report}`);
+    hubOnce({
+      state,
+      key: `progress-watch:${progressWatch.fingerprint || 'stall'}`,
+      text: `[指挥官] ${progressWatch.report}`,
+      dryRun,
+    });
+  } else {
+    log.push(`  盘面推进量：${progressWatch.report}`);
+  }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
   const ran = runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
@@ -2105,7 +2125,14 @@ function cmdAct(argv) {
   if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,
-    unscanned: situationHealth(situation).unscanned, actions: actions.map(summarizeAction), digest }, null, 2));
+    unscanned: situationHealth(situation).unscanned, actions: actions.map(summarizeAction), digest,
+    progressWatch: {
+      ok: progressWatch.ok,
+      scanned: progressWatch.scanned === true,
+      wake: !!progressWatch.wake,
+      error: progressWatch.error || null,
+    },
+  }, null, 2));
   console.error(log.join('\n'));
   process.exit(0);
 }

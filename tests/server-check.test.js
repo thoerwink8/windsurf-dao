@@ -212,31 +212,46 @@ test('server-check 判别力', async (t) => {
     });
   });
 
-  await t.test('classifyStallWatchTimer（⑮ 卡死发现 timer：屏面指纹层退役后守 progress-watch）', async (t) => {
-    await t.test('progress-watch 在册、NEXT 是时间、退役件不在 → ok', () => {
+  await t.test('classifyStallWatchTimer（⑮ 卡死发现已并进指挥官，独立钟是影子制度）', async (t) => {
+    await t.test('已并进、独立钟不在、退役件不在 → ok', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Sat 2026-09-06 13:15:00 CST  14min Sat 2026-09-06 13:00:00 CST  1min ago dao-progress-watch.timer dao-progress-watch.service',
+        timersText: 'Sat commander-act.timer commander-act.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'ok');
     });
 
-    await t.test('在册但 NEXT 是横杠 → red（空转，扫描等于没拉）', () => {
+    await t.test('独立 progress-watch timer 还在 → red（影子制度）', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: '-                               - Sat 2026-09-06 12:37:14 CST            - dao-progress-watch.timer     dao-progress-watch.service',
+        timersText: 'Sat 2026-09-06 13:15:00 CST dao-progress-watch.timer dao-progress-watch.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /NEXT/);
+      assert.match(r.detail, /dao-progress-watch\.timer/);
     });
 
-    await t.test('退役的 dao-agent-stall.timer 还在 → red，即使 progress-watch 已在册', () => {
+    await t.test('/etc 还留着已删单元文件 → red（disabled 也会被抓住）', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer\nThu dao-agent-stall.timer dao-agent-stall.service',
+        timersText: 'Sat commander-act.timer',
         retiredScriptExists: false,
+        progressWatchFolded: true,
+        leftoverUnitFiles: ['dao-nudge-stalled.timer'],
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /dao-nudge-stalled\.timer/);
+    });
+
+    await t.test('退役的 dao-agent-stall.timer 还在 → red', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
+        retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /dao-agent-stall\.timer/);
@@ -247,30 +262,32 @@ test('server-check 判别力', async (t) => {
         probed: true,
         timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /垫片/);
     });
 
-    await t.test('退役脚本还在 → red，即使 progress-watch 已在册', () => {
+    await t.test('退役脚本还在 → red', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer dao-progress-watch.service',
+        timersText: 'Thu commander-act.timer',
         retiredScriptExists: true,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /agent-stall-watch\.mjs/);
     });
 
-    await t.test('progress-watch 不在册 → red，带怎么起', () => {
+    await t.test('还没并进指挥官 → red，即使独立钟已经不在', () => {
       const r = classifyStallWatchTimer({
         probed: true,
         timersText: 'Thu sysstat-collect.timer',
         retiredScriptExists: false,
+        progressWatchFolded: false,
       });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /dao-progress-watch\.timer/);
-      assert.match(r.detail, /install-progress-watch/);
+      assert.match(r.detail, /runProgressWatch/);
     });
 
     await t.test('systemctl 探不到 → unknown，不当绿', () => {
@@ -281,8 +298,9 @@ test('server-check 判别力', async (t) => {
     await t.test('退役脚本没查成 → unknown', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer',
+        timersText: 'Thu commander-act.timer',
         retiredScriptUnknown: true,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'unknown');
     });

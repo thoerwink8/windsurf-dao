@@ -5,7 +5,7 @@
 
 > orca 版任务书在 `host/skills/dispatch/templates/soldier-book.md`。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以没有卡态切换、没有 orchestration
-> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论、按需起审官，
+> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论、把审官待办入队，
 > **不做 notify 结算、不写卡备注**（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
 
 ## 本单 spec（前言字段）
@@ -53,7 +53,7 @@
 
 1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。
    **不要在 PR 正文写 GitHub 自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 #657）。
-2. **调原子完工命令**——发完工/返工评论，并按需起审官：
+2. **调原子完工命令**——发完工/返工评论，并把审官待办入队：
 
    ```bash
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
@@ -107,4 +107,4 @@
 - 审官是谁、判定怎么落：审官任务书（mirasim 版 `host/skills/dispatch/templates/reviewer-book-mirasim.md`）为准；
   审查质量标准见 `host/skills/dispatch/review-standard.md`，本框架不复制。
 - 派工前读 CLI 教学那套是 orca 终端自起法用的；mirasim 会话由运行时起好，你直接干活，不自起 CLI。
-- `worker-done` 失败（报错/超时/建审官失败）必须**报出来并重试**，不许当发成功（#532）。
+- `worker-done` 失败（报错/超时/入队失败）必须**报出来并重试**，不许当发成功（#532）。
