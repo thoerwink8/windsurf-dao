@@ -401,6 +401,72 @@ describe('removeTreeFallback：账本孤本闸 fail-closed', () => {
     assert.match(r.error, /子卡/);
     assert.equal(gitRmCalled, false);
   });
+
+  it('生产路径 worktrees：孤本只在子卡目录 → 拒绝，不调删除且子树保留', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-parent-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-child-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-main-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json'), '{"type":"job.dispatch"}');
+    const removed = [];
+    const r = removeTreeFallback({
+      id: 'parent',
+      path: parentDir,
+      children: 1,
+    }, {
+      leaseCheck: free,
+      worktrees: [
+        { id: 'parent', path: parentDir, childWorktreeIds: ['child'] },
+        { id: 'child', path: childDir, parentWorktreeId: 'parent' },
+      ],
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { removed.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: (p) => { removed.push(`rm:${p}`); },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /child-orphan\.json/);
+    assert.equal(removed.length, 0, '生产路径子卡孤本不许走到删除');
+    assert.ok(fs.existsSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json')));
+    assert.ok(fs.existsSync(parentDir), '父树必须保留');
+    assert.ok(fs.existsSync(childDir), '子树必须保留');
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('生产路径 worktrees：整树无孤本才报告成功，父卡和子卡都会被扫到', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-p-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-c-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-m-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    const scanned = [];
+    const r = removeTreeFallback({
+      id: 'parent',
+      path: parentDir,
+      children: 1,
+    }, {
+      leaseCheck: free,
+      worktrees: [
+        { id: 'parent', path: parentDir, childWorktreeIds: ['child'] },
+        { id: 'child', path: childDir, parentWorktreeId: 'parent' },
+      ],
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { scanned.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: () => { throw new Error('gitRm 已成功，不该 rmSync'); },
+    });
+    assert.equal(r.ok, true);
+    assert.ok(scanned.includes(parentDir), '父卡 path 必须进删除名单');
+    assert.ok(scanned.includes(childDir), '子卡 path 必须进删除名单');
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
 });
 
 // 2026-09-05 实测：三支「无 PR + 有本地提交」的分支，git cherry 全报「未合入」，
