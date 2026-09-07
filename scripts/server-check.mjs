@@ -585,9 +585,20 @@ function checkTimerArmed() {
   // 我们（本仓 + 别的仓）装的一律在 `/etc/systemd/system/`。这个界线不靠任何人维护名单，
   // 且天然覆盖将来别的仓装上来的单元——`gw-remote-probe` 正是这么被捞回来的。
   const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)].map((m) => m[1]);
+  // list-timers 不列 disabled 的单元（2026-09-07 实咬：dao-nudge-stalled 文件在 /etc、
+  // timer 是 disabled，⑱ 全绿）。仓里装进 /etc 的 .timer 必须进扫描面，表上没有 = 没启用。
+  let etcTimers = [];
+  try {
+    etcTimers = readdirSync('/etc/systemd/system').filter((f) => f.endsWith('.timer'));
+  } catch (e) {
+    return classifyTimerArmed({
+      probed: false,
+      reason: `/etc/systemd/system 读不了：${String(e && e.message || e).slice(0, 120)}——disabled 那一格没查成`,
+    });
+  }
   const units = [];
   const skipped = [];
-  for (const unit of [...new Set(names)]) {
+  for (const unit of [...new Set([...names, ...etcTimers])]) {
     // 不加 `--value`：`systemctl show` 按**它自己的属性顺序**输出，不按命令行顺序，
     // 靠下标取值会张冠李戴（第一版就把某个时间戳当成了单元路径）。按键名取，与顺序无关。
     const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'SubState', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
