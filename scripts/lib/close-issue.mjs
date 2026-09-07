@@ -65,6 +65,28 @@ export function allChecksGreen(pr) {
   return { green: true };
 }
 
+/**
+ * 同一张单还有别的 OPEN 署名 PR 时，本张合了也不许关（#1065：#1075 合了，#1104 还开着，定时器又把单关了）。
+ * pr list 没查成 → ok:false，调用方不许当成「没有别的 PR」。
+ */
+export function otherOpenSignedPrs({ issue, exceptPr, runGh } = {}) {
+  const n = Number(issue);
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: 'otherOpenSignedPrs 没给有效 issue' };
+  if (typeof runGh !== 'function') return { ok: false, error: 'otherOpenSignedPrs 没拿到 gh（没查成）' };
+  const r = runGh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body']);
+  if (!r.ok) return { ok: false, error: `gh pr list 失败：${r.error || '没查成'}` };
+  if (!Array.isArray(r.json)) return { ok: false, error: 'gh pr list 不是数组（没查成）' };
+  const hits = [];
+  for (const p of r.json) {
+    const pn = Number(p && p.number);
+    if (!pn || String(pn) === String(exceptPr)) continue;
+    const nums = attributedIssueNumbers(`${p.title || ''}\n${p.body || ''}`);
+    const titled = attributedIssueNumber(p);
+    if (titled === n || nums.includes(n)) hits.push(pn);
+  }
+  return { ok: true, prs: hits };
+}
+
 /** 判定：非 MERGED → none；MERGED 且全绿 → close；否则 → reopen（不许关）。 */
 export function closeDecision(pr) {
   const state = String((pr && pr.state) || '').toUpperCase();
@@ -109,6 +131,21 @@ export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
   const expectOpen = dec.action === 'close';
   if (expectOpen && String(issueState).toUpperCase() === 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 已关`, issue, pr: number };
   if (!expectOpen && String(issueState).toUpperCase() !== 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 未关(${issueState})，无需重开`, issue, pr: number };
+  if (dec.action === 'close') {
+    const others = otherOpenSignedPrs({ issue, exceptPr: number, runGh });
+    if (!others.ok) {
+      return { ok: false, action: 'close', error: `还有没有别的 OPEN 署名 PR 没查成：${others.error}（没查成不许关）`, issue, pr: number };
+    }
+    if (others.prs.length) {
+      return {
+        ok: true,
+        action: 'none',
+        reason: `还有 OPEN 署名 PR ${others.prs.map((p) => `#${p}`).join('、')}，本张合了也不关`,
+        issue,
+        pr: number,
+      };
+    }
+  }
   if (dryRun) return { ok: true, action: dec.action, issue, pr: number, reason: dec.reason, dryRun: true };
   const verb = dec.action === 'close' ? 'close' : 'reopen';
   const op = runGh(['issue', verb, String(issue)]);

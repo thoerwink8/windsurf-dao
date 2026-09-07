@@ -50,8 +50,10 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
   士兵读 PR 的 review 状态就知道被打回——**mirasim 路径不用 `notify` 打红项到 dispatch**（没有 dispatch），
   红项写进 GitHub review 正文即送达。**不要自己拼 `task-create` / `worker-start` 开下一跳救人**。
 - **判绿**：按 `m=` 收口——
-  - `m=auto`（默认）：**你自己合并**（审官 App 合不了，走帅身份）：
-    `node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`（checks 已绿才走到这步）。合完进第 2 步。
+  - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。它只出现在交卷闸输出的「合并前还要过的」一节，归合并闸（指挥官 `pr merge` 之前跑 `--gate merge`）。审查期间 master 必然会动，拿它判红产出的是一次 `git merge` 加一整轮复审。
+  - `m=auto`（默认）：**你自己合并**（审官 App 合不了，走帅身份）。checks 已绿才走到这步。合并前先过合并闸：
+    `node scripts/handoff-check.mjs --gate merge`（红 / 没查成都不合，先把 master 拿进来再合）。
+    闸过了再 `node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`。合完进第 2 步。
   - `m=manual`（例外，前言带 `r=` 理由）：**你不许合**。判绿后先把 PR 转 draft（机器可读的「禁止合并」态）：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，然后在 review 正文写「需人工合并，理由：<r= 的值>」，交帅合并。
   - 合并前（两条路都跑）：`node scripts/dao.mjs pr-sync-labels --pr <PR号>`——把署名 issue 的 `model/*` `type/*` label

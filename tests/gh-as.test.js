@@ -139,6 +139,12 @@ describe('gh-as', () => {
     await t.test('GH_TOKEN 盖住本人', () => {
       assert.ok(calls[0].opts.env.GH_TOKEN === 't-live', 'GH_TOKEN 盖住本人  →  ' + String(calls[0].opts.env.GH_TOKEN));
     });
+    await t.test('剥掉 CLICOLOR_FORCE / FORCE_COLOR，否则 --json 不是 JSON', () => {
+      const env = calls[0].opts.env;
+      assert.equal(env.NO_COLOR, '1');
+      assert.equal(env.FORCE_COLOR, undefined);
+      assert.equal(env.CLICOLOR_FORCE, undefined);
+    });
   });
 
   it('换 token / whoami：扫成 vs 没扫成', async (t) => {
