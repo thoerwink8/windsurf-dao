@@ -42,24 +42,45 @@
 
 ## 自查证据
 
-目标测试（issue-gateway / issue-gateway-check / dispatch-gate / marshal-issue-identity / feishu-triage / provider-breaker / close-issue / dao-reviewer / notify-blocked / refiner / five-holes-815）：455 pass / 0 fail。
+目标测试（issue-gateway / issue-gateway-check / dispatch-gate / marshal-issue-identity / feishu-triage / provider-breaker / close-issue / dao-reviewer / notify-blocked / refiner / five-holes-815 / handoff-check / commander-merge-gate）：524 pass / 0 fail。
 
-`node scripts/dao-check.mjs`：好的（188 项，6 条可见，13 项跳过，34.4s）。身份链检查绿，见上。
+`node scripts/dao-check.mjs`：好的（189 项，6 条可见，13 项跳过，68.9s）。身份链检查绿，见上。
 
 真机：#1120 create/comment/edit-labels/close 均 ok；create+comment 重放 `replay:true`；`--identity` exit 2；缺幂等键 exit 1。验完已关。
 
-## 交卷闸
+## 交卷闸（返工：跟上 origin/master）
 
-`node scripts/handoff-check.mjs`（head `5e5aa9b`）：
+审官红项：正文钉的是旧 head `5e5aa9b` / 「4 通」，当时基底仍是 `a50a445`，`origin/master` 已到 `6968fe1`（#1117/#1119：交卷闸 ① 降级为合并闸）。本轮已把 `origin/master` 合入本分支。
+
+最终基线：`origin/master` = `6968fe18ec8d9b62de8c107468f7f65cdae9955a`
+合入后 head：`d8c7f7a80648139e56b75577f4051970e5908207`（`[cc] merge: origin/master into dao-792`）
+
+`node scripts/handoff-check.mjs`（交卷档，head `d8c7f7a`）：
 
 ```
 交卷闸：dao-792 vs origin/master（已拉远端）
+  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1973 行里的 20 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（d8c7f7a）
+
+合并前还要过的（查了，但不进本次判定）：
+  ✓  ① 基底含最新 master —— 基底含最新 origin/master
+  ↑ 这几条归合并闸：`node scripts/handoff-check.mjs --gate merge`。
+    它们红不挡交卷，也不该被审官拿来判红——基底新旧在审查期间必然会过期（#1117）。
+
+判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
+```
+
+`node scripts/handoff-check.mjs --gate merge`（合并档，同一 head）：
+
+```
+合并闸：dao-792 vs origin/master（已拉远端）
   ✓  ① 基底含最新 master —— 基底含最新 origin/master
   ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1963 行里的 20 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（5e5aa9b）
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1973 行里的 20 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-792 同点（d8c7f7a）
 
-判定：通（4 通 / 0 红 / 0 没查成）——可以交卷
+判定：通（4 通 / 0 红 / 0 没查成）——可以合并
 ```
 
 ## 体系类改动
