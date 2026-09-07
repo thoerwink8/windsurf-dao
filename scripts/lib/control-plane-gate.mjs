@@ -58,6 +58,34 @@ const GIT_VALUE_OPTS = new Set([
   '--shallow-file', '--super-prefix',
 ]);
 
+// docker / podman 全局带值参数。布尔旗标（--tls / --debug）不在此列，
+// 否则会把后面的真实子命令当成值吃掉。
+const DOCKER_VALUE_OPTS = new Set([
+  '-H', '--host', '-c', '--config', '--context',
+  '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
+  '--url', '--connection', '--identity',
+]);
+
+const HELM_VALUE_OPTS = new Set([
+  '--kube-context', '--kubeconfig', '--kube-apiserver',
+  '--kube-as-user', '--kube-as-group', '--kube-ca-file',
+  '--kube-token', '--kube-tls-server-name',
+  '-n', '--namespace',
+  '--registry-config', '--repository-config', '--repository-cache',
+  '--burst-limit', '--qps',
+]);
+
+const KUBECTL_VALUE_OPTS = new Set([
+  '--context', '--kubeconfig', '-n', '--namespace',
+  '-s', '--server', '--cluster', '--user', '--token',
+  '--as', '--as-group', '--as-uid',
+  '--certificate-authority', '--client-certificate', '--client-key',
+  '--request-timeout', '--cache-dir',
+  '--password', '--username', '--tls-server-name',
+  '--profile', '--profile-output',
+  '-v', '--v', '--vmodule',
+]);
+
 // ── 命令分类 ────────────────────────────────────────────────────────
 
 export function normalizeCmd(cmd) {
@@ -169,13 +197,22 @@ function skipWrappers(toks) {
 }
 
 function gitSubcommand(toks) {
+  return firstSubcommand(toks, GIT_VALUE_OPTS);
+}
+
+/**
+ * 跳过 argv[0] 后面带值的全局参数，拿到真实子命令。
+ * `docker --context prod push` 里 prod 是 --context 的值，不是子命令。
+ * `--host=tcp://…` 这种等号写法只占一个 token。
+ */
+function firstSubcommand(toks, valueOpts) {
   let i = 1;
   while (i < toks.length) {
     const t = toks[i];
     if (t === '--') return toks[i + 1] || '';
     if (t.startsWith('-')) {
       const opt = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
-      if (GIT_VALUE_OPTS.has(opt) && !t.includes('=')) { i += 2; continue; }
+      if (valueOpts.has(opt) && !t.includes('=')) { i += 2; continue; }
       i += 1;
       continue;
     }
@@ -220,7 +257,7 @@ export function classifyStatement(stmt) {
   }
 
   if (base === 'docker' || base === 'podman') {
-    const sub = toks.find((t, i) => i > 0 && !t.startsWith('-')) || '';
+    const sub = firstSubcommand(toks, DOCKER_VALUE_OPTS);
     if (sub === 'push') return 'outbound';
     return 'other';
   }
@@ -236,13 +273,13 @@ export function classifyStatement(stmt) {
   }
 
   if (base === 'helm') {
-    const sub = toks.find((t, i) => i > 0 && !t.startsWith('-')) || '';
+    const sub = firstSubcommand(toks, HELM_VALUE_OPTS);
     if (sub === 'upgrade' || sub === 'install') return 'outbound';
     return 'other';
   }
 
   if (base === 'kubectl') {
-    const sub = toks.find((t, i) => i > 0 && !t.startsWith('-')) || '';
+    const sub = firstSubcommand(toks, KUBECTL_VALUE_OPTS);
     if (sub === 'apply' || sub === 'create' || sub === 'replace' || sub === 'rollout') return 'outbound';
     return 'other';
   }

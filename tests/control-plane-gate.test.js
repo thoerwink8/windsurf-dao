@@ -99,6 +99,18 @@ describe('控制面闸：命令分类', () => {
     assert.equal(S.classifyStatement('make deploy'), 'outbound');
   });
 
+  it('带值全局参数后面的真实子命令仍是对外写', async () => {
+    const S = await LOAD;
+    assert.equal(S.classifyStatement('docker --context prod push registry/app:tag'), 'outbound');
+    assert.equal(S.classifyStatement('kubectl --context prod apply -f k8s.yaml'), 'outbound');
+    assert.equal(S.classifyStatement('helm --kube-context prod upgrade app chart'), 'outbound');
+    assert.equal(S.classifyStatement('docker -H tcp://1.2.3.4:2375 push registry/app:tag'), 'outbound');
+    assert.equal(S.classifyStatement('kubectl -n prod apply -f k8s.yaml'), 'outbound');
+    assert.equal(S.classifyStatement('helm -n prod upgrade app chart'), 'outbound');
+    assert.equal(S.classifyStatement('docker --host=tcp://1.2.3.4:2375 push registry/app:tag'), 'outbound');
+    assert.equal(S.classifyStatement('kubectl --namespace=prod apply -f k8s.yaml'), 'outbound');
+  });
+
   it('本地提交和只读不是对外写', async () => {
     const S = await LOAD;
     assert.equal(S.classifyCommand('git commit -m "x"').kind, 'local');
@@ -376,6 +388,34 @@ describe('控制面闸：接到派工闸入口', () => {
     assert.equal(r.status, 0);
     const doc = cursorResponse(r);
     assert.equal(doc && doc.permission, 'allow');
+  });
+
+  it('Claude 面：unreachable + 带值全局参数的部署命令 → exit 2', () => {
+    const cmds = [
+      'docker --context prod push registry/app:tag',
+      'kubectl --context prod apply -f k8s.yaml',
+      'helm --kube-context prod upgrade app chart',
+    ];
+    for (const cmd of cmds) {
+      const r = runHook(HOOK, cmd, { DAO_CONTROL_PLANE: 'false' });
+      assert.equal(r.status, 2, cmd);
+      assert.match(r.stderr || '', /失控会话的对外写/);
+    }
+  });
+
+  it('Cursor 面：unreachable + 带值全局参数的部署命令 → deny JSON', () => {
+    const cmds = [
+      'docker --context prod push registry/app:tag',
+      'kubectl --context prod apply -f k8s.yaml',
+      'helm --kube-context prod upgrade app chart',
+    ];
+    for (const cmd of cmds) {
+      const r = runHook(CURSOR_HOOK, cmd, { DAO_CONTROL_PLANE: 'false' }, { cursor: true });
+      assert.equal(r.status, 0, cmd);
+      const doc = cursorResponse(r);
+      assert.equal(doc && doc.permission, 'deny', cmd);
+      assert.match(JSON.stringify(doc), /失控会话的对外写/);
+    }
   });
 });
 
