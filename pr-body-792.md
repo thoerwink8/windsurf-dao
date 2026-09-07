@@ -6,28 +6,51 @@
 
 ## 验收标准
 
-- [ ] 存在跨宿主可调用的唯一 Issue 写入入口（`node scripts/issue-gateway.mjs`），业务契约 create / comment / close / edit-labels 同一份。
-- [ ] 调用者无法选择个人身份、传入 token 或执行任意 shell；网关固定 `dao-marshal[bot]`。
-- [ ] 网关分别完成 create、comment、label edit、close；可验证写入作者均为 `app/dao-marshal`。
-- [ ] 身份错误、Bot 凭据缺失、GitHub 查询失败、作者回读失败均 fail-closed；没有任何路径退回个人 `gh`。
-- [ ] 同一 `idempotency_key` 重放 create/comment 不产生重复对象，并返回原结果。
-- [ ] 故意从 Claude / Cursor 入口跑裸 `gh issue` 写动作：hook 当场拒绝；无 hook 的后台服务只暴露网关且不读个人 token。
-- [ ] 自动化服务单元不注入个人 `GH_TOKEN`；写入只走 GitHub App 凭据。
-- [ ] 每次调用生成可查询的结构化审计记录（宿主、动作、幂等键、目标、Bot 身份、URL、失败阶段）。
-- [ ] #790 回归：作者验证不是 Bot 时调用结果必须失败。
-- [ ] 遍历全部宿主配置面的闸：少接一处就红；「扫完 0 条」和「没查成」分开。
-- [ ] `node --test tests/issue-gateway.test.js tests/issue-gateway-check.test.js tests/dispatch-gate.test.js tests/marshal-issue-identity.test.js` 绿；`node scripts/dao-check.mjs` 新增身份链检查通过。
+- [x] 存在跨宿主可调用的唯一 Issue 写入入口（`node scripts/issue-gateway.mjs`），业务契约 create / comment / close / edit-labels 同一份。
+- [x] 调用者无法选择个人身份、传入 token 或执行任意 shell；网关固定 `dao-marshal[bot]`。负控：`--identity worker` → exit 2「禁止旗标」。
+- [x] 网关分别完成 create、comment、label edit、close；可验证写入作者均为 `app/dao-marshal`。真机样本 #1120：create `author: app/dao-marshal`；comment `author: dao-marshal[bot]`（https://github.com/thoerwink8/windsurf-dao/issues/1120）。
+- [x] 身份错误、Bot 凭据缺失、GitHub 查询失败、作者回读失败均 fail-closed；没有任何路径退回个人 `gh`。缺幂等键 → `missing_idempotency` exit 1。
+- [x] 同一 `idempotency_key` 重放 create/comment 不产生重复对象，并返回原结果。#1120 create/comment 第二次均为 `"replay":true`，number/url 不变。
+- [x] 故意从 Claude / Cursor 入口跑裸 `gh issue` 写动作：hook 当场拒绝；无 hook 的后台服务只暴露网关且不读个人 token。`dispatch-gate` 含单个 `&` 拆分；Claude + Cursor 入口均有负控。
+- [x] 自动化服务单元不注入个人 `GH_TOKEN`；写入只走 GitHub App 凭据。`dao-patrol` / `dao-close-issues` / `feishu-triage` 均 `UnsetEnvironment=GH_TOKEN GITHUB_TOKEN`。
+- [x] 每次调用生成可查询的结构化审计记录（宿主、动作、幂等键、目标、Bot 身份、URL、失败阶段）。落 `~/.dao/issue-gateway/audit/audit.ndjson`（不进 git）。
+- [x] #790 回归：作者验证不是 Bot 时调用结果必须失败。`tests/issue-gateway.test.js`「作者是个人账号必须失败」。
+- [x] 遍历全部宿主配置面的闸：少接一处就红；「扫完 0 条」和「没查成」分开。dao-check：`跨宿主 Issue 写入面 11/11 已接到网关；裸 gh issue 写动作 0 处（扫了 44 个面）；生产 Issue 写点 0 处绕过网关（扫了 169 个脚本）`。
+- [x] `node --test tests/issue-gateway.test.js tests/issue-gateway-check.test.js tests/dispatch-gate.test.js tests/marshal-issue-identity.test.js` 绿；`node scripts/dao-check.mjs` 新增身份链检查通过。
 
 ## 进展
 
 - [x] 空提交撑分支并推送
-- [ ] 网关 lib + CLI（允许列表、禁传身份/token/shell、幂等、回读作者、审计）
-- [ ] dispatch-gate 拦裸 `gh issue` 写动作（Claude + Cursor 挂载面）
-- [ ] 全宿主配置面闸（少接一处就红）
-- [ ] 飞书 triage / 指挥官 / 关单 / 熔断开单 等写入点接网关
-- [ ] 常驻指令与 skill 改指向网关（文字只作迁移护栏）
-- [ ] 真实 GitHub 验收 + 负控
-- [ ] 自查 / dao-check / handoff-check
+- [x] 网关 lib + CLI（允许列表、禁传身份/token/shell、幂等、回读作者、审计）
+- [x] dispatch-gate 拦裸 `gh issue` 写动作（Claude + Cursor 挂载面；含后台 `&`）
+- [x] 全宿主配置面闸（少接一处就红）+ 生产脚本扫描
+- [x] 飞书 triage / 指挥官 / 关单 / 熔断开单 / 消歧官 / 派工打标 / 完工评论 / 前置提醒 接网关
+- [x] 常驻指令与 skill 改指向网关（文字只作迁移护栏）
+- [x] 真实 GitHub 验收 + 负控（#1120）
+- [x] 自查 / dao-check / handoff-check
+
+## 审官 8 条（head `2584003b` 打回）怎么修的
+
+1. 飞书卡片拍板：`handleCardAction` 带 `idempotency_key=feishu-card:<messageId>:<choice>`，`applyCardActions` 传给真实 `makeGhDeps`；测试用真 deps，缺键 `rejects`。
+2. 熔断 6h 重报：`breakerAllOpenIdempotencyKey(now)` 按 `ALL_OPEN_DEDUP_MS` 窗口换键；同窗口 replay、跨窗口新建。走真实网关幂等账。
+3. 生产写点：refiner / stampIssueLabels / postIssueComment / closeIssueForPr / notify-blocked / worker-done / dao-amend 一律 `applyIssueWrite`；没注入写入器 fail-closed，不许退回裸 `gh issue`。`checkNoBareIssueWriteInCode` 扫 `scripts/`，0 文件 = 没查成。
+4. `splitShellStatements` 拆单个 `&`；Claude/Cursor 入口负控 `gateway & gh issue create` → block。
+5. close/reopen 回读 `{}` 缺 `state` → `gh_readback`，不是绿。
+6. `fail()` 里 `ok:false` 压过 extra；幂等账写失败返回 `landed:true` + 「需人工按 URL 处置」。
+7. 审计写失败 fail-closed，不得报告成功。
+8. 本段贴交卷闸输出。
+
+## 自查证据
+
+目标测试（issue-gateway / issue-gateway-check / dispatch-gate / marshal-issue-identity / feishu-triage / provider-breaker / close-issue / dao-reviewer / notify-blocked / refiner / five-holes-815）：455 pass / 0 fail。
+
+`node scripts/dao-check.mjs`：好的（188 项，6 条可见，13 项跳过，34.4s）。身份链检查绿，见上。
+
+真机：#1120 create/comment/edit-labels/close 均 ok；create+comment 重放 `replay:true`；`--identity` exit 2；缺幂等键 exit 1。验完已关。
+
+## 交卷闸
+
+`node scripts/handoff-check.mjs` 在推远端后重跑，输出贴下面。
 
 ## 体系类改动
 
@@ -41,4 +64,4 @@
 
 ## 机制判定
 
-#790 这类错在制度生效前还会再犯吗？**会**——规范只写在 Claude 专用 skill 时，别的宿主照样裸 `gh issue create`。机制改在：唯一写入网关 + hook 拦裸写 + 遍历全部宿主配置面的闸（少接一处就红）+ 后台服务不继承个人 token。文字提醒只作迁移护栏，不承重。
+#790 这类错在制度生效前还会再犯吗？**会**——规范只写在 Claude 专用 skill 时，别的宿主照样裸 `gh issue create`。机制改在：唯一写入网关 + hook 拦裸写 + 遍历全部宿主配置面的闸（少接一处就红）+ 生产脚本扫描 + 后台服务不继承个人 token。文字提醒只作迁移护栏，不承重。
