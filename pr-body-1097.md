@@ -58,9 +58,23 @@
 EXIT:0
 ```
 
-### handoff-check 真实输出（工人树 dao-1097）
+### handoff-check 真实输出（工人树 dao-1097，HEAD `f3f6b1e`）
 
-`node scripts/handoff-check.mjs`（交卷档，① 只报不判）。完整输出贴在 push 之后、与 HEAD 同点的那一轮。
+`node scripts/handoff-check.mjs`（交卷档，① 只报不判）：
+
+```
+交卷闸：dao-1097 vs origin/master（已拉远端）
+  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1487 行里的 10 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1097 同点（f3f6b1e）
+
+合并前还要过的（查了，但不进本次判定）：
+  ✓  ① 基底含最新 master —— 基底含最新 origin/master
+  ↑ 这几条归合并闸：`node scripts/handoff-check.mjs --gate merge`。
+    它们红不挡交卷，也不该被审官拿来判红——基底新旧在审查期间必然会过期（#1117）。
+
+判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
+```
 
 ## 机制判定
 
