@@ -1,6 +1,6 @@
 // scripts/lib/provider-health.mjs —— 消费健康表 + 熔断表（#842 F15 插线；#843 熔断）
 //
-// 健康表 ~/.dao/provider-health.json（Contabo 上由 ai-gateway-stack 探针写，本仓只读）：
+// 健康表 ~/.dao/provider-health.json（本仓 scripts/gw-remote-probe.mjs 周期写，派工只读）：
 //   { updatedAt, intervalMin, targets: { "<key>": { state:green|red|unscanned, code, ms, ... } } }
 //   过期（now-updatedAt > 2×intervalMin）或缺失 → unknown：**不拦**，但选型输出注明「健康表没查成」。
 //   红 → availability:red：**不直接拦**，只把它排到后面先探绿的（红可能已恢复，照探；消歧记录）。
