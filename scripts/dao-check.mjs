@@ -93,6 +93,10 @@
 // ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
 //    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
 //    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
+// ㉞ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
+//    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
+//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。工作区属主闸故意
+//    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -145,6 +149,9 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, DEFAULT_MANAGED_REPOS,
+} from './lib/git-ownership-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1169,6 +1176,66 @@ function checkRepoOwnership() {
   green('仓内属主：扫完 0 个 root 属主文件');
 }
 
+function findRootOwnedInGitDir(gitDir) {
+  const r = spawnSync('find', [gitDir, '-user', 'root', '-print'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (r.error || (r.status != null && r.status > 1)) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `find exit ${r.status}`).slice(0, 160) };
+  }
+  const files = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  const errs = String(r.stderr || '').split('\n').filter((l) => l.trim());
+  const other = errs.filter((l) => !/Permission denied/.test(l) && !/Failed to restore initial working directory/.test(l));
+  if (r.status === 1 && other.length) {
+    return { ok: false, error: other[0].slice(0, 160) };
+  }
+  return { ok: true, files };
+}
+
+function checkGitOwnershipSamples() {
+  const r = inspectGitOwnershipFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '.git 属主闸样本没查成' : '.git 属主闸样本对不上',
+      '恢复 tests/fixtures/git-ownership/{red,ok,empty}.json：红=点名 root 文件必须拦、绿必须过、仓不在必须没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`.git 属主闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkGitOwnershipLive() {
+  if (process.platform === 'win32') { skip('.git 属主：Windows 无 uid 概念，本项跳过'); return; }
+  const exists = (p) => existsSync(p);
+  const isDir = (p) => {
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
+  const statUid = (p) => statSync(p).uid;
+  const scans = DEFAULT_MANAGED_REPOS.map((repo) => scanGitRepo({
+    name: repo.name,
+    path: repo.path,
+    exists,
+    isDir,
+    statUid,
+    findRootOwned: findRootOwnedInGitDir,
+  }));
+  // 本机一台都没有（CI / 开发机 / 云 VM）→ SKIP 不是绿。分类器对「仓不在」仍判
+  // unscanned，单测钉那条；live 若因此 fail 会把 land 卡在「这台机器本来就不托管这两仓」。
+  if (scans.every((s) => s.exists === false)) {
+    skip('.git 属主：本机没有 /srv/projects 在管仓，本项没查成');
+    return;
+  }
+  const r = classifyGitOwnership(scans);
+  if (r.kind === 'ok') green(r.line);
+  else if (r.kind === 'skip') skip(r.line);
+  else fail(r.line, r.howToFix, r.evidence);
+}
+
 function checkInitiatives() {
   const file = join(ROOT, 'docs', 'initiatives.json');
   if (!existsSync(file)) { skip('西瓜清单：docs/initiatives.json 不在——本项没查成'); return; }
@@ -1805,6 +1872,8 @@ checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
 checkInbox();
 checkRepoOwnership();
+checkGitOwnershipSamples();
+checkGitOwnershipLive();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
