@@ -147,6 +147,13 @@ function mergePolicyUnscanned(why) {
 }
 
 export function resolveIssueMergePolicy(issue, policy) {
+  if (labelValue(issue, 'type/') === '体系') {
+    return {
+      mergePolicy: 'manual',
+      mergeReason: 'type/体系 框架活：自动执行，合并必须人工拍板',
+      mergePolicySource: 'framework',
+    };
+  }
   if (!policy || policy.unscanned) {
     return mergePolicyUnscanned(policy?.unscanned || '没拿到策略——判据本身没读到');
   }
