@@ -15,6 +15,7 @@ fi
 
 install -m 644 "$UNIT_DIR/dao-patrol.service" /etc/systemd/system/dao-patrol.service
 install -m 644 "$UNIT_DIR/dao-patrol.timer" /etc/systemd/system/dao-patrol.timer
+install -m 644 "$UNIT_DIR/dao-patrol-failure.service" /etc/systemd/system/dao-patrol-failure.service
 systemctl daemon-reload
 systemctl enable --now dao-patrol.timer
 
