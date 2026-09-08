@@ -43,6 +43,7 @@ import {
   writeDispatchOrder,
 } from './lib/dispatch-queue.mjs';
 import { withWorktreeLockSync, withWorktreeLock, defaultLockPath } from './lib/dispatch-lock.mjs';
+import { scanSessionProcs } from './lib/dispatch/lease.mjs';
 import {
   ROOT,
   USAGE,
@@ -1085,6 +1086,53 @@ function killPidTerm(pid) {
     if (e && (e.code === 'ESRCH' || e.errno === 3)) return { ok: true, alreadyGone: true, pid };
     return { ok: false, pid, error: String(e && e.message ? e.message : e) };
   }
+}
+
+function normFsPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * stop 回执之后再核实 OS：mirasim 有时只把会话标成 interrupted，
+ * app-server/code-mode 子进程仍留在原 worktree，继续占租约。
+ * 只杀 mirasim-server 后代且 cwd 精确命中的进程，禁止按名称/全局误杀。
+ */
+export function reapMirasimSessionProcesses(workdir, {
+  scan = scanSessionProcs,
+  kill = killPidTerm,
+} = {}) {
+  const want = normFsPath(workdir);
+  if (!want) return { ok: false, error: '没有 workdir，无法核实会话进程' };
+  const observed = scan();
+  if (!observed || observed.ok !== true) {
+    return { ok: false, unscanned: true, error: observed?.error || '会话进程没查成' };
+  }
+  const holders = (observed.procs || []).filter((p) => normFsPath(p?.cwd) === want);
+  const reaped = holders.map((p) => kill(p.pid));
+  const failed = reaped.filter((r) => r?.ok !== true);
+  if (failed.length) {
+    return { ok: false, error: `有 ${failed.length} 个会话进程没清掉`, reaped };
+  }
+  return { ok: true, reaped, remaining: 0 };
+}
+
+async function stopSessionAndReap(runtime, sessionKey, { workdir = null } = {}) {
+  let target = workdir;
+  if (!target && runtime && typeof runtime.listSessions === 'function') {
+    const listed = await runtime.listSessions();
+    if (listed?.ok === true) {
+      const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
+      target = hit?.cwd || hit?.workdir || hit?.worktree || null;
+    }
+  }
+  const stopped = await runtime.stopSession(sessionKey);
+  if (!stopped || stopped.ok !== true) return stopped || { ok: false, why: 'stop 没回成功' };
+  if (!target) return { ...stopped, reaped: [], reapSkipped: true };
+  // stop 是异步的，给服务端一个很短的退出窗口，再核实并回收残留子进程。
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const reaped = reapMirasimSessionProcesses(target);
+  if (!reaped.ok) return { ok: false, why: reaped.error, reaped: reaped.reaped || [] };
+  return { ...stopped, reaped: reaped.reaped || [] };
 }
 
 /** #835：占用闸过后再收该树 agent。收不掉就停，不许先删树留下孤儿。 */
@@ -4769,7 +4817,7 @@ async function stopSessionsAtCwd(runtime, cwd) {
     const key = s.sessionKey || s.key || s.id;
     if (!key) continue;
     try {
-      const r = await runtime.stopSession(key);
+      const r = await stopSessionAndReap(runtime, key, { workdir: cwd });
       stopped.push({ sessionKey: key, ok: !!(r && r.ok), why: r && r.why });
     } catch (e) {
       stopped.push({ sessionKey: key, ok: false, why: String(e && e.message ? e.message : e) });
@@ -4788,7 +4836,7 @@ async function cmdSessionStop(args) {
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
   let stopped;
-  try { stopped = await bind.runtime.stopSession(args.session); }
+  try { stopped = await stopSessionAndReap(bind.runtime, args.session); }
   catch (e) {
     fail(`session-stop 没查成: ${String(e?.message || e)}`, { executor: 'mirasim', sessionKey: args.session });
   }
