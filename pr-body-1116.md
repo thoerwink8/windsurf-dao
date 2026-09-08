@@ -34,7 +34,7 @@
 - [x] 删四处反推层（`collectIssueLabelsFromPr` / 宿主前缀兜底 / `uniqueNames` / 第二份 `linkedIssueNumbers`）
 - [x] 文档不再教「从 issue 抄 label」
 - [x] 测试 + dao-check + handoff-check
-- [x] 跟上 origin/master（#1109/#1106/#1015/#1107）；合入后探针单元补 #792 凭据隔离
+- [x] 跟上 origin/master（#1109/#1106/#1015/#1107 + 两笔巡检观察）；合入后探针单元补 #792 凭据隔离
 - [x] 本轮解冲突：ready-queue-check 保留本单 re-export `linkedIssueNumbers`，吃下 #966 「将来某版」跳过
 
 ## 机制判定
