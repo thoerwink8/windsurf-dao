@@ -210,6 +210,8 @@ describe('systemd 单元与装机脚本', () => {
     const s = fs.readFileSync(SERVICE, 'utf8');
     const t = fs.readFileSync(TIMER, 'utf8');
     assert.match(s, /^User=orca$/m);
+    assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
+    assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     assert.match(s, /scripts\/gw-remote-probe\.mjs/);
     assert.match(t, /^OnCalendar=/m);
     assert.match(t, /^Persistent=true$/m);
