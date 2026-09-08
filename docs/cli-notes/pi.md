@@ -12,6 +12,10 @@ agent 型（`start = "agent"`）。#822：除 GPT（Codex）外一律本 CLI。c
 - **ds-flash/pro 是同一模型两条通道**：模型条目只有一条，战绩记一处。
 - **无头 Linux 上 `--agent pi` 起在另一张终端**（#802 帅 2026-09-03 订正）：agent 真起来了（`terminal list` 的 `agentIdentity=pi`，标题 `π - …`），但记账 handle 指向 worktree 空壳，任务书打进 bash（`读: command not found`）。dispatch 按 `agentIdentity` 校准 handle 再注入。title 不可靠（Linux bash 标题是 `user@host:path`）。不要改 toml `start=command`。
 
+## GitHub Issue 写（#792）
+
+写 Issue 只走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`。
+
 ## 正确起法
 
 `pi --model {cli_model}`（launch 模板，cli_model 含 `gw` / `gw-dspool` / `gw-windsurf` / `gw-sub` 前缀），agent 型走 `worker-start --agent pi`；无头 Linux 若落成裸 shell，派工自动回退 `--command`。

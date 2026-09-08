@@ -47,7 +47,7 @@ describe('marshal-issue-identity', () => {
     });
 
     const admit = fs.readFileSync(path.join(REPO, 'host', 'skills', 'admit-push', 'SKILL.md'), 'utf8');
-    const bare = admit.replaceAll('gh-as.mjs marshal -- issue create', 'gh issue create');
+    const bare = admit.replaceAll('issue-gateway.mjs create', 'gh issue create');
     await t.test('负控样本：admit-push 里真有裸 gh issue create', () => {
       assert.ok(/\bgh issue create\b/.test(bare), '负控样本：admit-push 里真有裸 gh issue create');
     });
@@ -60,6 +60,20 @@ describe('marshal-issue-identity', () => {
     });
     await t.test('admit-push 写回裸 gh issue create → 必须报红', () => {
       assert.ok(!!bareMut.fail && /裸 gh issue|create/.test(bareMut.fail.join(' ')), 'admit-push 写回裸 gh issue create → 必须报红  →  ' + JSON.stringify(bareMut));
+    });
+
+    const forbidLine = checkMarshalIssueIdentity({
+      root: REPO,
+      files: {
+        'host/skills/dispatch/SKILL.md': dispatch,
+        'host/skills/dispatch/templates/soldier-book.md':
+          '写 Issue 只走 `node scripts/issue-gateway.mjs`。不许裸 `gh issue create|comment|close|edit`。\n',
+      },
+      skills: ['host/skills/dispatch/SKILL.md', 'host/skills/dispatch/templates/soldier-book.md'],
+    });
+    await t.test('同一行指向 issue-gateway 的禁止句不算教裸写', () => {
+      assert.equal(forbidLine.fail, undefined, JSON.stringify(forbidLine));
+      assert.match(String(forbidLine.green || ''), /0 处裸写/);
     });
 
     const noSkills = checkMarshalIssueIdentity({
@@ -75,8 +89,8 @@ describe('marshal-issue-identity', () => {
     await t.test('dispatch 打 issue label 走 marshal', () => {
       assert.ok(/stampIssueLabels\(\{[\s\S]*?runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)/.test(daoSrc), 'dispatch 打 issue label 走 marshal');
     });
-    await t.test('amend 发 issue 评论走 marshal', () => {
-      assert.ok(/postIssueComment\(\{\s*issue,\s*body,\s*runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)\s*\}\)/.test(daoSrc), 'amend 发 issue 评论走 marshal');
+    await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
+      assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);
     });
   });
 });
