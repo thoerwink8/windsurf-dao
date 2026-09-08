@@ -96,7 +96,10 @@ describe('decide：自己做（确定性）', () => {
 
   it('名单没有、/proc 还占着树 → reap-orphan', async () => {
     const { decide } = await CORE;
-    const cwd = '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1099';
+    // 二轮红 1：cwd 必须落在**测试当时**的 worktreesRoot() 下。CI runner 的 homedir
+    // 不是 /home/orca，写死路径在钳根之后必假红（本机绿、CI 红，正是最会漏的形）。
+    const { worktreesRoot } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const cwd = `${worktreesRoot()}/windsurf-dao/dao-review-pr-1099`;
     const r = decide(baseSituation({
       sessions: { scanned: true, items: [] },
       lease: { scanned: true, procs: [{ pid: 1369724, comm: 'node', cwd }] },
