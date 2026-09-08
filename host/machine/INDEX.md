@@ -53,6 +53,7 @@
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
+| D | ~/.dao/control-plane.json | 控制面闸探测落点（#948）。`scripts/lib/control-plane-gate.mjs` 只读 `{reachable:true\|false}`；文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。运行态，换机不拷 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
