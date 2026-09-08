@@ -36,6 +36,7 @@
 import { pathToFileURL } from 'node:url';
 import { closeIssueForPr } from './lib/close-issue.mjs';
 import { ghAs } from './lib/gh.mjs';
+import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
 const ROOT = process.cwd();
 const DECISION = 'docs/decisions/2026-08-21-close-issue-from-zero.md';
@@ -164,7 +165,7 @@ export function main(argv) {
   if (args.pr) {
     const f = fetchPr(args.pr);
     if (!f.ok) { console.error(`close-issues: 读 PR #${args.pr} 失败：${f.error}`); process.exit(1); }
-    results.push(closeIssueForPr({ pr: f.pr, runGh, dryRun: args.dryRun }));
+    results.push(closeIssueForPr({ pr: f.pr, runGh, writeIssue: applyIssueWrite, dryRun: args.dryRun }));
   } else if (args.sinceHours != null) {
     // 补漏窗口：重建 #807 删掉的合后钩——对每张刚合进的 PR 各判一次。
     const win = clampSinceHours(args.sinceHours);
@@ -201,7 +202,7 @@ export function main(argv) {
     for (const n of sel.numbers) {
       const f = fetchPr(n);
       if (!f.ok) { console.error(`close-issues: 读 PR #${n} 失败：${f.error}`); failed += 1; continue; }
-      results.push(closeIssueForPr({ pr: f.pr, runGh, dryRun: args.dryRun }));
+      results.push(closeIssueForPr({ pr: f.pr, runGh, writeIssue: applyIssueWrite, dryRun: args.dryRun }));
     }
   } else {
     const list = runGh(['pr', 'list', '--state', 'merged', '--limit', String(args.limit), '--json', 'number']);
@@ -217,7 +218,7 @@ export function main(argv) {
     for (const p of prs) {
       const f = fetchPr(p.number);
       if (!f.ok) { console.error(`close-issues: 读 PR #${p.number} 失败：${f.error}`); failed += 1; continue; }
-      results.push(closeIssueForPr({ pr: f.pr, runGh, dryRun: args.dryRun }));
+      results.push(closeIssueForPr({ pr: f.pr, runGh, writeIssue: applyIssueWrite, dryRun: args.dryRun }));
     }
   }
 

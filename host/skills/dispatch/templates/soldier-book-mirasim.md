@@ -20,6 +20,10 @@
 - ` #<issue 号>`：本单署名 issue（可空）。开 PR、写 PR 正文回链都用它。
 - **PR 号不在前言里**——PR 是你开工时开出来的（见开工第 2 步），开完你自己就知道号。
 
+## GitHub Issue 写（#792）
+
+写 Issue（开单 / 评论 / 关单 / 打标）只走 `node scripts/issue-gateway.mjs`，身份由网关固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`，不许经 `gh-as` 自选身份。PR 侧继续 `gh-as.mjs worker`。
+
 ## 开工（进 git 的活，先做这个再干活）
 
 1. 空提交撑分支并推送：`git commit --allow-empty -m "[cc] chore: 起<任务>分支"`，然后 `git push -u origin HEAD`。
