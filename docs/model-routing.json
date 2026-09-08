@@ -646,12 +646,12 @@
     "gpt": {
      "agent": "codex",
      "mode": "direct",
-     "理由": "2026-09-08 用户拍板：审官 gpt 族走 codex CLI 直连网关 gptpool（渠道级降级 windsurf40→pqapi15→mirasim-bridge5，一律 gpt-5.6-luna high）。此前 relay 模式全量烧 mirasim 云额度且中继池满时审官整天全灭（traffic 实证 relay.mirasim.ai），腿节「经 gw-windsurf」从未真走到。codex 直连配置 ~/.codex/config.toml 已指网关池"
+     "理由": "2026-09-08 用户拍板两轮：审官 gpt 族钉 codex CLI 载体（效果优先）+ 渠道优先级 windsurf>pqapi>mirasim。落地现状：codex 0.153+ 只讲 responses、new-api 转换未实现（ai-gateway-stack#7），故 direct=codex 直连 pqapi（~/.codex/config.toml，responses 原生），mirasim 由 setting.json failover reactive 兜底（always 已关——它曾把全部流量改道 relay.mirasim.ai 烧云额度）；windsurf 优先等 #7 落地后接入。chat 口径客户端已吃到网关 gptpool 三级链（windsurf40→pqapi15→mirasim-bridge5）"
     },
     "codex": {
      "agent": "codex",
      "mode": "direct",
-     "理由": "同 gpt：直连网关 gptpool（2026-09-08）"
+     "理由": "同 gpt（2026-09-08）"
     },
     "pi": {
      "agent": "pi",
