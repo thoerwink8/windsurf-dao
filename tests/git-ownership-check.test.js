@@ -251,4 +251,53 @@ describe('git-ownership-check', () => {
     assert.equal(S.DEFAULT_MANAGED_REPOS[1].name, 'ai-gateway-stack');
     assert.equal(S.DEFAULT_MANAGED_REPOS[1].path, '/srv/projects/ai-gateway-stack');
   });
+
+  it('find 权限错误 / 非零退出 → 没查成，不是绿', async () => {
+    const S = await LOAD;
+    const denied = S.interpretFindRootOwned({
+      status: 1,
+      stdout: '',
+      stderr: 'find: \'/srv/projects/windsurf-dao/.git/objects\': Permission denied\n',
+    });
+    assert.equal(denied.ok, false);
+    assert.match(denied.error, /Permission denied/);
+
+    const repo = '/srv/projects/windsurf-dao';
+    const gitDir = repo + '/.git';
+    const scan = S.scanGitRepo({
+      name: 'windsurf-dao',
+      path: repo,
+      ...probes({
+        existsMap: { [repo]: true, [gitDir]: true },
+        dirSet: new Set([gitDir]),
+        uidMap: { [repo]: 1000 },
+        findMap: { [gitDir]: denied },
+      }),
+    });
+    assert.equal(scan.scanned, false);
+    assert.match(scan.reason, /Permission denied/);
+    const judged = S.classifyGitOwnership([scan]);
+    assert.equal(judged.kind, 'unscanned');
+    assert.match(judged.line, /没扫成/);
+
+    // 判别力反证：旧写法把 Permission denied 滤掉、status=1 当干净——同一份 stderr 必须仍是没查成
+    const leaked = S.interpretFindRootOwned({
+      status: 1,
+      stdout: '',
+      stderr: 'find: \'.git/objects/pack\': Permission denied\n',
+    });
+    assert.equal(leaked.ok, false, 'status=1 + 只有 Permission denied 不许当干净');
+    assert.equal(Array.isArray(leaked.files), false);
+
+    const status0WithStderr = S.interpretFindRootOwned({
+      status: 0,
+      stdout: '',
+      stderr: 'find: \'.git\': Permission denied\n',
+    });
+    assert.equal(status0WithStderr.ok, false);
+
+    const cleanFind = S.interpretFindRootOwned({ status: 0, stdout: '', stderr: '' });
+    assert.equal(cleanFind.ok, true);
+    assert.deepEqual(cleanFind.files, []);
+  });
 });

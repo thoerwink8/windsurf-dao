@@ -30,6 +30,33 @@ function shortErr(e) {
   return String(e && e.message ? e.message : e).slice(0, 160);
 }
 
+function firstStderrLine(stderr) {
+  return String(stderr || '').split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
+}
+
+/**
+ * 把一次 `find -user root` 的 spawnSync 结果判成 {ok, files} / {ok:false, error}。
+ * 任意非零退出或 stderr（含 Permission denied）都是没查成，不许当干净——
+ * .git 未完整可读时部分扫描会漏掉 root 属主文件。
+ */
+export function interpretFindRootOwned(r) {
+  if (!r) {
+    return { ok: false, error: 'find 没给结果（没查成）' };
+  }
+  if (r.error) {
+    return { ok: false, error: shortErr(r.error) };
+  }
+  const firstErr = firstStderrLine(r.stderr);
+  if (r.status == null || r.status !== 0) {
+    return { ok: false, error: (firstErr || `find exit ${r.status}`).slice(0, 160) };
+  }
+  if (firstErr) {
+    return { ok: false, error: firstErr.slice(0, 160) };
+  }
+  const files = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  return { ok: true, files };
+}
+
 /**
  * 扫一个仓的 `.git`。探头全注入，live 与单测走同一条。
  * exists(path) / isDir(path) / statUid(path) / findRootOwned(gitDir)→{ok, files, error}。

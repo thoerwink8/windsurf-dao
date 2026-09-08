@@ -95,7 +95,8 @@
 //    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
 // ㉞ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
 //    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
-//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。工作区属主闸故意
+//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
+//    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -150,7 +151,7 @@ import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
 import {
-  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, DEFAULT_MANAGED_REPOS,
+  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, interpretFindRootOwned, DEFAULT_MANAGED_REPOS,
 } from './lib/git-ownership-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
@@ -1177,20 +1178,10 @@ function checkRepoOwnership() {
 }
 
 function findRootOwnedInGitDir(gitDir) {
-  const r = spawnSync('find', [gitDir, '-user', 'root', '-print'], {
+  return interpretFindRootOwned(spawnSync('find', [gitDir, '-user', 'root', '-print'], {
     encoding: 'utf8',
     windowsHide: true,
-  });
-  if (r.error || (r.status != null && r.status > 1)) {
-    return { ok: false, error: String(r.error?.message || r.stderr || `find exit ${r.status}`).slice(0, 160) };
-  }
-  const files = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  const errs = String(r.stderr || '').split('\n').filter((l) => l.trim());
-  const other = errs.filter((l) => !/Permission denied/.test(l) && !/Failed to restore initial working directory/.test(l));
-  if (r.status === 1 && other.length) {
-    return { ok: false, error: other[0].slice(0, 160) };
-  }
-  return { ok: true, files };
+  }));
 }
 
 function checkGitOwnershipSamples() {
