@@ -72,9 +72,12 @@ describe('dao 审官与完工', () => {
     });
     await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
       const i = daoSrc.indexOf('async function cmdReviewerCreateMirasim(');
-      const seg = daoSrc.slice(i, i + 9000);
+      const seg = daoSrc.slice(i, i + 14000);
       assert.match(seg, /outcome: 'reused'/);
-      assert.match(seg, /judgeReviewerSessionReuse/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
+      assert.match(daoSrc, /decideReviewerCreateStart/);
+      assert.match(daoSrc, /runLockedReviewerCreate/);
       // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
       assert.match(seg, /reviewer: picked\.modelId/);
       assert.match(daoSrc, /readReviewerDeathNote/);
@@ -84,7 +87,8 @@ describe('dao 审官与完工', () => {
       assert.match(daoSrc, /planReviewerOnCapacityDeath/);
       assert.match(seg, /forceNew/);
       assert.match(seg, /reviewerMustReplaceDead/);
-      assert.match(seg, /judgeReviewerCreateRace/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
       assert.equal(/!forceNew && again\.ok && again\.record && again\.record\.sessionKey/.test(seg), false,
         '锁内不许只看 sessionKey 当 raced——满载死会话会被当成并发已起');
       const wd = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');

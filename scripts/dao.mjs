@@ -4254,8 +4254,9 @@ async function cmdLeg(args) {
 // 合并归一：executor-binding.mjs / docs/model-routing.json「执行体」节 与卡 B 归一（见 PR 正文）。
 import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
-  judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
-  reviewerMustReplaceDead, judgeReviewerCreateRace,
+  buildMirasimReviewerPrompts, peekReviewerSession,
+  reviewerMustReplaceDead,
+  decideReviewerCreateStart, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
@@ -4475,27 +4476,27 @@ async function cmdReviewerCreateMirasim(args) {
   const registry = mirasimRegistry();
   // 撞满载必须另起：登记里还是刚死的那位，不带 force 会被一 PR 一审官闸当成「已有」复用。
   // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
-  const forceNew = reviewerMustReplaceDead({
-    force: args.force, switched: planned.switched, deadError: failover.deadError,
-  });
-  // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
   const existing = registry.read(args.pr);
-  if (existing.ok && existing.record && existing.record.sessionKey) {
-    // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
-    // 否则服务端一抽风就给同一个 PR 起第二个审官。
-    const peek = args.dryRun ? { view: null, why: 'dry-run 不探会话' } : await peekReviewerSession(bind.runtime, existing.record.sessionKey);
-    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: forceNew });
-    if (reuse.reuse) {
-      emit({
-        ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
-        reviewer: picked.modelId, worker: worker.modelId, sessionKey: reuse.sessionKey,
-        agent: existing.record.agent || null, treePath: existing.record.treePath || null,
-        expectedOid: existing.record.expectedOid || null,
-        mergePolicy: books.mergePolicy, mergePolicySource: books.source,
-        reuse: { reuse: true, checked: reuse.checked, why: reuse.why, peekWhy: peek.why || null },
-        why: `${reuse.why}（要另起加 --force）`,
-      });
-    }
+  const existingRecord = existing.ok ? existing.record : null;
+  const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
+    ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
+    : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  const decided = decideReviewerCreateStart({
+    force: args.force, switched: planned.switched, deadError: failover.deadError,
+    record: existingRecord, view: peek.view,
+  });
+  const forceNew = decided.forceNew;
+  // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
+  if (decided.reuse.reuse) {
+    emit({
+      ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
+      reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
+      agent: existingRecord.agent || null, treePath: existingRecord.treePath || null,
+      expectedOid: existingRecord.expectedOid || null,
+      mergePolicy: books.mergePolicy, mergePolicySource: books.source,
+      reuse: { reuse: true, checked: decided.reuse.checked, why: decided.reuse.why, peekWhy: peek.why || null },
+      why: `${decided.reuse.why}（要另起加 --force）`,
+    });
   }
 
   const repo = mirasimRepoRoot(args);
@@ -4514,33 +4515,42 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr);
+    const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
-    const racePeek = (again.ok && again.record && again.record.sessionKey && !args.dryRun)
-      ? await peekReviewerSession(bind.runtime, again.record.sessionKey)
+    const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
+      ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
-    const race = judgeReviewerCreateRace({
-      forceNew, record: again.ok ? again.record : null, view: racePeek.view,
+    const locked = await runLockedReviewerCreate({
+      forceNew, record: againRecord, view: racePeek.view,
+      create: async () => {
+        const created = await mirasimReviewerCreate({
+          runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
+          prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+          syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+          pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
+          models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
+          reviewBranch: `dao-review-pr-${args.pr}`,
+        });
+        if (!created.ok) return created;
+        // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
+        return {
+          ...created,
+          registryWrite: registry.write(args.pr, {
+            pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+            // reviewer 这一栏是 #1122 换厂链能不能往前走的前提：不记下**这一位是谁**，
+            // 下一轮只能拿审官位顶位（luna）当「上一位」，于是 luna→sol 之后永远还是算出 sol，
+            // 链子卡在第一格。实咬：sol 也撞满载后，换厂仍报「按顺位该换 gpt-5.6-sol」。
+            reviewer: picked.modelId,
+            round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
+            treeHead: created.treeHead || null, ts: Date.now(),
+          }),
+        };
+      },
     });
-    if (race.raced) return { raced: true, record: again.record };
-    const created = await mirasimReviewerCreate({
-      runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
-      prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
-      syncTree: (p, oid) => gitSyncTreeTo(p, oid),
-      pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
-      models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
-      reviewBranch: `dao-review-pr-${args.pr}`,
-    });
-    if (!created.ok) return { res: created };
-    // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
-    return { res: created, w: registry.write(args.pr, {
-      pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
-      // reviewer 这一栏是 #1122 换厂链能不能往前走的前提：不记下**这一位是谁**，
-      // 下一轮只能拿审官位顶位（luna）当「上一位」，于是 luna→sol 之后永远还是算出 sol，
-      // 链子卡在第一格。实咬：sol 也撞满载后，换厂仍报「按顺位该换 gpt-5.6-sol」。
-      reviewer: picked.modelId,
-      round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
-      treeHead: created.treeHead || null, ts: Date.now(),
-    }) };
+    if (locked.raced) return { raced: true, record: againRecord };
+    const created = locked.res;
+    if (!created || !created.ok) return { res: created };
+    return { res: created, w: created.registryWrite };
   }, { lockPath: reviewerLockPath(args.pr) });
 
   // 锁没拿到 = 没查成，不是「可以起」。硬失败，别在没有互斥的情况下烧第二份额度。

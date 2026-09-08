@@ -488,7 +488,10 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
   });
 
   it('#1122 点名已是下一位时锁内不许把满载死会话当 raced 复用', async () => {
-    const { reviewerMustReplaceDead, judgeReviewerCreateRace } = await import(RM);
+    const {
+      reviewerMustReplaceDead, judgeReviewerCreateRace,
+      decideReviewerCreateStart, runLockedReviewerCreate, mirasimReviewerCreate,
+    } = await import(RM);
     const rec = { sessionKey: 'codex:dead-sol', reviewer: 'gpt-5.6-sol' };
     const deadView = {
       missing: false, phase: 'done',
@@ -510,6 +513,46 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
       forceNew: false, record: rec, view: { missing: false, phase: 'running' },
     });
     assert.equal(live.raced, true, JSON.stringify(live));
+
+    // 审官红 1 点名的生产路径：requested=kimi、dead=sol、登记里已有 sol 死会话
+    // → 必须 startSession，不许 raced/reused。
+    const decided = decideReviewerCreateStart({
+      force: false, switched: false, deadError: deadView.error, record: rec, view: deadView,
+    });
+    assert.equal(decided.forceNew, true, JSON.stringify(decided));
+    assert.equal(decided.reuse.reuse, false, JSON.stringify(decided.reuse));
+    assert.equal(decided.race.raced, false, JSON.stringify(decided.race));
+    assert.equal(decided.start, true, JSON.stringify(decided));
+
+    const rig = reworkRig({ treeHead: HEAD });
+    const locked = await runLockedReviewerCreate({
+      forceNew: decided.forceNew, record: rec, view: deadView,
+      create: () => mirasimReviewerCreate({
+        ...reworkArgs(rig),
+        gh: fakeGh({ reviews: [] }),
+        pr: '1129',
+        reviewerModel: 'kimi-k3',
+        workerModel: 'grok-4.6',
+        models: [...MODELS, { id: 'kimi-k3', provider: 'cursor' }, { id: 'grok-4.6', provider: 'grok' }],
+        mirasimPolicy: {
+          ...MIRASIM_POLICY,
+          模型前缀族: { ...MIRASIM_POLICY.模型前缀族, kimi: 'pi', grok: 'pi' },
+          agentRoutes: { ...MIRASIM_POLICY.agentRoutes, pi: { agent: 'pi', mode: 'direct' } },
+        },
+      }),
+    });
+    assert.equal(locked.raced, false, JSON.stringify(locked));
+    assert.equal(locked.outcome, undefined);
+    assert.equal(locked.res && locked.res.ok, true, JSON.stringify(locked.res));
+    assert.equal(rig.calls.start.length, 1, '满载死会话必须 startSession，不许 reused');
+    assert.equal(rig.calls.start[0].model, 'kimi-k3');
+
+    const liveLocked = await runLockedReviewerCreate({
+      forceNew: false, record: rec, view: { missing: false, phase: 'running' },
+      create: () => { throw new Error('在役会话不许再起'); },
+    });
+    assert.equal(liveLocked.raced, true, JSON.stringify(liveLocked));
+    assert.equal(liveLocked.outcome, 'reused');
   });
 
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {

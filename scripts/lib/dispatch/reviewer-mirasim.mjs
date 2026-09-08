@@ -136,6 +136,48 @@ export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
 }
 
 /**
+ * 外层复用 + 锁内 raced 用同一份 forceNew。
+ *
+ * requested 正好是下一位时 switched=false，但满载死因仍必须另起。
+ * 第二次 peek 失败（view=null）时，没 force 会按「没查成」复用死会话——
+ * 所以 forceNew 认死因，不认 requested 变没变。
+ */
+export function decideReviewerCreateStart({ force, switched, deadError, record, view } = {}) {
+  const forceNew = reviewerMustReplaceDead({ force, switched, deadError });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew });
+  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  return {
+    forceNew,
+    reuse,
+    race,
+    start: reuse.reuse !== true && race.raced !== true,
+  };
+}
+
+/**
+ * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
+ * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ */
+export async function runLockedReviewerCreate({ forceNew, record, view, create } = {}) {
+  if (typeof create !== 'function') {
+    return { ok: false, error: '要注入 create（起审官会话）' };
+  }
+  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  if (race.raced) {
+    return {
+      ok: true,
+      raced: true,
+      outcome: 'reused',
+      record,
+      sessionKey: race.sessionKey || (record && record.sessionKey) || null,
+      why: race.why,
+    };
+  }
+  const created = await create();
+  return { ok: true, raced: false, res: created };
+}
+
+/**
  * 审官任务书的 merge-policy 必须来自原派工，不许硬编码 auto。
  * policyPlan 就是 resolveReviewerMergePolicy 的返回（显式旗标 > 账本 > 卡备注 > 回退 auto）。
  * 读不出合法策略 → 当场拒渲染（宁可不派，也不给审官注入错的合并边界）。
