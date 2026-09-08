@@ -332,6 +332,30 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
     assert.equal(got.actions.length, 0, '根外进程被当幽灵——帅位会话就跑在主仓里，杀它等于自宫');
   });
 
+  // 红 1（PR #1142 三轮）：会话登记在树根，但测试/构建会把 cwd 切到树内子目录。
+  // 审官最小复现：running 在 dao-live，进程在 dao-live/packages/api → 不该 reap。
+  // 形似前缀 dao-live-old 仍要 reap，保留判别力。
+  it('活会话树内子目录进程不 reap；形似前缀另一棵树仍 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const live = `${W}/dao-live`;
+    const sibling = `${W}/dao-live-old`;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 2001, comm: 'pi', cwd: live },
+        { pid: 2002, comm: 'node', cwd: `${live}/packages/api` },
+        { pid: 2003, comm: 'codex', cwd: sibling },
+      ],
+      sessions: [{ key: 'pi:live', state: 'running', cwd: live }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 1, '活树子目录进程被当幽灵——测试/构建 cwd 会切进 packages/api');
+    assert.equal(got.actions[0].cwd, sibling);
+    assert.deepEqual(got.actions[0].pids, [2003]);
+  });
+
   it('根外根内混着：只收根内那棵', async () => {
     const { planOrphanReaps } = await LEASE;
     const got = planOrphanReaps({

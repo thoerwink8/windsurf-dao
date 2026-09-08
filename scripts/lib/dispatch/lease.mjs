@@ -185,6 +185,14 @@ function normCwd(v) {
   return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
+/** 活会话保护整棵工作树：精确相等，或树内子目录。前缀必须带斜杠，避免 dao-live 误护 dao-live-old。 */
+function cwdInLiveTree(cwd, liveTrees) {
+  for (const live of liveTrees) {
+    if (cwd === live || cwd.startsWith(`${live}/`)) return true;
+  }
+  return false;
+}
+
 /**
  * 名单里没有活会话、/proc 上还占着树 → 回收幽灵进程。
  *
@@ -241,7 +249,9 @@ export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned
     const cwd = normCwd(p.cwd);
     if (!cwd) continue;
     if (!cwd.startsWith(`${base}/`)) continue;
-    if (liveTrees.has(cwd)) continue;
+    // 红 1（PR #1142 三轮）：保护活会话所在整棵树，不只精确相等。
+    // 会话登记在树根，测试/构建会把 cwd 切到 packages/api 这类子目录；只比相等会把子进程当幽灵 SIGTERM。
+    if (cwdInLiveTree(cwd, liveTrees)) continue;
     if (!byTree.has(cwd)) byTree.set(cwd, []);
     byTree.get(cwd).push({ pid, comm: p.comm || null });
   }
