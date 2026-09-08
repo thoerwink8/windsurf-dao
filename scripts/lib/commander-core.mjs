@@ -444,10 +444,38 @@ function collectCandidates(situation) {
       // #876 ②：带「待消歧」标的单一律不派，哪怕故意同时挂着「已消歧」。静默跳过——
       // 该说的话由盘点在「时机到了」那天说一次（commander-inventory 的待消歧一项），这里天天喊没意义。
       if (hasPendingLabel(issue?.labels)) continue;
-      // #876 ①：框架活（type/体系）不进自动派单队列，改回流一条「走快马」。
-      // 放在缺标签判据之前：框架单本就不该被要求补 model|reviewer，报帅催标签纯属噪音。
+      // #876 ①：框架活走无人值守快马，但必须保留人工合门。
+      // 以前这里只回流给主会话；用户离开时没有执行者，框架活就永远不动。
+      // 框架单仍要求明确 model/reviewer，不能为了自动化而猜模型。
       if (role === FRAMEWORK_ROLE) {
-        out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
+        if (!model || !reviewer) {
+          out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，但缺 model/reviewer，不能无人值守派工；补齐后再自动执行`, 'decide', { issue: n }), N.dispatch));
+          continue;
+        }
+        const frameworkGate = assessDispatchModel(model, { policy, enabledIds, redIds });
+        if (!frameworkGate.ok) {
+          out.push(withNeeds(esc(`#${n} 框架活不能自动派：${frameworkGate.why}`, {
+            reason: frameworkGate.reason, issue: n, model, title: issue?.title || '',
+          }), N.dispatch));
+          continue;
+        }
+        const live = hasLiveExecutor({
+          sessions: sessionListForLiveness(situation),
+          issue: n,
+        });
+        if (live.live) continue;
+        if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
+          reportAdmission(N.dispatch);
+          continue;
+        }
+        dispatchedThisRound += 1;
+        out.push(withNeeds({
+          kind: 'dispatch', issue: n, model, reviewer, role,
+          title: issue?.title || '', mergePolicy: 'manual',
+          mergeReason: 'type/体系 框架活：自动执行，合并必须人工拍板',
+          why: `#${n} 框架活已标齐，走无人值守快马`,
+        }, N.dispatch));
+        out.push(withNeeds(hub(`已自动派单 #${n}：框架活进入无人值守执行，合并仍等人工拍板`, 'dispatched', { issue: n }), N.dispatch));
         continue;
       }
       // 缺标签三档（#1003）。硬边界：不许改回「缺任一就报」。

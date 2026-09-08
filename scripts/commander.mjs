@@ -630,6 +630,8 @@ function execAction(action, { state, dryRun, log }) {
         '--issue', String(action.issue),
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
+        ...(action.mergePolicy ? ['--merge-policy', action.mergePolicy] : []),
+        ...(action.mergeReason ? ['--merge-reason', action.mergeReason] : []),
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
         '--spec', dispatchSpec(action.issue), '--confirm',
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
