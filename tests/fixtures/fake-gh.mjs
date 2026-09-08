@@ -12,7 +12,18 @@
 // 只实现消歧门用到的调用面（issue view <N> --json labels）；其它 gh 调用一律报错退出
 // （fail-loud：测试里出现未预期的调用 = 直接红，不许静默返回假数据）。
 
+import { appendFileSync } from 'node:fs';
+
 const args = process.argv.slice(2);
+// #1116 判别力：选型路径不许读 issue label。测试设 DAO_GH_FAKE_LOG 记下 argv；
+// DAO_GH_FAKE_REFUSE_ISSUE_VIEW=1 时 issue view 当场红——回退去读 issue 的代码过不了。
+if (process.env.DAO_GH_FAKE_LOG) {
+  try { appendFileSync(process.env.DAO_GH_FAKE_LOG, args.join(' ') + '\n'); } catch { /* 记不上不挡假 gh 本身 */ }
+}
+if (process.env.DAO_GH_FAKE_REFUSE_ISSUE_VIEW === '1' && args[0] === 'issue' && args[1] === 'view') {
+  process.stderr.write('fake-gh: 选型路径不许 issue view（#1116）');
+  process.exit(1);
+}
 // #564：label 自动打 / pr-sync-labels 的 CLI 测试也要走假 gh（CI 无 GH_TOKEN）。
 // #586：reviewer/* 自读选型 + worker-done 骨架也走假 gh。
 // 固定判定：

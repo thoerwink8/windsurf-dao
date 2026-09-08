@@ -9,7 +9,7 @@
 ## 验收标准
 
 - [x] 派工 → 工人交卷 → 起审官全程，`reviewer-create` 一次 issue label 都不读（夹具断言 gh 调用序列里没有 `issue view`）
-  - 证据：`tests/pr-label-truth.test.js`「按 head 分支打 model/* reviewer/*，gh 序列没有 issue view」；`tests/worker-model-host-prefix.test.js`「gh 调用序列没有 issue view」
+  - 证据：`tests/pr-label-truth.test.js`「CLI reviewer-create / worker-done --pr 42：成功且 gh 序列没有 issue view」（假 gh 拒 issue view + 写调用日志）；库函数侧同套「按 head 分支打标，gh 序列没有 issue view」
 - [x] PR 上没有 `model/*` 或 `reviewer/*` ⇒ 拒绝起审官，话面明确说「需人工打标」，不回退读 issue、不猜家族
   - 证据：`resolveWorkerFromPr` / `resolveReviewerFromPr` / `planWorkerDone` 手开 PR 没标就拒
 - [x] 一张 PR 署两张单不再产生任何歧义（PR 上只有一组标签）

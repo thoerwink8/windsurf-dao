@@ -7,7 +7,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const WD = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'worker-done.mjs').replace(/\\/g, '/'));
 const CARD = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'card.mjs').replace(/\\/g, '/'));
@@ -189,5 +191,58 @@ describe('选型路径零残留', () => {
     const fn = src.slice(src.indexOf('async function cmdDispatchMirasim'), src.indexOf('async function cmdDispatch(args)'));
     assert.match(fn, /reviewer: args\.reviewer/);
     assert.match(fn, /branch,/);
+  });
+});
+
+function lastJson(r) {
+  try { return JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { return { raw: r.stdout, err: r.stderr }; }
+}
+
+function cliWithGhLog(verb, pr) {
+  const log = path.join(os.tmpdir(), `dao-1116-gh-${verb}-${pr}-${process.pid}-${Date.now()}.log`);
+  try { fs.unlinkSync(log); } catch { /* 没有就没有 */ }
+  const r = spawnSync(process.execPath, [
+    path.join(ROOT, 'scripts', 'dao.mjs'),
+    verb, '--pr', String(pr), '--executor', 'mirasim', '--dry-run',
+  ], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      DAO_GH_FAKE: path.join(ROOT, 'tests', 'fixtures', 'fake-gh.mjs'),
+      DAO_GH_FAKE_LOG: log,
+      DAO_GH_FAKE_REFUSE_ISSUE_VIEW: '1',
+    },
+  });
+  const logText = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  try { fs.unlinkSync(log); } catch { /* 测完收 */ }
+  return { r, logText, payload: lastJson(r) };
+}
+
+describe('CLI 选型入口一次 issue label 都不读', () => {
+  it('reviewer-create --pr 42：成功且 gh 序列没有 issue view', () => {
+    const { r, logText, payload } = cliWithGhLog('reviewer-create', 42);
+    assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr, logText }));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.reviewer, 'gpt-5.6-luna');
+    assert.match(logText, /pr view/);
+    assert.doesNotMatch(logText, /issue view/);
+  });
+
+  it('worker-done --pr 42：成功且 gh 序列没有 issue view', () => {
+    const { r, logText, payload } = cliWithGhLog('worker-done', 42);
+    assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr, logText }));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.reviewer, 'gpt-5.6-luna');
+    assert.match(logText, /pr view/);
+    assert.doesNotMatch(logText, /issue view/);
+  });
+
+  it('reviewer-create 手开无标 PR → 拒，话面需人工打标', () => {
+    const { r, logText, payload } = cliWithGhLog('reviewer-create', 41);
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.match(String(payload.error || r.stderr || ''), /需人工打标/);
+    assert.doesNotMatch(logText, /issue view/);
   });
 });
