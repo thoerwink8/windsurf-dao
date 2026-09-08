@@ -1111,26 +1111,32 @@ export function reapMirasimSessionProcesses(workdir, {
   scan = scanSessionProcs,
   kill = killPidTerm,
   forceKill = killPidHard,
+  maxPasses = 4,
 } = {}) {
   const want = normFsPath(workdir);
   if (!want) return { ok: false, error: '没有 workdir，无法核实会话进程' };
-  const observed = scan();
-  if (!observed || observed.ok !== true) {
-    return { ok: false, unscanned: true, error: observed?.error || '会话进程没查成' };
+  const allReaped = [];
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const observed = scan();
+    if (!observed || observed.ok !== true) {
+      return { ok: false, unscanned: true, error: observed?.error || '会话进程没查成', reaped: allReaped };
+    }
+    const holders = (observed.procs || []).filter((p) => normFsPath(p?.cwd) === want);
+    if (!holders.length) return { ok: true, reaped: allReaped, remaining: 0 };
+    const reaped = holders.map((p) => {
+      const gentle = kill(p.pid);
+      if (gentle?.ok !== true) return gentle;
+      // stop 已经被服务端接受，仍存活的会话进程不能继续占住租约。
+      // 对精确 worktree 命中的 mirasim 后代强制收尾，避免 app-server 吞掉 TERM。
+      return forceKill(p.pid);
+    });
+    allReaped.push(...reaped);
+    const failed = reaped.filter((r) => r?.ok !== true);
+    if (failed.length) {
+      return { ok: false, error: `有 ${failed.length} 个会话进程没清掉`, reaped: allReaped };
+    }
   }
-  const holders = (observed.procs || []).filter((p) => normFsPath(p?.cwd) === want);
-  const reaped = holders.map((p) => {
-    const gentle = kill(p.pid);
-    if (gentle?.ok !== true) return gentle;
-    // stop 已经被服务端接受，仍存活的会话进程不能继续占住租约。
-    // 对精确 worktree 命中的 mirasim 后代强制收尾，避免 app-server 吞掉 TERM。
-    return forceKill(p.pid);
-  });
-  const failed = reaped.filter((r) => r?.ok !== true);
-  if (failed.length) {
-    return { ok: false, error: `有 ${failed.length} 个会话进程没清掉`, reaped };
-  }
-  return { ok: true, reaped, remaining: 0 };
+  return { ok: false, error: `会话进程反复重生，${maxPasses} 次核实后仍未清空`, reaped: allReaped, remaining: true };
 }
 
 async function stopSessionAndReap(runtime, sessionKey, { workdir = null } = {}) {

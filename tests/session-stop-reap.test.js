@@ -7,11 +7,12 @@ describe('session-stop 后核实并回收 mirasim 子进程', () => {
   it('只回收同一 worktree 的 mirasim 后代，不碰其他树', async () => {
     const { reapMirasimSessionProcesses } = await DAO;
     const killed = [];
+    let scans = 0;
     const r = reapMirasimSessionProcesses('/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1157', {
-      scan: () => ({ ok: true, procs: [
+      scan: () => scans++ === 0 ? ({ ok: true, procs: [
         { pid: 11, cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1157' },
         { pid: 12, cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1094' },
-      ] }),
+      ] }) : ({ ok: true, procs: [] }),
       kill: (pid) => { killed.push(`term:${pid}`); return { ok: true, pid }; },
       forceKill: (pid) => { killed.push(`kill:${pid}`); return { ok: true, pid }; },
     });
