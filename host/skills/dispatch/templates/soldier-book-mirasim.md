@@ -65,7 +65,7 @@
    那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
-   首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
+   首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。交卷成功后本会话会被停掉（树留着）。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，先照报错修，修不好升级给帅；退出码 0 才算交卷成功。
 4. 交卷后**等审**：审官红项会经 GitHub（`--request-changes` review）打回。你自己读 PR 的 review 状态判有没有被打回——
    红了逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。
@@ -107,4 +107,4 @@
 - 审官是谁、判定怎么落：审官任务书（mirasim 版 `host/skills/dispatch/templates/reviewer-book-mirasim.md`）为准；
   审查质量标准见 `host/skills/dispatch/review-standard.md`，本框架不复制。
 - 派工前读 CLI 教学那套是 orca 终端自起法用的；mirasim 会话由运行时起好，你直接干活，不自起 CLI。
-- `worker-done` 失败（报错/超时/建审官失败）必须**报出来并重试**，不许当发成功（#532）。
+- `worker-done` 失败（报错/超时/入队失败）必须**报出来并重试**，不许当发成功（#532）。

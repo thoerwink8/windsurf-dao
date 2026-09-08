@@ -2514,7 +2514,7 @@ function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
 }
 
 function writeReviewPendingOnFail({
-  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh,
+  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh, source,
 } = {}) {
   try {
     let head = { name: null, oid: null };
@@ -2529,7 +2529,7 @@ function writeReviewPendingOnFail({
     }
     const built = buildReviewPendingTicket({
       pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
-      source: REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+      source: source || REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
     });
     if (!built.ok) return built;
     return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });
@@ -4643,11 +4643,18 @@ async function cmdWorkerDoneMirasim(args) {
     const wrote = writeReviewPending({ dir, ticket: built.ticket });
     // 写票失败 fail-closed：报 ok 而票没落盘 = 这张 PR 从此没人管，比起审官失败更难发现。
     if (!wrote.ok) fail(wrote.error, { ...plan, postedIssue, postedPr });
+    let stopped = { ok: true, skipped: true };
+    try {
+      stopped = await stopSessionsAtCwd(bind.runtime, process.cwd());
+    } catch (e) {
+      fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, { ...plan, postedIssue, postedPr });
+    }
     emit({
       ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
       postedIssue, postedPr, action: 'queued-for-review',
       reviewPending: { path: wrote.path, source: built.ticket.source },
+      stopped,
       why: '首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官',
     });
     return;
@@ -4667,12 +4674,19 @@ async function cmdWorkerDoneMirasim(args) {
     reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force,
   });
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
+  let stopped = { ok: true, skipped: true };
+  try {
+    stopped = await stopSessionsAtCwd(bind.runtime, process.cwd());
+  } catch (e) {
+    fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, { ...plan, postedIssue, postedPr });
+  }
   emit({
     ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
     mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
     postedIssue, postedPr, action: res.action, session: res.session || null, interact: res.interact || null,
     sessionKey: res.sessionKey || res.session?.sessionKey || null, treeSync: res.treeSync || null,
     reuse: res.reuse ? { reuse: res.reuse.reuse, checked: res.reuse.checked, why: res.reuse.why } : null,
+    stopped,
   });
 }
 
@@ -4762,6 +4776,44 @@ async function cmdSessionRead(args) {
     why: view.why ?? null,
     readable: view.missing !== true,
   });
+}
+
+/** 停掉 cwd 落在这棵树上的会话。交卷后树留着、进程必须走。没清单或没有匹配 = 扫过 0 条，不是失败。 */
+async function stopSessionsAtCwd(runtime, cwd) {
+  const want = String(cwd || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!want) return { ok: false, unscanned: true, error: '停会话没给 cwd', stopped: [] };
+  if (!runtime || typeof runtime.listSessions !== 'function') {
+    return { ok: false, unscanned: true, error: 'runtime 没有 listSessions', stopped: [] };
+  }
+  const listed = await runtime.listSessions();
+  if (!listed || listed.ok === false) {
+    return {
+      ok: false, unscanned: true,
+      error: (listed && listed.error) || '会话清单没查成',
+      stopped: [],
+    };
+  }
+  const sessions = Array.isArray(listed.sessions) ? listed.sessions : [];
+  const hits = sessions.filter((s) => {
+    const cwd = String((s && (s.cwd || s.workdir || s.worktree)) || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    return cwd && (cwd === want || cwd.startsWith(`${want}/`));
+  });
+  const stopped = [];
+  for (const s of hits) {
+    const key = s.sessionKey || s.key || s.id;
+    if (!key) continue;
+    try {
+      const r = await runtime.stopSession(key);
+      stopped.push({ sessionKey: key, ok: !!(r && r.ok), why: r && r.why });
+    } catch (e) {
+      stopped.push({ sessionKey: key, ok: false, why: String(e && e.message ? e.message : e) });
+    }
+  }
+  const failed = stopped.filter((x) => x.ok !== true);
+  if (failed.length) {
+    return { ok: false, error: `有 ${failed.length} 个会话没停成`, stopped, scanned: hits.length };
+  }
+  return { ok: true, stopped, scanned: hits.length };
 }
 
 async function cmdSessionStop(args) {

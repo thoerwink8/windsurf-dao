@@ -33,10 +33,13 @@ export const REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW = 'commander-rereview';
 // 与 worker-done-fail 分开记，是因为两者的含义完全不同：那个是「起失败了，兜底」，
 // 这个是「按设计交到这里，等调度」。混成一个来源，队列里就分不出「出事了」和「在排队」。
 export const REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF = 'worker-done-handoff';
+// #1134 短命会话：master 已在写 worker-done。读侧继续认，和新主路 handoff 一样要有工人树。
+export const REVIEW_PENDING_SOURCE_WORKER_DONE = 'worker-done';
 export const REVIEW_PENDING_SOURCES = new Set([
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
 ]);
 
 /** 票上的来源只认写票时记下的那几个值；缺/空/不认识一律 null（来源没查成，不猜）。 */
@@ -69,13 +72,15 @@ export function buildReviewPendingTicket({
     return { ok: false, error: '复审待办要 reviewer' };
   }
   const src = typeof source === 'string' ? source.trim() : '';
-  if (!src) return { ok: false, error: '复审待办要 source（worker-done-fail | commander-rereview | worker-done-handoff）' };
+  if (!src) return { ok: false, error: '复审待办要 source（worker-done-fail | commander-rereview | worker-done-handoff | worker-done）' };
   if (!REVIEW_PENDING_SOURCES.has(src)) {
     return { ok: false, error: `复审待办来源不认识：${source}` };
   }
   // 工人失败票必须有树；指挥官 rereview 按设计可以没有（快马路，#927）。
-  // 首审入队票（#1125）也要有树：排障时要知道活干在哪；缺树 = 写票失败，不许入队。
-  if ((src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL || src === REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF)
+  // 首审入队票（#1125 handoff / #1134 worker-done）也要有树：排障时要知道活干在哪；缺树 = 写票失败，不许入队。
+  if ((src === REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL
+      || src === REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF
+      || src === REVIEW_PENDING_SOURCE_WORKER_DONE)
       && (!workerWorktree || !String(workerWorktree).trim())) {
     return { ok: false, error: '复审待办要工人树' };
   }

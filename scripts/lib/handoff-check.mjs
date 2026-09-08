@@ -302,7 +302,8 @@ export function judgeHandoffBaseline(facts = {}) {
 // 静默去掉会让「查了但这个时点不判」和「压根没查」分不开，那正是本仓反复禁的事。
 export const GATES = Object.freeze({
   handoff: { advisory: ['①'], label: '交卷' },
-  merge: { advisory: [], label: '合并' },
+  // squash 打到此刻的 master，落后 ≠ 冲突。① 合并档也只报不判（ephemeral-lifecycle）。
+  merge: { advisory: ['①'], label: '合并' },
 });
 
 export const DEFAULT_GATE = 'handoff';

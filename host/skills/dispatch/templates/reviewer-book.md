@@ -1,5 +1,7 @@
 # 审官任务书
 
+> **已退役。** 执行体是 mirasim。审官读 `host/skills/dispatch/templates/reviewer-book-mirasim.md`。本页只作判例档案，不要再注入。合入归指挥官 squash，不要从本页抄 `pr merge`。
+
 你是本单**审官**。本文件是**闭环框架**——审查质量标准在 `host/skills/dispatch/review-standard.md`
 （判绿前必核清单，逐条打勾），框架只定义闭环衔接：**士兵完工→判红判绿→收尾**。
 
@@ -72,10 +74,8 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 - **绿**：按注入参数的 merge-policy 收口（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上），两条路分开：
 
   - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。它只出现在交卷闸输出的「合并前还要过的」一节，归合并闸（指挥官 `pr merge` 之前跑 `--gate merge`）。审查期间 master 必然会动，拿它判红产出的是一次 `git merge` 加一整轮复审。
-  - `merge-policy: auto`（默认）：**你自己合并**，不再问帅。审官 App 只有 `contents:read`，合不了。
-    合并前先过合并闸：`node scripts/handoff-check.mjs --gate merge`（红 / 没查成都不合，先把 master 拿进来再合）。
-    闸过了再走帅身份：`node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`
-    （marshal 直接合并（checks 已绿才走到这一步，不需要排队）；当时合并命令以审读规矩为准）。合并完进第 3 步。
+  - `merge-policy: auto`（默认）：**你不许自己合并**。`--approve` 落到 GitHub 即收尾，指挥官当轮 squash。
+    不要跑 `handoff-check --gate merge`，不要 `pr merge`。落后 ≠ 冲突，不要为对齐 master 再审一轮。
   - `merge-policy: manual`（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
     **转 draft**（机器可读的「禁止合并」状态，draft PR 在 GitHub 上无法正常合并，这是 #549 审官
     第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，

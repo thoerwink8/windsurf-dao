@@ -718,6 +718,13 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     // #1104 毒票隔离：pickReviewer 同名去重；单张失败下一轮 retry-drain 仍带 --pr。
     assert.ok(!/'--pr'/.test(body), 'attach-reviewer 不带 --pr，否则容量闸被冲掉');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
+    const drainI = src.indexOf('function drainReviewPending');
+    assert.ok(drainI > -1, '找不到 drainReviewPending');
+    const drain = src.slice(drainI, drainI + 1200);
+    assert.match(drain, /drainLedgerKey\(/, 'rereview/retry 写侧必须走 drainLedgerKey');
+    assert.match(drain, /ticketHeadOid\(/, 'rereview/retry 的 head 必须过同一门面');
+    assert.match(drain, /'--pr'/, 'rereview/retry 的 drain 必须带本张 PR，毒票不许拖死队列里别的 PR');
+    assert.ok(!/`pr:\$\{action\.pr\}`/.test(drain), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {

@@ -255,6 +255,21 @@ describe('mirasimWorkerDone 编排', () => {
     assert.equal(rt.calls.start.length, 1);
   });
 
+  it('enqueueOnly：不起审官会话，只回报 queued', async () => {
+    const { mirasimWorkerDone } = await import(RM);
+    const rt = fakeRuntime();
+    const reg = memRegistry();
+    const res = await mirasimWorkerDone({
+      runtime: rt, gh: fakeGh({ reviews: [] }), readTreeHead: async () => rt._head, registry: reg,
+      pr: '883', repo: '/repo', prompt: '审', reworkPrompt: '复审',
+      reviewerModel: 'gpt-5.6-luna', workerModel: 'claude-opus',
+      models: MODELS, mirasimPolicy: MIRASIM_POLICY, round: 'first', enqueueOnly: true,
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'queued');
+    assert.equal(rt.calls.start.length, 0);
+  });
+
   it('返工轮 + 会话有等答问题 → interact（不新起会话）', async () => {
     const { mirasimWorkerDone } = await import(RM);
     const rt = fakeRuntime();
