@@ -323,6 +323,31 @@ describe('gh-as', () => {
     await t.test('CLI 缺 gh 参数 exit 2', () => {
       assert.ok(noArgs.status === 2, 'CLI 缺 gh 参数 exit 2  →  ' + String(noArgs.status));
     });
+
+    const G = await LIB_LOAD;
+    await t.test('isGhIssueWriteArgs 认写不认读', () => {
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'create', '--title', 't']), true);
+      assert.equal(G.isGhIssueWriteArgs(['--', 'issue', 'comment', '1']), true);
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'view', '1']), false);
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'list']), false);
+      assert.equal(G.isGhIssueWriteArgs(['pr', 'create']), false);
+      assert.equal(G.isGhIssueWriteArgs(null), false);
+    });
+    const issueWrite = spawnSync(process.execPath, [CLI, 'worker', '--', 'issue', 'create', '--title', 't'], {
+      encoding: 'utf8', env: { ...process.env, DAO_APPS_DIR: empty },
+    });
+    await t.test('#792 CLI 写 Issue 先于凭据检查就拒', () => {
+      assert.equal(issueWrite.status, 2);
+      assert.match(issueWrite.stderr || '', /issue-gateway/);
+      assert.equal(/这台机器没装/.test(issueWrite.stderr || ''), false);
+    });
+    const marshalWrite = spawnSync(process.execPath, [CLI, 'marshal', 'issue', 'comment', '1', '--body', 'x'], {
+      encoding: 'utf8', env: { ...process.env, DAO_APPS_DIR: empty },
+    });
+    await t.test('#792 marshal 身份也不能经 CLI 写 Issue', () => {
+      assert.equal(marshalWrite.status, 2);
+      assert.match(marshalWrite.stderr || '', /issue-gateway/);
+    });
   });
 
   it('过期「同账号不能 approve」注释不得再当现行约束', async (t) => {

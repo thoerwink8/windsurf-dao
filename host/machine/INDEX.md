@@ -45,6 +45,7 @@
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
 | D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
+| D | ~/.dao/issue-gateway | #792 Issue 写入网关的幂等账与审计（`idempotency/` + `audit/audit.ndjson`）。运行时自建，不进 git，换机不拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
@@ -52,12 +53,16 @@
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
+| D | ~/.dao/control-plane.json | 控制面闸探测落点（#948）。`scripts/lib/control-plane-gate.mjs` 只读 `{reachable:true\|false}`；文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。运行态，换机不拷 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
 | A | ~/.dao/broadcast-digest.json | 飞书日报队列（#1029/#1052）。心跳/发布/熔断先入队，换日合成一张 Card 2.0 日报卡发到总控群。运行时自建，不进 git，换机重生成 |
 | A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check (23) 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
-| A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
+| A | ~/.dao/provider-health.json | 网关健康表（#842 消费 / #967 写入）。`scripts/gw-remote-probe.mjs` 周期探针写、派工只读判可用性；契约见 dispatch skill。不进 git |
+| D | ~/bin/gw-remote-probe.mjs | #967 收进仓前的本机落点（同目录依赖 `~/bin/probe-health.mjs`）。仓内真相源 `scripts/gw-remote-probe.mjs`；systemd ExecStart 走仓内脚本。禁拷、不进 git |
+| D | ~/bin/probe-health.mjs | #967 收进仓前与探针同目录的健康表纯函数。仓内真相源 `scripts/lib/probe-health.mjs`。禁拷、不进 git |
+| D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | D | ~/.dao/progress-watch.json | 盘面推进量账本（#1004）。指挥官 `cmdAct` 每轮调 `progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |

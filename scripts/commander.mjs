@@ -653,7 +653,8 @@ function execAction(action, { state, dryRun, log }) {
         ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
         { dryRun, say, why: action.why },
       );
-    }    case 'merge':
+    }
+    case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
@@ -776,7 +777,7 @@ export function judgeMergeFreshness(pr, { run = runCmd } = {}) {
 }
 
 function execAddLabel(action, { dryRun, say }) {
-  const planned = planAddLabelCmd(action, { models: action.models });
+  const planned = planAddLabelCmd(action, { models: action.models, repo: REPO });
   if (!planned.ok) {
     say(`  add-label 校验拒：${planned.error}`);
     return { ok: false, error: planned.error, code: planned.code };
@@ -922,8 +923,15 @@ function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
   writeFileSync(bodyFile, planned.body, 'utf8');
   const r = runCmd(planned.argv, 60000);
   if (!r.ok) { say(`  转单失败：${r.error}`); return r; }
-  const m = String(r.out).match(/\/issues\/(\d+)/);
-  const number = m ? Number(m[1]) : null;
+  let number = null;
+  try {
+    const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
+    if (j && j.number) number = Number(j.number);
+  } catch { /* 回执不是 JSON 时退回 URL */ }
+  if (number == null) {
+    const m = String(r.out).match(/\/issues\/(\d+)/);
+    number = m ? Number(m[1]) : null;
+  }
   state.openIssueLedger = state.openIssueLedger || {};
   state.openIssueLedger[planned.key] = { at: nowIso(), number };
   say(`  转单开了 #${number || '?'}`);
@@ -1837,8 +1845,9 @@ function escalate(action, { state, dryRun, say,
     const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
     ensureDir(STATE_DIR);
     writeFileSync(bodyFile, body, 'utf8');
-    const r = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(booked.issue),
-      '--repo', REPO, '--body-file', bodyFile], 60000);
+    const r = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
+      '--repo', REPO, '--issue', String(booked.issue), '--body-file', bodyFile,
+      '--host', 'commander', '--idempotency-key', `commander-escalate:append:${booked.issue}:${verdict.target}`], 60000);
     if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
     state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
@@ -1888,8 +1897,9 @@ function escalate(action, { state, dryRun, say,
         ensureDir(STATE_DIR);
         const bodyFile = join(STATE_DIR, `escalate-append-${Date.now()}.md`);
         writeFileSync(bodyFile, body, 'utf8');
-        const put = cmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'comment', String(existing),
-          '--repo', REPO, '--body-file', bodyFile], 60000);
+        const put = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
+          '--repo', REPO, '--issue', String(existing), '--body-file', bodyFile,
+          '--host', 'commander', '--idempotency-key', `commander-escalate:append:${existing}:${t}`], 60000);
         if (!put.ok) {
           say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
           return { ok: false, error: put.error };
@@ -1935,8 +1945,9 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     ensureDir(STATE_DIR);
     const bodyFile = join(STATE_DIR, `escalate-close-${Date.now()}.md`);
     writeFileSync(bodyFile, body, 'utf8');
-    const closed = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'close', String(item.issue),
-      '--repo', REPO, '--comment', body, '--reason', 'completed'], 60000);
+    const closed = runCmd(['node', 'scripts/issue-gateway.mjs', 'close',
+      '--repo', REPO, '--issue', String(item.issue), '--comment', body, '--reason', 'completed',
+      '--host', 'commander', '--idempotency-key', `commander-escalate:close:${item.issue}:${item.reason}`], 60000);
     if (!closed.ok) { say(`  收敛关单失败（#${item.issue}，账本不动，下轮再试）：${closed.error}`); continue; }
     delete state.escalateLedger[item.key];
     say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
@@ -1990,11 +2001,23 @@ function openEscalationIssue({ title, body }) {
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `escalate-${Date.now()}.md`);
   writeFileSync(bodyFile, body, 'utf8');
-  const r = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'issue', 'create',
-    '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板'], 60000);
+  const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
+    || String(body || '').match(/查重标记[^\n]*/);
+  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
+    '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
+    '--host', 'commander', '--idempotency-key', key], 60000);
   if (!r.ok) return { ok: false, error: r.error };
-  const m = String(r.out).match(/\/issues\/(\d+)/);
-  return { ok: true, number: m ? Number(m[1]) : null };
+  let number = null;
+  try {
+    const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
+    if (j && j.number) number = Number(j.number);
+  } catch { /* 回执不是 JSON 时退回 URL */ }
+  if (number == null) {
+    const m = String(r.out).match(/\/issues\/(\d+)/);
+    number = m ? Number(m[1]) : null;
+  }
+  return { ok: true, number };
 }
 
 // ── 子命令 ──
