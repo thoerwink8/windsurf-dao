@@ -44,8 +44,9 @@ import {
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
-  SITUATION_SECTIONS,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs,
 } from './lib/commander-core.mjs';
+import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
@@ -157,11 +158,11 @@ function scanAttributedIssues(issues, prs) {
   }
   const out = [];
   for (const n of want) {
-    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
     if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
     try {
       const j = JSON.parse(r.out || '{}');
-      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });
     } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
   }
   return out;
@@ -533,6 +534,7 @@ function buildSituation({ state } = {}) {
     healthRedModels = [];
     defaultWorkerModel = null;
   }
+  const askPolicy = loadPolicy({ root: ROOT });
   const breakerIngest = ingestBreakerSignals();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
@@ -555,6 +557,7 @@ function buildSituation({ state } = {}) {
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
+    askPolicy,
   };
 }
 
@@ -634,6 +637,7 @@ function execAction(action, { state, dryRun, log }) {
         ...(action.mergeReason ? ['--merge-reason', action.mergeReason] : []),
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
         '--spec', dispatchSpec(action.issue), '--confirm',
+        ...dispatchMergePolicyArgs(action),
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
         ...(action.reconcile ? ['--allow-dup'] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
