@@ -8,7 +8,7 @@
 #     这个仓一小时合不了几张，实测量级是十几次 API 调用——marshal 那把 token 的额度完全无感。
 #
 # 挂在 :23 分：服务器上 dao-sync 在 :01/:06/:11…、dao-board-gc 在 :07、
-# dao-agent-stall 在 :02/:17/:32/:47、commander-act 在 :16/:36/:56、gw-remote-probe 在 :18/:48。
+# dao-progress-watch 在 :13/20、commander-act 在 :16/:36/:56、gw-remote-probe 在 :09/:39。
 # :23 谁也不撞。RandomizedDelaySec 只有 60 秒，抖过去还是空的。
 #
 # OnCalendar 是必需的，不是冗余：2026-09-05 实咬——只有 OnBootSec/OnUnitActiveSec 这种单调时钟的

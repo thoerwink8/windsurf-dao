@@ -11,6 +11,8 @@ import {
   applyGitIdentity,
   formatWhoami,
   ghAs,
+  isGhIssueWriteArgs,
+  ISSUE_WRITE_VIA_GATEWAY,
   loadRoleCreds,
   unknownRoleError,
   whoami,
@@ -53,6 +55,12 @@ if (!isMain) {
 
   const args = rest[0] === '--' ? rest.slice(1) : rest;
   if (!args.length) usage('缺 gh 参数（形如：node scripts/gh-as.mjs marshal -- pr comment 571 --body "…"）');
+
+  // #792：Issue 写必须走网关。先于凭据检查，免得调用者拿 worker/reviewer token 写 Issue。
+  if (isGhIssueWriteArgs(args)) {
+    console.error(ISSUE_WRITE_VIA_GATEWAY);
+    process.exit(2);
+  }
 
   // 先证凭据在，缺了直接 fail-loud，别等到 spawn 才报含糊的 401。
   const creds = loadRoleCreds(role);

@@ -203,8 +203,12 @@ export function planStampIssueLabels({ existingNames, model, role, reviewer } = 
   return { ok: true, names, add, skipped, existingModel };
 }
 
-/** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
-export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
+/** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。
+ *  写走 issue-gateway（writeIssue）；runGh 只用于读 labels / 建仓库级 label。 */
+export function stampIssueLabels({
+  issue, model, role, reviewer, runGh, writeIssue,
+  repo = 'thoerwink8/windsurf-dao', host = 'dispatch',
+} = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) {
     return { ok: false, skipped: true, issue: n, error: '没给合法 issue 号，label 不打' };
@@ -233,10 +237,20 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   }
   const ensured = ensureRepoLabels({ names: planned.add, runGh });
   if (!ensured.ok) return { ok: false, issue: n, unscanned: ensured.unscanned === true, error: ensured.error };
-  const add = [];
-  for (const name of planned.add) add.push('--add-label', name);
-  const r = runGh(['issue', 'edit', n, ...add]);
-  if (!r.ok) return { ok: false, issue: n, error: `issue #${n} 打 label 失败：${r.error}` };
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, issue: n, unscanned: true, error: 'stampIssueLabels 没拿到 issue-gateway 写入器——label 不打' };
+  }
+  const r = writeIssue({
+    action: 'issue_edit_labels',
+    repo,
+    issue: n,
+    add: planned.add,
+    host,
+    idempotency_key: `dispatch:stamp-labels:${n}:${planned.add.join(',')}`,
+  });
+  if (!r || !r.ok) {
+    return { ok: false, issue: n, error: `issue-gateway 打 label 失败：${r && r.error ? r.error : '没查成'}` };
+  }
   return {
     ok: true, issue: n, names: planned.names, add: planned.add, skipped: planned.skipped,
     created: ensured.created, labels: planned.add,

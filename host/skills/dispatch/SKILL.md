@@ -34,17 +34,17 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 ## 帅操作 issue 的身份约定（#627）
 
-PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）同样走 marshal，不用裸 `gh issue`。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
+PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）走唯一入口 `issue-gateway`（#792），身份由网关固定 `dao-marshal[bot]`，不用裸 `gh issue`，也不许自选 `--identity` / token。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
 
 ```bash
 node scripts/gh-as.mjs marshal --whoami
-node scripts/gh-as.mjs marshal -- issue create --title "..." --body-file <文件>
-node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>
-node scripts/gh-as.mjs marshal -- issue close <N> --comment "..."
-node scripts/gh-as.mjs marshal -- issue edit <N> --add-label "已消歧"
+node scripts/issue-gateway.mjs create --repo thoerwink8/windsurf-dao --title "..." --body-file <文件> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs comment --repo thoerwink8/windsurf-dao --issue <N> --body-file <文件> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs close --repo thoerwink8/windsurf-dao --issue <N> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs edit-labels --repo thoerwink8/windsurf-dao --issue <N> --add "已消歧" --host claude --idempotency-key <键>
 ```
 
-Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。
+Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。网关内部仍走 `gh-as.mjs marshal`，调用者不许自己选身份。
 
 只读（`issue view` / `issue list`）可以继续裸 `gh`——不落作者。仓内脚本里剩下的裸调用见 #627 落点 PR 清单，全量替换另开（#573「先收敛再铺开」）。
 
