@@ -29,4 +29,30 @@ describe('session-stop 后核实并回收 mirasim 子进程', () => {
     assert.equal(r.unscanned, true);
     assert.match(r.error, /权限不足/);
   });
+
+  it('会话清单查成但找不到 session → 不停会话、不报成功', async () => {
+    const { stopSessionAndReap } = await DAO;
+    let stops = 0;
+    const r = await stopSessionAndReap({
+      listSessions: async () => ({ ok: true, sessions: [] }),
+      stopSession: async () => { stops += 1; return { ok: true }; },
+    }, 'codex:missing');
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.why, /不在会话清单/);
+    assert.equal(stops, 0);
+  });
+
+  it('会话清单查不成 → 不停会话、不报成功', async () => {
+    const { stopSessionAndReap } = await DAO;
+    let stops = 0;
+    const r = await stopSessionAndReap({
+      listSessions: async () => ({ ok: false, error: '上游不可用' }),
+      stopSession: async () => { stops += 1; return { ok: true }; },
+    }, 'codex:unknown');
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.why, /上游不可用/);
+    assert.equal(stops, 0);
+  });
 });

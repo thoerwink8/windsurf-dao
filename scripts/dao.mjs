@@ -1139,18 +1139,31 @@ export function reapMirasimSessionProcesses(workdir, {
   return { ok: false, error: `会话进程反复重生，${maxPasses} 次核实后仍未清空`, reaped: allReaped, remaining: true };
 }
 
-async function stopSessionAndReap(runtime, sessionKey, { workdir = null } = {}) {
+export async function stopSessionAndReap(runtime, sessionKey, { workdir = null } = {}) {
   let target = workdir;
-  if (!target && runtime && typeof runtime.listSessions === 'function') {
-    const listed = await runtime.listSessions();
-    if (listed?.ok === true) {
-      const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
-      target = hit?.cwd || hit?.workdir || hit?.worktree || null;
+  if (!target) {
+    if (!runtime || typeof runtime.listSessions !== 'function') {
+      return { ok: false, unscanned: true, why: 'runtime 没有 listSessions，无法核实会话 worktree' };
+    }
+    let listed;
+    try { listed = await runtime.listSessions(); }
+    catch (e) {
+      return { ok: false, unscanned: true, why: `会话清单没查成：${String(e?.message || e)}` };
+    }
+    if (!listed || listed.ok !== true) {
+      return { ok: false, unscanned: true, why: listed?.error || listed?.why || '会话清单没查成' };
+    }
+    const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
+    if (!hit) {
+      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 不在会话清单，无法核实 worktree` };
+    }
+    target = hit.cwd || hit.workdir || hit.worktree || null;
+    if (!target) {
+      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 没有 worktree，无法核实残留进程` };
     }
   }
   const stopped = await runtime.stopSession(sessionKey);
   if (!stopped || stopped.ok !== true) return stopped || { ok: false, why: 'stop 没回成功' };
-  if (!target) return { ...stopped, reaped: [], reapSkipped: true };
   // stop 是异步的，给服务端一个很短的退出窗口，再核实并回收残留子进程。
   await new Promise((resolve) => setTimeout(resolve, 250));
   const reaped = reapMirasimSessionProcesses(target);
