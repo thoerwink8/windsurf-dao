@@ -510,13 +510,14 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: 810, labels: req.add }; };
     const stamped = S.stampIssueLabels({
-      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh,
+      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh, writeIssue,
     });
     assert.ok(stamped.ok, JSON.stringify(stamped));
-    const edit = calls.find(a => a[0] === 'issue' && a[1] === 'edit');
-    assert.ok(!edit || !edit.includes('model/grok-4.6'),
-      'issue edit 不得带第二条 model/* → ' + JSON.stringify({ stamped, calls }));
+    assert.ok(!writes.some(w => (w.add || []).includes('model/grok-4.6')),
+      'issue-gateway 打标不得带第二条 model/* → ' + JSON.stringify({ stamped, writes, calls }));
 
     const many = S.requireWorkerModel(['model/pi-v2', 'model/grok-4.6', 'type/写码']);
     assert.ok(many.ok === false && many.state === 'many', JSON.stringify(many));

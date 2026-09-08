@@ -19,6 +19,11 @@ export const COORDINATOR_HINT = [
   '例外（#675）：工人 TUI bindStation 在 run-current 为 null 时对本窗 run-create；帅窗不许走这条。',
 ].join('');
 
+export const GH_ISSUE_WRITE_HINT = [
+  'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。',
+  '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete，也不许经 gh-as 自选身份。',
+].join('');
+
 export function normalizeCmd(cmd) {
   return String(cmd || '').replace(/\s+/g, ' ').trim();
 }
@@ -85,6 +90,8 @@ export function splitShellStatements(cmd) {
     if (c === '&' && s[i + 1] === '&') { flush(); i++; continue; }
     if (c === '|' && s[i + 1] === '|') { flush(); i++; continue; }
     if (c === '|') { flush(); continue; }
+    // 单个 & 是后台作业：前后两段都会真跑，必须拆开分别判定（#1015 审官第 4 条）。
+    if (c === '&') { flush(); continue; }
     buf += c;
   }
   flush();
@@ -149,6 +156,45 @@ function bareTokens(stmt) {
 export function isDaoMjsInvocation(stmt) {
   const toks = bareTokens(stmt);
   return toks.some(t => /(^|[\\/])dao\.mjs$/i.test(t));
+}
+
+/** 这句真正跑起来的程序是不是 issue-gateway.mjs（#792 唯一写入入口）。 */
+export function isIssueGatewayInvocation(stmt) {
+  const toks = bareTokens(stmt);
+  return toks.some(t => /(^|[\\/])issue-gateway\.mjs$/i.test(t));
+}
+
+const GH_ISSUE_WRITE_VERBS = /^(create|comment|close|edit|reopen|delete)$/;
+
+function restAfterGhAs(toks) {
+  const idx = toks.findIndex((t) => /(^|[\\/])gh-as\.mjs$/i.test(t));
+  if (idx < 0) return null;
+  return toks.slice(idx + 1).filter((t) => t !== '--');
+}
+
+/** `gh-as.mjs <role> -- issue <写动词>`。网关内部走 lib ghAs()，不经这条 CLI。 */
+export function isGhAsIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  const rest = restAfterGhAs(bareTokens(stmt));
+  if (!rest) return false;
+  for (let i = 0; i < rest.length - 1; i++) {
+    if (rest[i] === 'issue' && GH_ISSUE_WRITE_VERBS.test(rest[i + 1])) return true;
+  }
+  return false;
+}
+
+/** 裸 `gh issue <写动词>`。dao.mjs / issue-gateway.mjs 不拦；gh-as 写 Issue 另见 isGhAsIssueWrite。 */
+export function isBareGhIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  if (isGhAsIssueWrite(stmt)) return false;
+  const toks = bareTokens(stmt);
+  if (toks.some(t => /(^|[\\/])gh-as\.mjs$/i.test(t))) return false;
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])gh(\.exe)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'issue') continue;
+    if (GH_ISSUE_WRITE_VERBS.test(toks[i + 2])) return true;
+  }
+  return false;
 }
 
 /** 这句未加引号的 token 序列里有没有 orca orchestration (worker-start|task-create|dispatch)。 */
@@ -222,6 +268,13 @@ export function decideGate(cmd) {
         block: true,
         command: normalizeCmd(cmd),
         message: `拦下帅窗抢 coordinator：${normalizeCmd(cmd)}\n${COORDINATOR_HINT}`,
+      };
+    }
+    if (isBareGhIssueWrite(stmt) || isGhAsIssueWrite(stmt)) {
+      return {
+        block: true,
+        command: normalizeCmd(cmd),
+        message: `拦下裸 gh issue 写动作：${normalizeCmd(cmd)}\n${GH_ISSUE_WRITE_HINT}`,
       };
     }
   }
