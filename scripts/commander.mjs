@@ -633,6 +633,8 @@ function execAction(action, { state, dryRun, log }) {
         '--issue', String(action.issue),
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
+        ...(action.mergePolicy ? ['--merge-policy', action.mergePolicy] : []),
+        ...(action.mergeReason ? ['--merge-reason', action.mergeReason] : []),
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
         '--spec', dispatchSpec(action.issue), '--confirm',
         ...dispatchMergePolicyArgs(action),
