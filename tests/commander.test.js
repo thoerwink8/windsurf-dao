@@ -1871,6 +1871,17 @@ describe('decide：human_holds → merge-policy（#1094）', () => {
     assert.equal(d[0].mergeReason, null);
   });
 
+  it('type/体系 即使 human_holds 扫完不命中也必须 manual', async () => {
+    const { resolveIssueMergePolicy } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const issue = holdReady(1145, { title: '渠道并发建模', body: '实现上限与顺位' });
+    issue.labels = issue.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item);
+    const plan = resolveIssueMergePolicy(issue, askPolicy);
+    assert.equal(plan.mergePolicy, 'manual');
+    assert.equal(plan.mergePolicySource, 'framework');
+    assert.match(plan.mergeReason, /type\/体系/);
+  });
+
   it('改 JSON 里的字，指挥官行为跟着变（关键词不落在指挥官侧）', async () => {
     const { decide, resolveIssueMergePolicy } = await CORE;
     const before = await policyFromHolds(['独有红线词QQQ']);
@@ -2013,6 +2024,28 @@ describe('对账循环：账上有人、名单里没有 → 重派', () => {
     assert.equal(clearD.length, 1);
     assert.equal(clearD[0].mergePolicy, 'auto');
     assert.equal(clearD[0].mergePolicySource, 'clear');
+  });
+
+  it('type/体系 的差集重派不因 human_holds 未命中回落 auto', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const framework = {
+      ...labeled,
+      number: 1145,
+      title: '渠道并发建模',
+      body: '实现上限与顺位',
+      labels: labeled.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item),
+    };
+    const r = decide(sit({
+      askPolicy,
+      github: { scanned: true, issues: [framework], prs: [] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 1145, model: 'grok-4.6' }] },
+    }));
+    const retry = byKind(r, 'dispatch').filter((action) => action.reconcile);
+    assert.equal(retry.length, 1);
+    assert.equal(retry[0].mergePolicy, 'manual');
+    assert.equal(retry[0].mergePolicySource, 'framework');
   });
 
   it('同一 issue 已有活会话 → 拒绝再派', async () => {
