@@ -127,7 +127,7 @@ describe('接线：dao-check 真的取了 author 并调了判据', () => {
   const src = () => fs.readFileSync(path.join(__dirname, '..', 'scripts', 'dao-check.mjs'), 'utf8');
 
   it('issue list 取了 author 字段（少它这道闸只能判没查成）', () => {
-    assert.match(src(), /'number,title,body,labels,author,createdAt'/);
+    assert.match(src(), /'number,title,body,labels,author,createdAt,milestone'/);
   });
 
   it('全量档调 checkCauseSlugLive，快档明说跳过', () => {

@@ -213,6 +213,8 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
     assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     assert.match(s, /scripts\/gw-remote-probe\.mjs/);
+    assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
+    assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     assert.match(t, /^OnCalendar=/m);
     assert.match(t, /^Persistent=true$/m);
     assert.match(t, /^OnCalendar=\*:09\/30$/m);
