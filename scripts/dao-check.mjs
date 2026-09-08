@@ -37,8 +37,9 @@
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
-// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
-// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
+// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿；
+//    #966 推迟档不进分母——夹具红/绿验判别力（快档也跑，live 仍只 --full）
+// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡且没挂「将来某版」 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 // ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
@@ -113,6 +114,7 @@ import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
+import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
@@ -1091,18 +1093,6 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 const PENDING_BOARD_MAX_DEFAULT = 5;
 const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
 
-/** PR/标题/正文里的署名 issue 号（新规范「署名 issue #N」+ 旧 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
-function closesNumbers(text) {
-  const found = [];
-  const re = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const t = Number(m[1] ?? m[2]);
-    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
-  }
-  return found;
-}
-
 // ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
 //
 // 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
@@ -1369,10 +1359,29 @@ function loadOpenBoard() {
   return {
     // author 是「同一起因只许一张 OPEN 单」那道检查的必需字段：用它分「机器/帅位开的」
     // 与「用户本人开的」，后者不纳入。少这个字段那道检查只能判没查成（#1063 ②）。
-    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,author,createdAt']),
+    // milestone 是「将来某版」推迟档（#966）的必需字段：少它 isDeferredIssue 永远 false。
+    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,author,createdAt,milestone']),
     prs: runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']),
     worktrees: runMirasimWorktrees(),
   };
+}
+
+function checkOpenIssueCountSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'open-issue-count');
+  const r = inspectOpenIssueCountFixtures(dir);
+  if (r.unscanned) {
+    fail('open 单数量样本没查成', '本次没查成：恢复 tests/fixtures/open-issue-count/ 超阈红 + 推迟不进分母的绿', r.error);
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `open 单数量样本对不上${r.problems && r.problems.length ? ` ${r.problems.length} 处` : ''}`,
+      '故意超阈必须红；同一份再加「将来某版」分母不变；推迟档顶满阈值必须绿',
+      (r.problems && r.problems.join(' ')) || r.error,
+    );
+    return;
+  }
+  green(`open 单数量样本 ${r.kinds.red + r.kinds.ok} 份（超阈红 ${r.kinds.red} / 推迟不进分母绿 ${r.kinds.ok}）`);
 }
 
 // 同一起因只许一张 OPEN 单（#1063 ②）。判据是纯函数 inspectCauseSlugs，这里只取数与报形。
@@ -1394,56 +1403,28 @@ function checkCauseSlugLive(board) {
 }
 
 function checkOpenIssueCount(board) {
-  const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
-  if (!Number.isFinite(max) || max < 0) {
-    fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
+  const maxRaw = process.env.DAO_CHECK_OPEN_ISSUE_MAX;
+  const max = Number(maxRaw || OPEN_ISSUE_MAX_DEFAULT);
+  const r = inspectOpenIssueCount({
+    issues: board.issues,
+    prs: board.prs,
+    worktrees: board.worktrees,
+    max,
+    maxRaw,
+  });
+  if (r.kind === 'unscanned') {
+    skip(r.line);
     return;
   }
-  const issues = board.issues;
-  if (issues.unscanned) {
-    skip(`open 单数量阈值：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
+  if (r.kind === 'invalid') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  const prs = board.prs;
-  if (prs.unscanned) {
-    skip(`open 单数量阈值：open PR 面没查成（${prs.error}）——在途排除做不全，不是绿`);
+  if (r.kind === 'red') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  const wt = board.worktrees;
-  if (wt.unscanned) {
-    skip('open 单数量阈值：worktree 卡面没查成（mirasim 树面没扫成）——少这张卡面会把在途单算成积压，本次没查成，不是绿');
-    return;
-  }
-  const cards = [];
-  for (const w of wt.worktrees) {
-    if (!w || w.isMainWorktree || w.isArchived) continue;
-    const name = String(w.displayName || '');
-    const linked = typeof w.linkedIssue === 'number' ? w.linkedIssue
-      : (w.linkedIssue && typeof w.linkedIssue.number === 'number' ? w.linkedIssue.number : null);
-    const zone = String(w.comment || '').match(/｜\[([^\]]*)\]/);
-    const zoneN = zone && zone[1].match(/#(\d+)/);
-    const issueName = name.match(/ISSUE-#?(\d+)/);
-    const oldName = name.match(/^#(\d+)/);
-    const n = linked || (zoneN ? Number(zoneN[1]) : null) || (issueName ? Number(issueName[1]) : null)
-      || (oldName ? Number(oldName[1]) : null);
-    if (n) cards.push(n);
-  }
-  const inPr = new Set();
-  for (const p of prs.array) {
-    for (const n of closesNumbers(`${p.title || ''}\n${p.body || ''}`)) inPr.add(n);
-  }
-  const inCard = new Set(cards);
-  if (issues.array.some(i => !i || typeof i.number !== 'number')) {
-    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${typeof issues.array[0]}`);
-    return;
-  }
-  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number));
-  const n = backlog.length;
-  if (n > max) {
-    fail(`open 未在做单 ${n} 张，超阈值 ${max}（共 ${issues.array.length} 张 open，${inPr.size} 张有在途 PR、${inCard.size} 张有本地卡）`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number,title,body');
-    return;
-  }
-  green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
+  green(r.line);
 }
 
 /**
@@ -1482,7 +1463,7 @@ function checkPendingBoardBacklog(board) {
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
-// 已消歧 + 无在途 PR/卡 → 打「有 N 个可立即起的单没起」。帅可能有正当理由
+// 已消歧 + 无在途 PR/卡 + 没挂「将来某版」→ 打「有 N 个可立即起的单没起」。帅可能有正当理由
 // （并发满、真依赖），所以不翻转退出码；今晚的病是它完全不可见。
 // 解析在 ready-queue-check.mjs，不复用 ⑭ 的 closesNumbers。
 // 并发上限随 #576 落地，本项不发明数字。#576 的 next 接手列表后本项退役。
@@ -1801,6 +1782,7 @@ checkDispatchGateAlive();
 checkMemoryLinkAlive();
 checkMasterTitleSamples();
 checkCardCommentSamples();
+checkOpenIssueCountSamples();
 if (FULL) {
   const openBoard = loadOpenBoard();
   checkOpenIssueCount(openBoard);
@@ -1808,7 +1790,7 @@ if (FULL) {
   checkReadyQueue(openBoard);
   checkCauseSlugLive(openBoard);
 } else {
-  netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('open 单数量阈值 live', '要打 gh issue list');
   netParked('待拍板堆积', '要打 gh issue list');
   netParked('可立即起但没起', '要打 gh issue list');
   netParked('同一起因只许一张 OPEN 单', '要打 gh issue list');
