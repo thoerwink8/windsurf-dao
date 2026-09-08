@@ -266,3 +266,39 @@ describe('shuai-scan CLI 契约', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
+
+// #1094：指挥官 human_holds 闸要读 issue 正文。查询必须要 body 字段；
+// 节点没给 body 键 ≠ 正文是空串——缺键是没查成。
+describe('GitHub 快照带 issue body（#1094）', () => {
+  it('GraphQL 查询要 issue body 字段', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /issues\([\s\S]*?\bbody\b/);
+  });
+
+  it('节点有 body → 原样留下；没这个键 → 结果上也没有（缺键不是空串）', async () => {
+    const S = await LOAD;
+    const withBody = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 1, title: '有正文', body: '改协作约定', labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(withBody.ok, true);
+    assert.equal(withBody.issues[0].body, '改协作约定');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 2, title: '没正文键', labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(missing.issues[0], 'body'), false);
+    const empty = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 3, title: '空正文', body: null, labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(empty.issues[0].body, '');
+  });
+});
