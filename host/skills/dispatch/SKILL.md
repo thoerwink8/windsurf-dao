@@ -34,17 +34,18 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 ## 帅操作 issue 的身份约定（#627）
 
-PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）同样走 marshal，不用裸 `gh issue`。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
+PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）走唯一入口 `issue-gateway`（#792），身份由网关固定 `dao-marshal[bot]`，不用裸 `gh issue`，也不许自选 `--identity` / token。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
 
 ```bash
 node scripts/gh-as.mjs marshal --whoami
-node scripts/gh-as.mjs marshal -- issue create --title "..." --body-file <文件>
-node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>
-node scripts/gh-as.mjs marshal -- issue close <N> --comment "..."
-node scripts/gh-as.mjs marshal -- issue edit <N> --add-label "已消歧"
+node scripts/issue-gateway.mjs create --repo thoerwink8/windsurf-dao --title "..." --body-file <文件> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs comment --repo thoerwink8/windsurf-dao --issue <N> --body-file <文件> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs close --repo thoerwink8/windsurf-dao --issue <N> --host claude --idempotency-key <键>
+node scripts/issue-gateway.mjs edit-labels --repo thoerwink8/windsurf-dao --issue <N> --add "已消歧" --host claude --idempotency-key <键>
+node scripts/gh-as.mjs marshal -- issue edit <N> --milestone "将来某版"
 ```
 
-Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。
+Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。网关内部仍走 `gh-as.mjs marshal`，调用者不许自己选身份。挂档（`--milestone`）网关还没有这个动词，继续走 marshal 同一身份，不裸 `gh`。
 
 只读（`issue view` / `issue list`）可以继续裸 `gh`——不落作者。仓内脚本里剩下的裸调用见 #627 落点 PR 清单，全量替换另开（#573「先收敛再铺开」）。
 
@@ -175,6 +176,8 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `node scripts/dao.mjs worktree-rm --worktree <卡>`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
 
 issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 issue，合并后**由关单脚本关**并引用落点 PR——关单只认 `node scripts/close-issues.mjs`（署名 issue 的 PR 已 MERGED **且** check 全绿才 `issue close`，红着合进的不关、已关的重开，见 issue #657），**不认 GitHub `Closes`/`Fixes` 自动关单**，不允许任何正文模板教写关单关键词。拍板写进真正对应的 issue/PR，禁止把不相干拍板塞进同一张 issue，没有对应载体宁可开小 issue（拍板归位）；「落点 PR 已 merged 但 issue 未关」的自动闸在 #442 看门狗审计清单。
+
+版本档（#966，拍板 2026-09-07 3A）：GitHub Milestone 两档——`当前在做`（现在或近期）/ `将来某版`（要做但不是现在）。**「先过渡、将来再接」必须挂 `将来某版`，不挂就是没交代。** 单保持 OPEN，好让 `gh issue list --milestone 将来某版` 一次列全；派工队列与「未在做」积压都不认这一档。不造标签、不造文件。挂档走 marshal：`issue edit <N> --milestone "将来某版"`。
 
 终审核对垫片退役：PR 正文登记的垫片（临时 Monitor / 手动流程）合并时当场退役换正式版，防影子制度（拍板 2026-08-15）。
 

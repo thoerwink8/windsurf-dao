@@ -43,6 +43,9 @@ WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
 # 别让 gh 每次起来都去查自己有没有新版：那是一次没必要的出网，失败还会往 stderr 刷噪音。
 Environment=GH_NO_UPDATE_NOTIFIER=1
+# #792：自动化服务不继承个人 GH_TOKEN。webhook forward 仍读 ~/.config/gh（GitHub 官方 CLI 登录），
+# 所以本单元不能设 GH_CONFIG_DIR=/var/empty——那会把通道掐死。写 Issue 不走这条单元。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 ProtectSystem=full
 ProtectHome=read-only
 # 写得动的只有状态文件那个目录；gh 的缓存目录一起放开，否则它写不进去会往 stderr 刷。

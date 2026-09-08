@@ -13,6 +13,9 @@
 //
 // 纯函数：吃一串快照，吐停滞判决。一个 IO 都不碰。
 // 「没查成」和「没停滞」必须不同形——读不清就说没查成，不许当成没事。
+// #966：挂「将来某版」的单不是当前待办——不进派工队列，也不当「已消歧但没派出」停滞。
+
+import { isDeferredIssue } from './ready-queue-check.mjs';
 
 export const DEFAULT_MIN_ROUNDS = 5;
 export const DISAMBIGUATED_LABEL = '已消歧';
@@ -142,6 +145,7 @@ export function extractObjects(snapshot) {
       return { scanned: false, error: `issue #${it.number} 的 label 不是数组（没查成）`, objects: [], idle: false };
     }
     if (!names.includes(DISAMBIGUATED_LABEL)) continue;
+    if (isDeferredIssue(it)) continue; // #966：将来某版不该派，不是没派
     if (issueHasInflight(it.number, { prs })) continue;
     objects.push({
       kind: 'issue',

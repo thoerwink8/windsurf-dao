@@ -383,6 +383,10 @@ orca account add --help
 # 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
 #   验：systemctl list-timers 里 dao-refiner.timer 的 NEXT 必须是时间；unit 必须带 NO_COLOR=1 GH_NO_COLOR=1
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
+# 供应商探活（#967，写 ~/.dao/provider-health.json 给派工读）：sudo bash scripts/install-gw-remote-probe.sh（单元 host/machine/systemd/gw-remote-probe.*）
+#   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
+#   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
+#   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。

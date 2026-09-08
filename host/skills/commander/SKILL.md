@@ -34,7 +34,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 ## 你能用的手（就这些，越界即停）
 
 - `node scripts/dao.mjs <verb>`：dispatch / reviewer-attach / worker-done / notify / reply / gate-create 等（用法 `node scripts/dao.mjs` 不带参数）。
-- 往单上落痕（返工方向、判断结论）：`node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>`（身份走 marshal，别用裸 gh 写动作；只读 view/list 可裸 gh）。
+- 往单上落痕（返工方向、判断结论）：`node scripts/issue-gateway.mjs comment --repo thoerwink8/windsurf-dao --issue <N> --body-file <文件> --host commander --idempotency-key <键>`（#792，身份由网关固定 marshal；只读 view/list 可裸 gh）。
 - 读：`gh` 只读、仓内文件、`dao.mjs session-read`（读别的一次性会话）。
 
 ## 边界（硬红线，**不许**碰）
@@ -43,6 +43,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 - **不许改协作约定文件**：`CLAUDE.md`、`host/skills/*/SKILL.md`（含本书）、`docs/decisions/*`。
 - **不许花钱**：换供应商、充值、起大批工人这类有成本的动作。
 - **不许合并/关单/删树**：那是眼睛确定性做的或帅做的，不是你判断的范围。
+- **「先过渡、将来再接」不是待消歧、不是关掉**：交帅挂 GitHub Milestone `将来某版`（#966），自己不关、不派。
 - 以上任一撞到 → **不做，报帅**（`gh` 评论到相关单 + 打 `待拍板` label），然后自行结束会话。
 
 ## 判红 → 返工（眼睛确定性做，不唤你；#931）

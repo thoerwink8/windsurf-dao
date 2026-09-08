@@ -381,20 +381,25 @@ describe('验收 7：不出网，单测毫秒级；CLI 注入假 gh', () => {
         existing.add(args[2]);
         return { ok: true, out: '' };
       }
-      if (args[0] === 'issue' && args[1] === 'edit') {
-        edits.push(args);
-        return { ok: true, out: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        comments.push(args);
-        return { ok: true, out: '' };
-      }
       return { ok: false, error: args.join(' ') };
+    };
+    const writeIssue = (req) => {
+      if (req.action === 'issue_edit_labels') {
+        const args = ['issue', 'edit', String(req.issue), ...req.add];
+        edits.push(args);
+        return { ok: true, number: req.issue, labels: req.add };
+      }
+      if (req.action === 'issue_comment') {
+        comments.push(['issue', 'comment', String(req.issue), '--body-file', 'gw']);
+        return { ok: true, number: req.issue };
+      }
+      return { ok: false, error: req.action };
     };
     const said = [];
     const r = runRefiner({
       args: {},
       runGh,
+      writeIssue,
       say: (t) => { said.push(t); return { ok: true }; },
       routingDoc: ROUTING,
     });
