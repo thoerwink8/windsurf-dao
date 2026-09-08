@@ -31,15 +31,20 @@ describe('dao 审官与完工', () => {
     });
 
     await t.test('postCommentOnce：没发过 → 真发', () => {
-      const posted = [];
+      const writes = [];
       const runGh = (argv) => {
         if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [] }) };
-        posted.push(argv.join(' '));
         return { ok: true, out: '' };
       };
-      const r = S.postCommentOnce({ kind: 'issue', number: '752', body: '完工：PR #758', runGh });
-      assert.ok(r.ok === true && !r.skipped && posted.length === 1 && /issue comment 752/.test(posted[0]),
-        '没发过真发  →  ' + JSON.stringify({ r, posted }));
+      const writeIssue = (req) => { writes.push(req); return { ok: true, number: 752 }; };
+      const r = S.postCommentOnce({
+        kind: 'issue', number: '752', body: '完工：PR #758', runGh,
+        writeIssue, host: 'worker-done', idempotency_key: 'worker-done:issue:758:752',
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.skipped, undefined);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].action, 'issue_comment');
     });
 
     await t.test('postCommentOnce：评论列表没查成 → ok:false unscanned（不许当没发过放行）', () => {
@@ -67,8 +72,8 @@ describe('dao 审官与完工', () => {
     await t.test('cmdWorkerDone 完工评论走 postCommentOnce（幂等）', () => {
       const i = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
       const seg = daoSrc.slice(i, i + 8000);
-      assert.ok(/postCommentOnce\(\{ kind: 'issue'/.test(seg) && /postCommentOnce\(\{ kind: 'pr'/.test(seg),
-        'worker-done 完工评论要幂等');
+      assert.match(seg, /postCommentOnce\(\{\s*kind: 'issue'/);
+      assert.match(seg, /postCommentOnce\(\{ kind: 'pr'/);
     });
     await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
       const i = daoSrc.indexOf('async function cmdReviewerCreateMirasim(');
@@ -137,19 +142,26 @@ describe('dao 审官与完工', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const stamped = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
-    await t.test('dispatch 打标成功：names 对、缺的 label 先建、issue edit 带 --add-label',
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: 123, labels: req.add }; };
+    const stamped = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh, writeIssue });
+    await t.test('dispatch 打标成功：names 对、缺的 label 先建、走 issue-gateway',
       () => {
         assert.ok(stamped.ok === true && stamped.names.length === 2
         && calls.some(a => a[0] === 'label' && a[1] === 'create' && a[2] === 'type/写码')
-        && calls.some(a => a[0] === 'issue' && a[1] === 'edit' && a[2] === '123' && a.includes('--add-label') && a.includes('model/grok-4.6') && a.includes('type/写码')),
-        'dispatch 打标成功：names 对、缺的 label 先建、issue edit 带 --add-label  →  ' + JSON.stringify({ stamped, calls }));
+        && writes.some(w => w.action === 'issue_edit_labels' && String(w.issue) === '123' && (w.add || []).includes('model/grok-4.6') && (w.add || []).includes('type/写码')),
+        'dispatch 打标成功：names 对、缺的 label 先建、走 issue-gateway  →  ' + JSON.stringify({ stamped, calls, writes }));
       });
 
     // 没 gh 执行器 / 没合法 issue：不许当「查过没事」。
     const noGh = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', runGh: null });
     await t.test('打标没 gh 执行器 → 报没查成', () => {
       assert.ok(noGh.ok === false && noGh.unscanned === true, '打标没 gh 执行器 → 报没查成  →  ' + JSON.stringify(noGh));
+    });
+    const noWrite = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
+    await t.test('打标没网关写入器 → 报没查成', () => {
+      assert.equal(noWrite.ok, false);
+      assert.equal(noWrite.unscanned, true);
     });
     const skip = S.stampIssueLabels({ issue: '', model: 'grok-4.6', runGh: recGh });
     await t.test('打标没合法 issue 号 → skipped 不瞎打', () => {
@@ -266,11 +278,12 @@ describe('dao 审官与完工', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const stampedRev = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: stampGh });
+    const stampWrite = (req) => { stampCalls.push(['gateway', req]); return { ok: true, number: 123, labels: req.add }; };
+    const stampedRev = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: stampGh, writeIssue: stampWrite });
     await t.test('dispatch 打标含 reviewer/*',
       () => {
         assert.ok(stampedRev.ok === true && stampedRev.names.includes('reviewer/gpt-5.6-sol')
-        && stampCalls.some(a => a[0] === 'issue' && a.includes('reviewer/gpt-5.6-sol')),
+        && stampCalls.some(a => a[0] === 'gateway' && (a[1].add || []).includes('reviewer/gpt-5.6-sol')),
         'dispatch 打标含 reviewer/*  →  ' + JSON.stringify({ stampedRev, stampCalls }));
       });
 
@@ -439,7 +452,7 @@ describe('dao 审官与完工', () => {
         assert.doesNotMatch(wdFn, /argsWorktreeCreate/);
       });
     await t.test('#675 完工评论在起审官之前（失败也要留交卷证据；PR #758 起幂等走 postCommentOnce）', () => {
-      const post = wdFn.indexOf('postCommentOnce({ kind: \'issue\'');
+      const post = wdFn.search(/postCommentOnce\(\{\s*kind: 'issue'/);
       const spawn = post >= 0 ? wdFn.indexOf('mirasimWorkerDone(', post) : -1;
       assert.ok(post >= 0 && spawn > post && /postCommentOnce/.test(wdFn.slice(post, spawn)),
         '#675 完工评论在起审官之前（幂等）  →  post=' + post + ' spawn=' + spawn);

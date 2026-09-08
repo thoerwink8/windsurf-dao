@@ -16,6 +16,10 @@
 - **身份混用**：`--as user` 用的是用户授权，bot 不在的群/没开的 scope 会空成功或权限错。动手前 `lark-cli auth status --as bot` / `--as user`。
 - **凭据不进 git**：落点归 ai-gateway-stack（INDEX E 类 `~/.mirasim/keys`）。本页不写文件内容、不写 app_id。
 
+## GitHub Issue 写（#792）
+
+适配器建单 / 追评走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。进程不持个人 GitHub token。群消息根 id 当 `idempotency_key`。
+
 ## 正确起法（接线）
 
 权威步骤在 #811 / #801，这里只留命令形状（占位符不要换成真值）：

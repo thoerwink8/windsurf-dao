@@ -107,6 +107,7 @@ import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
+import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
@@ -1802,6 +1803,7 @@ if (FULL) {
 }
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
+checkIssueGatewayAliveNow();
 checkLedgerGapSamples();
 if (FULL) checkLedgerGapLive(); else netParked('账本断流差集 live', '要拿账本对 GitHub');
 checkStrikesSamples();
@@ -2443,6 +2445,12 @@ function checkCompletionSignalAlive() {
 
 function checkMarshalIssueIdentityAlive() {
   const r = checkMarshalIssueIdentity({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkIssueGatewayAliveNow() {
+  const r = checkIssueGatewayAlive({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
 }

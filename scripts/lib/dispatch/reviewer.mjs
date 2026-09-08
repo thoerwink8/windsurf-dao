@@ -949,14 +949,29 @@ export function reviewerSpawnQueuedComment({ error, pr } = {}) {
   ].join('\n');
 }
 
-export function postIssueComment({ issue, body, runGh } = {}) {
+export function postIssueComment({
+  issue, body, runGh, writeIssue,
+  repo = 'thoerwink8/windsurf-dao', host = 'dispatch',
+  idempotency_key,
+} = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };
   if (!String(body || '').trim()) return { ok: false, error: 'postIssueComment 没给正文' };
-  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'postIssueComment 没拿到 gh 执行器' };
-  const r = runGh(['issue', 'comment', n, '--body', String(body)]);
-  if (!r.ok) return { ok: false, error: `issue #${n} 发评论失败：${r.error}` };
-  return { ok: true, issue: n };
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, unscanned: true, error: 'postIssueComment 没拿到 issue-gateway 写入器' };
+  }
+  const key = String(idempotency_key || '').trim();
+  if (!key) return { ok: false, error: 'postIssueComment 走网关要 idempotency_key' };
+  const r = writeIssue({
+    action: 'issue_comment',
+    repo,
+    issue: n,
+    body: String(body),
+    host,
+    idempotency_key: key,
+  });
+  if (!r || !r.ok) return { ok: false, error: `issue-gateway comment #${n} 失败：${r && r.error ? r.error : '没查成'}` };
+  return { ok: true, issue: n, via: 'issue-gateway' };
 }
 
 export function postPrComment({ pr, body, runGh } = {}) {
@@ -1054,14 +1069,18 @@ export function planReviewerDone({ pr, prState, reviews } = {}) {
 }
 
 /** 幂等发评论：同款已发过就跳过。拉取没查成 → ok:false unscanned（不瞎发也不瞎跳）。 */
-export function postCommentOnce({ kind, number, body, runGh } = {}) {
+export function postCommentOnce({
+  kind, number, body, runGh, writeIssue, repo, host, idempotency_key,
+} = {}) {
   const listed = listComments({ kind, number, runGh });
   if (!listed.ok) return { ok: false, unscanned: true, error: listed.error };
   if (commentAlreadyPosted(listed.comments, body)) {
     return { ok: true, skipped: true, alreadyPosted: true, [kind === 'pr' ? 'pr' : 'issue']: String(number) };
   }
   const post = kind === 'pr' ? postPrComment : postIssueComment;
-  const r = post({ pr: number, issue: number, body, runGh });
+  const r = post({
+    pr: number, issue: number, body, runGh, writeIssue, repo, host, idempotency_key,
+  });
   return { ...r, alreadyPosted: false };
 }
 
