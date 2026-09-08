@@ -642,7 +642,7 @@ describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () =
   // 判据分两半，因为今天只有一半在本 PR 手里：
   //   数据半边（docs/model-routing.json 加一行 "gpt-": "gpt"）属于改规则，等人拍板，本 PR 不动；
   //   代码半边（模型族优先 + 最长前缀）已经就位，这里用「真表 + 那一行」证明它就位。
-  it('真表 gpt-5.6-luna 走 gpt/codex/relay（master 已登记 gpt 前缀；落地通道 gw 不许赢过模型族）', async () => {
+  it('真表 gpt-5.6-luna 走 gpt/codex/direct（2026-09-08 拍板：codex 直连网关 gptpool，windsurf→pqapi→mirasim 池内降级；relay 曾把全部审官流量送进 mirasim 云并烧额度）', async () => {
     const S = await import(LIB);
     const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
     const provider = await realProvider('gpt-5.6-luna');
@@ -652,7 +652,7 @@ describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () =
     assert.equal(r.ok, true, r.error || '');
     assert.equal(r.family, 'gpt');
     assert.equal(r.agent, 'codex');
-    assert.equal(r.leg, 'relay');
+    assert.equal(r.leg, 'direct');
     assert.match(r.via, /模型前缀/, 'via 还报 provider = 模型族没赢过落地通道');
   });
 });
@@ -771,13 +771,13 @@ describe('判别实验：未登记家族拒派 / claude·codex 放行（#982）'
     assert.equal(r.status, 0);
   });
 
-  it('gpt-5.6-luna → 放行 gpt/codex/relay（落地通道 gw 不许赢过模型族）', () => {
+  it('gpt-5.6-luna → 放行 gpt/codex/direct（2026-09-08 拍板：直连网关 gptpool，relay 只当池内兜底）', () => {
     const r = dry('gpt-5.6-luna');
     const out = JSON.parse(String(r.stdout || '').trim());
     assert.equal(out.ok, true, out.error || '');
     assert.equal(out.family, 'gpt');
     assert.equal(out.agent, 'codex');
-    assert.equal(out.leg, 'relay');
+    assert.equal(out.leg, 'direct');
     assert.match(String(out.via || ''), /模型前缀/);
     assert.equal(r.status, 0);
   });

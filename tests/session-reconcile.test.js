@@ -71,6 +71,13 @@ describe('观测：活着 = 名单里有且非终态', () => {
     assert.equal(S.isLiveSession({ key: 'pi:1', state: 'running' }).live, true);
   });
 
+  it('incomplete 不算活执行者——短命会话已结束，下一轮允许重派', async () => {
+    const S = await LOAD;
+    const a = S.isLiveSession({ key: 'pi:1', state: 'incomplete' });
+    assert.equal(a.live, false);
+    assert.equal(a.unscanned, false);
+  });
+
   it('没给对象 → unscanned，绝不当活着（方向交给调用方）', async () => {
     const S = await LOAD;
     const a = S.isLiveSession(null);
@@ -104,13 +111,13 @@ describe('hasLiveExecutor：查不成当有人在做', () => {
     assert.equal(r.unscanned, false);
   });
 
-  it('incomplete 仍算活执行者——推一句继续，不重派（#1007/#1037 抢树）', async () => {
+  it('incomplete 不算活执行者——停会话后允许差集重派', async () => {
     const S = await LOAD;
     const r = S.hasLiveExecutor({
       sessions: [{ key: 'pi:1', state: 'incomplete', cwd: '/x/dao-885' }],
       issue: 885,
     });
-    assert.equal(r.live, true);
+    assert.equal(r.live, false);
     assert.equal(r.unscanned, false);
   });
 
