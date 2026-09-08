@@ -108,6 +108,33 @@ describe('progress-detect：orca 段死了照样判（屏面指纹层退役）',
 });
 
 describe('progress-detect：误报闸与逐对象', () => {
+  it('#966 挂「将来某版」的已消歧单不算未派出停滞', async () => {
+    const S = await load(LIB);
+    const snap = {
+      github: {
+        scanned: true,
+        prs: [],
+        issues: [{
+          number: 819,
+          title: '先过渡',
+          labels: [{ name: '已消歧' }],
+          milestone: { title: '将来某版' },
+        }],
+      },
+      orca: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [] },
+    };
+    const extracted = S.extractObjects(snap);
+    assert.equal(extracted.scanned, true, extracted.error);
+    assert.equal(extracted.objects.length, 0);
+    assert.equal(extracted.idle, true);
+    const snaps = Array.from({ length: 5 }, () => snap);
+    const got = S.detectProgressStall(snaps, { minRounds: 5 });
+    assert.equal(got.scanned, true, got.error);
+    assert.equal(got.stalled, false);
+    assert.equal(got.reason, 'idle');
+  });
+
   it('全空闲 20 轮不许报停滞', async () => {
     const S = await load(LIB);
     const snaps = Array.from({ length: 20 }, emptySnap);

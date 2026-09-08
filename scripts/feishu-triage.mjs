@@ -72,6 +72,7 @@ import { formatBoardTable } from './lib/board-v0.mjs';
 import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
+import { applyIssueWrite } from './lib/issue-gateway.mjs';
 import {
   isDailyAction, isDailyListPending, dailyCallbackResponse,
 } from './lib/feishu-daily-card.mjs';
@@ -479,8 +480,8 @@ export function makeLlm({
 
 // ---------------------------------------------------------------------------
 // deps 的 gh 三件套：判重搜索 / 建单 / 追评。
-// 判重用 `gh search issues` 前 10 条（#801 红线②：不上向量库）。
-// 适配器进程本身不持 GitHub 凭据——shell 出去的 gh 用本机登录态（#801 记录）。
+// 判重用 `gh search issues` 前 10 条（#801 红线②：不上向量库）——只读，可以继续裸 gh。
+// 建单 / 追评走 #792 网关，身份固定 dao-marshal[bot]；适配器进程不持个人 GitHub token。
 export function runGh(ghBin, args, { timeout = 60000 } = {}) {
   // 不 shell:true：Windows 上 cmd 会把带换行的 --body 拆开（#573 教训）
   const r = spawnSync(ghBin, args, { windowsHide: true, encoding: 'utf8', timeout, shell: false });
@@ -489,7 +490,8 @@ export function runGh(ghBin, args, { timeout = 60000 } = {}) {
   return { ok: r.status === 0, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
-export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh } = {}) {
+export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh, applyWrite } = {}) {
+  const write = applyWrite || applyIssueWrite;
   async function ghSearch(repo, query) {
     const r = await run(ghBin, ['search', 'issues', String(query), '--repo', repo, '--limit', '10', '--json', 'number,title,url']);
     if (!r.ok) throw new Error(`gh search 失败：${r.reason || r.stderr || r.code}`);
@@ -502,22 +504,35 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh 
     return (Array.isArray(list) ? list : []).map((x) => ({ number: x.number, title: x.title, url: x.url }));
   }
 
-  async function ghCreateIssue(repo, { title, body, labels = [] } = {}) {
-    const args = ['issue', 'create', '--repo', repo, '--title', String(title ?? ''), '--body', String(body ?? '')];
-    for (const l of labels) args.push('--label', String(l));
-    // gh issue create 没有 --json（gh 2.99 实测 unknown flag）：stdout 最后一行是 issue URL，从里面取号
-    const r = await run(ghBin, args);
-    if (!r.ok) throw new Error(`gh issue create 失败：${r.reason || r.stderr || r.code}`);
-    const lines = String(r.stdout || '').trim().split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean);
-    const url = lines.pop() || '';
-    const m = url.match(new RegExp('/issues/([0-9]+)$'));
-    if (!m) throw new Error(`gh issue create 输出里没有 issue URL：${url.slice(0, 200)}`);
-    return { number: Number(m[1]), url };
+  async function ghCreateIssue(repo, { title, body, labels = [], idempotency_key } = {}) {
+    const key = String(idempotency_key || '').trim();
+    if (!key) throw new Error('issue-gateway create 要 idempotency_key（群消息根 id 当键）');
+    const r = write({
+      action: 'issue_create',
+      repo,
+      title: String(title ?? ''),
+      body: String(body ?? ''),
+      labels,
+      host: 'feishu-triage',
+      idempotency_key: key,
+    });
+    if (!r || !r.ok) throw new Error(`issue-gateway create 失败：${r && r.stage ? r.stage + ' ' : ''}${r && r.error ? r.error : '没查成'}`);
+    if (!r.number || !r.url) throw new Error('issue-gateway create 回执不完整（缺 number/url）');
+    return { number: r.number, url: r.url, replay: !!r.replay };
   }
 
-  async function ghComment(repo, number, body) {
-    const r = await run(ghBin, ['issue', 'comment', String(number), '--repo', repo, '--body', String(body ?? '')]);
-    if (!r.ok) throw new Error(`gh issue comment 失败：${r.reason || r.stderr || r.code}`);
+  async function ghComment(repo, number, body, { idempotency_key } = {}) {
+    const key = String(idempotency_key || '').trim();
+    if (!key) throw new Error('issue-gateway comment 要 idempotency_key');
+    const r = write({
+      action: 'issue_comment',
+      repo,
+      issue: number,
+      body: String(body ?? ''),
+      host: 'feishu-triage',
+      idempotency_key: key,
+    });
+    if (!r || !r.ok) throw new Error(`issue-gateway comment 失败：${r && r.stage ? r.stage + ' ' : ''}${r && r.error ? r.error : '没查成'}`);
     return true;
   }
 
@@ -763,7 +778,13 @@ export async function handleCardAction(event, { store, deps } = {}) {
     const comment = cardDecisionComment({
       who, choice: parsed.choice, chatId: parsed.chatId, messageId: parsed.messageId,
     });
-    actions.push({ type: 'gh_comment', repo, number, body: comment });
+    actions.push({
+      type: 'gh_comment',
+      repo,
+      number,
+      body: comment,
+      idempotency_key: `feishu-card:${parsed.messageId || parsed.chatId || 'unknown'}:${parsed.choice || 'ok'}`,
+    });
     if (parsed.choice === 'alternative') {
       actions.push({
         type: 'card_followup',
@@ -819,7 +840,9 @@ export async function applyCardActions(result, { store, deps, client = null } = 
   for (const a of result.actions || []) {
     if (a.type === 'gh_comment' && a.repo && a.number && deps?.ghComment) {
       try {
-        await deps.ghComment(a.repo, a.number, a.body);
+        await deps.ghComment(a.repo, a.number, a.body, {
+          idempotency_key: a.idempotency_key,
+        });
         log({ type: 'action', action: a });
       } catch (e) {
         warn(`拍板评论写失败（${a.repo}#${a.number}）：${e.message}`);
