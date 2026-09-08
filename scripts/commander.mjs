@@ -1100,9 +1100,9 @@ function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, no
   return verdict;
 }
 
-function runOrShow(argv, { dryRun, say, why }) {
+function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
   if (dryRun) { say(`[dry] ${why || ''}\n    ${argv.join(' ')}`); return { ok: true, dryRun: true }; }
-  const r = runCmd(argv);
+  const r = run(argv);
   say(`  ${r.ok ? '跑完' : '失败'}：${argv.slice(1).join(' ')}${r.ok ? '' : ' → ' + r.error}`);
   return r;
 }
@@ -1286,8 +1286,8 @@ function ensureTreeFromPr(action, { dryRun, say, run = runCmd }) {
   return { ok: true, tree: path, headRef };
 }
 
-function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
-  const written = writeReworkBrief(action);
+function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
+  const written = writeReworkBrief(action, { dir: briefDir });
   if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
   const spec = reworkSpec(action, written.path);
   try { buildSoldierInject({ spec, issue: action.issue }); }
@@ -1338,7 +1338,7 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
   }
-  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
   rememberRework(state, action, written, started);
   return started;
 }
@@ -2227,4 +2227,5 @@ export {
   reapBrains,
   alreadyAppended,
   scanSessions, scanDesiredJobs,
+  ensureTreeFromPr, dispatchRework,
 };
