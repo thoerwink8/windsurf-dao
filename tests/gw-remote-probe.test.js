@@ -211,7 +211,6 @@ describe('systemd 单元与装机脚本', () => {
     const t = fs.readFileSync(TIMER, 'utf8');
     assert.match(s, /^User=orca$/m);
     assert.match(s, /scripts\/gw-remote-probe\.mjs/);
-    // #792：合入 master 后本单元漏卸个人 token，把 issue-gateway-check 打红。
     assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
     assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     assert.match(t, /^OnCalendar=/m);
