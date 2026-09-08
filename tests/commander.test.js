@@ -1121,6 +1121,17 @@ describe('返工命令：原树短会话，不新派工', () => {
     assert.match(src, /function rememberRework/);
     assert.doesNotMatch(body, /'--allow-dup'/, '不再走 dispatch 新派工');
   });
+  it('找不到 dao 树时从 PR 分支建树，不再永久交帅（#1142 实咬：快马 PR 无工树，返工判死刑）', () => {
+    const i = src.indexOf('function dispatchRework');
+    const body = src.slice(i, i + 4500);
+    assert.match(body, /ensureTreeFromPr/, '无树要先走建树路，不是直接交帅');
+    const j = src.indexOf('function ensureTreeFromPr');
+    assert.ok(j > -1, '找不到 ensureTreeFromPr——本闸判据失效，不是通过');
+    const helper = src.slice(j, j + 1800);
+    assert.match(helper, /worktree-create/, '建树走 dao.mjs worktree-create（mirasim 按分支幂等）');
+    assert.match(helper, /headRefName/, 'PR 分支名要实查，不猜');
+    assert.match(helper, /没查成/, '查不到分支名/回执没 path 要按没查成交帅，不能装成建好了');
+  });
 });
 
 // 2026-09-05 实咬：自动合并的唯一入口是 pr.reviewDecision==='APPROVED'，而这个字段由 GitHub 按分支保护规则算，
