@@ -21,9 +21,9 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js` → 全绿。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js` → 488 绿。合入后 `tests/issue-gateway-check.test.js tests/gw-remote-probe.test.js` → 29 绿。
 
-`node scripts/dao-check.mjs`：本单引入的复合断言闸已拆绿；剩下 1 项红是云 VM `~/.claude/skills` 不是目录（AGENTS.md 写明的环境项，不是本单回归）。
+`node scripts/dao-check.mjs`：1 项红是云 VM `~/.claude/skills` 不是目录（AGENTS.md 写明的环境项，不是本单回归）。
 
 ## 进展
 
@@ -34,6 +34,7 @@
 - [x] 删四处反推层（`collectIssueLabelsFromPr` / 宿主前缀兜底 / `uniqueNames` / 第二份 `linkedIssueNumbers`）
 - [x] 文档不再教「从 issue 抄 label」
 - [x] 测试 + dao-check + handoff-check
+- [x] 跟上 origin/master（#1109/#1106/#1015）；合入后探针单元补 #792 凭据隔离
 
 ## 机制判定
 
