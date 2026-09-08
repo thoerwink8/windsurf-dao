@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { allChecksGreen } from './close-issue.mjs';
-import { inspectReadyQueue } from './ready-queue-check.mjs';
+import { inspectReadyQueue, isDeferredIssue } from './ready-queue-check.mjs';
 import { planRunGc, isLiveDispatch } from './run-lifecycle.mjs';
 
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
@@ -37,6 +37,7 @@ query($owner: String!, $name: String!) {
         body
         updatedAt
         labels(first: 30) { nodes { name } }
+        milestone { title }
       }
     }
     pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -136,6 +137,10 @@ export function normalizeGithubGraphql(data) {
       title: i.title,
       updatedAt: i.updatedAt,
       labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
+      // #966：派工队列跳过「将来某版」。缺字段当没挂档（旧夹具 / 没查到），不当成推迟。
+      milestone: i.milestone && i.milestone.title != null
+        ? { title: String(i.milestone.title) }
+        : null,
     };
     // #1094 / #1103：human_holds 闸和待拍板过滤都要读正文。
     // 键必须在——缺键是「没查成」（#1094 闸走 manual），空串是「查过、正文空」。
@@ -392,6 +397,7 @@ export function buildRecommendations({ rules, github, orca } = {}) {
   const usedPrs = new Set(items.filter((i) => i.kind === 'pr').map((i) => i.number));
   const p3 = issues
     .filter((i) => !usedIssues.has(i.number))
+    .filter((i) => !isDeferredIssue(i))
     .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0))
     .map((i) => ({
       priority: 'P3',

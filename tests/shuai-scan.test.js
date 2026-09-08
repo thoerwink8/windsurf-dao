@@ -33,6 +33,61 @@ function sampleScanResult(S, overrides = {}) {
   return S.evaluateScan({ rules, orca, github });
 }
 
+describe('#966 GraphQL 带 milestone，推迟档不进推荐', () => {
+  it('查询字符串问了 milestone.title', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /milestone \{ title \}/);
+  });
+
+  it('normalize：有 title 就带上，缺字段当没挂档', async () => {
+    const S = await LOAD;
+    const deferred = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{
+          number: 819, title: '先过渡', updatedAt: '2026-09-07T00:00:00Z',
+          labels: { nodes: [{ name: '已消歧' }] },
+          milestone: { title: '将来某版' },
+        }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(deferred.ok, true);
+    assert.equal(deferred.issues[0].milestone.title, '将来某版');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{
+          number: 10, title: '现在做', updatedAt: '2026-09-07T00:00:00Z',
+          labels: { nodes: [{ name: '已消歧' }] },
+        }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.issues[0].milestone, null);
+  });
+
+  it('挂将来某版的已消歧单不进 P2，也不进 P3', async () => {
+    const S = await LOAD;
+    const rec = S.buildRecommendations({
+      rules: { 异常判据: {}, 推荐排序: {} },
+      github: {
+        ok: true,
+        issues: [
+          { number: 819, title: '先过渡', labels: [{ name: '已消歧' }], milestone: { title: '将来某版' }, updatedAt: '2026-09-07T00:00:00Z' },
+          { number: 42, title: '可起', labels: [{ name: '已消歧' }], updatedAt: '2026-08-21T00:00:00Z' },
+        ],
+        prs: [],
+      },
+      orca: { ok: true, worktrees: [] },
+    });
+    assert.equal(rec.ok, true);
+    const p2 = rec.items.filter((i) => i.priority === 'P2').map((i) => i.number);
+    const p3 = rec.items.filter((i) => i.priority === 'P3').map((i) => i.number);
+    assert.deepStrictEqual(p2, [42]);
+    assert.deepStrictEqual(p3, []);
+  });
+});
+
 describe('shuai-scan 规则文件', () => {
   it('默认 rules JSON 能解析', async () => {
     const S = await LOAD;
