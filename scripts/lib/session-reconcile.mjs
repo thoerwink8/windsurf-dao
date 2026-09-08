@@ -18,6 +18,8 @@ import { unclosedJobIds } from './ledger-query.mjs';
 const DEAD_STATES = new Set([
   'completed', 'complete', 'done', 'finished',
   'failed', 'error', 'aborted', 'cancelled', 'canceled',
+  // mirasim 的短命会话一轮结束后会报 incomplete；它已不再接收任务。
+  'incomplete',
 ]);
 
 function positiveInt(v) {

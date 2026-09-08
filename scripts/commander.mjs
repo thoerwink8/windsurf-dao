@@ -630,6 +630,8 @@ function execAction(action, { state, dryRun, log }) {
         '--issue', String(action.issue),
         '--name', dispatchName(action.title, action.issue),
         '--model', action.model, '--reviewer', action.reviewer,
+        ...(action.mergePolicy ? ['--merge-policy', action.mergePolicy] : []),
+        ...(action.mergeReason ? ['--merge-reason', action.mergeReason] : []),
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
         '--spec', dispatchSpec(action.issue), '--confirm',
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
@@ -1100,9 +1102,9 @@ function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, no
   return verdict;
 }
 
-function runOrShow(argv, { dryRun, say, why }) {
+function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
   if (dryRun) { say(`[dry] ${why || ''}\n    ${argv.join(' ')}`); return { ok: true, dryRun: true }; }
-  const r = runCmd(argv);
+  const r = run(argv);
   say(`  ${r.ok ? '跑完' : '失败'}：${argv.slice(1).join(' ')}${r.ok ? '' : ' → ' + r.error}`);
   return r;
 }
@@ -1266,8 +1268,28 @@ function rememberRework(state, action, written, verdict) {
   };
 }
 
-function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
-  const written = writeReworkBrief(action);
+/** 帅位快马 PR 没有 dao-<单> 工树。原判「找不到原树不新派工」把这类 PR 的返工判成死刑
+ *  （#1142 实咬：CONFLICTING 挂一晚，每轮「找不到工人树 dao-1133，交帅」，而帅并不在场）。
+ *  折法：从 PR 分支建树（mirasim 建树按分支幂等，同分支复用），会话仍是短命的——
+ *  「不新派工」挡的是重复 dispatch 整条链，不是挡一棵树。 */
+function ensureTreeFromPr(action, { dryRun, say, run = runCmd }) {
+  if (action.pr == null) return { ok: false, error: `找不到工人树 dao-${action.issue}，也没有 PR 可建树` };
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'view', String(action.pr),
+    '--json', 'headRefName', '-q', '.headRefName']);
+  const headRef = r.ok ? String(r.out || '').trim() : '';
+  if (!headRef) return { ok: false, error: `找不到工人树 dao-${action.issue || action.pr}，且查不到 PR #${action.pr} 的分支名（没查成）` };
+  if (dryRun) { say(`[dry] 无 dao 树，将从 PR 分支 ${headRef} 建树`); return { ok: true, dryRun: true, headRef }; }
+  const made = run(['node', 'scripts/dao.mjs', 'worktree-create', '--executor', 'mirasim', '--branch', headRef]);
+  if (!made.ok) return { ok: false, error: `从 PR 分支 ${headRef} 建树失败：${made.error || ''}` };
+  let path = null;
+  try { path = JSON.parse(String(made.out || '').trim().split('\n').pop() || '{}').path || null; }
+  catch { /* 回执不是 JSON：按下面「没查成」处理 */ }
+  if (!path) return { ok: false, error: `从 PR 分支 ${headRef} 建树回执没有 path（没查成）：${String(made.out || '').slice(0, 120)}` };
+  return { ok: true, tree: path, headRef };
+}
+
+function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
+  const written = writeReworkBrief(action, { dir: briefDir });
   if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
   const spec = reworkSpec(action, written.path);
   try { buildSoldierInject({ spec, issue: action.issue }); }
@@ -1276,7 +1298,14 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     say(`  ${error}`);
     return { ok: false, error };
   }
-  const tree = findDaoTree(action.issue, action.pr);
+  let tree = findDaoTree(action.issue, action.pr);
+  let treeFail = null;
+  if (!tree) {
+    const made = ensureTreeFromPr(action, { dryRun, say, run });
+    if (made.dryRun) return { ok: true, dryRun: true, tree: `(dry: PR 分支 ${made.headRef})` };
+    if (made.ok) { tree = made.tree; say(`  没有 dao 树，已按 PR 分支 ${made.headRef} 建树：${tree}`); }
+    else treeFail = made.error;
+  }
   if (action.conflict && tree && !dryRun) {
     const fetch = run(['git', '-C', tree, 'fetch', '--quiet', 'origin', 'master']);
     if (fetch.ok) {
@@ -1298,7 +1327,7 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     }
   }
   if (!tree) {
-    const error = `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
+    const error = treeFail || `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
     say(`  ${error}`);
     const verdict = { ok: false, unscanned: true, error };
     rememberRework(state, action, written, verdict);
@@ -1311,7 +1340,7 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
   }
-  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
   rememberRework(state, action, written, started);
   return started;
 }
@@ -2200,4 +2229,5 @@ export {
   reapBrains,
   alreadyAppended,
   scanSessions, scanDesiredJobs,
+  ensureTreeFromPr, dispatchRework,
 };
