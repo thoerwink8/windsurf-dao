@@ -100,6 +100,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { parseFrontmatter, collectExitTargets, judgeListExit } from './lib/session-brief.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
@@ -1213,6 +1214,62 @@ function checkInitiatives() {
   green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
+// ── 清单退场闸（2026-09-08 拍板「联动退出」：挂的单全关了，清单/计划文档就该收摊）──────
+// 读取面与退出共用 status/issues 字段，见 docs/README.md。判官纯函数在 session-brief.mjs。
+
+function listExitPlanDocs() {
+  const dir = join(ROOT, 'docs', 'decisions');
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); }
+  catch (e) { return { unscanned: true, error: String(e.message || e).slice(0, 80) }; }
+  const entries = [];
+  for (const f of files) {
+    try { entries.push({ file: `docs/decisions/${f}`, fm: parseFrontmatter(readFileSync(join(dir, f), 'utf8')) }); }
+    catch { /* 单个读不了不毁整扫；没 frontmatter 的本来就不进闸 */ }
+  }
+  return { entries };
+}
+
+function checkListExitSamples() {
+  // 故意违规样本：挂的单全 CLOSED 却还 active/in-progress → 必须被咬住，否则闸没生效。
+  const doc = { initiatives: [{ id: 'x', status: 'active', issues: [11, 12], next_action: 'n' }] };
+  const plans = [{ file: 'docs/decisions/p.md', fm: parseFrontmatter('---\nstatus: in-progress\nissues: [13]\n---\n正文') }];
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans });
+  if (targets.length !== 2) { fail('清单退场闸夹具：挂钩对象收集不对', '该收 2 个（西瓜 x + 计划 p.md）', `收到 ${targets.length}`); return; }
+  const red = judgeListExit({ targets, states: { 11: 'CLOSED', 12: 'CLOSED', 13: 'CLOSED' } });
+  if (red.ok || red.stale.length !== 2) { fail('清单退场闸夹具：全关单的赖着不走没被咬住', '判官对故意违规样本必须红', JSON.stringify(red).slice(0, 120)); return; }
+  const green_ = judgeListExit({ targets, states: { 11: 'OPEN', 12: 'CLOSED', 13: 'OPEN' } });
+  if (!green_.ok) { fail('清单退场闸夹具：还有单开着却被误咬', '有 OPEN 单就不该判退场', JSON.stringify(green_).slice(0, 120)); return; }
+  const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
+  if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成');
+}
+
+function checkListExitLive() {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(ROOT, 'docs', 'initiatives.json'), 'utf8')); }
+  catch (e) { skip(`清单退场闸：initiatives.json 读不了（${String(e.message || e).slice(0, 60)}）——本次没查成`); return; }
+  const plans = listExitPlanDocs();
+  if (plans.unscanned) { skip(`清单退场闸：decisions 目录没查成（${plans.error}）`); return; }
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans.entries });
+  if (!targets.length) { green('清单退场闸：0 个挂钩对象（active 清单/计划都没挂 issues，不是没查成）'); return; }
+  const nums = [...new Set(targets.flatMap((t) => t.issues))];
+  const states = {};
+  for (const n of nums) {
+    const r = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
+    if (r.status === 0) states[n] = String(r.stdout || '').trim();
+  }
+  const verdict = judgeListExit({ targets, states });
+  if (verdict.unscanned) { skip(`清单退场闸：${verdict.error}——本次没查成，不是绿`); return; }
+  if (!verdict.ok) {
+    fail(`清单该收摊没收摊：${verdict.stale.length} 个对象挂的单全关了还标着在推`,
+      '人工核一眼 done_when，一行 commit 把 status 翻成 done（西瓜条目/计划文档 frontmatter）——联动退出见 docs/README.md',
+      verdict.stale.map((t) => `${t.kind}:${t.name}`).join('、'));
+    return;
+  }
+  green(`清单退场闸：${targets.length} 个挂钩对象都还有在途单，没有赖着的`);
+}
+
 // ── orca 产品面残留（linux 用户名 /home/orca 不是产品，不进这条）────────────────
 // 认这些才算还没退役：真 spawn orca CLI、createOrcaBinding、orca-serve 单元、
 // dao.mjs 标了「整段删」的那条脊。判例档案（docs/decisions、docs/observations）不扫。
@@ -1806,6 +1863,8 @@ if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh 
 checkInbox();
 checkRepoOwnership();
 checkInitiatives();
+checkListExitSamples();
+if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
 checkOrcaRetirement();
 checkCompetingPrsSamples();
