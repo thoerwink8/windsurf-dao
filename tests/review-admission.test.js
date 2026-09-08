@@ -164,3 +164,54 @@ describe('#1125 判别力：把容量闸摘掉，满载当场变红', () => {
     assert.equal(noGate.pull.length, 3, '闸摘掉就把没查成当成 0 个在跑，一次拉满——正是本单要治的病');
   });
 });
+
+describe('#1125 审官红 1：满载持票不是试过', () => {
+  it('达上限拉 0（held>0）→ 不算试过', async () => {
+    const { classifyDrainAttempt } = await RP;
+    const r = classifyDrainAttempt({ ok: true, drained: 0, failed: 0, held: 2 });
+    assert.equal(r.countTry, false);
+    assert.equal(r.reason, 'held');
+    assert.equal(r.held, 2);
+  });
+
+  it('没查成拉 0（unscanned）→ 不算试过', async () => {
+    const { classifyDrainAttempt } = await RP;
+    const r = classifyDrainAttempt({ ok: true, drained: 0, held: 2, unscanned: true });
+    assert.equal(r.countTry, false);
+    assert.equal(r.reason, 'unscanned');
+  });
+
+  it('空转成功 / dry-run 也不算试过', async () => {
+    const { classifyDrainAttempt } = await RP;
+    assert.equal(classifyDrainAttempt({ ok: true, drained: 0, failed: 0, held: 0 }).countTry, false);
+    assert.equal(classifyDrainAttempt({ ok: true, dryRun: true, drained: 2 }).countTry, false);
+  });
+
+  it('真拉走 / 真失败 → 算试过', async () => {
+    const { classifyDrainAttempt } = await RP;
+    const pulled = classifyDrainAttempt({ ok: true, drained: 1, failed: 0, held: 1 });
+    assert.equal(pulled.countTry, true);
+    assert.equal(pulled.reason, 'pulled');
+    const failed = classifyDrainAttempt({ ok: false, drained: 0, failed: 1, held: 0 });
+    assert.equal(failed.countTry, true);
+    assert.equal(failed.reason, 'failed');
+  });
+
+  it('摘掉 held-not-try → 满载样本被记成试过（证明「不记 tries」是这条闸撑着的）', async () => {
+    const { classifyDrainAttempt } = await RP;
+    const payload = { ok: true, drained: 0, failed: 0, held: 2 };
+    assert.equal(classifyDrainAttempt(payload).countTry, false, '闸开着必须不记');
+    const noGate = classifyDrainAttempt(payload, { _checks: { 'held-not-try': false, 'unscanned-not-try': true } });
+    assert.equal(noGate.countTry, true, '闸摘掉就必须记成试过——否则宽限期后绕闸那条没有判别力');
+    assert.equal(noGate.reason, 'held-but-gate-off');
+  });
+
+  it('摘掉 unscanned-not-try → 没查成被记成试过', async () => {
+    const { classifyDrainAttempt } = await RP;
+    const payload = { ok: true, drained: 0, held: 2, unscanned: true };
+    assert.equal(classifyDrainAttempt(payload).countTry, false);
+    const noGate = classifyDrainAttempt(payload, { _checks: { 'held-not-try': true, 'unscanned-not-try': false } });
+    assert.equal(noGate.countTry, true);
+    assert.equal(noGate.reason, 'unscanned-but-gate-off');
+  });
+});

@@ -1032,7 +1032,7 @@ export const FLAGS_BY_VERB = {
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
     '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--force', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1162,9 +1162,10 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
                   # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
+  review-pending-drain [--pr <N>] [--force]
                   # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
-                  # --pr 指名单张是逃生口，不过并发上限。指挥官 attach-reviewer 走本动词（不带 --pr）
+                  # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸
+                  # --force 才不过上限，只许人手；指挥官自动化不许带
                   # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]

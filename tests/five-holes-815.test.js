@@ -210,7 +210,9 @@ describe('#815 ① 复审待办队列 + drain', () => {
     assert.ok(/review-pending-drain/.test(attachCase),
       '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
     assert.ok(!/'--pr'/.test(attachCase),
-      '#1125 attach-reviewer 不带 --pr，否则容量闸被冲掉');
+      '#1125 attach-reviewer 不带 --pr：整队按容量拉，代表票只用来记账');
+    assert.ok(!/'--force'/.test(attachCase),
+      '指挥官不许 --force 绕上限');
     assert.ok(/function drainReviewPending/.test(commanderSrc)
       && /review-pending-drain/.test(commanderSrc),
       'rereview/retry 的 drainReviewPending 必须带 --pr 调 review-pending-drain');

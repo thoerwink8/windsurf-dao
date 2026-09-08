@@ -3707,9 +3707,10 @@ async function cmdReviewPendingDrain(args) {
 
   // #1125：闸放在这里而不是指挥官里——`review-pending-drain` 是唯一的拉取入口，
   // 手工跑和指挥官跑必须受同一道闸。放到调用方就会有第二条绕过去的路。
-  // --pr 指名单张时不受上限约束：那是人明确要拉这一张，属于逃生口。
-  const admit = args.pr
-    ? { ok: true, pull: all, held: [], why: `--pr ${args.pr} 指名单张，不过并发上限` }
+  // --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸。
+  // 不过上限只认 --force，只许人手；指挥官自动化不许带。
+  const admit = args.force
+    ? { ok: true, pull: all, held: [], why: `--force 人手逃生口，不过并发上限` }
     : await admitReviewPull(all);
   if (!admit.ok) {
     // 没查成不放行，但也不是失败：票都还在队列，下一轮再来。
@@ -4652,10 +4653,15 @@ async function cmdWorkerDoneMirasim(args) {
   // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
   if (plan.round === 'first') {
     const dir = reviewPendingDir({ root: ROOT });
+    let head = { name: null, oid: null };
+    try {
+      head = { name: null, oid: gitHeadOf(process.cwd()) };
+    } catch { /* 失败票路径会 gh pr view；这里拿不到就退回 pr:N，不猜 */ }
     const built = buildReviewPendingTicket({
       pr: String(plan.pr), issue: plan.issue, reviewer: plan.reviewer, round: plan.round,
       workerModel, soldierDispatch: args.soldierDispatch || null,
       workerWorktree: mirasimRepoRoot(args),
+      head,
       source: REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
     });
     if (!built.ok) fail(built.error, { ...plan, postedIssue, postedPr });

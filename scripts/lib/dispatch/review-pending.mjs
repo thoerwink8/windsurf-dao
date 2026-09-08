@@ -192,6 +192,47 @@ export const REVIEW_ADMISSION_CHECKS = {
   'queue-unscanned': true,
 };
 
+/**
+ * drain 算不算「试过」（#1125 审官红 1）。达上限 / 没查成拉 0 是背压，不是失败——
+ * 记 tries 会让 45 分钟后 retry-drain --pr 把容量闸冲掉。测试把闸摘掉，满载必须被记成试过。
+ */
+export const DRAIN_ATTEMPT_CHECKS = {
+  'held-not-try': true,
+  'unscanned-not-try': true,
+};
+
+export function classifyDrainAttempt(payload, { _checks } = {}) {
+  const C = (_checks && typeof _checks === 'object') ? _checks : DRAIN_ATTEMPT_CHECKS;
+  if (payload && payload.dryRun === true) {
+    return { countTry: false, reason: 'dry-run' };
+  }
+  if (!payload || typeof payload !== 'object') {
+    return { countTry: true, reason: 'drain-unparsed' };
+  }
+  if (payload.unscanned === true) {
+    if (C['unscanned-not-try'] !== true) {
+      return { countTry: true, reason: 'unscanned-but-gate-off', held: Number(payload.held) || 0 };
+    }
+    return { countTry: false, reason: 'unscanned', held: Number(payload.held) || 0 };
+  }
+  const drained = Number(payload.drained) || 0;
+  const failed = Number(payload.failed) || 0;
+  const held = Number(payload.held) || 0;
+  if (payload.ok === true && drained === 0 && failed === 0) {
+    if (held > 0 && C['held-not-try'] !== true) {
+      return { countTry: true, reason: 'held-but-gate-off', held };
+    }
+    return { countTry: false, reason: held > 0 ? 'held' : 'empty', held };
+  }
+  return {
+    countTry: true,
+    reason: payload.ok === true ? 'pulled' : 'failed',
+    drained,
+    failed,
+    held,
+  };
+}
+
 function admissionChecksOf(input) {
   if (input && input._checks && typeof input._checks === 'object') return input._checks;
   return REVIEW_ADMISSION_CHECKS;
