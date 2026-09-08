@@ -71,6 +71,30 @@ function spawnLark(args, spawn = spawnSync) {
   return spawn('lark-cli', args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
 }
 
+/**
+ * 飞书卡片被服务端拒收时，仍要把关键事实送达。
+ * 只抽取卡片中的文本节点，避免把一张可能不合法的卡原样再发一次。
+ */
+export function cardToPlainText(card) {
+  const parts = [];
+  const visit = (value) => {
+    if (value == null) return;
+    if (typeof value === 'string') return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (typeof value !== 'object') return;
+    if (typeof value.content === 'string' && (value.tag === 'plain_text' || value.tag === 'lark_md' || value.tag === 'markdown')) {
+      const content = value.content.replace(/\s+/g, ' ').trim();
+      if (content) parts.push(content);
+    }
+    Object.entries(value).forEach(([key, child]) => {
+      if (key !== 'content') visit(child);
+    });
+  };
+  visit(card);
+  const unique = [...new Set(parts)];
+  return (unique.join('\n') || '指挥官有一条通知，但卡片格式被飞书拒收，请查看服务器日志。').slice(0, 6000);
+}
+
 export function classifyLarkResult(r, { emptyOk = false } = {}) {
   if (r && r.error) {
     const msg = r.error.code === 'ENOENT' ? 'lark-cli 起不来' : (r.error.message || String(r.error));
@@ -98,10 +122,18 @@ export function sendCardViaLark({ chatId, card, spawn = spawnSync } = {}) {
     '-q', '.data.message_id',
   ], spawn);
   const cls = classifyLarkResult(r);
-  if (!cls.ok) return { ok: false, error: `没送进群：${cls.error}` };
+  if (!cls.ok) {
+    const original = `没送进群：${cls.error}`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
+  }
   const messageId = parseMessageId(cls.out);
   if (!messageId) {
-    return { ok: false, error: `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）` };
+    const original = `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
   }
   return { ok: true, messageId };
 }

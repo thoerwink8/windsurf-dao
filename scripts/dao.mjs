@@ -4137,6 +4137,28 @@ function cmdNext() {
  * 判据全在 lib/now-board.mjs 的 renderNow（纯函数，机器人问现状将来直接调它）；
  * 取数全在 lib/now-collect.mjs。本函数只负责把两边接起来 + 选人看还是机器看。
  */
+/**
+ * `commander-act` runs as the service owner (usually `orca`), while an operator
+ * may inspect the board as root. Pick the newest readable snapshot source so
+ * `dao now` does not silently report the operator's stale ~/.dao directory.
+ * An explicit PROGRESS_WATCH_DIR always wins.
+ */
+export function resolveProgressSnapshotDir({ home = homedir(), list = readdirSync } = {}) {
+  const configured = process.env.PROGRESS_WATCH_DIR;
+  if (configured) return configured;
+  const candidates = [join(home, '.dao', 'commander')];
+  if (process.getuid?.() === 0) candidates.push('/home/orca/.dao/commander');
+  const ranked = candidates.map((dir) => {
+    try {
+      const latest = list(dir).filter((n) => /^situation-.*\.json$/i.test(n)).sort().at(-1) || '';
+      return { dir, latest };
+    } catch {
+      return { dir, latest: '' };
+    }
+  });
+  return ranked.sort((a, b) => b.latest.localeCompare(a.latest))[0]?.dir || candidates[0];
+}
+
 async function cmdNow(args) {
   const { collectNow } = await import('./lib/now-collect.mjs');
   const { renderNow, formatNow, DEFAULT_WINDOW_HOURS, DEFAULT_MAX_LINES } = await import('./lib/now-board.mjs');
@@ -4145,13 +4167,14 @@ async function cmdNow(args) {
   const hours = args.hours != null && /^\d+$/.test(String(args.hours)) ? Number(args.hours) : DEFAULT_WINDOW_HOURS;
   const host = args.noServer === true ? null : (args.host || 'contabo');
   const raw = await collectNow({ cwd: root, host, windowHours: hours, now: Date.now() });
-  const progressStalls = collectProgressStalls();
+  const progressDir = resolveProgressSnapshotDir();
+  const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
+    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
     process.exit(0);
   }
-  process.stdout.write(`${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
+  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
   process.exit(0);
 }
 
