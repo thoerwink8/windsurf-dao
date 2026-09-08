@@ -12,10 +12,11 @@ describe('session-stop 后核实并回收 mirasim 子进程', () => {
         { pid: 11, cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-1157' },
         { pid: 12, cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1094' },
       ] }),
-      kill: (pid) => { killed.push(pid); return { ok: true, pid }; },
+      kill: (pid) => { killed.push(`term:${pid}`); return { ok: true, pid }; },
+      forceKill: (pid) => { killed.push(`kill:${pid}`); return { ok: true, pid }; },
     });
     assert.equal(r.ok, true);
-    assert.deepEqual(killed, [11]);
+    assert.deepEqual(killed, ['term:11', 'kill:11']);
   });
 
   it('进程观测没查成 → 不当作已清理', async () => {
