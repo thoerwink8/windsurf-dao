@@ -10,6 +10,7 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
 const BOARD = import(toUrl(path.join(REPO, 'scripts', 'lib', 'board-v0.mjs')));
+const COLLECT = import(toUrl(path.join(REPO, 'scripts', 'lib', 'board-collect.mjs')));
 const WATCH = import(toUrl(path.join(REPO, 'scripts', 'board-watch.mjs')));
 const CORE = import(toUrl(path.join(REPO, 'scripts', 'lib', 'feishu-triage-core.mjs')));
 const PROFILE = import(toUrl(path.join(REPO, 'scripts', 'lib', 'feishu-group-profile.mjs')));
@@ -23,24 +24,51 @@ const okEnv = (items) => ({ scanned: true, items });
 const deadEnv = (why) => ({ scanned: false, error: why });
 
 function issue(over = {}) {
-  return {
-    number: 818, title: '看板 v0', createdAt: HOURS_AGO(1),
+  const createdAt = over.createdAt || HOURS_AGO(1);
+  const base = {
+    number: 818, title: '看板 v0', createdAt,
     labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }],
-    ...over,
   };
+  const merged = { ...base, ...over };
+  if (!Object.prototype.hasOwnProperty.call(over, 'events')) {
+    merged.events = [{ event: 'labeled', label: { name: '已消歧' }, created_at: merged.createdAt }];
+  }
+  return merged;
 }
 function pr(over = {}) {
-  return {
-    number: 1108, title: '看板实现', createdAt: HOURS_AGO(2), isDraft: true,
+  const createdAt = over.createdAt || HOURS_AGO(2);
+  const base = {
+    number: 1108, title: '看板实现', createdAt, isDraft: true,
     reviewDecision: '', labels: [{ name: 'model/grok-4.6' }],
-    ...over,
   };
+  const merged = { ...base, ...over };
+  if (!Object.prototype.hasOwnProperty.call(over, 'events')) {
+    const names = (merged.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+    const at = merged.createdAt;
+    if (names.includes('卡死/自动化认输') || names.includes('卡死/等用户')) {
+      const hit = names.includes('卡死/自动化认输') ? '卡死/自动化认输' : '卡死/等用户';
+      merged.events = [{ event: 'labeled', label: { name: hit }, created_at: at }];
+    } else if (String(merged.reviewDecision).toUpperCase() === 'CHANGES_REQUESTED') {
+      merged.events = [{ event: 'reviewed', state: 'changes_requested', submitted_at: at }];
+    } else if (String(merged.reviewDecision).toUpperCase() === 'APPROVED') {
+      merged.events = [{ event: 'reviewed', state: 'approved', submitted_at: at }];
+    } else if (merged.isDraft === true) {
+      merged.events = [{ event: 'convert_to_draft', created_at: at }];
+    } else {
+      merged.events = [{ event: 'ready_for_review', created_at: at }];
+    }
+  }
+  return merged;
 }
 function order(over = {}) {
-  return {
-    id: 'dq-1', ts: HOURS_AGO(0.5), issue: 818, name: '看板 v0', status: 'running',
-    model: 'grok-4.6', ...over,
+  const ts = over.ts || HOURS_AGO(0.5);
+  const status = over.status || 'running';
+  const base = {
+    id: 'dq-1', ts, issue: 818, name: '看板 v0', status,
+    model: 'grok-4.6',
+    runningAt: status === 'running' ? ts : null,
   };
+  return { ...base, ...over };
 }
 
 describe('看板行：三态信封', () => {
@@ -175,6 +203,115 @@ describe('阶段超时纯函数', () => {
     const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
     assert.equal(plan.alerts.length, 0);
     assert.equal(plan.skipped.some((s) => /没查成/.test(s.reason)), true);
+  });
+
+  it('开单 10h、当前阶段只待了 1h → 绿、不报超时', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([issue({
+        createdAt: HOURS_AGO(10),
+        events: [{ event: 'labeled', label: { name: '已消歧' }, created_at: HOURS_AGO(1) }],
+      })]),
+      prs: okEnv([]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].elapsedHours, 1);
+    assert.equal(board.rows[0].state, 'green');
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+  });
+
+  it('开 PR 10h、打回 1h → 绿、不报超时', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([]),
+      prs: okEnv([pr({
+        createdAt: HOURS_AGO(10),
+        isDraft: false,
+        reviewDecision: 'CHANGES_REQUESTED',
+        events: [{ event: 'reviewed', state: 'changes_requested', submitted_at: HOURS_AGO(1) }],
+      })]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].stage, '已红返工');
+    assert.equal(board.rows[0].elapsedHours, 1);
+    assert.equal(board.rows[0].state, 'green');
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+  });
+
+  it('执行中缺 .running 时间 → 不拿入队 ts 顶', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([]),
+      prs: okEnv([]),
+      queue: okEnv([order({ ts: HOURS_AGO(10), status: 'running', runningAt: null })]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].stage, '执行中');
+    assert.equal(board.rows[0].elapsedHours, null);
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+  });
+
+  it('事件没查成（events 缺席）→ 不拿开单日顶', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([issue({ createdAt: HOURS_AGO(10), events: undefined })]),
+      prs: okEnv([]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].elapsedHours, null);
+    assert.equal(board.rows[0].state, 'green');
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+  });
+
+  it('一开就是草稿：查过事件但没有 convert_to_draft → 用开 PR 日', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([]),
+      prs: okEnv([pr({ createdAt: HOURS_AGO(2), isDraft: true, events: [] })]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].stage, '工人干活');
+    assert.equal(board.rows[0].elapsedHours, 2);
+    assert.equal(board.rows[0].state, 'green');
+  });
+
+  it('开单 10h、阶段未知（没有阶段起点）→ elapsedHours=null、不报超时', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([issue({
+        createdAt: HOURS_AGO(10),
+        events: [],
+      })]),
+      prs: okEnv([]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    assert.equal(board.rows[0].elapsedHours, null);
+    assert.equal(board.rows[0].startedAt, null);
+    assert.equal(board.rows[0].state, 'green');
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+    assert.equal(plan.skipped.some((s) => /耗时没算出来/.test(s.reason)), true);
   });
 });
 
@@ -344,6 +481,26 @@ describe('策略 board 节 + CLI 动词', () => {
     const parsed = S.parseArgs(['node', 'dao.mjs', 'board', '--json']);
     assert.equal(parsed.verb, 'board');
     assert.equal(parsed.json, true);
+  });
+});
+
+describe('阶段事件取数：一张失败只让耗时空着', () => {
+  it('attachStageEvents：一张查不到事件仍 scanned，不把整路打成没查成', async () => {
+    const C = await COLLECT;
+    const env = okEnv([
+      { number: 818, title: 'a', labels: [{ name: '已消歧' }] },
+      { number: 792, title: 'b', labels: [{ name: '已消歧' }] },
+    ]);
+    const out = await C.attachStageEvents(env, {
+      kind: 'issue',
+      fetchEvents: async ({ number }) => {
+        if (number === 818) return [{ event: 'labeled', label: { name: '已消歧' }, created_at: HOURS_AGO(1) }];
+        return null;
+      },
+    });
+    assert.equal(out.scanned, true);
+    assert.equal(out.items[0].events.length, 1);
+    assert.equal(out.items[1].events, undefined);
   });
 });
 

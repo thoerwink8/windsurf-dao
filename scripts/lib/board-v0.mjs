@@ -53,6 +53,134 @@ function hoursBetween(startedAt, now) {
   return Math.round(h * 10) / 10;
 }
 
+function eventAt(e) {
+  if (!e || typeof e !== 'object') return null;
+  const raw = e.at || e.createdAt || e.created_at || e.submittedAt || e.submitted_at;
+  if (!raw) return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? (typeof raw === 'string' ? raw : new Date(t).toISOString()) : null;
+}
+
+function eventLabel(e) {
+  if (!e || typeof e !== 'object') return null;
+  if (typeof e.label === 'string' && e.label) return e.label;
+  if (e.label && typeof e.label.name === 'string' && e.label.name) return e.label.name;
+  if (typeof e.labelName === 'string' && e.labelName) return e.labelName;
+  return null;
+}
+
+function eventKind(e) {
+  if (!e || typeof e !== 'object') return null;
+  if (typeof e.kind === 'string' && e.kind) return e.kind;
+  const t = e.__typename ? String(e.__typename) : '';
+  if (t === 'LabeledEvent' || e.event === 'labeled') return 'labeled';
+  if (t === 'UnlabeledEvent' || e.event === 'unlabeled') return 'unlabeled';
+  if (t === 'ConvertToDraftEvent' || e.event === 'convert_to_draft') return 'convert_to_draft';
+  if (t === 'ReadyForReviewEvent' || e.event === 'ready_for_review') return 'ready_for_review';
+  if (t === 'PullRequestReview' || e.event === 'reviewed') return 'review';
+  if (e.state && (e.submittedAt || e.submitted_at) && !e.event && !e.__typename) return 'review';
+  return null;
+}
+
+function eventReviewState(e) {
+  const s = e && e.state != null ? String(e.state).toUpperCase() : '';
+  return s || null;
+}
+
+/** 时间线/事件 → 看板能读的阶段事件。形状对不上就丢，不当查成。 */
+export function normalizeStageEvent(raw) {
+  const kind = eventKind(raw);
+  const at = eventAt(raw);
+  if (!kind || !at) return null;
+  if (kind === 'labeled' || kind === 'unlabeled') {
+    const label = eventLabel(raw);
+    if (!label) return null;
+    return { kind, label, at };
+  }
+  if (kind === 'review') {
+    const state = eventReviewState(raw);
+    if (!state) return null;
+    return { kind, state, at };
+  }
+  return { kind, at };
+}
+
+function lastMatchingAt(events, pred) {
+  if (!Array.isArray(events)) return null;
+  let at = null;
+  for (const raw of events) {
+    const e = raw && typeof raw.kind === 'string' && raw.at ? raw : normalizeStageEvent(raw);
+    if (!e || !pred(e)) continue;
+    at = e.at;
+  }
+  return at;
+}
+
+const ISSUE_STAGE_LABEL = {
+  '待拍板': ISSUE_AWAIT,
+  '待消歧': ISSUE_PENDING,
+  '已消歧待派': ISSUE_READY,
+};
+const ISSUE_STAGE_LABELS = new Set(Object.values(ISSUE_STAGE_LABEL));
+
+/** 当前阶段起点。拿不到就空着——不许拿开单日冒充查成了（#1108 审官红项）。 */
+export function resolveIssueStageStartedAt(stage, events) {
+  if (!stage) return null;
+  if (!Array.isArray(events)) return null; // 事件没查成：不拿开单日顶
+  const label = ISSUE_STAGE_LABEL[stage];
+  if (label) return lastMatchingAt(events, (e) => e.kind === 'labeled' && e.label === label);
+  if (stage === '在办') {
+    return lastMatchingAt(events, (e) => e.kind === 'unlabeled' && ISSUE_STAGE_LABELS.has(e.label));
+  }
+  return null;
+}
+
+export function resolvePrStageStartedAt(stage, events, pr) {
+  if (!stage) return null;
+  if (!Array.isArray(events)) return null; // 事件没查成：不拿开 PR 日顶
+  if (stage === '卡死') {
+    return lastMatchingAt(events, (e) => e.kind === 'labeled'
+      && (e.label === EXHAUSTED_LABEL || e.label === WAITING_USER_LABEL));
+  }
+  if (stage === '已绿待合') {
+    return lastMatchingAt(events, (e) => e.kind === 'review' && e.state === 'APPROVED');
+  }
+  if (stage === '已红返工') {
+    return lastMatchingAt(events, (e) => e.kind === 'review' && e.state === 'CHANGES_REQUESTED');
+  }
+  if (stage === '工人干活') {
+    return lastMatchingAt(events, (e) => e.kind === 'convert_to_draft')
+      || (pr && pr.isDraft === true ? (pr.createdAt || null) : null);
+  }
+  if (stage === '等审') {
+    return lastMatchingAt(events, (e) => e.kind === 'ready_for_review')
+      || (pr && pr.isDraft !== true ? (pr.createdAt || null) : null);
+  }
+  return null;
+}
+
+/** 执行中看 .running 标记时间；排队看入队 ts。缺哪项空着，不拿另一项顶。 */
+export function resolveQueueStageStartedAt(order) {
+  if (!order || typeof order !== 'object') return null;
+  const st = assessQueueStage(order).stage;
+  if (st === '执行中') {
+    const at = order.runningAt || order.running_at;
+    return at ? String(at) : null;
+  }
+  if (st === '排队' || st === '失败' || st === '完成') {
+    return order.ts ? String(order.ts) : null;
+  }
+  return null;
+}
+
+function stageStartedAtOf(kind, item, stage) {
+  if (item && item.stageStartedAt) return item.stageStartedAt;
+  if (kind === 'issue') return resolveIssueStageStartedAt(stage, item && item.events);
+  if (kind === 'pr') return resolvePrStageStartedAt(stage, item && item.events, item);
+  if (kind === 'queue') return resolveQueueStageStartedAt(item);
+  return null;
+}
+
 function envelope(src) {
   if (!src || typeof src !== 'object') {
     return { scanned: false, error: '这一源根本没给（没查成）', items: [] };
@@ -161,7 +289,7 @@ export function issueToRow(issue, { now, thresholdHours, modelFromLedger } = {})
     return finishRow({
       state: 'unscanned', kind: 'issue', id, stage: null, model: null,
       title: issue.title ? String(issue.title) : null, why: st.why,
-      startedAt: issue.createdAt || issue.updatedAt || null,
+      startedAt: null,
     }, { now, thresholdHours });
   }
   const names = labelNames(issue.labels) || [];
@@ -173,7 +301,7 @@ export function issueToRow(issue, { now, thresholdHours, modelFromLedger } = {})
     model: pickModel(names, modelFromLedger),
     title: issue.title ? String(issue.title) : null,
     why: null,
-    startedAt: issue.createdAt || issue.updatedAt || null,
+    startedAt: stageStartedAtOf('issue', issue, st.stage),
   }, { now, thresholdHours });
 }
 
@@ -190,7 +318,7 @@ export function prToRow(pr, { now, thresholdHours, modelFromLedger } = {}) {
     model: pickModel(names, modelFromLedger),
     title: pr.title ? String(pr.title) : null,
     why: null,
-    startedAt: pr.createdAt || pr.updatedAt || null,
+    startedAt: stageStartedAtOf('pr', pr, st.stage),
   }, { now, thresholdHours });
 }
 
@@ -208,7 +336,7 @@ export function queueToRow(order, { now, thresholdHours } = {}) {
     model: order.model ? String(order.model) : null,
     title: order.name || order.title || null,
     why: null,
-    startedAt: order.ts || order.startedAt || null,
+    startedAt: resolveQueueStageStartedAt(order),
   }, { now, thresholdHours });
 }
 

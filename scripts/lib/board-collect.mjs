@@ -6,8 +6,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fetchIssues, fetchOpenPrs } from './now-collect.mjs';
-import { dispatchQueueDir, listDispatchOrders, readDispatchOrder } from './dispatch-queue.mjs';
+import { fetchIssues, fetchOpenPrs, run as runCmd } from './now-collect.mjs';
+import { dispatchOrderPaths, dispatchQueueDir, listDispatchOrders, readDispatchOrder } from './dispatch-queue.mjs';
 import { defaultLedgerDir } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
 import { DEFAULT_WORKER_WALL_HOURS, loadBoardThreshold, renderBoard } from './board-v0.mjs';
@@ -62,6 +62,14 @@ export function collectQueue({ root, env } = {}) {
         if (args && args.model) model = String(args.model);
       }
     }
+    let runningAt = null;
+    if (o.status === 'running' && dir && o.id) {
+      const paths = dispatchOrderPaths(dir, o.id);
+      try {
+        const meta = JSON.parse(readFileSync(paths.running, 'utf8') || '{}');
+        if (meta && meta.ts) runningAt = String(meta.ts);
+      } catch { /* 读不到就空着，不拿入队时间顶 */ }
+    }
     items.push({
       id: o.id,
       ts: o.ts,
@@ -69,6 +77,7 @@ export function collectQueue({ root, env } = {}) {
       name: o.name,
       status: o.status,
       model,
+      runningAt,
     });
   }
   return { scanned: true, items };
@@ -82,15 +91,72 @@ export function collectLedger({ home, env } = {}) {
   return { scanned: true, items };
 }
 
+const STAGE_EVENT_CONCURRENCY = 5;
+
+async function mapLimit(items, limit, fn) {
+  const ret = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      ret[i] = await fn(items[i], i);
+    }
+  }
+  const n = Math.max(1, Math.min(limit, items.length || 0));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return ret;
+}
+
+function parseEventsJson(text) {
+  try {
+    const v = JSON.parse(text);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+async function defaultFetchEvents({ cwd, number, kind }) {
+  const path = kind === 'pr'
+    ? `repos/{owner}/{repo}/issues/${number}/timeline`
+    : `repos/{owner}/{repo}/issues/${number}/events`;
+  const r = await runCmd('gh', ['api', path, '--paginate'], { cwd });
+  if (!r.ok) return null;
+  return parseEventsJson(r.out);
+}
+
 /**
- * GitHub 那两路复用 now-collect；issue/PR 补 createdAt（墙钟起点）。
+ * 给已查成的 issue/PR 补阶段事件。一张失败只让那张耗时空着，
+ * 不把整路打成没查成（#1108 审官：拿不到起点 ≠ 用开单日顶）。
+ */
+export async function attachStageEvents(env, { cwd, kind, fetchEvents = defaultFetchEvents } = {}) {
+  if (!env || env.scanned !== true || !Array.isArray(env.items) || env.items.length === 0) return env;
+  const items = await mapLimit(env.items, STAGE_EVENT_CONCURRENCY, async (it) => {
+    const n = it && it.number;
+    if (n == null) return it;
+    let events;
+    try { events = await fetchEvents({ cwd, number: n, kind }); }
+    catch { return it; }
+    if (!Array.isArray(events)) return it;
+    return { ...it, events };
+  });
+  return { ...env, items };
+}
+
+/**
+ * GitHub 那两路复用 now-collect；再补阶段事件当墙钟起点。
  * 补字段失败只让耗时空着，不把整路打成没查成。
  */
 export async function collectBoardSources({ cwd, root, env, home, now = Date.now() } = {}) {
   const repoRoot = root || cwd;
-  const [issues, prs] = await Promise.all([
+  const [issuesRaw, prsRaw] = await Promise.all([
     fetchIssues({ cwd: repoRoot }),
     fetchOpenPrs({ cwd: repoRoot }),
+  ]);
+  const [issues, prs] = await Promise.all([
+    attachStageEvents(issuesRaw, { cwd: repoRoot, kind: 'issue' }),
+    attachStageEvents(prsRaw, { cwd: repoRoot, kind: 'pr' }),
   ]);
   const queue = collectQueue({ root: repoRoot, env });
   const ledger = collectLedger({ home, env });
