@@ -1,665 +1,666 @@
 {
-  "updated": "2026-09-06",
-  "工人": {
-    "写码": {
-      "模型": [
-        {
-          "id": "grok-4.6",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "2026-09-03 #822：写码仍 grok-4.6，通道改 pi gw（前置2 工具样例绿）",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
-        },
-        {
-          "id": "devin-deepseek-v4-flash-max",
-          "顺位": null,
-          "禁用": true,
-          "理由": "2026-09-03 #822 退役：无网关渠道，非交互形态也无人维护",
-          "拍板": "2026-09-03",
-          "status": "正式",
-          "禁用时间": "2026-09-03",
-          "provider": "devin",
-          "cli_model": "deepseek-v4-flash-max"
-        },
-        {
-          "id": "deepseek-v4-flash",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "写码 fallback；2026-09-03 通道 gw-dspool（前置2 绿）",
-          "拍板": "2026-08-16",
-          "status": "正式",
-          "provider": "gw",
-          "cli_model": "gw-dspool/deepseek-v4-flash"
-        }
-      ]
+ "updated": "2026-09-06",
+ "工人": {
+  "写码": {
+   "模型": [
+    {
+     "id": "grok-4.6",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "2026-09-03 #822：写码仍 grok-4.6，通道改 pi gw（前置2 工具样例绿）",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gw",
+     "cli_model": "gw/grok-4.6"
     },
-    "方案": {
-      "模型": [
-        {
-          "id": "gpt-5.6-sol",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "2026-09-03 用户拍板：GPT 必须走 Codex；方案盲写主路",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gpt"
-        },
-        {
-          "id": "deepseek-v4-flash",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "2026-09-03 用户拍板：方案多模型盲写",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw-dspool/deepseek-v4-flash"
-        },
-        {
-          "id": "glm-5.2",
-          "顺位": 3,
-          "禁用": false,
-          "理由": "2026-09-03 用户拍板：方案多模型盲写",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
-        }
-      ]
+    {
+     "id": "devin-deepseek-v4-flash-max",
+     "顺位": null,
+     "禁用": true,
+     "理由": "2026-09-03 #822 退役：无网关渠道，非交互形态也无人维护",
+     "拍板": "2026-09-03",
+     "status": "正式",
+     "禁用时间": "2026-09-03",
+     "provider": "devin",
+     "cli_model": "deepseek-v4-flash-max"
     },
-    "方案整合": {
-      "模型": [
-        {
-          "id": "grok-4.6",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "2026-09-03 用户拍板：方案整合 = 写码工人 grok，通道改 pi gw",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
-        }
-      ]
-    },
-    "查证": {
-      "模型": [
-        {
-          "id": "grok-4.6",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "查证主选；#822 通道改 pi gw",
-          "拍板": "2026-08-14",
-          "status": "试用",
-          "trial_since": "2026-08-14",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
-        },
-        {
-          "id": "gemini-3.7-flash",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "查证试用；#822 从 cursor 改 gw-windsurf",
-          "拍板": "2026-08-18",
-          "status": "试用",
-          "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "顺位": 3,
-          "禁用": false,
-          "理由": "codex 查证备选",
-          "拍板": "2026-08-12",
-          "status": "正式",
-          "provider": "gpt"
-        }
-      ]
-    },
-    "UI": {
-      "模型": [
-        {
-          "id": "composer-2.5",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "UI 试用主选；#822 从 cursor 改 gw-sub",
-          "拍板": "2026-08-18",
-          "status": "试用",
-          "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-sub/composer-2.5"
-        },
-        {
-          "id": "kimi-k3",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "UI 备选；#822 改 gw-sub/kimi-k3-high",
-          "拍板": "2026-08-19",
-          "status": "试用",
-          "trial_since": "2026-08-16",
-          "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
-        },
-        {
-          "id": "glm-5.2",
-          "顺位": 3,
-          "禁用": false,
-          "理由": "UI 备选；#822 改 gw-windsurf；前置2 glm 工具样例绿",
-          "拍板": "2026-08-19",
-          "status": "试用",
-          "trial_since": "2026-08-19",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
-        },
-        {
-          "id": "gemini-3.7-flash",
-          "顺位": 4,
-          "禁用": false,
-          "理由": "UI 试用；#822 从 cursor 改 gw-windsurf",
-          "拍板": "2026-08-18",
-          "status": "试用",
-          "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
-        }
-      ]
-    },
-    "消歧": {
-      "模型": [
-        {
-          "id": "grok-4.6",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "2026-09-06 用户当场指定 grok（xAI）做消歧官；通道沿用 gw/grok-4.6（#1006）",
-          "拍板": "2026-09-06",
-          "status": "试用",
-          "trial_since": "2026-09-06",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
-        }
-      ]
+    {
+     "id": "deepseek-v4-flash",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "写码 fallback；2026-09-03 通道 gw-dspool（前置2 绿）",
+     "拍板": "2026-08-16",
+     "status": "正式",
+     "provider": "gw",
+     "cli_model": "gw-dspool/deepseek-v4-flash"
     }
+   ]
   },
-  "审官": {
-    "审查": {
-      "模型": [
-        {
-          "id": "gpt-5.6-sol",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "2026-08-22 审官只用 Codex（GPT 主路）；#822 用户例外：GPT 必须走 Codex。2026-09-03 #843 过渡期临时降到顺位 2（pqapi 官方确认故障，codex 每单必死）；pqapi 恢复后切回顺位 1",
-          "拍板": "2026-09-03",
-          "status": "正式",
-          "provider": "gpt"
-        },
-        {
-          "id": "gpt-5.6-luna",
-          "顺位": 1,
-          "禁用": false,
-          "理由": "2026-09-03 用户拍板过渡措施：pqapi 官方确认故障，codex 审官每单必死；#843 熔断上线且 pqapi 恢复后重新评估切回。经 gw-windsurf、网关 gptpool 三腿兜底。真实供应商 OpenAI，与 gw 工人（grok=xAI 等）跨厂——#843 同步把同厂闸改判真实供应商家族（#822 埋洞）",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/gpt-5.6-luna"
-        },
-        {
-          "id": "claude-opus",
-          "顺位": null,
-          "禁用": true,
-          "理由": "2026-08-22 审官位暂时禁用；#822 claude CLI 从选型移除，本条保持禁用",
-          "拍板": "2026-08-14",
-          "status": "正式",
-          "provider": "claude",
-          "cli_model": "opus"
-        },
-        {
-          "id": "kimi-k3",
-          "顺位": 3,
-          "禁用": false,
-          "理由": "备选登记，不顶审官位；#822 改 gw-sub。#843 后同厂闸按真实供应商家族判：kimi(月之暗面) 与 grok/gpt 等工人跨厂，只与 kimi 工人同厂",
-          "拍板": "2026-08-19",
-          "status": "试用",
-          "trial_since": "2026-08-16",
-          "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
-        },
-        {
-          "id": "glm-5.2",
-          "顺位": 4,
-          "禁用": false,
-          "理由": "备选登记，不顶审官位；#822 改 gw-windsurf。#843 后同厂闸按真实供应商家族判：glm(智谱) 只与 glm 工人同厂",
-          "拍板": "2026-08-19",
-          "status": "试用",
-          "trial_since": "2026-08-19",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
-        },
-        {
-          "id": "grok-4.6",
-          "顺位": 5,
-          "禁用": false,
-          "理由": "备选；#822 改 pi gw。#843 后同厂闸按真实供应商家族判：grok(xAI) 只与 grok 工人同厂",
-          "拍板": "2026-08-14",
-          "status": "试用",
-          "trial_since": "2026-08-14",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
-        }
-      ]
+  "方案": {
+   "模型": [
+    {
+     "id": "gpt-5.6-sol",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "2026-09-03 用户拍板：GPT 必须走 Codex；方案盲写主路",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gpt"
+    },
+    {
+     "id": "deepseek-v4-flash",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "2026-09-03 用户拍板：方案多模型盲写",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gw",
+     "cli_model": "gw-dspool/deepseek-v4-flash"
+    },
+    {
+     "id": "glm-5.2",
+     "顺位": 3,
+     "禁用": false,
+     "理由": "2026-09-03 用户拍板：方案多模型盲写",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/glm-5-2"
     }
+   ]
   },
-  "帅": {
-    "判断": {
-      "模型": [
-        {
-          "id": "deepseek-v4-pro",
-          "顺位": 1,
-          "禁用": true,
-          "理由": "用户 2026-09-03 拍板 ban：deepseek 只用 v4-flash（判断类主选；#822 从 opencode-go 改 gw-dspool（服务器 og 403））",
-          "拍板": "2026-09-03",
-          "status": "正式",
-          "provider": "gw",
-          "cli_model": "gw-dspool/deepseek-v4-pro-max"
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "顺位": 2,
-          "禁用": false,
-          "理由": "codex 判断备选",
-          "拍板": "2026-08-12",
-          "status": "正式",
-          "provider": "gpt"
-        },
-        {
-          "id": "kimi-k3",
-          "顺位": 3,
-          "禁用": false,
-          "理由": "判断试用；#822 改 gw-sub",
-          "拍板": "2026-08-19",
-          "status": "试用",
-          "trial_since": "2026-08-16",
-          "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
-        },
-        {
-          "id": "composer-2.5",
-          "顺位": 4,
-          "禁用": false,
-          "理由": "试用写码+判断；#822 改 gw-sub",
-          "拍板": "2026-08-18",
-          "status": "试用",
-          "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-sub/composer-2.5"
-        },
-        {
-          "id": "ox-alpha-free",
-          "顺位": null,
-          "禁用": true,
-          "理由": "2026-09-03 #822：无网关渠道，og 在服务器 403；从选型移除",
-          "拍板": "2026-09-03",
-          "status": "试用",
-          "trial_since": "2026-08-22",
-          "禁用时间": "2026-09-03",
-          "provider": "opencode-go",
-          "cli_model": "ox-alpha-free"
-        }
-      ]
+  "方案整合": {
+   "模型": [
+    {
+     "id": "grok-4.6",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "2026-09-03 用户拍板：方案整合 = 写码工人 grok，通道改 pi gw",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gw",
+     "cli_model": "gw/grok-4.6"
     }
+   ]
   },
-  "禁令": [
+  "查证": {
+   "模型": [
     {
-      "id": "ban-deepseek-查证",
-      "模型": [
-        "deepseek-v4-flash",
-        "deepseek-v4-pro"
-      ],
-      "工种": [
-        "查证"
-      ],
-      "理由": "事实召回差，查证/调研不派它",
-      "拍板": "2026-08-14"
+     "id": "grok-4.6",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "查证主选；#822 通道改 pi gw",
+     "拍板": "2026-08-14",
+     "status": "试用",
+     "trial_since": "2026-08-14",
+     "provider": "gw",
+     "cli_model": "gw/grok-4.6"
     },
     {
-      "id": "ban-ox-alpha-free-未验证工种",
-      "模型": [
-        "ox-alpha-free"
-      ],
-      "工种": [
-        "查证",
-        "审查",
-        "UI"
-      ],
-      "理由": "ox-alpha-free 只进写码+判断试用候选（#718）；#822 已从选型禁用，本禁令留着防加回",
-      "拍板": "2026-08-22"
+     "id": "gemini-3.7-flash",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "查证试用；#822 从 cursor 改 gw-windsurf",
+     "拍板": "2026-08-18",
+     "status": "试用",
+     "trial_since": "2026-08-18",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/gemini-3-7-flash-high"
     },
     {
-      "id": "ban-gpt-ui",
-      "模型": [
-        "gpt-5.6-sol",
-        "gpt-5.6-luna"
-      ],
-      "工种": [
-        "UI"
-      ],
-      "优先级": "高于「审查默认换厂商」",
-      "理由": "用户 2026-08-12 体感裁定（UI 类含复审）",
-      "拍板": "2026-08-12"
+     "id": "gpt-5.6-sol",
+     "顺位": 3,
+     "禁用": false,
+     "理由": "codex 查证备选",
+     "拍板": "2026-08-12",
+     "status": "正式",
+     "provider": "gpt"
     }
-  ],
-  "规则": [
-    {
-      "名称": "审查默认换厂商",
-      "理由": "审查与写码同一模型容易放水",
-      "约束": "受 gpt UI ban 优先级约束；#679 审官口同厂硬闸。#843 起按真实供应商家族判（网关落地 provider 只作诊断）——工人 grok 时 luna/kimi/glm 等审官都算跨厂，不再『跨厂只剩 gpt/codex』",
-      "拍板": "2026-08-12"
-    },
-    {
-      "名称": "审官顺位",
-      "理由": "2026-08-22 grill-ai 拍板 A：JSON 三层对齐，顺位路由；审官主路 Codex；Claude 禁用；同厂无人可派报错停手，不许自动 fallback。#822：GPT 必须走 Codex，其余模型只走 pi gw。#843 过渡期：审官顺位 1 临时切 gpt-5.6-luna（pqapi 官方确认故障，codex 每单必死），pqapi 恢复后切回 Codex",
-      "约束": "受 bans[gpt UI 类].precedence 约束",
-      "拍板": "2026-09-03"
-    },
-    {
-      "名称": "非GPT只走pi-gw",
-      "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等本单验收后",
-      "约束": "启用中的厂商：GPT 模型必须 gpt；其余必须 gw。禁用条目可留旧 CLI 作退役记录",
-      "拍板": "2026-09-03"
-    },
-    {
-      "名称": "腿表帅位自己改",
-      "理由": "2026-09-05 用户拍板：『腿表我认为是随时可以改的，只要是帅位都有权利改』。腿是对现实的追认——模型上下线、通道换了、供应商挂了，追认不了台账就失真。server-check ㉒ 拿实跑账对腿表，若改一条腿都要等人，这条闸只会长期红着变噪音，而噪音久了就没人看",
-      "约束": "只限「腿」节的增删改状态。「禁令」「规则」「轴」是拍过板的原则（GPT 禁入 UI、审查换厂商这些），改它们仍在 release-policy.json 的 human_holds『改规则(选型禁令)』里，永远问人",
-      "拍板": "2026-09-05"
-    }
-  ],
-  "轴": {
-    "族": [
-      "claude",
-      "codex",
-      "pi"
-    ],
-    "供应商": [
-      "gw",
-      "pqapi",
-      "reclaude",
-      "mirasim"
-    ],
-    "执行侧": [
-      "orca",
-      "mirasim",
-      "cc-local",
-      "terminal"
-    ]
+   ]
   },
-  "腿": [
+  "UI": {
+   "模型": [
     {
-      "id": "grok-4.6@gw/orca",
-      "模型": "grok-4.6",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw/grok-4.6"
-      },
-      "理由": "§73 迁移：写码/查证/方案整合现役主腿"
+     "id": "composer-2.5",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "UI 试用主选；#822 从 cursor 改 gw-sub",
+     "拍板": "2026-08-18",
+     "status": "试用",
+     "trial_since": "2026-08-18",
+     "provider": "gw",
+     "cli_model": "gw-sub/composer-2.5"
     },
     {
-      "id": "deepseek-v4-flash@gw/orca",
-      "模型": "deepseek-v4-flash",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-dspool/deepseek-v4-flash"
-      },
-      "理由": "§73 迁移：写码/方案 fallback"
+     "id": "kimi-k3",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "UI 备选；#822 改 gw-sub/kimi-k3-high",
+     "拍板": "2026-08-19",
+     "status": "试用",
+     "trial_since": "2026-08-16",
+     "provider": "gw",
+     "cli_model": "gw-sub/kimi-k3-high"
     },
     {
-      "id": "gpt-5.6-sol@pqapi/orca",
-      "模型": "gpt-5.6-sol",
-      "族": "codex",
-      "供应商": "pqapi",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gpt"
-      },
-      "理由": "§73 迁移：方案主路/审官备选；codex 直连 pqapi（#843 熔断 key direct:codex@pqapi）；gpt 族后备顺位见 §72"
+     "id": "glm-5.2",
+     "顺位": 3,
+     "禁用": false,
+     "理由": "UI 备选；#822 改 gw-windsurf；前置2 glm 工具样例绿",
+     "拍板": "2026-08-19",
+     "status": "试用",
+     "trial_since": "2026-08-19",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/glm-5-2"
     },
     {
-      "id": "gpt-5.6-luna@gw/orca",
-      "模型": "gpt-5.6-luna",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-windsurf/gpt-5.6-luna"
-      },
-      "理由": "§73 迁移：审官过渡首选（#843）"
-    },
-    {
-      "id": "glm-5.2@gw/orca",
-      "模型": "glm-5.2",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-windsurf/glm-5-2"
-      },
-      "理由": "§73 迁移：方案/UI/审官候选"
-    },
-    {
-      "id": "gemini-3.7-flash@gw/orca",
-      "模型": "gemini-3.7-flash",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-windsurf/gemini-3-7-flash-high"
-      },
-      "理由": "§73 迁移：查证/UI 候选"
-    },
-    {
-      "id": "kimi-k3@gw/orca",
-      "模型": "kimi-k3",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-sub/kimi-k3-high"
-      },
-      "理由": "§73 迁移：UI/审官/判断候选"
-    },
-    {
-      "id": "composer-2.5@gw/orca",
-      "模型": "composer-2.5",
-      "族": "pi",
-      "供应商": "gw",
-      "执行侧": "orca",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "gw",
-        "cli_model": "gw-sub/composer-2.5"
-      },
-      "理由": "§73 迁移：UI 主选/判断候选"
-    },
-    {
-      "id": "claude-fable-5@reclaude/terminal",
-      "模型": "claude-fable-5",
-      "族": "claude",
-      "供应商": "reclaude",
-      "执行侧": "terminal",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "理由": "帅位现役腿（人工起的 reclaude 终端）；§73「帅位也是腿」",
-      "落地": {
-        "provider": "claude",
-        "cli_model": "fable"
-      }
-    },
-    {
-      "id": "claude-opus@reclaude/orca",
-      "模型": "claude-opus",
-      "族": "claude",
-      "供应商": "reclaude",
-      "执行侧": "orca",
-      "状态": "停用",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "claude",
-        "cli_model": "opus"
-      },
-      "停用原因": "审官位 2026-08-22 起禁用沿革；且 reclaude 号 2026-09-04 白天 400 抖动",
-      "停用日期": "2026-09-04"
-    },
-    {
-      "id": "claude-opus-5@mirasim/mirasim",
-      "模型": "claude-opus-5",
-      "族": "claude",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-05",
-      "理由": "帅位会话载体腿。用户 2026-09-06 终拍：状态=在役（路是真的），但 7d 订阅额度紧张期它的优先级自然让位——不由人为翻停用开关，由选型算法与额度健康面（#885 卡 D）决定用不用；额度回来自动回到原优先级。此前「停用 vs 追认在役」两帅矛盾以此收口（#944）。"
-    },
-    {
-      "id": "claude-opus-5@reclaude/cc-local",
-      "模型": "claude-opus-5",
-      "族": "claude",
-      "供应商": "reclaude",
-      "执行侧": "cc-local",
-      "状态": "停用",
-      "拍板": "2026-09-04",
-      "停用原因": "等 #880 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工）",
-      "停用日期": "2026-09-04"
-    },
-    {
-      "id": "claude-opus-5@reclaude/terminal",
-      "模型": "claude-opus-5",
-      "族": "claude",
-      "供应商": "reclaude",
-      "执行侧": "terminal",
-      "状态": "在役",
-      "拍板": "2026-09-04",
-      "落地": {
-        "provider": "claude",
-        "cli_model": "opus"
-      },
-      "理由": "帅位现役腿（本机这个会话就是它）；§73「帅位也是腿」。2026-09-04 实咬：PR #890 起不了审官，报「模型 opus-5 不在路由表（没查成厂商）」——腿表登记了 fable 却漏了 opus-5，且树里一条都没有"
-    },
-    {
-      "id": "gpt-5.6-luna@mirasim/mirasim",
-      "模型": "gpt-5.6-luna",
-      "族": "codex",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-06",
-      "理由": "审官主路的实际路径。#944 对账闸上线抓出：登记 @gw/orca、实跑 mirasim relay 684 次/14 会话——纸面追上事实（用户 2026-09-06 拍板改正）。gw/orca 那条另记，两条并存到 orca 退役"
-    },
-    {
-      "id": "gpt-5.6-sol@mirasim/mirasim",
-      "模型": "gpt-5.6-sol",
-      "族": "codex",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-06",
-      "理由": "方案/判断 codex 会话在 mirasim 上的实际路径（对账实跑 15 次；用户 2026-09-06 拍板改正）"
-    },
-    {
-      "id": "gpt-6-astra@mirasim/mirasim",
-      "模型": "gpt-6-astra",
-      "族": "codex",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-06",
-      "理由": "mirasim codex 会话的默认模型——schedule_task 接口层指定不了模型（#944），定时巡检大脑落在它上。按 #944 订正的拍板精神登记为可覆盖默认，不钉死"
-    },
-    {
-      "id": "claude-fable-5@mirasim/mirasim",
-      "模型": "claude-fable-5",
-      "族": "claude",
-      "供应商": "mirasim",
-      "执行侧": "mirasim",
-      "状态": "在役",
-      "拍板": "2026-09-06",
-      "理由": "服务器帅位现役腿（写下本条的会话就是它）。Fable 只留帅位、派工须用户点名（2026-08-15 拍板）；对账闸抓出未登记后按用户 2026-09-06「改正腿表」拍板补登"
+     "id": "gemini-3.7-flash",
+     "顺位": 4,
+     "禁用": false,
+     "理由": "UI 试用；#822 从 cursor 改 gw-windsurf",
+     "拍板": "2026-08-18",
+     "status": "试用",
+     "trial_since": "2026-08-18",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/gemini-3-7-flash-high"
     }
-  ],
-  "执行体": {
-    "默认": "mirasim",
-    "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。orca 产品面已退役，执行体只剩 mirasim。",
-    "mirasim": {
-      "钉版本": "0.0.282",
-      "族": "mirasim-server",
-      "说明": "回环 ws 127.0.0.1:4316，systemd 常驻；起会话前契约断言 getState.version===钉版本，不符报警拒派不静默",
-      "模型前缀族": {
-        "gpt-5.6": "gpt",
-        "gpt": "gpt",
-        "codex": "codex",
-        "claude": "claude",
-        "pi": "pi",
-        "grok": "pi",
-        "deepseek": "pi",
-        "glm": "pi",
-        "gemini": "pi",
-        "kimi": "pi",
-        "composer": "pi"
-      },
-      "agentRoutes": {
-        "claude": {
-          "agent": "claude",
-          "mode": "relay",
-          "理由": "claude 族全 mirasim 云端 relay"
-        },
-        "gpt": {
-          "agent": "codex",
-          "mode": "relay",
-          "理由": "gpt 走 Codex；云端腿 relay（审官主路 gpt-5.6-luna）"
-        },
-        "codex": {
-          "agent": "codex",
-          "mode": "relay"
-        },
-        "pi": {
-          "agent": "pi",
-          "mode": "direct",
-          "理由": "pi 烧网关池，保 pqgpt 主路"
-        }
-      },
-      "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",
-      "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现"
+   ]
+  },
+  "消歧": {
+   "模型": [
+    {
+     "id": "grok-4.6",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "2026-09-06 用户当场指定 grok（xAI）做消歧官；通道沿用 gw/grok-4.6（#1006）",
+     "拍板": "2026-09-06",
+     "status": "试用",
+     "trial_since": "2026-09-06",
+     "provider": "gw",
+     "cli_model": "gw/grok-4.6"
     }
+   ]
   }
+ },
+ "审官": {
+  "审查": {
+   "模型": [
+    {
+     "id": "gpt-5.6-sol",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "2026-08-22 审官只用 Codex（GPT 主路）；#822 用户例外：GPT 必须走 Codex。2026-09-03 #843 过渡期临时降到顺位 2（pqapi 官方确认故障，codex 每单必死）；pqapi 恢复后切回顺位 1",
+     "拍板": "2026-09-03",
+     "status": "正式",
+     "provider": "gpt"
+    },
+    {
+     "id": "gpt-5.6-luna",
+     "顺位": 1,
+     "禁用": false,
+     "理由": "2026-09-03 用户拍板过渡措施：pqapi 官方确认故障，codex 审官每单必死；#843 熔断上线且 pqapi 恢复后重新评估切回。经 gw-windsurf、网关 gptpool 三腿兜底。真实供应商 OpenAI，与 gw 工人（grok=xAI 等）跨厂——#843 同步把同厂闸改判真实供应商家族（#822 埋洞）",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-09-03",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/gpt-5.6-luna"
+    },
+    {
+     "id": "claude-opus",
+     "顺位": null,
+     "禁用": true,
+     "理由": "2026-08-22 审官位暂时禁用；#822 claude CLI 从选型移除，本条保持禁用",
+     "拍板": "2026-08-14",
+     "status": "正式",
+     "provider": "claude",
+     "cli_model": "opus"
+    },
+    {
+     "id": "kimi-k3",
+     "顺位": 3,
+     "禁用": false,
+     "理由": "备选登记，不顶审官位；#822 改 gw-sub。#843 后同厂闸按真实供应商家族判：kimi(月之暗面) 与 grok/gpt 等工人跨厂，只与 kimi 工人同厂",
+     "拍板": "2026-08-19",
+     "status": "试用",
+     "trial_since": "2026-08-16",
+     "provider": "gw",
+     "cli_model": "gw-sub/kimi-k3-high"
+    },
+    {
+     "id": "glm-5.2",
+     "顺位": 4,
+     "禁用": false,
+     "理由": "备选登记，不顶审官位；#822 改 gw-windsurf。#843 后同厂闸按真实供应商家族判：glm(智谱) 只与 glm 工人同厂",
+     "拍板": "2026-08-19",
+     "status": "试用",
+     "trial_since": "2026-08-19",
+     "provider": "gw",
+     "cli_model": "gw-windsurf/glm-5-2"
+    },
+    {
+     "id": "grok-4.6",
+     "顺位": 5,
+     "禁用": false,
+     "理由": "备选；#822 改 pi gw。#843 后同厂闸按真实供应商家族判：grok(xAI) 只与 grok 工人同厂",
+     "拍板": "2026-08-14",
+     "status": "试用",
+     "trial_since": "2026-08-14",
+     "provider": "gw",
+     "cli_model": "gw/grok-4.6"
+    }
+   ]
+  }
+ },
+ "帅": {
+  "判断": {
+   "模型": [
+    {
+     "id": "deepseek-v4-pro",
+     "顺位": 1,
+     "禁用": true,
+     "理由": "用户 2026-09-03 拍板 ban：deepseek 只用 v4-flash（判断类主选；#822 从 opencode-go 改 gw-dspool（服务器 og 403））",
+     "拍板": "2026-09-03",
+     "status": "正式",
+     "provider": "gw",
+     "cli_model": "gw-dspool/deepseek-v4-pro-max"
+    },
+    {
+     "id": "gpt-5.6-sol",
+     "顺位": 2,
+     "禁用": false,
+     "理由": "codex 判断备选",
+     "拍板": "2026-08-12",
+     "status": "正式",
+     "provider": "gpt"
+    },
+    {
+     "id": "kimi-k3",
+     "顺位": 3,
+     "禁用": false,
+     "理由": "判断试用；#822 改 gw-sub",
+     "拍板": "2026-08-19",
+     "status": "试用",
+     "trial_since": "2026-08-16",
+     "provider": "gw",
+     "cli_model": "gw-sub/kimi-k3-high"
+    },
+    {
+     "id": "composer-2.5",
+     "顺位": 4,
+     "禁用": false,
+     "理由": "试用写码+判断；#822 改 gw-sub",
+     "拍板": "2026-08-18",
+     "status": "试用",
+     "trial_since": "2026-08-18",
+     "provider": "gw",
+     "cli_model": "gw-sub/composer-2.5"
+    },
+    {
+     "id": "ox-alpha-free",
+     "顺位": null,
+     "禁用": true,
+     "理由": "2026-09-03 #822：无网关渠道，og 在服务器 403；从选型移除",
+     "拍板": "2026-09-03",
+     "status": "试用",
+     "trial_since": "2026-08-22",
+     "禁用时间": "2026-09-03",
+     "provider": "opencode-go",
+     "cli_model": "ox-alpha-free"
+    }
+   ]
+  }
+ },
+ "禁令": [
+  {
+   "id": "ban-deepseek-查证",
+   "模型": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
+   ],
+   "工种": [
+    "查证"
+   ],
+   "理由": "事实召回差，查证/调研不派它",
+   "拍板": "2026-08-14"
+  },
+  {
+   "id": "ban-ox-alpha-free-未验证工种",
+   "模型": [
+    "ox-alpha-free"
+   ],
+   "工种": [
+    "查证",
+    "审查",
+    "UI"
+   ],
+   "理由": "ox-alpha-free 只进写码+判断试用候选（#718）；#822 已从选型禁用，本禁令留着防加回",
+   "拍板": "2026-08-22"
+  },
+  {
+   "id": "ban-gpt-ui",
+   "模型": [
+    "gpt-5.6-sol",
+    "gpt-5.6-luna"
+   ],
+   "工种": [
+    "UI"
+   ],
+   "优先级": "高于「审查默认换厂商」",
+   "理由": "用户 2026-08-12 体感裁定（UI 类含复审）",
+   "拍板": "2026-08-12"
+  }
+ ],
+ "规则": [
+  {
+   "名称": "审查默认换厂商",
+   "理由": "审查与写码同一模型容易放水",
+   "约束": "受 gpt UI ban 优先级约束；#679 审官口同厂硬闸。#843 起按真实供应商家族判（网关落地 provider 只作诊断）——工人 grok 时 luna/kimi/glm 等审官都算跨厂，不再『跨厂只剩 gpt/codex』",
+   "拍板": "2026-08-12"
+  },
+  {
+   "名称": "审官顺位",
+   "理由": "2026-08-22 grill-ai 拍板 A：JSON 三层对齐，顺位路由；审官主路 Codex；Claude 禁用；同厂无人可派报错停手，不许自动 fallback。#822：GPT 必须走 Codex，其余模型只走 pi gw。#843 过渡期：审官顺位 1 临时切 gpt-5.6-luna（pqapi 官方确认故障，codex 每单必死），pqapi 恢复后切回 Codex",
+   "约束": "受 bans[gpt UI 类].precedence 约束",
+   "拍板": "2026-09-03"
+  },
+  {
+   "名称": "非GPT只走pi-gw",
+   "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等本单验收后",
+   "约束": "启用中的厂商：GPT 模型必须 gpt；其余必须 gw。禁用条目可留旧 CLI 作退役记录",
+   "拍板": "2026-09-03"
+  },
+  {
+   "名称": "腿表帅位自己改",
+   "理由": "2026-09-05 用户拍板：『腿表我认为是随时可以改的，只要是帅位都有权利改』。腿是对现实的追认——模型上下线、通道换了、供应商挂了，追认不了台账就失真。server-check ㉒ 拿实跑账对腿表，若改一条腿都要等人，这条闸只会长期红着变噪音，而噪音久了就没人看",
+   "约束": "只限「腿」节的增删改状态。「禁令」「规则」「轴」是拍过板的原则（GPT 禁入 UI、审查换厂商这些），改它们仍在 release-policy.json 的 human_holds『改规则(选型禁令)』里，永远问人",
+   "拍板": "2026-09-05"
+  }
+ ],
+ "轴": {
+  "族": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "供应商": [
+   "gw",
+   "pqapi",
+   "reclaude",
+   "mirasim"
+  ],
+  "执行侧": [
+   "orca",
+   "mirasim",
+   "cc-local",
+   "terminal"
+  ]
+ },
+ "腿": [
+  {
+   "id": "grok-4.6@gw/orca",
+   "模型": "grok-4.6",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw/grok-4.6"
+   },
+   "理由": "§73 迁移：写码/查证/方案整合现役主腿"
+  },
+  {
+   "id": "deepseek-v4-flash@gw/orca",
+   "模型": "deepseek-v4-flash",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-dspool/deepseek-v4-flash"
+   },
+   "理由": "§73 迁移：写码/方案 fallback"
+  },
+  {
+   "id": "gpt-5.6-sol@pqapi/orca",
+   "模型": "gpt-5.6-sol",
+   "族": "codex",
+   "供应商": "pqapi",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gpt"
+   },
+   "理由": "§73 迁移：方案主路/审官备选；codex 直连 pqapi（#843 熔断 key direct:codex@pqapi）；gpt 族后备顺位见 §72"
+  },
+  {
+   "id": "gpt-5.6-luna@gw/orca",
+   "模型": "gpt-5.6-luna",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-windsurf/gpt-5.6-luna"
+   },
+   "理由": "§73 迁移：审官过渡首选（#843）"
+  },
+  {
+   "id": "glm-5.2@gw/orca",
+   "模型": "glm-5.2",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-windsurf/glm-5-2"
+   },
+   "理由": "§73 迁移：方案/UI/审官候选"
+  },
+  {
+   "id": "gemini-3.7-flash@gw/orca",
+   "模型": "gemini-3.7-flash",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-windsurf/gemini-3-7-flash-high"
+   },
+   "理由": "§73 迁移：查证/UI 候选"
+  },
+  {
+   "id": "kimi-k3@gw/orca",
+   "模型": "kimi-k3",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-sub/kimi-k3-high"
+   },
+   "理由": "§73 迁移：UI/审官/判断候选"
+  },
+  {
+   "id": "composer-2.5@gw/orca",
+   "模型": "composer-2.5",
+   "族": "pi",
+   "供应商": "gw",
+   "执行侧": "orca",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "gw",
+    "cli_model": "gw-sub/composer-2.5"
+   },
+   "理由": "§73 迁移：UI 主选/判断候选"
+  },
+  {
+   "id": "claude-fable-5@reclaude/terminal",
+   "模型": "claude-fable-5",
+   "族": "claude",
+   "供应商": "reclaude",
+   "执行侧": "terminal",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "理由": "帅位现役腿（人工起的 reclaude 终端）；§73「帅位也是腿」",
+   "落地": {
+    "provider": "claude",
+    "cli_model": "fable"
+   }
+  },
+  {
+   "id": "claude-opus@reclaude/orca",
+   "模型": "claude-opus",
+   "族": "claude",
+   "供应商": "reclaude",
+   "执行侧": "orca",
+   "状态": "停用",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "claude",
+    "cli_model": "opus"
+   },
+   "停用原因": "审官位 2026-08-22 起禁用沿革；且 reclaude 号 2026-09-04 白天 400 抖动",
+   "停用日期": "2026-09-04"
+  },
+  {
+   "id": "claude-opus-5@mirasim/mirasim",
+   "模型": "claude-opus-5",
+   "族": "claude",
+   "供应商": "mirasim",
+   "执行侧": "mirasim",
+   "状态": "在役",
+   "拍板": "2026-09-05",
+   "理由": "帅位会话载体腿。用户 2026-09-06 终拍：状态=在役（路是真的），但 7d 订阅额度紧张期它的优先级自然让位——不由人为翻停用开关，由选型算法与额度健康面（#885 卡 D）决定用不用；额度回来自动回到原优先级。此前「停用 vs 追认在役」两帅矛盾以此收口（#944）。"
+  },
+  {
+   "id": "claude-opus-5@reclaude/cc-local",
+   "模型": "claude-opus-5",
+   "族": "claude",
+   "供应商": "reclaude",
+   "执行侧": "cc-local",
+   "状态": "停用",
+   "拍板": "2026-09-04",
+   "停用原因": "等 #880 卡 H（cc-local 执行侧：reclaude -p + result 帧判完工）",
+   "停用日期": "2026-09-04"
+  },
+  {
+   "id": "claude-opus-5@reclaude/terminal",
+   "模型": "claude-opus-5",
+   "族": "claude",
+   "供应商": "reclaude",
+   "执行侧": "terminal",
+   "状态": "在役",
+   "拍板": "2026-09-04",
+   "落地": {
+    "provider": "claude",
+    "cli_model": "opus"
+   },
+   "理由": "帅位现役腿（本机这个会话就是它）；§73「帅位也是腿」。2026-09-04 实咬：PR #890 起不了审官，报「模型 opus-5 不在路由表（没查成厂商）」——腿表登记了 fable 却漏了 opus-5，且树里一条都没有"
+  },
+  {
+   "id": "gpt-5.6-luna@mirasim/mirasim",
+   "模型": "gpt-5.6-luna",
+   "族": "codex",
+   "供应商": "mirasim",
+   "执行侧": "mirasim",
+   "状态": "在役",
+   "拍板": "2026-09-06",
+   "理由": "审官主路的实际路径。#944 对账闸上线抓出：登记 @gw/orca、实跑 mirasim relay 684 次/14 会话——纸面追上事实（用户 2026-09-06 拍板改正）。gw/orca 那条另记，两条并存到 orca 退役"
+  },
+  {
+   "id": "gpt-5.6-sol@mirasim/mirasim",
+   "模型": "gpt-5.6-sol",
+   "族": "codex",
+   "供应商": "mirasim",
+   "执行侧": "mirasim",
+   "状态": "在役",
+   "拍板": "2026-09-06",
+   "理由": "方案/判断 codex 会话在 mirasim 上的实际路径（对账实跑 15 次；用户 2026-09-06 拍板改正）"
+  },
+  {
+   "id": "gpt-6-astra@mirasim/mirasim",
+   "模型": "gpt-6-astra",
+   "族": "codex",
+   "供应商": "mirasim",
+   "执行侧": "mirasim",
+   "状态": "在役",
+   "拍板": "2026-09-06",
+   "理由": "mirasim codex 会话的默认模型——schedule_task 接口层指定不了模型（#944），定时巡检大脑落在它上。按 #944 订正的拍板精神登记为可覆盖默认，不钉死"
+  },
+  {
+   "id": "claude-fable-5@mirasim/mirasim",
+   "模型": "claude-fable-5",
+   "族": "claude",
+   "供应商": "mirasim",
+   "执行侧": "mirasim",
+   "状态": "在役",
+   "拍板": "2026-09-06",
+   "理由": "服务器帅位现役腿（写下本条的会话就是它）。Fable 只留帅位、派工须用户点名（2026-08-15 拍板）；对账闸抓出未登记后按用户 2026-09-06「改正腿表」拍板补登"
+  }
+ ],
+ "执行体": {
+  "默认": "mirasim",
+  "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。orca 产品面已退役，执行体只剩 mirasim。",
+  "mirasim": {
+   "钉版本": "0.0.282",
+   "族": "mirasim-server",
+   "说明": "回环 ws 127.0.0.1:4316，systemd 常驻；起会话前契约断言 getState.version===钉版本，不符报警拒派不静默",
+   "模型前缀族": {
+    "gpt-5.6": "gpt",
+    "gpt": "gpt",
+    "codex": "codex",
+    "claude": "claude",
+    "pi": "pi",
+    "grok": "pi",
+    "deepseek": "pi",
+    "glm": "pi",
+    "gemini": "pi",
+    "kimi": "pi",
+    "composer": "pi"
+   },
+   "agentRoutes": {
+    "claude": {
+     "agent": "claude",
+     "mode": "relay",
+     "理由": "claude 族全 mirasim 云端 relay"
+    },
+    "gpt": {
+     "agent": "codex",
+     "mode": "direct",
+     "理由": "2026-09-08 用户拍板两轮：审官 gpt 族钉 codex CLI 载体（效果优先）+ 渠道优先级 windsurf>pqapi>mirasim。落地现状：codex 0.153+ 只讲 responses、new-api 转换未实现（ai-gateway-stack#7），故 direct=codex 直连 pqapi（~/.codex/config.toml，responses 原生），mirasim 由 setting.json failover reactive 兜底（always 已关——它曾把全部流量改道 relay.mirasim.ai 烧云额度）；windsurf 优先等 #7 落地后接入。chat 口径客户端已吃到网关 gptpool 三级链（windsurf40→pqapi15→mirasim-bridge5）"
+    },
+    "codex": {
+     "agent": "codex",
+     "mode": "direct",
+     "理由": "同 gpt（2026-09-08）"
+    },
+    "pi": {
+     "agent": "pi",
+     "mode": "direct",
+     "理由": "pi 烧网关池，保 pqgpt 主路"
+    }
+   },
+   "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",
+   "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现"
+  }
+ }
 }
