@@ -43,6 +43,7 @@ import {
   writeDispatchOrder,
 } from './lib/dispatch-queue.mjs';
 import { withWorktreeLockSync, withWorktreeLock, defaultLockPath } from './lib/dispatch-lock.mjs';
+import { scanSessionProcs } from './lib/dispatch/lease.mjs';
 import {
   ROOT,
   USAGE,
@@ -1085,6 +1086,89 @@ function killPidTerm(pid) {
     if (e && (e.code === 'ESRCH' || e.errno === 3)) return { ok: true, alreadyGone: true, pid };
     return { ok: false, pid, error: String(e && e.message ? e.message : e) };
   }
+}
+
+function killPidHard(pid) {
+  try {
+    process.kill(pid, 'SIGKILL');
+    return { ok: true, pid, forced: true };
+  } catch (e) {
+    if (e && (e.code === 'ESRCH' || e.errno === 3)) return { ok: true, alreadyGone: true, pid, forced: true };
+    return { ok: false, pid, error: String(e && e.message ? e.message : e), forced: true };
+  }
+}
+
+function normFsPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * stop 回执之后再核实 OS：mirasim 有时只把会话标成 interrupted，
+ * app-server/code-mode 子进程仍留在原 worktree，继续占租约。
+ * 只杀 mirasim-server 后代且 cwd 精确命中的进程，禁止按名称/全局误杀。
+ */
+export function reapMirasimSessionProcesses(workdir, {
+  scan = scanSessionProcs,
+  kill = killPidTerm,
+  forceKill = killPidHard,
+  maxPasses = 4,
+} = {}) {
+  const want = normFsPath(workdir);
+  if (!want) return { ok: false, error: '没有 workdir，无法核实会话进程' };
+  const allReaped = [];
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const observed = scan();
+    if (!observed || observed.ok !== true) {
+      return { ok: false, unscanned: true, error: observed?.error || '会话进程没查成', reaped: allReaped };
+    }
+    const holders = (observed.procs || []).filter((p) => normFsPath(p?.cwd) === want);
+    if (!holders.length) return { ok: true, reaped: allReaped, remaining: 0 };
+    const reaped = holders.map((p) => {
+      const gentle = kill(p.pid);
+      if (gentle?.ok !== true) return gentle;
+      // stop 已经被服务端接受，仍存活的会话进程不能继续占住租约。
+      // 对精确 worktree 命中的 mirasim 后代强制收尾，避免 app-server 吞掉 TERM。
+      return forceKill(p.pid);
+    });
+    allReaped.push(...reaped);
+    const failed = reaped.filter((r) => r?.ok !== true);
+    if (failed.length) {
+      return { ok: false, error: `有 ${failed.length} 个会话进程没清掉`, reaped: allReaped };
+    }
+  }
+  return { ok: false, error: `会话进程反复重生，${maxPasses} 次核实后仍未清空`, reaped: allReaped, remaining: true };
+}
+
+export async function stopSessionAndReap(runtime, sessionKey, { workdir = null } = {}) {
+  let target = workdir;
+  if (!target) {
+    if (!runtime || typeof runtime.listSessions !== 'function') {
+      return { ok: false, unscanned: true, why: 'runtime 没有 listSessions，无法核实会话 worktree' };
+    }
+    let listed;
+    try { listed = await runtime.listSessions(); }
+    catch (e) {
+      return { ok: false, unscanned: true, why: `会话清单没查成：${String(e?.message || e)}` };
+    }
+    if (!listed || listed.ok !== true) {
+      return { ok: false, unscanned: true, why: listed?.error || listed?.why || '会话清单没查成' };
+    }
+    const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
+    if (!hit) {
+      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 不在会话清单，无法核实 worktree` };
+    }
+    target = hit.cwd || hit.workdir || hit.worktree || null;
+    if (!target) {
+      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 没有 worktree，无法核实残留进程` };
+    }
+  }
+  const stopped = await runtime.stopSession(sessionKey);
+  if (!stopped || stopped.ok !== true) return stopped || { ok: false, why: 'stop 没回成功' };
+  // stop 是异步的，给服务端一个很短的退出窗口，再核实并回收残留子进程。
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const reaped = reapMirasimSessionProcesses(target);
+  if (!reaped.ok) return { ok: false, why: reaped.error, reaped: reaped.reaped || [] };
+  return { ...stopped, reaped: reaped.reaped || [] };
 }
 
 /** #835：占用闸过后再收该树 agent。收不掉就停，不许先删树留下孤儿。 */
@@ -4137,6 +4221,28 @@ function cmdNext() {
  * 判据全在 lib/now-board.mjs 的 renderNow（纯函数，机器人问现状将来直接调它）；
  * 取数全在 lib/now-collect.mjs。本函数只负责把两边接起来 + 选人看还是机器看。
  */
+/**
+ * `commander-act` runs as the service owner (usually `orca`), while an operator
+ * may inspect the board as root. Pick the newest readable snapshot source so
+ * `dao now` does not silently report the operator's stale ~/.dao directory.
+ * An explicit PROGRESS_WATCH_DIR always wins.
+ */
+export function resolveProgressSnapshotDir({ home = homedir(), list = readdirSync } = {}) {
+  const configured = process.env.PROGRESS_WATCH_DIR;
+  if (configured) return configured;
+  const candidates = [join(home, '.dao', 'commander')];
+  if (process.getuid?.() === 0) candidates.push('/home/orca/.dao/commander');
+  const ranked = candidates.map((dir) => {
+    try {
+      const latest = list(dir).filter((n) => /^situation-.*\.json$/i.test(n)).sort().at(-1) || '';
+      return { dir, latest };
+    } catch {
+      return { dir, latest: '' };
+    }
+  });
+  return ranked.sort((a, b) => b.latest.localeCompare(a.latest))[0]?.dir || candidates[0];
+}
+
 async function cmdNow(args) {
   const { collectNow } = await import('./lib/now-collect.mjs');
   const { renderNow, formatNow, DEFAULT_WINDOW_HOURS, DEFAULT_MAX_LINES } = await import('./lib/now-board.mjs');
@@ -4145,13 +4251,14 @@ async function cmdNow(args) {
   const hours = args.hours != null && /^\d+$/.test(String(args.hours)) ? Number(args.hours) : DEFAULT_WINDOW_HOURS;
   const host = args.noServer === true ? null : (args.host || 'contabo');
   const raw = await collectNow({ cwd: root, host, windowHours: hours, now: Date.now() });
-  const progressStalls = collectProgressStalls();
+  const progressDir = resolveProgressSnapshotDir();
+  const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, board }, null, 2));
+    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
     process.exit(0);
   }
-  process.stdout.write(`${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
+  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
   process.exit(0);
 }
 
@@ -4746,7 +4853,7 @@ async function stopSessionsAtCwd(runtime, cwd) {
     const key = s.sessionKey || s.key || s.id;
     if (!key) continue;
     try {
-      const r = await runtime.stopSession(key);
+      const r = await stopSessionAndReap(runtime, key, { workdir: cwd });
       stopped.push({ sessionKey: key, ok: !!(r && r.ok), why: r && r.why });
     } catch (e) {
       stopped.push({ sessionKey: key, ok: false, why: String(e && e.message ? e.message : e) });
@@ -4765,7 +4872,7 @@ async function cmdSessionStop(args) {
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
   let stopped;
-  try { stopped = await bind.runtime.stopSession(args.session); }
+  try { stopped = await stopSessionAndReap(bind.runtime, args.session); }
   catch (e) {
     fail(`session-stop 没查成: ${String(e?.message || e)}`, { executor: 'mirasim', sessionKey: args.session });
   }
