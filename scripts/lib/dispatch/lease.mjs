@@ -173,6 +173,87 @@ export function busyTrees(procs, { root = worktreesRoot() } = {}) {
   return { ok: true, trees, count: trees.length };
 }
 
+/** 名单里还在干活：不许当幽灵杀。incomplete 是「一轮说完」，该停。 */
+const ORPHAN_LIVE_STATES = new Set(['running', 'active', 'working', 'in_progress', 'started']);
+const ORPHAN_DONE_STATES = new Set([
+  'completed', 'complete', 'done', 'finished',
+  'failed', 'error', 'aborted', 'cancelled', 'canceled',
+  'incomplete',
+]);
+
+function normCwd(v) {
+  return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * 名单里没有活会话、/proc 上还占着树 → 回收幽灵进程。
+ *
+ * 2026-09-08 实咬：三只 Codex 挂了 7 小时，mirasim 名单 0 条对应记录，
+ * stop-session 只杀 incomplete，杀不到。租约还握在死人口里。
+ *
+ * 没查成（名单 / 进程观测）→ 空动作，不许当「没有幽灵」去杀。
+ * 活会话缺 cwd → 整轮不杀（对不上树就可能误杀）。
+ *
+ * @returns {{ok:true, actions:Array, skipped?:string}|{ok:false, unscanned:true, error:string, actions:[]}}
+ */
+export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned } = {}) {
+  if (sessionsScanned !== true) {
+    return { ok: true, actions: [], skipped: 'sessions-unscanned' };
+  }
+  if (leaseScanned !== true) {
+    return { ok: true, actions: [], skipped: 'lease-unscanned' };
+  }
+  if (!Array.isArray(procs)) {
+    return { ok: false, unscanned: true, error: '没拿到进程观测数组——不杀（没查成）', actions: [] };
+  }
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, error: '没拿到会话名单数组——不杀（没查成）', actions: [] };
+  }
+
+  const liveTrees = new Set();
+  let liveWithoutCwd = false;
+  for (const s of sessions) {
+    const state = String((s && (s.state || s.runState || s.driverState)) || '').toLowerCase();
+    const cwd = normCwd(s && (s.cwd || s.workdir || s.worktree));
+    if (ORPHAN_LIVE_STATES.has(state)) {
+      if (!cwd) { liveWithoutCwd = true; continue; }
+      liveTrees.add(cwd);
+      continue;
+    }
+    if (ORPHAN_DONE_STATES.has(state)) continue;
+    // 不认识的状态：对不上该不该杀，这棵树本轮放过。
+    if (!cwd) { liveWithoutCwd = true; continue; }
+    liveTrees.add(cwd);
+  }
+  if (liveWithoutCwd) {
+    return { ok: true, actions: [], skipped: 'live-session-cwd-missing' };
+  }
+
+  const byTree = new Map();
+  for (const p of procs) {
+    if (!p || !Number.isInteger(Number(p.pid))) continue;
+    const pid = Number(p.pid);
+    if (pid <= 1) continue;
+    const cwd = normCwd(p.cwd);
+    if (!cwd) continue;
+    if (liveTrees.has(cwd)) continue;
+    if (!byTree.has(cwd)) byTree.set(cwd, []);
+    byTree.get(cwd).push({ pid, comm: p.comm || null });
+  }
+
+  const actions = [];
+  for (const [cwd, holders] of [...byTree.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const pids = [...new Set(holders.map((h) => h.pid))];
+    actions.push({
+      kind: 'reap-orphan',
+      cwd,
+      pids,
+      why: `名单里没有活会话，/proc 还占着 ${cwd}（${holders.map((h) => `${h.comm || '?'} pid ${h.pid}`).join('、')}）`,
+    });
+  }
+  return { ok: true, actions };
+}
+
 /**
  * 生产入口：扫 /proc + 数在途。给派单准入用（#1007）。
  * 没查成 ⇒ ok:false，调用方必须收紧到不派——读不到 ≠ 可以随便派。

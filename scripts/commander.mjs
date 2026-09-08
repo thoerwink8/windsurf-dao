@@ -49,7 +49,7 @@ import {
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
-import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor } from './lib/provider-health.mjs';
 import {
@@ -376,6 +376,12 @@ function scanAdmission({ worktrees, policy } = {}) {
   return { ...cap, inFlight: inflight.count };
 }
 
+function scanLease() {
+  const scan = scanSessionProcs();
+  if (!scan.ok) return { scanned: false, error: scan.error, procs: [] };
+  return { scanned: true, procs: scan.procs, noServer: scan.noServer === true };
+}
+
 function scanReviewPending() {
   let dir;
   try { dir = reviewPendingDir({ root: ROOT }); }
@@ -508,6 +514,7 @@ function buildSituation({ state } = {}) {
   const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const sessions = scanSessions();
+  const lease = scanLease();
   const desiredJobs = scanDesiredJobs();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
@@ -539,7 +546,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, desiredJobs,
+    sessions, lease, desiredJobs,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -654,6 +661,8 @@ function execAction(action, { state, dryRun, log }) {
         { dryRun, say, why: action.why },
       );
     }
+    case 'reap-orphan':
+      return execReapOrphan(action, { dryRun, say });
     case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
@@ -830,6 +839,32 @@ function execReapTicket(action, { state, dryRun, say }) {
   }
   say(`  ${removed ? '回收死票' : '死票已不在'}：PR #${action.pr}`);
   return { ok: true, removed };
+}
+
+function execReapOrphan(action, { dryRun, say }) {
+  const cwd = String(action.cwd || '');
+  const pids = Array.isArray(action.pids) ? action.pids.map(Number).filter((n) => Number.isInteger(n) && n > 1) : [];
+  if (!cwd || !pids.length) {
+    say('  reap-orphan 缺 cwd/pids，不动手');
+    return { ok: false, error: 'reap-orphan 要 cwd 和 pids' };
+  }
+  if (dryRun) {
+    say(`[dry] 回收幽灵 ${cwd} pids ${pids.join(',')}`);
+    return { ok: true, dryRun: true };
+  }
+  const results = [];
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      results.push({ pid, ok: true });
+    } catch (e) {
+      if (e && e.code === 'ESRCH') results.push({ pid, ok: true, gone: true });
+      else results.push({ pid, ok: false, error: String(e.message || e) });
+    }
+  }
+  const failed = results.filter((r) => r.ok !== true);
+  say(`  回收幽灵 ${cwd}：${results.filter((r) => r.ok).length}/${pids.length} 已 SIGTERM${failed.length ? `，失败 ${failed.length}` : ''}`);
+  return failed.length ? { ok: false, error: `有 ${failed.length} 个 pid 没杀成`, results } : { ok: true, results };
 }
 
 function execMarkExhausted(action, { dryRun, say }) {

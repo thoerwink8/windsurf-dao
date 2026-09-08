@@ -235,3 +235,73 @@ describe('/proc/<pid>/stat 解析', () => {
     assert.deepEqual(got.procs.map((p) => p.pid), [200], 'ppid 解析错就认不出它是服务的后代');
   });
 });
+
+describe('幽灵进程：名单没有、/proc 还占着树', () => {
+  const 树1099 = `${W}/dao-review-pr-1099`;
+  const ghosts = [
+    { pid: 1369724, comm: 'node', cwd: 树1099 },
+    { pid: 1369731, comm: 'codex', cwd: 树1099 },
+  ];
+
+  it('名单 completed + /proc 还在 → reap-orphan', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:old', state: 'completed', cwd: 树1099 }],
+      sessionsScanned: true,
+      leaseScanned: true,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].kind, 'reap-orphan');
+    assert.equal(got.actions[0].cwd, 树1099);
+    assert.deepEqual(got.actions[0].pids, [1369724, 1369731]);
+  });
+
+  it('名单里根本没有这棵树 → 也 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'pi:1', state: 'completed', cwd: `${W}/dao-999` }],
+      sessionsScanned: true,
+      leaseScanned: true,
+    });
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].cwd, 树1099);
+  });
+
+  it('名单 running 在这棵树 → 不杀', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:live', state: 'running', cwd: 树1099 }],
+      sessionsScanned: true,
+      leaseScanned: true,
+    });
+    assert.equal(got.actions.length, 0);
+  });
+
+  it('名单没查成 → 不杀（没查成 ≠ 没有幽灵）', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [],
+      sessionsScanned: false,
+      leaseScanned: true,
+    });
+    assert.equal(got.actions.length, 0);
+    assert.equal(got.skipped, 'sessions-unscanned');
+  });
+
+  it('活会话缺 cwd → 整轮不杀', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:live', state: 'running' }],
+      sessionsScanned: true,
+      leaseScanned: true,
+    });
+    assert.equal(got.actions.length, 0);
+    assert.equal(got.skipped, 'live-session-cwd-missing');
+  });
+});

@@ -41,6 +41,7 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
+import { planOrphanReaps } from './dispatch/lease.mjs';
 import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
@@ -50,7 +51,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session',
+  'stop-session', 'reap-orphan',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -307,6 +308,8 @@ export const ACTION_NEEDS = {
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
   'stop-session': [],
+  // 幽灵进程只认 /proc + 会话名单；两面都由 collectCandidates 自己看 scanned，不进总闸。
+  'reap-orphan': [],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -961,6 +964,17 @@ function collectCandidates(situation) {
       why: '一轮说完，会话不常驻',
     }, ACTION_NEEDS['stop-session']));
   }
+  // 名单里没有活会话、/proc 还占着树：stop-session 杀不到（没有 key）。
+  const reaps = planOrphanReaps({
+    procs: situation.lease && situation.lease.scanned === true ? situation.lease.procs : null,
+    sessions: situation.sessions && situation.sessions.scanned === true
+      ? (situation.sessions.items || []) : null,
+    sessionsScanned: situation.sessions ? situation.sessions.scanned === true : false,
+    leaseScanned: situation.lease ? situation.lease.scanned === true : false,
+  });
+  for (const a of reaps.actions || []) {
+    stops.push(withNeeds(a, ACTION_NEEDS['reap-orphan']));
+  }
   return stops.concat(out);
 }
 
@@ -975,6 +989,7 @@ function collectCandidates(situation) {
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   sessions:      { scanned, items:[{key,title,state,cwd}], error } —— #1056 观测集；不进 SITUATION_SECTIONS
+ *   lease:         { scanned, procs:[{pid,comm,cwd}], error } —— /proc 会话进程；不进总闸，没查成则不产 reap-orphan
  *   desiredJobs:   { unscanned, items:[{job_id,issue,pr,identity,model}], error } —— #1056 期望集（未结 job.dispatch）
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账

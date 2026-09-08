@@ -46,11 +46,11 @@
       "id": "ephemeral-lifecycle",
       "name": "短命会话：交卷即杀、核绿即合、独立钟退役",
       "why": "用户 2026-09-07 拍板。核绿后又因 master 领先整轮返工；6 核上会话待着占内存；看门狗拆成多个独立钟。统领单 #1133。",
-      "done_when": "dao-check 的 checkEphemeralLifecycle 绿（交卷热路 session-stop、仓内无 nudge-stalled 生产文件、审官 mirasim 书无 pr merge、指挥官调用 runProgressWatch、合并闸 ① 只报不拦）",
+      "done_when": "dao-check 的 checkEphemeralLifecycle 绿（交卷热路 session-stop、仓内无 nudge-stalled 生产文件、审官 mirasim 书无 pr merge、指挥官调用 runProgressWatch、合并闸 ① 只报不拦、指挥官产 reap-orphan）",
       "check": "checkEphemeralLifecycle",
-      "next_action": "已完成：#1134 合入，#1133 已关，独立钟已卸。",
+      "next_action": "余洞：名单与 /proc 脱节的幽灵进程要回收（#1133）。",
       "next_action_as_of": "2026-09-08",
-      "status": "done",
+      "status": "active",
       "started": "2026-09-07"
     }
   ]
