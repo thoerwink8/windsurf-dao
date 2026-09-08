@@ -23,6 +23,10 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
+Environment=GH_CONFIG_DIR=/var/empty
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/miraquota-contabo-sync.mjs --once
 # 2 = 没查成（令牌不在 / 连不上）。故意留成失败：没查成要在 systemctl --failed 里看得见，
 # 不许跟「查过没事」长成一个样。
