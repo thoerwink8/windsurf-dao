@@ -15,12 +15,10 @@
 //
 // 退出码：0 查成（含真的 0 张） / 1 写下失败 / 2 没查成
 
-import { writeFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { ghAs, ROLES } from './lib/gh.mjs';
+import { applyIssueWrite } from './lib/issue-gateway.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './lib/model-routing-json.mjs';
 import { ensureRepoLabels } from './lib/dispatch/card.mjs';
 import { ensurePlain } from './lib/plain-words.mjs';
@@ -121,40 +119,47 @@ export function defaultSay(text) {
   return { ok: true, queued: true, messageId: r.messageId };
 }
 
-function commentViaFile(runGh, number, body) {
-  const file = join(tmpdir(), `dao-refiner-${number}-${process.pid}.md`);
-  try {
-    writeFileSync(file, body, 'utf8');
-    const r = runGh(['issue', 'comment', String(number), '--body-file', file]);
-    if (!r.ok) return { ok: false, error: `#${number} 写评论失败：${r.error || 'gh 没跑成'}` };
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: `#${number} 写评论失败：${String(e.message || e).slice(0, 160)}` };
-  } finally {
-    try { unlinkSync(file); } catch { /* 临时文件清不掉不挡主结果 */ }
-  }
+function commentViaGateway(number, body, writeIssue) {
+  const r = writeIssue({
+    action: 'issue_comment',
+    repo: 'thoerwink8/windsurf-dao',
+    issue: number,
+    body,
+    host: 'refiner',
+    idempotency_key: `refiner:comment:${number}`,
+  });
+  if (!r || !r.ok) return { ok: false, error: `#${number} 写评论失败：${r && r.error ? r.error : '没查成'}` };
+  return { ok: true };
 }
 
-export function applyPlan(plan, { runGh, dryRun } = {}) {
+export function applyPlan(plan, { runGh, dryRun, writeIssue = applyIssueWrite } = {}) {
   if (!plan || plan.verdict === VERDICT.skip) return { ok: true, skipped: true };
   const n = plan.number;
   const writes = [];
   if (dryRun) {
     return { ok: true, dryRun: true, labelsToAdd: plan.labelsToAdd || [], comment: !!plan.comment };
   }
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, error: `#${n} 没拿到 issue-gateway 写入器` };
+  }
   if ((plan.labelsToAdd || []).length) {
     const ensured = ensureRepoLabels({ names: plan.labelsToAdd, runGh });
     if (!ensured.ok) {
       return { ok: false, error: `#${n} 建标失败：${ensured.error || '没查成'}` };
     }
-    const add = [];
-    for (const name of plan.labelsToAdd) add.push('--add-label', name);
-    const r = runGh(['issue', 'edit', String(n), ...add]);
-    if (!r.ok) return { ok: false, error: `#${n} 打标失败：${r.error || 'gh 没跑成'}` };
+    const r = writeIssue({
+      action: 'issue_edit_labels',
+      repo: 'thoerwink8/windsurf-dao',
+      issue: n,
+      add: plan.labelsToAdd,
+      host: 'refiner',
+      idempotency_key: `refiner:labels:${n}:${plan.labelsToAdd.join(',')}`,
+    });
+    if (!r || !r.ok) return { ok: false, error: `#${n} 打标失败：${r && r.error ? r.error : '没查成'}` };
     writes.push('labels');
   }
   if (plan.comment) {
-    const c = commentViaFile(runGh, n, plan.comment);
+    const c = commentViaGateway(n, plan.comment, writeIssue);
     if (!c.ok) return c;
     writes.push('comment');
   }
@@ -171,6 +176,7 @@ export function runRefiner({
   say = defaultSay,
   routingDoc,
   models,
+  writeIssue = applyIssueWrite,
 } = {}) {
   if (args.as && !ROLES.includes(args.as)) {
     return {
@@ -226,7 +232,7 @@ export function runRefiner({
 
   const applied = [];
   for (const plan of round.plans) {
-    const r = applyPlan(plan, { runGh, dryRun: args.dryRun === true });
+    const r = applyPlan(plan, { runGh, dryRun: args.dryRun === true, writeIssue });
     if (!r.ok) {
       return {
         scanned: true, exit: 1, error: r.error, plans: round.plans, applied, skipped: round.skipped,

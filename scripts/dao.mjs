@@ -221,6 +221,7 @@ import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
+import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -2107,6 +2108,8 @@ async function runDispatchExecution(order, { queueDir } = {}) {
     role: gate.role,
     reviewer: gate.reviewer,
     runGh: ghRunner({ role: 'marshal' }),
+    writeIssue: applyIssueWrite,
+    host: 'dispatch',
   });
   if (!labels.ok && !labels.skipped) {
     console.error(`[dao] dispatch label 没打上（派工本身成功）：${labels.error}`);
@@ -2544,7 +2547,11 @@ function finishWorkerDoneSpawnFail({
   const gh = ghRunner({ role: 'worker' });
   if (handoff.queued) {
     const queuedBody = reviewerSpawnQueuedComment({ error, pr: plan.pr });
-    postIssueComment({ issue: plan.issue, body: queuedBody, runGh: gh });
+    postIssueComment({
+      issue: plan.issue, body: queuedBody, runGh: gh,
+      writeIssue: applyIssueWrite, host: 'worker-done',
+      idempotency_key: `worker-done:queued:${plan.pr}:${plan.issue}`,
+    });
     postPrComment({ pr: plan.pr, body: queuedBody, runGh: gh });
     if (parentId) {
       setWorkerCardProgress(parentId, '交卷了，复审待指挥官轮转', reuseInputs && reuseInputs.worktrees);
@@ -2565,7 +2572,11 @@ function finishWorkerDoneSpawnFail({
     });
   }
   const failBody = reviewerSpawnFailComment({ error, retried });
-  postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
+  postIssueComment({
+    issue: plan.issue, body: failBody, runGh: gh,
+    writeIssue: applyIssueWrite, host: 'worker-done',
+    idempotency_key: `worker-done:spawn-fail:${plan.pr}:${plan.issue}`,
+  });
   postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
   if (parentId) {
     setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs && reuseInputs.worktrees);
@@ -3089,8 +3100,12 @@ function cmdAmend(args) {
     jobId: target.jobId,
     eventId: written.event && written.event.event_id,
   });
-  // amend 是帅追加职责，评论走 marshal（#627）。
-  const posted = postIssueComment({ issue, body, runGh: ghRunner({ role: 'marshal' }) });
+  // amend 是帅追加职责，Issue 评论走网关（#792），身份固定 marshal。
+  const posted = postIssueComment({
+    issue, body, runGh: ghRunner({ role: 'marshal' }),
+    writeIssue: applyIssueWrite, host: 'dao-amend',
+    idempotency_key: `dao-amend:${issue}:${written.event && written.event.event_id || target.jobId}`,
+  });
   if (!posted.ok) fail(`override 已写入但 issue 评论没发出：${posted.error}`, { ledger: written, posted });
   emit({
     ok: true,
@@ -4567,7 +4582,11 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  const postedIssue = postCommentOnce({ kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh });
+  const postedIssue = postCommentOnce({
+    kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
+    writeIssue: applyIssueWrite, host: 'worker-done',
+    idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
+  });
   if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
