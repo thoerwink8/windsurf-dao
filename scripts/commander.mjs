@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -854,6 +854,15 @@ function execReapOrphan(action, { dryRun, say }) {
   }
   const results = [];
   for (const pid of pids) {
+    // 红 1（PR #1142 审官）：动手前再读一次 /proc/<pid>/cwd。规划到执行隔了小半轮，
+    // pid 可能已复用给别的进程；对不上规划时的 cwd 就跳过，宁可下轮再收也不误杀。
+    let liveCwd = null;
+    try { liveCwd = readlinkSync(`/proc/${pid}/cwd`); }
+    catch { results.push({ pid, ok: true, gone: true }); continue; }
+    if (String(liveCwd).replace(/\/+$/, '') !== cwd.replace(/\/+$/, '')) {
+      results.push({ pid, ok: true, skipped: 'cwd-mismatch', liveCwd });
+      continue;
+    }
     try {
       process.kill(pid, 'SIGTERM');
       results.push({ pid, ok: true });

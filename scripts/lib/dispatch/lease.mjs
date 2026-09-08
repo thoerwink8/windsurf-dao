@@ -196,7 +196,7 @@ function normCwd(v) {
  *
  * @returns {{ok:true, actions:Array, skipped?:string}|{ok:false, unscanned:true, error:string, actions:[]}}
  */
-export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned } = {}) {
+export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned, root = worktreesRoot() } = {}) {
   if (sessionsScanned !== true) {
     return { ok: true, actions: [], skipped: 'sessions-unscanned' };
   }
@@ -229,6 +229,10 @@ export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned
     return { ok: true, actions: [], skipped: 'live-session-cwd-missing' };
   }
 
+  // 红 1（PR #1142 审官）：回收范围必须和 busyTrees 同一把尺——只收工作树根下的 cwd。
+  // 不钳根的话，mirasim-server 在主仓 /srv、家目录、/tmp 上的任意后代都会被当幽灵 SIGTERM，
+  // 帅位自己的会话就跑在主仓里。前缀带斜杠，防 /tmp/mirasim-worktrees-fake 混进来。
+  const base = String(root).replace(/\/+$/, '');
   const byTree = new Map();
   for (const p of procs) {
     if (!p || !Number.isInteger(Number(p.pid))) continue;
@@ -236,6 +240,7 @@ export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned
     if (pid <= 1) continue;
     const cwd = normCwd(p.cwd);
     if (!cwd) continue;
+    if (!cwd.startsWith(`${base}/`)) continue;
     if (liveTrees.has(cwd)) continue;
     if (!byTree.has(cwd)) byTree.set(cwd, []);
     byTree.get(cwd).push({ pid, comm: p.comm || null });

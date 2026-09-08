@@ -17,6 +17,8 @@ const path = require('node:path');
 const LEASE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
 
 const W = '/home/orca/mirasim-worktrees/windsurf-dao';
+// planOrphanReaps 的范围根（红 1 后必须显式传：CI runner 的 homedir 不是 /home/orca，靠默认值会假红/假绿）
+const R = '/home/orca/mirasim-worktrees';
 const 树1040 = `${W}/dao-review-pr-1040`;
 const 树1064 = `${W}/dao-review-pr-1064`;
 const 树1055 = `${W}/dao-1055`;
@@ -250,6 +252,7 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
       sessions: [{ key: 'codex:old', state: 'completed', cwd: 树1099 }],
       sessionsScanned: true,
       leaseScanned: true,
+      root: R,
     });
     assert.equal(got.ok, true);
     assert.equal(got.actions.length, 1);
@@ -265,6 +268,7 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
       sessions: [{ key: 'pi:1', state: 'completed', cwd: `${W}/dao-999` }],
       sessionsScanned: true,
       leaseScanned: true,
+      root: R,
     });
     assert.equal(got.actions.length, 1);
     assert.equal(got.actions[0].cwd, 树1099);
@@ -277,6 +281,7 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
       sessions: [{ key: 'codex:live', state: 'running', cwd: 树1099 }],
       sessionsScanned: true,
       leaseScanned: true,
+      root: R,
     });
     assert.equal(got.actions.length, 0);
   });
@@ -288,6 +293,7 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
       sessions: [],
       sessionsScanned: false,
       leaseScanned: true,
+      root: R,
     });
     assert.equal(got.actions.length, 0);
     assert.equal(got.skipped, 'sessions-unscanned');
@@ -300,8 +306,46 @@ describe('幽灵进程：名单没有、/proc 还占着树', () => {
       sessions: [{ key: 'codex:live', state: 'running' }],
       sessionsScanned: true,
       leaseScanned: true,
+      root: R,
     });
     assert.equal(got.actions.length, 0);
     assert.equal(got.skipped, 'live-session-cwd-missing');
+  });
+
+  // 红 1（PR #1142 审官判别实验原样收进夹具）：回收范围必须钳在工作树根下。
+  // 这条能绿着合进去，正是当初「主仓/家目录/tmp 全进 reap」漏网的原因。
+  it('故意样本：主仓、家目录、/tmp、形似根的目录 → 0 条 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 3346479, comm: 'node', cwd: '/srv/projects/windsurf-dao' },
+        { pid: 3346480, comm: 'claude', cwd: '/home/orca' },
+        { pid: 3346481, comm: 'pi', cwd: '/tmp/mirasim-unix-smoke' },
+        { pid: 3346482, comm: 'pi', cwd: '/tmp/mirasim-worktrees-fake/windsurf-dao/dao-1' },
+      ],
+      sessions: [],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 0, '根外进程被当幽灵——帅位会话就跑在主仓里，杀它等于自宫');
+  });
+
+  it('根外根内混着：只收根内那棵', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 3346479, comm: 'node', cwd: '/srv/projects/windsurf-dao' },
+        ...ghosts,
+      ],
+      sessions: [],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].cwd, 树1099);
+    assert.deepEqual(got.actions[0].pids, [1369724, 1369731]);
   });
 });
