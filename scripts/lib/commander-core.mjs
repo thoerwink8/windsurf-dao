@@ -45,6 +45,7 @@ import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
 } from './admission.mjs';
+import { classifyAsk } from './ask-gate.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -129,6 +130,69 @@ export function assessDispatchModel(model, { policy, enabledIds, redIds } = {}) 
     return { ok: false, reason: 'model-health-red', why: `模型 ${id} 健康表红，不派` };
   }
   return { ok: true };
+}
+
+/**
+ * #1094：派工前用 ask-gate 的现成判官看这单动的东西在不在 human_holds。
+ * 命中 / 没查成 → manual（没查成不许退回 auto）；扫完不命中 → auto。
+ * 关键词表不落在本文件，只认 policy（parsePolicy / loadPolicy 的结果）。
+ * 不传 commitType：本闸只管 human_holds，不管发布档位。
+ */
+function mergePolicyUnscanned(why) {
+  return {
+    mergePolicy: 'manual',
+    mergeReason: `human_holds 没查成：${why}——不许退回 auto`,
+    mergePolicySource: 'unscanned',
+  };
+}
+
+export function resolveIssueMergePolicy(issue, policy) {
+  if (labelValue(issue, 'type/') === '体系') {
+    return {
+      mergePolicy: 'manual',
+      mergeReason: 'type/体系 框架活：自动执行，合并必须人工拍板',
+      mergePolicySource: 'framework',
+    };
+  }
+  if (!policy || policy.unscanned) {
+    return mergePolicyUnscanned(policy?.unscanned || '没拿到策略——判据本身没读到');
+  }
+  if (!issue || typeof issue !== 'object') {
+    return mergePolicyUnscanned('issue 没查成');
+  }
+  // 正文键缺失 ≠ 正文是空：没扫到正文就只凭标题放行 auto，红线只写在正文里就会漏。
+  if (issue.body === undefined || issue.body === null) {
+    return mergePolicyUnscanned('issue 正文没查成——不许只凭标题放行 auto');
+  }
+  const title = issue.title == null ? '' : String(issue.title);
+  const text = [title, String(issue.body)].filter((s) => String(s).trim()).join('\n');
+  const classified = classifyAsk({ text, policy });
+  if (classified.verdict === 'unscanned') {
+    return mergePolicyUnscanned(classified.why);
+  }
+  if (classified.verdict === 'ask') {
+    return {
+      mergePolicy: 'manual',
+      mergeReason: classified.why,
+      mergePolicySource: 'hold',
+    };
+  }
+  return {
+    mergePolicy: 'auto',
+    mergeReason: null,
+    mergePolicySource: 'clear',
+  };
+}
+
+/** act 侧把 decide 的 merge-policy 翻成 dao.mjs dispatch 旗标。
+ * auto 不传（跟底层缺省合）；manual 必须带理由。字段缺失 / 非法值一律 manual——没查成不许退回 auto。 */
+export function dispatchMergePolicyArgs(action) {
+  if (action && action.mergePolicy === 'auto') return [];
+  const reason = String(action && action.mergeReason || '').trim()
+    || (action && action.mergePolicy === 'manual'
+      ? 'human_holds 命中但理由没写上——不许退回 auto'
+      : `merge-policy 没查成（${action && action.mergePolicy != null ? action.mergePolicy : '空'}）——不许退回 auto`);
+  return ['--merge-policy', 'manual', '--merge-reason', reason];
 }
 
 /** issue 标签取值：`model/grok-4.6` → 传 prefix 'model/' 得 'grok-4.6'。取第一个命中，没有返回 null。 */
@@ -540,8 +604,16 @@ function collectCandidates(situation) {
       if (renamedHint && dispatchedThisRound === 1) {
         out.push(withNeeds(hub(renamedHint, 'decide'), N.dispatch));
       }
-      out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
-      out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
+      const mergePlan = resolveIssueMergePolicy(issue, situation.askPolicy);
+      out.push(withNeeds({
+        kind: 'dispatch', issue: n, model, reviewer, role: role || null,
+        title: issue?.title || '',
+        mergePolicy: mergePlan.mergePolicy,
+        mergeReason: mergePlan.mergeReason,
+        mergePolicySource: mergePlan.mergePolicySource,
+        why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
+      }, N.dispatch));
+      out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: n }), N.dispatch));
     }
   }
 
@@ -699,12 +771,17 @@ function collectCandidates(situation) {
       return;
     }
     reworkThisRound += 1;
+    const mergePlan = resolveIssueMergePolicy(rIssue, situation.askPolicy);
     out.push(withNeeds({
       kind: 'rework', pr: pr.number, head, issue: issueNo,
       model: reworkModel, reviewer: rReviewer, redRounds,
       title: pr.title || '', brief, reworkKey: rkey, conflict,
+      mergePolicy: mergePlan.mergePolicy,
+      mergeReason: mergePlan.mergeReason,
+      mergePolicySource: mergePlan.mergePolicySource,
       ...(substituted ? { substitutedModel: substituted } : {}),
-      why: why + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
+      why: why + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : '')
+        + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
     }, N.rework));
     out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
   }
@@ -953,14 +1030,18 @@ function collectCandidates(situation) {
         reportAdmission(N.dispatch);
         continue;
       }
+      const mergePlan = resolveIssueMergePolicy(issue, situation.askPolicy);
       out.push(withNeeds({
         kind: 'dispatch', issue: rd.issue, model, reviewer,
         role: labelValue(issue, 'type/') || null,
         title: issue.title || '',
-        why: rd.why,
+        mergePolicy: mergePlan.mergePolicy,
+        mergeReason: mergePlan.mergeReason,
+        mergePolicySource: mergePlan.mergePolicySource,
+        why: rd.why + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
         reconcile: true,
       }, N.dispatch));
-      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派`, 'dispatched', { issue: rd.issue }), N.dispatch));
+      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue }), N.dispatch));
     }
   }
 
@@ -995,7 +1076,7 @@ function collectCandidates(situation) {
 /**
  * 纯函数：态势 → 动作清单。**入口总闸 fail-closed**（审官 #840 红①）。
  * situation 各节形态（scan 负责填，任一节没查成把 scanned 置 false + error）：
- *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
+ *   github:        { scanned, issues:[{number,title,body,labels:[{name}]}],
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
  *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
  *   orca:          观察面（#1055 起不进必查清单；退役后 scanned:false 不当闸）
