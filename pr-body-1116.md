@@ -39,6 +39,7 @@
 - [x] 本轮跟上 origin/master（#1144 快马返工建树 + gpt 族 direct 路由 + 西瓜清单 2026-09-08 拍板）；共享 objects 属主混 root/orca，走 GIT_OBJECT_DIRECTORY + pack 迁回
 - [x] 本轮跟上 origin/master（#1157 无人值守生命周期 + 探活观察 + v2.1.0）；冲突 0
 - [x] 本轮跟上 origin/master（#1163 体系重派不回落 auto + #1099 human_holds 派 manual）；冲突 0
+- [x] 本轮跟上 origin/master（patrol 盘点探针观察：orca 读不了 journal）；冲突 0
 
 ## 机制判定
 
