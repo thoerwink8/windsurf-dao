@@ -6,6 +6,17 @@ const path = require('path');
 const fs = require('node:fs');
 
 const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
+const ASK = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'ask-gate.mjs').replace(/\\/g, '/'));
+const REPO = path.resolve(__dirname, '..');
+
+async function policyFromHolds(holds) {
+  const S = await ASK;
+  return S.parsePolicy(JSON.stringify({
+    human_holds: holds,
+    confirm: { patch: { who: 'auto' }, minor: { who: 'admin:1' }, major: { who: 'admin:1' } },
+    version: { bump_by_commit_type: { fix: 'patch', feat: 'minor' } },
+  }));
+}
 
 // 一份「全查成、全空」的基线态势：decide 应只回 noop。各用例覆盖其中某节。
 function baseSituation(over = {}) {
@@ -32,7 +43,7 @@ const byKind = (r, k) => r.actions.filter((a) => a.kind === k);
 
 // #931 返工夹具：判红的 PR 必须能回溯到署名 issue（返工工人的 model/reviewer 从那儿取）。
 function labeledIssue(n, over = {}) {
-  return { number: n, title: `单 ${n}`, labels: [
+  return { number: n, title: `单 ${n}`, body: '', labels: [
     { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
   ], ...over };
 }
@@ -44,7 +55,7 @@ function redReview(body, commit) { return { state: 'CHANGES_REQUESTED', body, co
 describe('decide：自己做（确定性）', () => {
   it('已消歧 + 无在途 + model|reviewer 标签齐 → dispatch（判据①）', async () => {
     const { decide } = await CORE;
-    const issue = { number: 900, title: '补 X', labels: [
+    const issue = { number: 900, title: '补 X', body: '', labels: [
       { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ] };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
@@ -774,7 +785,7 @@ describe('decide：空态势静默', () => {
 
 function readyIssue(n, model = 'grok-4.6') {
   return {
-    number: n, title: `单 ${n}`, labels: [
+    number: n, title: `单 ${n}`, body: '', labels: [
       { name: '已消歧' }, { name: `model/${model}` }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ],
   };
@@ -1834,11 +1845,158 @@ describe('#1014 attach-reviewer why 按来源写', () => {
   });
 });
 
+function holdReady(n, { title, body } = {}) {
+  return {
+    number: n,
+    title: title == null ? `单 ${n}` : title,
+    body: body == null ? '' : body,
+    labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+}
+
+// #1094：指挥官派工从不传 merge-policy，改规则单一律落默认 auto。
+// 判官复用 ask-gate，关键词只认 docs/release-policy.json；没查成一律 manual。
+describe('decide：human_holds → merge-policy（#1094）', () => {
+  it('标题命中 human_holds → dispatch.mergePolicy=manual，理由写出命中哪一条', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const r = decide(baseSituation({
+      askPolicy,
+      github: { scanned: true, issues: [holdReady(1094, { title: '这里碰到独有红线词QQQ' })], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'manual');
+    assert.equal(d[0].mergePolicySource, 'hold');
+    assert.match(d[0].mergeReason, /独有红线词QQQ/);
+    assert.match(d[0].why, /merge-policy:manual/);
+  });
+
+  it('普通写码单（扫完不命中）→ auto，和没查成分得开', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const r = decide(baseSituation({
+      askPolicy,
+      github: { scanned: true, issues: [holdReady(900, { title: '补 X' })], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'auto');
+    assert.equal(d[0].mergePolicySource, 'clear');
+    assert.equal(d[0].mergeReason, null);
+  });
+
+  it('type/体系 即使 human_holds 扫完不命中也必须 manual', async () => {
+    const { resolveIssueMergePolicy } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const issue = holdReady(1145, { title: '渠道并发建模', body: '实现上限与顺位' });
+    issue.labels = issue.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item);
+    const plan = resolveIssueMergePolicy(issue, askPolicy);
+    assert.equal(plan.mergePolicy, 'manual');
+    assert.equal(plan.mergePolicySource, 'framework');
+    assert.match(plan.mergeReason, /type\/体系/);
+  });
+
+  it('改 JSON 里的字，指挥官行为跟着变（关键词不落在指挥官侧）', async () => {
+    const { decide, resolveIssueMergePolicy } = await CORE;
+    const before = await policyFromHolds(['独有红线词QQQ']);
+    const after = await policyFromHolds(['另一个词ABC']);
+    const issue = holdReady(1, { title: '独有红线词QQQ' });
+    assert.equal(resolveIssueMergePolicy(issue, before).mergePolicy, 'manual');
+    assert.equal(resolveIssueMergePolicy(issue, after).mergePolicy, 'auto');
+    const r = decide(baseSituation({
+      askPolicy: after,
+      github: { scanned: true, issues: [issue], prs: [] },
+    }));
+    assert.equal(byKind(r, 'dispatch')[0].mergePolicy, 'auto');
+  });
+
+  it('fail-close：策略没查成 / human_holds 空数组 / 正文键缺失 → 一律 manual，不许 auto', async () => {
+    const { resolveIssueMergePolicy } = await CORE;
+    const emptyHolds = await policyFromHolds([]);
+    const issue = holdReady(2, { title: '补 X' });
+    const noPolicy = resolveIssueMergePolicy(issue, undefined);
+    assert.equal(noPolicy.mergePolicy, 'manual');
+    assert.equal(noPolicy.mergePolicySource, 'unscanned');
+    const empty = resolveIssueMergePolicy(issue, emptyHolds);
+    assert.equal(empty.mergePolicy, 'manual');
+    assert.equal(empty.mergePolicySource, 'unscanned');
+    const noBody = resolveIssueMergePolicy({ number: 3, title: '补 X' }, await policyFromHolds(['独有红线词QQQ']));
+    assert.equal(noBody.mergePolicy, 'manual');
+    assert.equal(noBody.mergePolicySource, 'unscanned');
+    assert.match(noBody.mergeReason, /正文没查成/);
+  });
+
+  it('decide 缺 askPolicy → 仍派，但 merge-policy 是 manual 不是 auto', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [holdReady(901)], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'manual');
+    assert.equal(d[0].mergePolicySource, 'unscanned');
+  });
+
+  it('真相源现算：live release-policy 上「改规则」样本是 manual，普通写码是 auto', async () => {
+    const { decide } = await CORE;
+    const live = (await ASK).loadPolicy({ root: REPO });
+    assert.equal(live.unscanned, undefined, live.unscanned);
+    const hit = decide(baseSituation({
+      askPolicy: live,
+      github: { scanned: true, issues: [holdReady(1093, {
+        title: '帅窗红线瞄错靶子',
+        body: '本单是改协作约定，merge-policy: manual',
+      })], prs: [] },
+    }));
+    assert.equal(byKind(hit, 'dispatch')[0].mergePolicy, 'manual');
+    assert.equal(byKind(hit, 'dispatch')[0].mergePolicySource, 'hold');
+    const clear = decide(baseSituation({
+      askPolicy: live,
+      github: { scanned: true, issues: [holdReady(900, { title: '补 X', body: '修空指针' })], prs: [] },
+    }));
+    assert.equal(byKind(clear, 'dispatch')[0].mergePolicy, 'auto');
+    assert.equal(byKind(clear, 'dispatch')[0].mergePolicySource, 'clear');
+  });
+
+  it('act 旗标：manual 带 --merge-policy/--merge-reason；auto 不传；缺字段当没查成走 manual', async () => {
+    const { dispatchMergePolicyArgs } = await CORE;
+    assert.deepEqual(dispatchMergePolicyArgs({ mergePolicy: 'auto' }), []);
+    const manual = dispatchMergePolicyArgs({ mergePolicy: 'manual', mergeReason: '命中 human_holds「独有红线词QQQ」' });
+    assert.deepEqual(manual.slice(0, 3), ['--merge-policy', 'manual', '--merge-reason']);
+    assert.equal(manual[3], '命中 human_holds「独有红线词QQQ」');
+    const missing = dispatchMergePolicyArgs({});
+    assert.equal(missing[0], '--merge-policy');
+    assert.equal(missing[1], 'manual');
+    assert.match(missing[3], /没查成/);
+  });
+
+  it('指挥官源码：派工命令接 dispatchMergePolicyArgs；不复制 human_holds 原文', () => {
+    const core = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs'), 'utf8');
+    const act = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(core, /classifyAsk/);
+    assert.equal(/协作约定/.test(core), false);
+    assert.equal(/选型禁令/.test(core), false);
+    assert.match(act, /dispatchMergePolicyArgs\(action\)/);
+    assert.match(act, /loadPolicy/);
+    const i = act.indexOf("case 'dispatch'");
+    assert.equal(i > -1, true);
+    assert.match(act.slice(i, i + 900), /dispatchMergePolicyArgs/);
+    // 返工已改走原树 start（#1134），不再 dao dispatch；merge-policy 旗标只挂新派工/差集重派。
+    const j = act.indexOf('function dispatchRework');
+    assert.equal(j > -1, true);
+    assert.doesNotMatch(act.slice(j, j + 2800), /dispatchMergePolicyArgs/);
+    assert.match(act.slice(j, j + 2800), /dao\.mjs', 'start'/);
+  });
+});
+
 // ── 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派 ──
 describe('对账循环：账上有人、名单里没有 → 重派', () => {
   // 不打「已消歧」：这单已经有人派过（账上未结），不该再走 ready 队列那条新派路。
   const labeled = {
-    number: 885, title: '卡 B 返工',
+    number: 885, title: '卡 B 返工', body: '',
     labels: [
       { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ],
@@ -1859,6 +2017,52 @@ describe('对账循环：账上有人、名单里没有 → 重派', () => {
     const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
     assert.equal(d.length, 1);
     assert.equal(d[0].issue, 885);
+  });
+
+  it('差集重派也带 merge-policy（命中 hold → manual，不命中 → auto）', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const hit = decide(sit({
+      askPolicy,
+      github: { scanned: true, issues: [{ ...labeled, title: '碰到独有红线词QQQ' }], prs: [] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const hitD = byKind(hit, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(hitD.length, 1);
+    assert.equal(hitD[0].mergePolicy, 'manual');
+    assert.equal(hitD[0].mergePolicySource, 'hold');
+    const clear = decide(sit({
+      askPolicy,
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const clearD = byKind(clear, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(clearD.length, 1);
+    assert.equal(clearD[0].mergePolicy, 'auto');
+    assert.equal(clearD[0].mergePolicySource, 'clear');
+  });
+
+  it('type/体系 的差集重派不因 human_holds 未命中回落 auto', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const framework = {
+      ...labeled,
+      number: 1145,
+      title: '渠道并发建模',
+      body: '实现上限与顺位',
+      labels: labeled.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item),
+    };
+    const r = decide(sit({
+      askPolicy,
+      github: { scanned: true, issues: [framework], prs: [] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 1145, model: 'grok-4.6' }] },
+    }));
+    const retry = byKind(r, 'dispatch').filter((action) => action.reconcile);
+    assert.equal(retry.length, 1);
+    assert.equal(retry[0].mergePolicy, 'manual');
+    assert.equal(retry[0].mergePolicySource, 'framework');
   });
 
   it('同一 issue 已有活会话 → 拒绝再派', async () => {
