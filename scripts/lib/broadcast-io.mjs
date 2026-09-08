@@ -18,6 +18,9 @@ import {
   parseChatListJson,
 } from './broadcast-digest.mjs';
 import { parseMessageId } from './hub-ask.mjs';
+import { cardToPlainText } from './feishu-card-text.mjs';
+
+export { cardToPlainText } from './feishu-card-text.mjs';
 
 function str(v) {
   return v == null ? '' : String(v).trim();
@@ -69,30 +72,6 @@ export function saveDigestState(state, path) {
 
 function spawnLark(args, spawn = spawnSync) {
   return spawn('lark-cli', args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
-}
-
-/**
- * 飞书卡片被服务端拒收时，仍要把关键事实送达。
- * 只抽取卡片中的文本节点，避免把一张可能不合法的卡原样再发一次。
- */
-export function cardToPlainText(card) {
-  const parts = [];
-  const visit = (value) => {
-    if (value == null) return;
-    if (typeof value === 'string') return;
-    if (Array.isArray(value)) { value.forEach(visit); return; }
-    if (typeof value !== 'object') return;
-    if (typeof value.content === 'string' && (value.tag === 'plain_text' || value.tag === 'lark_md' || value.tag === 'markdown')) {
-      const content = value.content.replace(/\s+/g, ' ').trim();
-      if (content) parts.push(content);
-    }
-    Object.entries(value).forEach(([key, child]) => {
-      if (key !== 'content') visit(child);
-    });
-  };
-  visit(card);
-  const unique = [...new Set(parts)];
-  return (unique.join('\n') || '指挥官有一条通知，但卡片格式被飞书拒收，请查看服务器日志。').slice(0, 6000);
 }
 
 export function classifyLarkResult(r, { emptyOk = false } = {}) {
