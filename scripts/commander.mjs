@@ -40,6 +40,7 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
+  gatewayIdemKey,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
@@ -1844,7 +1845,7 @@ function escalate(action, { state, dryRun, say,
     writeFileSync(bodyFile, body, 'utf8');
     const r = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
       '--repo', REPO, '--issue', String(booked.issue), '--body-file', bodyFile,
-      '--host', 'commander', '--idempotency-key', `commander-escalate:append:${booked.issue}:${verdict.target}`], 60000);
+      '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', booked.issue, verdict.target)], 60000);
     if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
     state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
@@ -1896,7 +1897,7 @@ function escalate(action, { state, dryRun, say,
         writeFileSync(bodyFile, body, 'utf8');
         const put = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
           '--repo', REPO, '--issue', String(existing), '--body-file', bodyFile,
-          '--host', 'commander', '--idempotency-key', `commander-escalate:append:${existing}:${t}`], 60000);
+          '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', existing, t)], 60000);
         if (!put.ok) {
           say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
           return { ok: false, error: put.error };
@@ -1944,7 +1945,7 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     writeFileSync(bodyFile, body, 'utf8');
     const closed = runCmd(['node', 'scripts/issue-gateway.mjs', 'close',
       '--repo', REPO, '--issue', String(item.issue), '--comment', body, '--reason', 'completed',
-      '--host', 'commander', '--idempotency-key', `commander-escalate:close:${item.issue}:${item.reason}`], 60000);
+      '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'close', item.issue, item.reason)], 60000);
     if (!closed.ok) { say(`  收敛关单失败（#${item.issue}，账本不动，下轮再试）：${closed.error}`); continue; }
     delete state.escalateLedger[item.key];
     say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
@@ -2000,7 +2001,8 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  // marker 是中文行（`查重标记（勿删）：…`），title 也可能带空格——直接当 key 必被网关拒收。
+  const key = gatewayIdemKey('commander-escalate', marker ? marker[0].slice(0, 120) : title);
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);

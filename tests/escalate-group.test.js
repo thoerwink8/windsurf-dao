@@ -394,3 +394,35 @@ describe('回放那一晚：同一个原因、6 个对象', () => {
     assert.deepEqual(ledger.k.objects.length, 6, '六个对象都要留在清单里，一个都不能丢');
   });
 });
+
+describe('gatewayIdemKey：报帅 key 必须过网关 KEY_RE（2026-09-08 实咬：中文 marker 每轮被拒，开单全军覆没）', () => {
+  it('故意构造违规样本：真实 marker 行原样当 key 会被网关拦', async () => {
+    const { GATEWAY_KEY_RE } = await LIB;
+    // 这就是 openEscalationIssue 从正文里抓出来的那行——修复前它被直接拼进 key
+    const rawMarker = '查重标记（勿删）：escalate/dispatch-failed';
+    assert.equal(GATEWAY_KEY_RE.test(`commander-escalate:${rawMarker}`), false, '违规样本必须被正则拦住，拦不住说明闸是摆设');
+  });
+  it('中文 marker 折成过闸 key，且同输入必同键', async () => {
+    const { GATEWAY_KEY_RE, gatewayIdemKey } = await LIB;
+    const k1 = gatewayIdemKey('commander-escalate', '查重标记（勿删）：escalate/dispatch-failed');
+    const k2 = gatewayIdemKey('commander-escalate', '查重标记（勿删）：escalate/dispatch-failed');
+    assert.equal(GATEWAY_KEY_RE.test(k1), true);
+    assert.equal(k1, k2, '幂等去重靠同输入同键，折完不能引入随机性');
+  });
+  it('带空格的对象名（issue #966）也过闸', async () => {
+    const { GATEWAY_KEY_RE, gatewayIdemKey } = await LIB;
+    const k = gatewayIdemKey('commander-escalate', 'append', 1088, 'issue #966');
+    assert.equal(GATEWAY_KEY_RE.test(k), true);
+  });
+  it('本来就干净的 ASCII key 原样返回——旧账本键不折、去重不断代', async () => {
+    const { gatewayIdemKey } = await LIB;
+    assert.equal(gatewayIdemKey('commander-escalate', 'close', 1063, 'dispatch-failed'),
+      'commander-escalate:close:1063:dispatch-failed');
+  });
+  it('不同输入不同键：折叠不能把两个原因合成一个', async () => {
+    const { gatewayIdemKey } = await LIB;
+    const a = gatewayIdemKey('commander-escalate', '查重标记（勿删）：escalate/dispatch-failed');
+    const b = gatewayIdemKey('commander-escalate', '查重标记（勿删）：escalate/rework-failed');
+    assert.notEqual(a, b);
+  });
+});

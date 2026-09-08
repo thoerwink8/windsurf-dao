@@ -94,6 +94,24 @@ export function escalateDedupKey(action) {
   return `escalate/${String(action?.reason || 'x')}`;
 }
 
+import { createHash } from 'node:crypto';
+
+/** issue-gateway 的 KEY_RE 只收可打印 ASCII、无空白（scripts/lib/issue-gateway.mjs）。
+ *  报帅的 key 一旦拼进中文 marker（`查重标记（勿删）：…`）或带空格的对象名（`issue #966`），
+ *  网关整条拒收——而报帅正是最不能静默丢的路（2026-09-08 实咬：开单/追加每轮全被拒，
+ *  失败循环重试，用户一张单都看不到）。
+ *  折法：能直接过闸的原样返回（旧账本键不变）；过不了的把非法段折成 '-' 并缀内容哈希——
+ *  同输入必同键，幂等去重语义不变。 */
+export const GATEWAY_KEY_RE = /^[\x21-\x7E]{1,200}$/;
+export function gatewayIdemKey(...parts) {
+  const raw = parts.filter((p) => p != null && String(p) !== '').map(String).join(':');
+  if (!raw) return 'x';
+  if (GATEWAY_KEY_RE.test(raw)) return raw;
+  const ascii = raw.replace(/[^\x21-\x7E]+/g, '-');
+  const h = createHash('sha256').update(raw).digest('hex').slice(0, 12);
+  return `${ascii.slice(0, 180)}~${h}`;
+}
+
 /** 受影响对象的稳定标识（进正文清单，不进键）。认不出对象 → null，按「无对象」记。 */
 export function escalateTarget(action) {
   if (!action) return null;
