@@ -23,7 +23,7 @@
 
 本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/gw-remote-probe.test.js tests/open-issue-count.test.js` → 510 绿。
 
-`node scripts/dao-check.mjs`：1 项红是云 VM `~/.claude/skills` 不是目录（AGENTS.md 写明的环境项，不是本单回归）。
+`node scripts/dao-check.mjs`：云 VM `~/.claude/skills` 不是目录（AGENTS.md 写明的环境项，不是本单回归）。上一轮 CI 红是收件箱 5 条未处置——已落成 #1164/#1165/#1166/#1167/#1168，观察文件加「处置：#N」。
 
 ## 进展
 
@@ -40,6 +40,7 @@
 - [x] 本轮跟上 origin/master（#1157 无人值守生命周期 + 探活观察 + v2.1.0）；冲突 0
 - [x] 本轮跟上 origin/master（#1163 体系重派不回落 auto + #1099 human_holds 派 manual）；冲突 0
 - [x] 本轮跟上 origin/master（patrol 盘点探针观察：orca 读不了 journal）；冲突 0
+- [x] 本轮：收件箱 5 条 patrol 观察落成 #1164–#1168，观察文件加「处置：#N」（CI check 被 inbox 闸打红，不是本单实现回归）
 
 ## 机制判定
 
