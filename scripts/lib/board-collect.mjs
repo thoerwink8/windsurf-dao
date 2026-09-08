@@ -3,10 +3,12 @@
 // 三路：GitHub 开放 issue / 开放 PR、本机派工队列、账本 job.dispatch。
 // 每路包成信封 {scanned:true, items} / {scanned:false, error}。
 // 一路挂掉只坏自己那几行。零写入。
+// GitHub 读走 gh-as marshal（timer 卸了个人 GH_TOKEN，#792）。
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fetchIssues, fetchOpenPrs, run as runCmd } from './now-collect.mjs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { run as runCmd } from './now-collect.mjs';
 import { dispatchOrderPaths, dispatchQueueDir, listDispatchOrders, readDispatchOrder } from './dispatch-queue.mjs';
 import { defaultLedgerDir } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
@@ -47,6 +49,34 @@ export function loadBoardPolicy(root) {
     error: null,
     doc: p.value,
   };
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const GH_AS = resolve(HERE, '..', 'gh-as.mjs');
+const PR_FIELDS = 'number,title,isDraft,reviewDecision,headRefOid,headRefName,mergeable,createdAt,updatedAt,labels';
+const ISSUE_FIELDS = 'number,title,labels,createdAt,updatedAt';
+
+/** 看板读 GitHub 走 gh-as marshal，不吃个人 GH_TOKEN（#792；timer 卸了凭据）。 */
+async function runGhAs(ghArgs, { cwd } = {}) {
+  return runCmd(process.execPath, [GH_AS, 'marshal', '--', ...ghArgs], { cwd });
+}
+
+export async function fetchBoardIssues({ cwd, limit = 60 } = {}) {
+  const r = await runGhAs(['issue', 'list', '--state', 'open', '--limit', String(limit), '--json', ISSUE_FIELDS], { cwd });
+  if (!r.ok) return { scanned: false, error: r.error };
+  const p = parseJson(r.out, 'gh issue list');
+  if (!p.ok) return { scanned: false, error: p.error };
+  if (!Array.isArray(p.value)) return { scanned: false, error: 'gh issue list 没给数组（契约不符，按没查成算）' };
+  return { scanned: true, items: p.value };
+}
+
+export async function fetchBoardPrs({ cwd, limit = 60 } = {}) {
+  const r = await runGhAs(['pr', 'list', '--state', 'open', '--limit', String(limit), '--json', PR_FIELDS], { cwd });
+  if (!r.ok) return { scanned: false, error: r.error };
+  const p = parseJson(r.out, 'gh pr list');
+  if (!p.ok) return { scanned: false, error: p.error };
+  if (!Array.isArray(p.value)) return { scanned: false, error: 'gh pr list 没给数组（契约不符，按没查成算）' };
+  return { scanned: true, items: p.value };
 }
 
 export function collectQueue({ root, env } = {}) {
@@ -135,7 +165,7 @@ async function defaultFetchEvents({ cwd, number, kind }) {
   const path = kind === 'pr'
     ? `repos/{owner}/{repo}/issues/${number}/timeline`
     : `repos/{owner}/{repo}/issues/${number}/events`;
-  const r = await runCmd('gh', ['api', path, '--paginate'], { cwd });
+  const r = await runGhAs(['api', path, '--paginate'], { cwd });
   if (!r.ok) return null;
   return parseEventsJson(r.out);
 }
@@ -159,14 +189,14 @@ export async function attachStageEvents(env, { cwd, kind, fetchEvents = defaultF
 }
 
 /**
- * GitHub 那两路复用 now-collect；再补阶段事件当墙钟起点。
+ * GitHub 那两路走 gh-as marshal（timer 卸了个人凭据）；再补阶段事件当墙钟起点。
  * 补字段失败只让耗时空着，不把整路打成没查成。
  */
 export async function collectBoardSources({ cwd, root, env, home, now = Date.now() } = {}) {
   const repoRoot = root || cwd;
   const [issuesRaw, prsRaw] = await Promise.all([
-    fetchIssues({ cwd: repoRoot }),
-    fetchOpenPrs({ cwd: repoRoot }),
+    fetchBoardIssues({ cwd: repoRoot }),
+    fetchBoardPrs({ cwd: repoRoot }),
   ]);
   const [issues, prs] = await Promise.all([
     attachStageEvents(issuesRaw, { cwd: repoRoot, kind: 'issue' }),

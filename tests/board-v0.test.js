@@ -578,6 +578,15 @@ describe('策略 board 节 + CLI 动词', () => {
 });
 
 describe('阶段事件取数：一张失败只让耗时空着', () => {
+  it('看板读 GitHub 走 gh-as marshal，不吃个人 gh', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'board-collect.mjs'), 'utf8');
+    assert.match(src, /gh-as\.mjs/);
+    assert.match(src, /'marshal'/);
+    assert.equal(/\bfetchIssues\b/.test(src), false);
+    assert.equal(/\bfetchOpenPrs\b/.test(src), false);
+    assert.equal(/runCmd\('gh'/.test(src), false);
+  });
+
   it('attachStageEvents：一张查不到事件仍 scanned，不把整路打成没查成', async () => {
     const C = await COLLECT;
     const env = okEnv([
@@ -607,6 +616,8 @@ describe('timer 单元在仓里', () => {
     assert.match(timer, /^Persistent=true$/m);
     assert.match(service, /board-watch\.mjs/);
     assert.match(service, /^User=orca$/m);
+    assert.match(service, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
+    assert.match(service, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     const install = fs.readFileSync(path.join(REPO, 'scripts', 'install-board-watch.sh'), 'utf8');
     const bad = install.split(/\r?\n/).filter((l) => /^\s*chmod\b/.test(l) && /\$(ROOT|\{ROOT\})/.test(l));
     assert.deepEqual(bad, []);
