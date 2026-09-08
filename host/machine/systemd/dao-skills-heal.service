@@ -1,0 +1,31 @@
+# /etc/systemd/system/dao-skills-heal.service
+#
+# skills 装载面自愈（#1146）：mirasim 启动会把 ~/.claude/skills 整目录劫成
+# 指向 ~/.mirasim/skills 的链接。本单元跑 scripts/skills-heal.mjs，合并式接回
+# （仓内 skill 逐个链回，mirasim 自有目录不删，外来条目链回新目录）。
+#
+# 已经是真目录 + 逐个链接时脚本 exit 0 无事可做，所以可以频繁跑。
+#
+# 装法：sudo bash scripts/install-skills-heal.sh
+# 验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间
+#
+# User=orca 是硬要求：ExecStart 指进 /srv/projects/windsurf-dao，那个仓每个
+# 执行体都能写；以 root 解释它等于给每个能写仓的执行体一条 root 通道。
+
+[Unit]
+Description=windsurf-dao skills 装载面合并式自愈（#1146）
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/skills-heal.mjs
+# 退出码 2 = 没查成，故意留成失败，不许跟「查过没事」长成一个样。
+SuccessExitStatus=0
+StandardOutput=journal
+StandardError=journal

@@ -12,7 +12,7 @@ clone 完先跑：
 node scripts/onboard.mjs            # 幂等接线：全局约定 / skills 链接 / memory；--dry-run 只看不动
 ```
 
-它把 §3/§10/§11 的接线全代劳（能修的修、危险的拒绝并指路）；剩下只有**手动带凭据**（§4）。
+它把 §3/§10/§11 的接线全代劳（能修的修、危险的拒绝并指路）；剩下只有**手动带凭据**（§4）。skills 被 mirasim 劫成整目录链接时走合并式接回（仓内逐个链，外来 skill 保留，不删 `~/.mirasim/skills`）。
 日后哪根链接断了、约定漂移了，重跑同一条命令即修复；SessionStart 哨兵发现未接线会注入一行提醒
 （绿=零输出）。来历见 docs/decisions/2026-08-31-local-guards-retire-with-server.md。
 
@@ -365,6 +365,7 @@ command -v orca                        # → ~/.local/bin/orca
 orca repo add --path /path/to/windsurf-dao --json
 
 # ⑦ 挂 skills（Linux 软链不需要开发者模式，这是搬家红利之一）
+# 必须逐个链，不要 ln -sfn host/skills ~/.claude/skills 整目录（那是 mirasim 劫法，dao-check ㉚ 报「被劫」）
 mkdir -p ~/.claude/skills
 for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/.claude/skills/"$n"; done
 
@@ -387,6 +388,9 @@ orca account add --help
 #   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
+# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal.*）
+#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；本单元每 5 分钟合并式接回，不删 mirasim 自有 skill
+#   验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间；dao-check ㉚ 绿（被劫红、没装 SKIP）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
@@ -572,11 +576,19 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 | Claude Code | `~/.claude/skills/<name>/` | 本机 symlink → 仓内 `host/skills/<name>` |
 | Cursor Desktop | `~/.cursor/skills/<name>/`（用户级）或项目 `.cursor/skills/<name>/` | 同上；**不要**往 `~/.cursor/skills-cursor/` 写（系统内置区） |
 
-Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员/开发者模式）：缺的补、悬空的重建；本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只报 `skills-not-link` 不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。Cursor 侧 onboard 不管，按 §11.2 手动接。
+Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员/开发者模式）：缺的补、悬空的重建、整目录链接（mirasim 劫走）合并式接回（仓内逐个链，外来目录保留，不删 `~/.mirasim/skills`）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只报 `skills-not-link` 不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。Cursor 侧 onboard 不管，按 §11.2 手动接。
 
 ### 11.1 Claude Code：`~/.claude/skills`
 
-`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
+`node scripts/onboard.mjs` 即可。形态必须是**真目录 + 逐个链接**，不要 `ln -sfn host/skills ~/.claude/skills` 整目录（那正是 mirasim 的劫法，dao-check ㉚ 报「被劫」，与「没装」SKIP 分形）。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` / `skills-elsewhere` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
+
+mirasim 每次启动可能把装载面劫成 `~/.claude/skills → ~/.mirasim/skills`。onboard 会卸掉整目录链接、建成真目录、把仓内 skill 逐个链回，并把 mirasim 自有 skill（`lark-*` / `eval` 等）链回新目录——原目录不删。不要靠人手工 `ln -sfn` 对抗（重链两次都被劫回）。服务器加自愈：
+
+```bash
+sudo bash scripts/install-skills-heal.sh
+```
+
+验：`systemctl list-timers` 里 `dao-skills-heal.timer` 的 NEXT 必须是时间。故意把装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
