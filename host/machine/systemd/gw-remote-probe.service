@@ -27,6 +27,8 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs
 # 退出码 0 = 探过（红项走报警 + 健康表，不算探针失败）。
 # 1 = 探针自己跑不动（一把 pool key 都读不到）或 --strict 且有红。
