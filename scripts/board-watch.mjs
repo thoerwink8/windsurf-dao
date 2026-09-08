@@ -17,7 +17,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { collectBoard } from './lib/board-collect.mjs';
-import { planStageTimeoutAlerts } from './lib/board-v0.mjs';
+import {
+  DEFAULT_ALERT_BATCH_MAX, formatDigestAlert, planStageTimeoutAlerts,
+} from './lib/board-v0.mjs';
 import { ensurePlain } from './lib/plain-words.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -136,11 +138,22 @@ export async function runBoardWatch({
     thresholdHours: board.thresholdHours,
     ledger: { alerts: ledger.alerts },
   });
+  const batchMax = Number(collected && collected.policy && collected.policy.alertBatchMax);
+  const cap = Number.isInteger(batchMax) && batchMax >= 1 ? batchMax : DEFAULT_ALERT_BATCH_MAX;
+  const digest = planned.alerts.length > cap;
+  const outbound = digest
+    ? [{
+        key: `digest:${now}`,
+        digest: true,
+        text: formatDigestAlert(planned.alerts, board.thresholdHours),
+        covered: planned.alerts.map((a) => a.key),
+      }]
+    : planned.alerts;
   const sent = [];
   const nextAlerts = { ...ledger.alerts };
-  for (const a of planned.alerts) {
+  for (const a of outbound) {
     if (dryRun) {
-      sent.push({ key: a.key, dryRun: true, text: a.text });
+      sent.push({ key: a.key, dryRun: true, text: a.text, digest: !!a.digest });
       continue;
     }
     const hub = hubSay(a.text);
@@ -154,8 +167,15 @@ export async function runBoardWatch({
         alerts: planned.alerts,
       };
     }
-    nextAlerts[a.key] = { at: now, stage: a.stage, id: a.id, kind: a.kind };
-    sent.push({ key: a.key, messageId: hub.messageId, text: a.text });
+    if (a.digest) {
+      for (const k of a.covered || []) {
+        const src = planned.alerts.find((x) => x.key === k);
+        nextAlerts[k] = { at: now, stage: src && src.stage, id: src && src.id, kind: src && src.kind, digest: true };
+      }
+    } else {
+      nextAlerts[a.key] = { at: now, stage: a.stage, id: a.id, kind: a.kind };
+    }
+    sent.push({ key: a.key, messageId: hub.messageId, text: a.text, digest: !!a.digest });
   }
   if (!dryRun && sent.length) {
     const saved = saveAlertLedger(state, { alerts: nextAlerts, at: now });

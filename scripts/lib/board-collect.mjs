@@ -10,7 +10,10 @@ import { fetchIssues, fetchOpenPrs, run as runCmd } from './now-collect.mjs';
 import { dispatchOrderPaths, dispatchQueueDir, listDispatchOrders, readDispatchOrder } from './dispatch-queue.mjs';
 import { defaultLedgerDir } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
-import { DEFAULT_WORKER_WALL_HOURS, loadBoardThreshold, renderBoard } from './board-v0.mjs';
+import {
+  DEFAULT_WORKER_WALL_HOURS, DEFAULT_ALERT_BATCH_MAX,
+  loadBoardThreshold, loadBoardAlertBatchMax, renderBoard,
+} from './board-v0.mjs';
 
 function parseJson(text, what) {
   try {
@@ -23,16 +26,27 @@ function parseJson(text, what) {
 export function loadBoardPolicy(root) {
   const file = join(root || '', 'docs', 'dispatch-policy.json');
   if (!root || !existsSync(file)) {
-    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, error: null };
+    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, alertBatchMax: DEFAULT_ALERT_BATCH_MAX, error: null };
   }
   let src;
   try { src = readFileSync(file, 'utf8'); }
   catch (e) {
-    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, error: `策略读不了：${String(e.message || e).slice(0, 80)}` };
+    return {
+      thresholdHours: DEFAULT_WORKER_WALL_HOURS,
+      alertBatchMax: DEFAULT_ALERT_BATCH_MAX,
+      error: `策略读不了：${String(e.message || e).slice(0, 80)}`,
+    };
   }
   const p = parseJson(src, 'dispatch-policy');
-  if (!p.ok) return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, error: p.error };
-  return { thresholdHours: loadBoardThreshold(p.value), error: null, doc: p.value };
+  if (!p.ok) {
+    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, alertBatchMax: DEFAULT_ALERT_BATCH_MAX, error: p.error };
+  }
+  return {
+    thresholdHours: loadBoardThreshold(p.value),
+    alertBatchMax: loadBoardAlertBatchMax(p.value),
+    error: null,
+    doc: p.value,
+  };
 }
 
 export function collectQueue({ root, env } = {}) {

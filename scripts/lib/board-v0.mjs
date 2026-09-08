@@ -3,10 +3,12 @@
 // 拍板 2026-09-07（7A）：一张表 + 超时告警发总控群 + 「状态」回表。
 // 本文件零 IO。取数在 board-collect.mjs，告警在 board-watch.mjs。
 //
-// 三条硬规矩（本仓反复实咬）：
+// 四条硬规矩（本仓反复实咬）：
 //   1. 没查成 ≠ 没有，更不等于超时。源挂了只坏自己那几行，不许显示成一切正常。
 //   2. 超时看墙钟，不看「连续 N 轮没动」。同一主体同一阶段已报过 → 不刷屏；跨阶段才再报。
 //   3. 总控群「状态」走确定性闸回这张表，不靠 LLM 编盘面；问候仍不甩表。
+//   4. 工人墙钟只绑该往下走的阶段。待拍板 / 待消歧 / 已消歧待派 / 卡死 / 已绿待合
+//      不是工人卡死（#1108 审官：红行应是少数，不是 39/43）。
 
 import { looksLikeStatusQuery } from './feishu-group-profile.mjs';
 import { PENDING_LABEL } from './pending-disambiguation.mjs';
@@ -17,6 +19,8 @@ import { ensurePlain, plainViolations, threeLines } from './plain-words.mjs';
 
 /** 跟 docs/release-policy.json budget.per_issue.worker_wall_hours_max 对齐。 */
 export const DEFAULT_WORKER_WALL_HOURS = 4;
+/** 一轮扫描最多往群里丢几条；超了改发一条摘要，挡第一枪刷屏。 */
+export const DEFAULT_ALERT_BATCH_MAX = 3;
 
 export const BOARD_KINDS = ['issue', 'pr', 'queue'];
 export const BOARD_STATES = ['green', 'red', 'unscanned'];
@@ -213,8 +217,9 @@ function unscannedRow(kind, why) {
   };
 }
 
-function rowState({ elapsedHours, thresholdHours, whyUnscanned }) {
+function rowState({ elapsedHours, thresholdHours, stage, whyUnscanned }) {
   if (whyUnscanned) return 'unscanned';
+  if (!stageCountsTowardWorkerWall(stage)) return 'green';
   if (elapsedHours != null && Number.isFinite(thresholdHours) && elapsedHours > thresholdHours) return 'red';
   return 'green';
 }
@@ -267,11 +272,21 @@ function ledgerModelMap(ledger) {
   return { scanned: true, error: null, map };
 }
 
+/** 工人墙钟只绑「该有人往下走」的阶段。等人拍 / 待派 / 已认输不算工人卡死（#1108 审官：红行应是少数）。 */
+export const WORKER_WALL_STAGES = new Set([
+  '工人干活', '已红返工', '等审', '在办', '执行中', '排队',
+]);
+
+export function stageCountsTowardWorkerWall(stage) {
+  return WORKER_WALL_STAGES.has(stage);
+}
+
 function finishRow(partial, { now, thresholdHours }) {
   const elapsedHours = hoursBetween(partial.startedAt, now);
   const state = rowState({
     elapsedHours,
     thresholdHours,
+    stage: partial.stage,
     whyUnscanned: partial.state === 'unscanned' ? partial.why : null,
   });
   return {
@@ -433,6 +448,10 @@ export function planStageTimeoutAlerts({ rows, thresholdHours = DEFAULT_WORKER_W
       skipped.push({ id: row.id, kind: row.kind, reason: '没查成，不报超时' });
       continue;
     }
+    if (!stageCountsTowardWorkerWall(row.stage)) {
+      skipped.push({ id: row.id, kind: row.kind, stage: row.stage, reason: '这一阶段不算工人墙钟' });
+      continue;
+    }
     if (row.elapsedHours == null) {
       skipped.push({ id: row.id, kind: row.kind, reason: '耗时没算出来，不报超时' });
       continue;
@@ -468,6 +487,24 @@ export function formatTimeoutAlert(row, thresholdHours = DEFAULT_WORKER_WALL_HOU
     what: `${who}在${stage}已经超过 ${thresholdHours} 小时（已过 ${hours} 小时）。`,
     impact: '可能卡住了，还没人往下走。',
     plan: '先报这一次；同一张单同一阶段不再刷屏。',
+  });
+  return ensurePlain(text, 'board-watch');
+}
+
+/** 超条数帽时发一条摘要，不按行刷屏。 */
+export function formatDigestAlert(alerts, thresholdHours = DEFAULT_WORKER_WALL_HOURS) {
+  const n = Array.isArray(alerts) ? alerts.length : 0;
+  const sample = (Array.isArray(alerts) ? alerts : []).slice(0, 3).map((a) => {
+    const who = describeRow(a);
+    const stage = a && a.stage ? a.stage : '这一阶段';
+    const hours = a && a.elapsedHours != null ? a.elapsedHours : '?';
+    return `${who}「${stage}」${hours} 小时`;
+  });
+  const more = n > sample.length ? `，另外还有 ${n - sample.length} 条` : '';
+  const text = threeLines({
+    what: `有 ${n} 张单在该往下走的阶段已经超过 ${thresholdHours} 小时。`,
+    impact: sample.length ? `例如：${sample.join('；')}${more}。` : '可能卡住了，还没人往下走。',
+    plan: '这一轮先报这一条；同一张单同一阶段不再刷屏。问「状态」看完整表。',
   });
   return ensurePlain(text, 'board-watch');
 }
@@ -527,6 +564,12 @@ export function loadBoardThreshold(doc) {
   const w = Number(doc && doc.board && doc.board.workerWallHoursMax);
   if (Number.isFinite(w) && w >= 0.25 && w <= 168) return w;
   return DEFAULT_WORKER_WALL_HOURS;
+}
+
+export function loadBoardAlertBatchMax(doc) {
+  const n = Number(doc && doc.board && doc.board.alertBatchMax);
+  if (Number.isInteger(n) && n >= 1 && n <= 20) return n;
+  return DEFAULT_ALERT_BATCH_MAX;
 }
 
 export { plainViolations, looksLikeStatusQuery };

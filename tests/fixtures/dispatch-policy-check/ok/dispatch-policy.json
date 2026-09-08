@@ -31,6 +31,7 @@
   },
   "board": {
     "workerWallHoursMax": 4,
+    "alertBatchMax": 3,
     "channel": "feishu-hub"
   }
 }

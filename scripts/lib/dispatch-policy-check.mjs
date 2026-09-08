@@ -7,7 +7,7 @@
 // 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮）。缺 commander 节不拦（#842 旧夹具兼容）。
 // hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
 // upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
-// board（#818 看板 v0）：workerWallHoursMax ∈ [0.25,168]；channel 若有必为非空字符串。缺 board 节兼容旧夹具；真身 docs/dispatch-policy.json 必须带。
+// board（#818 看板 v0）：workerWallHoursMax ∈ [0.25,168]；alertBatchMax 若有必为整数 1~20；channel 若有必为非空字符串。缺 board 节兼容旧夹具；真身 docs/dispatch-policy.json 必须带。
 // 三态可分：文件不在 / 坏 JSON / 缺 preflight 或 hubChat 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -104,6 +104,12 @@ function inspectBoardSection(board) {
     const w = Number(board.workerWallHoursMax);
     if (!Number.isFinite(w) || w < 0.25 || w > 168) {
       problems.push(`board.workerWallHoursMax 越界（要 0.25~168，实际 ${board.workerWallHoursMax}）`);
+    }
+  }
+  if (board.alertBatchMax !== undefined) {
+    const n = Number(board.alertBatchMax);
+    if (!Number.isInteger(n) || n < 1 || n > 20) {
+      problems.push(`board.alertBatchMax 越界（要 1~20 整数，实际 ${board.alertBatchMax}）`);
     }
   }
   if (board.channel !== undefined) {

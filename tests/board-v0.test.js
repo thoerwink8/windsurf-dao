@@ -142,16 +142,17 @@ describe('阶段超时纯函数', () => {
     const S = await BOARD;
     const board = S.renderBoard({
       now: NOW,
-      issues: okEnv([issue({ createdAt: HOURS_AGO(5) })]),
-      prs: okEnv([]),
+      issues: okEnv([]),
+      prs: okEnv([pr({ createdAt: HOURS_AGO(5), isDraft: true })]),
       queue: okEnv([]),
       ledger: okEnv([]),
       thresholdHours: 4,
     });
+    assert.equal(board.rows[0].stage, '工人干活');
     assert.equal(board.rows[0].state, 'red');
     const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
     assert.equal(plan.alerts.length, 1);
-    assert.equal(plan.alerts[0].key, 'issue:818:已消歧待派');
+    assert.equal(plan.alerts[0].key, 'pr:1108:工人干活');
     assert.equal(S.plainViolations(plan.alerts[0].text).length, 0);
     assert.match(plan.alerts[0].text, /超过 4 小时/);
   });
@@ -160,14 +161,14 @@ describe('阶段超时纯函数', () => {
     const S = await BOARD;
     const board = S.renderBoard({
       now: NOW,
-      issues: okEnv([issue({ createdAt: HOURS_AGO(5) })]),
-      prs: okEnv([]),
+      issues: okEnv([]),
+      prs: okEnv([pr({ createdAt: HOURS_AGO(5), isDraft: true })]),
       queue: okEnv([]),
       ledger: okEnv([]),
     });
     const once = S.planStageTimeoutAlerts({
       rows: board.rows, thresholdHours: 4,
-      ledger: { alerts: { 'issue:818:已消歧待派': { at: HOURS_AGO(0.1) } } },
+      ledger: { alerts: { 'pr:1108:工人干活': { at: HOURS_AGO(0.1) } } },
     });
     assert.equal(once.alerts.length, 0);
     assert.equal(once.skipped.some((s) => /已报过/.test(s.reason)), true);
@@ -211,7 +212,8 @@ describe('阶段超时纯函数', () => {
       now: NOW,
       issues: okEnv([issue({
         createdAt: HOURS_AGO(10),
-        events: [{ event: 'labeled', label: { name: '已消歧' }, created_at: HOURS_AGO(1) }],
+        labels: [{ name: '任务' }],
+        events: [{ event: 'unlabeled', label: { name: '已消歧' }, created_at: HOURS_AGO(1) }],
       })]),
       prs: okEnv([]),
       queue: okEnv([]),
@@ -266,7 +268,7 @@ describe('阶段超时纯函数', () => {
     const S = await BOARD;
     const board = S.renderBoard({
       now: NOW,
-      issues: okEnv([issue({ createdAt: HOURS_AGO(10), events: undefined })]),
+      issues: okEnv([issue({ createdAt: HOURS_AGO(10), labels: [{ name: '任务' }], events: undefined })]),
       prs: okEnv([]),
       queue: okEnv([]),
       ledger: okEnv([]),
@@ -299,6 +301,7 @@ describe('阶段超时纯函数', () => {
       now: NOW,
       issues: okEnv([issue({
         createdAt: HOURS_AGO(10),
+        labels: [{ name: '任务' }],
         events: [],
       })]),
       prs: okEnv([]),
@@ -306,12 +309,47 @@ describe('阶段超时纯函数', () => {
       ledger: okEnv([]),
       thresholdHours: 4,
     });
+    assert.equal(board.rows[0].stage, '在办');
     assert.equal(board.rows[0].elapsedHours, null);
     assert.equal(board.rows[0].startedAt, null);
     assert.equal(board.rows[0].state, 'green');
     const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
     assert.equal(plan.alerts.length, 0);
     assert.equal(plan.skipped.some((s) => /耗时没算出来/.test(s.reason)), true);
+  });
+
+  it('待拍板 / 已消歧待派 / 卡死 超 4h → 绿、不报超时（不算工人墙钟）', async () => {
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([
+        issue({
+          number: 819, createdAt: HOURS_AGO(10),
+          labels: [{ name: '待拍板' }],
+          events: [{ event: 'labeled', label: { name: '待拍板' }, created_at: HOURS_AGO(10) }],
+        }),
+        issue({
+          number: 818, createdAt: HOURS_AGO(10),
+          labels: [{ name: '已消歧' }],
+          events: [{ event: 'labeled', label: { name: '已消歧' }, created_at: HOURS_AGO(10) }],
+        }),
+      ]),
+      prs: okEnv([pr({
+        createdAt: HOURS_AGO(10),
+        labels: [{ name: '卡死/自动化认输' }, { name: 'model/grok-4.6' }],
+        events: [{ event: 'labeled', label: { name: '卡死/自动化认输' }, created_at: HOURS_AGO(10) }],
+      })]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+      thresholdHours: 4,
+    });
+    for (const r of board.rows) {
+      assert.equal(r.state, 'green', r.stage);
+      assert.equal(r.elapsedHours, 10);
+    }
+    const plan = S.planStageTimeoutAlerts({ rows: board.rows, thresholdHours: 4 });
+    assert.equal(plan.alerts.length, 0);
+    assert.equal(plan.skipped.filter((s) => /不算工人墙钟/.test(s.reason)).length, 3);
   });
 });
 
@@ -367,8 +405,8 @@ describe('board-watch 账本去重 + 没查成退出', () => {
     const S = await BOARD;
     const board = S.renderBoard({
       now: NOW,
-      issues: okEnv([issue({ createdAt: HOURS_AGO(5) })]),
-      prs: okEnv([]),
+      issues: okEnv([]),
+      prs: okEnv([pr({ createdAt: HOURS_AGO(5), isDraft: true })]),
       queue: okEnv([]),
       ledger: okEnv([]),
     });
@@ -384,6 +422,46 @@ describe('board-watch 账本去重 + 没查成退出', () => {
     const second = await W.runBoardWatch({ root: dir, state, dryRun: false, now: NOW, collect, hubSay });
     assert.equal(second.ok, true);
     assert.equal(second.sent.length, 0);
+    assert.equal(said.length, 1);
+  });
+
+  it('该报超过条数帽 → 发一条摘要，账本记下每一行', async () => {
+    const W = await WATCH;
+    const S = await BOARD;
+    const board = S.renderBoard({
+      now: NOW,
+      issues: okEnv([]),
+      prs: okEnv([
+        pr({ number: 1, createdAt: HOURS_AGO(5), isDraft: true }),
+        pr({ number: 2, createdAt: HOURS_AGO(6), isDraft: true }),
+        pr({ number: 3, createdAt: HOURS_AGO(7), isDraft: true }),
+        pr({ number: 4, createdAt: HOURS_AGO(8), isDraft: true }),
+      ]),
+      queue: okEnv([]),
+      ledger: okEnv([]),
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-digest-'));
+    const state = path.join(dir, 'watch.json');
+    const said = [];
+    const r = await W.runBoardWatch({
+      root: dir, state, dryRun: false, now: NOW,
+      collect: async () => ({ board, policy: { alertBatchMax: 3 } }),
+      hubSay: (text) => { said.push(text); return { ok: true, messageId: 'm1' }; },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(said.length, 1);
+    assert.equal(r.sent.length, 1);
+    assert.equal(r.sent[0].digest, true);
+    assert.match(said[0], /有 4 张单/);
+    assert.equal(S.plainViolations(said[0]).length, 0);
+    const book = JSON.parse(fs.readFileSync(state, 'utf8'));
+    assert.equal(Object.keys(book.alerts).length, 4);
+    const again = await W.runBoardWatch({
+      root: dir, state, dryRun: false, now: NOW,
+      collect: async () => ({ board, policy: { alertBatchMax: 3 } }),
+      hubSay: (text) => { said.push(text); return { ok: true, messageId: 'm2' }; },
+    });
+    assert.equal(again.sent.length, 0);
     assert.equal(said.length, 1);
   });
 
@@ -409,8 +487,8 @@ describe('board-watch 账本去重 + 没查成退出', () => {
     const S = await BOARD;
     const board = S.renderBoard({
       now: NOW,
-      issues: okEnv([issue({ createdAt: HOURS_AGO(5) })]),
-      prs: okEnv([]),
+      issues: okEnv([]),
+      prs: okEnv([pr({ createdAt: HOURS_AGO(5), isDraft: true })]),
       queue: okEnv([]),
       ledger: okEnv([]),
     });
@@ -457,6 +535,7 @@ describe('策略 board 节 + CLI 动词', () => {
     assert.equal(r.ok, true, JSON.stringify(r.problems));
     const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'dispatch-policy.json'), 'utf8'));
     assert.equal(doc.board.workerWallHoursMax, 4);
+    assert.equal(doc.board.alertBatchMax, 3);
   });
 
   it('workerWallHoursMax: 0 红', async () => {
@@ -471,6 +550,20 @@ describe('策略 board 节 + CLI 动词', () => {
     assert.equal(r.ok, false);
     assert.equal(r.unscanned, false);
     assert.equal(r.problems.some((p) => /workerWallHoursMax/.test(p)), true);
+  });
+
+  it('alertBatchMax: 0 红', async () => {
+    const C = await POLICY;
+    const src = JSON.stringify({
+      preflight: { enabled: true, timeoutMs: 5000, maxCandidates: 4, useHealthTable: true },
+      breaker: { windowHours: 24, failuresToTrip: 3, cooldownHours: 24, halfOpenProbes: 1 },
+      hubChat: { enabled: true, allowedActions: ['situation'], upstream: { redThreshold: 2, decisions: true, digest: false } },
+      board: { workerWallHoursMax: 4, alertBatchMax: 0 },
+    });
+    const r = C.inspectDispatchPolicySource(src);
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, false);
+    assert.equal(r.problems.some((p) => /alertBatchMax/.test(p)), true);
   });
 
   it('board 动词已登记', async () => {
