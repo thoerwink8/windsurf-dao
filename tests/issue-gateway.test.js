@@ -285,7 +285,12 @@ describe('issue-gateway 写入契约', () => {
     assert.match(r.error, /人工按 URL/);
   });
 
-  it('审计目录不可写 → 不得报告成功', async () => {
+  it('审计目录不可写 → 不得报告成功', async (t) => {
+    // root 无视文件权限位，chmod 0444 拦不住写——这条只能在非 root 下验（CI/orca 是非 root）。
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      t.skip('root 下权限位失效，本条验不了');
+      return;
+    }
     const G = await LIB_LOAD;
     const root = tmp();
     const dir = path.join(root, 'gw');

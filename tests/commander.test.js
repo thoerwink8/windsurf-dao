@@ -1148,6 +1148,112 @@ describe('返工命令：原树短会话，不新派工', () => {
   });
 });
 
+// #1142 实咬：帅位快马 PR 没有 dao-<单> 工树，返工被判死刑。下面是可执行判别（不是源码正则）：
+// 假 run 记录每条命令并按剧本回话，跑真函数，断言参数与 fail-closed 行为。
+describe('返工建树路（#1142）：无 dao 树时从 PR 分支建树，可执行判别', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const os = require('os');
+  /** 剧本化 run：按「命令里含哪个动词」回话，全部调用记进 calls。 */
+  function scriptedRun(script) {
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      for (const [needle, reply] of script) {
+        if (argv.includes(needle)) return typeof reply === 'function' ? reply(argv) : reply;
+      }
+      return { ok: false, error: `剧本没有这条命令：${argv.join(' ')}` };
+    };
+    return { run, calls };
+  }
+  const quiet = () => {};
+
+  it('成功路：实查分支名 → worktree-create 带 --branch → 回执 path 返回', async () => {
+    const M = await MOD();
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'cc/fix-branch\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-tree"}\n' }],
+    ]);
+    const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tree, '/tmp/fake-tree');
+    assert.equal(r.headRef, 'cc/fix-branch');
+    assert.equal(calls.length, 2);
+    // 查询参数：真查 PR 的 headRefName，不猜
+    assert.equal(calls[0].includes('view'), true, calls[0].join(' '));
+    assert.equal(calls[0].includes('987321'), true, calls[0].join(' '));
+    assert.equal(calls[0].includes('headRefName'), true, calls[0].join(' '));
+    // 建树参数：worktree-create 走 mirasim、带实查到的分支
+    assert.ok(calls[1].includes('worktree-create'));
+    const bi = calls[1].indexOf('--branch');
+    assert.equal(calls[1][bi + 1], 'cc/fix-branch', '建树必须用实查到的分支名');
+    assert.equal(calls[1][calls[1].indexOf('--executor') + 1], 'mirasim');
+  });
+
+  it('分支名查不到 → 没查成交帅，且不往下建树', async () => {
+    const M = await MOD();
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /没查成/);
+    assert.equal(calls.length, 1, '查不到分支名就不许再发 worktree-create');
+  });
+
+  it('建树回执无 path / 回执不是 JSON → 都按没查成，不装成建好了', async () => {
+    const M = await MOD();
+    for (const out of ['{"ok":true}\n', '不是 JSON 的回执\n']) {
+      const { run } = scriptedRun([
+        ['view', { ok: true, out: 'cc/fix-branch\n' }],
+        ['worktree-create', { ok: true, out }],
+      ]);
+      const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /回执没有 path/);
+    }
+  });
+
+  it('dispatchRework 串联：建出的树喂给 start --worktree，起会话成功记账 ok', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rework-1142-'));
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'cc/fix-branch\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-tree"}\n' }],
+      ['start', { ok: true, out: '{"ok":true,"sessionKey":"codex:test-9973"}\n' }],
+    ]);
+    const state = {};
+    const action = {
+      kind: 'rework', pr: 987321, issue: 987654, head: 'abcdef1234567890', redRounds: 1,
+      model: 'grok-4.6', brief: '## 判定：红 1 项\n1. `a.mjs:1` 改这里。', why: '测试',
+    };
+    const r = M.dispatchRework(action, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const start = calls.find((c) => c.includes('start'));
+    assert.ok(start, '必须真的发了 start');
+    assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-tree', 'start 必须用建树回执里的 path');
+    assert.equal(start[start.indexOf('--model') + 1], 'grok-4.6');
+    const rec = state.reworkDispatched[`987321:abcdef12`] || Object.values(state.reworkDispatched)[0];
+    assert.equal(rec.ok, true, '成功要记账');
+  });
+
+  it('dispatchRework 串联：分支查不到 → fail-closed 交帅，不发 start，记账 unscanned', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rework-1142-'));
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const state = {};
+    const action = {
+      kind: 'rework', pr: 987321, issue: 987654, head: 'abcdef1234567890', redRounds: 1,
+      model: 'grok-4.6', brief: '红项', why: '测试',
+    };
+    const r = M.dispatchRework(action, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true, '查不到是「没查成」不是「失败」');
+    assert.match(r.error, /没查成/);
+    assert.ok(!calls.some((c) => c.includes('start')), '没树绝不许起会话');
+    const rec = Object.values(state.reworkDispatched)[0];
+    assert.equal(rec.ok, false);
+    assert.equal(rec.unscanned, true);
+  });
+});
+
 // 2026-09-05 实咬：自动合并的唯一入口是 pr.reviewDecision==='APPROVED'，而这个字段由 GitHub 按分支保护规则算，
 // 本仓没开分支保护 ⇒ 恒为 null。审官判绿了，指挥官这一格永远进不去，PR 一直挂着等人——
 // 「全流程无人工干预」从来没通过电就是死在这里。判绿改成按当前 head 看真 review。
