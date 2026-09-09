@@ -60,16 +60,24 @@ describe('resolveLegCap —— 不限 / 待填 / 有限三态分得开', () => {
     assert.deepEqual(resolveLegCap(CAP_UNLIMITED), { cap: Infinity, state: 'unlimited' });
     assert.deepEqual(resolveLegCap(Infinity), { cap: Infinity, state: 'unlimited' });
   });
-  it('null / 缺字段 = 待填（可空=待填，不是红）', async () => {
-    const { resolveLegCap } = await CC;
-    assert.deepEqual(resolveLegCap(null), { cap: Infinity, state: 'pending' });
-    assert.deepEqual(resolveLegCap(undefined), { cap: Infinity, state: 'pending' });
+  it('null / 缺字段 = 待填 ⇒ 保守上限收紧，**不是** Infinity 放行', async () => {
+    const { resolveLegCap, CONSERVATIVE_CAP } = await CC;
+    // 故意违规样本的另一面：待填若按 Infinity 放行，闸对 429 真正出事的那几条渠道等于不设防。
+    assert.deepEqual(resolveLegCap(null), { cap: CONSERVATIVE_CAP, state: 'pending' });
+    assert.deepEqual(resolveLegCap(undefined), { cap: CONSERVATIVE_CAP, state: 'pending' });
+    assert.notEqual(resolveLegCap(null).cap, Infinity);
+    assert.equal(Number.isFinite(resolveLegCap(null).cap), true);
+  });
+  it('保守上限取 3（issue 实测「Codex 容量 3-4」的下界）', async () => {
+    const { CONSERVATIVE_CAP } = await CC;
+    assert.equal(CONSERVATIVE_CAP, 3);
   });
   it('脏值（0/负/杂串）当待填并标 bad', async () => {
-    const { resolveLegCap } = await CC;
+    const { resolveLegCap, CONSERVATIVE_CAP } = await CC;
     assert.equal(resolveLegCap(0).bad, true);
     assert.equal(resolveLegCap(-3).bad, true);
     assert.equal(resolveLegCap('abc').bad, true);
+    assert.equal(resolveLegCap(0).cap, CONSERVATIVE_CAP); // 脏值也收紧，不放行
   });
 });
 
@@ -94,10 +102,29 @@ describe('buildChannelCaps —— 从腿表建渠道容量表', () => {
     assert.equal(r.caps['gw:grok'], Infinity);
     assert.equal(r.states['gw:grok'], 'unlimited');
   });
-  it('待填渠道进 pending 列表（可空=待填，不红）', async () => {
-    const { buildChannelCaps } = await CC;
+  it('待填渠道进 pending 列表（可空=待填，不红），且 cap 是保守值不是 Infinity', async () => {
+    const { buildChannelCaps, CONSERVATIVE_CAP } = await CC;
     const r = buildChannelCaps(legs);
     assert.deepEqual(r.pending, ['gw:sub']);
+    assert.equal(r.caps['gw:sub'], CONSERVATIVE_CAP);
+    assert.equal(r.states['gw:sub'], 'pending');
+  });
+  it('同渠道「显式不限」压过「待填」——用缺失覆盖已验证结论是错的', async () => {
+    const { buildChannelCaps } = await CC;
+    const r = buildChannelCaps([
+      { id: 'a', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: '不限' },
+      { id: 'b', 状态: '在役', 供应商: 'gw', 落地: GROK },  // 同渠道 gw:grok，待填
+    ]);
+    assert.equal(r.caps['gw:grok'], Infinity);
+    assert.equal(r.states['gw:grok'], 'unlimited');
+  });
+  it('同渠道多条显式有限值取最严（min）', async () => {
+    const { buildChannelCaps } = await CC;
+    const r = buildChannelCaps([
+      { id: 'a', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 7 },
+      { id: 'b', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 2 },
+    ]);
+    assert.equal(r.caps['gw:grok'], 2);
   });
   it('停用腿不进容量表', async () => {
     const { buildChannelCaps } = await CC;
@@ -282,5 +309,53 @@ describe('legAvailability —— fail-close 边界', () => {
     const r = legAvailability(GLM, { caps: { 'gw:windsurf': Infinity }, states: { 'gw:windsurf': 'pending' } });
     assert.equal(r.available, true);
     assert.equal(r.pending, true);
+  });
+});
+
+describe('validateLegCaps —— dao-check 的判据（故意违规样本必须被拦下）', () => {
+  it('腿节不是数组 = 红（没查成，与「扫完是 0」分得开）', async () => {
+    const { validateLegCaps } = await CC;
+    const r = validateLegCaps(null);
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('故意违规样本：上限写 0 / -1 / 杂串 → 全部当场点名（bad）', async () => {
+    const { validateLegCaps } = await CC;
+    const r = validateLegCaps([
+      { id: 'zero@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 0 },
+      { id: 'neg@x', 状态: '在役', 供应商: 'gw', 落地: DEEPSEEK, 并发上限: -1 },
+      { id: 'junk@x', 状态: '在役', 供应商: 'gw', 落地: GLM, 并发上限: '很多' },
+    ]);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.bad.map((b) => b.id), ['zero@x', 'neg@x', 'junk@x']);
+  });
+
+  it('待填不算红（故意未配置），但必须列出来催填', async () => {
+    const { validateLegCaps, CONSERVATIVE_CAP } = await CC;
+    const r = validateLegCaps([
+      { id: 'pend@x', 状态: '在役', 供应商: 'gw', 落地: GLM },
+      { id: 'ok@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 5 },
+    ]);
+    assert.deepEqual(r.bad, []);
+    assert.deepEqual(r.pending.map((p) => p.id), ['pend@x']);
+    assert.equal(r.conservativeCap, CONSERVATIVE_CAP);
+  });
+
+  it('停用腿不参与校验（不要求填字段）', async () => {
+    const { validateLegCaps } = await CC;
+    const r = validateLegCaps([{ id: 'dead@x', 状态: '停用', 供应商: 'gw', 落地: GROK }]);
+    assert.deepEqual(r.pending, []);
+    assert.equal(r.inService, 0);
+  });
+
+  it('真表：在役腿全有字段、无脏值（本单验收标准）', async () => {
+    const { validateLegCaps } = await CC;
+    const fs = require('node:fs');
+    const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8'));
+    const r = validateLegCaps(doc.腿);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.bad, []);
+    assert.ok(r.inService > 0, '一条在役腿都没扫到 ⇒ 本次等于没查');
   });
 });
