@@ -34,6 +34,9 @@ Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/b
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 Environment=GH_CONFIG_DIR=/var/empty
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/mirasim-ws-probe.mjs
+# 握手等 sessions 帧 30s（跟 mirasim-sessions.mjs 同值，#1151 实咬）。默认 TimeoutStartSec=90s
+# 盖得住，但写死：别哪天被全局 DefaultTimeoutStartSec 削短，探针被 systemd 杀掉看起来像没探。
+TimeoutStartSec=45s
 # 退出码 0 = 探过（红项走报警 + 自愈，不算探针失败）。
 # --strict 且本轮红才是 1。没查成要在 journal 里看得见 ·，不许跟绿长成一个样。
 StandardOutput=journal

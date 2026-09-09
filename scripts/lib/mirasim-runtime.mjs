@@ -38,6 +38,12 @@ import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 export const PINNED_VERSION = '0.0.282';
 export const DEFAULT_PORT = 4316;
 
+/** listSessions / handshake 等 sessions 帧的预算。
+ *  跟 `scripts/mirasim-sessions.mjs` 的 MIRASIM_LS_TIMEOUT_MS 默认同值。
+ *  2026-09-09 实咬：负载 20 时 30s 才判超时；snapshot 默认 6s 会把「慢」误判成「死」，
+ *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
+export const SESSIONS_TIMEOUT_MS = 30_000;
+
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
 // 账本目录名就是后半段那个 uuid，交叉核靠这个映射。
 const SESSION_KEY_RE = /^([a-z][a-z0-9_-]*):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
@@ -583,6 +589,7 @@ export function createRuntime(opts = {}) {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
+    sessions: opts.sessionsTimeoutMs ?? SESSIONS_TIMEOUT_MS,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
   };
@@ -803,7 +810,7 @@ export function createRuntime(opts = {}) {
     const wire = await open();
     try {
       wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.sessions);
       if (!listed || !Array.isArray(listed.sessions)) {
         return { ok: false, unscanned: true, sessions: [], error: '会话清单没回 sessions 数组（没查成）' };
       }
@@ -870,6 +877,7 @@ export function createRuntime(opts = {}) {
    * 2026-09-09 帅位实证：listSessions 单口退化、startSession 仍通——连接可建、
    * state 也在，但 sessions 帧不回。只 ping state 探不到这个病。空名单（[]）算活；
    * 没回帧 / 不是数组才算死。连不上 / 令牌不在仍抛 MirasimUnavailableError。
+   * 等帧预算是 SESSIONS_TIMEOUT_MS（30s），不是 snapshot 的 6s——6s 会把负载误判成死。
    */
   async function handshake() {
     const wire = await open();
@@ -877,7 +885,7 @@ export function createRuntime(opts = {}) {
       const contract = judgeContract(wire.state, { pinnedVersion });
       if (contract.unscanned) return contract;
       wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.sessions);
       if (!listed || !Array.isArray(listed.sessions)) {
         return {
           ok: false,
@@ -903,7 +911,7 @@ export function createRuntime(opts = {}) {
     waitForCompletion,
     handshake,
     crossCheck,
-    config: { port, homeDir, pinnedVersion },
+    config: { port, homeDir, pinnedVersion, sessionsTimeoutMs: t.sessions },
   };
 }
 

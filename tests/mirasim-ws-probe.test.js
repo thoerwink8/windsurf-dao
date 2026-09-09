@@ -393,6 +393,26 @@ describe('handshake 是只读：不发 prompt、挂断，但要验 sessions 帧'
     assert.deepStrictEqual(sent.filter((f) => f.type === 'prompt'), []);
     assert.equal(wire.hungUp, true);
   });
+
+  it('handshake 等 sessions 帧用 30s，不是 snapshot 的 6s（负载下 6s 会把慢误判成死）', async () => {
+    const { createRuntime, SESSIONS_TIMEOUT_MS } = await import(RUNTIME);
+    assert.equal(SESSIONS_TIMEOUT_MS, 30_000);
+    const waits = [];
+    const wire = {
+      state: goodState,
+      send() {},
+      async waitFor(pred, timeoutMs) {
+        waits.push({ pred, timeoutMs });
+        return { type: 'sessions', sessions: [] };
+      },
+      close() {},
+    };
+    const rt = createRuntime({ connect: async () => wire });
+    await rt.handshake();
+    assert.equal(waits.length, 1, 'handshake 只等 sessions 这一帧');
+    assert.equal(waits[0].timeoutMs, 30_000, '跟 mirasim-sessions.mjs 默认同值；6s 是 snapshot 预算');
+    assert.equal(rt.config.sessionsTimeoutMs, 30_000);
+  });
 });
 
 describe('systemd 单元与装机脚本', () => {
@@ -405,6 +425,7 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(s, /scripts\/mirasim-ws-probe\.mjs/);
     assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
     assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
+    assert.match(s, /^TimeoutStartSec=45s$/m, '握手等 30s，unit 必须盖住，别被默认/全局削短');
     assert.match(t, /^OnCalendar=\*:08\/10$/m);
     assert.match(t, /^Persistent=true$/m);
   });
