@@ -324,6 +324,7 @@ describe('systemd 单元与装机脚本', () => {
     const s = fs.readFileSync(SERVER_UNIT, 'utf8');
     assert.match(s, /^User=orca$/m);
     assert.match(s, /^Restart=always$/m);
+    assert.match(s, /^TimeoutStopSec=10s$/m, 'SIGSTOP 挂起时 SIGTERM 进不去，要靠这一行 SIGKILL，否则探针 30s 超时自愈失败');
     assert.match(s, /^MemoryHigh=2\.5G$/m);
     assert.match(s, /^MemoryMax=4G$/m);
     assert.match(s, /server\.cjs --port 4316/);

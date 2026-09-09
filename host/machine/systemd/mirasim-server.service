@@ -32,6 +32,9 @@ WorkingDirectory=/home/orca/mirasim-server/0.0.282
 ExecStart=/home/orca/mirasim-server/0.0.282/node /home/orca/mirasim-server/0.0.282/server.cjs --port 4316 --host 127.0.0.1 --no-open --workdir /home/orca/mirasim-work
 Restart=always
 RestartSec=5
+# SIGSTOP / 主进程挂起时 SIGTERM 只是挂起，要等 TimeoutStopSec 后 SIGKILL 才真正死。
+# 探针只在无在途时 try-restart，没人要优雅退出；默认 90s 超过探针 30s 超时，自愈看起来失败。
+TimeoutStopSec=10s
 MemoryHigh=2.5G
 MemoryMax=4G
 
