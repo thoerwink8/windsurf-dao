@@ -962,6 +962,12 @@ function collectCandidates(situation) {
   // 排在返工/复审之后、新派之前（finishReserve 已预扣名额）。不进上面的 PR 循环：
   // 判红返工、冲突解、叫审官都不认 draft 这一格，写进去会被 continue 吃掉。
   function pushPumpDraft(pr) {
+    if (exhaustedThisRound.has(Number(pr.number))) return;
+    // 这一轮已经为这张 PR 派了返工/审官 = 有人在推，别再塞一个收口会话抢树。
+    if (out.some((a) => a && Number(a.pr) === Number(pr.number)
+      && (a.kind === 'rework' || a.kind === 'rereview' || a.kind === 'attach-reviewer'))) {
+      return;
+    }
     const pkey = pumpDraftKey(pr.number);
     const prev = reworkDispatched[pkey];
     if (prev && prev.unscanned === true) return; // 上次派成没成没查成，不重派（重派会造重复工人）

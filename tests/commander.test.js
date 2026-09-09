@@ -2067,6 +2067,18 @@ describe('#1147 draft 收口泵', () => {
     assert.equal(pumps[0].tries, 2);
   });
 
+  it('同轮已派解冲突返工 → 不再泵（别两个人抢一棵树）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [issue],
+        prs: [stalledDraft({ mergeable: 'CONFLICTING' })],
+      },
+    }));
+    assert.equal(byKind(r, 'rework').length, 1);
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+  });
+
   it('配额：slots=1 时收口泵占名额，新派被挤到下轮', async () => {
     const { decide } = await CORE;
     const ready = {
