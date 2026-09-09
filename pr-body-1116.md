@@ -43,6 +43,7 @@
 - [x] 本轮：收件箱 5 条 patrol 观察落成 #1164–#1168，观察文件加「处置：#N」（CI check 被 inbox 闸打红，不是本单实现回归）
 - [x] 本轮：指挥官选型也只读 PR label（`reviewerLabelFor` / 返工 / 复审补标打到 PR）。原先 decide 仍从署名 issue 反推审官——正是 #1096「不猜审官」那个出口。帮助文案「自读署名 issue」一并改掉。
 - [x] 本轮跟上 origin/master（inbox 6 条巡检观测补处置行，收件箱闸转绿）；冲突 0
+- [x] 本轮跟上 origin/master（patrol：#1015 凭据闸把额度采样 git 推送掐死）；观察文件加「处置：#1172」（指挥官方已开单，空处置行会把 inbox 闸打红）
 
 ## 机制判定
 
