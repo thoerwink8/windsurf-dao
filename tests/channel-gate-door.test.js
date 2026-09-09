@@ -307,3 +307,81 @@ describe('429 闭环：门里收到拒绝 → 熔断 trip（2→4→8）→ 下�
     assert.deepEqual(rounds, [2, 4, 8, 8]);
   });
 });
+
+// 生产接线证据：不是喂假快照给纯函数，而是走**生产入口 checkChannelCapacity + 真路由表**。
+// 上限数字不写死——腿表是帅位可随时改的（2026-09-05 拍板），钉死数字会在别人填真数那天变红，
+// 而闸本身一点没坏。所以钉**不变量**：在途 = 该渠道上限 ⇒ 满；少一个 ⇒ 放行。
+describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变量，不钉具体数字）', () => {
+  const ROUTING = path.join(__dirname, '..', 'docs', 'model-routing.json');
+
+  async function bits() {
+    const { checkChannelCapacity, buildChannelCaps, resolveModelChannel } = await import(CC);
+    const MR = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/');
+    const { loadRoutingJsonRaw, modelsFromJson } = await import(MR);
+    const raw = JSON.parse(fs.readFileSync(ROUTING, 'utf8'));
+    return { checkChannelCapacity, buildChannelCaps, resolveModelChannel, loadRoutingJsonRaw, modelsFromJson, raw };
+  }
+
+  const ioWith = (loadRoutingJsonRaw, modelsFromJson, trees, jobs) => ({
+    loadRouting: () => loadRoutingJsonRaw(),
+    loadModels: (r) => modelsFromJson(r),
+    checkInFlight: () => ({ ok: true, trees, count: trees.length }),
+    loadJobs: () => jobs,
+    loadBreaker: () => null,
+  });
+
+  // 审官模型：#1145 的起因就是「一轮起 10 个审官全部 429」，所以判别点选审官这条腿。
+  for (const model of ['gpt-5.6-luna', 'gpt-5.6-sol']) {
+    it(`${model}：在途占满该渠道上限 → 生产入口判 full；少一个 → free`, async () => {
+      const b = await bits();
+      const caps = b.buildChannelCaps(b.raw.腿);
+      const resolved = b.resolveModelChannel({ model, legs: b.raw.腿, models: b.modelsFromJson(b.raw), caps: caps.caps });
+      assert.ok(resolved, `${model} 在腿表里认不出渠道——判据失效，不是「检查通过」`);
+      const cap = resolved.cap;
+      // 拆到最简：两个条件分开断，失败时看得出是哪半坏了（复合断言看不出）。
+      assert.equal(Number.isFinite(cap), true, `${model} 的渠道 ${resolved.channel} 上限不是有限值（${cap}）——本用例失去判别力`);
+      assert.ok(cap >= 1, `${model} 的渠道 ${resolved.channel} 上限 ${cap} < 1——本用例失去判别力`);
+
+      const mk = (n) => {
+        const jobs = []; const trees = [];
+        for (let i = 1; i <= n; i += 1) {
+          jobs.push({ pr: 9000 + i, model });
+          trees.push(`/root/mirasim-worktrees/windsurf-dao/dao-review-pr-${9000 + i}`);
+        }
+        return { jobs, trees };
+      };
+
+      const full = mk(cap);
+      const rFull = b.checkChannelCapacity({ model, now: T0, io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, full.trees, full.jobs) });
+      assert.equal(rFull.verdict, 'full');
+      assert.equal(rFull.reason, 'at-cap');
+      assert.equal(rFull.channel, resolved.channel);
+      assert.equal(rFull.inFlight, cap);
+
+      const under = mk(cap - 1);
+      const rFree = b.checkChannelCapacity({ model, now: T0, io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, under.trees, under.jobs) });
+      assert.equal(rFree.verdict, 'free');
+      assert.equal(rFree.inFlight, cap - 1);
+    });
+  }
+
+  it('在途读不出来 → ok:false（fail-close），不是「扫完是 0」', async () => {
+    const b = await bits();
+    const r = b.checkChannelCapacity({
+      model: 'gpt-5.6-sol', now: T0,
+      io: { ...ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, [], []), checkInFlight: () => ({ ok: false, error: '/proc 读不动' }) },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('路由表读不出来 → ok:false（fail-close）', async () => {
+    const b = await bits();
+    const r = b.checkChannelCapacity({
+      model: 'gpt-5.6-sol', now: T0,
+      io: { ...ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, [], []), loadRouting: () => { throw new Error('文件不在'); } },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+});
