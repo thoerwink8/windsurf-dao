@@ -1028,7 +1028,7 @@ export const FLAGS_BY_VERB = {
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
     '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
-  'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'reviewer-done': new Set(['--pr', '--repo', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
@@ -1153,7 +1153,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
-  reviewer-done --pr <N> [--dry-run]
+  reviewer-done --pr <N> [--dry-run] [--repo owner/name]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>] [--repo owner/name]

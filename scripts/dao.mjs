@@ -3801,7 +3801,8 @@ function cmdReviewerAttach(args) {
 
 function cmdReviewerDone(args) {
   if (!args.pr) fail('reviewer-done 要 --pr');
-  const gh = ghRunner({ role: 'reviewer' });
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'reviewer-done' });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   const view = gh(['pr', 'view', String(args.pr), '--json', 'state,reviews']);
   if (!view.ok) fail(`gh 读 PR #${args.pr} 失败：${view.error}`);
   let json;

@@ -126,9 +126,9 @@ describe('#1024 parseOwnerNameRepo / withGhRepo / assertRepoAuthorized', () => {
 });
 
 describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
-  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain 都登记 --repo', async () => {
+  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain / reviewer-done 都登记 --repo', async () => {
     const S = await S_LOAD;
-    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain']) {
+    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain', 'reviewer-done']) {
       assert.equal(S.FLAGS_BY_VERB[v].has('--repo'), true, v);
     }
   });
@@ -144,6 +144,8 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     assert.match(src, /function resolveMirasimRepoTarget[\s\S]*assertCrossRepoOrFail\(/);
     assert.match(src, /function cmdReviewerAttach[\s\S]*assertCrossRepoOrFail/);
     assert.match(src, /function cmdReviewPendingDrain[\s\S]*assertCrossRepoOrFail/);
+    assert.match(src, /function cmdReviewerDone[\s\S]*assertCrossRepoOrFail/);
+    assert.match(src, /function cmdReviewerDone[\s\S]*ghRunnerForTarget\(targetRepo, \{ role: 'reviewer' \}\)/);
     assert.match(src, /if \(repo\) argv\.push\('--repo'/);
     const reviewer = src.slice(
       src.indexOf('async function cmdReviewerCreateMirasim'),
