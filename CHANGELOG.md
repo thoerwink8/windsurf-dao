@@ -2,6 +2,33 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.1.0 — 2026-09-08
+
+### 新功能
+- [cc] feat(routing): 审官 gpt 族 relay→direct——codex 直连网关 gptpool，停烧 mirasim 云额度（2026-09-08 用户拍板）
+- [pi] feat: 「将来某版」档——GitHub Milestone 两档 + 派工跳过 (#966) (#1107)
+- [pi] feat(gate): 控制面断了拦推送/部署，探测失败不拦（#948） (#1109)
+- [cc] feat(probe): 收 gw-remote-probe 进仓——单元+脚本+INDEX（#967） (#1106)
+
+### 修复与维护
+- [codex] fix(commander): 收口无人值守任务生命周期 (#1157)
+- [cc] fix(commander): 返工无 dao 树时从 PR 分支建树——快马 PR 不再永久交帅 (#1133) (#1144)
+- [cc] docs(routing): direct 的落地实况修准——codex 直连 pqapi（responses 约束），windsurf 优先挂 ai-gateway-stack#7
+- [cc] docs(西瓜清单): 录入 2026-09-08 全部拍板——scale-dozens 立项、orca-retire 重开、queued 档新增
+- [grok] fix(watchdog): ⑳ 已装却漂了不许被没装盖成没查成 (#1136)
+- [grok] fix(lifecycle): 刮名单超时 15s 仍偶发，改 30s (#1139)
+- [grok] fix(lifecycle): 会话名单超时放宽，看板勾完 (#1138)
+
+### 其它
+- [patrol] #967 合了，探活仍跑 ~/bin；drop-in 还撞 :07
+- [patrol] #948 控制面闸合了：没写腿，挂载面也不在现役工人上
+- [patrol] #1015 凭据闸扫不到每 20 分钟合并 PR 的指挥官单元
+- [pi] 收口跨宿主 GitHub 写权限：AI 只经 Bot 网关操作 Issue (#1015)
+- [patrol] #888 回流提示层钉在已退役的 orca 士兵书上
+- release: v2.0.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.0.0 — 2026-09-07
 
 ### 破坏性变更

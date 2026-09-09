@@ -1,10 +1,11 @@
 // scripts/lib/mirasim-runtime.mjs —— mirasim-server 当执行体的唯一绑定入口（#880 卡 A）。
 //
-// 五个动词是 #880 冻结的接口，dao.mjs 按 executor 字段分派 orca / mirasim 两套绑定，
-// orca 退役时删绑定、不改调用方：
+// 五个动词是 #880 冻结的接口；#1125 加了第六个 listSessions（orca 已随 #1115 退役，
+// 冻结五个的理由没了，「现在有几个审官真在跑」只有这一帧答得出）：
 //   ensureWorkspace(repo, branch)             → {path}
 //   startSession({agent, workdir, prompt})    → {sessionKey, taskId}
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
+//   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
 // handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
@@ -573,7 +574,7 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
   return wire;
 }
 
-// ── 五个动词 ─────────────────────────────────────────────────────────────────
+// ── 动词（#880 五个 + #1125 listSessions）────────────────────────────────────
 
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
@@ -589,9 +590,16 @@ export function createRuntime(opts = {}) {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
-    sessions: opts.sessionsTimeoutMs ?? SESSIONS_TIMEOUT_MS,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125 / #1151）：名单是**全量枚举**，
+    // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
+    // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
+    // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    // handshake 跟 listSessions 同一格：探活把「慢」判成「死」会连红重启（2026-09-09 实咬）。
+    list: opts.listTimeoutMs
+      ?? opts.sessionsTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || SESSIONS_TIMEOUT_MS),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -806,20 +814,6 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function listSessions() {
-    const wire = await open();
-    try {
-      wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.sessions);
-      if (!listed || !Array.isArray(listed.sessions)) {
-        return { ok: false, unscanned: true, sessions: [], error: '会话清单没回 sessions 数组（没查成）' };
-      }
-      return { ok: true, sessions: listed.sessions };
-    } finally {
-      wire.close();
-    }
-  }
-
   async function stopSession(sessionKey) {
     const wire = await open();
     try {
@@ -871,13 +865,40 @@ export function createRuntime(opts = {}) {
   }
 
   /**
+   * 会话名单（#1125）。readSession 内部一直在用这一帧当兜底，只是没往外露。
+   *
+   * 为什么现在加第六个动词：#880 冻结五个动词是为了「orca 退役时删绑定、不改调用方」，
+   * orca 已随 #1115 退役，那个理由没了。而「现在有几个审官真在跑」只有这一帧答得出——
+   * 登记文件会留下死会话（#1121），进程会被服务端重新拉起来变成残壳，两个都不算数。
+   *
+   * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
+   * 把上游池子拉满，那正是 #1125 要治的病。
+   * 等帧预算是 t.list（默认 SESSIONS_TIMEOUT_MS / MIRASIM_LS_TIMEOUT_MS），不是 snapshot 的 6s。
+   */
+  async function listSessions() {
+    const wire = await open();
+    try {
+      wire.send({ type: 'listSessions' });
+      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!msg || !Array.isArray(msg.sessions)) {
+        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      }
+      return { ok: true, missing: false, sessions: msg.sessions };
+    } catch (e) {
+      return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
+    } finally {
+      wire.close();
+    }
+  }
+
+  /**
    * 最小握手：开一条 ws，读 state 帧，再发 listSessions 等 sessions 帧，立刻挂断。
    * 不发 prompt、不起会话。探活用它判「该发生的事有没有发生」。
    *
    * 2026-09-09 帅位实证：listSessions 单口退化、startSession 仍通——连接可建、
    * state 也在，但 sessions 帧不回。只 ping state 探不到这个病。空名单（[]）算活；
    * 没回帧 / 不是数组才算死。连不上 / 令牌不在仍抛 MirasimUnavailableError。
-   * 等帧预算是 SESSIONS_TIMEOUT_MS（30s），不是 snapshot 的 6s——6s 会把负载误判成死。
+   * 等帧预算跟 listSessions 同一格（t.list / SESSIONS_TIMEOUT_MS），不是 snapshot 的 6s。
    */
   async function handshake() {
     const wire = await open();
@@ -885,7 +906,7 @@ export function createRuntime(opts = {}) {
       const contract = judgeContract(wire.state, { pinnedVersion });
       if (contract.unscanned) return contract;
       wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.sessions);
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.list);
       if (!listed || !Array.isArray(listed.sessions)) {
         return {
           ok: false,
@@ -911,7 +932,7 @@ export function createRuntime(opts = {}) {
     waitForCompletion,
     handshake,
     crossCheck,
-    config: { port, homeDir, pinnedVersion, sessionsTimeoutMs: t.sessions },
+    config: { port, homeDir, pinnedVersion, sessionsTimeoutMs: t.list },
   };
 }
 
@@ -924,8 +945,8 @@ export function _setSharedRuntime(r) { shared = r; }
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
-export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const listSessions = () => runtime().listSessions();
+export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
 export const handshake = () => runtime().handshake();

@@ -25,6 +25,9 @@ export const ADMISSION_DEFAULTS = {
   minSamplePairs: 4,
   // 取近 N 对增量的中位数。
   sampleWindow: 12,
+  // #1147 draft 收口泵：无会话 draft 超多久无提交才派短会话；同一张最多泵几次。
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 
 /** 旧键提示文案。读到 maxDispatchPerRound 时打这条，且不按它限流。 */
@@ -48,6 +51,8 @@ export function resolveAdmissionPolicy(raw) {
     conservativeWorkerMb: n('conservativeWorkerMb', 64, 4096, ADMISSION_DEFAULTS.conservativeWorkerMb),
     minSamplePairs: Math.round(n('minSamplePairs', 1, 32, ADMISSION_DEFAULTS.minSamplePairs)),
     sampleWindow: Math.round(n('sampleWindow', 2, 64, ADMISSION_DEFAULTS.sampleWindow)),
+    stalledDraftHours: n('stalledDraftHours', 1, 168, ADMISSION_DEFAULTS.stalledDraftHours),
+    stalledDraftMaxPumps: Math.round(n('stalledDraftMaxPumps', 1, 5, ADMISSION_DEFAULTS.stalledDraftMaxPumps)),
     requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
       ? src.requireModelInRouting
       : true,
