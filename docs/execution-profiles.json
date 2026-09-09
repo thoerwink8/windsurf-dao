@@ -450,18 +450,27 @@
         "gpt-5.6"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "relay reported configured/ok and roster listed model; no scoped new execution proof"
+        "status": "available",
+        "checkedAt": "2026-09-10T19:40:00.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-luna-relay-execution",
+        "reason": "真实会话 codex:5e165b05 在 /tmp/luna-verify-b 用 shell 工具读出 proof.txt 全文（LUNA_VERIFY_TOKEN_7fa31c），phase=done、turns=1、error=null。此前只有 inventory 级证据（清单里列了模型），执行目录据此拒绝起审官。"
       },
       "quality": {
         "status": "unverified",
         "tier": "unknown",
         "sourceId": null
       },
-      "capabilities": {},
+      "capabilities": {
+        "read": {
+          "status": "verified",
+          "sourceId": "1174-luna-relay-execution"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1174-luna-relay-execution"
+        }
+      },
       "pricing": {
         "status": "unknown",
         "currency": null,
