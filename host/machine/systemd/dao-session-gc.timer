@@ -1,0 +1,16 @@
+# /etc/systemd/system/dao-session-gc.timer
+#
+# 会话目录对账，每分钟看一次盘面扫到多少会话，但只在保留窗口之外才归档。
+# 10 分钟的间隔足够：会话目录是只增不减的，间隔太密只是空转。
+
+[Unit]
+Description=windsurf-dao session dir GC
+After=dao-session-gc.service
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+# /etc/systemd/system/dao-session-gc.service
+#
+# 会话目录对账清理（#1176，用户 2026-09-10 拍板：「issue 关了说明事情做完了，本地不需要留代码记录」）。
+# 判据在 scripts/lib/session-dir-gc.mjs。与 dao-board-gc 的分工：board-gc 管卡（worktree），本单元管会话目录本体。
+# 安全绳：进程闸（有活进程一律保留）+ fail-closed（GitHub 盘面查不成只按时效清，一次抖动不误删一大批）。
+#
+# 装法：sudo bash scripts/install-session-gc.sh
+# WorkingDirectory 指向本仓主树。换机改这一行。
+# PATH 显式写死：systemd 不读用户 shell profile。
+
+[Unit]
+Description=windsurf-dao session dir GC (session catalog cleanup)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+Environment=HOME=/home/orca
+Environment=DAO_GC_HOME=/home/orca
+Environment=DAO_GC_REPO=thoerwink8/windsurf-dao
+WorkingDirectory=/srv/projects/windsurf-dao
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/session-dir-gc.mjs --apply
+TimeoutStartSec=600
