@@ -217,7 +217,15 @@
 - [x] 士兵/审官 mirasim 任务书与代码同基线；orca 版任务书整页标退役
 - [x] `land` / `close-issues` / `board-gc` 仍作旁路幂等补漏，不重新承担「下一步谁干活」
 - [x] 统领单在 `done_when` 机器可算为真后，走 `close-issues.mjs` 关——#1133 已 CLOSED（`dao-close-issues.timer` 对 PR #1134 窗口判定）
-- [x] 本页看板全部勾完；initiatives 那条 `status: done`
+- [x] 本页看板全部勾完（原 0–8 步）；initiatives 原 `done_when` 仍绿。余洞见第 9 步。
+
+### 9. 余洞：名单以为没人了，进程还占着树（2026-09-08 实咬）
+
+热路只杀 mirasim 名单里的 `incomplete`。Codex 审官挂 7 小时后，名单里对应树 **0 条**（不是 incomplete、也不是 completed），`/proc` 上 `app-server` 还在，租约握在死人口里，再派报「树上已经有会话进程」。
+
+- [ ] 指挥官对照 `/proc` 与会话名单：名单没有活会话、树上还有会话进程 → `reap-orphan`（SIGTERM）。名单没查成 / 活会话缺 cwd → 不杀。
+- [ ] 夹具：completed 或名单空 + 树上有 pid → 产 reap；running 在这棵树 → 不产。故意「名单没查成」不杀。
+- [ ] 验收：本机那三只挂了 7 小时的 `dao-review-pr-1099/1118/1127` 进程被回收，再扫 `/proc` 对应 cwd 为 0。
 
 ---
 

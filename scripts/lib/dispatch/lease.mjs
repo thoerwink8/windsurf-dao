@@ -173,6 +173,102 @@ export function busyTrees(procs, { root = worktreesRoot() } = {}) {
   return { ok: true, trees, count: trees.length };
 }
 
+/** 名单里还在干活：不许当幽灵杀。incomplete 是「一轮说完」，该停。 */
+const ORPHAN_LIVE_STATES = new Set(['running', 'active', 'working', 'in_progress', 'started']);
+const ORPHAN_DONE_STATES = new Set([
+  'completed', 'complete', 'done', 'finished',
+  'failed', 'error', 'aborted', 'cancelled', 'canceled',
+  'incomplete',
+]);
+
+function normCwd(v) {
+  return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/** 活会话保护整棵工作树：精确相等，或树内子目录。前缀必须带斜杠，避免 dao-live 误护 dao-live-old。 */
+function cwdInLiveTree(cwd, liveTrees) {
+  for (const live of liveTrees) {
+    if (cwd === live || cwd.startsWith(`${live}/`)) return true;
+  }
+  return false;
+}
+
+/**
+ * 名单里没有活会话、/proc 上还占着树 → 回收幽灵进程。
+ *
+ * 2026-09-08 实咬：三只 Codex 挂了 7 小时，mirasim 名单 0 条对应记录，
+ * stop-session 只杀 incomplete，杀不到。租约还握在死人口里。
+ *
+ * 没查成（名单 / 进程观测）→ 空动作，不许当「没有幽灵」去杀。
+ * 活会话缺 cwd → 整轮不杀（对不上树就可能误杀）。
+ *
+ * @returns {{ok:true, actions:Array, skipped?:string}|{ok:false, unscanned:true, error:string, actions:[]}}
+ */
+export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned, root = worktreesRoot() } = {}) {
+  if (sessionsScanned !== true) {
+    return { ok: true, actions: [], skipped: 'sessions-unscanned' };
+  }
+  if (leaseScanned !== true) {
+    return { ok: true, actions: [], skipped: 'lease-unscanned' };
+  }
+  if (!Array.isArray(procs)) {
+    return { ok: false, unscanned: true, error: '没拿到进程观测数组——不杀（没查成）', actions: [] };
+  }
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, error: '没拿到会话名单数组——不杀（没查成）', actions: [] };
+  }
+
+  const liveTrees = new Set();
+  let liveWithoutCwd = false;
+  for (const s of sessions) {
+    const state = String((s && (s.state || s.runState || s.driverState)) || '').toLowerCase();
+    const cwd = normCwd(s && (s.cwd || s.workdir || s.worktree));
+    if (ORPHAN_LIVE_STATES.has(state)) {
+      if (!cwd) { liveWithoutCwd = true; continue; }
+      liveTrees.add(cwd);
+      continue;
+    }
+    if (ORPHAN_DONE_STATES.has(state)) continue;
+    // 不认识的状态：对不上该不该杀，这棵树本轮放过。
+    if (!cwd) { liveWithoutCwd = true; continue; }
+    liveTrees.add(cwd);
+  }
+  if (liveWithoutCwd) {
+    return { ok: true, actions: [], skipped: 'live-session-cwd-missing' };
+  }
+
+  // 红 1（PR #1142 审官）：回收范围必须和 busyTrees 同一把尺——只收工作树根下的 cwd。
+  // 不钳根的话，mirasim-server 在主仓 /srv、家目录、/tmp 上的任意后代都会被当幽灵 SIGTERM，
+  // 帅位自己的会话就跑在主仓里。前缀带斜杠，防 /tmp/mirasim-worktrees-fake 混进来。
+  const base = String(root).replace(/\/+$/, '');
+  const byTree = new Map();
+  for (const p of procs) {
+    if (!p || !Number.isInteger(Number(p.pid))) continue;
+    const pid = Number(p.pid);
+    if (pid <= 1) continue;
+    const cwd = normCwd(p.cwd);
+    if (!cwd) continue;
+    if (!cwd.startsWith(`${base}/`)) continue;
+    // 红 1（PR #1142 三轮）：保护活会话所在整棵树，不只精确相等。
+    // 会话登记在树根，测试/构建会把 cwd 切到 packages/api 这类子目录；只比相等会把子进程当幽灵 SIGTERM。
+    if (cwdInLiveTree(cwd, liveTrees)) continue;
+    if (!byTree.has(cwd)) byTree.set(cwd, []);
+    byTree.get(cwd).push({ pid, comm: p.comm || null });
+  }
+
+  const actions = [];
+  for (const [cwd, holders] of [...byTree.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const pids = [...new Set(holders.map((h) => h.pid))];
+    actions.push({
+      kind: 'reap-orphan',
+      cwd,
+      pids,
+      why: `名单里没有活会话，/proc 还占着 ${cwd}（${holders.map((h) => `${h.comm || '?'} pid ${h.pid}`).join('、')}）`,
+    });
+  }
+  return { ok: true, actions };
+}
+
 /**
  * 生产入口：扫 /proc + 数在途。给派单准入用（#1007）。
  * 没查成 ⇒ ok:false，调用方必须收紧到不派——读不到 ≠ 可以随便派。

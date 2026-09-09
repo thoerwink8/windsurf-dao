@@ -64,6 +64,17 @@ describe('ephemeral-lifecycle', () => {
     assert.equal(existsSync(join(REPO, 'scripts/close-issues.mjs')), true);
   });
 
+  it('名单没有仍占树的进程会 reap-orphan', () => {
+    const core = read('scripts/lib/commander-core.mjs');
+    assert.match(core, /planOrphanReaps/);
+    assert.match(core, /reap-orphan/);
+    const commander = read('scripts/commander.mjs');
+    assert.match(commander, /execReapOrphan/);
+    assert.match(commander, /scanLease/);
+    const lease = read('scripts/lib/dispatch/lease.mjs');
+    assert.match(lease, /export function planOrphanReaps/);
+  });
+
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {
     assert.match(read('scripts/mirasim-sessions.mjs'), /MIRASIM_LS_TIMEOUT_MS \|\| 30000/);
     assert.match(read('scripts/commander.mjs'), /MIRASIM_LS_TIMEOUT_MS: process\.env\.MIRASIM_LS_TIMEOUT_MS \|\| '30000'/);

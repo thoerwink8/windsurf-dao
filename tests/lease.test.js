@@ -17,6 +17,8 @@ const path = require('node:path');
 const LEASE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
 
 const W = '/home/orca/mirasim-worktrees/windsurf-dao';
+// planOrphanReaps 的范围根（红 1 后必须显式传：CI runner 的 homedir 不是 /home/orca，靠默认值会假红/假绿）
+const R = '/home/orca/mirasim-worktrees';
 const 树1040 = `${W}/dao-review-pr-1040`;
 const 树1064 = `${W}/dao-review-pr-1064`;
 const 树1055 = `${W}/dao-1055`;
@@ -233,5 +235,141 @@ describe('/proc/<pid>/stat 解析', () => {
       readlink: () => 树1055,
     });
     assert.deepEqual(got.procs.map((p) => p.pid), [200], 'ppid 解析错就认不出它是服务的后代');
+  });
+});
+
+describe('幽灵进程：名单没有、/proc 还占着树', () => {
+  const 树1099 = `${W}/dao-review-pr-1099`;
+  const ghosts = [
+    { pid: 1369724, comm: 'node', cwd: 树1099 },
+    { pid: 1369731, comm: 'codex', cwd: 树1099 },
+  ];
+
+  it('名单 completed + /proc 还在 → reap-orphan', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:old', state: 'completed', cwd: 树1099 }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].kind, 'reap-orphan');
+    assert.equal(got.actions[0].cwd, 树1099);
+    assert.deepEqual(got.actions[0].pids, [1369724, 1369731]);
+  });
+
+  it('名单里根本没有这棵树 → 也 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'pi:1', state: 'completed', cwd: `${W}/dao-999` }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].cwd, 树1099);
+  });
+
+  it('名单 running 在这棵树 → 不杀', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:live', state: 'running', cwd: 树1099 }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 0);
+  });
+
+  it('名单没查成 → 不杀（没查成 ≠ 没有幽灵）', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [],
+      sessionsScanned: false,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 0);
+    assert.equal(got.skipped, 'sessions-unscanned');
+  });
+
+  it('活会话缺 cwd → 整轮不杀', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: ghosts,
+      sessions: [{ key: 'codex:live', state: 'running' }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 0);
+    assert.equal(got.skipped, 'live-session-cwd-missing');
+  });
+
+  // 红 1（PR #1142 审官判别实验原样收进夹具）：回收范围必须钳在工作树根下。
+  // 这条能绿着合进去，正是当初「主仓/家目录/tmp 全进 reap」漏网的原因。
+  it('故意样本：主仓、家目录、/tmp、形似根的目录 → 0 条 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 3346479, comm: 'node', cwd: '/srv/projects/windsurf-dao' },
+        { pid: 3346480, comm: 'claude', cwd: '/home/orca' },
+        { pid: 3346481, comm: 'pi', cwd: '/tmp/mirasim-unix-smoke' },
+        { pid: 3346482, comm: 'pi', cwd: '/tmp/mirasim-worktrees-fake/windsurf-dao/dao-1' },
+      ],
+      sessions: [],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 0, '根外进程被当幽灵——帅位会话就跑在主仓里，杀它等于自宫');
+  });
+
+  // 红 1（PR #1142 三轮）：会话登记在树根，但测试/构建会把 cwd 切到树内子目录。
+  // 审官最小复现：running 在 dao-live，进程在 dao-live/packages/api → 不该 reap。
+  // 形似前缀 dao-live-old 仍要 reap，保留判别力。
+  it('活会话树内子目录进程不 reap；形似前缀另一棵树仍 reap', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const live = `${W}/dao-live`;
+    const sibling = `${W}/dao-live-old`;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 2001, comm: 'pi', cwd: live },
+        { pid: 2002, comm: 'node', cwd: `${live}/packages/api` },
+        { pid: 2003, comm: 'codex', cwd: sibling },
+      ],
+      sessions: [{ key: 'pi:live', state: 'running', cwd: live }],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.actions.length, 1, '活树子目录进程被当幽灵——测试/构建 cwd 会切进 packages/api');
+    assert.equal(got.actions[0].cwd, sibling);
+    assert.deepEqual(got.actions[0].pids, [2003]);
+  });
+
+  it('根外根内混着：只收根内那棵', async () => {
+    const { planOrphanReaps } = await LEASE;
+    const got = planOrphanReaps({
+      procs: [
+        { pid: 3346479, comm: 'node', cwd: '/srv/projects/windsurf-dao' },
+        ...ghosts,
+      ],
+      sessions: [],
+      sessionsScanned: true,
+      leaseScanned: true,
+      root: R,
+    });
+    assert.equal(got.actions.length, 1);
+    assert.equal(got.actions[0].cwd, 树1099);
+    assert.deepEqual(got.actions[0].pids, [1369724, 1369731]);
   });
 });

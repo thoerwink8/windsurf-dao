@@ -1225,6 +1225,8 @@ function checkEphemeralLifecycle() {
   const gone = (rel) => existsSync(join(ROOT, rel));
   const dao = read('scripts/dao.mjs');
   const commander = read('scripts/commander.mjs');
+  const commanderCore = read('scripts/lib/commander-core.mjs');
+  const lease = read('scripts/lib/dispatch/lease.mjs');
   const handoff = read('scripts/lib/handoff-check.mjs');
   const miraReviewer = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
   const miraSoldier = read('host/skills/dispatch/templates/soldier-book-mirasim.md');
@@ -1234,6 +1236,9 @@ function checkEphemeralLifecycle() {
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
   if (dao && !/enqueueOnly:\s*true/.test(dao)) problems.push('worker-done 没入队（enqueueOnly）');
   if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
+  if (commanderCore && !/planOrphanReaps/.test(commanderCore)) problems.push('指挥官没产幽灵进程回收');
+  if (commander && !/execReapOrphan/.test(commander)) problems.push('指挥官没执行幽灵进程回收');
+  if (lease && !/export function planOrphanReaps/.test(lease)) problems.push('租约闸没有幽灵回收纯函数');
   if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
   if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');
   if (miraReviewer && /pr merge/.test(miraReviewer)) problems.push('审官 mirasim 书还在教 pr merge');
