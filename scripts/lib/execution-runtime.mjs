@@ -79,7 +79,11 @@ const sameLease=(a,b)=>a&&b&&a.token===b.token&&(a.recordKey||a.sessionKey)===(b
 export function createExecutionRuntime(opts={}) {
   const homeDir=opts.homeDir||os.homedir(),stateDir=path.resolve(opts.stateDir||path.join(homeDir,'.dao/execution'));
   const profiles=opts.profiles||loadExecutionProfiles(opts.profilesFile);
-  const mirasim=opts.mirasimRuntime||createMirasimRuntime({...opts,homeDir,pinnedVersion:promotedVersion(homeDir,opts.pinnedVersion)});
+  // 显式钉的版本优先于本机自动发现：promotedVersion 读的是 mirasim-server/current，
+  // 无条件跟随会把策略里的「钉版本」永久盖掉（#884 P1#5 那条契约就是这么断的）。
+  // 只有没人钉的时候才跟随本机升级结果。
+  const mirasim=opts.mirasimRuntime||createMirasimRuntime({...opts,homeDir,
+    pinnedVersion:opts.pinnedVersion||promotedVersion(homeDir,opts.pinnedVersion)});
   const acp=opts.acpRuntime||createAcpRuntime({...opts,homeDir,stateDir:path.join(stateDir,'acp'),profiles});
   const sessionsDir=path.join(stateDir,'sessions'),metaFile=key=>path.join(sessionsDir,encodeURIComponent(key)+'.json');
   const leaseFile=workdir=>path.join(stateDir,'leases',crypto.createHash('sha256').update(workdir).digest('hex')+'.json');

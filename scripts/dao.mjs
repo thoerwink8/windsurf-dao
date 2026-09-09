@@ -3329,10 +3329,13 @@ async function cmdWorkerStartMirasim(args, routing, { policy }) {
   // #884 审官 P1#3（四轮）：超长 --spec 必须在渲染前结构化拒派，不许 buildSoldierInject 甩栈。
   const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   if (!injectGate.ok) fail(injectGate.error, { injectGate, executor: 'mirasim' });
-  const route = mirasimRouteOrFail(args, routing, policy);
+  // bindExecutor 要提到选路之前：runtime 带着执行目录，没有它 profileForModel 恒空，
+  // ACP 腿（cursor/devin）会掉回模型前缀兜底被判成 pi。dispatch 那侧一直传着，
+  // 这侧漏了——同一个修法只接一个调用点，判例 fix-landed-at-one-call-site-only。
+  const binding = bindExecutor({ executor: 'mirasim', policy, routing });
+  const route = mirasimRouteOrFail(args, routing, policy, binding.runtime);
   // 同 dispatch：不传 executor 就把 orca 任务书发进 mirasim 会话（#884 审官 P1，三轮）。
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
-  const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.workerStart({ workdir, prompt, model: route.model, provider: route.provider }); }
   catch (e) { fail(`mirasim 起会话失败: ${String(e?.message || e)}`, { executor: 'mirasim', workdir }); }

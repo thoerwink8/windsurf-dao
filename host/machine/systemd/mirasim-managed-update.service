@@ -1,0 +1,25 @@
+# /etc/systemd/system/mirasim-managed-update.service
+#
+# Mirasim 服务端周期升级（#1174 T4）。升级器本体在 /usr/local/lib/mirasim-managed-update/，
+# 它自己带 flock（/run/lock/mirasim-managed-update.lock）防重入、带在途排空与原子切换，
+# 失败会回退到切换前的版本。这里只负责按点唤起它。
+#
+# 无参数 = 完整流程：discover → check → drain → promote，或接续一次被打断的事务。
+# 要只看不动用 --check-only。
+#
+# 为什么需要这个单元：2026-09-10 盘点发现升级器脚本装好了、能跑，但**没有任何定时器驱动它**，
+# 等于装了个不会自己动的机制——本机因此一直停在 0.0.282，直到人工手动升到 0.0.307。
+
+[Unit]
+Description=Mirasim managed server update (discover/check/drain/promote)
+After=network-online.target mirasim-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 升级要改 /home/orca/mirasim-server 与 systemd 单元，必须 root；升级器内部再降权到 orca 跑服务。
+User=root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/node /usr/local/lib/mirasim-managed-update/mirasim-managed-update.mjs
+# 排空在途会话可能要等一会儿，给够时间；超时不算失败升级，下一轮会接续未完成的事务。
+TimeoutStartSec=1800

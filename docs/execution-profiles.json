@@ -667,7 +667,9 @@
         "implementation"
       ],
       "enabled": true,
-      "defaultForModels": [],
+      "defaultForModels": [
+        "composer-2.5"
+      ],
       "availability": {
         "status": "available",
         "checkedAt": "2026-09-09T18:20:00.000Z",
@@ -1100,7 +1102,9 @@
         "implementation"
       ],
       "enabled": true,
-      "defaultForModels": [],
+      "defaultForModels": [
+        "devin-deepseek-v4-flash-max"
+      ],
       "availability": {
         "status": "unverified",
         "checkedAt": "2026-09-09T18:20:00.000Z",

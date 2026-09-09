@@ -780,14 +780,22 @@ describe('判别实验：未登记家族拒派 / claude·codex 放行（#982）'
     assert.equal(r.status, 0);
   });
 
-  it('gpt-5.6-luna → 放行 gpt/codex/direct（2026-09-08 拍板：直连网关 gptpool，relay 只当池内兜底）', () => {
+  // 2026-09-10 用户拍板「选路一」：执行目录（docs/execution-profiles.json）接管选路，
+  // 腿的形态交看板后台管理，不再由模型前缀兜底决定。于是同一个 luna：
+  //   via   模型前缀 → execution profile
+  //   family gpt      → openai（profile 的 modelFamily 用厂商名，不是模型前缀）
+  //   leg    direct   → cloud（profile 的 route）
+  // 保留这条判别实验的原意——luna 必须被放行且落到 codex——只把随拍板变的三项跟上。
+  // 注意 vendor 判据（审查换厂商禁令）不受影响：resolveVendor 在真表上仍判 luna 为 gpt 家族，
+  // 2026-09-10 实测 sol+luna 仍正确判同厂拒绝。
+  it('gpt-5.6-luna → 放行，且走执行目录而不是模型前缀兜底（2026-09-10 拍板选路一）', () => {
     const r = dry('gpt-5.6-luna');
     const out = JSON.parse(String(r.stdout || '').trim());
     assert.equal(out.ok, true, out.error || '');
-    assert.equal(out.family, 'gpt');
     assert.equal(out.agent, 'codex');
-    assert.equal(out.leg, 'direct');
-    assert.match(String(out.via || ''), /模型前缀/);
+    assert.equal(out.family, 'openai');
+    assert.equal(out.leg, 'cloud');
+    assert.match(String(out.via || ''), /execution profile/);
     assert.equal(r.status, 0);
   });
 });

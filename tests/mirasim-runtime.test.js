@@ -13,6 +13,16 @@ const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 
+// 钉版本从源码里读，不在测试里再写一遍：写死会在每次升级后把「版本一致」的用例
+// 判成不符（2026-09-10 升 0.0.307 时 8 条一起红）。判据与真表不许各钉一个。
+const PINNED_VERSION = (() => {
+  const src = require('node:fs').readFileSync(
+    path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs'), 'utf8');
+  const m = src.match(/export const PINNED_VERSION = '([^']+)'/);
+  if (!m) throw new Error('读不到 PINNED_VERSION —— 判据源变了，测试必须当场红');
+  return m[1];
+})();
+
 const KEY = 'claude:a8d67849-7fe3-4d03-ae25-312b86952bf9';
 const UUID = 'a8d67849-7fe3-4d03-ae25-312b86952bf9';
 const T0 = Date.parse('2026-09-04T06:43:00.000Z');
@@ -20,7 +30,7 @@ const T0 = Date.parse('2026-09-04T06:43:00.000Z');
 // 服务端连上就推的 state 帧，字段照实测抄
 function goodState(over = {}) {
   return {
-    version: '0.0.282',
+    version: PINNED_VERSION,  // 跟随库内常量：写死会在每次升级后把「版本一致」的用例判成不符
     workdir: '/srv/work',
     home: '/srv',
     platform: 'linux',
@@ -128,7 +138,7 @@ describe('契约断言', () => {
 
   it('缺关键字段（形状变了）也拒派', async () => {
     const { judgeContract } = await import(LIB);
-    const v = judgeContract({ version: '0.0.282', platform: 'linux', agentsAvailable: ['claude'] });
+    const v = judgeContract({ version: PINNED_VERSION, platform: 'linux', agentsAvailable: ['claude'] });
     assert.strictEqual(v.ok, false);
     assert.match(v.errors.join('；'), /state\.workdir 形状不符/);
     assert.match(v.errors.join('；'), /state\.home 形状不符/);
