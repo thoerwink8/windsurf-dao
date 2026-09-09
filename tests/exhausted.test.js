@@ -170,7 +170,7 @@ describe('#1000 decide：rereview / rework 试满同样打标', () => {
       github: {
         scanned: true,
         issues: [{ number: 801, title: '单', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }] }],
-        prs: [{ number: 905, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #801', labels: [] }],
+        prs: [{ number: 905, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #801', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }],
       },
       prReviews: { scanned: true, byPr: { 905: { reviews: [{ state: 'CHANGES_REQUESTED', body: '一处', commit_id: 'old' }] } } },
       reworkDispatched: { [`rereview:905@${HEAD}`]: { at: OLD, pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
@@ -190,7 +190,7 @@ describe('#1000 decide：rereview / rework 试满同样打标', () => {
         issues: [{ number: 950, title: '单', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }] }],
         prs: [{
           number: 950, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE',
-          headRefOid: 'h950', body: '署名 issue #950', labels: [],
+          headRefOid: 'h950', body: '署名 issue #950', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
         }],
       },
       prReviews: { scanned: true, byPr: { 950: { reviews: [{ state: 'CHANGES_REQUESTED', body: '要改', commit_id: 'h950' }] } } },

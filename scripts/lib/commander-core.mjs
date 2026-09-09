@@ -317,18 +317,10 @@ export const REWORK_RETRY_GRACE_MIN = 45;
 export const MAX_REWORK_TRIES = 3;
 
 /**
- * PR 该派哪个审官：查它署名 issue 上的 reviewer/ 标签。
+ * 署名 issue 仍给 merge-policy / human_holds 用（正文在 issue 上）。
+ * 选型（谁写码、谁来审）只读 PR 自己的 label（#1116），不从这里反推。
  *
- * 两处快照都要看，因为它们装的是不同的东西：
- *  · `github.issues` 只有 **open** 单（GraphQL `states: OPEN`）；
- *  · `github.attributedIssues` 是「open PR 署名到、但不在上面那张表里」的单，多半是**已关闭**的。
- *
- * 2026-09-05 实咬：#945/#947/#909 的署名单 #833/#815/#889 早已关闭，标签明明带着 reviewer/，
- * 可只查 open 快照就是查不到 → 每轮报「不猜审官」→ 三张交卷可合的 PR 无限期挂着。
- * 单子关了不等于 PR 不用审。
- *
- * 已关闭的单**只用来查标签**，绝不并进 `github.issues`——那张表是派工候选表，
- * 混进已关闭的「已消歧」单会被当成新活派出去。
+ * 已关闭的单**只用来读正文**，绝不并进 `github.issues`——那张表是派工候选表。
  */
 export function attributedIssueOf(gh = {}, pr) {
   const n = attributedIssueNumber(pr);
@@ -338,8 +330,9 @@ export function attributedIssueOf(gh = {}, pr) {
     || null;
 }
 
-export function reviewerLabelFor(gh = {}, pr) {
-  return labelValue(attributedIssueOf(gh, pr), 'reviewer/');
+/** #1116：审官型号只读这张 PR 自己的 reviewer/*。没标就是没有，不回退去读 issue。 */
+export function reviewerLabelFor(_gh = {}, pr) {
+  return labelValue(pr, 'reviewer/');
 }
 
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
@@ -382,25 +375,28 @@ export const FORBIDDEN_AUTO_KINDS = new Set([
 function withNeeds(action, needs) { return { ...action, _needs: needs }; }
 
 /** 半标能推出唯一跨厂值 → add-label；推不出保持 null，调用方报帅（查不到 ≠ 猜一个）。 */
-function maybeAddLabel(issue, situation, extra, needs) {
-  if (!issue || issue.number == null) return null;
+function maybeAddLabel(target, situation, extra = {}, needs) {
+  if (!target || target.number == null) return null;
   const proposed = proposeAddLabel({
-    existingLabels: issue.labels,
+    existingLabels: target.labels,
     models: situation.routingModelRecords,
     reviewerOrder: situation.reviewerOrder,
     workerOrder: situation.workerOrder,
   });
   if (!proposed.ok) return null;
+  // on:'pr' 打到 PR（交卷后选型，#1116）；否则打到 issue（派工前半标）。
+  const dest = extra.on === 'pr'
+    ? { pr: extra.pr ?? target.number }
+    : { issue: extra.issue ?? target.number, ...(extra.pr != null ? { pr: extra.pr } : {}) };
   return withNeeds({
     kind: 'add-label',
-    issue: issue.number,
+    ...dest,
     labels: proposed.labels,
-    existingLabels: issue.labels,
+    existingLabels: target.labels,
     workerId: proposed.workerId,
     reviewerId: proposed.reviewerId,
     models: situation.routingModelRecords,
     why: extra.why,
-    ...extra,
   }, needs);
 }
 
@@ -685,8 +681,8 @@ function collectCandidates(situation) {
     }, N['attach-reviewer']));
   }
 
-  // 返工工人的构造：判红和解冲突两条路共用。取 model/reviewer 一律从**署名 issue 的标签**来
-  // （与原派工同源，不猜、不换厂），任何一步取不到就报帅不派。
+  // 返工工人的构造：判红和解冲突两条路共用。取 model/reviewer 一律从**这张 PR 自己的标签**来
+  // （#1116：选型不读 issue；merge-policy 仍读署名单正文），任何一步取不到就报帅不派。
   // 抽成闭包是因为「冲突」这条路必须在 analyzeReviewsAtHead 之前判——冲突 PR 常常一条 review 都没有，
   // 而 reviews-missing 在下面是静默 continue，写在后面会被那一条吃掉。
   function pushRework(pr, { brief, head, redRounds, why, hubText, conflict = false }) {
@@ -717,29 +713,30 @@ function collectCandidates(situation) {
     }
     const issueNo = attributedIssueNumber(pr);
     if (issueNo == null) {
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——model/reviewer 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——merge-policy 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
       return;
     }
-    // 走 attributedIssueOf 门面：它带了「开放单查不到就查 attributedIssues」的兜底，
-    // 而 attributedIssues 正是为「单关了但 PR 还要审/要返工」补的（点名的就是 #945/#833 这一对）。
+    // 署名单仍要扫到：merge-policy / human_holds 写在 issue 正文上（#1099）。
+    // 选型不从这里取——单子关了不等于 PR 不用返工，但正文没扫到就不能放行 auto。
     const rIssue = attributedIssueOf(gh, pr);
     if (!rIssue) {
       out.push(withNeeds(esc(
-        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关且不在署名补取里）——标签没查成，不派`,
+        `PR #${pr.number} 的署名 issue #${issueNo} 这轮没扫到（已关且不在署名补取里）——merge-policy 没查成，不派`,
         { reason: 'unscanned', pr: pr.number, issue: issueNo, missing: ['github'], detail: 'rework-issue-unscanned' },
       ), N.rework));
       return;
     }
-    const rModel = labelValue(rIssue, 'model/');
-    const rReviewer = labelValue(rIssue, 'reviewer/');
+    const rModel = labelValue(pr, 'model/');
+    const rReviewer = labelValue(pr, 'reviewer/');
     if (!rModel || !rReviewer) {
-      const filled = maybeAddLabel(rIssue, situation, {
+      const filled = maybeAddLabel(pr, situation, {
+        on: 'pr',
         pr: pr.number,
-        why: `PR #${pr.number} 要返工，署名 issue #${issueNo} 半标——补唯一跨厂标签`,
+        why: `PR #${pr.number} 要返工，PR 上缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''}——补唯一跨厂标签`,
       }, N['add-label']);
       if (filled) { out.push(filled); return; }
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但署名 issue #${issueNo} 缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，不猜——报帅补标签`, {
-        reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue.title || '',
+      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但 PR 上缺 ${!rModel ? 'model/' : ''}${!rModel && !rReviewer ? '、' : ''}${!rReviewer ? 'reviewer/' : ''} 标签，需人工打标（不读 issue、不猜）`, {
+        reason: 'missing-labels', pr: pr.number, issue: issueNo, title: pr.title || '',
       }), N.rework));
       return;
     }
@@ -931,13 +928,14 @@ function collectCandidates(situation) {
     // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
     // 试满仍无判定 ⇒ 停手报帅，不死循环。
     if (a.atHead === 0) {
-      // #971：缺 reviewer/ 时先补标签。等宽限期不会让标签自己长出来；
-      // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。
+      // #971 / #1116：缺 reviewer/ 时先补 PR 自己的标签。等宽限期不会让标签自己长出来；
+      // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。不读 issue。
       const reviewer = reviewerLabelFor(gh, pr);
       if (!reviewer) {
-        const filled = maybeAddLabel(attributedIssueOf(gh, pr), situation, {
+        const filled = maybeAddLabel(pr, situation, {
+          on: 'pr',
           pr: pr.number,
-          why: `PR #${pr.number} 要叫审官，但署名单缺 reviewer/——补唯一跨厂标签`,
+          why: `PR #${pr.number} 要叫审官，但 PR 上没有 reviewer/——补唯一跨厂标签`,
         }, N['add-label']);
         if (filled) { out.push(filled); continue; }
       }

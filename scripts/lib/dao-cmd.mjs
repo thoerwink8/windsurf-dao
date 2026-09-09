@@ -1134,7 +1134,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
                   # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
-                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
+                  # 不传 --reviewer 时自读 PR 自己的 reviewer/*（#1116）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
