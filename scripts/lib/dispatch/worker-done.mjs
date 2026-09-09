@@ -333,7 +333,7 @@ export function listPrReviews({ pr, runGh } = {}) {
   return { ok: true, reviews: parsed.value.reviews, count: parsed.value.reviews.length };
 }
 
-/** 完工计划：按已有 review 条数分首审 / 返工。首审才建审官。 */
+/** 完工计划：按已有 review 条数分首审 / 返工。#1125：首审只入队。 */
 export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };

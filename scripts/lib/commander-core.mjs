@@ -513,13 +513,14 @@ function collectCandidates(situation) {
     const tries = Number(reworkDispatched[pumpDraftKey(pr.number)]?.tries) || 0;
     return tries < maxPumps;
   };
-  /** 跟 pushPumpDraft 派出前校验同一套：有标签且模型过闸（含顶班）才算能占名额。 */
+  /** 跟 pushPumpDraft 派出前校验同一套：有标签且模型过闸（含顶班）才算能占名额。
+   * #1116：选型只读这张 PR 自己的 model/* reviewer/*，不从署名单反推。 */
   const resolvePumpDraftDispatch = (pr) => {
     const issueNo = attributedIssueNumber(pr);
     const rIssue = attributedIssueOf(gh, pr);
-    const rModel = labelValue(rIssue, 'model/');
-    const rReviewer = labelValue(rIssue, 'reviewer/');
-    if (!rIssue || !rModel || !rReviewer) {
+    const rModel = labelValue(pr, 'model/');
+    const rReviewer = labelValue(pr, 'reviewer/');
+    if (!rModel || !rReviewer) {
       return { ok: false, reason: 'missing-labels', issueNo, rIssue, rModel, rReviewer };
     }
     let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
@@ -1105,7 +1106,7 @@ function collectCandidates(situation) {
     if (!resolved.ok) {
       if (resolved.reason === 'missing-labels') {
         out.push(withNeeds(esc(
-          `PR #${pr.number} draft 超龄要收口，但署名 issue 的 model/reviewer 没查成——不猜、不泵`,
+          `PR #${pr.number} draft 超龄要收口，但 PR 上没有 model/reviewer——需人工打标（不读 issue、不猜）`,
           { reason: 'missing-labels', pr: pr.number, issue: resolved.issueNo, title: resolved.rIssue?.title || pr.title || '' },
         ), N['pump-draft']));
         return;

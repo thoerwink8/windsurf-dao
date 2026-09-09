@@ -41,7 +41,8 @@ function baseSituation(over = {}) {
 const kinds = (r) => r.actions.map((a) => a.kind);
 const byKind = (r, k) => r.actions.filter((a) => a.kind === k);
 
-// #931 返工夹具：判红的 PR 必须能回溯到署名 issue（返工工人的 model/reviewer 从那儿取）。
+// #931 返工夹具：判红的 PR 必须能回溯到署名 issue（merge-policy 仍读正文）。
+// #1116：返工工人的 model/reviewer 只读 PR 自己的 label。
 function labeledIssue(n, over = {}) {
   return { number: n, title: `单 ${n}`, body: '', labels: [
     { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
@@ -2218,7 +2219,10 @@ describe('#1147 draft 收口泵', () => {
   const stalledDraft = (over = {}) => ({
     number: 885, isDraft: true, mergeable: 'MERGEABLE', headRefOid: 'h885',
     body: '署名 issue #880', title: '搁置 draft',
-    lastCommittedAt: OLD_COMMIT, labels: [], ...over,
+    lastCommittedAt: OLD_COMMIT,
+    // #1116：选型只读 PR 自己的 label，不从署名单反推。
+    labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    ...over,
   });
   const sit = (over = {}) => baseSituation({
     at: NOW,
@@ -2355,14 +2359,13 @@ describe('#1147 draft 收口泵', () => {
 
   it('配额：超龄 draft 缺标签 → 不吞 slots=1，新活照派', async () => {
     const { decide } = await CORE;
-    const unlabeled = labeledIssue(880, { labels: [{ name: 'type/写码' }] });
     const ready = {
       number: 900, title: '新活', labels: [
         { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
       ],
     };
     const r = decide(sit({
-      github: { scanned: true, issues: [unlabeled, ready], prs: [stalledDraft()] },
+      github: { scanned: true, issues: [issue, ready], prs: [stalledDraft({ labels: [{ name: 'type/写码' }] })] },
       admission: { ok: true, slots: 1 },
     }));
     assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
@@ -2375,16 +2378,15 @@ describe('#1147 draft 收口泵', () => {
 
   it('配额：超龄 draft 模型不在选型且无顶班 → 不吞 slots=1，新活照派', async () => {
     const { decide } = await CORE;
-    const retired = labeledIssue(880, { labels: [
-      { name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
-    ] });
     const ready = {
       number: 900, title: '新活', labels: [
         { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
       ],
     };
     const r = decide(sit({
-      github: { scanned: true, issues: [retired, ready], prs: [stalledDraft()] },
+      github: { scanned: true, issues: [issue, ready], prs: [stalledDraft({ labels: [
+        { name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ] })] },
       admission: { ok: true, slots: 1 },
       commanderPolicy: { requireModelInRouting: true, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
       routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
