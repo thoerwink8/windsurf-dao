@@ -485,6 +485,8 @@ function collectCandidates(situation) {
   // 返工与复审共用剩余额度，谁先跑到谁先拿。
   let slotsLeft = dispatchSlots;
   // #1147：收口泵跟复审票一样是收尾，名额先扣，新活只用剩下的。
+  // 预留只数「真能派出」的 draft：缺标签 / 模型派不出只 escalate、不 takeSlot。
+  // 按超龄就扣名额会把 slots=1 吃光，本轮既泵不成也派不出新单。
   const stalledHoursMs = Number(policy.stalledDraftHours) * 3600 * 1000;
   const maxPumps = Number(policy.stalledDraftMaxPumps) || 2;
   const sessionsForLive = sessionListForLiveness(situation);
@@ -508,7 +510,36 @@ function collectCandidates(situation) {
     const tries = Number(reworkDispatched[pumpDraftKey(pr.number)]?.tries) || 0;
     return tries < maxPumps;
   };
-  const stalledPumpCount = (gh.prs || []).filter(draftDueForPump).length;
+  /** 跟 pushPumpDraft 派出前校验同一套：有标签且模型过闸（含顶班）才算能占名额。 */
+  const resolvePumpDraftDispatch = (pr) => {
+    const issueNo = attributedIssueNumber(pr);
+    const rIssue = attributedIssueOf(gh, pr);
+    const rModel = labelValue(rIssue, 'model/');
+    const rReviewer = labelValue(rIssue, 'reviewer/');
+    if (!rIssue || !rModel || !rReviewer) {
+      return { ok: false, reason: 'missing-labels', issueNo, rIssue, rModel, rReviewer };
+    }
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    let pumpModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        pumpModel = fb;
+        rGate = fbGate;
+      }
+    }
+    if (!rGate.ok) {
+      return { ok: false, reason: rGate.reason, why: rGate.why, issueNo, rIssue, rModel, rReviewer };
+    }
+    return { ok: true, issueNo, rIssue, rModel, rReviewer, pumpModel, substituted };
+  };
+  const stalledPumpCount = (gh.prs || []).filter((pr) => {
+    if (!draftDueForPump(pr)) return false;
+    return resolvePumpDraftDispatch(pr).ok;
+  }).length;
   const finishReserve = Math.min(slotsLeft, (rp.items || []).length + stalledPumpCount);
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
@@ -1059,32 +1090,17 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(pr.number));
       return;
     }
-    const issueNo = attributedIssueNumber(pr);
-    const rIssue = attributedIssueOf(gh, pr);
-    const rModel = labelValue(rIssue, 'model/');
-    const rReviewer = labelValue(rIssue, 'reviewer/');
-    if (!rIssue || !rModel || !rReviewer) {
-      out.push(withNeeds(esc(
-        `PR #${pr.number} draft 超龄要收口，但署名 issue 的 model/reviewer 没查成——不猜、不泵`,
-        { reason: 'missing-labels', pr: pr.number, issue: issueNo, title: rIssue?.title || pr.title || '' },
-      ), N['pump-draft']));
-      return;
-    }
-    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
-    let pumpModel = rModel;
-    let substituted = null;
-    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
-      const fb = situation.defaultWorkerModel;
-      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
-      if (fb && fbGate.ok) {
-        substituted = { from: rModel, to: fb, why: rGate.why };
-        pumpModel = fb;
-        rGate = fbGate;
+    const resolved = resolvePumpDraftDispatch(pr);
+    if (!resolved.ok) {
+      if (resolved.reason === 'missing-labels') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} draft 超龄要收口，但署名 issue 的 model/reviewer 没查成——不猜、不泵`,
+          { reason: 'missing-labels', pr: pr.number, issue: resolved.issueNo, title: resolved.rIssue?.title || pr.title || '' },
+        ), N['pump-draft']));
+        return;
       }
-    }
-    if (!rGate.ok) {
-      out.push(withNeeds(esc(`PR #${pr.number} draft 超龄要收口，但${rGate.why}`, {
-        reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel,
+      out.push(withNeeds(esc(`PR #${pr.number} draft 超龄要收口，但${resolved.why}`, {
+        reason: resolved.reason, pr: pr.number, issue: resolved.issueNo, model: resolved.rModel,
       }), N['pump-draft']));
       return;
     }
@@ -1094,13 +1110,13 @@ function collectCandidates(situation) {
     }
     const hours = Number(policy.stalledDraftHours) || 24;
     out.push(withNeeds({
-      kind: 'pump-draft', pr: pr.number, issue: issueNo,
-      model: pumpModel, reviewer: rReviewer,
+      kind: 'pump-draft', pr: pr.number, issue: resolved.issueNo,
+      model: resolved.pumpModel, reviewer: resolved.rReviewer,
       head: typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null,
       title: pr.title || '', pumpKey: pkey, tries: tries + 1,
-      ...(substituted ? { substitutedModel: substituted } : {}),
+      ...(resolved.substituted ? { substitutedModel: resolved.substituted } : {}),
       why: `PR #${pr.number} draft 超 ${hours}h 无提交且无活会话——派收口短会话（第 ${tries + 1}/${maxPumps} 次）`
-        + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
+        + (resolved.substituted ? `；原模型 ${resolved.substituted.from} 派不出（${resolved.substituted.why}），顶班 ${resolved.substituted.to}` : ''),
     }, N['pump-draft']));
     out.push(withNeeds(hub(
       `PR #${pr.number} draft 超龄无人推，已派收口短会话（第 ${tries + 1}/${maxPumps} 次）`,

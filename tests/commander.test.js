@@ -2298,6 +2298,51 @@ describe('#1147 draft 收口泵', () => {
     assert.equal(byKind(r, 'dispatch').length, 0, '新活必须让给收口泵');
   });
 
+  it('配额：超龄 draft 缺标签 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const unlabeled = labeledIssue(880, { labels: [{ name: 'type/写码' }] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [unlabeled, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const missing = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(missing.length, 1, JSON.stringify(r.actions));
+    assert.equal(missing[0].pr, 885);
+  });
+
+  it('配额：超龄 draft 模型不在选型且无顶班 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const retired = labeledIssue(880, { labels: [
+      { name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [retired, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+      commanderPolicy: { requireModelInRouting: true, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
+      defaultWorkerModel: null,
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '模型派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const retiredEsc = byKind(r, 'escalate').filter((a) => a.reason === 'model-not-in-routing');
+    assert.equal(retiredEsc.length, 1, JSON.stringify(r.actions));
+    assert.equal(retiredEsc[0].pr, 885);
+  });
+
   it('draftCommitAgeMs：缺字段 / 坏时钟 → unscanned，绝不当超龄', async () => {
     const { draftCommitAgeMs } = await CORE;
     const now = Date.parse(NOW);
