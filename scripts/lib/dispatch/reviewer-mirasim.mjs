@@ -342,14 +342,46 @@ export async function mirasimReviewerCreate({
 // ── PR→会话 登记（rework 轮找回审官会话） ─────────────────────────────────────
 
 /** 默认登记 IO：~/.dao/mirasim/reviewer-<pr>.json（本仓）或 reviewer-<owner>__<name>__<pr>.json（跨仓）。测试注入内存版。 */
-export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flowDir } = {}) {
+export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, join, flowDir } = {}) {
   const dir = flowDir;
   const loc = (pr, repo) => {
     const keyed = repoPrKey({ repo, pr });
     if (!keyed.ok) return keyed;
     return { ok: true, path: join(dir, `reviewer-${keyed.stem}.json`), keyed };
   };
+  const parseStem = (name) => {
+    const f = String(name || '');
+    const m = /^reviewer-(?:([A-Za-z0-9_.-]+)__([A-Za-z0-9_.-]+)__(\d+)|(\d+))\.json$/.exec(f);
+    if (!m) return null;
+    if (m[4]) return { pr: m[4], repo: null };
+    return { pr: m[3], repo: `${m[1]}/${m[2]}` };
+  };
   return {
+    /**
+     * 全部登记（#1125 数在役审官要）。**读不了目录回 null，不回空数组**——
+     * 「一条都没有」和「没读成」在下游是两种判决：前者可以拉满，后者一张都不许拉。
+     * #1024：跨仓文件名 reviewer-<owner>__<name>__<pr>.json 也要扫进来，否则跨仓在役审官不占位。
+     */
+    listAll() {
+      if (typeof readdir !== 'function') return null;
+      let names;
+      try {
+        names = readdir(dir);
+      } catch (e) {
+        // 目录不在 = 一条都没有（可以拉满）；读不了才是没查成。
+        const code = e && e.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+        return null;
+      }
+      const out = [];
+      for (const f of names) {
+        const parsed = parseStem(f);
+        if (!parsed) continue;
+        const r = this.read(parsed.pr, parsed.repo);
+        if (r.ok && r.record) out.push(r.record);
+      }
+      return out;
+    },
     read(pr, repo) {
       const place = loc(pr, repo);
       if (!place.ok) return { ok: false, missing: true, why: place.error };

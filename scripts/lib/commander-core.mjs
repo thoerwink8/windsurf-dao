@@ -35,6 +35,8 @@ import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
   reviewPendingSourceOf,
 } from './dispatch/review-pending.mjs';
 import { resolveMergeable } from './dispatch/git.mjs';
@@ -51,7 +53,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session',
+  'stop-session', 'pump-draft',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -80,11 +82,32 @@ export function attachReviewerWhy(ticket) {
   if (source === REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW) {
     return `PR #${pr} 交卷可合但没人审，按设计叫审官`;
   }
+  if (source === REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF
+      || source === REVIEW_PENDING_SOURCE_WORKER_DONE) {
+    return `PR #${pr} 工人首审已入队，按在役审官数拉取`;
+  }
   return `PR #${pr} 复审票来源没查成`;
 }
 
 /** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
 export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
+
+/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
+export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+
+/** draft 距上次提交的毫秒。缺字段 / 解不出 / 没有时钟 → unscanned，绝不当超龄。 */
+export function draftCommitAgeMs(pr, nowMs) {
+  const raw = pr && pr.lastCommittedAt;
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, unscanned: true, reason: 'commit-unscanned' };
+  }
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return { ok: false, unscanned: true, reason: 'commit-unscanned' };
+  if (!Number.isFinite(nowMs) || nowMs <= 0) {
+    return { ok: false, unscanned: true, reason: 'clock-unscanned' };
+  }
+  return { ok: true, ageMs: nowMs - t, lastCommittedAt: raw };
+}
 
 // 框架活的角色标（type/体系）。这类单不进自动派单队列，走快马：主会话子代理闭环（#876，用户 2026-09-04 拍板）。
 // 为什么不派：框架活要改的是派单机制本身，让派单机制去派它，等于让手术刀切自己。
@@ -98,6 +121,8 @@ export const COMMANDER_POLICY_DEFAULTS = {
   conservativeWorkerMb: 400,
   minSamplePairs: 4,
   sampleWindow: 12,
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 
 /** 归一 commander 节。旧键 maxDispatchPerRound 读到打「已改名」提示，不按它限流。 */
@@ -371,6 +396,9 @@ export const ACTION_NEEDS = {
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
   'stop-session': [],
+  // #1147 draft 收口泵：只认 github 上的 draft + lastCommittedAt。会话名单不进
+  // SITUATION_SECTIONS（没查成只挡住泵，不许把合并/叫审官整轮停掉）。
+  'pump-draft': ['github'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -462,7 +490,65 @@ function collectCandidates(situation) {
   // 复审票的数量本轮一开始就知道，所以先把名额留出来，剩下的才给新派单；
   // 返工与复审共用剩余额度，谁先跑到谁先拿。
   let slotsLeft = dispatchSlots;
-  const finishReserve = Math.min(slotsLeft, (rp.items || []).length);
+  // #1125：drain 自己按在役数拉，decide 每轮只产一条 attach-reviewer。
+  // 预留按票数会把新活全挤掉——队列里 18 张时 finishReserve=18，新活永远派不出。
+  // 有票就留 1 个名额喊一次 drain，剩下的给新活。
+  // #1147：收口泵也是收尾。预留只数「真能派出」的 draft：缺标签 / 模型派不出只 escalate、不 takeSlot。
+  const stalledHoursMs = Number(policy.stalledDraftHours) * 3600 * 1000;
+  const maxPumps = Number(policy.stalledDraftMaxPumps) || 2;
+  const sessionsForLive = sessionListForLiveness(situation);
+  const draftStalledForPump = (pr) => {
+    if (!pr || pr.number == null || !pr.isDraft) return false;
+    if (prHasStuckLabel(pr)) return false;
+    const age = draftCommitAgeMs(pr, nowMs);
+    if (!age.ok || age.ageMs < stalledHoursMs) return false;
+    const live = hasLiveExecutor({
+      sessions: sessionsForLive,
+      pr: pr.number,
+      issue: attributedIssueNumber(pr),
+    });
+    if (live.live || live.unavailable) return false;
+    const prev = reworkDispatched[pumpDraftKey(pr.number)];
+    if (prev && prev.unscanned === true) return false;
+    return true;
+  };
+  const draftDueForPump = (pr) => {
+    if (!draftStalledForPump(pr)) return false;
+    const tries = Number(reworkDispatched[pumpDraftKey(pr.number)]?.tries) || 0;
+    return tries < maxPumps;
+  };
+  /** 跟 pushPumpDraft 派出前校验同一套：有标签且模型过闸（含顶班）才算能占名额。 */
+  const resolvePumpDraftDispatch = (pr) => {
+    const issueNo = attributedIssueNumber(pr);
+    const rIssue = attributedIssueOf(gh, pr);
+    const rModel = labelValue(rIssue, 'model/');
+    const rReviewer = labelValue(rIssue, 'reviewer/');
+    if (!rIssue || !rModel || !rReviewer) {
+      return { ok: false, reason: 'missing-labels', issueNo, rIssue, rModel, rReviewer };
+    }
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    let pumpModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        pumpModel = fb;
+        rGate = fbGate;
+      }
+    }
+    if (!rGate.ok) {
+      return { ok: false, reason: rGate.reason, why: rGate.why, issueNo, rIssue, rModel, rReviewer };
+    }
+    return { ok: true, issueNo, rIssue, rModel, rReviewer, pumpModel, substituted };
+  };
+  const stalledPumpCount = (gh.prs || []).filter((pr) => {
+    if (!draftDueForPump(pr)) return false;
+    return resolvePumpDraftDispatch(pr).ok;
+  }).length;
+  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  const finishReserve = Math.min(slotsLeft, reviewReserve + stalledPumpCount);
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
   const takeSlot = () => {
@@ -679,6 +765,11 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(it.pr));
       continue;
     }
+    // #1125：执行侧 attach-reviewer 调的是不带 --pr 的 review-pending-drain，
+    // drain 自己按在役数拉、拉满即停。所以 decide 每轮只产**一条** attach-reviewer——
+    // 产 N 条就会连跑 N 次 drain，每次都看到「还没满」再拉一张，把容量闸冲掉。
+    // 账仍按这张代表票的 pr@head 记（validateRetryDrain 的键），不是按整队。
+    if (out.some((a) => a.kind === 'attach-reviewer')) continue;
     // 起审官也是起会话，也吃同一份 CPU 和内存——2026-09-06 实测 137 个会话里审官占 53 个。
     // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
     if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
@@ -990,6 +1081,68 @@ function collectCandidates(situation) {
       why: `PR #${pr.number} 审官判红（打在当前 head ${a.head.slice(0, 8)} 上）——派返工工人，任务书带红项全文`,
       hubText: `PR #${pr.number} 审官判红，已自动派返工工人（红项全文交给它，逐条改）`,
     });
+  }
+
+  // #1147 draft 收口泵：无活会话 + 超 N 小时无提交 → 派短会话三选一；泵满仍 draft → 打「卡死/等用户」交帅。
+  // 排在返工/复审之后、新派之前（finishReserve 已预扣名额）。不进上面的 PR 循环：
+  // 判红返工、冲突解、叫审官都不认 draft 这一格，写进去会被 continue 吃掉。
+  function pushPumpDraft(pr) {
+    if (exhaustedThisRound.has(Number(pr.number))) return;
+    // 这一轮已经为这张 PR 派了返工/审官 = 有人在推，别再塞一个收口会话抢树。
+    if (out.some((a) => a && Number(a.pr) === Number(pr.number)
+      && (a.kind === 'rework' || a.kind === 'rereview' || a.kind === 'attach-reviewer'))) {
+      return;
+    }
+    const pkey = pumpDraftKey(pr.number);
+    const prev = reworkDispatched[pkey];
+    if (prev && prev.unscanned === true) return; // 上次派成没成没查成，不重派（重派会造重复工人）
+    const tries = Number(prev?.tries) || 0;
+    if (tries >= maxPumps) {
+      if (prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number))) return;
+      out.push(withNeeds(buildMarkExhausted({
+        pr: pr.number, verb: 'pump-draft', tries,
+        head: typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null,
+        why: `PR #${pr.number} draft 收口泵试了 ${tries} 次仍是 draft——打「卡死/等用户」交帅，不再泵`,
+      }), N['mark-exhausted']));
+      exhaustedThisRound.add(Number(pr.number));
+      return;
+    }
+    const resolved = resolvePumpDraftDispatch(pr);
+    if (!resolved.ok) {
+      if (resolved.reason === 'missing-labels') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} draft 超龄要收口，但署名 issue 的 model/reviewer 没查成——不猜、不泵`,
+          { reason: 'missing-labels', pr: pr.number, issue: resolved.issueNo, title: resolved.rIssue?.title || pr.title || '' },
+        ), N['pump-draft']));
+        return;
+      }
+      out.push(withNeeds(esc(`PR #${pr.number} draft 超龄要收口，但${resolved.why}`, {
+        reason: resolved.reason, pr: pr.number, issue: resolved.issueNo, model: resolved.rModel,
+      }), N['pump-draft']));
+      return;
+    }
+    if (!takeSlot()) {
+      reportAdmission(N['pump-draft']);
+      return;
+    }
+    const hours = Number(policy.stalledDraftHours) || 24;
+    out.push(withNeeds({
+      kind: 'pump-draft', pr: pr.number, issue: resolved.issueNo,
+      model: resolved.pumpModel, reviewer: resolved.rReviewer,
+      head: typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null,
+      title: pr.title || '', pumpKey: pkey, tries: tries + 1,
+      ...(resolved.substituted ? { substitutedModel: resolved.substituted } : {}),
+      why: `PR #${pr.number} draft 超 ${hours}h 无提交且无活会话——派收口短会话（第 ${tries + 1}/${maxPumps} 次）`
+        + (resolved.substituted ? `；原模型 ${resolved.substituted.from} 派不出（${resolved.substituted.why}），顶班 ${resolved.substituted.to}` : ''),
+    }, N['pump-draft']));
+    out.push(withNeeds(hub(
+      `PR #${pr.number} draft 超龄无人推，已派收口短会话（第 ${tries + 1}/${maxPumps} 次）`,
+      'dispatched', { pr: pr.number },
+    ), N['pump-draft']));
+  }
+  for (const pr of gh.prs || []) {
+    if (!draftStalledForPump(pr)) continue;
+    pushPumpDraft(pr);
   }
 
   // ⑤ 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派。

@@ -1232,7 +1232,7 @@ function checkEphemeralLifecycle() {
   const nudgeInstall = read('scripts/install-nudge-stalled.sh');
   const progressInstall = read('scripts/install-progress-watch.sh');
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
-  if (dao && !/enqueueOnly:\s*true/.test(dao)) problems.push('worker-done 没入队（enqueueOnly）');
+  if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
   if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
   if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
   if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');

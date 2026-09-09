@@ -392,8 +392,31 @@ describe('dispatch-policy-check：minSamplePairs / sampleWindow 故意违规当�
         conservativeWorkerMb: 400,
         minSamplePairs: 4,
         sampleWindow: 12,
+        stalledDraftHours: 24,
+        stalledDraftMaxPumps: 2,
       },
     }));
     assert.equal(r.ok, true, JSON.stringify(r.problems));
+  });
+
+  it('stalledDraftHours: 0 红', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, stalledDraftHours: 0 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, false);
+    assert.equal(r.problems.some((p) => /stalledDraftHours/.test(p)), true, JSON.stringify(r.problems));
+  });
+
+  it('stalledDraftMaxPumps: 6 红', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, stalledDraftMaxPumps: 6 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.problems.some((p) => /stalledDraftMaxPumps/.test(p)), true, JSON.stringify(r.problems));
   });
 });
