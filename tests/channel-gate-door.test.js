@@ -77,7 +77,46 @@ describe('闸的位置：源码判据（照租约闸那套锚点断言）', () =
   it('默认判据是真闸，不是空函数（不给就不检查等于没有闸）', async () => {
     const { src } = 切出();
     assert.match(src, /opts\.channelAdmit \|\| defaultChannelAdmit/, '默认值被换掉，闸就等于没装');
-    assert.match(src, /import \{[\s\S]{0,200}\bcheckChannelCapacity\b[\s\S]{0,200}\} from '\.\/channel-concurrency\.mjs'/);
+  });
+
+  // 钉「默认走**原子占槽**入口」。判据取 defaultChannelAdmit 的**函数体**，不取 import 列表——
+  // 实测过：只钉 import 抓不住变异，把门换回 checkChannelCapacity 时两个名字都还在 import 里，
+  // 测试照绿。钉「谁被调用」才钉得住（本条有变异验证：换回只读入口当场转红）。
+  const 切出默认闸 = () => {
+    const src = fs.readFileSync(RT_FILE, 'utf8');
+    const a = src.indexOf('function defaultChannelAdmit(');
+    assert.notEqual(a, -1, 'defaultChannelAdmit 锚点找不到了——切片没取成，不是「检查通过」');
+    const b = src.indexOf('export function createRuntime(', a);
+    assert.notEqual(b, -1, 'createRuntime 锚点找不到了——切片没取成');
+    const body = src.slice(a, b);
+    assert.ok(body.length > 200, `切片只有 ${body.length} 字符，锚点多半失效了`);
+    return body;
+  };
+
+  it('默认闸调的是原子占槽入口 admitAndReserveChannel', async () => {
+    assert.match(切出默认闸(), /return admitAndReserveChannel\(/, '默认闸没走原子占槽');
+  });
+
+  it('默认闸不许调只读入口 checkChannelCapacity —— 那会把 TOCTOU 竞态放回来', async () => {
+    assert.equal(/checkChannelCapacity\(/.test(切出默认闸()), false, '门里用只读判据＝两个并发都判没满都放行');
+  });
+
+  it('占了槽的每条出路都退槽 —— release 在 finally 里', async () => {
+    const { fn } = 切出();
+    assert.match(fn, /releaseSlot\(\)/, '没退槽：预占泄漏会让该渠道少一个名额到 TTL 到点');
+    // 退槽必须在 finally：成功、被拒、抛错三条路都要过。写在 return 前面只覆盖成功那条。
+    const at = fn.indexOf('releaseSlot()');
+    const fin = fn.lastIndexOf('} finally {', at);
+    assert.notEqual(fin, -1, 'releaseSlot() 不在任何 finally 块里——被拒/抛错那两条路会漏退槽');
+  });
+
+  it('锁不许持过网络 I/O —— open() 在占槽之后，不在临界区里', async () => {
+    const { fn } = 切出();
+    // #849 那把锁的等待是忙自旋（dispatch-lock.mjs 的 sleep），持锁跨网络 I/O 会让等待者烧 CPU。
+    // 判据：channelAdmit（含锁的整段）必须在 await open() 之前**结束**——门里拿不到锁对象，
+    // 也就不可能把锁持过连线。
+    assert.ok(fn.indexOf('channelAdmit(') < fn.indexOf('await open()'));
+    assert.equal(/withWorktreeLock|acquireWorktreeLock/.test(fn), false, '门里不许自己持锁——锁只在 admitAndReserveChannel 的临界区内');
   });
 });
 
