@@ -8,7 +8,7 @@
 
 - [x] T0 调研：原生 Grok/Cursor/Devin 可运行，三者 ACP 握手和创建会话成功；已有探针证据 `/tmp/mirasim-executor-study/`。
 - [ ] T1 共用 ACP：Cursor/Devin 持久执行、读写工具、模型校验、进程回收、并发租约和跨命令读取；负责人 Kant。
-- [ ] T2 Cursor 真问答：出现结构化问题，自动回复任务书已有答案，回答后继续产物；计划批准/权限提示不吞、不假完成；负责人主会话。
+- [x] T2 Cursor 真问答：共用 MCP 真实问题→任务策略 JSON 回答→读随机文件→退出；注入工具精确权限自动放行，0 次人工回答，cleanup verified。证据 `docs/evidence/1174-cursor-question.json`。原生接口仍支持，当前 CLI 未开放的原生 AskQuestion 不冒充已验证。
 - [ ] T3 统一用量：Mirasim/ACP/原生来源进入同一账本，增量/累计去重，共享额度池、unknown、估价/实扣分开；负责人 Maxwell。
 - [ ] T4 Mirasim 周期升级：官方最新版发现、候选契约验证、在途排空、原子切换、故障回退；部署 orca 用户并验证定时器；负责人 Boyle。
 - [ ] T5 扩展执行目录：模型、agent、后端、渠道、账户池、角色、成本分开；确认真实供应商模型列表及 DeepSeek V4.1 Flash 是否可用；负责人 Chandrasekhar。
@@ -30,7 +30,7 @@
 - windsurf-dao：`codex/unified-execution-20260909` 独立 clone；ACP、统一 runtime、用量、目录、清单。
 - ai-gateway-stack：`codex/mirasim-managed-upgrades` 独立 clone；周期升级、安装与回退。
 - 当前：T1/T3/T4/T5 并行实现，主会话接入现有 runtime 并验证 T2。生产尚未切换。
-- 尚有外部依赖：New API 实时全表与部分上游原始凭据需要合法管理入口；不把分组 key 当上游 key。
+- 2026-09-09 用户已在香港机安装专用公钥；SSH 读回通过，实时 9 条渠道已核对，原始配置安全存入服务用户私有目录。后续验证直连请求和余额归属，不把分组 key 当上游 key。
 
 ## 上线完成判据
 

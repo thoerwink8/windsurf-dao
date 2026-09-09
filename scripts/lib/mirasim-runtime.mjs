@@ -780,11 +780,17 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function startSession({ agent, workdir, prompt, model, effort, clientRef } = {}) {
+  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route } = {}) {
+    // promptSent / explicitlyRejected 供 catch 里判「这次失败到底发出去没有」（#1174）。
+    let promptSent = false;
+    let explicitlyRejected = false;
     if (!agent || !workdir || !prompt) {
       throw new MirasimRejectedError('起会话要同时给 agent / workdir / prompt');
     }
-
+    if (route !== undefined && !['local', 'cloud', 'auto'].includes(route)) {
+      throw new MirasimRejectedError('route 必须是 local / cloud / auto');
+    }
+    try {
     // 租约闸：一棵树同时只许一个会话在跑（lib/dispatch/lease.mjs 有实测起因）。
     // 装在这里而不是各调用点——四个调用点（dao dispatch / dao start / 审官 create /
     // 推一把）全从这道门过，装在门里绕不开。放在连线之前：占着的树连 ws 都不开。
@@ -847,31 +853,15 @@ export function createRuntime(opts = {}) {
           workdir,
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
+          ...(route ? { route: route === 'auto' ? null : route } : {}),
           clientRef: clientRef || `dao-${startedAt}`,
         });
+        promptSent = true;
         const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
         const verdict = judgeAccepted(msg);
         if (!verdict.ok) {
           if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
-          if (verdict.rejected) {
-            // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
-            // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
-            // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
-            // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
-            const hit = isCapacityError(verdict.errors.join('；'));
-            if (hit.hit && chan.target) {
-              try {
-                channelFailed({
-                  target: chan.target, now: now(),
-                  why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
-                });
-              } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
-            }
-            throw new MirasimRejectedError(verdict.errors.join('；'), {
-              workdir, model: model || null,
-              ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
-            });
-          }
+          if (verdict.rejected) { explicitlyRejected = true; throw new MirasimRejectedError(verdict.errors.join('；')); }
           throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
         return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
@@ -882,6 +872,12 @@ export function createRuntime(opts = {}) {
       // 退槽。**删不掉不许让起会话失败**：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个
       // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
       try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
+    }
+    } catch (error) {
+      // promptSent && !explicitlyRejected = prompt 发出去了但没拿到明确拒绝 ⇒ 起会话状态不确定。
+      // 标出来是给上层判「能不能当没起过、能不能重派」——不确定的重派会烧两次额度（#1174）。
+      error.detail = { ...(error.detail || {}), launchUncertain: promptSent && !explicitlyRejected, clientRef: clientRef || null };
+      throw error;
     }
   }
 
@@ -1032,12 +1028,17 @@ export function createRuntime(opts = {}) {
   async function listSessions() {
     const wire = await open();
     try {
-      wire.send({ type: 'listSessions' });
-      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
-      if (!msg || !Array.isArray(msg.sessions)) {
-        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      const deadline = now() + t.list;
+      for (let limit = 256; limit <= 32768; limit *= 2) {
+        wire.send({ type: 'listSessions', scope: 'global', limit });
+        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, deadline - now()));
+        if (!msg || !Array.isArray(msg.sessions)) {
+          return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+        }
+        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+        if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
       }
-      return { ok: true, missing: false, sessions: msg.sessions };
+      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
     } catch (e) {
       return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
     } finally {

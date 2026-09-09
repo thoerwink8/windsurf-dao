@@ -20,6 +20,7 @@
 //                     mirasim: dispatchOne = ensureWorkspace + startSession（会话即卡）
 
 import { createRuntime } from './mirasim-runtime.mjs';
+import { createExecutionRuntime } from './execution-runtime.mjs';
 
 export const EXECUTORS = ['mirasim'];
 
@@ -298,7 +299,7 @@ export function createMirasimBinding({ runtime, policy } = {}) {
   // 不传等于 runtime 拿库内常量当真相：改路由表钉版本不生效——服务升级后照旧拒新版本，
   // 或策略已改新版本却继续放旧版本过（#884 审官 P1#5 实咬）。
   // 策略没写（null）时才让 createRuntime 落库内默认，不在这里抄第二份默认值。
-  const rt = runtime || createRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined });
+  const rt = runtime || createExecutionRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined });
   return {
     name: 'mirasim',
     runtime: rt,
@@ -374,9 +375,9 @@ export function bindExecutor(opts = {}) {
     const policy = readExecutorPolicy(opts.routing);
     const named = judgeExecutorName(opts.executor, policy);
     if (!named.ok) return { ok: false, error: named.error, policy };
-    const runtimeFactory = opts.runtimeFactory || createRuntime;
-    // 策略不写钉版本 = 跟随本机在役版本（2026-09-10 起这是默认，读 bundle 的 VERSION）。
-    // 不再回落到一个手打常量——那正是升级后全链拒派的根因。
+    // 两边合起来：#1174 的执行 runtime（带 ACP 后端）+ 2026-09-10 的钉版本跟随语义。
+    // 手打常量已删——它正是升级后全链拒派的根因，不许再回落过去。
+    const runtimeFactory = opts.runtimeFactory || createExecutionRuntime;
     const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || undefined;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
     const binding = createMirasimBinding({ runtime, policy });

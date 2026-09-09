@@ -12,6 +12,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -465,14 +466,17 @@ describe('dispatch --executor mirasim 拒 --task（#884 P1#4）', () => {
 // 判别力在「按文档那条命令跑，进的是 mirasim binding」——所以不能只断 ok:false（改坏了也 false），
 // 要断错误是从 mirasim 运行时**里面**冒出来的（读令牌那一步），且 detail 带 executor/repo/branch：
 // 那几个字段只有 cmdWorktreeCreateMirasim 会 emit，闸没让开根本走不到。
-// 端口钉一个没人监听的：令牌文件 local-59999.token 不存在 → 必定停在 readToken，
-// 既与这台机器今天有没有跑 mirasim 无关，也保证测试不会真去注册工作区／建树。
+// 统一执行层用原生 Git 建树，不再依赖 Mirasim 令牌；传入非 Git 的临时目录，
+// 必定在建树前拒绝，保证黑盒测试结构上碰不到真实仓库。
 describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）', () => {
   const DAO = path.resolve(ROOT, 'scripts', 'dao.mjs');
-  const runDao = (extra) => spawnSync(process.execPath, [DAO, 'worktree-create', ...extra], {
-    encoding: 'utf8', timeout: 60000, cwd: ROOT,
-    env: { ...process.env, MIRASIM_PORT: '59999' },
-  });
+  const runDao = (extra) => {
+    const emptyRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-non-repo-'));
+    try { return spawnSync(process.execPath, [DAO, 'worktree-create', '--repo', emptyRepo, ...extra], {
+      encoding: 'utf8', timeout: 60000, cwd: ROOT,
+      env: { ...process.env, MIRASIM_PORT: '59999' },
+    }); } finally { fs.rmSync(emptyRepo, { recursive: true, force: true }); }
+  };
 
   it('只给 --branch（无 --name/--issue）→ 走到 mirasim binding，不再被卡名闸拦下', () => {
     const r = runDao(['--executor', 'mirasim', '--branch', 'dao-probe-884']);
@@ -485,7 +489,7 @@ describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）'
     assert.equal(out.branch, 'dao-probe-884');
     assert.ok(out.repo, '没 --repo 时要落默认仓路径');
     assert.match(
-      String(out.error || ''), /mirasim 建树失败: 读不到回环会话令牌/,
+      String(out.error || ''), /mirasim 建树失败: (Command failed: git|live execution mutations are disabled in test processes)/,
       '错误得来自 mirasim 运行时内部——这就是「binding 真被调到了」的证据',
     );
     assert.equal(r.status, 1, '连不上服务是「没查成」，要非零退出');

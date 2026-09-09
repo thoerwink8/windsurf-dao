@@ -625,7 +625,7 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
       { sessionKey: KEY, runState: 'streaming' },
       { sessionKey: 'codex:dead', runState: 'done' },
     ];
-    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions }] : []));
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions, hasMore: false }] : []));
     const rt = await runtimeWith(wire);
     const r = await rt.listSessions();
     assert.equal(r.ok, true);
@@ -650,6 +650,33 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     assert.equal(r.ok, false);
     assert.equal(r.sessions, null);
     assert.match(r.why, /没查成/);
+  });
+
+  it('hasMore=true 扩大明确 global 查询，直到服务端证明完整', async () => {
+    let calls = 0;
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [{ sessionKey: KEY }], hasMore: ++calls === 1 }] : []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    const requests = wire.sent.filter(f => f.type === 'listSessions');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].scope, 'global');
+    assert.ok(requests[1].limit > requests[0].limit);
+  });
+
+  it('缺完整性标志不能假报全局查成', async () => {
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [] }] : []);
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.equal(r.sessions, null);
+  });
+
+  it('prompt 已发送但 ACK 丢失是 uncertain，不能释放后重复派', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    await assert.rejects(rt.startSession({ agent: 'claude', workdir: '/tmp/dao-fake', prompt: 'fixture', clientRef: 'lost-ack' }), e => e.detail.launchUncertain === true && e.detail.clientRef === 'lost-ack');
+    assert.equal(wire.sent.filter(f => f.type === 'prompt').length, 1);
   });
 });
 
