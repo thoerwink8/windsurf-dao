@@ -657,3 +657,37 @@ describe('问答与工作区', () => {
     });
   });
 });
+
+describe('#1125 listSessions：会话名单是第六个动词', () => {
+  it('回了 sessions 数组 → ok，原样交出', async () => {
+    const sessions = [
+      { sessionKey: KEY, runState: 'streaming' },
+      { sessionKey: 'codex:dead', runState: 'done' },
+    ];
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    assert.equal(r.missing, false);
+    assert.deepEqual(r.sessions, sessions);
+    assert.ok(wire.sent.some(f => f.type === 'listSessions'));
+  });
+
+  it('没回可用数组 → missing，sessions 是 null 不是 []', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions' }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.missing, true);
+    assert.equal(r.sessions, null, 'null 才能让 countLiveReviewers 判没查成；[] 会当成 0 个在跑去拉满');
+  });
+
+  it('等不到帧 → missing，sessions 是 null', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /没查成/);
+  });
+});
