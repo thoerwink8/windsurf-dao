@@ -368,13 +368,14 @@ describe('dao 审官与完工', () => {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run',
+    await t.test('CLI worker-done --dry-run 首审：入队、不起审官（#1125）',
       () => {
         assert.ok(cliWd.status === 0 && pWd.ok === true && pWd.wired === true && pWd.round === 'first' && pWd.shouldCreate === true
         && pWd.reviewer === 'gpt-5.6-luna'
         && pWd.reviewerCreate && pWd.reviewerCreate.invoked === false
+        && pWd.action === 'queued-for-review'
         && /^完工/.test(pWd.comment || ''),
-        'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
+        'CLI worker-done --dry-run 首审：入队、不起审官  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
       });
 
     const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--executor', 'mirasim', '--dry-run'], {
@@ -423,11 +424,18 @@ describe('dao 审官与完工', () => {
         assert.match(daoSrc586, /function cmdReviewerCreateMirasim[\s\S]*buildMirasimReviewerPrompts/);
       });
     const wdFn = (daoSrc586.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\n\/\*\*/) || daoSrc586.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\nasync function cmdStartMirasim/) || [''])[0];
-    await t.test('#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）',
+    await t.test('#1125 worker-done 首审入队、不起审官（返工才走 mirasimWorkerDone）',
       () => {
+        assert.match(wdFn, /queued-for-review/);
+        assert.match(wdFn, /REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF/);
         assert.match(wdFn, /mirasimWorkerDone\(/);
         assert.match(wdFn, /postCommentOnce/);
         assert.doesNotMatch(wdFn, /argsWorktreeCreate/);
+        const queueAt = wdFn.indexOf("plan.round === 'first'");
+        const spawnAt = wdFn.indexOf('mirasimWorkerDone(');
+        assert.notEqual(queueAt, -1, '首审入队分支要在');
+        assert.notEqual(spawnAt, -1, '返工才走 mirasimWorkerDone');
+        assert.equal(spawnAt > queueAt, true, '首审入队必须在 mirasimWorkerDone 之前');
       });
     await t.test('#675 完工评论在起审官之前（失败也要留交卷证据；PR #758 起幂等走 postCommentOnce）', () => {
       const post = wdFn.search(/postCommentOnce\(\{\s*kind: 'issue'/);

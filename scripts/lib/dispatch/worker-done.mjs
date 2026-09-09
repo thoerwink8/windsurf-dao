@@ -1,6 +1,7 @@
 // scripts/lib/dispatch/worker-done.mjs —— 完工结算 + label 选型域（#762 拆分）
 //
-// 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工，首审才建审官。
+// 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工。
+// #1125 起：首审只入队、不自己起审官；drain 按在役审官数拉取。返工往已有会话再推一针。
 // 决定在 dispatch 那一刻完整落账（model + reviewer + branch）；PR 上的
 // model/* / reviewer/* 是给人看、也是选型唯一真相源（#1116）。
 // 选型只读 PR 自己的 label——不读 issue、不从宿主前缀猜家族。
@@ -360,7 +361,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
     ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
-    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
+    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '首审已入待审队列，由指挥官按在役审官数拉取（#1125）。'].join('\n'));
   return {
     ok: true,
     wired: true,
@@ -380,7 +381,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
         pr: n,
         args: ['--pr', n],
         invoked: false,
-        reason: '首审：真调 reviewer-create（自读选型、建树、起终端、注入）',
+        reason: '首审：入待审队列，由指挥官按在役审官数拉取（#1125）',
       }
       : {
         verb: 'reviewer-create',

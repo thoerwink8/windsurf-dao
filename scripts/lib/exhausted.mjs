@@ -7,7 +7,7 @@
 
 export const EXHAUSTED_LABEL = '卡死/自动化认输';
 export const WAITING_USER_LABEL = '卡死/等用户';
-export const EXHAUSTED_VERBS = new Set(['drain', 'rework', 'rereview']);
+export const EXHAUSTED_VERBS = new Set(['drain', 'rework', 'rereview', 'pump-draft']);
 export const EXHAUSTED_COMMENT_MARK = '[commander-exhausted]';
 
 /** 账本键必须带 @head。只用 pr 会把修好的新局面永久挡住（PR #909 / df87014a）。 */
@@ -46,6 +46,24 @@ export function prHasWaitingUserLabel(pr) {
   return labelNames(pr && pr.labels).includes(WAITING_USER_LABEL);
 }
 
+export function waitingUserComment({ pr, verb, tries, head } = {}) {
+  const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '?');
+  const n = pr == null ? '?' : String(pr);
+  const h = typeof head === 'string' && head.trim() ? head.trim() : null;
+  const triesN = Number.isFinite(Number(tries)) ? Number(tries) : '?';
+  return [
+    `${EXHAUSTED_COMMENT_MARK} ${v} PR #${n}${h ? '@' + h : ''}`,
+    '',
+    `draft 收口泵试了 ${triesN} 次仍是 draft。已打「${WAITING_USER_LABEL}」，指挥官不再泵。`,
+    h ? `当前 head：${h}` : '当前 head 没查成，标打在 PR 上（属性不依赖 head）。',
+    '',
+    '帅位三选一：',
+    '1. 去掉该标——已解决，下轮可再泵',
+    '2. 补验收 / 转正式 / 关掉 PR',
+    '3. 保持等用户，看门狗不再推',
+  ].join('\n');
+}
+
 export function exhaustedComment({ pr, verb, tries, head } = {}) {
   const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '?');
   const n = pr == null ? '?' : String(pr);
@@ -66,16 +84,23 @@ export function exhaustedComment({ pr, verb, tries, head } = {}) {
   ].join('\n');
 }
 
-export function buildMarkExhausted({ pr, verb, tries, head, why } = {}) {
+export function buildMarkExhausted({ pr, verb, tries, head, why, label } = {}) {
   const n = pr == null ? null : Number.isFinite(Number(pr)) ? Number(pr) : pr;
+  const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '');
+  const useWaiting = label === WAITING_USER_LABEL || v === 'pump-draft';
   return {
     kind: 'mark-exhausted',
     pr: n,
-    verb: EXHAUSTED_VERBS.has(verb) ? verb : String(verb || ''),
+    verb: v,
     tries: Number(tries) || 0,
     head: typeof head === 'string' && head.trim() ? head.trim() : null,
-    why: why || `PR #${n} 自动化认输（${verb} 试满）`,
-    comment: exhaustedComment({ pr: n, verb, tries, head }),
+    label: useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL,
+    why: why || (useWaiting
+      ? `PR #${n} draft 收口泵试满，打「${WAITING_USER_LABEL}」交帅`
+      : `PR #${n} 自动化认输（${verb} 试满）`),
+    comment: useWaiting
+      ? waitingUserComment({ pr: n, verb, tries, head })
+      : exhaustedComment({ pr: n, verb, tries, head }),
   };
 }
 
