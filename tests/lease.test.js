@@ -202,6 +202,14 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
     assert.ok(fn.indexOf('leaseCheck(') < fn.indexOf('await open()'), '闸必须排在 open() 前面');
   });
 
+  it('占用声明在发 prompt 之前，失败要释放', async () => {
+    const { fn, src } = 切出();
+    assert.match(src, /opts\.claimOccupancy \|\| claimTreeOccupancy/, '默认必须是真占用锁');
+    assert.match(fn, /claimOccupancy\(/, '起会话入口没过占用声明');
+    assert.ok(fn.indexOf('claimOccupancy(') < fn.indexOf('await open()'), '占用声明必须排在 open() 前面');
+    assert.match(fn, /releaseClaim\(\)/, '失败路径必须释放');
+  });
+
   it('没查成要抛，不许当成放行', async () => {
     const { fn } = 切出();
     assert.match(fn, /lease\.ok[\s\S]{0,200}throw new MirasimUnavailableError/, '没查成必须抛（fail-close）');
@@ -233,5 +241,99 @@ describe('/proc/<pid>/stat 解析', () => {
       readlink: () => 树1055,
     });
     assert.deepEqual(got.procs.map((p) => p.pid), [200], 'ppid 解析错就认不出它是服务的后代');
+  });
+});
+
+function eacces(msg = 'EACCES') {
+  const e = new Error(msg);
+  e.code = 'EACCES';
+  return e;
+}
+
+describe('子目录 cwd 与树根是同一棵树（审官红①）', () => {
+  const ROOT = '/fake-home/mirasim-worktrees';
+  const TREE = `${ROOT}/windsurf-dao/dao-1007`;
+
+  it('cwd 落在 scripts/ 时租约仍是 held，busyTrees 也只数这一棵', async () => {
+    const { judgeTreeLease, busyTrees, worktreeRootOf } = await LEASE;
+    const procs = [{ pid: 9, comm: 'pi', cwd: `${TREE}/scripts` }];
+    assert.equal(worktreeRootOf(`${TREE}/scripts`, { root: ROOT }), TREE);
+    assert.equal(judgeTreeLease({ workdir: TREE, procs }).verdict, 'held');
+    const busy = busyTrees(procs, { root: ROOT });
+    assert.equal(busy.count, 1);
+    assert.deepEqual(busy.trees, [TREE]);
+  });
+
+  it('树名互为前缀时仍不许误判（dao-105 vs dao-1055）', async () => {
+    const { judgeTreeLease, busyTrees } = await LEASE;
+    const procs = [{ pid: 1, comm: 'pi', cwd: `${ROOT}/windsurf-dao/dao-1055/scripts` }];
+    assert.equal(judgeTreeLease({ workdir: `${ROOT}/windsurf-dao/dao-105`, procs }).verdict, 'free');
+    assert.deepEqual(busyTrees(procs, { root: ROOT }).trees, [`${ROOT}/windsurf-dao/dao-1055`]);
+  });
+});
+
+describe('stat/cmdline 读失败 fail-close（审官红②）', () => {
+  it('server 的 stat 抛 EACCES、子进程仍在 → unscanned，不是 noServer', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['767216', '3015939'],
+      read: (p) => {
+        if (p === '/proc/767216/stat') throw eacces();
+        if (p.endsWith('/stat')) return '3015939 (pi) S 767216 0 0';
+        if (p.endsWith('/cmdline')) return p.includes('767216') ? 'mirasim-server/x/server.cjs' : 'pi';
+        return 'x';
+      },
+      readlink: () => 树1040,
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.equal(got.noServer, undefined);
+    assert.match(got.error, /没查成/);
+  });
+
+  it('cmdline EACCES 同样 fail-close', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['1', '2'],
+      read: (p) => {
+        if (p.endsWith('/stat')) return p.includes('/1/') ? '1 (x) S 1 0 0' : '2 (y) S 1 0 0';
+        if (p.endsWith('/cmdline')) throw eacces();
+        return '';
+      },
+      readlink: () => '/',
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+  });
+});
+
+describe('占用声明：第二个拿不到，失败释放（审官红④）', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  it('两个并发抢同一棵树，第二个拿不到', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-'));
+    const lockPath = path.join(dir, 'session.lock');
+    const a = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(a.ok, true, '第一个应拿到');
+    const b = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(b.ok, false, '第二个应拿不到');
+    assert.equal(b.busy, true);
+    a.release();
+    const c = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(c.ok, true, '释放后第三个应拿到');
+    c.release();
+  });
+
+  it('持锁 pid 已死 → 拆过期锁再抢', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-dead-'));
+    const lockPath = path.join(dir, 'session.lock');
+    fs.writeFileSync(lockPath, '999999');
+    const r = claimTreeOccupancy({
+      workdir: 树1040, lockPath, pidAlive: () => false,
+    });
+    assert.equal(r.ok, true, '死 pid 应拆锁让出');
+    r.release();
   });
 });

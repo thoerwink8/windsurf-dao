@@ -547,7 +547,18 @@ function collectCandidates(situation) {
     if (!draftDueForPump(pr)) return false;
     return resolvePumpDraftDispatch(pr).ok;
   }).length;
-  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  // 审官红③：死票（已合并/已关）只产 reap-ticket，不占会话名额。
+  // 按 items.length>0 预留 1 会让一张死票把 slots=1 永久挡住新活。
+  const PR_WINDOW = 100;
+  const prListForReserve = gh.prs || [];
+  const ghScannedForReserve = gh.scanned === true && prListForReserve.length < PR_WINDOW;
+  const openPrsForReserve = new Set(prListForReserve.map((p) => Number(p?.number)).filter(Number.isFinite));
+  const liveFinishTickets = (rp.items || []).filter((it) => {
+    if (!it || it.pr == null) return false;
+    if (ghScannedForReserve && !openPrsForReserve.has(Number(it.pr))) return false;
+    return true;
+  }).length;
+  const reviewReserve = liveFinishTickets > 0 ? 1 : 0;
   const finishReserve = Math.min(slotsLeft, reviewReserve + stalledPumpCount);
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
@@ -712,10 +723,10 @@ function collectCandidates(situation) {
   // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
   // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
   // 那时「不在列表里」不再是死票的证据，一张都不剪。
-  const PR_WINDOW = 100;
-  const prList = gh.prs || [];
-  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
-  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  // PR_WINDOW / 开放列表在上面预留名额时已经算过，这里复用同一把尺。
+  const prList = prListForReserve;
+  const ghScanned = ghScannedForReserve;
+  const openPrs = openPrsForReserve;
   const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
 
   for (const it of rp.items || []) {

@@ -130,6 +130,16 @@ describe('与租约闸同源（不许各造一份判据）', () => {
     assert.equal(judgeTreeLease({ workdir: `${W}/dao-9999`, procs }).verdict, 'free');
   });
 
+  it('cwd 落在工作树子目录时，busyTrees 与 judgeTreeLease 对同一棵树结论一致', async () => {
+    const { busyTrees, judgeTreeLease } = await LEASE;
+    const tree = `${W}/dao-1007`;
+    const procs = [{ pid: 1, comm: 'pi', cwd: `${tree}/scripts` }];
+    const busy = busyTrees(procs, { root: ROOT });
+    assert.deepEqual(busy.trees, [tree]);
+    assert.equal(judgeTreeLease({ workdir: tree, procs }).verdict, 'held');
+    assert.equal(judgeTreeLease({ workdir: `${tree}/scripts`, procs }).verdict, 'held');
+  });
+
   // 判「函数在不在」，不是判「文件里有没有这几个字」——注释里要留下「删了什么、为什么」，
   // 按文本查会把那段注释本身当成违规（实测踩了一次）。
   it('admission.mjs 里不许再有审官排除逻辑', async () => {
