@@ -2,16 +2,18 @@
 //
 // 病（2026-09-08 实咬）：HTTP / 还是 200，进程还在，但 ws 起会话面发不出 state 帧。
 // 指挥官整晚「会话名单读不到」——不报警、不自愈。判活必须看「该发生的事有没有发生」
-// （state 帧），不是进程在不在、口开没开。同形状判例 #940。
+// （state 帧 + sessions 帧），不是进程在不在、口开没开。同形状判例 #940。
 //
 // 分层：本文件全是纯函数，只吃入参不碰 IO / 网络 / systemd。连线、扫 /proc、
 // systemctl、hub-say 在 scripts/mirasim-ws-probe.mjs。自己查自己查不出错。
 //
 // 三态必须分得开：
-//   green     —— 收到 state 帧（契约是否钉死版本是另一格，探活不拿它当死）
-//   red       —— 连上了但没收到 state / 连不上 ws（该发生的事没发生）
+//   green     —— 收到 state 帧且 sessions 帧回来了（契约是否钉死版本是另一格，探活不拿它当死）
+//   red       —— 连上了但没收到 state / 没收到 sessions / 连不上 ws（该发生的事没发生）
 //   unscanned —— 令牌不在、握手抛的不是「连不上」类、在途扫不成
 // 「没查成」不许当红累计 strikes，也不许当绿放行自愈。
+// 2026-09-09 帅位实证：listSessions 单口退化时 state 仍在、startSession 仍通——
+// 只 ping state 会整晚当活。空名单 [] 算活；没回帧才算死。
 
 export const DEFAULT_STRIKES_TO_ALERT = 2;
 export const DEFAULT_STRIKES_TO_HEAL = 2;
@@ -19,7 +21,8 @@ export const DEFAULT_STRIKES_TO_HEAL = 2;
 /**
  * 把一次握手结果收成三态。只吃判官出口 / 抛错形状，不碰网络。
  *
- * handshake 成功时入参是 judgeContract 的返回：{ok, unscanned, version, errors}。
+ * handshake 成功时入参是 {ok, unscanned, version, errors, sessionsOk?}。
+ * sessionsOk=false：state 在但 listSessions 不回（2026-09-09 单口退化）。
  * 失败时入参是 {error}（MirasimUnavailableError / 其它）。
  */
 export function classifyHandshake(result) {
@@ -35,20 +38,26 @@ export function classifyHandshake(result) {
     if (/读不到回环会话令牌|回环会话令牌是空的/.test(msg)) {
       return { state: 'unscanned', why: msg };
     }
-    // 连不上 / 连上没 state：正是本探针要抓的病。HTTP 200 探不出这个。
+    // 连不上 / 连上没 state / 没 sessions 帧：正是本探针要抓的病。HTTP 200 探不出这个。
     if (name === 'MirasimUnavailableError' || code === 'unavailable'
-        || /连不上回环 ws|没收到 state 帧/.test(msg)) {
+        || /连不上回环 ws|没收到 state 帧|没收到 sessions 帧|会话清单没回|没等到 sessions 帧/.test(msg)) {
       return { state: 'red', why: msg || '连不上回环 ws' };
     }
     return { state: 'unscanned', why: msg || '握手抛了不认识的错（没查成）' };
   }
+  // 2026-09-09：state 在但 listSessions 不回。显式 sessionsOk=false 优先于「有 version 就算绿」。
+  if (result.sessionsOk === false) {
+    return { state: 'red', why: (Array.isArray(result.errors) && result.errors[0]) || '没收到 sessions 帧' };
+  }
   if (result.unscanned === true) {
     return { state: 'red', why: (Array.isArray(result.errors) && result.errors[0]) || '没收到 state 帧' };
   }
-  // 收到 state 帧就算探活通。版本不符是契约另一格（拒派），不是「ws 面瘫了」——
+  // 收到 state 且 sessions 回来了才算探活通。版本不符是契约另一格（拒派），不是「ws 面瘫了」——
   // 探活把版本钉死当红，升级那天会整晚误报、把还活着的服务杀了。
+  // 注入夹具可以不带 sessionsOk（视为没测这一格）；真 handshake() 会带。
   if (result.ok === true || (result.unscanned === false && result.version)) {
-    return { state: 'green', why: `收到 state 帧（version=${result.version || '?'}）` };
+    const extra = result.sessionsOk === true ? '且 sessions 帧回来了' : '';
+    return { state: 'green', why: `收到 state 帧${extra}（version=${result.version || '?'}）` };
   }
   return { state: 'unscanned', why: '握手结果形状不认识（没查成）' };
 }
@@ -133,12 +142,12 @@ export function buildWsAlert({ folded, decision, plan } = {}) {
     : (decision && /在途/.test(decision.reason || '')
       ? '有人在干活，只报警不杀——等会话收了下一轮再看。'
       : '先继续探；还红且没人在干活我就重启。');
-  return `mirasim 起会话面连续 ${strikes} 次没回 state 帧（阈值 ${n}）：${why}
+  return `mirasim 起会话面连续 ${strikes} 次没回 state/sessions 帧（阈值 ${n}）：${why}
 影响：指挥官读不到会话名单，派工/复审会静默卡住，HTTP 探活看不出来。
 我打算：${intend}`;
 }
 
 export function buildWsRecovered({ lastWhy } = {}) {
   const extra = lastWhy ? `（上一轮是：${lastWhy}）` : '';
-  return `mirasim 起会话面恢复了，state 帧又回来了${extra}。不用处理。`;
+  return `mirasim 起会话面恢复了，state/sessions 帧又回来了${extra}。不用处理。`;
 }

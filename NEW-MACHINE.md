@@ -387,7 +387,7 @@ orca account add --help
 #   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
-# mirasim-server ws 探活（#1151，判活看 state 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
+# mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
 #   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
 #   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh

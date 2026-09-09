@@ -4,7 +4,9 @@
  *
  * 病（2026-09-08 实咬）：HTTP / 还是 200、进程还在，但 ws 发不出 state 帧。
  * 指挥官整晚「会话名单读不到」——不报警、不自愈。HTTP 探活看的是口开没开，
- * 本探针看「该发生的事有没有发生」（state 帧）。同形状判例 #940。
+ * 本探针看「该发生的事有没有发生」（state 帧 + sessions 帧）。同形状判例 #940。
+ * 2026-09-09 帅位实证：listSessions 单口退化时 startSession 仍通、state 仍在——
+ * 只 ping 连接 / state 探不到，必须发 listSessions、限时等 sessions 帧。
  *
  * 为什么是独立 timer，不塞进 6 小时 LLM 巡检（cmdPatrol）：
  *   巡检自己也要起会话。ws 面瘫了，巡检也起不来，等于自己查自己。

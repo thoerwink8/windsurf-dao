@@ -2,7 +2,8 @@
 #
 # mirasim-server ws 起会话面探活（#1151）。HTTP / 200 探不出这个病：
 # 2026-09-08 服务连续跑 4 天，进程在、口开着，但 state 帧发不出，
-# 指挥官整晚「会话名单读不到」。本单元每轮开一条最小 ws，收到 state 帧算活。
+# 指挥官整晚「会话名单读不到」。本单元每轮开一条最小 ws，收到 state 帧
+# 且 sessions 帧回来了算活（2026-09-09：listSessions 单口退化时 state 仍在）。
 # 连红且无在途会话才 try-restart；有人在干活只报警不杀。
 #
 # 独立于 6 小时 LLM 巡检：巡检自己也要起会话，ws 面瘫了它也起不来；
@@ -19,7 +20,7 @@
 # WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
 
 [Unit]
-Description=mirasim-server ws 起会话面探活：收到 state 帧算活，连红无在途才重启
+Description=mirasim-server ws 起会话面探活：state+sessions 帧都回才算活，连红无在途才重启
 After=network-online.target
 Wants=network-online.target
 

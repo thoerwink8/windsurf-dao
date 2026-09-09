@@ -7,7 +7,7 @@
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
-// handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、挂断），不发 prompt。
+// handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
 //
 // 服务端是 systemd 常驻的官方 mirasim-server（回环 ws，钉死一个版本）。控制面是私有协议、
 // 混淆、无文档，厂商明写客户端/服务端严格版本相等、无兼容层（ai-gateway-stack DECISIONS §71）——
@@ -864,14 +864,30 @@ export function createRuntime(opts = {}) {
   }
 
   /**
-   * 最小握手：开一条 ws，读 state 帧，立刻挂断。不发 prompt、不起会话。
-   * 探活用它判「该发生的事有没有发生」——收到 state 帧算连上了。
-   * 连不上 / 令牌不在仍抛 MirasimUnavailableError（调用方自己分红 vs 没查成）。
+   * 最小握手：开一条 ws，读 state 帧，再发 listSessions 等 sessions 帧，立刻挂断。
+   * 不发 prompt、不起会话。探活用它判「该发生的事有没有发生」。
+   *
+   * 2026-09-09 帅位实证：listSessions 单口退化、startSession 仍通——连接可建、
+   * state 也在，但 sessions 帧不回。只 ping state 探不到这个病。空名单（[]）算活；
+   * 没回帧 / 不是数组才算死。连不上 / 令牌不在仍抛 MirasimUnavailableError。
    */
   async function handshake() {
     const wire = await open();
     try {
-      return judgeContract(wire.state, { pinnedVersion });
+      const contract = judgeContract(wire.state, { pinnedVersion });
+      if (contract.unscanned) return contract;
+      wire.send({ type: 'listSessions' });
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
+      if (!listed || !Array.isArray(listed.sessions)) {
+        return {
+          ok: false,
+          unscanned: false,
+          version: contract.version,
+          sessionsOk: false,
+          errors: ['没收到 sessions 帧——listSessions 单口退化（连接可建、清单不回）'],
+        };
+      }
+      return { ...contract, sessionsOk: true, sessions: listed.sessions };
     } finally {
       wire.close();
     }

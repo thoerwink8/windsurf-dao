@@ -1,4 +1,5 @@
 // #1151：mirasim-server ws 探活。HTTP 200 / 进程在探不出「state 帧发不出」。
+// 2026-09-09：只 ping state 探不出 listSessions 单口退化——连接可建、清单不回。
 // 闸守四件事：纯函数三态、自愈闸（有在途不杀）、单元有墙钟、装机脚本验 NEXT + sudoers 写死。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -28,7 +29,7 @@ function unavailable(msg, over = {}) {
   return err;
 }
 
-describe('握手三态：判活看 state 帧，不看 HTTP / 进程', () => {
+describe('握手三态：判活看 state+sessions 帧，不看 HTTP / 进程', () => {
   it('故意样本：连不上 ws（SIGSTOP 挂起）→ red，不是没查成', async () => {
     const { classifyHandshake } = await import(LIB);
     const r = classifyHandshake({ error: unavailable('连不上回环 ws') });
@@ -62,6 +63,31 @@ describe('握手三态：判活看 state 帧，不看 HTTP / 进程', () => {
       errors: ['版本不符：钉死 0.0.282，服务端报 0.0.283'],
     });
     assert.equal(upgraded.state, 'green', '升级那天拿版本钉死当红会整晚误报、把还活着的服务杀了');
+  });
+
+  it('state 在但没收到 sessions 帧 → red（2026-09-09 listSessions 单口退化）', async () => {
+    const { classifyHandshake } = await import(LIB);
+    const hung = classifyHandshake({
+      ok: false, unscanned: false, version: '0.0.282', sessionsOk: false,
+      errors: ['没收到 sessions 帧——listSessions 单口退化（连接可建、清单不回）'],
+    });
+    assert.equal(hung.state, 'red');
+    assert.match(hung.why, /没收到 sessions 帧/);
+
+    const timedOut = classifyHandshake({
+      error: unavailable('30000ms 内没等到 sessions 帧'),
+    });
+    assert.equal(timedOut.state, 'red');
+    assert.match(timedOut.why, /没等到 sessions 帧/);
+  });
+
+  it('空名单 [] 且 sessionsOk → 绿（0 条不是没查成）', async () => {
+    const { classifyHandshake } = await import(LIB);
+    const empty = classifyHandshake({
+      ok: true, unscanned: false, version: '0.0.282', sessionsOk: true, sessions: [],
+    });
+    assert.equal(empty.state, 'green');
+    assert.match(empty.why, /sessions 帧回来了/);
   });
 
   it('令牌不在 / 不认识的错 → unscanned，不算连红', async () => {
@@ -176,7 +202,7 @@ describe('群里说人话', () => {
       decision: { heal: true, alert: true, reason: '无在途' },
       plan: { strikesToAlert: 2 },
     });
-    assert.match(text, /连续 2 次没回 state 帧/);
+    assert.match(text, /连续 2 次没回 state\/sessions 帧/);
     assert.match(text, /影响：/);
     assert.match(text, /我打算：/);
     assert.match(text, /重启 mirasim-server/);
@@ -222,7 +248,7 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
     assert.equal(second.healed, true);
     assert.equal(heals.length, 1);
     assert.equal(said.length, 1);
-    assert.match(said[0], /没回 state 帧/);
+    assert.match(said[0], /没回 state\/sessions 帧/);
     assert.equal(writes[1].healed, true);
     assert.match(writes[1].healWhy, /try-restart/);
   });
@@ -281,25 +307,89 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
     assert.equal(said.length, 0);
     assert.equal(writes[0].alerted, false);
   });
+
+  it('state 通但 sessions 不回：两轮连红才自愈（单口退化）', async () => {
+    const { runProbe } = await import(IO);
+    const heals = [];
+    const said = [];
+    const writes = [];
+    const hungList = async () => ({
+      ok: false, unscanned: false, version: '0.0.282', sessionsOk: false,
+      errors: ['没收到 sessions 帧——listSessions 单口退化（连接可建、清单不回）'],
+    });
+    const emptyScan = () => ({ ok: true, procs: [] });
+    const first = await runProbe({
+      handshake: hungList, scan: emptyScan, prev: { folded: null, alerted: false },
+      nowIso: NOW, say: (t) => said.push(t),
+      heal: () => { heals.push('x'); return { ok: true, why: 'restarted' }; },
+      writeState: (s) => writes.push(s),
+    });
+    assert.equal(first.folded.state, 'red');
+    assert.equal(first.folded.strikes, 1);
+    assert.equal(first.decision.heal, false);
+    assert.equal(heals.length, 0);
+
+    const second = await runProbe({
+      handshake: hungList, scan: emptyScan, prev: writes[0],
+      nowIso: '2026-09-09T13:20:00Z',
+      say: (t) => said.push(t),
+      heal: () => { heals.push('x'); return { ok: true, why: '已执行 try-restart' }; },
+      writeState: (s) => writes.push(s),
+    });
+    assert.equal(second.folded.strikes, 2);
+    assert.equal(second.decision.heal, true);
+    assert.equal(second.healed, true);
+    assert.equal(heals.length, 1);
+    assert.match(said[0], /没收到 sessions 帧/);
+  });
 });
 
-describe('handshake 是只读：不发 prompt、挂断', () => {
-  it('收到 state 就返回 judgeContract 结果，一帧 prompt 都没有', async () => {
+describe('handshake 是只读：不发 prompt、挂断，但要验 sessions 帧', () => {
+  const goodState = {
+    version: '0.0.282', workdir: '/srv', home: '/srv', platform: 'linux',
+    agentsAvailable: ['claude'],
+  };
+
+  it('收到 state 且 sessions 回来才算活，一帧 prompt 都没有', async () => {
     const { createRuntime } = await import(RUNTIME);
     const sent = [];
     const wire = {
-      state: {
-        version: '0.0.282', workdir: '/srv', home: '/srv', platform: 'linux',
-        agentsAvailable: ['claude'],
-      },
+      state: goodState,
       send(obj) { sent.push(obj); },
-      async waitFor() { return null; },
+      async waitFor(pred) {
+        if (typeof pred === 'function' && pred({ type: 'sessions', sessions: [] })) {
+          return { type: 'sessions', sessions: [] };
+        }
+        return null;
+      },
       close() { this.hungUp = true; },
     };
     const rt = createRuntime({ connect: async () => wire });
     const v = await rt.handshake();
     assert.equal(v.ok, true);
     assert.equal(v.unscanned, false);
+    assert.equal(v.sessionsOk, true);
+    assert.deepStrictEqual(v.sessions, []);
+    assert.ok(sent.some((f) => f.type === 'listSessions'), '必须发 listSessions，只 ping state 探不到单口退化');
+    assert.deepStrictEqual(sent.filter((f) => f.type === 'prompt'), []);
+    assert.equal(wire.hungUp, true);
+  });
+
+  it('state 在但 sessions 帧不回 → 不算活（2026-09-09 单口退化）', async () => {
+    const { createRuntime } = await import(RUNTIME);
+    const sent = [];
+    const wire = {
+      state: goodState,
+      send(obj) { sent.push(obj); },
+      async waitFor() { return null; },
+      close() { this.hungUp = true; },
+    };
+    const rt = createRuntime({ connect: async () => wire });
+    const v = await rt.handshake();
+    assert.equal(v.ok, false);
+    assert.equal(v.sessionsOk, false);
+    assert.match(v.errors[0], /没收到 sessions 帧/);
+    assert.ok(sent.some((f) => f.type === 'listSessions'));
     assert.deepStrictEqual(sent.filter((f) => f.type === 'prompt'), []);
     assert.equal(wire.hungUp, true);
   });
