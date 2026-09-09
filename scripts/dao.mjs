@@ -4788,6 +4788,8 @@ async function cmdWorkerDoneMirasim(args) {
   const postedIssue = postCommentOnce({
     kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
     writeIssue: applyIssueWrite, host: 'worker-done',
+    // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
+    repo: targetRepo.ownerName || undefined,
     idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
   });
   if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });

@@ -332,6 +332,8 @@ describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () =
     assert.match(done, /writeReviewPendingOnFail\(/);
     assert.match(done, /source:\s*REVIEW_PENDING_SOURCE_WORKER_DONE/);
     assert.match(done, /repo:\s*targetRepo\.ownerName/);
+    // 完工 issue 评论走网关：必须把目标仓传进去，不许默认落到 windsurf-dao。
+    assert.match(done, /postCommentOnce\(\{[\s\S]*?kind: 'issue'[\s\S]*?repo:\s*targetRepo\.ownerName/);
   });
 });
 
