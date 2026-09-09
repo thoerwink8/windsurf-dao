@@ -1,5 +1,7 @@
 # 机制巡检：orca 读不了 journal，盘点「探针连红」闸每轮没查成
 
+处置：#1166
+
 ## 结论
 
 指挥官盘点每 6 小时跑一次 `checkProbeJournal`，用 `journalctl -u gw-remote-probe` 判供应商探活是不是连红。跑它的身份是 `User=orca`，orca 不在 `systemd-journal` / `adm` 里，journal 文件是 `root:systemd-journal` 加 ACL，`journalctl` 退出 1、stdout 空。闸把「没权限」写成「可能没这个单元」，标 unknown，不开单。探活自己写的 `~/.dao/provider-health.json` orca 读得到，盘点不去读。于是这台机器上「探针连红」这一格从来没有真查过。
