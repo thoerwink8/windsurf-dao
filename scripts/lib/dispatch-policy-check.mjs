@@ -3,7 +3,7 @@
 // dao-check 用。自持解析：**不 import scripts/lib/preflight.mjs**（消费方），否则自己查自己查不出错。
 // preflight：enabled/useHealthTable 布尔；timeoutMs ∈ [500,60000]；maxCandidates 整数 ∈ [1,12]。
 // breaker：windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 整数 1–5；overrides 按 target 覆盖同范围。
-// commander：requireModelInRouting 布尔；loadThreshold 0.1~2、memReserveMb 256~16384、conservativeWorkerMb 64~4096、minSamplePairs 整数 1~32、sampleWindow 整数 2~64（都是余量参数，不是「派几个」）。
+// commander：requireModelInRouting 布尔；loadThreshold 0.1~2、memReserveMb 256~16384、conservativeWorkerMb 64~4096、minSamplePairs 整数 1~32、sampleWindow 整数 2~64（都是余量参数，不是「派几个」）；stalledDraftHours 1~168、stalledDraftMaxPumps 整数 1~5（#1147 draft 收口泵，缺键不拦）。
 // 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮）。缺 commander 节不拦（#842 旧夹具兼容）。
 // hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
 // upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
@@ -62,6 +62,14 @@ export function inspectDispatchPolicySource(src) {
       if (cm.sampleWindow !== undefined) {
         const s = cm.sampleWindow;
         if (!Number.isInteger(s) || s < 2 || s > 64) problems.push(`sampleWindow 越界（要整数 2~64，实际 ${cm.sampleWindow}）`);
+      }
+      if (cm.stalledDraftHours !== undefined) {
+        const h = Number(cm.stalledDraftHours);
+        if (!Number.isFinite(h) || h < 1 || h > 168) problems.push(`stalledDraftHours 越界（要 1~168，实际 ${cm.stalledDraftHours}）`);
+      }
+      if (cm.stalledDraftMaxPumps !== undefined) {
+        const p = cm.stalledDraftMaxPumps;
+        if (!Number.isInteger(p) || p < 1 || p > 5) problems.push(`stalledDraftMaxPumps 越界（要整数 1~5，实际 ${cm.stalledDraftMaxPumps}）`);
       }
     }
   }
