@@ -7,6 +7,7 @@
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
+// handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、挂断），不发 prompt。
 //
 // 服务端是 systemd 常驻的官方 mirasim-server（回环 ws，钉死一个版本）。控制面是私有协议、
 // 混淆、无文档，厂商明写客户端/服务端严格版本相等、无兼容层（ai-gateway-stack DECISIONS §71）——
@@ -862,6 +863,20 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 最小握手：开一条 ws，读 state 帧，立刻挂断。不发 prompt、不起会话。
+   * 探活用它判「该发生的事有没有发生」——收到 state 帧算连上了。
+   * 连不上 / 令牌不在仍抛 MirasimUnavailableError（调用方自己分红 vs 没查成）。
+   */
+  async function handshake() {
+    const wire = await open();
+    try {
+      return judgeContract(wire.state, { pinnedVersion });
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
@@ -870,6 +885,7 @@ export function createRuntime(opts = {}) {
     interact,
     stopSession,
     waitForCompletion,
+    handshake,
     crossCheck,
     config: { port, homeDir, pinnedVersion },
   };
@@ -888,3 +904,4 @@ export const interact = (sessionKey, answer) => runtime().interact(sessionKey, a
 export const listSessions = () => runtime().listSessions();
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
+export const handshake = () => runtime().handshake();

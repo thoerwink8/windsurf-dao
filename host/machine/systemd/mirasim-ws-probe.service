@@ -1,0 +1,39 @@
+# /etc/systemd/system/mirasim-ws-probe.service
+#
+# mirasim-server ws 起会话面探活（#1151）。HTTP / 200 探不出这个病：
+# 2026-09-08 服务连续跑 4 天，进程在、口开着，但 state 帧发不出，
+# 指挥官整晚「会话名单读不到」。本单元每轮开一条最小 ws，收到 state 帧算活。
+# 连红且无在途会话才 try-restart；有人在干活只报警不杀。
+#
+# 独立于 6 小时 LLM 巡检：巡检自己也要起会话，ws 面瘫了它也起不来；
+# 而且巡检硬边界不许启停服务。自愈走 sudoers 白名单里写死的那一条。
+#
+# User=orca 是硬要求：ExecStart 指 /srv/projects/windsurf-dao 里的脚本，
+# 那个仓每个执行体都能写；以 root 解释它等于给每个能写仓的执行体一条 root 通道
+# （tests/unit-privilege.test.js 守着）。
+#
+# 装（服务器）：sudo bash scripts/install-mirasim-ws-probe.sh
+# 验：systemctl list-timers | grep mirasim-ws-probe；NEXT 必须是时间不能是 `-`
+#     journalctl -u mirasim-ws-probe -n 5
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+
+[Unit]
+Description=mirasim-server ws 起会话面探活：收到 state 帧算活，连红无在途才重启
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：自动化服务不继承个人 GH_TOKEN。探针走 hub-say，不写 Issue。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/mirasim-ws-probe.mjs
+# 退出码 0 = 探过（红项走报警 + 自愈，不算探针失败）。
+# --strict 且本轮红才是 1。没查成要在 journal 里看得见 ·，不许跟绿长成一个样。
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,39 @@
+# /etc/systemd/system/mirasim-server.service
+#
+# 官方 mirasim-server（回环 ws，钉死版本）。执行体唯一起会话面（#880 / #1151）。
+# 二进制与工作目录归 ai-gateway-stack（~/.mirasim、~/mirasim-server/<版>），
+# 本仓只收这份 unit，结束手搓漂移——dao-sync 只拉代码不装单元，改了仓还得人装。
+#
+# MemoryHigh / MemoryMax 是 2026-09-08 的垫片：服务跑 4 天膨胀到 6.8G 后
+# ws 起会话面静默瘫痪。探活（mirasim-ws-probe）修发现面；本上限兜「真膨胀
+# 被 systemd 杀掉，Restart=always 自动拉起」。ws 瘫不一定伴随内存膨胀，
+# 所以探活合入后垫片仍留。原先手搓在
+# /etc/systemd/system/mirasim-server.service.d/memory-guard.conf，合进本文件
+# 以免 ⑳ 只比对 .service、drop-in 继续漂。装机脚本会删那份 drop-in。
+#
+# User=orca 是硬要求。ExecStart 指家目录里的官方包，不是本仓脚本。
+# 换机改 WorkingDirectory / ExecStart 的版本路径，不要复制业务逻辑进 unit。
+#
+# 装（服务器）：sudo bash scripts/install-mirasim-ws-probe.sh
+# 验：systemctl is-active mirasim-server；systemctl show -p MemoryMax
+
+[Unit]
+Description=Mirasim official remote server (v0.0.282 pinned; burns cloud quota via relay)
+After=network-online.target
+
+[Service]
+User=orca
+Environment=HOME=/home/orca
+Environment=MIRASIM_OPEN_BROWSER=0
+# #792：不继承个人 GH_TOKEN；服务端不写 Issue，但和其它单元同一把尺。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
+WorkingDirectory=/home/orca/mirasim-server/0.0.282
+ExecStart=/home/orca/mirasim-server/0.0.282/node /home/orca/mirasim-server/0.0.282/server.cjs --port 4316 --host 127.0.0.1 --no-open --workdir /home/orca/mirasim-work
+Restart=always
+RestartSec=5
+MemoryHigh=2.5G
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target
