@@ -670,10 +670,10 @@
       "defaultForModels": [],
       "availability": {
         "status": "available",
-        "checkedAt": "2026-09-09T14:02:27.505Z",
+        "checkedAt": "2026-09-09T18:20:00.000Z",
         "evidenceKind": "execution",
-        "sourceId": "native-study",
-        "reason": "ACP read tool completed and returned random proof; interactive question tool not exposed"
+        "sourceId": "1174-cursor-worktree-commit",
+        "reason": "worktree read+edit+git add/commit all auto-approved by worktree scope, 0 manual answers, real commit ef26cf2, cleanup verified"
       },
       "quality": {
         "status": "qualified",
@@ -686,16 +686,22 @@
           "sourceId": "native-study"
         },
         "write": {
-          "status": "unverified"
+          "status": "verified",
+          "sourceId": "1174-cursor-worktree-commit"
         },
         "test": {
           "status": "unverified"
         },
         "interaction": {
-          "status": "unverified"
+          "status": "verified",
+          "sourceId": "1174-cursor-question"
         },
         "resume": {
           "status": "declared"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1174-cursor-worktree-commit"
         }
       },
       "pricing": {
@@ -1097,10 +1103,10 @@
       "defaultForModels": [],
       "availability": {
         "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "official account list contains exact variant; ACP model prompt/tool qualification pending"
+        "checkedAt": "2026-09-09T18:20:00.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-devin-worktree-commit",
+        "reason": "worktree read+edit+git commit verified end to end (commit 2219daf, cleanup verified) but the ACP handshake reported model swe-1-7-medium, NOT the pinned deepseek-v4-flash-max; devin model pinning stays unproven"
       },
       "quality": {
         "status": "unverified",
@@ -1113,6 +1119,14 @@
         },
         "resume": {
           "status": "declared"
+        },
+        "write": {
+          "status": "verified",
+          "sourceId": "1174-devin-worktree-commit"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1174-devin-worktree-commit"
         }
       },
       "pricing": {

@@ -74,37 +74,119 @@ function canonicalPath(value, cwd) {
 
 // Only a single simple command can qualify for a prefix. Shell control operators,
 // expansions and substitutions cannot be smuggled through an allowed executable.
+// Metacharacters are refused where the shell would ACT on them: bare in an
+// unquoted word, or expansion-capable ($ ` \) inside double quotes. Inside quotes
+// the rest are literal text, so a commit trailer such as "Name <a@b.c>" is data,
+// not an operator, and rejecting it would block ordinary git usage.
+const UNQUOTED_UNSAFE = /[$`\\;&|<>(){}*?\[\]~!]/;
+const DOUBLE_QUOTED_UNSAFE = /[$`\\]/;
+
+/** Cursor writes every non-trivial commit message as `"$(cat <<'EOF' … EOF)"`.
+ * A SINGLE-QUOTED heredoc delimiter tells the shell to expand nothing, so the body
+ * is literal text, not a substitution. Lifting exactly that form out to a literal
+ * (and nothing else: an unquoted <<EOF still expands, and stays refused) is what
+ * lets an allowlisted `git commit` carry a real message. The placeholder uses NUL,
+ * which cannot occur in a command line, so it can never collide with real text.
+ */
+const HEREDOC_LITERAL = /\$\(\s*cat\s*<<'([A-Za-z_][A-Za-z0-9_]*)'\n([\s\S]*?)\n\1[ \t]*\n?[ \t]*\)/g;
+export function liftLiteralHeredocs(line) {
+  const literals = [];
+  const lifted = line.replace(HEREDOC_LITERAL, (_match, _delim, body) => {
+    literals.push(body);
+    return `\u0000H${literals.length - 1}\u0000`;
+  });
+  return { lifted, literals };
+}
+const restoreHeredocs = (word, literals) =>
+  word.replace(/\u0000H(\d+)\u0000/g, (match, index) => literals[Number(index)] ?? match);
 function commandWords(input) {
   if (Array.isArray(input)) return input.length && input.every(word => typeof word === 'string') ? input : null;
-  if (typeof input !== 'string' || /[\r\n$`\\;&|<>(){}*?\[\]~!]/.test(input)) return null;
+  if (typeof input !== 'string' || /[\r\n]/.test(input)) return null;
   const words = [];
-  const token = /\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))/gy;
+  // A shell word is a run of adjacent quoted and unquoted parts with no whitespace
+  // between them, so `--format="%H %s"` is ONE word. Treating that as a parse error
+  // (as an earlier version did) refuses ordinary git invocations. Concatenating is
+  // also the safe reading: `--test"joined"` becomes the single word `--testjoined`,
+  // which then simply fails to match the `['node','--test']` prefix.
+  const part = /(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))/gy;
+  const space = /\s*/y;
   let offset = 0;
   while (offset < input.length) {
-    if (!input.slice(offset).trim()) break;
-    token.lastIndex = offset;
-    const match = token.exec(input);
-    if (!match) return null;
-    words.push(match[1] ?? match[2] ?? match[3]);
-    offset = token.lastIndex;
-    if (offset < input.length && !/\s/.test(input[offset])) return null;
+    space.lastIndex = offset;
+    space.exec(input);
+    offset = space.lastIndex;
+    if (offset >= input.length) break;
+    let word = '';
+    let matched = false;
+    for (;;) {
+      part.lastIndex = offset;
+      const piece = part.exec(input);
+      if (!piece) break;
+      if (piece[1] !== undefined) { if (DOUBLE_QUOTED_UNSAFE.test(piece[1])) return null; word += piece[1]; }
+      else if (piece[2] !== undefined) word += piece[2]; // single quotes are fully literal
+      else { if (UNQUOTED_UNSAFE.test(piece[3])) return null; word += piece[3]; }
+      matched = true;
+      offset = part.lastIndex;
+      if (offset >= input.length || /\s/.test(input[offset])) break;
+    }
+    if (!matched) return null; // an unterminated quote reaches here
+    words.push(word);
   }
   return words.length ? words : null;
+}
+
+const DEVIN_COMMAND_META = 'cognition.ai/editableCommand';
+
+/** Devin's permission request carries only a toolCallId: no kind, title or rawInput.
+ * The kind arrives earlier, on the session/update that announced the same tool call,
+ * so the already-tracked tool call is the authority for what is being asked about.
+ * Returning undefined (rather than guessing) keeps an unknown shape failing closed.
+ */
+export function acpPermissionKind(params, toolCalls = []) {
+  const call = params?.toolCall;
+  if (!call) return undefined;
+  if (typeof call.kind === 'string') return call.kind;
+  const id = call.toolCallId;
+  if (id === undefined) return undefined;
+  const tracked = toolCalls.find(tool => tool?.id === id || tool?.toolCallId === id);
+  return typeof tracked?.kind === 'string' ? tracked.kind : undefined;
 }
 
 /** Permission policy is a decision boundary, not a filesystem/command sandbox.
  * Unknown tool input shapes fail closed. Native CLI permission requests can be
  * answered manually using the same durable promptId if their scope is unverifiable.
  */
-export function acpPermissionScope(rule, params, { cwd }) {
+export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
   const call = params.toolCall;
-  if (!call || !Array.isArray(rule.toolKinds) || !rule.toolKinds.includes(call.kind) ||
+  const kind = acpPermissionKind(params, toolCalls);
+  if (!call || kind === undefined || !Array.isArray(rule.toolKinds) || !rule.toolKinds.includes(kind) ||
     typeof rule.workdir !== 'string' || !path.isAbsolute(rule.workdir) || canonicalPath(rule.workdir, cwd) !== cwd) return null;
   const raw = call.rawInput && typeof call.rawInput === 'object' && !Array.isArray(call.rawInput) ? call.rawInput : {};
   const actualCwd = raw.cwd ?? raw.workdir ?? raw.workingDirectory ?? raw.working_directory ?? params.cwd;
   if (actualCwd !== undefined && canonicalPath(actualCwd, cwd) !== cwd) return null;
-  const scope = { toolKind: call.kind, cwd };
-  if (['read', 'edit', 'delete', 'move'].includes(call.kind)) {
+  const scope = { toolKind: kind, cwd };
+  // A worktree-scoped rule pre-authorizes any file tool that stays inside the
+  // managed workdir, and any command that matches one of the allowed prefixes.
+  // This is a decision boundary, not a security boundary: the managed workdir is
+  // already an isolated git worktree, so the agent is trusted to write anywhere
+  // within it but never outside it.
+  const worktree = rule.worktreeScope === true;
+  if (['read', 'edit', 'delete', 'move'].includes(kind)) {
+    if (worktree) {
+      const observed = [raw.path, raw.filePath, raw.file_path, raw.oldPath, raw.newPath,
+        ...(Array.isArray(raw.paths) ? raw.paths : []), ...(Array.isArray(raw.files) ? raw.files : []),
+        ...(Array.isArray(call.locations) ? call.locations.map(location => location.path) : [])].filter(value => value !== undefined);
+      const paths = observed.map(value => canonicalPath(value, cwd));
+      if (!paths.length || paths.some(value => !value)) return null;
+      if (paths.some(value => value !== cwd && !value.startsWith(cwd + path.sep))) return null;
+      const descriptors = rule.paths ?? rule.pathPatterns ?? null;
+      if (descriptors !== null) {
+        if (!Array.isArray(descriptors) || !descriptors.length) return null;
+        const allowed = descriptors.map(value => canonicalPath(value, cwd));
+        if (allowed.some(value => !value) || paths.some(value => value !== cwd && !allowed.includes(value))) return null;
+      }
+      return { ...scope, paths: [...new Set(paths)], permission: 'worktree_scoped' };
+    }
     if (!Array.isArray(rule.paths) || !rule.paths.length) return null;
     const allowed = rule.paths.map(value => canonicalPath(value, cwd));
     const observed = [raw.path, raw.filePath, raw.file_path, raw.oldPath, raw.newPath,
@@ -114,37 +196,102 @@ export function acpPermissionScope(rule, params, { cwd }) {
     if (!paths.length || allowed.some(value => !value) || paths.some(value => !value || !allowed.includes(value))) return null;
     return { ...scope, paths: [...new Set(paths)] };
   }
-  if (call.kind === 'execute') {
-    if (actualCwd === undefined || !Array.isArray(rule.commandPrefixes) || !rule.commandPrefixes.length) return null;
-    const words = commandWords(raw.argv ?? raw.command);
-    if (!words || !rule.commandPrefixes.some(prefix => Array.isArray(prefix) && prefix.length && prefix.every((word, index) => typeof word === 'string' && word === words[index]))) return null;
-    return { ...scope, command: words };
+  if (kind === 'execute') {
+    if (!Array.isArray(rule.commandPrefixes) || !rule.commandPrefixes.length) return null;
+    const allowed = words => rule.commandPrefixes.some(prefix =>
+      Array.isArray(prefix) && prefix.length && prefix.every((word, index) => typeof word === 'string' && word === words[index]));
+    if (!worktree) {
+      if (actualCwd === undefined) return null;
+      const words = commandWords(raw.argv ?? raw.command);
+      if (!words || !allowed(words)) return null;
+      return { ...scope, command: words, permission: 'prefix_scoped' };
+    }
+    // Cursor's ACP execute tool sends no rawInput: the shell line is the tool title,
+    // wrapped in backticks, sometimes prefixed with `cd <workdir> &&`. The title is
+    // what the CLI itself displays and runs, so it is the decision's subject.
+    // The command already starts in the managed workdir, because that is the cwd the
+    // agent process was spawned with and the cwd the ACP session was created for. So
+    // a command with no `cd` is bounded by construction; a `cd` is only allowed when
+    // it names that same workdir. Every other segment must match an allowed prefix,
+    // and any relocating operator (pipe, redirect, background, substitution) is
+    // refused by commandWords below.
+    // Devin instead puts the shell line in the tool call's _meta, and pins the
+    // directory per invocation with `git -C <dir>` rather than a leading cd.
+    let line = raw.argv ?? raw.command ?? null;
+    if (line === null && typeof call._meta?.[DEVIN_COMMAND_META] === 'string') line = call._meta[DEVIN_COMMAND_META];
+    if (line === null && typeof call.title === 'string') line = call.title.trim().replace(/^`(.*)`$/s, '$1');
+    if (Array.isArray(line)) {
+      const words = commandWords(line);
+      return words && allowed(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
+    }
+    if (typeof line !== 'string' || !line.trim()) return null;
+    // Only `&&` may join segments. Every other operator (| < > & ; and any
+    // substitution) is refused by commandWords below, because it rejects an
+    // unquoted metacharacter in any word of a segment.
+    const { lifted, literals } = liftLiteralHeredocs(line);
+    const segments = lifted.split(/\s*&&\s*/).filter(part => part.trim());
+    if (!segments.length) return null;
+    const parsed = [];
+    for (const segment of segments) {
+      const words = commandWords(segment);
+      if (!words) return null;
+      if (words[0] === 'cd') {
+        if (words.length !== 2 || canonicalPath(words[1], cwd) !== cwd) return null;
+      } else {
+        // `git -C <dir> <subcommand>` names its own directory; that directory must be
+        // the managed workdir, and the prefix is matched against the command without
+        // the -C pair, so an allowlist entry stays written as ['git','commit'].
+        let effective = words;
+        if (words[0] === 'git' && words[1] === '-C') {
+          if (words.length < 4 || canonicalPath(words[2], cwd) !== cwd) return null;
+          effective = [words[0], ...words.slice(3)];
+        }
+        if (!allowed(effective)) return null;
+      }
+      parsed.push(words.map(word => restoreHeredocs(word, literals)));
+    }
+    return { ...scope, command: parsed.flat(), segments: parsed, permission: 'worktree_scoped' };
   }
   return null;
 }
 
-function matchingRules(policy, method, params) {
+function matchingRules(policy, method, params, toolCalls = []) {
+  // The kind is resolved the same way the scope check resolves it, so an agent that
+  // omits it on the permission request (Devin) still selects the same rule.
+  const kind = acpPermissionKind(params, toolCalls);
   return (Array.isArray(policy?.rules) ? policy.rules : []).filter(rule =>
     rule.method === method && (rule.toolCallId === undefined || rule.toolCallId === (params.toolCallId ?? params.toolCall?.toolCallId)) &&
     (rule.toolTitle === undefined || rule.toolTitle === params.toolCall?.title) &&
-    (rule.toolKinds === undefined || (Array.isArray(rule.toolKinds) && rule.toolKinds.includes(params.toolCall?.kind))) &&
+    (rule.toolKinds === undefined || (Array.isArray(rule.toolKinds) && rule.toolKinds.includes(kind))) &&
     (rule.questionIds === undefined || (Array.isArray(rule.questionIds) && JSON.stringify([...rule.questionIds].sort()) === JSON.stringify((params.questions || []).map(question => question.id).sort()))),
   );
 }
 
 function policyAnswer(policy, method, params, context) {
-  const matches = matchingRules(policy, method, params);
+  const matches = matchingRules(policy, method, params, context.toolCalls);
   if (matches.length !== 1 || !Object.hasOwn(matches[0], 'answer')) return null;
-  const answer = encodeAcpAnswer(method, params, matches[0].answer);
+  const rule = matches[0];
+  // A worktree-scoped grant does not bind to a server-chosen optionId; it selects
+  // the server's allow_ONCE option directly, exactly once, without a human answer.
+  // The scope is verified (inside the managed workdir) before the choice is returned.
+  let answer, answerSource;
+  if (method === 'session/request_permission' && rule.worktreeScope === true && rule.answer?.grant === 'once') {
+    const options = params.options?.filter(option => option.kind === 'allow_once') || [];
+    if (options.length !== 1) return null;
+    answer = encodeAcpAnswer(method, params, { optionId: options[0].optionId });
+    answerSource = 'worktree_scope';
+  } else {
+    answer = encodeAcpAnswer(method, params, rule.answer);
+  }
   let scope;
   if (method === 'session/request_permission' && answer.outcome.outcome === 'selected') {
     const selected = params.options?.find(option => option.optionId === answer.outcome.optionId);
     if (selected?.kind === 'allow_once') {
-      scope = acpPermissionScope(matches[0], params, context);
+      scope = acpPermissionScope(rule, params, context);
       if (!scope) return null;
     } else if (!['reject_once', 'reject_always'].includes(selected?.kind)) return null;
   }
-  return { answer, scope };
+  return { answer, scope, ...(answerSource ? { answerSource } : {}) };
 }
 
 export function injectedQuestionPermission(config, method, params) {
@@ -333,11 +480,14 @@ export async function runAcpSession(dir) {
       throw new AcpRpcError(-32601, 'Unsupported ACP interaction');
     }
     let decision;
-    try { decision = policyAnswer(config.interactionPolicy, method, params, { cwd: config.cwd }); }
+    // status.toolCalls is how a permission request that names only a toolCallId is
+    // resolved back to the kind announced on the earlier session/update.
+    const context = { cwd: config.cwd, toolCalls: status.toolCalls };
+    try { decision = policyAnswer(config.interactionPolicy, method, params, context); }
     catch { interaction.policyError = 'invalid_policy_answer'; }
     // Registering our question tool explicitly authorizes invoking that tool, but not
     // answering its question or granting permission to any unrelated MCP tool.
-    if (!decision && !interaction.policyError && !matchingRules(config.interactionPolicy, method, params).length) decision = injectedQuestionPermission(config, method, params);
+    if (!decision && !interaction.policyError && !matchingRules(config.interactionPolicy, method, params, status.toolCalls).length) decision = injectedQuestionPermission(config, method, params);
     if (decision) {
       const { answer, scope } = decision;
       interaction.status = 'answered';

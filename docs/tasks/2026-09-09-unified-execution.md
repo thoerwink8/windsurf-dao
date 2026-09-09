@@ -8,6 +8,10 @@
 
 - [x] T0 调研：原生 Grok/Cursor/Devin 可运行，三者 ACP 握手和创建会话成功；已有探针证据 `/tmp/mirasim-executor-study/`。
 - [ ] T1 共用 ACP：Cursor/Devin 持久执行、读写工具、模型校验、进程回收、并发租约和跨命令读取；负责人 Kant。
+  - [x] T1a Cursor 真实工作树闭环：worktree 里读文件→改文件→`git add`/`git commit`，两次 `session/request_permission` 全由 worktree 作用域自动放行（`answerSource: worktree_scope`），0 次人工回答，`stopReason: end_turn`，`cleanup.verified` 且 survivors 为空，产出真实提交 `ef26cf2`（data.txt +1 行）。模型经 `session/set_model` 校验为 `composer-2.5[fast=true]`。证据 `docs/evidence/1174-cursor-worktree-commit.json`。
+  - [x] T1b Devin 真实工作树闭环：同一套 runtime 与放行判据，读→改→`git add`/`git commit`/`git rev-parse` 一次放行，0 次人工回答，`stopReason: end_turn`，cleanup 干净，产出真实提交 `2219daf`（notes.txt +1 行）。证据 `docs/evidence/1174-devin-worktree-commit.json`。
+  - 放行判据只认「落在受管 worktree 内」：文件工具的每个路径 realpath 后必须在 workdir 内（符号链接外逃被拒）；命令按 `&&` 分段，每段要么是 `cd <workdir>`、要么命中 argv 前缀白名单，管道/重定向/后台/命令替换一律拒。三处厂商差异按实测补齐：Cursor 命令在 `toolCall.title`（反引号包裹，有时带 `cd <workdir> &&`）、提交信息用 `"$(cat <<'EOF' … EOF)"`（单引号 heredoc 不展开，故提升为字面量）；Devin 权限请求不带 kind/title/rawInput，用先前 `session/update` 记下的同 toolCallId 补 kind，命令取 `_meta['cognition.ai/editableCommand']`，`git -C <dir>` 的目录必须等于 workdir；shell 词按「相邻引号段拼接」解析（`--format="%H %s"` 是一个词，早先版本把它当解析错误而拒掉）。
+  - [ ] T1c 仍缺：Devin 用的是 agent 默认模型 `swe-1-7-medium`，**`devin-acp-deepseek` 的 `deepseek-v4-flash-max` 钉模型这条路没验过**，profile 因此仍留 unverified；并发租约（同一 workdir 二次 startSession 被拒）与 `session/load` 跨命令续跑未单独验；`ensureGitWorkspace` 已补测试但未在真实派工链上跑过。
 - [x] T2 Cursor 真问答：共用 MCP 真实问题→任务策略 JSON 回答→读随机文件→退出；注入工具精确权限自动放行，0 次人工回答，cleanup verified。证据 `docs/evidence/1174-cursor-question.json`。原生接口仍支持，当前 CLI 未开放的原生 AskQuestion 不冒充已验证。
 - [ ] T3 统一用量：Mirasim/ACP/原生来源进入同一账本，增量/累计去重，共享额度池、unknown、估价/实扣分开；负责人 Maxwell。
 - [ ] T4 Mirasim 周期升级：官方最新版发现、候选契约验证、在途排空、原子切换、故障回退；部署 orca 用户并验证定时器；负责人 Boyle。

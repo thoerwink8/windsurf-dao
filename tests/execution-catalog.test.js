@@ -254,11 +254,14 @@ test('implicit model aliases must be unique with pinned route, ACP cannot borrow
 test('real catalog is structurally valid; no V4.1/GPT4omini/Llama IDs fabricated in profiles', async () => {
   const { loadExecutionCatalog, validateCatalog } = await lib;
   const c = loadExecutionCatalog(); assert.equal(validateCatalog(c).ok, true);
-  assert.ok(c.profiles.some(p => p.backend === 'acp' && p.agent === 'cursor'));
-  assert.ok(c.profiles.some(p => p.backend === 'acp' && p.agent === 'devin'));
-  assert.ok(c.profiles.some(p => p.agent === 'grok' && p.route === 'local'));
-  assert.ok(c.profiles.filter(p => /relay/.test(p.provider)).every(p => p.backend === 'mirasim' && p.route === 'cloud'));
-  assert.ok(c.profiles.every(p => !/v4[.-]1|gpt4omini|llama/i.test(p.model ?? '')));
+  const backendFor = agent => [...new Set(c.profiles.filter(p => p.agent === agent).map(p => p.backend))].sort();
+  assert.deepEqual(backendFor('cursor'), ['acp']);
+  assert.deepEqual(backendFor('devin'), ['acp']);
+  assert.deepEqual([...new Set(c.profiles.filter(p => p.agent === 'grok').map(p => p.route))], ['local']);
+  const relay = c.profiles.filter(p => /relay/.test(p.provider));
+  assert.deepEqual([...new Set(relay.map(p => p.backend))], ['mirasim']);
+  assert.deepEqual([...new Set(relay.map(p => p.route))], ['cloud']);
+  assert.deepEqual(c.profiles.filter(p => /v4[.-]1|gpt4omini|llama/i.test(p.model ?? '')).map(p => p.id), []);
   const pools = c.profiles.filter(p => ['devin-native', 'windsurf'].includes(p.provider)).map(p => p.accountPoolId);
   assert.equal(new Set(pools).size, 1, 'user-confirmed shared allowance must not create duplicate quotas');
 });

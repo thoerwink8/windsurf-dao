@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {spawn,spawnSync} from 'node:child_process';
+import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
-import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion} from '../scripts/lib/execution-runtime.mjs';
+import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace} from '../scripts/lib/execution-runtime.mjs';
 import {acquireExecutionFence,withExecutionFence,writeExecutionRecord} from '../scripts/lib/execution-fence.mjs';
 
 const linuxTest=(name,fn)=>test(name,{skip:process.platform!=='linux',timeout:10000},fn);
@@ -168,3 +168,47 @@ test('completion rejects partial/empty observations; task acceptance is separate
 });
 test('profiles reject disabled/unavailable/ambiguous choices and support registered IDs',()=>{assert.equal(resolveExecutionProfile({model:profile.id},[profile]).id,profile.id);assert.throws(()=>resolveExecutionProfile({profileId:profile.id},[{...profile,enabled:false}]),/disabled/);assert.throws(()=>resolveExecutionProfile({profileId:profile.id},[{...profile,availability:{status:'unverified'}}]),/unverified/);assert.throws(()=>resolveExecutionProfile({model:'alias'},[{...profile,defaultForModels:['alias']},{...profile,id:'second',defaultForModels:['alias']}]),/ambiguous/);});
 test('maintenance corruption fails closed and promoted version respects service home',t=>{const f=fixture(t),file=path.join(f.dir,'maintenance.json');fs.writeFileSync(file,'{bad');assert.throws(()=>maintenanceStatus(file));assert.equal(promotedVersion(f.dir,'0.0.282'),'0.0.282');const current=path.join(f.dir,'mirasim-server/current');fs.mkdirSync(current,{recursive:true});fs.writeFileSync(path.join(current,'VERSION'),'0.0.307\n');assert.equal(promotedVersion(f.dir,'0.0.282'),'0.0.307');});
+
+// ensureGitWorkspace is the "give the worker a tree" half of a real ACP task, so it
+// is exercised against a real local git repository: no remote, no network.
+function gitRepo(t) {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dao-worktree-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const repo=path.join(dir,'repo');fs.mkdirSync(repo);
+  const git=(args,cwd=repo)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',windowsHide:true});
+  git(['init','-q','-b','master']);
+  git(['config','user.email','dao@example.com']);
+  git(['config','user.name','dao']);
+  fs.writeFileSync(path.join(repo,'seed.txt'),'seed\n');
+  git(['add','-A']);git(['commit','-qm','seed']);
+  return {dir,repo,git};
+}
+
+linuxTest('ensureGitWorkspace creates a branch worktree and is idempotent for the same branch',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  const first=ensureGitWorkspace(repo,'feature/acp-1174',{homeDir:dir,base:'HEAD'});
+  assert.equal(first.created,true);
+  assert.equal(first.branch,'feature/acp-1174');
+  assert.equal(execFileSync('git',['-C',first.path,'symbolic-ref','--short','HEAD'],{encoding:'utf8',windowsHide:true}).trim(),'feature/acp-1174');
+  assert.equal(fs.readFileSync(path.join(first.path,'seed.txt'),'utf8'),'seed\n');
+  const second=ensureGitWorkspace(repo,'feature/acp-1174',{homeDir:dir,base:'HEAD'});
+  assert.equal(second.created,false);
+  assert.equal(second.path,first.path);
+  assert.equal(git(['worktree','list','--porcelain']).split('\n').filter(l=>l==='branch refs/heads/feature/acp-1174').length,1);
+});
+
+linuxTest('ensureGitWorkspace refuses a bad branch name and an unregistered occupied path',t=>{
+  const {dir,repo}=gitRepo(t);
+  assert.throws(()=>ensureGitWorkspace(repo,'bad branch',{homeDir:dir,base:'HEAD'}));
+  const squatted=path.join(dir,'mirasim-worktrees',path.basename(fs.realpathSync(repo)),'feature-squat');
+  fs.mkdirSync(squatted,{recursive:true});
+  assert.throws(()=>ensureGitWorkspace(repo,'feature/squat',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
+linuxTest('ensureGitWorkspace reuses an existing branch instead of rebranching it',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  git(['branch','existing/work']);
+  const made=ensureGitWorkspace(repo,'existing/work',{homeDir:dir,base:'HEAD'});
+  assert.equal(made.created,true);
+  assert.equal(execFileSync('git',['-C',made.path,'symbolic-ref','--short','HEAD'],{encoding:'utf8',windowsHide:true}).trim(),'existing/work');
+});
