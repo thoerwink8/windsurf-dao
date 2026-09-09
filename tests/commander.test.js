@@ -211,6 +211,31 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
     assert.match(a[0].why, /来源没查成/, '旧夹具没带来源，不许倒向任一种');
   });
+
+  it('#1125 队列多张票 → 每轮只产一条 attach-reviewer（drain 自己按在役数拉）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: {
+        scanned: true, issues: [],
+        prs: [
+          { number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'a' },
+          { number: 921, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'b' },
+          { number: 922, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'c' },
+        ],
+      },
+      reviewPending: {
+        scanned: true,
+        items: [
+          { pr: 920, reviewer: 'gpt-5.6-luna', worker: 'wt-a', head: 'a', source: 'worker-done-handoff' },
+          { pr: 921, reviewer: 'gpt-5.6-luna', worker: 'wt-b', head: 'b', source: 'worker-done-handoff' },
+          { pr: 922, reviewer: 'gpt-5.6-luna', worker: 'wt-c', head: 'c', source: 'worker-done-handoff' },
+        ],
+      },
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1, '产 N 条就会连跑 N 次 drain，把容量闸冲掉');
+    assert.equal(a[0].pr, 920, '代表票取队列里第一张活票');
+  });
 });
 
 describe('decide：报帅停手（永不自动）', () => {
@@ -1813,6 +1838,18 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.ok(!/失败/.test(a[0].why), '指挥官自己写的票不许说失败 → ' + a[0].why);
   });
 
+  it('工人首审入队票 → why 说按在役审官数拉取，不许说失败', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-w',
+      source: 'worker-done-handoff',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /工人首审已入队，按在役审官数拉取/);
+    assert.ok(!/失败/.test(a[0].why), '按设计入队不许说失败 → ' + a[0].why);
+  });
+
   it('没有来源字段的旧票 → why 说来源没查成，不许倒向任一种', async () => {
     const { decide, attachReviewerWhy } = await CORE;
     const r = decide(sit({
@@ -1823,6 +1860,7 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.match(a[0].why, /来源没查成/);
     assert.ok(!/工人起审官失败/.test(a[0].why), '旧票不许当成工人失败');
     assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
+    assert.ok(!/工人首审已入队/.test(a[0].why), '旧票不许当成首审入队');
     assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
     assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
   });
@@ -2151,5 +2189,274 @@ describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单
       assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
       assert.match(String(r.error || ''), /不是数组|没查成/);
     } finally { restore(); }
+  });
+});
+
+// ── #1147 draft 收口泵：无会话超时派短会话；泵满打「卡死/等用户」 ──
+describe('#1147 draft 收口泵', () => {
+  const NOW = '2026-09-08T20:00:00.000Z';
+  const OLD_COMMIT = '2026-09-07T18:00:00.000Z'; // 26h 前，默认 24h 超龄
+  const FRESH_COMMIT = '2026-09-08T19:00:00.000Z'; // 1h 前，未超龄
+  const issue = labeledIssue(880);
+  const stalledDraft = (over = {}) => ({
+    number: 885, isDraft: true, mergeable: 'MERGEABLE', headRefOid: 'h885',
+    body: '署名 issue #880', title: '搁置 draft',
+    lastCommittedAt: OLD_COMMIT, labels: [], ...over,
+  });
+  const sit = (over = {}) => baseSituation({
+    at: NOW,
+    github: { scanned: true, issues: [issue], prs: [stalledDraft()] },
+    sessions: { scanned: true, items: [] },
+    commanderPolicy: { requireModelInRouting: false, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
+    ...over,
+  });
+
+  it('draft + 无会话 + 超时 → 产 pump-draft', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit());
+    const pumps = byKind(r, 'pump-draft');
+    assert.equal(pumps.length, 1, JSON.stringify(r.actions));
+    assert.equal(pumps[0].pr, 885);
+    assert.equal(pumps[0].issue, 880);
+    assert.equal(pumps[0].model, 'grok-4.6');
+    assert.equal(pumps[0].tries, 1);
+    assert.equal(pumps[0].pumpKey, 'pump-draft:885');
+    assert.match(pumps[0].why, /超 24h/);
+  });
+
+  it('泵满 2 次仍 draft → 打「卡死/等用户」，不再泵', async () => {
+    const { decide, pumpDraftKey } = await CORE;
+    const { WAITING_USER_LABEL } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'exhausted.mjs').replace(/\\/g, '/'));
+    const r = decide(sit({
+      reworkDispatched: { [pumpDraftKey(885)]: { at: '2026-09-08T00:00:00.000Z', tries: 2, ok: true } },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    const marked = byKind(r, 'mark-exhausted');
+    assert.equal(marked.length, 1, JSON.stringify(r.actions));
+    assert.equal(marked[0].pr, 885);
+    assert.equal(marked[0].verb, 'pump-draft');
+    assert.equal(marked[0].tries, 2);
+    assert.equal(marked[0].label, WAITING_USER_LABEL);
+    assert.match(marked[0].comment, /卡死\/等用户/);
+  });
+
+  it('有活会话 → 不泵', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-880', title: 'PR #885' }] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+    assert.equal(byKind(r, 'mark-exhausted').length, 0);
+  });
+
+  it('未超时 → 不泵', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ lastCommittedAt: FRESH_COMMIT })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('lastCommittedAt 没查成 → 不泵（没查成 ≠ 超龄）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ lastCommittedAt: null })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('会话名单没查成 → 不泵（查不成当有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ sessions: { scanned: false, error: '连不上' } }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('观测面未接（老夹具）→ 不泵', async () => {
+    const { decide } = await CORE;
+    const base = sit();
+    delete base.sessions;
+    const r = decide(base);
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('已挂「卡死/等用户」→ 不泵不重复打标', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [issue],
+        prs: [stalledDraft({ labels: [{ name: '卡死/等用户' }] })],
+      },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+    assert.equal(byKind(r, 'mark-exhausted').length, 0);
+  });
+
+  it('非 draft 超龄无会话 → 不泵（别把正式 PR 当搁置单）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ isDraft: false })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('新提交只影响超龄，不重置次数：tries=1 仍超龄 → 再泵第 2 次', async () => {
+    const { decide, pumpDraftKey } = await CORE;
+    const r = decide(sit({
+      reworkDispatched: { [pumpDraftKey(885)]: { at: '2026-09-07T20:00:00.000Z', tries: 1, ok: true } },
+    }));
+    const pumps = byKind(r, 'pump-draft');
+    assert.equal(pumps.length, 1);
+    assert.equal(pumps[0].tries, 2);
+  });
+
+  it('同轮已派解冲突返工 → 不再泵（别两个人抢一棵树）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [issue],
+        prs: [stalledDraft({ mergeable: 'CONFLICTING' })],
+      },
+    }));
+    assert.equal(byKind(r, 'rework').length, 1);
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+  });
+
+  it('配额：slots=1 时收口泵占名额，新派被挤到下轮', async () => {
+    const { decide } = await CORE;
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 1, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 0, '新活必须让给收口泵');
+  });
+
+  it('配额：超龄 draft 缺标签 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const unlabeled = labeledIssue(880, { labels: [{ name: 'type/写码' }] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [unlabeled, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const missing = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(missing.length, 1, JSON.stringify(r.actions));
+    assert.equal(missing[0].pr, 885);
+  });
+
+  it('配额：超龄 draft 模型不在选型且无顶班 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const retired = labeledIssue(880, { labels: [
+      { name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [retired, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+      commanderPolicy: { requireModelInRouting: true, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
+      defaultWorkerModel: null,
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '模型派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const retiredEsc = byKind(r, 'escalate').filter((a) => a.reason === 'model-not-in-routing');
+    assert.equal(retiredEsc.length, 1, JSON.stringify(r.actions));
+    assert.equal(retiredEsc[0].pr, 885);
+  });
+
+  it('draftCommitAgeMs：缺字段 / 坏时钟 → unscanned，绝不当超龄', async () => {
+    const { draftCommitAgeMs } = await CORE;
+    const now = Date.parse(NOW);
+    const missing = draftCommitAgeMs({ lastCommittedAt: null }, now);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.unscanned, true);
+    const badClock = draftCommitAgeMs({ lastCommittedAt: OLD_COMMIT }, 0);
+    assert.equal(badClock.ok, false);
+    assert.equal(badClock.unscanned, true);
+    const ok = draftCommitAgeMs({ lastCommittedAt: OLD_COMMIT }, now);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.ageMs > 24 * 3600 * 1000, true);
+  });
+});
+
+describe('#1147 act：收口泵起原树短会话', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const os = require('os');
+  function scriptedRun(script) {
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      for (const [needle, reply] of script) {
+        if (argv.includes(needle)) return typeof reply === 'function' ? reply(argv) : reply;
+      }
+      return { ok: false, error: `剧本没有这条命令：${argv.join(' ')}` };
+    };
+    return { run, calls };
+  }
+  const quiet = () => {};
+
+  it('任务书含三选一，注入过得了字节闸', async () => {
+    const M = await MOD();
+    const text = M.pumpDraftBriefText({ pr: 885, issue: 880, head: 'h885', tries: 1 });
+    assert.match(text, /补验收/);
+    assert.match(text, /差什么/);
+    assert.match(text, /关闭是你判/);
+    const spec = M.pumpDraftSpec({ pr: 885 }, '/tmp/pump.md');
+    const { buildSoldierInject } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'template.mjs').replace(/\\/g, '/'));
+    const inject = buildSoldierInject({ spec, issue: 880 });
+    assert.equal(Buffer.byteLength(inject, 'utf8') <= 500, true, inject);
+  });
+
+  it('无 dao 树：从 PR 分支建树再 start，记账 tries', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pump-1147-'));
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'dao-1147\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-pump"}\n' }],
+      ['start', { ok: true, out: '{"ok":true,"sessionKey":"codex:pump-885"}\n' }],
+    ]);
+    const state = {};
+    const r = M.dispatchPumpDraft({
+      kind: 'pump-draft', pr: 885, issue: 880, model: 'grok-4.6', head: 'h885', tries: 1, why: '测试',
+    }, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const start = calls.find((c) => c.includes('start'));
+    assert.equal(Boolean(start), true);
+    assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-pump');
+    const rec = state.reworkDispatched['pump-draft:885'];
+    assert.equal(rec.ok, true);
+    assert.equal(rec.tries, 1);
+    assert.equal(rec.kind, 'pump-draft');
+  });
+
+  it('分支查不到 → 没查成，不发 start，记账 unscanned', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pump-1147-miss-'));
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const state = {};
+    const r = M.dispatchPumpDraft({
+      kind: 'pump-draft', pr: 885, issue: 880, model: 'grok-4.6', why: '测试',
+    }, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(calls.some((c) => c.includes('start')), false);
+    assert.equal(state.reworkDispatched['pump-draft:885'].unscanned, true);
   });
 });
