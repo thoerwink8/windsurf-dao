@@ -34,9 +34,10 @@ Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/b
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 Environment=GH_CONFIG_DIR=/var/empty
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/mirasim-ws-probe.mjs
-# 握手等 sessions 帧 30s（跟 mirasim-sessions.mjs 同值，#1151 实咬）。默认 TimeoutStartSec=90s
-# 盖得住，但写死：别哪天被全局 DefaultTimeoutStartSec 削短，探针被 systemd 杀掉看起来像没探。
-TimeoutStartSec=45s
+# 一轮最坏：开 ws 8s + 等 state 8s + 等 sessions 30s = 46s，再加 try-restart 30s、hub-say 30s。
+# 写 45s 会在 sessions 帧还差 1s 时被 systemd 杀掉——strikes 写不上、自愈不跑，
+# 正是「负载下 30s 才超时」那条实咬要防的误杀。写死 120s，别被全局 DefaultTimeoutStartSec 削短。
+TimeoutStartSec=120s
 # 退出码 0 = 探过（红项走报警 + 自愈，不算探针失败）。
 # --strict 且本轮红才是 1。没查成要在 journal 里看得见 ·，不许跟绿长成一个样。
 StandardOutput=journal

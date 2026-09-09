@@ -425,7 +425,7 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(s, /scripts\/mirasim-ws-probe\.mjs/);
     assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
     assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
-    assert.match(s, /^TimeoutStartSec=45s$/m, '握手等 30s，unit 必须盖住，别被默认/全局削短');
+    assert.match(s, /^TimeoutStartSec=120s$/m, '开 ws 8s + state 8s + sessions 30s + heal/say，45s 会在等帧时被 systemd 杀掉');
     assert.match(t, /^OnCalendar=\*:08\/10$/m);
     assert.match(t, /^Persistent=true$/m);
   });
