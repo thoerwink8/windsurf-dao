@@ -403,6 +403,7 @@
  "腿": [
   {
    "id": "grok-4.6@gw/orca",
+   "并发上限": "不限",
    "模型": "grok-4.6",
    "族": "pi",
    "供应商": "gw",
@@ -417,6 +418,7 @@
   },
   {
    "id": "deepseek-v4-flash@gw/orca",
+   "并发上限": null,
    "模型": "deepseek-v4-flash",
    "族": "pi",
    "供应商": "gw",
@@ -431,6 +433,7 @@
   },
   {
    "id": "gpt-5.6-sol@pqapi/orca",
+   "并发上限": 2,
    "模型": "gpt-5.6-sol",
    "族": "codex",
    "供应商": "pqapi",
@@ -444,6 +447,7 @@
   },
   {
    "id": "gpt-5.6-luna@gw/orca",
+   "并发上限": null,
    "模型": "gpt-5.6-luna",
    "族": "pi",
    "供应商": "gw",
@@ -458,6 +462,7 @@
   },
   {
    "id": "glm-5.2@gw/orca",
+   "并发上限": null,
    "模型": "glm-5.2",
    "族": "pi",
    "供应商": "gw",
@@ -472,6 +477,7 @@
   },
   {
    "id": "gemini-3.7-flash@gw/orca",
+   "并发上限": null,
    "模型": "gemini-3.7-flash",
    "族": "pi",
    "供应商": "gw",
@@ -486,6 +492,7 @@
   },
   {
    "id": "kimi-k3@gw/orca",
+   "并发上限": null,
    "模型": "kimi-k3",
    "族": "pi",
    "供应商": "gw",
@@ -500,6 +507,7 @@
   },
   {
    "id": "composer-2.5@gw/orca",
+   "并发上限": null,
    "模型": "composer-2.5",
    "族": "pi",
    "供应商": "gw",
@@ -514,6 +522,7 @@
   },
   {
    "id": "claude-fable-5@reclaude/terminal",
+   "并发上限": "不限",
    "模型": "claude-fable-5",
    "族": "claude",
    "供应商": "reclaude",
@@ -543,6 +552,7 @@
   },
   {
    "id": "claude-opus-5@mirasim/mirasim",
+   "并发上限": 5,
    "模型": "claude-opus-5",
    "族": "claude",
    "供应商": "mirasim",
@@ -564,6 +574,7 @@
   },
   {
    "id": "claude-opus-5@reclaude/terminal",
+   "并发上限": "不限",
    "模型": "claude-opus-5",
    "族": "claude",
    "供应商": "reclaude",
@@ -578,6 +589,7 @@
   },
   {
    "id": "gpt-5.6-luna@mirasim/mirasim",
+   "并发上限": 5,
    "模型": "gpt-5.6-luna",
    "族": "codex",
    "供应商": "mirasim",
@@ -588,6 +600,7 @@
   },
   {
    "id": "gpt-5.6-sol@mirasim/mirasim",
+   "并发上限": 5,
    "模型": "gpt-5.6-sol",
    "族": "codex",
    "供应商": "mirasim",
@@ -598,6 +611,7 @@
   },
   {
    "id": "gpt-6-astra@mirasim/mirasim",
+   "并发上限": 5,
    "模型": "gpt-6-astra",
    "族": "codex",
    "供应商": "mirasim",
@@ -608,6 +622,7 @@
   },
   {
    "id": "claude-fable-5@mirasim/mirasim",
+   "并发上限": 5,
    "模型": "claude-fable-5",
    "族": "claude",
    "供应商": "mirasim",
