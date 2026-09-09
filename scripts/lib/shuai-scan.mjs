@@ -132,19 +132,25 @@ function rollupFromGraphqlCommit(commitNode) {
 export function normalizeGithubGraphql(data) {
   const repo = data?.repository;
   if (!repo) return { ok: false, error: 'GraphQL 没返回 repository——没扫成' };
-  const issues = (repo.issues?.nodes || []).map((i) => ({
-    number: i.number,
-    title: i.title,
-    // body：待拍板过滤复用 ask-gate，正文里的「依据：花钱」必须带到发卡口（#1103 返工）。
-    // 取不到当空串，不许把字段整个丢掉——下游会只剩标题，红线命中全变成 auto。
-    body: i.body || '',
-    updatedAt: i.updatedAt,
-    labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
-    // #966：派工队列跳过「将来某版」。缺字段当没挂档（旧夹具 / 没查到），不当成推迟。
-    milestone: i.milestone && i.milestone.title != null
-      ? { title: String(i.milestone.title) }
-      : null,
-  }));
+  const issues = (repo.issues?.nodes || []).map((i) => {
+    const row = {
+      number: i.number,
+      title: i.title,
+      updatedAt: i.updatedAt,
+      labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
+      // #966：派工队列跳过「将来某版」。缺字段当没挂档（旧夹具 / 没查到），不当成推迟。
+      milestone: i.milestone && i.milestone.title != null
+        ? { title: String(i.milestone.title) }
+        : null,
+    };
+    // #1094 / #1103：human_holds 闸和待拍板过滤都要读正文。
+    // 键必须在——缺键是「没查成」（#1094 闸走 manual），空串是「查过、正文空」。
+    // 有键就必须留下，不许整字段丢掉（#1103：下游只剩标题，红线命中会漏）。
+    if (Object.prototype.hasOwnProperty.call(i, 'body')) {
+      row.body = i.body == null ? '' : String(i.body);
+    }
+    return row;
+  });
   const prs = (repo.pullRequests?.nodes || []).map((p) => {
     const commit = p.commits?.nodes?.[0]?.commit;
     const statusCheckRollup = rollupFromGraphqlCommit(commit);
