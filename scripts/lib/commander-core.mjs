@@ -35,6 +35,8 @@ import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
   reviewPendingSourceOf,
 } from './dispatch/review-pending.mjs';
 import { resolveMergeable } from './dispatch/git.mjs';
@@ -79,6 +81,10 @@ export function attachReviewerWhy(ticket) {
   }
   if (source === REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW) {
     return `PR #${pr} 交卷可合但没人审，按设计叫审官`;
+  }
+  if (source === REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF
+      || source === REVIEW_PENDING_SOURCE_WORKER_DONE) {
+    return `PR #${pr} 工人首审已入队，按在役审官数拉取`;
   }
   return `PR #${pr} 复审票来源没查成`;
 }
@@ -484,9 +490,10 @@ function collectCandidates(situation) {
   // 复审票的数量本轮一开始就知道，所以先把名额留出来，剩下的才给新派单；
   // 返工与复审共用剩余额度，谁先跑到谁先拿。
   let slotsLeft = dispatchSlots;
-  // #1147：收口泵跟复审票一样是收尾，名额先扣，新活只用剩下的。
-  // 预留只数「真能派出」的 draft：缺标签 / 模型派不出只 escalate、不 takeSlot。
-  // 按超龄就扣名额会把 slots=1 吃光，本轮既泵不成也派不出新单。
+  // #1125：drain 自己按在役数拉，decide 每轮只产一条 attach-reviewer。
+  // 预留按票数会把新活全挤掉——队列里 18 张时 finishReserve=18，新活永远派不出。
+  // 有票就留 1 个名额喊一次 drain，剩下的给新活。
+  // #1147：收口泵也是收尾。预留只数「真能派出」的 draft：缺标签 / 模型派不出只 escalate、不 takeSlot。
   const stalledHoursMs = Number(policy.stalledDraftHours) * 3600 * 1000;
   const maxPumps = Number(policy.stalledDraftMaxPumps) || 2;
   const sessionsForLive = sessionListForLiveness(situation);
@@ -540,7 +547,8 @@ function collectCandidates(situation) {
     if (!draftDueForPump(pr)) return false;
     return resolvePumpDraftDispatch(pr).ok;
   }).length;
-  const finishReserve = Math.min(slotsLeft, (rp.items || []).length + stalledPumpCount);
+  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  const finishReserve = Math.min(slotsLeft, reviewReserve + stalledPumpCount);
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
   const takeSlot = () => {
@@ -753,6 +761,11 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(it.pr));
       continue;
     }
+    // #1125：执行侧 attach-reviewer 调的是不带 --pr 的 review-pending-drain，
+    // drain 自己按在役数拉、拉满即停。所以 decide 每轮只产**一条** attach-reviewer——
+    // 产 N 条就会连跑 N 次 drain，每次都看到「还没满」再拉一张，把容量闸冲掉。
+    // 账仍按这张代表票的 pr@head 记（validateRetryDrain 的键），不是按整队。
+    if (out.some((a) => a.kind === 'attach-reviewer')) continue;
     // 起审官也是起会话，也吃同一份 CPU 和内存——2026-09-06 实测 137 个会话里审官占 53 个。
     // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
     if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }

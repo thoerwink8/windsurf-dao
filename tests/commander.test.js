@@ -211,6 +211,31 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
     assert.match(a[0].why, /来源没查成/, '旧夹具没带来源，不许倒向任一种');
   });
+
+  it('#1125 队列多张票 → 每轮只产一条 attach-reviewer（drain 自己按在役数拉）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: {
+        scanned: true, issues: [],
+        prs: [
+          { number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'a' },
+          { number: 921, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'b' },
+          { number: 922, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'c' },
+        ],
+      },
+      reviewPending: {
+        scanned: true,
+        items: [
+          { pr: 920, reviewer: 'gpt-5.6-luna', worker: 'wt-a', head: 'a', source: 'worker-done-handoff' },
+          { pr: 921, reviewer: 'gpt-5.6-luna', worker: 'wt-b', head: 'b', source: 'worker-done-handoff' },
+          { pr: 922, reviewer: 'gpt-5.6-luna', worker: 'wt-c', head: 'c', source: 'worker-done-handoff' },
+        ],
+      },
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1, '产 N 条就会连跑 N 次 drain，把容量闸冲掉');
+    assert.equal(a[0].pr, 920, '代表票取队列里第一张活票');
+  });
 });
 
 describe('decide：报帅停手（永不自动）', () => {
@@ -1813,6 +1838,18 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.ok(!/失败/.test(a[0].why), '指挥官自己写的票不许说失败 → ' + a[0].why);
   });
 
+  it('工人首审入队票 → why 说按在役审官数拉取，不许说失败', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-w',
+      source: 'worker-done-handoff',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /工人首审已入队，按在役审官数拉取/);
+    assert.ok(!/失败/.test(a[0].why), '按设计入队不许说失败 → ' + a[0].why);
+  });
+
   it('没有来源字段的旧票 → why 说来源没查成，不许倒向任一种', async () => {
     const { decide, attachReviewerWhy } = await CORE;
     const r = decide(sit({
@@ -1823,6 +1860,7 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.match(a[0].why, /来源没查成/);
     assert.ok(!/工人起审官失败/.test(a[0].why), '旧票不许当成工人失败');
     assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
+    assert.ok(!/工人首审已入队/.test(a[0].why), '旧票不许当成首审入队');
     assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
     assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
   });

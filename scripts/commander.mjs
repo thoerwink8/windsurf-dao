@@ -58,7 +58,7 @@ import {
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
@@ -646,8 +646,14 @@ function execAction(action, { state, dryRun, log }) {
       if (!r.ok) return r;
       return awaitDispatchResult(r.out, { say });
     }
-    case 'attach-reviewer':
-      return drainReviewPending(action, { state, dryRun, say });
+    case 'attach-reviewer': {
+      // 走 blessed 路径 review-pending-drain。#1125 起 drain 自己按在役审官数拉，拉满即停，不是一次清完。
+      // 不带 --pr：--pr 只隔离毒票，仍过容量闸；带了也不会绕上限。不过上限只认 --force（人手）。
+      const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      recordDrainAttempt(state, action, drainPayloadOf(r));
+      return r;
+    }
     case 'stop-session': {
       if (!action.sessionKey) {
         say('  stop-session 没有 sessionKey');
@@ -802,11 +808,8 @@ function execRetryDrain(action, { state, dryRun, say }) {
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
   const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
-  state.drainLedger = state.drainLedger || {};
-  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
-  state.drainLedger[planned.stateKey] = {
-    at: nowIso(), pr: planned.pr, tries: planned.tries,
-  };
+  // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
 }
 
@@ -1268,21 +1271,37 @@ function requestRereview(action, { state, dryRun, say }) {
   return drainReviewPending(action, { state, dryRun, say });
 }
 
-/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。 */
+/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
+ *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
 function drainReviewPending(action, { state, dryRun, say }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
-  // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
-  if (action.pr != null) {
-    state.drainLedger = state.drainLedger || {};
-    const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
-    const prev = state.drainLedger[key];
-    state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
-  }
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+function drainPayloadOf(runResult) {
+  if (!runResult) return { ok: false };
+  if (runResult.dryRun === true) return { ok: true, dryRun: true };
+  const text = String(runResult.out || '');
+  const start = text.lastIndexOf('{');
+  if (start < 0) return { ok: runResult.ok === true };
+  try { return JSON.parse(text.slice(start)); }
+  catch { return { ok: runResult.ok === true }; }
+}
+
+function recordDrainAttempt(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  const applied = applyDrainLedger({
+    ledger: state.drainLedger || {},
+    pr: action.pr,
+    head: ticketHeadOid(action.head),
+    payload,
+    nowIso: nowIso(),
+  });
+  if (applied.wrote) state.drainLedger = applied.ledger;
 }
 
 function findDaoTree(issue, pr) {
