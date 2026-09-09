@@ -55,6 +55,8 @@ async function runtimeWith(wire, over = {}) {
     homeDir: '/srv',
     connect: async () => wire,
     now: () => T0,
+    // 契约测试不测占用锁；默认空操作，避免往 /srv/.dao 写锁。占用锁自己有专项。
+    claimOccupancy: () => ({ ok: true, release() {} }),
     ...over,
   });
 }
@@ -611,6 +613,67 @@ describe('问答与工作区', () => {
       assert.match(err.message, /没查成/);
       return true;
     });
+  });
+
+  it('两个并发 startSession 抢同一棵树：第二个拿不到占用声明，一帧 prompt 都不发', async () => {
+    const wireA = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-a' }] : []));
+    const wireB = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-b' }] : []));
+    let held = false;
+    let claimed;
+    const claimedP = new Promise((r) => { claimed = r; });
+    let releaseA;
+    const holdA = new Promise((r) => { releaseA = r; });
+    const claimOccupancy = () => {
+      if (held) return { ok: false, busy: true, error: '已被占用', reason: 'lease-held' };
+      held = true;
+      claimed();
+      return { ok: true, release() { held = false; } };
+    };
+    const { createRuntime } = await import(LIB);
+    const rtA = createRuntime({
+      homeDir: '/srv',
+      connect: async () => { await holdA; return wireA; },
+      now: () => T0,
+      leaseCheck: () => ({ ok: true, verdict: 'free' }),
+      claimOccupancy,
+    });
+    const rtB = createRuntime({
+      homeDir: '/srv',
+      connect: async () => wireB,
+      now: () => T0,
+      leaseCheck: () => ({ ok: true, verdict: 'free' }),
+      claimOccupancy,
+    });
+    const pA = rtA.startSession({ agent: 'claude', workdir: '/srv/work', prompt: 'A' });
+    await claimedP; // A 已声明占用，还卡在 open() 之前
+    await assert.rejects(
+      () => rtB.startSession({ agent: 'claude', workdir: '/srv/work', prompt: 'B' }),
+      err => {
+        assert.strictEqual(err.name, 'MirasimRejectedError');
+        assert.strictEqual(err.detail.busy, true);
+        return true;
+      },
+    );
+    assert.deepStrictEqual(wireB.sent.filter(f => f.type === 'prompt'), [], '第二个不许发 prompt');
+    releaseA();
+    const a = await pA;
+    assert.strictEqual(a.taskId, 't-a');
+  });
+
+  it('起会话失败也释放占用声明', async () => {
+    let released = 0;
+    const wire = fakeWire(goodState({ version: '0.0.283' }));
+    const rt = await runtimeWith(wire, {
+      claimOccupancy: () => ({ ok: true, release() { released += 1; } }),
+    });
+    await assert.rejects(
+      () => rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: 'x' }),
+      /版本不符/,
+    );
+    assert.strictEqual(released, 1, '失败路径必须释放');
+    assert.deepStrictEqual(wire.sent.filter(f => f.type === 'prompt'), []);
   });
 });
 

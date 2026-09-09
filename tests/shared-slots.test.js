@@ -116,6 +116,23 @@ describe('收尾先于开新', () => {
   });
 });
 
+describe('死票不占会话名额（审官红③）', () => {
+  it('slots=1、队列只有一张已合并死票、另有一张 ready → reap-ticket 并且派那张新活', async () => {
+    const { decide } = await CORE;
+    // situation() 默认会按 ticket 造开放 PR。这里把 101 从开放列表拿掉，模拟已合并。
+    const s = situation({
+      issues: [readyIssue(201)],
+      ticket: [{ pr: 101 }],
+      slots: 1,
+    });
+    s.github.prs = []; // 已合并：开放列表里没有 101
+    const got = decide(s);
+    assert.equal(kinds(got, 'reap-ticket').length, 1, '死票要回收');
+    assert.equal(kinds(got, 'attach-reviewer').length, 0, '死票不许起审官');
+    assert.equal(kinds(got, 'dispatch').length, 1, '死票清理不占名额，新活该派');
+  });
+});
+
 describe('旧夹具兼容：没给 admission 就不限张', () => {
   it('admission 缺席 → 照旧全派（不当成 slots=0）', async () => {
     const { decide } = await CORE;
