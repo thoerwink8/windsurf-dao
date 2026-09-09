@@ -33,6 +33,7 @@
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
+| D | ~/.codex/.tmp | codex 每次 git 操作留下的临时工作目录，只增不减。2026-09-10 实测攒到 11109 个（当天只占 65 个），拖慢同盘一切文件系统遍历。board-gc 的孤儿清扫按时效回收，判据见 `scripts/lib/session-dir-gc.mjs` 的 `planOrphanGc`。运行态，不进 git |
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |

@@ -722,6 +722,11 @@
         "status": "listed",
         "checkedAt": "2026-09-09T13:56:31.764Z",
         "sourceId": "cursor-models"
+      },
+      "implicitSelection": {
+        "authorized": true,
+        "fallback": "none",
+        "reason": "2026-09-10 用户拍板选路一：执行目录接管选路。订阅制账号，隐式选中不会跨到按量计费路径；起不来就失败，不静默换腿。"
       }
     },
     {
@@ -1150,7 +1155,12 @@
         "checkedAt": "2026-09-09T14:40:44.592Z",
         "sourceId": "devin-models"
       },
-      "allowanceUse": "windsurf-devin-shared"
+      "allowanceUse": "windsurf-devin-shared",
+      "implicitSelection": {
+        "authorized": true,
+        "fallback": "none",
+        "reason": "2026-09-10 用户拍板选路一：执行目录接管选路。订阅制账号，隐式选中不会跨到按量计费路径；起不来就失败，不静默换腿。"
+      }
     },
     {
       "id": "deepseek-native-flash",
