@@ -54,6 +54,7 @@ query($owner: String!, $name: String!) {
         commits(last: 1) {
           nodes {
             commit {
+              committedDate
               statusCheckRollup {
                 contexts(first: 40) {
                   nodes {
@@ -157,6 +158,10 @@ export function normalizeGithubGraphql(data) {
       // headRefOid：判「审官那条红/绿是不是打在当前 head 上」的必需字段（#911 起）。
       // 取不到就是 null，判据侧按「没查成」走，绝不当成「head 变了」。
       headRefOid: typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : null,
+      // #1147：draft 收口泵看「上次提交」，不是 PR.updatedAt（评论也会刷新 updatedAt）。
+      // 取不到就是 null，decide 按「没查成」不泵，绝不当成「超龄」。
+      lastCommittedAt: typeof commit?.committedDate === 'string' && commit.committedDate
+        ? commit.committedDate : null,
       // #1000：认输是 PR 属性。与 issue 同形：节点缺就空数组（GraphQL 查成时字段总会在）。
       labels: (p.labels?.nodes || []).map((l) => ({ name: l.name })),
       body: p.body || '',
