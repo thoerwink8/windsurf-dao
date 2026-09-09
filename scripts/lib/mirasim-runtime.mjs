@@ -35,7 +35,7 @@ import os from 'node:os';
 import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 
 /** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
-export const PINNED_VERSION = '0.0.282';
+export const PINNED_VERSION = '0.0.307';
 export const DEFAULT_PORT = 4316;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
