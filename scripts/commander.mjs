@@ -51,7 +51,7 @@ import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
-import { buildChannelCaps, channelKeyOf } from './lib/channel-concurrency.mjs';
+import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor, loadBreaker } from './lib/provider-health.mjs';
 import {
@@ -380,43 +380,17 @@ function scanAdmission({ worktrees, policy } = {}) {
 
 /**
  * 渠道并发在途快照（#1145）。**在途来源与租约闸同源**（checkInFlight 的 /proc 扫描），
- * 树→渠道按 issue #1145 规定的链走：会话 cwd 所在树 → 派工账本（desiredJobs）model → 路由表落地 → 渠道。
+ * 树→渠道走 channel-concurrency 的共用解析器（树 → 派工账本 model → 腿表渠道）——
+ * 决策层与门里必须用同一把尺，各造一份会让分子分母对着不同的格子判满。
  *
- * 归不到渠道的树进 unattributed：不硬塞进某个渠道（塞错会误拦），仍受机器总闸（admission）约束。
  * checkInFlight 没查成 → ok:false，调用方把渠道在途数当没查成（本闸这轮不据它放大准入）。
  */
-function scanChannelInFlight({ models } = {}) {
+function scanChannelInFlight({ models, legs, caps } = {}) {
   const flight = checkInFlight();
   if (!flight.ok) return { ok: false, unscanned: true, error: flight.error, counts: {}, unattributed: [] };
   const desired = scanDesiredJobs();
-  const byIssue = new Map();
-  const byPr = new Map();
-  for (const j of desired.items || []) {
-    if (!j || !j.model) continue;
-    if (j.issue != null) byIssue.set(String(j.issue), String(j.model));
-    if (j.pr != null) byPr.set(String(j.pr), String(j.model));
-  }
-  const landingOf = (id) => {
-    const m = (models || []).find((r) => r && String(r.id) === String(id));
-    return m && m.provider ? { provider: m.provider, cli_model: m.cli_model } : null;
-  };
-  const counts = {};
-  const unattributed = [];
-  for (const tree of flight.trees || []) {
-    const branch = String(tree).replace(/\/+$/, '').split('/').pop() || '';
-    // 审官树 dao-review-pr-<n> → 按 PR 找审官 job；工人树 dao-<n> → 按 issue 找工人 job。
-    let model = null;
-    const rev = branch.match(/review-pr-(\d+)/);
-    if (rev) model = byPr.get(rev[1]) || null;
-    else {
-      const m = branch.match(/(\d+)/);
-      if (m) model = byIssue.get(m[1]) || byPr.get(m[1]) || null;
-    }
-    const ch = model ? channelKeyOf(landingOf(model)) : null;
-    if (!ch) { unattributed.push(tree); continue; }
-    counts[ch] = (counts[ch] || 0) + 1;
-  }
-  return { ok: true, counts, unattributed };
+  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps });
+  return countInFlightByChannel(flight.trees || [], resolver);
 }
 
 function scanReviewPending() {
@@ -560,6 +534,7 @@ function buildSituation({ state } = {}) {
   let healthRedModels = [];
   let defaultWorkerModel = null;
   let channelCaps = null;
+  let routingLegs = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
@@ -569,7 +544,8 @@ function buildSituation({ state } = {}) {
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
-    channelCaps = buildChannelCaps(raw['腿']); // #1145：渠道上限表（路由表腿节的并发上限字段）
+    routingLegs = raw['腿'];
+    channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）
   } catch {
     routingModels = null;
     routingModelRecords = null;
@@ -578,11 +554,14 @@ function buildSituation({ state } = {}) {
     healthRedModels = [];
     defaultWorkerModel = null;
     channelCaps = null;
+    routingLegs = null;
   }
   const askPolicy = loadPolicy({ root: ROOT });
   const breakerIngest = ingestBreakerSignals();
   // #1145：渠道并发第二道闸的三份快照。缺任一 decide 侧闸 inert（不改既有派工路）。
-  const channelInFlight = channelCaps ? scanChannelInFlight({ models: routingModelRecords }) : null;
+  const channelInFlight = channelCaps && channelCaps.ok
+    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
+    : null;
   const breaker = loadBreaker();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);

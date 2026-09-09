@@ -794,10 +794,18 @@ export function classifyReviewerSpawnError(error) {
   if (/already has an active dispatch/i.test(t)) {
     return { kind: 'active-dispatch', label: '审官终端已有在途派单' };
   }
+  // #1145：渠道满员是**背压**，与 depth 限制 / 在途派单同一类「已知拒派」——入队交指挥官轮转，
+  // 不许当「没查成」去烧重试预算（那会把「这轮轮不到」熬成 mark-exhausted 认输）。
+  // 认字样而不认对象：这条错误串是 mirasim 门里 CHANNEL_FULL_REASON 那一抛的 message。
+  if (/渠道满员|channel-full/i.test(t)) {
+    return { kind: 'channel-full', label: '渠道满员（背压，排队下轮）' };
+  }
   return { kind: 'unscanned', label: '没查成' };
 }
 
-const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch']);
+// depth 限制 / 在途派单 / 渠道满员：都是**已知拒派**，写进复审待办交指挥官下一轮，不算 fail。
+// 「没查成」不在这里——它必须停手报帅（拿不准不降级）。
+const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch', 'channel-full']);
 
 /** 从 Orca「already has an active dispatch (ctx_…)」里抠已有 id。抠不到 = 没查成，不许猜。 */
 export function parseActiveDispatchId(error) {

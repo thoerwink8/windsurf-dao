@@ -31,7 +31,15 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import {
+  checkChannelCapacity, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
+} from './channel-concurrency.mjs';
+import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
+import { loadBreaker } from './provider-health.mjs';
+import { ensureLocalLedger } from './ledger-home.mjs';
+import { readLedgerEvents } from './ledger-query.mjs';
+import { desiredFromEvents } from './session-reconcile.mjs';
 
 /** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
 export const PINNED_VERSION = '0.0.282';
@@ -568,6 +576,39 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 
 // ── 五个动词 ─────────────────────────────────────────────────────────────────
 
+/**
+ * 渠道并发闸的**取数薄壳**（#1145）。判定全在 lib/channel-concurrency.mjs 的纯函数里，
+ * 这里只负责把三份快照读出来：
+ *   · 路由表「腿」节 → 渠道上限（并发上限字段）
+ *   · /proc 在途树 → 渠道在途数（**与租约闸同源**：同一个 checkInFlight，不复用 mirasim 自己的记账）
+ *   · 派工账本未结 job → 树归哪个模型（树→模型→渠道的那一跳）
+ *   · 熔断表 → 冷却中的渠道等同满员
+ * 任一读不出来 ⇒ checkChannelCapacity 返回 ok:false，门里 fail-close 拒起。
+ */
+function defaultChannelAdmit({ model, now } = {}) {
+  return checkChannelCapacity({
+    model,
+    now: now ?? Date.now(),
+    io: {
+      loadRouting: () => loadRoutingJsonRaw(),
+      loadModels: (raw) => modelsFromJson(raw),
+      checkInFlight: () => checkInFlight(),
+      loadBreaker: () => loadBreaker(),
+      loadJobs: () => {
+        // 账本读不出来只是「这棵树归不到渠道」（进 unattributed），不是整闸没查成——
+        // 所以这里吞掉异常回空数组，而不是让整道闸 fail-close 把所有会话拦死。
+        try {
+          const dir = ensureLocalLedger({}).dir;
+          const listed = readLedgerEvents(dir);
+          if (listed.unscanned) return [];
+          const desired = desiredFromEvents(listed.events);
+          return desired.items || [];
+        } catch { return []; }
+      },
+    },
+  });
+}
+
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
   const port = Number(opts.port || process.env.MIRASIM_PORT || DEFAULT_PORT);
@@ -578,6 +619,10 @@ export function createRuntime(opts = {}) {
   const now = opts.now || (() => Date.now());
   // 租约判据可注入：单测给假的，生产读盘。默认必须是真闸——不给就不检查等于没有闸。
   const leaseCheck = opts.leaseCheck || checkTreeLease;
+  // 渠道并发判据同理（#1145）。默认真闸，取数在 defaultChannelAdmit（读路由表 / /proc / 账本）。
+  const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
+  // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
+  const channelFailed = opts.recordChannelFailure || recordChannelFailure;
   const t = {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
@@ -687,6 +732,29 @@ export function createRuntime(opts = {}) {
       });
     }
 
+    // 渠道并发闸（#1145）：挨着租约闸，同样装在门里、同样排在 open() 前面——
+    // 满员时连 ws 都不开。装在门里的理由与租约闸一字不差：四个调用点
+    // （dao dispatch / dao start / 审官 create / 推一把）全从这道门过，绕不开；
+    // 审官起会话因此自动受闸，不用动审官选型那条核心路径。
+    //
+    // 渠道并发是**机器负载准入（admission）之上叠加的第二道闸**，不替代它：
+    // 前者管这台机器还塞不塞得下，后者管上游那条渠道还收不收。
+    const chan = channelAdmit({ model, now: now() });
+    if (!chan.ok) {
+      // 没查成 ⇒ 拒起（fail-close），判据同租约闸：放行的代价是把上游打到 429 雪崩，
+      // 拒起的代价是这轮不派、下轮再来，而且报得出来。
+      throw new MirasimUnavailableError(`渠道并发没查成，拒起会话：${chan.error}`, { workdir, model: model || null });
+    }
+    if (chan.verdict === 'full') {
+      // 满员/熔断冷却中都是**背压**，与租约被占同一类：必须带 busy + reason，
+      // 否则指挥官会把「这轮轮不到这条渠道」当派工失败去开待拍板噪音单。
+      throw new MirasimRejectedError(`渠道满员，拒起会话：${chan.why}`, {
+        workdir, model: model || null, busy: true, reason: CHANNEL_FULL_REASON,
+        channel: chan.channel || null, cap: chan.cap, inFlight: chan.inFlight,
+        channelReason: chan.reason || null,
+      });
+    }
+
     const wire = await open();
     try {
       // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
@@ -705,7 +773,25 @@ export function createRuntime(opts = {}) {
       const verdict = judgeAccepted(msg);
       if (!verdict.ok) {
         if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
-        if (verdict.rejected) throw new MirasimRejectedError(verdict.errors.join('；'));
+        if (verdict.rejected) {
+          // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
+          // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
+          // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
+          // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
+          const hit = isCapacityError(verdict.errors.join('；'));
+          if (hit.hit && chan.target) {
+            try {
+              channelFailed({
+                target: chan.target, now: now(),
+                why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
+              });
+            } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
+          }
+          throw new MirasimRejectedError(verdict.errors.join('；'), {
+            workdir, model: model || null,
+            ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
+          });
+        }
         throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
       }
       return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
