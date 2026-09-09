@@ -24,7 +24,7 @@ export function acquireExecutionFence({stateDir} = {}) {
     if (!stat.isFile()) throw new Error('execution admission lock is not a regular file');
     if ((stat.mode & 0o777) !== 0o644 && (stat.uid === process.getuid() || process.getuid() === 0)) fs.fchmodSync(fd,0o644);
     const result = spawnSync('/usr/bin/flock',['-x','-n','3'],{
-      stdio:['ignore','pipe','pipe',fd],timeout:2000,env:{PATH:'/usr/bin:/bin'},
+      stdio:['ignore','pipe','pipe',fd],timeout:2000,env:{PATH:'/usr/bin:/bin'},windowsHide:true,
     });
     if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error('execution admission flock unavailable');
     if (result.status === 1) return {ok:false,busy:true,reason:'admission-held',path:lockPath};

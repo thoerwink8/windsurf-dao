@@ -19,7 +19,7 @@ export function main(argv = process.argv.slice(2)) {
     return 0;
   }
   if (argv.length || process.getuid?.() !== 0) throw new Error('root_export_requires_installed_service');
-  const readerGid = Number(execFileSync('/usr/bin/id', ['-g', 'orca'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).trim());
+  const readerGid = Number(execFileSync('/usr/bin/id', ['-g', 'orca'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, windowsHide: true }).trim());
   const result = exportRootMirasim({ readerGid });
   console.log(JSON.stringify(result));
   // Partial bounded scans publish a manifest with complete=false. The orca
