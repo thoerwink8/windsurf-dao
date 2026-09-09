@@ -23,7 +23,19 @@
  * 漏报比误报危险：闸判绿而越线的链就在眼前。所以这里只认「数字后面不是数字」，
  * 后面是什么都不管。
  */
-export const CHAIN_ANCHOR_RE = /\[chain:([a-z0-9][a-z0-9-]*)#(\d{1,2})(?!\d)/gi;
+export const CHAIN_ANCHOR_RE = /\[chain:([a-z0-9][a-z0-9-]*)#(\d{1,2})(?!\d)([^\]]*)/gi;
+
+/**
+ * 后缀里写了「换方向」或「整层删除」的锚，不算越线。
+ *
+ * grill-ai 的原文判准：「上一层的机制被整段删掉了才算换方向」，而换方向就该层号归零
+ * 重开一条链。2026-09-10 首版闸只看数字不看后缀，把 `agent-stall#7·整层删除` 和
+ * `dispatch-overinvest#5·换方向` 判成越线——它们恰恰是**已经做对了**那件事的自证，
+ * 后缀就是停手重推的记录。闸去骂一个已经改正的动作，正是「随机误报的闸最后一定被关掉」。
+ *
+ * 只认这两个词：别的备注（日期、单号）不豁免，否则加一句话就能绕过闸。
+ */
+export const REDIRECTED_RE = /换方向|整层删除/;
 
 /**
  * 把 commit 标题行解析成 slug → 最大层号。
@@ -37,6 +49,8 @@ export function maxDepthBySlug(lines) {
       const slug = m[1].toLowerCase();
       const depth = Number(m[2]);
       if (!Number.isFinite(depth)) continue;
+      // 换方向／整层删除 = 那一层已经停手从零重推过，不该再被当成「越线未处理」。
+      if (REDIRECTED_RE.test(m[3] || '')) { if (!out.has(slug)) out.set(slug, 0); continue; }
       if (!out.has(slug) || out.get(slug) < depth) out.set(slug, depth);
     }
   }

@@ -20,6 +20,10 @@ Type=oneshot
 # 升级要改 /home/orca/mirasim-server 与 systemd 单元，必须 root；升级器内部再降权到 orca 跑服务。
 User=root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 自动化单元一律卸个人 GitHub 凭据（#792）：身份只能由网关给，不许捡环境里的。
+# 两条缺一不可——UnsetEnvironment 挡环境变量，GH_CONFIG_DIR 挡 ~/.config/gh 里的登录态。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
 ExecStart=/usr/bin/node /usr/local/lib/mirasim-managed-update/mirasim-managed-update.mjs
 # 排空在途会话可能要等一会儿，给够时间；超时不算失败升级，下一轮会接续未完成的事务。
 TimeoutStartSec=1800

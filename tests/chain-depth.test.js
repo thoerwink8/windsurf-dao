@@ -93,12 +93,35 @@ test('层号超两位不认——避免把版本号之类误当层号', () => {
   assert.equal(m.size, 0);
 });
 
-test('层号后带中文备注的锚也要认——真实仓库里 dispatch-overinvest#5·换方向 曾整条逃过检查', () => {
-  const m = maxDepthBySlug(['d5d8011a [cc] test(inflight): 夹具 [chain:dispatch-overinvest#5·换方向]']);
-  assert.equal(m.get('dispatch-overinvest'), 5);
+test('层号后带备注的锚也要认出层号——第一版正则要求数字紧贴 ] 曾整条漏掉', () => {
+  const m = maxDepthBySlug(['d5d8011a [cc] test(inflight): 夹具 [chain:some-chain#5·见 #123]']);
+  assert.equal(m.get('some-chain'), 5);
 });
 
-test('带备注的越线锚判红，不再漏报', () => {
-  const v = classifyChainDepth({ lines: ['a1 [chain:dispatch-overinvest#5·换方向]'] });
+test('带普通备注的越线锚判红，不再漏报', () => {
+  const v = classifyChainDepth({ lines: ['a1 [chain:some-chain#5·见 #123]'] });
   assert.equal(v.state, 'red');
+});
+
+test('后缀写「整层删除」的锚不算越线——它是已经停手重推的自证', () => {
+  const v = classifyChainDepth({ lines: ['a1 [chain:agent-stall#7·整层删除]'] });
+  assert.equal(v.state, 'ok');
+});
+
+test('后缀写「换方向」的锚不算越线', () => {
+  const v = classifyChainDepth({ lines: ['a1 [chain:dispatch-overinvest#5·换方向]'] });
+  assert.equal(v.state, 'ok');
+});
+
+test('别的备注不豁免——否则加一句话就能绕过闸', () => {
+  const v = classifyChainDepth({ lines: ['a1 [chain:foo#4·2026-09-10 见 #123]'] });
+  assert.equal(v.state, 'red');
+});
+
+test('同一链既有越线层又有换方向层：换方向的那次不把越线洗白', () => {
+  const v = classifyChainDepth({ lines: [
+    'a1 [chain:foo#4]',
+    'a2 [chain:foo#5·换方向]',
+  ] });
+  assert.equal(v.state, 'red', '第 4 层没重推过，仍要报');
 });
