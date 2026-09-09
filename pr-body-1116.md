@@ -23,7 +23,7 @@
 
 本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js` → 714 绿。
 
-`node scripts/dao-check.mjs`：云 VM `~/.claude/skills` 不是目录（AGENTS.md 写明的环境项，不是本单回归）。上一轮 CI 红是收件箱 5 条未处置——已落成 #1164/#1165/#1166/#1167/#1168，观察文件加「处置：#N」。
+`node scripts/dao-check.mjs`：好的（199 项；3 条可见西瓜，13 项 SKIP 快档，无本单回归）。
 
 ## 进展
 
@@ -42,6 +42,7 @@
 - [x] 本轮跟上 origin/master（patrol 盘点探针观察：orca 读不了 journal）；冲突 0
 - [x] 本轮：收件箱 5 条 patrol 观察落成 #1164–#1168，观察文件加「处置：#N」（CI check 被 inbox 闸打红，不是本单实现回归）
 - [x] 本轮：指挥官选型也只读 PR label（`reviewerLabelFor` / 返工 / 复审补标打到 PR）。原先 decide 仍从署名 issue 反推审官——正是 #1096「不猜审官」那个出口。帮助文案「自读署名 issue」一并改掉。
+- [x] 本轮跟上 origin/master（inbox 6 条巡检观测补处置行，收件箱闸转绿）；冲突 0
 
 ## 机制判定
 
