@@ -26,6 +26,7 @@ function situation({ issues = [], ticket = [], slots = null } = {}) {
   return {
     github: { scanned: true, issues, prs: ticket.map((t) => ({ number: t.pr, title: `PR ${t.pr}`, isDraft: false })) },
     orca: { scanned: true, worktrees: [] },
+    trees: { scanned: true, worktrees: [] },
     reviewPending: { scanned: true, items: ticket },
     prReviews: { scanned: true, byPr: {} },
     stall: { scanned: true, strikes: {} },
@@ -51,7 +52,7 @@ describe('审官也吃名额（本次修的核心）', () => {
       ticket: [{ pr: 101 }, { pr: 102 }, { pr: 103 }],
       slots: 2,
     }));
-    assert.equal(kinds(r, 'attach-reviewer').length, 2, '审官原来完全不限张，这条就是修它');
+    assert.equal(kinds(r, 'attach-reviewer').length, 1, '#1125 每轮只喊一次 drain，闸在拉取侧');
   });
 
   it('slots=0 → 一个审官都不起', async () => {
@@ -90,8 +91,8 @@ describe('收尾先于开新', () => {
       ticket: [{ pr: 101 }, { pr: 102 }],
       slots: 2,
     }));
-    assert.equal(kinds(r, 'attach-reviewer').length, 2, '收尾要先拿到名额');
-    assert.equal(kinds(r, 'dispatch').length, 0, '预算被收尾占满，新活排队下轮');
+    assert.equal(kinds(r, 'attach-reviewer').length, 1, '#1125 收尾每轮只留 1 个名额喊 drain');
+    assert.equal(kinds(r, 'dispatch').length, 1, 'slots=2 减去 1 张收尾，剩 1 个给新活');
   });
 
   it('预算有富余时，收尾之外的名额才轮到新活', async () => {
@@ -123,7 +124,7 @@ describe('旧夹具兼容：没给 admission 就不限张', () => {
       ticket: [{ pr: 101 }, { pr: 102 }],
     }));
     assert.equal(kinds(r, 'dispatch').length, 3);
-    assert.equal(kinds(r, 'attach-reviewer').length, 2);
+    assert.equal(kinds(r, 'attach-reviewer').length, 1, '#1125 每轮只产一条 attach-reviewer');
   });
 
   // 「没查成」放开闸，等于机器空转时把自己压垮——必须收紧到 0 而不是放开。

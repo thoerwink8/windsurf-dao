@@ -29,7 +29,7 @@ const MIRASIM_POLICY = {
   },
 };
 
-const ROUTING = { models: MODELS, raw: { 执行体: { 默认: 'orca', mirasim: MIRASIM_POLICY } } };
+const ROUTING = { models: MODELS, raw: { 执行体: { 默认: 'mirasim', mirasim: MIRASIM_POLICY } } };
 
 const HEAD = 'a'.repeat(40);
 
@@ -87,7 +87,7 @@ describe('executor-binding', () => {
     const { readExecutorPolicy } = await import(EB);
     const p = readExecutorPolicy(ROUTING);
     assert.equal(p.ok, true);
-    assert.equal(p.default, 'orca');
+    assert.equal(p.default, 'mirasim');
     assert.ok(p.mirasim && p.mirasim.agentRoutes);
     const none = readExecutorPolicy({ raw: {} });
     assert.equal(none.ok, false);
@@ -100,7 +100,7 @@ describe('executor-binding', () => {
   it('judgeExecutorName：空用默认；不认识拒；mirasim 未登记拒', async () => {
     const { judgeExecutorName, readExecutorPolicy } = await import(EB);
     const p = readExecutorPolicy(ROUTING);
-    assert.equal(judgeExecutorName('', p).name, 'orca');
+    assert.equal(judgeExecutorName('', p).name, 'mirasim');
     assert.equal(judgeExecutorName('mirasim', p).ok, true);
     assert.equal(judgeExecutorName('nope', p).ok, false);
     assert.equal(judgeExecutorName('mirasim', readExecutorPolicy({ raw: {} })).ok, false);
@@ -253,6 +253,21 @@ describe('mirasimWorkerDone 编排', () => {
     assert.equal(res.action, 'created');
     assert.ok(reg.store.get('883').sessionKey);
     assert.equal(rt.calls.start.length, 1);
+  });
+
+  it('enqueueOnly：不起审官会话，只回报 queued', async () => {
+    const { mirasimWorkerDone } = await import(RM);
+    const rt = fakeRuntime();
+    const reg = memRegistry();
+    const res = await mirasimWorkerDone({
+      runtime: rt, gh: fakeGh({ reviews: [] }), readTreeHead: async () => rt._head, registry: reg,
+      pr: '883', repo: '/repo', prompt: '审', reworkPrompt: '复审',
+      reviewerModel: 'gpt-5.6-luna', workerModel: 'claude-opus',
+      models: MODELS, mirasimPolicy: MIRASIM_POLICY, round: 'first', enqueueOnly: true,
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'queued');
+    assert.equal(rt.calls.start.length, 0);
   });
 
   it('返工轮 + 会话有等答问题 → interact（不新起会话）', async () => {
@@ -447,6 +462,10 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'aborted' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' } }).reuse, true);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'done' } }).reuse, true);
+    // #1056：incomplete 不是在役。phase=done 只说那一轮结束了，会话已经卡死再复用 = 把 PR 锁死在死审官上。
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'done', incomplete: true } }).reuse, false);
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'incomplete' } }).reuse, false);
+    assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, runState: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' }, force: true }).reuse, false);
   });
 
@@ -582,14 +601,7 @@ describe('默认执行体 = mirasim，且同厂闸跟着搬过去了', () => {
   // 审官 PR #1071 判红第 1 条：默认翻成 mirasim 之后，**旧脊内部**那次嵌套 spawn
   // 不带旗标就会被送到 mirasim，旧脊拿回一个没有 reviewerDispatchId 的返回，而 exit code 仍是 0——
   // 「走错路」和「走对了」长得一模一样。执行体必须贯穿到底。
-  it('orca 旧脊嵌套调 reviewer-create 时显式带 --executor orca', () => {
-    const src = fs.readFileSync(CLI, 'utf8');
-    const i = src.indexOf('function invokeReviewerCreate(');
-    assert.ok(i > -1, 'invokeReviewerCreate 没了——本闸判据已失效，不是通过');
-    const block = src.slice(i, i + 900);
-    assert.match(block, /'reviewer-create', '--pr', String\(pr\), '--executor', 'orca'/,
-      '旧脊的嵌套调用漏了 --executor orca：无旗标会被默认送到 mirasim');
-  });
+
 
   it('mirasim worker-done 把 --reviewer 旗标传下去（#895 快马单）', () => {
     const src = fs.readFileSync(CLI, 'utf8');
@@ -686,6 +698,41 @@ describe('审官登记表落点必须跨树共享', () => {
     const got = mk().read('1040');
     assert.equal(got.ok, true, '换个实例就读不到了——落点没共享');
     assert.equal(got.record.sessionKey, 'codex:abc');
+  });
+
+  it('#1125 listAll：目录不在是空数组，读不了才是 null', async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const files = new Map();
+    const mk = (readdir) => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); files.set(p.split('/').pop(), c); },
+      mkdir: () => {},
+      readdir,
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const noFn = mk(undefined).listAll();
+    assert.equal(noFn, null, '没注入 readdir = 没查成，不许当成 0 条');
+
+    const missing = mk(() => { const e = new Error('no'); e.code = 'ENOENT'; throw e; }).listAll();
+    assert.deepEqual(missing, [], '目录不在 = 一条都没有，可以拉满');
+
+    const unreadable = mk(() => { const e = new Error('perm'); e.code = 'EACCES'; throw e; }).listAll();
+    assert.equal(unreadable, null, '读不了 = 没查成');
+
+    const reg = mk(() => ['reviewer-1040.json', 'other.txt', 'reviewer-nope.json']);
+    reg.write('1040', { pr: '1040', sessionKey: 'codex:abc' });
+    const listed = defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => store.set(p, c),
+      mkdir: () => {},
+      readdir: () => ['reviewer-1040.json', 'other.txt', 'reviewer-x.json'],
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    }).listAll();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].sessionKey, 'codex:abc');
   });
 });
 

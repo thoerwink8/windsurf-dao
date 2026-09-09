@@ -324,7 +324,7 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
 - 挂点已摘：随仓 `.claude/settings.json` 的 PreToolUse 是派工闸 + 问人闸（ask-gate）+ 工具使用闸（tool-use-gate，#969）+ SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。`~/.claude/settings.json` 归宿主自己，onboard 不能动。
-- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + 指挥官 + `progress-watch`（2026-09-06 屏面指纹层 `agent-stall-watch` 整层退役，orca 已不在承重面上）。
+- #807：`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`inbox-station.mjs` / `quick-fix.mjs` / 判定行协议已删。服务器承重面是 systemd + 指挥官（盘面推进量并进 `commander-act`；2026-09-06 屏面指纹层 `agent-stall-watch` 整层退役，orca 已不在承重面上）。
 - 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
 - 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
@@ -372,14 +372,21 @@ for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/
 orca account add --help
 
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
-# 卡死发现 = 盘面推进量看门狗（#1004）：sudo bash scripts/install-progress-watch.sh（单元 host/machine/systemd/dao-progress-watch.*）
-#   验：systemctl list-timers 里 dao-progress-watch.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:13/20）
-#   屏面指纹层（dao-agent-stall.* / install-agent-stall-watch.sh）2026-09-06 整层退役，机器上还留着就是影子制度，server-check ⑮ 会红
-# 卡死处置 = 推一把（**垫片，随 #1056 对账循环落地时整套删掉**）：sudo bash scripts/install-nudge-stalled.sh
-#   为什么要它：上面那条只**发现**并叫醒帅位，帅位不在就整夜没人动手。实测工人/审官跑完一轮
-#   会停在「等下一句话」被 mirasim 判成卡死（runState: incomplete），说一句「继续」就活。
-#   验：装完那一轮 journalctl -u dao-nudge-stalled 要能看到它真推了谁；只看到「已安装」不算
+# 卡死发现：不要装 dao-progress-watch（2026-09-07 并进 commander-act）。指挥官每轮自己跑 progress-watch.mjs。
+#   机器上若还留着：sudo bash scripts/install-progress-watch.sh（脚本改成卸载，顺手卸屏面指纹层）
+#   验：systemctl list-timers --all 里没有 dao-progress-watch.timer；server-check ⑮ 绿
+# 卡死处置：不要装 dao-nudge-stalled（2026-09-07 退役）。交卷/判定后停会话，差集由指挥官起短会话。
+#   机器上若还留着：sudo bash scripts/install-nudge-stalled.sh（脚本改成卸载）
+#   验：systemctl list-timers --all 里没有 dao-nudge-stalled.timer
+# 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
+#   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
+# 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
+#   验：systemctl list-timers 里 dao-refiner.timer 的 NEXT 必须是时间；unit 必须带 NO_COLOR=1 GH_NO_COLOR=1
 # MiraQuota 多机页 Contabo 接入（#881）：sudo bash scripts/install-miraquota-contabo.sh（单元 host/machine/systemd/miraquota-contabo.*）
+# 供应商探活（#967，写 ~/.dao/provider-health.json 给派工读）：sudo bash scripts/install-gw-remote-probe.sh（单元 host/machine/systemd/gw-remote-probe.*）
+#   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
+#   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
+#   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
@@ -434,17 +441,15 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 # 落 ~/.dao/server-check/checks.jsonl（仓外，不会成为下一轮输入）
 ```
 
-### land automation（#829）
+### land timer（#829）
 
-合并后自动清理走 `orca automations` 调同一条 `node scripts/land.mjs`，不另写服务器版。换机 / 重跑：
+合并后自动清理走 systemd hourly 调同一条 `node scripts/land.mjs`。换机 / 重跑：
 
 ```bash
-node scripts/install-land-automation.mjs            # 幂等：同名 0 条 create、1 条 edit，不造第二条
-node scripts/install-land-automation.mjs --dry-run  # 只看不动
+sudo bash scripts/install-land.sh
 ```
 
-hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspace-mode existing`（不许 new-per-run）。
-`server-check` 第⑧项认这条：不在 / disable = 红；list 没查成 = 没查成。
+`server-check` 第⑧项认 `dao-land.timer`：不在 / disable = 红；systemctl 没探到 = 没查成。
 
 ### 服务器指挥官（#800，眼睛常驻）
 
@@ -927,4 +932,4 @@ git ls-remote --heads origin | sed 's|.*refs/heads/||' \
 node scripts/dao-check.mjs
 ```
 
-退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。
+退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。手机私聊机器人要在飞书开发者后台勾「接收私聊消息」（事件仍是 `im.message.receive_v1`，适配器已收 `chat_type=p2p`）。日报队列落 `~/.dao/broadcast-digest.json`，换机不用拷。

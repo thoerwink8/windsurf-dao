@@ -92,6 +92,37 @@ describe('dispatch-gate', () => {
       assert.ok(/工人 TUI/.test(COORDINATOR_HINT) && /帅窗不许/.test(COORDINATOR_HINT),
         '#675 COORDINATOR_HINT 例外  →  ' + COORDINATOR_HINT);
     });
+    const ghCreate = decideGate('gh issue create --title t --body b');
+    await t.test('#792 decideGate 拦裸 gh issue create', () => {
+      assert.equal(ghCreate.block, true);
+      assert.match(ghCreate.message, /issue-gateway/);
+    });
+    const ghView = decideGate('gh issue view 1');
+    await t.test('#792 只读 gh issue view 放行', () => {
+      assert.equal(ghView.block, false);
+    });
+    const gw = decideGate('node scripts/issue-gateway.mjs create --repo thoerwink8/windsurf-dao --title t --host claude --idempotency-key k');
+    await t.test('#792 issue-gateway 入口放行', () => {
+      assert.equal(gw.block, false);
+    });
+    const ghas = decideGate('node scripts/gh-as.mjs marshal -- issue create --title t');
+    await t.test('#792 gh-as 写 Issue 也拦（身份不能自选）', () => {
+      assert.equal(ghas.block, true);
+      assert.match(ghas.message, /issue-gateway/);
+    });
+    const ghasPr = decideGate('node scripts/gh-as.mjs worker -- pr create --draft');
+    await t.test('#792 gh-as 开 PR 仍放行', () => {
+      assert.equal(ghasPr.block, false);
+    });
+    const ghasView = decideGate('node scripts/gh-as.mjs marshal -- issue view 1');
+    await t.test('#792 gh-as 只读 issue view 放行', () => {
+      assert.equal(ghasView.block, false);
+    });
+    const bg = decideGate('node scripts/issue-gateway.mjs create --repo x/y --title t --host h --idempotency-key k & gh issue create --title x');
+    await t.test('#1015 后台 & 拆开：网关后跟裸 gh issue create 仍拦', () => {
+      assert.equal(bg.block, true);
+      assert.match(bg.message, /issue-gateway/);
+    });
     await t.test('dao.mjs dispatch 不是旁路', () => {
       assert.ok(isDispatchBypass('node scripts/dao.mjs dispatch --name x') === false, 'dao.mjs dispatch 不是旁路');
     });
@@ -151,6 +182,20 @@ describe('dispatch-gate', () => {
       await t.test(`${label} 普通 inbox → 放行`, () => {
         assert.ok(inbox.status === 0, `${label} 普通 inbox → 放行  →  status=${inbox.status} ${inbox.stderr}`);
       });
+      const bgBare = runGate(script, 'node scripts/issue-gateway.mjs create --repo x/y --title t --host h --idempotency-key k & gh issue create --title x');
+      await t.test(`${label} 后台 & 夹带裸 gh issue create → exit 2`, () => {
+        assert.equal(bgBare.status, 2);
+        assert.match(bgBare.stderr || '', /issue-gateway/);
+      });
+      const ghasWrite = runGate(script, 'node scripts/gh-as.mjs marshal -- issue create --title t');
+      await t.test(`${label} gh-as 写 Issue → exit 2`, () => {
+        assert.equal(ghasWrite.status, 2);
+        assert.match(ghasWrite.stderr || '', /issue-gateway/);
+      });
+      const ghasPr = runGate(script, 'node scripts/gh-as.mjs worker -- pr create --draft');
+      await t.test(`${label} gh-as 开 PR → 放行`, () => {
+        assert.equal(ghasPr.status, 0);
+      });
       const send = runGate(script, 'orca orchestration send --type heartbeat --subject alive');
       await t.test(`${label} #667 心跳 → exit 2`, () => {
         assert.ok(send.status === 2 && /心跳不准发/.test(send.stderr || ''), `${label} #667 心跳 → exit 2  →  status=${send.status} ${send.stderr}`);
@@ -196,6 +241,11 @@ describe('dispatch-gate', () => {
       ['拦 run-use', 'orca orchestration run-use --id run_x', 'deny', /coordinator/],
       ['放行普通 inbox', 'orca orchestration inbox --json', 'allow', null],
       ['放行逃生口 raw', 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t', 'allow', null],
+      ['拦裸 gh issue create', 'gh issue create --title t --body b', 'deny', /issue-gateway/],
+      ['拦 gh-as 写 Issue', 'node scripts/gh-as.mjs marshal -- issue create --title t', 'deny', /issue-gateway/],
+      ['放行 gh-as 开 PR', 'node scripts/gh-as.mjs worker -- pr create --draft', 'allow', null],
+      ['放行只读 gh issue view', 'gh issue view 1', 'allow', null],
+      ['拦后台 & 夹带裸 gh issue create', 'node scripts/issue-gateway.mjs create --repo x/y --title t --host h --idempotency-key k & gh issue create --title x', 'deny', /issue-gateway/],
     ];
     for (const [label, cmd, expect, re] of cases) {
       const r = runCursorGate(CURSOR_HOOK, cmd);

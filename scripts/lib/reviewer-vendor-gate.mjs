@@ -238,13 +238,13 @@ export function resolveActualWorkerModel({ dispatchModel, labels } = {}) {
   if (!Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: '工人 model/* 标签没查成（不是列表）' };
   }
-  const hits = labels
+  const hits = [...new Set(labels
     .map((x) => {
       if (typeof x === 'string') return x;
       if (x && typeof x.name === 'string') return x.name;
       return '';
     })
-    .filter((name) => name.startsWith('model/') && name.length > 'model/'.length);
+    .filter((name) => name.startsWith('model/') && name.length > 'model/'.length))];
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '扫完没有唯一 model/*，不许从卡名猜' };
   }

@@ -22,10 +22,10 @@
 // ⑨ 判据从「Junction 指向仓内 memory 真相源」改为「符号链接目标仓的 origin ==
 // thoerwink8/windsurf-dao-memory」（#807：Linux 服务器形态，不再认 Windows Junction）。
 // 编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
-// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
+// 当前检查：①跑 tests/ 下所有测试（不采覆盖率、不裁剪——影响地图整层已删）
+// ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
 // ⑤模型路由（TOML providers.launch + JSON 政策 + yml 同源 + nextLaunch 夹具）
-// ⑦命令库 --help 参数存活（#807：orca 不在 PATH 一律 SKIP，不再把「本机无 orca」当红；
-//   有 orca 必须真跑。SKIP 和 ok 必须能分开）。
+// ⑦⑩ 已随 orca 产品面一起删（命令库 --help / extract* 真语料都是 orca CLI 的检查对象）。
 // ⑧态注入 hook 装载面点得到且真跑得动（issue #488）；#807：本机未接 Claude Code
 //   （无 ~/.claude/skills 且无 settings 面）SKIP 不是绿，有装载面仍必须真跑。
 // ⑨本机 memory 是否指向 windsurf-dao-memory 仓的符号链接（local-only，#503/#529/#807）：
@@ -37,8 +37,9 @@
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
-// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
-// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
+// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿；
+//    #966 推迟档不进分母——夹具红/绿验判别力（快档也跑，live 仍只 --full）
+// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡且没挂「将来某版」 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 // ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
@@ -89,22 +90,26 @@
 //    凡不是 Type=oneshot 的必须 Restart=always。只看仓里的模板，不打机器。
 //    RestartPreventExitStatus= 允许存在且不影响判定。检查器自持解析，不复用被检查对象。
 //    红/绿/空夹具验判别力；0 个 .service = 没查成，不是「0 个违规」。
+// ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
+//    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
+//    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
 
-import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { runOrcaRaw } from './lib/orca-run.mjs';
-import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
+import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
+import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
@@ -148,9 +153,13 @@ import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
 import { judgeCompetingPrs, collectOpenPrNewFiles } from './lib/competing-prs.mjs';
+import {
+  inspectMarshalSelfMerge, inspectMarshalSelfMergeFixtures,
+  MARSHAL_SELFMERGE_BASELINE_PR,
+} from './lib/marshal-selfmerge-check.mjs';
 import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
-import { affectedTests, depsFromRun, mergeMapEntries } from './lib/test-impact.mjs';
+import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
 
@@ -223,31 +232,16 @@ function runOneSuite(dir, f) {
     const args = ['--test', '--test-reporter=tap', p];
     let out = '';
     let child;
-    // 顺手采依赖（2026-09-06）：跑都跑了，把「这套碰过哪些文件」记下来并回影响地图。
-    // 实测只贵 8%（18 套 5049ms → 5445ms），换掉的是一个要人维护、建一次 110 秒的机制。
-    let covDir = null;
-    let readLog = null;
-    try {
-      covDir = mkdtempSync(join(tmpdir(), 'dao-ti-'));
-      readLog = join(covDir, 'reads.txt');
-    } catch { covDir = null; readLog = null; }   // 采不了就不采，测试照跑（采样是副产物，不是前提）
     try {
       // 测试期禁止出网（2026-09-06）：--import 预加载拦截器，NODE_OPTIONS 会继承给
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
-      // 覆盖率只看得见执行过的 JS；数据文件（json/md/toml…）靠 record-reads 记。
-      // 两者都经 NODE_OPTIONS/环境继承罩住 spawn 出去的 CLI。
-      const recorder = join(ROOT, 'tests', 'helpers', 'record-reads.mjs');
       const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
-      const imports = covDir
-        ? `--import ${pathToFileURL(guard).href} --import ${pathToFileURL(recorder).href}`
-        : `--import ${pathToFileURL(guard).href}`;
       const env = {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} ${imports}`.trim(),
-        ...(covDir ? { NODE_V8_COVERAGE: covDir, DAO_READ_LOG: readLog, DAO_READ_ROOT: ROOT } : {}),
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
       };
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
     } catch (e) {
@@ -257,41 +251,13 @@ function runOneSuite(dir, f) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const t0 = Date.now();
-    const finish = (extra) => {
-      let deps = null;
-      if (covDir) {
-        try {
-          deps = depsFromRun({
-            covDir, readLog, root: ROOT, testFile: `tests/${f}`,
-            io: { exists: existsSync, readDir: readdirSync, readFile: (x) => readFileSync(x, 'utf8') },
-          });
-        } catch { deps = null; }               // 采样出错不影响判定，只是这套下轮照跑
-        try { rmSync(covDir, { recursive: true, force: true }); } catch { /* 清不掉不影响判定 */ }
-      }
-      resolveOne({ f, deps, ...extra });
-    };
+    const finish = (extra) => resolveOne({ f, ...extra });
     child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
     child.on('close', (code) => finish({ status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
 }
 
-// ── 只跑受影响的（#TIA）────────────────────────────────────────────────
-// **默认就裁**（2026-09-06 用户拍板翻转过来的）。原设计是默认全量、`--affected` 才裁，
-// 理由是「漏跑是静默的，要裁必须调用方显式开口」。翻转的依据是实测：
-//   · CLAUDE.md 教给人的命令正是不带旗标那条 ⇒ 人和 AI 拿到的一直是 30s 的慢路，
-//     快档只有 land.mjs 自己在用。默认值就是实际行为，写在文档里的不算。
-//   · 「漏跑」这个担心已经由 affectedTests 规则 ④ 顶掉了：**不在图里的一律跑**，
-//     没有地图就整个退全量。裁剪只会跳过「图里明确说了不碰」的那些。
-// 全量：`--full`（同时打开要出网的那几项）。`--affected` 保留为等价别名，老调用不必改。
-//
-// 兜底仍是两处，不靠这一次：CI 每次 PR 全量（它是全新 clone、没有地图 ⇒ 自动退全量）、
-// land.mjs 推之前再跑一遍。
-//
-// 变更集口径（定错就是静默漏跑，这里写死不许猜）：
-//   origin/<默认分支>..HEAD 的改动  ∪  工作区未提交改动（含未跟踪）
-// 取并集是因为 land 是在 push 之前跑：只看已提交会漏掉刚改还没 commit 的，
-// 只看工作区会漏掉本地已经攒了几个 commit 的。
-
+// 变更集口径（断言写法闸用）：origin/<默认分支>..HEAD ∪ 工作区未提交（含未跟踪）。
 function changedFilesForAffected() {
   const out = new Set();
   // 「新增」要单独记：采样那一刻不存在的文件，地图里不可能有它的依赖信息。
@@ -337,71 +303,6 @@ function changedFilesForAffected() {
   return { scanned, files: [...out], added: [...added] };
 }
 
-/** 返回本轮要跑的测试文件名（不带 tests/ 前缀，与调用方一致）。 */
-function selectSuites(allSuites) {
-  // 两个旗标是**两根轴**，别合并：`--all-tests` 只管跑全部测试（CI 用），
-  // `--full` 在它之上还打开要出网的那几项（帅位本地用）。CI 不该顺带被扩检查面。
-  if (process.argv.includes('--full') || process.argv.includes('--all-tests')) return allSuites;
-  const all = allSuites.map(f => `tests/${f}`);
-  const { scanned, files, added } = changedFilesForAffected();
-  if (!scanned) {
-    green('影响面没算成（git 读不到）——按全量跑，不是「没有改动」');
-    return allSuites;
-  }
-  const map = readImpactMap();
-  const r = affectedTests({ map, changed: files, allTests: all, added });
-  if (r.mode === 'full') {
-    green(`影响面：全量（${r.why}）`);
-    return allSuites;
-  }
-  green(`影响面：${r.tests.length}/${all.length} 套（${r.why}）`);
-  return r.tests.map(t => t.replace(/^tests\//, ''));
-}
-
-// 地图是本机派生数据，落 ~/.dao/test-impact/（不进 git，理由见 test-impact-map.mjs 头部）。
-// CI 是全新 clone、没有地图 ⇒ 自动退全量，这正是已拍板的分层。
-function impactMapPath() {
-  return process.env.DAO_IMPACT_MAP || join(homedir(), '.dao', 'test-impact', 'map.json');
-}
-function readImpactMap() {
-  const p = impactMapPath();
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
-}
-
-/**
- * 把本轮跑过的那些套的依赖并回地图——地图是跑测试的副产物，没有独立的建图动作。
- *
- * 这里确实是「检查器往自己会读的文件里写东西」，本仓有一条规矩禁这个。豁免的理由要写清：
- * 那条规矩防的是**输出回流进判据、命中数越跑越多**。地图不产判定、只决定跑哪几套，
- * 而写错的方向是安全的——采不到就不写，不写就是「不在图里」，规则 ④ 让它下轮照跑。
- * 唯一危险的写法是「写个空数组冒充无依赖」，depsFromRun 对此回 null、mergeMapEntries 跳过。
- *
- * `allTests` 只在全量跑时才传：裁剪跑没跑到的套不代表它不存在，拿它去剔条目会把图剃秃。
- */
-function saveImpactMap(results, { allTests = null } = {}) {
-  const sampled = {};
-  for (const r of results) if (r && Array.isArray(r.deps)) sampled[`tests/${r.f}`] = r.deps;
-  if (Object.keys(sampled).length === 0) {
-    notes.push('影响地图：本轮一套依赖都没采到（不写图，这些套下轮照跑）');
-    return;
-  }
-  const head = (() => {
-    const r = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true });
-    return r.status === 0 ? (r.stdout || '').trim() : null;
-  })();
-  const merged = mergeMapEntries({ map: readImpactMap(), sampled, head, allTests });
-  const p = impactMapPath();
-  try {
-    mkdirSync(join(p, '..'), { recursive: true });
-    writeFileSync(p, JSON.stringify(merged.map, null, 2) + '\n');
-    notes.push(`影响地图：本轮刷新 ${merged.written} 套（跑测试的副产物，无需建图）`);
-  } catch (e) {
-    // 写不了不影响判定——只是下轮还得多跑几套。
-    notes.push(`影响地图没写成（不影响本次判定，下轮会多跑几套）：${String(e.message || e).slice(0, 60)}`);
-  }
-}
-
 async function runTests() {
   const dir = join(ROOT, 'tests');
   if (!existsSync(dir)) {
@@ -414,18 +315,9 @@ async function runTests() {
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
     process.env.DAO_NO_NETWORK_LOG = join(d, `${Date.now()}-${process.pid}.ndjson`);
   }
-  const allSuites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
-  if (allSuites.length === 0) {
-    // 这条判的是「tests/ 空了」——真·没查成。必须在裁剪之前判，
-    // 否则「裁剪后 0 套」会走到同一条红上，把「本次改动确实与测试无关」误报成「测试没了」
-    // （2026-09-06 实咬：只改 README 时报「一套测试都没扫到」）。
-    fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
-    return;
-  }
-  const suites = selectSuites(allSuites);
+  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
   if (suites.length === 0) {
-    green(`测试：本次改动与全部 ${allSuites.length} 套都无关（扫完是 0 条，不是没扫到）`);
-    reportNetworkViolations();
+    fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
   }
   const results = [];
@@ -453,8 +345,6 @@ async function runTests() {
   }
   reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
   reportNetworkViolations();
-  // 跑都跑了，把依赖并回图。只有全量跑才敢拿 allTests 去剔已删的条目。
-  saveImpactMap(results, { allTests: suites.length === allSuites.length ? allSuites.map(f => `tests/${f}`) : null });
   checkSpawnBudget();
   checkAssertStyle();
 }
@@ -972,83 +862,6 @@ function checkNextLaunchFixture() {
   else fail(`nextLaunch 夹具 ${problems.length} 处对不上`, '夹具 expect 与检查器自己的决策表必须一致；生产实现由 tests/next-launch.test.js 对同一份夹具核', problems.slice(0, 8).join(' '));
 }
 
-// ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
-// 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
-// dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
-// 零样本：catalog 空 / help 空 / 一个 flag 都解析不到 → 没查成，不是「0 个缺失」。
-// SKIP ≠ ok：输出必须能分开「扫完 0 条」和「这次没扫到」。
-
-function parseHelpOptionsIndependent(text) {
-  const flags = new Set();
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const opt = line.match(/^\s+(--[a-z0-9][a-z0-9-]*)\b/i);
-    if (opt) flags.add(opt[1]);
-    const usage = line.match(/^\s*Usage:/i);
-    if (usage) {
-      const re = /(--[a-z0-9][a-z0-9-]*)/gi;
-      let m;
-      while ((m = re.exec(line))) flags.add(m[1]);
-    }
-  }
-  return flags;
-}
-
-async function checkCommandHelp() {
-  let catalogUsedFlags, fetchOrcaHelp, orcaHelpAvailable, isCiEnv, helpCheckPolicy;
-  try {
-    const mod = await import(new URL('./lib/dao-cmd.mjs', import.meta.url));
-    catalogUsedFlags = mod.catalogUsedFlags;
-    fetchOrcaHelp = mod.fetchOrcaHelp;
-    orcaHelpAvailable = mod.orcaHelpAvailable;
-    isCiEnv = mod.isCiEnv;
-    helpCheckPolicy = mod.helpCheckPolicy;
-  } catch (e) {
-    fail('命令库模块加载失败', '恢复 scripts/lib/dao-cmd.mjs', String(e.message || e).slice(0, 160));
-    return;
-  }
-
-  const policy = helpCheckPolicy({ ci: isCiEnv(), orca: orcaHelpAvailable() });
-  if (policy.action === 'skip') {
-    skip(`命令库 --help 参数存活：${policy.reason}`);
-    return;
-  }
-  if (policy.action === 'fail') {
-    fail('命令库 --help 自检没查成', '本机装 orca 并保证在 PATH。此项本机必须真跑，不能跳过', policy.reason);
-    return;
-  }
-
-  const catalog = catalogUsedFlags();
-  if (!catalog || catalog.length === 0) {
-    fail('命令库一条 orca 命令都没扫到', 'builder 空了 ⇒ 本次等于没查', 'catalogUsedFlags()');
-    return;
-  }
-  const missing = [];
-  let scanned = 0;
-  for (const item of catalog) {
-    let text;
-    try {
-      text = fetchOrcaHelp(item.cmd);
-    } catch (e) {
-      fail('命令库 --help 自检没查成', '本机 orca --help 必须能跑', `${item.cmd}: ${String(e.message || e).slice(0, 120)}`);
-      return;
-    }
-    const available = parseHelpOptionsIndependent(text);
-    if (available.size === 0) {
-      fail('命令库 --help 一个参数都没解析到', 'help 文本形态变了，本次等于没查', item.cmd);
-      return;
-    }
-    scanned++;
-    for (const flag of item.flags || []) {
-      if (!available.has(flag)) missing.push(`${item.cmd} ${flag}`);
-    }
-  }
-  if (missing.length === 0) {
-    green(`命令库参数存活 ${scanned} 条命令 / 源=live`);
-  } else {
-    fail(`库参数已不在 orca --help ${missing.length} 个`, 'orca 升级删了参数，或库用了从未存在的旗标（#482 的 --submit 坑）', missing.join(' '));
-  }
-}
-
 // ── ⑧ 态注入 hook 活着（issue #488）────────────────────────────────────
 // 专注/值守三态的承重墙是 UserPromptSubmit hook：它每轮把当前态注入上下文。
 // 它是静默失效型部件的极端例子——被覆盖/断链/坏掉之后，态标还挂在那儿，
@@ -1125,40 +938,6 @@ function checkSkillLinksAlive() {
   if (r.green) green(r.green);
   else if (r.skip) skip(r.skip);
   else fail(...r.fail);
-}
-
-// ── ⑩ extract* 必须有 orca 真语料 ──────────────────────────────────
-// 自发现：扫 dao-cmd.mjs + scripts/lib/dispatch/*.mjs（#762 按域拆分后 extract* 散在各域文件）
-// 的 export function extract*，不手写函数名单。检查器只验信封（ok+result），不调用 extract*。
-// 零样本：一个 extract* 都扫不到 / 语料目录不在 / index 不在 → 没查成。
-
-function checkExtractFixtures() {
-  const libDir = join(ROOT, 'scripts', 'lib');
-  const daoCmdPath = join(libDir, 'dao-cmd.mjs');
-  if (!existsSync(daoCmdPath)) {
-    fail('dao-cmd.mjs 不在', '本次没查成：恢复 scripts/lib/dao-cmd.mjs', daoCmdPath);
-    return;
-  }
-  const texts = [readFileSync(daoCmdPath, 'utf8')];
-  const dispatchDir = join(libDir, 'dispatch');
-  if (existsSync(dispatchDir)) {
-    for (const name of readdirSync(dispatchDir).filter(n => n.endsWith('.mjs')).sort()) {
-      texts.push(readFileSync(join(dispatchDir, name), 'utf8'));
-    }
-  }
-  const report = checkOrcaJsonFixtures({
-    daoCmdText: texts.join('\n'),
-    fixtureDir: join(ROOT, 'tests', 'fixtures', 'orca-json'),
-  });
-  if (report.unscanned) {
-    fail('orca 真语料检查没查成', 'tests/fixtures/orca-json/ 要有 index.json，且 dao-cmd/dispatch 要有 extract* 导出', report.error);
-    return;
-  }
-  if (!report.ok) {
-    fail(`extract* 缺真语料 ${report.missing.length} 处`, '每个 extract* 在 orca-json/index.json 登记一份真实 --json 存档（含采集命令和日期）', report.missing.join(' '));
-    return;
-  }
-  green(`orca 真语料 ${report.scanned.length}/${report.parserCount} 个 extract* 有存档`);
 }
 
 // ── ⑪ 主帅标题核对样本 ─────────────────────────────────────────────
@@ -1302,18 +1081,6 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 const PENDING_BOARD_MAX_DEFAULT = 5;
 const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
 
-/** PR/标题/正文里的署名 issue 号（新规范「署名 issue #N」+ 旧 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
-function closesNumbers(text) {
-  const found = [];
-  const re = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const t = Number(m[1] ?? m[2]);
-    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
-  }
-  return found;
-}
-
 // ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
 //
 // 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
@@ -1446,110 +1213,76 @@ function checkInitiatives() {
   green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
-// ── orca 退役进度（2026-09-06 切流量后常驻）─────────────────────────────────────
-//
-// 为什么是一条 check 而不是一张 issue：#880 的进度表是「这条线唯一的实时状态面」，
-// 结果它过期了整整一张卡（卡 C 09-05 就合了，表上还写着未完成），2026-09-06 我被它
-// 误导两次。**跨会话的待办挂在人身上就会遗忘，挂在每次都跑的检查上才不会。**
-//
-// 判据是「当场可数的事实」——orca workspaces 下还剩几棵树，不是谁填的进度百分比。
-// 清零 = 存量流干 = 可以执行退役清单（停服务 + 删 dao.mjs 里标了边界的那条脊）。
-// 代码面的 orca 引用有多少。只数 scripts/ 与 tests/：docs/decisions 与 docs/observations
-// 是判例档案，记的是当时发生过什么，删掉等于篡改历史——它们里的 orca 字样永远保留。
-// grep 退出码：0=找到、1=一个没找到（正常清零）、>1=真出错（要报没查成，不许当成 0）。
-function countOrcaCodeRefs() {
-  const r = spawnSync('grep', ['-rilE', 'orca', 'scripts', 'tests'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
-  if (r.error) return { unscanned: true, error: String(r.error.message || r.error).slice(0, 80) };
-  if (r.status != null && r.status > 1) return { unscanned: true, error: `grep 退出码 ${r.status}：${String(r.stderr || '').slice(0, 60)}` };
-  return { files: String(r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean) };
+// ── orca 产品面残留（linux 用户名 /home/orca 不是产品，不进这条）────────────────
+// 认这些才算还没退役：真 spawn orca CLI、createOrcaBinding、orca-serve 单元、
+// dao.mjs 标了「整段删」的那条脊。判例档案（docs/decisions、docs/observations）不扫。
+function checkEphemeralLifecycle() {
+  const problems = [];
+  const read = (rel) => {
+    try { return readFileSync(join(ROOT, rel), 'utf8'); }
+    catch (e) { problems.push(`${rel} 读不了：${String(e && e.message || e).slice(0, 60)}`); return ''; }
+  };
+  const gone = (rel) => existsSync(join(ROOT, rel));
+  const dao = read('scripts/dao.mjs');
+  const commander = read('scripts/commander.mjs');
+  const handoff = read('scripts/lib/handoff-check.mjs');
+  const miraReviewer = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
+  const miraSoldier = read('host/skills/dispatch/templates/soldier-book-mirasim.md');
+  const agents = read('AGENTS.md');
+  const nudgeInstall = read('scripts/install-nudge-stalled.sh');
+  const progressInstall = read('scripts/install-progress-watch.sh');
+  if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
+  if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
+  if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
+  if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
+  if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');
+  if (miraReviewer && /pr merge/.test(miraReviewer)) problems.push('审官 mirasim 书还在教 pr merge');
+  if (miraSoldier && /按需起审官/.test(miraSoldier)) problems.push('士兵 mirasim 书还在教按需起审官');
+  if (handoff && !/merge:\s*\{\s*advisory:\s*\[[^\]]*['"]①['"]/.test(handoff.replace(/\s+/g, ' '))) {
+    problems.push('合并闸 ① 没标 advisory');
+  }
+  // 已删/退役路径：行里必须带「已删」字，否则交卷闸 ④ 把负向检查当成指向空气的指针。
+  if (gone('scripts/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 垫片还在仓里');
+  if (gone('scripts/lib/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 闸还在仓里');
+  if (gone('host/machine/systemd/dao-nudge-stalled.timer')) problems.push('已删的 nudge timer 单元还在仓里');
+  if (gone('host/machine/systemd/dao-progress-watch.timer')) problems.push('已删的 progress-watch timer 单元还在仓里');
+  if (nudgeInstall && !/disable --now dao-nudge-stalled/.test(nudgeInstall)) problems.push('nudge 安装脚本没改成卸载');
+  if (progressInstall && !/disable --now dao-progress-watch/.test(progressInstall)) problems.push('progress-watch 安装脚本没改成卸载');
+  if (!gone('scripts/land.mjs') || !gone('scripts/close-issues.mjs')) {
+    problems.push('land / close-issues 旁路脚本丢了');
+  }
+  if (problems.length) {
+    fail(`短命会话闸红 ${problems.length} 处`, 'done_when 是机器可算的事实，红了就还没完', problems.slice(0, 6).join('；'));
+    return;
+  }
+  green('短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量');
 }
 
 function checkOrcaRetirement() {
-  const home = process.env.HOME || '/home/orca';
-  const ws = join(home, 'orca', 'workspaces');
-  if (!existsSync(ws)) {
-    green('orca 退役：workspaces 目录已不在——存量清零，可执行退役清单（dao.mjs 里搜「整段删」）');
+  const r = spawnSync(
+    'grep',
+    ['-rlnE', String.raw`spawn(Sync)?\(\s*['"]orca['"]|run\(\s*['"]orca['"]|export function createOrcaBinding|orca-serve\.service|orca 退役时整段删`, 'scripts', 'tests', 'host/machine/systemd'],
+    { cwd: ROOT, encoding: 'utf8', windowsHide: true },
+  );
+  if (r.error) {
+    fail('orca 产品残留没查成', 'grep 跑不了就别说退役完了', String(r.error.message || r.error).slice(0, 80));
     return;
   }
-  let trees = [];
-  try {
-    for (const repo of readdirSync(ws)) {
-      const d = join(ws, repo);
-      if (!statSync(d).isDirectory()) continue;
-      // 跳过点开头的项：Orca 自己在这层放 .orca-worktree-trash（回收站），它不是在途树。
-      // 2026-09-06 实咬：树清到 0 了闸还报 1 棵——判据把回收站数成了活。
-      for (const t of readdirSync(d)) {
-        if (t.startsWith('.')) continue;
-        trees.push(`${repo}/${t}`);
-      }
-    }
-  } catch (e) {
-    // 数不出来就说没查成，不许当成「清零了」——那会让人以为可以删了
-    fail('orca 退役进度没查成', '读不了 orca workspaces，别据此判断能不能删', String(e.message || e).slice(0, 80));
+  if (r.status != null && r.status > 1) {
+    fail('orca 产品残留没查成', 'grep 出错不是「扫完 0 条」', `退出码 ${r.status}：${String(r.stderr || '').slice(0, 80)}`);
     return;
   }
-  if (trees.length === 0) {
-    // 判据写的是「0 棵树 且 orca-serve 已 disabled 且那条脊已删」，就得三样都算。
-    // 只数树会让闸一直喊「可以停服务了」——即使早就停了，判据与检查对不上（本仓 #880
-    // 进度表同款病：说的和查的不是一回事）。
-    const unit = spawnSync('systemctl', ['is-enabled', 'orca-serve'], { encoding: 'utf8', windowsHide: true });
-    const enabled = String(unit.stdout || '').trim();
-    const spineGone = !readFileSync(join(ROOT, 'scripts', 'dao.mjs'), 'utf8').includes('orca 退役时整段删');
-    if (enabled === 'enabled') {
-      green('orca 退役：存量树已清零——下一步 systemctl disable orca-serve');
-      return;
-    }
-    const refs = countOrcaCodeRefs();
-    if (refs.unscanned) {
-      fail('orca 代码引用没数成', '数不出来就别说删干净了——先修 grep 调用', refs.error);
-      return;
-    }
-    if (!spineGone) {
-      green(`orca 退役：树清零 + 服务已 ${enabled || '停用'}——只剩删代码（dao.mjs 里搜「整段删」那段，另有 ${refs.files.length} 个文件还引用 orca）`);
-      return;
-    }
-    if (refs.files.length) {
-      green(`orca 退役：树 0 / 服务停用 / 脊已删——scripts+tests 下还有 ${refs.files.length} 个文件引用 orca`);
-      notes.push(`orca 代码残留 ${refs.files.length} 个文件：${refs.files.slice(0, 6).join('、')}${refs.files.length > 6 ? ' …' : ''}`);
-      return;
-    }
-    green('orca 退役：判据四条全满足（树 0 / 服务停用 / 脊已删 / 代码零引用）——这个西瓜可以从 initiatives.json 摘了');
+  const files = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)
+    .filter((f) => !f.includes('dao-check.mjs')); // 本闸自己的模式字面量不算残留
+  if (files.length) {
+    fail(
+      `orca 产品面还在 ${files.length} 个文件里`,
+      '删 spawn orca / createOrcaBinding / orca-serve 单元 / dao.mjs「整段删」那条脊。linux 用户名 /home/orca 可以留',
+      files.slice(0, 8).join('、') + (files.length > 8 ? ' …' : ''),
+    );
     return;
   }
-  // 趋势闸：退役中的目标，量的必须是**单调**的。今天实咬（2026-09-06）——我在切流量，
-  // 另一个会话看见 orca-serve 干净退出判成故障、加了 Restart=always 拉回来。两边都没错，
-  // 缺的是「有人在往反方向走」这件事会自己叫出来。
-  //
-  // 判据不能是「谁改了哪个文件」（那个改动当下是对的），只能是**结果量**：
-  // 树数不减反增 = 还有调用方在往 orca 派活 = 退役被逆转，这才是要红的。
-  // 基线落 ~/.dao/（派生数据不进 git），首次跑只建基线不判。
-  const stateFile = join(home, '.dao', 'orca-retire-progress.json');
-  let prev = null;
-  try { if (existsSync(stateFile)) prev = JSON.parse(readFileSync(stateFile, 'utf8')); } catch { prev = null; }
-  // 写失败不许静默：基线记不下 = 趋势闸永远在「首次」，看起来一直绿其实一次都没比过。
-  // 2026-09-06 实咬：writeFileSync 漏在 import 外，catch 把它吞了，闸装了等于没装。
-  const writeState = () => {
-    try {
-      mkdirSync(join(home, '.dao'), { recursive: true });
-      writeFileSync(stateFile, JSON.stringify({ trees: trees.length, at: new Date().toISOString() }, null, 2));
-      return null;
-    } catch (e) { return String(e.message || e).slice(0, 80); }
-  };
-  const before = prev && Number.isInteger(prev.trees) ? prev.trees : null;
-  const writeErr = writeState();
-  if (writeErr) {
-    fail('orca 退役趋势闸记不下基线', '基线写不进去就永远比不出趋势——闸装了等于没装，先修落点', `${stateFile}: ${writeErr}`);
-    return;
-  }
-  if (before != null && trees.length > before) {
-    fail(`orca 退役被逆转：在途树从 ${before} 涨到 ${trees.length}`,
-      '退役中的量只该减。查是谁又往 orca 派了活——多半是某个调用方还没切到 mirasim',
-      `上次 ${prev.at}：${before} 棵；现在 ${trees.length} 棵`);
-    return;
-  }
-  const trend = before == null ? '（首次，已建基线）' : before === trees.length ? '（持平）' : `（上次 ${before}，在减）`;
-  notes.push(`orca 退役进行中：还有 ${trees.length} 棵在途树${trend}。清零后才停服务、删那条脊`);
-  green(`orca 退役进度：在途树 ${trees.length} 棵${trend}`);
+  green('orca 产品面已清（无 spawn orca / 无 orca-serve 单元 / 无整段删脊）');
 }
 
 // ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
@@ -1600,76 +1333,86 @@ function runGhJson(args) {
   return { array: doc };
 }
 
-// spawn 唯一真源在 scripts/lib/orca-run.mjs。raw 结果由本函数自己解析。
-function runOrcaWorktrees() {
-  const r = runOrcaRaw(['worktree', 'list', '--json'], { cwd: ROOT, timeout: 30000 });
-  if (r.error || r.status !== 0) return { unscanned: true, error: r.error?.code || `exit ${r.status}` };
-  let doc;
-  try { doc = JSON.parse(r.stdout || ''); } catch { return { unscanned: true, error: 'orca worktree list 输出不是 JSON' }; }
-  const wts = Array.isArray(doc?.result?.worktrees) ? doc.result.worktrees : null;
-  if (!wts) return { unscanned: true, error: 'orca worktree list 没有 result.worktrees 数组' };
-  return { worktrees: wts };
+function runMirasimWorktrees() {
+  const r = scanMirasimTrees({
+    readdir: readdirSync,
+    stat: statSync,
+    join,
+  });
+  if (!r.scanned) return { unscanned: true, error: r.error || 'mirasim 树面没查成' };
+  return { worktrees: r.worktrees || [] };
 }
 
 function loadOpenBoard() {
   return {
-    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels']),
+    // author 是「同一起因只许一张 OPEN 单」那道检查的必需字段：用它分「机器/帅位开的」
+    // 与「用户本人开的」，后者不纳入。少这个字段那道检查只能判没查成（#1063 ②）。
+    // milestone 是「将来某版」推迟档（#966）的必需字段：少它 isDeferredIssue 永远 false。
+    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,author,createdAt,milestone']),
     prs: runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']),
-    worktrees: runOrcaWorktrees(),
+    worktrees: runMirasimWorktrees(),
   };
 }
 
-function checkOpenIssueCount(board) {
-  const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
-  if (!Number.isFinite(max) || max < 0) {
-    fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
+function checkOpenIssueCountSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'open-issue-count');
+  const r = inspectOpenIssueCountFixtures(dir);
+  if (r.unscanned) {
+    fail('open 单数量样本没查成', '本次没查成：恢复 tests/fixtures/open-issue-count/ 超阈红 + 推迟不进分母的绿', r.error);
     return;
   }
+  if (!r.ok) {
+    fail(
+      `open 单数量样本对不上${r.problems && r.problems.length ? ` ${r.problems.length} 处` : ''}`,
+      '故意超阈必须红；同一份再加「将来某版」分母不变；推迟档顶满阈值必须绿',
+      (r.problems && r.problems.join(' ')) || r.error,
+    );
+    return;
+  }
+  green(`open 单数量样本 ${r.kinds.red + r.kinds.ok} 份（超阈红 ${r.kinds.red} / 推迟不进分母绿 ${r.kinds.ok}）`);
+}
+
+// 同一起因只许一张 OPEN 单（#1063 ②）。判据是纯函数 inspectCauseSlugs，这里只取数与报形。
+// 落点选 dao-check 不选 Claude Code hook：本机 ~/.claude/settings.json 一条 hook 都没有，
+// hook 型载体在这台服务器上根本不装（收件箱就是因此从 hook 挪过来，commit d48ecc5d）。
+function checkCauseSlugLive(board) {
   const issues = board.issues;
   if (issues.unscanned) {
-    skip(`open 单数量阈值：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
+    skip(`同一起因只许一张 OPEN 单：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  const prs = board.prs;
-  if (prs.unscanned) {
-    skip(`open 单数量阈值：open PR 面没查成（${prs.error}）——在途排除做不全，不是绿`);
+  const got = inspectCauseSlugs({ issues: issues.array });
+  if (got.kind === 'unscanned') { skip(got.line); return; }
+  if (got.kind === 'red') {
+    fail('同一起因有多张 OPEN 单 / 机器单缺起因行', got.line);
     return;
   }
-  const wt = board.worktrees;
-  if (wt.unscanned) {
-    skip('open 单数量阈值：worktree 卡面没查成（orca 不可用或输出畸形）——少这张卡面会把在途单算成积压，本次没查成，不是绿');
+  green(got.line);
+}
+
+function checkOpenIssueCount(board) {
+  const maxRaw = process.env.DAO_CHECK_OPEN_ISSUE_MAX;
+  const max = Number(maxRaw || OPEN_ISSUE_MAX_DEFAULT);
+  const r = inspectOpenIssueCount({
+    issues: board.issues,
+    prs: board.prs,
+    worktrees: board.worktrees,
+    max,
+    maxRaw,
+  });
+  if (r.kind === 'unscanned') {
+    skip(r.line);
     return;
   }
-  const cards = [];
-  for (const w of wt.worktrees) {
-    if (!w || w.isMainWorktree || w.isArchived) continue;
-    const name = String(w.displayName || '');
-    const linked = typeof w.linkedIssue === 'number' ? w.linkedIssue
-      : (w.linkedIssue && typeof w.linkedIssue.number === 'number' ? w.linkedIssue.number : null);
-    const zone = String(w.comment || '').match(/｜\[([^\]]*)\]/);
-    const zoneN = zone && zone[1].match(/#(\d+)/);
-    const issueName = name.match(/ISSUE-#?(\d+)/);
-    const oldName = name.match(/^#(\d+)/);
-    const n = linked || (zoneN ? Number(zoneN[1]) : null) || (issueName ? Number(issueName[1]) : null)
-      || (oldName ? Number(oldName[1]) : null);
-    if (n) cards.push(n);
-  }
-  const inPr = new Set();
-  for (const p of prs.array) {
-    for (const n of closesNumbers(`${p.title || ''}\n${p.body || ''}`)) inPr.add(n);
-  }
-  const inCard = new Set(cards);
-  if (issues.array.some(i => !i || typeof i.number !== 'number')) {
-    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${typeof issues.array[0]}`);
+  if (r.kind === 'invalid') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number));
-  const n = backlog.length;
-  if (n > max) {
-    fail(`open 未在做单 ${n} 张，超阈值 ${max}（共 ${issues.array.length} 张 open，${inPr.size} 张有在途 PR、${inCard.size} 张有本地卡）`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number,title,body');
+  if (r.kind === 'red') {
+    fail(r.line, r.howToFix, r.evidence);
     return;
   }
-  green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
+  green(r.line);
 }
 
 /**
@@ -1708,7 +1451,7 @@ function checkPendingBoardBacklog(board) {
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
-// 已消歧 + 无在途 PR/卡 → 打「有 N 个可立即起的单没起」。帅可能有正当理由
+// 已消歧 + 无在途 PR/卡 + 没挂「将来某版」→ 打「有 N 个可立即起的单没起」。帅可能有正当理由
 // （并发满、真依赖），所以不翻转退出码；今晚的病是它完全不可见。
 // 解析在 ready-queue-check.mjs，不复用 ⑭ 的 closesNumbers。
 // 并发上限随 #576 落地，本项不发明数字。#576 的 next 接手列表后本项退役。
@@ -2005,11 +1748,10 @@ function checkNoAutoCloseLive() {
 // 的反面教材：状态变了、检查的话面没跟上，人就照着旧话面做判断）。
 //
 // 离线的样本/接线检查（夹具判别力、模板扫描）一直全跑——它们不花网络，守的约定也还在仓里。
-// 档位（2026-09-06 默认从「全量」翻成「裁剪」，理由写在 selectSuites 上面那段）：
-//   不带旗标      快档：只跑受影响的测试 + 不出网          ← 人和 land.mjs 走这条
-//   --all-tests   跑全部测试，仍不出网                    ← CI 走这条
-//   --full        跑全部测试 + 打开要出网的那几项          ← 帅位本地要全查时
-// `--affected` 是老调用留下的等价别名，行为与默认一致，不必特判。
+// 档位（影响地图整层已删，测试默认全跑、不采覆盖率）：
+//   不带旗标      全部测试 + 不出网                         ← 人和 land.mjs、CI 走这条
+//   --all-tests   与默认相同（老调用留下的别名）
+//   --full        全部测试 + 打开要出网的那几项             ← 帅位本地要全查时
 const FULL = process.argv.includes('--full');
 // 要出网的检查只在全量档跑（2026-09-06 实测：飞书群有效性一项 11.3s，占了快检 8.6s 的大头）。
 // 判据同「单元测试不许打网络」：慢、飘、不可复现。快档 skip 会如实说「没查」，不是绿。
@@ -2023,25 +1765,27 @@ checkResidentBudget();
 checkRoutingProvidersToml();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
-if (FULL) await checkCommandHelp(); else netParked('命令库 --help 参数存活', '要逐条起子进程跑 --help');
 checkModeHookAlive();
 checkDispatchGateAlive();
 checkMemoryLinkAlive();
-checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
+checkOpenIssueCountSamples();
 if (FULL) {
   const openBoard = loadOpenBoard();
   checkOpenIssueCount(openBoard);
   checkPendingBoardBacklog(openBoard);
   checkReadyQueue(openBoard);
+  checkCauseSlugLive(openBoard);
 } else {
-  netParked('open 单数量阈值', '要打 gh issue list');
+  netParked('open 单数量阈值 live', '要打 gh issue list');
   netParked('待拍板堆积', '要打 gh issue list');
   netParked('可立即起但没起', '要打 gh issue list');
+  netParked('同一起因只许一张 OPEN 单', '要打 gh issue list');
 }
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
+checkIssueGatewayAliveNow();
 checkLedgerGapSamples();
 if (FULL) checkLedgerGapLive(); else netParked('账本断流差集 live', '要拿账本对 GitHub');
 checkStrikesSamples();
@@ -2062,6 +1806,7 @@ if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh 
 checkInbox();
 checkRepoOwnership();
 checkInitiatives();
+checkEphemeralLifecycle();
 checkOrcaRetirement();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
@@ -2081,6 +1826,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkMarshalSelfMergeSamples();
+if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -2161,6 +1908,50 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkMarshalSelfMergeSamples() {
+  const r = inspectMarshalSelfMergeFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '帅位 reviews=0 自合并闸样本没查成' : '帅位 reviews=0 自合并闸样本对不上',
+      '恢复 tests/fixtures/marshal-selfmerge/{red,ok,empty}.json：红=marshal 自合 reviews=0 必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`帅位 reviews=0 自合并闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkMarshalSelfMergeLive() {
+  const listed = runGhJson([
+    'pr', 'list', '--state', 'merged', '--limit', '100',
+    '--json', 'number,author,mergedBy,reviews',
+  ]);
+  if (listed.unscanned) {
+    skip(`帅位 reviews=0 自合并：gh pr list 没查成（${listed.error}），本次没查成，不是绿`);
+    return;
+  }
+  const r = inspectMarshalSelfMerge({
+    prs: listed.array,
+    baselinePr: MARSHAL_SELFMERGE_BASELINE_PR,
+  });
+  if (r.unscanned) {
+    skip(r.line);
+    return;
+  }
+  if (r.kind === 'red') {
+    fail(
+      r.line,
+      '判定权不归帅位：reviews=0 的自合并当场红。补独立跨厂审官再合，或把存量交给 marshal-selfmerged-audit',
+      (r.violations || []).map((v) => `#${v.number}`).join(' '),
+    );
+    return;
+  }
+  green(r.line);
 }
 
 function checkReleasePolicySamples() {
@@ -2636,6 +2427,12 @@ function checkCompletionSignalAlive() {
 
 function checkMarshalIssueIdentityAlive() {
   const r = checkMarshalIssueIdentity({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkIssueGatewayAliveNow() {
+  const r = checkIssueGatewayAlive({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
 }

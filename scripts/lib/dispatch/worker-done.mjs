@@ -1,6 +1,7 @@
 // scripts/lib/dispatch/worker-done.mjs —— 完工结算 + label 选型域（#762 拆分）
 //
-// 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工，首审才建审官。
+// 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工。
+// #1125 起：首审只入队、不自己起审官；drain 按在役审官数拉取。返工往已有会话再推一针。
 // label 记「决定」：dispatch 成功时把 model/<模型> type/<角色> reviewer/<审官>
 // 打到目标 issue；工人完工时用 pickReviewer / requireWorkerModel 复算。
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
@@ -22,6 +23,11 @@ function labelNameOf(item) {
   return '';
 }
 
+/** 一张 PR 署两张单会把同一份 model/* / reviewer/* 收集两遍；同名不是歧义。 */
+function uniqueNames(names) {
+  return [...new Set(names)];
+}
+
 /**
  * 从 label 列表读出唯一的审官模型。无 IO、可复算。
  * 三态必须输出不同的话：查到一个 / 没有 reviewer/* / 有多个。
@@ -35,9 +41,9 @@ export function pickReviewer(labels) {
       error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
     };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return {
       ok: false,
@@ -68,9 +74,9 @@ export function pickModel(labels) {
   if (labels == null || !Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
   }
-  const hits = labels
+  const hits = uniqueNames(labels
     .map(labelNameOf)
-    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length);
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length));
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
   }
@@ -125,10 +131,51 @@ export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
     let parsed;
     try { parsed = JSON.parse(iv.out); }
     catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
-    const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
+    // 缺字段 / null / 非数组 = 没查成，不是「扫完 0 条」。把它们归一成 []
+    // 会让宿主前缀兜底把「没查成」变成「查过了是 claude」（PR #1079 审官红项 2）。
+    if (!parsed || !Array.isArray(parsed.labels)) {
+      return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 缺 labels 数组（没查成，不许当扫完 0 条）` };
+    }
+    const names = parsed.labels.map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
-  return { ok: true, unscanned: false, refs, labels: collected };
+  return { ok: true, unscanned: false, refs, labels: collected, title: String(meta.title || '') };
+}
+
+/**
+ * 宿主前缀 → 真实供应商家族（起审官同厂闸的兜底来源，2026-09-06）。
+ *
+ * 为什么需要它：同厂闸要知道工人是谁，来源只有署名单的 `model/*` 标签，而那个标签的唯一
+ * 自动写入方是 `stampIssueLabels`——**派工成功之后**才调。于是工人开的 PR 天然有标签，
+ * **帅位手开的 PR 一个都没有**，起审官当场拒（「扫完没有 model/*」），PR 就停在没人审，
+ * 每 45 分钟重试一次、3 次后永远停住。实咬：PR #1070。
+ *
+ * 判据用 commit/PR 标题的宿主前缀（CLAUDE.md「commit 标题以宿主标识开头」）。它定不到
+ * 具体模型，但**定得到家族**，而同厂闸要的正是家族（vendorFamilyOf 按 id 前缀取家族，
+ * 家族名本身就是合法 id）。定不到就拒——不猜。
+ *
+ * **`pi` 故意不在表里**：pi 是多供应商宿主，上游报错时会在 1 毫秒内静默切到同 model id
+ * 的另一个 provider（判例 memory `pi-silent-provider-fallback`），家族推不出来。
+ * 漏登记一个宿主的代价是「照旧拒绝起审官」（今天的行为），猜错一个家族的代价是
+ * **同厂闸放行了同厂审官**——两边不对称，所以这张表宁缺勿滥。
+ */
+export const HOST_PREFIX_VENDOR_FAMILY = Object.freeze(Object.assign(Object.create(null), {
+  cc: 'claude',   // Claude Code：只跑 Anthropic 模型
+  codex: 'gpt',   // Codex CLI：只跑 OpenAI 模型
+  grok: 'grok',   // xAI
+}));
+
+/** 从标题首个 `[宿主]` 前缀推家族。推不出返回 {ok:false}——调用方按「没查成」处置，不许猜。 */
+export function vendorFamilyFromHostPrefix(title) {
+  const m = /^\s*\[([a-z0-9_-]+)\]/i.exec(String(title || ''));
+  if (!m) return { ok: false, why: '标题没有 [宿主] 前缀' };
+  const host = m[1].toLowerCase();
+  // 只认表的自有键。普通对象上 `[constructor]` / `[__proto__]` 会命中原型、返回 ok:true
+  //（后者 family 甚至是对象），把「推不出就拒」变成放行（PR #1079 审官红项 1）。
+  if (!Object.hasOwn(HOST_PREFIX_VENDOR_FAMILY, host)) {
+    return { ok: false, why: `宿主 ${host} 不在家族表里（多供应商宿主如 pi 故意不登记）`, host };
+  }
+  return { ok: true, host, family: HOST_PREFIX_VENDOR_FAMILY[host] };
 }
 
 export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
@@ -146,7 +193,34 @@ export function resolveWorkerFromPr({ pr, runGh, model } = {}) {
   }
   if (!collected.ok) return collected;
   const picked = requireWorkerModel(collected.labels);
-  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  if (picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  // 标签这条路走不通时的兜底，**只对「扫完确实没有 model/*」这一种**：
+  //   · state 'unscanned'（标签列表没拿到）不兜底——没查成必须继续拒，兜底会把「查不成」
+  //     变成「查过了是 claude」，正是 fail-closed 最怕的那种降级；
+  //   · state 'many'（多个 model/*）不兜底——那是要人消歧的真歧义，猜一个只会掩盖它。
+  if (picked.state === 'none') {
+    const guess = vendorFamilyFromHostPrefix(collected.title);
+    if (guess.ok) {
+      return {
+        ok: true,
+        state: 'one',
+        source: 'host-prefix',
+        // 家族名本身是合法 id：vendorFamilyOf('claude') === 'claude'。不编造具体版本号——
+        // 宿主前缀定得到家族，定不到型号，而同厂闸只要家族。
+        modelId: guess.family,
+        host: guess.host,
+        refs: collected.refs,
+        labels: collected.labels,
+      };
+    }
+    return {
+      ...picked,
+      source: 'label',
+      error: `${picked.error}；宿主前缀也推不出家族（${guess.why}）`,
+      refs: collected.refs,
+      labels: collected.labels,
+    };
+  }
   return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
@@ -218,13 +292,18 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
+  // 首审起审官要过同厂闸，工人家族必须有着落。不能只对 resolved.labels 调
+  // requireWorkerModel——那会把「扫完没有 model/*」直接拒掉，到不了
+  // resolveWorkerFromPr 的宿主前缀兜底（实咬：PR #1079 审官红项 1，复现
+  // 无 model/*、标题 [cc] 的手开 PR 在 worker-done 计划阶段就被拒）。
+  // 返工轮不起第二个审官，工人型号缺了也不挡交卷。
   const workerPick = shouldCreate
-    ? requireWorkerModel(resolved.labels)
+    ? resolveWorkerFromPr({ pr: n, runGh })
     : pickModel(resolved.labels || []);
   if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
     ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
-    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
+    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '首审已入待审队列，由指挥官按在役审官数拉取（#1125）。'].join('\n'));
   return {
     ok: true,
     wired: true,
@@ -236,6 +315,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
     workerModel: workerPick.ok ? workerPick.modelId : null,
+    workerSource: workerPick.ok ? (workerPick.source || null) : null,
     comment,
     reviewerCreate: shouldCreate
       ? {
@@ -243,7 +323,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
         pr: n,
         args: ['--pr', n],
         invoked: false,
-        reason: '首审：真调 reviewer-create（自读选型、建树、起终端、注入）',
+        reason: '首审：入待审队列，由指挥官按在役审官数拉取（#1125）',
       }
       : {
         verb: 'reviewer-create',

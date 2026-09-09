@@ -119,6 +119,9 @@ export function checkMarshalIssueIdentity({ root, files, skills } = {}) {
       };
     }
     for (const h of findBareWrites(loaded.text)) {
+      // 同一行已指向 issue-gateway / gh-as.mjs = 禁止句，不是教裸写（#792 士兵书）。
+      const line = String(loaded.text || '').split(/\r?\n/)[h.line - 1] || '';
+      if (/issue-gateway|gh-as\.mjs/.test(line)) continue;
       hits.push({ rel, ...h });
     }
   }
@@ -127,7 +130,7 @@ export function checkMarshalIssueIdentity({ root, files, skills } = {}) {
     return {
       fail: [
         `host/skills 还有 ${hits.length} 处教裸 gh issue 写动作`,
-        '改成 `node scripts/gh-as.mjs marshal -- issue <动词>`；只读 view/list 可以继续裸',
+        '改成 `node scripts/issue-gateway.mjs`；只读 view/list 可以继续裸',
         hits.slice(0, 4).map(h => `${h.rel}:${h.line} ${h.verb}  ${h.excerpt}`).join('；'),
       ],
       scanned: rels.length,

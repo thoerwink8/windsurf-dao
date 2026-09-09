@@ -33,6 +33,93 @@ function sampleScanResult(S, overrides = {}) {
   return S.evaluateScan({ rules, orca, github });
 }
 
+describe('#966 GraphQL 带 milestone，推迟档不进推荐', () => {
+  it('查询字符串问了 milestone.title', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /milestone \{ title \}/);
+  });
+
+  it('normalize：有 title 就带上，缺字段当没挂档', async () => {
+    const S = await LOAD;
+    const deferred = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{
+          number: 819, title: '先过渡', updatedAt: '2026-09-07T00:00:00Z',
+          labels: { nodes: [{ name: '已消歧' }] },
+          milestone: { title: '将来某版' },
+        }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(deferred.ok, true);
+    assert.equal(deferred.issues[0].milestone.title, '将来某版');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{
+          number: 10, title: '现在做', updatedAt: '2026-09-07T00:00:00Z',
+          labels: { nodes: [{ name: '已消歧' }] },
+        }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.issues[0].milestone, null);
+  });
+});
+
+describe('#1147 GraphQL 带 committedDate，normalize 落到 lastCommittedAt', () => {
+  it('查询字符串问了 committedDate', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /committedDate/);
+  });
+
+  it('有 committedDate 就带上，缺字段是 null 不当超龄', async () => {
+    const S = await LOAD;
+    const withDate = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{
+          number: 885, title: 'draft', updatedAt: '2026-09-08T00:00:00Z', isDraft: true,
+          commits: { nodes: [{ commit: { committedDate: '2026-09-07T18:00:00Z' } }] },
+        }] },
+      },
+    });
+    assert.equal(withDate.ok, true);
+    assert.equal(withDate.prs[0].lastCommittedAt, '2026-09-07T18:00:00Z');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{ number: 1, title: 'x', updatedAt: '2026-09-08T00:00:00Z', isDraft: true }] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.prs[0].lastCommittedAt, null);
+  });
+});
+
+describe('#966 推迟档不进推荐（接 GraphQL 归一化）', () => {
+  it('挂将来某版的已消歧单不进 P2，也不进 P3', async () => {
+    const S = await LOAD;
+    const rec = S.buildRecommendations({
+      rules: { 异常判据: {}, 推荐排序: {} },
+      github: {
+        ok: true,
+        issues: [
+          { number: 819, title: '先过渡', labels: [{ name: '已消歧' }], milestone: { title: '将来某版' }, updatedAt: '2026-09-07T00:00:00Z' },
+          { number: 42, title: '可起', labels: [{ name: '已消歧' }], updatedAt: '2026-08-21T00:00:00Z' },
+        ],
+        prs: [],
+      },
+      orca: { ok: true, worktrees: [] },
+    });
+    assert.equal(rec.ok, true);
+    const p2 = rec.items.filter((i) => i.priority === 'P2').map((i) => i.number);
+    const p3 = rec.items.filter((i) => i.priority === 'P3').map((i) => i.number);
+    assert.deepStrictEqual(p2, [42]);
+    assert.deepStrictEqual(p3, []);
+  });
+});
+
 describe('shuai-scan 规则文件', () => {
   it('默认 rules JSON 能解析', async () => {
     const S = await LOAD;
@@ -209,5 +296,41 @@ describe('shuai-scan CLI 契约', () => {
     assert.ok((r.stderr || '').trim().length > 0);
     assert.ok(!(r.stdout || '').includes('AGENT_LOOP_TICK_PANMIAN'));
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+// #1094：指挥官 human_holds 闸要读 issue 正文。查询必须要 body 字段；
+// 节点没给 body 键 ≠ 正文是空串——缺键是没查成。
+describe('GitHub 快照带 issue body（#1094）', () => {
+  it('GraphQL 查询要 issue body 字段', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /issues\([\s\S]*?\bbody\b/);
+  });
+
+  it('节点有 body → 原样留下；没这个键 → 结果上也没有（缺键不是空串）', async () => {
+    const S = await LOAD;
+    const withBody = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 1, title: '有正文', body: '改协作约定', labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(withBody.ok, true);
+    assert.equal(withBody.issues[0].body, '改协作约定');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 2, title: '没正文键', labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(missing.issues[0], 'body'), false);
+    const empty = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [{ number: 3, title: '空正文', body: null, labels: { nodes: [] } }] },
+        pullRequests: { nodes: [] },
+      },
+    });
+    assert.equal(empty.issues[0].body, '');
   });
 });

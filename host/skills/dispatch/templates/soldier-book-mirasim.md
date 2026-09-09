@@ -5,7 +5,7 @@
 
 > orca 版任务书在 `host/skills/dispatch/templates/soldier-book.md`。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以没有卡态切换、没有 orchestration
-> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论、按需起审官，
+> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论；首审入队、不自己起审官（#1125），
 > **不做 notify 结算、不写卡备注**（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
 
 ## 本单 spec（前言字段）
@@ -19,6 +19,10 @@
 - `spec=` 后面是**本单 spec**（权威范围）：本单具体职责的指针或正文，以它为准，本文件不复制每单不同的职责。
 - ` #<issue 号>`：本单署名 issue（可空）。开 PR、写 PR 正文回链都用它。
 - **PR 号不在前言里**——PR 是你开工时开出来的（见开工第 2 步），开完你自己就知道号。
+
+## GitHub Issue 写（#792）
+
+写 Issue（开单 / 评论 / 关单 / 打标）只走 `node scripts/issue-gateway.mjs`，身份由网关固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`，不许经 `gh-as` 自选身份。PR 侧继续 `gh-as.mjs worker`。
 
 ## 开工（进 git 的活，先做这个再干活）
 
@@ -41,9 +45,9 @@
 2. 跑 `node scripts/dao-check.mjs`，绿了才往下。
 3. 对照本单验收标准逐条打勾，每条贴证据（命令输出 / 文件路径 / PR 段）；缺证据的条不算过。
 4. **跑 `node scripts/handoff-check.mjs`，红了不许交卷。** 它核的是测试测不到的那一类——
-   你的树是不是切自旧 master（别人的文件在你树里根本没出生）、有没有反向删掉 master 已有的东西、
-   新写的仓内指针是不是指向空气、以及你自证的那份是不是审官真会看到的那份。
-   2026-09-05 实测：一次过审率 0/9，红的**全部**是这一类，而工人的测试全绿。
+   有没有反向删掉 master 已有的东西、新写的仓内指针是不是指向空气、以及你自证的那份是不是审官真会看到的那份。
+   **① 基底新旧只报不判**（#1117）：审查期间 master 会动，钉在交卷时刻是活锁；合并那一刻才由 `--gate merge` 判。输出里「合并前还要过的」一节不是红项，不要为它对齐再交一轮。
+   2026-09-05 实测：一次过审率 0/9，红的**全部**是契约类，而工人的测试全绿。
 5. **本单修的是某次实咬 / 事故 / 报警**：PR 正文补一段「机制判定」——这错在制度生效前还会再犯吗？
    会 → 机制改在哪；不会 → 为什么。答不出就写「没查成」，不许留空。
    缺这段审官直接判红（审官标准第 8 条），白跑一轮返工。
@@ -53,7 +57,7 @@
 
 1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。
    **不要在 PR 正文写 GitHub 自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 #657）。
-2. **调原子完工命令**——发完工/返工评论，并按需起审官：
+2. **调原子完工命令**——发完工/返工评论。首审只入队，不起审官（#1125）：
 
    ```bash
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
@@ -65,7 +69,7 @@
    那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
-   命令自己看盘面起/复用审官。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
+   首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。交卷成功后本会话会被停掉（树留着）。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，先照报错修，修不好升级给帅；退出码 0 才算交卷成功。
 4. 交卷后**等审**：审官红项会经 GitHub（`--request-changes` review）打回。你自己读 PR 的 review 状态判有没有被打回——
    红了逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。
@@ -107,4 +111,4 @@
 - 审官是谁、判定怎么落：审官任务书（mirasim 版 `host/skills/dispatch/templates/reviewer-book-mirasim.md`）为准；
   审查质量标准见 `host/skills/dispatch/review-standard.md`，本框架不复制。
 - 派工前读 CLI 教学那套是 orca 终端自起法用的；mirasim 会话由运行时起好，你直接干活，不自起 CLI。
-- `worker-done` 失败（报错/超时/建审官失败）必须**报出来并重试**，不许当发成功（#532）。
+- `worker-done` 失败（报错/超时/入队失败）必须**报出来并重试**，不许当发成功（#532）。

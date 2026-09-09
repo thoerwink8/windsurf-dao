@@ -209,6 +209,20 @@ describe('#815 ① 复审待办队列 + drain', () => {
     );
     assert.ok(/review-pending-drain/.test(attachCase),
       '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
+    assert.ok(!/'--pr'/.test(attachCase),
+      '#1125 attach-reviewer 不带 --pr：整队按容量拉，代表票只用来记账');
+    assert.ok(!/'--force'/.test(attachCase),
+      '指挥官不许 --force 绕上限');
+    assert.ok(/function drainReviewPending/.test(commanderSrc)
+      && /review-pending-drain/.test(commanderSrc),
+      'rereview/retry 的 drainReviewPending 必须带 --pr 调 review-pending-drain');
+    const rrFn = commanderSrc.slice(
+      commanderSrc.indexOf('function requestRereview'),
+      commanderSrc.indexOf('function drainReviewPending'),
+    );
+    assert.ok(/drainReviewPending/.test(rrFn),
+      'rereview 写完票当场 drain，不等下一轮 → ' + rrFn.slice(-240));
+    assert.ok(!/drain 下一轮消费/.test(rrFn), '不许再把审官推到下一轮');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-cmd-'));
     const built = S.buildReviewPendingTicket({
@@ -500,13 +514,14 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: 810, labels: req.add }; };
     const stamped = S.stampIssueLabels({
-      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh,
+      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh, writeIssue,
     });
     assert.ok(stamped.ok, JSON.stringify(stamped));
-    const edit = calls.find(a => a[0] === 'issue' && a[1] === 'edit');
-    assert.ok(!edit || !edit.includes('model/grok-4.6'),
-      'issue edit 不得带第二条 model/* → ' + JSON.stringify({ stamped, calls }));
+    assert.ok(!writes.some(w => (w.add || []).includes('model/grok-4.6')),
+      'issue-gateway 打标不得带第二条 model/* → ' + JSON.stringify({ stamped, writes, calls }));
 
     const many = S.requireWorkerModel(['model/pi-v2', 'model/grok-4.6', 'type/写码']);
     assert.ok(many.ok === false && many.state === 'many', JSON.stringify(many));
@@ -553,10 +568,9 @@ describe('#815 ⑥ 审官注入失败不回滚树', () => {
     assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
       'worker-start 失败也不得整树回滚');
 
-    const createSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerCreate'), daoSrc.indexOf('function cmdReviewerAttach'));
-    const attachSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerAttach'), daoSrc.indexOf('function cmdReviewerDone'));
-    assert.ok(/preferAgent:\s*true/.test(createSeg) && /preferAgent:\s*true/.test(attachSeg),
-      '审官 create/attach 必须 preferAgent，注入走 #805 --agent 探就绪');
+    const createSeg = daoSrc.slice(daoSrc.indexOf('async function cmdReviewerCreateMirasim'), daoSrc.indexOf('async function cmdWorkerDoneMirasim'));
+    assert.doesNotMatch(createSeg, /launchAgentInWorktree\(/);
+    assert.match(createSeg, /mirasimReviewerCreate\(/);
     const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
     assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
       'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
@@ -645,9 +659,21 @@ describe('#1014 复审票来源是写票时记下的事实', () => {
       'writeReviewPendingOnFail 必须填 worker-done-fail');
     assert.ok(/REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW/.test(commanderSrc),
       'requestRereview 必须填 commander-rereview');
+    assert.ok(/REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF/.test(daoSrc),
+      '#1125 首审入队必须填 worker-done-handoff');
     assert.ok(/attachReviewerWhy/.test(coreSrc), 'attach-reviewer 的 why 必须走分支函数');
     assert.ok(!/工人已交卷、worker-done 起审官失败入队/.test(daoSrc + commanderSrc + coreSrc),
       '写死的归因字符串必须从热路消失');
+  });
+
+  it('#1125 首审入队票缺工人树仍拒写', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1125', workerWorktree: null, reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /工人树/);
   });
 });
 

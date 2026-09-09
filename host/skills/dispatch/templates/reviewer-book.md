@@ -1,5 +1,7 @@
 # 审官任务书
 
+> **已退役。** 执行体是 mirasim。审官读 `host/skills/dispatch/templates/reviewer-book-mirasim.md`。本页只作判例档案，不要再注入。合入归指挥官 squash，不要从本页抄 `pr merge`。
+
 你是本单**审官**。本文件是**闭环框架**——审查质量标准在 `host/skills/dispatch/review-standard.md`
 （判绿前必核清单，逐条打勾），框架只定义闭环衔接：**士兵完工→判红判绿→收尾**。
 
@@ -71,9 +73,9 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
   （注入参数「对方 dispatch」）一并报上，帅换人走 `worker-start --task <task> --retry-of <id>`，战绩不断链。
 - **绿**：按注入参数的 merge-policy 收口（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上），两条路分开：
 
-  - `merge-policy: auto`（默认）：**你自己合并**，不再问帅。审官 App 只有 `contents:read`，合不了；
-    合并走帅身份：`node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`
-    （marshal 直接合并（checks 已绿才走到这一步，不需要排队）；当时合并命令以审读规矩为准）。合并完进第 3 步。
+  - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。它只出现在交卷闸输出的「合并前还要过的」一节，归合并闸（指挥官 `pr merge` 之前跑 `--gate merge`）。审查期间 master 必然会动，拿它判红产出的是一次 `git merge` 加一整轮复审。
+  - `merge-policy: auto`（默认）：**你不许自己合并**。`--approve` 落到 GitHub 即收尾，指挥官当轮 squash。
+    不要跑 `handoff-check --gate merge`，不要 `pr merge`。落后 ≠ 冲突，不要为对齐 master 再审一轮。
   - `merge-policy: manual`（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
     **转 draft**（机器可读的「禁止合并」状态，draft PR 在 GitHub 上无法正常合并，这是 #549 审官
     第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，
@@ -121,7 +123,7 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 
 ## 复审轮走队列
 
-返工完成后士兵仍调 `worker-done`（首行「返工完成」）。起审官失败（含士兵 dispatch 里不能再 worker-start 的深度限制、审官终端已有在途派单）时，`worker-done` 把待办写入 `_flow/queue/review-pending/<pr>.json`（含 head、工人树、reviewer）并**成功交卷**（`queued:true`，不是「没查成」非零退出）。指挥官 / automations 调 `dao.mjs review-pending-drain` 逐条 `reviewer-attach --skip-wait`。审官终端已有活 dispatch 时 drain/复用**跳过 worker-start**，把复审任务书送到现有终端。不要自己再派一张审官，也不要在已结算的审官 dispatch 上等复审。
+返工完成后士兵仍调 `worker-done`（首行「返工完成」）。#1125 起首审交卷也走同一条队列（`source=worker-done-handoff`，按设计入队，不是起败兜底）；指挥官调 `dao.mjs review-pending-drain` 按在役审官数拉取，达上限拉 0、票留在队列。起审官失败时仍写票并**成功交卷**（`queued:true`，不是「没查成」非零退出）。不要自己再派一张审官，也不要在已结算的审官 dispatch 上等复审。
 
 **失败不回滚树**（#815 第 6 洞）：`reviewer-attach` / `reviewer-create` 对 pi 类审官走与工人相同的 `--agent` 探就绪/回退（#805）。树已建成后，注入或开工验证失败**不许整树 rollback**——删了下次 `start --worktree path:` 就是 `selector_not_found`。留现场给人接手：
 

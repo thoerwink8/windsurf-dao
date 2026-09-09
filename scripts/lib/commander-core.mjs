@@ -20,7 +20,7 @@
 //
 // 复用已测原语（不重造）：
 //   shuai-scan.mjs   prApprovedReady / prApprovedDraft / prChecksRed —— PR 判绿/待拍板/CI 红
-//   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 = 可立即起
+//   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 + 没挂「将来某版」 = 可立即起
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
@@ -35,17 +35,25 @@ import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
   reviewPendingSourceOf,
 } from './dispatch/review-pending.mjs';
 import { resolveMergeable } from './dispatch/git.mjs';
 import {
+  hasLiveExecutor, sessionListForLiveness, planReconcile,
+} from './session-reconcile.mjs';
+import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
+import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
 } from './admission.mjs';
+import { classifyAsk } from './ask-gate.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
+  'stop-session', 'pump-draft',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -74,11 +82,32 @@ export function attachReviewerWhy(ticket) {
   if (source === REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW) {
     return `PR #${pr} 交卷可合但没人审，按设计叫审官`;
   }
+  if (source === REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF
+      || source === REVIEW_PENDING_SOURCE_WORKER_DONE) {
+    return `PR #${pr} 工人首审已入队，按在役审官数拉取`;
+  }
   return `PR #${pr} 复审票来源没查成`;
 }
 
 /** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
 export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
+
+/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
+export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+
+/** draft 距上次提交的毫秒。缺字段 / 解不出 / 没有时钟 → unscanned，绝不当超龄。 */
+export function draftCommitAgeMs(pr, nowMs) {
+  const raw = pr && pr.lastCommittedAt;
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, unscanned: true, reason: 'commit-unscanned' };
+  }
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return { ok: false, unscanned: true, reason: 'commit-unscanned' };
+  if (!Number.isFinite(nowMs) || nowMs <= 0) {
+    return { ok: false, unscanned: true, reason: 'clock-unscanned' };
+  }
+  return { ok: true, ageMs: nowMs - t, lastCommittedAt: raw };
+}
 
 // 框架活的角色标（type/体系）。这类单不进自动派单队列，走快马：主会话子代理闭环（#876，用户 2026-09-04 拍板）。
 // 为什么不派：框架活要改的是派单机制本身，让派单机制去派它，等于让手术刀切自己。
@@ -92,6 +121,8 @@ export const COMMANDER_POLICY_DEFAULTS = {
   conservativeWorkerMb: 400,
   minSamplePairs: 4,
   sampleWindow: 12,
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 
 /** 归一 commander 节。旧键 maxDispatchPerRound 读到打「已改名」提示，不按它限流。 */
@@ -124,6 +155,69 @@ export function assessDispatchModel(model, { policy, enabledIds, redIds } = {}) 
     return { ok: false, reason: 'model-health-red', why: `模型 ${id} 健康表红，不派` };
   }
   return { ok: true };
+}
+
+/**
+ * #1094：派工前用 ask-gate 的现成判官看这单动的东西在不在 human_holds。
+ * 命中 / 没查成 → manual（没查成不许退回 auto）；扫完不命中 → auto。
+ * 关键词表不落在本文件，只认 policy（parsePolicy / loadPolicy 的结果）。
+ * 不传 commitType：本闸只管 human_holds，不管发布档位。
+ */
+function mergePolicyUnscanned(why) {
+  return {
+    mergePolicy: 'manual',
+    mergeReason: `human_holds 没查成：${why}——不许退回 auto`,
+    mergePolicySource: 'unscanned',
+  };
+}
+
+export function resolveIssueMergePolicy(issue, policy) {
+  if (labelValue(issue, 'type/') === '体系') {
+    return {
+      mergePolicy: 'manual',
+      mergeReason: 'type/体系 框架活：自动执行，合并必须人工拍板',
+      mergePolicySource: 'framework',
+    };
+  }
+  if (!policy || policy.unscanned) {
+    return mergePolicyUnscanned(policy?.unscanned || '没拿到策略——判据本身没读到');
+  }
+  if (!issue || typeof issue !== 'object') {
+    return mergePolicyUnscanned('issue 没查成');
+  }
+  // 正文键缺失 ≠ 正文是空：没扫到正文就只凭标题放行 auto，红线只写在正文里就会漏。
+  if (issue.body === undefined || issue.body === null) {
+    return mergePolicyUnscanned('issue 正文没查成——不许只凭标题放行 auto');
+  }
+  const title = issue.title == null ? '' : String(issue.title);
+  const text = [title, String(issue.body)].filter((s) => String(s).trim()).join('\n');
+  const classified = classifyAsk({ text, policy });
+  if (classified.verdict === 'unscanned') {
+    return mergePolicyUnscanned(classified.why);
+  }
+  if (classified.verdict === 'ask') {
+    return {
+      mergePolicy: 'manual',
+      mergeReason: classified.why,
+      mergePolicySource: 'hold',
+    };
+  }
+  return {
+    mergePolicy: 'auto',
+    mergeReason: null,
+    mergePolicySource: 'clear',
+  };
+}
+
+/** act 侧把 decide 的 merge-policy 翻成 dao.mjs dispatch 旗标。
+ * auto 不传（跟底层缺省合）；manual 必须带理由。字段缺失 / 非法值一律 manual——没查成不许退回 auto。 */
+export function dispatchMergePolicyArgs(action) {
+  if (action && action.mergePolicy === 'auto') return [];
+  const reason = String(action && action.mergeReason || '').trim()
+    || (action && action.mergePolicy === 'manual'
+      ? 'human_holds 命中但理由没写上——不许退回 auto'
+      : `merge-policy 没查成（${action && action.mergePolicy != null ? action.mergePolicy : '空'}）——不许退回 auto`);
+  return ['--merge-policy', 'manual', '--merge-reason', reason];
 }
 
 /** issue 标签取值：`model/grok-4.6` → 传 prefix 'model/' 得 'grok-4.6'。取第一个命中，没有返回 null。 */
@@ -228,10 +322,13 @@ function hub(subject, moment, extra = {}) {
 }
 
 // 态势的必查节。scan 每节标 scanned:true/false。
-// #1055：orca 运行时 2026-09-06 退役，这一节再也不可能被扫出来。留在必查清单里
-// fail-closed 总闸就永远合上（每天最后一行都是「没查成的节：orca」）——搬走真相源、
-// 检查器判据还钉在旧位置。观察面若还扫，不进本清单、不当闸。
-export const SITUATION_SECTIONS = ['github', 'reviewPending', 'prReviews', 'stall'];
+// 2026-09-06 `orca` → `trees`：orca 运行时已 disabled，它**永远**没查成，
+// 于是 fail-closed 总闸从「读不到盘面就别乱动」退化成「每一轮都别动」。
+// 一个恒红的闸等于没有闸，而且它压掉的是真该做的动作。
+// `orca` 段仍在态势里（还有没搬完的消费者读它），但不再决定这一轮能不能动手。
+// `trees` 进清单：树面没查成 ≠ 没有在途工人，少派一轮可恢复，重复派工不可恢复。
+// #1055：必查清单只认这一处——situationHealth 跟决策层同一份，复制一份会再钉死。
+export const SITUATION_SECTIONS = ['github', 'trees', 'reviewPending', 'prReviews', 'stall'];
 
 // 复审重试：上一票的宽限期与上限。
 // 宽限期要大于「审官从起来到落判定」的常见耗时，否则审官正在看的时候就被重发一张票；
@@ -298,6 +395,10 @@ export const ACTION_NEEDS = {
   'reap-ticket': ['github', 'reviewPending'],
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
+  'stop-session': [],
+  // #1147 draft 收口泵：只认 github 上的 draft + lastCommittedAt。会话名单不进
+  // SITUATION_SECTIONS（没查成只挡住泵，不许把合并/叫审官整轮停掉）。
+  'pump-draft': ['github'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -339,7 +440,6 @@ function maybeAddLabel(issue, situation, extra, needs) {
 function collectCandidates(situation) {
   const out = [];
   const gh = situation.github || {};
-  const orca = situation.orca || {};
   const rp = situation.reviewPending || {};
   const reviews = situation.prReviews || {};
   const stall = situation.stall || {};
@@ -355,7 +455,20 @@ function collectCandidates(situation) {
 
   // ① 已消歧 + 无在途派工 → dispatch（缺标签 / 模型不在选型 / 健康表红 = 报帅不派）
   // #1007：闸是机器余量，不是「每轮派几个」。容量没查成 → 一张都不派（fail-close）。
-  const ready = inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: orca.worktrees || [] });
+  // 树面来自 situation.trees（mirasim，见 lib/mirasim-trees.mjs），**不再是 orca.worktrees**。
+  // 2026-09-06 实咬：orca 退役后那一段恒 scanned:false，而这里原来写着 `orca.worktrees || []`
+  // ——「没查成」被洗成「查过没有」，于是已消歧且还没开 PR 的单每 20 分钟被重复派一次。
+  // 现在**不给兜底空数组**：树面没查成就让 inspectReadyQueue 判 unscanned，一张都不派。
+  // 少派一轮是可恢复的，重复派工烧掉的额度和两个工人打架不是。
+  // 「有没有活执行者」仍只问下面 hasLiveExecutor（#1056 唯一活性口），不拿卡面猜。
+  const treeFace = situation.trees;
+  const ready = treeFace && treeFace.scanned === true
+    ? inspectReadyQueue({ issues: gh.issues || [], prs: gh.prs || [], worktrees: treeFace.worktrees })
+    : {
+      kind: 'unscanned',
+      ready: null,
+      line: `可立即起：没查成（${(treeFace && treeFace.error) || '树面没给'}，≠ 扫完是 0）`,
+    };
   const admission = situation.admission;
   // 生产路径 buildSituation 必填 admission。夹具缺席 = 不限张（旧测兼容，不当成 0 放开闸的反面）。
   let dispatchSlots = Infinity;
@@ -377,7 +490,65 @@ function collectCandidates(situation) {
   // 复审票的数量本轮一开始就知道，所以先把名额留出来，剩下的才给新派单；
   // 返工与复审共用剩余额度，谁先跑到谁先拿。
   let slotsLeft = dispatchSlots;
-  const finishReserve = Math.min(slotsLeft, (rp.items || []).length);
+  // #1125：drain 自己按在役数拉，decide 每轮只产一条 attach-reviewer。
+  // 预留按票数会把新活全挤掉——队列里 18 张时 finishReserve=18，新活永远派不出。
+  // 有票就留 1 个名额喊一次 drain，剩下的给新活。
+  // #1147：收口泵也是收尾。预留只数「真能派出」的 draft：缺标签 / 模型派不出只 escalate、不 takeSlot。
+  const stalledHoursMs = Number(policy.stalledDraftHours) * 3600 * 1000;
+  const maxPumps = Number(policy.stalledDraftMaxPumps) || 2;
+  const sessionsForLive = sessionListForLiveness(situation);
+  const draftStalledForPump = (pr) => {
+    if (!pr || pr.number == null || !pr.isDraft) return false;
+    if (prHasStuckLabel(pr)) return false;
+    const age = draftCommitAgeMs(pr, nowMs);
+    if (!age.ok || age.ageMs < stalledHoursMs) return false;
+    const live = hasLiveExecutor({
+      sessions: sessionsForLive,
+      pr: pr.number,
+      issue: attributedIssueNumber(pr),
+    });
+    if (live.live || live.unavailable) return false;
+    const prev = reworkDispatched[pumpDraftKey(pr.number)];
+    if (prev && prev.unscanned === true) return false;
+    return true;
+  };
+  const draftDueForPump = (pr) => {
+    if (!draftStalledForPump(pr)) return false;
+    const tries = Number(reworkDispatched[pumpDraftKey(pr.number)]?.tries) || 0;
+    return tries < maxPumps;
+  };
+  /** 跟 pushPumpDraft 派出前校验同一套：有标签且模型过闸（含顶班）才算能占名额。 */
+  const resolvePumpDraftDispatch = (pr) => {
+    const issueNo = attributedIssueNumber(pr);
+    const rIssue = attributedIssueOf(gh, pr);
+    const rModel = labelValue(rIssue, 'model/');
+    const rReviewer = labelValue(rIssue, 'reviewer/');
+    if (!rIssue || !rModel || !rReviewer) {
+      return { ok: false, reason: 'missing-labels', issueNo, rIssue, rModel, rReviewer };
+    }
+    let rGate = assessDispatchModel(rModel, { policy, enabledIds, redIds });
+    let pumpModel = rModel;
+    let substituted = null;
+    if (!rGate.ok && (rGate.reason === 'model-not-in-routing' || rGate.reason === 'model-health-red')) {
+      const fb = situation.defaultWorkerModel;
+      const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+      if (fb && fbGate.ok) {
+        substituted = { from: rModel, to: fb, why: rGate.why };
+        pumpModel = fb;
+        rGate = fbGate;
+      }
+    }
+    if (!rGate.ok) {
+      return { ok: false, reason: rGate.reason, why: rGate.why, issueNo, rIssue, rModel, rReviewer };
+    }
+    return { ok: true, issueNo, rIssue, rModel, rReviewer, pumpModel, substituted };
+  };
+  const stalledPumpCount = (gh.prs || []).filter((pr) => {
+    if (!draftDueForPump(pr)) return false;
+    return resolvePumpDraftDispatch(pr).ok;
+  }).length;
+  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  const finishReserve = Math.min(slotsLeft, reviewReserve + stalledPumpCount);
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
   const takeSlot = () => {
@@ -414,10 +585,38 @@ function collectCandidates(situation) {
       // #876 ②：带「待消歧」标的单一律不派，哪怕故意同时挂着「已消歧」。静默跳过——
       // 该说的话由盘点在「时机到了」那天说一次（commander-inventory 的待消歧一项），这里天天喊没意义。
       if (hasPendingLabel(issue?.labels)) continue;
-      // #876 ①：框架活（type/体系）不进自动派单队列，改回流一条「走快马」。
-      // 放在缺标签判据之前：框架单本就不该被要求补 model|reviewer，报帅催标签纯属噪音。
+      // #876 ①：框架活走无人值守快马，但必须保留人工合门。
+      // 以前这里只回流给主会话；用户离开时没有执行者，框架活就永远不动。
+      // 框架单仍要求明确 model/reviewer，不能为了自动化而猜模型。
       if (role === FRAMEWORK_ROLE) {
-        out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，走快马：主会话子代理闭环，不进派单队列`, 'decide', { issue: n }), N.dispatch));
+        if (!model || !reviewer) {
+          out.push(withNeeds(hub(`#${n}${issue?.title ? '「' + issue.title + '」' : ''}是框架活，但缺 model/reviewer，不能无人值守派工；补齐后再自动执行`, 'decide', { issue: n }), N.dispatch));
+          continue;
+        }
+        const frameworkGate = assessDispatchModel(model, { policy, enabledIds, redIds });
+        if (!frameworkGate.ok) {
+          out.push(withNeeds(esc(`#${n} 框架活不能自动派：${frameworkGate.why}`, {
+            reason: frameworkGate.reason, issue: n, model, title: issue?.title || '',
+          }), N.dispatch));
+          continue;
+        }
+        const live = hasLiveExecutor({
+          sessions: sessionListForLiveness(situation),
+          issue: n,
+        });
+        if (live.live) continue;
+        if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
+          reportAdmission(N.dispatch);
+          continue;
+        }
+        dispatchedThisRound += 1;
+        out.push(withNeeds({
+          kind: 'dispatch', issue: n, model, reviewer, role,
+          title: issue?.title || '', mergePolicy: 'manual',
+          mergeReason: 'type/体系 框架活：自动执行，合并必须人工拍板',
+          why: `#${n} 框架活已标齐，走无人值守快马`,
+        }, N.dispatch));
+        out.push(withNeeds(hub(`已自动派单 #${n}：框架活进入无人值守执行，合并仍等人工拍板`, 'dispatched', { issue: n }), N.dispatch));
         continue;
       }
       // 缺标签三档（#1003）。硬边界：不许改回「缺任一就报」。
@@ -475,6 +674,13 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
+      // #1056：活性只问这一处。同一 issue 已有活执行者（或名单没查成）→ 不派。
+      // 观测面未接入（老夹具）live.live=false，既有派工路不受影响。
+      const live = hasLiveExecutor({
+        sessions: sessionListForLiveness(situation),
+        issue: n,
+      });
+      if (live.live) continue;
       // 新活只能用「留给收尾之后剩下的」那部分名额，且照样要从共用池里领一个。
       if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
         reportAdmission(N.dispatch);
@@ -484,8 +690,16 @@ function collectCandidates(situation) {
       if (renamedHint && dispatchedThisRound === 1) {
         out.push(withNeeds(hub(renamedHint, 'decide'), N.dispatch));
       }
-      out.push(withNeeds({ kind: 'dispatch', issue: n, model, reviewer, role: role || null, title: issue?.title || '', why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐` }, N.dispatch));
-      out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}`, 'dispatched', { issue: n }), N.dispatch));
+      const mergePlan = resolveIssueMergePolicy(issue, situation.askPolicy);
+      out.push(withNeeds({
+        kind: 'dispatch', issue: n, model, reviewer, role: role || null,
+        title: issue?.title || '',
+        mergePolicy: mergePlan.mergePolicy,
+        mergeReason: mergePlan.mergeReason,
+        mergePolicySource: mergePlan.mergePolicySource,
+        why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
+      }, N.dispatch));
+      out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: n }), N.dispatch));
     }
   }
 
@@ -547,6 +761,11 @@ function collectCandidates(situation) {
       exhaustedThisRound.add(Number(it.pr));
       continue;
     }
+    // #1125：执行侧 attach-reviewer 调的是不带 --pr 的 review-pending-drain，
+    // drain 自己按在役数拉、拉满即停。所以 decide 每轮只产**一条** attach-reviewer——
+    // 产 N 条就会连跑 N 次 drain，每次都看到「还没满」再拉一张，把容量闸冲掉。
+    // 账仍按这张代表票的 pr@head 记（validateRetryDrain 的键），不是按整队。
+    if (out.some((a) => a.kind === 'attach-reviewer')) continue;
     // 起审官也是起会话，也吃同一份 CPU 和内存——2026-09-06 实测 137 个会话里审官占 53 个。
     // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
     if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
@@ -643,12 +862,17 @@ function collectCandidates(situation) {
       return;
     }
     reworkThisRound += 1;
+    const mergePlan = resolveIssueMergePolicy(rIssue, situation.askPolicy);
     out.push(withNeeds({
       kind: 'rework', pr: pr.number, head, issue: issueNo,
       model: reworkModel, reviewer: rReviewer, redRounds,
       title: pr.title || '', brief, reworkKey: rkey, conflict,
+      mergePolicy: mergePlan.mergePolicy,
+      mergeReason: mergePlan.mergeReason,
+      mergePolicySource: mergePlan.mergePolicySource,
       ...(substituted ? { substitutedModel: substituted } : {}),
-      why: why + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : ''),
+      why: why + (substituted ? `；原模型 ${substituted.from} 派不出（${substituted.why}），顶班 ${substituted.to}` : '')
+        + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
     }, N.rework));
     out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
   }
@@ -669,14 +893,21 @@ function collectCandidates(situation) {
     //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
     //   · 没查成一律不合，与「查过确实没绿」分开。
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+    const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const readyToLand = approvedToLand({
+      greenAtHead,
+      decisionApproved,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment: lastJudgmentOf(allA),
+    });
     // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
     const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
     const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
     const mergeableNow = mergeableState === 'MERGEABLE';
 
-    if ((greenAtHead || decisionApproved) && !pr.isDraft && mergeableNow) {
+    if (readyToLand && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
       if (ci.red) { // 判绿却 CI 红：矛盾态，不自动合，报帅
         out.push(withNeeds(esc(`PR #${pr.number} 审官判绿但 CI 红（${ci.reason}）——不自动合，报帅`, { reason: 'approved-but-ci-red', pr: pr.number }), N.merge));
@@ -696,13 +927,18 @@ function collectCandidates(situation) {
           continue;
         }
       }
-      out.push(withNeeds({ kind: 'merge', pr: pr.number, title: pr.title || '', why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE' }, N.merge));
+      out.push(withNeeds({
+        kind: 'merge', pr: pr.number, title: pr.title || '',
+        why: greenAtHead
+          ? '审官判绿（当前 head）+ CI 绿 + MERGEABLE'
+          : '审官已放行（head 因对接 master 变了，不再审）+ CI 绿 + MERGEABLE',
+      }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
       continue;
     }
 
-    if ((greenAtHead || decisionApproved) && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+    if (readyToLand && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
       continue;
     }
@@ -714,7 +950,17 @@ function collectCandidates(situation) {
     // 而 reviews-missing 在下面是静默 continue，写在后面会被吃掉。
     // 只认显式 CONFLICTING：UNKNOWN 是 GitHub 还在异步算，没查成 ≠ 有冲突。
     // mergeableState 已经过 resolveMergeable：列表 UNKNOWN 时单张重查后再判。
-    if (mergeableState === 'CONFLICTING' && !pr.isDraft) {
+    // #1056 / #1043：draft 不是「有人在做」。4 张 CONFLICTING 全是 draft、一个活会话都没有，
+    // 却被 !pr.isDraft 整批挡在门外。改问活执行者；查不成当有人在做（不往活树上再塞人）。
+    // 观测面未接入（老夹具）维持旧契约：draft 不派。
+    if (mergeableState === 'CONFLICTING') {
+      const live = hasLiveExecutor({
+        sessions: sessionListForLiveness(situation),
+        pr: pr.number,
+        issue: attributedIssueNumber(pr),
+      });
+      if (live.live) continue; // 有人在做，或会话名单没查成——不派
+      if (live.unavailable && pr.isDraft) continue; // 观测面未接：draft 维持旧契约
       const head = pr.headRefOid || '';
       if (!head) {
         out.push(withNeeds(esc(
@@ -738,11 +984,14 @@ function collectCandidates(situation) {
           `- 不许借机改本单范围外的东西；解冲突就只解冲突。`,
           `- 冲突文件在 master 侧被删除/拆分的（例如测试拆套），要把本分支的改动搬到新落点，不是把文件复活。`,
         ].join('\n'),
-        why: `PR #${pr.number} 与 master 冲突（CONFLICTING）——审官判不了冲突 PR，先派工人解冲突`,
-        hubText: `PR #${pr.number} 与 master 冲突，已自动派工人解冲突`,
+        why: `PR #${pr.number} 与 master 冲突（CONFLICTING）——脚本先自动合，合不上再在原树起短会话`,
+        hubText: `PR #${pr.number} 与 master 冲突，先自动合入 master`,
       });
       continue;
     }
+
+    // 审官已经放行：head 变了只因对接 master。不要因为当前 head 零判定再叫一轮审官。
+    if (readyToLand) continue;
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
@@ -830,6 +1079,125 @@ function collectCandidates(situation) {
     });
   }
 
+  // #1147 draft 收口泵：无活会话 + 超 N 小时无提交 → 派短会话三选一；泵满仍 draft → 打「卡死/等用户」交帅。
+  // 排在返工/复审之后、新派之前（finishReserve 已预扣名额）。不进上面的 PR 循环：
+  // 判红返工、冲突解、叫审官都不认 draft 这一格，写进去会被 continue 吃掉。
+  function pushPumpDraft(pr) {
+    if (exhaustedThisRound.has(Number(pr.number))) return;
+    // 这一轮已经为这张 PR 派了返工/审官 = 有人在推，别再塞一个收口会话抢树。
+    if (out.some((a) => a && Number(a.pr) === Number(pr.number)
+      && (a.kind === 'rework' || a.kind === 'rereview' || a.kind === 'attach-reviewer'))) {
+      return;
+    }
+    const pkey = pumpDraftKey(pr.number);
+    const prev = reworkDispatched[pkey];
+    if (prev && prev.unscanned === true) return; // 上次派成没成没查成，不重派（重派会造重复工人）
+    const tries = Number(prev?.tries) || 0;
+    if (tries >= maxPumps) {
+      if (prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number))) return;
+      out.push(withNeeds(buildMarkExhausted({
+        pr: pr.number, verb: 'pump-draft', tries,
+        head: typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null,
+        why: `PR #${pr.number} draft 收口泵试了 ${tries} 次仍是 draft——打「卡死/等用户」交帅，不再泵`,
+      }), N['mark-exhausted']));
+      exhaustedThisRound.add(Number(pr.number));
+      return;
+    }
+    const resolved = resolvePumpDraftDispatch(pr);
+    if (!resolved.ok) {
+      if (resolved.reason === 'missing-labels') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} draft 超龄要收口，但署名 issue 的 model/reviewer 没查成——不猜、不泵`,
+          { reason: 'missing-labels', pr: pr.number, issue: resolved.issueNo, title: resolved.rIssue?.title || pr.title || '' },
+        ), N['pump-draft']));
+        return;
+      }
+      out.push(withNeeds(esc(`PR #${pr.number} draft 超龄要收口，但${resolved.why}`, {
+        reason: resolved.reason, pr: pr.number, issue: resolved.issueNo, model: resolved.rModel,
+      }), N['pump-draft']));
+      return;
+    }
+    if (!takeSlot()) {
+      reportAdmission(N['pump-draft']);
+      return;
+    }
+    const hours = Number(policy.stalledDraftHours) || 24;
+    out.push(withNeeds({
+      kind: 'pump-draft', pr: pr.number, issue: resolved.issueNo,
+      model: resolved.pumpModel, reviewer: resolved.rReviewer,
+      head: typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null,
+      title: pr.title || '', pumpKey: pkey, tries: tries + 1,
+      ...(resolved.substituted ? { substitutedModel: resolved.substituted } : {}),
+      why: `PR #${pr.number} draft 超 ${hours}h 无提交且无活会话——派收口短会话（第 ${tries + 1}/${maxPumps} 次）`
+        + (resolved.substituted ? `；原模型 ${resolved.substituted.from} 派不出（${resolved.substituted.why}），顶班 ${resolved.substituted.to}` : ''),
+    }, N['pump-draft']));
+    out.push(withNeeds(hub(
+      `PR #${pr.number} draft 超龄无人推，已派收口短会话（第 ${tries + 1}/${maxPumps} 次）`,
+      'dispatched', { pr: pr.number },
+    ), N['pump-draft']));
+  }
+  for (const pr of gh.prs || []) {
+    if (!draftStalledForPump(pr)) continue;
+    pushPumpDraft(pr);
+  }
+
+  // ⑤ 对账循环（#1056）：未结 job.dispatch ∖ 活会话 → 差集重派。
+  // 观测面和期望集都没挂上（老夹具）→ 整段跳过，既有动作不受影响。
+  // sessions 不进 SITUATION_SECTIONS：名单没查成只挡住重派，不许把合并/叫审官整轮停掉。
+  if (situation.sessions != null || situation.desiredJobs != null) {
+    const desired = situation.desiredJobs;
+    // 差集重派也起会话，吃同一份机器余量。夹具没给 admission 时 slotsLeft=Infinity，
+    // 退回旧缺省 2（#849），不按已退役的 maxDispatchPerRound 键。
+    const reconcileCap = Number.isFinite(slotsLeft) ? Math.max(0, slotsLeft) : 2;
+    const plan = planReconcile({
+      desired: desired && desired.unscanned ? null : (desired && desired.items),
+      sessions: sessionListForLiveness(situation),
+      openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
+      alreadyQueued: out.map((a) => a.issue).filter((n) => Number.isInteger(n)),
+      maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
+      dispatchedThisRound: 0,
+    });
+    if (plan.unscanned) {
+      out.push(withNeeds(esc(plan.reports[0] || '对账循环没查成——当有人在做，不重派', {
+        reason: 'unscanned', detail: 'reconcile-unscanned',
+      }), N.dispatch));
+    }
+    for (const rd of plan.redispatches) {
+      const issue = (gh.issues || []).find((i) => i && i.number === rd.issue);
+      const model = labelValue(issue, 'model/');
+      const reviewer = labelValue(issue, 'reviewer/');
+      if (!issue || !model || !reviewer) {
+        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但 model/reviewer 没查成，不猜`, {
+          reason: 'missing-labels', issue: rd.issue,
+        }), N.dispatch));
+        continue;
+      }
+      const rGate = assessDispatchModel(model, { policy, enabledIds, redIds });
+      if (!rGate.ok) {
+        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但${rGate.why}`, {
+          reason: rGate.reason, issue: rd.issue, model,
+        }), N.dispatch));
+        continue;
+      }
+      if (!takeSlot()) {
+        reportAdmission(N.dispatch);
+        continue;
+      }
+      const mergePlan = resolveIssueMergePolicy(issue, situation.askPolicy);
+      out.push(withNeeds({
+        kind: 'dispatch', issue: rd.issue, model, reviewer,
+        role: labelValue(issue, 'type/') || null,
+        title: issue.title || '',
+        mergePolicy: mergePlan.mergePolicy,
+        mergeReason: mergePlan.mergeReason,
+        mergePolicySource: mergePlan.mergePolicySource,
+        why: rd.why + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
+        reconcile: true,
+      }, N.dispatch));
+      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue }), N.dispatch));
+    }
+  }
+
   // ④ 撞死指纹 + #833 自动换人没接住 → wake-brain
   for (const [term, info] of Object.entries(stall.strikes || {})) {
     if (!info || (info.strikes || 0) < 2) continue;
@@ -841,19 +1209,35 @@ function collectCandidates(situation) {
     }
   }
 
-  return out;
+  // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
+  // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  const stops = [];
+  for (const s of sessionListForLiveness(situation) || []) {
+    const raw = String((s && (s.state || s.runState || s.driverState)) || '').toLowerCase();
+    if (raw !== 'incomplete') continue;
+    const key = s && (s.key || s.id || s.sessionKey);
+    if (!key) continue;
+    stops.push(withNeeds({
+      kind: 'stop-session',
+      sessionKey: String(key),
+      why: '一轮说完，会话不常驻',
+    }, ACTION_NEEDS['stop-session']));
+  }
+  return stops.concat(out);
 }
 
 /**
  * 纯函数：态势 → 动作清单。**入口总闸 fail-closed**（审官 #840 红①）。
  * situation 各节形态（scan 负责填，任一节没查成把 scanned 置 false + error）：
- *   github:        { scanned, issues:[{number,title,labels:[{name}]}],
+ *   github:        { scanned, issues:[{number,title,body,labels:[{name}]}],
  *                    prs:[{number,title,isDraft,reviewDecision,mergeable,headRefOid,statusCheckRollup,body}], error }
  *                  headRefOid 缺 ⇒ 该 PR 的红轮判据按「没查成」走：不清零、也不当仍红
  *   orca:          观察面（#1055 起不进必查清单；退役后 scanned:false 不当闸）
  *   reviewPending: { scanned, items:[{pr,head,reviewer,worker,source,error}], error }
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
+ *   sessions:      { scanned, items:[{key,title,state,cwd}], error } —— #1056 观测集；不进 SITUATION_SECTIONS
+ *   desiredJobs:   { unscanned, items:[{job_id,issue,pr,identity,model}], error } —— #1056 期望集（未结 job.dispatch）
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
  *   viewMergeable:  (prNumber) => string | {ok, mergeable, error} —— #1017 列表 UNKNOWN 时单张重查；不注入则 UNKNOWN 保持没查成
@@ -866,13 +1250,16 @@ export function decide(situation = {}) {
   const candidates = collectCandidates(situation);
   const actions = [];
   const openLedger = situation.openIssueLedger || {};
+  const hubSeen = situation.hubSeen || {};
+  const nowMs = Date.parse(situation.at || '') || 0;
   for (const cand of candidates) {
     const needs = cand._needs || ACTION_NEEDS[cand.kind] || [];
     const missing = needs.filter((s) => !situation[s]?.scanned);
     const { _needs, ...clean } = cand;
     if (missing.length === 0) {
-      // #971：能转成 open-issue 的 escalate 当场转；已开过返回 null；转不成保持原动作。
-      const next = escalateToOpenIssue(clean, { ledger: openLedger });
+      // #971：能转成 open-issue 的 escalate 当场转。账本只免重开，不免发卡：
+      // 已有 OPEN 且没有成功 hubSeen 戳时，仍产 existing 动作去重试卡。
+      const next = escalateToOpenIssue(clean, { ledger: openLedger, hubSeen, now: nowMs });
       if (next) actions.push(next);
     }
     // 有 missing 的候选整条丢弃（含随附 notify-hub）——不逐条产 escalate，合并成下面一条

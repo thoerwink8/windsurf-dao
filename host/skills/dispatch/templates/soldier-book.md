@@ -1,11 +1,17 @@
 # 士兵任务书
 
+> **已退役。** 执行体是 mirasim。工人读 `host/skills/dispatch/templates/soldier-book-mirasim.md`。本页只作判例档案，不要再注入、不要当现役闭环。
+
 你是本单**实现工人**。本文件是**闭环框架**——你的**具体职责以注入文本里的本单 spec 为准**。
 框架只定义怎么开工、干完怎么交接：**完工走 `dao.mjs worker-done`，不要自己发 comment / 自己 notify 审官**（#586）。
 
 ## 本单 spec
 
 以派工注入文本里的「本单 spec」为准（权威范围）。本文件不复制每单不同的职责。
+
+## GitHub Issue 写（#792）
+
+写 Issue（开单 / 评论 / 关单 / 打标）只走 `node scripts/issue-gateway.mjs`，身份由网关固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`，不许经 `gh-as` 自选身份。PR 侧继续 `gh-as.mjs worker`。
 
 ## 派工前读 CLI 教学（#762）
 
@@ -35,13 +41,13 @@ GPT（方案里的 gpt-5.6-sol）仍走 Codex，见 `docs/cli-notes/codex.md`。
 5. 回流自问（#888）：本单做出的东西有没有**别的场景也用得上的**（纯函数/判据/模板/踩坑解法）？
    有 → PR 正文加 `## 回流` 段，三行：产物是什么 / 为什么通用（说得出 ≥2 个使用场景才算，说不出就别写）/
    建议落点（上收 windsurf-dao / 下发 host/skills / 留原仓+指针）。没有就不写，不硬凑。
-6. 全部提交并推送之后跑 `node scripts/handoff-check.mjs`（交卷闸，#904）——核的是「你这棵树跟 master、跟远端对不对得上」：基底含不含最新 master、有没有反向删掉别人的文件、新写的仓内指针指不指向空气、审官看到的是不是你自证过的那份。退出码 0 才准往下；1 是真红，2 是没查成，**两者都不许交卷**。
+6. 全部提交并推送之后跑 `node scripts/handoff-check.mjs`（交卷闸，#904 / #1117）——核的是「你这棵树跟仓里既成事实对不对得上」：有没有反向删掉别人的文件、新写的仓内指针指不指向空气、审官看到的是不是你自证过的那份。**① 基底含不含最新 master 这一档只报不判**（审查期间 master 会动，钉在交卷时刻是活锁；合并那一刻才由 `--gate merge` 判）。退出码 0 才准往下；1 是真红，2 是没查成，**两者都不许交卷**。
 7. 再 `worker-done`。没自查完不许交卷。
 
 ## 干完活之后（顺序执行，缺一不可）
 
 1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。**不要在 PR 正文写 GitHub 的自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 issue #657）。
-2. **调原子完工命令**——发完工/返工 comment，并按需起审官。不要自己 `issue comment`，不要自己 `notify` 审官：
+2. **调原子完工命令**——发完工/返工 comment。首审只入队，不起审官（#1125）。不要自己 `issue comment`，不要自己 `notify` 审官：
 
    ```bash
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件>
@@ -50,9 +56,8 @@ GPT（方案里的 gpt-5.6-sol）仍走 Codex，见 `docs/cli-notes/codex.md`。
    **不要**用 `orca orchestration send --type worker_done` 代替上面这条交卷——Orca 假 stall 会吊销 capability，原生结算失败，审官下一跳就断了。仓内 `worker-done` 不走 Orca 结算（#677）。判定绿之后的身份结算仍用下面第 4 步的 `notify --type worker_done`。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头。
-   命令自己看盘面：没有可复用审官终端 → 自读 `reviewer/*` 建审官并投递「完工」；终端还在 → 新 Task 注入老终端（不建第二张卡）；已有审官卡则复用，终端已关也不许再建。有 review 时 comment 用「返工完成」。
-   把「完工」和「起审官」绑成一个动作，是为了不靠你记得再做一步（#586）。
-3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，**不许往下走**——先照报错修，修不好就升级给帅。退出码 0 才进下一步。`worker-done` **不**结算 Orca 身份（#677）：成功路径只保证 GitHub 有完工、审官已起。
+   首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。不要自己起审官。
+3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，**不许往下走**——先照报错修，修不好就升级给帅。退出码 0 才进下一步。`worker-done` **不**结算 Orca 身份（#677）：成功路径只保证 GitHub 有完工、票已入队。
 4. **不要立刻** `notify --type worker_done`。GitHub 完工 + 起审官之后身份继续活；等审不算空转。此时 `worker-show` 必须仍是 ready/waiting，不是 completed。红项打进这个还活着的 dispatch（`notify --to dispatch:<这个 id>`）。不要开下一跳救人，不要因为已经有完工评论就下班。
    - 等审：用本身份收信。红项到来 → 逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。身份继续活。
    - 判定绿 / 本单结束 → 才允许结算（#551 仍要真结算，只是时刻后移）：

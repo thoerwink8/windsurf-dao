@@ -15,6 +15,7 @@
 
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { ROLES } from './gh.mjs';
+import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -29,6 +30,9 @@ export const MAX_DRAIN_TRIES = 3;
 export const OPEN_ISSUE_REASONS = new Set([
   'wake-exhausted',
 ]);
+
+/** 与 commander.mjs HUB_DEDUP_MS 同值：发卡成功后 6 小时内不重发。 */
+export const OPEN_ISSUE_CARD_DEDUP_MS = 6 * 3600 * 1000;
 
 export const CHECKS = {
   'add-label.role': true,
@@ -195,16 +199,25 @@ export function validateAddLabel(input = {}) {
 }
 
 /** 纯函数：校验过了才给出 gh-as argv。issue 优先（派工读的是署名单上的标）。 */
-export function planAddLabelCmd(action = {}, { models } = {}) {
+export function planAddLabelCmd(action = {}, { models, repo } = {}) {
   const v = validateAddLabel({ ...action, models: models || action.models });
   if (!v.ok) return v;
   if (action.issue == null && action.pr == null) {
     return fail('no-target', 'add-label 要 issue 或 pr 号');
   }
-  const sub = action.issue != null
-    ? ['issue', 'edit', String(action.issue)]
-    : ['pr', 'edit', String(action.pr)];
-  const argv = ['node', 'scripts/gh-as.mjs', v.role, '--', ...sub];
+  if (action.issue != null) {
+    const targetRepo = repo || action.repo || 'thoerwink8/windsurf-dao';
+    const argv = [
+      'node', 'scripts/issue-gateway.mjs', 'edit-labels',
+      '--repo', targetRepo,
+      '--issue', String(action.issue),
+      '--host', 'commander',
+      '--idempotency-key', `commander-add-label:${action.issue}:${v.labels.join(',')}`,
+    ];
+    for (const lab of v.labels) argv.push('--add', lab);
+    return { ok: true, argv, role: v.role, labels: v.labels, workerId: v.workerId, reviewerId: v.reviewerId };
+  }
+  const argv = ['node', 'scripts/gh-as.mjs', v.role, '--', 'pr', 'edit', String(action.pr)];
   for (const lab of v.labels) argv.push('--add-label', lab);
   return { ok: true, argv, role: v.role, labels: v.labels, workerId: v.workerId, reviewerId: v.reviewerId };
 }
@@ -350,6 +363,8 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
     maxTries: opts.maxTries,
   });
   if (!v.ok) return v;
+  // --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸。
+  // 不过上限是 --force，只许人手；指挥官自动化不许带。
   return {
     ok: true,
     argv: ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
@@ -412,6 +427,28 @@ export function drainLedgerKey(pr, head) {
   const p = pr == null ? '' : String(pr).trim();
   const headOid = typeof head === 'string' && head.trim() ? head.trim() : null;
   return headOid ? `pr:${p}@${headOid}` : `pr:${p}`;
+}
+
+/**
+ * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
+ * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
+ */
+export function applyDrainLedger({
+  ledger = {}, pr, head, payload, nowIso, _checks,
+} = {}) {
+  const verdict = classifyDrainAttempt(payload, { _checks });
+  if (!verdict.countTry || pr == null) return { ledger, wrote: false, verdict };
+  const key = drainLedgerKey(pr, head);
+  const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  return {
+    ledger: {
+      ...(ledger && typeof ledger === 'object' ? ledger : {}),
+      [key]: { at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1 },
+    },
+    wrote: true,
+    verdict,
+    key,
+  };
 }
 
 /**
@@ -496,12 +533,13 @@ export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {
   return {
     ok: true,
     argv: [
-      'node', 'scripts/gh-as.mjs', v.role, '--',
-      'issue', 'create',
+      'node', 'scripts/issue-gateway.mjs', 'create',
       '--repo', repo,
       '--title', rendered.title,
       '--body-file', bodyPath,
       '--label', '待拍板',
+      '--host', 'commander',
+      '--idempotency-key', `commander-open-issue:${v.key}`,
     ],
     role: v.role,
     key: v.key,
@@ -510,13 +548,55 @@ export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {
   };
 }
 
-/** decide 把可转的 escalate 换成 open-issue；转不成保持原动作。 */
-export function escalateToOpenIssue(action, { ledger } = {}) {
+/** 发卡去重戳：与 execOpenIssue / askEscalateCard 的 hubAskOnce key 同一格子。 */
+export function openIssueCardSeenKey(dedupKey) {
+  return `esc:${String(dedupKey || '')}`;
+}
+
+function bookedOpenIssueNumber(entry) {
+  const n = Number(entry && entry.number);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+function cardStillFresh(hubSeen, dedupKey, now) {
+  const last = Date.parse((hubSeen && hubSeen[openIssueCardSeenKey(dedupKey)]) || '') || 0;
+  if (!last) return false;
+  const nowMs = typeof now === 'number' && Number.isFinite(now) ? now : 0;
+  if (!nowMs) return true; // 有戳没时钟：不当过期，免刷屏
+  return nowMs - last < OPEN_ISSUE_CARD_DEDUP_MS;
+}
+
+/** decide 把可转的 escalate 换成 open-issue；转不成保持原动作。
+ *  账本只免重开，不免发卡：已有 OPEN 且没有成功 hubSeen 戳时，仍产 existing 动作去重试卡。 */
+export function escalateToOpenIssue(action, { ledger, hubSeen, now } = {}) {
   if (!action || action.kind !== 'escalate') return action;
   if (!OPEN_ISSUE_REASONS.has(action.reason)) return action;
   const answers = threeQuestionsFor(action.reason, action.why);
   if (!answers) return action;
   const target = action.pr != null ? `pr-${action.pr}` : action.issue != null ? `issue-${action.issue}` : action.term || '';
+  const key = openIssueDedupKey(action.reason, target);
+  const booked = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  if (booked) {
+    // 已开过：不许再走旧 escalate 开第二张。卡没送到就继续产 existing 去重试。
+    const number = bookedOpenIssueNumber(booked);
+    if (!number) return null;
+    if (cardStillFresh(hubSeen, key, now)) return null;
+    return {
+      kind: 'open-issue',
+      reason: action.reason,
+      original: action.why,
+      target,
+      answers,
+      issue: action.issue,
+      pr: action.pr,
+      term: action.term,
+      title: action.title,
+      why: action.why,
+      role: action.role,
+      existing: true,
+      number,
+    };
+  }
   const v = validateOpenIssue({
     reason: action.reason,
     original: action.why,
@@ -526,7 +606,6 @@ export function escalateToOpenIssue(action, { ledger } = {}) {
     role: action.role,
   });
   if (!v.ok) {
-    // 已开过：吞掉，不许再走旧 escalate 开第二张。其它校验拒：保持 escalate（人不猜）。
     if (v.code === 'dup') return null;
     return action;
   }

@@ -18,7 +18,7 @@
 
 - `<spec>` / ` #<issue>`：本单 spec 与署名 issue。
 - `p=<PR号>`：**你要审的 PR**（已经存在——士兵在开工时开出并转正式，你直接审它，不等 orchestration 完工信号）。
-- `m=<auto|manual>`：merge-policy。`auto`（默认）判绿你自己合；`manual`（例外，带 `r=` 理由）你不许合，转帅。
+- `m=<auto|manual>`：merge-policy。`auto`（默认）判绿后由指挥官 squash，你不许合；`manual`（例外，带 `r=` 理由）指挥官也不自动合，转帅。
 - **没有 `d=`（对方 dispatch）、没有 `s=`（skip-wait）、没有 `fb=`**——这三个都是 orchestration 的东西，mirasim 会话里不存在。
 
 以前言为准，不要手抄、不要猜。
@@ -49,25 +49,22 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 - **红**（有要返工的项）：走 `--request-changes`，正文把每条的**位置 / 问题 / 期望**写清。
   士兵读 PR 的 review 状态就知道被打回——**mirasim 路径不用 `notify` 打红项到 dispatch**（没有 dispatch），
   红项写进 GitHub review 正文即送达。**不要自己拼 `task-create` / `worker-start` 开下一跳救人**。
-- **判绿**：按 `m=` 收口——
-  - `m=auto`（默认）：**你自己合并**（审官 App 合不了，走帅身份）：
-    `node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`（checks 已绿才走到这步）。合完进第 2 步。
-  - `m=manual`（例外，前言带 `r=` 理由）：**你不许合**。判绿后先把 PR 转 draft（机器可读的「禁止合并」态）：
-    `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，然后在 review 正文写「需人工合并，理由：<r= 的值>」，交帅合并。
-  - 合并前（两条路都跑）：`node scripts/dao.mjs pr-sync-labels --pr <PR号>`——把署名 issue 的 `model/*` `type/*` label
-    同步到 PR（#564）；非零退出 = 没同步成，查报错补上再合并，不许带空 label 合。
+- **判绿**：`--approve` 落到 GitHub 即收尾。**不许自己合**（指挥官当轮 squash；落后 ≠ 冲突，不要为对齐 master 再审一轮）。
+  - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。
+  - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
+    `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
+  - 判定落成后不要待在会话里等下一句——交卷侧会停会话；你这边落判定即下班。
 
 ### 2. 收尾（mirasim 版：无 orchestration 结算）
 
 **判定落到 GitHub review（`--approve` 或 `--request-changes`）就是收尾**——mirasim 会话里**没有 Run 信箱、没有 dispatch 身份可结算**，
 所以**不发 `notify`、不发 `--type worker_done`、不取 Run id**（orca 版那两跳在这里都不存在）。
 
-- 判绿且已合并（`m=auto`）：合并完成即闭环。可归档信号 = PR 已 MERGED + 有 APPROVED review；归档（`worktree-rm`）仍由收口官/帅做，你不执行。
+- 判绿（`m=auto`）：APPROVED 落成即闭环。合入由指挥官 squash；可归档信号 = PR 已 MERGED + 有 APPROVED review。归档仍由收口官/帅做。
 - 判绿但 `m=manual`：转 draft + review 正文写明「需人工合并」即收尾，帅合并解 draft。
 - 判红：`--request-changes` 落 GitHub 即收尾这一轮，士兵返工后重开一轮审（士兵再调 `worker-done`，首行「返工完成」）。
 
-> **确认落成才算收尾**：`gh-as reviewer -- pr review` / `marshal -- pr merge` / `pr-sync-labels` 任一非零 = 没落成，
-> 当场报出来并重试，不许把「发过了」当「判定到位了」。
+> **确认落成才算收尾**：`gh-as reviewer -- pr review` 非零 = 没落成，当场报出来并重试，不许把「发过了」当「判定到位了」。
 
 ## 边界
 

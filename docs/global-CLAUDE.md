@@ -1,6 +1,6 @@
 # 全局协作约定
 
-- 默认用简体中文回复，代码标识、命令和路径保留原文。
+- 默认用简体中文回复，代码标识、命令和路径保留原文。GitHub Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792），身份固定 `dao-marshal[bot]`，不许裸 `gh issue` 写、不许自选 token。
 - 道法自然：先读清现状，再做最小而顺手的改动。
 - 为道日损：先问能不能删，能少做就不多造。
 - 反者道之动：看不清时反过来想，同一种办法连错两次就换路。
@@ -20,7 +20,7 @@
 - 用户在场时，所有需要拍板的决定都要问；用户不在场（值守态，dao-mode=standby）时，只推**已过消歧门**的项（岔路清单、结论、依据都已拍，见 dao-project skill 第二节），没过门的攒值守队列不派、等用户回来一起拍。
 - 用户回来后批量给出每件事的三行摘要：干到哪、要决定什么、推荐哪个。
 - 说人话的判断标准：这个词用户自己说过吗？没有就换成日常说法。
-- 收工一条命令：任何项目 commit 完跑 windsurf-dao 仓的 `node scripts/land.mjs`（幂等：检查绿才推主分支＋只清已合并派生物；派生分支、编排在管的树、与远端发散一律自动拒绝）。服务器 automations 调同一条（`node scripts/install-land-automation.mjs`，#829）。
+- 收工一条命令：任何项目 commit 完跑 windsurf-dao 仓的 `node scripts/land.mjs`（幂等：检查绿才推主分支＋只清已合并派生物；派生分支、编排在管的树、与远端发散一律自动拒绝）。服务器 hourly 调同一条（`sudo bash scripts/install-land.sh` 装 `dao-land.timer`，#829）。
 
 ### 收件箱（别的会话给我留东西）
 

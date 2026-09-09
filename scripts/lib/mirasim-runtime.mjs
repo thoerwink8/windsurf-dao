@@ -1,10 +1,11 @@
 // scripts/lib/mirasim-runtime.mjs —— mirasim-server 当执行体的唯一绑定入口（#880 卡 A）。
 //
-// 五个动词是 #880 冻结的接口，dao.mjs 按 executor 字段分派 orca / mirasim 两套绑定，
-// orca 退役时删绑定、不改调用方：
+// 五个动词是 #880 冻结的接口；#1125 加了第六个 listSessions（orca 已随 #1115 退役，
+// 冻结五个的理由没了，「现在有几个审官真在跑」只有这一帧答得出）：
 //   ensureWorkspace(repo, branch)             → {path}
 //   startSession({agent, workdir, prompt})    → {sessionKey, taskId}
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
+//   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
 //
@@ -239,12 +240,14 @@ export function readSessionView(snapshot) {
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
 export function metaView(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
+  const runState = typeof m.runState === 'string' ? m.runState.trim().toLowerCase() : '';
   return {
     phase: normPhase(m.runState),
     text: typeof m.preview === 'string' ? m.preview : '',
     toolCalls: [],
-    error: null,
-    incomplete: false,
+    error: typeof m.runDetail === 'string' && m.runDetail ? m.runDetail : null,
+    incomplete: runState === 'incomplete' || m.incomplete === true,
+    runState: runState || null,
     partial: true,
   };
 }
@@ -564,7 +567,7 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
   return wire;
 }
 
-// ── 五个动词 ─────────────────────────────────────────────────────────────────
+// ── 动词（#880 五个 + #1125 listSessions）────────────────────────────────────
 
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
@@ -582,6 +585,12 @@ export function createRuntime(opts = {}) {
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125）：名单是**全量枚举**，
+    // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
+    // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
+    // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    list: opts.listTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || 30_000),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -846,10 +855,37 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 会话名单（#1125）。readSession 内部一直在用这一帧当兜底，只是没往外露。
+   *
+   * 为什么现在加第六个动词：#880 冻结五个动词是为了「orca 退役时删绑定、不改调用方」，
+   * orca 已随 #1115 退役，那个理由没了。而「现在有几个审官真在跑」只有这一帧答得出——
+   * 登记文件会留下死会话（#1121），进程会被服务端重新拉起来变成残壳，两个都不算数。
+   *
+   * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
+   * 把上游池子拉满，那正是 #1125 要治的病。
+   */
+  async function listSessions() {
+    const wire = await open();
+    try {
+      wire.send({ type: 'listSessions' });
+      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!msg || !Array.isArray(msg.sessions)) {
+        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      }
+      return { ok: true, missing: false, sessions: msg.sessions };
+    } catch (e) {
+      return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
     readSession,
+    listSessions,
     interact,
     stopSession,
     waitForCompletion,
@@ -867,6 +903,7 @@ export function _setSharedRuntime(r) { shared = r; }
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
+export const listSessions = () => runtime().listSessions();
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);

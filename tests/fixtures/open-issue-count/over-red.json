@@ -1,0 +1,12 @@
+{
+  "expect": "red",
+  "expectN": 2,
+  "max": 1,
+  "why": "2 张非推迟、未在做的开放单，阈值 1 → ⑭ 必须红。没有将来某版。",
+  "issues": [
+    { "number": 101, "title": "积压 A" },
+    { "number": 102, "title": "积压 B" }
+  ],
+  "prs": [],
+  "worktrees": []
+}

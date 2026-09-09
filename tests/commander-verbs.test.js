@@ -41,7 +41,7 @@ describe('#971 形状对齐：drain 账本与复审同一套 tries', () => {
     assert.deepEqual([...FORBIDDEN_AUTO_KINDS].sort(), [
       'edit-dao', 'merge-force', 'rm-tree', 'worktree-remove', 'worktree-rm', 'write-fingerprint',
     ].sort());
-    for (const k of ['add-label', 'retry-drain', 'open-issue', 'mark-exhausted']) {
+    for (const k of ['add-label', 'retry-drain', 'open-issue', 'mark-exhausted', 'pump-draft']) {
       assert.ok(ACTION_KINDS.includes(k), `${k} 必须进白名单`);
       assert.ok(!FORBIDDEN_AUTO_KINDS.has(k), `${k} 不许进禁用表`);
     }
@@ -204,10 +204,11 @@ describe('add-label 校验：合法放行 / 违规被拒', () => {
       models: MODELS,
     });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual(r.argv, [
-      'node', 'scripts/gh-as.mjs', 'marshal', '--',
-      'issue', 'edit', '971', '--add-label', 'reviewer/gpt-5.6-luna',
-    ]);
+    assert.equal(r.argv[1], 'scripts/issue-gateway.mjs');
+    assert.ok(r.argv.includes('edit-labels'));
+    assert.ok(r.argv.includes('--idempotency-key'));
+    assert.ok(!r.argv.includes('--identity'));
+    assert.ok(r.argv.includes('reviewer/gpt-5.6-luna'));
   });
 });
 
@@ -263,6 +264,7 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const r = planRetryDrainCmd({ pr: 905 }, { queue: queued, ledger: ledgerOk, nowMs: PAST });
     assert.equal(r.ok, true);
     assert.deepEqual(r.argv, ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', '905']);
+    assert.ok(!r.argv.includes('--force'), '--pr 只隔离，不过上限只认 --force；指挥官不许带');
   });
 });
 
@@ -328,14 +330,48 @@ describe('open-issue 校验：原文+reason、三问、去重', () => {
     assert.equal(r.code, 'unscanned-silent');
   });
 
-  it('planOpenIssueCmd：gh-as marshal + --body-file，不许 --body', async () => {
+  it('planOpenIssueCmd：issue-gateway + --body-file，不许 --body / --identity', async () => {
     const { planOpenIssueCmd } = await VERBS;
     const r = planOpenIssueCmd(base, { repo: 'thoerwink8/windsurf-dao', bodyPath: '/tmp/x.md' });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.ok(r.argv.includes('marshal'));
+    assert.equal(r.argv[1], 'scripts/issue-gateway.mjs');
     assert.ok(r.argv.includes('--body-file'));
     assert.ok(!r.argv.includes('--body'));
+    assert.ok(!r.argv.includes('--identity'));
+    assert.ok(r.argv.includes('--idempotency-key'));
     assert.ok(r.argv.includes('待拍板'));
+  });
+
+  it('escalateToOpenIssue：账本有 OPEN 但无 hubSeen → existing 重试卡，不重开', async () => {
+    const { escalateToOpenIssue, OPEN_ISSUE_CARD_DEDUP_MS } = await VERBS;
+    const action = {
+      kind: 'escalate',
+      reason: 'wake-exhausted',
+      why: base.original,
+      term: 'term_q',
+    };
+    const ledger = { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } };
+    const retry = escalateToOpenIssue(action, { ledger, hubSeen: {}, now: PAST });
+    assert.equal(retry && retry.kind, 'open-issue');
+    assert.equal(retry.existing, true);
+    assert.equal(retry.number, 900);
+    assert.equal(retry.reason, 'wake-exhausted');
+
+    const fresh = escalateToOpenIssue(action, {
+      ledger,
+      hubSeen: { 'esc:wake-exhausted+term_q': FRESH_AT },
+      now: PAST,
+    });
+    assert.equal(fresh, null, '成功后 6 小时内不再发');
+
+    const expiredAt = PAST + OPEN_ISSUE_CARD_DEDUP_MS + 1;
+    const expired = escalateToOpenIssue(action, {
+      ledger,
+      hubSeen: { 'esc:wake-exhausted+term_q': new Date(PAST).toISOString() },
+      now: expiredAt,
+    });
+    assert.equal(expired && expired.existing, true, '过了 6 小时可以再发');
+    assert.equal(expired.number, 900);
   });
 });
 
@@ -513,7 +549,9 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
   function sit(over) {
     return {
       github: { scanned: true, issues: [], prs: [] },
+      // 2026-09-06：在途派工的树面从 orca 换成 mirasim（situation.trees）。
       orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
       reviewPending: { scanned: true, items: [] },
       prReviews: { scanned: true, byPr: {} },
       stall: { scanned: true, strikes: {} },
@@ -602,12 +640,28 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
   });
 
-  it('已开过的 open-issue 去重：账本有键就不再产', async () => {
+  it('已开过的 open-issue：账本免重开，没成功发卡戳则重试卡', async () => {
     const { decide, WAKE_LIMIT } = await CORE;
     const r = decide(sit({
       stall: { scanned: true, strikes: { term_q: { strikes: 2 } } },
       wakeCounts: { 'stall:term_q': WAKE_LIMIT },
       openIssueLedger: { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } },
+    }));
+    const oi = r.actions.filter((a) => a.kind === 'open-issue');
+    assert.equal(oi.length, 1, JSON.stringify(r.actions));
+    assert.equal(oi[0].existing, true);
+    assert.equal(oi[0].number, 900);
+    assert.equal(oi[0].reason, 'wake-exhausted');
+    assert.equal(r.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);
+  });
+
+  it('已开过且发卡成功 6 小时内：不再产 open-issue', async () => {
+    const { decide, WAKE_LIMIT } = await CORE;
+    const r = decide(sit({
+      stall: { scanned: true, strikes: { term_q: { strikes: 2 } } },
+      wakeCounts: { 'stall:term_q': WAKE_LIMIT },
+      openIssueLedger: { 'wake-exhausted+term_q': { at: OLD_AT, number: 900 } },
+      hubSeen: { 'esc:wake-exhausted+term_q': FRESH_AT },
     }));
     assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
     assert.equal(r.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);
@@ -645,6 +699,108 @@ describe('drainLedgerKey：decide 与 execute 同一门面', () => {
   });
 });
 
+describe('#1125 审官红 1：满载持票不记 tries，宽限期后不绕闸', () => {
+  const heldPayload = { ok: true, drained: 0, failed: 0, held: 2 };
+
+  it('满载拉 0 → applyDrainLedger 不写账', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const r = applyDrainLedger({
+      ledger: {}, pr: 920, head: null, payload: heldPayload, nowIso: OLD_AT,
+    });
+    assert.equal(r.wrote, false);
+    assert.equal(r.verdict.countTry, false);
+    assert.deepEqual(r.ledger, {});
+  });
+
+  it('没查成拉 0 → 也不写账', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const r = applyDrainLedger({
+      ledger: {}, pr: 920, head: null,
+      payload: { ok: true, drained: 0, held: 2, unscanned: true },
+      nowIso: OLD_AT,
+    });
+    assert.equal(r.wrote, false);
+  });
+
+  it('真拉走才记 tries', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const r = applyDrainLedger({
+      ledger: {}, pr: 920, head: 'h920',
+      payload: { ok: true, drained: 1, failed: 0, held: 1 },
+      nowIso: OLD_AT,
+    });
+    assert.equal(r.wrote, true);
+    assert.equal(r.key, 'pr:920@h920');
+    assert.equal(r.ledger['pr:920@h920'].tries, 1);
+  });
+
+  it('满载不记账 → 宽限期后仍走 attach-reviewer，不产 retry-drain --pr', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const { decide } = await CORE;
+    const applied = applyDrainLedger({
+      ledger: {}, pr: 920, head: null, payload: heldPayload, nowIso: OLD_AT,
+    });
+    assert.equal(applied.wrote, false);
+    const r = decide({
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
+      orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
+      prReviews: { scanned: true, byPr: {} },
+      stall: { scanned: true, strikes: {} },
+      wakeCounts: {},
+      reworkDispatched: {},
+      drainLedger: applied.ledger,
+      commanderPolicy: { requireModelInRouting: false },
+      routingModels: MODELS.filter((m) => !m.reviewerDisabled).map((m) => m.id),
+      routingModelRecords: MODELS,
+      reviewerOrder: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+      workerOrder: ['grok-4.6', 'deepseek-v4-flash'],
+      healthRedModels: [],
+      at: '2026-09-05T12:00:00.000Z',
+    });
+    assert.equal(r.actions.filter((a) => a.kind === 'retry-drain').length, 0, '没账就不能走 retry-drain');
+    assert.equal(r.actions.filter((a) => a.kind === 'attach-reviewer').length, 1, '下一轮仍走不带 --pr 的 attach-reviewer');
+  });
+
+  it('摘掉 held-not-try → 满载被记成试过，宽限期后产 retry-drain --pr（不带 --force）', async () => {
+    const { applyDrainLedger, planRetryDrainCmd } = await VERBS;
+    const { decide } = await CORE;
+    const applied = applyDrainLedger({
+      ledger: {}, pr: 920, head: null, payload: heldPayload, nowIso: OLD_AT,
+      _checks: { 'held-not-try': false, 'unscanned-not-try': true },
+    });
+    assert.equal(applied.wrote, true, '闸摘掉就必须记 tries——否则宽限期后绕闸那条没有判别力');
+    assert.equal(applied.ledger['pr:920'].tries, 1);
+    const r = decide({
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
+      orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
+      prReviews: { scanned: true, byPr: {} },
+      stall: { scanned: true, strikes: {} },
+      wakeCounts: {},
+      reworkDispatched: {},
+      drainLedger: applied.ledger,
+      commanderPolicy: { requireModelInRouting: false },
+      routingModels: MODELS.filter((m) => !m.reviewerDisabled).map((m) => m.id),
+      routingModelRecords: MODELS,
+      reviewerOrder: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+      workerOrder: ['grok-4.6', 'deepseek-v4-flash'],
+      healthRedModels: [],
+      at: '2026-09-05T12:00:00.000Z',
+    });
+    const rd = r.actions.filter((a) => a.kind === 'retry-drain');
+    assert.equal(rd.length, 1, '闸摘掉后宽限期就走 retry-drain');
+    const planned = planRetryDrainCmd(rd[0], {
+      queue: [{ pr: '920' }], ledger: applied.ledger, nowMs: PAST,
+    });
+    assert.equal(planned.ok, true);
+    assert.ok(planned.argv.includes('--pr'), '毒票隔离仍带 --pr');
+    assert.ok(!planned.argv.includes('--force'), '自动化不许 --force 绕上限');
+  });
+});
+
 describe('执行层真接了三个动词（不是只测纯函数）', () => {
   it('commander.mjs 的 switch 有三个 case，且动手前走 plan*Cmd', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
@@ -654,17 +810,38 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     for (const fn of ['planAddLabelCmd', 'planRetryDrainCmd', 'planOpenIssueCmd']) {
       assert.ok(src.includes(fn), `executor 缺 ${fn}（校验层没接到手上）`);
     }
-    assert.ok(/gh-as\.mjs/.test(src) && /marshal/.test(src), '写动作要走 gh-as');
+    assert.ok(/issue-gateway\.mjs/.test(src), 'Issue 写动作要走 issue-gateway（#792）');
+    assert.ok(/marshal/.test(src), 'PR 合并等仍走 marshal 身份');
   });
 
-  it('attach-reviewer 记账走 drainLedgerKey + ticketHeadOid，不许手写旧键 pr:<N>', () => {
+  it('attach-reviewer 记账走 applyDrainLedger，满载不记 tries；自动化不许 --force', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     const i = src.indexOf("case 'attach-reviewer':");
     assert.ok(i > -1, '找不到 attach-reviewer case');
     const body = src.slice(i, src.indexOf("case 'merge':", i));
-    assert.match(body, /drainLedgerKey\(/, '写侧必须走 drainLedgerKey，否则 decide 去看另一个格子');
-    assert.match(body, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    assert.match(body, /recordDrainAttempt\(/, '写侧必须走 recordDrainAttempt → applyDrainLedger');
+    // #1125：attach-reviewer 不带 --pr，整队按容量拉。带了就只拉代表票，补不满。
+    // --pr 仍过容量闸；不过上限只认 --force，指挥官不许带。
+    assert.ok(!/'--pr'/.test(body), 'attach-reviewer 不带 --pr：整队按容量拉');
+    assert.ok(!/'--force'/.test(body), '指挥官 attach-reviewer 不许 --force 绕上限');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(body), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
+    const recI = src.indexOf('function recordDrainAttempt');
+    assert.ok(recI > -1, '找不到 recordDrainAttempt');
+    const rec = src.slice(recI, recI + 800);
+    assert.match(rec, /applyDrainLedger\(/, '记账必须走 applyDrainLedger，满载才不会记 tries');
+    assert.match(rec, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    const drainI = src.indexOf('function drainReviewPending');
+    assert.ok(drainI > -1, '找不到 drainReviewPending');
+    const drainEnd = src.indexOf('function drainPayloadOf', drainI);
+    const drain = src.slice(drainI, drainEnd > drainI ? drainEnd : drainI + 800);
+    assert.match(drain, /recordDrainAttempt\(/, 'rereview/retry 写侧必须走同一记账门面');
+    assert.match(drain, /'--pr'/, 'rereview/retry 的 drain 必须带本张 PR，毒票不许拖死队列里别的 PR');
+    assert.ok(!/'--force'/.test(drain), '自动化 drain 不许 --force');
+    assert.ok(!/`pr:\$\{action\.pr\}`/.test(drain), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
+    const daoSrc = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
+    const drainCmd = daoSrc.slice(daoSrc.indexOf('async function cmdReviewPendingDrain'), daoSrc.indexOf('async function cmdReviewPendingDrain') + 2200);
+    assert.match(drainCmd, /args\.force/, '不过上限只认 --force');
+    assert.doesNotMatch(drainCmd, /args\.pr\s*\n\s*\? \{ ok: true/, '--pr 不许再当逃生口绕上限');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {

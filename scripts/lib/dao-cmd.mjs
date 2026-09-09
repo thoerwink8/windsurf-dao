@@ -638,18 +638,8 @@ export function isCiEnv(env = process.env) {
   return env.GITHUB_ACTIONS === 'true' || env.CI === 'true';
 }
 
-export function orcaHelpAvailable(spawn = spawnSync) {
-  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
-  if (r.error) {
-    const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
-      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
-    return { ok: false, missing, error: msg };
-  }
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) return { ok: false, missing: false, error: 'orca --help 无输出' };
-  return { ok: true, missing: false };
+export function orcaHelpAvailable() {
+  return { ok: false, missing: true, error: 'orca 已退役' };
 }
 
 /**
@@ -668,17 +658,8 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 /** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
 const LIVE_HELP_CACHE = new Map();
 
-export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const key = parts.join(' ');
-  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
-  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
-  if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
-  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
-  return text;
+export function fetchOrcaHelp(cmd) {
+  throw new Error(`orca 已退役，${cmd} --help 不再有对象`);
 }
 
 export function helpFixturePath(cmd, root = ROOT) {
@@ -699,28 +680,7 @@ export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = RO
 }
 
 function spawnOrcaHelpAsync(cmd) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  return new Promise((resolve, reject) => {
-    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.on('error', reject);
-    child.on('close', (status) => {
-      const text = `${stdout}${stderr}`;
-      if (status !== 0 && !String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
-        return;
-      }
-      if (!String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 无输出`));
-        return;
-      }
-      resolve(text);
-    });
-  });
+  return Promise.reject(new Error(`orca 已退役，${cmd} --help 不再有对象`));
 }
 
 /**
@@ -994,9 +954,12 @@ export {
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -1061,7 +1024,7 @@ export const FLAGS_BY_VERB = {
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
-    '--executor', '--branch', '--repo', '--json', '--help', '-h',
+    '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
@@ -1069,7 +1032,7 @@ export const FLAGS_BY_VERB = {
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
     '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--force', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1182,7 +1145,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
-                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
+                  # 交卷：发完工/返工 comment。#1125 起首审只入待审队列、不自己起审官；返工复用原会话再推一针
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
@@ -1199,10 +1162,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
                   # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
-                  # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
-                  # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
-                  # 扫完 0 条是空转成功，目录读不了才没查成
+  review-pending-drain [--pr <N>] [--force]
+                  # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
+                  # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸
+                  # --force 才不过上限，只许人手；指挥官自动化不许带
+                  # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵

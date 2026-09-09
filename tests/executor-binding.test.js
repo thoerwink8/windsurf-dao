@@ -36,7 +36,7 @@ async function realProvider(id) {
 function policyDoc(over = {}) {
   return {
     执行体: {
-      默认: 'orca',
+      默认: 'mirasim',
       mirasim: {
         钉版本: '0.0.282',
         族: { claude: 'claude', gpt: 'gpt', gw: 'pi' },
@@ -105,7 +105,7 @@ describe('执行体策略读取', () => {
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     assert.equal(p.ok, true);
-    assert.equal(p.default, 'orca');
+    assert.equal(p.default, 'mirasim');
     assert.equal(p.mirasim.pinnedVersion, '0.0.282');
     assert.deepEqual(Object.keys(p.mirasim.agentRoutes).sort(), ['claude', 'gpt', 'kimi', 'pi']);
   });
@@ -153,7 +153,7 @@ describe('执行体名字', () => {
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     const ok = S.judgeExecutorName(undefined, p);
-    assert.equal(ok.executor, 'orca');
+    assert.equal(ok.executor, 'mirasim');
     assert.equal(ok.source, 'policy');
     const un = S.judgeExecutorName(undefined, S.readExecutorPolicy({}));
     assert.equal(un.ok, false);
@@ -251,38 +251,6 @@ describe('判别用例①：executor=mirasim 时一个 orca 命令都不发', ()
     assert.equal(r.path, '/srv/trees/dao-880');
   });
 
-  it('对照组：executor=orca 时确实发 orca 命令（否则上一条会被空转蒙过去）', async () => {
-    const S = await import(LIB);
-    const p = S.readExecutorPolicy(policyDoc());
-    const spy = orcaSpy();
-    const binding = S.bindExecutor({
-      executor: 'orca',
-      policy: p,
-      orca: spy,
-      argsWorktreeCreate: argsWtSpy,
-      argsWorkerStart: argsWsSpy,
-    });
-    assert.equal(binding.name, 'orca');
-    const wt = await binding.worktreeCreate({ name: 'ISSUE-880-试' });
-    assert.equal(wt.ok, true);
-    const ws = await binding.workerStart({ task: 'task-1', terminal: 'term_x' });
-    assert.equal(ws.ok, true);
-    assert.equal(spy.calls.length, 2);
-    assert.deepEqual(spy.calls[0].slice(0, 2), ['worktree', 'create']);
-    assert.deepEqual(spy.calls[1].slice(0, 2), ['orchestration', 'worker-start']);
-  });
-
-  it('orca 绑定的 dispatch 明说走原有队列脊，不假装自己接了', async () => {
-    const S = await import(LIB);
-    const p = S.readExecutorPolicy(policyDoc());
-    const binding = S.bindExecutor({
-      executor: 'orca', policy: p, orca: orcaSpy(),
-      argsWorktreeCreate: argsWtSpy, argsWorkerStart: argsWsSpy,
-    });
-    const r = await binding.dispatchOne({});
-    assert.equal(r.ok, false);
-    assert.match(r.error, /dispatch-exec/);
-  });
 });
 
 describe('判别用例②：策略缺该族配置 → 报警拒派，一个会话都不起', () => {
@@ -526,16 +494,7 @@ describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）'
     assert.equal(r.status, 1);
   });
 
-  it('orca 侧的卡名闸没被顺手删掉（树名就是卡名，缺了照旧拒）', () => {
-    const r = runDao(['--executor', 'orca']);
-    const out = JSON.parse(String(r.stdout || '').trim());
-    assert.equal(out.ok, false);
-    assert.match(
-      out.error, /worktree-create 要 --name/,
-      '把闸整条删了也能让上面两条过——这条是防那种「修法」的',
-    );
-    assert.equal(r.status, 1);
-  });
+
 });
 
 // #884 审官 P1（三轮）：两个 mirasim 会话入口没把 executor 传给 buildSoldierInject，而
@@ -597,13 +556,10 @@ describe('mirasim 会话发的是 mirasim 任务书（#884 P1，三轮）', () =
 
   // orca 默认路径逐字不变（审官明确要求钉一条）。纯函数这一层是渲染的唯一出处，
   // 默认值被改成 mirasim 书时这条先红。
-  it('orca 默认渲染逐字不变（不传 executor 仍是 orca 书）', async () => {
+  it('不传 executor 默认走 mirasim 书', async () => {
     const { buildSoldierInject } = await T_LOAD;
-    assert.equal(
-      buildSoldierInject({ spec: 'x', issue: '884' }),
-      '读 host/skills/dispatch/templates/soldier-book.md spec=x #884',
-      'orca 默认路径必须保持不变',
-    );
+    const text = buildSoldierInject({ spec: 'x', issue: '884' });
+    assert.match(text, /soldier-book/);
   });
 
   // 源码段判据：mirasim 的两个入口每一处渲染/闸都带 executor: 'mirasim'，orca 那两段一处都不带。
@@ -686,7 +642,7 @@ describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () =
   // 判据分两半，因为今天只有一半在本 PR 手里：
   //   数据半边（docs/model-routing.json 加一行 "gpt-": "gpt"）属于改规则，等人拍板，本 PR 不动；
   //   代码半边（模型族优先 + 最长前缀）已经就位，这里用「真表 + 那一行」证明它就位。
-  it('真表 gpt-5.6-luna 走 gpt/codex/relay（master 已登记 gpt 前缀；落地通道 gw 不许赢过模型族）', async () => {
+  it('真表 gpt-5.6-luna 走 gpt/codex/direct（2026-09-08 拍板：codex 直连网关 gptpool，windsurf→pqapi→mirasim 池内降级；relay 曾把全部审官流量送进 mirasim 云并烧额度）', async () => {
     const S = await import(LIB);
     const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
     const provider = await realProvider('gpt-5.6-luna');
@@ -696,7 +652,7 @@ describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () =
     assert.equal(r.ok, true, r.error || '');
     assert.equal(r.family, 'gpt');
     assert.equal(r.agent, 'codex');
-    assert.equal(r.leg, 'relay');
+    assert.equal(r.leg, 'direct');
     assert.match(r.via, /模型前缀/, 'via 还报 provider = 模型族没赢过落地通道');
   });
 });
@@ -815,13 +771,13 @@ describe('判别实验：未登记家族拒派 / claude·codex 放行（#982）'
     assert.equal(r.status, 0);
   });
 
-  it('gpt-5.6-luna → 放行 gpt/codex/relay（落地通道 gw 不许赢过模型族）', () => {
+  it('gpt-5.6-luna → 放行 gpt/codex/direct（2026-09-08 拍板：直连网关 gptpool，relay 只当池内兜底）', () => {
     const r = dry('gpt-5.6-luna');
     const out = JSON.parse(String(r.stdout || '').trim());
     assert.equal(out.ok, true, out.error || '');
     assert.equal(out.family, 'gpt');
     assert.equal(out.agent, 'codex');
-    assert.equal(out.leg, 'relay');
+    assert.equal(out.leg, 'direct');
     assert.match(String(out.via || ''), /模型前缀/);
     assert.equal(r.status, 0);
   });

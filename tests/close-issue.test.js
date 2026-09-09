@@ -98,18 +98,25 @@ describe('close-issue 判定', () => {
         const n = Number(args[2]);
         return { ok: true, json: { state: n === 10 ? 'CLOSED' : 'OPEN' } };
       }
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return { ok: true, json: [] };
+      }
       return { ok: true, json: {} };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: Number(req.issue) }; };
     await t.test('绿→issue close', () => {
-      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'close' && r.issue === 9);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'close' && a[2] === '9'), '应调 issue close #9  →  ' + JSON.stringify(calls));
+      assert.equal(writes[0]?.action, 'issue_close');
+      assert.equal(String(writes[0]?.issue), '9');
     });
-    calls.length = 0;
+    writes.length = 0;
     await t.test('红且单已关→issue reopen', () => {
-      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'reopen' && r.issue === 10);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'reopen' && a[2] === '10'), '应调 issue reopen #10  →  ' + JSON.stringify(calls));
+      assert.equal(writes[0]?.action, 'issue_reopen');
+      assert.equal(String(writes[0]?.issue), '10');
     });
     calls.length = 0;
     await t.test('红但单没关→不动', () => {
@@ -120,8 +127,45 @@ describe('close-issue 判定', () => {
     calls.length = 0;
     await t.test('绿但单已关→不动', () => {
       const r = C.closeIssueForPr({ pr: { number: 4, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
-      assert.ok(r.ok && r.action === 'none');
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'close'), '绿但单已关不应重复 close  →  ' + JSON.stringify(calls));
+    });
+    calls.length = 0;
+    await t.test('绿该关但没注入 writeIssue → fail-closed，不许退回裸 gh issue close', () => {
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      assert.equal(r.ok, false);
+      assert.match(String(r.error), /issue-gateway 没注入/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
+    });
+    calls.length = 0;
+    await t.test('#1065：还有 OPEN 署名 PR → 本张合了也不关', () => {
+      const ghOpen = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return { ok: true, json: [{ number: 1104, title: '[grok] fix', body: '署名 issue #9、署名 issue #1097' }] };
+        }
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 1075, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: ghOpen });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(r.reason, /OPEN 署名 PR #1104/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
+    });
+    calls.length = 0;
+    await t.test('pr list 没查成 → 不许关（没查成 ≠ 没有别的 PR）', () => {
+      const ghFail = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+        if (args[0] === 'pr' && args[1] === 'list') return { ok: false, error: 'graphql timeout' };
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: ghFail });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /没查成不许关/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
     });
     calls.length = 0;
     await t.test('红且单已关但带「已顶替」标签→不弹回（2026-09-04：人拍过，机器让路）', () => {
@@ -130,6 +174,7 @@ describe('close-issue 判定', () => {
         if (args[0] === 'issue' && args[1] === 'view') {
           return { ok: true, json: { state: 'CLOSED', labels: [{ name: '任务' }, { name: '已顶替' }] } };
         }
+        if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
         return { ok: true, json: {} };
       };
       const r = C.closeIssueForPr({ pr: { number: 5, title: 'x', body: '署名 issue #12', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: ghLabeled });

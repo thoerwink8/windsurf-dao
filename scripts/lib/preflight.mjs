@@ -47,6 +47,8 @@ export const COMMANDER_POLICY_DEFAULTS = {
   conservativeWorkerMb: 400,
   minSamplePairs: 4,
   sampleWindow: 12,
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 export const BREAKER_POLICY_DEFAULTS = { ...BREAKER_DEFAULTS, overrides: {} };
 
@@ -74,6 +76,8 @@ function parseCommanderSection(cm) {
     conservativeWorkerMb: clampNum(src.conservativeWorkerMb, 64, 4096, COMMANDER_POLICY_DEFAULTS.conservativeWorkerMb),
     minSamplePairs: Math.round(clampNum(src.minSamplePairs, 1, 32, COMMANDER_POLICY_DEFAULTS.minSamplePairs)),
     sampleWindow: Math.round(clampNum(src.sampleWindow, 2, 64, COMMANDER_POLICY_DEFAULTS.sampleWindow)),
+    stalledDraftHours: clampNum(src.stalledDraftHours, 1, 168, COMMANDER_POLICY_DEFAULTS.stalledDraftHours),
+    stalledDraftMaxPumps: Math.round(clampNum(src.stalledDraftMaxPumps, 1, 5, COMMANDER_POLICY_DEFAULTS.stalledDraftMaxPumps)),
     renamedKeyHints,
   };
 }
@@ -407,7 +411,7 @@ export async function runPreflight({
       // **刻意不记熔断失败**——窗口内三次就 cooldown 24h，那正是把一次误判放大成
       // 「整条腿被拉黑一天」的机制，也正是 #853 里换错人的来源。
       // 已知代价：真正挂死（永不吐字）的上游因此不再被熔断拉黑，每次派工都要陪它耗满预算。
-      // 换来的是不再误杀正在干活的通道；挂死那侧另有 dao-progress-watch 兜。
+      // 换来的是不再误杀正在干活的通道；挂死那侧另有指挥官盘面推进量兜。
       if (!firstUnscanned) { firstUnscanned = c; firstSoftState = r.state; }
       reasons[c.id] = [...(reasons[c.id] || []), `timeout:${r.why || '没等到'}`];
       continue;

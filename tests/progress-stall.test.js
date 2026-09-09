@@ -108,6 +108,33 @@ describe('progress-detect：orca 段死了照样判（屏面指纹层退役）',
 });
 
 describe('progress-detect：误报闸与逐对象', () => {
+  it('#966 挂「将来某版」的已消歧单不算未派出停滞', async () => {
+    const S = await load(LIB);
+    const snap = {
+      github: {
+        scanned: true,
+        prs: [],
+        issues: [{
+          number: 819,
+          title: '先过渡',
+          labels: [{ name: '已消歧' }],
+          milestone: { title: '将来某版' },
+        }],
+      },
+      orca: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [] },
+    };
+    const extracted = S.extractObjects(snap);
+    assert.equal(extracted.scanned, true, extracted.error);
+    assert.equal(extracted.objects.length, 0);
+    assert.equal(extracted.idle, true);
+    const snaps = Array.from({ length: 5 }, () => snap);
+    const got = S.detectProgressStall(snaps, { minRounds: 5 });
+    assert.equal(got.scanned, true, got.error);
+    assert.equal(got.stalled, false);
+    assert.equal(got.reason, 'idle');
+  });
+
   it('全空闲 20 轮不许报停滞', async () => {
     const S = await load(LIB);
     const snaps = Array.from({ length: 20 }, emptySnap);
@@ -371,15 +398,16 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
     assert.doesNotMatch(String(b.stdout || ''), /AGENT_LOOP_TICK_PANMIAN/);
   });
 
-  it('timer 单元进 INDEX 装机面：service 调 progress-watch，timer 有 OnCalendar', () => {
-    const unitDir = path.join(REPO, 'host', 'machine', 'systemd');
-    const service = fs.readFileSync(path.join(unitDir, 'dao-progress-watch.service'), 'utf8');
-    const timer = fs.readFileSync(path.join(unitDir, 'dao-progress-watch.timer'), 'utf8');
-    assert.match(service, /ExecStart=.*scripts\/progress-watch\.mjs/);
-    assert.match(service, /^User=orca$/m);
-    assert.match(timer, /^OnCalendar=/m);
+  it('独立 timer 已退役：安装脚本卸载，指挥官每轮自己跑', () => {
     const installer = fs.readFileSync(path.join(REPO, 'scripts', 'install-progress-watch.sh'), 'utf8');
-    assert.match(installer, /dao-progress-watch\.timer/);
+    assert.match(installer, /disable --now dao-progress-watch\.timer/);
+    assert.match(installer, /retired dao-progress-watch\.timer/);
+    assert.doesNotMatch(installer, /enable --now dao-progress-watch/);
+    const unitDir = path.join(REPO, 'host', 'machine', 'systemd');
+    assert.equal(fs.existsSync(path.join(unitDir, 'dao-progress-watch.service')), false);
+    assert.equal(fs.existsSync(path.join(unitDir, 'dao-progress-watch.timer')), false);
+    const commander = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(commander, /runProgressWatch\s*\(/);
     const index = fs.readFileSync(path.join(REPO, 'host', 'machine', 'INDEX.md'), 'utf8');
     assert.match(index, /~\/\.dao\/progress-watch\.json/);
   });

@@ -204,6 +204,18 @@ describe('#1000 decide：rereview / rework 试满同样打标', () => {
   });
 });
 
+describe('#1147 pump-draft 试满打「卡死/等用户」，不是认输标', () => {
+  it('buildMarkExhausted(verb=pump-draft) → waiting-user 标 + 对应评论', async () => {
+    const { buildMarkExhausted, WAITING_USER_LABEL, EXHAUSTED_LABEL } = await EX;
+    const a = buildMarkExhausted({ pr: 885, verb: 'pump-draft', tries: 2, head: 'h885' });
+    assert.equal(a.kind, 'mark-exhausted');
+    assert.equal(a.label, WAITING_USER_LABEL);
+    assert.equal(a.label === EXHAUSTED_LABEL, false);
+    assert.match(a.comment, /卡死\/等用户/);
+    assert.match(a.comment, /draft 收口泵/);
+  });
+});
+
 describe('#1000 wake-exhausted 仍走开单（终端不是 PR）', () => {
   it('OPEN_ISSUE_REASONS 只剩 wake-exhausted', async () => {
     const { OPEN_ISSUE_REASONS } = await VERBS;
@@ -253,16 +265,24 @@ describe('#1000 dao now：待你拍列出两个卡死标', () => {
 });
 
 describe('#1000 硬边界：不许改 escalate 去重', () => {
-  it('commander.mjs 的 escalateLedger / escalateKey 还在', () => {
+  // 本条守的是「去重机制还在」，不是「函数还叫那个名」。2026-09-06 去重键从
+  // 「原因＋对象」改成「原因」（一个原因刷 6 张单的那次），判据跟着搬去 escalate-group.mjs，
+  // 名字随之改成 escalateDedupKey——机制本身一个字没少，守的东西不变。
+  it('commander.mjs 的 escalateLedger / 去重键判据还在', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     assert.match(src, /state\.escalateLedger/);
-    assert.match(src, /function escalateKey/);
+    assert.match(src, /escalateDedupKey\(action\)/);
     assert.match(src, /function escalate\(/);
   });
   it('ACTION_KINDS 含 mark-exhausted，FORBIDDEN 没放宽', async () => {
     const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
     assert.ok(ACTION_KINDS.includes('mark-exhausted'));
     assert.ok(!FORBIDDEN_AUTO_KINDS.has('mark-exhausted'));
+  });
+  it('ACTION_KINDS 含 pump-draft', async () => {
+    const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    assert.equal(ACTION_KINDS.includes('pump-draft'), true);
+    assert.equal(FORBIDDEN_AUTO_KINDS.has('pump-draft'), false);
   });
   it('executor 有 mark-exhausted case', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');

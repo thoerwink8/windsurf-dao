@@ -83,6 +83,15 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} 服务端查不到，登记失效 → 可新建：${view.why || ''}`.trim() };
   }
   const phase = view.phase == null ? '' : String(view.phase).trim().toLowerCase();
+  const runState = view.runState == null ? '' : String(view.runState).trim().toLowerCase();
+  // #1056：runState incomplete / incomplete 标记不是在役。phase=done 只说明那一轮结束了，
+  // 会话自己已经卡死（Selected model is at capacity / 30 分钟计时）。复用 = 把 PR 锁死在死审官上。
+  if (view.incomplete === true || phase === 'incomplete' || runState === 'incomplete') {
+    return {
+      reuse: false, sessionKey: key, checked: true,
+      why: `会话 ${key} runState=incomplete（一轮卡死，不是在役）→ 可新建`,
+    };
+  }
   if (phase && DEAD_PHASES.has(phase)) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} phase=${phase}（已废）→ 可新建` };
   }
@@ -332,10 +341,34 @@ export async function mirasimReviewerCreate({
 // ── PR→会话 登记（rework 轮找回审官会话） ─────────────────────────────────────
 
 /** 默认登记 IO：_flow/mirasim/reviewer-<pr>.json。测试注入内存版。 */
-export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flowDir } = {}) {
+export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, join, flowDir } = {}) {
   const dir = flowDir;
   const path = (pr) => join(dir, `reviewer-${pr}.json`);
   return {
+    /**
+     * 全部登记（#1125 数在役审官要）。**读不了目录回 null，不回空数组**——
+     * 「一条都没有」和「没读成」在下游是两种判决：前者可以拉满，后者一张都不许拉。
+     */
+    listAll() {
+      if (typeof readdir !== 'function') return null;
+      let names;
+      try {
+        names = readdir(dir);
+      } catch (e) {
+        // 目录不在 = 一条都没有（可以拉满）；读不了才是没查成。
+        const code = e && e.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+        return null;
+      }
+      const out = [];
+      for (const f of names) {
+        const m = /^reviewer-(\d+)\.json$/.exec(String(f));
+        if (!m) continue;
+        const r = this.read(m[1]);
+        if (r.ok && r.record) out.push(r.record);
+      }
+      return out;
+    },
     read(pr) {
       try {
         const t = readFile(path(pr));
@@ -367,7 +400,7 @@ export async function mirasimWorkerDone({
   runtime, gh, readTreeHead, prepareRef, syncTree, registry,
   pr, repo, prompt, reworkPrompt, reworkAnswer, reviewBranch,
   reviewerModel, workerModel, models, mirasimPolicy,
-  round, force, now = () => Date.now(),
+  round, force, enqueueOnly = false, now = () => Date.now(),
 } = {}) {
   if (typeof gh !== 'function') return { ok: false, stage: 'inputs', error: '要注入 gh 执行器' };
   if (!pr) return { ok: false, stage: 'inputs', error: '要 --pr' };
@@ -397,6 +430,15 @@ export async function mirasimWorkerDone({
     reuse = judgeReviewerSessionReuse({ record, view: peek.view, force });
     reuse.view = peek.view;
     if (peek.why) reuse.peekWhy = peek.why;
+  }
+
+  // 短命会话：交卷只入队，审官由指挥官按空位 drain。旧的起会话/interact 路留给单测。
+  if (enqueueOnly) {
+    return {
+      ok: true, action: 'queued', round: theRound, reviewCount,
+      sessionKey: sessionKey || null, reuse,
+      why: 'worker-done 只入队，不起审官会话',
+    };
   }
 
   // 首审轮 + 已有在役会话 → 复用，不再起第二个（幂等重试的正解）。

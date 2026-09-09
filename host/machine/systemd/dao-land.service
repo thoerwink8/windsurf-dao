@@ -1,0 +1,32 @@
+# /etc/systemd/system/dao-land.service
+#
+# 合并后自动清树 / 推默认分支（#829）。
+# 以前挂在 orca automations 的 hourly 任务上；orca-serve 停了那条路就死了。
+# 改成和 board-gc / close-issues 同一套：仓内 unit + sudo bash scripts/install-land.sh。
+#
+# 跑的是 `node scripts/land.mjs`（主树）。没活时 land 自己跳过推送，只尝试清已合并派生物。
+# 退出码 0=净 / 1=没收完 / 2=没活可做（--has-work 语义不在这条 oneshot 上）。
+# SuccessExitStatus 含 1：没收完是要人看的输出，不是单元故障。
+#
+# 装法：sudo bash scripts/install-land.sh
+# WorkingDirectory 指向本仓主树。换机改这一行。
+
+[Unit]
+Description=windsurf-dao land (push default branch + gc merged worktrees)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/land.mjs /srv/projects/windsurf-dao
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
