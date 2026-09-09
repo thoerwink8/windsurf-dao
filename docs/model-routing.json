@@ -621,7 +621,7 @@
   "默认": "mirasim",
   "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。orca 产品面已退役，执行体只剩 mirasim。",
   "mirasim": {
-   "钉版本": "0.0.282",
+   "钉版本": "0.0.307",
    "族": "mirasim-server",
    "说明": "回环 ws 127.0.0.1:4316，systemd 常驻；起会话前契约断言 getState.version===钉版本，不符报警拒派不静默",
    "模型前缀族": {
