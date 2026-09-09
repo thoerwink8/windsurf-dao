@@ -785,6 +785,41 @@ describe('审官登记表落点必须跨树共享', () => {
     assert.equal(got.ok, true, '换个实例就读不到了——落点没共享');
     assert.equal(got.record.sessionKey, 'codex:abc');
   });
+
+  it('#1125 listAll：目录不在是空数组，读不了才是 null', async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const files = new Map();
+    const mk = (readdir) => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); files.set(p.split('/').pop(), c); },
+      mkdir: () => {},
+      readdir,
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const noFn = mk(undefined).listAll();
+    assert.equal(noFn, null, '没注入 readdir = 没查成，不许当成 0 条');
+
+    const missing = mk(() => { const e = new Error('no'); e.code = 'ENOENT'; throw e; }).listAll();
+    assert.deepEqual(missing, [], '目录不在 = 一条都没有，可以拉满');
+
+    const unreadable = mk(() => { const e = new Error('perm'); e.code = 'EACCES'; throw e; }).listAll();
+    assert.equal(unreadable, null, '读不了 = 没查成');
+
+    const reg = mk(() => ['reviewer-1040.json', 'other.txt', 'reviewer-nope.json']);
+    reg.write('1040', { pr: '1040', sessionKey: 'codex:abc' });
+    const listed = defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => store.set(p, c),
+      mkdir: () => {},
+      readdir: () => ['reviewer-1040.json', 'other.txt', 'reviewer-x.json'],
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    }).listAll();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].sessionKey, 'codex:abc');
+  });
 });
 
 describe('#886 ④审官任务书的 m= 来自原派工（buildMirasimReviewerPrompts）', () => {

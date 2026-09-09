@@ -47,6 +47,8 @@ export const COMMANDER_POLICY_DEFAULTS = {
   conservativeWorkerMb: 400,
   minSamplePairs: 4,
   sampleWindow: 12,
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 export const BREAKER_POLICY_DEFAULTS = { ...BREAKER_DEFAULTS, overrides: {} };
 
@@ -74,6 +76,8 @@ function parseCommanderSection(cm) {
     conservativeWorkerMb: clampNum(src.conservativeWorkerMb, 64, 4096, COMMANDER_POLICY_DEFAULTS.conservativeWorkerMb),
     minSamplePairs: Math.round(clampNum(src.minSamplePairs, 1, 32, COMMANDER_POLICY_DEFAULTS.minSamplePairs)),
     sampleWindow: Math.round(clampNum(src.sampleWindow, 2, 64, COMMANDER_POLICY_DEFAULTS.sampleWindow)),
+    stalledDraftHours: clampNum(src.stalledDraftHours, 1, 168, COMMANDER_POLICY_DEFAULTS.stalledDraftHours),
+    stalledDraftMaxPumps: Math.round(clampNum(src.stalledDraftMaxPumps, 1, 5, COMMANDER_POLICY_DEFAULTS.stalledDraftMaxPumps)),
     renamedKeyHints,
   };
 }
