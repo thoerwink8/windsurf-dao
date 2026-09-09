@@ -33,7 +33,7 @@ import { join } from 'node:path';
 import os from 'node:os';
 import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
-  checkChannelCapacity, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
+  admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
 import { loadBreaker } from './provider-health.mjs';
@@ -577,16 +577,20 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 // ── 五个动词 ─────────────────────────────────────────────────────────────────
 
 /**
- * 渠道并发闸的**取数薄壳**（#1145）。判定全在 lib/channel-concurrency.mjs 的纯函数里，
+ * 渠道并发闸的**取数薄壳**（#1145）。判定与占槽都在 lib/channel-concurrency.mjs，
  * 这里只负责把三份快照读出来：
  *   · 路由表「腿」节 → 渠道上限（并发上限字段）
  *   · /proc 在途树 → 渠道在途数（**与租约闸同源**：同一个 checkInFlight，不复用 mirasim 自己的记账）
  *   · 派工账本未结 job → 树归哪个模型（树→模型→渠道的那一跳）
  *   · 熔断表 → 冷却中的渠道等同满员
- * 任一读不出来 ⇒ checkChannelCapacity 返回 ok:false，门里 fail-close 拒起。
+ * 任一读不出来 ⇒ 返回 ok:false，门里 fail-close 拒起。
+ *
+ * 走 admitAndReserveChannel 而不是只读的 checkChannelCapacity：只读会留 TOCTOU 竞态
+ * （两个并发都看到没满、都放行、真实并发超上限）。它在锁内「数预占+写预占」，返回的
+ * release 必须由调用方在 finally 里调。
  */
 function defaultChannelAdmit({ model, now } = {}) {
-  return checkChannelCapacity({
+  return admitAndReserveChannel({
     model,
     now: now ?? Date.now(),
     io: {
@@ -739,10 +743,15 @@ export function createRuntime(opts = {}) {
     //
     // 渠道并发是**机器负载准入（admission）之上叠加的第二道闸**，不替代它：
     // 前者管这台机器还塞不塞得下，后者管上游那条渠道还收不收。
+    //
+    // **是原子占槽，不是读快照**（审官第二轮红项）：读快照会让两个并发都看到没满都放行，
+    // 真实并发超上限（cap=2 的 pqapi 被顶到 3-4，正好落回 429 区，闸等于白设）。
+    // admitAndReserveChannel 在锁内「数预占+写预占」，返回的 release 必须在 finally 里调。
     const chan = channelAdmit({ model, now: now() });
     if (!chan.ok) {
       // 没查成 ⇒ 拒起（fail-close），判据同租约闸：放行的代价是把上游打到 429 雪崩，
       // 拒起的代价是这轮不派、下轮再来，而且报得出来。
+      // 「锁拿不到」也走这一支：拿不到锁说明有人在临界区，此刻数不准也占不上槽。
       throw new MirasimUnavailableError(`渠道并发没查成，拒起会话：${chan.error}`, { workdir, model: model || null });
     }
     if (chan.verdict === 'full') {
@@ -754,49 +763,58 @@ export function createRuntime(opts = {}) {
         channelReason: chan.reason || null,
       });
     }
+    // 预占已经占上：从这里往下**每一条出路**都必须退槽（成功、被拒、抛错），否则这个渠道
+    // 会少一个名额直到 TTL 到点。所以下面整段包在 try/finally 里，release 放 finally。
+    const releaseSlot = typeof chan.release === 'function' ? chan.release : () => {};
 
-    const wire = await open();
     try {
-      // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
-      assertContract(wire, agent);
-      const startedAt = now();
-      wire.send({
-        type: 'prompt',
-        prompt,
-        agent,
-        workdir,
-        ...(model ? { model } : {}),
-        ...(effort ? { effort } : {}),
-        clientRef: clientRef || `dao-${startedAt}`,
-      });
-      const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
-      const verdict = judgeAccepted(msg);
-      if (!verdict.ok) {
-        if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
-        if (verdict.rejected) {
-          // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
-          // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
-          // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
-          // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
-          const hit = isCapacityError(verdict.errors.join('；'));
-          if (hit.hit && chan.target) {
-            try {
-              channelFailed({
-                target: chan.target, now: now(),
-                why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
-              });
-            } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
+      const wire = await open();
+      try {
+        // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
+        assertContract(wire, agent);
+        const startedAt = now();
+        wire.send({
+          type: 'prompt',
+          prompt,
+          agent,
+          workdir,
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          clientRef: clientRef || `dao-${startedAt}`,
+        });
+        const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
+        const verdict = judgeAccepted(msg);
+        if (!verdict.ok) {
+          if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
+          if (verdict.rejected) {
+            // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
+            // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
+            // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
+            // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
+            const hit = isCapacityError(verdict.errors.join('；'));
+            if (hit.hit && chan.target) {
+              try {
+                channelFailed({
+                  target: chan.target, now: now(),
+                  why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
+                });
+              } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
+            }
+            throw new MirasimRejectedError(verdict.errors.join('；'), {
+              workdir, model: model || null,
+              ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
+            });
           }
-          throw new MirasimRejectedError(verdict.errors.join('；'), {
-            workdir, model: model || null,
-            ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
-          });
+          throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
-        throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
+        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
+      } finally {
+        wire.close();
       }
-      return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
     } finally {
-      wire.close();
+      // 退槽。**删不掉不许让起会话失败**：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个
+      // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
+      try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
     }
   }
 

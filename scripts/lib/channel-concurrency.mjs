@@ -29,10 +29,14 @@
 // 熔断表钉在**模型级 target**（沿用 #843 的键），并发上限钉在**池级渠道**——粒度不同是对的：
 // 429 是池在限流，冷却却按模型 target 记。两者都在同一个判据里查。
 
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import { join } from 'node:path';
 import { probeTargetOf } from './provider-probe.mjs';
 import {
   inspectAvailability, resolveBreakerPolicy, applyEvent, loadBreakerDoc, saveBreakerDoc,
 } from './provider-breaker.mjs';
+import { acquireWorktreeLock } from './dispatch-lock.mjs';
 
 /** 「不限」哨兵：渠道容量已验证工人无限做也没出问题（grokpool）。与「待填」区分——一个放开，一个没人填过。 */
 export const CAP_UNLIMITED = '不限';
@@ -443,12 +447,20 @@ export function applyChannelFailure(doc, { target, now, roundMs = ROUND_MS, why,
  *   那是全盘阻塞；而漏拦的代价有兜底——未登记模型在 commander 侧被
  *   assessDispatchModel 的 model-not-in-routing 拦着，机器总闸 admission 也仍在。
  */
-export function checkChannelCapacity({
-  model, now = Date.now(), io = {}, breakerPolicy,
-} = {}) {
-  if (model == null || String(model).trim() === '') {
-    return { ok: true, verdict: 'free', attributed: false, why: '起会话没钉 model，渠道无从归属——本闸不拦（机器总闸仍在）' };
-  }
+/**
+ * 取数：把判渠道要的四份快照读出来。**故意放在锁外**——它是读，且是本段里最慢的一步
+ * （/proc 扫几百个 pid）。放锁里会把临界区从毫秒级拉长，而 #849 那把锁的等待是**忙自旋**
+ * （dispatch-lock.mjs 的 sleep 是 `while (Date.now() < t) {}`），临界区一长，等待者就烧 CPU，
+ * 在这台常年负载 19-20 的机器上比原问题更糟。
+ *
+ * 锁外读为什么不破坏原子性：竞态窗口里的并发起会话**一定各写了一条预占**，而预占是在
+ * 锁内数的。也就是说「锁外的 /proc 数」只负责已经落地的会话，「锁内的预占数」负责正在起的，
+ * 两段相加才是分母 —— 需要互斥的只有「数预占 + 写预占」这一小段。
+ *
+ * @returns {{ok:true, raw, models, caps, states, procCounts, unattributed, breaker}
+ *          |{ok:false, unscanned:true, error}}
+ */
+export function readChannelFacts({ model, io = {} } = {}) {
   let raw;
   try {
     raw = io.loadRouting ? io.loadRouting() : null;
@@ -473,16 +485,20 @@ export function checkChannelCapacity({
   }));
   if (!counted.ok) return { ok: false, unscanned: true, error: `渠道在途数没查成（${counted.error}）` };
   const breaker = typeof io.loadBreaker === 'function' ? io.loadBreaker() : null;
-  const verdict = judgeChannelForModel({
-    model, legs: raw['腿'], models, caps: capsDoc.caps, states: capsDoc.states,
-    inFlight: counted.counts, breaker, now, breakerPolicy,
-  });
+  return {
+    ok: true, raw, models, caps: capsDoc.caps, states: capsDoc.states,
+    procCounts: counted.counts, unattributed: counted.unattributed, breaker,
+  };
+}
+
+/** 把 judgeChannelForModel 的结果收成门认的三态形状（free / full）。 */
+function shapeVerdict(verdict, { unattributedTrees = 0, reservations = 0 } = {}) {
   if (verdict.available) {
     return {
       ok: true, verdict: 'free', attributed: verdict.attributed !== false,
       channel: verdict.channel || null, target: verdict.target || null,
-      cap: verdict.cap, inFlight: verdict.inFlight,
-      unattributedTrees: counted.unattributed.length,
+      cap: verdict.cap, inFlight: verdict.inFlight, reservations,
+      unattributedTrees,
       why: verdict.why || null,
     };
   }
@@ -490,8 +506,23 @@ export function checkChannelCapacity({
     ok: true, verdict: 'full', attributed: true,
     channel: verdict.channel || null, target: verdict.target || null,
     reason: verdict.reason, cap: verdict.cap,
-    inFlight: verdict.inFlight, why: verdict.why,
+    inFlight: verdict.inFlight, reservations, why: verdict.why,
   };
+}
+
+export function checkChannelCapacity({
+  model, now = Date.now(), io = {}, breakerPolicy,
+} = {}) {
+  if (model == null || String(model).trim() === '') {
+    return { ok: true, verdict: 'free', attributed: false, why: '起会话没钉 model，渠道无从归属——本闸不拦（机器总闸仍在）' };
+  }
+  const facts = readChannelFacts({ model, io });
+  if (!facts.ok) return facts;
+  const verdict = judgeChannelForModel({
+    model, legs: facts.raw['腿'], models: facts.models, caps: facts.caps, states: facts.states,
+    inFlight: facts.procCounts, breaker: facts.breaker, now, breakerPolicy,
+  });
+  return shapeVerdict(verdict, { unattributedTrees: facts.unattributed.length });
 }
 
 /**
@@ -506,4 +537,192 @@ export function recordChannelFailure({ target, now = Date.now(), roundMs = ROUND
   const applied = applyChannelFailure(loaded.doc, { target, now, roundMs, why, policy });
   save(applied.doc, home ? { home } : {});
   return { ok: true, target: applied.target, rounds: applied.rounds, hours: applied.hours };
+}
+
+// ── 原子占槽：检查+预占分离，锁只护极短临界区 ────────────────────────────────
+//
+// 为什么必须原子（审官第二轮红项，实测属实）：原来的门是「读快照再放行」。两个并发
+// startSession() 可以同时看到 inFlight < cap 都判 free，随后都 open() 发 prompt，
+// 于是真实并发超过渠道上限。cap=2 的 pqapi 被两个并发顶到 3-4，正好落回 429 区——
+// 闸等于白设。commander 内部是 await 串行，但「帅位手动起 + timer 那轮」「drain 与派工」
+// 跨进程会叠上。takeChannelSlot() 只在 commander 的纯决策快照里返回新对象，护不到真实起会话。
+//
+// 为什么复用 #849 的 dispatch-lock 而不新造锁：它已经把这类锁最难的两件事解决了——
+// O_EXCL 跨进程互斥（本仓零依赖，node:fs 没有 flockSync），以及**持锁进程死掉自动拆锁**
+// （pid 判死 + mtime staleMs 兜底）。自己造一把必然要把这两件事再写一遍，而写漏第二件
+// 的后果是预占泄漏 ⇒ 永久假满员 ⇒ 全盘起不了会话。
+//
+// **锁绝不持过网络 I/O**：dispatch-lock 的等待是忙自旋（sleep 里 `while (Date.now() < t) {}`），
+// 锁一持住数秒，等待者就在这台常年负载 19-20 的机器上烧 CPU，比原问题更糟。所以临界区里
+// 只有「数预占 + 写预占」这一小段纯本地代码，一个 await 都没有；连 /proc 都在锁外读
+// （理由见 readChannelFacts）。
+//
+// 注：租约闸（lease.mjs）同属性——也是读快照、零锁，同样有 TOCTOU。那是另一个起因
+// （租约原子性），不在本单，帅位另开单处理；别顺手在这儿一起改。
+
+/** 渠道键 → 文件名安全的 slug（`direct:codex@pqapi` → `direct-codex-pqapi`）。 */
+export function channelSlug(channel) {
+  return String(channel == null ? '' : channel).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+}
+
+/**
+ * 预占的存活时限。必须**大于**一次正常 startSession 的耗时（门里 accept 超时默认 30s），
+ * 否则慢而合法的起会话会中途丢掉自己的预占；又要足够短，让漏删的预占自己退场。
+ * 60s 兼顾两头；真正的即时回收靠 pid 判死（持有者崩了当场不算），TTL 只是兜底。
+ */
+export const RESERVE_TTL_MS = 60 * 1000;
+
+/** 临界区只有毫秒级本地操作，2s 足够；等不到说明有人在临界区里，按没查成处理（见 admitAndReserveChannel）。 */
+export const RESERVE_LOCK_TIMEOUT_MS = 2000;
+/** 锁正常持有只有毫秒级；30s 远超任何合法持有，超过一律当死锁拆掉。 */
+export const RESERVE_LOCK_STALE_MS = 30 * 1000;
+
+export function reserveDir({ home = os.homedir(), channel } = {}) {
+  return join(home, '.dao', 'locks', `channel-${channelSlug(channel)}`);
+}
+
+export function reserveLockPath({ home = os.homedir(), channel } = {}) {
+  return join(home, '.dao', 'locks', `channel-${channelSlug(channel)}.lock`);
+}
+
+/**
+ * 数这个渠道当下的**活预占**，顺手把死的清掉（自愈，防目录长胖）。
+ * 活的判据两条都要满足，与 #849 拆锁判据同源：**持有者 pid 还活着** 且 **年龄 < TTL**。
+ * 目录不在 = 没有预占（这是「查成了，结论是 0」，不是没查成）。
+ *
+ * @returns {{ok:true, live:number, reaped:string[]}|{ok:false, unscanned:true, error}}
+ * 目录读不动（权限等）⇒ ok:false，调用方 fail-close——读不到预占数不许当成 0。
+ */
+export function countLiveReservations({
+  dir, now = Date.now(), ttlMs = RESERVE_TTL_MS,
+  readdir = readdirSync, read = readFileSync, unlink = unlinkSync, exists = existsSync,
+  pidAlive = defaultReservePidAlive,
+} = {}) {
+  if (!dir) return { ok: false, unscanned: true, error: '没给预占目录' };
+  if (!exists(dir)) return { ok: true, live: 0, reaped: [] };
+  let names;
+  try { names = readdir(dir); }
+  catch (e) { return { ok: false, unscanned: true, error: `预占目录读不动：${String(e && e.message || e)}` }; }
+  let live = 0;
+  const reaped = [];
+  for (const name of Array.isArray(names) ? names : []) {
+    if (!String(name).endsWith('.res')) continue;
+    const p = join(dir, String(name));
+    let doc = null;
+    try { doc = JSON.parse(String(read(p, 'utf8'))); } catch { doc = null; }
+    const pid = doc && Number(doc.pid);
+    const at = doc && Number(doc.at);
+    // 形状坏了（写一半 / 手改坏）：当死的清掉。它既证明不了有人在起会话，
+    // 留着又会永久占位——而永久占位就是「假满员 ⇒ 全盘阻塞」那条最坏路径。
+    const badShape = !Number.isInteger(pid) || pid <= 0 || !Number.isFinite(at);
+    const expired = !badShape && (now - at) >= ttlMs;
+    const dead = !badShape && !pidAlive(pid);
+    if (badShape || expired || dead) {
+      try { unlink(p); reaped.push(String(name)); } catch { /* 别人抢先清了 */ }
+      continue;
+    }
+    live += 1;
+  }
+  return { ok: true, live, reaped };
+}
+
+function defaultReservePidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; }
+  catch (e) { return e && e.code === 'EPERM'; } // 存在但没权限 = 还活着
+}
+
+/**
+ * 原子占槽（门里用的生产入口）。三态与 checkChannelCapacity 一致，多一个 `release`。
+ *
+ *   { ok:true, verdict:'free', release, ... }   → 放行；调用方**必须**在 finally 调 release
+ *   { ok:true, verdict:'full', reason, why }    → 满员/熔断，调用方按背压排队（busy）
+ *   { ok:false, unscanned:true, error }         → 没查成，调用方 fail-close 拒起
+ *
+ * 临界区（持锁，纯本地无 await）：数预占 → 判满 → 未满则写一条预占 → 放锁。
+ * 分母 = 锁外读到的 /proc 在途 + 锁内数到的活预占。
+ *
+ * 拿不到锁（超时）**按没查成处理**：拿不到说明有人正在临界区，此刻我们既数不准也占不上槽；
+ * 宁可这轮不起（下轮再来，且报得出来），也不许在没数准的情况下放行——那正是本红项的成因。
+ */
+export function admitAndReserveChannel({
+  model, now = Date.now(), io = {}, breakerPolicy, home = os.homedir(),
+  ttlMs = RESERVE_TTL_MS, lockTimeoutMs = RESERVE_LOCK_TIMEOUT_MS, lockStaleMs = RESERVE_LOCK_STALE_MS,
+  pid = process.pid, lockIo = {}, reserveIo = {},
+} = {}) {
+  const noop = () => ({ ok: true, skipped: true });
+  if (model == null || String(model).trim() === '') {
+    return { ok: true, verdict: 'free', attributed: false, release: noop, why: '起会话没钉 model，渠道无从归属——本闸不拦（机器总闸仍在）' };
+  }
+  const facts = readChannelFacts({ model, io });
+  if (!facts.ok) return facts;
+
+  const resolved = resolveModelChannel({ model, legs: facts.raw['腿'], models: facts.models, caps: facts.caps });
+  if (!resolved) {
+    // 认不出渠道 ⇒ 无处占槽，也无从判满。语义与 judgeChannelForModel 那一支一致（故意不 fail-close，
+    // 理由见 checkChannelCapacity 的注释：全盘阻塞的代价远大于漏拦一个未登记模型）。
+    const verdict = judgeChannelForModel({
+      model, legs: facts.raw['腿'], models: facts.models, caps: facts.caps, states: facts.states,
+      inFlight: facts.procCounts, breaker: facts.breaker, now, breakerPolicy,
+    });
+    return { ...shapeVerdict(verdict, { unattributedTrees: facts.unattributed.length }), release: noop };
+  }
+
+  const channel = resolved.channel;
+  const dir = reserveDir({ home, channel });
+  const acquire = lockIo.acquire || acquireWorktreeLock;
+  const got = acquire({
+    lockPath: reserveLockPath({ home, channel }),
+    timeoutMs: lockTimeoutMs,
+    staleMs: lockStaleMs,
+    ...lockIo.opts,
+  });
+  if (!got.ok) {
+    return { ok: false, unscanned: true, error: `渠道占槽锁没拿到（${got.error}）——数不准也占不上槽，不起（fail-close）` };
+  }
+
+  try {
+    const counted = countLiveReservations({ dir, now, ttlMs, ...reserveIo });
+    if (!counted.ok) {
+      return { ok: false, unscanned: true, error: `渠道预占数没查成（${counted.error}）` };
+    }
+    const inFlight = { ...facts.procCounts };
+    inFlight[channel] = (Number(inFlight[channel]) || 0) + counted.live;
+    const verdict = judgeChannelForModel({
+      model, legs: facts.raw['腿'], models: facts.models, caps: facts.caps, states: facts.states,
+      inFlight, breaker: facts.breaker, now, breakerPolicy,
+    });
+    if (!verdict.available) {
+      return { ...shapeVerdict(verdict, { unattributedTrees: facts.unattributed.length, reservations: counted.live }), release: noop };
+    }
+    // 未满 → 当场占一个槽。写在锁里，所以「数」和「占」之间没有别人插得进来的缝。
+    const mkdir = reserveIo.mkdir || mkdirSync;
+    const write = reserveIo.write || writeFileSync;
+    const unlink = reserveIo.unlink || unlinkSync;
+    const file = join(dir, `${pid}-${Math.random().toString(36).slice(2, 10)}.res`);
+    try {
+      mkdir(dir, { recursive: true });
+      write(file, JSON.stringify({ pid, at: now, model: String(model), channel }), 'utf8');
+    } catch (e) {
+      // 占不上槽 = 没查成（不是满员）：放行就等于回到读快照那套竞态。
+      return { ok: false, unscanned: true, error: `渠道预占写不进（${String(e && e.message || e)}）——占不上槽不放行` };
+    }
+    let released = false;
+    const release = () => {
+      if (released) return { ok: true, skipped: true };
+      released = true;
+      try { unlink(file); return { ok: true, path: file }; }
+      catch (e) {
+        // 删不掉不许让起会话失败：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个名额到 TTL 到点。
+        return { ok: false, error: `预占删不掉（${String(e && e.message || e)}）——靠 TTL/pid 兜底`, path: file };
+      }
+    };
+    return {
+      ...shapeVerdict(verdict, { unattributedTrees: facts.unattributed.length, reservations: counted.live }),
+      release, reservePath: file,
+    };
+  } finally {
+    try { got.release(); } catch { /* 放锁失败由 #849 的 pid/mtime 拆锁兜底 */ }
+  }
 }
