@@ -385,3 +385,74 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
     assert.equal(r.unscanned, true);
   });
 });
+
+// 门里排着两道闸，各抛一种背压。只接一条＝没修（memory fix-landed-at-one-call-site-only）：
+// 漏掉的那条会继续把「这轮轮不到」当失败去烧 drain 预算，撞满 3 次把 PR 判成认输。
+describe('审官路径：门里两种背压都要入队，「没查成」一条都不许混进去', () => {
+  // 真实错误串形状：门抛 message → mirasimReviewerCreate 包一层「起审官会话没查成：…」
+  const 门抛 = (msg) => `起审官会话没查成：${msg}`;
+
+  it('租约被占 → lease-held → queued，不 fail（#1085 的背压，本单补接）', async () => {
+    const { classifyReviewerSpawnError, planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const err = 门抛('租约被占，拒起会话：/root/mirasim-worktrees/windsurf-dao/dao-1145 已经有 1 个会话进程在干活（pi pid 2977217）');
+    assert.equal(classifyReviewerSpawnError(err).kind, 'lease-held');
+    const plan = planWorkerDoneAfterSpawnFail({ error: err, reviewPending: { ok: true } });
+    assert.equal(plan.queued, true);
+    assert.equal(plan.fail, false);
+  });
+
+  it('渠道满员 → channel-full → queued，不 fail（#1145 的背压）', async () => {
+    const { classifyReviewerSpawnError, planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const err = 门抛('渠道满员，拒起会话：渠道 direct:codex@pqapi 已满员（在途 2 ≥ 上限 2）');
+    assert.equal(classifyReviewerSpawnError(err).kind, 'channel-full');
+    const plan = planWorkerDoneAfterSpawnFail({ error: err, reviewPending: { ok: true } });
+    assert.equal(plan.queued, true);
+    assert.equal(plan.fail, false);
+  });
+
+  // 关键回归保护：这次放宽只许放进「已知拒派」，绝不许把「没查成」也顺手放进队列。
+  // 混进去的后果是真故障被静默排队、每轮重试，没有人被告知——比报错还坏。
+  it('回归保护：租约「没查成」仍 fail/stop 报帅，不被本次放宽误伤', async () => {
+    const { classifyReviewerSpawnError, planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const err = 门抛('租约没查成，拒起会话：扫了 412 个进程，一个 cwd 都读不出来');
+    assert.equal(classifyReviewerSpawnError(err).kind, 'unscanned');
+    const plan = planWorkerDoneAfterSpawnFail({ error: err, reviewPending: { ok: true } });
+    assert.equal(plan.queued, false);
+    assert.equal(plan.fail, true);
+  });
+
+  it('回归保护：渠道「没查成」同样 fail/stop 报帅', async () => {
+    const { classifyReviewerSpawnError, planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const err = 门抛('渠道并发没查成，拒起会话：渠道在途数没查成（/proc 读不动）');
+    assert.equal(classifyReviewerSpawnError(err).kind, 'unscanned');
+    const plan = planWorkerDoneAfterSpawnFail({ error: err, reviewPending: { ok: true } });
+    assert.equal(plan.queued, false);
+    assert.equal(plan.fail, true);
+  });
+
+  it('回归保护：不相干的真失败仍 fail（放宽没扩大到整个错误面）', async () => {
+    const { classifyReviewerSpawnError, planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const err = 门抛('workdir 不存在');
+    assert.equal(classifyReviewerSpawnError(err).kind, 'unscanned');
+    assert.equal(planWorkerDoneAfterSpawnFail({ error: err, reviewPending: { ok: true } }).fail, true);
+  });
+
+  it('背压集合里两条都在（漏一条就是只接了一个调用点）', async () => {
+    const { planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    // 不导出集合本身，就从行为上分别确认——两条各自独立断言，失败时看得出是哪条漏了
+    const lease = planWorkerDoneAfterSpawnFail({ error: 门抛('租约被占，拒起会话：x'), reviewPending: { ok: true } });
+    const chan = planWorkerDoneAfterSpawnFail({ error: 门抛('渠道满员，拒起会话：y'), reviewPending: { ok: true } });
+    assert.equal(lease.queued, true, 'lease-held 不在背压集合里——租约那条路仍在烧 drain 预算');
+    assert.equal(chan.queued, true, 'channel-full 不在背压集合里——渠道那条路仍在烧 drain 预算');
+  });
+
+  it('背压但复审待办没写成 → 仍 fail（队列写不进就不能算交卷）', async () => {
+    const { planWorkerDoneAfterSpawnFail } = await import(REVIEWER);
+    const plan = planWorkerDoneAfterSpawnFail({
+      error: 门抛('租约被占，拒起会话：x'),
+      reviewPending: { ok: false, error: '目录写不进' },
+    });
+    assert.equal(plan.queued, false);
+    assert.equal(plan.fail, true);
+  });
+});

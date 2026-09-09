@@ -779,7 +779,8 @@ export function planReviewerCreateAfterFail({ error } = {}) {
 }
 
 /** #675：起审官失败种类。terminal create 超时 / 注入未提交 / depth 限制 / 在途派单 / 没查成 必须分开。
- * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。 */
+ * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。
+ * #1145 余洞：门里两道闸的背压（租约被占 / 渠道满员）同理，两条都得认——见下面那段注释。 */
 export function classifyReviewerSpawnError(error) {
   const t = String(error || '');
   if (/Timed out waiting for terminal handle|terminal create 失败|terminal create 超时/i.test(t)) {
@@ -794,18 +795,33 @@ export function classifyReviewerSpawnError(error) {
   if (/already has an active dispatch/i.test(t)) {
     return { kind: 'active-dispatch', label: '审官终端已有在途派单' };
   }
-  // #1145：渠道满员是**背压**，与 depth 限制 / 在途派单同一类「已知拒派」——入队交指挥官轮转，
-  // 不许当「没查成」去烧重试预算（那会把「这轮轮不到」熬成 mark-exhausted 认输）。
-  // 认字样而不认对象：这条错误串是 mirasim 门里 CHANNEL_FULL_REASON 那一抛的 message。
+  // ── 门里的两种**背压**（#1145）：都不是「起审官失败」，是「这轮轮不到」──────────
+  // 起因是同一个：审官路径把背压当失败，于是去烧 drain 的重试预算，撞满 3 次把 PR
+  // 判成 mark-exhausted 认输——而实际上一个审官都还没起过。
+  //
+  // **两条都要接，缺一条等于没修**（memory 判例 fix-landed-at-one-call-site-only：
+  // 「一夜撞三次；带解释注释的修法最容易漏接，因为注释让人确信已经处理好了」）。
+  // mirasim 门里排着两道闸，各自抛一种背压，谁漏了谁那条路就继续烧预算：
+  //   · 租约闸（#1085，lease.mjs 的 LEASE_BUSY_REASON）——树里已经有人在干活
+  //   · 渠道闸（#1145，channel-concurrency.mjs 的 CHANNEL_FULL_REASON）——上游渠道满员/冷却中
+  // 认字样、不 import 那两个常量对象：这里判的是**错误串**（门抛出的 message 经
+  // mirasimReviewerCreate 包了一层），拿常量去比对象比不上，反而给人「已接上」的错觉。
+  if (/租约被占|lease-held/i.test(t)) {
+    return { kind: 'lease-held', label: '租约被占（背压，排队下轮）' };
+  }
   if (/渠道满员|channel-full/i.test(t)) {
     return { kind: 'channel-full', label: '渠道满员（背压，排队下轮）' };
   }
   return { kind: 'unscanned', label: '没查成' };
 }
 
-// depth 限制 / 在途派单 / 渠道满员：都是**已知拒派**，写进复审待办交指挥官下一轮，不算 fail。
-// 「没查成」不在这里——它必须停手报帅（拿不准不降级）。
-const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch', 'channel-full']);
+// **背压集合**：已知拒派 ⇒ 写进复审待办交指挥官下一轮，不算 fail。
+// 加新的拒起理由时改这一处，别在调用点各判一次「这个算失败还是算背压」——
+// 那正是 lease-held 漏了整整一轮的原因（#1145 返工时才发现）。
+// 「没查成」永远不在这里：拿不准不降级，必须停手报帅（有回归测试钉这条）。
+const REVIEW_PENDING_HANDOFF_KINDS = new Set([
+  'depth-limit', 'active-dispatch', 'channel-full', 'lease-held',
+]);
 
 /** 从 Orca「already has an active dispatch (ctx_…)」里抠已有 id。抠不到 = 没查成，不许猜。 */
 export function parseActiveDispatchId(error) {
