@@ -1640,7 +1640,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model });
   const disambiguation = args.issue
-    ? checkIssueDisambiguated({ issue: args.issue, runGh: ghRunnerForTarget(targetRepo) })
+    ? checkIssueDisambiguated({ issue: args.issue, runGh: ghRunnerForTarget(targetRepo, { role: 'worker' }) })
     : { ok: true, gated: false };
   const dup = precheckDispatchDup({
     issue: args.issue, name: cardName, allowDup: args.allowDup, now: args.now,

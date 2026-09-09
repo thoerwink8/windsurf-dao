@@ -311,7 +311,7 @@ describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () =
     assert.match(dispatch, /resolveMirasimRepoTarget\(/);
     assert.match(dispatch, /const repo = targetRepo\.localPath/);
     assert.match(dispatch, /ensureWorkspace\(repo, branch\)/);
-    assert.match(dispatch, /ghRunnerForTarget\(targetRepo\)/);
+    assert.match(dispatch, /ghRunnerForTarget\(targetRepo, \{ role: 'worker' \}\)/);
 
     const reviewer = src.slice(
       src.indexOf('async function cmdReviewerCreateMirasim'),
@@ -334,6 +334,32 @@ describe('#1024 返工：GitHub owner/name 与 runtime 本地路径拆开', () =
     assert.match(done, /repo:\s*targetRepo\.ownerName/);
     // 完工 issue 评论走网关：必须把目标仓传进去，不许默认落到 windsurf-dao。
     assert.match(done, /postCommentOnce\(\{[\s\S]*?kind: 'issue'[\s\S]*?repo:\s*targetRepo\.ownerName/);
+  });
+
+  it('runGh / spawnGh：跨仓钉 GH_REPO；不传一字不变',
+    async () => {
+    const G = await import('file://' + path.join(REPO, 'scripts', 'lib', 'gh.mjs').replace(/\\/g, '/'));
+    const seen = [];
+    const spawnImpl = (exe, args, opts) => {
+      seen.push({ exe, args, envRepo: opts && opts.env && opts.env.GH_REPO });
+      return { status: 0, stdout: 'ok', stderr: '' };
+    };
+    const pinned = G.spawnGh(['pr', 'view', '12'], { repo: 'thoerwink8/ws-cleaner', spawnImpl, token: 't' });
+    assert.equal(pinned.ok, true);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].envRepo, 'thoerwink8/ws-cleaner');
+    assert.deepEqual(seen[0].args, ['pr', 'view', '12']);
+
+    seen.length = 0;
+    const home = G.spawnGh(['pr', 'view', '12'], { spawnImpl, token: 't' });
+    assert.equal(home.ok, true);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].envRepo, undefined);
+
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'git.mjs'), 'utf8');
+    assert.match(src, /export function runGh\(args, \{ cwd, role, repo \} = \{\}\)/);
+    assert.match(src, /ghAs\(role, args, \{ cwd, repo \}\)/);
+    assert.match(src, /if \(ghRepo\) opts\.env = \{ \.\.\.process\.env, GH_REPO: ghRepo \}/);
   });
 });
 
