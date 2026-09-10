@@ -992,7 +992,7 @@ const MULTI_FLAGS = new Set(['slice']);
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
-  'session-stop': new Set(['--session', '--json', '--help', '-h']),
+  'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',

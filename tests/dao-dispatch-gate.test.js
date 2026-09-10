@@ -810,6 +810,48 @@ describe('#1055 dao start/session 动词切 mirasim', () => {
     }
   });
 
+  // 2026-09-11 实咬：commander 给 session-stop 传了 --worktree（它自己 710 行加的），
+  // 而白名单里没登记这个旗标 → 每一轮 commander 发起的停会话都报「未知参数: --worktree」，
+  // **一个都没停成**，死会话就这么一直留在盘上占树。
+  // 单点补一个词不算修——所以这里钉的是**类**：commander 里每一处 dao.mjs 调用，
+  // 它传的每个旗标都必须在白名单里。下次谁再加一个旗标，先在仓里红。
+  //
+  // 边界靠**括号深度**（不是行数、不是跨行大正则）：
+  //   行粒度会把上下文的别的脚本/别的调用卷进来（第一版误报 pr-sync-labels 收到
+  //   --squash，那是紧接着 gh-as.mjs 那行的）；跨行正则又容易被嵌套数组骗过。
+  //   从 `'scripts/dao.mjs', '<verb>'` 起，数 ()[] 的净深度，回到 0 就该收手。
+  it('commander 里每处 dao.mjs 调用传的旗标，白名单都必须收（防「未知参数」静默全灭）', async () => {
+    const S = await S_LOAD;
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+
+    const offenders = [];
+    let checked = 0;
+    const headRe = /['"]scripts\/dao\.mjs['"]\s*,\s*['"]([a-z-]+)['"]/g;
+    let m;
+    while ((m = headRe.exec(src)) !== null) {
+      const verb = m[1];
+      const allowed = S.FLAGS_BY_VERB[verb];
+      if (!allowed) continue;
+      checked += 1;
+      // 从动词之后扫到该调用的括号闭合处
+      let depth = 1; // `[` 或 `(` 已经开着了
+      let i = headRe.lastIndex;
+      let body = '';
+      while (i < src.length && depth > 0) {
+        const ch = src[i];
+        if (ch === '(' || ch === '[') depth += 1;
+        else if (ch === ')' || ch === ']') depth -= 1;
+        if (depth > 0) body += ch;
+        i += 1;
+      }
+      for (const f of body.match(/--[a-z][a-z-]*/g) || []) {
+        if (!allowed.has(f)) offenders.push(`${verb} 收到 ${f}（白名单没有）`);
+      }
+    }
+    assert.ok(checked >= 5, `只抓到 ${checked} 处调用——没匹配上说明这个检查已经查不到东西了`);
+    assert.deepEqual(offenders, [], offenders.join('；'));
+  });
+
   it('dao.mjs 里 orca 绑定整段删的标记还在——本单不做代码清理', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     assert.equal(/↓↓↓ 以下是 orca 绑定/.test(src), false, 'orca 绑定整段必须已删');
