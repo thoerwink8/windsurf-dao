@@ -71,6 +71,63 @@ export function installedVersion(homeDir) {
 }
 
 /**
+ * 「升级换没换干净」的判据：**在役进程自报的版本** vs **升级器 promote 出来的版本**。
+ * 纯判官，不碰网络也不碰盘——两个版本号由调用方取好传进来。
+ *
+ * 为什么这条要单列（2026-09-10 实咬的镜像面）：契约断言验的是「自报 = promote 出来的那份」
+ * ——两份都取服务端，所以它看不见「promote 换了盘上的 current，进程还跑着老版本」。
+ * 升级器 promote 里确实 stop→rename→start，但**没人验它真换成了**：中途 start 失败、
+ * 或者有人手改了软链又没重启，症状都是「新版本装好了、跑的还是老的」，而契约断言照样绿。
+ * 跟随模式把这层风险放大了：以前钉死版本时至少会因版本不符当场拒派。
+ *
+ * 三态：同版本 ok；不同 red（谁新谁旧都算红——回退和升级同样要人看一眼）；
+ * 任一取不到 unknown（没查成 ≠ 查过没事）。
+ */
+export function judgeVersionDrift({ promoted, reported, service = null } = {}) {
+  const norm = v => (typeof v === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v.trim()) ? v.trim() : null);
+  const p = norm(promoted);
+  const r = norm(reported);
+  const missing = [];
+  if (p === null) missing.push('升级器 promote 出来的版本（读不到 current/VERSION）');
+  if (r === null) missing.push('在役服务端自报的版本（没连上或没报 version）');
+  if (missing.length) {
+    return { state: 'unknown', key: 'mirasim-version', promoted: p, reported: r, service,
+      detail: `没查成：${missing.join('；')}——「没查成」不是「版本一致」` };
+  }
+  if (p !== r) {
+    return { state: 'red', key: 'mirasim-version', promoted: p, reported: r, service,
+      detail: `盘上 promote 的是 ${p}，在役进程自报 ${r}——升级没换干净（改了软链没重启，或 start 失败后回退了）`,
+      plain: {
+        what: `执行体服务换了新版本 ${p}，但真正在跑的还是很老的那份 ${r}`,
+        impact: '新版本的能力用不上；更糟的是契约断言两边都读服务端，这层错位它看不见，一切显示正常',
+        plan: '重启一次执行体服务（systemctl restart mirasim-server）即可，我来做，做完再验一遍',
+      } };
+  }
+  return { state: 'ok', key: 'mirasim-version', promoted: p, reported: r, service,
+    detail: `在役 ${p}（promote 与进程自报一致）` };
+}
+
+/**
+ * 取两个版本号喂给 judgeVersionDrift。**探测本身只做两件事**：
+ * 读盘上 promote 出来的 VERSION，连回环 ws 问一句 state。
+ *
+ * 不复用 createRuntime().ensureWorkspace —— 那条路会建树/写盘，巡检是**只读**动作，
+ * 眼睛不许有副作用。这里只拿到 state 就关连接。
+ * 任一步失败都返回 null 那一侧（判官自会判 unknown），不抛：巡检一项探不到不该拖垮整轮。
+ */
+export async function probeVersionDrift({ homeDir, port, service = 'mirasim-server.service', timeoutMs = 8000 } = {}) {
+  const promoted = installedVersion(homeDir);
+  let reported = null;
+  try {
+    const connect = defaultConnect;
+    const wire = await connect({ homeDir: homeDir || os.homedir(), port: Number(port || DEFAULT_PORT), openTimeoutMs: timeoutMs });
+    try { reported = typeof wire.state?.version === 'string' ? wire.state.version : null; }
+    finally { try { wire.close(); } catch { /* 只读探测，关不掉不该改判 */ } }
+  } catch { reported = null; /* 连不上 = 没查成，由判官说 */ }
+  return judgeVersionDrift({ promoted, reported, service });
+}
+
+/**
  * 钉死的服务端版本。**留空即「跟随本机在役版本」**——这是默认，也是推荐。
  *
  * 它只在一种场景下需要显式给值：想刻意钉住某个版本、让服务端偷偷换版本时当场拒派
@@ -285,7 +342,9 @@ export function readSessionView(snapshot) {
   let error = null;
   if (typeof s.error === 'string' && s.error) error = s.error;
   else if (s.error && typeof s.error === 'object' && typeof s.error.message === 'string') error = s.error.message;
-  return { phase, text, toolCalls, error, incomplete: s.incomplete === true };
+  return { phase, text, toolCalls, error, incomplete: s.incomplete === true,
+    // waiting_user 判据要用到交互清单（#1174）：快照里有就原样透传，没有就不给字段——不编空数组。
+    ...(Array.isArray(s.interactions) ? { interactions: s.interactions } : {}) };
 }
 
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
@@ -780,11 +839,17 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function startSession({ agent, workdir, prompt, model, effort, clientRef } = {}) {
+  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route } = {}) {
+    // promptSent / explicitlyRejected 供 catch 里判「这次失败到底发出去没有」（#1174）。
+    let promptSent = false;
+    let explicitlyRejected = false;
     if (!agent || !workdir || !prompt) {
       throw new MirasimRejectedError('起会话要同时给 agent / workdir / prompt');
     }
-
+    if (route !== undefined && !['local', 'cloud', 'auto'].includes(route)) {
+      throw new MirasimRejectedError('route 必须是 local / cloud / auto');
+    }
+    try {
     // 租约闸：一棵树同时只许一个会话在跑（lib/dispatch/lease.mjs 有实测起因）。
     // 装在这里而不是各调用点——四个调用点（dao dispatch / dao start / 审官 create /
     // 推一把）全从这道门过，装在门里绕不开。放在连线之前：占着的树连 ws 都不开。
@@ -847,13 +912,16 @@ export function createRuntime(opts = {}) {
           workdir,
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
+          ...(route ? { route: route === 'auto' ? null : route } : {}),
           clientRef: clientRef || `dao-${startedAt}`,
         });
+        promptSent = true;
         const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
         const verdict = judgeAccepted(msg);
         if (!verdict.ok) {
           if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
           if (verdict.rejected) {
+            explicitlyRejected = true;
             // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
             // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
             // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
@@ -883,6 +951,35 @@ export function createRuntime(opts = {}) {
       // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
       try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
     }
+    } catch (error) {
+      // promptSent && !explicitlyRejected = prompt 发出去了但没拿到明确拒绝 ⇒ 起会话状态不确定。
+      // 标出来是给上层判「能不能当没起过、能不能重派」——不确定的重派会烧两次额度（#1174）。
+      error.detail = { ...(error.detail || {}), launchUncertain: promptSent && !explicitlyRejected, clientRef: clientRef || null };
+      throw error;
+    }
+  }
+
+  // Identity reconciliation only. A matching record is not completion evidence.
+  // The unified worktree lease guarantees no second managed launch in this window.
+  function resolveStart({ agent, workdir, startedAt, since } = {}) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(agent || '') || !workdir) return { ok: false, unscanned: true, why: 'invalid start identity' };
+    const earliest = typeof (startedAt ?? since) === 'number' ? (startedAt ?? since) : Date.parse(startedAt ?? since);
+    if (!Number.isFinite(earliest)) return { ok: false, unscanned: true, why: 'missing start timestamp' };
+    const root = join(homeDir, '.mirasim', 'sessions', agent);
+    let ids;
+    try { ids = readdirSync(root); } catch (e) { return { ok: false, missing: e.code === 'ENOENT', unscanned: e.code !== 'ENOENT', why: 'session records unavailable' }; }
+    if (ids.length > 10000) return { ok: false, unscanned: true, why: 'session record scan limit' };
+    const hits = [];
+    for (const id of ids) {
+      if (!SESSION_KEY_RE.test(`${agent}:${id}`)) continue;
+      let row;
+      try { row = JSON.parse(readFileSync(join(root, id, 'record.json'), 'utf8')); }
+      catch (e) { if (e.code === 'ENOENT') continue; return { ok: false, unscanned: true, why: 'session record unreadable' }; }
+      const at = typeof row.createdAt === 'number' ? row.createdAt : Date.parse(row.createdAt);
+      if (row.workdir === workdir && Number.isFinite(at) && at >= earliest - 1000) hits.push({ sessionKey: `${agent}:${id}`, startedAt: at });
+    }
+    if (hits.length !== 1) return { ok: false, missing: hits.length === 0, ambiguous: hits.length > 1, why: 'start identity not unique', matches: hits.length };
+    return { ok: true, ...hits[0], confirmedBy: ['workdir', 'creation-window', 'persistent-session-record'] };
   }
 
   /**
@@ -1032,12 +1129,17 @@ export function createRuntime(opts = {}) {
   async function listSessions() {
     const wire = await open();
     try {
-      wire.send({ type: 'listSessions' });
-      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
-      if (!msg || !Array.isArray(msg.sessions)) {
-        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      const deadline = now() + t.list;
+      for (let limit = 256; limit <= 32768; limit *= 2) {
+        wire.send({ type: 'listSessions', scope: 'global', limit });
+        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, deadline - now()));
+        if (!msg || !Array.isArray(msg.sessions)) {
+          return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+        }
+        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+        if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
       }
-      return { ok: true, missing: false, sessions: msg.sessions };
+      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
     } catch (e) {
       return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
     } finally {
@@ -1048,6 +1150,7 @@ export function createRuntime(opts = {}) {
   return {
     ensureWorkspace,
     startSession,
+    resolveStart,
     readSession,
     listSessions,
     interact,

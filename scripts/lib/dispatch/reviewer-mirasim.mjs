@@ -236,7 +236,8 @@ export async function mirasimReviewerCreate({
   if (!vendorGate.ok) return { ok: false, stage: 'vendor', error: vendorGate.error, vendorGate };
 
   // 2. agent 路由：模型 → mirasim agent（gpt → codex relay）。查不到就拒派。
-  const route = judgeAgentRoute(reviewerModel, mirasimPolicy);
+  const profile = runtime.profileForModel?.(reviewerModel);
+  const route = profile ? { ok: true, agent: profile.agent, mode: profile.route, family: profile.modelFamily, profileId: profile.id } : judgeAgentRoute(reviewerModel, mirasimPolicy);
   if (!route.ok) return { ok: false, stage: 'route', error: route.error, route };
 
   // 3. 读 PR head。
