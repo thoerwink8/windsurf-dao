@@ -45,6 +45,7 @@
 - [x] 本轮跟上 origin/master（#1147 搁置单收口泵 + #1125 审官入队）。合入后 `resolvePumpDraftDispatch` 仍从署名单反推 model/reviewer——正是本单要删的那一层。改成只读 PR 自己的标签；没标就拒，不猜。
 - [x] 本轮跟上 origin/master（v2.2.0 / 建树 realpath / 钉版本跟随在役 / 报帅 key 规范化）。合入后观察 `2026-09-10-指挥官timer停了自检仍绿.md` 落成 #1177，文件加「处置：#1177」（空处置行会把 inbox 闸打红）。
 - [x] 本轮跟上 origin/master（#1110 合并闸检查器 + #1169 渠道并发三件套）。合入的是 master 新机制，本单选型路仍只读 PR label。
+- [x] 本轮跟上 origin/master（报帅 key 闸对齐网关真闸 ASCII；巡检观察已有「处置：2af1fba9」）。合入的是 master 已修，本单选型路仍只读 PR label。
 
 ## 机制判定
 
