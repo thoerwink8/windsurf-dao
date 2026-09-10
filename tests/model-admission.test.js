@@ -31,10 +31,11 @@ test('没有落地的 profile id：enabled 且 available 才放行', () => {
 test('熔断 open 未到冷却 → 红；冷却已过 → 放行（半开要给机会）', () => {
   const models = [{ id: 'gpt-5.6-sol', provider: 'gpt' }]; // probeTargetForModel → direct:codex@pqapi/responses
   const targets = { 'direct:codex@pqapi/responses': { state: 'open', cooldownUntil: '2026-09-10T17:39:20.055Z' } };
+  const idle = () => ({ availability: { 'gpt-5.6-sol': '空闲' } });
   const now = Date.parse('2026-09-10T13:00:00Z');
-  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now }), ['gpt-5.6-sol']);
+  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now, availabilityForFn: idle }), ['gpt-5.6-sol']);
   const later = Date.parse('2026-09-10T18:00:00Z');
-  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now: later }), [], '冷却到点必须放行，否则熔断成了永久封禁');
+  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now: later, availabilityForFn: idle }), [], '冷却到点必须放行，否则熔断成了永久封禁');
 });
 
 test('熔断 closed 不算红（健康表清白的夹具，只验熔断这一层）', () => {

@@ -104,7 +104,7 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(/writeReviewPendingOnFail/.test(daoSrc) && /reviewPending/.test(daoSrc),
       'worker-done 起败必须写队列');
-    assert.ok(/enqueueOnly:\s*true/.test(daoSrc) || /queued: true/.test(daoSrc),
+    assert.ok(/queued-for-review/.test(daoSrc) || /enqueueOnly:\s*true/.test(daoSrc) || /queued: true/.test(daoSrc),
       '交卷入队后必须成功交卷');
   });
 
@@ -190,7 +190,11 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(!/function reuseReviewerOnTerminal/.test(daoSrc),
       'orca 复用审官终端路径必须已删');
-    assert.match(daoSrc, /judgeReviewerSessionReuse/);
+    assert.match(daoSrc, /decideReviewerCreateStart/,
+      'mirasim 审官复用必须接到 create 热路');
+    const miraSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+    assert.match(miraSrc, /judgeReviewerSessionReuse/,
+      '一 PR 一审官的复用判据在 reviewer-mirasim，不在已删的 orca attach 脊');
   });
 
   it('#815 余洞：指挥官轮转消费队列，reviewer-attach 只调一次', async () => {
