@@ -43,7 +43,7 @@ import {
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
+  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, pumpDraftKey, ticketHeadOid,
   SITUATION_SECTIONS, dispatchMergePolicyArgs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -58,12 +58,12 @@ import {
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
-  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
+  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment,
 } from './lib/exhausted.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
@@ -78,6 +78,7 @@ import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, upd
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -646,8 +647,14 @@ function execAction(action, { state, dryRun, log }) {
       if (!r.ok) return r;
       return awaitDispatchResult(r.out, { say });
     }
-    case 'attach-reviewer':
-      return drainReviewPending(action, { state, dryRun, say });
+    case 'attach-reviewer': {
+      // 走 blessed 路径 review-pending-drain。#1125 起 drain 自己按在役审官数拉，拉满即停，不是一次清完。
+      // 不带 --pr：--pr 只隔离毒票，仍过容量闸；带了也不会绕上限。不过上限只认 --force（人手）。
+      const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      recordDrainAttempt(state, action, drainPayloadOf(r));
+      return r;
+    }
     case 'stop-session': {
       if (!action.sessionKey) {
         say('  stop-session 没有 sessionKey');
@@ -664,6 +671,8 @@ function execAction(action, { state, dryRun, log }) {
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
       return dispatchRework(action, { state, dryRun, say });
+    case 'pump-draft':
+      return dispatchPumpDraft(action, { state, dryRun, say });
     case 'rereview':
       return requestRereview(action, { state, dryRun, say });
     case 'wake-brain':
@@ -800,11 +809,8 @@ function execRetryDrain(action, { state, dryRun, say }) {
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
   const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
-  state.drainLedger = state.drainLedger || {};
-  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
-  state.drainLedger[planned.stateKey] = {
-    at: nowIso(), pr: planned.pr, tries: planned.tries,
-  };
+  // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
 }
 
@@ -842,9 +848,10 @@ function execMarkExhausted(action, { dryRun, say }) {
     say('  mark-exhausted 缺 pr，不动手');
     return { ok: false, error: 'mark-exhausted 要 pr' };
   }
-  const comment = action.comment || exhaustedComment({
-    pr, verb: action.verb, tries: action.tries, head: action.head,
-  });
+  const useWaiting = action.label === WAITING_USER_LABEL || action.verb === 'pump-draft';
+  const comment = action.comment || (useWaiting
+    ? waitingUserComment({ pr, verb: action.verb, tries: action.tries, head: action.head })
+    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head }));
   const st = runGh(['pr', 'view', String(pr), '--repo', REPO, '--json', 'labels,state'], 20000);
   if (!st.ok) {
     say(`  认输标没查成，本轮不打：PR #${pr}（${st.error}）`);
@@ -868,22 +875,27 @@ function execMarkExhausted(action, { dryRun, say }) {
     say(`  PR #${pr} 已有认输/等用户标，不重复评论`);
     return { ok: true, skipped: 'already-labeled' };
   }
+  const label = useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL;
+  const desc = useWaiting
+    ? 'draft 收口泵试满仍搁置，等帅位三选一'
+    : '自动化认输：机械重试无解，等帅位三选一';
+  const color = useWaiting ? 'FBCA04' : 'B60205';
   if (dryRun) {
-    say(`[dry] 给 PR #${pr} 打「${EXHAUSTED_LABEL}」并评论（${action.verb} 试了 ${action.tries} 次）`);
-    return { ok: true, dryRun: true };
+    say(`[dry] 给 PR #${pr} 打「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`);
+    return { ok: true, dryRun: true, label };
   }
   ensureDir(STATE_DIR);
   const created = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
-    'label', 'create', EXHAUSTED_LABEL, '--repo', REPO,
-    '--description', '自动化认输：机械重试无解，等帅位三选一', '--color', 'B60205'], 20000);
+    'label', 'create', label, '--repo', REPO,
+    '--description', desc, '--color', color], 20000);
   if (!created.ok && !/already exists/i.test(String(created.error || ''))) {
-    say(`  建认输标失败：${created.error}`);
+    say(`  建「${label}」失败：${created.error}`);
     return created;
   }
   const tagged = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
-    'pr', 'edit', String(pr), '--repo', REPO, '--add-label', EXHAUSTED_LABEL], 20000);
+    'pr', 'edit', String(pr), '--repo', REPO, '--add-label', label], 20000);
   if (!tagged.ok) {
-    say(`  打认输标失败：${tagged.error}`);
+    say(`  打「${label}」失败：${tagged.error}`);
     return tagged;
   }
   const bodyFile = join(STATE_DIR, `exhausted-${pr}-${Date.now()}.md`);
@@ -891,11 +903,11 @@ function execMarkExhausted(action, { dryRun, say }) {
   const commented = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
     'pr', 'comment', String(pr), '--repo', REPO, '--body-file', bodyFile], 20000);
   if (!commented.ok) {
-    say(`  认输标已打、评论失败：${commented.error}`);
-    return { ok: true, labeled: true, commented: false, error: commented.error };
+    say(`  「${label}」已打、评论失败：${commented.error}`);
+    return { ok: true, labeled: true, commented: false, error: commented.error, label };
   }
-  say(`  PR #${pr} 已打「${EXHAUSTED_LABEL}」并评论（${action.verb} × ${action.tries}）`);
-  return { ok: true, labeled: true, commented: true };
+  say(`  PR #${pr} 已打「${label}」并评论（${action.verb} × ${action.tries}）`);
+  return { ok: true, labeled: true, commented: true, label };
 }
 
 function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
@@ -1024,7 +1036,7 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
  * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
-export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
+export const DISPATCHING_KINDS = new Set(['dispatch', 'rework', 'pump-draft']);
 
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
@@ -1057,16 +1069,18 @@ export function runActions(actions, { exec, log = [] } = {}) {
     failedIssues.add(String(action.issue));
     if (action.pr != null) failedPrs.add(String(action.pr));
     const isRework = action.kind === 'rework';
+    const isPump = action.kind === 'pump-draft';
+    const failKind = isRework ? 'rework' : isPump ? 'pump-draft' : 'dispatch';
     const escalation = {
       kind: 'escalate',
-      reason: r && r.unscanned
-        ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
-        : (isRework ? 'rework-failed' : 'dispatch-failed'),
+      reason: r && r.unscanned ? `${failKind}-unscanned` : `${failKind}-failed`,
       issue: action.issue,
       ...(action.pr != null ? { pr: action.pr } : {}),
       why: isRework
         ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
-        : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
+        : isPump
+          ? `PR #${action.pr} draft 收口泵${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——本张不自动重派，交帅`
+          : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
     };
     generated.push(escalation);
     exec(escalation);
@@ -1183,6 +1197,39 @@ export function reworkSpec(action, briefPath) {
     : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
 }
 
+/** #1147 draft 收口泵：短会话三选一，必须落痕。关闭是工人判，不是指挥官机械关。 */
+export function pumpDraftBriefPath(action, { dir = null } = {}) {
+  return join(dir || join(STATE_DIR, 'pump-draft'), `pr-${action.pr}.md`);
+}
+
+export function pumpDraftBriefText(action) {
+  return [
+    `# draft 收口：PR #${action.pr}`,
+    '',
+    `- 署名 issue #${action.issue}；当前 head ${action.head || '（没查成）'}`,
+    `- 这是第 ${action.tries || 1} 次收口泵。泵满仍 draft 会打「卡死/等用户」交帅，不再泵。`,
+    '',
+    '本会话只做一件事：让这张 draft 离开搁置。三选一，必须落痕：',
+    '',
+    'a) 能补验收就补、转正式、交卷入队（`dao.mjs worker-done --executor mirasim`）。',
+    'b) 差距大就在 PR 评论写「差什么」并保持 draft。',
+    'c) 已被现实超越就评论说明并关闭（关闭是你判，不是指挥官机械关）。',
+    '',
+    '硬边界：不许借机改本单范围外的东西；不许批量关别人的 draft。',
+    '',
+  ].join('\n');
+}
+
+export function pumpDraftSpec(action, briefPath) {
+  return `收口 draft PR #${action.pr}：先切到该 PR 分支；三选一（补验收转正式 / 评论差什么保持 draft / 评论说明并关闭），全文在 ${briefPath}。`;
+}
+
+export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}) {
+  return writeBriefVerified({
+    path: pumpDraftBriefPath(action, { dir }), text: pumpDraftBriefText(action), io: fsio, what: 'draft 收口任务书',
+  });
+}
+
 /**
  * 叫审官复审：写一张复审待办票，当场走 review-pending-drain --pr。
  * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧。
@@ -1225,21 +1272,37 @@ function requestRereview(action, { state, dryRun, say }) {
   return drainReviewPending(action, { state, dryRun, say });
 }
 
-/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。 */
+/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
+ *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
 function drainReviewPending(action, { state, dryRun, say }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
-  // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
-  if (action.pr != null) {
-    state.drainLedger = state.drainLedger || {};
-    const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
-    const prev = state.drainLedger[key];
-    state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
-  }
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+function drainPayloadOf(runResult) {
+  if (!runResult) return { ok: false };
+  if (runResult.dryRun === true) return { ok: true, dryRun: true };
+  const text = String(runResult.out || '');
+  const start = text.lastIndexOf('{');
+  if (start < 0) return { ok: runResult.ok === true };
+  try { return JSON.parse(text.slice(start)); }
+  catch { return { ok: runResult.ok === true }; }
+}
+
+function recordDrainAttempt(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  const applied = applyDrainLedger({
+    ledger: state.drainLedger || {},
+    pr: action.pr,
+    head: ticketHeadOid(action.head),
+    payload,
+    nowIso: nowIso(),
+  });
+  if (applied.wrote) state.drainLedger = applied.ledger;
 }
 
 function findDaoTree(issue, pr) {
@@ -1344,6 +1407,54 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = n
   }
   const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
   rememberRework(state, action, written, started);
+  return started;
+}
+
+function rememberPumpDraft(state, action, written, verdict) {
+  state.reworkDispatched = state.reworkDispatched || {};
+  const pkey = action.pumpKey || pumpDraftKey(action.pr);
+  const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  state.reworkDispatched[pkey] = {
+    at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
+    brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
+    tries: prevTries + 1, kind: 'pump-draft',
+  };
+}
+
+export function dispatchPumpDraft(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
+  const written = writePumpDraftBrief(action, { dir: briefDir });
+  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
+  const spec = pumpDraftSpec(action, written.path);
+  try { buildSoldierInject({ spec, issue: action.issue }); }
+  catch (e) {
+    const error = `draft 收口注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  let tree = findDaoTree(action.issue, action.pr);
+  let treeFail = null;
+  if (!tree) {
+    const made = ensureTreeFromPr(action, { dryRun, say, run });
+    if (made.dryRun) return { ok: true, dryRun: true, tree: `(dry: PR 分支 ${made.headRef})` };
+    if (made.ok) { tree = made.tree; say(`  没有 dao 树，已按 PR 分支 ${made.headRef} 建树：${tree}`); }
+    else treeFail = made.error;
+  }
+  if (!tree) {
+    const error = treeFail || `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
+    say(`  ${error}`);
+    const verdict = { ok: false, unscanned: true, error };
+    rememberPumpDraft(state, action, written, verdict);
+    return verdict;
+  }
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', action.model,
+    '--worktree', tree, '--prompt', spec];
+  if (dryRun) {
+    say(`[dry] pump-draft PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
+    return { ok: true, dryRun: true, tree };
+  }
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
+  rememberPumpDraft(state, action, written, started);
   return started;
 }
 
@@ -2031,7 +2142,12 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  // key 不许含空白（网关判据）。回落到 title 时最容易踩：派工失败的 title 里带着整段
+  // JSON 错误，直接当 key 会被拒成 missing_idempotency——**故障与告警同源失效**，
+  // 2026-09-10 一晚 96 条派工失败没有任何一条报出来。所以这里一律规范化，
+  // 而不是指望调用方给的字符串正好合法。
+  const keySeed = marker ? marker[0] : title;
+  const key = `commander-escalate:${escalationKeyOf(keySeed)}`;
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);

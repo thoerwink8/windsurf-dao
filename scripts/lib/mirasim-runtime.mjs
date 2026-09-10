@@ -1,10 +1,11 @@
 // scripts/lib/mirasim-runtime.mjs —— mirasim-server 当执行体的唯一绑定入口（#880 卡 A）。
 //
-// 五个动词是 #880 冻结的接口，dao.mjs 按 executor 字段分派 orca / mirasim 两套绑定，
-// orca 退役时删绑定、不改调用方：
+// 五个动词是 #880 冻结的接口；#1125 加了第六个 listSessions（orca 已随 #1115 退役，
+// 冻结五个的理由没了，「现在有几个审官真在跑」只有这一帧答得出）：
 //   ensureWorkspace(repo, branch)             → {path}
 //   startSession({agent, workdir, prompt})    → {sessionKey, taskId}
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
+//   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
 //
@@ -28,13 +29,48 @@
 // 分层：judge* / parse* / read* 是纯判官，只吃入参不碰 IO；createRuntime 只管收发，不判对错。
 // 自己查自己查不出错——判完工的判据不复用发消息那一层的解析。
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 
-/** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
-export const PINNED_VERSION = '0.0.282';
+/**
+ * 读取本机在役的服务端版本——**唯一真值**。
+ *
+ * 为什么不再手打常量（2026-09-10 实咬）：原先这里是一个手写的 `PINNED_VERSION = '0.0.282'`，
+ * 配套注释写「升级永远人工验证后再换这一行（§72 拍板）」。但升级器装上定时器后**会自己升级**，
+ * 而"人工记得换这行"从来不成立——0.0.307 上线后契约断言全部不符，96 条派工被拒，
+ * 11 张单卡死，故障还因为报帅 key 同源失效而没人被通知。
+ *
+ * 记忆判例 hand-typed-constant-will-be-wrong 说的就是这件事：需要手打的常量早晚被凭印象填。
+ * 所以真值改从升级器**自己维护**的地方读——它验证 bundle 必须含 VERSION，
+ * `mirasim-server/current` 软链指向在役版本目录。它换服务端，这里就跟着变，不需要谁记得。
+ *
+ * 读不到返回 null，调用方按「没查成」处理（fail-closed，不许猜一个版本去放行）。
+ */
+export function installedVersion(homeDir) {
+  const candidates = [
+    join(homeDir || os.homedir(), 'mirasim-server', 'current', 'VERSION'),
+    '/usr/local/lib/mirasim-managed-update/VERSION',
+  ];
+  for (const p of candidates) {
+    try {
+      const v = readFileSync(p, 'utf8').trim();
+      if (/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v)) return v;
+    } catch { /* 下一个候选 */ }
+  }
+  return null;
+}
+
+/**
+ * 钉死的服务端版本。**留空即「跟随本机在役版本」**——这是默认，也是推荐。
+ *
+ * 它只在一种场景下需要显式给值：想刻意钉住某个版本、让服务端偷偷换版本时当场拒派
+ * （例如排查期间冻结）。设成具体版本号就恢复旧的严格语义。
+ *
+ * 不再保留一个手打的默认值：那正是 2026-09-10 那次全链瘫痪的根因。
+ */
+export const PINNED_VERSION = null;
 export const DEFAULT_PORT = 4316;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
@@ -80,8 +116,11 @@ export class MirasimRejectedError extends Error {
 /**
  * 起会话前的契约断言。只吃 state 帧的内容，不碰网络。
  * 返回 {ok, unscanned, version, errors}；unscanned=true 表示根本没收到 state（没查成）。
+ *
+ * pinnedVersion 为空 = 跟随本机在役版本（默认）。此时断言退化成「必须报出一个版本号」——
+ * 仍然拦得住「服务端换了实现却连 version 都不报」这种形态突变，但不再因为升级而误拒。
  */
-export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } = {}) {
+export function judgeContract(state, { agent, pinnedVersion = null } = {}) {
   if (!state || typeof state !== 'object') {
     return {
       ok: false,
@@ -92,7 +131,12 @@ export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } =
   }
   const errors = [];
   const version = typeof state.version === 'string' ? state.version : null;
-  if (version !== pinnedVersion) {
+  if (pinnedVersion == null) {
+    // 跟随模式：只要服务端报得出一个合法版本号就算过。不比对具体值——
+    // 比对值是「刻意钉住」的语义，不是默认。
+    if (version === null) errors.push('服务端没报 version 字段——帧形态变了，猜下去只会静默走错');
+    else if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) errors.push(`服务端报的 version 形状不符：${version}`);
+  } else if (version !== pinnedVersion) {
     errors.push(`版本不符：钉死 ${pinnedVersion}，服务端报 ${version === null ? '（没有 version 字段）' : version}`);
   }
   // 下面这几个字段是五个动词真正要读的。缺一个就说明帧形态换了，猜下去只会静默走错。
@@ -566,12 +610,13 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
   return wire;
 }
 
-// ── 五个动词 ─────────────────────────────────────────────────────────────────
+// ── 动词（#880 五个 + #1125 listSessions）────────────────────────────────────
 
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
   const port = Number(opts.port || process.env.MIRASIM_PORT || DEFAULT_PORT);
-  const pinnedVersion = opts.pinnedVersion || PINNED_VERSION;
+  // 不传就是跟随本机在役版本（读 bundle 的 VERSION）。刻意钉住才显式给值。
+  const pinnedVersion = opts.pinnedVersion || null;
   const connect = opts.connect || defaultConnect;
   const ledgerIo = opts.ledgerIo || defaultLedgerIo;
   const journalRead = opts.journalRead;
@@ -584,6 +629,12 @@ export function createRuntime(opts = {}) {
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125）：名单是**全量枚举**，
+    // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
+    // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
+    // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    list: opts.listTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || 30_000),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -619,13 +670,21 @@ export function createRuntime(opts = {}) {
         return msg.workspaces;
       };
 
+      // 匹配必须按 realpath，不许按字面路径（2026-09-10 实咬）：主仓在服务端以
+      // /home/orca/windsurf-dao（一个指向 /srv/projects/windsurf-dao 的符号链接）注册着，
+      // 0.0.307 对 saveWorkspace 按 realpath 去重——再注册 /srv 路径会被当成重复条目删掉。
+      // 字面匹配于是永远「列不到」，11 张单全卡在建树，看起来像服务端拒绝主仓，
+      // 其实是这里的 find 认不出同一个仓的另一个名字。
+      const realOf = p => { try { return realpathSync(String(p)); } catch { return String(p); } };
+      const repoReal = realOf(repo);
+      const sameRepo = w => w?.path === repo || realOf(w?.path) === repoReal;
       let workspaces = await listOnce();
-      let entry = workspaces.find(w => w?.path === repo);
+      let entry = workspaces.find(sameRepo);
       if (!entry) {
         wire.send({ type: 'saveWorkspace', path: repo, name: repo.split('/').filter(Boolean).pop() || repo });
         // 读回自证：注册完再列一次，列不到就说明这一步没生效
         workspaces = await listOnce();
-        entry = workspaces.find(w => w?.path === repo);
+        entry = workspaces.find(sameRepo);
         if (!entry) throw new MirasimRejectedError(`注册工作区没生效，列不到 ${repo}`);
       }
 
@@ -641,6 +700,14 @@ export function createRuntime(opts = {}) {
       const added = await wire.waitFor(m => m.type === 'worktreeAdded' && m.reqId === reqId, t.worktree);
       if (!added) throw new MirasimUnavailableError('addWorktree 没回 worktreeAdded 帧（没查成，别当成没建成）', { reqId });
       if (!added.ok) {
+        // 「already used by worktree at 'X'」是幂等命中，不是失败（2026-09-10 实咬）：
+        // 服务端的 worktrees 缓存会陈旧（实测 69 条里 31 条有 branch，git 里真实存在的
+        // dao-1145 等不在列表），findTree 于是漏判、走到新建，git 拒绝并**在错误里给出真实路径**。
+        // git 比服务端缓存权威——按它给的路径当已有树返回。只认精确形状，别的拒绝照抛。
+        const used = /already used by worktree at '([^']+)'/.exec(String(added.error || ''));
+        if (used && existsSync(used[1])) {
+          return { path: used[1], branch, created: false, verified: true };
+        }
         throw new MirasimRejectedError(`建树被拒：${added.error || '（没给原因）'}`, {
           code: added.code ?? null,
           detail: added.detail ?? null,
@@ -798,20 +865,6 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function listSessions() {
-    const wire = await open();
-    try {
-      wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
-      if (!listed || !Array.isArray(listed.sessions)) {
-        return { ok: false, unscanned: true, sessions: [], error: '会话清单没回 sessions 数组（没查成）' };
-      }
-      return { ok: true, sessions: listed.sessions };
-    } finally {
-      wire.close();
-    }
-  }
-
   async function stopSession(sessionKey) {
     const wire = await open();
     try {
@@ -862,6 +915,32 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 会话名单（#1125）。readSession 内部一直在用这一帧当兜底，只是没往外露。
+   *
+   * 为什么现在加第六个动词：#880 冻结五个动词是为了「orca 退役时删绑定、不改调用方」，
+   * orca 已随 #1115 退役，那个理由没了。而「现在有几个审官真在跑」只有这一帧答得出——
+   * 登记文件会留下死会话（#1121），进程会被服务端重新拉起来变成残壳，两个都不算数。
+   *
+   * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
+   * 把上游池子拉满，那正是 #1125 要治的病。
+   */
+  async function listSessions() {
+    const wire = await open();
+    try {
+      wire.send({ type: 'listSessions' });
+      const msg = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!msg || !Array.isArray(msg.sessions)) {
+        return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+      }
+      return { ok: true, missing: false, sessions: msg.sessions };
+    } catch (e) {
+      return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
@@ -884,7 +963,7 @@ export function _setSharedRuntime(r) { shared = r; }
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
-export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const listSessions = () => runtime().listSessions();
+export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);

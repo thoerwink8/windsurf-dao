@@ -204,6 +204,18 @@ describe('#1000 decide：rereview / rework 试满同样打标', () => {
   });
 });
 
+describe('#1147 pump-draft 试满打「卡死/等用户」，不是认输标', () => {
+  it('buildMarkExhausted(verb=pump-draft) → waiting-user 标 + 对应评论', async () => {
+    const { buildMarkExhausted, WAITING_USER_LABEL, EXHAUSTED_LABEL } = await EX;
+    const a = buildMarkExhausted({ pr: 885, verb: 'pump-draft', tries: 2, head: 'h885' });
+    assert.equal(a.kind, 'mark-exhausted');
+    assert.equal(a.label, WAITING_USER_LABEL);
+    assert.equal(a.label === EXHAUSTED_LABEL, false);
+    assert.match(a.comment, /卡死\/等用户/);
+    assert.match(a.comment, /draft 收口泵/);
+  });
+});
+
 describe('#1000 wake-exhausted 仍走开单（终端不是 PR）', () => {
   it('OPEN_ISSUE_REASONS 只剩 wake-exhausted', async () => {
     const { OPEN_ISSUE_REASONS } = await VERBS;
@@ -266,6 +278,11 @@ describe('#1000 硬边界：不许改 escalate 去重', () => {
     const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
     assert.ok(ACTION_KINDS.includes('mark-exhausted'));
     assert.ok(!FORBIDDEN_AUTO_KINDS.has('mark-exhausted'));
+  });
+  it('ACTION_KINDS 含 pump-draft', async () => {
+    const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    assert.equal(ACTION_KINDS.includes('pump-draft'), true);
+    assert.equal(FORBIDDEN_AUTO_KINDS.has('pump-draft'), false);
   });
   it('executor 有 mark-exhausted case', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
