@@ -165,7 +165,18 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
       kind: 'codex-responses',
       url: `${cx.baseUrl}/responses`,
       headers: { Authorization: 'Bearer <codex OPENAI_API_KEY>', 'Content-Type': 'application/json' },
-      body: { model, stream: true, max_output_tokens: 16, input: PROBE_MESSAGE },
+      // input 必须是 **responses 协议的结构化形状**，不能是裸字符串。
+      // 2026-09-10 实咬：这里原先是 `input: PROBE_MESSAGE`（裸 'ping'），而本机
+      // responses→chat 桥只认结构化 message（裸字符串转出空 messages），上游据此回
+      // `field messages is required` → 500。于是**探针自己造的红**被记成「上游挂了」：
+      // 健康表 108 次 500、熔断 tripped 两轮，审官无腿可走。手搓 curl 发结构化 input
+      // 连测 8 次全通——故障在探针与桥的接口约定，不在上游。
+      body: {
+        model,
+        stream: true,
+        max_output_tokens: PROBE_MAX_TOKENS,
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: PROBE_MESSAGE }] }],
+      },
       target,
       provider,
       model,
