@@ -17,6 +17,7 @@
 # （dao-sync 就是这么漏的，tests/unit-privilege.test.js 现在守着这一条）。
 [Unit]
 Description=windsurf-dao mechanism patrol (LLM)
+OnFailure=dao-patrol-failure.service
 After=network-online.target
 Wants=network-online.target
 

@@ -36,7 +36,7 @@ describe('ephemeral-lifecycle', () => {
 
   it('交卷入队并停会话；审官 mirasim 书不许自己合', () => {
     const dao = read('scripts/dao.mjs');
-    assert.match(dao, /enqueueOnly:\s*true/);
+    assert.match(dao, /queued-for-review|enqueueOnly:\s*true/);
     assert.match(dao, /stopSessionsAtCwd/);
     const mira = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
     assert.doesNotMatch(mira, /pr merge/);

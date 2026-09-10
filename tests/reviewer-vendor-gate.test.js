@@ -183,39 +183,180 @@ describe('#679 起审官同厂硬闸', () => {
     });
   });
 
-  it('容量换人同一条：跳过工人那一厂；没查成工人则升级', async (t) => {
+  it('#1122 容量换厂：跳过工人那一厂；没查成工人则不许换', async (t) => {
     const slot = await SLOT_LOAD;
     const order = await reviewerOrder();
     const models = MODELS;
     const passerIds = ['gpt-5.6-sol', 'kimi-k3'];
-    const ok = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      workerId: 'grok-4.6',
-      order,
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+
+    const ok = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, workerId: 'grok-4.6', order },
     });
     await t.test('工人 grok 时 GPT 下一档仍是 kimi', () => {
-      assert.ok(ok.ok && ok.action === 'switch' && ok.to === 'kimi-k3' && ok.pr === 664, JSON.stringify(ok));
+      assert.equal(ok.ok, true, JSON.stringify(ok));
     });
-    const same = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      workerId: 'kimi-k3',
+
+    const same = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, workerId: 'kimi-k3', order },
+    });
+    await t.test('下一档就是工人那一厂 → 拒，不换过去（#679 不许破）', () => {
+      assert.equal(same.ok, false, JSON.stringify(same));
+      assert.match(same.error, /同厂/);
+    });
+
+    const miss = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, order },
+    });
+    await t.test('没查成工人模型 → 不许换人', () => {
+      assert.equal(miss.ok, false, JSON.stringify(miss));
+    });
+  });
+
+  it('#1122 换厂的例外必须凭证据成立，不是裸旗标', async (t) => {
+    const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
+    const base = { deadModelId: 'gpt-5.6-sol', models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: 'grok-4.6', order };
+
+    await t.test('死因不是满载/看门狗那一类 → 拒（换厂不是挑模型的后门）', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: '审官判红：测试没跑' },
+      });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /不是满载/);
+    });
+
+    await t.test('没给死因 → 没查成，不是放行', () => {
+      const r = slot.judgeCapacityFailover({ requested: 'kimi-k3', capacityFailover: { ...base, deadError: '' } });
+      assert.equal(r.ok, false);
+      assert.equal(r.unscanned, true);
+    });
+
+    await t.test('压根没交凭证 → 拒', () => {
+      assert.equal(slot.judgeCapacityFailover({ requested: 'kimi-k3' }).ok, false);
+    });
+
+    await t.test('跳级点名（该换 kimi 却点 glm）→ 拒', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'glm-5.2',
+        capacityFailover: { ...base, deadError: 'pi turn stalled past 30 minutes' },
+      });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /不许跳级点名/);
+    });
+
+    await t.test('看门狗那一类死因同样算数（不只认 at capacity）', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: 'pi turn stalled past 30 minutes' },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+    });
+  });
+
+  it('#1122 生产路径选人：标签还钉着死人时按顺位取下一位', async (t) => {
+    const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
+    const base = {
+      deadModelId: 'gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
+      workerId: 'grok-4.6',
       order,
+    };
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+
+    await t.test('请求仍是刚死的那位 → 自动换成下一位', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, true);
     });
-    await t.test('下一档就是工人那一厂 → 升级，不换过去', () => {
-      assert.ok(same.ok === false && same.action === 'escalate' && /同厂/.test(same.error), JSON.stringify(same));
+
+    await t.test('没点名（标签空）→ 也取下一位，不卡在闸口', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: '',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
     });
-    const miss = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      order,
+
+    await t.test('点名正好是下一位 → 放行（switched=false，另起不绑这一位）', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, false);
     });
-    await t.test('没查成工人模型 → 升级不许换人', () => {
-      assert.ok(miss.ok === false && miss.action === 'escalate' && miss.unscanned === true, JSON.stringify(miss));
+
+    await t.test('点名跳级 → 拒', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'glm-5.2',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /不许跳级点名/);
+    });
+
+    await t.test('标签钉着更早一跳（luna）而刚死的是 sol → 取 kimi，不当跳级', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: {
+          ...base,
+          deadError: DEAD,
+          passerIds: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+          order: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+        },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, true);
+    });
+
+    await t.test('死因不是满载 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: '审官判红' },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, false);
+    });
+
+    await t.test('没交凭证 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({ requested: 'gpt-5.6-sol' });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+    });
+
+    await t.test('下一档就是工人那一厂 → 拒（#679 不许破）', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: DEAD, workerId: 'kimi-k3' },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /同厂/);
+    });
+
+    await t.test('满载死因但没查成上一位是谁 → 不换厂，不是把起审官打死', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: { ...base, deadModelId: null, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-luna');
     });
   });
 
@@ -290,25 +431,27 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('卡名仍是请求模型 grok（过期）', () => {
       assert.ok(staleCard.ok && staleCard.model === 'grok-4.6', JSON.stringify(staleCard));
     });
-    const wrong = slot.planCapacitySwitch({
-      displayName: 'PR-#680 审官·gpt-5.6-sol',
-      models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: staleCard.model,
-      order,
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+    const wrong = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: {
+        deadModelId: 'gpt-5.6-sol', deadError: DEAD,
+        models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: staleCard.model, order,
+      },
     });
     await t.test('误读过期卡名 grok → 会换到实际工人同厂的 kimi', () => {
-      assert.ok(wrong.ok && wrong.to === 'kimi-k3', JSON.stringify(wrong));
+      assert.equal(wrong.ok, true, JSON.stringify(wrong));
     });
-    const right = slot.planCapacitySwitch({
-      displayName: 'PR-#680 审官·gpt-5.6-sol',
-      models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: actual.modelId,
-      order,
+    const right = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: {
+        deadModelId: 'gpt-5.6-sol', deadError: DEAD,
+        models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: actual.modelId, order,
+      },
     });
-    await t.test('按实际 kimi 换人 → 升级，不换到同厂', () => {
-      assert.ok(right.ok === false && right.action === 'escalate' && /同厂/.test(right.error), JSON.stringify(right));
+    await t.test('按实际 kimi 换人 → 拒，不换到同厂', () => {
+      assert.equal(right.ok, false, JSON.stringify(right));
+      assert.match(right.error, /同厂/);
     });
   });
 

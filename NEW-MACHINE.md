@@ -167,13 +167,16 @@ memory `fix-landed-at-one-call-site-only`）。平台闸没有这个问题：任
 `strict: false`（不要求分支与 master 同步）：开 true 会让每张 PR 合并前都被迫 rebase，
 在多张 PR 并行时互相踩，churn 远大于收益。
 
-装/查/改：
+装/查/改：走幂等脚本（一次一个仓，**不是分发器**——#999 实测照搬本仓配置会把 CI 不在 PR 上跑的仓永久锁死）：
 
 ```bash
-gh api repos/thoerwink8/windsurf-dao/branches/master/protection            # 查
-gh api -X PUT repos/OWNER/REPO/branches/master/protection --input p.json   # 装
-gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆（应急）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --check     # 查（形状对 exit 0，不对 exit 1）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --dry-run   # 只打印将 PUT 的载荷
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO             # 装（已对则零副作用）
+gh api -X DELETE repos/OWNER/REPO/branches/master/protection           # 拆（应急，不走脚本）
 ```
+
+装之前先验：该仓 `check` workflow 在 `pull_request` 上跑、且当前是绿的。PUT 要 admin，用你自己的 `gh`，不要走 `gh-as worker`。
 
 **公开仓免费**。本仓 `private=false`，所以这条不花钱。私有仓要 Pro/Team。
 
@@ -382,6 +385,8 @@ orca account add --help
 # 卡死处置：不要装 dao-nudge-stalled（2026-09-07 退役）。交卷/判定后停会话，差集由指挥官起短会话。
 #   机器上若还留着：sudo bash scripts/install-nudge-stalled.sh（脚本改成卸载）
 #   验：systemctl list-timers --all 里没有 dao-nudge-stalled.timer
+# 看板阶段超时（#818 墙钟闸，跟推进量不是同一把尺）：sudo bash scripts/install-board-watch.sh（单元 host/machine/systemd/dao-board-watch.*）
+#   验：list-timers 里 dao-board-watch.timer 的 NEXT 必须是时间（OnCalendar 现行 *:19/20）
 # 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
 #   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
 # 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
@@ -774,7 +779,6 @@ bash scripts/vnc-browser.sh stop              # 用完就停
 要拿到 `200 0`——`ssl_verify_result=0` 才是证书真的被信任。
 
 ### 两个坑（都实咬过）
-
 1. **Ubuntu 23.10+ 会让 chromium 直接 FATAL: No usable sandbox**。
    真因是 `kernel.apparmor_restrict_unprivileged_userns=1`，非特权进程建不了 user namespace。
    **不要用 `--no-sandbox` 绕**——这个浏览器的用途正是让人在里面登录 GitHub，
@@ -789,6 +793,35 @@ bash scripts/vnc-browser.sh stop              # 用完就停
 拿到 `"Sign in to GitHub · GitHub - ..."` 才算真加载了。
 第一次跑时脚本把 chromium 的 stderr 丢进了 `/dev/null`，面上只显示「浏览器那格是停的」，
 查不出为什么——现在日志落 `~/.dao/vnc/chrome.log`，起不来会把最后几行打出来。
+
+## 13d. codex CLI 的沙箱前置（2026-09-10 实咬，审官链直接死在它上面）
+
+codex 新版默认带 Linux 沙箱，前置是 **`bubblewrap` + 允许建 user namespace**。缺任一条，
+审官会话起得来、**活儿一点没干**就结束，`session-read` 只回一行：
+`Codex could not find bubblewrap on PATH.` 或
+`Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.`
+2026-09-10 一晚三个审官会话全这样死，看着像「审官没干活」，真因在这两行。
+
+三件都要做：
+
+```bash
+apt-get install -y bubblewrap                 # ① 包
+# ② 二进制级放行 userns（Ubuntu 23.10+ 默认 kernel.apparmor_restrict_unprivileged_userns=1）
+cat > /etc/apparmor.d/bwrap <<'PROFILE'
+abi <abi/4.0>,
+include <tunables/global>
+profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, include if exists <local/bwrap> }
+PROFILE
+apparmor_parser -r /etc/apparmor.d/bwrap
+```
+
+③ **不要**用 `sysctl kernel.apparmor_restrict_unprivileged_userns=0` 绕。那条路是全局的：
+机器上**所有**进程都能建 userns，等于「为了给一个工具开锁，把整栋楼的锁拆了」——
+与 §13b 里 chromium 那条坑同一个判断（仓内判例：**不要用 `--no-sandbox` 绕**）。
+
+**验**（别只看装了包）：以服务用户身份实跑一句——
+`sudo -u orca bwrap --dev-bind / / --unshare-user true`；能安静退出才算放行生效，
+报 `setting up uid map: Permission denied` 就是 profile 没加载或被别的 profile 压住。
 
 ## 13.1 「模型好慢」先分段，别先查网络
 

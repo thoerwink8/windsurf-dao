@@ -1,0 +1,33 @@
+# /etc/systemd/system/dao-board-watch.service
+#
+# 看板 v0 阶段超时告警（#818）：读一张表，墙钟超
+# docs/dispatch-policy.json board.workerWallHoursMax（默认 4 小时）→ 总控群报一次。
+# 同一主体同一阶段不刷屏。源没查成 exit 2，不许当成没超时。
+#
+# 装（服务器，orca 用户；与 dao-progress-watch 同一套路）：
+#   sudo bash scripts/install-board-watch.sh
+#   sudo systemctl start dao-board-watch.service   # 当场扫一轮；enable --now 只起 timer
+#   systemctl list-timers | grep dao-board-watch   # NEXT 不能是 -
+#
+# WorkingDirectory 指向本仓主树。换机改这一行，不要复制业务逻辑进 unit。
+
+[Unit]
+Description=windsurf-dao board stage timeout watch (issue #818)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：自动化服务不继承个人 GH_TOKEN。看板读 GitHub 走 gh-as marshal。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/board-watch.mjs
+# 退出码 2 = 没查成（源挂了），故意留成失败：没查成要在
+# systemctl --failed 里看得见，不许跟「查过没事」长成一个样。
+# 0 = 扫过（有超时已报，或没有超时静默）。
+StandardOutput=journal
+StandardError=journal

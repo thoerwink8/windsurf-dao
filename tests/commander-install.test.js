@@ -69,3 +69,51 @@ describe('指挥官 systemd 单元模板（#848）', () => {
       ['/etc/systemd/system/commander-act.service.d/path.conf'], '在几份报几份');
   });
 });
+// 「timer 此刻还会自己响吗」的判据（收件箱 2026-09-10 实咬：enabled+dead 被报成齐）。
+// 判据全文见 lib/timer-armed.mjs 头注。
+const TA = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'timer-armed.mjs').replace(/\\/g, '/'));
+
+describe('timer 会不会自己响（enabled 不等于会响）', () => {
+  it('enabled + inactive(dead) + NEXT 空 → 红（正是 2026-09-10 那个形态）', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [{
+      unit: 'commander-act.timer', isEnabled: 'enabled', activeState: 'inactive', subState: 'dead', next: '',
+    }] });
+    assert.equal(v.state, 'red');
+    assert.match(v.detail, /commander-act\.timer/);
+    assert.match(v.detail, /没有下一次/);
+  });
+
+  it('active(running) + NEXT 空 → 绿：前一响的服务还在跑，systemd 等它结束才排下一次', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [{
+      unit: 'commander-act.timer', isEnabled: 'enabled', activeState: 'active', subState: 'running', next: '',
+    }] });
+    assert.equal(v.state, 'ok');
+  });
+
+  it('inactive 但 NEXT 有值 → 绿（挂起等下一点）', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [{
+      unit: 'dao-land.timer', isEnabled: 'enabled', activeState: 'inactive', subState: 'waiting', next: 'Thu 2026-09-11 13:17:55 CST',
+    }] });
+    assert.equal(v.state, 'ok');
+  });
+
+  it('未启用 → 红；一个红整体红（另一个正常也救不了）', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [
+      { unit: 'a.timer', isEnabled: 'disabled', activeState: 'inactive', subState: 'dead', next: '' },
+      { unit: 'b.timer', isEnabled: 'enabled', activeState: 'active', subState: 'waiting', next: 'x' },
+    ] });
+    assert.equal(v.state, 'red');
+    assert.equal(v.bad.length, 1);
+    assert.match(v.bad[0].why, /未启用/);
+  });
+
+  it('没探到 / 空样本 → unknown，绝不当 ok', async () => {
+    const { classifyTimerArmed } = await TA;
+    assert.equal(classifyTimerArmed({ probed: false }).state, 'unknown');
+    assert.equal(classifyTimerArmed({ probed: true, timers: [] }).state, 'unknown');
+  });
+});

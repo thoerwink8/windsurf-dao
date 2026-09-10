@@ -40,6 +40,16 @@ function idOf(entry) {
   return entry != null ? String(entry) : null;
 }
 
+/**
+ * 模型条目 → 健康表/熔断表用的探针 key（`gw:<组>/<模型>` / `direct:codex@pqapi/responses`）。
+ * 与 availabilityFor 内部用的是同一个函数，导出是为了让**熔断**也能按同一个 key 归口到模型
+ * （commander 的模型准入闸原先只收健康红，熔断靠 profile 未验间接挡住——归口后会漏）。
+ * 没有可探落地（如 profile id 这类条目）返回 null：不猜，调用方按「这条不归探针管」处理。
+ */
+export function probeTargetForModel(entry) {
+  return probeTargetOf(landingOf(entry));
+}
+
 /** 读健康表。缺失 / 坏 JSON / 过期 → unknown（不拦，注明）。 */
 export function loadHealthTable({ home = os.homedir(), read = readFileSync, exists = existsSync, now = Date.now() } = {}) {
   const path = join(home, ...HEALTH_PATH);

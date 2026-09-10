@@ -252,6 +252,8 @@ describe('mirasimWorkerDone 编排', () => {
     assert.equal(res.ok, true);
     assert.equal(res.action, 'created');
     assert.ok(reg.store.get('883').sessionKey);
+    // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
+    assert.equal(reg.store.get('883').reviewer, 'gpt-5.6-luna');
     assert.equal(rt.calls.start.length, 1);
   });
 
@@ -467,6 +469,90 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, runState: 'incomplete' } }).reuse, false);
     assert.equal(judgeReviewerSessionReuse({ record: rec, view: { missing: false, phase: 'running' }, force: true }).reuse, false);
+    // #1122：phase=done 但带着满载死因，不是审完了——复用会把 PR 锁死在死审官上。
+    const cap = judgeReviewerSessionReuse({
+      record: rec,
+      view: { missing: false, phase: 'done', error: 'Selected model is at capacity. Please try a different model.' },
+    });
+    assert.equal(cap.reuse, false, JSON.stringify(cap));
+    assert.match(cap.why, /at capacity/);
+    const stall = judgeReviewerSessionReuse({
+      record: rec,
+      view: { missing: false, phase: 'done', error: 'pi turn stalled past 30 minutes' },
+    });
+    assert.equal(stall.reuse, false, JSON.stringify(stall));
+    // 正常完工（error 空）仍复用——例外口不是常开。
+    assert.equal(judgeReviewerSessionReuse({
+      record: rec, view: { missing: false, phase: 'done', error: '' },
+    }).reuse, true);
+  });
+
+  it('#1122 点名已是下一位时锁内不许把满载死会话当 raced 复用', async () => {
+    const {
+      reviewerMustReplaceDead, judgeReviewerCreateRace,
+      decideReviewerCreateStart, runLockedReviewerCreate, mirasimReviewerCreate,
+    } = await import(RM);
+    const rec = { sessionKey: 'codex:dead-sol', reviewer: 'gpt-5.6-sol' };
+    const deadView = {
+      missing: false, phase: 'done',
+      error: 'Selected model is at capacity. Please try a different model.',
+    };
+    // requested=kimi、dead=sol：plan 返回 switched:false，另起仍必须为真。
+    assert.equal(reviewerMustReplaceDead({
+      force: false, switched: false, deadError: deadView.error,
+    }), true);
+    assert.equal(reviewerMustReplaceDead({
+      force: false, switched: false, deadError: '',
+    }), false);
+    const race = judgeReviewerCreateRace({ forceNew: true, record: rec, view: deadView });
+    assert.equal(race.raced, false, JSON.stringify(race));
+    const raceReuse = judgeReviewerCreateRace({ forceNew: false, record: rec, view: deadView });
+    assert.equal(raceReuse.raced, false, JSON.stringify(raceReuse),
+      '锁内复查即使不带 forceNew，满载死会话也不许当 raced');
+    const live = judgeReviewerCreateRace({
+      forceNew: false, record: rec, view: { missing: false, phase: 'running' },
+    });
+    assert.equal(live.raced, true, JSON.stringify(live));
+
+    // 审官红 1 点名的生产路径：requested=kimi、dead=sol、登记里已有 sol 死会话
+    // → 必须 startSession，不许 raced/reused。
+    const decided = decideReviewerCreateStart({
+      force: false, switched: false, deadError: deadView.error, record: rec, view: deadView,
+    });
+    assert.equal(decided.forceNew, true, JSON.stringify(decided));
+    assert.equal(decided.reuse.reuse, false, JSON.stringify(decided.reuse));
+    assert.equal(decided.race.raced, false, JSON.stringify(decided.race));
+    assert.equal(decided.start, true, JSON.stringify(decided));
+
+    const rig = reworkRig({ treeHead: HEAD });
+    const locked = await runLockedReviewerCreate({
+      forceNew: decided.forceNew, record: rec, view: deadView,
+      create: () => mirasimReviewerCreate({
+        ...reworkArgs(rig),
+        gh: fakeGh({ reviews: [] }),
+        pr: '1129',
+        reviewerModel: 'kimi-k3',
+        workerModel: 'grok-4.6',
+        models: [...MODELS, { id: 'kimi-k3', provider: 'cursor' }, { id: 'grok-4.6', provider: 'grok' }],
+        mirasimPolicy: {
+          ...MIRASIM_POLICY,
+          模型前缀族: { ...MIRASIM_POLICY.模型前缀族, kimi: 'pi', grok: 'pi' },
+          agentRoutes: { ...MIRASIM_POLICY.agentRoutes, pi: { agent: 'pi', mode: 'direct' } },
+        },
+      }),
+    });
+    assert.equal(locked.raced, false, JSON.stringify(locked));
+    assert.equal(locked.outcome, undefined);
+    assert.equal(locked.res && locked.res.ok, true, JSON.stringify(locked.res));
+    assert.equal(rig.calls.start.length, 1, '满载死会话必须 startSession，不许 reused');
+    assert.equal(rig.calls.start[0].model, 'kimi-k3');
+
+    const liveLocked = await runLockedReviewerCreate({
+      forceNew: false, record: rec, view: { missing: false, phase: 'running' },
+      create: () => { throw new Error('在役会话不许再起'); },
+    });
+    assert.equal(liveLocked.raced, true, JSON.stringify(liveLocked));
+    assert.equal(liveLocked.outcome, 'reused');
   });
 
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {
@@ -673,12 +759,12 @@ describe('审官登记表落点必须跨树共享', () => {
     assert.ok(i > -1, '函数没了——本闸判据已失效，不是通过');
     const block = src.slice(i, src.indexOf('\n}\n', i) + 3);
     assert.match(block, /withWorktreeLock\(/, '临界区没上锁');
-    assert.match(block, /lockPath: reviewerLockPath\(args\.pr\)/, '锁要按 PR 分，全局一把会把不同 PR 串起来');
+    assert.match(block, /lockPath: reviewerLockPath\(args\.pr, ownerName\)/, '锁要按仓+PR 分，两个仓同号不许共用一把锁');
     const lockAt = block.indexOf('withWorktreeLock(');
     const createAt = block.indexOf('mirasimReviewerCreate(');
     const writeAt = block.indexOf('registry.write(');
     assert.equal(lockAt < createAt && createAt < writeAt, true, '起会话与写登记都要在锁内');
-    assert.match(block, /const again = registry\.read\(args\.pr\)/, '锁内必须复查——锁外那次挡不住「正在起的」');
+    assert.match(block, /const again = registry\.read\(args\.pr, ownerName\)/, '锁内复查必须带仓——只认 PR 号会把别仓会话当自己的');
     assert.match(block, /stage: 'lock'/, '锁没拿到要硬失败，不许当成可以起');
   });
 
@@ -698,6 +784,95 @@ describe('审官登记表落点必须跨树共享', () => {
     const got = mk().read('1040');
     assert.equal(got.ok, true, '换个实例就读不到了——落点没共享');
     assert.equal(got.record.sessionKey, 'codex:abc');
+  });
+
+  it('**判别性**：两个仓同一 PR 号写登记互不覆盖；跨仓不复用无仓旧登记',
+    async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const mk = () => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); },
+      mkdir: () => {},
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const reg = mk();
+    const wa = reg.write('12', { pr: '12', repo: 'org/a', sessionKey: 'codex:a', treePath: '/wt-a' });
+    const wb = reg.write('12', { pr: '12', repo: 'org/b', sessionKey: 'codex:b', treePath: '/wt-b' });
+    assert.equal(wa.ok, true, JSON.stringify(wa));
+    assert.equal(wb.ok, true, JSON.stringify(wb));
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-12.json'), false, '跨仓登记不许落到纯 PR 号');
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-org__a__12.json'), true);
+    assert.equal(store.has('/home/orca/.dao/mirasim/reviewer-org__b__12.json'), true);
+
+    const ra = mk().read('12', 'org/a');
+    const rb = mk().read('12', 'org/b');
+    assert.equal(ra.ok, true, JSON.stringify(ra));
+    assert.equal(rb.ok, true, JSON.stringify(rb));
+    assert.equal(ra.record.sessionKey, 'codex:a');
+    assert.equal(rb.record.sessionKey, 'codex:b');
+    assert.equal(ra.record.treePath, '/wt-a');
+    assert.notEqual(ra.record.sessionKey, rb.record.sessionKey);
+
+    mk().write('12', { pr: '12', sessionKey: 'codex:home' });
+    const cross = mk().read('12', 'org/a');
+    assert.equal(cross.ok, true);
+    assert.equal(cross.record.sessionKey, 'codex:a', '有仓请求不许读到本仓 reviewer-12.json');
+    const stale = mk();
+    store.set('/home/orca/.dao/mirasim/reviewer-org__c__12.json', JSON.stringify({ pr: '12', sessionKey: 'codex:old' }));
+    const noRepo = stale.read('12', 'org/c');
+    assert.equal(noRepo.ok, false, JSON.stringify(noRepo));
+    assert.equal(noRepo.missing, true);
+    assert.match(String(noRepo.why), /不复用/);
+  });
+
+  it('#1125 listAll：目录不在是空数组，读不了才是 null；跨仓文件名也要扫进来', async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const store = new Map();
+    const mk = (readdir) => defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => { store.set(p, c); },
+      mkdir: () => {},
+      readdir,
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    const noFn = mk(undefined).listAll();
+    assert.equal(noFn, null, '没注入 readdir = 没查成，不许当成 0 条');
+
+    const missing = mk(() => { const e = new Error('no'); e.code = 'ENOENT'; throw e; }).listAll();
+    assert.deepEqual(missing, [], '目录不在 = 一条都没有，可以拉满');
+
+    const unreadable = mk(() => { const e = new Error('perm'); e.code = 'EACCES'; throw e; }).listAll();
+    assert.equal(unreadable, null, '读不了 = 没查成');
+
+    const listedHome = defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => store.set(p, c),
+      mkdir: () => {},
+      readdir: () => ['reviewer-1040.json', 'other.txt', 'reviewer-x.json'],
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+    listedHome.write('1040', { pr: '1040', sessionKey: 'codex:abc' });
+    const listed = listedHome.listAll();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].sessionKey, 'codex:abc');
+
+    listedHome.write('12', { pr: '12', repo: 'org/a', sessionKey: 'codex:a' });
+    const mixed = defaultReviewerRegistry({
+      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      writeFile: (p, c) => store.set(p, c),
+      mkdir: () => {},
+      readdir: () => ['reviewer-1040.json', 'reviewer-org__a__12.json', 'other.txt'],
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    }).listAll();
+    assert.equal(mixed.length, 2, JSON.stringify(mixed));
+    const keys = mixed.map((r) => r.sessionKey).sort();
+    assert.deepEqual(keys, ['codex:a', 'codex:abc']);
+
   });
 });
 

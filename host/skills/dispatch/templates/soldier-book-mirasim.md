@@ -5,7 +5,7 @@
 
 > orca 版任务书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以没有卡态切换、没有 orchestration
-> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论、把审官待办入队，
+> 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论；首审入队、不自己起审官（#1125），
 > **不做 notify 结算、不写卡备注**（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
 
 ## 本单 spec（前言字段）
@@ -57,7 +57,7 @@
 
 1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。
    **不要在 PR 正文写 GitHub 自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 #657）。
-2. **调原子完工命令**——发完工/返工评论，并把审官待办入队：
+2. **调原子完工命令**——发完工/返工评论。首审只入队，不起审官（#1125）：
 
    ```bash
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
@@ -67,7 +67,7 @@
    当场拒。漏旗标不再会静默落到已删的 orca 脊。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
-   命令只发完工评论并把审官待办入队，**不起审官会话**。指挥官按空位拉审官。交卷成功后本会话会被停掉（树留着）。不要 `notify --type worker_done`、不要取 Run id、不要写卡备注。
+   首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。交卷成功后本会话会被停掉（树留着）。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，先照报错修，修不好升级给帅；退出码 0 才算交卷成功。
 4. 交卷后**等审**：审官红项会经 GitHub（`--request-changes` review）打回。你自己读 PR 的 review 状态判有没有被打回——
    红了逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。

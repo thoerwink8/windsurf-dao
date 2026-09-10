@@ -14,9 +14,11 @@
 
 import { analyzeGithubReviews } from '../review-state.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
+import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
 import { judgeAgentRoute } from '../executor-binding.mjs';
 import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
+import { repoPrKey } from './repo.mjs';
 
 /** readSession 回的 phase 里代表「这条会话已经废了」的那几个。废了才准新建，别的一律复用。 */
 const DEAD_PHASES = new Set(['error', 'failed', 'aborted', 'cancelled', 'canceled']);
@@ -95,7 +97,85 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
   if (phase && DEAD_PHASES.has(phase)) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} phase=${phase}（已废）→ 可新建` };
   }
+  // #1122：phase=done 但带着满载/看门狗死因，不是「审完了」——复用 = 把 PR 锁死在死审官上。
+  // 空 error 仍复用：那才是正常完工，换厂例外口不是常开。
+  if (isCapacityDeath(view.error)) {
+    return {
+      reuse: false, sessionKey: key, checked: true,
+      why: `会话 ${key} 死于「${String(view.error).trim().slice(0, 60)}」→ 可新建（撞满载换厂）`,
+    };
+  }
   return { reuse: true, sessionKey: key, checked: true, phase: phase || null, why: `登记里有在役会话 ${key}，复用（一 PR 一审官）` };
+}
+
+/**
+ * 满载/看门狗死会话必须另起，不依赖 requested 是否刚好等于下一位。
+ *
+ * `planReviewerOnCapacityDeath` 在「点名正好是下一位」时返回 switched:false。
+ * 若另起只认 switched，锁内会把刚死的那位当成「并发抢锁已起过」复用掉。
+ */
+export function reviewerMustReplaceDead({ force, switched, deadError } = {}) {
+  return force === true || switched === true || isCapacityDeath(deadError);
+}
+
+/**
+ * 锁内复查：有 sessionKey 不等于「并发已起」。
+ * 满载/看门狗死会话走同一套 judgeReviewerSessionReuse，不算 raced。
+ */
+export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
+  if (forceNew === true) {
+    return { raced: false, why: '必须另起（force / 换厂 / 满载死会话）' };
+  }
+  if (!record || !record.sessionKey) {
+    return { raced: false, why: '锁内复查没有 sessionKey' };
+  }
+  const reuse = judgeReviewerSessionReuse({ record, view, force: false });
+  if (reuse.reuse) {
+    return { raced: true, record, sessionKey: reuse.sessionKey, why: reuse.why };
+  }
+  return { raced: false, why: reuse.why };
+}
+
+/**
+ * 外层复用 + 锁内 raced 用同一份 forceNew。
+ *
+ * requested 正好是下一位时 switched=false，但满载死因仍必须另起。
+ * 第二次 peek 失败（view=null）时，没 force 会按「没查成」复用死会话——
+ * 所以 forceNew 认死因，不认 requested 变没变。
+ */
+export function decideReviewerCreateStart({ force, switched, deadError, record, view } = {}) {
+  const forceNew = reviewerMustReplaceDead({ force, switched, deadError });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew });
+  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  return {
+    forceNew,
+    reuse,
+    race,
+    start: reuse.reuse !== true && race.raced !== true,
+  };
+}
+
+/**
+ * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
+ * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ */
+export async function runLockedReviewerCreate({ forceNew, record, view, create } = {}) {
+  if (typeof create !== 'function') {
+    return { ok: false, error: '要注入 create（起审官会话）' };
+  }
+  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  if (race.raced) {
+    return {
+      ok: true,
+      raced: true,
+      outcome: 'reused',
+      record,
+      sessionKey: race.sessionKey || (record && record.sessionKey) || null,
+      why: race.why,
+    };
+  }
+  const created = await create();
+  return { ok: true, raced: false, res: created };
 }
 
 /**
@@ -235,7 +315,8 @@ export async function mirasimReviewerCreate({
   if (!vendorGate.ok) return { ok: false, stage: 'vendor', error: vendorGate.error, vendorGate };
 
   // 2. agent 路由：模型 → mirasim agent（gpt → codex relay）。查不到就拒派。
-  const route = judgeAgentRoute(reviewerModel, mirasimPolicy);
+  const profile = runtime.profileForModel?.(reviewerModel);
+  const route = profile ? { ok: true, agent: profile.agent, mode: profile.route, family: profile.modelFamily, profileId: profile.id } : judgeAgentRoute(reviewerModel, mirasimPolicy);
   if (!route.ok) return { ok: false, stage: 'route', error: route.error, route };
 
   // 3. 读 PR head。
@@ -314,7 +395,23 @@ export async function mirasimReviewerCreate({
   //   「选型脱节」：真机看账本 model= 那行）。认→精确；不认→选型退化为「只选族/agent」。
   let sess;
   try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}` }); }
-  catch (e) { return { ok: false, stage: 'start', error: `起审官会话没查成：${String(e?.message || e)}`, code: e?.code, treePath }; }
+  catch (e) {
+    // 门里的**背压**标记必须原样透出去（#1145 / #1085）：租约被占、渠道满员都带
+    // detail.busy=true，它们不是「起审官失败」而是「这轮轮不到」。丢掉这个标记的后果是
+    // 背压被当成失败去烧重试预算（drain 的 3 次上限），最后把 PR 判成认输——
+    // 而实际上一个审官都还没起过。dao.mjs 那侧 `fail(res.error, {...res})` 会把这里的字段
+    // 整份摊进 JSON，所以只要在这儿带上，调用方一行都不用改。
+    const busy = e && e.detail && e.detail.busy === true;
+    return {
+      ok: false, stage: 'start',
+      error: `起审官会话没查成：${String(e?.message || e)}`,
+      code: e?.code, treePath,
+      ...(busy ? {
+        busy: true, reason: e.detail.reason || null,
+        channel: e.detail.channel || null, holders: e.detail.holders || undefined,
+      } : {}),
+    };
+  }
   if (!sess || !sess.sessionKey) return { ok: false, stage: 'start', error: '起审官会话没返回 sessionKey（没查成）', treePath, sess };
 
   return {
@@ -340,25 +437,75 @@ export async function mirasimReviewerCreate({
 
 // ── PR→会话 登记（rework 轮找回审官会话） ─────────────────────────────────────
 
-/** 默认登记 IO：_flow/mirasim/reviewer-<pr>.json。测试注入内存版。 */
-export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flowDir } = {}) {
+/** 默认登记 IO：~/.dao/mirasim/reviewer-<pr>.json（本仓）或 reviewer-<owner>__<name>__<pr>.json（跨仓）。测试注入内存版。 */
+export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, join, flowDir } = {}) {
   const dir = flowDir;
-  const path = (pr) => join(dir, `reviewer-${pr}.json`);
+  const loc = (pr, repo) => {
+    const keyed = repoPrKey({ repo, pr });
+    if (!keyed.ok) return keyed;
+    return { ok: true, path: join(dir, `reviewer-${keyed.stem}.json`), keyed };
+  };
+  const parseStem = (name) => {
+    const f = String(name || '');
+    const m = /^reviewer-(?:([A-Za-z0-9_.-]+)__([A-Za-z0-9_.-]+)__(\d+)|(\d+))\.json$/.exec(f);
+    if (!m) return null;
+    if (m[4]) return { pr: m[4], repo: null };
+    return { pr: m[3], repo: `${m[1]}/${m[2]}` };
+  };
   return {
-    read(pr) {
+    /**
+     * 全部登记（#1125 数在役审官要）。**读不了目录回 null，不回空数组**——
+     * 「一条都没有」和「没读成」在下游是两种判决：前者可以拉满，后者一张都不许拉。
+     * #1024：跨仓文件名 reviewer-<owner>__<name>__<pr>.json 也要扫进来，否则跨仓在役审官不占位。
+     */
+    listAll() {
+      if (typeof readdir !== 'function') return null;
+      let names;
       try {
-        const t = readFile(path(pr));
+        names = readdir(dir);
+      } catch (e) {
+        // 目录不在 = 一条都没有（可以拉满）；读不了才是没查成。
+        const code = e && e.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+        return null;
+      }
+      const out = [];
+      for (const f of names) {
+        const parsed = parseStem(f);
+        if (!parsed) continue;
+        const r = this.read(parsed.pr, parsed.repo);
+        if (r.ok && r.record) out.push(r.record);
+      }
+      return out;
+    },
+    read(pr, repo) {
+      const place = loc(pr, repo);
+      if (!place.ok) return { ok: false, missing: true, why: place.error };
+      try {
+        const t = readFile(place.path);
         const j = JSON.parse(t);
-        return { ok: true, record: j };
+        if (place.keyed.scoped) {
+          const recRepo = j && j.repo ? String(j.repo).trim() : '';
+          if (!recRepo || recRepo.toLowerCase() !== place.keyed.ownerName.toLowerCase()) {
+            return {
+              ok: false,
+              missing: true,
+              why: `PR ${pr} 的审官登记不是 ${place.keyed.ownerName}（旧无仓或不匹配），跨仓请求不复用`,
+            };
+          }
+        }
+        return { ok: true, record: j, path: place.path };
       } catch (e) {
         return { ok: false, missing: true, why: `没有 PR ${pr} 的审官会话登记：${String(e?.message || e)}` };
       }
     },
     write(pr, record) {
+      const place = loc(pr, record && record.repo);
+      if (!place.ok) return { ok: false, error: place.error };
       try {
         mkdir(dir);
-        writeFile(path(pr), JSON.stringify(record, null, 2));
-        return { ok: true, path: path(pr) };
+        writeFile(place.path, JSON.stringify(record, null, 2));
+        return { ok: true, path: place.path };
       } catch (e) {
         return { ok: false, error: `写审官会话登记失败：${String(e?.message || e)}` };
       }
@@ -374,7 +521,7 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, join, flow
  */
 export async function mirasimWorkerDone({
   runtime, gh, readTreeHead, prepareRef, syncTree, registry,
-  pr, repo, prompt, reworkPrompt, reworkAnswer, reviewBranch,
+  pr, repo, ownerName, prompt, reworkPrompt, reworkAnswer, reviewBranch,
   reviewerModel, workerModel, models, mirasimPolicy,
   round, force, enqueueOnly = false, now = () => Date.now(),
 } = {}) {
@@ -394,7 +541,7 @@ export async function mirasimWorkerDone({
     theRound = listed.count > 0 ? 'rework' : 'first';
   }
 
-  const existing = registry.read(pr);
+  const existing = registry.read(pr, ownerName);
   const record = existing.ok ? existing.record : null;
   const sessionKey = record && record.sessionKey ? String(record.sessionKey) : '';
 
@@ -436,7 +583,7 @@ export async function mirasimWorkerDone({
     });
     if (!created.ok) return { ...created, stage: `create:${created.stage}`, round: theRound, reviewCount, reuse };
     const w = writeReviewerRecord({
-      registry, pr, created, round: theRound, prevSessionKey: sessionKey || null, now,
+      registry, pr, ownerName, created, round: theRound, prevSessionKey: sessionKey || null, now, reviewerModel,
     });
     if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, reuse };
     return {
@@ -511,10 +658,12 @@ export async function mirasimWorkerDone({
   // 树已在新 head：登记里的 expectedOid 也要跟上（帅位实咬：它还是首轮的值，下一轮又对不上）。
   const refreshed = registry.write(pr, {
     ...record,
-    pr: String(pr), sessionKey, treePath,
+    pr: String(pr), repo: ownerName || record.repo || null, sessionKey, treePath,
     round: theRound, headRefName: prHead.headRefName, expectedOid: prHead.expectedOid,
     treeHead, ts: now(),
   });
+  // 注：这里 `...record` 打头，所以上一轮记下的 reviewer 会被带过来——复审换不换人由调用方决定，
+  // 不在这里猜。#1122 的换厂链读的就是这一栏。
   if (!refreshed || refreshed.ok !== true) {
     return {
       ok: false, stage: 'rework:registry', round: theRound, reviewCount, sessionKey, treePath, treeSync,
@@ -549,7 +698,7 @@ export async function mirasimWorkerDone({
     prompt: reworkPrompt || prompt, now,
   });
   if (!created.ok) return { ...created, stage: `rework:${created.stage}`, round: theRound, reviewCount, treeSync };
-  const w = writeReviewerRecord({ registry, pr, created, round: theRound, prevSessionKey: sessionKey, now });
+  const w = writeReviewerRecord({ registry, pr, ownerName, created, round: theRound, prevSessionKey: sessionKey, now, reviewerModel });
   if (!w.ok) return { ...w, round: theRound, reviewCount, session: created, treeSync };
   return { ok: true, action: 'reworked-new', round: theRound, reviewCount, session: created, registryWrite: w.write, treeSync };
 }
@@ -576,9 +725,12 @@ export async function peekReviewerSession(runtime, sessionKey) {
  * 于是重试会把「没持久化」当成「没有 session」再起第二个会话。这里把写失败翻成 ok:false，
  * 并把已起的 sessionKey 一并交出——人能顺着这个 key 收摊，不至于起了会话又丢了线头。
  */
-function writeReviewerRecord({ registry, pr, created, round, prevSessionKey, now }) {
+function writeReviewerRecord({ registry, pr, ownerName, created, round, prevSessionKey, now, reviewerModel }) {
   const rec = {
-    pr: String(pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+    pr: String(pr), repo: ownerName ? String(ownerName) : null,
+    sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+    // reviewer：#1122 换厂链靠它认「上一位是谁」。漏了它链子就卡在第一格（见 dao.mjs 同名注释）。
+    ...(reviewerModel ? { reviewer: reviewerModel } : {}),
     round, headRefName: created.headRefName, expectedOid: created.expectedOid,
     treeHead: created.treeHead || null,
     ...(prevSessionKey ? { prevSessionKey } : {}),

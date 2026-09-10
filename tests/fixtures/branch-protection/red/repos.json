@@ -1,0 +1,31 @@
+[
+  {
+    "slug": "org/missing",
+    "meta": { "private": false, "archived": false, "has_pages": false, "name": "missing" },
+    "protection": null
+  },
+  {
+    "slug": "org/bad-ctx",
+    "meta": { "private": false, "archived": false, "has_pages": false, "name": "bad-ctx" },
+    "protection": {
+      "required_status_checks": { "strict": false, "contexts": ["ci"] },
+      "enforce_admins": false
+    }
+  },
+  {
+    "slug": "org/admins",
+    "meta": { "private": false, "archived": false, "has_pages": false, "name": "admins" },
+    "protection": {
+      "required_status_checks": { "strict": false, "contexts": ["check"] },
+      "enforce_admins": true
+    }
+  },
+  {
+    "slug": "org/strict",
+    "meta": { "private": false, "archived": false, "has_pages": false, "name": "strict" },
+    "protection": {
+      "required_status_checks": { "strict": true, "contexts": ["check"] },
+      "enforce_admins": false
+    }
+  }
+]

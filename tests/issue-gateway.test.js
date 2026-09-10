@@ -110,6 +110,51 @@ describe('issue-gateway 校验', () => {
     assert.equal(r.ok, false);
     assert.equal(r.stage, 'allowlist');
   });
+
+  it('#1024：默认允许列表含 bot 已装的仓（ws-cleaner / miraquota-ledger），跨仓完工不许被名单挡回本仓', async () => {
+    const G = await LIB_LOAD;
+    const listed = G.loadAllowlist();
+    assert.equal(listed.ok, true);
+    assert.equal(listed.repos.includes('thoerwink8/ws-cleaner'), true);
+    assert.equal(listed.repos.includes('thoerwink8/miraquota-ledger'), true);
+    assert.equal(listed.repos.includes('thoerwink8/windsurf-dao'), true);
+    const fake = fakeMarshal();
+    const blocked = G.applyIssueWrite(
+      baseCreate({ repo: 'someone/other', idempotency_key: 'k-1024-other' }),
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.stage, 'allowlist');
+    const passed = G.applyIssueWrite(
+      {
+        action: 'issue_comment',
+        repo: 'thoerwink8/ws-cleaner',
+        issue: '12',
+        body: '完工：PR #12',
+        host: 'worker-done',
+        idempotency_key: 'k-1024-ws-comment',
+      },
+      {
+        dir: tmp(),
+        runMarshal: (args) => {
+          fake.calls.push(args.slice());
+          if (args[1] === 'comment') {
+            return { ok: true, out: 'https://github.com/thoerwink8/ws-cleaner/issues/12#issuecomment-9\n' };
+          }
+          if (args[0] === 'api') {
+            return { ok: true, out: JSON.stringify({ user: { login: 'dao-marshal[bot]', type: 'Bot' } }) };
+          }
+          return { ok: false, error: `unexpected ${args.join(' ')}` };
+        },
+      },
+    );
+    assert.notEqual(passed.stage, 'allowlist', passed.error);
+    assert.equal(passed.ok, true, passed.error);
+    const comment = fake.calls.find((a) => a[1] === 'comment');
+    assert.equal(comment.includes('--repo'), true);
+    assert.equal(comment.includes('thoerwink8/ws-cleaner'), true);
+    assert.equal(comment.includes('thoerwink8/windsurf-dao'), false);
+  });
 });
 
 describe('issue-gateway 写入契约', () => {
