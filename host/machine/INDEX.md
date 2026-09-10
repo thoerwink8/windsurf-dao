@@ -33,10 +33,14 @@
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
+| D | ~/.codex/.tmp | codex 每次 git 操作留下的临时工作目录，只增不减。2026-09-10 实测攒到 11109 个（当天只占 65 个），拖慢同盘一切文件系统遍历。board-gc 的孤儿清扫按时效回收，判据见 `scripts/lib/session-dir-gc.mjs` 的 `planOrphanGc`。运行态，不进 git |
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
+| C | ~/.config/cursor | Cursor 原生登录态；ACP 只使用现有认证，不公开或随仓复制 |
+| C | ~/.grok/auth.json | Grok Build 订阅凭据与续期状态，禁进 git、禁打印 |
+| D | ~/.local/share | 原生 Cursor/Devin CLI 版本、会话与凭据根；按产品管理，不整目录镜像 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
@@ -51,6 +55,7 @@
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
+| D | ~/.dao/execution | #1174 统一任务元数据、ACP 状态/进程租约/交互、用量事件与升级维护旗标。只迁移经过核对的记录，不把活进程状态当作可复制配置 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
 | D | ~/.dao/control-plane.json | 控制面闸探测落点（#948）。`scripts/lib/control-plane-gate.mjs` 只读 `{reachable:true\|false}`；文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。运行态，换机不拷 |
@@ -68,11 +73,14 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
-| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
-| E | ~/mirasim-server/current | 归 `ai-gateway-stack`。在役版本软链。本仓 unit 只引用这一层，不钉具体版本号（#1151；2026-09-10 手打 0.0.282 会把生产从 current 拉回去） |
-| E | ~/mirasim-work | 归 `ai-gateway-stack`。mirasim-server `--workdir`（服务自己的工作区，不是派工树 `~/mirasim-worktrees`）。本仓不写装法 |
+| E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
+| E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
+| E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
+| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
+| E | ~/mirasim-server/current | 归 `ai-gateway-stack`（先例 `~/.mirasim`）。服务端 `current` 软链指向在役版本目录；`current/VERSION` 是「本机在役版本」的唯一真相源——`scripts/lib/mirasim-runtime.mjs` 的 `installedVersion()` 只读这一份，升级器（`mirasim-managed-update`）自己维护它。本仓 unit 只引用这一层，不钉具体版本号（#1151；手打版本号会把生产从 current 拉回去）。本仓只读、不写装法 |
+| E | ~/mirasim-work | 归 `ai-gateway-stack`。mirasim-server `--workdir`（服务自己的工作区，不是派工树 `~/mirasim-worktrees`）。本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |

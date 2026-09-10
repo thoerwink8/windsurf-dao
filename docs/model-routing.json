@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-06",
+  "updated": "2026-09-09",
   "工人": {
     "写码": {
       "模型": [
@@ -671,12 +671,19 @@
           "agent": "pi",
           "mode": "direct",
           "理由": "pi 烧网关池，保 pqgpt 主路"
+        },
+        "grok": {
+          "agent": "grok",
+          "腿": "local",
+          "理由": "原生 Grok，由统一 profile 验证后启用"
         }
       },
       "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",
       "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现",
       "钉版本": null,
       "钉版本说明": "留空=跟随本机在役版本（读 mirasim-server/current/VERSION，升级器自己维护那份）。显式填具体版本号才恢复「不符就拒派」的严格语义，只用于排查期冻结。2026-09-10 实咬：这里原本手打 0.0.282，升级到 0.0.307 时没人记得改，契约断言全不符，96 条派工被拒、11 张单卡死，且告警同时哑掉——所以不再留手打值。"
-    }
+    },
+    "profileCatalog": "docs/execution-profiles.json",
+    "迁移说明": "2026-09-09 #1174：任务由统一 runtime 执行；具体后端、模型、local/cloud、供应商与账户池以 execution-profiles 为准。旧职责树保留已有 issue 的模型身份，不能再把旧 gw 探针当直连路径健康；Mirasim 版本读取已晋升 current/VERSION。Cursor/Devin 走共用 ACP，其他已支持执行体走 Mirasim。"
   }
 }

@@ -161,6 +161,7 @@ import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { classifyChainDepth } from './lib/chain-depth-check.mjs';
 import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
@@ -1297,6 +1298,31 @@ function checkOrcaRetirement() {
   green('orca 产品面已清（无 spawn orca / 无 orca-serve 单元 / 无整段删脊）');
 }
 
+// ── 补丁链层数闸（memory patch-stacking-is-two-strikes 的 gate）──────────────
+// 规矩是「同一种办法连错两次就换路」——第 2 层就该停手从零重推。所以 ≥3 层是
+// **停手没发生**的确定性证据。判据在 lib/chain-depth-check.mjs（只认锚里的最大层号，
+// 不数提交条数：同一层可以有很多次提交）。
+function checkChainDepth() {
+  const r = spawnSync('git', ['-C', ROOT, 'log', '--all', '--grep=chain:', '--oneline'],
+    { encoding: 'utf8', windowsHide: true, maxBuffer: 32 << 20 });
+  if (r.error || r.status !== 0) {
+    // 「git 跑不了」和「扫完 0 条锚」必须分开，否则闸静默开门。
+    fail('补丁链层数没查成', 'git log 跑不了就别说没有超深的链',
+      String(r.error?.message || r.stderr || `退出码 ${r.status}`).slice(0, 80));
+    return;
+  }
+  const lines = String(r.stdout || '').split('\n').filter((s) => s.trim());
+  const v = classifyChainDepth({ lines });
+  if (v.state === 'unknown') { fail('补丁链层数没查成', 'git log 输出读不出来', v.detail); return; }
+  if (v.state === 'red') {
+    fail(v.detail,
+      '第 2 层就该停手：跑 grill-ai，画出补丁链，从本质需求从零重推，把「删掉整层」的备选摆出来',
+      v.over.map((o) => `${o.slug}#${o.depth}`).join('、'));
+    return;
+  }
+  green(`补丁链层数：${v.detail}`);
+}
+
 // ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
 // 两个开放 PR 新建同一个文件 = 两份独立实现，合并时必然作废一个。判据与来历见
 // scripts/lib/competing-prs.mjs 头部（#884/#886/#986 三份实现撞在一起那次）。
@@ -1821,6 +1847,7 @@ checkRepoOwnership();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
+checkChainDepth();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
 checkNoReviewerRecreateSamples();
