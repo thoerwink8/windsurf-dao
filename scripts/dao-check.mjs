@@ -93,6 +93,10 @@
 // ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
 //    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
 //    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
+// ㉞ 测试结构性够不着真执行体（#1152）：spawn dao dispatch 必须带 --dry-run；
+//    故意「执行体 env 丢失」样本必须红；ensureWorkspace/startSession/cmdDispatchMirasim
+//    都要在真 IO 前过隔离闸。检查器自持括号匹配，不 import 被测测试 / runtime 解析。
+//    红/绿/空夹具验判别力；0 个测试文件 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -162,6 +166,10 @@ import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
+import {
+  inspectTestExecutorIsolationFixtures, inspectTestExecutorIsolationLive,
+  inspectIsolationWiring,
+} from './lib/test-executor-isolation-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -1814,6 +1822,8 @@ checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
 checkOrphanTestLive();
+checkTestExecutorIsolationSamples();
+checkTestExecutorIsolationLive();
 checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
@@ -2076,6 +2086,68 @@ function checkOrphanTestSamples() {
     return;
   }
   green(`孤儿测试闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkTestExecutorIsolationSamples() {
+  const r = inspectTestExecutorIsolationFixtures(join(ROOT, 'tests', 'fixtures', 'test-executor-isolation'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是执行体 env 丢失、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`测试隔离闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkTestExecutorIsolationLive() {
+  const dir = join(ROOT, 'tests');
+  const r = inspectTestExecutorIsolationLive({
+    dir,
+    readdir: readdirSync,
+    readFile: (p) => readFileSync(p, 'utf8'),
+    join,
+  });
+  if (r.unscanned) {
+    fail('测试隔离闸 live 没查成', 'tests/ 下要有 *.test.js，读失败不是「没有真派工」', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `测试隔离闸 ${r.violations.length} 处真 spawn dispatch`,
+      'spawn dao dispatch 必须带 --dry-run；真路径改注入 fake runtime / cliInProc（同进程隔离闸会拦）',
+      r.violations.map((v) => `${v.file}: ${v.why}`).join('；'),
+    );
+    return;
+  }
+  const runtimeFile = join(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs');
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  if (!existsSync(runtimeFile) || !existsSync(daoFile)) {
+    fail(
+      '测试隔离闸接线没查成',
+      '恢复 scripts/lib/mirasim-runtime.mjs 与 scripts/dao.mjs',
+      `runtime=${existsSync(runtimeFile)} dao=${existsSync(daoFile)}`,
+    );
+    return;
+  }
+  const wiring = inspectIsolationWiring({
+    runtimeSrc: readFileSync(runtimeFile, 'utf8'),
+    daoSrc: readFileSync(daoFile, 'utf8'),
+  });
+  if (wiring.unscanned) {
+    fail('测试隔离闸接线没查成', '给齐 runtime/dao 正文再扫', wiring.error || '');
+    return;
+  }
+  if (!wiring.ok) {
+    fail(
+      `测试隔离闸接线丢了 ${wiring.problems.length} 处`,
+      'ensureWorkspace / startSession / cmdDispatchMirasim 都要在真 IO 前过 judgeTestExecutorIsolation',
+      wiring.problems.join('；'),
+    );
+    return;
+  }
+  green(`测试隔离闸：${r.scanned} 套测试 0 处真 spawn dispatch；runtime/dao 接线在`);
 }
 
 function checkOrphanTestLive() {

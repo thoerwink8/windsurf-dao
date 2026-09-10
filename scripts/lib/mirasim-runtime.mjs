@@ -77,6 +77,40 @@ export class MirasimRejectedError extends Error {
 
 // ── 纯判官 ────────────────────────────────────────────────────────────────────
 
+/** 测试隔离闸话面钉死这一句，检查器 / 判别用例都认它。 */
+export const TEST_ISOLATION_MARK = '结构性够不着真执行体';
+
+/**
+ * 测试环境是否允许碰真执行体（#1152）。纯函数，只吃 env。
+ *
+ * 生产默认放行（指挥官派工没有这些信号）。测试默认拦截：
+ * NODE_TEST_CONTEXT（node --test）/ DAO_DISPATCH_NO_SPAWN（测试以为自己设了就能隔）/
+ * DAO_NO_NETWORK_LOG（dao-check 跑套时）——任一出现就拒。
+ * 真机验收显式 DAO_ALLOW_REAL_EXECUTOR=1 才放。
+ *
+ * 拦不住的洞：子进程 env 整份换成不含这些键的对象（执行体 env 丢失）。
+ * 那条靠测试源码闸（test-executor-isolation-check.mjs），不靠本函数。
+ */
+export function judgeTestExecutorIsolation(env = process.env) {
+  const e = env && typeof env === 'object' ? env : {};
+  if (String(e.DAO_ALLOW_REAL_EXECUTOR || '') === '1') {
+    return { ok: true, blocked: false, why: 'DAO_ALLOW_REAL_EXECUTOR', signals: [] };
+  }
+  const signals = [];
+  if (e.NODE_TEST_CONTEXT) signals.push('NODE_TEST_CONTEXT');
+  if (e.DAO_DISPATCH_NO_SPAWN) signals.push('DAO_DISPATCH_NO_SPAWN');
+  if (e.DAO_NO_NETWORK_LOG) signals.push('DAO_NO_NETWORK_LOG');
+  if (signals.length === 0) {
+    return { ok: true, blocked: false, why: 'no-test-signal', signals };
+  }
+  return {
+    ok: false,
+    blocked: true,
+    signals,
+    error: `测试环境${TEST_ISOLATION_MARK}（${signals.join('+')}）：ensureWorkspace/startSession 拒。单元测试注入 connect / fake runtime；真机验收设 DAO_ALLOW_REAL_EXECUTOR=1`,
+  };
+}
+
 /**
  * 起会话前的契约断言。只吃 state 帧的内容，不碰网络。
  * 返回 {ok, unscanned, version, errors}；unscanned=true 表示根本没收到 state（没查成）。
@@ -589,6 +623,8 @@ export function createRuntime(opts = {}) {
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
 
   const open = () => connect({ homeDir, port, openTimeoutMs: t.open });
+  const isolationEnv = opts.env || process.env;
+  const usingRealWire = connect === defaultConnect;
 
   /** 契约断言。不符就抛，抛之前一帧业务消息都不发——这才叫「拒派」。 */
   const assertContract = (wire, agent) => {
@@ -607,6 +643,10 @@ export function createRuntime(opts = {}) {
   };
 
   async function ensureWorkspace(repo, branch) {
+    if (usingRealWire) {
+      const isolation = judgeTestExecutorIsolation(isolationEnv);
+      if (!isolation.ok) throw new MirasimRejectedError(isolation.error, { isolation });
+    }
     const wire = await open();
     try {
       assertContract(wire);
@@ -667,6 +707,11 @@ export function createRuntime(opts = {}) {
   async function startSession({ agent, workdir, prompt, model, effort, clientRef } = {}) {
     if (!agent || !workdir || !prompt) {
       throw new MirasimRejectedError('起会话要同时给 agent / workdir / prompt');
+    }
+
+    if (usingRealWire) {
+      const isolation = judgeTestExecutorIsolation(isolationEnv);
+      if (!isolation.ok) throw new MirasimRejectedError(isolation.error, { isolation });
     }
 
     // 租约闸：一棵树同时只许一个会话在跑（lib/dispatch/lease.mjs 有实测起因）。

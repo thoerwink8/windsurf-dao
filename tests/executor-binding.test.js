@@ -480,10 +480,24 @@ describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）'
     assert.equal(out.branch, 'dao-probe-884');
     assert.ok(out.repo, '没 --repo 时要落默认仓路径');
     assert.match(
-      String(out.error || ''), /mirasim 建树失败: 读不到回环会话令牌/,
-      '错误得来自 mirasim 运行时内部——这就是「binding 真被调到了」的证据',
+      String(out.error || ''), /结构性够不着真执行体/,
+      '测试默认被隔离闸拦住（#1152）；这仍证明走到了 mirasim binding',
     );
-    assert.equal(r.status, 1, '连不上服务是「没查成」，要非零退出');
+    assert.equal(r.status, 1, '隔离拒派要非零退出');
+  });
+
+  it('显式 DAO_ALLOW_REAL_EXECUTOR + 没人监听的端口 → 停在读令牌，不建树', () => {
+    const r = spawnSync(process.execPath, [DAO, 'worktree-create', '--executor', 'mirasim', '--branch', 'dao-probe-884'], {
+      encoding: 'utf8', timeout: 60000, cwd: ROOT,
+      env: { ...process.env, MIRASIM_PORT: '59999', DAO_ALLOW_REAL_EXECUTOR: '1' },
+    });
+    const out = JSON.parse(String(r.stdout || '').trim());
+    assert.equal(out.executor, 'mirasim');
+    assert.match(
+      String(out.error || ''), /mirasim 建树失败: 读不到回环会话令牌/,
+      '放行隔离之后错误得来自 runtime 读令牌——没人监听的端口保证不建树',
+    );
+    assert.equal(r.status, 1);
   });
 
   it('mirasim 自己的 --branch 闸还在（没 --branch 也没 --issue → 拒派，不猜分支名）', () => {

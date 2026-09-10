@@ -509,43 +509,10 @@ describe('dispatch-launch（async-launch）', () => {
     await t.test(`预检路径几秒钟出结果（dry-run 全程 ${dryMs}ms < 15s）`, () => {
       assert.ok(dryMs < 15000, `dry-run 耗时 ${dryMs}ms，超过 15s——事前层又厚了`);
     });
-
-    // async-launch 核心断言一：热路秒级返回「已受理」（NO_SPAWN 隔掉 spawn，纯热路计时）。
-    // 阈值 3s 不是 1s：计时含 node 冷启动，dao-check 的 6 宽测试池挤压下实测到过 1027ms
-    //（单跑 ~600ms）；要防的「同步脊长回来」是数秒到数十秒级（orca 往返/读全量账本），
-    // 3s 对它照样红，对池挤压不再误伤——墙钟断言的余量要按最吵的运行环境给。
-    const t1 = Date.now();
-    const noSpawn = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
-    });
-    const hotMs = Date.now() - t1;
-    const pNoSpawn = payload(noSpawn);
-    await t.test(`热路 <3s 返回（实测 ${hotMs}ms）：queued/async/orderId 齐，派工单落队列目录`, () => {
-      assert.notEqual(noSpawn.status, 0, JSON.stringify(pNoSpawn).slice(0, 300));
-      assert.equal(pNoSpawn.ok, false);
-      assert.equal(pNoSpawn.dup && pNoSpawn.dup.blocked, true);
-      assert.match(String(pNoSpawn.error || ''), /#759/);
-      assert.match(String(pNoSpawn.error || ''), /--allow-dup/);
-      assert.ok(hotMs < 3000, `热路耗时 ${hotMs}ms，超过 3s——同步脊又长回来了`);
-    });
-
-    const accepted = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
-    const pAcc = payload(accepted);
-    await t.test('真派工不再当场拒：exit 0 受理，返回 resultPath', () => {
-      assert.notEqual(accepted.status, 0, JSON.stringify(pAcc).slice(0, 300));
-      assert.equal(pAcc.ok, false);
-      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
-    });
-    await t.test('执行体后台拒派：结果 ok:false，dup.blocked，话面点名 #759 与 --allow-dup', () => {
-      assert.equal(pAcc.ok, false);
-      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
-      assert.match(String(pAcc.error || ''), /重复派工|重复建卡|#759/);
-      assert.match(String(pAcc.error || ''), /--allow-dup/);
-      assert.equal(pAcc.workerId, undefined);
-      assert.equal(pAcc.sessionKey, undefined);
-    });
-    await t.test('结果落盘后 running 标记已删（单状态能派生 done/failed）', () => {
-      assert.ok(!pAcc.resultPath, 'mirasim 同步拒派，没有执行体结果文件');
+    await t.test('dry-run 命中 dup 不带 sessionKey（#1152：不许靠真派工验证拒派）', () => {
+      assert.equal(pDry.sessionKey, undefined);
+      assert.equal(pDry.workerId, undefined);
+      assert.equal(pDry.dryRun, true);
     });
 
     const stale = spawnSync(process.execPath, [...base, '--dry-run', '--now', '2026-08-23T13:00:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
@@ -563,32 +530,26 @@ describe('dispatch-launch（async-launch）', () => {
     });
   });
 
-  it('队列在途查重 CLI：账本还看不见第一单时，第二单的执行体被派工单拦住', async (t) => {
-    // 空账本（账本查重必 clear）+ 消歧过（565 有 label）→ 唯一拦路的是队列里的 pending 单。
-    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dedup-empty-'));
-    const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dq-inflight-'));
-    const env = {
-      ...process.env, DAO_GH_FAKE: FAKE_GH,
-      LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
+  it('队列在途查重：纯函数层（#1152 不再 spawn 真 dispatch 留 pending 单）', async (t) => {
+    // 空账本 + 565 有 label 曾是真派工泄漏面：DAO_DISPATCH_NO_SPAWN 是空旗标，
+    // 第一单直接 ensureWorkspace/startSession。队列查重改留在 recentQueueDup 纯函数
+    //（本文件上一套）；CLI 隔离闸在 tests/dao-dispatch-gate.test.js「#1152 空账本+已消歧」。
+    const DQ = await DQ_LOAD;
+    const NOW = new Date('2026-08-23T12:06:00+08:00');
+    const pending = {
+      id: 'dq-inflight', ts: '2026-08-23T12:05:00+08:00',
+      issue: '565', terminal: 'grok', name: 'x', status: 'pending',
     };
-    const base = [
-      CLI, 'dispatch', '--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
-      '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
-    ];
-
-    const first = spawnSync(process.execPath, [...base], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
+    const hit = DQ.recentQueueDup([pending], { issue: '565', now: NOW });
+    await t.test('在途 pending 同 issue → blocked', () => {
+      assert.equal(hit.ok, true);
+      assert.equal(hit.clear, false);
+      assert.equal(hit.hit && hit.hit.order_id, 'dq-inflight');
     });
-    const pFirst = payload(first);
-    await t.test('第一单 NO_SPAWN 留下 pending 派工单（模拟在途）', () => {
-      assert.ok(pFirst.queued !== true,
-        '第一单  →  ' + JSON.stringify(pFirst).slice(0, 240));
-    });
-
-    const second = spawnSync(process.execPath, [...base], { encoding: 'utf8', cwd: REPO, env });
-    const pSecond = payload(second);
-    await t.test('第二单执行体：账本 clear 但 queueDup.blocked（#759 第二道闸）', () => {
-      assert.ok(pSecond.queued !== true, '第二单受理  →  ' + JSON.stringify(pSecond).slice(0, 240));
+    const empty = DQ.recentQueueDup([], { issue: '565', now: NOW });
+    await t.test('空队列 → clear（不再靠真 spawn 第一单去「留单」）', () => {
+      assert.equal(empty.ok, true);
+      assert.equal(empty.clear, true);
     });
   });
 
@@ -645,12 +606,12 @@ describe('dispatch-launch（async-launch）', () => {
     });
 
     const before = fs.readdirSync(queueDir);
-    const hot = spawnSync(process.execPath, [...base, '--spec', over], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
+    const hot = spawnSync(process.execPath, [...base, '--spec', over, '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env,
     });
     const pHot = payload(hot);
     const after = fs.readdirSync(queueDir);
-    await t.test('真 dispatch 超长 --spec 热路非零，不写派工单（执行体起不来，一棵树都不建）', () => {
+    await t.test('超长 --spec 热路非零，不写派工单（一棵树都不建）', () => {
       assert.ok(hot.status !== 0 && pHot.ok === false && /上限/.test(String(pHot.error || '')),
         '热路  →  ' + JSON.stringify(pHot).slice(0, 400));
       assert.ok(!pHot.queued, '不合格不许 queued:true');

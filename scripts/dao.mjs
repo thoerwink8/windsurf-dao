@@ -255,6 +255,7 @@ import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
 } from './lib/executor-binding.mjs';
+import { judgeTestExecutorIsolation } from './lib/mirasim-runtime.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -1515,6 +1516,10 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   if (dup.blocked) fail(dup.error, { dup });
+
+  // #1152：测试环境结构性够不着真执行体。拒派闸失手时这一道仍拦住建树/起会话。
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
 
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }

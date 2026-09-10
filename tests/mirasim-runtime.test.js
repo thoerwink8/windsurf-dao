@@ -613,3 +613,48 @@ describe('问答与工作区', () => {
     });
   });
 });
+
+describe('测试隔离闸（#1152）', () => {
+  it('NODE_TEST_CONTEXT → 拒；空 env → 放行；ALLOW 覆盖', async () => {
+    const { judgeTestExecutorIsolation, TEST_ISOLATION_MARK } = await import(LIB);
+    const blocked = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child-v8' });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.blocked, true);
+    assert.match(blocked.error, new RegExp(TEST_ISOLATION_MARK));
+    const noSpawn = judgeTestExecutorIsolation({ DAO_DISPATCH_NO_SPAWN: '1' });
+    assert.equal(noSpawn.ok, false);
+    assert.ok(noSpawn.signals.includes('DAO_DISPATCH_NO_SPAWN'));
+    const prod = judgeTestExecutorIsolation({});
+    assert.equal(prod.ok, true);
+    assert.equal(prod.blocked, false);
+    const allow = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child', DAO_ALLOW_REAL_EXECUTOR: '1' });
+    assert.equal(allow.ok, true);
+    assert.equal(allow.why, 'DAO_ALLOW_REAL_EXECUTOR');
+  });
+
+  it('真连线 + 测试信号：ensureWorkspace / startSession 在 open 前抛', async () => {
+    const { createRuntime, TEST_ISOLATION_MARK } = await import(LIB);
+    const rt = createRuntime({ env: { NODE_TEST_CONTEXT: 'child' }, port: 59999 });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-iso'), err => {
+      assert.equal(err.name, 'MirasimRejectedError');
+      assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+      return true;
+    });
+    await assert.rejects(
+      () => rt.startSession({ agent: 'claude', workdir: '/repo', prompt: 'x' }),
+      err => {
+        assert.equal(err.name, 'MirasimRejectedError');
+        assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+        return true;
+      },
+    );
+  });
+
+  it('注入 connect 的单元测试不被隔离闸误伤', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-iso' }] : []));
+    const rt = await runtimeWith(wire, { env: { NODE_TEST_CONTEXT: 'child-v8' } });
+    const r = await rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' });
+    assert.equal(r.sessionKey, KEY);
+  });
+});
