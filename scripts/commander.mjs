@@ -78,6 +78,7 @@ import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, upd
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -2144,7 +2145,12 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  // key 不许含空白（网关判据）。回落到 title 时最容易踩：派工失败的 title 里带着整段
+  // JSON 错误，直接当 key 会被拒成 missing_idempotency——**故障与告警同源失效**，
+  // 2026-09-10 一晚 96 条派工失败没有任何一条报出来。所以这里一律规范化，
+  // 而不是指望调用方给的字符串正好合法。
+  const keySeed = marker ? marker[0] : title;
+  const key = `commander-escalate:${escalationKeyOf(keySeed)}`;
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);
