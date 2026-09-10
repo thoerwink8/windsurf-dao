@@ -8,6 +8,7 @@ import {createRuntime as createMirasimRuntime} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 
@@ -71,8 +72,10 @@ export function judgeExecutionCompletion(view) {
   return {status:'done',reason:'agent turn ended with observable output; task artifacts still require acceptance',confirmedBy:['session','output']};
 }
 function busy(message,reason='lease-held'){const e=new Error(message);e.code='busy';e.detail={busy:true,reason};return e;}
-const RESERVED=new Set(['pending','uncertain','stopping']);
-const FINISHED=new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','rejected','auth_required','unsupported_interaction','gone']);
+// 终态/预留态的正典在 lib/execution-states.mjs——回收侧（board-gc）读同一份，
+// 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
+const RESERVED=EXECUTION_RESERVED;
+const FINISHED=EXECUTION_FINISHED;
 const SESSION_KEY=/^[a-z][a-z0-9-]*:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sameLease=(a,b)=>a&&b&&a.token===b.token&&(a.recordKey||a.sessionKey)===(b.recordKey||b.sessionKey)&&a.cleanupToken===b.cleanupToken;
 

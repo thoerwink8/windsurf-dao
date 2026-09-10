@@ -12,6 +12,8 @@
 // 判决纪律与 session-dir-gc 一致：**任何「没查成」都保留**（fail-closed），
 // 只有「明确死了」才放行；且只放行**过期的**，刚起的不动。
 
+import { EXECUTION_FINISHED, blocksWorktree } from './execution-states.mjs';
+
 /** 默认宽限：租约在这个时长内一律不动（起会话、停会话都需要时间）。 */
 export const DEFAULT_LEASE_GRACE_MIN = 30;
 
@@ -47,7 +49,8 @@ export function judgeLease(lease, { sessionState = null, sessionsScanned = false
     return { verdict: 'reap', why: `${key} 会话名单里查不到它（台账有、盘上没了），租约挂了 ${age} 分钟` };
   }
   const raw = String(sessionState).toLowerCase();
-  if (['done', 'completed', 'complete', 'failed', 'error', 'aborted', 'cancelled', 'canceled', 'stopped', 'incomplete', 'gone'].includes(raw)) {
+  // 终态集合同样读正典——别再手打一份（2026-09-11：手打的那份和挡人侧不一致过）。
+  if (EXECUTION_FINISHED.has(raw)) {
     return { verdict: 'reap', why: `${key} 会话已是终态 ${raw}，租约挂了 ${age} 分钟` };
   }
   // 名单里有、状态是 running/starting/… → 可能真在跑，保留（不赌）。
@@ -55,14 +58,20 @@ export function judgeLease(lease, { sessionState = null, sessionsScanned = false
 }
 
 /**
- * 登记表里**卡在中间态**的记录（`stopping` / `uncertain` / `pending`）。
+ * 登记表里**还挡着工作树**的记录。
  *
  * 为什么要单列（2026-09-10 实咬）：会话被上游断流打死时，清理流程只走了一半，
  * 登记表停在 `state=stopping, cleanupVerified=false`。此后同一条工作树永远起不了新会话——
  * 报「worktree has an unresolved launch or cleanup」或「unresolved registry reservation」。
  * 实测就是这三层残留（租约 / 登记预留 / 清理 token）把审官挡在门外。
  *
- * 判据与租约层同源：**会话名单说得清「它死了」才回收**；查不到会话（台账有、盘上没了）
+ * 2026-09-11 修正（第 2 次实咬）：判据原本手打 `['stopping','uncertain','pending']`
+ * 三态，而**挡人侧**的条件是 `!FINISHED.has(state)`——`incomplete`（上游断流打死的
+ * 常态）不在三态里、也不在 FINISHED 里：挡人的说它没死，我这边的清单却说它死了，
+ * 于是 GC 扫过去不认它，#1150 被这条记录卡了整晚。
+ * 现在两边读同一份正典（lib/execution-states.mjs）的 `blocksWorktree`。
+ *
+ * 判据仍与租约层同源：**会话名单说得清「它死了」才回收**；查不到会话（台账有、盘上没了）
  * 同样算死了。会话还在跑就保留——哪怕它卡在中间态，那也是真在跑的一次启动。
  *
  * @param {Array} records 登记表记录（含 state / sessionKey / workdir / updatedAt）
@@ -70,17 +79,18 @@ export function judgeLease(lease, { sessionState = null, sessionsScanned = false
 export function judgeRegistryStuck(record, { sessionState = null, sessionsScanned = false, graceMin = DEFAULT_LEASE_GRACE_MIN, now = Date.now() } = {}) {
   const key = String(record?.sessionKey || record?.recordKey || '(没有 key)');
   const st = String(record?.state || '');
-  if (!['stopping', 'uncertain', 'pending'].includes(st)) return { verdict: 'keep', why: `${key} 状态 ${st || '空'} 不是中间态` };
+  // 不再手打状态清单：读挡人侧同一句话。它说不挡，就没有回收的理由。
+  if (!blocksWorktree(st)) return { verdict: 'keep', why: `${key} 状态 ${st || '空'} 已经不挡工作树了` };
   const at = Number(record?.updatedAt) || Number(record?.acceptedAt) || 0;
   const ageMin = at > 0 ? (now - at) / 60000 : NaN;
   if (!Number.isFinite(ageMin)) return { verdict: 'keep', unknown: true, why: `${key} 记录年龄没查成——不猜（fail-closed）` };
-  if (ageMin < graceMin) return { verdict: 'keep', why: `${key} 中间态 ${ageMin.toFixed(0)} 分钟 < 宽限 ${graceMin} 分钟` };
+  if (ageMin < graceMin) return { verdict: 'keep', why: `${key} 停在 ${st} ${ageMin.toFixed(0)} 分钟 < 宽限 ${graceMin} 分钟` };
   if (!sessionsScanned) return { verdict: 'keep', unknown: true, why: `${key} 会话名单没查成——不猜（fail-closed）` };
   if (sessionState == null) return { verdict: 'reap', why: `${key} 停在 ${st} 但会话名单里没有它，挂了 ${ageMin.toFixed(0)} 分钟` };
   const raw = String(sessionState).toLowerCase();
-  const terminal = ['done', 'completed', 'complete', 'failed', 'error', 'aborted', 'cancelled', 'canceled', 'stopped', 'incomplete', 'gone'];
-  if (terminal.includes(raw)) return { verdict: 'reap', why: `${key} 停在 ${st} 而会话已是终态 ${raw}，挂了 ${ageMin.toFixed(0)} 分钟` };
-  return { verdict: 'keep', why: `${key} 会话状态 ${raw}，按还在跑处理` };
+  if (EXECUTION_FINISHED.has(raw)) return { verdict: 'reap', why: `${key} 停在 ${st} 而会话已是终态 ${raw}，挂了 ${ageMin.toFixed(0)} 分钟` };
+  // 会话名单说它还在跑 → 保留（不赌）。这种「非终态」是活的，不是残留。
+  return { verdict: 'keep', why: `${key} 会话状态 ${raw || '未知'}，按还在跑处理` };
 }
 
 /**
