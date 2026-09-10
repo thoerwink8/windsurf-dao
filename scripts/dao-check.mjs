@@ -1903,7 +1903,7 @@ function checkDispatchPolicyLive() {
     );
     return;
   }
-  green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
+  green('dispatch-policy.json preflight/breaker/commander/hubChat/board 取值合范围');
 }
 
 function checkUnitRestartSamples() {

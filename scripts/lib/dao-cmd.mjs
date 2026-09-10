@@ -982,7 +982,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -1061,6 +1061,7 @@ export const FLAGS_BY_VERB = {
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
   now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
+  board: new Set(['--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1222,6 +1223,10 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
                   # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
                   # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
+  board [--json]
+                  # 看板 v0（#818）：一张表，issue / 合并请求 / 排队单各一行（阶段 / 耗时 / 模型）
+                  # 源挂掉只坏自己那几行，不许显示成一切正常；--json 给机器（三态信封）
+                  # 总控群问「状态」回的就是这张表；超时告警走 scripts/board-watch.mjs
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   preflight --model <id> [--json]
