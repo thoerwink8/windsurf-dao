@@ -700,6 +700,14 @@ export function createRuntime(opts = {}) {
       const added = await wire.waitFor(m => m.type === 'worktreeAdded' && m.reqId === reqId, t.worktree);
       if (!added) throw new MirasimUnavailableError('addWorktree 没回 worktreeAdded 帧（没查成，别当成没建成）', { reqId });
       if (!added.ok) {
+        // 「already used by worktree at 'X'」是幂等命中，不是失败（2026-09-10 实咬）：
+        // 服务端的 worktrees 缓存会陈旧（实测 69 条里 31 条有 branch，git 里真实存在的
+        // dao-1145 等不在列表），findTree 于是漏判、走到新建，git 拒绝并**在错误里给出真实路径**。
+        // git 比服务端缓存权威——按它给的路径当已有树返回。只认精确形状，别的拒绝照抛。
+        const used = /already used by worktree at '([^']+)'/.exec(String(added.error || ''));
+        if (used && existsSync(used[1])) {
+          return { path: used[1], branch, created: false, verified: true };
+        }
         throw new MirasimRejectedError(`建树被拒：${added.error || '（没给原因）'}`, {
           code: added.code ?? null,
           detail: added.detail ?? null,

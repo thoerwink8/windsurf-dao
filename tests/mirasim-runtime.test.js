@@ -8,6 +8,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 
@@ -690,5 +692,40 @@ describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）',
     );
     assert.strictEqual(v.ok, false);
     assert.match(v.errors.join('；'), /版本不符/);
+  });
+});
+
+describe('建树幂等命中（2026-09-10 服务端 worktrees 缓存陈旧）', () => {
+  it('git 说分支已被某树占用，且该路径真实存在 → 当已有树复用，不报错', async () => {
+    // 服务端 worktrees 缓存实测会陈旧（69 条里 31 条有 branch，git 里真有的不在列表），
+    // findTree 因此漏判、走到新建，git 拒绝并在错误里给出真实路径。git 比缓存权威。
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-hit-'));
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: `fatal: 'feat-z' is already used by worktree at '${real}'` }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    const r = await rt.ensureWorkspace('/repo', 'feat-z');
+    assert.strictEqual(r.created, false);
+    assert.strictEqual(r.path, real);
+    assert.strictEqual(r.verified, true);
+  });
+
+  it('git 报的路径不存在 → 仍是拒绝，不许拿一个不存在的路径当成功', async () => {
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: "fatal: 'feat-z' is already used by worktree at '/nope/not/here'" }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-z'), err => {
+      assert.strictEqual(err.name, 'MirasimRejectedError');
+      return true;
+    });
   });
 });
