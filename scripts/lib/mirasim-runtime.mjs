@@ -29,13 +29,56 @@
 // 分层：judge* / parse* / read* 是纯判官，只吃入参不碰 IO；createRuntime 只管收发，不判对错。
 // 自己查自己查不出错——判完工的判据不复用发消息那一层的解析。
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import {
+  admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
+} from './channel-concurrency.mjs';
+import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
+import { loadBreaker } from './provider-health.mjs';
+import { ensureLocalLedger } from './ledger-home.mjs';
+import { readLedgerEvents } from './ledger-query.mjs';
+import { desiredFromEvents } from './session-reconcile.mjs';
 
-/** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
-export const PINNED_VERSION = '0.0.282';
+/**
+ * 读取本机在役的服务端版本——**唯一真值**。
+ *
+ * 为什么不再手打常量（2026-09-10 实咬）：原先这里是一个手写的 `PINNED_VERSION = '0.0.282'`，
+ * 配套注释写「升级永远人工验证后再换这一行（§72 拍板）」。但升级器装上定时器后**会自己升级**，
+ * 而"人工记得换这行"从来不成立——0.0.307 上线后契约断言全部不符，96 条派工被拒，
+ * 11 张单卡死，故障还因为报帅 key 同源失效而没人被通知。
+ *
+ * 记忆判例 hand-typed-constant-will-be-wrong 说的就是这件事：需要手打的常量早晚被凭印象填。
+ * 所以真值改从升级器**自己维护**的地方读——它验证 bundle 必须含 VERSION，
+ * `mirasim-server/current` 软链指向在役版本目录。它换服务端，这里就跟着变，不需要谁记得。
+ *
+ * 读不到返回 null，调用方按「没查成」处理（fail-closed，不许猜一个版本去放行）。
+ */
+export function installedVersion(homeDir) {
+  const candidates = [
+    join(homeDir || os.homedir(), 'mirasim-server', 'current', 'VERSION'),
+    '/usr/local/lib/mirasim-managed-update/VERSION',
+  ];
+  for (const p of candidates) {
+    try {
+      const v = readFileSync(p, 'utf8').trim();
+      if (/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v)) return v;
+    } catch { /* 下一个候选 */ }
+  }
+  return null;
+}
+
+/**
+ * 钉死的服务端版本。**留空即「跟随本机在役版本」**——这是默认，也是推荐。
+ *
+ * 它只在一种场景下需要显式给值：想刻意钉住某个版本、让服务端偷偷换版本时当场拒派
+ * （例如排查期间冻结）。设成具体版本号就恢复旧的严格语义。
+ *
+ * 不再保留一个手打的默认值：那正是 2026-09-10 那次全链瘫痪的根因。
+ */
+export const PINNED_VERSION = null;
 export const DEFAULT_PORT = 4316;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
@@ -81,8 +124,11 @@ export class MirasimRejectedError extends Error {
 /**
  * 起会话前的契约断言。只吃 state 帧的内容，不碰网络。
  * 返回 {ok, unscanned, version, errors}；unscanned=true 表示根本没收到 state（没查成）。
+ *
+ * pinnedVersion 为空 = 跟随本机在役版本（默认）。此时断言退化成「必须报出一个版本号」——
+ * 仍然拦得住「服务端换了实现却连 version 都不报」这种形态突变，但不再因为升级而误拒。
  */
-export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } = {}) {
+export function judgeContract(state, { agent, pinnedVersion = null } = {}) {
   if (!state || typeof state !== 'object') {
     return {
       ok: false,
@@ -93,7 +139,12 @@ export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } =
   }
   const errors = [];
   const version = typeof state.version === 'string' ? state.version : null;
-  if (version !== pinnedVersion) {
+  if (pinnedVersion == null) {
+    // 跟随模式：只要服务端报得出一个合法版本号就算过。不比对具体值——
+    // 比对值是「刻意钉住」的语义，不是默认。
+    if (version === null) errors.push('服务端没报 version 字段——帧形态变了，猜下去只会静默走错');
+    else if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) errors.push(`服务端报的 version 形状不符：${version}`);
+  } else if (version !== pinnedVersion) {
     errors.push(`版本不符：钉死 ${pinnedVersion}，服务端报 ${version === null ? '（没有 version 字段）' : version}`);
   }
   // 下面这几个字段是五个动词真正要读的。缺一个就说明帧形态换了，猜下去只会静默走错。
@@ -569,16 +620,58 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 
 // ── 动词（#880 五个 + #1125 listSessions）────────────────────────────────────
 
+/**
+ * 渠道并发闸的**取数薄壳**（#1145）。判定与占槽都在 lib/channel-concurrency.mjs，
+ * 这里只负责把三份快照读出来：
+ *   · 路由表「腿」节 → 渠道上限（并发上限字段）
+ *   · /proc 在途树 → 渠道在途数（**与租约闸同源**：同一个 checkInFlight，不复用 mirasim 自己的记账）
+ *   · 派工账本未结 job → 树归哪个模型（树→模型→渠道的那一跳）
+ *   · 熔断表 → 冷却中的渠道等同满员
+ * 任一读不出来 ⇒ 返回 ok:false，门里 fail-close 拒起。
+ *
+ * 走 admitAndReserveChannel 而不是只读的 checkChannelCapacity：只读会留 TOCTOU 竞态
+ * （两个并发都看到没满、都放行、真实并发超上限）。它在锁内「数预占+写预占」，返回的
+ * release 必须由调用方在 finally 里调。
+ */
+function defaultChannelAdmit({ model, now } = {}) {
+  return admitAndReserveChannel({
+    model,
+    now: now ?? Date.now(),
+    io: {
+      loadRouting: () => loadRoutingJsonRaw(),
+      loadModels: (raw) => modelsFromJson(raw),
+      checkInFlight: () => checkInFlight(),
+      loadBreaker: () => loadBreaker(),
+      loadJobs: () => {
+        // 账本读不出来只是「这棵树归不到渠道」（进 unattributed），不是整闸没查成——
+        // 所以这里吞掉异常回空数组，而不是让整道闸 fail-close 把所有会话拦死。
+        try {
+          const dir = ensureLocalLedger({}).dir;
+          const listed = readLedgerEvents(dir);
+          if (listed.unscanned) return [];
+          const desired = desiredFromEvents(listed.events);
+          return desired.items || [];
+        } catch { return []; }
+      },
+    },
+  });
+}
+
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
   const port = Number(opts.port || process.env.MIRASIM_PORT || DEFAULT_PORT);
-  const pinnedVersion = opts.pinnedVersion || PINNED_VERSION;
+  // 不传就是跟随本机在役版本（读 bundle 的 VERSION）。刻意钉住才显式给值。
+  const pinnedVersion = opts.pinnedVersion || null;
   const connect = opts.connect || defaultConnect;
   const ledgerIo = opts.ledgerIo || defaultLedgerIo;
   const journalRead = opts.journalRead;
   const now = opts.now || (() => Date.now());
   // 租约判据可注入：单测给假的，生产读盘。默认必须是真闸——不给就不检查等于没有闸。
   const leaseCheck = opts.leaseCheck || checkTreeLease;
+  // 渠道并发判据同理（#1145）。默认真闸，取数在 defaultChannelAdmit（读路由表 / /proc / 账本）。
+  const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
+  // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
+  const channelFailed = opts.recordChannelFailure || recordChannelFailure;
   const t = {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
@@ -626,13 +719,21 @@ export function createRuntime(opts = {}) {
         return msg.workspaces;
       };
 
+      // 匹配必须按 realpath，不许按字面路径（2026-09-10 实咬）：主仓在服务端以
+      // /home/orca/windsurf-dao（一个指向 /srv/projects/windsurf-dao 的符号链接）注册着，
+      // 0.0.307 对 saveWorkspace 按 realpath 去重——再注册 /srv 路径会被当成重复条目删掉。
+      // 字面匹配于是永远「列不到」，11 张单全卡在建树，看起来像服务端拒绝主仓，
+      // 其实是这里的 find 认不出同一个仓的另一个名字。
+      const realOf = p => { try { return realpathSync(String(p)); } catch { return String(p); } };
+      const repoReal = realOf(repo);
+      const sameRepo = w => w?.path === repo || realOf(w?.path) === repoReal;
       let workspaces = await listOnce();
-      let entry = workspaces.find(w => w?.path === repo);
+      let entry = workspaces.find(sameRepo);
       if (!entry) {
         wire.send({ type: 'saveWorkspace', path: repo, name: repo.split('/').filter(Boolean).pop() || repo });
         // 读回自证：注册完再列一次，列不到就说明这一步没生效
         workspaces = await listOnce();
-        entry = workspaces.find(w => w?.path === repo);
+        entry = workspaces.find(sameRepo);
         if (!entry) throw new MirasimRejectedError(`注册工作区没生效，列不到 ${repo}`);
       }
 
@@ -648,6 +749,14 @@ export function createRuntime(opts = {}) {
       const added = await wire.waitFor(m => m.type === 'worktreeAdded' && m.reqId === reqId, t.worktree);
       if (!added) throw new MirasimUnavailableError('addWorktree 没回 worktreeAdded 帧（没查成，别当成没建成）', { reqId });
       if (!added.ok) {
+        // 「already used by worktree at 'X'」是幂等命中，不是失败（2026-09-10 实咬）：
+        // 服务端的 worktrees 缓存会陈旧（实测 69 条里 31 条有 branch，git 里真实存在的
+        // dao-1145 等不在列表），findTree 于是漏判、走到新建，git 拒绝并**在错误里给出真实路径**。
+        // git 比服务端缓存权威——按它给的路径当已有树返回。只认精确形状，别的拒绝照抛。
+        const used = /already used by worktree at '([^']+)'/.exec(String(added.error || ''));
+        if (used && existsSync(used[1])) {
+          return { path: used[1], branch, created: false, verified: true };
+        }
         throw new MirasimRejectedError(`建树被拒：${added.error || '（没给原因）'}`, {
           code: added.code ?? null,
           detail: added.detail ?? null,
@@ -694,30 +803,85 @@ export function createRuntime(opts = {}) {
       });
     }
 
-    const wire = await open();
-    try {
-      // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
-      assertContract(wire, agent);
-      const startedAt = now();
-      wire.send({
-        type: 'prompt',
-        prompt,
-        agent,
-        workdir,
-        ...(model ? { model } : {}),
-        ...(effort ? { effort } : {}),
-        clientRef: clientRef || `dao-${startedAt}`,
+    // 渠道并发闸（#1145）：挨着租约闸，同样装在门里、同样排在 open() 前面——
+    // 满员时连 ws 都不开。装在门里的理由与租约闸一字不差：四个调用点
+    // （dao dispatch / dao start / 审官 create / 推一把）全从这道门过，绕不开；
+    // 审官起会话因此自动受闸，不用动审官选型那条核心路径。
+    //
+    // 渠道并发是**机器负载准入（admission）之上叠加的第二道闸**，不替代它：
+    // 前者管这台机器还塞不塞得下，后者管上游那条渠道还收不收。
+    //
+    // **是原子占槽，不是读快照**（审官第二轮红项）：读快照会让两个并发都看到没满都放行，
+    // 真实并发超上限（cap=2 的 pqapi 被顶到 3-4，正好落回 429 区，闸等于白设）。
+    // admitAndReserveChannel 在锁内「数预占+写预占」，返回的 release 必须在 finally 里调。
+    const chan = channelAdmit({ model, now: now() });
+    if (!chan.ok) {
+      // 没查成 ⇒ 拒起（fail-close），判据同租约闸：放行的代价是把上游打到 429 雪崩，
+      // 拒起的代价是这轮不派、下轮再来，而且报得出来。
+      // 「锁拿不到」也走这一支：拿不到锁说明有人在临界区，此刻数不准也占不上槽。
+      throw new MirasimUnavailableError(`渠道并发没查成，拒起会话：${chan.error}`, { workdir, model: model || null });
+    }
+    if (chan.verdict === 'full') {
+      // 满员/熔断冷却中都是**背压**，与租约被占同一类：必须带 busy + reason，
+      // 否则指挥官会把「这轮轮不到这条渠道」当派工失败去开待拍板噪音单。
+      throw new MirasimRejectedError(`渠道满员，拒起会话：${chan.why}`, {
+        workdir, model: model || null, busy: true, reason: CHANNEL_FULL_REASON,
+        channel: chan.channel || null, cap: chan.cap, inFlight: chan.inFlight,
+        channelReason: chan.reason || null,
       });
-      const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
-      const verdict = judgeAccepted(msg);
-      if (!verdict.ok) {
-        if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
-        if (verdict.rejected) throw new MirasimRejectedError(verdict.errors.join('；'));
-        throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
+    }
+    // 预占已经占上：从这里往下**每一条出路**都必须退槽（成功、被拒、抛错），否则这个渠道
+    // 会少一个名额直到 TTL 到点。所以下面整段包在 try/finally 里，release 放 finally。
+    const releaseSlot = typeof chan.release === 'function' ? chan.release : () => {};
+
+    try {
+      const wire = await open();
+      try {
+        // 顺序是判据的一部分：先断言，通不过就一帧 prompt 都不发。
+        assertContract(wire, agent);
+        const startedAt = now();
+        wire.send({
+          type: 'prompt',
+          prompt,
+          agent,
+          workdir,
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          clientRef: clientRef || `dao-${startedAt}`,
+        });
+        const msg = await wire.waitFor(m => m.type === 'accepted' || m.type === 'error', t.accept);
+        const verdict = judgeAccepted(msg);
+        if (!verdict.ok) {
+          if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
+          if (verdict.rejected) {
+            // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
+            // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
+            // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
+            // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
+            const hit = isCapacityError(verdict.errors.join('；'));
+            if (hit.hit && chan.target) {
+              try {
+                channelFailed({
+                  target: chan.target, now: now(),
+                  why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
+                });
+              } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
+            }
+            throw new MirasimRejectedError(verdict.errors.join('；'), {
+              workdir, model: model || null,
+              ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
+            });
+          }
+          throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
+        }
+        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
+      } finally {
+        wire.close();
       }
-      return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
     } finally {
-      wire.close();
+      // 退槽。**删不掉不许让起会话失败**：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个
+      // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
+      try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
     }
   }
 

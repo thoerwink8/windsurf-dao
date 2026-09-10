@@ -2,6 +2,28 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.2.0 — 2026-09-09
+
+### 新功能
+- [cc] feat(commander): draft 搁置单收口泵——无会话超时派短会话三选一 (#1147) (#1162)
+- [pi] feat(review): 工人交卷改入队，审官按在役数拉取（#1125） (#1135)
+- [cc] feat(commander): 命中 human_holds 的单派 merge-policy=manual（#1094） (#1099)
+
+### 修复与维护
+- [cc] fix(commander): 报帅开单的 key 一律规范化——故障与告警不许同源失效
+- [cc] fix(mirasim): PINNED_VERSION 常量跟上 0.0.307——止血第二半
+- [cc] fix(routing): 钉版本 0.0.282→0.0.307 止血——生产派工链被契约断言拒死
+- [cc] fix(inbox): 6 条巡检观测补处置行——收件箱闸转绿
+- [codex] fix(commander): type/体系重派不回落 auto (#1163)
+
+### 其它
+- [patrol] #1015 凭据闸把额度采样的 git 推送掐死
+- [patrol] 收件箱从 hook 挪到 dao-check，skill 没改、新载体也没人跑
+- [patrol] orca 读不了 journal，盘点探针连红闸每轮没查成
+- release: v2.1.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.1.0 — 2026-09-08
 
 ### 新功能
