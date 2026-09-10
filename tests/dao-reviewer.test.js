@@ -77,9 +77,35 @@ describe('dao 审官与完工', () => {
     });
     await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
       const i = daoSrc.indexOf('async function cmdReviewerCreateMirasim(');
-      const seg = daoSrc.slice(i, i + 9000);
+      const createEnd = daoSrc.indexOf('\nasync function cmdWorkerDoneMirasim(', i);
+      const seg = daoSrc.slice(i, createEnd > i ? createEnd : i + 20000);
       assert.match(seg, /outcome: 'reused'/);
-      assert.match(seg, /judgeReviewerSessionReuse/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
+      assert.match(daoSrc, /decideReviewerCreateStart/);
+      assert.match(daoSrc, /runLockedReviewerCreate/);
+      // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
+      assert.match(seg, /reviewer: picked\.modelId/);
+      assert.match(daoSrc, /readReviewerDeathNote/);
+      assert.match(seg, /capacityFailover/);
+      // 闸口只回答「点名过不过」不够：生产路径必须自己按顺位取下一位。
+      assert.match(seg, /planReviewerOnCapacityDeath/);
+      assert.match(daoSrc, /planReviewerOnCapacityDeath/);
+      assert.match(seg, /forceNew/);
+      // reviewer-create 另起走 decideReviewerCreateStart（内部 reviewerMustReplaceDead），
+      // 函数正文不出现这个名字。#1125 把 cmdWorkerDoneMirasim 拉长后，旧的 14000 字窗口
+      // 盖不到 worker-done 尾，误报成 create 缺接线。
+      assert.match(seg, /deadError: failover\.deadError/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
+      assert.equal(/!forceNew && again\.ok && again\.record && again\.record\.sessionKey/.test(seg), false,
+        '锁内不许只看 sessionKey 当 raced——满载死会话会被当成并发已起');
+      const wd = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
+      const wdEnd = daoSrc.indexOf('\nasync function', wd + 10);
+      const wdSeg = daoSrc.slice(wd, wdEnd > wd ? wdEnd : wd + 9000);
+      assert.match(wdSeg, /planReviewerOnCapacityDeath/, 'worker-done 也要按死因换人，不只 reviewer-create');
+      assert.match(wdSeg, /reviewerMustReplaceDead/, 'worker-done 另起也不许只绑 switched');
+      assert.match(wdSeg, /queued-for-review/, '首审入队（#1125），换厂 force 仍接在返工起会话那条腿上');
       assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
         'refused-existing 不该再直接 fail 死循环');
     });
