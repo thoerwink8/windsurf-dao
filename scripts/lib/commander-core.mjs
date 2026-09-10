@@ -117,6 +117,8 @@ export const FRAMEWORK_ROLE = '体系';
 // 指挥官派单策略缺省（#1007）：机器余量准入，不再有「每轮派几个」常量。
 export const COMMANDER_POLICY_DEFAULTS = {
   requireModelInRouting: true,
+  // 主判据（2026-09-10 起）：真 CPU 占用率。loadThreshold 降级为趋势参考，不再当闸。
+  cpuThreshold: 0.85,
   loadThreshold: 0.85,
   memReserveMb: 1536,
   conservativeWorkerMb: 400,
@@ -368,6 +370,17 @@ export const SITUATION_SECTIONS = ['github', 'trees', 'reviewPending', 'prReview
 // commander-act 20 分钟一轮，45 分钟约等于「连着两轮都没等到判定才重发」。
 // 上限是为了别死循环——试满仍无判定就停手交人（判据：当前 head 判定仍是 0）。
 export const REREVIEW_GRACE_MIN = 45;
+/**
+ * 一轮里最多同时起几个**收尾**动作（叫审官 / 返工 / 解冲突 / 收口泵）。
+ *
+ * 为什么收尾要有自己的一笔名额、不跟新活共用：机器余量闸的本意是「别再开新活」，
+ * 而它原先连「把手上这些活收掉」一起拦——机器一满（slots=0），25 张 PR 一条判定都没有，
+ * 满载空转等收尾（2026-09-10 实咬，见 finishSlots 处的注释）。
+ *
+ * 上限取 3 的理由：收尾动作主要是等模型回话的 IO，本机开销小（实测审官进程 ~2% CPU），
+ * 但一轮里同时开太多会把当轮的决定表拉长、也不好定位；3 条够把「本轮的收尾队列」推着走。
+ */
+export const FINISH_SLOTS_MAX = 3;
 export const MAX_REREVIEW_TRIES = 3;
 // 返工派工失败后的重试节奏。与 drain / 复审同一套语义（45 分钟宽限、试满 3 次停手交人），
 // 故意不另造一套数字：三条路犯的是同一个「派了 ≠ 成了」，节奏不同只会让人以为它们是三件事。
@@ -577,9 +590,35 @@ function collectCandidates(situation) {
     if (!draftDueForPump(pr)) return false;
     return resolvePumpDraftDispatch(pr).ok;
   }).length;
+  // 收尾名额与「新活名额」是两笔账，**不共用**。
+  //
+  // 2026-09-10 实咬：原先 finishReserve 从 dispatchSlots 里切，机器一满（slots=0）就
+  // 切不出任何收尾名额，于是叫审官、解冲突、返工全被机器余量闸挡住——**闸的本意是
+  // 「别再开新活」，实际把「把手上这些活收掉」也一起拦了**。现场：10 个 grok 工人把
+  // 负载顶到 1.7–2.0，25 张 PR 一条判定都没有（#1129 甚至已有两条 APPROVED 打在
+  // 当前 head 上），机器满载却在空转等收尾。
+  //
+  // 收尾为什么不该被余量闸拦：它不增在制品，是把已有的活推过终点线；审官会话本机
+  // 开销也小（进程平均 2% CPU，其余是等模型回话的 IO 等待）。所以收尾名额**不受
+  // dispatchSlots 约束**，只受下面自己的上限（本机同时最多几个收尾动作）管。
+  // 反过来，机器满载时新活仍然一个不派——那半边的本意不动。
   const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
-  const finishReserve = Math.min(slotsLeft, reviewReserve + stalledPumpCount);
+  const finishReserve = reviewReserve + stalledPumpCount;
   const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
+  // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 FINISH_SLOTS_MAX。
+  // slots=Infinity（老夹具/未接准入）时跟着不限张，维持既有契约。
+  //
+  // **admission 没查成时收尾也归零**：读不到机器信号就不该起任何会话（fail-close），
+  // 收尾同样吃 CPU——「读不到 ≠ 可以随便派」这条对两笔账一视同仁。
+  // （写这版时先漏了这一格，shared-slots 的既有用例当场抓住：0 == 1。）
+  let finishSlots = admissionUnscanned ? 0
+    : (dispatchSlots === Infinity ? Infinity : FINISH_SLOTS_MAX);
+  /** 领一个收尾名额（叫审官/返工/解冲突/收口泵）。不占新活名额。 */
+  const takeFinishSlot = () => {
+    if (finishSlots <= 0) return false;
+    finishSlots -= 1;
+    return true;
+  };
   /** 领一个名额。领不到回 false，调用方排队下一轮（不丢、不 escalate）。 */
   const takeSlot = () => {
     if (slotsLeft <= 0) return false;
@@ -818,7 +857,7 @@ function collectCandidates(situation) {
     });
     if (drain.ok) {
       // 重试 drain 同样是起一个审官会话，同样领名额（判据见 slotsLeft 那段）。
-      if (!takeSlot()) { reportAdmission(N['retry-drain']); continue; }
+      if (!takeFinishSlot()) { reportAdmission(N['retry-drain']); continue; }
       out.push(withNeeds({
         kind: 'retry-drain', pr: it.pr, head: itHead, tries: drain.tries, stateKey: drain.stateKey,
         queue: rp.items,
@@ -845,7 +884,7 @@ function collectCandidates(situation) {
     if (out.some((a) => a.kind === 'attach-reviewer')) continue;
     // 起审官也是起会话，也吃同一份 CPU 和内存——2026-09-06 实测 137 个会话里审官占 53 个。
     // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
-    if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
+    if (!takeFinishSlot()) { reportAdmission(N['attach-reviewer']); continue; }
     out.push(withNeeds({
       kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null,
       head: it.head || null, source: it.source || null, error: it.error || null,
@@ -932,10 +971,10 @@ function collectCandidates(situation) {
       out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${rGate.why}`, { reason: rGate.reason, pr: pr.number, issue: issueNo, model: rModel }), N.rework));
       return;
     }
-    // 返工属于「收尾」，从共用池领名额（不再各管各的独立上限）。
-    // 之前担心的「新派单把返工挤掉」由 finishReserve 解决：收尾的需求先扣，新活只用剩下的。
-    // 余量用尽排队下轮，不丢、不 escalate。夹具没给 admission 时 slotsLeft=Infinity（旧测兼容）。
-    if (!takeSlot()) {
+    // 返工属于「收尾」，领**收尾名额**（与「新活名额」两笔账，见上面 finishSlots 的定义）。
+    // 机器满载时新活一个不派，但返工照领——它不增在制品，是把已有 PR 推过终点线。
+    // 收尾名额自有上限（FINISH_SLOTS_MAX），用尽则排队下轮，不丢、不 escalate。
+    if (!takeFinishSlot()) {
       reportAdmission(N.rework);
       return;
     }
@@ -1126,7 +1165,7 @@ function collectCandidates(situation) {
         continue;
       }
       // 复审也是起审官会话，同样领名额（理由同 attach-reviewer）。
-      if (!takeSlot()) { reportAdmission(N['attach-reviewer']); continue; }
+      if (!takeFinishSlot()) { reportAdmission(N['attach-reviewer']); continue; }
       out.push(withNeeds({
         kind: 'rereview', pr: pr.number, head: a.head,
         issue: attributedIssueNumber(pr),
@@ -1196,7 +1235,7 @@ function collectCandidates(situation) {
       }), N['pump-draft']));
       return;
     }
-    if (!takeSlot()) {
+    if (!takeFinishSlot()) {
       reportAdmission(N['pump-draft']);
       return;
     }

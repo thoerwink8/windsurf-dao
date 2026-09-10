@@ -381,6 +381,8 @@ orca account add --help
 # 卡死处置：不要装 dao-nudge-stalled（2026-09-07 退役）。交卷/判定后停会话，差集由指挥官起短会话。
 #   机器上若还留着：sudo bash scripts/install-nudge-stalled.sh（脚本改成卸载）
 #   验：systemctl list-timers --all 里没有 dao-nudge-stalled.timer
+# 看板阶段超时（#818 墙钟闸，跟推进量不是同一把尺）：sudo bash scripts/install-board-watch.sh（单元 host/machine/systemd/dao-board-watch.*）
+#   验：list-timers 里 dao-board-watch.timer 的 NEXT 必须是时间（OnCalendar 现行 *:19/20）
 # 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
 #   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
 # 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）

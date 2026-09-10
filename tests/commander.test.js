@@ -642,8 +642,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  it('⑤单轮返工上限沿用机器余量：超出的排队下轮，不丢也不 escalate', async () => {
-    const { decide } = await CORE;
+  // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX=3）。
+  // 缘由：机器一满 slots=0，连「把手上这些 PR 收掉」也被拦住——25 张 PR 一条判定都没有、
+  // 满载空转等收尾（实咬）。新活仍旧一个不派，那半边的本意不变（见下一条用例）。
+  it('⑤单轮返工领收尾名额：上限 FINISH_SLOTS_MAX，超出的排队下轮，不丢也不 escalate', async () => {
+    const { decide, FINISH_SLOTS_MAX } = await CORE;
     const issues = [];
     const prs = [];
     const byPr = {};
@@ -656,13 +659,29 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
       github: { scanned: true, issues, prs },
       prReviews: { scanned: true, byPr },
       commanderPolicy: { requireModelInRouting: false },
-      admission: { ok: true, slots: 2 },
+      // 机器满载：新活一个不派（slots=0），但返工属于收尾，照样领自己的名额
+      admission: { ok: true, slots: 0 },
     }));
     const w = byKind(r, 'rework');
-    assert.equal(w.length, 2, `一轮最多派 admission.slots 个返工工人，实际 ${w.length}`);
-    assert.deepEqual(w.map((a) => a.pr), [760, 761]);
+    assert.equal(w.length, FINISH_SLOTS_MAX, `机器满载时返工仍要能推进，最多 ${FINISH_SLOTS_MAX} 个，实际 ${w.length}`);
+    assert.deepEqual(w.map((a) => a.pr), [760, 761, 762]);
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
-    assert.equal(byKind(r, 'notify-hub').length, 2, '回流只跟着真派出去的那两个');
+    // 回流 = 每个真派出去的返工一条 + 一条「机器满、不收新活」的群通知（那是另一回事，分开数）。
+    const dispatched = byKind(r, 'notify-hub').filter((a) => a.moment === 'dispatched');
+    assert.equal(dispatched.length, FINISH_SLOTS_MAX, '回流只跟着真派出去的那几个');
+  });
+
+  it('⑤b 机器满载时新活仍然一个不派（收尾名额不许漏成新活名额）', async () => {
+    const { decide } = await CORE;
+    // 五张已消歧、标签齐、无在途的新活
+    const issues = [];
+    for (let i = 0; i < 5; i += 1) issues.push(labeledIssue(810 + i));
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs: [] },
+      prReviews: { scanned: true, byPr: {} },
+      admission: { ok: true, slots: 0 },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '机器满载时不收新活——收尾名额是另一笔账，不许漏给新活');
   });
 
   it('⑥判绿的 PR 不派返工（反证：别把 rework 变成「见 PR 就派」）', async () => {
