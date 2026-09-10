@@ -36,12 +36,17 @@ export function refsOf(record) {
  *
  * 判决顺序是安全边界，不许调换：
  *   1. 有活进程 → 永远保留（哪怕单早就关了，进程还在就是还在干活）
- *   2. 保留窗口内有活动 → 保留（刚跑完的会话，调度器可能还要读它的结果）
- *   3. 盘面没查成 → 保留（fail-closed：GitHub 超时/限流时一次抖动就误删一批，不可接受）
- *   4. 引用的单全部关闭 → 删
- *   5. 其余（引用了 OPEN 单、或认不出编号）→ 看时效，超窗口就删
+ *   2. 时间戳读不出 → 保留并标 unknown（「多老」没查成 ≠ 很老；见下）
+ *   3. 保留窗口内有活动 → 保留（刚跑完的会话，调度器可能还要读它的结果）
+ *   4. 盘面没查成 → 保留（fail-closed：GitHub 超时/限流时一次抖动就误删一批，不可接受）
+ *   5. 引用的单全部关闭 → 删
+ *   6. 其余（引用了 OPEN 单、或认不出编号）→ 看时效，超窗口就删
  *
- * 第 5 条为什么敢删引用了 OPEN 单的会话：一个 9-06 完成的老会话即使提到仍开着的 #1122，
+ * 第 2 条是 #1175 审官抓出来的洞：旧版把读不出时间戳的记录直接归 remove（「坏记录按时效
+ * 兜底当老的」）。可一次 stat 抖动、半写完的 record、权限错，形态跟「真的坏」一模一样，
+ * 而归档是不可逆的。没查成就保留，是本文件其余各条同一条纪律。
+ *
+ * 第 6 条为什么敢删引用了 OPEN 单的会话：一个 9-06 完成的老会话即使提到仍开着的 #1122，
  * 对推进 #1122 也毫无帮助——它是历史，不是在途状态。只按单号会留下 400+ 个死记录。
  */
 export function judgeSession(session, { closedRefs, boardScanned, now = Date.now(), keepHours = DEFAULT_KEEP_HOURS } = {}) {
@@ -49,8 +54,10 @@ export function judgeSession(session, { closedRefs, boardScanned, now = Date.now
 
   const updated = Number(session?.updatedAtMs);
   if (!Number.isFinite(updated)) {
-    // 时间读不出来，但进程也不在——这种记录本身就坏了，按时效兜底当老的处理。
-    return { verdict: 'remove', why: '时间戳读不出且无活进程' };
+    // 时间读不出来 = 「多老」这个事实没查成。没查成不是「很老」——一次 stat 抖动、
+    // 半写完的 record、权限错，形态都一样；当老的删正是 fail-open（#1175 审官第三条抓的）。
+    // 保留并标 unknown，让上层把「这轮有几个没查成」端出来，而不是悄悄归档。
+    return { verdict: 'keep', unknown: true, why: '时间戳没查成——不猜多老（fail-closed）' };
   }
   const ageHours = (now - updated) / 3600000;
   if (ageHours < keepHours) return { verdict: 'keep', why: `${keepHours} 小时内有活动` };

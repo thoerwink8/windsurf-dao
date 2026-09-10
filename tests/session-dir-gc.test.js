@@ -68,9 +68,27 @@ test('保留窗口内有活动就留，哪怕单已关', () => {
   assert.equal(j.verdict, 'keep');
 });
 
-test('时间戳读不出且无活进程，按坏记录删', () => {
+// #1175 审官第三条：时间戳读不出 = 「多老」这个事实没查成，跟「很老」不是一回事。
+// 旧判据把它直接归 remove，一次 stat 抖动/半写记录就会在 --apply 里被归档——fail-open。
+test('时间戳读不出 → 保留并标 unknown，绝不当坏记录删', () => {
   const j = judgeSession(sess({ updatedAtMs: NaN }), { closedRefs: new Set(), boardScanned: true, now });
-  assert.equal(j.verdict, 'remove');
+  assert.equal(j.verdict, 'keep');
+  assert.equal(j.unknown, true);
+  assert.match(j.why, /没查成/);
+});
+
+test('时间戳读不出时，即使盘面也扫成了，也不进 remove 名单', () => {
+  const p = planSessionGc({ sessions: [sess({ id: 'broken', updatedAtMs: NaN })], now, boardScanned: true, closedRefs: new Set() });
+  assert.deepEqual(p.remove, []);
+  assert.equal(p.keep.some((k) => k.id === 'broken'), true, '坏记录要出现在保留名单里，不能凭空消失');
+});
+
+test('时间戳读不出与「旧但正常」分得开：后者照删', () => {
+  const p = planSessionGc({
+    sessions: [sess({ id: 'old', updatedAtMs: now - 100 * H }), sess({ id: 'broken', updatedAtMs: NaN })],
+    now, boardScanned: true, closedRefs: new Set(),
+  });
+  assert.deepEqual(p.remove.map((r) => r.id), ['old']);
 });
 
 test('扫完 0 个报 unknown，不当成「没有会话」', () => {
