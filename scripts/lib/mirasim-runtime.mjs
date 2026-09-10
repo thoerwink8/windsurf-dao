@@ -71,6 +71,63 @@ export function installedVersion(homeDir) {
 }
 
 /**
+ * 「升级换没换干净」的判据：**在役进程自报的版本** vs **升级器 promote 出来的版本**。
+ * 纯判官，不碰网络也不碰盘——两个版本号由调用方取好传进来。
+ *
+ * 为什么这条要单列（2026-09-10 实咬的镜像面）：契约断言验的是「自报 = promote 出来的那份」
+ * ——两份都取服务端，所以它看不见「promote 换了盘上的 current，进程还跑着老版本」。
+ * 升级器 promote 里确实 stop→rename→start，但**没人验它真换成了**：中途 start 失败、
+ * 或者有人手改了软链又没重启，症状都是「新版本装好了、跑的还是老的」，而契约断言照样绿。
+ * 跟随模式把这层风险放大了：以前钉死版本时至少会因版本不符当场拒派。
+ *
+ * 三态：同版本 ok；不同 red（谁新谁旧都算红——回退和升级同样要人看一眼）；
+ * 任一取不到 unknown（没查成 ≠ 查过没事）。
+ */
+export function judgeVersionDrift({ promoted, reported, service = null } = {}) {
+  const norm = v => (typeof v === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v.trim()) ? v.trim() : null);
+  const p = norm(promoted);
+  const r = norm(reported);
+  const missing = [];
+  if (p === null) missing.push('升级器 promote 出来的版本（读不到 current/VERSION）');
+  if (r === null) missing.push('在役服务端自报的版本（没连上或没报 version）');
+  if (missing.length) {
+    return { state: 'unknown', key: 'mirasim-version', promoted: p, reported: r, service,
+      detail: `没查成：${missing.join('；')}——「没查成」不是「版本一致」` };
+  }
+  if (p !== r) {
+    return { state: 'red', key: 'mirasim-version', promoted: p, reported: r, service,
+      detail: `盘上 promote 的是 ${p}，在役进程自报 ${r}——升级没换干净（改了软链没重启，或 start 失败后回退了）`,
+      plain: {
+        what: `执行体服务换了新版本 ${p}，但真正在跑的还是很老的那份 ${r}`,
+        impact: '新版本的能力用不上；更糟的是契约断言两边都读服务端，这层错位它看不见，一切显示正常',
+        plan: '重启一次执行体服务（systemctl restart mirasim-server）即可，我来做，做完再验一遍',
+      } };
+  }
+  return { state: 'ok', key: 'mirasim-version', promoted: p, reported: r, service,
+    detail: `在役 ${p}（promote 与进程自报一致）` };
+}
+
+/**
+ * 取两个版本号喂给 judgeVersionDrift。**探测本身只做两件事**：
+ * 读盘上 promote 出来的 VERSION，连回环 ws 问一句 state。
+ *
+ * 不复用 createRuntime().ensureWorkspace —— 那条路会建树/写盘，巡检是**只读**动作，
+ * 眼睛不许有副作用。这里只拿到 state 就关连接。
+ * 任一步失败都返回 null 那一侧（判官自会判 unknown），不抛：巡检一项探不到不该拖垮整轮。
+ */
+export async function probeVersionDrift({ homeDir, port, service = 'mirasim-server.service', timeoutMs = 8000 } = {}) {
+  const promoted = installedVersion(homeDir);
+  let reported = null;
+  try {
+    const connect = defaultConnect;
+    const wire = await connect({ homeDir: homeDir || os.homedir(), port: Number(port || DEFAULT_PORT), openTimeoutMs: timeoutMs });
+    try { reported = typeof wire.state?.version === 'string' ? wire.state.version : null; }
+    finally { try { wire.close(); } catch { /* 只读探测，关不掉不该改判 */ } }
+  } catch { reported = null; /* 连不上 = 没查成，由判官说 */ }
+  return judgeVersionDrift({ promoted, reported, service });
+}
+
+/**
  * 钉死的服务端版本。**留空即「跟随本机在役版本」**——这是默认，也是推荐。
  *
  * 它只在一种场景下需要显式给值：想刻意钉住某个版本、让服务端偷偷换版本时当场拒派

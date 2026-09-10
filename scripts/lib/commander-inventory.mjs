@@ -19,8 +19,10 @@
 
 import { existsSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
+import { probeVersionDrift } from './mirasim-runtime.mjs';
 import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
@@ -119,6 +121,20 @@ function checkTimers() {
     };
   }
   return { state: 'ok', detail: `指挥官 timer 齐（${want.join('、')} enabled）`, key: 'timers' };
+}
+
+// 3.5 升级换没换干净：升级器 promote 出来的版本 vs 在役进程自报的版本。
+// 契约断言两边都读服务端，天生看不见「盘上换了、进程没换」这层错位（2026-09-10 的镜像面）。
+// 判官与只读探测都在 lib/mirasim-runtime.mjs，这里只管取数与翻译成巡检三态。
+async function checkVersionDrift({ homeDir } = {}) {
+  const key = 'mirasim-version';
+  if (!isLinux()) return { state: 'unknown', key, detail: '本平台无 systemd/回环服务端，探不到在役版本' };
+  try {
+    // 只读：读 current/VERSION + 连上问一句 state 就关，绝不建树、不写盘（眼睛不许有副作用）。
+    return await probeVersionDrift({ homeDir: homeDir || homedir(), service: 'mirasim-server.service' });
+  } catch (e) {
+    return { state: 'unknown', key, detail: `升级版本探不到：${fmt((e && e.message) || e)}——没查成，不是一致` };
+  }
 }
 
 // 4. 探针 journal 连红：gw-remote-probe 最近若干次全失败。
@@ -270,18 +286,24 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }) {
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
+  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
+}
+
+async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
     checkOrphanDeletedCwd(),
     checkTerminalVsAgents({ runOrca, ROOT }),
     checkTimers(),
+    // 升级换没换干净要看回环服务端自报，是异步的——单独 await，不塞进上面的同步数组。
+    await versionDrift(),
     checkProbeJournal(),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
     // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
-    // #1004 删掉 stale-pr 后这里一共 7 项。
+    // #1004 删掉 stale-pr 后这里一共 8 项（2026-09-10 加「升级换没换干净」）。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];

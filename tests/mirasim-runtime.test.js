@@ -767,3 +767,44 @@ describe('建树幂等命中（2026-09-10 服务端 worktrees 缓存陈旧）', 
     });
   });
 });
+
+// 升级换没换干净（2026-09-10 的镜像面）：契约断言两边都读服务端，
+// 所以「盘上 promote 了新版、进程还在跑老版」它天生看不见。这条判官专门补这个盲区。
+describe('judgeVersionDrift：promote 出来的版本 vs 在役进程自报的版本', () => {
+  const load = () => import(LIB);
+
+  it('两个版本一致 → ok', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.307', service: 'mirasim-server.service' });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.promoted, '0.0.307');
+  });
+
+  it('盘上 0.0.307、进程 0.0.282 → red（改了软链没重启的形态）', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.282' });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /0\.0\.307/);
+    assert.match(r.detail, /0\.0\.282/);
+    assert.ok(r.plain && r.plain.what && r.plain.impact && r.plain.plan, 'red 要给说人话的三行');
+  });
+
+  it('进程比盘上还新（回退没生效）同样 red —— 谁新谁旧都要人看一眼', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: '0.0.282', reported: '0.0.307' }).state, 'red');
+  });
+
+  it('取不到版本 → unknown，绝不是 ok（没查成 ≠ 查过没事）', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: null, reported: '0.0.307' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: null }).state, 'unknown');
+    assert.equal(judgeVersionDrift({}).state, 'unknown');
+    assert.match(judgeVersionDrift({}).detail, /没查成/);
+  });
+
+  it('形状不对的版本号当取不到，不当一致', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: 'unknown', reported: 'unknown' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: ' 0.0.307 ' }).state, 'ok', '两侧空白该被规整');
+  });
+});
