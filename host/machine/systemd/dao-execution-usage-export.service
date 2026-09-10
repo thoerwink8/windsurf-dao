@@ -1,0 +1,24 @@
+[Unit]
+Description=Publish sanitized root Mirasim usage for the orca collector
+Before=dao-execution-usage.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# This is an installed root-owned copy, never a script in a writable checkout.
+ExecStart=/usr/bin/env -i HOME=/root PATH=/usr/bin:/bin GH_CONFIG_DIR=/var/empty /usr/bin/node /usr/local/lib/dao-execution-usage/execution-usage-export.mjs
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY XAI_API_KEY CURSOR_API_KEY DEVIN_API_KEY WINDSURF_API_KEY
+Environment=GH_CONFIG_DIR=/var/empty
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/dao-execution-usage
+InaccessiblePaths=-/root/.mirasim/keys -/root/.config
+PrivateTmp=true
+PrivateNetwork=true
+RestrictAddressFamilies=AF_UNIX
+TimeoutStartSec=90
+StandardOutput=journal
+StandardError=journal

@@ -20,6 +20,9 @@ const DEAD_STATES = new Set([
   'failed', 'error', 'aborted', 'cancelled', 'canceled',
   // mirasim 的短命会话一轮结束后会报 incomplete；它已不再接收任务。
   'incomplete',
+  // 服务端查无此会话（档案被归档/清掉、服务端重启丢了内存态）。执行 runtime 用它把
+  // 「明确没了」跟「这次没读成」分开——前者不该由它自己判活，后者才要当有人在做。
+  'gone',
 ]);
 
 function positiveInt(v) {
