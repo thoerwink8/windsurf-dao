@@ -786,7 +786,10 @@ describe('judgeVersionDrift：promote 出来的版本 vs 在役进程自报的�
     assert.equal(r.state, 'red');
     assert.match(r.detail, /0\.0\.307/);
     assert.match(r.detail, /0\.0\.282/);
-    assert.ok(r.plain && r.plain.what && r.plain.impact && r.plain.plan, 'red 要给说人话的三行');
+    // 说人话的三行缺一行，群里就只剩技术话——拆开断言，失败时看得出缺的是哪一行。
+    assert.equal(typeof r.plain?.what, 'string', 'red 缺 plain.what');
+    assert.equal(typeof r.plain?.impact, 'string', 'red 缺 plain.impact');
+    assert.equal(typeof r.plain?.plan, 'string', 'red 缺 plain.plan');
   });
 
   it('进程比盘上还新（回退没生效）同样 red —— 谁新谁旧都要人看一眼', async () => {
