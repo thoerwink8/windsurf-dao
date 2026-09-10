@@ -65,7 +65,39 @@ describe('#966 GraphQL 带 milestone，推迟档不进推荐', () => {
     assert.equal(missing.ok, true);
     assert.equal(missing.issues[0].milestone, null);
   });
+});
 
+describe('#1147 GraphQL 带 committedDate，normalize 落到 lastCommittedAt', () => {
+  it('查询字符串问了 committedDate', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /committedDate/);
+  });
+
+  it('有 committedDate 就带上，缺字段是 null 不当超龄', async () => {
+    const S = await LOAD;
+    const withDate = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{
+          number: 885, title: 'draft', updatedAt: '2026-09-08T00:00:00Z', isDraft: true,
+          commits: { nodes: [{ commit: { committedDate: '2026-09-07T18:00:00Z' } }] },
+        }] },
+      },
+    });
+    assert.equal(withDate.ok, true);
+    assert.equal(withDate.prs[0].lastCommittedAt, '2026-09-07T18:00:00Z');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{ number: 1, title: 'x', updatedAt: '2026-09-08T00:00:00Z', isDraft: true }] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.prs[0].lastCommittedAt, null);
+  });
+});
+
+describe('#966 推迟档不进推荐（接 GraphQL 归一化）', () => {
   it('挂将来某版的已消歧单不进 P2，也不进 P3', async () => {
     const S = await LOAD;
     const rec = S.buildRecommendations({

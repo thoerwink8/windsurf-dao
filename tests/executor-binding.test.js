@@ -379,15 +379,20 @@ describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
     assert.equal(b.runtime, rt);
   });
 
-  it('仓内真表的钉版本就是 runtime 拿到的那个（真表与代码不许各钉一个）', async () => {
+  // 2026-09-10 机制改造：真表的钉版本**留空即跟随本机在役版本**（读 bundle 的 VERSION）。
+  // 手打版本号正是那次全链瘫痪的根因——升级器换了服务端，没人记得改这里。
+  // 本条改测两件事：真表默认必须是留空（防有人顺手又钉死一个手打值）；
+  // 显式钉住时仍要原样传进 runtime（策略→runtime 的传递没断，#884 P1#5 判别力保留）。
+  it('仓内真表默认不钉版本（跟随在役），显式钉住时才原样传进 runtime', async () => {
     const S = await import(LIB);
     const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
     const p = S.readExecutorPolicy(doc);
     assert.equal(p.ok, true, p.error || '');
     assert.ok(p.mirasim, '真表里没 mirasim 节 = 本次等于没查');
-    assert.ok(p.mirasim.pinnedVersion, '真表里没钉版本 = 本次等于没查');
+    assert.equal(p.mirasim.pinnedVersion, null,
+      '真表又钉了手打版本——升级到下一版时它必然过期拒派（2026-09-10 的 96 条实咬）；要冻结版本请走排查流程并写明回收时间');
     const b = S.bindExecutor({ executor: 'mirasim', policy: p });
-    assert.equal(b.runtime.config.pinnedVersion, p.mirasim.pinnedVersion);
+    assert.equal(b.runtime.config.pinnedVersion, null, '留空要一路传成 null（跟随），不许中途被兜底成手打常量');
   });
 });
 

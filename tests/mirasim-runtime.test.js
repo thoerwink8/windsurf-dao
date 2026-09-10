@@ -8,6 +8,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 
@@ -74,11 +76,14 @@ const ledgerRow = (over = {}) => ({
 });
 
 describe('契约断言', () => {
-  it('版本不符：抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
+  // 2026-09-10 改：钉版本默认改成「跟随本机在役版本」，不再比对具体值（那次因为手打常量
+  // 没跟上升级，96 条派工被拒）。所以「版本不符就拒派」这个能力现在需要**显式钉住**才触发——
+  // 这条测试跟着显式给 pinnedVersion，判别力（拒派=一帧都不发）原样保留。
+  it('显式钉住版本时：不符就抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
     const wire = fakeWire(goodState({ version: '0.0.283' }), () => [
       { type: 'accepted', sessionKey: KEY, taskId: 't1' },
     ]);
-    const rt = await runtimeWith(wire);
+    const rt = await runtimeWith(wire, { pinnedVersion: '0.0.307' });
     await assert.rejects(
       () => rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' }),
       err => {
@@ -609,6 +614,117 @@ describe('问答与工作区', () => {
     await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-none'), err => {
       assert.strictEqual(err.name, 'MirasimUnavailableError');
       assert.match(err.message, /没查成/);
+      return true;
+    });
+  });
+});
+
+describe('#1125 listSessions：会话名单是第六个动词', () => {
+  it('回了 sessions 数组 → ok，原样交出', async () => {
+    const sessions = [
+      { sessionKey: KEY, runState: 'streaming' },
+      { sessionKey: 'codex:dead', runState: 'done' },
+    ];
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    assert.equal(r.missing, false);
+    assert.deepEqual(r.sessions, sessions);
+    assert.ok(wire.sent.some(f => f.type === 'listSessions'));
+  });
+
+  it('没回可用数组 → missing，sessions 是 null 不是 []', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions' }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.missing, true);
+    assert.equal(r.sessions, null, 'null 才能让 countLiveReviewers 判没查成；[] 会当成 0 个在跑去拉满');
+  });
+
+  it('等不到帧 → missing，sessions 是 null', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /没查成/);
+  });
+});
+
+describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）', () => {
+  it('installedVersion 读出本机在役版本号', async () => {
+    const { installedVersion } = await import(LIB);
+    const v = installedVersion('/home/orca');
+    assert.ok(v === null || /^\d+\.\d+\.\d+/.test(v), `读出来应是版本号或 null，实际 ${v}`);
+  });
+
+  it('读不到时返回 null，不编一个版本出来', async () => {
+    const { installedVersion } = await import(LIB);
+    assert.strictEqual(installedVersion('/nonexistent-home-xyz'), null);
+  });
+
+  it('跟随模式：服务端版本与常量不同也放行——升级不该再拒派', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, true);
+  });
+
+  it('跟随模式仍拦「服务端不报版本」——形态突变不许静默走错', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /没报 version/);
+  });
+
+  it('跟随模式拦非法版本形状', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: 'not-a-version', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+  });
+
+  it('显式钉住时恢复严格语义', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract(
+      { version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] },
+      { pinnedVersion: '0.0.307' },
+    );
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /版本不符/);
+  });
+});
+
+describe('建树幂等命中（2026-09-10 服务端 worktrees 缓存陈旧）', () => {
+  it('git 说分支已被某树占用，且该路径真实存在 → 当已有树复用，不报错', async () => {
+    // 服务端 worktrees 缓存实测会陈旧（69 条里 31 条有 branch，git 里真有的不在列表），
+    // findTree 因此漏判、走到新建，git 拒绝并在错误里给出真实路径。git 比缓存权威。
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-hit-'));
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: `fatal: 'feat-z' is already used by worktree at '${real}'` }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    const r = await rt.ensureWorkspace('/repo', 'feat-z');
+    assert.strictEqual(r.created, false);
+    assert.strictEqual(r.path, real);
+    assert.strictEqual(r.verified, true);
+  });
+
+  it('git 报的路径不存在 → 仍是拒绝，不许拿一个不存在的路径当成功', async () => {
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: "fatal: 'feat-z' is already used by worktree at '/nope/not/here'" }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-z'), err => {
+      assert.strictEqual(err.name, 'MirasimRejectedError');
       return true;
     });
   });
