@@ -66,10 +66,12 @@ describe('dao 派工硬闸', () => {
     await t.test('显式 auto 无需理由 → 通过', () => {
       assert.ok(autoExplicit.status === 0 && p1e.mergePolicy === 'auto', '显式 auto 无需理由 → 通过  →  ' + JSON.stringify(p1e));
     });
+    // 2026-09-10 选路一：执行目录里的 grok-mirasim-native 接管 grok-4.6，
+    // 走原生 Grok CLI 而不是 pi 包装（实测 route=local，不烧 relay 额度）。
     await t.test('#615 dry-run 带 slate 且 grok 在名单里', () => {
       assert.equal(p1e.executor, 'mirasim', JSON.stringify(p1e));
       assert.equal(p1e.daoModel, 'grok-4.6');
-      assert.equal(p1e.agent, 'pi');
+      assert.equal(p1e.agent, 'grok');
     });
 
     const noModel = dispatch(['--merge-policy', 'auto', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
@@ -111,9 +113,9 @@ describe('dao 派工硬闸', () => {
       assert.equal(pOk.ok, true, JSON.stringify(pOk));
       assert.equal(pOk.reviewer, 'gpt-5.6-sol');
     });
-    await t.test('dry-run 工人走 pi gw/grok-4.6', () => {
-      assert.equal(pOk.agent, 'pi', JSON.stringify(pOk));
-      assert.equal(pOk.family, 'pi');
+    await t.test('dry-run 工人走原生 grok（选路一：执行目录接管）', () => {
+      assert.equal(pOk.agent, 'grok', JSON.stringify(pOk));
+      assert.equal(pOk.family, 'xai'); // profile 的 modelFamily 用厂商名（xAI），同 luna→openai
       assert.equal(pOk.daoModel, 'grok-4.6');
     });
 

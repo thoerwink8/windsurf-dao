@@ -1165,7 +1165,7 @@ export async function stopSessionAndReap(runtime, sessionKey, { workdir = null }
       return { ok: false, unscanned: true, why: `会话 ${sessionKey} 没有 worktree，无法核实残留进程` };
     }
   }
-  const stopped = await runtime.stopSession(sessionKey);
+  const stopped = await runtime.stopSession(sessionKey, { workdir: target });
   if (!stopped || stopped.ok !== true) return stopped || { ok: false, why: 'stop 没回成功' };
   // stop 是异步的，给服务端一个很短的退出窗口，再核实并回收残留子进程。
   await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1535,12 +1535,15 @@ function mirasimRepoOrFail(args) {
 }
 
 /** dao 的 --model → mirasim 的族/执行体 agent/腿。缺配置报警拒派，不静默降级。 */
-function mirasimRouteOrFail(args, routing, policy) {
+function mirasimRouteOrFail(args, routing, policy, runtime) {
   if (!args.model) {
     fail('mirasim 执行体要显式 --model（族路由按模型族认，--role 打分选型这条路还没接进来——见 #880 卡 B PR 正文）');
   }
   const hit = (routing?.models || []).find(m => m && m.id === args.model);
   if (!hit) fail(`模型 ${args.model} 不在路由表`);
+  const profile = runtime?.profileForModel?.(hit.id);
+  if (profile) return { ok: true, family: profile.modelFamily, agent: profile.agent, model: hit.id,
+    provider: profile.provider, backend: profile.backend, profileId: profile.id, mode: profile.route, leg: profile.route, via: 'execution profile' };
   const route = judgeAgentRoute({ policy, model: hit.id, provider: hit.provider });
   if (!route.ok) fail(route.error, { route: { model: hit.id, provider: hit.provider || null, family: route.family ?? null } });
   return { ...route, model: hit.id, provider: hit.provider || null };
@@ -1571,7 +1574,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
   const repo = mirasimRepoOrFail(args);
   const branch = mirasimBranchOrFail(args);
-  const route = mirasimRouteOrFail(args, routing, bind.policy);
+  const route = mirasimRouteOrFail(args, routing, bind.policy, bind.runtime);
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model });
   const disambiguation = args.issue
@@ -3326,10 +3329,13 @@ async function cmdWorkerStartMirasim(args, routing, { policy }) {
   // #884 审官 P1#3（四轮）：超长 --spec 必须在渲染前结构化拒派，不许 buildSoldierInject 甩栈。
   const injectGate = assertDispatchInjectPlan({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   if (!injectGate.ok) fail(injectGate.error, { injectGate, executor: 'mirasim' });
-  const route = mirasimRouteOrFail(args, routing, policy);
+  // bindExecutor 要提到选路之前：runtime 带着执行目录，没有它 profileForModel 恒空，
+  // ACP 腿（cursor/devin）会掉回模型前缀兜底被判成 pi。dispatch 那侧一直传着，
+  // 这侧漏了——同一个修法只接一个调用点，判例 fix-landed-at-one-call-site-only。
+  const binding = bindExecutor({ executor: 'mirasim', policy, routing });
+  const route = mirasimRouteOrFail(args, routing, policy, binding.runtime);
   // 同 dispatch：不传 executor 就把 orca 任务书发进 mirasim 会话（#884 审官 P1，三轮）。
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
-  const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.workerStart({ workdir, prompt, model: route.model, provider: route.provider }); }
   catch (e) { fail(`mirasim 起会话失败: ${String(e?.message || e)}`, { executor: 'mirasim', workdir }); }
@@ -4837,7 +4843,7 @@ async function cmdStartMirasim(args) {
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
   // #1059 合入时仍按旧签名 (model, mirasimPolicy) 调；本 PR 已把 mirasimRouteOrFail
   // 收成 (args, routing, policy)，不改这一处 dry-run 会在「要显式 --model」上假红。
-  const route = mirasimRouteOrFail(args, routing, bind.policy);
+  const route = mirasimRouteOrFail(args, routing, bind.policy, bind.runtime);
 
   let workdir = typeof args.worktree === 'string' && args.worktree.includes('/')
     ? args.worktree.replace(/^path:/, '')
@@ -4954,7 +4960,7 @@ async function cmdSessionStop(args) {
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
   let stopped;
-  try { stopped = await stopSessionAndReap(bind.runtime, args.session); }
+  try { stopped = await stopSessionAndReap(bind.runtime, args.session, { workdir: args.worktree || null }); }
   catch (e) {
     fail(`session-stop 没查成: ${String(e?.message || e)}`, { executor: 'mirasim', sessionKey: args.session });
   }

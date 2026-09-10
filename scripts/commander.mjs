@@ -51,8 +51,11 @@ import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
-import { availabilityFor } from './lib/provider-health.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
@@ -78,6 +81,7 @@ import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, upd
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -224,7 +228,7 @@ function scanOrca() {
  * 不许把合并/叫审官整轮停掉。
  */
 function scanSessions() {
-  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  const script = process.env.DAO_EXECUTION_LS || process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'execution-sessions.mjs');
   if (!existsSync(script)) {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
@@ -377,6 +381,21 @@ function scanAdmission({ worktrees, policy } = {}) {
   return { ...cap, inFlight: inflight.count };
 }
 
+/**
+ * 渠道并发在途快照（#1145）。**在途来源与租约闸同源**（checkInFlight 的 /proc 扫描），
+ * 树→渠道走 channel-concurrency 的共用解析器（树 → 派工账本 model → 腿表渠道）——
+ * 决策层与门里必须用同一把尺，各造一份会让分子分母对着不同的格子判满。
+ *
+ * checkInFlight 没查成 → ok:false，调用方把渠道在途数当没查成（本闸这轮不据它放大准入）。
+ */
+function scanChannelInFlight({ models, legs, caps } = {}) {
+  const flight = checkInFlight();
+  if (!flight.ok) return { ok: false, unscanned: true, error: flight.error, counts: {}, unattributed: [] };
+  const desired = scanDesiredJobs();
+  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps });
+  return countInFlightByChannel(flight.trees || [], resolver);
+}
+
 function scanReviewPending() {
   let dir;
   try { dir = reviewPendingDir({ root: ROOT }); }
@@ -472,14 +491,15 @@ function orcaErr(err) {
   return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
-/** 健康表标红的模型 id。表没查成 / unknown → []（不拦，与 #842 unknown 不拦对齐）。 */
+/**
+ * 健康表标红的模型 id。判据正文在 lib/model-admission.mjs（纯函数，可单测）——
+ * 这里只负责取三份输入：模型表、execution profiles、熔断表。
+ * 表没查成 / 读不到 → []（不拦，与 #842 unknown 不拦对齐）。
+ */
 function loadHealthRedIds(models) {
   if (!Array.isArray(models) || models.length === 0) return [];
   try {
-    const r = availabilityFor(models);
-    return Object.entries(r.availability || {})
-      .filter(([, v]) => v === 'red')
-      .map(([id]) => id);
+    return healthRedIds({ models, profiles: loadExecutionProfiles(), breaker: loadBreaker() });
   } catch {
     return [];
   }
@@ -517,6 +537,8 @@ function buildSituation({ state } = {}) {
   let workerOrder = null;
   let healthRedModels = [];
   let defaultWorkerModel = null;
+  let channelCaps = null;
+  let routingLegs = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
@@ -526,6 +548,8 @@ function buildSituation({ state } = {}) {
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
+    routingLegs = raw['腿'];
+    channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）
   } catch {
     routingModels = null;
     routingModelRecords = null;
@@ -533,9 +557,16 @@ function buildSituation({ state } = {}) {
     workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
+    channelCaps = null;
+    routingLegs = null;
   }
   const askPolicy = loadPolicy({ root: ROOT });
   const breakerIngest = ingestBreakerSignals();
+  // #1145：渠道并发第二道闸的三份快照。缺任一 decide 侧闸 inert（不改既有派工路）。
+  const channelInFlight = channelCaps && channelCaps.ok
+    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
+    : null;
+  const breaker = loadBreaker();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
@@ -557,6 +588,9 @@ function buildSituation({ state } = {}) {
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
+    channelCaps,
+    channelInFlight,
+    breaker,
     askPolicy,
   };
 }
@@ -660,7 +694,8 @@ function execAction(action, { state, dryRun, log }) {
         return { ok: false, error: 'stop-session 没有 sessionKey' };
       }
       return runOrShow(
-        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
+        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey),
+          ...(action.workdir ? ['--worktree', String(action.workdir)] : [])],
         { dryRun, say, why: action.why },
       );
     }
@@ -2141,7 +2176,12 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  const key = `commander-escalate:${marker ? marker[0].slice(0, 120) : title}`;
+  // key 不许含空白（网关判据）。回落到 title 时最容易踩：派工失败的 title 里带着整段
+  // JSON 错误，直接当 key 会被拒成 missing_idempotency——**故障与告警同源失效**，
+  // 2026-09-10 一晚 96 条派工失败没有任何一条报出来。所以这里一律规范化，
+  // 而不是指望调用方给的字符串正好合法。
+  const keySeed = marker ? marker[0] : title;
+  const key = `commander-escalate:${escalationKeyOf(keySeed)}`;
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);
