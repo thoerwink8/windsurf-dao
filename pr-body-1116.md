@@ -21,9 +21,7 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js` → 742 绿。
-
-`node scripts/dao-check.mjs`：好的（200 项；3 条可见西瓜，13 项 SKIP 快档，无本单回归）。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js` → 769 绿。
 
 ## 进展
 
@@ -45,6 +43,7 @@
 - [x] 本轮跟上 origin/master（inbox 6 条巡检观测补处置行，收件箱闸转绿）；冲突 0
 - [x] 本轮跟上 origin/master（patrol：#1015 凭据闸把额度采样 git 推送掐死）；观察文件加「处置：#1172」（指挥官方已开单，空处置行会把 inbox 闸打红）
 - [x] 本轮跟上 origin/master（#1147 搁置单收口泵 + #1125 审官入队）。合入后 `resolvePumpDraftDispatch` 仍从署名单反推 model/reviewer——正是本单要删的那一层。改成只读 PR 自己的标签；没标就拒，不猜。
+- [x] 本轮跟上 origin/master（v2.2.0 / 建树 realpath / 钉版本跟随在役 / 报帅 key 规范化）。合入后观察 `2026-09-10-指挥官timer停了自检仍绿.md` 落成 #1177，文件加「处置：#1177」（空处置行会把 inbox 闸打红）。
 
 ## 机制判定
 
