@@ -47,6 +47,7 @@
 - [x] 本轮跟上 origin/master（#1110 合并闸检查器 + #1169 渠道并发三件套）。合入的是 master 新机制，本单选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（报帅 key 闸对齐网关真闸 ASCII；巡检观察已有「处置：2af1fba9」）。合入的是 master 已修，本单选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1174/#1175 统一执行改造：ACP 无人值守 + 会话目录清理 + 补丁链闸 + grok 原生腿证据）。冲突 0；选型路仍只读 PR label。相关测试 773 绿。合入后 spawn 预算 147 被本单 CLI 夹具顶到 148（`pr-label-truth` 真走 `dao.mjs` 才能断言 gh 序列没有 issue view）。
+- [x] 本轮跟上 origin/master（#1129 满载换厂 + #1108 看板 v0 + 余量闸改量真 CPU）。冲突 0。换厂腿 `planReviewerOnCapacityDeath` 接在 `resolveReviewerFromPr` 之后：点名来自 PR 自己的 reviewer/*，不读 issue。注释里「issue 标签」改成「PR 标签」。相关测试 1073 绿。
 
 ## 机制判定
 
