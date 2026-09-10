@@ -231,10 +231,10 @@ export function isLiveDispatchRecipient({ workerState, dispatchStatus, lastFailu
 }
 
 /** 投递前证收件人真的在。拿不到 ≠ 没有：分不开就标 unscanned，一样非零。 */
-export function probeRecipient(target, orca) {
-  if (typeof orca !== 'function') throw new Error('probeRecipient 要 orca 执行器');
+export function probeRecipient(target, exec) {
+  if (typeof exec !== 'function') throw new Error('probeRecipient 要 exec 执行器');
   if (target.kind === 'terminal') {
-    const r = orca(argsTerminalRead({ terminal: target.id, limit: 1 }));
+    const r = exec(argsTerminalRead({ terminal: target.id, limit: 1 }));
     if (r.ok) return { ok: true, kind: 'terminal', id: target.id, status: r.json?.result?.terminal?.status ?? null };
     const text = orcaErrorText(r.error);
     if (/terminal_handle_stale|not_found/i.test(text)) {
@@ -243,7 +243,7 @@ export function probeRecipient(target, orca) {
     return { ok: false, unscanned: true, kind: 'terminal', id: target.id, error: `收件人活性没查成（不等于收件人不在）：${text}` };
   }
   if (target.kind === 'run') {
-    const r = orca(argsRunShow({ id: target.id }));
+    const r = exec(argsRunShow({ id: target.id }));
     if (r.ok && r.json?.result?.run) return { ok: true, kind: 'run', id: target.id };
     if (r.ok) return { ok: false, kind: 'run', id: target.id, error: `Run 信箱查无此 Run: ${target.id}` };
     const text = orcaErrorText(r.error);
@@ -255,7 +255,7 @@ export function probeRecipient(target, orca) {
   if (target.kind === 'dispatch') {
     // #559 官方通道：dispatch:<id> 是受监督工人的结构化收件箱。
     // 活性判据 = worker-show 能查到该 Dispatch（dispatch_not_found = 收件人不在，链断当场炸）。
-    const r = orca(argsWorkerShow({ dispatch: target.id }));
+    const r = exec(argsWorkerShow({ dispatch: target.id }));
     if (r.ok && r.json?.result?.dispatch?.id === target.id) {
       const workerState = r.json?.result?.worker?.state ?? null;
       const dispatchStatus = r.json?.result?.dispatch?.status ?? null;
@@ -292,7 +292,7 @@ export function probeRecipient(target, orca) {
     }
     return { ok: false, unscanned: true, kind: 'dispatch', id: target.id, error: `收件人 Dispatch 活性没查成（不等于收件人不在）：${text}` };
   }
-  const r = orca(argsRunCurrent());
+  const r = exec(argsRunCurrent());
   if (!r.ok) {
     const text = orcaErrorText(r.error);
     return { ok: false, unscanned: true, kind: 'own-run', error: `本终端绑的 Run 没查成: ${text}` };
@@ -414,10 +414,11 @@ export function findInboxMessage(inboxJson, messageId) {
  * #677：hop 审官→士兵 打进还活着的 id。已完工 fail-visible，不开下一跳救人。
  */
 export function deliverMessage({
-  to = null, subject, body = '', type, outcome, hop = '闭环通知', orca, inboxLimit = 50,
+  to = null, subject, body = '', type, outcome, hop = '闭环通知', exec, orca, inboxLimit = 50,
   taskId, dispatchId, dispatchCapability, from, filesModified, reportPath,
 } = {}) {
-  if (typeof orca !== 'function') throw new Error('deliverMessage 要 orca 执行器');
+  const run = typeof exec === 'function' ? exec : orca;
+  if (typeof run !== 'function') throw new Error('deliverMessage 要执行器');
   if (!subject) return { ok: false, hop, stage: '参数', error: `${hop}：缺 --subject，没主题的通知等于没通知` };
 
   const settlePlan = planWorkerDoneSend({ type, to, outcome, taskId, dispatchId, from, dispatchCapability });
@@ -429,14 +430,14 @@ export function deliverMessage({
       hop, subject, body, outcome: settlePlan.outcome,
       taskId: settlePlan.taskId, dispatchId: settlePlan.dispatchId,
       from: settlePlan.from, dispatchCapability: settlePlan.dispatchCapability,
-      filesModified, reportPath, orca,
+      filesModified, reportPath, exec: run,
     });
   }
 
   const target = classifyNotifyTarget(to);
   if (target.kind === 'unsupported') return { ok: false, hop, stage: '收件人', error: `${hop}：${target.error}` };
 
-  const pre = probeRecipient(target, orca);
+  const pre = probeRecipient(target, run);
   if (!pre.ok) {
     if (isSoldierReworkHop(hop) && isCompletedDispatchProbe(pre)) {
       return {
@@ -448,15 +449,15 @@ export function deliverMessage({
     return { ok: false, hop, stage: '收件人', unscanned: !!pre.unscanned, error: `${hop}：${pre.error}`, recipient: pre };
   }
 
-  const sent = orca(argsOrchestrationSend({ to, subject, body, type, outcome }));
+  const sent = run(argsOrchestrationSend({ to, subject, body, type, outcome }));
   if (!sent.ok) {
     const text = orcaErrorText(sent.error);
-    return { ok: false, hop, stage: '发送', error: `${hop}：orca send 失败: ${text}`, recipient: pre };
+    return { ok: false, hop, stage: '发送', error: `${hop}：exec send 失败: ${text}`, recipient: pre };
   }
 
   const msg = extractSentMessage(sent.json);
   if (!msg) {
-    return { ok: false, hop, stage: '回执', error: `${hop}：orca 说发出去了却没给消息回执 —— 拿不到回执就当没送到`, recipient: pre };
+    return { ok: false, hop, stage: '回执', error: `${hop}：exec 说发出去了却没给消息回执 —— 拿不到回执就当没送到`, recipient: pre };
   }
   if (to) {
     const expected = String(to);
@@ -473,7 +474,7 @@ export function deliverMessage({
     }
   }
 
-  const inbox = orca(argsOrchestrationInbox({ limit: inboxLimit, full: true }));
+  const inbox = run(argsOrchestrationInbox({ limit: inboxLimit, full: true }));
   if (!inbox.ok) {
     const text = orcaErrorText(inbox.error);
     return { ok: false, hop, stage: '复核', unscanned: true, messageId: msg.id, error: `${hop}：投递复核没查成: ${text}`, recipient: pre };
@@ -498,11 +499,12 @@ export function deliverMessage({
 /** #551：发 worker_done 后必须核 Dispatch 变成 completed，落库无效力 = 未结算。 */
 export function settleDispatch({
   hop = '闭环结算', subject, body = '', outcome, taskId, dispatchId,
-  from, dispatchCapability, filesModified, reportPath, orca,
+  from, dispatchCapability, filesModified, reportPath, exec, orca,
 } = {}) {
-  if (typeof orca !== 'function') throw new Error('settleDispatch 要 orca 执行器');
+  const run = typeof exec === 'function' ? exec : orca;
+  if (typeof run !== 'function') throw new Error('settleDispatch 要执行器');
 
-  const shown = orca(argsWorkerShow({ dispatch: dispatchId }));
+  const shown = run(argsWorkerShow({ dispatch: dispatchId }));
   if (!shown.ok) {
     const text = orcaErrorText(shown.error);
     if (/dispatch_not_found|not_found/i.test(text)) {
@@ -531,7 +533,7 @@ export function settleDispatch({
     };
   }
 
-  const sent = orca(argsOrchestrationSend({
+  const sent = run(argsOrchestrationSend({
     subject, body, type: 'worker_done', outcome,
     taskId, dispatchId, dispatchCapability, from: sender,
     filesModified, reportPath,
@@ -541,12 +543,12 @@ export function settleDispatch({
     const pane = isWrongPaneWorkerDoneError(sent.error);
     return {
       ok: false, hop, stage: '结算', settled: false, wrongPane: pane,
-      error: `${hop}：未结算：${pane ? '错误 pane 发送（发送方不是 Dispatch 本人）' : 'orca send 失败'}：${text}`,
+      error: `${hop}：未结算：${pane ? '错误 pane 发送（发送方不是 Dispatch 本人）' : 'exec send 失败'}：${text}`,
     };
   }
   const msg = extractSentMessage(sent.json);
 
-  const afterShow = orca(argsWorkerShow({ dispatch: dispatchId }));
+  const afterShow = run(argsWorkerShow({ dispatch: dispatchId }));
   if (!afterShow.ok) {
     const text = orcaErrorText(afterShow.error);
     return {

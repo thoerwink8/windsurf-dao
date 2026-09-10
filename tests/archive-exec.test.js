@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 
 const LIB = path.resolve(__dirname, '..', 'scripts', 'lib', 'archive-exec.mjs');
-const REVIEWER = path.resolve(__dirname, '..', 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md');
+const REVIEWER = path.resolve(__dirname, '..', 'host', 'skills', 'dispatch', 'templates', 'reviewer-book-mirasim.md');
 const LIB_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 
 function wt(partial) {
@@ -382,7 +382,8 @@ describe('archive-exec', () => {
   it('⑥ 审官协议仍是可归档通知，不自己 rm', async (t) => {
     const reviewerSrc = fs.readFileSync(REVIEWER, 'utf8');
     await t.test('审官任务书仍是可归档通知，不自己 rm', () => {
-      assert.ok(/--subject "可归档：<PR号>"/.test(reviewerSrc) && /归档动作本身（worktree rm）由帅做/.test(reviewerSrc), '审官任务书仍是可归档通知，不自己 rm');
+      assert.match(reviewerSrc, /不许自己合/, '审官任务书不自己 rm');
+      assert.doesNotMatch(reviewerSrc, /worktree-rm/, '审官任务书不教 worktree-rm');
     });
   });
 

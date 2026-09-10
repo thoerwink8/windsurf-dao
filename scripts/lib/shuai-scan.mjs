@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { allChecksGreen } from './close-issue.mjs';
 import { inspectReadyQueue, isDeferredIssue } from './ready-queue-check.mjs';
-import { planRunGc, isLiveDispatch } from './run-lifecycle.mjs';
+import { isLiveDispatch } from './run-lifecycle.mjs';
 
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
 export const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
@@ -175,95 +175,12 @@ export function normalizeGithubLists({ issues, prs } = {}) {
   return { ok: true, issues, prs };
 }
 
-function unwrapOrcaList(json, key) {
-  const v = json?.result?.[key] ?? json?.[key];
-  return Array.isArray(v) ? v : null;
-}
-
 function parseWorkerAgeMinutes(worker) {
   const raw = worker?.updatedAt || worker?.updated_at;
   if (!raw) return null;
   const ms = Date.parse(String(raw).includes('T') ? raw : `${raw.replace(' ', 'T')}Z`);
   if (!Number.isFinite(ms)) return null;
   return (Date.now() - ms) / 60000;
-}
-
-function activeRunIds({ runs, workers, worktrees, terminals } = {}) {
-  const ids = new Set();
-  const plan = planRunGc({ runs, workers, worktrees });
-  if (plan.ok) {
-    for (const r of plan.keep) {
-      if (r && r.id) ids.add(r.id);
-    }
-  }
-  if (Array.isArray(terminals)) {
-    const onBoard = new Set(terminals.map((t) => t && t.handle).filter(Boolean));
-    for (const r of Array.isArray(runs) ? runs : []) {
-      if (!r || !r.id) continue;
-      if (r.legacy) continue;
-      if (r.coordinator_handle && onBoard.has(r.coordinator_handle)) ids.add(r.id);
-    }
-  }
-  return ids;
-}
-
-export function collectOrcaBoard({ runOrca } = {}) {
-  if (typeof runOrca !== 'function') {
-    return { ok: false, error: 'collectOrcaBoard 缺 runOrca——没扫成' };
-  }
-  const wt = runOrca(['worktree', 'ps', '--json']);
-  if (!wt.ok) return { ok: false, error: `worktree ps 没查成：${fmtOrcaErr(wt.error)}` };
-  const worktrees = unwrapOrcaList(wt.json, 'worktrees');
-  if (!worktrees) return { ok: false, error: 'worktree ps 没有 worktrees 数组——没扫成' };
-
-  const wl = runOrca(['orchestration', 'worker-list', '--json']);
-  if (!wl.ok) return { ok: false, error: `worker-list 没查成：${fmtOrcaErr(wl.error)}` };
-  const workers = unwrapOrcaList(wl.json, 'workers');
-  if (!workers) return { ok: false, error: 'worker-list 没有 workers 数组——没扫成' };
-
-  const rl = runOrca(['orchestration', 'run-list', '--json']);
-  if (!rl.ok) return { ok: false, error: `run-list 没查成：${fmtOrcaErr(rl.error)}` };
-  const runs = unwrapOrcaList(rl.json, 'runs');
-  if (!runs) return { ok: false, error: 'run-list 没有 runs 数组——没扫成' };
-
-  const tl = runOrca(['terminal', 'list', '--json']);
-  if (!tl.ok) return { ok: false, error: `terminal list 没查成：${fmtOrcaErr(tl.error)}` };
-  const terminals = unwrapOrcaList(tl.json, 'terminals') || [];
-
-  const inbox = runOrca(['orchestration', 'inbox', '--full', '--json']);
-  if (!inbox.ok) return { ok: false, error: `inbox 没查成：${fmtOrcaErr(inbox.error)}` };
-  const messages = inbox.json?.result?.messages;
-  if (!Array.isArray(messages)) return { ok: false, error: 'inbox 没有 result.messages 数组——没扫成' };
-
-  const plan = planRunGc({ runs, workers, worktrees });
-  if (!plan.ok) return { ok: false, error: plan.error || 'run-gc 计划没算成——没扫成' };
-
-  const active = activeRunIds({ runs, workers, worktrees, terminals });
-  const pendingInboxCount = messages.filter((m) => {
-    if (!m || !m.id) return false;
-    if (String(m.type || '').toLowerCase() === 'heartbeat') return false;
-    return m.run_id && active.has(m.run_id);
-  }).length;
-
-  return {
-    ok: true,
-    runs,
-    workers,
-    worktrees,
-    terminals,
-    messages,
-    plan,
-    pendingInboxCount,
-    activeRunCount: active.size,
-  };
-}
-
-function fmtOrcaErr(err) {
-  if (!err) return '未知';
-  if (typeof err === 'string') return err.slice(0, 160);
-  if (err.message) return String(err.message).slice(0, 160);
-  if (err.code) return String(err.code).slice(0, 160);
-  return JSON.stringify(err).slice(0, 160);
 }
 
 function ruleNumber(section, key, fallback) {

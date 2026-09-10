@@ -25,13 +25,12 @@ describe('#826 身份消息失败不整树回滚', () => {
   });
 
   it('古路（failCreated 因身份消息）已退役：create/attach/reuse 身份失败不再 rollback', () => {
-    assert.ok(/function deliverReviewerIdentity/.test(DAO_SRC), '身份投递走共享辅助');
+    assert.ok(!/function deliverReviewerIdentity/.test(DAO_SRC),
+      'orca 审官身份投递辅助已随执行体删');
     assert.ok(!/failCreated\([^)]*审官身份消息没送到/.test(DAO_SRC),
       'reviewer-create/attach 不得因身份消息 failCreated');
     assert.ok(!/复用审官身份消息没送到士兵/.test(DAO_SRC),
       'reuse 不得因身份消息整跳失败');
-    assert.ok(/identityFailed/.test(DAO_SRC) && /planIdentityKeep/.test(DAO_SRC),
-      '成功路径要带 identityFailed 红项');
   });
 });
 

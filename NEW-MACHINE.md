@@ -332,7 +332,11 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 '{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs   # 应出 deny JSON、exit 0
 ```
 
-## 9d. Linux 服务器起 Orca 无头运行时（2026-08-24 拍板）
+## 9d. Linux 服务器起 Orca 无头运行时（已退役，#1150）
+
+**Orca 执行体已退役（2026-09-08 拍板，#1150 收尾）。新机不要照本节装 orca-serve / AppImage。**
+现役执行体是 mirasim；服务账号仍是 linux 用户 `orca`（`User=orca` / `/home/orca` 不在退役范围）。
+下面是 2026-08-24 当时的装机记录，只作回滚对照，不是现役步骤。
 
 拍板见 `docs/decisions/2026-08-24-linux-server-runtime-from-zero.md`：运行时搬 Linux 服务器，Windows 本机转人工派单。**下面每条都在 Ubuntu 24.04.4 + glibc 2.39 上真跑过**（orca 1.4.188 / Electron 43.1.0，AppImage 196MB，ready 契约 4～10s 出）。官方文档：`stablyai/orca` 的 `docs/reference/headless-linux-server.md`。
 

@@ -535,15 +535,14 @@ describe('mirasim 会话发的是 mirasim 任务书（#884 P1，三轮）', () =
   // 「注入闸核对了目标任务书」的判别用例：两本书前缀差 8 字节（-mirasim），所以存在一段
   // spec 长度——按 orca 书量刚好不超、按 mirasim 书量已经超。闸不传 executor 就会放过它，
   // 然后渲染那一步（已传 executor）抛出来，把栈甩给公开 CLI。这条同时钉住「闸与渲染同一本书」。
-  it('注入闸按 mirasim 书量字节：orca 刚好不超、mirasim 已超的 spec 当场拒派', async () => {
+  it('注入闸只按 mirasim 书量字节：超限当场拒派', async () => {
     const { INJECT_MAX_BYTES, assertDispatchInjectPlan } = await T_LOAD;
-    const orcaPrefixBytes = Buffer.byteLength('读 host/skills/dispatch/templates/soldier-book.md spec=', 'utf8');
-    const spec = 'x'.repeat(INJECT_MAX_BYTES - orcaPrefixBytes);
-    // 先自证这条 spec 真的落在那段窗口里，否则本用例什么也没测。
-    assert.equal(assertDispatchInjectPlan({ spec }).ok, true, '按 orca 书量应刚好不超');
+    const prefixBytes = Buffer.byteLength('读 host/skills/dispatch/templates/soldier-book-mirasim.md spec=', 'utf8');
+    const spec = 'x'.repeat(INJECT_MAX_BYTES - prefixBytes + 1);
+    assert.equal(assertDispatchInjectPlan({ spec }).ok, false, '不传 executor 也按 mirasim 书量');
     assert.equal(
       assertDispatchInjectPlan({ spec, executor: 'mirasim' }).ok, false,
-      '按 mirasim 书量应已超——不超就说明窗口算错了，本用例失去判别力',
+      '按 mirasim 书量应已超',
     );
 
     const r = runDispatch(['--spec', spec]);
@@ -588,15 +587,7 @@ describe('mirasim 会话发的是 mirasim 任务书（#884 P1，三轮）', () =
         assert.match(c, /executor: 'mirasim'/, name + ' 有一处没传 executor，会落 orca 默认书: ' + c);
       }
     }
-    const orcaSegs = {
-      热路: seg('async function cmdDispatch(args) {', 'async function cmdDispatchExec('),
-      执行体: seg('async function runDispatchExecution(', 'function cmdDispatchBatch('),
-    };
-    for (const [name, body] of Object.entries(orcaSegs)) {
-      for (const c of body.match(CALL) || []) {
-        assert.doesNotMatch(c, /executor:/, 'orca ' + name + ' 被塞了 executor，默认路径就变了: ' + c);
-      }
-    }
+    assert.ok(!src.includes('async function runDispatchExecution('), 'orca 执行体 runDispatchExecution 必须已删');
   });
 
   // worker-start 侧的 --task 也不许静默丢（与 dispatch 共用同一处判据）。

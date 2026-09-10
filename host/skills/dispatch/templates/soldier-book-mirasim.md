@@ -3,7 +3,7 @@
 你是本单**实现工人**，跑在一条 **mirasim 会话**里（不是 orca 终端）。本文件是**闭环框架**——
 你的**具体职责以注入前言里的本单 spec 为准**。框架只定义 mirasim 会话里怎么开工、干完怎么交卷。
 
-> orca 版任务书在 `host/skills/dispatch/templates/soldier-book.md`。**本版专给 mirasim 执行体**：
+> orca 版任务书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以没有卡态切换、没有 orchestration
 > 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论、把审官待办入队，
 > **不做 notify 结算、不写卡备注**（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
@@ -63,10 +63,8 @@
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
    ```
 
-   **`--executor mirasim` 一个字都不能少**（2026-09-06 实咬）：`worker-done` 的分岔判据是
-   `args.executor && args.executor !== 'orca'`，不传就默认走 orca 那条脊——你人在 mirasim 会话里，
-   却被送回 orca 的交卷通道，起审官必然失败，而且**它会报退出码 0**，你看着像交卷成功了。
-   那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
+   **`--executor mirasim` 建议带上。** #1150 之后默认就是 mirasim；显式 `--executor orca`
+   当场拒。漏旗标不再会静默落到已删的 orca 脊。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
    命令只发完工评论并把审官待办入队，**不起审官会话**。指挥官按空位拉审官。交卷成功后本会话会被停掉（树留着）。不要 `notify --type worker_done`、不要取 Run id、不要写卡备注。

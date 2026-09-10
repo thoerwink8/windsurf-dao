@@ -64,7 +64,7 @@ function injection(promptText, state) {
   return mode(["hook"], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: promptText }), state });
 }
 
-describe('dao-mode', () => {
+describe('dao-mode', { concurrency: 1 }, () => {
   it('① 四种结局各自不同形（规格要的三形 + 「读坏了」单列）', async (t) => {
     // ③ 文件压根不在
     const absent = injection("随便一句", path.join(SANDBOX, "不存在.json"));

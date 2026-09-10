@@ -23,7 +23,6 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from '
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { shouldAskExit, EXIT_DEFAULTS } from './should-ask-exit.mjs';
 
 // ── 落点 ────────────────────────────────────────────────────────────
@@ -110,53 +109,9 @@ function blank(mode) {
   };
 }
 
-// ── Orca 态标（给用户看的那一半）─────────────────────────────────────
-// 非 Orca 环境（或 orca 命令不在）必须静默降级：只写 state.json，不报错、不非零退出。
-
-const BADGE_RE = /^\[(?:专注|值守)[^\]]*\]\s*/;
-
-function orcaBadge(doc) {
-  if (doc.mode === 'focus') return `[专注 ${doc.focus?.what || '?'}] `;
-  if (doc.mode === 'standby') return `[值守${doc.focus?.what ? ' ' + doc.focus.what : ''}] `;
-  return '';
-}
-
-/**
- * 跑一次 orca。先按精确文件名 spawn（不过 shell，参数里的中文/分号不会被 shell 再解析一次），
- * 只有找不到可执行文件时才退到 shell 里试一次——那条路径把参数拼进单条命令，
- * 避免 Node 对「shell:true + args 数组」的弃用告警污染输出。
- *
- * 本文件作为 Claude 插件分发（CLAUDE_PLUGIN_ROOT 场景仓外没有 scripts/lib），必须自包含，
- * 不能 import 仓内共享实现。唯一真源是 scripts/lib/orca-run.mjs 的 runOrcaRaw——
- * 改 spawn 行为（timeout/回落）先改那边，再把本拷贝对齐。#807 曾删掉 windowsHide——本 hook 每轮
- * 对话都跑，Windows 上就是每轮闪一个控制台窗（2026-09-05 用户实报）；非 Windows 上它是 no-op。
- */
-function runOrca(args) {
-  const direct = spawnSync('orca', args, { encoding: 'utf8', timeout: 20000, windowsHide: true });
-  if (!direct.error) return direct;
-  const line = ['orca', ...args.map(a => `"${String(a).replace(/"/g, '\\"')}"`)].join(' ');
-  return spawnSync(line, { encoding: 'utf8', shell: true, timeout: 20000, windowsHide: true });
-}
-
-/** 返回一行人话，说明态标打上了还是跳过了、为什么。 */
-function applyOrcaBadge(doc) {
-  if (process.env.DAO_NO_ORCA === '1') return 'orca 态标：跳过（DAO_NO_ORCA=1）';
-  const show = runOrca(['worktree', 'show', '--worktree', 'active', '--json']);
-  if (show.error || show.status !== 0) {
-    return `orca 态标：跳过（非 Orca 环境或命令不可用：${show.error?.code || `exit ${show.status}`}）`;
-  }
-  let comment = '';
-  try {
-    comment = JSON.parse(show.stdout)?.result?.worktree?.comment || '';
-  } catch {
-    return 'orca 态标：跳过（worktree show 输出不是 JSON）';
-  }
-  const next = orcaBadge(doc) + comment.replace(BADGE_RE, '');
-  const set = runOrca(['worktree', 'set', '--worktree', 'active', '--comment', next, '--json']);
-  if (set.error || set.status !== 0) {
-    return `orca 态标：写不进（${set.error?.code || `exit ${set.status}`}），state.json 已写`;
-  }
-  return `orca 态标：已打「${next.slice(0, 40) || '(已清空)'}」`;
+/** 返回一行人话。orca 卡 comment 态标已随执行体退役。 */
+function applyOrcaBadge() {
+  return 'orca 态标：跳过（orca 执行体已退役）';
 }
 
 // ── 注入文本（承重墙）────────────────────────────────────────────────

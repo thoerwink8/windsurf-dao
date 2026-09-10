@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const INV = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-inventory.mjs').replace(/\\/g, '/'));
 const PREFIX = 'Environment=PATH=';
 
-/** 这份 unit 文本跑起来找不找得到 orca / hub-say。回 {ok, why}——不合格时 why 要说清缺什么。 */
+/** 这份 unit 文本跑起来找不找得到 local-bin / hub-say。回 {ok, why}——不合格时 why 要说清缺什么。 */
 function pathVerdict(text, toolDirs) {
   const line = String(text).split(/\r?\n/).find((l) => l.startsWith(PREFIX));
   if (!line) return { ok: false, why: `没有 ${PREFIX} 那一行` };
@@ -22,7 +22,7 @@ function pathVerdict(text, toolDirs) {
 }
 
 describe('指挥官 systemd 单元模板（#848）', () => {
-  it('两个 service 都带 PATH，且 orca / hub-say 的目录都在里面', async () => {
+  it('两个 service 都带 PATH，且 local-bin / hub-say 的目录都在里面', async () => {
     const { INSTALL_FILES, UNIT_TOOL_DIRS } = await INV;
     const services = Object.entries(INSTALL_FILES()).filter(([p]) => p.endsWith('.service'));
     assert.equal(services.length, 2, '应生成 act + inventory 两个 service：' + services.map(([p]) => p).join(','));
@@ -46,8 +46,8 @@ describe('指挥官 systemd 单元模板（#848）', () => {
 
     const half = before.replace('ExecStart=', `${PREFIX}/usr/local/bin:/usr/bin:/bin\nExecStart=`);
     const hv = pathVerdict(half, UNIT_TOOL_DIRS);
-    assert.equal(hv.ok, false, '有 PATH 不等于找得到 orca');
-    assert.match(hv.why, /orca/);
+    assert.equal(hv.ok, false, '有 PATH 不等于找得到 local-bin');
+    assert.match(hv.why, /local-bin/);
   });
 
   it('UNIT_PATH 与手写单元同一份值（换机改一处不许漏另一处）', async () => {
