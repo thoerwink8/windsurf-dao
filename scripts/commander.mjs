@@ -353,8 +353,17 @@ function scanAdmission({ worktrees, policy } = {}) {
   if (memRaw && memRaw.error) {
     return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
   }
-  if (loadRaw && loadRaw.error) {
-    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  // CPU 占用率要**两帧差**（/proc/stat 的计数是开机以来的累计值，单帧读不出「现在多忙」）。
+  // 窗口 100ms：比一次调度抖动长、比一轮决定短；这段里 worker 在等模型回话也照实反映成低占用，
+  // 正是我们要的（等 IO 不吃 CPU，不该被当成机器忙）。
+  const statBefore = readText('/proc/stat');
+  sleepSync(100);
+  const statAfter = readText('/proc/stat');
+  if (statBefore && statBefore.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `CPU 计数读不出来：${statBefore.error}` };
+  }
+  if (statAfter && statAfter.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `CPU 计数读不出来：${statAfter.error}` };
   }
   const nproc = cpus()?.length;
   const inflight = countInflightWorkers({ worktrees });
@@ -364,6 +373,8 @@ function scanAdmission({ worktrees, policy } = {}) {
   const samples = loadAdmissionSamples();
   const cap = admitCapacity({
     meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    statBeforeText: typeof statBefore === 'string' ? statBefore : '',
+    statAfterText: typeof statAfter === 'string' ? statAfter : '',
     loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
     nproc,
     inFlight: inflight.count,
@@ -375,6 +386,7 @@ function scanAdmission({ worktrees, policy } = {}) {
       at: nowIso(),
       inFlight: inflight.count,
       memAvailableMb: cap.memAvailableMb,
+      cpuBusy: cap.cpuBusy,
       loadNorm: cap.loadNorm,
     });
   }
