@@ -1300,6 +1300,7 @@ function collectCandidates(situation) {
     stops.push(withNeeds({
       kind: 'stop-session',
       sessionKey: String(key),
+      workdir: s.cwd || s.workdir || s.worktree || null,
       why: '一轮说完，会话不常驻',
     }, ACTION_NEEDS['stop-session']));
   }

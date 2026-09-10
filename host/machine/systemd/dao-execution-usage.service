@@ -1,0 +1,28 @@
+# Install with sudo bash scripts/install-execution-usage.sh after integration.
+[Unit]
+Description=Unified local execution usage collector
+Requires=dao-execution-usage-export.service
+After=dao-execution-usage-export.service network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=HOME=/home/orca
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=GH_CONFIG_DIR=/var/empty
+# Local collection needs no credentials. Cursor's read-only account sampler reads
+# its existing orca OAuth auth file; credentials are never copied into records.
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY XAI_API_KEY CURSOR_API_KEY DEVIN_API_KEY WINDSURF_API_KEY
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/execution-usage.mjs --collect --sync-cursor-account --inbox /var/lib/dao-execution-usage/root-inbox --json
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/orca/.dao/execution/usage
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=90
+StandardOutput=journal
+StandardError=journal
+# Exit 2 is an explicit collection gap; leave it visible as failed.

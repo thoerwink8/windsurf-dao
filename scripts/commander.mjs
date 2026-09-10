@@ -54,6 +54,7 @@ import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
 import { availabilityFor, loadBreaker } from './lib/provider-health.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
@@ -226,7 +227,7 @@ function scanOrca() {
  * 不许把合并/叫审官整轮停掉。
  */
 function scanSessions() {
-  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  const script = process.env.DAO_EXECUTION_LS || process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'execution-sessions.mjs');
   if (!existsSync(script)) {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
@@ -493,10 +494,17 @@ function orcaErr(err) {
 function loadHealthRedIds(models) {
   if (!Array.isArray(models) || models.length === 0) return [];
   try {
-    const r = availabilityFor(models);
-    return Object.entries(r.availability || {})
+    const profiles = loadExecutionProfiles();
+    const mapped = new Map(profiles.flatMap(p => [p.id, ...(p.defaultForModels || [])].map(id => [id, p])));
+    // A retired gateway probe cannot veto a qualified native/relay profile.
+    const r = availabilityFor(models.filter(m => !mapped.has(m.id)));
+    const profileRed = models.filter(m => mapped.has(m.id)).filter(m => {
+      const p = mapped.get(m.id);
+      return p.enabled !== true || (p.availability?.status || p.availability) !== 'available';
+    }).map(m => m.id);
+    return profileRed.concat(Object.entries(r.availability || {})
       .filter(([, v]) => v === 'red')
-      .map(([id]) => id);
+      .map(([id]) => id));
   } catch {
     return [];
   }
@@ -691,7 +699,8 @@ function execAction(action, { state, dryRun, log }) {
         return { ok: false, error: 'stop-session 没有 sessionKey' };
       }
       return runOrShow(
-        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
+        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey),
+          ...(action.workdir ? ['--worktree', String(action.workdir)] : [])],
         { dryRun, say, why: action.why },
       );
     }

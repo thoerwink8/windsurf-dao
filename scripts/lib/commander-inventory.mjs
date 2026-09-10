@@ -19,8 +19,11 @@
 
 import { existsSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
+import { probeVersionDrift } from './mirasim-runtime.mjs';
+import { classifyTimerArmed } from './timer-armed.mjs';
 import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
@@ -96,29 +99,63 @@ function checkTerminalVsAgents({ runOrca, ROOT }) {
   return { state: 'ok', detail: `终端 ${terminals.length} / live agent ${liveAgents}（对得上）`, key: 'term-vs-agent' };
 }
 
-// 3. timer 失效：指挥官两个 timer + 探针 timer 应 enabled。
+// 3. timer 失效：指挥官两个 timer 应在册、enabled，且**真的还会响**。
+//
+// 只看 `is-enabled` 是不够的（收件箱 2026-09-10「指挥官 timer 停了自检仍绿」实咬）：
+// commander-act.timer 从 09-09 22:58 起 enabled + inactive(dead)、NEXT=-，
+// 而这里回「✓ 齐（…enabled）」——自动派单实际停了 7 小时，眼睛报平安。enabled 说的是
+// 「开机时会拉起」，和「此刻会不会响」是两件事。补两个观测：ActiveState/SubState 与 NEXT。
+// 判 active 的 timer：NextElapse 为空是**正常**的（前一响的服务还在跑，systemd 等它结束
+// 才排下一次）——那种情形 SubState=running；空 Next + dead 才是真停。
+// 纯判据在 lib/timer-armed.mjs，这里只取数。
 function checkTimers() {
   if (!isLinux()) return { state: 'unknown', detail: '本平台无 systemd，探不到 timer', key: 'timers' };
   const want = ['commander-act.timer', 'commander-inventory.timer'];
-  const bad = [];
+  const samples = [];
   for (const t of want) {
-    const r = sh('systemctl', ['is-enabled', t]);
+    const r = sh('systemctl', ['show', t, '-p', 'ActiveState', '-p', 'SubState', '-p', 'UnitFileState',
+      '-p', 'NextElapseUSecRealtime', '-p', 'LastTriggerUSec']);
+    // `systemctl show` 按它自己的属性顺序输出（不是命令行顺序）——按键取，不按下标。
     if (!r.ok) return { state: 'unknown', detail: `systemctl 探不到：${r.error}`, key: 'timers' };
-    const st = r.out.trim();
-    if (st !== 'enabled') bad.push(`${t}=${st || 'unknown'}`);
+    const kv = new Map(String(r.out || '').split(/\r?\n/).map((l) => {
+      const i = l.indexOf('=');
+      return i === -1 ? null : [l.slice(0, i), l.slice(i + 1).trim()];
+    }).filter(Boolean));
+    samples.push({
+      unit: t,
+      isEnabled: kv.get('UnitFileState') || '',
+      activeState: kv.get('ActiveState') || '',
+      subState: kv.get('SubState') || '',
+      next: kv.get('NextElapseUSecRealtime') ?? '',
+      last: kv.get('LastTriggerUSec') || '',
+    });
   }
-  if (bad.length) {
-    return {
-      state: 'red', key: 'timers',
-      detail: `指挥官 timer 未 enabled：${bad.join('、')}——node scripts/commander.mjs install`,
+  const verdict = classifyTimerArmed({ probed: true, timers: samples });
+  if (verdict.state === 'ok') return { state: 'ok', detail: verdict.detail, key: 'timers' };
+  return {
+    state: verdict.state, key: 'timers', detail: verdict.detail,
+    ...(verdict.state === 'red' ? {
       plain: {
-        what: `指挥官的定时任务有 ${bad.length} 个是关着的${bad.some((b) => b.startsWith('commander-act')) ? '（含自动派单）' : ''}`,
-        impact: '关着期间新单不会自动派出去，只能人手动派',
-        plan: '如果是我们故意关的（修东西期间）就不用管；不是的话我开单请你放行重开',
+        what: `指挥官的定时任务有问题：${verdict.bad.map((b) => b.why).join('、')}`,
+        impact: '定时那 20 分钟一轮的自动派单/合并不会自己跑，只能人手动触发',
+        plan: '如果是我们故意停的（修东西期间）就不用管；不是的话我重开一次再验一遍',
       },
-    };
+    } : {}),
+  };
+}
+
+// 3.5 升级换没换干净：升级器 promote 出来的版本 vs 在役进程自报的版本。
+// 契约断言两边都读服务端，天生看不见「盘上换了、进程没换」这层错位（2026-09-10 的镜像面）。
+// 判官与只读探测都在 lib/mirasim-runtime.mjs，这里只管取数与翻译成巡检三态。
+async function checkVersionDrift({ homeDir } = {}) {
+  const key = 'mirasim-version';
+  if (!isLinux()) return { state: 'unknown', key, detail: '本平台无 systemd/回环服务端，探不到在役版本' };
+  try {
+    // 只读：读 current/VERSION + 连上问一句 state 就关，绝不建树、不写盘（眼睛不许有副作用）。
+    return await probeVersionDrift({ homeDir: homeDir || homedir(), service: 'mirasim-server.service' });
+  } catch (e) {
+    return { state: 'unknown', key, detail: `升级版本探不到：${fmt((e && e.message) || e)}——没查成，不是一致` };
   }
-  return { state: 'ok', detail: `指挥官 timer 齐（${want.join('、')} enabled）`, key: 'timers' };
 }
 
 // 4. 探针 journal 连红：gw-remote-probe 最近若干次全失败。
@@ -270,18 +307,24 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }) {
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
+  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
+}
+
+async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
     checkOrphanDeletedCwd(),
     checkTerminalVsAgents({ runOrca, ROOT }),
     checkTimers(),
+    // 升级换没换干净要看回环服务端自报，是异步的——单独 await，不塞进上面的同步数组。
+    await versionDrift(),
     checkProbeJournal(),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
     // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
-    // #1004 删掉 stale-pr 后这里一共 7 项。
+    // #1004 删掉 stale-pr 后这里一共 8 项（2026-09-10 加「升级换没换干净」）。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];
