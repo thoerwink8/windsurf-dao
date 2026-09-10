@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { dispatchQueueDir } from '../dispatch-queue.mjs';
+import { EXECUTION_FINISHED, EXECUTION_RESERVED } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
@@ -302,7 +303,33 @@ export function planReviewAdmission({ tickets, liveReviewers, cap = DEFAULT_REVI
 }
 
 // 终态：到了这几个就不占并发位了。注意 done 也在里面——审官那一针跑完就不再占上游。
-const REVIEWER_DONE_PHASES = new Set(['done', 'complete', 'completed', 'error', 'failed', 'aborted', 'cancelled', 'canceled']);
+//
+// 2026-09-11：从手打清单换成 execution-states 的正典（同一晚第 4 处手打副本）。
+// 手打那份漏了 `stopped` / `incomplete` / `gone` / `rejected` 等仓里公认的终态，
+// 实测 29 条残留里只有 1 条 stopped 被算成终态，其余全被当成「在役」——
+// 「在役 19 个」永久压着上限 3，复审票一张也拉不动。
+const REVIEWER_DONE_PHASES = EXECUTION_FINISHED;
+
+/**
+ * 中间态（stopping / pending / uncertain）什么时候不再占位。
+ *
+ * 不能像终态那样直接放行：中间态是「收尾走了一半」，可能真在收。
+ * 但也不能永远占位——同一晚实测 4 条 stopping 挂在 23–31 分钟前、对应树**零进程**，
+ * 却把上限 3 吃满，队列一张都拉不动。
+ *
+ * 所以按 lease-gc 同一套纪律：**过宽限 + 名单里没有活会话**才不算在役。
+ * 宽限内一律保留（审官可能正在收尾）。判据与「死人占树」那三层同源。
+ */
+const REVIEWER_RESERVED_GRACE_MIN = 15;
+
+function occupiesReviewerSlot({ phase, updatedAt, now }) {
+  if (REVIEWER_DONE_PHASES.has(phase)) return false;
+  if (!EXECUTION_RESERVED.has(phase)) return true;   // 真在跑：占位
+  const at = Number(updatedAt);
+  if (!Number.isFinite(at) || at <= 0) return true;  // 时间读不到 → 不猜，占位（fail-closed）
+  const ageMin = (now - at) / 60000;
+  return ageMin < REVIEWER_RESERVED_GRACE_MIN;       // 宽限内算在收尾；过点就算挂了
+}
 
 /**
  * 数「现在有几个审官真在跑」。纯判据：会话名单由调用方一次读进来，本函数不碰 IO。
@@ -328,8 +355,18 @@ export function countLiveReviewers({ records, sessions } = {}) {
     if (!key) continue;
     const s = byKey.get(key);
     if (!s) continue;                                   // 名单里没有 = 已经不在了
-    const phase = typeof s.runState === 'string' ? s.runState.trim().toLowerCase() : '';
-    if (REVIEWER_DONE_PHASES.has(phase)) continue;      // 终态不占位
+    // 2026-09-11 实咬：这里原来只读 `s.runState`，而执行运行时给的会话名单里
+    // **根本没有 runState 这个字段**（字段是 state/phase，见 mirasim-runtime 的
+    // listSessions 行）。于是 phase 恒为空串 → 永远命不中终态 →
+    // **每一条登记记录都被算成「在役审官」**，实测 29 条登记数出 28 个在役，
+    // 上限 3 永久吃满，复审票一张都拉不动（held 恒 4）。
+    // 现场：7 张 PR 卡在「当前 head 零判定」，复审票在队列里躺了 5 轮。
+    //
+    // 仓里别处早就这么兜底了（commander-core `s.state || s.runState || s.driverState`、
+    // execution-runtime `hit.runState || hit.phase`），只有这一处漏了。
+    const raw = s.runState ?? s.state ?? s.phase ?? s.driverState;
+    const phase = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (!occupiesReviewerSlot({ phase, updatedAt: s.updatedAt, now: Date.now() })) continue;
     // 带死因的那一针已经废了（#1121 同一判据），也不占位——否则残壳会把上限吃满，
     // 队列永远拉不动，看起来像「一直满载」其实一个都没在跑。
     // 只认「死因」字样，不把任意非空 runDetail 当死——预览/进度字也会写进这一格。
