@@ -1800,6 +1800,7 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
+checkLegCaps();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
@@ -2286,6 +2287,55 @@ function checkLegsLive() {
   const n = nPlusOneReport(doc);
   const warn = [...c.warnings, ...n.exposures];
   green(`腿表 ${doc.腿.length} 条四轴合法、与职责树互证${warn.length ? `；单轴裸奔 ${n.exposures.length} 处（只报不拦，补腿归 #880 卡 H/B）` : ''}`);
+}
+
+// #1145 渠道并发上限字段：在役腿的 `并发上限`。
+// **待填不红**（它是故意未配置，且已按保守值 CONSERVATIVE_CAP 收紧，见 channel-concurrency.mjs），
+// 但必须**显式列出来**——闸对待填渠道按保守值判满，盘面看不见就没人去填真数。
+// **腿节形状坏了才红**（那是没查成，不是「扫完是 0」）。
+function checkLegCaps() {
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+  } catch (e) {
+    fail('并发上限没查成', '选型 JSON 读失败', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  let validateLegCaps;
+  try {
+    ({ validateLegCaps } = require('./lib/channel-concurrency.mjs'));
+  } catch (e) {
+    fail('并发上限校验器加载失败', '修 scripts/lib/channel-concurrency.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  const v = validateLegCaps(doc && doc.腿);
+  if (!v.ok) {
+    fail('并发上限没查成', '§#1145：腿节必须是数组；补 腿 节', v.error || ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.inService === 0) {
+    // 「扫完 0 条在役腿」与「没查成」分得开：这里是查成了但一条在役腿都没有，
+    // 那样本身就没有判别力（闸没有任何腿可判），按没查成报。
+    fail('并发上限失去判别力', '一条在役腿都没扫到 ⇒ 本次等于没查；确认腿节 状态=在役 的条目', ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.bad.length) {
+    fail(
+      `并发上限有 ${v.bad.length} 条脏值`,
+      '并发上限只许正整数 / "不限" / null（待填）；0、负数、杂串都不是合法上限',
+      v.bad.map((b) => `${b.id}=${JSON.stringify(b.value)}`).slice(0, 6).join(' '),
+    );
+    return;
+  }
+  if (v.pending.length) {
+    // 走 notes 而不是只 green：greens 只在**全绿那一支**才打印（见文件末尾的输出段），
+    // 一旦盘面有红项，绿行整批不显示——待填清单就此隐形，没人会去填真数。
+    // notes 的「见」行两支都打，这条清单才真的看得见。
+    notes.push(`并发上限待填 ${v.pending.length} 条（已按保守值 ${v.conservativeCap} 收紧，**不是**放行）：${v.pending.map((p) => p.id).slice(0, 8).join('、')}${v.pending.length > 8 ? ' …' : ''}\n    填法：docs/model-routing.json 腿节该条的「并发上限」写实测并发数（已验证不限写 "不限"）`);
+    green(`并发上限：在役 ${v.inService} 条腿字段齐（待填 ${v.pending.length} 条按保守值 ${v.conservativeCap} 收紧）`);
+    return;
+  }
+  green(`并发上限：在役 ${v.inService} 条腿全部填实（无待填）`);
 }
 
 function checkVendorGateSamples() {
