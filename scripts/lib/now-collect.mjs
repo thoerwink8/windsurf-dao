@@ -71,7 +71,7 @@ function parseJson(text, what) {
 
 // ── open PR ─────────────────────────────────────────────────────────────────
 
-const PR_FIELDS = 'number,title,isDraft,reviewDecision,headRefOid,headRefName,mergeable,updatedAt,labels';
+const PR_FIELDS = 'number,title,isDraft,reviewDecision,headRefOid,headRefName,mergeable,createdAt,updatedAt,labels';
 
 export async function fetchOpenPrs({ cwd, limit = 60 } = {}) {
   const r = await run('gh', ['pr', 'list', '--state', 'open', '--limit', String(limit), '--json', PR_FIELDS], { cwd });
@@ -147,7 +147,7 @@ export async function fetchMerged({ cwd, windowHours = 6, limit = 30 } = {}) {
 // ── open issue ──────────────────────────────────────────────────────────────
 
 export async function fetchIssues({ cwd, limit = 60 } = {}) {
-  const r = await run('gh', ['issue', 'list', '--state', 'open', '--limit', String(limit), '--json', 'number,title,labels,updatedAt'], { cwd });
+  const r = await run('gh', ['issue', 'list', '--state', 'open', '--limit', String(limit), '--json', 'number,title,labels,createdAt,updatedAt'], { cwd });
   if (!r.ok) return { scanned: false, error: r.error };
   const p = parseJson(r.out, 'gh issue list');
   if (!p.ok) return { scanned: false, error: p.error };
