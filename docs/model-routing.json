@@ -671,6 +671,11 @@
           "agent": "pi",
           "mode": "direct",
           "理由": "pi 烧网关池，保 pqgpt 主路"
+        },
+        "grok": {
+          "agent": "grok",
+          "腿": "local",
+          "理由": "原生 Grok，由统一 profile 验证后启用"
         }
       },
       "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",

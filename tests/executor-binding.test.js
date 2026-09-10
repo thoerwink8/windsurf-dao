@@ -363,13 +363,18 @@ describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
     );
   });
 
-  it('策略没写钉版本 → 落库内默认，不落 null/undefined（否则契约断言判不了版本）', async () => {
+  // 2026-09-10 机制改造后语义：策略没写 = 跟随本机在役版本（由 execution-runtime 读
+  // mirasim-server/current/VERSION）。所以最终落到的**不是** null，而是真在役版本号——
+  // 旧断言钉的是「落库内常量」，那个常量已删。判别点保住：必须落一个合法版本号，
+  // 不许是 null/undefined（否则契约断言判不了版本）。
+  it('策略没写钉版本 → 跟随本机在役版本，落一个合法版本号而非 null/undefined', async () => {
     const S = await import(LIB);
-    const RT = await import(RUNTIME_LIB);
     const p = S.readExecutorPolicy(policyDoc({ 钉版本: undefined }));
-    assert.equal(p.mirasim.pinnedVersion, null, '策略没写就是 null，本层不替它编一个');
+    assert.equal(p.mirasim.pinnedVersion, null, '策略层没写就是 null，本层不替它编一个');
     const b = S.bindExecutor({ executor: 'mirasim', policy: p });
-    assert.equal(b.runtime.config.pinnedVersion, RT.PINNED_VERSION);
+    const got = b.runtime.config.pinnedVersion;
+    assert.ok(got != null, '落成了 null/undefined —— 契约断言判不了版本');
+    assert.match(String(got), /^\d+\.\d+\.\d+/, `落到的应该是合法版本号，实际 ${got}`);
   });
 
   it('注入了 runtime 时用注入的那个，不被策略覆写（测试与调用方能自己接线）', async () => {
@@ -393,7 +398,12 @@ describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
     assert.equal(p.mirasim.pinnedVersion, null,
       '真表又钉了手打版本——升级到下一版时它必然过期拒派（2026-09-10 的 96 条实咬）；要冻结版本请走排查流程并写明回收时间');
     const b = S.bindExecutor({ executor: 'mirasim', policy: p });
-    assert.equal(b.runtime.config.pinnedVersion, null, '留空要一路传成 null（跟随），不许中途被兜底成手打常量');
+    // 留空 = 跟随：runtime 最终拿到的是本机在役版本号（execution-runtime 读 bundle 的 VERSION），
+    // 不是 null、更不是某个手打常量。判别点：它必须等于本机真值。
+    const { installedVersion } = await import(RUNTIME_LIB);
+    const real = installedVersion(require('node:os').homedir());
+    assert.equal(b.runtime.config.pinnedVersion, real,
+      `留空要跟随本机在役版本（期望 ${real}），不许中途被兜底成手打常量`);
   });
 });
 

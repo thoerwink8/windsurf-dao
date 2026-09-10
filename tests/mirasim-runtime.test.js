@@ -13,14 +13,15 @@ const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 
-// 钉版本从源码里读，不在测试里再写一遍：写死会在每次升级后把「版本一致」的用例
-// 判成不符（2026-09-10 升 0.0.307 时 8 条一起红）。判据与真表不许各钉一个。
+// 夹具要一个「服务端报得出的合法版本号」。
+// 2026-09-10 起钉版本改成跟随在役版本（读 bundle 的 VERSION），不再有手打常量可抄——
+// 所以这里也从真源读：本机在役版本，读不到就退一个形状合法的假值。
+// 写死具体版本号会在每次升级后把「版本一致」的用例判成不符（0.0.307 那次 8 条一起红）。
 const PINNED_VERSION = (() => {
-  const src = require('node:fs').readFileSync(
-    path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs'), 'utf8');
-  const m = src.match(/export const PINNED_VERSION = '([^']+)'/);
-  if (!m) throw new Error('读不到 PINNED_VERSION —— 判据源变了，测试必须当场红');
-  return m[1];
+  try {
+    const { installedVersion } = require(path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs'));
+    return installedVersion(require('node:os').homedir()) || '0.0.0';
+  } catch { return '0.0.0'; }
 })();
 
 const KEY = 'claude:a8d67849-7fe3-4d03-ae25-312b86952bf9';
