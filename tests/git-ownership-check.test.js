@@ -1,4 +1,4 @@
-// .git 属主一致性闸（dao-check ㉞，issue #1149）
+// .git 属主一致性闸（dao-check ㉟，issue #1149）
 //
 // 验 scripts/lib/git-ownership-check.mjs：
 //   故意构造 root 属主文件 → 红且点名文件；

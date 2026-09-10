@@ -1,4 +1,4 @@
-// dao-check ㉞：在管仓 .git 属主一致性（issue #1149）。
+// dao-check ㉟：在管仓 .git 属主一致性（issue #1149）。
 //
 // 病：以 root 跑 git（fetch/worktree/检查器）会在 orca 属主的仓 `.git` 里留下
 // root 属主对象，之后以互不相像的面目失败。2026-09-08 一天两咬：

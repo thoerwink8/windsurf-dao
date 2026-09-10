@@ -93,7 +93,15 @@
 // ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
 //    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
 //    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
-// ㉞ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
+// ㉞ 合并闸形状（#999）：在管公开活仓该有 master 保护，形状必须是
+//    required=["check"]、enforce_admins=false、strict=false。扫描面从 INDEX E 类 /
+//    群映射 / 发布策略并出，不手写仓名单。live 只验本仓（别的公开仓如 miraquota-win
+//    刻意没装闸，扫进去会永远红）。live 打 GET branches/master（CI contents:read 够）；
+//    完整 /protection 要 Administration，CI/App 403 → SKIP 仍绿 = 闸不存在。
+//    缺 gh / 连摘要都 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
+//    strict 不在摘要里，live 盖不住「有人把 strict 拨成 true」——装闸脚本走完整 /protection。
+//    不造分发器：配置动作用 scripts/apply-branch-protection.mjs，一次一个仓。
+// ㉟ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
 //    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
 //    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
@@ -150,6 +158,10 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  inspectBranchProtectionFixtures, inspectThisRepoProtection,
+  collectManagedReposFromRoot, repoSlugFromRemote,
+} from './lib/branch-protection-check.mjs';
 import {
   classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, interpretFindRootOwned, DEFAULT_MANAGED_REPOS,
 } from './lib/git-ownership-check.mjs';
@@ -1858,6 +1870,7 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
+checkLegCaps();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
@@ -1888,6 +1901,9 @@ checkUnitRestartSamples();
 checkUnitRestartLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
+checkBranchProtectionSamples();
+checkBranchProtectionCatalog();
+checkBranchProtectionLive();
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -2012,6 +2028,96 @@ function checkMarshalSelfMergeLive() {
     return;
   }
   green(r.line);
+}
+
+function checkBranchProtectionSamples() {
+  const r = inspectBranchProtectionFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '合并闸形状样本没查成' : '合并闸形状样本对不上',
+      '恢复 tests/fixtures/branch-protection/{red,ok,empty}：红=缺保护/contexts 不对/enforce_admins:true/strict:true 必须拦、绿必须过、空=[] 没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`合并闸形状样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkBranchProtectionCatalog() {
+  const origin = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  const originSlug = origin.status === 0 ? repoSlugFromRemote(origin.stdout) : null;
+  const r = collectManagedReposFromRoot({
+    root: ROOT,
+    originSlug,
+    exists: (p) => existsSync(p),
+    readFile: (p) => readFileSync(p, 'utf8'),
+  });
+  if (r.unscanned) {
+    fail(
+      '合并闸扫描面没查成',
+      'INDEX E 类 / 群映射 / 发布策略 / origin 要扫得出在管仓；0 个 = 没查成，不是 0 个违规',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.slugs.length) {
+    fail('合并闸扫描面没查成', '扫出 0 个仓（没查成，不是 0 个违规）', '');
+    return;
+  }
+  green(`合并闸扫描面：${r.slugs.length} 个在管仓（不手写名单）`);
+}
+
+function checkBranchProtectionLive() {
+  const origin = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  if (origin.error && origin.error.code === 'ENOENT') {
+    skip('合并闸 live：git 不可用（ENOENT）——本次没查成，不是绿');
+    return;
+  }
+  const originSlug = origin.status === 0 ? repoSlugFromRemote(origin.stdout) : null;
+  if (!originSlug) {
+    fail(
+      '合并闸 live 没查成',
+      'git remote get-url origin 要能抽出 OWNER/REPO',
+      String(origin.stderr || origin.stdout || origin.error || '').trim().slice(0, 160),
+    );
+    return;
+  }
+  const r = inspectThisRepoProtection({
+    originSlug,
+    spawnGh: (args) => {
+      const g = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
+      return { error: g.error || null, status: g.status, stdout: g.stdout || '', stderr: g.stderr || '' };
+    },
+  });
+  if (r.skip) {
+    skip(`合并闸 live：${r.error || '缺 gh / 无权限'}——SKIP 不是绿`);
+    return;
+  }
+  if (r.unscanned) {
+    fail(
+      '合并闸 live 没查成',
+      'gh api repos/.../branches/master 要能跑（contents:read）；连摘要都读不到才是没查成',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `本仓 master 合并闸形状不对 ${(r.violations || []).length} 处`,
+      'required=["check"]、enforcement_level=non_admins（=enforce_admins:false）；装：node scripts/apply-branch-protection.mjs --repo OWNER/REPO',
+      (r.violations || []).map((v) => v.why).join('；'),
+    );
+    return;
+  }
+  green(`本仓 master 合并闸形状对（${originSlug}）`);
+
 }
 
 function checkReleasePolicySamples() {
@@ -2346,6 +2452,55 @@ function checkLegsLive() {
   const n = nPlusOneReport(doc);
   const warn = [...c.warnings, ...n.exposures];
   green(`腿表 ${doc.腿.length} 条四轴合法、与职责树互证${warn.length ? `；单轴裸奔 ${n.exposures.length} 处（只报不拦，补腿归 #880 卡 H/B）` : ''}`);
+}
+
+// #1145 渠道并发上限字段：在役腿的 `并发上限`。
+// **待填不红**（它是故意未配置，且已按保守值 CONSERVATIVE_CAP 收紧，见 channel-concurrency.mjs），
+// 但必须**显式列出来**——闸对待填渠道按保守值判满，盘面看不见就没人去填真数。
+// **腿节形状坏了才红**（那是没查成，不是「扫完是 0」）。
+function checkLegCaps() {
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+  } catch (e) {
+    fail('并发上限没查成', '选型 JSON 读失败', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  let validateLegCaps;
+  try {
+    ({ validateLegCaps } = require('./lib/channel-concurrency.mjs'));
+  } catch (e) {
+    fail('并发上限校验器加载失败', '修 scripts/lib/channel-concurrency.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  const v = validateLegCaps(doc && doc.腿);
+  if (!v.ok) {
+    fail('并发上限没查成', '§#1145：腿节必须是数组；补 腿 节', v.error || ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.inService === 0) {
+    // 「扫完 0 条在役腿」与「没查成」分得开：这里是查成了但一条在役腿都没有，
+    // 那样本身就没有判别力（闸没有任何腿可判），按没查成报。
+    fail('并发上限失去判别力', '一条在役腿都没扫到 ⇒ 本次等于没查；确认腿节 状态=在役 的条目', ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.bad.length) {
+    fail(
+      `并发上限有 ${v.bad.length} 条脏值`,
+      '并发上限只许正整数 / "不限" / null（待填）；0、负数、杂串都不是合法上限',
+      v.bad.map((b) => `${b.id}=${JSON.stringify(b.value)}`).slice(0, 6).join(' '),
+    );
+    return;
+  }
+  if (v.pending.length) {
+    // 走 notes 而不是只 green：greens 只在**全绿那一支**才打印（见文件末尾的输出段），
+    // 一旦盘面有红项，绿行整批不显示——待填清单就此隐形，没人会去填真数。
+    // notes 的「见」行两支都打，这条清单才真的看得见。
+    notes.push(`并发上限待填 ${v.pending.length} 条（已按保守值 ${v.conservativeCap} 收紧，**不是**放行）：${v.pending.map((p) => p.id).slice(0, 8).join('、')}${v.pending.length > 8 ? ' …' : ''}\n    填法：docs/model-routing.json 腿节该条的「并发上限」写实测并发数（已验证不限写 "不限"）`);
+    green(`并发上限：在役 ${v.inService} 条腿字段齐（待填 ${v.pending.length} 条按保守值 ${v.conservativeCap} 收紧）`);
+    return;
+  }
+  green(`并发上限：在役 ${v.inService} 条腿全部填实（无待填）`);
 }
 
 function checkVendorGateSamples() {
