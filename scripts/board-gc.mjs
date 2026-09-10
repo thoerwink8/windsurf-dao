@@ -19,7 +19,7 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths, descendantsOf } from './lib/board-gc.mjs';
@@ -33,6 +33,7 @@ import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs'
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { planSessionGc } from './lib/session-dir-gc.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -58,9 +59,22 @@ function run(cmd, args, { timeout = 60000 } = {}) {
   return { code: r.status, out: String(r.stdout || ''), err: String(r.stderr || ''), failed: !!r.error };
 }
 
-function listMirasimSessions() {
-  const root = process.env.BOARD_GC_SESSIONS
+/** 会话目录根。归档判决要按同一个根算路径，所以抽出来，不让两处各拼一次。 */
+function sessionsRoot() {
+  return process.env.BOARD_GC_SESSIONS
     || join(process.env.HOME || process.env.USERPROFILE || '', '.mirasim', 'sessions');
+}
+
+/** issue 表 → 已关闭编号的字符串集合（判据按字符串比，跟 refsOf 的产出对齐）。 */
+function closedRefsFrom(issueState) {
+  const out = new Set();
+  if (!issueState) return out;
+  for (const [num, state] of issueState) if (state === 'CLOSED') out.add(String(num));
+  return out;
+}
+
+function listMirasimSessions() {
+  const root = sessionsRoot();
   let agents;
   try {
     agents = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
@@ -428,6 +442,40 @@ function main() {
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);
     }
     final = applyBoardGcRemoves(final, results);
+
+    // 顺手把过期会话目录归档（#1176）。复用上面已经扫过的 sessions 与 alive——
+    // 会话名单那一趟本来就是全量遍历（2026-09-10 实测 60 条要 20 秒），
+    // 再单开一个定时器读第二遍等于把最慢的一步跑两次。
+    const gcPlan = planSessionGc({
+      sessions: progressed.sessions.map((s) => {
+        const [agent, ...rest] = String(s.id).split(':');
+        return {
+          id: rest.join(':'),
+          agent,
+          dir: join(sessionsRoot(), agent, rest.join(':')),
+          alive: alive.has(s.worktreeId) || assessLiveness(s, { thresholdMs }).state === 'active',
+          updatedAtMs: s.lastProgressAt == null ? NaN : s.lastProgressAt,
+          record: { workdir: s.worktreeId, title: s.label, preview: s.preview },
+        };
+      }),
+      closedRefs: issues == null ? new Set() : closedRefsFrom(issues),
+      boardScanned: issues != null,
+    });
+    if (gcPlan.state === 'ok' && gcPlan.remove.length) {
+      const archiveRoot = join(sessionsRoot(), '..', 'sessions-archive');
+      let archived = 0;
+      for (const s of gcPlan.remove) {
+        try {
+          const dest = join(archiveRoot, s.agent);
+          mkdirSync(dest, { recursive: true });
+          renameSync(s.dir, join(dest, s.id));
+          archived++;
+        } catch { /* 归档失败下一轮再来，不拦住本轮卡清理 */ }
+      }
+      if (archived) console.log(`会话目录归档 ${archived} 个（${gcPlan.detail}）`);
+    } else if (gcPlan.state === 'unknown') {
+      console.error(`会话目录没查成，本轮不归档：${gcPlan.detail}`);
+    }
   }
 
   if (args.json) { console.log(JSON.stringify(final, null, 2)); }
