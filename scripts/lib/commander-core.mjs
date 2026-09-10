@@ -48,6 +48,7 @@ import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
 } from './admission.mjs';
 import { classifyAsk } from './ask-gate.mjs';
+import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -155,6 +156,38 @@ export function assessDispatchModel(model, { policy, enabledIds, redIds } = {}) 
     return { ok: false, reason: 'model-health-red', why: `模型 ${id} 健康表红，不派` };
   }
   return { ok: true };
+}
+
+/**
+ * 审官顺位分流（#1145）：审官的 leg 不像工人那样被标签钉死（reviewer/ 是家族），
+ * 起会话时按审官顺位挑第一条**渠道没满、没熔断、本轮没 429** 的腿；都满 → 排队等下轮。
+ * 熔断/健康的逐位真探仍在 act 侧 preflightReviewer；本函数只加「渠道并发」这一层，
+ * 供审官选腿处按当前在途快照筛掉满员渠道（与 preflightReviewer 的顺位走法同源）。
+ *
+ * @param {object} situation  需含 reviewerOrder / routingModelRecords / channelCaps / channelInFlight / breaker / at
+ * @param {object} [opts]     { order 覆盖顺位, excluded 本轮 429 渠道集 }
+ * @returns pickLeg 的返回（{ok,picked,spilledFrom} | {ok:false,queued,tried,why}）
+ */
+export function chooseReviewerLeg(situation = {}, { order, excluded } = {}) {
+  const ord = Array.isArray(order) ? order : (Array.isArray(situation.reviewerOrder) ? situation.reviewerOrder : []);
+  const recs = Array.isArray(situation.routingModelRecords) ? situation.routingModelRecords : [];
+  const landingOf = (mid) => {
+    const m = recs.find((r) => r && String(r.id) === String(mid));
+    if (!m || !m.provider) return null;
+    return { provider: m.provider, cli_model: m.cli_model };
+  };
+  const chSnap = situation.channelCaps && typeof situation.channelCaps === 'object' ? situation.channelCaps : {};
+  const nowMs = Date.parse(situation.at || '') || 0;
+  return pickLeg({
+    order: ord,
+    landingOf,
+    caps: chSnap.caps || {},
+    states: chSnap.states || {},
+    inFlight: (situation.channelInFlight && situation.channelInFlight.counts) || {},
+    breaker: situation.breaker || null,
+    now: nowMs,
+    excluded,
+  });
 }
 
 /**
@@ -571,6 +604,46 @@ function collectCandidates(situation) {
   };
   const renamedHint = Array.isArray(policy.renamedKeyHints) && policy.renamedKeyHints[0]
     ? policy.renamedKeyHints[0] : null;
+
+  // ── 渠道并发第二道闸（#1145）──────────────────────────────────────────────
+  // 准入（admission）是总闸（机器余量）；这是叠加的渠道闸（上游合同容量）。两道都过才起会话。
+  // 缺 channelCaps 快照 = 老夹具/未接线：闸 inert，恒放行，不改既有派工路。
+  const chSnap = situation.channelCaps && typeof situation.channelCaps === 'object' ? situation.channelCaps : null;
+  const chCaps = (chSnap && chSnap.caps) || {};
+  const chStates = (chSnap && chSnap.states) || {};
+  let chInFlight = { ...((situation.channelInFlight && situation.channelInFlight.counts) || {}) };
+  const chBreaker = situation.breaker || null;
+  const chExcluded = situation.channelExcluded instanceof Set
+    ? situation.channelExcluded
+    : new Set(Array.isArray(situation.channelExcluded) ? situation.channelExcluded : []);
+  const modelRecs = Array.isArray(situation.routingModelRecords) ? situation.routingModelRecords : [];
+  const landingOfModel = (id) => {
+    const m = modelRecs.find((r) => r && String(r.id) === String(id));
+    if (!m || !m.provider) return null;
+    return { provider: m.provider, cli_model: m.cli_model };
+  };
+  // 工人的 model 由 issue 标签钉死（不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
+  // 认不出落地 → 本闸不拦（其它闸会挡）。返回 { ok, channel, why }。
+  const channelAdmits = (model) => {
+    if (!chSnap) return { ok: true, channel: null };
+    const landing = landingOfModel(model);
+    if (!landing) return { ok: true, channel: null };
+    const av = legAvailability(landing, {
+      caps: chCaps, states: chStates, inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+    });
+    return av.available
+      ? { ok: true, channel: av.channel }
+      : { ok: false, channel: av.channel, why: av.why, reason: av.reason };
+  };
+  const channelQueueReported = new Set();
+  const reportChannelQueue = (kind, admit) => {
+    const ch = admit.channel || '?';
+    if (channelQueueReported.has(ch)) return;
+    channelQueueReported.add(ch);
+    const what = admit.reason === 'breaker-open' ? '熔断冷却中' : admit.reason === 'excluded-429' ? '本轮已 429' : '已满员';
+    out.push(withNeeds(hub(`渠道 ${ch} ${what}，本轮不再往它派新会话（${admit.why || ''}）——票留队列等下轮`, 'decide'), kind));
+  };
+
   if (ready.kind === 'ready') {
     const readyIssues = ready.ready
       .map((n) => (gh.issues || []).find((i) => i && i.number === n))
@@ -605,11 +678,14 @@ function collectCandidates(situation) {
           issue: n,
         });
         if (live.live) continue;
+        const fwChannel = channelAdmits(model);
+        if (!fwChannel.ok) { reportChannelQueue(N.dispatch, fwChannel); continue; }
         if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
           reportAdmission(N.dispatch);
           continue;
         }
         dispatchedThisRound += 1;
+        chInFlight = takeChannelSlot(chInFlight, fwChannel.channel);
         out.push(withNeeds({
           kind: 'dispatch', issue: n, model, reviewer, role,
           title: issue?.title || '', mergePolicy: 'manual',
@@ -681,12 +757,16 @@ function collectCandidates(situation) {
         issue: n,
       });
       if (live.live) continue;
+      // 渠道并发第二道闸（#1145）：工人 model 由标签钉死，渠道满员/熔断时排队下轮，不擅自换模型。
+      const chAdmit = channelAdmits(model);
+      if (!chAdmit.ok) { reportChannelQueue(N.dispatch, chAdmit); continue; }
       // 新活只能用「留给收尾之后剩下的」那部分名额，且照样要从共用池里领一个。
       if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
         reportAdmission(N.dispatch);
         continue; // 余量用尽 / 没查成：排队下轮，不丢、不 escalate
       }
       dispatchedThisRound += 1;
+      chInFlight = takeChannelSlot(chInFlight, chAdmit.channel);
       if (renamedHint && dispatchedThisRound === 1) {
         out.push(withNeeds(hub(renamedHint, 'decide'), N.dispatch));
       }
