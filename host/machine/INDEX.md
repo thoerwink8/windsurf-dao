@@ -68,7 +68,8 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
-| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 钉死版本的安装根（`<版>/server.cjs`）。本仓 unit 只引用，不写装法 |
+| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
+| E | ~/mirasim-server/current | 归 `ai-gateway-stack`。在役版本软链。本仓 unit 只引用这一层，不钉具体版本号（#1151；2026-09-10 手打 0.0.282 会把生产从 current 拉回去） |
 | E | ~/mirasim-work | 归 `ai-gateway-stack`。mirasim-server `--workdir`（服务自己的工作区，不是派工树 `~/mirasim-worktrees`）。本仓不写装法 |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |

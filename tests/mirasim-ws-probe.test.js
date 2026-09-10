@@ -438,7 +438,10 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(s, /^TimeoutStopSec=10s$/m, 'SIGSTOP 挂起时 SIGTERM 进不去，要靠这一行 SIGKILL，否则探针 30s 超时自愈失败');
     assert.match(s, /^MemoryHigh=2\.5G$/m);
     assert.match(s, /^MemoryMax=4G$/m);
-    assert.match(s, /server\.cjs --port 4316/);
+    assert.match(s, /\/home\/orca\/mirasim-server\/current\/server\.cjs --port 4316/);
+    assert.match(s, /^WorkingDirectory=\/home\/orca\/mirasim-server\/current$/m);
+    assert.doesNotMatch(s, /mirasim-server\/\d+\.\d+\.\d+/,
+      'unit 钉具体版本号会在升级后把生产从 current 拉回去（2026-09-10 实咬）');
     assert.equal(fs.existsSync(path.join(UNIT_DIR, 'mirasim-server.service.d')), false,
       '垫片合进 unit 了，仓内不要再留一份 drop-in，⑳ 只比对 .service');
   });
@@ -454,6 +457,9 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(text, /mirasim-ws-probe\.timer/);
     assert.match(text, /memory-guard\.conf/);
     assert.match(text, /visudo/);
+    assert.match(text, /managed-update\.conf/,
+      '升级器 drop-in 不是本仓的，装机脚本必须写明不准删');
+    assert.doesNotMatch(text, /rm -f .*managed-update\.conf/);
   });
 
   it('sudoers 白名单写死 try-restart mirasim-server，不许通配、不许指家目录', () => {
@@ -475,6 +481,8 @@ describe('systemd 单元与装机脚本', () => {
     const index = fs.readFileSync(path.join(ROOT, 'host', 'machine', 'INDEX.md'), 'utf8');
     assert.match(index, /mirasim-ws-probe/);
     assert.match(index, /scripts\/mirasim-ws-probe\.mjs/);
+    assert.match(index, /~\/mirasim-server\/current/,
+      'unit 引用 current，闸按家目录下两段对账，INDEX 必须单独登记这一层');
   });
 });
 

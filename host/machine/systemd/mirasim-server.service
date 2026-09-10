@@ -1,8 +1,13 @@
 # /etc/systemd/system/mirasim-server.service
 #
-# 官方 mirasim-server（回环 ws，钉死版本）。执行体唯一起会话面（#880 / #1151）。
-# 二进制与工作目录归 ai-gateway-stack（~/.mirasim、~/mirasim-server/<版>），
+# 官方 mirasim-server（回环 ws）。执行体唯一起会话面（#880 / #1151）。
+# 二进制与工作目录归 ai-gateway-stack（~/.mirasim、~/mirasim-server/current），
 # 本仓只收这份 unit，结束手搓漂移——dao-sync 只拉代码不装单元，改了仓还得人装。
+#
+# 路径钉 current，不钉具体版本号（2026-09-10 实咬）：升级器自己换软链，
+# 手打 0.0.282 那种常量会在升级后把契约断言整晚打红。本仓 runtime 已改跟随
+# 在役版本；unit 若还写死旧目录，装机脚本会把生产从 current 拉回去。
+# 换机改家目录那一段，不要复制业务逻辑进 unit。
 #
 # MemoryHigh / MemoryMax 是 2026-09-08 的垫片：服务跑 4 天膨胀到 6.8G 后
 # ws 起会话面静默瘫痪。探活（mirasim-ws-probe）修发现面；本上限兜「真膨胀
@@ -10,15 +15,17 @@
 # 所以探活合入后垫片仍留。原先手搓在
 # /etc/systemd/system/mirasim-server.service.d/memory-guard.conf，合进本文件
 # 以免 ⑳ 只比对 .service、drop-in 继续漂。装机脚本会删那份 drop-in。
+# 升级器自己的 managed-update.conf（改 ExecStart 走 run-server.sh）不是本仓的，
+# 装机脚本不准删。
 #
 # User=orca 是硬要求。ExecStart 指家目录里的官方包，不是本仓脚本。
-# 换机改 WorkingDirectory / ExecStart 的版本路径，不要复制业务逻辑进 unit。
 #
 # 装（服务器）：sudo bash scripts/install-mirasim-ws-probe.sh
 # 验：systemctl is-active mirasim-server；systemctl show -p MemoryMax
+#     readlink -f /home/orca/mirasim-server/current 必须是一个版本目录
 
 [Unit]
-Description=Mirasim official remote server (v0.0.282 pinned; burns cloud quota via relay)
+Description=Mirasim official remote server (follows ~/mirasim-server/current; burns cloud quota via relay)
 After=network-online.target
 
 [Service]
@@ -28,8 +35,8 @@ Environment=MIRASIM_OPEN_BROWSER=0
 # #792：不继承个人 GH_TOKEN；服务端不写 Issue，但和其它单元同一把尺。
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 Environment=GH_CONFIG_DIR=/var/empty
-WorkingDirectory=/home/orca/mirasim-server/0.0.282
-ExecStart=/home/orca/mirasim-server/0.0.282/node /home/orca/mirasim-server/0.0.282/server.cjs --port 4316 --host 127.0.0.1 --no-open --workdir /home/orca/mirasim-work
+WorkingDirectory=/home/orca/mirasim-server/current
+ExecStart=/home/orca/mirasim-server/current/node /home/orca/mirasim-server/current/server.cjs --port 4316 --host 127.0.0.1 --no-open --workdir /home/orca/mirasim-work
 Restart=always
 RestartSec=5
 # SIGSTOP / 主进程挂起时 SIGTERM 只是挂起，要等 TimeoutStopSec 后 SIGKILL 才真正死。

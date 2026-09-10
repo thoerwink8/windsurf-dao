@@ -24,12 +24,14 @@ if ! visudo -c -f /etc/sudoers.d/mirasim-ws-probe.new; then
 fi
 mv /etc/sudoers.d/mirasim-ws-probe.new /etc/sudoers.d/mirasim-ws-probe
 
-# ② mirasim-server unit（含 MemoryHigh/MemoryMax 垫片）。
+# ② mirasim-server unit（含 MemoryHigh/MemoryMax 垫片，ExecStart 走 current）。
 # 手搓 drop-in memory-guard.conf 合进 unit 了，留下会盖出一份重复上限，
 # ⑳ 也只比对 .service 看不到 .d——删掉才算收进仓。
+# 升级器自己的 managed-update.conf 不是本仓的，不准删。
 echo "--- mirasim-server.service ---"
 install -m 644 "$UNIT_DIR/mirasim-server.service" /etc/systemd/system/mirasim-server.service
 rm -f /etc/systemd/system/mirasim-server.service.d/memory-guard.conf
+# rmdir 只在目录空时成功。升级器的 managed-update.conf 还在就留下 .d，不准 rm -rf。
 rmdir /etc/systemd/system/mirasim-server.service.d 2>/dev/null || true
 
 # ③ 探活 oneshot + timer
