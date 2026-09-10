@@ -53,7 +53,8 @@ import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
-import { availabilityFor, loadBreaker } from './lib/provider-health.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
@@ -490,21 +491,15 @@ function orcaErr(err) {
   return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
-/** 健康表标红的模型 id。表没查成 / unknown → []（不拦，与 #842 unknown 不拦对齐）。 */
+/**
+ * 健康表标红的模型 id。判据正文在 lib/model-admission.mjs（纯函数，可单测）——
+ * 这里只负责取三份输入：模型表、execution profiles、熔断表。
+ * 表没查成 / 读不到 → []（不拦，与 #842 unknown 不拦对齐）。
+ */
 function loadHealthRedIds(models) {
   if (!Array.isArray(models) || models.length === 0) return [];
   try {
-    const profiles = loadExecutionProfiles();
-    const mapped = new Map(profiles.flatMap(p => [p.id, ...(p.defaultForModels || [])].map(id => [id, p])));
-    // A retired gateway probe cannot veto a qualified native/relay profile.
-    const r = availabilityFor(models.filter(m => !mapped.has(m.id)));
-    const profileRed = models.filter(m => mapped.has(m.id)).filter(m => {
-      const p = mapped.get(m.id);
-      return p.enabled !== true || (p.availability?.status || p.availability) !== 'available';
-    }).map(m => m.id);
-    return profileRed.concat(Object.entries(r.availability || {})
-      .filter(([, v]) => v === 'red')
-      .map(([id]) => id));
+    return healthRedIds({ models, profiles: loadExecutionProfiles(), breaker: loadBreaker() });
   } catch {
     return [];
   }
