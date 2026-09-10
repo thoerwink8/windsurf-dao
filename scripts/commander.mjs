@@ -416,7 +416,7 @@ function scanReviewPending() {
   if (!listed.ok) return { scanned: false, error: listed.error };
   const items = (listed.tickets || []).map((t) => ({
     pr: Number(t.pr), head: t.head || null, reviewer: t.reviewer || null, worker: t.workerWorktree || null,
-    source: t.source || null, error: t.error || null,
+    source: t.source || null, error: t.error || null, repo: t.repo || null,
   }));
   return { scanned: true, items };
 }
@@ -864,11 +864,12 @@ function execRetryDrain(action, { state, dryRun, say }) {
 // 万一同号票再入队就直接从「已试 3 次」起步，一轮就 escalate。
 function execReapTicket(action, { state, dryRun, say }) {
   const dir = reviewPendingDir({ root: ROOT });
-  const path = reviewPendingPath(dir, action.pr);
+  const path = reviewPendingPath(dir, action.pr, action.repo);
   if (dryRun) { say(`[dry] 回收死票 ${path}`); return { ok: true, dryRun: true }; }
   // 删之前正面核一次死活。decide 的判据是「不在开放列表里」（缺席），这里要的是「确实关了」（在场证据）——
   // 缺席可能是查询窗口截断、可能是这一轮 API 抽风；删票不可逆，不拿在场证据不动手。
-  const st = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+  const repo = action.repo && String(action.repo).trim() ? String(action.repo).trim() : REPO;
+  const st = runGh(['pr', 'view', String(action.pr), '--repo', repo, '--json', 'state', '-q', '.state'], 20000);
   if (!st.ok) { say(`  死活没核成，不删票：PR #${action.pr}（${st.error}）`); return { ok: true, skipped: 'liveness-unscanned' }; }
   const prState = String(st.out).trim();
   if (prState !== 'MERGED' && prState !== 'CLOSED') {
@@ -1298,10 +1299,11 @@ function requestRereview(action, { state, dryRun, say }) {
     round: 'rereview',
     source: REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
     ts: nowIso(),
+    repo: action.repo || null,
   });
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
-    say(`[dry] 写复审待办 ${dir}/${action.pr}.json（${action.why}）`);
+    say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
     return drainReviewPending(action, { state, dryRun, say });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
@@ -1324,6 +1326,7 @@ function drainReviewPending(action, { state, dryRun, say }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+  if (action.repo) cmd.push('--repo', String(action.repo));
   const r = runOrShow(cmd, { dryRun, say, why: action.why });
   recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;

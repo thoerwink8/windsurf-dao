@@ -45,6 +45,25 @@ describe('dao 审官与完工', () => {
       assert.equal(r.skipped, undefined);
       assert.equal(writes.length, 1);
       assert.equal(writes[0].action, 'issue_comment');
+      assert.equal(writes[0].repo, 'thoerwink8/windsurf-dao');
+    });
+
+    await t.test('postCommentOnce：跨仓 issue 评论钉目标仓，不许落到默认 windsurf-dao', () => {
+      const writes = [];
+      const runGh = (argv) => {
+        if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [] }) };
+        return { ok: true, out: '' };
+      };
+      const writeIssue = (req) => { writes.push(req); return { ok: true, number: 12 }; };
+      const r = S.postCommentOnce({
+        kind: 'issue', number: '12', body: '完工：PR #12', runGh,
+        writeIssue, host: 'worker-done', repo: 'thoerwink8/ws-cleaner',
+        idempotency_key: 'worker-done:issue:12:12',
+      });
+      assert.equal(r.ok, true);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].repo, 'thoerwink8/ws-cleaner');
+      assert.notEqual(writes[0].repo, 'thoerwink8/windsurf-dao');
     });
 
     await t.test('postCommentOnce：评论列表没查成 → ok:false unscanned（不许当没发过放行）', () => {

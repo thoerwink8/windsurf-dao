@@ -1526,6 +1526,23 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
     }));
     assert.deepEqual(byKind(r, 'reap-ticket'), []);
   });
+
+  it('跨仓票：本仓开放列表对不上号也不许当死票回收',
+    async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 12, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null, repo: 'org/a' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+    const attach = byKind(r, 'attach-reviewer');
+    assert.equal(attach.length, 1);
+    assert.equal(attach[0].repo, 'org/a');
+    assert.equal(attach[0].pr, 12);
+  });
 });
 
 // ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，

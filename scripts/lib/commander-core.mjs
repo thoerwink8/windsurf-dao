@@ -839,9 +839,11 @@ function collectCandidates(situation) {
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
-    if (ghScanned && !openPrs.has(Number(it.pr))) {
+    const ticketRepo = it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
+    // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
+    if (!ticketRepo && ghScanned && !openPrs.has(Number(it.pr))) {
       out.push(withNeeds({
-        kind: 'reap-ticket', pr: it.pr,
+        kind: 'reap-ticket', pr: it.pr, repo: null,
         why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
       }, N['reap-ticket']));
       continue;
@@ -862,7 +864,7 @@ function collectCandidates(situation) {
       // 重试 drain 同样是起一个审官会话，同样领名额（判据见 slotsLeft 那段）。
       if (!takeFinishSlot()) { reportAdmission(N['retry-drain']); continue; }
       out.push(withNeeds({
-        kind: 'retry-drain', pr: it.pr, head: itHead, tries: drain.tries, stateKey: drain.stateKey,
+        kind: 'retry-drain', pr: it.pr, repo: it.repo || null, head: itHead, tries: drain.tries, stateKey: drain.stateKey,
         queue: rp.items,
         why: `PR #${it.pr} 上次 drain 没成（票还在队列），重试第 ${drain.tries} 次`,
       }, N['retry-drain']));
@@ -870,6 +872,8 @@ function collectCandidates(situation) {
     }
     if (drain.code === 'grace') continue;
     if (drain.code === 'exhausted') {
+      // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
+      if (ticketRepo) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
       if (livePr && prHasStuckLabel(livePr)) continue;
       const tries = Number(drain.tries) || 0;
@@ -889,7 +893,7 @@ function collectCandidates(situation) {
     // 它原来完全不限张：只把工人限住而审官不限，等于闸只挡了一半（#1007 二期）。
     if (!takeFinishSlot()) { reportAdmission(N['attach-reviewer']); continue; }
     out.push(withNeeds({
-      kind: 'attach-reviewer', pr: it.pr, reviewer: it.reviewer || null, worker: it.worker || null,
+      kind: 'attach-reviewer', pr: it.pr, repo: it.repo || null, reviewer: it.reviewer || null, worker: it.worker || null,
       head: it.head || null, source: it.source || null, error: it.error || null,
       why: attachReviewerWhy(it),
     }, N['attach-reviewer']));
