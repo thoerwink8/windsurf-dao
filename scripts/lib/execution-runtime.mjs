@@ -72,7 +72,7 @@ export function judgeExecutionCompletion(view) {
 }
 function busy(message,reason='lease-held'){const e=new Error(message);e.code='busy';e.detail={busy:true,reason};return e;}
 const RESERVED=new Set(['pending','uncertain','stopping']);
-const FINISHED=new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','rejected','auth_required','unsupported_interaction']);
+const FINISHED=new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','rejected','auth_required','unsupported_interaction','gone']);
 const SESSION_KEY=/^[a-z][a-z0-9-]*:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sameLease=(a,b)=>a&&b&&a.token===b.token&&(a.recordKey||a.sessionKey)===(b.recordKey||b.sessionKey)&&a.cleanupToken===b.cleanupToken;
 
@@ -348,8 +348,17 @@ export function createExecutionRuntime(opts={}) {
             let timer;
             try {
               const view=await Promise.race([backend(m.sessionKey,m).readSession(m.sessionKey),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),Math.max(1,Math.min(readTimeoutMs,deadline-Date.now())));})]);
+              // 「服务端查无此会话」与「这次没读成」不是一回事：前者是**已经消失**（会话档案被
+              // 归档/清掉、服务端重启丢了内存里的会话），后者是慢或抖。旧代码把两者都算成
+              // 「没查成」并让整张名单 ok:false——2026-09-10 实咬：一条 review-1175 的死会话记录
+              // 让观测集整轮没查成，指挥官据此把差集重派全冻结（#1146/#1152 该补的没补）。
+              // 明确的 missing 记成 gone：不进 errors（不影响整张名单），当 FINISHED 处理，
+              // 让「账上有、盘上没了」走到它该走的对账分支。
+              if(view&&view.missing===true){state='gone';}
+              else{
               state=judgeExecutionCompletion(view).status;
               if(state==='unknown')errors.push({backend:m.backend,recordKey:keyOf(m),error:'session state unknown'});
+              }
               m=await fence(()=>{
                 const current=metadata(keyOf(m));if(!current)throw new Error('registry changed');
                 const next={...current,state:RESERVED.has(current.state)||current.cleanupVerified?current.state:state,observedState:state,observedAt:now(),taskCompleted:false};

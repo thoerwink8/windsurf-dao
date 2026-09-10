@@ -139,6 +139,36 @@ linuxTest('managed list never calls global history; terminal observations persis
   const f=fixture(t),m=fakeRuntime({async listSessions(){throw Error('global history must not be called');}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'done',text:'finished'});
   const r=await rt.listSessions();assert.equal(r.ok,true);assert.equal(r.scope,'managed');assert.equal(r.includesExternal,false);assert.equal(r.sessions[0].state,'done');assert.equal(r.sessions[0].title,'ISSUE-#1174');const count=m.calls.read.length;await rt.listSessions();assert.equal(m.calls.read.length,count);
 });
+// 2026-09-10 实咬：一条会话记录指向服务端已经不认的 sessionKey（档案被归档、服务端重启丢
+// 内存态），readSession 回 missing:true。旧代码把它跟「这次没读成」（超时/抖动）一样算
+// errors，于是**整张名单 ok:false** —— 指挥官据此判观测集没查成，把差集重派全冻结
+// （#1146/#1152 该补的没补上，每轮只打一行 escalate）。
+// 判据：「明确没了」与「没读成」必须分道——前者是终态（gone，进 FINISHED、不重读、不算错），
+// 后者仍是没查成（unknown + errors，整张名单不作数）。
+linuxTest('明确的 session gone 不进 errors、不拦整张名单；读超时仍算没查成',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  const live=await rt.startSession(spec(f));m.views.set(live.sessionKey,{phase:'running',text:'live'});
+  // 同一条工作树只许一个在途会话，所以第二条记录直接落到登记表里（模拟「档案被清掉、
+  // 登记表还留着」那种现场）——这正是 2026-09-10 真机上那条 review-1175 死记录的形态。
+  const deadKey=key('codex');
+  const meta=path.join(f.stateDir,'sessions',encodeURIComponent(deadKey)+'.json');
+  const shape=JSON.parse(fs.readFileSync(path.join(f.stateDir,'sessions',encodeURIComponent(live.sessionKey)+'.json'),'utf8'));
+  fs.writeFileSync(meta,JSON.stringify({...shape,recordKey:deadKey,sessionKey:deadKey,state:'running',cleanupVerified:null}));
+  const gone=await rt.listSessions();
+  assert.equal(gone.ok,true,'一条 gone 不该让整张名单没查成');
+  assert.deepEqual(gone.errors,[]);
+  assert.equal(gone.sessions.find(x=>x.key===deadKey).state,'gone');
+  assert.equal(gone.sessions.find(x=>x.key===live.sessionKey).state,'running');
+  // gone 是终态：下一轮不再读它（不烧超时），也不因为「没读成」而重试。
+  const readsBefore=m.calls.read.filter(k=>k===deadKey).length;
+  await rt.listSessions();
+  assert.equal(m.calls.read.filter(k=>k===deadKey).length,readsBefore,'gone 之后不该再读同一条');
+  // 反例：读超时不是 gone，仍要进 errors（否则「没查成」会被洗成「盘上没人」）。
+  const orig=m.readSession;m.readSession=async k=>k===live.sessionKey?new Promise(()=>{}):orig(k);
+  const timed=await rt.listSessions({readTimeoutMs:20});
+  assert.equal(timed.ok,false,'超时是没查成，整张名单不作数');
+  assert.equal(timed.errors.some(e=>e.error==='session read incomplete'),true);
+});
 linuxTest('managed pending inventory is explicit and does not imply absent external sessions',async t=>{
   const f=fixture(t),entered=deferred(),release=deferred(),m=fakeRuntime(),start=m.startSession;m.startSession=async s=>{entered.resolve();await release.promise;return start(s);};const rt=runtime(f,{mirasimRuntime:m}),pending=rt.startSession(spec(f));await entered.promise;
   const list=await rt.listSessions();assert.equal(list.scope,'managed');assert.equal(list.sessions[0].state,'pending');assert.match(list.sessions[0].key,/^launch:/);assert.equal(m.calls.read.length,0);assert.equal(m.calls.list,0);release.resolve();await pending;
