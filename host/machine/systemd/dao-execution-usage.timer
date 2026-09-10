@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect native and Mirasim usage every five minutes
+
+[Timer]
+OnCalendar=*:3/5
+OnBootSec=3min
+Persistent=true
+RandomizedDelaySec=15
+
+[Install]
+WantedBy=timers.target

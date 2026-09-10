@@ -18,6 +18,9 @@ import {
   parseChatListJson,
 } from './broadcast-digest.mjs';
 import { parseMessageId } from './hub-ask.mjs';
+import { cardToPlainText } from './feishu-card-text.mjs';
+
+export { cardToPlainText } from './feishu-card-text.mjs';
 
 function str(v) {
   return v == null ? '' : String(v).trim();
@@ -98,10 +101,18 @@ export function sendCardViaLark({ chatId, card, spawn = spawnSync } = {}) {
     '-q', '.data.message_id',
   ], spawn);
   const cls = classifyLarkResult(r);
-  if (!cls.ok) return { ok: false, error: `没送进群：${cls.error}` };
+  if (!cls.ok) {
+    const original = `没送进群：${cls.error}`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
+  }
   const messageId = parseMessageId(cls.out);
   if (!messageId) {
-    return { ok: false, error: `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）` };
+    const original = `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
   }
   return { ok: true, messageId };
 }

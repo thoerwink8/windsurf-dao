@@ -1,0 +1,15 @@
+# 机制巡检失败时发送一条纯文本告警。
+# 卡片内容校验失败也不能把「巡检没跑成」藏掉，所以这里不走交互卡片。
+[Unit]
+Description=windsurf-dao patrol failure alert
+After=dao-patrol.service
+
+[Service]
+Type=oneshot
+User=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# 这条只发通知，不应继承个人 GitHub 凭据。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/patrol-failure.mjs

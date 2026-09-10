@@ -18,6 +18,17 @@ function meminfo(availKb) {
 function loadavg(load1) {
   return `${load1} 0.50 0.40 1/200 12345\n`;
 }
+// 2026-09-10：主闸改成真 CPU 占用率（两帧 /proc/stat 差），loadavg 降级为趋势量。
+// 这两个夹具按「想表达多少占用率」造两帧——busy=0.9 就是 90% 忙。
+function statFrames(busy, ticks = 100) {
+  const busyTicks = Math.round(ticks * busy);
+  const idleTicks = ticks - busyTicks;
+  const before = `cpu  ${0} 0 ${0} ${1000} 0 0 0 0 0 0\n`;
+  const after = `cpu  ${busyTicks / 2} 0 ${busyTicks / 2} ${1000 + idleTicks} 0 0 0 0 0 0\n`;
+  return { statBeforeText: before, statAfterText: after };
+}
+const CPU_IDLE = statFrames(0.1);
+const CPU_BUSY = statFrames(0.95);
 function samplesFromPairs(pairs) {
   // pairs: [{inFlight, memAvailableMb}, ...] 相邻差 1 才算有效对
   return pairs.map((p, i) => ({ at: `2026-09-06T0${i}:00:00Z`, ...p }));
@@ -121,7 +132,7 @@ describe('admitCapacity', () => {
   it('内存吃紧 → slots=0，即使队列再长', async () => {
     const { admitCapacity } = await ADMIT;
     const r = admitCapacity({
-      meminfoText: meminfo(200 * 1024), // 200MB 可用
+      ...CPU_IDLE,       meminfoText: meminfo(200 * 1024), // 200MB 可用
       loadavgText: loadavg(0.5),
       nproc: 6,
       inFlight: 4,
@@ -131,24 +142,42 @@ describe('admitCapacity', () => {
     assert.equal(r.ok, true);
     assert.equal(r.slots, 0);
   });
-  it('负载已满 → slots=0（主闸是 CPU）', async () => {
+  it('CPU 忙到阈值 → slots=0（主闸是真占用率；loadavg 只在 why 里报趋势）', async () => {
     const { admitCapacity } = await ADMIT;
     const r = admitCapacity({
+      ...CPU_BUSY,
       meminfoText: meminfo(8000 * 1024),
       loadavgText: loadavg(6.29),
       nproc: 6,
       inFlight: 4,
       samples: ENOUGH_SAMPLES,
-      policy: { loadThreshold: 0.85, memReserveMb: 1536 },
+      policy: { cpuThreshold: 0.85, memReserveMb: 1536 },
     });
     assert.equal(r.ok, true);
     assert.equal(r.slots, 0);
-    assert.match(r.why, /归一化负载/);
+    assert.match(r.why, /CPU 占用率 95%/);
+    assert.match(r.why, /loadavg 归一 1\.05/, 'loadavg 降级为趋势，仍在文案里供对照');
+  });
+
+  it('★ 反例（2026-09-10 实咬的那一格）：loadavg 高但 CPU 闲 → 照收', async () => {
+    const { admitCapacity } = await ADMIT;
+    const r = admitCapacity({
+      ...statFrames(0.13), // CPU 只有 13% 忙（等模型回话的那种负载）
+      meminfoText: meminfo(8000 * 1024),
+      loadavgText: loadavg(8.0), // 旧判据在这里判定「机器已满」
+      nproc: 6,
+      inFlight: 10,
+      samples: ENOUGH_SAMPLES,
+      policy: { cpuThreshold: 0.85, memReserveMb: 1536 },
+    });
+    assert.equal(r.ok, true);
+    assert.ok(r.slots > 0, `CPU 闲就该收（旧判据在这里判满），实际 slots=${r.slots}：${r.why}`);
   });
   it('余量充足 → 一轮收多张，且张数随余量变', async () => {
     const { admitCapacity } = await ADMIT;
     const pol = { loadThreshold: 0.85, memReserveMb: 1536 };
     const a = admitCapacity({
+      ...CPU_IDLE,
       meminfoText: meminfo(8000 * 1024),
       loadavgText: loadavg(1.0),
       nproc: 6,
@@ -157,6 +186,7 @@ describe('admitCapacity', () => {
       policy: pol,
     });
     const b = admitCapacity({
+      ...CPU_IDLE,
       meminfoText: meminfo(4000 * 1024),
       loadavgText: loadavg(1.0),
       nproc: 6,
@@ -172,7 +202,7 @@ describe('admitCapacity', () => {
   it('MemAvailable 读不出来 → 不派，报没查成', async () => {
     const { admitCapacity } = await ADMIT;
     const r = admitCapacity({
-      meminfoText: 'MemTotal: 1 kB\n',
+      ...CPU_IDLE,       meminfoText: 'MemTotal: 1 kB\n',
       loadavgText: loadavg(0.2),
       nproc: 6,
       inFlight: 0,
@@ -185,7 +215,7 @@ describe('admitCapacity', () => {
   it('样本不足 → 按保守占用收紧，标 sampleUnscanned', async () => {
     const { admitCapacity } = await ADMIT;
     const r = admitCapacity({
-      meminfoText: meminfo(8000 * 1024),
+      ...CPU_IDLE,       meminfoText: meminfo(8000 * 1024),
       loadavgText: loadavg(0.5),
       nproc: 6,
       inFlight: 0,
@@ -200,7 +230,7 @@ describe('admitCapacity', () => {
   it('在途数不是整数 → 不派', async () => {
     const { admitCapacity } = await ADMIT;
     const r = admitCapacity({
-      meminfoText: meminfo(8000 * 1024),
+      ...CPU_IDLE,       meminfoText: meminfo(8000 * 1024),
       loadavgText: loadavg(0.2),
       nproc: 6,
       inFlight: null,
@@ -213,7 +243,7 @@ describe('admitCapacity', () => {
   it('读到旧键 maxDispatchPerRound → 提示已改名，且不按它限流', async () => {
     const { admitCapacity, RENAMED_KEY_HINT } = await ADMIT;
     const r = admitCapacity({
-      meminfoText: meminfo(8000 * 1024),
+      ...CPU_IDLE,       meminfoText: meminfo(8000 * 1024),
       loadavgText: loadavg(0.5),
       nproc: 6,
       inFlight: 0,
@@ -392,8 +422,31 @@ describe('dispatch-policy-check：minSamplePairs / sampleWindow 故意违规当�
         conservativeWorkerMb: 400,
         minSamplePairs: 4,
         sampleWindow: 12,
+        stalledDraftHours: 24,
+        stalledDraftMaxPumps: 2,
       },
     }));
     assert.equal(r.ok, true, JSON.stringify(r.problems));
+  });
+
+  it('stalledDraftHours: 0 红', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, stalledDraftHours: 0 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, false);
+    assert.equal(r.problems.some((p) => /stalledDraftHours/.test(p)), true, JSON.stringify(r.problems));
+  });
+
+  it('stalledDraftMaxPumps: 6 红', async () => {
+    const { inspectDispatchPolicySource } = await POLICY_CHECK;
+    const r = inspectDispatchPolicySource(JSON.stringify({
+      ...BASE,
+      commander: { requireModelInRouting: true, stalledDraftMaxPumps: 6 },
+    }));
+    assert.equal(r.ok, false);
+    assert.equal(r.problems.some((p) => /stalledDraftMaxPumps/.test(p)), true, JSON.stringify(r.problems));
   });
 });

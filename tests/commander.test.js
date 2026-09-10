@@ -6,6 +6,17 @@ const path = require('path');
 const fs = require('node:fs');
 
 const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
+const ASK = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'ask-gate.mjs').replace(/\\/g, '/'));
+const REPO = path.resolve(__dirname, '..');
+
+async function policyFromHolds(holds) {
+  const S = await ASK;
+  return S.parsePolicy(JSON.stringify({
+    human_holds: holds,
+    confirm: { patch: { who: 'auto' }, minor: { who: 'admin:1' }, major: { who: 'admin:1' } },
+    version: { bump_by_commit_type: { fix: 'patch', feat: 'minor' } },
+  }));
+}
 
 // 一份「全查成、全空」的基线态势：decide 应只回 noop。各用例覆盖其中某节。
 function baseSituation(over = {}) {
@@ -32,7 +43,7 @@ const byKind = (r, k) => r.actions.filter((a) => a.kind === k);
 
 // #931 返工夹具：判红的 PR 必须能回溯到署名 issue（返工工人的 model/reviewer 从那儿取）。
 function labeledIssue(n, over = {}) {
-  return { number: n, title: `单 ${n}`, labels: [
+  return { number: n, title: `单 ${n}`, body: '', labels: [
     { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
   ], ...over };
 }
@@ -44,7 +55,7 @@ function redReview(body, commit) { return { state: 'CHANGES_REQUESTED', body, co
 describe('decide：自己做（确定性）', () => {
   it('已消歧 + 无在途 + model|reviewer 标签齐 → dispatch（判据①）', async () => {
     const { decide } = await CORE;
-    const issue = { number: 900, title: '补 X', labels: [
+    const issue = { number: 900, title: '补 X', body: '', labels: [
       { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ] };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
@@ -199,6 +210,31 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(a[0].pr, 920);
     assert.equal(a[0].head, 'abc', '执行侧记账要用这个 head 写 pr:920@abc');
     assert.match(a[0].why, /来源没查成/, '旧夹具没带来源，不许倒向任一种');
+  });
+
+  it('#1125 队列多张票 → 每轮只产一条 attach-reviewer（drain 自己按在役数拉）', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: {
+        scanned: true, issues: [],
+        prs: [
+          { number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'a' },
+          { number: 921, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'b' },
+          { number: 922, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'c' },
+        ],
+      },
+      reviewPending: {
+        scanned: true,
+        items: [
+          { pr: 920, reviewer: 'gpt-5.6-luna', worker: 'wt-a', head: 'a', source: 'worker-done-handoff' },
+          { pr: 921, reviewer: 'gpt-5.6-luna', worker: 'wt-b', head: 'b', source: 'worker-done-handoff' },
+          { pr: 922, reviewer: 'gpt-5.6-luna', worker: 'wt-c', head: 'c', source: 'worker-done-handoff' },
+        ],
+      },
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1, '产 N 条就会连跑 N 次 drain，把容量闸冲掉');
+    assert.equal(a[0].pr, 920, '代表票取队列里第一张活票');
   });
 });
 
@@ -601,8 +637,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  it('⑤单轮返工上限沿用机器余量：超出的排队下轮，不丢也不 escalate', async () => {
-    const { decide } = await CORE;
+  // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX=3）。
+  // 缘由：机器一满 slots=0，连「把手上这些 PR 收掉」也被拦住——25 张 PR 一条判定都没有、
+  // 满载空转等收尾（实咬）。新活仍旧一个不派，那半边的本意不变（见下一条用例）。
+  it('⑤单轮返工领收尾名额：上限 FINISH_SLOTS_MAX，超出的排队下轮，不丢也不 escalate', async () => {
+    const { decide, FINISH_SLOTS_MAX } = await CORE;
     const issues = [];
     const prs = [];
     const byPr = {};
@@ -615,13 +654,29 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
       github: { scanned: true, issues, prs },
       prReviews: { scanned: true, byPr },
       commanderPolicy: { requireModelInRouting: false },
-      admission: { ok: true, slots: 2 },
+      // 机器满载：新活一个不派（slots=0），但返工属于收尾，照样领自己的名额
+      admission: { ok: true, slots: 0 },
     }));
     const w = byKind(r, 'rework');
-    assert.equal(w.length, 2, `一轮最多派 admission.slots 个返工工人，实际 ${w.length}`);
-    assert.deepEqual(w.map((a) => a.pr), [760, 761]);
+    assert.equal(w.length, FINISH_SLOTS_MAX, `机器满载时返工仍要能推进，最多 ${FINISH_SLOTS_MAX} 个，实际 ${w.length}`);
+    assert.deepEqual(w.map((a) => a.pr), [760, 761, 762]);
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
-    assert.equal(byKind(r, 'notify-hub').length, 2, '回流只跟着真派出去的那两个');
+    // 回流 = 每个真派出去的返工一条 + 一条「机器满、不收新活」的群通知（那是另一回事，分开数）。
+    const dispatched = byKind(r, 'notify-hub').filter((a) => a.moment === 'dispatched');
+    assert.equal(dispatched.length, FINISH_SLOTS_MAX, '回流只跟着真派出去的那几个');
+  });
+
+  it('⑤b 机器满载时新活仍然一个不派（收尾名额不许漏成新活名额）', async () => {
+    const { decide } = await CORE;
+    // 五张已消歧、标签齐、无在途的新活
+    const issues = [];
+    for (let i = 0; i < 5; i += 1) issues.push(labeledIssue(810 + i));
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs: [] },
+      prReviews: { scanned: true, byPr: {} },
+      admission: { ok: true, slots: 0 },
+    }));
+    assert.equal(byKind(r, 'dispatch').length, 0, '机器满载时不收新活——收尾名额是另一笔账，不许漏给新活');
   });
 
   it('⑥判绿的 PR 不派返工（反证：别把 rework 变成「见 PR 就派」）', async () => {
@@ -774,7 +829,7 @@ describe('decide：空态势静默', () => {
 
 function readyIssue(n, model = 'grok-4.6') {
   return {
-    number: n, title: `单 ${n}`, labels: [
+    number: n, title: `单 ${n}`, body: '', labels: [
       { name: '已消歧' }, { name: `model/${model}` }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ],
   };
@@ -1120,6 +1175,112 @@ describe('返工命令：原树短会话，不新派工', () => {
     assert.match(body, /dao\.mjs', 'start'/, '返工应在原树起短会话');
     assert.match(src, /function rememberRework/);
     assert.doesNotMatch(body, /'--allow-dup'/, '不再走 dispatch 新派工');
+  });
+});
+
+// #1142 实咬：帅位快马 PR 没有 dao-<单> 工树，返工被判死刑。下面是可执行判别（不是源码正则）：
+// 假 run 记录每条命令并按剧本回话，跑真函数，断言参数与 fail-closed 行为。
+describe('返工建树路（#1142）：无 dao 树时从 PR 分支建树，可执行判别', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const os = require('os');
+  /** 剧本化 run：按「命令里含哪个动词」回话，全部调用记进 calls。 */
+  function scriptedRun(script) {
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      for (const [needle, reply] of script) {
+        if (argv.includes(needle)) return typeof reply === 'function' ? reply(argv) : reply;
+      }
+      return { ok: false, error: `剧本没有这条命令：${argv.join(' ')}` };
+    };
+    return { run, calls };
+  }
+  const quiet = () => {};
+
+  it('成功路：实查分支名 → worktree-create 带 --branch → 回执 path 返回', async () => {
+    const M = await MOD();
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'cc/fix-branch\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-tree"}\n' }],
+    ]);
+    const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tree, '/tmp/fake-tree');
+    assert.equal(r.headRef, 'cc/fix-branch');
+    assert.equal(calls.length, 2);
+    // 查询参数：真查 PR 的 headRefName，不猜
+    assert.equal(calls[0].includes('view'), true, calls[0].join(' '));
+    assert.equal(calls[0].includes('987321'), true, calls[0].join(' '));
+    assert.equal(calls[0].includes('headRefName'), true, calls[0].join(' '));
+    // 建树参数：worktree-create 走 mirasim、带实查到的分支
+    assert.ok(calls[1].includes('worktree-create'));
+    const bi = calls[1].indexOf('--branch');
+    assert.equal(calls[1][bi + 1], 'cc/fix-branch', '建树必须用实查到的分支名');
+    assert.equal(calls[1][calls[1].indexOf('--executor') + 1], 'mirasim');
+  });
+
+  it('分支名查不到 → 没查成交帅，且不往下建树', async () => {
+    const M = await MOD();
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /没查成/);
+    assert.equal(calls.length, 1, '查不到分支名就不许再发 worktree-create');
+  });
+
+  it('建树回执无 path / 回执不是 JSON → 都按没查成，不装成建好了', async () => {
+    const M = await MOD();
+    for (const out of ['{"ok":true}\n', '不是 JSON 的回执\n']) {
+      const { run } = scriptedRun([
+        ['view', { ok: true, out: 'cc/fix-branch\n' }],
+        ['worktree-create', { ok: true, out }],
+      ]);
+      const r = M.ensureTreeFromPr({ pr: 987321, issue: 987654 }, { dryRun: false, say: quiet, run });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /回执没有 path/);
+    }
+  });
+
+  it('dispatchRework 串联：建出的树喂给 start --worktree，起会话成功记账 ok', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rework-1142-'));
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'cc/fix-branch\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-tree"}\n' }],
+      ['start', { ok: true, out: '{"ok":true,"sessionKey":"codex:test-9973"}\n' }],
+    ]);
+    const state = {};
+    const action = {
+      kind: 'rework', pr: 987321, issue: 987654, head: 'abcdef1234567890', redRounds: 1,
+      model: 'grok-4.6', brief: '## 判定：红 1 项\n1. `a.mjs:1` 改这里。', why: '测试',
+    };
+    const r = M.dispatchRework(action, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const start = calls.find((c) => c.includes('start'));
+    assert.ok(start, '必须真的发了 start');
+    assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-tree', 'start 必须用建树回执里的 path');
+    assert.equal(start[start.indexOf('--model') + 1], 'grok-4.6');
+    const rec = state.reworkDispatched[`987321:abcdef12`] || Object.values(state.reworkDispatched)[0];
+    assert.equal(rec.ok, true, '成功要记账');
+  });
+
+  it('dispatchRework 串联：分支查不到 → fail-closed 交帅，不发 start，记账 unscanned', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rework-1142-'));
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const state = {};
+    const action = {
+      kind: 'rework', pr: 987321, issue: 987654, head: 'abcdef1234567890', redRounds: 1,
+      model: 'grok-4.6', brief: '红项', why: '测试',
+    };
+    const r = M.dispatchRework(action, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true, '查不到是「没查成」不是「失败」');
+    assert.match(r.error, /没查成/);
+    assert.ok(!calls.some((c) => c.includes('start')), '没树绝不许起会话');
+    const rec = Object.values(state.reworkDispatched)[0];
+    assert.equal(rec.ok, false);
+    assert.equal(rec.unscanned, true);
   });
 });
 
@@ -1696,6 +1857,18 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.ok(!/失败/.test(a[0].why), '指挥官自己写的票不许说失败 → ' + a[0].why);
   });
 
+  it('工人首审入队票 → why 说按在役审官数拉取，不许说失败', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      pr: 1014, head: { name: null, oid: 'h1014' }, reviewer: 'gpt-5.6-luna', worker: 'wt-w',
+      source: 'worker-done-handoff',
+    }));
+    const a = byKind(r, 'attach-reviewer');
+    assert.equal(a.length, 1);
+    assert.match(a[0].why, /工人首审已入队，按在役审官数拉取/);
+    assert.ok(!/失败/.test(a[0].why), '按设计入队不许说失败 → ' + a[0].why);
+  });
+
   it('没有来源字段的旧票 → why 说来源没查成，不许倒向任一种', async () => {
     const { decide, attachReviewerWhy } = await CORE;
     const r = decide(sit({
@@ -1706,8 +1879,156 @@ describe('#1014 attach-reviewer why 按来源写', () => {
     assert.match(a[0].why, /来源没查成/);
     assert.ok(!/工人起审官失败/.test(a[0].why), '旧票不许当成工人失败');
     assert.ok(!/按设计叫审官/.test(a[0].why), '旧票不许当成指挥官 rereview');
+    assert.ok(!/工人首审已入队/.test(a[0].why), '旧票不许当成首审入队');
     assert.match(attachReviewerWhy({ pr: 7 }), /来源没查成/);
     assert.match(attachReviewerWhy({ pr: 7, source: 'guess-from-comment' }), /来源没查成/);
+  });
+});
+
+function holdReady(n, { title, body } = {}) {
+  return {
+    number: n,
+    title: title == null ? `单 ${n}` : title,
+    body: body == null ? '' : body,
+    labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ],
+  };
+}
+
+// #1094：指挥官派工从不传 merge-policy，改规则单一律落默认 auto。
+// 判官复用 ask-gate，关键词只认 docs/release-policy.json；没查成一律 manual。
+describe('decide：human_holds → merge-policy（#1094）', () => {
+  it('标题命中 human_holds → dispatch.mergePolicy=manual，理由写出命中哪一条', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const r = decide(baseSituation({
+      askPolicy,
+      github: { scanned: true, issues: [holdReady(1094, { title: '这里碰到独有红线词QQQ' })], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'manual');
+    assert.equal(d[0].mergePolicySource, 'hold');
+    assert.match(d[0].mergeReason, /独有红线词QQQ/);
+    assert.match(d[0].why, /merge-policy:manual/);
+  });
+
+  it('普通写码单（扫完不命中）→ auto，和没查成分得开', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const r = decide(baseSituation({
+      askPolicy,
+      github: { scanned: true, issues: [holdReady(900, { title: '补 X' })], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'auto');
+    assert.equal(d[0].mergePolicySource, 'clear');
+    assert.equal(d[0].mergeReason, null);
+  });
+
+  it('type/体系 即使 human_holds 扫完不命中也必须 manual', async () => {
+    const { resolveIssueMergePolicy } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const issue = holdReady(1145, { title: '渠道并发建模', body: '实现上限与顺位' });
+    issue.labels = issue.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item);
+    const plan = resolveIssueMergePolicy(issue, askPolicy);
+    assert.equal(plan.mergePolicy, 'manual');
+    assert.equal(plan.mergePolicySource, 'framework');
+    assert.match(plan.mergeReason, /type\/体系/);
+  });
+
+  it('改 JSON 里的字，指挥官行为跟着变（关键词不落在指挥官侧）', async () => {
+    const { decide, resolveIssueMergePolicy } = await CORE;
+    const before = await policyFromHolds(['独有红线词QQQ']);
+    const after = await policyFromHolds(['另一个词ABC']);
+    const issue = holdReady(1, { title: '独有红线词QQQ' });
+    assert.equal(resolveIssueMergePolicy(issue, before).mergePolicy, 'manual');
+    assert.equal(resolveIssueMergePolicy(issue, after).mergePolicy, 'auto');
+    const r = decide(baseSituation({
+      askPolicy: after,
+      github: { scanned: true, issues: [issue], prs: [] },
+    }));
+    assert.equal(byKind(r, 'dispatch')[0].mergePolicy, 'auto');
+  });
+
+  it('fail-close：策略没查成 / human_holds 空数组 / 正文键缺失 → 一律 manual，不许 auto', async () => {
+    const { resolveIssueMergePolicy } = await CORE;
+    const emptyHolds = await policyFromHolds([]);
+    const issue = holdReady(2, { title: '补 X' });
+    const noPolicy = resolveIssueMergePolicy(issue, undefined);
+    assert.equal(noPolicy.mergePolicy, 'manual');
+    assert.equal(noPolicy.mergePolicySource, 'unscanned');
+    const empty = resolveIssueMergePolicy(issue, emptyHolds);
+    assert.equal(empty.mergePolicy, 'manual');
+    assert.equal(empty.mergePolicySource, 'unscanned');
+    const noBody = resolveIssueMergePolicy({ number: 3, title: '补 X' }, await policyFromHolds(['独有红线词QQQ']));
+    assert.equal(noBody.mergePolicy, 'manual');
+    assert.equal(noBody.mergePolicySource, 'unscanned');
+    assert.match(noBody.mergeReason, /正文没查成/);
+  });
+
+  it('decide 缺 askPolicy → 仍派，但 merge-policy 是 manual 不是 auto', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [holdReady(901)], prs: [] },
+    }));
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1);
+    assert.equal(d[0].mergePolicy, 'manual');
+    assert.equal(d[0].mergePolicySource, 'unscanned');
+  });
+
+  it('真相源现算：live release-policy 上「改规则」样本是 manual，普通写码是 auto', async () => {
+    const { decide } = await CORE;
+    const live = (await ASK).loadPolicy({ root: REPO });
+    assert.equal(live.unscanned, undefined, live.unscanned);
+    const hit = decide(baseSituation({
+      askPolicy: live,
+      github: { scanned: true, issues: [holdReady(1093, {
+        title: '帅窗红线瞄错靶子',
+        body: '本单是改协作约定，merge-policy: manual',
+      })], prs: [] },
+    }));
+    assert.equal(byKind(hit, 'dispatch')[0].mergePolicy, 'manual');
+    assert.equal(byKind(hit, 'dispatch')[0].mergePolicySource, 'hold');
+    const clear = decide(baseSituation({
+      askPolicy: live,
+      github: { scanned: true, issues: [holdReady(900, { title: '补 X', body: '修空指针' })], prs: [] },
+    }));
+    assert.equal(byKind(clear, 'dispatch')[0].mergePolicy, 'auto');
+    assert.equal(byKind(clear, 'dispatch')[0].mergePolicySource, 'clear');
+  });
+
+  it('act 旗标：manual 带 --merge-policy/--merge-reason；auto 不传；缺字段当没查成走 manual', async () => {
+    const { dispatchMergePolicyArgs } = await CORE;
+    assert.deepEqual(dispatchMergePolicyArgs({ mergePolicy: 'auto' }), []);
+    const manual = dispatchMergePolicyArgs({ mergePolicy: 'manual', mergeReason: '命中 human_holds「独有红线词QQQ」' });
+    assert.deepEqual(manual.slice(0, 3), ['--merge-policy', 'manual', '--merge-reason']);
+    assert.equal(manual[3], '命中 human_holds「独有红线词QQQ」');
+    const missing = dispatchMergePolicyArgs({});
+    assert.equal(missing[0], '--merge-policy');
+    assert.equal(missing[1], 'manual');
+    assert.match(missing[3], /没查成/);
+  });
+
+  it('指挥官源码：派工命令接 dispatchMergePolicyArgs；不复制 human_holds 原文', () => {
+    const core = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs'), 'utf8');
+    const act = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(core, /classifyAsk/);
+    assert.equal(/协作约定/.test(core), false);
+    assert.equal(/选型禁令/.test(core), false);
+    assert.match(act, /dispatchMergePolicyArgs\(action\)/);
+    assert.match(act, /loadPolicy/);
+    const i = act.indexOf("case 'dispatch'");
+    assert.equal(i > -1, true);
+    assert.match(act.slice(i, i + 900), /dispatchMergePolicyArgs/);
+    // 返工已改走原树 start（#1134），不再 dao dispatch；merge-policy 旗标只挂新派工/差集重派。
+    const j = act.indexOf('function dispatchRework');
+    assert.equal(j > -1, true);
+    assert.doesNotMatch(act.slice(j, j + 2800), /dispatchMergePolicyArgs/);
+    assert.match(act.slice(j, j + 2800), /dao\.mjs', 'start'/);
   });
 });
 
@@ -1715,7 +2036,7 @@ describe('#1014 attach-reviewer why 按来源写', () => {
 describe('对账循环：账上有人、名单里没有 → 重派', () => {
   // 不打「已消歧」：这单已经有人派过（账上未结），不该再走 ready 队列那条新派路。
   const labeled = {
-    number: 885, title: '卡 B 返工',
+    number: 885, title: '卡 B 返工', body: '',
     labels: [
       { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
     ],
@@ -1736,6 +2057,52 @@ describe('对账循环：账上有人、名单里没有 → 重派', () => {
     const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
     assert.equal(d.length, 1);
     assert.equal(d[0].issue, 885);
+  });
+
+  it('差集重派也带 merge-policy（命中 hold → manual，不命中 → auto）', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const hit = decide(sit({
+      askPolicy,
+      github: { scanned: true, issues: [{ ...labeled, title: '碰到独有红线词QQQ' }], prs: [] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const hitD = byKind(hit, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(hitD.length, 1);
+    assert.equal(hitD[0].mergePolicy, 'manual');
+    assert.equal(hitD[0].mergePolicySource, 'hold');
+    const clear = decide(sit({
+      askPolicy,
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885, model: 'grok-4.6' }] },
+    }));
+    const clearD = byKind(clear, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(clearD.length, 1);
+    assert.equal(clearD[0].mergePolicy, 'auto');
+    assert.equal(clearD[0].mergePolicySource, 'clear');
+  });
+
+  it('type/体系 的差集重派不因 human_holds 未命中回落 auto', async () => {
+    const { decide } = await CORE;
+    const askPolicy = await policyFromHolds(['独有红线词QQQ']);
+    const framework = {
+      ...labeled,
+      number: 1145,
+      title: '渠道并发建模',
+      body: '实现上限与顺位',
+      labels: labeled.labels.map((item) => item.name === 'type/写码' ? { name: 'type/体系' } : item),
+    };
+    const r = decide(sit({
+      askPolicy,
+      github: { scanned: true, issues: [framework], prs: [] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: { unscanned: false, items: [{ job_id: 'dispatch-pi:dead', identity: '工人', issue: 1145, model: 'grok-4.6' }] },
+    }));
+    const retry = byKind(r, 'dispatch').filter((action) => action.reconcile);
+    assert.equal(retry.length, 1);
+    assert.equal(retry[0].mergePolicy, 'manual');
+    assert.equal(retry[0].mergePolicySource, 'framework');
   });
 
   it('同一 issue 已有活会话 → 拒绝再派', async () => {
@@ -1841,5 +2208,274 @@ describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单
       assert.equal(r.scanned, false, 'sessions:null 不许当成查成且空');
       assert.match(String(r.error || ''), /不是数组|没查成/);
     } finally { restore(); }
+  });
+});
+
+// ── #1147 draft 收口泵：无会话超时派短会话；泵满打「卡死/等用户」 ──
+describe('#1147 draft 收口泵', () => {
+  const NOW = '2026-09-08T20:00:00.000Z';
+  const OLD_COMMIT = '2026-09-07T18:00:00.000Z'; // 26h 前，默认 24h 超龄
+  const FRESH_COMMIT = '2026-09-08T19:00:00.000Z'; // 1h 前，未超龄
+  const issue = labeledIssue(880);
+  const stalledDraft = (over = {}) => ({
+    number: 885, isDraft: true, mergeable: 'MERGEABLE', headRefOid: 'h885',
+    body: '署名 issue #880', title: '搁置 draft',
+    lastCommittedAt: OLD_COMMIT, labels: [], ...over,
+  });
+  const sit = (over = {}) => baseSituation({
+    at: NOW,
+    github: { scanned: true, issues: [issue], prs: [stalledDraft()] },
+    sessions: { scanned: true, items: [] },
+    commanderPolicy: { requireModelInRouting: false, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
+    ...over,
+  });
+
+  it('draft + 无会话 + 超时 → 产 pump-draft', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit());
+    const pumps = byKind(r, 'pump-draft');
+    assert.equal(pumps.length, 1, JSON.stringify(r.actions));
+    assert.equal(pumps[0].pr, 885);
+    assert.equal(pumps[0].issue, 880);
+    assert.equal(pumps[0].model, 'grok-4.6');
+    assert.equal(pumps[0].tries, 1);
+    assert.equal(pumps[0].pumpKey, 'pump-draft:885');
+    assert.match(pumps[0].why, /超 24h/);
+  });
+
+  it('泵满 2 次仍 draft → 打「卡死/等用户」，不再泵', async () => {
+    const { decide, pumpDraftKey } = await CORE;
+    const { WAITING_USER_LABEL } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'exhausted.mjs').replace(/\\/g, '/'));
+    const r = decide(sit({
+      reworkDispatched: { [pumpDraftKey(885)]: { at: '2026-09-08T00:00:00.000Z', tries: 2, ok: true } },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    const marked = byKind(r, 'mark-exhausted');
+    assert.equal(marked.length, 1, JSON.stringify(r.actions));
+    assert.equal(marked[0].pr, 885);
+    assert.equal(marked[0].verb, 'pump-draft');
+    assert.equal(marked[0].tries, 2);
+    assert.equal(marked[0].label, WAITING_USER_LABEL);
+    assert.match(marked[0].comment, /卡死\/等用户/);
+  });
+
+  it('有活会话 → 不泵', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      sessions: { scanned: true, items: [{ key: 'pi:1', state: 'running', cwd: '/x/dao-880', title: 'PR #885' }] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+    assert.equal(byKind(r, 'mark-exhausted').length, 0);
+  });
+
+  it('未超时 → 不泵', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ lastCommittedAt: FRESH_COMMIT })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('lastCommittedAt 没查成 → 不泵（没查成 ≠ 超龄）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ lastCommittedAt: null })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('会话名单没查成 → 不泵（查不成当有人在做）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({ sessions: { scanned: false, error: '连不上' } }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('观测面未接（老夹具）→ 不泵', async () => {
+    const { decide } = await CORE;
+    const base = sit();
+    delete base.sessions;
+    const r = decide(base);
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('已挂「卡死/等用户」→ 不泵不重复打标', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [issue],
+        prs: [stalledDraft({ labels: [{ name: '卡死/等用户' }] })],
+      },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+    assert.equal(byKind(r, 'mark-exhausted').length, 0);
+  });
+
+  it('非 draft 超龄无会话 → 不泵（别把正式 PR 当搁置单）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue], prs: [stalledDraft({ isDraft: false })] },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0);
+  });
+
+  it('新提交只影响超龄，不重置次数：tries=1 仍超龄 → 再泵第 2 次', async () => {
+    const { decide, pumpDraftKey } = await CORE;
+    const r = decide(sit({
+      reworkDispatched: { [pumpDraftKey(885)]: { at: '2026-09-07T20:00:00.000Z', tries: 1, ok: true } },
+    }));
+    const pumps = byKind(r, 'pump-draft');
+    assert.equal(pumps.length, 1);
+    assert.equal(pumps[0].tries, 2);
+  });
+
+  it('同轮已派解冲突返工 → 不再泵（别两个人抢一棵树）', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [issue],
+        prs: [stalledDraft({ mergeable: 'CONFLICTING' })],
+      },
+    }));
+    assert.equal(byKind(r, 'rework').length, 1);
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+  });
+
+  it('配额：slots=1 时收口泵占名额，新派被挤到下轮', async () => {
+    const { decide } = await CORE;
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [issue, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 1, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 0, '新活必须让给收口泵');
+  });
+
+  it('配额：超龄 draft 缺标签 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const unlabeled = labeledIssue(880, { labels: [{ name: 'type/写码' }] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [unlabeled, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const missing = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(missing.length, 1, JSON.stringify(r.actions));
+    assert.equal(missing[0].pr, 885);
+  });
+
+  it('配额：超龄 draft 模型不在选型且无顶班 → 不吞 slots=1，新活照派', async () => {
+    const { decide } = await CORE;
+    const retired = labeledIssue(880, { labels: [
+      { name: 'model/退役-4.0' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] });
+    const ready = {
+      number: 900, title: '新活', labels: [
+        { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+      ],
+    };
+    const r = decide(sit({
+      github: { scanned: true, issues: [retired, ready], prs: [stalledDraft()] },
+      admission: { ok: true, slots: 1 },
+      commanderPolicy: { requireModelInRouting: true, stalledDraftHours: 24, stalledDraftMaxPumps: 2 },
+      routingModels: ['grok-4.6', 'deepseek-v4-flash', 'gpt-5.6-sol'],
+      defaultWorkerModel: null,
+    }));
+    assert.equal(byKind(r, 'pump-draft').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'dispatch').length, 1, '模型派不出的 draft 不许预留名额');
+    assert.equal(byKind(r, 'dispatch')[0].issue, 900);
+    const retiredEsc = byKind(r, 'escalate').filter((a) => a.reason === 'model-not-in-routing');
+    assert.equal(retiredEsc.length, 1, JSON.stringify(r.actions));
+    assert.equal(retiredEsc[0].pr, 885);
+  });
+
+  it('draftCommitAgeMs：缺字段 / 坏时钟 → unscanned，绝不当超龄', async () => {
+    const { draftCommitAgeMs } = await CORE;
+    const now = Date.parse(NOW);
+    const missing = draftCommitAgeMs({ lastCommittedAt: null }, now);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.unscanned, true);
+    const badClock = draftCommitAgeMs({ lastCommittedAt: OLD_COMMIT }, 0);
+    assert.equal(badClock.ok, false);
+    assert.equal(badClock.unscanned, true);
+    const ok = draftCommitAgeMs({ lastCommittedAt: OLD_COMMIT }, now);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.ageMs > 24 * 3600 * 1000, true);
+  });
+});
+
+describe('#1147 act：收口泵起原树短会话', () => {
+  const MOD = () => import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+  const os = require('os');
+  function scriptedRun(script) {
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      for (const [needle, reply] of script) {
+        if (argv.includes(needle)) return typeof reply === 'function' ? reply(argv) : reply;
+      }
+      return { ok: false, error: `剧本没有这条命令：${argv.join(' ')}` };
+    };
+    return { run, calls };
+  }
+  const quiet = () => {};
+
+  it('任务书含三选一，注入过得了字节闸', async () => {
+    const M = await MOD();
+    const text = M.pumpDraftBriefText({ pr: 885, issue: 880, head: 'h885', tries: 1 });
+    assert.match(text, /补验收/);
+    assert.match(text, /差什么/);
+    assert.match(text, /关闭是你判/);
+    const spec = M.pumpDraftSpec({ pr: 885 }, '/tmp/pump.md');
+    const { buildSoldierInject } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'template.mjs').replace(/\\/g, '/'));
+    const inject = buildSoldierInject({ spec, issue: 880 });
+    assert.equal(Buffer.byteLength(inject, 'utf8') <= 500, true, inject);
+  });
+
+  it('无 dao 树：从 PR 分支建树再 start，记账 tries', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pump-1147-'));
+    const { run, calls } = scriptedRun([
+      ['view', { ok: true, out: 'dao-1147\n' }],
+      ['worktree-create', { ok: true, out: '{"ok":true,"path":"/tmp/fake-pump"}\n' }],
+      ['start', { ok: true, out: '{"ok":true,"sessionKey":"codex:pump-885"}\n' }],
+    ]);
+    const state = {};
+    const r = M.dispatchPumpDraft({
+      kind: 'pump-draft', pr: 885, issue: 880, model: 'grok-4.6', head: 'h885', tries: 1, why: '测试',
+    }, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const start = calls.find((c) => c.includes('start'));
+    assert.equal(Boolean(start), true);
+    assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-pump');
+    const rec = state.reworkDispatched['pump-draft:885'];
+    assert.equal(rec.ok, true);
+    assert.equal(rec.tries, 1);
+    assert.equal(rec.kind, 'pump-draft');
+  });
+
+  it('分支查不到 → 没查成，不发 start，记账 unscanned', async () => {
+    const M = await MOD();
+    const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pump-1147-miss-'));
+    const { run, calls } = scriptedRun([['view', { ok: false, error: 'gh 挂了' }]]);
+    const state = {};
+    const r = M.dispatchPumpDraft({
+      kind: 'pump-draft', pr: 885, issue: 880, model: 'grok-4.6', why: '测试',
+    }, { state, dryRun: false, say: quiet, run, briefDir });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(calls.some((c) => c.includes('start')), false);
+    assert.equal(state.reworkDispatched['pump-draft:885'].unscanned, true);
   });
 });

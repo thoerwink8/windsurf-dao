@@ -1,4 +1,4 @@
-// dao-check ㉞：测试结构性够不着真执行体（#1152）
+// dao-check ㉟：测试结构性够不着真执行体（#1152）
 //
 // 来历（2026-09-08 实咬）：tests/dispatch-launch.test.js 与 dao-dispatch-gate.test.js
 // 对 `dao.mjs dispatch --issue 565` 真 spawn，靠「拒派闸 / DAO_DISPATCH_NO_SPAWN」当安全网。

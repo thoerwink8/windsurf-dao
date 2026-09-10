@@ -72,6 +72,13 @@ export function resolveVendor(modelId, models) {
   const id = String(modelId).trim();
   const reg = providerOf(id, models); // 网关落地：仅诊断 + 家族回落源，不作判据
   const provider = reg.ok ? reg.provider : null;
+  const entry = Array.isArray(models) ? models.find(m => m?.id === id) : null;
+  if (entry?.executionProfileId) {
+    const actual = String(entry.actualModel || '').split('/').at(-1).split('[')[0];
+    const family = vendorFamilyOf(actual);
+    if (!family) return { ok: false, state: 'unscanned', id, provider, registered: true, error: 'execution profile actual model family is unknown' };
+    return { ok: true, id, vendor: family, vendorSource: 'execution-profile', provider, registered: true };
+  }
   const fam = vendorFamilyOf(id);
   if (fam) {
     return { ok: true, id, vendor: fam, vendorSource: 'family', provider, registered: reg.ok };

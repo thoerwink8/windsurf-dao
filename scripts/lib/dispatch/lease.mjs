@@ -80,7 +80,7 @@ export function scanSessionProcs({
     ppid.set(pid, Number(f[1])); // 切掉 pid 和 comm 后，ppid 是第 2 个（原第 4）
     let cmd = '';
     try { cmd = read(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* 内核线程没有 cmdline */ }
-    if (cmd.includes(MIRASIM_SERVER_MARK)) servers.add(pid);
+    if (cmd.includes(MIRASIM_SERVER_MARK) || cmd.includes('acp-session-runner.mjs')) servers.add(pid);
   }
   if (!servers.size) {
     // 服务不在 = 一个会话也不可能在跑。这是「查成了，结论是 0」，不是没查成。

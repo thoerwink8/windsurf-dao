@@ -954,10 +954,12 @@ export {
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -976,7 +978,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -1030,7 +1032,7 @@ export const FLAGS_BY_VERB = {
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
     '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--force', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1054,6 +1056,7 @@ export const FLAGS_BY_VERB = {
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
   now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
+  board: new Set(['--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1143,7 +1146,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
-                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
+                  # 交卷：发完工/返工 comment。#1125 起首审只入待审队列、不自己起审官；返工复用原会话再推一针
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
@@ -1160,10 +1163,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
                   # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
-                  # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
-                  # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
-                  # 扫完 0 条是空转成功，目录读不了才没查成
+  review-pending-drain [--pr <N>] [--force]
+                  # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
+                  # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸
+                  # --force 才不过上限，只许人手；指挥官自动化不许带
+                  # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -1213,6 +1217,10 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
                   # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
                   # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
+  board [--json]
+                  # 看板 v0（#818）：一张表，issue / 合并请求 / 排队单各一行（阶段 / 耗时 / 模型）
+                  # 源挂掉只坏自己那几行，不许显示成一切正常；--json 给机器（三态信封）
+                  # 总控群问「状态」回的就是这张表；超时告警走 scripts/board-watch.mjs
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   preflight --model <id> [--json]

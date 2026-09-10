@@ -1,0 +1,92 @@
+{
+  "observedAt": "2026-09-09T15:19:17.063Z",
+  "source": "authenticated SSH /opt/new-api/data/new-api.db",
+  "channels": [
+    {
+      "id": 1,
+      "name": "WindsurfAPI (Windsurf/Devin Pro)",
+      "status": 1,
+      "groups": "windsurf,sub,dspool,gptpool",
+      "modelCount": 48,
+      "upstreamOrigin": "http://127.0.0.1:3401"
+    },
+    {
+      "id": 2,
+      "name": "pqapi-sol (cxy)",
+      "status": 1,
+      "groups": "pqapi,gptpool",
+      "modelCount": 2,
+      "upstreamOrigin": "http://127.0.0.1:3405"
+    },
+    {
+      "id": 3,
+      "name": "opencode-go (多家)",
+      "status": 1,
+      "groups": "opencode",
+      "modelCount": 7,
+      "upstreamOrigin": "http://127.0.0.1:3403"
+    },
+    {
+      "id": 5,
+      "name": "cursor-api-proxy (Cursor 订阅)",
+      "status": 1,
+      "groups": "cursor,sub,grokpool",
+      "modelCount": 44,
+      "upstreamOrigin": "http://127.0.0.1:3200"
+    },
+    {
+      "id": 6,
+      "name": "Grok (xAI 订阅 OAuth 直连)",
+      "status": 1,
+      "groups": "grok,grokpool",
+      "modelCount": 2,
+      "upstreamOrigin": "http://127.0.0.1:3400"
+    },
+    {
+      "id": 7,
+      "name": "commandcode-proxy (Command Code 订阅)",
+      "status": 1,
+      "groups": "cmdcode,dspool",
+      "modelCount": 6,
+      "upstreamOrigin": "http://127.0.0.1:3402"
+    },
+    {
+      "id": 8,
+      "name": "pqapi-free (cxy_free)",
+      "status": 1,
+      "groups": "pqapi,gptpool",
+      "modelCount": 3,
+      "upstreamOrigin": "http://127.0.0.1:3405"
+    },
+    {
+      "id": 9,
+      "name": "Grok-openai (xAI 订阅 · OpenAI 格式带档位)",
+      "status": 1,
+      "groups": "grok,grokpool",
+      "modelCount": 1,
+      "upstreamOrigin": "http://127.0.0.1:3404"
+    },
+    {
+      "id": 10,
+      "name": "mirasim-bridge (Mirasim 云端额度)",
+      "status": 1,
+      "groups": "mirasim,gptpool",
+      "modelCount": 7,
+      "upstreamOrigin": "http://127.0.0.1:4315"
+    }
+  ],
+  "franceCommandcode": {
+    "endpoint": "http://127.0.0.1:4342/v1",
+    "upstream": "https://api.commandcode.ai",
+    "model": "deepseek/deepseek-v4-flash",
+    "status": 200,
+    "matched": true,
+    "ms": 6084,
+    "usage": {
+      "prompt_tokens": 7659,
+      "completion_tokens": 33,
+      "cached_tokens": 7552
+    },
+    "newApiInPath": false
+  }
+}
