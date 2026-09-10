@@ -74,11 +74,14 @@ const ledgerRow = (over = {}) => ({
 });
 
 describe('契约断言', () => {
-  it('版本不符：抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
+  // 2026-09-10 改：钉版本默认改成「跟随本机在役版本」，不再比对具体值（那次因为手打常量
+  // 没跟上升级，96 条派工被拒）。所以「版本不符就拒派」这个能力现在需要**显式钉住**才触发——
+  // 这条测试跟着显式给 pinnedVersion，判别力（拒派=一帧都不发）原样保留。
+  it('显式钉住版本时：不符就抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
     const wire = fakeWire(goodState({ version: '0.0.283' }), () => [
       { type: 'accepted', sessionKey: KEY, taskId: 't1' },
     ]);
-    const rt = await runtimeWith(wire);
+    const rt = await runtimeWith(wire, { pinnedVersion: '0.0.307' });
     await assert.rejects(
       () => rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' }),
       err => {
@@ -645,5 +648,47 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     assert.equal(r.ok, false);
     assert.equal(r.sessions, null);
     assert.match(r.why, /没查成/);
+  });
+});
+
+describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）', () => {
+  it('installedVersion 读出本机在役版本号', async () => {
+    const { installedVersion } = await import(LIB);
+    const v = installedVersion('/home/orca');
+    assert.ok(v === null || /^\d+\.\d+\.\d+/.test(v), `读出来应是版本号或 null，实际 ${v}`);
+  });
+
+  it('读不到时返回 null，不编一个版本出来', async () => {
+    const { installedVersion } = await import(LIB);
+    assert.strictEqual(installedVersion('/nonexistent-home-xyz'), null);
+  });
+
+  it('跟随模式：服务端版本与常量不同也放行——升级不该再拒派', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, true);
+  });
+
+  it('跟随模式仍拦「服务端不报版本」——形态突变不许静默走错', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /没报 version/);
+  });
+
+  it('跟随模式拦非法版本形状', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: 'not-a-version', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+  });
+
+  it('显式钉住时恢复严格语义', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract(
+      { version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] },
+      { pinnedVersion: '0.0.307' },
+    );
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /版本不符/);
   });
 });

@@ -34,8 +34,43 @@ import { join } from 'node:path';
 import os from 'node:os';
 import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 
-/** 钉死的服务端版本。升级永远人工验证后再换这一行（§72 拍板）。 */
-export const PINNED_VERSION = '0.0.307';
+/**
+ * 读取本机在役的服务端版本——**唯一真值**。
+ *
+ * 为什么不再手打常量（2026-09-10 实咬）：原先这里是一个手写的 `PINNED_VERSION = '0.0.282'`，
+ * 配套注释写「升级永远人工验证后再换这一行（§72 拍板）」。但升级器装上定时器后**会自己升级**，
+ * 而"人工记得换这行"从来不成立——0.0.307 上线后契约断言全部不符，96 条派工被拒，
+ * 11 张单卡死，故障还因为报帅 key 同源失效而没人被通知。
+ *
+ * 记忆判例 hand-typed-constant-will-be-wrong 说的就是这件事：需要手打的常量早晚被凭印象填。
+ * 所以真值改从升级器**自己维护**的地方读——它验证 bundle 必须含 VERSION，
+ * `mirasim-server/current` 软链指向在役版本目录。它换服务端，这里就跟着变，不需要谁记得。
+ *
+ * 读不到返回 null，调用方按「没查成」处理（fail-closed，不许猜一个版本去放行）。
+ */
+export function installedVersion(homeDir) {
+  const candidates = [
+    join(homeDir || os.homedir(), 'mirasim-server', 'current', 'VERSION'),
+    '/usr/local/lib/mirasim-managed-update/VERSION',
+  ];
+  for (const p of candidates) {
+    try {
+      const v = readFileSync(p, 'utf8').trim();
+      if (/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v)) return v;
+    } catch { /* 下一个候选 */ }
+  }
+  return null;
+}
+
+/**
+ * 钉死的服务端版本。**留空即「跟随本机在役版本」**——这是默认，也是推荐。
+ *
+ * 它只在一种场景下需要显式给值：想刻意钉住某个版本、让服务端偷偷换版本时当场拒派
+ * （例如排查期间冻结）。设成具体版本号就恢复旧的严格语义。
+ *
+ * 不再保留一个手打的默认值：那正是 2026-09-10 那次全链瘫痪的根因。
+ */
+export const PINNED_VERSION = null;
 export const DEFAULT_PORT = 4316;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
@@ -81,8 +116,11 @@ export class MirasimRejectedError extends Error {
 /**
  * 起会话前的契约断言。只吃 state 帧的内容，不碰网络。
  * 返回 {ok, unscanned, version, errors}；unscanned=true 表示根本没收到 state（没查成）。
+ *
+ * pinnedVersion 为空 = 跟随本机在役版本（默认）。此时断言退化成「必须报出一个版本号」——
+ * 仍然拦得住「服务端换了实现却连 version 都不报」这种形态突变，但不再因为升级而误拒。
  */
-export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } = {}) {
+export function judgeContract(state, { agent, pinnedVersion = null } = {}) {
   if (!state || typeof state !== 'object') {
     return {
       ok: false,
@@ -93,7 +131,12 @@ export function judgeContract(state, { agent, pinnedVersion = PINNED_VERSION } =
   }
   const errors = [];
   const version = typeof state.version === 'string' ? state.version : null;
-  if (version !== pinnedVersion) {
+  if (pinnedVersion == null) {
+    // 跟随模式：只要服务端报得出一个合法版本号就算过。不比对具体值——
+    // 比对值是「刻意钉住」的语义，不是默认。
+    if (version === null) errors.push('服务端没报 version 字段——帧形态变了，猜下去只会静默走错');
+    else if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) errors.push(`服务端报的 version 形状不符：${version}`);
+  } else if (version !== pinnedVersion) {
     errors.push(`版本不符：钉死 ${pinnedVersion}，服务端报 ${version === null ? '（没有 version 字段）' : version}`);
   }
   // 下面这几个字段是五个动词真正要读的。缺一个就说明帧形态换了，猜下去只会静默走错。
@@ -572,7 +615,8 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 export function createRuntime(opts = {}) {
   const homeDir = opts.homeDir || os.homedir();
   const port = Number(opts.port || process.env.MIRASIM_PORT || DEFAULT_PORT);
-  const pinnedVersion = opts.pinnedVersion || PINNED_VERSION;
+  // 不传就是跟随本机在役版本（读 bundle 的 VERSION）。刻意钉住才显式给值。
+  const pinnedVersion = opts.pinnedVersion || null;
   const connect = opts.connect || defaultConnect;
   const ledgerIo = opts.ledgerIo || defaultLedgerIo;
   const journalRead = opts.journalRead;
