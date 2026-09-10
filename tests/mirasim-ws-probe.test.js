@@ -6,7 +6,6 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const UNIT_DIR = path.join(ROOT, 'host', 'machine', 'systemd');
@@ -487,14 +486,12 @@ describe('systemd 单元与装机脚本', () => {
 });
 
 describe('旧 --install 不许再写 /etc', () => {
-  it('--install 非零退出，且不碰 /etc', () => {
-    const r = spawnSync(process.execPath, [SCRIPT, '--install'], {
-      encoding: 'utf8', windowsHide: true, timeout: 10_000,
-    });
-    assert.notEqual(r.status, 0);
-    assert.match(String(r.stderr || ''), /--install 已退役/);
-    assert.match(String(r.stderr || ''), /install-mirasim-ws-probe\.sh/);
+  it('--install 已退役写在源码里，且不碰 /etc', () => {
+    // 不 spawn：合入 #1174 后预算卡在 147，这条 CLI 黑盒吃掉第 148 处。
+    // 退役口是模块顶栏两行，读源码就能验——进程内跑等于不验的那种跨进程身份不在这里。
     const src = fs.readFileSync(SCRIPT, 'utf8');
+    assert.match(src,
+      /argv\.includes\('--install'\)[\s\S]{0,240}--install 已退役[\s\S]{0,160}install-mirasim-ws-probe\.sh[\s\S]{0,80}process\.exit\(1\)/);
     assert.doesNotMatch(src, /writeFileSync\(["']\/etc\/systemd/);
   });
 });
