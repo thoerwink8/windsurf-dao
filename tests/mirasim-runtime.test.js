@@ -13,6 +13,17 @@ const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 
+// 夹具要一个「服务端报得出的合法版本号」。
+// 2026-09-10 起钉版本改成跟随在役版本（读 bundle 的 VERSION），不再有手打常量可抄——
+// 所以这里也从真源读：本机在役版本，读不到就退一个形状合法的假值。
+// 写死具体版本号会在每次升级后把「版本一致」的用例判成不符（0.0.307 那次 8 条一起红）。
+const PINNED_VERSION = (() => {
+  try {
+    const { installedVersion } = require(path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs'));
+    return installedVersion(require('node:os').homedir()) || '0.0.0';
+  } catch { return '0.0.0'; }
+})();
+
 const KEY = 'claude:a8d67849-7fe3-4d03-ae25-312b86952bf9';
 const UUID = 'a8d67849-7fe3-4d03-ae25-312b86952bf9';
 const T0 = Date.parse('2026-09-04T06:43:00.000Z');
@@ -20,7 +31,7 @@ const T0 = Date.parse('2026-09-04T06:43:00.000Z');
 // 服务端连上就推的 state 帧，字段照实测抄
 function goodState(over = {}) {
   return {
-    version: '0.0.282',
+    version: PINNED_VERSION,  // 跟随库内常量：写死会在每次升级后把「版本一致」的用例判成不符
     workdir: '/srv/work',
     home: '/srv',
     platform: 'linux',
@@ -128,7 +139,7 @@ describe('契约断言', () => {
 
   it('缺关键字段（形状变了）也拒派', async () => {
     const { judgeContract } = await import(LIB);
-    const v = judgeContract({ version: '0.0.282', platform: 'linux', agentsAvailable: ['claude'] });
+    const v = judgeContract({ version: PINNED_VERSION, platform: 'linux', agentsAvailable: ['claude'] });
     assert.strictEqual(v.ok, false);
     assert.match(v.errors.join('；'), /state\.workdir 形状不符/);
     assert.match(v.errors.join('；'), /state\.home 形状不符/);
@@ -669,7 +680,7 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
       { sessionKey: KEY, runState: 'streaming' },
       { sessionKey: 'codex:dead', runState: 'done' },
     ];
-    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions }] : []));
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions, hasMore: false }] : []));
     const rt = await runtimeWith(wire);
     const r = await rt.listSessions();
     assert.equal(r.ok, true);
@@ -694,6 +705,33 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     assert.equal(r.ok, false);
     assert.equal(r.sessions, null);
     assert.match(r.why, /没查成/);
+  });
+
+  it('hasMore=true 扩大明确 global 查询，直到服务端证明完整', async () => {
+    let calls = 0;
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [{ sessionKey: KEY }], hasMore: ++calls === 1 }] : []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    const requests = wire.sent.filter(f => f.type === 'listSessions');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].scope, 'global');
+    assert.ok(requests[1].limit > requests[0].limit);
+  });
+
+  it('缺完整性标志不能假报全局查成', async () => {
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [] }] : []);
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.equal(r.sessions, null);
+  });
+
+  it('prompt 已发送但 ACK 丢失是 uncertain，不能释放后重复派', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    await assert.rejects(rt.startSession({ agent: 'claude', workdir: '/tmp/dao-fake', prompt: 'fixture', clientRef: 'lost-ack' }), e => e.detail.launchUncertain === true && e.detail.clientRef === 'lost-ack');
+    assert.equal(wire.sent.filter(f => f.type === 'prompt').length, 1);
   });
 });
 
@@ -771,5 +809,49 @@ describe('建树幂等命中（2026-09-10 服务端 worktrees 缓存陈旧）', 
       assert.strictEqual(err.name, 'MirasimRejectedError');
       return true;
     });
+  });
+});
+
+// 升级换没换干净（2026-09-10 的镜像面）：契约断言两边都读服务端，
+// 所以「盘上 promote 了新版、进程还在跑老版」它天生看不见。这条判官专门补这个盲区。
+describe('judgeVersionDrift：promote 出来的版本 vs 在役进程自报的版本', () => {
+  const load = () => import(LIB);
+
+  it('两个版本一致 → ok', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.307', service: 'mirasim-server.service' });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.promoted, '0.0.307');
+  });
+
+  it('盘上 0.0.307、进程 0.0.282 → red（改了软链没重启的形态）', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.282' });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /0\.0\.307/);
+    assert.match(r.detail, /0\.0\.282/);
+    // 说人话的三行缺一行，群里就只剩技术话——拆开断言，失败时看得出缺的是哪一行。
+    assert.equal(typeof r.plain?.what, 'string', 'red 缺 plain.what');
+    assert.equal(typeof r.plain?.impact, 'string', 'red 缺 plain.impact');
+    assert.equal(typeof r.plain?.plan, 'string', 'red 缺 plain.plan');
+  });
+
+  it('进程比盘上还新（回退没生效）同样 red —— 谁新谁旧都要人看一眼', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: '0.0.282', reported: '0.0.307' }).state, 'red');
+  });
+
+  it('取不到版本 → unknown，绝不是 ok（没查成 ≠ 查过没事）', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: null, reported: '0.0.307' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: null }).state, 'unknown');
+    assert.equal(judgeVersionDrift({}).state, 'unknown');
+    assert.match(judgeVersionDrift({}).detail, /没查成/);
+  });
+
+  it('形状不对的版本号当取不到，不当一致', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: 'unknown', reported: 'unknown' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: ' 0.0.307 ' }).state, 'ok', '两侧空白该被规整');
   });
 });
