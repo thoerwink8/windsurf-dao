@@ -285,7 +285,9 @@ export function readSessionView(snapshot) {
   let error = null;
   if (typeof s.error === 'string' && s.error) error = s.error;
   else if (s.error && typeof s.error === 'object' && typeof s.error.message === 'string') error = s.error.message;
-  return { phase, text, toolCalls, error, incomplete: s.incomplete === true };
+  return { phase, text, toolCalls, error, incomplete: s.incomplete === true,
+    // waiting_user 判据要用到交互清单（#1174）：快照里有就原样透传，没有就不给字段——不编空数组。
+    ...(Array.isArray(s.interactions) ? { interactions: s.interactions } : {}) };
 }
 
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
@@ -861,7 +863,26 @@ export function createRuntime(opts = {}) {
         const verdict = judgeAccepted(msg);
         if (!verdict.ok) {
           if (verdict.missing) throw new MirasimUnavailableError(`起会话没查成：${verdict.errors.join('；')}`);
-          if (verdict.rejected) { explicitlyRejected = true; throw new MirasimRejectedError(verdict.errors.join('；')); }
+          if (verdict.rejected) {
+            explicitlyRejected = true;
+            // #1145 第三层：**真实上游拒绝**就落在这里。撞容量（429 / at-capacity）要喂熔断表，
+            // 否则下一轮还会照原样重投同一条渠道——那正是 issue 里的 retry storm。
+            // 退避轮数由 planBackoff 算（2→4→8 封顶），状态转移仍走 #843 breaker 的
+            // applyEvent(trip)，不新造状态机。认不出指纹就不记（不猜——猜错会把普通失败熔成冷却）。
+            const hit = isCapacityError(verdict.errors.join('；'));
+            if (hit.hit && chan.target) {
+              try {
+                channelFailed({
+                  target: chan.target, now: now(),
+                  why: `起会话被上游拒（${hit.kind}）：${verdict.errors.join('；').slice(0, 120)}`,
+                });
+              } catch { /* 记不进熔断表不该把「起会话失败」这条真相盖掉 */ }
+            }
+            throw new MirasimRejectedError(verdict.errors.join('；'), {
+              workdir, model: model || null,
+              ...(hit.hit ? { capacity: true, capacityKind: hit.kind, channel: chan.channel || null } : {}),
+            });
+          }
           throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
         return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
@@ -879,6 +900,29 @@ export function createRuntime(opts = {}) {
       error.detail = { ...(error.detail || {}), launchUncertain: promptSent && !explicitlyRejected, clientRef: clientRef || null };
       throw error;
     }
+  }
+
+  // Identity reconciliation only. A matching record is not completion evidence.
+  // The unified worktree lease guarantees no second managed launch in this window.
+  function resolveStart({ agent, workdir, startedAt, since } = {}) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(agent || '') || !workdir) return { ok: false, unscanned: true, why: 'invalid start identity' };
+    const earliest = typeof (startedAt ?? since) === 'number' ? (startedAt ?? since) : Date.parse(startedAt ?? since);
+    if (!Number.isFinite(earliest)) return { ok: false, unscanned: true, why: 'missing start timestamp' };
+    const root = join(homeDir, '.mirasim', 'sessions', agent);
+    let ids;
+    try { ids = readdirSync(root); } catch (e) { return { ok: false, missing: e.code === 'ENOENT', unscanned: e.code !== 'ENOENT', why: 'session records unavailable' }; }
+    if (ids.length > 10000) return { ok: false, unscanned: true, why: 'session record scan limit' };
+    const hits = [];
+    for (const id of ids) {
+      if (!SESSION_KEY_RE.test(`${agent}:${id}`)) continue;
+      let row;
+      try { row = JSON.parse(readFileSync(join(root, id, 'record.json'), 'utf8')); }
+      catch (e) { if (e.code === 'ENOENT') continue; return { ok: false, unscanned: true, why: 'session record unreadable' }; }
+      const at = typeof row.createdAt === 'number' ? row.createdAt : Date.parse(row.createdAt);
+      if (row.workdir === workdir && Number.isFinite(at) && at >= earliest - 1000) hits.push({ sessionKey: `${agent}:${id}`, startedAt: at });
+    }
+    if (hits.length !== 1) return { ok: false, missing: hits.length === 0, ambiguous: hits.length > 1, why: 'start identity not unique', matches: hits.length };
+    return { ok: true, ...hits[0], confirmedBy: ['workdir', 'creation-window', 'persistent-session-record'] };
   }
 
   /**
@@ -1049,6 +1093,7 @@ export function createRuntime(opts = {}) {
   return {
     ensureWorkspace,
     startSession,
+    resolveStart,
     readSession,
     listSessions,
     interact,
