@@ -12,8 +12,13 @@
 
 import { createHash } from 'node:crypto';
 
-/** 网关允许的字符：可见且非空白。其余一律折成 '-'。 */
-const UNSAFE = /[^\p{L}\p{N}_.:#/-]+/gu;
+/**
+ * 网关真闸是 **ASCII 可见字符**（issue-gateway 的 KEY_RE：\x21-\x7E），不是「可见字符」。
+ * 第一版这里写 \p{L}\p{N}（收件箱 2026-09-10「报帅规范化闸比真闸松」实咬）：\p{L} 含汉字，
+ * 于是「待拍板」这类 key 过了本层规范化、照样被网关拒，refiner 29 连败——测试闸比真闸松，
+ * 绿灯全亮着生产全瘫。可读前缀只留 ASCII 安全集，中文交给摘要保证稳定与区分。
+ */
+const UNSAFE = /[^A-Za-z0-9_.:#/-]+/g;
 
 /**
  * 把任意文本折成合法且稳定的 key 片段。
@@ -32,8 +37,17 @@ export function escalationKeyOf(seed, keep = 80) {
   return readable ? `${readable}-${digest}` : digest;
 }
 
-/** 网关那侧的判据，抄在这里供测试正控：1–200 个可见字符、无空白。 */
+/**
+ * 网关那侧的判据，独立实现供测试正控（不 import 网关的 KEY_RE——自己查自己查不出错）：
+ * 1–200 个字符，每个都是 ASCII 可见字符（0x21–0x7E）。
+ * 第一版只查「非空、无空白、≤200」，比真闸松——中文 key 在这里绿、在网关红。
+ */
 export function isGatewayKeySafe(key) {
   const s = String(key ?? '');
-  return s.length >= 1 && s.length <= 200 && !/\s/.test(s);
+  if (s.length < 1 || s.length > 200) return false;
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (c < 0x21 || c > 0x7e) return false;
+  }
+  return true;
 }
