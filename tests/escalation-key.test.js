@@ -65,3 +65,25 @@ test('isGatewayKeySafe 认出超长 key', () => {
 test('isGatewayKeySafe 认出空 key', () => {
   assert.equal(isGatewayKeySafe(''), false);
 });
+
+// ── 2026-09-10 第二咬（收件箱「报帅规范化闸比真闸松」）：网关真闸是 ASCII，
+// 第一版 UNSAFE 用 \p{L} 保住了汉字、isGatewayKeySafe 只查空白——测试全绿，生产全拒。
+// 下面三条是防复发的判别力：中文进来必须折成 ASCII，且本侧判据必须跟真闸一样严。
+
+test('中文 key 原样过不了判据——正控（第一版在这里是 true，闸比真闸松）', () => {
+  assert.equal(isGatewayKeySafe('refiner:labels:1146:待拍板'), false);
+});
+
+test('中文 seed 规范化后必须全 ASCII 且合法', () => {
+  const key = escalationKeyOf('refiner:labels:1146:待拍板,已消歧');
+  assert.equal(isGatewayKeySafe(key), true);
+  assert.match(key, /^[\x21-\x7E]+$/);
+});
+
+test('两组不同的中文 label 不许撞 key（可读前缀折没了，区分靠摘要）', () => {
+  assert.notEqual(escalationKeyOf('待拍板'), escalationKeyOf('已消歧'));
+});
+
+test('同一组中文 label 永远同一个 key（refiner 幂等语义不变）', () => {
+  assert.equal(escalationKeyOf('待拍板,model/gpt-5.6-luna'), escalationKeyOf('待拍板,model/gpt-5.6-luna'));
+});
