@@ -20,6 +20,7 @@
 //                     mirasim: dispatchOne = ensureWorkspace + startSession（会话即卡）
 
 import { createRuntime } from './mirasim-runtime.mjs';
+import { createExecutionRuntime } from './execution-runtime.mjs';
 
 export const EXECUTORS = ['mirasim'];
 
@@ -293,12 +294,13 @@ function resolveFamilyRoute({ mirasim, model, provider, emptyRoutesError }) {
  * 契约断言（钉版本 + 帧形状 + 执行体在不在）在 ensureWorkspace / startSession 里面，
  * 不符就抛且一帧 prompt 都不发——本层不再断第二遍（抄第二份判据必然走偏）。
  */
-export function createMirasimBinding({ runtime, policy } = {}) {
+export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
   // 钉版本的唯一真相源是策略（docs/model-routing.json 的 执行体.mirasim.钉版本）。
   // 不传等于 runtime 拿库内常量当真相：改路由表钉版本不生效——服务升级后照旧拒新版本，
   // 或策略已改新版本却继续放旧版本过（#884 审官 P1#5 实咬）。
-  // 策略没写（null）时才让 createRuntime 落库内默认，不在这里抄第二份默认值。
-  const rt = runtime || createRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined });
+  // 策略没写（null）时才让 createRuntime 落「本机在役版本」，不在这里抄第二份默认值——
+  // 而「本机」由 runtimeOpts.homeDir 定（缺了就拿真实 home，CI 上没有 VERSION 就会空转）。
+  const rt = runtime || createExecutionRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined, ...(runtimeOpts || {}) });
   return {
     name: 'mirasim',
     runtime: rt,
@@ -374,12 +376,12 @@ export function bindExecutor(opts = {}) {
     const policy = readExecutorPolicy(opts.routing);
     const named = judgeExecutorName(opts.executor, policy);
     if (!named.ok) return { ok: false, error: named.error, policy };
-    const runtimeFactory = opts.runtimeFactory || createRuntime;
-    // 策略不写钉版本 = 跟随本机在役版本（2026-09-10 起这是默认，读 bundle 的 VERSION）。
-    // 不再回落到一个手打常量——那正是升级后全链拒派的根因。
+    // 两边合起来：#1174 的执行 runtime（带 ACP 后端）+ 2026-09-10 的钉版本跟随语义。
+    // 手打常量已删——它正是升级后全链拒派的根因，不许再回落过去。
+    const runtimeFactory = opts.runtimeFactory || createExecutionRuntime;
     const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || undefined;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
-    const binding = createMirasimBinding({ runtime, policy });
+    const binding = createMirasimBinding({ runtime, policy, runtimeOpts: opts.runtimeOpts });
     return {
       ok: true,
       executor: 'mirasim',
@@ -396,5 +398,5 @@ export function bindExecutor(opts = {}) {
 
   const named = judgeExecutorName(opts.executor, opts.policy);
   if (!named.ok) throw new Error(named.error);
-  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy });
+  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy, runtimeOpts: opts.runtimeOpts });
 }

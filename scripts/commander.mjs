@@ -53,7 +53,9 @@ import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
-import { availabilityFor, loadBreaker } from './lib/provider-health.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
@@ -226,7 +228,7 @@ function scanOrca() {
  * 不许把合并/叫审官整轮停掉。
  */
 function scanSessions() {
-  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  const script = process.env.DAO_EXECUTION_LS || process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'execution-sessions.mjs');
   if (!existsSync(script)) {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
@@ -489,14 +491,15 @@ function orcaErr(err) {
   return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
-/** 健康表标红的模型 id。表没查成 / unknown → []（不拦，与 #842 unknown 不拦对齐）。 */
+/**
+ * 健康表标红的模型 id。判据正文在 lib/model-admission.mjs（纯函数，可单测）——
+ * 这里只负责取三份输入：模型表、execution profiles、熔断表。
+ * 表没查成 / 读不到 → []（不拦，与 #842 unknown 不拦对齐）。
+ */
 function loadHealthRedIds(models) {
   if (!Array.isArray(models) || models.length === 0) return [];
   try {
-    const r = availabilityFor(models);
-    return Object.entries(r.availability || {})
-      .filter(([, v]) => v === 'red')
-      .map(([id]) => id);
+    return healthRedIds({ models, profiles: loadExecutionProfiles(), breaker: loadBreaker() });
   } catch {
     return [];
   }
@@ -691,7 +694,8 @@ function execAction(action, { state, dryRun, log }) {
         return { ok: false, error: 'stop-session 没有 sessionKey' };
       }
       return runOrShow(
-        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
+        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey),
+          ...(action.workdir ? ['--worktree', String(action.workdir)] : [])],
         { dryRun, say, why: action.why },
       );
     }
