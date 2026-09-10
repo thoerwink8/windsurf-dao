@@ -85,8 +85,8 @@ known group credential, even when its descriptor has been relabeled `provider-ke
 
 ## Management access investigation (initial gap, subsequently resolved)
 
-Read the gateway repository's `MIGRATE.md`, `docs/SECRETS.md`,
-`secrets/secrets.env.example`, `secrets/unpack.sh`, `docs/ops/REPLICATION.md`,
+Read the gateway repository's `MIGRATE.md`, `ai-gateway-stack/docs/SECRETS.md`,
+`secrets/secrets.env.example`, `secrets/unpack.sh`, `ai-gateway-stack/docs/ops/REPLICATION.md`,
 `deploy/ssh-client.mjs`, bootstrap/admin probe scripts, gateway policy and available
 local service/SSH configuration. These establish the following specific paths:
 

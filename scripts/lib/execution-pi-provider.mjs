@@ -1,5 +1,6 @@
 // Native Pi binding only. Scheduling/qualification remains in execution-catalog/runtime.
-// Verified against Pi 0.85.1 docs/providers.md and CLI --model provider/id.
+// Verified against Pi 0.85.1 upstream provider documentation (product docs, not a file
+// in this repository) and CLI --model provider/id.
 // Both providers already exist in Pi: never write models-store.json to invent a provider.
 import fs from 'node:fs';
 import os from 'node:os';
