@@ -388,11 +388,11 @@
         "grok-4.6"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "native Grok read passed; production Mirasim 0.0.282 lacks Grok; validate upgraded runtime before scheduling"
+        "status": "available",
+        "checkedAt": "2026-09-10T12:58:43.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-grok-native-execution",
+        "reason": "0.0.307 实起原生 grok 会话：真 worktree 里用写文件工具落产物、账本两行 200（route=local，上游 cli-chat-proxy.grok.com），非网关栈"
       },
       "quality": {
         "status": "unverified",
