@@ -29,7 +29,7 @@
 // 分层：judge* / parse* / read* 是纯判官，只吃入参不碰 IO；createRuntime 只管收发，不判对错。
 // 自己查自己查不出错——判完工的判据不复用发消息那一层的解析。
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { checkTreeLease, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
@@ -626,13 +626,21 @@ export function createRuntime(opts = {}) {
         return msg.workspaces;
       };
 
+      // 匹配必须按 realpath，不许按字面路径（2026-09-10 实咬）：主仓在服务端以
+      // /home/orca/windsurf-dao（一个指向 /srv/projects/windsurf-dao 的符号链接）注册着，
+      // 0.0.307 对 saveWorkspace 按 realpath 去重——再注册 /srv 路径会被当成重复条目删掉。
+      // 字面匹配于是永远「列不到」，11 张单全卡在建树，看起来像服务端拒绝主仓，
+      // 其实是这里的 find 认不出同一个仓的另一个名字。
+      const realOf = p => { try { return realpathSync(String(p)); } catch { return String(p); } };
+      const repoReal = realOf(repo);
+      const sameRepo = w => w?.path === repo || realOf(w?.path) === repoReal;
       let workspaces = await listOnce();
-      let entry = workspaces.find(w => w?.path === repo);
+      let entry = workspaces.find(sameRepo);
       if (!entry) {
         wire.send({ type: 'saveWorkspace', path: repo, name: repo.split('/').filter(Boolean).pop() || repo });
         // 读回自证：注册完再列一次，列不到就说明这一步没生效
         workspaces = await listOnce();
-        entry = workspaces.find(w => w?.path === repo);
+        entry = workspaces.find(sameRepo);
         if (!entry) throw new MirasimRejectedError(`注册工作区没生效，列不到 ${repo}`);
       }
 
