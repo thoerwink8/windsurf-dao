@@ -46,6 +46,7 @@
 - [x] 本轮跟上 origin/master（v2.2.0 / 建树 realpath / 钉版本跟随在役 / 报帅 key 规范化）。合入后观察 `2026-09-10-指挥官timer停了自检仍绿.md` 落成 #1177，文件加「处置：#1177」（空处置行会把 inbox 闸打红）。
 - [x] 本轮跟上 origin/master（#1110 合并闸检查器 + #1169 渠道并发三件套）。合入的是 master 新机制，本单选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（报帅 key 闸对齐网关真闸 ASCII；巡检观察已有「处置：2af1fba9」）。合入的是 master 已修，本单选型路仍只读 PR label。
+- [x] 本轮跟上 origin/master（#1174/#1175 统一执行改造：ACP 无人值守 + 会话目录清理 + 补丁链闸 + grok 原生腿证据）。冲突 0；选型路仍只读 PR label。相关测试 773 绿。合入后 spawn 预算 147 被本单 CLI 夹具顶到 148（`pr-label-truth` 真走 `dao.mjs` 才能断言 gh 序列没有 issue view）。
 
 ## 机制判定
 
