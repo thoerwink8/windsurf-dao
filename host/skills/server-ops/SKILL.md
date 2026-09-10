@@ -26,6 +26,15 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 - 一条命令：`node scripts/miraquota-contabo-sync.mjs --once`（timer 调同一条；`--dry-run` 只打印）。
 - 探活：`systemctl list-timers` 里要有 `miraquota-contabo.timer`，**NEXT 不能是 `-`**。多机页出现 `contabo`，额度数对得上 `getRelay` 的 usage windows。
 
+## 看板阶段超时（墙钟闸）
+
+v0 零界面（#818）：一张表 + 墙钟超 `docs/dispatch-policy.json` 的 `board.workerWallHoursMax` 才报到总控群。跟上面「连续 N 轮没动」不是同一把尺。
+
+- 单元模板：`host/machine/systemd/dao-board-watch.service` + `.timer`（装法在 service 文件头）。
+- 幂等安装（要 root）：`sudo bash scripts/install-board-watch.sh`。
+- 一条命令：`node scripts/board-watch.mjs`（timer 调同一条；`--dry-run` 只打印）。读表：`node scripts/dao.mjs board [--json]`。
+- 探活：`systemctl list-timers` 里要有 `dao-board-watch.timer`，**NEXT 不能是 `-`**。源没查成 exit 2，不许当成没超时。
+
 ## 卡死发现（盘面推进量）
 
 2026-09-06 用户拍板删掉屏面指纹整层：不再读执行体屏幕猜它卡没卡，改成超时判死——
