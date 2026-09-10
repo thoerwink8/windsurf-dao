@@ -147,6 +147,74 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'merged'));
   });
 
+  // 2026-09-11 实咬：「认输」把 PR 永久焊死。
+  // #1000 那行 `if (prHasStuckLabel(pr)) continue` 的注释写着「合并路仍走」，
+  // 但 continue 把合并路一起跳掉了。于是审官**后来真在 head 上落了 APPROVED** 也合不了。
+  // 现场：PR #1127 —— 认输后审官会话交付 APPROVED（commit_id == headRefOid）、CI 绿、
+  // MERGEABLE，三条齐了却因为一个 40 分钟前打的标躺着不动；
+  // 而它是当时 13 张认输 PR 里**唯一**真可合的（其余 12 张 atHead 零判定）。
+  //
+  // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」。
+  it('【认输不挡合并】带「卡死/自动化认输」但审官已在当前 head 判绿 → 照样 merge', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1127';
+    const pr = {
+      number: 1127, title: '已认输但后来绿了', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      labels: [{ name: '卡死/自动化认输' }, { name: 'type/写码' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1127: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 1, '条件齐了就该合，标不该把路堵死');
+    assert.equal(byKind(r, 'land').length, 1);
+  });
+
+  it('【认输仍挡重试】带标但当前 head 零判定 → 不 merge、不派审官（省额度那条还成立）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 1128, title: '认输了还没绿', isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h1128',
+      labels: [{ name: '卡死/自动化认输' }, { name: 'type/写码' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1128: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rereview').length, 0, '认输就是为了不再机械重试');
+  });
+
+  it('【认输也挡冲突解】带标的冲突 PR 不派解冲突（合并例外只放判绿那一条）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 1129, title: '认输且冲突', isDraft: false, mergeable: 'CONFLICTING', headRefOid: 'h1129',
+      labels: [{ name: '卡死/自动化认输' }], statusCheckRollup: [], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1129: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rework').length, 0, '认输只放「判绿」一条过去，别的照旧挡住');
+  });
+
+  it('【认输挡合并】判绿但 CI 红 → 仍不合（例外不许绕过 CI 那道闸）', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1130';
+    const pr = {
+      number: 1130, title: '认输且 CI 红', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      labels: [{ name: '卡死/自动化认输' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1130: { reviews: [{ state: 'APPROVED', body: '可合并', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, 'CI 是非卖品，例外不绕过它');
+  });
+
   it('真 APPROVED + 白话正文（无判定行）→ merge，不误报 approved-without-review（#857 红 1 判别）', async () => {
     const { decide } = await CORE;
     const pr = {

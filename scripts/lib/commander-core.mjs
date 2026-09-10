@@ -1005,7 +1005,33 @@ function collectCandidates(situation) {
     if (!pr || pr.number == null) continue;
     // #1000：认输 / 等用户是 PR 属性。指挥官见到就跳过，不再机械重试（省额度）。
     // 合并路仍走——帅位关掉或去掉标之后自然回来；标还在时也不自动合一张已经认输的 PR。
-    if (prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number))) continue;
+    //
+    // 2026-09-11 实咬：上面这句注释写着「合并路仍走」，但 `continue` 把合并路也一起跳掉了，
+    // 于是「认输」把 PR **永久焊死**——审官后来真在 head 上落了 APPROVED 也合不了。
+    // 现场：PR #1127 认输之后审官会话交付了 APPROVED（commit_id == headRefOid）、
+    // CI 绿、MERGEABLE，三条都齐，却因为一个 40 分钟前打的标躺着不动。
+    // 而 #1127 当时是 13 张认输 PR 里**唯一**真可合的——其余 12 张 atHead 零判定。
+    //
+    // 改法（最小）：只让「判绿」这一件事穿过这层标，其余动作照旧被认输挡住。
+    // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」；
+    // 真合不了的情况下面各道判据（CI 红、draft、冲突、head 零判定）各自会拦。
+    const stuck = prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number));
+    if (stuck) {
+      const headR = pr.headRefOid;
+      const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);
+      const mergeableR = String(resolveMergeable(pr, { viewMergeable: situation.viewMergeable }).mergeable || '').toUpperCase() === 'MERGEABLE';
+      // CI 是非卖品：例外只放「判绿」过去，不许绕过 CI 那道闸（写完本条时自己测出来的）。
+      const ciR = prChecksRed(pr);
+      if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
+        out.push(withNeeds({
+          kind: 'merge', pr: pr.number, title: pr.title || '',
+          why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE——已认输但条件齐了，照合（认输只挡重试，不挡合并）',
+        }, N.merge));
+        out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等）' }, N.land));
+        out.push(withNeeds(hub(`PR #${pr.number} 认输之后审官仍判绿，已自动合并`, 'merged', { pr: pr.number }), N.merge));
+      }
+      continue;
+    }
 
     // 判绿判据只认**真 review**（2026-09-05 实咬）：原来这里的入口是 prApprovedReady，
     // 它要 pr.reviewDecision === 'APPROVED'。而 reviewDecision 是 GitHub 按分支保护规则算的聚合值，
