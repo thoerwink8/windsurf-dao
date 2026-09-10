@@ -367,14 +367,25 @@ describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
   // mirasim-server/current/VERSION）。所以最终落到的**不是** null，而是真在役版本号——
   // 旧断言钉的是「落库内常量」，那个常量已删。判别点保住：必须落一个合法版本号，
   // 不许是 null/undefined（否则契约断言判不了版本）。
+  // 「跟随本机在役版本」这件事的判据是「runtime 读到的那个 VERSION 文件」，不是运行这台机的
+  // 真实 home：CI 容器里没有 ~/mirasim-server/current/VERSION（2026-09-10 CI 实红，本地全绿——
+  // 同一份代码两个结果，说明这两条其实在测环境）。改成注一个临时 home 当「本机」，
+  // 判据从「随机环境」变成「写死进夹具的值」，两条在任何机器上结果一致。
+  function homeWithVersion(v) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-exec-binding-'));
+    fs.mkdirSync(path.join(home, 'mirasim-server', 'current'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'mirasim-server', 'current', 'VERSION'), `${v}\n`);
+    return home;
+  }
+
   it('策略没写钉版本 → 跟随本机在役版本，落一个合法版本号而非 null/undefined', async () => {
     const S = await import(LIB);
+    const home = homeWithVersion('9.9.901');
     const p = S.readExecutorPolicy(policyDoc({ 钉版本: undefined }));
     assert.equal(p.mirasim.pinnedVersion, null, '策略层没写就是 null，本层不替它编一个');
-    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
-    const got = b.runtime.config.pinnedVersion;
-    assert.ok(got != null, '落成了 null/undefined —— 契约断言判不了版本');
-    assert.match(String(got), /^\d+\.\d+\.\d+/, `落到的应该是合法版本号，实际 ${got}`);
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtimeOpts: { homeDir: home } });
+    assert.equal(b.runtime.config.pinnedVersion, '9.9.901',
+      '留空要跟随本机在役版本（读 homeDir 下 mirasim-server/current/VERSION），不许兜底成手打常量');
   });
 
   it('注入了 runtime 时用注入的那个，不被策略覆写（测试与调用方能自己接线）', async () => {
@@ -397,13 +408,12 @@ describe('钉版本从策略传到 runtime（#884 P1#5）', () => {
     assert.ok(p.mirasim, '真表里没 mirasim 节 = 本次等于没查');
     assert.equal(p.mirasim.pinnedVersion, null,
       '真表又钉了手打版本——升级到下一版时它必然过期拒派（2026-09-10 的 96 条实咬）；要冻结版本请走排查流程并写明回收时间');
-    const b = S.bindExecutor({ executor: 'mirasim', policy: p });
+    const home = homeWithVersion('9.9.902');
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtimeOpts: { homeDir: home } });
     // 留空 = 跟随：runtime 最终拿到的是本机在役版本号（execution-runtime 读 bundle 的 VERSION），
-    // 不是 null、更不是某个手打常量。判别点：它必须等于本机真值。
-    const { installedVersion } = await import(RUNTIME_LIB);
-    const real = installedVersion(require('node:os').homedir());
-    assert.equal(b.runtime.config.pinnedVersion, real,
-      `留空要跟随本机在役版本（期望 ${real}），不许中途被兜底成手打常量`);
+    // 不是 null、更不是某个手打常量。判别点：它必须等于夹具写死的那个真值。
+    assert.equal(b.runtime.config.pinnedVersion, '9.9.902',
+      '留空要跟随本机在役版本，不许中途被兜底成手打常量');
   });
 });
 
