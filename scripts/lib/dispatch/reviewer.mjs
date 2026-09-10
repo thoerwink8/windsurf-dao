@@ -14,6 +14,7 @@ import { normalizePipes } from '../next-launch.mjs';
 import { availabilityFor } from '../provider-health.mjs';
 import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
 import { preflightStopReport } from './launch.mjs';
+import { legAvailability } from '../channel-concurrency.mjs';
 
 export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
@@ -778,7 +779,8 @@ export function planReviewerCreateAfterFail({ error } = {}) {
 }
 
 /** #675：起审官失败种类。terminal create 超时 / 注入未提交 / depth 限制 / 在途派单 / 没查成 必须分开。
- * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。 */
+ * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。
+ * #1145 余洞：门里两道闸的背压（租约被占 / 渠道满员）同理，两条都得认——见下面那段注释。 */
 export function classifyReviewerSpawnError(error) {
   const t = String(error || '');
   if (/Timed out waiting for terminal handle|terminal create 失败|terminal create 超时/i.test(t)) {
@@ -793,10 +795,33 @@ export function classifyReviewerSpawnError(error) {
   if (/already has an active dispatch/i.test(t)) {
     return { kind: 'active-dispatch', label: '审官终端已有在途派单' };
   }
+  // ── 门里的两种**背压**（#1145）：都不是「起审官失败」，是「这轮轮不到」──────────
+  // 起因是同一个：审官路径把背压当失败，于是去烧 drain 的重试预算，撞满 3 次把 PR
+  // 判成 mark-exhausted 认输——而实际上一个审官都还没起过。
+  //
+  // **两条都要接，缺一条等于没修**（memory 判例 fix-landed-at-one-call-site-only：
+  // 「一夜撞三次；带解释注释的修法最容易漏接，因为注释让人确信已经处理好了」）。
+  // mirasim 门里排着两道闸，各自抛一种背压，谁漏了谁那条路就继续烧预算：
+  //   · 租约闸（#1085，lease.mjs 的 LEASE_BUSY_REASON）——树里已经有人在干活
+  //   · 渠道闸（#1145，channel-concurrency.mjs 的 CHANNEL_FULL_REASON）——上游渠道满员/冷却中
+  // 认字样、不 import 那两个常量对象：这里判的是**错误串**（门抛出的 message 经
+  // mirasimReviewerCreate 包了一层），拿常量去比对象比不上，反而给人「已接上」的错觉。
+  if (/租约被占|lease-held/i.test(t)) {
+    return { kind: 'lease-held', label: '租约被占（背压，排队下轮）' };
+  }
+  if (/渠道满员|channel-full/i.test(t)) {
+    return { kind: 'channel-full', label: '渠道满员（背压，排队下轮）' };
+  }
   return { kind: 'unscanned', label: '没查成' };
 }
 
-const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch']);
+// **背压集合**：已知拒派 ⇒ 写进复审待办交指挥官下一轮，不算 fail。
+// 加新的拒起理由时改这一处，别在调用点各判一次「这个算失败还是算背压」——
+// 那正是 lease-held 漏了整整一轮的原因（#1145 返工时才发现）。
+// 「没查成」永远不在这里：拿不准不降级，必须停手报帅（有回归测试钉这条）。
+const REVIEW_PENDING_HANDOFF_KINDS = new Set([
+  'depth-limit', 'active-dispatch', 'channel-full', 'lease-held',
+]);
 
 /** 从 Orca「already has an active dispatch (ctx_…)」里抠已有 id。抠不到 = 没查成，不许猜。 */
 export function parseActiveDispatchId(error) {
@@ -1064,10 +1089,14 @@ export function postCommentOnce({
 // @param {string|null} [args.dispatchId]
 // @param {function} [args.probe] 注入探针（测试用）
 // @param {object} [args.policy] / [args.availabilityResult] / [args.now] 注入
-// @returns {Promise<{ok,stop,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
+// @param {object} [args.channelCaps]   #1145 渠道容量快照 { caps:{ch:n}, states } —— 缺则渠道剔除 inert
+// @param {object} [args.channelInFlight] #1145 渠道在途快照 { counts:{ch:n} }（或直接的 counts 对象）
+// @param {Set|string[]} [args.channelExcluded] #1145 本轮已 429 的渠道
+// @returns {Promise<{ok,stop,queued?,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
 export async function preflightReviewer({
   order = [], models = [], workerId = null, noPreflight = false, dispatchId = null,
   probe, policy, availabilityResult, now = new Date(), root, home,
+  channelCaps = null, channelInFlight = null, channelExcluded = null,
 } = {}) {
   const byId = new Map((models || []).map(m => [m.id, m]));
   // 同厂闸：顺位里与工人同厂的当场剔除，不放宽。
@@ -1092,6 +1121,42 @@ export async function preflightReviewer({
       report: '派前探一针：审官顺位无异厂候选，停手报帅。',
     };
   }
+  // 渠道满员剔除（#1145）：与上面的同厂剔除、下面的熔断剔除同一层同构。
+  // 只据「在途上限」剔（熔断仍由 availabilityFor / runPreflight 处理，不在这里重复）。
+  // 缺 channelCaps 快照 → inert（不剔），保证既有 preflightReviewer 行为不回归。
+  let channelNotes = [];
+  if (channelCaps && channelCaps.caps) {
+    const caps = channelCaps.caps || {};
+    const states = channelCaps.states || {};
+    const inFlight = (channelInFlight && (channelInFlight.counts || channelInFlight)) || {};
+    const excluded = channelExcluded instanceof Set
+      ? channelExcluded
+      : new Set(Array.isArray(channelExcluded) ? channelExcluded : []);
+    const kept = [];
+    const dropped = [];
+    for (const cand of vendorFiltered) {
+      const av = legAvailability(cand.landing, { caps, states, inFlight, excluded });
+      // 认不出渠道（no-channel）不据渠道剔——本闸只拦「已满员/本轮429」，其余保留。
+      if (av.available || av.reason === 'no-channel') { kept.push(cand); continue; }
+      if (av.reason === 'at-cap' || av.reason === 'excluded-429') {
+        dropped.push({ id: cand.id, channel: av.channel, why: av.why });
+        continue;
+      }
+      kept.push(cand); // breaker 等未传，理论到不了；保守保留
+    }
+    channelNotes = dropped.map(d => `渠道满员，剔除 ${d.id}（${d.channel}）分流到顺位下一腿`);
+    // 「渠道都满」≠「同厂全剔」：前者排队等下轮，不报帅停手；后者才是真无候选。
+    if (kept.length === 0 && dropped.length > 0) {
+      return {
+        ok: false, stop: false, queued: true, chosen: null, switched: false, probed: [], hardBlocked: [],
+        notes: channelNotes.concat('审官顺位内所有腿渠道都满员——票留队列等下轮（不硬挤）'),
+        skipped: false,
+        report: '派前探一针：审官顺位所有腿渠道满员，排队等下轮，不报帅。',
+      };
+    }
+    vendorFiltered.length = 0;
+    vendorFiltered.push(...kept);
+  }
   const pol = policy || loadDispatchPolicy(root ? { root } : {});
   const avail = availabilityResult
     || (pol.useHealthTable ? availabilityFor(vendorFiltered, { home, now: now instanceof Date ? now.getTime() : now, breakerPolicy: pol.breaker }) : undefined);
@@ -1107,7 +1172,7 @@ export async function preflightReviewer({
     switched: !!(r.chosen && top && r.chosen !== top),
     probed: r.probed,
     hardBlocked: r.hardBlocked,
-    notes: r.notes,
+    notes: channelNotes.concat(r.notes || []),
     skipped: r.skipped,
     unscannedFallback: !!r.unscannedFallback,
     report: r.stop ? preflightStopReport({ role: '审官', probed: r.probed, hardBlocked: r.hardBlocked }) : null,

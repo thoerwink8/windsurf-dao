@@ -314,7 +314,23 @@ export async function mirasimReviewerCreate({
   //   「选型脱节」：真机看账本 model= 那行）。认→精确；不认→选型退化为「只选族/agent」。
   let sess;
   try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}` }); }
-  catch (e) { return { ok: false, stage: 'start', error: `起审官会话没查成：${String(e?.message || e)}`, code: e?.code, treePath }; }
+  catch (e) {
+    // 门里的**背压**标记必须原样透出去（#1145 / #1085）：租约被占、渠道满员都带
+    // detail.busy=true，它们不是「起审官失败」而是「这轮轮不到」。丢掉这个标记的后果是
+    // 背压被当成失败去烧重试预算（drain 的 3 次上限），最后把 PR 判成认输——
+    // 而实际上一个审官都还没起过。dao.mjs 那侧 `fail(res.error, {...res})` 会把这里的字段
+    // 整份摊进 JSON，所以只要在这儿带上，调用方一行都不用改。
+    const busy = e && e.detail && e.detail.busy === true;
+    return {
+      ok: false, stage: 'start',
+      error: `起审官会话没查成：${String(e?.message || e)}`,
+      code: e?.code, treePath,
+      ...(busy ? {
+        busy: true, reason: e.detail.reason || null,
+        channel: e.detail.channel || null, holders: e.detail.holders || undefined,
+      } : {}),
+    };
+  }
   if (!sess || !sess.sessionKey) return { ok: false, stage: 'start', error: '起审官会话没返回 sessionKey（没查成）', treePath, sess };
 
   return {
