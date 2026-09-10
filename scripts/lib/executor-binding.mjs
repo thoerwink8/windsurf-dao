@@ -19,7 +19,7 @@
 //   dispatch        → orca: dao.mjs 原有队列脊（派工单 + detached 执行体，本绑定不接）
 //                     mirasim: dispatchOne = ensureWorkspace + startSession（会话即卡）
 
-import { createRuntime, PINNED_VERSION } from './mirasim-runtime.mjs';
+import { createRuntime } from './mirasim-runtime.mjs';
 
 export const EXECUTORS = ['mirasim'];
 
@@ -375,7 +375,9 @@ export function bindExecutor(opts = {}) {
     const named = judgeExecutorName(opts.executor, policy);
     if (!named.ok) return { ok: false, error: named.error, policy };
     const runtimeFactory = opts.runtimeFactory || createRuntime;
-    const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || PINNED_VERSION;
+    // 策略不写钉版本 = 跟随本机在役版本（2026-09-10 起这是默认，读 bundle 的 VERSION）。
+    // 不再回落到一个手打常量——那正是升级后全链拒派的根因。
+    const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || undefined;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
     const binding = createMirasimBinding({ runtime, policy });
     return {
