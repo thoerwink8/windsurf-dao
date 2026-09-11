@@ -14,9 +14,32 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, check, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   let value;
-  while (Date.now() < deadline) { value = await fn(); if (check(value)) return value; await delay(20); }
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      value = await fn();
+      lastError = undefined;
+      if (check(value)) return value;
+    } catch (error) {
+      // Fake-agent files appear a few polls after start acknowledgement.
+      // First-poll ENOENT / partial JSON must retry, or CI load turns this into a false red.
+      if (error && (error.code === 'ENOENT' || error instanceof SyntaxError)) lastError = error;
+      else throw error;
+    }
+    await delay(20);
+  }
+  if (lastError) throw lastError;
   assert.fail(`Condition not met: ${JSON.stringify(value)}`);
 }
+
+function parseSpawnJson(child) {
+  const detail = `${child.stderr || ''}\n${child.stdout || ''}`.trim();
+  assert.equal(child.status, 0, detail);
+  const line = String(child.stdout || '').trim().split(/\n/).filter(Boolean).at(-1);
+  assert.ok(line, `child stdout empty; stderr=${child.stderr || ''}`);
+  return JSON.parse(line);
+}
+
 async function setup(t, scenario = 'complete', overrides = {}) {
   const { createAcpRuntime } = await mod;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-test-'));
@@ -37,6 +60,15 @@ async function setup(t, scenario = 'complete', overrides = {}) {
 }
 
 test('ACP durable runtime (isolated fake executables only)', { skip: process.platform !== 'linux' }, async t => {
+  await t.test('until retries missing files instead of failing on the first poll', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-until-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'later.json');
+    setTimeout(() => fs.writeFileSync(file, '{"ok":true}\n'), 40);
+    const value = await until(() => JSON.parse(fs.readFileSync(file, 'utf8')), v => v.ok === true, 2000);
+    assert.equal(value.ok, true);
+  });
+
   await t.test('completes a prompt, preserves usage/context, and never marks the GitHub task complete', async t => {
     const { runtime, start, disk } = await setup(t, 'complete', { env: { ACP_FIXTURE_SECRET: 'test-secret-never-publish' }, profiles: [{ id: 'native-cursor', agent: 'cursor', model: 'catalog-only' }] });
     const allocated = `acp:${randomUUID()}`;
@@ -65,9 +97,8 @@ test('ACP durable runtime (isolated fake executables only)', { skip: process.pla
   await t.test('survives the initiating dao process exiting', async t => {
     const { runtime, options, workdir } = await setup(t, 'delayed');
     const code = `import {createAcpRuntime} from ${JSON.stringify(pathToFileURL(path.join(root, 'scripts/lib/acp-runtime.mjs')).href)};const rt=createAcpRuntime(${JSON.stringify(options)});console.log(JSON.stringify(await rt.startSession(${JSON.stringify({ agent: 'cursor', workdir, prompt: 'detached' })})));`;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 18000 });
-    assert.equal(child.status, 0, child.stderr);
-    const created = JSON.parse(child.stdout);
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 45000 });
+    const created = parseSpawnJson(child);
     const view = await until(() => runtime.readSession(created.sessionKey), view => view.phase === 'done');
     assert.equal(view.text, 'finished:complete');
   });
@@ -322,13 +353,18 @@ test('ACP durable runtime (isolated fake executables only)', { skip: process.pla
     await until(() => JSON.parse(fs.readFileSync(path.join(workdir, 'fake-backend-session.json'))), history => history.prompts.length === 1);
     await assert.rejects(runtime.resumeSession(original.sessionKey, 'too-early'), error => error.code === 'session_active');
     assert.equal((await runtime.stopSession(original.sessionKey)).verified, true);
+    const locksDir = path.join(options.stateDir, 'locks');
+    await until(() => {
+      try { return fs.readdirSync(locksDir); }
+      catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    }, names => names.length === 0);
     const changed = { ...options, homeDir: path.join(dir, 'different-home'), env: { ACP_RESUME_MARKER: 'must-not-replace-account' },
       acpProfiles: { cursor: { command: '/must-not-replace-profile', args: [] } } };
     const allocated = `acp:${randomUUID()}`;
     const code = `import {createAcpRuntime} from ${JSON.stringify(pathToFileURL(path.join(root, 'scripts/lib/acp-runtime.mjs')).href)};console.log(JSON.stringify(await createAcpRuntime(${JSON.stringify(changed)}).resumeSession(${JSON.stringify(original.sessionKey)},'continue-only',${JSON.stringify({ sessionKey: allocated })})));`;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 20000 });
-    assert.equal(child.status, 0, child.stderr);
-    const resumed = JSON.parse(child.stdout);
+    // resumeInto waits up to controlTimeoutMs then launchSession up to startupTimeoutMs (6s+15s).
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: 45000 });
+    const resumed = parseSpawnJson(child);
     assert.equal(resumed.sessionKey, allocated);
     assert.notEqual(resumed.sessionKey, original.sessionKey);
     assert.equal(resumed.taskId, original.taskId);

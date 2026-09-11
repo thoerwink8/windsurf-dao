@@ -491,6 +491,7 @@ function collectCandidates(situation) {
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
+  const effectiveMergeability = new Map();
   // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
   const nowMs = Date.parse(situation.at || '') || 0;
   let reworkThisRound = 0;
@@ -1076,6 +1077,7 @@ function collectCandidates(situation) {
     // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
     const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
     const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
+    effectiveMergeability.set(pr.number, mergeableState);
     const mergeableNow = mergeableState === 'MERGEABLE';
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
@@ -1352,7 +1354,12 @@ function collectCandidates(situation) {
       desired: desired && desired.unscanned ? null : (desired && desired.items),
       sessions: sessionListForLiveness(situation),
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
-      alreadyQueued: out.map((a) => a.issue).filter((n) => Number.isInteger(n)),
+      openPrs: gh.scanned ? (gh.prs || []).map(pr => {
+        const review = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+        const mergeable = effectiveMergeability.get(pr.number) || pr.mergeable;
+        return { ...pr, reworkRequired: mergeable !== 'MERGEABLE' || !review.scanned || review.latestRed === true };
+      }) : null,
+      alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
       dispatchedThisRound: 0,
     });
