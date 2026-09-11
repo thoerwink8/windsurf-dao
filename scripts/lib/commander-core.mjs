@@ -257,7 +257,7 @@ export function dispatchMergePolicyArgs(action) {
   return ['--merge-policy', 'manual', '--merge-reason', reason];
 }
 
-/** issue 标签取值：`model/grok-4.6` → 传 prefix 'model/' 得 'grok-4.6'。取第一个命中，没有返回 null。 */
+/** 标签取值：`model/grok-4.6` → 传 prefix 'model/' 得 'grok-4.6'。issue / PR 都能用。取第一个命中，没有返回 null。 */
 export function labelValue(issue, prefix) {
   const labels = Array.isArray(issue?.labels) ? issue.labels : [];
   for (const l of labels) {
