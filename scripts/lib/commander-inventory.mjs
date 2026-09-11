@@ -438,8 +438,13 @@ export function findPathShims(exists = existsSync) {
   return PATH_SHIMS.filter((p) => exists(p));
 }
 
-function unit(desc, execArgs) {
-  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nExecStart=/usr/bin/node ${execArgs}\n`;
+function unit(desc, execArgs, { gitPush = false } = {}) {
+  // #1167：生成单元也要过凭据闸。act 会 git push（合冲突后推 PR 分支），
+  // 声明 REQUIRES_GIT_PUSH=1 且不设空目录；inventory 不写远端，致盲 ~/.config/gh。
+  const cred = gitPush
+    ? 'UnsetEnvironment=GH_TOKEN GITHUB_TOKEN\n# REQUIRES_GIT_PUSH=1：这个单元要写远端 git（commander.mjs 里的 git push）。\n# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 git 的凭据助手\n# `gh auth git-credential` 找不到 hosts.yml，推送永远失败。\n# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs。'
+    : 'UnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nEnvironment=GH_CONFIG_DIR=/var/empty';
+  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\n${cred}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
 /**
  * timer 模板。**`OnCalendar` 是必需的，不是冗余。**
@@ -459,7 +464,11 @@ function timer(desc, activeSec, calendar) {
   return `[Unit]\nDescription=${desc}\n\n[Timer]\nOnCalendar=${calendar}\nOnBootSec=3min\nOnUnitActiveSec=${activeSec}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
 }
 export const INSTALL_FILES = () => ({
-  '/etc/systemd/system/commander-act.service': unit('指挥官 act：scan→decide→执行（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs act'),
+  '/etc/systemd/system/commander-act.service': unit(
+    '指挥官 act：scan→decide→执行（#800）',
+    '/srv/projects/windsurf-dao/scripts/commander.mjs act',
+    { gitPush: true },
+  ),
   // :11/20 —— 错开 dao-sync(:1/5)、dao-board-gc(:07)、dao-patrol(:23)
   '/etc/systemd/system/commander-act.timer': timer('指挥官 act 每 20 分钟', '20min', '*:11/20'),
   '/etc/systemd/system/commander-inventory.service': unit('指挥官盘点体检（#800）', '/srv/projects/windsurf-dao/scripts/commander.mjs inventory'),
