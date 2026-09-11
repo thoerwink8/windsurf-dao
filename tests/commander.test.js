@@ -1602,6 +1602,44 @@ describe(`审官标签只读 PR 自己的 reviewer/*`, () => {
       assert.equal(esc.length, 1, `第 ${round + 1} 轮都要有可见出口（有开单去重，不会刷屏单子）`);
     }
   });
+
+  // 2026-09-11 实咬 #1182：标题「堵 #565」抢走正文「署名 issue #1152」。
+  // #565 已关、只有「已消歧」；#1152 标齐。旧解析去查 565 → 补不上标 → escalate。
+  // 用户拍板：不要给标题里无关的 #565 补标签。
+  it('标题随手引用的 #565 不许抢走正文署名 #1152 的审官', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 1159,
+      isDraft: false,
+      mergeable: 'MERGEABLE',
+      headRefOid: HEAD,
+      title: '[cc] fix(test): 测试结构性够不着真执行体，堵 #565 假会话泄漏',
+      body: '署名 issue #1152，关单交给 `scripts/close-issues.mjs`。',
+    };
+    const r = decide(baseSituation({
+      at: '2026-09-11T12:00:00.000Z',
+      github: {
+        scanned: true,
+        issues: [labeledIssue(1152, { labels: [
+          { name: 'model/grok-4.6' },
+          { name: 'reviewer/gpt-5.6-luna' },
+          { name: 'type/写码' },
+        ] })],
+        attributedIssues: [{ number: 565, title: '项化派工', labels: [{ name: '已消歧' }] }],
+        prs: [pr],
+      },
+      prReviews: { scanned: true, byPr: { 1159: { reviews: [] } } },
+    }));
+    const add = byKind(r, 'add-label');
+    assert.equal(add.filter((a) => Number(a.issue) === 565).length, 0, '不许给无关的 #565 补标');
+    const esc = byKind(r, 'escalate').filter((a) => a.reason === 'reviewer-label-missing');
+    assert.equal(esc.length, 0, '正文署名单标齐就不该报审官标签缺失');
+    const rr = byKind(r, 'rereview');
+    assert.equal(rr.length, 1, '该从 #1152 叫审官');
+    assert.equal(rr[0].issue, 1152);
+    assert.equal(rr[0].reviewer, 'gpt-5.6-luna');
+    assert.equal(rr[0].pr, 1159);
+  });
 });
 
 // ── 死票回收（2026-09-06 实咬：#970/#972/#983 合并后仍每轮开单，17 张噪音单的源头） ──

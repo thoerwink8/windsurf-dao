@@ -7,6 +7,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { INSTALL_FILES } from './commander-inventory.mjs';
 
 export const HOST_SURFACES = [
   { id: 'claude-settings', rel: '.claude/settings.json', kind: 'hook-json', must: 'dispatch-gate' },
@@ -262,11 +263,32 @@ const BLIND_PERSONAL_GH_RE = /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m;
 // 所以另配一道反向闸（tests/systemd-push-declaration.test.js）：
 // 仓内脚本里真出现 git push 的，必须有单元声明它要推送，否则红。
 const REQUIRES_GIT_PUSH_RE = /^#\s*REQUIRES_GIT_PUSH=1\b/m;
+/** 代码生成的指挥官单元不在 host/machine/systemd/，虚拟成这个前缀再进同一把尺（#1167）。 */
+export const GENERATED_SYSTEMD_PREFIX = 'generated-systemd/';
+
+function generatedCommanderServiceFiles() {
+  let generated;
+  try { generated = INSTALL_FILES(); }
+  catch (e) {
+    return { fail: ['指挥官生成单元读不到', 'INSTALL_FILES() 必须能给出 commander-act/inventory 的 service 文本', String((e && e.message) || e).slice(0, 160)] };
+  }
+  const overlay = {};
+  for (const [abs, content] of Object.entries(generated || {})) {
+    if (!String(abs).endsWith('.service')) continue;
+    const base = String(abs).replace(/\\/g, '/').split('/').pop();
+    overlay[`${GENERATED_SYSTEMD_PREFIX}${base}`] = content;
+  }
+  if (Object.keys(overlay).length === 0) {
+    return { fail: ['指挥官一个 .service 都没生成', '0 个样本 = 本次等于没查，不是绿', 'scripts/lib/commander-inventory.mjs INSTALL_FILES'] };
+  }
+  return { overlay };
+}
 
 /** 自动化单元不许继承个人 GH_TOKEN，也不许读 ~/.config/gh（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
 export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
   if (!root && !files) return { fail: ['没给仓库根', 'checkNoPersonalTokenInUnits 要 root', ''] };
   let rels;
+  let overlay = files;
   if (Array.isArray(extraRels)) rels = extraRels;
   else if (files) {
     rels = Object.keys(files).filter((k) => k.endsWith('.service'));
@@ -276,13 +298,18 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
       return { fail: ['systemd 单元目录不在', '恢复 host/machine/systemd/；目录不在 = 没查成', dir] };
     }
     rels = readdirSync(dir).filter((n) => n.endsWith('.service')).map((n) => `host/machine/systemd/${n}`);
+    // extraRels 是测试隔离入口，生产路径必须把 INSTALL_FILES() 生成的指挥官单元一并扫进去。
+    const generated = generatedCommanderServiceFiles();
+    if (generated.fail) return generated;
+    overlay = { ...(files || {}), ...generated.overlay };
+    rels = rels.concat(Object.keys(generated.overlay));
   }
   if (rels.length === 0) {
     return { fail: ['一个 systemd 单元都没扫到', '0 个样本 = 本次等于没查，不是绿', 'host/machine/systemd/*.service'] };
   }
   const hits = [];
   for (const rel of rels) {
-    const loaded = readRel(root || '', rel, files);
+    const loaded = readRel(root || '', rel, overlay);
     if (loaded.missing) {
       return { fail: [`单元读不到：${rel}`, '读失败不是 0 条违规', loaded.path || rel] };
     }
@@ -308,12 +335,14 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
       ],
       scanned: rels.length,
       hits,
+      rels,
     };
   }
   return {
     green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（声明写远端的不设空目录、其余必须设；少一处或设反一处都红）`,
     scanned: rels.length,
     hits: [],
+    rels,
   };
 }
 
