@@ -67,7 +67,7 @@
 | A | ~/.dao/provider-health.json | 网关健康表（#842 消费 / #967 写入）。`scripts/gw-remote-probe.mjs` 周期探针写、派工只读判可用性；契约见 dispatch skill。不进 git |
 | D | ~/bin/gw-remote-probe.mjs | #967 收进仓前的本机落点（同目录依赖 `~/bin/probe-health.mjs`）。仓内真相源 `scripts/gw-remote-probe.mjs`；systemd ExecStart 走仓内脚本。禁拷、不进 git |
 | D | ~/bin/probe-health.mjs | #967 收进仓前与探针同目录的健康表纯函数。仓内真相源 `scripts/lib/probe-health.mjs`。禁拷、不进 git |
-| D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）。运行时自建，换机不拷 |
+| D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）；mirasim-ws-probe 探活状态（~/.local/state/mirasim-ws-probe.json，#1151，仓内脚本 scripts/mirasim-ws-probe.mjs）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | D | ~/.dao/progress-watch.json | 盘面推进量账本（#1004）。指挥官 `cmdAct` 每轮调 `progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | D | ~/.dao/board-watch.json | 看板 v0 阶段超时告警账本（#818）。`board-watch.mjs` 写「主体:阶段」指纹，同一阶段不重报到总控群。运行态，换机不拷 |
@@ -79,7 +79,9 @@
 | E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
-| E | ~/mirasim-server/current | 归 `ai-gateway-stack`（先例 `~/.mirasim`）。服务端 `current` 软链指向在役版本目录；`current/VERSION` 是「本机在役版本」的唯一真相源——`scripts/lib/mirasim-runtime.mjs` 的 `installedVersion()` 只读这一份，升级器（`mirasim-managed-update`）自己维护它。本仓只读、不写装法、不钉版本号 |
+| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
+| E | ~/mirasim-server/current | 归 `ai-gateway-stack`（先例 `~/.mirasim`）。服务端 `current` 软链指向在役版本目录；`current/VERSION` 是「本机在役版本」的唯一真相源——`scripts/lib/mirasim-runtime.mjs` 的 `installedVersion()` 只读这一份，升级器（`mirasim-managed-update`）自己维护它。本仓 unit 只引用这一层，不钉具体版本号（#1151；手打版本号会把生产从 current 拉回去）。本仓只读、不写装法 |
+| E | ~/mirasim-work | 归 `ai-gateway-stack`。mirasim-server `--workdir`（服务自己的工作区，不是派工树 `~/mirasim-worktrees`）。本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |

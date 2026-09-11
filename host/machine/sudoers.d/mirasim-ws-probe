@@ -1,0 +1,19 @@
+# /etc/sudoers.d/mirasim-ws-probe —— ws 探活唯一被允许的 root 动作（#1151）
+#
+# 探针（scripts/mirasim-ws-probe.mjs，以 orca 跑）连红且无在途会话时要
+# try-restart mirasim-server。判据在探针自己的纯函数里，本白名单不带参数、
+# 不换命令、不换单元名。
+#
+# 为什么必须写死到具体单元名：`systemctl try-restart` 后面换成别的单元名
+# 就是另一件事了。带通配（例如 mirasim-*）等于把「能重启任何单元」给了 orca，
+# 而每个工人 agent 都能写那个仓。tests/unit-privilege.test.js 守着
+# 「不许通配、要绝对路径、不许指家目录」。
+#
+# 用 try-restart 不是 restart：服务没在跑时 try-restart 是空操作，
+# 避免探针把「没装」修成「被我拉起来了」。没装的发现面是探活 red + 报警。
+#
+# 装：sudo install -m 440 host/machine/sudoers.d/mirasim-ws-probe /etc/sudoers.d/mirasim-ws-probe
+#     （install-mirasim-ws-probe.sh 会做，并先 visudo -c 验语法——sudoers 写坏会把整台机器锁死）
+# 验：sudo -u orca sudo -n /usr/bin/systemctl try-restart mirasim-server.service  → 应当成功
+#     sudo -u orca sudo -n /usr/bin/systemctl restart ssh.service                 → 应当被拒
+orca ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart mirasim-server.service

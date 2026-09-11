@@ -8,6 +8,7 @@
 //   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
+// handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
 //
 // 服务端是 systemd 常驻的官方 mirasim-server（回环 ws，钉死一个版本）。控制面是私有协议、
 // 混淆、无文档，厂商明写客户端/服务端严格版本相等、无兼容层（ai-gateway-stack DECISIONS §71）——
@@ -138,6 +139,12 @@ export async function probeVersionDrift({ homeDir, port, service = 'mirasim-serv
  */
 export const PINNED_VERSION = null;
 export const DEFAULT_PORT = 4316;
+
+/** listSessions / handshake 等 sessions 帧的预算。
+ *  跟 `scripts/mirasim-sessions.mjs` 的 MIRASIM_LS_TIMEOUT_MS 默认同值。
+ *  2026-09-09 实咬：负载 20 时 30s 才判超时；snapshot 默认 6s 会把「慢」误判成「死」，
+ *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
+export const SESSIONS_TIMEOUT_MS = 30_000;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
 // 账本目录名就是后半段那个 uuid，交叉核靠这个映射。
@@ -761,12 +768,14 @@ export function createRuntime(opts = {}) {
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
-    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125）：名单是**全量枚举**，
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125 / #1151）：名单是**全量枚举**，
     // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
     // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
     // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    // handshake 跟 listSessions 同一格：探活把「慢」判成「死」会连红重启（2026-09-09 实咬）。
     list: opts.listTimeoutMs
-      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || 30_000),
+      ?? opts.sessionsTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || SESSIONS_TIMEOUT_MS),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -1149,6 +1158,7 @@ export function createRuntime(opts = {}) {
    *
    * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
    * 把上游池子拉满，那正是 #1125 要治的病。
+   * 等帧预算是 t.list（默认 SESSIONS_TIMEOUT_MS / MIRASIM_LS_TIMEOUT_MS），不是 snapshot 的 6s。
    */
   async function listSessions() {
     const wire = await open();
@@ -1171,6 +1181,37 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 最小握手：开一条 ws，读 state 帧，再发 listSessions 等 sessions 帧，立刻挂断。
+   * 不发 prompt、不起会话。探活用它判「该发生的事有没有发生」。
+   *
+   * 2026-09-09 帅位实证：listSessions 单口退化、startSession 仍通——连接可建、
+   * state 也在，但 sessions 帧不回。只 ping state 探不到这个病。空名单（[]）算活；
+   * 没回帧 / 不是数组才算死。连不上 / 令牌不在仍抛 MirasimUnavailableError。
+   * 等帧预算跟 listSessions 同一格（t.list / SESSIONS_TIMEOUT_MS），不是 snapshot 的 6s。
+   */
+  async function handshake() {
+    const wire = await open();
+    try {
+      const contract = judgeContract(wire.state, { pinnedVersion });
+      if (contract.unscanned) return contract;
+      wire.send({ type: 'listSessions' });
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!listed || !Array.isArray(listed.sessions)) {
+        return {
+          ok: false,
+          unscanned: false,
+          version: contract.version,
+          sessionsOk: false,
+          errors: ['没收到 sessions 帧——listSessions 单口退化（连接可建、清单不回）'],
+        };
+      }
+      return { ...contract, sessionsOk: true, sessions: listed.sessions };
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
@@ -1180,8 +1221,9 @@ export function createRuntime(opts = {}) {
     interact,
     stopSession,
     waitForCompletion,
+    handshake,
     crossCheck,
-    config: { port, homeDir, pinnedVersion },
+    config: { port, homeDir, pinnedVersion, sessionsTimeoutMs: t.list },
   };
 }
 
@@ -1198,3 +1240,4 @@ export const listSessions = () => runtime().listSessions();
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
+export const handshake = () => runtime().handshake();
