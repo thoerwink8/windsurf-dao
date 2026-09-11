@@ -72,7 +72,14 @@ export function buildHubCard({
   if (decided && decided.choice) return buildDecidedHubCard({
     repo, number, url, title, from, what, impact, recommend, why, deadline, decided,
   });
-  const humanStar = star || starFromIssue({ title, body });
+  const humanStar = star || (body
+    ? starFromIssue({ title, body })
+    : {
+      situation: what || title || '目前有一项事情需要处理',
+      task: deadline || '现在需要决定下一步怎么做',
+      action: recommend || '先确认情况，再决定是否继续',
+      result: impact || '拍板后会按选定方案继续，并把结果写回这张单',
+    });
   return {
     config: { wide_screen_mode: true },
     header: {
