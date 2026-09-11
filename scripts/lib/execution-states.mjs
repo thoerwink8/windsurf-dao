@@ -14,7 +14,7 @@
 
 /** 终态：会话已经结束了，不管结束得好不好。落在这里的状态不占树。 */
 export const EXECUTION_FINISHED = new Set([
-  'done', 'completed', 'complete',
+  'done', 'completed', 'complete', 'finished',
   'failed', 'error', 'aborted', 'cancelled', 'canceled', 'stopped', 'rejected',
   'auth_required', 'unsupported_interaction',
   'incomplete', // 上游断流打死的常态：run 有终帧但没干完。**终态**，不是「还在启动」

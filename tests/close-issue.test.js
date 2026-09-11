@@ -19,6 +19,19 @@ function rollup(...conclusions) {
   return conclusions.map(c => ({ status: 'COMPLETED', conclusion: c }));
 }
 
+it('a merged subtask cannot close an umbrella with unfinished acceptance items', async () => {
+  const C = await LOAD;
+  const pr = { number: 1186, body: '署名 issue #1174', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') };
+  for (const body of ['- [x] 实现\n- [ ] 自动验收', '', undefined]) {
+    let writes = 0;
+    const r = C.closeIssueForPr({ pr,
+      runGh: () => ({ ok: true, json: { state: 'OPEN', url: 'https://github.com/o/r/issues/1174', labels: [{ name: '统领单' }], body } }),
+      writeIssue: () => { writes++; return { ok: true }; } });
+    assert.equal(r.action, 'none');
+    assert.equal(writes, 0);
+  }
+});
+
 describe('close-issue 署名单号', () => {
   it('#657 正文「署名 issue #N」是署名单号（非 GitHub 关单词，不触发自动关单）', async (t) => {
     const C = await LOAD;

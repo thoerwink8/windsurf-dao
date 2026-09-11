@@ -8,6 +8,14 @@ const path = require('node:path');
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'session-reconcile.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
 
+it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
+  const { isLiveSession } = await LOAD;
+  for (const state of ['stopped', 'rejected', 'gone', 'finished']) {
+    assert.equal(isLiveSession({ key: 'grok:fixture', state }).live, false, state);
+  }
+  assert.equal(isLiveSession({ key: 'grok:fixture', state: 'running' }).live, true);
+});
+
 function dispatch(over = {}) {
   return {
     type: 'job.dispatch',

@@ -106,7 +106,7 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   if (!issue) return { ok: true, action: 'none', reason: '无署名单号', pr: number };
   const dec = closeDecision(pr);
   if (dec.action === 'none') return { ok: true, action: 'none', reason: dec.reason, pr: number };
-  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url,labels']);
+  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url,labels,body']);
   if (!iv.ok) {
     const msg = String(iv.error || '');
     // 署名目标不存在：署名解析误中（标题/正文随手引用 #N），不是关单失败——跳过不污染 exit code。
@@ -125,6 +125,13 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   // 人工判定「已顶替」的单不弹回（2026-09-04 实咬：#633/#651/#683/#684/#686/#693 六张被 sweep
   // 反复 reopen——署名 PR 合入时历史 check 红，脚本不区分「谁关的、为什么关」。带标签 = 人拍过，机器让路）。
   const labels = Array.isArray(iv.json?.labels) ? iv.json.labels.map((l) => String(l?.name || '')) : [];
+  if (dec.action === 'close' && labels.includes('统领单')) {
+    const body = iv.json?.body;
+    if (typeof body !== 'string') return { ok: false, action: 'none', issue, pr: number, error: '统领单验收清单未读取成功，不自动关闭' };
+    if (/^\s*[-*]\s+\[ \]/m.test(body) || !/^\s*[-*]\s+\[[xX]\]/m.test(body)) {
+      return { ok: true, action: 'none', issue, pr: number, reason: '统领单验收清单尚未全部完成，单个 PR 合并不代表整项完成' };
+    }
+  }
   if (dec.action === 'reopen' && labels.includes('已顶替')) {
     return { ok: true, action: 'none', reason: `issue #${issue} 带「已顶替」标签（人工拍过），不弹回`, issue, pr: number };
   }
