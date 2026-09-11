@@ -52,6 +52,7 @@
 - [x] 本轮再跟上 origin/master（#1146 skills 装载面自愈 + #1155 .git 属主闸）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1146 +3 叠成 151。
 - [x] 本轮跟上 origin/master（#1199 分支保护读应用凭据）。冲突 0；选型路仍只读 PR label。相关测试 897 绿。
 - [x] 本轮跟上 origin/master（#1189 回流提示层改指现役士兵书 + #1200/#1201 watchdog 已批准任务交付）。冲突 0；选型路仍只读 PR label。`labelValue` 注释不再写「issue 标签取值」（函数已给 PR 用）。相关测试 953 绿。
+- [x] 本轮跟上 origin/master（#1177/#1193 指挥官 timer enabled 但停摆必须红）。冲突 0；选型路仍只读 PR label。
 
 ## 机制判定
 
