@@ -153,6 +153,7 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import { classifyFailedUnits, repoScriptOf } from './lib/failed-units-check.mjs';
 import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
   collectManagedReposFromRoot, repoSlugFromRemote,
@@ -1866,6 +1867,7 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkFailedUnitsLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
 checkBranchProtectionSamples();
@@ -1951,6 +1953,36 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkFailedUnitsLive() {
+  // 探不到 systemd（Windows / 无 systemctl）→ unknown，不做成绿（本仓硬规矩）。
+  const probe = spawnSync('systemctl', ['--failed', '--no-pager', '--plain'], {
+    encoding: 'utf8', timeout: 10000, windowsHide: true,
+  });
+  if (probe.error || probe.status !== 0) {
+    skip(`本仓单元有没有挂掉没查成：systemctl --failed 探不到（无 systemd？）${String(probe.error || probe.status || '').slice(0, 120)}`);
+    return;
+  }
+  const output = `${probe.stdout || ''}\n${probe.stderr || ''}`;
+  // 失败单元的 unit 文件在 /etc/systemd/system（要读得到才判得了归属）。
+  const unitTexts = {};
+  for (const m of output.matchAll(/^(\S+\.service)\s/gm)) {
+    const name = m[1];
+    for (const p of [join('/etc/systemd/system', name), join(ROOT, 'host', 'machine', 'systemd', name)]) {
+      if (existsSync(p)) { unitTexts[name] = readFileSync(p, 'utf8'); break; }
+    }
+  }
+  const r = classifyFailedUnits({ output, repoRoot: ROOT, unitTexts });
+  if (r.state === 'red') {
+    fail(`本仓 ${r.failed.length} 个单元挂在 systemctl --failed 里`, r.plain.impact + '；' + r.plain.plan, r.detail);
+    return;
+  }
+  if (r.state === 'unknown') {
+    skip(`本仓单元有没有挂掉没查成：${r.detail}`);
+    return;
+  }
+  green(r.detail);
 }
 
 function checkMarshalSelfMergeSamples() {
