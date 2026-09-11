@@ -42,7 +42,7 @@
 // 为什么 lstat 不用 stat：符号链接本身要能跟普通目录分开——普通目录是「装错了」，
 // 不是「装好了」。
 
-import { readdirSync, lstatSync, realpathSync, existsSync, readFileSync } from 'node:fs';
+import { readdirSync, lstatSync, statSync, readlinkSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 
 /** 文件系统大小写语义：NTFS 约定大小写不敏感（junction/symlink 的目标大小写五花八门），
@@ -149,8 +149,28 @@ export function checkSkillLinks({ root, home, isCi = false }) {
     }
     return { fail: ['~/.claude/skills 探测不了', '确认 ~/.claude 可读；读不了 = 本次没查成', `${face}: ${String(e.message || e).slice(0, 120)}`] };
   }
-  if (!faceSt.isDirectory()) {
-    return { fail: ['~/.claude/skills 不是目录', '宿主发现面坏了：删掉这个文件/链接，按 NEW-MACHINE §11 重建为目录', face] };
+  // 发现面可以是真目录，也可以是指向真目录的符号链接。
+  //
+  // 2026-09-11 实咬：本机把它做成 `~/.claude/skills -> ~/.mirasim/skills`（执行体共用的
+  // skill 面，memory codex-claude-shared-skills），**解引用后是个正常目录**，而这道闸
+  // 用 lstat 判 isDirectory ⇒ 符号链接一律判死：「宿主发现面坏了」。方向跟本仓反复咬到的
+  // 同一条——判据比现实窄，坏的是闸不是面。所以这里用 statSync 解引用后判。
+  // 断链（目标不在）仍然要红，那是真的坏；只是不再把「链接」本身当坏。
+  let faceResolved = null;
+  try {
+    faceResolved = statSync(face);
+  } catch (e) {
+    // 链接在、目标不在 = 断链。这是确定的坏，不是没查成。
+    return {
+      fail: [
+        '~/.claude/skills 是断链（目标不在）',
+        '按 NEW-MACHINE §11 重建发现面：目标目录要存在（本机是 ~/.mirasim/skills）',
+        `${face} → ${String(readlinkSync(face)).slice(0, 120)}（${String(e && e.code || e).slice(0, 60)}）`,
+      ],
+    };
+  }
+  if (!faceResolved.isDirectory()) {
+    return { fail: ['~/.claude/skills 不是目录', '宿主发现面坏了：删掉这个文件，按 NEW-MACHINE §11 重建为目录（或指向真目录的链接）', face] };
   }
 
   const bad = [];

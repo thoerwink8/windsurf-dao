@@ -13,17 +13,10 @@
 //   同一 issue 已有活执行者 ⇒ 拒绝再派。
 
 import { unclosedJobIds } from './ledger-query.mjs';
+import { EXECUTION_FINISHED, sessionStateOf } from './execution-states.mjs';
 
 /** 驱动自报的终态：人已经走了，名单里留着也不算活执行者。 */
-const DEAD_STATES = new Set([
-  'completed', 'complete', 'done', 'finished',
-  'failed', 'error', 'aborted', 'cancelled', 'canceled',
-  // mirasim 的短命会话一轮结束后会报 incomplete；它已不再接收任务。
-  'incomplete',
-  // 服务端查无此会话（档案被归档/清掉、服务端重启丢了内存态）。执行 runtime 用它把
-  // 「明确没了」跟「这次没读成」分开——前者不该由它自己判活，后者才要当有人在做。
-  'gone',
-]);
+const DEAD_STATES = EXECUTION_FINISHED;
 
 function positiveInt(v) {
   const n = Number(v);
@@ -95,7 +88,7 @@ export function isLiveSession(s) {
   if (!key) {
     return { live: false, unscanned: true, why: '会话没有 key——没查成' };
   }
-  const raw = String(s.state || s.runState || '').toLowerCase();
+  const raw = sessionStateOf(s) || '';
   if (DEAD_STATES.has(raw)) {
     return { live: false, unscanned: false, why: `终态 ${raw}` };
   }

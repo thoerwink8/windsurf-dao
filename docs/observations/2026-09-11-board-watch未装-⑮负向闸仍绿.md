@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # 机制巡检：#818 看板超时告警从未装上，⑮ 改成「旧钟不在即绿」
 
 ## 结论
@@ -98,3 +102,13 @@ $ node scripts/board-watch.mjs --dry-run --json
 删掉「看板超时告警要另装一只钟」这一层。指挥官 act 每 20 分钟已经醒一次、已经跑 `runProgressWatch`；墙钟告警跟推进量不是同一把尺，但可以是同一次唤醒里的第二刀。并进去之后删 `dao-board-watch.{service,timer}` 和 `install-board-watch.sh`，⑮ 继续守「独立钟不在」。没有独立单元，就没有「合了仓忘了装」。
 
 若墙钟告警必须独立跑：⑳ 把「仓里有、机器上没装」从 unknown 改成 red，并给 `dao-board-watch.timer` 加一条正向在册闸（NEXT 不是 `-`）。现在这把负向 ⑮ 守不住新钟。
+
+处置：#818 的腿已接上，2026-09-11（`908061db`）。
+
+- `dao-board-watch` 已装（`sudo bash scripts/install-board-watch.sh`），timer 有 NEXT，
+  账本 `~/.dao/board-watch.json` 已生成；干跑 `--dry-run` 通（当前 0 条越线）。
+- ⑮ 那半张判据的根治不在 ⑮ 自己：**⑳「仓里单元 vs 机器上装着的一致」原本把
+  「仓里有、机器上没有」判成 unknown（没查成）而不是 red**，所以它每轮说「没查成」
+  而不是「红」——不开单、不叫人，安静得像没事。改判 red 后当场多查出 5 个从没装过的
+  单元（含 #1151 的 mirasim-ws-probe），已一并装上。
+- 教训：只判「不该有的没有」不判「该有的有没有」，半张判据会绿得理直气壮。
