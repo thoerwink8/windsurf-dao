@@ -2588,3 +2588,55 @@ describe('#1147 act：收口泵起原树短会话', () => {
     assert.equal(state.reworkDispatched['pump-draft:885'].unscanned, true);
   });
 });
+
+// ── 2026-09-11：一个动作炸了不许带走整轮 ─────────────────────────────────────
+// 实咬：execClearExhausted 里一个 `run is not defined` 让 10:51 那轮 act 整个 exit 1
+// ——扫、判、其余动作全没跑成，而报错只在 journal 里，用户侧看不出「这一轮什么都没做」。
+// 一个动作的笔误不该等于整轮停摆。
+describe('runActions：动作抛异常不许带走整轮', () => {
+  const CMD = import('../scripts/commander.mjs');
+
+  it('中间那条动作抛异常 → 后面的动作照跑，异常记进日志', async () => {
+    const { runActions } = await CMD;
+    const seen = [];
+    const log = [];
+    const exec = (a) => {
+      seen.push(a.kind);
+      if (a.kind === 'boom') throw new Error('run is not defined');
+      return { ok: true };
+    };
+    runActions([
+      { kind: 'noop' },
+      { kind: 'boom', why: '炸一个' },
+      { kind: 'notify-hub', subject: '后一条' },
+    ], { exec, log });
+
+    assert.deepEqual(seen, ['noop', 'boom', 'notify-hub'], '炸了之后必须继续跑后面的');
+    assert.equal(log.some((l) => /执行炸了/.test(l)), true, '异常要有可见记录，不许静默吞掉');
+    assert.equal(log.some((l) => /run is not defined/.test(l)), true, '原文要带上，否则查不出来');
+  });
+
+  it('反证：不抛时日志里不该出现「执行炸了」', async () => {
+    const { runActions } = await CMD;
+    const log = [];
+    runActions([{ kind: 'noop' }, { kind: 'notify-hub', subject: 'x' }], { exec: () => ({ ok: true }), log });
+    assert.equal(log.some((l) => /执行炸了/.test(l)), false);
+  });
+
+  it('executor 有 clear-exhausted case，且用的是本文件真有的 runCmd/runGh', async () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(src, /case 'clear-exhausted':/);
+    assert.match(src, /function execClearExhausted/);
+    // 防的就是这次那个笔误：用了本文件不存在的 runner 名字（原来是 run，实际只有 runCmd/runGh）。
+    // 钉法：execClearExhausted 体内出现的 runner 必须是 run / runCmd / runGh 之一，
+    // 而 `run` 必须由参数注入（`run = runCmd`），不许当成全局函数直接用。
+    assert.match(src, /function execClearExhausted\(action, \{ dryRun, say, run = runCmd \}/,
+      'run 没注入就会再撞一次 ReferenceError');
+    const body = src.slice(src.indexOf('function execClearExhausted'));
+    const fn = body.slice(0, body.indexOf('\nfunction ', 10));
+    // 用字符串包含判定，不用正则——这次那个笔误就是错在「名字对不上」，
+    // 而判定它的正则自己再写错一次（转义）就本末倒置了。
+    assert.equal(fn.includes('const r = run('), true, '摘标要走注入的 run');
+    assert.equal(fn.includes("'scripts/gh-as.mjs'"), true, '摘标要走 gh-as');
+  });
+});

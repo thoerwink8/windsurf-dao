@@ -871,8 +871,9 @@ function execAddLabel(action, { dryRun, say }) {
  * 多留一轮标只是少一轮推进，拿旧快照摘标可能让一辆已经在修的车再被派一次。
  * 与 execReapTicket 同一纪律（删之前正面核死活）。
  */
-function execClearExhausted(action, { dryRun, say }) {
+function execClearExhausted(action, { dryRun, say, run = runCmd } = {}) {
   if (dryRun) { say(`[dry] 摘 ${EXHAUSTED_LABEL}：#${action.pr}（${action.why}）`); return { ok: true, dryRun: true }; }
+  // run 可注入（照本文件 execMerge 的惯例）：测试要能钉调用序列而不真打 gh。
   const cur = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'headRefOid,labels'], 20000);
   if (!cur.ok) { say(`  当前 head 没核成，不摘标：#${action.pr}（${cur.error}）`); return { ok: true, skipped: 'head-unscanned' }; }
   let got;
@@ -1148,7 +1149,17 @@ export function runActions(actions, { exec, log = [] } = {}) {
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
-    const r = exec(action);
+    // 一个动作炸了不许带走整轮（2026-09-11 实咬）：execClearExhausted 里一个
+    // `run is not defined` 让 10:51 那轮 act 整个 exit 1——扫、判、其余动作全没跑成，
+    // 而报错只在 journal 里，用户侧看不出「这一轮什么都没做」。
+    // 收成 try/catch：失败按「这个动作没成」记一条，继续跑剩下的。
+    let r;
+    try { r = exec(action); }
+    catch (e) {
+      const msg = String((e && e.message) || e);
+      log.push(`  执行炸了（已跳过，不影响本轮其余动作）：${msg}`);
+      r = { ok: false, error: msg, threw: true };
+    }
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
     // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
     // 仍要进 failedIssues（不发「已自动派单」喜报——毕竟没派出去），但**不报帅、不开单**。
