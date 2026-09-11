@@ -2174,7 +2174,9 @@ function escalate(action, { state, dryRun, say,
  * 判据是纯函数 reconcileEscalationRound，这里只负责取数与执行 gh 动作。
  * 关单留言写清被哪条原因收敛——关单必须可追溯（#1063 硬边界）。
  */
-function reconcileEscalations({ actions, situation, state, dryRun, say }) {
+export function reconcileEscalations({ actions, situation, state, dryRun, say,
+  readIssue = n => runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'state,labels'], 30000),
+}) {
   const reasonsThisRound = (actions || [])
     .filter((a) => a && a.kind === 'escalate' && a.reason)
     .map((a) => String(a.reason));
@@ -2192,6 +2194,19 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
   if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
   if (!dryRun) state.escalateStreak = r.streak;
   for (const item of r.toClose) {
+    // A capped open-issue snapshot may omit an approved task. Re-read each
+    // close candidate; missing evidence never means the task is unapproved.
+    const current = readIssue(item.issue);
+    let issue;
+    try { if (current.ok) issue = JSON.parse(current.out); } catch { /* keep below */ }
+    if (!issue || !Array.isArray(issue.labels)) {
+      say(`  #${item.issue} 当前标签未核实，不自动关单`);
+      continue;
+    }
+    if (issue.labels.some(l => (typeof l === 'string' ? l : l?.name) === '已拍板')) {
+      say(`  #${item.issue} 已批准执行，由交付验收负责关单`);
+      continue;
+    }
     if (dryRun) { say(`[dry] 收敛关单 #${item.issue}（原因 ${item.reason} 本轮已消失）`); continue; }
     const entry = (state.escalateLedger || {})[item.key] || {};
     const body = closeCommentBody({ reason: item.reason, objects: entry.objects, at: nowIso() });
