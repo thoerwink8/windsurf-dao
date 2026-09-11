@@ -77,9 +77,10 @@
 // ㉙ 发布策略 schema（#817）：docs/release-policy.json 可解析且过 schema（四个顶层键 /
 //    confirm 三级 / bump 表 / 每项目 demo）。检查器自持解析，不 import 消费方；
 //    红/绿/空夹具验判别力；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成。
-// ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
-//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
-//    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
+// ㉚ skill 发现面符号链接（#793 / #1146）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
+//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红。整目录链接（mirasim 劫走）
+//    报「被劫」，本机无 ~/.claude/skills 报 SKIP「没装」——两种红/跳必须分形，常红等于没有检查。
+//    接回走 onboard / dao-skills-heal.timer，本项只报警。0 个 skill = 没查成
 // ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
 //    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
@@ -945,8 +946,8 @@ function checkMemoryLinkAlive() {
 
 // ── ㉚ skill 发现面符号链接（local-only，issue #793）────────────────────
 // 仓内 host/skills/<名>/ 每个 skill，在本机宿主发现面 ~/.claude/skills/<名> 必须是指向仓内
-// host/skills/<名> 的符号链接（NEW-MACHINE §11；建链是手动动作，#565 拍板 symlink 归帅建，
-// 本检查只报警不自动建链）。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
+// host/skills/<名> 的符号链接（NEW-MACHINE §11）。整目录链接 = 被劫（#1146），无发现面 = 没装。
+// 接回走 onboard / dao-skills-heal.timer，本检查只报警。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
 // 实现放 scripts/lib/skill-link-check.mjs，让 tests/skill-link.test.js 拿假 root + 假 HOME 造
 // 违规样本（缺链/普通目录/悬空/指错=红，全链齐=绿，无 ~/.claude/skills=SKIP，空 host/skills=没查成）
 // 单独验判别力，不必跑整个 dao-check（那会递归）。

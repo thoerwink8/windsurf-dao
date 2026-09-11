@@ -3,9 +3,8 @@
 // 查的是「git pull 带不来的三处家目录接线」（NEW-MACHINE §3/§10/§11）：
 //   ① ~/.claude/CLAUDE.md 与真相源 docs/global-CLAUDE.md 的漂移（全局约定没有下发机制）
 //   ② ~/.claude/skills 的链接可用性。现行部署形态是**真目录 + 逐个 skill 链接**
-//      （NEW-MACHINE §11 / memory dao-claude-migration），整目录链接也认——判据以「dispatch
-//      这一课解析得到 SKILL.md」为探针，不钉死形态；指向别的 checkout 只要是活的 skills 树
-//      也算绿（多 clone 常态，worktree 会话不许每轮报噪音）。
+//      （NEW-MACHINE §11）。整目录链接算 skills-elsewhere（#1146：mirasim 劫成 ~/.mirasim/skills
+//      的形态）——onboard / skills-heal 合并式接回，不再只报不修。
 //   ③ 本项目 memory 链接（复用 dao-memory-link-check 的判据，不重写）。linked worktree
 //      （.git 是文件）没有自己的 memory 目录是常态，不报；主 clone 上缺才是「换机没接」。
 //   ④ ~/.claude.json 里 `npx ...@latest` 型 MCP 服务器——每开一个会话都现场查 registry，
@@ -59,10 +58,10 @@ export function checkGlobalClaude({ root, home }) {
   return {};
 }
 
-/** ② skills 可用性。探针 = dispatch/SKILL.md 能解析到（不钉死整目录/逐个两种形态）。
- *  可修 id：skills-missing（目录不在）/ skills-partial（目录在但缺链接）/ skills-dangling（链接悬空）。
- *  只报不修：skills-not-link（dispatch 是拷贝的真目录，会过期，需人工并回）、
- *            skills-elsewhere（整目录链接指到的地方不是 skills 树）。 */
+/** ② skills 可用性。现行形态 = 真目录 + 逐个链接。
+ *  可修 id：skills-missing / skills-partial / skills-dangling / skills-elsewhere
+ *            （#1146：整目录链接含 mirasim 劫走，合并式接回）。
+ *  只报不修：skills-not-link（dispatch 是拷贝的真目录，会过期，需人工并回）。 */
 /** 读符号链接的目标，读不到回空串——判据侧按「不是指进本仓」处理（宁可多报）。 */
 function readLinkSafe(p) {
   try { return readlinkSync(p); } catch { return ''; }
@@ -77,6 +76,18 @@ const THIRD_PARTY_SKILLS = new Set([
   'orchestration',   // Orca 应用自带（多 agent 编排）
 ]);
 
+/** #1146 合并保留：链进 ~/.mirasim/skills 的条目是 mirasim 自有 skill，不是影子制度。 */
+function isMirasimKeeper(home, liveDir, name) {
+  const mira = join(home, '.mirasim', 'skills');
+  let miraReal;
+  try { miraReal = realpathSync(mira); } catch { return false; }
+  let liveReal;
+  try { liveReal = realpathSync(join(liveDir, name)); } catch { return false; }
+  const a = String(liveReal).replace(/\\/g, '/');
+  const b = String(miraReal).replace(/\\/g, '/').replace(/\/+$/, '');
+  return a === b || a.startsWith(b + '/');
+}
+
 export function checkSkillsLink({ root, home, dir = '.claude' }) {
   const linkPath = join(home, dir, 'skills');
   let st;
@@ -87,8 +98,9 @@ export function checkSkillsLink({ root, home, dir = '.claude' }) {
     let real;
     try { real = realpathSync(linkPath); }
     catch { return { problem: { id: 'skills-dangling', msg: `~/${dir}/skills 整目录链接悬空` } }; }
-    if (existsSync(join(real, 'dispatch', 'SKILL.md'))) return {};
-    return { problem: { id: 'skills-elsewhere', msg: `~/${dir}/skills 指向 ${real}，那里不是 skills 树——手动重链` } };
+    // 整目录链接一律接回逐个形态（#1146）：目标里有 dispatch 也算劫——
+    // 现场就是 ~/.claude/skills → ~/.mirasim/skills，而那里正好也有 dispatch。
+    return { problem: { id: 'skills-elsewhere', msg: `~/${dir}/skills 整目录链到 ${real}——合并式接回（仓内逐个链，外来保留）` } };
   }
 
   // 真目录 = 逐个链接形态（现行部署）
@@ -135,6 +147,7 @@ export function checkSkillsLink({ root, home, dir = '.claude' }) {
     for (const n of liveEntries) {
       if (want.includes(n)) continue;               // 本仓的，上面已经逐个验过
       if (THIRD_PARTY_SKILLS.has(n)) continue;      // 宿主自带，白名单里写死了理由
+      if (isMirasimKeeper(home, linkPath, n)) continue; // #1146 合并保留的 mirasim 自有 skill
       let isLink = false;
       try { isLink = lstatSync(join(linkPath, n)).isSymbolicLink(); }
       catch { /* 读不到就按外来报，宁可多报 */ }
