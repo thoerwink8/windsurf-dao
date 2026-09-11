@@ -476,6 +476,32 @@ describe('判完工交叉核', () => {
     assert.strictEqual(readSessionView({ runState: 'complete' }).phase, 'done');
     assert.strictEqual(readSessionView({ phase: 'done', incomplete: true }).incomplete, true);
   });
+
+  // 2026-09-11 实咬（与 review-pending.countLiveReviewers 同一个病）：
+  // 上面那条用例只喂 `runState`，而**真实会话清单里没有这个字段**——
+  // 实测 listSessions 回的键是 `… state, phase, observedState …`。
+  // 于是夹具全绿、生产里 phase 恒为 null（「这条会话什么态」永远是不知道）。
+  // 这组用真实字段名喂，钉住那个夹具盲区。
+  it('【真字段】只给 state 也要归一出 phase（会话清单的真实形状）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'stopped' }).phase, 'stopped');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'running' }).phase, 'running');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'completed' }).phase, 'done');
+  });
+
+  it('【真字段】state=incomplete 要标 incomplete（收尾没跑完，不是在役）', async () => {
+    const { metaView } = await import(LIB);
+    const v = metaView({ sessionKey: 'k', state: 'incomplete' });
+    assert.strictEqual(v.phase, 'incomplete');
+    assert.strictEqual(v.incomplete, true);
+  });
+
+  it('【真字段】只给 phase / observedState 也认；都没有才给 null（不编）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', phase: 'failed' }).phase, 'failed');
+    assert.strictEqual(metaView({ sessionKey: 'k', observedState: 'gone' }).phase, 'gone');
+    assert.strictEqual(metaView({ sessionKey: 'k' }).phase, null);
+  });
 });
 
 describe('账本与日志解析', () => {

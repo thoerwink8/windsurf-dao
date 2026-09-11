@@ -350,9 +350,15 @@ export function readSessionView(snapshot) {
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
 export function metaView(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
-  const runState = typeof m.runState === 'string' ? m.runState.trim().toLowerCase() : '';
+  // 2026-09-11 实咬（与 review-pending 的 countLiveReviewers 同一个病）：
+  // 会话清单里**没有 `runState` 这个字段**——真字段是 state/phase
+  // （实测 listSessions 回的键：… state, phase, observedState …）。
+  // 只读 runState 会让 phase 恒为 null，于是「这条会话是什么态」永远是「不知道」。
+  // 这里走的是**快照没回帧时的兜底路**，本来就只能靠清单说话，再读错字段就真的瞎了。
+  const raw = m.runState ?? m.state ?? m.phase ?? m.observedState;
+  const runState = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   return {
-    phase: normPhase(m.runState),
+    phase: normPhase(runState),
     text: typeof m.preview === 'string' ? m.preview : '',
     toolCalls: [],
     error: typeof m.runDetail === 'string' && m.runDetail ? m.runDetail : null,
