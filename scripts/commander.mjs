@@ -43,7 +43,7 @@ import {
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, pumpDraftKey, ticketHeadOid,
+  decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   SITUATION_SECTIONS, dispatchMergePolicyArgs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -2409,6 +2409,37 @@ function cmdAct(argv) {
     situation, state, dryRun, say: (m) => log.push(m),
   });
   runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
+
+  // ── 推进量仪表（2026-09-11）────────────────────────────────────────────────
+  // **动作摘要连续相同 = 停住**。这一晚四个死点全靠它抓到（12 张认输 PR 零动作、
+  // 死动作刷 19 轮、判据读错字段、整轮被一个异常带走），而它们**全都不报错**：
+  // 认输的 PR 是「零动作」，死动作是「每轮产一条被拒的动作」——日志里像已经叫过审官。
+  // 错误扫描找不到这些；只有「跟上一轮比，有没有变化」找得到。
+  //
+  // 判据刻意**不数动作条数**：一条被拒的死动作也是动作。数的是 digest（去掉 noop 后
+  // 的稳定摘要）——它变了才算真有新东西。
+  if (!dryRun) {
+    // 判据在 commander-core 的 nextDigestStreak（纯函数，可直喂）。这里只取数、报警。
+    const vac = nextDigestStreak({
+      actions,
+      lastDigest: state.lastActionDigest || null,
+      lastStreak: state.digestStreak,
+      threshold: Number(policy.commander?.digestStreakAlert) || 6,
+    });
+    state.digestStreak = vac.streak;
+    state.lastActionDigest = vac.digest;
+    if (vac.stuck) {
+      log.push(`  推进量：连续 ${vac.streak} 轮动作摘要完全相同——停住了，不是还在跑`);
+      hubOnce({
+        state,
+        key: `digest-stuck:${vac.digest}`,
+        text: `[指挥官] 连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
+          + `盘面没在推进。当前这一套动作：\n${log.filter((l) => l.startsWith('· ')).slice(0, 6).join('\n')}`,
+        dryRun,
+      });
+    }
+  }
+
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
   else {

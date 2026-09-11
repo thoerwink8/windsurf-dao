@@ -2640,3 +2640,63 @@ describe('runActions：动作抛异常不许带走整轮', () => {
     assert.equal(fn.includes("'scripts/gh-as.mjs'"), true, '摘标要走 gh-as');
   });
 });
+
+// ── 2026-09-11：推进量仪表（一晚四个死点全靠它抓到）─────────────────────────
+// 判据是「动作摘要连续相同 = 停住」。四个死点**全都不报错**：
+// 认输的 PR 零动作、死动作每轮产一条被拒的、判据读错字段、整轮被异常带走。
+// 错误扫描找不到这些；只有「跟上一轮比有没有变化」找得到。
+describe('nextDigestStreak：推进量仪表', () => {
+  const SAME = [{ kind: 'escalate', reason: 'missing-labels', issue: 1 }];
+  const OTHER = [{ kind: 'merge', pr: 9 }];
+
+  it('同一套动作累积；换了新动作归零', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    for (let i = 0; i < 3; i += 1) {
+      const r = nextDigestStreak({ actions: SAME, lastDigest, lastStreak: streak, threshold: 3 });
+      lastDigest = r.digest; streak = r.streak;
+    }
+    assert.equal(streak, 2, '第二轮起才累计');
+    const moved = nextDigestStreak({ actions: OTHER, lastDigest, lastStreak: streak, threshold: 3 });
+    assert.equal(moved.streak, 0, 'digest 变了就归零');
+    assert.equal(moved.stuck, false);
+  });
+
+  it('累计到阈值就 stuck（死点期就是这个形状）', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    let stuck = false;
+    for (let i = 0; i < 8; i += 1) {
+      const r = nextDigestStreak({ actions: SAME, lastDigest, lastStreak: streak, threshold: 6 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(stuck, true, '连续相同必须报警——这一晚就是靠它才发现停住的');
+  });
+
+  it('【反证】空闲不算卡住：全是 noop 时摘要恒空，不许报警', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    let stuck = false;
+    for (let i = 0; i < 10; i += 1) {
+      const r = nextDigestStreak({ actions: [{ kind: 'noop' }, { kind: 'noop' }], lastDigest, lastStreak: streak, threshold: 3 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(streak, 0, '手上没活 ≠ 卡住（那一头归心跳管）');
+    assert.equal(stuck, false);
+  });
+
+  it('【反证】一条被拒的死动作也算「有活」，所以连续相同会被抓到', async () => {
+    const { nextDigestStreak } = await CORE;
+    // 死动作形状：rereview 带 null reviewer（执行侧必拒）——它就是被这条仪表抓到的
+    const dead = [{ kind: 'rereview', pr: 1159, reason: '', reviewer: null }];
+    let lastDigest = null; let streak = 0; let stuck = false;
+    for (let i = 0; i < 6; i += 1) {
+      const r = nextDigestStreak({ actions: dead, lastDigest, lastStreak: streak, threshold: 5 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
+  });
+});

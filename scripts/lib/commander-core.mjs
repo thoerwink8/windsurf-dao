@@ -1492,6 +1492,31 @@ export function hasLiveAction(actions = []) {
   return actions.some((a) => a && a.kind !== 'noop' && !(a.kind === 'escalate' && a.reason === 'unscanned'));
 }
 
+/**
+ * 推进量：这一轮的动作摘要跟上一轮比，有没有变。
+ *
+ * 2026-09-11 立（一晚四个死点全靠它抓到）。判据是**动作摘要连续相同 = 停住**：
+ *   · 12 张认输 PR 零动作 → 每轮摘要一模一样，不报错；
+ *   · 死动作（被拒的 rereview）→ 每轮产一条，摘要也一模一样，日志里像已经叫过审官；
+ *   · 判据读错字段 → 同上；
+ *   · 整轮被一个异常带走 → 根本没有摘要。
+ * **它们全都不报错**，所以错误扫描找不到；只有「跟上一轮比有没有变化」找得到。
+ *
+ * 两个刻意的选择：
+ *   1. 数 digest 不数动作条数——一条被拒的死动作也是动作，数条数会把它当成有推进；
+ *   2. **空闲不算卡住**：全是 noop 时摘要恒为空串，那是「手上没活」不是「卡住」，
+ *      已有心跳（7 天静默）管那一头。所以只在确实有活动作时才累计。
+ *
+ * @returns {{streak:number, digest:string, stuck:boolean}}
+ */
+export function nextDigestStreak({ actions = [], lastDigest = null, lastStreak = 0, threshold = 6 } = {}) {
+  const digest = actionsDigest(actions);
+  const hasWork = actions.filter((a) => a && a.kind !== 'noop').length > 0;
+  const sameWork = hasWork && lastDigest != null && lastDigest === digest;
+  const streak = sameWork ? (Number(lastStreak) || 0) + 1 : 0;
+  return { streak, digest, stuck: streak >= Math.max(1, Number(threshold) || 6) };
+}
+
 /** 稳定去重键：把一批动作归一成排序后的字符串，act 拿它跟 state 里上一轮比，决定回流不回流。 */
 export function actionsDigest(actions = []) {
   const keys = actions
