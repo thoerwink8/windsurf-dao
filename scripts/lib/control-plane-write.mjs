@@ -3,6 +3,8 @@
 // 判定仍在 control-plane-gate.mjs（只读）。本文件负责生产侧两件事：
 //   1. 把探测三态写成 ~/.dao/control-plane.json（给探头读）
 //   2. 给现役 worktree 挂上 git pre-push（不问 Claude/Cursor hook）
+// 钩子从正在跑的这份代码装（stableHooksDir），不读工作树里有没有 scripts/githooks。
+// 挂不上由调用方 fail-closed——建树成功却没接线，正是 #1165 审官 P1。
 //
 // 三态落盘规矩（2026-09-07 5A）：
 //   green     → {reachable:true}
@@ -13,8 +15,11 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { CONTROL_PLANE_REL } from './control-plane-gate.mjs';
+
+const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 
 export const CONTROL_PLANE_SOURCE = 'mirasim-ws-probe';
 export const HOOKS_REL = ['scripts', 'githooks'];
@@ -65,16 +70,28 @@ export function writeControlPlaneFile(doc, {
 }
 
 /**
- * 把本工作树的 core.hooksPath 指到仓内 scripts/githooks。
- * 不是 git 树 / 钩子文件不在 → 不抛，返回 ok:false（建树本身不许被这个绊住）。
+ * 钩子稳定来源：正在跑的这份 dao 代码自带的 scripts/githooks。
+ * 不读工作树里那份——工作树可能还停在合本单之前的 master，那里没有 pre-push。
+ */
+export function stableHooksDir() {
+  return join(THIS_DIR, '..', 'githooks');
+}
+
+/**
+ * 把工作树的 core.hooksPath 指到稳定来源，写完读回。
+ * 不是 git 树 / 稳定来源没有钩子 / 写不上 / 读回对不上 → 返回 ok:false，由调用方 fail-closed。
  */
 export function ensureControlPlaneHooksPath({
   cwd,
   spawnGit = spawnSync,
   exists = existsSync,
+  hooksDir = stableHooksDir(),
 } = {}) {
   if (!cwd) return { ok: false, why: '没给 cwd' };
   if (!exists(join(cwd, '.git'))) return { ok: false, why: `${cwd} 不是 git 工作树` };
+
+  const hookFile = join(hooksDir, 'pre-push');
+  if (!exists(hookFile)) return { ok: false, why: `稳定来源钩子不在：${hookFile}` };
 
   const top = spawnGit('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8',
@@ -83,10 +100,6 @@ export function ensureControlPlaneHooksPath({
   if ((top.status ?? 1) !== 0) {
     return { ok: false, why: `rev-parse 失败：${String(top.stderr || '').slice(0, 80)}` };
   }
-  const root = String(top.stdout || '').trim();
-  const hooksDir = join(root, ...HOOKS_REL);
-  const hookFile = join(hooksDir, 'pre-push');
-  if (!exists(hookFile)) return { ok: false, why: `${hookFile} 不在` };
 
   const cur = spawnGit('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'], {
     encoding: 'utf8',
@@ -109,5 +122,24 @@ export function ensureControlPlaneHooksPath({
       why: `hooksPath 写不上：${String(set.stderr || set.stdout || '').slice(0, 80)}`,
     };
   }
+
+  const got = spawnGit('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const readBack = String(got.stdout || '').trim();
+  if (readBack !== hooksDir) {
+    return {
+      ok: false,
+      why: `hooksPath 写了但读回是 ${readBack || '空'}，不是 ${hooksDir}`,
+    };
+  }
   return { ok: true, already: false, hooksPath: hooksDir };
+}
+
+/** 建树热路用：挂不上就抛，调用方不能再报「建树成功」。 */
+export function attachControlPlaneHooksOrThrow(cwd, opts) {
+  const r = ensureControlPlaneHooksPath({ cwd, ...(opts || {}) });
+  if (!r.ok) throw new Error(`控制面闸没挂上：${r.why}`);
+  return r;
 }

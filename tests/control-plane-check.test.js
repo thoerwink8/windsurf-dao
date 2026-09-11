@@ -18,6 +18,24 @@ describe('控制面闸：静态挂载面', () => {
     assert.match(live.green, /pre-push/);
   });
 
+  it('dao.mjs 热路没挂闸 → 静态检查红（不是绿）', async () => {
+    const S = await import(LIB);
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-cp-hot-'));
+    fs.mkdirSync(path.join(empty, 'scripts', 'githooks'), { recursive: true });
+    fs.mkdirSync(path.join(empty, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(empty, 'scripts', 'githooks', 'pre-push'), 'control-plane-pre-push.mjs\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'control-plane-pre-push.mjs'), 'decideControlPlane\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'land.mjs'), 'decideControlPlane\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'control-plane-write.mjs'), 'control-plane.json\nwriteControlPlaneFile\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'mirasim-ws-probe.mjs'), 'writeControlPlane\ncontrolPlaneDocFromProbe\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'dao.mjs'), 'async function cmdDispatchMirasim(){}\nasync function cmdDispatch(){}\nasync function cmdStartMirasim(){}\nasync function cmdSessionRead(){}\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'execution-runtime.mjs'), 'export function ensureGitWorkspace(){}\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'executor-binding.mjs'), 'export function createMirasimBinding(){}\n');
+    const r = S.checkControlPlaneProduction({ root: empty });
+    assert.equal(!!r.green, false);
+    assert.match(r.fail.join(' '), /没挂控制面闸|fail-closed|稳定来源/);
+  });
+
   it('零样本（没有 githooks/pre-push）→ 没查成，不是绿', async () => {
     const S = await import(LIB);
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-cp-empty-'));

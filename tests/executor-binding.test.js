@@ -83,6 +83,7 @@ function fakeRuntime(over = {}) {
 
 const argsWtSpy = (o) => ['worktree', 'create', '--name', String(o.name || ''), '--json'];
 const argsWsSpy = (o) => ['orchestration', 'worker-start', '--task', String(o.task || ''), '--json'];
+const skipHooks = () => ({ ok: true });
 
 describe('执行体策略读取', () => {
   it('没有「执行体」节 = 没查成，不是「默认 orca」', async () => {
@@ -226,6 +227,7 @@ describe('判别用例①：executor=mirasim 时一个 orca 命令都不发', ()
       orca: spy,
       argsWorktreeCreate: argsWtSpy,
       argsWorkerStart: argsWsSpy,
+      attachHooks: skipHooks,
     });
     assert.equal(binding.name, 'mirasim');
     const r = await binding.dispatchOne({
@@ -326,10 +328,63 @@ describe('mirasim 绑定的边界', () => {
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     const rt = fakeRuntime({ workspace: { path: '/srv/trees/dao-880', branch: 'dao-880', created: false, verified: true } });
-    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt });
+    const b = S.bindExecutor({ executor: 'mirasim', policy: p, runtime: rt, attachHooks: skipHooks });
     const r = await b.worktreeCreate({ repo: '/repo', branch: 'dao-880' });
     assert.equal(r.ok, true);
     assert.equal(r.created, false);
+  });
+
+  it('hook 安装失败 → worktreeCreate 报失败，不能声称建树成功', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const b = S.bindExecutor({
+      executor: 'mirasim',
+      policy: p,
+      runtime: rt,
+      attachHooks: () => ({ ok: false, why: '写不上' }),
+    });
+    const r = await b.worktreeCreate({ repo: '/repo', branch: 'dao-880' });
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'hooks');
+    assert.match(r.error, /控制面闸没挂上/);
+    assert.match(r.error, /写不上/);
+  });
+
+  it('hook 安装失败 → workerStart 不起会话', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const b = S.bindExecutor({
+      executor: 'mirasim',
+      policy: p,
+      runtime: rt,
+      attachHooks: () => ({ ok: false, why: '写不上' }),
+    });
+    const r = await b.workerStart({
+      workdir: '/tree', prompt: '任务书', model: 'claude-opus', provider: 'claude',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'hooks');
+    assert.equal(rt.calls.startSession.length, 0, '闸没挂上却起了会话');
+  });
+
+  it('dispatchOne：hook 失败停在建树，不起会话', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const rt = fakeRuntime();
+    const b = S.bindExecutor({
+      executor: 'mirasim',
+      policy: p,
+      runtime: rt,
+      attachHooks: () => ({ ok: false, why: '写不上' }),
+    });
+    const r = await b.dispatchOne({
+      repo: '/repo', branch: 'dao-880', prompt: '任务书', model: 'claude-opus', provider: 'claude',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'worktree');
+    assert.equal(rt.calls.startSession.length, 0);
   });
 
   it('判完工的腿原样转给卡 A，不在本层抄第二份判据', async () => {
@@ -695,7 +750,7 @@ describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', 
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     const rt = fakeRuntime();
-    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p, attachHooks: skipHooks });
     const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', model: 'claude-opus', provider: 'claude' });
     assert.equal(r.ok, true, r.error || '');
     assert.equal(rt.calls.startSession.length, 1);
@@ -707,7 +762,7 @@ describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', 
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     const rt = fakeRuntime();
-    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p, attachHooks: skipHooks });
     const r = await binding.dispatchOne({
       repo: '/repo', branch: 'dao-884', prompt: '任务书', model: 'claude-opus', provider: 'claude',
     });
@@ -720,7 +775,7 @@ describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', 
     const S = await import(LIB);
     const p = S.readExecutorPolicy(policyDoc());
     const rt = fakeRuntime();
-    const binding = S.createMirasimBinding({ runtime: rt, policy: p });
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p, attachHooks: skipHooks });
     const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', provider: 'claude' });
     assert.equal(r.ok, true, r.error || '');
     assert.equal(rt.calls.startSession[0].model, undefined, '空串会被 runtime 当成有值塞进帧里');

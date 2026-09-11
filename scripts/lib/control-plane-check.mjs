@@ -6,6 +6,7 @@
 // ② land.mjs 真 push 前问 decideControlPlane
 // ③ mirasim-ws-probe 写 control-plane.json（写腿）
 // ④ 钩子行为：reachable=false 拦、true 放、没查成放
+// ⑤ dispatch/start/ensureWorkspace 热路挂闸，挂不上 fail-closed（#1165 审官 P1）
 // 落点从未出现过：checkControlPlaneDropPoint → skip 不是绿
 // 零样本（钩子文件不在）报没查成，不许记成绿。
 
@@ -19,6 +20,9 @@ const PRE_PUSH_JS = ['scripts', 'lib', 'control-plane-pre-push.mjs'];
 const LAND = ['scripts', 'land.mjs'];
 const WS_PROBE = ['scripts', 'mirasim-ws-probe.mjs'];
 const WRITE_LIB = ['scripts', 'lib', 'control-plane-write.mjs'];
+const DAO = ['scripts', 'dao.mjs'];
+const EXEC_RT = ['scripts', 'lib', 'execution-runtime.mjs'];
+const BIND = ['scripts', 'lib', 'executor-binding.mjs'];
 
 function read(root, rel) {
   const file = join(root, ...rel);
@@ -112,6 +116,48 @@ export function checkControlPlaneProduction({ root } = {}) {
   }
   if (!/writeControlPlane/.test(ws.text) || !/controlPlaneDocFromProbe/.test(ws.text)) {
     problems.push('mirasim-ws-probe 没接到写腿（要调 controlPlaneDocFromProbe / writeControlPlane）');
+  }
+
+  if (!/stableHooksDir|import\.meta\.url/.test(writeLib.text)) {
+    problems.push('钩子不是从正在跑的代码装的（稳定来源）');
+  }
+  if (!/读回/.test(writeLib.text) || !/attachControlPlaneHooksOrThrow/.test(writeLib.text)) {
+    problems.push('hooksPath 没读回自证 / 没有 fail-closed 抛出口');
+  }
+
+  const dao = read(root, DAO);
+  if (!dao.exists) {
+    return { fail: ['dao.mjs 不在', 'dispatch / start 热路在这里', join(root, ...DAO)] };
+  }
+  const dispatchFn = dao.text.slice(
+    dao.text.indexOf('async function cmdDispatchMirasim('),
+    dao.text.indexOf('async function cmdDispatch('),
+  );
+  if (!/attachControlPlaneHooksOrFail|ensureControlPlaneHooksPath/.test(dispatchFn)) {
+    problems.push('cmdDispatchMirasim 建树后没挂控制面闸（会绕过 worktreeCreate）');
+  }
+  const startFn = dao.text.slice(
+    dao.text.indexOf('async function cmdStartMirasim('),
+    dao.text.indexOf('async function cmdSessionRead('),
+  );
+  if (!/attachControlPlaneHooksOrFail|ensureControlPlaneHooksPath/.test(startFn)) {
+    problems.push('cmdStartMirasim 没挂控制面闸（已有 workdir 那条也会绕过建树）');
+  }
+
+  const execRt = read(root, EXEC_RT);
+  if (!execRt.exists) {
+    return { fail: ['execution-runtime.mjs 不在', 'dispatch/start 默认 ensureWorkspace 在这里', join(root, ...EXEC_RT)] };
+  }
+  if (!/attachControlPlaneHooksOrThrow/.test(execRt.text)) {
+    problems.push('ensureGitWorkspace / ensureWorkspace 没挂控制面闸');
+  }
+
+  const bind = read(root, BIND);
+  if (!bind.exists) {
+    return { fail: ['executor-binding.mjs 不在', 'worktreeCreate 吞失败就在这里', join(root, ...BIND)] };
+  }
+  if (!/控制面闸没挂上/.test(bind.text)) {
+    problems.push('worktreeCreate / workerStart 没对 hook 安装失败 fail-closed');
   }
 
   const blocked = runHook(hookJs.file, { DAO_CONTROL_PLANE: 'false' }, root);

@@ -489,6 +489,59 @@ describe('控制面闸：写腿文档', () => {
     assert.equal(r.ok, false);
     assert.match(r.why, /不是 git/);
   });
+
+  it('稳定来源：工作树没有 githooks 也能挂上，读回对得上', async () => {
+    const W = await import(WRITE_LIB);
+    const { work } = setupPushRepo('dao-cp-stable-hooks-');
+    assert.equal(fs.existsSync(path.join(work, 'scripts', 'githooks', 'pre-push')), false);
+    const r = W.ensureControlPlaneHooksPath({ cwd: work });
+    assert.equal(r.ok, true, r.why);
+    assert.equal(r.hooksPath, W.stableHooksDir());
+    const got = git(work, ['config', '--worktree', '--get', 'core.hooksPath']);
+    assert.equal(got.stdout.trim(), W.stableHooksDir());
+  });
+
+  it('稳定来源没有 pre-push → ok:false', async () => {
+    const W = await import(WRITE_LIB);
+    const { work } = setupPushRepo('dao-cp-no-src-hook-');
+    const r = W.ensureControlPlaneHooksPath({
+      cwd: work,
+      hooksDir: path.join(os.tmpdir(), 'dao-no-hooks-src'),
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.why, /稳定来源钩子不在/);
+  });
+
+  it('hooksPath 写了但读回对不上 → ok:false', async () => {
+    const W = await import(WRITE_LIB);
+    const hooksDir = W.stableHooksDir();
+    let gets = 0;
+    const spawnGit = (_cmd, args) => {
+      if (args.includes('rev-parse')) return { status: 0, stdout: '/tmp/x\n', stderr: '' };
+      if (args.includes('--get') && args.includes('core.hooksPath')) {
+        gets += 1;
+        if (gets === 1) return { status: 1, stdout: '', stderr: '' };
+        return { status: 0, stdout: '/wrong\n', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const r = W.ensureControlPlaneHooksPath({
+      cwd: '/tmp/x',
+      spawnGit,
+      exists: (p) => /\.git$/.test(p) || /pre-push$/.test(p),
+      hooksDir,
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.why, /读回/);
+  });
+
+  it('attachControlPlaneHooksOrThrow：失败就抛', async () => {
+    const W = await import(WRITE_LIB);
+    assert.throws(
+      () => W.attachControlPlaneHooksOrThrow(path.join(os.tmpdir(), 'dao-cp-no-git')),
+      /控制面闸没挂上/,
+    );
+  });
 });
 
 describe('控制面闸：现役 git push 路径', () => {

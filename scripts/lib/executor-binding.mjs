@@ -295,13 +295,14 @@ function resolveFamilyRoute({ mirasim, model, provider, emptyRoutesError }) {
  * 契约断言（钉版本 + 帧形状 + 执行体在不在）在 ensureWorkspace / startSession 里面，
  * 不符就抛且一帧 prompt 都不发——本层不再断第二遍（抄第二份判据必然走偏）。
  */
-export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
+export function createMirasimBinding({ runtime, policy, runtimeOpts, attachHooks } = {}) {
   // 钉版本的唯一真相源是策略（docs/model-routing.json 的 执行体.mirasim.钉版本）。
   // 不传等于 runtime 拿库内常量当真相：改路由表钉版本不生效——服务升级后照旧拒新版本，
   // 或策略已改新版本却继续放旧版本过（#884 审官 P1#5 实咬）。
   // 策略没写（null）时才让 createRuntime 落「本机在役版本」，不在这里抄第二份默认值——
   // 而「本机」由 runtimeOpts.homeDir 定（缺了就拿真实 home，CI 上没有 VERSION 就会空转）。
   const rt = runtime || createExecutionRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined, ...(runtimeOpts || {}) });
+  const attach = attachHooks || ensureControlPlaneHooksPath;
   return {
     name: 'mirasim',
     runtime: rt,
@@ -310,7 +311,19 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
       const branch = String(spec.branch || '').trim();
       if (!repo || !branch) return { ok: false, executor: 'mirasim', error: 'mirasim 建树要 repo（仓路径）和 branch（新分支名）' };
       const r = await rt.ensureWorkspace(repo, branch);
-      if (r && r.path) ensureControlPlaneHooksPath({ cwd: r.path });
+      if (!r || !r.path) {
+        return { ok: false, executor: 'mirasim', error: 'mirasim 建树没返回 path', stage: 'worktree' };
+      }
+      const h = attach({ cwd: r.path });
+      if (!h || !h.ok) {
+        return {
+          ok: false,
+          executor: 'mirasim',
+          error: `控制面闸没挂上：${(h && h.why) || '没查成'}`,
+          stage: 'hooks',
+          path: r.path,
+        };
+      }
       return {
         ok: true,
         executor: 'mirasim',
@@ -318,6 +331,7 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
         branch: r.branch ?? branch,
         created: r.created === true,
         verified: r.verified !== false,
+        hooksPath: h.hooksPath,
         native: r,
       };
     },
@@ -327,6 +341,16 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
       const workdir = String(spec.workdir || '').trim();
       const prompt = String(spec.prompt || '');
       if (!workdir || !prompt) return { ok: false, executor: 'mirasim', error: 'mirasim 起会话要 workdir 和 prompt（任务书）' };
+      const h = attach({ cwd: workdir });
+      if (!h || !h.ok) {
+        return {
+          ok: false,
+          executor: 'mirasim',
+          error: `控制面闸没挂上：${(h && h.why) || '没查成'}`,
+          stage: 'hooks',
+          workdir,
+        };
+      }
       // #884 审官 P1#2：model 在上一行算出来却不往下传 = 服务端永远收不到具体模型，
       // 而回执里的 daoModel 只是同一个变量抄了一遍，证明不了「发过」。
       const started = await rt.startSession({ agent: route.agent, workdir, prompt, model: spec.model || undefined });
@@ -383,7 +407,7 @@ export function bindExecutor(opts = {}) {
     const runtimeFactory = opts.runtimeFactory || createExecutionRuntime;
     const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || undefined;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
-    const binding = createMirasimBinding({ runtime, policy, runtimeOpts: opts.runtimeOpts });
+    const binding = createMirasimBinding({ runtime, policy, runtimeOpts: opts.runtimeOpts, attachHooks: opts.attachHooks });
     return {
       ok: true,
       executor: 'mirasim',
@@ -400,5 +424,5 @@ export function bindExecutor(opts = {}) {
 
   const named = judgeExecutorName(opts.executor, opts.policy);
   if (!named.ok) throw new Error(named.error);
-  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy, runtimeOpts: opts.runtimeOpts });
+  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy, runtimeOpts: opts.runtimeOpts, attachHooks: opts.attachHooks });
 }
