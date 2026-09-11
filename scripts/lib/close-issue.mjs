@@ -100,6 +100,26 @@ export function closeDecision(pr) {
  * 对单个 PR 执行关单判定并落动作。
  * 返回 { ok, action, reason, issue?, pr?, dryRun? }。
  */
+export function hasCompletedChecklist(body) {
+  let checked = 0, fence = null;
+  const text = String(body || '').replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  for (const line of text.split(/\r?\n/)) {
+    const delimiter = line.match(/^\s*(`{3,}|~{3,})/);
+    if (delimiter) {
+      const mark = delimiter[1];
+      if (!fence) fence = mark;
+      else if (mark[0] === fence[0] && mark.length >= fence.length && line.trim() === mark) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const item = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]/);
+    if (!item) continue;
+    if (item[1] === ' ') return false;
+    checked++;
+  }
+  return checked > 0;
+}
+
 export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 'thoerwink8/windsurf-dao' } = {}) {
   const number = String((pr && (pr.number ?? pr.pr)) ?? '');
   const issue = attributedIssueNumber(pr);
@@ -128,7 +148,7 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   if (dec.action === 'close' && labels.includes('统领单')) {
     const body = iv.json?.body;
     if (typeof body !== 'string') return { ok: false, action: 'none', issue, pr: number, error: '统领单验收清单未读取成功，不自动关闭' };
-    if (/^\s*[-*]\s+\[ \]/m.test(body) || !/^\s*[-*]\s+\[[xX]\]/m.test(body)) {
+    if (!hasCompletedChecklist(body)) {
       return { ok: true, action: 'none', issue, pr: number, reason: '统领单验收清单尚未全部完成，单个 PR 合并不代表整项完成' };
     }
   }

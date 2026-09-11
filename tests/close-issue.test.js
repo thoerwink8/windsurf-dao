@@ -22,7 +22,8 @@ function rollup(...conclusions) {
 it('a merged subtask cannot close an umbrella with unfinished acceptance items', async () => {
   const C = await LOAD;
   const pr = { number: 1186, body: '署名 issue #1174', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') };
-  for (const body of ['- [x] 实现\n- [ ] 自动验收', '', undefined]) {
+  for (const body of ['- [x] 实现\n- [ ] 自动验收', '- [x] 实现\n+ [ ] 自动验收',
+    '- [x] 实现\n1. [ ] 自动验收', '```md\n- [x] 例子\n```', '<!--\n- [x] 例子\n-->', '', undefined]) {
     let writes = 0;
     const r = C.closeIssueForPr({ pr,
       runGh: () => ({ ok: true, json: { state: 'OPEN', url: 'https://github.com/o/r/issues/1174', labels: [{ name: '统领单' }], body } }),

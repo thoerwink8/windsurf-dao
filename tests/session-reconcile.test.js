@@ -16,6 +16,12 @@ it('stopped and rejected sessions use canonical terminal states and do not occup
   assert.equal(isLiveSession({ key: 'grok:fixture', state: 'running' }).live, true);
 });
 
+it('successful finished reviewer remains reusable', async () => {
+  const { judgeReviewerSessionReuse } = await import('../scripts/lib/dispatch/reviewer-mirasim.mjs');
+  const r = judgeReviewerSessionReuse({ record: { sessionKey: 'codex:finished' }, view: { phase: 'finished' } });
+  assert.equal(r.reuse, true);
+});
+
 function dispatch(over = {}) {
   return {
     type: 'job.dispatch',
