@@ -8,7 +8,7 @@ import {createRuntime as createMirasimRuntime} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
-import {EXECUTION_FINISHED,EXECUTION_RESERVED} from './execution-states.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,sessionStateOf} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 
@@ -382,17 +382,22 @@ export function createExecutionRuntime(opts={}) {
         // 没查成（2026-09-10 实咬：三条过期会话让观测集恒 incomplete，指挥官冻结差集重派）。
         // 名单没这条 / 没给状态，才退回「读快照判进度」那条老路。
         let listedState = null;
-        const needList = !FINISHED.has(state) && m.sessionKey && !RESERVED.has(state);
+        const needList = (!FINISHED.has(state) || state === 'incomplete') && !m.cleanupVerified && m.sessionKey && !RESERVED.has(state);
         const listedIndex = needList ? await listedIndexOnce() : null;
         const hit = listedIndex ? listedIndex.get(String(m.sessionKey)) : null;
         if (hit) {
-          const raw = String(hit.runState || hit.phase || '').toLowerCase();
-          if (FINISHED.has(raw) || hit.open === false) listedState = FINISHED.has(raw) ? raw : 'incomplete';
+          // `open` describes an open UI session, not whether its agent ended.
+          // A headless running Grok may have open:false. Never manufacture a
+          // terminal state from that bit: doing so lets commander kill its own
+          // workers on the next scan. Re-read unverified incomplete cache rows
+          // so a previous misclassification does not become permanent truth.
+          const raw = sessionStateOf(hit);
+          if (raw) listedState = raw;
         }
         if (listedState) {
           state = listedState;
           try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, state: RESERVED.has(cur.state) || cur.cleanupVerified ? cur.state : listedState, observedState: listedState, observedAt: now(), taskCompleted: false }; atomic(metaFile(keyOf(m)), next); return next; }); } catch { /* 落不下不改判 */ }
-        } else if(!FINISHED.has(state)&&m.sessionKey&&!RESERVED.has(state)) {
+        } else if((!FINISHED.has(state)||state==='incomplete')&&!m.cleanupVerified&&m.sessionKey&&!RESERVED.has(state)) {
           if(++active>maxActive||Date.now()>=deadline){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'managed active scan limit'});}
           else {
             let timer;
