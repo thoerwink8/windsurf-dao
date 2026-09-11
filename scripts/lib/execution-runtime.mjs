@@ -397,7 +397,7 @@ export function createExecutionRuntime(opts={}) {
         if (listedState) {
           state = listedState;
           try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, state: RESERVED.has(cur.state) || cur.cleanupVerified ? cur.state : listedState, observedState: listedState, observedAt: now(), taskCompleted: false }; atomic(metaFile(keyOf(m)), next); return next; }); } catch { /* 落不下不改判 */ }
-        } else if(!FINISHED.has(state)&&m.sessionKey&&!RESERVED.has(state)) {
+        } else if((!FINISHED.has(state)||state==='incomplete')&&!m.cleanupVerified&&m.sessionKey&&!RESERVED.has(state)) {
           if(++active>maxActive||Date.now()>=deadline){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'managed active scan limit'});}
           else {
             let timer;

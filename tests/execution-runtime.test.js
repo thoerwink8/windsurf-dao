@@ -36,7 +36,6 @@ linuxTest('headless running session with open:false stays live and repairs stale
   assert.equal(first.ok,true);
   assert.equal(first.sessions[0].state,'running');
   const record=records(f)[0];
-  const file=path.join(f.stateDir,'sessions',record.recordKey+'.json');
   const actual=fs.readdirSync(path.join(f.stateDir,'sessions')).find(n=>n.endsWith('.json'));
   writeExecutionRecord(path.join(f.stateDir,'sessions',actual),{...record,state:'incomplete'});
   const second=await rt.listSessions();
@@ -51,6 +50,26 @@ linuxTest('closed UI without run state is not terminal evidence',async t=>{
   m.views.set(started.sessionKey,{phase:'streaming',text:'working',toolCalls:[]});
   const r=await rt.listSessions();
   assert.equal(r.sessions[0].state,'running');
+});
+
+linuxTest('cached incomplete requires fresh verification even when list fails or lacks state',async t=>{
+  for(const listFails of [true,false]) {
+    const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+    const started=await rt.startSession(spec(f));
+    const file=path.join(f.stateDir,'sessions',fs.readdirSync(path.join(f.stateDir,'sessions')).find(n=>n.endsWith('.json')));
+    writeExecutionRecord(file,{...records(f)[0],state:'incomplete'});
+    m.listSessions=async()=>listFails?{ok:false}:{ok:true,sessions:[{sessionKey:started.sessionKey,open:false}]};
+    m.views.set(started.sessionKey,{phase:'running',text:'working',toolCalls:[]});
+    const r=await rt.listSessions();
+    assert.equal(r.ok,true);
+    assert.equal(r.sessions[0].state,'running');
+    assert.equal(m.calls.read.length,1);
+    writeExecutionRecord(file,{...records(f)[0],state:'incomplete'});
+    m.readSession=async()=>{throw Error('unavailable');};
+    const unknown=await rt.listSessions();
+    assert.equal(unknown.ok,false);
+    assert.equal(unknown.sessions[0].state,'unknown');
+  }
 });
 
 linuxTest('real flock belongs to the parent FD after helper exit and shares the same inode',async t=>{
