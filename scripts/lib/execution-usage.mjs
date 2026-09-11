@@ -188,6 +188,10 @@ function atomic(file, value, immutable = false, access = {}) {
   try {
     fd = fs.openSync(tmp, 'wx', access.mode ?? 0o600);
     if (Number.isInteger(access.gid) && process.platform !== 'win32') fs.fchownSync(fd, process.getuid(), access.gid);
+    // The installed root exporter runs with a restrictive umask.  Apply the
+    // requested shared-reader mode explicitly after opening; otherwise rows
+    // become 0600 and the orca collector reports inbox_invalid.
+    if (Number.isInteger(access.mode) && process.platform !== 'win32') fs.fchmodSync(fd, access.mode);
     fs.writeFileSync(fd, JSON.stringify(value) + '\n'); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
     if (immutable) {
       try { fs.linkSync(tmp, file); } catch (e) { if (e.code === 'EEXIST') return false; throw e; }
