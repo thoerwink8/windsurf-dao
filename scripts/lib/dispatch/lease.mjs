@@ -32,6 +32,7 @@
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { scanProcCwds } from '../proc-cwds.mjs';
 
 /** 认 mirasim 服务进程用的字样。取自它自己的 argv：`…/mirasim-server/<版本>/server.cjs`。 */
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
@@ -54,13 +55,27 @@ export const LEASE_BUSY_REASON = 'lease-held';
  * @returns {{ok:true, procs:Array<{pid:number,comm:string,cwd:string}>, resolved:number, total:number}
  *          |{ok:false, unscanned:true, error:string}}
  *
- * 三态出口。**「扫完没有」与「根本没扫到」必须分得开**：以别的用户身份跑时
- * /proc/<pid>/cwd 读不出来，看起来和「没有进程在这棵树里」一模一样——那会让闸静默失效。
- * 判据：能解出 cwd 的进程数为 0 而进程总数不为 0 ⇒ 没查成。
+ * 三态出口。**「扫完没有」与「根本没扫到」必须分得开**。
+ * 覆盖证明见 `scanProcCwds`：相关进程 = 本身份。别的用户 cwd 读不出是预期（Yama），
+ * 不算没查成；本身份 cwd 没核清才是没查成。旧判据「任意读出一条 cwd 就算 ok」
+ * 会在 60/249 时放行删除——#1176 审官 P1。
+ *
+ * 覆盖证明必须排在「服务不在 ⇒ 0 个会话」前面：服务不在不能反过来证明相关进程核清了。
  */
 export function scanSessionProcs({
-  readdir = readdirSync, read = readFileSync, readlink = readlinkSync,
+  readdir = readdirSync, read = readFileSync, readlink = readlinkSync, getuid,
 } = {}) {
+  const cover = scanProcCwds({ readdir, read, readlink, getuid });
+  if (!cover.ok) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: cover.error,
+      resolved: cover.resolved || 0,
+      total: cover.total || 0,
+    };
+  }
+
   let names;
   try { names = readdir('/proc'); }
   catch (e) { return { ok: false, unscanned: true, error: `/proc 读不动：${String(e.message || e)}` }; }
@@ -84,7 +99,7 @@ export function scanSessionProcs({
   }
   if (!servers.size) {
     // 服务不在 = 一个会话也不可能在跑。这是「查成了，结论是 0」，不是没查成。
-    return { ok: true, procs: [], resolved: 0, total: pids.length, noServer: true };
+    return { ok: true, procs: [], resolved: cover.resolved, total: pids.length, noServer: true };
   }
 
   const 是后代 = (pid) => {
@@ -98,12 +113,11 @@ export function scanSessionProcs({
     return false;
   };
 
+  const cwdByPid = new Map((cover.entries || []).map((e) => [Number(e.pid), e.cwd]));
   const procs = [];
-  let resolved = 0;
   for (const pid of pids) {
-    let cwd;
-    try { cwd = readlink(`/proc/${pid}/cwd`); } catch { continue; } // 别人的进程 / 已经退了
-    resolved += 1;
+    const cwd = cwdByPid.get(pid);
+    if (!cwd) continue; // 退了 / 别人的 / 内核藏起来的——覆盖证明已经核过
     if (servers.has(pid)) continue; // 服务自己不是干活的会话，它的 cwd 不该占住任何树
     if (!是后代(pid)) continue;
     let comm = '';
@@ -111,11 +125,7 @@ export function scanSessionProcs({
     procs.push({ pid, comm, cwd: String(cwd).replace(/\/+$/, '') });
   }
 
-  // 能读 /proc 目录、却一个 cwd 都解不出来 ⇒ 以别的身份在跑，看不见真相。
-  if (resolved === 0) {
-    return { ok: false, unscanned: true, error: `扫了 ${pids.length} 个进程，一个 cwd 都读不出来——多半是以别的用户在跑，看不见会话进程（没查成）` };
-  }
-  return { ok: true, procs, resolved, total: pids.length };
+  return { ok: true, procs, resolved: cover.resolved, total: pids.length };
 }
 
 /**

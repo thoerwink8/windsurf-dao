@@ -19,7 +19,7 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths, descendantsOf } from './lib/board-gc.mjs';
@@ -35,6 +35,7 @@ import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/wo
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { planSessionGc, planOrphanGc, markOrphanInUse } from './lib/session-dir-gc.mjs';
 import { planLeaseGc, judgeRegistryStuck } from './lib/lease-gc.mjs';
+import { scanProcCwds } from './lib/proc-cwds.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -96,24 +97,11 @@ function listOrphanTmp(root) {
 }
 
 /**
- * 扫 /proc 全部能读的 cwd。孤儿目录的占用者不限于 mirasim 后代（git/codex 自己也算）。
- * 三态：读不动 / 一个 cwd 都解不出 → unscanned；解得出 → ok。
+ * 扫 /proc cwd，带相关进程覆盖证明。孤儿占用者不限于 mirasim 后代（git/codex 自己也算）。
+ * 判据在 lib/proc-cwds.mjs：别的用户 EACCES 预期内；本身份没核清才是没查成。
  */
-function readProcCwds({ readdir = readdirSync, readlink = readlinkSync } = {}) {
-  let names;
-  try { names = readdir('/proc'); }
-  catch (e) { return { ok: false, unscanned: true, error: `/proc 读不动：${String(e && e.message || e)}` }; }
-  const pids = names.filter((n) => /^\d+$/.test(String(n)));
-  if (!pids.length) return { ok: false, unscanned: true, error: '/proc 下一个 pid 都没有——没查成' };
-  const cwds = [];
-  for (const pid of pids) {
-    try { cwds.push(String(readlink(`/proc/${pid}/cwd`)).replace(/\/+$/, '')); }
-    catch { /* 别人的进程 / 已经退了 */ }
-  }
-  if (!cwds.length) {
-    return { ok: false, unscanned: true, error: `扫了 ${pids.length} 个进程，一个 cwd 都读不出来——没查成` };
-  }
-  return { ok: true, cwds, resolved: cwds.length, total: pids.length };
+function readProcCwds(io = {}) {
+  return scanProcCwds(io);
 }
 
 /** cwd 落在工作目录里（本身或子路径）就算占用。 */

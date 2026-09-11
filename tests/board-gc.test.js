@@ -1334,14 +1334,24 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
     assert.match(src, /逃出根外整条跳过/);
   });
 
+  it('readProcCwds 走 scanProcCwds，不是自己吞掉 readlink 错误', () => {
+    assert.match(src, /scanProcCwds/);
+    const body = src.slice(src.indexOf('function readProcCwds'), src.indexOf('function hasLiveCwd'));
+    assert.match(body, /return scanProcCwds/);
+    assert.doesNotMatch(body, /catch \{ \/\* 别人的进程/);
+  });
+
   it('readProcCwds：能解出 cwd → ok', async () => {
     const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     const r = readProcCwds({
       readdir: () => ['1', '2', 'cpu'],
       readlink: (p) => {
-        if (String(p).includes('/1/')) return '/tmp/a/';
-        throw new Error('gone');
+        if (String(p).includes('/1/cwd')) return '/tmp/a/';
+        throw gone;
       },
+      read: () => { throw gone; },
+      getuid: () => 999,
     });
     assert.equal(r.ok, true);
     assert.deepEqual(r.cwds, ['/tmp/a']);
@@ -1359,13 +1369,35 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
 
   it('readProcCwds：一个 cwd 都解不出 → unscanned，不是 0 条占用', async () => {
     const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     const r = readProcCwds({
       readdir: () => ['1', '2'],
-      readlink: () => { throw new Error('gone'); },
+      readlink: () => { throw gone; },
+      read: () => { throw gone; },
     });
     assert.equal(r.ok, false);
     assert.equal(r.unscanned, true);
     assert.match(r.error, /没查成/);
+  });
+
+  it('readProcCwds：本身份部分 cwd 读失败 → unscanned（审官 P1 回归）', async () => {
+    const { readProcCwds } = await import(CLI);
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const r = readProcCwds({
+      getuid: () => 999,
+      readdir: () => ['10', '11'],
+      readlink: (p) => {
+        if (String(p).includes('/10/cwd')) return '/tmp/a';
+        if (String(p).includes('/11/cwd')) throw eacces;
+        if (String(p).includes('/11/exe')) return '/usr/bin/node';
+        throw eacces;
+      },
+      read: (p) => (String(p).endsWith('/11/status') ? 'Uid:\t999\t999\t999\t999\n' : ''),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.denied, 1);
+    assert.match(r.error, /没核清/);
   });
 
   it('listOrphanTmp：目录不存在当没有，不是没查成', async () => {
