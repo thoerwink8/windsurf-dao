@@ -25,6 +25,7 @@
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { sessionStateOf } from './execution-states.mjs';
+import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
@@ -1109,6 +1110,15 @@ function collectCandidates(situation) {
     }
 
     if (readyToLand && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+      const approvedIssue = (gh.issues || []).find(i => Number(i.number) === explicitApprovalIssue(pr));
+      if (canReleaseApprovedDraft({ pr: { ...pr, mergeable: mergeableState }, issue: approvedIssue,
+        greenAtHead, expectedHead: pr.headRefOid })) {
+        out.push(withNeeds({ kind: 'merge', pr: pr.number, head: pr.headRefOid,
+          approvalIssue: approvedIssue.number, title: pr.title || '',
+          why: '用户已批准执行，当前提交审查和检查均通过，自动解除合并等待' }, N.merge));
+        out.push(withNeeds({ kind: 'land', why: '已批准任务合并后收尾' }, N.land));
+        continue;
+      }
       out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
       continue;
     }
