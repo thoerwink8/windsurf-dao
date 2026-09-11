@@ -10,6 +10,15 @@ const path = require('node:path');
 
 const LIB = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'escalate-group.mjs').replace(/\\/g, '/'));
 
+it('approved execution task stays open after its original alert recovers', async () => {
+  const { reconcileEscalationRound } = await LIB;
+  const ledger = { 'escalate/approved-but-ci-red': { issue: 1183, objects: ['PR #1155'] } };
+  const held = reconcileEscalationRound({ reasonsThisRound: [], ledger, allScanned: true, approvedIssues: [1183] });
+  assert.deepEqual(held.toClose, []);
+  const ordinary = reconcileEscalationRound({ reasonsThisRound: [], ledger, allScanned: true });
+  assert.equal(ordinary.toClose[0].issue, 1183);
+});
+
 describe('「没查成」class 不开单（判前缀，不判相等）', () => {
   it('裸 unscanned 静默', async () => {
     const { isUnscannedReason } = await LIB;

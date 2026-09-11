@@ -237,7 +237,7 @@ export function migrateEscalateLedger(ledger) {
  * 所以只在全查成的轮次里收敛；没查成的轮次连计数都不动（否则连续轮数会被扫描故障洗掉）。
  */
 export function reconcileEscalationRound({
-  reasonsThisRound = [], streak = {}, ledger = {}, allScanned = false,
+  reasonsThisRound = [], streak = {}, ledger = {}, allScanned = false, approvedIssues = [],
 } = {}) {
   const seen = new Set((reasonsThisRound || []).filter(Boolean).map(String));
   if (!allScanned) {
@@ -248,11 +248,15 @@ export function reconcileEscalationRound({
   // 先把旧键折进新键，再判消失。不折的话 `escalate/missing-labels/issue-1007`
   // 会被剥成另一个原因，本轮明明还有 missing-labels 也会进 toClose。
   const canon = migrateEscalateLedger(ledger);
+  const approved = new Set(approvedIssues.map(String));
   const toClose = [];
   for (const key of Object.keys(canon)) {
     const reason = reasonOfKey(key);
     if (!reason || seen.has(reason)) continue;
     const entry = canon[key];
+    // An approved alert is now a tracked execution task. Signal recovery is
+    // not task completion: its PR and acceptance flow own closing it.
+    if (entry && approved.has(String(entry.issue))) continue;
     if (entry && entry.issue) toClose.push({ reason, issue: entry.issue, key });
   }
   return { streak: next, toClose, skipped: null };

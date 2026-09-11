@@ -2185,6 +2185,9 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     streak: state.escalateStreak || {},
     ledger: state.escalateLedger,
     allScanned: health.allScanned,
+    approvedIssues: (situation.github?.issues || [])
+      .filter(i => (i.labels || []).some(l => (typeof l === 'string' ? l : l.name) === '已拍板'))
+      .map(i => i.number),
   });
   if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
   if (!dryRun) state.escalateStreak = r.streak;
