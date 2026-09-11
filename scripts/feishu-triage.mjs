@@ -933,7 +933,10 @@ export async function handleListPending({ groups, store, creds, chatId, client =
     github, hubPending: store?.hubPending, policy, repo, bumpCard, issueCard,
   });
   const text = plan.text || applied.text || '';
-  if (text && target && (plan.empty || plan.unscanned)) {
+  // A successful non-empty list also needs a reply.  Previously this only
+  // sent empty/error responses, so the menu click was processed (and logged)
+  // but the user saw nothing when pending items existed.
+  if (text && target) {
     if (client?.sendText) {
       try { await client.sendText(target, text); } catch (e) { warn(`看待拍板回执失败：${e.message}`); }
     } else {
