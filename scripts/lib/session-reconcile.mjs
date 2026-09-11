@@ -14,6 +14,7 @@
 
 import { unclosedJobIds } from './ledger-query.mjs';
 import { EXECUTION_FINISHED, sessionStateOf } from './execution-states.mjs';
+import { checksSucceeded, explicitApprovalIssue } from './approved-merge.mjs';
 
 /** 驱动自报的终态：人已经走了，名单里留着也不算活执行者。 */
 const DEAD_STATES = EXECUTION_FINISHED;
@@ -205,6 +206,7 @@ export function planReconcile({
   desired,
   sessions,
   openIssues,
+  openPrs = [],
   alreadyQueued,
   maxPerRound = 2,
   dispatchedThisRound = 0,
@@ -233,6 +235,15 @@ export function planReconcile({
   }
 
   const queued = asNumberSet(alreadyQueued) || new Set();
+  if (!Array.isArray(openPrs)) return { unscanned: true, redispatches: [], reports: ['交卷状态未查成，不猜测需要重派的工人'] };
+  const deliveryByIssue = new Map();
+  for (const pr of openPrs) {
+    const issue = explicitApprovalIssue(pr);
+    if (!issue) continue;
+    const delivered = pr?.isDraft === false && pr.reworkRequired === false && checksSucceeded(pr);
+    deliveryByIssue.set(issue, (deliveryByIssue.get(issue) ?? true) && delivered);
+  }
+  const delivered = new Set([...deliveryByIssue].filter(([, done]) => done).map(([issue]) => issue));
   const byIssue = new Map();
   const reports = [];
   for (const d of desired) {
@@ -251,6 +262,7 @@ export function planReconcile({
   for (const [issue, d] of byIssue) {
     if (!open.has(issue)) continue; // 单已关：不是漏救，是完工
     if (queued.has(issue)) continue; // 本轮已经要派，不造第二份
+    if (delivered.has(issue)) continue; // 已交卷等审查/合并；判红返工走独立的 PR 路径。
     const live = hasLiveExecutor({ sessions, issue, pr: d.pr });
     if (live.unscanned) {
       reports.push(`#${issue} 活会话没查成——当有人在做，不重派`);
