@@ -28,7 +28,7 @@ it('an omitted approved task is rechecked before alarm convergence can close it'
   const { SITUATION_SECTIONS } = await import('../scripts/lib/commander-core.mjs');
   for (const key of SITUATION_SECTIONS) base.situation[key] = { ...base.situation[key], scanned: true };
   for (const record of [{ ok: false }, { ok: true, out: '{}' },
-    { ok: true, out: JSON.stringify({ labels: [{ name: '已拍板' }] }) }]) {
+    { ok: true, out: JSON.stringify({ state: 'OPEN', labels: [{ name: '已拍板' }] }) }]) {
     const lines = [];
     reconcileEscalations({ ...base, say: x => lines.push(x), readIssue: () => record });
     assert.equal(lines.some(line => line.startsWith('[dry] 收敛关单')), false);

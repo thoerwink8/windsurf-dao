@@ -2199,7 +2199,7 @@ export function reconcileEscalations({ actions, situation, state, dryRun, say,
     const current = readIssue(item.issue);
     let issue;
     try { if (current.ok) issue = JSON.parse(current.out); } catch { /* keep below */ }
-    if (!issue || !Array.isArray(issue.labels)) {
+    if (!issue || !['OPEN', 'CLOSED'].includes(issue.state) || !Array.isArray(issue.labels)) {
       say(`  #${item.issue} 当前标签未核实，不自动关单`);
       continue;
     }
