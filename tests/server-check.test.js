@@ -15,6 +15,7 @@ import {
   classifyFeishuTriage,
   classifyStallWatchTimer,
   classifyBotModelProbe,
+  classifyCommanderStatus,
   parseEnvFile,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
@@ -209,6 +210,47 @@ test('server-check 判别力', async (t) => {
         timersText: `Wed 2026-09-07 01:17:00 CST 30min left n/a n/a ${LAND_TIMER} dao-land.service`,
       });
       assert.equal(r.state, 'ok');
+    });
+  });
+
+  await t.test('⑭ 指挥官自检：透传 status --json，不许改写成 enabled/install', async (t) => {
+    await t.test('exit 1 且 detail 写 start → 红，原文保留，不改写成 install', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 1,
+        stdout: JSON.stringify({
+          state: 'red',
+          detail: 'timer 不会自己响：commander-act.timer enabled 但 inactive(dead) 且没有下一次——sudo systemctl start commander-act.timer',
+          exit: 1,
+        }),
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /systemctl start commander-act\.timer/);
+      assert.doesNotMatch(r.detail, /install/);
+    });
+    await t.test('exit 0 透传「会自己响」，不许改写成「在册且 enabled」', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 0,
+        stdout: JSON.stringify({ state: 'ok', detail: '2 个 timer 在册且会自己响', exit: 0 }),
+      });
+      assert.equal(r.state, 'ok');
+      assert.equal(r.detail, '2 个 timer 在册且会自己响');
+      assert.doesNotMatch(r.detail, /在册且 enabled/);
+    });
+    await t.test('没探到 → unknown', () => {
+      const r = classifyCommanderStatus({ probed: false, reason: 'ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+    await t.test('CHECKS ⑭ 走 --json + classifyCommanderStatus，源码不再写 install / 在册且 enabled', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['⑭ 指挥官自检");
+      assert.ok(i > -1, '找不到 ⑭ CHECKS 条目');
+      const entry = src.slice(i, i + 600);
+      assert.match(entry, /classifyCommanderStatus/);
+      assert.match(entry, /'status',\s*'--json'/);
+      assert.doesNotMatch(entry, /install/);
+      assert.doesNotMatch(entry, /在册且 enabled/);
     });
   });
 
