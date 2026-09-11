@@ -255,6 +255,13 @@ export function checkNoBareIssueWriteInCode({ root, files, extraRels, exempt } =
 
 const UNSET_PERSONAL_TOKEN_RE = /^UnsetEnvironment=.*\bGH_TOKEN\b.*\bGITHUB_TOKEN\b/m;
 const BLIND_PERSONAL_GH_RE = /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m;
+// 单元自己声明要不要写远端 git。判据写死成一枚显式的、可被扫的标记：
+// 猜（扫 ExecStart 跟 import 找 push）在 minified 产物上必然误判——实测
+// mirasim-server 的 server.cjs 里撞出一堆无关的 `['push']`，判成「要推送」。
+// 声明式的好处是它是唯一真相源；代价是「声明和现实会漂」，
+// 所以另配一道反向闸（tests/systemd-push-declaration.test.js）：
+// 仓内脚本里真出现 git push 的，必须有单元声明它要推送，否则红。
+const REQUIRES_GIT_PUSH_RE = /^#\s*REQUIRES_GIT_PUSH=1\b/m;
 
 /** 自动化单元不许继承个人 GH_TOKEN，也不许读 ~/.config/gh（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
 export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
@@ -283,15 +290,20 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
     const base = rel.replace(/\\/g, '/').split('/').pop();
     const hasUnset = UNSET_PERSONAL_TOKEN_RE.test(text);
     const hasBlind = BLIND_PERSONAL_GH_RE.test(text);
-    // gh-event-bridge 必须用个人 gh 登录做 webhook forward，不能挡 ~/.config/gh。
+    // gh-event-bridge 要用个人 gh 登录做 webhook forward，不能挡 ~/.config/gh。
     const isGhEvents = base === 'dao-gh-events.service';
-    if (!hasUnset || (isGhEvents ? hasBlind : !hasBlind)) hits.push(rel);
+    // 单元自己声明要不要写远端（见 REQUIRES_GIT_PUSH_RE 处的注释）。
+    const needsPush = REQUIRES_GIT_PUSH_RE.test(text);
+    const wrongBlind = !isGhEvents && needsPush && hasBlind;
+    const missingBlind = !isGhEvents && !needsPush && !hasBlind;
+    const ghEventsBroken = isGhEvents && hasBlind;
+    if (!hasUnset || wrongBlind || missingBlind || ghEventsBroken) hits.push(rel);
   }
   if (hits.length) {
     return {
       fail: [
-        `自动化单元 ${hits.length} 个没卸个人 GitHub 凭据`,
-        '每个单元都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN；写 Issue 的单元还要 Environment=GH_CONFIG_DIR=/var/empty（dao-gh-events 反过来：不许设 GH_CONFIG_DIR=/var/empty，webhook forward 仍读个人 gh 登录）。少一处就红',
+        `自动化单元 ${hits.length} 个没卸个人 GitHub 凭据 / 空目录设反了`,
+        '每个单元都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN。写远端（脚本树里有 git push）的单元**不许**设 Environment=GH_CONFIG_DIR=/var/empty——那会让 gh 的凭据助手找不到 hosts.yml，推送永远失败（miraquota-contabo 自 2026-09-06 起每 10 分钟红一次）；不写远端的单元必须设，挡住 ~/.config/gh。dao-gh-events 反过来：不许设。少一处、设反一处都红',
         hits.slice(0, 8).join('；'),
       ],
       scanned: rels.length,
@@ -299,7 +311,7 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
     };
   }
   return {
-    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（写 Issue 的不读 ~/.config/gh；少一处就红）`,
+    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（声明写远端的不设空目录、其余必须设；少一处或设反一处都红）`,
     scanned: rels.length,
     hits: [],
   };
