@@ -153,7 +153,7 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
-import { classifyFailedUnits, repoScriptOf } from './lib/failed-units-check.mjs';
+import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
 import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
   collectManagedReposFromRoot, repoSlugFromRemote,
@@ -1973,7 +1973,23 @@ function checkFailedUnitsLive() {
       if (existsSync(p)) { unitTexts[name] = readFileSync(p, 'utf8'); break; }
     }
   }
-  const r = classifyFailedUnits({ output, repoRoot: ROOT, unitTexts });
+  // 「跑成过吗」：问配对的 timer 有没有过触发。判不了 → 保守当「没跑成过」（红）。
+  const arming = {};
+  for (const name of Object.keys(unitTexts)) {
+    const base = name.replace(/\.service$/, '');
+    const timerPath = join('/etc/systemd/system', `${base}.timer`);
+    const hasTimerFile = existsSync(timerPath);
+    let timerProps = '';
+    if (hasTimerFile) {
+      const tp = spawnSync('systemctl', ['show', `${base}.timer`, '-p', 'LastTriggerUSec', '-p', 'LastTriggerUSecRealtime'], {
+        encoding: 'utf8', timeout: 10000, windowsHide: true,
+      });
+      timerProps = String((tp && tp.stdout) || '');
+    }
+    const ever = hasEverRun({ serviceName: name, timerProps, hasTimerFile });
+    arming[name] = ever === true;
+  }
+  const r = classifyFailedUnits({ output, repoRoot: ROOT, unitTexts, arming });
   if (r.state === 'red') {
     fail(`本仓 ${r.failed.length} 个单元挂在 systemctl --failed 里`, r.plain.impact + '；' + r.plain.plan, r.detail);
     return;

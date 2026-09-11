@@ -36,13 +36,46 @@ export function repoUnitNames({ root } = {}) {
 }
 
 /**
+ * 这个服务单元「跑成过」吗——判它是不是那种常亮红灯。
+ *
+ * 判据：同名的 timer 有没有 LastTriggerUSecRealtime（有过触发），
+ * 或有配对的 timer 单元存在且 enable。取不到 → **不是 false 就是 true**，
+ * 而是「判不了」，返回 null；调用方把 null 当「没跑成过」处理（保守判红）。
+ *
+ * @param {{serviceName:string, timerProps?:string, hasTimerFile?:boolean}} args
+ * @returns {boolean|null}
+ */
+export function hasEverRun({ serviceName, timerProps = '', hasTimerFile = false } = {}) {
+  const base = String(serviceName || '').replace(/\.service$/, '');
+  if (!base) return null;
+  if (!hasTimerFile) return false; // 没配对的 timer：oneshot 靠人拉，没「跑成过」这回事
+  // 这个 systemd（255）上 `LastTriggerUSecRealtime` 是**空的**，有值的是 `LastTriggerUSec`
+  // （它打出来是人读的时间串，不是单调计数）。两个都取，**只要有一个非空非零就算跑成过**——
+  // 只认其中一个会在另一版 systemd 上把「跑成过」读成「从没跑过」，凭空造红灯。
+  const vals = [...String(timerProps).matchAll(/^LastTriggerUSec(?:Realtime)?=(.*)$/gm)].map((m) => m[1].trim());
+  if (!vals.length) return null; // 两项都没打出来 = 判不了
+  return vals.some((v) => v && v !== '0' && v !== 'n/a');
+}
+
+/**
  * 纯函数：`systemctl --failed` 的输出 + 每个失败单元的文件文本 → 三态。
  *
  * 归属判据用 **ExecStart 指不指向本仓**，不用单元名——名字是手打的，早晚漏
  * （本仓判例 hand-typed-constant-will-be-wrong）。这样别的仓的单元、系统自带
  * 单元不会误报，而「仓里的单元被装成别的名字」也不会漏。
+ *
+ * **已经被放弃的那一档**：本仓有个单元（`dao-execution-usage.service`）按设计
+ * 用 exit 2 表示「采集不完整，要人看得见」，而它**每 5 分钟必然重进一次
+ * `--failed`**——因为 charge 这类字段结构上就报不全。那种常亮红灯跟
+ * miraquota 那五天一样，最后一定没人看。所以判据把两件事分开：
+ *
+ *   - 单元**从没成功过**（timer 的 LastTrigger 空 / 从未 active）→ red，这是真故障
+ *   - 单元**跑成过、只是最近一次非零** → 不红，但列进 `flaky` 如实报出来
+ *
+ * 分开的代价是「跑成过之后又开始每次失败」会被降级成不红。用 `flaky` 明着写出来
+ * 抵这一点——不红不等于不说，跟「没查成不当绿」是同一条规矩的两面。
  */
-export function classifyFailedUnits({ output, repoRoot, unitTexts = {} } = {}) {
+export function classifyFailedUnits({ output, repoRoot, unitTexts = {}, arming = {} } = {}) {
   if (typeof output !== 'string') {
     return { state: 'unknown', detail: 'systemctl --failed 没输出（探不到？）——没查成，不当绿' };
   }
@@ -66,15 +99,23 @@ export function classifyFailedUnits({ output, repoRoot, unitTexts = {} } = {}) {
     if (repoScriptOf(text, root)) mine.push(name);
     else foreign.push(name);
   }
-  if (mine.length) {
+  // 已放弃的一档：这个单元跑成过（同前缀的 timer 有过触发），只是最近一次非零。
+  const armed = (name) => {
+    const v = arming[name];
+    return v === true;
+  };
+  const flaky = mine.filter((n) => armed(n));
+  const hard = mine.filter((n) => !armed(n));
+  if (hard.length) {
     return {
       state: 'red',
-      detail: `本仓 ${mine.length} 个单元挂在 systemctl --failed 里：${mine.join('、')}`,
-      failed: mine,
+      detail: `本仓 ${hard.length} 个单元挂在 systemctl --failed 里（从没成功过）：${hard.join('、')}`,
+      failed: hard,
+      flaky,
       foreign,
       unjudged,
       plain: {
-        what: `本仓有 ${mine.length} 个常驻单元起不来：${mine.join('、')}`,
+        what: `本仓有 ${hard.length} 个常驻单元起不来：${hard.join('、')}`,
         impact: '那条腿其实没在跑，但它该干的活看起来像「一直没事」',
         plan: 'journalctl -u <单元> -n 50 看最后一次为什么失败；修完 systemctl reset-failed',
       },
@@ -85,7 +126,16 @@ export function classifyFailedUnits({ output, repoRoot, unitTexts = {} } = {}) {
     return {
       state: 'unknown',
       detail: `${unjudged.length} 个失败单元读不到 unit 文件，判不了归属：${unjudged.join('、')}`,
-      failed: [], foreign, unjudged,
+      failed: [], flaky, foreign, unjudged,
+    };
+  }
+  if (flaky.length) {
+    // 不红，但必须说出来：这些单元跑成过、最近一次非零，可能是真故障，也可能
+    // 是它按设计用非零码报「不完整」。不替人判，只把名单摆出来。
+    return {
+      state: 'green',
+      detail: `本仓单元无一起不来（${flaky.length} 个跑成过、最近一次非零，已在 --failed 里：${flaky.join('、')}；${foreign.length} 个别的单元在失败列表里，不归本仓）`,
+      failed: [], flaky, foreign,
     };
   }
   return {

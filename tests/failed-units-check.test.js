@@ -19,16 +19,51 @@ const MINE = '[Service]\nUser=orca\nExecStart=/usr/bin/node /srv/projects/windsu
 const OTHERS = '[Service]\nExecStart=/usr/bin/node /srv/projects/ai-gateway-stack/deploy/x.mjs\n';
 
 describe('本仓单元挂 systemctl --failed', () => {
-  it('本仓单元失败 → red，且点名是哪个', async () => {
+  it('本仓 unit 从没跑成过、挂在 --failed → red，且点名是哪个', async () => {
     const { classifyFailedUnits } = await LOAD;
     const out = '  UNIT LOAD ACTIVE SUB DESCRIPTION\n  miraquota-contabo.service loaded failed failed MiraQuota\n';
     const r = classifyFailedUnits({
       output: out, repoRoot: REPO,
       unitTexts: { 'miraquota-contabo.service': MINE },
+      arming: { 'miraquota-contabo.service': false },
     });
     assert.equal(r.state, 'red', JSON.stringify(r));
     assert.deepEqual(r.failed, ['miraquota-contabo.service']);
-    assert.ok(r.plain && r.plain.what && r.plain.impact, '红要带人话三行');
+    // 拆成最简断言（本仓 assert-style：复合断言失败时分不清哪半坏了）
+    assert.deepEqual(Object.keys(r.plain || {}).sort(), ['impact', 'plan', 'what'], '红要带人话三行');
+  });
+
+  // 这一档是本仓设计使然：dao-execution-usage 按设计用 exit 2 表示「采集不完整」，
+  // 而 charge 这类字段结构上报不全 ⇒ 它每 5 分钟必然重进 --failed。
+  // 那种常亮红灯跟 miraquota 那五天一样，最后一定没人看——所以「跑成过、最近一次非零」
+  // 不判红，但必须列进 flaky 说出来（不红不等于不说）。
+  it('本仓 unit 跑成过、只是最近一次非零 → 不红，但列进 flaky 如实报', async () => {
+    const { classifyFailedUnits } = await LOAD;
+    const out = '  UNIT LOAD ACTIVE SUB DESCRIPTION\n  dao-execution-usage.service loaded failed failed collector\n';
+    const r = classifyFailedUnits({
+      output: out, repoRoot: REPO,
+      unitTexts: { 'dao-execution-usage.service': MINE },
+      arming: { 'dao-execution-usage.service': true },
+    });
+    assert.equal(r.state, 'green', JSON.stringify(r));
+    assert.deepEqual(r.flaky, ['dao-execution-usage.service']);
+    assert.match(r.detail, /dao-execution-usage\.service/, 'flaky 也要点名，否则等于没说');
+    assert.deepEqual(r.failed, []);
+  });
+
+  it('跑成过 + 从没跑成过混在一起 → red 只算从没跑成过的那部分', async () => {
+    const { classifyFailedUnits } = await LOAD;
+    const out = '  UNIT LOAD ACTIVE SUB DESCRIPTION\n'
+      + '  never.service loaded failed failed x\n'
+      + '  flaky.service loaded failed failed y\n';
+    const r = classifyFailedUnits({
+      output: out, repoRoot: REPO,
+      unitTexts: { 'never.service': MINE, 'flaky.service': MINE },
+      arming: { 'never.service': false, 'flaky.service': true },
+    });
+    assert.equal(r.state, 'red', JSON.stringify(r));
+    assert.deepEqual(r.failed, ['never.service']);
+    assert.deepEqual(r.flaky, ['flaky.service']);
   });
 
   it('只有别仓的单元失败 → green（不归本仓，不许把噪音算进来）', async () => {
@@ -99,4 +134,37 @@ describe('本仓单元挂 systemctl --failed', () => {
   // spawn 预算（scripts/lib/spawn-budget.mjs，147 格），为「证明真实环境能算出结果」
   // 花一格不值——真实环境那一头由 dao-check 的 checkFailedUnitsLive 每跑必验，
   // 而且它验的是同一份 output 形态。判别力由上面 6 条夹具承担（red 1 条 / unknown 3 条）。
+});
+
+// hasEverRun 是「这一档算不算红」的判据本身，它读错字段会凭空造红灯——
+// 实测本机 systemd 255 上 LastTriggerUSecRealtime 是空的，有值的是 LastTriggerUSec。
+describe('hasEverRun 读对了 timer 的字段吗', () => {
+  it('LastTriggerUSec 有值 → 跑成过（本机 systemd 255 的真实形态）', async () => {
+    const { hasEverRun } = await LOAD;
+    const real = 'LastTriggerUSec=Fri 2026-09-11 21:18:10 CST\n';
+    assert.equal(hasEverRun({ serviceName: 'x.service', timerProps: real, hasTimerFile: true }), true);
+  });
+
+  it('两个字段都空值 / 0 / n/a → 从没跑过', async () => {
+    const { hasEverRun } = await LOAD;
+    for (const v of ['LastTriggerUSec=\n', 'LastTriggerUSec=0\n', 'LastTriggerUSec=n/a\n',
+      'LastTriggerUSecRealtime=\nLastTriggerUSec=\n']) {
+      assert.equal(hasEverRun({ serviceName: 'x.service', timerProps: v, hasTimerFile: true }), false, JSON.stringify(v));
+    }
+  });
+
+  it('Realtime 有值也算（另一版 systemd 可能只给这一项）', async () => {
+    const { hasEverRun } = await LOAD;
+    assert.equal(hasEverRun({ serviceName: 'x.service', timerProps: 'LastTriggerUSecRealtime=Fri 2026-09-11 21:18:10 CST\n', hasTimerFile: true }), true);
+  });
+
+  it('没配对的 timer → 不算跑成过（oneshot 靠人拉）', async () => {
+    const { hasEverRun } = await LOAD;
+    assert.equal(hasEverRun({ serviceName: 'x.service', timerProps: 'LastTriggerUSec=Fri 2026-01-01 00:00:00 CST\n', hasTimerFile: false }), false);
+  });
+
+  it('两项都没打出来 → null（判不了，调用方保守当红）', async () => {
+    const { hasEverRun } = await LOAD;
+    assert.equal(hasEverRun({ serviceName: 'x.service', timerProps: 'Whatever=1\n', hasTimerFile: true }), null);
+  });
 });
