@@ -18,7 +18,14 @@ function mkHome(tag, { root = REPO } = {}) {
   const dotClaude = path.join(home, '.claude');
   fs.mkdirSync(dotClaude, { recursive: true });
   fs.copyFileSync(path.join(root, 'docs', 'global-CLAUDE.md'), path.join(dotClaude, 'CLAUDE.md'));
-  fs.symlinkSync(path.join(root, 'host', 'skills'), path.join(dotClaude, 'skills'), 'junction');
+  // #1146 起整目录链接算被劫；全绿基线必须是真目录 + 逐个链接。
+  const live = path.join(dotClaude, 'skills');
+  fs.mkdirSync(live, { recursive: true });
+  const src = path.join(root, 'host', 'skills');
+  for (const n of fs.readdirSync(src)) {
+    if (!fs.existsSync(path.join(src, n, 'SKILL.md'))) continue;
+    fs.symlinkSync(path.join(src, n), path.join(live, n), 'junction');
+  }
   // 假 memory clone：origin 指向正牌 memory 仓
   const clone = path.join(home, 'fake-memory-clone');
   fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
@@ -58,26 +65,26 @@ describe('onboard', () => {
     });
     await t.test('skills 链接不在', async () => {
       const { home, clone } = mkHome('noskill'); await linkMemory(home, clone, REPO); mkCreds(home);
-      fs.rmSync(path.join(home, '.claude', 'skills'));
+      fs.rmSync(path.join(home, '.claude', 'skills'), { recursive: true, force: true });
       assert.ok((await ids(home)).includes('skills-missing'));
     });
     await t.test('skills/dispatch 是拷贝的真目录 → skills-not-link 只报不修', async () => {
       const { home, clone } = mkHome('dirskill'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
-      fs.rmSync(p); fs.mkdirSync(path.join(p, 'dispatch'), { recursive: true });
+      fs.rmSync(p, { recursive: true, force: true }); fs.mkdirSync(path.join(p, 'dispatch'), { recursive: true });
       fs.writeFileSync(path.join(p, 'dispatch', 'SKILL.md'), '拷贝残留');
       assert.ok((await ids(home)).includes('skills-not-link'));
     });
     await t.test('skills 目录在但缺链接 → skills-partial（可修）', async () => {
       const { home, clone } = mkHome('partial'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
-      fs.rmSync(p); fs.mkdirSync(p);
+      fs.rmSync(p, { recursive: true, force: true }); fs.mkdirSync(p);
       assert.ok((await ids(home)).includes('skills-partial'));
     });
     await t.test('逐个链接形态（现行部署）→ 绿', async () => {
       const { home, clone } = mkHome('perskill'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
-      fs.rmSync(p); fs.mkdirSync(p);
+      fs.rmSync(p, { recursive: true, force: true }); fs.mkdirSync(p);
       // 2026-09-05 起逐个比对全部 skill，不再拿 dispatch 一个当哨兵——只链一个不算绿。
       const src = path.join(REPO, 'host', 'skills');
       for (const n of fs.readdirSync(src)) {
@@ -89,7 +96,7 @@ describe('onboard', () => {
     await t.test('只链 dispatch、别的没链 → 仍判 skills-partial（实咬：新建 dao-inbox 后 onboard 照报全绿）', async () => {
       const { home, clone } = mkHome('sentinel'); await linkMemory(home, clone, REPO); mkCreds(home);
       const p = path.join(home, '.claude', 'skills');
-      fs.rmSync(p); fs.mkdirSync(p);
+      fs.rmSync(p, { recursive: true, force: true }); fs.mkdirSync(p);
       fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
       assert.ok((await ids(home)).includes('skills-partial'), '只链一个不许判绿——这正是当天漏掉 dao-inbox 的那格');
     });
@@ -456,5 +463,160 @@ describe('家目录里追溯不回本仓的 skill', () => {
     const S = await LIB_LOAD;
     assert.ok(S.ONBOARD_REPORT_ONLY.has('skills-stray'));
     assert.ok(S.ONBOARD_REPORT_ONLY.has('skills-dangling-stray'));
+  });
+});
+
+// #1146：整目录链接（mirasim 形态）从「只报不修」升级成合并式接回。
+describe('skills 装载面合并式接回', () => {
+  const MOUNT_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'skills-mount.mjs').replace(/\\/g, '/'));
+
+  function mkHijackHome(tag) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `onboard-${tag}-`));
+    const mira = path.join(home, '.mirasim', 'skills');
+    fs.mkdirSync(mira, { recursive: true });
+    fs.mkdirSync(path.join(mira, 'lark-im'), { recursive: true });
+    fs.writeFileSync(path.join(mira, 'lark-im', 'SKILL.md'), '---\nname: lark-im\n---\nmirasim 自有');
+    fs.mkdirSync(path.join(mira, 'eval'), { recursive: true });
+    fs.writeFileSync(path.join(mira, 'eval', 'SKILL.md'), '---\nname: eval\n---\nmirasim eval');
+    // 被劫目标里也放一份仓内 skill，接回后必须换成仓内链，不能删 mira 里那份
+    fs.mkdirSync(path.join(mira, 'dispatch'), { recursive: true });
+    fs.writeFileSync(path.join(mira, 'dispatch', 'SKILL.md'), '被劫残留');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.symlinkSync(mira, path.join(home, '.claude', 'skills'), 'junction');
+    fs.copyFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), path.join(home, '.claude', 'CLAUDE.md'));
+    return { home, mira };
+  }
+
+  it('整目录链到 mirasim 形态 → skills-elsewhere（可修，不再只报）', async () => {
+    const S = await LIB_LOAD;
+    const { home } = mkHijackHome('elsewhere');
+    const r = S.checkSkillsLink({ root: REPO, home });
+    assert.equal(r.problem?.id, 'skills-elsewhere', JSON.stringify(r));
+    assert.ok(!S.ONBOARD_REPORT_ONLY.has('skills-elsewhere'), 'elsewhere 必须可修');
+  });
+
+  it('故意把装载面换成 mirasim 形态 → heal 接回仓内链且保留 lark-im/eval，不删原目录', async () => {
+    const M = await MOUNT_LOAD;
+    const S = await LIB_LOAD;
+    const { home, mira } = mkHijackHome('heal');
+    const r = M.healSkillsMount({ root: REPO, home });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.kind, 'hijacked');
+    assert.equal(r.changed, true);
+    assert.ok(r.kept.includes('lark-im'), 'lark-im 必须保留  →  ' + JSON.stringify(r.kept));
+    assert.ok(r.kept.includes('eval'), 'eval 必须保留  →  ' + JSON.stringify(r.kept));
+    const face = path.join(home, '.claude', 'skills');
+    assert.equal(fs.lstatSync(face).isDirectory(), true, '接回后必须是真目录');
+    assert.equal(fs.lstatSync(face).isSymbolicLink(), false);
+    assert.equal(fs.lstatSync(path.join(face, 'dispatch')).isSymbolicLink(), true);
+    assert.ok(fs.realpathSync(path.join(face, 'dispatch')).replace(/\\/g, '/').endsWith('/host/skills/dispatch'));
+    assert.ok(fs.existsSync(path.join(face, 'lark-im', 'SKILL.md')), 'lark-im 仍可见');
+    assert.ok(fs.existsSync(path.join(face, 'eval', 'SKILL.md')), 'eval 仍可见');
+    assert.ok(fs.existsSync(path.join(mira, 'lark-im', 'SKILL.md')), '原 mirasim 目录不许删');
+    assert.equal(fs.readFileSync(path.join(mira, 'dispatch', 'SKILL.md'), 'utf8'), '被劫残留', '仓内同名那份留在 mira 里');
+    const after = S.checkSkillsLink({ root: REPO, home });
+    assert.equal(after.problem, undefined, '接回后 onboard 应绿（外来走 keeper 白名单） →  ' + JSON.stringify(after));
+    const r2 = M.healSkillsMount({ root: REPO, home });
+    assert.equal(r2.ok, true);
+    assert.equal(r2.changed, false, '再跑必须幂等');
+  });
+
+  it('dry-run 不动盘，却报出会保留哪些外来', async () => {
+    const M = await MOUNT_LOAD;
+    const { home, mira } = mkHijackHome('dry');
+    const before = fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink();
+    const r = M.healSkillsMount({ root: REPO, home, dryRun: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.kind, 'hijacked');
+    assert.ok(r.kept.includes('lark-im'));
+    assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink(), before);
+    assert.ok(fs.existsSync(mira));
+  });
+
+  it('没查成（host/skills 不在）与查过没事不同形', async () => {
+    const M = await MOUNT_LOAD;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-unscanned-'));
+    const r = M.healSkillsMount({ root: path.join(home, 'not-a-repo'), home });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('classify：没装 / 被劫 / 真目录 三种形态分形', async () => {
+    const M = await MOUNT_LOAD;
+    const missingHome = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-cls-miss-'));
+    assert.equal(M.classifySkillsMount({ root: REPO, home: missingHome }).kind, 'missing');
+    const { home: hijackHome } = mkHijackHome('cls-hijack');
+    assert.equal(M.classifySkillsMount({ root: REPO, home: hijackHome }).kind, 'hijacked');
+    const { home: dirHome } = mkHome('cls-dir');
+    assert.equal(M.classifySkillsMount({ root: REPO, home: dirHome }).kind, 'directory');
+    const fileHome = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-cls-file-'));
+    fs.mkdirSync(path.join(fileHome, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(fileHome, '.claude', 'skills'), 'not-a-dir');
+    assert.equal(M.classifySkillsMount({ root: REPO, home: fileHome }).kind, 'file');
+  });
+
+  it('onboard.mjs e2e：整目录 mirasim 形态实跑接回，外来仍可见', async () => {
+    const { home, clone } = mkHome('e2e-hijack');
+    await linkMemory(home, clone, REPO); mkCreds(home);
+    const mira = path.join(home, '.mirasim', 'skills');
+    fs.mkdirSync(path.join(mira, 'lark-im'), { recursive: true });
+    fs.writeFileSync(path.join(mira, 'lark-im', 'SKILL.md'), 'mira-lark');
+    const face = path.join(home, '.claude', 'skills');
+    fs.rmSync(face, { recursive: true, force: true });
+    fs.symlinkSync(mira, face, 'junction');
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')], {
+      env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(fs.lstatSync(face).isSymbolicLink(), false, '接回后必须是真目录');
+    assert.equal(fs.lstatSync(path.join(face, 'dispatch')).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(path.join(face, 'lark-im', 'SKILL.md')), true, 'lark-im 仍可见');
+    assert.equal(fs.existsSync(path.join(mira, 'lark-im', 'SKILL.md')), true, '原目录不许删');
+  });
+
+  it('skills-heal.mjs 被劫 exit 0 且接回；没查成 exit 2', () => {
+    const script = path.join(REPO, 'scripts', 'skills-heal.mjs');
+    const { home } = mkHijackHome('cli-heal');
+    const ok = spawnSync(process.execPath, [script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    });
+    assert.equal(ok.status, 0, String(ok.stderr || ok.stdout));
+    assert.match(String(ok.stdout || ''), /已接回|接回/);
+    assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink(), false);
+    const empty = spawnSync(process.execPath, [script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      env: { ...process.env, HOME: '', USERPROFILE: '' },
+    });
+    assert.equal(empty.status, 2, String(empty.stderr || empty.stdout));
+    assert.match(String(empty.stderr || ''), /没查成/);
+  });
+});
+
+describe('skills 自愈装机', () => {
+  it('装机脚本在，要 root，装完验 NEXT，不 chmod 仓内文件', () => {
+    const installer = path.join(REPO, 'scripts', 'install-skills-heal.sh');
+    assert.equal(fs.existsSync(installer), true, '装机脚本不在，单元只能靠人手抄进 /etc');
+    const text = fs.readFileSync(installer, 'utf8');
+    const bad = text.split(/\r?\n/).filter((l) =>
+      /^\s*chmod\b/.test(l) && /\$(ROOT|\{ROOT\})/.test(l));
+    assert.deepEqual(bad, []);
+    assert.match(text, /EUID/);
+    assert.match(text, /NextElapseUSecRealtime/);
+    assert.match(text, /dao-skills-heal\.timer/);
+  });
+
+  it('NEW-MACHINE §9d/§11.1 有一行装法；INDEX 登记装载面形态', () => {
+    const nm = fs.readFileSync(path.join(REPO, 'NEW-MACHINE.md'), 'utf8');
+    assert.match(nm, /install-skills-heal\.sh/);
+    assert.match(nm, /dao-skills-heal\.timer/);
+    assert.match(nm, /合并式接回/);
+    const index = fs.readFileSync(path.join(REPO, 'host', 'machine', 'INDEX.md'), 'utf8');
+    assert.match(index, /被劫/);
+    const unit = fs.readFileSync(path.join(REPO, 'host', 'machine', 'systemd', 'dao-skills-heal.service'), 'utf8');
+    assert.match(unit, /^User=orca/m);
+    assert.match(unit, /UnsetEnvironment=GH_TOKEN GITHUB_TOKEN/);
+    assert.match(unit, /GH_CONFIG_DIR=\/var\/empty/);
+    assert.match(unit, /scripts\/skills-heal\.mjs/);
   });
 });

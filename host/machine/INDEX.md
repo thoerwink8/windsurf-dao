@@ -29,7 +29,7 @@
 | A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的符号链接 |
 | D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git。其中 `statusLine.command` 指本仓 `host/statusline.js` 的**本机绝对路径**（仓搬家/换机要手改）——onboard 哨兵 `statusline-dangling` 报断 |
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
-| A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
+| A | ~/.claude/skills | NEW-MACHINE §11。真目录 + 逐个链到 `host/skills/<名>`。整目录链接 = 被劫（#1146），onboard / dao-skills-heal 合并式接回 |
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
@@ -74,10 +74,10 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
+| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。`~/.codex/skills` 见 ignore.md 历史条。本仓只读、不写装法 |
 | E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
 | E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
 | E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |
-| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。执行体（claude / codex / pi）共用的 skill 发现面。本机 `~/.claude/skills` 与 `~/.codex/skills` 都是指向这里的符号链接（`~/.codex/skills` 见 ignore.md 的历史条）；`scripts/lib/skill-link-check.mjs` 解引用后判它是不是目录。本仓不写装法 |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
 | E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
