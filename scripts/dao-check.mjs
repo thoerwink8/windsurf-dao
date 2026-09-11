@@ -193,6 +193,7 @@ import {
   inspectTestExecutorIsolationFixtures, inspectTestExecutorIsolationLive,
   inspectIsolationWiring,
 } from './lib/test-executor-isolation-check.mjs';
+import { readBranchProtection } from './lib/branch-protection-io.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -2177,10 +2178,10 @@ function checkBranchProtectionLive() {
   }
   const r = inspectThisRepoProtection({
     originSlug,
-    spawnGh: (args) => {
+    spawnGh: (args) => readBranchProtection(args, { readAsCli: (args) => {
       const g = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
       return { error: g.error || null, status: g.status, stdout: g.stdout || '', stderr: g.stderr || '' };
-    },
+    } }),
   });
   if (r.skip) {
     skip(`合并闸 live：${r.error || '缺 gh / 无权限'}——SKIP 不是绿`);
