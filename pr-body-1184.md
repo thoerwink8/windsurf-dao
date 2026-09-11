@@ -30,7 +30,22 @@
 
 相邻（不在本单三 key 里、不扩修）：`leg:pqapi-sol` 官方 `/v1/responses` 结构化也是 200 空内容 + `upstream_accounts_unavailable`，上游真挂。
 
-生产 `~/.dao/provider-health.json` / `provider-breaker.json` **未手改**。direct 仍红 strikes=167；两条腿仍红。熔断 open 等冷却后 half-open，绿只在 half-open 合闸。
+### 独立重验（2026-09-12，指挥官再派本会话，不落 key）
+
+| 通道 | 请求 | 结果 | 判定 |
+|---|---|---|---|
+| `direct:codex@pqapi/responses` | 旧体裸字符串 → `127.0.0.1:4317/v1/responses` | **500** `field messages is required`（803ms） | 假红仍在 |
+| 同上 | 结构化 helper 同一口 | **200 + 真内容**（3351ms；`output_text.delta` + `response.completed`） | 通道仍可用 |
+| 同上 | 本分支 `gw-remote-probe.mjs --only` 写临时表 | **green 200 / 1970ms** | 周期探针跟上 |
+| `leg:pqapi-free` | 官方 `/v1/models` | 200 | 账号活着 |
+| 同上 | 官方 chat `gpt-5.6-luna` | **503** `No available channel … (distributor)` | 上游真挂 |
+| 同上 | 网关 `pqapi` 组同一模型 | 同一 503 | 腿探针没错 |
+| `leg:mirasim-bridge` | 本机 `127.0.0.1:4315/v1/models` | 200 | 进程在 |
+| 同上 | 本机 chat `gpt-5.6-luna` | **502** `没找到 Mirasim 会话口` | 现在不可用 |
+| 同上 | `discoverSessionTokens()` | 0 条（mirasim-server 在跑 ≠ 有会话令牌） | 不是探针形状错 |
+| 对照 | 网关 gptpool 别名 `gpt-5.6` | 200 + 真内容（1627ms，落到 luna） | 池靠 Windsurf 仍通 |
+
+生产健康表 / 熔断表 **仍未手改**。systemd 探活跑主树 `/srv/projects/windsurf-dao`（master 旧体），所以生产 `direct` 仍红 strikes=169、500；两条腿仍红。合入后下一轮 30 分钟探针会把 `direct` 探绿；`pqapi-free` / `mirasim-bridge` 仍红，盘点 `probe-red` 还会亮——那是真挂，不装绿。熔断 open 等冷却 half-open，绿只在 half-open 合闸。
 
 ### 代码
 
@@ -46,6 +61,6 @@
 
 ## 自查
 
-- `node --test tests/provider-probe.test.js tests/gw-remote-probe.test.js`：43 过 / 0 红。
-- `node scripts/dao-check.mjs`：退出码 0（235 项，14 项跳过）。
-- `node scripts/handoff-check.mjs --body-file pr-body-1184.md`：交卷档通（② 零删除 / ④ 指针 / ⑤ 自证＝审官所见）。① 基底差 2 个提交只报不判（#1117）。
+- `node --test tests/provider-probe.test.js tests/gw-remote-probe.test.js`：43 过 / 0 红（合入 origin/master 后再跑仍 43/0）。
+- `node scripts/dao-check.mjs`：退出码 0（239 项，14 项跳过，130.8s）。合入 #1199 前本树旧探头把合并闸判成「分支摘要不是对象」；跟上 master 后「本仓 master 合并闸形状对」。
+- `node scripts/handoff-check.mjs --body-file pr-body-1184.md`：交卷档通（② 零删除 / ④ 指针 / ⑤ 自证＝审官所见）。① 基底已跟上，只报不判（#1117）。
