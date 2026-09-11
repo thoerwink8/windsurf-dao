@@ -315,6 +315,16 @@ export function createStateStore(file) {
         if (same(before[key], latest[key])) delete merged[key];
       } else if (pending && before[key] && (!latest[key]
         || latest[key].repo !== before[key].repo || latest[key].number !== before[key].number)) {
+        if (CARD_CHOICES.includes(local[key]?.decided?.choice)) {
+          const replacements = Object.entries(merged).filter(([, entry]) =>
+            entry.repo === before[key].repo && entry.number === before[key].number);
+          if (replacements.length) {
+            for (const [id, entry] of replacements) {
+              if (!CARD_CHOICES.includes(entry.decided?.choice)) merged[id] = { ...entry, decided: local[key].decided };
+            }
+          } else if (!latest[key]) merged[key] = local[key]; // Retain the receipt, not an active card.
+          else throw new Error('已保存的选择无法对应当前卡片，请核对本地记录');
+        }
         continue; // Another writer removed/rebound this card; do not retire its replacement.
       } else if (pending && latest[key] && !same(before[key], latest[key])) {
         const fields = mergeEntries(before[key] || {}, local[key], latest[key]);
@@ -931,9 +941,14 @@ export async function applyCardActions(result, { store, deps, client = null } = 
           for (const entry of Object.values(store.hubPending)) {
             if (entry.repo === a.repo && entry.number === a.number) entry.decided = result.response.decided;
           }
+          let savedLocally = true;
           try { store.save?.(); }
-          catch (e) { warn(`GitHub 已保存，本地记录写入失败：${e.message}`); }
-          if (client?.updateCard) {
+          catch (e) { savedLocally = false; warn(`GitHub 已保存，本地记录写入失败：${e.message}`); }
+          if (!savedLocally && client?.reply) {
+            try { await client.reply(messageId, '决定已保存到 GitHub，本地卡片记录暂未更新，请勿重复拍板。'); }
+            catch (e) { warn(`保存结果通知未送达：${e.message}`); }
+          }
+          if (client?.updateCard && savedLocally) {
             try { await serialCardUpdate(store, `${a.repo}#${a.number}`, async () => {
               for (const [id, current] of Object.entries(store.hubPending)) {
                 if (current.repo === a.repo && current.number === a.number) {

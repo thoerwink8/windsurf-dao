@@ -18,6 +18,24 @@ const POLICY_CHECK = import(toUrl(path.join(REPO, 'scripts', 'lib', 'dispatch-po
 const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
 
 describe('state saves preserve concurrent card decisions', () => {
+  it('a confirmed choice follows the same-issue replacement even without a card-update client', async t => {
+    const { createStateStore, applyCardActions } = await ADAPTER;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-replaced-choice-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'state.json');
+    const initial = createStateStore(file);
+    initial.hubPending.old = { repo: DEFAULT_REPO, number: 1174 };
+    initial.save();
+    const human = createStateStore(file), refresh = createStateStore(file);
+    delete refresh.hubPending.old;
+    refresh.hubPending.new = { repo: DEFAULT_REPO, number: 1174 };
+    refresh.save();
+    await applyCardActions({ parsed: { messageId: 'old' }, response: { decided: { choice: 'recommend' } },
+      actions: [{ type: 'gh_comment', repo: DEFAULT_REPO, number: 1174, body: 'approved', idempotency_key: 'fixture' }] },
+    { store: human, deps: { ghComment: async () => {} } });
+    assert.equal(createStateStore(file).hubPending.new.decided.choice, 'recommend');
+    assert.equal(human.hubPending.new.decided.choice, 'recommend');
+  });
   it('contended state save fails promptly rather than blocking card callbacks', async t => {
     const { createStateStore } = await ADAPTER;
     const { acquireWorktreeLock } = await import('../scripts/lib/dispatch-lock.mjs');
