@@ -8,8 +8,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import {
   classifyOrcaStdout,
   classifyFeishuTriage,
@@ -659,6 +660,118 @@ test('⑳ 单元漂移', async (t) => {
   await t.test('只差换行/首尾空白 → 不算漂移（避免天天红成噪音）', () => {
     const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
     assert.equal(r.state, 'ok');
+  });
+
+  await t.test('.d/ 读不了 → unknown（不许当成正文一致）', () => {
+    const r = classifyUnitDrift([{ name: 'a.timer', repo: 'X', live: null, unreadable: true }]);
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没查成/);
+  });
+});
+
+test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', async (t) => {
+  const {
+    assembleEffectiveUnit,
+    liveTextFromSystemctlCat,
+    collectUnitDriftPairs,
+    classifyUnitDrift,
+    classifyProbeExecStart,
+  } = await import('../scripts/server-check.mjs');
+
+  await t.test('正文对、drop-in 把日历改走 → red（只读 FragmentPath 会绿）', () => {
+    const repo = '[Timer]\nOnCalendar=*:09/30\n';
+    const live = assembleEffectiveUnit(repo, [{
+      path: '/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf',
+      text: '[Timer]\nOnCalendar=*:07/30\n',
+    }]);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('故意只拷正文不删 .d/ 当场红', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Unit]\nDescription=probe\n\n[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      mkdirSync(join(etcDir, 'gw-remote-probe.timer.d'));
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer.d', 'oncalendar.conf'), '[Timer]\nOnCalendar=*:07/30\n');
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'red', r.detail);
+      assert.match(r.detail, /gw-remote-probe\.timer/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('正文对且无 drop-in → ok（反证不是恒红）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-ok-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'ok', r.detail);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('systemctl cat 带 drop-in：剥首行后仍 ≠ 仓内正文', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}# /etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf\n[Timer]\nOnCalendar=*:07/30\n`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('systemctl cat 无 drop-in：剥首行后与正文一致', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'ok');
+  });
+
+  await t.test('活 ExecStart 指向 ~/bin/gw-remote-probe.mjs → red（仓内文件锁不够）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /home\/orca\/bin\/gw-remote-probe/);
+    assert.match(r.detail, /install-gw-remote-probe/);
+  });
+
+  await t.test('活 ExecStart 走仓内脚本 → ok', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+    });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, undefined);
+  });
+
+  await t.test('没装时本格不发言（漂移闸去红）', () => {
+    const r = classifyProbeExecStart({ liveExecStart: null });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, true);
+  });
+
+  await t.test('⑳ 取数读 .d，并锁活 ExecStart', () => {
+    const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+    assert.match(src, /collectUnitDriftPairs/);
+    assert.match(src, /\$\{name\}\.d/);
+    assert.match(src, /#1164 活 ExecStart/);
+    assert.match(src, /classifyProbeExecStart/);
   });
 });
 

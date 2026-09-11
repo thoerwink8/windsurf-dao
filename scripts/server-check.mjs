@@ -912,10 +912,82 @@ function checkRetiredCliOnPath() {
 //
 // **只报不装**：dao-sync 现在跑 orca 身份，写不了 /etc；而让它能写，正是
 // 2026-09-05 堵掉的那条提权路（root 解释 orca 可写的仓内脚本）。装单元是人的动作。
+//
+// #1164：只读 FragmentPath 正文看不见 drop-in。拷了 timer、忘了删 `.d/`，
+// 活日历仍是 :07/30，闸却绿。取数按 `systemctl cat` 的有效单元
+// （正文 + `/etc/systemd/system/<名>.d/*.conf`），再另锁探活 ExecStart 走仓内脚本。
+
+/** 拼出 `systemctl cat` 剥掉首行 `# <FragmentPath>` 之后的有效单元。
+ * 没有 drop-in 时就是正文；有 `.d/*.conf` 时追加 `# <path>` + 内容，所以只拷正文会红。 */
+export function assembleEffectiveUnit(fragment, dropIns = []) {
+  if (!Array.isArray(dropIns) || dropIns.length === 0) return fragment;
+  let out = String(fragment);
+  if (!out.endsWith('\n')) out += '\n';
+  for (const d of dropIns) {
+    out += `# ${d.path}\n`;
+    const t = String(d.text ?? '');
+    out += t.endsWith('\n') ? t : `${t}\n`;
+  }
+  return out;
+}
+
+/** 剥掉 `systemctl cat` 自动加的第一行 `# <FragmentPath>`。后面若还有 `# <name>.d/` 就是 drop-in。 */
+export function liveTextFromSystemctlCat(stdout) {
+  const text = String(stdout ?? '');
+  const nl = text.indexOf('\n');
+  if (nl < 0) return text;
+  if (!/^# \//.test(text.slice(0, nl))) return text;
+  return text.slice(nl + 1);
+}
+
+function readLiveEffectiveUnit(name, etcDir) {
+  const fragmentPath = join(etcDir, name);
+  let fragment;
+  try {
+    fragment = readFileSync(fragmentPath, 'utf8');
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) {
+      return { live: null, unreadable: false };
+    }
+    return { live: null, unreadable: true };
+  }
+  const dropDir = join(etcDir, `${name}.d`);
+  let dropNames;
+  try {
+    dropNames = readdirSync(dropDir).filter((n) => n.endsWith('.conf') && !n.startsWith('.')).sort();
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) {
+      return { live: fragment, unreadable: false };
+    }
+    return { live: null, unreadable: true };
+  }
+  const dropIns = [];
+  for (const n of dropNames) {
+    const p = join(dropDir, n);
+    try {
+      dropIns.push({ path: p, text: readFileSync(p, 'utf8') });
+    } catch {
+      return { live: null, unreadable: true };
+    }
+  }
+  return { live: assembleEffectiveUnit(fragment, dropIns), unreadable: false };
+}
+
+/** 仓内单元目录 vs 机器 /etc（含 drop-in）。repoDir 读不了会抛，交给调用方当没查成。 */
+export function collectUnitDriftPairs({ repoDir, etcDir }) {
+  const names = readdirSync(repoDir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+  return names.map((name) => {
+    let repo = null;
+    try { repo = readFileSync(join(repoDir, name), 'utf8'); } catch { repo = null; }
+    const liveRead = readLiveEffectiveUnit(name, etcDir);
+    return { name, repo, live: liveRead.live, unreadable: liveRead.unreadable };
+  });
+}
 
 /** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。
  * 已比对且漂了的优先于没比成：#1104 合进的 dao-board-gc.service 机器上还 After=orca-serve，
- * 但 nudge/land 没装让整项走 unknown，漂移被盖住。没装仍是 unknown（本函数不装单元）。 */
+ * 但 nudge/land 没装让整项走 unknown，漂移被盖住。没装仍是 unknown（本函数不装单元）。
+ * `unreadable: true` 是「这格没测成」（.d/ 读不了），不是「没装」。 */
 export function classifyUnitDrift(pairs) {
   if (!Array.isArray(pairs)) return { state: UNKNOWN, detail: '单元清单不是数组——没查成' };
   // 扫出 0 个不是「都一致」，是判据失效（目录挪了、命名换了）
@@ -924,15 +996,14 @@ export function classifyUnitDrift(pairs) {
   // 不归一化这条会天天红成噪音，而噪音久了就没人看。归一化放判据层（一把尺在一处），
   // 取数层只管把原文读出来。
   const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
-  const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
-  const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
+  const drifted = pairs.filter((p) => !p.unreadable && p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
   // 「仓里有、机器上没有」和「两边都有但不一致」都是**确定的故障**，只是修法不同。
   // 原来两者一起塞进 unreadable → UNKNOWN，于是 #818 的 dao-board-watch
   // **从合进仓到 2026-09-11 一次没装过**，这条闸每轮说「没查成」而不是「红」——
   // 「没查成」不当绿是对的，但它也不开单、不叫人，安静得像没事。
   // 「机器上没装」根本不是没查成：仓里那份就是真相，缺的那头是缺，不是测不准。
-  const notInstalled = pairs.filter((p) => p.repo != null && p.live == null);
-  const reallyUnreadable = pairs.filter((p) => p.repo == null);
+  const notInstalled = pairs.filter((p) => !p.unreadable && p.repo != null && p.live == null);
+  const reallyUnreadable = pairs.filter((p) => p.unreadable || p.repo == null);
   if (drifted.length || notInstalled.length) {
     const bits = [];
     if (drifted.length) {
@@ -958,24 +1029,52 @@ export function classifyUnitDrift(pairs) {
   return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
 }
 
+const PROBE_EXEC_FORBIDDEN = '/home/orca/bin/gw-remote-probe.mjs';
+const PROBE_EXEC_EXPECTED = 'scripts/gw-remote-probe.mjs';
+
+/** 活体样本：机器上的 ExecStart 不是仓内脚本就红。仓内文件锁不够——#967 合进仓后机器仍跑 ~/bin/gw-remote-probe.mjs。
+ * `liveExecStart == null` 表示本格不发言（没装由漂移闸去红）。 */
+export function classifyProbeExecStart({ liveExecStart } = {}) {
+  if (liveExecStart == null) return { state: OK, skipped: true, detail: '' };
+  const s = String(liveExecStart);
+  if (s.includes(PROBE_EXEC_FORBIDDEN)) {
+    return {
+      state: RED,
+      detail: `gw-remote-probe.service 活 ExecStart 仍指向仓外旧脚本 ${PROBE_EXEC_FORBIDDEN}。装：sudo bash scripts/install-gw-remote-probe.sh`,
+    };
+  }
+  if (!s.includes(PROBE_EXEC_EXPECTED)) {
+    return {
+      state: RED,
+      detail: `gw-remote-probe.service 活 ExecStart 不是仓内脚本（要含 ${PROBE_EXEC_EXPECTED}，实际：${s.slice(0, 180)}）。装：sudo bash scripts/install-gw-remote-probe.sh`,
+    };
+  }
+  return { state: OK, detail: 'gw-remote-probe ExecStart 走仓内脚本' };
+}
+
 function checkUnitDrift() {
   const dir = join(REPO_ROOT, 'host', 'machine', 'systemd');
-  let names;
+  let pairs;
   try {
-    names = readdirSync(dir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+    pairs = collectUnitDriftPairs({ repoDir: dir, etcDir: '/etc/systemd/system' });
   } catch (e) {
     return { state: UNKNOWN, detail: `仓内单元目录读不了（${e.message || e}）——没查成` };
   }
-  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
-  // 不归一化的话这条会天天红成噪音，而噪音久了就没人看。
-  const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
-  const pairs = names.map((name) => {
-    let repo = null; let live = null;
-    try { repo = (readFileSync(join(dir, name), 'utf8')); } catch { repo = null; }
-    try { live = (readFileSync(join('/etc/systemd/system', name), 'utf8')); } catch { live = null; }
-    return { name, repo, live };
-  });
-  return classifyUnitDrift(pairs);
+  const drift = classifyUnitDrift(pairs);
+  const probe = pairs.find((p) => p.name === 'gw-remote-probe.service');
+  let liveExecStart = null;
+  // #1164 活 ExecStart：systemctl show，失败则退回有效单元正文
+  if (probe && !probe.unreadable && probe.live != null) {
+    const shown = run('systemctl', ['show', 'gw-remote-probe.service', '-p', 'ExecStart'], { timeout: 8000 });
+    liveExecStart = (shown.probed && shown.code === 0 && String(shown.stdout || '').trim())
+      ? String(shown.stdout)
+      : probe.live;
+  }
+  const exec = classifyProbeExecStart({ liveExecStart });
+  if (exec.state === RED) {
+    return { state: RED, detail: drift.state === RED ? `${drift.detail}；${exec.detail}` : exec.detail };
+  }
+  return drift;
 }
 
 // —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
@@ -1247,6 +1346,31 @@ function selfTest() {
   });
   if (blind.state !== UNKNOWN || !/没查成/.test(blind.detail)) {
     failures.push(`EACCES 应判没查成，实际 ${blind.state}：${blind.detail}`);
+  }
+
+  // #1164：正文对、drop-in 把日历改走 → 必须红。只读 FragmentPath 会绿。
+  const leftoverDropIn = classifyUnitDrift([{
+    name: 'gw-remote-probe.timer',
+    repo: '[Timer]\nOnCalendar=*:09/30\n',
+    live: assembleEffectiveUnit('[Timer]\nOnCalendar=*:09/30\n', [{
+      path: '/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf',
+      text: '[Timer]\nOnCalendar=*:07/30\n',
+    }]),
+  }]);
+  if (leftoverDropIn.state !== RED || !/gw-remote-probe\.timer/.test(leftoverDropIn.detail)) {
+    failures.push(`正文对但 drop-in 改日历应判红，实际 ${leftoverDropIn.state}：${leftoverDropIn.detail}`);
+  }
+  const binExec = classifyProbeExecStart({
+    liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+  });
+  if (binExec.state !== RED || !/home\/orca\/bin/.test(binExec.detail)) {
+    failures.push(`活 ExecStart 指 ~/bin/gw-remote-probe.mjs 应判红，实际 ${binExec.state}：${binExec.detail}`);
+  }
+  const inRepoExec = classifyProbeExecStart({
+    liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+  });
+  if (inRepoExec.state !== OK || inRepoExec.skipped) {
+    failures.push(`活 ExecStart 走仓内脚本应 ok，实际 ${inRepoExec.state}：${inRepoExec.detail}`);
   }
 
   if (failures.length) {
