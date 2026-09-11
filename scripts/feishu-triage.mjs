@@ -809,9 +809,29 @@ export async function handleCardAction(event, { store, deps, commitState = true 
 
 /** live 路径：先算出 ack 立刻 return 给 SDK，gh 评论 setImmediate 后跑。
  *  通讯录永远不进这条路径——假 client.userName 挂死也必须在预算内回包。 */
+const savingDecisions = new WeakMap();
+const cardUpdates = new WeakMap();
+function decisionKey(parsed) { return `${parsed.repo}#${parsed.number}`; }
+function serialCardUpdate(store, key, work) {
+  if (!store) return work();
+  let updates = cardUpdates.get(store);
+  if (!updates) { updates = new Map(); cardUpdates.set(store, updates); }
+  const next = (updates.get(key) || Promise.resolve()).catch(() => {}).then(work);
+  updates.set(key, next);
+  return next.finally(() => { if (updates.get(key) === next) updates.delete(key); });
+}
 export async function liveCardAction(event, {
   store, deps, client = null, defer = setImmediate, groups, creds,
 } = {}) {
+  const parsed = parseCardAction(event);
+  let saving, key;
+  if (store && parsed && !isDailyAction(parsed.rawValue)) {
+    saving = savingDecisions.get(store);
+    if (!saving) { saving = new Set(); savingDecisions.set(store, saving); }
+    key = decisionKey(parsed);
+    if (saving.has(key)) return { toast: { type: 'info', content: '上一项选择正在保存，请等卡片更新后再操作。' } };
+    saving.add(key);
+  }
   try {
     const result = await handleCardAction(event, { store, deps, commitState: false });
     const ack = result?.response?.kind === 'ok'
@@ -821,9 +841,9 @@ export async function liveCardAction(event, {
       card: buildHubCard({}),
     });
     defer(async () => {
-      await applyCardActions(result, { store, deps, client }).catch((e) => {
-        log({ type: 'error', message: String(e.message || e) });
-      });
+      try { await applyCardActions(result, { store, deps, client }); }
+      catch (e) { log({ type: 'error', message: String(e.message || e) }); }
+      finally { saving?.delete(key); }
       // 「看待拍板」真正去拉 GitHub / 发卡，必须在 3 秒回包之后——打网不许挡 toast。
       if (isDailyListPending(result?.parsed?.rawValue)) {
         handleListPending({
@@ -835,6 +855,7 @@ export async function liveCardAction(event, {
     });
     return ack;
   } catch (e) {
+    saving?.delete(key);
     log({ type: 'error', message: String(e.message || e) });
     return cardActionAck({ toast: { type: 'error', content: '没记下' }, card: buildHubCard({}) });
   }
@@ -844,18 +865,31 @@ export async function applyCardActions(result, { store, deps, client = null } = 
   if (!result) return;
   for (const a of result.actions || []) {
     if (a.type === 'gh_comment' && a.repo && a.number && deps?.ghComment) {
+      let githubSaved = false;
       try {
         await deps.ghComment(a.repo, a.number, a.body, {
           idempotency_key: a.idempotency_key,
         });
+        githubSaved = true;
         const messageId = result.parsed?.messageId;
         if (messageId && store?.hubPending && result.response?.decided) {
           const saved = { ...(store.hubPending[messageId] || {}), repo: a.repo, number: a.number,
             decided: result.response.decided };
           store.hubPending[messageId] = saved;
-          store.save?.();
+          for (const entry of Object.values(store.hubPending)) {
+            if (entry.repo === a.repo && entry.number === a.number) entry.decided = result.response.decided;
+          }
+          try { store.save?.(); }
+          catch (e) { warn(`GitHub 已保存，本地记录写入失败：${e.message}`); }
           if (client?.updateCard) {
-            try { await client.updateCard(messageId, buildHubCard(saved)); }
+            try { await serialCardUpdate(store, `${a.repo}#${a.number}`, async () => {
+              for (const [id, current] of Object.entries(store.hubPending)) {
+                if (current.repo === a.repo && current.number === a.number) {
+                  current.decided = result.response.decided;
+                  await client.updateCard(id, buildHubCard(current));
+                }
+              }
+            }); }
             catch (e) { warn(`决定已保存，卡片更新失败：${e.message}`); }
           }
         }
@@ -864,7 +898,9 @@ export async function applyCardActions(result, { store, deps, client = null } = 
         warn(`拍板评论写失败（${a.repo}#${a.number}）：${e.message}`);
         log({ type: 'action-error', actionType: 'gh_comment', message: String(e.message || e) });
         if (client?.reply && result.parsed?.messageId) {
-          try { await client.reply(result.parsed.messageId, '这次选择还没有保存到 GitHub，请重试；尚未按这次点击执行。'); }
+          try { await client.reply(result.parsed.messageId, githubSaved
+            ? '决定已保存到 GitHub，本地卡片更新遇到问题。请勿重复拍板。'
+            : '这次选择未能确认已保存到 GitHub，请稍后核对或重试。'); }
           catch (notifyError) { warn(`拍板失败通知未送达：${notifyError.message}`); }
         }
       }
@@ -882,7 +918,7 @@ export async function applyCardActions(result, { store, deps, client = null } = 
       log({ type: 'action', action: a });
     }
   }
-  if (store?.save) store.save();
+  try { store?.save?.(); } catch (e) { warn(`本地状态保存失败：${e.message}`); }
 }
 
 export function hubRepoFromGroups(groups, fallback = 'thoerwink8/windsurf-dao') {
@@ -939,9 +975,10 @@ async function refreshPending({ groups, store, creds, chatId, client = null, rea
   const plan = planMenuList({ github, hubPending: store?.hubPending, policy, repo });
   const results = [];
   for (const a of plan.actions || []) {
+    await serialCardUpdate(store, a.key, async () => {
     // A decision can arrive while the network request above is pending.
     const previous = store?.hubPending?.[a.messageId];
-    if (previous?.decided) continue;
+    if (previous?.decided) return;
     const card = buildHubCard({ ...(a.pending || {}), ...(a.issue || {}) });
     let result;
     try {
@@ -956,7 +993,9 @@ async function refreshPending({ groups, store, creds, chatId, client = null, rea
         const messageId = await client.sendCard(target, card);
         if (!messageId) throw new Error('飞书没有返回卡片消息号');
         if (store?.hubPending) {
-          store.hubPending[messageId] = { ...a.pending, ...a.issue, chatId: target };
+          const latest = store.hubPending[a.messageId] || a.pending;
+          store.hubPending[messageId] = { ...a.pending, ...a.issue, chatId: target,
+            ...(latest?.decided ? { decided: latest.decided } : {}) };
           if (a.messageId) delete store.hubPending[a.messageId];
           store.save?.();
         }
@@ -965,10 +1004,12 @@ async function refreshPending({ groups, store, creds, chatId, client = null, rea
     } catch (e) { result = { ok: false, error: String(e.message || e) }; }
     results.push({ kind: a.kind, key: a.key, result });
     // Restore the decided view if the user clicked during this update.
-    if (previous?.decided && result.ok) {
-      try { await client.updateCard(result.messageId, buildHubCard({ ...previous, decided: previous.decided })); }
+    const latest = store?.hubPending?.[result.messageId];
+    if (latest?.decided && result.ok) {
+      try { await client.updateCard(result.messageId, buildHubCard(latest)); }
       catch (e) { warn(`拍板后的卡片更新失败：${e.message}`); }
     }
+    });
   }
   const failed = results.filter(x => !x.result.ok).length;
   const applied = { ok: !plan.unscanned && !failed, results };

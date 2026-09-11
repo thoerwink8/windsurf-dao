@@ -11,8 +11,9 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const REPO = path.resolve(__dirname, '..');
-const LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'failed-units-check.mjs').replace(/\\/g, '/'));
+const CHECKOUT = path.resolve(__dirname, '..');
+const REPO = '/srv/projects/windsurf-dao';
+const LOAD = import('file://' + path.join(CHECKOUT, 'scripts', 'lib', 'failed-units-check.mjs').replace(/\\/g, '/'));
 const fs = require('node:fs');
 
 const MINE = '[Service]\nUser=orca\nExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/miraquota-contabo-sync.mjs --once\n';
@@ -122,11 +123,11 @@ describe('本仓单元挂 systemctl --failed', () => {
 
   it('本仓 systemd 目录读得到单元名（0 个 = 没查成）', async () => {
     const { repoUnitNames } = await LOAD;
-    const r = repoUnitNames({ root: REPO });
+    const r = repoUnitNames({ root: CHECKOUT });
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.ok(r.names.length > 5, '本仓单元应该有一大把');
     assert.ok(r.names.includes('dao-land.service'));
-    const bad = repoUnitNames({ root: path.join(REPO, 'no-such-dir') });
+    const bad = repoUnitNames({ root: path.join(CHECKOUT, 'no-such-dir') });
     assert.equal(bad.ok, false);
   });
 

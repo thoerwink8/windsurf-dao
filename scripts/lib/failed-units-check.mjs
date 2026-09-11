@@ -11,17 +11,18 @@
 // 一律返回 unknown，不做成绿。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 
 /** 从 unit 文件文本里取 ExecStart 指到的本仓路径（不在本仓返回 null）。 */
 export function repoScriptOf(unitText, repoRoot) {
   const es = (String(unitText).match(/^ExecStart=(.*)$/m) || [])[1] || '';
   if (!es) return null;
-  const root = resolve(repoRoot || '');
+  const paths = String(repoRoot || '').startsWith('/') ? posix : win32;
+  const root = paths.resolve(repoRoot || '');
   for (const tok of es.split(/\s+/)) {
     if (!/\.(mjs|js|cjs|sh)$/.test(tok)) continue;
-    const abs = resolve(tok.startsWith('/') ? tok : join(root, tok));
-    if (abs === root || abs.startsWith(root + '/')) return abs;
+    const abs = paths.resolve(root, tok);
+    if (abs === root || abs.startsWith(root + paths.sep)) return abs;
   }
   return null;
 }
@@ -86,7 +87,7 @@ export function classifyFailedUnits({ output, repoRoot, unitTexts = {}, arming =
   if (!lines.length) {
     return { state: 'unknown', detail: 'systemctl --failed 输出空——没扫到任何样本，不当绿' };
   }
-  const root = resolve(repoRoot || '');
+  const root = repoRoot || '';
   const mine = [];
   const foreign = [];
   const unjudged = [];

@@ -63,7 +63,56 @@ test('a failed GitHub write keeps the decision retryable and reports the failure
   assert.equal(ack.card, undefined);
   await deferred[0]();
   assert.equal(store.hubPending.om_decision.decided, undefined);
-  assert.match(replies[0], /还没有保存/);
+  assert.match(replies[0], /未能确认已保存/);
+});
+
+test('conflicting clicks while saving reserve one issue even across two message IDs', async () => {
+  const M = await moduleAt('feishu-triage.mjs');
+  const store = { hubPending: { first: { repo, number: 1174 }, second: { repo, number: 1174 } }, save() {} };
+  const deferred = [], comments = [];
+  const args = { store, deps: { ghComment: async (...a) => comments.push(a) }, defer: fn => deferred.push(fn) };
+  await M.liveCardAction(event('first'), args);
+  const other = event('second'); other.action.value.choice = 'wait';
+  const ack = await M.liveCardAction(other, args);
+  assert.match(ack.toast.content, /上一项选择/);
+  assert.equal(deferred.length, 1);
+  await deferred[0]();
+  assert.equal(comments.length, 1);
+  assert.equal(store.hubPending.second.decided.choice, 'recommend');
+});
+
+test('a replacement refresh preserves a decision saved while the old update waits', async () => {
+  const M = await moduleAt('feishu-triage.mjs');
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const store = { hubPending: { om_decision: { repo, number: 1174 } }, save() {} };
+  const cards = [], deferred = [];
+  let calls = 0;
+  const client = { updateCard: async (_id, card) => {
+    if (++calls === 1) { await blocked; throw Error('deleted'); }
+    cards.push(card);
+  }, sendCard: async () => 'om_replacement', sendText: async () => {} };
+  const refresh = M.handleListPending({ groups: {}, store, creds: { hubChatId: 'oc_test' }, client,
+    read: async () => ({ ok: true, stdout: JSON.stringify([{ number: 1174, labels: ['待拍板'] }]) }) });
+  await new Promise(resolve => setImmediate(resolve));
+  await M.liveCardAction(event(), { store, client, deps: { ghComment: async () => {} }, defer: fn => deferred.push(fn) });
+  const save = deferred[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  release();
+  await Promise.all([refresh, save]);
+  assert.equal(store.hubPending.om_replacement.decided.choice, 'recommend');
+  assert.match(cards.at(-1).header.title.content, /已拍/);
+});
+
+test('local save failure after GitHub success never claims the decision was not saved', async () => {
+  const M = await moduleAt('feishu-triage.mjs');
+  const store = { hubPending: {}, save() { throw Error('disk full'); } };
+  const replies = [], deferred = [];
+  await M.liveCardAction(event(), { store, deps: { ghComment: async () => {} },
+    client: { reply: async (_id, text) => replies.push(text) }, defer: fn => deferred.push(fn) });
+  await deferred[0]();
+  assert.equal(store.hubPending.om_decision.decided.choice, 'recommend');
+  assert.equal(replies.some(text => /还没有保存|未能确认/.test(text)), false);
 });
 
 test('failed card replacement reports failure instead of a successful count', async () => {
