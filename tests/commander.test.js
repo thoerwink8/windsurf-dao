@@ -1555,9 +1555,33 @@ describe(`审官标签要在关闭的署名单上也查得到`, () => {
       prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
     }));
     assert.equal(byKind(r, 'add-label').length, 0, '署名单都没有，补标签无从下手');
+    // 2026-09-11 改判据（原断言是「产一条 reviewer=null 的 rereview」）：
+    // 那条死动作执行侧必拒，而它**不进账本**（账本由执行侧派成时写），
+    // 于是 tries 永远停在 1、永远到不了 MAX_REREVIEW_TRIES——
+    // #1159/#1154 就这样每 20 分钟刷一条同样的死动作，刷了 19 轮，静默无出口。
+    // 原注释写「执行侧据此停手报帅」，实际没有任何东西会报帅。
     const rr = byKind(r, 'rereview');
-    assert.equal(rr.length, 1);
-    assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+    assert.equal(rr.length, 0, '查不到审官就不许产死动作——它长得像「已经叫过审官了」');
+    const esc = byKind(r, 'escalate').filter((a) => a.reason === 'reviewer-label-missing');
+    assert.equal(esc.length, 1, '查不到要走会开单的出口，人才看得见');
+    assert.equal(esc[0].pr, 890);
+  });
+
+  // 2026-09-11 实咬（#1159/#1154 静默刷 19 轮）：死动作会无限重复，因为它不进账本。
+  // 这一条钉的是「不许再回到那个形状」：连续多轮喂同一个输入，每轮都必须**一样**地
+  // 只产一条 escalate，而绝不能产 rereview——旧代码每轮都产同样的死动作，永远不收敛。
+  it('【不再无限刷】同一 PR 连喂 5 轮：每轮都只有 escalate，一列 rereview 都没有', async () => {
+    const { decide } = await CORE;
+    for (let round = 0; round < 5; round += 1) {
+      const r = decide(baseSituation({
+        at: `2026-09-11T0${round}:00:00.000Z`,
+        github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(1159, 1152)] },
+        prReviews: { scanned: true, byPr: { 1159: { reviews: [] } } },
+      }));
+      assert.equal(byKind(r, 'rereview').length, 0, `第 ${round + 1} 轮不许产死动作`);
+      const esc = byKind(r, 'escalate').filter((a) => a.reason === 'reviewer-label-missing');
+      assert.equal(esc.length, 1, `第 ${round + 1} 轮都要有可见出口（有开单去重，不会刷屏单子）`);
+    }
   });
 });
 

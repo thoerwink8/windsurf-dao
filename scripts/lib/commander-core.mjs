@@ -1173,6 +1173,14 @@ function collectCandidates(situation) {
     if (a.atHead === 0) {
       // #971：缺 reviewer/ 时先补标签。等宽限期不会让标签自己长出来；
       // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。
+      //
+      // 2026-09-11 实咬：补不上标时旧代码**继续往下走**，产出一个 reviewer=null 的
+      // rereview。执行侧必拒，且它不进账本（账本由执行侧在派成时写，见 commander.mjs:1315），
+      // 于是 tries 永远停在 1、永远到不了 MAX_REREVIEW_TRIES：
+      // #1159/#1154 每 20 分钟刷一条一模一样的死动作，刷了 19 轮，全程没有出口。
+      // **死动作不是「没动作」**——它在日志里长得像「已经叫过审官了」。
+      //
+      // 这里不再产死动作：补不上标就当场报帅（走 escalate，它有开单去重，不会刷屏）。
       const reviewer = reviewerLabelFor(gh, pr);
       if (!reviewer) {
         const filled = maybeAddLabel(attributedIssueOf(gh, pr), situation, {
@@ -1180,6 +1188,16 @@ function collectCandidates(situation) {
           why: `PR #${pr.number} 要叫审官，但署名单缺 reviewer/——补唯一跨厂标签`,
         }, N['add-label']);
         if (filled) { out.push(filled); continue; }
+        if (!prHasStuckLabel(pr)) {
+          const issueNo = attributedIssueNumber(pr);
+          out.push(withNeeds(esc(
+            `PR #${pr.number} 交卷可合、当前 head ${String(a.head).slice(0, 8)} 零判定，但叫不动审官：`
+            + `署名 issue（#${issueNo ?? '?'}）上取不到 reviewer/ 标签，自动补标也补不上。`
+            + `这张 PR 会一直挂到有人给那个单打上 reviewer/ 为止`,
+            { reason: 'reviewer-label-missing', pr: pr.number, issue: issueNo },
+          ), N.rereview));
+        }
+        continue;
       }
       const rrKey = `rereview:${pr.number}@${a.head}`;
       const prev = reworkDispatched[rrKey];
