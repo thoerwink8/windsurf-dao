@@ -115,6 +115,36 @@ test('local save failure after GitHub success never claims the decision was not 
   assert.equal(replies.some(text => /还没有保存|未能确认/.test(text)), false);
 });
 
+test('stale GitHub read cannot reopen an issue already decided on a different card', async () => {
+  const M = await moduleAt('feishu-triage.mjs');
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const store = { hubPending: {}, save() {} }, deferred = [], sent = [], comments = [];
+  const client = { sendCard: async (_chat, card) => { sent.push(card); return 'om_new'; }, sendText: async () => {} };
+  const refresh = M.handleListPending({ groups: {}, store, creds: { hubChatId: 'oc_test' }, client,
+    read: async () => { await gate; return { ok: true, stdout: JSON.stringify([{ number: 1174, labels: ['待拍板'] }]) }; } });
+  const args = { store, client, deps: { ghComment: async (...a) => comments.push(a) }, defer: fn => deferred.push(fn) };
+  const wait = event('om_old'); wait.action.value.choice = 'wait';
+  await M.liveCardAction(wait, args); await deferred[0]();
+  release(); await refresh;
+  assert.equal(sent.length, 0);
+  const duplicate = await M.liveCardAction(event('om_new'), args);
+  assert.match(duplicate.toast.content, /已经拍过/);
+  await deferred[1]();
+  assert.equal(comments.length, 1);
+  assert.equal(store.hubPending.om_old.decided.choice, 'wait');
+});
+
+test('a deleted alias does not prevent updating the surviving decision card', async () => {
+  const M = await moduleAt('feishu-triage.mjs');
+  const store = { hubPending: { deleted: { repo, number: 1174 }, live: { repo, number: 1174 } }, save() {} };
+  const patches = [], deferred = [];
+  await M.liveCardAction(event('live'), { store, deps: { ghComment: async () => {} }, defer: fn => deferred.push(fn),
+    client: { updateCard: async id => { patches.push(id); if (id === 'deleted') throw Error('gone'); } } });
+  await deferred[0]();
+  assert.deepEqual(patches, ['deleted', 'live']);
+});
+
 test('failed card replacement reports failure instead of a successful count', async () => {
   const M = await moduleAt('feishu-triage.mjs');
   const sent = [];

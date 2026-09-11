@@ -763,7 +763,8 @@ export async function handleCardAction(event, { store, deps, commitState = true 
     });
     return { parsed, response, ack, actions: [] };
   }
-  const pending = (parsed.messageId && store?.hubPending?.[parsed.messageId]) || null;
+  let pending = (parsed.messageId && store?.hubPending?.[parsed.messageId]) || null;
+  pending = savedDecisionFor(store, parsed.repo || pending?.repo, parsed.number || pending?.number) || pending;
   const now = typeof deps?.now === 'function' ? deps.now() : Date.now();
   const who = parsed.name || parsed.openId || '有人';
   const response = cardCallbackResponse(parsed, { pending, now, who });
@@ -811,6 +812,10 @@ export async function handleCardAction(event, { store, deps, commitState = true 
  *  通讯录永远不进这条路径——假 client.userName 挂死也必须在预算内回包。 */
 const savingDecisions = new WeakMap();
 const cardUpdates = new WeakMap();
+function savedDecisionFor(store, repo, number) {
+  return Object.values(store?.hubPending || {}).find(entry =>
+    entry.repo === repo && Number(entry.number) === Number(number) && entry.decided?.choice);
+}
 function decisionKey(parsed) { return `${parsed.repo}#${parsed.number}`; }
 function serialCardUpdate(store, key, work) {
   if (!store) return work();
@@ -886,7 +891,8 @@ export async function applyCardActions(result, { store, deps, client = null } = 
               for (const [id, current] of Object.entries(store.hubPending)) {
                 if (current.repo === a.repo && current.number === a.number) {
                   current.decided = result.response.decided;
-                  await client.updateCard(id, buildHubCard(current));
+                  try { await client.updateCard(id, buildHubCard(current)); }
+                  catch (e) { warn(`决定已保存，卡片 ${id} 更新失败：${e.message}`); }
                 }
               }
             }); }
@@ -977,6 +983,7 @@ async function refreshPending({ groups, store, creds, chatId, client = null, rea
   for (const a of plan.actions || []) {
     await serialCardUpdate(store, a.key, async () => {
     // A decision can arrive while the network request above is pending.
+    if (savedDecisionFor(store, a.issue.repo, a.issue.number)) return;
     const previous = store?.hubPending?.[a.messageId];
     if (previous?.decided) return;
     const card = buildHubCard({ ...(a.pending || {}), ...(a.issue || {}) });
