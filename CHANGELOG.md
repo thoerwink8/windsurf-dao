@@ -2,6 +2,40 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.4.0 — 2026-09-11
+
+### 新功能
+- [codex] feat(pending): explain decisions with STAR summaries
+- [cc] feat(dao-check): 本仓单元挂 systemctl --failed 要红（#1172/#1173 的第三格）
+- [cc] feat(commander): 推进量仪表——动作摘要连续相同就报警（一晚四个死点全靠它抓到）
+- [cc] feat(probe): mirasim-server ws 探活 + unit 收仓（#1151） (#1161)
+
+### 修复与维护
+- [codex] fix(feishu): apply STAR to generated cards
+- [codex] fix(feishu): show all pending cards and replace stale messages
+- [codex] fix(feishu): reply when pending list is nonempty
+- [codex] fix(feishu): route pending menu reads through marshal
+- [codex] fix(feishu): use marshal app for readonly GitHub queries
+- [codex] fix(usage): honor shared inbox permissions under restrictive umask
+- [cc] docs(obs): 禁网闸在 orca 身份下恒红 14 笔——堵住 land 推送，已排除本轮改动与全部测试套件
+- [cc] fix(闸): 两条判据比现实窄——只在 orca 身份下翻红的那种
+- [cc] docs(obs): 收件箱三条处置留痕（两真一已修）
+- [cc] fix(盘面): 三处「判据只看得见一半」——收件箱三张观察的处置
+- [cc] fix(units): GH_CONFIG_DIR=/var/empty 掐死了 git 凭据助手——账本五天没更新
+- [cc] fix(commander): policy 不在作用域（第二次同类笔误）+ 配静态闸防这一类
+- [cc] fix(escalate): 追加对象的幂等键含空白被网关拒——「追加进已有单」这条路一直没通
+- [cc] fix(commander): 一个动作炸了不许带走整轮 + 修我自己写的 run is not defined
+- [cc] fix(stall): 停滞警报不再报一次就静音——同指纹超 6 小时重喊
+- [cc] fix(exhausted): 「自动化认输」不再是单向闩——带 head 的判据就该随新 head 失效
+- [cc] fix(states): 状态与字段名收成一处正典 + 配契约闸——一晚九处同形状错的根治
+- [cc] fix(commander): 死动作会无限重复——审官叫不动时改产会开单的出口，不再静默刷 19 轮
+- [cc] fix(mirasim): metaView 读的 runState 也不存在——兜底路上的会话态恒为 null
+
+### 其它
+- release: v2.3.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.3.0 — 2026-09-10
 
 ### 新功能
