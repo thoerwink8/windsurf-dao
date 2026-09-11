@@ -364,6 +364,7 @@ export function createExecutionRuntime(opts={}) {
                 const k = x.sessionKey || x.id || x.key;
                 if (k) idx.set(String(k), x);
               }
+              idx.complete = listed.complete === true && listed.partial !== true && listed.hasMore !== true;
               return idx;
             }
           } catch { /* 名单查不成 = 这条线索没有，退回读快照 */ }
@@ -393,6 +394,13 @@ export function createExecutionRuntime(opts={}) {
           // so a previous misclassification does not become permanent truth.
           const raw = sessionStateOf(hit);
           if (raw) listedState = raw;
+        }
+        // Absence from a proven complete server inventory plus no executing
+        // process is positive evidence of a removed session. Without both
+        // observations retain the snapshot fallback; absence is not a timeout.
+        if (!hit && listedIndex?.complete && m.backend === 'mirasim') {
+          try { if (processCheck(m.workdir).length === 0) listedState = 'gone'; }
+          catch { /* Cannot verify processes: do not infer disappearance. */ }
         }
         if (listedState) {
           state = listedState;
