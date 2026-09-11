@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
 import { probeVersionDrift } from './mirasim-runtime.mjs';
 import { loadHealthTable } from './provider-health.mjs';
-import { classifyTimerArmed } from './timer-armed.mjs';
+import { classifyTimerArmed, combineNextElapse } from './timer-armed.mjs';
 import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
@@ -98,7 +98,7 @@ function checkTimers() {
   const samples = [];
   for (const t of want) {
     const r = sh('systemctl', ['show', t, '-p', 'ActiveState', '-p', 'SubState', '-p', 'UnitFileState',
-      '-p', 'NextElapseUSecRealtime', '-p', 'LastTriggerUSec']);
+      '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic', '-p', 'LastTriggerUSec']);
     // `systemctl show` 按它自己的属性顺序输出（不是命令行顺序）——按键取，不按下标。
     if (!r.ok) return { state: 'unknown', detail: `systemctl 探不到：${r.error}`, key: 'timers' };
     const kv = new Map(String(r.out || '').split(/\r?\n/).map((l) => {
@@ -110,7 +110,8 @@ function checkTimers() {
       isEnabled: kv.get('UnitFileState') || '',
       activeState: kv.get('ActiveState') || '',
       subState: kv.get('SubState') || '',
-      next: kv.get('NextElapseUSecRealtime') ?? '',
+      // 和 ⑱ 同一把尺：两个时钟任意一个有真值就算有下一次；infinity 不算。
+      next: combineNextElapse(kv.get('NextElapseUSecRealtime'), kv.get('NextElapseUSecMonotonic')),
       last: kv.get('LastTriggerUSec') || '',
     });
   }
@@ -120,7 +121,7 @@ function checkTimers() {
     state: verdict.state, key: 'timers', detail: verdict.detail,
     ...(verdict.state === 'red' ? {
       plain: {
-        what: `指挥官的定时任务有问题：${verdict.bad.map((b) => b.why).join('、')}`,
+        what: `指挥官的定时任务有 ${verdict.bad.length} 个不会自己响（含自动派单）`,
         impact: '定时那 20 分钟一轮的自动派单/合并不会自己跑，只能人手动触发',
         plan: '如果是我们故意停的（修东西期间）就不用管；不是的话我重开一次再验一遍',
       },
@@ -388,7 +389,8 @@ async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, 
 // ── status 子命令：自检三态，供 server-check 一行引用 ──
 export function runStatus({ rest, ROOT }) {
   const asJson = rest.includes('--json');
-  // 三态判据：timer 装好且 enabled = 通；未装/未 enabled = 红；无 systemd（Windows）= 没查成。
+  // 三态判据：两个指挥官 timer 会自己响 = 通；enabled 但 NEXT 空 / 未启用 = 红；无 systemd = 没查成。
+  // 只问 is-enabled 会把 inactive(dead) 报成通（#1177）。
   const t = checkTimers();
   let state, detail, exit;
   if (t.state === 'unknown') { state = 'unknown'; detail = t.detail; exit = 2; }

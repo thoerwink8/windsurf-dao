@@ -82,6 +82,26 @@ describe('timer 会不会自己响（enabled 不等于会响）', () => {
     assert.equal(v.state, 'red');
     assert.match(v.detail, /commander-act\.timer/);
     assert.match(v.detail, /没有下一次/);
+    assert.match(v.detail, /systemctl start commander-act\.timer/);
+    assert.doesNotMatch(v.detail, /install/, '文件已经对，不许指向重装');
+  });
+
+  it('active(elapsed) + NEXT 空 → 红：不许因 ActiveState=active 放行', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [{
+      unit: 'commander-act.timer', isEnabled: 'enabled', activeState: 'active', subState: 'elapsed', next: '',
+    }] });
+    assert.equal(v.state, 'red');
+    assert.match(v.detail, /elapsed/);
+    assert.match(v.detail, /systemctl start commander-act\.timer/);
+  });
+
+  it('NEXT=infinity → 红（systemd 停摆时 monotonic 写成这个字）', async () => {
+    const { classifyTimerArmed } = await TA;
+    const v = classifyTimerArmed({ probed: true, timers: [{
+      unit: 'commander-act.timer', isEnabled: 'enabled', activeState: 'inactive', subState: 'dead', next: 'infinity',
+    }] });
+    assert.equal(v.state, 'red');
   });
 
   it('active(running) + NEXT 空 → 绿：前一响的服务还在跑，systemd 等它结束才排下一次', async () => {
@@ -100,7 +120,7 @@ describe('timer 会不会自己响（enabled 不等于会响）', () => {
     assert.equal(v.state, 'ok');
   });
 
-  it('未启用 → 红；一个红整体红（另一个正常也救不了）', async () => {
+  it('未启用 → 红；修法是 enable --now，不是 install', async () => {
     const { classifyTimerArmed } = await TA;
     const v = classifyTimerArmed({ probed: true, timers: [
       { unit: 'a.timer', isEnabled: 'disabled', activeState: 'inactive', subState: 'dead', next: '' },
@@ -109,11 +129,33 @@ describe('timer 会不会自己响（enabled 不等于会响）', () => {
     assert.equal(v.state, 'red');
     assert.equal(v.bad.length, 1);
     assert.match(v.bad[0].why, /未启用/);
+    assert.match(v.bad[0].why, /enable --now a\.timer/);
+    assert.doesNotMatch(v.detail, /install/);
   });
 
   it('没探到 / 空样本 → unknown，绝不当 ok', async () => {
     const { classifyTimerArmed } = await TA;
     assert.equal(classifyTimerArmed({ probed: false }).state, 'unknown');
     assert.equal(classifyTimerArmed({ probed: true, timers: [] }).state, 'unknown');
+  });
+
+  it('两个时钟合成：infinity 丢掉，真值留下', async () => {
+    const { combineNextElapse, hasNextElapse } = await TA;
+    assert.equal(combineNextElapse('', 'infinity'), '');
+    assert.equal(hasNextElapse(combineNextElapse('', 'infinity')), false);
+    assert.equal(combineNextElapse('', '2d 18h'), '2d 18h');
+    assert.equal(hasNextElapse('2d 18h'), true);
+    assert.equal(hasNextElapse('infinity'), false);
+    assert.equal(hasNextElapse(null), false);
+  });
+
+  it('checkTimers 取数必须问 monotonic，不能只问 realtime', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'commander-inventory.mjs'), 'utf8');
+    const i = src.indexOf('function checkTimers');
+    assert.ok(i > -1, '找不到 checkTimers');
+    const body = src.slice(i, i + 1800);
+    assert.match(body, /NextElapseUSecRealtime/);
+    assert.match(body, /NextElapseUSecMonotonic/, '09-10 的 monotonic=infinity 必须进尺，只问 realtime 会和 ⑱ 口径分叉');
+    assert.match(body, /combineNextElapse/);
   });
 });

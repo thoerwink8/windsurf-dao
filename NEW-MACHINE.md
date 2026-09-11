@@ -474,7 +474,7 @@ sudo bash scripts/install-land.sh
 ```bash
 sudo node scripts/commander.mjs install    # 写 commander-act/inventory 的 service+timer 到 /etc/systemd/system/
                                             # 完了自动 daemon-reload + enable --now（非 root 会在写盘时失败退出并给命令）
-node scripts/commander.mjs status           # 自检三态：timer 在册且 enabled 才通（server-check 第⑭项也引它）
+node scripts/commander.mjs status           # 自检三态：timer 会自己响才通（enabled 但 NEXT 空也是红；server-check 第⑭项也引它）
 ```
 
 眼睛 = `commander-act.timer`（每 20 分钟 scan→decide→执行）+ `commander-inventory.timer`（每 6 小时盘点体检）。
