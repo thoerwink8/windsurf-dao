@@ -24,21 +24,28 @@ export function attributedIssueNumbers(text) {
 }
 
 /**
- * 单个署名 issue 号：标题 #N 优先（与 flow.ticketIssueNumber 同口径），再正文署名/关单词。
+ * 单个署名 issue 号。
  *
- * 标题先剥掉补丁链标记 `[chain:<名>#<序号>]`——那里的 #N 是链内序号，不是 issue 号。
- * 2026-09-05 实咬：PR #893 标题结尾 `[chain:session-visibility#0]`，标题优先把 0 当成署名单号，
- * 于是正文里正确的「署名 issue #891」根本轮不到，查不到 reviewer/ 标签 → 复审永远派不出去。
- * 症状是完全静默的：PR 挂着、指挥官每轮说「不猜审官」、没有任何地方指向标题。
+ * 优先级（2026-09-11 实咬 PR #1159 / issue #1182）：
+ *   1. 正文「署名 issue #N」或旧关单词（Closes/Fixes）——任务书和关单脚本的权威署名。
+ *   2. 标题里的「署名 issue #N」/关单词（少见，`Fixes #21` 写在标题也算）。
+ *   3. 标题裸 #N（旧约定 `[pi] #657 关单`）。标题先剥 `[chain:名#序号]`。
  *
- * 同时挡掉 #0：issue 号从 1 起，`#0` 一定是别的东西被误当成了单号。
+ * 正文署名必须压过标题随手引用。PR #1159 标题「堵 #565 假会话泄漏」、正文「署名 issue #1152」，
+ * 旧规则标题优先 → 去查已关闭、没有 reviewer/ 的 #565，自动补标也补不上
+ * （#565 连 model/ 都没有），交卷可合的 PR 一直挂着。用户拍板：不要给标题里无关的 #565 补标签。
+ *
+ * 挡掉 #0：issue 号从 1 起，`#0` 一定是别的东西被误当成了单号。
  */
 export function attributedIssueNumber(pr) {
+  const bodyNums = attributedIssueNumbers((pr && pr.body) || '').filter((n) => n > 0);
+  if (bodyNums.length) return bodyNums[0];
   const title = String((pr && pr.title) || '').replace(/\[chain:[^\]]*\]/gi, '');
+  const titleExplicit = attributedIssueNumbers(title).filter((n) => n > 0);
+  if (titleExplicit.length) return titleExplicit[0];
   const t = title.match(/#(\d+)/);
   if (t && Number(t[1]) > 0) return Number(t[1]);
-  const nums = attributedIssueNumbers((pr && pr.body) || '').filter((n) => n > 0);
-  return nums.length ? nums[0] : null;
+  return null;
 }
 
 const HARD_RED = new Set(['FAILURE', 'CANCELLED', 'ACTION_REQUIRED', 'TIMED_OUT', 'STALE', 'STARTUP_FAILURE']);
