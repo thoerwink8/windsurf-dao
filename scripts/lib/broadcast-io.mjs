@@ -79,11 +79,17 @@ export function classifyLarkResult(r, { emptyOk = false } = {}) {
     const msg = r.error.code === 'ENOENT' ? 'lark-cli 起不来' : (r.error.message || String(r.error));
     return { ok: false, error: msg };
   }
-  if (r && r.status !== 0 && r.status != null) {
-    return { ok: false, error: str(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 200) };
+  if (!r || r.status !== 0) {
+    return { ok: false, error: str(r?.stderr || r?.stdout || `exit ${r?.status ?? 'unknown'}`).slice(0, 200) };
   }
   const out = str(r && r.stdout);
   if (!out && !emptyOk) return { ok: false, error: 'lark-cli 没回内容' };
+  // CLI transport success does not imply that the API accepted the update.
+  let body;
+  try { body = JSON.parse(out); } catch { /* -q may return a bare message id. */ }
+  if (body?.ok === false || (typeof body?.code === 'number' && body.code !== 0)) {
+    return { ok: false, error: str(body.error?.message || body.error || body.msg || body.message || out).slice(0, 200) };
+  }
   return { ok: true, out };
 }
 

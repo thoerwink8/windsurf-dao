@@ -16,6 +16,86 @@ const ADAPTER = import(toUrl(path.join(REPO, 'scripts', 'feishu-triage.mjs')));
 const POLICY_CHECK = import(toUrl(path.join(REPO, 'scripts', 'lib', 'dispatch-policy-check.mjs')));
 
 const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
+
+describe('state saves preserve concurrent card decisions', () => {
+  for (const first of ['human', 'commander']) {
+    it(`human choice survives when ${first} saves first`, async (t) => {
+      const { createStateStore } = await ADAPTER;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-state-merge-'));
+      t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const file = path.join(dir, 'threads.json');
+      const seed = createStateStore(file);
+      seed.hubPending.om_card = { repo: DEFAULT_REPO, number: 1174, title: 'old title' };
+      seed.hubPending.om_removed = { repo: DEFAULT_REPO, number: 1175 };
+      seed.save();
+      // Two long-lived readers loaded the same snapshot before either writer.
+      const commander = createStateStore(file), human = createStateStore(file);
+      commander.hubPending.om_card.decided = { choice: '已办结', who: 'elsewhere' };
+      commander.hubPending.om_removed.decided = { choice: '已办结', who: 'elsewhere' };
+      const chosen = { choice: 'alternative', who: 'Alice', at: '2026-09-12T01:00:00Z' };
+      human.hubPending.om_card.decided = chosen;
+      human.hubPending.om_card.title = 'current title';
+      human.hubPending.om_new = { repo: DEFAULT_REPO, number: 1176 };
+      delete human.hubPending.om_removed;
+      human.map.set('new_thread', { phase: 'asked' });
+      human.aliases.reply = 'new_thread';
+      if (first === 'human') { human.save(); commander.save(); }
+      else { commander.save(); human.save(); }
+      const saved = createStateStore(file);
+      assert.deepStrictEqual(saved.hubPending.om_card.decided, chosen);
+      assert.equal(saved.hubPending.om_card.title, 'current title');
+      assert.equal(saved.hubPending.om_new.number, 1176);
+      assert.deepStrictEqual(saved.map.get('new_thread'), { phase: 'asked' });
+      assert.equal(saved.aliases.reply, 'new_thread');
+      if (first === 'human') assert.equal(saved.hubPending.om_removed, undefined);
+      // A subsequent unrelated event from either old reader must not regress it.
+      commander.map.set('later', { phase: 'done' });
+      commander.save();
+      human.save();
+      assert.deepStrictEqual(createStateStore(file).hubPending.om_card.decided, chosen);
+      assert.deepStrictEqual(createStateStore(file).map.get('later'), { phase: 'done' });
+    });
+  }
+
+  it('stale pending saves retain a newly persisted projection; unreadable state is not overwritten', async (t) => {
+    const { createStateStore } = await ADAPTER;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-state-retry-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'threads.json');
+    const first = createStateStore(file);
+    first.hubPending.om_card = { repo: DEFAULT_REPO, number: 1174 };
+    first.save();
+    const stale = createStateStore(file);
+    first.hubPending.om_card.decided = { choice: '已办结', who: 'elsewhere' };
+    first.save();
+    stale.aliases.reply = 'thread';
+    stale.save();
+    assert.equal(createStateStore(file).hubPending.om_card.decided.choice, '已办结');
+    fs.writeFileSync(file, '{broken');
+    assert.throws(() => stale.save(), /JSON|property/i);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+    assert.equal(fs.existsSync(file + '.lock'), false);
+  });
+
+  it('a stale projection cannot retire a card rebound to another issue', async (t) => {
+    const { createStateStore } = await ADAPTER;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-state-rebound-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'threads.json');
+    const owner = createStateStore(file);
+    owner.hubPending.om_card = { repo: DEFAULT_REPO, number: 1174 };
+    owner.save();
+    const stale = createStateStore(file);
+    owner.hubPending.om_card.number = 1175;
+    owner.save();
+    stale.hubPending.om_card.decided = { choice: '已办结', who: 'elsewhere' };
+    stale.save();
+    const saved = createStateStore(file);
+    assert.equal(saved.hubPending.om_card.number, 1175);
+    assert.equal(saved.hubPending.om_card.decided, undefined);
+  });
+});
+
 const HUB_POLICY = {
   enabled: true,
   allowedActions: ['situation', 'decision', 'guide'],

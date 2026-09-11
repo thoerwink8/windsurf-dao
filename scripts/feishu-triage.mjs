@@ -81,6 +81,9 @@ import {
   MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent, planMenuList,
 } from './lib/hub-pending.mjs';
 import { parsePolicy } from './lib/ask-gate.mjs';
+import { mergeHubPending } from './lib/hub-ask.mjs';
+import { CARD_CHOICES } from './lib/feishu-hub-card.mjs';
+import { acquireWorktreeLock } from './lib/dispatch-lock.mjs';
 
 export {
   buildHubCard, parseCardAction, cardCallbackResponse, buildDecidedHubCard, CHOICE_LABELS,
@@ -299,6 +302,35 @@ export function createStateStore(file) {
       warn(`状态文件读不了（${file}），从空开始：${e.message}`);
     }
   }
+  const snapshot = () => ({ threads: Object.fromEntries(store.map), aliases: store.aliases, hubPending: store.hubPending });
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // Apply only local changes to the latest file. A slow commander cycle must
+  // not replace decisions, threads or cards saved by the event consumer.
+  function mergeEntries(before, local, latest, pending = false) {
+    const merged = { ...latest };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(local)])) {
+      if (same(before[key], local[key])) continue;
+      if (!Object.hasOwn(local, key)) {
+        if (same(before[key], latest[key])) delete merged[key];
+      } else if (pending && before[key] && (!latest[key]
+        || latest[key].repo !== before[key].repo || latest[key].number !== before[key].number)) {
+        continue; // Another writer removed/rebound this card; do not retire its replacement.
+      } else if (pending && latest[key] && !same(before[key], latest[key])) {
+        const fields = mergeEntries(before[key] || {}, local[key], latest[key]);
+        let decided = latest[key].decided;
+        // A confirmed human choice also wins when it reaches disk after the
+        // automatic "handled elsewhere" projection.
+        if (CARD_CHOICES.includes(local[key]?.decided?.choice)
+          && !CARD_CHOICES.includes(decided?.choice)) decided = local[key].decided;
+        const target = { hubPending: { [key]: { decided } } };
+        mergeHubPending(target, key, fields);
+        merged[key] = target.hubPending[key];
+      } else merged[key] = local[key];
+    }
+    return merged;
+  }
+  let baseline;
   const store = {
     map,
     aliases,
@@ -314,20 +346,33 @@ export function createStateStore(file) {
       return ids.find(Boolean) || '';
     },
     save() {
-      const payload = {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        threads: Object.fromEntries(store.map),
-        aliases: store.aliases,
-        hubPending: store.hubPending,
-      };
-      const dir = dirname(file);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const tmp = `${file}.tmp`;
-      writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
-      renameSync(tmp, file);
+      const held = acquireWorktreeLock({ lockPath: `${file}.lock`, timeoutMs: 5000 });
+      if (!held.ok) throw new Error(held.error);
+      try {
+        // Refuse to replace an unreadable file: it may contain confirmed choices.
+        const latest = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+        const local = snapshot();
+        const payload = {
+          ...latest, version: 1, updatedAt: new Date().toISOString(),
+          threads: mergeEntries(baseline.threads, local.threads, latest.threads || {}),
+          aliases: mergeEntries(baseline.aliases, local.aliases, latest.aliases || {}),
+          hubPending: mergeEntries(baseline.hubPending, local.hubPending, latest.hubPending || {}, true),
+        };
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+        renameSync(tmp, file);
+        store.map.clear();
+        for (const [key, value] of Object.entries(payload.threads)) store.map.set(key, value);
+        store.aliases = payload.aliases;
+        store.hubPending = payload.hubPending;
+        baseline = clone(snapshot());
+      } finally {
+        held.release();
+        process.removeListener('exit', held.release);
+      }
     },
   };
+  baseline = clone(snapshot());
   return store;
 }
 

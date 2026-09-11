@@ -2394,6 +2394,7 @@ function runHubProjection({ situation, dryRun, log }) {
     return;
   }
   const applied = applyHubCycle(plan, {
+    store,
     issueCard: (a) => {
       const fields = pendingFromAsk(a.issue || {});
       return runHubAsk(fields, {
