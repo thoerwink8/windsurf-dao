@@ -5,6 +5,7 @@
 // 点击处理是纯函数：先算出 toast + 更新后的卡片（3 秒内能回包），再由调用方落 gh 评论。
 
 import { ensurePlain } from './plain-words.mjs';
+import { starFromIssue, starText } from './human-summary.mjs';
 
 export const CARD_CHOICES = ['recommend', 'wait', 'alternative'];
 
@@ -32,8 +33,10 @@ export function choiceLabel(choice) {
 /** 卡片正文：出事 / 影响 / 推荐+为什么 / 期限；GitHub 链接最后一行兜底。 */
 export function hubCardBodyText({
   title, from, repo, url, what, impact, recommend, why, deadline,
+  star,
 } = {}) {
   const lines = [];
+  if (star) lines.push(starText(star));
   const head = str(what) || str(title);
   if (head) lines.push(`出了什么事：${head}`);
   if (str(impact)) lines.push(`影响：${impact}`);
@@ -63,11 +66,13 @@ function callbackButton({ label, choice, repo, number, type }) {
 export function buildHubCard({
   repo, number, url, title, from,
   what, impact, recommend, why, deadline,
+  body = '', star,
   decided = null,
 } = {}) {
   if (decided && decided.choice) return buildDecidedHubCard({
     repo, number, url, title, from, what, impact, recommend, why, deadline, decided,
   });
+  const humanStar = star || starFromIssue({ title, body });
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -79,7 +84,7 @@ export function buildHubCard({
         tag: 'div',
         text: {
           tag: 'lark_md',
-          content: hubCardBodyText({ title, from, repo, url, what, impact, recommend, why, deadline }),
+          content: hubCardBodyText({ title, from, repo, url, what, impact, recommend, why, deadline, star: humanStar }),
         },
       },
       {
