@@ -21,7 +21,7 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js` → 核 562 + 指挥官 185 绿；合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js` → 核 317 + 指挥官 185 + 其余相关 204 绿；合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
 
 ## 进展
 
@@ -54,6 +54,7 @@
 - [x] 本轮跟上 origin/master（#1189 回流提示层改指现役士兵书 + #1200/#1201 watchdog 已批准任务交付）。冲突 0；选型路仍只读 PR label。`labelValue` 注释不再写「issue 标签取值」（函数已给 PR 用）。相关测试 953 绿。
 - [x] 本轮跟上 origin/master（#1177/#1193 指挥官 timer enabled 但停摆必须红）。冲突 0；选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1205 派工前核实 type/ + #1190 凭据闸扫指挥官单元 + #1194 探针真请求 + #1191 正文署名压过标题随手引用）。冲突 0。#1205 是往 issue 写 type（给人看盘面），不是选型反推。#1191 合入后指挥官测试仍断言「署名单标齐就能叫审官」——按本单改成：署名认正文 #1152，审官只认 PR 自己的 reviewer/*；署名单标齐、PR 没标仍报缺失。
+- [x] 本轮跟上 origin/master（#1203 已交卷工人不再反复重派 + #1198 acp-runtime 并行误红）。冲突 0；选型路仍只读 PR label。#1203 合入后差集重派带 openPrs，不从 issue 反推审官。相关测试 317+185+204 绿；dao-check 241 项绿。
 
 ## 机制判定
 
