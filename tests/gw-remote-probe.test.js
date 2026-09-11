@@ -172,6 +172,15 @@ describe('探针纯函数：探测面从策略派生', () => {
   });
 });
 
+describe('周期探针 responses 请求体不许再漂成裸字符串', () => {
+  it('主脚本必须用 codexResponsesProbeBody，不得手写 input: "reply …"', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    assert.match(src, /codexResponsesProbeBody/);
+    assert.doesNotMatch(src, /input:\s*["']reply with the single word ok["']/);
+    assert.doesNotMatch(src, /input:\s*PROBE_MESSAGE/);
+  });
+});
+
 describe('直连 responses：空 content 不算通', () => {
   it('response.completed + content:[] 即使序列化很长也是红', async () => {
     const { responsesEventHasContent } = await import(HEALTH);
