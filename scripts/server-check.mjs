@@ -28,6 +28,7 @@ import { extractDeltaContent } from './lib/provider-probe.mjs';
 import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
+import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -528,19 +529,15 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
   //                        commander-act 派工人一跑好几分钟，扫到执行中就会被报成死态。
   //   其余（waiting / elapsed / dead）—— 没有下一次就是真死态，本闸要抓的正是它。
   // 判据缺 SubState 这一维，等于把「正在干活」读成「已经死了」。
-  const noNext = (u) => {
-    const n = u && u.next;
-    if (n == null) return true;
-    const t = String(n).trim();
-    return t === '' || t === '0' || t === 'n/a' || t === 'infinity';
-  };
+  const noNext = (u) => !hasNextElapse(u && u.next);
   const running = units.filter((u) => u && String(u.subState || '') === 'running');
   const dead = units.filter((u) => noNext(u) && String(u.subState || '') !== 'running');
   if (dead.length) {
+    const names = dead.map((u) => u.unit).join(' ');
     return {
       state: RED,
       detail: `${dead.length}/${units.length} 个 timer 没有下一次触发（${dead.map((u) => u.unit).join('、')}）——`
-        + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
+        + `它们仍显示 active+enabled 但已经不会再跑；sudo systemctl start ${names}（未启用则 enable --now）`,
     };
   }
   // 「现在还有下一次」不等于安全。只有单调时钟（OnBootSec/OnUnitActiveSec）的 timer
@@ -628,10 +625,8 @@ function checkTimerArmed() {
       return classifyTimerArmed({ probed: false, reason: `${unit} 的单元文件落在没见过的地方（${frag}）——判不出归属，不当「不归我管」` });
     }
     if (!mine) { skipped.push(unit); continue; }
-    const vals = ['NextElapseUSecRealtime', 'NextElapseUSecMonotonic']
-      .map((k) => kv.get(k) || '').filter(Boolean);
-    // 两个点位任意一个有值就算有下一次；两个都空才是死态。
-    const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
+    // 两个点位任意一个有真值就算有下一次；infinity/空 不算（与 ⑭ 共用 hasNextElapse）。
+    const next = combineNextElapse(kv.get('NextElapseUSecRealtime'), kv.get('NextElapseUSecMonotonic'));
     // SubState 分开「没有下一次」的两种：
     //   waiting = 在岗等下一次 → 没有下一次就是死态（本闸要抓的）
     //   running = 它触发的服务此刻正在跑 → 服务跑完才排下一次，**没有下一次是对的**
@@ -642,7 +637,7 @@ function checkTimerArmed() {
     // 读不到回 null（没查成），不回 false：那会把「没读着」报成「缺 OnCalendar」，是误报。
     let calendar = null;
     try { calendar = /^OnCalendar=/m.test(readFileSync(frag, 'utf8')); } catch { calendar = null; }
-    units.push({ unit, next: alive ? vals.join('|') : null, calendar, subState });
+    units.push({ unit, next: next || null, calendar, subState });
   }
   if (units.length === 0 && skipped.length > 0) {
     // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
@@ -1118,12 +1113,38 @@ function checkGhEventBridge() {
   return classifyGhEventBridge({ probed: true, state });
 }
 
+/**
+ * ⑭ 把 commander status --json 的退出码和 detail 译成三态。
+ * 不许把成功改写成「在册且 enabled」，也不许把红改写成「去 install」——
+ * 09-10 实咬时文件已经对，status 自己会写出 start / enable --now。
+ */
+export function classifyCommanderStatus({ probed = false, reason = '', code, stdout = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `commander status 没跑成：${reason || ''}` };
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) {
+    return { state: UNKNOWN, detail: `commander status 不是 JSON（exit=${code}）：${text.trim().slice(0, 160)}` };
+  }
+  let payload;
+  try { payload = JSON.parse(text.slice(start)); }
+  catch (e) {
+    return { state: UNKNOWN, detail: `commander status JSON 坏了（exit=${code}）：${String(e.message).slice(0, 120)}` };
+  }
+  const detail = String(payload.detail || '').trim() || `指挥官自检 exit ${code}`;
+  if (code === 0) return { state: OK, detail };
+  if (code === 2) return { state: UNKNOWN, detail };
+  return { state: RED, detail };
+}
+
 const CHECKS = [
   ['② 非 root 运行', checkNotRoot],
   ['⑧ land timer 在册且启用', checkLandAutomation],
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
-  ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
+  ['⑭ 指挥官自检（commander status，#800）', () => {
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status', '--json'], { timeout: 60000 });
+    return classifyCommanderStatus(r);
+  }],
   ['⑮ 卡死发现已并进指挥官且独立钟已退役', checkStallWatchTimer],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
