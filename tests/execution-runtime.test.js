@@ -27,6 +27,32 @@ function records(f){return fs.readdirSync(path.join(f.stateDir,'sessions')).filt
 const fenceURL=new URL('../scripts/lib/execution-fence.mjs',import.meta.url).href;
 const runtimeURL=new URL('../scripts/lib/execution-runtime.mjs',import.meta.url).href;
 
+linuxTest('headless running session with open:false stays live and repairs stale incomplete cache',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  const started=await rt.startSession(spec(f));
+  m.listSessions=async()=>({ok:true,sessions:[{sessionKey:started.sessionKey,runState:'running',open:false}]});
+  m.readSession=async()=>{throw Error('list already provides a running state');};
+  const first=await rt.listSessions();
+  assert.equal(first.ok,true);
+  assert.equal(first.sessions[0].state,'running');
+  const record=records(f)[0];
+  const file=path.join(f.stateDir,'sessions',record.recordKey+'.json');
+  const actual=fs.readdirSync(path.join(f.stateDir,'sessions')).find(n=>n.endsWith('.json'));
+  writeExecutionRecord(path.join(f.stateDir,'sessions',actual),{...record,state:'incomplete'});
+  const second=await rt.listSessions();
+  assert.equal(second.ok,true);
+  assert.equal(second.sessions[0].state,'running');
+});
+
+linuxTest('closed UI without run state is not terminal evidence',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  const started=await rt.startSession(spec(f));
+  m.listSessions=async()=>({ok:true,sessions:[{sessionKey:started.sessionKey,open:false}]});
+  m.views.set(started.sessionKey,{phase:'streaming',text:'working',toolCalls:[]});
+  const r=await rt.listSessions();
+  assert.equal(r.sessions[0].state,'running');
+});
+
 linuxTest('real flock belongs to the parent FD after helper exit and shares the same inode',async t=>{
   const f=fixture(t),held=acquireExecutionFence({stateDir:f.stateDir});assert.ok(held.ok);t.after(()=>held.release());
   const childCode='import {acquireExecutionFence} from '+JSON.stringify(fenceURL)+';const h=acquireExecutionFence({stateDir:process.argv[1]});console.log(JSON.stringify({ok:h.ok}));h.release?.();';
