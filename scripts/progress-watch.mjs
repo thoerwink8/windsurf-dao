@@ -294,6 +294,8 @@ export function runProgressWatch({
   const planned = planWake({
     fingerprint: verdict.fingerprint,
     prevFingerprint: ledger.fingerprint,
+    prevAt: ledger.at,
+    now,
     stalled: verdict.stalled,
   });
   if (planned.wake && !dryRun) {

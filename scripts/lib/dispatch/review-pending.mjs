@@ -17,10 +17,13 @@
 //    「在役几个」没查成时一张都不许拉——当成 0 个在跑就会一次把池子拉满，正是本单要治的病。
 //
 // 队列深度本身就是背压信号：「待审 18 张 / 在役 3 个」这句话即仪表盘。
+// #1024 复审：文件名必须带仓，两个仓的同号 PR 不许共用 12.json。
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { dispatchQueueDir } from '../dispatch-queue.mjs';
+import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
+import { repoPrKey } from './repo.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
@@ -59,12 +62,19 @@ export function reviewPendingDir({ root, env } = {}) {
   return join(root, REVIEW_PENDING_DIR_REL);
 }
 
-export function reviewPendingPath(dir, pr) {
-  return join(dir, `${String(pr).trim()}.json`);
+const REVIEW_PENDING_FILE_RE = /^(?:\d+|[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+__\d+)\.json$/;
+
+export function reviewPendingPath(dir, pr, repo) {
+  const keyed = repoPrKey({ repo, pr });
+  if (!keyed.ok) {
+    // 键没做成不许回落到纯 PR 号（两个仓同号会串票）。
+    return join(dir, `.invalid-${String(pr ?? '').trim()}.json`);
+  }
+  return join(dir, `${keyed.stem}.json`);
 }
 
 export function buildReviewPendingTicket({
-  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source,
+  pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source, repo,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
@@ -87,6 +97,12 @@ export function buildReviewPendingTicket({
   const oid = head?.oid || head?.headRefOid || null;
   const name = head?.name || head?.headRefName || null;
   const when = ts instanceof Date ? ts : new Date(ts || Date.now());
+  let repoField = null;
+  if (repo != null && String(repo) !== '') {
+    const keyed = repoPrKey({ repo, pr: n });
+    if (!keyed.ok) return { ok: false, error: keyed.error };
+    repoField = keyed.ownerName;
+  }
   return {
     ok: true,
     ticket: {
@@ -100,6 +116,7 @@ export function buildReviewPendingTicket({
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
+      repo: repoField,
       error: error ? String(error) : null,
       source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
@@ -112,7 +129,9 @@ export function writeReviewPending({ dir, ticket } = {}) {
   if (!ticket || ticket.kind !== REVIEW_PENDING_KIND || !ticket.pr) {
     return { ok: false, error: '不是复审待办（kind/pr 对不上）' };
   }
-  const path = reviewPendingPath(dir, ticket.pr);
+  const keyed = repoPrKey({ repo: ticket.repo, pr: ticket.pr });
+  if (!keyed.ok) return { ok: false, error: keyed.error };
+  const path = reviewPendingPath(dir, ticket.pr, ticket.repo);
   try {
     mkdirSync(dir, { recursive: true });
     const tmp = `${path}.tmp-${process.pid}`;
@@ -154,7 +173,7 @@ export function listReviewPending(dir) {
   }
   const tickets = [];
   for (const name of names) {
-    if (!/^\d+\.json$/.test(name)) continue;
+    if (!REVIEW_PENDING_FILE_RE.test(name)) continue;
     const read = readReviewPending(join(dir, name));
     if (!read.ok) return { ok: false, unscanned: true, error: read.error, tickets };
     tickets.push(read.ticket);
@@ -284,7 +303,33 @@ export function planReviewAdmission({ tickets, liveReviewers, cap = DEFAULT_REVI
 }
 
 // 终态：到了这几个就不占并发位了。注意 done 也在里面——审官那一针跑完就不再占上游。
-const REVIEWER_DONE_PHASES = new Set(['done', 'complete', 'completed', 'error', 'failed', 'aborted', 'cancelled', 'canceled']);
+//
+// 2026-09-11：从手打清单换成 execution-states 的正典（同一晚第 4 处手打副本）。
+// 手打那份漏了 `stopped` / `incomplete` / `gone` / `rejected` 等仓里公认的终态，
+// 实测 29 条残留里只有 1 条 stopped 被算成终态，其余全被当成「在役」——
+// 「在役 19 个」永久压着上限 3，复审票一张也拉不动。
+const REVIEWER_DONE_PHASES = EXECUTION_FINISHED;
+
+/**
+ * 中间态（stopping / pending / uncertain）什么时候不再占位。
+ *
+ * 不能像终态那样直接放行：中间态是「收尾走了一半」，可能真在收。
+ * 但也不能永远占位——同一晚实测 4 条 stopping 挂在 23–31 分钟前、对应树**零进程**，
+ * 却把上限 3 吃满，队列一张都拉不动。
+ *
+ * 所以按 lease-gc 同一套纪律：**过宽限 + 名单里没有活会话**才不算在役。
+ * 宽限内一律保留（审官可能正在收尾）。判据与「死人占树」那三层同源。
+ */
+const REVIEWER_RESERVED_GRACE_MIN = 15;
+
+function occupiesReviewerSlot({ phase, updatedAt, now }) {
+  if (REVIEWER_DONE_PHASES.has(phase)) return false;
+  if (!EXECUTION_RESERVED.has(phase)) return true;   // 真在跑：占位
+  const at = Number(updatedAt);
+  if (!Number.isFinite(at) || at <= 0) return true;  // 时间读不到 → 不猜，占位（fail-closed）
+  const ageMin = (now - at) / 60000;
+  return ageMin < REVIEWER_RESERVED_GRACE_MIN;       // 宽限内算在收尾；过点就算挂了
+}
 
 /**
  * 数「现在有几个审官真在跑」。纯判据：会话名单由调用方一次读进来，本函数不碰 IO。
@@ -310,8 +355,16 @@ export function countLiveReviewers({ records, sessions } = {}) {
     if (!key) continue;
     const s = byKey.get(key);
     if (!s) continue;                                   // 名单里没有 = 已经不在了
-    const phase = typeof s.runState === 'string' ? s.runState.trim().toLowerCase() : '';
-    if (REVIEWER_DONE_PHASES.has(phase)) continue;      // 终态不占位
+    // 2026-09-11 实咬：这里原来只读 `s.runState`，而执行运行时给的会话名单里
+    // **根本没有这个字段**（真字段是 state/phase，见 mirasim-runtime 的 listSessions 行）。
+    // 于是 phase 恒为空串 → 永远命不中终态 → **每一条登记记录都被算成「在役审官」**，
+    // 实测 29 条登记数出 28 个在役，上限 3 永久吃满，复审票一张都拉不动。
+    //
+    // 字段名不再逐处兜底——全仓统一走正典的 sessionStateOf（那一处写明了三套词的优先级）。
+    // 逐处写 `a ?? b ?? c` 正是本晚的病：每个消费者各写一份，写漏一处就是一次静默失效。
+    const phase = sessionStateOf(s) || '';
+    if (!occupiesReviewerSlot({ phase, updatedAt: s.updatedAt, now: Date.now() })) continue;
+    // 带死因的那一针已经废了（#1121 同一判据），也不占位——否则残壳会把上限吃满，
     // 带死因的那一针已经废了（#1121 同一判据），也不占位——否则残壳会把上限吃满，
     // 队列永远拉不动，看起来像「一直满载」其实一个都没在跑。
     // 只认「死因」字样，不把任意非空 runDetail 当死——预览/进度字也会写进这一格。
@@ -348,6 +401,7 @@ export function planReviewPendingDrain(ticket) {
   const argv = ['reviewer-create', '--pr', pr, '--reviewer', reviewer, '--executor', 'mirasim'];
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
+  if (ticket.repo) argv.push('--repo', String(ticket.repo));
   return {
     ok: true,
     verb: 'reviewer-create',
@@ -383,7 +437,7 @@ export function consumeReviewPending({ dir, ticket, attach } = {}) {
     };
   }
   if (dir && ticket?.pr) {
-    const pendingPath = reviewPendingPath(dir, ticket.pr);
+    const pendingPath = reviewPendingPath(dir, ticket.pr, ticket.repo);
     try {
       unlinkSync(pendingPath);
     } catch (e) {

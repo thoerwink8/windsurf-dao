@@ -24,8 +24,10 @@ WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
 # #792：自动化服务不继承个人 GH_TOKEN。
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
-# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
-Environment=GH_CONFIG_DIR=/var/empty
+# REQUIRES_GIT_PUSH=1：这个单元要写远端 git（见脚本里的 git push）。
+# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 git 的凭据助手
+# `gh auth git-credential` 找不到 hosts.yml，推送永远失败。
+# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs。
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/land.mjs /srv/projects/windsurf-dao
 SuccessExitStatus=0 1
 StandardOutput=journal

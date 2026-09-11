@@ -8,6 +8,7 @@
 //   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
+// handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
 //
 // 服务端是 systemd 常驻的官方 mirasim-server（回环 ws，钉死一个版本）。控制面是私有协议、
 // 混淆、无文档，厂商明写客户端/服务端严格版本相等、无兼容层（ai-gateway-stack DECISIONS §71）——
@@ -37,6 +38,7 @@ import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
+import { sessionStateOf } from './execution-states.mjs';
 import { loadBreaker } from './provider-health.mjs';
 import { ensureLocalLedger } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
@@ -137,6 +139,12 @@ export async function probeVersionDrift({ homeDir, port, service = 'mirasim-serv
  */
 export const PINNED_VERSION = null;
 export const DEFAULT_PORT = 4316;
+
+/** listSessions / handshake 等 sessions 帧的预算。
+ *  跟 `scripts/mirasim-sessions.mjs` 的 MIRASIM_LS_TIMEOUT_MS 默认同值。
+ *  2026-09-09 实咬：负载 20 时 30s 才判超时；snapshot 默认 6s 会把「慢」误判成「死」，
+ *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
+export const SESSIONS_TIMEOUT_MS = 30_000;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
 // 账本目录名就是后半段那个 uuid，交叉核靠这个映射。
@@ -384,9 +392,14 @@ export function readSessionView(snapshot) {
 /** 会话清单那条 meta 也折成同样的四个字段。text 只有预览，标 partial。 */
 export function metaView(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
-  const runState = typeof m.runState === 'string' ? m.runState.trim().toLowerCase() : '';
+  // 2026-09-11 实咬（与 review-pending 的 countLiveReviewers 同一个病）：
+  // 这里原来只读 `m.runState`，而会话清单里**没有这个字段**（真字段是 state/phase）。
+  // 于是 phase 恒为 null——「这条会话什么态」永远是「不知道」。
+  // 这里走的是**快照没回帧时的兜底路**，本来就只能靠清单说话，再读错字段就真的瞎了。
+  // 字段名统一走正典（sessionStateOf），别在本函数里再写一份兜底链。
+  const runState = sessionStateOf(m) || '';
   return {
-    phase: normPhase(m.runState),
+    phase: normPhase(runState),
     text: typeof m.preview === 'string' ? m.preview : '',
     toolCalls: [],
     error: typeof m.runDetail === 'string' && m.runDetail ? m.runDetail : null,
@@ -504,6 +517,24 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       status: 'failed',
       confirmedBy: ['snapshot'],
       reason: `快照报 ${phase} 但带着 incomplete 标记${view.error ? `：${view.error}` : '（半截收尾）'}`,
+    };
+  }
+  // 会话被杀死时，快照**不变成失败态**——死因只写进 error，phase 照样是 done（#1121 实咬）：
+  //   "pi turn stalled past 30 minutes"                  工人被 30 分钟回合看门狗掐死
+  //   "Selected model is at capacity. Please try …"      审官撞上游满载
+  // incomplete 只是旁证，而且不稳定：同一个死因，2026-09-07 有时带 incomplete
+  // 被判 failed，有时不带就判成完工。死因的**唯一**可靠载体是 error 本身。
+  //
+  // fail-closed：判 failed 而实际干完了 ⇒ 多一次重派，浪费额度，无害；
+  // 判 done 而实际被杀 ⇒ 静默搁浅，当天演了 11 次（3 个工人 + 8 个审官）。
+  // 实证：所有真交付了成果的会话 error 都是 null；11 个带 error 的一个产出都没有。
+  const deathNote = view.error == null ? '' : String(view.error).trim();
+  if (deathNote) {
+    return {
+      status: 'failed',
+      confirmedBy: ['snapshot'],
+      reason: `快照报 ${phase}，但会话带着死因：${deathNote}——被打断的一针不算完工`,
+      error: deathNote,
     };
   }
 
@@ -771,12 +802,14 @@ export function createRuntime(opts = {}) {
     snapshot: opts.snapshotTimeoutMs ?? 6_000,
     ack: opts.ackTimeoutMs ?? 1_500,
     worktree: opts.worktreeTimeoutMs ?? 60_000,
-    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125）：名单是**全量枚举**，
+    // 会话名单要单独一个预算，不能跟 snapshot 共用（#1125 / #1151）：名单是**全量枚举**，
     // 会话越多越慢——2026-09-07 实测 60 条时 3.0–5.4 秒，而 snapshot 的 6 秒余量只剩零点几秒，
     // 机器一有负载就越线。越线的后果不是「慢一点」，是判成「没查成」⇒ 这一轮一张票都不拉，
     // 队列看起来永远堵着。所以它宁可等久一点，也不能因为抖动就报没查成。
+    // handshake 跟 listSessions 同一格：探活把「慢」判成「死」会连红重启（2026-09-09 实咬）。
     list: opts.listTimeoutMs
-      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || 30_000),
+      ?? opts.sessionsTimeoutMs
+      ?? (Number.parseInt(process.env.MIRASIM_LS_TIMEOUT_MS || '', 10) || SESSIONS_TIMEOUT_MS),
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
@@ -1169,6 +1202,7 @@ export function createRuntime(opts = {}) {
    *
    * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
    * 把上游池子拉满，那正是 #1125 要治的病。
+   * 等帧预算是 t.list（默认 SESSIONS_TIMEOUT_MS / MIRASIM_LS_TIMEOUT_MS），不是 snapshot 的 6s。
    */
   async function listSessions() {
     const wire = await open();
@@ -1191,6 +1225,37 @@ export function createRuntime(opts = {}) {
     }
   }
 
+  /**
+   * 最小握手：开一条 ws，读 state 帧，再发 listSessions 等 sessions 帧，立刻挂断。
+   * 不发 prompt、不起会话。探活用它判「该发生的事有没有发生」。
+   *
+   * 2026-09-09 帅位实证：listSessions 单口退化、startSession 仍通——连接可建、
+   * state 也在，但 sessions 帧不回。只 ping state 探不到这个病。空名单（[]）算活；
+   * 没回帧 / 不是数组才算死。连不上 / 令牌不在仍抛 MirasimUnavailableError。
+   * 等帧预算跟 listSessions 同一格（t.list / SESSIONS_TIMEOUT_MS），不是 snapshot 的 6s。
+   */
+  async function handshake() {
+    const wire = await open();
+    try {
+      const contract = judgeContract(wire.state, { pinnedVersion });
+      if (contract.unscanned) return contract;
+      wire.send({ type: 'listSessions' });
+      const listed = await wire.waitFor(m => m.type === 'sessions', t.list);
+      if (!listed || !Array.isArray(listed.sessions)) {
+        return {
+          ok: false,
+          unscanned: false,
+          version: contract.version,
+          sessionsOk: false,
+          errors: ['没收到 sessions 帧——listSessions 单口退化（连接可建、清单不回）'],
+        };
+      }
+      return { ...contract, sessionsOk: true, sessions: listed.sessions };
+    } finally {
+      wire.close();
+    }
+  }
+
   return {
     ensureWorkspace,
     startSession,
@@ -1200,8 +1265,9 @@ export function createRuntime(opts = {}) {
     interact,
     stopSession,
     waitForCompletion,
+    handshake,
     crossCheck,
-    config: { port, homeDir, pinnedVersion },
+    config: { port, homeDir, pinnedVersion, sessionsTimeoutMs: t.list },
   };
 }
 
@@ -1218,3 +1284,4 @@ export const listSessions = () => runtime().listSessions();
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
+export const handshake = () => runtime().handshake();
