@@ -19,7 +19,7 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths, descendantsOf } from './lib/board-gc.mjs';
@@ -33,7 +33,7 @@ import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs'
 import { checkTreeLease, scanSessionProcs } from './lib/dispatch/lease.mjs';
 import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
-import { planSessionGc } from './lib/session-dir-gc.mjs';
+import { planSessionGc, planOrphanGc, markOrphanInUse } from './lib/session-dir-gc.mjs';
 import { planLeaseGc, judgeRegistryStuck } from './lib/lease-gc.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -64,6 +64,56 @@ function run(cmd, args, { timeout = 60000 } = {}) {
 function sessionsRoot() {
   return process.env.BOARD_GC_SESSIONS
     || join(process.env.HOME || process.env.USERPROFILE || '', '.mirasim', 'sessions');
+}
+
+/** 孤儿临时目录根（~/.codex/.tmp）。测的时候用 BOARD_GC_ORPHAN_TMP 指到沙箱。 */
+function orphanTmpRoot() {
+  return process.env.BOARD_GC_ORPHAN_TMP
+    || join(process.env.HOME || process.env.USERPROFILE || '', '.codex', '.tmp');
+}
+
+/**
+ * 列出临时目录的直接子目录。ENOENT = 没有，不是没查成。
+ * 时间读不出的条目仍进名单，交给判据留着。
+ */
+function listOrphanTmp(root) {
+  let ents;
+  try {
+    ents = readdirSync(root, { withFileTypes: true });
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return { ok: true, entries: [] };
+    return { ok: false, error: `临时目录读不了：${String(e && e.message || e).slice(0, 120)}` };
+  }
+  const entries = [];
+  for (const d of ents) {
+    if (!d.isDirectory()) continue;
+    const p = join(root, d.name);
+    let mtimeMs = NaN;
+    try { mtimeMs = Number(statSync(p).mtimeMs); } catch { /* 读不出就标 NaN，判据会留着 */ }
+    entries.push({ path: p, mtimeMs });
+  }
+  return { ok: true, entries };
+}
+
+/**
+ * 扫 /proc 全部能读的 cwd。孤儿目录的占用者不限于 mirasim 后代（git/codex 自己也算）。
+ * 三态：读不动 / 一个 cwd 都解不出 → unscanned；解得出 → ok。
+ */
+function readProcCwds({ readdir = readdirSync, readlink = readlinkSync } = {}) {
+  let names;
+  try { names = readdir('/proc'); }
+  catch (e) { return { ok: false, unscanned: true, error: `/proc 读不动：${String(e && e.message || e)}` }; }
+  const pids = names.filter((n) => /^\d+$/.test(String(n)));
+  if (!pids.length) return { ok: false, unscanned: true, error: '/proc 下一个 pid 都没有——没查成' };
+  const cwds = [];
+  for (const pid of pids) {
+    try { cwds.push(String(readlink(`/proc/${pid}/cwd`)).replace(/\/+$/, '')); }
+    catch { /* 别人的进程 / 已经退了 */ }
+  }
+  if (!cwds.length) {
+    return { ok: false, unscanned: true, error: `扫了 ${pids.length} 个进程，一个 cwd 都读不出来——没查成` };
+  }
+  return { ok: true, cwds, resolved: cwds.length, total: pids.length };
 }
 
 /** issue 表 → 已关闭编号的字符串集合（判据按字符串比，跟 refsOf 的产出对齐）。 */
@@ -459,90 +509,128 @@ function main() {
     }
     final = applyBoardGcRemoves(final, results);
 
-    // 顺手把过期会话目录归档（#1176）。复用上面已经扫过的 sessions 与 alive——
-    // 会话名单那一趟本来就是全量遍历（2026-09-10 实测 60 条要 20 秒），
-    // 再单开一个定时器读第二遍等于把最慢的一步跑两次。
-    const gcPlan = planSessionGc({
-      sessions: progressed.sessions.map((s) => {
-        const [agent, ...rest] = String(s.id).split(':');
-        return {
-          id: rest.join(':'),
-          agent,
-          dir: join(sessionsRoot(), agent, rest.join(':')),
-          alive: alive.has(s.worktreeId) || assessLivenessWithTree(s, { thresholdMs, scan: procScan }).state === 'active',
-          updatedAtMs: s.lastProgressAt == null ? NaN : s.lastProgressAt,
-          record: { workdir: s.worktreeId, title: s.label, preview: s.preview },
-        };
-      }),
-      closedRefs: issues == null ? new Set() : closedRefsFrom(issues),
-      boardScanned: issues != null,
-    });
-    // 顺手回收**孤儿执行租约**（#1175 实咬）：审官会话被上游断流打死会留下 state=running
-    // 的租约占着工作树，此后同一棵树的 reviewer-create 一律报「already has an active session」
-    // ——死人占树、活人进不来。判据在 lib/lease-gc.mjs（fail-closed：任何「没查成」都保留）。
-    // 复用上面扫到的 sessions（同一次全量枚举），不另打一趟。
-    try {
-      const stateByKey = new Map();
-      for (const s2 of progressed.sessions) {
-        const k = s2.sessionKey || s2.id;
-        if (k) stateByKey.set(String(k), s2.state || s2.runState || null);
-      }
-      const leases = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'leases'))
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => {
-          const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
-          let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
-          return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000 };
-        })
-        .filter(Boolean);
-      // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
-      const registryRecords = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'sessions'))
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => {
-          const full = join(process.env.HOME || '', '.dao', 'execution', 'sessions', f);
-          try { return { ...JSON.parse(readFileSync(full, 'utf8')), _file: full }; } catch { return null; }
-        })
-        .filter(Boolean);
-      const staleRecords = registryRecords
-        .map((r) => ({ r, j: judgeRegistryStuck(r, { sessionsScanned: listed.ok === true, sessionState: stateByKey.get(String(r.sessionKey || r.recordKey)) ?? null }) }))
-        .filter((x) => x.j.verdict === 'reap');
-      if (staleRecords.length) {
-        let cleaned = 0;
-        for (const { r, j } of staleRecords) {
-          try { rmSync(r._file, { force: true }); cleaned++; } catch { /* 下轮再来 */ }
+    // 进程面没查成 → 会话/租约/孤儿本轮都不删（#1176：查不清时保留）。
+    const procsOk = procScan && procScan.ok && !procScan.unscanned;
+    if (!procsOk) {
+      console.error(`进程面没查成，本轮不归档会话、不回收租约、不扫临时目录：${(procScan && procScan.error) || 'unscanned'}`);
+    } else {
+      // 顺手把过期会话目录归档（#1176）。复用上面已经扫过的 sessions 与 alive——
+      // 会话名单那一趟本来就是全量遍历（2026-09-10 实测 60 条要 20 秒），
+      // 再单开一个定时器读第二遍等于把最慢的一步跑两次。
+      const gcPlan = planSessionGc({
+        sessions: progressed.sessions.map((s) => {
+          const [agent, ...rest] = String(s.id).split(':');
+          return {
+            id: rest.join(':'),
+            agent,
+            dir: join(sessionsRoot(), agent, rest.join(':')),
+            alive: alive.has(s.worktreeId) || assessLivenessWithTree(s, { thresholdMs, scan: procScan }).state === 'active',
+            updatedAtMs: s.lastProgressAt == null ? NaN : s.lastProgressAt,
+            record: { workdir: s.worktreeId, title: s.label, preview: s.preview },
+          };
+        }),
+        closedRefs: issues == null ? new Set() : closedRefsFrom(issues),
+        boardScanned: issues != null,
+      });
+      // 顺手回收**孤儿执行租约**（#1175 实咬）：审官会话被上游断流打死会留下 state=running
+      // 的租约占着工作树，此后同一棵树的 reviewer-create 一律报「already has an active session」
+      // ——死人占树、活人进不来。判据在 lib/lease-gc.mjs（fail-closed：任何「没查成」都保留）。
+      // 复用上面扫到的 sessions（同一次全量枚举），不另打一趟。
+      try {
+        const stateByKey = new Map();
+        for (const s2 of progressed.sessions) {
+          const k = s2.sessionKey || s2.id;
+          if (k) stateByKey.set(String(k), s2.state || s2.runState || null);
         }
-        if (cleaned) console.log(`中间态登记回收 ${cleaned} 条（${staleRecords[0].j.why}）`);
-      }
-      const leasePlan = planLeaseGc({ leases, sessions: stateByKey, sessionsScanned: listed.ok === true });
-      if (leasePlan.state === 'ok' && leasePlan.reap.length) {
-        let reaped = 0;
-        for (const l of leasePlan.reap) {
-          // 只动租约文件本身——树留给卡清理那一路（本文件的主职），不在这里顺手删树。
-          try { rmSync(l._file, { force: true }); reaped++; } catch { /* 删不掉下轮再来 */ }
+        const liveCwds = (procScan.procs || []).map((p) => String(p.cwd || '').replace(/\/+$/, '')).filter(Boolean);
+        const leases = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'leases'))
+          .filter((f) => f.endsWith('.json'))
+          .map((f) => {
+            const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
+            let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
+            const wd = String(d.workdir || '').replace(/\/+$/, '');
+            const hasLiveProcess = !!wd && liveCwds.some((cwd) => cwd === wd || cwd.startsWith(wd + '/'));
+            return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000, hasLiveProcess };
+          })
+          .filter(Boolean);
+        // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
+        const registryRecords = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'sessions'))
+          .filter((f) => f.endsWith('.json'))
+          .map((f) => {
+            const full = join(process.env.HOME || '', '.dao', 'execution', 'sessions', f);
+            try { return { ...JSON.parse(readFileSync(full, 'utf8')), _file: full }; } catch { return null; }
+          })
+          .filter(Boolean);
+        const staleRecords = registryRecords
+          .map((r) => ({ r, j: judgeRegistryStuck(r, { sessionsScanned: listed.ok === true, sessionState: stateByKey.get(String(r.sessionKey || r.recordKey)) ?? null }) }))
+          .filter((x) => x.j.verdict === 'reap');
+        if (staleRecords.length) {
+          let cleaned = 0;
+          for (const { r, j } of staleRecords) {
+            try { rmSync(r._file, { force: true }); cleaned++; } catch { /* 下轮再来 */ }
+          }
+          if (cleaned) console.log(`中间态登记回收 ${cleaned} 条（${staleRecords[0].j.why}）`);
         }
-        if (reaped) console.log(`孤儿租约回收 ${reaped} 条（${leasePlan.detail}）`);
-      } else if (leasePlan.state === 'unknown') {
-        console.error(`租约没查成，本轮不回收：${leasePlan.detail}`);
+        const leasePlan = planLeaseGc({ leases, sessions: stateByKey, sessionsScanned: listed.ok === true });
+        if (leasePlan.state === 'ok' && leasePlan.reap.length) {
+          let reaped = 0;
+          for (const l of leasePlan.reap) {
+            // 只动租约文件本身——树留给卡清理那一路（本文件的主职），不在这里顺手删树。
+            try { rmSync(l._file, { force: true }); reaped++; } catch { /* 删不掉下轮再来 */ }
+          }
+          if (reaped) console.log(`孤儿租约回收 ${reaped} 条（${leasePlan.detail}）`);
+        } else if (leasePlan.state === 'unknown') {
+          console.error(`租约没查成，本轮不回收：${leasePlan.detail}`);
+        }
+      } catch (e) {
+        // 租约目录不在（新机/从未起过会话）是正常态；其它错误报出来但不拦住本轮卡清理。
+        if (!/ENOENT/.test(String(e && e.code))) console.error(`租约回收出错（本轮跳过）：${String(e && e.message || e).slice(0, 140)}`);
       }
-    } catch (e) {
-      // 租约目录不在（新机/从未起过会话）是正常态；其它错误报出来但不拦住本轮卡清理。
-      if (!/ENOENT/.test(String(e && e.code))) console.error(`租约回收出错（本轮跳过）：${String(e && e.message || e).slice(0, 140)}`);
-    }
 
-    if (gcPlan.state === 'ok' && gcPlan.remove.length) {
-      const archiveRoot = join(sessionsRoot(), '..', 'sessions-archive');
-      let archived = 0;
-      for (const s of gcPlan.remove) {
-        try {
-          const dest = join(archiveRoot, s.agent);
-          mkdirSync(dest, { recursive: true });
-          renameSync(s.dir, join(dest, s.id));
-          archived++;
-        } catch { /* 归档失败下一轮再来，不拦住本轮卡清理 */ }
+      if (gcPlan.state === 'ok' && gcPlan.remove.length) {
+        const archiveRoot = join(sessionsRoot(), '..', 'sessions-archive');
+        let archived = 0;
+        for (const s of gcPlan.remove) {
+          try {
+            const dest = join(archiveRoot, s.agent);
+            mkdirSync(dest, { recursive: true });
+            renameSync(s.dir, join(dest, s.id));
+            archived++;
+          } catch { /* 归档失败下一轮再来，不拦住本轮卡清理 */ }
+        }
+        if (archived) console.log(`会话目录归档 ${archived} 个（${gcPlan.detail}）`);
+      } else if (gcPlan.state === 'unknown') {
+        console.error(`会话目录没查成，本轮不归档：${gcPlan.detail}`);
       }
-      if (archived) console.log(`会话目录归档 ${archived} 个（${gcPlan.detail}）`);
-    } else if (gcPlan.state === 'unknown') {
-      console.error(`会话目录没查成，本轮不归档：${gcPlan.detail}`);
+
+      // 第 3 层：无编号归属的临时目录按时效清（#1176）。INDEX 写了这层走 planOrphanGc，
+      // 驱动层以前没 import——判据绿、生产 ~/.codex/.tmp 照样只增不减。
+      const tmpRoot = orphanTmpRoot();
+      const listedTmp = listOrphanTmp(tmpRoot);
+      if (!listedTmp.ok) {
+        console.error(`临时目录没查成，本轮不扫：${listedTmp.error}`);
+      } else {
+        const cwdScan = readProcCwds();
+        if (!cwdScan.ok) {
+          console.error(`临时目录占用没查成，本轮不删：${cwdScan.error}`);
+        } else {
+          const marked = markOrphanInUse(listedTmp.entries, cwdScan.cwds, tmpRoot);
+          const orphanPlan = planOrphanGc({ entries: marked.entries, procsScanned: true });
+          console.log(`孤儿临时目录：${orphanPlan.detail}`);
+          if (orphanPlan.state === 'ok' && orphanPlan.remove.length) {
+            let removed = 0;
+            for (const e of orphanPlan.remove) {
+              const p = String(e.path || '');
+              const base = tmpRoot.replace(/\/+$/, '');
+              if (!p.startsWith(base + '/') || p === base) continue; // 逃出根外整条跳过
+              try { rmSync(p, { force: true, recursive: true }); removed++; } catch { /* 下轮再来 */ }
+            }
+            if (removed) console.log(`孤儿临时目录回收 ${removed} 个（${orphanPlan.detail}）`);
+          } else if (orphanPlan.state === 'unknown') {
+            console.error(`临时目录没查成，本轮不删：${orphanPlan.detail}`);
+          }
+        }
+      }
     }
   }
 
@@ -573,4 +661,4 @@ const sameFile = (a, b) => {
 };
 if (sameFile(process.argv[1], HERE)) main();
 
-export { pushSalvage, removeTreeFallback };
+export { pushSalvage, removeTreeFallback, readProcCwds, listOrphanTmp, orphanTmpRoot };
