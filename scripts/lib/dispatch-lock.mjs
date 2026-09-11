@@ -76,7 +76,9 @@ export function acquireWorktreeLock({
   try { mkdir(dirname(path), { recursive: true }); } catch { /* 目录已在 */ }
 
   const t0 = now();
-  while (now() - t0 < timeoutMs) {
+  let attempted = false;
+  while (!attempted || now() - t0 < timeoutMs) {
+    attempted = true; // timeout=0 means one nonblocking attempt, not zero attempts.
     try {
       const fd = open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
       try { write(fd, String(pid)); } catch { /* pid 写不上不挡持锁 */ }
@@ -106,6 +108,7 @@ export function acquireWorktreeLock({
         try { unlink(path); } catch { /* 别人抢先拆了 */ }
         continue;
       }
+      if (now() - t0 >= timeoutMs) break;
       sleepFn(50);
     }
   }

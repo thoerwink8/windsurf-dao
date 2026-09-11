@@ -346,7 +346,9 @@ export function createStateStore(file) {
       return ids.find(Boolean) || '';
     },
     save() {
-      const held = acquireWorktreeLock({ lockPath: `${file}.lock`, timeoutMs: 5000 });
+      // A contended state file must not freeze incoming card callbacks. The
+      // confirmed decision remains in GitHub; callers report/retry local save.
+      const held = acquireWorktreeLock({ lockPath: `${file}.lock`, timeoutMs: 0 });
       if (!held.ok) throw new Error(held.error);
       try {
         // Refuse to replace an unreadable file: it may contain confirmed choices.

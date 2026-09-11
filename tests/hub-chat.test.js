@@ -18,6 +18,23 @@ const POLICY_CHECK = import(toUrl(path.join(REPO, 'scripts', 'lib', 'dispatch-po
 const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
 
 describe('state saves preserve concurrent card decisions', () => {
+  it('contended state save fails promptly rather than blocking card callbacks', async t => {
+    const { createStateStore } = await ADAPTER;
+    const { acquireWorktreeLock } = await import('../scripts/lib/dispatch-lock.mjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-state-lock-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'state.json');
+    const store = createStateStore(file);
+    const held = acquireWorktreeLock({ lockPath: `${file}.lock`, timeoutMs: 0 });
+    assert.equal(held.ok, true);
+    try {
+      const start = Date.now();
+      assert.throws(() => store.save());
+      assert.ok(Date.now() - start < 500);
+    } finally { held.release(); process.removeListener('exit', held.release); }
+    store.save();
+    assert.ok(fs.existsSync(file));
+  });
   for (const first of ['human', 'commander']) {
     it(`human choice survives when ${first} saves first`, async (t) => {
       const { createStateStore } = await ADAPTER;
