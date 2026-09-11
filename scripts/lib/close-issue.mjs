@@ -100,13 +100,47 @@ export function closeDecision(pr) {
  * 对单个 PR 执行关单判定并落动作。
  * 返回 { ok, action, reason, issue?, pr?, dryRun? }。
  */
+export function hasCompletedChecklist(body) {
+  let checked = 0, fence = null, comment = false;
+  for (const raw of String(body || '').split(/\r?\n/)) {
+    if (fence) {
+      const close = raw.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = !comment && raw.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (opening) { fence = opening[1]; continue; }
+    let line = raw;
+    for (;;) {
+      if (comment) {
+        const end = line.indexOf('-->');
+        if (end < 0) { line = ''; break; }
+        line = line.slice(end + 3); comment = false;
+      }
+      const start = line.indexOf('<!--');
+      if (start < 0) break;
+      const end = line.indexOf('-->', start + 4);
+      if (end < 0) { line = line.slice(0, start); comment = true; break; }
+      line = line.slice(0, start) + line.slice(end + 3);
+    }
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (delimiter) { fence = delimiter[1]; continue; }
+    const item = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]/);
+    if (!item) continue;
+    if (item[1] === ' ') return false;
+    if (/^(?: {4}|\t)/.test(line)) continue; // Do not use an indented code example as completion proof.
+    checked++;
+  }
+  return checked > 0 && !comment && !fence;
+}
+
 export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 'thoerwink8/windsurf-dao' } = {}) {
   const number = String((pr && (pr.number ?? pr.pr)) ?? '');
   const issue = attributedIssueNumber(pr);
   if (!issue) return { ok: true, action: 'none', reason: '无署名单号', pr: number };
   const dec = closeDecision(pr);
   if (dec.action === 'none') return { ok: true, action: 'none', reason: dec.reason, pr: number };
-  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url,labels']);
+  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url,labels,body']);
   if (!iv.ok) {
     const msg = String(iv.error || '');
     // 署名目标不存在：署名解析误中（标题/正文随手引用 #N），不是关单失败——跳过不污染 exit code。
@@ -125,6 +159,13 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   // 人工判定「已顶替」的单不弹回（2026-09-04 实咬：#633/#651/#683/#684/#686/#693 六张被 sweep
   // 反复 reopen——署名 PR 合入时历史 check 红，脚本不区分「谁关的、为什么关」。带标签 = 人拍过，机器让路）。
   const labels = Array.isArray(iv.json?.labels) ? iv.json.labels.map((l) => String(l?.name || '')) : [];
+  if (dec.action === 'close' && labels.includes('统领单')) {
+    const body = iv.json?.body;
+    if (typeof body !== 'string') return { ok: false, action: 'none', issue, pr: number, error: '统领单验收清单未读取成功，不自动关闭' };
+    if (!hasCompletedChecklist(body)) {
+      return { ok: true, action: 'none', issue, pr: number, reason: '统领单验收清单尚未全部完成，单个 PR 合并不代表整项完成' };
+    }
+  }
   if (dec.action === 'reopen' && labels.includes('已顶替')) {
     return { ok: true, action: 'none', reason: `issue #${issue} 带「已顶替」标签（人工拍过），不弹回`, issue, pr: number };
   }

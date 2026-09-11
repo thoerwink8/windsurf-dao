@@ -13,7 +13,7 @@
 // readTreeHead / registry）全注入，测试不碰真服务。跨厂闸复用 assertCrossVendor（照旧）。
 
 import { analyzeGithubReviews } from '../review-state.mjs';
-import { EXECUTION_FINISHED, sessionStateOf } from '../execution-states.mjs';
+import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf } from '../execution-states.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
@@ -38,7 +38,7 @@ import { repoPrKey } from './repo.mjs';
  * 所以从正典里**显式减去「干成了」的三个词**，而不是另抄一份清单——
  * 正典加新终态时这里自动跟上，不会再漂。
  */
-const DEAD_PHASES = new Set([...EXECUTION_FINISHED].filter((p) => !['done', 'completed', 'complete'].includes(p)));
+const DEAD_PHASES = new Set([...EXECUTION_FINISHED].filter((p) => !EXECUTION_SUCCEEDED.has(p)));
 
 // ── 纯判官 ────────────────────────────────────────────────────────────────────
 
