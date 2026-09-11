@@ -1679,6 +1679,16 @@ async function cmdDispatchMirasim(args, routing, gate) {
   const isolation = judgeTestExecutorIsolation(process.env);
   if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
 
+  // The Mirasim path bypasses legacy post-launch label stamping. Fill the
+  // selected task type before starting, otherwise a later pr-sync-labels
+  // refuses to merge a fully reviewed PR. Existing declared types win.
+  if (args.issue && !(disambiguation.labels || []).some(n => n.startsWith('type/'))) {
+    const labels = stampIssueLabels({ issue: args.issue, role: gate?.role,
+      preserveType: true, runGh: ghRunnerForTarget(targetRepo, { role: 'marshal' }),
+      writeIssue: applyIssueWrite, repo: ghRepo || 'thoerwink8/windsurf-dao', host: 'dispatch-mirasim' });
+    if (!labels.ok) fail(`派工类型未写入，暂不起工人：${labels.error}`, { executor: 'mirasim' });
+  }
+
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
   catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, ghRepo: ghRepo || null, branch }); }
@@ -1740,7 +1750,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
     reviewer: args.reviewer ?? null,
     mergePolicy: (gate && gate.mergePolicy) || 'auto',
     ledgerWritten: !!(ledger && ledger.ok),
-    note: '会话即卡：交卷=PR 存在+判据绿（#880 卡 F）；GitHub 侧 label/评论未接（降级项，不断链）',
+    note: '有署名的任务在开工前核实类型；交卷仍需 PR 和验证结果，启动成功不等于完成',
   });
 }
 
