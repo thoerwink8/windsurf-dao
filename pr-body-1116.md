@@ -21,7 +21,7 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js` → 880 绿。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js` → 897 绿。
 
 ## 进展
 
@@ -50,6 +50,7 @@
 - [x] 本轮跟上 origin/master（#1129 满载换厂 + #1108 看板 v0 + 余量闸改量真 CPU）。冲突 0。换厂腿 `planReviewerOnCapacityDeath` 接在 `resolveReviewerFromPr` 之后：点名来自 PR 自己的 reviewer/*，不读 issue。注释里「issue 标签」改成「PR 标签」。相关测试 1073 绿。
 - [x] 本轮跟上 origin/master（v2.4.0 / #1188 已停工人不再占位）。冲突四处：`worker-done` 留 `--repo` 射程并先账本打标；`reviewer-create` 帮助文案自读 PR label；指挥官缺标补 PR 自己的标签、补不上报帅不产死动作。合入后 master 把报帅话面写回「署名 issue 上取不到 reviewer/」——改成指 PR，并钉断言不许再教从 issue 反推。相关测试 880 绿。
 - [x] 本轮再跟上 origin/master（#1146 skills 装载面自愈 + #1155 .git 属主闸）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1146 +3 叠成 151。
+- [x] 本轮跟上 origin/master（#1199 分支保护读应用凭据）。冲突 0；选型路仍只读 PR label。相关测试 897 绿。
 
 ## 机制判定
 
