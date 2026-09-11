@@ -676,7 +676,13 @@ test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', a
     collectUnitDriftPairs,
     classifyUnitDrift,
     classifyProbeExecStart,
+    parseExecStartArgv,
+    probeScriptFromExecStart,
   } = await import('../scripts/server-check.mjs');
+  const expectedScript = probeScriptFromExecStart(
+    readFileSync(join(HERE, '..', 'host', 'machine', 'systemd', 'gw-remote-probe.service'), 'utf8'),
+  );
+  assert.equal(expectedScript, '/srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs');
 
   await t.test('正文对、drop-in 把日历改走 → red（只读 FragmentPath 会绿）', () => {
     const repo = '[Timer]\nOnCalendar=*:09/30\n';
@@ -746,6 +752,7 @@ test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', a
   await t.test('活 ExecStart 指向 ~/bin/gw-remote-probe.mjs → red（仓内文件锁不够）', () => {
     const r = classifyProbeExecStart({
       liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
     });
     assert.equal(r.state, 'red');
     assert.match(r.detail, /home\/orca\/bin\/gw-remote-probe/);
@@ -755,23 +762,79 @@ test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', a
   await t.test('活 ExecStart 走仓内脚本 → ok', () => {
     const r = classifyProbeExecStart({
       liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
     });
     assert.equal(r.state, 'ok');
     assert.equal(r.skipped, undefined);
   });
 
+  await t.test('仓外同名路径 /tmp/scripts/gw-remote-probe.mjs → red（子串匹配会假绿）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 仓外同名路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('误导注释含仓内路径、实际目标是 /tmp/gw-remote-probe.mjs → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: [
+        '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+        'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+      ].join('\n'),
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 实际目标仓外、旁注含仓内路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/gw-remote-probe.mjs ; ignore_errors=no } # scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('解析 ExecStart：注释不算，取最后一条未注释行', () => {
+    const argv = parseExecStartArgv([
+      '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+      'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+    ].join('\n'));
+    assert.deepEqual(argv, ['/usr/bin/node', '/tmp/gw-remote-probe.mjs']);
+    assert.equal(
+      probeScriptFromExecStart('ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }'),
+      '/tmp/scripts/gw-remote-probe.mjs',
+    );
+  });
+
   await t.test('没装时本格不发言（漂移闸去红）', () => {
-    const r = classifyProbeExecStart({ liveExecStart: null });
+    const r = classifyProbeExecStart({ liveExecStart: null, expectedScript });
     assert.equal(r.state, 'ok');
     assert.equal(r.skipped, true);
   });
 
-  await t.test('⑳ 取数读 .d，并锁活 ExecStart', () => {
+  await t.test('⑳ 取数读 .d，并锁活 ExecStart 解析 argv', () => {
     const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
     assert.match(src, /collectUnitDriftPairs/);
     assert.match(src, /\$\{name\}\.d/);
     assert.match(src, /#1164 活 ExecStart/);
     assert.match(src, /classifyProbeExecStart/);
+    assert.match(src, /parseExecStartArgv/);
+    assert.match(src, /expectedScript/);
+    assert.doesNotMatch(src, /!s\.includes\(PROBE_EXEC_EXPECTED\)/,
+      '不许再对整段 liveExecStart 做子串包含');
   });
 });
 

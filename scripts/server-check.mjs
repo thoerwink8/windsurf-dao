@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { delimiter as PATH_DELIMITER, dirname, join, resolve } from 'node:path';
+import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
@@ -1030,26 +1030,85 @@ export function classifyUnitDrift(pairs) {
 }
 
 const PROBE_EXEC_FORBIDDEN = '/home/orca/bin/gw-remote-probe.mjs';
-const PROBE_EXEC_EXPECTED = 'scripts/gw-remote-probe.mjs';
+const PROBE_SCRIPT_NAME = 'gw-remote-probe.mjs';
+
+function stripExecPrefixes(cmd) {
+  return String(cmd).replace(/^[-+@!:]+/, '');
+}
+
+function splitArgv(cmd) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|[^\s]+/g;
+  const s = String(cmd).trim();
+  if (!s) return null;
+  let m;
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[0]);
+  return out.length ? out : null;
+}
+
+/** 从 `systemctl show -p ExecStart` 或单元正文抽出 argv。注释行不算。 */
+export function parseExecStartArgv(text) {
+  const s = String(text ?? '');
+  const show = s.match(/argv\[\]=([^;]*?)\s*;/);
+  if (show) return splitArgv(show[1].trim());
+  let last = null;
+  for (const line of s.split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    const m = line.match(/^\s*ExecStart\s*=\s*(.*)$/);
+    if (m && m[1].trim()) last = stripExecPrefixes(m[1].trim());
+  }
+  if (last) return splitArgv(last);
+  return null;
+}
+
+/** 活 ExecStart 真正要跑的脚本路径（未 resolve）。解析失败返回 null。 */
+export function probeScriptFromExecStart(text) {
+  const argv = parseExecStartArgv(text);
+  if (!argv || !argv.length) return null;
+  const exe = basename(stripExecPrefixes(argv[0]));
+  let raw;
+  if (exe === PROBE_SCRIPT_NAME) raw = argv[0];
+  else if (exe === 'node' || exe === 'nodejs') raw = argv[1];
+  else raw = argv.find((a) => basename(a) === PROBE_SCRIPT_NAME);
+  if (raw == null || raw === '') return null;
+  return raw;
+}
+
+function resolvedProbeScript(p) {
+  if (p == null || p === '') return null;
+  const s = String(p);
+  // 相对路径跟的是检查进程 cwd，不是单元 WorkingDirectory——不当仓内脚本。
+  if (!isAbsolute(s)) return null;
+  return resolve(s);
+}
 
 /** 活体样本：机器上的 ExecStart 不是仓内脚本就红。仓内文件锁不够——#967 合进仓后机器仍跑 ~/bin/gw-remote-probe.mjs。
- * `liveExecStart == null` 表示本格不发言（没装由漂移闸去红）。 */
-export function classifyProbeExecStart({ liveExecStart } = {}) {
+ * 必须解析 argv 并跟 `expectedScript`（仓内单元正文里的绝对路径）比，不能对整段做子串包含：
+ * `/tmp/scripts/gw-remote-probe.mjs` 或注释里出现仓内路径都会把子串匹配骗绿（#1164 审官 P1）。
+ * `liveExecStart == null` 表示本格不发言（没装由漂移闸去红）。
+ * 期望路径从仓内单元解析（机器主树），不拿当前 worktree 的 REPO_ROOT。 */
+export function classifyProbeExecStart({ liveExecStart, expectedScript } = {}) {
   if (liveExecStart == null) return { state: OK, skipped: true, detail: '' };
-  const s = String(liveExecStart);
-  if (s.includes(PROBE_EXEC_FORBIDDEN)) {
+  const expected = resolvedProbeScript(expectedScript);
+  if (!expected) {
+    return { state: UNKNOWN, detail: '没给期望脚本绝对路径——没查成' };
+  }
+  const actualRaw = probeScriptFromExecStart(liveExecStart);
+  const actual = resolvedProbeScript(actualRaw);
+  if (actual && actual === expected) {
+    return { state: OK, detail: 'gw-remote-probe ExecStart 走仓内脚本' };
+  }
+  const shown = actual || actualRaw || String(liveExecStart).slice(0, 180);
+  if (actual && actual === resolve(PROBE_EXEC_FORBIDDEN)) {
     return {
       state: RED,
       detail: `gw-remote-probe.service 活 ExecStart 仍指向仓外旧脚本 ${PROBE_EXEC_FORBIDDEN}。装：sudo bash scripts/install-gw-remote-probe.sh`,
     };
   }
-  if (!s.includes(PROBE_EXEC_EXPECTED)) {
-    return {
-      state: RED,
-      detail: `gw-remote-probe.service 活 ExecStart 不是仓内脚本（要含 ${PROBE_EXEC_EXPECTED}，实际：${s.slice(0, 180)}）。装：sudo bash scripts/install-gw-remote-probe.sh`,
-    };
-  }
-  return { state: OK, detail: 'gw-remote-probe ExecStart 走仓内脚本' };
+  return {
+    state: RED,
+    detail: `gw-remote-probe.service 活 ExecStart 不是仓内脚本（要 ${expected}，实际：${shown}）。装：sudo bash scripts/install-gw-remote-probe.sh`,
+  };
 }
 
 function checkUnitDrift() {
@@ -1063,16 +1122,21 @@ function checkUnitDrift() {
   const drift = classifyUnitDrift(pairs);
   const probe = pairs.find((p) => p.name === 'gw-remote-probe.service');
   let liveExecStart = null;
+  let expectedScript = null;
   // #1164 活 ExecStart：systemctl show，失败则退回有效单元正文
   if (probe && !probe.unreadable && probe.live != null) {
     const shown = run('systemctl', ['show', 'gw-remote-probe.service', '-p', 'ExecStart'], { timeout: 8000 });
     liveExecStart = (shown.probed && shown.code === 0 && String(shown.stdout || '').trim())
       ? String(shown.stdout)
       : probe.live;
+    expectedScript = probe.repo ? probeScriptFromExecStart(probe.repo) : null;
   }
-  const exec = classifyProbeExecStart({ liveExecStart });
+  const exec = classifyProbeExecStart({ liveExecStart, expectedScript });
   if (exec.state === RED) {
     return { state: RED, detail: drift.state === RED ? `${drift.detail}；${exec.detail}` : exec.detail };
+  }
+  if (exec.state === UNKNOWN && !exec.skipped) {
+    return { state: UNKNOWN, detail: drift.state === RED ? `${drift.detail}；${exec.detail}` : exec.detail };
   }
   return drift;
 }
@@ -1360,17 +1424,34 @@ function selfTest() {
   if (leftoverDropIn.state !== RED || !/gw-remote-probe\.timer/.test(leftoverDropIn.detail)) {
     failures.push(`正文对但 drop-in 改日历应判红，实际 ${leftoverDropIn.state}：${leftoverDropIn.detail}`);
   }
+  const expectedProbe = '/srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs';
   const binExec = classifyProbeExecStart({
     liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+    expectedScript: expectedProbe,
   });
   if (binExec.state !== RED || !/home\/orca\/bin/.test(binExec.detail)) {
     failures.push(`活 ExecStart 指 ~/bin/gw-remote-probe.mjs 应判红，实际 ${binExec.state}：${binExec.detail}`);
   }
   const inRepoExec = classifyProbeExecStart({
     liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+    expectedScript: expectedProbe,
   });
   if (inRepoExec.state !== OK || inRepoExec.skipped) {
     failures.push(`活 ExecStart 走仓内脚本应 ok，实际 ${inRepoExec.state}：${inRepoExec.detail}`);
+  }
+  const outsideSameName = classifyProbeExecStart({
+    liveExecStart: 'ExecStart=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs',
+    expectedScript: expectedProbe,
+  });
+  if (outsideSameName.state !== RED || !/\/tmp\/scripts/.test(outsideSameName.detail)) {
+    failures.push(`仓外同名路径应判红，实际 ${outsideSameName.state}：${outsideSameName.detail}`);
+  }
+  const commentLies = classifyProbeExecStart({
+    liveExecStart: '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs\nExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs\n',
+    expectedScript: expectedProbe,
+  });
+  if (commentLies.state !== RED || !/\/tmp\/gw-remote-probe/.test(commentLies.detail)) {
+    failures.push(`误导注释应判红，实际 ${commentLies.state}：${commentLies.detail}`);
   }
 
   if (failures.length) {
