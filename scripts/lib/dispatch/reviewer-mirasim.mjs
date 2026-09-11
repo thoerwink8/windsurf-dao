@@ -13,6 +13,7 @@
 // readTreeHead / registry）全注入，测试不碰真服务。跨厂闸复用 assertCrossVendor（照旧）。
 
 import { analyzeGithubReviews } from '../review-state.mjs';
+import { EXECUTION_FINISHED, sessionStateOf } from '../execution-states.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
@@ -20,8 +21,24 @@ import { judgeAgentRoute } from '../executor-binding.mjs';
 import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
 import { repoPrKey } from './repo.mjs';
 
-/** readSession 回的 phase 里代表「这条会话已经废了」的那几个。废了才准新建，别的一律复用。 */
-const DEAD_PHASES = new Set(['error', 'failed', 'aborted', 'cancelled', 'canceled']);
+/**
+ * readSession 回的 phase 里代表「这条会话**废了**、必须换一个」的那几个。
+ *
+ * 注意与 `EXECUTION_FINISHED` 的区别（别把两者混成一个）：
+ * 终态 = 「结束了」；废了 = 「结束了但没干成事」。**done 是终态但不是废**——
+ * 它把审完了，复用它是「一 PR 一审官」的本意；`judgeReviewerSessionReuse` 的用例
+ * 明确钉着 `phase:'done' → reuse:true`。
+ *
+ * 2026-09-11：原来手打 5 个词（error/failed/aborted/cancelled/canceled），
+ * **漏了 stopped / incomplete / gone / rejected**——那四个正是本机最常见的死法
+ * （实测登记里 stopped 16 条、incomplete 1 条、gone 1 条、rejected 1 条）。
+ * 漏判的后果不是「多起一个会话」，是**把 PR 锁死在一个死审官上**：
+ * 判成「还能复用」→ 永远不新建 → 那个 PR 永远等不到判定。
+ *
+ * 所以从正典里**显式减去「干成了」的三个词**，而不是另抄一份清单——
+ * 正典加新终态时这里自动跟上，不会再漂。
+ */
+const DEAD_PHASES = new Set([...EXECUTION_FINISHED].filter((p) => !['done', 'completed', 'complete'].includes(p)));
 
 // ── 纯判官 ────────────────────────────────────────────────────────────────────
 
@@ -84,14 +101,17 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
   if (view.missing === true) {
     return { reuse: false, sessionKey: key, checked: true, why: `会话 ${key} 服务端查不到，登记失效 → 可新建：${view.why || ''}`.trim() };
   }
-  const phase = view.phase == null ? '' : String(view.phase).trim().toLowerCase();
-  const runState = view.runState == null ? '' : String(view.runState).trim().toLowerCase();
-  // #1056：runState incomplete / incomplete 标记不是在役。phase=done 只说明那一轮结束了，
+  // 状态词统一走正典。view 有**两种形状**：快照路给 phase（+incomplete 标记），
+  // 清单路给 state/phase。各写一份兜底链必然漏（本晚的病），所以两处都经 sessionStateOf。
+  const phase = sessionStateOf(view) || '';
+  // #1056：incomplete 不是在役。phase=done 只说明那一轮结束了，
   // 会话自己已经卡死（Selected model is at capacity / 30 分钟计时）。复用 = 把 PR 锁死在死审官上。
-  if (view.incomplete === true || phase === 'incomplete' || runState === 'incomplete') {
+  // 兜底 `view.incomplete === true`：快照路的 incomplete 标记比 phase 更权威（它标的是
+  // 「收尾了但没跑完」），而那时 phase 可能已经是 done。
+  if (view.incomplete === true || phase === 'incomplete') {
     return {
       reuse: false, sessionKey: key, checked: true,
-      why: `会话 ${key} runState=incomplete（一轮卡死，不是在役）→ 可新建`,
+      why: `会话 ${key} phase=incomplete（一轮卡死，不是在役）→ 可新建`,
     };
   }
   if (phase && DEAD_PHASES.has(phase)) {

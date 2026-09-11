@@ -12,7 +12,10 @@ import {EXECUTION_FINISHED,EXECUTION_RESERVED} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 
-const TERMINAL = new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','auth_required','unsupported_interaction']);
+// 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
+// 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
+// 本晚第 3 处手打副本；现在全仓只留正典一处。
+const TERMINAL = EXECUTION_FINISHED;
 const wait = ms => new Promise(r=>setTimeout(r,ms));
 const defaultProfilesFile = new URL('../../docs/execution-profiles.json',import.meta.url);
 export function loadExecutionProfiles(file=process.env.DAO_EXECUTION_PROFILES || defaultProfilesFile) {

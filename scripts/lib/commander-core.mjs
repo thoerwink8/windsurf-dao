@@ -24,6 +24,7 @@
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
+import { sessionStateOf } from './execution-states.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
@@ -1380,7 +1381,10 @@ function collectCandidates(situation) {
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
-    const raw = String((s && (s.state || s.runState || s.driverState)) || '').toLowerCase();
+    // 这里的 s 来自 execution-sessions.mjs，已经是**归一后**的形状（字段是 state），
+    // 所以读 `state` 本来就对。改成走正典（sessionStateOf）是为了统一入口：
+    // 每个消费者各写一份兜底链是本晚的病根，写对一次不代表下次改形状时还跟着改。
+    const raw = sessionStateOf(s) || '';
     if (raw !== 'incomplete') continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;

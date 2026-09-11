@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { dispatchQueueDir } from '../dispatch-queue.mjs';
-import { EXECUTION_FINISHED, EXECUTION_RESERVED } from '../execution-states.mjs';
+import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
@@ -356,17 +356,15 @@ export function countLiveReviewers({ records, sessions } = {}) {
     const s = byKey.get(key);
     if (!s) continue;                                   // 名单里没有 = 已经不在了
     // 2026-09-11 实咬：这里原来只读 `s.runState`，而执行运行时给的会话名单里
-    // **根本没有 runState 这个字段**（字段是 state/phase，见 mirasim-runtime 的
-    // listSessions 行）。于是 phase 恒为空串 → 永远命不中终态 →
-    // **每一条登记记录都被算成「在役审官」**，实测 29 条登记数出 28 个在役，
-    // 上限 3 永久吃满，复审票一张都拉不动（held 恒 4）。
-    // 现场：7 张 PR 卡在「当前 head 零判定」，复审票在队列里躺了 5 轮。
+    // **根本没有这个字段**（真字段是 state/phase，见 mirasim-runtime 的 listSessions 行）。
+    // 于是 phase 恒为空串 → 永远命不中终态 → **每一条登记记录都被算成「在役审官」**，
+    // 实测 29 条登记数出 28 个在役，上限 3 永久吃满，复审票一张都拉不动。
     //
-    // 仓里别处早就这么兜底了（commander-core `s.state || s.runState || s.driverState`、
-    // execution-runtime `hit.runState || hit.phase`），只有这一处漏了。
-    const raw = s.runState ?? s.state ?? s.phase ?? s.driverState;
-    const phase = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    // 字段名不再逐处兜底——全仓统一走正典的 sessionStateOf（那一处写明了三套词的优先级）。
+    // 逐处写 `a ?? b ?? c` 正是本晚的病：每个消费者各写一份，写漏一处就是一次静默失效。
+    const phase = sessionStateOf(s) || '';
     if (!occupiesReviewerSlot({ phase, updatedAt: s.updatedAt, now: Date.now() })) continue;
+    // 带死因的那一针已经废了（#1121 同一判据），也不占位——否则残壳会把上限吃满，
     // 带死因的那一针已经废了（#1121 同一判据），也不占位——否则残壳会把上限吃满，
     // 队列永远拉不动，看起来像「一直满载」其实一个都没在跑。
     // 只认「死因」字样，不把任意非空 runDetail 当死——预览/进度字也会写进这一格。

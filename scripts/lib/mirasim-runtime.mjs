@@ -37,6 +37,7 @@ import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
+import { sessionStateOf } from './execution-states.mjs';
 import { loadBreaker } from './provider-health.mjs';
 import { ensureLocalLedger } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
@@ -351,12 +352,11 @@ export function readSessionView(snapshot) {
 export function metaView(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
   // 2026-09-11 实咬（与 review-pending 的 countLiveReviewers 同一个病）：
-  // 会话清单里**没有 `runState` 这个字段**——真字段是 state/phase
-  // （实测 listSessions 回的键：… state, phase, observedState …）。
-  // 只读 runState 会让 phase 恒为 null，于是「这条会话是什么态」永远是「不知道」。
+  // 这里原来只读 `m.runState`，而会话清单里**没有这个字段**（真字段是 state/phase）。
+  // 于是 phase 恒为 null——「这条会话什么态」永远是「不知道」。
   // 这里走的是**快照没回帧时的兜底路**，本来就只能靠清单说话，再读错字段就真的瞎了。
-  const raw = m.runState ?? m.state ?? m.phase ?? m.observedState;
-  const runState = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  // 字段名统一走正典（sessionStateOf），别在本函数里再写一份兜底链。
+  const runState = sessionStateOf(m) || '';
   return {
     phase: normPhase(runState),
     text: typeof m.preview === 'string' ? m.preview : '',
