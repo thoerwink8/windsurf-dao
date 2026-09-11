@@ -1,6 +1,6 @@
 // scripts/lib/commander-inventory.mjs —— 指挥官「盘点体检 + 自检 + 装机」（#800）
 //
-// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列。
+// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列/收件箱。
 // **它不自己修，只开单**——修要过用户放行（「盘点」与「自愈」的边界）。异常 → gh search 查重
 // （带 [commander-inventory] 标记）→ 开「待拍板」单；正常 → 静默。第二轮同一异常不重复开。
 //
@@ -13,6 +13,7 @@
 //   landing-empty   留。落地清单空状态列是文档债，不是 PR/单/树/票。
 //   stale-running   留。派工队列僵尸 .running，situation 不写这份队列。
 //   pending-surface 留。待消歧到时机是日历事件，不是「连续 N 轮同一状态」。
+//   inbox           #1171 加。收件箱从 hook / dao-check 挪到盘点：那两条腿没人定时跑。
 //
 // 每项三态：ok / red / unknown。unknown（探不到，如 Windows 无 /proc、无 journalctl）绝不开单，
 // 也绝不当 ok——「没查成」经 status 三态可见，不刷屏、不埋根因。
@@ -30,6 +31,7 @@ import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
 } from './pending-disambiguation.mjs';
 import { fieldsFromInventory } from './hub-ask.mjs';
+import { parseInboxDoc, assessInbox } from './inbox.mjs';
 
 const INV_MARKER = '[commander-inventory]';
 // 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
@@ -256,6 +258,60 @@ function checkStaleDispatchRunning({ ROOT, dryRun }) {
   return { state: 'ok', detail: '无僵尸 .running', key: 'stale-running' };
 }
 
+// 7.5 收件箱（#1171）：别的会话落在 docs/observations/ 的发现有没有人处置。
+// 判据复用 inbox.mjs 的 assessInbox，不另造第二套口径。git 查不成 → unknown，
+// 不许当成「没有未提交」（hook 当时就这么写；dao-check 那版 git 失败当空，是搬的时候要丢掉的病）。
+export function judgeInbox(assessed) {
+  const key = 'inbox';
+  if (!assessed || assessed.unscanned) {
+    const why = (assessed && Array.isArray(assessed.lines) && assessed.lines[0]) || '收件箱没查成';
+    return { state: 'unknown', key, detail: `${why}——不是「没有新东西」` };
+  }
+  if (assessed.mode === 'block') {
+    const pending = Array.isArray(assessed.pending) ? assessed.pending.length : 0;
+    const overdue = Array.isArray(assessed.overdue) ? assessed.overdue.length : 0;
+    const untracked = Array.isArray(assessed.untracked) ? assessed.untracked.length : 0;
+    return {
+      state: 'red', key,
+      detail: `收件箱要先处置：${pending} 条未处置（超时 ${overdue}，未提交 ${untracked}）`,
+      plain: {
+        what: `收件箱有 ${pending} 条发现没人处理${overdue ? `，其中 ${overdue} 条已经超过一天` : ''}${untracked ? `，还有 ${untracked} 条写了没提交` : ''}`,
+        impact: '别的会话留的洞会继续堆着，没有人把它变成单子',
+        plan: '开一张待拍板单，你放行后按每条观察开单或标处置',
+      },
+    };
+  }
+  if (assessed.mode === 'notice') {
+    const pending = Array.isArray(assessed.pending) ? assessed.pending.length : 0;
+    return { state: 'ok', key, detail: `收件箱有 ${pending} 条未处置（未到硬闸）` };
+  }
+  return { state: 'ok', key, detail: '收件箱无未处置' };
+}
+
+export function checkInbox({ ROOT }) {
+  const key = 'inbox';
+  const dir = join(ROOT, 'docs', 'observations');
+  if (!existsSync(dir)) return { state: 'ok', key, detail: 'docs/observations 不在——本仓没这条通道' };
+  let docs = [];
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.md')) continue;
+      const p = join(dir, name);
+      docs.push(parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs }));
+    }
+  } catch (e) {
+    return { state: 'unknown', key, detail: `收件箱没查成：读不了 docs/observations（${String(e.message || e).slice(0, 80)}）——不是「没有新东西」` };
+  }
+  const g = spawnSync('git', ['-C', ROOT, 'ls-files', '--others', '--exclude-standard', '--', 'docs/observations'],
+    { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+  if (g.error || g.status !== 0) {
+    return { state: 'unknown', key, detail: `收件箱没查成：git 查未跟踪失败（${String(g.error?.message || g.stderr || g.status).slice(0, 80)}）——不是「没有新东西」` };
+  }
+  const untracked = String(g.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    .map((p) => p.split(/[/\\]/).pop());
+  return judgeInbox(assessInbox({ docs, untracked }));
+}
+
 // 8. 待消歧单到时机浮出水面（#876 ③）：扫 open 的「待消歧」单，正文/评论里「时机：#N 关闭后」
 //    引用的 #N 已关 → 提醒一条「到讨论时机了」。**只提醒不派工、不开单**（单本来就在，开新单是重复）。
 //    时机行缺失或 #N 读不到 → 没查成：不提醒、不报错，只落一行日志。
@@ -340,8 +396,9 @@ async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, 
     checkProbeJournal(),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
-    // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
-    // #1004 删掉 stale-pr 后这里一共 8 项（2026-09-10 加「升级换没换干净」）。
+    checkInbox({ ROOT }),
+    // 待消歧到时机必须仍是最后一项：下面 surface = checks[checks.length - 1]。
+    // #1004 删 stale-pr、#1171 加 inbox 后这里一共 9 项。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];
