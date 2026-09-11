@@ -1297,17 +1297,37 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
     assert.match(src, /hasLiveProcess/);
   });
 
-  it('进程没查成时三层都不删，且跳过发生在调用之前', () => {
-    assert.match(src, /进程面没查成，本轮不归档会话、不回收租约、不扫临时目录/);
-    const apply = src.slice(src.indexOf('final = applyBoardGcRemoves'));
-    const skipAt = apply.indexOf('进程面没查成');
+  it('进程没查成时工作树/会话/租约/孤儿都不删，且跳过发生在调用之前', () => {
+    assert.match(src, /进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('进程面没查成，本轮不删工作树');
+    const zombieAt = apply.indexOf('worktree-rm');
     const sessionAt = apply.indexOf('planSessionGc(');
     const leaseAt = apply.indexOf('planLeaseGc(');
     const orphanAt = apply.indexOf('planOrphanGc(');
     assert.notEqual(skipAt, -1, '找不到进程面没查成的跳过');
+    assert.match(src, /args.apply && jobs.length && procsOk/, '备份推送也要过进程闸，不许在查不清时改远端');
+    assert.equal(zombieAt > skipAt, true, 'worktree-rm 必须在跳过之后');
     assert.equal(sessionAt > skipAt, true, 'planSessionGc 必须在跳过之后');
     assert.equal(leaseAt > skipAt, true, 'planLeaseGc 必须在跳过之后');
     assert.equal(orphanAt > skipAt, true, 'planOrphanGc 必须在跳过之后');
+  });
+
+  it('登记层回收前也标 hasLiveProcess，活进程不许当死人清掉', () => {
+    const from = src.indexOf('const registryRecords');
+    const call = src.indexOf('judgeRegistryStuck(r');
+    assert.notEqual(from, -1, '找不到登记层名单');
+    assert.notEqual(call, -1, '驱动层必须真调 judgeRegistryStuck');
+    assert.equal(from < call, true);
+    assert.match(src.slice(from, call), /hasLiveProcess:\s*hasLiveCwd/);
+  });
+
+  it('hasLiveCwd：cwd 落在工作目录或其子路径 → 占用', async () => {
+    const { hasLiveCwd } = await import(CLI);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1/src', '/home/other']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-2', '/home/other']), false);
+    assert.equal(hasLiveCwd('', ['/wt/dao-1']), false);
   });
 
   it('删临时目录前过根前缀闸，逃出根外整条跳过', () => {

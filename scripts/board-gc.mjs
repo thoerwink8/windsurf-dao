@@ -116,6 +116,12 @@ function readProcCwds({ readdir = readdirSync, readlink = readlinkSync } = {}) {
   return { ok: true, cwds, resolved: cwds.length, total: pids.length };
 }
 
+/** cwd 落在工作目录里（本身或子路径）就算占用。 */
+function hasLiveCwd(wd, liveCwds) {
+  const w = String(wd || '').replace(/\/+$/, '');
+  return !!w && (liveCwds || []).some((cwd) => cwd === w || cwd.startsWith(w + '/'));
+}
+
 /** issue 表 → 已关闭编号的字符串集合（判据按字符串比，跟 refsOf 的产出对齐）。 */
 function closedRefsFrom(issueState) {
   const out = new Set();
@@ -424,7 +430,7 @@ function main() {
   // 「没查成」既不当在跑也不当没在跑。
   const procScan = scanSessionProcs();
   if (procScan.unscanned) {
-    console.error(`提示：会话进程没扫成（${procScan.error}）——本轮仅按记录与时间判活，不因此多清树`);
+    console.error(`提示：会话进程没扫成（${procScan.error}）——判决仍按记录与时间；--apply 时工作树/会话/租约/孤儿一律不删`);
   }
   // 「活着」= 判据说 active。silent / unscanned / done 都不算活着——
   // 特别是 done：干完的会话不该让它那张卡永远免死。
@@ -462,7 +468,8 @@ function main() {
   // 干跑一个 git 写动作都不许有——所以整段挂在 --apply 里，干跑只在报告里说「会推哪条」。
   let final = plan;
   const jobs = planSalvage(plan);
-  if (args.apply && jobs.length) {
+  const procsOk = procScan && procScan.ok && !procScan.unscanned;
+  if (args.apply && jobs.length && procsOk) {
     const results = new Map();
     for (const j of jobs) {
       const r = pushSalvage(j);
@@ -479,6 +486,10 @@ function main() {
   }
 
   if (args.apply) {
+    // 进程面没查成 → 工作树/会话/租约/孤儿本轮都不删（#1176：查不清时保留）。
+    if (!procsOk) {
+      console.error(`进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录：${(procScan && procScan.error) || 'unscanned'}`);
+    } else {
     const results = new Map();
     for (const z of final.zombies) {
       if (Array.isArray(z.derived) && z.derived.length) {
@@ -509,11 +520,6 @@ function main() {
     }
     final = applyBoardGcRemoves(final, results);
 
-    // 进程面没查成 → 会话/租约/孤儿本轮都不删（#1176：查不清时保留）。
-    const procsOk = procScan && procScan.ok && !procScan.unscanned;
-    if (!procsOk) {
-      console.error(`进程面没查成，本轮不归档会话、不回收租约、不扫临时目录：${(procScan && procScan.error) || 'unscanned'}`);
-    } else {
       // 顺手把过期会话目录归档（#1176）。复用上面已经扫过的 sessions 与 alive——
       // 会话名单那一趟本来就是全量遍历（2026-09-10 实测 60 条要 20 秒），
       // 再单开一个定时器读第二遍等于把最慢的一步跑两次。
@@ -548,9 +554,7 @@ function main() {
           .map((f) => {
             const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
             let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
-            const wd = String(d.workdir || '').replace(/\/+$/, '');
-            const hasLiveProcess = !!wd && liveCwds.some((cwd) => cwd === wd || cwd.startsWith(wd + '/'));
-            return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000, hasLiveProcess };
+            return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000, hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
           })
           .filter(Boolean);
         // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
@@ -558,7 +562,10 @@ function main() {
           .filter((f) => f.endsWith('.json'))
           .map((f) => {
             const full = join(process.env.HOME || '', '.dao', 'execution', 'sessions', f);
-            try { return { ...JSON.parse(readFileSync(full, 'utf8')), _file: full }; } catch { return null; }
+            try {
+              const d = JSON.parse(readFileSync(full, 'utf8'));
+              return { ...d, _file: full, hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
+            } catch { return null; }
           })
           .filter(Boolean);
         const staleRecords = registryRecords
@@ -661,4 +668,4 @@ const sameFile = (a, b) => {
 };
 if (sameFile(process.argv[1], HERE)) main();
 
-export { pushSalvage, removeTreeFallback, readProcCwds, listOrphanTmp, orphanTmpRoot };
+export { pushSalvage, removeTreeFallback, readProcCwds, listOrphanTmp, orphanTmpRoot, hasLiveCwd };

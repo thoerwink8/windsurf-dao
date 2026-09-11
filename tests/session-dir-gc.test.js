@@ -47,6 +47,16 @@ test('盘面没查成时 fail-closed，超时效也不删', () => {
   assert.equal(j.verdict, 'keep');
 });
 
+test('planSessionGc 盘面没查成 → 名单全留，文案不是「只按时效清」', () => {
+  const p = planSessionGc({
+    sessions: [sess({ updatedAtMs: now - 100 * H })],
+    now, boardScanned: false, closedRefs: new Set(),
+  });
+  assert.equal(p.remove.length, 0);
+  assert.match(p.detail, /本轮不删/);
+  assert.doesNotMatch(p.detail, /时效清/);
+});
+
 test('引用的单全部关闭就删', () => {
   const j = judgeSession(sess({ record: { workdir: 'dao-1145' } }), {
     closedRefs: new Set(['1145']), boardScanned: true, now,

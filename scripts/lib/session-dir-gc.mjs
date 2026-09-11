@@ -78,7 +78,7 @@ export function judgeSession(session, { closedRefs, boardScanned, now = Date.now
  *
  * @param {{sessions: Array, closedRefs: Set<string>, boardScanned: boolean}} input
  *   sessions 每项形如 {id, agent, dir, alive, updatedAtMs, record}
- *   boardScanned 为 false 表示这轮没拿到 GitHub 盘面——此时只靠时效清，不用单号判据。
+ *   boardScanned 为 false 表示这轮没拿到 GitHub 盘面——一律保留（fail-closed）。
  * @returns {{state:'ok'|'unknown', remove:Array, keep:Array, detail:string}}
  */
 export function planSessionGc({ sessions, closedRefs = new Set(), boardScanned = true, now = Date.now(), keepHours = DEFAULT_KEEP_HOURS } = {}) {
@@ -95,7 +95,7 @@ export function planSessionGc({ sessions, closedRefs = new Set(), boardScanned =
     const j = judgeSession(s, { closedRefs, boardScanned, now, keepHours });
     (j.verdict === 'remove' ? remove : keep).push({ ...s, why: j.why });
   }
-  const scope = boardScanned ? '' : '（盘面没查成，本轮只按时效清）';
+  const scope = boardScanned ? '' : '（盘面没查成，本轮不删）';
   return {
     state: 'ok',
     remove,
