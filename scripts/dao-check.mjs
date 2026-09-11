@@ -101,6 +101,11 @@
 //    缺 gh / 连摘要都 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
 //    strict 不在摘要里，live 盖不住「有人把 strict 拨成 true」——装闸脚本走完整 /protection。
 //    不造分发器：配置动作用 scripts/apply-branch-protection.mjs，一次一个仓。
+// ㉟ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
+//    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
+//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
+//    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
+//    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -158,6 +163,9 @@ import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
   collectManagedReposFromRoot, repoSlugFromRemote,
 } from './lib/branch-protection-check.mjs';
+import {
+  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, interpretFindRootOwned, DEFAULT_MANAGED_REPOS,
+} from './lib/git-ownership-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1183,6 +1191,56 @@ function checkRepoOwnership() {
   green('仓内属主：扫完 0 个 root 属主文件');
 }
 
+function findRootOwnedInGitDir(gitDir) {
+  return interpretFindRootOwned(spawnSync('find', [gitDir, '-user', 'root', '-print'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }));
+}
+
+function checkGitOwnershipSamples() {
+  const r = inspectGitOwnershipFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '.git 属主闸样本没查成' : '.git 属主闸样本对不上',
+      '恢复 tests/fixtures/git-ownership/{red,ok,empty}.json：红=点名 root 文件必须拦、绿必须过、仓不在必须没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`.git 属主闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkGitOwnershipLive() {
+  if (process.platform === 'win32') { skip('.git 属主：Windows 无 uid 概念，本项跳过'); return; }
+  const exists = (p) => existsSync(p);
+  const isDir = (p) => {
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
+  const statUid = (p) => statSync(p).uid;
+  const scans = DEFAULT_MANAGED_REPOS.map((repo) => scanGitRepo({
+    name: repo.name,
+    path: repo.path,
+    exists,
+    isDir,
+    statUid,
+    findRootOwned: findRootOwnedInGitDir,
+  }));
+  // 本机一台都没有（CI / 开发机 / 云 VM）→ SKIP 不是绿。分类器对「仓不在」仍判
+  // unscanned，单测钉那条；live 若因此 fail 会把 land 卡在「这台机器本来就不托管这两仓」。
+  if (scans.every((s) => s.exists === false)) {
+    skip('.git 属主：本机没有 /srv/projects 在管仓，本项没查成');
+    return;
+  }
+  const r = classifyGitOwnership(scans);
+  if (r.kind === 'ok') green(r.line);
+  else if (r.kind === 'skip') skip(r.line);
+  else fail(r.line, r.howToFix, r.evidence);
+}
+
 function checkInitiatives() {
   const file = join(ROOT, 'docs', 'initiatives.json');
   if (!existsSync(file)) { skip('西瓜清单：docs/initiatives.json 不在——本项没查成'); return; }
@@ -1845,6 +1903,8 @@ checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
 checkInbox();
 checkRepoOwnership();
+checkGitOwnershipSamples();
+checkGitOwnershipLive();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
