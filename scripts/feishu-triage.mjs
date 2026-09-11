@@ -72,17 +72,15 @@ import { formatBoardTable } from './lib/board-v0.mjs';
 import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
-import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { readGithubAsync, writeIssueAsync } from './lib/feishu-io.mjs';
 import { ghAs } from './lib/gh.mjs';
 import {
   isDailyAction, isDailyListPending, dailyCallbackResponse,
 } from './lib/feishu-daily-card.mjs';
 import {
-  MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent,
+  MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent, planMenuList,
 } from './lib/hub-pending.mjs';
 import { parsePolicy } from './lib/ask-gate.mjs';
-import { runMenuList } from './lib/feishu-hub-cycle.mjs';
-import { sendCardViaLark, sendTextViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
 
 export {
   buildHubCard, parseCardAction, cardCallbackResponse, buildDecidedHubCard, CHOICE_LABELS,
@@ -491,17 +489,12 @@ export function runGh(ghBin, args, { timeout = 60000 } = {}) {
   return { ok: r.status === 0, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
-export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh, applyWrite } = {}) {
-  const write = applyWrite || applyIssueWrite;
+export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run, applyWrite } = {}) {
+  const write = applyWrite || writeIssueAsync;
   // Read-only GitHub queries must use the same installation identity as the
   // write gateway.  The service deliberately has GH_CONFIG_DIR=/var/empty,
   // so a bare gh would always report "gh auth login" and turn the bot blind.
-  const read = run === runGh
-    ? (_bin, args, opts) => {
-      const r = ghAs('marshal', args, { maxBuffer: 64 * 1024 * 1024, timeout: opts?.timeout });
-      return { ok: r.ok, code: r.status, stdout: r.out || '', stderr: r.error || '' };
-    }
-    : run;
+  const read = run || (ghBin === 'gh' ? readGithubAsync : runGh);
   async function ghSearch(repo, query) {
     const r = await read(ghBin, ['search', 'issues', String(query), '--repo', repo, '--limit', '10', '--json', 'number,title,url']);
     if (!r.ok) throw new Error(`gh search 失败：${r.reason || r.stderr || r.code}`);
@@ -517,7 +510,7 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh,
   async function ghCreateIssue(repo, { title, body, labels = [], idempotency_key } = {}) {
     const key = String(idempotency_key || '').trim();
     if (!key) throw new Error('issue-gateway create 要 idempotency_key（群消息根 id 当键）');
-    const r = write({
+    const r = await write({
       action: 'issue_create',
       repo,
       title: String(title ?? ''),
@@ -534,7 +527,7 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh,
   async function ghComment(repo, number, body, { idempotency_key } = {}) {
     const key = String(idempotency_key || '').trim();
     if (!key) throw new Error('issue-gateway comment 要 idempotency_key');
-    const r = write({
+    const r = await write({
       action: 'issue_comment',
       repo,
       issue: number,
@@ -755,7 +748,7 @@ export function cardActionAck(response) {
 /** #875：card.action.trigger → 3 秒内 toast+卡片回包；随后落 gh 评论（不挡回包）。
  *  整条回包+组评论不打网：名字只用事件里的 operator.user_name / open_id。
  *  通讯录挂死不许进这条路径（#952 审官疑问：回包前 await userName 会拖过 3 秒闸）。 */
-export async function handleCardAction(event, { store, deps } = {}) {
+export async function handleCardAction(event, { store, deps, commitState = true } = {}) {
   const parsed = parseCardAction(event);
   if (!parsed) return null;
   // 日报卡按钮：toast 一句，不写 GitHub、不改待拍板卡、不记 hubPending。
@@ -776,7 +769,7 @@ export async function handleCardAction(event, { store, deps } = {}) {
   const response = cardCallbackResponse(parsed, { pending, now, who });
   const ack = cardActionAck(response);
 
-  if (response.kind === 'ok' && parsed.messageId && store?.hubPending) {
+  if (commitState && response.kind === 'ok' && parsed.messageId && store?.hubPending) {
     const prev = pending || { repo: parsed.repo, number: parsed.number };
     store.hubPending[parsed.messageId] = { ...prev, decided: response.decided };
   }
@@ -820,13 +813,15 @@ export async function liveCardAction(event, {
   store, deps, client = null, defer = setImmediate, groups, creds,
 } = {}) {
   try {
-    const result = await handleCardAction(event, { store, deps });
-    const ack = result?.ack || cardActionAck({
+    const result = await handleCardAction(event, { store, deps, commitState: false });
+    const ack = result?.response?.kind === 'ok'
+      ? { toast: { type: 'info', content: '已收到选择，正在保存到 GitHub；保存成功后卡片会显示已拍板。' } }
+      : result?.ack || cardActionAck({
       toast: { type: 'error', content: '没记下' },
       card: buildHubCard({}),
     });
-    defer(() => {
-      applyCardActions(result, { store, deps, client }).catch((e) => {
+    defer(async () => {
+      await applyCardActions(result, { store, deps, client }).catch((e) => {
         log({ type: 'error', message: String(e.message || e) });
       });
       // 「看待拍板」真正去拉 GitHub / 发卡，必须在 3 秒回包之后——打网不许挡 toast。
@@ -853,10 +848,25 @@ export async function applyCardActions(result, { store, deps, client = null } = 
         await deps.ghComment(a.repo, a.number, a.body, {
           idempotency_key: a.idempotency_key,
         });
+        const messageId = result.parsed?.messageId;
+        if (messageId && store?.hubPending && result.response?.decided) {
+          const saved = { ...(store.hubPending[messageId] || {}), repo: a.repo, number: a.number,
+            decided: result.response.decided };
+          store.hubPending[messageId] = saved;
+          store.save?.();
+          if (client?.updateCard) {
+            try { await client.updateCard(messageId, buildHubCard(saved)); }
+            catch (e) { warn(`决定已保存，卡片更新失败：${e.message}`); }
+          }
+        }
         log({ type: 'action', action: a });
       } catch (e) {
         warn(`拍板评论写失败（${a.repo}#${a.number}）：${e.message}`);
         log({ type: 'action-error', actionType: 'gh_comment', message: String(e.message || e) });
+        if (client?.reply && result.parsed?.messageId) {
+          try { await client.reply(result.parsed.messageId, '这次选择还没有保存到 GitHub，请重试；尚未按这次点击执行。'); }
+          catch (notifyError) { warn(`拍板失败通知未送达：${notifyError.message}`); }
+        }
       }
     } else if (a.type === 'card_followup' && a.rootId && a.text) {
       if (client?.reply) {
@@ -907,48 +917,64 @@ export function listPendingGithub(repo, { ghBin = process.env.FEISHU_GH || 'gh',
   });
 }
 
-export async function handleListPending({ groups, store, creds, chatId, client = null }) {
+const pendingRefreshes = new WeakMap();
+export function handleListPending(options) {
+  const { store, chatId, creds } = options;
+  const key = chatId || creds?.hubChatId || '';
+  if (!store) return refreshPending(options);
+  let active = pendingRefreshes.get(store);
+  if (!active) { active = new Map(); pendingRefreshes.set(store, active); }
+  if (active.has(key)) return active.get(key);
+  const pending = refreshPending(options).finally(() => active.delete(key));
+  active.set(key, pending);
+  return pending;
+}
+
+async function refreshPending({ groups, store, creds, chatId, client = null, read = readGithubAsync }) {
   const repo = hubRepoFromGroups(groups);
-  const github = listPendingGithub(repo);
+  const r = await read('gh', listPendingIssueArgs(repo));
+  const github = githubFromIssueList({ ok: r.ok, out: r.stdout, error: r.stderr, repo });
   const policy = loadAskPolicyDoc();
   const target = chatId || creds?.hubChatId || '';
-  const bumpCard = ({ messageId, card, issue }) => {
-    if (!messageId || !card) return { ok: false, error: '没有要更新的卡' };
-    const updated = updateCardViaLark({ messageId, card });
-    if (updated?.ok) return updated;
-    // A historical hubPending entry may point to a text fallback or a deleted
-    // card.  Do not leave the user with only the count message: publish a new
-    // interactive card and replace the stale mapping.
-    const replacement = issueCard({ issue });
-    if (replacement?.ok) return { ...replacement, replaced: true, previousError: updated?.error };
-    return { ok: false, error: `旧卡更新失败：${updated?.error || '未知'}；新卡发送失败：${replacement?.error || '未知'}` };
-  };
-  const issueCard = (a) => {
-    if (!target) return { ok: false, error: '没送进群：缺群号' };
-    const card = buildHubCard(a.issue || {});
-    const r = sendCardViaLark({ chatId: target, card });
-    if (r && r.ok && store?.hubPending && a.issue) {
-      store.hubPending[r.messageId] = {
-        repo: a.issue.repo, number: a.issue.number, title: a.issue.title,
-        url: a.issue.url, what: a.issue.title,
-      };
-      if (store.save) store.save();
+  const plan = planMenuList({ github, hubPending: store?.hubPending, policy, repo });
+  const results = [];
+  for (const a of plan.actions || []) {
+    // A decision can arrive while the network request above is pending.
+    const previous = store?.hubPending?.[a.messageId];
+    if (previous?.decided) continue;
+    const card = buildHubCard({ ...(a.pending || {}), ...(a.issue || {}) });
+    let result;
+    try {
+      if (!client || !target) throw new Error('飞书发送连接不可用');
+      let updated = false;
+      if (a.kind === 'bump') {
+        try { await client.updateCard(a.messageId, card); updated = true; }
+        catch { /* The old message may be deleted. Publish a replacement. */ }
+      }
+      if (updated) result = { ok: true, messageId: a.messageId };
+      else {
+        const messageId = await client.sendCard(target, card);
+        if (!messageId) throw new Error('飞书没有返回卡片消息号');
+        if (store?.hubPending) {
+          store.hubPending[messageId] = { ...a.pending, ...a.issue, chatId: target };
+          if (a.messageId) delete store.hubPending[a.messageId];
+          store.save?.();
+        }
+        result = { ok: true, messageId, replaced: a.kind === 'bump' };
+      }
+    } catch (e) { result = { ok: false, error: String(e.message || e) }; }
+    results.push({ kind: a.kind, key: a.key, result });
+    // Restore the decided view if the user clicked during this update.
+    if (previous?.decided && result.ok) {
+      try { await client.updateCard(result.messageId, buildHubCard({ ...previous, decided: previous.decided })); }
+      catch (e) { warn(`拍板后的卡片更新失败：${e.message}`); }
     }
-    return r;
-  };
-  const { plan, applied } = runMenuList({
-    github, hubPending: store?.hubPending, policy, repo, bumpCard, issueCard,
-  });
-  const text = plan.text || applied.text || '';
-  // A successful non-empty list also needs a reply.  Previously this only
-  // sent empty/error responses, so the menu click was processed (and logged)
-  // but the user saw nothing when pending items existed.
-  if (text && target) {
-    if (client?.sendText) {
-      try { await client.sendText(target, text); } catch (e) { warn(`看待拍板回执失败：${e.message}`); }
-    } else {
-      sendTextViaLark({ chatId: target, text });
-    }
+  }
+  const failed = results.filter(x => !x.result.ok).length;
+  const applied = { ok: !plan.unscanned && !failed, results };
+  const text = `${plan.text || ''}${failed ? `；其中 ${failed} 张卡片未发送成功，请稍后重试` : ''}`;
+  if (text && target && client?.sendText) {
+    try { await client.sendText(target, text); } catch (e) { warn(`看待拍板回执失败：${e.message}`); }
   }
   log({
     type: 'menu', eventKey: MENU_LIST_PENDING, empty: !!plan.empty, unscanned: !!plan.unscanned,
