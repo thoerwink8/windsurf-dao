@@ -912,9 +912,16 @@ export async function handleListPending({ groups, store, creds, chatId, client =
   const github = listPendingGithub(repo);
   const policy = loadAskPolicyDoc();
   const target = chatId || creds?.hubChatId || '';
-  const bumpCard = ({ messageId, card }) => {
+  const bumpCard = ({ messageId, card, issue }) => {
     if (!messageId || !card) return { ok: false, error: '没有要更新的卡' };
-    return updateCardViaLark({ messageId, card });
+    const updated = updateCardViaLark({ messageId, card });
+    if (updated?.ok) return updated;
+    // A historical hubPending entry may point to a text fallback or a deleted
+    // card.  Do not leave the user with only the count message: publish a new
+    // interactive card and replace the stale mapping.
+    const replacement = issueCard({ issue });
+    if (replacement?.ok) return { ...replacement, replaced: true, previousError: updated?.error };
+    return { ok: false, error: `旧卡更新失败：${updated?.error || '未知'}；新卡发送失败：${replacement?.error || '未知'}` };
   };
   const issueCard = (a) => {
     if (!target) return { ok: false, error: '没送进群：缺群号' };
@@ -943,7 +950,10 @@ export async function handleListPending({ groups, store, creds, chatId, client =
       sendTextViaLark({ chatId: target, text });
     }
   }
-  log({ type: 'menu', eventKey: MENU_LIST_PENDING, empty: !!plan.empty, unscanned: !!plan.unscanned, text });
+  log({
+    type: 'menu', eventKey: MENU_LIST_PENDING, empty: !!plan.empty, unscanned: !!plan.unscanned,
+    text, cards: (applied.results || []).map((x) => ({ kind: x.kind, ok: x.result?.ok === true, replaced: x.result?.replaced === true, error: x.result?.error })),
+  });
   return { inbound: null, replies: text ? [{ rootId: '', text }] : [], actions: plan.actions || [], plan, applied };
 }
 
