@@ -1571,15 +1571,21 @@ function brainStartCmd(pointer, title) {
     '--title', title || '指挥官大脑'];
 }
 
+export function buildBrainPointer({ situFile, target, why } = {}) {
+  return [
+    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
+    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile || '(本轮态势文件)'}，`,
+    `处置目标：${target}（${why}）。`,
+    '职责（2026-09-04 拍板「必须送达」，#1150 送达口改 mirasim）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 GitHub 评论（issue-gateway comment / gh-as worker 的 pr comment）或飞书 hub（hub-say）送达工人或审官推动闭环。不要调 dao.mjs send / notify / reviewer-attach——已退役，调用即拒。送不动时在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
+    '边界：只许调现役 dao.mjs 动词 + issue-gateway / gh 只读；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
+  ].join('');
+}
+
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
-  const pointer = action.pointer || [
-    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
-    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
-    `处置目标：${action.target}（${action.why}）。`,
-    '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
-    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
-  ].join('');
+  const pointer = action.pointer || buildBrainPointer({
+    situFile, target: action.target, why: action.why,
+  });
   const startCmd = brainStartCmd(pointer, action.title);
   if (dryRun) {
     say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}`);

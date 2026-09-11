@@ -17,8 +17,9 @@ describe('#826 身份消息失败不整树回滚', () => {
     const failed = S.planIdentityKeep({ identityOk: false, identityError: 'no_active_sender_terminal' });
     assert.ok(failed.ok && failed.keep === true && failed.rollback === false && failed.identityFailed === true,
       '失败必须保留树 → ' + JSON.stringify(failed));
-    assert.ok(/notify --from/.test(failed.warning) && /不回滚/.test(failed.warning),
-      '红项要提示补发 --from → ' + failed.warning);
+    assert.match(failed.warning, /不回滚/);
+    assert.match(failed.warning, /GitHub 评论/);
+    assert.match(failed.warning, /不要调 dao\.mjs notify/);
     const ok = S.planIdentityKeep({ identityOk: true });
     assert.ok(ok.ok && ok.identityFailed === false && ok.rollback === false,
       '成功不得标失败 → ' + JSON.stringify(ok));

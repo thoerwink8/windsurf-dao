@@ -270,10 +270,10 @@ describe('dao 闭环投递与结算', () => {
         && /判定绿/.test(skill) && /#677/.test(skill) && /派工时的常驻约定/.test(skill),
         '#677 口径唯一落点在 SKILL  →  global派工段=' + /## 派工时/.test(global) + ' skill判定绿=' + skill.includes('判定绿'));
     });
-    await t.test('notify 文档：普通投递 ≠ 结算；worker_done 才核 completed', () => {
-      assert.ok(/投递\*\*不是\*\*结算|普通 notify 验的是\*\*投递\*\*不是\*\*结算/.test(S.USAGE)
-        && /未结算/.test(S.USAGE) && /#551/.test(S.USAGE),
-        'notify 文档：普通投递 ≠ 结算；worker_done 才核 completed  →  ' + S.USAGE.slice(-500));
+    await t.test('USAGE 不再把 notify 写成可照抄入口', () => {
+      assert.match(S.USAGE, /notify[\s\S]*已退役/);
+      assert.doesNotMatch(S.USAGE, /^[ \t]+notify\s/m);
+      assert.match(S.USAGE, /GitHub 评论 \+ 飞书 hub/);
     });
     await t.test('deliverMessage 注释点明普通 ok:true ≠ 结算，worker_done 核 completed', () => {
       assert.ok(/不是结算/.test(deliverSrc) && /未结算/.test(deliverSrc) && /#551/.test(deliverSrc) && /completed/.test(deliverSrc),
@@ -392,9 +392,9 @@ describe('dao 闭环投递与结算', () => {
         '没查成 ≠ 已完工  →  ' + JSON.stringify(unscanned));
     });
 
-    await t.test('USAGE：worker-done 不结算；notify 不开下一跳', () => {
-      assert.ok(/#677：成功路径不结算/.test(S.USAGE) && /不开下一跳救人/.test(S.USAGE),
-        'USAGE #677  →  ' + S.USAGE.slice(S.USAGE.indexOf('worker-done --pr'), S.USAGE.indexOf('worker-done --pr') + 280));
+    await t.test('USAGE：worker-done 不结算，不开下一跳', () => {
+      assert.match(S.USAGE, /#677：成功路径不结算/);
+      assert.match(S.USAGE, /不开下一跳救人/);
     });
 
     await t.test('extractSoldierTerminal：terminal 为 null 时退到 handle', () => {

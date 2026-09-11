@@ -366,7 +366,7 @@ export function resolveIdentitySender({ explicitFrom, fallbackHandle, terminals,
 }
 
 /**
- * #826：身份消息失败降级为非致命。树与终端保留，只记红项并提示 notify --from 补发。
+ * #826：身份消息失败降级为非致命。树与终端保留，只记红项并提示用 GitHub 评论补发。
  * 古路（整树 rollback）代价远大于失败本身。
  */
 export function planIdentityKeep({ identityOk, identityError } = {}) {
@@ -379,7 +379,7 @@ export function planIdentityKeep({ identityOk, identityError } = {}) {
     keep: true,
     rollback: false,
     identityFailed: true,
-    warning: `审官身份消息没送到士兵收件箱（树与终端保留，不回滚）：${why}。补发：node scripts/dao.mjs notify --from <协调终端> --to dispatch:<士兵 dispatch> --subject "审官身份：…"`,
+    warning: `审官身份消息没送到士兵收件箱（树与终端保留，不回滚）：${why}。补发走 GitHub 评论（issue-gateway / gh-as worker pr comment），不要调 dao.mjs notify（已退役）。`,
   };
 }
 

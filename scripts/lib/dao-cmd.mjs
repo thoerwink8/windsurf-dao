@@ -1125,11 +1125,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
                   # --repo owner/name：跨仓派工（#1024）。不传仍是本仓。目标仓不在该 role 的 installation 里就拒，报「这个仓没授权给 <role>」，不许回落本仓
-  dispatch-exec --order <派工单路径>
-                  # 内部动词：dispatch 拉起的后台执行体；结果落 <id>.out.json（派工失败请重派，不要手动重跑——复用旧 Run 会 consumer_fenced，见 #762）
-  dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
-                  # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
-                  # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
+  # 已退役（调用即拒，#1150）：dispatch-exec / dispatch --batch。不要调它们。
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
                   # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
@@ -1149,26 +1145,17 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
-                  # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
-                  # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
+                  # #826：身份消息失败不整树回滚（树与终端保留，只记红项；补发走 GitHub 评论，不要调 notify）
+                  # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
                   # 交卷：发完工/返工 comment。#1125 起首审只入待审队列、不自己起审官；返工复用原会话再推一针
-                  # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
+                  # #677：成功路径不结算士兵 Dispatch，不开下一跳救人。不要调 notify。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
   reviewer-done --pr <N> [--dry-run] [--repo owner/name]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>] [--repo owner/name]
-                  # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
-                  # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
-                  # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
-                  # #631：--skip-wait 显式跳过等完工——worker-done 失败后补审官时工人不会再发完工，硬等烧 600s；
-                  #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
-                  #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
-                  # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
-                  # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
-                  # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
+  # reviewer-attach 已退役，调用即拒。补派审官走 reviewer-create（主路 review-pending-drain）。
   review-pending-drain [--pr <N>] [--repo owner/name] [--force]
                   # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
                   # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸；带 --repo 只吃该仓的票
@@ -1200,13 +1187,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # mirasim：worker-start --executor mirasim --worktree <树路径> --spec <文> --model <id> --reviewer <id> --confirm（不要 --task；会话即卡，#884 P1）
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
-  send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]
-                  # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
-                  # #802/#815：--dispatch 用 worker-read 的 terminal.handle（真 agent），不要信派工单 workerHandle（常是空壳）
-  notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
-                  [--task-id <id> --dispatch-id <id> --from <handle> --dispatch-capability <token>]
-                  # 普通通知：dispatch: 活人直接投递。hop 审官→士兵 打进还活着的 id；已完工 fail-visible，不开下一跳救人（#677）
-                  # --type worker_done：省略 --to，必须带 --task-id/--dispatch-id/--outcome；发出后核 Dispatch 变 completed（#551）。士兵侧判定绿才允许发。
+  # send / notify 已退役，调用即拒。通知走 GitHub 评论 + 飞书 hub，不要调它们。
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
@@ -1249,15 +1230,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕
 
-notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
-落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
-收件人形态：dispatch:<id>（官方结构化收件箱，士兵↔审官互发用；#559 ①）、run:…（审官→帅）、
-term_…（低层通道）、省略（自己那条 Run 信箱）。
-delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
-普通 notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱。
---type worker_done 是结算口（#551）：必须带 --task-id/--dispatch-id/--outcome，省略 --to，
-发出后核 worker-show Dispatch 为 completed。缺身份、错 pane、落库但未 completed
-一律非零并报「未结算」。状态没查成标 unscanned，不许当成「查过仍是 dispatched」。
+send / notify / reviewer-attach / dispatch-exec / dispatch --batch 已退役（#1150），调用即拒。
+通知走 GitHub 评论 + 飞书 hub；补派审官走 reviewer-create。不要把这些名字当可照抄入口。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认；手写 --model 偏离该工种（默认写码）顺位 1 也要 --confirm（#754）。未知 --参数 一律非零。
@@ -1270,7 +1244,7 @@ merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 ma
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
-续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create / reviewer-attach 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
+续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——

@@ -186,6 +186,9 @@ import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
 import { readBranchProtection } from './lib/branch-protection-io.mjs';
+import {
+  checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
+} from './lib/retired-verb-advert-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -1359,6 +1362,29 @@ function checkOrcaRetirement() {
   green('orca 产品面已清（无 spawn orca / 无 orca-serve 单元 / 无整段删脊）');
 }
 
+// ── 现役帮助不许宣传已退役入口（#1150 审官红 2）────────────────────────
+// USAGE / 派工手册 / 指挥官任务书再把 reviewer-attach、notify、send、
+// dispatch-exec、dispatch --batch 写成可照抄路径就会把操作者引到死路。
+// 夹具红/绿/空验判别力；0 个现役文件 = 没查成。
+function checkRetiredVerbAdvertSamples() {
+  const r = inspectRetiredVerbAdvertFixtures(join(ROOT, 'tests', 'fixtures', 'retired-verb-advert'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '退役入口宣传闸样本没查成' : '退役入口宣传闸样本对不上',
+      '恢复 tests/fixtures/retired-verb-advert/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`退役入口宣传闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkRetiredVerbAdvertLive() {
+  const r = checkRetiredVerbAdvert({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
 // ── 补丁链层数闸（memory patch-stacking-is-two-strikes 的 gate）──────────────
 // 规矩是「同一种办法连错两次就换路」——第 2 层就该停手从零重推。所以 ≥3 层是
 // **停手没发生**的确定性证据。判据在 lib/chain-depth-check.mjs（只认锚里的最大层号，
@@ -1910,6 +1936,8 @@ checkGitOwnershipLive();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
+checkRetiredVerbAdvertSamples();
+checkRetiredVerbAdvertLive();
 checkChainDepth();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
