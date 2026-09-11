@@ -1,9 +1,10 @@
 // 现役帮助/手册不许把已退役 dao 动词写成可照抄的入口（#1150 审官红 2）。
 //
 // 改这段前必须知道：
-//   reviewer-attach / dispatch-exec / dispatch --batch / notify / send 还在 CLI
-//   路由里当「调用即拒」的 stub，FLAGS/VERBS 可以留；本闸只扫**现役帮助**把它们
-//   写成用法。历史叙述、测试、CHANGELOG、判例档案不扫。
+//   reviewer-attach / dispatch-exec / dispatch --batch / notify / send /
+//   terminal send 还在 CLI 路由或历史夹具里当「调用即拒」的 stub，FLAGS/VERBS
+//   可以留；本闸只扫**现役帮助**把它们写成用法。历史叙述、测试、CHANGELOG、
+//   判例档案不扫。
 //   同一行写了「已退役 / 不要调 / 调用即拒」算交代，不算宣传。
 // 检查器自己持有标记，不 import dao-cmd.USAGE。
 
@@ -16,6 +17,7 @@ export const RETIRED_ADVERT_IDS = Object.freeze([
   'notify',
   'send',
   'dispatch-batch',
+  'terminal-send',
 ]);
 
 const EXEMPT_RE = /已退役|调用即拒|不要调|不许调|无落点|当场拒|不是入口/;
@@ -26,6 +28,7 @@ const PATTERNS = Object.freeze([
   { id: 'notify', re: /(?:node\s+scripts\/)?dao\.mjs\s+notify\b|^[ \t]+notify\s/ },
   { id: 'send', re: /(?:node\s+scripts\/)?dao\.mjs\s+send\b|^[ \t]+send\s/ },
   { id: 'dispatch-batch', re: /(?:node\s+scripts\/)?dao\.mjs\s+dispatch\s+--batch\b|^[ \t]+dispatch\s+--batch\b|\bdispatch\s+--batch\b/ },
+  { id: 'terminal-send', re: /orca\s+terminal\s+send\b|\bterminal\s+send\b/ },
 ]);
 
 const SKILLS_DIR = 'host/skills';
@@ -177,7 +180,7 @@ export function checkRetiredVerbAdvert({ root, files, manuals } = {}) {
     return {
       fail: [
         `现役帮助还在宣传已退役入口 ${hits.length} 处`,
-        '删掉可照抄的 reviewer-attach / dispatch-exec / dispatch --batch / notify / send；补派走 reviewer-create，通知走 GitHub 评论 + 飞书 hub。同一行写「已退役/不要调」才算交代',
+        '删掉可照抄的 reviewer-attach / dispatch-exec / dispatch --batch / notify / send / terminal send；补派走 reviewer-create，通知走 GitHub 评论 + 飞书 hub，吞注入停手报未送达。同一行写「已退役/不要调」才算交代',
         shown + (hits.length > 6 ? ' …' : ''),
       ],
       scanned: rels.length,

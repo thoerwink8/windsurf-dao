@@ -542,7 +542,7 @@ export function terminalsAfterLaunchPlan({ existingHandles, plan, createdHandle 
   return [...next];
 }
 
-/** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
+/** orca terminal send --json 的回执（已退役，只解析历史夹具）。真返回在 result.send；accepted=true 才算送达。
  * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
 export function extractTerminalSend(json) {
   const s = json?.result?.send;

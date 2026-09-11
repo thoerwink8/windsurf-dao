@@ -28,6 +28,17 @@ describe('retired-verb-advert', () => {
 
     const batchRetired = scanRetiredAdverts('`dispatch --batch` 已随执行体退役。调用当场拒。');
     assert.equal(batchRetired.length, 0);
+
+    const ts = scanRetiredAdverts('吞注入才走 terminal send 补救');
+    assert.equal(ts.length, 1);
+    assert.equal(ts[0].id, 'terminal-send');
+
+    const orcaTs = scanRetiredAdverts('orca terminal send --text hi --enter');
+    assert.equal(orcaTs.length, 1);
+    assert.equal(orcaTs[0].id, 'terminal-send');
+
+    const okTs = scanRetiredAdverts('没有 terminal send 可补（orca 已退役，调用即拒）。');
+    assert.equal(okTs.length, 0);
   });
 
   it('夹具红/绿/空有判别力', async () => {
@@ -61,6 +72,16 @@ describe('retired-verb-advert', () => {
     });
     assert.ok(mutated.fail);
     assert.match(mutated.fail[0], /宣传已退役入口/);
+
+    const mutatedSend = checkRetiredVerbAdvert({
+      root: REPO,
+      files: {
+        'host/skills/dispatch/SKILL.md': '吞注入才走 terminal send 补救\n',
+      },
+    });
+    assert.ok(mutatedSend.fail);
+    assert.match(mutatedSend.fail[0], /宣传已退役入口/);
+    assert.match(mutatedSend.fail[2], /terminal-send/);
   });
 
   it('wakeBrain 生成的任务书不再要求 send/notify', async () => {

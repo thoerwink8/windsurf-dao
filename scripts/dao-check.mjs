@@ -1364,7 +1364,7 @@ function checkOrcaRetirement() {
 
 // ── 现役帮助不许宣传已退役入口（#1150 审官红 2）────────────────────────
 // USAGE / 派工手册 / 指挥官任务书再把 reviewer-attach、notify、send、
-// dispatch-exec、dispatch --batch 写成可照抄路径就会把操作者引到死路。
+// dispatch-exec、dispatch --batch、terminal send 写成可照抄路径就会把操作者引到死路。
 // 夹具红/绿/空验判别力；0 个现役文件 = 没查成。
 function checkRetiredVerbAdvertSamples() {
   const r = inspectRetiredVerbAdvertFixtures(join(ROOT, 'tests', 'fixtures', 'retired-verb-advert'));
