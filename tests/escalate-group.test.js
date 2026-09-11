@@ -10,6 +10,31 @@ const path = require('node:path');
 
 const LIB = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'escalate-group.mjs').replace(/\\/g, '/'));
 
+it('approved execution task stays open after its original alert recovers', async () => {
+  const { reconcileEscalationRound } = await LIB;
+  const ledger = { 'escalate/approved-but-ci-red': { issue: 1183, objects: ['PR #1155'] } };
+  const held = reconcileEscalationRound({ reasonsThisRound: [], ledger, allScanned: true, approvedIssues: [1183] });
+  assert.deepEqual(held.toClose, []);
+  const ordinary = reconcileEscalationRound({ reasonsThisRound: [], ledger, allScanned: true });
+  assert.equal(ordinary.toClose[0].issue, 1183);
+});
+
+it('an omitted approved task is rechecked before alarm convergence can close it', async () => {
+  const { reconcileEscalations } = await import('../scripts/commander.mjs');
+  const base = { actions: [], dryRun: true,
+    situation: { github: { scanned: true, issues: [] }, trees: { scanned: true }, git: { scanned: true } },
+    state: { escalateLedger: { 'escalate/approved-but-ci-red': { issue: 1183, objects: [] } } } };
+  // Fill the scanner sections required by the production function.
+  const { SITUATION_SECTIONS } = await import('../scripts/lib/commander-core.mjs');
+  for (const key of SITUATION_SECTIONS) base.situation[key] = { ...base.situation[key], scanned: true };
+  for (const record of [{ ok: false }, { ok: true, out: '{}' },
+    { ok: true, out: JSON.stringify({ state: 'OPEN', labels: [{ name: '已拍板' }] }) }]) {
+    const lines = [];
+    reconcileEscalations({ ...base, say: x => lines.push(x), readIssue: () => record });
+    assert.equal(lines.some(line => line.startsWith('[dry] 收敛关单')), false);
+  }
+});
+
 describe('「没查成」class 不开单（判前缀，不判相等）', () => {
   it('裸 unscanned 静默', async () => {
     const { isUnscannedReason } = await LIB;
