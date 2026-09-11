@@ -86,6 +86,9 @@ import { escalationKeyOf } from './lib/escalation-key.mjs';
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
 const REPO = process.env.COMMANDER_REPO || DEFAULT_REPO;
+// 连续多少轮动作摘要完全相同就报「停住了」（一轮 ≈ 20 分钟，6 轮 ≈ 2 小时）。
+// 2026-09-11 立：本晚四个死点全都不报错，只有这个判据抓得到。
+const DIGEST_STREAK_ALERT = 6;
 
 // 仓外落点（检查器输出不落在自己会读的范围内，CLAUDE.md）。
 const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'commander');
@@ -2420,11 +2423,14 @@ function cmdAct(argv) {
   // 的稳定摘要）——它变了才算真有新东西。
   if (!dryRun) {
     // 判据在 commander-core 的 nextDigestStreak（纯函数，可直喂）。这里只取数、报警。
+    // 阈值写常量不走 policy：cmdAct 里没有 loadDispatchPolicy 的实例（那是
+    // buildSituation 内部的事），去 load 一份只为读一个数不值得——而写错作用域
+    // 正是上一轮让整轮 act exit 1 的原因。
     const vac = nextDigestStreak({
       actions,
       lastDigest: state.lastActionDigest || null,
       lastStreak: state.digestStreak,
-      threshold: Number(policy.commander?.digestStreakAlert) || 6,
+      threshold: DIGEST_STREAK_ALERT,
     });
     state.digestStreak = vac.streak;
     state.lastActionDigest = vac.digest;
