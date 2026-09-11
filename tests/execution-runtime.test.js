@@ -27,6 +27,28 @@ function records(f){return fs.readdirSync(path.join(f.stateDir,'sessions')).filt
 const fenceURL=new URL('../scripts/lib/execution-fence.mjs',import.meta.url).href;
 const runtimeURL=new URL('../scripts/lib/execution-runtime.mjs',import.meta.url).href;
 
+linuxTest('complete inventory and empty process scan prove cached orphan gone',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  await rt.startSession(spec(f));
+  const file=path.join(f.stateDir,'sessions',fs.readdirSync(path.join(f.stateDir,'sessions')).find(n=>n.endsWith('.json')));
+  writeExecutionRecord(file,{...records(f)[0],state:'incomplete'});
+  m.listSessions=async()=>({ok:true,complete:true,sessions:[]});
+  m.readSession=async()=>{throw Error('removed sessions have no snapshot');};
+  const r=await rt.listSessions();
+  assert.equal(r.ok,true);
+  assert.equal(r.sessions[0].state,'gone');
+});
+
+linuxTest('incomplete inventory cannot prove disappearance',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  await rt.startSession(spec(f));
+  m.listSessions=async()=>({ok:true,complete:false,sessions:[]});
+  m.readSession=async()=>{throw Error('unknown');};
+  const r=await rt.listSessions();
+  assert.equal(r.ok,false);
+  assert.equal(r.sessions[0].state,'unknown');
+});
+
 linuxTest('headless running session with open:false stays live and repairs stale incomplete cache',async t=>{
   const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
   const started=await rt.startSession(spec(f));
