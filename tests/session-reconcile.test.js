@@ -20,15 +20,18 @@ it('a delivered passing PR waits for review rather than restarting its finished 
   assert.equal(planReconcile(failed).redispatches.length, 1);
   const rework = structuredClone(params); rework.openPrs[0].reworkRequired = true;
   assert.equal(planReconcile(rework).redispatches.length, 1);
+  const multiple = structuredClone(params);
+  multiple.openPrs.push({ ...multiple.openPrs[0], isDraft: true });
+  assert.equal(planReconcile(multiple).redispatches.length, 1);
   assert.equal(planReconcile({ ...params, openPrs: null }).unscanned, true);
 });
 
 it('failed rework still recovers on unchanged head despite a passing CI', async () => {
   const { decide, reworkKey } = await import('../scripts/lib/commander-core.mjs');
-  for (const scenario of ['red', 'conflict', 'waiting']) {
+  for (const scenario of ['red', 'conflict', 'refreshed-conflict', 'waiting']) {
     const issue = { number: 1167, title: '任务', body: '', labels: ['已消歧','model/grok-4.6','reviewer/gpt-5.6-luna'].map(name => ({ name })) };
     const pr = { number: 1190, title: '修复', body: '署名 issue #1167', isDraft: false,
-      headRefOid: 'same-head', mergeable: scenario === 'conflict' ? 'CONFLICTING' : 'MERGEABLE',
+      headRefOid: 'same-head', mergeable: scenario === 'refreshed-conflict' ? 'UNKNOWN' : scenario === 'conflict' ? 'CONFLICTING' : 'MERGEABLE',
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] };
     const r = decide({ github: { scanned: true, issues: [issue], prs: [pr] },
       trees: { scanned: true, worktrees: [] }, reviewPending: { scanned: true, items: [] }, stall: { scanned: true, strikes: {} },
@@ -36,6 +39,7 @@ it('failed rework still recovers on unchanged head despite a passing CI', async 
       sessions: { scanned: true, items: [{ key: 'grok:old', state: 'stopped', cwd: '/tmp/dao-1167' }] },
       desiredJobs: { items: [{ job_id: 'old', identity: '工人', issue: 1167, model: 'grok-4.6' }] },
       reworkDispatched: { [reworkKey(1190, 'same-head')]: { ok: true, at: new Date().toISOString() } },
+      viewMergeable: () => ({ ok: true, mergeable: 'CONFLICTING' }),
       commanderPolicy: { requireModelInRouting: false }, healthRedModels: [], routingModels: ['grok-4.6','gpt-5.6-luna'] });
     const recovery = r.actions.some(a => ['dispatch','rework'].includes(a.kind) && a.issue === 1167);
     assert.equal(recovery, scenario !== 'waiting', scenario);
