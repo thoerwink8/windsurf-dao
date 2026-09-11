@@ -121,7 +121,11 @@ export function findDispatchForTask(workerListJson, taskId) {
   return { ok: true, dispatchId: hits[hits.length - 1].dispatchId, scanned: workers.length };
 }
 // #762 拆分：repo 选择符移到 scripts/lib/dispatch/repo.mjs（保持对外 API 不变）
-export { argsRepoList, normalizeRepoRemote, resolveRepoSelector } from './dispatch/repo.mjs';
+export {
+  argsRepoList, normalizeRepoRemote, resolveRepoSelector,
+  parseOwnerNameRepo, githubRemoteUrlOf, withGhRepo, assertRepoAuthorized,
+  looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout, repoPrKey,
+} from './dispatch/repo.mjs';
 
 // #762 拆分：worktree 生命周期域移到 scripts/lib/dispatch/worktree.mjs（保持对外 API 不变）
 import {
@@ -954,10 +958,12 @@ export {
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -976,7 +982,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -986,12 +992,12 @@ const MULTI_FLAGS = new Set(['slice']);
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
-  'session-stop': new Set(['--session', '--json', '--help', '-h']),
+  'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
-    // mirasim 路径（#880 卡 B）：--executor 选执行体，--branch/--repo 是 mirasim 建树要的。
-    // 与 worker-done / reviewer-create 同名同义（卡 C 已加），别在这里另起名字。
+    // --repo：跨仓 owner/name（#1024）。mirasim 默认路把 owner/name 与本地 checkout 拆开，
+    // 不再把 GitHub 选择符原样塞给 ensureWorkspace。与 worker-done / reviewer-create 同名同义。
     '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
@@ -1024,13 +1030,14 @@ export const FLAGS_BY_VERB = {
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
     '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
-  'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'reviewer-done': new Set(['--pr', '--repo', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--repo',
+    '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--repo', '--force', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1054,6 +1061,7 @@ export const FLAGS_BY_VERB = {
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
   now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
+  board: new Set(['--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1112,10 +1120,11 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup] [--repo owner/name]
                   # 异步发射（2026-08-23 async-launch 拍板）：热路只做参数校验+写派工单到 _flow/queue/+拉起 detached 执行体，<1s 返回「已受理」；
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
+                  # --repo owner/name：跨仓派工（#1024）。不传仍是本仓。目标仓不在该 role 的 installation 里就拒，报「这个仓没授权给 <role>」，不许回落本仓
   dispatch-exec --order <派工单路径>
                   # 内部动词：dispatch 拉起的后台执行体；结果落 <id>.out.json（派工失败请重派，不要手动重跑——复用旧 Run 会 consumer_fenced，见 #762）
   dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
@@ -1133,7 +1142,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
                   # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run] [--repo owner/name]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
@@ -1142,15 +1151,15 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
-  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
-                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
+                  # 交卷：发完工/返工 comment。#1125 起首审只入待审队列、不自己起审官；返工复用原会话再推一针
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
-  reviewer-done --pr <N> [--dry-run]
+  reviewer-done --pr <N> [--dry-run] [--repo owner/name]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>]
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>] [--repo owner/name]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
                   # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
@@ -1160,10 +1169,11 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
                   # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
                   # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
-                  # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
-                  # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
-                  # 扫完 0 条是空转成功，目录读不了才没查成
+  review-pending-drain [--pr <N>] [--repo owner/name] [--force]
+                  # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
+                  # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸；带 --repo 只吃该仓的票
+                  # --force 才不过上限，只许人手；指挥官自动化不许带
+                  # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -1213,6 +1223,10 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
                   # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
                   # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
+  board [--json]
+                  # 看板 v0（#818）：一张表，issue / 合并请求 / 排队单各一行（阶段 / 耗时 / 模型）
+                  # 源挂掉只坏自己那几行，不许显示成一切正常；--json 给机器（三态信封）
+                  # 总控群问「状态」回的就是这张表；超时告警走 scripts/board-watch.mjs
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   preflight --model <id> [--json]

@@ -4,7 +4,7 @@
 // TOML 只留 [providers.*].launch；禁止 JSON↔TOML 双写选型段。
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname, sep } from 'node:path';
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 
 export const ROUTING_JSON = join(resolve(import.meta.dirname, '..', '..'), 'docs', 'model-routing.json');
@@ -19,6 +19,14 @@ export function loadRoutingJsonRaw(file = ROUTING_JSON) {
     throw new Error(`选型 JSON 不是合法 JSON: ${String(e.message || e).split(/\r?\n/)[0]}`);
   }
   if (!doc || typeof doc !== 'object') throw new Error('选型 JSON 解析结果不是对象');
+  if (doc.执行体?.profileCatalog) {
+    const root = resolve(dirname(file), '..');
+    const catalogPath = resolve(root, doc.执行体.profileCatalog);
+    if (!catalogPath.startsWith(root + sep)) throw new Error('execution profile catalog must stay inside repository');
+    const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
+    if (!Array.isArray(catalog.profiles)) throw new Error('execution profile catalog has no profiles[]');
+    Object.defineProperty(doc, 'executionProfiles', { value: catalog.profiles, enumerable: false });
+  }
   return doc;
 }
 
@@ -122,7 +130,15 @@ export function modelsFromJson(doc) {
       }
     }
   }
-  return [...byId.values()].map(entry => toLegacyModel(entry, [...(rolesById.get(entry.id) || [])]));
+  const models = [...byId.values()].map(entry => toLegacyModel(entry, [...(rolesById.get(entry.id) || [])]));
+  const roleNames = { companion: '查证', implementation: '写码', architecture: '方案', review: '审查', 'review-low-risk': '审查' };
+  for (const p of doc.executionProfiles || []) {
+    if (!p?.id || !p.model || models.some(m => m.id === p.id)) continue;
+    models.push({ id: p.id, provider: p.provider, cli_model: p.agentModel || p.model,
+      roles: [...new Set((p.roles || []).map(r => roleNames[r]).filter(Boolean))], status: p.enabled ? '正式' : '停用',
+      why: '统一执行目录', reviewerDisabled: !p.enabled, executionProfileId: p.id, actualModel: p.model, modelFamily: p.modelFamily });
+  }
+  return models;
 }
 
 /** @deprecated 顺位树取代分时路由；保留导出名供旧调用方，恒返回 []。 */

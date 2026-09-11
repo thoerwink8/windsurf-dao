@@ -44,26 +44,30 @@ import {
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest, reworkKey, ticketHeadOid,
-  SITUATION_SECTIONS,
+  decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs,
 } from './lib/commander-core.mjs';
+import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
-import { availabilityFor } from './lib/provider-health.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, drainLedgerKey,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
-  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment,
+  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment, exhaustedPushPath,
 } from './lib/exhausted.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
@@ -78,6 +82,7 @@ import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, upd
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -158,11 +163,11 @@ function scanAttributedIssues(issues, prs) {
   }
   const out = [];
   for (const n of want) {
-    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,labels'], 20000);
+    const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
     if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
     try {
       const j = JSON.parse(r.out || '{}');
-      if (j && j.number) out.push({ number: j.number, title: j.title || '', labels: j.labels || [] });
+      if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });
     } catch { /* 解析不了同上：宁可没有，不要一个错的 */ }
   }
   return out;
@@ -224,7 +229,7 @@ function scanOrca() {
  * 不许把合并/叫审官整轮停掉。
  */
 function scanSessions() {
-  const script = process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'mirasim-sessions.mjs');
+  const script = process.env.DAO_EXECUTION_LS || process.env.DAO_MIRASIM_LS || join(ROOT, 'scripts', 'execution-sessions.mjs');
   if (!existsSync(script)) {
     return { scanned: false, error: `会话名单脚本不在（${script}）——观测面没查成` };
   }
@@ -296,6 +301,20 @@ function readText(path) {
   catch (e) { return { error: String(e.message || e) }; }
 }
 
+/**
+ * 读「自动化认输」账本（~/.dao/exhausted-push.json）。
+ *
+ * 读不到一律返回 `{}`（空账本）——**不是** fail-closed。理由：空账本 ⇒
+ * `planExhaustedLabelClear` 找不到认输记录 ⇒ 不摘任何标。也就是「读不到就什么都不做」，
+ * 这正是 fail-closed 的**效果**，不需要额外分支。摘标本身还有一道正面核（execClearExhausted）。
+ */
+function loadExhaustedPush() {
+  const txt = readText(exhaustedPushPath(homedir()));
+  if (typeof txt !== 'string') return {};
+  try { const o = JSON.parse(txt); return o && typeof o === 'object' ? o : {}; }
+  catch { return {}; }
+}
+
 function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
   if (!existsSync(file)) return [];
   let src;
@@ -349,8 +368,17 @@ function scanAdmission({ worktrees, policy } = {}) {
   if (memRaw && memRaw.error) {
     return { ok: false, unscanned: true, slots: 0, why: `MemAvailable 读不出来：${memRaw.error}` };
   }
-  if (loadRaw && loadRaw.error) {
-    return { ok: false, unscanned: true, slots: 0, why: `loadavg 读不出来：${loadRaw.error}` };
+  // CPU 占用率要**两帧差**（/proc/stat 的计数是开机以来的累计值，单帧读不出「现在多忙」）。
+  // 窗口 100ms：比一次调度抖动长、比一轮决定短；这段里 worker 在等模型回话也照实反映成低占用，
+  // 正是我们要的（等 IO 不吃 CPU，不该被当成机器忙）。
+  const statBefore = readText('/proc/stat');
+  sleepSync(100);
+  const statAfter = readText('/proc/stat');
+  if (statBefore && statBefore.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `CPU 计数读不出来：${statBefore.error}` };
+  }
+  if (statAfter && statAfter.error) {
+    return { ok: false, unscanned: true, slots: 0, why: `CPU 计数读不出来：${statAfter.error}` };
   }
   const nproc = cpus()?.length;
   const inflight = countInflightWorkers({ worktrees });
@@ -360,6 +388,8 @@ function scanAdmission({ worktrees, policy } = {}) {
   const samples = loadAdmissionSamples();
   const cap = admitCapacity({
     meminfoText: typeof memRaw === 'string' ? memRaw : '',
+    statBeforeText: typeof statBefore === 'string' ? statBefore : '',
+    statAfterText: typeof statAfter === 'string' ? statAfter : '',
     loadavgText: typeof loadRaw === 'string' ? loadRaw : '',
     nproc,
     inFlight: inflight.count,
@@ -371,10 +401,26 @@ function scanAdmission({ worktrees, policy } = {}) {
       at: nowIso(),
       inFlight: inflight.count,
       memAvailableMb: cap.memAvailableMb,
+      cpuBusy: cap.cpuBusy,
       loadNorm: cap.loadNorm,
     });
   }
   return { ...cap, inFlight: inflight.count };
+}
+
+/**
+ * 渠道并发在途快照（#1145）。**在途来源与租约闸同源**（checkInFlight 的 /proc 扫描），
+ * 树→渠道走 channel-concurrency 的共用解析器（树 → 派工账本 model → 腿表渠道）——
+ * 决策层与门里必须用同一把尺，各造一份会让分子分母对着不同的格子判满。
+ *
+ * checkInFlight 没查成 → ok:false，调用方把渠道在途数当没查成（本闸这轮不据它放大准入）。
+ */
+function scanChannelInFlight({ models, legs, caps } = {}) {
+  const flight = checkInFlight();
+  if (!flight.ok) return { ok: false, unscanned: true, error: flight.error, counts: {}, unattributed: [] };
+  const desired = scanDesiredJobs();
+  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps });
+  return countInFlightByChannel(flight.trees || [], resolver);
 }
 
 function scanReviewPending() {
@@ -385,7 +431,7 @@ function scanReviewPending() {
   if (!listed.ok) return { scanned: false, error: listed.error };
   const items = (listed.tickets || []).map((t) => ({
     pr: Number(t.pr), head: t.head || null, reviewer: t.reviewer || null, worker: t.workerWorktree || null,
-    source: t.source || null, error: t.error || null,
+    source: t.source || null, error: t.error || null, repo: t.repo || null,
   }));
   return { scanned: true, items };
 }
@@ -472,14 +518,15 @@ function orcaErr(err) {
   return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
-/** 健康表标红的模型 id。表没查成 / unknown → []（不拦，与 #842 unknown 不拦对齐）。 */
+/**
+ * 健康表标红的模型 id。判据正文在 lib/model-admission.mjs（纯函数，可单测）——
+ * 这里只负责取三份输入：模型表、execution profiles、熔断表。
+ * 表没查成 / 读不到 → []（不拦，与 #842 unknown 不拦对齐）。
+ */
 function loadHealthRedIds(models) {
   if (!Array.isArray(models) || models.length === 0) return [];
   try {
-    const r = availabilityFor(models);
-    return Object.entries(r.availability || {})
-      .filter(([, v]) => v === 'red')
-      .map(([id]) => id);
+    return healthRedIds({ models, profiles: loadExecutionProfiles(), breaker: loadBreaker() });
   } catch {
     return [];
   }
@@ -517,6 +564,8 @@ function buildSituation({ state } = {}) {
   let workerOrder = null;
   let healthRedModels = [];
   let defaultWorkerModel = null;
+  let channelCaps = null;
+  let routingLegs = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
@@ -526,6 +575,8 @@ function buildSituation({ state } = {}) {
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
+    routingLegs = raw['腿'];
+    channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）
   } catch {
     routingModels = null;
     routingModelRecords = null;
@@ -533,8 +584,16 @@ function buildSituation({ state } = {}) {
     workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
+    channelCaps = null;
+    routingLegs = null;
   }
+  const askPolicy = loadPolicy({ root: ROOT });
   const breakerIngest = ingestBreakerSignals();
+  // #1145：渠道并发第二道闸的三份快照。缺任一 decide 侧闸 inert（不改既有派工路）。
+  const channelInFlight = channelCaps && channelCaps.ok
+    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
+    : null;
+  const breaker = loadBreaker();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
@@ -548,6 +607,9 @@ function buildSituation({ state } = {}) {
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
     hubSeen: (state && state.hubSeen) || {},
+    // 「自动化认输」的账本（键 pushed:<pr>@<head>）。decide 用它判「这个标是不是过期了」——
+    // 标是无头的、账本带 head，二者一比就知道工人有没有推新东西（2026-09-11）。
+    exhaustedPush: loadExhaustedPush(),
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
@@ -556,6 +618,10 @@ function buildSituation({ state } = {}) {
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
+    channelCaps,
+    channelInFlight,
+    breaker,
+    askPolicy,
   };
 }
 
@@ -633,6 +699,7 @@ function execAction(action, { state, dryRun, log }) {
         '--model', action.model, '--reviewer', action.reviewer,
         '--split', 'no', '--split-reason', '指挥官自动派工：单块活（#800）',
         '--spec', dispatchSpec(action.issue), '--confirm',
+        ...dispatchMergePolicyArgs(action),
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
         ...(action.reconcile ? ['--allow-dup'] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
@@ -643,15 +710,22 @@ function execAction(action, { state, dryRun, log }) {
       if (!r.ok) return r;
       return awaitDispatchResult(r.out, { say });
     }
-    case 'attach-reviewer':
-      return drainReviewPending(action, { state, dryRun, say });
+    case 'attach-reviewer': {
+      // 走 blessed 路径 review-pending-drain。#1125 起 drain 自己按在役审官数拉，拉满即停，不是一次清完。
+      // 不带 --pr：--pr 只隔离毒票，仍过容量闸；带了也不会绕上限。不过上限只认 --force（人手）。
+      const cmd = ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+      const r = runOrShow(cmd, { dryRun, say, why: action.why });
+      recordDrainAttempt(state, action, drainPayloadOf(r));
+      return r;
+    }
     case 'stop-session': {
       if (!action.sessionKey) {
         say('  stop-session 没有 sessionKey');
         return { ok: false, error: 'stop-session 没有 sessionKey' };
       }
       return runOrShow(
-        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey)],
+        ['node', 'scripts/dao.mjs', 'session-stop', '--session', String(action.sessionKey),
+          ...(action.workdir ? ['--worktree', String(action.workdir)] : [])],
         { dryRun, say, why: action.why },
       );
     }
@@ -661,6 +735,8 @@ function execAction(action, { state, dryRun, log }) {
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
       return dispatchRework(action, { state, dryRun, say });
+    case 'pump-draft':
+      return dispatchPumpDraft(action, { state, dryRun, say });
     case 'rereview':
       return requestRereview(action, { state, dryRun, say });
     case 'wake-brain':
@@ -684,6 +760,8 @@ function execAction(action, { state, dryRun, log }) {
       return execReapTicket(action, { state, dryRun, say });
     case 'mark-exhausted':
       return execMarkExhausted(action, { dryRun, say });
+    case 'clear-exhausted':
+      return execClearExhausted(action, { dryRun, say });
     case 'noop':
       return { ok: true };
     default:
@@ -786,6 +864,36 @@ function execAddLabel(action, { dryRun, say }) {
   return runOrShow(planned.argv, { dryRun, say, why: action.why });
 }
 
+/**
+ * 摘「自动化认输」标（2026-09-11）：认输是**带 head** 的判据，工人推了新 head = 新局面。
+ *
+ * 摘之前正面核一次当前 head——decide 用的是 20 分钟前的态势快照，
+ * 而摘标会让这张 PR 重回流水线（可能立刻被派工/叫审官）。核不上就**不摘**（fail-closed）：
+ * 多留一轮标只是少一轮推进，拿旧快照摘标可能让一辆已经在修的车再被派一次。
+ * 与 execReapTicket 同一纪律（删之前正面核死活）。
+ */
+function execClearExhausted(action, { dryRun, say, run = runCmd } = {}) {
+  if (dryRun) { say(`[dry] 摘 ${EXHAUSTED_LABEL}：#${action.pr}（${action.why}）`); return { ok: true, dryRun: true }; }
+  // run 可注入（照本文件 execMerge 的惯例）：测试要能钉调用序列而不真打 gh。
+  const cur = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'headRefOid,labels'], 20000);
+  if (!cur.ok) { say(`  当前 head 没核成，不摘标：#${action.pr}（${cur.error}）`); return { ok: true, skipped: 'head-unscanned' }; }
+  let got;
+  try { got = JSON.parse(cur.out || '{}'); }
+  catch { say(`  当前 head 解析失败，不摘标：#${action.pr}`); return { ok: true, skipped: 'head-parse' }; }
+  const head = typeof got.headRefOid === 'string' ? got.headRefOid.trim() : '';
+  if (!head || head !== String(action.head)) {
+    say(`  head 与快照对不上（快照 ${String(action.head).slice(0, 8)} / 实为 ${head.slice(0, 8) || '未取到'}），本轮不摘：#${action.pr}`);
+    return { ok: true, skipped: 'head-moved' };
+  }
+  const names = (got.labels || []).map((l) => (typeof l === 'string' ? l : l && l.name)).filter(Boolean);
+  if (!names.includes(EXHAUSTED_LABEL)) { say(`  #${action.pr} 已无该标，无需摘`); return { ok: true, skipped: 'already-clear' }; }
+  if (names.includes(WAITING_USER_LABEL)) { say(`  #${action.pr} 是「等用户」，不摘（人没回话机器不动）`); return { ok: true, skipped: 'waiting-user' }; }
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'edit', String(action.pr), '--remove-label', EXHAUSTED_LABEL]);
+  if (!r.ok) { say(`  摘标失败 #${action.pr}：${r.error}`); return { ok: false, error: r.error }; }
+  say(`  已摘「${EXHAUSTED_LABEL}」：#${action.pr}（${String(action.why).slice(0, 60)}）`);
+  return { ok: true, cleared: true };
+}
+
 function execRetryDrain(action, { state, dryRun, say }) {
   const planned = planRetryDrainCmd(action, {
     queue: action.queue,
@@ -797,11 +905,8 @@ function execRetryDrain(action, { state, dryRun, say }) {
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
   const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
-  state.drainLedger = state.drainLedger || {};
-  // 派了 ≠ 成了：只记 tries，不记 ok。票还在队列 = 下次仍会走 retry。
-  state.drainLedger[planned.stateKey] = {
-    at: nowIso(), pr: planned.pr, tries: planned.tries,
-  };
+  // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
 }
 
@@ -809,11 +914,12 @@ function execRetryDrain(action, { state, dryRun, say }) {
 // 万一同号票再入队就直接从「已试 3 次」起步，一轮就 escalate。
 function execReapTicket(action, { state, dryRun, say }) {
   const dir = reviewPendingDir({ root: ROOT });
-  const path = reviewPendingPath(dir, action.pr);
+  const path = reviewPendingPath(dir, action.pr, action.repo);
   if (dryRun) { say(`[dry] 回收死票 ${path}`); return { ok: true, dryRun: true }; }
   // 删之前正面核一次死活。decide 的判据是「不在开放列表里」（缺席），这里要的是「确实关了」（在场证据）——
   // 缺席可能是查询窗口截断、可能是这一轮 API 抽风；删票不可逆，不拿在场证据不动手。
-  const st = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+  const repo = action.repo && String(action.repo).trim() ? String(action.repo).trim() : REPO;
+  const st = runGh(['pr', 'view', String(action.pr), '--repo', repo, '--json', 'state', '-q', '.state'], 20000);
   if (!st.ok) { say(`  死活没核成，不删票：PR #${action.pr}（${st.error}）`); return { ok: true, skipped: 'liveness-unscanned' }; }
   const prState = String(st.out).trim();
   if (prState !== 'MERGED' && prState !== 'CLOSED') {
@@ -839,9 +945,10 @@ function execMarkExhausted(action, { dryRun, say }) {
     say('  mark-exhausted 缺 pr，不动手');
     return { ok: false, error: 'mark-exhausted 要 pr' };
   }
-  const comment = action.comment || exhaustedComment({
-    pr, verb: action.verb, tries: action.tries, head: action.head,
-  });
+  const useWaiting = action.label === WAITING_USER_LABEL || action.verb === 'pump-draft';
+  const comment = action.comment || (useWaiting
+    ? waitingUserComment({ pr, verb: action.verb, tries: action.tries, head: action.head })
+    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head }));
   const st = runGh(['pr', 'view', String(pr), '--repo', REPO, '--json', 'labels,state'], 20000);
   if (!st.ok) {
     say(`  认输标没查成，本轮不打：PR #${pr}（${st.error}）`);
@@ -865,22 +972,27 @@ function execMarkExhausted(action, { dryRun, say }) {
     say(`  PR #${pr} 已有认输/等用户标，不重复评论`);
     return { ok: true, skipped: 'already-labeled' };
   }
+  const label = useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL;
+  const desc = useWaiting
+    ? 'draft 收口泵试满仍搁置，等帅位三选一'
+    : '自动化认输：机械重试无解，等帅位三选一';
+  const color = useWaiting ? 'FBCA04' : 'B60205';
   if (dryRun) {
-    say(`[dry] 给 PR #${pr} 打「${EXHAUSTED_LABEL}」并评论（${action.verb} 试了 ${action.tries} 次）`);
-    return { ok: true, dryRun: true };
+    say(`[dry] 给 PR #${pr} 打「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`);
+    return { ok: true, dryRun: true, label };
   }
   ensureDir(STATE_DIR);
   const created = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
-    'label', 'create', EXHAUSTED_LABEL, '--repo', REPO,
-    '--description', '自动化认输：机械重试无解，等帅位三选一', '--color', 'B60205'], 20000);
+    'label', 'create', label, '--repo', REPO,
+    '--description', desc, '--color', color], 20000);
   if (!created.ok && !/already exists/i.test(String(created.error || ''))) {
-    say(`  建认输标失败：${created.error}`);
+    say(`  建「${label}」失败：${created.error}`);
     return created;
   }
   const tagged = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
-    'pr', 'edit', String(pr), '--repo', REPO, '--add-label', EXHAUSTED_LABEL], 20000);
+    'pr', 'edit', String(pr), '--repo', REPO, '--add-label', label], 20000);
   if (!tagged.ok) {
-    say(`  打认输标失败：${tagged.error}`);
+    say(`  打「${label}」失败：${tagged.error}`);
     return tagged;
   }
   const bodyFile = join(STATE_DIR, `exhausted-${pr}-${Date.now()}.md`);
@@ -888,11 +1000,11 @@ function execMarkExhausted(action, { dryRun, say }) {
   const commented = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
     'pr', 'comment', String(pr), '--repo', REPO, '--body-file', bodyFile], 20000);
   if (!commented.ok) {
-    say(`  认输标已打、评论失败：${commented.error}`);
-    return { ok: true, labeled: true, commented: false, error: commented.error };
+    say(`  「${label}」已打、评论失败：${commented.error}`);
+    return { ok: true, labeled: true, commented: false, error: commented.error, label };
   }
-  say(`  PR #${pr} 已打「${EXHAUSTED_LABEL}」并评论（${action.verb} × ${action.tries}）`);
-  return { ok: true, labeled: true, commented: true };
+  say(`  PR #${pr} 已打「${label}」并评论（${action.verb} × ${action.tries}）`);
+  return { ok: true, labeled: true, commented: true, label };
 }
 
 function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {
@@ -1021,7 +1133,7 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
  * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
-export const DISPATCHING_KINDS = new Set(['dispatch', 'rework']);
+export const DISPATCHING_KINDS = new Set(['dispatch', 'rework', 'pump-draft']);
 
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
@@ -1038,7 +1150,17 @@ export function runActions(actions, { exec, log = [] } = {}) {
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
-    const r = exec(action);
+    // 一个动作炸了不许带走整轮（2026-09-11 实咬）：execClearExhausted 里一个
+    // `run is not defined` 让 10:51 那轮 act 整个 exit 1——扫、判、其余动作全没跑成，
+    // 而报错只在 journal 里，用户侧看不出「这一轮什么都没做」。
+    // 收成 try/catch：失败按「这个动作没成」记一条，继续跑剩下的。
+    let r;
+    try { r = exec(action); }
+    catch (e) {
+      const msg = String((e && e.message) || e);
+      log.push(`  执行炸了（已跳过，不影响本轮其余动作）：${msg}`);
+      r = { ok: false, error: msg, threw: true };
+    }
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
     // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
     // 仍要进 failedIssues（不发「已自动派单」喜报——毕竟没派出去），但**不报帅、不开单**。
@@ -1054,16 +1176,18 @@ export function runActions(actions, { exec, log = [] } = {}) {
     failedIssues.add(String(action.issue));
     if (action.pr != null) failedPrs.add(String(action.pr));
     const isRework = action.kind === 'rework';
+    const isPump = action.kind === 'pump-draft';
+    const failKind = isRework ? 'rework' : isPump ? 'pump-draft' : 'dispatch';
     const escalation = {
       kind: 'escalate',
-      reason: r && r.unscanned
-        ? (isRework ? 'rework-unscanned' : 'dispatch-unscanned')
-        : (isRework ? 'rework-failed' : 'dispatch-failed'),
+      reason: r && r.unscanned ? `${failKind}-unscanned` : `${failKind}-failed`,
       issue: action.issue,
       ...(action.pr != null ? { pr: action.pr } : {}),
       why: isRework
         ? `PR #${action.pr} 自动派返工工人${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——同 head 不自动重派，交帅`
-        : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
+        : isPump
+          ? `PR #${action.pr} draft 收口泵${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}——本张不自动重派，交帅`
+          : `#${action.issue} 自动派工${r && r.unscanned ? '成没成没查成' : '失败'}：${(r && r.error) || ''}`,
     };
     generated.push(escalation);
     exec(escalation);
@@ -1101,9 +1225,9 @@ function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, no
   return verdict;
 }
 
-function runOrShow(argv, { dryRun, say, why }) {
+function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
   if (dryRun) { say(`[dry] ${why || ''}\n    ${argv.join(' ')}`); return { ok: true, dryRun: true }; }
-  const r = runCmd(argv);
+  const r = run(argv);
   say(`  ${r.ok ? '跑完' : '失败'}：${argv.slice(1).join(' ')}${r.ok ? '' : ' → ' + r.error}`);
   return r;
 }
@@ -1180,6 +1304,39 @@ export function reworkSpec(action, briefPath) {
     : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
 }
 
+/** #1147 draft 收口泵：短会话三选一，必须落痕。关闭是工人判，不是指挥官机械关。 */
+export function pumpDraftBriefPath(action, { dir = null } = {}) {
+  return join(dir || join(STATE_DIR, 'pump-draft'), `pr-${action.pr}.md`);
+}
+
+export function pumpDraftBriefText(action) {
+  return [
+    `# draft 收口：PR #${action.pr}`,
+    '',
+    `- 署名 issue #${action.issue}；当前 head ${action.head || '（没查成）'}`,
+    `- 这是第 ${action.tries || 1} 次收口泵。泵满仍 draft 会打「卡死/等用户」交帅，不再泵。`,
+    '',
+    '本会话只做一件事：让这张 draft 离开搁置。三选一，必须落痕：',
+    '',
+    'a) 能补验收就补、转正式、交卷入队（`dao.mjs worker-done --executor mirasim`）。',
+    'b) 差距大就在 PR 评论写「差什么」并保持 draft。',
+    'c) 已被现实超越就评论说明并关闭（关闭是你判，不是指挥官机械关）。',
+    '',
+    '硬边界：不许借机改本单范围外的东西；不许批量关别人的 draft。',
+    '',
+  ].join('\n');
+}
+
+export function pumpDraftSpec(action, briefPath) {
+  return `收口 draft PR #${action.pr}：先切到该 PR 分支；三选一（补验收转正式 / 评论差什么保持 draft / 评论说明并关闭），全文在 ${briefPath}。`;
+}
+
+export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}) {
+  return writeBriefVerified({
+    path: pumpDraftBriefPath(action, { dir }), text: pumpDraftBriefText(action), io: fsio, what: 'draft 收口任务书',
+  });
+}
+
 /**
  * 叫审官复审：写一张复审待办票，当场走 review-pending-drain --pr。
  * 不在这里直接起审官——一 PR 一审官的闸、复用还是新建、缺士兵树走不走快马路，全在 drain/reviewer-create 那一侧。
@@ -1202,10 +1359,11 @@ function requestRereview(action, { state, dryRun, say }) {
     round: 'rereview',
     source: REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
     ts: nowIso(),
+    repo: action.repo || null,
   });
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
-    say(`[dry] 写复审待办 ${dir}/${action.pr}.json（${action.why}）`);
+    say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
     return drainReviewPending(action, { state, dryRun, say });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
@@ -1222,21 +1380,38 @@ function requestRereview(action, { state, dryRun, say }) {
   return drainReviewPending(action, { state, dryRun, say });
 }
 
-/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。 */
+/** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
+ *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
 function drainReviewPending(action, { state, dryRun, say }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
+  if (action.repo) cmd.push('--repo', String(action.repo));
   const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  // 派了 ≠ 成了：不管这次成没成，tries 都记一笔。票还在队列 = 下次走 retry-drain。
-  // 键必须与 validateRetryDrain / execRetryDrain 同一套（pr:<N>@<head>）。
-  if (action.pr != null) {
-    state.drainLedger = state.drainLedger || {};
-    const key = drainLedgerKey(action.pr, ticketHeadOid(action.head));
-    const prev = state.drainLedger[key];
-    state.drainLedger[key] = { at: nowIso(), pr: action.pr, tries: (Number(prev?.tries) || 0) + 1 };
-  }
+  recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+function drainPayloadOf(runResult) {
+  if (!runResult) return { ok: false };
+  if (runResult.dryRun === true) return { ok: true, dryRun: true };
+  const text = String(runResult.out || '');
+  const start = text.lastIndexOf('{');
+  if (start < 0) return { ok: runResult.ok === true };
+  try { return JSON.parse(text.slice(start)); }
+  catch { return { ok: runResult.ok === true }; }
+}
+
+function recordDrainAttempt(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  const applied = applyDrainLedger({
+    ledger: state.drainLedger || {},
+    pr: action.pr,
+    head: ticketHeadOid(action.head),
+    payload,
+    nowIso: nowIso(),
+  });
+  if (applied.wrote) state.drainLedger = applied.ledger;
 }
 
 function findDaoTree(issue, pr) {
@@ -1267,8 +1442,28 @@ function rememberRework(state, action, written, verdict) {
   };
 }
 
-function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
-  const written = writeReworkBrief(action);
+/** 帅位快马 PR 没有 dao-<单> 工树。原判「找不到原树不新派工」把这类 PR 的返工判成死刑
+ *  （#1142 实咬：CONFLICTING 挂一晚，每轮「找不到工人树 dao-1133，交帅」，而帅并不在场）。
+ *  折法：从 PR 分支建树（mirasim 建树按分支幂等，同分支复用），会话仍是短命的——
+ *  「不新派工」挡的是重复 dispatch 整条链，不是挡一棵树。 */
+function ensureTreeFromPr(action, { dryRun, say, run = runCmd }) {
+  if (action.pr == null) return { ok: false, error: `找不到工人树 dao-${action.issue}，也没有 PR 可建树` };
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'view', String(action.pr),
+    '--json', 'headRefName', '-q', '.headRefName']);
+  const headRef = r.ok ? String(r.out || '').trim() : '';
+  if (!headRef) return { ok: false, error: `找不到工人树 dao-${action.issue || action.pr}，且查不到 PR #${action.pr} 的分支名（没查成）` };
+  if (dryRun) { say(`[dry] 无 dao 树，将从 PR 分支 ${headRef} 建树`); return { ok: true, dryRun: true, headRef }; }
+  const made = run(['node', 'scripts/dao.mjs', 'worktree-create', '--executor', 'mirasim', '--branch', headRef]);
+  if (!made.ok) return { ok: false, error: `从 PR 分支 ${headRef} 建树失败：${made.error || ''}` };
+  let path = null;
+  try { path = JSON.parse(String(made.out || '').trim().split('\n').pop() || '{}').path || null; }
+  catch { /* 回执不是 JSON：按下面「没查成」处理 */ }
+  if (!path) return { ok: false, error: `从 PR 分支 ${headRef} 建树回执没有 path（没查成）：${String(made.out || '').slice(0, 120)}` };
+  return { ok: true, tree: path, headRef };
+}
+
+function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
+  const written = writeReworkBrief(action, { dir: briefDir });
   if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
   const spec = reworkSpec(action, written.path);
   try { buildSoldierInject({ spec, issue: action.issue }); }
@@ -1277,7 +1472,14 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     say(`  ${error}`);
     return { ok: false, error };
   }
-  const tree = findDaoTree(action.issue, action.pr);
+  let tree = findDaoTree(action.issue, action.pr);
+  let treeFail = null;
+  if (!tree) {
+    const made = ensureTreeFromPr(action, { dryRun, say, run });
+    if (made.dryRun) return { ok: true, dryRun: true, tree: `(dry: PR 分支 ${made.headRef})` };
+    if (made.ok) { tree = made.tree; say(`  没有 dao 树，已按 PR 分支 ${made.headRef} 建树：${tree}`); }
+    else treeFail = made.error;
+  }
   if (action.conflict && tree && !dryRun) {
     const fetch = run(['git', '-C', tree, 'fetch', '--quiet', 'origin', 'master']);
     if (fetch.ok) {
@@ -1299,7 +1501,7 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     }
   }
   if (!tree) {
-    const error = `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
+    const error = treeFail || `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
     say(`  ${error}`);
     const verdict = { ok: false, unscanned: true, error };
     rememberRework(state, action, written, verdict);
@@ -1312,8 +1514,56 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd }) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
   }
-  const started = runOrShow(cmd, { dryRun: false, say, why: action.why });
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
   rememberRework(state, action, written, started);
+  return started;
+}
+
+function rememberPumpDraft(state, action, written, verdict) {
+  state.reworkDispatched = state.reworkDispatched || {};
+  const pkey = action.pumpKey || pumpDraftKey(action.pr);
+  const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  state.reworkDispatched[pkey] = {
+    at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
+    brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
+    tries: prevTries + 1, kind: 'pump-draft',
+  };
+}
+
+export function dispatchPumpDraft(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
+  const written = writePumpDraftBrief(action, { dir: briefDir });
+  if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
+  const spec = pumpDraftSpec(action, written.path);
+  try { buildSoldierInject({ spec, issue: action.issue }); }
+  catch (e) {
+    const error = `draft 收口注入过不了字节闸：${String(e.message || e).slice(0, 200)}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  let tree = findDaoTree(action.issue, action.pr);
+  let treeFail = null;
+  if (!tree) {
+    const made = ensureTreeFromPr(action, { dryRun, say, run });
+    if (made.dryRun) return { ok: true, dryRun: true, tree: `(dry: PR 分支 ${made.headRef})` };
+    if (made.ok) { tree = made.tree; say(`  没有 dao 树，已按 PR 分支 ${made.headRef} 建树：${tree}`); }
+    else treeFail = made.error;
+  }
+  if (!tree) {
+    const error = treeFail || `找不到工人树 dao-${action.issue || action.pr}，不新派工`;
+    say(`  ${error}`);
+    const verdict = { ok: false, unscanned: true, error };
+    rememberPumpDraft(state, action, written, verdict);
+    return verdict;
+  }
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', action.model,
+    '--worktree', tree, '--prompt', spec];
+  if (dryRun) {
+    say(`[dry] pump-draft PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
+    return { ok: true, dryRun: true, tree };
+  }
+  const started = runOrShow(cmd, { dryRun: false, say, why: action.why, run });
+  rememberPumpDraft(state, action, written, started);
   return started;
 }
 
@@ -1845,7 +2095,7 @@ function escalate(action, { state, dryRun, say,
     writeFileSync(bodyFile, body, 'utf8');
     const r = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
       '--repo', REPO, '--issue', String(booked.issue), '--body-file', bodyFile,
-      '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', booked.issue, verdict.target)], 60000);
+      '--host', 'commander', '--idempotency-key', `commander-escalate:append:${booked.issue}:${keySafe(verdict.target)}`], 60000);
     if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
     state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
@@ -1897,7 +2147,7 @@ function escalate(action, { state, dryRun, say,
         writeFileSync(bodyFile, body, 'utf8');
         const put = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
           '--repo', REPO, '--issue', String(existing), '--body-file', bodyFile,
-          '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', existing, t)], 60000);
+          '--host', 'commander', '--idempotency-key', `commander-escalate:append:${existing}:${keySafe(t)}`], 60000);
         if (!put.ok) {
           say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
           return { ok: false, error: put.error };
@@ -1967,6 +2217,23 @@ function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
 // 标题只写原因，不写对象——**对象会不断增加**，写进标题第二个对象来的那一刻它就是错的。
 // 受影响清单在正文里滚动（业界形态：一条告警 + 受影响对象清单，不是每个对象一条告警）。
 function escalateTitle(a) { return String(a.reason || '').trim(); }
+
+/**
+ * 幂等键里不许有空白（网关明规则：1–200 个可见字符、不能有空白）。
+ *
+ * 2026-09-11 实咬：`verdict.target` 的形状是 `PR #1154` / `issue #815`——**带空格**，
+ * 直接拼进 `--idempotency-key` 会被网关拒：
+ *
+ *     报帅追加失败（#1182，本轮不改账本，下轮再试）：
+ *     missing_idempotency: idempotency_key 必须是 1–200 个可见字符、不能有空白
+ *
+ * 于是「追加对象进已有单」这条路一直没通（第一次被走到是我新加的 reviewer-label-missing
+ * 触发的）。键**只需要稳定唯一**，不需要好看——所以把空白折成 `-`，
+ * 正文里的对象名照旧用可读原文（那才是给人看的）。
+ */
+export function keySafe(s) {
+  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+}
 function escalateBody(a, marker, verdict) {
   const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
   const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
@@ -2001,8 +2268,11 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  // marker 是中文行（`查重标记（勿删）：…`），title 也可能带空格——直接当 key 必被网关拒收。
-  const key = gatewayIdemKey('commander-escalate', marker ? marker[0].slice(0, 120) : title);
+  // marker 是中文行（`查重标记（勿删）：…`），title 也可能带空格/JSON——直接当 key 必被网关拒收。
+  // 一律走 escalationKeyOf（ASCII 前缀 + 摘要），不指望调用方给的字符串正好合法。
+  // 2026-09-10 实咬：派工失败 title 带着整段 JSON，故障与告警同源失效。
+  const keySeed = marker ? marker[0] : title;
+  const key = `commander-escalate:${escalationKeyOf(keySeed)}`;
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);
@@ -2139,6 +2409,37 @@ function cmdAct(argv) {
     situation, state, dryRun, say: (m) => log.push(m),
   });
   runDaipai({ state, dryRun, say: (m) => log.push(m) }); // 双门制：双向门到期无人回复 → 唤大脑代拍
+
+  // ── 推进量仪表（2026-09-11）────────────────────────────────────────────────
+  // **动作摘要连续相同 = 停住**。这一晚四个死点全靠它抓到（12 张认输 PR 零动作、
+  // 死动作刷 19 轮、判据读错字段、整轮被一个异常带走），而它们**全都不报错**：
+  // 认输的 PR 是「零动作」，死动作是「每轮产一条被拒的动作」——日志里像已经叫过审官。
+  // 错误扫描找不到这些；只有「跟上一轮比，有没有变化」找得到。
+  //
+  // 判据刻意**不数动作条数**：一条被拒的死动作也是动作。数的是 digest（去掉 noop 后
+  // 的稳定摘要）——它变了才算真有新东西。
+  if (!dryRun) {
+    // 判据在 commander-core 的 nextDigestStreak（纯函数，可直喂）。这里只取数、报警。
+    const vac = nextDigestStreak({
+      actions,
+      lastDigest: state.lastActionDigest || null,
+      lastStreak: state.digestStreak,
+      threshold: Number(policy.commander?.digestStreakAlert) || 6,
+    });
+    state.digestStreak = vac.streak;
+    state.lastActionDigest = vac.digest;
+    if (vac.stuck) {
+      log.push(`  推进量：连续 ${vac.streak} 轮动作摘要完全相同——停住了，不是还在跑`);
+      hubOnce({
+        state,
+        key: `digest-stuck:${vac.digest}`,
+        text: `[指挥官] 连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
+          + `盘面没在推进。当前这一套动作：\n${log.filter((l) => l.startsWith('· ')).slice(0, 6).join('\n')}`,
+        dryRun,
+      });
+    }
+  }
+
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
   else {
@@ -2202,4 +2503,5 @@ export {
   reapBrains,
   alreadyAppended,
   scanSessions, scanDesiredJobs,
+  ensureTreeFromPr, dispatchRework,
 };

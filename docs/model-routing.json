@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-06",
+  "updated": "2026-09-09",
   "工人": {
     "写码": {
       "模型": [
@@ -403,6 +403,7 @@
   "腿": [
     {
       "id": "grok-4.6@gw/orca",
+      "并发上限": "不限",
       "模型": "grok-4.6",
       "族": "pi",
       "供应商": "gw",
@@ -417,6 +418,7 @@
     },
     {
       "id": "deepseek-v4-flash@gw/orca",
+      "并发上限": null,
       "模型": "deepseek-v4-flash",
       "族": "pi",
       "供应商": "gw",
@@ -431,6 +433,7 @@
     },
     {
       "id": "gpt-5.6-sol@pqapi/orca",
+      "并发上限": 2,
       "模型": "gpt-5.6-sol",
       "族": "codex",
       "供应商": "pqapi",
@@ -444,6 +447,7 @@
     },
     {
       "id": "gpt-5.6-luna@gw/orca",
+      "并发上限": null,
       "模型": "gpt-5.6-luna",
       "族": "pi",
       "供应商": "gw",
@@ -458,6 +462,7 @@
     },
     {
       "id": "glm-5.2@gw/orca",
+      "并发上限": null,
       "模型": "glm-5.2",
       "族": "pi",
       "供应商": "gw",
@@ -472,6 +477,7 @@
     },
     {
       "id": "gemini-3.7-flash@gw/orca",
+      "并发上限": null,
       "模型": "gemini-3.7-flash",
       "族": "pi",
       "供应商": "gw",
@@ -486,6 +492,7 @@
     },
     {
       "id": "kimi-k3@gw/orca",
+      "并发上限": null,
       "模型": "kimi-k3",
       "族": "pi",
       "供应商": "gw",
@@ -500,6 +507,7 @@
     },
     {
       "id": "composer-2.5@gw/orca",
+      "并发上限": null,
       "模型": "composer-2.5",
       "族": "pi",
       "供应商": "gw",
@@ -514,6 +522,7 @@
     },
     {
       "id": "claude-fable-5@reclaude/terminal",
+      "并发上限": "不限",
       "模型": "claude-fable-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -543,6 +552,7 @@
     },
     {
       "id": "claude-opus-5@mirasim/mirasim",
+      "并发上限": 5,
       "模型": "claude-opus-5",
       "族": "claude",
       "供应商": "mirasim",
@@ -564,6 +574,7 @@
     },
     {
       "id": "claude-opus-5@reclaude/terminal",
+      "并发上限": "不限",
       "模型": "claude-opus-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -578,6 +589,7 @@
     },
     {
       "id": "gpt-5.6-luna@mirasim/mirasim",
+      "并发上限": 5,
       "模型": "gpt-5.6-luna",
       "族": "codex",
       "供应商": "mirasim",
@@ -588,6 +600,7 @@
     },
     {
       "id": "gpt-5.6-sol@mirasim/mirasim",
+      "并发上限": 5,
       "模型": "gpt-5.6-sol",
       "族": "codex",
       "供应商": "mirasim",
@@ -598,6 +611,7 @@
     },
     {
       "id": "gpt-6-astra@mirasim/mirasim",
+      "并发上限": 5,
       "模型": "gpt-6-astra",
       "族": "codex",
       "供应商": "mirasim",
@@ -608,6 +622,7 @@
     },
     {
       "id": "claude-fable-5@mirasim/mirasim",
+      "并发上限": 5,
       "模型": "claude-fable-5",
       "族": "claude",
       "供应商": "mirasim",
@@ -621,9 +636,8 @@
     "默认": "mirasim",
     "说明": "#880 §72：治理留 dao，mirasim-server 当执行体 provider。orca 产品面已退役，执行体只剩 mirasim。",
     "mirasim": {
-      "钉版本": "0.0.282",
       "族": "mirasim-server",
-      "说明": "回环 ws 127.0.0.1:4316，systemd 常驻；起会话前契约断言 getState.version===钉版本，不符报警拒派不静默",
+      "说明": "回环 ws 127.0.0.1:4316，systemd 常驻。起会话前有契约断言，判据见 scripts/lib/mirasim-runtime.mjs 的 judgeContract：默认只要求服务端报得出合法 version（跟随在役版本，升级不误拒），显式钉住才比对具体值。",
       "模型前缀族": {
         "gpt-5.6": "gpt",
         "gpt": "gpt",
@@ -645,21 +659,31 @@
         },
         "gpt": {
           "agent": "codex",
-          "mode": "relay",
-          "理由": "gpt 走 Codex；云端腿 relay（审官主路 gpt-5.6-luna）"
+          "mode": "direct",
+          "理由": "2026-09-08 用户拍板两轮：审官 gpt 族钉 codex CLI 载体（效果优先）+ 渠道优先级 windsurf>pqapi>mirasim。落地现状：codex 0.153+ 只讲 responses、new-api 转换未实现（ai-gateway-stack#7），故 direct=codex 直连 pqapi（~/.codex/config.toml，responses 原生），mirasim 由 setting.json failover reactive 兜底（always 已关——它曾把全部流量改道 relay.mirasim.ai 烧云额度）；windsurf 优先等 #7 落地后接入。chat 口径客户端已吃到网关 gptpool 三级链（windsurf40→pqapi15→mirasim-bridge5）"
         },
         "codex": {
           "agent": "codex",
-          "mode": "relay"
+          "mode": "direct",
+          "理由": "同 gpt（2026-09-08）"
         },
         "pi": {
           "agent": "pi",
           "mode": "direct",
           "理由": "pi 烧网关池，保 pqgpt 主路"
+        },
+        "grok": {
+          "agent": "grok",
+          "腿": "local",
+          "理由": "原生 Grok，由统一 profile 验证后启用"
         }
       },
       "注": "2026-09-06 实测服务端 agentsAvailable = [codex, pi]（claude 不在，见「腿」节两条 @mirasim 的 claude 腿）。六个 pi 族前缀 grok/deepseek/glm/gemini/kimi/composer 已登记，它们在「腿」节的族本来就是 pi；仍未登记的家族 judgeAgentRoute 照旧拒派不猜",
-      "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现"
-    }
+      "pi 腿还不能搬": "2026-09-06 真机验针实测：路由判得出、会话起得来、grok-4.6 真回 PONG、快照 phase=done——但 judgeCompletion 判 unknown。根因是 mode=direct 的 agent 自己直连网关，流量不经 mirasim relay，~/.mirasim/traffic 下结构上就没有它的账本目录，三方交叉核的 ledger 那条腿不存在（journal 腿又默认关着，#880 卡 A 留的「没查成」）。现役 5 条 @mirasim 腿全是 claude/codex 族 relay，所以这个洞此前没暴露过。把「腿」节的 pi 腿改成执行侧=mirasim 之前必须先解决完工判据，否则每针都判不出完工、waitForCompletion 一路等到超时——比拒派更难发现",
+      "钉版本": null,
+      "钉版本说明": "留空=跟随本机在役版本（读 mirasim-server/current/VERSION，升级器自己维护那份）。显式填具体版本号才恢复「不符就拒派」的严格语义，只用于排查期冻结。2026-09-10 实咬：这里原本手打 0.0.282，升级到 0.0.307 时没人记得改，契约断言全不符，96 条派工被拒、11 张单卡死，且告警同时哑掉——所以不再留手打值。"
+    },
+    "profileCatalog": "docs/execution-profiles.json",
+    "迁移说明": "2026-09-09 #1174：任务由统一 runtime 执行；具体后端、模型、local/cloud、供应商与账户池以 execution-profiles 为准。旧职责树保留已有 issue 的模型身份，不能再把旧 gw 探针当直连路径健康；Mirasim 版本读取已晋升 current/VERSION。Cursor/Devin 走共用 ACP，其他已支持执行体走 Mirasim。"
   }
 }

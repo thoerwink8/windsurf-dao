@@ -15,6 +15,7 @@
 
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { ROLES } from './gh.mjs';
+import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -362,9 +363,13 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
     maxTries: opts.maxTries,
   });
   if (!v.ok) return v;
+  // --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸。
+  // 不过上限是 --force，只许人手；指挥官自动化不许带。
   return {
     ok: true,
-    argv: ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
+    argv: action.repo
+      ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr), '--repo', String(action.repo)]
+      : ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
     pr: v.pr,
     tries: v.tries,
     stateKey: v.stateKey,
@@ -424,6 +429,28 @@ export function drainLedgerKey(pr, head) {
   const p = pr == null ? '' : String(pr).trim();
   const headOid = typeof head === 'string' && head.trim() ? head.trim() : null;
   return headOid ? `pr:${p}@${headOid}` : `pr:${p}`;
+}
+
+/**
+ * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
+ * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
+ */
+export function applyDrainLedger({
+  ledger = {}, pr, head, payload, nowIso, _checks,
+} = {}) {
+  const verdict = classifyDrainAttempt(payload, { _checks });
+  if (!verdict.countTry || pr == null) return { ledger, wrote: false, verdict };
+  const key = drainLedgerKey(pr, head);
+  const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  return {
+    ledger: {
+      ...(ledger && typeof ledger === 'object' ? ledger : {}),
+      [key]: { at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1 },
+    },
+    wrote: true,
+    verdict,
+    key,
+  };
 }
 
 /**

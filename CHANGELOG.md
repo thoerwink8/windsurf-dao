@@ -2,6 +2,98 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.3.0 — 2026-09-10
+
+### 新功能
+- [pi] feat(dispatch): 派工链贯通 --repo，射程不再钉死本仓 (#1028)
+- [cc] feat(gc): 孤儿执行租约与中间态登记回收——死人占树的根因
+- [pi] feat(reviewer): 撞满载按顺位换厂——凭死因原文成立，删点将台死代码（#1122） (#1129)
+- [cc] feat(board): 看板 v0——一张表 + 超时告警发总控群（#818） (#1108)
+- [cc] feat(catalog): grok 原生腿取得执行级证据并回填（#1174）
+- [cc] feat(execution): 统一执行改造——ACP 无人值守 + 会话目录清理 + 补丁链闸（#1174 #1176） (#1175)
+- [cc] feat(check): 合并闸检查器——扫在管公开活仓的分支保护（#999） (#1110)
+- [cc] feat(channel): 会话级并发三件套——上限+顺位分流+熔断 (#1145) (#1169)
+- [cc] feat(mirasim): 钉版本改为跟随在役版本——升级不再需要谁记得改常量
+
+### 修复与维护
+- [cc] fix(mirasim): 带着死因的会话不许判完工——judgeCompletion 补读 error（#1121） (#1127)
+- [cc] fix(commander): 「认输」不再把 PR 永久焊死——条件齐了照合，认输只挡重试
+- [cc] docs(obs): 复审票拉不动的根因——字段名不存在 + 手打终态清单，且夹具与代码错在同一处
+- [cc] fix(review): 读的字段名不存在——28 个「在役审官」把上限 3 永久吃满，复审票一张拉不动
+- [cc] docs(obs): 补两处核实——本轮没真删错，且 #1150 另有一道牌接住
+- [cc] docs(obs): 会话记录的 updatedAt 会冻住——判活靠它，正在跑的会话 45 分钟后判 silent
+- [cc] fix(cli): session-stop 收下 --worktree——指挥官发起的停会话此前 100% 报「未知参数」
+- [cc] fix(execution): incomplete 不是「未结算预留」——#1150 卡整晚的根因，状态清单收成一处正典
+- [cc] fix(gate): 转义闸判据换轴——认「代码文本经 shell 落进文件」这个行为，不再认工具名
+- [cc] fix(execution): 观测集不再被过期会话拖成「没查成」——先问名单，实测 19-30s → 8.8s
+- [cc] fix(probe): codex 直连探针的 input 改成 responses 结构化形状——108 次「上游红」是它自己造的
+- [cc] fix(admission): 余量闸改量真 CPU 占用 + 收尾名额独立成池（用户 2026-09-10 拍板 A+B）
+- [cc] fix(admission): 模型准入归口——profile 未验不再连带冻掉在役落地的模型
+- [cc] fix(execution): 会话明确 gone 不再拖垮整张名单——差集重派解冻
+- [cc] fix(tests): 三处 _tmp 沙箱收尾自清——root 跑一次，属主闸红且 orca 下次 EACCES
+- [cc] docs(new-machine): codex 沙箱前置三件——bubblewrap + 二进制级 userns 放行
+- [cc] docs(observations): 处置报帅 key 闸条目——2af1fba9 已落，附实测前后对照
+- [cc] fix(gateway): 报帅 key 的闸对齐真闸（ASCII）——中文 label 不再被拒（收件箱 2026-09-10）
+- [cc] fix(mirasim): 建树幂等命中不再报错——服务端 worktrees 缓存会陈旧
+- [cc] fix(mirasim): 工作区匹配按 realpath——11 张单卡在建树的真根因
+
+### 其它
+- [patrol] #818 看板超时告警从未装上，⑮ 改成负向闸所以缺席仍绿
+- [patrol] 报帅规范化闸比网关真闸松，中文 key 每轮仍被拒
+- [patrol] 指挥官 act timer 已停，⑭ 只问 enabled 所以仍绿
+- release: v2.2.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.2.0 — 2026-09-09
+
+### 新功能
+- [cc] feat(commander): draft 搁置单收口泵——无会话超时派短会话三选一 (#1147) (#1162)
+- [pi] feat(review): 工人交卷改入队，审官按在役数拉取（#1125） (#1135)
+- [cc] feat(commander): 命中 human_holds 的单派 merge-policy=manual（#1094） (#1099)
+
+### 修复与维护
+- [cc] fix(commander): 报帅开单的 key 一律规范化——故障与告警不许同源失效
+- [cc] fix(mirasim): PINNED_VERSION 常量跟上 0.0.307——止血第二半
+- [cc] fix(routing): 钉版本 0.0.282→0.0.307 止血——生产派工链被契约断言拒死
+- [cc] fix(inbox): 6 条巡检观测补处置行——收件箱闸转绿
+- [codex] fix(commander): type/体系重派不回落 auto (#1163)
+
+### 其它
+- [patrol] #1015 凭据闸把额度采样的 git 推送掐死
+- [patrol] 收件箱从 hook 挪到 dao-check，skill 没改、新载体也没人跑
+- [patrol] orca 读不了 journal，盘点探针连红闸每轮没查成
+- release: v2.1.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.1.0 — 2026-09-08
+
+### 新功能
+- [cc] feat(routing): 审官 gpt 族 relay→direct——codex 直连网关 gptpool，停烧 mirasim 云额度（2026-09-08 用户拍板）
+- [pi] feat: 「将来某版」档——GitHub Milestone 两档 + 派工跳过 (#966) (#1107)
+- [pi] feat(gate): 控制面断了拦推送/部署，探测失败不拦（#948） (#1109)
+- [cc] feat(probe): 收 gw-remote-probe 进仓——单元+脚本+INDEX（#967） (#1106)
+
+### 修复与维护
+- [codex] fix(commander): 收口无人值守任务生命周期 (#1157)
+- [cc] fix(commander): 返工无 dao 树时从 PR 分支建树——快马 PR 不再永久交帅 (#1133) (#1144)
+- [cc] docs(routing): direct 的落地实况修准——codex 直连 pqapi（responses 约束），windsurf 优先挂 ai-gateway-stack#7
+- [cc] docs(西瓜清单): 录入 2026-09-08 全部拍板——scale-dozens 立项、orca-retire 重开、queued 档新增
+- [grok] fix(watchdog): ⑳ 已装却漂了不许被没装盖成没查成 (#1136)
+- [grok] fix(lifecycle): 刮名单超时 15s 仍偶发，改 30s (#1139)
+- [grok] fix(lifecycle): 会话名单超时放宽，看板勾完 (#1138)
+
+### 其它
+- [patrol] #967 合了，探活仍跑 ~/bin；drop-in 还撞 :07
+- [patrol] #948 控制面闸合了：没写腿，挂载面也不在现役工人上
+- [patrol] #1015 凭据闸扫不到每 20 分钟合并 PR 的指挥官单元
+- [pi] 收口跨宿主 GitHub 写权限：AI 只经 Bot 网关操作 Issue (#1015)
+- [patrol] #888 回流提示层钉在已退役的 orca 士兵书上
+- release: v2.0.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.0.0 — 2026-09-07
 
 ### 破坏性变更

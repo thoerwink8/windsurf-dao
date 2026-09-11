@@ -225,3 +225,6 @@ describe('redact.mjs · 会话态脱敏', () => {
     });
   });
 });
+
+// 收尾清理：同 tests/dao-mode.test.js 尾注——root 跑一次，orca 的下一次就 EACCES。
+process.on('exit', () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });

@@ -590,3 +590,7 @@ describe('dao-mode', () => {
     });
   });
 });
+
+// 收尾清理：沙箱落在仓内 _tmp/mode-sandbox。宿主是 root 时它是 root 属主——
+// dao-check「仓内属主」项当场红，且 orca 侧下次跑测试 rmSync 直接 EACCES（2026-09-10 实咬）。
+process.on("exit", () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });
