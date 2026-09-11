@@ -1,0 +1,16 @@
+[
+  {
+    "name": "windsurf-dao",
+    "path": "/no/such/windsurf-dao",
+    "exists": false,
+    "scanned": false,
+    "reason": "仓路径不存在"
+  },
+  {
+    "name": "ai-gateway-stack",
+    "path": "/no/such/ai-gateway-stack",
+    "exists": false,
+    "scanned": false,
+    "reason": "仓路径不存在"
+  }
+]

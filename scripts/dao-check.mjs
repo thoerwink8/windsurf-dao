@@ -77,9 +77,10 @@
 // ㉙ 发布策略 schema（#817）：docs/release-policy.json 可解析且过 schema（四个顶层键 /
 //    confirm 三级 / bump 表 / 每项目 demo）。检查器自持解析，不 import 消费方；
 //    红/绿/空夹具验判别力；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成。
-// ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
-//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
-//    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
+// ㉚ skill 发现面符号链接（#793 / #1146）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
+//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红。整目录链接（mirasim 劫走）
+//    报「被劫」，本机无 ~/.claude/skills 报 SKIP「没装」——两种红/跳必须分形，常红等于没有检查。
+//    接回走 onboard / dao-skills-heal.timer，本项只报警。0 个 skill = 没查成
 // ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
 //    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
@@ -101,7 +102,12 @@
 //    缺 gh / 连摘要都 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
 //    strict 不在摘要里，live 盖不住「有人把 strict 拨成 true」——装闸脚本走完整 /protection。
 //    不造分发器：配置动作用 scripts/apply-branch-protection.mjs，一次一个仓。
-// ㉟ 测试结构性够不着真执行体（#1152）：spawn dao dispatch 必须带 --dry-run；
+// ㉟ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
+//    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
+//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
+//    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
+//    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
+// ㉠ 测试结构性够不着真执行体（#1152）：spawn dao dispatch 必须带 --dry-run；
 //    故意「执行体 env 丢失」样本必须红；ensureWorkspace/startSession/cmdDispatchMirasim
 //    都要在真 IO 前过隔离闸。检查器自持括号匹配，不 import 被测测试 / runtime 解析。
 //    红/绿/空夹具验判别力；0 个测试文件 = 没查成。
@@ -162,6 +168,9 @@ import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
   collectManagedReposFromRoot, repoSlugFromRemote,
 } from './lib/branch-protection-check.mjs';
+import {
+  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, interpretFindRootOwned, DEFAULT_MANAGED_REPOS,
+} from './lib/git-ownership-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -945,8 +954,8 @@ function checkMemoryLinkAlive() {
 
 // ── ㉚ skill 发现面符号链接（local-only，issue #793）────────────────────
 // 仓内 host/skills/<名>/ 每个 skill，在本机宿主发现面 ~/.claude/skills/<名> 必须是指向仓内
-// host/skills/<名> 的符号链接（NEW-MACHINE §11；建链是手动动作，#565 拍板 symlink 归帅建，
-// 本检查只报警不自动建链）。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
+// host/skills/<名> 的符号链接（NEW-MACHINE §11）。整目录链接 = 被劫（#1146），无发现面 = 没装。
+// 接回走 onboard / dao-skills-heal.timer，本检查只报警。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
 // 实现放 scripts/lib/skill-link-check.mjs，让 tests/skill-link.test.js 拿假 root + 假 HOME 造
 // 违规样本（缺链/普通目录/悬空/指错=红，全链齐=绿，无 ~/.claude/skills=SKIP，空 host/skills=没查成）
 // 单独验判别力，不必跑整个 dao-check（那会递归）。
@@ -1189,6 +1198,56 @@ function checkRepoOwnership() {
     return;
   }
   green('仓内属主：扫完 0 个 root 属主文件');
+}
+
+function findRootOwnedInGitDir(gitDir) {
+  return interpretFindRootOwned(spawnSync('find', [gitDir, '-user', 'root', '-print'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }));
+}
+
+function checkGitOwnershipSamples() {
+  const r = inspectGitOwnershipFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '.git 属主闸样本没查成' : '.git 属主闸样本对不上',
+      '恢复 tests/fixtures/git-ownership/{red,ok,empty}.json：红=点名 root 文件必须拦、绿必须过、仓不在必须没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`.git 属主闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkGitOwnershipLive() {
+  if (process.platform === 'win32') { skip('.git 属主：Windows 无 uid 概念，本项跳过'); return; }
+  const exists = (p) => existsSync(p);
+  const isDir = (p) => {
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
+  const statUid = (p) => statSync(p).uid;
+  const scans = DEFAULT_MANAGED_REPOS.map((repo) => scanGitRepo({
+    name: repo.name,
+    path: repo.path,
+    exists,
+    isDir,
+    statUid,
+    findRootOwned: findRootOwnedInGitDir,
+  }));
+  // 本机一台都没有（CI / 开发机 / 云 VM）→ SKIP 不是绿。分类器对「仓不在」仍判
+  // unscanned，单测钉那条；live 若因此 fail 会把 land 卡在「这台机器本来就不托管这两仓」。
+  if (scans.every((s) => s.exists === false)) {
+    skip('.git 属主：本机没有 /srv/projects 在管仓，本项没查成');
+    return;
+  }
+  const r = classifyGitOwnership(scans);
+  if (r.kind === 'ok') green(r.line);
+  else if (r.kind === 'skip') skip(r.line);
+  else fail(r.line, r.howToFix, r.evidence);
 }
 
 function checkInitiatives() {
@@ -1853,6 +1912,8 @@ checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
 checkInbox();
 checkRepoOwnership();
+checkGitOwnershipSamples();
+checkGitOwnershipLive();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
