@@ -66,7 +66,7 @@ import {
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
-  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment,
+  EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment, exhaustedPushPath,
 } from './lib/exhausted.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
@@ -298,6 +298,20 @@ function scanTrees() {
 function readText(path) {
   try { return readFileSync(path, 'utf8'); }
   catch (e) { return { error: String(e.message || e) }; }
+}
+
+/**
+ * 读「自动化认输」账本（~/.dao/exhausted-push.json）。
+ *
+ * 读不到一律返回 `{}`（空账本）——**不是** fail-closed。理由：空账本 ⇒
+ * `planExhaustedLabelClear` 找不到认输记录 ⇒ 不摘任何标。也就是「读不到就什么都不做」，
+ * 这正是 fail-closed 的**效果**，不需要额外分支。摘标本身还有一道正面核（execClearExhausted）。
+ */
+function loadExhaustedPush() {
+  const txt = readText(exhaustedPushPath(homedir()));
+  if (typeof txt !== 'string') return {};
+  try { const o = JSON.parse(txt); return o && typeof o === 'object' ? o : {}; }
+  catch { return {}; }
 }
 
 function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
@@ -592,6 +606,9 @@ function buildSituation({ state } = {}) {
     drainLedger: (state && state.drainLedger) || {},
     openIssueLedger: (state && state.openIssueLedger) || {},
     hubSeen: (state && state.hubSeen) || {},
+    // 「自动化认输」的账本（键 pushed:<pr>@<head>）。decide 用它判「这个标是不是过期了」——
+    // 标是无头的、账本带 head，二者一比就知道工人有没有推新东西（2026-09-11）。
+    exhaustedPush: loadExhaustedPush(),
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
@@ -742,6 +759,8 @@ function execAction(action, { state, dryRun, log }) {
       return execReapTicket(action, { state, dryRun, say });
     case 'mark-exhausted':
       return execMarkExhausted(action, { dryRun, say });
+    case 'clear-exhausted':
+      return execClearExhausted(action, { dryRun, say });
     case 'noop':
       return { ok: true };
     default:
@@ -842,6 +861,35 @@ function execAddLabel(action, { dryRun, say }) {
     return { ok: false, error: planned.error, code: planned.code };
   }
   return runOrShow(planned.argv, { dryRun, say, why: action.why });
+}
+
+/**
+ * 摘「自动化认输」标（2026-09-11）：认输是**带 head** 的判据，工人推了新 head = 新局面。
+ *
+ * 摘之前正面核一次当前 head——decide 用的是 20 分钟前的态势快照，
+ * 而摘标会让这张 PR 重回流水线（可能立刻被派工/叫审官）。核不上就**不摘**（fail-closed）：
+ * 多留一轮标只是少一轮推进，拿旧快照摘标可能让一辆已经在修的车再被派一次。
+ * 与 execReapTicket 同一纪律（删之前正面核死活）。
+ */
+function execClearExhausted(action, { dryRun, say }) {
+  if (dryRun) { say(`[dry] 摘 ${EXHAUSTED_LABEL}：#${action.pr}（${action.why}）`); return { ok: true, dryRun: true }; }
+  const cur = runGh(['pr', 'view', String(action.pr), '--repo', REPO, '--json', 'headRefOid,labels'], 20000);
+  if (!cur.ok) { say(`  当前 head 没核成，不摘标：#${action.pr}（${cur.error}）`); return { ok: true, skipped: 'head-unscanned' }; }
+  let got;
+  try { got = JSON.parse(cur.out || '{}'); }
+  catch { say(`  当前 head 解析失败，不摘标：#${action.pr}`); return { ok: true, skipped: 'head-parse' }; }
+  const head = typeof got.headRefOid === 'string' ? got.headRefOid.trim() : '';
+  if (!head || head !== String(action.head)) {
+    say(`  head 与快照对不上（快照 ${String(action.head).slice(0, 8)} / 实为 ${head.slice(0, 8) || '未取到'}），本轮不摘：#${action.pr}`);
+    return { ok: true, skipped: 'head-moved' };
+  }
+  const names = (got.labels || []).map((l) => (typeof l === 'string' ? l : l && l.name)).filter(Boolean);
+  if (!names.includes(EXHAUSTED_LABEL)) { say(`  #${action.pr} 已无该标，无需摘`); return { ok: true, skipped: 'already-clear' }; }
+  if (names.includes(WAITING_USER_LABEL)) { say(`  #${action.pr} 是「等用户」，不摘（人没回话机器不动）`); return { ok: true, skipped: 'waiting-user' }; }
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'edit', String(action.pr), '--remove-label', EXHAUSTED_LABEL]);
+  if (!r.ok) { say(`  摘标失败 #${action.pr}：${r.error}`); return { ok: false, error: r.error }; }
+  say(`  已摘「${EXHAUSTED_LABEL}」：#${action.pr}（${String(action.why).slice(0, 60)}）`);
+  return { ok: true, cleared: true };
 }
 
 function execRetryDrain(action, { state, dryRun, say }) {

@@ -32,7 +32,7 @@ import { attributedIssueNumber } from './close-issue.mjs';
 import {
   proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
 } from './commander-verbs.mjs';
-import { buildMarkExhausted, prHasStuckLabel } from './exhausted.mjs';
+import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -55,7 +55,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session', 'pump-draft',
+  'stop-session', 'pump-draft', 'clear-exhausted',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -440,6 +440,8 @@ export const ACTION_NEEDS = {
   'open-issue': [],
   // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
   'reap-ticket': ['github', 'reviewPending'],
+  // 摘「自动化认输」标要知道 PR 的当前 head 与 labels（都在 github 节）。
+  'clear-exhausted': ['github'],
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
   'stop-session': [],
@@ -837,6 +839,26 @@ function collectCandidates(situation) {
   const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
   const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
   const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
+
+  // 「自动化认输」是带 head 的判据，不是永久标签——工人推了新 head = 新局面，摘标放回流水线。
+  // 2026-09-11 实咬：这个标只写不摘，12 张 PR 被永久焊死（decide 对它们零动作）。
+  // 账本键是 pushed:<pr>@<head>（带 head），标签却是无头的——把那个不对称补上。
+  // 判据是纯函数（lib/exhausted.mjs 的 planExhaustedLabelClear），这里只取数与产动作。
+  {
+    const clearPlan = planExhaustedLabelClear({
+      prs: prList,
+      ledger: situation.exhaustedPush || {},
+      pushedThisRound: [],
+    });
+    for (const c of clearPlan.clears) {
+      out.push(withNeeds({
+        kind: 'clear-exhausted',
+        pr: c.pr,
+        head: c.head,
+        why: c.why,
+      }, N['clear-exhausted'] || N['add-label']));
+    }
+  }
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
