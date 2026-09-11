@@ -394,3 +394,33 @@ describe('回放那一晚：同一个原因、6 个对象', () => {
     assert.deepEqual(ledger.k.objects.length, 6, '六个对象都要留在清单里，一个都不能丢');
   });
 });
+
+// ── 2026-09-11：幂等键里不许有空白 ────────────────────────────────────────────
+// 实咬：`verdict.target` 的形状是 `PR #1154`（**带空格**），裸拼进 --idempotency-key
+// 被网关拒（missing_idempotency）。于是「追加对象进已有单」这条路一直没通——
+// 第一次被走到，是我新加的 reviewer-label-missing 触发的。
+// 键只需要稳定唯一、不需要好看；正文里的对象名才用可读原文。
+describe('报帅幂等键不含空白（网关硬规则）', () => {
+  const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
+  const CMD = import(toUrl(path.join(__dirname, '..', 'scripts', 'commander.mjs')));
+  const CMD_SRC = path.join(__dirname, '..', 'scripts', 'commander.mjs');
+
+  it('append 的幂等键对 target 做了净化（不是裸拼）', async () => {
+    const src = require('node:fs').readFileSync(CMD_SRC, 'utf8');
+    // 裸拼的形状：...key', `commander-escalate:append:${X}:${verdict.target}`
+    const rawAppend = /idempotency-key', `commander-escalate:append:[^`]*\$\{verdict\.target\}/.test(src);
+    assert.equal(rawAppend, false, 'verdict.target 是「PR #N」带空格，裸拼会被网关拒');
+    assert.match(src, /function keySafe\(/, '要有净化函数');
+    assert.match(src, /keySafe\(verdict\.target\)/, 'append 要走净化');
+  });
+
+  it('keySafe 把空白折掉，且空值有兜底', async () => {
+    const C = await CMD;
+    assert.equal(typeof C.keySafe, 'function', 'keySafe 要导出，测试才能直接钉');
+    for (const s of ['PR #1154', 'issue #815', 'a  b']) {
+      assert.equal(/\s/.test(C.keySafe(s)), false, `${s} 净化后不该有空白`);
+    }
+    assert.equal(C.keySafe(''), 'none');
+    assert.equal(C.keySafe(null), 'none');
+  });
+});

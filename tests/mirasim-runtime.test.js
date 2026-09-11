@@ -425,12 +425,82 @@ describe('判完工交叉核', () => {
     assert.match(v.reason, /incomplete/);
   });
 
+  // #1121：被杀死的会话 phase 照样是 done，死因只写进 error。两条死因串是 2026-09-07
+  // 从真会话上抄下来的原文，不是编的——工人 3 次、审官 8 次，全天 11 次判成「完工」。
+  const STALL_ERR = 'pi turn stalled past 30 minutes';
+  const CAPACITY_ERR = 'Selected model is at capacity. Please try a different model.';
+
+  for (const [name, err] of [['回合看门狗掐死工人', STALL_ERR], ['审官撞上游满载', CAPACITY_ERR]]) {
+    it(`#1121 ${name}：phase=done 但带死因 → failed（账本有成功行也不许判 done）`, async () => {
+      const { judgeCompletion } = await import(LIB);
+      const v = judgeCompletion({
+        // 账本里**有**起针后的成功行：会话被杀前已经打了几十个工具调用，
+        // 交叉核拦不住这一类——所以判据必须落在 error 上。
+        view: { phase: 'done', text: '读了一堆，什么也没写', toolCalls: [], error: err },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'failed');
+      assert.notStrictEqual(v.status, 'done');
+      assert.strictEqual(v.error, err, '死因原文不许被吞掉');
+      assert.equal(v.reason.includes(err), true);
+    });
+  }
+
+  it('#1121 反证：phase=done 且 error 为空 → 照旧走交叉核判 done（这条不是恒红）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    for (const empty of [null, undefined, '', '   ']) {
+      const v = judgeCompletion({
+        view: { phase: 'done', text: 'PONG', toolCalls: [], error: empty },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'done', `error=${JSON.stringify(empty)} 时应判 done`);
+    }
+  });
+
+  it('#1121 非终态不受影响：phase=running 带 error 仍判 running（不提前结算）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const v = judgeCompletion({
+      view: { phase: 'running', error: CAPACITY_ERR },
+      ledger: { readable: true, rows: [] },
+      since: T0,
+    });
+    assert.strictEqual(v.status, 'running');
+  });
+
   it('会话清单的 runState 归一到 phase 这套词', async () => {
     const { metaView, readSessionView } = await import(LIB);
     assert.strictEqual(metaView({ runState: 'completed', preview: 'PONG' }).phase, 'done');
     assert.strictEqual(metaView({ runState: 'running' }).phase, 'running');
     assert.strictEqual(readSessionView({ runState: 'complete' }).phase, 'done');
     assert.strictEqual(readSessionView({ phase: 'done', incomplete: true }).incomplete, true);
+  });
+
+  // 2026-09-11 实咬（与 review-pending.countLiveReviewers 同一个病）：
+  // 上面那条用例只喂 `runState`，而**真实会话清单里没有这个字段**——
+  // 实测 listSessions 回的键是 `… state, phase, observedState …`。
+  // 于是夹具全绿、生产里 phase 恒为 null（「这条会话什么态」永远是不知道）。
+  // 这组用真实字段名喂，钉住那个夹具盲区。
+  it('【真字段】只给 state 也要归一出 phase（会话清单的真实形状）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'stopped' }).phase, 'stopped');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'running' }).phase, 'running');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'completed' }).phase, 'done');
+  });
+
+  it('【真字段】state=incomplete 要标 incomplete（收尾没跑完，不是在役）', async () => {
+    const { metaView } = await import(LIB);
+    const v = metaView({ sessionKey: 'k', state: 'incomplete' });
+    assert.strictEqual(v.phase, 'incomplete');
+    assert.strictEqual(v.incomplete, true);
+  });
+
+  it('【真字段】只给 phase / observedState 也认；都没有才给 null（不编）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', phase: 'failed' }).phase, 'failed');
+    assert.strictEqual(metaView({ sessionKey: 'k', observedState: 'gone' }).phase, 'gone');
+    assert.strictEqual(metaView({ sessionKey: 'k' }).phase, null);
   });
 });
 

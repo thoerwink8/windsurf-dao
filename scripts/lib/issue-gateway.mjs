@@ -19,6 +19,10 @@ export const DEFAULT_ALLOWED_REPOS = [
   'thoerwink8/ai-gateway-stack',
   'thoerwink8/miraquota-win',
   'thoerwink8/windsurf-dao-memory',
+  // #1024：派工链 --repo 打到 bot 已装的仓时，完工评论也走网关。
+  // 名单少一个仓 = 交卷被拒，看起来像派出去了、实际写不进目标仓。
+  'thoerwink8/ws-cleaner',
+  'thoerwink8/miraquota-ledger',
 ];
 export const FORBIDDEN_FIELDS = [
   'identity', 'token', 'gh_token', 'GH_TOKEN', 'GITHUB_TOKEN',
