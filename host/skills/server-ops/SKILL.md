@@ -7,6 +7,12 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 
 只写「改这台机器前必须知道什么」。装法见 `NEW-MACHINE.md` §9d。
 
+## skills 装载面自愈（#1146）
+
+- 单元模板：`host/machine/systemd/dao-skills-heal.service`（装法在文件头）。
+- 幂等安装（要 root）：`scripts/install-skills-heal.sh`。装法见 `NEW-MACHINE.md` §11.1，本页不复制。
+- 探活：`systemctl list-timers` 里要有 `dao-skills-heal.timer`，**NEXT 不能是 `-`**。dao-check ㉚：没装 SKIP，被劫红。
+
 ## land timer
 
 - 单元模板：`host/machine/systemd/dao-land.service` + `.timer`（装法在文件头）。
