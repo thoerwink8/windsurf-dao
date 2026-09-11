@@ -1353,7 +1353,10 @@ function collectCandidates(situation) {
       desired: desired && desired.unscanned ? null : (desired && desired.items),
       sessions: sessionListForLiveness(situation),
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
-      openPrs: gh.scanned ? gh.prs : null,
+      openPrs: gh.scanned ? (gh.prs || []).map(pr => {
+        const review = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
+        return { ...pr, reworkRequired: pr.mergeable === 'CONFLICTING' || !review.scanned || review.latestRed === true };
+      }) : null,
       alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
       dispatchedThisRound: 0,

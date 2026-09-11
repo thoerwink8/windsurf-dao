@@ -237,7 +237,7 @@ export function planReconcile({
   const queued = asNumberSet(alreadyQueued) || new Set();
   if (!Array.isArray(openPrs)) return { unscanned: true, redispatches: [], reports: ['交卷状态未查成，不猜测需要重派的工人'] };
   const delivered = new Set(openPrs
-    .filter(pr => pr?.isDraft === false && checksSucceeded(pr))
+    .filter(pr => pr?.isDraft === false && pr.reworkRequired === false && checksSucceeded(pr))
     .map(explicitApprovalIssue).filter(Boolean));
   const byIssue = new Map();
   const reports = [];
