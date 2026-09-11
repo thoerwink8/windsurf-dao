@@ -8,6 +8,19 @@ const path = require('node:path');
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'session-reconcile.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
 
+it('a delivered passing PR waits for review rather than restarting its finished worker', async () => {
+  const { planReconcile } = await LOAD;
+  const params = { desired: [{ issue: 1167, job_id: 'dispatch-x', identity: '工人' }],
+    sessions: [], openIssues: [1167], openPrs: [{ isDraft: false, body: '署名 issue #1167',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }] };
+  assert.equal(planReconcile(params).redispatches.length, 0);
+  const draft = structuredClone(params); draft.openPrs[0].isDraft = true;
+  assert.equal(planReconcile(draft).redispatches.length, 1);
+  const failed = structuredClone(params); failed.openPrs[0].statusCheckRollup[0].conclusion = 'FAILURE';
+  assert.equal(planReconcile(failed).redispatches.length, 1);
+  assert.equal(planReconcile({ ...params, openPrs: null }).unscanned, true);
+});
+
 it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
   const { isLiveSession } = await LOAD;
   for (const state of ['stopped', 'rejected', 'gone', 'finished']) {

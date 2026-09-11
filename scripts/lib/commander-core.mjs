@@ -1353,7 +1353,8 @@ function collectCandidates(situation) {
       desired: desired && desired.unscanned ? null : (desired && desired.items),
       sessions: sessionListForLiveness(situation),
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
-      alreadyQueued: out.map((a) => a.issue).filter((n) => Number.isInteger(n)),
+      openPrs: gh.scanned ? gh.prs : null,
+      alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
       dispatchedThisRound: 0,
     });
