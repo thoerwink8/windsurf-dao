@@ -185,6 +185,17 @@ describe('branch-protection-check', () => {
     assert.equal(ok.protection.enforce_admins, false);
   });
 
+  it('classifyBranchProbe：ANSI 染色的 JSON 仍算对象，不当没查成', async () => {
+    const S = await LOAD;
+    const plain = JSON.stringify(branchSummary());
+    const colored = `\u001b[1;37m${plain.replace(/\{/g, '{\u001b[m').replace(/"name"/g, '\u001b[1;34m"name"\u001b[m')}`;
+    const r = S.classifyBranchProbe({ status: 0, stdout: colored, stderr: '' });
+    assert.equal(r.kind, 'ok', r.why || JSON.stringify(r).slice(0, 200));
+    assert.equal(r.branch.name, 'master');
+    const raw = S.classifyBranchProbe({ status: 0, stdout: plain, stderr: '' });
+    assert.equal(raw.kind, 'ok');
+  });
+
   it('inspectBranchProtection：空清单没查成；全出局没查成；skip 不是绿；有红则红', async () => {
     const S = await LOAD;
 

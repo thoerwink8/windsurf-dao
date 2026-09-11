@@ -350,14 +350,20 @@ export function classifyProtectionProbe({ error, status, stdout, stderr, httpSta
  * 403/ENOENT 只留给「连摘要都读不到」——那才是真没查成。
  * protected=false 走 judgeBranchSummary，是红不是 skip。
  */
+function stripAnsi(s) {
+  return String(s || '').replace(/\u001b\[[0-9;]*m/g, '');
+}
+
 export function classifyBranchProbe({ error, status, stdout, stderr, httpStatus } = {}) {
   const err = error || null;
   const msg = String((err && (err.message || err.code)) || '');
   if (err && (err.code === 'ENOENT' || /ENOENT/i.test(msg))) {
     return { kind: 'skip', why: 'gh 不可用（ENOENT）' };
   }
-  const trimmedOut = String(stdout || '').trim();
-  const trimmedErr = String(stderr || '').trim();
+  // gh 在 FORCE_COLOR / TTY 下会给 JSON 上色。先剥再 parse，否则 `{` 前面那截 ESC
+  // 让 JSON.parse 失败，这道闸整轮「没查成」——有保护也看不见。
+  const trimmedOut = stripAnsi(stdout).trim();
+  const trimmedErr = stripAnsi(stderr).trim();
   let doc = null;
   for (const chunk of [trimmedOut, trimmedErr]) {
     if (!chunk) continue;
