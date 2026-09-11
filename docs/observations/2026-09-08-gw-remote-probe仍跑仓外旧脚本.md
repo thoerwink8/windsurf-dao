@@ -3,6 +3,8 @@
 # 机制巡检：#967 收进仓了，机器还在跑 ~/bin；drop-in 仍撞 :07，⑳ 看不见 drop-in
 > 处置：#1164 机器还在跑 ~/bin 探活——已开单跟机器收口
 
+处置：#1164
+
 ## 结论
 
 今天上午合进 master 的 #967（PR #1106，`324c06b4`）把供应商探活收进本仓：单元 `ExecStart` 指 `scripts/gw-remote-probe.mjs`，timer 自带 `OnCalendar=*:09/30`，装机脚本会删掉 09-05 止血留下的 `:07/30` drop-in，INDEX / NEW-MACHINE / 测试都把 `~/bin/gw-remote-probe.mjs` 标成「收进仓后不再是真相源」。这台机器 `/etc/systemd/system/gw-remote-probe.service` 仍是 2026-09-03 那份，`ExecStart` 还指 `/home/orca/bin/gw-remote-probe.mjs`（mtime 09-04，带会写出缺墙钟单元的 `--install`）。drop-in `*:07/30` 还在，和 `dao-board-gc` 的 `:07` 叠在一起。派工读的 `~/.dao/provider-health.json` 仍由这份仓外旧脚本在写。闸和测试锁的是仓内文件，所以仓里绿。
