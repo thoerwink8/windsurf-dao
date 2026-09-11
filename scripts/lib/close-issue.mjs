@@ -101,23 +101,35 @@ export function closeDecision(pr) {
  * 返回 { ok, action, reason, issue?, pr?, dryRun? }。
  */
 export function hasCompletedChecklist(body) {
-  let checked = 0, fence = null;
-  const text = String(body || '').replace(/<!--[\s\S]*?(?:-->|$)/g, '');
-  for (const line of text.split(/\r?\n/)) {
-    const delimiter = line.match(/^\s*(`{3,}|~{3,})/);
-    if (delimiter) {
-      const mark = delimiter[1];
-      if (!fence) fence = mark;
-      else if (mark[0] === fence[0] && mark.length >= fence.length && line.trim() === mark) fence = null;
+  let checked = 0, fence = null, comment = false;
+  for (const raw of String(body || '').split(/\r?\n/)) {
+    if (fence) {
+      const close = raw.match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
-    if (fence) continue;
+    let line = raw;
+    for (;;) {
+      if (comment) {
+        const end = line.indexOf('-->');
+        if (end < 0) { line = ''; break; }
+        line = line.slice(end + 3); comment = false;
+      }
+      const start = line.indexOf('<!--');
+      if (start < 0) break;
+      const end = line.indexOf('-->', start + 4);
+      if (end < 0) { line = line.slice(0, start); comment = true; break; }
+      line = line.slice(0, start) + line.slice(end + 3);
+    }
+    const delimiter = line.match(/^\s*(`{3,}|~{3,})/);
+    if (delimiter) { fence = delimiter[1]; continue; }
     const item = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]/);
     if (!item) continue;
     if (item[1] === ' ') return false;
+    if (/^(?: {4}|\t)/.test(line)) continue; // Do not use an indented code example as completion proof.
     checked++;
   }
-  return checked > 0;
+  return checked > 0 && !comment && !fence;
 }
 
 export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 'thoerwink8/windsurf-dao' } = {}) {
