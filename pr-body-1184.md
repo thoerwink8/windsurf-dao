@@ -43,3 +43,9 @@
 会再犯。2026-09-10 修了派前探针 `provider-probe.mjs` 的裸字符串，周期探针 `gw-remote-probe.mjs` 是另一份请求体，没一起改，健康表继续记 500（本轮 167 次）。两条腿是上游真挂，探针没错。
 
 机制：responses 请求体只许有这一份 helper；测试锁周期探针必须用它。不手改健康表/熔断表装绿。
+
+## 自查
+
+- `node --test tests/provider-probe.test.js tests/gw-remote-probe.test.js`：43 过 / 0 红。
+- `node scripts/dao-check.mjs`：退出码 0（235 项，14 项跳过）。
+- `node scripts/handoff-check.mjs --body-file pr-body-1184.md`：交卷档通（② 零删除 / ④ 指针 / ⑤ 自证＝审官所见）。① 基底差 2 个提交只报不判（#1117）。
