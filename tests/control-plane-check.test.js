@@ -18,6 +18,31 @@ describe('控制面闸：静态挂载面', () => {
     assert.match(live.green, /pre-push/);
   });
 
+  it('pre-push 先跑工作树同名文件 → 静态检查红', async () => {
+    const S = await import(LIB);
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-cp-root-hook-'));
+    fs.mkdirSync(path.join(empty, 'scripts', 'githooks'), { recursive: true });
+    fs.mkdirSync(path.join(empty, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(
+      path.join(empty, 'scripts', 'githooks', 'pre-push'),
+      [
+        'root=$(git rev-parse --show-toplevel)',
+        'script="$root/scripts/lib/control-plane-pre-push.mjs"',
+        '',
+      ].join('\n'),
+    );
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'control-plane-pre-push.mjs'), 'decideControlPlane\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'land.mjs'), 'decideControlPlane\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'control-plane-write.mjs'), 'control-plane.json\nwriteControlPlaneFile\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'mirasim-ws-probe.mjs'), 'writeControlPlane\ncontrolPlaneDocFromProbe\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'dao.mjs'), 'async function cmdDispatchMirasim(){}\nasync function cmdDispatch(){}\nasync function cmdStartMirasim(){}\nasync function cmdSessionRead(){}\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'execution-runtime.mjs'), 'export function ensureGitWorkspace(){}\n');
+    fs.writeFileSync(path.join(empty, 'scripts', 'lib', 'executor-binding.mjs'), 'export function createMirasimBinding(){}\n');
+    const r = S.checkControlPlaneProduction({ root: empty });
+    assert.equal(!!r.green, false);
+    assert.match(r.fail.join(' '), /工作树里的同名|旧\/空实现能绕开/);
+  });
+
   it('dao.mjs 热路没挂闸 → 静态检查红（不是绿）', async () => {
     const S = await import(LIB);
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-cp-hot-'));

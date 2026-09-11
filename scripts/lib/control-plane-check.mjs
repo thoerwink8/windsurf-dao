@@ -2,7 +2,8 @@
 //
 // 检查器自己读文件、自己 spawn 钩子，不 import 判定函数（自己查自己查不出错）。
 //
-// ① 仓内现役挂载面在：scripts/githooks/pre-push 指向 control-plane-pre-push.mjs
+// ① 仓内现役挂载面在：scripts/githooks/pre-push 钉死 $here/../lib/control-plane-pre-push.mjs
+//    （不许先跑工作树同名文件）
 // ② land.mjs 真 push 前问 decideControlPlane
 // ③ mirasim-ws-probe 写 control-plane.json（写腿）
 // ④ 钩子行为：reachable=false 拦、true 放、没查成放
@@ -60,6 +61,12 @@ export function checkControlPlaneProduction({ root } = {}) {
   }
   if (!/control-plane-pre-push\.mjs/.test(hookSh.text)) {
     problems.push('scripts/githooks/pre-push 没指向 control-plane-pre-push.mjs');
+  }
+  if (!/\$here\/\.\.\/lib\/control-plane-pre-push\.mjs/.test(hookSh.text)) {
+    problems.push('pre-push 没钉死稳定来源 $here/../lib/control-plane-pre-push.mjs');
+  }
+  if (/\$root\/scripts\/lib\/control-plane-pre-push/.test(hookSh.text)) {
+    problems.push('pre-push 仍先跑工作树里的同名文件，旧/空实现能绕开闸');
   }
 
   const hookJs = read(root, PRE_PUSH_JS);

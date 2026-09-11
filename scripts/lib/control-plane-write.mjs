@@ -72,6 +72,7 @@ export function writeControlPlaneFile(doc, {
 /**
  * 钩子稳定来源：正在跑的这份 dao 代码自带的 scripts/githooks。
  * 不读工作树里那份——工作树可能还停在合本单之前的 master，那里没有 pre-push。
+ * wrapper 必须 exec $here/../lib/control-plane-pre-push.mjs，不许再跳回工作树同名文件。
  */
 export function stableHooksDir() {
   return join(THIS_DIR, '..', 'githooks');

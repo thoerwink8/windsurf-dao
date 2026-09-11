@@ -575,6 +575,28 @@ describe('控制面闸：现役 git push 路径', () => {
     assert.equal(allowed.status, 0, allowed.stderr);
   });
 
+  it('稳定 wrapper 钉死 $here/../lib，不读工作树同名文件', () => {
+    const text = fs.readFileSync(path.join(REPO, 'scripts', 'githooks', 'pre-push'), 'utf8');
+    assert.match(text, /\$here\/\.\.\/lib\/control-plane-pre-push\.mjs/);
+    assert.equal(/\$root\/scripts\/lib\/control-plane-pre-push/.test(text), false);
+  });
+
+  it('目标树有旧/空同名实现时，稳定 wrapper 仍拦 reachable=false', () => {
+    const { work } = setupPushRepo('dao-cp-stale-hook-');
+    fs.mkdirSync(path.join(work, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(
+      path.join(work, 'scripts', 'lib', 'control-plane-pre-push.mjs'),
+      'console.error("STALE_TREE_HOOK"); process.exit(0);\n',
+    );
+    assert.equal(git(work, ['config', 'core.hooksPath', path.join(REPO, 'scripts', 'githooks')]).status, 0);
+
+    const blocked = git(work, ['push', 'origin', 'HEAD'], { DAO_CONTROL_PLANE: 'false' });
+    const blockedText = `${blocked.stderr || ''}${blocked.stdout || ''}`;
+    assert.notEqual(blocked.status, 0);
+    assert.match(blockedText, /失控会话的对外写|控制面/);
+    assert.equal(/STALE_TREE_HOOK/.test(blockedText), false);
+  });
+
   it('land.mjs：unreachable 不推；恢复后能推', () => {
     const { work, ident, bare } = setupPushRepo('dao-cp-land-');
     assert.equal(git(work, ['push', '-u', 'origin', 'master'], { DAO_CONTROL_PLANE: 'true' }).status, 0);
