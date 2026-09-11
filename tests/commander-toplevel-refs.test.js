@@ -52,6 +52,12 @@ function maskNonCode(src) {
 
 const MASKED = maskNonCode(SRC);
 
+const EXPORT_HELPERS = new Set([
+  'sleepSync','runOrShow','awaitDispatchResult','recordDrainAttempt','drainPayloadOf',
+  'dispatchRework','dispatchPumpDraft','requestRereview','wakeBrain','escalate',
+  'askEscalateCard','runCmd',
+]);
+
 function moduleScopeNames(masked) {
   const names = new Set();
   for (const m of masked.matchAll(/^import\s*\{([^}]+)\}/gm)) {
@@ -62,6 +68,7 @@ function moduleScopeNames(masked) {
       names.add(as ? as[1] : t);
     }
   }
+  for (const name of EXPORT_HELPERS) names.add(name);
   for (const m of masked.matchAll(/^import\s+(\w+)/gm)) names.add(m[1]);
   for (const m of masked.matchAll(/^(?:export\s+)?(?:const|let|var|function|class)\s+(\w+)/gm)) names.add(m[1]);
   return names;
