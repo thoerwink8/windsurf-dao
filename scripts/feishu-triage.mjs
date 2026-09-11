@@ -893,7 +893,12 @@ export function loadAskPolicyDoc(root = REPO_ROOT) {
 }
 
 export function listPendingGithub(repo, { ghBin = process.env.FEISHU_GH || 'gh', run = runGh } = {}) {
-  const r = run(ghBin, listPendingIssueArgs(repo));
+  const r = run === runGh
+    ? (() => {
+      const x = ghAs('marshal', listPendingIssueArgs(repo), { maxBuffer: 64 * 1024 * 1024 });
+      return { ok: x.ok, stdout: x.out || '', stderr: x.error || '', reason: x.error };
+    })()
+    : run(ghBin, listPendingIssueArgs(repo));
   return githubFromIssueList({
     ok: !!r.ok,
     out: r.stdout,
