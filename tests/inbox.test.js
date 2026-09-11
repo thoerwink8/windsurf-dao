@@ -139,6 +139,36 @@ describe('收件箱：盘点挂载面（#1171）', () => {
     }
   });
 
+  it('目录确实不在 → ok（本仓没这条通道），不是没查成', async () => {
+    const { checkInbox } = await INV;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-none-'));
+    try {
+      const r = checkInbox({ ROOT: tmp });
+      assert.equal(r.state, 'ok');
+      assert.match(r.detail, /不在/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('父目录不可读 → unknown，不许当「通道不在」（existsSync 会把 EACCES 报成 false）', async () => {
+    const { checkInbox } = await INV;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-eacces-'));
+    const docsDir = path.join(tmp, 'docs');
+    try {
+      fs.mkdirSync(path.join(docsDir, 'observations'), { recursive: true });
+      fs.writeFileSync(path.join(docsDir, 'observations', 'x.md'), '# x\n');
+      fs.chmodSync(docsDir, 0);
+      const r = checkInbox({ ROOT: tmp });
+      assert.equal(r.state, 'unknown', JSON.stringify(r));
+      assert.match(r.detail, /没查成/);
+      assert.doesNotMatch(r.detail, /不在/);
+    } finally {
+      try { fs.chmodSync(docsDir, 0o755); } catch { /* 清理必须先拿回权限 */ }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('现役腿是指挥官盘点调用 assessInbox，不是 dao-check，也不是已死的 hook 名', () => {
     assert.match(invSrc, /assessInbox/);
     const iInbox = invSrc.indexOf('checkInbox({ ROOT })');

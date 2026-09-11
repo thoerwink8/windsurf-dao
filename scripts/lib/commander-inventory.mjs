@@ -292,10 +292,21 @@ export function judgeInbox(assessed) {
 export function checkInbox({ ROOT }) {
   const key = 'inbox';
   const dir = join(ROOT, 'docs', 'observations');
-  if (!existsSync(dir)) return { state: 'ok', key, detail: 'docs/observations 不在——本仓没这条通道' };
+  // 不许 existsSync 前置：父目录 EACCES 时它返回 false，会把「没查成」伪装成「本仓没这条通道」
+  //（#1192 复审；同形见 pr-868：absent 只认 ENOENT/ENOTDIR）。
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return { state: 'ok', key, detail: 'docs/observations 不在——本仓没这条通道' };
+    }
+    return { state: 'unknown', key, detail: `收件箱没查成：读不了 docs/observations（${String(e.message || e).slice(0, 80)}）——不是「没有新东西」` };
+  }
   let docs = [];
   try {
-    for (const name of readdirSync(dir)) {
+    for (const name of names) {
       if (!name.endsWith('.md')) continue;
       const p = join(dir, name);
       docs.push(parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs }));
