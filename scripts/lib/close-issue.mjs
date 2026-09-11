@@ -104,10 +104,12 @@ export function hasCompletedChecklist(body) {
   let checked = 0, fence = null, comment = false;
   for (const raw of String(body || '').split(/\r?\n/)) {
     if (fence) {
-      const close = raw.match(/^\s*(`{3,}|~{3,})\s*$/);
+      const close = raw.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
+    const opening = !comment && raw.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (opening) { fence = opening[1]; continue; }
     let line = raw;
     for (;;) {
       if (comment) {
@@ -121,7 +123,7 @@ export function hasCompletedChecklist(body) {
       if (end < 0) { line = line.slice(0, start); comment = true; break; }
       line = line.slice(0, start) + line.slice(end + 3);
     }
-    const delimiter = line.match(/^\s*(`{3,}|~{3,})/);
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
     if (delimiter) { fence = delimiter[1]; continue; }
     const item = line.match(/^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]/);
     if (!item) continue;
