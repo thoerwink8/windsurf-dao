@@ -41,6 +41,11 @@ function isPlainObject(v) {
   return v != null && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** gh 在 FORCE_COLOR 下给 JSON 涂色。不剥掉，JSON.parse 失败，live 闸会把「有摘要」报成没查成。 */
+function stripAnsi(s) {
+  return String(s || '').replace(/\u001b\[[0-9;]*m/g, '');
+}
+
 /** git remote / GitHub URL → owner/repo。抽不出返回 null。 */
 export function repoSlugFromRemote(url) {
   const s = String(url || '').trim();
@@ -313,10 +318,10 @@ export function classifyProtectionProbe({ error, status, stdout, stderr, httpSta
   if (err && (err.code === 'ENOENT' || /ENOENT/i.test(msg))) {
     return { kind: 'skip', why: 'gh 不可用（ENOENT）' };
   }
-  const text = `${String(stdout || '')}\n${String(stderr || '')}`;
+  const text = `${stripAnsi(stdout)}\n${stripAnsi(stderr)}`;
   let doc = null;
-  const trimmedOut = String(stdout || '').trim();
-  const trimmedErr = String(stderr || '').trim();
+  const trimmedOut = stripAnsi(stdout).trim();
+  const trimmedErr = stripAnsi(stderr).trim();
   for (const chunk of [trimmedOut, trimmedErr]) {
     if (!chunk) continue;
     const i = chunk.indexOf('{');
@@ -350,10 +355,6 @@ export function classifyProtectionProbe({ error, status, stdout, stderr, httpSta
  * 403/ENOENT 只留给「连摘要都读不到」——那才是真没查成。
  * protected=false 走 judgeBranchSummary，是红不是 skip。
  */
-function stripAnsi(s) {
-  return String(s || '').replace(/\u001b\[[0-9;]*m/g, '');
-}
-
 export function classifyBranchProbe({ error, status, stdout, stderr, httpStatus } = {}) {
   const err = error || null;
   const msg = String((err && (err.message || err.code)) || '');
