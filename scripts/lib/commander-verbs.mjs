@@ -367,7 +367,9 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
   // 不过上限是 --force，只许人手；指挥官自动化不许带。
   return {
     ok: true,
-    argv: ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
+    argv: action.repo
+      ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr), '--repo', String(action.repo)]
+      : ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(v.pr)],
     pr: v.pr,
     tries: v.tries,
     stateKey: v.stateKey,

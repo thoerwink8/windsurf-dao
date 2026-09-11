@@ -926,21 +926,34 @@ export function classifyUnitDrift(pairs) {
   const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
   const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
   const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
-  const unreadWho = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
-  if (drifted.length) {
-    const unreadBit = unreadable.length
-      ? `；另外 ${unreadable.length} 个没比成：${unreadWho.join('、')}`
+  // 「仓里有、机器上没有」和「两边都有但不一致」都是**确定的故障**，只是修法不同。
+  // 原来两者一起塞进 unreadable → UNKNOWN，于是 #818 的 dao-board-watch
+  // **从合进仓到 2026-09-11 一次没装过**，这条闸每轮说「没查成」而不是「红」——
+  // 「没查成」不当绿是对的，但它也不开单、不叫人，安静得像没事。
+  // 「机器上没装」根本不是没查成：仓里那份就是真相，缺的那头是缺，不是测不准。
+  const notInstalled = pairs.filter((p) => p.repo != null && p.live == null);
+  const reallyUnreadable = pairs.filter((p) => p.repo == null);
+  if (drifted.length || notInstalled.length) {
+    const bits = [];
+    if (drifted.length) {
+      bits.push(`${drifted.length} 个仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`);
+    }
+    if (notInstalled.length) {
+      bits.push(`仓里有 ${notInstalled.length} 个机器上根本没有：${notInstalled.map((p) => p.name).join('、')}——这一格从没装上过`);
+    }
+    const unreadBit = reallyUnreadable.length
+      ? `；另外 ${reallyUnreadable.length} 个仓内读不到：${reallyUnreadable.map((p) => p.name).join('、')}`
       : '';
     return {
       state: RED,
-      detail: `${drifted.length}/${pairs.length} 个单元仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`
+      detail: bits.join('；')
         + unreadBit
-        + '——改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
+        + '。改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
         + '指挥官那两个是代码生成的，sudo node scripts/commander.mjs install。装完 daemon-reload',
     };
   }
-  if (unreadable.length) {
-    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${unreadWho.join('、')}——没查成，不是「一致」` };
+  if (reallyUnreadable.length) {
+    return { state: UNKNOWN, detail: `${reallyUnreadable.length} 个单元仓内读不到：${reallyUnreadable.map((p) => p.name).join('、')}——没查成，不是「一致」` };
   }
   return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
 }

@@ -42,6 +42,8 @@ const ROOT = resolve(import.meta.dirname, '..', '..');
 export const DISPATCH_POLICY_DEFAULTS = { enabled: true, timeoutMs: 30000, maxCandidates: 4, useHealthTable: true };
 export const COMMANDER_POLICY_DEFAULTS = {
   requireModelInRouting: true,
+  // 主判据（2026-09-10 起）：真 CPU 占用率。loadThreshold 降级为趋势参考，不再当闸。
+  cpuThreshold: 0.85,
   loadThreshold: 0.85,
   memReserveMb: 1536,
   conservativeWorkerMb: 400,
@@ -155,6 +157,11 @@ export function validateDispatchPolicy(doc) {
     if (typeof cm !== 'object') problems.push('commander 必须是对象');
     else {
       if (typeof cm.requireModelInRouting !== 'boolean') problems.push('requireModelInRouting 必须 true/false');
+      if (cm.cpuThreshold !== undefined) {
+        const t = Number(cm.cpuThreshold);
+        // 占用率是 0~1 的比例，不是负载倍数——上限 1，超过 1 说明填错了口径（旧 loadThreshold 才是 0.1~2）。
+        if (!Number.isFinite(t) || t < 0.1 || t > 1) problems.push(`cpuThreshold 越界（要 0.1~1 的占用率，实际 ${cm.cpuThreshold}）`);
+      }
       if (cm.loadThreshold !== undefined) {
         const t = Number(cm.loadThreshold);
         if (!Number.isFinite(t) || t < 0.1 || t > 2) problems.push(`loadThreshold 越界（要 0.1~2，实际 ${cm.loadThreshold}）`);

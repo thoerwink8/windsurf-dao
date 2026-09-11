@@ -42,7 +42,7 @@
 // 为什么 lstat 不用 stat：符号链接本身要能跟普通目录分开——普通目录是「装错了」，
 // 不是「装好了」。
 
-import { readdirSync, lstatSync, realpathSync, existsSync, readFileSync } from 'node:fs';
+import { readdirSync, lstatSync, readlinkSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 
 /** 文件系统大小写语义：NTFS 约定大小写不敏感（junction/symlink 的目标大小写五花八门），
@@ -149,9 +149,21 @@ export function checkSkillLinks({ root, home, isCi = false }) {
     }
     return { fail: ['~/.claude/skills 探测不了', '确认 ~/.claude 可读；读不了 = 本次没查成', `${face}: ${String(e.message || e).slice(0, 120)}`] };
   }
+  // 整目录符号链接 = 被劫（#1146）。解引用后是目录也不放行——正确形态是真目录 + 逐个链。
+  // 断链单独报（目标不在是真坏，不是「不是目录」）。
   if (faceSt.isSymbolicLink()) {
     let target = face;
-    try { target = realpathSync(face); } catch { /* 悬空也算劫 */ }
+    try {
+      target = realpathSync(face);
+    } catch (e) {
+      let linkText = face;
+      try { linkText = String(readlinkSync(face)).slice(0, 120); } catch { /* ignore */ }
+      return { fail: [
+        '~/.claude/skills 是断链（目标不在）',
+        '跑 node scripts/onboard.mjs 或等 dao-skills-heal.timer 接回；不要手工 ln -sfn 整目录',
+        `${face} → ${linkText}（${String(e && e.code || e).slice(0, 60)}）`,
+      ] };
+    }
     return { fail: [
       'skills 装载面被劫（整目录链接）',
       '跑 node scripts/onboard.mjs 或等 dao-skills-heal.timer 下个周期接回；不要手工 ln -sfn 整目录（下一次 mirasim 启动还会劫走）',

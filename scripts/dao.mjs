@@ -61,6 +61,11 @@ import {
   argsWorktreePs,
   argsRepoList,
   resolveRepoSelector,
+  parseOwnerNameRepo,
+  assertRepoAuthorized,
+  splitRepoTarget,
+  resolveLocalCheckout,
+  repoPrKey,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   resolveWorktreeSelector,
@@ -224,7 +229,7 @@ import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
-import { applyGitIdentity } from './lib/gh.mjs';
+import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
 import {
@@ -254,7 +259,7 @@ import {
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
-import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -1527,11 +1532,71 @@ function mirasimBranchOrFail(args) {
   fail('mirasim 执行体要 --branch（没 --issue 就推不出默认分支名）；同一 issue 派第二张卡也要显式给，否则会撞同一棵树');
 }
 
-/** mirasim 侧的仓路径。默认本 checkout；跨树派单显式给 --repo。 */
-function mirasimRepoOrFail(args) {
-  const repo = String(args.repo || '').trim() || ROOT;
-  if (!repo) fail('mirasim 执行体要 --repo（仓路径）');
-  return repo;
+/**
+ * #1024 返工：mirasim 路把 GitHub owner/name 和 runtime 本地路径拆开。
+ * owner/name → 授权闸 + gh --repo；本地路径才给 ensureWorkspace。
+ * 不传 --repo = 本仓（gh 不钉仓，本地 ROOT）。路径仍给 #880 卡 B 建树用。
+ */
+function resolveMirasimRepoTarget(args, { role = 'worker', where = 'dispatch', defaultLocal } = {}) {
+  const split = splitRepoTarget(args && args.repo, { root: defaultLocal || ROOT });
+  if (!split.ok) fail(split.error);
+  if (split.kind === 'path') {
+    const localPath = String(split.localPath || '').trim();
+    if (!localPath) fail('mirasim 执行体要 --repo（仓路径）');
+    return { ok: true, omitted: false, ownerName: null, localPath, kind: 'path' };
+  }
+  if (split.omitted) {
+    return { ok: true, omitted: true, ownerName: null, localPath: defaultLocal || ROOT, kind: 'omitted' };
+  }
+  const gated = assertCrossRepoOrFail(split.ownerName, { role, where });
+  const checkout = resolveLocalCheckout({ ownerName: gated.ownerName });
+  if (!checkout.ok) fail(checkout.error, { repo: gated.ownerName, role });
+  return {
+    ok: true,
+    omitted: false,
+    ownerName: gated.ownerName,
+    localPath: checkout.localPath,
+    kind: 'ownerName',
+    authorized: true,
+    role: gated.role,
+  };
+}
+
+/** 兼容旧调用点：只返回 runtime 本地路径。跨仓 owner/name 不再原样返回。 */
+function mirasimRepoOrFail(args, opts) {
+  return resolveMirasimRepoTarget(args, opts).localPath;
+}
+
+function ghRunnerForTarget(target, opts = {}) {
+  return ghRunner({ ...opts, repo: target && target.ownerName ? target.ownerName : undefined });
+}
+
+/**
+ * #1024：跨仓闸。不传 --repo 直接放行（本仓路径一字不变）。
+ * 传了：格式非法当场拒；installation 没授权拒；名单没扫成报「没查成」。
+ * dry-run 也拦格式，授权闸 dry-run 同样拦（回落会让人以为派出了）。
+ */
+function assertCrossRepoOrFail(raw, { role = 'worker', where = 'dispatch' } = {}) {
+  const parsed = parseOwnerNameRepo(raw);
+  if (!parsed.ok) fail(parsed.error);
+  if (parsed.omitted) return { ok: true, omitted: true, ownerName: null };
+  let info;
+  try {
+    info = whoami(role);
+  } catch (e) {
+    fail(`${where}：目标仓 ${parsed.ownerName} 没查成（不是「这个仓不存在」）：whoami 抛了 ${String(e?.message || e)}`);
+  }
+  if (!info || info.ok !== true) {
+    fail(`${where}：目标仓 ${parsed.ownerName} 没查成（不是「这个仓不存在」）：${(info && info.error) || 'whoami 没回 ok'}`);
+  }
+  const gate = assertRepoAuthorized({
+    ownerName: parsed.ownerName,
+    role,
+    repositories: info.repositories,
+    repoScan: info.repoScan,
+  });
+  if (!gate.ok) fail(gate.error, { repo: parsed.ownerName, role, repoScan: info.repoScan });
+  return { ok: true, omitted: false, ownerName: parsed.ownerName, authorized: true, role };
 }
 
 /** dao 的 --model → mirasim 的族/执行体 agent/腿。缺配置报警拒派，不静默降级。 */
@@ -1558,6 +1623,8 @@ function mirasimRouteOrFail(args, routing, policy, runtime) {
  */
 async function cmdDispatchMirasim(args, routing, gate) {
   assertMirasimNoTask(args, 'dispatch');
+  // #1024 返工：owner/name 走授权闸并解析成本地 checkout；路径仍给建树；不传 = 本仓。
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'dispatch' });
   // 治理三闸照旧：拆块约束、分块指派、注入字节。少调一道就等于换执行体顺手关了它。
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
@@ -1572,13 +1639,14 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   const bind = bindExecutor({ executor: 'mirasim', routing });
   if (!bind.ok) fail(bind.error, { executor: 'mirasim' });
-  const repo = mirasimRepoOrFail(args);
+  const repo = targetRepo.localPath;
+  const ghRepo = targetRepo.ownerName || undefined;
   const branch = mirasimBranchOrFail(args);
   const route = mirasimRouteOrFail(args, routing, bind.policy, bind.runtime);
   const prompt = buildSoldierInject({ spec: args.spec, issue: args.issue, executor: 'mirasim' });
   const cardName = assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model });
   const disambiguation = args.issue
-    ? checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() })
+    ? checkIssueDisambiguated({ issue: args.issue, runGh: ghRunnerForTarget(targetRepo, { role: 'worker' }) })
     : { ok: true, gated: false };
   const dup = precheckDispatchDup({
     issue: args.issue, name: cardName, allowDup: args.allowDup, now: args.now,
@@ -1589,7 +1657,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
-      card: cardName, workerCard: cardName, issue: args.issue ?? null, repo, branch,
+      card: cardName, workerCard: cardName, issue: args.issue ?? null, repo, ghRepo: ghRepo || null, branch,
       agent: route.agent, family: route.family, leg: route.leg, mode: route.mode, via: route.via,
       daoModel: args.model, model: args.model,
       reviewer: args.reviewer ?? null, reviewerDeferred: true, reviewerCard: null,
@@ -1608,7 +1676,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
-  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
+  catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, ghRepo: ghRepo || null, branch }); }
 
   let sess;
   try {
@@ -1661,7 +1729,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
   emit({
     ok: true, executor: 'mirasim',
     card: cardName, issue: args.issue ?? null,
-    repo, branch, path: tree.path, treeCreated: tree.created,
+    repo, ghRepo: ghRepo || null, branch, path: tree.path, treeCreated: tree.created,
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
     reviewer: args.reviewer ?? null,
@@ -2526,7 +2594,7 @@ function invokeReviewerCreateHealed(opts) {
  * 「走错路」和「走对了」长得一模一样。
  * 存量 orca 士兵的任务书里本来就不带 executor，这条不显式贯穿，它们交卷就会被误吞。
  */
-function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from } = {}) {
+function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from, repo } = {}) {
   const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr), '--executor', 'mirasim'];
   if (name) argv.push('--name', String(name));
   if (parentWorktree) argv.push('--parent-worktree', String(parentWorktree));
@@ -2534,6 +2602,7 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
   if (issue) argv.push('--issue', String(issue));
   if (reviewer) argv.push('--reviewer', String(reviewer));
   if (from) argv.push('--from', String(from));
+  if (repo) argv.push('--repo', String(repo));
   if (dryRun) argv.push('--dry-run');
   const r = spawnSync(process.execPath, argv, { windowsHide: true,
     encoding: 'utf8',
@@ -2604,7 +2673,7 @@ function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
 }
 
 function writeReviewPendingOnFail({
-  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh, source,
+  pr, parentId, reviewer, issue, round, error, workerModel, soldierDispatch, runGh, source, repo,
 } = {}) {
   try {
     let head = { name: null, oid: null };
@@ -2619,7 +2688,7 @@ function writeReviewPendingOnFail({
     }
     const built = buildReviewPendingTicket({
       pr, head, workerWorktree: parentId, reviewer, issue, round, error, workerModel, soldierDispatch,
-      source: source || REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
+      source: source || REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, repo,
     });
     if (!built.ok) return built;
     return writeReviewPending({ dir: reviewPendingDir({ root: ROOT }), ticket: built.ticket });
@@ -3100,7 +3169,8 @@ async function cmdWorktreeCreate(args) {
 }
 
 async function cmdWorktreeCreateMirasim(args, { policy }) {
-  const repo = mirasimRepoOrFail(args);
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worktree-create' });
+  const repo = targetRepo.localPath;
   const branch = mirasimBranchOrFail(args);
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
@@ -3108,7 +3178,7 @@ async function cmdWorktreeCreateMirasim(args, { policy }) {
   catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch }); }
   if (!r.ok) fail(`mirasim 建树失败: ${r.error}`, { executor: 'mirasim', repo, branch });
   emit({
-    ok: true, executor: 'mirasim', repo, branch,
+    ok: true, executor: 'mirasim', repo, ghRepo: targetRepo.ownerName || null, branch,
     path: r.path, created: r.created, verified: r.verified,
   });
 }
@@ -3364,6 +3434,8 @@ function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');
   if (!args.worktree) fail('reviewer-attach 要 --worktree（工人卡）');
   if (!args.reviewer) fail('reviewer-attach 要 --reviewer（审官模型 id）');
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'reviewer-attach' });
+  const ghRepo = targetRepo.ownerName || undefined;
 
   const routing = loadOrFail();
   let reviewerLaunch;
@@ -3374,7 +3446,7 @@ function cmdReviewerAttach(args) {
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) fail(cap.error);
 
-  const gh = ghRunner({ role: 'reviewer' });
+  const gh = ghRunner({ role: 'reviewer', repo: ghRepo });
   const meta = gh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
@@ -3738,7 +3810,8 @@ function cmdReviewerAttach(args) {
 
 function cmdReviewerDone(args) {
   if (!args.pr) fail('reviewer-done 要 --pr');
-  const gh = ghRunner({ role: 'reviewer' });
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'reviewer-done' });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   const view = gh(['pr', 'view', String(args.pr), '--json', 'state,reviews']);
   if (!view.ok) fail(`gh 读 PR #${args.pr} 失败：${view.error}`);
   let json;
@@ -3788,27 +3861,35 @@ async function admitReviewPull(tickets) {
 }
 
 async function cmdReviewPendingDrain(args) {
+  const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'review-pending-drain' });
+  const ghRepo = targetRepo.ownerName || undefined;
   const dir = reviewPendingDir({ root: ROOT });
   const listed = listReviewPending(dir);
   if (!listed.ok) fail(listed.error, listed);
-  const all = args.pr
-    ? listed.tickets.filter(t => String(t.pr) === String(args.pr))
-    : listed.tickets;
+  const scoped = listed.tickets.filter(t => {
+    if (args.pr && String(t.pr) !== String(args.pr)) return false;
+    const ticketRepo = t.repo ? String(t.repo).trim() : '';
+    if (ghRepo) {
+      // 显式跨仓 drain 只吃该仓的票；无仓旧票不当成目标仓。
+      return ticketRepo.toLowerCase() === String(ghRepo).toLowerCase();
+    }
+    if (args.pr) return !ticketRepo; // --pr 不带 --repo = 本仓，不顺手清掉跨仓同号票
+    return true;
+  });
 
   // #1125：闸放在这里而不是指挥官里——`review-pending-drain` 是唯一的拉取入口，
   // 手工跑和指挥官跑必须受同一道闸。放到调用方就会有第二条绕过去的路。
   // --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸。
   // 不过上限只认 --force，只许人手；指挥官自动化不许带。
   const admit = args.force
-    ? { ok: true, pull: all, held: [], why: `--force 人手逃生口，不过并发上限` }
-    : await admitReviewPull(all);
+    ? { ok: true, pull: scoped, held: [], why: `--force 人手逃生口，不过并发上限` }
+    : await admitReviewPull(scoped);
   if (!admit.ok) {
     // 没查成不放行，但也不是失败：票都还在队列，下一轮再来。
     emit({ ok: true, drained: 0, held: admit.held.length, unscanned: true, why: admit.why, dir });
     return;
   }
   const tickets = admit.pull;
-
   if (args.dryRun) {
     emit({
       ok: true,
@@ -3826,7 +3907,9 @@ async function cmdReviewPendingDrain(args) {
     dir,
     tickets,
     attach: (plan) => {
-      const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], { windowsHide: true,
+      const argv = [...plan.argv];
+      if (ghRepo && !argv.includes('--repo')) argv.push('--repo', ghRepo);
+      const spawned = spawnSync(process.execPath, [self, ...argv, '--json'], { windowsHide: true,
         encoding: 'utf8',
         cwd: ROOT,
         timeout: 600000,
@@ -4445,12 +4528,13 @@ async function cmdLeg(args) {
 // 合并归一：executor-binding.mjs / docs/model-routing.json「执行体」节 与卡 B 归一（见 PR 正文）。
 import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
-  judgeReviewerSessionReuse, buildMirasimReviewerPrompts, peekReviewerSession,
+  buildMirasimReviewerPrompts, peekReviewerSession,
+  reviewerMustReplaceDead,
+  decideReviewerCreateStart, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
-/** 主 clone 根（PR 分支所在的 git 仓）：--repo 优先，否则由本树 git-common-dir 推。 */
-function mirasimRepoRoot(args) {
-  if (args && args.repo) return args.repo;
+/** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
+function thisCheckoutRoot() {
   const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
   if (r.status === 0) {
     let g = String(r.stdout || '').trim();
@@ -4461,6 +4545,11 @@ function mirasimRepoRoot(args) {
     }
   }
   return ROOT;
+}
+
+/** 主 clone 根（PR 分支所在的 git 仓）：跨仓解析本地 checkout，否则本树。 */
+function mirasimRepoRoot(args, opts) {
+  return resolveMirasimRepoTarget(args, opts).localPath || thisCheckoutRoot();
 }
 
 /** 读回某树 HEAD 的 sha（读回自证的那一读；读不到抛，交判官判「没查成」）。 */
@@ -4560,10 +4649,14 @@ function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
  * `read → 起会话 → write` 之间没有原子 claim，两棵树并发跑 reviewer-create 时
  * 都能在对方写盘前读到 missing，于是各起一个 session，后写覆盖前写——
  * 登记看着只有一条，额度已经烧了两份，「一 PR 一审官」名存实亡。
- * 锁文件按 PR 分，复用既有的 O_EXCL 原语（持锁进程死了自动拆），不另造一套。
+ * 锁文件按仓+PR 分（本仓仍是 reviewer-<pr>.lock），复用既有的 O_EXCL 原语
+ * （持锁进程死了自动拆），不另造一套。两个仓的同号 PR 不许共用一把锁。
  */
-function reviewerLockPath(pr) {
-  return join(dirname(defaultLockPath()), `reviewer-${String(pr)}.lock`);
+function reviewerLockPath(pr, repo) {
+  const keyed = repoPrKey({ repo, pr });
+  // 键没做成不许回落到纯 PR 号（两个仓同号会共用一把锁）。
+  const stem = keyed.ok ? keyed.stem : `.invalid-${String(pr ?? '').trim()}`;
+  return join(dirname(defaultLockPath()), `reviewer-${stem}.lock`);
 }
 
 function mirasimRegistry() {
@@ -4577,9 +4670,37 @@ function mirasimRegistry() {
   });
 }
 
+/**
+ * 取「上一位审官是谁、死于什么」——#1122 换厂凭证的唯一来源。
+ *
+ * 读不到一律回空死因：那样 assertReviewerSeat 会走老规矩（只许同厂换顺位），
+ * 也就是**没查成时不放宽**。把「读不到」当成「死于满载」会让换厂变成常开的后门。
+ */
+async function readReviewerDeathNote(runtime, args, ownerName) {
+  if (args.dryRun) return { deadModelId: null, deadError: '' };
+  try {
+    const rec = mirasimRegistry().read(args.pr, ownerName);
+    const key = rec && rec.ok && rec.record ? rec.record.sessionKey : '';
+    if (!key) return { deadModelId: null, deadError: '' };
+    const peek = await peekReviewerSession(runtime, key);
+    const view = peek && peek.view;
+    // 只有终态会话的死因才算数：还在跑的那个不是「死了」，是「没审完」。
+    if (!view || view.missing === true || String(view.phase || '').toLowerCase() === 'running') {
+      return { deadModelId: null, deadError: '' };
+    }
+    return {
+      deadModelId: rec.record.reviewer || null,
+      deadError: view.error == null ? '' : String(view.error).trim(),
+    };
+  } catch {
+    return { deadModelId: null, deadError: '' };
+  }
+}
+
 async function cmdReviewerCreateMirasim(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
-  const gh = ghRunner({ role: 'reviewer' });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'reviewer', where: 'reviewer-create', defaultLocal: thisCheckoutRoot() });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   const routing = loadOrFail();
   const execPolicy = readExecutorPolicy(routing);
   const named = judgeExecutorName(args.executor, execPolicy);
@@ -4591,14 +4712,35 @@ async function cmdReviewerCreateMirasim(args) {
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
   if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  // #1122 换厂凭证：只有「上一位审官的会话死于满载/看门狗」才配得上跨厂。
+  // 证据从登记在案的那个会话上取——不是一个调用方能自己声明的旗标。
+  const failover = await readReviewerDeathNote(bind.runtime, args, targetRepo.ownerName || null);
+  const failoverCtx = failover.deadError ? {
+    deadModelId: failover.deadModelId,
+    deadError: failover.deadError,
+    workerId: worker.modelId,
+    models: routing.models || [],
+    passerIds: reviewerOrderOf(routing),
+    order: reviewerOrderOf(routing),
+  } : null;
+  // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
+  const planned = planReviewerOnCapacityDeath({
+    requested: picked.modelId, capacityFailover: failoverCtx,
+  });
+  if (!planned.ok) fail(planned.error, { capacityPlan: planned, pr: String(args.pr) });
+  picked.modelId = planned.reviewerId;
   // #679 同厂硬闸：orca 路一直有，mirasim 路原来没有。2026-09-06 把默认执行体翻成 mirasim
   // 的那一刻，不补这一句就等于顺手关掉了这道闸——切流量必须把闸一起搬过去，
   // 否则「闸还在代码里」和「闸还在这条路上」是两回事（memory bypassing-wrapper-loses-its-checks）。
+  // 闸在选人之后：换厂前标签上的死人可能与工人同厂，先闸会把退路自己砍掉。
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: picked.modelId, routing,
   });
-  const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
-  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
+  const seat = assertReviewerSeat({
+    reviewerId: picked.modelId, routing,
+    capacityFailover: failoverCtx,
+  });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, capacityPlan: planned, pr: String(args.pr) });
   const routeDbg = judgeAgentRoute(picked.modelId, bind.mirasim);
   if (!routeDbg.ok) fail(routeDbg.error, { route: routeDbg, reviewer: picked.modelId });
 
@@ -4616,32 +4758,40 @@ async function cmdReviewerCreateMirasim(args) {
   if (!books.ok) fail(books.error, { policyPlan, pr: String(args.pr) });
 
   const registry = mirasimRegistry();
+  const ownerName = targetRepo.ownerName || null;
+  // 撞满载必须另起：登记里还是刚死的那位，不带 force 会被一 PR 一审官闸当成「已有」复用。
+  // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
+  // #1024：键是仓+PR，跨仓同号不复用别仓的会话。
+  const existing = registry.read(args.pr, ownerName);
+  const existingRecord = existing.ok ? existing.record : null;
+  const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
+    ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
+    : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  const decided = decideReviewerCreateStart({
+    force: args.force, switched: planned.switched, deadError: failover.deadError,
+    record: existingRecord, view: peek.view,
+  });
+  const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  const existing = registry.read(args.pr);
-  if (existing.ok && existing.record && existing.record.sessionKey) {
-    // 连不上服务端是「没查成」，不是「会话失效」——peekReviewerSession 把这两件事分开，
-    // 否则服务端一抽风就给同一个 PR 起第二个审官。
-    const peek = args.dryRun ? { view: null, why: 'dry-run 不探会话' } : await peekReviewerSession(bind.runtime, existing.record.sessionKey);
-    const reuse = judgeReviewerSessionReuse({ record: existing.record, view: peek.view, force: args.force });
-    if (reuse.reuse) {
-      emit({
-        ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
-        reviewer: picked.modelId, worker: worker.modelId, sessionKey: reuse.sessionKey,
-        agent: existing.record.agent || null, treePath: existing.record.treePath || null,
-        expectedOid: existing.record.expectedOid || null,
-        mergePolicy: books.mergePolicy, mergePolicySource: books.source,
-        reuse: { reuse: true, checked: reuse.checked, why: reuse.why, peekWhy: peek.why || null },
-        why: `${reuse.why}（要另起加 --force）`,
-      });
-    }
+  if (decided.reuse.reuse) {
+    emit({
+      ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
+      reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
+      agent: existingRecord.agent || null, treePath: existingRecord.treePath || null,
+      expectedOid: existingRecord.expectedOid || null,
+      mergePolicy: books.mergePolicy, mergePolicySource: books.source,
+      reuse: { reuse: true, checked: decided.reuse.checked, why: decided.reuse.why, peekWhy: peek.why || null },
+      why: `${decided.reuse.why}（要另起加 --force）`,
+    });
   }
 
-  const repo = mirasimRepoRoot(args);
+  const repo = targetRepo.localPath;
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim', pr: String(args.pr), reviewer: picked.modelId,
       reviewerSource: picked.source || null,
       worker: worker.modelId, workerModel: worker.modelId, agent: routeDbg.agent, mode: routeDbg.mode, repo,
+      ghRepo: targetRepo.ownerName || null,
       vendorGate, reviewerSeat: seat,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
     });
@@ -4651,26 +4801,44 @@ async function cmdReviewerCreateMirasim(args) {
   // 起会话 + 写登记必须在同一把 per-PR 锁里，并在锁内**再读一次登记**（double-check）：
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
-    const again = registry.read(args.pr);
-    if (!args.force && again.ok && again.record && again.record.sessionKey) {
-      return { raced: true, record: again.record };
-    }
-    const created = await mirasimReviewerCreate({
-      runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
-      prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
-      syncTree: (p, oid) => gitSyncTreeTo(p, oid),
-      pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
-      models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
-      reviewBranch: `dao-review-pr-${args.pr}`,
+    const again = registry.read(args.pr, ownerName);
+    const againRecord = again.ok ? again.record : null;
+    // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
+    const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
+      ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
+      : { view: null };
+    const locked = await runLockedReviewerCreate({
+      forceNew, record: againRecord, view: racePeek.view,
+      create: async () => {
+        const created = await mirasimReviewerCreate({
+          runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
+          prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
+          syncTree: (p, oid) => gitSyncTreeTo(p, oid),
+          pr: String(args.pr), repo, reviewerModel: picked.modelId, workerModel: worker.modelId,
+          models: routing.models, mirasimPolicy: bind.mirasim, prompt: books.prompt,
+          reviewBranch: `dao-review-pr-${args.pr}`,
+        });
+        if (!created.ok) return created;
+        // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
+        return {
+          ...created,
+          registryWrite: registry.write(args.pr, {
+            pr: String(args.pr), repo: ownerName, sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
+            // reviewer 这一栏是 #1122 换厂链能不能往前走的前提：不记下**这一位是谁**，
+            // 下一轮只能拿审官位顶位（luna）当「上一位」，于是 luna→sol 之后永远还是算出 sol，
+            // 链子卡在第一格。实咬：sol 也撞满载后，换厂仍报「按顺位该换 gpt-5.6-sol」。
+            reviewer: picked.modelId,
+            round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
+            treeHead: created.treeHead || null, ts: Date.now(),
+          }),
+        };
+      },
     });
-    if (!created.ok) return { res: created };
-    // #886 审官第 3 条：登记写失败 fail-closed——不许在没持久化时报 created（重试会起第二个会话）。
-    return { res: created, w: registry.write(args.pr, {
-      pr: String(args.pr), sessionKey: created.sessionKey, agent: created.agent, treePath: created.treePath,
-      round: 'first', headRefName: created.headRefName, expectedOid: created.expectedOid,
-      treeHead: created.treeHead || null, ts: Date.now(),
-    }) };
-  }, { lockPath: reviewerLockPath(args.pr) });
+    if (locked.raced) return { raced: true, record: againRecord };
+    const created = locked.res;
+    if (!created || !created.ok) return { res: created };
+    return { res: created, w: created.registryWrite };
+  }, { lockPath: reviewerLockPath(args.pr, ownerName) });
 
   // 锁没拿到 = 没查成，不是「可以起」。硬失败，别在没有互斥的情况下烧第二份额度。
   if (guarded && guarded.ok === false && guarded.locked === false) {
@@ -4716,8 +4884,9 @@ async function cmdWorkerDoneMirasim(args) {
     try { body = readFileSync(args.bodyFile, 'utf8'); }
     catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
   }
-  const gh = ghRunner({ role: 'worker' });
-  const ghR = ghRunner({ role: 'reviewer' });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
+  const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
+  const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
@@ -4736,6 +4905,22 @@ async function cmdWorkerDoneMirasim(args) {
     const worker = resolveWorkerFromPr({ pr: args.pr, runGh: ghR });
     workerModel = worker.ok ? worker.modelId : null;
   }
+  // #1122：登记会话死于满载时按顺位换下一位，再过同厂闸。闸必须在选人之后，
+  // 否则标签上的死人会把退路自己砍掉。
+  const failover = await readReviewerDeathNote(bind.runtime, args, targetRepo.ownerName || null);
+  const failoverCtx = failover.deadError ? {
+    deadModelId: failover.deadModelId,
+    deadError: failover.deadError,
+    workerId: workerModel,
+    models: routing.models || [],
+    passerIds: reviewerOrderOf(routing),
+    order: reviewerOrderOf(routing),
+  } : null;
+  const planned = planReviewerOnCapacityDeath({
+    requested: plan.reviewer, capacityFailover: failoverCtx,
+  });
+  if (!planned.ok) fail(planned.error, { capacityPlan: planned, ...plan });
+  plan.reviewer = planned.reviewerId;
   refuseIfSameVendor({ workerId: workerModel, reviewerId: plan.reviewer, routing });
 
   // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
@@ -4765,6 +4950,8 @@ async function cmdWorkerDoneMirasim(args) {
   const postedIssue = postCommentOnce({
     kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
     writeIssue: applyIssueWrite, host: 'worker-done',
+    // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
+    repo: targetRepo.ownerName || undefined,
     idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
   });
   if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
@@ -4781,6 +4968,7 @@ async function cmdWorkerDoneMirasim(args) {
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
   // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
+  const repo = targetRepo.localPath;
   if (plan.round === 'first') {
     const dir = reviewPendingDir({ root: ROOT });
     let head = { name: null, oid: null };
@@ -4790,9 +4978,11 @@ async function cmdWorkerDoneMirasim(args) {
     const built = buildReviewPendingTicket({
       pr: String(plan.pr), issue: plan.issue, reviewer: plan.reviewer, round: plan.round,
       workerModel, soldierDispatch: args.soldierDispatch || null,
-      workerWorktree: mirasimRepoRoot(args),
+      workerWorktree: repo,
       head,
       source: REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+      // 仓键用 GitHub owner/name，不许把 localPath 塞进来（路径过不了 parseOwnerNameRepo，还会把跨仓票落到 12.json）。
+      repo: targetRepo.ownerName || null,
     });
     if (!built.ok) fail(built.error, { ...plan, postedIssue, postedPr });
     const wrote = writeReviewPending({ dir, ticket: built.ticket });
@@ -4815,18 +5005,19 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  const repo = mirasimRepoRoot(args);
   const res = await mirasimWorkerDone({
     runtime: bind.runtime, gh: ghR, readTreeHead: gitHeadOf,
     prepareRef: (r, b, oid, rb) => gitFetchRef(r, b, oid, rb),
     syncTree: (p, oid) => gitSyncTreeTo(p, oid),
     registry: mirasimRegistry(),
-    pr: String(plan.pr), repo,
+    pr: String(plan.pr), repo, ownerName: targetRepo.ownerName || null,
     prompt: books.prompt,
     reworkPrompt: books.reworkPrompt,
     reviewerModel: plan.reviewer, workerModel,
     models: routing.models, mirasimPolicy: bind.mirasim, round: plan.round,
-    reviewBranch: `dao-review-pr-${plan.pr}`, force: args.force,
+    reviewBranch: `dao-review-pr-${plan.pr}`, force: reviewerMustReplaceDead({
+      force: args.force, switched: planned.switched, deadError: failover.deadError,
+    }),
   });
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
   let stopped = { ok: true, skipped: true };
@@ -4865,14 +5056,15 @@ async function cmdStartMirasim(args) {
   let workdir = typeof args.worktree === 'string' && args.worktree.includes('/')
     ? args.worktree.replace(/^path:/, '')
     : '';
-  const repo = mirasimRepoRoot(args);
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'start', defaultLocal: thisCheckoutRoot() });
+  const repo = targetRepo.localPath;
   const branch = args.branch || gitBranchName(ROOT).branch || 'master';
 
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
       agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
-      repo, branch, workdir: workdir || '(ensureWorkspace 后才有)',
+      repo, ghRepo: targetRepo.ownerName || null, branch, workdir: workdir || '(ensureWorkspace 后才有)',
       promptBytes: Buffer.byteLength(String(args.prompt), 'utf8'),
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
     });

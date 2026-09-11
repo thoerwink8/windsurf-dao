@@ -32,9 +32,14 @@ test('熔断 open 未到冷却 → 红；冷却已过 → 放行（半开要给�
   const models = [{ id: 'gpt-5.6-sol', provider: 'gpt' }]; // probeTargetForModel → direct:codex@pqapi/responses
   const targets = { 'direct:codex@pqapi/responses': { state: 'open', cooldownUntil: '2026-09-10T17:39:20.055Z' } };
   const now = Date.parse('2026-09-10T13:00:00Z');
-  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now }), ['gpt-5.6-sol']);
+  // 必须注入干净的健康表：这条测的是**熔断**那一层，不注入就会去读真盘。
+  // 2026-09-11 实咬：pqapi 那条 leg 真的红着（healthRedIds 里 health 与 breaker 是两条独立判据），
+  // 于是「冷却已过 → 放行」这条断言随机器状态翻红——测的是熔断，红的是线路，
+  // 而它只在 orca 身份下红（root 家目录没有那张健康表）。纯夹具，不依赖真盘。
+  const clean = () => ({ availability: {} });
+  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now, availabilityForFn: clean }), ['gpt-5.6-sol']);
   const later = Date.parse('2026-09-10T18:00:00Z');
-  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now: later }), [], '冷却到点必须放行，否则熔断成了永久封禁');
+  assert.deepEqual(healthRedIds({ models, profiles: [], breaker: { ok: true, targets }, now: later, availabilityForFn: clean }), [], '冷却到点必须放行，否则熔断成了永久封禁');
 });
 
 test('熔断 closed 不算红（健康表清白的夹具，只验熔断这一层）', () => {

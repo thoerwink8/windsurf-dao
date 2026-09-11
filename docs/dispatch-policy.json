@@ -1,6 +1,6 @@
 {
   "updated": "2026-09-08",
-  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位；超时不算红（#853：排队型网关首字节慢，实测 gw-sub 组 10~16.5s，旧的 5000ms 让它们每次必红、当场换掉正在干活的通道）——timeoutMs=30000 的实测依据写在 scripts/lib/preflight.mjs 的 DISPATCH_POLICY_DEFAULTS 上方，改数字前先看那张表。编排层熔断（#843）：窗口内连撞 N 次自动 cooldown，到点半开一针。指挥官（#1007）：机器余量准入（loadThreshold / memReserveMb 是留多少余量，不是派几个）+ 派前校验模型在当前选型且健康表非红。每轮派几个的垫片已退役。draft 收口泵（#1147）：stalledDraftHours 是无会话 draft 超多久无提交才派收口短会话（默认 24h），stalledDraftMaxPumps 是同一张 draft 最多泵几次（默认 2，泵完仍 draft 打「卡死/等用户」）。真相源，改动后 dao-check 校验取值范围。后台改的是这份文件 → PR。；hubChat（#852 总帅入口）：总控群对话开关与允许动作（situation=盘面只读问答 / decision=拍板写回对应单 / guide=新需求指路项目群），upstream 是三类上行的分级。board（#818 看板 v0）：阶段墙钟小时，默认跟 release-policy budget.per_issue.worker_wall_hours_max 对齐；alertBatchMax 一轮扫描最多往群里丢几条（超了改发一条摘要）",
+  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位；超时不算红（#853：排队型网关首字节慢，实测 gw-sub 组 10~16.5s，旧的 5000ms 让它们每次必红、当场换掉正在干活的通道）——timeoutMs=30000 的实测依据写在 scripts/lib/preflight.mjs 的 DISPATCH_POLICY_DEFAULTS 上方，改数字前先看那张表。编排层熔断（#843）：窗口内连撞 N 次自动 cooldown，到点半开一针。指挥官（#1007）：机器余量准入（**主判据 cpuThreshold = 真 CPU 占用率**，2026-09-10 起取代 loadThreshold——后者在等模型回话的 IO 型负载下把等 IO 的进程算成压力，实测差两倍以上；loadThreshold / memReserveMb 是留多少余量，不是派几个）+ 派前校验模型在当前选型且健康表非红。每轮派几个的垫片已退役。draft 收口泵（#1147）：stalledDraftHours 是无会话 draft 超多久无提交才派收口短会话（默认 24h），stalledDraftMaxPumps 是同一张 draft 最多泵几次（默认 2，泵完仍 draft 打「卡死/等用户」）。真相源，改动后 dao-check 校验取值范围。后台改的是这份文件 → PR。；hubChat（#852 总帅入口）：总控群对话开关与允许动作（situation=盘面只读问答 / decision=拍板写回对应单 / guide=新需求指路项目群），upstream 是三类上行的分级。board（#818 看板 v0）：阶段墙钟小时，默认跟 release-policy budget.per_issue.worker_wall_hours_max 对齐；alertBatchMax 一轮扫描最多往群里丢几条（超了改发一条摘要）",
   "preflight": {
     "enabled": true,
     "timeoutMs": 30000,
@@ -22,7 +22,8 @@
     "minSamplePairs": 4,
     "sampleWindow": 12,
     "stalledDraftHours": 24,
-    "stalledDraftMaxPumps": 2
+    "stalledDraftMaxPumps": 2,
+    "cpuThreshold": 0.85
   },
   "hubChat": {
     "enabled": true,

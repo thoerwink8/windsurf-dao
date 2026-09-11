@@ -621,10 +621,22 @@ test('⑳ 单元漂移', async (t) => {
     assert.match(r.detail, /install/, '要给修法');
   });
 
-  await t.test('机器上压根没装 → unknown，不是 red 也不是 ok', () => {
+  // 这条原本期望 unknown。2026-09-11 改判：**「仓里有、机器上没有」不是没查成，是确定的故障。**
+  // 原判据把它和「仓内读不到」一起塞进 unreadable → unknown，于是 #818 的
+  // dao-board-watch 从合进仓（09-10 21:43）到 09-11 一次没装过，这条闸每轮说「没查成」
+  // 而不是「红」——不开单、不叫人，安静得像没事。仓里那份就是真相，缺的那头是缺。
+  await t.test('机器上压根没装 → red（仓里有就是真相，缺的是缺，不是测不准）', () => {
     const r = classifyUnitDrift([{ name: 'x.timer', repo: 'A', live: null }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /x\.timer/, '要点名是哪个');
+    assert.match(r.detail, /从没装上过|根本没有/);
+    assert.match(r.detail, /install/, '要给修法');
+  });
+
+  await t.test('仓内读不到 → 仍是 unknown（这才是真的没查成）', () => {
+    const r = classifyUnitDrift([{ name: 'x.timer', repo: null, live: 'A' }]);
     assert.equal(r.state, 'unknown');
-    assert.match(r.detail, /没装|没查成/);
+    assert.match(r.detail, /没查成|读不到/);
   });
 
   await t.test('已装却漂了 + 另几个没装 → red（没装不许把漂移盖成没查成）', () => {

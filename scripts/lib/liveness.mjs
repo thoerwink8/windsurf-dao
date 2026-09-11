@@ -244,3 +244,57 @@ export function applyProgressMemory({ sessions, memory, now = Date.now() } = {})
   }
   return { sessions: out, memory: next };
 }
+
+/**
+ * 一棵树里现在有没有活着的会话进程（#1166 之后的同形问题，观察
+ * `2026-09-11-会话在跑记录说停.md`）。
+ *
+ * 为什么需要它：`record.json` 的 `updatedAt` 记的是「服务端最后一次写记录」，
+ * 上游 run 断流之后本地执行体继续干，记录不再回写——时间戳冻住，
+ * 于是「记录的新鲜度」与「活干的进度」脱钩，一个冻住的旧值会被判成
+ * 「它安静了 45 分钟」。判据的可靠性不该依赖「恰好没跑到越线那一刻」。
+ *
+ * 纯函数：进程观测从外面给（scanSessionProcs 的产物），好单测，也不在这里起子进程。
+ *
+ * 三态，**「没查成」不许退化成「没在跑」**：
+ *   'running'   该树有活进程 → 别动它（fail-open 到「留着」）
+ *   'idle'      查成了，该树确实没有活进程 → 可以走时间判据
+ *   'unknown'   进程面没查成 → 判据不许动用「没在跑」这个结论
+ */
+export function treeProcessState(tree, { scan } = {}) {
+  const want = String(tree || '').replace(/\/+$/, '');
+  if (!want) return { state: 'unknown', why: '没给树路径——没查成' };
+  if (!scan || typeof scan !== 'object') return { state: 'unknown', why: '没给进程观测——没查成' };
+  if (scan.unscanned) return { state: 'unknown', why: scan.error || '进程面没查成' };
+  if (scan.ok !== true) return { state: 'unknown', why: scan.error || '进程面没查成' };
+  if (scan.noServer) {
+    // 服务不在 = 一个会话也不可能在跑。这是「查成了，结论是 0」。
+    return { state: 'idle', why: 'mirasim 服务没在跑，该树不可能有会话进程' };
+  }
+  const procs = Array.isArray(scan.procs) ? scan.procs : [];
+  const hits = procs.filter((p) => String(p && p.cwd || '').replace(/\/+$/, '') === want);
+  if (!hits.length) return { state: 'idle', why: `该树没有活着的会话进程（扫到 ${procs.length} 个会话进程，都不在这棵树）` };
+  return {
+    state: 'running',
+    why: `该树有 ${hits.length} 个活着的会话进程（pid ${hits.slice(0, 4).map((p) => p.pid).join('、')}）`,
+    pids: hits.map((p) => p.pid),
+  };
+}
+
+/**
+ * 会话活性 + 树内进程，合成「这张卡该不该算活着」。
+ *
+ * 顺序（观察里建议的那条）：**记录说安静但该树有活进程 → 按在跑处理**。
+ * 反过来（记录说在跑、进程没了）才轮到时间判据。时间判据只作最后兜底。
+ *
+ * 进程面 'unknown' 时**不改判**，原样返回活性判定并注明——「没查成」不许被当成
+ * 「没在跑」，也不许被当成「在跑」，两种都是一种猜。
+ */
+export function assessLivenessWithTree(session, { now = Date.now(), thresholdMs = DEFAULT_SILENCE_MS, scan } = {}) {
+  const base = assessLiveness(session, { now, thresholdMs });
+  const tree = treeProcessState(session && session.worktreeId, { scan });
+  if (tree.state === 'running') {
+    return { ...base, state: 'active', treeOverride: true, why: `${base.why}；但${tree.why}→按在跑处理` };
+  }
+  return { ...base, treeState: tree.state, treeWhy: tree.why };
+}

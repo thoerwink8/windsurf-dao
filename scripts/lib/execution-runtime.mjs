@@ -8,10 +8,14 @@ import {createRuntime as createMirasimRuntime} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,sessionStateOf} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 
-const TERMINAL = new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','auth_required','unsupported_interaction']);
+// 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
+// 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
+// 本晚第 3 处手打副本；现在全仓只留正典一处。
+const TERMINAL = EXECUTION_FINISHED;
 const wait = ms => new Promise(r=>setTimeout(r,ms));
 const defaultProfilesFile = new URL('../../docs/execution-profiles.json',import.meta.url);
 export function loadExecutionProfiles(file=process.env.DAO_EXECUTION_PROFILES || defaultProfilesFile) {
@@ -71,8 +75,10 @@ export function judgeExecutionCompletion(view) {
   return {status:'done',reason:'agent turn ended with observable output; task artifacts still require acceptance',confirmedBy:['session','output']};
 }
 function busy(message,reason='lease-held'){const e=new Error(message);e.code='busy';e.detail={busy:true,reason};return e;}
-const RESERVED=new Set(['pending','uncertain','stopping']);
-const FINISHED=new Set(['done','completed','complete','failed','error','aborted','cancelled','canceled','stopped','rejected','auth_required','unsupported_interaction','gone']);
+// 终态/预留态的正典在 lib/execution-states.mjs——回收侧（board-gc）读同一份，
+// 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
+const RESERVED=EXECUTION_RESERVED;
+const FINISHED=EXECUTION_FINISHED;
 const SESSION_KEY=/^[a-z][a-z0-9-]*:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sameLease=(a,b)=>a&&b&&a.token===b.token&&(a.recordKey||a.sessionKey)===(b.recordKey||b.sessionKey)&&a.cleanupToken===b.cleanupToken;
 
@@ -338,11 +344,68 @@ export function createExecutionRuntime(opts={}) {
     const sessions=new Array(records.length),errors=[];
     const deadline=Date.now()+(opts.managedListTimeoutMs??15000);
     let cursor=0,active=0;
+    // 服务端的会话名单**按需查一次、全 worker 复用**：它带每条会话的 runState/open（服务端
+    // 对自己会话的权威定性），是「这条已经终结了吗」最便宜的答案——比逐个读快照快一个数量级
+    // （快照读实测 12s/条且过期会话必然超时）。
+    //
+    // 「按需」不能省：一条要判的会话都没有时（全是 pending/终态）不该白打一趟名单——
+    // 既有用例盯着这个（managed pending inventory… 断言 m.calls.list===0）。所以用惰性
+    // promise：第一个真需要的 worker 触发，其余等同一个结果，全程最多一次。
+    // 查不成就是 null，退回「读快照判进度」的老路（fail-open 到旧行为，不假装终结）。
+    let listedIndexPromise = null;
+    const listedIndexOnce = () => {
+      if (!listedIndexPromise) {
+        listedIndexPromise = (async () => {
+          try {
+            const listed = await mirasim.listSessions({ scope: 'global' });
+            if (listed && listed.ok === true && Array.isArray(listed.sessions)) {
+              const idx = new Map();
+              for (const x of listed.sessions) {
+                const k = x.sessionKey || x.id || x.key;
+                if (k) idx.set(String(k), x);
+              }
+              idx.complete = listed.complete === true && listed.partial !== true && listed.hasMore !== true;
+              return idx;
+            }
+          } catch { /* 名单查不成 = 这条线索没有，退回读快照 */ }
+          return null;
+        })();
+      }
+      return listedIndexPromise;
+    };
     const worker=async()=>{
       for(;;) {
         const index=cursor++;if(index>=records.length)return;
         let m=records[index],state=m.state;
-        if(!FINISHED.has(state)&&m.sessionKey&&!RESERVED.has(state)) {
+        // **先问名单**：服务端自己的会话名单里就带 runState/open，那是它对自己每条会话的
+        // 权威定性。名单说已经终结（incomplete/failed/…）、或 open=false 的，不必再去读快照
+        // ——快照会随会话过期消失，为它等一趟读超时（实测 12s > 8s 预算）只会把整张名单判成
+        // 没查成（2026-09-10 实咬：三条过期会话让观测集恒 incomplete，指挥官冻结差集重派）。
+        // 名单没这条 / 没给状态，才退回「读快照判进度」那条老路。
+        let listedState = null;
+        const needList = (!FINISHED.has(state) || state === 'incomplete') && !m.cleanupVerified && m.sessionKey && !RESERVED.has(state);
+        const listedIndex = needList ? await listedIndexOnce() : null;
+        const hit = listedIndex ? listedIndex.get(String(m.sessionKey)) : null;
+        if (hit) {
+          // `open` describes an open UI session, not whether its agent ended.
+          // A headless running Grok may have open:false. Never manufacture a
+          // terminal state from that bit: doing so lets commander kill its own
+          // workers on the next scan. Re-read unverified incomplete cache rows
+          // so a previous misclassification does not become permanent truth.
+          const raw = sessionStateOf(hit);
+          if (raw) listedState = raw;
+        }
+        // Absence from a proven complete server inventory plus no executing
+        // process is positive evidence of a removed session. Without both
+        // observations retain the snapshot fallback; absence is not a timeout.
+        if (!hit && listedIndex?.complete && m.backend === 'mirasim') {
+          try { if (processCheck(m.workdir).length === 0) listedState = 'gone'; }
+          catch { /* Cannot verify processes: do not infer disappearance. */ }
+        }
+        if (listedState) {
+          state = listedState;
+          try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, state: RESERVED.has(cur.state) || cur.cleanupVerified ? cur.state : listedState, observedState: listedState, observedAt: now(), taskCompleted: false }; atomic(metaFile(keyOf(m)), next); return next; }); } catch { /* 落不下不改判 */ }
+        } else if((!FINISHED.has(state)||state==='incomplete')&&!m.cleanupVerified&&m.sessionKey&&!RESERVED.has(state)) {
           if(++active>maxActive||Date.now()>=deadline){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'managed active scan limit'});}
           else {
             let timer;
@@ -357,7 +420,15 @@ export function createExecutionRuntime(opts={}) {
               if(view&&view.missing===true){state='gone';}
               else{
               state=judgeExecutionCompletion(view).status;
-              if(state==='unknown')errors.push({backend:m.backend,recordKey:keyOf(m),error:'session state unknown'});
+              // 「服务端名单里已经报了终态、只是快照没回帧」（partial）不算「这次没读成」：
+              // 终态会话的快照本来就会过期消失，为它把整张名单判成没查成，代价是调度器整轮不动
+              // （2026-09-10 实咬：一条 runState=incomplete 的死会话让观测集恒 incomplete，
+              // 指挥官每轮只打一行 escalate）。名单给的终态就是判据，直接采信。
+              // 真·读不成（超时/抛错）仍走下面那条 catch，照旧进 errors。
+              if(state==='unknown'&&!(view&&view.partial===true&&FINISHED.has(String(view.phase||'')))){
+                errors.push({backend:m.backend,recordKey:keyOf(m),error:'session state unknown'});
+              }
+              if(state==='unknown'&&view&&view.partial===true&&FINISHED.has(String(view.phase||'')))state=String(view.phase);
               }
               m=await fence(()=>{
                 const current=metadata(keyOf(m));if(!current)throw new Error('registry changed');
@@ -365,10 +436,24 @@ export function createExecutionRuntime(opts={}) {
                 atomic(metaFile(keyOf(m)),next);return next;
               });
               state=m.state;
-            }catch{state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'session read incomplete'});}finally{clearTimeout(timer);}
+            }catch{
+              // 读快照失败（超时/抛错）：**别把 unknown 写回记录**。写回之后这一条就永远
+              // 进不了上面的 FINISHED 短路，每轮都白等一整趟超时，而且每轮都给整张名单
+              // 记一条 errors —— 2026-09-10 实咬：三条过期会话让观测集恒「没查成」，
+              // 指挥官据此冻结差集重派。状态留原样（下次仍会尝试读，会话真回来了还能救），
+              // 但本轮按 unknown 上报，不写盘。
+              state='unknown';
+              errors.push({backend:m.backend,recordKey:keyOf(m),error:'session read incomplete'});
+            }finally{clearTimeout(timer);}
           }
         }
         sessions[index]={...m,key:m.sessionKey||keyOf(m),state,phase:state,cwd:m.workdir,title:m.title||(m.issue?'ISSUE-#'+m.issue:m.pr?'PR-#'+m.pr:null),scope:'managed',taskCompleted:false};
+        // 记账自愈：这一轮真读到过终态就落盘，免得下一轮又按 `unknown` 去读一趟必然超时的快照。
+        // （旧实咬：上一次读失败写回 unknown，此后再也不进 FINISHED 段，每轮白等 8 秒。）
+        if (FINISHED.has(state) && m.state !== state) {
+          try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, observedState: state, observedAt: now() }; atomic(metaFile(keyOf(m)), next); return next; }); }
+          catch { /* 落不下不改判，下一轮再说 */ }
+        }
       }
     };
     const workers=Math.max(1,Math.min(records.length||1,opts.managedReadConcurrency??4));

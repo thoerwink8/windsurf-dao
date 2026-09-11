@@ -396,6 +396,9 @@ orca account add --help
 # skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal.*）
 #   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；本单元每 5 分钟合并式接回，不删 mirasim 自有 skill
 #   验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间；dao-check ㉚ 绿（被劫红、没装 SKIP）
+# mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
+#   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
+#   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
