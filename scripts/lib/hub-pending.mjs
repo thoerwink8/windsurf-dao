@@ -257,9 +257,12 @@ export function planMenuList({
       text: `没查成：${str(github && github.error) || 'GitHub 待拍板列表没查成'}`,
     };
   }
+  // This menu is a projection of GitHub's `待拍板` label.  Do not apply the
+  // ask-gate a second time here: hiding entries classified as `auto` made the
+  // UI say “2 pending” while the repository visibly contained 10.  The label
+  // is the source of truth for this view; policy still governs other flows.
   const pendingIssues = githubPendingIssues(github, fallbackRepo)
-    .map((issue) => ({ issue, filter: cardFilter(issue, { policy, classify }) }))
-    .filter((x) => x.filter.card);
+    .map((issue) => ({ issue, filter: cardFilter(issue, { policy, classify }) }));
   const { byIssue } = indexHubPending(hubPending);
   if (pendingIssues.length === 0) {
     return {

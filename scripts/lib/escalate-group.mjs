@@ -42,6 +42,11 @@
  */
 export const HUMAN_DECISION_REASONS = new Set([
   'missing-labels',          // 人补标
+  // 2026-09-11 新增：PR 上取不到 reviewer/ 且自动补标补不上（#1116 选型只读 PR label）。
+  // 与 missing-labels 同类（人补标），但**分得开**：missing-labels 是「缺一半，
+  // 唯一值推得出来就自己补」，这条是「补不上，必须人来」。#1159/#1154 卡在这：
+  // 旧路从署名 issue 反推，标题里的 #565（已关闭、只有『已消歧』）顶掉正文的 #1152。
+  'reviewer-label-missing',
   'model-health-red',        // 换不换模型——花钱/换人
   'model-not-in-routing',    // 要不要把这个模型加进选型
   'wake-exhausted',          // 唤醒用尽，人来接

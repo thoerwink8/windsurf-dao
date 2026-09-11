@@ -115,6 +115,60 @@ describe('#1125 countLiveReviewers：只有会话名单里的 runState 算数', 
     assert.equal(r.count, 0);
   });
 
+  // 2026-09-11 实咬：上面所有用例都只喂 `runState`，而执行运行时的会话名单里
+  // **根本没有这个字段**（真字段是 state/phase，见 mirasim-runtime 的 listSessions）。
+  // 于是夹具全绿、生产恒错：29 条登记数出 28 个「在役审官」，上限 3 永久吃满，
+  // 复审票一张拉不动，7 张 PR 卡在「当前 head 零判定」。
+  // 下面这组用**真实字段名**喂，是防这个夹具盲区的。
+  it('【真字段】只给 state（没有 runState）也认得出终态——夹具盲区回归', async () => {
+    const { countLiveReviewers } = await RP;
+    const r = countLiveReviewers({
+      records: [rec(1, 'codex:a'), rec(2, 'codex:b'), rec(3, 'codex:c'), rec(4, 'codex:d')],
+      sessions: [
+        { sessionKey: 'codex:a', state: 'stopped' },
+        { sessionKey: 'codex:b', state: 'done' },
+        { sessionKey: 'codex:c', state: 'incomplete' },
+        { sessionKey: 'codex:d', state: 'running' },
+      ],
+    });
+    assert.equal(r.count, 1, 'stopped/done/incomplete 都是终态，只有 running 占位');
+    assert.deepEqual(r.live.map((x) => x.pr), ['4']);
+  });
+
+  it('【真字段】只给 phase 也认（服务端快照那一路的字段名）', async () => {
+    const { countLiveReviewers } = await RP;
+    const r = countLiveReviewers({
+      records: [rec(1, 'codex:a'), rec(2, 'codex:b')],
+      sessions: [
+        { sessionKey: 'codex:a', phase: 'stopped' },
+        { sessionKey: 'codex:b', phase: 'streaming' },
+      ],
+    });
+    assert.equal(r.count, 1);
+  });
+
+  it('中间态过宽限才不占位——在收尾的审官不许被当成死了', async () => {
+    const { countLiveReviewers } = await RP;
+    const fresh = Date.now() - 5 * 60 * 1000;
+    const stale = Date.now() - 40 * 60 * 1000;
+    const r = countLiveReviewers({
+      records: [rec(1, 'codex:fresh'), rec(2, 'codex:stale'), rec(3, 'codex:notime')],
+      sessions: [
+        { sessionKey: 'codex:fresh', state: 'stopping', updatedAt: fresh },
+        { sessionKey: 'codex:stale', state: 'stopping', updatedAt: stale },
+        { sessionKey: 'codex:notime', state: 'stopping' },
+      ],
+    });
+    assert.equal(r.count, 2, '刚停的、没时间的都占位；只剩挂了 40 分钟那条不占');
+    assert.deepEqual(r.live.map((x) => x.pr), ['1', '3']);
+  });
+
+  it('没查成永远不等于 0 个在跑', async () => {
+    const { countLiveReviewers } = await RP;
+    assert.equal(countLiveReviewers({ records: [], sessions: null }).count, null);
+    assert.equal(countLiveReviewers({ records: null, sessions: [] }).count, null);
+  });
+
   it('名单读不到 → 没查成，count 是 null 不是 0', async () => {
     const { countLiveReviewers } = await RP;
     const r = countLiveReviewers({ records: [rec(1, 'codex:a')], sessions: null });

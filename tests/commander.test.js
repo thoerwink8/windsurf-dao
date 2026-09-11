@@ -152,6 +152,74 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'merged'));
   });
 
+  // 2026-09-11 实咬：「认输」把 PR 永久焊死。
+  // #1000 那行 `if (prHasStuckLabel(pr)) continue` 的注释写着「合并路仍走」，
+  // 但 continue 把合并路一起跳掉了。于是审官**后来真在 head 上落了 APPROVED** 也合不了。
+  // 现场：PR #1127 —— 认输后审官会话交付 APPROVED（commit_id == headRefOid）、CI 绿、
+  // MERGEABLE，三条齐了却因为一个 40 分钟前打的标躺着不动；
+  // 而它是当时 13 张认输 PR 里**唯一**真可合的（其余 12 张 atHead 零判定）。
+  //
+  // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」。
+  it('【认输不挡合并】带「卡死/自动化认输」但审官已在当前 head 判绿 → 照样 merge', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1127';
+    const pr = {
+      number: 1127, title: '已认输但后来绿了', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      labels: [{ name: '卡死/自动化认输' }, { name: 'type/写码' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1127: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 1, '条件齐了就该合，标不该把路堵死');
+    assert.equal(byKind(r, 'land').length, 1);
+  });
+
+  it('【认输仍挡重试】带标但当前 head 零判定 → 不 merge、不派审官（省额度那条还成立）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 1128, title: '认输了还没绿', isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h1128',
+      labels: [{ name: '卡死/自动化认输' }, { name: 'type/写码' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1128: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rereview').length, 0, '认输就是为了不再机械重试');
+  });
+
+  it('【认输也挡冲突解】带标的冲突 PR 不派解冲突（合并例外只放判绿那一条）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 1129, title: '认输且冲突', isDraft: false, mergeable: 'CONFLICTING', headRefOid: 'h1129',
+      labels: [{ name: '卡死/自动化认输' }], statusCheckRollup: [], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1129: { reviews: [] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rework').length, 0, '认输只放「判绿」一条过去，别的照旧挡住');
+  });
+
+  it('【认输挡合并】判绿但 CI 红 → 仍不合（例外不许绕过 CI 那道闸）', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1130';
+    const pr = {
+      number: 1130, title: '认输且 CI 红', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      labels: [{ name: '卡死/自动化认输' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1130: { reviews: [{ state: 'APPROVED', body: '可合并', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, 'CI 是非卖品，例外不绕过它');
+  });
+
   it('真 APPROVED + 白话正文（无判定行）→ merge，不误报 approved-without-review（#857 红 1 判别）', async () => {
     const { decide } = await CORE;
     const pr = {
@@ -1504,9 +1572,35 @@ describe(`审官标签只读 PR 自己的 reviewer/*`, () => {
       prReviews: { scanned: true, byPr: { 890: { reviews: [] } } },
     }));
     assert.equal(byKind(r, 'add-label').length, 0, 'PR 上两个都没有，补标签无从下手');
+    // 2026-09-11 改判据（原断言是「产一条 reviewer=null 的 rereview」）：
+    // 那条死动作执行侧必拒，而它**不进账本**（账本由执行侧派成时写），
+    // 于是 tries 永远停在 1、永远到不了 MAX_REREVIEW_TRIES——
+    // #1159/#1154 就这样每 20 分钟刷一条同样的死动作，刷了 19 轮，静默无出口。
+    // 原注释写「执行侧据此停手报帅」，实际没有任何东西会报帅。
     const rr = byKind(r, 'rereview');
-    assert.equal(rr.length, 1);
-    assert.equal(rr[0].reviewer, null, '查不到就是 null，执行侧据此停手报帅——不许臆测审官');
+    assert.equal(rr.length, 0, '查不到审官就不许产死动作——它长得像「已经叫过审官了」');
+    const esc = byKind(r, 'escalate').filter((a) => a.reason === 'reviewer-label-missing');
+    assert.equal(esc.length, 1, '查不到要走会开单的出口，人才看得见');
+    assert.equal(esc[0].pr, 890);
+    assert.match(esc[0].why, /PR 上取不到 reviewer\//, '话面指 PR，不把人赶回 issue');
+    assert.doesNotMatch(esc[0].why, /署名 issue.{0,20}上取不到 reviewer/, '不许再教从 issue 反推');
+  });
+
+  // 2026-09-11 实咬（#1159/#1154 静默刷 19 轮）：死动作会无限重复，因为它不进账本。
+  // 这一条钉的是「不许再回到那个形状」：连续多轮喂同一个输入，每轮都必须**一样**地
+  // 只产一条 escalate，而绝不能产 rereview——旧代码每轮都产同样的死动作，永远不收敛。
+  it('【不再无限刷】同一 PR 连喂 5 轮：每轮都只有 escalate，一列 rereview 都没有', async () => {
+    const { decide } = await CORE;
+    for (let round = 0; round < 5; round += 1) {
+      const r = decide(baseSituation({
+        at: `2026-09-11T0${round}:00:00.000Z`,
+        github: { scanned: true, issues: [], attributedIssues: [], prs: [readyPr(1159, 1152)] },
+        prReviews: { scanned: true, byPr: { 1159: { reviews: [] } } },
+      }));
+      assert.equal(byKind(r, 'rereview').length, 0, `第 ${round + 1} 轮不许产死动作`);
+      const esc = byKind(r, 'escalate').filter((a) => a.reason === 'reviewer-label-missing');
+      assert.equal(esc.length, 1, `第 ${round + 1} 轮都要有可见出口（有开单去重，不会刷屏单子）`);
+    }
   });
 });
 
@@ -1542,6 +1636,23 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
       reviewPending: { scanned: true, items: [{ pr: 890, head: 'aaa', reviewer: 'x', worker: null }] },
     }));
     assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
+
+  it('跨仓票：本仓开放列表对不上号也不许当死票回收',
+    async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 12, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null, repo: 'org/a' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+    const attach = byKind(r, 'attach-reviewer');
+    assert.equal(attach.length, 1);
+    assert.equal(attach[0].repo, 'org/a');
+    assert.equal(attach[0].pr, 12);
   });
 });
 
@@ -2496,5 +2607,117 @@ describe('#1147 act：收口泵起原树短会话', () => {
     assert.equal(r.unscanned, true);
     assert.equal(calls.some((c) => c.includes('start')), false);
     assert.equal(state.reworkDispatched['pump-draft:885'].unscanned, true);
+  });
+});
+
+// ── 2026-09-11：一个动作炸了不许带走整轮 ─────────────────────────────────────
+// 实咬：execClearExhausted 里一个 `run is not defined` 让 10:51 那轮 act 整个 exit 1
+// ——扫、判、其余动作全没跑成，而报错只在 journal 里，用户侧看不出「这一轮什么都没做」。
+// 一个动作的笔误不该等于整轮停摆。
+describe('runActions：动作抛异常不许带走整轮', () => {
+  const CMD = import('../scripts/commander.mjs');
+
+  it('中间那条动作抛异常 → 后面的动作照跑，异常记进日志', async () => {
+    const { runActions } = await CMD;
+    const seen = [];
+    const log = [];
+    const exec = (a) => {
+      seen.push(a.kind);
+      if (a.kind === 'boom') throw new Error('run is not defined');
+      return { ok: true };
+    };
+    runActions([
+      { kind: 'noop' },
+      { kind: 'boom', why: '炸一个' },
+      { kind: 'notify-hub', subject: '后一条' },
+    ], { exec, log });
+
+    assert.deepEqual(seen, ['noop', 'boom', 'notify-hub'], '炸了之后必须继续跑后面的');
+    assert.equal(log.some((l) => /执行炸了/.test(l)), true, '异常要有可见记录，不许静默吞掉');
+    assert.equal(log.some((l) => /run is not defined/.test(l)), true, '原文要带上，否则查不出来');
+  });
+
+  it('反证：不抛时日志里不该出现「执行炸了」', async () => {
+    const { runActions } = await CMD;
+    const log = [];
+    runActions([{ kind: 'noop' }, { kind: 'notify-hub', subject: 'x' }], { exec: () => ({ ok: true }), log });
+    assert.equal(log.some((l) => /执行炸了/.test(l)), false);
+  });
+
+  it('executor 有 clear-exhausted case，且用的是本文件真有的 runCmd/runGh', async () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(src, /case 'clear-exhausted':/);
+    assert.match(src, /function execClearExhausted/);
+    // 防的就是这次那个笔误：用了本文件不存在的 runner 名字（原来是 run，实际只有 runCmd/runGh）。
+    // 钉法：execClearExhausted 体内出现的 runner 必须是 run / runCmd / runGh 之一，
+    // 而 `run` 必须由参数注入（`run = runCmd`），不许当成全局函数直接用。
+    assert.match(src, /function execClearExhausted\(action, \{ dryRun, say, run = runCmd \}/,
+      'run 没注入就会再撞一次 ReferenceError');
+    const body = src.slice(src.indexOf('function execClearExhausted'));
+    const fn = body.slice(0, body.indexOf('\nfunction ', 10));
+    // 用字符串包含判定，不用正则——这次那个笔误就是错在「名字对不上」，
+    // 而判定它的正则自己再写错一次（转义）就本末倒置了。
+    assert.equal(fn.includes('const r = run('), true, '摘标要走注入的 run');
+    assert.equal(fn.includes("'scripts/gh-as.mjs'"), true, '摘标要走 gh-as');
+  });
+});
+
+// ── 2026-09-11：推进量仪表（一晚四个死点全靠它抓到）─────────────────────────
+// 判据是「动作摘要连续相同 = 停住」。四个死点**全都不报错**：
+// 认输的 PR 零动作、死动作每轮产一条被拒的、判据读错字段、整轮被异常带走。
+// 错误扫描找不到这些；只有「跟上一轮比有没有变化」找得到。
+describe('nextDigestStreak：推进量仪表', () => {
+  const SAME = [{ kind: 'escalate', reason: 'missing-labels', issue: 1 }];
+  const OTHER = [{ kind: 'merge', pr: 9 }];
+
+  it('同一套动作累积；换了新动作归零', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    for (let i = 0; i < 3; i += 1) {
+      const r = nextDigestStreak({ actions: SAME, lastDigest, lastStreak: streak, threshold: 3 });
+      lastDigest = r.digest; streak = r.streak;
+    }
+    assert.equal(streak, 2, '第二轮起才累计');
+    const moved = nextDigestStreak({ actions: OTHER, lastDigest, lastStreak: streak, threshold: 3 });
+    assert.equal(moved.streak, 0, 'digest 变了就归零');
+    assert.equal(moved.stuck, false);
+  });
+
+  it('累计到阈值就 stuck（死点期就是这个形状）', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    let stuck = false;
+    for (let i = 0; i < 8; i += 1) {
+      const r = nextDigestStreak({ actions: SAME, lastDigest, lastStreak: streak, threshold: 6 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(stuck, true, '连续相同必须报警——这一晚就是靠它才发现停住的');
+  });
+
+  it('【反证】空闲不算卡住：全是 noop 时摘要恒空，不许报警', async () => {
+    const { nextDigestStreak } = await CORE;
+    let lastDigest = null;
+    let streak = 0;
+    let stuck = false;
+    for (let i = 0; i < 10; i += 1) {
+      const r = nextDigestStreak({ actions: [{ kind: 'noop' }, { kind: 'noop' }], lastDigest, lastStreak: streak, threshold: 3 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(streak, 0, '手上没活 ≠ 卡住（那一头归心跳管）');
+    assert.equal(stuck, false);
+  });
+
+  it('【反证】一条被拒的死动作也算「有活」，所以连续相同会被抓到', async () => {
+    const { nextDigestStreak } = await CORE;
+    // 死动作形状：rereview 带 null reviewer（执行侧必拒）——它就是被这条仪表抓到的
+    const dead = [{ kind: 'rereview', pr: 1159, reason: '', reviewer: null }];
+    let lastDigest = null; let streak = 0; let stuck = false;
+    for (let i = 0; i < 6; i += 1) {
+      const r = nextDigestStreak({ actions: dead, lastDigest, lastStreak: streak, threshold: 5 });
+      lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
+    }
+    assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
   });
 });

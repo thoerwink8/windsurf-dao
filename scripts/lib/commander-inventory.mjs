@@ -23,6 +23,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
 import { probeVersionDrift } from './mirasim-runtime.mjs';
+import { loadHealthTable } from './provider-health.mjs';
 import { classifyTimerArmed } from './timer-armed.mjs';
 import { ensurePlain, threeLines } from './plain-words.mjs';
 import {
@@ -158,32 +159,48 @@ async function checkVersionDrift({ homeDir } = {}) {
   }
 }
 
-// 4. 探针 journal 连红：gw-remote-probe 最近若干次全失败。
-function checkProbeJournal() {
-  if (!isLinux()) return { state: 'unknown', detail: '本平台无 journalctl', key: 'probe-red' };
-  const r = sh('journalctl', ['-u', 'gw-remote-probe.service', '-n', '20', '--no-pager', '-o', 'cat'], 20000);
-  if (!r.ok) return { state: 'unknown', detail: `journalctl 探不到：${r.error}`, key: 'probe-red' };
-  if (r.code !== 0) return { state: 'unknown', detail: `journalctl 退出 ${r.code}（可能没这个单元）`, key: 'probe-red' };
-  const lines = r.out.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return { state: 'unknown', detail: '探针 journal 空，探不到', key: 'probe-red' };
-  // 数「结尾连续」的失败标记（探针脚本自己的红行约定：含「红」或「FAIL」或「探活失败」）
-  let streak = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/(红|FAIL|失败|error|exceeded)/i.test(lines[i])) streak++;
-    else if (/(通|绿|OK|ok:true|成功)/i.test(lines[i])) break;
+// 4. 探针连红：读探活自己写的健康表。
+//
+// 原来读 `journalctl -u gw-remote-probe`，跑它的身份是 orca——orca 不在
+// systemd-journal / adm 里，journalctl 退出 1、stdout 空，闸就把这次失败
+// 归成「不知道」，标 unknown 不开单（#1166）。这台机器上「探针连红」
+// 这一格因此**从来没有真查过**，而探活自己写的健康表 orca 读得到。
+//
+// 判据换成读健康表：真相源从「别人单元的日志」改成「探活自己落的盘」——
+// 少一层权限依赖，也少一层「日志格式变了判据就瞎」。
+export function judgeProbeRed(health) {
+  const key = 'probe-red';
+  if (!health || health.unknown) {
+    return { state: 'unknown', key, detail: `健康表没查成：${(health && health.reason) || '没读到'}` };
   }
-  if (streak >= 3) {
+  const targets = health.table && typeof health.table === 'object' ? health.table : {};
+  const names = Object.keys(targets);
+  if (!names.length) {
+    // 表在但没有目标 = 探活没采到东西，跟「全绿」是两回事。
+    return { state: 'unknown', key, detail: `${health.path} 里一个目标都没有——没采到，不是全绿` };
+  }
+  const red = names.filter((n) => String(targets[n] && targets[n].state || '').toLowerCase() === 'red');
+  const unknownT = names.filter((n) => String(targets[n] && targets[n].state || '').toLowerCase() === 'unknown');
+  if (red.length) {
     return {
-      state: 'red', key: 'probe-red',
-      detail: `探针 journal 结尾连红 ${streak} 行`,
+      state: 'red', key,
+      detail: `健康表 ${red.length}/${names.length} 个目标红：${red.slice(0, 6).join('、')}`,
       plain: {
-        what: `网关探活最近连续 ${streak} 次报红`,
-        impact: '走网关的模型可能不通，工人和审官会卡住',
-        plan: '具体哪条线路不通看探活自己发的那条消息；我先开单记着',
+        what: `网关探活有 ${red.length} 条线路报红：${red.slice(0, 4).join('、')}`,
+        impact: '走这几条的工人和审官会卡住或被降级',
+        plan: '具体失败码看健康表那几个目标的 code/why；编排层已按此避让，我先开单记着',
       },
     };
   }
-  return { state: 'ok', detail: `探针 journal 无连红（结尾红 ${streak} 行）`, key: 'probe-red' };
+  return {
+    state: 'ok', key,
+    detail: `健康表 ${names.length} 个目标无一红（unknown ${unknownT.length} 个）`,
+  };
+}
+
+function checkProbeJournal() {
+  if (!isLinux()) return { state: 'unknown', detail: '本平台无 systemd，探不到探针', key: 'probe-red' };
+  return judgeProbeRed(loadHealthTable({ home: homedir() }));
 }
 
 // 5. 超龄 open PR（stale-pr）——#1004 裁定被推进量覆盖：N 轮 head/合上/草稿/判定都不变

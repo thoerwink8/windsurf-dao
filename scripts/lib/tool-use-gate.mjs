@@ -25,6 +25,11 @@ export const BASH_TOOLS = ['Bash'];
 export const HEREDOC_NOTE =
   '[工具使用闸] heredoc 写 .mjs/.js/.ts 时，shell 会吞掉 \\n \\s 这类转义（变成真换行/真字符）。改用 Edit 工具，或把内容写成 raw 文件再 splice。';
 
+export const SHELL_ESCAPE_NOTE =
+  '[工具使用闸] 这条命令要把含转义的文本经 shell 落进文件（重定向/heredoc/sed -i/tee/python -c 都算）。'
+  + '每多一层中转就多一次转义，而失败是静默的：命令退出 0、文件也写出来了，错误要等很久以后才以别的面目炸。'
+  + '改用 Write/Edit 工具直接写，或把内容落成 raw 文件再用不含转义的小脚本读进来拼。';
+
 export const PYTHON_NOTE =
   '[工具使用闸] 本机 `python` 是 WindowsApps stub，exit 49 静默失败，命令「成功」但一个字没写进去。用 `py`（或 `python3`）。';
 
@@ -67,6 +72,64 @@ export function hasBackslashEscape(command) {
 export function isHeredocEscape(command) {
   const cmd = String(command || '');
   return hasHeredoc(cmd) && targetsJs(cmd) && hasBackslashEscape(cmd);
+}
+
+/**
+ * 命令要把文本**写进文件**吗（重定向 / heredoc / tee / 就地改）。
+ *
+ * 这是新判据轴的第一条：不看用哪个工具，看**行为**——「文本正在经 shell 落进文件」。
+ * 旧判据只认 heredoc，于是 python3 heredoc / sed -i / perl -i / tee 全是盲区
+ * （2026-09-10 实测四个形态 classifyBash 都返回空，而那晚的正则正是经 python3 heredoc 变形的）。
+ */
+export function writesToFile(command) {
+  const cmd = String(command || '');
+  if (hasHeredoc(cmd)) return true;
+  // `> file` / `>> file`。**排除 fd 重定向**（2>&1、&>）与数字比较（x=1>2）；
+  // 别把前面的空格排掉——`echo hi > a.mjs` 的 `>` 前面正是空格，第一版把它排了，
+  // 于是最常见的那种重定向反而漏判（2026-09-10 实测）。
+  if (/(?:[0-9]?>>?)(?!&)\s*[^\s&|;]+/.test(cmd) && !/\d>&\d/.test(cmd)) return true;
+  if (/\b(?:tee|sponge)\b/.test(cmd)) return true;
+  // 就地编辑：`sed -i` / `sed -i.bak` / `perl -pi` / `perl -i -pe`。
+  // 注意 perl 的合并写法 `-pi`（不是 `-p -i`）——第一版要求 `-i` 前是空白，漏了它。
+  // 判据放宽成「短选项串里含 i」：`-[a-zA-Z]*i`。
+  if (/\b(?:sed|perl)\b[^|;]*\s-[a-zA-Z]*i[a-zA-Z]*(?:\.\S+)?\b/.test(cmd)) return true;
+  // 解释器一行式里显式调用写文件的 API：`node -e "fs.writeFileSync(...)"`。
+  // 只看「解释器 + -c/-e」不够（那样会把只读的一行式也命中），必须同时有写入调用。
+  if (/\b(?:python3?|py|node|ruby|php|deno|bun)\b[^|;]*\s-(?:c|e)\b/.test(cmd)
+      && /(?:writeFileSync|writeFile|appendFileSync|appendFile|fopen\s*\(|open\s*\([^)]*['"][wa]|\bwrite\s*\()/.test(cmd)) return true;
+  return false;
+}
+
+/**
+ * 命令里有没有**代码/配置文本**（写文件的目标或内容）。
+ * 认扩展名，也认「文本里明显是代码」的形态——目的是覆盖「换了个目标文件类型」的下一次。
+ */
+export function touchesCodeText(command) {
+  const cmd = String(command || '');
+  if (/\.(?:[mc]?js|ts|tsx|json|jsonc|sh|bash|zsh|toml|ya?ml|py)\b/i.test(cmd)) return true;
+  // 内容本身是代码的形态：`import ... from`、`export function`、`require(`、`=>`、正则字面量
+  if (/\b(?:import|export|require)\s*[\(\s]/.test(cmd)) return true;
+  if (/\/\^?[^/\n]*\\[nswdWDSB]/.test(cmd)) return true;             // 命令里含正则字面量的转义
+  return false;
+}
+
+/**
+ * 根治版判据（2026-09-10 用户指名要的「永久根治」）。
+ *
+ * 病根不是某一种工具，是「**代码/正则经 shell 文本层中转**」这个做法：每多一层
+ * （bash → heredoc → python → 文件）就多一次转义，真值在传递中无声变形，而失败是
+ * **静默的**——命令退出 0、文件也写出来了，错误要等很久以后以完全不相干的面目炸出来。
+ *
+ * 判据轴换成了行为，与工具名无关：**要写文件 + 含转义 + 碰的是代码/配置文本**。
+ * 这样下次换个工具（python3 → perl → node -e → 别的）照样命中——旧判据认名字，
+ * 名字一换就漏，实测漏了整整四个形态。
+ *
+ * 与既有 `isHeredocEscape` 的关系：旧判据是这条的**特例**（heredoc 是 writesToFile 的一种），
+ * 两条都留着——旧的留着是因为它的文案更具体（点明 heredoc 这个坑），新的负责兜住其余形态。
+ */
+export function isShellEscapeIntoFile(command) {
+  const cmd = String(command || '');
+  return writesToFile(cmd) && hasBackslashEscape(cmd) && touchesCodeText(cmd);
 }
 
 /**
@@ -160,6 +223,9 @@ export function classifyBash(command, { unitScripts = [] } = {}) {
   const cmd = String(command || '');
   const notes = [];
   if (isHeredocEscape(cmd)) notes.push({ id: 'heredoc-escape', text: HEREDOC_NOTE });
+  // 根治版：与工具名无关，认「代码文本经 shell 落进文件」这个行为。旧判据命中时不重复注
+  // （heredoc 是它的特例，两条都中只报一次）。
+  else if (isShellEscapeIntoFile(cmd)) notes.push({ id: 'shell-escape-into-file', text: SHELL_ESCAPE_NOTE });
   if (isPythonStub(cmd)) notes.push({ id: 'python-stub', text: PYTHON_NOTE });
   if (isHandRolledSystemdRun(cmd, unitScripts)) notes.push({ id: 'handrolled-systemd', text: SYSTEMD_NOTE });
   return notes;

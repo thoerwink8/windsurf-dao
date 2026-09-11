@@ -26,14 +26,15 @@ import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemo
 import { worktreeIdOf } from './lib/card-identity.mjs';
 import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
-  sessionFromMirasimSession,
+  assessLivenessWithTree, sessionFromMirasimSession,
 } from './lib/liveness.mjs';
 import { recordBroadcast } from './lib/broadcast-io.mjs';
 import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs';
-import { checkTreeLease } from './lib/dispatch/lease.mjs';
+import { checkTreeLease, scanSessionProcs } from './lib/dispatch/lease.mjs';
 import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { planSessionGc } from './lib/session-dir-gc.mjs';
+import { planLeaseGc, judgeRegistryStuck } from './lib/lease-gc.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
@@ -366,12 +367,27 @@ function main() {
   }
   const live = scanLiveness({ sessions: progressed.sessions, thresholdMs });
   if (!live.ok) { console.error(`活性没查成：${live.error}`); process.exit(2); }
+  // 会话记录的时间戳会冻住（`2026-09-11-会话在跑记录说停.md`）：上游 run 断流后本地
+  // 执行体继续干、记录不再回写，一个两小时没变的旧值会被判成「它安静了 45 分钟」。
+  // 所以先扫一次会话进程，让「该树有活进程」压过时间判据（fail-open 到「留着」）。
+  // 扫不动（不是 root/orca 看不见别人的进程）→ treeState=unknown，**不改判**：
+  // 「没查成」既不当在跑也不当没在跑。
+  const procScan = scanSessionProcs();
+  if (procScan.unscanned) {
+    console.error(`提示：会话进程没扫成（${procScan.error}）——本轮仅按记录与时间判活，不因此多清树`);
+  }
   // 「活着」= 判据说 active。silent / unscanned / done 都不算活着——
   // 特别是 done：干完的会话不该让它那张卡永远免死。
   const alive = new Set();
+  const aliveByProc = [];
   for (const s2 of progressed.sessions) {
     if (!s2.worktreeId) continue;
-    if (assessLiveness(s2, { thresholdMs }).state === 'active') alive.add(s2.worktreeId);
+    const v = assessLivenessWithTree(s2, { thresholdMs, scan: procScan });
+    if (v.treeOverride) aliveByProc.push(s2.worktreeId);
+    if (v.state === 'active') alive.add(s2.worktreeId);
+  }
+  if (aliveByProc.length) {
+    console.error(`提示：${aliveByProc.length} 张卡的记录说安静、但该树有活进程——按在跑留着：${aliveByProc.slice(0, 5).join('、')}`);
   }
 
   const prs = fetchPrState();
@@ -453,7 +469,7 @@ function main() {
           id: rest.join(':'),
           agent,
           dir: join(sessionsRoot(), agent, rest.join(':')),
-          alive: alive.has(s.worktreeId) || assessLiveness(s, { thresholdMs }).state === 'active',
+          alive: alive.has(s.worktreeId) || assessLivenessWithTree(s, { thresholdMs, scan: procScan }).state === 'active',
           updatedAtMs: s.lastProgressAt == null ? NaN : s.lastProgressAt,
           record: { workdir: s.worktreeId, title: s.label, preview: s.preview },
         };
@@ -461,6 +477,58 @@ function main() {
       closedRefs: issues == null ? new Set() : closedRefsFrom(issues),
       boardScanned: issues != null,
     });
+    // 顺手回收**孤儿执行租约**（#1175 实咬）：审官会话被上游断流打死会留下 state=running
+    // 的租约占着工作树，此后同一棵树的 reviewer-create 一律报「already has an active session」
+    // ——死人占树、活人进不来。判据在 lib/lease-gc.mjs（fail-closed：任何「没查成」都保留）。
+    // 复用上面扫到的 sessions（同一次全量枚举），不另打一趟。
+    try {
+      const stateByKey = new Map();
+      for (const s2 of progressed.sessions) {
+        const k = s2.sessionKey || s2.id;
+        if (k) stateByKey.set(String(k), s2.state || s2.runState || null);
+      }
+      const leases = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'leases'))
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => {
+          const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
+          let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
+          return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000 };
+        })
+        .filter(Boolean);
+      // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
+      const registryRecords = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'sessions'))
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => {
+          const full = join(process.env.HOME || '', '.dao', 'execution', 'sessions', f);
+          try { return { ...JSON.parse(readFileSync(full, 'utf8')), _file: full }; } catch { return null; }
+        })
+        .filter(Boolean);
+      const staleRecords = registryRecords
+        .map((r) => ({ r, j: judgeRegistryStuck(r, { sessionsScanned: listed.ok === true, sessionState: stateByKey.get(String(r.sessionKey || r.recordKey)) ?? null }) }))
+        .filter((x) => x.j.verdict === 'reap');
+      if (staleRecords.length) {
+        let cleaned = 0;
+        for (const { r, j } of staleRecords) {
+          try { rmSync(r._file, { force: true }); cleaned++; } catch { /* 下轮再来 */ }
+        }
+        if (cleaned) console.log(`中间态登记回收 ${cleaned} 条（${staleRecords[0].j.why}）`);
+      }
+      const leasePlan = planLeaseGc({ leases, sessions: stateByKey, sessionsScanned: listed.ok === true });
+      if (leasePlan.state === 'ok' && leasePlan.reap.length) {
+        let reaped = 0;
+        for (const l of leasePlan.reap) {
+          // 只动租约文件本身——树留给卡清理那一路（本文件的主职），不在这里顺手删树。
+          try { rmSync(l._file, { force: true }); reaped++; } catch { /* 删不掉下轮再来 */ }
+        }
+        if (reaped) console.log(`孤儿租约回收 ${reaped} 条（${leasePlan.detail}）`);
+      } else if (leasePlan.state === 'unknown') {
+        console.error(`租约没查成，本轮不回收：${leasePlan.detail}`);
+      }
+    } catch (e) {
+      // 租约目录不在（新机/从未起过会话）是正常态；其它错误报出来但不拦住本轮卡清理。
+      if (!/ENOENT/.test(String(e && e.code))) console.error(`租约回收出错（本轮跳过）：${String(e && e.message || e).slice(0, 140)}`);
+    }
+
     if (gcPlan.state === 'ok' && gcPlan.remove.length) {
       const archiveRoot = join(sessionsRoot(), '..', 'sessions-archive');
       let archived = 0;

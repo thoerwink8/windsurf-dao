@@ -2,6 +2,83 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.4.0 — 2026-09-11
+
+### 新功能
+- [codex] feat(pending): explain decisions with STAR summaries
+- [cc] feat(dao-check): 本仓单元挂 systemctl --failed 要红（#1172/#1173 的第三格）
+- [cc] feat(commander): 推进量仪表——动作摘要连续相同就报警（一晚四个死点全靠它抓到）
+- [cc] feat(probe): mirasim-server ws 探活 + unit 收仓（#1151） (#1161)
+
+### 修复与维护
+- [codex] fix(feishu): apply STAR to generated cards
+- [codex] fix(feishu): show all pending cards and replace stale messages
+- [codex] fix(feishu): reply when pending list is nonempty
+- [codex] fix(feishu): route pending menu reads through marshal
+- [codex] fix(feishu): use marshal app for readonly GitHub queries
+- [codex] fix(usage): honor shared inbox permissions under restrictive umask
+- [cc] docs(obs): 禁网闸在 orca 身份下恒红 14 笔——堵住 land 推送，已排除本轮改动与全部测试套件
+- [cc] fix(闸): 两条判据比现实窄——只在 orca 身份下翻红的那种
+- [cc] docs(obs): 收件箱三条处置留痕（两真一已修）
+- [cc] fix(盘面): 三处「判据只看得见一半」——收件箱三张观察的处置
+- [cc] fix(units): GH_CONFIG_DIR=/var/empty 掐死了 git 凭据助手——账本五天没更新
+- [cc] fix(commander): policy 不在作用域（第二次同类笔误）+ 配静态闸防这一类
+- [cc] fix(escalate): 追加对象的幂等键含空白被网关拒——「追加进已有单」这条路一直没通
+- [cc] fix(commander): 一个动作炸了不许带走整轮 + 修我自己写的 run is not defined
+- [cc] fix(stall): 停滞警报不再报一次就静音——同指纹超 6 小时重喊
+- [cc] fix(exhausted): 「自动化认输」不再是单向闩——带 head 的判据就该随新 head 失效
+- [cc] fix(states): 状态与字段名收成一处正典 + 配契约闸——一晚九处同形状错的根治
+- [cc] fix(commander): 死动作会无限重复——审官叫不动时改产会开单的出口，不再静默刷 19 轮
+- [cc] fix(mirasim): metaView 读的 runState 也不存在——兜底路上的会话态恒为 null
+
+### 其它
+- release: v2.3.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.3.0 — 2026-09-10
+
+### 新功能
+- [pi] feat(dispatch): 派工链贯通 --repo，射程不再钉死本仓 (#1028)
+- [cc] feat(gc): 孤儿执行租约与中间态登记回收——死人占树的根因
+- [pi] feat(reviewer): 撞满载按顺位换厂——凭死因原文成立，删点将台死代码（#1122） (#1129)
+- [cc] feat(board): 看板 v0——一张表 + 超时告警发总控群（#818） (#1108)
+- [cc] feat(catalog): grok 原生腿取得执行级证据并回填（#1174）
+- [cc] feat(execution): 统一执行改造——ACP 无人值守 + 会话目录清理 + 补丁链闸（#1174 #1176） (#1175)
+- [cc] feat(check): 合并闸检查器——扫在管公开活仓的分支保护（#999） (#1110)
+- [cc] feat(channel): 会话级并发三件套——上限+顺位分流+熔断 (#1145) (#1169)
+- [cc] feat(mirasim): 钉版本改为跟随在役版本——升级不再需要谁记得改常量
+
+### 修复与维护
+- [cc] fix(mirasim): 带着死因的会话不许判完工——judgeCompletion 补读 error（#1121） (#1127)
+- [cc] fix(commander): 「认输」不再把 PR 永久焊死——条件齐了照合，认输只挡重试
+- [cc] docs(obs): 复审票拉不动的根因——字段名不存在 + 手打终态清单，且夹具与代码错在同一处
+- [cc] fix(review): 读的字段名不存在——28 个「在役审官」把上限 3 永久吃满，复审票一张拉不动
+- [cc] docs(obs): 补两处核实——本轮没真删错，且 #1150 另有一道牌接住
+- [cc] docs(obs): 会话记录的 updatedAt 会冻住——判活靠它，正在跑的会话 45 分钟后判 silent
+- [cc] fix(cli): session-stop 收下 --worktree——指挥官发起的停会话此前 100% 报「未知参数」
+- [cc] fix(execution): incomplete 不是「未结算预留」——#1150 卡整晚的根因，状态清单收成一处正典
+- [cc] fix(gate): 转义闸判据换轴——认「代码文本经 shell 落进文件」这个行为，不再认工具名
+- [cc] fix(execution): 观测集不再被过期会话拖成「没查成」——先问名单，实测 19-30s → 8.8s
+- [cc] fix(probe): codex 直连探针的 input 改成 responses 结构化形状——108 次「上游红」是它自己造的
+- [cc] fix(admission): 余量闸改量真 CPU 占用 + 收尾名额独立成池（用户 2026-09-10 拍板 A+B）
+- [cc] fix(admission): 模型准入归口——profile 未验不再连带冻掉在役落地的模型
+- [cc] fix(execution): 会话明确 gone 不再拖垮整张名单——差集重派解冻
+- [cc] fix(tests): 三处 _tmp 沙箱收尾自清——root 跑一次，属主闸红且 orca 下次 EACCES
+- [cc] docs(new-machine): codex 沙箱前置三件——bubblewrap + 二进制级 userns 放行
+- [cc] docs(observations): 处置报帅 key 闸条目——2af1fba9 已落，附实测前后对照
+- [cc] fix(gateway): 报帅 key 的闸对齐真闸（ASCII）——中文 label 不再被拒（收件箱 2026-09-10）
+- [cc] fix(mirasim): 建树幂等命中不再报错——服务端 worktrees 缓存会陈旧
+- [cc] fix(mirasim): 工作区匹配按 realpath——11 张单卡在建树的真根因
+
+### 其它
+- [patrol] #818 看板超时告警从未装上，⑮ 改成负向闸所以缺席仍绿
+- [patrol] 报帅规范化闸比网关真闸松，中文 key 每轮仍被拒
+- [patrol] 指挥官 act timer 已停，⑭ 只问 enabled 所以仍绿
+- release: v2.2.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.2.0 — 2026-09-09
 
 ### 新功能
