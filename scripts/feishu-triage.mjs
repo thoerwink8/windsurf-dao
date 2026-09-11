@@ -73,6 +73,7 @@ import {
   buildHubCard, parseCardAction, cardCallbackResponse, cardDecisionComment, alternativeFollowup,
 } from './lib/feishu-hub-card.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { ghAs } from './lib/gh.mjs';
 import {
   isDailyAction, isDailyListPending, dailyCallbackResponse,
 } from './lib/feishu-daily-card.mjs';
@@ -492,8 +493,17 @@ export function runGh(ghBin, args, { timeout = 60000 } = {}) {
 
 export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh, applyWrite } = {}) {
   const write = applyWrite || applyIssueWrite;
+  // Read-only GitHub queries must use the same installation identity as the
+  // write gateway.  The service deliberately has GH_CONFIG_DIR=/var/empty,
+  // so a bare gh would always report "gh auth login" and turn the bot blind.
+  const read = run === runGh
+    ? (_bin, args, opts) => {
+      const r = ghAs('marshal', args, { maxBuffer: 64 * 1024 * 1024, timeout: opts?.timeout });
+      return { ok: r.ok, code: r.status, stdout: r.out || '', stderr: r.error || '' };
+    }
+    : run;
   async function ghSearch(repo, query) {
-    const r = await run(ghBin, ['search', 'issues', String(query), '--repo', repo, '--limit', '10', '--json', 'number,title,url']);
+    const r = await read(ghBin, ['search', 'issues', String(query), '--repo', repo, '--limit', '10', '--json', 'number,title,url']);
     if (!r.ok) throw new Error(`gh search 失败：${r.reason || r.stderr || r.code}`);
     let list;
     try {
