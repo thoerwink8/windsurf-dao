@@ -1,0 +1,5 @@
+/* 审官对抗样本：spawnSync 起了别名。只钉调用名 spawnSync 会 scanned:0。
+const { spawnSync: run } = require('node:child_process');
+const CLI = 'scripts/dao.mjs';
+run(process.execPath, [CLI, 'dispatch'], { env: { PATH: '/usr/bin', HOME: '/tmp' } });
+*/

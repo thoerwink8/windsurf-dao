@@ -1,4 +1,4 @@
-// 绿样本：spawn dispatch 带 --dry-run，预览一针都不许烧。
+/* 绿样本：spawn dispatch 带 --dry-run，预览一针都不许烧。
 const { spawnSync } = require('node:child_process');
 spawnSync(process.execPath, [
   'scripts/dao.mjs', 'dispatch', '--executor', 'mirasim',
@@ -7,3 +7,4 @@ spawnSync(process.execPath, [
   encoding: 'utf8',
   env: { ...process.env },
 });
+*/

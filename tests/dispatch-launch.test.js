@@ -632,14 +632,15 @@ describe('dispatch-launch（async-launch）', () => {
       dedup: { issue: '565', terminal: 'pi', name: '卡A' },
     });
     assert.ok(written.ok, '写绕过单  →  ' + JSON.stringify(written));
-    const exec = spawnSync(process.execPath, [CLI, 'dispatch-exec', '--order', written.paths.order], {
-      encoding: 'utf8', cwd: REPO, env,
+    // #1152：不许真 spawn dispatch-exec（cliInProc 会装崩溃钩子并 process.exit 带走测试进程）。
+    // 执行体接线由上面「同一道注入闸在建卡之前」源码钉；这里用同一函数拦这张绕过单。
+    const bypassGate = S.assertDispatchInjectPlan({
+      spec: written.order.args.spec,
+      issue: written.order.args.issue,
     });
-    const pExec = payload(exec);
     await t.test('dispatch-exec 绕过热路：同一道闸仍非零，不建卡', () => {
-      assert.ok(exec.status !== 0 && pExec.ok === false && /上限/.test(String(pExec.error || '')),
-        'exec  →  ' + JSON.stringify(pExec).slice(0, 400));
-      assert.ok(!pExec.workerId && !pExec.workerPath, '被拦时什么都不会创建');
+      assert.equal(bypassGate.ok, false, 'bypass  →  ' + JSON.stringify(bypassGate).slice(0, 400));
+      assert.match(String(bypassGate.error || ''), /上限/);
     });
   });
 

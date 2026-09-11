@@ -1,6 +1,5 @@
-// 故意违规样本（#1152）：执行体 env 丢失。
-// spawn dao dispatch 不带 --dry-run，env 对象不继承 process.env、
-// 也不带 NODE_TEST_CONTEXT / DAO_DISPATCH_NO_SPAWN——子进程读真账本，#565 无在途就真派工。
+/* 故意违规样本（#1152）：执行体 env 丢失。
+   包进块注释：即便被 node --test 显式加载也不会 spawn。
 const { spawnSync } = require('node:child_process');
 spawnSync(process.execPath, [
   'scripts/dao.mjs', 'dispatch', '--executor', 'mirasim',
@@ -11,3 +10,4 @@ spawnSync(process.execPath, [
   encoding: 'utf8',
   env: { PATH: '/usr/bin', HOME: '/tmp' },
 });
+*/

@@ -1,0 +1,10 @@
+/* 审官对抗样本：动词和 argv 都在变量里，调用点看不到字面量 'dispatch'。
+const { spawnSync } = require('node:child_process');
+const CLI = 'scripts/dao.mjs';
+const verb = 'dispatch';
+const argv = [CLI, verb, '--issue', '565'];
+spawnSync(process.execPath, argv, {
+  encoding: 'utf8',
+  env: { PATH: '/usr/bin', HOME: '/tmp' },
+});
+*/

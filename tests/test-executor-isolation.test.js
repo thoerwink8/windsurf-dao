@@ -5,11 +5,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   classifyTestDispatchSpawns,
+  collectSpawnAliases,
   inspectTestExecutorIsolationFixtures,
   inspectTestExecutorIsolationLive,
   inspectIsolationWiring,
@@ -18,6 +20,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
 const CALL = 'spawn' + 'Sync';
+const EXEC_FILE = 'execFile' + 'Sync';
 
 test('没给正文 = 没查成，空字符串 = 查成 0 条', () => {
   const none = classifyTestDispatchSpawns(null);
@@ -72,6 +75,57 @@ test('...base 展开后带 --dry-run 则绿', () => {
   assert.equal(r.ok, true);
 });
 
+test('别名 spawnSync:run 必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    `const { ${CALL}: ${alias} } = require('node:child_process');`,
+    `${alias}(process.execPath, [CLI, 'dispatch'], { env: { PATH: '/usr/bin', HOME: '/tmp' } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('import as 别名必须红', () => {
+  const alias = 'go';
+  const src = [
+    `import { ${CALL} as ${alias} } from 'node:child_process';`,
+    `${alias}(process.execPath, ['dao.mjs', 'dispatch'], { env: { PATH: '/bin', HOME: '/tmp' } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('argv 整段变量 + 动词变量必须红', () => {
+  const src = [
+    "const verb = 'dispatch';",
+    "const argv = ['dao.mjs', verb, '--issue', '565'];",
+    `${CALL}(process.execPath, argv, { env: { PATH: '/usr/bin', HOME: '/tmp' } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('dispatch-exec 必须红', () => {
+  const src = `${CALL}(process.execPath, ['dao.mjs', 'dispatch-exec', '--order', 'x.json'], { env: { PATH: '/bin', HOME: '/tmp' } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+  assert.match(r.violations[0].why, /env 丢失/);
+});
+
+test('execFileSync 调 dispatch 必须红', () => {
+  const src = `${EXEC_FILE}(process.execPath, ['dao.mjs', 'dispatch'], { env: { PATH: '/bin', HOME: '/tmp' } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
 test('夹具红/绿/空有判别力', () => {
   const r = inspectTestExecutorIsolationFixtures(join(HERE, 'fixtures', 'test-executor-isolation'));
   assert.equal(r.unscanned, false, r.error || '');
@@ -79,6 +133,28 @@ test('夹具红/绿/空有判别力', () => {
   assert.equal(r.kinds.red, 1);
   assert.equal(r.kinds.ok, 1);
   assert.equal(r.kinds.empty, 1);
+});
+
+test('夹具 *.js 必须红（node --test 显式路径会当模块执行）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'iso-fix-'));
+  try {
+    mkdirSync(join(root, 'red'));
+    mkdirSync(join(root, 'ok'));
+    mkdirSync(join(root, 'empty'));
+    writeFileSync(
+      join(root, 'red', 'env-lost.test.js'),
+      `${CALL}(process.execPath, ['dao.mjs', 'dispatch'], { env: { PATH: '/bin' } });\n`,
+    );
+    writeFileSync(
+      join(root, 'ok', 'dry-run.txt'),
+      `${CALL}(process.execPath, ['dao.mjs', 'dispatch', '--dry-run'], { env: { ...process.env } });\n`,
+    );
+    const r = inspectTestExecutorIsolationFixtures(root);
+    assert.equal(r.ok, false);
+    assert.match(String(r.error || ''), /test\.js/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('live：本仓 tests/*.test.js 0 处真 spawn dispatch', () => {

@@ -198,7 +198,8 @@ export const TEST_ISOLATION_MARK = '结构性够不着真执行体';
  * 真机验收显式 DAO_ALLOW_REAL_EXECUTOR=1 才放。
  *
  * 拦不住的洞：子进程 env 整份换成不含这些键的对象（执行体 env 丢失）。
- * 那条靠测试源码闸（test-executor-isolation-check.mjs），不靠本函数。
+ * 那条靠测试源码闸（test-executor-isolation-check.mjs：别名 / argv 变量 /
+ * dispatch-exec 都要扫到），不靠本函数。
  */
 export function judgeTestExecutorIsolation(env = process.env) {
   const e = env && typeof env === 'object' ? env : {};
