@@ -437,3 +437,102 @@ describe('控制面闸：随仓挂载面仍是派工闸入口', () => {
     assert.equal(entries.some((h) => /cursor-dispatch-gate-hook\.mjs/.test(h.command)), true);
   });
 });
+
+const WRITE_LIB = 'file://' + path.join(REPO, 'scripts', 'lib', 'control-plane-write.mjs').replace(/\\/g, '/');
+const PRE_PUSH = path.join(REPO, 'scripts', 'lib', 'control-plane-pre-push.mjs');
+const LAND = path.join(REPO, 'scripts', 'land.mjs');
+
+function git(dir, args, env) {
+  return spawnSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: env ? { ...process.env, ...env } : process.env,
+  });
+}
+
+function runNode(script, extra = {}) {
+  return spawnSync(process.execPath, [script].concat(extra.args || []), {
+    encoding: 'utf8',
+    windowsHide: true,
+    input: extra.input || '',
+    env: extra.env ? { ...process.env, ...extra.env } : process.env,
+  });
+}
+
+function setupPushRepo(prefix) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const work = path.join(tmp, 'work');
+  assert.equal(git(tmp, ['init', '--bare', '-b', 'master', 'origin.git']).status, 0);
+  assert.equal(git(tmp, ['clone', 'origin.git', 'work']).status, 0);
+  const ident = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
+  assert.equal(git(work, [...ident, 'commit', '--allow-empty', '-m', 'c1']).status, 0);
+  return { tmp, work, ident, bare: path.join(tmp, 'origin.git') };
+}
+
+describe('控制面闸：写腿文档', () => {
+  it('green→reachable true；red→false；unscanned 不写 reachable', async () => {
+    const W = await import(WRITE_LIB);
+    const g = W.controlPlaneDocFromProbe({ state: 'green', at: 't0' });
+    assert.equal(g.reachable, true);
+    assert.equal(g.probe, 'green');
+    const r = W.controlPlaneDocFromProbe({ state: 'red', why: 'Remote Control 400', at: 't1' });
+    assert.equal(r.reachable, false);
+    assert.match(r.error, /400/);
+    const u = W.controlPlaneDocFromProbe({ state: 'unscanned', why: '令牌不在', at: 't2' });
+    assert.equal(Object.prototype.hasOwnProperty.call(u, 'reachable'), false);
+    assert.equal(u.probe, 'unscanned');
+  });
+
+  it('ensureControlPlaneHooksPath：没有 .git 不抛', async () => {
+    const W = await import(WRITE_LIB);
+    const r = W.ensureControlPlaneHooksPath({ cwd: path.join(os.tmpdir(), 'dao-cp-no-git') });
+    assert.equal(r.ok, false);
+    assert.match(r.why, /不是 git/);
+  });
+});
+
+describe('控制面闸：现役 git push 路径', () => {
+  it('pre-push 脚本：false 拦、true 放、落点不在放行并写没查成', () => {
+    const blocked = runNode(PRE_PUSH, { env: { DAO_CONTROL_PLANE: 'false' } });
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr || '', /失控会话的对外写/);
+
+    const allowed = runNode(PRE_PUSH, { env: { DAO_CONTROL_PLANE: 'true' } });
+    assert.equal(allowed.status, 0);
+
+    const missing = runNode(PRE_PUSH, {
+      env: {
+        DAO_CONTROL_PLANE: '',
+        DAO_CONTROL_PLANE_FILE: path.join(os.tmpdir(), 'dao-cp-absent.json'),
+      },
+    });
+    assert.equal(missing.status, 0);
+    assert.match(missing.stderr || '', /没查成/);
+  });
+
+  it('真 git push：reachable=false 拦；恢复 true 后能推', () => {
+    const { work } = setupPushRepo('dao-cp-git-');
+    assert.equal(git(work, ['config', 'core.hooksPath', path.join(REPO, 'scripts', 'githooks')]).status, 0);
+
+    const blocked = git(work, ['push', 'origin', 'HEAD'], { DAO_CONTROL_PLANE: 'false' });
+    assert.notEqual(blocked.status, 0);
+    assert.match(`${blocked.stderr || ''}${blocked.stdout || ''}`, /失控会话的对外写|控制面/);
+
+    const allowed = git(work, ['push', '-u', 'origin', 'HEAD'], { DAO_CONTROL_PLANE: 'true' });
+    assert.equal(allowed.status, 0, allowed.stderr);
+  });
+
+  it('land.mjs：unreachable 不推；恢复后能推', () => {
+    const { work, ident, bare } = setupPushRepo('dao-cp-land-');
+    assert.equal(git(work, ['push', '-u', 'origin', 'master'], { DAO_CONTROL_PLANE: 'true' }).status, 0);
+    assert.equal(git(work, [...ident, 'commit', '--allow-empty', '-m', 'c2']).status, 0);
+
+    const blocked = runNode(LAND, { args: [work], env: { DAO_CONTROL_PLANE: 'false' } });
+    assert.notEqual(blocked.status, 0);
+    assert.match(`${blocked.stdout || ''}${blocked.stderr || ''}`, /失控会话的对外写|控制面/);
+
+    const allowed = runNode(LAND, { args: [work], env: { DAO_CONTROL_PLANE: 'true' } });
+    assert.equal(allowed.status, 0, allowed.stdout + allowed.stderr);
+    assert.equal(git(bare, ['rev-parse', 'master']).stdout.trim(), git(work, ['rev-parse', 'master']).stdout.trim());
+  });
+});

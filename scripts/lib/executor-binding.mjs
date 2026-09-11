@@ -21,6 +21,7 @@
 
 import { createRuntime } from './mirasim-runtime.mjs';
 import { createExecutionRuntime } from './execution-runtime.mjs';
+import { ensureControlPlaneHooksPath } from './control-plane-write.mjs';
 
 export const EXECUTORS = ['mirasim'];
 
@@ -309,6 +310,7 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts } = {}) {
       const branch = String(spec.branch || '').trim();
       if (!repo || !branch) return { ok: false, executor: 'mirasim', error: 'mirasim 建树要 repo（仓路径）和 branch（新分支名）' };
       const r = await rt.ensureWorkspace(repo, branch);
+      if (r && r.path) ensureControlPlaneHooksPath({ cwd: r.path });
       return {
         ok: true,
         executor: 'mirasim',
