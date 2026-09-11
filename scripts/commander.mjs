@@ -42,9 +42,10 @@ import {
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
+import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
-  SITUATION_SECTIONS, dispatchMergePolicyArgs,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
@@ -440,15 +441,18 @@ function scanReviewPending() {
 
 // 每张 open 非 draft PR 抓审官 review 正文（判红轮 / 判绿 / 歪了都靠它）。
 // 抓不到的 PR：byPr 里不填，decide 对该 PR 静默不臆测（别处若要合并会另标 unscanned）。
-function scanPrReviews(prs) {
+export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
   const [owner, name] = REPO.split('/');
   const byPr = {};
   let anyFail = null;
   for (const pr of prs || []) {
-    if (!pr || pr.isDraft) continue; // draft 还没交卷，不抓
+    if (!pr) continue;
+    // Approved manual tasks may be returned to draft by the reviewer. Their
+    // actual votes must still reach the decision stage; other drafts wait.
+    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) continue;
     // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
     // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
-    const gh = runGh(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
+    const gh = read(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
       '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at, commit_id: .commit_id}]'], 30000);
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
@@ -555,7 +559,7 @@ function buildSituation({ state } = {}) {
   const trees = scanTrees();
   const reviewPending = scanReviewPending();
   const otherRepos = scanOtherRepos();
-  const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
+  const prReviews = github.scanned ? scanPrReviews(github.prs, { issues: github.issues }) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const sessions = scanSessions();
   const desiredJobs = scanDesiredJobs();
@@ -787,16 +791,43 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
+  if (action.approvalIssue) {
+    const read = args => {
+      const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+      try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; }
+    };
+    const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
+    const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
+    const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
+      commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
+    const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
+    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
+      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead: action.head })) {
+      say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
+      return { ok: true, skipped: 'approval-not-current' };
+    }
+    steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    steps[2].push('--match-head-commit', action.head);
+  }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
   if (freshness && freshness.state && freshness.state !== 'ok') {
     say(`  ① 基底落后（不拦 squash）：${String(freshness.detail || freshness.state).split('\n')[0]}`);
   }
   const calls = [];
+  let releasedDraft = false, merged = false;
   for (const s of steps) {
     calls.push(s);
     const r = run(s);
-    if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls }; }
+    if (!r.ok) {
+      if (action.approvalIssue && releasedDraft && !merged) {
+        const restored = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr), '--undo']);
+        if (!restored.ok) say(`  #${action.pr} 未能恢复草稿，需要核查：${restored.error}`);
+      }
+      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls };
+    }
+    if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
+    if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
   say(`  已合并 #${action.pr} 并关单`);
   return { ok: true, calls, freshness };

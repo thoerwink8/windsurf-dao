@@ -29,7 +29,7 @@
 
 ## 三层发现面（提示 → 动作 → 机械）
 
-1. **提示层**：`host/skills/dispatch/templates/soldier-book.md` 交卷自查第 5 条（有通用产物 → 写段）。
+1. **提示层**：`host/skills/dispatch/templates/soldier-book-mirasim.md` 交卷自查「回流自问」（有通用产物 → 写段）。
 2. **动作层**：`host/skills/dispatch/SKILL.md`「终审接回流段」——合并时三种落法 + 回写证据。
 3. **机械层**：`scripts/lib/harvest-check.mjs` + dao-check 两项（样本三态常跑；live 在 `--full`，
    扫近 7 天 merged PR）。**孤儿回流段 = 有人发现了好东西但没人接** → 红，点名 PR 号。
@@ -68,7 +68,7 @@
 - 该不该做：该——它是唯一能让「一次性解法」变成资产的机制。
 - 删哪层：**删掉「另建回流台账」这一层**。账本就是 GitHub（PR 段 + issue），不新建文件、不新建 label 体系（只用一个 `回流` label）。
 - 已知不覆盖：士兵压根没意识到产物通用时，段不会出现——机械闸只能抓「写了没人接」，抓不到「压根没写」。
-  这层交给审官必核清单（与 `admit-push` 同款取舍：不假装全覆盖）。
+  这层交给审官必核清单（`host/skills/dispatch/review-standard.md` 的回流自问条；与 `admit-push` 同款取舍：不假装全覆盖）。
 
 ## 落地
 
