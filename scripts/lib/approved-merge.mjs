@@ -1,4 +1,9 @@
-import { attributedIssueNumber } from './close-issue.mjs';
+import { attributedIssueNumbers } from './close-issue.mjs';
+
+export function explicitApprovalIssue(pr) {
+  const numbers = attributedIssueNumbers(pr?.body || '').filter(n => n > 0);
+  return numbers.length === 1 ? numbers[0] : null;
+}
 
 export function isApprovedExecutionTask(issue) {
   if (!Array.isArray(issue?.labels)) return false;
@@ -16,6 +21,6 @@ export function canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead }
   return !!(pr && issue && pr.isDraft === true && greenAtHead === true
     && expectedHead && pr.headRefOid === expectedHead
     && String(pr.mergeable).toUpperCase() === 'MERGEABLE'
-    && attributedIssueNumber(pr) === Number(issue.number)
+    && explicitApprovalIssue(pr) === Number(issue.number)
     && isApprovedExecutionTask(issue) && checksSucceeded(pr));
 }

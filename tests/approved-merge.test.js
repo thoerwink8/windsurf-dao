@@ -14,6 +14,8 @@ test('only explicitly approved execution with current review and complete CI can
   const { canReleaseApprovedDraft } = await load;
   assert.equal(canReleaseApprovedDraft(data()), true);
   const variants = [x => { x.issue.labels = [{ name: '已拍板' }]; },
+    x => { x.pr.title = '#1182'; x.pr.body = '署名 issue #819'; },
+    x => { x.pr.body = '署名 issue #1182\n署名 issue #819'; },
     x => { x.issue.number = 819; }, x => { x.greenAtHead = false; },
     x => { x.pr.headRefOid = 'b'.repeat(40); }, x => { x.pr.mergeable = 'UNKNOWN'; },
     x => { x.pr.statusCheckRollup = []; }, x => { x.pr.statusCheckRollup[0].status = 'IN_PROGRESS'; }];
@@ -22,10 +24,16 @@ test('only explicitly approved execution with current review and complete CI can
 
 test('commander emits approval-bound merge rather than another user question', async () => {
   const { decide } = await import('../scripts/lib/commander-core.mjs');
+  const { scanPrReviews } = await import('../scripts/commander.mjs');
   const x = data();
+  let reads = 0;
+  const scanned = scanPrReviews([x.pr], { issues: [x.issue], read: () => {
+    reads++; return { ok: true, out: JSON.stringify([{ state: 'APPROVED', commit_id: head }]) };
+  } });
+  assert.equal(reads, 1);
   const r = decide({ github: { scanned: true, issues: [x.issue], prs: [x.pr] },
     trees: { scanned: true, worktrees: [] }, reviewPending: { scanned: true, items: [] },
-    prReviews: { scanned: true, byPr: { 1191: { reviews: [{ state: 'APPROVED', commit_id: head }] } } },
+    prReviews: scanned,
     stall: { scanned: true, strikes: {} }, commanderPolicy: { requireModelInRouting: false } });
   const merge = r.actions.find(a => a.kind === 'merge');
   assert.equal(merge?.approvalIssue, 1182);

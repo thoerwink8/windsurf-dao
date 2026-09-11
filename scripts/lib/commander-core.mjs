@@ -25,7 +25,7 @@
 
 import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
 import { sessionStateOf } from './execution-states.mjs';
-import { canReleaseApprovedDraft } from './approved-merge.mjs';
+import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
@@ -1112,7 +1112,7 @@ function collectCandidates(situation) {
     }
 
     if (readyToLand && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
-      const approvedIssue = (gh.issues || []).find(i => Number(i.number) === attributedIssueNumber(pr));
+      const approvedIssue = (gh.issues || []).find(i => Number(i.number) === explicitApprovalIssue(pr));
       if (canReleaseApprovedDraft({ pr: { ...pr, mergeable: mergeableState }, issue: approvedIssue,
         greenAtHead, expectedHead: pr.headRefOid })) {
         out.push(withNeeds({ kind: 'merge', pr: pr.number, head: pr.headRefOid,
