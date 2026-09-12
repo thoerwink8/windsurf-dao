@@ -663,53 +663,72 @@ describe('队列落点钉在主 clone：跑在 worktree 里也写同一份队列
   const RP = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/'));
   const DQ = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch-queue.mjs').replace(/\\/g, '/'));
 
-  // 造一个真 git 仓 + 一棵挂在上面的真 worktree。判据必须来自真 git，
-  // 手搓的假 spawn 只能证明「我按我以为的形状调了」。
-  function repoWithWorktree() {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-root-'));
+  // 造一个真 git 仓 + 挂在上面的**两棵**真 worktree（模拟工人树与复审树）。
+  // 判据必须来自真 git，手搓的假 spawn 只能证明「我按我以为的形状调了」。
+  //
+  // 2026-09-12 CI 变红：这三条原来钉的是**本机的绝对路径**（/srv/projects/windsurf-dao
+  // 与 /home/orca/mirasim-worktrees/…）。那些路径在 CI 上不存在 → `git -C 不存在的目录`
+  // 退出码非 0 → mainCheckoutRoot 退回「给什么树根就还什么」，三棵树各自成一个队列根。
+  // 于是同一条断言在开发机靠「路径真在那儿」蒙对、在 CI 上如实报红——而它要证明的
+  // 恰恰是「**任意**两棵树指向同一份队列」，跟本机路径存不存在无关。换成夹具就不看环境了。
+  function repoWithWorktrees() {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-root-')));
     gitIn(root, ['init', '-q']);
     gitIn(root, ['config', 'user.email', 't@t']);
     gitIn(root, ['config', 'user.name', 't']);
     fs.writeFileSync(path.join(root, 'f.txt'), 'x\n');
     gitIn(root, ['add', 'f.txt']);
     gitIn(root, ['commit', '-q', '-m', 'init']);
-    const wt = path.join(root, '..', `${path.basename(root)}-wt`);
-    const made = gitIn(root, ['worktree', 'add', '-q', '-b', 'side', wt]);
-    if (made.status !== 0) return null;
-    return { root: fs.realpathSync(root), wt: fs.realpathSync(wt) };
+    const base = path.dirname(root);
+    const name = path.basename(root);
+    const wt1 = path.join(base, `${name}-worker`);
+    const wt2 = path.join(base, `${name}-reviewer`);
+    const m1 = gitIn(root, ['worktree', 'add', '-q', '-b', 'worker', wt1]);
+    const m2 = gitIn(root, ['worktree', 'add', '-q', '-b', 'reviewer', wt2]);
+    if (m1.status !== 0 || m2.status !== 0) return null;
+    return { root, wt1: fs.realpathSync(wt1), wt2: fs.realpathSync(wt2) };
+  }
+
+  // 夹具造不出来时不许静默 return（那就是「没查成」冒充「查过了」）。CI 上 git 一定在。
+  function mustWorktrees() {
+    const r = repoWithWorktrees();
+    assert.ok(r, '造不出真 worktree 夹具 → 本项没查成，不是绿');
+    return r;
   }
 
   it('worktree 与主树推同一个主 clone 根', async () => {
     const { mainCheckoutRoot } = await MC;
-    const r = repoWithWorktree();
-    if (!r) return; // 环境不支持 worktree：跳过，不假绿（下方真仓那条仍会跑）
-    const fromMain = mainCheckoutRoot({ treeRoot: r.root });
-    const fromWt = mainCheckoutRoot({ treeRoot: r.wt });
+    const { root, wt1 } = mustWorktrees();
+    const fromMain = mainCheckoutRoot({ treeRoot: root });
+    const fromWt = mainCheckoutRoot({ treeRoot: wt1 });
     assert.equal(fromWt, fromMain, 'worktree 里推出来的主 clone 根必须与主树一致');
   });
 
   it('三个不同树根 → 同一个待审队列目录（这是本单治的病）', async () => {
     const { reviewPendingDir } = await RP;
-    const a = reviewPendingDir({ root: '/srv/projects/windsurf-dao' });
-    const b = reviewPendingDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1152' });
-    const c = reviewPendingDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1174' });
+    const { root, wt1, wt2 } = mustWorktrees();
+    const a = reviewPendingDir({ root });
+    const b = reviewPendingDir({ root: wt1 });
+    const c = reviewPendingDir({ root: wt2 });
     assert.equal(b, a, `工人树里的票必须落回主树队列：${b} ≠ ${a}`);
     assert.equal(c, a, `复审树里的票必须落回主树队列：${c} ≠ ${a}`);
   });
 
   it('派工单队列走同一把尺（同根因，同一处修）', async () => {
     const { dispatchQueueDir } = await DQ;
-    const a = dispatchQueueDir({ root: '/srv/projects/windsurf-dao' });
-    const b = dispatchQueueDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1152' });
+    const { root, wt1, wt2 } = mustWorktrees();
+    const a = dispatchQueueDir({ root });
+    const b = dispatchQueueDir({ root: wt1 });
+    const c = dispatchQueueDir({ root: wt2 });
     assert.equal(b, a, `工人树里的派工单必须落回主树队列：${b} ≠ ${a}`);
+    assert.equal(c, a, `复审树里的派工单必须落回主树队列：${c} ≠ ${a}`);
   });
 
   it('显式 root 仍生效：指向一个真 worktree 时归到它的主 clone', async () => {
     const { reviewPendingDir } = await RP;
-    const r = repoWithWorktree();
-    if (!r) return;
-    const dir = reviewPendingDir({ root: r.wt });
-    assert.ok(dir.startsWith(r.root), `worktree 根的队列必须落在主 clone 下：${dir} 不在 ${r.root}`);
+    const { root, wt1 } = mustWorktrees();
+    const dir = reviewPendingDir({ root: wt1 });
+    assert.ok(dir.startsWith(root), `worktree 根的队列必须落在主 clone 下：${dir} 不在 ${root}`);
   });
 
   it('env 覆盖优先（测试隔真仓的路不许被这次改动堵掉）', async () => {
