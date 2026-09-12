@@ -375,7 +375,20 @@ function blockingSet(readyIssues, openIssues, openPrs) {
   return cited;
 }
 
-export function prioritizeReady(issues, { openIssues, openPrs } = {}) {
+function bornMs(issue) {
+  const t = Date.parse(issue && issue.createdAt);
+  if (Number.isFinite(t)) return t;
+  // createdAt 没查成时退回单号：号小的通常更老。不是精确等待时间，只是稳定次序。
+  return Number.isInteger(issue && issue.number) ? issue.number : 0;
+}
+
+function roundsOf(issue, roundsByIssue) {
+  if (!roundsByIssue || typeof roundsByIssue !== 'object') return 0;
+  const n = Number(roundsByIssue[issue && issue.number]);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+export function prioritizeReady(issues, { openIssues, openPrs, roundsByIssue } = {}) {
   if (!Array.isArray(issues)) return [];
   const blocking = blockingSet(issues, openIssues, openPrs);
   const rows = issues
@@ -384,8 +397,22 @@ export function prioritizeReady(issues, { openIssues, openPrs } = {}) {
       const blockedByOthers = blocking.has(i.number);
       const selfHeal = isSelfHeal(i);
       const rank = blockedByOthers ? 0 : selfHeal ? 1 : 2;
-      return { n: i.number, rank };
+      return { n: i.number, rank, rounds: roundsOf(i, roundsByIssue), born: bornMs(i) };
     });
-  rows.sort((a, b) => (a.rank - b.rank) || (a.n - b.n));
+  // 同类里：轮次多的先收口，再按等待时间（出生早的先），最后单号。
+  rows.sort((a, b) => (a.rank - b.rank) || (b.rounds - a.rounds) || (a.born - b.born) || (a.n - b.n));
   return rows.map((r) => r.n);
+}
+
+/** 老单还有审查/返工/冲突/收口泵时，普通新单最多留几个槽位。不是机器余量上限。 */
+export const MAX_NEW_DISPATCH_WHEN_OLD_BUSY = 1;
+
+/**
+ * 老单有可执行动作时，新派工槽位压到 1。
+ * slots 不是有限数字（老夹具不限张）时同样压到 1——这条是收口策略，不跟准入共用。
+ */
+export function capNewDispatchSlots(slots, oldBusy) {
+  if (!oldBusy) return slots;
+  if (!Number.isFinite(slots)) return MAX_NEW_DISPATCH_WHEN_OLD_BUSY;
+  return Math.min(Math.max(0, slots), MAX_NEW_DISPATCH_WHEN_OLD_BUSY);
 }

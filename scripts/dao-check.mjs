@@ -1266,6 +1266,13 @@ function checkEphemeralLifecycle() {
   const progressInstall = read('scripts/install-progress-watch.sh');
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
   if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
+  const core = read('scripts/lib/commander-core.mjs');
+  const admit = read('scripts/lib/admission.mjs');
+  const reap = read('scripts/lib/ephemeral-reap.mjs');
+  if (core && !/'reap-tree'/.test(core)) problems.push('指挥官动作表没有 reap-tree');
+  if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');
+  if (admit && !/capNewDispatchSlots/.test(admit)) problems.push('老单优先没有把新单槽位压到 1');
+  if (reap && !/planTreeReaps/.test(reap)) problems.push('清树判据 planTreeReaps 丢了');
   if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
   if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
   if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');

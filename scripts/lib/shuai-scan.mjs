@@ -35,6 +35,7 @@ query($owner: String!, $name: String!) {
         number
         title
         body
+        createdAt
         updatedAt
         labels(first: 30) { nodes { name } }
         milestone { title }
@@ -44,6 +45,7 @@ query($owner: String!, $name: String!) {
       nodes {
         number
         title
+        createdAt
         updatedAt
         isDraft
         reviewDecision
@@ -136,6 +138,7 @@ export function normalizeGithubGraphql(data) {
     const row = {
       number: i.number,
       title: i.title,
+      createdAt: i.createdAt || null,
       updatedAt: i.updatedAt,
       labels: (i.labels?.nodes || []).map((l) => ({ name: l.name })),
       // #966：派工队列跳过「将来某版」。缺字段当没挂档（旧夹具 / 没查到），不当成推迟。
@@ -157,6 +160,7 @@ export function normalizeGithubGraphql(data) {
     return {
       number: p.number,
       title: p.title,
+      createdAt: p.createdAt || null,
       updatedAt: p.updatedAt,
       isDraft: !!p.isDraft,
       reviewDecision: p.reviewDecision || null,

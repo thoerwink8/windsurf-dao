@@ -43,6 +43,16 @@ describe('ephemeral-lifecycle', () => {
     assert.match(mira, /不许自己合/);
   });
 
+  it('指挥官能清审官/工人树，且通用 worktree-rm 仍禁止出现在 decide 输出', () => {
+    const core = read('scripts/lib/commander-core.mjs');
+    assert.match(core, /'reap-tree'/);
+    assert.match(core, /FORBIDDEN_AUTO_KINDS[\s\S]*worktree-rm/);
+    const commander = read('scripts/commander.mjs');
+    assert.match(commander, /function execReapTree/);
+    const admit = read('scripts/lib/admission.mjs');
+    assert.match(admit, /capNewDispatchSlots/);
+  });
+
   it('指挥官 / AGENTS / worker-brief 指 mirasim 书', () => {
     const commander = read('scripts/commander.mjs');
     assert.match(commander, /soldier-book-mirasim\.md/);

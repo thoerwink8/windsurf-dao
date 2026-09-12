@@ -48,7 +48,9 @@ import {
 import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
+  capNewDispatchSlots,
 } from './admission.mjs';
+import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { classifyAsk } from './ask-gate.mjs';
 import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
 
@@ -56,7 +58,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session', 'pump-draft', 'clear-exhausted',
+  'stop-session', 'pump-draft', 'clear-exhausted', 'reap-tree',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -97,6 +99,22 @@ export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
 
 /** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
 export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+
+/**
+ * 老单还有没有可执行动作（审查入队 / 判红返工 / 冲突 / 收口泵）。
+ * 有 → 新派工最多留 1 个槽位。合并不算：合是指挥官 squash，不占工人会话。
+ */
+export function oldTicketsHaveWork({ reviewPending, prs, reviewsByPr, draftDueForPump } = {}) {
+  if (Array.isArray(reviewPending) && reviewPending.length > 0) return true;
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    if (typeof draftDueForPump === 'function' && draftDueForPump(pr)) return true;
+    if (String(pr.mergeable || '').toUpperCase() === 'CONFLICTING') return true;
+    const a = analyzeReviewsAtHead(prReviewInput(reviewsByPr?.[pr.number]), pr.headRefOid);
+    if (a.scanned && a.latestRed === true) return true;
+  }
+  return false;
+}
 
 /** draft 距上次提交的毫秒。缺字段 / 解不出 / 没有时钟 → unscanned，绝不当超龄。 */
 export function draftCommitAgeMs(pr, nowMs) {
@@ -449,6 +467,9 @@ export const ACTION_NEEDS = {
   // #1147 draft 收口泵：只认 github 上的 draft + lastCommittedAt。会话名单不进
   // SITUATION_SECTIONS（没查成只挡住泵，不许把合并/叫审官整轮停掉）。
   'pump-draft': ['github'],
+  // 清树：github 用来核 PR/issue 态。树面/会话名单没查成由 planTreeReaps 自己 skip，
+  // 不进总闸——不能因为清不了树就把合并/叫审官整轮停掉。
+  'reap-tree': ['github'],
 };
 
 // 决不能出现在自动路径里的动作（审官建议的「自动路径边界」）：清树 / 写指纹 / 改 dao.mjs 等
@@ -612,7 +633,14 @@ function collectCandidates(situation) {
   // 反过来，机器满载时新活仍然一个不派——那半边的本意不动。
   const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
   const finishReserve = reviewReserve + stalledPumpCount;
-  const newWorkSlots = Math.max(0, slotsLeft - finishReserve);
+  // 老单还有审查/返工/冲突/收口泵时，普通新单最多 1 个槽位（#1174）。
+  const agingBusy = oldTicketsHaveWork({
+    reviewPending: rp.items,
+    prs: gh.prs,
+    reviewsByPr: reviews.byPr,
+    draftDueForPump,
+  });
+  const newWorkSlots = capNewDispatchSlots(Math.max(0, slotsLeft - finishReserve), agingBusy);
   // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 FINISH_SLOTS_MAX。
   // slots=Infinity（老夹具/未接准入）时跟着不限张，维持既有契约。
   //
@@ -692,7 +720,17 @@ function collectCandidates(situation) {
     const readyIssues = ready.ready
       .map((n) => (gh.issues || []).find((i) => i && i.number === n))
       .filter(Boolean);
-    const ordered = prioritizeReady(readyIssues, { openIssues: gh.issues || [], openPrs: gh.prs || [] });
+    const roundsByIssue = {};
+    for (const pr of gh.prs || []) {
+      const issueNo = attributedIssueNumber(pr);
+      if (issueNo == null) continue;
+      const judged = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
+      const n = judged.scanned ? (Number(judged.redRounds) || 0) : 0;
+      roundsByIssue[issueNo] = Math.max(roundsByIssue[issueNo] || 0, n);
+    }
+    const ordered = prioritizeReady(readyIssues, {
+      openIssues: gh.issues || [], openPrs: gh.prs || [], roundsByIssue,
+    });
     let dispatchedThisRound = 0;
     for (const n of ordered) {
       const issue = (gh.issues || []).find((i) => i && i.number === n);
@@ -1026,7 +1064,17 @@ function collectCandidates(situation) {
   }
 
   // ③ PR 驱动：判绿合并 / manual 待拍板 / 审官轮次
-  for (const pr of gh.prs || []) {
+  // 老单优先：轮次多的先收口，再按等待时间（出生早的先）。
+  const prsAged = [...(gh.prs || [])].sort((a, b) => {
+    const ra = analyzeReviews(prReviewInput(reviews.byPr?.[a && a.number])).redRounds || 0;
+    const rb = analyzeReviews(prReviewInput(reviews.byPr?.[b && b.number])).redRounds || 0;
+    if (rb !== ra) return rb - ra;
+    const ta = Date.parse((a && (a.createdAt || a.updatedAt)) || '') || 0;
+    const tb = Date.parse((b && (b.createdAt || b.updatedAt)) || '') || 0;
+    if (ta !== tb) return ta - tb;
+    return (Number(a && a.number) || 0) - (Number(b && b.number) || 0);
+  });
+  for (const pr of prsAged) {
     if (!pr || pr.number == null) continue;
     // #1000：认输 / 等用户是 PR 属性。指挥官见到就跳过，不再机械重试（省额度）。
     // 合并路仍走——帅位关掉或去掉标之后自然回来；标还在时也不自动合一张已经认输的 PR。
@@ -1413,6 +1461,31 @@ function collectCandidates(situation) {
       out.push(withNeeds(esc(`终端 ${term} 撞死指纹已唤大脑 ${woken} 次仍没闭环——报帅`, { reason: 'wake-exhausted', term, woken }), N['wake-brain']));
     } else {
       out.push(withNeeds({ kind: 'wake-brain', target: `stall:${term}`, term, why: `终端 ${term} 撞死指纹 strikes=${info.strikes}，#833 自动换人未接住` }, N['wake-brain']));
+    }
+  }
+
+  // 清树放在 merge 之后：本轮刚决定合的 PR，exec 先 squash 再拆树。
+  const mergedPairs = out.filter((a) => a.kind === 'merge' && Number.isInteger(a.pr)).map((a) => {
+    const pr = (gh.prs || []).find((p) => p && Number(p.number) === Number(a.pr));
+    return { pr: a.pr, issue: attributedIssueNumber(pr) || a.approvalIssue || null };
+  });
+  const reaps = planTreeReaps({
+    trees: markTreesForMergedPrs((treeFace && treeFace.worktrees) || [], mergedPairs),
+    sessions: sessionListForLiveness(situation),
+    github: gh,
+    reviewsByPr: reviews.byPr,
+    mergedPrs: mergedPairs.map((p) => p.pr),
+  });
+  if (reaps && reaps.ok) {
+    for (const item of reaps.items || []) {
+      out.push(withNeeds({
+        kind: 'reap-tree',
+        role: item.role,
+        pr: item.pr,
+        issue: item.issue,
+        path: item.path,
+        why: item.why,
+      }, ACTION_NEEDS['reap-tree']));
     }
   }
 

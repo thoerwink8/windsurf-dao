@@ -48,6 +48,8 @@ import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
+import { snapshotCapacity } from './lib/ephemeral-capacity.mjs';
+import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
@@ -93,6 +95,8 @@ const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'co
 const STATE_PATH = join(STATE_DIR, 'state.json');
 const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
   || join(homedir(), '.dao', 'admission', 'samples.ndjson');
+const CAPACITY_SAMPLE_PATH = process.env.DAO_CAPACITY_SAMPLES
+  || join(homedir(), '.dao', 'ephemeral-lifecycle', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -322,6 +326,19 @@ function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
 }
 
 function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+function leftoverIncomplete(situation) {
+  const sec = situation && situation.sessions;
+  if (!sec || sec.scanned !== true || !Array.isArray(sec.items)) return null;
+  return sec.items.filter((s) => sessionStateOf(s) === 'incomplete').length;
+}
+
+function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
   try {
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
@@ -754,12 +771,114 @@ function execAction(action, { state, dryRun, log }) {
       return execMarkExhausted(action, { dryRun, say });
     case 'clear-exhausted':
       return execClearExhausted(action, { dryRun, say });
+    case 'reap-tree':
+      return execReapTree(action, { dryRun, say });
     case 'noop':
       return { ok: true };
     default:
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+function parseGhJson(run, args, what) {
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+  if (!r || r.ok !== true) {
+    return { ok: false, unscanned: true, error: `${what}没查成：${(r && r.error) || '命令失败'}` };
+  }
+  try {
+    const json = JSON.parse(String(r.out || '').trim() || '{}');
+    return { ok: true, json };
+  } catch {
+    return { ok: false, unscanned: true, error: `${what}返回不是 JSON` };
+  }
+}
+
+function reviewDelivered(reviews) {
+  if (!Array.isArray(reviews)) return { ok: false, unscanned: true, error: 'reviews 不是数组' };
+  const hit = reviews.some((rv) => {
+    const s = String((rv && rv.state) || '').toUpperCase();
+    return s === 'APPROVED' || s === 'CHANGES_REQUESTED' || s === 'APPROVE' || s === 'CHANGES_REQUEST';
+  });
+  return { ok: true, delivered: hit };
+}
+
+/**
+ * 清树前再核一次 GitHub。decide 产候选，这里 fail-closed：查不成 / 还开着就不删。
+ * run 可注入，测试钉「OPEN 不删工人树 / MERGED 才删」。
+ */
+export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
+  const treePath = action && action.path;
+  if (!treePath) {
+    say('  reap-tree 没有 path');
+    return { ok: false, unscanned: true, error: 'reap-tree 没有 path' };
+  }
+  if (dryRun) {
+    say(`[dry] reap-tree ${action.role || ''} ${treePath}（${action.why || ''}）`);
+    return { ok: true, dryRun: true, path: treePath };
+  }
+  const role = action.role || '';
+  if (role === 'reviewer') {
+    if (action.pr == null) {
+      const error = '审官树没有 PR 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state,reviews'], `PR #${action.pr}`);
+    if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+    const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+    if (state === 'MERGED' || state === 'CLOSED') {
+      /* 已了结，可拆审官树 */
+    } else if (state === 'OPEN') {
+      const d = reviewDelivered(viewed.json && viewed.json.reviews);
+      if (!d.ok) { say(`  不清 ${treePath}：${d.error}`); return d; }
+      if (!d.delivered) {
+        const error = `PR #${action.pr} 还开着且没有判定，审官树留着`;
+        say(`  ${error}`);
+        return { ok: false, error };
+      }
+    } else {
+      const error = `PR #${action.pr} 状态没查成（${state || '空'}），不清`;
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+  } else if (role === 'worker' || role === 'orphan') {
+    if (action.pr != null) {
+      const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
+      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+      if (state !== 'MERGED' && state !== 'CLOSED') {
+        const error = `PR #${action.pr} 状态是 ${state || '空'}，工人树不清`;
+        say(`  ${error}`);
+        return { ok: false, unscanned: state === '', error };
+      }
+    } else if (action.issue != null) {
+      const viewed = parseGhJson(run, ['issue', 'view', String(action.issue), '--json', 'state'], `issue #${action.issue}`);
+      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+      if (state !== 'CLOSED') {
+        const error = `issue #${action.issue} 状态是 ${state || '空'}，不清`;
+        say(`  ${error}`);
+        return { ok: false, unscanned: state === '', error };
+      }
+    } else {
+      const error = '孤儿树没有 PR/issue 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+  } else {
+    const error = `未知清树角色 ${role}，不清`;
+    say(`  ${error}`);
+    return { ok: false, unscanned: true, error };
+  }
+  const rm = run(['node', 'scripts/dao.mjs', 'worktree-rm', '--worktree', `path:${treePath}`]);
+  if (!rm || rm.ok !== true) {
+    const error = `拆树失败 ${treePath}：${(rm && rm.error) || '命令失败'}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  say(`  已拆 ${treePath}`);
+  return { ok: true, path: treePath };
 }
 
 /**
@@ -1320,7 +1439,7 @@ export function reworkSpec(action, briefPath) {
   const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
   return action.conflict
     ? `解冲突 PR #${action.pr}：${checkout}；把 origin/master 合进来解冲突，硬边界与做法全文在 ${briefPath}，解完跑 dao-check 绿了再推。`
-    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷（worker-done --pr ${action.pr}，复用这张 PR，不开第二张）。`;
 }
 
 /** #1147 draft 收口泵：短会话三选一，必须落痕。关闭是工人判，不是指挥官机械关。 */
@@ -2427,6 +2546,7 @@ function cmdAct(argv) {
 
   const { actions } = decide(situation);
   const log = [];
+  let cleanupFailures = 0;
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
     dir: STATE_DIR,
@@ -2448,7 +2568,14 @@ function cmdAct(argv) {
   }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
-  const ran = runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  const ran = runActions(actions, {
+    exec: (a) => {
+      const r = execAction(a, { state, dryRun, log });
+      if (a && a.kind === 'reap-tree' && (!r || r.ok !== true) && !(r && r.dryRun)) cleanupFailures += 1;
+      return r;
+    },
+    log,
+  });
   // 轮末收敛（#1063）：数连续轮 + 把本轮已不再出现的原因自动关单。必须在动作跑完之后，
   // 因为「本轮有哪些原因」要等 decide 的动作全部落地才算数。
   // 输入必须是 decide 的静态动作 **加上** runActions 执行中动态产生的升级动作：
@@ -2503,6 +2630,22 @@ function cmdAct(argv) {
     }
   }
   runHubProjection({ situation, dryRun, log });
+  if (!dryRun) {
+    const ad = situation.admission || {};
+    appendCapacitySample(snapshotCapacity({
+      at: situation.at,
+      cpuBusy: ad.cpuBusy,
+      memAvailableMb: ad.memAvailableMb,
+      loadNorm: ad.loadNorm,
+      inFlight: ad.inFlight,
+      sessions: situation.sessions && situation.sessions.scanned === true
+        ? (situation.sessions.items || []).length : null,
+      worktrees: situation.trees && situation.trees.scanned === true
+        ? (situation.trees.worktrees || []).length : null,
+      leftoverAfterHandoff: leftoverIncomplete(situation),
+      cleanupFailures,
+    }));
+  }
   if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,

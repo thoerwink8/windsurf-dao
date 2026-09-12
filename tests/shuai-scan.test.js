@@ -39,6 +39,11 @@ describe('#966 GraphQL 带 milestone，推迟档不进推荐', () => {
     assert.match(S.GITHUB_GRAPHQL, /milestone \{ title \}/);
   });
 
+  it('查询字符串问了 createdAt（老单等待时间）', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /createdAt/);
+  });
+
   it('normalize：有 title 就带上，缺字段当没挂档', async () => {
     const S = await LOAD;
     const deferred = S.normalizeGithubGraphql({
