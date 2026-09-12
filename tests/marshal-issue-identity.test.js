@@ -86,11 +86,13 @@ describe('marshal-issue-identity', () => {
     });
 
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    await t.test('mirasim 派工 stampIssueLabels 必须 marshal（#1205）', () => {
+    await t.test('mirasim 派工打 stampIssueLabels 走 marshal 网关', () => {
       const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
-      assert.match(mira, /stampIssueLabels\(/, '派工前补 type/，缺标会让审完的 PR 合不进去');
-      assert.match(mira, /ghRunnerForTarget\([\s\S]*role:\s*'marshal'/, '打标身份必须 marshal');
+      assert.match(mira, /stampIssueLabels\(/, 'mirasim 派工补 type');
+      assert.match(mira, /runGh:\s*ghRunnerForTarget\([^,]+,\s*\{\s*role:\s*'marshal'\s*\}\)/,
+        'mirasim 打 label 身份 marshal（跨仓走 ForTarget）');
+      assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
     });
     await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
       assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);
