@@ -1,0 +1,5 @@
+/* 审官对抗样本：对象解构夹注释。ident 与冒号之间的 /* comment */ 会让别名解析失败。
+const cp = require("node:child_process");
+const { exec /* comment */: run = fallback } = cp;
+run(`node scripts/dao.mjs ${getVerb()}`, { env: { PATH: "/bin" } });
+*/

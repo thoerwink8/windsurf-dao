@@ -1133,6 +1133,130 @@ test('数组解构带 --dry-run 仍绿', () => {
   assert.equal(r.ok, true, JSON.stringify(r));
 });
 
+test('字符串键解构 { "exec": run } 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const { ${JSON.stringify(EX)}: ${alias} } = cp;`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('解构夹注释 { exec /* comment */: run = fallback } 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const { ${EX} /* comment */: ${alias} = fallback } = cp;`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('对象解构赋值 ({ ["exec"]: run } = cp) 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const lb = '[';
+  const rb = ']';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `let ${alias};`,
+    `({ ${lb}${JSON.stringify(EX)}${rb}: ${alias} } = cp);`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('数组解构别名链 const [run] = [fn] 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const fwd = 'f' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${fwd} = cp.${EX};`,
+    `const [${alias}] = [${fwd}];`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('数组解构括号 const [run] = [(cp.exec)] 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const [${alias}] = [(cp.${EX})];`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('数组解构赋值 ([run] = [cp.exec]) 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `let ${alias};`,
+    `([${alias}] = [cp.${EX}]);`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('字符串键解构带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const { ${JSON.stringify(EX)}: ${alias} } = cp;`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()} --dry-run${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
+test('数组解构别名链带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const fwd = 'f' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${fwd} = cp.${EX};`,
+    `const [${alias}] = [${fwd}];`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()} --dry-run${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
 test('解构默认值静态非 dispatch 仍绿', () => {
   const EX = 'ex' + 'ec';
   const alias = 'ru' + 'n';
@@ -1216,6 +1340,39 @@ test('审官 default 转发 / 计算属性适配 / exec 动态模板都不许 sc
     [
       'const cp = require("node:child_process");',
       `const [${'ru' + 'n'}] = [cp.${EX}];`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `const { ${JSON.stringify(EX)}: ${'ru' + 'n'} } = cp;`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `const { ${EX} /* comment */: ${'ru' + 'n'} = fallback } = cp;`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `let ${'ru' + 'n'};`,
+      `({ ${lb}${JSON.stringify(EX)}${rb}: ${'ru' + 'n'} } = cp);`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `const ${'f' + 'n'} = cp.${EX};`,
+      `const [${'ru' + 'n'}] = [${'f' + 'n'}];`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `const [${'ru' + 'n'}] = [(cp.${EX})];`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `let ${'ru' + 'n'};`,
+      `([${'ru' + 'n'}] = [cp.${EX}]);`,
       `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
     ].join('\n'),
   ];

@@ -33,7 +33,11 @@
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
 //      不能证明 --dry-run 也统一 fail-closed（不依赖调用名恰好是 exec）。
 //      解构默认值（{ exec: run = fallback }）、计算键解构（{ ["exec"]: run }）、
-//      数组解构（const [run] = [cp.exec]）产生的 child_process 别名要跟；跟丢 = scanned:0。
+//      字符串键（{ "exec": run }）、注释（{ exec /* comment */: run }）、
+//      解构赋值（({ ["exec"]: run } = cp)）、数组解构（const [run] = [cp.exec]）、
+//      数组别名链（const fn = cp.exec; const [run] = [fn]）、括号（[(cp.exec)]）、
+//      数组赋值（([run] = [cp.exec])）产生的 child_process 别名要跟；跟丢 = scanned:0。
+//      解析不了的 child_process 解构 fail-closed——不许 scanned:0 静默放行。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -167,7 +171,10 @@ function splitTopLevelArgs(inner) {
  * 收集 spawn/exec 调用名：原名 + 解构/import as/赋值别名。
  * `{ spawnSync: require(...) }` 的 require 不当别名（后面是 '(' 不是 ',' / '}' / '='）。
  * 解构默认值 `{ exec: run = fallback }`、计算键 `{ ["exec"]: run }`、
- * 数组解构 `const [run] = [cp.exec]` 都要收成别名（并保留 exec 命令字符串语义）。
+ * 字符串键 `{ "exec": run }`、注释夹在 ident 与冒号之间、
+ * 解构赋值 `({ ["exec"]: run } = cp)`、数组解构 `const [run] = [cp.exec]`、
+ * 数组别名链 `[fn]`、括号 `[(cp.exec)]`、数组赋值 `([run] = [cp.exec])`
+ * 都要收成别名（并保留 exec 命令字符串语义）。解析不了的 child_process 解构标不透明。
  * 别名会再赋一次（`const run = cp.spawnSync; const actual = run`），收到固定点。
  * 未知 child_process 计算属性（`const run = cp[unknownKey]`）也收成别名，并标不透明。
  * 对象字面量 / 成员赋值（`{ run: cp.spawnSync }` / `box.run = cp.spawnSync`）也收成别名，
@@ -381,7 +388,7 @@ const CP_INLINE_DOT = new RegExp(
 );
 
 function isChildProcessNamespaceExpr(expr, cpNames) {
-  const t = String(expr || '').trim();
+  const t = unwrapParens(expr);
   if (!t) return false;
   if (new RegExp(String.raw`^${CP_LOAD}\s*\)?${CP_NS_SUFFIX}$`).test(t)) return true;
   if (!cpNames || !cpNames.size) return false;
@@ -408,6 +415,97 @@ function scanCpDefaultDestructure(text, names) {
       if (aliased) names.add(aliased[1]);
     }
   }
+}
+
+/** 剥掉一层或多层只包着整个表达式的括号。 */
+function unwrapParens(expr) {
+  let t = String(expr || '').trim();
+  for (let n = 0; n < 8; n++) {
+    if (!t.startsWith('(')) return t;
+    const end = matchBalanced(t, 0);
+    if (end < 0) return t;
+    if (t.slice(end + 1).trim()) return t;
+    t = t.slice(1, end).trim();
+  }
+  return t;
+}
+
+/** 绑定模式里的注释：ident 与冒号之间的块注释换成空格。字符串原样保留。 */
+function stripJsComments(s) {
+  let out = '';
+  let inStr = null;
+  let esc = false;
+  const text = String(s || '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; out += c; continue; }
+    if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      if (i < text.length) out += '\n';
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      if (i < text.length) i += 1;
+      out += ' ';
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+function asNameList(names) {
+  if (!names) return [];
+  return names instanceof Set ? [...names] : [...names];
+}
+
+function asNameSet(names) {
+  if (names instanceof Set) return names;
+  return new Set(asNameList(names));
+}
+
+/** `arr[i] =` 是成员赋值，不是数组解构。`const [run] =` / `([run] =` 才是。 */
+function isIndexOrMemberBracket(text, openIdx) {
+  let i = openIdx - 1;
+  while (i >= 0 && /\s/.test(text[i])) i--;
+  if (i < 0) return false;
+  if (text[i] === ')' || text[i] === ']') return true;
+  if (text[i] === '.') return true;
+  if (!/[A-Za-z0-9_$]/.test(text[i])) return false;
+  let j = i;
+  while (j >= 0 && /[A-Za-z0-9_$]/.test(text[j])) j--;
+  const ident = text.slice(j + 1, i + 1);
+  return !/^(?:const|let|var|of|in|from|await|return|case|throw|typeof|void|delete|yield|new)$/.test(ident);
+}
+
+function guessBindingDest(raw) {
+  const head = splitBindingDefault(stripJsComments(raw));
+  if (!head || head.startsWith('...')) return '';
+  const m = head.match(/([A-Za-z_][\w]*)\s*$/);
+  return m ? m[1] : '';
+}
+
+function exprLooksUnprovenSpawn(expr, names, cpNames) {
+  const t = unwrapParens(expr);
+  if (!t) return false;
+  if (isChildProcessNamespaceExpr(t, cpNames)) return true;
+  if (/child_process/.test(t)) return true;
+  if (new RegExp(String.raw`\b(?:${SPAWN_FNS.map(escapeIdent).join('|')})\b`).test(t)) return true;
+  if (cpNames && cpNames.size) {
+    const ids = [...cpNames].map(escapeIdent).join('|');
+    if (ids && new RegExp(String.raw`\b(?:${ids})\b`).test(t)) return true;
+  }
+  const nameSet = asNameSet(names);
+  return /^[A-Za-z_][\w]*$/.test(t) && nameSet.has(t);
 }
 
 /** 剥掉解构绑定的默认值：`run = fallback` → `run`。括号/方括号/字符串里的 `=` 不算。 */
@@ -444,7 +542,7 @@ function splitBindingDefault(raw) {
 }
 
 function parseObjectBinding(raw, src) {
-  const head = splitBindingDefault(raw);
+  const head = splitBindingDefault(stripJsComments(raw));
   if (!head || head.startsWith('...')) return null;
   if (head[0] === '[') {
     const keyEnd = matchBalanced(head, 0);
@@ -455,6 +553,8 @@ function parseObjectBinding(raw, src) {
     const { resolved, opaque } = resolveComputedKey(src, head.slice(1, keyEnd));
     return { dest: destM[1], src: resolved, opaque };
   }
+  const quoted = head.match(/^(['"])((?:\\.|[^\\])*?)\1\s*:\s*([A-Za-z_][\w]*)$/);
+  if (quoted) return { dest: quoted[3], src: quoted[2].replace(/\\(['"])/g, '$1'), opaque: false };
   const rename = head.match(/^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)$/);
   if (rename) return { dest: rename[2], src: rename[1], opaque: false };
   const short = head.match(/^([A-Za-z_][\w]*)$/);
@@ -463,16 +563,17 @@ function parseObjectBinding(raw, src) {
 }
 
 function parseArrayDest(raw) {
-  const head = splitBindingDefault(raw);
+  const head = splitBindingDefault(stripJsComments(raw));
   if (!head || head.startsWith('...') || head[0] === '[' || head[0] === '{') return null;
   const m = head.match(/^([A-Za-z_][\w]*)$/);
   return m ? m[1] : null;
 }
 
 function spawnNameFromExpr(expr, names, cpNames, src) {
-  const t = String(expr || '').trim();
+  const t = unwrapParens(expr);
   if (!t) return { name: '', opaque: false };
-  const nameList = [...(names || [])];
+  const nameList = asNameList(names);
+  const nameSet = asNameSet(names);
   const computed = t.match(/^([\s\S]*?)(?:\s*\?\.\s*)?\[([\s\S]*)\]\s*$/);
   if (computed && computed[1].trim()) {
     const recv = computed[1].trim().replace(/\?\.\s*$/, '');
@@ -490,70 +591,87 @@ function spawnNameFromExpr(expr, names, cpNames, src) {
   ) {
     return { name: mem[2], opaque: false };
   }
+  if (/^[A-Za-z_][\w]*$/.test(t) && nameSet.has(t)) return { name: t, opaque: false };
   return { name: '', opaque: false };
 }
 
-function eachDeclDestructure(text, openCh, onMatch) {
-  const re = openCh === '{'
-    ? /\b(?:const|let|var)\s*\{/g
-    : /\b(?:const|let|var)\s*\[/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const open = m.index + m[0].length - 1;
-    const end = matchBalanced(text, open);
+/** 声明解构 + 赋值解构（含括号）。`arr[i] =` 不当数组解构。 */
+function eachDestructure(text, openCh, onMatch) {
+  const src = String(text || '');
+  let inStr = null;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c !== openCh) continue;
+    if (openCh === '[' && isIndexOrMemberBracket(src, i)) continue;
+    const end = matchBalanced(src, i);
     if (end < 0) continue;
-    const eq = text.slice(end + 1).match(/^\s*=\s*/);
+    const eq = src.slice(end + 1).match(/^\s*=\s*/);
     if (!eq) continue;
     const rhsStart = end + 1 + eq[0].length;
-    const rhsEnd = scanRhsEnd(text, rhsStart);
+    const rhsEnd = scanRhsEnd(src, rhsStart);
     onMatch({
-      inner: text.slice(open + 1, end),
-      rhs: text.slice(rhsStart, rhsEnd).trim(),
+      inner: src.slice(i + 1, end),
+      rhs: src.slice(rhsStart, rhsEnd).trim(),
     });
+    i = end;
   }
 }
 
 function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque) {
-  eachDeclDestructure(text, '{', ({ inner, rhs }) => {
+  eachDestructure(text, '{', ({ inner, rhs }) => {
     const rhsIsCp = isChildProcessNamespaceExpr(rhs, cpNames);
-    for (const raw of splitTopLevelArgs(inner)) {
+    for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
       const binding = parseObjectBinding(raw, text);
-      if (!binding || !binding.dest) continue;
-      if (binding.src && isSpawnName(binding.src, [...names])) addAlias(binding.dest, binding.src);
-      else if (binding.opaque && rhsIsCp) addOpaque(binding.dest);
+      if (binding && binding.dest) {
+        if (binding.src && isSpawnName(binding.src, asNameList(names))) addAlias(binding.dest, binding.src);
+        else if (binding.opaque && rhsIsCp) addOpaque(binding.dest);
+        continue;
+      }
+      if (!rhsIsCp) continue;
+      const dest = guessBindingDest(raw);
+      if (dest) addOpaque(dest);
     }
   });
 }
 
 function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque) {
-  const take = (inner, rhs) => {
-    if (!rhs.startsWith('[')) return;
-    const close = matchBalanced(rhs, 0);
-    if (close < 0 || rhs.slice(close + 1).trim()) return;
-    const lhs = splitTopLevelArgs(inner);
-    const slots = splitTopLevelArgs(rhs.slice(1, close));
-    for (let i = 0; i < lhs.length && i < slots.length; i++) {
+  eachDestructure(text, '[', ({ inner, rhs }) => {
+    const rhsUnwrapped = unwrapParens(rhs);
+    const lhs = splitTopLevelArgs(stripJsComments(inner));
+    const failClosedDests = () => {
+      for (const raw of lhs) {
+        const dest = parseArrayDest(raw);
+        if (dest) addOpaque(dest);
+      }
+    };
+    if (!rhsUnwrapped.startsWith('[')) {
+      if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
+      return;
+    }
+    const close = matchBalanced(rhsUnwrapped, 0);
+    if (close < 0 || rhsUnwrapped.slice(close + 1).trim()) {
+      if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
+      return;
+    }
+    const slots = splitTopLevelArgs(rhsUnwrapped.slice(1, close));
+    for (let i = 0; i < lhs.length; i++) {
       const dest = parseArrayDest(lhs[i]);
       if (!dest) continue;
-      const info = spawnNameFromExpr(slots[i], names, cpNames, text);
+      const slot = slots[i] || '';
+      const info = spawnNameFromExpr(slot, names, cpNames, text);
       if (info.name) addAlias(dest, info.name);
       else if (info.opaque) addOpaque(dest);
+      else if (exprLooksUnprovenSpawn(slot, names, cpNames)) addOpaque(dest);
     }
-  };
-  eachDeclDestructure(text, '[', ({ inner, rhs }) => take(inner, rhs));
-  const bare = /(?:^|[;\n])\s*\[/g;
-  let m;
-  while ((m = bare.exec(text))) {
-    const open = text.indexOf('[', m.index);
-    if (open < 0) continue;
-    const end = matchBalanced(text, open);
-    if (end < 0) continue;
-    const eq = text.slice(end + 1).match(/^\s*=\s*/);
-    if (!eq) continue;
-    const rhsStart = end + 1 + eq[0].length;
-    const rhsEnd = scanRhsEnd(text, rhsStart);
-    take(text.slice(open + 1, end), text.slice(rhsStart, rhsEnd).trim());
-  }
+  });
 }
 
 function collectChildProcessReceivers(src) {
@@ -911,12 +1029,18 @@ function scanRhsEnd(text, start) {
     }
     if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
     if (c === '(') depthParen++;
-    else if (c === ')') { if (depthParen) depthParen--; }
-    else if (c === '[') depthBrack++;
-    else if (c === ']') { if (depthBrack) depthBrack--; }
-    else if (c === '{') depthBrace++;
-    else if (c === '}') { if (depthBrace) depthBrace--; }
-    else if (depthParen === 0 && depthBrack === 0 && depthBrace === 0) {
+    else if (c === ')') {
+      if (!depthParen) return i;
+      depthParen--;
+    } else if (c === '[') depthBrack++;
+    else if (c === ']') {
+      if (!depthBrack) return i;
+      depthBrack--;
+    } else if (c === '{') depthBrace++;
+    else if (c === '}') {
+      if (!depthBrace) return i;
+      depthBrace--;
+    } else if (depthParen === 0 && depthBrack === 0 && depthBrace === 0) {
       if (c === ';' || c === '\n') return i;
     }
   }
@@ -1496,6 +1620,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let destructureDefault = false;
       let computedDestructure = false;
       let arrayDestructure = false;
+      let quotedDestructure = false;
+      let commentDestructure = false;
+      let assignDestructure = false;
+      let arrayAliasDestructure = false;
+      let arrayParenDestructure = false;
+      let arrayAssignDestructure = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -1604,6 +1734,45 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\$\{/.test(src)
           && r.scanned > 0 && !r.ok
         ) arrayDestructure = true;
+        if (
+          /['"`]exec['"`]\s*:\s*[A-Za-z_]/.test(src)
+          && !/\[\s*['"`]exec['"`]/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) quotedDestructure = true;
+        if (
+          /\bexec\s*\/\*/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) commentDestructure = true;
+        if (
+          /\(\s*\{/.test(src)
+          && /\[\s*['"`]exec['"`]\s*\]\s*:/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) assignDestructure = true;
+        if (
+          /\b(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w]*\s*\.\s*exec\b/.test(src)
+          && /\[[A-Za-z_][\w]*\]\s*=\s*\[[A-Za-z_][\w]*\]/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) arrayAliasDestructure = true;
+        if (
+          /\[\s*\(\s*[A-Za-z_][\w]*\s*\.\s*exec/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) arrayParenDestructure = true;
+        if (
+          /\(\s*\[[^\]]+\]\s*=/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) arrayAssignDestructure = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -1639,6 +1808,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!destructureDefault) problems.push('red/ 没点出解构默认值别名（exec: run = fallback）');
       if (!computedDestructure) problems.push('red/ 没点出计算键解构别名（["exec"]: run）');
       if (!arrayDestructure) problems.push('red/ 没点出数组解构别名（[run] = [cp.exec]）');
+      if (!quotedDestructure) problems.push('red/ 没点出字符串键解构别名（"exec": run）');
+      if (!commentDestructure) problems.push('red/ 没点出带注释的解构别名（exec /* comment */: run）');
+      if (!assignDestructure) problems.push('red/ 没点出对象解构赋值（({ ["exec"]: run } = cp)）');
+      if (!arrayAliasDestructure) problems.push('red/ 没点出数组解构别名链（[run] = [fn]）');
+      if (!arrayParenDestructure) problems.push('red/ 没点出数组解构括号（[(cp.exec)]）');
+      if (!arrayAssignDestructure) problems.push('red/ 没点出数组解构赋值（([run] = [cp.exec])）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

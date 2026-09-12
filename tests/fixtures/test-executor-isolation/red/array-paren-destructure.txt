@@ -1,0 +1,5 @@
+/* 审官对抗样本：数组解构括号。右值 (cp.exec) 不是裸成员访问，会 scanned:0。
+const cp = require("node:child_process");
+const [run] = [(cp.exec)];
+run(`node scripts/dao.mjs ${getVerb()}`, { env: { PATH: "/bin" } });
+*/
