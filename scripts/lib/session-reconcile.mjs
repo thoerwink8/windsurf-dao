@@ -67,11 +67,15 @@ export function desiredFromEvents(events) {
       identity: e.identity || null,
       issue: issueOfDispatch(e),
       pr: prOfDispatch(e),
+      repo: e.repo || null,
+      branch: e.branch || null,
       card_name: cardNameOf(e) || null,
       terminal: e.terminal || null,
       dispatch_id: e.dispatch_id || null,
       ts: e.ts || null,
       model: e.model || null,
+      reviewer: e.reviewer || null,
+      role: e.work_type || e.role || null,
     });
   }
   return { unscanned: false, items };
@@ -176,6 +180,14 @@ function asNumberSet(v) {
   return new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0));
 }
 
+/** 差集项对应的开放 PR：只认 desired 上记下的 PR 号，对不上就是没有，不猜。 */
+export function openPrMatchingDesired(d, openPrs) {
+  if (!d || !Array.isArray(openPrs)) return null;
+  const want = Number(d.pr);
+  if (!Number.isInteger(want) || want <= 0) return null;
+  return openPrs.find((p) => p && Number(p.number) === want) || null;
+}
+
 /**
  * 审官静默要不要重起（#1043 现场 B）。
  * 目标 PR 已不在开放名单 = 干完了，不报警不重起。
@@ -260,7 +272,9 @@ export function planReconcile({
   let used = Number(dispatchedThisRound) || 0;
   const cap = Number.isInteger(maxPerRound) && maxPerRound > 0 ? maxPerRound : 2;
   for (const [issue, d] of byIssue) {
-    if (!open.has(issue)) continue; // 单已关：不是漏救，是完工
+    const matchedPr = openPrMatchingDesired(d, openPrs);
+    // 单已关且没有对应开放 PR：完工。单已关但 PR 还开着：差集仍要按 PR 标签消费。
+    if (!open.has(issue) && !matchedPr) continue;
     if (queued.has(issue)) continue; // 本轮已经要派，不造第二份
     if (delivered.has(issue)) continue; // 已交卷等审查/合并；判红返工走独立的 PR 路径。
     const live = hasLiveExecutor({ sessions, issue, pr: d.pr });
@@ -273,6 +287,9 @@ export function planReconcile({
     used += 1;
     redispatches.push({
       issue,
+      pr: (matchedPr && matchedPr.number) || d.pr || null,
+      repo: d.repo || null,
+      branch: d.branch || null,
       job_id: d.job_id,
       model: d.model || null,
       why: `#${issue} 账上有未结派工 ${d.job_id}，名单里没有活会话——差集重派`,

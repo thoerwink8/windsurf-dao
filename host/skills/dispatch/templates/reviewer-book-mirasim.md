@@ -54,6 +54,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
   - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
   - 判定落成后不要待在会话里等下一句——交卷侧会停会话；你这边落判定即下班。
+  - 选型只读 PR 自己的 `model/*` `reviewer/*`（#1116）。指挥官 squash 前跑 `dao pr-sync-labels`（按仓+分支从账本打标；缺完整记录需人工打标，不读 issue）。你这边不打标、不合。
 
 ### 2. 收尾（mirasim 版：无 orchestration 结算）
 

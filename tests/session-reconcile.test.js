@@ -32,6 +32,7 @@ it('failed rework still recovers on unchanged head despite a passing CI', async 
     const issue = { number: 1167, title: '任务', body: '', labels: ['已消歧','model/grok-4.6','reviewer/gpt-5.6-luna'].map(name => ({ name })) };
     const pr = { number: 1190, title: '修复', body: '署名 issue #1167', isDraft: false,
       headRefOid: 'same-head', mergeable: scenario === 'refreshed-conflict' ? 'UNKNOWN' : scenario === 'conflict' ? 'CONFLICTING' : 'MERGEABLE',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }, { name: 'type/写码' }],
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] };
     const r = decide({ github: { scanned: true, issues: [issue], prs: [pr] },
       trees: { scanned: true, worktrees: [] }, reviewPending: { scanned: true, items: [] }, stall: { scanned: true, strikes: {} },
@@ -102,6 +103,25 @@ describe('期望集：只读未结 job.dispatch', () => {
       dispatch({ issue_number: null, card_name: 'ISSUE-#1043 拿代理指标当事实' }),
     ]);
     assert.equal(r.items[0].issue, 1043);
+  });
+
+  it('保留 PR/仓/分支/审官，给差集消费方定位 PR', async () => {
+    const S = await LOAD;
+    const r = S.desiredFromEvents([
+      dispatch({
+        issue_number: 1116,
+        pr_number: 1118,
+        repo: 'acme/repo',
+        branch: 'dao-1',
+        reviewer: 'new-reviewer',
+        work_type: '写码',
+      }),
+    ]);
+    assert.equal(r.items[0].pr, 1118);
+    assert.equal(r.items[0].repo, 'acme/repo');
+    assert.equal(r.items[0].branch, 'dao-1');
+    assert.equal(r.items[0].reviewer, 'new-reviewer');
+    assert.equal(r.items[0].role, '写码');
   });
 
   it('审官 job_id=gh-pr-N-review 认出 PR', async () => {
@@ -232,6 +252,36 @@ describe('差集：该在却不在 → 重派；查不成零重派', () => {
     const S = await LOAD;
     const r = S.planReconcile({ desired, sessions: [], openIssues: [] });
     assert.deepEqual(r.redispatches, []);
+  });
+
+  it('单已关但对应 PR 还开着 → 仍列入差集（消费方读 PR 标签）', async () => {
+    const S = await LOAD;
+    const r = S.planReconcile({
+      desired,
+      sessions: [],
+      openIssues: [],
+      openPrs: [{ number: 885, body: '署名 issue #885', isDraft: true, reworkRequired: true }],
+    });
+    assert.equal(r.redispatches.length, 1);
+    assert.equal(r.redispatches[0].issue, 885);
+    assert.equal(r.redispatches[0].pr, 885);
+  });
+
+  it('差集项带上 PR/仓/分支，不把选型钉在事件账的旧 model 上', async () => {
+    const S = await LOAD;
+    const r = S.planReconcile({
+      desired: [{
+        job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 10,
+        repo: 'acme/repo', branch: 'dao-1', model: 'old-worker',
+      }],
+      sessions: [],
+      openIssues: [885],
+      openPrs: [{ number: 10, body: '署名 issue #885', isDraft: true, reworkRequired: true }],
+    });
+    assert.equal(r.redispatches.length, 1);
+    assert.equal(r.redispatches[0].pr, 10);
+    assert.equal(r.redispatches[0].repo, 'acme/repo');
+    assert.equal(r.redispatches[0].branch, 'dao-1');
   });
 
   it('审官未结不走差集重派（现场 B 归 shouldRestartReviewer）', async () => {

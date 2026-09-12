@@ -86,14 +86,18 @@ describe('marshal-issue-identity', () => {
     });
 
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    await t.test('mirasim 派工打 stampIssueLabels 走 marshal 网关', () => {
+    await t.test('mirasim 给 issue 打 type/ 走 marshal（#1205/#1207），不打 model/reviewer（#1116）', () => {
       const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
+      const i = mira.indexOf('stampIssueLabels(');
+      const stamp = i >= 0 ? mira.slice(i, mira.indexOf(';', i) + 1) : '';
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
-      assert.match(mira, /stampIssueLabels\(/, 'mirasim 派工补 type');
-      assert.match(mira, /preserveType:\s*true/, '已有 type 不许覆盖');
+      assert.ok(stamp, '#1205 缺 type/ 时补盘面');
+      assert.match(stamp, /preserveType:\s*true/, '已有 type/ 不覆盖');
       assert.match(mira, /runGh:\s*ghRunnerForTarget\([^,]+,\s*\{\s*role:\s*'marshal'\s*\}\)/,
         'mirasim 打 label 身份 marshal（跨仓走 ForTarget）');
       assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
+      assert.doesNotMatch(stamp, /\bmodel:/, '不把 model 打到 issue');
+      assert.doesNotMatch(stamp, /\breviewer:/, '不把 reviewer 打到 issue');
     });
     await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
       assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);

@@ -128,10 +128,9 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(one.ok === true && one.modelId === 'grok-4.6', JSON.stringify(one));
     });
     const dup = S.requireWorkerModel(['model/grok-4.6', 'type/写码', 'model/grok-4.6', 'reviewer/kimi-k3']);
-    await t.test('同名 model/* 出现两次（署两张单）→ 仍是一个模型', () => {
-      assert.equal(dup.ok, true);
-      assert.equal(dup.state, 'one');
-      assert.equal(dup.modelId, 'grok-4.6');
+    await t.test('同名 model/* 出现两次 → many（单一来源不该重复，重复就是歧义）', () => {
+      assert.equal(dup.ok, false);
+      assert.equal(dup.state, 'many');
     });
     const many = S.requireWorkerModel(['model/grok-4.6', 'model/pi-v2']);
     await t.test('两个不同的 model/* → many，不许猜', () => {
@@ -139,10 +138,9 @@ describe('#679 起审官同厂硬闸', () => {
       assert.equal(many.state, 'many');
     });
     const revDup = S.pickReviewer(['reviewer/kimi-k3', 'type/写码', 'reviewer/kimi-k3']);
-    await t.test('同名 reviewer/* 出现两次 → 仍是一个审官', () => {
-      assert.equal(revDup.ok, true);
-      assert.equal(revDup.state, 'one');
-      assert.equal(revDup.modelId, 'kimi-k3');
+    await t.test('同名 reviewer/* 出现两次 → many（单一来源不该重复）', () => {
+      assert.equal(revDup.ok, false);
+      assert.equal(revDup.state, 'many');
     });
   });
 
@@ -413,10 +411,9 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(fromLabel.ok && fromLabel.source === 'label' && fromLabel.modelId === 'kimi-k3', JSON.stringify(fromLabel));
     });
     const fromDup = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'model/kimi-k3'] });
-    await t.test('同名 model/* 收集两遍仍认唯一', () => {
-      assert.equal(fromDup.ok, true);
-      assert.equal(fromDup.source, 'label');
-      assert.equal(fromDup.modelId, 'kimi-k3');
+    await t.test('同名 model/* 收集两遍 → many（#1116 不再去重）', () => {
+      assert.equal(fromDup.ok, false);
+      assert.equal(fromDup.state, 'many');
     });
     const unscanned = resolveActualWorkerModel({});
     await t.test('两边都没有 → 没查成，不许从卡名猜', () => {

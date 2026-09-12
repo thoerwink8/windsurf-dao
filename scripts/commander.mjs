@@ -142,17 +142,17 @@ function scanGithub() {
 }
 
 /**
- * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为查它们的 reviewer/ 标签。
+ * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为读它们的正文（merge-policy / human_holds）。
+ * 选型（model/reviewer）只读 PR 自己的 label（#1116），不再从这里反推。
  *
- * 主查询是 `issues(states: OPEN)`，所以单子一关标签就查不到。2026-09-05 实咬：
- * #945/#947/#909 的署名单 #833/#815/#889 都关了，标签明明带着 reviewer/gpt-5.6-luna，
- * 指挥官每轮报「不猜审官」，三张交卷可合的 PR 无限期挂着。**单子关了不等于 PR 不用审。**
+ * 主查询是 `issues(states: OPEN)`，所以单子一关正文就查不到。2026-09-05 实咬：
+ * #945/#947/#909 的署名单 #833/#815/#889 都关了，PR 还要审、还要返工。**单子关了不等于 PR 不用审。**
  *
  * 为什么不把主查询改成 OPEN+CLOSED：那张表按 UPDATED_AT 取前 100 条，掺进关闭单会把
  * open 单挤出视野——修一个洞捅一个更大的。这里改成按需精确取，条数上限就是 open PR 数。
  *
  * 取回来的单**单独放一格**，绝不并进 issues：那是派工候选表，混进已关闭的「已消歧」单
- * 会被当成新活派出去。取不到就留空，让上游照旧说「不猜审官」——查不到 ≠ 猜一个。
+ * 会被当成新活派出去。取不到就留空——查不到 ≠ 猜一个。
  */
 function scanAttributedIssues(issues, prs) {
   const have = new Set((issues || []).map((i) => i && i.number).filter(Boolean));
@@ -164,7 +164,7 @@ function scanAttributedIssues(issues, prs) {
   const out = [];
   for (const n of want) {
     const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
-    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    if (!r.ok) continue; // 取不到就当没有：正文读不到就不猜 merge-policy，选型不读这里
     try {
       const j = JSON.parse(r.out || '{}');
       if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });
@@ -693,7 +693,9 @@ function execAction(action, { state, dryRun, log }) {
         '--spec', dispatchSpec(action.issue), '--confirm',
         ...dispatchMergePolicyArgs(action),
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
-        ...(action.reconcile ? ['--allow-dup'] : [])];
+        ...(action.reconcile ? ['--allow-dup'] : []),
+        // 仓键跟到执行口：跨仓不得回落默认仓。本仓带 --repo 与不传等价。
+        ...(action.repo ? ['--repo', String(action.repo)] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
@@ -1403,7 +1405,7 @@ export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}
  */
 function requestRereview(action, { state, dryRun, say }) {
   if (!action.reviewer) {
-    const error = `PR #${action.pr} 要复审，但署名 issue 上没有 reviewer/ 标签——不猜审官`;
+    const error = `PR #${action.pr} 要复审，但 PR 上没有 reviewer/ 标签——需人工打标，不猜审官`;
     say(`  ${error}`);
     return { ok: false, error };
   }

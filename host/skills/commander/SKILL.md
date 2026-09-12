@@ -59,7 +59,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
   （判绿只对当时那个 commit 有效，判红同理）。head 或 review 的 commit_id 没查成 ⇒ 按「没查成」走，
   既不清零也不当仍红。
 - **同一 PR 同一 head 只派一次**（记账 `rework:<pr>@<oid>`）；单轮上限沿用 `maxDispatchPerRound`。
-  红项全文取不到 / 署名 issue 的 model|reviewer 标签取不到 / 模型不在选型 —— 一律不派，各自 fail-visible。
+  红项全文取不到 / PR 的 model|reviewer 标签取不到 / 模型不在选型 —— 一律不派，各自 fail-visible。
 - 派工失败或成没成没查成 ⇒ 同 head **不自动重派**（会造重复工人），改报帅，人来定。
 
 **红项写不清楚时没人替工人翻译**——那是审官该被纠的问题（审官标准要求红项写「`文件:行号` + 现象 + 期望改法」），

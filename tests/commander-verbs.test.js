@@ -679,22 +679,22 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     assert.equal(r.actions.filter((a) => a.kind === 'escalate' && a.reason === 'wake-exhausted').length, 0);
   });
 
-  it('交卷可合但署名单缺 reviewer/ → add-label，不空转 rereview', async () => {
+  it('交卷可合但 PR 缺 reviewer/ → add-label 打到 PR，不空转 rereview', async () => {
     const { decide } = await CORE;
     const HEAD = '749662d242db4d56f746d016b9c3dda00355774d';
     const r = decide(sit({
       github: {
         scanned: true,
         issues: [],
-        attributedIssues: [{ number: 833, title: '撞限流', labels: [{ name: 'model/grok-4.6' }, { name: '已消歧' }] }],
-        prs: [{ number: 945, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #833' }],
+        attributedIssues: [{ number: 833, title: '撞限流', body: '', labels: [{ name: 'model/grok-4.6' }, { name: '已消歧' }] }],
+        prs: [{ number: 945, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #833', labels: [{ name: 'model/grok-4.6' }] }],
       },
       prReviews: { scanned: true, byPr: { 945: { reviews: [] } } },
     }));
     const add = r.actions.filter((a) => a.kind === 'add-label');
     assert.equal(add.length, 1, JSON.stringify(r.actions));
-    assert.equal(add[0].issue, 833);
     assert.equal(add[0].pr, 945);
+    assert.equal(add[0].issue, undefined, '选型补标打到 PR，不打 issue');
     assert.deepEqual(add[0].labels, ['reviewer/gpt-5.6-luna']);
     assert.equal(r.actions.filter((a) => a.kind === 'rereview').length, 0, '标签没补上就叫审官是空转');
   });

@@ -193,67 +193,74 @@ describe('dao 审官与完工', () => {
       assert.ok(skip.ok === false && skip.skipped === true, '打标没合法 issue 号 → skipped 不瞎打  →  ' + JSON.stringify(skip));
     });
 
-    // 合并侧同步：stub runGh（PR 正文 Closes #7，issue #7 有 model+type）。
+    // #1116：PR head 分支 → 账本 dispatch → 打标。不读 issue。
     const calls2 = [];
     const syncGh = (a) => {
       calls2.push(a.slice());
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '修 X', body: 'Closes #7\n验收：过' }) };
-      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: '已消歧' }] }) };
+      if (a[0] === 'pr' && a[1] === 'view') {
+        return { ok: true, out: JSON.stringify({ title: '修 X', body: 'Closes #7\n验收：过', labels: [], headRefName: 'dao-7' }) };
+      }
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
+      if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const synced = S.syncPrLabelsFromIssue({ pr: '7', runGh: syncGh });
-    await t.test('pr-sync-labels：从署名 issue 把 model/type 抄到 PR（非 model/type 不抄）',
+    const events7 = [{ type: 'job.dispatch', identity: '工人', branch: 'dao-7', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码' }];
+    const synced = S.stampPrLabelsFromDispatch({ pr: '7', repo: 'thoerwink8/windsurf-dao', runGh: syncGh, events: events7, ensureLabels: S.ensureRepoLabels });
+    await t.test('pr-sync-labels：按仓+分支从账本打 model/type/reviewer 到 PR，不读 issue',
       () => {
-        assert.ok(synced.ok === true && synced.labels.length === 2 && synced.labels.includes('model/grok-4.6') && synced.labels.includes('type/写码')
-        && calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')),
-        'pr-sync-labels：从署名 issue 把 model/type 抄到 PR（非 model/type 不抄）  →  ' + JSON.stringify({ synced, calls2 }));
+        assert.equal(synced.ok, true, JSON.stringify(synced));
+        assert.equal(synced.labels.includes('model/grok-4.6'), true);
+        assert.equal(synced.labels.includes('type/写码'), true);
+        assert.equal(synced.labels.includes('reviewer/gpt-5.6-luna'), true);
+        assert.equal(calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')), true);
+        assert.equal(calls2.some(a => a[0] === 'issue'), false, JSON.stringify(calls2));
       });
 
-    // PR 没署名单号 → 说清楚，不许静默。
-    const noRef = S.syncPrLabelsFromIssue({ pr: '9', runGh: (a) => {
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '无署名', body: '改动：修 bug' }) };
-      return { ok: false, error: `未预期 ${a.join(' ')}` };
-    } });
-    await t.test('pr-sync-labels 无署名单号 → 报错需人工补', () => {
-      assert.ok(noRef.ok === false && /Closes|署名/.test(noRef.error), 'pr-sync-labels 无署名单号 → 报错需人工补  →  ' + JSON.stringify(noRef));
+    const noRef = S.stampPrLabelsFromDispatch({
+      pr: '9',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [],
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: '无署名', body: '改动：修 bug', labels: [], headRefName: 'hand-9' }) };
+        }
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    await t.test('账本没有该分支 → 拒且话面需人工打标', () => {
+      assert.equal(noRef.ok, false, JSON.stringify(noRef));
+      assert.match(String(noRef.error || ''), /需人工打标/);
     });
 
-    // 署名 issue 没有 model/type label → 说清楚。
-    const noLabel = S.syncPrLabelsFromIssue({ pr: '10', runGh: (a) => {
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10' }) };
-      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: '已消歧' }] }) };
-      return { ok: false, error: `未预期 ${a.join(' ')}` };
-    } });
-    await t.test('署名 issue 无 model/type → 报错需人工补', () => {
-      assert.ok(noLabel.ok === false && /model|type/.test(noLabel.error), '署名 issue 无 model/type → 报错需人工补  →  ' + JSON.stringify(noLabel));
+    const noLabel = S.stampPrLabelsFromDispatch({
+      pr: '10',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'other', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10', labels: [], headRefName: 'dao-10' }) };
+        }
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
     });
-
-    // CLI 级：pr-sync-labels --pr 42（fake-gh 固定：正文 Closes #565，565 带 model/type）→ 退出 0。
-    const FAKE_GH2 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
-    const cliSync = await cliInProc(['pr-sync-labels', '--pr', '42'], { DAO_GH_FAKE: FAKE_GH2 });
-    const pSync = (() => { try { return JSON.parse((cliSync.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到',
-      () => {
-        assert.ok(cliSync.status === 0 && pSync.ok === true && (pSync.labels || []).includes('model/grok-4.6') && (pSync.labels || []).includes('type/写码'),
-          'CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到  →  ' + `status=${cliSync.status} ${JSON.stringify(pSync)}`);
-      });
-    const cliSyncNoRef = await cliInProc(['pr-sync-labels', '--pr', '41'], { DAO_GH_FAKE: FAKE_GH2 });
-    const pSyncNoRef = (() => { try { return JSON.parse((cliSyncNoRef.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI pr-sync-labels 无署名单号 → 非 0 且说清',
-      () => {
-        assert.ok(cliSyncNoRef.status !== 0 && /署名/.test(String(pSyncNoRef.error || '')), 'CLI pr-sync-labels 无署名单号 → 非 0 且说清  →  ' + `status=${cliSyncNoRef.status} ${JSON.stringify(pSyncNoRef)}`);
-      });
+    await t.test('分支对不上账本 → 需人工打标', () => {
+      assert.equal(noLabel.ok, false, JSON.stringify(noLabel));
+      assert.match(String(noLabel.error || ''), /需人工打标/);
+    });
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
-    await t.test('dao.mjs mirasim 派工补 type 走 stampIssueLabels（#1205）', () => {
+    await t.test('dao.mjs mirasim 派工只给 issue 打 type/（#1205/#1207 盘面），不打 model/reviewer（#1116）', () => {
       const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
+      const i = mira.indexOf('stampIssueLabels(');
+      const stamp = i >= 0 ? mira.slice(i, mira.indexOf(';', i) + 1) : '';
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
-      assert.match(mira, /stampIssueLabels\(/, 'mirasim 派工补 type');
-      assert.match(mira, /preserveType:\s*true/, '已有 type 不被默认值盖掉');
+      assert.ok(stamp, '#1205 缺 type/ 时补盘面');
+      assert.match(stamp, /preserveType:\s*true/, '已有 type/ 不覆盖');
       assert.match(mira, /role:\s*'marshal'/, '打 label 身份 marshal');
       assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
+      assert.doesNotMatch(stamp, /\bmodel:/, '不把 model 打到 issue');
+      assert.doesNotMatch(stamp, /\breviewer:/, '不把 reviewer 打到 issue');
     });
     await t.test('pr-sync-labels 仍是 label 校准入口', () => {
       assert.ok(/function cmdPrSyncLabels/.test(daoSrcLabels), 'pr-sync-labels 动词还在');
@@ -275,10 +282,10 @@ describe('dao 审官与完工', () => {
       assert.ok(many.ok === false && many.state === 'many' && /多个 reviewer/.test(many.error), 'pickReviewer 有多个 → many，不许猜  →  ' + JSON.stringify(many));
     });
     const dup = S.pickReviewer(['reviewer/gpt-5.6-sol', 'reviewer/gpt-5.6-sol']);
-    await t.test('同名 reviewer/* 两次 → 一个，不是歧义', () => {
-      assert.equal(dup.ok, true);
-      assert.equal(dup.state, 'one');
-      assert.equal(dup.modelId, 'gpt-5.6-sol');
+    await t.test('同名 reviewer/* 两次 → many（单一来源不该重复，重复就是歧义）', () => {
+      assert.equal(dup.ok, false);
+      assert.equal(dup.state, 'many');
+      assert.match(String(dup.error || ''), /多个 reviewer/);
     });
     const unscanned = S.pickReviewer(null);
     await t.test('pickReviewer 没拿到列表 → unscanned，和「扫完 0 条」不同话',
@@ -318,58 +325,49 @@ describe('dao 审官与完工', () => {
       });
 
     const syncRevCalls = [];
-    const syncRev = S.syncPrLabelsFromIssue({
+    const syncRev = S.stampPrLabelsFromDispatch({
       pr: '8',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-8', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-sol', work_type: '写码' }],
+      ensureLabels: S.ensureRepoLabels,
       runGh: (a) => {
         syncRevCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #8' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: '已消歧' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #8', labels: [], headRefName: 'dao-8' }) };
+        }
         if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }]) };
         if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
-    await t.test('pr-sync-labels 抄 reviewer/*（已消歧仍不抄）',
+    await t.test('打标含 reviewer/*（已消歧不在账本决定里，不会打）',
       () => {
-        assert.ok(syncRev.ok === true && syncRev.labels.includes('reviewer/gpt-5.6-sol') && syncRev.labels.includes('model/grok-4.6')
-        && !syncRev.labels.includes('已消歧'),
-        'pr-sync-labels 抄 reviewer/*（已消歧仍不抄）  →  ' + JSON.stringify(syncRev));
+        assert.equal(syncRev.ok, true, JSON.stringify(syncRev));
+        assert.equal(syncRev.labels.includes('reviewer/gpt-5.6-sol'), true);
+        assert.equal(syncRev.labels.includes('model/grok-4.6'), true);
+        assert.equal(syncRev.labels.includes('已消歧'), false);
+        assert.equal(syncRevCalls.some(a => a[0] === 'issue'), false, JSON.stringify(syncRevCalls));
       });
 
     const onlyRevCalls = [];
-    const onlyRev = S.syncPrLabelsFromIssue({
+    const onlyRev = S.stampPrLabelsFromDispatch({
       pr: '11',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [],
       runGh: (a) => {
         onlyRevCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11', labels: [{ name: 'reviewer/gpt-5.6-sol' }], headRefName: 'hand-11' }) };
+        }
         if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
-    await t.test('pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit',
+    await t.test('账本没有该分支 → 拒且不调 pr edit',
       () => {
-        assert.ok(onlyRev.ok === false && /model/.test(onlyRev.error) && /type/.test(onlyRev.error)
-        && !onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
-        'pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit  →  ' + JSON.stringify({ onlyRev, onlyRevCalls }));
-      });
-
-    const modelOnlyCalls = [];
-    const modelOnly = S.syncPrLabelsFromIssue({
-      pr: '12',
-      runGh: (a) => {
-        modelOnlyCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #12' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }) };
-        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
-        return { ok: false, error: `未预期 ${a.join(' ')}` };
-      },
-    });
-    await t.test('pr-sync-labels 有 model 无 type → 拒且不调 pr edit',
-      () => {
-        assert.ok(modelOnly.ok === false && /type/.test(modelOnly.error)
-        && !modelOnlyCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
-        'pr-sync-labels 有 model 无 type → 拒且不调 pr edit  →  ' + JSON.stringify({ modelOnly, modelOnlyCalls }));
+        assert.equal(onlyRev.ok, false, JSON.stringify(onlyRev));
+        assert.match(String(onlyRev.error || ''), /需人工打标/);
+        assert.equal(onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'), false, JSON.stringify(onlyRevCalls));
       });
 
     const FAKE_GH3 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
@@ -460,8 +458,17 @@ describe('dao 审官与完工', () => {
         if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
           return { ok: true, out: JSON.stringify({ reviews: [] }) };
         }
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x',
+              body: 'Closes #565',
+              labels: [{ name: 'reviewer/gpt-5.6-sol' }, { name: 'model/grok-4.6' }],
+              headRefName: 'dao-42',
+            }),
+          };
+        }
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
@@ -600,8 +607,17 @@ describe('dao 审官与完工', () => {
         if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
           return { ok: true, out: JSON.stringify({ reviews: [{ id: 1, body: '判定：红 1 项' }] }) };
         }
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x',
+              body: 'Closes #565',
+              labels: [{ name: 'reviewer/gpt-5.6-sol' }, { name: 'model/grok-4.6' }],
+              headRefName: 'dao-46',
+            }),
+          };
+        }
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });

@@ -171,8 +171,8 @@ export function judgeCapacityFailover({ requested, capacityFailover } = {}) {
 /**
  * 生产路径选人（#1122）：上一位死于满载/看门狗时，按顺位取下一位。
  *
- * 闸口 `judgeCapacityFailover` 只回答「点名的这位过不过」——调用方仍拿 issue 标签上的
- * luna 去起，永远过不了「请求的必须等于下一位」。本函数才是换厂的腿：
+ * 闸口 `judgeCapacityFailover` 只回答「点名的这位过不过」——调用方仍拿 PR 自己的
+ * reviewer/*（#1116）去起，永远过不了「请求的必须等于下一位」。本函数才是换厂的腿：
  *   - 没点名、或点的就是刚死的那位 → 取下一位（标签还钉着死人，这是默认路径）
  *   - 点名的正好是下一位 → 放行
  *   - 点名是更靠前的（标签还钉着更早一跳死掉的那位）→ 仍取下一位

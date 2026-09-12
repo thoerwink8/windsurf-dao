@@ -215,6 +215,22 @@ export function githubRemoteUrlOf(ownerName) {
   return `https://github.com/${s}.git`;
 }
 
+/** git remote URL → GitHub owner/name。推不出就没查成，不许猜。 */
+export function ownerNameFromRemoteUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return { ok: false, unscanned: true, error: 'git remote 空（没查成，不许猜）' };
+  const stripped = s.replace(/\.git$/i, '').replace(/\/+$/, '');
+  const m = stripped.match(/github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/i);
+  if (!m) {
+    return { ok: false, unscanned: true, error: `git remote 推不出 owner/name：${s}` };
+  }
+  const parsed = parseOwnerNameRepo(`${m[1]}/${m[2]}`);
+  if (!parsed.ok || parsed.omitted) {
+    return { ok: false, unscanned: true, error: `git remote 推不出 owner/name：${s}` };
+  }
+  return { ok: true, ownerName: parsed.ownerName, owner: parsed.owner, name: parsed.name };
+}
+
 /**
  * #1024：gh 参数按目标仓钉死。不传 / 空 = 原样（本仓 cwd 语义一字不变）。
  * 已有 --repo 不重复插。非法格式当场拒，不许拼半截。

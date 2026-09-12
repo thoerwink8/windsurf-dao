@@ -62,6 +62,7 @@ import {
   argsRepoList,
   resolveRepoSelector,
   parseOwnerNameRepo,
+  ownerNameFromRemoteUrl,
   assertRepoAuthorized,
   splitRepoTarget,
   resolveLocalCheckout,
@@ -192,7 +193,8 @@ import {
   encodeSendText,
   runGh,
   stampIssueLabels,
-  syncPrLabelsFromIssue,
+  stampPrLabelsFromDispatch,
+  ensureRepoLabels,
   resolveReviewerFromPr,
   resolveWorkerFromPr,
   planWorkerDone,
@@ -800,6 +802,8 @@ async function cmdDispatchMirasim(args, routing, gate) {
         ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
         card_name: cardName,
         branch,
+        reviewer: args.reviewer ?? null,
+        repo: resolveDispatchRepo(ghRepo) || null,
       },
     });
     if (!ledger.ok && !ledger.skipped) console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
@@ -844,8 +848,55 @@ function cmdDispatchBatch() {
   fail('orca 已退役，dispatch --batch 随 orca 编排一起删了');
 }
 
+function loadDispatchEventsForStamp() {
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    if (listed.unscanned) return { ok: false, unscanned: true, error: listed.error, events: [] };
+    return { ok: true, events: listed.events || [] };
+  } catch (e) {
+    return { ok: false, unscanned: true, error: String(e.message || e), events: [] };
+  }
+}
+
+/** 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。 */
+function resolveDispatchRepoName(explicit) {
+  const parsed = parseOwnerNameRepo(explicit);
+  if (parsed.ok && !parsed.omitted) return { ok: true, ownerName: parsed.ownerName };
+  const remote = gitRemoteOriginUrl(thisCheckoutRoot());
+  if (!remote.ok) {
+    return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${remote.error}` };
+  }
+  return ownerNameFromRemoteUrl(remote.url);
+}
+
+function resolveDispatchRepo(explicit) {
+  const r = resolveDispatchRepoName(explicit);
+  return r.ok ? r.ownerName : null;
+}
+
+/** #1116：仓 + PR head 分支 → 账本 dispatch → 打标。查不到完整记录不猜。 */
+function stampPrFromLedger({ pr, runGh, repo } = {}) {
+  const listed = loadDispatchEventsForStamp();
+  if (!listed.ok) return listed;
+  const resolved = resolveDispatchRepoName(repo);
+  if (!resolved.ok) return resolved;
+  return stampPrLabelsFromDispatch({
+    pr,
+    runGh,
+    events: listed.events,
+    ensureLabels: ensureRepoLabels,
+    repo: resolved.ownerName,
+  });
+}
+
 function cmdPrSyncLabels(args) {
-  const r = syncPrLabelsFromIssue({ pr: args.pr, runGh: ghRunner() });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'pr-sync-labels', defaultLocal: thisCheckoutRoot() });
+  const r = stampPrFromLedger({
+    pr: args.pr,
+    runGh: ghRunnerForTarget(targetRepo, { role: 'worker' }),
+    repo: targetRepo.ownerName,
+  });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
 }
@@ -1754,6 +1805,13 @@ async function cmdReviewerCreateMirasim(args) {
   const bind = bindExecutor({ executor: named.name, routing });
   if (!bind.ok) fail(bind.error, { executor: named.name });
 
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
+  // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
+
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
@@ -1933,6 +1991,11 @@ async function cmdWorkerDoneMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。

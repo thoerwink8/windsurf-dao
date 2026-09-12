@@ -524,8 +524,7 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
       model: 'grok-4.6',
       runGh: () => ({ ok: true, out: JSON.stringify({ title: 'x', body: '署名 issue #565', labels: [] }) }),
     });
-    // collectIssueLabelsFromPr 会先 pr view 再 issue view；上面的 runGh 对两种都返回同一 JSON。
-    // --model 显式指定时即使 label 读不全也用旗标。
+    // #1116：只读 PR 自己的 label；--model 显式指定时即使 label 读不全也用旗标。
     assert.ok(flagged.ok === true && flagged.source === 'flag' && flagged.modelId === 'grok-4.6',
       'attach --model 显式指定，不许猜 → ' + JSON.stringify(flagged));
 
