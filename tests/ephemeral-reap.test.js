@@ -88,6 +88,57 @@ describe('planTreeReaps', () => {
     assert.equal(r.items[0].issue, 9);
   });
 
+  it('同 issue 多树 + 一合一开 → 不清（对不上精确 PR）', async () => {
+    const { planTreeReaps, markTreesForMergedPrs } = await REAP;
+    const t1 = workerTree(9);
+    const t2 = workerTree(9, { path: '/home/orca/mirasim-worktrees/windsurf-dao/dao-9-2' });
+    const trees = markTreesForMergedPrs([t1, t2], [{ pr: 20, issue: 9 }]);
+    assert.equal(trees.filter((t) => t.mergedPr === 20).length, 0, JSON.stringify(trees));
+    const r = planTreeReaps({
+      trees,
+      sessions: [],
+      github: {
+        scanned: true,
+        issues: [{ number: 9 }],
+        prs: [
+          { number: 20, title: 'x', body: '署名 issue #9' },
+          { number: 21, title: 'y', body: '署名 issue #9' },
+        ],
+      },
+      mergedPrs: [20],
+    });
+    assert.equal(r.items.length, 0, JSON.stringify(r));
+    assert.ok(
+      r.skipped.some((s) => /开放 PR|精确/.test(s.why)),
+      JSON.stringify(r.skipped),
+    );
+  });
+
+  it('同 issue 多树：head 分支名对上已合 PR 的那棵才清', async () => {
+    const { planTreeReaps } = await REAP;
+    const r = planTreeReaps({
+      trees: [
+        workerTree(9),
+        workerTree(9, { path: '/home/orca/mirasim-worktrees/windsurf-dao/dao-9-2' }),
+      ],
+      sessions: [],
+      github: {
+        scanned: true,
+        issues: [{ number: 9 }],
+        prs: [
+          { number: 20, title: 'x', body: '署名 issue #9', headRefName: 'dao-9' },
+          { number: 21, title: 'y', body: '署名 issue #9', headRefName: 'dao-9-2' },
+        ],
+      },
+      mergedPrs: [20],
+    });
+    assert.equal(r.items.length, 1, JSON.stringify(r));
+    assert.equal(r.items[0].role, 'worker');
+    assert.equal(r.items[0].pr, 20);
+    assert.ok(r.items[0].path.endsWith('/dao-9'), r.items[0].path);
+    assert.ok(r.skipped.some((s) => String(s.path || '').endsWith('/dao-9-2')), JSON.stringify(r.skipped));
+  });
+
   it('工人树：单还开着 → 留着给返工', async () => {
     const { planTreeReaps } = await REAP;
     const r = planTreeReaps({
@@ -242,6 +293,49 @@ describe('decide 产 reap-tree', () => {
     const reapIdx = r.actions.findIndex((a) => a.kind === 'reap-tree' && a.role === 'worker');
     assert.ok(mergeIdx >= 0, '有 merge');
     assert.ok(reapIdx > mergeIdx, '工人树清在 merge 之后');
+  });
+
+  it('同 issue 两棵工人树 + 一合一开 → decide 不清工人树', async () => {
+    const { decide } = await CORE;
+    const r = decide({
+      github: {
+        scanned: true,
+        issues: [{
+          number: 9, title: '单', body: '',
+          labels: [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+        }],
+        prs: [{
+          number: 20, title: 'PR', body: '署名 issue #9', isDraft: false,
+          reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', headRefOid: 'abc',
+          statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+        }, {
+          number: 21, title: '另一张', body: '署名 issue #9', isDraft: true,
+          reviewDecision: null, mergeable: 'MERGEABLE', headRefOid: 'def',
+        }],
+      },
+      orca: { scanned: true, worktrees: [] },
+      trees: {
+        scanned: true,
+        worktrees: [
+          reviewerTree(20),
+          workerTree(9),
+          workerTree(9, { path: '/home/orca/mirasim-worktrees/windsurf-dao/dao-9-2' }),
+        ],
+      },
+      sessions: { scanned: true, items: [] },
+      reviewPending: { scanned: true, items: [] },
+      prReviews: { scanned: true, byPr: { 20: { reviews: [{ state: 'APPROVED', commit_id: 'abc' }] } } },
+      stall: { scanned: true, strikes: {} },
+      wakeCounts: {},
+      reworkDispatched: {},
+      commanderPolicy: { requireModelInRouting: false },
+      routingModels: ['grok-4.6', 'gpt-5.6-sol'],
+      healthRedModels: [],
+      admission: { ok: true, slots: 2, why: 'ok' },
+    });
+    const workerReaps = r.actions.filter((a) => a.kind === 'reap-tree' && a.role === 'worker');
+    assert.equal(workerReaps.length, 0, JSON.stringify(workerReaps));
+    assert.equal(r.actions.filter((a) => a.kind === 'merge' && a.pr === 20).length, 1);
   });
 });
 
@@ -398,6 +492,27 @@ describe('execReapTree fail-closed', () => {
 });
 
 describe('容量对比', () => {
+  it('初始有 incomplete、stop 成功、样本残留为 0', async () => {
+    const { leftoverIncompleteAfterStops, countLeftoverAfterHandoff } = await CAP;
+    const sessions = [{ key: 'pi:dead', state: 'incomplete', cwd: '/x/dao-900' }];
+    assert.equal(countLeftoverAfterHandoff(sessions, '/x/dao-900').count, 1);
+    const after = leftoverIncompleteAfterStops(sessions, [
+      { ok: true, sessionKey: 'pi:dead', workdir: '/x/dao-900' },
+    ]);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    assert.equal(after.count, 0);
+  });
+
+  it('stop 失败则残留仍是 1', async () => {
+    const { leftoverIncompleteAfterStops } = await CAP;
+    const after = leftoverIncompleteAfterStops(
+      [{ key: 'pi:dead', state: 'incomplete', cwd: '/x/dao-900' }],
+      [{ ok: false, sessionKey: 'pi:dead', workdir: '/x/dao-900' }],
+    );
+    assert.equal(after.ok, true);
+    assert.equal(after.count, 1);
+  });
+
   it('字段齐全算出差值；缺字段 unscanned', async () => {
     const { snapshotCapacity, compareCapacity } = await CAP;
     const before = snapshotCapacity({

@@ -24,6 +24,9 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
   if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');
   if (admit && !/capNewDispatchSlots/.test(admit)) problems.push('老单优先没有把新单槽位压到 1');
   if (reap && !/planTreeReaps/.test(reap)) problems.push('清树判据 planTreeReaps 丢了');
+  if (commander && !/leftoverIncompleteAfterStops/.test(commander)) {
+    problems.push('交卷残留没按 stop-session 结果重算');
+  }
   if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
   if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
   if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');

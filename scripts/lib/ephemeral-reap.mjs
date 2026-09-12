@@ -86,7 +86,99 @@ export function openListComplete(github) {
   return { ok: true, issues, prs };
 }
 
+function treeDirName(tree) {
+  return basename(normPath((tree && (tree.path || tree.worktreeId)) || ''));
+}
 
+function prHeadTail(pr) {
+  if (!pr) return null;
+  const raw = pr.headRefName || pr.headRef || pr.branch || pr.mergedPrHead || null;
+  if (!raw) return null;
+  const s = String(raw).replace(/\\/g, '/').replace(/^refs\/heads\//, '');
+  const tail = s.split('/').pop();
+  return tail || null;
+}
+
+function treeMatchesPrHead(tree, pr) {
+  const name = treeDirName(tree);
+  const tail = prHeadTail(pr);
+  return !!(name && tail && name === tail);
+}
+
+function workerSiblings(trees, issue) {
+  const out = [];
+  for (const t of Array.isArray(trees) ? trees : []) {
+    const id = identityOf(t);
+    if (id && id.kind === '工人' && id.number === issue) out.push(t);
+  }
+  return out;
+}
+
+function prsAttributedToIssue(prs, issue, { onlyMerged, merged } = {}) {
+  const out = [];
+  for (const p of Array.isArray(prs) ? prs : []) {
+    const n = Number(p && p.number);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    if (onlyMerged && !merged.has(n)) continue;
+    if (!onlyMerged && merged.has(n)) continue;
+    if (attributedIssueNumber(p) === issue) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * 工人树能不能按本轮已合 PR 清。
+ * 清必须挂到精确的 PR/树：对得上 head 分支名，或「一棵树 + 没有别的开放 PR」。
+ * 对不上 → fail-closed 留树（同单还有开放 PR 或多棵候选树时不走 mergedPr 快路）。
+ */
+function workerMergeReap({ tree, issue, trees, list, merged, mergedForIssue }) {
+  const siblings = workerSiblings(trees, issue);
+  const mergedPrs = list.ok ? prsAttributedToIssue(list.prs, issue, { onlyMerged: true, merged }) : [];
+  if (Number.isInteger(mergedForIssue) && merged.has(mergedForIssue)
+      && !mergedPrs.some((p) => Number(p.number) === mergedForIssue)) {
+    mergedPrs.push({
+      number: mergedForIssue,
+      headRefName: tree && tree.mergedPrHead ? tree.mergedPrHead : null,
+    });
+  }
+  if (mergedPrs.length === 0) return { hit: false };
+
+  const others = list.ok ? prsAttributedToIssue(list.prs, issue, { onlyMerged: false, merged }) : null;
+  const named = mergedPrs.filter((p) => treeMatchesPrHead(tree, p));
+  const namedOther = (others || []).filter((p) => treeMatchesPrHead(tree, p));
+  if (named.length === 1 && namedOther.length === 0) {
+    const prObj = named[0];
+    const clash = siblings.filter((t) => t !== tree && treeMatchesPrHead(t, prObj));
+    if (clash.length === 0) {
+      const pr = Number(prObj.number);
+      return {
+        hit: true, reap: true, pr,
+        why: `PR #${pr} 本轮合并且对上这棵树，工人树 #${issue} 无活会话`,
+      };
+    }
+  }
+
+  if (!list.ok) {
+    return { hit: true, reap: false, why: 'GitHub 盘面没查成，不能确认同单有没有别的开放 PR，工人树不清' };
+  }
+  if (others && others.length > 0) {
+    return {
+      hit: true, reap: false,
+      why: `同单还有开放 PR #${others[0].number}，不能按已合 PR 清这棵树`,
+    };
+  }
+  if (siblings.length > 1) {
+    return {
+      hit: true, reap: false,
+      why: `同单有 ${siblings.length} 棵工人树，对不上精确 PR，留树`,
+    };
+  }
+  const pr = Number(mergedPrs[0].number);
+  return {
+    hit: true, reap: true, pr,
+    why: `PR #${pr} 本轮合并，工人树 #${issue} 无活会话`,
+  };
+}
 
 /**
  * 产清树候选。调用方把结果 append 到动作清单末尾（merge 之后），exec 再核一次。
@@ -179,27 +271,23 @@ export function planTreeReaps({
       continue;
     }
 
-    // 工人树
+    // 工人树。刚决定 merge 的 PR 还在开放列表里；用 mergedPrs / mergedPr 正面确认。
+    // 同单可以有 dao-<N> / dao-<N>-2 多棵树，不能把一个已合 PR 盖到每一棵上。
     const issue = id.number;
-    const mergedHit = [...merged].find((pr) => {
-      const p = (list.ok ? list.prs : []).find((x) => Number(x && x.number) === pr);
-      return p ? attributedIssueNumber(p) === issue : false;
+    const mergedForIssue = (tree.mergedPr != null) ? Number(tree.mergedPr) : null;
+    const merge = workerMergeReap({
+      tree, issue, trees, list, merged,
+      mergedForIssue: Number.isInteger(mergedForIssue) && merged.has(mergedForIssue) ? mergedForIssue : null,
     });
-    // 刚决定 merge 的 PR 还在开放列表里；用 mergedPrs 正面确认。
-    if (mergedHit) {
+    if (merge.hit && merge.reap) {
       items.push({
-        kind: 'reap-tree', role: 'worker', pr: mergedHit, issue, path: tree.path,
-        why: `PR #${mergedHit} 本轮合并，工人树 #${issue} 无活会话`,
+        kind: 'reap-tree', role: 'worker', pr: merge.pr, issue, path: tree.path,
+        why: merge.why,
       });
       continue;
     }
-    // 调用方把「刚合的 PR 号 → 署名单」直接传进来（PR 循环里已经有 attributedIssueNumber）。
-    const mergedForIssue = (tree.mergedPr != null) ? Number(tree.mergedPr) : null;
-    if (Number.isInteger(mergedForIssue) && merged.has(mergedForIssue)) {
-      items.push({
-        kind: 'reap-tree', role: 'worker', pr: mergedForIssue, issue, path: tree.path,
-        why: `PR #${mergedForIssue} 本轮合并，工人树 #${issue} 无活会话`,
-      });
+    if (merge.hit) {
+      skipped.push({ path: tree.path, issue, why: merge.why });
       continue;
     }
 
@@ -221,19 +309,37 @@ export function planTreeReaps({
 
 /**
  * 把「本轮要合的 PR」标到工人树上，让 planTreeReaps 不用再从正文猜署名。
+ * 同 issue 多棵树时不把同一个 PR 盖到每一棵上——对得上 head 分支名才标，对不上留空。
  * 猜不出来就不要标——exec 仍会核 GitHub。
  */
 export function markTreesForMergedPrs(trees, mergedPairs) {
   if (!Array.isArray(trees) || !Array.isArray(mergedPairs)) return trees;
-  const byIssue = new Map();
+  const countByIssue = new Map();
+  for (const t of trees) {
+    const id = identityOf(t);
+    if (!id || id.kind !== '工人') continue;
+    countByIssue.set(id.number, (countByIssue.get(id.number) || 0) + 1);
+  }
+  const pairsByIssue = new Map();
   for (const p of mergedPairs) {
     if (!p || !Number.isInteger(p.issue) || !Number.isInteger(p.pr)) continue;
-    byIssue.set(p.issue, p.pr);
+    const arr = pairsByIssue.get(p.issue) || [];
+    arr.push(p);
+    pairsByIssue.set(p.issue, arr);
   }
   return trees.map((t) => {
     const id = identityOf(t);
     if (!id || id.kind !== '工人') return t;
-    const pr = byIssue.get(id.number);
-    return pr ? { ...t, mergedPr: pr } : t;
+    const pairs = pairsByIssue.get(id.number) || [];
+    if (pairs.length === 0) return t;
+    const named = pairs.filter((p) => treeMatchesPrHead(t, p));
+    if (named.length === 1) {
+      return { ...t, mergedPr: named[0].pr, mergedPrHead: prHeadTail(named[0]) };
+    }
+    if ((countByIssue.get(id.number) || 0) === 1 && pairs.length === 1) {
+      const p = pairs[0];
+      return { ...t, mergedPr: p.pr, mergedPrHead: prHeadTail(p) };
+    }
+    return t;
   });
 }

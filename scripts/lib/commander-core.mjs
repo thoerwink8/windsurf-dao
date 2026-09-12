@@ -1467,7 +1467,11 @@ function collectCandidates(situation) {
   // 清树放在 merge 之后：本轮刚决定合的 PR，exec 先 squash 再拆树。
   const mergedPairs = out.filter((a) => a.kind === 'merge' && Number.isInteger(a.pr)).map((a) => {
     const pr = (gh.prs || []).find((p) => p && Number(p.number) === Number(a.pr));
-    return { pr: a.pr, issue: attributedIssueNumber(pr) || a.approvalIssue || null };
+    return {
+      pr: a.pr,
+      issue: attributedIssueNumber(pr) || a.approvalIssue || null,
+      headRefName: pr && pr.headRefName ? String(pr.headRefName) : null,
+    };
   });
   const reaps = planTreeReaps({
     trees: markTreesForMergedPrs((treeFace && treeFace.worktrees) || [], mergedPairs),

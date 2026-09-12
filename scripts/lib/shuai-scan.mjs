@@ -51,6 +51,7 @@ query($owner: String!, $name: String!) {
         reviewDecision
         mergeable
         headRefOid
+        headRefName
         labels(first: 30) { nodes { name } }
         body
         commits(last: 1) {
@@ -168,6 +169,8 @@ export function normalizeGithubGraphql(data) {
       // headRefOid：判「审官那条红/绿是不是打在当前 head 上」的必需字段（#911 起）。
       // 取不到就是 null，判据侧按「没查成」走，绝不当成「head 变了」。
       headRefOid: typeof p.headRefOid === 'string' && p.headRefOid ? p.headRefOid : null,
+      // 同 issue 多棵工人树时用分支名对上精确的那一棵（dao-<N> / dao-<N>-2）。
+      headRefName: typeof p.headRefName === 'string' && p.headRefName ? p.headRefName : null,
       // #1147：draft 收口泵看「上次提交」，不是 PR.updatedAt（评论也会刷新 updatedAt）。
       // 取不到就是 null，decide 按「没查成」不泵，绝不当成「超龄」。
       lastCommittedAt: typeof commit?.committedDate === 'string' && commit.committedDate

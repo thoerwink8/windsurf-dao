@@ -60,20 +60,77 @@ export function compareCapacity(before, after) {
   };
 }
 
+function defaultStateOf(s) {
+  return String((s && (s.state || s.phase || '')) || '').toLowerCase();
+}
+
+function normDir(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 /** 交卷后残留：名单里 cwd 落在该树上、状态还是 incomplete。名单没查成 → unscanned。 */
 export function countLeftoverAfterHandoff(sessions, workdir, { stateOf } = {}) {
   if (!Array.isArray(sessions)) {
     return { ok: false, unscanned: true, count: 0, error: '会话名单没查成' };
   }
-  const want = String(workdir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const want = normDir(workdir);
   if (!want) return { ok: false, unscanned: true, count: 0, error: '没给交卷树路径' };
-  const read = typeof stateOf === 'function'
-    ? stateOf
-    : (s) => String((s && (s.state || s.phase || '')) || '').toLowerCase();
+  const read = typeof stateOf === 'function' ? stateOf : defaultStateOf;
   let count = 0;
   for (const s of sessions) {
-    const cwd = String((s && (s.cwd || s.workdir || s.worktree)) || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const cwd = normDir(s && (s.cwd || s.workdir || s.worktree));
     if (!cwd || (cwd !== want && !cwd.startsWith(`${want}/`))) continue;
+    if (read(s) === 'incomplete') count += 1;
+  }
+  return { ok: true, count };
+}
+
+/**
+ * 按 stop-session 的真实结果算交卷后残留。
+ * 成功停掉的会话不再算 incomplete；名单没查成 → unscanned。
+ * 有交卷树时走 countLeftoverAfterHandoff，不拿 cmdAct 开始时的原始名单当残留。
+ */
+export function leftoverIncompleteAfterStops(sessions, stopResults, { stateOf } = {}) {
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, count: 0, error: '会话名单没查成' };
+  }
+  const stopped = new Set();
+  const workdirs = [];
+  const seenDir = new Set();
+  for (const r of Array.isArray(stopResults) ? stopResults : []) {
+    if (!r) continue;
+    if (r.ok === true && r.dryRun !== true && r.sessionKey) stopped.add(String(r.sessionKey));
+    const wd = normDir(r.workdir);
+    if (wd && !seenDir.has(wd)) {
+      seenDir.add(wd);
+      workdirs.push(wd);
+    }
+  }
+  const remaining = sessions.map((s) => {
+    const key = s && (s.key || s.id || s.sessionKey);
+    if (key && stopped.has(String(key))) return { ...s, state: 'stopped', phase: 'stopped' };
+    return s;
+  });
+  const read = typeof stateOf === 'function' ? stateOf : defaultStateOf;
+
+  if (workdirs.length > 0) {
+    let count = 0;
+    for (const wd of workdirs) {
+      const r = countLeftoverAfterHandoff(remaining, wd, { stateOf: read });
+      if (!r.ok) return r;
+      count += r.count;
+    }
+    for (const s of remaining) {
+      if (read(s) !== 'incomplete') continue;
+      const cwd = normDir(s && (s.cwd || s.workdir || s.worktree));
+      if (cwd && workdirs.some((wd) => cwd === wd || cwd.startsWith(`${wd}/`))) continue;
+      count += 1;
+    }
+    return { ok: true, count };
+  }
+
+  let count = 0;
+  for (const s of remaining) {
     if (read(s) === 'incomplete') count += 1;
   }
   return { ok: true, count };

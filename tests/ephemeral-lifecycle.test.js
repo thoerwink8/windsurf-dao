@@ -55,6 +55,7 @@ describe('ephemeral-lifecycle', () => {
     assert.match(core, /FORBIDDEN_AUTO_KINDS[\s\S]*worktree-rm/);
     const commander = read('scripts/commander.mjs');
     assert.match(commander, /function execReapTree/);
+    assert.match(commander, /leftoverIncompleteAfterStops/);
     const admit = read('scripts/lib/admission.mjs');
     assert.match(admit, /capNewDispatchSlots/);
   });
@@ -122,6 +123,12 @@ describe('ephemeral-lifecycle', () => {
       exists,
     });
     assert.equal(noCap.includes('老单优先没有把新单槽位压到 1'), true, JSON.stringify(noCap));
+
+    const noLeftover = inspectEphemeralLifecycleSources({
+      files: { ...files, commander: files.commander.replace(/leftoverIncompleteAfterStops/g, 'leftoverGone') },
+      exists,
+    });
+    assert.equal(noLeftover.includes('交卷残留没按 stop-session 结果重算'), true, JSON.stringify(noLeftover));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {

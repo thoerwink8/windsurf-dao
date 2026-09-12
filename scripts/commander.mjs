@@ -48,7 +48,7 @@ import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
-import { snapshotCapacity } from './lib/ephemeral-capacity.mjs';
+import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-capacity.mjs';
 import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
@@ -332,10 +332,11 @@ function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
   } catch { /* 样本写不进不挡本轮判定 */ }
 }
 
-function leftoverIncomplete(situation) {
+function leftoverIncomplete(situation, stopResults) {
   const sec = situation && situation.sessions;
   if (!sec || sec.scanned !== true || !Array.isArray(sec.items)) return null;
-  return sec.items.filter((s) => sessionStateOf(s) === 'incomplete').length;
+  const r = leftoverIncompleteAfterStops(sec.items, stopResults, { stateOf: sessionStateOf });
+  return r.ok ? r.count : null;
 }
 
 function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
@@ -2595,10 +2596,18 @@ function cmdAct(argv) {
   }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
+  const stopResults = [];
   const ran = runActions(actions, {
     exec: (a) => {
       const r = execAction(a, { state, dryRun, log });
       if (a && a.kind === 'reap-tree' && (!r || r.ok !== true) && !(r && r.dryRun)) cleanupFailures += 1;
+      if (a && a.kind === 'stop-session') {
+        stopResults.push({
+          sessionKey: a.sessionKey || null,
+          workdir: a.workdir || null,
+          ok: !!(r && r.ok === true && r.dryRun !== true),
+        });
+      }
       return r;
     },
     log,
@@ -2669,7 +2678,7 @@ function cmdAct(argv) {
         ? (situation.sessions.items || []).length : null,
       worktrees: situation.trees && situation.trees.scanned === true
         ? (situation.trees.worktrees || []).length : null,
-      leftoverAfterHandoff: leftoverIncomplete(situation),
+      leftoverAfterHandoff: leftoverIncomplete(situation, stopResults),
       cleanupFailures,
     }));
   }
