@@ -271,6 +271,60 @@ describe('issue-gateway 写入契约', () => {
     assert.equal(r.stage, 'author_mismatch');
   });
 
+  // 2026-09-12 实咬：PR 上的评论回执是 /pull/ 形状。原来只认 /issues/，
+  // 「已发出、GitHub 也回了 URL」被判成没收到回执 → 调用方 fail-closed 卡死，
+  // 且幂等没记账 → 重跑再发一条（#1211 连发三条）。两半都要钉住。
+  const PR_RECEIPT = 'https://github.com/thoerwink8/windsurf-dao/pull/1211#issuecomment-5645762291\n';
+  function fakeMarshalPrReceipt() {
+    return {
+      runMarshal(args) {
+        const verb = args[1];
+        if (verb === 'comment') return { ok: true, out: PR_RECEIPT };
+        if (args[0] === 'api') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              user: { login: 'dao-marshal[bot]', type: 'Bot' },
+              html_url: PR_RECEIPT.trim(),
+            }),
+          };
+        }
+        return { ok: false, error: `未预期 ${args.join(' ')}` };
+      },
+    };
+  }
+
+  it('#1211：PR 评论回执走 /pull/ 形状，照样算收到回执（不再假红卡死交卷链）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshalPrReceipt();
+    const dir = tmp();
+    const r = G.issueComment({
+      repo: 'thoerwink8/windsurf-dao', issue: 1211, body: '完工：PR #1211',
+      host: 'claude', idempotency_key: 'pr-shape-1',
+    }, { dir, runMarshal: fake.runMarshal });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.url, PR_RECEIPT.trim());
+
+    // 同一 idempotency_key 重放不得再写——假红那阵正是靠幂等没记账而重复发言的。
+    const again = G.issueComment({
+      repo: 'thoerwink8/windsurf-dao', issue: 1211, body: '完工：PR #1211',
+      host: 'claude', idempotency_key: 'pr-shape-1',
+    }, { dir, runMarshal: () => { throw new Error('重放不该再调 gh'); } });
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.replay, true);
+  });
+
+  it('/pull/ 与 /issues/ 两种回执解析到同一套数（编号、comment id、url）', async () => {
+    const G = await LIB_LOAD;
+    const issue = G.parseCommentUrl('https://github.com/o/r/issues/42#issuecomment-9');
+    const pull = G.parseCommentUrl('https://github.com/o/r/pull/42#issuecomment-9');
+    // url 原样回显（两种形状各自保留），键与编号必须一致——下游只认这几个。
+    assert.equal(pull.url, 'https://github.com/o/r/pull/42#issuecomment-9');
+    assert.deepEqual({ ...pull, url: null }, { ...issue, url: null });
+    assert.equal(G.parseIssueUrl('https://github.com/o/r/pull/42').number, 42);
+    assert.equal(G.parseCommentUrl('https://github.com/o/r/pull/42'), null, '没有 #issuecomment 的不算评论回执');
+  });
+
   it('每次调用写审计，能区分宿主 / 动作 / 失败阶段', async () => {
     const G = await LIB_LOAD;
     const dir = tmp();

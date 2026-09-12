@@ -657,3 +657,80 @@ describe('#1014 复审票来源是写票时记下的事实', () => {
   });
 });
 
+
+describe('队列落点钉在主 clone：跑在 worktree 里也写同一份队列（2026-09-12 实咬）', () => {
+  const MC = import('file://' + path.join(REPO, 'scripts', 'lib', 'main-checkout.mjs').replace(/\\/g, '/'));
+  const RP = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/'));
+  const DQ = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch-queue.mjs').replace(/\\/g, '/'));
+
+  // 造一个真 git 仓 + 一棵挂在上面的真 worktree。判据必须来自真 git，
+  // 手搓的假 spawn 只能证明「我按我以为的形状调了」。
+  function repoWithWorktree() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-root-'));
+    gitIn(root, ['init', '-q']);
+    gitIn(root, ['config', 'user.email', 't@t']);
+    gitIn(root, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(root, 'f.txt'), 'x\n');
+    gitIn(root, ['add', 'f.txt']);
+    gitIn(root, ['commit', '-q', '-m', 'init']);
+    const wt = path.join(root, '..', `${path.basename(root)}-wt`);
+    const made = gitIn(root, ['worktree', 'add', '-q', '-b', 'side', wt]);
+    if (made.status !== 0) return null;
+    return { root: fs.realpathSync(root), wt: fs.realpathSync(wt) };
+  }
+
+  it('worktree 与主树推同一个主 clone 根', async () => {
+    const { mainCheckoutRoot } = await MC;
+    const r = repoWithWorktree();
+    if (!r) return; // 环境不支持 worktree：跳过，不假绿（下方真仓那条仍会跑）
+    const fromMain = mainCheckoutRoot({ treeRoot: r.root });
+    const fromWt = mainCheckoutRoot({ treeRoot: r.wt });
+    assert.equal(fromWt, fromMain, 'worktree 里推出来的主 clone 根必须与主树一致');
+  });
+
+  it('三个不同树根 → 同一个待审队列目录（这是本单治的病）', async () => {
+    const { reviewPendingDir } = await RP;
+    const a = reviewPendingDir({ root: '/srv/projects/windsurf-dao' });
+    const b = reviewPendingDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1152' });
+    const c = reviewPendingDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1174' });
+    assert.equal(b, a, `工人树里的票必须落回主树队列：${b} ≠ ${a}`);
+    assert.equal(c, a, `复审树里的票必须落回主树队列：${c} ≠ ${a}`);
+  });
+
+  it('派工单队列走同一把尺（同根因，同一处修）', async () => {
+    const { dispatchQueueDir } = await DQ;
+    const a = dispatchQueueDir({ root: '/srv/projects/windsurf-dao' });
+    const b = dispatchQueueDir({ root: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1152' });
+    assert.equal(b, a, `工人树里的派工单必须落回主树队列：${b} ≠ ${a}`);
+  });
+
+  it('显式 root 仍生效：指向一个真 worktree 时归到它的主 clone', async () => {
+    const { reviewPendingDir } = await RP;
+    const r = repoWithWorktree();
+    if (!r) return;
+    const dir = reviewPendingDir({ root: r.wt });
+    assert.ok(dir.startsWith(r.root), `worktree 根的队列必须落在主 clone 下：${dir} 不在 ${r.root}`);
+  });
+
+  it('env 覆盖优先（测试隔真仓的路不许被这次改动堵掉）', async () => {
+    const { reviewPendingDir } = await RP;
+    const { dispatchQueueDir } = await DQ;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-env-'));
+    assert.equal(
+      reviewPendingDir({ root: '/srv/projects/windsurf-dao', env: { DAO_REVIEW_PENDING_DIR: tmp } }),
+      tmp,
+      'DAO_REVIEW_PENDING_DIR 必须原样生效');
+    assert.equal(
+      dispatchQueueDir({ root: '/srv/projects/windsurf-dao', env: { DAO_DISPATCH_QUEUE_DIR: tmp } }),
+      tmp,
+      'DAO_DISPATCH_QUEUE_DIR 必须原样生效');
+  });
+
+  it('不在 git 仓里不炸：退回给的树根，不新造失败面', async () => {
+    const { mainCheckoutRoot } = await MC;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-nogit-'));
+    // 注意：非 git 目录下 `git rev-parse --git-common-dir` 会**退回 cwd**（不是失败），
+    // 所以这里给什么树根就该拿回什么——这条钉的是「不炸」，不是「探到 git」。
+    assert.equal(mainCheckoutRoot({ treeRoot: tmp }), tmp);
+  });
+});

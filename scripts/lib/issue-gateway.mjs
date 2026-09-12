@@ -108,14 +108,17 @@ export function marshalAuthorOk(author) {
   };
 }
 
-export function parseIssueUrl(text) {
-  const m = String(text || '').match(/https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/(\d+)/);
-  if (!m) return null;
-  return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]), url: m[0] };
-}
-
-export function parseCommentUrl(text) {
-  const m = String(text || '').match(/https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/(\d+)#issuecomment-(\d+)/);
+// 2026-09-12 实咬：PR 上的评论回执走的是 **pull** 形状——
+// `https://github.com/o/r/pull/1211#issuecomment-5645762291`。这里原来只认 `/issues/`，
+// 于是「评论已发出去、GitHub 也回了 URL」被判成 incomplete_receipt（没收到回执）。
+// 危害不止是文案：idempotency 只在成功路径记账，判失败就不记账，重跑会**再发一条**，
+// 而调用方拿到 ok:false 会 fail-closed 停在原地——worker-done 就卡在这一步，
+// 票没写、会话没停、交卷 comment 发了一串（#1211 连发三条的由来）。
+// pull 与 issues 在 GitHub 上是同一套编号与 comment id，形状收全即可。
+function parseCommentLike(text) {
+  const m = String(text || '').match(
+    /https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/(\d+)#issuecomment-(\d+)/,
+  );
   if (!m) return null;
   return {
     repo: `${m[1]}/${m[2]}`,
@@ -123,6 +126,16 @@ export function parseCommentUrl(text) {
     commentId: m[4],
     url: m[0],
   };
+}
+
+export function parseCommentUrl(text) {
+  return parseCommentLike(text);
+}
+
+export function parseIssueUrl(text) {
+  const m = String(text || '').match(/https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/(\d+)/);
+  if (!m) return null;
+  return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]), url: m[0] };
 }
 
 function fail(stage, error, extra = {}) {
