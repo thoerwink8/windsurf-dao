@@ -294,6 +294,92 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.ok(r.labels.includes('reviewer/gpt-5.6-luna'));
     assert.ok(!r.labels.includes('model/kimi-k3'));
   });
+
+  it('fork PR：headRepository 是来源仓，打标键用目标仓', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const { ensureRepoLabels } = await CARD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x',
+            body: '署名 issue #7',
+            labels: [],
+            headRefName: 'dao-7',
+            headRepository: { nameWithOwner: 'fork-owner/source-repo' },
+            url: 'https://github.com/base-owner/base-repo/pull/7',
+          }),
+        };
+      }
+      if (args[0] === 'label' && args[1] === 'list') {
+        return {
+          ok: true,
+          out: JSON.stringify([
+            { name: 'model/grok-4.6' },
+            { name: 'type/写码' },
+            { name: 'reviewer/gpt-5.6-luna' },
+          ]),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '7',
+      runGh,
+      repo: 'base-owner/base-repo',
+      ensureLabels: ensureRepoLabels,
+      events: [{
+        type: 'job.dispatch', identity: '工人', branch: 'dao-7', repo: 'base-owner/base-repo',
+        model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码',
+      }],
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.repo, 'base-owner/base-repo');
+    assert.ok(r.labels.includes('model/grok-4.6'));
+    assert.ok(r.labels.includes('reviewer/gpt-5.6-luna'));
+    assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), true);
+    assert.ok(!String(r.error || '').includes('fork-owner/source-repo'));
+  });
+
+  it('跨仓同名分支：PR URL 是另一仓时拒打标', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x',
+            body: '署名 issue #2',
+            labels: [],
+            headRefName: 'dao-1',
+            headRepository: { nameWithOwner: OTHER },
+            url: `https://github.com/${OTHER}/pull/2`,
+          }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '2',
+      runGh,
+      repo: REPO,
+      events: [{
+        type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO,
+        model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码',
+      }],
+    });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.error, /不许跨仓套标/);
+    assert.match(r.error, new RegExp(OTHER));
+    assert.ok(!calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), JSON.stringify(calls));
+  });
 });
 
 describe('选型路径零残留', () => {

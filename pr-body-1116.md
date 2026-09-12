@@ -20,6 +20,8 @@
   - 证据：`tests/pr-label-truth.test.js`「四处删除在仓内 grep 零命中」+ ready-queue-check 是 re-export
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
+- [x] fork PR 打标用目标/base 仓，不用 `headRepository`；跨仓同名分支防串标闸仍在
+  - 证据：`tests/pr-label-truth.test.js`「fork PR：headRepository 是来源仓，打标键用目标仓」ok；「跨仓同名分支：PR URL 是另一仓时拒打标」ok
 
 本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/marshal-issue-identity.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js tests/control-plane-gate.test.js tests/control-plane-check.test.js` → 核 338 + 指挥官/账本/收件箱及相关 738 绿。合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
 
@@ -63,6 +65,7 @@
 - [x] 返工（审官红 3）：缺 reviewer 打标 fail-visible；匹配键改仓+分支；identity 必须是工人。
 - [x] 返工（审官红 4）：差集重派只读对应 PR 的 model/reviewer/type，找不到 PR 或标签不齐走人工补标，不回退 issue；`pickWorkerDispatchByBranch` 取仓+分支最新一条再校验，后写残缺/身份非法不得回退旧完整记录。
 - [x] 返工（审官红 5）：补独立 `## 回流`；正文贴字面命令 `node scripts/handoff-check.mjs` 及输出末行。
+- [x] 返工（审官红 6）：`repoFromPrMeta` 仓键改取 PR URL 的目标/base 仓，不再用 `headRepository` 与 `--repo` 比较。fork PR（head 来源仓 ≠ 目标仓）照常打标；URL 指向另一仓仍拒（防串标）。
 
 ### handoff-check 真实输出
 
@@ -95,6 +98,6 @@
 
 ## 回流
 
-- 产物：仓 + 分支直接键（`pickWorkerDispatchByBranch`）和缺字段 fail-visible；差集侧配套 `correspondingPrForRedispatch`（仓 + PR 号，跨仓同号不套本仓 PR）。
+- 产物：仓 + 分支直接键（`pickWorkerDispatchByBranch`）和缺字段 fail-visible；差集侧配套 `correspondingPrForRedispatch`（仓 + PR 号，跨仓同号不套本仓 PR）。打标仓键认目标/base 仓（PR URL），不认 `headRepository`。
 - 为什么通用：① 工人交卷打标（`scripts/lib/dispatch/worker-done.mjs`：按仓+分支取最新 `job.dispatch`，缺 repo / identity / model / reviewer 当场失败并说需人工打标）；② 指挥官差集重派（`scripts/lib/commander-core.mjs`：按仓匹配对应开放 PR，只读该 PR 的 model/reviewer/type，找不到或标签不齐走人工补标）。两个入口共用「写一次、读同一处、读不到就拒」，不是只服务一个调用点。
 - 建议落点：留原仓 `scripts/lib/dispatch/worker-done.mjs` + `scripts/lib/commander-core.mjs`（已经是两个消费侧入口）。

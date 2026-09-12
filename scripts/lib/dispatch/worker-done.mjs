@@ -5,7 +5,8 @@
 // 决定在 dispatch 那一刻完整落账（model + reviewer + branch + repo）；PR 上的
 // model/* / reviewer/* 是给人看、也是选型唯一真相源（#1116）。
 // 选型只读 PR 自己的 label——不读 issue、不从宿主前缀猜家族。
-// 打标匹配键是 GitHub owner/name + 分支；缺 reviewer / 缺仓 / identity 不是工人都拒。
+// 打标匹配键是 GitHub owner/name（目标/base 仓，不是 headRepository）+ 分支；
+// 缺 reviewer / 缺仓 / identity 不是工人都拒。
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
 
 import { parseOwnerNameRepo } from './repo.mjs';
@@ -135,9 +136,8 @@ function normalizeDispatchRepo(raw) {
 }
 
 function repoFromPrMeta(meta) {
-  const nwo = meta && meta.headRepository && meta.headRepository.nameWithOwner;
-  const fromHead = normalizeDispatchRepo(nwo);
-  if (fromHead) return fromHead;
+  // 所属仓是目标/base 仓。headRepository 是 head 来源仓，fork PR 跟 --repo 比会误拒。
+  // gh pr view 没有 baseRepository，URL 指向目标仓。
   const url = String((meta && meta.url) || '');
   const m = url.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\b/i);
   return m ? normalizeDispatchRepo(m[1]) : '';
@@ -150,7 +150,7 @@ export function collectPrLabels({ pr, runGh } = {}) {
   if (typeof runGh !== 'function') {
     return { ok: false, unscanned: true, error: 'collectPrLabels 没拿到 gh 执行器（没查成，不许猜）' };
   }
-  const view = runGh(['pr', 'view', n, '--json', 'title,body,labels,headRefName,headRepository,url']);
+  const view = runGh(['pr', 'view', n, '--json', 'title,body,labels,headRefName,url']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
   const parsed = parseJsonOut(view.out, `gh pr view #${n}`);
   if (!parsed.ok) return { ok: false, unscanned: true, error: parsed.error };
