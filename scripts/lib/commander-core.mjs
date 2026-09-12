@@ -408,6 +408,23 @@ export function reviewerLabelFor(_gh = {}, pr) {
   return labelValue(pr, 'reviewer/');
 }
 
+/**
+ * 差集重派对应的开放 PR。记了 PR 号就按号找，对不上就是没有；
+ * 没记 PR 号时，署名单唯一命中一张才认。多张/零张都不猜，不回退 issue。
+ */
+export function correspondingPrForRedispatch(rd, prs) {
+  const list = Array.isArray(prs) ? prs : [];
+  if (rd && rd.pr != null) {
+    const n = Number(rd.pr);
+    if (!Number.isInteger(n) || n <= 0) return null;
+    return list.find((p) => p && Number(p.number) === n) || null;
+  }
+  const issue = Number(rd && rd.issue);
+  if (!Number.isInteger(issue) || issue <= 0) return null;
+  const hits = list.filter((p) => p && attributedIssueNumber(p) === issue);
+  return hits.length === 1 ? hits[0] : null;
+}
+
 // 声明式依赖表：每个动作 kind 的「必要节」——任一未 scanned，该动作在入口总闸一律不产。
 // notify-hub / land 是随附动作，产出处会用 _needs 显式继承主动作的依赖（下面 hub/withNeeds）。
 // escalate 是 fail-visible 出口、noop 是空态势——本身不依赖任何节。
@@ -1369,19 +1386,28 @@ function collectCandidates(situation) {
       }), N.dispatch));
     }
     for (const rd of plan.redispatches) {
-      const issue = (gh.issues || []).find((i) => i && i.number === rd.issue);
-      const model = labelValue(issue, 'model/');
-      const reviewer = labelValue(issue, 'reviewer/');
-      if (!issue || !model || !reviewer) {
-        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但 model/reviewer 没查成，不猜`, {
-          reason: 'missing-labels', issue: rd.issue,
+      // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
+      const pr = correspondingPrForRedispatch(rd, gh.prs);
+      if (!pr) {
+        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但找不到对应 PR，需人工补标（不读 issue、不猜）`, {
+          reason: 'missing-labels', issue: rd.issue, pr: rd.pr || null,
         }), N.dispatch));
+        continue;
+      }
+      const model = labelValue(pr, 'model/');
+      const reviewer = labelValue(pr, 'reviewer/');
+      const role = labelValue(pr, 'type/');
+      if (!model || !reviewer) {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 差集要重派，但 PR 上缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''}，需人工打标（不读 issue、不猜）`,
+          { reason: 'missing-labels', pr: pr.number, issue: rd.issue, title: pr.title || '' },
+        ), N.dispatch));
         continue;
       }
       const rGate = assessDispatchModel(model, { policy, enabledIds, redIds });
       if (!rGate.ok) {
-        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但${rGate.why}`, {
-          reason: rGate.reason, issue: rd.issue, model,
+        out.push(withNeeds(esc(`PR #${pr.number} 差集要重派，但${rGate.why}`, {
+          reason: rGate.reason, pr: pr.number, issue: rd.issue, model,
         }), N.dispatch));
         continue;
       }
@@ -1389,18 +1415,23 @@ function collectCandidates(situation) {
         reportAdmission(N.dispatch);
         continue;
       }
-      const mergePlan = resolveIssueMergePolicy(issue, situation.askPolicy);
+      const issue = (gh.issues || []).find((i) => i && i.number === rd.issue)
+        || attributedIssueOf(gh, pr);
+      const mergeSource = role === FRAMEWORK_ROLE
+        ? { title: issue?.title ?? '', body: issue?.body ?? '', labels: [{ name: `type/${FRAMEWORK_ROLE}` }] }
+        : issue;
+      const mergePlan = resolveIssueMergePolicy(mergeSource, situation.askPolicy);
       out.push(withNeeds({
-        kind: 'dispatch', issue: rd.issue, model, reviewer,
-        role: labelValue(issue, 'type/') || null,
-        title: issue.title || '',
+        kind: 'dispatch', issue: rd.issue, pr: pr.number, model, reviewer,
+        role: role || null,
+        title: (issue && issue.title) || pr.title || '',
         mergePolicy: mergePlan.mergePolicy,
         mergeReason: mergePlan.mergeReason,
         mergePolicySource: mergePlan.mergePolicySource,
         why: rd.why + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
         reconcile: true,
       }, N.dispatch));
-      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue }), N.dispatch));
+      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue, pr: pr.number }), N.dispatch));
     }
   }
 

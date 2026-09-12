@@ -88,8 +88,20 @@ describe('pickWorkerDispatchByBranch', () => {
       { type: 'job.dispatch', identity: '工人', branch: 'dao-1116', repo: REPO, model: 'grok-4.6', reviewer: 'gpt-5.6-luna' },
       { type: 'job.dispatch', branch: 'dao-1116', repo: REPO, model: 'wrong', reviewer: 'wrong' },
     ], 'dao-1116', REPO);
-    assert.equal(laterBroken.ok, true);
-    assert.equal(laterBroken.model, 'grok-4.6');
+    assert.equal(laterBroken.ok, false);
+    assert.match(laterBroken.error, /缺 identity 或不是工人/);
+    assert.match(laterBroken.error, /需人工打标/);
+  });
+
+  it('后写残缺工人记录不得回退旧的完整记录', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const got = pickWorkerDispatchByBranch([
+      { type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: 'acme/repo', model: 'old-complete', reviewer: 'old-reviewer' },
+      { type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: 'acme/repo', model: 'new-incomplete' },
+    ], 'dao-1', 'acme/repo');
+    assert.equal(got.ok, false);
+    assert.match(got.error, /缺 model 或 reviewer/);
+    assert.match(got.error, /需人工打标/);
   });
 
   it('跨仓同名分支不套另一仓的 dispatch', async () => {

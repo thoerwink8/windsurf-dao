@@ -173,7 +173,8 @@ export function collectPrLabels({ pr, runGh } = {}) {
   };
 }
 
-/** 工人 job.dispatch：identity 必须是工人，匹配键是 repo + branch。多条取最新一条完整记录。 */
+/** 工人 job.dispatch：匹配键是 repo + branch。先取该键最新一条，再校验 identity/model/reviewer。
+ * 最新一条缺字段或身份非法 → 人工补标，不回退旧的完整记录。 */
 export function pickWorkerDispatchByBranch(events, branch, repo) {
   const want = String(branch || '').trim();
   if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
@@ -191,32 +192,30 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
     if (normalizeDispatchRepo(e.repo) !== wantRepo) continue;
     keyed.push(e);
   }
-  const workers = keyed.filter((e) => e.identity === '工人');
-  const complete = workers.filter((e) => String(e.model || '').trim() && String(e.reviewer || '').trim());
-  if (complete.length === 0) {
-    if (workers.length > 0) {
-      return {
-        ok: false,
-        state: 'none',
-        error: `仓 ${wantRepo} 分支 ${want} 的工人 job.dispatch 缺 model 或 reviewer——需人工打标`,
-      };
-    }
-    if (keyed.length > 0) {
-      return {
-        ok: false,
-        state: 'none',
-        error: `仓 ${wantRepo} 分支 ${want} 的 job.dispatch 缺 identity 或不是工人——需人工打标`,
-      };
-    }
+  if (keyed.length === 0) {
     return {
       ok: false,
       state: 'none',
       error: `账本没有仓 ${wantRepo} 分支 ${want} 的工人 job.dispatch——这不是派工链上的 PR，需人工打标`,
     };
   }
-  const hit = complete[complete.length - 1];
+  const hit = keyed[keyed.length - 1];
+  if (hit.identity !== '工人') {
+    return {
+      ok: false,
+      state: 'none',
+      error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 identity 或不是工人——需人工打标`,
+    };
+  }
   const model = String(hit.model || '').trim();
   const reviewer = String(hit.reviewer || '').trim();
+  if (!model || !reviewer) {
+    return {
+      ok: false,
+      state: 'none',
+      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model 或 reviewer——需人工打标`,
+    };
+  }
   const role = String(hit.work_type || hit.role || '').trim();
   return {
     ok: true,

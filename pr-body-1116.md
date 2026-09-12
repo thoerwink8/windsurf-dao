@@ -61,6 +61,7 @@
 - [x] 本轮跟上 origin/master（#1206 watchdog 真结果 / 死锁清后立刻再抢 / 派工前补 type）。冲突 0。#1206 的 stampIssueLabels 仍只打 type/、不打 model/reviewer；指挥官选型仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1197 控制面闸接到现役 git push 路径）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1165 +2 叠成 153。选型路仍只读 PR label。
 - [x] 返工（审官红 3）：缺 reviewer 打标 fail-visible；匹配键改仓+分支；identity 必须是工人。
+- [x] 返工（审官红 4）：差集重派只读对应 PR 的 model/reviewer/type，找不到 PR 或标签不齐走人工补标，不回退 issue；`pickWorkerDispatchByBranch` 取仓+分支最新一条再校验，后写残缺/身份非法不得回退旧完整记录。
 
 ## 机制判定
 
