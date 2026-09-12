@@ -1592,6 +1592,71 @@ test('for-of 对象 rest 带 --dry-run 仍绿', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('for-of 对象 rest 紧凑写法必须红（} 与 of 之间无空白）', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp }of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('for-of 对象 rest 全紧凑写法必须红', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for(const{...' + 'cp}of[mod]){',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('for-of 对象 rest 块注释间隔必须红', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp }/*x*/of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('for-of 对象 rest 行注释间隔必须红', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp }//x',
+    'of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('for-of 对象 rest 紧凑写法带 --dry-run 仍绿', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp }of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / for-of 都不许 scanned:0 ok:true', () => {
   const EX = 'ex' + 'ec';
   const alias = 'ru' + 'n';
@@ -1642,6 +1707,24 @@ test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / fo
     [
       'const mod = await import("node:child_process");',
       'for (const { ...' + 'cp } of [mod]) {',
+      `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+      '}',
+    ].join('\n'),
+    [
+      'const mod = await import("node:child_process");',
+      'for (const { ...' + 'cp }of [mod]) {',
+      `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+      '}',
+    ].join('\n'),
+    [
+      'const mod = await import("node:child_process");',
+      'for(const{...' + 'cp}of[mod]){',
+      `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+      '}',
+    ].join('\n'),
+    [
+      'const mod = await import("node:child_process");',
+      'for (const { ...' + 'cp }/*x*/of [mod]) {',
       `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
       '}',
     ].join('\n'),

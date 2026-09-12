@@ -44,6 +44,8 @@
 //      解析不了的 rest dest fail-closed——不许 scanned:0 静默放行。
 //      for-of 对象 rest 要解析迭代源（至少覆盖可解析数组里的已知
 //      namespace/别名）；无法证明来源安全时 fail-closed。
+//      for-of 的 of 按 token 边界认：`}of` / `}/*x*/of` 与 `} of` 同等，
+//      不要把空白当成语法必要条件。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
 //      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
@@ -195,9 +197,11 @@ function splitTopLevelArgs(inner) {
  * 未知 child_process 计算属性（`const run = cp[unknownKey]`）也收成别名，并标不透明。
  * 对象字面量 / 成员赋值（`{ run: cp.spawnSync }` / `box.run = cp.spawnSync`）也收成别名，
  * 并把承载对象记成 holder，`box.run(...)` 不许 scanned:0。
- * 对象 rest（`const { ...cp } = mod` / `for (const { ...cp } of [mod])`）
+ * 对象 rest（`const { ...cp } = mod` / `for (const { ...cp } of [mod])` /
+ * `for (const {...cp}of [mod])` / `}` 与 `of` 之间夹块注释）
  * 从已知 child_process namespace 得到的 holder 要收进接收器；
  * 解析不了的 rest dest、无法证明安全的 for-of 迭代源 fail-closed。
+ * for-of 的 of 按 token 边界认，空白和注释都是合法间隔。
  */
 export function collectSpawnAliases(src) {
   return [...collectSpawnAliasSets(src).names];
@@ -770,6 +774,41 @@ function spawnNameFromExpr(expr, names, cpNames, src) {
   return { name: '', opaque: false };
 }
 
+/** 空白、行注释、块注释都是 JS 合法间隔。未闭合块注释吃到末尾。 */
+function skipWsAndComments(s, i) {
+  const text = String(s || '');
+  let k = i;
+  while (k < text.length) {
+    const c = text[k];
+    if (/\s/.test(c)) { k += 1; continue; }
+    if (c === '/' && text[k + 1] === '/') {
+      k += 2;
+      while (k < text.length && text[k] !== '\n') k += 1;
+      continue;
+    }
+    if (c === '/' && text[k + 1] === '*') {
+      k += 2;
+      while (k < text.length && !(text[k] === '*' && text[k + 1] === '/')) k += 1;
+      if (k < text.length) k += 2;
+      continue;
+    }
+    break;
+  }
+  return k;
+}
+
+/**
+ * `}` / `]` 后的 `of`：按 token 边界认，不要把空白当成语法必要条件。
+ * `}of`、块注释或行注释夹在中间，都是合法 for-of。
+ */
+function matchForOfKeyword(after) {
+  const s = String(after || '');
+  const start = skipWsAndComments(s, 0);
+  if (!s.startsWith('of', start)) return null;
+  if (/[A-Za-z0-9_]/.test(s[start + 2] || '')) return null;
+  return { length: skipWsAndComments(s, start + 2) };
+}
+
 /** 声明解构 + 赋值解构（含括号）+ for-of。`arr[i] =` 不当数组解构。 */
 function eachDestructure(text, openCh, onMatch) {
   const src = String(text || '');
@@ -790,10 +829,9 @@ function eachDestructure(text, openCh, onMatch) {
     if (end < 0) continue;
     const after = src.slice(end + 1);
     const eq = after.match(/^\s*=\s*/);
-    const ofKw = after.match(/^\s+of\b\s*/);
+    const ofKw = matchForOfKeyword(after);
     if (!eq && !ofKw) continue;
-    const sep = eq || ofKw;
-    const rhsStart = end + 1 + sep[0].length;
+    const rhsStart = end + 1 + (eq ? eq[0].length : ofKw.length);
     const rhsEnd = scanRhsEnd(src, rhsStart);
     onMatch({
       inner: src.slice(i + 1, end),
@@ -1973,6 +2011,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let objectRestCp = false;
       let forOfObjectRest = false;
       let forOfObjectRestUnproven = false;
+      let forOfObjectRestCompact = false;
+      let forOfObjectRestComment = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -2161,6 +2201,20 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\bof\b/.test(src)
           && (r.violations || []).some((v) => /对象 rest/.test(v.why))
         ) forOfObjectRestUnproven = true;
+        if (
+          /for\s*\(\s*(?:const|let|var)\s*\{/.test(src)
+          && /\.\.\.\s*[A-Za-z_][\w]*/.test(src)
+          && /\}of\b/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) forOfObjectRestCompact = true;
+        if (
+          /for\s*\(\s*(?:const|let|var)\s*\{/.test(src)
+          && /\.\.\.\s*[A-Za-z_][\w]*/.test(src)
+          && /\}\s*\/\*[\s\S]*?\*\/\s*of\b/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) forOfObjectRestComment = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2210,6 +2264,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!objectRestCp) problems.push('red/ 没点出对象 rest 解构 child_process（{ ...cp } = mod）');
       if (!forOfObjectRest) problems.push('red/ 没点出 for-of 对象 rest（for (const { ...cp } of [mod])）');
       if (!forOfObjectRestUnproven) problems.push('red/ 没点出 for-of 对象 rest 迭代源 fail-closed');
+      if (!forOfObjectRestCompact) problems.push('red/ 没点出 for-of 对象 rest 紧凑写法（for (const {...cp}of [mod])）');
+      if (!forOfObjectRestComment) problems.push('red/ 没点出 for-of 对象 rest 注释间隔（}/*...*/of）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
