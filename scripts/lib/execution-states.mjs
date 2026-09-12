@@ -26,6 +26,22 @@ export const EXECUTION_FINISHED = new Set([
 export const EXECUTION_RESERVED = new Set(['pending', 'uncertain', 'stopping']);
 
 /**
+ * `judgeExecutionCompletion()` 的 status 值域里，**「已结束」的那半边**。
+ *
+ * 为什么它也在正典里（2026-09-12 实咬）：那个函数把整张 `EXECUTION_FINISHED` 折叠成
+ * 归一后的 `done`/`failed` 两个词，于是**调用方判「收尾验过了没」时不该再去卡 view 的原始状态词**。
+ * 可它这么干了——`stopSession` 的核验循环与 `startSession` 的放行闸都写 `['done','failed']`，
+ * 而这条链最常撞的终态恰恰是 `incomplete`（上游断流打死），它不在那两个词里：
+ * 收尾验不过 → 会话与租约双双重写回 `stopping` → 同一条工作树永久起不了新会话，
+ * 实测卡了 56 分钟，只能等对账兜底。
+ *
+ * 注意这不是又一张状态表：它是**那个函数的出参值域**（折叠后的），不是会话状态词。
+ * 折叠规则只有一句：`EXECUTION_FINISHED` 里的词 → `failed`，正常干完 → `done`。
+ * 若哪天出参多了第三个词，改这里一处，下游全跟着走。
+ */
+export const EXECUTION_VERDICT_FINISHED = new Set(['done', 'failed']);
+
+/**
  * 从一条**外部形状**的会话对象里读出状态词。**所有消费者都该走这里，别自己点字段名。**
  *
  * 2026-09-11 实咬（本晚第 4、7 处，同一个病）：
@@ -81,4 +97,34 @@ export function classifySessionState(session) {
 export function blocksWorktree(state) {
   const st = String(state || '');
   return !EXECUTION_FINISHED.has(st) || EXECUTION_RESERVED.has(st);
+}
+
+/**
+ * 「这份会话视图能不能**证明它已经死了**」——快照没回帧（`partial`）时的采信判据。
+ *
+ * 2026-09-12 实咬（审官树被永久占住）：`session-read` 对一条上游断流打死的会话回
+ * `{phase:'incomplete', partial:true, via:'meta'}`——快照过期没回帧，读的是会话清单预览。
+ * 清单给的 `incomplete` 是**终态**（见 EXECUTION_FINISHED 的注释），可当时只有
+ * `listSessions` 那条路（execution-runtime:428-436）认这句话：
+ *   · `judgeExecutionCompletion` 见到 `partial` 就先回 `unknown`；
+ *   · `stopSession` 的核验循环又拿手打的 `['done','failed']` 去卡，`incomplete` 不在里面。
+ * 两个合起来 → 收尾永远「验不过」→ 会话与租约双双重写回 `stopping`（cleanupVerified:false）
+ * → 此后同一条工作树一律报「worktree has an unresolved launch or cleanup」，
+ * **死人占着树，活人进不来**。实测卡了 56 分钟，只能等对账兜底。
+ *
+ * **只采信「已死」那半边，不采信「干完了」**——这是安全边界，不许放宽：
+ * 快照没回帧时正文可能被截断，`partial` 里报 `done` 不构成「活交付了」的证据；
+ * 但它报 `failed/incomplete/stopped/...`（正典终态里**非成功**的那些）时，
+ * 「这棵树没有人在干活」是成立的——收尾需要的正是这句话。
+ * 真·读不成（phase 为空、态非终）照旧回 null = 没查成，调用方分开处置。
+ *
+ * @returns {string|null} 已确证的终态词，或 null = 不足以判死
+ */
+export function confirmedSessionState(view) {
+  if (!view || view.missing === true) return null;
+  if (view.partial !== true) return null;
+  const raw = sessionStateOf(view.snapshot || view);
+  if (raw == null) return null;
+  if (!EXECUTION_FINISHED.has(raw)) return null;
+  return EXECUTION_SUCCEEDED.has(raw) ? null : raw;
 }
