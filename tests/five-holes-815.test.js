@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
 const CLI = path.join(REPO, 'scripts', 'dao.mjs');
-const REVIEWER_BOOK = path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md');
+const REVIEWER_BOOK = path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book-mirasim.md');
 const S_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 
 function gitEnv() {
@@ -104,13 +104,8 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(/writeReviewPendingOnFail/.test(daoSrc) && /reviewPending/.test(daoSrc),
       'worker-done 起败必须写队列');
-    assert.ok(/finishWorkerDoneSpawnFail/.test(daoSrc) && /queued-review-pending/.test(daoSrc),
-      'depth/在途派单入队后必须成功交卷');
-    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
-    assert.ok(/复审轮走队列/.test(book) && /review-pending-drain/.test(book),
-      'reviewer-book 必须写复审轮走队列');
-    assert.ok(/queued:true/.test(book.replace(/\s+/g, '')) || /queued:true/.test(book),
-      'reviewer-book 必须写成功交卷 queued');
+    assert.ok(/queued-for-review/.test(daoSrc) || /enqueueOnly:\s*true/.test(daoSrc) || /queued: true/.test(daoSrc),
+      '交卷入队后必须成功交卷');
   });
 
   it('#815 余洞：depth 2 / 在途派单不是没查成；待办写成则 queued 交卷', async () => {
@@ -193,11 +188,13 @@ describe('#815 ① 复审待办队列 + drain', () => {
       JSON.stringify(recovered));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    const reuseFn = (daoSrc.match(/function reuseReviewerOnTerminal\([\s\S]*?\nfunction /) || [''])[0];
-    assert.ok(/planReuseExistingLiveDispatch/.test(reuseFn) && /skipStart/.test(reuseFn),
-      '复用路径必须先核在途派单再决定 worker-start');
-    assert.ok(/planAfterWorkerStartActiveDispatch/.test(reuseFn),
-      'worker-start 撞在途派单必须沿用已有 id');
+    assert.ok(!/function reuseReviewerOnTerminal/.test(daoSrc),
+      'orca 复用审官终端路径必须已删');
+    assert.match(daoSrc, /decideReviewerCreateStart/,
+      'mirasim 审官复用必须接到 create 热路');
+    const miraSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+    assert.match(miraSrc, /judgeReviewerSessionReuse/,
+      '一 PR 一审官的复用判据在 reviewer-mirasim，不在已删的 orca attach 脊');
   });
 
   it('#815 余洞：指挥官轮转消费队列，reviewer-attach 只调一次', async () => {
@@ -321,10 +318,9 @@ describe('#815 ② 派工单记真终端 + send --dispatch', () => {
     assert.ok(parsed.dispatch === 'ctx_802' && parsed.text === '红项', JSON.stringify(parsed));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/pickDispatchAgentTerminal/.test(daoSrc) && /created\.agentTerminalHandle/.test(daoSrc),
-      '派工单落盘必须补 agentTerminalHandle');
-    assert.ok(/function cmdSend[\s\S]*resolveSendTarget/.test(daoSrc),
-      'cmdSend 必须走 --dispatch 解析');
+    assert.ok(!/created\.agentTerminalHandle/.test(daoSrc),
+      'orca 派工单 agentTerminalHandle 必须已删');
+    assert.match(daoSrc, /orca 已退役，send/);
   });
 });
 
@@ -415,8 +411,7 @@ describe('#815 ③ 复用审官前 worker-read 核活性', () => {
     assert.ok(none.ok && none.action === 'create' && /扫完没有/.test(none.reason), JSON.stringify(none));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function cmdReviewerAttach[\s\S]*planReviewerAttachReuse[\s\S]*argsWorkerRead/.test(daoSrc),
-      'attach 复用前必须 worker-read');
+    assert.match(daoSrc, /orca 已退役，reviewer-attach/);
   });
 });
 
@@ -467,10 +462,9 @@ describe('#815 ④ 建审官树按 origin 检出', () => {
     assert.ok(aligned.ok === true, '按 origin 检出后应对上 PR head → ' + JSON.stringify(aligned));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function cmdReviewerCreate[\s\S]*prepareReviewerOriginRef/.test(daoSrc),
-      'reviewer-create 建树前必须 fetch origin');
-    assert.ok(/function cmdReviewerAttach[\s\S]*prepareReviewerOriginRef/.test(daoSrc),
-      'reviewer-attach 建树前必须 fetch origin');
+    assert.match(daoSrc, /function gitFetchRef/, 'reviewer-create mirasim 建树前必须 fetch');
+    assert.match(daoSrc, /cmdReviewerCreateMirasim/, '审官走 cmdReviewerCreateMirasim');
+    assert.match(daoSrc, /orca 已退役，reviewer-attach/);
   });
 });
 
@@ -560,24 +554,11 @@ describe('#815 ⑥ 审官注入失败不回滚树', () => {
       '还没有树才允许回滚 → ' + JSON.stringify(noTree));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function keepCreated/.test(daoSrc), '注入失败走 keepCreated 不是 failCreated');
-    assert.ok(!/failCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
-      'create/attach 不得因开工验证失败 failCreated');
-    assert.ok(/keepCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
-      '开工验证失败必须 keepCreated');
-    assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
-      'worker-start 失败也不得整树回滚');
-
+    assert.doesNotMatch(daoSrc, /function keepCreated/, 'orca keepCreated 必须已删');
+    assert.doesNotMatch(daoSrc, /function failCreated/, 'orca failCreated 必须已删');
     const createSeg = daoSrc.slice(daoSrc.indexOf('async function cmdReviewerCreateMirasim'), daoSrc.indexOf('async function cmdWorkerDoneMirasim'));
     assert.doesNotMatch(createSeg, /launchAgentInWorktree\(/);
     assert.match(createSeg, /mirasimReviewerCreate\(/);
-    const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
-    assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
-      'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
-
-    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
-    assert.ok(/失败不回滚树/.test(book) && /start --model/.test(book),
-      'reviewer-book 必须写失败不回滚 + 接手命令');
   });
 });
 

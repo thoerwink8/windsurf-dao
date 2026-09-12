@@ -86,9 +86,6 @@ describe('marshal-issue-identity', () => {
     });
 
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    await t.test('dispatch 打 issue label 走 marshal', () => {
-      assert.ok(/stampIssueLabels\(\{[\s\S]*?runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)/.test(daoSrc), 'dispatch 打 issue label 走 marshal');
-    });
     await t.test('mirasim 派工打 stampIssueLabels 走 marshal 网关', () => {
       const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');

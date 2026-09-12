@@ -1,6 +1,6 @@
 // scripts/lib/commander-inventory.mjs —— 指挥官「盘点体检 + 自检 + 装机」（#800）
 //
-// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列。
+// 盘点体检（眼睛的第二只）：扫孤儿进程/终端登记/timer/探针连红/落地清单空列/收件箱。
 // **它不自己修，只开单**——修要过用户放行（「盘点」与「自愈」的边界）。异常 → gh search 查重
 // （带 [commander-inventory] 标记）→ 开「待拍板」单；正常 → 静默。第二轮同一异常不重复开。
 //
@@ -13,6 +13,7 @@
 //   landing-empty   留。落地清单空状态列是文档债，不是 PR/单/树/票。
 //   stale-running   留。派工队列僵尸 .running，situation 不写这份队列。
 //   pending-surface 留。待消歧到时机是日历事件，不是「连续 N 轮同一状态」。
+//   inbox           #1171 加。收件箱从 hook / dao-check 挪到盘点：那两条腿没人定时跑。
 //
 // 每项三态：ok / red / unknown。unknown（探不到，如 Windows 无 /proc、无 journalctl）绝不开单，
 // 也绝不当 ok——「没查成」经 status 三态可见，不刷屏、不埋根因。
@@ -30,6 +31,7 @@ import {
   PENDING_LABEL, parseTimingRef, collectSurfacing, buildSurfacingHubText, surfacingDedupKey,
 } from './pending-disambiguation.mjs';
 import { fieldsFromInventory } from './hub-ask.mjs';
+import { parseInboxDoc, assessInbox } from './inbox.mjs';
 
 const INV_MARKER = '[commander-inventory]';
 // 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
@@ -74,30 +76,13 @@ function checkOrphanDeletedCwd() {
   return { state: 'ok', detail: '无 cwd 已删的 agent 进程', key: 'orphan-cwd' };
 }
 
-// 2. 终端登记数 vs live agent 数不符（#633）。
-function checkTerminalVsAgents({ runOrca, ROOT }) {
-  const tl = runOrca(['terminal', 'list', '--json'], { cwd: ROOT });
-  if (!tl.ok) return { state: 'unknown', detail: `terminal list 没查成：${fmt(tl.error)}`, key: 'term-vs-agent' };
-  const terminals = tl.json?.result?.terminals;
-  if (!Array.isArray(terminals)) return { state: 'unknown', detail: 'terminal list 契约变了', key: 'term-vs-agent' };
-  const wl = runOrca(['orchestration', 'worker-list', '--json'], { cwd: ROOT });
-  if (!wl.ok) return { state: 'unknown', detail: `worker-list 没查成：${fmt(wl.error)}`, key: 'term-vs-agent' };
-  const workers = wl.json?.result?.workers;
-  if (!Array.isArray(workers)) return { state: 'unknown', detail: 'worker-list 契约变了', key: 'term-vs-agent' };
-  const liveAgents = workers.filter((w) => w && ['ready', 'working', 'waiting'].includes(String(w.state || '').toLowerCase())).length;
-  // 只在 agent 数明显超过终端数时报（agent 无所依附的终端 = 幽灵）；反向（空终端多）是常态不报。
-  if (liveAgents > terminals.length) {
-    return {
-      state: 'red', key: 'term-vs-agent',
-      detail: `live agent ${liveAgents} 个 > 终端 ${terminals.length} 个（登记对不上，#633）`,
-      plain: {
-        what: `登记在册的工人有 ${liveAgents} 个，但真正开着的工作窗口只有 ${terminals.length} 个`,
-        impact: '多出来的是「幽灵工人」，占名额不干活',
-        plan: '开一张待拍板单，你放行后我清掉',
-      },
-    };
-  }
-  return { state: 'ok', detail: `终端 ${terminals.length} / live agent ${liveAgents}（对得上）`, key: 'term-vs-agent' };
+// 2. 终端登记 vs live agent（#633）。orca 终端/worker-list 已退役；在途改由租约闸看。
+function checkTerminalVsAgents() {
+  return {
+    state: 'ok',
+    detail: 'orca 终端登记已退役，在途改由 mirasim 租约闸看',
+    key: 'term-vs-agent',
+  };
 }
 
 // 3. timer 失效：指挥官两个 timer 应在册、enabled，且**真的还会响**。
@@ -257,6 +242,71 @@ function checkStaleDispatchRunning({ ROOT, dryRun }) {
   return { state: 'ok', detail: '无僵尸 .running', key: 'stale-running' };
 }
 
+// 7.5 收件箱（#1171）：别的会话落在 docs/observations/ 的发现有没有人处置。
+// 判据复用 inbox.mjs 的 assessInbox，不另造第二套口径。git 查不成 → unknown，
+// 不许当成「没有未提交」（hook 当时就这么写；dao-check 那版 git 失败当空，是搬的时候要丢掉的病）。
+export function judgeInbox(assessed) {
+  const key = 'inbox';
+  if (!assessed || assessed.unscanned) {
+    const why = (assessed && Array.isArray(assessed.lines) && assessed.lines[0]) || '收件箱没查成';
+    return { state: 'unknown', key, detail: `${why}——不是「没有新东西」` };
+  }
+  if (assessed.mode === 'block') {
+    const pending = Array.isArray(assessed.pending) ? assessed.pending.length : 0;
+    const overdue = Array.isArray(assessed.overdue) ? assessed.overdue.length : 0;
+    const untracked = Array.isArray(assessed.untracked) ? assessed.untracked.length : 0;
+    return {
+      state: 'red', key,
+      detail: `收件箱要先处置：${pending} 条未处置（超时 ${overdue}，未提交 ${untracked}）`,
+      plain: {
+        what: `收件箱有 ${pending} 条发现没人处理${overdue ? `，其中 ${overdue} 条已经超过一天` : ''}${untracked ? `，还有 ${untracked} 条写了没提交` : ''}`,
+        impact: '别的会话留的洞会继续堆着，没有人把它变成单子',
+        plan: '开一张待拍板单，你放行后按每条观察开单或标处置',
+      },
+    };
+  }
+  if (assessed.mode === 'notice') {
+    const pending = Array.isArray(assessed.pending) ? assessed.pending.length : 0;
+    return { state: 'ok', key, detail: `收件箱有 ${pending} 条未处置（未到硬闸）` };
+  }
+  return { state: 'ok', key, detail: '收件箱无未处置' };
+}
+
+export function checkInbox({ ROOT }) {
+  const key = 'inbox';
+  const dir = join(ROOT, 'docs', 'observations');
+  // 不许 existsSync 前置：父目录 EACCES 时它返回 false，会把「没查成」伪装成「本仓没这条通道」
+  //（#1192 复审；同形见 pr-868：absent 只认 ENOENT/ENOTDIR）。
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return { state: 'ok', key, detail: 'docs/observations 不在——本仓没这条通道' };
+    }
+    return { state: 'unknown', key, detail: `收件箱没查成：读不了 docs/observations（${String(e.message || e).slice(0, 80)}）——不是「没有新东西」` };
+  }
+  let docs = [];
+  try {
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue;
+      const p = join(dir, name);
+      docs.push(parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs }));
+    }
+  } catch (e) {
+    return { state: 'unknown', key, detail: `收件箱没查成：读不了 docs/observations（${String(e.message || e).slice(0, 80)}）——不是「没有新东西」` };
+  }
+  const g = spawnSync('git', ['-C', ROOT, 'ls-files', '--others', '--exclude-standard', '--', 'docs/observations'],
+    { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+  if (g.error || g.status !== 0) {
+    return { state: 'unknown', key, detail: `收件箱没查成：git 查未跟踪失败（${String(g.error?.message || g.stderr || g.status).slice(0, 80)}）——不是「没有新东西」` };
+  }
+  const untracked = String(g.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    .map((p) => p.split(/[/\\]/).pop());
+  return judgeInbox(assessInbox({ docs, untracked }));
+}
+
 // 8. 待消歧单到时机浮出水面（#876 ③）：扫 open 的「待消歧」单，正文/评论里「时机：#N 关闭后」
 //    引用的 #N 已关 → 提醒一条「到讨论时机了」。**只提醒不派工、不开单**（单本来就在，开新单是重复）。
 //    时机行缺失或 #N 读不到 → 没查成：不提醒、不报错，只落一行日志。
@@ -325,24 +375,25 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
-  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
+  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
 }
 
-async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
+async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
     checkOrphanDeletedCwd(),
-    checkTerminalVsAgents({ runOrca, ROOT }),
+    checkTerminalVsAgents(),
     checkTimers(),
     // 升级换没换干净要看回环服务端自报，是异步的——单独 await，不塞进上面的同步数组。
     await versionDrift(),
     checkProbeJournal(),
     checkLandingChecklist({ ROOT }),
     checkStaleDispatchRunning({ ROOT, dryRun }),
-    // 待消歧到时机（#876 ③）：跟前几项同列，一起进计数——挂在数组外面会让 ok 数与实际项数对不上。
-    // #1004 删掉 stale-pr 后这里一共 8 项（2026-09-10 加「升级换没换干净」）。
+    checkInbox({ ROOT }),
+    // 待消歧到时机必须仍是最后一项：下面 surface = checks[checks.length - 1]。
+    // #1004 删 stale-pr、#1171 加 inbox 后这里一共 9 项。
     scanPendingSurfacing({ runGh, REPO }),
   ];
   const surface = checks[checks.length - 1];
@@ -420,14 +471,14 @@ export function runStatus({ rest, ROOT }) {
 
 // ── install 子命令：幂等写 systemd service+timer ──
 
-// 单元里的 PATH 必须显式写死。systemd 不读 orca 的 shell profile，oneshot 拿到的 PATH 只有
-// /usr/bin:/bin，于是指挥官调 orca（bare name，见 lib/orca-run.mjs，没有绝对路径兜底）和
-// hub-say 全是 ENOENT——2026-09-03 实咬 #848：首轮 act 找不到 orca 被 unscanned fail-closed 拦下、
+// 单元里的 PATH 必须显式写死。systemd 不读服务用户的 shell profile，oneshot 拿到的 PATH 只有
+// /usr/bin:/bin，于是指挥官调 hub-say 全是 ENOENT——2026-09-03 实咬 #848：首轮 act
+// 找不到命令被 unscanned fail-closed 拦下（当时还调 orca CLI，#1150 已删）。
 // 群通知整轮静默，靠手糊的 drop-in 垫片才跑起来。同一坑 agent-stall-watch 已经踩过一次。
 // 值与 host/machine/systemd/*.service 里手写的那几个必须一致（tests/commander-install.test.js 盯着）。
 export const UNIT_PATH = '/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin';
 // 指挥官真正要在 PATH 里找到的外部命令住在哪。改 UNIT_PATH 前先确认这几条还在里面。
-export const UNIT_TOOL_DIRS = { orca: '/home/orca/.local/bin', 'hub-say': '/home/orca/bin' };
+export const UNIT_TOOL_DIRS = { 'local-bin': '/home/orca/.local/bin', 'hub-say': '/home/orca/bin' };
 
 // 2026-09-03 那两份 drop-in 垫片。正式模板带上 PATH 之后它们该退役——留着不会坏事，
 // 但它是影子制度：下次有人改 UNIT_PATH 会发现改了不生效。装机时看一眼，在就报一句。

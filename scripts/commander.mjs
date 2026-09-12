@@ -25,9 +25,6 @@ import { fileURLToPath } from 'node:url';
 import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
-function runOrca() {
-  return { ok: false, error: { code: 'orca_retired', message: 'orca 已退役' } };
-}
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
@@ -212,16 +209,8 @@ function scanOtherRepos() {
 }
 
 function scanOrca() {
-  const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) {
-    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
-    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
-    // 在途工人改由 scanAdmission 按 mirasim 两层工作树 + 会话存活事实数。
-    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
-  }
-  const worktrees = wt.json?.result?.worktrees;
-  if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
-  return { scanned: true, worktrees };
+  // orca 执行体已退役：卡面恒空（查成了的空，不是没查成）。在途改由 scanTrees。
+  return { scanned: true, worktrees: [], orcaGone: true };
 }
 
 /**
@@ -483,12 +472,15 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
   }
 }
 
-/** 在世终端清单。读不到/契约变了都回 ok:false——由调用方按「没查成」处理，不当成「一个都没有」。 */
+/** 在世会话清单。orca 终端已退役，改采 mirasim 会话名单。没查成回 ok:false，不当成「一个都没有」。 */
 function listLiveTerminals() {
-  const r = runOrca(['terminal', 'list', '--json'], { cwd: ROOT });
-  if (!r.ok) return { ok: false, error: `terminal list 没查成：${orcaErr(r.error)}` };
-  const terminals = r.json?.result?.terminals;
-  if (!Array.isArray(terminals)) return { ok: false, error: 'terminal list 没有 terminals 数组——没查成' };
+  const sessions = scanSessions();
+  if (!sessions.scanned) return { ok: false, error: `会话名单没查成：${sessions.error}` };
+  const terminals = (sessions.items || []).map((s) => {
+    const handle = s && (s.sessionKey || s.id || s.handle);
+    if (!handle) return null;
+    return { handle, id: handle, sessionKey: s.sessionKey || handle };
+  }).filter(Boolean);
   return { ok: true, terminals };
 }
 
@@ -516,12 +508,6 @@ function scanStall({ file = STALL_FILE, live, write = writeFileSync } = {}) {
     catch (e) { out.pruneWriteError = `僵尸条目写回失败（下轮再剪）：${String(e.message || e)}`; }
   }
   return out;
-}
-
-function orcaErr(err) {
-  if (!err) return '未知';
-  if (typeof err === 'string') return err.slice(0, 160);
-  return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
 /**
@@ -1654,15 +1640,21 @@ function brainStartCmd(pointer, title) {
     '--title', title || '指挥官大脑'];
 }
 
+export function buildBrainPointer({ situFile, target, why } = {}) {
+  return [
+    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
+    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile || '(本轮态势文件)'}，`,
+    `处置目标：${target}（${why}）。`,
+    '职责（2026-09-04 拍板「必须送达」，#1150 送达口改 mirasim）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 GitHub 评论（issue-gateway comment / gh-as worker 的 pr comment）或飞书 hub（hub-say）送达工人或审官推动闭环。不要调 dao.mjs send / notify / reviewer-attach——已退役，调用即拒。送不动时在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
+    '边界：只许调现役 dao.mjs 动词 + issue-gateway / gh 只读；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
+  ].join('');
+}
+
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
-  const pointer = action.pointer || [
-    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
-    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
-    `处置目标：${action.target}（${action.why}）。`,
-    '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
-    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
-  ].join('');
+  const pointer = action.pointer || buildBrainPointer({
+    situFile, target: action.target, why: action.why,
+  });
   const startCmd = brainStartCmd(pointer, action.title);
   if (dryRun) {
     say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}`);
@@ -2586,7 +2578,7 @@ function main() {
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);
     process.exit(0);
   }
-  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
+  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
   if (sub === 'status') return import('./lib/commander-inventory.mjs').then((m) => m.runStatus({ rest, ROOT }));
   if (sub === 'install') return import('./lib/commander-inventory.mjs').then((m) => m.runInstall({ rest, ROOT }));
   const fn = CMDS[sub];

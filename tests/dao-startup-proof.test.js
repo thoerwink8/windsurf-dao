@@ -159,8 +159,8 @@ describe('dao 开工验证', () => {
     await t.test('dao.mjs 不再调用 verifyInjectionPolling', () => {
       assert.ok(!/verifyInjectionPolling\(/.test(daoSrcPoll), 'dao.mjs 不再调用 verifyInjectionPolling');
     });
-    await t.test('dao.mjs 工人/审官/attach/续派走 finishWorkerInject', () => {
-      assert.ok((daoSrcPoll.match(/finishWorkerInject\(\{/g) || []).length >= 1, 'dao.mjs 仍有 finishWorkerInject  →  ' + (daoSrcPoll.match(/finishWorkerInject\(\{/g) || []).length);
+    await t.test('dao.mjs 不再走 orca finishWorkerInject（mirasim 起会话即注入）', () => {
+      assert.ok(!/finishWorkerInject\(/.test(daoSrcPoll), 'dao.mjs 不得再调 finishWorkerInject');
     });
 
     const okLine = S.assertInjectText('读 host/skills/dispatch/templates/soldier-book.md spec=修 X #602', { label: '士兵注入' });
@@ -330,8 +330,9 @@ describe('dao 开工验证', () => {
     await t.test('dao.mjs 不再有 sendEnter / sendEnterHandle 垫片路径', () => {
       assert.ok(!/sendEnter/.test(daoSrc2), 'dao.mjs 不再有 sendEnter 垫片路径');
     });
-    await t.test('回滚前先存屏（failCreated 调 snapshotHandleScreen）', () => {
-      assert.ok(/function failCreated[\s\S]*snapshotHandleScreen/.test(daoSrc2) && /function snapshotHandleScreen/.test(daoSrc2), '回滚前先存屏（failCreated 调 snapshotHandleScreen）');
+    await t.test('orca 回滚存屏路径已删', () => {
+      assert.doesNotMatch(daoSrc2, /function failCreated/, 'failCreated 必须已删');
+      assert.doesNotMatch(daoSrc2, /function snapshotHandleScreen/, 'snapshotHandleScreen 必须已删');
     });
   });
 
@@ -566,14 +567,11 @@ describe('dao 开工验证', () => {
     });
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    await t.test('审官路开工探针把 provider 传给 verifyStartedPolling（工人派工路已 fire-and-forget 不验）', () => {
-      // 2026-08-23：派工主路（cmdDispatch/cmdDispatchBatch）删掉注入后开工验证；
-      // 审官路（worker-done 复用/续派/reviewer-create/reviewer-attach）保留真认账。
-      const calls = daoSrc.match(/finishWorkerInject\(\{[\s\S]{0,220}\}\)/g) || [];
-      assert.ok(/provider: reviewerLaunch\.provider/.test(daoSrc)
-        && /provider: launch\.provider/.test(daoSrc)
-        && calls.every(c => !/workerLaunch|childLaunch/.test(c)),
-        'dao.mjs 审官路开工探针要带 provider，工人派工路不再验  →  ' + calls.join('\n---\n'));
+    await t.test('审官 mirasim 路不起 orca 开工探针 finishWorkerInject', () => {
+      assert.ok(!/finishWorkerInject\(/.test(daoSrc)
+        && !/function startOrcaWorker/.test(daoSrc)
+        && !/function startWorkerBySlate/.test(daoSrc),
+        'dao.mjs 审官路不得再走 orca finishWorkerInject');
     });
   });
 
