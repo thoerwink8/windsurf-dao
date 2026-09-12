@@ -1,0 +1,4 @@
+/* 审官对抗样本：调用级 spread 内联数组。...[cmd, argv] 当 command 会 scanned:0。
+const cp = require("node:child_process");
+cp.spawnSync(...[process.execPath, ["scripts/dao.mjs", "dispatch"]], { env: { PATH: "/bin" } });
+*/

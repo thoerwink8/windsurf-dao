@@ -17,6 +17,9 @@
 //      未知计算属性结果经别名转发仍保留不透明标记（const run = cp[unknownKey]; run(...)）。
 //      argv 变量解析不了且调用像在跑 node/dao → 保守判红，不许留下变量名当 scanned:0。
 //      argv 是函数调用 / 未知 spread / 数组里的动态表达式：Node/dao 候选无法证明安全 → fail-closed。
+//      调用级 spread（spawnSync(...args, opts) / spawnSync(...[cmd, argv]) /
+//      exec(...args)）展开成真实位置参数；展开不了对该 child_process 候选
+//      fail-closed——不许把 ...args 当成 command 后 scanned:0。
 //      argv 只认调用前最后一次赋值：调用后才补 --dry-run 不许拼进来误放行。
 //      argv 赋值还要证明对调用可达：死分支 / if (true) 里最后一次带 --dry-run
 //      不算放行。控制流无法证明则 unresolved fail-closed。
@@ -2267,13 +2270,59 @@ function collectArgvIdent(src, ident, callIndex, pieces, addArray) {
   return { resolved, str };
 }
 
+function isCallSpreadArg(expr) {
+  const t = String(expr || '').trim();
+  const k = skipWsAndComments(t, 0);
+  return t[k] === '.' && t[k + 1] === '.' && t[k + 2] === '.';
+}
+
+/** 调用实参列表里的 ...x / ...[a, b] 展开成真实位置参数；展开不了标 unresolved。 */
+function expandCallArgSpreads(src, args, beforeIdx, depth = 0) {
+  if (depth > 8) return { args: [], unresolved: true };
+  const out = [];
+  for (const raw of args) {
+    const t = String(raw || '').trim();
+    if (!isCallSpreadArg(t)) {
+      out.push(t);
+      continue;
+    }
+    const k = skipWsAndComments(t, 0);
+    const inner = unwrapParens(t.slice(k + 3));
+    const items = unwrapArrayArg(inner);
+    if (items) {
+      const nested = expandCallArgSpreads(src, items, beforeIdx, depth + 1);
+      if (nested.unresolved) return { args: [], unresolved: true };
+      out.push(...nested.args);
+      continue;
+    }
+    const ident = String(inner || '').trim();
+    if (/^[A-Za-z_][\w]*$/.test(ident)) {
+      const resolved = resolveArgvArray(src, ident, beforeIdx);
+      if (resolved.unresolved || !resolved.lit) return { args: [], unresolved: true };
+      const fromIdent = unwrapArrayArg(resolved.lit);
+      if (!fromIdent) return { args: [], unresolved: true };
+      const nested = expandCallArgSpreads(src, fromIdent, beforeIdx, depth + 1);
+      if (nested.unresolved) return { args: [], unresolved: true };
+      out.push(...nested.args);
+      continue;
+    }
+    return { args: [], unresolved: true };
+  }
+  return { args: out, unresolved: false };
+}
+
 /** 子进程 argv / exec 命令字符串。只认各 API 真实参数位置；options 后的额外位置参数不算。 */
 function argvTextForCall(src, span, callIndex = Infinity, execNames) {
   const open = invocationOpen(span);
   if (open < 0) return { text: '', unresolved: false };
   const close = matchBalanced(span, open);
   if (close < 0) return { text: '', unresolved: false };
-  const args = splitTopLevelArgs(span.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
+  const rawArgs = splitTopLevelArgs(span.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
+  const expanded = expandCallArgSpreads(src, rawArgs, callIndex);
+  if (expanded.unresolved) {
+    return { text: '', unresolved: true, callSpreadUnproven: true };
+  }
+  const args = expanded.args;
   const pieces = [];
   let unresolved = false;
   const argvExprs = [];
@@ -2385,7 +2434,9 @@ export function classifyTestDispatchSpawns(src) {
     violations.push({
       kind: lost ? 'env-lost' : 'live-dispatch',
       why: unresolvedArgv && !dispatch
-        ? '无法解析的 argv 变量：fail-closed，不许 scanned:0 静默放行'
+        ? (argvInfo.callSpreadUnproven
+          ? '无法解析的调用级 spread：fail-closed，不许 scanned:0 静默放行'
+          : '无法解析的 argv 变量：fail-closed，不许 scanned:0 静默放行')
         : lost
           ? '执行体 env 丢失：spawn dispatch 的 env 没继承 process.env、也没带隔离信号，子进程会读真账本真派工'
           : opaque && !dispatch
@@ -2609,6 +2660,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let concatRequireSpec = false;
       let moduleRequire = false;
       let nestedCpHolder = false;
+      let callSpread = false;
       for (const f of files) {
         const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
@@ -2888,6 +2940,10 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\.\s*inner\s*\.\s*spawnSync/.test(src)
           && r.scanned > 0 && !r.ok
         ) nestedCpHolder = true;
+        if (
+          /\(\s*\.\.\.\s*(?:[A-Za-z_]|\[)/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) callSpread = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2955,6 +3011,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!concatRequireSpec) problems.push('red/ 没点出拼接模块名 require("node:" + "child_process")');
       if (!moduleRequire) problems.push('red/ 没点出 module.require(child_process)');
       if (!nestedCpHolder) problems.push('red/ 没点出嵌套 holder（box.inner.spawnSync）');
+      if (!callSpread) problems.push('red/ 没点出调用级 spread（...args 作第一实参 / ...[cmd, argv] / exec 同类）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

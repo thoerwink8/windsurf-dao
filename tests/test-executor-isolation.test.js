@@ -569,6 +569,96 @@ test('未知 spread argv fail-closed（审官对抗样本）', () => {
   assert.match(r.violations[0].why, /无法解析的 argv/);
 });
 
+test('调用级 spread ...args 必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    'const args = [process.execPath, ["scripts/dao.mjs", "dispatch"]];',
+    `cp.${CALL}(...args, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('调用级 spread 内联数组必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}(...[process.execPath, ["scripts/dao.mjs", "dispatch"]], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('exec 调用级 spread 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const src = [
+    `const { ${EX} } = require("node:child_process");`,
+    'const args = ["node scripts/dao.mjs dispatch"];',
+    `${EX}(...args, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('调用级 spread 解析不了 fail-closed', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}(...unknownArgs, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /调用级 spread/);
+});
+
+test('调用级 spread 带 --dry-run 仍绿', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    'const args = [process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"]];',
+    `cp.${CALL}(...args, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('git 调用级 spread 可解析不当 dispatch', () => {
+  const src = [
+    'const args = ["/usr/bin/git", ["status"]];',
+    `${CALL}(...args);`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
+test('调用级 spread 展开第二参 argv 必须红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, ...[["scripts/dao.mjs", "dispatch"]], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('调用级 spread 注释间隔仍展开', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    'const args = [process.execPath, ["scripts/dao.mjs", "dispatch"]];',
+    `cp.${CALL}(... /* pack */ args, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
 test('数组里的动态动词 fail-closed（审官对抗样本）', () => {
   const src = [
     `const { ${CALL} } = require("node:child_process");`,
@@ -1930,6 +2020,20 @@ test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / fo
       'for (const { ...' + 'cp }/*x*/of [mod]) {',
       `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
       '}',
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      'const args = [process.execPath, ["scripts/dao.mjs", "dispatch"]];',
+      `cp.${CALL}(...args, { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      `cp.${CALL}(...[process.execPath, ["scripts/dao.mjs", "dispatch"]], { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      `const { ${EX} } = require("node:child_process");`,
+      'const args = ["node scripts/dao.mjs dispatch"];',
+      `${EX}(...args, { env: { PATH: "/bin" } });`,
     ].join('\n'),
   ];
   for (const src of samples) {

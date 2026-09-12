@@ -1,0 +1,5 @@
+/* 审官对抗样本：调用级 spread 把 [cmd, argv] 展开成真实位置参数。把 ...args 当 command 会 scanned:0。
+const cp = require("node:child_process");
+const args = [process.execPath, ["scripts/dao.mjs", "dispatch"]];
+cp.spawnSync(...args, { env: { PATH: "/bin" } });
+*/
