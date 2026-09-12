@@ -32,7 +32,7 @@
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { scanProcCwds } from '../proc-cwds.mjs';
+import { scanProcCwds, linkErrorKind } from '../proc-cwds.mjs';
 
 /** 认 mirasim 服务进程用的字样。取自它自己的 argv：`…/mirasim-server/<版本>/server.cjs`。 */
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
@@ -64,6 +64,10 @@ export const LEASE_BUSY_REASON = 'lease-held';
  *
  * 覆盖证明、父链、cwd 必须吃同一份 PID 快照。再读一次 /proc，第一次之后才出现的
  * 本身份进程会静默漏掉，函数仍 ok:true——#1176 审官 P1。
+ *
+ * 父链/服务识别同样 fail-closed：cwd 核清之后，stat、cmdline 或格式没读成
+ * 不许折叠成 noServer 去放行清理——那是「服务识别没查成」，不是「查成了且没有服务」。
+ * 只有明确的 ENOENT/ESRCH 才当进程退了。内核线程 cmdline 是空串，读得成；读失败不是空串。
  */
 export function scanSessionProcs({
   readdir = readdirSync, read = readFileSync, readlink = readlinkSync, getuid,
@@ -91,13 +95,53 @@ export function scanSessionProcs({
   const ppid = new Map();
   for (const pid of pids) {
     let stat;
-    try { stat = read(`/proc/${pid}/stat`, 'utf8'); } catch { continue; }
-    const cut = stat.lastIndexOf(')');
-    if (cut < 0) continue;
-    const f = stat.slice(cut + 2).trim().split(/\s+/);
-    ppid.set(pid, Number(f[1])); // 切掉 pid 和 comm 后，ppid 是第 2 个（原第 4）
+    try {
+      stat = read(`/proc/${pid}/stat`, 'utf8');
+    } catch (e) {
+      if (linkErrorKind(e) === 'gone') continue;
+      return {
+        ok: false,
+        unscanned: true,
+        error: `pid ${pid} 的 stat 没读成：${String(e && e.message || e)}`,
+        resolved: cover.resolved,
+        total: pids.length,
+      };
+    }
+    const cut = String(stat).lastIndexOf(')');
+    if (cut < 0) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `pid ${pid} 的 stat 没有 comm 右括号——没查成`,
+        resolved: cover.resolved,
+        total: pids.length,
+      };
+    }
+    const f = String(stat).slice(cut + 2).trim().split(/\s+/);
+    const parent = Number(f[1]);
+    if (!Number.isFinite(parent)) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `pid ${pid} 的 ppid 解析不出——没查成`,
+        resolved: cover.resolved,
+        total: pids.length,
+      };
+    }
+    ppid.set(pid, parent);
     let cmd = '';
-    try { cmd = read(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* 内核线程没有 cmdline */ }
+    try {
+      cmd = read(`/proc/${pid}/cmdline`, 'utf8');
+    } catch (e) {
+      if (linkErrorKind(e) === 'gone') continue;
+      return {
+        ok: false,
+        unscanned: true,
+        error: `pid ${pid} 的 cmdline 没读成：${String(e && e.message || e)}`,
+        resolved: cover.resolved,
+        total: pids.length,
+      };
+    }
     if (cmd.includes(MIRASIM_SERVER_MARK) || cmd.includes('acp-session-runner.mjs')) servers.add(pid);
   }
   if (!servers.size) {

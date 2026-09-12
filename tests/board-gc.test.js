@@ -1314,6 +1314,29 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
     assert.equal(orphanAt > skipAt, true, 'planOrphanGc 必须在跳过之后');
   });
 
+  it('stat/cmdline EACCES 时 procsOk 为假，--apply 不进删除路径', async () => {
+    const { scanSessionProcs } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const procScan = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['100', '200'],
+      readlink: () => '/wt/active',
+      read: () => { throw eacces; },
+    });
+    const procsOk = procScan && procScan.ok && !procScan.unscanned;
+    assert.equal(procScan.ok, false, JSON.stringify(procScan));
+    assert.equal(procScan.unscanned, true);
+    assert.equal(procsOk, false, 'board-gc 用同一公式算 procsOk，假值才能跳过删除');
+    assert.match(src, /const procsOk = procScan && procScan\.ok && !procScan\.unscanned/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('if (!procsOk)');
+    for (const needle of ['removeTreeFallback(', 'planSessionGc(', 'planLeaseGc(', 'planOrphanGc(']) {
+      const at = apply.indexOf(needle);
+      assert.notEqual(at, -1, `apply 段找不到 ${needle}`);
+      assert.equal(at > skipAt, true, `${needle} 必须在 !procsOk 跳过之后`);
+    }
+  });
+
   it('登记层回收前也标 hasLiveProcess，活进程不许当死人清掉', () => {
     const from = src.indexOf('const registryRecords');
     const call = src.indexOf('judgeRegistryStuck(r');

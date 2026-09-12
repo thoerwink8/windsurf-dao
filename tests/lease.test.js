@@ -331,6 +331,80 @@ describe('覆盖证明与会话扫描共用一份 PID 快照（#1176 审官 P1�
   });
 });
 
+describe('stat/cmdline 没查成不许折叠成 noServer（#1176 审官 P1）', () => {
+  const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+  const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+  // 审官判别性实验：cwd 全部可读，stat/cmdline 对所有 PID 返回 EACCES。
+  // 旧实现 {"ok":true,"procs":[],"resolved":2,"total":2,"noServer":true}。
+  it('cwd 核清但 stat/cmdline 全是 EACCES → unscanned，不是 noServer', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['100', '200'],
+      readlink: () => '/wt/active',
+      read: () => { throw eacces; },
+    });
+    assert.equal(got.ok, false, JSON.stringify(got));
+    assert.equal(got.unscanned, true);
+    assert.notEqual(got.noServer, true);
+    assert.match(String(got.error || ''), /stat|cmdline/);
+  });
+
+  it('stat 没有 comm 右括号 → unscanned，不是跳过当没服务', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100', '200'],
+      readlink: () => '/',
+      read: (p) => (p.endsWith('/stat') ? '100 (broken' : ''),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.notEqual(got.noServer, true);
+    assert.match(got.error, /右括号/);
+  });
+
+  it('ppid 字段缺失 → unscanned', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100'],
+      readlink: () => '/',
+      read: (p) => (p.endsWith('/stat') ? '100 (x) S' : ''),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.match(got.error, /ppid/);
+  });
+
+  it('某个 pid 的 stat ENOENT → 当退了，其余核清仍可认 noServer', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100', '200'],
+      readlink: () => '/',
+      read: (p) => {
+        if (String(p).includes('/100/stat')) throw gone;
+        if (p.endsWith('/stat')) return '200 (init) S 1 0 0';
+        return '';
+      },
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.noServer, true);
+    assert.deepEqual(got.procs, []);
+  });
+
+  it('cmdline 空串是内核线程的正常形态，仍算查成了且没有服务', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['1', '2'],
+      read: (p) => (p.endsWith('/stat') ? '1 (init) S 1 0 0' : ''),
+      readlink: () => '/',
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.noServer, true);
+    assert.deepEqual(got.procs, []);
+  });
+});
+
 describe('/proc/<pid>/stat 解析', () => {
   // comm 里带空格和括号会把「按空格切」冲垮，切在最后一个 ')' 才安全。
   it('进程名里有空格和括号时 ppid 仍解析得对', async () => {
