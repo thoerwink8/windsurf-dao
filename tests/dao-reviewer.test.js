@@ -253,6 +253,14 @@ describe('dao 审官与完工', () => {
     await t.test('dao.mjs dispatch 打 reviewer/*', () => {
       assert.ok(/reviewer:\s*gate\.reviewer/.test(daoSrcLabels), 'dao.mjs dispatch 打 reviewer/*  →  ' + daoSrcLabels.slice(0, 60));
     });
+    await t.test('dao.mjs mirasim 派工补 type 走 stampIssueLabels（#1205）', () => {
+      const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
+      assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
+      assert.match(mira, /stampIssueLabels\(/, 'mirasim 派工补 type');
+      assert.match(mira, /preserveType:\s*true/, '已有 type 不被默认值盖掉');
+      assert.match(mira, /role:\s*'marshal'/, '打 label 身份 marshal');
+      assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
+    });
   });
 
   it('#586 审官按需起阶段一：pickReviewer + 自读选型 + worker-done 骨架', async (t) => {

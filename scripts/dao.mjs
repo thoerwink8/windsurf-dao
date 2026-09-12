@@ -1674,6 +1674,15 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   if (dup.blocked) fail(dup.error, { dup });
 
+  // Mirasim 不走 orca 事后 stamp。开工前把缺的 type/* 补上，否则后面 pr-sync-labels
+  // 会拒掉已经审完的 PR。已有 type/* 不覆盖。
+  if (args.issue && !(disambiguation.labels || []).some(n => n.startsWith('type/'))) {
+    const labels = stampIssueLabels({ issue: args.issue, role: gate?.role,
+      preserveType: true, runGh: ghRunnerForTarget(targetRepo, { role: 'marshal' }),
+      writeIssue: applyIssueWrite, repo: ghRepo || 'thoerwink8/windsurf-dao', host: 'dispatch-mirasim' });
+    if (!labels.ok) fail(`派工类型未写入，暂不起工人：${labels.error}`, { executor: 'mirasim' });
+  }
+
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
   catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, ghRepo: ghRepo || null, branch }); }
@@ -1735,7 +1744,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
     reviewer: args.reviewer ?? null,
     mergePolicy: (gate && gate.mergePolicy) || 'auto',
     ledgerWritten: !!(ledger && ledger.ok),
-    note: '会话即卡：交卷=PR 存在+判据绿（#880 卡 F）；GitHub 侧 label/评论未接（降级项，不断链）',
+    note: '有署名的任务在开工前核实类型；交卷仍需 PR 和验证结果，启动成功不等于完成',
   });
 }
 
@@ -1753,8 +1762,8 @@ async function cmdDispatch(args) {
   //      auto，显式派成 manual 的单会被自动合并——这是三条里唯一的硬阻塞。
   //   ② 派前探针 / 熔断没接 —— 钉在 orca 的 provider 名上（#843/#845）。**降级项不断链**：
   //      派工照跑，只是撞到坏模型时不会提前发现。
-  //   ③ GitHub 侧 label / 派工评论没接 —— **降级项不断链**：闭环靠 PR 署名走，不靠 label；
-  //      代价是盘面看不见派了什么。
+  //   ③ GitHub 侧 label：mirasim 开工前 stampIssueLabels 补 type/*（已有 type 不覆盖，marshal + 网关）；
+  //      派工评论仍没接。闭环还靠 PR 署名；缺 type 时不再把开工成功当完成。
   // **2026-09-06 已翻**。#880 卡 E 的验收判据「v2 真实派单一轮无人工干预」达成：
   // issue #1003 → mirasim 派工 → 工人自己干完开出 PR #1025 → 交卷 → 审官 APPROVED → 已合并，
   // 全程 orca 侧零参与（orca workspaces 下始终没有 1025 的卡）。

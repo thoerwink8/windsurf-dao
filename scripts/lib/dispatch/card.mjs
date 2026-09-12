@@ -7,6 +7,7 @@
 import { dispatchLabelNames, linkedIssueNumbers } from './worker-done.mjs';
 import { PENDING_LABEL } from '../pending-disambiguation.mjs';
 import { attributedIssueNumber } from '../close-issue.mjs';
+import { escalationKeyOf } from '../escalation-key.mjs';
 
 /** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
  * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
@@ -180,7 +181,7 @@ function labelNameOf(item) {
  * 接手派单不重挂 model/*（#815/#810）：issue 上已有任意 model/* 就不再加第二条。
  * existingNames 没拿到 → unscanned，不许猜着再挂。
  */
-export function planStampIssueLabels({ existingNames, model, role, reviewer } = {}) {
+export function planStampIssueLabels({ existingNames, model, role, reviewer, preserveType = false } = {}) {
   if (existingNames == null || !Array.isArray(existingNames)) {
     return { ok: false, unscanned: true, error: 'issue 现有 label 没查成（没查成，不许再挂）' };
   }
@@ -190,6 +191,10 @@ export function planStampIssueLabels({ existingNames, model, role, reviewer } = 
   const add = [];
   const skipped = [];
   for (const name of names) {
+    if (preserveType && name.startsWith('type/') && existing.some(n => n.startsWith('type/'))) {
+      skipped.push({ name, reason: 'keep-existing-type' });
+      continue;
+    }
     if (existing.includes(name)) {
       skipped.push({ name, reason: 'already' });
       continue;
@@ -206,7 +211,7 @@ export function planStampIssueLabels({ existingNames, model, role, reviewer } = 
 /** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。
  *  写走 issue-gateway（writeIssue）；runGh 只用于读 labels / 建仓库级 label。 */
 export function stampIssueLabels({
-  issue, model, role, reviewer, runGh, writeIssue,
+  issue, model, role, reviewer, runGh, writeIssue, preserveType = false,
   repo = 'thoerwink8/windsurf-dao', host = 'dispatch',
 } = {}) {
   const n = String(issue ?? '').trim();
@@ -223,11 +228,12 @@ export function stampIssueLabels({
   let existingNames = [];
   try {
     const parsed = JSON.parse(view.out);
-    existingNames = Array.isArray(parsed?.labels) ? parsed.labels : [];
+    if (!Array.isArray(parsed?.labels)) return { ok: false, issue: n, unscanned: true, error: '现有标签列表未返回，不猜测任务类型' };
+    existingNames = parsed.labels;
   } catch {
     return { ok: false, issue: n, unscanned: true, error: `gh 读 issue #${n} labels 返回非 JSON——没查成，不许再挂` };
   }
-  const planned = planStampIssueLabels({ existingNames, model, role, reviewer });
+  const planned = planStampIssueLabels({ existingNames, model, role, reviewer, preserveType });
   if (!planned.ok) return { ...planned, issue: n };
   if (!planned.add.length) {
     return {
@@ -246,7 +252,7 @@ export function stampIssueLabels({
     issue: n,
     add: planned.add,
     host,
-    idempotency_key: `dispatch:stamp-labels:${n}:${planned.add.join(',')}`,
+    idempotency_key: escalationKeyOf(`dispatch:stamp-labels:${n}:${planned.add.join(',')}`),
   });
   if (!r || !r.ok) {
     return { ok: false, issue: n, error: `issue-gateway 打 label 失败：${r && r.error ? r.error : '没查成'}` };
