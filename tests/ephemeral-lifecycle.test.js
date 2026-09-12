@@ -38,6 +38,10 @@ describe('ephemeral-lifecycle', () => {
     const dao = read('scripts/dao.mjs');
     assert.match(dao, /queued-for-review|enqueueOnly:\s*true/);
     assert.match(dao, /stopSessionsAtCwd/);
+    const i = dao.indexOf('async function cmdWorkerDoneMirasim');
+    const body = dao.slice(i, i + 14000);
+    assert.match(body, /审官树已按短命契约拆掉/);
+    assert.match(body, /existsSync\(String\(reviewTree\)\)/);
     const mira = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
     assert.doesNotMatch(mira, /pr merge/);
     assert.match(mira, /不许自己合/);

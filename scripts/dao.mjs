@@ -1994,7 +1994,7 @@ async function cmdWorkerDoneMirasim(args) {
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
-  // #1125 主路：首审**只入队，不起审官**。
+  // #1125 主路：交卷**只入队，不起审官**。
   //
   // 病：起审官原来发生在工人交卷那一刻，于是**生产端决定了消费端的并发**——工人跑得多快，
   // 审官就被起得多快，而没有任何人在看上游还剩多少容量。2026-09-07 实测 13 个工人在跑、
@@ -2003,9 +2003,10 @@ async function cmdWorkerDoneMirasim(args) {
   // 队列本身早就有（#815），但当初是给 Orca depth 2 限制做的**起败兜底**，Orca 已随 #1115
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
-  // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
+  // 首审一律入队。返工：审官树还在才往原会话推针；树已按短命契约拆掉则同样入队，
+  // 不读不存在的 `dao-review-pr-<N>`（#1174：判定后立刻拆审官树）。
   const repo = targetRepo.localPath;
-  if (plan.round === 'first') {
+  const enqueueHandoff = async (why) => {
     const dir = reviewPendingDir({ root: ROOT });
     let head = { name: null, oid: null };
     try {
@@ -2036,8 +2037,17 @@ async function cmdWorkerDoneMirasim(args) {
       postedIssue, postedPr, action: 'queued-for-review',
       reviewPending: { path: wrote.path, source: built.ticket.source },
       stopped,
-      why: '首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官',
+      why,
     });
+  };
+  if (plan.round === 'first') {
+    await enqueueHandoff('首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官');
+    return;
+  }
+  const rec = mirasimRegistry().read(String(plan.pr), targetRepo.ownerName || null);
+  const reviewTree = rec && rec.ok && rec.record ? rec.record.treePath : null;
+  if (!reviewTree || !existsSync(String(reviewTree))) {
+    await enqueueHandoff('审官树已按短命契约拆掉，返工改入队由指挥官起新短命审官');
     return;
   }
 
