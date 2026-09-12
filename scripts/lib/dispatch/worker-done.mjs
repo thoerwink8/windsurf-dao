@@ -173,8 +173,9 @@ export function collectPrLabels({ pr, runGh } = {}) {
   };
 }
 
-/** 工人 job.dispatch：匹配键是 repo + branch。先取该键最新一条，再校验 identity/model/reviewer。
- * 最新一条缺字段或身份非法 → 人工补标，不回退旧的完整记录。 */
+/** 工人 job.dispatch：先按分支取最新一条（另一仓的完整记录不算这条链；
+ * 缺 repo 的后写残缺仍是最新一条），再校验 repo/identity/model/reviewer。
+ * 最新一条缺任一字段或身份非法 → 人工补标，不回退旧的完整记录。 */
 export function pickWorkerDispatchByBranch(events, branch, repo) {
   const want = String(branch || '').trim();
   if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
@@ -189,7 +190,9 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
   for (const e of events) {
     if (!e || e.type !== 'job.dispatch') continue;
     if (String(e.branch || '').trim() !== want) continue;
-    if (normalizeDispatchRepo(e.repo) !== wantRepo) continue;
+    const eventRepo = normalizeDispatchRepo(e.repo);
+    // 明确写了另一仓的，不是这条链。缺仓的后写残缺要留下来当最新一条校验。
+    if (eventRepo && eventRepo !== wantRepo) continue;
     keyed.push(e);
   }
   if (keyed.length === 0) {
@@ -200,6 +203,21 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
     };
   }
   const hit = keyed[keyed.length - 1];
+  const hitRepo = normalizeDispatchRepo(hit.repo);
+  if (!hitRepo) {
+    return {
+      ok: false,
+      state: 'none',
+      error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 repo——需人工打标`,
+    };
+  }
+  if (hitRepo !== wantRepo) {
+    return {
+      ok: false,
+      state: 'none',
+      error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 仓是 ${hitRepo}——需人工打标`,
+    };
+  }
   if (hit.identity !== '工人') {
     return {
       ok: false,

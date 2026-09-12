@@ -23,7 +23,7 @@
 //   ready-queue-check.mjs  inspectReadyQueue —— 已消歧 + 无在途 PR + 无卡 + 没挂「将来某版」 = 可立即起
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
-import { prApprovedReady, prApprovedDraft, prChecksRed } from './shuai-scan.mjs';
+import { prApprovedReady, prApprovedDraft, prChecksRed, DEFAULT_REPO } from './shuai-scan.mjs';
 import { sessionStateOf } from './execution-states.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
@@ -408,20 +408,43 @@ export function reviewerLabelFor(_gh = {}, pr) {
   return labelValue(pr, 'reviewer/');
 }
 
+/** owner/name 小写；非法或空串不当仓键。 */
+export function normalizeCommanderRepo(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(s) ? s : '';
+}
+
+function prRepoOf(pr) {
+  if (!pr || typeof pr !== 'object') return '';
+  if (typeof pr.repo === 'string') return normalizeCommanderRepo(pr.repo);
+  if (typeof pr.repository === 'string') return normalizeCommanderRepo(pr.repository);
+  return normalizeCommanderRepo(pr.repository && pr.repository.nameWithOwner);
+}
+
 /**
- * 差集重派对应的开放 PR。记了 PR 号就按号找，对不上就是没有；
- * 没记 PR 号时，署名单唯一命中一张才认。多张/零张都不猜，不回退 issue。
+ * 差集重派对应的开放 PR。匹配键是仓 + PR 号（没记 PR 号时才用署名单唯一命中）。
+ * 目标仓不是当前指挥官仓、或该仓对不上本仓开放 PR → 没有，不拿同号本仓 PR 顶。
  */
-export function correspondingPrForRedispatch(rd, prs) {
+export function correspondingPrForRedispatch(rd, prs, { homeRepo } = {}) {
   const list = Array.isArray(prs) ? prs : [];
+  const wantRepo = normalizeCommanderRepo(rd && rd.repo);
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  if (wantRepo && here && wantRepo !== here) return null;
+  const scoped = list.filter((p) => {
+    if (!p) return false;
+    const prRepo = prRepoOf(p);
+    if (prRepo && here && prRepo !== here) return false;
+    if (prRepo && wantRepo && prRepo !== wantRepo) return false;
+    return true;
+  });
   if (rd && rd.pr != null) {
     const n = Number(rd.pr);
     if (!Number.isInteger(n) || n <= 0) return null;
-    return list.find((p) => p && Number(p.number) === n) || null;
+    return scoped.find((p) => Number(p.number) === n) || null;
   }
   const issue = Number(rd && rd.issue);
   if (!Number.isInteger(issue) || issue <= 0) return null;
-  const hits = list.filter((p) => p && attributedIssueNumber(p) === issue);
+  const hits = scoped.filter((p) => attributedIssueNumber(p) === issue);
   return hits.length === 1 ? hits[0] : null;
 }
 
@@ -1385,13 +1408,21 @@ function collectCandidates(situation) {
         reason: 'unscanned', detail: 'reconcile-unscanned',
       }), N.dispatch));
     }
+    const homeRepo = situation.repo || DEFAULT_REPO;
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
-      const pr = correspondingPrForRedispatch(rd, gh.prs);
+      // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
+      const wantRepo = normalizeCommanderRepo(rd && rd.repo);
+      const here = normalizeCommanderRepo(homeRepo);
+      const pr = correspondingPrForRedispatch(rd, gh.prs, { homeRepo });
       if (!pr) {
-        out.push(withNeeds(esc(`#${rd.issue} 差集要重派，但找不到对应 PR，需人工补标（不读 issue、不猜）`, {
-          reason: 'missing-labels', issue: rd.issue, pr: rd.pr || null,
-        }), N.dispatch));
+        const cross = wantRepo && here && wantRepo !== here;
+        out.push(withNeeds(esc(
+          cross
+            ? `#${rd.issue} 差集要重派，目标仓 ${rd.repo} 不是当前指挥官仓 ${homeRepo}，需人工补标（不得用同号本仓 PR）`
+            : `#${rd.issue} 差集要重派，但找不到对应 PR，需人工补标（不读 issue、不猜）`,
+          { reason: 'missing-labels', issue: rd.issue, pr: rd.pr || null, repo: rd.repo || null },
+        ), N.dispatch));
         continue;
       }
       const model = labelValue(pr, 'model/');
@@ -1400,14 +1431,14 @@ function collectCandidates(situation) {
       if (!model || !reviewer) {
         out.push(withNeeds(esc(
           `PR #${pr.number} 差集要重派，但 PR 上缺 ${!model ? 'model/' : ''}${!model && !reviewer ? '、' : ''}${!reviewer ? 'reviewer/' : ''}，需人工打标（不读 issue、不猜）`,
-          { reason: 'missing-labels', pr: pr.number, issue: rd.issue, title: pr.title || '' },
+          { reason: 'missing-labels', pr: pr.number, issue: rd.issue, title: pr.title || '', repo: rd.repo || homeRepo },
         ), N.dispatch));
         continue;
       }
       const rGate = assessDispatchModel(model, { policy, enabledIds, redIds });
       if (!rGate.ok) {
         out.push(withNeeds(esc(`PR #${pr.number} 差集要重派，但${rGate.why}`, {
-          reason: rGate.reason, pr: pr.number, issue: rd.issue, model,
+          reason: rGate.reason, pr: pr.number, issue: rd.issue, model, repo: rd.repo || homeRepo,
         }), N.dispatch));
         continue;
       }
@@ -1421,8 +1452,10 @@ function collectCandidates(situation) {
         ? { title: issue?.title ?? '', body: issue?.body ?? '', labels: [{ name: `type/${FRAMEWORK_ROLE}` }] }
         : issue;
       const mergePlan = resolveIssueMergePolicy(mergeSource, situation.askPolicy);
+      const targetRepo = (rd.repo && String(rd.repo).trim()) || homeRepo || null;
       out.push(withNeeds({
         kind: 'dispatch', issue: rd.issue, pr: pr.number, model, reviewer,
+        repo: targetRepo,
         role: role || null,
         title: (issue && issue.title) || pr.title || '',
         mergePolicy: mergePlan.mergePolicy,
@@ -1431,7 +1464,7 @@ function collectCandidates(situation) {
         why: rd.why + `；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
         reconcile: true,
       }, N.dispatch));
-      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue, pr: pr.number }), N.dispatch));
+      out.push(withNeeds(hub(`#${rd.issue} 账上有人、名单里没有——已自动重派（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: rd.issue, pr: pr.number, repo: targetRepo }), N.dispatch));
     }
   }
 

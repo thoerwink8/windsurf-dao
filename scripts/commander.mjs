@@ -693,7 +693,9 @@ function execAction(action, { state, dryRun, log }) {
         '--spec', dispatchSpec(action.issue), '--confirm',
         ...dispatchMergePolicyArgs(action),
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
-        ...(action.reconcile ? ['--allow-dup'] : [])];
+        ...(action.reconcile ? ['--allow-dup'] : []),
+        // 仓键跟到执行口：跨仓不得回落默认仓。本仓带 --repo 与不传等价。
+        ...(action.repo ? ['--repo', String(action.repo)] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。

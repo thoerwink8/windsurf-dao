@@ -2355,6 +2355,64 @@ describe('对账循环：账上有人、名单里没有 → 重派', () => {
     assert.match(e[0].why, /找不到对应 PR/);
   });
 
+  it('跨仓同号 PR 不得套本仓标签重派', async () => {
+    const { decide, correspondingPrForRedispatch } = await CORE;
+    const pr = {
+      number: 10, title: '本仓', body: '署名 issue #1',
+      labels: [{ name: 'model/new' }, { name: 'reviewer/new' }, { name: 'type/写码' }],
+    };
+    assert.equal(correspondingPrForRedispatch(
+      { issue: 999, pr: 10, repo: 'other/repo' },
+      [pr],
+      { homeRepo: 'thoerwink8/windsurf-dao' },
+    ), null);
+    const local = correspondingPrForRedispatch(
+      { issue: 1, pr: 10, repo: 'thoerwink8/windsurf-dao' },
+      [pr],
+      { homeRepo: 'thoerwink8/windsurf-dao' },
+    );
+    assert.equal(local, pr);
+    const r = decide(sit({
+      repo: 'thoerwink8/windsurf-dao',
+      github: { scanned: true, issues: [labeled], prs: [pr] },
+      sessions: { scanned: true, items: [] },
+      desiredJobs: {
+        unscanned: false,
+        items: [{ job_id: 'dispatch-x', identity: '工人', issue: 999, pr: 10, repo: 'other/repo' }],
+      },
+    }));
+    const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(d.length, 0, JSON.stringify(d));
+    assert.equal(byKind(r, 'dispatch').length, 0);
+    const e = byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels');
+    assert.equal(e.length, 1, JSON.stringify(r.actions));
+    assert.equal(e[0].issue, 999);
+    assert.equal(e[0].pr, 10);
+    assert.equal(e[0].repo, 'other/repo');
+    assert.match(e[0].why, /other\/repo/);
+    assert.match(e[0].why, /不得用同号本仓 PR/);
+  });
+
+  it('本仓差集重派 action 带 repo，不丢仓键', async () => {
+    const { decide } = await CORE;
+    const r = decide(sit({
+      repo: 'thoerwink8/windsurf-dao',
+      sessions: { scanned: true, items: [] },
+      desiredJobs: {
+        unscanned: false,
+        items: [{
+          job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 885,
+          repo: 'thoerwink8/windsurf-dao',
+        }],
+      },
+    }));
+    const d = byKind(r, 'dispatch').filter((a) => a.reconcile);
+    assert.equal(d.length, 1, JSON.stringify(r.actions));
+    assert.equal(d[0].repo, 'thoerwink8/windsurf-dao');
+    assert.equal(d[0].pr, 885);
+    assert.equal(d[0].model, 'grok-4.6');
+  });
+
   it('署名 issue 已关、PR 标签齐全 → 差集重派读 PR，不误报缺失', async () => {
     const { decide } = await CORE;
     const pr = {
@@ -2425,6 +2483,13 @@ describe('对账循环 scan 真的接进态势', () => {
 
   it('差集重派带 --allow-dup（否则 10 分钟去重窗会挡掉）', () => {
     assert.match(src, /action\.reconcile \? \['--allow-dup'\] : \[\]/);
+  });
+
+  it('差集重派带 --repo（跨仓不得回落默认仓）', () => {
+    const i = src.indexOf("case 'dispatch':");
+    assert.ok(i > -1, '找不到 dispatch 执行分支');
+    const fn = src.slice(i, src.indexOf("case 'attach-reviewer':", i));
+    assert.match(fn, /action\.repo \? \['--repo', String\(action\.repo\)\]/);
   });
 
   it('rereview 写完票当场 drain --pr，不等下一轮', () => {

@@ -104,6 +104,18 @@ describe('pickWorkerDispatchByBranch', () => {
     assert.match(got.error, /需人工打标/);
   });
 
+  it('后写缺 repo 不得回退旧的完整记录', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const got = pickWorkerDispatchByBranch([
+      { type: 'job.dispatch', identity: '工人', branch: 'b', repo: 'acme/repo', model: 'old', reviewer: 'old-r' },
+      { type: 'job.dispatch', identity: '工人', branch: 'b', model: 'new', reviewer: 'new-r' },
+    ], 'b', 'acme/repo');
+    assert.equal(got.ok, false);
+    assert.equal(got.model, undefined);
+    assert.match(got.error, /缺 repo/);
+    assert.match(got.error, /需人工打标/);
+  });
+
   it('跨仓同名分支不套另一仓的 dispatch', async () => {
     const { pickWorkerDispatchByBranch } = await WD;
     const events = [
