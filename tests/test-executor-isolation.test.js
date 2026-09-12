@@ -293,6 +293,69 @@ test('未知计算属性经别名转发必须红（审官对抗样本）', () =>
   assert.ok(r.violations.length > 0);
 });
 
+test('调用后再赋 --dry-run 的 argv 必须红（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch"];',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+    'argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.ok(r.violations.length > 0);
+});
+
+test('调用前 argv 已有 --dry-run、调用后再改掉仍绿', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+    'argv = ["scripts/dao.mjs", "dispatch"];',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('process.execPath 别名 + 解析不了的 argv 必须红（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const nodePath = process.execPath;',
+    'const argv = makeArgv();',
+    `${CALL}(nodePath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('process.execPath 别名再赋值 + 解析不了的 argv 仍红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const nodePath = process.execPath;',
+    'const bin = nodePath;',
+    'const argv = makeArgv();',
+    `${CALL}(bin, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('process.execPath 别名但 argv 带 --dry-run 仍绿', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const nodePath = process.execPath;',
+    'const argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    `${CALL}(nodePath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('未知计算属性别名再赋值仍红', () => {
   const alias = 'ru' + 'n';
   const next = 'act' + 'ual';

@@ -1,0 +1,6 @@
+/* 审官对抗样本：调用前 argv 无 --dry-run，调用后才补。拼全部赋值会误放行。
+const { spawnSync } = require("node:child_process");
+let argv = ["scripts/dao.mjs", "dispatch"];
+spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });
+argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];
+*/

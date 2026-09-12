@@ -16,6 +16,8 @@
 //      解析不了的 child_process 计算属性调用 fail-closed——不许 scanned:0 静默放行。
 //      未知计算属性结果经别名转发仍保留不透明标记（const run = cp[unknownKey]; run(...)）。
 //      argv 变量解析不了且调用像在跑 node/dao → 保守判红，不许留下变量名当 scanned:0。
+//      argv 只认调用前最后一次赋值：调用后才补 --dry-run 不许拼进来误放行。
+//      process.execPath 的命令别名要跟（const nodePath = process.execPath; spawn(nodePath, argv)）。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -324,21 +326,27 @@ function scanComputedCalls(text, spawnNames, cpNames, onSpan) {
     const { resolved, opaque } = resolveComputedKey(text, text.slice(i + 1, keyEnd));
     const recv = receiverBefore(text, i, cpNames);
     if (!isSpawnName(resolved, [...spawnNames]) && !(opaque && recv.isCp)) continue;
-    onSpan(text.slice(recv.start, callEnd + 1));
+    onSpan(text.slice(recv.start, callEnd + 1), recv.start);
     i = callEnd;
   }
 }
 
 export function extractCallSpans(src, names) {
+  return extractCallSites(src, names).map((s) => s.span);
+}
+
+function extractCallSites(src, names) {
   const text = String(src || '');
   const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
   const alts = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const spans = [];
+  const sites = [];
   const seen = new Set();
-  const push = (span) => {
-    if (!span || seen.has(span)) return;
-    seen.add(span);
-    spans.push(span);
+  const push = (span, index) => {
+    if (!span) return;
+    const key = `${index}:${span}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    sites.push({ span, index });
   };
   const cpNames = collectChildProcessReceivers(text);
   if (alts.length) {
@@ -357,62 +365,92 @@ export function extractCallSpans(src, names) {
       if (openIdx < 0) continue;
       const end = matchBalanced(text, openIdx);
       if (end < 0) continue;
-      push(text.slice(m.index, end + 1));
+      push(text.slice(m.index, end + 1), m.index);
     }
   }
   const spawnNames = new Set([...list, ...SPAWN_FNS]);
   scanComputedCalls(text, spawnNames, cpNames, push);
-  return spans;
+  return sites;
 }
 
-function findArrayLiteral(src, name) {
-  const text = String(src || '');
-  const re = new RegExp(String.raw`(?:^|[^\w.])${escapeIdent(name)}\s*=\s*\[`, 'g');
-  const pieces = [];
-  let m;
-  while ((m = re.exec(text))) {
-    const openIdx = text.indexOf('[', m.index + m[0].length - 1);
-    if (openIdx < 0) continue;
-    const end = matchBalanced(text, openIdx);
-    if (end < 0) continue;
-    pieces.push(text.slice(openIdx, end + 1));
-  }
-  return pieces.join('\n');
-}
-
-function findStringLiteral(src, name) {
-  const text = String(src || '');
-  const re = new RegExp(String.raw`(?:^|[^\w.])${escapeIdent(name)}\s*=\s*`, 'g');
-  const pieces = [];
-  let m;
-  while ((m = re.exec(text))) {
-    const start = m.index + m[0].length;
-    const first = readStringLit(text, start);
-    if (!first) continue;
-    let end = first.end;
-    while (true) {
-      let j = end;
-      while (j < text.length && /\s/.test(text[j])) j++;
-      if (text[j] !== '+') break;
-      j += 1;
-      while (j < text.length && /\s/.test(text[j])) j++;
-      const next = readStringLit(text, j);
-      if (!next) break;
-      end = next.end;
+function scanRhsEnd(text, start) {
+  let depthParen = 0;
+  let depthBrack = 0;
+  let depthBrace = 0;
+  let inStr = null;
+  let esc = false;
+  const src = String(text || '');
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
     }
-    pieces.push(foldStringConcat(text.slice(start, end)));
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '(') depthParen++;
+    else if (c === ')') { if (depthParen) depthParen--; }
+    else if (c === '[') depthBrack++;
+    else if (c === ']') { if (depthBrack) depthBrack--; }
+    else if (c === '{') depthBrace++;
+    else if (c === '}') { if (depthBrace) depthBrace--; }
+    else if (depthParen === 0 && depthBrack === 0 && depthBrace === 0) {
+      if (c === ';' || c === '\n') return i;
+    }
   }
-  return pieces.join('\n');
+  return src.length;
+}
+
+/** 调用前最后一次 `name = rhs`。赋值必须在 beforeIdx 前结束。 */
+function findLastAssignment(src, name, beforeIdx = Infinity) {
+  const text = String(src || '');
+  const re = new RegExp(String.raw`(?:^|[^\w.])${escapeIdent(name)}\s*=(?![=>])\s*`, 'g');
+  let last = null;
+  let m;
+  while ((m = re.exec(text))) {
+    const rhsStart = m.index + m[0].length;
+    if (rhsStart >= beforeIdx) continue;
+    const rhsEnd = scanRhsEnd(text, rhsStart);
+    if (rhsEnd < 0 || rhsEnd > beforeIdx) continue;
+    last = { rhs: text.slice(rhsStart, rhsEnd).trim(), start: m.index, end: rhsEnd };
+  }
+  return last;
+}
+
+function findArrayLiteral(src, name, beforeIdx = Infinity) {
+  const asg = findLastAssignment(src, name, beforeIdx);
+  if (!asg) return '';
+  const rhs = asg.rhs.trim();
+  if (!rhs.startsWith('[')) return '';
+  const end = matchBalanced(rhs, 0);
+  if (end < 0) return '';
+  return rhs.slice(0, end + 1);
+}
+
+function findStringLiteral(src, name, beforeIdx = Infinity) {
+  const asg = findLastAssignment(src, name, beforeIdx);
+  if (!asg) return '';
+  const folded = foldStringConcat(asg.rhs);
+  const t = folded.trim();
+  if (!t) return '';
+  if (t[0] !== '"' && t[0] !== "'" && t[0] !== '`') return '';
+  return folded;
 }
 
 /** process.execPath / node / *.js 才可能跑 dao；git 等字面量命令不当 dispatch 候选。 */
-function isJsRunnerCommand(src, cmd) {
+function isJsRunnerCommand(src, cmd, beforeIdx = Infinity, seen = new Set()) {
   const t = String(cmd || '').trim();
   if (!t) return true;
   if (/\bprocess\.execPath\b/.test(t)) return true;
+  if (/^process\s*\[\s*(['"`])execPath\1\s*\]$/.test(t)) return true;
   if (/^[A-Za-z_][\w]*$/.test(t)) {
-    const str = findStringLiteral(src, t);
-    if (str) return isJsRunnerCommand(src, str);
+    if (seen.has(t)) return true;
+    seen.add(t);
+    const asg = findLastAssignment(src, t, beforeIdx);
+    if (asg) return isJsRunnerCommand(src, asg.rhs, asg.start, seen);
+    const str = findStringLiteral(src, t, beforeIdx);
+    if (str) return isJsRunnerCommand(src, str, beforeIdx, seen);
     return false;
   }
   const folded = foldStringConcat(t);
@@ -428,18 +466,18 @@ function isJsRunnerCommand(src, cmd) {
   return true;
 }
 
-function expandArgvSpreads(src, span) {
+function expandArgvSpreads(src, span, beforeIdx) {
   let out = span;
   for (const m of span.matchAll(/\.\.\.\s*([A-Za-z_][\w]*)/g)) {
     if (m[1] === 'process' || m[1] === 'env') continue;
-    const lit = findArrayLiteral(src, m[1]);
+    const lit = findArrayLiteral(src, m[1], beforeIdx);
     if (lit) out += `\n${lit}`;
   }
   return out;
 }
 
 /** 子进程 argv / exec 命令字符串，不含 options 对象。--dry-run 只在这里算数。 */
-function argvTextForCall(src, span) {
+function argvTextForCall(src, span, callIndex = Infinity) {
   const open = span.indexOf('(');
   if (open < 0) return { text: '', unresolved: false };
   const close = matchBalanced(span, open);
@@ -448,14 +486,16 @@ function argvTextForCall(src, span) {
   const pieces = [];
   let unresolved = false;
   let command = '';
+  const callee = calleeName(span);
+  const execString = callee === 'exec' || callee === 'execSync';
   const addArray = (piece) => {
-    const expanded = expandArgvSpreads(src, piece);
+    const expanded = expandArgvSpreads(src, piece, callIndex);
     pieces.push(expanded);
     for (const idm of expanded.matchAll(/\b([A-Za-z_][\w]*)\b/g)) {
       const id = idm[1];
       if (SPAWN_FNS.includes(id) || id === 'process' || id === 'execPath') continue;
-      const str = findStringLiteral(src, id);
-      const arr = findArrayLiteral(src, id);
+      const str = findStringLiteral(src, id, callIndex);
+      const arr = findArrayLiteral(src, id, callIndex);
       if (str) pieces.push(str);
       if (arr) pieces.push(arr);
     }
@@ -465,15 +505,17 @@ function argvTextForCall(src, span) {
     if (!t || t.startsWith('{')) continue;
     if (/^(?:function\b|[A-Za-z_][\w]*\s*=>)/.test(t)) continue;
     if (!command) command = t;
+    // spawn/execFile 的第一参是命令路径，不是 argv；exec 的第一参才是命令字符串。
+    const treatingAsCommand = !execString && t === command;
     if (t.startsWith('[')) { addArray(t); continue; }
     if (/^[A-Za-z_][\w]*$/.test(t)) {
-      const arr = findArrayLiteral(src, t);
-      const str = findStringLiteral(src, t);
+      const arr = findArrayLiteral(src, t, callIndex);
+      const str = findStringLiteral(src, t, callIndex);
       if (arr) addArray(arr);
       if (str) pieces.push(str);
       if (!arr && !str) {
         pieces.push(t);
-        if (isJsRunnerCommand(src, command)) unresolved = true;
+        if (!treatingAsCommand && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
       }
       continue;
     }
@@ -512,11 +554,11 @@ export function classifyTestDispatchSpawns(src) {
   const text = String(src);
   const { names, opaque: opaqueAliases } = collectSpawnAliasSets(text);
   const nameList = [...names];
-  const spans = extractCallSpans(text, nameList);
+  const sites = extractCallSites(text, nameList);
   const violations = [];
   let scanned = 0;
-  for (const span of spans) {
-    const argvInfo = argvTextForCall(text, span);
+  for (const { span, index } of sites) {
+    const argvInfo = argvTextForCall(text, span, index);
     const argvText = foldStringConcat(argvInfo.text);
     const opaque = isOpaqueComputedSpan(span, nameList, text)
       || opaqueAliases.has(calleeName(span));
@@ -608,6 +650,37 @@ function listKindFiles(dir) {
   catch { return []; }
 }
 
+/** 调用前 argv 无 --dry-run，调用后同名变量才补上。拼全部赋值会误放行。 */
+function fixtureHasArgvMutatedAfterCall(src) {
+  const text = String(src || '');
+  const spawnAt = text.search(/\b(?:spawnSync|spawn|execFileSync|execFile|execSync|exec)\s*\(/);
+  if (spawnAt < 0) return false;
+  const before = text.slice(0, spawnAt);
+  const after = text.slice(spawnAt);
+  const assignRe = /(?:^|[^\w.])([A-Za-z_][\w]*)\s*=\s*\[/g;
+  const beforeNames = new Map();
+  let m;
+  while ((m = assignRe.exec(before))) {
+    const openIdx = before.indexOf('[', m.index + m[0].length - 1);
+    if (openIdx < 0) continue;
+    const end = matchBalanced(before, openIdx);
+    if (end < 0) continue;
+    beforeNames.set(m[1], before.slice(openIdx, end + 1));
+  }
+  assignRe.lastIndex = 0;
+  while ((m = assignRe.exec(after))) {
+    const name = m[1];
+    if (!beforeNames.has(name)) continue;
+    const openIdx = after.indexOf('[', m.index + m[0].length - 1);
+    if (openIdx < 0) continue;
+    const end = matchBalanced(after, openIdx);
+    if (end < 0) continue;
+    const later = after.slice(openIdx, end + 1);
+    if (!hasLit(beforeNames.get(name), '--dry-run') && hasLit(later, '--dry-run')) return true;
+  }
+  return false;
+}
+
 export function inspectTestExecutorIsolationFixtures(root) {
   if (!root) return { ok: false, unscanned: true, error: '没给样本根目录' };
   if (!existsSync(root)) return { ok: false, unscanned: true, error: `样本目录不在：${root}` };
@@ -646,6 +719,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let assignedArgv = false;
       let unresolvedArgv = false;
       let opaqueAlias = false;
+      let laterArgvDryRun = false;
+      let execPathAlias = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -670,6 +745,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
           /(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w]*\s*\[/.test(src)
           && r.scanned > 0 && !r.ok
         ) opaqueAlias = true;
+        if (fixtureHasArgvMutatedAfterCall(src) && r.scanned > 0 && !r.ok) laterArgvDryRun = true;
+        if (
+          /[A-Za-z_][\w]*\s*=\s*process\.execPath/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execPathAlias = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -679,6 +759,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!assignedArgv) problems.push('red/ 没点出 argv 先声明再赋值');
       if (!unresolvedArgv) problems.push('red/ 没点出解析不了的 argv 变量');
       if (!opaqueAlias) problems.push('red/ 没点出计算属性别名转发');
+      if (!laterArgvDryRun) problems.push('red/ 没点出调用后才赋 --dry-run 的 argv');
+      if (!execPathAlias) problems.push('red/ 没点出 process.execPath 命令别名');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
