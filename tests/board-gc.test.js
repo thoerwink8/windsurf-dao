@@ -1031,7 +1031,8 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('删树读的是救援之后的名单，不是原判决', () => {
-    const i = src.indexOf("'worktree-rm'");
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.notEqual(i, -1, '找不到 git 删树主路径');
     assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
@@ -1301,13 +1302,13 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
     assert.match(src, /进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录/);
     const apply = src.slice(src.indexOf('if (args.apply) {'));
     const skipAt = apply.indexOf('进程面没查成，本轮不删工作树');
-    const zombieAt = apply.indexOf('worktree-rm');
+    const zombieAt = apply.indexOf('removeTreeFallback(');
     const sessionAt = apply.indexOf('planSessionGc(');
     const leaseAt = apply.indexOf('planLeaseGc(');
     const orphanAt = apply.indexOf('planOrphanGc(');
     assert.notEqual(skipAt, -1, '找不到进程面没查成的跳过');
     assert.match(src, /args.apply && jobs.length && procsOk/, '备份推送也要过进程闸，不许在查不清时改远端');
-    assert.equal(zombieAt > skipAt, true, 'worktree-rm 必须在跳过之后');
+    assert.equal(zombieAt > skipAt, true, 'removeTreeFallback 必须在跳过之后');
     assert.equal(sessionAt > skipAt, true, 'planSessionGc 必须在跳过之后');
     assert.equal(leaseAt > skipAt, true, 'planLeaseGc 必须在跳过之后');
     assert.equal(orphanAt > skipAt, true, 'planOrphanGc 必须在跳过之后');

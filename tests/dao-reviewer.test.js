@@ -247,10 +247,12 @@ describe('dao 审官与完工', () => {
       });
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
-    await t.test('dao.mjs mirasim 派工不打 stampIssueLabels（降级项，闭环靠 PR 署名）', () => {
+    await t.test('dao.mjs mirasim 派工补 type 走 marshal stampIssueLabels（#1205）', () => {
       const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
-      assert.doesNotMatch(mira, /stampIssueLabels\(/, 'mirasim 派工不打 label');
+      assert.match(mira, /stampIssueLabels\(/, '缺 type 时补 stampIssueLabels');
+      assert.match(mira, /preserveType:\s*true/, '已有 type 不许覆盖');
+      assert.match(mira, /role:\s*'marshal'/, '补标身份必须 marshal');
     });
     await t.test('pr-sync-labels 仍是 label 校准入口', () => {
       assert.ok(/function cmdPrSyncLabels/.test(daoSrcLabels), 'pr-sync-labels 动词还在');
