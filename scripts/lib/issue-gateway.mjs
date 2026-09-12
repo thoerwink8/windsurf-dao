@@ -115,7 +115,11 @@ export function parseIssueUrl(text) {
 }
 
 export function parseCommentUrl(text) {
-  const m = String(text || '').match(/https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/(\d+)#issuecomment-(\d+)/);
+  // `gh issue comment` 回 `/issues/<N>#issuecomment-<id>`，但**同一张 PR 走这条入口时
+  // 回的是 `/pull/<N>#issuecomment-<id>`**（2026-09-12 实咬：给 PR #1159 落停手评论，
+  // 评论已在 GitHub 上落成，网关却判 incomplete_receipt/ok:false——调用方据 ok:false
+  // 重试就是重复评论）。两条路径都认。
+  const m = String(text || '').match(/https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/(\d+)#issuecomment-(\d+)/);
   if (!m) return null;
   return {
     repo: `${m[1]}/${m[2]}`,

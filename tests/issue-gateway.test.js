@@ -271,6 +271,28 @@ describe('issue-gateway 写入契约', () => {
     assert.equal(r.stage, 'author_mismatch');
   });
 
+  // 2026-09-12 实咬：给 PR #1159 落评论，评论已在 GitHub 上落成，网关却判
+  // incomplete_receipt/ok:false——因为 gh pr comment 回的是 /pull/<N>#issuecomment-<id>，
+  // 而这里只认 /issues/。调用方拿到 ok:false 会重试，就是重复评论。
+  it('parseCommentUrl 认 issue 与 pull 两条路径', async () => {
+    const G = await LIB_LOAD;
+    const onIssue = G.parseCommentUrl('https://github.com/o/r/issues/42#issuecomment-9\n');
+    assert.equal(onIssue.number, 42);
+    assert.equal(onIssue.commentId, '9');
+    const onPull = G.parseCommentUrl('https://github.com/o/r/pull/1159#issuecomment-5646045516\n');
+    assert.equal(onPull.number, 1159, 'PR 路径的评论回执必须认出来（否则判没落成，调用方会重发）');
+    assert.equal(onPull.commentId, '5646045516');
+    assert.equal(onPull.repo, 'o/r');
+  });
+
+  it('parseCommentUrl 不吃不是回执的链接（没查成不是查过没事）', async () => {
+    const G = await LIB_LOAD;
+    // 光有 PR / issue 链接、没有 #issuecomment 锚点 = 不是评论回执，必须返回 null。
+    assert.equal(G.parseCommentUrl('https://github.com/o/r/pull/1159'), null);
+    assert.equal(G.parseCommentUrl('https://github.com/o/r/issues/42'), null);
+    assert.equal(G.parseCommentUrl(''), null);
+  });
+
   it('每次调用写审计，能区分宿主 / 动作 / 失败阶段', async () => {
     const G = await LIB_LOAD;
     const dir = tmp();
