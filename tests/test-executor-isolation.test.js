@@ -56,6 +56,64 @@ test('--dry-run 放行，哪怕 env 很瘦', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('--dry-run 在 stdin 不算放行（审官对抗样本）', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" }, input: "--dry-run" });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('--dry-run 在 env 字段不算放行（审官对抗样本）', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", FLAG: "--dry-run" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('argv 里真有 --dry-run 仍放行（options 再写一份不算干扰）', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" }, input: "--dry-run" });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('计算属性 spawn 必须红（审官对抗样本）', () => {
+  const lb = '[';
+  const rb = ']';
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp${lb}${JSON.stringify(CALL)}${rb}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.ok(r.violations.length > 0);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('argv 拼接动词必须红（审官对抗样本）', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dis" + "patch"], { env: { PATH: "/bin" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.ok(r.violations.length > 0);
+});
+
+test('解析不了的 child_process 计算属性 fail-closed', () => {
+  const lb = '[';
+  const rb = ']';
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp${lb}fn${rb}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.ok(r.violations.length > 0);
+});
+
 test('...base 展开后能看见 dispatch', () => {
   const src = [
     "const base = ['dao.mjs', 'dispatch', '--issue', '565'];",

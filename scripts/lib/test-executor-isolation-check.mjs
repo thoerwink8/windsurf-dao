@@ -9,8 +9,10 @@
 //   1. 测试源码不许 spawn/exec 调 dao dispatch / dispatch-exec 还不带 --dry-run
 //      （子进程 env 丢失时 NODE_TEST_CONTEXT 也丢，运行时闸够不着）。
 //      认别名（spawnSync: run / const run = cp.spawnSync）、argv 变量、模板动词、
-//      exec 命令字符串、dispatch-exec——只钉调用名 spawnSync + 单双引号字面量
-//      会让审官给的对抗样本 scanned:0 静默漏检。
+//      exec 命令字符串、dispatch-exec、计算属性 cp["spawnSync"]、拼接动词 "dis"+"patch"。
+//      --dry-run 只认解析后的子进程 argv（input / env 字段里的字面量不算）。
+//      解析不了的 child_process 计算属性调用 fail-closed——不许 scanned:0 静默放行。
+//      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
 // 检查器自持正则与括号匹配，不 import 被测测试、不 import mirasim-runtime 的解析。
@@ -30,9 +32,48 @@ function hasLit(s, lit) {
   return new RegExp('[' + '\'"`' + ']' + esc + '[' + '\'"`' + ']').test(String(s || ''));
 }
 
+function readStringLit(s, i) {
+  const q = s[i];
+  if (q !== '"' && q !== "'" && q !== '`') return null;
+  let esc = false;
+  for (let k = i + 1; k < s.length; k++) {
+    const c = s[k];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === q) return { body: s.slice(i + 1, k), end: k + 1 };
+  }
+  return null;
+}
+
+/** "dis" + "patch" → "dispatch"。带 ${} 的模板不折。 */
+function foldStringConcat(text) {
+  let s = String(text || '');
+  for (let n = 0; n < 32; n++) {
+    let found = false;
+    for (let i = 0; i < s.length; i++) {
+      const a = readStringLit(s, i);
+      if (!a) continue;
+      if (s[i] === '`' && a.body.includes('${')) continue;
+      let j = a.end;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      if (s[j] !== '+') continue;
+      j += 1;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      const b = readStringLit(s, j);
+      if (!b) continue;
+      if (s[j] === '`' && b.body.includes('${')) continue;
+      s = s.slice(0, i) + s[i] + a.body + b.body + s[i] + s.slice(b.end);
+      found = true;
+      break;
+    }
+    if (!found) break;
+  }
+  return s;
+}
+
 /** 引号/`dispatch`，以及 exec("node dao.mjs dispatch ...") 这种命令字符串里的裸动词。 */
 function hasDispatchVerb(text) {
-  const s = String(text || '');
+  const s = foldStringConcat(String(text || ''));
   if (hasLit(s, 'dispatch') || hasLit(s, 'dispatch-exec')) return true;
   return /(?:^|[\s"'`=/,\[\]])dispatch(?:-exec)?(?=[\s"'`,\]]|$)/.test(s);
 }
@@ -121,22 +162,118 @@ export function collectSpawnAliases(src) {
   return [...names];
 }
 
+function collectChildProcessReceivers(src) {
+  const names = new Set();
+  const text = String(src || '');
+  const patterns = [
+    /(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*require\(\s*['"](?:node:)?child_process['"]\s*\)/g,
+    /import\s+\*\s+as\s+([A-Za-z_][\w]*)\s+from\s+['"](?:node:)?child_process['"]/g,
+    /import\s+([A-Za-z_][\w]*)\s+from\s+['"](?:node:)?child_process['"]/g,
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(text))) names.add(m[1]);
+  }
+  return names;
+}
+
+function receiverBefore(text, bracketIdx, cpNames) {
+  const before = text.slice(Math.max(0, bracketIdx - 96), bracketIdx);
+  const req = before.match(/require\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*$/);
+  if (req) return { isCp: true, start: bracketIdx - req[0].length };
+  const id = before.match(/([A-Za-z_][\w]*)\s*$/);
+  if (id) return { isCp: cpNames.has(id[1]), start: bracketIdx - id[0].length };
+  return { isCp: false, start: bracketIdx };
+}
+
+function resolveComputedKey(src, keySrc) {
+  const folded = foldStringConcat(String(keySrc || '')).trim();
+  const lit = folded.match(/^(['"`])([\s\S]*)\1$/);
+  if (lit && !(lit[1] === '`' && lit[2].includes('${'))) return { resolved: lit[2], opaque: false };
+  if (/^[A-Za-z_][\w]*$/.test(folded)) {
+    const str = findStringLiteral(src, folded);
+    const sm = String(str || '').match(/^(['"`])([\s\S]*)\1$/);
+    if (sm && !(sm[1] === '`' && sm[2].includes('${'))) return { resolved: sm[2], opaque: false };
+    return { resolved: '', opaque: true };
+  }
+  return { resolved: '', opaque: true };
+}
+
+function isSpawnName(name, names) {
+  const n = String(name || '');
+  if (!n) return false;
+  if (SPAWN_FNS.includes(n)) return true;
+  return Array.isArray(names) && names.includes(n);
+}
+
+function isOpaqueComputedSpan(span, names, src) {
+  const open = String(span || '').indexOf('(');
+  if (open < 0) return false;
+  const before = span.slice(0, open);
+  const rb = before.lastIndexOf(']');
+  if (rb < 0) return false;
+  const lb = before.lastIndexOf('[');
+  if (lb < 0 || lb > rb) return false;
+  const { resolved, opaque } = resolveComputedKey(src || span, before.slice(lb + 1, rb));
+  if (isSpawnName(resolved, names)) return false;
+  return opaque || !isSpawnName(resolved, names);
+}
+
+function scanComputedCalls(text, spawnNames, cpNames, onSpan) {
+  let inStr = null;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c !== '[') continue;
+    const keyEnd = matchBalanced(text, i);
+    if (keyEnd < 0) continue;
+    const after = text.slice(keyEnd + 1).match(/^\s*\(/);
+    if (!after) continue;
+    const openIdx = text.indexOf('(', keyEnd + 1);
+    if (openIdx < 0) continue;
+    const callEnd = matchBalanced(text, openIdx);
+    if (callEnd < 0) continue;
+    const { resolved, opaque } = resolveComputedKey(text, text.slice(i + 1, keyEnd));
+    const recv = receiverBefore(text, i, cpNames);
+    if (!isSpawnName(resolved, [...spawnNames]) && !(opaque && recv.isCp)) continue;
+    onSpan(text.slice(recv.start, callEnd + 1));
+    i = callEnd;
+  }
+}
+
 export function extractCallSpans(src, names) {
   const text = String(src || '');
-  const alts = (Array.isArray(names) ? names : [names]).map((n) => String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  if (alts.length === 0) return [];
-  const re = new RegExp(String.raw`\b(?:${alts.join('|')})\s*\(`, 'g');
+  const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
+  const alts = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const spans = [];
-  let m;
-  while ((m = re.exec(text))) {
-    const before = text.slice(Math.max(0, m.index - 12), m.index);
-    if (/\bfunction\s+$/.test(before)) continue;
-    const openIdx = text.indexOf('(', m.index);
-    if (openIdx < 0) continue;
-    const end = matchBalanced(text, openIdx);
-    if (end < 0) continue;
-    spans.push(text.slice(m.index, end + 1));
+  const seen = new Set();
+  const push = (span) => {
+    if (!span || seen.has(span)) return;
+    seen.add(span);
+    spans.push(span);
+  };
+  if (alts.length) {
+    const re = new RegExp(String.raw`\b(?:${alts.join('|')})\s*\(`, 'g');
+    let m;
+    while ((m = re.exec(text))) {
+      const before = text.slice(Math.max(0, m.index - 12), m.index);
+      if (/\bfunction\s+$/.test(before)) continue;
+      const openIdx = text.indexOf('(', m.index);
+      if (openIdx < 0) continue;
+      const end = matchBalanced(text, openIdx);
+      if (end < 0) continue;
+      push(text.slice(m.index, end + 1));
+    }
   }
+  const spawnNames = new Set([...list, ...SPAWN_FNS]);
+  scanComputedCalls(text, spawnNames, collectChildProcessReceivers(text), push);
   return spans;
 }
 
@@ -152,19 +289,24 @@ function findArrayLiteral(src, name) {
 }
 
 function findStringLiteral(src, name) {
-  const re = new RegExp(String.raw`(?:const|let|var)\s+${escapeIdent(name)}\s*=\s*(['"\`])`);
+  const re = new RegExp(String.raw`(?:const|let|var)\s+${escapeIdent(name)}\s*=\s*`);
   const m = re.exec(src);
   if (!m) return '';
-  const quote = m[1];
-  const start = m.index + m[0].length - 1;
-  let esc = false;
-  for (let i = start + 1; i < src.length; i++) {
-    const c = src[i];
-    if (esc) { esc = false; continue; }
-    if (c === '\\') { esc = true; continue; }
-    if (c === quote) return src.slice(start, i + 1);
+  const start = m.index + m[0].length;
+  const first = readStringLit(src, start);
+  if (!first) return '';
+  let end = first.end;
+  while (true) {
+    let j = end;
+    while (j < src.length && /\s/.test(src[j])) j++;
+    if (src[j] !== '+') break;
+    j += 1;
+    while (j < src.length && /\s/.test(src[j])) j++;
+    const next = readStringLit(src, j);
+    if (!next) break;
+    end = next.end;
   }
-  return '';
+  return foldStringConcat(src.slice(start, end));
 }
 
 function expandArgvSpreads(src, span) {
@@ -177,42 +319,45 @@ function expandArgvSpreads(src, span) {
   return out;
 }
 
-/** 展开调用里的 argv：字面量、整段变量、数组里的动词变量、...spread。 */
-function expandCallArgv(src, span) {
-  let out = expandArgvSpreads(src, span);
+/** 子进程 argv / exec 命令字符串，不含 options 对象。--dry-run 只在这里算数。 */
+function argvTextForCall(src, span) {
   const open = span.indexOf('(');
-  if (open < 0) return out;
+  if (open < 0) return '';
   const close = matchBalanced(span, open);
-  if (close < 0) return out;
+  if (close < 0) return '';
   const args = splitTopLevelArgs(span.slice(open + 1, close));
+  const pieces = [];
+  const addArray = (piece) => {
+    const expanded = expandArgvSpreads(src, piece);
+    pieces.push(expanded);
+    for (const idm of expanded.matchAll(/\b([A-Za-z_][\w]*)\b/g)) {
+      const id = idm[1];
+      if (SPAWN_FNS.includes(id) || id === 'process' || id === 'execPath') continue;
+      const str = findStringLiteral(src, id);
+      const arr = findArrayLiteral(src, id);
+      if (str) pieces.push(str);
+      if (arr) pieces.push(arr);
+    }
+  };
   for (const raw of args) {
     const t = raw.trim();
-    const pieces = [];
+    if (!t || t.startsWith('{')) continue;
+    if (/^(?:function\b|[A-Za-z_][\w]*\s*=>)/.test(t)) continue;
+    if (t.startsWith('[')) { addArray(t); continue; }
     if (/^[A-Za-z_][\w]*$/.test(t)) {
       const arr = findArrayLiteral(src, t);
       const str = findStringLiteral(src, t);
-      if (arr) pieces.push(arr);
+      if (arr) addArray(arr);
       if (str) pieces.push(str);
+      continue;
     }
-    if (t.startsWith('[')) pieces.push(t);
-    for (const piece of pieces) {
-      out += `\n${piece}`;
-      if (!piece.startsWith('[')) continue;
-      for (const idm of piece.matchAll(/\b([A-Za-z_][\w]*)\b/g)) {
-        const id = idm[1];
-        if (SPAWN_FNS.includes(id) || id === 'process' || id === 'execPath') continue;
-        const str = findStringLiteral(src, id);
-        const arr = findArrayLiteral(src, id);
-        if (str) out += `\n${str}`;
-        if (arr) out += `\n${arr}`;
-      }
-    }
+    pieces.push(t);
   }
-  return out;
+  return pieces.join('\n');
 }
 
 function hasDryRun(text) {
-  const s = String(text || '');
+  const s = foldStringConcat(String(text || ''));
   if (hasLit(s, '--dry-run')) return true;
   return /(?:^|[\s"'`=/,\[\]])--dry-run(?=[\s"'`,\]]|$)/.test(s);
 }
@@ -239,23 +384,28 @@ export function classifyTestDispatchSpawns(src) {
     return { ok: false, unscanned: true, error: '没给测试正文（没查成）', scanned: 0, violations: [] };
   }
   const text = String(src);
-  const spans = extractCallSpans(text, collectSpawnAliases(text));
+  const names = collectSpawnAliases(text);
+  const spans = extractCallSpans(text, names);
   const violations = [];
   let scanned = 0;
   for (const span of spans) {
-    const expanded = expandCallArgv(text, span);
-    if (!hasDispatchVerb(expanded)) continue;
+    const argvText = foldStringConcat(argvTextForCall(text, span));
+    const opaque = isOpaqueComputedSpan(span, names, text);
+    const dispatch = hasDispatchVerb(argvText);
+    if (!dispatch && !opaque) continue;
     scanned += 1;
-    if (hasDryRun(expanded)) continue;
+    if (dispatch && hasDryRun(argvText)) continue;
     const lost = isEnvLost(span);
-    const execVerb = hasLit(expanded, 'dispatch-exec') || /dispatch-exec/.test(expanded);
+    const execVerb = hasLit(argvText, 'dispatch-exec') || /dispatch-exec/.test(argvText);
     violations.push({
       kind: lost ? 'env-lost' : 'live-dispatch',
       why: lost
         ? '执行体 env 丢失：spawn dispatch 的 env 没继承 process.env、也没带隔离信号，子进程会读真账本真派工'
-        : execVerb
-          ? '真 spawn dao dispatch-exec 且无 --dry-run：测试结构性够得着真执行体'
-          : '真 spawn dao dispatch 且无 --dry-run：测试结构性够得着真执行体',
+        : opaque && !dispatch
+          ? '无法可靠解析的 child_process 计算属性调用：fail-closed，不许 scanned:0 静默放行'
+          : execVerb
+            ? '真 spawn dao dispatch-exec 且无 --dry-run：测试结构性够得着真执行体'
+            : '真 spawn dao dispatch 且无 --dry-run：测试结构性够得着真执行体',
       excerpt: span.replace(/\s+/g, ' ').slice(0, 240),
     });
   }
@@ -357,13 +507,25 @@ export function inspectTestExecutorIsolationFixtures(root) {
     }
     if (kind === 'red') {
       let envLost = false;
+      let dryRunNotInArgv = false;
+      let computedSpawn = false;
+      let concatVerb = false;
       for (const f of files) {
-        const r = classifyTestDispatchSpawns(readFileSync(join(dir, f), 'utf8'));
-        if (r.unscanned || r.ok) problems.push(`red/${f} 自称该红但没抓到真 dispatch spawn`);
+        const src = readFileSync(join(dir, f), 'utf8');
+        const r = classifyTestDispatchSpawns(src);
+        if (r.unscanned || r.ok || r.scanned === 0) {
+          problems.push(`red/${f} 自称该红但没抓到真 dispatch spawn（scanned=${r.scanned}）`);
+        }
         if ((r.violations || []).some((v) => v.kind === 'env-lost')) envLost = true;
+        if (hasLit(src, '--dry-run') && r.scanned > 0 && !r.ok) dryRunNotInArgv = true;
+        if (src.includes('["' + 'spawnSync' + '"]') && r.scanned > 0 && !r.ok) computedSpawn = true;
+        if (/"dis"\s*\+\s*"patch"/.test(src) && r.scanned > 0 && !r.ok) concatVerb = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
-      else if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
+      if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
+      if (!computedSpawn) problems.push('red/ 没点出计算属性 child_process 调用');
+      if (!concatVerb) problems.push('red/ 没点出拼接动词 dis+patch');
+      if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
       for (const f of files) {

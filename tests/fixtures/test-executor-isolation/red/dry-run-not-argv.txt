@@ -1,0 +1,4 @@
+/* 审官对抗样本：--dry-run 在 stdin，不在子进程 argv。源码闸若扫整段调用会误放行。
+const { spawnSync } = require("node:child_process");
+spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" }, input: "--dry-run" });
+*/

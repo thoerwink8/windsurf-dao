@@ -1,0 +1,4 @@
+/* 审官对抗样本：argv 动词是拼接字面量。不折 "dis"+"patch" 会 scanned:0。
+const { spawnSync } = require("node:child_process");
+spawnSync(process.execPath, ["scripts/dao.mjs", "dis" + "patch"], { env: { PATH: "/bin" } });
+*/
