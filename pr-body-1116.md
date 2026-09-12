@@ -76,11 +76,12 @@
 ```
 交卷闸：dao-1116 vs origin/master（已拉远端）
   ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
-  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1592 行里的 28 条仓内路径指针都真实存在
-  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1116 同点（9f6ad35）
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1709 行里的 31 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1116 同点（c3ad480）
 
 合并前还要过的（查了，但不进本次判定）：
   X  ① 基底含最新 master —— 本树切自旧 origin/master：差 2 个提交、涉及 3 个文件。
+      差的提交：4a0aca2 [patrol] docs(obs): 巡检会话继承 mirasim-server 的 GH_CONFIG_DIR=/var/empty，第一次 git push 被掐死、55f737f [patrol] docs(obs): failed-units闸被系统单元钉SKIP；skills-heal自愈钟没装
       ↑ 归合并闸：`node scripts/handoff-check.mjs --gate merge`。不挡交卷，也不该被审官拿来判红（#1117）。
 
 判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
