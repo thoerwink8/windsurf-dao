@@ -16,8 +16,9 @@
 //
 // 4. 本文件是纯函数 + 只读探头。不写控制面状态文件、不打网络、不 spawn。
 //    谁要在这里加 spawnSync，必须带 windowsHide: true。
-//    挂载面复用派工闸入口（dispatch-gate-hook / cursor-dispatch-gate-hook），
-//    判定逻辑只此一份——那边只问 decideControlPlane，不复制分类。
+//    写腿在 control-plane-write.mjs，由 mirasim-ws-probe 落盘（#1165）。
+//    现役挂载面：git pre-push（scripts/githooks/pre-push）和 land.mjs 问 decideControlPlane。
+//    Claude/Cursor 派工闸入口仍问同一份判定，但不覆盖 mirasim 工人。
 //
 // 5. 崩了由调用方 fail-closed（dispatch-gate 的 catch → Claude exit 2 / Cursor deny）。
 //    本文件抛出 = 没查成的反面：闸自己坏了，跟「探测没查成」不是同一件事，

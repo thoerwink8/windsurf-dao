@@ -27,6 +27,7 @@
 ## 开工（进 git 的活，先做这个再干活）
 
 1. 空提交撑分支并推送：`git commit --allow-empty -m "[cc] chore: 起<任务>分支"`，然后 `git push -u origin HEAD`。
+   `git push` 会问控制面闸（#1165 / `scripts/githooks/pre-push`）：reachable=false 时拦；探测没查成不拦。恢复后才能再推。
    先 `git log -1 --format='%an <%ae>'` 确认作者是 `dao-worker[bot]`；不是就 `node scripts/gh-as.mjs worker --set-git-identity`，还不对就停手（PR 页和 git log 会对不上）。
 2. 开 draft PR：`node scripts/gh-as.mjs worker -- pr create --draft --body-file <文件>`，标题带 `[cc]` 前缀，
    正文必须含三段——**目标 / 验收标准 / 进展**——回链前言里的 issue 号。**这一步之后你才有 PR 号**（交卷、审官判定都认它）。
