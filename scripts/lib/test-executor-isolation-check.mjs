@@ -41,14 +41,17 @@
 //      `({ default: cp } = await import(...))` / `({ default: cp } = mod)`；
 //      解析不了的 default 绑定 fail-closed）。
 //      获取路径不靠字面量模块名穷举：require / import() / module.require /
-//      process.mainModule.require 的 specifier 走 foldStringConcat
+//      process.mainModule.require / createRequire() 及其别名返回的
+//      require 函数，specifier 走 foldStringConcat
 //      （"node:" + "child_process" 算 child_process）。解析不了但参数里
 //      有 child_process 字面量 → 接收器照收。对象属性 / 成员赋值上的
 //      加载（{ inner: require(...) } / box.inner = require(...)）把键收进
 //      接收器，嵌套 holder 的成员调用才能扫到。
 //      spawnSync / spawn / fork / execFile 成员调用：未知接收器也扫
-//      （不许再靠 cpNames 漏成 scanned:0）。exec / execSync 仍要已知
-//      接收器，避免把 regex.exec 当派工。
+//      （不许再靠 cpNames 漏成 scanned:0）。exec / execSync 默认仍要已知
+//      接收器，避免把 regex.exec 当派工；但命令静态含 Node + dao.mjs
+//      时未知接收器也扫（createRequire 漏登记也不许 scanned:0）。
+//      计算属性键（cp["exec"]）要当成 exec 命令字符串，不许当 spawn 路径。
 //      process.execPath 别名覆盖赋值解构、默认值、字符串键、计算键；无法证明时
 //      对 Node/dao 候选 fail-closed。
 //      对象 holder 的属性键走 resolveComputedKey（含 `["r"+"un"]`），值走别名解析
@@ -666,6 +669,13 @@ function calleeName(span) {
   const before = span.slice(0, open).trim().replace(/\?\.\s*$/, '').replace(/\)\s*$/, '').trim();
   const whole = before.match(/^([A-Za-z_][\w]*)$/);
   if (whole) return whole[1];
+  if (before.endsWith(']')) {
+    const lb = before.lastIndexOf('[');
+    if (lb >= 0 && matchBalanced(before, lb) === before.length - 1) {
+      const { resolved } = resolveComputedKey(span, before.slice(lb + 1, before.length - 1));
+      if (resolved) return resolved;
+    }
+  }
   const m = before.match(/([A-Za-z_][\w]*)$/);
   return m ? m[1] : '';
 }
@@ -710,8 +720,8 @@ function specifierLooksLikeChildProcess(argSrc) {
   return specifierMentionsChildProcess(argSrc);
 }
 
-/** i 处是 `(` 且 callee 是 require / import() / module.require / process.mainModule.require。 */
-function requireLikeAtParen(text, openIdx) {
+/** i 处是 `(` 且 callee 是 require / import() / module.require / process.mainModule.require / createRequire 别名。 */
+function requireLikeAtParen(text, openIdx, requireLikes) {
   const s = String(text || '');
   if (s[openIdx] !== '(') return null;
   let k = openIdx;
@@ -723,7 +733,13 @@ function requireLikeAtParen(text, openIdx) {
     if (j > 0 && /[\w.]/.test(s[j - 1])) return null;
     return { callee: 'import', start: j };
   }
-  if (name !== 'require') return null;
+  if (name !== 'require') {
+    if (requireLikes && requireLikes.has(name)) {
+      if (j > 0 && /[\w.]/.test(s[j - 1])) return null;
+      return { callee: 'require', start: j };
+    }
+    return null;
+  }
   let start = j;
   let p = j;
   while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
@@ -1222,9 +1238,83 @@ function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpa
   }, onUnresolvedRest);
 }
 
+/**
+ * createRequire() / module.createRequire() 及其 import/解构/赋值别名
+ * 返回的是 require 函数。调用它取 child_process 时要把 dest 登记成接收器。
+ */
+function collectRequireLikeCallees(text) {
+  const factories = new Set(['createRequire']);
+  const likes = new Set();
+  const s = String(text || '');
+  const growFactories = () => {
+    const impAs = /\bcreateRequire\s+as\s+([A-Za-z_][\w]*)/g;
+    let m;
+    while ((m = impAs.exec(s))) factories.add(m[1]);
+    const renamed = /\bcreateRequire\s*:\s*([A-Za-z_][\w]*)/g;
+    while ((m = renamed.exec(s))) factories.add(m[1]);
+    const fac = [...factories].map(escapeIdent).join('|');
+    const asg = new RegExp(
+      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(?:${fac})\s*(?![(\w])`,
+      'g',
+    );
+    while ((m = asg.exec(s))) factories.add(m[1]);
+    const bare = new RegExp(
+      String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(?:${fac})\s*(?![(\w])`,
+      'g',
+    );
+    while ((m = bare.exec(s))) factories.add(m[1]);
+  };
+  for (let n = 0; n < 16; n++) {
+    const before = factories.size + likes.size;
+    growFactories();
+    scanExecutable(s, (i) => {
+      if (s[i] !== '(') return;
+      let k = i;
+      while (k > 0 && /\s/.test(s[k - 1])) k -= 1;
+      let j = k;
+      while (j > 0 && /[\w]/.test(s[j - 1])) j -= 1;
+      const name = s.slice(j, k);
+      if (!factories.has(name)) return;
+      let start = j;
+      let p = j;
+      while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
+      if (p > 0 && s[p - 1] === '.') {
+        p -= 1;
+        while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
+        if (p > 0 && s[p - 1] === '?') p -= 1;
+        while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
+        let q = p;
+        while (q > 0 && /[\w]/.test(s[q - 1])) q -= 1;
+        if (q < p) start = q;
+      }
+      const dest = destNameBefore(s, start) || bindingNameBefore(s, start);
+      if (dest) likes.add(dest);
+      const close = matchBalanced(s, i);
+      return close >= 0 ? close + 1 : i + 1;
+    });
+    if (likes.size) {
+      const lk = [...likes].map(escapeIdent).join('|');
+      const asg = new RegExp(
+        String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:${lk})\s*(?![(\w])`,
+        'g',
+      );
+      let m;
+      while ((m = asg.exec(s))) likes.add(m[1]);
+      const bare = new RegExp(
+        String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?:${lk})\s*(?![(\w])`,
+        'g',
+      );
+      while ((m = bare.exec(s))) likes.add(m[1]);
+    }
+    if (factories.size + likes.size === before) break;
+  }
+  return likes;
+}
+
 function collectChildProcessReceivers(src) {
   const names = new Set();
   const text = String(src || '');
+  const requireLikes = collectRequireLikeCallees(text);
   const loadNs = String.raw`${CP_LOAD}\s*\)?${CP_NS_SUFFIX}`;
   const patterns = [
     new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*${loadNs}`, 'g'),
@@ -1240,7 +1330,7 @@ function collectChildProcessReceivers(src) {
   scanCpDefaultDestructure(text, names);
   scanExecutable(text, (i) => {
     if (text[i] !== '(') return;
-    const like = requireLikeAtParen(text, i);
+    const like = requireLikeAtParen(text, i, requireLikes);
     if (!like) return;
     const close = matchBalanced(text, i);
     if (close < 0) return;
@@ -1579,6 +1669,12 @@ function groupOpenBefore(text, closeIdx, nameIdx) {
   return -1;
 }
 
+function firstArgLooksLikeNodeDao(text, openIdx, closeIdx) {
+  if (openIdx < 0 || closeIdx < 0) return false;
+  const args = splitTopLevelArgs(text.slice(openIdx + 1, closeIdx)).map((s) => s.trim()).filter(Boolean);
+  return looksLikeNodeDaoCommand(args[0] || '');
+}
+
 function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
   const text = String(src || '');
   const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
@@ -1605,14 +1701,12 @@ function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
       const wrapped = rest.match(/^\s*\)\s*\(/);
       const adapter = matchAdapterAfter(rest, text);
       const window = text.slice(Math.max(0, m.index - 120), m.index);
-      if (/\.\s*$/.test(before) && !knownMemberReceiver(window, cpNames)) {
-        // 未知接收器只放行规范 spawn 名（spawnSync 等）。exec 是 regex.exec；
-        // 别名可能是误收的 assert.ok，不能当 child_process。
-        if (!SPAWN_FNS.includes(m[0]) || MEMBER_NEEDS_KNOWN_CP.has(m[0])) continue;
-      }
+      const unknownMember = /\.\s*$/.test(before) && !knownMemberReceiver(window, cpNames);
+      if (unknownMember && !SPAWN_FNS.includes(m[0])) continue;
       let openIdx = -1;
       let spanStart = m.index;
       if (adapter) {
+        if (unknownMember && MEMBER_NEEDS_KNOWN_CP.has(m[0])) continue;
         const adapterOpen = m.index + m[0].length + adapter.prefixLen - 1;
         const end = emitAdapterCall(adapter.kind, text, adapterOpen, m[0], spanStart, push);
         if (end >= 0) re.lastIndex = end + 1;
@@ -1630,6 +1724,10 @@ function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
       if (openIdx < 0) continue;
       const end = matchBalanced(text, openIdx);
       if (end < 0) continue;
+      if (unknownMember && MEMBER_NEEDS_KNOWN_CP.has(m[0])
+        && !firstArgLooksLikeNodeDao(text, openIdx, end)) {
+        continue;
+      }
       push(text.slice(spanStart, end + 1), spanStart);
     }
   }
@@ -2661,6 +2759,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let moduleRequire = false;
       let nestedCpHolder = false;
       let callSpread = false;
+      let createRequireCp = false;
       for (const f of files) {
         const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
@@ -2944,6 +3043,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
           /\(\s*\.\.\.\s*(?:[A-Za-z_]|\[)/.test(src)
           && r.scanned > 0 && !r.ok
         ) callSpread = true;
+        if (
+          /createRequire/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) createRequireCp = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -3012,6 +3116,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!moduleRequire) problems.push('red/ 没点出 module.require(child_process)');
       if (!nestedCpHolder) problems.push('red/ 没点出嵌套 holder（box.inner.spawnSync）');
       if (!callSpread) problems.push('red/ 没点出调用级 spread（...args 作第一实参 / ...[cmd, argv] / exec 同类）');
+      if (!createRequireCp) problems.push('red/ 没点出 createRequire 取得的 child_process（exec / execSync / 计算属性 exec）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

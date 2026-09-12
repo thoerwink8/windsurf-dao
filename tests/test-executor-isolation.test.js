@@ -2413,6 +2413,117 @@ test('regex.exec 不因成员调用 fail-closed 误红', () => {
   assert.equal(r.scanned, 0, JSON.stringify(r));
 });
 
+test('createRequire 取得 child_process 后 cp.exec 必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const src = [
+    `import { ${CR} } from "node:module";`,
+    `const req = ${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('createRequire 路径上的 execSync 必须红', () => {
+  const EX = 'ex' + 'ecSync';
+  const CR = 'create' + 'Require';
+  const src = [
+    `import { ${CR} } from "node:module";`,
+    `const req = ${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('createRequire 路径上的 cp["exec"] 必须红', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const lb = '[';
+  const rb = ']';
+  const src = [
+    `import { ${CR} } from "node:module";`,
+    `const req = ${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp${lb}${JSON.stringify(EX)}${rb}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('createRequire import 别名必须红', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const src = [
+    `import { ${CR} as makeReq } from "node:module";`,
+    'const req = makeReq(import.meta.url);',
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('module.createRequire 取得 child_process 必须红', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const src = [
+    `const req = module.${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('未知接收器 exec 命令静态含 Node+dao.mjs 必须红（fail-closed）', () => {
+  const EX = 'ex' + 'ec';
+  const src = `unknown.${EX}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('createRequire 带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const src = [
+    `import { ${CR} } from "node:module";`,
+    `const req = ${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs dispatch --dry-run", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1, JSON.stringify(r));
+});
+
+test('createRequire 静态非 dispatch 动词仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const CR = 'create' + 'Require';
+  const src = [
+    `import { ${CR} } from "node:module";`,
+    `const req = ${CR}(import.meta.url);`,
+    'const cp = req("node:child_process");',
+    `cp.${EX}("node scripts/dao.mjs worker-done", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
 test('夹具红/绿/空有判别力', () => {
   const r = inspectTestExecutorIsolationFixtures(join(HERE, 'fixtures', 'test-executor-isolation'));
   assert.equal(r.unscanned, false, r.error || '');

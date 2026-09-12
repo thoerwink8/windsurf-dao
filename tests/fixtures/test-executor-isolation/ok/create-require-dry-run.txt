@@ -1,0 +1,6 @@
+/* 绿对照：createRequire 取得 child_process，命令真有 --dry-run。
+import { createRequire } from "node:module";
+const req = createRequire(import.meta.url);
+const cp = req("node:child_process");
+cp.exec("node scripts/dao.mjs dispatch --dry-run", { env: { PATH: "/bin" } });
+*/

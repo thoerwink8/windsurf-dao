@@ -1,0 +1,6 @@
+/* 审官对抗样本：createRequire 的 import 别名。只钉函数名 createRequire 会漏 makeReq。
+import { createRequire as makeReq } from "node:module";
+const req = makeReq(import.meta.url);
+const cp = req("node:child_process");
+cp.exec("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });
+*/
