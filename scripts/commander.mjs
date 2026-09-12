@@ -164,7 +164,7 @@ function scanAttributedIssues(issues, prs) {
   const out = [];
   for (const n of want) {
     const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
-    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    if (!r.ok) continue; // 取不到就当没有：正文读不到就不猜 merge-policy，选型不读这里
     try {
       const j = JSON.parse(r.out || '{}');
       if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });

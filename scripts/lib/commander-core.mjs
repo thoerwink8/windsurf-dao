@@ -663,7 +663,7 @@ function collectCandidates(situation) {
     if (!m || !m.provider) return null;
     return { provider: m.provider, cli_model: m.cli_model };
   };
-  // 工人的 model 由 issue 标签钉死（不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
+  // 工人的 model 由 PR 标签钉死（#1116；不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
   // 认不出落地 → 本闸不拦（其它闸会挡）。返回 { ok, channel, why }。
   const channelAdmits = (model) => {
     if (!chSnap) return { ok: true, channel: null };
