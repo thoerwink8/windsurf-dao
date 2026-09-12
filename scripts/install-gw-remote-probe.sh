@@ -19,7 +19,8 @@ install -m 644 "$UNIT_DIR/gw-remote-probe.service" /etc/systemd/system/gw-remote
 install -m 644 "$UNIT_DIR/gw-remote-probe.timer" /etc/systemd/system/gw-remote-probe.timer
 
 # 2026-09-05 止血时加过 drop-in（OnCalendar=*:07/30，撞 dao-board-gc）。
-# 仓内单元已经带 *:09/30，drop-in 留下会盖掉仓里的点位，⑳ 也会报漂移。
+# 仓内单元已经带 *:09/30，drop-in 留下会盖掉仓里的点位。
+# ⑳ 比有效单元（正文 + .d/*.conf）：只拷正文不删这文件会红（#1164）。
 rm -f /etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf
 rmdir /etc/systemd/system/gw-remote-probe.timer.d 2>/dev/null || true
 

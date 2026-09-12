@@ -74,30 +74,13 @@ function checkOrphanDeletedCwd() {
   return { state: 'ok', detail: '无 cwd 已删的 agent 进程', key: 'orphan-cwd' };
 }
 
-// 2. 终端登记数 vs live agent 数不符（#633）。
-function checkTerminalVsAgents({ runOrca, ROOT }) {
-  const tl = runOrca(['terminal', 'list', '--json'], { cwd: ROOT });
-  if (!tl.ok) return { state: 'unknown', detail: `terminal list 没查成：${fmt(tl.error)}`, key: 'term-vs-agent' };
-  const terminals = tl.json?.result?.terminals;
-  if (!Array.isArray(terminals)) return { state: 'unknown', detail: 'terminal list 契约变了', key: 'term-vs-agent' };
-  const wl = runOrca(['orchestration', 'worker-list', '--json'], { cwd: ROOT });
-  if (!wl.ok) return { state: 'unknown', detail: `worker-list 没查成：${fmt(wl.error)}`, key: 'term-vs-agent' };
-  const workers = wl.json?.result?.workers;
-  if (!Array.isArray(workers)) return { state: 'unknown', detail: 'worker-list 契约变了', key: 'term-vs-agent' };
-  const liveAgents = workers.filter((w) => w && ['ready', 'working', 'waiting'].includes(String(w.state || '').toLowerCase())).length;
-  // 只在 agent 数明显超过终端数时报（agent 无所依附的终端 = 幽灵）；反向（空终端多）是常态不报。
-  if (liveAgents > terminals.length) {
-    return {
-      state: 'red', key: 'term-vs-agent',
-      detail: `live agent ${liveAgents} 个 > 终端 ${terminals.length} 个（登记对不上，#633）`,
-      plain: {
-        what: `登记在册的工人有 ${liveAgents} 个，但真正开着的工作窗口只有 ${terminals.length} 个`,
-        impact: '多出来的是「幽灵工人」，占名额不干活',
-        plan: '开一张待拍板单，你放行后我清掉',
-      },
-    };
-  }
-  return { state: 'ok', detail: `终端 ${terminals.length} / live agent ${liveAgents}（对得上）`, key: 'term-vs-agent' };
+// 2. 终端登记 vs live agent（#633）。orca 终端/worker-list 已退役；在途改由租约闸看。
+function checkTerminalVsAgents() {
+  return {
+    state: 'ok',
+    detail: 'orca 终端登记已退役，在途改由 mirasim 租约闸看',
+    key: 'term-vs-agent',
+  };
 }
 
 // 3. timer 失效：指挥官两个 timer 应在册、enabled，且**真的还会响**。
@@ -325,16 +308,16 @@ export function tallyChecks(checks = []) {
 export const CHECK_SYM = { ok: '✓', quiet: '✓', red: 'X', due: '!', unknown: '?' };
 
 // ── inventory 子命令 ──
-export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
-  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
+export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift = checkVersionDrift }) {
+  return runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift });
 }
 
-async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
+async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState, versionDrift }) {
   const dryRun = rest.includes('--dry-run');
   const state = loadState();
   const checks = [
     checkOrphanDeletedCwd(),
-    checkTerminalVsAgents({ runOrca, ROOT }),
+    checkTerminalVsAgents(),
     checkTimers(),
     // 升级换没换干净要看回环服务端自报，是异步的——单独 await，不塞进上面的同步数组。
     await versionDrift(),
@@ -420,14 +403,14 @@ export function runStatus({ rest, ROOT }) {
 
 // ── install 子命令：幂等写 systemd service+timer ──
 
-// 单元里的 PATH 必须显式写死。systemd 不读 orca 的 shell profile，oneshot 拿到的 PATH 只有
-// /usr/bin:/bin，于是指挥官调 orca（bare name，见 lib/orca-run.mjs，没有绝对路径兜底）和
-// hub-say 全是 ENOENT——2026-09-03 实咬 #848：首轮 act 找不到 orca 被 unscanned fail-closed 拦下、
+// 单元里的 PATH 必须显式写死。systemd 不读服务用户的 shell profile，oneshot 拿到的 PATH 只有
+// /usr/bin:/bin，于是指挥官调 hub-say 全是 ENOENT——2026-09-03 实咬 #848：首轮 act
+// 找不到命令被 unscanned fail-closed 拦下（当时还调 orca CLI，#1150 已删）。
 // 群通知整轮静默，靠手糊的 drop-in 垫片才跑起来。同一坑 agent-stall-watch 已经踩过一次。
 // 值与 host/machine/systemd/*.service 里手写的那几个必须一致（tests/commander-install.test.js 盯着）。
 export const UNIT_PATH = '/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin';
 // 指挥官真正要在 PATH 里找到的外部命令住在哪。改 UNIT_PATH 前先确认这几条还在里面。
-export const UNIT_TOOL_DIRS = { orca: '/home/orca/.local/bin', 'hub-say': '/home/orca/bin' };
+export const UNIT_TOOL_DIRS = { 'local-bin': '/home/orca/.local/bin', 'hub-say': '/home/orca/bin' };
 
 // 2026-09-03 那两份 drop-in 垫片。正式模板带上 PATH 之后它们该退役——留着不会坏事，
 // 但它是影子制度：下次有人改 UNIT_PATH 会发现改了不生效。装机时看一眼，在就报一句。

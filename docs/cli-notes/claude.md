@@ -1,5 +1,8 @@
 # CLI 踩坑教学：Claude（`reclaude` CLI，模型 opus）
 
+> **Orca 执行体已退役（#1150）。** 现役工人由 `dao.mjs dispatch` 起 mirasim 会话，不要再 `orca terminal create`。
+> 下面是 orca 时代的踩坑档案，只在对照 launch 模板时读。
+>
 > 提炼自 `docs/model-routing.toml [providers.claude]`。
 
 ## 一句话特性

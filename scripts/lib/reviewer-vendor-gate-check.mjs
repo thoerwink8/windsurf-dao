@@ -58,7 +58,9 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc } = {}) {
 
   const attach = chunk(daoSrc, /function cmdReviewerAttach\b[\s\S]*?\nfunction /);
   if (!attach) problems.push('找不到 cmdReviewerAttach');
-  else if (!REFUSE_CALL.test(attach) && !GATE_CALL.test(attach)) {
+  else if (/orca 已退役/.test(attach)) {
+    // #1150：attach 随 orca 卡退役，调用即拒，不再起审官，同厂闸无对象
+  } else if (!REFUSE_CALL.test(attach) && !GATE_CALL.test(attach)) {
     problems.push('cmdReviewerAttach 没走同厂闸');
   }
 
