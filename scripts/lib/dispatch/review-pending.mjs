@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { dispatchQueueDir } from '../dispatch-queue.mjs';
+import { mainCheckoutRoot } from '../main-checkout.mjs';
 import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
 
@@ -51,15 +52,25 @@ export function reviewPendingSourceOf(ticket) {
   return REVIEW_PENDING_SOURCES.has(s) ? s : null;
 }
 
-export function reviewPendingDir({ root, env } = {}) {
+/**
+ * 队列落点 = **主 clone 根**下的 `_flow/queue/review-pending`。
+ *
+ * 为什么要过 mainCheckoutRoot（2026-09-12 实咬）：原来直接 `join(root, …)`，而 root 是
+ * 调用方**本树**的根。工人在自己的 worktree 里交卷，票就写进那棵树；drain 在主树里读，
+ * 永远看不见——#1159（票在 dao-1152/_flow/）、#1208（票在 dao-1174/_flow/）两条实锤，
+ * 队列看起来只是「少了几张」，不报错。修法见 lib/main-checkout.mjs 头部。
+ *
+ * root 仍可显式给（测试隔真仓），但**再叠一层** git-common-dir：显式 root 若是 worktree，
+ * 也归到主 clone——「一份队列」这件事不该由调用方记得。
+ */
+export function reviewPendingDir({ root, env, spawn } = {}) {
   const e = env || process.env;
   const override = e.DAO_REVIEW_PENDING_DIR;
   if (override && String(override).trim()) return resolve(root || process.cwd(), String(override));
   if (e.DAO_DISPATCH_QUEUE_DIR && String(e.DAO_DISPATCH_QUEUE_DIR).trim()) {
     return join(dispatchQueueDir({ root, env: e }), 'review-pending');
   }
-  if (!root) throw new Error('reviewPendingDir 要 root（或 DAO_REVIEW_PENDING_DIR）');
-  return join(root, REVIEW_PENDING_DIR_REL);
+  return join(mainCheckoutRoot({ treeRoot: root, env: e, spawn }), REVIEW_PENDING_DIR_REL);
 }
 
 const REVIEW_PENDING_FILE_RE = /^(?:\d+|[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+__\d+)\.json$/;

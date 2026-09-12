@@ -1311,12 +1311,19 @@ async function cmdReviewPendingDrain(args) {
   const scoped = listed.tickets.filter(t => {
     if (args.pr && String(t.pr) !== String(args.pr)) return false;
     const ticketRepo = t.repo ? String(t.repo).trim() : '';
-    if (ghRepo) {
-      // 显式跨仓 drain 只吃该仓的票；无仓旧票不当成目标仓。
-      return ticketRepo.toLowerCase() === String(ghRepo).toLowerCase();
-    }
-    if (args.pr) return !ticketRepo; // --pr 不带 --repo = 本仓，不顺手清掉跨仓同号票
-    return true;
+    // 2026-09-12 实咬：`--pr` 分支原来是 `return !ticketRepo`（有仓字段就当成别仓的票），
+    // 但**本仓**的票也带 repo 字段——worker-done 入队那条路一律写 GitHub owner/name
+    // （见 cmdWorkerDone 的 enqueueHandoff）。于是 `review-pending-drain --pr 1159`
+    // 报「队列共 0 张」：票在队列里，被这一行筛掉了，而 --pr 恰恰是 #1104 说的
+    // 「毒票不许拖死整队」的唯一出口——出口自己把真票挡在外面。
+    // 判据换成「票仓与本仓不一致才算别仓」，两边都有且不同才剔；跟上面 ghRepo 分支同一把尺。
+    const home = ghRepo
+      ? String(ghRepo).trim().toLowerCase()
+      : resolveDispatchRepo(null)?.toLowerCase() || null;
+    if (!ticketRepo) return true;   // 无仓旧票：本仓路径的票，照吃
+    // home 推不出（不在 GitHub 仓里跑）时不在筛选上再加一层否决——这里的活是挑票，
+    // 不是鉴权；判错方向的代价（真票被静默挡在出口外）比多试一张大得多。
+    return !home || ticketRepo.toLowerCase() === home;
   });
 
   // #1125：闸放在这里而不是指挥官里——`review-pending-drain` 是唯一的拉取入口，
