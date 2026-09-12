@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-09",
+  "updated": "2026-09-12",
   "工人": {
     "写码": {
       "模型": [
@@ -11,8 +11,9 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
+          "provider": "xai-native",
+          "cli_model": "grok-4.6",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "devin-deepseek-v4-flash-max",
@@ -28,12 +29,14 @@
         {
           "id": "deepseek-v4-flash",
           "顺位": 2,
-          "禁用": false,
+          "禁用": true,
           "理由": "写码 fallback；2026-09-03 通道 gw-dspool（前置2 绿）",
           "拍板": "2026-08-16",
           "status": "正式",
           "provider": "gw",
-          "cli_model": "gw-dspool/deepseek-v4-flash"
+          "cli_model": "gw-dspool/deepseek-v4-flash",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         }
       ]
     },
@@ -47,29 +50,34 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "provider": "gpt"
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "deepseek-v4-flash",
           "顺位": 2,
-          "禁用": false,
+          "禁用": true,
           "理由": "2026-09-03 用户拍板：方案多模型盲写",
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
           "provider": "gw",
-          "cli_model": "gw-dspool/deepseek-v4-flash"
+          "cli_model": "gw-dspool/deepseek-v4-flash",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "glm-5.2",
           "顺位": 3,
-          "禁用": false,
+          "禁用": true,
           "理由": "2026-09-03 用户拍板：方案多模型盲写",
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
           "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
+          "cli_model": "gw-windsurf/glm-5-2",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         }
       ]
     },
@@ -83,8 +91,9 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
+          "provider": "xai-native",
+          "cli_model": "grok-4.6",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         }
       ]
     },
@@ -98,19 +107,22 @@
           "拍板": "2026-08-14",
           "status": "试用",
           "trial_since": "2026-08-14",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
+          "provider": "xai-native",
+          "cli_model": "grok-4.6",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "gemini-3.7-flash",
           "顺位": 2,
-          "禁用": false,
+          "禁用": true,
           "理由": "查证试用；#822 从 cursor 改 gw-windsurf",
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
           "provider": "gw",
-          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
+          "cli_model": "gw-windsurf/gemini-3-7-flash-high",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "gpt-5.6-sol",
@@ -119,7 +131,8 @@
           "理由": "codex 查证备选",
           "拍板": "2026-08-12",
           "status": "正式",
-          "provider": "gpt"
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         }
       ]
     },
@@ -133,41 +146,48 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-sub/composer-2.5"
+          "provider": "cursor-native",
+          "cli_model": "composer-2.5",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "kimi-k3",
           "顺位": 2,
-          "禁用": false,
+          "禁用": true,
           "理由": "UI 备选；#822 改 gw-sub/kimi-k3-high",
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
           "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
+          "cli_model": "gw-sub/kimi-k3-high",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "glm-5.2",
           "顺位": 3,
-          "禁用": false,
+          "禁用": true,
           "理由": "UI 备选；#822 改 gw-windsurf；前置2 glm 工具样例绿",
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-19",
           "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
+          "cli_model": "gw-windsurf/glm-5-2",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "gemini-3.7-flash",
           "顺位": 4,
-          "禁用": false,
+          "禁用": true,
           "理由": "UI 试用；#822 从 cursor 改 gw-windsurf",
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
           "provider": "gw",
-          "cli_model": "gw-windsurf/gemini-3-7-flash-high"
+          "cli_model": "gw-windsurf/gemini-3-7-flash-high",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         }
       ]
     },
@@ -181,8 +201,9 @@
           "拍板": "2026-09-06",
           "status": "试用",
           "trial_since": "2026-09-06",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
+          "provider": "xai-native",
+          "cli_model": "grok-4.6",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         }
       ]
     }
@@ -197,7 +218,8 @@
           "理由": "2026-08-22 审官只用 Codex（GPT 主路）；#822 用户例外：GPT 必须走 Codex。2026-09-03 #843 过渡期临时降到顺位 2（pqapi 官方确认故障，codex 每单必死）；pqapi 恢复后切回顺位 1",
           "拍板": "2026-09-03",
           "status": "正式",
-          "provider": "gpt"
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "gpt-5.6-luna",
@@ -207,8 +229,8 @@
           "拍板": "2026-09-03",
           "status": "试用",
           "trial_since": "2026-09-03",
-          "provider": "gw",
-          "cli_model": "gw-windsurf/gpt-5.6-luna"
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "claude-opus",
@@ -223,24 +245,28 @@
         {
           "id": "kimi-k3",
           "顺位": 3,
-          "禁用": false,
+          "禁用": true,
           "理由": "备选登记，不顶审官位；#822 改 gw-sub。#843 后同厂闸按真实供应商家族判：kimi(月之暗面) 与 grok/gpt 等工人跨厂，只与 kimi 工人同厂",
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
           "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
+          "cli_model": "gw-sub/kimi-k3-high",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "glm-5.2",
           "顺位": 4,
-          "禁用": false,
+          "禁用": true,
           "理由": "备选登记，不顶审官位；#822 改 gw-windsurf。#843 后同厂闸按真实供应商家族判：glm(智谱) 只与 glm 工人同厂",
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-19",
           "provider": "gw",
-          "cli_model": "gw-windsurf/glm-5-2"
+          "cli_model": "gw-windsurf/glm-5-2",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "grok-4.6",
@@ -250,8 +276,9 @@
           "拍板": "2026-08-14",
           "status": "试用",
           "trial_since": "2026-08-14",
-          "provider": "gw",
-          "cli_model": "gw/grok-4.6"
+          "provider": "xai-native",
+          "cli_model": "grok-4.6",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         }
       ]
     }
@@ -276,18 +303,21 @@
           "理由": "codex 判断备选",
           "拍板": "2026-08-12",
           "status": "正式",
-          "provider": "gpt"
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "kimi-k3",
           "顺位": 3,
-          "禁用": false,
+          "禁用": true,
           "理由": "判断试用；#822 改 gw-sub",
           "拍板": "2026-08-19",
           "status": "试用",
           "trial_since": "2026-08-16",
           "provider": "gw",
-          "cli_model": "gw-sub/kimi-k3-high"
+          "cli_model": "gw-sub/kimi-k3-high",
+          "禁用原因": "2026-09-12 退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里没有启用条目，落地只剩 newapi 网关组（gw）；派工判出的 pi 腿在 mirasim 侧没有账本目录 ⇒ judgeCompletion 恒 unknown，waitForCompletion 一路等到超时——比拒派更难发现（「pi 腿还不能搬」条已实测记过）。恢复办法：先在 docs/execution-profiles.json 加一条启用 profile，再翻回本开关。",
+          "禁用日期": "2026-09-12"
         },
         {
           "id": "composer-2.5",
@@ -297,8 +327,9 @@
           "拍板": "2026-08-18",
           "status": "试用",
           "trial_since": "2026-08-18",
-          "provider": "gw",
-          "cli_model": "gw-sub/composer-2.5"
+          "provider": "cursor-native",
+          "cli_model": "composer-2.5",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
           "id": "ox-alpha-free",
@@ -364,15 +395,15 @@
     },
     {
       "名称": "审官顺位",
-      "理由": "2026-08-22 grill-ai 拍板 A：JSON 三层对齐，顺位路由；审官主路 Codex；Claude 禁用；同厂无人可派报错停手，不许自动 fallback。#822：GPT 必须走 Codex，其余模型只走 pi gw。#843 过渡期：审官顺位 1 临时切 gpt-5.6-luna（pqapi 官方确认故障，codex 每单必死），pqapi 恢复后切回 Codex",
+      "理由": "2026-08-22 grill-ai 拍板 A：JSON 三层对齐，顺位路由；审官主路 Codex；Claude 禁用；同厂无人可派报错停手，不许自动 fallback。#822：GPT 必须走 Codex。（原句末「其余模型只走 pi gw」已随 2026-09-12 规则[2] 退役而删——选型改认统一执行目录，那条通道不再是规则。）#843 过渡期：审官顺位 1 临时切 gpt-5.6-luna（pqapi 官方确认故障，codex 每单必死），pqapi 恢复后切回 Codex",
       "约束": "受 bans[gpt UI 类].precedence 约束",
       "拍板": "2026-09-03"
     },
     {
-      "名称": "非GPT只走pi-gw",
-      "理由": "2026-09-03 用户拍板：除 gpt 必须走 Codex 外，其他都切 pi；降级交给网关池，派工层不再做模型级备胎。Grok Build / cursor-agent / devin / claude CLI 从选型移除，卸载等本单验收后",
-      "约束": "启用中的厂商：GPT 模型必须 gpt；其余必须 gw。禁用条目可留旧 CLI 作退役记录",
-      "拍板": "2026-09-03"
+      "名称": "选型只认统一执行目录",
+      "理由": "2026-09-12 用户拍板（原「非GPT只走pi-gw」退役）：派工选型的唯一真相源是 docs/execution-profiles.json。本仓职责树只排顺位，不再各自钉一条通道——2026-09-09 #1174 起，执行体、后端、本地/云端、供应商、账户池都由目录说了算，树里的 provider 字段已退化为诊断值。原规则[2]「非GPT只走pi-gw」把降级交给「网关池」，实测网关池那几条模型在目录里没有条目：判出的 pi 腿在 mirasim 侧没有账本，完工判据恒判 unknown，每针等到超时。故连模型带规则一起退。",
+      "约束": "启用中的职责树条目必须能由目录判出一条真路（有启用 profile，或其腿有真实账本）。newapi 网关已从派工选型退役：树里不许再出现 provider=gw 的启用条目；[providers.gw] 启动模板与网关探针留作人工诊断，任何派工路径都不再读它。",
+      "拍板": "2026-09-12"
     },
     {
       "名称": "腿表帅位自己改",
@@ -391,7 +422,10 @@
       "gw",
       "pqapi",
       "reclaude",
-      "mirasim"
+      "mirasim",
+      "xai-native",
+      "mirasim-relay",
+      "cursor-native"
     ],
     "执行侧": [
       "orca",
@@ -408,13 +442,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw/grok-4.6"
       },
-      "理由": "§73 迁移：写码/查证/方案整合现役主腿"
+      "理由": "§73 迁移：写码/查证/方案整合现役主腿",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "deepseek-v4-flash@gw/orca",
@@ -423,13 +459,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-dspool/deepseek-v4-flash"
       },
-      "理由": "§73 迁移：写码/方案 fallback"
+      "理由": "§73 迁移：写码/方案 fallback",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "gpt-5.6-sol@pqapi/orca",
@@ -438,12 +476,14 @@
       "族": "codex",
       "供应商": "pqapi",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gpt"
       },
-      "理由": "§73 迁移：方案主路/审官备选；codex 直连 pqapi（#843 熔断 key direct:codex@pqapi）；gpt 族后备顺位见 §72"
+      "理由": "§73 迁移：方案主路/审官备选；codex 直连 pqapi（#843 熔断 key direct:codex@pqapi）；gpt 族后备顺位见 §72",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "gpt-5.6-luna@gw/orca",
@@ -452,13 +492,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-windsurf/gpt-5.6-luna"
       },
-      "理由": "§73 迁移：审官过渡首选（#843）"
+      "理由": "§73 迁移：审官过渡首选（#843）",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "glm-5.2@gw/orca",
@@ -467,13 +509,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-windsurf/glm-5-2"
       },
-      "理由": "§73 迁移：方案/UI/审官候选"
+      "理由": "§73 迁移：方案/UI/审官候选",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "gemini-3.7-flash@gw/orca",
@@ -482,13 +526,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-windsurf/gemini-3-7-flash-high"
       },
-      "理由": "§73 迁移：查证/UI 候选"
+      "理由": "§73 迁移：查证/UI 候选",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "kimi-k3@gw/orca",
@@ -497,13 +543,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-sub/kimi-k3-high"
       },
-      "理由": "§73 迁移：UI/审官/判断候选"
+      "理由": "§73 迁移：UI/审官/判断候选",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "composer-2.5@gw/orca",
@@ -512,13 +560,15 @@
       "族": "pi",
       "供应商": "gw",
       "执行侧": "orca",
-      "状态": "在役",
+      "状态": "停用",
       "拍板": "2026-09-04",
       "落地": {
         "provider": "gw",
         "cli_model": "gw-sub/composer-2.5"
       },
-      "理由": "§73 迁移：UI 主选/判断候选"
+      "理由": "§73 迁移：UI 主选/判断候选",
+      "停用原因": "2026-09-12 退役：本腿的执行侧是 orca，而 orca 已退役（2026-09-06 编排态）；它承载的模型已由统一执行目录判出真路（或已随本次制度退役）。网关落地从选型退役，本腿留作沿革。",
+      "停用日期": "2026-09-12"
     },
     {
       "id": "claude-fable-5@reclaude/terminal",
@@ -630,6 +680,64 @@
       "状态": "在役",
       "拍板": "2026-09-06",
       "理由": "服务器帅位现役腿（写下本条的会话就是它）。Fable 只留帅位、派工须用户点名（2026-08-15 拍板）；对账闸抓出未登记后按用户 2026-09-06「改正腿表」拍板补登"
+    },
+    {
+      "id": "grok-4.6@xai-native/mirasim",
+      "并发上限": "不限",
+      "模型": "grok-4.6",
+      "族": "pi",
+      "供应商": "xai-native",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-12",
+      "理由": "执行目录 grok-mirasim-native（available，有真会话证据）。网关退役后本腿是 grok 的唯一真路",
+      "落地": {
+        "provider": "xai-native",
+        "cli_model": "grok-4.6"
+      }
+    },
+    {
+      "id": "gpt-5.6-sol@mirasim-relay/mirasim",
+      "并发上限": "不限",
+      "模型": "gpt-5.6-sol",
+      "族": "codex",
+      "供应商": "mirasim-relay",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-12",
+      "理由": "执行目录 codex-relay-gpt-5.6-sol。原 gpt-5.6-sol@pqapi/orca 腿已停用",
+      "落地": {
+        "provider": "mirasim-relay"
+      }
+    },
+    {
+      "id": "gpt-5.6-luna@mirasim-relay/mirasim",
+      "并发上限": "不限",
+      "模型": "gpt-5.6-luna",
+      "族": "codex",
+      "供应商": "mirasim-relay",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-12",
+      "理由": "执行目录 codex-relay-gpt-5.6-luna（available，#1174 真会话 codex:5e165b05 phase=done）",
+      "落地": {
+        "provider": "mirasim-relay"
+      }
+    },
+    {
+      "id": "composer-2.5@cursor-native/mirasim",
+      "并发上限": 1,
+      "模型": "composer-2.5",
+      "族": "pi",
+      "供应商": "cursor-native",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-12",
+      "理由": "执行目录 cursor-acp-composer（available）。走共用 ACP 通道，不经 mirasim-server relay；执行侧认载体（mirasim），不写已退役的 orca。并发上限 1：本腿是订阅制本机会话（cursor-subscription），上游按订阅限流，多条并发一起撞 429 比排队慢。族记 pi 不记 claude：族是本腿走哪条 CLI 协议、完工证据长什么样——本条走 ACP 的 cursor 会话，既不进 mirasim-server 的 relay，也不产生 claude 会话的 result 帧。§73 约束①（mirasim 执行 claude 族时供应商锁死 mirasim）是 mirasim-server relay 通道的实测事实，管不到 ACP；记成 claude 会让它误撞该约束，也让「审查换厂商」按 vendorFamilyOf(composer-2.5)=composer 独立成一家、与族标签对不上。派工选型面与此一致：执行体.mirasim.模型前缀族 里 composer→pi，模型 id 与族标签两处同值。",
+      "落地": {
+        "provider": "cursor-native",
+        "cli_model": "composer-2.5"
+      }
     }
   ],
   "执行体": {
