@@ -54,6 +54,8 @@ function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
 /**
  * 拿排他锁。返回 { ok, path, release }；release 必须在 finally 调。
  * 超时 → ok:false。持锁 pid 已死、或锁文件 mtime 超过 staleMs → 拆过期锁再抢。
+ * timeoutMs=0 是一次非阻塞尝试，但清掉死锁/过期锁后仍立即再抢一次——
+ * 否则崩溃遗留的锁会被删掉，函数却报「等超时（0ms）」。
  */
 export function acquireWorktreeLock({
   lockPath,
@@ -77,6 +79,7 @@ export function acquireWorktreeLock({
 
   const t0 = now();
   let attempted = false;
+  let retriedAfterStale = false;
   while (!attempted || now() - t0 < timeoutMs) {
     attempted = true; // timeout=0 means one nonblocking attempt, not zero attempts.
     try {
@@ -106,6 +109,11 @@ export function acquireWorktreeLock({
       const expired = age != null && age >= staleMs;
       if (dead || expired) {
         try { unlink(path); } catch { /* 别人抢先拆了 */ }
+        // Clearing a stale lock does not consume the timeout=0 attempt.
+        if (!retriedAfterStale) {
+          retriedAfterStale = true;
+          attempted = false;
+        }
         continue;
       }
       if (now() - t0 >= timeoutMs) break;

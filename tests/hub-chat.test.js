@@ -36,6 +36,19 @@ describe('state saves preserve concurrent card decisions', () => {
     assert.equal(createStateStore(file).hubPending.new.decided.choice, 'recommend');
     assert.equal(human.hubPending.new.decided.choice, 'recommend');
   });
+  it('timeoutMs=0 save recovers a dead leftover lock and keeps the confirmed choice', async t => {
+    const { createStateStore } = await ADAPTER;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-state-stale-lock-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'state.json');
+    const store = createStateStore(file);
+    store.hubPending.om_card = { repo: DEFAULT_REPO, number: 1174, decided: { choice: 'recommend' } };
+    fs.writeFileSync(`${file}.lock`, '999999999');
+    store.save();
+    assert.equal(createStateStore(file).hubPending.om_card.decided.choice, 'recommend');
+    assert.equal(fs.existsSync(`${file}.lock`), false);
+  });
+
   it('contended state save fails promptly rather than blocking card callbacks', async t => {
     const { createStateStore } = await ADAPTER;
     const { acquireWorktreeLock } = await import('../scripts/lib/dispatch-lock.mjs');
