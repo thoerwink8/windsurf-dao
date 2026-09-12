@@ -1,0 +1,5 @@
+/* 审官对抗样本：解构 process.execPath。只认 nodePath = process.execPath 会 scanned:0。
+const { spawnSync } = require("node:child_process");
+const { execPath: nodePath } = process;
+spawnSync(nodePath, argv, { env: { PATH: "/bin" } });
+*/

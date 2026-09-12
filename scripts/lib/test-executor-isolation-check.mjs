@@ -21,6 +21,9 @@
 //      process.execPath 的命令别名要跟（const nodePath = process.execPath; spawn(nodePath, argv)）。
 //      node 绝对/相对路径（/usr/bin/node、node.exe）也是 JS 执行体，不许当 git 放过。
 //      对象字面量 / 成员赋值上的 child_process 别名（{ run: cp.spawnSync }; box.run(...)）要跟。
+//      可选链（cp?.spawnSync / spawnSync?.(...)）、逗号间接调用（(0, spawnSync)(...)）、
+//      计算属性键（{ ['run']: cp.spawnSync }）、展开 child_process（{ ...cp }; box.spawnSync(...)）、
+//      解构 process.execPath（const { execPath: nodePath } = process）都要跟。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -163,12 +166,26 @@ export function collectSpawnAliases(src) {
 }
 
 function eachObjectSpawnProp(text, fns, onMatch) {
+  const recv = String.raw`(?:[A-Za-z_][\w]*\s*\??\.\s*)?`;
   const re = new RegExp(
-    String.raw`\b([A-Za-z_][\w]*)\s*:\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(?:${fns})\s*(?![(\w])`,
+    String.raw`\b([A-Za-z_][\w]*)\s*:\s*${recv}(?:${fns})\s*(?![(\w])`,
     'g',
   );
   let m;
   while ((m = re.exec(text))) onMatch(m[1]);
+  const computed = new RegExp(
+    String.raw`\[\s*(['"\`])([^'"\`]+)\1\s*\]\s*:\s*${recv}(?:${fns})\s*(?![(\w])`,
+    'g',
+  );
+  while ((m = computed.exec(text))) {
+    if (/^[A-Za-z_][\w]*$/.test(m[2])) onMatch(m[2]);
+  }
+}
+
+function spreadsChildProcess(body, cpNames) {
+  if (!cpNames || !cpNames.size) return false;
+  const ids = [...cpNames].map(escapeIdent).join('|');
+  return new RegExp(String.raw`(?:^|[^\w.])\.\.\.\s*(?:${ids})\b`).test(String(body || ''));
 }
 
 function collectSpawnAliasSets(src) {
@@ -183,7 +200,7 @@ function collectSpawnAliasSets(src) {
     opaque.add(id);
   };
   for (let n = 0; n < 32; n++) {
-    const before = names.size + opaque.size + holders.size;
+    const before = names.size + opaque.size + holders.size + cpNames.size;
     const fns = [...names].map(escapeIdent).join('|');
     const dest = new RegExp(String.raw`(?<!-)\b(?:${fns})\s*:\s*([A-Za-z_][\w]*)\s*[,}]`, 'g');
     let m;
@@ -191,25 +208,40 @@ function collectSpawnAliasSets(src) {
     const imp = new RegExp(String.raw`(?<!-)\b(?:${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
     while ((m = imp.exec(text))) names.add(m[1]);
     const asg = new RegExp(
-      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
+      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
       'g',
     );
     while ((m = asg.exec(text))) names.add(m[1]);
     const bare = new RegExp(
-      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
+      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
       'g',
     );
     while ((m = bare.exec(text))) names.add(m[1]);
     eachObjectSpawnProp(text, fns, (id) => names.add(id));
+    const takeObj = (id, body) => {
+      let has = false;
+      eachObjectSpawnProp(body, fns, () => { has = true; });
+      if (has) holders.add(id);
+      if (spreadsChildProcess(body, cpNames)) {
+        holders.add(id);
+        cpNames.add(id);
+      }
+    };
     const asgObj = /\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*\{/g;
     while ((m = asgObj.exec(text))) {
       const openIdx = text.indexOf('{', m.index + m[0].length - 1);
       if (openIdx < 0) continue;
       const end = matchBalanced(text, openIdx);
       if (end < 0) continue;
-      let has = false;
-      eachObjectSpawnProp(text.slice(openIdx, end + 1), fns, () => { has = true; });
-      if (has) holders.add(m[1]);
+      takeObj(m[1], text.slice(openIdx, end + 1));
+    }
+    const bareObj = /(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*\{/g;
+    while ((m = bareObj.exec(text))) {
+      const openIdx = text.indexOf('{', m.index + m[0].length - 1);
+      if (openIdx < 0) continue;
+      const end = matchBalanced(text, openIdx);
+      if (end < 0) continue;
+      takeObj(m[1], text.slice(openIdx, end + 1));
     }
     const mem = new RegExp(
       String.raw`\b([A-Za-z_][\w]*)\s*\.\s*([A-Za-z_][\w]*)\s*=\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(?:${fns})\s*(?![(\w])`,
@@ -249,9 +281,23 @@ function collectSpawnAliasSets(src) {
       );
       while ((m = bareOp.exec(text))) addOpaque(m[1]);
     }
-    if (names.size + opaque.size + holders.size === before) break;
+    if (cpNames.size) {
+      const ids = [...cpNames].map(escapeIdent).join('|');
+      const asgCp = new RegExp(
+        String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:${ids})\s*(?![(\w.])`,
+        'g',
+      );
+      while ((m = asgCp.exec(text))) cpNames.add(m[1]);
+      const bareCp = new RegExp(
+        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?:${ids})\s*(?![(\w.])`,
+        'g',
+      );
+      while ((m = bareCp.exec(text))) cpNames.add(m[1]);
+    }
+    for (const h of holders) cpNames.add(h);
+    if (names.size + opaque.size + holders.size + cpNames.size === before) break;
   }
-  return { names, opaque, holders };
+  return { names, opaque, holders, cpNames };
 }
 
 /** `const run = cp[unknownKey]`：赋值不是调用。解析不了的 key 标不透明。 */
@@ -282,13 +328,26 @@ function scanComputedAliases(text, cpNames, onAlias) {
   }
 }
 
+/** 实参列表的 '('：`(0, spawnSync)(args)` 取第二个，`spawnSync?.(args)` 取唯一那个。 */
+function invocationOpen(span) {
+  const s = String(span || '');
+  if (s.endsWith(')')) {
+    const end = s.length - 1;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== '(') continue;
+      if (matchBalanced(s, i) === end) return i;
+    }
+  }
+  return s.indexOf('(');
+}
+
 function calleeName(span) {
-  const open = String(span || '').indexOf('(');
+  const open = invocationOpen(span);
   if (open < 0) return '';
-  const before = span.slice(0, open).trim();
+  const before = span.slice(0, open).trim().replace(/\?\.\s*$/, '').replace(/\)\s*$/, '').trim();
   const whole = before.match(/^([A-Za-z_][\w]*)$/);
   if (whole) return whole[1];
-  const m = before.match(/[^.\w]([A-Za-z_][\w]*)$/);
+  const m = before.match(/([A-Za-z_][\w]*)$/);
   return m ? m[1] : '';
 }
 
@@ -309,9 +368,9 @@ function collectChildProcessReceivers(src) {
 
 function receiverBefore(text, bracketIdx, cpNames) {
   const before = text.slice(Math.max(0, bracketIdx - 96), bracketIdx);
-  const req = before.match(/require\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*$/);
+  const req = before.match(/require\s*\(\s*['"](?:node:)?child_process['"]\s*\)(?:\s*\?\.)?\s*$/);
   if (req) return { isCp: true, start: bracketIdx - req[0].length };
-  const id = before.match(/([A-Za-z_][\w]*)\s*$/);
+  const id = before.match(/([A-Za-z_][\w]*)(?:\s*\?\.)?\s*$/);
   if (id) return { isCp: cpNames.has(id[1]), start: bracketIdx - id[0].length };
   return { isCp: false, start: bracketIdx };
 }
@@ -337,7 +396,7 @@ function isSpawnName(name, names) {
 }
 
 function isOpaqueComputedSpan(span, names, src) {
-  const open = String(span || '').indexOf('(');
+  const open = invocationOpen(span);
   if (open < 0) return false;
   const before = span.slice(0, open);
   const rb = before.lastIndexOf(']');
@@ -379,11 +438,20 @@ function scanComputedCalls(text, spawnNames, cpNames, onSpan) {
 }
 
 export function extractCallSpans(src, names) {
-  const holders = collectSpawnAliasSets(src).holders;
-  return extractCallSites(src, names, holders).map((s) => s.span);
+  const sets = collectSpawnAliasSets(src);
+  return extractCallSites(src, names, sets.holders, sets.cpNames).map((s) => s.span);
 }
 
-function extractCallSites(src, names, holders) {
+function groupOpenBefore(text, closeIdx, nameIdx) {
+  const lo = Math.max(0, nameIdx - 160);
+  for (let i = nameIdx - 1; i >= lo; i--) {
+    if (text[i] !== '(') continue;
+    if (matchBalanced(text, i) === closeIdx) return i;
+  }
+  return -1;
+}
+
+function extractCallSites(src, names, holders, cpReceivers) {
   const text = String(src || '');
   const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
   const alts = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -396,25 +464,38 @@ function extractCallSites(src, names, holders) {
     seen.add(key);
     sites.push({ span, index });
   };
-  const cpNames = collectChildProcessReceivers(text);
+  const cpNames = new Set(cpReceivers || collectChildProcessReceivers(text));
   for (const h of holders || []) cpNames.add(h);
   if (alts.length) {
-    const re = new RegExp(String.raw`\b(?:${alts.join('|')})\s*\(`, 'g');
+    const re = new RegExp(String.raw`\b(?:${alts.join('|')})\b`, 'g');
     let m;
     while ((m = re.exec(text))) {
       const before = text.slice(Math.max(0, m.index - 12), m.index);
       if (/\bfunction\s+$/.test(before)) continue;
-      if (/\.\s*$/.test(before)) {
-        const window = text.slice(Math.max(0, m.index - 96), m.index);
-        const req = /require\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*\.\s*$/.test(window);
-        const recv = window.match(/([A-Za-z_][\w]*)\s*\.\s*$/);
-        if (!req && !(recv && cpNames.has(recv[1]))) continue;
-      }
-      const openIdx = text.indexOf('(', m.index);
+      const rest = text.slice(m.index + m[0].length);
+      const direct = rest.match(/^(?:\s*\?\.)?\s*\(/);
+      const wrapped = rest.match(/^\s*\)\s*\(/);
+      let openIdx = -1;
+      let spanStart = m.index;
+      if (direct) {
+        if (/\.\s*$/.test(before)) {
+          const window = text.slice(Math.max(0, m.index - 96), m.index);
+          const req = /require\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*\??\.\s*$/.test(window);
+          const recv = window.match(/([A-Za-z_][\w]*)\s*\??\.\s*$/);
+          if (!req && !(recv && cpNames.has(recv[1]))) continue;
+        }
+        openIdx = m.index + m[0].length + direct[0].lastIndexOf('(');
+      } else if (wrapped) {
+        const closeIdx = m.index + m[0].length + wrapped[0].indexOf(')');
+        const groupOpen = groupOpenBefore(text, closeIdx, m.index);
+        if (groupOpen < 0) continue;
+        openIdx = m.index + m[0].length + wrapped[0].lastIndexOf('(');
+        spanStart = groupOpen;
+      } else continue;
       if (openIdx < 0) continue;
       const end = matchBalanced(text, openIdx);
       if (end < 0) continue;
-      push(text.slice(m.index, end + 1), m.index);
+      push(text.slice(spanStart, end + 1), spanStart);
     }
   }
   const spawnNames = new Set([...list, ...SPAWN_FNS]);
@@ -497,6 +578,30 @@ function isNodeExecutableName(v) {
   return name === 'node' || name === 'nodejs';
 }
 
+/** `const { execPath } = process` / `const { execPath: nodePath } = process` */
+function isProcessExecPathBinding(src, name, beforeIdx = Infinity) {
+  const ident = String(name || '');
+  if (!ident) return false;
+  const text = String(src || '');
+  const re = /\b(?:const|let|var)\s*\{/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const open = m.index + m[0].length - 1;
+    if (open >= beforeIdx) continue;
+    const end = matchBalanced(text, open);
+    if (end < 0 || end >= beforeIdx) continue;
+    if (!/^\s*=\s*process\b/.test(text.slice(end + 1))) continue;
+    const inner = text.slice(open + 1, end);
+    for (const raw of splitTopLevelArgs(inner)) {
+      const piece = raw.trim();
+      if (piece === ident && ident === 'execPath') return true;
+      const rename = piece.match(new RegExp(String.raw`^execPath\s*:\s*${escapeIdent(ident)}$`));
+      if (rename) return true;
+    }
+  }
+  return false;
+}
+
 /** process.execPath / node / *.js 才可能跑 dao；git 等字面量命令不当 dispatch 候选。 */
 function isJsRunnerCommand(src, cmd, beforeIdx = Infinity, seen = new Set()) {
   const t = String(cmd || '').trim();
@@ -510,6 +615,7 @@ function isJsRunnerCommand(src, cmd, beforeIdx = Infinity, seen = new Set()) {
     if (asg) return isJsRunnerCommand(src, asg.rhs, asg.start, seen);
     const str = findStringLiteral(src, t, beforeIdx);
     if (str) return isJsRunnerCommand(src, str, beforeIdx, seen);
+    if (isProcessExecPathBinding(src, t, beforeIdx)) return true;
     return false;
   }
   const folded = foldStringConcat(t);
@@ -671,7 +777,7 @@ function expandArgvSpreads(src, span, beforeIdx) {
 
 /** 子进程 argv / exec 命令字符串，不含 options 对象。--dry-run 只在这里算数。 */
 function argvTextForCall(src, span, callIndex = Infinity) {
-  const open = span.indexOf('(');
+  const open = invocationOpen(span);
   if (open < 0) return { text: '', unresolved: false };
   const close = matchBalanced(span, open);
   if (close < 0) return { text: '', unresolved: false };
@@ -752,9 +858,9 @@ export function classifyTestDispatchSpawns(src) {
     return { ok: false, unscanned: true, error: '没给测试正文（没查成）', scanned: 0, violations: [] };
   }
   const text = String(src);
-  const { names, opaque: opaqueAliases, holders } = collectSpawnAliasSets(text);
+  const { names, opaque: opaqueAliases, holders, cpNames } = collectSpawnAliasSets(text);
   const nameList = [...names];
-  const sites = extractCallSites(text, nameList, holders);
+  const sites = extractCallSites(text, nameList, holders, cpNames);
   const violations = [];
   let scanned = 0;
   for (const { span, index } of sites) {
@@ -926,6 +1032,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let dynamicArgvElem = false;
       let absNodePath = false;
       let objPropAlias = false;
+      let optionalMember = false;
+      let optionalCall = false;
+      let commaCall = false;
+      let computedObjKey = false;
+      let spreadCp = false;
+      let destructureExecPath = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -975,6 +1087,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
           /\{\s*[A-Za-z_][\w]*\s*:\s*[A-Za-z_][\w]*\s*\.\s*spawnSync/.test(src)
           && r.scanned > 0 && !r.ok
         ) objPropAlias = true;
+        if (/\?\.\s*spawnSync\s*\(/.test(src) && r.scanned > 0 && !r.ok) optionalMember = true;
+        if (/\bspawnSync\s*\?\.\s*\(/.test(src) && r.scanned > 0 && !r.ok) optionalCall = true;
+        if (/\(\s*0\s*,\s*spawnSync\s*\)\s*\(/.test(src) && r.scanned > 0 && !r.ok) commaCall = true;
+        if (/\[\s*['"]run['"]\s*\]\s*:/.test(src) && r.scanned > 0 && !r.ok) computedObjKey = true;
+        if (/\{\s*\.\.\.\s*[A-Za-z_][\w]*\s*\}/.test(src) && r.scanned > 0 && !r.ok) spreadCp = true;
+        if (/execPath\s*:\s*[A-Za-z_][\w]*/.test(src) && r.scanned > 0 && !r.ok) destructureExecPath = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -991,6 +1109,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!dynamicArgvElem) problems.push('red/ 没点出数组里的动态 argv 表达式');
       if (!absNodePath) problems.push('red/ 没点出 node 绝对路径');
       if (!objPropAlias) problems.push('red/ 没点出对象属性转发的 child_process 别名');
+      if (!optionalMember) problems.push('red/ 没点出可选链成员调用（cp?.spawnSync）');
+      if (!optionalCall) problems.push('red/ 没点出可选链调用（spawnSync?.）');
+      if (!commaCall) problems.push('red/ 没点出逗号间接调用（(0, spawnSync)）');
+      if (!computedObjKey) problems.push('red/ 没点出计算属性键对象别名（[\'run\']）');
+      if (!spreadCp) problems.push('red/ 没点出展开 child_process（{ ...cp }）');
+      if (!destructureExecPath) problems.push('red/ 没点出解构 process.execPath');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

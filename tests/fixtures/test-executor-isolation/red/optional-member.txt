@@ -1,0 +1,6 @@
+/* 审官对抗样本：可选链成员 cp?.spawnSync。成员前缀只认 obj. 会 scanned:0。
+const cp = require("node:child_process");
+cp?.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/
