@@ -247,13 +247,15 @@ describe('dao 审官与完工', () => {
     });
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
-    await t.test('dao.mjs mirasim 派工只给 issue 打 type/（#1205 盘面），不打 model/reviewer（#1116）', () => {
+    await t.test('dao.mjs mirasim 派工只给 issue 打 type/（#1205/#1207 盘面），不打 model/reviewer（#1116）', () => {
       const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
       const i = mira.indexOf('stampIssueLabels(');
       const stamp = i >= 0 ? mira.slice(i, mira.indexOf(';', i) + 1) : '';
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
       assert.ok(stamp, '#1205 缺 type/ 时补盘面');
       assert.match(stamp, /preserveType:\s*true/, '已有 type/ 不覆盖');
+      assert.match(mira, /role:\s*'marshal'/, '打 label 身份 marshal');
+      assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
       assert.doesNotMatch(stamp, /\bmodel:/, '不把 model 打到 issue');
       assert.doesNotMatch(stamp, /\breviewer:/, '不把 reviewer 打到 issue');
     });
