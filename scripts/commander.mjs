@@ -913,20 +913,53 @@ function execClearExhausted(action, { dryRun, say, run = runCmd } = {}) {
   return { ok: true, cleared: true };
 }
 
-function execRetryDrain(action, { state, dryRun, say }) {
+export function execRetryDrain(action, { state, dryRun, say, readHead = livePrHead, run = runCmd }) {
+  // 决策说「这张票没过期」到执行这张票之间隔着几秒到几分钟，工人可能刚推了新 head。
+  // 二次校验必须拿现场的 head，不能拿决策时的快照——否则闸只在 decide 侧成立，
+  // 执行侧读的是票头（旧值），一定自洽，闸等于没装（2026-09-12 审官打回 #1209 的第二条）。
+  // 查不到现场 head 就不放行：拿不到现场证据时放行，闸就变成「查到才拦」，抽风一次全过。
+  const repo = action.repo && String(action.repo).trim() ? String(action.repo).trim() : REPO;
+  let liveHeadForCheck = '';
+  if (dryRun) {
+    liveHeadForCheck = String(action.head || '');
+  } else {
+    const cur = readHead(action, repo);
+    if (!cur.ok) {
+      say(`  当前 head 没核成，不重试这张票：#${action.pr}（${cur.error}）`);
+      return { ok: false, error: `当前 head 没核成：${cur.error}`, code: 'head-unscanned' };
+    }
+    liveHeadForCheck = cur.head;
+  }
+  // 现场 head 走 **opts.liveHead**。planRetryDrainCmd 只从 opts 读 liveHead，
+  // 把它塞进 action 是无效的——而且 action 里本来就有 `head`（票头），
+  // 展开 `...action` 看着像「顺手带上」，实际什么都没带，校验拿到「票头 vs 票头」，
+  // 一定自洽、闸又变成没装（第二版就是这么写的，探针当场抓到）。
   const planned = planRetryDrainCmd(action, {
     queue: action.queue,
     ledger: (state && state.drainLedger) || {},
     nowMs: Date.parse(nowIso()) || 0,
+    liveHead: liveHeadForCheck,
   });
   if (!planned.ok) {
     say(`  retry-drain 校验拒：${planned.error}`);
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
-  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why, run });
   // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
   recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+/** 现场 head 读取器（execRetryDrain 的二次校验用）：查不成返回 ok:false，调用方 fail-closed。 */
+function livePrHead(action, repo) {
+  const r = runGh(['pr', 'view', String(action.pr), '--repo', repo, '--json', 'headRefOid'], 20000);
+  if (!r.ok) return { ok: false, error: r.error };
+  let got;
+  try { got = JSON.parse(r.out || '{}'); }
+  catch { return { ok: false, error: 'headRefOid 解析失败' }; }
+  const head = typeof got.headRefOid === 'string' ? got.headRefOid.trim() : '';
+  if (!head) return { ok: false, error: 'headRefOid 是空的' };
+  return { ok: true, head };
 }
 
 // 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
