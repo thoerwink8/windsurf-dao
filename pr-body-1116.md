@@ -57,6 +57,8 @@
 - [x] 本轮跟上 origin/master（#1203 已交卷工人不再反复重派 + #1198 acp-runtime 并行误红）。冲突 0；选型路仍只读 PR label。#1203 合入后差集重派带 openPrs，不从 issue 反推审官。相关测试 317+185+204 绿；dao-check 241 项绿。
 - [x] 本轮跟上 origin/master（#1150 Orca 退役收尾 / #1196 探活闸）。冲突两处：`reviewer-book.md` 跟 master 删（本单说明已在 mirasim 书）；`dao.mjs` 的 dispatch-exec/batch 跟 master 墓碑，账本打标留下。#1150 测试写「mirasim 不打 stampIssueLabels」，但 #1205 已给 issue 补 type/——改钉成只打 type/、不打 model/reviewer，身份 marshal。选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1207 跟上 #1205 的 marshal 网关断言 / #1192 收件箱接到指挥官盘点）。冲突两处测试：`dao-reviewer` / `marshal-issue-identity`。合入后同时钉死：补 type/ 走 marshal + issue-gateway，且不把 model/reviewer 打到 issue。选型路仍只读 PR label。
+- [x] 本轮跟上 origin/master（#1176/#1195 孤儿临时目录清扫）。冲突一处：`marshal-issue-identity` 保留本单「不打 model/reviewer」断言，#1176 的 stampIssueLabels 存在性已被 stamp 切片覆盖。选型路仍只读 PR label。相关测试 138+439+347+293 绿。
+- [x] 本轮跟上 origin/master（#1206 watchdog 真结果 / 死锁清后立刻再抢 / 派工前补 type）。冲突 0。#1206 的 stampIssueLabels 仍只打 type/、不打 model/reviewer；指挥官选型仍只读 PR label。
 
 ## 机制判定
 
