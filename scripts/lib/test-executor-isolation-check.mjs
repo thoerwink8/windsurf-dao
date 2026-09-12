@@ -20,6 +20,8 @@
 //      argv 只认调用前最后一次赋值：调用后才补 --dry-run 不许拼进来误放行。
 //      argv 赋值还要证明对调用可达：死分支 / if (true) 里最后一次带 --dry-run
 //      不算放行。控制流无法证明则 unresolved fail-closed。
+//      argv 赋值与 push/索引变更按 JS token 收集：注释和字符串里的同名
+//      赋值不算运行时值（// argv = [..., "--dry-run"] 不许误放行）。
 //      process.execPath 的命令别名要跟（const nodePath = process.execPath; spawn(nodePath, argv)）。
 //      node 绝对/相对路径（/usr/bin/node、node.exe）也是 JS 执行体，不许当 git 放过。
 //      对象字面量 / 成员赋值上的 child_process 别名（{ run: cp.spawnSync }; box.run(...)）要跟。
@@ -153,6 +155,22 @@ function skipStringOrComment(text, i) {
     return k < s.length ? k + 2 : k;
   }
   return i;
+}
+
+function wordAt(text, i) {
+  const s = String(text || '');
+  if (i < 0 || i >= s.length || !/[A-Za-z_]/.test(s[i])) return null;
+  let j = i + 1;
+  while (j < s.length && /[\w]/.test(s[j])) j += 1;
+  return { name: s.slice(i, j), end: j };
+}
+
+/** i 处若是独立 ident（前一格不是 ident 或 `.`）则返回 { name, end }。 */
+function identAt(text, i) {
+  const w = wordAt(text, i);
+  if (!w) return null;
+  if (i > 0 && /[\w.]/.test(text[i - 1])) return null;
+  return w;
 }
 
 /** 从 openIdx 处的 '(' / '[' / '{' 起，匹配到成对关闭。字符串和注释内的括号不算。 */
@@ -1505,24 +1523,48 @@ function arrayRhsHasDryRun(rhs) {
   return hasLit(t.slice(0, end + 1), '--dry-run');
 }
 
-/** 调用前所有 `name = rhs`。赋值必须在 beforeIdx 前结束。 */
+/** 调用前所有 `name = rhs`。赋值必须在 beforeIdx 前结束。按 token 跳过注释和字符串。 */
 function findAssignments(src, name, beforeIdx = Infinity) {
   const text = String(src || '');
-  const re = new RegExp(String.raw`(?:^|[^\w.])(${escapeIdent(name)})\s*=(?![=>])\s*`, 'g');
+  const ident = String(name || '');
   const out = [];
-  let m;
-  while ((m = re.exec(text))) {
-    const identStart = m.index + m[0].indexOf(m[1]);
-    const rhsStart = m.index + m[0].length;
-    if (rhsStart >= beforeIdx) continue;
+  if (!ident) return out;
+  const limit = Number.isFinite(beforeIdx) ? beforeIdx : text.length;
+  for (let i = 0; i < text.length && i < limit; ) {
+    const skipped = skipStringOrComment(text, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    const id = identAt(text, i);
+    if (!id) {
+      i += 1;
+      continue;
+    }
+    if (id.name !== ident) {
+      i = id.end;
+      continue;
+    }
+    const eq = skipWsAndComments(text, id.end);
+    if (eq >= limit || text[eq] !== '=' || text[eq + 1] === '=' || text[eq + 1] === '>') {
+      i = id.end;
+      continue;
+    }
+    const rhsStart = skipWsAndComments(text, eq + 1);
+    if (rhsStart >= limit) {
+      i = id.end;
+      continue;
+    }
     const rhsEnd = scanRhsEnd(text, rhsStart);
-    if (rhsEnd < 0 || rhsEnd > beforeIdx) continue;
-    out.push({
-      rhs: text.slice(rhsStart, rhsEnd).trim(),
-      start: m.index,
-      identStart,
-      end: rhsEnd,
-    });
+    if (rhsEnd >= 0 && rhsEnd <= limit) {
+      out.push({
+        rhs: text.slice(rhsStart, rhsEnd).trim(),
+        start: i,
+        identStart: i,
+        end: rhsEnd,
+      });
+    }
+    i = rhsEnd > i ? rhsEnd : id.end;
   }
   return out;
 }
@@ -1535,45 +1577,85 @@ function findLastAssignment(src, name, beforeIdx = Infinity) {
 
 function collectArgvMutations(src, name, fromIdx, toIdx) {
   const text = String(src || '');
+  const ident = String(name || '');
   const out = [];
-  const ident = escapeIdent(name);
-  const callRe = new RegExp(
-    String.raw`\b${ident}\s*\??\.\s*(push|unshift|pop|shift|splice)\s*\(`,
-    'g',
-  );
-  let m;
-  while ((m = callRe.exec(text))) {
-    if (m.index < fromIdx || m.index >= toIdx) continue;
-    const open = text.indexOf('(', m.index + m[0].length - 1);
-    if (open < 0 || open >= toIdx) continue;
+  if (!ident) return out;
+  const methods = new Set(['push', 'unshift', 'pop', 'shift', 'splice']);
+  const startBound = Number.isFinite(fromIdx) ? fromIdx : 0;
+  const endBound = Number.isFinite(toIdx) ? toIdx : text.length;
+  for (let i = 0; i < text.length; ) {
+    const skipped = skipStringOrComment(text, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    const id = identAt(text, i);
+    if (!id) {
+      i += 1;
+      continue;
+    }
+    if (id.name !== ident || i < startBound || i >= endBound) {
+      i = id.end;
+      continue;
+    }
+    let k = skipWsAndComments(text, id.end);
+    if (text[k] === '?' && text[k + 1] === '.') k = skipWsAndComments(text, k + 2);
+    else if (text[k] === '.') k = skipWsAndComments(text, k + 1);
+    else if (text[k] === '[') {
+      const close = matchBalanced(text, k);
+      if (close < 0) {
+        i = id.end;
+        continue;
+      }
+      const after = skipWsAndComments(text, close + 1);
+      if (after >= endBound || text[after] !== '=' || text[after + 1] === '=' || text[after + 1] === '>') {
+        i = id.end;
+        continue;
+      }
+      const rhsStart = skipWsAndComments(text, after + 1);
+      if (rhsStart >= endBound) {
+        i = id.end;
+        continue;
+      }
+      const rhsEnd = scanRhsEnd(text, rhsStart);
+      if (rhsEnd > endBound) {
+        i = id.end;
+        continue;
+      }
+      const keySrc = text.slice(k + 1, close);
+      const key = resolveComputedKey(text, keySrc);
+      const slot = key.resolved && /^(?:0|[1-9]\d*)$/.test(key.resolved) ? Number(key.resolved) : NaN;
+      out.push({
+        kind: 'index',
+        slot,
+        value: text.slice(rhsStart, rhsEnd).trim(),
+        opaque: key.opaque || !Number.isInteger(slot),
+        index: i,
+      });
+      i = rhsEnd > i ? rhsEnd : id.end;
+      continue;
+    } else {
+      i = id.end;
+      continue;
+    }
+    const method = wordAt(text, k);
+    if (!method || !methods.has(method.name)) {
+      i = id.end;
+      continue;
+    }
+    const open = skipWsAndComments(text, method.end);
+    if (text[open] !== '(' || open >= endBound) {
+      i = id.end;
+      continue;
+    }
     const close = matchBalanced(text, open);
-    if (close < 0 || close > toIdx) continue;
+    if (close < 0 || close > endBound) {
+      i = id.end;
+      continue;
+    }
     const args = splitTopLevelArgs(text.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
-    out.push({ kind: m[1], args, index: m.index });
-  }
-  const lbRe = new RegExp(String.raw`\b${ident}\s*\[`, 'g');
-  while ((m = lbRe.exec(text))) {
-    if (m.index < fromIdx || m.index >= toIdx) continue;
-    const open = text.indexOf('[', m.index);
-    const close = matchBalanced(text, open);
-    if (close < 0) continue;
-    const after = text.slice(close + 1);
-    const eq = after.match(/^\s*=(?![=>])\s*/);
-    if (!eq) continue;
-    const rhsStart = close + 1 + eq[0].length;
-    if (rhsStart >= toIdx) continue;
-    const rhsEnd = scanRhsEnd(text, rhsStart);
-    if (rhsEnd > toIdx) continue;
-    const keySrc = text.slice(open + 1, close);
-    const key = resolveComputedKey(text, keySrc);
-    const slot = key.resolved && /^(?:0|[1-9]\d*)$/.test(key.resolved) ? Number(key.resolved) : NaN;
-    out.push({
-      kind: 'index',
-      slot,
-      value: text.slice(rhsStart, rhsEnd).trim(),
-      opaque: key.opaque || !Number.isInteger(slot),
-      index: m.index,
-    });
+    out.push({ kind: method.name, args, index: i });
+    i = close + 1;
   }
   out.sort((a, b) => a.index - b.index);
   return out;
@@ -2170,6 +2252,17 @@ function listKindFiles(dir) {
   catch { return []; }
 }
 
+/**
+ * 夹具常把样本包进整文件块注释，避免误存成 *.js 时被 node --test 执行。
+ * 整文件就是一块块注释时剥开再分类，好让赋值扫描按 token 跳过样本里的真注释。
+ * 文件头一行注释 + 后面活代码的，原样交给分类器。
+ */
+function unwrapFixtureSample(src) {
+  const t = String(src || '').trim();
+  if (!t.startsWith('/*') || !t.endsWith('*/')) return String(src || '');
+  return t.slice(2, -2);
+}
+
 /** 调用前 argv 无 --dry-run，调用后同名变量才补上。拼全部赋值会误放行。 */
 function fixtureHasArgvMutatedAfterCall(src) {
   const text = String(src || '');
@@ -2289,8 +2382,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let controlFlowCpAssign = false;
       let controlFlowAliasAssign = false;
       let controlFlowArgvAssign = false;
+      let argvAssignLineComment = false;
+      let argvAssignBlockComment = false;
+      let argvAssignInString = false;
       for (const f of files) {
-        const src = readFileSync(join(dir, f), 'utf8');
+        const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
         if (r.unscanned || r.ok || r.scanned === 0) {
           problems.push(`red/${f} 自称该红但没抓到真 dispatch spawn（scanned=${r.scanned}）`);
@@ -2535,6 +2631,18 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && hasLit(src, '--dry-run')
           && r.scanned > 0 && !r.ok
         ) controlFlowArgvAssign = true;
+        if (
+          /\/\/[^\n]*[A-Za-z_][\w]*\s*=\s*\[[^\n]*--dry-run/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvAssignLineComment = true;
+        if (
+          /\/\*\s*[A-Za-z_][\w]*\s*=\s*\[[\s\S]*?--dry-run[\s\S]*?\*\//.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvAssignBlockComment = true;
+        if (
+          /['"`][^'"`\n]*[A-Za-z_][\w]*\s*=\s*\[[^'"`\n]*--dry-run/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvAssignInString = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2594,11 +2702,14 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!controlFlowCpAssign) problems.push('red/ 没点出控制流里的 child_process 赋值（if (...) cp = require）');
       if (!controlFlowAliasAssign) problems.push('red/ 没点出控制流里的函数别名赋值（if (...) run = cp.spawnSync）');
       if (!controlFlowArgvAssign) problems.push('red/ 没点出控制流里无法证明的 argv 赋值（if 死分支 / if (true) 多次赋值）');
+      if (!argvAssignLineComment) problems.push('red/ 没点出行注释里的 argv 赋值（// argv = [..., "--dry-run"]）');
+      if (!argvAssignBlockComment) problems.push('red/ 没点出块注释里的 argv 赋值（/* argv = [..., "--dry-run"] */）');
+      if (!argvAssignInString) problems.push('red/ 没点出字符串里的 argv 赋值');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
       for (const f of files) {
-        const r = classifyTestDispatchSpawns(readFileSync(join(dir, f), 'utf8'));
+        const r = classifyTestDispatchSpawns(unwrapFixtureSample(readFileSync(join(dir, f), 'utf8')));
         if (r.unscanned) problems.push(`ok/${f} 没查成`);
         else if (!r.ok) problems.push(`ok/${f} 自称该绿但扫到：${r.violations.map((v) => v.why).join('；')}`);
       }
