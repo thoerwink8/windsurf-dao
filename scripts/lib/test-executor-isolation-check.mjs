@@ -22,6 +22,9 @@
 //      不算放行。控制流无法证明则 unresolved fail-closed。
 //      argv 赋值与 push/索引变更按 JS token 收集：注释和字符串里的同名
 //      赋值不算运行时值（// argv = [..., "--dry-run"] 不许误放行）。
+//      反引号模板的 ${...} 插值是执行表达式：argv 赋值 / push / 索引变更要收。
+//      初始数组带 --dry-run、插值里改掉再 spawn 不许误放行。
+//      含插值但模板未闭合 → fail-closed。
 //      process.execPath 的命令别名要跟（const nodePath = process.execPath; spawn(nodePath, argv)）。
 //      node 绝对/相对路径（/usr/bin/node、node.exe）也是 JS 执行体，不许当 git 放过。
 //      对象字面量 / 成员赋值上的 child_process 别名（{ run: cp.spawnSync }; box.run(...)）要跟。
@@ -135,6 +138,8 @@ function escapeIdent(name) {
 
 /**
  * 从 i 起若是字符串或注释则跳到其后；否则返回 i。
+ * 反引号模板整段跳过（含 ${...}），给括号匹配当一个字面量。
+ * 赋值/变更收集另走 splitTemplateAt，进入插值当代码。
  * 未闭合字符串吃到末尾（与旧 inStr 到 EOF 同），好让括号匹配 fail-closed。
  */
 function skipStringOrComment(text, i) {
@@ -155,6 +160,72 @@ function skipStringOrComment(text, i) {
     return k < s.length ? k + 2 : k;
   }
   return i;
+}
+
+/**
+ * i 处是 `。拆出 ${...} 插值（绝对下标，不含 ${ 与闭合 }）。
+ * 插值里再套模板由调用方递归。未闭合或 ${ 对不上 } → unclosed。
+ */
+function splitTemplateAt(text, i) {
+  const s = String(text || '');
+  if (s[i] !== '`') return null;
+  const interpolations = [];
+  let k = i + 1;
+  let esc = false;
+  while (k < s.length) {
+    const c = s[k];
+    if (esc) { esc = false; k += 1; continue; }
+    if (c === '\\') { esc = true; k += 1; continue; }
+    if (c === '`') return { end: k + 1, interpolations, unclosed: false };
+    if (c === '$' && s[k + 1] === '{') {
+      const close = matchBalanced(s, k + 1);
+      if (close < 0) {
+        interpolations.push({ start: k + 2, end: s.length });
+        return { end: s.length, interpolations, unclosed: true };
+      }
+      interpolations.push({ start: k + 2, end: close });
+      k = close + 1;
+      continue;
+    }
+    k += 1;
+  }
+  return { end: s.length, interpolations, unclosed: true };
+}
+
+/**
+ * 扫描可执行代码。注释、单双引号、模板字面量段跳过；${...} 插值当代码。
+ * visit(i) 可返回下一个下标，吃掉 ident / RHS。
+ */
+function scanExecutable(text, visit, limit = Infinity) {
+  const s = String(text || '');
+  const cap = Number.isFinite(limit) ? Math.min(limit, s.length) : s.length;
+  let unclosed = false;
+  const walk = (from, to) => {
+    let i = from;
+    while (i < to && i < cap) {
+      if (s[i] === '`') {
+        const tmpl = splitTemplateAt(s, i);
+        if (!tmpl) { i += 1; continue; }
+        if (tmpl.unclosed) unclosed = true;
+        for (const interp of tmpl.interpolations) {
+          const a = interp.start;
+          const b = Math.min(interp.end, to);
+          if (a < b && a < cap) walk(a, b);
+        }
+        i = tmpl.end > i ? tmpl.end : i + 1;
+        continue;
+      }
+      const skipped = skipStringOrComment(s, i);
+      if (skipped !== i) {
+        i = skipped;
+        continue;
+      }
+      const next = visit(i);
+      i = Number.isInteger(next) && next > i ? next : i + 1;
+    }
+  };
+  walk(0, s.length);
+  return { unclosed };
 }
 
 function wordAt(text, i) {
@@ -1523,38 +1594,23 @@ function arrayRhsHasDryRun(rhs) {
   return hasLit(t.slice(0, end + 1), '--dry-run');
 }
 
-/** 调用前所有 `name = rhs`。赋值必须在 beforeIdx 前结束。按 token 跳过注释和字符串。 */
+/** 调用前所有 `name = rhs`。赋值必须在 beforeIdx 前结束。按 token 跳过注释和字符串；模板插值当代码。 */
 function findAssignments(src, name, beforeIdx = Infinity) {
   const text = String(src || '');
   const ident = String(name || '');
   const out = [];
   if (!ident) return out;
   const limit = Number.isFinite(beforeIdx) ? beforeIdx : text.length;
-  for (let i = 0; i < text.length && i < limit; ) {
-    const skipped = skipStringOrComment(text, i);
-    if (skipped !== i) {
-      i = skipped;
-      continue;
-    }
+  scanExecutable(text, (i) => {
     const id = identAt(text, i);
-    if (!id) {
-      i += 1;
-      continue;
-    }
-    if (id.name !== ident) {
-      i = id.end;
-      continue;
-    }
+    if (!id) return;
+    if (id.name !== ident) return id.end;
     const eq = skipWsAndComments(text, id.end);
     if (eq >= limit || text[eq] !== '=' || text[eq + 1] === '=' || text[eq + 1] === '>') {
-      i = id.end;
-      continue;
+      return id.end;
     }
     const rhsStart = skipWsAndComments(text, eq + 1);
-    if (rhsStart >= limit) {
-      i = id.end;
-      continue;
-    }
+    if (rhsStart >= limit) return id.end;
     const rhsEnd = scanRhsEnd(text, rhsStart);
     if (rhsEnd >= 0 && rhsEnd <= limit) {
       out.push({
@@ -1564,8 +1620,8 @@ function findAssignments(src, name, beforeIdx = Infinity) {
         end: rhsEnd,
       });
     }
-    i = rhsEnd > i ? rhsEnd : id.end;
-  }
+    return rhsEnd > i ? rhsEnd : id.end;
+  }, limit);
   return out;
 }
 
@@ -1583,45 +1639,24 @@ function collectArgvMutations(src, name, fromIdx, toIdx) {
   const methods = new Set(['push', 'unshift', 'pop', 'shift', 'splice']);
   const startBound = Number.isFinite(fromIdx) ? fromIdx : 0;
   const endBound = Number.isFinite(toIdx) ? toIdx : text.length;
-  for (let i = 0; i < text.length; ) {
-    const skipped = skipStringOrComment(text, i);
-    if (skipped !== i) {
-      i = skipped;
-      continue;
-    }
+  scanExecutable(text, (i) => {
     const id = identAt(text, i);
-    if (!id) {
-      i += 1;
-      continue;
-    }
-    if (id.name !== ident || i < startBound || i >= endBound) {
-      i = id.end;
-      continue;
-    }
+    if (!id) return;
+    if (id.name !== ident || i < startBound || i >= endBound) return id.end;
     let k = skipWsAndComments(text, id.end);
     if (text[k] === '?' && text[k + 1] === '.') k = skipWsAndComments(text, k + 2);
     else if (text[k] === '.') k = skipWsAndComments(text, k + 1);
     else if (text[k] === '[') {
       const close = matchBalanced(text, k);
-      if (close < 0) {
-        i = id.end;
-        continue;
-      }
+      if (close < 0) return id.end;
       const after = skipWsAndComments(text, close + 1);
       if (after >= endBound || text[after] !== '=' || text[after + 1] === '=' || text[after + 1] === '>') {
-        i = id.end;
-        continue;
+        return id.end;
       }
       const rhsStart = skipWsAndComments(text, after + 1);
-      if (rhsStart >= endBound) {
-        i = id.end;
-        continue;
-      }
+      if (rhsStart >= endBound) return id.end;
       const rhsEnd = scanRhsEnd(text, rhsStart);
-      if (rhsEnd > endBound) {
-        i = id.end;
-        continue;
-      }
+      if (rhsEnd > endBound) return id.end;
       const keySrc = text.slice(k + 1, close);
       const key = resolveComputedKey(text, keySrc);
       const slot = key.resolved && /^(?:0|[1-9]\d*)$/.test(key.resolved) ? Number(key.resolved) : NaN;
@@ -1632,37 +1667,27 @@ function collectArgvMutations(src, name, fromIdx, toIdx) {
         opaque: key.opaque || !Number.isInteger(slot),
         index: i,
       });
-      i = rhsEnd > i ? rhsEnd : id.end;
-      continue;
+      return rhsEnd > i ? rhsEnd : id.end;
     } else {
-      i = id.end;
-      continue;
+      return id.end;
     }
     const method = wordAt(text, k);
-    if (!method || !methods.has(method.name)) {
-      i = id.end;
-      continue;
-    }
+    if (!method || !methods.has(method.name)) return id.end;
     const open = skipWsAndComments(text, method.end);
-    if (text[open] !== '(' || open >= endBound) {
-      i = id.end;
-      continue;
-    }
+    if (text[open] !== '(' || open >= endBound) return id.end;
     const close = matchBalanced(text, open);
-    if (close < 0 || close > endBound) {
-      i = id.end;
-      continue;
-    }
+    if (close < 0 || close > endBound) return id.end;
     const args = splitTopLevelArgs(text.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
     out.push({ kind: method.name, args, index: i });
-    i = close + 1;
-  }
+    return close + 1;
+  }, endBound);
   out.sort((a, b) => a.index - b.index);
   return out;
 }
 
 function resolveArgvArray(src, name, beforeIdx = Infinity) {
   const all = findAssignments(src, name, beforeIdx);
+  const unclosed = scanExecutable(src, () => {}, beforeIdx).unclosed;
   let lastProven = null;
   for (const item of all) {
     if (!siteUnprovenVsCall(src, item.identStart, beforeIdx)) lastProven = item;
@@ -1671,16 +1696,16 @@ function resolveArgvArray(src, name, beforeIdx = Infinity) {
     item.start > (lastProven ? lastProven.start : -1)
     && siteUnprovenVsCall(src, item.identStart, beforeIdx)
   ));
-  if (!lastProven) return { lit: '', unresolved: all.length > 0 };
+  if (!lastProven) return { lit: '', unresolved: all.length > 0 || unclosed };
   const rhs = lastProven.rhs.trim();
   if (!rhs.startsWith('[')) {
-    return { lit: '', unresolved: laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs)) };
+    return { lit: '', unresolved: unclosed || laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs)) };
   }
   const end = matchBalanced(rhs, 0);
   if (end < 0) return { lit: '', unresolved: true };
   const slots = splitTopLevelArgs(rhs.slice(1, end)).map((s) => s.trim());
   const muts = collectArgvMutations(src, name, lastProven.end, beforeIdx);
-  let unresolved = laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs));
+  let unresolved = unclosed || laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs));
   const destructive = new Set(['pop', 'shift', 'splice']);
   for (const mut of muts) {
     if (siteUnprovenVsCall(src, mut.index, beforeIdx)) {
@@ -2385,6 +2410,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let argvAssignLineComment = false;
       let argvAssignBlockComment = false;
       let argvAssignInString = false;
+      let argvAssignTemplateInterp = false;
+      let argvMutTemplateInterp = false;
       for (const f of files) {
         const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
@@ -2643,6 +2670,14 @@ export function inspectTestExecutorIsolationFixtures(root) {
           /['"`][^'"`\n]*[A-Za-z_][\w]*\s*=\s*\[[^'"`\n]*--dry-run/.test(src)
           && r.scanned > 0 && !r.ok
         ) argvAssignInString = true;
+        if (
+          /\$\{[^`]*[A-Za-z_][\w]*\s*=\s*\[/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvAssignTemplateInterp = true;
+        if (
+          /\$\{[^`]*[A-Za-z_][\w]*\s*\.\s*pop\s*\(/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvMutTemplateInterp = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2705,6 +2740,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!argvAssignLineComment) problems.push('red/ 没点出行注释里的 argv 赋值（// argv = [..., "--dry-run"]）');
       if (!argvAssignBlockComment) problems.push('red/ 没点出块注释里的 argv 赋值（/* argv = [..., "--dry-run"] */）');
       if (!argvAssignInString) problems.push('red/ 没点出字符串里的 argv 赋值');
+      if (!argvAssignTemplateInterp) problems.push('red/ 没点出模板插值里的 argv 赋值');
+      if (!argvMutTemplateInterp) problems.push('red/ 没点出模板插值里的 argv.pop');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

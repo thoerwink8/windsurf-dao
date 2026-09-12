@@ -382,6 +382,69 @@ test('真实 argv 带 --dry-run、注释里再赋无 --dry-run 仍绿', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('模板插值里的 argv 赋值改掉 --dry-run 必须红（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    'const note = `${(argv = ["scripts/dao.mjs", "dispatch"])}`;',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('模板插值里的 argv.pop 拿掉 --dry-run 必须红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    'const note = `${argv.pop()}`;',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.ok(r.violations.length > 0, JSON.stringify(r));
+});
+
+test('嵌套模板插值里的 argv 赋值改掉 --dry-run 必须红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    'const note = `${`${(argv = ["scripts/dao.mjs", "dispatch"])}`}`;',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('模板插值里再次赋 argv 且真实带 --dry-run 仍绿', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch"];',
+    'const note = `${(argv = ["scripts/dao.mjs", "dispatch", "--dry-run"])}`;',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('无关模板插值、真实 argv 带 --dry-run 仍绿', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
+    'const note = `hello ${name}`;',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('死分支里赋 --dry-run 的 argv 必须红（审官对抗样本）', () => {
   const src = [
     `const { ${CALL} } = require("node:child_process");`,
