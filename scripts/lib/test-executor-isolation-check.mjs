@@ -29,6 +29,9 @@
 //      child_process 接收器：声明时 require/import、赋值 require、动态 import() / import().then；
 //      跟踪 .default / .promises（含变量转发、解构 default）。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
+//      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
+//      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
+//      不能证明 --dry-run 也统一 fail-closed（不依赖调用名恰好是 exec）。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -173,17 +176,17 @@ export function collectSpawnAliases(src) {
 function eachObjectSpawnProp(text, fns, onMatch) {
   const recv = String.raw`(?:[A-Za-z_][\w]*\s*\??\.\s*)?`;
   const re = new RegExp(
-    String.raw`\b([A-Za-z_][\w]*)\s*:\s*${recv}(?:${fns})\s*(?![(\w])`,
+    String.raw`\b([A-Za-z_][\w]*)\s*:\s*${recv}(${fns})\s*(?![(\w])`,
     'g',
   );
   let m;
-  while ((m = re.exec(text))) onMatch(m[1]);
+  while ((m = re.exec(text))) onMatch(m[1], m[2]);
   const computed = new RegExp(
-    String.raw`\[\s*(['"\`])([^'"\`]+)\1\s*\]\s*:\s*${recv}(?:${fns})\s*(?![(\w])`,
+    String.raw`\[\s*(['"\`])([^'"\`]+)\1\s*\]\s*:\s*${recv}(${fns})\s*(?![(\w])`,
     'g',
   );
   while ((m = computed.exec(text))) {
-    if (/^[A-Za-z_][\w]*$/.test(m[2])) onMatch(m[2]);
+    if (/^[A-Za-z_][\w]*$/.test(m[2])) onMatch(m[2], m[3]);
   }
 }
 
@@ -197,6 +200,7 @@ function collectSpawnAliasSets(src) {
   const names = new Set(SPAWN_FNS);
   const opaque = new Set();
   const holders = new Set();
+  const execNames = new Set(['exec', 'execSync']);
   const text = String(src || '');
   const cpNames = collectChildProcessReceivers(text);
   const addOpaque = (id) => {
@@ -204,25 +208,30 @@ function collectSpawnAliasSets(src) {
     names.add(id);
     opaque.add(id);
   };
+  const addAlias = (dest, srcName) => {
+    if (!dest) return;
+    names.add(dest);
+    if (srcName && execNames.has(srcName)) execNames.add(dest);
+  };
   for (let n = 0; n < 32; n++) {
-    const before = names.size + opaque.size + holders.size + cpNames.size;
+    const before = names.size + opaque.size + holders.size + cpNames.size + execNames.size;
     const fns = [...names].map(escapeIdent).join('|');
-    const dest = new RegExp(String.raw`(?<!-)\b(?:${fns})\s*:\s*([A-Za-z_][\w]*)\s*[,}]`, 'g');
+    const dest = new RegExp(String.raw`(?<!-)\b(${fns})\s*:\s*([A-Za-z_][\w]*)\s*[,}]`, 'g');
     let m;
-    while ((m = dest.exec(text))) names.add(m[1]);
-    const imp = new RegExp(String.raw`(?<!-)\b(?:${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
-    while ((m = imp.exec(text))) names.add(m[1]);
+    while ((m = dest.exec(text))) addAlias(m[2], m[1]);
+    const imp = new RegExp(String.raw`(?<!-)\b(${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
+    while ((m = imp.exec(text))) addAlias(m[2], m[1]);
     const asg = new RegExp(
-      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
+      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(${fns})\s*(?![(\w])`,
       'g',
     );
-    while ((m = asg.exec(text))) names.add(m[1]);
+    while ((m = asg.exec(text))) addAlias(m[1], m[2]);
     const bare = new RegExp(
-      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(?:${fns})\s*(?![(\w])`,
+      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(${fns})\s*(?![(\w])`,
       'g',
     );
-    while ((m = bare.exec(text))) names.add(m[1]);
-    eachObjectSpawnProp(text, fns, (id) => names.add(id));
+    while ((m = bare.exec(text))) addAlias(m[1], m[2]);
+    eachObjectSpawnProp(text, fns, (id, srcName) => addAlias(id, srcName));
     const takeObj = (id, body) => {
       let has = false;
       eachObjectSpawnProp(body, fns, () => { has = true; });
@@ -249,12 +258,12 @@ function collectSpawnAliasSets(src) {
       takeObj(m[1], text.slice(openIdx, end + 1));
     }
     const mem = new RegExp(
-      String.raw`\b([A-Za-z_][\w]*)\s*\.\s*([A-Za-z_][\w]*)\s*=\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(?:${fns})\s*(?![(\w])`,
+      String.raw`\b([A-Za-z_][\w]*)\s*\.\s*([A-Za-z_][\w]*)\s*=\s*(?:[A-Za-z_][\w]*\s*\.\s*)?(${fns})\s*(?![(\w])`,
       'g',
     );
     while ((m = mem.exec(text))) {
       holders.add(m[1]);
-      names.add(m[2]);
+      addAlias(m[2], m[3]);
     }
     if (holders.size) {
       const hs = [...holders].map(escapeIdent).join('|');
@@ -270,7 +279,7 @@ function collectSpawnAliasSets(src) {
       while ((m = bareH.exec(text))) holders.add(m[1]);
     }
     scanComputedAliases(text, cpNames, (id, info) => {
-      if (isSpawnName(info.resolved, [...names])) names.add(id);
+      if (isSpawnName(info.resolved, [...names])) addAlias(id, info.resolved);
       else if (info.opaque) addOpaque(id);
     });
     if (opaque.size) {
@@ -302,9 +311,9 @@ function collectSpawnAliasSets(src) {
       scanCpDefaultDestructure(text, cpNames);
     }
     for (const h of holders) cpNames.add(h);
-    if (names.size + opaque.size + holders.size + cpNames.size === before) break;
+    if (names.size + opaque.size + holders.size + cpNames.size + execNames.size === before) break;
   }
-  return { names, opaque, holders, cpNames };
+  return { names, opaque, holders, cpNames, execNames };
 }
 
 /** `const run = cp[unknownKey]`：赋值不是调用。解析不了的 key 标不透明。 */
@@ -1055,7 +1064,7 @@ function expandArgvSpreads(src, span, beforeIdx) {
 }
 
 /** 子进程 argv / exec 命令字符串，不含 options 对象。--dry-run 只在这里算数。 */
-function argvTextForCall(src, span, callIndex = Infinity) {
+function argvTextForCall(src, span, callIndex = Infinity, execNames) {
   const open = invocationOpen(span);
   if (open < 0) return { text: '', unresolved: false };
   const close = matchBalanced(span, open);
@@ -1066,7 +1075,8 @@ function argvTextForCall(src, span, callIndex = Infinity) {
   let command = '';
   const argvExprs = [];
   const callee = calleeName(span);
-  const execString = callee === 'exec' || callee === 'execSync';
+  const execFns = execNames instanceof Set ? execNames : new Set(['exec', 'execSync']);
+  const execString = execFns.has(callee);
   const addArray = (piece) => {
     const expanded = expandArgvSpreads(src, piece, callIndex);
     pieces.push(expanded);
@@ -1100,6 +1110,9 @@ function argvTextForCall(src, span, callIndex = Infinity) {
       continue;
     }
     pieces.push(t);
+  }
+  if (looksLikeNodeDaoCommand(command) && commandHasDynamicParts(command) && !commandStaticallyHasDryRun(command)) {
+    unresolved = true;
   }
   if (isJsRunnerCommand(src, command, callIndex)) {
     for (const expr of argvExprs) {
@@ -1137,13 +1150,13 @@ export function classifyTestDispatchSpawns(src) {
     return { ok: false, unscanned: true, error: '没给测试正文（没查成）', scanned: 0, violations: [] };
   }
   const text = String(src);
-  const { names, opaque: opaqueAliases, holders, cpNames } = collectSpawnAliasSets(text);
+  const { names, opaque: opaqueAliases, holders, cpNames, execNames } = collectSpawnAliasSets(text);
   const nameList = [...names];
   const sites = extractCallSites(text, nameList, holders, cpNames);
   const violations = [];
   let scanned = 0;
   for (const { span, index, opaque: siteOpaque } of sites) {
-    const argvInfo = argvTextForCall(text, span, index);
+    const argvInfo = argvTextForCall(text, span, index, execNames);
     const argvText = foldStringConcat(argvInfo.text);
     const opaque = isOpaqueComputedSpan(span, nameList, text)
       || opaqueAliases.has(calleeName(span))
@@ -1327,6 +1340,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let computedAdapter = false;
       let computedReflect = false;
       let execDynamicTmpl = false;
+      let execAliasDynamic = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -1410,6 +1424,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\$\{/.test(src)
           && r.scanned > 0 && !r.ok
         ) execDynamicTmpl = true;
+        if (
+          /\bexec\s*:\s*[A-Za-z_][\w]*/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execAliasDynamic = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -1441,6 +1461,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!computedAdapter) problems.push('red/ 没点出计算属性 Function.call/apply/bind 适配');
       if (!computedReflect) problems.push('red/ 没点出计算属性 Reflect.apply 适配');
       if (!execDynamicTmpl) problems.push('red/ 没点出 exec 动态模板命令');
+      if (!execAliasDynamic) problems.push('red/ 没点出 exec 别名动态模板命令');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

@@ -962,6 +962,61 @@ test('静态 exec 非 dispatch 动词仍绿', () => {
   assert.equal(r.scanned, 0, JSON.stringify(r));
 });
 
+test('exec 解构别名动态模板必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    `const { ${EX}: ${alias} } = require("node:child_process");`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('exec 别名再赋值动态模板必须红', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const next = 'act' + 'ual';
+  const tick = '`';
+  const src = [
+    `const { ${EX}: ${alias} } = require("node:child_process");`,
+    `const ${next} = ${alias};`,
+    `${next}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('const run = cp.exec 动态模板必须红', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${alias} = cp.${EX};`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('exec 别名动态模板带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    `const { ${EX}: ${alias} } = require("node:child_process");`,
+    `${alias}(${tick}node scripts/dao.mjs \${getVerb()} --dry-run${tick}, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
 test('动态 import 默认导出带 --dry-run 仍绿', () => {
   const src = [
     'const mod = await import("node:child_process");',
@@ -1016,6 +1071,10 @@ test('审官 default 转发 / 计算属性适配 / exec 动态模板都不许 sc
     [
       `const { ${EX} } = require("node:child_process");`,
       `${EX}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin", HOME: "/tmp" } });`,
+    ].join('\n'),
+    [
+      `const { ${EX}: ${'ru' + 'n'} } = require("node:child_process");`,
+      `${'ru' + 'n'}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
     ].join('\n'),
   ];
   for (const src of samples) {
