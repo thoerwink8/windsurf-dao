@@ -1,0 +1,4 @@
+/* 审官对抗样本：argv 变量解析不了。留下变量名当没扫到会 scanned:0。
+const { spawnSync } = require("node:child_process");
+spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });
+*/

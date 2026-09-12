@@ -108,7 +108,8 @@
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 // ㉠ 测试结构性够不着真执行体（#1152）：spawn dao dispatch / dispatch-exec 必须带 --dry-run；
-//    认别名（含 const run = cp.spawnSync）、argv 变量、模板动词、exec 命令字符串；
+//    认别名（含 const run = cp.spawnSync / 未知计算属性转发）、argv 变量（含赋值，
+//    解析不了则 fail-closed）、模板动词、exec 命令字符串；
 //    故意「执行体 env 丢失」样本必须红且不得是 *.test.js（会被 node --test 发现执行）。
 //    ensureWorkspace/startSession/cmdDispatchMirasim 都要在真 IO 前过隔离闸。
 //    检查器自持括号匹配，不 import 被测测试 / runtime 解析。
@@ -2339,7 +2340,7 @@ function checkTestExecutorIsolationSamples() {
   if (!r.ok) {
     fail(
       r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
-      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 .txt/.fixture（不许 *.test.js，会被执行），必须点出执行体 env 丢失、非 argv 的 --dry-run、计算属性 spawn、拼接动词；绿夹具必须绿；空=没查成',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 .txt/.fixture（不许 *.test.js，会被执行），必须点出执行体 env 丢失、非 argv 的 --dry-run、计算属性 spawn、拼接动词、别名再赋值、argv 先声明再赋值、解析不了的 argv、计算属性别名转发；绿夹具必须绿；空=没查成',
       r.error || '',
     );
     return;

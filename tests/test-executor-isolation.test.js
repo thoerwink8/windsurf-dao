@@ -246,6 +246,72 @@ test('裸赋值别名链必须红', () => {
   assert.notEqual(r.scanned, 0, JSON.stringify(r));
 });
 
+test('argv 先声明再赋值必须红（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let argv;',
+    'argv = ["scripts/dao.mjs", "dispatch"];',
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('解析不了的 argv 变量 fail-closed（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('git 的 argv 变量解析不了不当 dispatch', () => {
+  const src = `${CALL}('git', args, { cwd: tmp, encoding: 'utf8' });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
+test('未知计算属性经别名转发必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const lb = '[';
+  const rb = ']';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${alias} = cp${lb}unknownKey${rb};`,
+    `${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.ok(r.violations.length > 0);
+});
+
+test('未知计算属性别名再赋值仍红', () => {
+  const alias = 'ru' + 'n';
+  const next = 'act' + 'ual';
+  const lb = '[';
+  const rb = ']';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${alias} = cp${lb}unknownKey${rb};`,
+    `const ${next} = ${alias};`,
+    `${next}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const aliases = collectSpawnAliases(src);
+  assert.ok(aliases.includes(alias), aliases.join(','));
+  assert.ok(aliases.includes(next), aliases.join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
 test('exec 命令字符串必须红（审官对抗样本）', () => {
   const exe = 'ex' + 'ec';
   const src = [

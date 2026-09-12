@@ -1,0 +1,7 @@
+/* 审官对抗样本：未知计算属性经别名转发。只扫 cp[key](...) 会 scanned:0。
+const cp = require("node:child_process");
+const run = cp[unknownKey];
+run(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/

@@ -1,0 +1,6 @@
+/* 审官对抗样本：argv 先声明再赋值。只认 const argv = [...] 会 scanned:0。
+const { spawnSync } = require("node:child_process");
+let argv;
+argv = ["scripts/dao.mjs", "dispatch"];
+spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });
+*/
