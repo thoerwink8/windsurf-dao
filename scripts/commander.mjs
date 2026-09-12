@@ -794,18 +794,31 @@ function parseGhJson(run, args, what) {
   }
 }
 
-function reviewDelivered(reviews) {
-  if (!Array.isArray(reviews)) return { ok: false, unscanned: true, error: 'reviews 不是数组' };
-  const hit = reviews.some((rv) => {
-    const s = String((rv && rv.state) || '').toUpperCase();
-    return s === 'APPROVED' || s === 'CHANGES_REQUESTED' || s === 'APPROVE' || s === 'CHANGES_REQUEST';
+/** gh pr view 的 reviews 用 commit.oid；analyzeReviewsAtHead 认 commit_id。缺 oid 原样留下，对账侧 fail-closed。 */
+function reviewsForAnalyze(reviews) {
+  if (!Array.isArray(reviews)) return reviews;
+  return reviews.map((r) => {
+    if (!r || typeof r !== 'object') return r;
+    const oid = String(r.commit_id || r.commitId || (r.commit && r.commit.oid) || '').trim();
+    return { ...r, commit_id: oid, submitted_at: r.submitted_at || r.submittedAt };
   });
-  return { ok: true, delivered: hit };
+}
+
+function judgmentAtCurrentHead(json) {
+  const head = json && typeof json.headRefOid === 'string' ? json.headRefOid.trim() : '';
+  const a = analyzeReviewsAtHead(reviewsForAnalyze(json && json.reviews), head);
+  if (!a.scanned) {
+    return { ok: false, unscanned: true, error: `当前 head 判定没查成（${a.reason || 'unknown'}）` };
+  }
+  const delivered = a.latestGreen === true || a.latestRed === true || a.green === true;
+  return { ok: true, delivered };
 }
 
 /**
  * 清树前再核一次 GitHub。decide 产候选，这里 fail-closed：查不成 / 还开着就不删。
- * run 可注入，测试钉「OPEN 不删工人树 / MERGED 才删」。
+ * 工人树 PR 路径只认 MERGED（CLOSED 未合并不是合并证据，孤儿才走 issue CLOSED）。
+ * 审官树 OPEN 只认 commit oid 等于执行时 headRefOid 的判定；缺 oid / 对不上就留树。
+ * run 可注入，测试钉这些反例。
  */
 export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
   const treePath = action && action.path;
@@ -824,16 +837,16 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
       say(`  ${error}`);
       return { ok: false, unscanned: true, error };
     }
-    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state,reviews'], `PR #${action.pr}`);
+    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state,reviews,headRefOid'], `PR #${action.pr}`);
     if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
     const state = String(viewed.json && viewed.json.state || '').toUpperCase();
     if (state === 'MERGED' || state === 'CLOSED') {
       /* 已了结，可拆审官树 */
     } else if (state === 'OPEN') {
-      const d = reviewDelivered(viewed.json && viewed.json.reviews);
+      const d = judgmentAtCurrentHead(viewed.json);
       if (!d.ok) { say(`  不清 ${treePath}：${d.error}`); return d; }
       if (!d.delivered) {
-        const error = `PR #${action.pr} 还开着且没有判定，审官树留着`;
+        const error = `PR #${action.pr} 当前 head 没有判定，审官树留着`;
         say(`  ${error}`);
         return { ok: false, error };
       }
@@ -842,22 +855,36 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
       say(`  ${error}`);
       return { ok: false, unscanned: true, error };
     }
-  } else if (role === 'worker' || role === 'orphan') {
-    if (action.pr != null) {
-      const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
-      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
-      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
-      if (state !== 'MERGED' && state !== 'CLOSED') {
-        const error = `PR #${action.pr} 状态是 ${state || '空'}，工人树不清`;
-        say(`  ${error}`);
-        return { ok: false, unscanned: state === '', error };
-      }
-    } else if (action.issue != null) {
+  } else if (role === 'worker') {
+    if (action.pr == null) {
+      const error = '工人树没有 PR 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
+    if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+    const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+    if (state !== 'MERGED') {
+      const error = `PR #${action.pr} 状态是 ${state || '空'}，工人树只在 MERGED 后清`;
+      say(`  ${error}`);
+      return { ok: false, unscanned: state === '', error };
+    }
+  } else if (role === 'orphan') {
+    if (action.issue != null) {
       const viewed = parseGhJson(run, ['issue', 'view', String(action.issue), '--json', 'state'], `issue #${action.issue}`);
       if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
       const state = String(viewed.json && viewed.json.state || '').toUpperCase();
       if (state !== 'CLOSED') {
         const error = `issue #${action.issue} 状态是 ${state || '空'}，不清`;
+        say(`  ${error}`);
+        return { ok: false, unscanned: state === '', error };
+      }
+    } else if (action.pr != null) {
+      const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
+      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+      if (state !== 'MERGED') {
+        const error = `PR #${action.pr} 状态是 ${state || '空'}，孤儿树只在 MERGED 或 issue CLOSED 后清`;
         say(`  ${error}`);
         return { ok: false, unscanned: state === '', error };
       }

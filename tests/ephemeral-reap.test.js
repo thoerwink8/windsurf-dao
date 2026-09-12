@@ -278,10 +278,28 @@ describe('execReapTree fail-closed', () => {
     assert.ok(calls.some((c) => c.includes('worktree-rm')));
   });
 
+  it('工人树：PR CLOSED 未合并 → 不删', async () => {
+    const M = await CMD();
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      if (argv.includes('view')) return { ok: true, out: '{"state":"CLOSED"}\n' };
+      return { ok: true, out: '' };
+    };
+    const r = M.execReapTree(
+      { role: 'worker', pr: 20, path: '/tmp/dao-9', why: 'test' },
+      { dryRun: false, say: () => {}, run },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(calls.filter((c) => c.includes('worktree-rm')).length, 0, JSON.stringify(calls));
+  });
+
   it('审官树：OPEN 且无判定 → 不删', async () => {
     const M = await CMD();
+    const calls = [];
     const run = (argv) => {
-      if (argv.includes('view')) return { ok: true, out: '{"state":"OPEN","reviews":[]}\n' };
+      calls.push(argv);
+      if (argv.includes('view')) return { ok: true, out: '{"state":"OPEN","headRefOid":"abc","reviews":[]}\n' };
       return { ok: true, out: '' };
     };
     const r = M.execReapTree(
@@ -289,6 +307,83 @@ describe('execReapTree fail-closed', () => {
       { dryRun: false, say: () => {}, run },
     );
     assert.equal(r.ok, false);
+    assert.equal(calls.filter((c) => c.includes('worktree-rm')).length, 0, JSON.stringify(calls));
+  });
+
+  it('审官树：旧 HEAD 的判定 + 新 HEAD → 不删', async () => {
+    const M = await CMD();
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      if (argv.includes('view')) {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            state: 'OPEN',
+            headRefOid: 'newhead',
+            reviews: [{ state: 'APPROVED', commit: { oid: 'oldhead' } }],
+          }) + '\n',
+        };
+      }
+      return { ok: true, out: '' };
+    };
+    const r = M.execReapTree(
+      { role: 'reviewer', pr: 20, path: '/tmp/dao-review-pr-20', why: 'test' },
+      { dryRun: false, say: () => {}, run },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(calls.filter((c) => c.includes('worktree-rm')).length, 0, JSON.stringify(calls));
+  });
+
+  it('审官树：判定缺 commit oid → 不删', async () => {
+    const M = await CMD();
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      if (argv.includes('view')) {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            state: 'OPEN',
+            headRefOid: 'abc',
+            reviews: [{ state: 'CHANGES_REQUESTED' }],
+          }) + '\n',
+        };
+      }
+      return { ok: true, out: '' };
+    };
+    const r = M.execReapTree(
+      { role: 'reviewer', pr: 20, path: '/tmp/dao-review-pr-20', why: 'test' },
+      { dryRun: false, say: () => {}, run },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(calls.filter((c) => c.includes('worktree-rm')).length, 0, JSON.stringify(calls));
+  });
+
+  it('审官树：OPEN 且判定打在当前 HEAD → 发 worktree-rm', async () => {
+    const M = await CMD();
+    const calls = [];
+    const run = (argv) => {
+      calls.push(argv);
+      if (argv.includes('view')) {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            state: 'OPEN',
+            headRefOid: 'abc',
+            reviews: [{ state: 'APPROVED', commit: { oid: 'abc' } }],
+          }) + '\n',
+        };
+      }
+      return { ok: true, out: '{"ok":true}\n' };
+    };
+    const r = M.execReapTree(
+      { role: 'reviewer', pr: 20, path: '/tmp/dao-review-pr-20', why: 'test' },
+      { dryRun: false, say: () => {}, run },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(calls.filter((c) => c.includes('worktree-rm')).length, 1, JSON.stringify(calls));
   });
 
   it('GitHub 读失败 → unscanned 不删', async () => {
