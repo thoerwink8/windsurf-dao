@@ -85,7 +85,8 @@
             "merge_policy": { "enum": ["auto", "manual"], "description": "派工 merge-policy（#799：审官 create/attach 继承）" },
             "merge_reason": { "type": ["string", "null"], "description": "merge-policy=manual 的理由" },
             "reviewer": { "type": ["string", "null"], "description": "派工那一刻选定的审官模型（#1116：决定写一次，消费方只读这一处）" },
-            "branch": { "type": ["string", "null"], "description": "工人 PR head 分支，选型打标的直接键（#1116）" }
+            "branch": { "type": ["string", "null"], "description": "工人 PR head 分支，选型打标匹配键之一（#1116：repo + branch）" },
+            "repo": { "type": ["string", "null"], "description": "GitHub owner/name，选型打标匹配键（#1116：与 branch 一起用，防跨仓同名分支套标）" }
           },
           "required": ["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"],
           "additionalProperties": true

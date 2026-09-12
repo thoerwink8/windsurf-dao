@@ -205,19 +205,21 @@ describe('dao 审官与完工', () => {
       if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const events7 = [{ type: 'job.dispatch', identity: '工人', branch: 'dao-7', model: 'grok-4.6', work_type: '写码' }];
-    const synced = S.stampPrLabelsFromDispatch({ pr: '7', runGh: syncGh, events: events7, ensureLabels: S.ensureRepoLabels });
-    await t.test('pr-sync-labels：按分支从账本打 model/type 到 PR，不读 issue',
+    const events7 = [{ type: 'job.dispatch', identity: '工人', branch: 'dao-7', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码' }];
+    const synced = S.stampPrLabelsFromDispatch({ pr: '7', repo: 'thoerwink8/windsurf-dao', runGh: syncGh, events: events7, ensureLabels: S.ensureRepoLabels });
+    await t.test('pr-sync-labels：按仓+分支从账本打 model/type/reviewer 到 PR，不读 issue',
       () => {
         assert.equal(synced.ok, true, JSON.stringify(synced));
         assert.equal(synced.labels.includes('model/grok-4.6'), true);
         assert.equal(synced.labels.includes('type/写码'), true);
+        assert.equal(synced.labels.includes('reviewer/gpt-5.6-luna'), true);
         assert.equal(calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')), true);
         assert.equal(calls2.some(a => a[0] === 'issue'), false, JSON.stringify(calls2));
       });
 
     const noRef = S.stampPrLabelsFromDispatch({
       pr: '9',
+      repo: 'thoerwink8/windsurf-dao',
       events: [],
       runGh: (a) => {
         if (a[0] === 'pr' && a[1] === 'view') {
@@ -233,7 +235,8 @@ describe('dao 审官与完工', () => {
 
     const noLabel = S.stampPrLabelsFromDispatch({
       pr: '10',
-      events: [{ type: 'job.dispatch', identity: '工人', branch: 'other', model: 'grok-4.6' }],
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'other', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
       runGh: (a) => {
         if (a[0] === 'pr' && a[1] === 'view') {
           return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10', labels: [], headRefName: 'dao-10' }) };
@@ -324,7 +327,8 @@ describe('dao 审官与完工', () => {
     const syncRevCalls = [];
     const syncRev = S.stampPrLabelsFromDispatch({
       pr: '8',
-      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-8', model: 'grok-4.6', reviewer: 'gpt-5.6-sol', work_type: '写码' }],
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-8', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-sol', work_type: '写码' }],
       ensureLabels: S.ensureRepoLabels,
       runGh: (a) => {
         syncRevCalls.push(a.slice());
@@ -348,6 +352,7 @@ describe('dao 审官与完工', () => {
     const onlyRevCalls = [];
     const onlyRev = S.stampPrLabelsFromDispatch({
       pr: '11',
+      repo: 'thoerwink8/windsurf-dao',
       events: [],
       runGh: (a) => {
         onlyRevCalls.push(a.slice());

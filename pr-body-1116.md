@@ -2,7 +2,7 @@
 
 删掉「从 issue 标签反推派工决定」这一层（用户 2026-09-07 拍板 ①）。
 
-派工决定（谁写码、谁来审）在 `dispatch` 那一刻完整落一次：`job.dispatch` 补 `reviewer` + `branch`，再用 PR head 分支当直接键把 `model/*` `reviewer/*` 打到 PR。之后 `reviewer-create` / `worker-done` 只读 PR label。
+派工决定（谁写码、谁来审）在 `dispatch` 那一刻完整落一次：`job.dispatch` 补 `reviewer` + `branch` + `repo`，再用仓 + PR head 分支当直接键把 `model/*` `reviewer/*` 打到 PR。之后 `reviewer-create` / `worker-done` 只读 PR label。缺完整字段时打标 fail-visible，需人工打标。
 
 署名 issue #1116，关单交给 `scripts/close-issues.mjs`。
 
@@ -60,6 +60,7 @@
 - [x] 本轮跟上 origin/master（#1176/#1195 孤儿临时目录清扫）。冲突一处：`marshal-issue-identity` 保留本单「不打 model/reviewer」断言，#1176 的 stampIssueLabels 存在性已被 stamp 切片覆盖。选型路仍只读 PR label。相关测试 138+439+347+293 绿。
 - [x] 本轮跟上 origin/master（#1206 watchdog 真结果 / 死锁清后立刻再抢 / 派工前补 type）。冲突 0。#1206 的 stampIssueLabels 仍只打 type/、不打 model/reviewer；指挥官选型仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1197 控制面闸接到现役 git push 路径）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1165 +2 叠成 153。选型路仍只读 PR label。
+- [x] 返工（审官红 3）：缺 reviewer 打标 fail-visible；匹配键改仓+分支；identity 必须是工人。
 
 ## 机制判定
 
@@ -67,4 +68,4 @@
 
 制度生效前还会再犯吗？**会**——只要还从 issue 反推，每个重建点都会再出一次「这是个新 bug」。本单删掉这一层：决定写一次、消费方读同一处、读不到就拒。不留「PR 上没有就回退去读 issue」的兼容回退。
 
-过渡：现有 open PR 需补打一次标签，用现成的 `dao pr-sync-labels` 批量跑一遍即可，不写迁移代码。
+过渡：现有 open PR 需补打一次标签。`dao pr-sync-labels` 只在账本工人 `job.dispatch` 同时有仓、分支、model、reviewer，且 `identity` 是工人时才打齐；缺任一字段当场失败并说「需人工打标」，不许报成功留下一张仍不可选型的 PR。账本没有完整记录的，手动 `gh pr edit <N> --add-label model/<id> --add-label reviewer/<id> --add-label type/<类>`。

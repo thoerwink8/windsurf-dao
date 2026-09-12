@@ -126,11 +126,24 @@ describe('#1024 parseOwnerNameRepo / withGhRepo / assertRepoAuthorized', () => {
 });
 
 describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
-  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain / reviewer-done 都登记 --repo', async () => {
+  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain / reviewer-done / pr-sync-labels 都登记 --repo', async () => {
     const S = await S_LOAD;
-    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain', 'reviewer-done']) {
+    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain', 'reviewer-done', 'pr-sync-labels']) {
       assert.equal(S.FLAGS_BY_VERB[v].has('--repo'), true, v);
     }
+  });
+
+  it('ownerNameFromRemoteUrl 从常见 git remote 推出 owner/name', async () => {
+    const S = await S_LOAD;
+    const https = S.ownerNameFromRemoteUrl('https://github.com/thoerwink8/windsurf-dao.git');
+    assert.equal(https.ok, true);
+    assert.equal(https.ownerName, 'thoerwink8/windsurf-dao');
+    const ssh = S.ownerNameFromRemoteUrl('git@github.com:acme/other-dao.git');
+    assert.equal(ssh.ok, true);
+    assert.equal(ssh.ownerName, 'acme/other-dao');
+    const empty = S.ownerNameFromRemoteUrl('');
+    assert.equal(empty.ok, false);
+    assert.equal(empty.unscanned, true);
   });
 
   it('热路把 --repo 写进派工单；执行体再过闸；审官/交卷/drain 都调 assertCrossRepoOrFail', () => {

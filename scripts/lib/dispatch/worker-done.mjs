@@ -2,10 +2,13 @@
 //
 // 改这段前必须知道：worker-done 按已有 review 条数分首审 / 返工。
 // #1125 起：首审只入队、不自己起审官；drain 按在役审官数拉取。返工往已有会话再推一针。
-// 决定在 dispatch 那一刻完整落账（model + reviewer + branch）；PR 上的
+// 决定在 dispatch 那一刻完整落账（model + reviewer + branch + repo）；PR 上的
 // model/* / reviewer/* 是给人看、也是选型唯一真相源（#1116）。
 // 选型只读 PR 自己的 label——不读 issue、不从宿主前缀猜家族。
+// 打标匹配键是 GitHub owner/name + 分支；缺 reviewer / 缺仓 / identity 不是工人都拒。
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
+
+import { parseOwnerNameRepo } from './repo.mjs';
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
@@ -125,6 +128,21 @@ function parseJsonOut(raw, what) {
   catch { return { ok: false, error: `${what} 返回非 JSON：${String(raw).slice(0, 120)}` }; }
 }
 
+function normalizeDispatchRepo(raw) {
+  const parsed = parseOwnerNameRepo(raw);
+  if (!parsed.ok || parsed.omitted) return '';
+  return String(parsed.ownerName).toLowerCase();
+}
+
+function repoFromPrMeta(meta) {
+  const nwo = meta && meta.headRepository && meta.headRepository.nameWithOwner;
+  const fromHead = normalizeDispatchRepo(nwo);
+  if (fromHead) return fromHead;
+  const url = String((meta && meta.url) || '');
+  const m = url.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\b/i);
+  return m ? normalizeDispatchRepo(m[1]) : '';
+}
+
 /** 只读一张 PR 自己的 label + 标题/正文（给署名 issue 发完工 comment 用）。不读 issue。 */
 export function collectPrLabels({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
@@ -132,7 +150,7 @@ export function collectPrLabels({ pr, runGh } = {}) {
   if (typeof runGh !== 'function') {
     return { ok: false, unscanned: true, error: 'collectPrLabels 没拿到 gh 执行器（没查成，不许猜）' };
   }
-  const view = runGh(['pr', 'view', n, '--json', 'title,body,labels,headRefName']);
+  const view = runGh(['pr', 'view', n, '--json', 'title,body,labels,headRefName,headRepository,url']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
   const parsed = parseJsonOut(view.out, `gh pr view #${n}`);
   if (!parsed.ok) return { ok: false, unscanned: true, error: parsed.error };
@@ -150,52 +168,74 @@ export function collectPrLabels({ pr, runGh } = {}) {
     title,
     body,
     headRefName: String(meta.headRefName || ''),
+    repo: repoFromPrMeta(meta) || null,
     refs: linkedIssueNumbers(`${title}\n${body}`),
   };
 }
 
-/** 工人 job.dispatch：identity=工人，且带 branch。多条取最新一条（账本已按 ts 排）。 */
-export function pickWorkerDispatchByBranch(events, branch) {
+/** 工人 job.dispatch：identity 必须是工人，匹配键是 repo + branch。多条取最新一条完整记录。 */
+export function pickWorkerDispatchByBranch(events, branch, repo) {
   const want = String(branch || '').trim();
   if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
+  const wantRepo = normalizeDispatchRepo(repo);
+  if (!wantRepo) {
+    return { ok: false, state: 'unscanned', error: '没给仓（没查成，不许猜）' };
+  }
   if (events == null || !Array.isArray(events)) {
     return { ok: false, state: 'unscanned', error: '账本事件列表没拿到（没查成，不许猜）' };
   }
-  const hits = events.filter((e) => {
-    if (!e || e.type !== 'job.dispatch') return false;
-    if (e.identity && e.identity !== '工人') return false;
-    return String(e.branch || '').trim() === want;
-  });
-  if (hits.length === 0) {
+  const keyed = [];
+  for (const e of events) {
+    if (!e || e.type !== 'job.dispatch') continue;
+    if (String(e.branch || '').trim() !== want) continue;
+    if (normalizeDispatchRepo(e.repo) !== wantRepo) continue;
+    keyed.push(e);
+  }
+  const workers = keyed.filter((e) => e.identity === '工人');
+  const complete = workers.filter((e) => String(e.model || '').trim() && String(e.reviewer || '').trim());
+  if (complete.length === 0) {
+    if (workers.length > 0) {
+      return {
+        ok: false,
+        state: 'none',
+        error: `仓 ${wantRepo} 分支 ${want} 的工人 job.dispatch 缺 model 或 reviewer——需人工打标`,
+      };
+    }
+    if (keyed.length > 0) {
+      return {
+        ok: false,
+        state: 'none',
+        error: `仓 ${wantRepo} 分支 ${want} 的 job.dispatch 缺 identity 或不是工人——需人工打标`,
+      };
+    }
     return {
       ok: false,
       state: 'none',
-      error: `账本没有分支 ${want} 的工人 job.dispatch——这不是派工链上的 PR，需人工打标`,
+      error: `账本没有仓 ${wantRepo} 分支 ${want} 的工人 job.dispatch——这不是派工链上的 PR，需人工打标`,
     };
   }
-  const hit = hits[hits.length - 1];
+  const hit = complete[complete.length - 1];
   const model = String(hit.model || '').trim();
   const reviewer = String(hit.reviewer || '').trim();
   const role = String(hit.work_type || hit.role || '').trim();
-  if (!model) {
-    return { ok: false, state: 'none', error: `分支 ${want} 的 job.dispatch 缺 model——需人工打标` };
-  }
   return {
     ok: true,
     state: 'one',
     event: hit,
     model,
-    reviewer: reviewer || null,
+    reviewer,
     role: role || DEFAULT_DISPATCH_TYPE,
     branch: want,
+    repo: wantRepo,
   };
 }
 
 /**
- * PR head 分支 → 账本工人 dispatch → 把 model/* reviewer/* type/* 打到这张 PR。
- * 幂等：已有同名 label 不再加。查不到记录 ⇒ 明确报「需人工打标」，不猜、不读 issue。
+ * 仓 + PR head 分支 → 账本工人 dispatch → 把 model/* reviewer/* type/* 打到这张 PR。
+ * 幂等：已有同名 label 不再加。缺完整记录 ⇒ 明确报「需人工打标」，不猜、不读 issue。
+ * 缺 reviewer 不许只打 model/type 后报 ok。
  */
-export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels } = {}) {
+export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, repo } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'stampPrLabelsFromDispatch 没给 PR 号' };
   if (typeof runGh !== 'function') {
@@ -207,12 +247,28 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels } = 
   if (!branch) {
     return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 headRefName（没查成，不许猜）` };
   }
-  const picked = pickWorkerDispatchByBranch(events, branch);
+  const wantRepo = normalizeDispatchRepo(repo) || collected.repo || '';
+  if (!wantRepo) {
+    return { ok: false, unscanned: true, error: 'stampPrLabelsFromDispatch 没给仓（没查成，不许猜）' };
+  }
+  if (collected.repo && collected.repo !== wantRepo) {
+    return {
+      ok: false,
+      state: 'none',
+      skipped: true,
+      pr: n,
+      branch,
+      repo: wantRepo,
+      error: `PR #${n} 在 ${collected.repo}，打标目标是 ${wantRepo}——需人工打标（不许跨仓套标）`,
+    };
+  }
+  const picked = pickWorkerDispatchByBranch(events, branch, wantRepo);
   if (!picked.ok) {
     return {
       ...picked,
       pr: n,
       branch,
+      repo: wantRepo,
       skipped: picked.state === 'none',
       error: picked.error,
     };
@@ -222,6 +278,17 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels } = 
     role: picked.role,
     reviewer: picked.reviewer,
   });
+  if (!names.some((name) => name.startsWith(REVIEWER_LABEL_PREFIX))) {
+    return {
+      ok: false,
+      state: 'none',
+      skipped: true,
+      pr: n,
+      branch,
+      repo: wantRepo,
+      error: `仓 ${wantRepo} 分支 ${branch} 打标缺 reviewer/*——需人工打标`,
+    };
+  }
   const existing = collected.labels;
   const add = names.filter((name) => !existing.includes(name));
   const skipped = names.filter((name) => existing.includes(name)).map((name) => ({ name, reason: 'already' }));
@@ -235,18 +302,20 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels } = 
           error: (ensured && ensured.error) || 'ensureRepoLabels 失败',
           pr: n,
           branch,
+          repo: wantRepo,
         };
       }
     }
     const flags = [];
     for (const name of add) flags.push('--add-label', name);
     const edit = runGh(['pr', 'edit', n, ...flags]);
-    if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}`, pr: n, branch };
+    if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}`, pr: n, branch, repo: wantRepo };
   }
   return {
     ok: true,
     pr: n,
     branch,
+    repo: wantRepo,
     names,
     add,
     skipped,

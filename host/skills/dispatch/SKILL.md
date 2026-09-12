@@ -157,7 +157,7 @@ test "$(git branch --show-current)" = master \
 
 每单合并时主会话跑 `scripts/calibrate.mjs`，把本单成绩（返工轮数 / 红项）+ 该模型在该任务类的累计战绩原样呈现给用户。校准更新永远可见，不落暗账。网关日志按 `dao_task` 查这张单花了多少（怎么查见 ai-gateway-stack #3）。
 
-**label 是校准数据源（#564 / #1116）**：`dispatch` 那一刻把 `model` + `reviewer` + `branch` 写入账本；工人交卷 / 起审官前按 PR head 分支打到 PR。审官/帅合并前跑 `node scripts/dao.mjs pr-sync-labels --pr <N>` 是同一条打标（幂等；查不到账本记录 ⇒ 需人工打标，不读 issue）。没 label 的 PR 进不了战绩（calibrate 只认带 model/* 与 type/* 的已合并 PR）。
+**label 是校准数据源（#564 / #1116）**：`dispatch` 那一刻把 `model` + `reviewer` + `branch` + `repo` 写入账本；工人交卷 / 起审官前按仓 + PR head 分支打到 PR。审官/帅合并前跑 `node scripts/dao.mjs pr-sync-labels --pr <N>` 是同一条打标（幂等；缺完整记录 ⇒ 需人工打标，不读 issue）。没 label 的 PR 进不了战绩（calibrate 只认带 model/* 与 type/* 的已合并 PR）。
 
 累计数据触发定位调整信号时，以策略 PR 提案形式摆给用户拍板。一个任务只做一次，不为测评搞对跑或重复实验——校准数据全部来自真实任务流。
 

@@ -62,6 +62,7 @@ import {
   argsRepoList,
   resolveRepoSelector,
   parseOwnerNameRepo,
+  ownerNameFromRemoteUrl,
   assertRepoAuthorized,
   splitRepoTarget,
   resolveLocalCheckout,
@@ -802,6 +803,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
         card_name: cardName,
         branch,
         reviewer: args.reviewer ?? null,
+        repo: resolveDispatchRepo(ghRepo) || null,
       },
     });
     if (!ledger.ok && !ledger.skipped) console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
@@ -857,20 +859,44 @@ function loadDispatchEventsForStamp() {
   }
 }
 
-/** #1116：PR head 分支 → 账本 dispatch → 打标。查不到记录不猜。 */
-function stampPrFromLedger({ pr, runGh } = {}) {
+/** 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。 */
+function resolveDispatchRepoName(explicit) {
+  const parsed = parseOwnerNameRepo(explicit);
+  if (parsed.ok && !parsed.omitted) return { ok: true, ownerName: parsed.ownerName };
+  const remote = gitRemoteOriginUrl(thisCheckoutRoot());
+  if (!remote.ok) {
+    return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${remote.error}` };
+  }
+  return ownerNameFromRemoteUrl(remote.url);
+}
+
+function resolveDispatchRepo(explicit) {
+  const r = resolveDispatchRepoName(explicit);
+  return r.ok ? r.ownerName : null;
+}
+
+/** #1116：仓 + PR head 分支 → 账本 dispatch → 打标。查不到完整记录不猜。 */
+function stampPrFromLedger({ pr, runGh, repo } = {}) {
   const listed = loadDispatchEventsForStamp();
   if (!listed.ok) return listed;
+  const resolved = resolveDispatchRepoName(repo);
+  if (!resolved.ok) return resolved;
   return stampPrLabelsFromDispatch({
     pr,
     runGh,
     events: listed.events,
     ensureLabels: ensureRepoLabels,
+    repo: resolved.ownerName,
   });
 }
 
 function cmdPrSyncLabels(args) {
-  const r = stampPrFromLedger({ pr: args.pr, runGh: ghRunner() });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'pr-sync-labels', defaultLocal: thisCheckoutRoot() });
+  const r = stampPrFromLedger({
+    pr: args.pr,
+    runGh: ghRunnerForTarget(targetRepo, { role: 'worker' }),
+    repo: targetRepo.ownerName,
+  });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
 }
@@ -1781,7 +1807,7 @@ async function cmdReviewerCreateMirasim(args) {
 
   // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
   // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
-  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh });
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
   if (!stamped.ok && stamped.unscanned) {
     console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
   }
@@ -1966,7 +1992,7 @@ async function cmdWorkerDoneMirasim(args) {
   const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
-  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh });
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
   if (!stamped.ok && stamped.unscanned) {
     console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
   }

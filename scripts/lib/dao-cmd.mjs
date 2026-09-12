@@ -123,7 +123,7 @@ export function findDispatchForTask(workerListJson, taskId) {
 // #762 拆分：repo 选择符移到 scripts/lib/dispatch/repo.mjs（保持对外 API 不变）
 export {
   argsRepoList, normalizeRepoRemote, resolveRepoSelector,
-  parseOwnerNameRepo, githubRemoteUrlOf, withGhRepo, assertRepoAuthorized,
+  parseOwnerNameRepo, githubRemoteUrlOf, ownerNameFromRemoteUrl, withGhRepo, assertRepoAuthorized,
   looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout, repoPrKey,
 } from './dispatch/repo.mjs';
 
@@ -854,9 +854,9 @@ export {
   DISAMBIGUATED_LABEL, checkIssueDisambiguated, assembleCardName,
 } from './dispatch/card.mjs';
 
-// ── #564 / #1116 label：决定在 dispatch 那一刻写进账本（model + reviewer + branch）。
-// 工人交卷 / 起审官前按 PR head 分支从账本打到 PR；选型只读 PR 自己的 label。
-// `dao pr-sync-labels --pr <N>` 是同一条打标动作（幂等）。查不到账本记录 ⇒ 需人工打标，不读 issue。
+// ── #564 / #1116 label：决定在 dispatch 那一刻写进账本（model + reviewer + branch + repo）。
+// 工人交卷 / 起审官前按仓 + PR head 分支从账本打到 PR；选型只读 PR 自己的 label。
+// `dao pr-sync-labels --pr <N>` 是同一条打标动作（幂等）。查不到完整记录 ⇒ 需人工打标，不读 issue。
 
 // #762 拆分：完工结算 + label 选型域移到 scripts/lib/dispatch/worker-done.mjs（保持对外 API 不变）
 import {
@@ -1056,7 +1056,7 @@ export const FLAGS_BY_VERB = {
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
-  'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
+  'pr-sync-labels': new Set(['--pr', '--repo', '--json', '--help', '-h']),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
@@ -1161,7 +1161,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸；带 --repo 只吃该仓的票
                   # --force 才不过上限，只许人手；指挥官自动化不许带
                   # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
-  pr-sync-labels --pr <N>   # 合并前：PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116；查不到需人工打标）
+  pr-sync-labels --pr <N> [--repo owner/name]
+                  # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
+                  # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）

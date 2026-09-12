@@ -215,7 +215,7 @@ export function writeJobDispatch({
   dir, ts, machine, schema, jobId, model, identity, workType,
   modelVersion, terminal, priceSnapshot, decisionId, prNumber, extra = {},
 } = {}) {
-  // extra.reviewer / extra.branch 由调用方在派工那一刻写入（#1116）。
+  // extra.reviewer / extra.branch / extra.repo 由调用方在派工那一刻写入（#1116）。
   if (!jobId) return { ok: false, skipped: false, error: 'job.dispatch 缺 job_id' };
   if (!model) return { ok: false, skipped: false, error: 'job.dispatch 缺 model' };
   if (!ts) return { ok: false, skipped: false, error: 'job.dispatch 缺 ts' };
