@@ -17,6 +17,8 @@ export function snapshotCapacity({
   cleanupFailures,
 } = {}) {
   const n = (v) => {
+    // Number(null) === 0：没查成不能伪装成测到的零。
+    if (v == null) return null;
     const x = Number(v);
     return Number.isFinite(x) ? x : null;
   };

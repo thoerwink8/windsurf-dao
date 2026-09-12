@@ -46,6 +46,36 @@ describe('planTreeReaps', () => {
     assert.equal(r.items[0].pr, 20);
   });
 
+  it('审官树：开放 PR 缺 headRefOid → 不清（旧 review 不当当前 head）', async () => {
+    const { planTreeReaps } = await REAP;
+    const r = planTreeReaps({
+      trees: [{ path: '/tmp/dao-review-pr-20', kind: '审官', pr: 20 }],
+      sessions: [],
+      github: { scanned: true, issues: [], prs: [{ number: 20 }] },
+      reviewsByPr: { 20: { reviews: [{ state: 'APPROVED', commit_id: 'oldhead' }] } },
+    });
+    assert.equal(r.items.length, 0, JSON.stringify(r.items));
+    const skip = r.skipped.find((s) => String(s.path || '').endsWith('dao-review-pr-20'));
+    assert.equal(Boolean(skip), true, JSON.stringify(r.skipped));
+    assert.match(String(skip.why), /headRefOid 没查成/);
+  });
+
+  it('审官树：开放 PR 有 head，判定打在旧 commit → 不清', async () => {
+    const { planTreeReaps } = await REAP;
+    const r = planTreeReaps({
+      trees: [reviewerTree(20)],
+      sessions: [],
+      github: { scanned: true, issues: [], prs: [{ number: 20, headRefOid: 'newhead' }] },
+      reviewsByPr: { 20: { reviews: [{ state: 'APPROVED', commit_id: 'oldhead' }] } },
+    });
+    assert.equal(r.items.length, 0, JSON.stringify(r.items));
+    assert.equal(
+      r.skipped.some((s) => /当前 head 还没有判定/.test(s.why)),
+      true,
+      JSON.stringify(r.skipped),
+    );
+  });
+
   it('审官树：reviews 没查成 → 不清', async () => {
     const { planTreeReaps } = await REAP;
     const r = planTreeReaps({
@@ -530,6 +560,36 @@ describe('容量对比', () => {
     const missing = compareCapacity(before, snapshotCapacity({ inFlight: 1 }));
     assert.equal(missing.ok, false);
     assert.equal(missing.unscanned, true);
+  });
+
+  it('显式 null 保持 null，对比为 unscanned，不伪装成 0', async () => {
+    const { snapshotCapacity, compareCapacity } = await CAP;
+    const before = snapshotCapacity({
+      cpuBusy: null, memAvailableMb: null, loadNorm: null,
+      inFlight: 1, sessions: 1, worktrees: 1,
+      leftoverAfterHandoff: 0, cleanupFailures: 0,
+    });
+    assert.equal(before.cpuBusy, null);
+    assert.equal(before.memAvailableMb, null);
+    assert.equal(before.loadNorm, null);
+    const after = snapshotCapacity({
+      cpuBusy: 0.3, memAvailableMb: 1000, loadNorm: 0.4,
+      inFlight: 1, sessions: 1, worktrees: 1,
+      leftoverAfterHandoff: 0, cleanupFailures: 0,
+    });
+    const c = compareCapacity(before, after);
+    assert.equal(c.ok, false);
+    assert.equal(c.unscanned, true);
+    const cpu = c.items.find((x) => x.key === 'cpuBusy');
+    assert.equal(cpu && cpu.unscanned, true, JSON.stringify(cpu));
+    const zero = snapshotCapacity({
+      cpuBusy: 0, memAvailableMb: 0, loadNorm: 0,
+      inFlight: 0, sessions: 0, worktrees: 0,
+      leftoverAfterHandoff: 0, cleanupFailures: 0,
+    });
+    assert.equal(zero.cpuBusy, 0);
+    assert.equal(zero.memAvailableMb, 0);
+    assert.equal(zero.loadNorm, 0);
   });
 });
 

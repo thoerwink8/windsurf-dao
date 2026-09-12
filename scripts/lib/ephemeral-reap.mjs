@@ -2,15 +2,16 @@
 //
 // 改这段前必须知道：
 //   1. 进程贵、树便宜。交卷后工人树要留着给审查/返工/冲突；审官树在判定落 GitHub 后立刻可删。
-//   2. 删树不可逆。任何一格没查成（会话名单 / PR 态 / issue 态 / 列表窗口截断）⇒ 不删。
+//   2. 删树不可逆。任何一格没查成（会话名单 / PR 态 / issue 态 / 当前 head / 列表窗口截断）⇒ 不删。
 //      「不在开放列表里」只有在窗口未截断时才是「已关」的证据，与指挥官回收死票同一把尺。
+//      审官树仍开放时，缺 headRefOid 不许把旧 review 当成当前 head。
 //   3. decide 是纯函数：这里只产候选。exec 必须再核一次 GitHub 状态，查不成仍不删。
 //   4. 通用 worktree-rm 仍禁止出现在 decide 输出里；本文件只产 kind:'reap-tree'。
 
 import { basename } from 'node:path';
 import { identifyTreeDir } from './mirasim-trees.mjs';
 import { isLiveSession } from './session-reconcile.mjs';
-import { analyzeGithubReviews } from './review-state.mjs';
+import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
 
 export const PR_LIST_WINDOW = 100;
@@ -61,12 +62,28 @@ function reviewsOf(reviewsByPr, pr) {
   return null;
 }
 
+function reviewCommitId(rv) {
+  if (!rv || typeof rv !== 'object') return '';
+  return String(rv.commit_id || rv.commitId || (rv.commit && rv.commit.oid) || '').trim();
+}
+
+/**
+ * 只认打在当前 head 上的判别态。缺 head / 缺 commit oid = 没查成。
+ * 不许在 head 缺失时把全部 review 当成「当前 head」（与 analyzeReviewsAtHead 同一把尺）。
+ */
 function judgedAtHead(reviewsByPr, pr, head) {
   const list = reviewsOf(reviewsByPr, pr);
-  if (!Array.isArray(list)) return { scanned: false };
-  const atHead = head
-    ? list.filter((r) => !r || !r.commit_id || String(r.commit_id) === String(head))
-    : list;
+  if (!Array.isArray(list)) return { scanned: false, reason: 'reviews-missing' };
+  const h = typeof head === 'string' ? head.trim() : '';
+  if (!h) return { scanned: false, reason: 'head-unscanned' };
+  const atHead = [];
+  for (const rv of list) {
+    const state = normalizeReviewState(rv);
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue;
+    const cid = reviewCommitId(rv);
+    if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
+    if (cid === h) atHead.push(rv);
+  }
   return analyzeGithubReviews(atHead);
 }
 
@@ -247,16 +264,27 @@ export function planTreeReaps({
         });
         continue;
       }
-      const head = (list.ok ? list.prs : []).find((p) => Number(p && p.number) === pr)?.headRefOid || null;
+      // 历史 PR：不在未截断开放列表里才走这条，exec 再核已关/已合。
+      // 仍在开放列表时绝不能靠「没查成的 head + 任意旧 review」清树。
+      if (list.ok && !openPrs.has(pr)) {
+        items.push({
+          kind: 'reap-tree', role: 'reviewer', pr, issue: null, path: tree.path,
+          why: `PR #${pr} 不在未截断开放列表里，审官树无活会话——exec 须再核已关/已合`,
+        });
+        continue;
+      }
+      if (!list.ok) {
+        skipped.push({ path: tree.path, pr, why: `PR #${pr} 盘面没查成（${list.why}），审官树不清` });
+        continue;
+      }
+      const prObj = list.prs.find((p) => Number(p && p.number) === pr);
+      const head = prObj && typeof prObj.headRefOid === 'string' ? prObj.headRefOid.trim() : '';
+      if (!head) {
+        skipped.push({ path: tree.path, pr, why: `PR #${pr} 仍开放但 headRefOid 没查成，审官树不清` });
+        continue;
+      }
       const judged = judgedAtHead(reviewsByPr, pr, head);
       if (!judged.scanned) {
-        if (list.ok && !openPrs.has(pr)) {
-          items.push({
-            kind: 'reap-tree', role: 'reviewer', pr, issue: null, path: tree.path,
-            why: `PR #${pr} 不在未截断开放列表里，审官树无活会话——exec 须再核已关/已合`,
-          });
-          continue;
-        }
         skipped.push({ path: tree.path, pr, why: `PR #${pr} 的 reviews 没查成，审官树不清` });
         continue;
       }
