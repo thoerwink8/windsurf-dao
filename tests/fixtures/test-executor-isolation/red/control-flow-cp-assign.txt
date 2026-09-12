@@ -1,0 +1,7 @@
+/* 审官对抗样本：控制流里给 child_process 接收器赋值。只认行首/分号后会 scanned:0。
+let cp;
+if (true) cp = require("node:child_process");
+cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/

@@ -1,0 +1,4 @@
+/* 绿样本：exec 命令里 --dry-run 在 # 注释之前，是真实 shell token。
+const { exec } = require("node:child_process");
+exec("node scripts/dao.mjs dispatch --dry-run # later", { env: { PATH: "/bin" } });
+*/

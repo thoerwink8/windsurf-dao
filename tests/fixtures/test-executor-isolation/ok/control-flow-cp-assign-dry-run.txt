@@ -1,0 +1,7 @@
+/* 绿样本：控制流里赋值 child_process，argv 带真实 --dry-run。
+let cp;
+if (true) cp = require("node:child_process");
+cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], {
+  env: { PATH: "/bin" }
+});
+*/

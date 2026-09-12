@@ -46,6 +46,9 @@
 //      namespace/别名）；无法证明来源安全时 fail-closed。
 //      for-of 的 of 按 token 边界认：`}of` / `}/*x*/of` 与 `} of` 同等，
 //      不要把空白当成语法必要条件。
+//      括号匹配与赋值分隔符按 JS token 跳过注释（({ ...cp }/* } */ = mod) 要收）。
+//      --dry-run 只认真实 argv / shell token：第四参、argv 旁注释、括号 options.input、
+//      exec 的 # 注释都不算放行。裸赋值跟任意语句上下文（if (...) cp = require）。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
 //      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
@@ -126,23 +129,43 @@ function escapeIdent(name) {
   return String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** 从 openIdx 处的 '(' 或 '[' 起，匹配到成对关闭。字符串内的括号不算。 */
+/**
+ * 从 i 起若是字符串或注释则跳到其后；否则返回 i。
+ * 未闭合字符串吃到末尾（与旧 inStr 到 EOF 同），好让括号匹配 fail-closed。
+ */
+function skipStringOrComment(text, i) {
+  const s = String(text || '');
+  const c = s[i];
+  if (c === '"' || c === "'" || c === '`') {
+    const lit = readStringLit(s, i);
+    return lit ? lit.end : s.length;
+  }
+  if (c === '/' && s[i + 1] === '/') {
+    let k = i + 2;
+    while (k < s.length && s[k] !== '\n') k += 1;
+    return k;
+  }
+  if (c === '/' && s[i + 1] === '*') {
+    let k = i + 2;
+    while (k < s.length && !(s[k] === '*' && s[k + 1] === '/')) k += 1;
+    return k < s.length ? k + 2 : k;
+  }
+  return i;
+}
+
+/** 从 openIdx 处的 '(' / '[' / '{' 起，匹配到成对关闭。字符串和注释内的括号不算。 */
 function matchBalanced(src, openIdx) {
   const open = src[openIdx];
   const close = open === '(' ? ')' : open === '[' ? ']' : open === '{' ? '}' : '';
   if (!close) return -1;
   let depth = 0;
-  let inStr = null;
-  let esc = false;
   for (let i = openIdx; i < src.length; i++) {
-    const c = src[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === inStr) inStr = null;
+    const skipped = skipStringOrComment(src, i);
+    if (skipped !== i) {
+      i = skipped - 1;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    const c = src[i];
     if (c === open) depth++;
     else if (c === close) {
       depth--;
@@ -158,18 +181,14 @@ function splitTopLevelArgs(inner) {
   let depthParen = 0;
   let depthBrack = 0;
   let depthBrace = 0;
-  let inStr = null;
-  let esc = false;
   const text = String(inner || '');
   for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === inStr) inStr = null;
+    const skipped = skipStringOrComment(text, i);
+    if (skipped !== i) {
+      i = skipped - 1;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    const c = text[i];
     if (c === '(') depthParen++;
     else if (c === ')') depthParen--;
     else if (c === '[') depthBrack++;
@@ -198,10 +217,12 @@ function splitTopLevelArgs(inner) {
  * 对象字面量 / 成员赋值（`{ run: cp.spawnSync }` / `box.run = cp.spawnSync`）也收成别名，
  * 并把承载对象记成 holder，`box.run(...)` 不许 scanned:0。
  * 对象 rest（`const { ...cp } = mod` / `for (const { ...cp } of [mod])` /
- * `for (const {...cp}of [mod])` / `}` 与 `of` 之间夹块注释）
+ * `for (const {...cp}of [mod])` / `}` 与 `of` 之间夹块注释 /
+ * 模式与 `=` 之间夹注释再赋值）
  * 从已知 child_process namespace 得到的 holder 要收进接收器；
- * 解析不了的 rest dest、无法证明安全的 for-of 迭代源 fail-closed。
- * for-of 的 of 按 token 边界认，空白和注释都是合法间隔。
+ * 解析不了的 rest dest、无法证明安全的 for-of 迭代源、括号匹配失败 fail-closed。
+ * for-of 的 of 与解构后的 `=` 按 token 边界认，空白和注释都是合法间隔。
+ * 裸赋值不限行首/分号后：`if (true) cp = require(...)` / `(run = cp.spawnSync)`。
  */
 export function collectSpawnAliases(src) {
   return [...collectSpawnAliasSets(src).names];
@@ -228,18 +249,14 @@ function indexOfTopLevelColon(s) {
   let depthParen = 0;
   let depthBrack = 0;
   let depthBrace = 0;
-  let inStr = null;
-  let esc = false;
   const text = String(s || '');
   for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === inStr) inStr = null;
+    const skipped = skipStringOrComment(text, i);
+    if (skipped !== i) {
+      i = skipped - 1;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    const c = text[i];
     if (c === '(') depthParen++;
     else if (c === ')') { if (depthParen) depthParen--; }
     else if (c === '[') depthBrack++;
@@ -382,7 +399,7 @@ function collectSpawnAliasSets(src) {
     let m;
     while ((m = dest.exec(text))) addAlias(m[2], m[1]);
     scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, noteUnresolvedRest);
-    scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque);
+    scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, noteUnresolvedRest);
     const imp = new RegExp(String.raw`(?<!-)\b(${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
     while ((m = imp.exec(text))) addAlias(m[2], m[1]);
     const asg = new RegExp(
@@ -391,7 +408,7 @@ function collectSpawnAliasSets(src) {
     );
     while ((m = asg.exec(text))) addAlias(m[1], m[2]);
     const bare = new RegExp(
-      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?!\{)[^\n;]*(?<!-)\b(${fns})\s*(?![(\w])`,
+      String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?!\{)[^\n;]*(?<!-)\b(${fns})\s*(?![(\w])`,
       'g',
     );
     while ((m = bare.exec(text))) addAlias(m[1], m[2]);
@@ -416,7 +433,7 @@ function collectSpawnAliasSets(src) {
       if (end < 0) continue;
       takeObj(m[1], text.slice(openIdx, end + 1));
     }
-    const bareObj = /(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*\{/g;
+    const bareObj = /(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*\{/g;
     while ((m = bareObj.exec(text))) {
       const openIdx = text.indexOf('{', m.index + m[0].length - 1);
       if (openIdx < 0) continue;
@@ -441,7 +458,7 @@ function collectSpawnAliasSets(src) {
       );
       while ((m = asgH.exec(text))) holders.add(m[1]);
       const bareH = new RegExp(
-        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?:${hs})\s*(?![(\w.])`,
+        String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?:${hs})\s*(?![(\w.])`,
         'g',
       );
       while ((m = bareH.exec(text))) holders.add(m[1]);
@@ -454,7 +471,7 @@ function collectSpawnAliasSets(src) {
       );
       while ((m = asgOh.exec(text))) opaqueHolders.add(m[1]);
       const bareOh = new RegExp(
-        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?:${ohs})\s*(?![(\w.])`,
+        String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?:${ohs})\s*(?![(\w.])`,
         'g',
       );
       while ((m = bareOh.exec(text))) opaqueHolders.add(m[1]);
@@ -471,7 +488,7 @@ function collectSpawnAliasSets(src) {
       );
       while ((m = asgOp.exec(text))) addOpaque(m[1]);
       const bareOp = new RegExp(
-        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?:${op})\s*(?![(\w])`,
+        String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*(?:${op})\s*(?![(\w])`,
         'g',
       );
       while ((m = bareOp.exec(text))) addOpaque(m[1]);
@@ -485,7 +502,7 @@ function collectSpawnAliasSets(src) {
       );
       while ((m = asgCp.exec(text))) cpNames.add(m[1]);
       const bareCp = new RegExp(
-        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*${ns}\s*(?![(\w.])`,
+        String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*${ns}\s*(?![(\w.])`,
         'g',
       );
       while ((m = bareCp.exec(text))) cpNames.add(m[1]);
@@ -593,17 +610,19 @@ function scanCpDefaultDestructure(text, names, onUnresolvedRest) {
       const dest = guessBindingDest(raw);
       if (dest) names.add(dest);
     }
-  });
+  }, onUnresolvedRest);
 }
 
-/** 剥掉一层或多层只包着整个表达式的括号。 */
+/** 剥掉一层或多层只包着整个表达式的括号。前导/尾随注释不算「后面还有东西」。 */
 function unwrapParens(expr) {
   let t = String(expr || '').trim();
   for (let n = 0; n < 8; n++) {
-    if (!t.startsWith('(')) return t;
+    const k = skipWsAndComments(t, 0);
+    if (k) t = t.slice(k);
+    if (!t.startsWith('(')) return t.trim();
     const end = matchBalanced(t, 0);
     if (end < 0) return t;
-    if (t.slice(end + 1).trim()) return t;
+    if (skipWsAndComments(t, end + 1) < t.length) return t;
     t = t.slice(1, end).trim();
   }
   return t;
@@ -687,23 +706,19 @@ function exprLooksUnprovenSpawn(expr, names, cpNames) {
   return /^[A-Za-z_][\w]*$/.test(t) && nameSet.has(t);
 }
 
-/** 剥掉解构绑定的默认值：`run = fallback` → `run`。括号/方括号/字符串里的 `=` 不算。 */
+/** 剥掉解构绑定的默认值：`run = fallback` → `run`。括号/方括号/字符串/注释里的 `=` 不算。 */
 function splitBindingDefault(raw) {
   const t = String(raw || '').trim();
   let depthParen = 0;
   let depthBrack = 0;
   let depthBrace = 0;
-  let inStr = null;
-  let esc = false;
   for (let i = 0; i < t.length; i++) {
-    const c = t[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === inStr) inStr = null;
+    const skipped = skipStringOrComment(t, i);
+    if (skipped !== i) {
+      i = skipped - 1;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    const c = t[i];
     if (c === '(') depthParen++;
     else if (c === ')') { if (depthParen) depthParen--; }
     else if (c === '[') depthBrack++;
@@ -809,8 +824,39 @@ function matchForOfKeyword(after) {
   return { length: skipWsAndComments(s, start + 2) };
 }
 
+/** `}` / `]` 后的 `=`：注释是合法间隔。`==` / `=>` 不算赋值。 */
+function matchAssignEq(after) {
+  const s = String(after || '');
+  const start = skipWsAndComments(s, 0);
+  if (s[start] !== '=') return null;
+  if (s[start + 1] === '=' || s[start + 1] === '>') return null;
+  return { length: skipWsAndComments(s, start + 1) };
+}
+
+/** `({` / `const {` / `for (const {` 才是解构；`if (true) {` / `fn({` 不是。 */
+function isDeclDestructure(src, openIdx) {
+  const before = src.slice(Math.max(0, openIdx - 64), openIdx);
+  return /(?:^|[^\w])(?:const|let|var)\s+$/.test(before)
+    || /(?:^|[^\w])for\s*\(\s*(?:const|let|var)?\s*$/.test(before);
+}
+
+/**
+ * 括号匹配失败才 fail-closed：声明解构，或 `({ ...` / `({ default` / `({ ["k"]`。
+ * 不要把 `fn([`、正则字符类 `([\"']` 当解构。
+ */
+function shouldFailClosedUnbalanced(src, openIdx, openCh) {
+  if (isDeclDestructure(src, openIdx)) return true;
+  if (openCh !== '{') return false;
+  let i = openIdx - 1;
+  while (i >= 0 && /\s/.test(src[i])) i -= 1;
+  if (i < 0 || src[i] !== '(') return false;
+  const peekAt = skipWsAndComments(src, openIdx + 1);
+  const peek = src.slice(peekAt, peekAt + 32);
+  return peek.startsWith('...') || /^default\b/.test(peek) || /^(\[|['"])/.test(peek);
+}
+
 /** 声明解构 + 赋值解构（含括号）+ for-of。`arr[i] =` 不当数组解构。 */
-function eachDestructure(text, openCh, onMatch) {
+function eachDestructure(text, openCh, onMatch, onUnbalanced) {
   const src = String(text || '');
   let inStr = null;
   let esc = false;
@@ -826,12 +872,15 @@ function eachDestructure(text, openCh, onMatch) {
     if (c !== openCh) continue;
     if (openCh === '[' && isIndexOrMemberBracket(src, i)) continue;
     const end = matchBalanced(src, i);
-    if (end < 0) continue;
+    if (end < 0) {
+      if (typeof onUnbalanced === 'function' && shouldFailClosedUnbalanced(src, i, openCh)) onUnbalanced();
+      continue;
+    }
     const after = src.slice(end + 1);
-    const eq = after.match(/^\s*=\s*/);
+    const eq = matchAssignEq(after);
     const ofKw = matchForOfKeyword(after);
     if (!eq && !ofKw) continue;
-    const rhsStart = end + 1 + (eq ? eq[0].length : ofKw.length);
+    const rhsStart = end + 1 + (eq ? eq.length : ofKw.length);
     const rhsEnd = scanRhsEnd(src, rhsStart);
     onMatch({
       inner: src.slice(i + 1, end),
@@ -886,7 +935,7 @@ function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOp
       const unproven = !rhsIsCp && exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames);
       applyFrom(rhsIsCp, unproven);
     }
-  });
+  }, onUnresolvedRest);
 }
 
 function forOfSources(rhs, src) {
@@ -897,12 +946,12 @@ function forOfSources(rhs, src) {
   }
   if (!t.startsWith('[')) return [t];
   const close = matchBalanced(t, 0);
-  if (close < 0 || t.slice(close + 1).trim()) return [t];
+  if (close < 0 || skipWsAndComments(t, close + 1) < t.length) return [t];
   const slots = splitTopLevelArgs(t.slice(1, close)).map((s) => s.trim()).filter(Boolean);
   return slots.length ? slots : [t];
 }
 
-function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque) {
+function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, onUnresolvedRest) {
   eachDestructure(text, '[', ({ inner, rhs, kind }) => {
     const sources = kind === 'of' ? forOfSources(rhs, text) : [rhs];
     const lhs = splitTopLevelArgs(stripJsComments(inner));
@@ -919,7 +968,7 @@ function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpa
         continue;
       }
       const close = matchBalanced(rhsUnwrapped, 0);
-      if (close < 0 || rhsUnwrapped.slice(close + 1).trim()) {
+      if (close < 0 || skipWsAndComments(rhsUnwrapped, close + 1) < rhsUnwrapped.length) {
         if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
         continue;
       }
@@ -934,7 +983,7 @@ function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpa
         else if (exprLooksUnprovenSpawn(slot, names, cpNames)) addOpaque(dest);
       }
     }
-  });
+  }, onUnresolvedRest);
 }
 
 function collectChildProcessReceivers(src) {
@@ -943,7 +992,7 @@ function collectChildProcessReceivers(src) {
   const loadNs = String.raw`${CP_LOAD}\s*\)?${CP_NS_SUFFIX}`;
   const patterns = [
     new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*${loadNs}`, 'g'),
-    new RegExp(String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*${loadNs}`, 'g'),
+    new RegExp(String.raw`(?:^|[^\w.])\s*([A-Za-z_][\w]*)\s*=(?![=>])\s*${loadNs}`, 'g'),
     new RegExp(String.raw`import\s+\*\s+as\s+([A-Za-z_][\w]*)\s+from\s+${CP_SPEC}`, 'g'),
     new RegExp(String.raw`import\s+([A-Za-z_][\w]*)\s+from\s+${CP_SPEC}`, 'g'),
     new RegExp(String.raw`(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\)\s*\.then\s*\(\s*\(?\s*([A-Za-z_][\w]*)`, 'g'),
@@ -981,7 +1030,7 @@ function unwrapArrayArg(expr) {
   if (!t.startsWith('[')) return null;
   const end = matchBalanced(t, 0);
   if (end < 0) return null;
-  if (t.slice(end + 1).trim()) return null;
+  if (skipWsAndComments(t, end + 1) < t.length) return null;
   return splitTopLevelArgs(t.slice(1, end)).map((s) => s.trim()).filter(Boolean);
 }
 
@@ -1307,18 +1356,14 @@ function scanRhsEnd(text, start) {
   let depthParen = 0;
   let depthBrack = 0;
   let depthBrace = 0;
-  let inStr = null;
-  let esc = false;
   const src = String(text || '');
   for (let i = start; i < src.length; i++) {
-    const c = src[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === inStr) inStr = null;
+    const skipped = skipStringOrComment(src, i);
+    if (skipped !== i) {
+      i = skipped - 1;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    const c = src[i];
     if (c === '(') depthParen++;
     else if (c === ')') {
       if (!depthParen) return i;
@@ -1519,7 +1564,65 @@ function looksLikeNodeDaoCommand(expr) {
 }
 
 function commandStaticallyHasDryRun(expr) {
-  return hasDryRun(staticCommandText(expr));
+  return hasDryRun(stripShellComments(staticCommandText(expr)));
+}
+
+/** POSIX：无引号且位于词首的 `#` 起到行尾是 shell 注释。 */
+function stripShellComments(command) {
+  const s = String(command || '');
+  let out = '';
+  let inSq = false;
+  let inDq = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (!inSq && !inDq && c === '\\' && i + 1 < s.length) {
+      out += c + s[i + 1];
+      i += 1;
+      continue;
+    }
+    if (!inDq && c === "'") { inSq = !inSq; out += c; continue; }
+    if (!inSq && c === '"') { inDq = !inDq; out += c; continue; }
+    if (!inSq && !inDq && c === '#' && (i === 0 || /\s/.test(s[i - 1]))) {
+      while (i < s.length && s[i] !== '\n') i += 1;
+      if (i < s.length) out += '\n';
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+function execCommandScanText(expr) {
+  const folded = foldStringConcat(stripJsComments(String(expr || ''))).trim();
+  const wrapped = folded.match(/^(['"`])([\s\S]*)\1$/);
+  if (!wrapped) return stripShellComments(folded);
+  let body = wrapped[2];
+  if (wrapped[1] === '`') body = stripTemplateInterp(body);
+  return stripShellComments(body);
+}
+
+function isOptionsArg(expr) {
+  const u = unwrapParens(expr);
+  const k = skipWsAndComments(u, 0);
+  return u[k] === '{';
+}
+
+function isCallbackArg(expr) {
+  const u = unwrapParens(expr);
+  const k = skipWsAndComments(u, 0);
+  const t = u.slice(k);
+  return /^(?:async\s+)?function\b/.test(t)
+    || /^(?:async\s+)?(?:\([^)]*\)|[A-Za-z_][\w]*)\s*=>/.test(t);
+}
+
+/** 只取表达式里的数组字面量本身，丢掉后面的注释和多余 token。 */
+function arrayLiteralPrefix(expr) {
+  const u = unwrapParens(expr);
+  const k = skipWsAndComments(u, 0);
+  if (u[k] !== '[') return '';
+  const end = matchBalanced(u, k);
+  if (end < 0) return '';
+  return stripJsComments(u.slice(k, end + 1));
 }
 
 /** process.execPath / node / *.js 才可能跑 dao；git 等字面量命令不当 dispatch 候选。 */
@@ -1583,7 +1686,7 @@ function isPathBuilderCall(t) {
 
 function flattenArgvSlots(src, expr, beforeIdx, depth = 0) {
   if (depth > 8) return [{ kind: 'unknown' }];
-  const t = String(expr || '').trim();
+  const t = stripJsComments(String(expr || '')).trim();
   if (!t) return [];
   if (t.startsWith('[')) {
     const end = matchBalanced(t, 0);
@@ -1706,22 +1809,29 @@ function expandArgvSpreads(src, span, beforeIdx) {
   return out;
 }
 
-/** 子进程 argv / exec 命令字符串，不含 options 对象。--dry-run 只在这里算数。 */
+function collectArgvIdent(src, ident, callIndex, pieces, addArray) {
+  const resolved = resolveArgvArray(src, ident, callIndex);
+  const str = findStringLiteral(src, ident, callIndex);
+  if (resolved.lit) addArray(resolved.lit);
+  if (str) pieces.push(str);
+  return { resolved, str };
+}
+
+/** 子进程 argv / exec 命令字符串。只认各 API 真实参数位置；options 后的额外位置参数不算。 */
 function argvTextForCall(src, span, callIndex = Infinity, execNames) {
   const open = invocationOpen(span);
   if (open < 0) return { text: '', unresolved: false };
   const close = matchBalanced(span, open);
   if (close < 0) return { text: '', unresolved: false };
-  const args = splitTopLevelArgs(span.slice(open + 1, close));
+  const args = splitTopLevelArgs(span.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
   const pieces = [];
   let unresolved = false;
-  let command = '';
   const argvExprs = [];
   const callee = calleeName(span);
   const execFns = execNames instanceof Set ? execNames : new Set(['exec', 'execSync']);
   const execString = execFns.has(callee);
   const addArray = (piece) => {
-    const expanded = expandArgvSpreads(src, piece, callIndex);
+    const expanded = expandArgvSpreads(src, stripJsComments(piece), callIndex);
     pieces.push(expanded);
     for (const idm of expanded.matchAll(/\b([A-Za-z_][\w]*)\b/g)) {
       const id = idm[1];
@@ -1732,30 +1842,39 @@ function argvTextForCall(src, span, callIndex = Infinity, execNames) {
       if (arr) pieces.push(arr);
     }
   };
-  for (const raw of args) {
-    const t = raw.trim();
-    if (!t || t.startsWith('{')) continue;
-    if (/^(?:function\b|[A-Za-z_][\w]*\s*=>)/.test(t)) continue;
-    if (!command) command = t;
-    // spawn/execFile 的第一参是命令路径，不是 argv；exec 的第一参才是命令字符串。
-    const treatingAsCommand = !execString && t === command;
-    if (!treatingAsCommand) argvExprs.push(t);
-    if (t.startsWith('[')) { addArray(t); continue; }
-    if (/^[A-Za-z_][\w]*$/.test(t)) {
-      const resolved = resolveArgvArray(src, t, callIndex);
-      const arr = resolved.lit;
-      const str = findStringLiteral(src, t, callIndex);
-      if (arr) addArray(arr);
-      if (str) pieces.push(str);
-      if (resolved.unresolved && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
-      if (!arr && !str) {
-        pieces.push(t);
-        if (!treatingAsCommand && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
-      }
-      continue;
+  const command = args[0] || '';
+  const ingestArgvExpr = (expr) => {
+    argvExprs.push(expr);
+    const arr = arrayLiteralPrefix(expr);
+    if (arr) {
+      addArray(arr);
+      return;
     }
-    pieces.push(t);
+    const ident = unwrapParens(expr).trim();
+    if (/^[A-Za-z_][\w]*$/.test(ident)) {
+      const { resolved, str } = collectArgvIdent(src, ident, callIndex, pieces, addArray);
+      if (resolved.unresolved && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
+      if (!resolved.lit && !str) {
+        pieces.push(ident);
+        if (isJsRunnerCommand(src, command, callIndex)) unresolved = true;
+      }
+      return;
+    }
+    pieces.push(stripJsComments(unwrapParens(expr)));
+  };
+
+  if (execString) {
+    pieces.push(execCommandScanText(command));
+    const ident = unwrapParens(command).trim();
+    if (/^[A-Za-z_][\w]*$/.test(ident)) {
+      const str = findStringLiteral(src, ident, callIndex);
+      if (str) pieces.push(execCommandScanText(str));
+    }
+    argvExprs.push(command);
+  } else if (args.length >= 2 && !isOptionsArg(args[1]) && !isCallbackArg(args[1])) {
+    ingestArgvExpr(args[1]);
   }
+
   if (looksLikeNodeDaoCommand(command) && commandHasDynamicParts(command) && !commandStaticallyHasDryRun(command)) {
     unresolved = true;
   }
@@ -2013,6 +2132,13 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let forOfObjectRestUnproven = false;
       let forOfObjectRestCompact = false;
       let forOfObjectRestComment = false;
+      let destructureCommentEq = false;
+      let extraPositionalDryRun = false;
+      let argvCommentDryRun = false;
+      let parenOptionsDryRun = false;
+      let execShellCommentDryRun = false;
+      let controlFlowCpAssign = false;
+      let controlFlowAliasAssign = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -2215,6 +2341,44 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /dao\.mjs/.test(src)
           && r.scanned > 0 && !r.ok
         ) forOfObjectRestComment = true;
+        if (
+          /\}\s*\/\*[\s\S]*?\*\/\s*=/.test(src)
+          && /\.\.\.\s*[A-Za-z_][\w]*/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) destructureCommentEq = true;
+        if (
+          /\}\s*,\s*['"]--dry-run['"]/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) extraPositionalDryRun = true;
+        if (
+          /\]\s*\/\*[^*]*--dry-run/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvCommentDryRun = true;
+        if (
+          /\(\s*\{/.test(src)
+          && /input\s*:\s*['"]--dry-run['"]/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) parenOptionsDryRun = true;
+        if (
+          /\bexec\s*\(/.test(src)
+          && /#\s*--dry-run/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execShellCommentDryRun = true;
+        if (
+          /if\s*\(/.test(src)
+          && /=\s*require\s*\(\s*['"`](?:node:)?child_process['"`]/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) controlFlowCpAssign = true;
+        if (
+          /if\s*\(/.test(src)
+          && /=\s*[A-Za-z_][\w]*\s*\.\s*spawnSync/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) controlFlowAliasAssign = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2266,6 +2430,13 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!forOfObjectRestUnproven) problems.push('red/ 没点出 for-of 对象 rest 迭代源 fail-closed');
       if (!forOfObjectRestCompact) problems.push('red/ 没点出 for-of 对象 rest 紧凑写法（for (const {...cp}of [mod])）');
       if (!forOfObjectRestComment) problems.push('red/ 没点出 for-of 对象 rest 注释间隔（}/*...*/of）');
+      if (!destructureCommentEq) problems.push('red/ 没点出解构赋值注释间隔（}/*...*/=）');
+      if (!extraPositionalDryRun) problems.push('red/ 没点出 options 之后的额外 --dry-run 位置参数');
+      if (!argvCommentDryRun) problems.push('red/ 没点出 argv 旁注释里的 --dry-run');
+      if (!parenOptionsDryRun) problems.push('red/ 没点出括号包着的 options.input --dry-run');
+      if (!execShellCommentDryRun) problems.push('red/ 没点出 exec 命令 # 之后的 --dry-run');
+      if (!controlFlowCpAssign) problems.push('red/ 没点出控制流里的 child_process 赋值（if (...) cp = require）');
+      if (!controlFlowAliasAssign) problems.push('red/ 没点出控制流里的函数别名赋值（if (...) run = cp.spawnSync）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

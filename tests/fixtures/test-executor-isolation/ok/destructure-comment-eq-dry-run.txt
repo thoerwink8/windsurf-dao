@@ -1,0 +1,8 @@
+/* 绿样本：解构赋值夹注释，但 argv 带真实 --dry-run。
+const mod = await import("node:child_process");
+let cp;
+({ ...cp }/* comment with } */ = mod);
+cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], {
+  env: { PATH: "/bin" }
+});
+*/

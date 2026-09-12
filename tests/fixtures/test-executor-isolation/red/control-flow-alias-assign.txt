@@ -1,0 +1,8 @@
+/* 审官对抗样本：控制流里给 spawn 别名赋值。只认行首/分号后会 scanned:0。
+const cp = require("node:child_process");
+let run;
+if (true) run = cp.spawnSync;
+run(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/

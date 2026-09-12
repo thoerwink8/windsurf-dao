@@ -1,0 +1,6 @@
+/* 审官对抗样本：--dry-run 在 argv 数组旁的注释里，不在真实 argv。
+const { spawnSync } = require("node:child_process");
+spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"] /* --dry-run */, {
+  env: { PATH: "/bin" }
+});
+*/

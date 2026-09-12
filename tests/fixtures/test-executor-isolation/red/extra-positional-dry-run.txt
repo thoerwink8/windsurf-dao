@@ -1,0 +1,9 @@
+/* 审官对抗样本：--dry-run 在 spawnSync 第四参。Node 忽略 options 之后的位置参数。
+const { spawnSync } = require("node:child_process");
+spawnSync(
+  process.execPath,
+  ["scripts/dao.mjs", "dispatch"],
+  { env: { PATH: "/bin" } },
+  "--dry-run"
+);
+*/

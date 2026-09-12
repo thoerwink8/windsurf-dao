@@ -1,0 +1,9 @@
+/* 绿样本：第四参也写了 --dry-run，但真实 argv 里已有 --dry-run。
+const { spawnSync } = require("node:child_process");
+spawnSync(
+  process.execPath,
+  ["scripts/dao.mjs", "dispatch", "--dry-run"],
+  { env: { PATH: "/bin" } },
+  "--dry-run"
+);
+*/

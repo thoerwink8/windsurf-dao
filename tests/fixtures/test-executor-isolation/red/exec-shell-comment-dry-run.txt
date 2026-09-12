@@ -1,0 +1,4 @@
+/* 审官对抗样本：exec 命令字符串里 # 之后是 shell 注释，--dry-run 不会进 argv。
+const { exec } = require("node:child_process");
+exec("node scripts/dao.mjs dispatch # --dry-run", { env: { PATH: "/bin" } });
+*/

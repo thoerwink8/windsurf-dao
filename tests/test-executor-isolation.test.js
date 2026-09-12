@@ -1759,6 +1759,187 @@ test('动态 import 默认导出带 --dry-run 仍绿', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('解构赋值与 = 之间夹注释必须红（审官对抗样本）', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'let cp;',
+    '({ ...' + 'cp }/* comment with } */ = mod);',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('default 解构赋值夹注释必须红', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'let cp;',
+    '({ default: cp }/*...*/ = mod);',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('数组解构赋值夹注释必须红', () => {
+  const EX = 'ex' + 'ec';
+  const alias = 'ru' + 'n';
+  const src = [
+    'const cp = require("node:child_process");',
+    `let ${alias};`,
+    `([${alias}]/*...*/ = [cp.${EX}]);`,
+    `${alias}("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('execPath 解构赋值夹注释 + 无法解析 argv 必须红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'let nodePath;',
+    '({ execPath: nodePath }/*...*/ = process);',
+    `${CALL}(nodePath, makeArgv(), { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('rest 模式内部注释含 } 必须红', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'let cp;',
+    '({ ...' + 'cp /* comment with } */ } = mod);',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('解构赋值夹注释带 --dry-run 仍绿', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'let cp;',
+    '({ ...' + 'cp }/* comment with } */ = mod);',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('options 之后的额外 --dry-run 位置参数必须红（审官对抗样本）', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } }, "--dry-run");`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('argv 旁注释里的 --dry-run 必须红', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"] /* --dry-run */, { env: { PATH: "/bin" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('括号包着的 options.input --dry-run 必须红', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], ({ env: { PATH: "/bin" }, input: "--dry-run" }));`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('exec 命令 # 之后的 --dry-run 必须红', () => {
+  const EX = 'ex' + 'ec';
+  const src = `${EX}("node scripts/dao.mjs dispatch # --dry-run", { env: { PATH: "/bin" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('exec --dry-run 在 # 之前仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const src = `${EX}("node scripts/dao.mjs dispatch --dry-run # later", { env: { PATH: "/bin" } });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('真实 argv 有 --dry-run 时第四参干扰仍绿', () => {
+  const src = `${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } }, "--dry-run");`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('控制流里赋值 child_process 必须红（审官对抗样本）', () => {
+  const src = [
+    'let cp;',
+    'if (true) cp = require("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('控制流里赋值 spawn 别名必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    'const cp = require("node:child_process");',
+    `let ${alias};`,
+    `if (true) ${alias} = cp.${CALL};`,
+    `${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('括号里赋值 child_process 必须红', () => {
+  const src = [
+    'let cp;',
+    '(cp = require("node:child_process"));',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('括号里赋值 spawn 别名必须红', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    'const cp = require("node:child_process");',
+    `let ${alias};`,
+    `(${alias} = cp.${CALL});`,
+    `${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('控制流赋值带 --dry-run 仍绿', () => {
+  const src = [
+    'let cp;',
+    'if (true) cp = require("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('计算属性 call 带 --dry-run 仍绿', () => {
   const lb = '[';
   const rb = ']';
