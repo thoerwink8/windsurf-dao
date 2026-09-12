@@ -37,6 +37,15 @@
 //      跟踪 .default / .promises（含变量转发、解构 default、解构赋值
 //      `({ default: cp } = await import(...))` / `({ default: cp } = mod)`；
 //      解析不了的 default 绑定 fail-closed）。
+//      获取路径不靠字面量模块名穷举：require / import() / module.require /
+//      process.mainModule.require 的 specifier 走 foldStringConcat
+//      （"node:" + "child_process" 算 child_process）。解析不了但参数里
+//      有 child_process 字面量 → 接收器照收。对象属性 / 成员赋值上的
+//      加载（{ inner: require(...) } / box.inner = require(...)）把键收进
+//      接收器，嵌套 holder 的成员调用才能扫到。
+//      spawnSync / spawn / fork / execFile 成员调用：未知接收器也扫
+//      （不许再靠 cpNames 漏成 scanned:0）。exec / execSync 仍要已知
+//      接收器，避免把 regex.exec 当派工。
 //      process.execPath 别名覆盖赋值解构、默认值、字符串键、计算键；无法证明时
 //      对 Node/dao 候选 fail-closed。
 //      对象 holder 的属性键走 resolveComputedKey（含 `["r"+"un"]`），值走别名解析
@@ -77,6 +86,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SPAWN_FNS = ['spawnSync', 'spawn', 'execFileSync', 'execFile', 'execSync', 'exec', 'fork'];
+/** regex.exec 太常见：这两名成员调用仍要已知 child_process 接收器。其余 spawn 名未知接收器也扫。 */
+const MEMBER_NEEDS_KNOWN_CP = new Set(['exec', 'execSync']);
 const FIXTURE_FILE = /\.(?:fixture|txt)$/;
 const EXECUTABLE_TEST = /\.test\.(js|mjs|cjs)$/;
 const JS_FILE = /\.(js|mjs|cjs)$/;
@@ -663,9 +674,140 @@ const CP_INLINE_DOT = new RegExp(
   String.raw`(?:require\s*\(\s*${CP_SPEC}\s*\)|(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\))\s*\)?${CP_NS_SUFFIX}\s*\??\.\s*$`,
 );
 
+function classifyModuleSpecifier(argSrc) {
+  const folded = foldStringConcat(String(argSrc || '')).trim();
+  const t = unwrapParens(folded);
+  const lit = t.match(/^(['"`])([\s\S]*)\1$/);
+  if (lit && !(lit[1] === '`' && lit[2].includes('${'))) {
+    const spec = lit[2].replace(/^node:/, '');
+    return spec === 'child_process' ? 'cp' : 'other';
+  }
+  return 'unknown';
+}
+
+function specifierMentionsChildProcess(argSrc) {
+  const folded = foldStringConcat(String(argSrc || ''));
+  for (let i = 0; i < folded.length; i++) {
+    const lit = readStringLit(folded, i);
+    if (!lit) continue;
+    if (folded[i] === '`' && lit.body.includes('${')) {
+      i = lit.end - 1;
+      continue;
+    }
+    if (lit.body.replace(/^node:/, '') === 'child_process') return true;
+    i = lit.end - 1;
+  }
+  return false;
+}
+
+function specifierLooksLikeChildProcess(argSrc) {
+  const kind = classifyModuleSpecifier(argSrc);
+  if (kind === 'cp') return true;
+  if (kind === 'other') return false;
+  return specifierMentionsChildProcess(argSrc);
+}
+
+/** i 处是 `(` 且 callee 是 require / import() / module.require / process.mainModule.require。 */
+function requireLikeAtParen(text, openIdx) {
+  const s = String(text || '');
+  if (s[openIdx] !== '(') return null;
+  let k = openIdx;
+  while (k > 0 && /\s/.test(s[k - 1])) k -= 1;
+  let j = k;
+  while (j > 0 && /[\w]/.test(s[j - 1])) j -= 1;
+  const name = s.slice(j, k);
+  if (name === 'import') {
+    if (j > 0 && /[\w.]/.test(s[j - 1])) return null;
+    return { callee: 'import', start: j };
+  }
+  if (name !== 'require') return null;
+  let start = j;
+  let p = j;
+  while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
+  if (p > 0 && s[p - 1] === '.') {
+    p -= 1;
+    while (p > 0 && /\s/.test(s[p - 1])) p -= 1;
+    let q = p;
+    while (q > 0 && /[\w]/.test(s[q - 1])) q -= 1;
+    if (q === p) return { callee: 'require', start };
+    start = q;
+    let r = q;
+    while (r > 0 && /\s/.test(s[r - 1])) r -= 1;
+    if (r > 0 && s[r - 1] === '.') {
+      r -= 1;
+      while (r > 0 && /\s/.test(s[r - 1])) r -= 1;
+      let root = r;
+      while (root > 0 && /[\w]/.test(s[root - 1])) root -= 1;
+      if (root < r) start = root;
+    }
+  }
+  return { callee: 'require', start };
+}
+
+function stripCpNsSuffix(expr) {
+  let t = unwrapParens(expr);
+  for (let n = 0; n < 8; n++) {
+    const m = t.match(/^(.*?)(?:\s*\??\.\s*(?:default|promises))\s*$/);
+    if (!m) break;
+    t = unwrapParens(m[1]);
+  }
+  return t;
+}
+
+function parseRequireLikeCall(expr) {
+  let t = unwrapParens(stripCpNsSuffix(expr));
+  const awaitM = t.match(/^await\s+([\s\S]*)$/);
+  if (awaitM) t = unwrapParens(awaitM[1]);
+  const open = t.indexOf('(');
+  if (open < 0) return null;
+  const like = requireLikeAtParen(t, open);
+  if (!like) return null;
+  if (skipWsAndComments(t, 0) < like.start) return null;
+  const close = matchBalanced(t, open);
+  if (close < 0) return null;
+  if (skipWsAndComments(t, close + 1) < t.length) return null;
+  return { arg: t.slice(open + 1, close), start: like.start, callee: like.callee };
+}
+
+function isChildProcessLoadExpr(expr) {
+  const parsed = parseRequireLikeCall(expr);
+  if (!parsed) return false;
+  return specifierLooksLikeChildProcess(parsed.arg);
+}
+
+function destNameBefore(text, idx) {
+  let pos = idx;
+  let tok = lastTokenBefore(text, pos);
+  if (tok.type === 'ident' && tok.value === 'await') {
+    pos = tok.start;
+    tok = lastTokenBefore(text, pos);
+  }
+  if (!tok || tok.value !== '=') return '';
+  const left = lastTokenBefore(text, tok.start);
+  if (!left || left.type !== 'ident') return '';
+  if (left.value === 'const' || left.value === 'let' || left.value === 'var') return '';
+  return left.value;
+}
+
+function bindingNameBefore(text, idx) {
+  const dest = destNameBefore(text, idx);
+  if (dest) return dest;
+  let pos = idx;
+  let tok = lastTokenBefore(text, pos);
+  if (tok.type === 'ident' && tok.value === 'await') {
+    pos = tok.start;
+    tok = lastTokenBefore(text, pos);
+  }
+  if (!tok || tok.value !== ':') return '';
+  const key = lastTokenBefore(text, tok.start);
+  if (!key || key.type !== 'ident') return '';
+  return key.value;
+}
+
 function isChildProcessNamespaceExpr(expr, cpNames) {
   const t = unwrapParens(expr);
   if (!t) return false;
+  if (isChildProcessLoadExpr(t)) return true;
   if (new RegExp(String.raw`^${CP_LOAD}\s*\)?${CP_NS_SUFFIX}$`).test(t)) return true;
   if (!cpNames || !cpNames.size) return false;
   const ids = [...cpNames].map(escapeIdent).join('|');
@@ -1093,17 +1235,53 @@ function collectChildProcessReceivers(src) {
     while ((m = re.exec(text))) names.add(m[1]);
   }
   scanCpDefaultDestructure(text, names);
+  scanExecutable(text, (i) => {
+    if (text[i] !== '(') return;
+    const like = requireLikeAtParen(text, i);
+    if (!like) return;
+    const close = matchBalanced(text, i);
+    if (close < 0) return;
+    if (!specifierLooksLikeChildProcess(text.slice(i + 1, close))) return close + 1;
+    const dest = bindingNameBefore(text, like.start);
+    if (dest) names.add(dest);
+    return close + 1;
+  });
   return names;
+}
+
+function windowEndsWithCpLoadDot(window) {
+  const w = String(window || '');
+  const m = w.match(/(\s*\??\.\s*)$/);
+  if (!m) return false;
+  return isChildProcessLoadExpr(w.slice(0, w.length - m[1].length));
 }
 
 function knownMemberReceiver(window, cpNames) {
   const w = String(window || '');
-  if (CP_INLINE_DOT.test(w)) return true;
+  if (CP_INLINE_DOT.test(w) || windowEndsWithCpLoadDot(w)) return true;
   const recv = w.match(/([A-Za-z_][\w]*)(?:\s*\??\.\s*(?:default|promises))*\s*\??\.\s*$/);
   return !!(recv && cpNames && cpNames.has(recv[1]));
 }
 
 function receiverBefore(text, bracketIdx, cpNames) {
+  let k = bracketIdx;
+  while (k > 0 && /\s/.test(text[k - 1])) k -= 1;
+  for (let n = 0; n < 6; n++) {
+    const slice = text.slice(Math.max(0, k - 12), k);
+    const ns = slice.match(/(\?\.)?\.(?:default|promises)$/);
+    if (!ns) break;
+    k -= ns[0].length;
+    while (k > 0 && /\s/.test(text[k - 1])) k -= 1;
+  }
+  if (text[k - 1] === ')') {
+    const open = matchingOpenParen(text, k - 1);
+    if (open >= 0) {
+      const like = requireLikeAtParen(text, open);
+      if (like && specifierLooksLikeChildProcess(text.slice(open + 1, k - 1))) {
+        return { isCp: true, start: like.start };
+      }
+    }
+  }
   const before = text.slice(Math.max(0, bracketIdx - 120), bracketIdx);
   const load = before.match(new RegExp(
     String.raw`(?:require\s*\(\s*${CP_SPEC}\s*\)|(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\))\s*\)?${CP_NS_SUFFIX}(?:\s*\?\.)?\s*$`,
@@ -1188,7 +1366,19 @@ function exprIsSpawnTarget(expr, spawnNames, cpNames) {
   if (!t) return false;
   if (/^[A-Za-z_][\w]*$/.test(t)) return !!(spawnNames && spawnNames.has(t)) || SPAWN_FNS.includes(t);
   const mem = t.match(/^([A-Za-z_][\w]*)(?:\s*\??\.\s*(?:default|promises))*\s*(?:\?\.\s*|\.\s*)([A-Za-z_][\w]*)$/);
-  if (mem && cpNames && cpNames.has(mem[1]) && (spawnNames.has(mem[2]) || SPAWN_FNS.includes(mem[2]))) {
+  if (mem) {
+    const isFn = SPAWN_FNS.includes(mem[2]);
+    const isAlias = !!(spawnNames && spawnNames.has(mem[2]));
+    if (isFn && !MEMBER_NEEDS_KNOWN_CP.has(mem[2])) return true;
+    if ((isFn || isAlias) && cpNames && cpNames.has(mem[1])) return true;
+  }
+  const loadMem = t.match(/^(.*?)(?:\s*\??\.\s*)([A-Za-z_][\w]*)$/);
+  if (loadMem && isChildProcessLoadExpr(loadMem[1])
+    && ((spawnNames && spawnNames.has(loadMem[2])) || SPAWN_FNS.includes(loadMem[2]))) {
+    return true;
+  }
+  if (isChildProcessLoadExpr(t)
+    && SPAWN_FNS.some((n) => new RegExp(String.raw`(?:^|[^\w])${escapeIdent(n)}(?:[^\w]|$)`).test(t))) {
     return true;
   }
   if (new RegExp(String.raw`(?:require|import)\s*\(\s*${CP_SPEC}\s*\)`).test(t)
@@ -1412,7 +1602,11 @@ function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
       const wrapped = rest.match(/^\s*\)\s*\(/);
       const adapter = matchAdapterAfter(rest, text);
       const window = text.slice(Math.max(0, m.index - 120), m.index);
-      if (/\.\s*$/.test(before) && !knownMemberReceiver(window, cpNames)) continue;
+      if (/\.\s*$/.test(before) && !knownMemberReceiver(window, cpNames)) {
+        // 未知接收器只放行规范 spawn 名（spawnSync 等）。exec 是 regex.exec；
+        // 别名可能是误收的 assert.ok，不能当 child_process。
+        if (!SPAWN_FNS.includes(m[0]) || MEMBER_NEEDS_KNOWN_CP.has(m[0])) continue;
+      }
       let openIdx = -1;
       let spanStart = m.index;
       if (adapter) {
@@ -2412,6 +2606,9 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let argvAssignInString = false;
       let argvAssignTemplateInterp = false;
       let argvMutTemplateInterp = false;
+      let concatRequireSpec = false;
+      let moduleRequire = false;
+      let nestedCpHolder = false;
       for (const f of files) {
         const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
@@ -2678,6 +2875,19 @@ export function inspectTestExecutorIsolationFixtures(root) {
           /\$\{[^`]*[A-Za-z_][\w]*\s*\.\s*pop\s*\(/.test(src)
           && r.scanned > 0 && !r.ok
         ) argvMutTemplateInterp = true;
+        if (
+          /require\s*\(\s*['"]node:['"]\s*\+\s*['"]child_process['"]/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) concatRequireSpec = true;
+        if (
+          /module\s*\.\s*require\s*\(/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) moduleRequire = true;
+        if (
+          /inner\s*:\s*require\s*\(/.test(src)
+          && /\.\s*inner\s*\.\s*spawnSync/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) nestedCpHolder = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2742,6 +2952,9 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!argvAssignInString) problems.push('red/ 没点出字符串里的 argv 赋值');
       if (!argvAssignTemplateInterp) problems.push('red/ 没点出模板插值里的 argv 赋值');
       if (!argvMutTemplateInterp) problems.push('red/ 没点出模板插值里的 argv.pop');
+      if (!concatRequireSpec) problems.push('red/ 没点出拼接模块名 require("node:" + "child_process")');
+      if (!moduleRequire) problems.push('red/ 没点出 module.require(child_process)');
+      if (!nestedCpHolder) problems.push('red/ 没点出嵌套 holder（box.inner.spawnSync）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

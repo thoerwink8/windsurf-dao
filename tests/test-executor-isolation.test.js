@@ -2246,6 +2246,69 @@ test('审官 default 转发 / 计算属性适配 / exec 动态模板都不许 sc
   }
 });
 
+test('拼接模块名 require("node:" + "child_process") 必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:" + "child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('module.require(child_process) 必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = module.require("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('嵌套 holder box.inner.spawnSync 必须红（审官对抗样本）', () => {
+  const src = [
+    'const box = { inner: require("node:child_process") };',
+    `box.inner.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('拼接 specifier 嵌套 holder 必须红', () => {
+  const src = [
+    'const box = { inner: require("node:" + "child_process") };',
+    `box.inner.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('拼接 specifier 带 --dry-run 仍绿', () => {
+  const src = [
+    'const cp = require("node:" + "child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('regex.exec 不因成员调用 fail-closed 误红', () => {
+  const src = [
+    'const re = /escalate\\/(.+)$/;',
+    'const m = re.exec(String(key || ""));',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
 test('夹具红/绿/空有判别力', () => {
   const r = inspectTestExecutorIsolationFixtures(join(HERE, 'fixtures', 'test-executor-isolation'));
   assert.equal(r.unscanned, false, r.error || '');

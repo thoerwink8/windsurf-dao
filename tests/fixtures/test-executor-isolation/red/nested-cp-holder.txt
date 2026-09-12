@@ -1,0 +1,6 @@
+/* 审官对抗样本：嵌套 holder。{ inner: require(...) }; box.inner.spawnSync 只认顶层接收器会 scanned:0。
+const box = { inner: require("node:child_process") };
+box.inner.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/
