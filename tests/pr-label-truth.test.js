@@ -342,7 +342,7 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.ok(r.labels.includes('model/grok-4.6'));
     assert.ok(r.labels.includes('reviewer/gpt-5.6-luna'));
     assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), true);
-    assert.ok(!String(r.error || '').includes('fork-owner/source-repo'));
+    assert.equal(String(r.error || '').includes('fork-owner/source-repo'), false);
   });
 
   it('跨仓同名分支：PR URL 是另一仓时拒打标', async () => {
@@ -378,7 +378,7 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.match(r.error, /不许跨仓套标/);
     assert.match(r.error, new RegExp(OTHER));
-    assert.ok(!calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), JSON.stringify(calls));
+    assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), false, JSON.stringify(calls));
   });
 });
 
