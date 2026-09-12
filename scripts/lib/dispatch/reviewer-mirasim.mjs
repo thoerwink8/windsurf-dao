@@ -176,14 +176,25 @@ export function decideReviewerCreateStart({ force, switched, deadError, record, 
 }
 
 /**
+ * 把 probeDir 三态收成 decideReworkReviewerHandoff 的 treeExists。
+ * 不能收成布尔：unscanned 必须是 undefined，才会走 fail 而不是入队。
+ */
+export function treeExistsFromProbe(probe) {
+  if (probe && probe.kind === 'yes') return true;
+  if (probe && probe.kind === 'no') return false;
+  return undefined;
+}
+
+/**
  * 返工交卷：审官树还在就复用原会话。
  *
- * 只有确认登记不存在、或登记在但树目录确认不在时才入队。
- * 登记没查成（权限 / 临时 I/O / 坏 JSON）fail-visible，不许当成树已拆去起第二个审官。
+ * 只有确认登记不存在、或登记可读且树目录确认不在时才入队。
+ * 登记没查成（权限 / 临时 I/O / 坏 JSON）或可读但缺 treePath（结构不完整）
+ * 都 fail-visible，不许当成树已拆去起第二个审官。
  *
  *   action='reuse'    —— 登记可读且树目录还在，往原会话推针
  *   action='enqueue'  —— 确认没有登记，或登记在但树目录确认不在
- *   action='fail'     —— 登记没查成 / 树在不在没查成
+ *   action='fail'     —— 登记没查成 / 缺树路径 / 树在不在没查成
  */
 export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
   if (!rec || rec.ok !== true) {
@@ -198,11 +209,11 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
       why: `审官登记没查成，返工不入队、不起新审官：${(rec && rec.why) || '没给原因'}`,
     };
   }
-  const treePath = rec.record && rec.record.treePath != null ? String(rec.record.treePath) : '';
+  const treePath = rec.record && rec.record.treePath != null ? String(rec.record.treePath).trim() : '';
   if (!treePath) {
     return {
-      action: 'enqueue',
-      why: '审官登记没有树路径，按已拆入队',
+      action: 'fail',
+      why: '审官登记没有树路径（结构不完整），返工不入队、不起新审官',
     };
   }
   if (treeExists === true) {
@@ -523,6 +534,7 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, j
     /**
      * 全部登记（#1125 数在役审官要）。**读不了目录回 null，不回空数组**——
      * 「一条都没有」和「没读成」在下游是两种判决：前者可以拉满，后者一张都不许拉。
+     * 单条 read 失败且不是确认缺失，同样回 null：部分结果当完整表会把在役数算成 0。
      * #1024：跨仓文件名 reviewer-<owner>__<name>__<pr>.json 也要扫进来，否则跨仓在役审官不占位。
      */
     listAll() {
@@ -541,7 +553,12 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, j
         const parsed = parseStem(f);
         if (!parsed) continue;
         const r = this.read(parsed.pr, parsed.repo);
-        if (r.ok && r.record) out.push(r.record);
+        if (r && r.ok === true && r.record) {
+          out.push(r.record);
+          continue;
+        }
+        if (r && r.missing === true) continue;
+        return null;
       }
       return out;
     },

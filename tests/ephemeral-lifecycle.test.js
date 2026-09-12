@@ -41,7 +41,9 @@ describe('ephemeral-lifecycle', () => {
     const i = dao.indexOf('async function cmdWorkerDoneMirasim');
     const body = dao.slice(i, i + 14000);
     assert.match(body, /decideReworkReviewerHandoff/);
-    assert.match(body, /existsSync\(String\(reviewTree\)\)/);
+    assert.match(body, /probeDir\(statSync/);
+    assert.match(body, /treeExistsFromProbe/);
+    assert.equal(/existsSync\(String\(reviewTree\)\)/.test(body), false);
     const mira = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
     assert.doesNotMatch(mira, /pr merge/);
     assert.match(mira, /不许自己合/);

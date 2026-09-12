@@ -19,7 +19,7 @@
 // 与 inbox.log 完工信。758-763 实证：dao 加的认账钟误杀能干活的工人（假阴性）。
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -228,7 +228,7 @@ import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
-import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
+import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
@@ -1566,7 +1566,7 @@ import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
-  decideReviewerCreateStart, decideReworkReviewerHandoff, runLockedReviewerCreate,
+  decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2019,7 +2019,7 @@ async function cmdWorkerDoneMirasim(args) {
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
   // 首审一律入队。返工：审官树还在才往原会话推针；确认登记不在或树已拆才入队。
-  // 登记没查成 fail-visible，不许当成树已拆去起第二个审官。
+  // 登记没查成 / 缺 treePath / 树在不在没查成，一律 fail-visible，不许当成树已拆去起第二个审官。
   const repo = targetRepo.localPath;
   const enqueueHandoff = async (why) => {
     const dir = reviewPendingDir({ root: ROOT });
@@ -2060,8 +2060,13 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
   const rec = mirasimRegistry().read(String(plan.pr), targetRepo.ownerName || null);
-  const reviewTree = rec && rec.ok && rec.record ? rec.record.treePath : null;
-  const treeExists = reviewTree ? existsSync(String(reviewTree)) : undefined;
+  const reviewTree = rec && rec.ok && rec.record && rec.record.treePath != null
+    ? String(rec.record.treePath).trim()
+    : '';
+  // probeDir 而不是 existsSync：后者把 EACCES 洗成 false，随后按树已拆入队。
+  const treeExists = reviewTree
+    ? treeExistsFromProbe(probeDir(statSync, reviewTree))
+    : undefined;
   const handoff = decideReworkReviewerHandoff({ rec, treeExists });
   if (handoff.action === 'fail') fail(handoff.why, { ...plan, postedIssue, postedPr });
   if (handoff.action === 'enqueue') {
