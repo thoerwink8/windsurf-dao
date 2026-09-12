@@ -82,6 +82,12 @@ const memRegistry = () => {
   };
 };
 
+function ioErr(code, msg) {
+  const e = new Error(msg || code);
+  e.code = code;
+  return e;
+}
+
 describe('executor-binding', () => {
   it('readExecutorPolicy 读到 mirasim 节；缺节是没查成，不是默认 orca', async () => {
     const { readExecutorPolicy } = await import(EB);
@@ -772,7 +778,7 @@ describe('审官登记表落点必须跨树共享', () => {
     const { defaultReviewerRegistry } = await import(RM);
     const store = new Map();
     const mk = () => defaultReviewerRegistry({
-      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      readFile: (p) => { if (!store.has(p)) throw ioErr('ENOENT'); return store.get(p); },
       writeFile: (p, c) => { store.set(p, c); },
       mkdir: () => {},
       join: (...xs) => xs.join('/'),
@@ -791,7 +797,7 @@ describe('审官登记表落点必须跨树共享', () => {
     const { defaultReviewerRegistry } = await import(RM);
     const store = new Map();
     const mk = () => defaultReviewerRegistry({
-      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      readFile: (p) => { if (!store.has(p)) throw ioErr('ENOENT'); return store.get(p); },
       writeFile: (p, c) => { store.set(p, c); },
       mkdir: () => {},
       join: (...xs) => xs.join('/'),
@@ -831,7 +837,7 @@ describe('审官登记表落点必须跨树共享', () => {
     const { defaultReviewerRegistry } = await import(RM);
     const store = new Map();
     const mk = (readdir) => defaultReviewerRegistry({
-      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      readFile: (p) => { if (!store.has(p)) throw ioErr('ENOENT'); return store.get(p); },
       writeFile: (p, c) => { store.set(p, c); },
       mkdir: () => {},
       readdir,
@@ -848,7 +854,7 @@ describe('审官登记表落点必须跨树共享', () => {
     assert.equal(unreadable, null, '读不了 = 没查成');
 
     const listedHome = defaultReviewerRegistry({
-      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      readFile: (p) => { if (!store.has(p)) throw ioErr('ENOENT'); return store.get(p); },
       writeFile: (p, c) => store.set(p, c),
       mkdir: () => {},
       readdir: () => ['reviewer-1040.json', 'other.txt', 'reviewer-x.json'],
@@ -862,7 +868,7 @@ describe('审官登记表落点必须跨树共享', () => {
 
     listedHome.write('12', { pr: '12', repo: 'org/a', sessionKey: 'codex:a' });
     const mixed = defaultReviewerRegistry({
-      readFile: (p) => { if (!store.has(p)) throw new Error('ENOENT'); return store.get(p); },
+      readFile: (p) => { if (!store.has(p)) throw ioErr('ENOENT'); return store.get(p); },
       writeFile: (p, c) => store.set(p, c),
       mkdir: () => {},
       readdir: () => ['reviewer-1040.json', 'reviewer-org__a__12.json', 'other.txt'],
@@ -873,6 +879,89 @@ describe('审官登记表落点必须跨树共享', () => {
     const keys = mixed.map((r) => r.sessionKey).sort();
     assert.deepEqual(keys, ['codex:a', 'codex:abc']);
 
+  });
+
+  it('登记读取：ENOENT 才是 missing；EACCES / 坏 JSON 是没查成', async () => {
+    const { defaultReviewerRegistry } = await import(RM);
+    const mk = (readFile) => defaultReviewerRegistry({
+      readFile,
+      writeFile: () => {},
+      mkdir: () => {},
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    });
+
+    const missing = mk(() => { throw ioErr('ENOENT'); }).read('1208');
+    assert.equal(missing.ok, false);
+    assert.equal(missing.missing, true);
+
+    const denied = mk(() => { throw ioErr('EACCES', 'permission denied'); }).read('1208');
+    assert.equal(denied.ok, false);
+    assert.equal(denied.missing, false, JSON.stringify(denied));
+    assert.match(String(denied.why), /没查成/);
+
+    const badJson = mk(() => '{not json').read('1208');
+    assert.equal(badJson.ok, false);
+    assert.equal(badJson.missing, false, JSON.stringify(badJson));
+    assert.match(String(badJson.why), /没查成/);
+  });
+
+  it('返工：登记没查成不入队；确认不在或树已拆才入队', async () => {
+    const { decideReworkReviewerHandoff } = await import(RM);
+    const unread = decideReworkReviewerHandoff({
+      rec: { ok: false, missing: false, why: 'PR 1208 的审官会话登记没查成：EACCES' },
+      treeExists: true,
+    });
+    assert.equal(unread.action, 'fail');
+    assert.match(unread.why, /没查成/);
+    assert.equal(unread.action === 'enqueue', false);
+
+    const gone = decideReworkReviewerHandoff({ rec: { ok: false, missing: true, why: '没有' } });
+    assert.equal(gone.action, 'enqueue');
+
+    const torn = decideReworkReviewerHandoff({
+      rec: { ok: true, record: { treePath: '/mira/dao-review-pr-1208' } },
+      treeExists: false,
+    });
+    assert.equal(torn.action, 'enqueue');
+    assert.match(torn.why, /已按短命契约拆掉/);
+
+    const live = decideReworkReviewerHandoff({
+      rec: { ok: true, record: { treePath: '/mira/dao-review-pr-1208' } },
+      treeExists: true,
+    });
+    assert.equal(live.action, 'reuse');
+  });
+
+  it('**判别性**：EACCES 读登记 → worker-done 不起第二个审官', async () => {
+    const { mirasimWorkerDone, defaultReviewerRegistry, decideReworkReviewerHandoff } = await import(RM);
+    const rec = defaultReviewerRegistry({
+      readFile: () => { throw ioErr('EACCES', 'permission denied'); },
+      writeFile: () => {},
+      mkdir: () => {},
+      join: (...xs) => xs.join('/'),
+      flowDir: '/home/orca/.dao/mirasim',
+    }).read('1208');
+    assert.equal(rec.ok, false);
+    assert.equal(rec.missing, false, JSON.stringify(rec));
+    const d = decideReworkReviewerHandoff({ rec, treeExists: true });
+    assert.equal(d.action, 'fail');
+
+    const rig = reworkRig({ treeHead: HEAD });
+    const res = await mirasimWorkerDone({
+      ...reworkArgs(rig),
+      gh: fakeGh({ reviews: [{ state: 'CHANGES_REQUESTED' }] }),
+      registry: {
+        read() { return rec; },
+        write() { return { ok: true }; },
+      },
+      pr: '1208',
+      round: 'rework',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.stage, 'registry');
+    assert.equal(rig.calls.start.length, 0, '登记没查成不许再起一个审官');
+    assert.equal(rig.calls.ensure.length, 0);
   });
 });
 

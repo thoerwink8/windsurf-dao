@@ -1566,7 +1566,7 @@ import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
-  decideReviewerCreateStart, runLockedReviewerCreate,
+  decideReviewerCreateStart, decideReworkReviewerHandoff, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -1799,6 +1799,11 @@ async function cmdReviewerCreateMirasim(args) {
   // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
   // #1024：键是仓+PR，跨仓同号不复用别仓的会话。
   const existing = registry.read(args.pr, ownerName);
+  if (existing && existing.ok !== true && existing.missing !== true) {
+    fail(`审官登记没查成，不起第二个审官：${existing.why || '没给原因'}`, {
+      executor: 'mirasim', stage: 'registry', pr: String(args.pr),
+    });
+  }
   const existingRecord = existing.ok ? existing.record : null;
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
@@ -1838,6 +1843,16 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr, ownerName);
+    if (again && again.ok !== true && again.missing !== true) {
+      return {
+        res: {
+          ok: false,
+          stage: 'registry',
+          error: `锁内复查审官登记没查成，不起第二个审官：${again.why || '没给原因'}`,
+        },
+        w: null,
+      };
+    }
     const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
@@ -2003,8 +2018,8 @@ async function cmdWorkerDoneMirasim(args) {
   // 队列本身早就有（#815），但当初是给 Orca depth 2 限制做的**起败兜底**，Orca 已随 #1115
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
-  // 首审一律入队。返工：审官树还在才往原会话推针；树已按短命契约拆掉则同样入队，
-  // 不读不存在的 `dao-review-pr-<N>`（#1174：判定后立刻拆审官树）。
+  // 首审一律入队。返工：审官树还在才往原会话推针；确认登记不在或树已拆才入队。
+  // 登记没查成 fail-visible，不许当成树已拆去起第二个审官。
   const repo = targetRepo.localPath;
   const enqueueHandoff = async (why) => {
     const dir = reviewPendingDir({ root: ROOT });
@@ -2046,8 +2061,11 @@ async function cmdWorkerDoneMirasim(args) {
   }
   const rec = mirasimRegistry().read(String(plan.pr), targetRepo.ownerName || null);
   const reviewTree = rec && rec.ok && rec.record ? rec.record.treePath : null;
-  if (!reviewTree || !existsSync(String(reviewTree))) {
-    await enqueueHandoff('审官树已按短命契约拆掉，返工改入队由指挥官起新短命审官');
+  const treeExists = reviewTree ? existsSync(String(reviewTree)) : undefined;
+  const handoff = decideReworkReviewerHandoff({ rec, treeExists });
+  if (handoff.action === 'fail') fail(handoff.why, { ...plan, postedIssue, postedPr });
+  if (handoff.action === 'enqueue') {
+    await enqueueHandoff(handoff.why);
     return;
   }
 

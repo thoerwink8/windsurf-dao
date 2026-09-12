@@ -176,6 +176,53 @@ export function decideReviewerCreateStart({ force, switched, deadError, record, 
 }
 
 /**
+ * 返工交卷：审官树还在就复用原会话。
+ *
+ * 只有确认登记不存在、或登记在但树目录确认不在时才入队。
+ * 登记没查成（权限 / 临时 I/O / 坏 JSON）fail-visible，不许当成树已拆去起第二个审官。
+ *
+ *   action='reuse'    —— 登记可读且树目录还在，往原会话推针
+ *   action='enqueue'  —— 确认没有登记，或登记在但树目录确认不在
+ *   action='fail'     —— 登记没查成 / 树在不在没查成
+ */
+export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
+  if (!rec || rec.ok !== true) {
+    if (rec && rec.missing === true) {
+      return {
+        action: 'enqueue',
+        why: '审官登记确认不存在，返工改入队由指挥官起新短命审官',
+      };
+    }
+    return {
+      action: 'fail',
+      why: `审官登记没查成，返工不入队、不起新审官：${(rec && rec.why) || '没给原因'}`,
+    };
+  }
+  const treePath = rec.record && rec.record.treePath != null ? String(rec.record.treePath) : '';
+  if (!treePath) {
+    return {
+      action: 'enqueue',
+      why: '审官登记没有树路径，按已拆入队',
+    };
+  }
+  if (treeExists === true) {
+    return { action: 'reuse', treePath, why: '审官树还在，返工往原会话推针' };
+  }
+  if (treeExists === false) {
+    return {
+      action: 'enqueue',
+      treePath,
+      why: '审官树已按短命契约拆掉，返工改入队由指挥官起新短命审官',
+    };
+  }
+  return {
+    action: 'fail',
+    treePath,
+    why: `审官树 ${treePath} 在不在没查成，返工不入队、不起新审官`,
+  };
+}
+
+/**
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
  */
@@ -500,7 +547,8 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, j
     },
     read(pr, repo) {
       const place = loc(pr, repo);
-      if (!place.ok) return { ok: false, missing: true, why: place.error };
+      // 键都没做成 = 没查成，不是「文件确认不在」。
+      if (!place.ok) return { ok: false, missing: false, why: place.error };
       try {
         const t = readFile(place.path);
         const j = JSON.parse(t);
@@ -516,7 +564,16 @@ export function defaultReviewerRegistry({ readFile, writeFile, mkdir, readdir, j
         }
         return { ok: true, record: j, path: place.path };
       } catch (e) {
-        return { ok: false, missing: true, why: `没有 PR ${pr} 的审官会话登记：${String(e?.message || e)}` };
+        const code = e && e.code;
+        // 只有目录/文件确认不在才算 missing。EACCES、临时 I/O、坏 JSON 都是没查成。
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+          return { ok: false, missing: true, why: `没有 PR ${pr} 的审官会话登记` };
+        }
+        return {
+          ok: false,
+          missing: false,
+          why: `PR ${pr} 的审官会话登记没查成：${String(e && e.message || e)}`,
+        };
       }
     },
     write(pr, record) {
@@ -562,6 +619,13 @@ export async function mirasimWorkerDone({
   }
 
   const existing = registry.read(pr, ownerName);
+  if (existing && existing.ok !== true && existing.missing !== true) {
+    return {
+      ok: false,
+      stage: 'registry',
+      error: `审官登记没查成，不起第二个审官：${existing.why || '没给原因'}`,
+    };
+  }
   const record = existing.ok ? existing.record : null;
   const sessionKey = record && record.sessionKey ? String(record.sessionKey) : '';
 

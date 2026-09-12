@@ -122,6 +122,7 @@ import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
+import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
@@ -1255,42 +1256,23 @@ function checkEphemeralLifecycle() {
     try { return readFileSync(join(ROOT, rel), 'utf8'); }
     catch (e) { problems.push(`${rel} 读不了：${String(e && e.message || e).slice(0, 60)}`); return ''; }
   };
-  const gone = (rel) => existsSync(join(ROOT, rel));
-  const dao = read('scripts/dao.mjs');
-  const commander = read('scripts/commander.mjs');
-  const handoff = read('scripts/lib/handoff-check.mjs');
-  const miraReviewer = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
-  const miraSoldier = read('host/skills/dispatch/templates/soldier-book-mirasim.md');
-  const agents = read('AGENTS.md');
-  const nudgeInstall = read('scripts/install-nudge-stalled.sh');
-  const progressInstall = read('scripts/install-progress-watch.sh');
-  if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
-  if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
-  const core = read('scripts/lib/commander-core.mjs');
-  const admit = read('scripts/lib/admission.mjs');
-  const reap = read('scripts/lib/ephemeral-reap.mjs');
-  if (core && !/'reap-tree'/.test(core)) problems.push('指挥官动作表没有 reap-tree');
-  if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');
-  if (admit && !/capNewDispatchSlots/.test(admit)) problems.push('老单优先没有把新单槽位压到 1');
-  if (reap && !/planTreeReaps/.test(reap)) problems.push('清树判据 planTreeReaps 丢了');
-  if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
-  if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
-  if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');
-  if (miraReviewer && /pr merge/.test(miraReviewer)) problems.push('审官 mirasim 书还在教 pr merge');
-  if (miraSoldier && /按需起审官/.test(miraSoldier)) problems.push('士兵 mirasim 书还在教按需起审官');
-  if (handoff && !/merge:\s*\{\s*advisory:\s*\[[^\]]*['"]①['"]/.test(handoff.replace(/\s+/g, ' '))) {
-    problems.push('合并闸 ① 没标 advisory');
-  }
-  // 已删/退役路径：行里必须带「已删」字，否则交卷闸 ④ 把负向检查当成指向空气的指针。
-  if (gone('scripts/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 垫片还在仓里');
-  if (gone('scripts/lib/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 闸还在仓里');
-  if (gone('host/machine/systemd/dao-nudge-stalled.timer')) problems.push('已删的 nudge timer 单元还在仓里');
-  if (gone('host/machine/systemd/dao-progress-watch.timer')) problems.push('已删的 progress-watch timer 单元还在仓里');
-  if (nudgeInstall && !/disable --now dao-nudge-stalled/.test(nudgeInstall)) problems.push('nudge 安装脚本没改成卸载');
-  if (progressInstall && !/disable --now dao-progress-watch/.test(progressInstall)) problems.push('progress-watch 安装脚本没改成卸载');
-  if (!gone('scripts/land.mjs') || !gone('scripts/close-issues.mjs')) {
-    problems.push('land / close-issues 旁路脚本丢了');
-  }
+  const files = {
+    dao: read('scripts/dao.mjs'),
+    commander: read('scripts/commander.mjs'),
+    handoff: read('scripts/lib/handoff-check.mjs'),
+    miraReviewer: read('host/skills/dispatch/templates/reviewer-book-mirasim.md'),
+    miraSoldier: read('host/skills/dispatch/templates/soldier-book-mirasim.md'),
+    agents: read('AGENTS.md'),
+    nudgeInstall: read('scripts/install-nudge-stalled.sh'),
+    progressInstall: read('scripts/install-progress-watch.sh'),
+    core: read('scripts/lib/commander-core.mjs'),
+    admit: read('scripts/lib/admission.mjs'),
+    reap: read('scripts/lib/ephemeral-reap.mjs'),
+  };
+  problems.push(...inspectEphemeralLifecycleSources({
+    files,
+    exists: (rel) => existsSync(join(ROOT, rel)),
+  }));
   if (problems.length) {
     fail(`短命会话闸红 ${problems.length} 处`, 'done_when 是机器可算的事实，红了就还没完', problems.slice(0, 6).join('；'));
     return;

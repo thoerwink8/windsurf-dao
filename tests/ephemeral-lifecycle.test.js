@@ -40,7 +40,7 @@ describe('ephemeral-lifecycle', () => {
     assert.match(dao, /stopSessionsAtCwd/);
     const i = dao.indexOf('async function cmdWorkerDoneMirasim');
     const body = dao.slice(i, i + 14000);
-    assert.match(body, /审官树已按短命契约拆掉/);
+    assert.match(body, /decideReworkReviewerHandoff/);
     assert.match(body, /existsSync\(String\(reviewTree\)\)/);
     const mira = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
     assert.doesNotMatch(mira, /pr merge/);
@@ -78,6 +78,48 @@ describe('ephemeral-lifecycle', () => {
   it('land / close-issues 仍是旁路脚本', () => {
     assert.equal(existsSync(join(REPO, 'scripts/land.mjs')), true);
     assert.equal(existsSync(join(REPO, 'scripts/close-issues.mjs')), true);
+  });
+
+  it('现役源码过短命会话闸；去掉 reap-tree / execReapTree / capNewDispatchSlots 翻红', async () => {
+    const { inspectEphemeralLifecycleSources } = await import(
+      'file://' + join(REPO, 'scripts/lib/ephemeral-lifecycle-check.mjs').replace(/\\/g, '/')
+    );
+    const files = {
+      dao: read('scripts/dao.mjs'),
+      commander: read('scripts/commander.mjs'),
+      handoff: read('scripts/lib/handoff-check.mjs'),
+      miraReviewer: read('host/skills/dispatch/templates/reviewer-book-mirasim.md'),
+      miraSoldier: read('host/skills/dispatch/templates/soldier-book-mirasim.md'),
+      agents: read('AGENTS.md'),
+      nudgeInstall: read('scripts/install-nudge-stalled.sh'),
+      progressInstall: read('scripts/install-progress-watch.sh'),
+      core: read('scripts/lib/commander-core.mjs'),
+      admit: read('scripts/lib/admission.mjs'),
+      reap: read('scripts/lib/ephemeral-reap.mjs'),
+    };
+    const exists = (rel) => existsSync(join(REPO, rel));
+    assert.deepEqual(inspectEphemeralLifecycleSources({ files, exists }), []);
+
+    const checkSrc = read('scripts/dao-check.mjs');
+    assert.match(checkSrc, /inspectEphemeralLifecycleSources/);
+
+    const noKind = inspectEphemeralLifecycleSources({
+      files: { ...files, core: files.core.replace(/'reap-tree'/g, "'nope-tree'") },
+      exists,
+    });
+    assert.equal(noKind.includes('指挥官动作表没有 reap-tree'), true, JSON.stringify(noKind));
+
+    const noExec = inspectEphemeralLifecycleSources({
+      files: { ...files, commander: files.commander.replace(/execReapTree/g, 'execGoneTree') },
+      exists,
+    });
+    assert.equal(noExec.includes('指挥官没有清树执行函数'), true, JSON.stringify(noExec));
+
+    const noCap = inspectEphemeralLifecycleSources({
+      files: { ...files, admit: files.admit.replace(/capNewDispatchSlots/g, 'capGoneSlots') },
+      exists,
+    });
+    assert.equal(noCap.includes('老单优先没有把新单槽位压到 1'), true, JSON.stringify(noCap));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {
