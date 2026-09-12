@@ -31,7 +31,7 @@
 - [x] `reviewer-create` / `worker-done` 先打标，再只读 PR label
 - [x] 删四处反推层（`collectIssueLabelsFromPr` / 宿主前缀兜底 / `uniqueNames` / 第二份 `linkedIssueNumbers`）
 - [x] 文档不再教「从 issue 抄 label」
-- [x] 测试 + dao-check + handoff-check
+- [x] 测试 + dao-check + `node scripts/handoff-check.mjs`（记录见下）
 - [x] 跟上 origin/master（#1109/#1106/#1015/#1107 + 两笔巡检观察）；合入后探针单元补 #792 凭据隔离
 - [x] 本轮解冲突：ready-queue-check 保留本单 re-export `linkedIssueNumbers`，吃下 #966 「将来某版」跳过
 - [x] 本轮跟上 origin/master（#1144 快马返工建树 + gpt 族 direct 路由 + 西瓜清单 2026-09-08 拍板）；共享 objects 属主混 root/orca，走 GIT_OBJECT_DIRECTORY + pack 迁回
@@ -62,6 +62,28 @@
 - [x] 本轮跟上 origin/master（#1197 控制面闸接到现役 git push 路径）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1165 +2 叠成 153。选型路仍只读 PR label。
 - [x] 返工（审官红 3）：缺 reviewer 打标 fail-visible；匹配键改仓+分支；identity 必须是工人。
 - [x] 返工（审官红 4）：差集重派只读对应 PR 的 model/reviewer/type，找不到 PR 或标签不齐走人工补标，不回退 issue；`pickWorkerDispatchByBranch` 取仓+分支最新一条再校验，后写残缺/身份非法不得回退旧完整记录。
+- [x] 返工（审官红 5）：补独立 `## 回流`；正文贴字面命令 `node scripts/handoff-check.mjs` 及输出末行。
+
+### handoff-check 真实输出
+
+`node scripts/handoff-check.mjs` → `判定：通（3 通 / 0 红 / 0 没查成）——可以交卷`
+
+工人树 `dao-1116` 交卷档全文（① 只报不判，归合并闸 #1117）：
+
+```
+交卷闸：dao-1116 vs origin/master（已拉远端）
+  ✓  ② 相对 master 零删除 —— 相对 origin/master 零删除
+  ✓  ④ 本分支新写的仓内指针都存在 —— 新增 1592 行里的 28 条仓内路径指针都真实存在
+  ✓  ⑤ 自证基线＝审官所见 —— 工作区干净，本地与 origin/dao-1116 同点（9f6ad35）
+
+合并前还要过的（查了，但不进本次判定）：
+  X  ① 基底含最新 master —— 本树切自旧 origin/master：差 2 个提交、涉及 3 个文件。
+      ↑ 归合并闸：`node scripts/handoff-check.mjs --gate merge`。不挡交卷，也不该被审官拿来判红（#1117）。
+
+判定：通（3 通 / 0 红 / 0 没查成）——可以交卷
+```
+
+推送本轮正文后再跑一次，末行仍须是这一句。
 
 ## 机制判定
 
@@ -70,3 +92,9 @@
 制度生效前还会再犯吗？**会**——只要还从 issue 反推，每个重建点都会再出一次「这是个新 bug」。本单删掉这一层：决定写一次、消费方读同一处、读不到就拒。不留「PR 上没有就回退去读 issue」的兼容回退。
 
 过渡：现有 open PR 需补打一次标签。`dao pr-sync-labels` 只在账本工人 `job.dispatch` 同时有仓、分支、model、reviewer，且 `identity` 是工人时才打齐；缺任一字段当场失败并说「需人工打标」，不许报成功留下一张仍不可选型的 PR。账本没有完整记录的，手动 `gh pr edit <N> --add-label model/<id> --add-label reviewer/<id> --add-label type/<类>`。
+
+## 回流
+
+- 产物：仓 + 分支直接键（`pickWorkerDispatchByBranch`）和缺字段 fail-visible；差集侧配套 `correspondingPrForRedispatch`（仓 + PR 号，跨仓同号不套本仓 PR）。
+- 为什么通用：① 工人交卷打标（`scripts/lib/dispatch/worker-done.mjs`：按仓+分支取最新 `job.dispatch`，缺 repo / identity / model / reviewer 当场失败并说需人工打标）；② 指挥官差集重派（`scripts/lib/commander-core.mjs`：按仓匹配对应开放 PR，只读该 PR 的 model/reviewer/type，找不到或标签不齐走人工补标）。两个入口共用「写一次、读同一处、读不到就拒」，不是只服务一个调用点。
+- 建议落点：留原仓 `scripts/lib/dispatch/worker-done.mjs` + `scripts/lib/commander-core.mjs`（已经是两个消费侧入口）。
