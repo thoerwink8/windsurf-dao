@@ -78,6 +78,7 @@ export function judgeLease(lease, { sessionState = null, sessionsScanned = false
  */
 export function judgeRegistryStuck(record, { sessionState = null, sessionsScanned = false, graceMin = DEFAULT_LEASE_GRACE_MIN, now = Date.now() } = {}) {
   const key = String(record?.sessionKey || record?.recordKey || '(没有 key)');
+  if (record?.hasLiveProcess === true) return { verdict: 'keep', why: `${key} 有活进程` };
   const st = String(record?.state || '');
   // 不再手打状态清单：读挡人侧同一句话。它说不挡，就没有回收的理由。
   if (!blocksWorktree(st)) return { verdict: 'keep', why: `${key} 状态 ${st || '空'} 已经不挡工作树了` };
