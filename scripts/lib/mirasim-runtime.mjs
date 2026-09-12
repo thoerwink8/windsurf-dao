@@ -201,6 +201,21 @@ export function withRealExecutorEnv(env = process.env) {
 }
 
 /**
+ * 工人会话里跑的生产入口（worker-done / reviewer-create）给本进程打旗。
+ * 测试信号在则不打——不许从测试里选择加入。空/瘦 env 打旗：这正是工人 mirasim
+ * 会话 spawn dao.mjs 的形态（没有 NODE_TEST_CONTEXT，也没有指挥官代打的旗）。
+ * dispatch / worktree-create 不许调：那是 #565 假会话泄漏面。
+ */
+export function enableRealExecutorUnlessTest(env = process.env) {
+  const e = env && typeof env === 'object' ? env : {};
+  const isolation = judgeTestExecutorIsolation(e);
+  if (isolation.why === 'test-signal') return { ok: false, stamped: false, isolation };
+  if (isolation.ok) return { ok: true, stamped: false, isolation };
+  e[REAL_EXECUTOR_ENV] = '1';
+  return { ok: true, stamped: true, isolation: judgeTestExecutorIsolation(e) };
+}
+
+/**
  * 是否允许碰真执行体（#1152）。纯函数，只吃 env。allowlist：
  *
  * - 默认拦。子进程 env 整份换成瘦对象（执行体 env 丢失）也拦——这正是 2026-09-08

@@ -265,7 +265,7 @@ import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
 } from './lib/executor-binding.mjs';
-import { judgeTestExecutorIsolation } from './lib/mirasim-runtime.mjs';
+import { judgeTestExecutorIsolation, enableRealExecutorUnlessTest } from './lib/mirasim-runtime.mjs';
 import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
 
 
@@ -1751,6 +1751,7 @@ async function readReviewerDeathNote(runtime, args, ownerName) {
 }
 
 async function cmdReviewerCreateMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('reviewer-create 要 --pr');
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'reviewer', where: 'reviewer-create', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
@@ -1931,6 +1932,7 @@ async function cmdReviewerCreateMirasim(args) {
 }
 
 async function cmdWorkerDoneMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('worker-done 要 --pr');
   let body = args.body;
   if (args.bodyFile) {

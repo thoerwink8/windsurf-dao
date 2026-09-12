@@ -190,6 +190,16 @@ export function inspectIsolationWiring({ runtimeSrc, daoSrc, executionSrc, comma
       else if (create < 0) problems.push('cmdWorktreeCreateMirasim 找不到 worktreeCreate');
       else if (iso > create) problems.push('cmdWorktreeCreateMirasim 隔离闸必须在 worktreeCreate 前');
     }
+    const done = sliceFn(daoSrc, 'async function cmdWorkerDoneMirasim(', 'async function cmdStartMirasim(');
+    if (!done) problems.push('找不到 cmdWorkerDoneMirasim（没查成函数块）');
+    else if (!/enableRealExecutorUnlessTest\(/.test(done)) {
+      problems.push('cmdWorkerDoneMirasim 没给工人会话打 DAO_REAL_EXECUTOR（交卷起审官会被 allowlist 误拦）');
+    }
+    const rev = sliceFn(daoSrc, 'async function cmdReviewerCreateMirasim(', 'async function cmdWorkerDoneMirasim(');
+    if (!rev) problems.push('找不到 cmdReviewerCreateMirasim（没查成函数块）');
+    else if (!/enableRealExecutorUnlessTest\(/.test(rev)) {
+      problems.push('cmdReviewerCreateMirasim 没给本进程打 DAO_REAL_EXECUTOR');
+    }
   }
   if (executionSrc == null) problems.push('没给 execution-runtime.mjs 正文（没查成函数块）');
   else {

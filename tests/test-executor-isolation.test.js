@@ -47,6 +47,20 @@ test('allowlist：空 env / 瘦 env 拦；生产旗标放行；测试不能 opt-
   assert.equal(cannotOptIn.why, 'test-signal');
 });
 
+test('工人会话入口：无测试信号才打旗；测试信号不打', async () => {
+  const { enableRealExecutorUnlessTest, REAL_EXECUTOR_ENV } = await import(RUNTIME);
+  const testEnv = { NODE_TEST_CONTEXT: 'child' };
+  const blocked = enableRealExecutorUnlessTest(testEnv);
+  assert.equal(blocked.stamped, false);
+  assert.equal(testEnv[REAL_EXECUTOR_ENV], undefined);
+
+  const workerEnv = { PATH: '/bin' };
+  const stamped = enableRealExecutorUnlessTest(workerEnv);
+  assert.equal(stamped.stamped, true);
+  assert.equal(workerEnv[REAL_EXECUTOR_ENV], '1');
+  assert.equal(stamped.isolation.ok, true);
+});
+
 test('夹具红/绿/空有判别力', async () => {
   const { inspectTestExecutorIsolationFixtures } = await loadCheck();
   const r = inspectTestExecutorIsolationFixtures(join(HERE, 'fixtures', 'test-executor-isolation'));
