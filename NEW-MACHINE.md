@@ -335,7 +335,11 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 '{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs   # 应出 deny JSON、exit 0
 ```
 
-## 9d. Linux 服务器起 Orca 无头运行时（2026-08-24 拍板）
+## 9d. Linux 服务器起 Orca 无头运行时（已退役，#1150）
+
+**Orca 执行体已退役（2026-09-08 拍板，#1150 收尾）。新机不要照本节装 orca-serve / AppImage。**
+现役执行体是 mirasim；服务账号仍是 linux 用户 `orca`（`User=orca` / `/home/orca` 不在退役范围）。
+下面是 2026-08-24 当时的装机记录，只作回滚对照，不是现役步骤。
 
 拍板见 `docs/decisions/2026-08-24-linux-server-runtime-from-zero.md`：运行时搬 Linux 服务器，Windows 本机转人工派单。**下面每条都在 Ubuntu 24.04.4 + glibc 2.39 上真跑过**（orca 1.4.188 / Electron 43.1.0，AppImage 196MB，ready 契约 4～10s 出）。官方文档：`stablyai/orca` 的 `docs/reference/headless-linux-server.md`。
 
@@ -934,7 +938,7 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 
 派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.json 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
 
-派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
+派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-create --pr <N>`（主路 `review-pending-drain`）。`reviewer-attach` 已退役，调用即拒。
 
 同文件另外两道 PreToolUse 只注不拦（插件 `hooks.json` 那条路 2026-09-05 实证不响，所以跟派工闸一样挂随仓）：问人闸 `host/skills/ask-gate/hooks/ask-gate.mjs`（matcher 提问工具）、工具使用闸 `host/skills/tool-use-gate/hooks/tool-use-gate.mjs`（matcher `^Bash$`，#969：heredoc 吞转义 / `python` 是 stub）。验：
 

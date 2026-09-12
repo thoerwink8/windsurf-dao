@@ -179,7 +179,6 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
 describe('#1117 审官任务书不许拿 ① 当交卷红', () => {
   const BOOKS = [
     'host/skills/dispatch/templates/reviewer-book-mirasim.md',
-    'host/skills/dispatch/templates/reviewer-book.md',
     'host/skills/dispatch/review-standard.md',
   ];
   for (const rel of BOOKS) {
