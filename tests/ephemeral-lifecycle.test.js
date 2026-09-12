@@ -54,9 +54,11 @@ describe('ephemeral-lifecycle', () => {
     assert.match(brief, /soldier-book-mirasim\.md/);
   });
 
-  it('orca 任务书整页标退役', () => {
-    assert.match(read('host/skills/dispatch/templates/soldier-book.md'), /已退役/);
-    assert.match(read('host/skills/dispatch/templates/reviewer-book.md'), /已退役/);
+  it('orca 任务书已删', () => {
+    assert.equal(existsSync(join(REPO, 'host/skills/dispatch/templates/soldier-book.md')), false);
+    assert.equal(existsSync(join(REPO, 'host/skills/dispatch/templates/reviewer-book.md')), false);
+    assert.equal(existsSync(join(REPO, 'host/skills/dispatch/templates/soldier-inject.md')), false);
+    assert.equal(existsSync(join(REPO, 'host/skills/dispatch/templates/reviewer-inject.md')), false);
   });
 
   it('land / close-issues 仍是旁路脚本', () => {

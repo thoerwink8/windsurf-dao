@@ -142,11 +142,11 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     );
     assert.match(dispatch, /resolveMirasimRepoTarget\(/);
     assert.match(src, /function resolveMirasimRepoTarget[\s\S]*assertCrossRepoOrFail\(/);
-    assert.match(src, /function cmdReviewerAttach[\s\S]*assertCrossRepoOrFail/);
+    assert.match(src, /function cmdReviewerAttach[\s\S]*orca 已退役/);
     assert.match(src, /function cmdReviewPendingDrain[\s\S]*assertCrossRepoOrFail/);
     assert.match(src, /function cmdReviewerDone[\s\S]*assertCrossRepoOrFail/);
     assert.match(src, /function cmdReviewerDone[\s\S]*ghRunnerForTarget\(targetRepo, \{ role: 'reviewer' \}\)/);
-    assert.match(src, /if \(repo\) argv\.push\('--repo'/);
+    assert.match(src, /if \(ghRepo && !argv\.includes\('--repo'\)\) argv\.push\('--repo'/);
     const reviewer = src.slice(
       src.indexOf('async function cmdReviewerCreateMirasim'),
       src.indexOf('async function cmdWorkerDoneMirasim'),

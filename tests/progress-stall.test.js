@@ -444,7 +444,7 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
 });
 
 describe('commander-inventory 退役：stale-pr 被推进量覆盖', () => {
-  it('源码不再跑超龄 PR 那一项；其余 7 项还在', () => {
+  it('源码不再跑超龄 PR 那一项；其余项还在，inbox 也在', () => {
     const src = fs.readFileSync(INV, 'utf8');
     assert.doesNotMatch(src, /function checkStalePrs/);
     assert.doesNotMatch(src, /key: 'stale-pr'/);
@@ -455,5 +455,6 @@ describe('commander-inventory 退役：stale-pr 被推进量覆盖', () => {
     assert.match(src, /landing-empty/);
     assert.match(src, /stale-running/);
     assert.match(src, /pending-surface/);
+    assert.match(src, /function checkInbox/);
   });
 });

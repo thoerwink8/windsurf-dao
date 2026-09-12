@@ -193,102 +193,28 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(mira.includes('assertDispatchInjectPlan('), 'cmdDispatchMirasim 缺注入闸');
     });
 
-    // 执行体段 = runDispatchExecution 本体（到 cmdDispatchBatch 为止）。
-    const xi = daoSrc.indexOf('function runDispatchExecution(');
-    const xj = daoSrc.indexOf('function cmdDispatchBatch(');
-    assert.ok(xi > 0 && xj > xi, '执行体段定位');
-    const seg = daoSrc.slice(xi, xj);
-    await t.test('执行体段保留：消歧门 / 账本查重 / 队列查重 / git 身份 / 送字 / 失败回滚 / 事后 label / 记账', () => {
-      for (const sym of ['checkIssueDisambiguated', 'precheckDispatchDup', 'precheckQueueDup',
-        'applyGitIdentity', 'startOrcaWorker', 'failCreated', 'stampIssueLabels', 'writeJobDispatch']) {
-        assert.ok(new RegExp(`\\b${sym}\\b`).test(seg), `执行体段缺 ${sym}`);
+    await t.test('#1150 orca 异步派工脊已删', () => {
+      for (const sym of ['function runDispatchExecution(', 'function startOrcaWorker(',
+        'function startWorkerBySlate(', 'function failCreated(', 'function bindStation(']) {
+        assert.ok(!daoSrc.includes(sym), `dao.mjs 不该再有 ${sym}`);
       }
     });
-    await t.test('执行体段删净：同厂闸 / 环境自检 / 同步看板 / gc 顺车', () => {
-      for (const sym of ['filterSlateSameVendor', 'assertCrossVendor', 'envProbeWorktree',
-        'rewriteMasterZone', 'afterDispatchComment', 'runGcReadonlyScan', 'gcThresholdLine', 'launchedGate']) {
-        assert.ok(!new RegExp(`\\b${sym}\\b`).test(seg), `执行体段不该再有 ${sym}`);
-      }
+    await t.test('dispatch-exec / batch 是退役 stub，点名 orca 必须拒', () => {
+      const ei = daoSrc.indexOf('async function cmdDispatchExec(');
+      const bi = daoSrc.indexOf('function cmdDispatchBatch(');
+      assert.ok(ei > 0, '找得到 cmdDispatchExec');
+      assert.ok(bi > ei, 'cmdDispatchBatch 在 cmdDispatchExec 之后');
+      const eseg = daoSrc.slice(ei, bi);
+      const bseg = daoSrc.slice(bi, daoSrc.indexOf('function cmdPrSyncLabels('));
+      assert.match(eseg, /orca 已退役/);
+      assert.match(bseg, /orca 已退役/);
+      assert.ok(!/runDispatchExecution\(/.test(eseg), 'dispatch-exec 不得再调 orca 执行体');
     });
-    await t.test('#831 执行体段：同一道注入闸在建卡之前（防绕过热路直接 dispatch-exec）', () => {
-      const gateAt = seg.indexOf('assertDispatchInjectPlan(');
-      const createAt = seg.indexOf('argsWorktreeCreate(');
-      assert.ok(gateAt > 0, '执行体缺 assertDispatchInjectPlan');
-      assert.ok(createAt > gateAt, '执行体注入闸必须在 argsWorktreeCreate 之前');
-      assert.ok(/buildSoldierInject\(/.test(seg), '执行体仍走 buildSoldierInject（闸在模板纯函数里，不是抄第二份）');
-    });
-    await t.test('执行体段：两道查重与消歧门都在建卡之前（拦截不碰 orca）', () => {
-      assert.ok(seg.indexOf('precheckDispatchDup(') > 0
-        && seg.indexOf('precheckDispatchDup(') < seg.indexOf('argsWorktreeCreate('),
-        'precheckDispatchDup 必须在 argsWorktreeCreate 之前');
-      assert.ok(seg.indexOf('precheckQueueDup(') > 0
-        && seg.indexOf('precheckQueueDup(') < seg.indexOf('argsWorktreeCreate('),
-        'precheckQueueDup 必须在 argsWorktreeCreate 之前');
-      assert.ok(seg.indexOf('checkIssueDisambiguated(') > 0
-        && seg.indexOf('checkIssueDisambiguated(') < seg.indexOf('argsWorktreeCreate('),
-        '消歧门必须在建卡之前');
-      assert.ok(/dup\.blocked/.test(seg) && /queueDup\.blocked/.test(seg) && /args\.allowDup/.test(seg),
-        '两道命中都要有 blocked 拦截与 allowDup 入参');
-      assert.ok(/--allow-dup/.test(daoSrc), '拦截话面要指 --allow-dup 逃生口');
-    });
-    await t.test('执行体段：startOrcaWorker 后无开工验证，带「已派未确认」话面', () => {
-      assert.ok(!/finishWorkerInject|verifyStartedPolling|workerStartProof/.test(seg),
-        '执行体段不该再有开工验证轮询');
-      assert.ok(/已派，未确认/.test(seg) && /startOrcaWorker\(/.test(seg),
-        '执行体要有 fire-and-forget 话面');
-    });
-    await t.test('执行体段：显式 --model 不打分（live:false），bans 门闩仍过滤回退链', () => {
-      assert.ok(/live:\s*!gate\.model/.test(seg), '执行体选型打分只在 --role 路（live:!gate.model）');
-      assert.ok(/bans\.yml/.test(seg) && /checkGates\(/.test(seg), '显式 --model 的 bans 过滤要在执行体');
-    });
-    await t.test('dispatch-exec 入口：读派工单 + 结果槽 + running 标记 + 崩溃补结果', () => {
-      const ei = daoSrc.indexOf('function cmdDispatchExec(');
-      const ej = daoSrc.indexOf('function precheckQueueDup(');
-      assert.ok(ei > 0 && ej > ei, 'cmdDispatchExec 段定位');
-      const eseg = daoSrc.slice(ei, ej);
-      assert.ok(/readDispatchOrder\(/.test(eseg) && /setDispatchResultSink\(/.test(eseg)
-        && /runDispatchExecution\(/.test(eseg) && /installDispatchExecCrashGuard\(/.test(eseg),
-        'cmdDispatchExec 要读单、设结果槽、跑执行体、装 crash guard');
-      assert.ok(/crashed:\s*true/.test(daoSrc) && /SIGTERM/.test(daoSrc),
-        '崩溃补 crashed 结果（含 SIGTERM trap）');
-      assert.ok(/withWorktreeLockSync\(/.test(daoSrc), '建树段必须 flock/互斥锁串行（#849）');
-    });
-    await t.test('dispatch-exec 动词注册进路由与参数表', () => {
+    await t.test('dispatch-exec 动词仍注册（调用即拒，不留第三态）', () => {
       assert.ok(/case 'dispatch-exec': return cmdDispatchExec\(args\)/.test(daoSrc),
         'dao.mjs 路由缺 dispatch-exec');
-      const libSrc = fs.readFileSync(DAO, 'utf8');
-      assert.ok(/'dispatch-exec'/.test(libSrc) && libSrc.includes("'--order'"),
-        'dao-cmd.mjs 的 VERBS/FLAGS_BY_VERB 缺 dispatch-exec --order');
     });
-    await t.test('cmdDispatchBatch 段：startWorker 无注入后验证，同样删净四层', () => {
-      const bi = daoSrc.indexOf('function cmdDispatchBatch(');
-      const bj = daoSrc.indexOf('function cmdPrSyncLabels(');
-      assert.ok(bi > 0 && bj > bi, 'cmdDispatchBatch 段定位');
-      const bseg = daoSrc.slice(bi, bj);
-      assert.ok(!/verifyStartedPolling|waitAndVerify/.test(bseg),
-        'cmdDispatchBatch 段不该再有就绪探针/开工验证');
-      for (const sym of ['envProbeWorktree', 'runGcReadonlyScan', 'afterDispatchComment', 'rewriteMasterZone']) {
-        assert.ok(!new RegExp(`\\b${sym}\\b`).test(bseg), `cmdDispatchBatch 段不该再有 ${sym}`);
-      }
-    });
-    await t.test('startWorkerBySlate 段：terminal create 成功即收，不就绪探针', () => {
-      const si = daoSrc.indexOf('function startWorkerBySlate(');
-      const sj = daoSrc.indexOf('function readOnceHandle(');
-      assert.ok(si > 0 && sj > si, 'startWorkerBySlate 段定位');
-      const sseg = daoSrc.slice(si, sj);
-      assert.ok(!/waitAndVerify/.test(sseg), 'startWorkerBySlate 不该再有 waitAndVerify');
-      assert.ok(/kind: 'deferred'/.test(sseg), '#802 成功 agent 路也要记 launchAttempt');
-    });
-    await t.test('#802 startOrcaWorker 按 agentIdentity 校准 handle，不是旧开工验证', () => {
-      const si = daoSrc.indexOf('function startOrcaWorker(');
-      const sj = daoSrc.indexOf('function startWorkerBySlate(');
-      assert.ok(si > 0 && sj > si, 'startOrcaWorker 段定位');
-      const sseg = daoSrc.slice(si, sj);
-      assert.ok(/planDeferredRepair\(/.test(sseg), 'startOrcaWorker 要校准注入目标且缺 book fail-loud');
-      assert.ok(!/finishWorkerInject|verifyStartedPolling/.test(sseg),
-        '校准不是把开工验证轮询请回来');
-    });
-    await t.test('runGcReadonlyScan 函数本体已删（gc 顺车整层删，手动走 run-gc）', () => {
+    await t.test('runGcReadonlyScan 函数本体已删（gc 顺车整层删）', () => {
       assert.ok(!/function runGcReadonlyScan/.test(daoSrc), 'dao.mjs 不该再有 runGcReadonlyScan');
     });
   });
@@ -555,7 +481,7 @@ describe('dispatch-launch（async-launch）', () => {
 
   it('#831 注入闸前移到热路：超长 --spec 当场非零，一棵树都不建', async (t) => {
     const S = await S_LOAD;
-    const prefix = '读 host/skills/dispatch/templates/soldier-book.md spec=';
+    const prefix = '读 host/skills/dispatch/templates/soldier-book-mirasim.md spec=';
     const prefixBytes = S.injectUtf8Bytes(prefix);
     const over = 'x'.repeat(S.INJECT_MAX_BYTES - prefixBytes + 1);
 

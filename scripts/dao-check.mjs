@@ -185,7 +185,6 @@ import {
   inspectMarshalSelfMerge, inspectMarshalSelfMergeFixtures,
   MARSHAL_SELFMERGE_BASELINE_PR,
 } from './lib/marshal-selfmerge-check.mjs';
-import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
@@ -195,6 +194,9 @@ import {
   inspectIsolationWiring,
 } from './lib/test-executor-isolation-check.mjs';
 import { readBranchProtection } from './lib/branch-protection-io.mjs';
+import {
+  checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
+} from './lib/retired-verb-advert-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -1114,51 +1116,8 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 const PENDING_BOARD_MAX_DEFAULT = 5;
 const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
 
-// ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
-//
-// 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
-// ——global-CLAUDE.md 写着「每轮由全局 hook 提醒」，两个 settings.json 里一个 inbox 字样都没有，
-// 所以那两条 open 的 observation 躺了一天没人管。文档说有、实际没有，又一次「上游就绪≠下游执行」。
-//
-// 更根本的问题是载体选错了：UserPromptSubmit 是 Claude Code 独有的，而执行体已经全在 mirasim 上
-// （codex / pi 会话根本没有这种 hook）。把「会不会被读到」押在某一个客户端的钩子上，
-// 换个执行体就静默失效。
-//
-// 所以挪到 dao-check：它是帅位每次 land 的必经之路，与客户端无关。判据复用 inbox.mjs 的
-// assessInbox（不另造第二套口径）：超时 / 堆积 / 未提交 → block 判红，否则只念一遍。
-function checkInbox() {
-  const dir = join(ROOT, 'docs', 'observations');
-  if (!existsSync(dir)) { green('收件箱：docs/observations 不在——本仓没这条通道'); return; }
-  let docs = [];
-  try {
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith('.md')) continue;
-      const p = join(dir, name);
-      const parsed = parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs });
-      if (parsed) docs.push(parsed);
-    }
-  } catch (e) {
-    fail('收件箱没查成', '读不了 docs/observations——不是「没有新东西」', String(e.message || e).slice(0, 80));
-    return;
-  }
-  // 未提交的最危险：落盘了但别的机器看不到，等于没写（这条通道的立身之本就是进 git）。
-  const st = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--', 'docs/observations'], { encoding: 'utf8', windowsHide: true });
-  const untracked = st.status === 0
-    ? String(st.stdout || '').split(/\r?\n/).filter(l => l.startsWith('??')).map(l => l.slice(3).trim()).filter(Boolean)
-    : [];
-  const assessed = assessInbox({ docs, untracked });
-  if (assessed.unscanned) { fail('收件箱没查成', assessed.lines.join('；'), ''); return; }
-  if (assessed.mode === 'block') {
-    fail(`收件箱要先处置：${assessed.pending.length} 条未处置（超时 ${assessed.overdue.length}，未提交 ${untracked.length}）`,
-      '每条落成 issue、或文件里加一行「处置：<结论>」、或 status 标 wontfix 加理由；未提交的先 git add',
-      assessed.lines.slice(0, 3).join('；'));
-    return;
-  }
-  if (assessed.mode === 'notice') {
-    for (const l of assessed.lines) notes.push(`收件箱：${l}`);
-  }
-  green(`收件箱：对照 ${docs.length} 条，未处置 ${assessed.pending.length}`);
-}
+// 收件箱不在 dao-check。#1171：这条检查只在 land 推默认分支时才跑，机器上没人定时唤它，
+// 不是帅位会看见的腿。现役挂载面是指挥官盘点 commander-inventory（每 6 小时）。
 
 // ── 西瓜清单（2026-09-06）─────────────────────────────────────────────────────
 //
@@ -1366,6 +1325,29 @@ function checkOrcaRetirement() {
     return;
   }
   green('orca 产品面已清（无 spawn orca / 无 orca-serve 单元 / 无整段删脊）');
+}
+
+// ── 现役帮助不许宣传已退役入口（#1150 审官红 2）────────────────────────
+// USAGE / 派工手册 / 指挥官任务书再把 reviewer-attach、notify、send、
+// dispatch-exec、dispatch --batch、terminal send 写成可照抄路径就会把操作者引到死路。
+// 夹具红/绿/空验判别力；0 个现役文件 = 没查成。
+function checkRetiredVerbAdvertSamples() {
+  const r = inspectRetiredVerbAdvertFixtures(join(ROOT, 'tests', 'fixtures', 'retired-verb-advert'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '退役入口宣传闸样本没查成' : '退役入口宣传闸样本对不上',
+      '恢复 tests/fixtures/retired-verb-advert/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`退役入口宣传闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkRetiredVerbAdvertLive() {
+  const r = checkRetiredVerbAdvert({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
 }
 
 // ── 补丁链层数闸（memory patch-stacking-is-two-strikes 的 gate）──────────────
@@ -1912,13 +1894,14 @@ checkLegCaps();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
-checkInbox();
 checkRepoOwnership();
 checkGitOwnershipSamples();
 checkGitOwnershipLive();
 checkInitiatives();
 checkEphemeralLifecycle();
 checkOrcaRetirement();
+checkRetiredVerbAdvertSamples();
+checkRetiredVerbAdvertLive();
 checkChainDepth();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');

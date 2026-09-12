@@ -75,11 +75,11 @@ describe('dao 闭环投递与结算', () => {
       { hop: '审官→士兵(dispatch)', live: { to: `dispatch:${LIVE_DISPATCH}` }, dead: { to: `dispatch:${DEAD_DISPATCH}` } },
     ];
     for (const h of HOPS) {
-      const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, exec: fakeOrca(), orca: fakeOrca() });
       await t.test(`${h.hop}：收件人在 → 放行并给消息 id`, () => {
         assert.ok(good.ok === true && /^msg_/.test(good.messageId || ''), `${h.hop}：收件人在 → 放行并给消息 id  →  ` + JSON.stringify(good));
       });
-      const bad = S.deliverMessage({ ...h.dead, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      const bad = S.deliverMessage({ ...h.dead, subject: '完工', hop: h.hop, exec: fakeOrca(), orca: fakeOrca() });
       await t.test(`${h.hop}：故意错 handle → 拦下`, () => {
         assert.ok(bad.ok === false && bad.stage === '收件人', `${h.hop}：故意错 handle → 拦下  →  ` + JSON.stringify(bad));
       });
@@ -88,27 +88,27 @@ describe('dao 闭环投递与结算', () => {
       });
     }
 
-    const dropped = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxDrops: true }) });
+    const dropped = S.deliverMessage({ to: LIVE, subject: 'x', exec: fakeOrca({ inboxDrops: true }), orca: fakeOrca({ inboxDrops: true }) });
     await t.test('回执给了 id 但编排里查不到 → 拦下', () => {
       assert.ok(dropped.ok === false && dropped.stage === '复核', '回执给了 id 但编排里查不到 → 拦下  →  ' + JSON.stringify(dropped));
     });
 
-    const unscanned = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxBroken: true }) });
+    const unscanned = S.deliverMessage({ to: LIVE, subject: 'x', exec: fakeOrca({ inboxBroken: true }), orca: fakeOrca({ inboxBroken: true }) });
     await t.test('复核一条样本都没扫到 → 标 unscanned 且非 ok（没查成 ≠ 查过没事）', () => {
       assert.ok(unscanned.ok === false && unscanned.unscanned === true, '复核一条样本都没扫到 → 标 unscanned 且非 ok（没查成 ≠ 查过没事）  →  ' + JSON.stringify(unscanned));
     });
 
-    const noReceipt = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ sentMissingId: true }) });
+    const noReceipt = S.deliverMessage({ to: LIVE, subject: 'x', exec: fakeOrca({ sentMissingId: true }), orca: fakeOrca({ sentMissingId: true }) });
     await t.test('send 说成功却没回执 → 拦下', () => {
       assert.ok(noReceipt.ok === false && noReceipt.stage === '回执', 'send 说成功却没回执 → 拦下  →  ' + JSON.stringify(noReceipt));
     });
 
-    const wrong = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ misroute: 'term_someone-else' }) });
+    const wrong = S.deliverMessage({ to: LIVE, subject: 'x', exec: fakeOrca({ misroute: 'term_someone-else' }), orca: fakeOrca({ misroute: 'term_someone-else' }) });
     await t.test('回执收件人与请求不一致（错投）→ 拦下', () => {
       assert.ok(wrong.ok === false && /错投/.test(wrong.error), '回执收件人与请求不一致（错投）→ 拦下  →  ' + JSON.stringify(wrong));
     });
 
-    const noRun = S.deliverMessage({ subject: 'x', orca: fakeOrca() });
+    const noRun = S.deliverMessage({ subject: 'x', exec: fakeOrca(), orca: fakeOrca() });
     await t.test('省略收件人但没绑 Run → 拦下（发进真空）', () => {
       assert.ok(noRun.ok === false && /真空/.test(noRun.error), '省略收件人但没绑 Run → 拦下（发进真空）  →  ' + JSON.stringify(noRun));
     });
@@ -145,7 +145,7 @@ describe('dao 闭环投递与结算', () => {
       to: `dispatch:${DONE_DISPATCH}`,
       subject: '红项',
       hop: '士兵→审官(dispatch)',
-      orca: fakeOrca(),
+      exec: fakeOrca(), orca: fakeOrca(),
     });
     await t.test('非审官→士兵 hop 已完工 dispatch → 非零，禁止当送达', () => {
       assert.ok(doneSendOther.ok === false && doneSendOther.stage === '收件人' && /已完工/.test(doneSendOther.error),
@@ -155,7 +155,7 @@ describe('dao 闭环投递与结算', () => {
       to: `dispatch:${DONE_DISPATCH}`,
       subject: '红项',
       hop: '审官→士兵(dispatch)',
-      orca: fakeOrca(),
+      exec: fakeOrca(), orca: fakeOrca(),
     });
     await t.test('#677 审官→士兵 已完工 → 失败，不开下一跳', () => {
       assert.ok(doneSendHop.ok === false && doneSendHop.stage === '收件人'
@@ -178,12 +178,12 @@ describe('dao 闭环投递与结算', () => {
       assert.ok(S.extractDispatchId({ id: 'rpc-123', result: {} }) === null, 'extractDispatchId 不认 RPC 顶层 id');
     });
 
-    const group = S.deliverMessage({ to: '@all', subject: 'x', orca: fakeOrca() });
+    const group = S.deliverMessage({ to: '@all', subject: 'x', exec: fakeOrca(), orca: fakeOrca() });
     await t.test('组播收件人 → 拒发（没人负责签收）', () => {
       assert.ok(group.ok === false && /组播/.test(group.error), '组播收件人 → 拒发（没人负责签收）  →  ' + JSON.stringify(group));
     });
 
-    const noSubject = S.deliverMessage({ to: LIVE, orca: fakeOrca() });
+    const noSubject = S.deliverMessage({ to: LIVE, exec: fakeOrca(), orca: fakeOrca() });
     await t.test('缺 subject → 拦下', () => {
       assert.ok(noSubject.ok === false && noSubject.stage === '参数', '缺 subject → 拦下  →  ' + JSON.stringify(noSubject));
     });
@@ -194,7 +194,7 @@ describe('dao 闭环投递与结算', () => {
       comment: '返工完成：PR #592\n\n已修红项',
       reviewerDispatchId: LIVE_DISPATCH,
       deliver: S.deliverMessage,
-      orca: fakeOrca(),
+      exec: fakeOrca(), orca: fakeOrca(),
     });
     await t.test('#586 返工走四关投递 notified.ok===true',
       () => {
@@ -221,53 +221,45 @@ describe('dao 闭环投递与结算', () => {
     await t.test('CLI notify 故意错 handle → 非零退出', () => {
       assert.ok(cliBad.status !== 0, 'CLI notify 故意错 handle → 非零退出  →  ' + `status=${cliBad.status} ${cliBad.stdout}`);
     });
-    await t.test('CLI notify 失败时 stderr 明说链断', () => {
-      assert.ok(/链断/.test(cliBad.stderr || ''), 'CLI notify 失败时 stderr 明说链断  →  ' + cliBad.stderr);
+    await t.test('CLI notify 失败时报 orca 已退役', () => {
+      const blob = `${cliBad.stderr || ''}\n${cliBad.stdout || ''}`;
+      assert.ok(/orca 已退役/.test(blob), 'CLI notify 失败时报 orca 已退役  →  ' + blob.slice(0, 240));
     });
 
-    const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
-    const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md'), 'utf8');
-    await t.test('士兵任务书问帅走 dao.mjs ask，并写 ASK_TIMEOUT', () => {
-      assert.ok(/dao\.mjs ask/.test(tmplSoldier) && /ASK_TIMEOUT/.test(tmplSoldier) && /run-current/.test(tmplSoldier), '士兵任务书问帅走 dao.mjs ask，并写 ASK_TIMEOUT');
+    const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book-mirasim.md'), 'utf8');
+    const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book-mirasim.md'), 'utf8');
+    await t.test('士兵任务书问帅不走 dao.mjs ask', () => {
+      assert.ok(/不要调 `node scripts\/dao\.mjs ask`/.test(tmplSoldier), '士兵任务书问帅不走 dao.mjs ask');
     });
-    await t.test('审官上报不用 run-current 当地址', () => {
-      assert.ok(/不要用 `run-current`/.test(tmplReviewer) && /worker-show/.test(tmplReviewer), '审官上报不用 run-current 当地址');
+    await t.test('审官判定落 GitHub review，不走 notify', () => {
+      assert.ok(/不发 `notify`/.test(tmplReviewer) || /不用 `notify`/.test(tmplReviewer), '审官判定落 GitHub review，不走 notify');
     });
     await t.test('士兵任务书完工走 dao.mjs worker-done（不是裸 orca send）', () => {
       assert.ok(/dao\.mjs worker-done/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), '士兵任务书完工走 dao.mjs worker-done（不是裸 orca send）  →  ' + tmplSoldier.slice(0, 200));
     });
-    await t.test('审官任务书发信走 dao.mjs notify（不是裸 orca send）', () => {
-      assert.ok(/dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), '审官任务书发信走 dao.mjs notify（不是裸 orca send）  →  ' + tmplReviewer.slice(0, 200));
+    await t.test('审官任务书不走 dao.mjs notify / 裸 orca send', () => {
+      assert.ok(/不发 `notify`/.test(tmplReviewer) || /不用 `notify`/.test(tmplReviewer), '审官任务书不走 notify  →  ' + tmplReviewer.slice(0, 200));
+      assert.doesNotMatch(tmplReviewer, /^\s*orca orchestration send/m, '审官书不含裸 orca send');
     });
-    await t.test('两份任务书都写明「确认送达才准进下一步」', () => {
-      assert.ok(/确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer), '两份任务书都写明「确认送达才准进下一步」');
+    await t.test('士兵任务书写明确认送达才算发完', () => {
+      assert.ok(/确认送达/.test(tmplSoldier), '士兵任务书写明确认送达才算发完');
     });
 
-    // 审官「可归档」仍是普通告知；结算另走 worker_done（#551）
-    const archiveBlock = tmplReviewer.slice(tmplReviewer.indexOf('### 3. 收尾'));
-    const marshalNotify = archiveBlock.match(/notify --hop "审官→帅"[\s\S]{0,280}?--body[^\n]*/);
-    await t.test('审官「可归档」notify 不带 --type worker_done（那是投递给帅）', () => {
-      assert.ok(marshalNotify && /--to run:/.test(marshalNotify[0]) && !/--type worker_done/.test(marshalNotify[0]),
-        '审官「可归档」notify 不带 --type worker_done（那是投递给帅）  →  ' + (marshalNotify && marshalNotify[0]));
+    await t.test('审官书禁止 notify --type worker_done', () => {
+      assert.ok(/不发 `--type worker_done`/.test(tmplReviewer) || /不要发 notify --type worker_done/.test(tmplReviewer),
+        '审官书禁止 worker_done 结算 notify');
     });
-    await t.test('审官结算走 notify --type worker_done 且带 task-id/dispatch-id', () => {
-      assert.ok(/--type worker_done/.test(archiveBlock) && /--task-id/.test(archiveBlock) && /--dispatch-id/.test(archiveBlock)
-        && /未结算/.test(archiveBlock) && /#551/.test(archiveBlock),
-        '审官结算走 notify --type worker_done 且带 task-id/dispatch-id  →  ' + archiveBlock.slice(0, 400));
+    await t.test('审官判定落 GitHub review', () => {
+      assert.match(tmplReviewer, /--approve/, '审官绿走 --approve');
+      assert.match(tmplReviewer, /--request-changes/, '审官红走 --request-changes');
     });
-    await t.test('审官任务书写明红项后也结算，复审轮走队列（#552/#815）', () => {
-      assert.ok(/inspect-only/.test(archiveBlock) && /复审轮走队列/.test(archiveBlock) && /#552/.test(archiveBlock),
-        '审官任务书写明红项后也结算，复审轮走队列（#552/#815）');
+    await t.test('审官红项走 GitHub --request-changes，不拼 task-create', () => {
+      assert.match(tmplReviewer, /--request-changes/, '审官红项走 --request-changes');
+      assert.match(tmplReviewer, /不要自己拼/, '审官不自己拼下一跳');
     });
-    await t.test('#675 审官任务书红项只跑 notify，不自己拼 task-create', () => {
-      assert.ok(/不要自己拼/.test(tmplReviewer) && /task-create/.test(tmplReviewer) && /不要开下一跳/.test(tmplReviewer),
-        '#675 审官任务书红项只跑 notify，不自己拼 task-create');
-    });
-    await t.test('#677 士兵任务书：交卷后身份继续活，判定绿才结算', () => {
-      assert.ok(/不要立刻/.test(tmplSoldier) && /判定绿/.test(tmplSoldier)
-        && /还活着/.test(tmplSoldier) && /#677/.test(tmplSoldier)
-        && !/新 Task 注入本终端/.test(tmplSoldier),
-        '#677 士兵任务书交卷不立刻结算  →  ' + tmplSoldier.slice(tmplSoldier.indexOf('不要立刻'), tmplSoldier.indexOf('不要立刻') + 180));
+    await t.test('士兵任务书判定绿由收口官落 APPROVED', () => {
+      assert.match(tmplSoldier, /判定绿/, '士兵书写判定绿');
+      assert.match(tmplSoldier, /APPROVED/, '判定绿由收口官落 APPROVED');
     });
     await t.test('#677 口径唯一落点在 SKILL；global 已不承载派工约定（2026-08-31 停派工归零）', () => {
       const global = fs.readFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), 'utf8');
@@ -278,10 +270,10 @@ describe('dao 闭环投递与结算', () => {
         && /判定绿/.test(skill) && /#677/.test(skill) && /派工时的常驻约定/.test(skill),
         '#677 口径唯一落点在 SKILL  →  global派工段=' + /## 派工时/.test(global) + ' skill判定绿=' + skill.includes('判定绿'));
     });
-    await t.test('notify 文档：普通投递 ≠ 结算；worker_done 才核 completed', () => {
-      assert.ok(/投递\*\*不是\*\*结算|普通 notify 验的是\*\*投递\*\*不是\*\*结算/.test(S.USAGE)
-        && /未结算/.test(S.USAGE) && /#551/.test(S.USAGE),
-        'notify 文档：普通投递 ≠ 结算；worker_done 才核 completed  →  ' + S.USAGE.slice(-500));
+    await t.test('USAGE 不再把 notify 写成可照抄入口', () => {
+      assert.match(S.USAGE, /notify[\s\S]*已退役/);
+      assert.doesNotMatch(S.USAGE, /^[ \t]+notify\s/m);
+      assert.match(S.USAGE, /GitHub 评论 \+ 飞书 hub/);
     });
     await t.test('deliverMessage 注释点明普通 ok:true ≠ 结算，worker_done 核 completed', () => {
       assert.ok(/不是结算/.test(deliverSrc) && /未结算/.test(deliverSrc) && /#551/.test(deliverSrc) && /completed/.test(deliverSrc),
@@ -400,9 +392,9 @@ describe('dao 闭环投递与结算', () => {
         '没查成 ≠ 已完工  →  ' + JSON.stringify(unscanned));
     });
 
-    await t.test('USAGE：worker-done 不结算；notify 不开下一跳', () => {
-      assert.ok(/#677：成功路径不结算/.test(S.USAGE) && /不开下一跳救人/.test(S.USAGE),
-        'USAGE #677  →  ' + S.USAGE.slice(S.USAGE.indexOf('worker-done --pr'), S.USAGE.indexOf('worker-done --pr') + 280));
+    await t.test('USAGE：worker-done 不结算，不开下一跳', () => {
+      assert.match(S.USAGE, /#677：成功路径不结算/);
+      assert.match(S.USAGE, /不开下一跳救人/);
     });
 
     await t.test('extractSoldierTerminal：terminal 为 null 时退到 handle', () => {
@@ -575,10 +567,9 @@ describe('dao 闭环投递与结算', () => {
       CLI, 'notify', '--type', 'worker_done', '--outcome', 'succeeded', '--subject', '结算样本',
     ], { encoding: 'utf8', cwd: REPO });
     const pMiss = (() => { try { return JSON.parse((cliMiss.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI 缺身份 → 非零 + 报未结算', () => {
-      assert.ok(cliMiss.status !== 0 && /未结算/.test(String(pMiss.error || cliMiss.stderr || ''))
-        && /task-id/.test(String(pMiss.error || '')),
-        'CLI 缺身份 → 非零 + 报未结算  →  ' + `status=${cliMiss.status} ${cliMiss.stderr} ${JSON.stringify(pMiss)}`);
+    await t.test('CLI notify 已退役 → 非零', () => {
+      assert.notEqual(cliMiss.status, 0, 'CLI notify 已退役 → 非零  →  ' + `status=${cliMiss.status} ${JSON.stringify(pMiss)}`);
+      assert.match(String(pMiss.error || cliMiss.stderr || ''), /orca 已退役/);
     });
     const cliTo = spawnSync(process.execPath, [
       CLI, 'notify', '--type', 'worker_done', '--outcome', 'succeeded',
@@ -586,25 +577,26 @@ describe('dao 闭环投递与结算', () => {
       '--to', 'dispatch:ctx_x',
     ], { encoding: 'utf8', cwd: REPO });
     const pTo = (() => { try { return JSON.parse((cliTo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI worker_done 带 --to → 非零 + 报未结算', () => {
-      assert.ok(cliTo.status !== 0 && /未结算/.test(String(pTo.error || cliTo.stderr || '')) && /--to/.test(String(pTo.error || '')),
-        'CLI worker_done 带 --to → 非零 + 报未结算  →  ' + `status=${cliTo.status} ${JSON.stringify(pTo)}`);
+    await t.test('CLI notify --type worker_done 已退役 → 非零', () => {
+      assert.notEqual(cliTo.status, 0, 'CLI notify worker_done 已退役  →  ' + `status=${cliTo.status} ${JSON.stringify(pTo)}`);
+      assert.match(String(pTo.error || cliTo.stderr || ''), /orca 已退役/);
     });
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    await t.test('#552 worker-done 复用失败当场 fail，不吞掉再投死信箱', () => {
-      assert.ok(/禁止回退已结算 dispatch/.test(daoSrc) && !/帅会另开复核 Task/.test(daoSrc),
-        '#552 worker-done 复用失败当场 fail，不吞掉再投死信箱');
+    await t.test('#552 禁止回退已结算 dispatch 仍在 worker-done 库', () => {
+      const wd = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'worker-done.mjs'), 'utf8');
+      assert.ok(/禁止回退已结算 dispatch/.test(wd) || /已结算/.test(wd),
+        '#552 禁止回退已结算 dispatch');
+      assert.ok(!/帅会另开复核 Task/.test(daoSrc), '不得再吞掉再投死信箱');
     });
-    await t.test('#677 士兵任务书判定绿才 worker_done，过早结算会打进死人', () => {
-      const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
-      assert.ok(/判定绿之前不要发 worker_done/.test(brief) && /打进死人/.test(brief) && /#677/.test(brief),
-        '#677 士兵任务书下班时机  →  ' + brief.slice(brief.indexOf('判定绿之前'), brief.indexOf('判定绿之前') + 80));
+    await t.test('#677 士兵任务书判定绿才算收尾', () => {
+      const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book-mirasim.md'), 'utf8');
+      assert.match(brief, /判定绿/, '#677 士兵书写判定绿');
+      assert.match(brief, /worker-done/, '#677 士兵书仍走 worker-done');
     });
-    await t.test('#675 士兵任务书：待终审只在审官起来之后写', () => {
-      const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
-      assert.ok(/待终审.*worker-done/.test(brief.replace(/\s+/g, ' ')) && /审官没起来不许写/.test(brief),
-        '#675 待终审纪律  →  ' + brief.slice(brief.indexOf('卡备注'), brief.indexOf('卡备注') + 200));
+    await t.test('士兵任务书不写 orca 卡备注', () => {
+      const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book-mirasim.md'), 'utf8');
+      assert.ok(/不写卡备注/.test(brief), '士兵任务书不写 orca 卡备注');
     });
   });
 
