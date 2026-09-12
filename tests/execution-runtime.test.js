@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace} from '../scripts/lib/execution-runtime.mjs';
+import {stableHooksDir} from '../scripts/lib/control-plane-write.mjs';
 import {acquireExecutionFence,withExecutionFence,writeExecutionRecord} from '../scripts/lib/execution-fence.mjs';
 
 const linuxTest=(name,fn)=>test(name,{skip:process.platform!=='linux',timeout:10000},fn);
@@ -255,6 +256,15 @@ linuxTest('resume uses new ACP key through the same fence and preserves task/acc
   const r=await rt.resumeSession(s.sessionKey,'continue');assert.notEqual(r.sessionKey,s.sessionKey);assert.equal(r.taskId,'same-task');assert.equal(r.resumeFrom,s.sessionKey);assert.equal(r.accountPoolId,profile.accountPoolId);assert.equal(a.calls.resume[0].options.sessionKey,r.sessionKey);
 });
 linuxTest('completion timeout is unknown rather than successful running',async t=>{const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));assert.equal((await rt.waitForCompletion(s.sessionKey,{timeoutMs:0})).status,'unknown');});
+linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  const started=await rt.startSession(spec(f));
+  const file=path.join(f.stateDir,'sessions',fs.readdirSync(path.join(f.stateDir,'sessions')).find(n=>n.endsWith('.json')));
+  writeExecutionRecord(file,{...records(f)[0],state:'completed'});
+  m.views.set(started.sessionKey,{phase:'done',text:'',toolCalls:[],missing:false,partial:false});
+  await rt.readSession(started.sessionKey);
+  assert.equal(records(f)[0].state,'completed');
+});
 linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
 
 test('nested Mirasim interactions and awaiting override apparent completion/incomplete',()=>{
@@ -292,6 +302,25 @@ linuxTest('ensureGitWorkspace creates a branch worktree and is idempotent for th
   assert.equal(second.created,false);
   assert.equal(second.path,first.path);
   assert.equal(git(['worktree','list','--porcelain']).split('\n').filter(l=>l==='branch refs/heads/feature/acp-1174').length,1);
+  assert.equal(
+    execFileSync('git',['-C',first.path,'config','--worktree','--get','core.hooksPath'],{encoding:'utf8',windowsHide:true}).trim(),
+    stableHooksDir(),
+  );
+});
+
+linuxTest('dispatch/start 共用 ensureWorkspace：树没有 githooks 也从稳定来源挂上 hooksPath',async t=>{
+  const {dir,repo}=gitRepo(t);
+  assert.equal(fs.existsSync(path.join(repo,'scripts','githooks','pre-push')),false);
+  const rt=createExecutionRuntime({
+    homeDir:dir,profiles:[],base:'HEAD',
+    mirasimRuntime:fakeRuntime(),acpRuntime:fakeRuntime(),
+    scanProcesses:emptyScan,
+  });
+  const tree=await rt.ensureWorkspace(repo,'dao-1165-hooks');
+  assert.equal(
+    execFileSync('git',['-C',tree.path,'config','--worktree','--get','core.hooksPath'],{encoding:'utf8',windowsHide:true}).trim(),
+    stableHooksDir(),
+  );
 });
 
 linuxTest('ensureGitWorkspace refuses a bad branch name and an unregistered occupied path',t=>{

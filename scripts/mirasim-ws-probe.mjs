@@ -38,6 +38,10 @@ import {
   buildWsAlert,
   buildWsRecovered,
 } from './lib/mirasim-ws-probe.mjs';
+import {
+  controlPlaneDocFromProbe,
+  writeControlPlaneFile,
+} from './lib/control-plane-write.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.includes('--install')) {
@@ -156,6 +160,21 @@ export async function runProbe(deps = {}) {
   };
   if (typeof deps.writeState === 'function') deps.writeState(next);
   else if (!deps.skipWrite) writeState(next);
+
+  // #1165：同一轮握手就是「指挥官能不能接管」的写腿。
+  // 注入 writeControlPlane 时只交给测试；skipWrite 则两边都不碰真文件。
+  const cpDoc = controlPlaneDocFromProbe({
+    state: folded.state,
+    why: folded.why,
+    at: nowIso,
+  });
+  if (typeof deps.writeControlPlane === 'function') deps.writeControlPlane(cpDoc);
+  else if (!deps.skipWrite) {
+    try { writeControlPlaneFile(cpDoc); }
+    catch (e) {
+      console.error(`  ⚠ 控制面状态写不进：${String(e && e.message ? e.message : e).slice(0, 120)}`);
+    }
+  }
 
   const icon = folded.state === 'green' ? '✓' : folded.state === 'unscanned' ? '·' : '⚠';
   console.log(`  ${icon} ws ${folded.state.padEnd(9)} strikes=${folded.strikes} ${folded.why}`);

@@ -33,7 +33,7 @@
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
-| D | ~/.codex/.tmp | codex 每次 git 操作留下的临时工作目录，只增不减。2026-09-10 实测攒到 11109 个（当天只占 65 个），拖慢同盘一切文件系统遍历。board-gc 的孤儿清扫按时效回收，判据见 `scripts/lib/session-dir-gc.mjs` 的 `planOrphanGc`。运行态，不进 git |
+| D | ~/.codex/.tmp | codex 每次 git 操作留下的临时工作目录，只增不减。2026-09-10 实测攒到 11109 个（当天只占 65 个），拖慢同盘一切文件系统遍历。board-gc `--apply` 调 `planOrphanGc` 按时效回收；相关进程（本身份）cwd 没核清或目录正在用则保留。运行态，不进 git |
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
@@ -58,7 +58,7 @@
 | D | ~/.dao/execution | #1174 统一任务元数据、ACP 状态/进程租约/交互、用量事件与升级维护旗标。只迁移经过核对的记录，不把活进程状态当作可复制配置 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
-| D | ~/.dao/control-plane.json | 控制面闸探测落点（#948）。`scripts/lib/control-plane-gate.mjs` 只读 `{reachable:true\|false}`；文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。运行态，换机不拷 |
+| D | ~/.dao/control-plane.json | 控制面闸探测落点（#948 / #1165）。写腿：`scripts/mirasim-ws-probe.mjs` 每轮把握手三态写成 `{reachable:true\|false}`（没查成不写 reachable）。读腿：`scripts/lib/control-plane-gate.mjs`。文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。现役挂载面是 git pre-push 与 land.mjs，不只 Claude/Cursor hook。运行态，换机不拷 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |

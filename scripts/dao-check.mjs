@@ -113,6 +113,8 @@
 //    ensureWorkspace/startSession/cmdDispatchMirasim 都要在真 IO 前过隔离闸。
 //    检查器自持括号匹配，不 import 被测测试 / runtime 解析。
 //    红/绿/空夹具验判别力；0 个测试文件 = 没查成。
+// ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
+//    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -124,6 +126,7 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
@@ -931,6 +934,19 @@ function checkModeHookAlive() {
 function checkDispatchGateAlive() {
   const r = checkDispatchGate({ root: ROOT });
   if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkControlPlaneAlive() {
+  const r = checkControlPlaneProduction({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkControlPlaneDropPointAlive() {
+  const r = checkControlPlaneDropPoint();
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
   else fail(...r.fail);
 }
 
@@ -1858,6 +1874,8 @@ checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();
 checkDispatchGateAlive();
+checkControlPlaneAlive();
+checkControlPlaneDropPointAlive();
 checkMemoryLinkAlive();
 checkMasterTitleSamples();
 checkCardCommentSamples();

@@ -24,6 +24,11 @@ import {
   decideShip, decideBranchDelete, decideWorktreeRemove, decideTerminalClose, hasLandWork,
   collectBranchMergeFacts, parseWorktrees, branchCheckedOutAt,
 } from './lib/land-core.mjs';
+import {
+  collectEvidence,
+  decideControlPlane,
+  probeControlPlane,
+} from './lib/control-plane-gate.mjs';
 
 const FLAGS = new Set(['--dry-run', '--has-work']);
 const DRY = process.argv.includes('--dry-run');
@@ -31,6 +36,20 @@ const HAS_WORK = process.argv.includes('--has-work');
 const argPath = process.argv.slice(2).filter(a => !FLAGS.has(a))[0];
 const cwd = resolve(argPath || process.cwd());
 const say = (s) => process.stdout.write(s + '\n');
+
+function assertControlPlaneAllowsPush() {
+  const probe = probeControlPlane();
+  const d = decideControlPlane({
+    cmd: 'git push',
+    probe,
+    evidence: collectEvidence({ env: process.env }),
+  });
+  if (d.block) {
+    say(`[收工] ${d.message}`);
+    process.exit(1);
+  }
+  if (d.note) say(`[收工] ${d.note}`);
+}
 
 function git(args, opts = {}) {
   const r = spawnSync('git', ['-C', opts.cwd || root, ...args], { windowsHide: true, encoding: 'utf8' });
@@ -86,6 +105,7 @@ if (!HAS_WORK && ship.action === 'push') {
   }
   if (DRY) say(`[收工] [拟] git push origin ${defaultBranch}`);
   else {
+    assertControlPlaneAllowsPush();
     const p = git(['push', 'origin', defaultBranch]);
     if (p.status !== 0) { say(`[收工] push 失败：${(p.err || p.out).slice(0, 160)}`); process.exit(1); }
     say(`[收工] 已推 origin/${defaultBranch}`);

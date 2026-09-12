@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeSession, planSessionGc, planOrphanGc, refsOf } from '../scripts/lib/session-dir-gc.mjs';
+import { judgeSession, planSessionGc, planOrphanGc, markOrphanInUse, refsOf } from '../scripts/lib/session-dir-gc.mjs';
 
 const now = Date.parse('2026-09-10T01:00:00Z');
 const H = 3600000;
@@ -45,6 +45,16 @@ test('盘面没查成时 fail-closed，超时效也不删', () => {
     closedRefs: new Set(['1145']), boardScanned: false, now,
   });
   assert.equal(j.verdict, 'keep');
+});
+
+test('planSessionGc 盘面没查成 → 名单全留，文案不是「只按时效清」', () => {
+  const p = planSessionGc({
+    sessions: [sess({ updatedAtMs: now - 100 * H })],
+    now, boardScanned: false, closedRefs: new Set(),
+  });
+  assert.equal(p.remove.length, 0);
+  assert.match(p.detail, /本轮不删/);
+  assert.doesNotMatch(p.detail, /时效清/);
 });
 
 test('引用的单全部关闭就删', () => {
@@ -138,16 +148,59 @@ test('planOrphanGc 删超时效的临时目录', () => {
       { path: '/b', mtimeMs: now - 1 * H },
     ],
     now,
+    procsScanned: true,
   });
   assert.deepEqual(p.remove.map((e) => e.path), ['/a']);
 });
 
 test('planOrphanGc 时间读不出的目录宁可留着', () => {
-  const p = planOrphanGc({ entries: [{ path: '/c', mtimeMs: NaN }], now });
+  const p = planOrphanGc({ entries: [{ path: '/c', mtimeMs: NaN }], now, procsScanned: true });
   assert.equal(p.remove.length, 0);
 });
 
 test('planOrphanGc 清单不是数组报 unknown', () => {
   const p = planOrphanGc({ entries: null, now });
   assert.equal(p.state, 'unknown');
+});
+
+test('planOrphanGc 进程面没查成 → 超时效也不删（fail-closed）', () => {
+  const p = planOrphanGc({
+    entries: [{ path: '/a', mtimeMs: now - 30 * H }],
+    now,
+  });
+  assert.equal(p.state, 'unknown');
+  assert.equal(p.remove.length, 0);
+  assert.match(p.detail, /进程面没查成/);
+});
+
+test('planOrphanGc 有进程正在用 → 超时效也不删', () => {
+  const p = planOrphanGc({
+    entries: [{ path: '/a', mtimeMs: now - 30 * H, inUse: true }],
+    now,
+    procsScanned: true,
+  });
+  assert.equal(p.remove.length, 0);
+  assert.equal(p.keep.length, 1);
+  assert.match(p.keep[0].why, /正在用/);
+});
+
+test('markOrphanInUse：cwd 落在子目录里就标这条', () => {
+  const r = markOrphanInUse(
+    [{ path: '/tmp/x/git-old' }, { path: '/tmp/x/git-new' }],
+    ['/tmp/x/git-new/objects', '/home/other'],
+    '/tmp/x',
+  );
+  assert.equal(r.rootInUse, false);
+  assert.equal(r.entries.find((e) => e.path === '/tmp/x/git-new').inUse, true);
+  assert.equal(r.entries.find((e) => e.path === '/tmp/x/git-old').inUse, false);
+});
+
+test('markOrphanInUse：cwd 就在根上 → 整批都标占用', () => {
+  const r = markOrphanInUse(
+    [{ path: '/tmp/x/git-old' }, { path: '/tmp/x/git-new' }],
+    ['/tmp/x'],
+    '/tmp/x',
+  );
+  assert.equal(r.rootInUse, true);
+  assert.equal(r.entries.every((e) => e.inUse), true);
 });

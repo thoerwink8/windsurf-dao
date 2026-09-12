@@ -90,6 +90,7 @@ describe('marshal-issue-identity', () => {
       const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
       assert.match(mira, /stampIssueLabels\(/, 'mirasim 派工补 type');
+      assert.match(mira, /preserveType:\s*true/, '已有 type 不许覆盖');
       assert.match(mira, /runGh:\s*ghRunnerForTarget\([^,]+,\s*\{\s*role:\s*'marshal'\s*\}\)/,
         'mirasim 打 label 身份 marshal（跨仓走 ForTarget）');
       assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');

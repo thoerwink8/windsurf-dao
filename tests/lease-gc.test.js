@@ -82,6 +82,12 @@ test('登记表停在 stopping 且名单里没这条会话 → 回收', () => {
   assert.equal(judgeRegistryStuck(rec(), { sessionsScanned: true, sessionState: null }).verdict, 'reap');
 });
 
+test('登记表有活进程 → 名单里没有也不回收', () => {
+  const j = judgeRegistryStuck(rec({ hasLiveProcess: true }), { sessionsScanned: true, sessionState: null });
+  assert.equal(j.verdict, 'keep');
+  assert.match(j.why, /活进程/);
+});
+
 test('登记表停在中间态但会话还在跑 → 保留（那是真在跑的一次启动）', () => {
   assert.equal(judgeRegistryStuck(rec(), { sessionsScanned: true, sessionState: 'running' }).verdict, 'keep');
 });

@@ -38,6 +38,7 @@ import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
+import { attachControlPlaneHooksOrThrow } from './control-plane-write.mjs';
 import { sessionStateOf } from './execution-states.mjs';
 import { loadBreaker } from './provider-health.mjs';
 import { ensureLocalLedger } from './ledger-home.mjs';
@@ -814,6 +815,11 @@ export function createRuntime(opts = {}) {
   };
   const verifyTries = opts.worktreeVerifyTries ?? 4;
   const verifyDelayMs = opts.worktreeVerifyDelayMs ?? 700;
+  const attachHooks = opts.attachHooks === undefined ? attachControlPlaneHooksOrThrow : opts.attachHooks;
+  const finishTree = (tree) => {
+    if (typeof attachHooks === 'function' && tree && tree.path) attachHooks(tree.path);
+    return tree;
+  };
 
   const open = () => connect({ homeDir, port, openTimeoutMs: t.open });
   const isolationEnv = opts.env || process.env;
@@ -874,7 +880,7 @@ export function createRuntime(opts = {}) {
         w && typeof w === 'object' && (w.branch === branch || w.head === branch));
       const already = findTree(entry.worktrees);
       if (already && typeof already.path === 'string' && already.path) {
-        return { path: already.path, branch, created: false, verified: true };
+        return finishTree({ path: already.path, branch, created: false, verified: true });
       }
 
       const reqId = `dao-${now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -888,7 +894,7 @@ export function createRuntime(opts = {}) {
         // git 比服务端缓存权威——按它给的路径当已有树返回。只认精确形状，别的拒绝照抛。
         const used = /already used by worktree at '([^']+)'/.exec(String(added.error || ''));
         if (used && existsSync(used[1])) {
-          return { path: used[1], branch, created: false, verified: true };
+          return finishTree({ path: used[1], branch, created: false, verified: true });
         }
         throw new MirasimRejectedError(`建树被拒：${added.error || '（没给原因）'}`, {
           code: added.code ?? null,
@@ -907,7 +913,7 @@ export function createRuntime(opts = {}) {
         const after = await listOnce();
         verified = Boolean(findTree(after.find(w => w?.path === repo)?.worktrees));
       }
-      return { path: added.path, branch: added.branch ?? branch, created: true, verified };
+      return finishTree({ path: added.path, branch: added.branch ?? branch, created: true, verified });
     } finally {
       wire.close();
     }
