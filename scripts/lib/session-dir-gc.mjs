@@ -78,7 +78,7 @@ export function judgeSession(session, { closedRefs, boardScanned, now = Date.now
  *
  * @param {{sessions: Array, closedRefs: Set<string>, boardScanned: boolean}} input
  *   sessions 每项形如 {id, agent, dir, alive, updatedAtMs, record}
- *   boardScanned 为 false 表示这轮没拿到 GitHub 盘面——此时只靠时效清，不用单号判据。
+ *   boardScanned 为 false 表示这轮没拿到 GitHub 盘面——一律保留（fail-closed）。
  * @returns {{state:'ok'|'unknown', remove:Array, keep:Array, detail:string}}
  */
 export function planSessionGc({ sessions, closedRefs = new Set(), boardScanned = true, now = Date.now(), keepHours = DEFAULT_KEEP_HOURS } = {}) {
@@ -95,7 +95,7 @@ export function planSessionGc({ sessions, closedRefs = new Set(), boardScanned =
     const j = judgeSession(s, { closedRefs, boardScanned, now, keepHours });
     (j.verdict === 'remove' ? remove : keep).push({ ...s, why: j.why });
   }
-  const scope = boardScanned ? '' : '（盘面没查成，本轮只按时效清）';
+  const scope = boardScanned ? '' : '（盘面没查成，本轮不删）';
   return {
     state: 'ok',
     remove,
@@ -105,17 +105,67 @@ export function planSessionGc({ sessions, closedRefs = new Set(), boardScanned =
 }
 
 /**
+ * 把「有进程 cwd 落在这个临时目录里」标到条目上。
+ *
+ * 只看 cwd 前缀，不看 mirasim 亲缘：git 临时目录的占用者是 git/codex 自己，
+ * 不一定是 mirasim-server 的后代。root 本身被占用 → 整批都标 inUse（不赌）。
+ */
+export function markOrphanInUse(entries, cwds, root) {
+  const base = String(root || '').replace(/\/+$/, '');
+  const used = new Set();
+  let rootInUse = false;
+  for (const raw of cwds || []) {
+    const cwd = String(raw || '').replace(/\/+$/, '');
+    if (!base || !cwd) continue;
+    if (cwd === base) { rootInUse = true; continue; }
+    if (cwd.startsWith(base + '/')) {
+      const top = cwd.slice(base.length + 1).split('/').filter(Boolean)[0];
+      if (top) used.add(`${base}/${top}`);
+    }
+  }
+  const marked = (Array.isArray(entries) ? entries : []).map((e) => {
+    const p = String(e?.path || '').replace(/\/+$/, '');
+    return { ...e, inUse: rootInUse || used.has(p) };
+  });
+  return { rootInUse, used, entries: marked };
+}
+
+/**
  * 无归属临时目录的判据（~/.codex/.tmp/git-* 这类）。
  *
  * 这批目录压根没有编号可认——codex 每次 git 操作留一个，从不回收。
- * 2026-09-10 实测攒了 11109 个，只有 65 个是当天的。它们唯一能用的判据就是时效。
+ * 2026-09-10 实测攒了 11109 个，只有 65 个是当天的。
+ *
+ * 判决顺序同样是安全边界：
+ *   1. 清单不是数组 / 进程面没查成 → 不删（fail-closed）
+ *   2. 有进程正在用 → 留
+ *   3. 时间读不出 → 留
+ *   4. 超时效 → 删
  */
-export function planOrphanGc({ entries, now = Date.now(), keepHours = 24 } = {}) {
-  if (!Array.isArray(entries)) return { state: 'unknown', remove: [], detail: '临时目录清单不是数组（没查成）' };
-  const remove = entries.filter((e) => {
+export function planOrphanGc({ entries, now = Date.now(), keepHours = 24, procsScanned = false } = {}) {
+  if (!Array.isArray(entries)) return { state: 'unknown', remove: [], keep: [], detail: '临时目录清单不是数组（没查成）' };
+  if (!procsScanned) {
+    return { state: 'unknown', remove: [], keep: entries, detail: '进程面没查成，本轮不删临时目录（fail-closed）' };
+  }
+  const remove = [];
+  const keep = [];
+  for (const e of entries) {
+    if (e?.inUse) {
+      keep.push({ ...e, why: '有进程正在用这个目录' });
+      continue;
+    }
     const t = Number(e?.mtimeMs);
-    if (!Number.isFinite(t)) return false; // 时间读不出就别动，宁可留着
-    return (now - t) / 3600000 >= keepHours;
-  });
-  return { state: 'ok', remove, detail: `扫到 ${entries.length} 个临时目录：删 ${remove.length}（超 ${keepHours} 小时）` };
+    if (!Number.isFinite(t)) {
+      keep.push({ ...e, why: '时间读不出就别动，宁可留着' });
+      continue;
+    }
+    if ((now - t) / 3600000 >= keepHours) remove.push({ ...e, why: `超 ${keepHours} 小时` });
+    else keep.push({ ...e, why: `未超 ${keepHours} 小时` });
+  }
+  return {
+    state: 'ok',
+    remove,
+    keep,
+    detail: `扫到 ${entries.length} 个临时目录：删 ${remove.length}、留 ${keep.length}（超 ${keepHours} 小时）`,
+  };
 }

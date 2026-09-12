@@ -3,7 +3,7 @@
 你是本单**审官**，跑在一条 **mirasim 会话**里。本文件是**闭环框架**——审查质量标准在
 `host/skills/dispatch/review-standard.md`（判绿前必核清单，逐条打勾），框架只定义闭环衔接：**审 PR → 判红判绿 → 收尾**。
 
-> orca 版审官书在 `host/skills/dispatch/templates/reviewer-book.md`。**本版专给 mirasim 执行体**：
+> orca 版审官书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以**没有「等士兵完工」的 orchestration 收信、
 > 没有 Run id 上报、没有 notify 结算**。判定**直接落到 GitHub review 状态**（`--approve` / `--request-changes`），
 > 落了就算完成（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。

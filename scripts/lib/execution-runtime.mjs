@@ -271,7 +271,10 @@ export function createExecutionRuntime(opts={}) {
     if(initial)result=await fence(()=>{
       const current=metadata(key);if(!current)return null;
       const verdict=judgeExecutionCompletion(view);
-      const state=RESERVED.has(current.state)||current.cleanupVerified?current.state:verdict.status;
+      let state=RESERVED.has(current.state)||current.cleanupVerified?current.state:verdict.status;
+      // 快照读不成（unknown）不许把已经落盘的终态改回 unknown，否则死人登记永久占树。
+      // #1176 返工实咬：peek 一次就把 completed 写成 unknown，下一跳 startSession 被挡。
+      if(verdict.status==='unknown'&&FINISHED.has(String(current.state||'')))state=current.state;
       const next={...current,state,observedState:verdict.status,updatedAt:now(),taskCompleted:false};
       atomic(metaFile(key),next);return next;
     });

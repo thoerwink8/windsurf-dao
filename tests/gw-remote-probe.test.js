@@ -172,6 +172,15 @@ describe('探针纯函数：探测面从策略派生', () => {
   });
 });
 
+describe('周期探针 responses 请求体不许再漂成裸字符串', () => {
+  it('主脚本必须用 codexResponsesProbeBody，不得手写 input: "reply …"', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    assert.match(src, /codexResponsesProbeBody/);
+    assert.doesNotMatch(src, /input:\s*["']reply with the single word ok["']/);
+    assert.doesNotMatch(src, /input:\s*PROBE_MESSAGE/);
+  });
+});
+
 describe('直连 responses：空 content 不算通', () => {
   it('response.completed + content:[] 即使序列化很长也是红', async () => {
     const { responsesEventHasContent } = await import(HEALTH);
@@ -211,6 +220,8 @@ describe('systemd 单元与装机脚本', () => {
     const t = fs.readFileSync(TIMER, 'utf8');
     assert.match(s, /^User=orca$/m);
     assert.match(s, /scripts\/gw-remote-probe\.mjs/);
+    assert.doesNotMatch(s, /\/home\/orca\/bin\/gw-remote-probe\.mjs/,
+      '仓内单元不得再写 ~/bin/gw-remote-probe.mjs——合进仓后机器仍跑那份是 #1164 的病');
     assert.match(s, /^UnsetEnvironment=GH_TOKEN GITHUB_TOKEN$/m);
     assert.match(s, /^Environment=GH_CONFIG_DIR=\/var\/empty$/m);
     assert.match(t, /^OnCalendar=/m);
@@ -227,6 +238,8 @@ describe('systemd 单元与装机脚本', () => {
     assert.match(text, /EUID/);
     assert.match(text, /NextElapseUSecRealtime/);
     assert.match(text, /gw-remote-probe\.timer/);
+    assert.match(text, /gw-remote-probe\.timer\.d\/oncalendar\.conf/,
+      '装机必须卸掉 09-05 的 :07/30 drop-in，留下 ⑳ 也看不见活日历');
   });
 
   it('NEW-MACHINE §9 有一行装法；INDEX 登记本机落点与健康表写入方', () => {

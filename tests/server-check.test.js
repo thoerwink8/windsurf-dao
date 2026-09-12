@@ -8,13 +8,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import {
   classifyOrcaStdout,
   classifyFeishuTriage,
   classifyStallWatchTimer,
   classifyBotModelProbe,
+  classifyCommanderStatus,
   parseEnvFile,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
@@ -209,6 +211,47 @@ test('server-check 判别力', async (t) => {
         timersText: `Wed 2026-09-07 01:17:00 CST 30min left n/a n/a ${LAND_TIMER} dao-land.service`,
       });
       assert.equal(r.state, 'ok');
+    });
+  });
+
+  await t.test('⑭ 指挥官自检：透传 status --json，不许改写成 enabled/install', async (t) => {
+    await t.test('exit 1 且 detail 写 start → 红，原文保留，不改写成 install', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 1,
+        stdout: JSON.stringify({
+          state: 'red',
+          detail: 'timer 不会自己响：commander-act.timer enabled 但 inactive(dead) 且没有下一次——sudo systemctl start commander-act.timer',
+          exit: 1,
+        }),
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /systemctl start commander-act\.timer/);
+      assert.doesNotMatch(r.detail, /install/);
+    });
+    await t.test('exit 0 透传「会自己响」，不许改写成「在册且 enabled」', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 0,
+        stdout: JSON.stringify({ state: 'ok', detail: '2 个 timer 在册且会自己响', exit: 0 }),
+      });
+      assert.equal(r.state, 'ok');
+      assert.equal(r.detail, '2 个 timer 在册且会自己响');
+      assert.doesNotMatch(r.detail, /在册且 enabled/);
+    });
+    await t.test('没探到 → unknown', () => {
+      const r = classifyCommanderStatus({ probed: false, reason: 'ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+    await t.test('CHECKS ⑭ 走 --json + classifyCommanderStatus，源码不再写 install / 在册且 enabled', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['⑭ 指挥官自检");
+      assert.ok(i > -1, '找不到 ⑭ CHECKS 条目');
+      const entry = src.slice(i, i + 600);
+      assert.match(entry, /classifyCommanderStatus/);
+      assert.match(entry, /'status',\s*'--json'/);
+      assert.doesNotMatch(entry, /install/);
+      assert.doesNotMatch(entry, /在册且 enabled/);
     });
   });
 
@@ -659,6 +702,181 @@ test('⑳ 单元漂移', async (t) => {
   await t.test('只差换行/首尾空白 → 不算漂移（避免天天红成噪音）', () => {
     const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
     assert.equal(r.state, 'ok');
+  });
+
+  await t.test('.d/ 读不了 → unknown（不许当成正文一致）', () => {
+    const r = classifyUnitDrift([{ name: 'a.timer', repo: 'X', live: null, unreadable: true }]);
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没查成/);
+  });
+});
+
+test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', async (t) => {
+  const {
+    assembleEffectiveUnit,
+    liveTextFromSystemctlCat,
+    collectUnitDriftPairs,
+    classifyUnitDrift,
+    classifyProbeExecStart,
+    parseExecStartArgv,
+    probeScriptFromExecStart,
+  } = await import('../scripts/server-check.mjs');
+  const expectedScript = probeScriptFromExecStart(
+    readFileSync(join(HERE, '..', 'host', 'machine', 'systemd', 'gw-remote-probe.service'), 'utf8'),
+  );
+  assert.equal(expectedScript, '/srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs');
+
+  await t.test('正文对、drop-in 把日历改走 → red（只读 FragmentPath 会绿）', () => {
+    const repo = '[Timer]\nOnCalendar=*:09/30\n';
+    const live = assembleEffectiveUnit(repo, [{
+      path: '/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf',
+      text: '[Timer]\nOnCalendar=*:07/30\n',
+    }]);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('故意只拷正文不删 .d/ 当场红', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Unit]\nDescription=probe\n\n[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      mkdirSync(join(etcDir, 'gw-remote-probe.timer.d'));
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer.d', 'oncalendar.conf'), '[Timer]\nOnCalendar=*:07/30\n');
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'red', r.detail);
+      assert.match(r.detail, /gw-remote-probe\.timer/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('正文对且无 drop-in → ok（反证不是恒红）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-ok-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'ok', r.detail);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('systemctl cat 带 drop-in：剥首行后仍 ≠ 仓内正文', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}# /etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf\n[Timer]\nOnCalendar=*:07/30\n`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('systemctl cat 无 drop-in：剥首行后与正文一致', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'ok');
+  });
+
+  await t.test('活 ExecStart 指向 ~/bin/gw-remote-probe.mjs → red（仓内文件锁不够）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /home\/orca\/bin\/gw-remote-probe/);
+    assert.match(r.detail, /install-gw-remote-probe/);
+  });
+
+  await t.test('活 ExecStart 走仓内脚本 → ok', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, undefined);
+  });
+
+  await t.test('仓外同名路径 /tmp/scripts/gw-remote-probe.mjs → red（子串匹配会假绿）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 仓外同名路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('误导注释含仓内路径、实际目标是 /tmp/gw-remote-probe.mjs → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: [
+        '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+        'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+      ].join('\n'),
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 实际目标仓外、旁注含仓内路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/gw-remote-probe.mjs ; ignore_errors=no } # scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('解析 ExecStart：注释不算，取最后一条未注释行', () => {
+    const argv = parseExecStartArgv([
+      '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+      'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+    ].join('\n'));
+    assert.deepEqual(argv, ['/usr/bin/node', '/tmp/gw-remote-probe.mjs']);
+    assert.equal(
+      probeScriptFromExecStart('ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }'),
+      '/tmp/scripts/gw-remote-probe.mjs',
+    );
+  });
+
+  await t.test('没装时本格不发言（漂移闸去红）', () => {
+    const r = classifyProbeExecStart({ liveExecStart: null, expectedScript });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, true);
+  });
+
+  await t.test('⑳ 取数读 .d，并锁活 ExecStart 解析 argv', () => {
+    const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+    assert.match(src, /collectUnitDriftPairs/);
+    assert.match(src, /\$\{name\}\.d/);
+    assert.match(src, /#1164 活 ExecStart/);
+    assert.match(src, /classifyProbeExecStart/);
+    assert.match(src, /parseExecStartArgv/);
+    assert.match(src, /expectedScript/);
+    assert.doesNotMatch(src, /!s\.includes\(PROBE_EXEC_EXPECTED\)/,
+      '不许再对整段 liveExecStart 做子串包含');
   });
 });
 

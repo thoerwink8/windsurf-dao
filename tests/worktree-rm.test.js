@@ -492,17 +492,21 @@ describe('worktree-rm', () => {
         });
     });
 
-  it('#835 cmdWorktreeRm 闸过后再 reapThenRm',
+  it('#1150 cmdWorktreeRm 走 git 原生删树，先过占用/账本闸',
     async (t) => {
       const daoSrc = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'dao.mjs'), 'utf8');
-      const rmFn = daoSrc.slice(daoSrc.indexOf('function cmdWorktreeRm'), daoSrc.indexOf('function cmdTaskCreate'));
-      await t.test('热路走 reapThenRmWorktree',
+      const rmFn = daoSrc.slice(daoSrc.indexOf('function gitRemoveWorktree'), daoSrc.indexOf('function cmdTaskCreate'));
+      await t.test('热路走 git worktree remove',
         () => {
-          assert.ok(/reapThenRmWorktree/.test(rmFn), rmFn.slice(0, 400));
+          assert.match(rmFn, /gitRemoveWorktree/, rmFn.slice(0, 400));
+          assert.match(rmFn, /worktree',\s*'remove'/);
         });
-      await t.test('先退役再 reap/删树',
+      await t.test('删树前过租约闸',
         () => {
-          assert.ok(rmFn.indexOf('finalizeWorktreeRmLifecycle') < rmFn.indexOf('reapThenRmWorktree'), '顺序反了');
+          const leaseAt = rmFn.indexOf('checkTreeLease');
+          const rmAt = rmFn.indexOf("worktree', 'remove'");
+          assert.ok(leaseAt > -1, '有租约闸');
+          assert.ok(leaseAt < rmAt, '租约闸必须在 git rm 之前');
         });
       await t.test('占用闸文案仍在',
         () => {

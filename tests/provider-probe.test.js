@@ -143,6 +143,27 @@ describe('planProbe', () => {
     assert.ok(p.url.endsWith('/responses'), p.url);
     assert.equal(p.target, 'direct:codex@pqapi/responses');
   });
+  it('codexResponsesProbeBody 的 input 是结构化 message，不是裸字符串', async () => {
+    const { codexResponsesProbeBody } = await import(LIB);
+    const b = codexResponsesProbeBody({ model: 'gpt-5.6-luna', text: 'ping', maxOutputTokens: 8 });
+    assert.equal(b.model, 'gpt-5.6-luna');
+    assert.equal(b.stream, true);
+    assert.equal(b.max_output_tokens, 8);
+    assert.equal(Array.isArray(b.input), true);
+    assert.equal(typeof b.input, 'object');
+    assert.notEqual(typeof b.input, 'string');
+    assert.equal(b.input[0].type, 'message');
+    assert.equal(b.input[0].role, 'user');
+    assert.equal(b.input[0].content[0].type, 'input_text');
+    assert.equal(b.input[0].content[0].text, 'ping');
+  });
+  it('planProbe(gpt) 的 body.input 也是结构化 message（与周期探针同一份 helper）', async () => {
+    const { planProbe } = await import(LIB);
+    const p = planProbe({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }, { codexConfig: { ok: true, baseUrl: base, authPath: '/x/auth.json' } });
+    assert.equal(Array.isArray(p.body.input), true);
+    assert.equal(p.body.input[0].type, 'message');
+    assert.equal(p.body.input[0].content[0].type, 'input_text');
+  });
   it('cursor/opencode-go/devin/grok → unscanned（不许当绿）', async () => {
     const { planProbe } = await import(LIB);
     for (const provider of ['cursor', 'opencode-go', 'devin', 'grok']) {

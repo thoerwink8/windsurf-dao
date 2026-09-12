@@ -81,6 +81,9 @@ import {
   MENU_LIST_PENDING, githubFromIssueList, listPendingIssueArgs, parseMenuEvent, planMenuList,
 } from './lib/hub-pending.mjs';
 import { parsePolicy } from './lib/ask-gate.mjs';
+import { mergeHubPending } from './lib/hub-ask.mjs';
+import { CARD_CHOICES } from './lib/feishu-hub-card.mjs';
+import { acquireWorktreeLock } from './lib/dispatch-lock.mjs';
 
 export {
   buildHubCard, parseCardAction, cardCallbackResponse, buildDecidedHubCard, CHOICE_LABELS,
@@ -299,6 +302,45 @@ export function createStateStore(file) {
       warn(`状态文件读不了（${file}），从空开始：${e.message}`);
     }
   }
+  const snapshot = () => ({ threads: Object.fromEntries(store.map), aliases: store.aliases, hubPending: store.hubPending });
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // Apply only local changes to the latest file. A slow commander cycle must
+  // not replace decisions, threads or cards saved by the event consumer.
+  function mergeEntries(before, local, latest, pending = false) {
+    const merged = { ...latest };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(local)])) {
+      if (same(before[key], local[key])) continue;
+      if (!Object.hasOwn(local, key)) {
+        if (same(before[key], latest[key])) delete merged[key];
+      } else if (pending && before[key] && (!latest[key]
+        || latest[key].repo !== before[key].repo || latest[key].number !== before[key].number)) {
+        if (CARD_CHOICES.includes(local[key]?.decided?.choice)) {
+          const replacements = Object.entries(merged).filter(([, entry]) =>
+            entry.repo === before[key].repo && entry.number === before[key].number);
+          if (replacements.length) {
+            for (const [id, entry] of replacements) {
+              if (!CARD_CHOICES.includes(entry.decided?.choice)) merged[id] = { ...entry, decided: local[key].decided };
+            }
+          } else if (!latest[key]) merged[key] = local[key]; // Retain the receipt, not an active card.
+          else throw new Error('已保存的选择无法对应当前卡片，请核对本地记录');
+        }
+        continue; // Another writer removed/rebound this card; do not retire its replacement.
+      } else if (pending && latest[key] && !same(before[key], latest[key])) {
+        const fields = mergeEntries(before[key] || {}, local[key], latest[key]);
+        let decided = latest[key].decided;
+        // A confirmed human choice also wins when it reaches disk after the
+        // automatic "handled elsewhere" projection.
+        if (CARD_CHOICES.includes(local[key]?.decided?.choice)
+          && !CARD_CHOICES.includes(decided?.choice)) decided = local[key].decided;
+        const target = { hubPending: { [key]: { decided } } };
+        mergeHubPending(target, key, fields);
+        merged[key] = target.hubPending[key];
+      } else merged[key] = local[key];
+    }
+    return merged;
+  }
+  let baseline;
   const store = {
     map,
     aliases,
@@ -314,20 +356,35 @@ export function createStateStore(file) {
       return ids.find(Boolean) || '';
     },
     save() {
-      const payload = {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        threads: Object.fromEntries(store.map),
-        aliases: store.aliases,
-        hubPending: store.hubPending,
-      };
-      const dir = dirname(file);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const tmp = `${file}.tmp`;
-      writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
-      renameSync(tmp, file);
+      // A contended state file must not freeze incoming card callbacks. The
+      // confirmed decision remains in GitHub; callers report/retry local save.
+      const held = acquireWorktreeLock({ lockPath: `${file}.lock`, timeoutMs: 0 });
+      if (!held.ok) throw new Error(held.error);
+      try {
+        // Refuse to replace an unreadable file: it may contain confirmed choices.
+        const latest = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+        const local = snapshot();
+        const payload = {
+          ...latest, version: 1, updatedAt: new Date().toISOString(),
+          threads: mergeEntries(baseline.threads, local.threads, latest.threads || {}),
+          aliases: mergeEntries(baseline.aliases, local.aliases, latest.aliases || {}),
+          hubPending: mergeEntries(baseline.hubPending, local.hubPending, latest.hubPending || {}, true),
+        };
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+        renameSync(tmp, file);
+        store.map.clear();
+        for (const [key, value] of Object.entries(payload.threads)) store.map.set(key, value);
+        store.aliases = payload.aliases;
+        store.hubPending = payload.hubPending;
+        baseline = clone(snapshot());
+      } finally {
+        held.release();
+        process.removeListener('exit', held.release);
+      }
     },
   };
+  baseline = clone(snapshot());
   return store;
 }
 
@@ -884,9 +941,14 @@ export async function applyCardActions(result, { store, deps, client = null } = 
           for (const entry of Object.values(store.hubPending)) {
             if (entry.repo === a.repo && entry.number === a.number) entry.decided = result.response.decided;
           }
+          let savedLocally = true;
           try { store.save?.(); }
-          catch (e) { warn(`GitHub 已保存，本地记录写入失败：${e.message}`); }
-          if (client?.updateCard) {
+          catch (e) { savedLocally = false; warn(`GitHub 已保存，本地记录写入失败：${e.message}`); }
+          if (!savedLocally && client?.reply) {
+            try { await client.reply(messageId, '决定已保存到 GitHub，本地卡片记录暂未更新，请勿重复拍板。'); }
+            catch (e) { warn(`保存结果通知未送达：${e.message}`); }
+          }
+          if (client?.updateCard && savedLocally) {
             try { await serialCardUpdate(store, `${a.repo}#${a.number}`, async () => {
               for (const [id, current] of Object.entries(store.hubPending)) {
                 if (current.repo === a.repo && current.number === a.number) {

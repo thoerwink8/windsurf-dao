@@ -106,8 +106,8 @@ function renderInjectTemplate(name, vars) {
 }
 
 export function buildSoldierInject({ spec, issue, executor } = {}) {
-  // #880 卡 F：executor==='mirasim' 选 mirasim 版任务书（去 orca 卡态/结算/Run）；默认 orca 不变。
-  const tpl = executor === 'mirasim' ? 'soldier-inject-mirasim.md' : 'soldier-inject.md';
+  // #1150：orca 注入模板已删，只剩 mirasim 书。executor 仍传进闸，量的是这一本。
+  const tpl = 'soldier-inject-mirasim.md';
   const text = renderInjectTemplate(tpl, {
     SPEC: spec,
     ISSUE_REF: issue ? ` #${issue}` : '',
@@ -138,20 +138,14 @@ export function assertDispatchInjectPlan({ spec, issue, headSpec, childSpecs, ex
   return { ok: true };
 }
 
-export function buildBatchInject({ spec, issue } = {}) {
-  const text = renderInjectTemplate('batch-inject.md', {
-    SPEC: spec,
-    ISSUE_REF: issue ? ` #${issue}` : '',
-  });
-  const gate = assertInjectText(text, { label: 'batch 注入' });
-  if (!gate.ok) throw new Error(gate.error);
-  return text;
+export function buildBatchInject() {
+  throw new Error('orca 已退役，batch 注入随 orca 批派工一起删了');
 }
 
 export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait, fallbackReason, executor } = {}) {
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
   // #880 卡 F：mirasim 版审官注入无 d=/s=/fb=（orchestration 才有），多余 vars 被 render 忽略。
-  const tpl = executor === 'mirasim' ? 'reviewer-inject-mirasim.md' : 'reviewer-inject.md';
+  const tpl = 'reviewer-inject-mirasim.md';
   const text = renderInjectTemplate(tpl, {
     SPEC: spec,
     ISSUE_REF: issue ? ` #${issue}` : '',

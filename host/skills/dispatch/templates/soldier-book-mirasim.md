@@ -3,7 +3,7 @@
 你是本单**实现工人**，跑在一条 **mirasim 会话**里（不是 orca 终端）。本文件是**闭环框架**——
 你的**具体职责以注入前言里的本单 spec 为准**。框架只定义 mirasim 会话里怎么开工、干完怎么交卷。
 
-> orca 版任务书在 `host/skills/dispatch/templates/soldier-book.md`。**本版专给 mirasim 执行体**：
+> orca 版任务书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以没有卡态切换、没有 orchestration
 > 结算、没有 Run id 上报。交卷仍是 `dao.mjs worker-done` 这一个原子动作，但只发完工评论；首审入队、不自己起审官（#1125），
 > **不做 notify 结算、不写卡备注**（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
@@ -52,7 +52,10 @@
 5. **本单修的是某次实咬 / 事故 / 报警**：PR 正文补一段「机制判定」——这错在制度生效前还会再犯吗？
    会 → 机制改在哪；不会 → 为什么。答不出就写「没查成」，不许留空。
    缺这段审官直接判红（审官标准第 8 条），白跑一轮返工。
-6. 再 `worker-done`。没自查完不许交卷。
+6. 回流自问（#888）：本单做出的东西有没有**别的场景也用得上的**（纯函数/判据/模板/踩坑解法）？
+   有 → PR 正文加 `## 回流` 段，三行：产物是什么 / 为什么通用（说得出 ≥2 个使用场景才算，说不出就别写）/
+   建议落点（上收 windsurf-dao / 下发 host/skills / 留原仓+指针）。没有就不写，不硬凑。
+7. 再 `worker-done`。没自查完不许交卷。
 
 ## 交卷（原子动作，缺一不可）
 
@@ -64,10 +67,8 @@
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件> --executor mirasim
    ```
 
-   **`--executor mirasim` 一个字都不能少**（2026-09-06 实咬）：`worker-done` 的分岔判据是
-   `args.executor && args.executor !== 'orca'`，不传就默认走 orca 那条脊——你人在 mirasim 会话里，
-   却被送回 orca 的交卷通道，起审官必然失败，而且**它会报退出码 0**，你看着像交卷成功了。
-   那次的结果是 PR 交了、审官一条上游调用都没发出去、登记也没写，静默等在那儿。
+   **`--executor mirasim` 建议带上。** #1150 之后默认就是 mirasim；显式 `--executor orca`
+   当场拒。漏旗标不再会静默落到已删的 orca 脊。
 
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头（读侧认这一行，见完工信号契约）。
    首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。交卷成功后本会话会被停掉（树留着）。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。

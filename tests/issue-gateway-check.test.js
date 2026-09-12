@@ -206,4 +206,58 @@ describe('issue-gateway-check 全宿主面', () => {
     assert.equal(Boolean(r.fail), true);
     assert.match(r.fail.join(' '), /没扫到|没查/);
   });
+
+  // #1167：指挥官两个 service 是 INSTALL_FILES() 现场生成的，不在
+  // host/machine/systemd/。闸的生产路径必须把生成结果一并扫进去；
+  // extraRels 仍是测试隔离入口，传了就不再掺生成单元。
+  const INV = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-inventory.mjs').replace(/\\/g, '/'));
+
+  it('默认扫描面含指挥官生成单元，现行模板绿（#1167）', async () => {
+    const { checkNoPersonalTokenInUnits, GENERATED_SYSTEMD_PREFIX } = await CHECK_LOAD;
+    const r = checkNoPersonalTokenInUnits({ root: REPO });
+    assert.equal(Boolean(r.fail), false, JSON.stringify(r));
+    const rels = r.rels || [];
+    assert.ok(rels.includes(`${GENERATED_SYSTEMD_PREFIX}commander-act.service`), JSON.stringify(rels));
+    assert.ok(rels.includes(`${GENERATED_SYSTEMD_PREFIX}commander-inventory.service`), JSON.stringify(rels));
+  });
+
+  it('指挥官生成单元摘掉 UnsetEnvironment → 红（#1167）', async () => {
+    const { checkNoPersonalTokenInUnits, GENERATED_SYSTEMD_PREFIX } = await CHECK_LOAD;
+    const { INSTALL_FILES } = await INV;
+    const act = String(INSTALL_FILES()['/etc/systemd/system/commander-act.service'] || '');
+    assert.match(act, /^UnsetEnvironment=.*\bGH_TOKEN\b/m, '现行模板本该有 UnsetEnvironment——没有则本条在量空气');
+    const stripped = act.replace(/^UnsetEnvironment=.*\n/m, '');
+    const rel = `${GENERATED_SYSTEMD_PREFIX}commander-act.service`;
+    const r = checkNoPersonalTokenInUnits({ root: REPO, extraRels: [rel], files: { [rel]: stripped } });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /没卸|GH_TOKEN|GH_CONFIG_DIR/);
+  });
+
+  it('commander-inventory 摘掉 GH_CONFIG_DIR → 红（#1167）', async () => {
+    const { checkNoPersonalTokenInUnits, GENERATED_SYSTEMD_PREFIX } = await CHECK_LOAD;
+    const { INSTALL_FILES } = await INV;
+    const inv = String(INSTALL_FILES()['/etc/systemd/system/commander-inventory.service'] || '');
+    assert.match(inv, /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m, 'inventory 不写远端，现行模板本该致盲 ~/.config/gh');
+    const stripped = inv.replace(/^Environment=GH_CONFIG_DIR=\/var\/empty.*\n/m, '');
+    const rel = `${GENERATED_SYSTEMD_PREFIX}commander-inventory.service`;
+    const r = checkNoPersonalTokenInUnits({ root: REPO, extraRels: [rel], files: { [rel]: stripped } });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /没卸|GH_TOKEN|GH_CONFIG_DIR/);
+  });
+
+  it('commander-act 声明写远端却设了空目录 → 红（#1167 A1，不许一刀切）', async () => {
+    const { checkNoPersonalTokenInUnits, GENERATED_SYSTEMD_PREFIX } = await CHECK_LOAD;
+    const { INSTALL_FILES } = await INV;
+    const act = String(INSTALL_FILES()['/etc/systemd/system/commander-act.service'] || '');
+    assert.match(act, /^#\s*REQUIRES_GIT_PUSH=1\b/m, 'act 会 git push，现行模板必须声明');
+    assert.doesNotMatch(act, /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m);
+    const poisoned = act.replace(
+      /^(UnsetEnvironment=.*)$/m,
+      '$1\nEnvironment=GH_CONFIG_DIR=/var/empty',
+    );
+    const rel = `${GENERATED_SYSTEMD_PREFIX}commander-act.service`;
+    const r = checkNoPersonalTokenInUnits({ root: REPO, extraRels: [rel], files: { [rel]: poisoned } });
+    assert.equal(Boolean(r.fail), true, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /GH_CONFIG_DIR|空目录|没卸/);
+  });
 });
