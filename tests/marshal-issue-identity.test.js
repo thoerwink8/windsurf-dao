@@ -86,14 +86,11 @@ describe('marshal-issue-identity', () => {
     });
 
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    await t.test('mirasim 派工不打 stampIssueLabels；打了必须 marshal', () => {
+    await t.test('mirasim 派工 stampIssueLabels 必须 marshal（#1205）', () => {
       const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
-      const stamps = /stampIssueLabels\(\{[\s\S]*?runGh:\s*ghRunner\(\{[\s\S]*?\}\)/g;
-      const hits = daoSrc.match(stamps) || [];
       assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
-      assert.doesNotMatch(mira, /stampIssueLabels\(/, 'mirasim 派工不打 label');
-      assert.ok(hits.every((h) => /role:\s*'marshal'/.test(h)),
-        '若 stampIssueLabels 还在 dao.mjs 调用，身份必须 marshal  →  ' + hits.join(' | '));
+      assert.match(mira, /stampIssueLabels\(/, '派工前补 type/，缺标会让审完的 PR 合不进去');
+      assert.match(mira, /ghRunnerForTarget\([\s\S]*role:\s*'marshal'/, '打标身份必须 marshal');
     });
     await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
       assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);
