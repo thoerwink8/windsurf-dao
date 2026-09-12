@@ -344,6 +344,137 @@ test('process.execPath 别名再赋值 + 解析不了的 argv 仍红', () => {
   assert.notEqual(r.scanned, 0, JSON.stringify(r));
 });
 
+test('argv 函数调用 fail-closed（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, makeArgv(), { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('未知 spread argv fail-closed（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, [...argv], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('数组里的动态动词 fail-closed（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, ["scripts/dao.mjs", getVerb()], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('数组动态动词但带 --dry-run 仍绿', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}(process.execPath, ["scripts/dao.mjs", getVerb(), "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
+test('node 绝对路径 + 解析不了的 argv 必须红（审官对抗样本）', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    `${CALL}("/usr/bin/node", argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('node.exe 路径别名 + 解析不了的 argv 仍红', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const bin = "C:\\\\Program Files\\\\nodejs\\\\node.exe";',
+    `${CALL}(bin, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('git 绝对路径 + 解析不了的 argv 不当 dispatch', () => {
+  const src = `${CALL}("/usr/bin/git", args, { cwd: tmp, encoding: "utf8" });`;
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
+test('非 dao 脚本 + 未知 spread 不当 dispatch', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const HOOK = path.join(REPO, "hooks", "dao-mode.mjs");',
+    `${CALL}(process.execPath, [HOOK, ...args], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
+test('dao 已知其它动词 + 未知 spread 不当 dispatch', () => {
+  const src = [
+    `const { ${CALL} } = require("node:child_process");`,
+    'const DAO = path.join(ROOT, "scripts", "dao.mjs");',
+    `${CALL}(process.execPath, [DAO, "worktree-create", ...extra], { env: { ...process.env } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 0, JSON.stringify(r));
+});
+
+test('对象属性转发 spawn 必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const box = { ${alias}: cp.${CALL} };`,
+    `box.${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('成员赋值转发 spawn 必须红', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    'const cp = require("node:child_process");',
+    'const box = {};',
+    `box.${alias} = cp.${CALL};`,
+    `box.${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('对象上挂原名 spawnSync 必须红', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `const box = { ${CALL}: cp.${CALL} };`,
+    `box.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
 test('process.execPath 别名但 argv 带 --dry-run 仍绿', () => {
   const src = [
     `const { ${CALL} } = require("node:child_process");`,

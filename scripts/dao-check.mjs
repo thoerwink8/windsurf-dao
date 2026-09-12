@@ -2340,7 +2340,7 @@ function checkTestExecutorIsolationSamples() {
   if (!r.ok) {
     fail(
       r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
-      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 .txt/.fixture（不许 *.test.js，会被执行），必须点出执行体 env 丢失、非 argv 的 --dry-run、计算属性 spawn、拼接动词、别名再赋值、argv 先声明再赋值、解析不了的 argv、计算属性别名转发、调用后才赋 --dry-run 的 argv、process.execPath 命令别名；绿夹具必须绿；空=没查成',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 .txt/.fixture（不许 *.test.js，会被执行），必须点出执行体 env 丢失、非 argv 的 --dry-run、计算属性 spawn、拼接动词、别名再赋值、argv 先声明再赋值、解析不了的 argv、计算属性别名转发、调用后才赋 --dry-run 的 argv、process.execPath 命令别名、argv 函数调用、未知 spread argv、数组里的动态 argv、node 绝对路径、对象属性转发别名；绿夹具必须绿；空=没查成',
       r.error || '',
     );
     return;
