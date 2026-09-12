@@ -1545,6 +1545,53 @@ test('对象 rest holder 带 --dry-run 仍绿', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('for-of 对象 rest 必须红（审官对抗样本）', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp } of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('for-of 对象 rest 迭代源解析不了 fail-closed', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp } of [mod[k]]) {}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations.map((v) => v.why).join(';'), /对象 rest/);
+});
+
+test('for-of 对象 rest dest 解析不了 fail-closed', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + '[cp] } of [mod]) {}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations.map((v) => v.why).join(';'), /对象 rest/);
+});
+
+test('for-of 对象 rest 带 --dry-run 仍绿', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'for (const { ...' + 'cp } of [mod]) {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+    '}',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / for-of 都不许 scanned:0 ok:true', () => {
   const EX = 'ex' + 'ec';
   const alias = 'ru' + 'n';
@@ -1591,6 +1638,12 @@ test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / fo
     [
       'const { ...' + 'cp } = await import("node:child_process");',
       `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const mod = await import("node:child_process");',
+      'for (const { ...' + 'cp } of [mod]) {',
+      `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+      '}',
     ].join('\n'),
   ];
   for (const src of samples) {

@@ -38,9 +38,12 @@
 //      带真实 --dry-run 的样本不误红。
 //      数组解构覆盖声明、赋值、for-of（`for (const [run] of [[cp.exec]])`）。
 //      对象 rest（`const { ...cp } = mod` / `const { ...rest } = cp` /
-//      `const { ...cp } = await import("node:child_process")`）从已知
+//      `const { ...cp } = await import("node:child_process")` /
+//      `for (const { ...cp } of [mod])`）从已知
 //      child_process namespace 得到的 holder 要跟，成员调用进入扫描；
 //      解析不了的 rest dest fail-closed——不许 scanned:0 静默放行。
+//      for-of 对象 rest 要解析迭代源（至少覆盖可解析数组里的已知
+//      namespace/别名）；无法证明来源安全时 fail-closed。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
 //      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
@@ -192,8 +195,9 @@ function splitTopLevelArgs(inner) {
  * 未知 child_process 计算属性（`const run = cp[unknownKey]`）也收成别名，并标不透明。
  * 对象字面量 / 成员赋值（`{ run: cp.spawnSync }` / `box.run = cp.spawnSync`）也收成别名，
  * 并把承载对象记成 holder，`box.run(...)` 不许 scanned:0。
- * 对象 rest（`const { ...cp } = mod`）从已知 child_process namespace 得到的 holder
- * 要收进接收器；解析不了的 rest dest fail-closed。
+ * 对象 rest（`const { ...cp } = mod` / `for (const { ...cp } of [mod])`）
+ * 从已知 child_process namespace 得到的 holder 要收进接收器；
+ * 解析不了的 rest dest、无法证明安全的 for-of 迭代源 fail-closed。
  */
 export function collectSpawnAliases(src) {
   return [...collectSpawnAliasSets(src).names];
@@ -803,28 +807,46 @@ function eachDestructure(text, openCh, onMatch) {
 }
 
 function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, onUnresolvedRest) {
-  eachDestructure(text, '{', ({ inner, rhs }) => {
-    const rhsIsCp = isChildProcessNamespaceExpr(rhs, cpNames);
-    for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
-      if (isObjectRestBinding(raw)) {
-        const dest = parseObjectRestDest(raw);
-        if (dest && rhsIsCp) cpNames.add(dest);
-        else if (!dest && rhsIsCp && typeof onUnresolvedRest === 'function') onUnresolvedRest();
-        continue;
+  eachDestructure(text, '{', ({ inner, rhs, kind }) => {
+    const sources = kind === 'of' ? forOfSources(rhs, text) : [rhs];
+    const lhs = splitTopLevelArgs(stripJsComments(inner));
+    const noteRest = () => {
+      if (typeof onUnresolvedRest === 'function') onUnresolvedRest();
+    };
+    const applyFrom = (rhsIsCp, unproven) => {
+      if (!rhsIsCp && !unproven) return;
+      for (const raw of lhs) {
+        if (isObjectRestBinding(raw)) {
+          const dest = parseObjectRestDest(raw);
+          if (dest && rhsIsCp) cpNames.add(dest);
+          else if (dest && unproven) {
+            cpNames.add(dest);
+            addOpaque(dest);
+            noteRest();
+          } else if (!dest) {
+            noteRest();
+          }
+          continue;
+        }
+        const binding = parseObjectBinding(raw, text);
+        if (binding && binding.dest) {
+          if (rhsIsCp && (binding.src === 'default' || binding.opaque)) cpNames.add(binding.dest);
+          if (binding.src && isSpawnName(binding.src, asNameList(names))) addAlias(binding.dest, binding.src);
+          else if (binding.opaque && (rhsIsCp || unproven)) addOpaque(binding.dest);
+          continue;
+        }
+        const dest = guessBindingDest(raw);
+        if (dest) {
+          addOpaque(dest);
+          cpNames.add(dest);
+        }
       }
-      const binding = parseObjectBinding(raw, text);
-      if (binding && binding.dest) {
-        if (rhsIsCp && (binding.src === 'default' || binding.opaque)) cpNames.add(binding.dest);
-        if (binding.src && isSpawnName(binding.src, asNameList(names))) addAlias(binding.dest, binding.src);
-        else if (binding.opaque && rhsIsCp) addOpaque(binding.dest);
-        continue;
-      }
-      if (!rhsIsCp) continue;
-      const dest = guessBindingDest(raw);
-      if (dest) {
-        addOpaque(dest);
-        cpNames.add(dest);
-      }
+    };
+    for (const source of sources) {
+      const rhsUnwrapped = unwrapParens(source);
+      const rhsIsCp = isChildProcessNamespaceExpr(rhsUnwrapped, cpNames);
+      const unproven = !rhsIsCp && exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames);
+      applyFrom(rhsIsCp, unproven);
     }
   });
 }
@@ -1949,6 +1971,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let argvPush = false;
       let forOfArrayDestructure = false;
       let objectRestCp = false;
+      let forOfObjectRest = false;
+      let forOfObjectRestUnproven = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -2124,6 +2148,19 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\$\{/.test(src)
           && r.scanned > 0 && !r.ok
         ) forOfArrayDestructure = true;
+        if (
+          /for\s*\(\s*(?:const|let|var)\s*\{/.test(src)
+          && /\.\.\.\s*[A-Za-z_][\w]*/.test(src)
+          && /\bof\b/.test(src)
+          && /dao\.mjs/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) forOfObjectRest = true;
+        if (
+          /for\s*\(\s*(?:const|let|var)\s*\{/.test(src)
+          && /\.\.\.\s*[A-Za-z_][\w]*/.test(src)
+          && /\bof\b/.test(src)
+          && (r.violations || []).some((v) => /对象 rest/.test(v.why))
+        ) forOfObjectRestUnproven = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2171,6 +2208,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!argvPush) problems.push('red/ 没点出 argv.push 调用前变更');
       if (!forOfArrayDestructure) problems.push('red/ 没点出 for-of 数组解构（for (const [run] of [[cp.exec]])）');
       if (!objectRestCp) problems.push('red/ 没点出对象 rest 解构 child_process（{ ...cp } = mod）');
+      if (!forOfObjectRest) problems.push('red/ 没点出 for-of 对象 rest（for (const { ...cp } of [mod])）');
+      if (!forOfObjectRestUnproven) problems.push('red/ 没点出 for-of 对象 rest 迭代源 fail-closed');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

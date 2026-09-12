@@ -1,0 +1,8 @@
+/* 绿样本：for-of 对象 rest holder 带真实 --dry-run。
+const mod = await import("node:child_process");
+for (const { ...cp } of [mod]) {
+  cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], {
+    env: { PATH: "/bin" }
+  });
+}
+*/
