@@ -1,0 +1,6 @@
+/* 审官对抗样本：process.execPath 解构赋值。只认声明解构会 scanned:0。
+const { spawnSync } = require("node:child_process");
+let nodePath;
+({ execPath: nodePath } = process);
+spawnSync(nodePath, makeArgv(), { env: { PATH: "/bin" } });
+*/

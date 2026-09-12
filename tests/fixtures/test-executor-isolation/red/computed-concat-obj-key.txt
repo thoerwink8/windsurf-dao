@@ -1,0 +1,7 @@
+/* 审官对抗样本：拼接计算键对象转发。只覆盖 ['run'] 字面量会 scanned:0。
+const cp = require("node:child_process");
+const box = { ["r" + "un"]: cp.spawnSync };
+box.run(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/

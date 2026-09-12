@@ -1,0 +1,8 @@
+/* 审官对抗样本：for-of 数组解构。eachDestructure 只认 = 会 scanned:0。
+const cp = require("node:child_process");
+for (const [run] of [[cp.exec]]) {
+  run(`node scripts/dao.mjs ${getVerb()}`, {
+    env: { PATH: "/bin" }
+  });
+}
+*/

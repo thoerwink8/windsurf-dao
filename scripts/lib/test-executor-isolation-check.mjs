@@ -27,7 +27,16 @@
 //      函数适配：.call / .apply / 立刻 .bind()() / Reflect.apply / Function.prototype.call.call；
 //      计算属性/可选链同类（spawnSync["call"] / Reflect["apply"]）；解析不了的适配实参 fail-closed。
 //      child_process 接收器：声明时 require/import、赋值 require、动态 import() / import().then；
-//      跟踪 .default / .promises（含变量转发、解构 default）。
+//      跟踪 .default / .promises（含变量转发、解构 default、解构赋值
+//      `({ default: cp } = await import(...))` / `({ default: cp } = mod)`；
+//      解析不了的 default 绑定 fail-closed）。
+//      process.execPath 别名覆盖赋值解构、默认值、字符串键、计算键；无法证明时
+//      对 Node/dao 候选 fail-closed。
+//      对象 holder 的属性键走 resolveComputedKey（含 `["r"+"un"]`），值走别名解析
+//      （括号 RHS、计算属性 RHS）；解析不了的 child_process 属性转发保守判红。
+//      argv 调用前的 push / 索引赋值要跟；跟丢或变更无法证明 → fail-closed。
+//      带真实 --dry-run 的样本不误红。
+//      数组解构覆盖声明、赋值、for-of（`for (const [run] of [[cp.exec]])`）。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
 //      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
@@ -201,6 +210,131 @@ function eachObjectSpawnProp(text, fns, onMatch) {
   }
 }
 
+function indexOfTopLevelColon(s) {
+  let depthParen = 0;
+  let depthBrack = 0;
+  let depthBrace = 0;
+  let inStr = null;
+  let esc = false;
+  const text = String(s || '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '(') depthParen++;
+    else if (c === ')') { if (depthParen) depthParen--; }
+    else if (c === '[') depthBrack++;
+    else if (c === ']') { if (depthBrack) depthBrack--; }
+    else if (c === '{') depthBrace++;
+    else if (c === '}') { if (depthBrace) depthBrace--; }
+    else if (c === ':' && depthParen === 0 && depthBrack === 0 && depthBrace === 0) return i;
+  }
+  return -1;
+}
+
+function objectInner(body) {
+  const t = String(body || '').trim();
+  if (!t.startsWith('{')) return t;
+  const end = matchBalanced(t, 0);
+  if (end < 0) return t.slice(1);
+  return t.slice(1, end);
+}
+
+function eachObjectProperty(body, onProp) {
+  for (const raw of splitTopLevelArgs(stripJsComments(objectInner(body)))) {
+    const piece = raw.trim();
+    if (!piece || piece.startsWith('...')) continue;
+    if (piece[0] === '[') {
+      const keyEnd = matchBalanced(piece, 0);
+      if (keyEnd < 0) continue;
+      const after = piece.slice(keyEnd + 1).trim();
+      if (!after.startsWith(':')) continue;
+      onProp({ keySrc: piece.slice(1, keyEnd), value: after.slice(1).trim(), computed: true });
+      continue;
+    }
+    const colon = indexOfTopLevelColon(piece);
+    if (colon < 0) continue;
+    onProp({ keySrc: piece.slice(0, colon).trim(), value: piece.slice(colon + 1).trim(), computed: false });
+  }
+}
+
+function resolveObjectKey(src, keySrc, computed) {
+  const raw = String(keySrc || '').trim();
+  if (computed) return resolveComputedKey(src, raw);
+  if (/^[A-Za-z_][\w]*$/.test(raw)) return { resolved: raw, opaque: false };
+  return resolveComputedKey(src, raw);
+}
+
+/** 对象字面量上的 child_process 属性转发：键走 resolveComputedKey，值走别名解析。 */
+function applyObjectSpawnProps(body, src, names, cpNames, addAlias, addOpaque) {
+  let has = false;
+  let opaqueFwd = false;
+  eachObjectProperty(body, (prop) => {
+    const key = resolveObjectKey(src, prop.keySrc, prop.computed);
+    const info = spawnNameFromExpr(prop.value, names, cpNames, src);
+    if (!info.name && !info.opaque) return;
+    has = true;
+    if (key.opaque || !key.resolved || !/^[A-Za-z_][\w]*$/.test(key.resolved)) {
+      opaqueFwd = true;
+      return;
+    }
+    if (info.name) addAlias(key.resolved, info.name);
+    else addOpaque(key.resolved);
+  });
+  return { has, opaqueFwd };
+}
+
+/** `box.run = (cp.spawnSync)` / `box["r"+"un"] = cp.spawnSync` / `box.run = cp["spawnSync"]` */
+function scanHolderAssigns(text, names, cpNames, addAlias, addOpaque, holders, opaqueHolders) {
+  const src = String(text || '');
+  let inStr = null;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (!/[A-Za-z_]/.test(c)) continue;
+    if (i > 0 && /[A-Za-z0-9_]/.test(src[i - 1])) continue;
+    const idm = src.slice(i).match(/^([A-Za-z_][\w]*)/);
+    if (!idm) continue;
+    const prop = matchPropertyAccess(src, i + idm[1].length, src);
+    if (!prop) continue;
+    const after = src.slice(prop.end);
+    const eq = after.match(/^\s*=(?![=>])\s*/);
+    if (!eq) {
+      i += idm[1].length - 1;
+      continue;
+    }
+    const rhsStart = prop.end + eq[0].length;
+    const rhsEnd = scanRhsEnd(src, rhsStart);
+    const rhs = src.slice(rhsStart, rhsEnd);
+    const info = spawnNameFromExpr(rhs, names, cpNames, src);
+    if (!info.name && !info.opaque) {
+      i += idm[1].length - 1;
+      continue;
+    }
+    holders.add(idm[1]);
+    if (prop.opaque || !prop.name || !/^[A-Za-z_][\w]*$/.test(prop.name)) {
+      opaqueHolders.add(idm[1]);
+    } else if (info.name) {
+      addAlias(prop.name, info.name);
+    } else {
+      addOpaque(prop.name);
+    }
+    i = Math.max(i, rhsEnd - 1);
+  }
+}
+
 function spreadsChildProcess(body, cpNames) {
   if (!cpNames || !cpNames.size) return false;
   const ids = [...cpNames].map(escapeIdent).join('|');
@@ -211,6 +345,7 @@ function collectSpawnAliasSets(src) {
   const names = new Set(SPAWN_FNS);
   const opaque = new Set();
   const holders = new Set();
+  const opaqueHolders = new Set();
   const execNames = new Set(['exec', 'execSync']);
   const text = String(src || '');
   const cpNames = collectChildProcessReceivers(text);
@@ -225,7 +360,7 @@ function collectSpawnAliasSets(src) {
     if (srcName && execNames.has(srcName)) execNames.add(dest);
   };
   for (let n = 0; n < 32; n++) {
-    const before = names.size + opaque.size + holders.size + cpNames.size + execNames.size;
+    const before = names.size + opaque.size + holders.size + opaqueHolders.size + cpNames.size + execNames.size;
     const fns = [...names].map(escapeIdent).join('|');
     const dest = new RegExp(String.raw`(?<!-)\b(${fns})\s*:\s*([A-Za-z_][\w]*)(?:\s*=(?![=>])|\s*[,}])`, 'g');
     let m;
@@ -248,7 +383,10 @@ function collectSpawnAliasSets(src) {
     const takeObj = (id, body) => {
       let has = false;
       eachObjectSpawnProp(body, fns, () => { has = true; });
+      const props = applyObjectSpawnProps(body, text, names, cpNames, addAlias, addOpaque);
+      if (props.has) has = true;
       if (has) holders.add(id);
+      if (props.opaqueFwd) opaqueHolders.add(id);
       if (spreadsChildProcess(body, cpNames)) {
         holders.add(id);
         cpNames.add(id);
@@ -278,6 +416,7 @@ function collectSpawnAliasSets(src) {
       holders.add(m[1]);
       addAlias(m[2], m[3]);
     }
+    scanHolderAssigns(text, names, cpNames, addAlias, addOpaque, holders, opaqueHolders);
     if (holders.size) {
       const hs = [...holders].map(escapeIdent).join('|');
       const asgH = new RegExp(
@@ -290,6 +429,19 @@ function collectSpawnAliasSets(src) {
         'g',
       );
       while ((m = bareH.exec(text))) holders.add(m[1]);
+    }
+    if (opaqueHolders.size) {
+      const ohs = [...opaqueHolders].map(escapeIdent).join('|');
+      const asgOh = new RegExp(
+        String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:${ohs})\s*(?![(\w.])`,
+        'g',
+      );
+      while ((m = asgOh.exec(text))) opaqueHolders.add(m[1]);
+      const bareOh = new RegExp(
+        String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*(?:${ohs})\s*(?![(\w.])`,
+        'g',
+      );
+      while ((m = bareOh.exec(text))) opaqueHolders.add(m[1]);
     }
     scanComputedAliases(text, cpNames, (id, info) => {
       if (isSpawnName(info.resolved, [...names])) addAlias(id, info.resolved);
@@ -324,9 +476,9 @@ function collectSpawnAliasSets(src) {
       scanCpDefaultDestructure(text, cpNames);
     }
     for (const h of holders) cpNames.add(h);
-    if (names.size + opaque.size + holders.size + cpNames.size + execNames.size === before) break;
+    if (names.size + opaque.size + holders.size + opaqueHolders.size + cpNames.size + execNames.size === before) break;
   }
-  return { names, opaque, holders, cpNames, execNames };
+  return { names, opaque, holders, cpNames, execNames, opaqueHolders };
 }
 
 /** `const run = cp[unknownKey]`：赋值不是调用。解析不了的 key 标不透明。 */
@@ -397,24 +549,18 @@ function isChildProcessNamespaceExpr(expr, cpNames) {
 }
 
 function scanCpDefaultDestructure(text, names) {
-  const re = /\b(?:const|let|var)\s*\{/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const open = m.index + m[0].length - 1;
-    const end = matchBalanced(text, open);
-    if (end < 0) continue;
-    const eq = text.slice(end + 1).match(/^\s*=\s*/);
-    if (!eq) continue;
-    const rhsStart = end + 1 + eq[0].length;
-    const rhsEnd = scanRhsEnd(text, rhsStart);
-    const rhs = text.slice(rhsStart, rhsEnd).trim();
-    if (!isChildProcessNamespaceExpr(rhs, names)) continue;
-    const inner = text.slice(open + 1, end);
-    for (const raw of splitTopLevelArgs(inner)) {
-      const aliased = raw.trim().match(/^default\s*:\s*([A-Za-z_][\w]*)$/);
-      if (aliased) names.add(aliased[1]);
+  eachDestructure(text, '{', ({ inner, rhs }) => {
+    if (!isChildProcessNamespaceExpr(rhs, names)) return;
+    for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
+      const binding = parseObjectBinding(raw, text);
+      if (binding && binding.dest) {
+        if (binding.src === 'default' || binding.opaque) names.add(binding.dest);
+        continue;
+      }
+      const dest = guessBindingDest(raw);
+      if (dest) names.add(dest);
     }
-  }
+  });
 }
 
 /** 剥掉一层或多层只包着整个表达式的括号。 */
@@ -595,7 +741,7 @@ function spawnNameFromExpr(expr, names, cpNames, src) {
   return { name: '', opaque: false };
 }
 
-/** 声明解构 + 赋值解构（含括号）。`arr[i] =` 不当数组解构。 */
+/** 声明解构 + 赋值解构（含括号）+ for-of。`arr[i] =` 不当数组解构。 */
 function eachDestructure(text, openCh, onMatch) {
   const src = String(text || '');
   let inStr = null;
@@ -613,13 +759,19 @@ function eachDestructure(text, openCh, onMatch) {
     if (openCh === '[' && isIndexOrMemberBracket(src, i)) continue;
     const end = matchBalanced(src, i);
     if (end < 0) continue;
-    const eq = src.slice(end + 1).match(/^\s*=\s*/);
-    if (!eq) continue;
-    const rhsStart = end + 1 + eq[0].length;
+    const after = src.slice(end + 1);
+    const eq = after.match(/^\s*=\s*/);
+    const ofKw = after.match(/^\s+of\b\s*/);
+    if (!eq && !ofKw) continue;
+    const sep = eq || ofKw;
+    const rhsStart = end + 1 + sep[0].length;
     const rhsEnd = scanRhsEnd(src, rhsStart);
     onMatch({
       inner: src.slice(i + 1, end),
       rhs: src.slice(rhsStart, rhsEnd).trim(),
+      start: i,
+      end: rhsEnd,
+      kind: eq ? 'assign' : 'of',
     });
     i = end;
   }
@@ -631,20 +783,37 @@ function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOp
     for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
       const binding = parseObjectBinding(raw, text);
       if (binding && binding.dest) {
+        if (rhsIsCp && (binding.src === 'default' || binding.opaque)) cpNames.add(binding.dest);
         if (binding.src && isSpawnName(binding.src, asNameList(names))) addAlias(binding.dest, binding.src);
         else if (binding.opaque && rhsIsCp) addOpaque(binding.dest);
         continue;
       }
       if (!rhsIsCp) continue;
       const dest = guessBindingDest(raw);
-      if (dest) addOpaque(dest);
+      if (dest) {
+        addOpaque(dest);
+        cpNames.add(dest);
+      }
     }
   });
 }
 
+function forOfSources(rhs, src) {
+  let t = unwrapParens(rhs);
+  if (/^[A-Za-z_][\w]*$/.test(t)) {
+    const arr = findArrayLiteral(src, t);
+    if (arr) t = unwrapParens(arr);
+  }
+  if (!t.startsWith('[')) return [t];
+  const close = matchBalanced(t, 0);
+  if (close < 0 || t.slice(close + 1).trim()) return [t];
+  const slots = splitTopLevelArgs(t.slice(1, close)).map((s) => s.trim()).filter(Boolean);
+  return slots.length ? slots : [t];
+}
+
 function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque) {
-  eachDestructure(text, '[', ({ inner, rhs }) => {
-    const rhsUnwrapped = unwrapParens(rhs);
+  eachDestructure(text, '[', ({ inner, rhs, kind }) => {
+    const sources = kind === 'of' ? forOfSources(rhs, text) : [rhs];
     const lhs = splitTopLevelArgs(stripJsComments(inner));
     const failClosedDests = () => {
       for (const raw of lhs) {
@@ -652,24 +821,27 @@ function scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpa
         if (dest) addOpaque(dest);
       }
     };
-    if (!rhsUnwrapped.startsWith('[')) {
-      if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
-      return;
-    }
-    const close = matchBalanced(rhsUnwrapped, 0);
-    if (close < 0 || rhsUnwrapped.slice(close + 1).trim()) {
-      if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
-      return;
-    }
-    const slots = splitTopLevelArgs(rhsUnwrapped.slice(1, close));
-    for (let i = 0; i < lhs.length; i++) {
-      const dest = parseArrayDest(lhs[i]);
-      if (!dest) continue;
-      const slot = slots[i] || '';
-      const info = spawnNameFromExpr(slot, names, cpNames, text);
-      if (info.name) addAlias(dest, info.name);
-      else if (info.opaque) addOpaque(dest);
-      else if (exprLooksUnprovenSpawn(slot, names, cpNames)) addOpaque(dest);
+    for (const source of sources) {
+      const rhsUnwrapped = unwrapParens(source);
+      if (!rhsUnwrapped.startsWith('[')) {
+        if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
+        continue;
+      }
+      const close = matchBalanced(rhsUnwrapped, 0);
+      if (close < 0 || rhsUnwrapped.slice(close + 1).trim()) {
+        if (exprLooksUnprovenSpawn(rhsUnwrapped, names, cpNames)) failClosedDests();
+        continue;
+      }
+      const slots = splitTopLevelArgs(rhsUnwrapped.slice(1, close));
+      for (let i = 0; i < lhs.length; i++) {
+        const dest = parseArrayDest(lhs[i]);
+        if (!dest) continue;
+        const slot = slots[i] || '';
+        const info = spawnNameFromExpr(slot, names, cpNames, text);
+        if (info.name) addAlias(dest, info.name);
+        else if (info.opaque) addOpaque(dest);
+        else if (exprLooksUnprovenSpawn(slot, names, cpNames)) addOpaque(dest);
+      }
     }
   });
 }
@@ -944,7 +1116,34 @@ function scanIndirectApply(text, spawnNames, cpNames, onSpan) {
 
 export function extractCallSpans(src, names) {
   const sets = collectSpawnAliasSets(src);
-  return extractCallSites(src, names, sets.holders, sets.cpNames).map((s) => s.span);
+  return extractCallSites(src, names, sets.holders, sets.cpNames, sets.opaqueHolders).map((s) => s.span);
+}
+
+function scanOpaqueHolderCalls(text, opaqueHolders, onSpan) {
+  const set = opaqueHolders instanceof Set ? opaqueHolders : new Set(opaqueHolders || []);
+  if (!set.size) return;
+  const hs = [...set].map(escapeIdent).join('|');
+  const re = new RegExp(String.raw`\b(?:${hs})\b`, 'g');
+  let m;
+  while ((m = re.exec(text))) {
+    const prop = matchPropertyAccess(text, m.index + m[0].length, text);
+    if (!prop) continue;
+    const adapter = matchAdapterAfter(text.slice(prop.end), text);
+    if (adapter) {
+      const adapterOpen = text.indexOf('(', prop.end);
+      if (adapterOpen < 0) continue;
+      const name = prop.name && /^[A-Za-z_][\w]*$/.test(prop.name) ? prop.name : 'spawnSync';
+      const end = emitAdapterCall(adapter.kind, text, adapterOpen, name, m.index, onSpan);
+      if (end >= 0) re.lastIndex = end + 1;
+      continue;
+    }
+    const openIdx = indexOfCallOpen(text, prop.end);
+    if (openIdx < 0) continue;
+    const close = matchBalanced(text, openIdx);
+    if (close < 0) continue;
+    onSpan(text.slice(m.index, close + 1), m.index, true);
+    re.lastIndex = close + 1;
+  }
 }
 
 function groupOpenBefore(text, closeIdx, nameIdx) {
@@ -956,7 +1155,7 @@ function groupOpenBefore(text, closeIdx, nameIdx) {
   return -1;
 }
 
-function extractCallSites(src, names, holders, cpReceivers) {
+function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
   const text = String(src || '');
   const list = (Array.isArray(names) ? names : [names]).map(String).filter(Boolean);
   const alts = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -1009,6 +1208,7 @@ function extractCallSites(src, names, holders, cpReceivers) {
   const spawnNames = new Set([...list, ...SPAWN_FNS]);
   scanComputedCalls(text, spawnNames, cpNames, push);
   scanIndirectApply(text, spawnNames, cpNames, push);
+  scanOpaqueHolderCalls(text, opaqueHolders, push);
   return sites;
 }
 
@@ -1063,14 +1263,82 @@ function findLastAssignment(src, name, beforeIdx = Infinity) {
   return last;
 }
 
-function findArrayLiteral(src, name, beforeIdx = Infinity) {
+function collectArgvMutations(src, name, fromIdx, toIdx) {
+  const text = String(src || '');
+  const out = [];
+  const ident = escapeIdent(name);
+  const callRe = new RegExp(
+    String.raw`\b${ident}\s*\??\.\s*(push|unshift|pop|shift|splice)\s*\(`,
+    'g',
+  );
+  let m;
+  while ((m = callRe.exec(text))) {
+    if (m.index < fromIdx || m.index >= toIdx) continue;
+    const open = text.indexOf('(', m.index + m[0].length - 1);
+    if (open < 0 || open >= toIdx) continue;
+    const close = matchBalanced(text, open);
+    if (close < 0 || close > toIdx) continue;
+    const args = splitTopLevelArgs(text.slice(open + 1, close)).map((s) => s.trim()).filter(Boolean);
+    out.push({ kind: m[1], args, index: m.index });
+  }
+  const lbRe = new RegExp(String.raw`\b${ident}\s*\[`, 'g');
+  while ((m = lbRe.exec(text))) {
+    if (m.index < fromIdx || m.index >= toIdx) continue;
+    const open = text.indexOf('[', m.index);
+    const close = matchBalanced(text, open);
+    if (close < 0) continue;
+    const after = text.slice(close + 1);
+    const eq = after.match(/^\s*=(?![=>])\s*/);
+    if (!eq) continue;
+    const rhsStart = close + 1 + eq[0].length;
+    if (rhsStart >= toIdx) continue;
+    const rhsEnd = scanRhsEnd(text, rhsStart);
+    if (rhsEnd > toIdx) continue;
+    const keySrc = text.slice(open + 1, close);
+    const key = resolveComputedKey(text, keySrc);
+    const slot = key.resolved && /^(?:0|[1-9]\d*)$/.test(key.resolved) ? Number(key.resolved) : NaN;
+    out.push({
+      kind: 'index',
+      slot,
+      value: text.slice(rhsStart, rhsEnd).trim(),
+      opaque: key.opaque || !Number.isInteger(slot),
+      index: m.index,
+    });
+  }
+  out.sort((a, b) => a.index - b.index);
+  return out;
+}
+
+function resolveArgvArray(src, name, beforeIdx = Infinity) {
   const asg = findLastAssignment(src, name, beforeIdx);
-  if (!asg) return '';
+  if (!asg) return { lit: '', unresolved: false };
   const rhs = asg.rhs.trim();
-  if (!rhs.startsWith('[')) return '';
+  if (!rhs.startsWith('[')) return { lit: '', unresolved: false };
   const end = matchBalanced(rhs, 0);
-  if (end < 0) return '';
-  return rhs.slice(0, end + 1);
+  if (end < 0) return { lit: '', unresolved: false };
+  const slots = splitTopLevelArgs(rhs.slice(1, end)).map((s) => s.trim());
+  const muts = collectArgvMutations(src, name, asg.end, beforeIdx);
+  let unresolved = false;
+  const destructive = new Set(['pop', 'shift', 'splice']);
+  for (const mut of muts) {
+    if (mut.kind === 'push') {
+      slots.push(...mut.args);
+    } else if (mut.kind === 'unshift') {
+      slots.unshift(...mut.args);
+    } else if (mut.kind === 'index' && Number.isInteger(mut.slot) && mut.slot >= 0 && !mut.opaque) {
+      while (slots.length <= mut.slot) slots.push('');
+      slots[mut.slot] = mut.value;
+    } else if (destructive.has(mut.kind) || mut.kind === 'index') {
+      unresolved = true;
+    } else {
+      unresolved = true;
+    }
+  }
+  return { lit: `[${slots.join(', ')}]`, unresolved };
+}
+
+function findArrayLiteral(src, name, beforeIdx = Infinity) {
+  return resolveArgvArray(src, name, beforeIdx).lit;
 }
 
 function findStringLiteral(src, name, beforeIdx = Infinity) {
@@ -1093,28 +1361,30 @@ function isNodeExecutableName(v) {
   return name === 'node' || name === 'nodejs';
 }
 
-/** `const { execPath } = process` / `const { execPath: nodePath } = process` */
+function isProcessNamespaceExpr(expr) {
+  return /^(?:global(?:This)?\s*\.\s*)?process$/.test(unwrapParens(expr));
+}
+
+/** `const { execPath } = process` / `({ execPath: nodePath } = process)` / 字符串键与计算键 */
 function isProcessExecPathBinding(src, name, beforeIdx = Infinity) {
   const ident = String(name || '');
   if (!ident) return false;
   const text = String(src || '');
-  const re = /\b(?:const|let|var)\s*\{/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const open = m.index + m[0].length - 1;
-    if (open >= beforeIdx) continue;
-    const end = matchBalanced(text, open);
-    if (end < 0 || end >= beforeIdx) continue;
-    if (!/^\s*=\s*process\b/.test(text.slice(end + 1))) continue;
-    const inner = text.slice(open + 1, end);
-    for (const raw of splitTopLevelArgs(inner)) {
-      const piece = raw.trim();
-      if (piece === ident && ident === 'execPath') return true;
-      const rename = piece.match(new RegExp(String.raw`^execPath\s*:\s*${escapeIdent(ident)}$`));
-      if (rename) return true;
+  let found = false;
+  eachDestructure(text, '{', ({ inner, rhs, start, end }) => {
+    if (found) return;
+    if (start >= beforeIdx || end > beforeIdx) return;
+    if (!isProcessNamespaceExpr(rhs)) return;
+    for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
+      const binding = parseObjectBinding(raw, text);
+      if (binding && binding.dest === ident) {
+        if (binding.src === 'execPath' || binding.opaque) found = true;
+        return;
+      }
+      if (!binding && guessBindingDest(raw) === ident) found = true;
     }
-  }
-  return false;
+  });
+  return found;
 }
 
 function stripTemplateInterp(s) {
@@ -1171,9 +1441,11 @@ function isJsRunnerCommand(src, cmd, beforeIdx = Infinity, seen = new Set()) {
     if (seen.has(t)) return true;
     seen.add(t);
     const asg = findLastAssignment(src, t, beforeIdx);
-    if (asg) return isJsRunnerCommand(src, asg.rhs, asg.start, seen);
-    const str = findStringLiteral(src, t, beforeIdx);
-    if (str) return isJsRunnerCommand(src, str, beforeIdx, seen);
+    if (asg && isJsRunnerCommand(src, asg.rhs, asg.start, seen)) return true;
+    if (!asg) {
+      const str = findStringLiteral(src, t, beforeIdx);
+      if (str) return isJsRunnerCommand(src, str, beforeIdx, seen);
+    }
     if (isProcessExecPathBinding(src, t, beforeIdx)) return true;
     return false;
   }
@@ -1249,8 +1521,12 @@ function flattenArgvSlots(src, expr, beforeIdx, depth = 0) {
     return [{ kind: 'lit', value: lit[2] }];
   }
   if (/^[A-Za-z_][\w]*$/.test(t)) {
-    const arr = findArrayLiteral(src, t, beforeIdx);
-    if (arr) return flattenArgvSlots(src, arr, beforeIdx, depth + 1);
+    const resolved = resolveArgvArray(src, t, beforeIdx);
+    if (resolved.lit) {
+      const slots = flattenArgvSlots(src, resolved.lit, beforeIdx, depth + 1);
+      if (resolved.unresolved) slots.push({ kind: 'unknown' });
+      return slots;
+    }
     const str = findStringLiteral(src, t, beforeIdx);
     if (str) return flattenArgvSlots(src, str, beforeIdx, depth + 1);
     const asg = findLastAssignment(src, t, beforeIdx);
@@ -1375,10 +1651,12 @@ function argvTextForCall(src, span, callIndex = Infinity, execNames) {
     if (!treatingAsCommand) argvExprs.push(t);
     if (t.startsWith('[')) { addArray(t); continue; }
     if (/^[A-Za-z_][\w]*$/.test(t)) {
-      const arr = findArrayLiteral(src, t, callIndex);
+      const resolved = resolveArgvArray(src, t, callIndex);
+      const arr = resolved.lit;
       const str = findStringLiteral(src, t, callIndex);
       if (arr) addArray(arr);
       if (str) pieces.push(str);
+      if (resolved.unresolved && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
       if (!arr && !str) {
         pieces.push(t);
         if (!treatingAsCommand && isJsRunnerCommand(src, command, callIndex)) unresolved = true;
@@ -1426,9 +1704,9 @@ export function classifyTestDispatchSpawns(src) {
     return { ok: false, unscanned: true, error: '没给测试正文（没查成）', scanned: 0, violations: [] };
   }
   const text = String(src);
-  const { names, opaque: opaqueAliases, holders, cpNames, execNames } = collectSpawnAliasSets(text);
+  const { names, opaque: opaqueAliases, holders, cpNames, execNames, opaqueHolders } = collectSpawnAliasSets(text);
   const nameList = [...names];
-  const sites = extractCallSites(text, nameList, holders, cpNames);
+  const sites = extractCallSites(text, nameList, holders, cpNames, opaqueHolders);
   const violations = [];
   let scanned = 0;
   for (const { span, index, opaque: siteOpaque } of sites) {
@@ -1626,6 +1904,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let arrayAliasDestructure = false;
       let arrayParenDestructure = false;
       let arrayAssignDestructure = false;
+      let defaultAssignDestructure = false;
+      let execPathAssignDestructure = false;
+      let computedConcatObjKey = false;
+      let argvPush = false;
+      let forOfArrayDestructure = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -1773,6 +2056,33 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /\$\{/.test(src)
           && r.scanned > 0 && !r.ok
         ) arrayAssignDestructure = true;
+        if (
+          /\(\s*\{\s*default\s*:/.test(src)
+          && /await\s+import\s*\(/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) defaultAssignDestructure = true;
+        if (
+          /\(\s*\{\s*execPath\s*:/.test(src)
+          && /=\s*process\b/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execPathAssignDestructure = true;
+        if (
+          /\[\s*['"][^'"]+['"]\s*\+\s*['"][^'"]+['"]\s*\]\s*:/.test(src)
+          && /spawnSync/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) computedConcatObjKey = true;
+        if (
+          /\.push\s*\(/.test(src)
+          && /dispatch/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) argvPush = true;
+        if (
+          /for\s*\(\s*(?:const|let|var)\s*\[/.test(src)
+          && /\bof\b/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) forOfArrayDestructure = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -1814,6 +2124,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!arrayAliasDestructure) problems.push('red/ 没点出数组解构别名链（[run] = [fn]）');
       if (!arrayParenDestructure) problems.push('red/ 没点出数组解构括号（[(cp.exec)]）');
       if (!arrayAssignDestructure) problems.push('red/ 没点出数组解构赋值（([run] = [cp.exec])）');
+      if (!defaultAssignDestructure) problems.push('red/ 没点出动态 import default 解构赋值（({ default: cp } = await import)）');
+      if (!execPathAssignDestructure) problems.push('red/ 没点出 process.execPath 解构赋值（({ execPath: nodePath } = process)）');
+      if (!computedConcatObjKey) problems.push('red/ 没点出拼接计算键对象转发（["r"+"un"]）');
+      if (!argvPush) problems.push('red/ 没点出 argv.push 调用前变更');
+      if (!forOfArrayDestructure) problems.push('red/ 没点出 for-of 数组解构（for (const [run] of [[cp.exec]])）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
