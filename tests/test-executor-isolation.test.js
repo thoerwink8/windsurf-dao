@@ -1475,6 +1475,76 @@ test('for-of 数组解构带 --dry-run 仍绿', () => {
   assert.equal(r.ok, true, JSON.stringify(r));
 });
 
+test('对象 rest 从动态 import 模块必须红（审官对抗样本）', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'const { ...' + 'cp } = mod;',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('对象 rest 从 require 模块必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    'const { ...' + 'rest } = cp;',
+    `rest.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('对象 rest 直接从 import() 必须红（审官对抗样本）', () => {
+  const src = [
+    'const { ...' + 'cp } = await import("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('对象 rest 赋值解构必须红', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    'let rest;',
+    '({ ...' + 'rest } = cp);',
+    `rest.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('对象 rest dest 解析不了 fail-closed', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'const { ...' + '[cp] } = mod;',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations.map((v) => v.why).join(';'), /对象 rest/);
+});
+
+test('对象 rest holder 带 --dry-run 仍绿', () => {
+  const src = [
+    'const mod = await import("node:child_process");',
+    'const { ...' + 'cp } = mod;',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
 test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / for-of 都不许 scanned:0 ok:true', () => {
   const EX = 'ex' + 'ec';
   const alias = 'ru' + 'n';
@@ -1507,6 +1577,20 @@ test('审官 default 解构赋值 / execPath 赋值 / 拼接键 / argv.push / fo
       `for (const [${alias}] of [[cp.${EX}]]) {`,
       `  ${alias}(${tick}node scripts/dao.mjs \${getVerb()}${tick}, { env: { PATH: "/bin" } });`,
       '}',
+    ].join('\n'),
+    [
+      'const mod = await import("node:child_process");',
+      'const { ...' + 'cp } = mod;',
+      `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const cp = require("node:child_process");',
+      'const { ...' + 'rest } = cp;',
+      `rest.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    ].join('\n'),
+    [
+      'const { ...' + 'cp } = await import("node:child_process");',
+      `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
     ].join('\n'),
   ];
   for (const src of samples) {

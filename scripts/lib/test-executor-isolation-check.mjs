@@ -37,6 +37,10 @@
 //      argv 调用前的 push / 索引赋值要跟；跟丢或变更无法证明 → fail-closed。
 //      带真实 --dry-run 的样本不误红。
 //      数组解构覆盖声明、赋值、for-of（`for (const [run] of [[cp.exec]])`）。
+//      对象 rest（`const { ...cp } = mod` / `const { ...rest } = cp` /
+//      `const { ...cp } = await import("node:child_process")`）从已知
+//      child_process namespace 得到的 holder 要跟，成员调用进入扫描；
+//      解析不了的 rest dest fail-closed——不许 scanned:0 静默放行。
 //      exec 动态模板/未知命令：静态部分同时有 Node + dao.mjs 且不能证明 --dry-run → fail-closed。
 //      别名必须保留 exec / execSync 的命令字符串语义（{ exec: run }; run(`…${getVerb()}`)
 //      不许按 spawn 第一参路径解析后 scanned:0）。第一参本身含 Node + dao.mjs 且动态、
@@ -188,6 +192,8 @@ function splitTopLevelArgs(inner) {
  * 未知 child_process 计算属性（`const run = cp[unknownKey]`）也收成别名，并标不透明。
  * 对象字面量 / 成员赋值（`{ run: cp.spawnSync }` / `box.run = cp.spawnSync`）也收成别名，
  * 并把承载对象记成 holder，`box.run(...)` 不许 scanned:0。
+ * 对象 rest（`const { ...cp } = mod`）从已知 child_process namespace 得到的 holder
+ * 要收进接收器；解析不了的 rest dest fail-closed。
  */
 export function collectSpawnAliases(src) {
   return [...collectSpawnAliasSets(src).names];
@@ -349,6 +355,8 @@ function collectSpawnAliasSets(src) {
   const execNames = new Set(['exec', 'execSync']);
   const text = String(src || '');
   const cpNames = collectChildProcessReceivers(text);
+  let unresolvedCpRest = false;
+  const noteUnresolvedRest = () => { unresolvedCpRest = true; };
   const addOpaque = (id) => {
     if (!id) return;
     names.add(id);
@@ -365,7 +373,7 @@ function collectSpawnAliasSets(src) {
     const dest = new RegExp(String.raw`(?<!-)\b(${fns})\s*:\s*([A-Za-z_][\w]*)(?:\s*=(?![=>])|\s*[,}])`, 'g');
     let m;
     while ((m = dest.exec(text))) addAlias(m[2], m[1]);
-    scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque);
+    scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, noteUnresolvedRest);
     scanArrayDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque);
     const imp = new RegExp(String.raw`(?<!-)\b(${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
     while ((m = imp.exec(text))) addAlias(m[2], m[1]);
@@ -473,12 +481,12 @@ function collectSpawnAliasSets(src) {
         'g',
       );
       while ((m = bareCp.exec(text))) cpNames.add(m[1]);
-      scanCpDefaultDestructure(text, cpNames);
     }
+    scanCpDefaultDestructure(text, cpNames, noteUnresolvedRest);
     for (const h of holders) cpNames.add(h);
     if (names.size + opaque.size + holders.size + opaqueHolders.size + cpNames.size + execNames.size === before) break;
   }
-  return { names, opaque, holders, cpNames, execNames, opaqueHolders };
+  return { names, opaque, holders, cpNames, execNames, opaqueHolders, unresolvedCpRest };
 }
 
 /** `const run = cp[unknownKey]`：赋值不是调用。解析不了的 key 标不透明。 */
@@ -548,10 +556,27 @@ function isChildProcessNamespaceExpr(expr, cpNames) {
   return new RegExp(String.raw`^(?:${ids})${CP_NS_SUFFIX}$`).test(t);
 }
 
-function scanCpDefaultDestructure(text, names) {
+function isObjectRestBinding(raw) {
+  return splitBindingDefault(stripJsComments(raw)).trim().startsWith('...');
+}
+
+/** `{ ...cp }` → `cp`。rest dest 必须是标识符，解析不了返回空。 */
+function parseObjectRestDest(raw) {
+  const head = splitBindingDefault(stripJsComments(raw)).trim();
+  const m = head.match(/^\.\.\.\s*([A-Za-z_][\w]*)$/);
+  return m ? m[1] : '';
+}
+
+function scanCpDefaultDestructure(text, names, onUnresolvedRest) {
   eachDestructure(text, '{', ({ inner, rhs }) => {
     if (!isChildProcessNamespaceExpr(rhs, names)) return;
     for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
+      if (isObjectRestBinding(raw)) {
+        const dest = parseObjectRestDest(raw);
+        if (dest) names.add(dest);
+        else if (typeof onUnresolvedRest === 'function') onUnresolvedRest();
+        continue;
+      }
       const binding = parseObjectBinding(raw, text);
       if (binding && binding.dest) {
         if (binding.src === 'default' || binding.opaque) names.add(binding.dest);
@@ -777,10 +802,16 @@ function eachDestructure(text, openCh, onMatch) {
   }
 }
 
-function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque) {
+function scanObjectDestructureSpawnAliases(text, names, cpNames, addAlias, addOpaque, onUnresolvedRest) {
   eachDestructure(text, '{', ({ inner, rhs }) => {
     const rhsIsCp = isChildProcessNamespaceExpr(rhs, cpNames);
     for (const raw of splitTopLevelArgs(stripJsComments(inner))) {
+      if (isObjectRestBinding(raw)) {
+        const dest = parseObjectRestDest(raw);
+        if (dest && rhsIsCp) cpNames.add(dest);
+        else if (!dest && rhsIsCp && typeof onUnresolvedRest === 'function') onUnresolvedRest();
+        continue;
+      }
       const binding = parseObjectBinding(raw, text);
       if (binding && binding.dest) {
         if (rhsIsCp && (binding.src === 'default' || binding.opaque)) cpNames.add(binding.dest);
@@ -1704,7 +1735,7 @@ export function classifyTestDispatchSpawns(src) {
     return { ok: false, unscanned: true, error: '没给测试正文（没查成）', scanned: 0, violations: [] };
   }
   const text = String(src);
-  const { names, opaque: opaqueAliases, holders, cpNames, execNames, opaqueHolders } = collectSpawnAliasSets(text);
+  const { names, opaque: opaqueAliases, holders, cpNames, execNames, opaqueHolders, unresolvedCpRest } = collectSpawnAliasSets(text);
   const nameList = [...names];
   const sites = extractCallSites(text, nameList, holders, cpNames, opaqueHolders);
   const violations = [];
@@ -1734,6 +1765,14 @@ export function classifyTestDispatchSpawns(src) {
               ? '真 spawn dao dispatch-exec 且无 --dry-run：测试结构性够得着真执行体'
               : '真 spawn dao dispatch 且无 --dry-run：测试结构性够得着真执行体',
       excerpt: span.replace(/\s+/g, ' ').slice(0, 240),
+    });
+  }
+  if (unresolvedCpRest) {
+    scanned += 1;
+    violations.push({
+      kind: 'live-dispatch',
+      why: '无法可靠解析的 child_process 对象 rest 解构：fail-closed，不许 scanned:0 静默放行',
+      excerpt: '{...}',
     });
   }
   return { ok: violations.length === 0, unscanned: false, scanned, violations };
@@ -1909,6 +1948,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let computedConcatObjKey = false;
       let argvPush = false;
       let forOfArrayDestructure = false;
+      let objectRestCp = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -1962,7 +2002,8 @@ export function inspectTestExecutorIsolationFixtures(root) {
         if (/\bspawnSync\s*\?\.\s*\(/.test(src) && r.scanned > 0 && !r.ok) optionalCall = true;
         if (/\(\s*0\s*,\s*spawnSync\s*\)\s*\(/.test(src) && r.scanned > 0 && !r.ok) commaCall = true;
         if (/\[\s*['"]run['"]\s*\]\s*:/.test(src) && r.scanned > 0 && !r.ok) computedObjKey = true;
-        if (/\{\s*\.\.\.\s*[A-Za-z_][\w]*\s*\}/.test(src) && r.scanned > 0 && !r.ok) spreadCp = true;
+        if (/=\s*\{\s*\.\.\.\s*[A-Za-z_][\w]*\s*\}/.test(src) && r.scanned > 0 && !r.ok) spreadCp = true;
+        if (/\{\s*\.\.\.\s*[A-Za-z_][\w]*\s*\}\s*=/.test(src) && r.scanned > 0 && !r.ok) objectRestCp = true;
         if (/execPath\s*:\s*[A-Za-z_][\w]*/.test(src) && r.scanned > 0 && !r.ok) destructureExecPath = true;
         if (/\.call\s*\(\s*null/.test(src) && r.scanned > 0 && !r.ok) fnCall = true;
         if (/\.apply\s*\(\s*null/.test(src) && r.scanned > 0 && !r.ok) fnApply = true;
@@ -2129,6 +2170,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!computedConcatObjKey) problems.push('red/ 没点出拼接计算键对象转发（["r"+"un"]）');
       if (!argvPush) problems.push('red/ 没点出 argv.push 调用前变更');
       if (!forOfArrayDestructure) problems.push('red/ 没点出 for-of 数组解构（for (const [run] of [[cp.exec]])）');
+      if (!objectRestCp) problems.push('red/ 没点出对象 rest 解构 child_process（{ ...cp } = mod）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
