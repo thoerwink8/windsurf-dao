@@ -1,9 +1,0 @@
-/* 审官对抗样本：for-of 对象 rest，} 与 of 之间是块注释。
-   空白不是语法必要条件；注释也是合法间隔。
-const mod = await import("node:child_process");
-for (const {...cp}/*x*/of [mod]) {
-  cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-    env: { PATH: "/bin" }
-  });
-}
-*/

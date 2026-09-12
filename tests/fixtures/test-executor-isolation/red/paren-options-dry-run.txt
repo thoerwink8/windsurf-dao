@@ -1,4 +1,0 @@
-/* 审官对抗样本：括号包着的 options，input 里的 --dry-run 不是子进程 argv。
-const { spawnSync } = require("node:child_process");
-spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], ({ env: { PATH: "/bin" }, input: "--dry-run" }));
-*/

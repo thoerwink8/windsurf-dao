@@ -1,5 +1,0 @@
-/* 审官对抗样本：逗号间接调用 (0, spawnSync)(...)。只认 spawnSync( 会 scanned:0。
-const cp = require("node:child_process");
-const { spawnSync } = cp;
-(0, spawnSync)(process.execPath, argv, { env: { PATH: "/bin" } });
-*/

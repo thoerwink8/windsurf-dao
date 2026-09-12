@@ -1,6 +1,0 @@
-/* 审官对抗样本：动词是模板字面量。只认单/双引号会 scanned:0。
-const { spawnSync: run } = require("node:child_process");
-const verb = `dispatch`;
-const argv = ["scripts/dao.mjs", verb];
-run(process.execPath, argv, { env: { PATH: "/bin", HOME: "/tmp" } });
-*/

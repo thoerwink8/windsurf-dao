@@ -1,7 +1,0 @@
-/* 审官对抗样本：展开 child_process { ...cp }。box2 不在 cp 接收者里会 scanned:0。
-const cp = require("node:child_process");
-const box2 = { ...cp };
-box2.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

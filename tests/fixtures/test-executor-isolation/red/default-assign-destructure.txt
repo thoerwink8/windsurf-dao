@@ -1,7 +1,0 @@
-/* 审官对抗样本：动态 import 默认导出解构赋值。只扫 const { default } 会 scanned:0。
-let cp;
-({ default: cp } = await import("node:child_process"));
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

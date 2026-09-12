@@ -1,9 +1,0 @@
-/* 审官对抗样本：for-of 对象 rest 紧凑写法。} 与 of 之间无空白。
-   旧闸 `^\s+of\b` 把空白当成语法必要条件，Node 合法 `}of` 会 scanned:0。
-const mod = await import("node:child_process");
-for (const {...cp}of [mod]) {
-  cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-    env: { PATH: "/bin" }
-  });
-}
-*/

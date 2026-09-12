@@ -1,6 +1,0 @@
-/* 绿对照：createRequire 路径上的静态非 dispatch 动词，不当派工。
-import { createRequire } from "node:module";
-const req = createRequire(import.meta.url);
-const cp = req("node:child_process");
-cp.exec("node scripts/dao.mjs worker-done", { env: { PATH: "/bin" } });
-*/

@@ -1,6 +1,0 @@
-/* 审官对抗样本：createRequire() 取得 child_process 再 cp.exec。只认 require/import 会 scanned:0。
-import { createRequire } from "node:module";
-const req = createRequire(import.meta.url);
-const cp = req("node:child_process");
-cp.exec("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });
-*/

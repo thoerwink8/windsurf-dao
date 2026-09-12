@@ -1,5 +1,0 @@
-/* 绿样本：调用级 spread 展开后真实 argv 带 --dry-run。
-const cp = require("node:child_process");
-const args = [process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"]];
-cp.spawnSync(...args, { env: { PATH: "/bin" } });
-*/

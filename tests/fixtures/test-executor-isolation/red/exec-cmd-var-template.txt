@@ -1,6 +1,0 @@
-/* 审官对抗样本：exec 命令变量动态模板。只读调用点字面量、插值被剥掉后
-不再按 Node+dao.mjs fail-closed，会 scanned:0。
-const cp = require("node:child_process");
-const cmd = `node scripts/dao.mjs ${getVerb()}`;
-cp.exec(cmd, { env: { PATH: "/bin" } });
-*/

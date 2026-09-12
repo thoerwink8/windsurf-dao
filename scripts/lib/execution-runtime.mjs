@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {createRuntime as createMirasimRuntime} from './mirasim-runtime.mjs';
+import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
@@ -98,7 +98,13 @@ export function createExecutionRuntime(opts={}) {
   const now=opts.now||Date.now,scan=opts.scanProcesses||scanSessionProcs;
   const identity=opts.processIdentity||acpProcessIdentity,alive=opts.processAlive||acpProcessAlive,kill=opts.killProcess||process.kill.bind(process);
   const fence=fn=>withExecutionFence({stateDir,timeoutMs:opts.fenceTimeoutMs??5000},fn);
-  const assertMutationAllowed=()=>{if(process.env.NODE_TEST_CONTEXT&&!(opts.mirasimRuntime&&opts.acpRuntime))throw new Error('live execution mutations are disabled in test processes; inject isolated backends');};
+  const isolatedBackends=Boolean(opts.mirasimRuntime&&opts.acpRuntime);
+  const assertMutationAllowed=()=>{if(process.env.NODE_TEST_CONTEXT&&!isolatedBackends)throw new Error('live execution mutations are disabled in test processes; inject isolated backends');};
+  const assertExecutorIsolation=()=>{
+    if(isolatedBackends)return;
+    const isolation=judgeTestExecutorIsolation(opts.env||process.env);
+    if(!isolation.ok)throw new MirasimRejectedError(isolation.error,{isolation});
+  };
   function metadata(key){return readJson(metaFile(key));}
   const backend=(key,m)=>((m?.backend||(String(key).startsWith('acp:')?'acp':'mirasim'))==='acp'?acp:mirasim);
   const keyOf=m=>m.recordKey||m.sessionKey;
@@ -209,6 +215,7 @@ export function createExecutionRuntime(opts={}) {
     }catch{return {ok:false,uncertain:true,recordKey};}
   }
   async function startSession(spec) {
+    assertExecutorIsolation();
     assertMutationAllowed();
     const launch=prepare(spec),{actual,meta,token}=launch,file=leaseFile(meta.workdir);
     for(;;) {
@@ -488,6 +495,7 @@ export function createExecutionRuntime(opts={}) {
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
     profileForModel:model=>{const matches=profiles.filter(p=>p.id===model||p.defaultForModels?.includes(model));if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},
     ensureWorkspace:async(repo,branch)=>{
+      assertExecutorIsolation();
       assertMutationAllowed();
       const tree=await (opts.ensureWorkspace?opts.ensureWorkspace(repo,branch):ensureGitWorkspace(repo,branch,{homeDir,base:opts.base}));
       if(tree&&tree.path) attachControlPlaneHooksOrThrow(tree.path);

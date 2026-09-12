@@ -1,8 +1,0 @@
-/* 审官对抗样本：对象 rest 从已知 child_process namespace 得到 holder。
-   不跟踪 { ...cp } = mod 会 scanned:0。
-const mod = await import("node:child_process");
-const { ...cp } = mod;
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

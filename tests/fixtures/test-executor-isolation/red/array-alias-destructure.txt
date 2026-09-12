@@ -1,6 +1,0 @@
-/* 审官对抗样本：数组解构别名链。只认右值写成 cp.exec，[fn] 会 scanned:0。
-const cp = require("node:child_process");
-const fn = cp.exec;
-const [run] = [fn];
-run(`node scripts/dao.mjs ${getVerb()}`, { env: { PATH: "/bin" } });
-*/

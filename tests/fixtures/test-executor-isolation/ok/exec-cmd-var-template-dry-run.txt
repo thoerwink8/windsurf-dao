@@ -1,5 +1,0 @@
-/* 绿样本：exec 命令变量动态模板，静态部分能证明 --dry-run。
-const cp = require("node:child_process");
-const cmd = `node scripts/dao.mjs ${getVerb()} --dry-run`;
-cp.exec(cmd, { env: { PATH: "/bin" } });
-*/

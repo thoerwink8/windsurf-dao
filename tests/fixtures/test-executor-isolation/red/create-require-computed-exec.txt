@@ -1,6 +1,0 @@
-/* 审官对抗样本：createRequire 之后 cp["exec"]。计算属性键要按 exec 命令字符串扫，不许 scanned:0。
-import { createRequire } from "node:module";
-const req = createRequire(import.meta.url);
-const cp = req("node:child_process");
-cp["exec"]("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });
-*/

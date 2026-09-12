@@ -1,6 +1,0 @@
-/* 审官对抗样本：process.execPath 别名 + 解析不了的 argv。当未知标识符会 scanned:0。
-const { spawnSync } = require("node:child_process");
-const nodePath = process.execPath;
-const argv = makeArgv();
-spawnSync(nodePath, argv, { env: { PATH: "/bin" } });
-*/

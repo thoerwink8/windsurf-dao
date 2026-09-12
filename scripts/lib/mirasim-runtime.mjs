@@ -190,35 +190,51 @@ export class MirasimRejectedError extends Error {
 /** 测试隔离闸话面钉死这一句，检查器 / 判别用例都认它。 */
 export const TEST_ISOLATION_MARK = '结构性够不着真执行体';
 
+/** 生产入口显式放行真执行体的 env 名。dao.mjs 自己不许自打这面旗。 */
+export const REAL_EXECUTOR_ENV = 'DAO_REAL_EXECUTOR';
+
+/** 指挥官 spawn 子进程时打上放行旗。测试进程不要调。 */
+export function withRealExecutorEnv(env = process.env) {
+  const e = env && typeof env === 'object' ? { ...env } : {};
+  e[REAL_EXECUTOR_ENV] = '1';
+  return e;
+}
+
 /**
- * 测试环境是否允许碰真执行体（#1152）。纯函数，只吃 env。
+ * 是否允许碰真执行体（#1152）。纯函数，只吃 env。allowlist：
  *
- * 生产默认放行（指挥官派工没有这些信号）。测试默认拦截：
- * NODE_TEST_CONTEXT（node --test）/ DAO_DISPATCH_NO_SPAWN（测试以为自己设了就能隔）/
- * DAO_NO_NETWORK_LOG（dao-check 跑套时）——任一出现就拒。
- * 真机验收显式 DAO_ALLOW_REAL_EXECUTOR=1 才放。
+ * - 默认拦。子进程 env 整份换成瘦对象（执行体 env 丢失）也拦——这正是 2026-09-08
+ *   14 个 #565 假会话的洞；denylist（「看见测试信号才拦」）放行空 env。
+ * - 测试信号（NODE_TEST_CONTEXT / DAO_DISPATCH_NO_SPAWN / DAO_NO_NETWORK_LOG）
+ *   一律拦，带 DAO_REAL_EXECUTOR=1 也不能从测试里选择加入。
+ * - 只有生产入口显式 DAO_REAL_EXECUTOR=1、且没有测试信号，才放。
  *
- * 拦不住的洞：子进程 env 整份换成不含这些键的对象（执行体 env 丢失）。
- * 那条靠测试源码闸（test-executor-isolation-check.mjs：别名 / argv 变量 /
- * dispatch-exec 都要扫到），不靠本函数。
+ * 单元测试注入 connect / fake runtime（usingRealWire=false 时本闸不参与）。
  */
 export function judgeTestExecutorIsolation(env = process.env) {
   const e = env && typeof env === 'object' ? env : {};
-  if (String(e.DAO_ALLOW_REAL_EXECUTOR || '') === '1') {
-    return { ok: true, blocked: false, why: 'DAO_ALLOW_REAL_EXECUTOR', signals: [] };
-  }
   const signals = [];
   if (e.NODE_TEST_CONTEXT) signals.push('NODE_TEST_CONTEXT');
   if (e.DAO_DISPATCH_NO_SPAWN) signals.push('DAO_DISPATCH_NO_SPAWN');
   if (e.DAO_NO_NETWORK_LOG) signals.push('DAO_NO_NETWORK_LOG');
-  if (signals.length === 0) {
-    return { ok: true, blocked: false, why: 'no-test-signal', signals };
+  if (signals.length > 0) {
+    return {
+      ok: false,
+      blocked: true,
+      why: 'test-signal',
+      signals,
+      error: `测试环境${TEST_ISOLATION_MARK}（${signals.join('+')}）：ensureWorkspace/startSession 拒。单元测试注入 connect / fake runtime；生产入口打 ${REAL_EXECUTOR_ENV}=1`,
+    };
+  }
+  if (String(e[REAL_EXECUTOR_ENV] || '') === '1') {
+    return { ok: true, blocked: false, why: REAL_EXECUTOR_ENV, signals: [] };
   }
   return {
     ok: false,
     blocked: true,
-    signals,
-    error: `测试环境${TEST_ISOLATION_MARK}（${signals.join('+')}）：ensureWorkspace/startSession 拒。单元测试注入 connect / fake runtime；真机验收设 DAO_ALLOW_REAL_EXECUTOR=1`,
+    why: 'missing-DAO_REAL_EXECUTOR',
+    signals: [],
+    error: `默认拦${TEST_ISOLATION_MARK}：未设 ${REAL_EXECUTOR_ENV}=1。测试注入 fake runtime；指挥官 / systemd 生产入口显式放行`,
   };
 }
 

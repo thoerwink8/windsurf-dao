@@ -1,4 +1,0 @@
-/* 审官对抗样本：argv 是函数调用。只认裸标识符会 scanned:0。
-const { spawnSync } = require("node:child_process");
-spawnSync(process.execPath, makeArgv(), { env: { PATH: "/bin" } });
-*/

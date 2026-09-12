@@ -1,6 +1,0 @@
-/* 审官对抗样本：require("node:" + "child_process")。只认字面量模块名会 scanned:0，运行时却是真 child_process。
-const cp = require("node:" + "child_process");
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

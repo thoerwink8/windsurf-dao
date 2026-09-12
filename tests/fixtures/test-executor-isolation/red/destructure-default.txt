@@ -1,6 +1,0 @@
-/* 审官对抗样本：解构默认值。{ exec: run } 只认后面紧跟 ,/}，带 = fallback 会 scanned:0。
-const { exec: run = fallback } = require("node:child_process");
-run(`node scripts/dao.mjs ${getVerb()}`, {
-  env: { PATH: "/bin" }
-});
-*/

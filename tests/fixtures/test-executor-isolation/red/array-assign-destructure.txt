@@ -1,6 +1,0 @@
-/* 审官对抗样本：数组解构赋值。前面有括号时 ^/[;\n]\s*\[ 匹配不到 ([run] = [cp.exec])。
-const cp = require("node:child_process");
-let run;
-([run] = [cp.exec]);
-run(`node scripts/dao.mjs ${getVerb()}`, { env: { PATH: "/bin" } });
-*/

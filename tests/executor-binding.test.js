@@ -571,21 +571,20 @@ describe('worktree-create --executor mirasim 不要 --name/--issue（#884 P1）'
     assert.equal(r.status, 1, '连不上服务 / 隔离拒派都要非零退出');
   });
 
-  it('显式 DAO_ALLOW_REAL_EXECUTOR 仍不得在测试里真建树', () => {
-    // ALLOW 只覆盖本单隔离闸。统一执行层改走 git，不再读 mirasim 令牌；
-    // 非 git 目录 + 执行层突变闸仍拦住真 IO。
+  it('显式 DAO_REAL_EXECUTOR 仍不得在测试里真建树', () => {
+    // 测试信号下 allowlist 不许选择加入。NODE_TEST_CONTEXT 随 process.env 进子进程。
     const emptyRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-non-repo-allow-'));
     try {
       const r = spawnSync(process.execPath, [DAO, 'worktree-create', '--executor', 'mirasim', '--branch', 'dao-probe-884', '--repo', emptyRepo], {
         encoding: 'utf8', timeout: 60000, cwd: ROOT,
-        env: { ...process.env, MIRASIM_PORT: '59999', DAO_ALLOW_REAL_EXECUTOR: '1' },
+        env: { ...process.env, MIRASIM_PORT: '59999', DAO_REAL_EXECUTOR: '1' },
       });
       const out = JSON.parse(String(r.stdout || '').trim());
       assert.equal(out.executor, 'mirasim');
       assert.match(
         String(out.error || ''),
-        /结构性够不着真执行体|mirasim 建树失败: (读不到回环会话令牌|Command failed: git|live execution mutations are disabled in test processes)/,
-        '放行本单隔离闸之后仍不得真建树',
+        /结构性够不着真执行体/,
+        '测试进程即使打了生产旗标也不得真建树',
       );
       assert.equal(r.status, 1);
     } finally { fs.rmSync(emptyRepo, { recursive: true, force: true }); }

@@ -1,6 +1,0 @@
-/* 审官对抗样本：module.require(...) 取 child_process。只认裸 require/import 会 scanned:0。
-const cp = module.require("node:child_process");
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

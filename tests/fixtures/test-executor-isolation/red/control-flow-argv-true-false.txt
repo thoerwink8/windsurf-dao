@@ -1,6 +1,0 @@
-/* 审官对抗样本：if (true)/if (false) 多次赋 argv。控制流无法证明哪次发生。 */
-const { spawnSync } = require("node:child_process");
-let argv = ["scripts/dao.mjs", "dispatch"];
-if (true) argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];
-if (false) argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];
-spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });

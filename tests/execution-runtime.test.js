@@ -265,7 +265,7 @@ linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
   await rt.readSession(started.sessionKey);
   assert.equal(records(f)[0].state,'completed');
 });
-linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
+linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/结构性够不着真执行体|live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
 
 test('nested Mirasim interactions and awaiting override apparent completion/incomplete',()=>{
   const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');

@@ -1,7 +1,0 @@
-/* 审官对抗样本：require 后再对象 rest。const { ...rest } = cp 不跟踪会 scanned:0。
-const cp = require("node:child_process");
-const { ...rest } = cp;
-rest.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

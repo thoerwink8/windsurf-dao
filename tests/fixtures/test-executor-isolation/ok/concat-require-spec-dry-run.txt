@@ -1,6 +1,0 @@
-/* 绿对照：拼接 specifier 取 child_process，但 argv 真有 --dry-run。
-const cp = require("node:" + "child_process");
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], {
-  env: { PATH: "/bin" }
-});
-*/

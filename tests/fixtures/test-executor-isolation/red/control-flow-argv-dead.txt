@@ -1,5 +1,0 @@
-/* 审官对抗样本：死分支里最后一次 argv 带 --dry-run。只取文本序最后一次赋值会 ok:true。 */
-const { spawnSync } = require("node:child_process");
-let argv = ["scripts/dao.mjs", "dispatch"];
-if (false) argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];
-spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });

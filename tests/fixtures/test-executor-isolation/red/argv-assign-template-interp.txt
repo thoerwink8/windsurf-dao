@@ -1,5 +1,0 @@
-/* 审官对抗样本：模板插值里的 argv 赋值会改掉 --dry-run。 */
-const { spawnSync } = require("node:child_process");
-let argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];
-const note = `${(argv = ["scripts/dao.mjs", "dispatch"])}`;
-spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });

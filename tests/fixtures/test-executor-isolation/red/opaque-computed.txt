@@ -1,4 +1,0 @@
-/* 审官对抗样本：child_process 计算属性方法名解析不了，fail-closed。
-const cp = require("node:child_process");
-cp[fn](process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });
-*/

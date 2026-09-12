@@ -1,8 +1,0 @@
-/* 绿样本：for-of 数组解构，静态部分能证明 --dry-run。
-const cp = require("node:child_process");
-for (const [run] of [[cp.exec]]) {
-  run(`node scripts/dao.mjs ${getVerb()} --dry-run`, {
-    env: { PATH: "/bin" }
-  });
-}
-*/

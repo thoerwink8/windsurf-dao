@@ -1,7 +1,0 @@
-/* 审官对抗样本：exec 解构别名。别名进了调用名集合但丢了 exec 命令字符串语义，
-会按 spawn 解析第一参，动态模板既看不见 dispatch 也不标 argv 未解析，scanned:0。
-const { exec: run } = require("node:child_process");
-run(`node scripts/dao.mjs ${getVerb()}`, {
-  env: { PATH: "/bin" }
-});
-*/

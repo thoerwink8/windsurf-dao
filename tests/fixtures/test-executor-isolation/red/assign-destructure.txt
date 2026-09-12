@@ -1,6 +1,0 @@
-/* 审官对抗样本：对象解构赋值。只认 const/let/var {，({ ["exec"]: run } = cp) 会 scanned:0。
-const cp = require("node:child_process");
-let run;
-({ ["exec"]: run } = cp);
-run(`node scripts/dao.mjs ${getVerb()}`, { env: { PATH: "/bin" } });
-*/

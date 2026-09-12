@@ -1,6 +1,0 @@
-/* 审官对抗样本：调用前 argv 索引赋值。只读数组字面量会 scanned:0。
-const { spawnSync } = require("node:child_process");
-const argv = ["scripts/dao.mjs"];
-argv[1] = "dispatch";
-spawnSync(process.execPath, argv, { env: { PATH: "/bin" } });
-*/

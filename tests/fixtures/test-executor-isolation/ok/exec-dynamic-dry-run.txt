@@ -1,6 +1,0 @@
-/* 绿样本：exec 动态模板但静态部分能证明 --dry-run。
-const { exec } = require("node:child_process");
-exec(`node scripts/dao.mjs ${getVerb()} --dry-run`, {
-  env: { PATH: "/bin", HOME: "/tmp" }
-});
-*/

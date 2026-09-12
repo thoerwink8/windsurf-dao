@@ -107,14 +107,12 @@
 //    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
-// ㉠ 测试结构性够不着真执行体（#1152）：spawn dao dispatch / dispatch-exec 必须带 --dry-run；
-//    认别名（含 const run = cp.spawnSync / 未知计算属性转发）、argv 变量（含赋值，
-//    解析不了则 fail-closed）、模板动词、exec 命令字符串、.call/.apply/Reflect.apply、
-//    动态 import() 与赋值 require 的 child_process 接收器；
-//    故意「执行体 env 丢失」样本必须红且不得是 *.test.js（会被 node --test 发现执行）。
-//    ensureWorkspace/startSession/cmdDispatchMirasim 都要在真 IO 前过隔离闸。
-//    检查器自持括号匹配，不 import 被测测试 / runtime 解析。
-//    红/绿/空夹具验判别力；0 个测试文件 = 没查成。
+// ㉠ 测试结构性够不着真执行体（#1152）：运行时 allowlist（默认拦，DAO_REAL_EXECUTOR=1
+//    才放；测试信号不能选择加入）。红夹具必须点出 env-lost 与测试不能 opt-in；
+//    绿夹具必须是生产旗标。ensureWorkspace / startSession / cmdDispatchMirasim /
+//    cmdStartMirasim / cmdWorktreeCreateMirasim / execution-runtime 都要在真 IO 前过闸。
+//    指挥官 runCmd 与 systemd 模板必须打 DAO_REAL_EXECUTOR=1。
+//    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
 // ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
 //    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
 
@@ -2341,12 +2339,12 @@ function checkTestExecutorIsolationSamples() {
   if (!r.ok) {
     fail(
       r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
-      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 .txt/.fixture（不许 *.test.js，会被执行），必须点出执行体 env 丢失、非 argv 的 --dry-run、计算属性 spawn、拼接动词、别名再赋值、argv 先声明再赋值、解析不了的 argv、计算属性别名转发、调用后才赋 --dry-run 的 argv、process.execPath 命令别名、argv 函数调用、未知 spread argv、数组里的动态 argv、node 绝对路径、对象属性转发别名、调用级 spread（...args 作第一实参 / ...[cmd, argv] / exec 同类）；绿夹具必须绿；空=没查成',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 env JSON（不许 *.js），必须点出 env-lost 与测试不能 opt-in；绿夹具必须是生产 DAO_REAL_EXECUTOR=1；空=没查成',
       r.error || '',
     );
     return;
   }
-  green(`测试隔离闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+  green(`测试隔离闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（allowlist 有判别力）`);
 }
 
 function checkTestExecutorIsolationLive() {
@@ -2354,8 +2352,6 @@ function checkTestExecutorIsolationLive() {
   const r = inspectTestExecutorIsolationLive({
     dir,
     readdir: readdirSync,
-    readFile: (p) => readFileSync(p, 'utf8'),
-    join,
   });
   if (r.unscanned) {
     fail('测试隔离闸 live 没查成', 'tests/ 下要有 *.test.js，读失败不是「没有真派工」', r.error || '');
@@ -2363,39 +2359,46 @@ function checkTestExecutorIsolationLive() {
   }
   if (!r.ok) {
     fail(
-      `测试隔离闸 ${r.violations.length} 处真 spawn dispatch`,
-      'spawn dao dispatch / dispatch-exec 必须带 --dry-run（含别名和 argv 变量）；真路径改注入 fake runtime / cliInProc（同进程隔离闸会拦）',
-      r.violations.map((v) => `${v.file}: ${v.why}`).join('；'),
+      `测试隔离闸 live 红`,
+      'tests/ 下要有测试文件；真 spawn 靠运行时 allowlist 拦',
+      (r.violations || []).map((v) => `${v.file}: ${v.why}`).join('；') || r.error || '',
     );
     return;
   }
   const runtimeFile = join(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs');
   const daoFile = join(ROOT, 'scripts', 'dao.mjs');
-  if (!existsSync(runtimeFile) || !existsSync(daoFile)) {
+  const executionFile = join(ROOT, 'scripts', 'lib', 'execution-runtime.mjs');
+  const commanderFile = join(ROOT, 'scripts', 'commander.mjs');
+  const unitFile = join(ROOT, 'scripts', 'lib', 'commander-inventory.mjs');
+  const missing = [runtimeFile, daoFile, executionFile, commanderFile, unitFile].filter((p) => !existsSync(p));
+  if (missing.length) {
     fail(
       '测试隔离闸接线没查成',
-      '恢复 scripts/lib/mirasim-runtime.mjs 与 scripts/dao.mjs',
-      `runtime=${existsSync(runtimeFile)} dao=${existsSync(daoFile)}`,
+      '恢复 mirasim-runtime / dao / execution-runtime / commander / commander-inventory',
+      missing.join('；'),
     );
     return;
   }
   const wiring = inspectIsolationWiring({
     runtimeSrc: readFileSync(runtimeFile, 'utf8'),
     daoSrc: readFileSync(daoFile, 'utf8'),
+    executionSrc: readFileSync(executionFile, 'utf8'),
+    commanderSrc: readFileSync(commanderFile, 'utf8'),
+    unitSrc: readFileSync(unitFile, 'utf8'),
   });
   if (wiring.unscanned) {
-    fail('测试隔离闸接线没查成', '给齐 runtime/dao 正文再扫', wiring.error || '');
+    fail('测试隔离闸接线没查成', '给齐 runtime/dao/execution/commander/unit 正文再扫', wiring.error || '');
     return;
   }
   if (!wiring.ok) {
     fail(
       `测试隔离闸接线丢了 ${wiring.problems.length} 处`,
-      'ensureWorkspace / startSession / cmdDispatchMirasim 都要在真 IO 前过 judgeTestExecutorIsolation',
+      'allowlist 判官 + 真 IO 前过闸 + 指挥官/systemd 打 DAO_REAL_EXECUTOR=1',
       wiring.problems.join('；'),
     );
     return;
   }
-  green(`测试隔离闸：${r.scanned} 套测试 0 处真 spawn dispatch；runtime/dao 接线在`);
+  green(`测试隔离闸：${r.scanned} 套测试；allowlist 接线与生产入口打旗在`);
 }
 
 function checkOrphanTestLive() {

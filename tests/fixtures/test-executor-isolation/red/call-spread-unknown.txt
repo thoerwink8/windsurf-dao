@@ -1,4 +1,0 @@
-/* 审官对抗样本：调用级 spread 解析不了。不许 scanned:0, ok:true。
-const { spawnSync } = require("node:child_process");
-spawnSync(...unknownArgs, { env: { PATH: "/bin" } });
-*/

@@ -1,4 +1,0 @@
-/* 审官对抗样本：argv 整段是未知 spread。展开不了当 scanned:0 会漏。
-const { spawnSync } = require("node:child_process");
-spawnSync(process.execPath, [...argv], { env: { PATH: "/bin" } });
-*/

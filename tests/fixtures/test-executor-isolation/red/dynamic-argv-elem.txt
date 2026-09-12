@@ -1,4 +1,0 @@
-/* 审官对抗样本：数组里的动态表达式可产出 dispatch。只扫字面量会 scanned:0。
-const { spawnSync } = require("node:child_process");
-spawnSync(process.execPath, ["scripts/dao.mjs", getVerb()], { env: { PATH: "/bin" } });
-*/

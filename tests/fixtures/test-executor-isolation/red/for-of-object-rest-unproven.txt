@@ -1,4 +1,0 @@
-/* 审官对抗样本：for-of 对象 rest 迭代源无法证明安全必须 fail-closed。
-const mod = await import("node:child_process");
-for (const { ...cp } of [mod[k]]) {}
-*/

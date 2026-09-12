@@ -1,6 +1,0 @@
-/* 审官对抗样本：exec 动态模板。getVerb() 运行时可返回 dispatch，含插值的模板不当 Node/dao 候选会 scanned:0。
-const { exec } = require("node:child_process");
-exec(`node scripts/dao.mjs ${getVerb()}`, {
-  env: { PATH: "/bin", HOME: "/tmp" }
-});
-*/

@@ -1,9 +1,0 @@
-/* 审官对抗样本：真 spawn dao dispatch-exec（执行体本体），env 丢失。
-const { spawnSync } = require('node:child_process');
-spawnSync(process.execPath, [
-  'scripts/dao.mjs', 'dispatch-exec', '--order', '/tmp/x.json',
-], {
-  encoding: 'utf8',
-  env: { PATH: '/usr/bin', HOME: '/tmp' },
-});
-*/

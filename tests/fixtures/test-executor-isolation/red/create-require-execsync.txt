@@ -1,6 +1,0 @@
-/* 审官对抗样本：createRequire 路径上的 execSync。成员形式仍要已知接收器，漏登记会 scanned:0。
-import { createRequire } from "node:module";
-const req = createRequire(import.meta.url);
-const cp = req("node:child_process");
-cp.execSync("node scripts/dao.mjs dispatch", { env: { PATH: "/bin" } });
-*/

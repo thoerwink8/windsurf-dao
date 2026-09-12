@@ -1,9 +1,0 @@
-/* 审官对抗样本：解构模式与 = 之间夹注释（注释里还有 }）。
-   matchBalanced 若把注释当括号、eachDestructure 只认空白，会 scanned:0。
-const mod = await import("node:child_process");
-let cp;
-({ ...cp }/* comment with } */ = mod);
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

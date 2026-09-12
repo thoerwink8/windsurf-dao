@@ -1,4 +1,0 @@
-/* 审官对抗样本：计算属性 spawn。只认标识符 spawnSync 加括号会 scanned:0。
-const cp = require("node:child_process");
-cp["spawnSync"](process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });
-*/

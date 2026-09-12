@@ -1,4 +1,0 @@
-/* 审官对抗样本：node 绝对路径 + 解析不了的 argv。当 git 会 scanned:0。
-const { spawnSync } = require("node:child_process");
-spawnSync("/usr/bin/node", argv, { env: { PATH: "/bin" } });
-*/

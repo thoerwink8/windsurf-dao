@@ -960,6 +960,8 @@ async function cmdWorktreeCreateMirasim(args, { policy }) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worktree-create' });
   const repo = targetRepo.localPath;
   const branch = mirasimBranchOrFail(args);
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim', repo, branch });
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.worktreeCreate({ repo, branch }); }
@@ -2121,6 +2123,9 @@ async function cmdStartMirasim(args) {
     });
     return;
   }
+
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
 
   if (!workdir) {
     try {

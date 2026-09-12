@@ -1,6 +1,0 @@
-/* 审官对抗样本：直接从 import() 对象 rest。const { ...cp } = await import(...) 会 scanned:0。
-const { ...cp } = await import("node:child_process");
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

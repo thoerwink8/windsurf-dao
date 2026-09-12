@@ -1,5 +1,0 @@
-/* 审官对抗样本：可选链调用 spawnSync?.(...)。只认 spawnSync( 会 scanned:0。
-const cp = require("node:child_process");
-const { spawnSync } = cp;
-spawnSync?.(process.execPath, argv, { env: { PATH: "/bin" } });
-*/

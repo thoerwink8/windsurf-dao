@@ -1,6 +1,0 @@
-/* 审官对抗样本：exec 命令变量别名。findStringLiteral 不跟随 ident = ident。
-const cp = require("node:child_process");
-const cmd = `node scripts/dao.mjs ${getVerb()}`;
-const command = cmd;
-cp.exec(command, { env: { PATH: "/bin" } });
-*/

@@ -1,7 +1,0 @@
-/* 审官对抗样本：对象属性转发 child_process 函数。只认 cp.spawnSync / 解构会 scanned:0。
-const cp = require("node:child_process");
-const box = { run: cp.spawnSync };
-box.run(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

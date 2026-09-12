@@ -1,7 +1,0 @@
-/* 审官对抗样本：对象 rest dest 解析不了必须 fail-closed，不许 scanned:0 ok:true。
-const mod = await import("node:child_process");
-const { ...[cp] } = mod;
-cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
-  env: { PATH: "/bin" }
-});
-*/

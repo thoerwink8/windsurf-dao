@@ -1,5 +1,0 @@
-/* 审官对抗样本：属性别名 const run = cp.spawnSync。只认标识符赋值会 scanned:0。
-const cp = require("node:child_process");
-const run = cp.spawnSync;
-run(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", HOME: "/tmp" } });
-*/
