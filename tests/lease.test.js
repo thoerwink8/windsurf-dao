@@ -292,6 +292,45 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
   });
 });
 
+describe('覆盖证明与会话扫描共用一份 PID 快照（#1176 审官 P1）', () => {
+  // 审官判别性复现：第二次 PID 列表扩成 ['10','2','3'] 时，旧实现
+  // ok:true、procs 只有 pid 2、total:3——新出现的 PID 3 在目标树里，
+  // 既不进 procs 也不 unscanned。
+  it('第一次扫描后出现的本身份 PID 不许静默漏掉', async () => {
+    const { scanSessionProcs } = await LEASE;
+    let readdirCalls = 0;
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => {
+        readdirCalls += 1;
+        return readdirCalls === 1 ? ['10', '2'] : ['10', '2', '3'];
+      },
+      read: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(p)?.[1];
+        if (p.endsWith('/status')) return 'Uid:\t999\t999\t999\t999\n';
+        if (p.endsWith('/cmdline')) return pid === '10' ? 'mirasim-server/x/server.cjs' : 'y';
+        if (p.endsWith('/comm')) return 'worker\n';
+        const ppid = { 10: 1, 2: 10, 3: 10 }[pid];
+        return `${pid} (x) S ${ppid} 0 0`;
+      },
+      readlink: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(String(p))?.[1];
+        return pid === '10' ? '/' : '/wt/active';
+      },
+    });
+    const silentDrop = got.ok === true
+      && Array.isArray(got.procs)
+      && got.procs.some((p) => p.pid === 2)
+      && !got.procs.some((p) => p.pid === 3)
+      && got.total === 3;
+    assert.equal(silentDrop, false, JSON.stringify({ readdirCalls, result: got }));
+    assert.equal(readdirCalls, 1, '必须复用覆盖证明那一份 PID 快照，不许再读一次 /proc');
+    assert.equal(got.ok, true);
+    assert.equal(got.total, 2);
+    assert.deepEqual(got.procs, [{ pid: 2, comm: 'worker', cwd: '/wt/active' }]);
+  });
+});
+
 describe('/proc/<pid>/stat 解析', () => {
   // comm 里带空格和括号会把「按空格切」冲垮，切在最后一个 ')' 才安全。
   it('进程名里有空格和括号时 ppid 仍解析得对', async () => {

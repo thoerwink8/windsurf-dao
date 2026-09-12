@@ -37,8 +37,8 @@ function defaultUid() {
 /**
  * 扫 cwd，带覆盖证明。
  *
- * @returns {{ok:true, cwds:string[], entries:Array, resolved:number, total:number, gone:number, hidden:number, foreign:number, denied:number}
- *          |{ok:false, unscanned:true, error:string, cwds?:string[], entries?:Array, resolved?:number, total?:number, gone?:number, hidden?:number, foreign?:number, denied?:number}}
+ * @returns {{ok:true, cwds:string[], entries:Array, pids:number[], resolved:number, total:number, gone:number, hidden:number, foreign:number, denied:number}
+ *          |{ok:false, unscanned:true, error:string, cwds?:string[], entries?:Array, pids?:number[], resolved?:number, total?:number, gone?:number, hidden?:number, foreign?:number, denied?:number}}
  */
 export function scanProcCwds({
   procDir = '/proc',
@@ -104,7 +104,8 @@ export function scanProcCwds({
   }
 
   const stats = {
-    cwds, entries, resolved: cwds.length, total: pids.length,
+    cwds, entries, pids: pids.map(Number),
+    resolved: cwds.length, total: pids.length,
     gone, hidden, foreign, denied: denied.length,
   };
   if (denied.length) {

@@ -61,6 +61,9 @@ export const LEASE_BUSY_REASON = 'lease-held';
  * 会在 60/249 时放行删除——#1176 审官 P1。
  *
  * 覆盖证明必须排在「服务不在 ⇒ 0 个会话」前面：服务不在不能反过来证明相关进程核清了。
+ *
+ * 覆盖证明、父链、cwd 必须吃同一份 PID 快照。再读一次 /proc，第一次之后才出现的
+ * 本身份进程会静默漏掉，函数仍 ok:true——#1176 审官 P1。
  */
 export function scanSessionProcs({
   readdir = readdirSync, read = readFileSync, readlink = readlinkSync, getuid,
@@ -76,12 +79,12 @@ export function scanSessionProcs({
     };
   }
 
-  let names;
-  try { names = readdir('/proc'); }
-  catch (e) { return { ok: false, unscanned: true, error: `/proc 读不动：${String(e.message || e)}` }; }
-
-  const pids = names.filter((n) => /^\d+$/.test(n)).map(Number);
-  if (!pids.length) return { ok: false, unscanned: true, error: '/proc 下一个 pid 都没有——没查成' };
+  const pids = Array.isArray(cover.pids)
+    ? cover.pids.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  if (!pids.length) {
+    return { ok: false, unscanned: true, error: '覆盖证明没带回 PID 快照——没查成' };
+  }
 
   // 先找 mirasim 服务进程：会话进程必须是它的后代。
   const servers = new Set();

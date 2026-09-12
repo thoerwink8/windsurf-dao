@@ -60,6 +60,7 @@ test('全部 cwd 读成 → ok', () => {
   }));
   assert.equal(r.ok, true);
   assert.deepEqual(r.cwds, ['/wt/a', '/wt/b']);
+  assert.deepEqual(r.pids, [10, 11]);
   assert.equal(r.denied, 0);
 });
 
