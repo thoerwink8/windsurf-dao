@@ -18,6 +18,8 @@
 //      argv 变量解析不了且调用像在跑 node/dao → 保守判红，不许留下变量名当 scanned:0。
 //      argv 是函数调用 / 未知 spread / 数组里的动态表达式：Node/dao 候选无法证明安全 → fail-closed。
 //      argv 只认调用前最后一次赋值：调用后才补 --dry-run 不许拼进来误放行。
+//      argv 赋值还要证明对调用可达：死分支 / if (true) 里最后一次带 --dry-run
+//      不算放行。控制流无法证明则 unresolved fail-closed。
 //      process.execPath 的命令别名要跟（const nodePath = process.execPath; spawn(nodePath, argv)）。
 //      node 绝对/相对路径（/usr/bin/node、node.exe）也是 JS 执行体，不许当 git 放过。
 //      对象字面量 / 成员赋值上的 child_process 别名（{ run: cp.spawnSync }; box.run(...)）要跟。
@@ -1383,20 +1385,152 @@ function scanRhsEnd(text, start) {
   return src.length;
 }
 
-/** 调用前最后一次 `name = rhs`。赋值必须在 beforeIdx 前结束。 */
-function findLastAssignment(src, name, beforeIdx = Infinity) {
+/** idx 之前最后一个 ident / punct / `=>`。字符串和注释跳过。 */
+function lastTokenBefore(text, idx) {
+  const src = String(text || '');
+  const limit = Math.max(0, Math.min(idx, src.length));
+  let last = { type: '', value: '', start: -1, end: -1 };
+  for (let i = 0; i < limit; ) {
+    const skipped = skipStringOrComment(src, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    const c = src[i];
+    if (/\s/.test(c)) { i += 1; continue; }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i + 1;
+      while (j < limit && /[\w]/.test(src[j])) j += 1;
+      last = { type: 'ident', value: src.slice(i, j), start: i, end: j };
+      i = j;
+      continue;
+    }
+    if (c === '=' && src[i + 1] === '>' && i + 1 < limit) {
+      last = { type: 'arrow', value: '=>', start: i, end: i + 2 };
+      i += 2;
+      continue;
+    }
+    last = { type: 'punct', value: c, start: i, end: i + 1 };
+    i += 1;
+  }
+  return last;
+}
+
+function matchingOpenParen(text, closeIdx) {
+  const src = String(text || '');
+  if (src[closeIdx] !== ')') return -1;
+  for (let i = closeIdx - 1; i >= 0; i--) {
+    if (src[i] !== '(') continue;
+    if (matchBalanced(src, i) === closeIdx) return i;
+  }
+  return -1;
+}
+
+const CF_PAREN_KWS = new Set(['if', 'for', 'while', 'switch', 'catch', 'with']);
+
+function keywordBeforeCloseParen(text, closeIdx) {
+  const open = matchingOpenParen(text, closeIdx);
+  if (open < 0) return '';
+  const tok = lastTokenBefore(text, open);
+  if (tok.type !== 'ident') return '';
+  if (tok.value === 'function') return 'function';
+  if (lastTokenBefore(text, tok.start).value === 'function') return 'function';
+  return tok.value;
+}
+
+/** `{` 是否控制流 / 函数体。`) {` 一律当块（if/for/while/函数/方法）。 */
+function isCfBrace(text, openIdx) {
+  const tok = lastTokenBefore(text, openIdx);
+  if (tok.type === 'arrow') return true;
+  if (tok.type === 'ident' && /^(?:else|try|do|finally|catch)$/.test(tok.value)) return true;
+  return tok.value === ')';
+}
+
+function unbracedCfGuardsSite(text, siteIdx) {
+  const tok = lastTokenBefore(text, siteIdx);
+  if (tok.type === 'ident' && tok.value === 'else') return true;
+  if (tok.value !== ')') return false;
+  const after = skipWsAndComments(text, tok.start + 1);
+  if (text[after] === '{') return false;
+  const kw = keywordBeforeCloseParen(text, tok.start);
+  return CF_PAREN_KWS.has(kw) || kw === 'function';
+}
+
+function braceCfContainsSiteNotCall(text, siteIdx, callIndex) {
+  const src = String(text || '');
+  const stack = [];
+  for (let i = 0; i < siteIdx; i++) {
+    const skipped = skipStringOrComment(src, i);
+    if (skipped !== i) {
+      i = skipped - 1;
+      continue;
+    }
+    const c = src[i];
+    if (c === '{' || c === '(' || c === '[') stack.push({ ch: c, idx: i });
+    else if (c === '}' || c === ')' || c === ']') {
+      const want = c === '}' ? '{' : c === ')' ? '(' : '[';
+      for (let k = stack.length - 1; k >= 0; k--) {
+        if (stack[k].ch === want) {
+          stack.length = k;
+          break;
+        }
+      }
+    }
+  }
+  for (const frame of stack) {
+    if (frame.ch !== '{') continue;
+    if (!isCfBrace(src, frame.idx)) continue;
+    const close = matchBalanced(src, frame.idx);
+    if (close >= 0 && close < callIndex) return true;
+  }
+  return false;
+}
+
+/**
+ * 站点不在调用的控制流前驱上：死分支 / 调用外的 if(true) 赋值不能当运行时值。
+ * 没有调用点（beforeIdx 非有限）就不判可达性。
+ */
+function siteUnprovenVsCall(text, siteIdx, callIndex) {
+  if (!Number.isFinite(callIndex)) return false;
+  if (siteIdx >= callIndex) return true;
+  if (unbracedCfGuardsSite(text, siteIdx)) return true;
+  return braceCfContainsSiteNotCall(text, siteIdx, callIndex);
+}
+
+function arrayRhsHasDryRun(rhs) {
+  const t = String(rhs || '').trim();
+  if (!t.startsWith('[')) return false;
+  const end = matchBalanced(t, 0);
+  if (end < 0) return false;
+  return hasLit(t.slice(0, end + 1), '--dry-run');
+}
+
+/** 调用前所有 `name = rhs`。赋值必须在 beforeIdx 前结束。 */
+function findAssignments(src, name, beforeIdx = Infinity) {
   const text = String(src || '');
-  const re = new RegExp(String.raw`(?:^|[^\w.])${escapeIdent(name)}\s*=(?![=>])\s*`, 'g');
-  let last = null;
+  const re = new RegExp(String.raw`(?:^|[^\w.])(${escapeIdent(name)})\s*=(?![=>])\s*`, 'g');
+  const out = [];
   let m;
   while ((m = re.exec(text))) {
+    const identStart = m.index + m[0].indexOf(m[1]);
     const rhsStart = m.index + m[0].length;
     if (rhsStart >= beforeIdx) continue;
     const rhsEnd = scanRhsEnd(text, rhsStart);
     if (rhsEnd < 0 || rhsEnd > beforeIdx) continue;
-    last = { rhs: text.slice(rhsStart, rhsEnd).trim(), start: m.index, end: rhsEnd };
+    out.push({
+      rhs: text.slice(rhsStart, rhsEnd).trim(),
+      start: m.index,
+      identStart,
+      end: rhsEnd,
+    });
   }
-  return last;
+  return out;
+}
+
+/** 调用前最后一次 `name = rhs`（文本序，含控制流里的）。可达性由 resolveArgvArray 另判。 */
+function findLastAssignment(src, name, beforeIdx = Infinity) {
+  const all = findAssignments(src, name, beforeIdx);
+  return all.length ? all[all.length - 1] : null;
 }
 
 function collectArgvMutations(src, name, fromIdx, toIdx) {
@@ -1446,17 +1580,31 @@ function collectArgvMutations(src, name, fromIdx, toIdx) {
 }
 
 function resolveArgvArray(src, name, beforeIdx = Infinity) {
-  const asg = findLastAssignment(src, name, beforeIdx);
-  if (!asg) return { lit: '', unresolved: false };
-  const rhs = asg.rhs.trim();
-  if (!rhs.startsWith('[')) return { lit: '', unresolved: false };
+  const all = findAssignments(src, name, beforeIdx);
+  let lastProven = null;
+  for (const item of all) {
+    if (!siteUnprovenVsCall(src, item.identStart, beforeIdx)) lastProven = item;
+  }
+  const laterUnproven = all.filter((item) => (
+    item.start > (lastProven ? lastProven.start : -1)
+    && siteUnprovenVsCall(src, item.identStart, beforeIdx)
+  ));
+  if (!lastProven) return { lit: '', unresolved: all.length > 0 };
+  const rhs = lastProven.rhs.trim();
+  if (!rhs.startsWith('[')) {
+    return { lit: '', unresolved: laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs)) };
+  }
   const end = matchBalanced(rhs, 0);
-  if (end < 0) return { lit: '', unresolved: false };
+  if (end < 0) return { lit: '', unresolved: true };
   const slots = splitTopLevelArgs(rhs.slice(1, end)).map((s) => s.trim());
-  const muts = collectArgvMutations(src, name, asg.end, beforeIdx);
-  let unresolved = false;
+  const muts = collectArgvMutations(src, name, lastProven.end, beforeIdx);
+  let unresolved = laterUnproven.some((item) => !arrayRhsHasDryRun(item.rhs));
   const destructive = new Set(['pop', 'shift', 'splice']);
   for (const mut of muts) {
+    if (siteUnprovenVsCall(src, mut.index, beforeIdx)) {
+      unresolved = true;
+      continue;
+    }
     if (mut.kind === 'push') {
       slots.push(...mut.args);
     } else if (mut.kind === 'unshift') {
@@ -1721,6 +1869,7 @@ function flattenArgvSlots(src, expr, beforeIdx, depth = 0) {
       if (resolved.unresolved) slots.push({ kind: 'unknown' });
       return slots;
     }
+    if (resolved.unresolved) return [{ kind: 'unknown' }];
     const str = findStringLiteral(src, t, beforeIdx);
     if (str) return flattenArgvSlots(src, str, beforeIdx, depth + 1);
     const asg = findLastAssignment(src, t, beforeIdx);
@@ -2139,6 +2288,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let execShellCommentDryRun = false;
       let controlFlowCpAssign = false;
       let controlFlowAliasAssign = false;
+      let controlFlowArgvAssign = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -2379,6 +2529,12 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /=\s*[A-Za-z_][\w]*\s*\.\s*spawnSync/.test(src)
           && r.scanned > 0 && !r.ok
         ) controlFlowAliasAssign = true;
+        if (
+          /if\s*\(\s*(?:true|false)\s*\)/.test(src)
+          && /[A-Za-z_][\w]*\s*=\s*\[/.test(src)
+          && hasLit(src, '--dry-run')
+          && r.scanned > 0 && !r.ok
+        ) controlFlowArgvAssign = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -2437,6 +2593,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!execShellCommentDryRun) problems.push('red/ 没点出 exec 命令 # 之后的 --dry-run');
       if (!controlFlowCpAssign) problems.push('red/ 没点出控制流里的 child_process 赋值（if (...) cp = require）');
       if (!controlFlowAliasAssign) problems.push('red/ 没点出控制流里的函数别名赋值（if (...) run = cp.spawnSync）');
+      if (!controlFlowArgvAssign) problems.push('red/ 没点出控制流里无法证明的 argv 赋值（if 死分支 / if (true) 多次赋值）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
