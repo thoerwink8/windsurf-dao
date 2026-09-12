@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace} from '../scripts/lib/execution-runtime.mjs';
+import {stableHooksDir} from '../scripts/lib/control-plane-write.mjs';
 import {acquireExecutionFence,withExecutionFence,writeExecutionRecord} from '../scripts/lib/execution-fence.mjs';
 
 const linuxTest=(name,fn)=>test(name,{skip:process.platform!=='linux',timeout:10000},fn);
@@ -301,6 +302,25 @@ linuxTest('ensureGitWorkspace creates a branch worktree and is idempotent for th
   assert.equal(second.created,false);
   assert.equal(second.path,first.path);
   assert.equal(git(['worktree','list','--porcelain']).split('\n').filter(l=>l==='branch refs/heads/feature/acp-1174').length,1);
+  assert.equal(
+    execFileSync('git',['-C',first.path,'config','--worktree','--get','core.hooksPath'],{encoding:'utf8',windowsHide:true}).trim(),
+    stableHooksDir(),
+  );
+});
+
+linuxTest('dispatch/start 共用 ensureWorkspace：树没有 githooks 也从稳定来源挂上 hooksPath',async t=>{
+  const {dir,repo}=gitRepo(t);
+  assert.equal(fs.existsSync(path.join(repo,'scripts','githooks','pre-push')),false);
+  const rt=createExecutionRuntime({
+    homeDir:dir,profiles:[],base:'HEAD',
+    mirasimRuntime:fakeRuntime(),acpRuntime:fakeRuntime(),
+    scanProcesses:emptyScan,
+  });
+  const tree=await rt.ensureWorkspace(repo,'dao-1165-hooks');
+  assert.equal(
+    execFileSync('git',['-C',tree.path,'config','--worktree','--get','core.hooksPath'],{encoding:'utf8',windowsHide:true}).trim(),
+    stableHooksDir(),
+  );
 });
 
 linuxTest('ensureGitWorkspace refuses a bad branch name and an unregistered occupied path',t=>{

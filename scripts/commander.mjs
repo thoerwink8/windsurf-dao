@@ -1232,21 +1232,51 @@ function dispatchSpec(issue) {
 function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
 
-function runCmd(argv, timeout = 600000) {
-  const r = spawnSync(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
-  if (r.error) return { ok: false, error: `起不来：${r.error.message}` };
-  if (r.status !== 0) return { ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
-  return { ok: true, out: String(r.stdout || '') };
+export function runCmd(argv, timeout = 600000, { spawn = spawnSync } = {}) {
+  const r = spawn(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  // Machine evidence must survive a nonzero exit. Only the human summary is shortened.
+  const output = { out: String(r.stdout || ''), stderr: String(r.stderr || ''),
+    status: r.status, signal: r.signal || null, spawnError: r.error?.code || (r.error ? 'SPAWN_ERROR' : null) };
+  if (r.error) return { ...output, ok: false, error: `起不来：${r.error.message}`.slice(0, 300) };
+  if (r.status !== 0) return { ...output, ok: false, error: String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
+  return { ...output, ok: true };
+}
+
+/** dao emits a final JSON object on stdout, optionally after diagnostic lines.
+ * Track the whole document (including strings/arrays), never an inner object's '{'.
+ * Incomplete JSON or text after the result is not a result receipt.
+ */
+export function parseDaoResult(stdout) {
+  const text = String(stdout || '').trim();
+  const starts = /^[ \t]*(?=\{)/gm;
+  let match;
+  while ((match = starts.exec(text))) {
+    const start = match.index;
+    let depth = 0, quoted = false, escaped = false, end = -1;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === '"') quoted = false;
+      } else if (c === '"') quoted = true;
+      else if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') {
+        if (--depth === 0) { end = i + 1; break; }
+      }
+    }
+    if (end < 0) return null;
+    let doc;
+    try { doc = JSON.parse(text.slice(start, end)); } catch { return null; }
+    if (!text.slice(end).trim()) return doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : null;
+    starts.lastIndex = end; // Skip the entire earlier document, including nested objects.
+  }
+  return null;
 }
 /** 从 dispatch 的「已受理」输出里取 resultPath。拿不到 → null（调用方按没查成处理）。 */
 export function resultPathOf(stdout) {
-  const text = String(stdout || '');
-  const start = text.indexOf('{');
-  if (start < 0) return null;
-  try {
-    const j = JSON.parse(text.slice(start));
-    return typeof j.resultPath === 'string' && j.resultPath ? j.resultPath : null;
-  } catch { return null; }
+  const j = parseDaoResult(stdout);
+  return typeof j?.resultPath === 'string' && j.resultPath ? j.resultPath : null;
 }
 
 /**
@@ -1267,11 +1297,7 @@ export function resultPathOf(stdout) {
  * @returns {{sync:true, sessionKey, card, issue}|null}
  */
 export function judgeSyncDispatch(stdout) {
-  const text = String(stdout || '');
-  const start = text.indexOf('{');
-  if (start < 0) return null;
-  let j;
-  try { j = JSON.parse(text.slice(start)); } catch { return null; }
+  const j = parseDaoResult(stdout);
   if (!j || typeof j !== 'object' || j.ok !== true) return null;
   if (typeof j.resultPath === 'string' && j.resultPath) return null; // 异步脊，走回读那条路
   const key = typeof j.sessionKey === 'string' ? j.sessionKey.trim() : '';
@@ -1391,10 +1417,23 @@ function awaitDispatchResult(stdout, { say, budgetMs = 240000, stepMs = 3000, no
   return verdict;
 }
 
-function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
+export function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
   if (dryRun) { say(`[dry] ${why || ''}\n    ${argv.join(' ')}`); return { ok: true, dryRun: true }; }
-  const r = run(argv);
-  say(`  ${r.ok ? '跑完' : '失败'}：${argv.slice(1).join(' ')}${r.ok ? '' : ' → ' + r.error}`);
+  let r = run(argv);
+  // Only these dao verbs emit the execution receipts consumed here. Git/gh and
+  // arbitrary subprocess output must never be reclassified by JSON or error text.
+  if (['node', process.execPath].includes(argv[0]) && argv[1] &&
+      resolve(ROOT, argv[1]) === join(ROOT, 'scripts', 'dao.mjs') &&
+      ['start', 'dispatch', 'review-pending-drain'].includes(argv[2]) && !r.spawnError && !r.signal) {
+    const doc = parseDaoResult(r.out);
+    if (doc && typeof doc.ok === 'boolean') {
+      const ok = r.ok === true && doc.ok;
+      r = { ...r, ok,
+        ...(doc.ok === false && doc.busy === true ? { busy: true, reason: doc.reason } : {}),
+        ...(!ok ? { error: String(doc.error || r.error || 'dao 执行失败').slice(0, 300) } : {}) };
+    }
+  }
+  say(`  ${r.busy ? '暂缓' : r.ok ? '跑完' : '失败'}：${argv.slice(1).join(' ')}${r.ok ? '' : ' → ' + r.error}`);
   return r;
 }
 
@@ -1407,7 +1446,7 @@ function runOrShow(argv, { dryRun, say, why, run = runCmd }) {
 //   · 注入 ≤500 字节是硬闸（#602/#619），红项**全文**塞不进任务书 —— 全文落仓外文件，注入只给指针。
 //   · 写完必须**读回自证**：读不回 / 对不上 = 没查成，不派工（半截任务书比不派更坏）。
 //   · dispatch 是**异步**的（#787）：只看退出码 = 把「受理了」当「派成了」，必须回读结果文件判三态。
-//   · 同一 PR 同一 head 只派一次：记账落 state.reworkDispatched，**尝试即记**——
+//   · 同一 PR 同一 head 只派一次：记账落 state.reworkDispatched，**尝试即记，背压不算尝试**——
 //     失败/没查成不自动重派（重派会造重复工人），改由 runActions 报帅，人来决定。
 
 /** 红项全文的仓外落点（生成物不落进自己会读的仓内范围，CLAUDE.md）。 */
@@ -1558,14 +1597,11 @@ function drainReviewPending(action, { state, dryRun, say }) {
   return r;
 }
 
-function drainPayloadOf(runResult) {
+export function drainPayloadOf(runResult) {
   if (!runResult) return { ok: false };
   if (runResult.dryRun === true) return { ok: true, dryRun: true };
-  const text = String(runResult.out || '');
-  const start = text.lastIndexOf('{');
-  if (start < 0) return { ok: runResult.ok === true };
-  try { return JSON.parse(text.slice(start)); }
-  catch { return { ok: runResult.ok === true }; }
+  const doc = parseDaoResult(runResult.out);
+  return doc ? { ...doc, ok: runResult.ok === true && doc.ok === true } : { ok: runResult.ok === true };
 }
 
 function recordDrainAttempt(state, action, payload) {
@@ -1598,6 +1634,7 @@ function findDaoTree(issue, pr) {
 }
 
 function rememberRework(state, action, written, verdict) {
+  if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
@@ -1686,6 +1723,7 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = n
 }
 
 function rememberPumpDraft(state, action, written, verdict) {
+  if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const pkey = action.pumpKey || pumpDraftKey(action.pr);
   const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
@@ -2533,6 +2571,7 @@ function runHubProjection({ situation, dryRun, log }) {
     return;
   }
   const applied = applyHubCycle(plan, {
+    store,
     issueCard: (a) => {
       const fields = pendingFromAsk(a.issue || {});
       return runHubAsk(fields, {

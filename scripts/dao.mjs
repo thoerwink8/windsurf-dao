@@ -265,6 +265,7 @@ import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
 } from './lib/executor-binding.mjs';
+import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
 
 
 function errText(e) {
@@ -585,6 +586,13 @@ function resolveExecutorOrFail(args, routing) {
   return { policy, executor: named.executor, source: named.source };
 }
 
+/** 现役工人 git push 前要问控制面闸。挂不上 = 建树/开工失败，不许声称已接线（#1165 审官 P1）。 */
+function attachControlPlaneHooksOrFail(cwd, extra = {}) {
+  const h = ensureControlPlaneHooksPath({ cwd });
+  if (!h.ok) fail(`控制面闸没挂上：${h.why}`, { cwd, ...extra });
+  return h;
+}
+
 /** mirasim 侧要一个具体分支名。给不出就拒派，不猜——猜错会把两张卡塞进同一棵树。 */
 function mirasimBranchOrFail(args) {
   const explicit = String(args.branch || '').trim();
@@ -749,6 +757,8 @@ async function cmdDispatchMirasim(args, routing, gate) {
   let tree;
   try { tree = await bind.runtime.ensureWorkspace(repo, branch); }
   catch (e) { fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, ghRepo: ghRepo || null, branch }); }
+  if (!tree || !tree.path) fail('mirasim 建树没返回 path', { executor: 'mirasim', repo, branch });
+  attachControlPlaneHooksOrFail(tree.path, { executor: 'mirasim', repo, branch });
 
   let sess;
   try {
@@ -2148,6 +2158,8 @@ async function cmdStartMirasim(args) {
       fail(`mirasim 建树失败: ${String(e?.message || e)}`, { executor: 'mirasim', repo, branch });
     }
   }
+  if (!workdir) fail('mirasim 起会话没拿到 workdir', { executor: 'mirasim', repo, branch });
+  attachControlPlaneHooksOrFail(workdir, { executor: 'mirasim', repo, branch });
 
   let sess;
   try {

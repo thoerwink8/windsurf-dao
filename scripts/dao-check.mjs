@@ -107,6 +107,8 @@
 //    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
+// ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
+//    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -118,6 +120,7 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
@@ -922,6 +925,19 @@ function checkModeHookAlive() {
 function checkDispatchGateAlive() {
   const r = checkDispatchGate({ root: ROOT });
   if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkControlPlaneAlive() {
+  const r = checkControlPlaneProduction({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkControlPlaneDropPointAlive() {
+  const r = checkControlPlaneDropPoint();
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
   else fail(...r.fail);
 }
 
@@ -1837,6 +1853,8 @@ checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();
 checkDispatchGateAlive();
+checkControlPlaneAlive();
+checkControlPlaneDropPointAlive();
 checkMemoryLinkAlive();
 checkMasterTitleSamples();
 checkCardCommentSamples();

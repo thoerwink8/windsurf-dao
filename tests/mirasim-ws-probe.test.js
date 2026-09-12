@@ -228,7 +228,7 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
     const first = await runProbe({
       handshake: hung, scan: emptyScan, prev: { folded: null, alerted: false },
       nowIso: NOW, say: (t) => said.push(t), heal: () => { heals.push('x'); return { ok: true, why: 'restarted' }; },
-      writeState: (s) => writes.push(s), quiet: false,
+      writeState: (s) => writes.push(s), skipWrite: true, quiet: false,
     });
     assert.equal(first.folded.state, 'red');
     assert.equal(first.folded.strikes, 1);
@@ -240,7 +240,7 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
       handshake: hung, scan: emptyScan, prev: writes[0],
       nowIso: '2026-09-08T14:43:00Z',
       say: (t) => said.push(t), heal: () => { heals.push('x'); return { ok: true, why: '已执行 try-restart' }; },
-      writeState: (s) => writes.push(s), quiet: false,
+      writeState: (s) => writes.push(s), skipWrite: true, quiet: false,
     });
     assert.equal(second.folded.strikes, 2);
     assert.equal(second.decision.heal, true);
@@ -299,7 +299,7 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
       prev: { folded: { state: 'red', strikes: 1 }, alerted: false },
       nowIso: NOW, say: (t) => said.push(t),
       heal: () => { throw new Error('quiet 不该调 heal'); },
-      writeState: (s) => writes.push(s), quiet: true,
+      writeState: (s) => writes.push(s), skipWrite: true, quiet: true,
     });
     assert.equal(r.decision.heal, true, '闸本身到了阈值');
     assert.equal(r.healed, false);
@@ -321,7 +321,7 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
       handshake: hungList, scan: emptyScan, prev: { folded: null, alerted: false },
       nowIso: NOW, say: (t) => said.push(t),
       heal: () => { heals.push('x'); return { ok: true, why: 'restarted' }; },
-      writeState: (s) => writes.push(s),
+      writeState: (s) => writes.push(s), skipWrite: true,
     });
     assert.equal(first.folded.state, 'red');
     assert.equal(first.folded.strikes, 1);
@@ -333,13 +333,48 @@ describe('一轮探活（注入握手 / 扫进程，不碰真 ws）', () => {
       nowIso: '2026-09-09T13:20:00Z',
       say: (t) => said.push(t),
       heal: () => { heals.push('x'); return { ok: true, why: '已执行 try-restart' }; },
-      writeState: (s) => writes.push(s),
+      writeState: (s) => writes.push(s), skipWrite: true,
     });
     assert.equal(second.folded.strikes, 2);
     assert.equal(second.decision.heal, true);
     assert.equal(second.healed, true);
     assert.equal(heals.length, 1);
     assert.match(said[0], /没收到 sessions 帧/);
+  });
+
+  it('写腿：red 落 reachable=false；恢复 green 落 true；unscanned 不写 reachable', async () => {
+    const { runProbe } = await import(IO);
+    const cp = [];
+    const hung = async () => { throw unavailable('连不上回环 ws'); };
+    const emptyScan = () => ({ ok: true, procs: [] });
+
+    await runProbe({
+      handshake: hung, scan: emptyScan, prev: { folded: null, alerted: false },
+      nowIso: NOW, say: () => {}, heal: () => ({ ok: true }),
+      skipWrite: true, writeControlPlane: (d) => cp.push(d),
+    });
+    assert.equal(cp[0].reachable, false);
+    assert.equal(cp[0].probe, 'red');
+    assert.match(cp[0].error, /连不上回环 ws/);
+
+    await runProbe({
+      handshake: async () => ({ ok: true, unscanned: false, version: '0.0.282' }),
+      scan: emptyScan,
+      prev: { folded: { state: 'red', strikes: 2, why: '连不上回环 ws' }, alerted: true },
+      nowIso: NOW, say: () => {}, heal: () => ({ ok: true }),
+      skipWrite: true, writeControlPlane: (d) => cp.push(d),
+    });
+    assert.equal(cp[1].reachable, true);
+    assert.equal(cp[1].probe, 'green');
+
+    await runProbe({
+      handshake: async () => { throw unavailable('读不到回环会话令牌，服务多半没在跑'); },
+      scan: emptyScan, prev: { folded: null, alerted: false },
+      nowIso: NOW, say: () => {}, heal: () => ({ ok: true }),
+      skipWrite: true, writeControlPlane: (d) => cp.push(d),
+    });
+    assert.equal(Object.prototype.hasOwnProperty.call(cp[2], 'reachable'), false);
+    assert.equal(cp[2].probe, 'unscanned');
   });
 });
 
