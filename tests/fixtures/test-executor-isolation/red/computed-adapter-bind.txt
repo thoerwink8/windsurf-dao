@@ -1,0 +1,6 @@
+/* 审官对抗样本：spawnSync["bind"]()()。只认 .bind( 会 scanned:0。
+const cp = require("node:child_process");
+cp.spawnSync["bind"](null)(
+  process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" }
+});
+*/

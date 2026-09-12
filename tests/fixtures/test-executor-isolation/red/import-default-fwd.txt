@@ -1,0 +1,7 @@
+/* 审官对抗样本：动态 import() 默认导出经变量转发。只收 mod 不跟 .default 会 scanned:0。
+const mod = await import("node:child_process");
+const cp = mod.default;
+cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/
