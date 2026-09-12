@@ -21,7 +21,7 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js` → 核 317 + 指挥官 185 + 其余相关 204 绿；合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/marshal-issue-identity.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js` → 核 329 + 指挥官/账本/收件箱 586 + 其余相关 102 绿；dao-check 243 项绿。合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
 
 ## 进展
 
@@ -56,6 +56,7 @@
 - [x] 本轮跟上 origin/master（#1205 派工前核实 type/ + #1190 凭据闸扫指挥官单元 + #1194 探针真请求 + #1191 正文署名压过标题随手引用）。冲突 0。#1205 是往 issue 写 type（给人看盘面），不是选型反推。#1191 合入后指挥官测试仍断言「署名单标齐就能叫审官」——按本单改成：署名认正文 #1152，审官只认 PR 自己的 reviewer/*；署名单标齐、PR 没标仍报缺失。
 - [x] 本轮跟上 origin/master（#1203 已交卷工人不再反复重派 + #1198 acp-runtime 并行误红）。冲突 0；选型路仍只读 PR label。#1203 合入后差集重派带 openPrs，不从 issue 反推审官。相关测试 317+185+204 绿；dao-check 241 项绿。
 - [x] 本轮跟上 origin/master（#1150 Orca 退役收尾 / #1196 探活闸）。冲突两处：`reviewer-book.md` 跟 master 删（本单说明已在 mirasim 书）；`dao.mjs` 的 dispatch-exec/batch 跟 master 墓碑，账本打标留下。#1150 测试写「mirasim 不打 stampIssueLabels」，但 #1205 已给 issue 补 type/——改钉成只打 type/、不打 model/reviewer，身份 marshal。选型路仍只读 PR label。
+- [x] 本轮跟上 origin/master（#1207 跟上 #1205 的 marshal 网关断言 / #1192 收件箱接到指挥官盘点）。冲突两处测试：`dao-reviewer` / `marshal-issue-identity`。合入后同时钉死：补 type/ 走 marshal + issue-gateway，且不把 model/reviewer 打到 issue。选型路仍只读 PR label。
 
 ## 机制判定
 
