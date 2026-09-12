@@ -11,6 +11,7 @@ import {scanSessionProcs} from './dispatch/lease.mjs';
 import {EXECUTION_FINISHED,EXECUTION_RESERVED,sessionStateOf} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
+import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
 
 // 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
 // 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
@@ -52,13 +53,14 @@ export function ensureGitWorkspace(repo,branch,{homeDir=os.homedir(),base='origi
   const root=fs.realpathSync(repo);const git=args=>String(exec('git',['-C',root,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim();
   git(['check-ref-format','--branch',branch]);
   const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
-  for(const b of blocks){const lines=b.split('\n');if(lines.includes('branch refs/heads/'+branch)){const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(dir&&fs.existsSync(dir))return {path:dir,branch,created:false,verified:true};}}
+  for(const b of blocks){const lines=b.split('\n');if(lines.includes('branch refs/heads/'+branch)){const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(dir&&fs.existsSync(dir)){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}}
   const target=path.join(homeDir,'mirasim-worktrees',path.basename(root),branch.replace(/[^\w.-]/g,'-'));
   if(fs.existsSync(target))throw new Error('unregistered worktree path already exists: '+target);
   fs.mkdirSync(path.dirname(target),{recursive:true});let exists=false;try{git(['show-ref','--verify','--quiet','refs/heads/'+branch]);exists=true;}catch{}
   if(exists)git(['worktree','add',target,branch]);else git(['worktree','add','-b',branch,target,base]);
   const head=String(exec('git',['-C',target,'symbolic-ref','--short','HEAD'],{encoding:'utf8'})).trim();
   if(head!==branch)throw new Error('created worktree has wrong branch');
+  attachControlPlaneHooksOrThrow(target);
   return {path:target,branch,created:true,verified:true};
 }
 export function judgeExecutionCompletion(view) {
@@ -485,7 +487,12 @@ export function createExecutionRuntime(opts={}) {
   }
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
     profileForModel:model=>{const matches=profiles.filter(p=>p.id===model||p.defaultForModels?.includes(model));if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},
-    ensureWorkspace:(repo,branch)=>{assertMutationAllowed();return opts.ensureWorkspace?opts.ensureWorkspace(repo,branch):ensureGitWorkspace(repo,branch,{homeDir,base:opts.base});},
+    ensureWorkspace:async(repo,branch)=>{
+      assertMutationAllowed();
+      const tree=await (opts.ensureWorkspace?opts.ensureWorkspace(repo,branch):ensureGitWorkspace(repo,branch,{homeDir,base:opts.base}));
+      if(tree&&tree.path) attachControlPlaneHooksOrThrow(tree.path);
+      return tree;
+    },
     interact:async(key,answer)=>{assertMutationAllowed();await fence(assertAdmission);const m=metadata(key);if(m&&!m.sessionKey)throw busy('launch remains unconfirmed','launch-uncertain');return backend(key,m).interact(key,answer);},
     resumeSession,resolveStart,crossCheck:key=>String(key).startsWith('acp:')?{ledger:{readable:false,why:'ACP usage is independently collected'},journal:{readable:false}}:mirasim.crossCheck(key),metadata,
   };

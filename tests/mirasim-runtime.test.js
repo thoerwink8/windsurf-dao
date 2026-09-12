@@ -68,6 +68,7 @@ async function runtimeWith(wire, over = {}) {
     homeDir: '/srv',
     connect: async () => wire,
     now: () => T0,
+    attachHooks: () => ({ ok: true }),
     ...over,
   });
 }
@@ -622,6 +623,17 @@ describe('问答与工作区', () => {
     assert.strictEqual(r.path, '/trees/feat-x');
     assert.strictEqual(r.created, false);
     assert.deepStrictEqual(wire.sent.filter(f => f.type === 'addWorktree'), []);
+  });
+
+  it('建树后闸没挂上 → 整段失败，不把树当建成', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listWorkspaces' ? [{
+      type: 'workspaces',
+      workspaces: [{ path: '/repo', name: 'repo', worktrees: [{ path: '/trees/feat-x', branch: 'feat-x' }] }],
+    }] : []));
+    const rt = await runtimeWith(wire, {
+      attachHooks: () => { throw new Error('控制面闸没挂上：写不上'); },
+    });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-x'), /控制面闸没挂上/);
   });
 
   it('没有就建，并按 reqId 收应答、再列一次读回自证', async () => {
