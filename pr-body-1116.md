@@ -21,7 +21,7 @@
 - [x] 判别力自证：把新打标动作去掉，起审官必须当场红
   - 证据：`stampPrLabelsFromDispatch`「判别力：把打标事件拿掉，起审官当场红」
 
-本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/marshal-issue-identity.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js` → 核 329 + 指挥官/账本/收件箱 586 + 其余相关 102 绿；dao-check 243 项绿。合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
+本单相关测试：`node --test tests/pr-label-truth.test.js tests/worker-model-host-prefix.test.js tests/reviewer-vendor-gate.test.js tests/dao-reviewer.test.js tests/marshal-issue-identity.test.js tests/five-holes-815.test.js tests/ready-queue.test.js tests/ledger.test.js tests/dao-dispatch-gate.test.js tests/mirasim-dispatch-labels.test.js tests/close-issue.test.js tests/commander.test.js tests/commander-verbs.test.js tests/exhausted.test.js tests/shared-slots.test.js tests/inbox.test.js tests/escalation-key.test.js tests/escalate-group.test.js tests/spawn-budget.test.js tests/dispatch-repo.test.js tests/branch-protection-io.test.js tests/commander-merge-gate.test.js tests/harvest.test.js tests/approved-merge.test.js tests/control-plane-gate.test.js tests/control-plane-check.test.js` → 核 338 + 指挥官/账本/收件箱及相关 738 绿。合入 #1191 后把「署名单标齐就能叫审官」改钉成只认 PR 自己的 reviewer/*。
 
 ## 进展
 
@@ -59,6 +59,7 @@
 - [x] 本轮跟上 origin/master（#1207 跟上 #1205 的 marshal 网关断言 / #1192 收件箱接到指挥官盘点）。冲突两处测试：`dao-reviewer` / `marshal-issue-identity`。合入后同时钉死：补 type/ 走 marshal + issue-gateway，且不把 model/reviewer 打到 issue。选型路仍只读 PR label。
 - [x] 本轮跟上 origin/master（#1176/#1195 孤儿临时目录清扫）。冲突一处：`marshal-issue-identity` 保留本单「不打 model/reviewer」断言，#1176 的 stampIssueLabels 存在性已被 stamp 切片覆盖。选型路仍只读 PR label。相关测试 138+439+347+293 绿。
 - [x] 本轮跟上 origin/master（#1206 watchdog 真结果 / 死锁清后立刻再抢 / 派工前补 type）。冲突 0。#1206 的 stampIssueLabels 仍只打 type/、不打 model/reviewer；指挥官选型仍只读 PR label。
+- [x] 本轮跟上 origin/master（#1197 控制面闸接到现役 git push 路径）。冲突只在 spawn-budget：本单 CLI 夹具 +1 与 #1165 +2 叠成 153。选型路仍只读 PR label。
 
 ## 机制判定
 
