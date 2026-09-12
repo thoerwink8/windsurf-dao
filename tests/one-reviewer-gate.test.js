@@ -125,12 +125,19 @@ describe('一 PR 一审官闸', () => {
     const sol = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing });
     assert.ok(sol.ok === true && sol.switched === true && sol.modelId === 'gpt-5.6-sol', JSON.stringify(sol));
 
-    // 故意违规样本①：顺位表里但异厂——路由表自己写着「备选登记，不顶审官位」，必须仍被拦。
+    // 故意违规样本①：异厂——路由表自己写着「备选登记，不顶审官位」，必须仍被拦。
+    // 样本取 grok-4.6：2026-09-12 网关退役后，顺位表里剩下的异厂只剩它（kimi-k3/glm-5.2 已随网关禁用，
+    // 禁用条目不再进顺位表，拿它们当样本只会撞「不在表里」那条，查不出换厂闸）。
+    const grok = S.assertReviewerSeat({ reviewerId: 'grok-4.6', routing });
+    assert.equal(grok.ok, false, `grok-4.6 该被换厂闸拦下：${JSON.stringify(grok)}`);
+    assert.match(grok.error, /不许换厂/);
+
+    // 表外模型（含已禁用的 kimi/glm）：走「不在表里」这条，不是换厂闸。
     const kimi = S.assertReviewerSeat({ reviewerId: 'kimi-k3', routing });
     const glm = S.assertReviewerSeat({ reviewerId: 'glm-5.2', routing });
-    const grok = S.assertReviewerSeat({ reviewerId: 'grok-4.6', routing });
-    for (const [id, r] of [['kimi-k3', kimi], ['glm-5.2', glm], ['grok-4.6', grok]]) {
-      assert.ok(r.ok === false && /不许换厂/.test(r.error), `${id} 该被换厂闸拦下：${JSON.stringify(r)}`);
+    for (const [id, r] of [['kimi-k3', kimi], ['glm-5.2', glm]]) {
+      assert.equal(r.ok, false, `${id} 该被「不在顺位表」拦下：${JSON.stringify(r)}`);
+      assert.match(r.error, /不在表里/);
     }
     // 故意违规样本②：同厂但不在顺位表里 → 拒。放开的是「表内同厂」，不是「所有同厂」。
     const offTable = S.assertReviewerSeat({ reviewerId: 'gpt-4.1-nobody', routing });
@@ -150,48 +157,51 @@ describe('一 PR 一审官闸', () => {
     const S = await S_LOAD;
     const routing = S.loadRouting();
     const DEAD = 'Selected model is at capacity. Please try a different model.';
-    // 上一位 luna 死于满载 → 下一顺位是同厂 sol；跨厂 kimi 仍是跳级。
+    // 跨厂样本取 grok-4.6：2026-09-12 网关退役后，顺位表里剩下的异厂只剩它
+    // （kimi-k3/glm-5.2 已随网关禁用，已不进顺位表——拿它们当样本只会撞「不在表里」）。
+    // 上一位 luna 死于满载 → 下一顺位是同厂 sol；跨厂 grok 仍是跳级。
     const skip = S.assertReviewerSeat({
-      reviewerId: 'kimi-k3', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'grok-4.6' },
+      reviewerId: 'grok-4.6', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'claude-opus-5' },
     });
     assert.equal(skip.ok, false, JSON.stringify(skip));
     assert.match(skip.error, /不许跳级点名/);
 
     const sol = S.assertReviewerSeat({
       reviewerId: 'gpt-5.6-sol', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'grok-4.6' },
+      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'claude-opus-5' },
     });
     assert.equal(sol.ok, true, JSON.stringify(sol));
     assert.equal(sol.switched, true);
 
-    // 上一位 sol 也死于满载 → 下一档跨厂 kimi，且不是工人那一厂。
-    const kimi = S.assertReviewerSeat({
-      reviewerId: 'kimi-k3', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, workerId: 'grok-4.6' },
+    // 上一位 sol 也死于满载 → 下一档跨厂 grok，且不是工人那一厂。
+    // 工人钉 claude-opus-5：若工人本身就是 grok，grok 与工人同厂会被挡（那正是 #679 同厂闸，另一条线）。
+    const cross = S.assertReviewerSeat({
+      reviewerId: 'grok-4.6', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, workerId: 'claude-opus-5' },
     });
-    assert.equal(kimi.ok, true, JSON.stringify(kimi));
-    assert.equal(kimi.crossVendor, true);
-    assert.equal(kimi.failover, 'capacity');
+    assert.equal(cross.ok, true, JSON.stringify(cross));
+    assert.equal(cross.crossVendor, true);
+    assert.equal(cross.failover, 'capacity');
 
     // 正常完工（error 为空）→ 跨厂仍拒，例外口不是常开。
     const alive = S.assertReviewerSeat({
-      reviewerId: 'kimi-k3', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '', workerId: 'grok-4.6' },
+      reviewerId: 'grok-4.6', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '', workerId: 'claude-opus-5' },
     });
     assert.equal(alive.ok, false, JSON.stringify(alive));
     assert.equal(alive.unscanned, true);
 
     // 死因不是满载（判红）→ 仍拒。
     const red = S.assertReviewerSeat({
-      reviewerId: 'kimi-k3', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '审官判红', workerId: 'grok-4.6' },
+      reviewerId: 'grok-4.6', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '审官判红', workerId: 'claude-opus-5' },
     });
     assert.equal(red.ok, false, JSON.stringify(red));
     assert.match(red.error, /不是满载/);
 
     // 不交凭证 → 仍拒（老规矩）。
-    const none = S.assertReviewerSeat({ reviewerId: 'kimi-k3', routing });
+    const none = S.assertReviewerSeat({ reviewerId: 'grok-4.6', routing });
     assert.equal(none.ok, false, JSON.stringify(none));
     assert.match(none.error, /不许换厂/);
   });

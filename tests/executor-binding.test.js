@@ -717,11 +717,13 @@ describe('族路由按模型族，最长前缀赢（#884 P1#1，四轮）', () =
   // 判据分两半，因为今天只有一半在本 PR 手里：
   //   数据半边（docs/model-routing.json 加一行 "gpt-": "gpt"）属于改规则，等人拍板，本 PR 不动；
   //   代码半边（模型族优先 + 最长前缀）已经就位，这里用「真表 + 那一行」证明它就位。
-  it('真表 gpt-5.6-luna 走 gpt/codex/direct（2026-09-08 拍板：codex 直连网关 gptpool，windsurf→pqapi→mirasim 池内降级；relay 曾把全部审官流量送进 mirasim 云并烧额度）', async () => {
+  it('真表 gpt-5.6-luna 走 gpt/codex/direct（模型族赢过落地通道，与落哪个 provider 无关）', async () => {
     const S = await import(LIB);
     const doc = JSON.parse(fs.readFileSync(ROUTING_JSON, 'utf8'));
     const provider = await realProvider('gpt-5.6-luna');
-    assert.equal(provider, 'gw', '真表里它已经不落 gw 了——本条的前提变了，重判');
+    // 2026-09-12 网关退役：这条腿的落地由 gw 改指 mirasim-relay。本条考的是「族路由按模型族，
+    // 不按落地的 provider」——所以前提只要求「落地不是 gpt 本身」，不再钉死 gw。
+    assert.notEqual(provider, 'gpt', '真表里它若直接落 gpt，本条就考不出「模型族赢」（provider=' + provider + '）');
     const p = S.readExecutorPolicy(doc);
     const r = S.judgeAgentRoute({ policy: p, model: 'gpt-5.6-luna', provider });
     assert.equal(r.ok, true, r.error || '');
