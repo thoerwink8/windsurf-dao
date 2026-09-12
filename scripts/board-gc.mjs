@@ -5,8 +5,7 @@
 // 并且需要建立一个能够自动清理的机制自动去发现，自动去清理」。
 //
 // 判据全在 scripts/lib/board-gc.mjs（纯函数、可测）。本文件只负责三件事：
-// 采事实（mirasim 树 / gh / git）、把事实喂给判据、按判决调 dao.mjs worktree-rm。
-// worktree-rm 仍问 orca：退役后恒失败，所以 --apply 失败时走 git 删树兜底（#1065）。
+// 采事实（mirasim 树 / gh / git）、把事实喂给判据、按判决走 git 原生删树（#1104 removeTreeFallback 转正）。
 //
 // 与 board-reset 的分工：board-reset 是「重测前一锅端」（所有非主树顶层卡）；
 // 本命令是它的反面——**只清确实不需要的那几张**，其余一张不动。
@@ -39,7 +38,6 @@ import { scanProcCwds } from './lib/proc-cwds.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
-const DAO = join(ROOT, 'scripts', 'dao.mjs');
 
 function parseArgs(argv) {
   const out = { apply: false, say: false, json: false };
@@ -496,12 +494,10 @@ function main() {
           continue;
         }
       }
-      let r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
-      if (r.code !== 0) {
-        const fb = removeTreeFallback(z, { worktrees });
-        if (fb.ok) r = { code: 0, err: '', out: fb.note || '' };
-        else r = { code: 1, err: fb.error || r.err, out: r.out };
-      }
+      const fb = removeTreeFallback(z, { worktrees });
+      const r = fb.ok
+        ? { code: 0, err: '', out: fb.note || '' }
+        : { code: 1, err: fb.error || '', out: '' };
       const error = (r.err.trim() || r.out.trim()).slice(0, 200);
       results.set(z.id, r.code === 0 ? { ok: true } : { ok: false, error: error || `exit ${r.code}` });
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);

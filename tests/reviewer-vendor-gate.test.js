@@ -499,15 +499,17 @@ describe('#679 起审官同厂硬闸', () => {
       CLI, 'reviewer-attach', '--pr', '42', '--worktree', 'wt_w', '--reviewer', 'grok-4.6', '--dry-run',
     ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pAttachSame = payload(attachSame);
-    await t.test('attach grok 到 grok 工人 → 非零且同厂', () => {
-      assert.ok(attachSame.status !== 0 && /同厂/.test(String(pAttachSame.error || '')), JSON.stringify(pAttachSame));
+    await t.test('attach 随 orca 卡退役，调用即拒', () => {
+      assert.notEqual(attachSame.status, 0, JSON.stringify(pAttachSame));
+      assert.match(String(pAttachSame.error || ''), /orca 已退役/);
     });
     const attachPass = spawnSync(process.execPath, [
       CLI, 'reviewer-attach', '--pr', '42', '--worktree', 'wt_w', '--reviewer', 'gpt-5.6-sol', '--dry-run',
     ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pAttachPass = payload(attachPass);
-    await t.test('attach gpt 到 grok 工人 → dry-run 通过', () => {
-      assert.ok(attachPass.status === 0 && pAttachPass.ok === true, JSON.stringify(pAttachPass));
+    await t.test('attach 退役 stub 不因同厂/异厂分岔', () => {
+      assert.notEqual(attachPass.status, 0, JSON.stringify(pAttachPass));
+      assert.match(String(pAttachPass.error || ''), /orca 已退役/);
     });
 
     const createSame = spawnSync(process.execPath, [

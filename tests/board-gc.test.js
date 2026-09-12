@@ -254,12 +254,12 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.match(src, /from '\.\/lib\/liveness\.mjs'/);
     assert.doesNotMatch(src, /lastOutputAt\s*[<>]/, '别在驱动层直接拿时间戳比大小');
   });
-  it('worktree-rm 失败走 git 删树兜底，不把 orca_retired 当终局', () => {
+  it('--apply 走 git 原生删树，不再问 orca worktree-rm', () => {
     assert.match(src, /function removeTreeFallback/);
     assert.match(src, /checkTreeLease/);
     const i = src.indexOf('const fb = removeTreeFallback(z');
-    assert.ok(i > -1, '找不到兜底调用');
-    assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
+    assert.ok(i > -1, '找不到 git 删树主路径');
+    assert.doesNotMatch(src, /\[DAO,\s*'worktree-rm'/);
   });
   it('兜底删树前过账本孤本闸，有 stray / 没查成都不许删', () => {
     const start = src.indexOf('function removeTreeFallback');
@@ -288,9 +288,9 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
   });
-  it('默认不删：要 --apply 才调 worktree-rm', () => {
-    const i = src.indexOf("'worktree-rm'");
-    assert.ok(i > -1, '找不到 worktree-rm 调用，判据已失效');
+  it('默认不删：要 --apply 才调 git 删树', () => {
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.ok(i > -1, '找不到 git 删树主路径，判据已失效');
     assert.match(src.slice(Math.max(0, i - 1600), i), /if \(args\.apply\)/);
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {

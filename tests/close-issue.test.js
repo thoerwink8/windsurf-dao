@@ -51,16 +51,25 @@ describe('close-issue 署名单号', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('Fixes #12'), [12]);
     });
   });
-  it('attributedIssueNumber：标题 #N 优先，其次正文署名', async (t) => {
+  it('attributedIssueNumber：正文署名压过标题随手引用，标题裸 #N 只是退路', async (t) => {
     const C = await LOAD;
-    await t.test('标题带 #N 取标题', () => {
-      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 657);
+    await t.test('正文有署名时取正文，哪怕标题另有 #N', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 99);
     });
     await t.test('标题无号取正文署名', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '署名 issue #42' }), 42);
     });
+    await t.test('正文没有署名、标题有裸 #N → 标题退路', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '无追溯' }), 657);
+    });
     await t.test('都没有 → null', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '无追溯' }), null);
+    });
+    await t.test('#1159 语料：标题堵 #565、正文署名 #1152 → 1152', () => {
+      assert.strictEqual(C.attributedIssueNumber({
+        title: '[cc] fix(test): 测试结构性够不着真执行体，堵 #565 假会话泄漏',
+        body: '署名 issue #1152，关单交给 `scripts/close-issues.mjs`。',
+      }), 1152);
     });
   });
 });
@@ -277,9 +286,15 @@ describe('署名单号解析不许把补丁链标记当成 issue 号', () => {
     assert.equal(attributedIssueNumber(pr), 888, '链内序号不是单号，要落到正文署名上');
   });
 
-  it('判别力反证：标题里真的有单号时照旧优先用它', async () => {
+  it('正文署名压过标题里真的 #N——标题优先会把随手引用当成署名单', async () => {
     const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
     const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '署名 issue #888' };
-    assert.equal(attributedIssueNumber(pr), 945, '别把整条标题优先规则一刀切废掉');
+    assert.equal(attributedIssueNumber(pr), 888, '正文署名是权威；标题 #945 是随手引用');
+  });
+
+  it('判别力反证：正文没有署名单号时，标题裸 #N 仍是退路', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '没有署名这一行' };
+    assert.equal(attributedIssueNumber(pr), 945, '旧约定 [pi] #N 关单 不能废');
   });
 });

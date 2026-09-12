@@ -25,9 +25,6 @@ import { fileURLToPath } from 'node:url';
 import {
   buildGithubGraphqlArgs, parseGithubGraphqlResponse, DEFAULT_REPO,
 } from './lib/shuai-scan.mjs';
-function runOrca() {
-  return { ok: false, error: { code: 'orca_retired', message: 'orca 已退役' } };
-}
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { progressSignature } from './lib/liveness.mjs';
 import { ghExecutable } from './lib/gh.mjs';
@@ -42,9 +39,10 @@ import {
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
+import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
-  SITUATION_SECTIONS, dispatchMergePolicyArgs,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
@@ -211,16 +209,8 @@ function scanOtherRepos() {
 }
 
 function scanOrca() {
-  const wt = runOrca(['worktree', 'ps', '--json'], { cwd: ROOT });
-  if (!wt.ok) {
-    // orca 已退役：ps 失败是稳态。ready-queue 排除在途卡改用空列表（卡面排除做不全会把
-    // inspectReadyQueue 打成 unscanned，等于永远不派）。空数组 = 「这面没有 orca 卡」，
-    // 在途工人改由 scanAdmission 按 mirasim 两层工作树 + 会话存活事实数。
-    return { scanned: true, worktrees: [], orcaGone: true, error: `worktree ps 没查成：${orcaErr(wt.error)}` };
-  }
-  const worktrees = wt.json?.result?.worktrees;
-  if (!Array.isArray(worktrees)) return { scanned: false, error: 'worktree ps 没有 worktrees 数组——没查成' };
-  return { scanned: true, worktrees };
+  // orca 执行体已退役：卡面恒空（查成了的空，不是没查成）。在途改由 scanTrees。
+  return { scanned: true, worktrees: [], orcaGone: true };
 }
 
 /**
@@ -440,15 +430,18 @@ function scanReviewPending() {
 
 // 每张 open 非 draft PR 抓审官 review 正文（判红轮 / 判绿 / 歪了都靠它）。
 // 抓不到的 PR：byPr 里不填，decide 对该 PR 静默不臆测（别处若要合并会另标 unscanned）。
-function scanPrReviews(prs) {
+export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
   const [owner, name] = REPO.split('/');
   const byPr = {};
   let anyFail = null;
   for (const pr of prs || []) {
-    if (!pr || pr.isDraft) continue; // draft 还没交卷，不抓
+    if (!pr) continue;
+    // Approved manual tasks may be returned to draft by the reviewer. Their
+    // actual votes must still reach the decision stage; other drafts wait.
+    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) continue;
     // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
     // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
-    const gh = runGh(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
+    const gh = read(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
       '--jq', '[.[] | {body: .body, state: .state, submitted_at: .submitted_at, commit_id: .commit_id}]'], 30000);
     if (!gh.ok) { anyFail = gh.error; continue; }
     try {
@@ -479,12 +472,15 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
   }
 }
 
-/** 在世终端清单。读不到/契约变了都回 ok:false——由调用方按「没查成」处理，不当成「一个都没有」。 */
+/** 在世会话清单。orca 终端已退役，改采 mirasim 会话名单。没查成回 ok:false，不当成「一个都没有」。 */
 function listLiveTerminals() {
-  const r = runOrca(['terminal', 'list', '--json'], { cwd: ROOT });
-  if (!r.ok) return { ok: false, error: `terminal list 没查成：${orcaErr(r.error)}` };
-  const terminals = r.json?.result?.terminals;
-  if (!Array.isArray(terminals)) return { ok: false, error: 'terminal list 没有 terminals 数组——没查成' };
+  const sessions = scanSessions();
+  if (!sessions.scanned) return { ok: false, error: `会话名单没查成：${sessions.error}` };
+  const terminals = (sessions.items || []).map((s) => {
+    const handle = s && (s.sessionKey || s.id || s.handle);
+    if (!handle) return null;
+    return { handle, id: handle, sessionKey: s.sessionKey || handle };
+  }).filter(Boolean);
   return { ok: true, terminals };
 }
 
@@ -512,12 +508,6 @@ function scanStall({ file = STALL_FILE, live, write = writeFileSync } = {}) {
     catch (e) { out.pruneWriteError = `僵尸条目写回失败（下轮再剪）：${String(e.message || e)}`; }
   }
   return out;
-}
-
-function orcaErr(err) {
-  if (!err) return '未知';
-  if (typeof err === 'string') return err.slice(0, 160);
-  return (err.message || err.code || JSON.stringify(err)).slice(0, 160);
 }
 
 /**
@@ -555,7 +545,7 @@ function buildSituation({ state } = {}) {
   const trees = scanTrees();
   const reviewPending = scanReviewPending();
   const otherRepos = scanOtherRepos();
-  const prReviews = github.scanned ? scanPrReviews(github.prs) : { scanned: false, error: 'github 没查成，跳过 reviews' };
+  const prReviews = github.scanned ? scanPrReviews(github.prs, { issues: github.issues }) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const sessions = scanSessions();
   const desiredJobs = scanDesiredJobs();
@@ -787,16 +777,43 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
+  if (action.approvalIssue) {
+    const read = args => {
+      const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+      try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; }
+    };
+    const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
+    const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
+    const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
+      commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
+    const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
+    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
+      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead: action.head })) {
+      say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
+      return { ok: true, skipped: 'approval-not-current' };
+    }
+    steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    steps[2].push('--match-head-commit', action.head);
+  }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
   if (freshness && freshness.state && freshness.state !== 'ok') {
     say(`  ① 基底落后（不拦 squash）：${String(freshness.detail || freshness.state).split('\n')[0]}`);
   }
   const calls = [];
+  let releasedDraft = false, merged = false;
   for (const s of steps) {
     calls.push(s);
     const r = run(s);
-    if (!r.ok) { say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls }; }
+    if (!r.ok) {
+      if (action.approvalIssue && releasedDraft && !merged) {
+        const restored = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr), '--undo']);
+        if (!restored.ok) say(`  #${action.pr} 未能恢复草稿，需要核查：${restored.error}`);
+      }
+      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls };
+    }
+    if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
+    if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
   say(`  已合并 #${action.pr} 并关单`);
   return { ok: true, calls, freshness };
@@ -1585,15 +1602,21 @@ function brainStartCmd(pointer, title) {
     '--title', title || '指挥官大脑'];
 }
 
+export function buildBrainPointer({ situFile, target, why } = {}) {
+  return [
+    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
+    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile || '(本轮态势文件)'}，`,
+    `处置目标：${target}（${why}）。`,
+    '职责（2026-09-04 拍板「必须送达」，#1150 送达口改 mirasim）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 GitHub 评论（issue-gateway comment / gh-as worker 的 pr comment）或飞书 hub（hub-say）送达工人或审官推动闭环。不要调 dao.mjs send / notify / reviewer-attach——已退役，调用即拒。送不动时在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
+    '边界：只许调现役 dao.mjs 动词 + issue-gateway / gh 只读；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
+  ].join('');
+}
+
 function wakeBrain(action, { state, dryRun, say }) {
   const situFile = state._lastSituationFile || '(本轮态势文件)';
-  const pointer = action.pointer || [
-    '你是服务器指挥官的「大脑」（一次性会话，#800）。',
-    `先读 host/skills/commander/SKILL.md 与态势文件 ${situFile}，`,
-    `处置目标：${action.target}（${action.why}）。`,
-    '职责（2026-09-04 拍板）：给出具体解决方案（改哪里、验收判据），落痕到对应单后必须用 dao.mjs send/notify 送达工人或审官终端推动闭环——只留评论不算送达；终端死了或送不动，在单上写明「给了什么方案、送到哪、为什么没动」再报帅。',
-    '边界：只许调 dao.mjs 动词 + gh issue/pr comment；不许改决策字段/协作约定文件/花钱。处置完自行结束会话。',
-  ].join('');
+  const pointer = action.pointer || buildBrainPointer({
+    situFile, target: action.target, why: action.why,
+  });
   const startCmd = brainStartCmd(pointer, action.title);
   if (dryRun) {
     say(`[dry] wake-brain ${action.target}：\n    ${startCmd.join(' ')}`);
@@ -2174,7 +2197,9 @@ function escalate(action, { state, dryRun, say,
  * 判据是纯函数 reconcileEscalationRound，这里只负责取数与执行 gh 动作。
  * 关单留言写清被哪条原因收敛——关单必须可追溯（#1063 硬边界）。
  */
-function reconcileEscalations({ actions, situation, state, dryRun, say }) {
+export function reconcileEscalations({ actions, situation, state, dryRun, say,
+  readIssue = n => runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'state,labels'], 30000),
+}) {
   const reasonsThisRound = (actions || [])
     .filter((a) => a && a.kind === 'escalate' && a.reason)
     .map((a) => String(a.reason));
@@ -2185,10 +2210,26 @@ function reconcileEscalations({ actions, situation, state, dryRun, say }) {
     streak: state.escalateStreak || {},
     ledger: state.escalateLedger,
     allScanned: health.allScanned,
+    approvedIssues: (situation.github?.issues || [])
+      .filter(i => (i.labels || []).some(l => (typeof l === 'string' ? l : l.name) === '已拍板'))
+      .map(i => i.number),
   });
   if (r.skipped) { say(`  升级收敛略过：${r.skipped}`); return { ok: true, skipped: r.skipped }; }
   if (!dryRun) state.escalateStreak = r.streak;
   for (const item of r.toClose) {
+    // A capped open-issue snapshot may omit an approved task. Re-read each
+    // close candidate; missing evidence never means the task is unapproved.
+    const current = readIssue(item.issue);
+    let issue;
+    try { if (current.ok) issue = JSON.parse(current.out); } catch { /* keep below */ }
+    if (!issue || !['OPEN', 'CLOSED'].includes(issue.state) || !Array.isArray(issue.labels)) {
+      say(`  #${item.issue} 当前标签未核实，不自动关单`);
+      continue;
+    }
+    if (issue.labels.some(l => (typeof l === 'string' ? l : l?.name) === '已拍板')) {
+      say(`  #${item.issue} 已批准执行，由交付验收负责关单`);
+      continue;
+    }
     if (dryRun) { say(`[dry] 收敛关单 #${item.issue}（原因 ${item.reason} 本轮已消失）`); continue; }
     const entry = (state.escalateLedger || {})[item.key] || {};
     const body = closeCommentBody({ reason: item.reason, objects: entry.objects, at: nowIso() });
@@ -2498,7 +2539,7 @@ function main() {
   install    幂等写 systemd service+timer（act 每 20 分钟、inventory 每 6 小时；--dry-run 只打印）`);
     process.exit(0);
   }
-  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
+  if (sub === 'inventory') return import('./lib/commander-inventory.mjs').then((m) => m.runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, hubAskOnce, openEscalationIssue, loadState, saveState }));
   if (sub === 'status') return import('./lib/commander-inventory.mjs').then((m) => m.runStatus({ rest, ROOT }));
   if (sub === 'install') return import('./lib/commander-inventory.mjs').then((m) => m.runInstall({ rest, ROOT }));
   const fn = CMDS[sub];

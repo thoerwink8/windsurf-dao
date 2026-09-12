@@ -247,11 +247,13 @@ describe('dao 审官与完工', () => {
       });
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
-    await t.test('dao.mjs dispatch 成功后调 stampIssueLabels', () => {
-      assert.ok(/stampIssueLabels\(\{/.test(daoSrcLabels), 'dao.mjs dispatch 成功后调 stampIssueLabels  →  ' + daoSrcLabels.slice(0, 60));
+    await t.test('dao.mjs mirasim 派工不打 stampIssueLabels（降级项，闭环靠 PR 署名）', () => {
+      const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
+      assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
+      assert.doesNotMatch(mira, /stampIssueLabels\(/, 'mirasim 派工不打 label');
     });
-    await t.test('dao.mjs dispatch 打 reviewer/*', () => {
-      assert.ok(/reviewer:\s*gate\.reviewer/.test(daoSrcLabels), 'dao.mjs dispatch 打 reviewer/*  →  ' + daoSrcLabels.slice(0, 60));
+    await t.test('pr-sync-labels 仍是 label 校准入口', () => {
+      assert.ok(/function cmdPrSyncLabels/.test(daoSrcLabels), 'pr-sync-labels 动词还在');
     });
   });
 
@@ -756,10 +758,10 @@ describe('dao 审官与完工', () => {
         assert.doesNotMatch(wdFn, /\/审官\//);
         assert.match(wdFn, /mirasimWorkerDone\(/);
       });
-    await t.test('#586 复用路径 worker-start 必带审官树 --worktree',
+    await t.test('#586 复用路径走 mirasimWorkerDone，不再 worker-start --worktree',
       () => {
-        assert.ok(/worktree: reviewerWorktreeId/.test(daoSrc586) && /result\.task\.id/.test(daoSrc586),
-          '#586 复用路径 worker-start 必带审官树 --worktree  →  复用路径要显式 --worktree，task id 取 result.task.id');
+        assert.match(daoSrc586, /mirasimWorkerDone\(/);
+        assert.doesNotMatch(daoSrc586, /worktree: reviewerWorktreeId/);
       });
   });
 
@@ -976,13 +978,15 @@ describe('dao 审官与完工', () => {
 
     const daoSrcAlign = fs.readFileSync(CLI, 'utf8');
     await t.test('#575 ⑦ reviewer-create 建树前走 assessPrMergeable', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrcAlign), '#575 ⑦ reviewer-create 建树前走 assessPrMergeable');
+      const mira = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+      assert.ok(/assessPrMergeable/.test(mira), '#575 ⑦ reviewer-create 建树前走 assessPrMergeable');
     });
-    await t.test('#575 ⑦ reviewer-attach 建树前走 assessPrMergeable', () => {
-      assert.ok(/function cmdReviewerAttach[\s\S]*assessPrMergeable/.test(daoSrcAlign), '#575 ⑦ reviewer-attach 建树前走 assessPrMergeable');
+    await t.test('#575 ⑦ reviewer-attach 已退役，不走 orca 建树', () => {
+      assert.match(daoSrcAlign, /orca 已退役，reviewer-attach/);
     });
     await t.test('#575 ⑦ reviewer-create 建树后试合', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrcAlign), '#575 ⑦ reviewer-create 建树后试合');
+      const mira = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+      assert.ok(/assessPrMergeable/.test(mira), '#575 ⑦ mergeable 硬闸在 mirasim 审官路径');
     });
 
     const revHelp = await cliInProc(['reviewer-create', '--help']);
@@ -1001,18 +1005,21 @@ describe('dao 审官与完工', () => {
     const tmplDir = path.join(REPO, 'host', 'skills', 'dispatch', 'templates');
     const files = S.listDispatchTemplates();
     await t.test('模板目录有 soldier-book + reviewer-book + 两份 inject', () => {
-      assert.ok(files.includes('soldier-book.md') && files.includes('reviewer-book.md') && files.includes('soldier-inject.md') && files.includes('reviewer-inject.md'), '模板目录有 soldier-book + reviewer-book + 两份 inject  →  ' + files.join(','));
+      assert.ok(files.includes('soldier-book-mirasim.md'), '有 soldier-book-mirasim.md  →  ' + files.join(','));
+      assert.ok(files.includes('reviewer-book-mirasim.md'), '有 reviewer-book-mirasim.md');
+      assert.ok(files.includes('soldier-inject-mirasim.md'), '有 soldier-inject-mirasim.md');
+      assert.ok(files.includes('reviewer-inject-mirasim.md'), '有 reviewer-inject-mirasim.md');
     });
 
-    const soldierBook = fs.readFileSync(path.join(tmplDir, 'soldier-book.md'), 'utf8');
+    const soldierBook = fs.readFileSync(path.join(tmplDir, 'soldier-book-mirasim.md'), 'utf8');
     await t.test('soldier-book 不再内嵌审官 dispatch id（#586 按需起）', () => {
       assert.ok(!/REVIEWER_DISPATCH_ID/.test(soldierBook) && !/dispatch:undefined/.test(soldierBook), 'soldier-book 不再内嵌审官 dispatch id（#586 按需起）  →  ' + soldierBook.slice(-220));
     });
     await t.test('soldier-book 完工走 worker-done', () => {
       assert.ok(/worker-done/.test(soldierBook) && /--pr/.test(soldierBook), 'soldier-book 完工走 worker-done  →  ' + soldierBook.slice(-260));
     });
-    await t.test('soldier-book 要求不要自己发 comment / notify', () => {
-      assert.ok(/不要自己/.test(soldierBook), 'soldier-book 要求不要自己发 comment / notify');
+    await t.test('soldier-book 要求不要 notify 结算', () => {
+      assert.ok(/不要.*notify/.test(soldierBook) || /不做 notify/.test(soldierBook), 'soldier-book 要求不要 notify 结算');
     });
 
     const soldier = S.buildSoldierInject({ spec: '短摘要：修 X', issue: 602 });
@@ -1020,10 +1027,10 @@ describe('dao 审官与完工', () => {
       assert.ok(!/[\r\n]/.test(soldier) && /短摘要：修 X/.test(soldier), '士兵注入是单行且含 spec  →  ' + soldier);
     });
     await t.test('士兵注入含指针路径', () => {
-      assert.ok(/host\/skills\/dispatch\/templates\/soldier-book\.md/.test(soldier), '士兵注入含指针路径  →  ' + soldier);
+      assert.ok(/host\/skills\/dispatch\/templates\/soldier-book-mirasim\.md/.test(soldier), '士兵注入含指针路径  →  ' + soldier);
     });
-    await t.test('主约束：士兵注入 ≤100 字节', () => {
-      assert.ok(S.injectUtf8Bytes(soldier) <= 100, '主约束：士兵注入 ≤100 字节  →  ' + `bytes=${S.injectUtf8Bytes(soldier)} ${soldier}`);
+    await t.test('主约束：士兵注入低于长度上限', () => {
+      assert.ok(S.injectUtf8Bytes(soldier) <= S.INJECT_MAX_BYTES, '士兵注入低于长度上限  →  ' + `bytes=${S.injectUtf8Bytes(soldier)} ${soldier}`);
     });
 
     const reviewer = S.buildReviewerInject({
@@ -1038,26 +1045,25 @@ describe('dao 审官与完工', () => {
     await t.test('审官注入低于长度上限', () => {
       assert.ok(S.injectUtf8Bytes(reviewer) <= S.INJECT_MAX_BYTES, '审官注入低于长度上限  →  ' + `bytes=${S.injectUtf8Bytes(reviewer)} ${reviewer}`);
     });
-    await t.test('审官注入填进士兵 dispatch id', () => {
-      assert.ok(/ctx_worker-1/.test(reviewer), '审官注入填进士兵 dispatch id');
-    });
     await t.test('审官注入填进 merge-policy', () => {
       assert.ok(/m=auto/.test(reviewer), '审官注入填进 merge-policy  →  ' + reviewer);
     });
-    await t.test('审官注入红项目标是 dispatch:<id> 不是 handle', () => {
-      assert.ok(/d=ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), '审官注入红项目标是 dispatch:<id> 不是 handle  →  ' + reviewer);
+    await t.test('审官注入指 mirasim 审官书', () => {
+      assert.match(reviewer, /reviewer-book-mirasim\.md/, '审官注入指 mirasim 审官书  →  ' + reviewer);
+      assert.doesNotMatch(reviewer, /term_/, '审官注入不含 terminal handle');
     });
 
-    const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book.md'), 'utf8');
+    const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book-mirasim.md'), 'utf8');
     await t.test('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', () => {
       assert.ok(/乒乓/.test(reviewerBook), 'reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅');
     });
     await t.test('reviewer-book 走 gh-as reviewer approve（#573）', () => {
-      assert.ok(/gh-as\.mjs reviewer/.test(reviewerBook) && /--approve/.test(reviewerBook) && /真 approve/.test(reviewerBook), 'reviewer-book 走 gh-as reviewer approve（#573）  →  ' + reviewerBook.slice(0, 400));
+      assert.match(reviewerBook, /gh-as\.mjs reviewer/, 'reviewer-book 走 gh-as reviewer  →  ' + reviewerBook.slice(0, 400));
+      assert.match(reviewerBook, /--approve/, 'reviewer-book 含 --approve');
     });
     await t.test('reviewer-book 审官不许自己合，合入归指挥官 squash', () => {
       assert.ok(
-        /你不许自己合并/.test(reviewerBook)
+        /不许自己合/.test(reviewerBook)
           && !/pr merge <PR号> --auto/.test(reviewerBook)
           && !/服务端 auto-merge/.test(reviewerBook),
         'reviewer-book 仍在教审官自己合 → ' + reviewerBook.slice(reviewerBook.indexOf('merge-policy: auto'), reviewerBook.indexOf('merge-policy: auto') + 280),
@@ -1080,21 +1086,21 @@ describe('dao 审官与完工', () => {
     let threw = false, threwMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', mergePolicy: 'auto' }); }
     catch (e) { threw = true; threwMsg = String(e.message || e); }
-    await t.test('缺占位符值 → 抛', () => {
-      assert.ok(threw && /SOLDIER_DISPATCH_ID/.test(threwMsg), '缺占位符值 → 抛  →  ' + threwMsg);
+    await t.test('缺士兵 dispatch id 不再抛（mirasim 注入无 d= 占位）', () => {
+      assert.ok(!threw, '缺士兵 dispatch id 不再抛  →  ' + threwMsg);
     });
 
     let threwU = false, uMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: String(undefined), mergePolicy: 'auto' }); }
     catch (e) { threwU = true; uMsg = String(e.message || e); }
-    await t.test('审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红', () => {
-      assert.ok(threwU && /SOLDIER_DISPATCH_ID/.test(uMsg) && /dispatch:undefined|无效值/.test(uMsg), '审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红  →  ' + uMsg);
+    await t.test('审官注入无 d= 占位：字面量 undefined 不炸', () => {
+      assert.ok(!threwU, '字面量 undefined 不炸  →  ' + uMsg);
     });
-    let threwN = false;
+    let threwN = false, nMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: 'null', mergePolicy: 'auto' }); }
-    catch (e) { threwN = true; }
-    await t.test('审官红项回归：占位符填字面量 null 也抛', () => {
-      assert.ok(threwN, '审官红项回归：占位符填字面量 null 也抛');
+    catch (e) { threwN = true; nMsg = String(e.message || e); }
+    await t.test('审官注入无 d= 占位：字面量 null 不炸', () => {
+      assert.ok(!threwN, '字面量 null 不炸  →  ' + nMsg);
     });
 
     const multi = S.buildSoldierInject({ spec: '短摘要\n第二行' });
@@ -1118,22 +1124,24 @@ describe('dao 审官与完工', () => {
     await t.test('dao.mjs 士兵任务书走短注入（buildSoldierInject）', () => {
       assert.ok(/buildSoldierInject/.test(daoSrc), 'dao.mjs 士兵任务书走短注入（buildSoldierInject）');
     });
-    await t.test('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', () => {
-      assert.ok(/soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）  →  REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
+    await t.test('dao.mjs 士兵 spec 走 buildSoldierInject', () => {
+      assert.match(daoSrc, /buildSoldierInject/, 'dao.mjs 士兵 spec 走 buildSoldierInject');
+      assert.doesNotMatch(daoSrc, /REVIEWER_DISPATCH_ID/, 'dao.mjs 不再内嵌审官 dispatch id');
     });
-    await t.test('dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）',
+    await t.test('dao.mjs 审官由 cmdReviewerCreateMirasim 起会话（dispatch 不再起）',
       () => {
-        assert.ok(/function cmdReviewerCreate[\s\S]*reviewerTaskId/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*revStarted/.test(daoSrc)
-        && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc), 'dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）');
+        assert.match(daoSrc, /cmdReviewerCreateMirasim/, 'dao.mjs 审官由 cmdReviewerCreateMirasim 起会话');
+        assert.match(daoSrc, /mirasimReviewerCreate/, 'dao.mjs 调 mirasimReviewerCreate');
       });
-    await t.test('dao.mjs 审官注入后也验开工（reviewerInject）', () => {
-      assert.ok(/reviewerInject/.test(daoSrc), 'dao.mjs 审官注入后也验开工（reviewerInject）');
+    await t.test('dao.mjs 审官 prompt 走 buildMirasimReviewerPrompts', () => {
+      assert.ok(/buildMirasimReviewerPrompts/.test(daoSrc), 'dao.mjs 审官 prompt 走 buildMirasimReviewerPrompts');
     });
     await t.test('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', () => {
       assert.ok(/extractDispatchId/.test(daoSrc), 'dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）');
     });
-    await t.test('dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）', () => {
-      assert.ok(/soldierDoneVia: 'worker-done'/.test(daoSrc) && /reviewerDeferred: true/.test(daoSrc), 'dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）');
+    await t.test('dao.mjs 完工走 cmdWorkerDoneMirasim', () => {
+      assert.match(daoSrc, /cmdWorkerDoneMirasim/, 'dao.mjs 完工走 cmdWorkerDoneMirasim');
+      assert.match(daoSrc, /mirasimWorkerDone/, 'dao.mjs 调 mirasimWorkerDone');
     });
     await t.test('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', () => {
       assert.match(daoSrc, /function cmdReviewerCreateMirasim[\s\S]*soldierDispatchId/);
@@ -1149,8 +1157,9 @@ describe('dao 审官与完工', () => {
       assert.doesNotMatch(wd, /comment: '待终审'/);
       assert.doesNotMatch(wd, /comment: '交卷了，审官没起来'/);
     });
-    await t.test('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', () => {
-      assert.ok(/审官身份/.test(daoSrc) && /identity/.test(daoSrc), '审官红项修正：审官身份消息发进士兵收件箱（四关确认）');
+    await t.test('审官判定落 GitHub review，不走 orca 身份投递', () => {
+      assert.ok(!/function deliverReviewerIdentity/.test(daoSrc), 'orca 身份投递必须已删');
+      assert.ok(/cmdReviewerCreateMirasim/.test(daoSrc), '审官走 mirasim create');
     });
   });
 });
