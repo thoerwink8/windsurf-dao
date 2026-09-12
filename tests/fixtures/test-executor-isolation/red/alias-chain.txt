@@ -1,0 +1,6 @@
+/* 审官对抗样本：别名再赋一次。只收一层别名会 scanned:0。
+const cp = require("node:child_process");
+const run = cp.spawnSync;
+const actual = run;
+actual(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", HOME: "/tmp" } });
+*/

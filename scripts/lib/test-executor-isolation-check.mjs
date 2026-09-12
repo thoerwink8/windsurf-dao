@@ -8,8 +8,9 @@
 // 闸失手 = 烧钱且静默。所以检查两面：
 //   1. 测试源码不许 spawn/exec 调 dao dispatch / dispatch-exec 还不带 --dry-run
 //      （子进程 env 丢失时 NODE_TEST_CONTEXT 也丢，运行时闸够不着）。
-//      认别名（spawnSync: run / const run = cp.spawnSync）、argv 变量、模板动词、
-//      exec 命令字符串、dispatch-exec、计算属性 cp["spawnSync"]、拼接动词 "dis"+"patch"。
+//      认别名（spawnSync: run / const run = cp.spawnSync / const actual = run 链式赋值）、
+//      argv 变量、模板动词、exec 命令字符串、dispatch-exec、计算属性 cp["spawnSync"]、
+//      拼接动词 "dis"+"patch"。别名解析收到固定点，一层赋值再转一层不许 scanned:0。
 //      --dry-run 只认解析后的子进程 argv（input / env 字段里的字面量不算）。
 //      解析不了的 child_process 计算属性调用 fail-closed——不许 scanned:0 静默放行。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
@@ -144,21 +145,31 @@ function splitTopLevelArgs(inner) {
 /**
  * 收集 spawn/exec 调用名：原名 + 解构/import as/赋值别名。
  * `{ spawnSync: require(...) }` 的 require 不当别名（后面是 '(' 不是 ',' / '}'）。
+ * 别名会再赋一次（`const run = cp.spawnSync; const actual = run`），收到固定点。
  */
 export function collectSpawnAliases(src) {
   const names = new Set(SPAWN_FNS);
   const text = String(src || '');
-  const fns = SPAWN_FNS.map(escapeIdent).join('|');
-  const dest = new RegExp(String.raw`\b(?:${fns})\s*:\s*([A-Za-z_][\w]*)\s*[,}]`, 'g');
-  let m;
-  while ((m = dest.exec(text))) names.add(m[1]);
-  const imp = new RegExp(String.raw`\b(?:${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
-  while ((m = imp.exec(text))) names.add(m[1]);
-  const asg = new RegExp(
-    String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*[^\n;]*\b(?:${fns})\s*(?![(\w])`,
-    'g',
-  );
-  while ((m = asg.exec(text))) names.add(m[1]);
+  for (let n = 0; n < 32; n++) {
+    const before = names.size;
+    const fns = [...names].map(escapeIdent).join('|');
+    const dest = new RegExp(String.raw`\b(?:${fns})\s*:\s*([A-Za-z_][\w]*)\s*[,}]`, 'g');
+    let m;
+    while ((m = dest.exec(text))) names.add(m[1]);
+    const imp = new RegExp(String.raw`\b(?:${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
+    while ((m = imp.exec(text))) names.add(m[1]);
+    const asg = new RegExp(
+      String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*[^\n;]*\b(?:${fns})\s*(?![(\w])`,
+      'g',
+    );
+    while ((m = asg.exec(text))) names.add(m[1]);
+    const bare = new RegExp(
+      String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*[^\n;]*\b(?:${fns})\s*(?![(\w])`,
+      'g',
+    );
+    while ((m = bare.exec(text))) names.add(m[1]);
+    if (names.size === before) break;
+  }
   return [...names];
 }
 
@@ -510,6 +521,7 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let dryRunNotInArgv = false;
       let computedSpawn = false;
       let concatVerb = false;
+      let aliasChain = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -520,11 +532,16 @@ export function inspectTestExecutorIsolationFixtures(root) {
         if (hasLit(src, '--dry-run') && r.scanned > 0 && !r.ok) dryRunNotInArgv = true;
         if (src.includes('["' + 'spawnSync' + '"]') && r.scanned > 0 && !r.ok) computedSpawn = true;
         if (/"dis"\s*\+\s*"patch"/.test(src) && r.scanned > 0 && !r.ok) concatVerb = true;
+        if (
+          /(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w]*\s*;/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) aliasChain = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
       if (!computedSpawn) problems.push('red/ 没点出计算属性 child_process 调用');
       if (!concatVerb) problems.push('red/ 没点出拼接动词 dis+patch');
+      if (!aliasChain) problems.push('red/ 没点出别名再赋值（run → actual）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

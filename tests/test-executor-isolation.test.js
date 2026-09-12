@@ -213,6 +213,39 @@ test('属性别名 const run = cp.spawnSync 必须红（审官对抗样本）', 
   assert.equal(r.violations[0].kind, 'env-lost');
 });
 
+test('别名再赋值必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const next = 'act' + 'ual';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${alias} = cp.${CALL};`,
+    `const ${next} = ${alias};`,
+    `${next}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", HOME: "/tmp" } });`,
+  ].join('\n');
+  const aliases = collectSpawnAliases(src);
+  assert.ok(aliases.includes(alias), aliases.join(','));
+  assert.ok(aliases.includes(next), aliases.join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('裸赋值别名链必须红', () => {
+  const alias = 'ru' + 'n';
+  const next = 'act' + 'ual';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const ${alias} = cp.${CALL};`,
+    `let ${next};`,
+    `${next} = ${alias};`,
+    `${next}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", HOME: "/tmp" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
 test('exec 命令字符串必须红（审官对抗样本）', () => {
   const exe = 'ex' + 'ec';
   const src = [
