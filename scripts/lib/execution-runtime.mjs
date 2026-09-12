@@ -8,7 +8,7 @@ import {createRuntime as createMirasimRuntime} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
-import {EXECUTION_FINISHED,EXECUTION_RESERVED,sessionStateOf} from './execution-states.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
@@ -64,6 +64,11 @@ export function ensureGitWorkspace(repo,branch,{homeDir=os.homedir(),base='origi
   return {path:target,branch,created:true,verified:true};
 }
 export function judgeExecutionCompletion(view) {
+  // 快照没回帧（partial）时不许一律回 unknown：会话清单已经报了终态就采信它。
+  // 判据在正典（execution-states.confirmedSessionState），与 listSessions 那条路同一句。
+  // 2026-09-12 实咬：不认这句话 → 收尾永远验不过 → 租约永久 stopping 占住审官树。
+  const confirmed=confirmedSessionState(view);
+  if(confirmed)return {status:'failed',reason:'session already finished per inventory (snapshot stale)',confirmedBy:['session']};
   if(!view||view.missing||view.partial)return {status:'unknown',reason:'complete session view unavailable',confirmedBy:[]};
   const snapshot=view.snapshot||{},phase=view.phase||snapshot.phase||snapshot.runState;
   const cancelled=['aborted','cancelled','canceled','stopped'].includes(phase);
@@ -81,6 +86,10 @@ function busy(message,reason='lease-held'){const e=new Error(message);e.code='bu
 // 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
 const RESERVED=EXECUTION_RESERVED;
 const FINISHED=EXECUTION_FINISHED;
+// `judgeExecutionCompletion` 的 status 值域只有两个词，且由它自己从正典映射而来。
+// 谁要判「这次收尾验过了没」，读这句话，别去卡 view 的原始状态词——
+// 手打 ['done','failed'] 去卡 view 的那版漏了 `incomplete`，把树永久锁死（2026-09-12 实咬）。
+const TERMINAL_STATUS=EXECUTION_VERDICT_FINISHED;
 const SESSION_KEY=/^[a-z][a-z0-9-]*:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sameLease=(a,b)=>a&&b&&a.token===b.token&&(a.recordKey||a.sessionKey)===(b.recordKey||b.sessionKey)&&a.cleanupToken===b.cleanupToken;
 
@@ -230,7 +239,7 @@ export function createExecutionRuntime(opts={}) {
       });
       if(!previous)break;
       const view=await backend(previous.sessionKey,previous).readSession(previous.sessionKey);
-      if(!['done','failed'].includes(judgeExecutionCompletion(view).status))throw busy('worktree already has an active or unknown session');
+      if(!TERMINAL_STATUS.has(judgeExecutionCompletion(view).status))throw busy('worktree already has an active or unknown session');
       const cleaned=await stopSession(previous.sessionKey,{workdir:meta.workdir,expectedLease:previous,automatic:true});
       if(!cleaned?.ok)throw busy('previous worktree session cleanup is unverified');
     }
@@ -326,7 +335,12 @@ export function createExecutionRuntime(opts={}) {
           let terminal=false;
           for(let i=0;i<(opts.stopVerifyTries??3);i++) {
             const view=await rt.readSession(key);
-            if(['done','failed'].includes(judgeExecutionCompletion(view).status)){terminal=true;break;}
+            // 「收尾验过了」的判据：`judgeExecutionCompletion` 的 status 是**归一后**的两个词
+            // （done/failed），它内部已经把正典的整张终态表映射进来了，所以这里不是手打状态表。
+            // 原来的写法是拿 `['done','failed']` 去卡 **view**，而上游断流打死的常态（`incomplete`）
+            // 在正典里是终态、却不在那个手打清单 → 验不过 → 会话与租约双双回写 stopping
+            // → 这棵树永久起不了新会话（2026-09-12 实咬）。
+            if(TERMINAL_STATUS.has(judgeExecutionCompletion(view).status)){terminal=true;break;}
             if(i+1<(opts.stopVerifyTries??3))await wait(opts.cleanupPollMs??100);
           }
           if(!terminal)result={ok:false,uncertain:true,why:'vendor stop is not terminal; lease retained'};

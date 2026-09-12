@@ -45,6 +45,7 @@
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
 | A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
+| A | ~/.dao/ephemeral-lifecycle | 短命执行体容量快照（#1174）。指挥官每轮追加 `samples.ndjson`（cpuBusy/内存/在途/会话/树/交卷残留/清树失败）。不进 git，换机重生成 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |

@@ -19,7 +19,7 @@
 // 与 inbox.log 完工信。758-763 实证：dao 加的认账钟误杀能干活的工人（假阴性）。
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -230,7 +230,7 @@ import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
-import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
+import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
@@ -1627,7 +1627,7 @@ import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
-  decideReviewerCreateStart, runLockedReviewerCreate,
+  decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -1867,6 +1867,11 @@ async function cmdReviewerCreateMirasim(args) {
   // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
   // #1024：键是仓+PR，跨仓同号不复用别仓的会话。
   const existing = registry.read(args.pr, ownerName);
+  if (existing && existing.ok !== true && existing.missing !== true) {
+    fail(`审官登记没查成，不起第二个审官：${existing.why || '没给原因'}`, {
+      executor: 'mirasim', stage: 'registry', pr: String(args.pr),
+    });
+  }
   const existingRecord = existing.ok ? existing.record : null;
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
@@ -1906,6 +1911,16 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr, ownerName);
+    if (again && again.ok !== true && again.missing !== true) {
+      return {
+        res: {
+          ok: false,
+          stage: 'registry',
+          error: `锁内复查审官登记没查成，不起第二个审官：${again.why || '没给原因'}`,
+        },
+        w: null,
+      };
+    }
     const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
@@ -2067,7 +2082,7 @@ async function cmdWorkerDoneMirasim(args) {
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
-  // #1125 主路：首审**只入队，不起审官**。
+  // #1125 主路：交卷**只入队，不起审官**。
   //
   // 病：起审官原来发生在工人交卷那一刻，于是**生产端决定了消费端的并发**——工人跑得多快，
   // 审官就被起得多快，而没有任何人在看上游还剩多少容量。2026-09-07 实测 13 个工人在跑、
@@ -2076,9 +2091,10 @@ async function cmdWorkerDoneMirasim(args) {
   // 队列本身早就有（#815），但当初是给 Orca depth 2 限制做的**起败兜底**，Orca 已随 #1115
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
-  // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
+  // 首审一律入队。返工：审官树还在才往原会话推针；确认登记不在或树已拆才入队。
+  // 登记没查成 / 缺 treePath / 树在不在没查成，一律 fail-visible，不许当成树已拆去起第二个审官。
   const repo = targetRepo.localPath;
-  if (plan.round === 'first') {
+  const enqueueHandoff = async (why) => {
     const dir = reviewPendingDir({ root: ROOT });
     let head = { name: null, oid: null };
     try {
@@ -2109,8 +2125,25 @@ async function cmdWorkerDoneMirasim(args) {
       postedIssue, postedPr, action: 'queued-for-review',
       reviewPending: { path: wrote.path, source: built.ticket.source },
       stopped,
-      why: '首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官',
+      why,
     });
+  };
+  if (plan.round === 'first') {
+    await enqueueHandoff('首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官');
+    return;
+  }
+  const rec = mirasimRegistry().read(String(plan.pr), targetRepo.ownerName || null);
+  const reviewTree = rec && rec.ok && rec.record && rec.record.treePath != null
+    ? String(rec.record.treePath).trim()
+    : '';
+  // probeDir 而不是 existsSync：后者把 EACCES 洗成 false，随后按树已拆入队。
+  const treeExists = reviewTree
+    ? treeExistsFromProbe(probeDir(statSync, reviewTree))
+    : undefined;
+  const handoff = decideReworkReviewerHandoff({ rec, treeExists });
+  if (handoff.action === 'fail') fail(handoff.why, { ...plan, postedIssue, postedPr });
+  if (handoff.action === 'enqueue') {
+    await enqueueHandoff(handoff.why);
     return;
   }
 

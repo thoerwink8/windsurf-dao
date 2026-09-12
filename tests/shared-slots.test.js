@@ -107,10 +107,10 @@ describe('收尾先于开新', () => {
       slots: 2,
     }));
     assert.equal(kinds(r, 'attach-reviewer').length, 1, '#1125 收尾每轮只留 1 个名额喊 drain');
-    assert.equal(kinds(r, 'dispatch').length, 1, 'slots=2 减去 1 张收尾，剩 1 个给新活');
+    assert.equal(kinds(r, 'dispatch').length, 1, '老单有票时新活最多 1 张');
   });
 
-  it('预算有富余时，收尾之外的名额才轮到新活', async () => {
+  it('预算有富余时，老单有票则新活仍最多 1 张', async () => {
     const { decide } = await CORE;
     const r = decide(situation({
       issues: [readyIssue(201), readyIssue(202), readyIssue(203)],
@@ -118,7 +118,7 @@ describe('收尾先于开新', () => {
       slots: 3,
     }));
     assert.equal(kinds(r, 'attach-reviewer').length, 1);
-    assert.equal(kinds(r, 'dispatch').length, 2, '3 个名额减去 1 张票，剩 2 个给新活');
+    assert.equal(kinds(r, 'dispatch').length, 1, '老单有可执行动作时新派工压到 1');
   });
 
   it('没有票时，全部名额都归新活', async () => {
@@ -138,7 +138,7 @@ describe('旧夹具兼容：没给 admission 就不限张', () => {
       issues: [readyIssue(201), readyIssue(202), readyIssue(203)],
       ticket: [{ pr: 101 }, { pr: 102 }],
     }));
-    assert.equal(kinds(r, 'dispatch').length, 3);
+    assert.equal(kinds(r, 'dispatch').length, 1, '即使准入不限张，老单有票时新活仍最多 1');
     assert.equal(kinds(r, 'attach-reviewer').length, 1, '#1125 每轮只产一条 attach-reviewer');
   });
 

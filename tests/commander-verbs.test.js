@@ -41,7 +41,7 @@ describe('#971 形状对齐：drain 账本与复审同一套 tries', () => {
     assert.deepEqual([...FORBIDDEN_AUTO_KINDS].sort(), [
       'edit-dao', 'merge-force', 'rm-tree', 'worktree-remove', 'worktree-rm', 'write-fingerprint',
     ].sort());
-    for (const k of ['add-label', 'retry-drain', 'open-issue', 'mark-exhausted', 'pump-draft']) {
+    for (const k of ['add-label', 'retry-drain', 'open-issue', 'mark-exhausted', 'pump-draft', 'reap-tree']) {
       assert.ok(ACTION_KINDS.includes(k), `${k} 必须进白名单`);
       assert.ok(!FORBIDDEN_AUTO_KINDS.has(k), `${k} 不许进禁用表`);
     }
