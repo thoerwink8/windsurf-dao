@@ -232,11 +232,16 @@ describe('decide 产 reap-tree', () => {
       admission: { ok: true, slots: 2, why: 'ok' },
     });
     const reaps = r.actions.filter((a) => a.kind === 'reap-tree');
-    assert.ok(reaps.some((a) => a.role === 'reviewer' && a.pr === 20), JSON.stringify(reaps));
-    assert.ok(reaps.some((a) => a.role === 'worker' && a.issue === 9), JSON.stringify(reaps));
+    const reviewerReaps = reaps.filter((a) => a.role === 'reviewer');
+    const workerReaps = reaps.filter((a) => a.role === 'worker');
+    assert.equal(reviewerReaps.length, 1, JSON.stringify(reaps));
+    assert.equal(reviewerReaps[0].pr, 20);
+    assert.equal(workerReaps.length, 1, JSON.stringify(reaps));
+    assert.equal(workerReaps[0].issue, 9);
     const mergeIdx = r.actions.findIndex((a) => a.kind === 'merge');
     const reapIdx = r.actions.findIndex((a) => a.kind === 'reap-tree' && a.role === 'worker');
-    assert.ok(mergeIdx >= 0 && reapIdx > mergeIdx, '工人树清在 merge 之后');
+    assert.ok(mergeIdx >= 0, '有 merge');
+    assert.ok(reapIdx > mergeIdx, '工人树清在 merge 之后');
   });
 });
 
