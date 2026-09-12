@@ -864,17 +864,30 @@ function loadDispatchEventsForStamp() {
   }
 }
 
-/** 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。 */
+/**
+ * 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。
+ *
+ * 不传 --repo = 本仓（与 resolveMirasimRepoTarget 同口径），所以「省略」这一路必须真去问 origin，
+ * 不能落 null：账本 repo 是选型打标的匹配键（#1116），写 null 等于这条派工链事后查不回来。
+ * 本仓 origin 探不到时退到 ROOT——同机另一个 checkout 上看不到 origin 不代表派工不是本仓的。
+ */
 function resolveDispatchRepoName(explicit) {
   const parsed = parseOwnerNameRepo(explicit);
   if (parsed.ok && !parsed.omitted) return { ok: true, ownerName: parsed.ownerName };
-  const remote = gitRemoteOriginUrl(thisCheckoutRoot());
-  if (!remote.ok) {
-    return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${remote.error}` };
+  const root = thisCheckoutRoot();
+  const tried = root === ROOT ? [root] : [root, ROOT];
+  let lastError = '';
+  for (const dir of tried) {
+    const remote = gitRemoteOriginUrl(dir);
+    if (!remote.ok) { lastError = remote.error; continue; }
+    const resolved = ownerNameFromRemoteUrl(remote.url);
+    if (resolved.ok) return resolved;
+    lastError = resolved.error;
   }
-  return ownerNameFromRemoteUrl(remote.url);
+  return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${lastError}` };
 }
 
+/** 落账用：解析不出就 null。派工不许因为「仓名没查成」而拒绝——本仓 origin 正常时永远拿得到。 */
 function resolveDispatchRepo(explicit) {
   const r = resolveDispatchRepoName(explicit);
   return r.ok ? r.ownerName : null;

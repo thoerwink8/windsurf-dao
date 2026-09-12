@@ -61,7 +61,7 @@ describe('pickWorkerDispatchByBranch', () => {
     ], 'dao-1116', REPO);
     assert.equal(got.ok, false);
     assert.equal(got.state, 'none');
-    assert.match(got.error, /缺 model 或 reviewer/);
+    assert.match(got.error, /缺 reviewer/);
     assert.match(got.error, /需人工打标/);
   });
 
@@ -100,20 +100,29 @@ describe('pickWorkerDispatchByBranch', () => {
       { type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: 'acme/repo', model: 'new-incomplete' },
     ], 'dao-1', 'acme/repo');
     assert.equal(got.ok, false);
-    assert.match(got.error, /缺 model 或 reviewer/);
+    assert.match(got.error, /缺 reviewer/);
     assert.match(got.error, /需人工打标/);
   });
 
-  it('后写缺 repo 不得回退旧的完整记录', async () => {
+  it('后写缺 repo 不得回退旧的完整记录，但最新一条本身要认（历史事件无 repo）', async () => {
     const { pickWorkerDispatchByBranch } = await WD;
+    // #1118 起 repo 才是必写字段，#1116 之前的历史事件全都没有。缺它不能当「不是这条链」，
+    // 也不能因此回退到旧记录——仍以最新一条为准，只是把「仓是推的」标出来。
     const got = pickWorkerDispatchByBranch([
       { type: 'job.dispatch', identity: '工人', branch: 'b', repo: 'acme/repo', model: 'old', reviewer: 'old-r' },
       { type: 'job.dispatch', identity: '工人', branch: 'b', model: 'new', reviewer: 'new-r' },
     ], 'b', 'acme/repo');
-    assert.equal(got.ok, false);
-    assert.equal(got.model, undefined);
-    assert.match(got.error, /缺 repo/);
-    assert.match(got.error, /需人工打标/);
+    assert.equal(got.ok, true);
+    assert.equal(got.model, 'new');
+    assert.equal(got.reviewer, 'new-r');
+    assert.equal(got.repoAssumed, true);
+
+    // 账本写了 repo 的，repoAssumed 不在（没推，是读来的）
+    const exact = pickWorkerDispatchByBranch([
+      { type: 'job.dispatch', identity: '工人', branch: 'b', repo: 'acme/repo', model: 'm', reviewer: 'r' },
+    ], 'b', 'acme/repo');
+    assert.equal(exact.ok, true);
+    assert.equal(exact.repoAssumed, false);
   });
 
   it('跨仓同名分支不套另一仓的 dispatch', async () => {
@@ -138,8 +147,8 @@ describe('pickWorkerDispatchByBranch', () => {
     const noRepoOnEvent = pickWorkerDispatchByBranch([
       { type: 'job.dispatch', identity: '工人', branch: 'dao-1', model: 'a', reviewer: 'r1' },
     ], 'dao-1', REPO);
-    assert.equal(noRepoOnEvent.ok, false);
-    assert.match(noRepoOnEvent.error, /需人工打标/);
+    assert.equal(noRepoOnEvent.ok, true);
+    assert.equal(noRepoOnEvent.repoAssumed, true);
   });
 });
 
@@ -257,6 +266,37 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.match(r.error, /需人工打标/);
     assert.ok(!calls.some((a) => a[1] === 'edit'), JSON.stringify(calls));
+  });
+
+  it('账本缺 reviewer（历史事件）取 PR 自己的 reviewer/*，账本有就以账本为准', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const ev = (extra) => ({ type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO, model: 'grok-4.6', work_type: '写码', ...extra });
+
+    // 账本没写 reviewer，标签有：收下，并说清审官是标签来的
+    const fromLabel = pickWorkerDispatchByBranch([ev({})], 'dao-1', REPO, { reviewerHint: 'gpt-5.6-luna' });
+    assert.equal(fromLabel.ok, true, JSON.stringify(fromLabel));
+    assert.equal(fromLabel.reviewer, 'gpt-5.6-luna');
+    assert.equal(fromLabel.reviewerSource, 'pr-label');
+
+    // 账本写了：账本的说了算，标签同值也标成 ledger
+    const fromLedger = pickWorkerDispatchByBranch([ev({ reviewer: 'gpt-5.6-luna' })], 'dao-1', REPO, { reviewerHint: 'gpt-5.6-luna' });
+    assert.equal(fromLedger.ok, true);
+    assert.equal(fromLedger.reviewerSource, 'ledger');
+
+    // 两条都在且不一致：不猜，报人工（两条都是派工那刻的决定）
+    const clash = pickWorkerDispatchByBranch([ev({ reviewer: 'gpt-5.6-luna' })], 'dao-1', REPO, { reviewerHint: 'grok-4.6' });
+    assert.equal(clash.ok, false);
+    assert.match(clash.error, /不一致/);
+
+    // 两条都没有：仍拒，不许拿「账本没写」当放行
+    const neither = pickWorkerDispatchByBranch([ev({})], 'dao-1', REPO, {});
+    assert.equal(neither.ok, false);
+    assert.match(neither.error, /需人工打标/);
+
+    // model 没有这种历史缺口：缺了就是拒，不许从标签补
+    const noModel = pickWorkerDispatchByBranch([ev({ model: '' })], 'dao-1', REPO, { reviewerHint: 'gpt-5.6-luna' });
+    assert.equal(noModel.ok, false);
+    assert.match(noModel.error, /缺 model/);
   });
 
   it('跨仓同名分支：后写的另一仓 dispatch 不给本仓 PR 打标', async () => {
