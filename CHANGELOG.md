@@ -2,6 +2,50 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.5.0 — 2026-09-12
+
+### 新功能
+- [cc] feat(lifecycle): 短命执行体 + 老单优先收口 (#1208)
+- [cc] feat: 删掉从 issue 标签反推派工决定这一层 (#1118)
+- [cc] feat: Orca 执行体彻底退役收尾（#1150） (#1153)
+- [cc] feat(onboard): skills 装载面合并式修复 + 自愈（#1146） (#1160)
+- [cc] feat(check): .git 属主一致性闸——root 残留一天两咬 (#1149) (#1155)
+
+### 修复与维护
+- [patrol] docs(obs): 控制面单轮探活红立刻掐死 git push
+- [patrol] docs(obs): 主树发散同步全绿；收件箱不查未推送
+- [cc] docs(obs): 判据不可判定靠加正则补不出来——#1159 十六轮返工环
+- [cc] fix(queue): 待审/派工队列钉在主 clone + 认 /pull/ 评论回执 (#1212)
+- [patrol] docs(obs): 控制面闸稳定来源在活工人树上指回自己，㊱仍绿
+- [patrol] docs(obs): 巡检会话继承 mirasim-server 的 GH_CONFIG_DIR=/var/empty，第一次 git push 被掐死
+- [patrol] docs(obs): failed-units闸被系统单元钉SKIP；skills-heal自愈钟没装
+- [cc] fix(gate): 控制面闸接到现役 git push 路径（#1165） (#1197)
+- [codex] fix(watchdog): 保存真实执行结果，停止重复通知和误报失败 (#1206)
+- [cc] fix(gc): 接上孤儿临时目录清扫，进程没查成不许删 (#1176) (#1195)
+- [cc] fix(inbox): 收件箱接到指挥官盘点，不再押在没人跑的 dao-check (#1192)
+- [grok] fix(check): ⑳ 比有效单元含 drop-in，探活 ExecStart 须走仓内脚本 (#1196)
+- [codex] fix(watchdog): 已交卷的工人不再被反复重派 (#1203)
+- [cc] fix(test): acp-runtime 跨进程 resume 在 CI 并行下不再误红 (#1183) (#1198)
+- [codex] fix(dispatch): verify missing task type before starting Mirasim workers (#1205)
+- [cc] fix(units): 凭据闸扫到指挥官生成单元（#1167） (#1190)
+- [cc] fix(probe): 三条红通道验真实请求，修假红 (#1184) (#1194)
+- [cc] fix(署名解析): 正文署名压过标题随手引用的 #N (#1191)
+- [cc] fix(check): 指挥官 timer enabled 但停摆必须红 (#1177) (#1193)
+- [cc] fix(harvest): 回流提示层改指现役 mirasim 士兵书 (#1189)
+- [codex] fix(watchdog): 已批准任务验证通过后自行完成合并 (#1201)
+- [codex] fix(watchdog): 告警恢复不等于已批准任务交付完成 (#1200)
+- [codex] fix(check): read branch protection through application credentials (#1199)
+- [codex] fix(watchdog): 已停工人不再占位，统领单不再提前关闭 (#1188)
+- [codex] fix(runtime): verify removed sessions against inventory and processes (#1187)
+- [codex] fix(runtime): 无界面的运行中工人不再被判为结束 (#1186)
+- [codex] fix(feishu): 拍板时即时确认，网络等待不再堵住按钮 (#1185)
+
+### 其它
+- [cc] test: 跟上 #1205——mirasim 派工补 type 走 marshal 网关 (#1207)
+- release: v2.4.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.4.0 — 2026-09-11
 
 ### 新功能
