@@ -591,6 +591,119 @@ test('解构 process.execPath 别名 + 解析不了的 argv 必须红（审官�
   assert.match(r.violations[0].why, /无法解析的 argv/);
 });
 
+test('Function.call 适配必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}.call(null, process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('Function.apply 适配必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}.apply(null, [process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } }]);`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('Reflect.apply 适配必须红（审官对抗样本）', () => {
+  const applyOf = 'ap' + 'ply';
+  const src = [
+    'const cp = require("node:child_process");',
+    `Reflect.${applyOf}(cp.${CALL}, null, [process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } }]);`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('立刻 bind()() 适配必须红', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}.bind(null)(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('Function.prototype.call.call 适配必须红', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `Function.prototype.call.call(cp.${CALL}, null, process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('动态 import() child_process 必须红（审官对抗样本）', () => {
+  const src = [
+    'const cp = await import("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('import().then 接收器必须红', () => {
+  const src = [
+    'import("node:child_process").then((cp) => {',
+    `  cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+    '});',
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('先声明再赋值 require(child_process) 必须红（审官对抗样本）', () => {
+  const src = [
+    'let cp;',
+    'cp = require("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('赋值 await import() child_process 必须红', () => {
+  const src = [
+    'let cp;',
+    'cp = await import("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('apply 实参解析不了 fail-closed', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}.apply(null, mysteryArgs);`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
 test('审官六条对抗样本都不许 scanned:0 ok:true', () => {
   const samples = [
     [
@@ -631,6 +744,38 @@ test('审官六条对抗样本都不许 scanned:0 ok:true', () => {
   }
 });
 
+test('审官 call/apply/Reflect.apply/动态import/赋值require 都不许 scanned:0 ok:true', () => {
+  const applyOf = 'ap' + 'ply';
+  const samples = [
+    [
+      "const cp = require('node:child_process');",
+      `cp.${CALL}.call(null, process.execPath, ['scripts/dao.mjs', 'dispatch'], { env: { PATH: '/bin' } });`,
+    ].join('\n'),
+    [
+      "const cp = require('node:child_process');",
+      `cp.${CALL}.apply(null, [process.execPath, ['scripts/dao.mjs', 'dispatch'], { env: { PATH: '/bin' } }]);`,
+    ].join('\n'),
+    [
+      "const cp = require('node:child_process');",
+      `Reflect.${applyOf}(cp.${CALL}, null, [process.execPath, ['scripts/dao.mjs', 'dispatch'], { env: { PATH: '/bin' } }]);`,
+    ].join('\n'),
+    [
+      'const cp = await import("node:child_process");',
+      `cp.${CALL}(process.execPath, ['scripts/dao.mjs', 'dispatch'], { env: { PATH: '/bin' } });`,
+    ].join('\n'),
+    [
+      'let cp;',
+      'cp = require("node:child_process");',
+      `cp.${CALL}(process.execPath, ['scripts/dao.mjs', 'dispatch'], { env: { PATH: '/bin' } });`,
+    ].join('\n'),
+  ];
+  for (const src of samples) {
+    const r = classifyTestDispatchSpawns(src);
+    assert.equal(r.ok, false, JSON.stringify({ src, r }));
+    assert.notEqual(r.scanned, 0, JSON.stringify({ src, r }));
+  }
+});
+
 test('可选链成员带 --dry-run 仍绿', () => {
   const src = [
     'const cp = require("node:child_process");',
@@ -658,6 +803,37 @@ test('解构 process.execPath 但 argv 带 --dry-run 仍绿', () => {
     'const { execPath: nodePath } = process;',
     'const argv = ["scripts/dao.mjs", "dispatch", "--dry-run"];',
     `${CALL}(nodePath, argv, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('Function.call 带 --dry-run 仍绿', () => {
+  const src = [
+    'const cp = require("node:child_process");',
+    `cp.${CALL}.call(null, process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('动态 import() 带 --dry-run 仍绿', () => {
+  const src = [
+    'const cp = await import("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scanned, 1);
+});
+
+test('赋值 require 带 --dry-run 仍绿', () => {
+  const src = [
+    'let cp;',
+    'cp = require("node:child_process");',
+    `cp.${CALL}(process.execPath, ["scripts/dao.mjs", "dispatch", "--dry-run"], { env: { PATH: "/bin" } });`,
   ].join('\n');
   const r = classifyTestDispatchSpawns(src);
   assert.equal(r.ok, true, JSON.stringify(r));

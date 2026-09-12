@@ -24,6 +24,9 @@
 //      可选链（cp?.spawnSync / spawnSync?.(...)）、逗号间接调用（(0, spawnSync)(...)）、
 //      计算属性键（{ ['run']: cp.spawnSync }）、展开 child_process（{ ...cp }; box.spawnSync(...)）、
 //      解构 process.execPath（const { execPath: nodePath } = process）都要跟。
+//      函数适配：.call / .apply / 立刻 .bind()() / Reflect.apply / Function.prototype.call.call；
+//      解析不了的适配实参 fail-closed。
+//      child_process 接收器：声明时 require/import、赋值 require、动态 import() / import().then。
 //      只钉调用名 spawnSync + 单双引号字面量会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -351,13 +354,21 @@ function calleeName(span) {
   return m ? m[1] : '';
 }
 
+const CP_SPEC = String.raw`['"\`](?:node:)?child_process['"\`]`;
+const CP_LOAD = String.raw`(?:\(\s*)?(?:await\s+)?(?:require|import)\s*\(\s*${CP_SPEC}\s*\)`;
+const CP_INLINE_DOT = new RegExp(
+  String.raw`(?:require\s*\(\s*${CP_SPEC}\s*\)|(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\))\s*\)?\s*\??\.\s*$`,
+);
+
 function collectChildProcessReceivers(src) {
   const names = new Set();
   const text = String(src || '');
   const patterns = [
-    /(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*require\(\s*['"](?:node:)?child_process['"]\s*\)/g,
-    /import\s+\*\s+as\s+([A-Za-z_][\w]*)\s+from\s+['"](?:node:)?child_process['"]/g,
-    /import\s+([A-Za-z_][\w]*)\s+from\s+['"](?:node:)?child_process['"]/g,
+    new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*${CP_LOAD}`, 'g'),
+    new RegExp(String.raw`(?:^|[;\n])\s*([A-Za-z_][\w]*)\s*=\s*${CP_LOAD}`, 'g'),
+    new RegExp(String.raw`import\s+\*\s+as\s+([A-Za-z_][\w]*)\s+from\s+${CP_SPEC}`, 'g'),
+    new RegExp(String.raw`import\s+([A-Za-z_][\w]*)\s+from\s+${CP_SPEC}`, 'g'),
+    new RegExp(String.raw`(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\)\s*\.then\s*\(\s*\(?\s*([A-Za-z_][\w]*)`, 'g'),
   ];
   for (const re of patterns) {
     let m;
@@ -366,13 +377,90 @@ function collectChildProcessReceivers(src) {
   return names;
 }
 
+function knownMemberReceiver(window, cpNames) {
+  const w = String(window || '');
+  if (CP_INLINE_DOT.test(w)) return true;
+  const recv = w.match(/([A-Za-z_][\w]*)(?:\s*\??\.\s*(?:default|promises))?\s*\??\.\s*$/);
+  return !!(recv && cpNames && cpNames.has(recv[1]));
+}
+
 function receiverBefore(text, bracketIdx, cpNames) {
-  const before = text.slice(Math.max(0, bracketIdx - 96), bracketIdx);
-  const req = before.match(/require\s*\(\s*['"](?:node:)?child_process['"]\s*\)(?:\s*\?\.)?\s*$/);
-  if (req) return { isCp: true, start: bracketIdx - req[0].length };
+  const before = text.slice(Math.max(0, bracketIdx - 120), bracketIdx);
+  const load = before.match(new RegExp(
+    String.raw`(?:require\s*\(\s*${CP_SPEC}\s*\)|(?:await\s+)?import\s*\(\s*${CP_SPEC}\s*\))\s*\)?(?:\s*\?\.)?\s*$`,
+  ));
+  if (load) return { isCp: true, start: bracketIdx - load[0].length };
+  const dotted = before.match(/([A-Za-z_][\w]*)(?:\s*\??\.\s*(?:default|promises))?(?:\s*\?\.)?\s*$/);
+  if (dotted) return { isCp: !!(cpNames && cpNames.has(dotted[1])), start: bracketIdx - dotted[0].length };
   const id = before.match(/([A-Za-z_][\w]*)(?:\s*\?\.)?\s*$/);
-  if (id) return { isCp: cpNames.has(id[1]), start: bracketIdx - id[0].length };
+  if (id) return { isCp: !!(cpNames && cpNames.has(id[1])), start: bracketIdx - id[0].length };
   return { isCp: false, start: bracketIdx };
+}
+
+function unwrapArrayArg(expr) {
+  const t = String(expr || '').trim();
+  if (!t.startsWith('[')) return null;
+  const end = matchBalanced(t, 0);
+  if (end < 0) return null;
+  if (t.slice(end + 1).trim()) return null;
+  return splitTopLevelArgs(t.slice(1, end)).map((s) => s.trim()).filter(Boolean);
+}
+
+function matchAdapterAfter(rest) {
+  const m = String(rest || '').match(
+    /^(?:\s*\?\s*\.\s*|\s*\.\s*)(call|apply|bind)\b(?:\s*\?\s*\.\s*)?\s*\(/,
+  );
+  if (!m) return null;
+  return { kind: m[1], prefixLen: m[0].length };
+}
+
+function calleeNameFromTarget(expr) {
+  const t = String(expr || '').trim();
+  const mem = t.match(/([A-Za-z_][\w]*)\s*$/);
+  return mem ? mem[1] : '';
+}
+
+function exprIsSpawnTarget(expr, spawnNames, cpNames) {
+  const t = String(expr || '').trim().replace(/^\(+/, '').replace(/\)+$/, '');
+  if (!t) return false;
+  if (/^[A-Za-z_][\w]*$/.test(t)) return !!(spawnNames && spawnNames.has(t)) || SPAWN_FNS.includes(t);
+  const mem = t.match(/^([A-Za-z_][\w]*)(?:\s*\??\.\s*(?:default|promises))?\s*(?:\?\.\s*|\.\s*)([A-Za-z_][\w]*)$/);
+  if (mem && cpNames && cpNames.has(mem[1]) && (spawnNames.has(mem[2]) || SPAWN_FNS.includes(mem[2]))) {
+    return true;
+  }
+  if (new RegExp(String.raw`(?:require|import)\s*\(\s*${CP_SPEC}\s*\)`).test(t)
+    && SPAWN_FNS.some((n) => new RegExp(String.raw`(?:^|[^\w])${escapeIdent(n)}(?:[^\w]|$)`).test(t))) {
+    return true;
+  }
+  const computed = t.match(/^([A-Za-z_][\w]*)\s*(?:\?\.\s*)?\[/);
+  if (computed && cpNames && cpNames.has(computed[1])) return true;
+  return false;
+}
+
+function emitAdapterCall(kind, text, adapterOpen, name, index, onSpan) {
+  const adapterClose = matchBalanced(text, adapterOpen);
+  if (adapterClose < 0) return -1;
+  const adapterArgs = splitTopLevelArgs(text.slice(adapterOpen + 1, adapterClose));
+  if (kind === 'bind') {
+    const after = text.slice(adapterClose + 1);
+    if (!/^\s*\(/.test(after)) return -2;
+    const invOpen = adapterClose + 1 + after.indexOf('(');
+    const invClose = matchBalanced(text, invOpen);
+    if (invClose < 0) return -1;
+    onSpan(`${name}(${splitTopLevelArgs(text.slice(invOpen + 1, invClose)).join(', ')})`, index);
+    return invClose;
+  }
+  if (kind === 'apply') {
+    const unwrapped = unwrapArrayArg(adapterArgs[1] || '');
+    if (!unwrapped) {
+      onSpan(`${name}(${adapterArgs.slice(1).join(', ')})`, index, true);
+      return adapterClose;
+    }
+    onSpan(`${name}(${unwrapped.join(', ')})`, index);
+    return adapterClose;
+  }
+  onSpan(`${name}(${adapterArgs.slice(1).join(', ')})`, index);
+  return adapterClose;
 }
 
 function resolveComputedKey(src, keySrc) {
@@ -423,17 +511,53 @@ function scanComputedCalls(text, spawnNames, cpNames, onSpan) {
     if (c !== '[') continue;
     const keyEnd = matchBalanced(text, i);
     if (keyEnd < 0) continue;
-    const after = text.slice(keyEnd + 1).match(/^\s*\(/);
-    if (!after) continue;
+    const after = text.slice(keyEnd + 1);
+    const direct = after.match(/^(?:\s*\?\.)?\s*\(/);
+    const adapter = matchAdapterAfter(after);
+    if (!direct && !adapter) continue;
+    const { resolved, opaque } = resolveComputedKey(text, text.slice(i + 1, keyEnd));
+    const recv = receiverBefore(text, i, cpNames);
+    if (!isSpawnName(resolved, [...spawnNames]) && !(opaque && recv.isCp)) continue;
+    const name = isSpawnName(resolved, [...spawnNames]) ? resolved : 'spawnSync';
+    if (adapter) {
+      const adapterOpen = text.indexOf('(', keyEnd + 1);
+      if (adapterOpen < 0) continue;
+      const end = emitAdapterCall(adapter.kind, text, adapterOpen, name, recv.start, onSpan);
+      if (end >= 0) i = end;
+      continue;
+    }
     const openIdx = text.indexOf('(', keyEnd + 1);
     if (openIdx < 0) continue;
     const callEnd = matchBalanced(text, openIdx);
     if (callEnd < 0) continue;
-    const { resolved, opaque } = resolveComputedKey(text, text.slice(i + 1, keyEnd));
-    const recv = receiverBefore(text, i, cpNames);
-    if (!isSpawnName(resolved, [...spawnNames]) && !(opaque && recv.isCp)) continue;
     onSpan(text.slice(recv.start, callEnd + 1), recv.start);
     i = callEnd;
+  }
+}
+
+function scanIndirectApply(text, spawnNames, cpNames, onSpan) {
+  const re = /(?:(?:\bReflect\s*(?:\?\.\s*|\.\s*)apply)|(?:\bFunction\s*\.\s*prototype\s*\.\s*(?:call|apply)\s*\.\s*call))\s*(?:\?\.\s*)?\(/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const openIdx = m.index + m[0].length - 1;
+    const closeIdx = matchBalanced(text, openIdx);
+    if (closeIdx < 0) continue;
+    const args = splitTopLevelArgs(text.slice(openIdx + 1, closeIdx));
+    if (!args.length) continue;
+    const target = args[0].trim();
+    if (!exprIsSpawnTarget(target, spawnNames, cpNames)) continue;
+    const name = calleeNameFromTarget(target) || 'spawnSync';
+    const viaApply = /(?:Reflect\s*(?:\?\.\s*|\.\s*)apply|prototype\s*\.\s*apply)/.test(m[0]);
+    if (viaApply) {
+      const unwrapped = unwrapArrayArg(args[2] || '');
+      if (!unwrapped) {
+        onSpan(`${name}(${args.slice(2).join(', ')})`, m.index, true);
+        continue;
+      }
+      onSpan(`${name}(${unwrapped.join(', ')})`, m.index);
+      continue;
+    }
+    onSpan(`${name}(${args.slice(2).join(', ')})`, m.index);
   }
 }
 
@@ -457,12 +581,12 @@ function extractCallSites(src, names, holders, cpReceivers) {
   const alts = list.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const sites = [];
   const seen = new Set();
-  const push = (span, index) => {
+  const push = (span, index, opaque = false) => {
     if (!span) return;
-    const key = `${index}:${span}`;
+    const key = `${index}:${span}:${opaque ? 1 : 0}`;
     if (seen.has(key)) return;
     seen.add(key);
-    sites.push({ span, index });
+    sites.push({ span, index, opaque: !!opaque });
   };
   const cpNames = new Set(cpReceivers || collectChildProcessReceivers(text));
   for (const h of holders || []) cpNames.add(h);
@@ -475,15 +599,18 @@ function extractCallSites(src, names, holders, cpReceivers) {
       const rest = text.slice(m.index + m[0].length);
       const direct = rest.match(/^(?:\s*\?\.)?\s*\(/);
       const wrapped = rest.match(/^\s*\)\s*\(/);
+      const adapter = matchAdapterAfter(rest);
+      const window = text.slice(Math.max(0, m.index - 120), m.index);
+      if (/\.\s*$/.test(before) && !knownMemberReceiver(window, cpNames)) continue;
       let openIdx = -1;
       let spanStart = m.index;
+      if (adapter) {
+        const adapterOpen = m.index + m[0].length + adapter.prefixLen - 1;
+        const end = emitAdapterCall(adapter.kind, text, adapterOpen, m[0], spanStart, push);
+        if (end >= 0) re.lastIndex = end + 1;
+        continue;
+      }
       if (direct) {
-        if (/\.\s*$/.test(before)) {
-          const window = text.slice(Math.max(0, m.index - 96), m.index);
-          const req = /require\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*\??\.\s*$/.test(window);
-          const recv = window.match(/([A-Za-z_][\w]*)\s*\??\.\s*$/);
-          if (!req && !(recv && cpNames.has(recv[1]))) continue;
-        }
         openIdx = m.index + m[0].length + direct[0].lastIndexOf('(');
       } else if (wrapped) {
         const closeIdx = m.index + m[0].length + wrapped[0].indexOf(')');
@@ -500,6 +627,7 @@ function extractCallSites(src, names, holders, cpReceivers) {
   }
   const spawnNames = new Set([...list, ...SPAWN_FNS]);
   scanComputedCalls(text, spawnNames, cpNames, push);
+  scanIndirectApply(text, spawnNames, cpNames, push);
   return sites;
 }
 
@@ -863,11 +991,12 @@ export function classifyTestDispatchSpawns(src) {
   const sites = extractCallSites(text, nameList, holders, cpNames);
   const violations = [];
   let scanned = 0;
-  for (const { span, index } of sites) {
+  for (const { span, index, opaque: siteOpaque } of sites) {
     const argvInfo = argvTextForCall(text, span, index);
     const argvText = foldStringConcat(argvInfo.text);
     const opaque = isOpaqueComputedSpan(span, nameList, text)
-      || opaqueAliases.has(calleeName(span));
+      || opaqueAliases.has(calleeName(span))
+      || !!siteOpaque;
     const unresolvedArgv = argvInfo.unresolved;
     const dispatch = hasDispatchVerb(argvText);
     if (!dispatch && !opaque && !unresolvedArgv) continue;
@@ -1038,6 +1167,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let computedObjKey = false;
       let spreadCp = false;
       let destructureExecPath = false;
+      let fnCall = false;
+      let fnApply = false;
+      let reflectApply = false;
+      let dynamicImport = false;
+      let assignedRequire = false;
       for (const f of files) {
         const src = readFileSync(join(dir, f), 'utf8');
         const r = classifyTestDispatchSpawns(src);
@@ -1093,6 +1227,17 @@ export function inspectTestExecutorIsolationFixtures(root) {
         if (/\[\s*['"]run['"]\s*\]\s*:/.test(src) && r.scanned > 0 && !r.ok) computedObjKey = true;
         if (/\{\s*\.\.\.\s*[A-Za-z_][\w]*\s*\}/.test(src) && r.scanned > 0 && !r.ok) spreadCp = true;
         if (/execPath\s*:\s*[A-Za-z_][\w]*/.test(src) && r.scanned > 0 && !r.ok) destructureExecPath = true;
+        if (/\.call\s*\(\s*null/.test(src) && r.scanned > 0 && !r.ok) fnCall = true;
+        if (/\.apply\s*\(\s*null/.test(src) && r.scanned > 0 && !r.ok) fnApply = true;
+        if (/Reflect\s*\.\s*apply\s*\(/.test(src) && r.scanned > 0 && !r.ok) reflectApply = true;
+        if (/await\s+import\s*\(\s*['"`](?:node:)?child_process['"`]/.test(src) && r.scanned > 0 && !r.ok) {
+          dynamicImport = true;
+        }
+        if (
+          /(?:const|let|var)\s+[A-Za-z_][\w]*\s*;/.test(src)
+          && /(?:^|[;\n])\s*[A-Za-z_][\w]*\s*=\s*require\s*\(\s*['"`](?:node:)?child_process['"`]/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) assignedRequire = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -1115,6 +1260,11 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!computedObjKey) problems.push('red/ 没点出计算属性键对象别名（[\'run\']）');
       if (!spreadCp) problems.push('red/ 没点出展开 child_process（{ ...cp }）');
       if (!destructureExecPath) problems.push('red/ 没点出解构 process.execPath');
+      if (!fnCall) problems.push('red/ 没点出 Function.call 适配（spawnSync.call）');
+      if (!fnApply) problems.push('red/ 没点出 Function.apply 适配（spawnSync.apply）');
+      if (!reflectApply) problems.push('red/ 没点出 Reflect.apply 适配');
+      if (!dynamicImport) problems.push('red/ 没点出动态 import() child_process');
+      if (!assignedRequire) problems.push('red/ 没点出先声明再赋值的 require(child_process)');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {

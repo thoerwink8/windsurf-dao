@@ -109,7 +109,8 @@
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 // ㉠ 测试结构性够不着真执行体（#1152）：spawn dao dispatch / dispatch-exec 必须带 --dry-run；
 //    认别名（含 const run = cp.spawnSync / 未知计算属性转发）、argv 变量（含赋值，
-//    解析不了则 fail-closed）、模板动词、exec 命令字符串；
+//    解析不了则 fail-closed）、模板动词、exec 命令字符串、.call/.apply/Reflect.apply、
+//    动态 import() 与赋值 require 的 child_process 接收器；
 //    故意「执行体 env 丢失」样本必须红且不得是 *.test.js（会被 node --test 发现执行）。
 //    ensureWorkspace/startSession/cmdDispatchMirasim 都要在真 IO 前过隔离闸。
 //    检查器自持括号匹配，不 import 被测测试 / runtime 解析。

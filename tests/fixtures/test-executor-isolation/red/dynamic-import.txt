@@ -1,0 +1,6 @@
+/* 审官对抗样本：动态 import() child_process。只收声明时 require / 静态 import 会 scanned:0。
+const cp = await import("node:child_process");
+cp.spawnSync(process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+});
+*/

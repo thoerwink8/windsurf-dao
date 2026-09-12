@@ -1,0 +1,6 @@
+/* 审官对抗样本：spawnSync.apply。只认标识符后直接 ( 会 scanned:0。
+const cp = require("node:child_process");
+cp.spawnSync.apply(null, [process.execPath, ["scripts/dao.mjs", "dispatch"], {
+  env: { PATH: "/bin" }
+}]);
+*/
