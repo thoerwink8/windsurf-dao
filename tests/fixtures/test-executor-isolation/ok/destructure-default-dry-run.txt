@@ -1,0 +1,6 @@
+/* 绿样本：解构默认值别名，静态部分能证明 --dry-run。
+const { exec: run = fallback } = require("node:child_process");
+run(`node scripts/dao.mjs ${getVerb()} --dry-run`, {
+  env: { PATH: "/bin", HOME: "/tmp" }
+});
+*/

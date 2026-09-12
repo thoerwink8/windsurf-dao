@@ -1,0 +1,7 @@
+/* 审官对抗样本：计算键解构。只认 ident: alias，{ ["exec"]: run } 会 scanned:0。
+const cp = require("node:child_process");
+const { ["exec"]: run } = cp;
+run(`node scripts/dao.mjs ${getVerb()}`, {
+  env: { PATH: "/bin" }
+});
+*/
