@@ -108,9 +108,10 @@
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
 // ㉠ 测试结构性够不着真执行体（#1152）：spawn dao dispatch / dispatch-exec 必须带 --dry-run；
-//    认别名、argv 变量；故意「执行体 env 丢失」样本必须红且不得是 *.test.js（会被
-//    node --test 发现执行）。ensureWorkspace/startSession/cmdDispatchMirasim
-//    都要在真 IO 前过隔离闸。检查器自持括号匹配，不 import 被测测试 / runtime 解析。
+//    认别名（含 const run = cp.spawnSync）、argv 变量、模板动词、exec 命令字符串；
+//    故意「执行体 env 丢失」样本必须红且不得是 *.test.js（会被 node --test 发现执行）。
+//    ensureWorkspace/startSession/cmdDispatchMirasim 都要在真 IO 前过隔离闸。
+//    检查器自持括号匹配，不 import 被测测试 / runtime 解析。
 //    红/绿/空夹具验判别力；0 个测试文件 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';

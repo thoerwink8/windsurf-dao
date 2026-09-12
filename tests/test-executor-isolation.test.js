@@ -126,6 +126,47 @@ test('execFileSync 调 dispatch 必须红', () => {
   assert.equal(r.violations[0].kind, 'env-lost');
 });
 
+test('模板动词 `dispatch` 必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const tick = '`';
+  const src = [
+    `const { ${CALL}: ${alias} } = require("node:child_process");`,
+    `const verb = ${tick}dispatch${tick};`,
+    'const argv = ["scripts/dao.mjs", verb];',
+    `${alias}(process.execPath, argv, { env: { PATH: "/bin", HOME: "/tmp" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('属性别名 const run = cp.spawnSync 必须红（审官对抗样本）', () => {
+  const alias = 'ru' + 'n';
+  const src = [
+    `const cp = require("node:child_process");`,
+    `const ${alias} = cp.${CALL};`,
+    `${alias}(process.execPath, ["scripts/dao.mjs", "dispatch"], { env: { PATH: "/bin", HOME: "/tmp" } });`,
+  ].join('\n');
+  assert.ok(collectSpawnAliases(src).includes(alias), collectSpawnAliases(src).join(','));
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
+test('exec 命令字符串必须红（审官对抗样本）', () => {
+  const exe = 'ex' + 'ec';
+  const src = [
+    `const { ${exe} } = require("node:child_process");`,
+    `${exe}("node scripts/dao.mjs dispatch --issue 565", { env: { PATH: "/bin", HOME: "/tmp" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.equal(r.violations[0].kind, 'env-lost');
+});
+
 test('夹具红/绿/空有判别力', () => {
   const r = inspectTestExecutorIsolationFixtures(join(HERE, 'fixtures', 'test-executor-isolation'));
   assert.equal(r.unscanned, false, r.error || '');

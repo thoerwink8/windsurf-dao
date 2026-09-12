@@ -8,7 +8,8 @@
 // 闸失手 = 烧钱且静默。所以检查两面：
 //   1. 测试源码不许 spawn/exec 调 dao dispatch / dispatch-exec 还不带 --dry-run
 //      （子进程 env 丢失时 NODE_TEST_CONTEXT 也丢，运行时闸够不着）。
-//      认别名（spawnSync: run）、argv 变量、dispatch-exec——只钉调用名 spawnSync
+//      认别名（spawnSync: run / const run = cp.spawnSync）、argv 变量、模板动词、
+//      exec 命令字符串、dispatch-exec——只钉调用名 spawnSync + 单双引号字面量
 //      会让审官给的对抗样本 scanned:0 静默漏检。
 //   2. 生产接线：ensureWorkspace / startSession / cmdDispatchMirasim 都要过隔离判官
 //
@@ -25,7 +26,15 @@ const EXECUTABLE_TEST = /\.test\.(js|mjs|cjs)$/;
 const JS_FILE = /\.(js|mjs|cjs)$/;
 
 function hasLit(s, lit) {
-  return new RegExp(String.raw`['"]${lit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`).test(String(s || ''));
+  const esc = String(lit || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('[' + '\'"`' + ']' + esc + '[' + '\'"`' + ']').test(String(s || ''));
+}
+
+/** 引号/`dispatch`，以及 exec("node dao.mjs dispatch ...") 这种命令字符串里的裸动词。 */
+function hasDispatchVerb(text) {
+  const s = String(text || '');
+  if (hasLit(s, 'dispatch') || hasLit(s, 'dispatch-exec')) return true;
+  return /(?:^|[\s"'`=/,\[\]])dispatch(?:-exec)?(?=[\s"'`,\]]|$)/.test(s);
 }
 
 function escapeIdent(name) {
@@ -104,7 +113,10 @@ export function collectSpawnAliases(src) {
   while ((m = dest.exec(text))) names.add(m[1]);
   const imp = new RegExp(String.raw`\b(?:${fns})\s+as\s+([A-Za-z_][\w]*)\b`, 'g');
   while ((m = imp.exec(text))) names.add(m[1]);
-  const asg = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*(?:${fns})\s*(?![(\w])`, 'g');
+  const asg = new RegExp(
+    String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*[^\n;]*\b(?:${fns})\s*(?![(\w])`,
+    'g',
+  );
   while ((m = asg.exec(text))) names.add(m[1]);
   return [...names];
 }
@@ -199,8 +211,10 @@ function expandCallArgv(src, span) {
   return out;
 }
 
-function hasDispatchVerb(text) {
-  return hasLit(text, 'dispatch') || hasLit(text, 'dispatch-exec');
+function hasDryRun(text) {
+  const s = String(text || '');
+  if (hasLit(s, '--dry-run')) return true;
+  return /(?:^|[\s"'`=/,\[\]])--dry-run(?=[\s"'`,\]]|$)/.test(s);
 }
 
 /** 显式 env: { ... } 对象字面量里既没有 process.env 也没有隔离信号。 */
@@ -232,9 +246,9 @@ export function classifyTestDispatchSpawns(src) {
     const expanded = expandCallArgv(text, span);
     if (!hasDispatchVerb(expanded)) continue;
     scanned += 1;
-    if (hasLit(expanded, '--dry-run')) continue;
+    if (hasDryRun(expanded)) continue;
     const lost = isEnvLost(span);
-    const execVerb = hasLit(expanded, 'dispatch-exec');
+    const execVerb = hasLit(expanded, 'dispatch-exec') || /dispatch-exec/.test(expanded);
     violations.push({
       kind: lost ? 'env-lost' : 'live-dispatch',
       why: lost

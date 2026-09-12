@@ -1,0 +1,4 @@
+/* 审官对抗样本：exec 命令字符串。只扫 argv 数组会 scanned:0。
+const { exec } = require("node:child_process");
+exec("node scripts/dao.mjs dispatch --issue 565", { env: { PATH: "/bin", HOME: "/tmp" } });
+*/
