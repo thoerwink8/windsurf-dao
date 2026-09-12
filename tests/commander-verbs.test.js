@@ -259,6 +259,41 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     assert.equal(r.escalate, true);
   });
 
+  it('违规：票头过期（!= 当前 head）→ 拒，不重试这张，也不烧 tries', async () => {
+    const { validateRetryDrain, MAX_DRAIN_TRIES } = await VERBS;
+    const r = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      head: 'oldhead', liveHead: 'newhead',
+      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'stale-head');
+    // 关键：过期的票头即使试满，也不该认输——它问的不是现场。
+    const full = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      head: 'oldhead', liveHead: 'newhead',
+      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+    });
+    assert.equal(full.code, 'stale-head', '过期票头必须先于 max-tries 判定');
+  });
+
+  it('票头与当前 head 一致 / 有一侧没查成 → 不判过期，其余判据照走', async () => {
+    const { validateRetryDrain } = await VERBS;
+    const same = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      head: 'samehead', liveHead: 'samehead',
+      ledger: { 'pr:905@samehead': { at: OLD_AT, tries: 1 } },
+    });
+    assert.equal(same.ok, true, JSON.stringify(same));
+    // 没有 liveHead（老调用方 / PR 不在开放列表）→ 退回旧契约，不因缺参数就拦
+    const noLive = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      head: 'oldhead',
+      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+    });
+    assert.equal(noLive.ok, true, JSON.stringify(noLive));
+  });
+
   it('planRetryDrainCmd：argv 是 drain --pr，不是造新票', async () => {
     const { planRetryDrainCmd } = await VERBS;
     const r = planRetryDrainCmd({ pr: 905 }, { queue: queued, ledger: ledgerOk, nowMs: PAST });
@@ -480,6 +515,18 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
         }),
       },
       {
+        id: 'retry-drain.stale-head',
+        run: (checks) => V.validateRetryDrain({
+          _checks: checks,
+          pr: 905,
+          queue: [{ pr: '905' }],
+          head: 'oldhead',
+          liveHead: 'newhead',
+          ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+          nowMs: PAST,
+        }),
+      },
+      {
         id: 'retry-drain.max-tries',
         run: (checks) => V.validateRetryDrain({
           _checks: checks,
@@ -650,6 +697,42 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     assert.equal(marked.length, 1, JSON.stringify(r.actions));
     assert.equal(marked[0].verb, 'drain');
     assert.equal(r.actions.filter((a) => a.kind === 'open-issue').length, 0);
+  });
+
+  it('票头过期 → 不认输、不 attach 旧票，按当前 head 重新叫审官（#1208 实咬）', async () => {
+    const { decide } = await CORE;
+    const { MAX_DRAIN_TRIES } = await VERBS;
+    const HEAD = 'newhead0000000000000000000000000000000000';
+    const r = decide(sit({
+      github: {
+        scanned: true, issues: [],
+        attributedIssues: [{ number: 1174, labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }, { name: '已消歧' }] }],
+        prs: [{ number: 1208, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #1174' }],
+      },
+      // 六条判定全打在旧 commit 上 → 当前 head 零判定
+      prReviews: { scanned: true, byPr: { 1208: { reviews: [{ state: 'CHANGES_REQUESTED', commit_id: 'oldhead', body: '红' }] } } },
+      reviewPending: { scanned: true, items: [{ pr: 1208, head: { name: null, oid: 'oldhead' }, reviewer: 'gpt-5.6-luna' }] },
+      drainLedger: { 'pr:1208@oldhead': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+    }));
+    assert.equal(r.actions.filter((a) => a.kind === 'mark-exhausted').length, 0,
+      '票过期不是「试满」——不许拿旧 head 的账认输');
+    assert.equal(r.actions.filter((a) => a.kind === 'retry-drain').length, 0, '过期的票不许重试');
+    const rr = r.actions.filter((a) => a.kind === 'rereview');
+    assert.equal(rr.length, 1, JSON.stringify(r.actions));
+    assert.equal(rr[0].head, HEAD, '复审票必须按当前 head 写');
+  });
+
+  it('票头与当前 head 一致且试满 → 照旧认输（新判据不回退老出口）', async () => {
+    const { decide } = await CORE;
+    const { MAX_DRAIN_TRIES } = await VERBS;
+    const r = decide(sit({
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
+      reviewPending: { scanned: true, items: [{ pr: 920, head: { name: null, oid: 'head920' }, reviewer: 'gpt-5.6-luna' }] },
+      drainLedger: { 'pr:920@head920': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+    }));
+    const marked = r.actions.filter((a) => a.kind === 'mark-exhausted');
+    assert.equal(marked.length, 1, JSON.stringify(r.actions));
+    assert.equal(marked[0].verb, 'drain');
   });
 
   it('已开过的 open-issue：账本免重开，没成功发卡戳则重试卡', async () => {

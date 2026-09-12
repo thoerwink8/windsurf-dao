@@ -878,9 +878,14 @@ function collectCandidates(situation) {
     // 票里的 head 有两种形态：字符串，或 {name, oid}（写票的一侧给的是后者）。
     // 取不出就传 null——退回旧键，不是猜一个。
     const itHead = ticketHeadOid(it.head);
+    // 票头是写票那一刻的快照，不是现场。带上当前 head，让「票过期」与「真试过」分开
+    // （2026-09-12 #1208：票头停在旧 commit，重试账钉在旧键上，试满后永久认输，
+    //  而按当前 head 本该叫的那轮复审一次也没叫出来）。见 commander-verbs 的 retry-drain.stale-head。
+    const liveHead = typeof livePr?.headRefOid === 'string' ? livePr.headRefOid.trim() : '';
     const drain = validateRetryDrain({
       pr: it.pr,
       head: itHead,
+      liveHead,
       queue: rp.items,
       ledger: situation.drainLedger || {},
       nowMs,
@@ -896,6 +901,9 @@ function collectCandidates(situation) {
       continue;
     }
     if (drain.code === 'grace') continue;
+    // 票头过期：不许拿它去 attach-reviewer（那张票问的不是现在的 head），也不许认输。
+    // 落到下面 PR 循环的 rereview 分支——它按**当前 head** 重新写票，tries 从新键起算。
+    if (drain.code === 'stale-head') continue;
     if (drain.code === 'exhausted') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
       if (ticketRepo) continue;

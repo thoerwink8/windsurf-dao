@@ -44,6 +44,7 @@ export const CHECKS = {
   'retry-drain.pr': true,
   'retry-drain.queue': true,
   'retry-drain.attempted': true,
+  'retry-drain.stale-head': true,
   'retry-drain.max-tries': true,
   'retry-drain.grace': true,
   'open-issue.reason': true,
@@ -321,6 +322,30 @@ export function validateRetryDrain(input = {}) {
   if (never) return never;
   const prevObj = prev && typeof prev === 'object' ? prev : { at: '', tries: 0 };
 
+  // 票上的 head 是**写票那一刻**的快照，只做记录（reviewer-create 的 expectedOid 另有来源，
+  // 见 planReviewPendingDrain / reviewer-mirasim.judgeReviewerHead）。而账本键
+  // `pr:<n>@<head>` 也钉在那个 head 上，于是「票头过期」会把整条重试链冻住：
+  // 工人推了新 head 之后旧票还在队列，重试每次都读同一格账、tries 只涨不换格，
+  // 试满 3 次就永久认输——而认输的判据（那个 head）早就不代表现场了。
+  //
+  // 2026-09-12 实咬：PR #1208 的票头停在 1fec6850，PR 已是 41a79e75；
+  // drain 账 pr:1208@1fec6850 tries=4，decide 每轮产一条 mark-exhausted，
+  // **本该叫的复审一次也没叫**——有出口的路被一张过期票堵死了。
+  //
+  // 票头 != 当前 head ⇒ 这票代表的那次重试已经无意义，它不是「试过了」，是「问错了对象」。
+  // 不烧名额：当场拒，让 decide 落回 rereview 分支按**当前 head** 重新写票。
+  const liveHead = typeof input.liveHead === 'string' && input.liveHead.trim() ? input.liveHead.trim() : '';
+  const ticketHead = typeof input.head === 'string' && input.head.trim() ? input.head.trim() : '';
+  const stale = gated(
+    'retry-drain.stale-head',
+    Boolean(liveHead) && Boolean(ticketHead) && ticketHead !== liveHead,
+    fail('stale-head',
+      `PR #${pr} 的复审票头 ${ticketHead.slice(0, 8) || '缺'} 与当前 head ${liveHead.slice(0, 8)} 对不上`
+      + `——票过期，不重试这张，按当前 head 重写`),
+    C,
+  );
+  if (stale) return stale;
+
   const graceMin = Number.isFinite(input.graceMin) ? input.graceMin : DRAIN_GRACE_MIN;
   const maxTries = Number.isFinite(input.maxTries) ? input.maxTries : MAX_DRAIN_TRIES;
   const tries = Number(prevObj.tries) || 0;
@@ -356,6 +381,7 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
   const v = validateRetryDrain({
     pr: action.pr,
     head: action.head,
+    liveHead: opts.liveHead,
     queue: opts.queue,
     ledger: opts.ledger,
     nowMs: opts.nowMs,
