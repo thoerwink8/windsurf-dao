@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-// host/skills/dao-inbox/hooks/inbox-check.mjs —— UserPromptSubmit 钩子：收件箱有没有人给我留东西
+// host/skills/dao-inbox/hooks/inbox-check.mjs —— 旧 Claude Code 钩子，不是现役挂载面。
 //
-// 装在**全局** settings.json 的 UserPromptSubmit，所以每个项目都会跑（这就是「自上而下传导」
-// 现成的运输带——不用给每个仓拷一份模板；模板拷贝改一次要改 N 份，而且「哪个仓是旧版」看不出来）。
-// 判断逻辑在仓内 scripts/lib/inbox.mjs（可单测），本文件只负责取数与打印。
+// #1171：现役腿是指挥官盘点 commander-inventory（每 6 小时）。本文件留着给仍装
+// Claude Code 的本机，服务器上这条路径没装过。判断逻辑在 scripts/lib/inbox.mjs。
 //
 // 找仓的方式：从 cwd 往上找 .git。找不到就静默退出——不在仓里时它没有意义。
 // 仓里没有 docs/observations/ 也静默：不是每个仓都有人往里写。
