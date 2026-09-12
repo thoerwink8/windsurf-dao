@@ -1244,6 +1244,95 @@ test('exec 动态模板带 --dry-run 仍绿', () => {
   assert.equal(r.ok, true, JSON.stringify(r));
 });
 
+test('exec 命令变量动态模板必须红（审官对抗样本）', () => {
+  const EX = 'ex' + 'ec';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const cmd = ${tick}node scripts/dao.mjs \${getVerb()}${tick};`,
+    `cp.${EX}(cmd, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+  assert.match(r.violations[0].why, /无法解析的 argv/);
+});
+
+test('exec 命令变量动态拼接必须红', () => {
+  const EX = 'ex' + 'ec';
+  const src = [
+    'const cp = require("node:child_process");',
+    'const cmd = "node scripts/dao.mjs " + getVerb();',
+    `cp.${EX}(cmd, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('exec 命令变量别名必须红', () => {
+  const EX = 'ex' + 'ec';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const cmd = ${tick}node scripts/dao.mjs \${getVerb()}${tick};`,
+    'const command = cmd;',
+    `cp.${EX}(command, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('execSync 命令变量动态模板必须红', () => {
+  const EX = 'exec' + 'Sync';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const cmd = ${tick}node scripts/dao.mjs \${getVerb()}${tick};`,
+    `cp.${EX}(cmd, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.notEqual(r.scanned, 0, JSON.stringify(r));
+});
+
+test('exec 命令变量动态模板带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const cmd = ${tick}node scripts/dao.mjs \${getVerb()} --dry-run${tick};`,
+    `cp.${EX}(cmd, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
+test('exec 命令变量动态拼接带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const src = [
+    'const cp = require("node:child_process");',
+    'const cmd = "node scripts/dao.mjs " + getVerb() + " --dry-run";',
+    `cp.${EX}(cmd, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
+test('exec 命令变量别名带 --dry-run 仍绿', () => {
+  const EX = 'ex' + 'ec';
+  const tick = '`';
+  const src = [
+    'const cp = require("node:child_process");',
+    `const cmd = ${tick}node scripts/dao.mjs \${getVerb()} --dry-run${tick};`,
+    'const command = cmd;',
+    `cp.${EX}(command, { env: { PATH: "/bin" } });`,
+  ].join('\n');
+  const r = classifyTestDispatchSpawns(src);
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
 test('静态 exec 非 dispatch 动词仍绿', () => {
   const EX = 'ex' + 'ec';
   const src = [

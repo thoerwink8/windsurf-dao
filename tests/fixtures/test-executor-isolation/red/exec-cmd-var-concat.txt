@@ -1,0 +1,5 @@
+/* 审官对抗样本：exec 命令变量动态拼接。
+const cp = require("node:child_process");
+const cmd = "node scripts/dao.mjs " + getVerb();
+cp.execSync(cmd, { env: { PATH: "/bin" } });
+*/

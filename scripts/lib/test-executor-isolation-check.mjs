@@ -1672,7 +1672,9 @@ function groupOpenBefore(text, closeIdx, nameIdx) {
 function firstArgLooksLikeNodeDao(text, openIdx, closeIdx) {
   if (openIdx < 0 || closeIdx < 0) return false;
   const args = splitTopLevelArgs(text.slice(openIdx + 1, closeIdx)).map((s) => s.trim()).filter(Boolean);
-  return looksLikeNodeDaoCommand(args[0] || '');
+  const cmd = args[0] || '';
+  if (looksLikeNodeDaoCommand(cmd)) return true;
+  return looksLikeNodeDaoCommand(resolveExecCommandExpr(text, cmd, openIdx));
 }
 
 function extractCallSites(src, names, holders, cpReceivers, opaqueHolders) {
@@ -2117,6 +2119,18 @@ function commandStaticallyHasDryRun(expr) {
   return hasDryRun(stripShellComments(staticCommandText(expr)));
 }
 
+/** 跟随 exec 命令标识符的赋值链，拿到调用前最后一次 RHS。 */
+function resolveExecCommandExpr(src, expr, beforeIdx = Infinity, seen = new Set()) {
+  const ident = unwrapParens(String(expr || '')).trim();
+  if (!ident) return ident;
+  if (!/^[A-Za-z_][\w]*$/.test(ident)) return ident;
+  if (seen.has(ident) || seen.size > 8) return ident;
+  seen.add(ident);
+  const asg = findLastAssignment(src, ident, beforeIdx);
+  if (!asg || !asg.rhs) return ident;
+  return resolveExecCommandExpr(src, asg.rhs, asg.start, seen);
+}
+
 /** POSIX：无引号且位于词首的 `#` 起到行尾是 shell 注释。 */
 function stripShellComments(command) {
   const s = String(command || '');
@@ -2335,6 +2349,10 @@ function daoArgvUnproven(src, expr, beforeIdx) {
   const t = String(expr || '').trim();
   if (!t) return true;
   if (isCallExpr(t)) return true;
+  const resolved = resolveExecCommandExpr(src, t, beforeIdx);
+  if (looksLikeNodeDaoCommand(resolved) && commandHasDynamicParts(resolved) && !commandStaticallyHasDryRun(resolved)) {
+    return true;
+  }
   if (looksLikeNodeDaoCommand(t) && commandHasDynamicParts(t) && !commandStaticallyHasDryRun(t)) {
     return true;
   }
@@ -2440,6 +2458,7 @@ function argvTextForCall(src, span, callIndex = Infinity, execNames) {
     }
   };
   const command = args[0] || '';
+  const commandExpr = execString ? resolveExecCommandExpr(src, command, callIndex) : command;
   const ingestArgvExpr = (expr) => {
     argvExprs.push(expr);
     const arr = arrayLiteralPrefix(expr);
@@ -2462,20 +2481,22 @@ function argvTextForCall(src, span, callIndex = Infinity, execNames) {
 
   if (execString) {
     pieces.push(execCommandScanText(command));
+    pieces.push(execCommandScanText(commandExpr));
     const ident = unwrapParens(command).trim();
     if (/^[A-Za-z_][\w]*$/.test(ident)) {
       const str = findStringLiteral(src, ident, callIndex);
       if (str) pieces.push(execCommandScanText(str));
     }
     argvExprs.push(command);
+    argvExprs.push(commandExpr);
   } else if (args.length >= 2 && !isOptionsArg(args[1]) && !isCallbackArg(args[1])) {
     ingestArgvExpr(args[1]);
   }
 
-  if (looksLikeNodeDaoCommand(command) && commandHasDynamicParts(command) && !commandStaticallyHasDryRun(command)) {
+  if (looksLikeNodeDaoCommand(commandExpr) && commandHasDynamicParts(commandExpr) && !commandStaticallyHasDryRun(commandExpr)) {
     unresolved = true;
   }
-  if (isJsRunnerCommand(src, command, callIndex)) {
+  if (isJsRunnerCommand(src, command, callIndex) || isJsRunnerCommand(src, commandExpr, callIndex)) {
     for (const expr of argvExprs) {
       if (daoArgvUnproven(src, expr, callIndex)) unresolved = true;
     }
@@ -2760,6 +2781,9 @@ export function inspectTestExecutorIsolationFixtures(root) {
       let nestedCpHolder = false;
       let callSpread = false;
       let createRequireCp = false;
+      let execCmdVarTemplate = false;
+      let execCmdVarConcat = false;
+      let execCmdVarAlias = false;
       for (const f of files) {
         const src = unwrapFixtureSample(readFileSync(join(dir, f), 'utf8'));
         const r = classifyTestDispatchSpawns(src);
@@ -3048,6 +3072,25 @@ export function inspectTestExecutorIsolationFixtures(root) {
           && /dao\.mjs/.test(src)
           && r.scanned > 0 && !r.ok
         ) createRequireCp = true;
+        if (
+          /\bexec(?:Sync)?\s*\(\s*[A-Za-z_][\w]*\s*,/.test(src)
+          && /dao\.mjs/.test(src)
+          && /(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*`[^`]*\$\{/.test(src)
+          && !/(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w]*\s*;/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execCmdVarTemplate = true;
+        if (
+          /\bexec(?:Sync)?\s*\(\s*[A-Za-z_][\w]*\s*,/.test(src)
+          && /['"`][^'"`]*dao\.mjs[^'"`]*['"`]\s*\+\s*[A-Za-z_]/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execCmdVarConcat = true;
+        if (
+          /\bexec(?:Sync)?\s*\(\s*[A-Za-z_][\w]*\s*,/.test(src)
+          && /dao\.mjs/.test(src)
+          && /\$\{/.test(src)
+          && /(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w]*\s*;/.test(src)
+          && r.scanned > 0 && !r.ok
+        ) execCmdVarAlias = true;
       }
       if (!envLost) problems.push('red/ 没点出执行体 env 丢失');
       if (!dryRunNotInArgv) problems.push('red/ 没点出非 argv 的 --dry-run（input/env 冒充放行）');
@@ -3117,6 +3160,9 @@ export function inspectTestExecutorIsolationFixtures(root) {
       if (!nestedCpHolder) problems.push('red/ 没点出嵌套 holder（box.inner.spawnSync）');
       if (!callSpread) problems.push('red/ 没点出调用级 spread（...args 作第一实参 / ...[cmd, argv] / exec 同类）');
       if (!createRequireCp) problems.push('red/ 没点出 createRequire 取得的 child_process（exec / execSync / 计算属性 exec）');
+      if (!execCmdVarTemplate) problems.push('red/ 没点出 exec 命令变量动态模板（cmd = `node dao.mjs ${...}`; exec(cmd)）');
+      if (!execCmdVarConcat) problems.push('red/ 没点出 exec 命令变量动态拼接（"node ... dao.mjs " + getVerb()）');
+      if (!execCmdVarAlias) problems.push('red/ 没点出 exec 命令变量别名（const command = cmd; exec(command)）');
       if (!problems.some((p) => p.startsWith('red/'))) kinds.red += 1;
     }
     if (kind === 'ok') {
