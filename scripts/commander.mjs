@@ -914,13 +914,31 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
 /**
  * 合并动作：squash 打到此刻 master。① 基底落后只报不拦（ephemeral-lifecycle）。
  * run / judge 可注入，测试才能钉调用序列、不必起真 git。
+ *
+ * #1235：三步里只有 **pr merge** 是门，另两步是记账——打标签（calibrate 的战绩数据源）
+ * 和关单都靠它，但它们失败**说明不了这张 PR 不能合**。原先三步一个循环、任一失败就
+ * `return {ok:false}`，于是「账本里没有 job.dispatch 的非派工链 PR」（日报/升级链产生的
+ * PR 全是这种）会在第①步失败 → ②根本不跑。实测 #1143：判绿可合、CI 绿、MERGEABLE，
+ * 在这个死点上撞了 38 次/24h，白挂一天，而这只是打不上一个标签。
+ *
+ * 所以：记账步骤 best-effort，失败进 failures 一起报出去；**只有 pr merge 失败才算真失败**。
+ * 打标必须在 merge 之前——合并后 PR 关了就补不上标签，战绩会永久缺这一张。
  */
 export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+  const GATING = new Set(['pr merge']);
   const steps = [
     ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
     ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
     ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
   ];
+  // 判据取「真正干那件事」的那两个 token：`pr merge` 是门，`pr-sync-labels`/`close-issues` 是记账。
+  // 不按 argv 下标钉（#1117 的 approvalIssue 分支会往中间 splice 一步，下标会漂）。
+  const isGate = (argv) => {
+    const s = argv.join(' ');
+    for (const g of GATING) if (s.includes(g)) return true;
+    return false;
+  };
+
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
@@ -950,22 +968,30 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     say(`  ① 基底落后（不拦 squash）：${String(freshness.detail || freshness.state).split('\n')[0]}`);
   }
   const calls = [];
+  const failed = [];            // 记账步骤的失败：报出去，但不挡这一轮合并（#1235）
   let releasedDraft = false, merged = false;
   for (const s of steps) {
     calls.push(s);
     const r = run(s);
     if (!r.ok) {
+      if (!isGate(s)) {
+        failed.push({ step: s.join(' '), error: r.error || '命令失败' });
+        say(`  merge 记账步骤失败（不挡合并）：${s.join(' ')} → ${r.error}`);
+        continue;
+      }
       if (action.approvalIssue && releasedDraft && !merged) {
         const restored = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr), '--undo']);
         if (!restored.ok) say(`  #${action.pr} 未能恢复草稿，需要核查：${restored.error}`);
       }
-      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls };
+      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls, failed };
     }
     if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
     if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
-  say(`  已合并 #${action.pr} 并关单`);
-  return { ok: true, calls, freshness };
+  say(failed.length
+    ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
+    : `  已合并 #${action.pr} 并关单`);
+  return { ok: true, calls, freshness, failed };
 }
 
 /**
