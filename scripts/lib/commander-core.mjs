@@ -1070,8 +1070,59 @@ function collectCandidates(situation) {
       }
     }
     const issueNo = attributedIssueNumber(pr);
+    // 无署名 issue（pr-fast 快路，`host/skills/pr-fast/SKILL.md`：快路不收 issue）**不挡返工**。
+    //
+    // 2026-09-14 用户拍板「你决定如何推进」。原先这里当场报帅（`rework-no-issue`），
+    // 代价是快路 PR 一旦判红就永久停在这——审官的红项躺在 GitHub 上没人接，而报帅单
+    // 只是把「merge-policy 取不到」这件事又说了一遍，它拦不住任何真实风险：
+    //   · 返工的**动作**（照红项改）跟署名 issue 一点关系都没有；
+    //   · 唯一真依赖 issue 的是 **merge-policy**（human_holds 分类写在 issue 正文上，#1099）。
+    //     取不到就是「不许放行 auto」——那就是 **manual**，与 `mergePolicyUnscanned` 同一个
+    //     失败方向（本文件上面那条：没查成一律 manual，不许退回 auto）。
+    //
+    // 所以：无署名 ⇒ mergePolicy: manual + 如实写清理由，返工照派。
+    // 判据**没有放宽**：没有 human_holds 证据 ⇒ 不许自动合；只是不再把「推不动」当成处置。
     if (issueNo == null) {
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——merge-policy 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
+      const rModel0 = labelValue(pr, 'model/');
+      const rReviewer0 = labelValue(pr, 'reviewer/');
+      if (!rModel0 || !rReviewer0) {
+        const filled0 = maybeAddLabel(pr, situation, {
+          on: 'pr',
+          pr: pr.number,
+          why: `PR #${pr.number} 要返工，PR 上缺 ${!rModel0 ? 'model/' : ''}${!rModel0 && !rReviewer0 ? '、' : ''}${!rReviewer0 ? 'reviewer/' : ''}——补唯一跨厂标签`,
+        }, N['add-label']);
+        if (filled0) { out.push(filled0); return; }
+        out.push(withNeeds(esc(`PR #${pr.number} 要返工，但 PR 上缺 ${!rModel0 ? 'model/' : ''}${!rModel0 && !rReviewer0 ? '、' : ''}${!rReviewer0 ? 'reviewer/' : ''} 标签，需人工打标（不读 issue、不猜）`, {
+          reason: 'missing-labels', pr: pr.number, title: pr.title || '',
+        }), N.rework));
+        return;
+      }
+      let g0 = assessDispatchModel(rModel0, { policy, enabledIds, redIds });
+      let model0 = rModel0;
+      let sub0 = null;
+      if (!g0.ok && (g0.reason === 'model-not-in-routing' || g0.reason === 'model-health-red')) {
+        const fb = situation.defaultWorkerModel;
+        const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+        if (fb && fbGate.ok) { sub0 = { from: rModel0, to: fb, why: g0.why }; model0 = fb; g0 = fbGate; }
+      }
+      if (!g0.ok) {
+        out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${g0.why}`, { reason: g0.reason, pr: pr.number, model: rModel0 }), N.rework));
+        return;
+      }
+      if (!takeFinishSlot()) { reportAdmission(N.rework); return; }
+      reworkThisRound += 1;
+      out.push(withNeeds({
+        kind: 'rework', pr: pr.number, head, issue: null,
+        model: model0, reviewer: rReviewer0, redRounds,
+        title: pr.title || '', brief, reworkKey: rkey, conflict,
+        mergePolicy: 'manual',
+        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergePolicySource: 'no-issue',
+        ...(sub0 ? { substitutedModel: sub0 } : {}),
+        why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
+          + '；merge-policy:manual（无署名 issue，不许放行 auto）',
+      }, N.rework));
+      out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
       return;
     }
     // 署名单仍要扫到：merge-policy / human_holds 写在 issue 正文上（#1099）。
