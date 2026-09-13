@@ -45,6 +45,7 @@ import {
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
+import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
@@ -490,6 +491,43 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
   }
 }
 
+/** 载体（agent CLI）版本漂移：读进态势，好让「某条腿突然不好使」时有第一条线索。
+ *
+ *  用户 2026-09-13 拍板：只做「版本变了要说」，不钉死（理由见 scripts/lib/cli-version.mjs 文件头）。
+ *  **不进任何拦截路径**——红了不拦、读不到也不拦，只把漂移放进态势与台账。
+ *
+ *  节流：六个载体一轮 spawn 约 4 秒（实测定，最慢 cmdc 3.1s），而 scan 是热路径，
+ *  所以按 TTL 跳读——上次读成功且没超时就直接用落表的记录，不重复 spawn。
+ *  读不成时**回 {scanned:false}** 而不是空数组：本系统最该避免的错就是把「没查成」说成「没变」。 */
+const CLI_VERSION_TTL_MS = 30 * 60 * 1000;
+function scanCliVersions({ now = Date.now() } = {}) {
+  try {
+    const prev = loadVersionState({ home: homedir() });
+    const lastAt = prev.updatedAt ? Date.parse(prev.updatedAt) : NaN;
+    if (prev.present && Number.isFinite(lastAt) && now - lastAt < CLI_VERSION_TTL_MS) {
+      return { scanned: true, cached: true, statePresent: true, versions: prev.versions, updatedAt: prev.updatedAt, drift: null };
+    }
+    const script = join(ROOT, 'scripts', 'cli-versions.mjs');
+    const r = spawnSync(process.execPath, [script, '--json'], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+    if (r.error || r.status !== 0 || !r.stdout) {
+      return { scanned: false, error: r.error ? String(r.error.code || r.error.message) : `退出码 ${r.status}` };
+    }
+    const parsed = JSON.parse(r.stdout);
+    // statePresent=false 表示这是第一次记录基线——此时**没比过任何东西**，
+    // 调用方必须把这种与「比过、没变」分开说（本系统最老的那个错：把没查成说成查过没事）。
+    const statePresent = !!parsed.statePresent;
+    const drift = statePresent ? parsed.drift : null;
+    return {
+      scanned: true, cached: false, statePresent, versions: parsed.current || {},
+      updatedAt: new Date(now).toISOString(),
+      drift, summary: statePresent ? (parsed.summary || '') : '',
+    };
+  } catch (e) {
+    return { scanned: false, error: String(e.message || e).slice(0, 160) };
+  }
+}
+
+
 /** 在世会话清单。orca 终端已退役，改采 mirasim 会话名单。没查成回 ok:false，不当成「一个都没有」。 */
 function listLiveTerminals() {
   const sessions = scanSessions();
@@ -604,6 +642,8 @@ function buildSituation({ state } = {}) {
     ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
     : null;
   const breaker = loadBreaker();
+  // 载体版本漂移：只入态势与台账，不进任何拦截路径（用户 2026-09-13 拍板「只做变了要说」）。
+  const cliVersions = scanCliVersions();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
@@ -630,6 +670,7 @@ function buildSituation({ state } = {}) {
     defaultWorkerModel,
     channelCaps,
     channelInFlight,
+    cliVersions,
     breaker,
     askPolicy,
   };
@@ -2616,6 +2657,21 @@ function cmdAct(argv) {
   const { actions } = decide(situation);
   const log = [];
   let cleanupFailures = 0;
+  // 载体版本漂移：变了就报一句（用户 2026-09-13 拍板「只做变了要说，不钉死」）。
+  // 与盘面推进量并排——两件事都是「本轮无声发生、只有日志能看出来」的那一类。
+  // 读不成时明说「没查成」，不许与「没变」共用一种输出。
+  const cliV = situation.cliVersions || { scanned: false, error: '态势里没有这一节' };
+  if (!cliV.scanned) {
+    log.push(`  载体版本没查成：${cliV.error || '未知'}`);
+  } else if (!cliV.statePresent) {
+    // 第一次跑：记住了六个载体现值，但**没比过任何东西**——不许说「无变化」，
+    // 那会把「还没基线」说成「查过没事」（本系统最老的那个错）。
+    log.push('  载体版本：首次记录基线（还没有上次可比，本次不算「无变化」）');
+  } else if (cliV.drift && (cliV.drift.changed?.length || cliV.drift.gone?.length || cliV.drift.appeared?.length || cliV.drift.unreadable?.length)) {
+    log.push(`  载体版本漂移：${cliV.summary}`);
+  } else {
+    log.push(`  载体版本无变化${cliV.cached ? '（用缓存的记录）' : ''}`);
+  }
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
     dir: STATE_DIR,
