@@ -279,6 +279,32 @@ describe('ready-queue', () => {
     await t.test('claimedIssueNumbers 挡掉 #0（号从 1 起，#0 一定是别的东西）', () => {
       assert.deepStrictEqual(Q.claimedIssueNumbers('Closes #0'), []);
     });
+
+    await t.test('「还开着」含开着的 PR：引用目标是 PR 号时收严照样生效', () => {
+      // #1216 的真实处境：标题「#1143 刷了 135 条评论的根因」，#1143 是一张**开着的 PR**
+      // （返工中），不在 issues 面里。只按 issues 面构造名单，这条收严整个失效。
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1051, ['已消歧'])],
+        prs: [
+          { number: 1143, title: '返工中', body: '' },
+          { number: 1216, title: '[cc] fix(exhausted): 认输标按「最新」记录比对——#1143 刷了 135 条评论的根因', body: '' },
+        ],
+        worktrees: [],
+      });
+      // #1216 不该宣称认领 #1143（那是它诊断的病例），所以 #1051 仍可立即起。
+      assert.equal(r.kind, 'ready');
+      assert.deepStrictEqual(r.ready, [1051]);
+    });
+
+    await t.test('正控：目标号已关（不在名单里）时退路照旧认领', () => {
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1051, ['已消歧'])],
+        prs: [{ number: 1216, title: '[cc] fix(exhausted): 认输标按「最新」记录比对——#1143 刷了 135 条评论的根因', body: '' }],
+        worktrees: [],
+      });
+      // #1143 不在任何开放名单里（已关）→ 退路返 1143，但它跟 #1051 无关，所以 #1051 照样可起。
+      assert.deepStrictEqual(r.ready, [1051]);
+    });
   });
 
   it('#577 dispatch skill 四件里的规矩原文还在', async (t) => {

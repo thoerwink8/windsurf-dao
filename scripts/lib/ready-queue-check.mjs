@@ -83,14 +83,18 @@ export function inspectReadyQueue(snap) {
   // 在途 = 有 PR **认领**这张单。三处收严，缺一处都会把「提到」当成「在做」：
   //   ① 认领口径（`attributedIssueNumber`），不是宽口径 `linkedIssueNumbers`——「关联 #N」是交叉引用；
   //   ② 剥掉被否定的分句——「不写 closes #N」是声明不做；
-  //   ③ 标题裸匹配那一级退路，对**还开着的单**收严——#1051 被 #1096 标题「挂回 #1051」焊死 7 天。
-  // 传入开放单名单：本函数判的正是「这些开着的单里哪些没在途」，所以那张名单就在手边。
-  const openIssues = new Set(
-    snap.issues.map((i) => (i && Number.isInteger(i.number) ? i.number : null)).filter(Boolean),
-  );
+  //   ③ 标题裸匹配那一级退路，对**还开着的号**收严——#1051 被 #1096 标题「挂回 #1051」焊死 7 天。
+  //
+  // 「还开着」必须**含开着的 PR**：GitHub 的 issue 与 PR 共用号段，而引用的目标常常是一张 PR
+  // （#1216 标题「#1143 刷了 135 条评论的根因」，#1143 是 PR、不在 issues 面里）。只按 issues 面
+  // 构造名单，这条收严就对这些引用整个失效——2026-09-13 实测：带 {1143} 时返回 null，
+  // 只传 issues 面那份名单时又返 1143。
+  const openNumbers = new Set();
+  for (const i of snap.issues) if (i && Number.isInteger(i.number)) openNumbers.add(i.number);
+  for (const p of snap.prs) if (p && Number.isInteger(p.number)) openNumbers.add(p.number);
   const inPr = new Set();
   for (const p of snap.prs) {
-    for (const n of claimedIssueNumbersOfPr(p, { openIssues })) inPr.add(n);
+    for (const n of claimedIssueNumbersOfPr(p, { openIssues: openNumbers })) inPr.add(n);
     for (const n of claimedIssueNumbers(`${p?.title || ''}\n${p?.body || ''}`)) inPr.add(n);
   }
   const inCard = new Set(cards.numbers);
