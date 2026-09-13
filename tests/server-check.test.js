@@ -8,22 +8,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import {
   classifyOrcaStdout,
-  classifyRuntimeStatus,
-  classifyAccountsResult,
   classifyFeishuTriage,
   classifyStallWatchTimer,
   classifyBotModelProbe,
+  classifyCommanderStatus,
   parseEnvFile,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
   parseTuiAgentDisplayNames,
   classifyRequiredAgents,
   providerToAgentId,
-  classifyLandAutomation,
   parseProviderClis,
   inServiceProviders,
   retiredClis,
@@ -33,6 +32,7 @@ import {
   scanRetiredClis,
   DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
+import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_CHECK_SRC = resolve(HERE, '..', 'scripts', 'server-check.mjs');
@@ -89,62 +89,6 @@ test('server-check 判别力', async (t) => {
 
     await t.test('探不到码表里必须有 runtime_unavailable', () => {
       assert.ok(UNPROBEABLE_CODES.has('runtime_unavailable'));
-    });
-  });
-
-  await t.test('classifyRuntimeStatus', async (t) => {
-    await t.test('orca 已死：ok:true 但 reachable:false → red（真缺陷 1：曾经报绿）', () => {
-      const result = {
-        app: { running: false, pid: null },
-        runtime: { state: 'not_running', reachable: false, runtimeId: null },
-      };
-      const r = classifyRuntimeStatus(result);
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /不可达/);
-      assert.match(r.detail, /serve/); // 报红要带怎么起
-    });
-
-    await t.test('reachable:true → ok，且带 runtimeId', () => {
-      const result = { app: { running: true }, runtime: { state: 'running', reachable: true, runtimeId: 'abc' } };
-      const r = classifyRuntimeStatus(result);
-      assert.equal(r.state, 'ok');
-      assert.match(r.detail, /abc/);
-    });
-
-    await t.test('契约变了（reachable 不是布尔）→ unknown，不是绿', () => {
-      assert.equal(classifyRuntimeStatus({ runtime: { state: 'running' } }).state, 'unknown');
-      assert.equal(classifyRuntimeStatus({}).state, 'unknown');
-      assert.equal(classifyRuntimeStatus(null).state, 'unknown');
-    });
-
-    await t.test('reachable 是字符串 "true" 也算契约变了 —— 不许被真值糊过去', () => {
-      assert.equal(classifyRuntimeStatus({ runtime: { reachable: 'true' } }).state, 'unknown');
-    });
-  });
-
-  await t.test('classifyAccountsResult', async (t) => {
-    // 2026-09-05 改判：这条原本判真红「派工起得来终端也登不上」。实测推翻了它的前提——
-    // 服务器托管账号一直是 0，审官与工人却整天在跑：#822 之后全员走 pi + 网关 keyFile，
-    // orca 托管账号根本不在登录路径上。永远红的检查会把真红淹掉，比没有检查更糟。
-    // 判据保留（真回到 CLI 直连时还有用），但降成不报红，且必须说清「本机不走这条路」。
-    await t.test('一个账号都没有 → 不报红，但要说清本机不走这条登录路', () => {
-      const r = classifyAccountsResult({ claude: { accounts: [] }, codex: { accounts: [] } });
-      assert.notEqual(r.state, 'red', '前提已不成立，不许继续报一个谁也修不了的红');
-      assert.equal(r.empty, true, '0 个要显形，不能和「有账号」长得一样');
-      assert.match(r.detail, /不走这条登录路/);
-      assert.match(r.detail, /account add/, '真要改回 CLI 直连时，修法仍要写在这里');
-    });
-
-    await t.test('有账号 → ok，计数按厂商加总', () => {
-      const r = classifyAccountsResult({ claude: { accounts: [{ id: 'a' }, { id: 'b' }] }, codex: { accounts: [{ id: 'c' }] } });
-      assert.equal(r.state, 'ok');
-      assert.equal(r.count, 3);
-    });
-
-    await t.test('认不出任何厂商键 → unknown（契约变了 ≠ 0 个）', () => {
-      assert.equal(classifyAccountsResult({}).state, 'unknown');
-      assert.equal(classifyAccountsResult({ claude: { accts: [] } }).state, 'unknown');
-      assert.equal(classifyAccountsResult(null).state, 'unknown');
     });
   });
 
@@ -250,64 +194,107 @@ test('server-check 判别力', async (t) => {
     });
   });
 
-  await t.test('#829 land automation 在册且启用', async (t) => {
-    await t.test('没有这条 → red，带安装命令', () => {
-      const r = classifyLandAutomation([]);
-      assert.equal(r.state, 'red');
-      assert.match(r.detail, /install-land-automation/);
+  await t.test('#829 land timer 在册且启用', async (t) => {
+    await t.test('没探到 → unknown', () => {
+      const r = classifyLandTimer({ probed: false, reason: 'ENOENT' });
+      assert.equal(r.state, 'unknown');
     });
-    await t.test('在册但 enabled=false → red（判别性：disable 必须变红）', () => {
-      const r = classifyLandAutomation([{ name: 'land', enabled: false, id: 'x' }]);
+    await t.test('未启用 → red，带装法', () => {
+      const r = classifyLandTimer({ probed: true, isEnabled: 'disabled', timersText: '' });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /enabled/);
+      assert.match(r.detail, new RegExp(LAND_INSTALL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     });
-    await t.test('在册且 enabled=true → ok', () => {
-      const r = classifyLandAutomation([{ name: 'land', enabled: true, id: 'abc' }]);
+    await t.test('enabled 且 NEXT 是时间 → ok', () => {
+      const r = classifyLandTimer({
+        probed: true,
+        isEnabled: 'enabled',
+        timersText: `Wed 2026-09-07 01:17:00 CST 30min left n/a n/a ${LAND_TIMER} dao-land.service`,
+      });
       assert.equal(r.state, 'ok');
-      assert.match(r.detail, /abc/);
-    });
-    await t.test('同名两条 → red（幂等坏了）', () => {
-      const r = classifyLandAutomation([
-        { name: 'land', enabled: true, id: 'a' },
-        { name: 'land', enabled: true, id: 'b' },
-      ]);
-      assert.equal(r.state, 'red');
-    });
-    await t.test('不是数组 → unknown，不许当绿', () => {
-      assert.equal(classifyLandAutomation(null).state, 'unknown');
-      assert.equal(classifyLandAutomation(undefined).state, 'unknown');
-    });
-    await t.test('别的名字在册不算这条', () => {
-      const r = classifyLandAutomation([{ name: 'other', enabled: true, id: 'z' }]);
-      assert.equal(r.state, 'red');
     });
   });
 
-  await t.test('classifyStallWatchTimer（⑮ 卡死发现 timer：屏面指纹层退役后守 progress-watch）', async (t) => {
-    await t.test('progress-watch 在册、NEXT 是时间、退役件不在 → ok', () => {
+  await t.test('⑭ 指挥官自检：透传 status --json，不许改写成 enabled/install', async (t) => {
+    await t.test('exit 1 且 detail 写 start → 红，原文保留，不改写成 install', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 1,
+        stdout: JSON.stringify({
+          state: 'red',
+          detail: 'timer 不会自己响：commander-act.timer enabled 但 inactive(dead) 且没有下一次——sudo systemctl start commander-act.timer',
+          exit: 1,
+        }),
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /systemctl start commander-act\.timer/);
+      assert.doesNotMatch(r.detail, /install/);
+    });
+    await t.test('exit 0 透传「会自己响」，不许改写成「在册且 enabled」', () => {
+      const r = classifyCommanderStatus({
+        probed: true,
+        code: 0,
+        stdout: JSON.stringify({ state: 'ok', detail: '2 个 timer 在册且会自己响', exit: 0 }),
+      });
+      assert.equal(r.state, 'ok');
+      assert.equal(r.detail, '2 个 timer 在册且会自己响');
+      assert.doesNotMatch(r.detail, /在册且 enabled/);
+    });
+    await t.test('没探到 → unknown', () => {
+      const r = classifyCommanderStatus({ probed: false, reason: 'ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+    await t.test('CHECKS ⑭ 走 --json + classifyCommanderStatus，源码不再写 install / 在册且 enabled', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['⑭ 指挥官自检");
+      assert.ok(i > -1, '找不到 ⑭ CHECKS 条目');
+      const entry = src.slice(i, i + 600);
+      assert.match(entry, /classifyCommanderStatus/);
+      assert.match(entry, /'status',\s*'--json'/);
+      assert.doesNotMatch(entry, /install/);
+      assert.doesNotMatch(entry, /在册且 enabled/);
+    });
+  });
+
+  await t.test('classifyStallWatchTimer（⑮ 卡死发现已并进指挥官，独立钟是影子制度）', async (t) => {
+    await t.test('已并进、独立钟不在、退役件不在 → ok', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Sat 2026-09-06 13:15:00 CST  14min Sat 2026-09-06 13:00:00 CST  1min ago dao-progress-watch.timer dao-progress-watch.service',
+        timersText: 'Sat commander-act.timer commander-act.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'ok');
     });
 
-    await t.test('在册但 NEXT 是横杠 → red（空转，扫描等于没拉）', () => {
+    await t.test('独立 progress-watch timer 还在 → red（影子制度）', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: '-                               - Sat 2026-09-06 12:37:14 CST            - dao-progress-watch.timer     dao-progress-watch.service',
+        timersText: 'Sat 2026-09-06 13:15:00 CST dao-progress-watch.timer dao-progress-watch.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /NEXT/);
+      assert.match(r.detail, /dao-progress-watch\.timer/);
     });
 
-    await t.test('退役的 dao-agent-stall.timer 还在 → red，即使 progress-watch 已在册', () => {
+    await t.test('/etc 还留着已删单元文件 → red（disabled 也会被抓住）', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer\nThu dao-agent-stall.timer dao-agent-stall.service',
+        timersText: 'Sat commander-act.timer',
         retiredScriptExists: false,
+        progressWatchFolded: true,
+        leftoverUnitFiles: ['dao-nudge-stalled.timer'],
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /dao-nudge-stalled\.timer/);
+    });
+
+    await t.test('退役的 dao-agent-stall.timer 还在 → red', () => {
+      const r = classifyStallWatchTimer({
+        probed: true,
+        timersText: 'Thu dao-agent-stall.timer dao-agent-stall.service',
+        retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /dao-agent-stall\.timer/);
@@ -318,30 +305,32 @@ test('server-check 判别力', async (t) => {
         probed: true,
         timersText: 'Thu agent-stall-watch.timer agent-stall-watch.service',
         retiredScriptExists: false,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /垫片/);
     });
 
-    await t.test('退役脚本还在 → red，即使 progress-watch 已在册', () => {
+    await t.test('退役脚本还在 → red', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer dao-progress-watch.service',
+        timersText: 'Thu commander-act.timer',
         retiredScriptExists: true,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'red');
       assert.match(r.detail, /agent-stall-watch\.mjs/);
     });
 
-    await t.test('progress-watch 不在册 → red，带怎么起', () => {
+    await t.test('还没并进指挥官 → red，即使独立钟已经不在', () => {
       const r = classifyStallWatchTimer({
         probed: true,
         timersText: 'Thu sysstat-collect.timer',
         retiredScriptExists: false,
+        progressWatchFolded: false,
       });
       assert.equal(r.state, 'red');
-      assert.match(r.detail, /dao-progress-watch\.timer/);
-      assert.match(r.detail, /install-progress-watch/);
+      assert.match(r.detail, /runProgressWatch/);
     });
 
     await t.test('systemctl 探不到 → unknown，不当绿', () => {
@@ -352,8 +341,9 @@ test('server-check 判别力', async (t) => {
     await t.test('退役脚本没查成 → unknown', () => {
       const r = classifyStallWatchTimer({
         probed: true,
-        timersText: 'Thu dao-progress-watch.timer',
+        timersText: 'Thu commander-act.timer',
         retiredScriptUnknown: true,
+        progressWatchFolded: true,
       });
       assert.equal(r.state, 'unknown');
     });
@@ -674,10 +664,34 @@ test('⑳ 单元漂移', async (t) => {
     assert.match(r.detail, /install/, '要给修法');
   });
 
-  await t.test('机器上压根没装 → unknown，不是 red 也不是 ok', () => {
+  // 这条原本期望 unknown。2026-09-11 改判：**「仓里有、机器上没有」不是没查成，是确定的故障。**
+  // 原判据把它和「仓内读不到」一起塞进 unreadable → unknown，于是 #818 的
+  // dao-board-watch 从合进仓（09-10 21:43）到 09-11 一次没装过，这条闸每轮说「没查成」
+  // 而不是「红」——不开单、不叫人，安静得像没事。仓里那份就是真相，缺的那头是缺。
+  await t.test('机器上压根没装 → red（仓里有就是真相，缺的是缺，不是测不准）', () => {
     const r = classifyUnitDrift([{ name: 'x.timer', repo: 'A', live: null }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /x\.timer/, '要点名是哪个');
+    assert.match(r.detail, /从没装上过|根本没有/);
+    assert.match(r.detail, /install/, '要给修法');
+  });
+
+  await t.test('仓内读不到 → 仍是 unknown（这才是真的没查成）', () => {
+    const r = classifyUnitDrift([{ name: 'x.timer', repo: null, live: 'A' }]);
     assert.equal(r.state, 'unknown');
-    assert.match(r.detail, /没装|没查成/);
+    assert.match(r.detail, /没查成|读不到/);
+  });
+
+  await t.test('已装却漂了 + 另几个没装 → red（没装不许把漂移盖成没查成）', () => {
+    const r = classifyUnitDrift([
+      { name: 'dao-board-gc.service', repo: 'After=network-online.target', live: 'After=network-online.target leftover-runtime.service' },
+      { name: 'dao-nudge-stalled.timer', repo: 'OnCalendar=*:0/20', live: null },
+      { name: 'dao-land.timer', repo: 'OnCalendar=hourly', live: null },
+    ]);
+    assert.equal(r.state, 'red', '漂移被没装盖成 unknown 就会让 #1104 的单元永远不装');
+    assert.match(r.detail, /dao-board-gc\.service/, '要点名漂了的那个');
+    assert.match(r.detail, /dao-nudge-stalled\.timer/, '没装的也要列，免得以为只漂了一份');
+    assert.match(r.detail, /install/, '要给修法');
   });
 
   await t.test('扫出 0 个 → unknown（判据失效，不是「都一致」）', () => {
@@ -689,9 +703,184 @@ test('⑳ 单元漂移', async (t) => {
     const r = classifyUnitDrift([{ name: 'a.timer', repo: '[Timer]\nOnCalendar=*:07\n', live: '[Timer]\r\nOnCalendar=*:07' }]);
     assert.equal(r.state, 'ok');
   });
+
+  await t.test('.d/ 读不了 → unknown（不许当成正文一致）', () => {
+    const r = classifyUnitDrift([{ name: 'a.timer', repo: 'X', live: null, unreadable: true }]);
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没查成/);
+  });
 });
 
-test('#984 ⑪ 预算 60s + orca 面 9 项挂退役牌', () => {
+test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', async (t) => {
+  const {
+    assembleEffectiveUnit,
+    liveTextFromSystemctlCat,
+    collectUnitDriftPairs,
+    classifyUnitDrift,
+    classifyProbeExecStart,
+    parseExecStartArgv,
+    probeScriptFromExecStart,
+  } = await import('../scripts/server-check.mjs');
+  const expectedScript = probeScriptFromExecStart(
+    readFileSync(join(HERE, '..', 'host', 'machine', 'systemd', 'gw-remote-probe.service'), 'utf8'),
+  );
+  assert.equal(expectedScript, '/srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs');
+
+  await t.test('正文对、drop-in 把日历改走 → red（只读 FragmentPath 会绿）', () => {
+    const repo = '[Timer]\nOnCalendar=*:09/30\n';
+    const live = assembleEffectiveUnit(repo, [{
+      path: '/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf',
+      text: '[Timer]\nOnCalendar=*:07/30\n',
+    }]);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('故意只拷正文不删 .d/ 当场红', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Unit]\nDescription=probe\n\n[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      mkdirSync(join(etcDir, 'gw-remote-probe.timer.d'));
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer.d', 'oncalendar.conf'), '[Timer]\nOnCalendar=*:07/30\n');
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'red', r.detail);
+      assert.match(r.detail, /gw-remote-probe\.timer/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('正文对且无 drop-in → ok（反证不是恒红）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dao-1164-ok-'));
+    try {
+      const repoDir = join(root, 'repo');
+      const etcDir = join(root, 'etc');
+      mkdirSync(repoDir);
+      mkdirSync(etcDir);
+      const body = '[Timer]\nOnCalendar=*:09/30\n';
+      writeFileSync(join(repoDir, 'gw-remote-probe.timer'), body);
+      writeFileSync(join(etcDir, 'gw-remote-probe.timer'), body);
+      const r = classifyUnitDrift(collectUnitDriftPairs({ repoDir, etcDir }));
+      assert.equal(r.state, 'ok', r.detail);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('systemctl cat 带 drop-in：剥首行后仍 ≠ 仓内正文', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}# /etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf\n[Timer]\nOnCalendar=*:07/30\n`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /gw-remote-probe\.timer/);
+  });
+
+  await t.test('systemctl cat 无 drop-in：剥首行后与正文一致', () => {
+    const repo = '# /etc/systemd/system/gw-remote-probe.timer\n[Timer]\nOnCalendar=*:09/30\n';
+    const cat = `# /etc/systemd/system/gw-remote-probe.timer\n${repo}`;
+    const live = liveTextFromSystemctlCat(cat);
+    const r = classifyUnitDrift([{ name: 'gw-remote-probe.timer', repo, live }]);
+    assert.equal(r.state, 'ok');
+  });
+
+  await t.test('活 ExecStart 指向 ~/bin/gw-remote-probe.mjs → red（仓内文件锁不够）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /home\/orca\/bin\/gw-remote-probe/);
+    assert.match(r.detail, /install-gw-remote-probe/);
+  });
+
+  await t.test('活 ExecStart 走仓内脚本 → ok', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, undefined);
+  });
+
+  await t.test('仓外同名路径 /tmp/scripts/gw-remote-probe.mjs → red（子串匹配会假绿）', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 仓外同名路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/scripts\/gw-remote-probe/);
+  });
+
+  await t.test('误导注释含仓内路径、实际目标是 /tmp/gw-remote-probe.mjs → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: [
+        '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+        'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+      ].join('\n'),
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('systemctl show 实际目标仓外、旁注含仓内路径 → red', () => {
+    const r = classifyProbeExecStart({
+      liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/gw-remote-probe.mjs ; ignore_errors=no } # scripts/gw-remote-probe.mjs',
+      expectedScript,
+    });
+    assert.equal(r.state, 'red', r.detail);
+    assert.match(r.detail, /\/tmp\/gw-remote-probe/);
+  });
+
+  await t.test('解析 ExecStart：注释不算，取最后一条未注释行', () => {
+    const argv = parseExecStartArgv([
+      '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs',
+      'ExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs',
+    ].join('\n'));
+    assert.deepEqual(argv, ['/usr/bin/node', '/tmp/gw-remote-probe.mjs']);
+    assert.equal(
+      probeScriptFromExecStart('ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs ; ignore_errors=no }'),
+      '/tmp/scripts/gw-remote-probe.mjs',
+    );
+  });
+
+  await t.test('没装时本格不发言（漂移闸去红）', () => {
+    const r = classifyProbeExecStart({ liveExecStart: null, expectedScript });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.skipped, true);
+  });
+
+  await t.test('⑳ 取数读 .d，并锁活 ExecStart 解析 argv', () => {
+    const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+    assert.match(src, /collectUnitDriftPairs/);
+    assert.match(src, /\$\{name\}\.d/);
+    assert.match(src, /#1164 活 ExecStart/);
+    assert.match(src, /classifyProbeExecStart/);
+    assert.match(src, /parseExecStartArgv/);
+    assert.match(src, /expectedScript/);
+    assert.doesNotMatch(src, /!s\.includes\(PROBE_EXEC_EXPECTED\)/,
+      '不许再对整段 liveExecStart 做子串包含');
+  });
+});
+
+test('#984 ⑪ 预算 60s；orca 产品面检查已删', () => {
   assert.equal(DAO_CHECK_NESTED_TIMEOUT_MS, 60_000, '⑪ 预算必须是 60s——改回 180s/600s 这条要红');
   const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
   assert.match(src, /timeout: DAO_CHECK_NESTED_TIMEOUT_MS/,
@@ -700,14 +889,7 @@ test('#984 ⑪ 预算 60s + orca 面 9 项挂退役牌', () => {
     '⑪ 不许再写 180s 硬编码');
   assert.match(src, /dao-check 自己 \$\{ms\}ms/,
     '⑪ detail 必须带 dao-check 自己的耗时');
-  const retired = ['① orca 在 PATH', '④ runtime 可达', '⑤ worktree 面', '⑥ terminal 面',
-    '⑦ orchestration 面', '⑧ automations 面', '⑨ 本仓已注册进 orca', '⑩ 托管账号可用',
-    '⑬ start=agent'];
-  const lines = src.split(/\r?\n/);
-  for (const name of retired) {
-    const line = lines.find((l) => l.includes(name) && l.includes('退役条件：mirasim 派工实跑 + orca 退役'));
-    assert.ok(line, `${name} 必须挂退役牌`);
+  for (const name of ['① orca 在 PATH', '④ runtime 可达', '⑨ 本仓已注册进 orca']) {
+    assert.equal(src.includes(name), false, `${name} 必须已删，不许再挂退役牌`);
   }
-  assert.match(src, /现在不删/,
-    '退役牌必须写现在不删');
 });

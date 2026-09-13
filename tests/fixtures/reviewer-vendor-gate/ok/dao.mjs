@@ -6,12 +6,14 @@ function cmdDispatch(args) {
   refuseIfSameVendor({ workerId: childLaunch.modelId, reviewerId, routing });
 }
 function cmdReviewerCreate(args) {
+  planReviewerOnCapacityDeath({ requested: reviewerId, capacityFailover });
   refuseIfSameVendor({ workerId, reviewerId, routing });
 }
 function cmdReviewerAttach(args) {
   refuseIfSameVendor({ workerId, reviewerId, routing });
 }
 function cmdWorkerDone(args) {
+  planReviewerOnCapacityDeath({ requested: reviewerId, capacityFailover });
   refuseIfSameVendor({ workerId, reviewerId, routing });
 }
 function cmdNotify() {}

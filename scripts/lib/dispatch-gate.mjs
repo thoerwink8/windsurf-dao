@@ -1,10 +1,16 @@
 // 派工闸门（#546 #517）：拦裸 orca 派工命令。
+// #948：同一入口再问控制面闸（判定逻辑在 ./control-plane-gate.mjs，这里不复制分类）。
 //
 // Claude Code 的命令型 hook：只有 exit 2 拦得住动作；崩溃 / exit 1 / 超时在宿主眼里全是放行。
 // 所以本文件任何异常都转成 exit 2（fail-closed）。「崩了」和「判通过」不许同形。
 // 用法：hook 读 stdin 的 PreToolUse JSON；测试也可 argv 传入命令。
 
 import { readFileSync } from 'node:fs';
+import {
+  collectEvidence,
+  decideControlPlane,
+  probeControlPlane,
+} from './control-plane-gate.mjs';
 
 export const GATE_HINT = [
   '派工只走 node scripts/dao.mjs dispatch（用法：node scripts/dao.mjs dispatch --help）。',
@@ -17,6 +23,19 @@ export const COORDINATOR_HINT = [
   '人用窗口永不当 coordinator（#667）。',
   '派工走 node scripts/dao.mjs dispatch。不要从帅窗 run-use / run-create。',
   '例外（#675）：工人 TUI bindStation 在 run-current 为 null 时对本窗 run-create；帅窗不许走这条。',
+].join('');
+
+/** 这个 token 是不是 orca CLI（含 .exe/.cmd）。写法避开函数调用形，免得验收 grep 误伤。 */
+export function isOrcaCliToken(tok) {
+  const s = String(tok || '');
+  return /(^|[\\/])orca$/i.test(s)
+    || /(^|[\\/])orca\.exe$/i.test(s)
+    || /(^|[\\/])orca\.cmd$/i.test(s);
+}
+
+export const GH_ISSUE_WRITE_HINT = [
+  'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。',
+  '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete，也不许经 gh-as 自选身份。',
 ].join('');
 
 export function normalizeCmd(cmd) {
@@ -85,6 +104,8 @@ export function splitShellStatements(cmd) {
     if (c === '&' && s[i + 1] === '&') { flush(); i++; continue; }
     if (c === '|' && s[i + 1] === '|') { flush(); i++; continue; }
     if (c === '|') { flush(); continue; }
+    // 单个 & 是后台作业：前后两段都会真跑，必须拆开分别判定（#1015 审官第 4 条）。
+    if (c === '&') { flush(); continue; }
     buf += c;
   }
   flush();
@@ -151,11 +172,50 @@ export function isDaoMjsInvocation(stmt) {
   return toks.some(t => /(^|[\\/])dao\.mjs$/i.test(t));
 }
 
+/** 这句真正跑起来的程序是不是 issue-gateway.mjs（#792 唯一写入入口）。 */
+export function isIssueGatewayInvocation(stmt) {
+  const toks = bareTokens(stmt);
+  return toks.some(t => /(^|[\\/])issue-gateway\.mjs$/i.test(t));
+}
+
+const GH_ISSUE_WRITE_VERBS = /^(create|comment|close|edit|reopen|delete)$/;
+
+function restAfterGhAs(toks) {
+  const idx = toks.findIndex((t) => /(^|[\\/])gh-as\.mjs$/i.test(t));
+  if (idx < 0) return null;
+  return toks.slice(idx + 1).filter((t) => t !== '--');
+}
+
+/** `gh-as.mjs <role> -- issue <写动词>`。网关内部走 lib ghAs()，不经这条 CLI。 */
+export function isGhAsIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  const rest = restAfterGhAs(bareTokens(stmt));
+  if (!rest) return false;
+  for (let i = 0; i < rest.length - 1; i++) {
+    if (rest[i] === 'issue' && GH_ISSUE_WRITE_VERBS.test(rest[i + 1])) return true;
+  }
+  return false;
+}
+
+/** 裸 `gh issue <写动词>`。dao.mjs / issue-gateway.mjs 不拦；gh-as 写 Issue 另见 isGhAsIssueWrite。 */
+export function isBareGhIssueWrite(stmt) {
+  if (isDaoMjsInvocation(stmt) || isIssueGatewayInvocation(stmt)) return false;
+  if (isGhAsIssueWrite(stmt)) return false;
+  const toks = bareTokens(stmt);
+  if (toks.some(t => /(^|[\\/])gh-as\.mjs$/i.test(t))) return false;
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])gh(\.exe)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'issue') continue;
+    if (GH_ISSUE_WRITE_VERBS.test(toks[i + 2])) return true;
+  }
+  return false;
+}
+
 /** 这句未加引号的 token 序列里有没有 orca orchestration (worker-start|task-create|dispatch)。 */
 export function isOrcaDispatchInvocation(stmt) {
   const toks = bareTokens(stmt);
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (/^(worker-start|task-create|dispatch)$/.test(toks[i + 2])) return true;
   }
@@ -183,7 +243,7 @@ export function isHeartbeatSend(stmt) {
   const toks = tokenizeShell(stmt).map((t) => t.value);
   let send = false;
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (toks[i + 2] === 'send') { send = true; break; }
   }
@@ -199,14 +259,14 @@ export function isHumanCoordinatorBind(stmt) {
   if (isDaoMjsInvocation(stmt)) return false;
   const toks = bareTokens(stmt);
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (/^(run-use|run-create)$/.test(toks[i + 2])) return true;
   }
   return false;
 }
 
-export function decideGate(cmd) {
+export function decideGate(cmd, { probe = null, evidence = null } = {}) {
   const statements = splitShellStatements(cmd);
   const parts = statements.length ? statements : [String(cmd || '')];
   for (const stmt of parts) {
@@ -224,13 +284,48 @@ export function decideGate(cmd) {
         message: `拦下帅窗抢 coordinator：${normalizeCmd(cmd)}\n${COORDINATOR_HINT}`,
       };
     }
+    if (isBareGhIssueWrite(stmt) || isGhAsIssueWrite(stmt)) {
+      return {
+        block: true,
+        command: normalizeCmd(cmd),
+        message: `拦下裸 gh issue 写动作：${normalizeCmd(cmd)}\n${GH_ISSUE_WRITE_HINT}`,
+      };
+    }
   }
-  if (!isDispatchBypass(cmd)) return { block: false, command: normalizeCmd(cmd) };
+  if (isDispatchBypass(cmd)) {
+    return {
+      block: true,
+      command: normalizeCmd(cmd),
+      message: `拦下裸 orca 派工：${normalizeCmd(cmd)}\n${GATE_HINT}`,
+    };
+  }
+  // #948：控制面明确不可达时拦对外写。探测没查成不拦（没查成 ≠ 断了）。
+  const cp = decideControlPlane({ cmd, probe, evidence });
+  if (cp.block) {
+    return {
+      block: true,
+      command: normalizeCmd(cmd),
+      message: cp.message,
+      controlPlane: cp,
+    };
+  }
   return {
-    block: true,
+    block: false,
     command: normalizeCmd(cmd),
-    message: `拦下裸 orca 派工：${normalizeCmd(cmd)}\n${GATE_HINT}`,
+    note: cp.note || '',
+    controlPlane: cp,
   };
+}
+
+function parseHookEvent(stdinText) {
+  const text = String(stdinText || '').trim();
+  if (!text || text[0] !== '{') return null;
+  try {
+    const doc = JSON.parse(text);
+    return doc && typeof doc === 'object' ? doc : null;
+  } catch {
+    return null;
+  }
 }
 
 export function runAsHook({ stdinText = '', argv = [], env = process.env } = {}) {
@@ -238,9 +333,13 @@ export function runAsHook({ stdinText = '', argv = [], env = process.env } = {})
     const crash = env && (env.DISPATCH_GATE_CRASH === '1' || env.DISPATCH_GATE_CRASH === 'true');
     if (crash) throw new Error('dispatch-gate 故意崩（DISPATCH_GATE_CRASH）');
     const cmd = commandFromHookInput(stdinText, argv);
-    const decision = decideGate(cmd);
+    const event = parseHookEvent(stdinText);
+    const probe = probeControlPlane({ env });
+    const evidence = collectEvidence({ env, event });
+    const decision = decideGate(cmd, { probe, evidence });
     if (decision.block) return { exit: 2, stderr: decision.message, command: decision.command };
-    return { exit: 0, stderr: '', command: decision.command };
+    // 探测没查成：放行，但 stderr 写清「没查成 ≠ 断了」，避免一次抖动被当成绿灯。
+    return { exit: 0, stderr: decision.note || '', command: decision.command };
   } catch (e) {
     return {
       exit: 2,

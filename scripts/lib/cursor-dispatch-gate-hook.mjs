@@ -31,7 +31,13 @@ const r = runAsHook({
 });
 
 if (r.exit === 0) {
-  process.stdout.write(`${JSON.stringify({ permission: 'allow' })}\n`);
+  const allow = { permission: 'allow' };
+  // #948：探测没查成时放行，但仍要把「没查成 ≠ 断了」送到 Cursor 消息里。
+  if (r.stderr) {
+    allow.user_message = r.stderr;
+    allow.agent_message = r.stderr;
+  }
+  process.stdout.write(`${JSON.stringify(allow)}\n`);
 } else {
   const msg = r.stderr || '派工只走 node scripts/dao.mjs dispatch';
   process.stdout.write(`${JSON.stringify({ permission: 'deny', user_message: msg, agent_message: msg })}\n`);

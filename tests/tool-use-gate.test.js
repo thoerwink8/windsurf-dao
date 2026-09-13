@@ -83,6 +83,73 @@ describe('工具使用闸：heredoc 吞转义', () => {
   });
 });
 
+// 根治版判据（2026-09-10 用户指名要的「永久根治」）。
+//
+// 起因：旧判据只认 `cat > x.mjs <<EOF` 一种形态，实测 python3 heredoc / sed -i /
+// node -e / perl -i / tee / 重定向四个以上形态**全部哑火**，而那晚的正则正是经
+// python3 heredoc 变形的。判据轴从「认工具名」换成「认行为」：
+// **要写文件 + 含转义 + 碰的是代码/配置文本**——下次换工具照样命中。
+describe('工具使用闸：代码文本经 shell 落进文件（根治版）', () => {
+  it('违规样本：python3 heredoc 写正则 —— 必须被注中（旧判据在这里是哑的）', async () => {
+    const S = await LOAD;
+    const cmd = 'python3 - <<\'PY\'\nimport re\nprint(re.sub(r"\\s+", " ", "a  b"))\nPY';
+    const notes = S.classifyBash(cmd);
+    assert.ok(notes.some((n) => n.id === 'shell-escape-into-file'), JSON.stringify(notes));
+    assert.match(S.renderToolUseGate(notes), /Write\/Edit/);
+  });
+
+  it('违规样本：sed -i 改含转义的代码', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('sed -i "s|old|new \\d+|" scripts/lib/x.mjs'));
+  });
+
+  it('违规样本：node -e 显式写文件', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('node -e "require(\'fs\').writeFileSync(\'a.mjs\',\'/\\s+/;\')"'));
+  });
+
+  it('违规样本：perl 就地编辑（含 -pi 合并写法）', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('perl -pi -e "s/\\s+/_/g" a.json'), '合并写法 -pi');
+    assert.ok(S.isShellEscapeIntoFile('perl -i -pe "s/\\s+/_/g" a.json'), '分开写法 -i -pe');
+    assert.ok(S.isShellEscapeIntoFile('sed -i.bak "s/\\d+/N/g" a.mjs'), '-i 带后缀');
+  });
+
+  it('违规样本：tee / 重定向写 json', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('echo \'{"a":"\\d"}\' | tee a.json'));
+    assert.ok(S.isShellEscapeIntoFile('echo "const r = /\\d+/" > a.mjs'));
+    assert.ok(S.isShellEscapeIntoFile('printf "const r = /\\s+/" >> a.mjs'));
+  });
+
+  it('反证：只读命令不许注（git / grep 含转义也不行）', async () => {
+    const S = await LOAD;
+    assert.equal(S.classifyBash('git status --short').length, 0);
+    assert.equal(S.classifyBash('grep -n "\\d" scripts/x.mjs').length, 0);
+    assert.equal(S.classifyBash('rg -e "\\s+" docs/').length, 0);
+  });
+
+  it('反证：写文件但不含转义 —— 不许注（误报会让人无视闸）', async () => {
+    const S = await LOAD;
+    assert.equal(S.classifyBash('echo hello > note.txt').length, 0);
+    assert.equal(S.classifyBash('sed -i "s/a/b/" a.mjs').length, 0);
+  });
+
+  it('反证：fd 重定向与数字比较不算写文件', async () => {
+    const S = await LOAD;
+    assert.equal(S.writesToFile('cat a 2>&1 | head'), false);
+    assert.equal(S.writesToFile('test 1 2 -gt 1'), false);
+  });
+
+  it('两条判据都中时只注一次（heredoc 是根治判据的特例，不重复刷屏）', async () => {
+    const S = await LOAD;
+    const cmd = "cat > x.mjs <<'EOF'\nconst re = /\\s+/;\nEOF";
+    const notes = S.classifyBash(cmd);
+    assert.equal(notes.filter((n) => n.id === 'heredoc-escape').length, 1);
+    assert.equal(notes.filter((n) => n.id === 'shell-escape-into-file').length, 0, '被特例覆盖时不重复注');
+  });
+});
+
 describe('工具使用闸：python 是 stub', () => {
   it('违规样本：裸 python -c —— 必须被注中', async () => {
     const S = await LOAD;

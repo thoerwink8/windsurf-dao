@@ -71,6 +71,19 @@ export function looksLikeGreeting(text) {
   ).test(t);
 }
 
+/**
+ * 总控群「状态」确定性闸（#818）。问候不命中；长消息 / 新需求不命中。
+ * 只认短问「状态」「看板」，「盘面怎么样」仍走 LLM 聚合（#852）。
+ */
+export function looksLikeStatusQuery(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return false;
+  if (looksLikeGreeting(raw)) return false;
+  const stripped = raw.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!stripped || stripped.length > 24) return false;
+  return /^(现在的?)?(状态|看板)(怎么样|如何)?[?？!！。.\s]*$/u.test(stripped);
+}
+
 /** 问候出口：LLM 回了盘点或空话就换成兜底，不把盘点漏出去。 */
 export function safeGreetingReply(text) {
   const t = typeof text === 'string' ? text.trim() : '';

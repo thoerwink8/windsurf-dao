@@ -29,43 +29,61 @@
 | A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的符号链接 |
 | D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git。其中 `statusLine.command` 指本仓 `host/statusline.js` 的**本机绝对路径**（仓搬家/换机要手改）——onboard 哨兵 `statusline-dangling` 报断 |
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
-| A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
+| A | ~/.claude/skills | NEW-MACHINE §11。真目录 + 逐个链到 `host/skills/<名>`。整目录链接 = 被劫（#1146），onboard / dao-skills-heal 合并式接回 |
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
 | D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
+| D | ~/.codex/.tmp | codex 每次 git 操作留下的临时工作目录，只增不减。2026-09-10 实测攒到 11109 个（当天只占 65 个），拖慢同盘一切文件系统遍历。board-gc `--apply` 调 `planOrphanGc` 按时效回收；相关进程（本身份）cwd 没核清或目录正在用则保留。运行态，不进 git |
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
+| C | ~/.config/cursor | Cursor 原生登录态；ACP 只使用现有认证，不公开或随仓复制 |
+| C | ~/.grok/auth.json | Grok Build 订阅凭据与续期状态，禁进 git、禁打印 |
+| D | ~/.local/share | 原生 Cursor/Devin CLI 版本、会话与凭据根；按产品管理，不整目录镜像 |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
 | A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
+| A | ~/.dao/ephemeral-lifecycle | 短命执行体容量快照（#1174）。指挥官每轮追加 `samples.ndjson`（cpuBusy/内存/在途/会话/树/交卷残留/清树失败）。不进 git，换机重生成 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
 | D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
 | D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
+| D | ~/.dao/issue-gateway | #792 Issue 写入网关的幂等账与审计（`idempotency/` + `audit/audit.ndjson`）。运行时自建，不进 git，换机不拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
+| D | ~/.dao/execution | #1174 统一任务元数据、ACP 状态/进程租约/交互、用量事件与升级维护旗标。只迁移经过核对的记录，不把活进程状态当作可复制配置 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
-| A | ~/.dao/test-impact | 只跑受影响的测试用的影响地图（2026-09-06）。**没有建图动作**——`dao-check` 跑测试时顺手采依赖写 `map.json`，下次跑就用它裁剪；不在图里的一律照跑。**本机派生数据，不进 git**——提交它就多一个没法人工合并的并发冲突点（判例：memory 仓 MEMORY.md）。删了不用管，跑一次就自己长回来 |
+| D | ~/.dao/control-plane.json | 控制面闸探测落点（#948 / #1165）。写腿：`scripts/mirasim-ws-probe.mjs` 每轮把握手三态写成 `{reachable:true\|false}`（没查成不写 reachable）。读腿：`scripts/lib/control-plane-gate.mjs`。文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。现役挂载面是 git pre-push 与 land.mjs，不只 Claude/Cursor hook。运行态，换机不拷 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
 | A | ~/.dao/preflight | 派前探一针审计（#842）。`dao.mjs preflight` / 派工前探针逐条追加 `<YYYY-MM-DD>.ndjson`（ts,target,state,code,ms,why,dispatchId）。不进 git，换机重生成 |
 | A | ~/.dao/hub-chat | 总控群对话消费记录（#852）。feishu-triage hub 对话逐条追加 `<YYYY-MM-DD>.ndjson`（updatedAt,chatId,from,question,intent,reply,landedTo）。不进 git，换机重生成 |
 | A | ~/.dao/broadcast-digest.json | 飞书日报队列（#1029/#1052）。心跳/发布/熔断先入队，换日合成一张 Card 2.0 日报卡发到总控群。运行时自建，不进 git，换机重生成 |
 | A | ~/.dao/gh-events.json | GitHub 事件桥状态（#956）。`gh-event-bridge.mjs` 每 30 秒写心跳、每 10 分钟记一次自证 ping 的往返；server-check (23) 只读它判「桥还在守着」还是「悄悄停了」。运行时自建，不进 git，换机不拷 |
-| A | ~/.dao/provider-health.json | 网关健康表（#842 F15 消费端读）。内容由 `ai-gateway-stack` 周期探针写、本仓只读判可用性；契约见 dispatch skill。不进 git |
+| A | ~/.dao/provider-health.json | 网关健康表（#842 消费 / #967 写入）。`scripts/gw-remote-probe.mjs` 周期探针写、派工只读判可用性；契约见 dispatch skill。不进 git |
+| D | ~/bin/gw-remote-probe.mjs | #967 收进仓前的本机落点（同目录依赖 `~/bin/probe-health.mjs`）。仓内真相源 `scripts/gw-remote-probe.mjs`；systemd ExecStart 走仓内脚本。禁拷、不进 git |
+| D | ~/bin/probe-health.mjs | #967 收进仓前与探针同目录的健康表纯函数。仓内真相源 `scripts/lib/probe-health.mjs`。禁拷、不进 git |
+| D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）；mirasim-ws-probe 探活状态（~/.local/state/mirasim-ws-probe.json，#1151，仓内脚本 scripts/mirasim-ws-probe.mjs）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
-| D | ~/.dao/progress-watch.json | 盘面推进量看门狗账本（#1004）。`progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
+| D | ~/.dao/progress-watch.json | 盘面推进量账本（#1004）。指挥官 `cmdAct` 每轮调 `progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
+| D | ~/.dao/board-watch.json | 看板 v0 阶段超时告警账本（#818）。`board-watch.mjs` 写「主体:阶段」指纹，同一阶段不重报到总控群。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
+| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。`~/.codex/skills` 见 ignore.md 历史条。本仓只读、不写装法 |
+| E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
+| E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
+| E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | E | ~/.mirasim/run | 归 `ai-gateway-stack`。mirasim-server 回环 ws 的会话令牌（`local-<端口>.token`，服务起停即换）。`scripts/lib/mirasim-runtime.mjs` 只读它拼连接、不打印、不进 git；本仓不写装法 |
+| E | ~/mirasim-server | 归 `ai-gateway-stack`。官方 mirasim-server 安装根（`<版>/server.cjs`）。本仓不写装法 |
+| E | ~/mirasim-server/current | 归 `ai-gateway-stack`（先例 `~/.mirasim`）。服务端 `current` 软链指向在役版本目录；`current/VERSION` 是「本机在役版本」的唯一真相源——`scripts/lib/mirasim-runtime.mjs` 的 `installedVersion()` 只读这一份，升级器（`mirasim-managed-update`）自己维护它。本仓 unit 只引用这一层，不钉具体版本号（#1151；手打版本号会把生产从 current 拉回去）。本仓只读、不写装法 |
+| E | ~/mirasim-work | 归 `ai-gateway-stack`。mirasim-server `--workdir`（服务自己的工作区，不是派工树 `~/mirasim-worktrees`）。本仓不写装法 |
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |

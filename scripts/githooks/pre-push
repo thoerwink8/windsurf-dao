@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# git pre-push：控制面不可达时拦推送（#1165）。
+# 现役工人走 git push，不靠 Claude/Cursor PreToolUse。
+# 始终跑 hooksPath 自带的实现（$here/../lib），不读工作树里那份。
+# 旧树残留空/旧同名文件会把闸绕开（#1165 审官 P1）。
+set -euo pipefail
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script="$here/../lib/control-plane-pre-push.mjs"
+if [ ! -f "$script" ]; then
+  echo "控制面 pre-push 脚本不在稳定来源——没查成，不拦" >&2
+  exit 0
+fi
+exec node "$script"

@@ -146,6 +146,56 @@ describe('一 PR 一审官闸', () => {
     assert.ok(miss.error !== empty.error);
   });
 
+  it('#1122 审官位跨厂例外：凭死因成立，正常完工仍拒，不许跳级', async () => {
+    const S = await S_LOAD;
+    const routing = S.loadRouting();
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+    // 上一位 luna 死于满载 → 下一顺位是同厂 sol；跨厂 kimi 仍是跳级。
+    const skip = S.assertReviewerSeat({
+      reviewerId: 'kimi-k3', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'grok-4.6' },
+    });
+    assert.equal(skip.ok, false, JSON.stringify(skip));
+    assert.match(skip.error, /不许跳级点名/);
+
+    const sol = S.assertReviewerSeat({
+      reviewerId: 'gpt-5.6-sol', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-luna', deadError: DEAD, workerId: 'grok-4.6' },
+    });
+    assert.equal(sol.ok, true, JSON.stringify(sol));
+    assert.equal(sol.switched, true);
+
+    // 上一位 sol 也死于满载 → 下一档跨厂 kimi，且不是工人那一厂。
+    const kimi = S.assertReviewerSeat({
+      reviewerId: 'kimi-k3', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, workerId: 'grok-4.6' },
+    });
+    assert.equal(kimi.ok, true, JSON.stringify(kimi));
+    assert.equal(kimi.crossVendor, true);
+    assert.equal(kimi.failover, 'capacity');
+
+    // 正常完工（error 为空）→ 跨厂仍拒，例外口不是常开。
+    const alive = S.assertReviewerSeat({
+      reviewerId: 'kimi-k3', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '', workerId: 'grok-4.6' },
+    });
+    assert.equal(alive.ok, false, JSON.stringify(alive));
+    assert.equal(alive.unscanned, true);
+
+    // 死因不是满载（判红）→ 仍拒。
+    const red = S.assertReviewerSeat({
+      reviewerId: 'kimi-k3', routing,
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: '审官判红', workerId: 'grok-4.6' },
+    });
+    assert.equal(red.ok, false, JSON.stringify(red));
+    assert.match(red.error, /不是满载/);
+
+    // 不交凭证 → 仍拒（老规矩）。
+    const none = S.assertReviewerSeat({ reviewerId: 'kimi-k3', routing });
+    assert.equal(none.ok, false, JSON.stringify(none));
+    assert.match(none.error, /不许换厂/);
+  });
+
   it('结算后再造：报帅且 create/换厂都是 false；没查成 ≠ 未结算', async () => {
     const S = await S_LOAD;
     const miss = S.planAfterSettledReviewer({});
@@ -181,15 +231,14 @@ describe('一 PR 一审官闸', () => {
 
   it('worker-done 失败路径不再调 nextReviewerAfter；create 先过闸', () => {
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    const wdFn = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
-    const createFn = (daoSrc.match(/function cmdReviewerCreate\([\s\S]*?\nfunction /) || [''])[0];
+    const wdFn = (daoSrc.match(/function cmdWorkerDoneMirasim\([\s\S]*?\nasync function cmdStartMirasim/) || [''])[0];
+    const createFn = (daoSrc.match(/function cmdReviewerCreateMirasim\([\s\S]*?\nasync function cmdWorkerDoneMirasim/) || [''])[0];
     assert.ok(wdFn && !/nextReviewerAfter/.test(wdFn), 'worker-done 仍换厂  →  ' + wdFn.slice(0, 200));
-    assert.ok(/planWorkerDoneAfterSpawnFail/.test(wdFn) || /finishWorkerDoneSpawnFail/.test(wdFn),
+    assert.ok(/refuseIfSameVendor/.test(wdFn) || /fail\(/.test(wdFn),
       'worker-done 失败没停手报');
-    assert.ok(/gateReviewerCreate/.test(createFn) && /assertReviewerSeat/.test(createFn),
-      'reviewer-create 没过一审官闸');
-    const gateAt = createFn.indexOf('gateReviewerCreate');
-    const worktreeAt = createFn.indexOf('argsWorktreeCreate');
-    assert.ok(gateAt >= 0 && worktreeAt > gateAt, '闸必须在 worktree create 之前');
+    assert.ok(/assertReviewerSeat/.test(createFn) || /refuseIfSameVendor/.test(createFn),
+      'reviewer-create 没过同厂/审官位闸');
+    assert.match(createFn, /planReviewerOnCapacityDeath/,
+      'reviewer-create 没按死因取下一位——闸口放行了，生产路径仍拿标签上的死人去起');
   });
 });

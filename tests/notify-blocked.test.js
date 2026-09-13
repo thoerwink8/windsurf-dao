@@ -126,7 +126,10 @@ describe('notify-blocked', () => {
       "console.log(JSON.stringify(isPr\n" +
       "  ? [{ number: 501, title: '等它的一张 PR', body: '前置：Blocked-by: #497' }]\n" +
       "  : [{ number: 502, title: '等它的一张 issue', body: 'Blocked-by: #497 的事' }]));\n");
-    const mergedRes = runNotify(497, { gh: process.execPath, ghArgs: [splitGh] });
+    const mergedRes = runNotify(497, {
+      gh: process.execPath, ghArgs: [splitGh],
+      commentIssue: () => ({ ok: true }),
+    });
     await t.test('issue 面与 PR 面被合并（#544）', () => {
       assert.ok(mergedRes.ok === true && mergedRes.waiters.map(w => w.number).join(",") === "501,502", 'issue 面与 PR 面被合并（#544）  →  ' + JSON.stringify(mergedRes));
     });

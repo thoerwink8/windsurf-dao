@@ -1,6 +1,6 @@
 // scripts/lib/provider-health.mjs —— 消费健康表 + 熔断表（#842 F15 插线；#843 熔断）
 //
-// 健康表 ~/.dao/provider-health.json（Contabo 上由 ai-gateway-stack 探针写，本仓只读）：
+// 健康表 ~/.dao/provider-health.json（本仓 scripts/gw-remote-probe.mjs 周期写，派工只读）：
 //   { updatedAt, intervalMin, targets: { "<key>": { state:green|red|unscanned, code, ms, ... } } }
 //   过期（now-updatedAt > 2×intervalMin）或缺失 → unknown：**不拦**，但选型输出注明「健康表没查成」。
 //   红 → availability:red：**不直接拦**，只把它排到后面先探绿的（红可能已恢复，照探；消歧记录）。
@@ -38,6 +38,16 @@ function landingOf(entry) {
 function idOf(entry) {
   if (entry && typeof entry === 'object') return entry.id != null ? String(entry.id) : null;
   return entry != null ? String(entry) : null;
+}
+
+/**
+ * 模型条目 → 健康表/熔断表用的探针 key（`gw:<组>/<模型>` / `direct:codex@pqapi/responses`）。
+ * 与 availabilityFor 内部用的是同一个函数，导出是为了让**熔断**也能按同一个 key 归口到模型
+ * （commander 的模型准入闸原先只收健康红，熔断靠 profile 未验间接挡住——归口后会漏）。
+ * 没有可探落地（如 profile id 这类条目）返回 null：不猜，调用方按「这条不归探针管」处理。
+ */
+export function probeTargetForModel(entry) {
+  return probeTargetOf(landingOf(entry));
 }
 
 /** 读健康表。缺失 / 坏 JSON / 过期 → unknown（不拦，注明）。 */

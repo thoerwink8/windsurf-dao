@@ -121,12 +121,12 @@ function commentFromShow(json) {
   return wt && wt.comment != null ? String(wt.comment) : '';
 }
 
-export function mutateWorktreeComment({ worktreeId, mutate, runOrca } = {}) {
+export function mutateWorktreeComment({ worktreeId, mutate, exec } = {}) {
   if (!worktreeId) return { ok: false, action: 'warn', reason: 'mutateWorktreeComment 没给 worktreeId' };
   if (typeof mutate !== 'function') return { ok: false, action: 'warn', reason: 'mutateWorktreeComment 没给 mutate' };
-  if (typeof runOrca !== 'function') return { ok: false, action: 'warn', reason: 'mutateWorktreeComment 没给 runOrca' };
+  if (typeof exec !== 'function') return { ok: false, action: 'warn', reason: 'mutateWorktreeComment 没给 exec' };
 
-  const shown = runOrca(['worktree', 'show', '--worktree', worktreeId, '--json']);
+  const shown = exec(['worktree', 'show', '--worktree', worktreeId, '--json']);
   if (!shown || !shown.ok) {
     const reason = `worktree show 失败，不改 comment：${shown?.error || '无详情'}`;
     console.error(`[dao] ${reason}`);
@@ -137,13 +137,13 @@ export function mutateWorktreeComment({ worktreeId, mutate, runOrca } = {}) {
   if (next === current) {
     return { ok: true, action: 'noop', worktreeId, comment: current };
   }
-  const set = runOrca(['worktree', 'set', '--worktree', worktreeId, '--comment', next, '--json']);
+  const set = exec(['worktree', 'set', '--worktree', worktreeId, '--comment', next, '--json']);
   if (!set || !set.ok) {
     const reason = `worktree set --comment 失败：${set?.error || '无详情'}`;
     console.error(`[dao] ${reason}`);
     return { ok: false, action: 'warn', reason, from: current, to: next };
   }
-  const shown2 = runOrca(['worktree', 'show', '--worktree', worktreeId, '--json']);
+  const shown2 = exec(['worktree', 'show', '--worktree', worktreeId, '--json']);
   const actual = commentFromShow(shown2?.json);
   if (actual !== next) {
     const reason = `worktree comment 回读不是所设（投递成功≠送达）：想要「${next}」，实际「${actual || '(空)'}」`;
@@ -153,7 +153,7 @@ export function mutateWorktreeComment({ worktreeId, mutate, runOrca } = {}) {
   return { ok: true, action: 'updated', worktreeId, from: current, comment: next };
 }
 
-export function afterDispatchComment({ name, issue, worktreeId, runOrca } = {}) {
+export function afterDispatchComment({ name, issue, worktreeId, exec } = {}) {
   let tickets = ticketsFromName(name);
   const t = normalizeTicket(issue);
   if (t && !tickets.includes(t)) tickets = [...tickets, t];
@@ -162,18 +162,18 @@ export function afterDispatchComment({ name, issue, worktreeId, runOrca } = {}) 
   }
   const r = mutateWorktreeComment({
     worktreeId,
-    runOrca,
+    exec,
     mutate: (comment) => tickets.reduce((acc, id) => addTicket(acc, id), comment),
   });
   return { ...r, tickets };
 }
 
-export function applyRemoveTicket({ id, worktreeId, runOrca } = {}) {
+export function applyRemoveTicket({ id, worktreeId, exec } = {}) {
   const t = normalizeTicket(id);
   if (!t) return { ok: false, action: 'warn', reason: 'applyRemoveTicket 没给合法单号' };
   return mutateWorktreeComment({
     worktreeId,
-    runOrca,
+    exec,
     mutate: (comment) => removeTicket(comment, t),
   });
 }
@@ -288,11 +288,11 @@ export function collectInFlightTickets(worktrees, selfRepo) {
   return { ok: true, unscanned: false, tickets, scanned };
 }
 
-export function worktreesFromPs(runOrca) {
-  if (typeof runOrca !== 'function') {
-    return { ok: false, unscanned: true, error: '没给 runOrca，盘面没查成' };
+export function worktreesFromPs(exec) {
+  if (typeof exec !== 'function') {
+    return { ok: false, unscanned: true, error: '没给 exec，盘面没查成' };
   }
-  const listed = runOrca(['worktree', 'ps', '--json']);
+  const listed = exec(['worktree', 'ps', '--json']);
   if (!listed || !listed.ok) {
     return { ok: false, unscanned: true, error: `worktree ps 失败：${listed?.error || '无详情'}` };
   }
@@ -326,7 +326,7 @@ export function rewriteMasterPrefix(prefix) {
  * 全量重写 master 卡定界区。过期「见终端标题」指针改掉，其余前缀保留。没查成不写。
  * dryRun 只算不写。挂点在 dao.mjs / flow.mjs，本函数不自己找挂点。
  */
-export function syncMasterTicketZone({ worktrees, selfRepo, repoId, repoName, pathHint, runOrca, dryRun } = {}) {
+export function syncMasterTicketZone({ worktrees, selfRepo, repoId, repoName, pathHint, exec, dryRun } = {}) {
   if (!Array.isArray(worktrees)) {
     return warnMaster('worktrees 不是数组，没查成，不定界区', { unscanned: true });
   }
@@ -359,15 +359,15 @@ export function syncMasterTicketZone({ worktrees, selfRepo, repoId, repoName, pa
       scanned: collected.scanned,
     };
   }
-  if (typeof runOrca !== 'function') {
-    return warnMaster('syncMasterTicketZone 没给 runOrca', {
+  if (typeof exec !== 'function') {
+    return warnMaster('syncMasterTicketZone 没给 exec', {
       tickets: collected.tickets,
       worktreeId: master.worktreeId,
     });
   }
   const r = mutateWorktreeComment({
     worktreeId: master.worktreeId,
-    runOrca,
+    exec,
     mutate: (comment) => {
       const { prefix } = parseTicketZone(comment);
       return formatTitle(rewriteMasterPrefix(prefix), collected.tickets);

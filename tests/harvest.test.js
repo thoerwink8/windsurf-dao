@@ -282,3 +282,175 @@ describe('harvest 回流闸', () => {
     });
   });
 });
+
+// #1168：回流提示层必须钉在现役士兵书上。退役 orca 书即使仍有「回流自问」，
+// 也不是提示层真相源——工人读的是 soldier-book-mirasim.md。
+// 检查器自持正则，不 import 被检查对象的解析逻辑。
+const REPO = path.resolve(__dirname, '..');
+const ACTIVE_SOLDIER = 'host/skills/dispatch/templates/soldier-book-mirasim.md';
+const RETIRED_SOLDIER = 'host/skills/dispatch/templates/soldier-book.md';
+const STANDARD = 'host/skills/dispatch/review-standard.md';
+const DESIGN = 'docs/decisions/2026-09-04-harvest-reflow.md';
+const HARVEST_CHECK = 'scripts/lib/harvest-check.mjs';
+
+const OK_SOLDIER = '6. 回流自问：有则写 `## 回流` 段';
+const OK_STANDARD = '10. 回流自问：看 `## 回流` 段';
+const OK_DESIGN = '1. **提示层**：`host/skills/dispatch/templates/soldier-book-mirasim.md` 交卷自查「回流自问」';
+const OK_HC = '// 现役士兵书 host/skills/dispatch/templates/soldier-book-mirasim.md 交卷自查「回流自问」';
+
+function readRel(rel) {
+  const p = path.join(REPO, rel);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+
+function hintLine(text) {
+  const m = String(text || '').match(/提示层[^\n]*/);
+  return m ? m[0] : '';
+}
+
+/** 三态：unscanned（没查成）/ red（扫完发现缺条或指错书）/ ok。 */
+function inspectHintLayer(files) {
+  if (!files || typeof files !== 'object') return { kind: 'unscanned', fail: '没给 files（没查成）' };
+  const keys = ['soldier', 'standard', 'design', 'harvestCheck'];
+  const missing = keys.filter((k) => !(k in files));
+  if (missing.length) return { kind: 'unscanned', fail: `缺落点 ${missing.join(' ')}（没查成）` };
+  const unreadable = keys.filter((k) => files[k] == null);
+  if (unreadable.length) {
+    return { kind: 'unscanned', fail: `读不到落点：${unreadable.join(' ')}（没查成）` };
+  }
+
+  const fails = [];
+  if (!/回流自问/.test(files.soldier)) fails.push('现役士兵书没有「回流自问」');
+  if (!/## 回流/.test(files.soldier)) fails.push('现役士兵书没有「## 回流」段模板');
+
+  if (!/^\s{0,3}\d+[.)]\s+[^\n]*回流/m.test(files.standard)) {
+    fails.push('审官必核清单没有可打勾的回流核');
+  }
+  if (!/## 回流/.test(files.standard)) {
+    fails.push('审官标准回流核没有点名「## 回流」段');
+  }
+
+  const hint = hintLine(files.design);
+  if (!/soldier-book-mirasim\.md/.test(hint)) {
+    fails.push('设计页提示层没有指向 soldier-book-mirasim.md');
+  }
+  if (/templates\/soldier-book\.md/.test(hint)) {
+    fails.push('设计页提示层仍把退役 soldier-book.md 当真相源');
+  }
+  if (/交卷自查第\s*5\s*条/.test(files.design)) {
+    fails.push('设计页仍写「交卷自查第 5 条」——现役书第 5 条是机制判定');
+  }
+
+  if (!/soldier-book-mirasim\.md/.test(files.harvestCheck)) {
+    fails.push('harvest-check 注释没有指向 soldier-book-mirasim.md');
+  }
+  if (/士兵书自查第\s*5\s*条/.test(files.harvestCheck)) {
+    fails.push('harvest-check 仍写「士兵书自查第 5 条」——现役书第 5 条是机制判定');
+  }
+  if (/\/soldier-book\.md/.test(files.harvestCheck)) {
+    fails.push('harvest-check 仍引用退役 soldier-book.md 当提示层');
+  }
+
+  if (fails.length) return { kind: 'red', fail: fails.join('；'), scanned: keys.length };
+  return { kind: 'ok', scanned: keys.length };
+}
+
+function liveFiles() {
+  return {
+    soldier: readRel(ACTIVE_SOLDIER),
+    standard: readRel(STANDARD),
+    design: readRel(DESIGN),
+    harvestCheck: readRel(HARVEST_CHECK),
+  };
+}
+
+describe('#1168 回流提示层钉在现役士兵书', () => {
+  it('① 夹具：没查成 / 缺条判红 / 指退役书判红 / 齐了才绿', () => {
+    const ok = {
+      soldier: OK_SOLDIER,
+      standard: OK_STANDARD,
+      design: OK_DESIGN,
+      harvestCheck: OK_HC,
+    };
+
+    assert.equal(inspectHintLayer().kind, 'unscanned', '不给 files 必须没查成');
+    assert.equal(inspectHintLayer({}).kind, 'unscanned', '缺落点必须没查成');
+
+    const unreadable = inspectHintLayer({
+      soldier: null, standard: OK_STANDARD, design: OK_DESIGN, harvestCheck: OK_HC,
+    });
+    assert.equal(unreadable.kind, 'unscanned', '文件读不到必须没查成  →  ' + JSON.stringify(unreadable));
+    assert.match(String(unreadable.fail), /soldier/, '没查成也要点名是哪份读不到');
+
+    const missing = inspectHintLayer({ ...ok, soldier: '交卷前自查没有这件事。' });
+    assert.equal(missing.kind, 'red', '现役书缺回流自问必须红  →  ' + JSON.stringify(missing));
+    assert.match(String(missing.fail), /回流自问/, '红证据要点名缺的是回流自问');
+    assert.notEqual(missing.kind, 'unscanned', '「扫完发现缺条」和「没查成」必须分得开');
+
+    const noHeading = inspectHintLayer({ ...ok, soldier: '6. 回流自问：有就写段' });
+    assert.equal(noHeading.kind, 'red', '有回流自问但没有 ## 回流 模板必须红  →  ' + JSON.stringify(noHeading));
+    assert.match(String(noHeading.fail), /## 回流/);
+
+    const noStandard = inspectHintLayer({ ...ok, standard: '1. 审的就是这份代码' });
+    assert.equal(noStandard.kind, 'red', '审官清单没有回流核必须红  →  ' + JSON.stringify(noStandard));
+    assert.match(String(noStandard.fail), /回流核/);
+
+    const retiredHint = inspectHintLayer({
+      ...ok,
+      design: '1. **提示层**：`host/skills/dispatch/templates/soldier-book.md` 交卷自查第 5 条',
+    });
+    assert.equal(retiredHint.kind, 'red', '设计页把退役书当提示层必须红  →  ' + JSON.stringify(retiredHint));
+    assert.match(String(retiredHint.fail), /退役|soldier-book-mirasim/);
+
+    const retiredHc = inspectHintLayer({
+      ...ok,
+      harvestCheck: '// 士兵书自查第 5 条 host/skills/dispatch/templates/soldier-book.md',
+    });
+    assert.equal(retiredHc.kind, 'red', 'harvest-check 钉退役书必须红  →  ' + JSON.stringify(retiredHc));
+    assert.match(String(retiredHc.fail), /退役|soldier-book-mirasim|第 5 条/);
+
+    const green = inspectHintLayer(ok);
+    assert.equal(green.kind, 'ok', '要件齐必须绿  →  ' + JSON.stringify(green));
+    assert.equal(green.scanned, 4, '四处落点都要扫到  →  ' + JSON.stringify(green));
+  });
+
+  it('② 故意从现役书摘掉回流字样 → 当场红', () => {
+    const live = liveFiles();
+    assert.equal(live.soldier != null, true, `读不到 ${ACTIVE_SOLDIER} ⇒ 本条没查成`);
+
+    const stripped = live.soldier.replaceAll('回流', 'XX');
+    assert.equal(stripped.includes('回流'), false, '负控：摘完现役书里不该还剩「回流」');
+
+    const r = inspectHintLayer({ ...live, soldier: stripped });
+    assert.equal(r.kind, 'red', '摘掉回流字样必须红  →  ' + JSON.stringify(r));
+    assert.match(String(r.fail), /回流自问|## 回流/);
+  });
+
+  it('② 续：故意把提示层指针改回退役书 → 当场红', () => {
+    const live = liveFiles();
+    const retiredDesign = live.design.replaceAll(
+      'host/skills/dispatch/templates/soldier-book-mirasim.md',
+      'host/skills/dispatch/templates/soldier-book.md',
+    );
+    const r = inspectHintLayer({ ...live, design: retiredDesign });
+    assert.equal(r.kind, 'red', '提示层改指退役书必须红  →  ' + JSON.stringify(r));
+    assert.match(String(r.fail), /退役|soldier-book-mirasim/);
+  });
+
+  it('③ live：现役士兵书 / 审官标准 / 设计页 / harvest-check 四处齐', () => {
+    assert.match(ACTIVE_SOLDIER, /soldier-book-mirasim\.md$/,
+      '提示层真相源必须是现役 mirasim 书，常量写错就红');
+    assert.notEqual(ACTIVE_SOLDIER, RETIRED_SOLDIER,
+      '打开退役书不再当提示层真相源');
+
+    const files = liveFiles();
+    const r = inspectHintLayer(files);
+    assert.equal(r.kind, 'ok', 'live 必须绿  →  ' + JSON.stringify(r));
+    assert.equal(r.scanned, 4, '四处落点都要扫到  →  ' + JSON.stringify(r));
+
+    const hint = hintLine(files.design);
+    assert.match(hint, /soldier-book-mirasim\.md/, '设计页提示层指向现役书  →  ' + hint);
+    assert.doesNotMatch(hint, /templates\/soldier-book\.md/,
+      '设计页提示层不得指向退役书  →  ' + hint);
+  });
+});

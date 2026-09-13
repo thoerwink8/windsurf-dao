@@ -2,11 +2,12 @@
 //
 // 改这段前必须知道：卡名格式唯一真相源是 assembleCardName（#589）。
 // 消歧门三态必须分得开（#565）：查成且有 label / 查成但没 label / 没查成。
-// label 记「决定」：dispatch 记 issue，帅合并时同步到 PR（#564 + #586）。
+// label 记「决定」：dispatch 打 issue（给人看盘面）；选型真相源是 PR 自己的 label（#1116）。
 
-import { dispatchLabelNames, linkedIssueNumbers } from './worker-done.mjs';
+import { dispatchLabelNames } from './worker-done.mjs';
 import { PENDING_LABEL } from '../pending-disambiguation.mjs';
 import { attributedIssueNumber } from '../close-issue.mjs';
+import { escalationKeyOf } from '../escalation-key.mjs';
 
 /** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
  * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
@@ -180,7 +181,7 @@ function labelNameOf(item) {
  * 接手派单不重挂 model/*（#815/#810）：issue 上已有任意 model/* 就不再加第二条。
  * existingNames 没拿到 → unscanned，不许猜着再挂。
  */
-export function planStampIssueLabels({ existingNames, model, role, reviewer } = {}) {
+export function planStampIssueLabels({ existingNames, model, role, reviewer, preserveType = false } = {}) {
   if (existingNames == null || !Array.isArray(existingNames)) {
     return { ok: false, unscanned: true, error: 'issue 现有 label 没查成（没查成，不许再挂）' };
   }
@@ -190,6 +191,10 @@ export function planStampIssueLabels({ existingNames, model, role, reviewer } = 
   const add = [];
   const skipped = [];
   for (const name of names) {
+    if (preserveType && name.startsWith('type/') && existing.some(n => n.startsWith('type/'))) {
+      skipped.push({ name, reason: 'keep-existing-type' });
+      continue;
+    }
     if (existing.includes(name)) {
       skipped.push({ name, reason: 'already' });
       continue;
@@ -203,8 +208,12 @@ export function planStampIssueLabels({ existingNames, model, role, reviewer } = 
   return { ok: true, names, add, skipped, existingModel };
 }
 
-/** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
-export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
+/** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。
+ *  写走 issue-gateway（writeIssue）；runGh 只用于读 labels / 建仓库级 label。 */
+export function stampIssueLabels({
+  issue, model, role, reviewer, runGh, writeIssue, preserveType = false,
+  repo = 'thoerwink8/windsurf-dao', host = 'dispatch',
+} = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) {
     return { ok: false, skipped: true, issue: n, error: '没给合法 issue 号，label 不打' };
@@ -219,11 +228,12 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   let existingNames = [];
   try {
     const parsed = JSON.parse(view.out);
-    existingNames = Array.isArray(parsed?.labels) ? parsed.labels : [];
+    if (!Array.isArray(parsed?.labels)) return { ok: false, issue: n, unscanned: true, error: '现有标签列表未返回，不猜测任务类型' };
+    existingNames = parsed.labels;
   } catch {
     return { ok: false, issue: n, unscanned: true, error: `gh 读 issue #${n} labels 返回非 JSON——没查成，不许再挂` };
   }
-  const planned = planStampIssueLabels({ existingNames, model, role, reviewer });
+  const planned = planStampIssueLabels({ existingNames, model, role, reviewer, preserveType });
   if (!planned.ok) return { ...planned, issue: n };
   if (!planned.add.length) {
     return {
@@ -233,66 +243,35 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   }
   const ensured = ensureRepoLabels({ names: planned.add, runGh });
   if (!ensured.ok) return { ok: false, issue: n, unscanned: ensured.unscanned === true, error: ensured.error };
-  const add = [];
-  for (const name of planned.add) add.push('--add-label', name);
-  const r = runGh(['issue', 'edit', n, ...add]);
-  if (!r.ok) return { ok: false, issue: n, error: `issue #${n} 打 label 失败：${r.error}` };
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, issue: n, unscanned: true, error: 'stampIssueLabels 没拿到 issue-gateway 写入器——label 不打' };
+  }
+  const r = writeIssue({
+    action: 'issue_edit_labels',
+    repo,
+    issue: n,
+    add: planned.add,
+    host,
+    idempotency_key: escalationKeyOf(`dispatch:stamp-labels:${n}:${planned.add.join(',')}`),
+  });
+  if (!r || !r.ok) {
+    return { ok: false, issue: n, error: `issue-gateway 打 label 失败：${r && r.error ? r.error : '没查成'}` };
+  }
   return {
     ok: true, issue: n, names: planned.names, add: planned.add, skipped: planned.skipped,
     created: ensured.created, labels: planned.add,
   };
 }
 
-/** 合并侧（帅合并时跑）：PR 正文署名的 issue 上取 model/* type/* reviewer/* label，抄到 PR。
- * PR 上没署名 issue / 署名 issue 缺 model/* 或 type/* / gh 没查成——三种都要说清楚，不许静默。
- * reviewer/* 有则抄、没有不挡；但只有 reviewer/*、缺校准标签，不许 pr edit。 */
-export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
-  const n = String(pr ?? '').trim();
-  if (!n) return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没给 PR 号' };
-  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没拿到 gh 执行器' };
-  const view = runGh(['pr', 'view', n, '--json', 'title,body']);
-  if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
-  let meta;
-  try { meta = JSON.parse(view.out); }
-  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
-  const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
-  if (!refs.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 正文/标题里没有「署名 issue #N」/关单词署名单号——label 无从同步，需人工补` };
-  }
-  const from = [];
-  for (const issueNum of refs) {
-    const iv = runGh(['issue', 'view', String(issueNum), '--json', 'labels']);
-    if (!iv.ok) return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 失败：${iv.error}` };
-    let labels = [];
-    try {
-      const parsed = JSON.parse(iv.out);
-      labels = Array.isArray(parsed?.labels) ? parsed.labels : [];
-    } catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
-    const names = labels
-      .map(l => (l && typeof l === 'object' ? l.name : l))
-      .filter(name => typeof name === 'string' && /^(model\/|type\/|reviewer\/)/.test(name));
-    if (names.length) from.push({ issue: issueNum, labels: names });
-  }
-  const want = [...new Set(from.flatMap(f => f.labels))];
-  const hasModel = want.some(name => name.startsWith('model/'));
-  const hasType = want.some(name => name.startsWith('type/'));
-  if (!hasModel || !hasType) {
-    const missing = [!hasModel && 'model/*', !hasType && 'type/*'].filter(Boolean).join(' 和 ');
-    return {
-      ok: false,
-      unscanned: false,
-      error: `PR #${n} 的署名 issue 上缺 ${missing} label（派工漏打？）——需人工补，不许只靠 reviewer/* 过关`,
-      refs,
-      labels: want,
-    };
-  }
-  const ensured = ensureRepoLabels({ names: want, runGh });
-  if (!ensured.ok) return { ok: false, unscanned: ensured.unscanned === true, error: ensured.error };
-  const add = [];
-  for (const name of want) add.push('--add-label', name);
-  const edit = runGh(['pr', 'edit', n, ...add]);
-  if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}` };
-  return { ok: true, pr: n, labels: want, refs, from, created: ensured.created };
+/** #1116：从 issue 抄 label 这条路删了。CLI `pr-sync-labels` 走 stampPrLabelsFromDispatch。
+ * 留下这个名字只为旧 import 当场红，不许当兼容回退。 */
+export function syncPrLabelsFromIssue({ pr } = {}) {
+  const n = String(pr ?? '').trim() || '?';
+  return {
+    ok: false,
+    unscanned: false,
+    error: `syncPrLabelsFromIssue 已删（#1116）：PR #${n} 不许再从 issue 反推 label，需人工打标或走 stampPrLabelsFromDispatch`,
+  };
 }
 
 export function dispatchComment({ mergePolicy, mergeReason, model, reviewer, split, splitReason } = {}) {

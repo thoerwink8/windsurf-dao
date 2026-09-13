@@ -1,0 +1,20 @@
+[
+  {
+    "name": "windsurf-dao",
+    "path": "/srv/projects/windsurf-dao",
+    "gitDir": "/srv/projects/windsurf-dao/.git",
+    "exists": true,
+    "scanned": true,
+    "repoOwnerUid": 1000,
+    "rootOwned": ["/srv/projects/windsurf-dao/.git/objects/pack/pack-evil.pack"]
+  },
+  {
+    "name": "ai-gateway-stack",
+    "path": "/srv/projects/ai-gateway-stack",
+    "gitDir": "/srv/projects/ai-gateway-stack/.git",
+    "exists": true,
+    "scanned": true,
+    "repoOwnerUid": 1000,
+    "rootOwned": []
+  }
+]

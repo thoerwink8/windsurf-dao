@@ -288,6 +288,44 @@ export function judgeHandoffBaseline(facts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 档位：哪一条在哪个时点才算判据（issue #1117）
+// ---------------------------------------------------------------------------
+
+// ① 想防的是「你的测试跑在旧基底上」，而那件事**只在合并那一刻才要紧**。
+// 钉在交卷时刻等于要求「审查期间全世界别动」：2026-09-07 实测 master 一天前进 22 次、
+// 一轮审查约 35 分钟，两者同量级 ⇒ 任一轮审查结束时基底已过期的概率约一半，而且是全体命中
+// （master 每合一次，当时全部 23 张在途 PR 同时失去交卷资格）。这不是会偶尔误报的闸，
+// 是一道**注定满足不了**的闸——审官把活全干完，红在「审查期间世界动了」。
+//
+// 所以 ① 换时点，不换判据：交卷档只报不判，合并档才计入判定。
+// 「只报不判」不等于「不查」——查照样查，结论照样打出来，只是不进 verdict。
+// 静默去掉会让「查了但这个时点不判」和「压根没查」分不开，那正是本仓反复禁的事。
+export const GATES = Object.freeze({
+  handoff: { advisory: ['①'], label: '交卷' },
+  // squash 打到此刻的 master，落后 ≠ 冲突。① 合并档也只报不判（ephemeral-lifecycle）。
+  merge: { advisory: ['①'], label: '合并' },
+});
+
+export const DEFAULT_GATE = 'handoff';
+
+/**
+ * 把判据按档位拆成「进本次判定的」和「只报不判的」。
+ * 不改判据本身——每条的 state 该红还红，只决定它算不算数。
+ * 认不得的档位一律抛：档位写错时静默退回默认档，等于把合并闸悄悄降成交卷闸。
+ */
+export function partitionByGate(items = [], gate = DEFAULT_GATE) {
+  const spec = GATES[gate];
+  if (!spec) throw new Error(`认不得的档位 ${gate}（只有 ${Object.keys(GATES).join(' / ')}）`);
+  const advisory = new Set(spec.advisory);
+  return {
+    gate,
+    label: spec.label,
+    judged: items.filter((i) => !advisory.has(i.id)),
+    advisory: items.filter((i) => advisory.has(i.id)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 汇总
 // ---------------------------------------------------------------------------
 

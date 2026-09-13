@@ -45,8 +45,8 @@ systemctl enable --now dao-gh-events.service
 echo "--- 验白名单（该成功）---"
 runuser -u orca -- sudo -n /usr/bin/systemctl start --no-block dao-close-issues.service
 echo "--- 验白名单没开太宽（该被拒）---"
-if runuser -u orca -- sudo -n /usr/bin/systemctl start --no-block orca-serve.service 2>/dev/null; then
-  echo "白名单开太宽：orca 竟然能起 orca-serve。停手先收窄。" >&2; exit 1
+if runuser -u orca -- sudo -n /usr/bin/systemctl start --no-block ssh.service 2>/dev/null; then
+  echo "白名单开太宽：orca 竟然能起 ssh.service。停手先收窄。" >&2; exit 1
 fi
 echo "  被拒，符合预期"
 

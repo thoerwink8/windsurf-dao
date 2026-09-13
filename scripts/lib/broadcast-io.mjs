@@ -18,6 +18,9 @@ import {
   parseChatListJson,
 } from './broadcast-digest.mjs';
 import { parseMessageId } from './hub-ask.mjs';
+import { cardToPlainText } from './feishu-card-text.mjs';
+
+export { cardToPlainText } from './feishu-card-text.mjs';
 
 function str(v) {
   return v == null ? '' : String(v).trim();
@@ -76,11 +79,17 @@ export function classifyLarkResult(r, { emptyOk = false } = {}) {
     const msg = r.error.code === 'ENOENT' ? 'lark-cli 起不来' : (r.error.message || String(r.error));
     return { ok: false, error: msg };
   }
-  if (r && r.status !== 0 && r.status != null) {
-    return { ok: false, error: str(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 200) };
+  if (!r || r.status !== 0) {
+    return { ok: false, error: str(r?.stderr || r?.stdout || `exit ${r?.status ?? 'unknown'}`).slice(0, 200) };
   }
   const out = str(r && r.stdout);
   if (!out && !emptyOk) return { ok: false, error: 'lark-cli 没回内容' };
+  // CLI transport success does not imply that the API accepted the update.
+  let body;
+  try { body = JSON.parse(out); } catch { /* -q may return a bare message id. */ }
+  if (body?.ok === false || (typeof body?.code === 'number' && body.code !== 0)) {
+    return { ok: false, error: str(body.error?.message || body.error || body.msg || body.message || out).slice(0, 200) };
+  }
   return { ok: true, out };
 }
 
@@ -98,10 +107,18 @@ export function sendCardViaLark({ chatId, card, spawn = spawnSync } = {}) {
     '-q', '.data.message_id',
   ], spawn);
   const cls = classifyLarkResult(r);
-  if (!cls.ok) return { ok: false, error: `没送进群：${cls.error}` };
+  if (!cls.ok) {
+    const original = `没送进群：${cls.error}`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
+  }
   const messageId = parseMessageId(cls.out);
   if (!messageId) {
-    return { ok: false, error: `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）` };
+    const original = `没送进群：没有 message_id（stdout=${cls.out.slice(0, 80)}）`;
+    const fallback = sendTextViaLark({ chatId: hub, text: cardToPlainText(card), spawn });
+    if (fallback.ok) return { ...fallback, degraded: true, error: `${original}；已降级为纯文本` };
+    return { ok: false, error: `${original}；纯文本降级也失败：${fallback.error || '未知错误'}` };
   }
   return { ok: true, messageId };
 }
@@ -203,8 +220,7 @@ export function leaveAbandonedChats(state, {
   return { ok: failed.length === 0, state: next, left, failed, missing };
 }
 
-/**
- * 记一条。换日只把昨天的条目留给日报卡去发，本函数不直接发群。
+/** 记一条。换日只把昨天的条目留给日报卡去发，本函数不直接发群。
  * 入队成功就算回执——真送到飞书是日报卡那一次。
  */
 export function recordBroadcast(text, {

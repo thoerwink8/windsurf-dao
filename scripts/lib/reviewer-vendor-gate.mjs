@@ -72,6 +72,13 @@ export function resolveVendor(modelId, models) {
   const id = String(modelId).trim();
   const reg = providerOf(id, models); // 网关落地：仅诊断 + 家族回落源，不作判据
   const provider = reg.ok ? reg.provider : null;
+  const entry = Array.isArray(models) ? models.find(m => m?.id === id) : null;
+  if (entry?.executionProfileId) {
+    const actual = String(entry.actualModel || '').split('/').at(-1).split('[')[0];
+    const family = vendorFamilyOf(actual);
+    if (!family) return { ok: false, state: 'unscanned', id, provider, registered: true, error: 'execution profile actual model family is unknown' };
+    return { ok: true, id, vendor: family, vendorSource: 'execution-profile', provider, registered: true };
+  }
   const fam = vendorFamilyOf(id);
   if (fam) {
     return { ok: true, id, vendor: fam, vendorSource: 'family', provider, registered: reg.ok };
@@ -238,13 +245,13 @@ export function resolveActualWorkerModel({ dispatchModel, labels } = {}) {
   if (!Array.isArray(labels)) {
     return { ok: false, state: 'unscanned', error: '工人 model/* 标签没查成（不是列表）' };
   }
-  const hits = [...new Set(labels
+  const hits = labels
     .map((x) => {
       if (typeof x === 'string') return x;
       if (x && typeof x.name === 'string') return x.name;
       return '';
     })
-    .filter((name) => name.startsWith('model/') && name.length > 'model/'.length))];
+    .filter((name) => name.startsWith('model/') && name.length > 'model/'.length);
   if (hits.length === 0) {
     return { ok: false, state: 'none', error: '扫完没有唯一 model/*，不许从卡名猜' };
   }

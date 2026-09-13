@@ -47,7 +47,7 @@ describe('marshal-issue-identity', () => {
     });
 
     const admit = fs.readFileSync(path.join(REPO, 'host', 'skills', 'admit-push', 'SKILL.md'), 'utf8');
-    const bare = admit.replaceAll('gh-as.mjs marshal -- issue create', 'gh issue create');
+    const bare = admit.replaceAll('issue-gateway.mjs create', 'gh issue create');
     await t.test('负控样本：admit-push 里真有裸 gh issue create', () => {
       assert.ok(/\bgh issue create\b/.test(bare), '负控样本：admit-push 里真有裸 gh issue create');
     });
@@ -62,6 +62,20 @@ describe('marshal-issue-identity', () => {
       assert.ok(!!bareMut.fail && /裸 gh issue|create/.test(bareMut.fail.join(' ')), 'admit-push 写回裸 gh issue create → 必须报红  →  ' + JSON.stringify(bareMut));
     });
 
+    const forbidLine = checkMarshalIssueIdentity({
+      root: REPO,
+      files: {
+        'host/skills/dispatch/SKILL.md': dispatch,
+        'host/skills/dispatch/templates/soldier-book.md':
+          '写 Issue 只走 `node scripts/issue-gateway.mjs`。不许裸 `gh issue create|comment|close|edit`。\n',
+      },
+      skills: ['host/skills/dispatch/SKILL.md', 'host/skills/dispatch/templates/soldier-book.md'],
+    });
+    await t.test('同一行指向 issue-gateway 的禁止句不算教裸写', () => {
+      assert.equal(forbidLine.fail, undefined, JSON.stringify(forbidLine));
+      assert.match(String(forbidLine.green || ''), /0 处裸写/);
+    });
+
     const noSkills = checkMarshalIssueIdentity({
       root: REPO,
       files: { 'host/skills/dispatch/SKILL.md': dispatch },
@@ -72,11 +86,21 @@ describe('marshal-issue-identity', () => {
     });
 
     const daoSrc = fs.readFileSync(DAO, 'utf8');
-    await t.test('dispatch 打 issue label 走 marshal', () => {
-      assert.ok(/stampIssueLabels\(\{[\s\S]*?runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)/.test(daoSrc), 'dispatch 打 issue label 走 marshal');
+    await t.test('mirasim 给 issue 打 type/ 走 marshal（#1205/#1207），不打 model/reviewer（#1116）', () => {
+      const mira = daoSrc.slice(daoSrc.indexOf('async function cmdDispatchMirasim'), daoSrc.indexOf('async function cmdDispatch('));
+      const i = mira.indexOf('stampIssueLabels(');
+      const stamp = i >= 0 ? mira.slice(i, mira.indexOf(';', i) + 1) : '';
+      assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
+      assert.ok(stamp, '#1205 缺 type/ 时补盘面');
+      assert.match(stamp, /preserveType:\s*true/, '已有 type/ 不覆盖');
+      assert.match(mira, /runGh:\s*ghRunnerForTarget\([^,]+,\s*\{\s*role:\s*'marshal'\s*\}\)/,
+        'mirasim 打 label 身份 marshal（跨仓走 ForTarget）');
+      assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
+      assert.doesNotMatch(stamp, /\bmodel:/, '不把 model 打到 issue');
+      assert.doesNotMatch(stamp, /\breviewer:/, '不把 reviewer 打到 issue');
     });
-    await t.test('amend 发 issue 评论走 marshal', () => {
-      assert.ok(/postIssueComment\(\{\s*issue,\s*body,\s*runGh:\s*ghRunner\(\{\s*role:\s*'marshal'\s*\}\)\s*\}\)/.test(daoSrc), 'amend 发 issue 评论走 marshal');
+    await t.test('amend 发 issue 评论走网关（身份仍固定 marshal）', () => {
+      assert.match(daoSrc, /postIssueComment\(\{[\s\S]*?writeIssue:\s*applyIssueWrite[\s\S]*?host:\s*'dao-amend'/);
     });
   });
 });

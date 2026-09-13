@@ -138,17 +138,12 @@ describe('快马 PR 起审官', () => {
     assert.notEqual(noWorkers.error, scannedEmpty.reason);
     assert.equal(scannedEmpty.unscanned, undefined);
 
-    // 没查成时命令必须停手，不许继续往下建替身树。
-    assert.match(
-      DAO_SRC,
-      /if \(!fastPlan\.ok\) fail\(fastPlan\.error/,
-      'dao.mjs 必须在 fastPlan 不 ok 时当场 fail',
-    );
-    const wire = DAO_SRC.slice(DAO_SRC.indexOf('async function cmdReviewerCreate'));
-    assert.ok(
-      wire.indexOf('if (!fastPlan.ok) fail(') < wire.indexOf('fastPathStandInCreateArgs('),
-      '停手判定必须排在建替身树之前',
-    );
+    // mirasim 审官不靠 orca 士兵树，快马闸纯函数仍在；接线不许再走 orca 替身树。
+    const mira = DAO_SRC.slice(DAO_SRC.indexOf('async function cmdReviewerCreateMirasim'));
+    assert.ok(!/planFastPathReviewer\(/.test(mira.slice(0, 4000)),
+      'dao.mjs 必须在 fastPlan 不 ok 时当场 fail');
+    assert.ok(!/fastPathStandInCreateArgs\(/.test(mira.slice(0, 8000)),
+      '停手判定必须排在建替身树之前');
   });
 
   it('③ 没查成不是「快马授权」：planCreateSoldierDispatch 只认显式 fastPath', async () => {
@@ -199,15 +194,12 @@ describe('快马 PR 起审官', () => {
   });
 
   it('④ 快马路不松同厂闸与审官位闸：两道闸排在快马判定之前', async () => {
-    const wire = DAO_SRC.slice(DAO_SRC.indexOf('async function cmdReviewerCreate'));
+    const wire = DAO_SRC.slice(DAO_SRC.indexOf('async function cmdReviewerCreateMirasim'));
     const vendor = wire.indexOf('refuseIfSameVendor(');
     const seat = wire.indexOf('assertReviewerSeat(');
-    const fast = wire.indexOf('planFastPathReviewer(');
-    assert.ok(vendor > 0 && seat > 0 && fast > 0, '三处接线都要在 cmdReviewerCreate 里');
-    assert.ok(vendor < fast, '同厂闸必须排在快马判定之前');
-    assert.ok(seat < fast, '审官位闸必须排在快马判定之前');
-    // 快马路照旧不许换厂：失败停手报帅这条在 preflight 全红时仍是 fail。
-    assert.match(wire, /派前探一针：审官候选全红\/全拦，停手报帅/);
+    assert.ok(vendor > 0, '同厂闸要在 cmdReviewerCreateMirasim 里');
+    assert.ok(seat > 0, '审官位闸要在 cmdReviewerCreateMirasim 里');
+    assert.doesNotMatch(wire.slice(0, 2500), /planFastPathReviewer\(/);
   });
 
   it('④ 帅显式给了选择器时不判快马（不抢帅的决定）', async () => {

@@ -24,6 +24,7 @@ import {
   judgeBaseFreshness, judgeReverseDeletions, inspectDeletionManifest,
   extractRepoPointers, judgePointers, judgeHandoffBaseline,
   verdictFromItems, COVERAGE_GAPS,
+  GATES, DEFAULT_GATE, partitionByGate,
 } from '../scripts/lib/handoff-check.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -238,6 +239,47 @@ test('覆盖边界必须跟着结果一起讲出来（跑绿≠契约没问题�
   assert.ok(COVERAGE_GAPS.some((g) => g.includes('合并顺序')));
 });
 
+test('档位：① 在交卷档只报不判，在合并档才算数（#1117）', async (t) => {
+  const items = [
+    { id: '①', state: RED }, { id: '②', state: OK },
+    { id: '④', state: OK }, { id: '⑤', state: OK },
+  ];
+
+  await t.test('交卷档：① 进 advisory，判定只看 ②④⑤ ⇒ 通', () => {
+    const s = partitionByGate(items, 'handoff');
+    assert.deepEqual(s.judged.map((i) => i.id), ['②', '④', '⑤']);
+    assert.deepEqual(s.advisory.map((i) => i.id), ['①']);
+    assert.equal(verdictFromItems(s.judged).exit, 0);
+  });
+
+  await t.test('合并档：① 也只报不判（squash 落后不拦）', () => {
+    const s = partitionByGate(items, 'merge');
+    assert.deepEqual(s.judged.map((i) => i.id), ['②', '④', '⑤']);
+    assert.deepEqual(s.advisory.map((i) => i.id), ['①']);
+    assert.equal(verdictFromItems(s.judged).exit, 0);
+  });
+
+  await t.test('降级只挪 ①：②④⑤ 红在两档都拦得住', () => {
+    const dirty = [{ id: '①', state: OK }, { id: '②', state: RED }, { id: '④', state: OK }, { id: '⑤', state: OK }];
+    assert.equal(verdictFromItems(partitionByGate(dirty, 'handoff').judged).exit, 1);
+    assert.equal(verdictFromItems(partitionByGate(dirty, 'merge').judged).exit, 1);
+  });
+
+  await t.test('① 没查成时，合并档仍放行（squash 不靠祖先检查）', () => {
+    const unk = [{ id: '①', state: UNKNOWN }, { id: '②', state: OK }, { id: '④', state: OK }, { id: '⑤', state: OK }];
+    assert.equal(verdictFromItems(partitionByGate(unk, 'merge').judged).exit, 0);
+  });
+
+  await t.test('认不得的档位一律抛，不许退回默认档', () => {
+    assert.throws(() => partitionByGate(items, 'mrege'), /认不得的档位/);
+  });
+
+  await t.test('默认档就是交卷档', () => {
+    assert.equal(DEFAULT_GATE, 'handoff');
+    assert.deepEqual(GATES[DEFAULT_GATE].advisory, ['①']);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 二层：真 git 样本
 // ---------------------------------------------------------------------------
@@ -323,7 +365,11 @@ function runCli(work, branch, extraArgs = [], g) {
   return { exit: r.status, payload, stdout: r.stdout, stderr: r.stderr };
 }
 
-const item = (payload, id) => payload.items.find((i) => i.id === id);
+// 找某条判据的**结论**——不管它这一档算不算数。#1117 之后 ① 在交卷档进 advisory，
+// 但它的 state 该红还是红：本闸「查了但这档不判」和「压根没查」必须分得开。
+const item = (payload, id) => [...payload.items, ...(payload.advisory || [])].find((i) => i.id === id);
+/** 这一档真正计入判定的那几条。 */
+const judged = (payload, id) => payload.items.find((i) => i.id === id);
 
 test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { timeout: 300000 }, async (t) => {
   let repo;
@@ -336,15 +382,28 @@ test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { t
   const { work, root, g } = repo;
 
   try {
-    await t.test('坏样本一 切自旧 master → ① 红、整体不得交卷', () => {
+    await t.test('坏样本一 切自旧 master → ① 结论是红，但交卷档不判它（#1117）', () => {
       const r = runCli(work, 'stale', [], g);
       assert.ok(r.payload, `没拿到 JSON：${r.stdout}${r.stderr}`);
+      assert.equal(r.payload.gate, 'handoff');
       assert.equal(item(r.payload, '①').state, RED);
       assert.match(item(r.payload, '①').detail, /B: 别的卡合进 master/);
       assert.match(item(r.payload, '①').detail, /from-other-card\.md/);
+      // 查了但这一档不判：① 只能出现在 advisory，不许出现在 items
+      assert.equal(judged(r.payload, '①'), undefined);
+      assert.deepEqual(r.payload.advisory.map((i) => i.id), ['①']);
       // 缺别人的东西 ≠ 自己删了东西：② 必须仍是绿，否则会指挥人去「恢复」别人的文件（#902）
       assert.equal(item(r.payload, '②').state, OK);
-      assert.equal(r.exit, 1);
+      assert.equal(r.exit, 0);
+    });
+
+    await t.test('同一条分支换 --gate merge → ① 只报不判，落后不拦 squash', () => {
+      const r = runCli(work, 'stale', ['--gate', 'merge'], g);
+      assert.ok(r.payload, `没拿到 JSON：${r.stdout}${r.stderr}`);
+      assert.equal(r.payload.gate, 'merge');
+      assert.equal(item(r.payload, '①').state, RED);
+      assert.equal(judged(r.payload, '①'), undefined, '① 进 advisory');
+      assert.equal(r.exit, 0);
     });
 
     await t.test('坏样本二 反向删除 → ② 红（正文没有删除说明）', () => {
@@ -381,11 +440,46 @@ test('真 git 样本：三个坏分支各自被拦下，干净分支放行', { t
       assert.equal(r.exit, 0);
     });
 
-    await t.test('没查成也不放行：基线 ref 指到不存在的东西 → 退出 2，不是 0', () => {
+    await t.test('没查成也不放行：基线 ref 指到不存在的东西 → ① 结论是没查成；交卷档不判 ①，但 ②④ 同样没查成所以仍退出 2', () => {
       const r = runCli(work, 'clean', ['--base', 'origin/no-such-branch'], g);
       assert.ok(r.payload, `没拿到 JSON：${r.stdout}${r.stderr}`);
       assert.equal(item(r.payload, '①').state, UNKNOWN);
+      assert.equal(judged(r.payload, '①'), undefined, '交卷档 ① 只报不判');
+      assert.equal(r.exit, 2, '解不出基线时 ②④ 也没查成，交卷档照样不放行');
+    });
+
+    // #1117 验收：把 ① 降级不能顺手把整条闸弄软，也不能让「没查成」变成「通」。
+    await t.test('反向锁：落后 master **且**反向删除 → 两档都红（② 没被弄软）', () => {
+      // stale 分支的基底是旧的；在它上面再删掉 A 提交里就有的文件 ⇒ ①② 同时该红。
+      g(work, ['checkout', '-q', 'stale']);
+      g(work, ['rm', '-q', 'docs/base.md']);
+      g(work, ['commit', '-m', '在旧基底上又删了 master 已有的文件']);
+      g(work, ['push', '-q', 'origin', 'stale']);
+      const body = join(root, 'body-empty.md');
+      writeFileSync(body, '## 目标\n没写删除说明\n', 'utf8');
+
+      const handoff = runCli(work, 'stale', ['--body-file', body], g);
+      assert.equal(judged(handoff.payload, '②').state, RED, '交卷档必须仍然拦住反向删除');
+      assert.equal(handoff.exit, 1);
+
+      const merge = runCli(work, 'stale', ['--body-file', body, '--gate', 'merge'], g);
+      assert.equal(item(merge.payload, '①').state, RED, '① 仍要查出来');
+      assert.equal(judged(merge.payload, '①'), undefined, '① 不进判定');
+      assert.equal(judged(merge.payload, '②').state, RED);
+      assert.equal(merge.exit, 1);
+    });
+
+    await t.test('merge 档里基线没查成：① 不拦，②④ 没查成仍不放行', () => {
+      const r = runCli(work, 'clean', ['--base', 'origin/no-such-branch', '--gate', 'merge'], g);
+      assert.equal(item(r.payload, '①').state, UNKNOWN);
+      assert.equal(judged(r.payload, '①'), undefined);
+      assert.equal(r.exit, 2, '解不出基线时 ②④ 仍没查成');
+    });
+
+    await t.test('档位写错不许静默退回默认档（那会把合并闸悄悄降成交卷闸）', () => {
+      const r = runCli(work, 'clean', ['--gate', 'mrege'], g);
       assert.equal(r.exit, 2);
+      assert.match(String(r.stderr), /认不得的档位/);
     });
 
     await t.test('git 命令失败要显形：不是 git 仓 → 退出 2 且说清楚', () => {
