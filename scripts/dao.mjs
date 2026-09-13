@@ -953,8 +953,12 @@ function cmdPrOpen(args) {
   // 的字段打成标，它既不选审官也不写账（这是 memory `dispatched-label-alone-never-dispatches` 的同一形状：
   // 少一个标，整条链静默卡住，而现场看起来像「已经交出去了」）。
   if (!reviewer) fail('pr-open 要 --reviewer（打标路要求 model 与 reviewer 同时在账上；缺一个就永远「需人工打标」）');
-  if (!knownIds.includes(reviewer)) {
-    fail(`pr-open 的 --reviewer ${reviewer} 不在 registry（不落幽灵账）：可用 ${knownIds.join('、')}`);
+  // 「在 registry 里」不够——还得是**能当审官**的那个（有「审查」职责、没被 reviewerDisabled）。
+  // 同一个模型 id 既可能在工人侧也可能在审官侧，只查 id 存在就放行，落下去的是一条
+  // 「账上写着审官、实际起不来审官会话」的账——那是比缺字段更难查的坏账。
+  const reviewerIds = reviewerPasserIds(routing);
+  if (!reviewerIds.includes(reviewer)) {
+    fail(`pr-open 的 --reviewer ${reviewer} 不是可用审官（要 roles 含「审查」且没被 reviewerDisabled）：可用 ${reviewerIds.join('、')}`);
   }
   // 审查换厂商：这条链落账后审官就是定死的，开 PR 这一刻是唯一能拦住同厂的点。
   refuseIfSameVendor({ workerId: model, reviewerId: reviewer, routing });
