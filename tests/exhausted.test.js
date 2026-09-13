@@ -321,6 +321,41 @@ describe('认输标签随新 head 自动摘除（自主运转的死点 A）', ()
     assert.equal(r.skipped.some((x) => x.why === 'same-head'), true);
   });
 
+  // 2026-09-13 实咬（真 bug，不是设计）：老实现对「这张 PR 在账本里的记录」用
+  // `Object.keys(book).find(v => v.pr === n)` 取**第一条**（插入序最老的），不是最新一条。
+  // PR #1143 账本里有三条（a77faa7c → bc83fcf5 → 6c14ce71），find 永远命中 9-08 那条，
+  // 于是当前 head 6c14ce71 被误判成「head 变了」→ 摘标 → worker-done 又打标又评论 → 再摘。
+  // 每 20 分钟一轮，刷了 136 条同 head 的认输评论，标在「有/无」之间横跳，PR 一步没动。
+  // 旧测试每条只放**一条**记录，所以这个 bug 从没被撞到——这条就是那个盲区的正控。
+  it('账本里同一 PR 攒了多条记录 → 跟**最新**那条比，不是跟最老的比（#1143 刷屏的根因）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const CUR = '6c14ce71c243ebd98d3ada4505c243df4072aea1';
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1143, CUR, [EXHAUSTED])],
+      ledger: {
+        'pushed:1143@a77faa7c11583f97db5a18f6d3d433c136ce7ae2': { at: '2026-09-08T09:31:45.880Z', pr: 1143, head: 'a77faa7c11583f97db5a18f6d3d433c136ce7ae2' },
+        'pushed:1143@bc83fcf5909d51f23b91002be2d0a03725ba5e7e': { at: '2026-09-08T10:32:05.566Z', pr: 1143, head: 'bc83fcf5909d51f23b91002be2d0a03725ba5e7e' },
+        [`pushed:1143@${CUR}`]: { at: '2026-09-11T06:11:29.507Z', pr: 1143, head: CUR },
+      },
+    });
+    assert.equal(r.clears.length, 0, '最新记录就是当前 head ⇒ 该判 same-head，不许摘');
+    assert.equal(r.skipped[0].why, 'same-head');
+  });
+
+  it('多条记录里最新那条确实不是当前 head → 才摘（正控：别把该摘的也一起挡了）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const NEW = 'f'.repeat(40);
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1143, NEW, [EXHAUSTED])],
+      ledger: {
+        'pushed:1143@a77faa7c11583f97db5a18f6d3d433c136ce7ae2': { at: '2026-09-08T09:31:45.880Z', pr: 1143, head: 'a77faa7c11583f97db5a18f6d3d433c136ce7ae2' },
+        'pushed:1143@6c14ce71c243ebd98d3ada4505c243df4072aea1': { at: '2026-09-11T06:11:29.507Z', pr: 1143, head: '6c14ce71c243ebd98d3ada4505c243df4072aea1' },
+      },
+    });
+    assert.equal(r.clears.length, 1);
+    assert.equal(r.clears[0].recordedHead, '6c14ce71c243ebd98d3ada4505c243df4072aea1', '要跟最新那条比，不是最老那条');
+  });
+
   it('「等用户」不摘——人没回话之前机器不该自己动', async () => {
     const { planExhaustedLabelClear } = await EX;
     const r = planExhaustedLabelClear({
