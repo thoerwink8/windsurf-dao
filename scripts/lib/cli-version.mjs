@@ -39,6 +39,12 @@ export const VERSION_PROBES = Object.freeze({
  *  两处各写各的解析就是「同一规则两个实现」，改一处漏一处是这类系统的老坑；
  *  而且 cursor-agent 本来就不在 PATH（走版本目录），拿裸名去 spawn 会 ENOENT——
  *  这正是第一次写的版本犯的错（2026-09-13 实测：六个载体里它是唯一读不成的）。 */
+export function effectivePath({ home = os.homedir(), env = process.env } = {}) {
+  const localBin = join(home, '.local', 'bin');
+  const cur = String(env.PATH || '');
+  return cur.split(':').includes(localBin) ? cur : `${localBin}:${cur}`;
+}
+
 export function resolveProbeBinary(bin, { pathValue = process.env.PATH || '', homeDir = os.homedir(), fs = {} } = {}) {
   const onPath = resolvesOnPath(bin, { pathValue, ...fs });
   if (onPath.ok) return { command: onPath.where, via: 'path' };
@@ -87,18 +93,46 @@ export function classifyVersionDrift({ current = {}, previous = {} } = {}) {
 }
 
 /** 落盘前的状态合并：变了才更新 lastChangedAt，没变保留原值。
- *  这样「这个版本是什么时候上的」永远答得出来，而不用去翻日志。 */
+ *  这样「这个版本是什么时候上的」永远答得出来，而不用去翻日志。
+ *
+ *  **探测失败不许抹掉 last-known**（2026-09-13 审官在 PR #1213 上抓的红 2）。
+ *  原实现是 `if (!rec.version) continue`——一次临时超时就把那条记录整个删掉，
+ *  下一轮读到真版本时只能报 `appeared`，永远报不出 `changed: 0.85.1 → 0.86.0`。
+ *  那正好毁掉本模块存在的理由（「版本变了要说」）。实测形状：
+ *      mergeVersionState({pi:{version:null,error:'超时'}}, {pi:{version:'0.85.1'}})  →  {}
+ *  改法：读不到就**把旧值原样留着**，只把 lastCheckedAt 与本次的 error 记上；
+ *  读得到时照旧比。这样「这一轮没读成」与「这一轮读成了且没变」分得开，
+ *  而恢复之后仍能按旧值判 changed。
+ */
 export function mergeVersionState({ current = {}, previous = {}, now = new Date().toISOString() } = {}) {
   const out = {};
+  const prev = previous && typeof previous === 'object' ? previous : {};
   for (const [bin, rec] of Object.entries(current || {})) {
-    if (!rec || !rec.version) continue;
-    const was = previous && previous[bin];
-    const same = was && String(was.version) === String(rec.version);
+    const was = prev[bin];
+    // 读不到：有旧值就留旧值（并记本次 error），没旧值才留一条「一直是读不到」的账。
+    if (!rec || !rec.version) {
+      const err = rec && rec.error ? String(rec.error) : null;
+      if (was && was.version) {
+        out[bin] = {
+          version: String(was.version),
+          firstSeenAt: was.firstSeenAt || now,
+          lastChangedAt: was.lastChangedAt || now,
+          lastCheckedAt: now,
+          lastReadableAt: was.lastReadableAt || was.lastCheckedAt || null,
+          ...(err ? { error: err } : {}),
+        };
+      } else if (err) {
+        out[bin] = { version: null, error: err, firstSeenAt: (was && was.firstSeenAt) || now, lastCheckedAt: now };
+      }
+      continue;
+    }
+    const same = was && was.version && String(was.version) === String(rec.version);
     out[bin] = {
       version: String(rec.version),
       firstSeenAt: (was && was.firstSeenAt) || now,
       lastChangedAt: same ? (was.lastChangedAt || now) : now,
       lastCheckedAt: now,
+      lastReadableAt: now,
     };
   }
   return out;

@@ -9,8 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseVersionLine, classifyVersionDrift, mergeVersionState, renderDrift,
-  VERSION_PROBES, resolveProbeBinary,
-} from '../scripts/lib/cli-version.mjs';
+  VERSION_PROBES, resolveProbeBinary, effectivePath } from '../scripts/lib/cli-version.mjs';
 
 test('① 各家用各自的读法，不是每个都认 --version', () => {
   // devin 是子命令形态。写死 --version 会在它身上读空，而空会被当成「没读成」——
@@ -112,4 +111,58 @@ test('⑩ 解析不到的可执行文件不许静默当「版本没变」', () =
   });
   assert.equal(d.unreadable.length, 1);
   assert.equal(d.appeared.length, 0, '读不到 ≠ 新出现');
+});
+
+// 红 2（审官在 PR #1213 上抓）：探测失败不许抹掉 last-known
+//
+// 原实现 `if (!rec.version) continue` 会把那条记录整个删掉，一次临时超时就让下一轮
+// 只能报 appeared、永远报不出 changed: 0.85.1 → 0.86.0——正好毁掉本模块存在的理由。
+test('mergeVersionState：本轮读不到 → 保留旧值；恢复后仍按旧值判 changed', () => {
+  const previous = { pi: { version: '0.85.1', firstSeenAt: 'A', lastChangedAt: 'A', lastCheckedAt: 'A' } };
+  // ① 超时那一轮：旧值必须还在
+  const during = mergeVersionState({ current: { pi: { version: null, error: '超时' } }, previous, now: 'B' });
+  assert.equal(during.pi.version, '0.85.1', '一次超时不许把基线抹掉');
+  assert.equal(during.pi.lastChangedAt, 'A', '读不到不是「变了」，不许动 lastChangedAt');
+  assert.equal(during.pi.lastCheckedAt, 'B');
+  assert.equal(during.pi.error, '超时');
+  // ② 恢复后读到新版本：跟**旧值**比，报得出 changed
+  const after = mergeVersionState({ current: { pi: { version: '0.86.0' } }, previous: during, now: 'C' });
+  assert.equal(after.pi.version, '0.86.0');
+  assert.equal(after.pi.lastChangedAt, 'C');
+  assert.equal(after.pi.firstSeenAt, 'A', 'firstSeenAt 要跟着旧值走，不许被重置');
+  const drift = classifyVersionDrift({ current: { pi: { version: '0.86.0' } }, previous: during });
+  assert.deepEqual(drift.changed.map(c => [c.bin, c.was, c.now]), [['pi', '0.85.1', '0.86.0']]);
+  // ③ 从来没有旧值又读不到：留一条「一直是读不到」的账，不是静默消失
+  const never = mergeVersionState({ current: { devin: { version: null, error: '起不来' } }, previous: {}, now: 'D' });
+  assert.equal(never.devin.version, null);
+  assert.equal(never.devin.error, '起不来');
+});
+
+// 红 3（审官在 PR #1213 上抓）：解析用的 PATH 必须与子进程实际拿到的是同一条
+//
+// 原实现先按 `process.env.PATH` 判一次死活、**之后**才往子进程 env 里补 `~/.local/bin`。
+// 于是 `PATH=/usr/bin:/bin` 时 devin 判「本机解析不到」，而它就在随后那条有效 PATH 里——
+// 正是本模块自己要修的那类「shell PATH 与部署 PATH 不一致」。
+test('effectivePath：把 ~/.local/bin 并进来，且不重复', () => {
+  const home = '/home/u';
+  assert.equal(effectivePath({ home, env: { PATH: '/usr/bin:/bin' } }), '/home/u/.local/bin:/usr/bin:/bin');
+  // 已经在里面就不再加一次（重复项会让「按 PATH 判死活」多走一圈，也让人读串）
+  assert.equal(effectivePath({ home, env: { PATH: '/home/u/.local/bin:/usr/bin' } }), '/home/u/.local/bin:/usr/bin');
+  assert.equal(effectivePath({ home, env: {} }), '/home/u/.local/bin:');
+});
+
+test('resolveProbeBinary 按传入的 pathValue 判，不偷偷退回 process.env.PATH', async () => {
+  const { resolveProbeBinary } = await import('../scripts/lib/cli-version.mjs');
+  // 装出来的假 fs：只有那条有效 PATH 的目录里有 devin（fs 按 {exists,access,stat} 包成对象传）
+  const fs = {
+    exists: () => true,
+    access: (p) => { if (p !== '/home/u/.local/bin/devin') { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
+    stat: () => ({ isFile: () => true }),
+  };
+  const hit = resolveProbeBinary('devin', { homeDir: '/home/u', pathValue: '/home/u/.local/bin:/usr/bin:/bin', fs });
+  assert.equal(hit.via, 'path');
+  assert.equal(hit.command, '/home/u/.local/bin/devin');
+  // 同一条 fs、换一条不含它的 PATH → 判不出来（证明判据确实吃入参，不是吃环境）
+  const miss = resolveProbeBinary('devin', { homeDir: '/home/u', pathValue: '/usr/bin:/bin', fs });
+  assert.equal(miss.command, null);
 });

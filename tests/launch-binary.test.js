@@ -9,12 +9,21 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
+import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, countExistingDirs, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
+
+const PATH_ = '/usr/bin:/bin';
+const HOME = '/home/u';
 
 /** 假文件系统：only 集合里的路径算「存在且可执行」，其余一律不可解析。
- *  与真实 fs 同形（exists/access/stat），但不碰磁盘——本套不许依赖跑测试的机器上装了什么。 */
-function fakeFs(only) {
-  const has = (p) => only.includes(p);
+ *  与真实 fs 同形（exists/access/stat），但不碰磁盘——本套不许依赖跑测试的机器上装了什么。
+ *
+ *  PATH_ 里的目录默认算「存在」：真实机器上 `/usr/bin` / `/bin` 就是在的，
+ *  把它们也排除掉会触发「这条 PATH 不属于本机」那条判据（⑫），
+ *  于是每条用例都变 unknown——那是夹具不真，不是判据错了。
+ *  `dirsPresent: false` 显式要那个场景时用。 */
+function fakeFs(only, { dirsPresent = true } = {}) {
+  const pathDirs = PATH_.split(':').filter(Boolean);
+  const has = (p) => only.includes(p) || (dirsPresent && pathDirs.includes(p));
   return {
     exists: has,
     access: (p) => { if (!has(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
@@ -22,8 +31,6 @@ function fakeFs(only) {
   };
 }
 
-const PATH_ = '/usr/bin:/bin';
-const HOME = '/home/u';
 
 test('① 正控：launch 里的命令词本机没有 → 红并点名字段', () => {
   const v = classifyLaunchBinaries({
@@ -170,4 +177,34 @@ test('⑪b 单元里没写 PATH 的文件不参与取值（不拿空串当一条
   assert.equal(pathFromUnitText('Environment="PATH=/a:/b"\n'), '/a:/b');
   // 全仓都没有 PATH → 返回 null（调用方退回本进程），不许编一条出来
   assert.equal(deployPathFromUnits('/x', { readdir: () => ['z.service'], readFile: () => '[Service]\n' }), null);
+});
+
+// ⑫ 异机（CI runner）不许假红（2026-09-13 审官在 PR #1213 上抓的红 1）
+//
+// `resolveProbePath()` 取仓内 systemd 单元写的 `/home/orca/.local/bin:…`——那是**生产**的 PATH。
+// 在 GitHub runner 上那个目录根本不存在，于是 24 处命令词齐刷刷判「解析不到」、
+// `dao-check --all-tests` 稳定退出 1。那不是模板的 24 个错，是**检查环境被混用了**。
+// 判据：这条 PATH 里的目录在本机一个都不存在 ⇒ unknown（没查成），不许判红也不许判绿。
+test('⑫ PATH 目录本机一个都不存在 → unknown（异机不假红）', () => {
+  const prodPath = '/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin';
+  const v = classifyLaunchBinaries({
+    providers: [{ name: 'claude', cli: 'reclaude', launch: 'reclaude --model {model}' }],
+    pathValue: prodPath, homeDir: '/home/runner', pathSource: '仓内部署单元',
+    fs: fakeFs([], { dirsPresent: false }),   // 一个目录都不存在 = 这不是那台机器
+  });
+  assert.equal(v.state, 'unknown', '异机上判红是把「检查环境不对」说成「模板错了」');
+  assert.match(v.detail, /别的机器/);
+  assert.equal(v.broken.length, 0);
+});
+
+test('⑫b 正控：目录在、命令词不在 → 仍然红（别拿异机判据把真错也挡住）', () => {
+  const v = classifyLaunchBinaries({
+    providers: [{ name: 'commandcode', cli: 'cmdc', launch: 'command-code -m {model}' }],
+    pathValue: PATH_, homeDir: HOME, fs: fakeFs(['/usr/bin/cmdc']),   // /usr/bin 在，command-code 不在
+  });
+  assert.equal(v.state, 'red');
+  assert.deepEqual(v.broken.map(b => b.word), ['command-code']);
+  // countExistingDirs 是这条判据的输入，单独钉一下
+  assert.deepEqual(countExistingDirs(PATH_, { exists: (p) => p === '/usr/bin' }), { total: 2, existing: 1 });
+  assert.deepEqual(countExistingDirs('', { exists: () => true }), { total: 0, existing: 0 });
 });

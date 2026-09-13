@@ -46,12 +46,31 @@ export const OFF_PATH_BIN = Object.freeze({
  *      —— 真相源在仓里，不硬编码进本模块，换机时它跟着单元文件一起改；
  *   ③ 退回本进程的 PATH（并标明来源，让红项一眼可辨「是模板错还是我这条 PATH 不对」）。
  *
+ * **但「目标部署 PATH」不等于「本机能验证的文件系统」**（2026-09-13 审官在 PR #1213 上抓的红 1）。
+ * 取到 ② 之后要在**本机**的 fs 上找那些二进制；CI runner 上 `/home/orca/.local/bin` 根本不存在，
+ * 于是 24 处命令词齐刷刷判「解析不到」、`dao-check --all-tests` 稳定退出 1——
+ * 那不是模板的 24 个错误，是**检查环境被混用了**。所以 `classifyLaunchBinaries` 必须能分辨：
+ *
+ *   · 部署 PATH 的**目录本机一个都不存在** → `unknown`（没查成，不是「都对得上」也不是「都错了」）
+ *   · 目录在、命令词解析不到 → `red`（这才是真的模板错）
+ *   · 目录在、命令词都在 → `ok`
+ *
+ * 这条区分正是项目规矩里那句「输出必须能区分『扫完查出 0 条』和『这次没扫到任何样本』」。
+ *
  * @param {object} [env]  取 ① 用
  * @param {object} [io]   { readdir, readFile } 注入点，测试用
  * @param {string} [unitDir] ② 的扫描目录
  */
 export const DEPLOY_PATH_ENV = 'DAO_DEPLOY_PATH';
 export const DEPLOY_UNIT_DIR = 'host/machine/systemd';
+
+/** 一条 PATH 里的目录，本机存在几个。用来判「这条 PATH 是不是属于这台机器」。 */
+export function countExistingDirs(pathValue, { exists = existsSync } = {}) {
+  const dirs = String(pathValue || '').split(':').filter(Boolean);
+  let n = 0;
+  for (const d of dirs) { try { if (exists(d)) n++; } catch { /* 判不了当成不在 */ } }
+  return { total: dirs.length, existing: n };
+}
 
 /** 从一份 systemd 单元文本里取 `Environment=PATH=…` 的值。取不到返回 null（不猜）。 */
 export function pathFromUnitText(text) {
@@ -142,6 +161,20 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
   }
   if (!pathValue) {
     return { state: 'unknown', detail: 'PATH 为空（没查成，不是「都对得上」）', checked: 0, broken: [], excused: [] };
+  }
+
+  // 红 1：先问「这条 PATH 是不是属于这台机器」。一个目录都不存在 ⇒ 我们拿的是**别的机器**的
+  // 部署 PATH（CI runner 上取到仓内单元写的 /home/orca/.local/bin 就是这种形状）。
+  // 那时判红是把「检查环境不对」说成「模板有 24 个错」——按项目规矩，没扫到任何样本
+  // 必须与「扫完查出 0 条」分得开，所以这里给 unknown。
+  const dirs = countExistingDirs(pathValue, fs);
+  if (dirs.total > 0 && dirs.existing === 0) {
+    return {
+      state: 'unknown', checked: 0, broken: [], excused: [],
+      detail: `这条 PATH 里的 ${dirs.total} 个目录在本机一个都不存在——拿的是别的机器的部署 PATH，`
+        + `本机没法验它（没查成，不是「都对得上」也不是「都错了」）。PATH=${pathValue.slice(0, 60)}…`
+        + `${pathSource ? `（来源：${pathSource}）` : ''}`,
+    };
   }
 
   const broken = [];
