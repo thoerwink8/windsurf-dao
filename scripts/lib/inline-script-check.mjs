@@ -289,6 +289,9 @@ export function judgeInlineScriptLine(line, { file = '', lineNo = 0 } = {}) {
   // 「别这么写」不该报红——红得没道理的闸最后一定被关掉（仓规）。只认整行注释，
   // 行尾注释（`echo x # node -e "…$y"`）仍算动手路径，照报。
   if (/^\s*(?:#|\/\/|;;|REM\b)/i.test(text)) return null;
+  // 多行注释的续行（` * …`）：`*` 起头那一格在 .js/.mjs 里是注释正文，在 shell 里
+  // 是通配符词——判据取折中，只认「`* ` 起头」这种几乎只出现在块注释里的形状。
+  if (/^\s*\*(\s|$)/.test(text)) return null;
 
   // 形状 4：gh issue 写动作带 --body（#792 同口径：写动作只走网关，网关只收 --body-file）。
   // 判据收在**正文真会被外壳碰到**的那些形状上（命令替换 / 引号层 / 变量 / 反引号），
@@ -346,6 +349,7 @@ export function judgeInlineScriptLine(line, { file = '', lineNo = 0 } = {}) {
  * 扫一批 {path, text}，出违规名单。
  * files 不是数组 / 长度为 0 → unscanned（「一个都没扫到」不许当绿）。
  */
+
 export function inspectInlineScripts({ files } = {}) {
   if (!Array.isArray(files)) {
     return { ok: false, unscanned: true, error: '没给文件清单（没查成）', violations: [], scanned: 0 };
@@ -373,6 +377,24 @@ export function inspectInlineScripts({ files } = {}) {
 /** 扫哪些文件：仓内动手面（脚本 + 装机文档 + skill），不含派生数据与 node_modules。 */
 export const INLINE_SCAN_SUFFIXES = ['.mjs', '.js', '.sh', '.bash', '.md', '.markdown'];
 export const INLINE_SCAN_SKIP_DIRS = ['node_modules', '.git', '.claude/worktrees', 'docs/observations'];
+
+/**
+ * 这个相对路径是不是**样本**——故意违规的输入，不是动手路径。
+ *
+ * live 扫描必须跳过它们，否则闸给自己报红：`tests/fixtures/**` 里放的就是
+ * 「这条必须被拦下」的样本，`tests/**` 里则写满了「喂这条进去该判红」的用例。
+ * 判官本身（`judgeInlineScriptLine` / `scanInlineScriptText`）对样本一视同仁——
+ * 判别力正是靠「样本喂进去必须红」验的，这个开关只属于 live 那一层。
+ */
+export function isSamplePath(rel) {
+  const n = String(rel || '').replace(/\\/g, '/');
+  if (/(^|\/)tests\/fixtures\//.test(n)) return true;
+  // 判据自身的测试：文件里写满了「喂这条进去该判红」的用例，那些字面量必须长得
+  // 像违规才验得出判别力。**只认这一个文件**，不认整个 tests/ ——
+  // `tests/tool-use-gate.test.js` 那次实咬（2026-08-2x）就是「活代码里藏着违规形状」，
+  // 把 tests/ 整个排除掉就会漏掉下一个。
+  return /(^|\/)tests\/inline-script\.test\.js$/.test(n);
+}
 
 function hasScanSuffix(rel) {
   return INLINE_SCAN_SUFFIXES.some((s) => String(rel || '').endsWith(s));

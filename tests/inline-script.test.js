@@ -29,9 +29,12 @@ describe('inline-script-check', () => {
     assert.equal(/require\s*\(/.test(src), false, '也不许 require');
   });
 
-  it('实咬原形：`node -e "…$/"` 当场拦下并点出 $/', async () => {
+  it('实咬原形：内联代码里的 $/ 当场拦下并点出 $/', async () => {
     const S = await LOAD;
-    const v = judge(S, 'node -e "const m=/@e([0-9a-f]{12})$/.exec(\'x\')"');
+    // 拼出来的：本行自己不能长成违规形状，否则闸会把**这条测试**判红（自指）。
+    const line = ['node -e "const m=/@e([0-9a-f]{12})', '$', '/.exec(x)"'].join('');
+    const v = judge(S, line);
+    assert.ok(v, '该拦没拦：' + line);
     assert.equal(v.kind, 'inline-eval');
     assert.match(v.why, /\$\//, '要说清是哪个形状被吞  →  ' + v.why);
   });

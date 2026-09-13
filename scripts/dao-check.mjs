@@ -177,7 +177,7 @@ import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
 import {
-  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles,
+  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
 } from './lib/inline-script-check.mjs';
 import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
 import {
@@ -2065,6 +2065,9 @@ function checkInlineScriptLive() {
   }
   const loaded = [];
   for (const rel of files) {
+    // 样本目录（`tests/fixtures/**`）里放的就是**故意违规**的样本，是判别力的来源，
+    // 不是动手路径——live 扫它们等于闸给自己报红。
+    if (isSamplePath(rel)) continue;
     try {
       const text = readFileSync(join(ROOT, rel), 'utf8');
       if (text.includes('\0')) continue;
