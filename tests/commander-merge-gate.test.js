@@ -125,6 +125,9 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     return { calls, run };
   }
   const silent = () => {};
+  // execMerge 现在还会写 job.closed（#581 的差集靠它）。测试一律注入替身：
+  // 不注入就会往**真账本**里写一条 gh-pr-<测试号> 的假终态，污染 ⑰ 的对照集合。
+  const noLedger = () => ({ worker: { ok: true }, reviewer: { ok: true } });
 
   it('① 红仍 squash（落后 ≠ 冲突）', async () => {
     const { execMerge } = await CMD;
@@ -132,7 +135,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { calls, run } = spyRun();
     const r = execMerge(
       { pr: 1234, why: '判绿可合' },
-      { say: silent, run, judge: () => ({ state: RED, detail: '本树切自旧 origin/master' }) },
+      { say: silent, run, ledgerClose: noLedger, judge: () => ({ state: RED, detail: '本树切自旧 origin/master' }) },
     );
     assert.equal(r.ok, true);
     assert.equal(r.blocked, undefined);
@@ -146,7 +149,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { calls, run } = spyRun();
     const r = execMerge(
       { pr: 1234 },
-      { say: silent, run, judge: () => ({ state: UNKNOWN, detail: '拉不到远端' }) },
+      { say: silent, run, ledgerClose: noLedger, judge: () => ({ state: UNKNOWN, detail: '拉不到远端' }) },
     );
     assert.equal(r.ok, true);
     assert.ok(calls.some((c) => /pr merge/.test(c)));
@@ -158,7 +161,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { calls, run } = spyRun();
     const r = execMerge(
       { pr: 1234 },
-      { say: silent, run, judge: () => ({ state: OK, detail: '基底含最新 origin/master' }) },
+      { say: silent, run, ledgerClose: noLedger, judge: () => ({ state: OK, detail: '基底含最新 origin/master' }) },
     );
     assert.equal(r.ok, true);
     assert.equal(r.blocked, undefined);
@@ -173,6 +176,57 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { GATES } = await HC;
     assert.deepEqual(GATES.merge.advisory, ['①']);
     assert.deepEqual(GATES.handoff.advisory, ['①']);
+  });
+});
+
+// 合并后补 job.closed（#581 的差集判据 / dao-check ⑰ 读它）。
+// 2026-09-13 实咬：这条链断了六周——写它的 flow.mjs 被 #807 整段删除，写口没接回来，
+// 账本里 job.dispatch 一路在写而 job.closed 自 09-08 起 0 条，111 张已合并带标 PR 对不上。
+describe('#581 合并后补 job.closed', () => {
+  const silent = () => {};
+  function runOk() {
+    const calls = [];
+    return { calls, run: (argv) => { calls.push(argv.join(' ')); return { ok: true, out: '' }; } };
+  }
+
+  it('合并成功 ⇒ 记终态，且带上为什么合的', async () => {
+    const { execMerge } = await CMD;
+    const { OK } = await HC;
+    const { run } = runOk();
+    const seen = [];
+    const r = execMerge({ pr: 1234, why: '判绿可合' },
+      { say: silent, run, judge: () => ({ state: OK }), ledgerClose: (a) => { seen.push(a); return { ok: true }; } });
+    assert.equal(r.ok, true);
+    assert.equal(seen.length, 1, '合并成功必须记一次终态  →  ' + JSON.stringify(seen));
+    assert.equal(seen[0].pr, 1234);
+    assert.equal(seen[0].why, '判绿可合', '归因要带 why——⑰ 之外还要能回答「这单为什么合了」');
+  });
+
+  it('合并失败 ⇒ 不记终态（失败路径不是终态）', async () => {
+    const { execMerge } = await CMD;
+    const { OK } = await HC;
+    const run = (argv) => (argv.includes('merge') ? { ok: false, error: 'boom' } : { ok: true, out: '' });
+    let called = 0;
+    const r = execMerge({ pr: 1234 }, { say: silent, run, judge: () => ({ state: OK }), ledgerClose: () => { called += 1; return {}; } });
+    assert.equal(r.ok, false);
+    assert.equal(called, 0, '合并没成不许记成功终态  →  ' + called);
+  });
+
+  it('dry-run ⇒ 不记终态', async () => {
+    const { execMerge } = await CMD;
+    let called = 0;
+    const r = execMerge({ pr: 1234 }, { dryRun: true, say: silent, run: runOk().run, ledgerClose: () => { called += 1; return {}; } });
+    assert.equal(r.ok, true);
+    assert.equal(called, 0, 'dry-run 只打印，不许写账本');
+  });
+
+  it('写账本崩了不许把合并判成失败（合并已经发生了，回滚不了）', async () => {
+    const { execMerge } = await CMD;
+    const { OK } = await HC;
+    const { run } = runOk();
+    const r = execMerge({ pr: 1234 }, { say: silent, run, judge: () => ({ state: OK }),
+      ledgerClose: () => { throw new Error('账本目录只读'); } });
+    assert.equal(r.ok, true, '账本写不了是 ⑰ 的事，不是合并失败  →  ' + JSON.stringify({ ok: r.ok, error: r.error }));
   });
 });
 

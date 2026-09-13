@@ -54,7 +54,9 @@ test('executor rechecks evidence, pins head and restores draft if merge fails', 
       if (args[5] === 'merge' && scenario === 'merge-failed') return { ok: false, error: 'head moved' };
       return { ok: true, out: '' };
     };
-    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }) });
+    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }),
+      // 注入替身：真写会往本机账本塞一条 gh-pr-1191 的假终态，污染 ⑰ 的对照集合。
+      ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) });
     const merge = calls.find(a => a[5] === 'merge');
     if (['head-changed', 'review-stale', 'approval-removed'].includes(scenario)) {
       assert.equal(merge, undefined);
