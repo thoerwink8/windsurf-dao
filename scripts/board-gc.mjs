@@ -538,6 +538,7 @@ function main() {
           .map((f) => {
             const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
             let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
+            // 年龄认记录时钟；mtime 只作老文件退路（失败回写会刷新 mtime，#1174 缺陷二）
             return { ...d, _file: full, ageMin: ageMinOf(d, { mtimeMs: statSync(full).mtimeMs }), hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
           })
           .filter(Boolean);
