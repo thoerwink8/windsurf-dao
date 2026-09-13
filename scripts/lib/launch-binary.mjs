@@ -18,7 +18,7 @@
 // 带上「在哪个 PATH 下判的」，并且查不出二进制时要能跟「根本没扫到样本」分开。
 
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, dirname } from 'node:path';
 
 /** `bin = "..."` 显式落点：明知它不在 PATH 上、但机器上有这个文件。
  *  这是**允许表**不是忽略表——每条都必须给出真实存在、可执行的那个路径，
@@ -72,6 +72,38 @@ export function countExistingDirs(pathValue, { exists = existsSync } = {}) {
   return { total: dirs.length, existing: n };
 }
 
+/**
+ * 「这里是不是部署宿主」——决定宿主局部的检查该不该跑。
+ *
+ * **这不是「PATH 像不像本机」的问题**（2026-09-13 连试两种阈值都被 CI 咬回来：
+ * 「一个目录都不存在」和「过半数不存在」——`/usr/bin`、`/usr/local/bin`、`/bin`
+ * 在 CI runner 上**都在**，于是两种阈值都判成「是本机」，然后在这台上问
+ * 「有没有装 grok CLI」，答案当然是没有 → 24 处红、`--all-tests` 退出 1。
+ * 判例 memory `patch-stacking-is-two-strikes`：同一方案连错两次就换路。
+ *
+ * 换成**直接问身份**：部署宿主有几个只属于它的落点，拿它们当判据。
+ * 这里选 `~/.mirasim/run`（mirasim 服务端的回环令牌目录）——
+ * 它由 mirasim 服务在部署宿主上建，CI runner 上不存在，也不必依赖任何外部命令。
+ *
+ * 三态：`true` 是宿主 / `false` 不是 / `null` 判不了（无 home）。调用方按 null 走没查成。
+ *
+ * 为什么不用主机名：换机就失效，而「换机要改的东西越少越好」是本仓的既有口径。
+ * 为什么不用「有没有装 pi」：那就是被检查的量本身，拿它当准入是自指。
+ */
+export function deploymentHostPresence({ homeDir = '', exists = existsSync, markers = null } = {}) {
+  if (!homeDir) return { host: null, why: '拿不到 homeDir，判不了' };
+  const MARKERS = Array.isArray(markers) ? markers : [
+    join(homeDir, '.mirasim', 'run'),        // mirasim 服务端的回环令牌目录
+    join(homeDir, '.dao', 'commander'),      // 指挥官落盘目录（部署宿主上由 commander 建）
+  ];
+  const hits = MARKERS.filter(p => { try { return exists(p); } catch { return false; } });
+  if (hits.length > 0) return { host: true, markers: hits };
+  return {
+    host: false, markers: [], checked: MARKERS,
+    why: `部署宿主的落点一个都不在（${MARKERS.slice(0, 2).join('、')}）——这台不是部署宿主`,
+  };
+}
+
 /** 从一份 systemd 单元文本里取 `Environment=PATH=…` 的值。取不到返回 null（不猜）。 */
 export function pathFromUnitText(text) {
   const m = /^\s*Environment\s*=\s*"?PATH=([^"\n]+)"?\s*$/m.exec(String(text || ''));
@@ -122,20 +154,30 @@ export function commandWord(command) {
 /** 命令词在 PATH 上找时的裸名（带路径的原样返回，调用方按绝对路径判）。 */
 const bareName = (word) => (word.includes('/') ? word : word.split('/').pop());
 
-/** 本机有没有这个可执行文件。absolute = 命令词本身带路径（/usr/bin/foo 或 ./foo）。 */
+/** 本机有没有这个可执行文件。absolute = 命令词本身带路径（/usr/bin/foo 或 ./foo）。
+ *
+ *  `searched` 回报「我在哪些目录里找过、这些目录本机在不在」——调用方要靠它分辨
+ *  「模板写错了」（目录在、文件不在）和「这条 PATH 不是本机的」（目录就不在）。
+ *  不认识这两种的调用方会像 2026-09-13 的 CI 那样，把后者说成前者。 */
 export function resolvesOnPath(word, { pathValue, exists = existsSync, access = accessSync, stat = statSync } = {}) {
   const dirs = String(pathValue || '').split(':').filter(Boolean);
   const executable = (p) => {
     try { access(p, constants.X_OK); return stat(p).isFile(); } catch { return false; }
   };
+  const dirExists = (d) => { try { return exists(d); } catch { return false; } };
   if (isAbsolute(word) || word.includes('/')) {
-    return { ok: executable(word), where: word };
+    const ok = executable(word);
+    // 带路径的命令词：所在的**目录**在不在，决定这是「模板错」还是「这台机器没有」
+    const dir = dirname(word);
+    return { ok, where: ok ? word : null, searched: [{ dir, exists: dirExists(dir) }], anyDirExists: dirExists(dir) };
   }
+  const searched = [];
   for (const dir of dirs) {
     const candidate = join(dir, word);
-    if (executable(candidate)) return { ok: true, where: candidate };
+    if (executable(candidate)) return { ok: true, where: candidate, searched, anyDirExists: true };
+    searched.push({ dir, exists: dirExists(dir) });
   }
-  return { ok: false, where: null };
+  return { ok: false, where: null, searched, anyDirExists: searched.some(s => s.exists) };
 }
 
 /**
@@ -163,22 +205,22 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
     return { state: 'unknown', detail: 'PATH 为空（没查成，不是「都对得上」）', checked: 0, broken: [], excused: [] };
   }
 
-  // 红 1：先问「这条 PATH 是不是属于这台机器」。一个目录都不存在 ⇒ 我们拿的是**别的机器**的
-  // 部署 PATH（CI runner 上取到仓内单元写的 /home/orca/.local/bin 就是这种形状）。
-  // 那时判红是把「检查环境不对」说成「模板有 24 个错」——按项目规矩，没扫到任何样本
-  // 必须与「扫完查出 0 条」分得开，所以这里给 unknown。
-  const dirs = countExistingDirs(pathValue, fs);
-  if (dirs.total > 0 && dirs.existing === 0) {
-    return {
-      state: 'unknown', checked: 0, broken: [], excused: [],
-      detail: `这条 PATH 里的 ${dirs.total} 个目录在本机一个都不存在——拿的是别的机器的部署 PATH，`
-        + `本机没法验它（没查成，不是「都对得上」也不是「都错了」）。PATH=${pathValue.slice(0, 60)}…`
-        + `${pathSource ? `（来源：${pathSource}）` : ''}`,
-    };
-  }
-
+  // 红 1：解析失败分两种，必须分开（2026-09-13 CI 实咬，run 34744690601）。
+  //
+  //   · **目录不在本机** → 这条 PATH 是别的机器的部署 PATH，我们没法在这台上验它 ⇒ `unknown`（没查成）
+  //   · **目录在、文件不在** → 模板真写错了 ⇒ `red`
+  //
+  // 为什么不按「整条 PATH 属不属于本机」判（第一版就是这么写的，连改两次都没抓住 CI）：
+  // `PATH` 里混着通用目录（`/usr/bin`、`/usr/local/bin`、`/bin`）和生产专属目录
+  // （`/home/orca/.local/bin`）。CI runner 上通用目录**都在**，于是
+  // 「一个都不存在」和「过半数不存在」两种阈值都命不中（实测 existing=3/5），照旧判红。
+  // 逐目录判就没有这个问题：命令词解析失败时，先看**它该在的那个目录**在不在。
+  //
+  // 判据归属：目录在不在，是「这台机器有什么」；文件在不在，是「模板写对没有」。
+  // 混在一起就会把前者说成后者——那正是这次 CI 红 24 处的成因。
   const broken = [];
   const excused = [];
+  const unverifiable = [];   // 目录就不在本机 ⇒ 不是「模板错了」，是「本机验不了」
   const probe = (word) => resolvesOnPath(word, { pathValue, ...fs });
   for (const p of withLaunch) {
     // 两个字段都看：cli 是给人看的声明，launch 是真正执行的命令。两者指同一个二进制才算自洽，
@@ -186,7 +228,8 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
     for (const [field, value] of [['launch', p.launch], ['cli', p.cli]]) {
       const word = commandWord(value);
       if (!word) continue;
-      if (probe(word).ok) continue;
+      const res = probe(word);
+      if (res.ok) continue;
       const declared = OFF_PATH_BIN[bareName(word)];
       if (declared) {
         const abs = declared.startsWith('~') ? join(homeDir || '', declared.slice(1)) : declared;
@@ -196,7 +239,24 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
           }
           continue;
         }
+        // 允许表的落点是**本模块自己维护的**绝对路径（OFF_PATH_BIN）。它不存在就是
+        // 这张表写错了或落点被挪走了——红。**不许按「目录不在本机」放过**：
+        // 那会让允许表变成「写错名字的免死金牌」，正是 ⑤ 号测试守着的东西。
+        // 与裸名的区别：裸名问的是「这台机器有没有」，允许表问的是「我写的落点对不对」。
         broken.push({ provider: p.name, field, word, why: `在允许表里但落点不存在或不可执行：${declared}` });
+        continue;
+      }
+      // 关键分流：**解析失败时，它该在的目录本机在不在**。
+      //
+      // 只对**裸名**分流。带路径的命令词（`/opt/bin/agent`）不走这条路——那是作者对
+      // 「这条命令长什么样」的断言，写错了就是错，本模块照原样判（见 ⑦）。
+      // 裸名则是在问「这台机器上有没有这个可执行文件」：目录根本不在 ⇒ 这条 PATH 属于别的机器
+      // （CI runner 上取到仓内单元写的 /home/orca/... 就是这形状），没查成；
+      // 目录在、文件不在 ⇒ 模板真写错了，红。
+      const isBare = !(isAbsolute(word) || word.includes('/'));
+      const missingDirs = (res.searched || []).filter(s => !s.exists).map(s => s.dir);
+      if (isBare && !res.anyDirExists && missingDirs.length) {
+        unverifiable.push({ provider: p.name, field, word, dirs: missingDirs });
         continue;
       }
       broken.push({ provider: p.name, field, word, why: '本机 PATH 上解析不到' });
@@ -206,6 +266,18 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
   // detail 里必须说清「在哪个 PATH 下判的、这条 PATH 从哪来」——宿主局部判据的结论
   // 脱离它的 PATH 就没有意义，而红项要能一眼看出「是模板错了还是我这条 PATH 不对」。
   const where = `PATH=${pathValue.slice(0, 60)}…${pathSource ? `（来源：${pathSource}）` : ''}`;
+
+  // 命中的命令词所在目录本机一个都不在 ⇒ 本机验不了这条模板（没查成）。
+  // 与「扫完 0 条违规」分开：那是 ok，这是 unknown。
+  if (broken.length === 0 && unverifiable.length > 0) {
+    const dirsShown = [...new Set(unverifiable.flatMap(u => u.dirs))].slice(0, 3).join('、');
+    return {
+      state: 'unknown', checked: withLaunch.length, broken, excused, unverifiable,
+      detail: `${unverifiable.length} 处命令词解析不到，但它们该在的目录本机就不存在（${dirsShown}）`
+        + `——这条 PATH 是别的机器的部署 PATH，本机没法验`
+        + `（没查成，不是「都对得上」也不是「都错了」）。${where}`,
+    };
+  }
 
   if (broken.length === 0) {
     const words = [...new Set(excused.map(e => e.word))];

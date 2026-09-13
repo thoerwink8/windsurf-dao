@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, countExistingDirs, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
+import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, countExistingDirs, deploymentHostPresence, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
 
 const PATH_ = '/usr/bin:/bin';
 const HOME = '/home/u';
@@ -207,4 +207,35 @@ test('⑫b 正控：目录在、命令词不在 → 仍然红（别拿异机判�
   // countExistingDirs 是这条判据的输入，单独钉一下
   assert.deepEqual(countExistingDirs(PATH_, { exists: (p) => p === '/usr/bin' }), { total: 2, existing: 1 });
   assert.deepEqual(countExistingDirs('', { exists: () => true }), { total: 0, existing: 0 });
+});
+
+// ⑬ 宿主身份判据（2026-09-13 CI 实咬，run 34744690601）
+//
+// 启动模板闸问的是「这台机器上那些 agent CLI 解析得了吗」——只有部署宿主答得了。
+// CI runner 上答案当然是「解析不了」，于是 24 处红、`--all-tests` 稳定退出 1。
+// **那不是模板的 24 个错误，是问错了机器。**
+//
+// 这条判据被改过两次都不对，两次都是拿「PATH 里目录在不在」当信号：
+//   · 第一版「一个目录都不存在」——CI 上 `/usr/bin`、`/usr/local/bin`、`/bin` **都在**，命不中；
+//   · 第二版「过半数不存在」——实测 CI 上 existing=3/5，照样命不中。
+// 换路：直接问身份（部署宿主专属落点在不在）。
+test('⑬ 宿主身份：专属落点在 → 是宿主；一个都不在 → 不是（判不了给 null）', () => {
+  const HOME_ = '/home/orca';
+  const real = { exists: (p) => p === '/home/orca/.mirasim/run' || p === '/home/orca/.dao/commander' };
+  assert.equal(deploymentHostPresence({ homeDir: HOME_, exists: real.exists }).host, true);
+
+  // CI runner：home 不同，专属落点一个都不在
+  const ci = deploymentHostPresence({ homeDir: '/home/runner', exists: () => false });
+  assert.equal(ci.host, false);
+  assert.match(ci.why, /不是部署宿主/);
+
+  // 拿不到 home ⇒ 判不了（调用方按没查成走，不许当成「不是宿主」静默跳过）
+  assert.equal(deploymentHostPresence({ homeDir: '' }).host, null);
+
+  // 关键反证：**通用目录在也不算宿主**——这正是前两版判据栽的地方
+  const onlyGeneric = deploymentHostPresence({
+    homeDir: '/home/runner',
+    exists: (p) => ['/usr/bin', '/usr/local/bin', '/bin'].includes(p),
+  });
+  assert.equal(onlyGeneric.host, false, '/usr/bin 这类通用目录不能证明「这是部署宿主」');
 });

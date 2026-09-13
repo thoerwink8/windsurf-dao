@@ -202,7 +202,7 @@ import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
-import { classifyLaunchBinaries, resolveProbePath, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
+import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -708,6 +708,21 @@ function checkLaunchBinaries() {
     unitDir: join(ROOT, DEPLOY_UNIT_DIR),
     io: { readdir: readdirSync, readFile: p => readFileSync(p, 'utf8') },
   });
+  // **这条检查只在部署宿主上跑**（2026-09-13 CI 实咬，run 34744690601）。
+  // 它问的是「这台机器上那些 agent CLI 解析得了吗」——CI runner 上答案当然是「解析不了」，
+  // 于是 24 处红、`--all-tests` 稳定退出 1。**那不是模板的 24 个错误，是问错了机器。**
+  //
+  // 判据用部署宿主的专属落点（`~/.mirasim/run` 等），不用「PATH 里目录在不在」——
+  // 后者在 CI 上会被 `/usr/bin` 这些通用目录兜住，两次都判成「是本机」（见
+  // launch-binary.mjs 的 deploymentHostPresence 注释，判例 patch-stacking-is-two-strikes）。
+  //
+  // 不是宿主 ⇒ `unscanned`（没查成），既不判红也不判绿。按项目规矩：
+  // 输出必须能区分「扫完查出 0 条」与「这次没扫到任何样本」——在这里连样本都没有。
+  const hostPresence = deploymentHostPresence({ homeDir: homedir() });
+  if (hostPresence.host !== true) {
+    skip(`启动模板命令词：这条检查是宿主局部的，本机不是部署宿主（${hostPresence.why || '判不了'}）——本次没查成，不是绿也不是红`);
+    return;
+  }
   const verdict = classifyLaunchBinaries({ providers, pathValue, pathSource: source, homeDir: homedir() });
   if (verdict.state === 'unknown') {
     fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
