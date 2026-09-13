@@ -51,6 +51,96 @@ describe('close-issue 署名单号', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('Fixes #12'), [12]);
     });
   });
+
+  it('#1051 被否定的分句不算认领——「不写 closes #N」是声明不做，不是认领', async (t) => {
+    const C = await LOAD;
+
+    await t.test('PR #1096 原句：挂回 #1051 的那段不再把 #1051 读成认领', () => {
+      // 现场原文（PR #1096 正文「## 不做什么」一节）。
+      const body = [
+        '- **不写 `closes #1051`**。#1051 的实体工作（给四+三条同形各配一个会报警的执行者）一件都没做。',
+        '',
+        '署名 issue #1101',
+      ].join('\n');
+      assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101]);
+    });
+
+    await t.test('正控：同一句去掉否定词后照旧认领（不是把整行屏蔽）', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('写 closes #1051'), [1051]);
+    });
+
+    await t.test('正控：否定只作用于它所在的分句，别处的认领不受牵连', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051。署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051\n署名 issue #1101'), [1101]);
+      // 反过来：先认领、后否定另一张单 —— 认领的那张必须留住。
+      assert.deepStrictEqual(C.attributedIssueNumbers('署名 issue #1101\n不写 closes #1051'), [1101]);
+    });
+
+    await t.test('正控：Closes 出现在叙述里（非否定）仍认领', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('这个 PR Closes #564，顺手修了别处'), [564]);
+    });
+
+    await t.test('stripNegatedClaims 保留换行结构（正文压过标题的优先级不变）', () => {
+      const out = C.stripNegatedClaims('不写 closes #1\n署名 issue #2');
+      assert.match(out, /\n/);
+      assert.doesNotMatch(out, /closes #1/);
+      assert.match(out, /署名 issue #2/);
+    });
+
+    await t.test('没有否定词时原样返回（快路径不改写正文）', () => {
+      const src = '署名 issue #657\n参考 #498 #480';
+      assert.strictEqual(C.stripNegatedClaims(src), src);
+    });
+
+    await t.test('attributedIssueNumber 整条链路也干净：#1096 归到 #1101，不是 #1051', () => {
+      const pr = {
+        title: '[cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口',
+        body: '- **不写 `closes #1051`**。\n\n署名 issue #1101',
+      };
+      assert.strictEqual(C.attributedIssueNumber(pr), 1101);
+    });
+  });
+
+  it('#1051 标题退路：目标单还开着时收严，已关的单照旧（判据是「拦谁」不是「拦什么词」）', async (t) => {
+    const C = await LOAD;
+    // PR #1096 的真实处境：正文零显式署名（剥掉否定后），只有标题里提到 #1051。
+    const pr = {
+      title: '[cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口',
+      body: '',
+    };
+
+    await t.test('目标单还开着 → 不返号（#1051 就是这样被焊死 7 天的）', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr, { openIssues: new Set([1051]) }), null);
+    });
+
+    await t.test('目标单已关 → 照旧返号（历史 PR 本该这么归因，12 张真 PR 全靠这一条）', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr, { openIssues: new Set([1101, 1102]) }), 1051);
+    });
+
+    await t.test('不传 openIssues（老调用方/夹具）→ 保持原行为，不凭猜收严', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr), 1051);
+    });
+
+    await t.test('正控：正文显式署名不受收严影响（第 1 级永远权威）', () => {
+      const withBody = { ...pr, body: '署名 issue #1101' };
+      assert.strictEqual(C.attributedIssueNumber(withBody, { openIssues: new Set([1101, 1051]) }), 1101);
+    });
+
+    await t.test('正控：标题显式「署名 issue #N」不受收严影响（第 2 级）', () => {
+      const titled = { title: '[cc] x 署名 issue #1051', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(titled, { openIssues: new Set([1051]) }), 1051);
+    });
+
+    await t.test('PR #1216 真实处境：#1143 开着 → 不再误认（它是「刷了 135 条评论的根因」）', () => {
+      const p = { title: '[cc] fix(exhausted): 认输标按「最新」记录比对——#1143 刷了 135 条评论的根因', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(p, { openIssues: new Set([1143]) }), null);
+    });
+
+    await t.test('PR #938 真实处境：#931 已关 → 照旧认（那是真交付：「（#931，基于 #926）」）', () => {
+      const p = { title: 'feat(commander): 判红直接派返工工人——删掉「唤大脑」整层（#931，基于 #926）', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(p, { openIssues: new Set([926]) }), 931);
+    });
+  });
   it('attributedIssueNumber：正文署名压过标题随手引用，标题裸 #N 只是退路', async (t) => {
     const C = await LOAD;
     await t.test('正文有署名时取正文，哪怕标题另有 #N', () => {

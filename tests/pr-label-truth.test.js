@@ -412,11 +412,33 @@ describe('选型路径零残留', () => {
     assert.deepEqual(hits, [], hits.join('\n'));
   });
 
-  it('ready-queue-check 的 linkedIssueNumbers 是 re-export，不是第二份正则', () => {
+  it('ready-queue-check 的链接判据是 re-export，不是第二份正则', () => {
     const src = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'ready-queue-check.mjs'), 'utf8');
-    assert.match(src, /import \{ linkedIssueNumbers \} from '\.\/dispatch\/worker-done\.mjs'/);
+    // 两份判据都从 worker-done 取，本文件不自己写正则（名字列表顺序不钉死）。
+    assert.match(src, /import \{[^}]*\blinkedIssueNumbers\b[^}]*\} from '\.\/dispatch\/worker-done\.mjs'/);
+    assert.match(src, /import \{[^}]*\bclaimedIssueNumbers\b[^}]*\} from '\.\/dispatch\/worker-done\.mjs'/);
     assert.doesNotMatch(src, /const CLOSES_RE/);
     assert.doesNotMatch(src, /export function linkedIssueNumbers/);
+    assert.doesNotMatch(src, /export function claimedIssueNumbers/);
+  });
+
+  it('#1051 在途判据用认领口径，不是宽口径（两个缺陷：关联当认领 + 否定式当认领）', () => {
+    const rq = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'ready-queue-check.mjs'), 'utf8');
+    // 判在途那一行必须是 claimedIssueNumbers；用回 linkedIssueNumbers 直接红。
+    assert.match(rq, /for \(const n of claimedIssueNumbers\(/);
+    assert.doesNotMatch(rq, /for \(const n of linkedIssueNumbers\(/);
+
+    const wd = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'dispatch', 'worker-done.mjs'), 'utf8');
+    // 认领判据只有一个实现副本，在关单侧。这里抄第二份正则就红（名字列表顺序不钉死）。
+    assert.match(wd, /import \{[^}]*\battributedIssueNumbers\b[^}]*\} from '\.\.\/close-issue\.mjs'/);
+    const claimedBody = wd.slice(wd.indexOf('export function claimedIssueNumbers'));
+    assert.match(claimedBody, /return attributedIssueNumbers\(text\)/);
+  });
+
+  it('关单侧的认领判据会剥掉被否定的分句', () => {
+    const ci = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'close-issue.mjs'), 'utf8');
+    assert.match(ci, /export function stripNegatedClaims/);
+    assert.match(ci, /const scan = stripNegatedClaims\(text\)/);
   });
 
   it('job.dispatch schema 有 reviewer 与 branch 与 repo', () => {

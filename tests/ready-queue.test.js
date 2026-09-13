@@ -223,6 +223,64 @@ describe('ready-queue', () => {
     });
   });
 
+  it('#1051 顺带提及不是认领：判在途用窄口径，别把「提过」当成「在做」', async (t) => {
+    const Q = await LIB_LOAD;
+
+    await t.test('「关联 #N」不挡派工——这就是 #1051 停摆 7 天的根因', () => {
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1051, ['已消歧'])],
+        // PR #1096 原样的两句话：正文写「关联 #1051」+「署名 issue #1101」。
+        prs: [{
+          title: '[cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口',
+          body: '关联 #1051（**只作署名，不关单**）\n署名 issue #1101',
+        }],
+        worktrees: [],
+      });
+      assert.equal(r.kind, 'ready');
+      assert.deepStrictEqual(r.ready, [1051]);
+    });
+
+    await t.test('正控：「署名 issue #N」仍然挡（窄口径不是不挡）', () => {
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1051, ['已消歧'])],
+        prs: [{ title: 'x', body: '署名 issue #1051' }],
+        worktrees: [],
+      });
+      assert.equal(r.kind, 'zero');
+      assert.deepStrictEqual(r.ready, []);
+    });
+
+    await t.test('正控：关单词（Closes/Fixes）仍然挡', () => {
+      for (const w of ['Closes #1051', 'Fixes #1051', 'Resolves #1051']) {
+        const r = Q.inspectReadyQueue({
+          issues: [issue(1051, ['已消歧'])],
+          prs: [{ title: 'x', body: w }],
+          worktrees: [],
+        });
+        assert.equal(r.kind, 'zero', `${w} 应当挡`);
+      }
+    });
+
+    await t.test('同一张 PR 既认领又关联：认领的那张挡，关联的那张不挡', () => {
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1101, ['已消歧']), issue(1051, ['已消歧'])],
+        prs: [{ title: 'x', body: '署名 issue #1101\n关联 #1051' }],
+        worktrees: [],
+      });
+      assert.deepStrictEqual(r.ready, [1051]);
+    });
+
+    await t.test('宽窄两份判据都在，口径差别只有「关联」一条', () => {
+      const text = '署名 issue #1101\n关联 #1051\nCloses #7';
+      assert.deepStrictEqual(Q.linkedIssueNumbers(text), [1101, 1051, 7]);
+      assert.deepStrictEqual(Q.claimedIssueNumbers(text), [1101, 7]);
+    });
+
+    await t.test('claimedIssueNumbers 挡掉 #0（号从 1 起，#0 一定是别的东西）', () => {
+      assert.deepStrictEqual(Q.claimedIssueNumbers('Closes #0'), []);
+    });
+  });
+
   it('#577 dispatch skill 四件里的规矩原文还在', async (t) => {
     const txt = fs.readFileSync(SKILL, 'utf8');
     await t.test('skill 写了立刻并行派', () => {
