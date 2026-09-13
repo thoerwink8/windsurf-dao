@@ -498,9 +498,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  if (!issue) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
-  }
+  // 快路（pr-fast）不收 issue。没署名单号 ≠ 交不了卷：完工评论落 PR。
+  // 指挥官 #1240：无署名不挡返工。这边对称：无署名不挡交卷。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
