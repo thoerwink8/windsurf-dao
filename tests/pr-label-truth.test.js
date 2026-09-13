@@ -519,3 +519,107 @@ describe('CLI 选型入口一次 issue label 都不读', () => {
     assert.doesNotMatch(logText, /issue view/);
   });
 });
+
+// ── #1214 缺口 A：帅位自开 PR 的正式入口（pr-open）
+//
+// 用户 2026-09-13 拍板走「显式打标入口」先解环。这一组验的就是那条入口：
+// 开 draft + 落账（job.opened + job.dispatch）+ 打标，且**判据一个字没放宽**——
+// 补给打标路的是一条真账，不是给判据开的后门。
+
+function prOpenEnv({ ledgerDir, newPr = '901' } = {}) {
+  const log = path.join(os.tmpdir(), `dao-priopen-gh-${process.pid}-${Date.now()}.log`);
+  try { fs.unlinkSync(log); } catch { /* 没有就没有 */ }
+  return {
+    log,
+    env: {
+      ...process.env,
+      DAO_GH_FAKE: path.join(ROOT, 'tests', 'fixtures', 'fake-gh.mjs'),
+      DAO_GH_FAKE_LOG: log,
+      DAO_GH_FAKE_NEW_PR: String(newPr),
+      LEDGER_EVENTS_DIR: ledgerDir,
+    },
+  };
+}
+
+function runPrOpen(extraArgs, { ledgerDir, newPr } = {}) {
+  const { log, env } = prOpenEnv({ ledgerDir, newPr });
+  const r = spawnSync(process.execPath, [
+    path.join(ROOT, 'scripts', 'dao.mjs'), 'pr-open',
+    '--title', '[cc] 帅位自开的活',
+    '--body', '## 目标\n\n解环。\n\n## 验收标准\n\n- [ ] 打得上标\n\n## 进展\n\n- [ ] 待开工',
+    '--head', 'cc/seat-opened',
+    '--model', 'claude-opus',
+    ...extraArgs,
+  ], { encoding: 'utf8', cwd: ROOT, env, timeout: 60000 });
+  const logText = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  try { fs.unlinkSync(log); } catch { /* 测完收 */ }
+  return { r, logText, payload: lastJson(r) };
+}
+
+function ledgerEvents(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && !f.endsWith('.schema.json'))
+    .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+}
+
+describe('#1214 缺口 A：pr-open 落账后，打标路真的认得出这条链', () => {
+  it('开 draft + 落 job.opened/job.dispatch（带 branch/repo/model/reviewer）+ 打标', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-ledger-'));
+    try {
+      const { r, payload, logText } = runPrOpen(['--reviewer', 'gpt-5.6-luna'], { ledgerDir });
+      assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr, logText }));
+      assert.equal(payload.ok, true);
+      assert.equal(payload.pr, 901);
+      assert.equal(payload.draft, true);
+      assert.equal(payload.ledgerWritten, true);
+      assert.match(logText, /pr create/);
+      assert.match(logText, /--draft/);
+      const evts = ledgerEvents(ledgerDir);
+      assert.deepEqual(evts.map((e) => e.type).sort(), ['job.dispatch', 'job.opened']);
+      const d = evts.find((e) => e.type === 'job.dispatch');
+      assert.equal(d.identity, '工人');
+      assert.equal(d.model, 'claude-opus');
+      assert.equal(d.branch, 'cc/seat-opened');
+      assert.equal(d.repo, REPO);
+      assert.equal(d.reviewer, 'gpt-5.6-luna');
+      assert.equal(d.pr_number, 901);
+      // 打标路读的就是这条 —— 这正是缺口 A 的修法：账补上，判据不放宽。
+      assert.equal(d.source, 'dao-pr-open');
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  it('落的那条账，pickWorkerDispatchByBranch 当场认得出（不是「写了就算」）', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-pick-'));
+    try {
+      const { r } = runPrOpen(['--reviewer', 'gpt-5.6-luna'], { ledgerDir });
+      assert.equal(r.status, 0, r.stderr);
+      const picked = pickWorkerDispatchByBranch(ledgerEvents(ledgerDir), 'cc/seat-opened', REPO);
+      assert.equal(picked.ok, true, JSON.stringify(picked));
+      assert.equal(picked.model, 'claude-opus');
+      assert.equal(picked.reviewer, 'gpt-5.6-luna');
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  it('--model 不在 registry ⇒ 拒，且一条账都不落（不落幽灵账）', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-badmodel-'));
+    try {
+      const { r, payload } = runPrOpen(['--model', 'mistral-large-不存在的'], { ledgerDir });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /不在 registry/);
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  it('缺 --head ⇒ 当场拒（分支名是打标路的键，猜不得）', () => {
+    const noHead = spawnSync(process.execPath, [
+      path.join(ROOT, 'scripts', 'dao.mjs'), 'pr-open',
+      '--title', 'x', '--body', 'y', '--model', 'claude-opus',
+    ], {
+      encoding: 'utf8', cwd: ROOT,
+      env: { ...process.env, DAO_GH_FAKE: path.join(ROOT, 'tests', 'fixtures', 'fake-gh.mjs') },
+    });
+    assert.notEqual(noHead.status, 0);
+    assert.match(String(noHead.stdout || noHead.stderr), /--head/);
+  });
+});
