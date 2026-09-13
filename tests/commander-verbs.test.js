@@ -707,7 +707,9 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
       github: {
         scanned: true, issues: [],
         attributedIssues: [{ number: 1174, labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }, { name: '已消歧' }] }],
-        prs: [{ number: 1208, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #1174' }],
+        // #1116：叫审官的选型只读 PR 自己的 label，所以这两个标必须打在 PR 上。
+        prs: [{ number: 1208, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #1174',
+          labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }] }],
       },
       // 六条判定全打在旧 commit 上 → 当前 head 零判定
       prReviews: { scanned: true, byPr: { 1208: { reviews: [{ state: 'CHANGES_REQUESTED', commit_id: 'oldhead', body: '红' }] } } },

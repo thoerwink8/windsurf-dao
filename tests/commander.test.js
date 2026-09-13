@@ -2024,7 +2024,8 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
         prs: [{
           number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: oid,
           body: '署名 issue #909',
-          labels: [{ name: '卡死/自动化认输' }, { name: 'reviewer/gpt-5.6-luna' }], ...prOver,
+          // 返工选型只读 PR 自己的 label（#1116），所以 model/ 必须打在 PR 上，不是只打 issue。
+          labels: [{ name: '卡死/自动化认输' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }], ...prOver,
         }],
       },
       reviewPending: { scanned: true, items: [ticket(909, ticketHead)] },
@@ -2078,7 +2079,8 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
           prs: [{
             number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
             body: '署名 issue #909',
-            labels: [{ name: '卡死/自动化认输' }, { name: 'reviewer/gpt-5.6-luna' }],
+            // 同上：返工选型只读 PR 自己的 label（#1116）。
+            labels: [{ name: '卡死/自动化认输' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }],
           }],
         },
         reviewPending: { scanned: true, items: [{
