@@ -521,6 +521,57 @@ describe('execReapTree fail-closed', () => {
   });
 });
 
+describe('execReapOrphan fail-closed', () => {
+  it('cwd 对不上规划 → 不杀', async () => {
+    const M = await CMD();
+    const killed = [];
+    const r = M.execReapOrphan(
+      { cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1', pids: [4242] },
+      {
+        dryRun: false,
+        say: () => {},
+        readlink: () => '/tmp/other',
+        kill: (pid) => { killed.push(pid); },
+      },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(killed, []);
+    assert.equal(r.results[0].skipped, 'cwd-mismatch');
+  });
+
+  it('cwd 对得上 → SIGTERM', async () => {
+    const M = await CMD();
+    const killed = [];
+    const cwd = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1';
+    const r = M.execReapOrphan(
+      { cwd, pids: [4242] },
+      {
+        dryRun: false,
+        say: () => {},
+        readlink: () => cwd,
+        kill: (pid, sig) => { killed.push({ pid, sig }); },
+      },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(killed, [{ pid: 4242, sig: 'SIGTERM' }]);
+  });
+
+  it('pid 已经没了 → 当成功，不红', async () => {
+    const M = await CMD();
+    const r = M.execReapOrphan(
+      { cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1', pids: [4242] },
+      {
+        dryRun: false,
+        say: () => {},
+        readlink: () => { const e = new Error('gone'); e.code = 'ENOENT'; throw e; },
+        kill: () => { throw new Error('不该杀'); },
+      },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.results[0].gone, true);
+  });
+});
+
 describe('容量对比', () => {
   it('初始有 incomplete、stop 成功、样本残留为 0', async () => {
     const { leftoverIncompleteAfterStops, countLeftoverAfterHandoff } = await CAP;

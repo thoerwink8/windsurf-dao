@@ -99,6 +99,7 @@ describe('ephemeral-lifecycle', () => {
       core: read('scripts/lib/commander-core.mjs'),
       admit: read('scripts/lib/admission.mjs'),
       reap: read('scripts/lib/ephemeral-reap.mjs'),
+      lease: read('scripts/lib/dispatch/lease.mjs'),
     };
     const exists = (rel) => existsSync(join(REPO, rel));
     assert.deepEqual(inspectEphemeralLifecycleSources({ files, exists }), []);
@@ -129,6 +130,24 @@ describe('ephemeral-lifecycle', () => {
       exists,
     });
     assert.equal(noLeftover.includes('交卷残留没按 stop-session 结果重算'), true, JSON.stringify(noLeftover));
+
+    const noOrphanPlan = inspectEphemeralLifecycleSources({
+      files: { ...files, core: files.core.replace(/planOrphanReaps/g, 'planGoneReaps') },
+      exists,
+    });
+    assert.equal(noOrphanPlan.includes('指挥官没产幽灵进程回收'), true, JSON.stringify(noOrphanPlan));
+
+    const noOrphanExec = inspectEphemeralLifecycleSources({
+      files: { ...files, commander: files.commander.replace(/execReapOrphan/g, 'execGoneOrphan') },
+      exists,
+    });
+    assert.equal(noOrphanExec.includes('指挥官没执行幽灵进程回收'), true, JSON.stringify(noOrphanExec));
+
+    const noOrphanFn = inspectEphemeralLifecycleSources({
+      files: { ...files, lease: files.lease.replace(/export function planOrphanReaps/g, 'export function planGoneReaps') },
+      exists,
+    });
+    assert.equal(noOrphanFn.includes('租约闸没有幽灵回收纯函数'), true, JSON.stringify(noOrphanFn));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {
