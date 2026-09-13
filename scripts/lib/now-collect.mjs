@@ -8,12 +8,16 @@
 // 零写入：不 fetch（fetch 会写本机 refs）、不建树、不起会话、不发言。
 // 因此 master 提交读的是本机 origin/master 引用，可能落后；这一点在信封的 note 里如实说。
 //
-// 审官登记（reviewer-<PR>.json）的落点实测跟着**执行命令那棵树**跑，不是固定目录
-// （/home/orca/wt-unblock/_flow/mirasim/…）。这里只扫已知候选目录，扫不到由判官记「没查成」。
-// 改落点是 #880 卡 C 的范围，本动词不碰。
+// 审官登记（reviewer-<PR>.json）的落点在**执行命令那棵树**或 `~/.dao/mirasim/`
+// （`dao.mjs` 的 `mirasimRegistry()` 用 `join(homedir(), '.dao', 'mirasim')` 当 flowDir）。
+// 2026-09-14 实咬：候选目录只扫 `_flow/mirasim`，而现役登记全在 `~/.dao/mirasim/`（81 份），
+// 于是每一张有审官的 PR 都被判成「登记找不到」→ 盘面报 `reviewer-unknown`「要你拍」，
+// 帅位按盘面拍板就会去重起一个已经在跑的审官。这里补上真实写入方那个目录。
+// 仍然只扫已知候选目录：扫不到由判官记「没查成」，不当「这张 PR 没有审官」。
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export const DEFAULT_BUDGET_MS = 15000;
@@ -206,9 +210,12 @@ export async function fetchWorktrees({ cwd } = {}) {
 
 // ── 审官登记（本机候选目录） ─────────────────────────────────────────────────
 
-export function localRegistryDirs({ repoRoot, worktreePaths = [] } = {}) {
+export function localRegistryDirs({ repoRoot, worktreePaths = [], home = homedir() } = {}) {
   const dirs = new Set();
   if (repoRoot) dirs.add(join(repoRoot, '_flow', 'mirasim'));
+  // 真实写入方的落点（dao.mjs mirasimRegistry 的 flowDir）。少了它，「登记在哪」与「去哪找」
+  // 就是两条各写各的真相源——2026-09-14 实测：81 份登记在 ~/.dao/mirasim/，候选目录里 0 份。
+  if (home) dirs.add(join(home, '.dao', 'mirasim'));
   for (const p of worktreePaths) if (p) dirs.add(join(p, '_flow', 'mirasim'));
   return [...dirs];
 }
@@ -305,24 +312,32 @@ export function lookupGitHead(treePath, { runGit = defaultRunGit, exists = exist
 export const REMOTE_SCRIPT = [
   'set -u',
   'TPLIST=$(mktemp 2>/dev/null || echo /tmp/now-collect-tp.$$)',
+  'DLIST=$(mktemp 2>/dev/null || echo /tmp/now-collect-d.$$)',
   ': > "$TPLIST"',
+  ': > "$DLIST"',
+  // 候选根会互相重叠（`$HOME` 与 `/home/orca` 在本机是同一个目录），不去重就会把同一批文件
+  // 扫两遍——2026-09-14 实测：8 个 DIROK 里有 4 个是重复的，188 份登记里 94 份读了两遍，
+  // 整段 12.4 秒（超了调用方的 11 秒预算），于是本机自扫天天超时、天天报「没查成」。
   'for root in "$HOME" /home/orca /root; do',
-  '  for d in "$root"/windsurf-dao/_flow/mirasim "$root"/wt-*/_flow/mirasim "$root"/mirasim-worktrees/*/*/_flow/mirasim; do',
+  '  for d in "$root"/windsurf-dao/_flow/mirasim "$root"/wt-*/_flow/mirasim "$root"/mirasim-worktrees/*/*/_flow/mirasim "$root"/.dao/mirasim; do',
   '    case "$d" in *"*"*) continue;; esac',
-  '    if [ -d "$d" ]; then',
-  '      printf "DIROK\\t%s\\n" "$d"',
-  '      for f in "$d"/reviewer-*.json; do',
-  '        [ -f "$f" ] || continue',
-  '        printf "REG\\t%s\\t%s\\n" "$f" "$(base64 -w0 < "$f")"',
-  '        tp=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(\\"treePath\\") or \\"\\")" "$f" 2>/dev/null) || tp=',
-  '        if [ -z "$tp" ]; then tp=$(grep -o "\\"treePath\\":\\"[^\\"]*\\"" "$f" 2>/dev/null | head -n 1 | cut -d "\\"" -f 4); fi',
-  '        if [ -n "$tp" ]; then printf "%s\\n" "$tp" >> "$TPLIST"; fi',
-  '      done',
-  '    else',
-  '      printf "DIRMISS\\t%s\\n" "$d"',
-  '    fi',
+  '    printf "%s\\n" "$d" >> "$DLIST"',
   '  done',
   'done',
+  'sort -u "$DLIST" -o "$DLIST" 2>/dev/null || true',
+  'while IFS= read -r d; do',
+  '  [ -n "$d" ] || continue',
+  '  if [ ! -d "$d" ]; then printf "DIRMISS\\t%s\\n" "$d"; continue; fi',
+  '  printf "DIROK\\t%s\\n" "$d"',
+  '  for f in "$d"/reviewer-*.json; do',
+  '    [ -f "$f" ] || continue',
+  '    printf "REG\\t%s\\t%s\\n" "$f" "$(base64 -w0 < "$f")"',
+  '    tp=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(\\"treePath\\") or \\"\\")" "$f" 2>/dev/null) || tp=',
+  '    if [ -z "$tp" ]; then tp=$(grep -o "\\"treePath\\":\\"[^\\"]*\\"" "$f" 2>/dev/null | head -n 1 | cut -d "\\"" -f 4); fi',
+  '    if [ -n "$tp" ]; then printf "%s\\n" "$tp" >> "$TPLIST"; fi',
+  '  done',
+  'done < "$DLIST"',
+  'rm -f "$DLIST"',
   'sort -u "$TPLIST" -o "$TPLIST" 2>/dev/null || true',
   'while IFS= read -r tp; do',
   '  [ -n "$tp" ] || continue',
@@ -392,6 +407,32 @@ export function attachRemoteTreeHeads(regs, trees) {
   });
 }
 
+/**
+ * 本机就是服务器时，ssh 到自己是纯开销，而且一旦这个主机名解析不了，整条观测面
+ * 会**静默退化成「全都没查成」**——2026-09-14 实咬：这台机器上 `/etc/hosts` 没有
+ * `contabo`（当初那个别名是手配的，装机文档里没有，换机/重置后必然丢），
+ * 于是 `dao now` 报「审官会话没查成：连不上 contabo」，18 张 PR 全被挂上「要你拍」。
+ *
+ * 这里的兜底是**在 ssh 失败之后**才走：本机跑同一份 REMOTE_SCRIPT（`sh -s`，同一套
+ * 目录与 /proc 判据），拿到的是一手数据，不是降级成空表。两条约束：
+ *   · 只在 ssh 没成时才用，ssh 通了就以远端为准（真跨机部署时行为不变）；
+ *   · 用了要说出来（`via: 'local-self-scan'`），别让「本机兜底」在盘面上长得像「远端正常」。
+ */
+export async function fetchLocalSelfScan({ cwd } = {}) {
+  const r = await run('sh', ['-s'], { cwd, timeout: SSH_TIMEOUT_MS, input: REMOTE_SCRIPT });
+  if (!r.ok) return { registries: { scanned: false, error: `本机自扫起不来：${r.error}` }, sessions: { scanned: false, error: `本机自扫起不来：${r.error}` } };
+  const p = parseRemoteScan(r.out);
+  if (!p.ended) {
+    const why = '本机自扫没跑完（输出没收到结束标记，按没查成算）';
+    return { registries: { scanned: false, error: why }, sessions: { scanned: false, error: why } };
+  }
+  const items = attachRemoteTreeHeads(p.regs, p.trees);
+  return {
+    registries: { scanned: true, via: 'local-self-scan', items, dirsScanned: p.dirsScanned, dirsMissing: p.dirsMissing, bad: p.bad },
+    sessions: { scanned: true, via: 'local-self-scan', items: p.procs },
+  };
+}
+
 export async function fetchRemote({ host, cwd } = {}) {
   if (!host) {
     const why = '没给服务器名（--no-server 或本机不认识 contabo）';
@@ -401,7 +442,10 @@ export async function fetchRemote({ host, cwd } = {}) {
     cwd, timeout: SSH_TIMEOUT_MS, input: REMOTE_SCRIPT,
   });
   if (!r.ok) {
-    const why = `连不上 ${host}：${r.error}`;
+    // ssh 没成 ⇒ 名字解析不了时本机就是那台机器，自己扫一遍；扫不成仍按「没查成」如实报。
+    const self = await fetchLocalSelfScan({ cwd });
+    if (self.registries.scanned === true) return self;
+    const why = `连不上 ${host}：${r.error}（本机自扫也没成：${self.registries.error || ''}）`;
     return { registries: { scanned: false, error: why }, sessions: { scanned: false, error: why } };
   }
   const p = parseRemoteScan(r.out);
@@ -422,11 +466,21 @@ function mergeRegistries(local, remote) {
   if (local.scanned !== true && remote.scanned !== true) {
     return { scanned: false, error: `本机与服务器两侧都没查成：${remote.error || ''} / ${local.error || ''}` };
   }
-  const items = [...(local.items || []), ...(remote.items || [])];
+  // 按落点去重：本机候选目录与远端脚本的候选根会重叠（本机就是服务器时更是同一批文件），
+  // 不去重会让同一份登记出现两次。判官取 ts 最大的那份，重复不改变结论——但它让
+  // 「候选目录几个」「登记几条」这些数失真，正是排查落点问题时唯一能用的那几个数。
+  const seen = new Set();
+  const items = [...(local.items || []), ...(remote.items || [])].filter((it) => {
+    const k = it && it.from ? String(it.from) : null;
+    if (!k) return true;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
   return {
     scanned: true,
     items,
-    dirsScanned: [...(local.dirsScanned || []), ...(remote.dirsScanned || [])],
+    dirsScanned: [...new Set([...(local.dirsScanned || []), ...(remote.dirsScanned || [])])],
     dirsMissing: [...(local.dirsMissing || []), ...(remote.dirsMissing || [])],
     bad: [...(local.bad || []), ...(remote.bad || [])],
     halfUnscanned: local.scanned !== true ? '本机侧没查成' : (remote.scanned !== true ? `服务器侧没查成：${remote.error}` : null),
