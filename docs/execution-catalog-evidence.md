@@ -173,6 +173,61 @@ Reference documents include `https://cursor.com/docs/cli/acp`,
 `https://docs.devin.ai/cli/`, and
 `https://docs.devin.ai/cli/enterprise/windsurf-auth`.
 
+## Native pi direct, 2026-09-13
+
+The 2026-09-09 HTTP probe above tested the raw endpoints. This section records what
+the **carrier** does, which is the thing dispatch actually uses, and it disagrees
+with the earlier probe in one place.
+
+`~/.pi/agent/models-store.json` was refreshed with `pi update --models`. The
+authenticated rosters are: `deepseek` 2 IDs (`api.deepseek.com`, openai-completions),
+`opencode-go` 27 IDs (`opencode.ai/zen/go/v1` for 20 openai-completions and 4
+openai-responses, `opencode.ai/zen/go` for 2 anthropic-messages), `anthropic` 14 IDs.
+`xai` is present as an **OAuth** entry, not an api_key, and `anthropic` has **no
+entry at all** in `~/.pi/agent/auth.json` even though `pi auth check --model
+anthropic/claude-opus-5` reports `ready` — that check proves a credential resolves,
+not that the upstream accepts it.
+
+One bounded `pi -p --model <provider>/<id> "reply with the single word ok"` per row:
+
+| Row | Result |
+| --- | --- |
+| `opencode-go/kimi-k3`, `qwen3.8-max`, `glm-5.3`, `minimax-m3` | answered `ok` |
+| `opencode-go/hy3`, `omen-alpha` | answered `ok` |
+| `opencode-go/deepseek-flash` | answered `ok` |
+| `opencode-go/deepseek-v4-flash`, `deepseek-v4-pro` | 403 `RegionError` (China-hosted only) |
+| `deepseek/deepseek-flash` | 402 `Insufficient Balance` |
+| `anthropic/claude-opus-5` | 401 `invalid x-api-key` |
+
+**Correction to the 2026-09-09 probe.** It recorded OpenCode Go as 403. Driven
+through pi, the same models answer. The raw-HTTP 403 was an artifact of calling the
+endpoint without pi's session handling, not a property of the provider. The
+`direct_http` evidence on those profiles is therefore about the bare endpoint, not
+about the carrier route.
+
+Consequences recorded in the catalog, not assumed from it:
+
+- **Carrier route works for opencode-go on all three transports** (openai-completions,
+  openai-responses, anthropic-messages). `scripts/lib/execution-pi-provider.mjs`'s
+  frozen `NATIVE` table therefore holds a **list of allowed (api, baseUrl) pairs per
+  provider**, not one pair. The pair is matched exactly against the provider's own
+  list and must equal the catalog row; the api_key-only, literal-key, fresh-catalog,
+  single-model-match and exact-endpoint rules are unchanged.
+- **`deepseek` and `anthropic` are wired but not funded.** Direct DeepSeek returns
+  402 on the account and Anthropic's key is rejected as invalid; both transports
+  reach the vendor. Their catalog entries are inventories of what is configurable,
+  not usable routes.
+- **`xai` cannot be carried by this launcher.** Its credential is OAuth and the
+  launcher admits only a literal `api_key`; admitting OAuth would be a rule change.
+- **Registration is not dispatch.** Every profile added on 2026-09-13 is
+  `enabled: false` with `availability.status: unavailable` and no execution
+  evidence; `selectExecutionProfile` still refuses each one. No account balance,
+  quota or quality tier was measured for any of them.
+- **Five roster IDs have no family** in `modelFamily()`: `hy3`, `hy4-preview`,
+  `longcat-2.0`, `mimo-v2.5`, `mimo-v2.5-pro`. They are not registered — the
+  cross-vendor gate cannot reason about an unknown family. Naming them is a change
+  to the routing vocabulary and stays with a human.
+
 ## Schema and routing integration
 
 Top level: `schemaVersion: 1`, `providers`, `accountPools`, `sources`, `profiles`,
