@@ -105,13 +105,24 @@ import { createHash } from 'node:crypto';
  *  报帅的 key 一旦拼进中文 marker（`查重标记（勿删）：…`）或带空格的对象名（`issue #966`），
  *  网关整条拒收——而报帅正是最不能静默丢的路（2026-09-08 实咬：开单/追加每轮全被拒，
  *  失败循环重试，用户一张单都看不到）。
- *  折法：能直接过闸的原样返回（旧账本键不变）；过不了的把非法段折成 '-' 并缀内容哈希——
- *  同输入必同键，幂等去重语义不变。 */
+ *
+ *  折法（顺序不能反——PR #1143 审官红：空白对象先哈希会换键，旧 append 账失效）：
+ *    1. 能直接过闸的原样返回；
+ *    2. 否则按旧 keySafe 折每一段（trim、空白→`-`、剥非法、截 120）。折完整键若已过真闸，
+ *       必须沿用——`PR #1154` 已落账为 `commander-escalate:append:123:PR-#1154`；
+ *    3. 旧结果仍会被真闸拒（非 ASCII term、整键超长）才哈希折叠。同输入必同键。 */
 export const GATEWAY_KEY_RE = /^[\x21-\x7E]{1,200}$/;
+/** 旧 commander.keySafe 的段折法。只给 gatewayIdemKey 做跨版本兼容，不单独当闸。 */
+function legacyKeySafe(s) {
+  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+}
 export function gatewayIdemKey(...parts) {
-  const raw = parts.filter((p) => p != null && String(p) !== '').map(String).join(':');
+  const segs = parts.filter((p) => p != null && String(p) !== '').map(String);
+  const raw = segs.join(':');
   if (!raw) return 'x';
   if (GATEWAY_KEY_RE.test(raw)) return raw;
+  const legacy = segs.map(legacyKeySafe).join(':');
+  if (GATEWAY_KEY_RE.test(legacy)) return legacy;
   const ascii = raw.replace(/[^\x21-\x7E]+/g, '-');
   const h = createHash('sha256').update(raw).digest('hex').slice(0, 12);
   return `${ascii.slice(0, 180)}~${h}`;

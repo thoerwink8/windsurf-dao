@@ -409,9 +409,10 @@ describe('gatewayIdemKey：报帅 key 必须过网关 KEY_RE（2026-09-08 实咬
     assert.equal(GATEWAY_KEY_RE.test(k1), true);
     assert.equal(k1, k2, '幂等去重靠同输入同键，折完不能引入随机性');
   });
-  it('带空格的对象名（issue #966）也过闸', async () => {
+  it('带空格的对象名沿用旧 keySafe 键，不哈希', async () => {
     const { GATEWAY_KEY_RE, gatewayIdemKey } = await LIB;
     const k = gatewayIdemKey('commander-escalate', 'append', 1088, 'issue #966');
+    assert.equal(k, 'commander-escalate:append:1088:issue-#966');
     assert.equal(GATEWAY_KEY_RE.test(k), true);
   });
   it('本来就干净的 ASCII key 原样返回——旧账本键不折、去重不断代', async () => {
@@ -433,6 +434,7 @@ describe('gatewayIdemKey：报帅 key 必须过网关 KEY_RE（2026-09-08 实咬
 // 真实 validateRequest 返回 missing_idempotency。append×2 改走 gatewayIdemKey 整键闸。
 describe('报帅幂等键过网关真闸（ASCII 1–200，不是「无空白即可」）', () => {
   const fs = require('node:fs');
+  const os = require('node:os');
   const CMD_SRC = path.join(__dirname, '..', 'scripts', 'commander.mjs');
   const GW = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'issue-gateway.mjs').replace(/\\/g, '/'));
 
@@ -447,10 +449,16 @@ describe('报帅幂等键过网关真闸（ASCII 1–200，不是「无空白即
     };
   }
 
-  it('两条 append 与 open/close 都走 gatewayIdemKey，不再有 keySafe', () => {
+  // 旧 commander.keySafe 拼 append 键的公式。跨版本回放必须字面复现，不能调现行实现。
+  function oldAppendKey(issue, target) {
+    const safe = String(target == null ? '' : target).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+    return `commander-escalate:append:${issue}:${safe}`;
+  }
+
+  it('两条 append 与 open/close 都走 gatewayIdemKey；commander 不再自带 keySafe', () => {
     const src = fs.readFileSync(CMD_SRC, 'utf8');
-    assert.doesNotMatch(src, /function keySafe\(/, 'keySafe 已删：它比真闸松（收汉字）');
-    assert.doesNotMatch(src, /一-鿿/, '汉字白名单回来了 = append 又会 missing_idempotency');
+    assert.doesNotMatch(src, /function keySafe\(/, 'commander 里的 keySafe 已删：它比真闸松（收汉字）；兼容折法在 gatewayIdemKey');
+    assert.doesNotMatch(src, /一-鿿/, '汉字白名单回到 commander = append 又会 missing_idempotency');
     assert.match(src, /gatewayIdemKey\('commander-escalate', 'append', booked\.issue, verdict\.target\)/,
       'judge append 没走整键闸');
     assert.match(src, /gatewayIdemKey\('commander-escalate', 'append', existing, t\)/,
@@ -474,12 +482,14 @@ describe('报帅幂等键过网关真闸（ASCII 1–200，不是「无空白即
     assert.equal(rejected.stage, 'missing_idempotency');
 
     const folded = gatewayIdemKey('commander-escalate', 'append', 123, target);
+    assert.notEqual(folded, oldAppendKey(123, target), '旧 keySafe 留汉字，必须走哈希，不能沿用会被真闸拒的旧键');
+    assert.match(folded, /~/);
     const accepted = validateRequest(commentReq(folded));
     assert.equal(accepted.ok, true, `折后仍被真闸拒：${folded} → ${accepted.error || ''}`);
     assert.equal(accepted.request.idempotency_key, folded);
   });
 
-  it('超长 ASCII term 拼进前缀会超 200；整键闸截完仍被真闸放行', async () => {
+  it('超长 ASCII term：旧 keySafe 截 120 已过真闸，沿用旧键不哈希', async () => {
     const { gatewayIdemKey } = await LIB;
     const { validateRequest } = await GW;
     const longTerm = 'A'.repeat(250);
@@ -490,8 +500,58 @@ describe('报帅幂等键过网关真闸（ASCII 1–200，不是「无空白即
     assert.equal(rejected.stage, 'missing_idempotency');
 
     const folded = gatewayIdemKey('commander-escalate', 'append', 123, longTerm);
+    assert.equal(folded, oldAppendKey(123, longTerm));
     const accepted = validateRequest(commentReq(folded));
-    assert.equal(accepted.ok, true, `超长折后仍被真闸拒：len=${folded.length} ${accepted.error || ''}`);
-    assert.ok(folded.length <= 200);
+    assert.equal(accepted.ok, true, `折后仍被真闸拒：len=${folded.length} ${accepted.error || ''}`);
+    assert.equal(folded.length <= 200, true);
+  });
+
+  it('旧 keySafe 折完仍超 200：才哈希折叠', async () => {
+    const { GATEWAY_KEY_RE, gatewayIdemKey } = await LIB;
+    const { validateRequest } = await GW;
+    const a = 'A'.repeat(80);
+    const b = 'B'.repeat(80);
+    const c = 'C'.repeat(80);
+    const legacy = `${a}:${b}:${c}`;
+    assert.equal(legacy.length > 200, true, '夹具失真：三段拼完必须超 200');
+    assert.equal(GATEWAY_KEY_RE.test(legacy), false);
+    const folded = gatewayIdemKey(a, b, c);
+    assert.match(folded, /~/);
+    assert.equal(GATEWAY_KEY_RE.test(folded), true);
+    const accepted = validateRequest(commentReq(folded));
+    assert.equal(accepted.ok, true, `整键超长折后仍被真闸拒：len=${folded.length} ${accepted.error || ''}`);
+  });
+
+  it('跨版本回放：旧 append key 已入账，当前 key 不得第二次 comment', async () => {
+    const { gatewayIdemKey } = await LIB;
+    const { applyIssueWrite } = await GW;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'escalate-idemp-'));
+    const calls = [];
+    const runMarshal = (args) => {
+      calls.push(args.slice());
+      if (args[1] === 'comment') {
+        return { ok: true, out: 'https://github.com/thoerwink8/windsurf-dao/issues/123#issuecomment-9\n' };
+      }
+      if (args[0] === 'api') {
+        return { ok: true, out: JSON.stringify({ user: { login: 'dao-marshal[bot]', type: 'Bot' } }) };
+      }
+      return { ok: false, error: `unexpected ${args.join(' ')}` };
+    };
+
+    const target = 'PR #1154';
+    const oldKey = oldAppendKey(123, target);
+    assert.equal(oldKey, 'commander-escalate:append:123:PR-#1154', '夹具失真：必须是审官点名的旧键');
+    const nowKey = gatewayIdemKey('commander-escalate', 'append', 123, target);
+    assert.equal(nowKey, oldKey, '当前 append key 必须等于旧 keySafe 结果，否则已落账的恢复重试会换键再评');
+
+    const first = applyIssueWrite(commentReq(oldKey), { dir, runMarshal });
+    assert.equal(first.ok, true, first.error);
+    assert.equal(first.replay, false);
+    assert.equal(calls.filter((c) => c[1] === 'comment').length, 1);
+
+    const second = applyIssueWrite(commentReq(nowKey), { dir, runMarshal });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(second.replay, true, '命中旧账必须 replay，不能当新写入');
+    assert.equal(calls.filter((c) => c[1] === 'comment').length, 1, '不得第二次 issue comment');
   });
 });
