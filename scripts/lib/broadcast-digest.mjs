@@ -69,13 +69,6 @@ export function enqueueBroadcast(queue, { text, source, now } = {}) {
   return { queue: next, flush: null };
 }
 
-/** 强制把当前队列吐出来（菜单不走这条；指挥官跨日 / 装机自检用）。 */
-export function flushBroadcast(queue) {
-  const q = normalizeQueue(queue);
-  if (!q.items.length) return { queue: { day: q.day, items: [] }, flush: null };
-  return { queue: { day: q.day, items: [] }, flush: { day: q.day, items: q.items } };
-}
-
 /**
  * 指挥官每轮：换日且昨天有条目 ⇒ 吐出。
  * 不等有新条入队——安静的新一天也要把昨天的摘要发掉。
@@ -137,15 +130,6 @@ export function parseChatListJson(out) {
     return { scanned: false, error: `群列表不是 JSON：${String(e.message || e).slice(0, 80)}` };
   }
   return { scanned: true, chats: asChatList(raw) };
-}
-
-export function chatIdFromCreate(out) {
-  try {
-    const j = JSON.parse(String(out ?? ''));
-    return str(j?.data?.chat_id || j?.chat_id || j?.data?.id);
-  } catch {
-    return str(out).replace(/^"|"$/g, '');
-  }
 }
 
 export function abandonedChatIds(chats) {

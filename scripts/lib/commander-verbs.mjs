@@ -16,6 +16,11 @@
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { ROLES } from './gh.mjs';
 import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
+// #1236：判据版本。**定义在这里**（不在 commander-core）——drainLedgerKey 也在这文件，
+// 而 commander-core → commander-verbs 是单向依赖，写在 core 会绕成环。
+import { retryEpoch, stampRetryKey } from './retry-epoch.mjs';
+// #1237：失败分类（terminal / retryable / unknown）——判据在那边，这里只消费。
+import { judgeRetry } from './retry-verdict.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -326,10 +331,30 @@ export function validateRetryDrain(input = {}) {
   const tries = Number(prevObj.tries) || 0;
   const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : 0;
 
+  // #1237：先问「这个失败再试一次会不会不一样」。判据在 lib/retry-verdict.mjs，
+  // 不在这里写词表——这里只消费结论。
+  //
+  // 为什么这一条要在 max-tries **之前**：7 天日志 274 条错误里 54% 是不可试的
+  // （树/文件已经不在了、账本里根本没这条记录、执行目录判死）。对它们试满 3 次
+  // = 白等 3×45 分钟才见到人，而每一次都不可能成功。
+  // 一次就交人 vs 两小时后交人，差的不是效率，是「这张卡还活着吗」。
+  //
+  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError）。
+  // 没记过原文 → verdict 为 unknown → 按可试处理（保守：宁可多试一次）。
+  const verdict = judgeRetry({ error: prevObj.lastError });
+  const hopeless = gated(
+    'retry-drain.hopeless',
+    verdict.verdict === 'terminal',
+    fail('hopeless', `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`,
+      { escalate: true, tries, retryVerdict: 'terminal', verdictWhy: verdict.why, error: prevObj.lastError || null }),
+    C,
+  );
+  if (hopeless) return hopeless;
+
   const exhausted = gated(
     'retry-drain.max-tries',
     tries >= maxTries,
-    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries }),
+    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries, retryVerdict: verdict.verdict }),
     C,
   );
   if (exhausted) return exhausted;
@@ -422,14 +447,66 @@ export function openIssueDedupKey(reason, target) {
   return `${String(reason || '')}+${String(target || '')}`;
 }
 
+/**
+ * #1236：判据版本，进程内只算一次。
+ *
+ * 「只算一次」不是性能优化（137KB 哈希不到 5ms），是**一致性**：一个进程里有几十处建键，
+ * 必须用同一个版本号。若逐次重读文件，中途有人改了文件（派工链在跑的同时有人在 worktree
+ * 里提交）就会出现同一轮里两套键，账记到两个格子——正是 #909 那个形状。
+ * 缓存的是**值**不是**文件**，所以不存在「缓存何时失效」的问题：进程活多久就用多久。
+ */
+let EPOCH_CACHE = null;
+export function epochOf({ reload = false } = {}) {
+  if (!reload && EPOCH_CACHE) return EPOCH_CACHE;
+  EPOCH_CACHE = retryEpoch();
+  return EPOCH_CACHE;
+}
+
+// #1236：把 stampRetryKey 从本模块转出去（re-export），让 commander-core 只依赖
+// commander-verbs 这一个方向，不必为了一个纯函数再 import 一层（也就不会绕成环）。
+export { stampRetryKey };
+
+/** retry-epoch 的 stampRetryKey 包一层本进程的版本号，调用方不必自己取 epoch。 */
+export function stampedKey(base) { return stampRetryKey(base, epochOf().epoch); }
+
 /** drain 账本键：有 head 写 pr:<pr>@<head>，拿不到退回 pr:<pr>（没查成，不猜）。
  *  decide 与 execute 必须走这一个门面——#909 修了 decide 侧、漏了 attach-reviewer 写侧，
- *  账记到另一个格子，票还在队列却永远走不进 retry-drain。 */
-export function drainLedgerKey(pr, head) {
+ *  账记到另一个格子，票还在队列却永远走不进 retry-drain。
+ *  #1236：带判据版本——决定「drain 推不推得动」的代码变了，旧账自动作废（lib/retry-epoch.mjs）。 */
+/**
+ * 形态部分：`pr:<pr>@<head>`（拿不到 head 退回 `pr:<pr>`）。
+ * **常量、与判据版本无关**，给同步上下文（构造 fixture）用。
+ *
+ * 为什么拆出这一半：账本键会出现在测试的**同步** fixture 里（`sit()` 这种返回普通对象的
+ * 地方），那里 `await` 用不了。逼调用方去 await 一个纯拼字符串的函数，结果就是测试退回
+ * 手拼字面量——而手拼正是加判据版本那天静默失配的根源（测试假绿、生产卡死）。
+ */
+export function drainLedgerShape(pr, head) {
   const p = pr == null ? '' : String(pr).trim();
   const headOid = typeof head === 'string' && head.trim() ? head.trim() : null;
   return headOid ? `pr:${p}@${headOid}` : `pr:${p}`;
 }
+
+export function drainLedgerKey(pr, head) {
+  return stampedKey(drainLedgerShape(pr, head));
+}
+
+/**
+ * 同步建键门面：`{ rework, rereview, pump, drain }`，参数与对应的 Key() 函数一致。
+ *
+ * **这是给同步 context 用的**（fixture / 纯函数测试）：判据版本在**模块加载时**取一次，
+ * 于是每个键都是同步可算的普通字符串。生产侧不要在长跑的进程里用它——
+ * 那个进程应当在**每轮开头**取一次版本（`epochOf()`）并全程沿用，否则同一轮里两套键
+ * 会把账记到两个格子（#909 的形状）。
+ *
+ * 版本值本身是同一份：`epochOf()` 进程内只算一次，所以这里取到的与 Key() 函数取到的一致。
+ */
+export const retryKeysSync = {
+  rework: (pr, head) => stampedKey(`rework:${pr}@${head}`),
+  rereview: (pr, head) => stampedKey(`rereview:${pr}@${head}`),
+  pump: (pr) => stampedKey(`pump-draft:${pr}`),
+  drain: (pr, head) => stampedKey(drainLedgerShape(pr, head)),
+};
 
 /**
  * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
@@ -442,10 +519,17 @@ export function applyDrainLedger({
   if (!verdict.countTry || pr == null) return { ledger, wrote: false, verdict };
   const key = drainLedgerKey(pr, head);
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
+  // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
+  // 只存首行、截 400 字：账本是给人看的判据，不是日志转储。
+  const lastError = String((payload && (payload.error || payload.why)) || '').trim().split(/\r?\n/)[0].slice(0, 400) || null;
   return {
     ledger: {
       ...(ledger && typeof ledger === 'object' ? ledger : {}),
-      [key]: { at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1 },
+      [key]: {
+        at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1,
+        ...(lastError ? { lastError } : {}),
+      },
     },
     wrote: true,
     verdict,

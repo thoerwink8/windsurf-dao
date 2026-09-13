@@ -29,6 +29,7 @@ import {
 } from './lib/progress-detect.mjs';
 import { runGh } from './lib/dao-cmd.mjs';
 import { planExhaustedPush, exhaustedPushPath } from './lib/exhausted.mjs';
+import { epochOf } from './lib/commander-verbs.mjs';
 
 /** 与 shuai-scan 同一叫醒哨兵：有停滞且指纹变了才打到 stdout。 */
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
@@ -189,7 +190,8 @@ export function pushExhaustedToShuai({ dryRun = false, lines = [] } = {}) {
   }
   const ledgerPath = process.env.PROGRESS_WATCH_EXHAUSTED_LEDGER || exhaustedPushPath(homedir());
   const ledger = loadJson(ledgerPath);
-  const plan = planExhaustedPush({ prs: got.prs, ledger });
+  // #1238：推送账也带判据版本——认输标本身现在按版本判断过期，账与标必须同一套。
+  const plan = planExhaustedPush({ prs: got.prs, ledger, epoch: epochOf().epoch });
   for (const p of plan.pushes) {
     lines.push(p.text);
     if (!dryRun) ledger[p.key] = { at: new Date().toISOString(), pr: p.pr, head: p.head };

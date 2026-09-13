@@ -31,9 +31,16 @@ import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
 import {
-  proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
+  proposeAddLabel, validateRetryDrain, escalateToOpenIssue, stampedKey,
+  drainLedgerKey, epochOf, MAX_DRAIN_TRIES,
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
+// #1236：重试键的三件套（判据版本 / 键拼装 / drain 账键）转出去，让**测试与生产共用同一把键**。
+// 手拼字面量的测试在加版本那天会静默失配（测试假绿、生产卡死）——今天漏的是测试，
+// 明天就是写侧（#909 的形状）。
+export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
+// #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
+import { judgeRetry } from './retry-verdict.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -94,11 +101,28 @@ export function attachReviewerWhy(ticket) {
   return `PR #${pr} 复审票来源没查成`;
 }
 
-/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
-export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
+/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。
+ *  #1236：带判据版本——决定「推不推得动」的代码变了，旧账自动作废（见 lib/retry-epoch.mjs）。 */
+export function reworkKey(pr, head) {
+  return stampedKey(`rework:${pr}@${head}`);
+}
 
-/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
-export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。
+ *  #1236：同样带判据版本——泵不动的原因若是执行链坏了，修好后该重获机会。 */
+export function pumpDraftKey(pr) {
+  return stampedKey(`pump-draft:${pr}`);
+}
+
+/**
+ * #1236：复审键。原先在 decide / execute 各写一份字面量，这次抽成一个函数——
+ * 两处必须用**同一个**判据版本，写两份早晚分叉（#909 就是 decide 修了、写侧漏了，
+ * 账记到另一个格子，票还在队列却永远走不进 retry-drain）。
+ */
+export function rereviewKey(pr, head) {
+  return stampedKey(`rereview:${pr}@${head}`);
+}
+
+
 
 /**
  * 老单还有没有可执行动作（审查入队 / 判红返工 / 冲突 / 收口泵）。
@@ -926,6 +950,8 @@ function collectCandidates(situation) {
       prs: prList,
       ledger: situation.exhaustedPush || {},
       pushedThisRound: [],
+      // #1238：带上本轮判据版本。判据改过 → 按旧判据打的认输标自动过期。
+      epoch: epochOf().epoch,
     });
     for (const c of clearPlan.clears) {
       out.push(withNeeds({
@@ -971,7 +997,11 @@ function collectCandidates(situation) {
       continue;
     }
     if (drain.code === 'grace') continue;
-    if (drain.code === 'exhausted') {
+    // #1237：'hopeless' 与 'exhausted' 都产认输动作，但**理由不一样**，评论也要不一样：
+    //   hopeless  = 判据本身就是「拒」，一次都不该试 → 不该写「试了 N 次仍没推动」
+    //   exhausted = 真试满了，机械重试确实无解
+    // 混成一句话会误导读的人往错方向查（这正是 #1233 认输评论那个病的同一个形状）。
+    if (drain.code === 'exhausted' || drain.code === 'hopeless') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
       if (ticketRepo) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
@@ -980,6 +1010,8 @@ function collectCandidates(situation) {
       out.push(withNeeds(buildMarkExhausted({
         pr: it.pr, verb: 'drain', tries, head: itHead,
         why: drain.error,
+        retryVerdict: drain.retryVerdict || (drain.code === 'hopeless' ? 'terminal' : null),
+        maxTries: MAX_DRAIN_TRIES,
       }), N['mark-exhausted']));
       exhaustedThisRound.add(Number(it.pr));
       continue;
@@ -1019,11 +1051,19 @@ function collectCandidates(situation) {
       const tries = Number(prev.tries) || 1;
       const ageMin = (nowMs - (Date.parse(prev.at || '') || 0)) / 60000;
       if (Number.isFinite(ageMin) && ageMin < REWORK_RETRY_GRACE_MIN) return;
-      if (tries >= MAX_REWORK_TRIES) {
+      // #1237：先问「这个失败再试一次会不会不一样」，再决定烧不烧名额。
+      // 不可试的（树没了 / 标签缺 / 执行目录判死）当场交人，别白等 3×宽限期。
+      const rworkVerdict = judgeRetry({ error: prev.lastError || prev.error });
+      if (tries >= MAX_REWORK_TRIES || rworkVerdict.verdict === 'terminal') {
         if (prHasStuckLabel(pr)) return;
+        const hopeless = rworkVerdict.verdict === 'terminal' && tries < MAX_REWORK_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rework', tries, head,
-          why: `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
+          retryVerdict: rworkVerdict.verdict,
+          maxTries: MAX_REWORK_TRIES,
+          why: hopeless
+            ? `PR #${pr.number} 返工派不动，且这个失败重试不会变（第 ${tries} 次即交人）——${prev.lastError || prev.error || '无原文'}`
+            : `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         return;
@@ -1321,16 +1361,23 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = `rereview:${pr.number}@${a.head}`;
+      const rrKey = rereviewKey(pr.number, a.head);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
       if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
       const firstRound = a.judgedTotal === 0;
-      if (tries >= MAX_REREVIEW_TRIES) {
+      // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
+      const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
+        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: a.head,
-          why: `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+          retryVerdict: rrVerdict.verdict,
+          maxTries: MAX_REREVIEW_TRIES,
+          why: hopeless
+            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
+            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;

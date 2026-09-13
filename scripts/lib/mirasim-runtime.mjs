@@ -193,13 +193,6 @@ export const TEST_ISOLATION_MARK = '结构性够不着真执行体';
 /** 生产入口显式放行真执行体的 env 名。dao.mjs 自己不许自打这面旗。 */
 export const REAL_EXECUTOR_ENV = 'DAO_REAL_EXECUTOR';
 
-/** 指挥官 spawn 子进程时打上放行旗。测试进程不要调。 */
-export function withRealExecutorEnv(env = process.env) {
-  const e = env && typeof env === 'object' ? { ...env } : {};
-  e[REAL_EXECUTOR_ENV] = '1';
-  return e;
-}
-
 /**
  * 工人会话里跑的生产入口（worker-done / reviewer-create）给本进程打旗。
  * 测试信号在则不打——不许从测试里选择加入。空/瘦 env 打旗：这正是工人 mirasim
@@ -1312,9 +1305,6 @@ export function createRuntime(opts = {}) {
 // 默认实例：dao.mjs 直接引这五个动词，不必关心连线细节。
 let shared = null;
 const runtime = () => (shared ||= createRuntime());
-/** 只给测试用：换掉默认实例。 */
-export function _setSharedRuntime(r) { shared = r; }
-
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
