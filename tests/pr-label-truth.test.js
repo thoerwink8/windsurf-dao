@@ -207,7 +207,91 @@ describe('stampPrLabelsFromDispatch', () => {
     });
     assert.equal(r.ok, true);
     assert.deepEqual(r.add, []);
+    assert.deepEqual(r.drop, []);
     assert.ok(!calls.some((a) => a[1] === 'edit'));
+  });
+
+  // 2026-09-14 实咬（#1256）：打标路只加不减，于是「工人换过模型」的 PR 上
+  // model/grok-4.6 与 model/claude-opus-5 并存。`pickModel` 对同前缀多条一律拒
+  // （worker-done.mjs:87），起审官被拒，那个 PR **永久**卡死。
+  // 现场：drain 报「有多个 model/* label（model/grok-4.6、model/claude-opus-5，不许猜一个），拒绝起审官」。
+  it('同前缀旧标要摘掉（换过模型的 PR 不许被旧标焊死）', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const { ensureRepoLabels } = await CARD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x', body: '署名 issue #1',
+            labels: [{ name: 'model/claude-opus-5' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-luna' }],
+            headRefName: 'dao-1',
+          }),
+        };
+      }
+      // label list 要给「已存在」的那些，否则 ensureRepoLabels 会去 label create（那一步不在被测范围）
+      if (args[0] === 'label' && args[1] === 'list') {
+        return { ok: true, out: JSON.stringify(['model/grok-4.6', 'model/claude-opus-5', 'type/写码', 'reviewer/gpt-5.6-luna', '卡死/等用户', '人工/待复核'].map((name) => ({ name }))) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '1256',
+      runGh,
+      repo: REPO,
+      ensureLabels: ensureRepoLabels,
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO, model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.add, ['model/grok-4.6']);
+    assert.deepEqual(r.drop, ['model/claude-opus-5']);
+    const edit = calls.find((a) => a[0] === 'pr' && a[1] === 'edit');
+    assert.ok(edit, JSON.stringify(calls));
+    // 拆成最简条件：一条 ok(a && b) 失败时看不出哪半坏了（本仓 assert-style 闸）。
+    const flagValue = (flag) => (edit.includes(flag) ? edit[edit.indexOf(flag) + 1] : null);
+    assert.equal(flagValue('--add-label'), 'model/grok-4.6', JSON.stringify(edit));
+    assert.equal(flagValue('--remove-label'), 'model/claude-opus-5', JSON.stringify(edit));
+  });
+
+  // 正控的另一半：**别的前缀不许碰**。同一次打标顺手清掉人工加的标会误伤——
+  // 这里挂一个本次要打的三个前缀之外的标，它必须原样留下。
+  it('不碰别的前缀的标（只清本次要打的那三个前缀）', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const { ensureRepoLabels } = await CARD;
+    const calls = [];
+    const runGh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          ok: true,
+          out: JSON.stringify({
+            title: 'x', body: '署名 issue #1',
+            labels: [{ name: 'model/claude-opus-5' }, { name: '卡死/等用户' }, { name: '人工/待复核' }],
+            headRefName: 'dao-1',
+          }),
+        };
+      }
+      // label list 要给「已存在」的那些，否则 ensureRepoLabels 会去 label create（那一步不在被测范围）
+      if (args[0] === 'label' && args[1] === 'list') {
+        return { ok: true, out: JSON.stringify(['model/grok-4.6', 'model/claude-opus-5', 'type/写码', 'reviewer/gpt-5.6-luna', '卡死/等用户', '人工/待复核'].map((name) => ({ name }))) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: '未预期 ' + args.join(' ') };
+    };
+    const r = stampPrLabelsFromDispatch({
+      pr: '9',
+      runGh,
+      repo: REPO,
+      ensureLabels: ensureRepoLabels,
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO, model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.drop, ['model/claude-opus-5']);
+    assert.ok(!r.drop.includes('卡死/等用户'), JSON.stringify(r.drop));
+    assert.ok(!r.drop.includes('人工/待复核'), JSON.stringify(r.drop));
   });
 
   it('判别力：把打标事件拿掉，起审官当场红', async () => {
