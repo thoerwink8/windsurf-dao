@@ -14,7 +14,8 @@
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
 | `scripts/dao.mjs` | 派工闭环的命令入口；盘面子命令 `board-archive` / `board-reset`（重测派单前的存档与清盘）：`board-archive` 全量存档卡片/终端/workers/Run/信箱到本机 `~/.dao/board-archive/`（不进 git），`board-reset` 默认 dry-run 只列将删的卡，加 `--apply` 先存档再删盘 |
-| `scripts/progress-watch.mjs` | 卡死发现的唯一定时面：读指挥官态势快照，连续 N 轮同一对象同一状态即判卡，叫醒帅位。2026-09-06 用户拍板删掉屏面指纹整层（`agent-stall-watch.mjs` 及其自动换人），改用超时判死，不猜执行体屏幕上写了什么 |
+| `scripts/progress-watch.mjs` | 卡死发现的判据库：读指挥官态势快照，连续 N 轮同一对象同一状态即判卡。**2026-09-07 起随 #1134 并进 `commander-act` 每轮调用，独立定时器已退役**——生命周期动作只留指挥官一口钟。更早的屏面指纹整层（`agent-stall-watch.mjs`）2026-09-06 已删，改用超时判死 |
+| `docs/decisions/2026-09-08-channel-concurrency-two-planes.md` | 渠道并发两平面拍板：请求级归网关、会话级归指挥官、看板只做控制面；三道天花板与各渠道实测数据 |
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/global-CLAUDE.md` | 用户级 `~/.claude/CLAUDE.md` 的真相源副本：换机跑 `node scripts/onboard.mjs` 自动同步（漂移由 SessionStart 哨兵报），git 不带机器配置 |
