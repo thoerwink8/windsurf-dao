@@ -12,7 +12,7 @@ clone 完先跑：
 node scripts/onboard.mjs            # 幂等接线：全局约定 / skills 链接 / memory；--dry-run 只看不动
 ```
 
-它把 §3/§10/§11 的接线全代劳（能修的修、危险的拒绝并指路）；剩下只有**手动带凭据**（§4）。
+它把 §3/§10/§11 的接线全代劳（能修的修、危险的拒绝并指路）；剩下只有**手动带凭据**（§4）。skills 被 mirasim 劫成整目录链接时走合并式接回（仓内逐个链，外来 skill 保留，不删 `~/.mirasim/skills`）。
 日后哪根链接断了、约定漂移了，重跑同一条命令即修复；SessionStart 哨兵发现未接线会注入一行提醒
 （绿=零输出）。来历见 docs/decisions/2026-08-31-local-guards-retire-with-server.md。
 
@@ -167,13 +167,16 @@ memory `fix-landed-at-one-call-site-only`）。平台闸没有这个问题：任
 `strict: false`（不要求分支与 master 同步）：开 true 会让每张 PR 合并前都被迫 rebase，
 在多张 PR 并行时互相踩，churn 远大于收益。
 
-装/查/改：
+装/查/改：走幂等脚本（一次一个仓，**不是分发器**——#999 实测照搬本仓配置会把 CI 不在 PR 上跑的仓永久锁死）：
 
 ```bash
-gh api repos/thoerwink8/windsurf-dao/branches/master/protection            # 查
-gh api -X PUT repos/OWNER/REPO/branches/master/protection --input p.json   # 装
-gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆（应急）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --check     # 查（形状对 exit 0，不对 exit 1）
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO --dry-run   # 只打印将 PUT 的载荷
+node scripts/apply-branch-protection.mjs --repo OWNER/REPO             # 装（已对则零副作用）
+gh api -X DELETE repos/OWNER/REPO/branches/master/protection           # 拆（应急，不走脚本）
 ```
+
+装之前先验：该仓 `check` workflow 在 `pull_request` 上跑、且当前是绿的。PUT 要 admin，用你自己的 `gh`，不要走 `gh-as worker`。
 
 **公开仓免费**。本仓 `private=false`，所以这条不花钱。私有仓要 Pro/Team。
 
@@ -193,6 +196,8 @@ gh api -X DELETE repos/thoerwink8/windsurf-dao/branches/master/protection  # 拆
 - 机器上开了梯子的话，网关必须配直连分流，否则流量会绕代理节点出海再绕回来（实测慢 35 倍，且不报错）。
 
 Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
+
+**手起的会话（人直接敲 `claude`，不经 Mirasim / cc-switch）另设 `autoCompactWindow=200000`**，落在那台机器 `~/.claude/settings.json`（2026-09-07 用户拍板）。依据是当晚一次 7 小时帅位长会话的实测：967 次调用、cacheRead 2.96 亿 / output 69 万 = **428×**，单次 cacheRead 中位 287,889，而静态注入面（CLAUDE.md + skills 清单 + memory 索引 + CLI 内置）只占 45,606——**84% 是会话历史累积**，砍约定文件最多打七折，压窗口才动得了数量级。上面 500k 那条管的是 cc-switch 下发链路，两条互不覆盖；Mirasim 起的会话走它自己的 `--settings` 临时文件（当时实测强写 800000），改本机 settings 对它无效。
 
 ## 6. pi 怎么配
 
@@ -332,7 +337,11 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 '{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs   # 应出 deny JSON、exit 0
 ```
 
-## 9d. Linux 服务器起 Orca 无头运行时（2026-08-24 拍板）
+## 9d. Linux 服务器起 Orca 无头运行时（已退役，#1150）
+
+**Orca 执行体已退役（2026-09-08 拍板，#1150 收尾）。新机不要照本节装 orca-serve / AppImage。**
+现役执行体是 mirasim；服务账号仍是 linux 用户 `orca`（`User=orca` / `/home/orca` 不在退役范围）。
+下面是 2026-08-24 当时的装机记录，只作回滚对照，不是现役步骤。
 
 拍板见 `docs/decisions/2026-08-24-linux-server-runtime-from-zero.md`：运行时搬 Linux 服务器，Windows 本机转人工派单。**下面每条都在 Ubuntu 24.04.4 + glibc 2.39 上真跑过**（orca 1.4.188 / Electron 43.1.0，AppImage 196MB，ready 契约 4～10s 出）。官方文档：`stablyai/orca` 的 `docs/reference/headless-linux-server.md`。
 
@@ -365,6 +374,7 @@ command -v orca                        # → ~/.local/bin/orca
 orca repo add --path /path/to/windsurf-dao --json
 
 # ⑦ 挂 skills（Linux 软链不需要开发者模式，这是搬家红利之一）
+# 必须逐个链，不要 ln -sfn host/skills ~/.claude/skills 整目录（那是 mirasim 劫法，dao-check ㉚ 报「被劫」）
 mkdir -p ~/.claude/skills
 for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/.claude/skills/"$n"; done
 
@@ -378,6 +388,8 @@ orca account add --help
 # 卡死处置：不要装 dao-nudge-stalled（2026-09-07 退役）。交卷/判定后停会话，差集由指挥官起短会话。
 #   机器上若还留着：sudo bash scripts/install-nudge-stalled.sh（脚本改成卸载）
 #   验：systemctl list-timers --all 里没有 dao-nudge-stalled.timer
+# 看板阶段超时（#818 墙钟闸，跟推进量不是同一把尺）：sudo bash scripts/install-board-watch.sh（单元 host/machine/systemd/dao-board-watch.*）
+#   验：list-timers 里 dao-board-watch.timer 的 NEXT 必须是时间（OnCalendar 现行 *:19/20）
 # 僵尸卡回收：sudo bash scripts/install-board-gc.sh（单元 host/machine/systemd/dao-board-gc.*）
 #   采 mirasim 树；worktree-rm 退役后走 git 删树兜底。验：journalctl -u dao-board-gc 不能再出现 `orca_retired` 且僵尸还在
 # 消歧官（#1006）：sudo bash scripts/install-dao-refiner.sh（单元 host/machine/systemd/dao-refiner.*）
@@ -387,6 +399,12 @@ orca account add --help
 #   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
+# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal.*）
+#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；本单元每 5 分钟合并式接回，不删 mirasim 自有 skill
+#   验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间；dao-check ㉚ 绿（被劫红、没装 SKIP）
+# mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
+#   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
+#   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。
@@ -458,7 +476,7 @@ sudo bash scripts/install-land.sh
 ```bash
 sudo node scripts/commander.mjs install    # 写 commander-act/inventory 的 service+timer 到 /etc/systemd/system/
                                             # 完了自动 daemon-reload + enable --now（非 root 会在写盘时失败退出并给命令）
-node scripts/commander.mjs status           # 自检三态：timer 在册且 enabled 才通（server-check 第⑭项也引它）
+node scripts/commander.mjs status           # 自检三态：timer 会自己响才通（enabled 但 NEXT 空也是红；server-check 第⑭项也引它）
 ```
 
 眼睛 = `commander-act.timer`（每 20 分钟 scan→decide→执行）+ `commander-inventory.timer`（每 6 小时盘点体检）。
@@ -496,7 +514,9 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 ### 搬过去之后本仓的红项变化（实测）
 
-orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+
+（这段是 2026-09 初的实测快照。当时那批「云上注定红」清单曾写在仓根 `AGENTS.md`；该文件现只留 Codex/跨执行体常驻指针，不再抄红项清单——判断真回归靠基线：先在**未改动**的 master 上跑一遍，多出来的红才是你引入的。）
 
 ## 10. 接上 memory
 
@@ -572,11 +592,19 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 | Claude Code | `~/.claude/skills/<name>/` | 本机 symlink → 仓内 `host/skills/<name>` |
 | Cursor Desktop | `~/.cursor/skills/<name>/`（用户级）或项目 `.cursor/skills/<name>/` | 同上；**不要**往 `~/.cursor/skills-cursor/` 写（系统内置区） |
 
-Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员/开发者模式）：缺的补、悬空的重建；本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只报 `skills-not-link` 不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。Cursor 侧 onboard 不管，按 §11.2 手动接。
+Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员/开发者模式）：缺的补、悬空的重建、整目录链接（mirasim 劫走）合并式接回（仓内逐个链，外来目录保留，不删 `~/.mirasim/skills`）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只报 `skills-not-link` 不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。Cursor 侧 onboard 不管，按 §11.2 手动接。
 
 ### 11.1 Claude Code：`~/.claude/skills`
 
-`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
+`node scripts/onboard.mjs` 即可。形态必须是**真目录 + 逐个链接**，不要 `ln -sfn host/skills ~/.claude/skills` 整目录（那正是 mirasim 的劫法，dao-check ㉚ 报「被劫」，与「没装」SKIP 分形）。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` / `skills-elsewhere` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
+
+mirasim 每次启动可能把装载面劫成 `~/.claude/skills → ~/.mirasim/skills`。onboard 会卸掉整目录链接、建成真目录、把仓内 skill 逐个链回，并把 mirasim 自有 skill（`lark-*` / `eval` 等）链回新目录——原目录不删。不要靠人手工 `ln -sfn` 对抗（重链两次都被劫回）。服务器加自愈：
+
+```bash
+sudo bash scripts/install-skills-heal.sh
+```
+
+验：`systemctl list-timers` 里 `dao-skills-heal.timer` 的 NEXT 必须是时间。故意把装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
@@ -770,7 +798,6 @@ bash scripts/vnc-browser.sh stop              # 用完就停
 要拿到 `200 0`——`ssl_verify_result=0` 才是证书真的被信任。
 
 ### 两个坑（都实咬过）
-
 1. **Ubuntu 23.10+ 会让 chromium 直接 FATAL: No usable sandbox**。
    真因是 `kernel.apparmor_restrict_unprivileged_userns=1`，非特权进程建不了 user namespace。
    **不要用 `--no-sandbox` 绕**——这个浏览器的用途正是让人在里面登录 GitHub，
@@ -785,6 +812,35 @@ bash scripts/vnc-browser.sh stop              # 用完就停
 拿到 `"Sign in to GitHub · GitHub - ..."` 才算真加载了。
 第一次跑时脚本把 chromium 的 stderr 丢进了 `/dev/null`，面上只显示「浏览器那格是停的」，
 查不出为什么——现在日志落 `~/.dao/vnc/chrome.log`，起不来会把最后几行打出来。
+
+## 13d. codex CLI 的沙箱前置（2026-09-10 实咬，审官链直接死在它上面）
+
+codex 新版默认带 Linux 沙箱，前置是 **`bubblewrap` + 允许建 user namespace**。缺任一条，
+审官会话起得来、**活儿一点没干**就结束，`session-read` 只回一行：
+`Codex could not find bubblewrap on PATH.` 或
+`Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.`
+2026-09-10 一晚三个审官会话全这样死，看着像「审官没干活」，真因在这两行。
+
+三件都要做：
+
+```bash
+apt-get install -y bubblewrap                 # ① 包
+# ② 二进制级放行 userns（Ubuntu 23.10+ 默认 kernel.apparmor_restrict_unprivileged_userns=1）
+cat > /etc/apparmor.d/bwrap <<'PROFILE'
+abi <abi/4.0>,
+include <tunables/global>
+profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, include if exists <local/bwrap> }
+PROFILE
+apparmor_parser -r /etc/apparmor.d/bwrap
+```
+
+③ **不要**用 `sysctl kernel.apparmor_restrict_unprivileged_userns=0` 绕。那条路是全局的：
+机器上**所有**进程都能建 userns，等于「为了给一个工具开锁，把整栋楼的锁拆了」——
+与 §13b 里 chromium 那条坑同一个判断（仓内判例：**不要用 `--no-sandbox` 绕**）。
+
+**验**（别只看装了包）：以服务用户身份实跑一句——
+`sudo -u orca bwrap --dev-bind / / --unshare-user true`；能安静退出才算放行生效，
+报 `setting up uid map: Permission denied` 就是 profile 没加载或被别的 profile 压住。
 
 ## 13.1 「模型好慢」先分段，别先查网络
 
@@ -886,7 +942,7 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 
 派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.json 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
 
-派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
+派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-create --pr <N>`（主路 `review-pending-drain`）。`reviewer-attach` 已退役，调用即拒。
 
 同文件另外两道 PreToolUse 只注不拦（插件 `hooks.json` 那条路 2026-09-05 实证不响，所以跟派工闸一样挂随仓）：问人闸 `host/skills/ask-gate/hooks/ask-gate.mjs`（matcher 提问工具）、工具使用闸 `host/skills/tool-use-gate/hooks/tool-use-gate.mjs`（matcher `^Bash$`，#969：heredoc 吞转义 / `python` 是 stub）。验：
 

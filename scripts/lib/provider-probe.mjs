@@ -38,6 +38,21 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const PROBE_MESSAGE = 'ping';
 const PROBE_MAX_TOKENS = 8;
 
+/**
+ * Codex /responses 探针请求体。input 必须是结构化 message，不能是裸字符串。
+ * 2026-09-10 实咬：裸 'ping' 被本机 responses→chat 桥转成空 messages，上游回
+ * `field messages is required` → 500，健康表把探针自己造的红记成「上游挂了」。
+ * 周期探针 gw-remote-probe.mjs 必须用这一份，不许再手写一份。
+ */
+export function codexResponsesProbeBody({ model, text = PROBE_MESSAGE, maxOutputTokens = PROBE_MAX_TOKENS } = {}) {
+  return {
+    model,
+    stream: true,
+    max_output_tokens: maxOutputTokens,
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: String(text ?? '') }] }],
+  };
+}
+
 /** 组 id → 健康表短名：gw（grok 组）→ grok，gw-dspool → dspool。 */
 function groupShort(groupId) {
   const g = String(groupId || '');
@@ -165,7 +180,7 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
       kind: 'codex-responses',
       url: `${cx.baseUrl}/responses`,
       headers: { Authorization: 'Bearer <codex OPENAI_API_KEY>', 'Content-Type': 'application/json' },
-      body: { model, stream: true, max_output_tokens: 16, input: PROBE_MESSAGE },
+      body: codexResponsesProbeBody({ model }),
       target,
       provider,
       model,

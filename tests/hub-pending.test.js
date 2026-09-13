@@ -269,7 +269,7 @@ describe('planMenuList：看待拍板走同一条取数', () => {
     assert.equal(issueActs[0].issue.number, 32);
   });
 
-  it('auto 的单不进菜单列表', async () => {
+  it('用户主动查看时，GitHub 待拍板标签不被 auto 判断隐藏', async () => {
     const { planMenuList } = await LIB;
     const r = planMenuList({
       github: { scanned: true, issues: [issue(33, { title: '要不要拦下这个明显切错基线的 PR？' })] },
@@ -277,8 +277,8 @@ describe('planMenuList：看待拍板走同一条取数', () => {
       policy: await policy(),
       repo: REPO,
     });
-    assert.equal(r.empty, true);
-    assert.equal(r.actions.length, 0);
+    assert.equal(r.empty, false);
+    assert.equal(r.actions.length, 1);
   });
 });
 

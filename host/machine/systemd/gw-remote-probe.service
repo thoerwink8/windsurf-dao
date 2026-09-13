@@ -27,7 +27,7 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
-# #792：自动化服务不继承个人 GH_TOKEN。探针走 hub-say，不写 Issue。
+# #792：自动化服务不继承个人 GH_TOKEN。探针走 hub-say，不写 Issue，但仍不许读个人 gh 登录。
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 # #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
 Environment=GH_CONFIG_DIR=/var/empty

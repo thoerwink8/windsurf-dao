@@ -215,6 +215,7 @@ export function writeJobDispatch({
   dir, ts, machine, schema, jobId, model, identity, workType,
   modelVersion, terminal, priceSnapshot, decisionId, prNumber, extra = {},
 } = {}) {
+  // extra.reviewer / extra.branch / extra.repo 由调用方在派工那一刻写入（#1116）。
   if (!jobId) return { ok: false, skipped: false, error: 'job.dispatch 缺 job_id' };
   if (!model) return { ok: false, skipped: false, error: 'job.dispatch 缺 model' };
   if (!ts) return { ok: false, skipped: false, error: 'job.dispatch 缺 ts' };
@@ -434,11 +435,6 @@ export function recordPair({ ctx, ts, source, worker, reviewer }) {
     });
   }
   return out;
-}
-
-/** 给测试与调用方拼路径用；不读事件内容（读事件是检查方自己的事）。 */
-export function eventPathHint(dir, machine) {
-  return join(dir, `*-${machine}.json`);
 }
 
 /** 给 amend 找所属 job：优先 --pr 的 gh-pr-N，否则 issue 对上的工人 dispatch。 */

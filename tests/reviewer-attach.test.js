@@ -192,43 +192,42 @@ describe('planAttachSoldierDispatch（#631 活性闸 + skip-wait 决策矩阵）
 });
 
 describe('buildReviewerInject skip-wait 标记（#631 注入契约）', () => {
-  it('skip-wait → 注入带 s=1', async () => {
+  it('mirasim 审官注入无 orca 的 s=/d= 编排标记', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: 'ctx_worker', mergePolicy: 'auto', skipWait: true,
     });
-    assert.ok(/ s=1/.test(text), 'skip-wait 标记进注入 → ' + text);
-    assert.ok(/d=ctx_worker/.test(text), 'd 保留 → ' + text);
+    assert.match(text, /reviewer-book-mirasim\.md/);
+    assert.match(text, /p=626/);
+    assert.match(text, /m=auto/);
+    assert.doesNotMatch(text, / s=1/);
+    assert.doesNotMatch(text, /d=ctx_worker/);
   });
 
-  it('非 skip-wait → 注入不带 s 标记（worker-done 路径不变）', async () => {
+  it('非 skip-wait 同样是 mirasim 形态', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: 'ctx_worker', mergePolicy: 'auto', skipWait: false,
     });
-    assert.ok(!/ s=1/.test(text), '默认不带 s=1 → ' + text);
-    assert.ok(/p=626 d=ctx_worker m=auto$/.test(text), '默认形态不变 → ' + text);
+    assert.match(text, /p=626 m=auto/);
+    assert.doesNotMatch(text, / s=1/);
   });
 
-  it('skip-wait 无收件人：显式传 "" → 渲染成 d= 不炸（红项上帅）', async () => {
+  it('skip-wait 无收件人：显式传 "" 不炸', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: '', mergePolicy: 'auto', skipWait: true,
     });
-    assert.ok(/d= /.test(text) || /d=$/.test(text.replace(/ s=1$/, '')), '空 d 渲染成 d= → ' + text);
-    assert.ok(/ s=1/.test(text), 's=1 仍在 → ' + text);
+    assert.match(text, /p=626 m=auto/);
   });
 
-  it('skip-wait 无收件人但传 null → 仍抛（dispatch:undefined 硬闸不因 skip-wait 松动）', async () => {
+  it('skip-wait 无收件人但传 null → 模板无 d= 占位也不再抛', async () => {
     const S = await S_LOAD;
-    let threw = false, msg = '';
-    try {
-      S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: null, mergePolicy: 'auto', skipWait: true });
-    } catch (e) { threw = true; msg = String(e.message || e); }
-    assert.ok(threw && /SOLDIER_DISPATCH_ID/.test(msg), 'null 必须抛 → ' + msg);
+    const text = S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: null, mergePolicy: 'auto', skipWait: true });
+    assert.match(text, /p=1 m=auto/);
   });
 });
 
@@ -268,8 +267,8 @@ describe('#799 planCreateSoldierDispatch（结算态士兵仍起审官）', () =
       spec: '按审官任务书审 PR #797', pr: '797',
       soldierDispatchId: r.soldierDispatchId, mergePolicy: 'auto',
     });
-    assert.ok(/d= /.test(inject) || /d= m=/.test(inject) || /d=$/.test(inject.replace(/ m=.*$/, '')),
-      '注入空 d= → ' + inject);
+    assert.match(inject, /reviewer-book-mirasim\.md/);
+    assert.doesNotMatch(inject, /d=ctx_/);
   });
 
   it('活士兵 → 注入真 id，身份可投（#552 闸对活人仍走）', async () => {
@@ -342,8 +341,8 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
       spec: '按审官任务书审 PR #798', pr: '798',
       soldierDispatchId: '', mergePolicy: r.mergePolicy, fallbackReason: r.fallbackReason,
     });
-    assert.ok(/m=auto/.test(inject) && /fb=账本无mergePolicy/.test(inject),
-      '任务书写明回退原因 → ' + inject);
+    assert.ok(/m=auto/.test(inject), '回退 auto 写入任务书 → ' + inject);
+    assert.ok(!/fb=/.test(inject), 'mirasim 注入无 fb= 编排标记 → ' + inject);
   });
 
   it('账本没查成 → 回退 auto，原因是读不到（与「没有字段」分开）', async () => {

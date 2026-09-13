@@ -26,6 +26,7 @@ import {
   planRound, VERDICT, FRAMEWORK_ROLE,
 } from './lib/refine-core.mjs';
 import { recordBroadcast } from './lib/broadcast-io.mjs';
+import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -153,7 +154,10 @@ export function applyPlan(plan, { runGh, dryRun, writeIssue = applyIssueWrite } 
       issue: n,
       add: plan.labelsToAdd,
       host: 'refiner',
-      idempotency_key: `refiner:labels:${n}:${plan.labelsToAdd.join(',')}`,
+      // label 名多半是中文（待拍板、已消歧…），直拼进 key 会被网关的 ASCII 闸拒掉——
+      // 2026-09-10 实咬：这条 key 让 refiner 29 次全败、0 次成功，dao-refiner.service 常挂 failed。
+      // escalationKeyOf 折成 ASCII 前缀 + 摘要：同一组 label 仍是同一个 key（幂等语义不变）。
+      idempotency_key: `refiner:labels:${n}:${escalationKeyOf(plan.labelsToAdd.join(','), 40)}`,
     });
     if (!r || !r.ok) return { ok: false, error: `#${n} 打标失败：${r && r.error ? r.error : '没查成'}` };
     writes.push('labels');

@@ -173,6 +173,26 @@ describe('classifySendResult / parseMessageId', () => {
   });
 });
 
+describe('待拍板卡片发送降级', () => {
+  it('交互卡片被拒收 → sendCardViaLarkCli 发送纯文本', async () => {
+    const { sendCardViaLarkCli } = await LIB;
+    const calls = [];
+    const spawn = (cmd, argv) => {
+      calls.push([cmd, ...argv]);
+      if (calls.length === 1) return { status: 1, stderr: 'card content rejected', stdout: '' };
+      return { status: 0, stdout: '"om_fallback"', stderr: '' };
+    };
+    const r = sendCardViaLarkCli({
+      chatId: 'oc_hub',
+      card: { elements: [{ tag: 'div', text: { tag: 'lark_md', content: '待拍板通知' } }] },
+      spawn,
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.degraded, true);
+    assert.ok(calls[1].includes('--text'));
+  });
+});
+
 describe('fieldsFrom*：没单号拒，有单号才组卡', () => {
   it('escalate 缺号拒', async () => {
     const { fieldsFromEscalate } = await LIB;

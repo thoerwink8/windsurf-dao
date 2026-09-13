@@ -193,102 +193,28 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(mira.includes('assertDispatchInjectPlan('), 'cmdDispatchMirasim 缺注入闸');
     });
 
-    // 执行体段 = runDispatchExecution 本体（到 cmdDispatchBatch 为止）。
-    const xi = daoSrc.indexOf('function runDispatchExecution(');
-    const xj = daoSrc.indexOf('function cmdDispatchBatch(');
-    assert.ok(xi > 0 && xj > xi, '执行体段定位');
-    const seg = daoSrc.slice(xi, xj);
-    await t.test('执行体段保留：消歧门 / 账本查重 / 队列查重 / git 身份 / 送字 / 失败回滚 / 事后 label / 记账', () => {
-      for (const sym of ['checkIssueDisambiguated', 'precheckDispatchDup', 'precheckQueueDup',
-        'applyGitIdentity', 'startOrcaWorker', 'failCreated', 'stampIssueLabels', 'writeJobDispatch']) {
-        assert.ok(new RegExp(`\\b${sym}\\b`).test(seg), `执行体段缺 ${sym}`);
+    await t.test('#1150 orca 异步派工脊已删', () => {
+      for (const sym of ['function runDispatchExecution(', 'function startOrcaWorker(',
+        'function startWorkerBySlate(', 'function failCreated(', 'function bindStation(']) {
+        assert.ok(!daoSrc.includes(sym), `dao.mjs 不该再有 ${sym}`);
       }
     });
-    await t.test('执行体段删净：同厂闸 / 环境自检 / 同步看板 / gc 顺车', () => {
-      for (const sym of ['filterSlateSameVendor', 'assertCrossVendor', 'envProbeWorktree',
-        'rewriteMasterZone', 'afterDispatchComment', 'runGcReadonlyScan', 'gcThresholdLine', 'launchedGate']) {
-        assert.ok(!new RegExp(`\\b${sym}\\b`).test(seg), `执行体段不该再有 ${sym}`);
-      }
+    await t.test('dispatch-exec / batch 是退役 stub，点名 orca 必须拒', () => {
+      const ei = daoSrc.indexOf('async function cmdDispatchExec(');
+      const bi = daoSrc.indexOf('function cmdDispatchBatch(');
+      assert.ok(ei > 0, '找得到 cmdDispatchExec');
+      assert.ok(bi > ei, 'cmdDispatchBatch 在 cmdDispatchExec 之后');
+      const eseg = daoSrc.slice(ei, bi);
+      const bseg = daoSrc.slice(bi, daoSrc.indexOf('function cmdPrSyncLabels('));
+      assert.match(eseg, /orca 已退役/);
+      assert.match(bseg, /orca 已退役/);
+      assert.ok(!/runDispatchExecution\(/.test(eseg), 'dispatch-exec 不得再调 orca 执行体');
     });
-    await t.test('#831 执行体段：同一道注入闸在建卡之前（防绕过热路直接 dispatch-exec）', () => {
-      const gateAt = seg.indexOf('assertDispatchInjectPlan(');
-      const createAt = seg.indexOf('argsWorktreeCreate(');
-      assert.ok(gateAt > 0, '执行体缺 assertDispatchInjectPlan');
-      assert.ok(createAt > gateAt, '执行体注入闸必须在 argsWorktreeCreate 之前');
-      assert.ok(/buildSoldierInject\(/.test(seg), '执行体仍走 buildSoldierInject（闸在模板纯函数里，不是抄第二份）');
-    });
-    await t.test('执行体段：两道查重与消歧门都在建卡之前（拦截不碰 orca）', () => {
-      assert.ok(seg.indexOf('precheckDispatchDup(') > 0
-        && seg.indexOf('precheckDispatchDup(') < seg.indexOf('argsWorktreeCreate('),
-        'precheckDispatchDup 必须在 argsWorktreeCreate 之前');
-      assert.ok(seg.indexOf('precheckQueueDup(') > 0
-        && seg.indexOf('precheckQueueDup(') < seg.indexOf('argsWorktreeCreate('),
-        'precheckQueueDup 必须在 argsWorktreeCreate 之前');
-      assert.ok(seg.indexOf('checkIssueDisambiguated(') > 0
-        && seg.indexOf('checkIssueDisambiguated(') < seg.indexOf('argsWorktreeCreate('),
-        '消歧门必须在建卡之前');
-      assert.ok(/dup\.blocked/.test(seg) && /queueDup\.blocked/.test(seg) && /args\.allowDup/.test(seg),
-        '两道命中都要有 blocked 拦截与 allowDup 入参');
-      assert.ok(/--allow-dup/.test(daoSrc), '拦截话面要指 --allow-dup 逃生口');
-    });
-    await t.test('执行体段：startOrcaWorker 后无开工验证，带「已派未确认」话面', () => {
-      assert.ok(!/finishWorkerInject|verifyStartedPolling|workerStartProof/.test(seg),
-        '执行体段不该再有开工验证轮询');
-      assert.ok(/已派，未确认/.test(seg) && /startOrcaWorker\(/.test(seg),
-        '执行体要有 fire-and-forget 话面');
-    });
-    await t.test('执行体段：显式 --model 不打分（live:false），bans 门闩仍过滤回退链', () => {
-      assert.ok(/live:\s*!gate\.model/.test(seg), '执行体选型打分只在 --role 路（live:!gate.model）');
-      assert.ok(/bans\.yml/.test(seg) && /checkGates\(/.test(seg), '显式 --model 的 bans 过滤要在执行体');
-    });
-    await t.test('dispatch-exec 入口：读派工单 + 结果槽 + running 标记 + 崩溃补结果', () => {
-      const ei = daoSrc.indexOf('function cmdDispatchExec(');
-      const ej = daoSrc.indexOf('function precheckQueueDup(');
-      assert.ok(ei > 0 && ej > ei, 'cmdDispatchExec 段定位');
-      const eseg = daoSrc.slice(ei, ej);
-      assert.ok(/readDispatchOrder\(/.test(eseg) && /setDispatchResultSink\(/.test(eseg)
-        && /runDispatchExecution\(/.test(eseg) && /installDispatchExecCrashGuard\(/.test(eseg),
-        'cmdDispatchExec 要读单、设结果槽、跑执行体、装 crash guard');
-      assert.ok(/crashed:\s*true/.test(daoSrc) && /SIGTERM/.test(daoSrc),
-        '崩溃补 crashed 结果（含 SIGTERM trap）');
-      assert.ok(/withWorktreeLockSync\(/.test(daoSrc), '建树段必须 flock/互斥锁串行（#849）');
-    });
-    await t.test('dispatch-exec 动词注册进路由与参数表', () => {
+    await t.test('dispatch-exec 动词仍注册（调用即拒，不留第三态）', () => {
       assert.ok(/case 'dispatch-exec': return cmdDispatchExec\(args\)/.test(daoSrc),
         'dao.mjs 路由缺 dispatch-exec');
-      const libSrc = fs.readFileSync(DAO, 'utf8');
-      assert.ok(/'dispatch-exec'/.test(libSrc) && libSrc.includes("'--order'"),
-        'dao-cmd.mjs 的 VERBS/FLAGS_BY_VERB 缺 dispatch-exec --order');
     });
-    await t.test('cmdDispatchBatch 段：startWorker 无注入后验证，同样删净四层', () => {
-      const bi = daoSrc.indexOf('function cmdDispatchBatch(');
-      const bj = daoSrc.indexOf('function cmdPrSyncLabels(');
-      assert.ok(bi > 0 && bj > bi, 'cmdDispatchBatch 段定位');
-      const bseg = daoSrc.slice(bi, bj);
-      assert.ok(!/verifyStartedPolling|waitAndVerify/.test(bseg),
-        'cmdDispatchBatch 段不该再有就绪探针/开工验证');
-      for (const sym of ['envProbeWorktree', 'runGcReadonlyScan', 'afterDispatchComment', 'rewriteMasterZone']) {
-        assert.ok(!new RegExp(`\\b${sym}\\b`).test(bseg), `cmdDispatchBatch 段不该再有 ${sym}`);
-      }
-    });
-    await t.test('startWorkerBySlate 段：terminal create 成功即收，不就绪探针', () => {
-      const si = daoSrc.indexOf('function startWorkerBySlate(');
-      const sj = daoSrc.indexOf('function readOnceHandle(');
-      assert.ok(si > 0 && sj > si, 'startWorkerBySlate 段定位');
-      const sseg = daoSrc.slice(si, sj);
-      assert.ok(!/waitAndVerify/.test(sseg), 'startWorkerBySlate 不该再有 waitAndVerify');
-      assert.ok(/kind: 'deferred'/.test(sseg), '#802 成功 agent 路也要记 launchAttempt');
-    });
-    await t.test('#802 startOrcaWorker 按 agentIdentity 校准 handle，不是旧开工验证', () => {
-      const si = daoSrc.indexOf('function startOrcaWorker(');
-      const sj = daoSrc.indexOf('function startWorkerBySlate(');
-      assert.ok(si > 0 && sj > si, 'startOrcaWorker 段定位');
-      const sseg = daoSrc.slice(si, sj);
-      assert.ok(/planDeferredRepair\(/.test(sseg), 'startOrcaWorker 要校准注入目标且缺 book fail-loud');
-      assert.ok(!/finishWorkerInject|verifyStartedPolling/.test(sseg),
-        '校准不是把开工验证轮询请回来');
-    });
-    await t.test('runGcReadonlyScan 函数本体已删（gc 顺车整层删，手动走 run-gc）', () => {
+    await t.test('runGcReadonlyScan 函数本体已删（gc 顺车整层删）', () => {
       assert.ok(!/function runGcReadonlyScan/.test(daoSrc), 'dao.mjs 不该再有 runGcReadonlyScan');
     });
   });
@@ -509,43 +435,10 @@ describe('dispatch-launch（async-launch）', () => {
     await t.test(`预检路径几秒钟出结果（dry-run 全程 ${dryMs}ms < 15s）`, () => {
       assert.ok(dryMs < 15000, `dry-run 耗时 ${dryMs}ms，超过 15s——事前层又厚了`);
     });
-
-    // async-launch 核心断言一：热路秒级返回「已受理」（NO_SPAWN 隔掉 spawn，纯热路计时）。
-    // 阈值 3s 不是 1s：计时含 node 冷启动，dao-check 的 6 宽测试池挤压下实测到过 1027ms
-    //（单跑 ~600ms）；要防的「同步脊长回来」是数秒到数十秒级（orca 往返/读全量账本），
-    // 3s 对它照样红，对池挤压不再误伤——墙钟断言的余量要按最吵的运行环境给。
-    const t1 = Date.now();
-    const noSpawn = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
-    });
-    const hotMs = Date.now() - t1;
-    const pNoSpawn = payload(noSpawn);
-    await t.test(`热路 <3s 返回（实测 ${hotMs}ms）：queued/async/orderId 齐，派工单落队列目录`, () => {
-      assert.notEqual(noSpawn.status, 0, JSON.stringify(pNoSpawn).slice(0, 300));
-      assert.equal(pNoSpawn.ok, false);
-      assert.equal(pNoSpawn.dup && pNoSpawn.dup.blocked, true);
-      assert.match(String(pNoSpawn.error || ''), /#759/);
-      assert.match(String(pNoSpawn.error || ''), /--allow-dup/);
-      assert.ok(hotMs < 3000, `热路耗时 ${hotMs}ms，超过 3s——同步脊又长回来了`);
-    });
-
-    const accepted = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
-    const pAcc = payload(accepted);
-    await t.test('真派工不再当场拒：exit 0 受理，返回 resultPath', () => {
-      assert.notEqual(accepted.status, 0, JSON.stringify(pAcc).slice(0, 300));
-      assert.equal(pAcc.ok, false);
-      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
-    });
-    await t.test('执行体后台拒派：结果 ok:false，dup.blocked，话面点名 #759 与 --allow-dup', () => {
-      assert.equal(pAcc.ok, false);
-      assert.equal(pAcc.dup && pAcc.dup.blocked, true);
-      assert.match(String(pAcc.error || ''), /重复派工|重复建卡|#759/);
-      assert.match(String(pAcc.error || ''), /--allow-dup/);
-      assert.equal(pAcc.workerId, undefined);
-      assert.equal(pAcc.sessionKey, undefined);
-    });
-    await t.test('结果落盘后 running 标记已删（单状态能派生 done/failed）', () => {
-      assert.ok(!pAcc.resultPath, 'mirasim 同步拒派，没有执行体结果文件');
+    await t.test('dry-run 命中 dup 不带 sessionKey（#1152：不许靠真派工验证拒派）', () => {
+      assert.equal(pDry.sessionKey, undefined);
+      assert.equal(pDry.workerId, undefined);
+      assert.equal(pDry.dryRun, true);
     });
 
     const stale = spawnSync(process.execPath, [...base, '--dry-run', '--now', '2026-08-23T13:00:00+08:00'], { encoding: 'utf8', cwd: REPO, env });
@@ -563,38 +456,32 @@ describe('dispatch-launch（async-launch）', () => {
     });
   });
 
-  it('队列在途查重 CLI：账本还看不见第一单时，第二单的执行体被派工单拦住', async (t) => {
-    // 空账本（账本查重必 clear）+ 消歧过（565 有 label）→ 唯一拦路的是队列里的 pending 单。
-    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dedup-empty-'));
-    const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dq-inflight-'));
-    const env = {
-      ...process.env, DAO_GH_FAKE: FAKE_GH,
-      LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
+  it('队列在途查重：纯函数层（#1152 不再 spawn 真 dispatch 留 pending 单）', async (t) => {
+    // 空账本 + 565 有 label 曾是真派工泄漏面：DAO_DISPATCH_NO_SPAWN 是空旗标，
+    // 第一单直接 ensureWorkspace/startSession。队列查重改留在 recentQueueDup 纯函数
+    //（本文件上一套）；CLI 隔离闸在 tests/dao-dispatch-gate.test.js「#1152 空账本+已消歧」。
+    const DQ = await DQ_LOAD;
+    const NOW = new Date('2026-08-23T12:06:00+08:00');
+    const pending = {
+      id: 'dq-inflight', ts: '2026-08-23T12:05:00+08:00',
+      issue: '565', terminal: 'grok', name: 'x', status: 'pending',
     };
-    const base = [
-      CLI, 'dispatch', '--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
-      '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
-    ];
-
-    const first = spawnSync(process.execPath, [...base], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
+    const hit = DQ.recentQueueDup([pending], { issue: '565', now: NOW });
+    await t.test('在途 pending 同 issue → blocked', () => {
+      assert.equal(hit.ok, true);
+      assert.equal(hit.clear, false);
+      assert.equal(hit.hit && hit.hit.order_id, 'dq-inflight');
     });
-    const pFirst = payload(first);
-    await t.test('第一单 NO_SPAWN 留下 pending 派工单（模拟在途）', () => {
-      assert.ok(pFirst.queued !== true,
-        '第一单  →  ' + JSON.stringify(pFirst).slice(0, 240));
-    });
-
-    const second = spawnSync(process.execPath, [...base], { encoding: 'utf8', cwd: REPO, env });
-    const pSecond = payload(second);
-    await t.test('第二单执行体：账本 clear 但 queueDup.blocked（#759 第二道闸）', () => {
-      assert.ok(pSecond.queued !== true, '第二单受理  →  ' + JSON.stringify(pSecond).slice(0, 240));
+    const empty = DQ.recentQueueDup([], { issue: '565', now: NOW });
+    await t.test('空队列 → clear（不再靠真 spawn 第一单去「留单」）', () => {
+      assert.equal(empty.ok, true);
+      assert.equal(empty.clear, true);
     });
   });
 
   it('#831 注入闸前移到热路：超长 --spec 当场非零，一棵树都不建', async (t) => {
     const S = await S_LOAD;
-    const prefix = '读 host/skills/dispatch/templates/soldier-book.md spec=';
+    const prefix = '读 host/skills/dispatch/templates/soldier-book-mirasim.md spec=';
     const prefixBytes = S.injectUtf8Bytes(prefix);
     const over = 'x'.repeat(S.INJECT_MAX_BYTES - prefixBytes + 1);
 
@@ -645,12 +532,12 @@ describe('dispatch-launch（async-launch）', () => {
     });
 
     const before = fs.readdirSync(queueDir);
-    const hot = spawnSync(process.execPath, [...base, '--spec', over], {
-      encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
+    const hot = spawnSync(process.execPath, [...base, '--spec', over, '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env,
     });
     const pHot = payload(hot);
     const after = fs.readdirSync(queueDir);
-    await t.test('真 dispatch 超长 --spec 热路非零，不写派工单（执行体起不来，一棵树都不建）', () => {
+    await t.test('超长 --spec 热路非零，不写派工单（一棵树都不建）', () => {
       assert.ok(hot.status !== 0 && pHot.ok === false && /上限/.test(String(pHot.error || '')),
         '热路  →  ' + JSON.stringify(pHot).slice(0, 400));
       assert.ok(!pHot.queued, '不合格不许 queued:true');
@@ -671,14 +558,15 @@ describe('dispatch-launch（async-launch）', () => {
       dedup: { issue: '565', terminal: 'pi', name: '卡A' },
     });
     assert.ok(written.ok, '写绕过单  →  ' + JSON.stringify(written));
-    const exec = spawnSync(process.execPath, [CLI, 'dispatch-exec', '--order', written.paths.order], {
-      encoding: 'utf8', cwd: REPO, env,
+    // #1152：不许真 spawn dispatch-exec（cliInProc 会装崩溃钩子并 process.exit 带走测试进程）。
+    // 执行体接线由上面「同一道注入闸在建卡之前」源码钉；这里用同一函数拦这张绕过单。
+    const bypassGate = S.assertDispatchInjectPlan({
+      spec: written.order.args.spec,
+      issue: written.order.args.issue,
     });
-    const pExec = payload(exec);
     await t.test('dispatch-exec 绕过热路：同一道闸仍非零，不建卡', () => {
-      assert.ok(exec.status !== 0 && pExec.ok === false && /上限/.test(String(pExec.error || '')),
-        'exec  →  ' + JSON.stringify(pExec).slice(0, 400));
-      assert.ok(!pExec.workerId && !pExec.workerPath, '被拦时什么都不会创建');
+      assert.equal(bypassGate.ok, false, 'bypass  →  ' + JSON.stringify(bypassGate).slice(0, 400));
+      assert.match(String(bypassGate.error || ''), /上限/);
     });
   });
 

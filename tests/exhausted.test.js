@@ -10,6 +10,8 @@ const EX = import('file://' + path.join(REPO, 'scripts', 'lib', 'exhausted.mjs')
 const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
 const BOARD = import('file://' + path.join(REPO, 'scripts', 'lib', 'now-board.mjs').replace(/\\/g, '/'));
 const VERBS = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-verbs.mjs').replace(/\\/g, '/'));
+// #1236：同步建键（fixture 用）。手拼字面量在加判据版本那天会静默失配。
+const { retryKeysSync: RK } = require('../scripts/lib/commander-verbs.mjs');
 
 function baseSituation(over = {}) {
   return {
@@ -116,7 +118,7 @@ describe('#1000 decide：drain 试满打标，不再开单', () => {
       prs: [{ number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'samehead', labels: [] }],
     },
     reviewPending: { scanned: true, items: [ticket(909, 'samehead')] },
-    drainLedger: { 'pr:909@samehead': { at: OLD, pr: '909', tries: 3 } },
+    drainLedger: { [RK.drain(909, 'samehead')]: { at: OLD, pr: '909', tries: 3 } },
     ...over,
   });
 
@@ -155,7 +157,7 @@ describe('#1000 decide：drain 试满打标，不再开单', () => {
   it('判别性反例：tries 未满不得打该标', async () => {
     const { decide } = await CORE;
     const r = decide(sit({
-      drainLedger: { 'pr:909@samehead': { at: OLD, pr: '909', tries: 1 } },
+      drainLedger: { [RK.drain(909, 'samehead')]: { at: OLD, pr: '909', tries: 1 } },
     }));
     assert.equal(byKind(r, 'mark-exhausted').length, 0);
     assert.equal(byKind(r, 'retry-drain').length, 1);
@@ -164,16 +166,18 @@ describe('#1000 decide：drain 试满打标，不再开单', () => {
 
 describe('#1000 decide：rereview / rework 试满同样打标', () => {
   it('rereview 试满 → mark-exhausted，不是 open-issue', async () => {
-    const { decide, MAX_REREVIEW_TRIES } = await CORE;
+    const { decide, MAX_REREVIEW_TRIES, rereviewKey: coreRereviewKey } = await CORE;
     const HEAD = 'f9adbffa1170c57559c64160081619acc328988f';
     const r = decide(baseSituation({
       github: {
         scanned: true,
         issues: [{ number: 801, title: '单', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }] }],
-        prs: [{ number: 905, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #801', labels: [] }],
+        prs: [{ number: 905, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #801', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }],
       },
       prReviews: { scanned: true, byPr: { 905: { reviews: [{ state: 'CHANGES_REQUESTED', body: '一处', commit_id: 'old' }] } } },
-      reworkDispatched: { [`rereview:905@${HEAD}`]: { at: OLD, pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
+      // #1236：键走生产侧那把（core.rereviewKey），不手拼字面量——
+      // 手拼的键在加判据版本那天会**静默失配**，测试假绿而生产卡死。
+      reworkDispatched: { [coreRereviewKey(905, HEAD)]: { at: OLD, pr: 905, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
     }));
     assert.equal(byKind(r, 'rereview').length, 0);
     const marked = byKind(r, 'mark-exhausted');
@@ -183,24 +187,36 @@ describe('#1000 decide：rereview / rework 试满同样打标', () => {
   });
 
   it('rework 试满 → mark-exhausted，不是 escalate', async () => {
-    const { decide, MAX_REWORK_TRIES } = await CORE;
+    const { decide, MAX_REWORK_TRIES, reworkKey: coreReworkKey } = await CORE;
     const r = decide(baseSituation({
       github: {
         scanned: true,
         issues: [{ number: 950, title: '单', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }] }],
         prs: [{
           number: 950, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE',
-          headRefOid: 'h950', body: '署名 issue #950', labels: [],
+          headRefOid: 'h950', body: '署名 issue #950', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
         }],
       },
       prReviews: { scanned: true, byPr: { 950: { reviews: [{ state: 'CHANGES_REQUESTED', body: '要改', commit_id: 'h950' }] } } },
-      reworkDispatched: { 'rework:950@h950': { at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: MAX_REWORK_TRIES } },
+      reworkDispatched: { [coreReworkKey(950, 'h950')]: { at: OLD, pr: 950, head: 'h950', ok: false, unscanned: false, tries: MAX_REWORK_TRIES } },
     }));
     assert.equal(byKind(r, 'rework').length, 0);
     const marked = byKind(r, 'mark-exhausted');
     assert.equal(marked.length, 1, JSON.stringify(r.actions));
     assert.equal(marked[0].verb, 'rework');
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'rework-exhausted').length, 0);
+  });
+});
+
+describe('#1147 pump-draft 试满打「卡死/等用户」，不是认输标', () => {
+  it('buildMarkExhausted(verb=pump-draft) → waiting-user 标 + 对应评论', async () => {
+    const { buildMarkExhausted, WAITING_USER_LABEL, EXHAUSTED_LABEL } = await EX;
+    const a = buildMarkExhausted({ pr: 885, verb: 'pump-draft', tries: 2, head: 'h885' });
+    assert.equal(a.kind, 'mark-exhausted');
+    assert.equal(a.label, WAITING_USER_LABEL);
+    assert.equal(a.label === EXHAUSTED_LABEL, false);
+    assert.match(a.comment, /卡死\/等用户/);
+    assert.match(a.comment, /draft 收口泵/);
   });
 });
 
@@ -267,9 +283,160 @@ describe('#1000 硬边界：不许改 escalate 去重', () => {
     assert.ok(ACTION_KINDS.includes('mark-exhausted'));
     assert.ok(!FORBIDDEN_AUTO_KINDS.has('mark-exhausted'));
   });
+  it('ACTION_KINDS 含 pump-draft', async () => {
+    const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    assert.equal(ACTION_KINDS.includes('pump-draft'), true);
+    assert.equal(FORBIDDEN_AUTO_KINDS.has('pump-draft'), false);
+  });
   it('executor 有 mark-exhausted case', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     assert.match(src, /case 'mark-exhausted':/);
     assert.match(src, /function execMarkExhausted/);
+  });
+});
+
+// ── 2026-09-11：认输是带 head 的判据，不是永久标签 ────────────────────────────
+// 实咬：这个标只写不摘，12 张 PR 被永久焊死（decide 对它们零动作、连报帅都没有）。
+// 本文件自己的注释早写着「账本键必须带 @head。只用 pr 会把修好的新局面永久挡住」，
+// 但账本带 head、**标签是无头的**——这个不对称就是闩。
+describe('认输标签随新 head 自动摘除（自主运转的死点 A）', () => {
+  const EXHAUSTED = '卡死/自动化认输';
+  const WAITING = '卡死/等用户';
+  const prWith = (n, head, labels) => ({ number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: head, labels: labels.map((name) => ({ name })) });
+
+  it('工人推了新 head → 摘标（旧认输对新局面不成立）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])],
+      ledger: { 'pushed:100@OLDHEAD': { pr: 100, head: 'OLDHEAD' } },
+    });
+    assert.equal(r.clears.length, 1);
+    assert.equal(r.clears[0].pr, 100);
+    assert.equal(r.clears[0].head, 'NEWHEAD');
+  });
+
+  it('反证：同一个 head、同一个判据版本 → 不许摘（那才是「已认输」的本意）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      // #1238：账本键带判据版本；版本没变、head 没变 → 这次认输仍然成立。
+      ledger: { 'pushed:100@SAMEHEAD@eaaaaaaaaaaaa': { pr: 100, head: 'SAMEHEAD', at: '2026-09-13T00:00:00Z' } },
+      epoch: 'aaaaaaaaaaaa',
+    });
+    assert.equal(r.clears.length, 0);
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true,
+      '两条都没变才算「仍认输」  →  ' + JSON.stringify(r.skipped));
+  });
+
+  it('「等用户」不摘——人没回话之前机器不该自己动', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [WAITING])],
+      ledger: { 'pushed:100@OLDHEAD': { pr: 100, head: 'OLDHEAD' } },
+    });
+    assert.equal(r.clears.length, 0);
+  });
+
+  // ── #1238：判据变了，标也要过期 ────────────────────────────────────────────
+  // 2026-09-13 第二次实咬：摘标原先只认「工人推了新 head」，于是**判据修好了但没人推
+  // 新 head 的 PR 永远过期不了**。实测 6 张（#1225/#1213/#1211/#1209/#1111/#1148），
+  // 其中 #1111/#1148 的病早已修在 master 上，标还挂着；人对它们「摘标重推」也无效。
+  it('head 没动但判据版本变了 → 摘（挡住它的那套判据改过了）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    // 版本号**从真模块取**，不手打——手打 12 位 hex 这件事我当场就数错过两次
+    // （这正是「凡是需要手打的常量早晚会被凭印象填」那条判例的形状，只不过发生在我自己身上）。
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const oldEpoch = nowEpoch === 'aaaaaaaaaaaa' ? 'bbbbbbbbbbbb' : 'aaaaaaaaaaaa';
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { [`pushed:100@SAMEHEAD@e${oldEpoch}`]: { pr: 100, head: 'SAMEHEAD', at: '2026-09-10T00:00:00Z' } },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 1, JSON.stringify(r));
+    assert.equal(r.clears[0].reason, 'epoch-changed', '要说得出是版本变的，不是 head 变的');
+    assert.ok(r.clears[0].why.includes(oldEpoch), '旧版本要写在理由里  →  ' + r.clears[0].why);
+    assert.ok(r.clears[0].why.includes(nowEpoch), '新版本也要在  →  ' + r.clears[0].why);
+  });
+
+  it('老记录没带版本 → 按过期处理（留着 = 可能永久卡死）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { 'pushed:100@SAMEHEAD': { pr: 100, head: 'SAMEHEAD', at: '2026-09-07T00:00:00Z' } },
+      epoch: 'aaaaaaaaaaaa',
+    });
+    assert.equal(r.clears.length, 1, '加版本之前的记录无从判断，按过期处理');
+    assert.equal(r.clears[0].reason, 'epoch-missing');
+  });
+
+  it('本轮版本没算成 + 老记录 → 不动手（没依据不许摘）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { 'pushed:100@SAMEHEAD@eaaaaaaaaaaaa': { pr: 100, head: 'SAMEHEAD', at: '2026-09-07T00:00:00Z' } },
+      epoch: null,
+    });
+    assert.equal(r.clears.length, 0, '这一轮算不出判据版本，就没依据说标过期了');
+    assert.equal(r.skipped.some((x) => x.why === 'epoch-unscanned'), true);
+  });
+
+  it('一张 PR 多条记录 → 取 at 最新的那条比（不是 Object.keys 的第一条）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const oldEpoch = nowEpoch === 'aaaaaaaaaaaa' ? 'bbbbbbbbbbbb' : 'aaaaaaaaaaaa';
+    // 构造一个**只有按 at 取最新才判得对**的场面：
+    //   最老那条 = 旧版本的记录（按它比 → 摘，理由是 epoch-missing/changed）
+    //   最新那条 = 新版本、同 head（按它比 → 不摘：这次认输仍然成立）
+    // 误取最老那条 → 会摘掉一个**仍然成立**的标，把已经认输的 PR 重新放回流水线空转。
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])],
+      ledger: {
+        [`pushed:100@NEWHEAD@e${oldEpoch}`]: { pr: 100, head: 'NEWHEAD', at: '2026-09-07T00:00:00Z' },
+        [`pushed:100@NEWHEAD@e${nowEpoch}`]: { pr: 100, head: 'NEWHEAD', at: '2026-09-13T00:00:00Z' },
+      },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 0, '最新那条说这次认输仍成立，就不该摘  →  ' + JSON.stringify(r));
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true,
+      '要走到「同 head 同版本」这条判据上  →  ' + JSON.stringify(r.skipped));
+  });
+
+  it('反证：账本里没有认输记录 → 不摘（没认输过就无从谈「过期」）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({ prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])], ledger: {} });
+    assert.equal(r.clears.length, 0);
+    assert.equal(r.skipped.some((x) => x.why === 'no-ledger-head'), true);
+  });
+
+  it('head 没查成 → 不摘（fail-closed：摘错会让一辆在修的车再被派一次）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [{ number: 100, labels: [{ name: EXHAUSTED }] }],
+      ledger: { 'pushed:100@OLD': { pr: 100, head: 'OLD' } },
+    });
+    assert.equal(r.clears.length, 0);
+    assert.equal(r.skipped.some((x) => x.why === 'head-unscanned'), true);
+  });
+
+  it('decide 真接线：旧 head 认输的 PR 会产出 clear-exhausted', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [prWith(777, 'NEWHEAD', [EXHAUSTED])] },
+      exhaustedPush: { 'pushed:777@OLDHEAD': { pr: 777, head: 'OLDHEAD' } },
+    }));
+    const ce = byKind(r, 'clear-exhausted');
+    assert.equal(ce.length, 1, '接线断了这条就白写');
+    assert.equal(ce[0].pr, 777);
+  });
+
+  it('ACTION_KINDS 含 clear-exhausted，且 executor 有 case', async () => {
+    const { ACTION_KINDS, FORBIDDEN_AUTO_KINDS } = await CORE;
+    assert.equal(ACTION_KINDS.includes('clear-exhausted'), true);
+    assert.equal(FORBIDDEN_AUTO_KINDS.has('clear-exhausted'), false);
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(src, /case 'clear-exhausted':/);
+    assert.match(src, /function execClearExhausted/);
   });
 });

@@ -1,0 +1,42 @@
+{
+  "issue": 1174,
+  "taskId": "1174-T2-full-auto-cursor-question",
+  "sessionKey": "acp:6d7e2ecf-e91a-4c05-bf9f-4de0f9a0a3c1",
+  "observedAt": "2026-09-09T15:11:50.033Z",
+  "backend": "acp",
+  "agent": "cursor",
+  "phase": "done",
+  "toolCalls": [
+    {
+      "title": "dao-interactions: dao_ask_user_question",
+      "status": "completed",
+      "kind": "other"
+    },
+    {
+      "title": "Read proof.txt",
+      "status": "completed",
+      "kind": "read"
+    }
+  ],
+  "interactions": [
+    {
+      "method": "session/request_permission",
+      "status": "answered",
+      "source": "native",
+      "answerSource": "injected_question_tool"
+    },
+    {
+      "method": "mcp/dao_ask_user_question",
+      "status": "answered",
+      "source": "mcp",
+      "answerSource": "interactionPolicy"
+    }
+  ],
+  "cleanup": {
+    "verified": true,
+    "survivors": []
+  },
+  "manualAnswers": 0,
+  "selectedAnswer": "json",
+  "artifactMatched": true
+}

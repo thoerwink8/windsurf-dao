@@ -42,6 +42,11 @@
  */
 export const HUMAN_DECISION_REASONS = new Set([
   'missing-labels',          // 人补标
+  // 2026-09-11 新增：PR 上取不到 reviewer/ 且自动补标补不上（#1116 选型只读 PR label）。
+  // 与 missing-labels 同类（人补标），但**分得开**：missing-labels 是「缺一半，
+  // 唯一值推得出来就自己补」，这条是「补不上，必须人来」。#1159/#1154 卡在这：
+  // 旧路从署名 issue 反推，标题里的 #565（已关闭、只有『已消歧』）顶掉正文的 #1152。
+  'reviewer-label-missing',
   'model-health-red',        // 换不换模型——花钱/换人
   'model-not-in-routing',    // 要不要把这个模型加进选型
   'wake-exhausted',          // 唤醒用尽，人来接
@@ -92,6 +97,35 @@ export function isUnscannedReason(reason) {
  */
 export function escalateDedupKey(action) {
   return `escalate/${String(action?.reason || 'x')}`;
+}
+
+import { createHash } from 'node:crypto';
+
+/** issue-gateway 的 KEY_RE 只收可打印 ASCII、无空白（scripts/lib/issue-gateway.mjs）。
+ *  报帅的 key 一旦拼进中文 marker（`查重标记（勿删）：…`）或带空格的对象名（`issue #966`），
+ *  网关整条拒收——而报帅正是最不能静默丢的路（2026-09-08 实咬：开单/追加每轮全被拒，
+ *  失败循环重试，用户一张单都看不到）。
+ *
+ *  折法（顺序不能反——PR #1143 审官红：空白对象先哈希会换键，旧 append 账失效）：
+ *    1. 能直接过闸的原样返回；
+ *    2. 否则按旧 keySafe 折每一段（trim、空白→`-`、剥非法、截 120）。折完整键若已过真闸，
+ *       必须沿用——`PR #1154` 已落账为 `commander-escalate:append:123:PR-#1154`；
+ *    3. 旧结果仍会被真闸拒（非 ASCII term、整键超长）才哈希折叠。同输入必同键。 */
+export const GATEWAY_KEY_RE = /^[\x21-\x7E]{1,200}$/;
+/** 旧 commander.keySafe 的段折法。只给 gatewayIdemKey 做跨版本兼容，不单独当闸。 */
+function legacyKeySafe(s) {
+  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+}
+export function gatewayIdemKey(...parts) {
+  const segs = parts.filter((p) => p != null && String(p) !== '').map(String);
+  const raw = segs.join(':');
+  if (!raw) return 'x';
+  if (GATEWAY_KEY_RE.test(raw)) return raw;
+  const legacy = segs.map(legacyKeySafe).join(':');
+  if (GATEWAY_KEY_RE.test(legacy)) return legacy;
+  const ascii = raw.replace(/[^\x21-\x7E]+/g, '-');
+  const h = createHash('sha256').update(raw).digest('hex').slice(0, 12);
+  return `${ascii.slice(0, 180)}~${h}`;
 }
 
 /** 受影响对象的稳定标识（进正文清单，不进键）。认不出对象 → null，按「无对象」记。 */
@@ -232,7 +266,7 @@ export function migrateEscalateLedger(ledger) {
  * 所以只在全查成的轮次里收敛；没查成的轮次连计数都不动（否则连续轮数会被扫描故障洗掉）。
  */
 export function reconcileEscalationRound({
-  reasonsThisRound = [], streak = {}, ledger = {}, allScanned = false,
+  reasonsThisRound = [], streak = {}, ledger = {}, allScanned = false, approvedIssues = [],
 } = {}) {
   const seen = new Set((reasonsThisRound || []).filter(Boolean).map(String));
   if (!allScanned) {
@@ -243,11 +277,15 @@ export function reconcileEscalationRound({
   // 先把旧键折进新键，再判消失。不折的话 `escalate/missing-labels/issue-1007`
   // 会被剥成另一个原因，本轮明明还有 missing-labels 也会进 toClose。
   const canon = migrateEscalateLedger(ledger);
+  const approved = new Set(approvedIssues.map(String));
   const toClose = [];
   for (const key of Object.keys(canon)) {
     const reason = reasonOfKey(key);
     if (!reason || seen.has(reason)) continue;
     const entry = canon[key];
+    // An approved alert is now a tracked execution task. Signal recovery is
+    // not task completion: its PR and acceptance flow own closing it.
+    if (entry && approved.has(String(entry.issue))) continue;
     if (entry && entry.issue) toClose.push({ reason, issue: entry.issue, key });
   }
   return { streak: next, toClose, skipped: null };

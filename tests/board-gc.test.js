@@ -254,12 +254,12 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.match(src, /from '\.\/lib\/liveness\.mjs'/);
     assert.doesNotMatch(src, /lastOutputAt\s*[<>]/, '别在驱动层直接拿时间戳比大小');
   });
-  it('worktree-rm 失败走 git 删树兜底，不把 orca_retired 当终局', () => {
+  it('--apply 走 git 原生删树，不再问 orca worktree-rm', () => {
     assert.match(src, /function removeTreeFallback/);
     assert.match(src, /checkTreeLease/);
     const i = src.indexOf('const fb = removeTreeFallback(z');
-    assert.ok(i > -1, '找不到兜底调用');
-    assert.match(src.slice(Math.max(0, i - 500), i), /worktree-rm/);
+    assert.ok(i > -1, '找不到 git 删树主路径');
+    assert.doesNotMatch(src, /\[DAO,\s*'worktree-rm'/);
   });
   it('兜底删树前过账本孤本闸，有 stray / 没查成都不许删', () => {
     const start = src.indexOf('function removeTreeFallback');
@@ -288,9 +288,9 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
   });
-  it('默认不删：要 --apply 才调 worktree-rm', () => {
-    const i = src.indexOf("'worktree-rm'");
-    assert.ok(i > -1, '找不到 worktree-rm 调用，判据已失效');
+  it('默认不删：要 --apply 才调 git 删树', () => {
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.ok(i > -1, '找不到 git 删树主路径，判据已失效');
     assert.match(src.slice(Math.max(0, i - 1600), i), /if \(args\.apply\)/);
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {
@@ -1031,7 +1031,8 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('删树读的是救援之后的名单，不是原判决', () => {
-    const i = src.indexOf("'worktree-rm'");
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.notEqual(i, -1, '找不到 git 删树主路径');
     assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
@@ -1274,5 +1275,175 @@ describe('board-gc #1001：dirty 只数 tracked，报告按实清分段', () => 
     const j = src.lastIndexOf('formatBoardGc');
     assert.notEqual(i, -1, '驱动层必须调 applyBoardGcRemoves 并回实清');
     assert.ok(j > i, '报告必须在并回实清结果之后出，否则标题又会撒谎');
+  });
+});
+
+// #1176：第 3 层「孤儿清扫」曾经只写了判据和 INDEX，驱动层从未 import。
+// 这组闸钉的是接线本身——删掉调用必须红，防止再出现「判据绿、生产只增不减」。
+describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'host', 'machine', 'INDEX.md'), 'utf8');
+
+  it('INDEX 声称的 planOrphanGc 在驱动层真的调用，不是空气指针', () => {
+    assert.match(idx, /planOrphanGc/);
+    assert.match(src, /planOrphanGc\(/);
+  });
+
+  it('会话归档走 planSessionGc', () => {
+    assert.match(src, /planSessionGc\(/);
+  });
+
+  it('租约回收走 planLeaseGc，且把活进程标进 hasLiveProcess', () => {
+    assert.match(src, /planLeaseGc\(/);
+    assert.match(src, /hasLiveProcess/);
+  });
+
+  it('进程没查成时工作树/会话/租约/孤儿都不删，且跳过发生在调用之前', () => {
+    assert.match(src, /进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('进程面没查成，本轮不删工作树');
+    const zombieAt = apply.indexOf('removeTreeFallback(');
+    const sessionAt = apply.indexOf('planSessionGc(');
+    const leaseAt = apply.indexOf('planLeaseGc(');
+    const orphanAt = apply.indexOf('planOrphanGc(');
+    assert.notEqual(skipAt, -1, '找不到进程面没查成的跳过');
+    assert.match(src, /args.apply && jobs.length && procsOk/, '备份推送也要过进程闸，不许在查不清时改远端');
+    assert.equal(zombieAt > skipAt, true, 'removeTreeFallback 必须在跳过之后');
+    assert.equal(sessionAt > skipAt, true, 'planSessionGc 必须在跳过之后');
+    assert.equal(leaseAt > skipAt, true, 'planLeaseGc 必须在跳过之后');
+    assert.equal(orphanAt > skipAt, true, 'planOrphanGc 必须在跳过之后');
+  });
+
+  it('stat/cmdline EACCES 时 procsOk 为假，--apply 不进删除路径', async () => {
+    const { scanSessionProcs } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const procScan = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['100', '200'],
+      readlink: () => '/wt/active',
+      read: () => { throw eacces; },
+    });
+    const procsOk = procScan && procScan.ok && !procScan.unscanned;
+    assert.equal(procScan.ok, false, JSON.stringify(procScan));
+    assert.equal(procScan.unscanned, true);
+    assert.equal(procsOk, false, 'board-gc 用同一公式算 procsOk，假值才能跳过删除');
+    assert.match(src, /const procsOk = procScan && procScan\.ok && !procScan\.unscanned/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('if (!procsOk)');
+    for (const needle of ['removeTreeFallback(', 'planSessionGc(', 'planLeaseGc(', 'planOrphanGc(']) {
+      const at = apply.indexOf(needle);
+      assert.notEqual(at, -1, `apply 段找不到 ${needle}`);
+      assert.equal(at > skipAt, true, `${needle} 必须在 !procsOk 跳过之后`);
+    }
+  });
+
+  it('登记层回收前也标 hasLiveProcess，活进程不许当死人清掉', () => {
+    const from = src.indexOf('const registryRecords');
+    const call = src.indexOf('judgeRegistryStuck(r');
+    assert.notEqual(from, -1, '找不到登记层名单');
+    assert.notEqual(call, -1, '驱动层必须真调 judgeRegistryStuck');
+    assert.equal(from < call, true);
+    assert.match(src.slice(from, call), /hasLiveProcess:\s*hasLiveCwd/);
+  });
+
+  it('hasLiveCwd：cwd 落在工作目录或其子路径 → 占用', async () => {
+    const { hasLiveCwd } = await import(CLI);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1/src', '/home/other']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-2', '/home/other']), false);
+    assert.equal(hasLiveCwd('', ['/wt/dao-1']), false);
+  });
+
+  it('删临时目录前过根前缀闸，逃出根外整条跳过', () => {
+    assert.match(src, /逃出根外整条跳过/);
+  });
+
+  it('readProcCwds 走 scanProcCwds，不是自己吞掉 readlink 错误', () => {
+    assert.match(src, /scanProcCwds/);
+    const body = src.slice(src.indexOf('function readProcCwds'), src.indexOf('function hasLiveCwd'));
+    assert.match(body, /return scanProcCwds/);
+    assert.doesNotMatch(body, /catch \{ \/\* 别人的进程/);
+  });
+
+  it('readProcCwds：能解出 cwd → ok', async () => {
+    const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const r = readProcCwds({
+      readdir: () => ['1', '2', 'cpu'],
+      readlink: (p) => {
+        if (String(p).includes('/1/cwd')) return '/tmp/a/';
+        throw gone;
+      },
+      read: () => { throw gone; },
+      getuid: () => 999,
+    });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.cwds, ['/tmp/a']);
+  });
+
+  it('readProcCwds：/proc 读不动 → unscanned', async () => {
+    const { readProcCwds } = await import(CLI);
+    const r = readProcCwds({
+      readdir: () => { throw new Error('EACCES'); },
+      readlink: () => '',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('readProcCwds：一个 cwd 都解不出 → unscanned，不是 0 条占用', async () => {
+    const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const r = readProcCwds({
+      readdir: () => ['1', '2'],
+      readlink: () => { throw gone; },
+      read: () => { throw gone; },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.error, /没查成/);
+  });
+
+  it('readProcCwds：本身份部分 cwd 读失败 → unscanned（审官 P1 回归）', async () => {
+    const { readProcCwds } = await import(CLI);
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const r = readProcCwds({
+      getuid: () => 999,
+      readdir: () => ['10', '11'],
+      readlink: (p) => {
+        if (String(p).includes('/10/cwd')) return '/tmp/a';
+        if (String(p).includes('/11/cwd')) throw eacces;
+        if (String(p).includes('/11/exe')) return '/usr/bin/node';
+        throw eacces;
+      },
+      read: (p) => (String(p).endsWith('/11/status') ? 'Uid:\t999\t999\t999\t999\n' : ''),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.denied, 1);
+    assert.match(r.error, /没核清/);
+  });
+
+  it('listOrphanTmp：目录不存在当没有，不是没查成', async () => {
+    const { listOrphanTmp } = await import(CLI);
+    const r = listOrphanTmp(path.join(os.tmpdir(), 'no-codex-tmp-' + Date.now()));
+    assert.equal(r.ok, true);
+    assert.equal(r.entries.length, 0);
+  });
+
+  it('listOrphanTmp：只收目录并记下 mtime，文件不算', async () => {
+    const { listOrphanTmp } = await import(CLI);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orphan-tmp-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'git-old'));
+      fs.writeFileSync(path.join(dir, 'not-a-dir'), 'x');
+      const r = listOrphanTmp(dir);
+      assert.equal(r.ok, true);
+      assert.equal(r.entries.length, 1);
+      assert.equal(path.basename(r.entries[0].path), 'git-old');
+      assert.equal(Number.isFinite(r.entries[0].mtimeMs), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

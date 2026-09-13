@@ -7,6 +7,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { INSTALL_FILES } from './commander-inventory.mjs';
 
 export const HOST_SURFACES = [
   { id: 'claude-settings', rel: '.claude/settings.json', kind: 'hook-json', must: 'dispatch-gate' },
@@ -20,7 +21,6 @@ export const HOST_SURFACES = [
   { id: 'cli-notes-claude', rel: 'docs/cli-notes/claude.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'cli-notes-cursor', rel: 'docs/cli-notes/cursor.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'cli-notes-feishu', rel: 'docs/cli-notes/feishu.md', kind: 'resident-md', must: 'issue-gateway' },
-  { id: 'soldier-book', rel: 'host/skills/dispatch/templates/soldier-book.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'soldier-book-mirasim', rel: 'host/skills/dispatch/templates/soldier-book-mirasim.md', kind: 'resident-md', must: 'issue-gateway' },
 ];
 
@@ -255,11 +255,39 @@ export function checkNoBareIssueWriteInCode({ root, files, extraRels, exempt } =
 
 const UNSET_PERSONAL_TOKEN_RE = /^UnsetEnvironment=.*\bGH_TOKEN\b.*\bGITHUB_TOKEN\b/m;
 const BLIND_PERSONAL_GH_RE = /^Environment=GH_CONFIG_DIR=\/var\/empty\b/m;
+// 单元自己声明要不要写远端 git。判据写死成一枚显式的、可被扫的标记：
+// 猜（扫 ExecStart 跟 import 找 push）在 minified 产物上必然误判——实测
+// mirasim-server 的 server.cjs 里撞出一堆无关的 `['push']`，判成「要推送」。
+// 声明式的好处是它是唯一真相源；代价是「声明和现实会漂」，
+// 所以另配一道反向闸（tests/systemd-push-declaration.test.js）：
+// 仓内脚本里真出现 git push 的，必须有单元声明它要推送，否则红。
+const REQUIRES_GIT_PUSH_RE = /^#\s*REQUIRES_GIT_PUSH=1\b/m;
+/** 代码生成的指挥官单元不在 host/machine/systemd/，虚拟成这个前缀再进同一把尺（#1167）。 */
+export const GENERATED_SYSTEMD_PREFIX = 'generated-systemd/';
+
+function generatedCommanderServiceFiles() {
+  let generated;
+  try { generated = INSTALL_FILES(); }
+  catch (e) {
+    return { fail: ['指挥官生成单元读不到', 'INSTALL_FILES() 必须能给出 commander-act/inventory 的 service 文本', String((e && e.message) || e).slice(0, 160)] };
+  }
+  const overlay = {};
+  for (const [abs, content] of Object.entries(generated || {})) {
+    if (!String(abs).endsWith('.service')) continue;
+    const base = String(abs).replace(/\\/g, '/').split('/').pop();
+    overlay[`${GENERATED_SYSTEMD_PREFIX}${base}`] = content;
+  }
+  if (Object.keys(overlay).length === 0) {
+    return { fail: ['指挥官一个 .service 都没生成', '0 个样本 = 本次等于没查，不是绿', 'scripts/lib/commander-inventory.mjs INSTALL_FILES'] };
+  }
+  return { overlay };
+}
 
 /** 自动化单元不许继承个人 GH_TOKEN，也不许读 ~/.config/gh（#792 凭据隔离）。少一处就红；0 个文件 = 没查成。 */
 export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
   if (!root && !files) return { fail: ['没给仓库根', 'checkNoPersonalTokenInUnits 要 root', ''] };
   let rels;
+  let overlay = files;
   if (Array.isArray(extraRels)) rels = extraRels;
   else if (files) {
     rels = Object.keys(files).filter((k) => k.endsWith('.service'));
@@ -269,13 +297,18 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
       return { fail: ['systemd 单元目录不在', '恢复 host/machine/systemd/；目录不在 = 没查成', dir] };
     }
     rels = readdirSync(dir).filter((n) => n.endsWith('.service')).map((n) => `host/machine/systemd/${n}`);
+    // extraRels 是测试隔离入口，生产路径必须把 INSTALL_FILES() 生成的指挥官单元一并扫进去。
+    const generated = generatedCommanderServiceFiles();
+    if (generated.fail) return generated;
+    overlay = { ...(files || {}), ...generated.overlay };
+    rels = rels.concat(Object.keys(generated.overlay));
   }
   if (rels.length === 0) {
     return { fail: ['一个 systemd 单元都没扫到', '0 个样本 = 本次等于没查，不是绿', 'host/machine/systemd/*.service'] };
   }
   const hits = [];
   for (const rel of rels) {
-    const loaded = readRel(root || '', rel, files);
+    const loaded = readRel(root || '', rel, overlay);
     if (loaded.missing) {
       return { fail: [`单元读不到：${rel}`, '读失败不是 0 条违规', loaded.path || rel] };
     }
@@ -283,25 +316,32 @@ export function checkNoPersonalTokenInUnits({ root, files, extraRels } = {}) {
     const base = rel.replace(/\\/g, '/').split('/').pop();
     const hasUnset = UNSET_PERSONAL_TOKEN_RE.test(text);
     const hasBlind = BLIND_PERSONAL_GH_RE.test(text);
-    // gh-event-bridge 必须用个人 gh 登录做 webhook forward，不能挡 ~/.config/gh。
+    // gh-event-bridge 要用个人 gh 登录做 webhook forward，不能挡 ~/.config/gh。
     const isGhEvents = base === 'dao-gh-events.service';
-    if (!hasUnset || (isGhEvents ? hasBlind : !hasBlind)) hits.push(rel);
+    // 单元自己声明要不要写远端（见 REQUIRES_GIT_PUSH_RE 处的注释）。
+    const needsPush = REQUIRES_GIT_PUSH_RE.test(text);
+    const wrongBlind = !isGhEvents && needsPush && hasBlind;
+    const missingBlind = !isGhEvents && !needsPush && !hasBlind;
+    const ghEventsBroken = isGhEvents && hasBlind;
+    if (!hasUnset || wrongBlind || missingBlind || ghEventsBroken) hits.push(rel);
   }
   if (hits.length) {
     return {
       fail: [
-        `自动化单元 ${hits.length} 个没卸个人 GitHub 凭据`,
-        '每个单元都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN；写 Issue 的单元还要 Environment=GH_CONFIG_DIR=/var/empty（dao-gh-events 反过来：不许设 GH_CONFIG_DIR=/var/empty，webhook forward 仍读个人 gh 登录）。少一处就红',
+        `自动化单元 ${hits.length} 个没卸个人 GitHub 凭据 / 空目录设反了`,
+        '每个单元都要 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN。写远端（脚本树里有 git push）的单元**不许**设 Environment=GH_CONFIG_DIR=/var/empty——那会让 gh 的凭据助手找不到 hosts.yml，推送永远失败（miraquota-contabo 自 2026-09-06 起每 10 分钟红一次）；不写远端的单元必须设，挡住 ~/.config/gh。dao-gh-events 反过来：不许设。少一处、设反一处都红',
         hits.slice(0, 8).join('；'),
       ],
       scanned: rels.length,
       hits,
+      rels,
     };
   }
   return {
-    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（写 Issue 的不读 ~/.config/gh；少一处就红）`,
+    green: `自动化单元不继承个人 token ${rels.length}/${rels.length}（声明写远端的不设空目录、其余必须设；少一处或设反一处都红）`,
     scanned: rels.length,
     hits: [],
+    rels,
   };
 }
 

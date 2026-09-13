@@ -110,6 +110,51 @@ describe('issue-gateway 校验', () => {
     assert.equal(r.ok, false);
     assert.equal(r.stage, 'allowlist');
   });
+
+  it('#1024：默认允许列表含 bot 已装的仓（ws-cleaner / miraquota-ledger），跨仓完工不许被名单挡回本仓', async () => {
+    const G = await LIB_LOAD;
+    const listed = G.loadAllowlist();
+    assert.equal(listed.ok, true);
+    assert.equal(listed.repos.includes('thoerwink8/ws-cleaner'), true);
+    assert.equal(listed.repos.includes('thoerwink8/miraquota-ledger'), true);
+    assert.equal(listed.repos.includes('thoerwink8/windsurf-dao'), true);
+    const fake = fakeMarshal();
+    const blocked = G.applyIssueWrite(
+      baseCreate({ repo: 'someone/other', idempotency_key: 'k-1024-other' }),
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.stage, 'allowlist');
+    const passed = G.applyIssueWrite(
+      {
+        action: 'issue_comment',
+        repo: 'thoerwink8/ws-cleaner',
+        issue: '12',
+        body: '完工：PR #12',
+        host: 'worker-done',
+        idempotency_key: 'k-1024-ws-comment',
+      },
+      {
+        dir: tmp(),
+        runMarshal: (args) => {
+          fake.calls.push(args.slice());
+          if (args[1] === 'comment') {
+            return { ok: true, out: 'https://github.com/thoerwink8/ws-cleaner/issues/12#issuecomment-9\n' };
+          }
+          if (args[0] === 'api') {
+            return { ok: true, out: JSON.stringify({ user: { login: 'dao-marshal[bot]', type: 'Bot' } }) };
+          }
+          return { ok: false, error: `unexpected ${args.join(' ')}` };
+        },
+      },
+    );
+    assert.notEqual(passed.stage, 'allowlist', passed.error);
+    assert.equal(passed.ok, true, passed.error);
+    const comment = fake.calls.find((a) => a[1] === 'comment');
+    assert.equal(comment.includes('--repo'), true);
+    assert.equal(comment.includes('thoerwink8/ws-cleaner'), true);
+    assert.equal(comment.includes('thoerwink8/windsurf-dao'), false);
+  });
 });
 
 describe('issue-gateway 写入契约', () => {
@@ -226,6 +271,60 @@ describe('issue-gateway 写入契约', () => {
     assert.equal(r.stage, 'author_mismatch');
   });
 
+  // 2026-09-12 实咬：PR 上的评论回执是 /pull/ 形状。原来只认 /issues/，
+  // 「已发出、GitHub 也回了 URL」被判成没收到回执 → 调用方 fail-closed 卡死，
+  // 且幂等没记账 → 重跑再发一条（#1211 连发三条）。两半都要钉住。
+  const PR_RECEIPT = 'https://github.com/thoerwink8/windsurf-dao/pull/1211#issuecomment-5645762291\n';
+  function fakeMarshalPrReceipt() {
+    return {
+      runMarshal(args) {
+        const verb = args[1];
+        if (verb === 'comment') return { ok: true, out: PR_RECEIPT };
+        if (args[0] === 'api') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              user: { login: 'dao-marshal[bot]', type: 'Bot' },
+              html_url: PR_RECEIPT.trim(),
+            }),
+          };
+        }
+        return { ok: false, error: `未预期 ${args.join(' ')}` };
+      },
+    };
+  }
+
+  it('#1211：PR 评论回执走 /pull/ 形状，照样算收到回执（不再假红卡死交卷链）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshalPrReceipt();
+    const dir = tmp();
+    const r = G.issueComment({
+      repo: 'thoerwink8/windsurf-dao', issue: 1211, body: '完工：PR #1211',
+      host: 'claude', idempotency_key: 'pr-shape-1',
+    }, { dir, runMarshal: fake.runMarshal });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.url, PR_RECEIPT.trim());
+
+    // 同一 idempotency_key 重放不得再写——假红那阵正是靠幂等没记账而重复发言的。
+    const again = G.issueComment({
+      repo: 'thoerwink8/windsurf-dao', issue: 1211, body: '完工：PR #1211',
+      host: 'claude', idempotency_key: 'pr-shape-1',
+    }, { dir, runMarshal: () => { throw new Error('重放不该再调 gh'); } });
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.replay, true);
+  });
+
+  it('/pull/ 与 /issues/ 两种回执解析到同一套数（编号、comment id、url）', async () => {
+    const G = await LIB_LOAD;
+    const issue = G.parseCommentUrl('https://github.com/o/r/issues/42#issuecomment-9');
+    const pull = G.parseCommentUrl('https://github.com/o/r/pull/42#issuecomment-9');
+    // url 原样回显（两种形状各自保留），键与编号必须一致——下游只认这几个。
+    assert.equal(pull.url, 'https://github.com/o/r/pull/42#issuecomment-9');
+    assert.deepEqual({ ...pull, url: null }, { ...issue, url: null });
+    assert.equal(G.parseIssueUrl('https://github.com/o/r/pull/42').number, 42);
+    assert.equal(G.parseCommentUrl('https://github.com/o/r/pull/42'), null, '没有 #issuecomment 的不算评论回执');
+  });
+
   it('每次调用写审计，能区分宿主 / 动作 / 失败阶段', async () => {
     const G = await LIB_LOAD;
     const dir = tmp();
@@ -285,7 +384,12 @@ describe('issue-gateway 写入契约', () => {
     assert.match(r.error, /人工按 URL/);
   });
 
-  it('审计目录不可写 → 不得报告成功', async () => {
+  it('审计目录不可写 → 不得报告成功', async (t) => {
+    // root 无视文件权限位，chmod 0444 拦不住写——这条只能在非 root 下验（CI/orca 是非 root）。
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      t.skip('root 下权限位失效，本条验不了');
+      return;
+    }
     const G = await LIB_LOAD;
     const root = tmp();
     const dir = path.join(root, 'gw');

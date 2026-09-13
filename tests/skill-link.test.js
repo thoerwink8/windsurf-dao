@@ -268,7 +268,27 @@ describe('skill-link', () => {
       fs.mkdirSync(bareHome, { recursive: true });
       const r = checkSkillLinks({ root, home: bareHome });
       await t.test('无 ~/.claude/skills ⇒ SKIP 且不是绿不是红', () => {
-        assert.ok(!!r.skip && !r.green && !r.fail, '无 ~/.claude/skills ⇒ SKIP 且不是绿不是红  →  ' + JSON.stringify(r).slice(0, 200));
+        assert.ok(r.skip, '无 ~/.claude/skills ⇒ SKIP  →  ' + JSON.stringify(r).slice(0, 200));
+        assert.match(r.skip, /没装/, 'SKIP 必须点名没装，才能跟被劫红分形  →  ' + r.skip);
+        assert.equal(r.green, undefined);
+        assert.equal(r.fail, undefined);
+      });
+    }
+
+    // ── ⑨b 红样本：整目录链接（#1146 mirasim 劫走）⇒ 报「被劫」，与「没装」分形 ──
+    {
+      const root = makeRoot("hijack");
+      const home = path.join(SANDBOX, "homes", "hijack-home");
+      const mira = path.join(home, ".mirasim", "skills");
+      fs.mkdirSync(mira, { recursive: true });
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.symlinkSync(mira, path.join(home, ".claude", "skills"), linkType());
+      const r = checkSkillLinks({ root, home });
+      await t.test('整目录链到 ~/.mirasim/skills ⇒ 报「被劫」不是 SKIP', () => {
+        assert.ok(r.fail, '被劫必须红  →  ' + JSON.stringify(r).slice(0, 240));
+        assert.match(r.fail[0], /被劫/);
+        assert.equal(r.skip, undefined, '被劫不许落 SKIP（那是没装）');
+        assert.equal(r.green, undefined);
       });
     }
 

@@ -3,7 +3,7 @@
 你是本单**审官**，跑在一条 **mirasim 会话**里。本文件是**闭环框架**——审查质量标准在
 `host/skills/dispatch/review-standard.md`（判绿前必核清单，逐条打勾），框架只定义闭环衔接：**审 PR → 判红判绿 → 收尾**。
 
-> orca 版审官书在 `host/skills/dispatch/templates/reviewer-book.md`。**本版专给 mirasim 执行体**：
+> orca 版审官书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以**没有「等士兵完工」的 orchestration 收信、
 > 没有 Run id 上报、没有 notify 结算**。判定**直接落到 GitHub review 状态**（`--approve` / `--request-changes`），
 > 落了就算完成（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
@@ -54,6 +54,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
   - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
   - 判定落成后不要待在会话里等下一句——交卷侧会停会话；你这边落判定即下班。
+  - 选型只读 PR 自己的 `model/*` `reviewer/*`（#1116）。指挥官 squash 前跑 `dao pr-sync-labels`（按仓+分支从账本打标；缺完整记录需人工打标，不读 issue）。你这边不打标、不合。
 
 ### 2. 收尾（mirasim 版：无 orchestration 结算）
 

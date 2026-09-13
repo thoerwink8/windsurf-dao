@@ -33,6 +33,7 @@ import { dirname, join } from "node:path";
 import os from "node:os";
 import { loadPolicy, probePlan } from "./lib/gateway-policy.mjs";
 import { buildHealthTable, mergeLegHealth, computeAlerts, plainTarget, buildRedAlert, responsesEventHasContent } from "./lib/probe-health.mjs";
+import { codexResponsesProbeBody } from "./lib/provider-probe.mjs";
 
 const argv = process.argv.slice(2);
 // #967：旧 --install 写出的 timer 只有单调时钟。必须在读策略之前拦——这条旗标不该去碰网关。
@@ -135,10 +136,14 @@ async function probeDirect(direct) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
   try {
+    // responses input 必须走结构化 message（与派前探针同一份 helper）。裸字符串会被
+    // 本机桥转成空 messages → 500，健康表把探针自己造的红记成上游挂了。
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/responses`, {
       method: "POST", signal: ac.signal,
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, stream: true, max_output_tokens: 16, input: "reply with the single word ok" }),
+      body: JSON.stringify(codexResponsesProbeBody({
+        model, text: "reply with the single word ok", maxOutputTokens: 16,
+      })),
     });
     if (!res.ok) return { key: direct.key, kind: "direct", state: "red", code: res.status, ms: Date.now() - started, why: `HTTP ${res.status}` };
     let buf = "", got = false;

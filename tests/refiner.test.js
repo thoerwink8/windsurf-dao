@@ -518,3 +518,23 @@ describe('硬边界：本单不改指挥官三件套、不放宽消歧闸', () =
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'board-gc.mjs')), true);
   });
 });
+
+// 2026-09-10 第二咬：labels key 直拼中文 label，网关 ASCII 闸 29 连败 0 成功。
+// 判别力在「真跑一次 applyPlan，把发给网关的 key 抓下来对着网关判据验」。
+describe('labels 的 idempotency_key 过得了网关的 ASCII 闸', () => {
+  it('中文 label 组合出的 key 合法、稳定、可区分', async () => {
+    const { applyPlan } = await CLI;
+    const KEY = import('file://' + path.join(ROOT, 'scripts', 'lib', 'escalation-key.mjs').replace(/\\/g, '/'));
+    const { isGatewayKeySafe } = await KEY;
+    const seen = [];
+    const writeIssue = (req) => { seen.push(req); return { ok: true }; };
+    const runGh = () => ({ ok: true, code: 0, out: '[]' });
+    const plan = { verdict: 'act', number: 1146, labelsToAdd: ['待拍板', 'model/gpt-5.6-luna'], comment: null };
+    const r = applyPlan(plan, { runGh, dryRun: false, writeIssue });
+    assert.equal(r.ok, true);
+    const label = seen.find((w) => w.action === 'issue_edit_labels');
+    assert.ok(label, '必须真发了打标写动作');
+    assert.equal(isGatewayKeySafe(label.idempotency_key), true, `key 过不了网关闸：${label.idempotency_key}`);
+    assert.match(label.idempotency_key, /^refiner:labels:1146:/);
+  });
+});
