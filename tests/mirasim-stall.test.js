@@ -157,7 +157,7 @@ describe('activeWorkdirs / usageRecord / probeMirasimTarget', () => {
   });
   it('usageRecord：读到窗 → readable，读不到 → 标没查成', async () => {
     const { usageRecord } = await import(MON);
-    const ok = usageRecord({ relay: { mode: 'cloud', agentRoutes: {}, usage: { windows: [{ label: '5h', usedPercent: 4.6 }] } }, host: 'h', port: 4316, now: T0 });
+    const ok = usageRecord({ relay: { mode: 'cloud', agentRoutes: {}, usage: { windows: [{ label: '5h', usedPercent: 4.6, remainingPercent: 95.4 }] } }, host: 'h', port: 4316, now: T0 });
     assert.equal(ok.readable, true);
     assert.equal(ok.windows[0].usedPercent, 4.6);
     const miss = usageRecord({ relay: null, now: T0 });
@@ -166,7 +166,7 @@ describe('activeWorkdirs / usageRecord / probeMirasimTarget', () => {
   });
   it('probeMirasimTarget：claude→relay 且窗读到 → ok；健康没采到 → 没查成', async () => {
     const { probeMirasimTarget, buildMirasimHealth } = await import(MON);
-    const health = buildMirasimHealth({ state: { version: '0.0.282' }, relay: { mode: 'cloud', available: true, agentRoutes: { claude: 'relay' }, usage: { windows: [{ label: '5h', usedPercent: 1 }] } } });
+    const health = buildMirasimHealth({ state: { version: '0.0.282' }, relay: { mode: 'cloud', available: true, agentRoutes: { claude: 'relay' }, usage: { windows: [{ label: '5h', usedPercent: 1, remainingPercent: 99 }] } } });
     const t = probeMirasimTarget({ agent: 'claude', health });
     assert.equal(t.target, 'mirasim:claude');
     assert.equal(t.state, 'ok');

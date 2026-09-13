@@ -28,9 +28,9 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createRuntime, readLedger, openWire,
@@ -101,6 +101,51 @@ function postComment({ issue, body }) {
   return { ok, detail: ok ? '评论已落' : `评论失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 200)}`, out: String(r.stdout || '').trim() };
 }
 
+function gitText(dir, args) {
+  if (!dir) return null;
+  const r = spawnSync('git', ['-C', dir, ...args], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
+  if (r.error || r.status !== 0) return null;
+  const s = String(r.stdout || '').trim();
+  return s || null;
+}
+
+function absGitPath(dir, raw) {
+  if (!raw) return null;
+  const abs = isAbsolute(raw) ? raw : resolve(dir, raw);
+  try { return realpathSync(abs); } catch { return resolve(abs); }
+}
+
+function gitCommonDir(dir) {
+  return absGitPath(dir, gitText(dir, ['rev-parse', '--git-common-dir']));
+}
+
+/** 目标仓默认分支：只认 origin/HEAD，解不出就没查成——不猜 master/main。 */
+function defaultBranchOf(dir) {
+  const originHead = gitText(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (!originHead) return null;
+  const b = originHead.replace(/^(?:refs\/remotes\/)?origin\//, '');
+  return b || null;
+}
+
+const HOME_COMMON_DIR = gitCommonDir(REPO_ROOT);
+
+/**
+ * 证明 dir 是本仓（与审查仓同一 git common-dir）的工作树，并给出该仓默认分支。
+ * 解不出 / 不是本仓 → ok:false，调用方必须不删树并标 unknown。
+ */
+export function worktreeOwnership(dir) {
+  if (!dir || !existsSync(dir)) return { ok: false, why: '路径不存在，仓归属没查成（不删）' };
+  const common = gitCommonDir(dir);
+  if (!common) return { ok: false, why: 'git common-dir 解不出，仓归属没查成（不删）' };
+  if (!HOME_COMMON_DIR) return { ok: false, why: '审查仓 common-dir 没查成（不删）' };
+  if (common !== HOME_COMMON_DIR) {
+    return { ok: false, why: `workdir 不属于本仓（common-dir 不同），不删` };
+  }
+  const defaultBranch = defaultBranchOf(dir);
+  if (!defaultBranch) return { ok: false, why: '仓归属查到了，但默认分支没查成（不删）' };
+  return { ok: true, commonDir: common, defaultBranch, why: null };
+}
+
 /**
  * 从工作树反查它**当前**在哪条分支。会话清单的 branch 字段是起会话时请求的那个，
  * 真机 0.0.286 实测一半是 null、一半是 'master'，拿它当树的现状会既漏删又误删。
@@ -120,10 +165,20 @@ function treeExists(dir) {
   try { return existsSync(dir); } catch { return null; }
 }
 
-/** 分支合没合并进 master：merged/未合并/没查成三态。 */
-function isBranchMerged(branch) {
-  if (!branch) return null;
-  const r = spawnSync('git', ['branch', '--merged', 'master', '--format=%(refname:short)'], { windowsHide: true, encoding: 'utf8', cwd: REPO_ROOT, timeout: 15000 });
+/**
+ * 分支合没合并进**该 workdir 所属仓**的默认分支：merged/未合并/没查成三态。
+ * 必须传入 workdir：先证明仓归属，再在那棵仓里按其默认分支判；
+ * 解不出归属或没 workdir → null（没查成），绝不拿审查仓 REPO_ROOT 的 --merged master 套到别人头上。
+ */
+function isBranchMerged(branch, workdir) {
+  if (!branch || !workdir) return null;
+  const own = worktreeOwnership(workdir);
+  if (!own.ok) return null;
+  const r = spawnSync(
+    'git',
+    ['-C', workdir, 'branch', '--merged', own.defaultBranch, '--format=%(refname:short)'],
+    { windowsHide: true, encoding: 'utf8', timeout: 15000 },
+  );
   if (r.error || r.status !== 0) return null;
   const set = new Set(String(r.stdout || '').split(/\r?\n/).filter(Boolean));
   return set.has(branch);
@@ -133,7 +188,7 @@ function isBranchMerged(branch) {
  * 扫一遍（可测核心）。deps 全注入，测试给假的：
  *   listSessions() / readSession(k) / readLedger(k) / stopSession(k)
  *   deleteSession(k,{removeWorktree}) / removeWorktree(path)
- *   isBranchMerged(branch) / branchOfWorktree(path) / treeExists(path)
+ *   isBranchMerged(branch, workdir) / worktreeOwnership(path) / branchOfWorktree(path) / treeExists(path)
  *   postComment({issue,body}) / now()
  *   issueOf(session) —— 从会话推关联 issue（推不出用 fallbackIssue）
  * opts: { stallMs, ttlMs, dryRun, fallbackIssue, protectPaths }
@@ -179,10 +234,28 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
       let treeReason = s.workdir ? 'workdir 还在活动集里，不动树' : '会话没登记 workdir，不动树';
       if (s.workdir && !active.has(s.workdir)) {
         treeBranch = deps.branchOfWorktree ? deps.branchOfWorktree(s.workdir) : null;
-        const merged = treeBranch ? deps.isBranchMerged(treeBranch) : null;
-        const wj = judgeGcWorktree({ path: s.workdir, branch: treeBranch, merged, protectedPaths: protectPaths });
-        removeTree = wj.gc;
-        treeReason = wj.reason;
+        // 测试没注入 worktreeOwnership 时按「已证明归属」走（夹具自己管 isBranchMerged）；
+        // 真依赖必须注入，解不出归属 → 不删树并标 unknown。
+        const own = deps.worktreeOwnership
+          ? deps.worktreeOwnership(s.workdir)
+          : { ok: true, defaultBranch: 'master', why: null };
+        if (!own || own.ok !== true || !own.defaultBranch) {
+          removeTree = false;
+          treeReason = own?.why || '仓归属没查成（不删树）';
+          out.unknown.push({ key, reason: `树 ${s.workdir}：${treeReason}`, gaps: [{ name: '仓归属', why: treeReason }] });
+          out.unscanned = true;
+        } else {
+          const merged = treeBranch ? deps.isBranchMerged(treeBranch, s.workdir) : null;
+          const wj = judgeGcWorktree({
+            path: s.workdir,
+            branch: treeBranch,
+            merged,
+            defaultBranch: own.defaultBranch,
+            protectedPaths: protectPaths,
+          });
+          removeTree = wj.gc;
+          treeReason = wj.reason;
+        }
       }
       if (dryRun) {
         out.gced.push({ key, reason: g.reason, removeTree, treeBranch, treeReason, dryRun: true });
@@ -358,6 +431,7 @@ async function realDeps(runtime) {
     deleteSession: (k, o) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: !!o?.removeWorktree })),
     removeWorktree: p => withWire(w => wireRemoveWorktree(w, { path: p })),
     isBranchMerged,
+    worktreeOwnership,
     branchOfWorktree,
     treeExists,
     postComment,
@@ -421,4 +495,4 @@ async function main(argv = process.argv.slice(2)) {
 const isDirect = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirect) main();
 
-export { parseArgs, isBranchMerged, issueFromBranch };
+export { parseArgs, isBranchMerged, issueFromBranch, branchOfWorktree };

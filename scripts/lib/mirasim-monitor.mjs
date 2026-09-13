@@ -10,9 +10,9 @@
 //
 // ★ 改这个文件前必须知道的一件事（PR #885 审官七条 P1 的共同根因）：
 //   「读不到 / 没查成」一旦被编成「已知值」（账本读不到编成稳定的 rows='x'、partial 预览当
-//   完整正文、Number(null) 折成 0、sessions:null 当空集），就会走进判死 / 回收 / 报健康 ok。
+//   完整正文、Number(null) 折成 0、缺 text 折成 ''、sessions:null 当空集），就会走进判死 / 回收 / 报健康 ok。
 //   所以本文件只有 **一处** 判「查成了没有」——下面「没查成怎么传播」那一段
-//   （gapReport / knownTimestamp / stallReadGaps）。新增判据一律从那儿取结论，
+//   （gapReport / knownTimestamp / knownPercent / stallReadGaps）。新增判据一律从那儿取结论，
 //   别在各自函数里另打补丁（八处补丁＝八个新洞）。
 //
 // ws op 名全部在 mirasim-server 的 server.cjs 里 grep 实证过，再连真机读回帧核对，
@@ -98,14 +98,17 @@ export function knownTimestamp(v) {
 
 /**
  * 卡死判据的读链路盘点。判死要的证据只有两样算**主证**：
- *   · 完整快照正文（partial 预览不算——那只是前若干字，正文在变而预览不变时会误杀）
- *   · 账本行数（readable 才算；读不到既不冒充 0，也不冒充「稳定值」）
+ *   · 完整快照正文（partial 预览不算——那只是前若干字，正文在变而预览不变时会误杀；
+ *     缺 text / 非字符串也不算——空串是合法正文，跟缺字段不能混）
+ *   · 账本行数（readable 且没有坏行才算；读不到、坏行都不冒充「稳定值」）
  * 两样任一没查成 → 整条 unknown，不进 stall TTL。
  * updatedAt 是**次证**：读不到只是少一次「看见它动了」的机会，不阻断判死，
  * 但也绝不折成 0（activitySig 里记 'x'，等它真有值时算「动过了」）。
  */
 export function stallReadGaps({ view, ledger } = {}) {
   const v = view && typeof view === 'object' ? view : null;
+  const ledgerBad = typeof ledger?.bad === 'number' && ledger.bad > 0;
+  const textKnown = !!v && (v.textKnown === true || typeof v.text === 'string');
   return gapReport([
     { name: '会话快照', known: !!v && v.missing !== true, why: v?.why || '快照与会话清单都没读到' },
     {
@@ -115,9 +118,16 @@ export function stallReadGaps({ view, ledger } = {}) {
     },
     { name: 'phase', known: !!v && !!normPhase(v.phase), why: '快照里没有 phase，判不出跑到哪' },
     {
+      name: '快照正文',
+      known: textKnown,
+      why: '快照缺 text 或不是字符串——空正文与缺字段不能混用',
+    },
+    {
       name: '账本',
-      known: !!ledger && ledger.readable === true && Array.isArray(ledger.rows),
-      why: ledger?.why || '账本读不到，证不了「行数没涨」',
+      known: !!ledger && ledger.readable === true && Array.isArray(ledger.rows) && !ledgerBad,
+      why: ledgerBad
+        ? `账本有 ${ledger.bad} 行坏行，整份没查成`
+        : (ledger?.why || '账本读不到，证不了「行数没涨」'),
     },
   ]);
 }
@@ -270,15 +280,46 @@ export function judgeGcWorktree({ path, branch, merged, defaultBranch = 'master'
   return { gc: true, reason: `分支 ${branch} 已合并，回收树 ${path}` };
 }
 
-/** 一个额度窗折成健康表要的形状。 */
+/**
+ * 额度百分比（唯一出处）。只认有限数值或纯数字串，且落在 [0, 100]；
+ * null / undefined / 空串 / 布尔 / 非法值一律 null ——**绝不**走 Number()
+ * （Number(null)===0、Number('')===0，会把「没查成」编成「用了 0%」）。
+ */
+export function knownPercent(v) {
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return null;
+    if (!/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) return null;
+    n = Number(s);
+  } else return null;
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return n;
+}
+
+/** 一个额度窗折成健康表要的形状。缺字段保持 null，不折成 0。 */
 function windowView(w) {
   const o = w && typeof w === 'object' ? w : {};
   return {
-    label: typeof o.label === 'string' ? o.label : '?',
-    usedPercent: Number.isFinite(Number(o.usedPercent)) ? Number(o.usedPercent) : null,
-    remainingPercent: Number.isFinite(Number(o.remainingPercent)) ? Number(o.remainingPercent) : null,
+    label: typeof o.label === 'string' && o.label.trim() ? o.label : '?',
+    usedPercent: knownPercent(o.usedPercent),
+    remainingPercent: knownPercent(o.remainingPercent),
     status: typeof o.status === 'string' ? o.status : null,
   };
+}
+
+/** 额度窗齐不齐：至少一个窗，且每个窗的 used/remaining 都是合法百分比。 */
+function quotaWindowsKnown(windows) {
+  if (!Array.isArray(windows) || windows.length === 0) {
+    return { known: false, why: '一个也没读到' };
+  }
+  for (const w of windows) {
+    if (!w || !Number.isFinite(w.usedPercent) || !Number.isFinite(w.remainingPercent)) {
+      return { known: false, why: '额度窗字段缺失或非法（不许折成 0）' };
+    }
+  }
+  return { known: true, why: null };
 }
 
 /**
@@ -345,12 +386,17 @@ export function buildMirasimHealth({ state, relay, connectError, pinnedVersion =
   }
 
   // 结论：版本不符、relay 明确不可用是真红；只要有「没查成」的分量就 unknown；全齐才 ok。
+  // 额度窗：有窗但字段非法 ≠ 查成了。length>0 不够。
+  const quota = quotaWindowsKnown(windows);
+  if (relay && typeof relay === 'object' && !quota.known && !notes.some(n => /额度窗/.test(n))) {
+    notes.push(quota.why);
+  }
   const gaps = gapReport([
     { name: 'relay 帧', known: !!relay && typeof relay === 'object', why: '没收到' },
     { name: 'mode', known: mode != null, why: '缺字段' },
     { name: 'agentRoutes', known: agentRoutes != null, why: '缺字段' },
     { name: 'available', known: typeof available === 'boolean', why: '缺字段' },
-    { name: '额度窗', known: windows.length > 0, why: '一个也没读到' },
+    { name: '额度窗', known: quota.known, why: quota.why },
   ]);
   const st = !versionOk || available === false ? 'red' : gaps.ok ? 'ok' : 'unknown';
   return { state: st, probed: true, version, versionOk, mode, available, agentRoutes, windows, notes };
@@ -515,9 +561,12 @@ export function usageRecord({ relay, host, port, now } = {}) {
   const agentRoutes = relay && relay.agentRoutes && typeof relay.agentRoutes === 'object' ? relay.agentRoutes : null;
   const windows = relay && relay.usage && Array.isArray(relay.usage.windows)
     ? relay.usage.windows.map(windowView) : [];
+  const quota = quotaWindowsKnown(windows);
   const notes = [];
   if (!relay) notes.push('没收到 relay 帧，额度窗没查成');
-  else if (windows.length === 0) notes.push('relay 帧里没有 usage.windows，额度窗没查成');
+  else if (!quota.known) {
+    notes.push(quota.why === '一个也没读到' ? 'relay 帧里没有 usage.windows，额度窗没查成' : quota.why);
+  }
   if (relay && available === null) notes.push('relay 帧里没有 available 字段，中转可用性没查成');
   return {
     schema: 'mirasim-usage/1',
@@ -528,7 +577,7 @@ export function usageRecord({ relay, host, port, now } = {}) {
     available,
     agentRoutes,
     windows,
-    readable: windows.length > 0,
+    readable: quota.known,
     notes,
   };
 }
@@ -546,6 +595,11 @@ export function probeMirasimTarget({ agent, health } = {}) {
     return { target, state: 'unknown', why: health?.notes?.join('；') || '没采到 mirasim 健康（没查成）' };
   }
   if (health.state === 'red') return { target, state: 'red', why: health.notes?.join('；') || '健康段判红' };
+  // 只有完整且 health.state==='ok' 才能按路由放行。unknown 必须继续 unknown
+  // （缺 mode 时健康已是 unknown，但路由/窗还在——旧实现会放行 mirasim:claude）。
+  if (health.state !== 'ok') {
+    return { target, state: 'unknown', why: health.notes?.join('；') || `健康段 ${health.state || '不是 ok'}（没查成，不按路由放行）` };
+  }
   const routes = health.agentRoutes;
   if (!routes) return { target, state: 'unknown', why: '没读到 agentRoutes（没查成）' };
   const leg = routes[agent];
@@ -559,6 +613,9 @@ export function probeMirasimTarget({ agent, health } = {}) {
     return { target, state: 'unknown', why: `${agent}→relay 但 relay.available 没读到（没查成）` };
   }
   if (!health.windows.length) return { target, state: 'unknown', why: `${agent}→relay 但额度窗没读到（没查成）` };
+  if (health.windows.some(w => !w || !Number.isFinite(w.usedPercent) || !Number.isFinite(w.remainingPercent))) {
+    return { target, state: 'unknown', why: `${agent}→relay 但额度窗字段缺失或非法（没查成）` };
+  }
   return { target, state: 'ok', why: `${agent}→relay 且 available，额度窗读到 ${health.windows.length} 个` };
 }
 

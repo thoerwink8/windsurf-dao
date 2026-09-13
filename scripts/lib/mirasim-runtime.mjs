@@ -393,13 +393,16 @@ function normPhase(raw) {
 }
 
 /**
- * 从快照抽出 readSession 对外的四个字段。快照里没有的字段一律给 null / 空，不编。
+ * 从快照抽出 readSession 对外的字段。快照里没有的字段一律给 null，不编。
+ * text：字段在且是字符串才算已知（空串合法）；缺字段 / 非字符串 → text:null + textKnown:false，
+ * 不许折成 '' 跟「正文就是空的」混在一起。
  * incomplete 为真时，phase 即使是 done 也不算干完——服务端用它标「收尾了但没跑完」。
  */
 export function readSessionView(snapshot) {
   const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const phase = normPhase(s.phase) || normPhase(s.runState);
-  const text = typeof s.text === 'string' ? s.text : '';
+  const textKnown = typeof s.text === 'string';
+  const text = textKnown ? s.text : null;
   const toolCalls = Array.isArray(s.toolCalls)
     ? s.toolCalls.filter(t => t && typeof t === 'object').map(t => ({
       id: t.id ?? null,
@@ -410,7 +413,7 @@ export function readSessionView(snapshot) {
   let error = null;
   if (typeof s.error === 'string' && s.error) error = s.error;
   else if (s.error && typeof s.error === 'object' && typeof s.error.message === 'string') error = s.error.message;
-  return { phase, text, toolCalls, error, incomplete: s.incomplete === true,
+  return { phase, text, textKnown, toolCalls, error, incomplete: s.incomplete === true,
     // waiting_user 判据要用到交互清单（#1174）：快照里有就原样透传，没有就不给字段——不编空数组。
     ...(Array.isArray(s.interactions) ? { interactions: s.interactions } : {}) };
 }
@@ -572,6 +575,13 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       reason: `快照说完工，但账本没读到（${ledger?.why || '没给账本'}）——交叉核没做成，判没查成`,
     };
   }
+  if (typeof ledger.bad === 'number' && ledger.bad > 0) {
+    return {
+      status: 'unknown',
+      confirmedBy: ['snapshot'],
+      reason: `快照说完工，但账本有 ${ledger.bad} 行坏行——交叉核用的是不完整账本，判没查成`,
+    };
+  }
   const rows = Array.isArray(ledger.rows) ? ledger.rows : [];
   const fresh = rows.filter(r => {
     const ts = Date.parse(r?.ts || '');
@@ -642,7 +652,10 @@ export function readLedger({ sessionKey, homeDir, io = defaultLedgerIo } = {}) {
       rows.push(...parsed.rows);
       bad += parsed.bad;
     }
-    return { readable: true, rows, bad, dir, why: null };
+    if (bad > 0) {
+      return { readable: false, rows, bad, dir, why: `账本有 ${bad} 行不是合法 JSON 对象，整份没查成` };
+    }
+    return { readable: true, rows, bad: 0, dir, why: null };
   } catch (e) {
     return { readable: false, rows: [], why: `账本读失败：${e?.message || e}` };
   }
@@ -1124,7 +1137,7 @@ export function createRuntime(opts = {}) {
       }
       if (!shape.missing) {
         // 收到帧但形状不对：这是契约问题，不许当「没这条会话」糊过去
-        return { phase: null, text: '', toolCalls: [], error: null, missing: false, via: 'snapshot', why: shape.errors.join('；') };
+        return { phase: null, text: null, textKnown: false, toolCalls: [], error: null, missing: false, via: 'snapshot', why: shape.errors.join('；') };
       }
       wire.send({ type: 'listSessions' });
       const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
@@ -1137,7 +1150,7 @@ export function createRuntime(opts = {}) {
         };
       }
       return {
-        phase: null, text: '', toolCalls: [], error: null,
+        phase: null, text: null, textKnown: false, toolCalls: [], error: null,
         missing: true, partial: false, via: null,
         why: `快照和会话清单都没读到（没查成）：${metaShape.errors.join('；')}`,
       };
