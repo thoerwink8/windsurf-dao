@@ -18,25 +18,70 @@
  * **「不写 `closes #1051`」**——那是在**声明不做这件事**，正则却把 `closes #1051`
  * 当成认领读走了，在真机上把 #1051 焊死 7 天（见 `attributedIssueNumber` 注释）。
  *
- * 判据是「同一分句里出现了否定词」。按行与句读切分，只丢掉命中的那一分句——
- * 不整段屏蔽，别处重复署名的仍认。在 250 张真 PR 正文上回放：只改变 #1096 一张，反面零误伤。
+ * 否定范围按真实分句切：行界 + 中英文句读（。．；;！!？?，,、：:；英文句号只在
+ * 空白/行尾/汉字前切开，避免 `close-issue.mjs` / `v1.2`）。Markdown/引号先蒙成
+ * 空白再匹配，所以 `**不写** closes` 仍是一句。只丢掉「否定词 → 关单词/#N」
+ * 那一段，同一分句后头的「署名 issue #N」留下。
+ *
+ * 「不」后面的接应按长词优先（应该/可以 先于 应/可），否则 `不应该写 closes`
+ * 会被 `应` 吃掉、整句漏网。
  */
-const NEGATED_CLAIM = /(?:不|别|勿|无需|不要|没有|未|非)\s*(?:再|去|会|要|来)?\s*(?:写|加|用|提|填|挂|打|标|带|记)?\s*[「『"'`]*\s*(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved|署名)\b/i;
+function negatedClaimRe() {
+  return new RegExp(
+    String.raw`(?:不(?:应该|可以|要|必|能|可|该|应)?|别|勿|无需|没有|未|非|禁止|切勿)`
+    + String.raw`(?:\s*(?:再|去|会|要|来|该|应|能|可|必|写|加|用|提|填|挂|打|标|带|记|关闭|关|把|将|被|请|还|也))*`
+    + String.raw`\s*(?:(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b|署名)`
+    + String.raw`(?:\s+issue)?(?:\s*[#＃]\s*\d+)?`,
+    'gi',
+  );
+}
 
-/** 丢掉被否定词管住的分句，保留其余原文。
- *  行界与句读位置保留（被打掉的分句换成空串，不挪走换行）——`attributedIssueNumber`
+/** Markdown/引号蒙成同长度空白，匹配下标能映回原文。 */
+function maskMarkup(s) {
+  return String(s)
+    .replace(/[*`~]/g, ' ')
+    .replace(/[「」『』]/g, ' ')
+    .replace(/[\u201C\u201D\u2018\u2019]/g, ' ')
+    .replace(/["']/g, ' ');
+}
+
+/** 英文句号只在空白/行尾/汉字前切开，避免文件名和版本号。 */
+const CLAUSE_PUNCT = /[。．；;！!？?，,、：:]|\.(?=\s|$|[\u4e00-\u9fff])/g;
+
+function splitClauses(line) {
+  const s = String(line);
+  const chunks = [];
+  let last = 0;
+  CLAUSE_PUNCT.lastIndex = 0;
+  let m;
+  while ((m = CLAUSE_PUNCT.exec(s))) {
+    chunks.push(s.slice(last, m.index + m[0].length));
+    last = m.index + m[0].length;
+  }
+  if (last < s.length || chunks.length === 0) chunks.push(s.slice(last));
+  return chunks;
+}
+
+function stripNegatedSpans(chunk) {
+  const matches = [...maskMarkup(chunk).matchAll(negatedClaimRe())];
+  if (matches.length === 0) return chunk;
+  let out = chunk;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i];
+    out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
+  }
+  return out;
+}
+
+/** 丢掉被否定词管住的认领片段，保留其余原文。
+ *  行界与句读位置保留（被打掉的片段换成空串，不挪走换行）——`attributedIssueNumber`
  *  靠「正文段落」的先后与有无决定优先级，改写行结构会连带改掉它的判据。 */
 export function stripNegatedClaims(text) {
   const src = String(text || '');
-  if (!NEGATED_CLAIM.test(src)) return src;
+  if (!negatedClaimRe().test(maskMarkup(src))) return src;
   const kept = [];
   for (const line of src.split(/\r?\n/)) {
-    // 按句读与粗体标记切分句：否定只作用于它所在的那一分句。
-    let out = line;
-    for (const seg of line.split(/(?<=[。；;！!？?])|(?=\*\*)/)) {
-      if (seg && NEGATED_CLAIM.test(seg)) out = out.replace(seg, '');
-    }
-    kept.push(out);
+    kept.push(splitClauses(line).map(stripNegatedSpans).join(''));
   }
   return kept.join('\n');
 }

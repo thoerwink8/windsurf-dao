@@ -76,6 +76,27 @@ describe('close-issue 署名单号', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('署名 issue #1101\n不写 closes #1051'), [1101]);
     });
 
+    await t.test('审官反例：不应该写 / **不写** 仍不算认领，后续署名留下', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051。署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('**不写** closes #1051。署名 issue #1101'), [1101]);
+      assert.strictEqual(C.attributedIssueNumber({ title: 'x', body: '不应该写 closes #1051。署名 issue #1101' }), 1101);
+      assert.strictEqual(C.attributedIssueNumber({ title: 'x', body: '**不写** closes #1051。署名 issue #1101' }), 1101);
+    });
+
+    await t.test('中英文标点切分：逗号/英文句号后的署名仍认，否定接应（不能/不该/不应/不必）也剥', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051，署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051. 署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051 署名 issue #1101'), [1101]);
+      for (const body of ['不能写 closes #1051。署名 issue #1101', '不该写 closes #1051。署名 issue #1101',
+        '不应写 closes #1051。署名 issue #1101', '不必写 closes #1051。署名 issue #1101']) {
+        assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101], body);
+      }
+    });
+
+    await t.test('正控：不论/不仅 不是否定认领（不-复合词别误伤）', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不论 Closes #564 还是 Fixes #12'), [564, 12]);
+    });
+
     await t.test('正控：Closes 出现在叙述里（非否定）仍认领', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('这个 PR Closes #564，顺手修了别处'), [564]);
     });
