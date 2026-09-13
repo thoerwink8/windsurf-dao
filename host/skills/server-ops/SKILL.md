@@ -9,9 +9,13 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 
 ## skills 装载面自愈（#1146）
 
-- 单元模板：`host/machine/systemd/dao-skills-heal.service`（装法在文件头）。
+- 单元模板：`host/machine/systemd/dao-skills-heal.service`（orca）、`dao-skills-heal-root.service`（root），装法在各文件头。
 - 幂等安装（要 root）：`scripts/install-skills-heal.sh`。装法见 `NEW-MACHINE.md` §11.1，本页不复制。
-- 探活：`systemctl list-timers` 里要有 `dao-skills-heal.timer`，**NEXT 不能是 `-`**。dao-check ㉚：没装 SKIP，被劫红。
+- **两只钟，各守一个家目录**（判据 `scripts/lib/skill-homes.mjs`：那个家有 `.claude/` 或 `.mirasim/` 就守）。
+  只有 orca 那只时，root 的装载面被劫后没人接，dao-check ㉚ 能红三天。
+- 探活：`systemctl list-timers` 里**两只** timer 的 NEXT 都不能是 `-`。dao-check ㉚：没装 SKIP，被劫红。
+- 以 root 那只跑的是 `/usr/local/lib/dao-skills-heal` 的安装副本，不是仓内脚本——改完要重跑装机脚本，
+  且仓根写死在单元的 `DAO_REPO_ROOT`（装机脚本按实际路径改写）。
 
 ## land timer
 

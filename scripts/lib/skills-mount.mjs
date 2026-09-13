@@ -9,7 +9,7 @@
 // 本文件只动 ~/.claude/skills 这一层，绝不 rm -rf 被劫目标。
 // onboard.mjs 与 scripts/skills-heal.mjs（systemd 自愈）共用这一份。
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 const linkType = () => (process.platform === 'win32' ? 'junction' : undefined);
@@ -119,12 +119,44 @@ function linkKeepers(face, keepers, dryRun) {
 }
 
 /**
+ * 这个 checkout 是不是**临时 worktree**（`.git` 是文件，指向主仓 .git/worktrees/<名>）。
+ *
+ * 为什么判它：装载面的链接必须指一个**活得比会话久**的 checkout。主树是 `/srv/projects/windsurf-dao`，
+ * worktree 是干完就删的临时的树。2026-09-13 实咬：我从 `.claude/worktrees/<名>/` 里跑了自愈，
+ * 它把 `/root/.claude/skills/dispatch` 链到了那个 worktree——那个树一删，链接全悬空，
+ * 而且它是**照着 §11.1 的装法**在仓里跑出来的结果，不是谁手抖。
+ *
+ * 全手工解析（读 .git 文件），不 shell git。
+ */
+export function isLinkedWorktree(root) {
+  try {
+    const st = lstatSync(join(root || '', '.git'));
+    if (!st || !st.isFile()) return false; // 目录形态 = 主 clone / 主树
+    return /^gitdir:\s*\S+/m.test(readFileSync(join(root, '.git'), 'utf8'));
+  } catch {
+    return false; // 读不到就不判它是 worktree（没依据时不拦，交给别处）
+  }
+}
+
+/**
  * 合并式接回。幂等：已经是真目录且仓内链齐 → changed=false。
  * 不删被劫目标里的任何东西。
  *
  * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string}}
  */
-export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, say = () => {} } = {}) {
+export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, allowWorktree = false, say = () => {} } = {}) {
+  // 从临时 worktree 里接回会把装载面链到一个干完就删的树（见 isLinkedWorktree 的注释）。
+  // 这不是「不许在 worktree 里跑」——是「跑之前先知道后果」，所以 dry-run 照跑，只拦落盘那一步。
+  if (!dryRun && !allowWorktree && isLinkedWorktree(root)) {
+    return {
+      ok: false,
+      kind: 'worktree',
+      worktree: true,
+      error: `${root} 是临时 worktree（.git 是文件）——从这里接回会把装载面链到这个树，树一删全悬空；`
+        + '要在 worktree 里预演用 --dry-run，真接回请到主树 /srv/projects/windsurf-dao 跑',
+      face: join(home || '', dir, 'skills'),
+    };
+  }
   const c = classifySkillsMount({ root, home, dir });
   if (c.kind === 'unscanned') return { ok: false, unscanned: true, kind: c.kind, reason: c.reason, face: c.face };
   if (c.kind === 'file') {

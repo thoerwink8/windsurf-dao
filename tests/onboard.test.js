@@ -577,19 +577,31 @@ describe('skills 装载面合并式接回', () => {
   it('skills-heal.mjs 被劫 exit 0 且接回；没查成 exit 2', () => {
     const script = path.join(REPO, 'scripts', 'skills-heal.mjs');
     const { home } = mkHijackHome('cli-heal');
+    // HOME 指假家目录、DAO_SKILL_HOMES 只给这一个：不这么钉，「守哪几个家」会拿本机
+    // /etc/passwd 真清单，测试就变成在真机上乱建链（2026-09-13 改多 home 时踩到）。
     const ok = spawnSync(process.execPath, [script], {
       encoding: 'utf8', windowsHide: true, timeout: 15_000,
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home, DAO_SKILL_HOMES: home },
     });
     assert.equal(ok.status, 0, String(ok.stderr || ok.stdout));
     assert.match(String(ok.stdout || ''), /已接回|接回/);
     assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink(), false);
+    // 没查成 = 一个候选家目录都读不到（覆盖值里全是够不着的路径），必须 exit 2 且说「没查成」。
     const empty = spawnSync(process.execPath, [script], {
       encoding: 'utf8', windowsHide: true, timeout: 15_000,
-      env: { ...process.env, HOME: '', USERPROFILE: '' },
+      env: { ...process.env, HOME: '', USERPROFILE: '', DAO_SKILL_HOMES: '/nope-' + process.pid },
     });
     assert.equal(empty.status, 2, String(empty.stderr || empty.stdout));
     assert.match(String(empty.stderr || ''), /没查成/);
+    // 反向控制：有家目录但那个家没装执行体（没有 .claude/ 也没有 .mirasim/）⇒ 不是故障，exit 0 说出来。
+    const bare = fs.mkdtempSync(path.join(require('os').tmpdir(), 'onboard-bare-home-'));
+    const bareRun = spawnSync(process.execPath, [script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      env: { ...process.env, HOME: bare, USERPROFILE: bare, DAO_SKILL_HOMES: bare },
+    });
+    assert.equal(bareRun.status, 0, String(bareRun.stderr || bareRun.stdout));
+    assert.match(String(bareRun.stdout || ''), /无装载面要守/);
+    fs.rmSync(bare, { recursive: true, force: true });
   });
 });
 

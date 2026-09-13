@@ -5,30 +5,57 @@
 //   node scripts/skills-heal.mjs --dry-run  # 只看不动
 //
 // systemd 每 5 分钟跑一次：已经是真目录 + 逐个链接就 exit 0 无事可做。
-// 只动 ~/.claude/skills 这一层，不删 ~/.mirasim/skills。
+// 只动 <家目录>/.claude/skills 这一层，不删 <家目录>/.mirasim/skills。
 // 没查成 exit 2（跟「查过没事」分形）；接回失败 exit 1。
+//
+// 守的是**本机所有有装载面的家目录**，不是当前进程那一个（判据在 lib/skill-homes.mjs）。
+// 2026-09-13 实咬：单元 `User=orca` 只修得住 /home/orca，而 dao-check 看的是 /root，
+// root 那份被 mirasim 劫走后红了三天没人接——两个 home 各自都「对」，合起来没人管。
+//
+// 从临时 worktree 里不许真接回（会链到干完就删的树，见 lib/skills-mount.mjs
+// isLinkedWorktree）：要预演用 --dry-run，真要接回请到主树跑。
 
 import { healSkillsMount } from './lib/skills-mount.mjs';
-import { repoRootOfThisFile } from './lib/onboard-check.mjs';
-import { defaultHome } from './lib/dao-memory-link-check.mjs';
+import { repoRoot } from './lib/onboard-check.mjs';
+import { agentHomes } from './lib/skill-homes.mjs';
 
 const DRY = process.argv.includes('--dry-run');
-const root = repoRootOfThisFile();
-const home = defaultHome();
+const root = repoRoot();
 const say = (s) => process.stdout.write(s + '\n');
 
-const r = healSkillsMount({ root, home, dryRun: DRY, say });
-if (r.unscanned) {
-  process.stderr.write(`[skills-heal] 没查成：${r.reason || '未知'}（≠ 查过没事）\n`);
+const found = agentHomes();
+if (!found.ok) {
+  process.stderr.write(`[skills-heal] 没查成：${found.reason}（≠ 查过没事）\n`);
   process.exit(2);
 }
-if (!r.ok) {
-  process.stderr.write(`[skills-heal] 失败：${r.error || '未知'}\n`);
-  process.exit(1);
-}
-if (!r.changed) {
-  say('[skills-heal] 装载面已是逐个链接，无事可做');
+if (!found.homes.length) {
+  // 有家目录但一个装载面都没有 = 这台机器没装执行体，不是故障，但要说出来。
+  say('[skills-heal] 本机没有任何家目录带 .claude/ 或 .mirasim/，无装载面要守');
   process.exit(0);
 }
-say(`[skills-heal] ${DRY ? '拟' : '已'}接回 kind=${r.kind} 仓内补=${(r.linked || []).length} 重建=${(r.rebuilt || []).length} 保留=${(r.kept || []).length}`);
+
+const results = [];
+let failed = 0;
+for (const home of found.homes) {
+  const r = healSkillsMount({ root, home, dryRun: DRY, say: (s) => say(`  [${home}] ${s}`) });
+  results.push({ home, ...r });
+  if (r.unscanned || !r.ok) failed++;
+}
+
+const changed = results.filter((r) => r.changed);
+const kindOf = (r) => (r.unscanned ? 'unscanned' : r.kind);
+const summary = results.map((r) => `${r.home}:${kindOf(r)}`).join(' ');
+if (failed) {
+  const bad = results.filter((r) => r.unscanned || !r.ok);
+  const wt = bad.filter((r) => r.worktree);
+  process.stderr.write(`[skills-heal] ${bad.length}/${results.length} 个家目录没接成：${bad.map((r) => `${r.home}(${r.reason || r.error || '未知'})`).join('；')}\n`);
+  // worktree 拦下时清一色 exit 2：这是「这个地点没法判」，不是「接回坏了」——
+  // 单元在 /srv 主树跑，永远不会走到这条；人从 worktree 里跑才会。
+  process.exit(wt.length === bad.length ? 2 : 1);
+}
+if (!changed.length) {
+  say(`[skills-heal] ${results.length} 个装载面都已是逐个链接，无事可做（${summary}）`);
+  process.exit(0);
+}
+say(`[skills-heal] ${DRY ? '拟' : '已'}接回 ${changed.length}/${results.length} 个：${summary}`);
 process.exit(0);
