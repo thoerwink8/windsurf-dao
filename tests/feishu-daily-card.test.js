@@ -222,6 +222,33 @@ describe('buildDailyCard：Card JSON 2.0 结构', () => {
     assert.deepEqual(plainViolations(flattenCardText(card)), []);
   });
 
+  it('脚注在，但不许用 1.0 的 note（飞书 200861：schema V2 unsupported tag note）', async () => {
+    const { buildDailyCard } = await LIB;
+    const card = buildDailyCard({ day: '2026-09-07', snapshot: snap(), nowLabel: '19:12' });
+    const tags = [];
+    const visit = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (typeof n.tag === 'string') tags.push(n.tag);
+      if (Array.isArray(n)) { for (const x of n) visit(x); return; }
+      for (const v of Object.values(n)) visit(v);
+    };
+    visit(card);
+    assert.equal(tags.includes('note'), false);
+    assert.equal(tags.includes('chart'), false);
+    const text = flattenCardText(card);
+    assert.match(text, /数据截止 · 19:12 · 只在有变化时推送/);
+    const footnotes = [];
+    const visitNote = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (n.tag === 'markdown' && typeof n.content === 'string' && n.content.includes('只在有变化时推送')) footnotes.push(n);
+      if (Array.isArray(n)) { for (const x of n) visitNote(x); return; }
+      for (const v of Object.values(n)) visitNote(v);
+    };
+    visitNote(card);
+    assert.equal(footnotes.length, 1);
+    assert.equal(footnotes[0].text_size, 'notation');
+  });
+
   it('空事项不把存量当新闻；schema 2.0 用 width_mode 不用 1.0 的 wide_screen_mode', async () => {
     const { buildDailyCard } = await LIB;
     const card = buildDailyCard({
