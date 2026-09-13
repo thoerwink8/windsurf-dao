@@ -107,6 +107,12 @@
 //    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
 //    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
 //    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
+// ㉠ 测试结构性够不着真执行体（#1152）：运行时 allowlist（默认拦，DAO_REAL_EXECUTOR=1
+//    才放；测试信号不能选择加入）。红夹具必须点出 env-lost 与测试不能 opt-in；
+//    绿夹具必须是生产旗标。ensureWorkspace / startSession / cmdDispatchMirasim /
+//    cmdStartMirasim / cmdWorktreeCreateMirasim / execution-runtime 都要在真 IO 前过闸。
+//    指挥官 runCmd 与 systemd 模板必须打 DAO_REAL_EXECUTOR=1。
+//    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
 // ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
 //    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
 
@@ -188,6 +194,10 @@ import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
+import {
+  inspectTestExecutorIsolationFixtures, inspectTestExecutorIsolationLive,
+  inspectIsolationWiring,
+} from './lib/test-executor-isolation-check.mjs';
 import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
@@ -1907,6 +1917,8 @@ checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
 checkOrphanTestLive();
+checkTestExecutorIsolationSamples();
+checkTestExecutorIsolationLive();
 checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
@@ -2309,6 +2321,73 @@ function checkOrphanTestSamples() {
     return;
   }
   green(`孤儿测试闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkTestExecutorIsolationSamples() {
+  const r = inspectTestExecutorIsolationFixtures(join(ROOT, 'tests', 'fixtures', 'test-executor-isolation'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 env JSON（不许 *.js），必须点出 env-lost 与测试不能 opt-in；绿夹具必须是生产 DAO_REAL_EXECUTOR=1；空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`测试隔离闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（allowlist 有判别力）`);
+}
+
+function checkTestExecutorIsolationLive() {
+  const dir = join(ROOT, 'tests');
+  const r = inspectTestExecutorIsolationLive({
+    dir,
+    readdir: readdirSync,
+  });
+  if (r.unscanned) {
+    fail('测试隔离闸 live 没查成', 'tests/ 下要有 *.test.js，读失败不是「没有真派工」', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `测试隔离闸 live 红`,
+      'tests/ 下要有测试文件；真 spawn 靠运行时 allowlist 拦',
+      (r.violations || []).map((v) => `${v.file}: ${v.why}`).join('；') || r.error || '',
+    );
+    return;
+  }
+  const runtimeFile = join(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs');
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  const executionFile = join(ROOT, 'scripts', 'lib', 'execution-runtime.mjs');
+  const commanderFile = join(ROOT, 'scripts', 'commander.mjs');
+  const unitFile = join(ROOT, 'scripts', 'lib', 'commander-inventory.mjs');
+  const missing = [runtimeFile, daoFile, executionFile, commanderFile, unitFile].filter((p) => !existsSync(p));
+  if (missing.length) {
+    fail(
+      '测试隔离闸接线没查成',
+      '恢复 mirasim-runtime / dao / execution-runtime / commander / commander-inventory',
+      missing.join('；'),
+    );
+    return;
+  }
+  const wiring = inspectIsolationWiring({
+    runtimeSrc: readFileSync(runtimeFile, 'utf8'),
+    daoSrc: readFileSync(daoFile, 'utf8'),
+    executionSrc: readFileSync(executionFile, 'utf8'),
+    commanderSrc: readFileSync(commanderFile, 'utf8'),
+    unitSrc: readFileSync(unitFile, 'utf8'),
+  });
+  if (wiring.unscanned) {
+    fail('测试隔离闸接线没查成', '给齐 runtime/dao/execution/commander/unit 正文再扫', wiring.error || '');
+    return;
+  }
+  if (!wiring.ok) {
+    fail(
+      `测试隔离闸接线丢了 ${wiring.problems.length} 处`,
+      'allowlist 判官 + 真 IO 前过闸 + 指挥官/systemd 打 DAO_REAL_EXECUTOR=1',
+      wiring.problems.join('；'),
+    );
+    return;
+  }
+  green(`测试隔离闸：${r.scanned} 套测试；allowlist 接线与生产入口打旗在`);
 }
 
 function checkOrphanTestLive() {

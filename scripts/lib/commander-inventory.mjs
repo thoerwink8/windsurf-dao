@@ -497,7 +497,7 @@ function unit(desc, execArgs, { gitPush = false } = {}) {
   const cred = gitPush
     ? 'UnsetEnvironment=GH_TOKEN GITHUB_TOKEN\n# REQUIRES_GIT_PUSH=1：这个单元要写远端 git（commander.mjs 里的 git push）。\n# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 git 的凭据助手\n# `gh auth git-credential` 找不到 hosts.yml，推送永远失败。\n# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs。'
     : 'UnsetEnvironment=GH_TOKEN GITHUB_TOKEN\nEnvironment=GH_CONFIG_DIR=/var/empty';
-  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\n${cred}\nExecStart=/usr/bin/node ${execArgs}\n`;
+  return `[Unit]\nDescription=${desc}\n\n[Service]\nType=oneshot\nUser=orca\nWorkingDirectory=/srv/projects/windsurf-dao\nEnvironment=PATH=${UNIT_PATH}\nEnvironment=DAO_REAL_EXECUTOR=1\n${cred}\nExecStart=/usr/bin/node ${execArgs}\n`;
 }
 /**
  * timer 模板。**`OnCalendar` 是必需的，不是冗余。**

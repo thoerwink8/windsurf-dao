@@ -22,7 +22,7 @@ describe('dao 派工硬闸', () => {
       // 它已经没有服务对象（2026-09-06 实测 orca 树 0 棵、运行时不在），但代码还在，
       // 删之前必须继续被测，所以显式点名 orca。
       // mirasim 路径的对等硬闸另有一套（本文件末「mirasim 单轨派工硬闸」）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', ...args], { encoding: 'utf8', cwd: REPO });
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...args], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -357,6 +357,22 @@ describe('dao 派工硬闸', () => {
       assert.equal((pFail.disambiguation || {}).unscanned, true);
     });
 
+    // #1152：空账本 + 565 有 label 是当年真派工烧额度的路径。
+    // 同进程 cliInProc（env 丢不了）走到隔离闸，不许建树/起会话。
+    const isoLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1152-iso-l-'));
+    const isoQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1152-iso-q-'));
+    const isoEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: isoQueue, LEDGER_EVENTS_DIR: isoLedger };
+    const cliIso = await cliInProc(['dispatch', '--executor', 'mirasim', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], isoEnv);
+    const pIso = (() => { try { return JSON.parse((cliIso.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    await t.test('#1152 空账本+已消歧：隔离闸拦住真执行体，不建树不起会话', () => {
+      assert.notEqual(cliIso.status, 0, JSON.stringify(pIso).slice(0, 300));
+      assert.equal(pIso.ok, false);
+      assert.match(String(pIso.error || ''), /结构性够不着真执行体/);
+      assert.equal(pIso.sessionKey, undefined);
+      assert.equal(pIso.path, undefined);
+      assert.equal(pIso.workerId, undefined);
+    });
+
     const daoSrc565 = fs.readFileSync(CLI, 'utf8');
     await t.test('dao.mjs dispatch 与 worker-start 都调消歧门', () => {
       assert.ok((daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, 'dao.mjs dispatch 与 worker-start 都调消歧门  →  ' + daoSrc565.slice(0, 60));
@@ -374,7 +390,7 @@ describe('dao 派工硬闸', () => {
     const S = await S_LOAD;
     function dispatchRaw(extra) {
       // 同上：本套测 orca 那条脊，切流量后要显式点名（默认已是 mirasim）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', ...extra], { encoding: 'utf8', cwd: REPO });
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -654,7 +670,7 @@ describe('dao 派工硬闸', () => {
 describe('mirasim 单轨派工硬闸', () => {
   const { assert, fs, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
   const base = ['--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--split', 'no', '--split-reason', '单测'];
-  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
   const payload = (r) => {
     try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
     catch { return { raw: r.stdout, err: r.stderr }; }

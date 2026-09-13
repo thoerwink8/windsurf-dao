@@ -712,6 +712,64 @@ describe('问答与工作区', () => {
   });
 });
 
+describe('测试隔离闸（#1152）', () => {
+  it('NODE_TEST_CONTEXT → 拒；空 env → 拒；生产旗标放行；测试不能 opt-in', async () => {
+    const { judgeTestExecutorIsolation, TEST_ISOLATION_MARK, REAL_EXECUTOR_ENV } = await import(LIB);
+    const blocked = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child-v8' });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.blocked, true);
+    assert.match(blocked.error, new RegExp(TEST_ISOLATION_MARK));
+    const noSpawn = judgeTestExecutorIsolation({ DAO_DISPATCH_NO_SPAWN: '1' });
+    assert.equal(noSpawn.ok, false);
+    assert.ok(noSpawn.signals.includes('DAO_DISPATCH_NO_SPAWN'));
+    const missing = judgeTestExecutorIsolation({});
+    assert.equal(missing.ok, false);
+    assert.equal(missing.why, 'missing-DAO_REAL_EXECUTOR');
+    const prod = judgeTestExecutorIsolation({ [REAL_EXECUTOR_ENV]: '1' });
+    assert.equal(prod.ok, true);
+    assert.equal(prod.blocked, false);
+    const cannotOptIn = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child', [REAL_EXECUTOR_ENV]: '1' });
+    assert.equal(cannotOptIn.ok, false);
+    assert.equal(cannotOptIn.why, 'test-signal');
+  });
+
+  it('真连线 + 空 env：ensureWorkspace 在 open 前抛（env 丢失不再放行）', async () => {
+    const { createRuntime, TEST_ISOLATION_MARK } = await import(LIB);
+    const rt = createRuntime({ env: { PATH: '/bin' }, port: 59999 });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-iso'), err => {
+      assert.equal(err.name, 'MirasimRejectedError');
+      assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+      return true;
+    });
+  });
+
+  it('真连线 + 测试信号：ensureWorkspace / startSession 在 open 前抛', async () => {
+    const { createRuntime, TEST_ISOLATION_MARK } = await import(LIB);
+    const rt = createRuntime({ env: { NODE_TEST_CONTEXT: 'child' }, port: 59999 });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-iso'), err => {
+      assert.equal(err.name, 'MirasimRejectedError');
+      assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+      return true;
+    });
+    await assert.rejects(
+      () => rt.startSession({ agent: 'claude', workdir: '/repo', prompt: 'x' }),
+      err => {
+        assert.equal(err.name, 'MirasimRejectedError');
+        assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+        return true;
+      },
+    );
+  });
+
+  it('注入 connect 的单元测试不被隔离闸误伤', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-iso' }] : []));
+    const rt = await runtimeWith(wire, { env: { NODE_TEST_CONTEXT: 'child-v8' } });
+    const r = await rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' });
+    assert.equal(r.sessionKey, KEY);
+  });
+});
+
 describe('#1125 listSessions：会话名单是第六个动词', () => {
   it('回了 sessions 数组 → ok，原样交出', async () => {
     const sessions = [
