@@ -42,6 +42,7 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
+  rereviewKey, epochOf,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -615,6 +616,10 @@ function buildSituation({ state } = {}) {
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
+    // #1236：本轮用的判据版本。重试键都带它，所以把它报出去——版本一变，
+    // 所有在途 PR 的重试计数归零（修法落地即自动重获机会）。没算成时 epoch 为 null，
+    // 那时键退回旧形态（今天的行为），这一点也要看得见，不许伪装成「版本一致」。
+    retryEpoch: (() => { const e = epochOf(); return { epoch: e.epoch, files: e.files, ...(e.ok ? {} : { unscanned: e.why }) }; })(),
     openIssueLedger: (state && state.openIssueLedger) || {},
     hubSeen: (state && state.hubSeen) || {},
     // 「自动化认输」的账本（键 pushed:<pr>@<head>）。decide 用它判「这个标是不是过期了」——
@@ -1608,7 +1613,9 @@ function requestRereview(action, { state, dryRun, say }) {
   // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
   // 不记 ok——「票写出去了」不是「判定落了」，2026-09-05 就是把这两件事记成一条账，
   // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
-  state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
+  // #1236：退回 rereviewKey() 而不是就地拼字面量——写侧与 decide 侧必须同一个判据版本，
+  // 两处字面量分叉就是 #909 的形状（账记到另一个格子，票还在队列却永远走不进 retry-drain）。
+  state.reworkDispatched[action.stateKey || rereviewKey(action.pr, action.head)] = {
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
