@@ -2446,7 +2446,17 @@ function escalate(action, { state, dryRun, say,
     // 去重账把下一次真发生永远退回旧单号（重开在网关那层从未发生）。
     seed: escalateRoundSeed(action.reason, verdict.objects),
   });
-  if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
+  if (opened.ok && opened.number) {
+    // 账本的 `at` = 「这张单是什么时候为这件事开的」。幂等键重放时**不许刷新**：
+    // 刷新它等于宣称「刚开了一张」，而线上一张都没开——#1240 里 #1204 的
+    // `at` 就是这样被每 20 分钟往后推一次，翻账本看不出它其实是张旧单。
+    const firstBooked = booked && booked.issue === opened.number;
+    state.escalateLedger[key] = {
+      issue: opened.number,
+      at: firstBooked ? (booked.at || nowIso()) : nowIso(),
+      objects: verdict.objects || [],
+    };
+  }
   // 幂等键重放时 gateway 会把**上一次的同键单号**退回（scripts/lib/issue-gateway.mjs:483），
   // 那张单可能是已关的。原先这里一律说「报帅开单 #N」，于是日志里看得见「开单」，
   // 线上却没有新单——#1240 里 #1204 被这样报了上百轮。回执里 replay 字段就是判据。
