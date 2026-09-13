@@ -359,3 +359,46 @@ describe('extractFinish / settleScan（纯函数判据）', () => {
     assert.equal(settleScan('gw-openai', { ...newScan(), gotContent: true }, cut).state, 'no_finish');
   });
 });
+
+// 本地登录型（网关退役后 grok/composer 走官方 CLI 自己的登录态）：
+// 探不到会话健康，只有凭据文件在不在这一层证据——缺=红，在=unscanned，**永远不许绿**。
+describe('native-login：缺凭据红 / 有凭据也不许绿', () => {
+  const noFile = () => false;
+
+  it('probeTargetOf 给本地登录型算出 native:<provider> 键', async () => {
+    const { probeTargetOf } = await import(LIB);
+    assert.equal(probeTargetOf({ provider: 'xai-native', cli_model: 'grok-4.6' }), 'native:xai-native');
+    assert.equal(probeTargetOf({ provider: 'cursor-native' }), 'native:cursor-native');
+    // 不在表里的 provider 认不出 → null（调用方据此判 unscanned，不猜一个键出来）
+    assert.equal(probeTargetOf({ provider: 'opencode-go' }), null);
+  });
+
+  it('缺凭据文件 = red（派工必然起不来，这是确定的事实）', async () => {
+    const { planProbe, runProbe } = await import(LIB);
+    const plan = planProbe({ provider: 'xai-native' }, {});
+    assert.equal(plan.kind, 'native-login');
+    const r = await runProbe(plan, { exists: noFile });
+    assert.equal(r.state, 'red');
+    assert.match(r.why, /凭据不在/);
+  });
+
+  it('凭据文件在 = unscanned，且 why 说清「文件在 ≠ 会话健康」', async () => {
+    const { planProbe, runProbe } = await import(LIB);
+    const plan = planProbe({ provider: 'xai-native' }, {});
+    const r = await runProbe(plan, { exists: () => true });
+    assert.equal(r.state, 'unscanned');
+    assert.match(r.why, /文件在 ≠ 会话健康/);
+  });
+
+  it('本地登录型整表单源：provider-probe 与 execution-catalog 用同一份路径表', async () => {
+    const probe = await import(LIB);
+    const catalog = await import('file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'execution-catalog.mjs').replace(/\\/g, '/'));
+    const { NATIVE_LOGIN_FILES } = probe;
+    const names = Object.keys(NATIVE_LOGIN_FILES);
+    assert.deepEqual(names.sort(), ['cursor-native', 'devin-native', 'xai-native']);
+    // 凭据盘点必须逐条用同一份路径（两处各手打一份是「加一个 provider 要记得改两处」的由来）
+    const inv = catalog.discoverExecutionCredentials({ home: '/tmp/h', read: () => '', exists: () => false });
+    const native = inv.filter(e => e.kind === 'native-login').map(e => e.location).sort();
+    assert.deepEqual(native, names.map(p => `~/${NATIVE_LOGIN_FILES[p]}`).sort());
+  });
+});

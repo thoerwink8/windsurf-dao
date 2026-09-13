@@ -458,14 +458,16 @@ describe('验收 7：不出网，单测毫秒级；CLI 注入假 gh', () => {
   });
 });
 
-describe('选型 JSON 加了消歧角色，通道是 gw/grok-4.6', () => {
-  it('工人.消歧 顺位 1 是 grok-4.6 / gw', () => {
+describe('选型 JSON 加了消歧角色，通道随落地说', () => {
+  it('工人.消歧 顺位 1 是 grok-4.6，落地 provider 与 cli_model 自洽', () => {
     const slot = ROUTING.工人 && ROUTING.工人.消歧 && ROUTING.工人.消歧.模型;
     assert.equal(Array.isArray(slot), true);
     const first = slot.find((m) => m && m.禁用 !== true && m.顺位 === 1);
     assert.equal(first.id, 'grok-4.6');
-    assert.equal(first.provider, 'gw');
-    assert.equal(first.cli_model, 'gw/grok-4.6');
+    // 不钉死通道：网关退役后落地 provider 由选型真相源说了算，测试只核「id 与 cli_model 同源」
+    // （钉死字面的话，每换一次通道这条测试就假红一次——判据该跟着真相源走）。
+    assert.equal(first.provider, 'xai-native');
+    assert.equal(first.cli_model, first.id);
   });
 
   it('pickDispatchLabels 打的是下一跳工人（写码），不读 工人.消歧', async () => {

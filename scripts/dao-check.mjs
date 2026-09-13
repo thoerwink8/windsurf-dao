@@ -202,6 +202,7 @@ import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
+import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -680,6 +681,63 @@ function checkRoutingProvidersToml() {
   } else {
     fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；选型只许 docs/model-routing.json；TOML 禁止 [[models]]/[[routes]]/[[bans]]/[[rules]]', problems.slice(0, 10).join(' '));
   }
+}
+
+/** provider 启动模板里的命令词，本机解析得了吗（#2026-09-13 实咬：command-code 写错一个月没人发现）。
+ *  判据实现是纯函数（scripts/lib/launch-binary.mjs），这里只负责喂输入。
+ *  PATH 从本进程取——这是**宿主局部**判据，换台机器结论就不同，所以前提文字里带 PATH。 */
+function checkLaunchBinaries() {
+  if (!existsSync(ROUTING_FILE)) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 不在，本次等于没查', ROUTING_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+  } catch (e) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 解析失败（另有一项会单独报解析错）', String(e.message || e).slice(0, 120));
+    return;
+  }
+  const providers = Object.entries(doc.providers || {})
+    .filter(([, p]) => p && typeof p === 'object')
+    .map(([name, p]) => ({ name, cli: p.cli, launch: p.launch }));
+  // 判据锚在**部署环境**的 PATH，不是碰巧跑检查那个 shell 的（2026-09-13 实咬：
+  // sudo/裸 shell 下 PATH 不含 ~/.local/bin，reclaude/devin 判「解析不到」→ 假红；
+  // 真实服务 commander-act.service 的 PATH 显式带着它）。见 launch-binary.mjs 的 resolveProbePath。
+  const { pathValue, source } = resolveProbePath(process.env, {
+    unitDir: join(ROOT, DEPLOY_UNIT_DIR),
+    io: { readdir: readdirSync, readFile: p => readFileSync(p, 'utf8') },
+  });
+  // **这条检查只在部署宿主上跑**（2026-09-13 CI 实咬，run 34744690601）。
+  // 它问的是「这台机器上那些 agent CLI 解析得了吗」——CI runner 上答案当然是「解析不了」，
+  // 于是 24 处红、`--all-tests` 稳定退出 1。**那不是模板的 24 个错误，是问错了机器。**
+  //
+  // 判据用部署宿主的专属落点（`~/.mirasim/run` 等），不用「PATH 里目录在不在」——
+  // 后者在 CI 上会被 `/usr/bin` 这些通用目录兜住，两次都判成「是本机」（见
+  // launch-binary.mjs 的 deploymentHostPresence 注释，判例 patch-stacking-is-two-strikes）。
+  //
+  // 不是宿主 ⇒ `unscanned`（没查成），既不判红也不判绿。按项目规矩：
+  // 输出必须能区分「扫完查出 0 条」与「这次没扫到任何样本」——在这里连样本都没有。
+  const hostPresence = deploymentHostPresence({ homeDir: homedir() });
+  if (hostPresence.host !== true) {
+    skip(`启动模板命令词：这条检查是宿主局部的，本机不是部署宿主（${hostPresence.why || '判不了'}）——本次没查成，不是绿也不是红`);
+    return;
+  }
+  const verdict = classifyLaunchBinaries({ providers, pathValue, pathSource: source, homeDir: homedir() });
+  if (verdict.state === 'unknown') {
+    fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
+    return;
+  }
+  if (verdict.state === 'ok') {
+    green(`启动模板命令词 ${verdict.checked} 个 provider 本机都解析得出${verdict.excused.length ? `（${verdict.excused.length} 处走显式落点）` : ''}`);
+    return;
+  }
+  fail(
+    `启动模板 ${verdict.broken.length} 处命令词本机解析不到`,
+    '改 docs/model-routing.toml 的 cli/launch 用本机真有的名字（npm 包声明的 bin 与它建的符号链接不是一回事）；'
+    + '确实不在 PATH 的（如 cursor-agent 走版本目录）在 scripts/lib/launch-binary.mjs 的 OFF_PATH_BIN 里给真实落点',
+    verdict.detail,
+  );
 }
 
 function checkRoutingPolicyJson() {
@@ -1859,6 +1917,7 @@ checkSkillLinksAlive();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkRoutingProvidersToml();
+checkLaunchBinaries();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();

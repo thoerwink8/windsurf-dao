@@ -16,5 +16,8 @@
 | ~/bin/agent-stall-watch.mjs | #833 退役的 Contabo 垫片路径（落地即删），不进 INDEX 不当产品落点；屏面指纹整层 2026-09-06 退役，卡死发现并进指挥官 cmdAct（scripts/progress-watch.mjs） |
 | ~/.dao/agent-stall-watch.json | #833 连红账本，运行时自建于仓外，可丢可重算；屏面指纹层退役后只剩指挥官/熔断读写它 |
 | ~/.dao/exhausted-push.json | #1000 认输推送账本（pushed:<pr>@<head>），看门狗运行时自建于仓外，可丢可重算；丢了最多对同一 head 再推一次帅位 |
+| ~/.dao/cli-versions.json | 载体版本漂移基线（纯函数 `scripts/lib/cli-version.mjs`，运行器 `scripts/cli-versions.mjs`，2026-09-13 立）：每次扫记一条 `bin → 版本`，只用来跟上一轮比出「谁换了」。运行时自建于仓外、可丢可重算——丢了下次当首轮重记基线，不当产品配置，不进 INDEX |
 | ~/.codex/skills | CHANGELOG 历史条目（link-codex 已退、写入方曾归 cc-switch）。不是现产品落点，不进 INDEX、不装机 |
 | ~/.config/gh | GitHub 官方 CLI 个人登录（hosts.yml），不是 dao 产品落点。#792 写 Issue 的单元把 GH_CONFIG_DIR 指到空目录，不让读这里；dao-gh-events 例外：webhook forward 仍走这份登录。不进 INDEX、不装机、不拷 |
+| ~/.claude/.credentials.json | 只出现在 tool-use-gate 的单测字符串与注释里（第 5 条凭据判据的样本），本机没有这个文件，dao 也不读它——凭据归 reclaude 链路管。不是产品落点，不进 INDEX |
+| ~/.config/pi | 同上，单测样本串（`secrets.toml` 一类形似名）。pi 的凭据落点是 `~/.pi/agent/auth.json`，这个目录本机不存在、dao 不读。不进 INDEX |

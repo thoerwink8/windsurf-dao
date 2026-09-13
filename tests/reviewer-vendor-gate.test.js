@@ -42,27 +42,31 @@ describe('#679 起审官同厂硬闸', () => {
     });
     const { loadRoutingPolicy } = await POLICY_LOAD;
     const liveModels = loadRoutingPolicy().models;
-    // #843 判别性：grok(xAI) 工人 + luna(OpenAI) 审官 → 放行。两者网关落地都是 gw，但真实供应商
-    // 家族 grok≠gpt，跨厂成立。这是 #822/#828 埋洞的修复：从前按 provider(gw==gw) 误判成同厂拒绝。
+    // #843 判别性：grok(xAI) 工人 + luna(OpenAI) 审官 → 放行。判据是真实供应商家族
+    // grok≠gpt，这是 #822/#828 埋洞的修复：从前按 provider 相等就误判成同厂拒绝。
+    // 2026-09-12 网关退役后两条腿的落地不再相同（xai-native vs mirasim-relay），
+    // 所以这里不再断言「同经 gw」——断言的是「跨厂结论由家族给出」。
     const lunaGate = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('grok 工人 + luna 审官 → 放行（真实供应商 grok/xAI ≠ gpt/OpenAI，虽同经 gw）', () => {
+    await t.test('grok 工人 + luna 审官 → 放行（真实供应商 grok/xAI ≠ gpt/OpenAI）', () => {
       assert.ok(lunaGate.ok === true && lunaGate.state === 'pass'
         && lunaGate.workerVendor === 'grok' && lunaGate.reviewerVendor === 'gpt'
-        && lunaGate.workerProvider === 'gw' && lunaGate.reviewerProvider === 'gw',
+        && lunaGate.reviewerProvider !== lunaGate.workerProvider,
       '#843 grok 工人 + luna 审官应放行  →  ' + JSON.stringify(lunaGate));
     });
-    // 判别性另一半：同为 OpenAI 家族（sol 直连 gpt、luna 经 gw）→ 同厂拒绝。堵上按 provider 判时
-    // gpt(provider gpt) vs luna(provider gw) 会被误当跨厂放行的旧洞。
+    // 判别性另一半：同为 OpenAI 家族（sol 与 luna 落地都是 mirasim-relay）→ 同厂拒绝。
+    // 堵上按 provider 判时 gpt 家族自审被误当跨厂放行的旧洞。
     const gptOnGpt = assertCrossVendor({ workerId: 'gpt-5.6-sol', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('gpt-sol 工人 + gpt-luna 审官 → 同厂拒绝（都是 OpenAI，落地 gpt/gw 不同也拒）', () => {
+    await t.test('gpt-sol 工人 + gpt-luna 审官 → 同厂拒绝（都是 OpenAI，落地不同也拒）', () => {
       assert.ok(gptOnGpt.ok === false && gptOnGpt.state === 'same_vendor'
         && gptOnGpt.workerVendor === 'gpt' && gptOnGpt.reviewerVendor === 'gpt',
       'gpt 家族自审应拒  →  ' + JSON.stringify(gptOnGpt));
     });
     const liveGpt = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-sol', models: liveModels });
-    await t.test('grok 工人（gw）+ gpt-sol 审官 → 通过（grok/xAI ≠ gpt/OpenAI）', () => {
-      assert.ok(liveGpt.ok === true && liveGpt.state === 'pass' && liveGpt.workerProvider === 'gw' && liveGpt.reviewerProvider === 'gpt',
-        'gw 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
+    await t.test('grok 工人 + gpt-sol 审官 → 通过（grok/xAI ≠ gpt/OpenAI）', () => {
+      assert.equal(liveGpt.ok, true, 'grok 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
+      assert.equal(liveGpt.state, 'pass', JSON.stringify(liveGpt));
+      assert.equal(liveGpt.workerVendor, 'grok', JSON.stringify(liveGpt));
+      assert.equal(liveGpt.reviewerVendor, 'gpt', JSON.stringify(liveGpt));
     });
     const same = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'grok-4.6', models: MODELS });
     await t.test('grok 工人 + grok 审官 → 同厂拒绝', () => {
@@ -147,30 +151,39 @@ describe('#679 起审官同厂硬闸', () => {
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {
     const slot = await SLOT_LOAD;
     const order = await reviewerOrder();
-    const passerIds = ['gpt-5.6-sol', 'claude-opus', 'kimi-k3'];
+    // 候选池：审官序里与工人 grok 异厂的只有 GPT 两位。passerIds 只留 sol → 走完仍是起点，
+    // 下一位落在谁身上由实测决定，不能钉死（2026-09-12 网关退役后 kimi/glm 两条禁用条目
+    // 退出了顺位表，钉死的名字会当场假红）。
     const grokWorker = slot.nextReviewerAfter({
-      currentId: 'gpt-5.6-sol', models: MODELS, passerIds, workerId: 'grok-4.6', order,
+      currentId: 'gpt-5.6-sol', models: MODELS, passerIds: ['gpt-5.6-sol'], workerId: 'grok-4.6', order,
     });
-    await t.test('工人 grok、当前 GPT → 下一位 kimi，不是 grok', () => {
-      assert.ok(grokWorker.ok && grokWorker.next === 'kimi-k3' && grokWorker.next !== 'grok-4.6',
-        JSON.stringify(grokWorker));
+    await t.test('工人 grok、候选池只剩 sol → 没有下一位（不是同厂冲突）', () => {
+      assert.equal(grokWorker.ok, false, JSON.stringify(grokWorker));
+      assert.equal(grokWorker.exhausted, true, JSON.stringify(grokWorker));
+      assert.match(grokWorker.error, /没有下一位/);
+      assert.doesNotMatch(grokWorker.error, /同厂/, '报同厂是把排障引向不存在的厂商冲突');
     });
-    const skipKimi = slot.nextReviewerAfter({
+    // 顺位表里与工人 grok 异厂的只剩 GPT；sol 后面只可能接同厂的 grok-4.6 → 走完仍同厂则升级。
+    // 判别性：这一条必须给「异厂候选」，拿 grok-4.6 当工人时下一步只能是它自己那一厂。
+    const skipSibling = slot.nextReviewerAfter({
       currentId: 'gpt-5.6-sol',
       models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: 'kimi-k3',
+      passerIds: ['gpt-5.6-sol', 'grok-4.6'],
+      workerId: 'grok-4.6',
       order,
     });
     await t.test('选型序走完仍同厂 → 升级，不落到工人那一厂', () => {
-      assert.ok(skipKimi.ok === false && skipKimi.exhausted === true && /同厂/.test(skipKimi.error),
-        JSON.stringify(skipKimi));
+      assert.equal(skipSibling.ok, false, JSON.stringify(skipSibling));
+      assert.equal(skipSibling.exhausted, true, JSON.stringify(skipSibling));
+      assert.match(skipSibling.error, /同厂/);
     });
+    // 空池样本的工人要与顺位表里任何候选都不同厂，否则分不清「空池」和「同厂」——claude-opus
+    // 的家族 claude 不在顺位表里，正合适（拿 grok-4.6 当工人则会被误判成同厂那条）。
     const noNext = slot.nextReviewerAfter({
       currentId: 'gpt-5.6-sol',
       models: MODELS,
       passerIds: ['gpt-5.6-sol'],
-      workerId: 'kimi-k3',
+      workerId: 'claude-opus',
       order,
     });
     await t.test('没有下一位 ≠ 仍同厂（#729/#730 排障被误导实证：候选池空了不许报成厂商冲突）', () => {
@@ -269,12 +282,15 @@ describe('#679 起审官同厂硬闸', () => {
     const DEAD = 'Selected model is at capacity. Please try a different model.';
 
     await t.test('请求仍是刚死的那位 → 自动换成下一位', () => {
+      // 2026-09-12 网关退役把 kimi/glm 两条禁用条目移出顺位表，顺位变成 luna→sol→grok-4.6。
+      // 「刚死的那位」取 luna 而不是 sol：请求 sol 时它后面只剩同厂的 grok-4.6，样本编不出来；
+      // luna 后面正接 sol（异厂），本条考的仍是「标签还钉着死人 → 换下一位」。
       const r = slot.planReviewerOnCapacityDeath({
-        requested: 'gpt-5.6-sol',
-        capacityFailover: { ...base, deadError: DEAD },
+        requested: 'gpt-5.6-luna',
+        capacityFailover: { ...base, deadModelId: 'gpt-5.6-luna', deadError: DEAD },
       });
       assert.equal(r.ok, true, JSON.stringify(r));
-      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
       assert.equal(r.switched, true);
     });
 

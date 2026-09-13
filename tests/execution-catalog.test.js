@@ -261,7 +261,13 @@ test('real catalog is structurally valid; no V4.1/GPT4omini/Llama IDs fabricated
   const relay = c.profiles.filter(p => /relay/.test(p.provider));
   assert.deepEqual([...new Set(relay.map(p => p.backend))], ['mirasim']);
   assert.deepEqual([...new Set(relay.map(p => p.route))], ['cloud']);
-  assert.deepEqual(c.profiles.filter(p => /v4[.-]1|gpt4omini|llama/i.test(p.model ?? '')).map(p => p.id), []);
+  assert.deepEqual(c.profiles.filter(p => /gpt4omini|llama/i.test(p.model ?? '')).map(p => p.id), []);
+  // deepseek-v4 ids are deliberately NOT banned here any more. The old ban listed
+  // v4.1 as fabricated; the upstream roster now genuinely carries deepseek-v4.1-flash
+  // (2026-09-13 store refresh), so the ban was asserting something false. Roster ids
+  // are covered where they are actually enforced: inspectPiDirectProvider matches each
+  // profile's model against the live store and fails exact_model_not_in_native_catalog.
+  // Generic shapes that no vendor uses stay banned above.
   const pools = c.profiles.filter(p => ['devin-native', 'windsurf'].includes(p.provider)).map(p => p.accountPoolId);
   assert.equal(new Set(pools).size, 1, 'user-confirmed shared allowance must not create duplicate quotas');
 });

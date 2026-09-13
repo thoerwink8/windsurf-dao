@@ -571,8 +571,13 @@ describe('dianjiangtai', () => {
   it('⑤ JSON 职责树顺位参与推荐（写码 grok > flash，#822）', async (t) => {
     const policy = await routingPolicy();
     const rankOrder = policy.rankOrderFor('工人', '写码');
-    await t.test('model-routing.json 写码顺位 grok > flash（#822 devin 退役）', () => {
-      assert.ok(rankOrder[0] === GROK && rankOrder[1] === FLASH && !rankOrder.includes(DEVIN), '写码顺位  →  ' + JSON.stringify(rankOrder));
+    // 2026-09-12 网关退役：deepseek-v4-flash 在统一执行目录里没有启用条目，落地只剩网关组，
+    // 已随本次退役禁用（见 model-routing.json 的禁用原因）——顺位表里只剩 grok-4.6 一条。
+    // 断言改成「grok 在首位且没有 devin」：钉死长度的话，每退一个模型这条就假红一次。
+    await t.test('model-routing.json 写码顺位首位是 grok（#822 devin 退役）', () => {
+      assert.equal(rankOrder[0], GROK, '写码顺位首位  →  ' + JSON.stringify(rankOrder));
+      assert.equal(rankOrder.includes(DEVIN), false, 'devin 不该在写码顺位里  →  ' + JSON.stringify(rankOrder));
+      assert.equal(rankOrder.includes(FLASH), false, 'flash 已随网关退役  →  ' + JSON.stringify(rankOrder));
     });
     await t.test('审官顺位 1 = gpt-5.6-luna（#843 过渡：pqapi 故障，codex 每单必死，临时切 luna）', () => {
       assert.ok((policy.reviewerOrder || [])[0] === 'gpt-5.6-luna', '审官顺位  →  ' + JSON.stringify(policy.reviewerOrder));
@@ -581,8 +586,10 @@ describe('dianjiangtai', () => {
       assert.ok((policy.reviewerOrder || [])[1] === 'gpt-5.6-sol', '审官顺位 2  →  ' + JSON.stringify(policy.reviewerOrder));
     });
     const planOrder = policy.rankOrderFor('工人', '方案');
-    await t.test('model-routing.json 方案顺位 gpt > flash > glm（#817 订正）', () => {
-      assert.ok(planOrder[0] === 'gpt-5.6-sol' && planOrder[1] === FLASH && planOrder[2] === 'glm-5.2', '方案顺位  →  ' + JSON.stringify(planOrder));
+    // 同理：方案顺位原来 gpt > flash > glm 三档，后两档已随网关退役禁用。
+    await t.test('model-routing.json 方案顺位首位 gpt-sol（#817 订正）', () => {
+      assert.equal(planOrder[0], 'gpt-5.6-sol', '方案顺位首位  →  ' + JSON.stringify(planOrder));
+      assert.equal(planOrder.length, 1, '方案顺位只剩一条（flash/glm 已随网关退役）  →  ' + JSON.stringify(planOrder));
     });
     await t.test('model-routing.json 方案整合顺位 grok（#817 订正）', () => {
       assert.ok(policy.rankOrderFor('工人', '方案整合')[0] === GROK, '方案整合  →  ' + JSON.stringify(policy.rankOrderFor('工人', '方案整合')));
@@ -805,13 +812,23 @@ describe('dianjiangtai', () => {
       { id: "kimi-k3", provider: "cursor" },
       { id: "grok-4.6", provider: "grok" },
     ];
-    await t.test('GPT 容量满后下一档是 kimi（JSON 序，Opus 禁用）', () => {
-      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "claude-opus", "kimi-k3"], order: REVIEWER_ORDER });
-      assert.ok(n.ok && n.next === "kimi-k3", 'GPT 容量满后下一档是 kimi  →  ' + JSON.stringify(n));
+    // 2026-09-12 网关退役把 kimi/glm 移出顺位表，顺位只剩 luna→sol→grok-4.6。
+    // orderedPasserIds 顺着 order 先挑「既在 passerIds 又在 models」的，挑完才按 passerIds 顺序补位，
+    // 所以补位段永远排在表尾——「表外的条目之后还有表内条目」这种序编不出来。这里考的是顺序本身：
+    // 池子给的顺序（claude-opus 在 grok-4.6 前面）压不过顺位表，grok-4.6 仍排在 claude-opus 前面。
+    await t.test('顺位表的次序压过池子给的顺序（claude-opus 在池子里靠前也只排第二）', () => {
+      const list = slot.reviewerOrder({ models, passerIds: ["claude-opus", "grok-4.6"], order: REVIEWER_ORDER });
+      assert.equal(list.indexOf("grok-4.6") < list.indexOf("claude-opus"), true, '顺位表序  →  ' + JSON.stringify(list));
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["claude-opus", "grok-4.6"], order: REVIEWER_ORDER });
+      assert.equal(n.ok, true, '容量满后换人  →  ' + JSON.stringify(n));
+      assert.equal(n.next, "grok-4.6", '顺位表下一位  →  ' + JSON.stringify(n));
     });
-    await t.test('无 kimi 时 GPT 下一档是 grok', () => {
-      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "grok-4.6"], order: REVIEWER_ORDER });
-      assert.ok(n.ok && n.next === "grok-4.6", '无 kimi 时 GPT 下一档是 grok  →  ' + JSON.stringify(n));
+    // 判别性：池子里带着顺位表外的 kimi-k3，换出来的仍是表内的 grok-4.6——
+    // 取的是顺位表，不是 passerIds 顺序（按后者 grok-4.6 之前会先吐 kimi-k3）。
+    await t.test('表里排后面的那位仍取得到（池子里的表外条目不会插队）', () => {
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "kimi-k3", "grok-4.6"], order: REVIEWER_ORDER });
+      assert.equal(n.ok, true, '顺位表取人  →  ' + JSON.stringify(n));
+      assert.equal(n.next, "grok-4.6", '表尾那位  →  ' + JSON.stringify(n));
     });
     await t.test('选型序走完 → 没法再换', () => {
       const n = slot.nextReviewerAfter({ currentId: "kimi-k3", models, passerIds: ["gpt-5.6-sol", "kimi-k3"], order: REVIEWER_ORDER });
@@ -857,9 +874,13 @@ describe('dianjiangtai', () => {
       assert.ok(djReview.status === 0, 'CLI 审读退出码 0  →  ' + (djReview.stderr || "").slice(0, 240));
     });
     const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
-    const lunaProvider = localProviderOf("gpt-5.6-luna");
-    await t.test('CLI 审读 A = provider/gpt-5.6-luna（#843 过渡顶位，pqapi 故障）', () => {
-      assert.ok(!!lunaProvider && djReviewOut.options.A.model === `${lunaProvider}/gpt-5.6-luna`, 'CLI 审读 A = provider/gpt-5.6-luna  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    // 渲染用的 provider 由 选型 JSON 的模型表优先给出，policy/models.yml 只作回落。
+    // 2026-09-12 网关退役后 luna 的落地已由 gw 改指 mirasim-relay，而 policy/models.yml 仍写着旧的
+    // `provider: gw`（pi --provider gw-windsurf）——拿它当期望值会假红。这里直接问选型真相源。
+    const lunaProvider = policyProviderOf("gpt-5.6-luna") || localProviderOf("gpt-5.6-luna");
+    await t.test('CLI 审读 A = 落地/luna（顺位顶位）', () => {
+      assert.equal(!!lunaProvider, true, '选型真相源里要有 luna 的 provider  →  ' + JSON.stringify(lunaProvider));
+      assert.equal(djReviewOut.options.A.model, `${lunaProvider}/gpt-5.6-luna`, 'CLI 审读 A  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
     await t.test('CLI 审读 A reason=reviewer_order', () => {
       assert.ok(djReviewOut.options.A.reason === "reviewer_order", 'CLI 审读 A reason=reviewer_order  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
@@ -874,8 +895,9 @@ describe('dianjiangtai', () => {
     const djUiOut = djUi.status === 0 ? JSON.parse(djUi.stdout) : { options: { A: {} } };
     const grokProvider = policyProviderOf("grok-4.6") || localProviderOf("grok-4.6");
     const kimiProvider = policyProviderOf("kimi-k3") || localProviderOf("kimi-k3");
-    await t.test('CLI 审读撞 UI ban → A = provider/kimi-k3（GPT 被剔，JSON 序 kimi 顶位）', () => {
-      assert.ok(!!kimiProvider && djUiOut.options.A.model === `${kimiProvider}/kimi-k3`, 'CLI 审读撞 UI ban → A = provider/kimi-k3  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
+    await t.test('CLI 审读撞 UI ban → A = 落地/grok-4.6（GPT 被剔，顺位表下一位 grok-4.6）', () => {
+      assert.equal(!!grokProvider, true, '选型真相源里要有 grok 的 provider  →  ' + JSON.stringify(grokProvider));
+      assert.equal(djUiOut.options.A.model, `${grokProvider}/grok-4.6`, 'CLI 审读撞 UI ban → A  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
     });
     await t.test('CLI 审读撞 UI ban reason=reviewer_order', () => {
       assert.ok(djUiOut.options.A.reason === "reviewer_order", 'CLI 审读撞 UI ban reason=reviewer_order  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
