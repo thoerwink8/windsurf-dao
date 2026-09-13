@@ -153,3 +153,67 @@ describe('#822 model-routing 非GPT顺位1必须gw', () => {
       '禁用 devin 不得进启用槽');
   });
 });
+
+// #1233：审官顺位 × 执行目录可用性。
+// 2026-09-13 实咬：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位
+// gpt-5.6-sol 在执行目录里 unverified，起审官必被 resolveExecutionProfile 拒 →
+// 每张按顺位选了它的复审票 drain 必失败、试满 3 次打「自动化认输」。
+describe('#1233 审官顺位按执行目录可用性过滤', () => {
+  const M = () => import('file://' + path.join(REPO, 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/'));
+  const PROFILES = [
+    { id: 'm-ok', enabled: true, availability: { status: 'available' } },
+    { id: 'm-unverified', enabled: true, availability: { status: 'unverified' } },
+    { id: 'm-off', enabled: false, availability: { status: 'available' } },
+    { id: 'm-ok-by-default', enabled: true, availability: 'available', defaultForModels: ['alias-model'] },
+  ];
+
+  it('起不来的剔除，并点名为什么', async () => {
+    const { usableReviewerOrder } = await M();
+    const r = usableReviewerOrder(['m-ok', 'm-unverified', 'm-off', 'alias-model', 'm-nowhere'], { profiles: PROFILES });
+    assert.deepEqual(r.usable, ['m-ok', 'alias-model'], '可用的留下  →  ' + JSON.stringify(r));
+    assert.deepEqual(r.skipped.map((s) => s.id), ['m-unverified', 'm-off', 'm-nowhere'], '被剔的每个都要点名');
+    assert.ok(r.skipped[0].why.includes('unverified'), '理由要带 availability  →  ' + r.skipped[0].why);
+    assert.ok(r.skipped[1].why.includes('未启用'), '理由要带未启用  →  ' + r.skipped[1].why);
+    assert.ok(r.skipped[2].why.includes('没有这个模型'), '理由要带目录里没有  →  ' + r.skipped[2].why);
+  });
+
+  it('顺位全起不来 ⇒ allDead，不许退回到「就用第一个」', async () => {
+    const { usableReviewerOrder } = await M();
+    const r = usableReviewerOrder(['m-unverified', 'm-off'], { profiles: PROFILES });
+    assert.deepEqual(r.usable, []);
+    assert.equal(r.allDead, true, '全灭必须报出来（这正是 2026-09-13 那场实咬的形状）');
+  });
+
+  it('执行目录没读到 ⇒ 不剔任何顺位，但明说没查成', async () => {
+    const { usableReviewerOrder } = await M();
+    const order = ['m-ok', 'm-unverified'];
+    const r = usableReviewerOrder(order, {});
+    assert.deepEqual(r.usable, order, '没读到目录时不许凭空剔人（没有依据）');
+    assert.deepEqual(r.skipped, []);
+    assert.ok(r.unscanned, '「没读到」必须与「读到了、全都可用」分得开  →  ' + JSON.stringify(r));
+  });
+
+  it('空顺位 ⇒ 不是 allDead（扫完就没有，跟「有但全废」是两件事）', async () => {
+    const { usableReviewerOrder } = await M();
+    const r = usableReviewerOrder([], { profiles: PROFILES });
+    assert.deepEqual(r.usable, []);
+    assert.equal(r.allDead, false);
+    assert.equal(r.unscanned, undefined);
+  });
+
+  it('现行审官序过一遍：真正能起的顺位一条都不能少，被剔的必须说得出理由', async () => {
+    const { usableReviewerOrder, reviewerSelectOrder, loadRoutingJsonRaw } = await M();
+    const { loadExecutionProfiles } = await import('file://' + path.join(REPO, 'scripts', 'lib', 'execution-runtime.mjs').replace(/\\/g, '/'));
+    const order = reviewerSelectOrder(loadRoutingJsonRaw());
+    assert.ok(order.length > 0, '审官序必须非空（空 = 没扫到，不算通过）');
+    const r = usableReviewerOrder(order, { profiles: loadExecutionProfiles() });
+    assert.equal(r.unscanned, undefined, '执行目录必须读得到（读不到 = 这一层根本没生效）');
+    assert.ok(r.usable.length > 0, '至少要有 1 个能起的审官，否则整条复审链全瘫  →  ' + JSON.stringify(r));
+    const blank = r.skipped.filter((s) => !s.why || s.why.length <= 4);
+    assert.deepEqual(blank, [], '剔除理由不许是空话  →  ' + JSON.stringify(r.skipped));
+    // 正向控制：过滤后的序必须是原序的子序列（不许换顺序、不许凭空多出人）
+    let i = 0;
+    for (const id of order) if (i < r.usable.length && id === r.usable[i]) i += 1;
+    assert.equal(i, r.usable.length, '可用序必须是原顺位的子序列  →  ' + JSON.stringify(r.usable));
+  });
+});

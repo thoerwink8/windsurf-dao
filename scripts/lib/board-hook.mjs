@@ -154,11 +154,6 @@ export function boardSummary({ cache = null } = {}) {
   return summary;
 }
 
-/** 盘面行：缓存新鲜直接用；过期或没缓存就重算（只缓存成功那次，没查成不落缓存）。 */
-export function boardInjection() {
-  return boardLine(boardSummary());
-}
-
 // ── #576 next：动作候选层 ──────────────────────────────────────────
 // #807 起本机常驻进程（flow/watchdog）整层删掉：next 不再读心跳文件，只剩盘面 + 模式态。
 // 派工节奏与 PR 回流归服务器指挥官（commander.mjs），本行只报本地 mirasim 树面。

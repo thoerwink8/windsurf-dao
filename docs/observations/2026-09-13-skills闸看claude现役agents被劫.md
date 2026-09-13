@@ -1,5 +1,5 @@
 ---
-status: new
+status: done
 ---
 
 # 机制巡检：㉚ / skills-heal 只看 ~/.claude/skills；现役 grok 发现面 ~/.agents/skills 仍是整目录劫持
@@ -71,3 +71,23 @@ Sun 2026-09-13 18:28:00 CST  ... dao-skills-heal.timer  dao-skills-heal.service
 ## 建议的最小改造
 
 删掉「技能发现面 = `~/.claude/skills`」这一层假设。㉚ 和 skills-heal 问的应是**现役执行体实际加载的目录**（这台机器上至少包括 `~/.agents/skills`；整目录链接按现在的 `hijacked` 判红）。只把 Claude Code 的发现面修好，不能证明 grok / mirasim 工人看得到仓内 skill。
+
+## 处置（2026-09-13）
+
+处置：#1226（部分）+ 不改 `.agents`，理由如下。
+
+**先核了「交付到没到」**（本条的实质担心）：
+
+```
+$ readlink -f /home/orca/.agents/skills/dispatch /root/.agents/skills/dispatch
+/srv/projects/windsurf-dao/host/skills/dispatch
+/srv/projects/windsurf-dao/host/skills/dispatch
+```
+
+整目录链接是「劫向 `~/.mirasim/skills`」，而 `~/.mirasim/skills/<名>` 逐个指向仓内——**交付是通的**，只是绕了一层。所以本条写的「闸绿的那一层不是现役执行体在用的那一层」在**判活**上不成立：现役执行体确实拿到了仓内 skill。
+
+**为什么不把 `.agents` 也纳入守的范围**：`~/.agents` 归 `ai-gateway-stack`（E 类，本仓只读、不写装法）——那个目录是 mirasim 装 `lark-*` 的地方，`.skill-lock.json` 记着 `source: larksuite/cli`。往别人的目录里塞仓内链是越界，且和它自己的 `skill-lock` 会互相覆盖。同理 `.grok/skills` 里只有它自带的 lark 链，没有仓内 skill，不是「少接了」而是「不归本仓接」。
+
+**真正留下的风险（本 PR 已顺手堵掉一部分）**：仓内链如果指进**临时 worktree**，树一删就全悬空——`~/.agents/skills/dispatch` 这种二级引用会跟着断，而且断在别人目录里更难查。查过两处 `.mirasim/skills` 当前 0 条指进 worktree（都是主树绝对路径）；同时给 `healSkillsMount` 加了硬拦：从 worktree 落盘直接拒（`isLinkedWorktree`，dry-run 照跑）。
+
+**没做**：给 ㉚ 加「`.agents` 链接指向哪儿」这一格。判据要的是「现役执行体拿到仓内 skill 没有」，实现方式是 `realpath` 追到底再比 `host/skills/<名>`——这件事值得做，但不该在 `.agents` 这一层做（那是 E 类目录），而应做成「按执行体列发现面，逐个 realpath 验交付」。留给需要时另开单。

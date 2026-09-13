@@ -19,18 +19,6 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 
 /**
- * 从脚本自身位置推本树根（与 dao-cmd.mjs 的 ROOT 同式）。
- * @param {string} arg `import.meta.dirname`、`import.meta.url`，或已是目录的绝对路径
- * @param {string} [rel] 从该目录再上溯几层（dao.mjs 的 ROOT 是 scripts/ 的上两层 → 传 '../..'）
- */
-export function thisTreeRoot(arg, rel = '../..') {
-  const p = String(arg || '');
-  if (!p) return process.cwd();
-  if (p.startsWith('file:')) return resolve(new URL(p).pathname, rel);
-  return resolve(p, rel);
-}
-
-/**
  * 主 clone 根。
  *
  * @param {object} [opts]

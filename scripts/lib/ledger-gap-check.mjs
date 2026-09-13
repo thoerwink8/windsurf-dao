@@ -64,16 +64,6 @@ export function readClosedPrNumbers(eventsDir) {
   return { unscanned: false, numbers };
 }
 
-export function closedPrNumbersFromEvents(events) {
-  const numbers = new Set();
-  for (const e of events || []) {
-    if (e && e.type === 'job.closed' && Number.isInteger(e.pr_number) && e.pr_number > 0) {
-      numbers.add(e.pr_number);
-    }
-  }
-  return numbers;
-}
-
 export function historicalGapNote(baselinePr = LEDGER_GAP_BASELINE_PR) {
   if (Number(baselinePr) !== LEDGER_GAP_BASELINE_PR) return '';
   return `存量缺口 ${LEDGER_GAP_HISTORICAL_GAPS.map(n => `#${n}`).join(' ')}（baseline #${LEDGER_GAP_BASELINE_PR} 之前不对照；成因是常驻 flow 跑旧代码，#596 已闸，#597 实证新代码会写 closed）`;

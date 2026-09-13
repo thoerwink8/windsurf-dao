@@ -277,6 +277,14 @@ describe('#815 ① 复审待办队列 + drain', () => {
     assert.ok(drained.ok === false && drained.failed === 1 && drained.drained === 0,
       'drain 必须非零且不计入 drained → ' + JSON.stringify(drained));
     assert.ok(fs.existsSync(pendingPath), 'drain 失败后待办仍在');
+
+    // #1239：顶层 error 必须带出真因。原先只有计数，调用方（dao.mjs 的
+    // `fail(drained.error || '未全部成功')`）取不到字符串 → 日志里只剩兜底文案
+    // 「review-pending-drain 未全部成功」，7 天里 23 次，读的人据此查不出任何东西。
+    assert.ok(/删不掉|清理失败/.test(drained.error || ''),
+      '顶层 error 必须带上第一张失败票的真因 → ' + JSON.stringify(drained.error));
+    assert.ok(!/^review-pending-drain 未全部成功$/.test(drained.error || ''),
+      '不许退化成兜底文案（那等于没带）');
   });
 });
 

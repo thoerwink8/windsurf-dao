@@ -441,15 +441,6 @@ export function looksLikeAgentPreview(text) {
   return /Grok Build|always-approve|ctrl\+q|╭─|╰─/i.test(String(text || ''));
 }
 
-export function looksLikeShellPrompt(text) {
-  const s = String(text || '').trimEnd();
-  if (!s) return false;
-  if (looksLikeAgentPreview(s)) return false;
-  return /(?:^|\n)PS .*>\s*$/.test(s)
-    || /(?:^|\n)[A-Z]:\\[^>\n]*>\s*$/.test(s)
-    || /(?:^|\n)\$\s*$/.test(s);
-}
-
 export function extractHandleFromWorkerStart(json) {
   return json?.result?.worker?.agent_terminal_handle
     || json?.result?.dispatch?.assignee_handle
@@ -533,7 +524,6 @@ export function planLaunchFallback({ foundHandle } = {}) {
   return { action: 'create', closeHandle: null, leftoverIfCreateNow: false };
 }
 
-/** 按启动计划演算终态 handle 列表。用来证明 close-then-create 不会留第二个终端。 */
 export function terminalsAfterLaunchPlan({ existingHandles, plan, createdHandle } = {}) {
   const next = new Set(Array.isArray(existingHandles) ? existingHandles : []);
   if (!plan || plan.action === 'reuse') return [...next];
@@ -982,7 +972,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'pr-open', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -1057,6 +1047,12 @@ export const FLAGS_BY_VERB = {
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
   'pr-sync-labels': new Set(['--pr', '--repo', '--json', '--help', '-h']),
+  // #1214 缺口 A：帅位自开 PR 的写侧。--model 必填（不许从提交前缀猜家族）；
+  // --head 必填（分支名是打标匹配键）；正文走 --body-file（正文里的换行/引号不进命令行）。
+  'pr-open': new Set([
+    '--title', '--body', '--body-file', '--head', '--branch', '--base', '--model', '--reviewer',
+    '--work-type', '--merge-policy', '--merge-reason', '--issue', '--repo', '--json', '--help', '-h',
+  ]),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
@@ -1164,6 +1160,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N> [--repo owner/name]
                   # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
                   # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
+  pr-open --title <题> (--body <文>|--body-file <文件>) --head <分支> --model <registry id>
+          [--reviewer <id>] [--base master] [--work-type 写码] [--merge-policy auto|manual]
+          [--issue <号>] [--repo owner/name]
+                  # #1214 缺口 A：帅位自开 PR 的正式入口——开 draft + 落账（job.opened + job.dispatch）+ 打标
+                  # 自开 PR 是合法动作，但此前没有落账动作 ⇒ 打标路永远查不到这条链 ⇒ 一律卡在「需人工打标」
+                  # --model 必填且必须是 registry 里的 id（不许从提交前缀猜家族，也不落幽灵账）
+                  # 打标失败只记账不当门：PR 已开、账已落，回执里说清哪个标没打上
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）
