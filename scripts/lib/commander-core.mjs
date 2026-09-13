@@ -71,6 +71,20 @@ export function ticketHeadOid(head) {
   return typeof oid === 'string' && oid.trim() ? oid.trim() : null;
 }
 
+/** 复审票上的仓。空 = 本仓（指挥官扫到的 gh.prs）；非空 = 别仓，本仓列表不是它的现场。 */
+function ticketRepoOf(it) {
+  return it && it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
+}
+
+/** stale / 归属键：本仓纯 PR 号，跨仓 `owner/name#pr`。同号不同仓必须分开。 */
+function ticketScopeKey(it) {
+  if (!it || it.pr == null) return null;
+  const n = Number(it.pr);
+  if (!Number.isFinite(n)) return null;
+  const repo = ticketRepoOf(it);
+  return repo ? `${repo}#${n}` : String(n);
+}
+
 /** #1014：attach-reviewer 的 why 按票上记下的来源写，不许写死、不许猜。
  *  来源缺失/不认识 → 「来源没查成」；真失败要把 error 原文带上。 */
 export function attachReviewerWhy(ticket) {
@@ -847,11 +861,15 @@ function collectCandidates(situation) {
   // 各算一份迟早对不上，而这里的失效方式正是「两处判据不同步」。
   const staleTickets = new Set();
   for (const it of rp.items || []) {
-    if (!it || it.pr == null) continue;
+    const scope = ticketScopeKey(it);
+    if (!scope) continue;
+    // 跨仓票的现场不在本仓 gh.prs。按纯 PR 号比对会把别仓过期票记成本仓 stale，
+    // 本仓 stuck PR 就被绕过去派 rework/rereview（#1209 审官返工）。
+    if (ticketRepoOf(it)) continue;
     const itHead0 = ticketHeadOid(it.head);
     const livePr0 = (gh.prs || []).find((p) => p && Number(p.number) === Number(it.pr));
     const liveHead0 = typeof livePr0?.headRefOid === 'string' ? livePr0.headRefOid.trim() : '';
-    if (liveHead0 && itHead0 && itHead0 !== liveHead0) staleTickets.add(Number(it.pr));
+    if (liveHead0 && itHead0 && itHead0 !== liveHead0) staleTickets.add(scope);
   }
 
   // 「自动化认输」是带 head 的判据，不是永久标签——工人推了新 head = 新局面，摘标放回流水线。
@@ -876,7 +894,7 @@ function collectCandidates(situation) {
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
-    const ticketRepo = it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
+    const ticketRepo = ticketRepoOf(it);
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
     if (!ticketRepo && ghScanned && !openPrs.has(Number(it.pr))) {
       out.push(withNeeds({
@@ -899,7 +917,7 @@ function collectCandidates(situation) {
     // 认输标永远没人摘、按当前 head 该叫的复审永远叫不出来（2026-09-12 审官打回 #1209 的第一条）。
     // 省额度那句的本意是「已经认输的 PR 不用再花额度重试 drain」，它管的是**重试**，
     // 不该顺手把「收殓过期票」也管了——那件事不花额度，只是把死票从流水线上取下来。
-    const staleTicket = staleTickets.has(Number(it.pr));
+    const staleTicket = staleTickets.has(ticketScopeKey(it));
     if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     const drain = validateRetryDrain({
       pr: it.pr,
@@ -1073,7 +1091,7 @@ function collectCandidates(situation) {
     // 于是修法在事故现场一次都不生效，因为事故现场正是「认输标 + 当前 head 零判定」这个组合。
     // 放它过去不花额度：落到下面 rereview 分支只重写一张票，宽限期和试满照样管着。
     const stuck = prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number));
-    const staleTicketHere = staleTickets.has(Number(pr.number));
+    const staleTicketHere = staleTickets.has(ticketScopeKey({ pr: pr.number }));
     if (stuck && !staleTicketHere) {
       const headR = pr.headRefOid;
       const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);

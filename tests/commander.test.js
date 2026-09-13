@@ -2013,6 +2013,50 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
       assert.equal(byKind(r, 'rereview').length, 0, '没现场证据时不重写票，也不认输');
       assert.equal(byKind(r, 'mark-exhausted').length, 0);
     });
+
+    // 审官返工：staleTickets 若只按 PR 号建集合，跨仓同号过期票会把本仓 stuck 否决绕开。
+    // 形状：别仓票 { pr:909, repo:org/other, head:oldhead }，本仓 #909 仍挂认输标。
+    it('跨仓同号过期票 + 本仓 stuck + 当前 head 有红 → 不许 rework', async () => {
+      const { decide } = await CORE;
+      const HEAD = 'newhead111';
+      const sit = (ticketOver) => baseSituation({
+        at: '2026-09-12T12:00:00.000Z',
+        github: {
+          scanned: true,
+          issues: [labeledIssue(909)],
+          prs: [{
+            number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+            body: '署名 issue #909',
+            labels: [{ name: '卡死/自动化认输' }, { name: 'reviewer/gpt-5.6-luna' }],
+          }],
+        },
+        reviewPending: { scanned: true, items: [{
+          pr: 909, head: { name: null, oid: 'oldhead' },
+          reviewer: 'gpt-5.6-luna', worker: null, ...ticketOver,
+        }] },
+        prReviews: { scanned: true, byPr: { 909: { reviews: [
+          redReview('别仓过期票不该触发本仓返工', HEAD),
+        ] } } },
+      });
+      const foreign = decide(sit({ repo: 'org/other' }));
+      assert.equal(byKind(foreign, 'rework').length, 0, '跨仓票不能绕过本仓 stuck 否决去派返工');
+      assert.equal(byKind(foreign, 'rereview').length, 0);
+      // 判别：同一夹具、本仓过期票仍须穿过 stuck 派返工——修法不许把 #1208 也挡回去。
+      const home = decide(sit({}));
+      assert.equal(byKind(home, 'rework').length, 1, '本仓过期票 + 当前 head 有红，仍须派返工');
+    });
+
+    it('跨仓同号过期票 + 本仓 stuck + 当前 head 零判定 → 不许 rereview', async () => {
+      const { decide } = await CORE;
+      const sit = stuckSit('newhead111', { 'pr:909@oldhead999': { at: OLD, pr: '909', tries: 4 } });
+      sit.reviewPending = { scanned: true, items: [{
+        pr: 909, repo: 'org/other', head: { name: null, oid: 'oldhead999' },
+        reviewer: 'gpt-5.6-luna', worker: null,
+      }] };
+      const r = decide(sit);
+      assert.equal(byKind(r, 'rereview').length, 0, '跨仓票不能让本仓 stuck PR 去叫复审');
+      assert.equal(byKind(r, 'rework').length, 0);
+    });
   });
 });
 
