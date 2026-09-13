@@ -135,6 +135,7 @@ import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
+import { PENDING_DECISION_LABEL } from './lib/hub-pending.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
@@ -1142,7 +1143,17 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 // 只拦数量，不拦「等了多久」：一张真的在等用户的单，用户出门两天它就超龄了，
 // 那不是违规（wall-clock 当闸必然误报，本仓已有判例）。年龄只报出来给人看。
 const PENDING_BOARD_MAX_DEFAULT = 5;
-const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
+// 判据是 **label**，不是标题前缀（#1240 顺带收口）。
+//
+// 标题那个 `[待拍板] ` 前缀是历史上「机器开的单长什么样」的记号，跟 label 说的是同一件事，
+// 于是同一件事有了两个真相源。而它俩**不同步**：机器开的单两侧都有（前缀 + label），
+// 人开的单只有 label，这个前缀还容易在标题里被当成普通文字（#1210 一度开成
+// `[待拍板] [待拍板] 盘点：inbox`，两道前缀）。按 prefix 数，等于按「有没有记得手写那个
+// 前缀」数——数出来的不是「有几件事在等人拍」。
+//
+// **不许退化成「数不出来就当 0」**：label 字段没读到时（`--json` 里少一项、
+// 对象形态变了）报红，不静默放过——那是「没查成」，不是「一张都没有」。
+const PENDING_LABEL = PENDING_DECISION_LABEL; // '待拍板'，真相源在 hub-pending.mjs（别再抄字面量）
 
 // 收件箱不在 dao-check。#1171：这条检查只在 land 推默认分支时才跑，机器上没人定时唤它，
 // 不是帅位会看见的腿。现役挂载面是指挥官盘点 commander-inventory（每 6 小时）。
@@ -1538,22 +1549,22 @@ function checkPendingBoardBacklog(board) {
     skip(`待拍板堆积：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  if (issues.array.some((i) => !i || typeof i.title !== 'string')) {
-    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title 的对象数组）');
+  if (issues.array.some((i) => !i || typeof i.title !== 'string' || !Array.isArray(i.labels))) {
+    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title + labels 的对象数组）——别当成「一张都没有」');
     return;
   }
-  const pending = issues.array.filter((i) => PENDING_TITLE_RE.test(i.title));
+  const pending = issues.array.filter((i) => i.labels.some((l) => (typeof l === 'string' ? l : l?.name) === PENDING_LABEL));
   const n = pending.length;
   if (n > max) {
     const 样 = pending.slice(0, 3).map((i) => `#${i.number}`).join(' ');
     fail(
-      `机器开的「待拍板」单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
+      `标着「待拍板」的开放单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
       '先判每张是不是假警报：假警报要去修产生它的那条判据，不是关掉了事；真要人拍的才留着',
-      'gh issue list --state open --limit 500 --json number,title | grep 待拍板',
+      `gh issue list --state open --limit 500 --json number,title,labels | grep ${PENDING_LABEL}`,
     );
     return;
   }
-  green(`机器开的「待拍板」单 ${n}/${max} 张`);
+  green(`标着「待拍板」的开放单 ${n}/${max} 张`);
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────

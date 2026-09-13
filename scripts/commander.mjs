@@ -2440,7 +2440,8 @@ function escalate(action, { state, dryRun, say,
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
   const opened = openIssue({
-    title: `[待拍板] ${escalateTitle(action)}`,
+    // 标题不带 `[待拍板] ` 前缀（#1240）：那件事由 --label 承载，前缀是第二个真相源。
+    title: escalateTitle(action),
     body: escalateBody(action, marker, verdict),
     // #1240：开单这一轮的幂等键必须把本轮对象折进去，否则被收敛关掉的单会靠网关
     // 去重账把下一次真发生永远退回旧单号（重开在网关那层从未发生）。
