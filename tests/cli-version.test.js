@@ -166,3 +166,16 @@ test('resolveProbeBinary 按传入的 pathValue 判，不偷偷退回 process.en
   const miss = resolveProbeBinary('devin', { homeDir: '/home/u', pathValue: '/usr/bin:/bin', fs });
   assert.equal(miss.command, null);
 });
+
+test('PATH 不含 ~/.local/bin、但目标在该目录时：先 effectivePath 再 resolve 仍能读到', () => {
+  const home = '/home/u';
+  const pathValue = effectivePath({ home, env: { PATH: '/usr/bin:/bin' } });
+  const fs = {
+    exists: (p) => p === '/home/u/.local/bin/devin',
+    access: (p) => { if (p !== '/home/u/.local/bin/devin') { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
+    stat: () => ({ isFile: () => true }),
+  };
+  const hit = resolveProbeBinary('devin', { homeDir: home, pathValue, fs });
+  assert.equal(hit.via, 'path');
+  assert.equal(hit.command, '/home/u/.local/bin/devin');
+});
