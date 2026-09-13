@@ -515,11 +515,11 @@
         "gpt-5.6-sol"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "relay reported configured/ok and roster listed model; no scoped new execution proof"
+        "status": "available",
+        "checkedAt": "2026-09-13T05:13:43.155Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-sol-relay-execution",
+        "reason": "真实会话 codex:53f08e23 在 /tmp/sol-verify-wt 用 shell 工具读出 proof-sol.txt 全文（SOL_VERIFY_TOKEN_9c4e21），phase=done、error=null。此前只有 inventory 级证据（清单里列了模型），执行目录据此拒绝起审官。"
       },
       "quality": {
         "status": "unverified",
