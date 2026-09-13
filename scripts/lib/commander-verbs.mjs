@@ -606,7 +606,10 @@ export function renderOpenIssueBody(input = {}) {
   if (!body.includes(v.original) || !body.includes(`- 原因：${v.reason}`)) {
     return fail('body-missing-source', '渲染丢了原文或 reason，不开');
   }
-  return { ok: true, body, title: `[待拍板] ${v.reason}${link ? '：' + link : ''}`, key: v.key, role: v.role };
+  // 标题不再带 `[待拍板] ` 前缀（#1240）：待拍板由 **label** 承载，前缀是同一件事的第二个
+  // 真相源，而它俩会不同步（人开的单只有 label；#1210 一度开出两道前缀）。
+  // 单里照样有 label（见上面 argv 的 --label），收件人靠 label 找它。
+  return { ok: true, body, title: `${v.reason}${link ? '：' + link : ''}`, key: v.key, role: v.role };
 }
 
 export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {
