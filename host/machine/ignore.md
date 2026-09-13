@@ -18,3 +18,5 @@
 | ~/.dao/exhausted-push.json | #1000 认输推送账本（pushed:<pr>@<head>），看门狗运行时自建于仓外，可丢可重算；丢了最多对同一 head 再推一次帅位 |
 | ~/.codex/skills | CHANGELOG 历史条目（link-codex 已退、写入方曾归 cc-switch）。不是现产品落点，不进 INDEX、不装机 |
 | ~/.config/gh | GitHub 官方 CLI 个人登录（hosts.yml），不是 dao 产品落点。#792 写 Issue 的单元把 GH_CONFIG_DIR 指到空目录，不让读这里；dao-gh-events 例外：webhook forward 仍走这份登录。不进 INDEX、不装机、不拷 |
+| ~/.claude/.credentials.json | 只出现在 tool-use-gate 的单测字符串与注释里（第 5 条凭据判据的样本），本机没有这个文件，dao 也不读它——凭据归 reclaude 链路管。不是产品落点，不进 INDEX |
+| ~/.config/pi | 同上，单测样本串（`secrets.toml` 一类形似名）。pi 的凭据落点是 `~/.pi/agent/auth.json`，这个目录本机不存在、dao 不读。不进 INDEX |
