@@ -152,13 +152,13 @@ test('ageMinOf 认记录字段，不认文件 mtime（失败回写会刷新 mtim
   const now = 1_700_000_000_000;
   const updatedAt = now - 120 * 60000;
   const age = ageMinOf({ updatedAt }, { now, mtimeMs: now });
-  assert.ok(age > 119 && age < 121, `got ${age}`);
+  assert.equal(age, 120);
 });
 
 test('ageMinOf 没有字段才退 mtime（老文件）', () => {
   const now = 1_700_000_000_000;
   const age = ageMinOf({}, { now, mtimeMs: now - 60 * 60000 });
-  assert.ok(age > 59 && age < 61, `got ${age}`);
+  assert.equal(age, 60);
 });
 
 test('ageMinOf 字段和 mtime 都没有 → NaN（fail-closed）', () => {
