@@ -448,4 +448,33 @@ describe('报帅幂等键不含空白（网关硬规则）', () => {
     assert.equal(C.keySafe(''), 'none');
     assert.equal(C.keySafe(null), 'none');
   });
+
+  // 2026-09-13 实咬（审官在 PR #1143 上抓的，真 bug）：上面那条只测「没空白」，
+  // 而真闸是 **ASCII 可见字符**。当时的实现写 `.replace(/[^\x21-\x7e一-鿿-]/g,'')`
+  // ——自己放行了汉字，于是 keySafe 不是网关闸的等价物。`escalateTarget` 对 term 收
+  // 任意字符串，`term='终端审官'` 生成的键真实 `validateRequest` 返回 missing_idempotency。
+  //
+  // 这一条**不测本函数自己的正则**（那正是「自己查自己」）：把 keySafe 的产出喂给
+  // 真实的 `scripts/lib/issue-gateway.mjs::validateRequest`，看网关认不认。
+  it('keySafe 的产出逐个过真实网关闸（不是测自己的正则）', async () => {
+    const C = await CMD;
+    const { validateRequest } = await import(toUrl(path.join(__dirname, '..', 'scripts', 'lib', 'issue-gateway.mjs')));
+    // 覆盖三种形状：带空格（PR #N）、纯中文（term 是终端名）、控制字符与超长。
+    const seeds = ['PR #1154', 'issue #815', '终端审官', '审官终端', 'a  b', 'x'.repeat(400), ''];
+    for (const seed of seeds) {
+      const key = `commander-escalate:append:123:${C.keySafe(seed)}`;
+      const v = validateRequest({ action: 'issue_comment', repo: 'thoerwink8/windsurf-dao', issue: 1, body: 'x', idempotency_key: key, host: 'commander' });
+      assert.equal(v.ok, true, `seed=${JSON.stringify(seed)} 生成的键被真网关拒了：${v.error || ''}（key=${key}）`);
+    }
+  });
+
+  // 只剥离不哈希的兜底会撞键——本 PR 第一版就是那个形状（`[^\x21-\x7e一-鿿-]` 剥完剩空 → 'none'）。
+  // 实际修法委托给 escalationKeyOf（可读前缀 + sha256 摘要），所以钉两件：
+  //   ① 纯非 ASCII 的 seed 不能落成空兜底；
+  //   ② 不同 seed 必须给不同键（摘要的职责）。
+  it('非 ASCII 的 term 不落空兜底，且不同 term 不撞键', async () => {
+    const C = await CMD;
+    assert.notEqual(C.keySafe('终端审官'), 'none', '不该被剥成空兜底');
+    assert.notEqual(C.keySafe('终端审官'), C.keySafe('审官终端'), '两条不同的链不能共用一个键，否则第二条被当重复丢掉');
+  });
 });

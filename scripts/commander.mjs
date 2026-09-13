@@ -2490,20 +2490,37 @@ function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
 function escalateTitle(a) { return String(a.reason || '').trim(); }
 
 /**
- * 幂等键里不许有空白（网关明规则：1–200 个可见字符、不能有空白）。
+ * 幂等键里的对象片段：折成网关收的形状。
  *
- * 2026-09-11 实咬：`verdict.target` 的形状是 `PR #1154` / `issue #815`——**带空格**，
- * 直接拼进 `--idempotency-key` 会被网关拒：
+ * 网关的判据是**ASCII 可见字符**（`issue-gateway` 的 `KEY_RE = /^[\x21-\x7E]{1,200}$/`），
+ * 不是「可见字符」。这一点在仓里已经被撞过两次，是同一个病：
+ *
+ * 2026-09-11 实咬（空白）：`verdict.target` 的形状是 `PR #1154` / `issue #815`——**带空格**，
+ * 直接拼进 `--idempotency-key` 被网关拒：
  *
  *     报帅追加失败（#1182，本轮不改账本，下轮再试）：
  *     missing_idempotency: idempotency_key 必须是 1–200 个可见字符、不能有空白
  *
- * 于是「追加对象进已有单」这条路一直没通（第一次被走到是我新加的 reviewer-label-missing
- * 触发的）。键**只需要稳定唯一**，不需要好看——所以把空白折成 `-`，
- * 正文里的对象名照旧用可读原文（那才是给人看的）。
+ * 2026-09-13 实咬（非 ASCII，审官在 PR #1143 上抓的）：修上面那条时这里写的是
+ * `.replace(/[^\x21-\x7e一-鿿-]/g, '')`——**自己放行了汉字**，于是本函数不是网关闸的等价物。
+ * `escalateTarget` 对 `term` 收任意字符串，实际用 `term='终端审官'` 生成
+ * `commander-escalate:append:123:终端审官`，真实 `validateRequest` 返回 `missing_idempotency`。
+ * 也就是「所有 commander 写路都过 ASCII 闸」当时并不成立。
+ *
+ * 现在**委托给 `escalationKeyOf`**，不再在本文件维护第二份正则——那份在
+ * `scripts/lib/escalation-key.mjs`，来历是同一天同一个病（refiner 29 连败：
+ * 规范化闸写 `\p{L}` 收汉字、比真闸松，绿灯全亮着生产全瘫）。
+ * 它做两件本函数做不了的事：
+ *   ① 可读前缀只留 ASCII 安全集，中文交给 sha256 摘要；
+ *   ② **摘要保证区分度**——只剥离不哈希的话，`'终端审官'` 和 `'审官终端'` 会双双落成空串、
+ *      撞成同一个键，第二条被当成重复丢掉（正是本函数先前 `|| 'none'` 的兜底会干的事）。
+ *
+ * 保留本函数名与 `|| 'none'` 的兜底：调用点与测试都按这个名字钉着，改名是没必要的动静。
  */
 export function keySafe(s) {
-  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+  const raw = String(s == null ? '' : s).trim();
+  if (!raw) return 'none';   // 契约不变：空值给固定的 'none'（旧行为，调用点与测试按它钉着）
+  return escalationKeyOf(raw, 120) || 'none';
 }
 function escalateBody(a, marker, verdict) {
   const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
