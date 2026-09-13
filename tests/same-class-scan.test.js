@@ -87,11 +87,19 @@ describe('同类扫描段闸（审官标准第 9 条）', () => {
     assert.equal(notFix.state, 'n/a', '显式说不是就不查 → ' + JSON.stringify(notFix));
   });
 
-  it('规矩落在两处任务书里（改了实现不改书 = 工人不知道要写）', () => {
+  it('规矩落在现役那两处（改了实现不改书 = 工人不知道要写）', () => {
+    // 判据钉**现役**文件，不钉文件名：`soldier-book.md` 已退役（现役是
+    // `soldier-book-mirasim.md`，Orca 退役时换的）。钉死文件名会让这条测试
+    // 在换载体那天变成「文件找不到」——红的是路径，不是规矩丢了，读的人往错方向查。
     const fs = require('fs');
     const std = fs.readFileSync(path.join(REPO, 'host/skills/dispatch/review-standard.md'), 'utf8');
-    const book = fs.readFileSync(path.join(REPO, 'host/skills/dispatch/templates/soldier-book.md'), 'utf8');
-    assert.match(std, /同类扫描/, '审官标准要有第 9 条');
-    assert.match(book, /同类扫描/, '工人任务书要写，否则只能靠审官判红后返工');
+    assert.match(std, /同类扫描/, '审官标准要有这一条');
+    const books = fs.readdirSync(path.join(REPO, 'host/skills/dispatch/templates'))
+      .filter((f) => /^soldier-book.*\.md$/.test(f));
+    assert.ok(books.length > 0, '现役工人任务书一份都没扫到（≠ 规矩没丢）');
+    const hit = books.filter((f) => /同类扫描/.test(
+      fs.readFileSync(path.join(REPO, 'host/skills/dispatch/templates', f), 'utf8')));
+    assert.ok(hit.length > 0,
+      `工人任务书要写「同类扫描」，否则只能靠审官判红后返工；扫了 ${books.join('、')}，都没写`);
   });
 });
