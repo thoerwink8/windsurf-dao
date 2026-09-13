@@ -241,7 +241,7 @@ export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint 
   if (fromLedger && hint && fromLedger !== hint) {
     return {
       ok: false,
-      state: 'none',
+      state: 'conflict',
       error: `仓 ${wantRepo} 分支 ${want} 账本审官 ${fromLedger} 与 PR 标签 ${hint} 不一致`
         + '——两条都是派工那刻的决定，证不出哪条对，需人工打标',
     };
@@ -306,7 +306,20 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
   }
   // reviewer 的历史缺口（#1118 前的账本没这项）用 PR 自己的 reviewer/* 补——PR 标签是审官
   // 选型的既有真相源（pickReviewer），不是从 issue 反推。没有标签才拒。
+  // 多个（含同名重复）reviewer/* 一律 fail-closed：不许拿账本单值把歧义抹平。
   const hint = pickReviewer(collected.labels);
+  if (!hint.ok && hint.state === 'many') {
+    return {
+      ok: false,
+      state: 'many',
+      skipped: false,
+      pr: n,
+      branch,
+      repo: wantRepo,
+      error: `${hint.error}——需人工打标`,
+      labels: hint.labels,
+    };
+  }
   const picked = pickWorkerDispatchByBranch(events, branch, wantRepo, {
     reviewerHint: hint.ok ? hint.modelId : '',
   });
@@ -371,6 +384,8 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
     reviewer: picked.reviewer,
     role: picked.role,
     refs: collected.refs,
+    repoAssumed: picked.repoAssumed === true,
+    reviewerSource: picked.reviewerSource,
   };
 }
 

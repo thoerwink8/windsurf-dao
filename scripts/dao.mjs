@@ -908,6 +908,21 @@ function stampPrFromLedger({ pr, runGh, repo } = {}) {
   });
 }
 
+/**
+ * 打标失败后还许不许继续只读已有 PR 标签。
+ * 没查成（unscanned）→ 继续；不是派工链（skipped + none）→ 打不上不挡。
+ * 已查成的冲突/歧义（conflict / many）必须 fail-closed，不许再猜。
+ */
+function warnOrFailLedgerStamp(stamped, pr) {
+  if (!stamped || stamped.ok) return;
+  if (stamped.unscanned) {
+    console.error(`[dao] PR #${pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+    return;
+  }
+  if (stamped.skipped && stamped.state === 'none') return;
+  fail(stamped.error, stamped);
+}
+
 function cmdPrSyncLabels(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'pr-sync-labels', defaultLocal: thisCheckoutRoot() });
   const r = stampPrFromLedger({
@@ -1833,12 +1848,11 @@ async function cmdReviewerCreateMirasim(args) {
   const bind = bindExecutor({ executor: named.name, routing });
   if (!bind.ok) fail(bind.error, { executor: named.name });
 
-  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
-  // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。
+  // 没查成 / 不是派工链：打不上不挡，PR 上已有标就认。
+  // 已查成的冲突/歧义（账本 vs 标签不一致、多个 reviewer/*）：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
-  if (!stamped.ok && stamped.unscanned) {
-    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
-  }
+  warnOrFailLedgerStamp(stamped, args.pr);
 
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
@@ -2035,11 +2049,11 @@ async function cmdWorkerDoneMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
-  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。
+  // 没查成 / 不是派工链：打不上不挡，没标由 plan 拒。
+  // 已查成的冲突/歧义：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
-  if (!stamped.ok && stamped.unscanned) {
-    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
-  }
+  warnOrFailLedgerStamp(stamped, args.pr);
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。

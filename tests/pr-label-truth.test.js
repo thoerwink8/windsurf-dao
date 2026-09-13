@@ -186,6 +186,8 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.ok(r.labels.includes('model/grok-4.6'));
     assert.ok(r.labels.includes('reviewer/gpt-5.6-luna'));
+    assert.equal(r.repoAssumed, false);
+    assert.equal(r.reviewerSource, 'ledger');
     assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), true);
     assert.equal(calls.some((a) => a.includes('model/grok-4.6')), true);
     assert.ok(!calls.some((a) => a[0] === 'issue'), JSON.stringify(calls));
@@ -286,6 +288,7 @@ describe('stampPrLabelsFromDispatch', () => {
     // 两条都在且不一致：不猜，报人工（两条都是派工那刻的决定）
     const clash = pickWorkerDispatchByBranch([ev({ reviewer: 'gpt-5.6-luna' })], 'dao-1', REPO, { reviewerHint: 'grok-4.6' });
     assert.equal(clash.ok, false);
+    assert.equal(clash.state, 'conflict');
     assert.match(clash.error, /不一致/);
 
     // 两条都没有：仍拒，不许拿「账本没写」当放行
@@ -420,6 +423,125 @@ describe('stampPrLabelsFromDispatch', () => {
     assert.match(r.error, new RegExp(OTHER));
     assert.equal(calls.some((a) => a[0] === 'pr' && a[1] === 'edit'), false, JSON.stringify(calls));
   });
+
+  it('多个 reviewer/*（含同名重复）fail-closed，账本有值也不放行', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const events = [{
+      type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO,
+      model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码',
+    }];
+    const run = (labels) => {
+      const calls = [];
+      const r = stampPrLabelsFromDispatch({
+        pr: '1',
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              ok: true,
+              out: JSON.stringify({
+                title: 'x', body: '署名 issue #1', labels, headRefName: 'dao-1',
+              }),
+            };
+          }
+          if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+          return { ok: false, error: '未预期 ' + args.join(' ') };
+        },
+        repo: REPO,
+        events,
+      });
+      return { r, calls };
+    };
+
+    const two = run([
+      { name: 'model/grok-4.6' },
+      { name: 'reviewer/gpt-5.6-luna' },
+      { name: 'reviewer/gpt-5.6-sol' },
+    ]);
+    assert.equal(two.r.ok, false, JSON.stringify(two.r));
+    assert.equal(two.r.state, 'many');
+    assert.match(two.r.error, /多个 reviewer/);
+    assert.equal(two.calls.some((a) => a[1] === 'edit'), false, JSON.stringify(two.calls));
+
+    const dup = run([
+      { name: 'reviewer/gpt-5.6-luna' },
+      { name: 'reviewer/gpt-5.6-luna' },
+    ]);
+    assert.equal(dup.r.ok, false, JSON.stringify(dup.r));
+    assert.equal(dup.r.state, 'many');
+    assert.equal(dup.calls.some((a) => a[1] === 'edit'), false, JSON.stringify(dup.calls));
+  });
+
+  it('账本 reviewer 与 PR 唯一标签不一致：stamp fail-closed 不 edit', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const calls = [];
+    const r = stampPrLabelsFromDispatch({
+      pr: '1',
+      runGh: (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x', body: '署名 issue #1',
+              labels: [{ name: 'reviewer/gpt-5.6-sol' }],
+              headRefName: 'dao-1',
+            }),
+          };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: '未预期 ' + args.join(' ') };
+      },
+      repo: REPO,
+      events: [{
+        type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO,
+        model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码',
+      }],
+    });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.state, 'conflict');
+    assert.match(r.error, /不一致/);
+    assert.equal(calls.some((a) => a[1] === 'edit'), false, JSON.stringify(calls));
+  });
+
+  it('历史事件缺 repo/reviewer：stamp 成功返回值带 repoAssumed 与 reviewerSource', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const { ensureRepoLabels } = await CARD;
+    const r = stampPrLabelsFromDispatch({
+      pr: '3',
+      runGh: (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x', body: '署名 issue #3',
+              labels: [{ name: 'reviewer/gpt-5.6-luna' }],
+              headRefName: 'dao-3',
+            }),
+          };
+        }
+        if (args[0] === 'label' && args[1] === 'list') {
+          return {
+            ok: true,
+            out: JSON.stringify([
+              { name: 'model/grok-4.6' },
+              { name: 'type/写码' },
+              { name: 'reviewer/gpt-5.6-luna' },
+            ]),
+          };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: '未预期 ' + args.join(' ') };
+      },
+      repo: REPO,
+      ensureLabels: ensureRepoLabels,
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-3', model: 'grok-4.6', work_type: '写码' }],
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.repoAssumed, true);
+    assert.equal(r.reviewerSource, 'pr-label');
+    assert.equal(r.reviewer, 'gpt-5.6-luna');
+  });
 });
 
 describe('选型路径零残留', () => {
@@ -529,5 +651,101 @@ describe('CLI 选型入口一次 issue label 都不读', () => {
     assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
     assert.match(String(payload.error || r.stderr || ''), /需人工打标/);
     assert.doesNotMatch(logText, /issue view/);
+  });
+});
+
+function writeLedgerEvents(events) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1211-ledger-'));
+  events.forEach((e, i) => {
+    fs.writeFileSync(path.join(dir, `${i}.json`), JSON.stringify(e));
+  });
+  return dir;
+}
+
+function cliWithLedger(verb, pr, { events, extraArgs = [] } = {}) {
+  const dir = writeLedgerEvents(events);
+  const log = path.join(os.tmpdir(), `dao-1211-gh-${verb}-${pr}-${process.pid}-${Date.now()}.log`);
+  try { fs.unlinkSync(log); } catch { /* 没有就没有 */ }
+  const args = [path.join(ROOT, 'scripts', 'dao.mjs'), verb, '--pr', String(pr), ...extraArgs];
+  if (verb !== 'pr-sync-labels') args.push('--executor', 'mirasim', '--dry-run');
+  const r = spawnSync(process.execPath, args, {
+    encoding: 'utf8',
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      LEDGER_EVENTS_DIR: dir,
+      DAO_GH_FAKE: path.join(ROOT, 'tests', 'fixtures', 'fake-gh.mjs'),
+      DAO_GH_FAKE_LOG: log,
+      DAO_GH_FAKE_REFUSE_ISSUE_VIEW: '1',
+    },
+  });
+  const logText = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  try { fs.unlinkSync(log); } catch { /* 测完收 */ }
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 测完收 */ }
+  return { r, logText, payload: lastJson(r) };
+}
+
+const FAKE_HEAD = 'thoerwink8/fake-head';
+const clashEvent = {
+  type: 'job.dispatch',
+  identity: '工人',
+  branch: FAKE_HEAD,
+  repo: REPO,
+  model: 'grok-4.6',
+  reviewer: 'gpt-5.6-sol',
+  work_type: '写码',
+};
+const historicEvent = {
+  type: 'job.dispatch',
+  identity: '工人',
+  branch: FAKE_HEAD,
+  model: 'grok-4.6',
+  work_type: '写码',
+};
+const completeEvent = {
+  type: 'job.dispatch',
+  identity: '工人',
+  branch: FAKE_HEAD,
+  repo: REPO,
+  model: 'grok-4.6',
+  reviewer: 'gpt-5.6-luna',
+  work_type: '写码',
+};
+
+describe('CLI 已查成冲突 fail-closed，来源字段向外层返回', () => {
+  it('reviewer-create：账本 sol vs PR 唯一标签 luna → 拒，不继续选 PR 标签', () => {
+    const { r, payload } = cliWithLedger('reviewer-create', 42, { events: [clashEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'conflict');
+    assert.match(String(payload.error || ''), /不一致/);
+    assert.notEqual(payload.reviewer, 'gpt-5.6-luna');
+    assert.notEqual(payload.reviewer, 'gpt-5.6-sol');
+  });
+
+  it('worker-done：账本 sol vs PR 唯一标签 luna → 拒，不继续选 PR 标签', () => {
+    const { r, payload } = cliWithLedger('worker-done', 42, { events: [clashEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'conflict');
+    assert.match(String(payload.error || ''), /不一致/);
+  });
+
+  it('pr-sync-labels：历史事件缺 repo/reviewer → 输出 repoAssumed 与 reviewerSource=pr-label', () => {
+    const { r, payload } = cliWithLedger('pr-sync-labels', 42, { events: [historicEvent] });
+    assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.repoAssumed, true);
+    assert.equal(payload.reviewerSource, 'pr-label');
+    assert.equal(payload.reviewer, 'gpt-5.6-luna');
+  });
+
+  it('pr-sync-labels：账本写全 → 输出 repoAssumed=false 与 reviewerSource=ledger', () => {
+    const { r, payload } = cliWithLedger('pr-sync-labels', 42, { events: [completeEvent] });
+    assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.repoAssumed, false);
+    assert.equal(payload.reviewerSource, 'ledger');
+    assert.equal(payload.reviewer, 'gpt-5.6-luna');
   });
 });
