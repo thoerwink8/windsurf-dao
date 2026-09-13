@@ -437,11 +437,6 @@ export function recordPair({ ctx, ts, source, worker, reviewer }) {
   return out;
 }
 
-/** 给测试与调用方拼路径用；不读事件内容（读事件是检查方自己的事）。 */
-export function eventPathHint(dir, machine) {
-  return join(dir, `*-${machine}.json`);
-}
-
 /** 给 amend 找所属 job：优先 --pr 的 gh-pr-N，否则 issue 对上的工人 dispatch。 */
 export function resolveAmendTarget({ events, issue, pr } = {}) {
   const prNumber = pr != null && String(pr).trim() !== '' ? Number(pr) : null;

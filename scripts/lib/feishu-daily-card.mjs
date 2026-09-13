@@ -286,11 +286,6 @@ export function isDailyListPending(value) {
   return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PENDING;
 }
 
-export function isDailyListPrs(value) {
-  const v = value && typeof value === 'object' ? value : {};
-  return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PRS;
-}
-
 /** 日报卡按钮：toast 一句，不改卡、不写 GitHub。card === null 告诉回包路径别换待拍板卡。 */
 export function dailyCallbackResponse(value) {
   const v = value && typeof value === 'object' ? value : {};

@@ -441,15 +441,6 @@ export function looksLikeAgentPreview(text) {
   return /Grok Build|always-approve|ctrl\+q|╭─|╰─/i.test(String(text || ''));
 }
 
-export function looksLikeShellPrompt(text) {
-  const s = String(text || '').trimEnd();
-  if (!s) return false;
-  if (looksLikeAgentPreview(s)) return false;
-  return /(?:^|\n)PS .*>\s*$/.test(s)
-    || /(?:^|\n)[A-Z]:\\[^>\n]*>\s*$/.test(s)
-    || /(?:^|\n)\$\s*$/.test(s);
-}
-
 export function extractHandleFromWorkerStart(json) {
   return json?.result?.worker?.agent_terminal_handle
     || json?.result?.dispatch?.assignee_handle
@@ -533,7 +524,6 @@ export function planLaunchFallback({ foundHandle } = {}) {
   return { action: 'create', closeHandle: null, leftoverIfCreateNow: false };
 }
 
-/** 按启动计划演算终态 handle 列表。用来证明 close-then-create 不会留第二个终端。 */
 export function terminalsAfterLaunchPlan({ existingHandles, plan, createdHandle } = {}) {
   const next = new Set(Array.isArray(existingHandles) ? existingHandles : []);
   if (!plan || plan.action === 'reuse') return [...next];
