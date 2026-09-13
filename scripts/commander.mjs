@@ -52,7 +52,7 @@ import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-
 import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
-import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadBreaker } from './lib/provider-health.mjs';
 import { healthRedIds } from './lib/model-admission.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
@@ -576,12 +576,21 @@ function buildSituation({ state } = {}) {
   let defaultWorkerModel = null;
   let channelCaps = null;
   let routingLegs = null;
+  // #1233：执行目录里起不来的顺位，剔了谁、为什么剔——报出去，别静默跳过。
+  let reviewerOrderSkipped = [];
+  let reviewerOrderUnscanned = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
     routingModelRecords = models;
-    reviewerOrder = reviewerSelectOrder(raw);
+    // #1233：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位（gpt-5.6-sol）在执行
+    // 目录里是 unverified，起审官必被拒 → 每张按顺位选了它的复审票 drain 必失败、试满 3 次
+    // 打「自动化认输」。这里按执行目录的实际可用性把顺位过一遍，**剔了谁要说得出来**。
+    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles() });
+    reviewerOrder = availability.usable;
+    reviewerOrderSkipped = availability.skipped;
+    if (availability.unscanned) reviewerOrderUnscanned = availability.unscanned;
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
@@ -591,6 +600,8 @@ function buildSituation({ state } = {}) {
     routingModels = null;
     routingModelRecords = null;
     reviewerOrder = null;
+    reviewerOrderSkipped = [];
+    reviewerOrderUnscanned = null;
     workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
@@ -625,6 +636,8 @@ function buildSituation({ state } = {}) {
     routingModels,
     routingModelRecords,
     reviewerOrder,
+    reviewerOrderSkipped,
+    reviewerOrderUnscanned,
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
@@ -644,6 +657,26 @@ function situationHealth(situation) {
   // 必查清单只认 SITUATION_SECTIONS（#1055：orca 退役后不在清单里，复制一份会再钉死）。
   const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   return { unscanned, allScanned: unscanned.length === 0 };
+}
+
+/**
+ * 审官顺位被剔了什么、剩下的还能不能起——每轮打一行（#1233）。
+ *
+ * 剔除了却不报，等于把「静默跳过」换了个地方发生：顺位表看起来还是原来那张，
+ * 而实际能叫的审官只剩几个，没人知道少了谁。三种状态不许混成一句：
+ *   没读到执行目录（没查成）/ 全被剔（一个能起的审官都没有）/ 剔了几个。
+ */
+function reviewerOrderNote(situation) {
+  const skipped = Array.isArray(situation.reviewerOrderSkipped) ? situation.reviewerOrderSkipped : [];
+  if (situation.reviewerOrderUnscanned) return [`  审官顺位：${situation.reviewerOrderUnscanned}`];
+  const order = Array.isArray(situation.reviewerOrder) ? situation.reviewerOrder : [];
+  if (order.length === 0 && skipped.length > 0) {
+    return [`  ⚠ 审官顺位：执行目录里一个能起的审官都没有（全被剔：${skipped.map((s) => s.id).join('、')}）`
+      + '——本轮没有审官可用，叫审官必失败'];
+  }
+  if (skipped.length === 0) return [];
+  return [`  审官顺位：剔掉 ${skipped.length} 位（执行目录里起不来）——`
+    + skipped.map((s) => `${s.id}：${s.why}`).join('；')];
 }
 
 // ── 手：hub 回流（带去重）──
@@ -1116,7 +1149,7 @@ function execMarkExhausted(action, { dryRun, say }) {
   const useWaiting = action.label === WAITING_USER_LABEL || action.verb === 'pump-draft';
   const comment = action.comment || (useWaiting
     ? waitingUserComment({ pr, verb: action.verb, tries: action.tries, head: action.head })
-    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head }));
+    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head, why: action.why }));
   const st = runGh(['pr', 'view', String(pr), '--repo', REPO, '--json', 'labels,state'], 20000);
   if (!st.ok) {
     say(`  认输标没查成，本轮不打：PR #${pr}（${st.error}）`);
@@ -2549,8 +2582,15 @@ function cmdScan() {
     otherRepos: situation.otherRepos?.scanned
       ? situation.otherRepos.repos.map((r) => `${r.repo}: ${r.issues} issue / ${r.prs} PR`)
       : `没查成：${situation.otherRepos?.error || '缺节'}`,
+    // #1233：顺位被剔了谁必须出现在态势摘要里——只写进快照文件等于没人读。
+    reviewerOrder: {
+      usable: Array.isArray(situation.reviewerOrder) ? situation.reviewerOrder : null,
+      skipped: situation.reviewerOrderSkipped || [],
+      ...(situation.reviewerOrderUnscanned ? { unscanned: situation.reviewerOrderUnscanned } : {}),
+    },
   };
   console.log(JSON.stringify(summary, null, 2));
+  for (const line of reviewerOrderNote(situation)) console.error(line);
   process.exit(health.allScanned ? 0 : 2);
 }
 
@@ -2617,7 +2657,7 @@ function cmdAct(argv) {
   state._lastSituationFile = file;
 
   const { actions } = decide(situation);
-  const log = [];
+  const log = [...reviewerOrderNote(situation)];
   let cleanupFailures = 0;
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
@@ -2775,6 +2815,7 @@ if (isDirectRun) main();
 
 export {
   buildSituation, situationHealth, escalate, escalateDedupKey, execOpenIssue, scanStall,
+  reviewerOrderNote,
   countInflightWorkers,
   reapBrains,
   alreadyAppended,
