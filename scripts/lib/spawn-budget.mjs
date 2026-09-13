@@ -12,7 +12,7 @@
 // 只是要看得见总量。降预算是显式动作——改这个数字本身就是一次记账。
 
 /** 当前允许的 spawnSync 调用总数。第二刀每做一批就把这个数改小，不许只加不减。 */
-export const SPAWN_BUDGET = 152;
+export const SPAWN_BUDGET = 153;
 
 /**
  * 数的是**调用**，不是「提到」。
@@ -31,9 +31,10 @@ export function countSpawnCalls(source) {
 export const BUDGET_NOTE = '第二刀做到 134；合入 dao now 测试 +3、再合 master board-gc/stall 测试 +2，预算 139；#982 卡 B 绑定层 CLI 黑盒（executor-binding.test.js 公开 CLI 不许崩栈 / 任务书路由 / 未登记家族拒派）+6，预算 145；#967 返工补缺 targets fail-closed 的 CLI 样本 +1，预算 146。dao.test 早退型已转完（-18），'
   + '#1174 ACP 接入 +6（acp-runtime 跨进程验 /proc 身份与 flock ×2、execution-runtime 跨进程验 flock ×1、execution-usage CLI 黑盒 ×3），'
   + '吃掉 5 格余量后溢出 1，预算 147——这 6 处验的就是「另一个进程里会怎样」，进程内跑等于不验，故记账不改测；'
+  + '#1116 CLI 选型入口夹具 +1（pr-label-truth 真走 dao.mjs 才能断言 gh 序列没有 issue view，进程内跑等于不验接线），预算 148；'
   + '#1146 skills 装载面 CLI 黑盒 +3（onboard.mjs 整目录劫持 e2e ×1、skills-heal.mjs 被劫 exit 0 / 没查成 exit 2 ×2），'
-  + '验的是 systemd 认的退出码和 onboard 真把 skills-elsewhere 接上，进程内跑等于不验 CLI 边界，预算 150；'
-  + '#1165 控制面闸现役 git push / land.mjs 真推送黑盒 +2，预算 152；'
+  + '验的是 systemd 认的退出码和 onboard 真把 skills-elsewhere 接上，进程内跑等于不验 CLI 边界，预算 151；'
+  + '#1165 控制面闸现役 git push / land.mjs 真推送黑盒 +2，预算 153；'
   + '剩下的是真建树/真发请求的动词，进程内跑会共享模块状态互相污染，转它们要先隔离状态；目标 ≤40';
 
 /**

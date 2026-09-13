@@ -12,9 +12,12 @@
 // 只出可见行、永不报红。没查成必须和「扫完 0 个」不同形。
 
 import { issueNumberFromWorktree } from './card-identity.mjs';
+import { linkedIssueNumbers } from './dispatch/worker-done.mjs';
 
 // 只认正向「已消歧」（#565）。近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门。
 const READY_LABEL = '已消歧';
+
+export { linkedIssueNumbers };
 
 // #966：GitHub Milestone 两档之一。挂了这一档 = 要做但不是现在，单保持 OPEN 以便
 // `gh issue list --milestone 将来某版` 一次列全；派工队列必须跳过，否则档挂了机器下一轮还派。
@@ -32,21 +35,6 @@ export function milestoneTitleOf(issue) {
 
 export function isDeferredIssue(issue) {
   return milestoneTitleOf(issue) === DEFERRED_MILESTONE_TITLE;
-}
-
-/** 本检查自己的署名正则，不复用 dao-check ⑭ / dao-cmd。
- * #657：新规范是「署名 issue #N」（非 GitHub 关单词，不触发自动关单），兼容旧关单词。 */
-const CLOSES_RE = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
-
-export function linkedIssueNumbers(text) {
-  const found = [];
-  const re = new RegExp(CLOSES_RE.source, CLOSES_RE.flags);
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const n = Number(m[1] ?? m[2]);
-    if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
-  }
-  return found;
 }
 
 export function cardNumbersFromWorktrees(wts) {

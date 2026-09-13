@@ -48,6 +48,8 @@ import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
+import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-capacity.mjs';
+import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
@@ -93,6 +95,8 @@ const STATE_DIR = process.env.COMMANDER_STATE_DIR || join(homedir(), '.dao', 'co
 const STATE_PATH = join(STATE_DIR, 'state.json');
 const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
   || join(homedir(), '.dao', 'admission', 'samples.ndjson');
+const CAPACITY_SAMPLE_PATH = process.env.DAO_CAPACITY_SAMPLES
+  || join(homedir(), '.dao', 'ephemeral-lifecycle', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
@@ -142,17 +146,17 @@ function scanGithub() {
 }
 
 /**
- * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为查它们的 reviewer/ 标签。
+ * open PR 署名到、却不在 open 快照里的那些单（多半已关闭）——只为读它们的正文（merge-policy / human_holds）。
+ * 选型（model/reviewer）只读 PR 自己的 label（#1116），不再从这里反推。
  *
- * 主查询是 `issues(states: OPEN)`，所以单子一关标签就查不到。2026-09-05 实咬：
- * #945/#947/#909 的署名单 #833/#815/#889 都关了，标签明明带着 reviewer/gpt-5.6-luna，
- * 指挥官每轮报「不猜审官」，三张交卷可合的 PR 无限期挂着。**单子关了不等于 PR 不用审。**
+ * 主查询是 `issues(states: OPEN)`，所以单子一关正文就查不到。2026-09-05 实咬：
+ * #945/#947/#909 的署名单 #833/#815/#889 都关了，PR 还要审、还要返工。**单子关了不等于 PR 不用审。**
  *
  * 为什么不把主查询改成 OPEN+CLOSED：那张表按 UPDATED_AT 取前 100 条，掺进关闭单会把
  * open 单挤出视野——修一个洞捅一个更大的。这里改成按需精确取，条数上限就是 open PR 数。
  *
  * 取回来的单**单独放一格**，绝不并进 issues：那是派工候选表，混进已关闭的「已消歧」单
- * 会被当成新活派出去。取不到就留空，让上游照旧说「不猜审官」——查不到 ≠ 猜一个。
+ * 会被当成新活派出去。取不到就留空——查不到 ≠ 猜一个。
  */
 function scanAttributedIssues(issues, prs) {
   const have = new Set((issues || []).map((i) => i && i.number).filter(Boolean));
@@ -164,7 +168,7 @@ function scanAttributedIssues(issues, prs) {
   const out = [];
   for (const n of want) {
     const r = runGh(['issue', 'view', String(n), '--repo', REPO, '--json', 'number,title,body,labels'], 20000);
-    if (!r.ok) continue; // 取不到就当没有：上游会说「不猜审官」，不会臆测
+    if (!r.ok) continue; // 取不到就当没有：正文读不到就不猜 merge-policy，选型不读这里
     try {
       const j = JSON.parse(r.out || '{}');
       if (j && j.number) out.push({ number: j.number, title: j.title || '', body: j.body == null ? '' : String(j.body), labels: j.labels || [] });
@@ -322,6 +326,20 @@ function loadAdmissionSamples(file = ADMISSION_SAMPLE_PATH) {
 }
 
 function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(row) + '\n');
+  } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+function leftoverIncomplete(situation, stopResults) {
+  const sec = situation && situation.sessions;
+  if (!sec || sec.scanned !== true || !Array.isArray(sec.items)) return null;
+  const r = leftoverIncompleteAfterStops(sec.items, stopResults, { stateOf: sessionStateOf });
+  return r.ok ? r.count : null;
+}
+
+function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
   try {
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
@@ -693,7 +711,9 @@ function execAction(action, { state, dryRun, log }) {
         '--spec', dispatchSpec(action.issue), '--confirm',
         ...dispatchMergePolicyArgs(action),
         // 差集重派：账上未结、名单里没有。10 分钟去重窗会把「上一单已死」当成重复建卡挡掉。
-        ...(action.reconcile ? ['--allow-dup'] : [])];
+        ...(action.reconcile ? ['--allow-dup'] : []),
+        // 仓键跟到执行口：跨仓不得回落默认仓。本仓带 --repo 与不传等价。
+        ...(action.repo ? ['--repo', String(action.repo)] : [])];
       // dispatch 是**异步**的：热路只写派工单+拉起执行体就 exit 0（「已受理」），
       // 真结果落 resultPath。只看退出码 = 把「受理了」当「派成了」——
       // 2026-09-04 实咬：#787 工人 TUI 等就绪失败，指挥官照样报「跑完」并往群里发「已自动派单」。
@@ -754,12 +774,141 @@ function execAction(action, { state, dryRun, log }) {
       return execMarkExhausted(action, { dryRun, say });
     case 'clear-exhausted':
       return execClearExhausted(action, { dryRun, say });
+    case 'reap-tree':
+      return execReapTree(action, { dryRun, say });
     case 'noop':
       return { ok: true };
     default:
       say(`  未知动作 kind=${action.kind}`);
       return { ok: false, error: `未知动作 ${action.kind}` };
   }
+}
+
+function parseGhJson(run, args, what) {
+  const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+  if (!r || r.ok !== true) {
+    return { ok: false, unscanned: true, error: `${what}没查成：${(r && r.error) || '命令失败'}` };
+  }
+  try {
+    const json = JSON.parse(String(r.out || '').trim() || '{}');
+    return { ok: true, json };
+  } catch {
+    return { ok: false, unscanned: true, error: `${what}返回不是 JSON` };
+  }
+}
+
+/** gh pr view 的 reviews 用 commit.oid；analyzeReviewsAtHead 认 commit_id。缺 oid 原样留下，对账侧 fail-closed。 */
+function reviewsForAnalyze(reviews) {
+  if (!Array.isArray(reviews)) return reviews;
+  return reviews.map((r) => {
+    if (!r || typeof r !== 'object') return r;
+    const oid = String(r.commit_id || r.commitId || (r.commit && r.commit.oid) || '').trim();
+    return { ...r, commit_id: oid, submitted_at: r.submitted_at || r.submittedAt };
+  });
+}
+
+function judgmentAtCurrentHead(json) {
+  const head = json && typeof json.headRefOid === 'string' ? json.headRefOid.trim() : '';
+  const a = analyzeReviewsAtHead(reviewsForAnalyze(json && json.reviews), head);
+  if (!a.scanned) {
+    return { ok: false, unscanned: true, error: `当前 head 判定没查成（${a.reason || 'unknown'}）` };
+  }
+  const delivered = a.latestGreen === true || a.latestRed === true || a.green === true;
+  return { ok: true, delivered };
+}
+
+/**
+ * 清树前再核一次 GitHub。decide 产候选，这里 fail-closed：查不成 / 还开着就不删。
+ * 工人树 PR 路径只认 MERGED（CLOSED 未合并不是合并证据，孤儿才走 issue CLOSED）。
+ * 审官树 OPEN 只认 commit oid 等于执行时 headRefOid 的判定；缺 oid / 对不上就留树。
+ * run 可注入，测试钉这些反例。
+ */
+export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
+  const treePath = action && action.path;
+  if (!treePath) {
+    say('  reap-tree 没有 path');
+    return { ok: false, unscanned: true, error: 'reap-tree 没有 path' };
+  }
+  if (dryRun) {
+    say(`[dry] reap-tree ${action.role || ''} ${treePath}（${action.why || ''}）`);
+    return { ok: true, dryRun: true, path: treePath };
+  }
+  const role = action.role || '';
+  if (role === 'reviewer') {
+    if (action.pr == null) {
+      const error = '审官树没有 PR 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state,reviews,headRefOid'], `PR #${action.pr}`);
+    if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+    const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+    if (state === 'MERGED' || state === 'CLOSED') {
+      /* 已了结，可拆审官树 */
+    } else if (state === 'OPEN') {
+      const d = judgmentAtCurrentHead(viewed.json);
+      if (!d.ok) { say(`  不清 ${treePath}：${d.error}`); return d; }
+      if (!d.delivered) {
+        const error = `PR #${action.pr} 当前 head 没有判定，审官树留着`;
+        say(`  ${error}`);
+        return { ok: false, error };
+      }
+    } else {
+      const error = `PR #${action.pr} 状态没查成（${state || '空'}），不清`;
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+  } else if (role === 'worker') {
+    if (action.pr == null) {
+      const error = '工人树没有 PR 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+    const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
+    if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+    const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+    if (state !== 'MERGED') {
+      const error = `PR #${action.pr} 状态是 ${state || '空'}，工人树只在 MERGED 后清`;
+      say(`  ${error}`);
+      return { ok: false, unscanned: state === '', error };
+    }
+  } else if (role === 'orphan') {
+    if (action.issue != null) {
+      const viewed = parseGhJson(run, ['issue', 'view', String(action.issue), '--json', 'state'], `issue #${action.issue}`);
+      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+      if (state !== 'CLOSED') {
+        const error = `issue #${action.issue} 状态是 ${state || '空'}，不清`;
+        say(`  ${error}`);
+        return { ok: false, unscanned: state === '', error };
+      }
+    } else if (action.pr != null) {
+      const viewed = parseGhJson(run, ['pr', 'view', String(action.pr), '--json', 'state'], `PR #${action.pr}`);
+      if (!viewed.ok) { say(`  不清 ${treePath}：${viewed.error}`); return viewed; }
+      const state = String(viewed.json && viewed.json.state || '').toUpperCase();
+      if (state !== 'MERGED') {
+        const error = `PR #${action.pr} 状态是 ${state || '空'}，孤儿树只在 MERGED 或 issue CLOSED 后清`;
+        say(`  ${error}`);
+        return { ok: false, unscanned: state === '', error };
+      }
+    } else {
+      const error = '孤儿树没有 PR/issue 号，不清';
+      say(`  ${error}`);
+      return { ok: false, unscanned: true, error };
+    }
+  } else {
+    const error = `未知清树角色 ${role}，不清`;
+    say(`  ${error}`);
+    return { ok: false, unscanned: true, error };
+  }
+  const rm = run(['node', 'scripts/dao.mjs', 'worktree-rm', '--worktree', `path:${treePath}`]);
+  if (!rm || rm.ok !== true) {
+    const error = `拆树失败 ${treePath}：${(rm && rm.error) || '命令失败'}`;
+    say(`  ${error}`);
+    return { ok: false, error };
+  }
+  say(`  已拆 ${treePath}`);
+  return { ok: true, path: treePath };
 }
 
 /**
@@ -1119,7 +1268,10 @@ function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
 
 export function runCmd(argv, timeout = 600000, { spawn = spawnSync } = {}) {
-  const r = spawn(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  // #1152：生产入口显式放行真执行体。dao.mjs 自己不许自打这面旗，否则测试瘦 env
+  // spawn 的子进程会把自己放行。指挥官是派工/起会话的唯一常规父进程。
+  const env = { ...process.env, DAO_REAL_EXECUTOR: '1' };
+  const r = spawn(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env });
   // Machine evidence must survive a nonzero exit. Only the human summary is shortened.
   const output = { out: String(r.stdout || ''), stderr: String(r.stderr || ''),
     status: r.status, signal: r.signal || null, spawnError: r.error?.code || (r.error ? 'SPAWN_ERROR' : null) };
@@ -1392,7 +1544,7 @@ export function reworkSpec(action, briefPath) {
   const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
   return action.conflict
     ? `解冲突 PR #${action.pr}：${checkout}；把 origin/master 合进来解冲突，硬边界与做法全文在 ${briefPath}，解完跑 dao-check 绿了再推。`
-    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷。`;
+    : `返工 PR #${action.pr}：${checkout}；审官红项全文在 ${briefPath}，逐条改完交卷（worker-done --pr ${action.pr}，复用这张 PR，不开第二张）。`;
 }
 
 /** #1147 draft 收口泵：短会话三选一，必须落痕。关闭是工人判，不是指挥官机械关。 */
@@ -1436,7 +1588,7 @@ export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}
  */
 function requestRereview(action, { state, dryRun, say }) {
   if (!action.reviewer) {
-    const error = `PR #${action.pr} 要复审，但署名 issue 上没有 reviewer/ 标签——不猜审官`;
+    const error = `PR #${action.pr} 要复审，但 PR 上没有 reviewer/ 标签——需人工打标，不猜审官`;
     say(`  ${error}`);
     return { ok: false, error };
   }
@@ -2499,6 +2651,7 @@ function cmdAct(argv) {
 
   const { actions } = decide(situation);
   const log = [];
+  let cleanupFailures = 0;
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
     dir: STATE_DIR,
@@ -2520,7 +2673,22 @@ function cmdAct(argv) {
   }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
-  const ran = runActions(actions, { exec: (a) => execAction(a, { state, dryRun, log }), log });
+  const stopResults = [];
+  const ran = runActions(actions, {
+    exec: (a) => {
+      const r = execAction(a, { state, dryRun, log });
+      if (a && a.kind === 'reap-tree' && (!r || r.ok !== true) && !(r && r.dryRun)) cleanupFailures += 1;
+      if (a && a.kind === 'stop-session') {
+        stopResults.push({
+          sessionKey: a.sessionKey || null,
+          workdir: a.workdir || null,
+          ok: !!(r && r.ok === true && r.dryRun !== true),
+        });
+      }
+      return r;
+    },
+    log,
+  });
   // 轮末收敛（#1063）：数连续轮 + 把本轮已不再出现的原因自动关单。必须在动作跑完之后，
   // 因为「本轮有哪些原因」要等 decide 的动作全部落地才算数。
   // 输入必须是 decide 的静态动作 **加上** runActions 执行中动态产生的升级动作：
@@ -2575,6 +2743,22 @@ function cmdAct(argv) {
     }
   }
   runHubProjection({ situation, dryRun, log });
+  if (!dryRun) {
+    const ad = situation.admission || {};
+    appendCapacitySample(snapshotCapacity({
+      at: situation.at,
+      cpuBusy: ad.cpuBusy,
+      memAvailableMb: ad.memAvailableMb,
+      loadNorm: ad.loadNorm,
+      inFlight: ad.inFlight,
+      sessions: situation.sessions && situation.sessions.scanned === true
+        ? (situation.sessions.items || []).length : null,
+      worktrees: situation.trees && situation.trees.scanned === true
+        ? (situation.trees.worktrees || []).length : null,
+      leftoverAfterHandoff: leftoverIncomplete(situation, stopResults),
+      cleanupFailures,
+    }));
+  }
   if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,

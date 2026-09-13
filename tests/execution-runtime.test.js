@@ -203,6 +203,30 @@ linuxTest('exclusive stopping reservation covers backend stop and process cleanu
 linuxTest('empty processes plus weak stop acknowledgement cannot clear a queued vendor session',async t=>{
   const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'queued',text:''});const r=await rt.stopSession(s.sessionKey);assert.equal(r.ok,false);assert.equal(lease(f).value.state,'stopping');await assert.rejects(rt.startSession(spec(f)),e=>e.detail?.busy===true);
 });
+// 2026-09-12 实咬（审官树被永久占住 56 分钟，只能等对账兜底）：
+// 上游断流打死的会话，session-read 回的是 `partial:true` 的清单预览（快照没回帧）。
+// 那时 judgeExecutionCompletion 一律回 unknown、stopSession 又手打 ['done','failed'] 卡 view，
+// 于是收尾永远验不过 → 会话与租约双双回写 stopping → 这棵树以后再起不了会话。
+// 反例判据：partial 报**非成功**终态 = 可以证明「没人在干活」，收尾必须能收口。
+linuxTest('partial inventory reporting a dead session still lets cleanup finish',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));
+  m.stopSession=async k=>{m.views.set(k,{phase:'incomplete',text:'开篇一句就断了',toolCalls:[],missing:false,partial:true,via:'meta'});return {ok:true,verified:true};};
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true,'partial 报 incomplete 时收尾必须收得掉');
+  assert.equal(lease(f).value.state,'stopped');
+  assert.equal(lease(f).value.cleanupVerified,true);
+  // 收口之后同一棵树要能再起会话——「死人占着树」才是这条的真代价。
+  const again=await rt.startSession(spec(f));
+  assert.ok(again.sessionKey,'收口后同树必须能起新会话');
+});
+// 安全边界：partial 里报**成功**终态不算交活证据（快照没回帧、正文可能被截断），仍判没查成。
+linuxTest('partial inventory claiming success is not evidence of a delivered task',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));
+  m.views.set(s.sessionKey,{phase:'done',text:'预览',toolCalls:[],missing:false,partial:true,via:'meta'});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,false,'partial 报 done 不足以证明交付，收尾要保守');
+  assert.equal(lease(f).value.state,'stopping');
+});
 linuxTest('managed list never calls global history; terminal observations persist',async t=>{
   const f=fixture(t),m=fakeRuntime({async listSessions(){throw Error('global history must not be called');}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'done',text:'finished'});
   const r=await rt.listSessions();assert.equal(r.ok,true);assert.equal(r.scope,'managed');assert.equal(r.includesExternal,false);assert.equal(r.sessions[0].state,'done');assert.equal(r.sessions[0].title,'ISSUE-#1174');const count=m.calls.read.length;await rt.listSessions();assert.equal(m.calls.read.length,count);
@@ -265,7 +289,7 @@ linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
   await rt.readSession(started.sessionKey);
   assert.equal(records(f)[0].state,'completed');
 });
-linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
+linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/结构性够不着真执行体|live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
 
 test('nested Mirasim interactions and awaiting override apparent completion/incomplete',()=>{
   const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');

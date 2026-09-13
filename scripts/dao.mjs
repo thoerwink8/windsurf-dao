@@ -19,7 +19,7 @@
 // 与 inbox.log 完工信。758-763 实证：dao 加的认账钟误杀能干活的工人（假阴性）。
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,7 @@ import {
   argsRepoList,
   resolveRepoSelector,
   parseOwnerNameRepo,
+  ownerNameFromRemoteUrl,
   assertRepoAuthorized,
   splitRepoTarget,
   resolveLocalCheckout,
@@ -192,7 +193,8 @@ import {
   encodeSendText,
   runGh,
   stampIssueLabels,
-  syncPrLabelsFromIssue,
+  stampPrLabelsFromDispatch,
+  ensureRepoLabels,
   resolveReviewerFromPr,
   resolveWorkerFromPr,
   planWorkerDone,
@@ -228,7 +230,7 @@ import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
-import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
+import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
@@ -265,6 +267,7 @@ import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
 } from './lib/executor-binding.mjs';
+import { judgeTestExecutorIsolation, enableRealExecutorUnlessTest } from './lib/mirasim-runtime.mjs';
 import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
 
 
@@ -744,6 +747,10 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   if (dup.blocked) fail(dup.error, { dup });
 
+  // #1152：测试环境结构性够不着真执行体。拒派闸失手时这一道仍拦住建树/起会话。
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
+
   // The Mirasim path bypasses legacy post-launch label stamping. Fill the
   // selected task type before starting, otherwise a later pr-sync-labels
   // refuses to merge a fully reviewed PR. Existing declared types win.
@@ -800,6 +807,8 @@ async function cmdDispatchMirasim(args, routing, gate) {
         ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
         card_name: cardName,
         branch,
+        reviewer: args.reviewer ?? null,
+        repo: resolveDispatchRepo(ghRepo) || null,
       },
     });
     if (!ledger.ok && !ledger.skipped) console.error(`[dao] mirasim 派工账本没写上（派工本身成功）：${ledger.error}`);
@@ -844,8 +853,55 @@ function cmdDispatchBatch() {
   fail('orca 已退役，dispatch --batch 随 orca 编排一起删了');
 }
 
+function loadDispatchEventsForStamp() {
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    if (listed.unscanned) return { ok: false, unscanned: true, error: listed.error, events: [] };
+    return { ok: true, events: listed.events || [] };
+  } catch (e) {
+    return { ok: false, unscanned: true, error: String(e.message || e), events: [] };
+  }
+}
+
+/** 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。 */
+function resolveDispatchRepoName(explicit) {
+  const parsed = parseOwnerNameRepo(explicit);
+  if (parsed.ok && !parsed.omitted) return { ok: true, ownerName: parsed.ownerName };
+  const remote = gitRemoteOriginUrl(thisCheckoutRoot());
+  if (!remote.ok) {
+    return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${remote.error}` };
+  }
+  return ownerNameFromRemoteUrl(remote.url);
+}
+
+function resolveDispatchRepo(explicit) {
+  const r = resolveDispatchRepoName(explicit);
+  return r.ok ? r.ownerName : null;
+}
+
+/** #1116：仓 + PR head 分支 → 账本 dispatch → 打标。查不到完整记录不猜。 */
+function stampPrFromLedger({ pr, runGh, repo } = {}) {
+  const listed = loadDispatchEventsForStamp();
+  if (!listed.ok) return listed;
+  const resolved = resolveDispatchRepoName(repo);
+  if (!resolved.ok) return resolved;
+  return stampPrLabelsFromDispatch({
+    pr,
+    runGh,
+    events: listed.events,
+    ensureLabels: ensureRepoLabels,
+    repo: resolved.ownerName,
+  });
+}
+
 function cmdPrSyncLabels(args) {
-  const r = syncPrLabelsFromIssue({ pr: args.pr, runGh: ghRunner() });
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'pr-sync-labels', defaultLocal: thisCheckoutRoot() });
+  const r = stampPrFromLedger({
+    pr: args.pr,
+    runGh: ghRunnerForTarget(targetRepo, { role: 'worker' }),
+    repo: targetRepo.ownerName,
+  });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
 }
@@ -955,6 +1011,8 @@ async function cmdWorktreeCreateMirasim(args, { policy }) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worktree-create' });
   const repo = targetRepo.localPath;
   const branch = mirasimBranchOrFail(args);
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim', repo, branch });
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.worktreeCreate({ repo, branch }); }
@@ -1260,12 +1318,19 @@ async function cmdReviewPendingDrain(args) {
   const scoped = listed.tickets.filter(t => {
     if (args.pr && String(t.pr) !== String(args.pr)) return false;
     const ticketRepo = t.repo ? String(t.repo).trim() : '';
-    if (ghRepo) {
-      // 显式跨仓 drain 只吃该仓的票；无仓旧票不当成目标仓。
-      return ticketRepo.toLowerCase() === String(ghRepo).toLowerCase();
-    }
-    if (args.pr) return !ticketRepo; // --pr 不带 --repo = 本仓，不顺手清掉跨仓同号票
-    return true;
+    // 2026-09-12 实咬：`--pr` 分支原来是 `return !ticketRepo`（有仓字段就当成别仓的票），
+    // 但**本仓**的票也带 repo 字段——worker-done 入队那条路一律写 GitHub owner/name
+    // （见 cmdWorkerDone 的 enqueueHandoff）。于是 `review-pending-drain --pr 1159`
+    // 报「队列共 0 张」：票在队列里，被这一行筛掉了，而 --pr 恰恰是 #1104 说的
+    // 「毒票不许拖死整队」的唯一出口——出口自己把真票挡在外面。
+    // 判据换成「票仓与本仓不一致才算别仓」，两边都有且不同才剔；跟上面 ghRepo 分支同一把尺。
+    const home = ghRepo
+      ? String(ghRepo).trim().toLowerCase()
+      : resolveDispatchRepo(null)?.toLowerCase() || null;
+    if (!ticketRepo) return true;   // 无仓旧票：本仓路径的票，照吃
+    // home 推不出（不在 GitHub 仓里跑）时不在筛选上再加一层否决——这里的活是挑票，
+    // 不是鉴权；判错方向的代价（真票被静默挡在出口外）比多试一张大得多。
+    return !home || ticketRepo.toLowerCase() === home;
   });
 
   // #1125：闸放在这里而不是指挥官里——`review-pending-drain` 是唯一的拉取入口，
@@ -1576,7 +1641,7 @@ import {
   mirasimReviewerCreate, mirasimWorkerDone, defaultReviewerRegistry,
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
-  decideReviewerCreateStart, runLockedReviewerCreate,
+  decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -1744,6 +1809,7 @@ async function readReviewerDeathNote(runtime, args, ownerName) {
 }
 
 async function cmdReviewerCreateMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('reviewer-create 要 --pr');
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'reviewer', where: 'reviewer-create', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
@@ -1753,6 +1819,13 @@ async function cmdReviewerCreateMirasim(args) {
   if (!named.ok) fail(named.error, { executor: args.executor });
   const bind = bindExecutor({ executor: named.name, routing });
   if (!bind.ok) fail(bind.error, { executor: named.name });
+
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
+  // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
 
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
@@ -1809,6 +1882,11 @@ async function cmdReviewerCreateMirasim(args) {
   // 不绑 planned.switched：点名正好是下一位时 switched=false，但死会话仍必须另起。
   // #1024：键是仓+PR，跨仓同号不复用别仓的会话。
   const existing = registry.read(args.pr, ownerName);
+  if (existing && existing.ok !== true && existing.missing !== true) {
+    fail(`审官登记没查成，不起第二个审官：${existing.why || '没给原因'}`, {
+      executor: 'mirasim', stage: 'registry', pr: String(args.pr),
+    });
+  }
   const existingRecord = existing.ok ? existing.record : null;
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
@@ -1848,6 +1926,16 @@ async function cmdReviewerCreateMirasim(args) {
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr, ownerName);
+    if (again && again.ok !== true && again.missing !== true) {
+      return {
+        res: {
+          ok: false,
+          stage: 'registry',
+          error: `锁内复查审官登记没查成，不起第二个审官：${again.why || '没给原因'}`,
+        },
+        w: null,
+      };
+    }
     const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
@@ -1924,6 +2012,7 @@ async function cmdReviewerCreateMirasim(args) {
 }
 
 async function cmdWorkerDoneMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('worker-done 要 --pr');
   let body = args.body;
   if (args.bodyFile) {
@@ -1933,6 +2022,11 @@ async function cmdWorkerDoneMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
+  const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
+  if (!stamped.ok && stamped.unscanned) {
+    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+  }
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
@@ -2004,7 +2098,7 @@ async function cmdWorkerDoneMirasim(args) {
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
-  // #1125 主路：首审**只入队，不起审官**。
+  // #1125 主路：交卷**只入队，不起审官**。
   //
   // 病：起审官原来发生在工人交卷那一刻，于是**生产端决定了消费端的并发**——工人跑得多快，
   // 审官就被起得多快，而没有任何人在看上游还剩多少容量。2026-09-07 实测 13 个工人在跑、
@@ -2013,9 +2107,10 @@ async function cmdWorkerDoneMirasim(args) {
   // 队列本身早就有（#815），但当初是给 Orca depth 2 限制做的**起败兜底**，Orca 已随 #1115
   // 退役，理由没了、机制留着。这里把它接成主路：交卷入队，指挥官按在役审官数拉取。
   //
-  // 只切首审：返工是往**已有**会话再推一针，不新增并发，照原路走。
+  // 首审一律入队。返工：审官树还在才往原会话推针；确认登记不在或树已拆才入队。
+  // 登记没查成 / 缺 treePath / 树在不在没查成，一律 fail-visible，不许当成树已拆去起第二个审官。
   const repo = targetRepo.localPath;
-  if (plan.round === 'first') {
+  const enqueueHandoff = async (why) => {
     const dir = reviewPendingDir({ root: ROOT });
     let head = { name: null, oid: null };
     try {
@@ -2046,8 +2141,25 @@ async function cmdWorkerDoneMirasim(args) {
       postedIssue, postedPr, action: 'queued-for-review',
       reviewPending: { path: wrote.path, source: built.ticket.source },
       stopped,
-      why: '首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官',
+      why,
     });
+  };
+  if (plan.round === 'first') {
+    await enqueueHandoff('首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官');
+    return;
+  }
+  const rec = mirasimRegistry().read(String(plan.pr), targetRepo.ownerName || null);
+  const reviewTree = rec && rec.ok && rec.record && rec.record.treePath != null
+    ? String(rec.record.treePath).trim()
+    : '';
+  // probeDir 而不是 existsSync：后者把 EACCES 洗成 false，随后按树已拆入队。
+  const treeExists = reviewTree
+    ? treeExistsFromProbe(probeDir(statSync, reviewTree))
+    : undefined;
+  const handoff = decideReworkReviewerHandoff({ rec, treeExists });
+  if (handoff.action === 'fail') fail(handoff.why, { ...plan, postedIssue, postedPr });
+  if (handoff.action === 'enqueue') {
+    await enqueueHandoff(handoff.why);
     return;
   }
 
@@ -2116,6 +2228,9 @@ async function cmdStartMirasim(args) {
     });
     return;
   }
+
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
 
   if (!workdir) {
     try {

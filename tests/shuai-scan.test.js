@@ -39,6 +39,11 @@ describe('#966 GraphQL 带 milestone，推迟档不进推荐', () => {
     assert.match(S.GITHUB_GRAPHQL, /milestone \{ title \}/);
   });
 
+  it('查询字符串问了 createdAt（老单等待时间）', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /createdAt/);
+  });
+
   it('normalize：有 title 就带上，缺字段当没挂档', async () => {
     const S = await LOAD;
     const deferred = S.normalizeGithubGraphql({
@@ -73,6 +78,11 @@ describe('#1147 GraphQL 带 committedDate，normalize 落到 lastCommittedAt', (
     assert.match(S.GITHUB_GRAPHQL, /committedDate/);
   });
 
+  it('查询字符串问了 headRefName（同单多树对精确 PR）', async () => {
+    const S = await LOAD;
+    assert.match(S.GITHUB_GRAPHQL, /headRefName/);
+  });
+
   it('有 committedDate 就带上，缺字段是 null 不当超龄', async () => {
     const S = await LOAD;
     const withDate = S.normalizeGithubGraphql({
@@ -94,6 +104,29 @@ describe('#1147 GraphQL 带 committedDate，normalize 落到 lastCommittedAt', (
     });
     assert.equal(missing.ok, true);
     assert.equal(missing.prs[0].lastCommittedAt, null);
+  });
+
+  it('normalize 把 headRefName 带上，缺字段是 null', async () => {
+    const S = await LOAD;
+    const withName = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{
+          number: 20, title: 'x', updatedAt: '2026-09-12T00:00:00Z', isDraft: false,
+          headRefName: 'dao-9',
+        }] },
+      },
+    });
+    assert.equal(withName.ok, true);
+    assert.equal(withName.prs[0].headRefName, 'dao-9');
+    const missing = S.normalizeGithubGraphql({
+      repository: {
+        issues: { nodes: [] },
+        pullRequests: { nodes: [{ number: 1, title: 'x', updatedAt: '2026-09-12T00:00:00Z', isDraft: false }] },
+      },
+    });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.prs[0].headRefName, null);
   });
 });
 

@@ -15,17 +15,26 @@ import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DISPATCH_DEDUP_WINDOW_MS } from './ledger-query.mjs';
+import { mainCheckoutRoot } from './main-checkout.mjs';
 
 export const DISPATCH_QUEUE_DIR_REL = join('_flow', 'queue');
 export const DISPATCH_ORDER_KIND = 'dao-dispatch-order';
 export const DISPATCH_ORDER_VERSION = 1;
 
-/** 队列目录：env 覆盖优先（测试），缺省 <root>/_flow/queue。 */
-export function dispatchQueueDir({ root, env } = {}) {
-  const override = (env || process.env).DAO_DISPATCH_QUEUE_DIR;
+/**
+ * 队列目录：env 覆盖优先（测试），缺省 **主 clone 根**下的 `_flow/queue`。
+ *
+ * 为什么过 mainCheckoutRoot（2026-09-12 实咬）：原来直接 `join(root, …)`，root 是调用方
+ * **本树**的根。工人在自己 worktree 里跑，派工单就写进那棵树；主树里的读者（看板、盘点）
+ * 看不见。与 review-pending 同一处根因，同一个修法——见 lib/main-checkout.mjs 头部。
+ *
+ * root 仍可显式给，但会再叠一层 git-common-dir 归到主 clone：**一份队列**不该由调用方记得。
+ */
+export function dispatchQueueDir({ root, env, spawn } = {}) {
+  const e = env || process.env;
+  const override = e.DAO_DISPATCH_QUEUE_DIR;
   if (override && String(override).trim()) return resolve(root || process.cwd(), String(override));
-  if (!root) throw new Error('dispatchQueueDir 要 root（或 DAO_DISPATCH_QUEUE_DIR）');
-  return join(root, DISPATCH_QUEUE_DIR_REL);
+  return join(mainCheckoutRoot({ treeRoot: root, env: e, spawn }), DISPATCH_QUEUE_DIR_REL);
 }
 
 function beijingCompact(d) {

@@ -126,11 +126,55 @@ describe('#1024 parseOwnerNameRepo / withGhRepo / assertRepoAuthorized', () => {
 });
 
 describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
-  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain / reviewer-done 都登记 --repo', async () => {
+  it('dispatch / reviewer-create / worker-done / reviewer-attach / review-pending-drain / reviewer-done / pr-sync-labels 都登记 --repo', async () => {
     const S = await S_LOAD;
-    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain', 'reviewer-done']) {
+    for (const v of ['dispatch', 'reviewer-create', 'worker-done', 'reviewer-attach', 'review-pending-drain', 'reviewer-done', 'pr-sync-labels']) {
       assert.equal(S.FLAGS_BY_VERB[v].has('--repo'), true, v);
     }
+  });
+
+  // 2026-09-12 实咬：`--pr` 分支原来写 `return !ticketRepo`（有仓字段就当成别仓票），
+  // 可本仓入队的票**一律**带 repo（cmdWorkerDone 的 enqueueHandoff 写 GitHub owner/name），
+  // 于是 `review-pending-drain --pr 1159` 报「队列共 0 张」——票在队列里，被这一行筛掉了，
+  // 而 --pr 恰恰是 #1104「毒票不许拖死整队」的唯一出口，出口自己把真票挡在外面。
+  it('#1104：--pr 隔离单张时，本仓票（带 repo 字段）必须仍被吃到；只有别仓同号才剔', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-drain-scope-'));
+    const mk = (pr, repo, ts) => fs.writeFileSync(path.join(dir, `${pr}.json`), JSON.stringify({
+      kind: 'dao-review-pending', v: 1, pr: String(pr),
+      head: { name: 'b', oid: '0'.repeat(40) }, workerWorktree: '/tmp/wt',
+      reviewer: 'gpt-5.6-luna', issue: '1', round: 'first', workerModel: 'grok-4.6',
+      soldierDispatch: null, repo, error: null,
+      source: repo ? 'worker-done-handoff' : 'commander-rereview', ts,
+    }));
+    mk(9001, 'thoerwink8/windsurf-dao', '2026-09-12T01:00:00Z');  // 本仓入队票（带 repo）
+    mk(9002, null, '2026-09-12T02:00:00Z');                       // 无仓旧票（指挥官 rereview）
+    mk(9003, 'acme/other-dao', '2026-09-12T03:00:00Z');           // 真别仓票
+    const env = { DAO_REVIEW_PENDING_DIR: dir };
+    const pull = async (args) => {
+      const r = await cliInProc(args, env);
+      return JSON.parse(r.stdout);
+    };
+    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run']);
+    assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
+    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run']);
+    assert.deepEqual(p2.tickets.map(t => t.pr), ['9002'], '无仓旧票不该被 --pr 挡在外面');
+    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run']);
+    assert.deepEqual(p3.tickets.map(t => t.pr), [], '别仓同号票不该被本仓 --pr 顺手拉走');
+    const all = await pull(['review-pending-drain', '--dry-run']);
+    assert.deepEqual(all.tickets.map(t => t.pr), ['9001', '9002'], '不带 --pr 时本仓票全吃，别仓票剔');
+  });
+
+  it('ownerNameFromRemoteUrl 从常见 git remote 推出 owner/name', async () => {
+    const S = await S_LOAD;
+    const https = S.ownerNameFromRemoteUrl('https://github.com/thoerwink8/windsurf-dao.git');
+    assert.equal(https.ok, true);
+    assert.equal(https.ownerName, 'thoerwink8/windsurf-dao');
+    const ssh = S.ownerNameFromRemoteUrl('git@github.com:acme/other-dao.git');
+    assert.equal(ssh.ok, true);
+    assert.equal(ssh.ownerName, 'acme/other-dao');
+    const empty = S.ownerNameFromRemoteUrl('');
+    assert.equal(empty.ok, false);
+    assert.equal(empty.unscanned, true);
   });
 
   it('热路把 --repo 写进派工单；执行体再过闸；审官/交卷/drain 都调 assertCrossRepoOrFail', () => {
