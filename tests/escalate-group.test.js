@@ -427,32 +427,71 @@ describe('gatewayIdemKey：报帅 key 必须过网关 KEY_RE（2026-09-08 实咬
   });
 });
 
-// ── 2026-09-11：幂等键里不许有空白 ────────────────────────────────────────────
-// 实咬：`verdict.target` 的形状是 `PR #1154`（**带空格**），裸拼进 --idempotency-key
-// 被网关拒（missing_idempotency）。于是「追加对象进已有单」这条路一直没通——
-// 第一次被走到，是我新加的 reviewer-label-missing 触发的。
-// 键只需要稳定唯一、不需要好看；正文里的对象名才用可读原文。
-describe('报帅幂等键不含空白（网关硬规则）', () => {
-  const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
-  const CMD = import(toUrl(path.join(__dirname, '..', 'scripts', 'commander.mjs')));
+// ── 2026-09-11 / 审官 PR #1143 返工：append 整键必须过网关真闸 ────────────────
+// 旧 keySafe 把空白折成 `-`，但正则里留了 `一-鿿`，中文 term 原样进 key。
+// 审官复现：escalateTarget({ term: '终端审官' }) → commander-escalate:append:123:终端审官
+// 真实 validateRequest 返回 missing_idempotency。append×2 改走 gatewayIdemKey 整键闸。
+describe('报帅幂等键过网关真闸（ASCII 1–200，不是「无空白即可」）', () => {
+  const fs = require('node:fs');
   const CMD_SRC = path.join(__dirname, '..', 'scripts', 'commander.mjs');
+  const GW = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'issue-gateway.mjs').replace(/\\/g, '/'));
 
-  it('append 的幂等键对 target 做了净化（不是裸拼）', async () => {
-    const src = require('node:fs').readFileSync(CMD_SRC, 'utf8');
-    // 裸拼的形状：...key', `commander-escalate:append:${X}:${verdict.target}`
-    const rawAppend = /idempotency-key', `commander-escalate:append:[^`]*\$\{verdict\.target\}/.test(src);
-    assert.equal(rawAppend, false, 'verdict.target 是「PR #N」带空格，裸拼会被网关拒');
-    assert.match(src, /function keySafe\(/, '要有净化函数');
-    assert.match(src, /keySafe\(verdict\.target\)/, 'append 要走净化');
+  function commentReq(key) {
+    return {
+      action: 'issue_comment',
+      repo: 'thoerwink8/windsurf-dao',
+      host: 'commander',
+      issue: '123',
+      body: '指挥官：同一原因又命中一个对象。',
+      idempotency_key: key,
+    };
+  }
+
+  it('两条 append 与 open/close 都走 gatewayIdemKey，不再有 keySafe', () => {
+    const src = fs.readFileSync(CMD_SRC, 'utf8');
+    assert.doesNotMatch(src, /function keySafe\(/, 'keySafe 已删：它比真闸松（收汉字）');
+    assert.doesNotMatch(src, /一-鿿/, '汉字白名单回来了 = append 又会 missing_idempotency');
+    assert.match(src, /gatewayIdemKey\('commander-escalate', 'append', booked\.issue, verdict\.target\)/,
+      'judge append 没走整键闸');
+    assert.match(src, /gatewayIdemKey\('commander-escalate', 'append', existing, t\)/,
+      '查重命中后的 append 没走整键闸');
+    assert.match(src, /gatewayIdemKey\('commander-escalate', escalationKeyOf\(keySeed\)\)/,
+      'open 最终 key 没过整键闸');
+    assert.match(src, /gatewayIdemKey\('commander-escalate', 'close', item\.issue, item\.reason\)/,
+      'close 没走整键闸');
   });
 
-  it('keySafe 把空白折掉，且空值有兜底', async () => {
-    const C = await CMD;
-    assert.equal(typeof C.keySafe, 'function', 'keySafe 要导出，测试才能直接钉');
-    for (const s of ['PR #1154', 'issue #815', 'a  b']) {
-      assert.equal(/\s/.test(C.keySafe(s)), false, `${s} 净化后不该有空白`);
-    }
-    assert.equal(C.keySafe(''), 'none');
-    assert.equal(C.keySafe(null), 'none');
+  it('非 ASCII term 原样拼会被真实 validateRequest 拒；gatewayIdemKey 后放行', async () => {
+    const { escalateTarget, gatewayIdemKey } = await LIB;
+    const { validateRequest } = await GW;
+    const target = escalateTarget({ term: '终端审官' });
+    assert.equal(target, '终端审官', '夹具失真：escalateTarget 对本 term 应原样返回');
+
+    // 旧拼法（keySafe 留汉字之后的真实形态），正控：真闸必须拒。
+    const raw = `commander-escalate:append:123:${target}`;
+    const rejected = validateRequest(commentReq(raw));
+    assert.equal(rejected.ok, false, '夹具失真：中文 key 必须被真闸拒，否则本条没有判别力');
+    assert.equal(rejected.stage, 'missing_idempotency');
+
+    const folded = gatewayIdemKey('commander-escalate', 'append', 123, target);
+    const accepted = validateRequest(commentReq(folded));
+    assert.equal(accepted.ok, true, `折后仍被真闸拒：${folded} → ${accepted.error || ''}`);
+    assert.equal(accepted.request.idempotency_key, folded);
+  });
+
+  it('超长 ASCII term 拼进前缀会超 200；整键闸截完仍被真闸放行', async () => {
+    const { gatewayIdemKey } = await LIB;
+    const { validateRequest } = await GW;
+    const longTerm = 'A'.repeat(250);
+    const raw = `commander-escalate:append:123:${longTerm}`;
+    assert.equal(raw.length > 200, true, '夹具失真：本条要的是超长，不是刚好合法');
+    const rejected = validateRequest(commentReq(raw));
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.stage, 'missing_idempotency');
+
+    const folded = gatewayIdemKey('commander-escalate', 'append', 123, longTerm);
+    const accepted = validateRequest(commentReq(folded));
+    assert.equal(accepted.ok, true, `超长折后仍被真闸拒：len=${folded.length} ${accepted.error || ''}`);
+    assert.ok(folded.length <= 200);
   });
 });
