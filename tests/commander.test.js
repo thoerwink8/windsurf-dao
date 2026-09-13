@@ -682,12 +682,21 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
   it('④b PR 没有署名 issue / 署名 issue 没扫到 / 缺标签 / 模型不在选型 —— 四种都不派，理由各自可辨', async () => {
     const { decide } = await CORE;
     const reviews = { scanned: true, byPr: { 701: { reviews: [redReview(RED_FULL, HEAD)] } } };
+    // 2026-09-14 改判（#1240）：无署名 issue **不再报帅**，改成 mergePolicy=manual 照派返工。
+    // 缘由：快路 PR（pr-fast）本来就不收 issue，判红后原先永久停在「报帅」这一步——
+    // 审官的红项躺在 GitHub 上没人接，而报帅单只把「取不到 merge-policy」又说一遍。
+    // 返工的**动作**跟署名 issue 无关；唯一真依赖它的是 merge-policy，取不到就是 manual
+    // （与 mergePolicyUnscanned 同一失败方向：没查成不许退回 auto），判据一步没放宽。
     const noIssue = decide(baseSituation({
-      github: { scanned: true, issues: [], prs: [{ number: 701, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', headRefOid: HEAD, body: '正文里没有署名单号' }] },
+      github: { scanned: true, issues: [], prs: [{ number: 701, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', headRefOid: HEAD, body: '正文里没有署名单号', labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }] }] },
       prReviews: reviews,
     }));
-    assert.equal(byKind(noIssue, 'rework').length, 0);
-    assert.ok(byKind(noIssue, 'escalate').some((a) => a.reason === 'rework-no-issue'));
+    assert.equal(byKind(noIssue, 'escalate').length, 0, '无署名不再是报帅理由');
+    const rw = byKind(noIssue, 'rework');
+    assert.equal(rw.length, 1, '要照派返工');
+    assert.equal(rw[0].mergePolicy, 'manual', '取不到 human_holds 判据 ⇒ 不许放行 auto');
+    assert.equal(rw[0].mergePolicySource, 'no-issue');
+    assert.equal(rw[0].issue, null, '不许编一个 issue 号出来');
 
     const issueGone = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [redPr(701, HEAD, 700)] },

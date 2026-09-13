@@ -1529,7 +1529,9 @@ export function reworkBriefText(action) {
   return [
     `# 返工任务：PR #${action.pr}`,
     '',
-    `- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`,
+    // 署名 issue 可能没有（快路 PR，见 commander-core 的 no-issue 分支）——那就不写这一项，
+    // 不写 `署名 issue #null`（读任务书的人会去找那张单）。
+    ...(action.issue != null ? [`- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`] : [`- 审官红项打在 head ${action.head} 上；**无署名 issue**（快路 PR）`]),
     `- 当前 head 上的判红轮数：${action.redRounds}`,
     '- 下面是审官那条 CHANGES_REQUESTED review 的**正文全文**（未摘要、未改写）：',
     '',
