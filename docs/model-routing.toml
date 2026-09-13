@@ -84,16 +84,19 @@ launch_note = """
 """
 
 [providers.commandcode]
-cli = "command-code"
+cli = "cmdc"
 start = "command"
-launch = "command-code -m {model} --skip-onboarding --yolo"
+launch = "cmdc -m {model} --skip-onboarding --yolo"
 launch_model = "deepseek/deepseek-v4-flash"
 # 2026-08-16 帅实测：命令发出后需补一记空回车才执行（与 pi/grok 同坑），之后约 20 秒内 TUI 就绪。45s = 20s + 余量。
 probe_wait_ms = 45000
 launch_note = """
 Command Code 官方 CLI，本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，Orca agent 识别清单不含它，`worker-start --terminal` 必返回 `agent_unconfigured`；需进 git 的活走 pi/codex/claude 在册通道）。
-模型 id 两段式 `deepseek/deepseek-v4-flash`（-m 直传）。可执行文件是 `cmdc`（`command-code` 也可用），
-不是 `cmd`（撞 Windows cmd.exe）。装机与登录见 NEW-MACHINE.md「command-code 怎么配」节。
+模型 id 两段式 `deepseek/deepseek-v4-flash`（-m 直传）。可执行文件 `cmdc`（npm 包 `command-code` 1.41.0 声明了
+`cmd`/`cmdc`/`command-code`/`commandcode` 四个 bin，但**只建了 `cmd`/`cmdc`/`commandcode` 三个符号链接**，
+`command-code` 这个不带缩写的名字本机没有——2026-09-13 实测 `command -v command-code` 为空，
+用它会 `command not found`。本文件 2026-09-13 前写的就是它，是坏值）。别用 `cmd`（撞 Windows cmd.exe）。
+装机与登录见 NEW-MACHINE.md「command-code 怎么配」节。
 启动坑（2026-08-16 帅实测）：
 - 登录必须真 TTY（Ink raw mode），无 TTY 报 "Raw mode is not supported"；登录只能用户跑 `command-code login`。
 - 自动化一律 `--skip-onboarding`，否则撞 onboarding 会静默挂住（同 #500 型坑）。

@@ -192,6 +192,7 @@ import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
+import { classifyLaunchBinaries } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -670,6 +671,41 @@ function checkRoutingProvidersToml() {
   } else {
     fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；选型只许 docs/model-routing.json；TOML 禁止 [[models]]/[[routes]]/[[bans]]/[[rules]]', problems.slice(0, 10).join(' '));
   }
+}
+
+/** provider 启动模板里的命令词，本机解析得了吗（#2026-09-13 实咬：command-code 写错一个月没人发现）。
+ *  判据实现是纯函数（scripts/lib/launch-binary.mjs），这里只负责喂输入。
+ *  PATH 从本进程取——这是**宿主局部**判据，换台机器结论就不同，所以前提文字里带 PATH。 */
+function checkLaunchBinaries() {
+  if (!existsSync(ROUTING_FILE)) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 不在，本次等于没查', ROUTING_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+  } catch (e) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 解析失败（另有一项会单独报解析错）', String(e.message || e).slice(0, 120));
+    return;
+  }
+  const providers = Object.entries(doc.providers || {})
+    .filter(([, p]) => p && typeof p === 'object')
+    .map(([name, p]) => ({ name, cli: p.cli, launch: p.launch }));
+  const verdict = classifyLaunchBinaries({ providers, pathValue: process.env.PATH || '', homeDir: homedir() });
+  if (verdict.state === 'unknown') {
+    fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
+    return;
+  }
+  if (verdict.state === 'ok') {
+    green(`启动模板命令词 ${verdict.checked} 个 provider 本机都解析得出${verdict.excused.length ? `（${verdict.excused.length} 处走显式落点）` : ''}`);
+    return;
+  }
+  fail(
+    `启动模板 ${verdict.broken.length} 处命令词本机解析不到`,
+    '改 docs/model-routing.toml 的 cli/launch 用本机真有的名字（npm 包声明的 bin 与它建的符号链接不是一回事）；'
+    + '确实不在 PATH 的（如 cursor-agent 走版本目录）在 scripts/lib/launch-binary.mjs 的 OFF_PATH_BIN 里给真实落点',
+    verdict.detail,
+  );
 }
 
 function checkRoutingPolicyJson() {
@@ -1849,6 +1885,7 @@ checkSkillLinksAlive();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkRoutingProvidersToml();
+checkLaunchBinaries();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();
