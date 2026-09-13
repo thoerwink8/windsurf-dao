@@ -8,6 +8,8 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const VERBS = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-verbs.mjs').replace(/\\/g, '/'));
+// #1236：同步建键（fixture 用）。手拼字面量在加判据版本那天会静默失配。
+const { retryKeysSync: RK } = require('../scripts/lib/commander-verbs.mjs');
 const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
 
 const MODELS = [
@@ -214,14 +216,15 @@ describe('add-label 校验：合法放行 / 违规被拒', () => {
 
 describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () => {
   const queued = [{ pr: '905' }];
-  const ledgerOk = { 'pr:905': { at: OLD_AT, tries: 1 } };
+  // #1236：键走同步建键器（形态 + 判据版本），不手拼——手拼的键在加版本那天会静默失配。
+  const ledgerOk = { [RK.drain(905, null)]: { at: OLD_AT, tries: 1 } };
 
   it('合法：票在队列 + 有上次账 + 过了宽限 + 未试满 → 放行，tries 累加', async () => {
     const { validateRetryDrain } = await VERBS;
     const r = validateRetryDrain({ pr: 905, queue: queued, ledger: ledgerOk, nowMs: PAST });
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.tries, 2);
-    assert.equal(r.stateKey, 'pr:905');
+    assert.equal(r.stateKey, RK.drain(905, null));
   });
 
   it('违规：不在队列不许凭空造票', async () => {
@@ -242,7 +245,7 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const { validateRetryDrain } = await VERBS;
     const r = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
-      ledger: { 'pr:905': { at: FRESH_AT, tries: 1 } },
+      ledger: { [RK.drain(905, null)]: { at: FRESH_AT, tries: 1 } },
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'grace');
@@ -252,7 +255,7 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const { validateRetryDrain, MAX_DRAIN_TRIES } = await VERBS;
     const r = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
-      ledger: { 'pr:905': { at: OLD_AT, tries: MAX_DRAIN_TRIES, ok: true } },
+      ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: MAX_DRAIN_TRIES, ok: true } },
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'exhausted');
@@ -264,7 +267,7 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const r = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
       head: 'oldhead', liveHead: 'newhead',
-      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+      ledger: { [RK.drain(905, 'oldhead')]: { at: OLD_AT, tries: 1 } },
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'stale-head');
@@ -272,7 +275,7 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const full = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
       head: 'oldhead', liveHead: 'newhead',
-      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+      ledger: { [RK.drain(905, 'oldhead')]: { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     });
     assert.equal(full.code, 'stale-head', '过期票头必须先于 max-tries 判定');
   });
@@ -282,14 +285,14 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     const same = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
       head: 'samehead', liveHead: 'samehead',
-      ledger: { 'pr:905@samehead': { at: OLD_AT, tries: 1 } },
+      ledger: { [RK.drain(905, 'samehead')]: { at: OLD_AT, tries: 1 } },
     });
     assert.equal(same.ok, true, JSON.stringify(same));
     // 没有 liveHead（老调用方 / PR 不在开放列表）→ 退回旧契约，不因缺参数就拦
     const noLive = validateRetryDrain({
       pr: 905, queue: queued, nowMs: PAST,
       head: 'oldhead',
-      ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+      ledger: { [RK.drain(905, 'oldhead')]: { at: OLD_AT, tries: 1 } },
     });
     assert.equal(noLive.ok, true, JSON.stringify(noLive));
   });
@@ -490,7 +493,8 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           _checks: checks,
           pr: '',
           queue: [{ pr: '' }],
-          ledger: { 'pr:': { at: OLD_AT, tries: 1 } },
+          // #1236：空 pr 的键也走同步建键器（形态 `pr:` + 版本）。手拼会在加版本那天失配。
+          ledger: { [RK.drain('', null)]: { at: OLD_AT, tries: 1 } },
           nowMs: PAST,
         }),
       },
@@ -500,7 +504,7 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           _checks: checks,
           pr: 905,
           queue: [{ pr: '1' }],
-          ledger: { 'pr:905': { at: OLD_AT, tries: 1 } },
+          ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: 1 } },
           nowMs: PAST,
         }),
       },
@@ -522,7 +526,7 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           queue: [{ pr: '905' }],
           head: 'oldhead',
           liveHead: 'newhead',
-          ledger: { 'pr:905@oldhead': { at: OLD_AT, tries: 1 } },
+          ledger: { [RK.drain(905, 'oldhead')]: { at: OLD_AT, tries: 1 } },
           nowMs: PAST,
         }),
       },
@@ -532,7 +536,7 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           _checks: checks,
           pr: 905,
           queue: [{ pr: '905' }],
-          ledger: { 'pr:905': { at: OLD_AT, tries: V.MAX_DRAIN_TRIES } },
+          ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: V.MAX_DRAIN_TRIES } },
           nowMs: PAST,
         }),
       },
@@ -542,7 +546,7 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           _checks: checks,
           pr: 905,
           queue: [{ pr: '905' }],
-          ledger: { 'pr:905': { at: FRESH_AT, tries: 1 } },
+          ledger: { [RK.drain(905, null)]: { at: FRESH_AT, tries: 1 } },
           nowMs: PAST,
         }),
       },
@@ -666,7 +670,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     const r = decide(sit({
       github: { scanned: true, issues: [], prs: [openPr(920)] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
-      drainLedger: { 'pr:920': { at: OLD_AT, tries: 1 } },
+      drainLedger: { [RK.drain(920, null)]: { at: OLD_AT, tries: 1 } },
     }));
     const rd = r.actions.filter((a) => a.kind === 'retry-drain');
     assert.equal(rd.length, 1, JSON.stringify(r.actions));
@@ -679,7 +683,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     const { decide } = await CORE;
     const r = decide(sit({
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
-      drainLedger: { 'pr:920': { at: FRESH_AT, tries: 1 } },
+      drainLedger: { [RK.drain(920, null)]: { at: FRESH_AT, tries: 1 } },
     }));
     assert.equal(r.actions.filter((a) => a.kind === 'retry-drain').length, 0);
     assert.equal(r.actions.filter((a) => a.kind === 'attach-reviewer').length, 0);
@@ -691,7 +695,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     const r = decide(sit({
       github: { scanned: true, issues: [], prs: [openPr(920)] },
       reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
-      drainLedger: { 'pr:920': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+      drainLedger: { [RK.drain(920, null)]: { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     }));
     const marked = r.actions.filter((a) => a.kind === 'mark-exhausted');
     assert.equal(marked.length, 1, JSON.stringify(r.actions));
@@ -714,7 +718,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
       // 六条判定全打在旧 commit 上 → 当前 head 零判定
       prReviews: { scanned: true, byPr: { 1208: { reviews: [{ state: 'CHANGES_REQUESTED', commit_id: 'oldhead', body: '红' }] } } },
       reviewPending: { scanned: true, items: [{ pr: 1208, head: { name: null, oid: 'oldhead' }, reviewer: 'gpt-5.6-luna' }] },
-      drainLedger: { 'pr:1208@oldhead': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+      drainLedger: { [RK.drain(1208, 'oldhead')]: { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     }));
     assert.equal(r.actions.filter((a) => a.kind === 'mark-exhausted').length, 0,
       '票过期不是「试满」——不许拿旧 head 的账认输');
@@ -730,7 +734,7 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
     const r = decide(sit({
       github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
       reviewPending: { scanned: true, items: [{ pr: 920, head: { name: null, oid: 'head920' }, reviewer: 'gpt-5.6-luna' }] },
-      drainLedger: { 'pr:920@head920': { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
+      drainLedger: { [RK.drain(920, 'head920')]: { at: OLD_AT, tries: MAX_DRAIN_TRIES } },
     }));
     const marked = r.actions.filter((a) => a.kind === 'mark-exhausted');
     assert.equal(marked.length, 1, JSON.stringify(r.actions));
@@ -786,13 +790,16 @@ describe('decide 接线：三个动词接住 escalate，不是只测纯函数', 
 });
 
 describe('drainLedgerKey：decide 与 execute 同一门面', () => {
-  it('有 head → pr:<pr>@<head>；拿不到 → 退回 pr:<pr>', async () => {
-    const { drainLedgerKey } = await VERBS;
-    assert.equal(drainLedgerKey(909, 'abc'), 'pr:909@abc');
-    assert.equal(drainLedgerKey('909', '  abc  '), 'pr:909@abc');
-    assert.equal(drainLedgerKey(909, null), 'pr:909');
-    assert.equal(drainLedgerKey(909, ''), 'pr:909');
-    assert.equal(drainLedgerKey(909, '   '), 'pr:909');
+  it('有 head → pr:<pr>@<head>；拿不到 → 退回 pr:<pr>（尾部一律带判据版本 #1236）', async () => {
+    const { drainLedgerKey, epochOf } = await VERBS;
+    // 前缀部分是这套测试原本要钉的；尾部 @e<版本> 由 #1236 加上，两段分开断言，
+    // 这样「前缀形态坏了」和「版本没带上」失败时看得出是哪一半（不写成一条复合断言）。
+    const e = '@e' + epochOf().epoch;
+    assert.equal(drainLedgerKey(909, 'abc'), 'pr:909@abc' + e);
+    assert.equal(drainLedgerKey('909', '  abc  '), 'pr:909@abc' + e, '两头空白要 trim');
+    assert.equal(drainLedgerKey(909, null), 'pr:909' + e);
+    assert.equal(drainLedgerKey(909, ''), 'pr:909' + e, '空串 = 没拿到 head');
+    assert.equal(drainLedgerKey(909, '   '), 'pr:909' + e, '纯空白 = 没拿到 head');
   });
 });
 
@@ -827,8 +834,9 @@ describe('#1125 审官红 1：满载持票不记 tries，宽限期后不绕闸',
       nowIso: OLD_AT,
     });
     assert.equal(r.wrote, true);
-    assert.equal(r.key, 'pr:920@h920');
-    assert.equal(r.ledger['pr:920@h920'].tries, 1);
+    // #1236：键尾带判据版本，与 RK.drain 比而不是与字面量比
+    assert.equal(r.key, RK.drain(920, 'h920'), '形态仍是 pr:<pr>@<head>，只是多了版本尾巴');
+    assert.equal(r.ledger[RK.drain(920, 'h920')].tries, 1);
   });
 
   it('满载不记账 → 宽限期后仍走 attach-reviewer，不产 retry-drain --pr', async () => {
@@ -868,7 +876,7 @@ describe('#1125 审官红 1：满载持票不记 tries，宽限期后不绕闸',
       _checks: { 'held-not-try': false, 'unscanned-not-try': true },
     });
     assert.equal(applied.wrote, true, '闸摘掉就必须记 tries——否则宽限期后绕闸那条没有判别力');
-    assert.equal(applied.ledger['pr:920'].tries, 1);
+    assert.equal(applied.ledger[RK.drain(920, null)].tries, 1);
     const r = decide({
       github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
       orca: { scanned: true, worktrees: [] },

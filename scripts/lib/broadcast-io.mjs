@@ -220,8 +220,7 @@ export function leaveAbandonedChats(state, {
   return { ok: failed.length === 0, state: next, left, failed, missing };
 }
 
-/**
- * 记一条。换日只把昨天的条目留给日报卡去发，本函数不直接发群。
+/** 记一条。换日只把昨天的条目留给日报卡去发，本函数不直接发群。
  * 入队成功就算回执——真送到飞书是日报卡那一次。
  */
 export function recordBroadcast(text, {

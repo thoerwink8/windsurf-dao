@@ -97,6 +97,54 @@ export function reviewerSelectOrder(doc) {
   return rankOrderFromTree(doc, '审官', '审查');
 }
 
+/**
+ * 把「审官顺位」按**执行目录的实际可用性**过一遍（#1233）。
+ *
+ * 病（2026-09-13 实咬）：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位
+ * 是 `gpt-5.6-sol`，而 `docs/execution-profiles.json` 里那条 `availability.status`
+ * 是 `unverified`——`resolveExecutionProfile` 照设计直接拒。于是每张按顺位选了 sol 的
+ * 复审票，drain 必然失败，试满 3 次打「卡死/自动化认输」。**判绿可合的 PR 被推成卡死**，
+ * 而认输评论只写「试了 3 次仍没推动」，真因埋在 drain 的返回值里没人看见。
+ *
+ * 所以这里做两件事，缺一不可：
+ *   1. 顺位里**起不来的剔除**（usable）；
+ *   2. 剔了谁、为什么剔，**原样报出来**（`skipped`）——静默跳过会让下一个「选了必死的
+ *      模型」继续以别的面目复发。
+ *
+ * 底线：全序都起不来时 `usable` 为空且 `allDead`，调用方**必须报「一个能起的审官都没有」**，
+ * 不许退回到「那就用第一个」——那正是今天这场实咬。
+ *
+ * 没读到执行目录时**不剔任何人**（没有依据），但 `unscanned` 要说出来——「没读到」和
+ * 「读到了、全都可用」必须分得开。
+ *
+ * @param {string[]} order 审官顺位（reviewerSelectOrder 的输出）
+ * @param {{profiles?: Array}} opts profiles 来自 loadExecutionProfiles()
+ * @returns {{usable: string[], skipped: Array<{id: string, why: string}>, allDead: boolean, unscanned?: string}}
+ */
+export function usableReviewerOrder(order, { profiles } = {}) {
+  const list = Array.isArray(order) ? order.map(String) : [];
+  const catalog = Array.isArray(profiles) ? profiles : null;
+  if (!catalog) return { usable: list, skipped: [], allDead: false, unscanned: '执行目录没读到（没查成：不据此剔除任何顺位）' };
+  const usable = [];
+  const skipped = [];
+  for (const id of list) {
+    // 与 resolveExecutionProfile 同一套匹配：先按 profile id 精确命中，再看 defaultForModels。
+    // 自己写一份会跟那条闸分叉（分叉那天没人发现——判据只在红的时候才被读）。
+    const matches = catalog.filter((p) => p && (p.id === id || (Array.isArray(p.defaultForModels) && p.defaultForModels.includes(id))));
+    if (matches.length === 0) { skipped.push({ id, why: '执行目录里没有这个模型的 profile' }); continue; }
+    if (matches.length > 1) { skipped.push({ id, why: `执行目录里匹配到 ${matches.length} 条 profile，含糊` }); continue; }
+    const p = matches[0];
+    if (p.enabled !== true) { skipped.push({ id, why: `profile ${p.id} 未启用` }); continue; }
+    const availability = typeof p.availability === 'string' ? p.availability : p.availability?.status;
+    if (availability && availability !== 'available') {
+      skipped.push({ id, why: `profile ${p.id} 的 availability=${availability}` });
+      continue;
+    }
+    usable.push(id);
+  }
+  return { usable, skipped, allDead: usable.length === 0 && list.length > 0 };
+}
+
 function toLegacyModel(entry, roles) {
   const landing = landingOf(entry);
   const legacy = {
