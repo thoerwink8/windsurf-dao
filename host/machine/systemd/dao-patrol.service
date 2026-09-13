@@ -15,11 +15,10 @@
 # User=orca 是硬要求，不是习惯：ExecStart 指的是 /srv/projects/windsurf-dao 里的脚本，
 # 那个仓每个执行体都能写；以 root 解释它，等于给每个能写仓的执行体一条 root 通道
 # （dao-sync 就是这么漏的，tests/unit-privilege.test.js 现在守着这一条）。
-# PATH 必须带 ~/.local/bin，否则回收一次性会话时找不到 orca。
-
 [Unit]
 Description=windsurf-dao mechanism patrol (LLM)
-After=network-online.target orca-serve.service
+OnFailure=dao-patrol-failure.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -27,6 +26,12 @@ Type=oneshot
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+# #792：巡逻开单走 issue-gateway，不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# REQUIRES_GIT_PUSH=1：这个单元要写远端 git（见脚本里的 git push）。
+# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 git 的凭据助手
+# `gh auth git-credential` 找不到 hosts.yml，推送永远失败。
+# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs。
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/commander.mjs patrol
 # 起一次性会话本身要等（起会话 3 分钟预算 + 送指针 1 分钟），默认 90 秒会把正常的一轮掐死。
 TimeoutStartSec=600

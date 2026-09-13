@@ -1,0 +1,69 @@
+{
+  "issue": 1174,
+  "taskId": "1174-T1-devin-worktree-commit",
+  "sessionKey": "acp:5697238a-9c11-4cb9-8676-80683ad1034f",
+  "observedAt": "2026-09-09T18:18:18.389Z",
+  "backend": "acp",
+  "agent": "devin",
+  "model": "swe-1-7-medium",
+  "workdir": "/tmp/dao-acp-e2e/devin-tree",
+  "phase": "done",
+  "stopReason": "end_turn",
+  "toolCalls": [
+    {
+      "kind": "read",
+      "status": "completed",
+      "title": "Read file"
+    },
+    {
+      "kind": "edit",
+      "status": "completed",
+      "title": "Edit file"
+    },
+    {
+      "kind": "execute",
+      "status": "completed",
+      "title": "Ran git"
+    }
+  ],
+  "interactions": [
+    {
+      "method": "session/request_permission",
+      "status": "answered",
+      "answerSource": "worktree_scope",
+      "permission": "worktree_scoped",
+      "toolKind": "execute",
+      "segments": [
+        [
+          "git",
+          "add",
+          "notes.txt"
+        ],
+        [
+          "git",
+          "commit",
+          "-m",
+          "gamma-change"
+        ],
+        [
+          "git",
+          "rev-parse",
+          "HEAD"
+        ]
+      ]
+    }
+  ],
+  "cleanup": {
+    "verified": true,
+    "survivors": []
+  },
+  "manualAnswers": 0,
+  "artifact": {
+    "commit": "2219daf5f25473de521b122c22462ad456d95946",
+    "subject": "gamma-change",
+    "diffstat": "notes.txt | 1 +",
+    "worktreeCleanAfter": true
+  },
+  "processSurvivors": [],
+  "note": "kind absent on the permission request; resolved from the tracked session/update toolCall. Command read from _meta cognition.ai/editableCommand."
+}

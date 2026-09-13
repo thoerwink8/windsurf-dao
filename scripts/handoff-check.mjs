@@ -10,10 +10,12 @@
 // 一件都不核本树自洽——那是 dao-check 和单元测试的活，重复做只会多花时间不多抓一条。
 //
 // 退出码三态（照 scripts/server-check.mjs 的惯例，不许把没查成当通过）：
-//   0 = 四件都查过且通    1 = 有真红（查成了，结果不对）    2 = 有没查成（判不了 ⇒ 不放行）
+//   0 = 本档计入判定的条目都查过且通    1 = 有真红    2 = 有没查成（判不了 ⇒ 不放行）
+// #1117：交卷档（默认）① 只报不判；合并档（--gate merge）四条全判。
 //
 // 用法：
-//   node scripts/handoff-check.mjs                    交卷前在自己的树里跑
+//   node scripts/handoff-check.mjs                    交卷前在自己的树里跑（默认 --gate handoff）
+//   node scripts/handoff-check.mjs --gate merge       合并前跑（① 计入判定）
 //   node scripts/handoff-check.mjs --json             一行 JSON（给脚本读）
 //   node scripts/handoff-check.mjs --no-fetch         不联网（① 最多只能判到「没查成」）
 //   node scripts/handoff-check.mjs --body-file <路径>  拿本地文件当 PR 正文核删除说明
@@ -34,6 +36,7 @@ import {
   OK, RED, UNKNOWN,
   judgeBaseFreshness, judgeReverseDeletions, judgePointers, judgeHandoffBaseline,
   extractRepoPointers, verdictFromItems, COVERAGE_GAPS,
+  GATES, DEFAULT_GATE, partitionByGate,
 } from './lib/handoff-check.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -215,7 +218,7 @@ function loadPrBody(opts, facts) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { repo: process.cwd(), noFetch: false, json: false, verbose: false };
+  const opts = { repo: process.cwd(), noFetch: false, json: false, verbose: false, gate: DEFAULT_GATE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
@@ -225,6 +228,7 @@ function parseArgs(argv) {
     else if (a === '--head') opts.head = argv[++i];
     else if (a === '--base') opts.base = argv[++i];
     else if (a === '--body-file') opts.bodyFile = argv[++i];
+    else if (a === '--gate') opts.gate = argv[++i];
     else if (a === '--help' || a === '-h') opts.help = true;
     else { opts.badArg = a; }
   }
@@ -233,12 +237,22 @@ function parseArgs(argv) {
 
 const USAGE = `用法：node scripts/handoff-check.mjs [--json] [--no-fetch] [--body-file <路径>]
                                    [--repo <路径>] [--head <ref>] [--base <ref>]
-退出码：0 通 / 1 真红（不得交卷）/ 2 没查成（判不了，同样不得交卷）`;
+                                   [--gate handoff|merge]
+档位（#1117）：
+  handoff（默认）交卷闸：判 ②④⑤。① 基底新旧只报不判——审查期间 master 会动，
+                        钉在交卷时刻是结构性活锁，不是代码问题。
+  merge          合并闸：四条全判。基底新旧只在合并那一刻才真正要紧。
+退出码：0 通 / 1 真红（不得放行）/ 2 没查成（判不了，同样不得放行）`;
 
 export function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
   if (opts.help) { console.log(USAGE); return 0; }
   if (opts.badArg) { console.error(`认不得的参数：${opts.badArg}\n${USAGE}`); return 2; }
+  if (!GATES[opts.gate]) {
+    // 档位写错不许退回默认档：那会把「合并闸」悄悄降成「交卷闸」，红项直接消失。
+    console.error(`认不得的档位 --gate ${opts.gate}（只有 ${Object.keys(GATES).join(' / ')}）\n${USAGE}`);
+    return 2;
+  }
 
   const top = run('git', ['-C', opts.repo, 'rev-parse', '--show-toplevel']);
   if (!top.probed || top.code !== 0) {
@@ -264,7 +278,9 @@ export function main(argv = process.argv.slice(2)) {
     items.push({ id: '⑤', name: '自证基线＝审官所见', ...judgeHandoffBaseline(facts.baseline) });
   }
 
-  const v = verdictFromItems(items);
+  const split = partitionByGate(items, opts.gate);
+  const v = verdictFromItems(split.judged);
+  const brief = (i) => ({ id: i.id, name: i.name, state: i.state, detail: i.detail });
   const payload = {
     at: new Date().toISOString(),
     repo: facts.repo,
@@ -272,23 +288,33 @@ export function main(argv = process.argv.slice(2)) {
     base: facts.baseRef,
     head: facts.headSha,
     fetched: facts.fetched,
+    gate: split.gate,
     verdict: v.verdict,
     exit: v.exit,
     ok: v.ok, red: v.red, unknown: v.unknown,
-    items: items.map((i) => ({ id: i.id, name: i.name, state: i.state, detail: i.detail })),
+    items: split.judged.map(brief),
+    // 只报不判的那几条另放一处，且**带着各自的 state**：读的人要能分清
+    // 「这条查过、结论是红、但这个档不判它」和「这条压根没查」。
+    advisory: split.advisory.map(brief),
     coverageGaps: COVERAGE_GAPS,
   };
 
   if (opts.json) {
     console.log(JSON.stringify(payload));
   } else {
-    console.log(`交卷闸：${payload.branch} vs ${payload.base}${facts.fetched ? '（已拉远端）' : '（未拉远端）'}`);
-    for (const i of items) {
-      const mark = i.state === OK ? '✓' : i.state === RED ? 'X' : '?';
-      console.log(`  ${mark}  ${i.id} ${i.name} —— ${i.detail}`);
+    const mark = (i) => (i.state === OK ? '✓' : i.state === RED ? 'X' : '?');
+    console.log(`${split.label}闸：${payload.branch} vs ${payload.base}${facts.fetched ? '（已拉远端）' : '（未拉远端）'}`);
+    for (const i of split.judged) console.log(`  ${mark(i)}  ${i.id} ${i.name} —— ${i.detail}`);
+    if (split.advisory.length) {
+      console.log('\n合并前还要过的（查了，但不进本次判定）：');
+      for (const i of split.advisory) console.log(`  ${mark(i)}  ${i.id} ${i.name} —— ${i.detail}`);
+      console.log(`  ↑ 这几条归合并闸：\`node scripts/handoff-check.mjs --gate merge\`。`
+        + `\n    它们红不挡交卷，也不该被审官拿来判红——基底新旧在审查期间必然会过期（#1117）。`);
     }
+    const pass = split.gate === 'merge' ? '可以合并' : '可以交卷';
+    const fail = split.gate === 'merge' ? '不得合并' : '不得交卷';
     console.log(`\n判定：${v.verdict}（${v.ok} 通 / ${v.red} 红 / ${v.unknown} 没查成）`
-      + `${v.exit === 0 ? '——可以交卷' : '——不得交卷（红=改完重跑；没查成=先让它查得成）'}`);
+      + `${v.exit === 0 ? `——${pass}` : `——${fail}（红=改完重跑；没查成=先让它查得成）`}`);
     console.log('\n本闸盖不到什么（跑绿≠契约没问题）：');
     for (const g of COVERAGE_GAPS) console.log(`  · ${g}`);
   }

@@ -33,19 +33,22 @@ function baseSituation(over = {}) {
 const byKind = (r, k) => r.actions.filter((a) => a.kind === k);
 const labels = (...names) => names.map((name) => ({ name }));
 
-describe('机制一：框架单不进自动派单队列（走快马）', () => {
-  it('type/体系 + 已消歧 + model|reviewer 标齐 → 0 dispatch + 1 回流（说人话）', async () => {
+describe('机制一：框架单走无人值守快马', () => {
+  it('type/体系 + 已消歧 + model|reviewer 标齐 → 自动派工且手动合门', async () => {
     const { decide } = await CORE;
     const { plainViolations } = await PLAIN;
     const issue = { number: 876, title: '两个指挥官机制', labels: labels('已消歧', 'model/claude-opus', 'reviewer/gpt-5.6-luna', 'type/体系') };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
-    assert.equal(byKind(r, 'dispatch').length, 0, '框架单绝不进自动派单队列');
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1, '框架单允许无人值守执行');
+    assert.equal(d[0].issue, 876);
+    assert.equal(d[0].mergePolicy, 'manual', '框架单必须保留人工合门');
+    assert.match(d[0].mergeReason, /体系/);
     const hub = byKind(r, 'notify-hub');
-    assert.equal(hub.length, 1, '要回流一条说明走快马');
-    assert.equal(hub[0].moment, 'decide');
+    assert.equal(hub.length, 1, '要回流一条说明已自动派工');
+    assert.equal(hub[0].moment, 'dispatched');
     assert.equal(hub[0].issue, 876);
-    assert.match(hub[0].subject, /快马/);
-    assert.match(hub[0].subject, /不进派单队列/);
+    assert.match(hub[0].subject, /已自动派单/);
     assert.deepEqual(plainViolations(hub[0].subject), [], hub[0].subject);
     assert.equal(byKind(r, 'escalate').length, 0, '框架单不是异常，不报帅');
   });
@@ -59,12 +62,13 @@ describe('机制一：框架单不进自动派单队列（走快马）', () => {
     assert.equal(d[0].issue, 877);
   });
 
-  it('框架单缺 model|reviewer 也不报「补标签」（框架单本就不需要）', async () => {
+  it('框架单缺 model|reviewer → 不猜模型，回流说明无法无人值守', async () => {
     const { decide } = await CORE;
     const issue = { number: 878, title: '另一个机制', labels: labels('已消歧', 'type/体系') };
     const r = decide(baseSituation({ github: { scanned: true, issues: [issue], prs: [] } }));
     assert.equal(byKind(r, 'dispatch').length, 0);
     assert.equal(byKind(r, 'escalate').filter((a) => a.reason === 'missing-labels').length, 0);
+    assert.match(byKind(r, 'notify-hub')[0].subject, /缺 model\/reviewer/);
   });
 });
 
@@ -144,7 +148,7 @@ describe('缺标签三档（堵住自我繁殖，同时把瞄准派工车道的�
     assert.match(e[0].why, /model\//, '要点名缺的是 model/');
   });
 
-  it('半标态 + type/体系 → 仍走快马，不报补标签（框架豁免在缺标签判据之前）', async () => {
+  it('半标态 + type/体系 → 不猜缺失标签，说明无法无人值守', async () => {
     const { decide } = await CORE;
     // 现实原型：#888（model/claude-opus-5，无 reviewer/，带 type/体系）——它是当前唯一的半标态开单，
     // 但被框架豁免先接走，两条判据谁在前决定了它的去向，这里把顺序钉死。
@@ -154,7 +158,7 @@ describe('缺标签三档（堵住自我繁殖，同时把瞄准派工车道的�
     assert.equal(byKind(r, 'dispatch').length, 0);
     const hub = byKind(r, 'notify-hub');
     assert.equal(hub.length, 1);
-    assert.match(hub[0].subject, /快马/);
+    assert.match(hub[0].subject, /缺 model\/reviewer/);
   });
 
   it('「没查成」与「查过没事」分得开：github 没查成 → fail-visible 的 unscanned，不是静默', async () => {

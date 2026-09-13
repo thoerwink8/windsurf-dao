@@ -44,16 +44,20 @@ describe('systemd 单元的权限边界', () => {
   });
 
   it('sudoers 白名单必须写死命令，不带通配——通配等于没收窄', () => {
-    const f = path.join(__dirname, '..', 'host', 'machine', 'sudoers.d', 'dao-sync');
-    assert.ok(fs.existsSync(f), 'sudoers 白名单文件不在——dao-sync 重启机器人那一步会静默失败');
-    const rules = fs.readFileSync(f, 'utf8').split(/\r?\n/)
-      .filter((l) => l.trim() && !l.trim().startsWith('#'));
-    assert.ok(rules.length > 0, '白名单里一条规则都没有——扫出 0 条不算通过');
-    for (const r of rules) {
-      assert.ok(!/[*?]/.test(r), `规则里有通配符，等于没收窄：${r}`);
-      assert.match(r, /NOPASSWD:\s*\/[^\s]+/, `规则要给绝对路径的命令：${r}`);
-      assert.ok(!/\/home\//.test(r),
-        `白名单不许指向家目录里的东西——那正是可写的地方，收窄就白收了：${r}`);
+    const dir = path.join(__dirname, '..', 'host', 'machine', 'sudoers.d');
+    const files = fs.readdirSync(dir).filter((f) => f && !f.startsWith('.'));
+    assert.ok(files.length > 0, '一个 sudoers 白名单都没扫到，本闸已经不在查任何东西');
+    assert.ok(files.includes('dao-sync'), 'dao-sync 白名单丢了——重启机器人那一步会静默失败');
+    for (const name of files) {
+      const rules = fs.readFileSync(path.join(dir, name), 'utf8').split(/\r?\n/)
+        .filter((l) => l.trim() && !l.trim().startsWith('#'));
+      assert.ok(rules.length > 0, `${name} 里一条规则都没有——扫出 0 条不算通过`);
+      for (const r of rules) {
+        assert.ok(!/[*?]/.test(r), `${name} 规则里有通配符，等于没收窄：${r}`);
+        assert.match(r, /NOPASSWD:\s*\/[^\s]+/, `${name} 规则要给绝对路径的命令：${r}`);
+        assert.ok(!/\/home\//.test(r),
+          `${name} 白名单不许指向家目录里的东西——那正是可写的地方，收窄就白收了：${r}`);
+      }
     }
   });
 });

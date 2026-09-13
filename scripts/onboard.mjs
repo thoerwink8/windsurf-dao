@@ -6,20 +6,21 @@
 //
 // 修什么 / 绝不修什么：
 //   global-missing/drift → 备份现文件为 CLAUDE.md.bak-<ts>，再从 docs/global-CLAUDE.md 覆盖
-//   skills-missing/dangling → 重建 Junction（node 原生 'junction'，无需管理员）
+//   skills-missing/dangling/partial/elsewhere → 合并式接回（#1146：仓内逐个链，外来目录保留，不删 mirasim 自有 skill）
 //   memory-unlinked/broken  → 只在能找到合法 clone（origin 对得上）且落点无内容时才接；
 //                             落点是有内容的普通目录 = 拒绝并指路人工并回
 //                             （memory-relink-needs-content-diff 教训：方向判反=静默丢记忆）
 //   pi-ext-missing/drift    → 把 host/pi-extensions 里 go-fallback 两个文件重拷到 ~/.pi/agent/extensions
 //                             （只在装了 pi 的机器上；本机那份若被手改过，先备份 .bak-<ts>）
-//   skills-not-link / skills-elsewhere / creds-missing / mcp-slow-boot / statusline-dangling → 永远只报不修
+//   skills-not-link / creds-missing / mcp-slow-boot / statusline-dangling → 永远只报不修
 //
 // exit 0 = 修完复查全绿；exit 1 = 还有剩（含 dry-run 查出问题）。
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, rmdirSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, rmdirSync, readdirSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { checkOnboard, repoRootOfThisFile, ONBOARD_REPORT_ONLY, PI_EXTENSIONS } from './lib/onboard-check.mjs';
 import { checkMemoryLink, defaultHome, encodeProjectDir, originUrlFromConfig, repoSlugFromUrl, MEMORY_REPO_SLUG } from './lib/dao-memory-link-check.mjs';
+import { healSkillsMount } from './lib/skills-mount.mjs';
 
 const DRY = process.argv.includes('--dry-run');
 const root = repoRootOfThisFile();
@@ -39,22 +40,12 @@ function fixGlobal() {
 }
 
 function fixSkills() {
-  // 现行部署形态（NEW-MACHINE §11）：~/.claude/skills 是真目录，里面每课一个链接。
-  // 幂等：缺的补、悬空的重建；真目录/真文件（人工拷贝）不动，只在检查里报 skills-not-link。
-  const dirPath = join(home, ".claude", "skills");
-  const src = join(root, "host", "skills");
-  act(`补齐 skills 逐个链接 ${dirPath} ← ${src}`, () => {
-    mkdirSync(dirPath, { recursive: true });
-    for (const name of readdirSync(src)) {
-      const l = join(dirPath, name);
-      let st = null;
-      try { st = lstatSync(l); } catch { /* 缺 → 补 */ }
-      if (!st) { symlinkSync(join(src, name), l, "junction"); continue; }
-      if (st.isSymbolicLink()) {
-        try { realpathSync(l); } catch { unlinkSync(l); symlinkSync(join(src, name), l, "junction"); }
-      }
-      // 真目录/真文件：不动
-    }
+  // #1146：合并式接回。整目录链接（mirasim 劫走）卸掉后建成真目录 + 逐个仓内链；
+  // 被劫目标里的外来条目链回新目录，原目录不删。缺链/悬空同样走这一份。
+  act(`合并式接回 ~/.claude/skills ← host/skills（外来保留）`, () => {
+    const r = healSkillsMount({ root, home, dryRun: false, say: (s) => say('    ' + s) });
+    if (r.unscanned) throw new Error(`没查成：${r.reason}`);
+    if (!r.ok) throw new Error(r.error || '接回失败');
   });
 }
 
@@ -108,7 +99,7 @@ for (const p of before.problems) say(`  - ${p.id}: ${p.msg}`);
 
 for (const p of before.problems) {
   if (p.id === 'global-missing' || p.id === 'global-drift') fixGlobal();
-  else if (p.id === 'skills-missing' || p.id === 'skills-partial' || p.id === 'skills-dangling') fixSkills();
+  else if (p.id === 'skills-missing' || p.id === 'skills-partial' || p.id === 'skills-dangling' || p.id === 'skills-elsewhere') fixSkills();
   else if (p.id === 'memory-unlinked' || p.id === 'memory-broken') fixMemory(p.id);
   else if (p.id === 'pi-ext-missing' || p.id === 'pi-ext-drift') fixPiExt();
   else say(`  [只报不修] ${p.id}: ${p.msg}`);

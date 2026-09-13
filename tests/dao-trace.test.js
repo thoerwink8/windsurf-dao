@@ -69,14 +69,11 @@ describe('dao-trace（#823）', () => {
 
   it('dispatch / start / reviewer-create / reviewer-attach 起 pi 传 daoTrace', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
-    assert.match(src, /function launchAgentInWorktree\(\{[^}]*daoTrace/);
-    const n = (src.match(/daoTraceFor\(/g) || []).length;
-    assert.ok(n >= 5, `daoTraceFor 调用应覆盖 start/dispatch/batch/create/attach，实际 ${n}`);
-    const create = src.match(/function cmdReviewerCreate\b[\s\S]*?\nfunction cmdReviewerAttach\b/)?.[0] || '';
-    const attach = src.match(/function cmdReviewerAttach\b[\s\S]*?\nfunction cmd/)?.[0] || '';
-    assert.match(create, /daoTraceFor\(/);
-    assert.match(attach, /daoTraceFor\(/);
-    assert.doesNotMatch(create, /forceCommand/);
-    assert.doesNotMatch(attach, /forceCommand/);
+    assert.match(src, /function daoTraceFor\(/);
+    const start = src.match(/async function cmdStart\b[\s\S]*?\nfunction main\b/)?.[0] || '';
+    assert.match(start, /daoTraceFor\(/);
+    assert.match(start, /applyDaoTraceToLaunch\(/);
+    const mira = src.slice(src.indexOf('async function cmdDispatchMirasim('), src.indexOf('async function cmdDispatch('));
+    assert.doesNotMatch(mira, /daoTraceFor\(/);
   });
 });

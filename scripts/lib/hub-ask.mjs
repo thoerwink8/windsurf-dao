@@ -7,6 +7,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { buildHubCard } from './feishu-hub-card.mjs';
+import { cardToPlainText } from './feishu-card-text.mjs';
 import { doorOf, TWO_WAY_DEADLINE_MS } from './daipai.mjs';
 
 function str(v) {
@@ -116,7 +117,19 @@ export function sendCardViaLarkCli({ chatId, card, spawn = spawnSync } = {}) {
     '--format', 'json',
     '-q', '.data.message_id',
   ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-  return classifySendResult(r);
+  const classified = classifySendResult(r);
+  if (classified.ok) return classified;
+  const fallback = spawn('lark-cli', [
+    'im', '+messages-send',
+    '--as', 'bot',
+    '--chat-id', hub,
+    '--text', cardToPlainText(card),
+    '--format', 'json',
+    '-q', '.data.message_id',
+  ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  const textResult = classifySendResult(fallback);
+  if (textResult.ok) return { ...textResult, degraded: true, error: `${classified.error}；已降级为纯文本` };
+  return { ...classified, error: `${classified.error}；纯文本降级也失败：${textResult.error || '未知错误'}` };
 }
 
 /**

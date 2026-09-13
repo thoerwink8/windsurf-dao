@@ -2,7 +2,7 @@
 //
 // 用户 2026-09-06 拍板：上限不许是个填的数字，不许 AI 驱动。
 // 每轮派工前算一次「还能不能再收一个」，输入只允许可测量的机器信号：
-//   主：归一化负载（loadavg1 / nproc）
+//   主：**真 CPU 占用率**（/proc/stat 两帧差；见下面为什么不用 loadavg）
 //   副：MemAvailable − 在途数 × 单工人实测占用 > 安全余量
 //   两条都过才收；任一读不出来 ⇒ fail-close 收紧（读不到 ≠ 可以随便派）。
 //
@@ -11,11 +11,28 @@
 //
 // 垫片 maxDispatchPerRound 本单退役：策略里不再有「派几个」可填常量。
 // 安全余量、负载阈值是「留多少余量」，不是「派几个」。
+//
+// ── 为什么主判据从 loadavg 换成 CPU 占用率（2026-09-10 实咬） ──────────────────
+//
+// 这台机的负载形态是**等模型回话**：10 个 agent 会话各自等上游 API 返回，进程绝大多数
+// 时间睡在 IO 上。loadavg 把「可运行 + 不可中断等待」一起算，于是同一时刻：
+//   归一化负载 load1/nproc = 0.57–1.50（≥0.85 判「机器已满」）
+//   真 CPU 占用（/proc/stat 两帧差）= 0.24（空闲 76%），内存余 9G
+// 两者差两倍以上，而 loadavg 那一路把闸关死：收尾动作（叫审官/返工/解冲突）一个都派不出，
+// 25 张 PR 一条判定都没有、机器满载空转——**判据量的不是它想量的东西**。
+//
+// CPU 占用率是**非单调**的：它答「这段窗口里 CPU 有多忙」，正是「再加一个人会不会变慢」
+// 要问的那个问题。等 IO 的进程不再被算成压力（它们不吃 CPU，加人不会更慢）。
+// loadavg 留着**只报趋势**（诊断用，进 why 文案），不再当闸——判例 memory `nested-check-budget-*`
+// 与仓规「闸只拦确定性的量」同源：测不准的量不该拿去拦动作。
 
 /** 安全余量 / 负载阈值——「留多少余量」，不是「派几个」。 */
 export const ADMISSION_DEFAULTS = {
-  // 实测 2026-09-06：12 个工人把 6 核打到 loadavg 6.29（归一化 ≈ 1.05）、空闲 10%。
-  // 阈值 0.85 = 还没到超订就停收，避免再加人让所有人变慢。
+  // 主闸：真 CPU 占用率到这条线就停收（2026-09-10 起，取代 loadavg）。
+  // 取值 0.85 = 与旧负载阈值同一个「留 15% 余量」的意思，但量的是 CPU 真忙不忙。
+  // 为什么不用 loadavg：见文件头注。
+  cpuThreshold: 0.85,
+  // **不再是闸**，只用来在 why 文案里报趋势（读数与 CPU 占用脱节时，人从这行看得出来）。
   loadThreshold: 0.85,
   // 内存是副条件。12 个工人只吃 ~2.2G、还剩 7.9G；留 1.5G 防 OOM / 页面缓存抖动。
   memReserveMb: 1536,
@@ -25,6 +42,9 @@ export const ADMISSION_DEFAULTS = {
   minSamplePairs: 4,
   // 取近 N 对增量的中位数。
   sampleWindow: 12,
+  // #1147 draft 收口泵：无会话 draft 超多久无提交才派短会话；同一张最多泵几次。
+  stalledDraftHours: 24,
+  stalledDraftMaxPumps: 2,
 };
 
 /** 旧键提示文案。读到 maxDispatchPerRound 时打这条，且不按它限流。 */
@@ -43,11 +63,14 @@ export function resolveAdmissionPolicy(raw) {
     return v;
   };
   return {
+    cpuThreshold: n('cpuThreshold', 0.1, 1, ADMISSION_DEFAULTS.cpuThreshold),
     loadThreshold: n('loadThreshold', 0.1, 2, ADMISSION_DEFAULTS.loadThreshold),
     memReserveMb: n('memReserveMb', 256, 16384, ADMISSION_DEFAULTS.memReserveMb),
     conservativeWorkerMb: n('conservativeWorkerMb', 64, 4096, ADMISSION_DEFAULTS.conservativeWorkerMb),
     minSamplePairs: Math.round(n('minSamplePairs', 1, 32, ADMISSION_DEFAULTS.minSamplePairs)),
     sampleWindow: Math.round(n('sampleWindow', 2, 64, ADMISSION_DEFAULTS.sampleWindow)),
+    stalledDraftHours: n('stalledDraftHours', 1, 168, ADMISSION_DEFAULTS.stalledDraftHours),
+    stalledDraftMaxPumps: Math.round(n('stalledDraftMaxPumps', 1, 5, ADMISSION_DEFAULTS.stalledDraftMaxPumps)),
     requireModelInRouting: typeof src.requireModelInRouting === 'boolean'
       ? src.requireModelInRouting
       : true,
@@ -73,8 +96,52 @@ export function parseMeminfo(text) {
 }
 
 /**
+ * 解析 /proc/stat 的两帧 CPU 计数，算这段窗口的**真占用率**（1 − 空闲/总）。
+ *
+ * 为什么不用 loadavg 当闸：见文件头注（2026-09-10 实咬，IO 型负载下差两倍以上）。
+ * CPU 占用率是这段窗口「CPU 有多忙」的直接测量，正是「再加一个人会不会更慢」要问的问题。
+ *
+ * 两帧间隔要有意义：要求计数确实增长（`total` 增量为正）。同一帧喂两遍、或读盘失败
+ * 拿回空串 → unscanned，调用方 fail-close（读不到 ≠ 可以随便派）。
+ *
+ * @param {string} a 先一帧 /proc/stat 文本
+ * @param {string} b 后一帧
+ */
+export function parseCpuBusy(a, b) {
+  const grab = (text, who) => {
+    if (typeof text !== 'string' || !text.trim()) {
+      return { ok: false, error: `${who} 帧读不出来（空）` };
+    }
+    const line = text.split(/\r?\n/).find((l) => /^cpu\s/.test(l));
+    if (!line) return { ok: false, error: `${who} 帧没有 cpu 行（/proc/stat 形状变了）` };
+    const nums = line.trim().split(/\s+/).slice(1).map(Number);
+    if (nums.length < 5 || !nums.every(Number.isFinite)) {
+      return { ok: false, error: `${who} 帧 cpu 字段不是数字（形状变了）` };
+    }
+    // user nice system idle iowait irq softirq steal …；前四个是必有的，其余按有算。
+    const total = nums.reduce((x, y) => x + y, 0);
+    const idle = (nums[3] || 0) + (nums[4] || 0); // idle + iowait
+    return { ok: true, total, idle };
+  };
+  const x = grab(a, '前一');
+  if (!x.ok) return { ok: false, unscanned: true, error: x.error };
+  const y = grab(b, '后一');
+  if (!y.ok) return { ok: false, unscanned: true, error: y.error };
+  const dTotal = y.total - x.total;
+  const dIdle = y.idle - x.idle;
+  if (!(dTotal > 0) || dIdle < 0) {
+    return { ok: false, unscanned: true, error: '两帧之间 CPU 计数没有推进（同一次读的？）——没查成' };
+  }
+  const busy = Math.min(1, Math.max(0, (dTotal - dIdle) / dTotal));
+  return { ok: true, busy };
+}
+
+/**
  * 解析 /proc/loadavg 文本 + nproc。归一化负载 = load1 / nproc。
  * 任一侧读不到 → unscanned。
+ *
+ * **只在 why 文案与样本里报趋势，不再当闸**（2026-09-10 起主判据是真 CPU 占用率，
+ * 见文件头注：IO 型负载下 loadavg 会把等模型回话的进程算成压力，差两倍以上）。
  */
 export function parseLoadavg(text, nproc) {
   if (typeof text !== 'string' || !text.trim()) {
@@ -163,6 +230,8 @@ export function estimateWorkerMb(samples, { minPairs = ADMISSION_DEFAULTS.minSam
  */
 export function admitCapacity({
   meminfoText,
+  statBeforeText,
+  statAfterText,
   loadavgText,
   nproc,
   inFlight,
@@ -176,9 +245,12 @@ export function admitCapacity({
   if (!mem.ok) {
     return { ok: false, unscanned: true, slots: 0, why: mem.error, renamedKeyHints: hints };
   }
+  // 趋势量：loadavg 降级为诊断（不再当闸）。
   const load = parseLoadavg(loadavgText, nproc);
-  if (!load.ok) {
-    return { ok: false, unscanned: true, slots: 0, why: load.error, renamedKeyHints: hints };
+  // 主闸：真 CPU 占用率。读不到两帧 → fail-close（读不到 ≠ 可以随便派）。
+  const cpu = parseCpuBusy(statBeforeText, statAfterText);
+  if (!cpu.ok) {
+    return { ok: false, unscanned: true, slots: 0, why: `CPU 占用率没查成：${cpu.error}`, renamedKeyHints: hints };
   }
   if (!Number.isInteger(inFlight) || inFlight < 0) {
     return { ok: false, unscanned: true, slots: 0, why: '在途数没查成，不派', renamedKeyHints: hints };
@@ -191,13 +263,15 @@ export function admitCapacity({
   const sampleUnscanned = !est.ok;
   const workerMb = est.ok ? est.workerMb : pol.conservativeWorkerMb;
 
-  // 主闸：归一化负载已到阈值 → 一张都不收（再加人只会让所有人变慢）。
-  if (load.loadNorm >= pol.loadThreshold) {
+  // 主闸：CPU 占用率已到阈值 → 一张都不收（再加人只会让所有人变慢）。
+  if (cpu.busy >= pol.cpuThreshold) {
     return {
       ok: true,
       slots: 0,
-      why: `归一化负载 ${load.loadNorm.toFixed(2)} ≥ 阈值 ${pol.loadThreshold}，机器已满，不收`,
-      loadNorm: load.loadNorm,
+      why: `CPU 占用率 ${(cpu.busy * 100).toFixed(0)}% ≥ 阈值 ${(pol.cpuThreshold * 100).toFixed(0)}%，机器已忙，不收`
+        + (load.ok ? `（loadavg 归一 ${load.loadNorm.toFixed(2)}，只报趋势）` : ''),
+      cpuBusy: cpu.busy,
+      loadNorm: load.ok ? load.loadNorm : null,
       memAvailableMb: mem.memAvailableMb,
       workerMb,
       inFlight,
@@ -215,7 +289,8 @@ export function admitCapacity({
       ok: true,
       slots: 0,
       why: `内存余量 ${headroomMb.toFixed(0)}MB ≤ 0（可用 ${mem.memAvailableMb.toFixed(0)}MB − 预留 ${pol.memReserveMb}MB − 在途 ${inFlight}×${workerMb.toFixed(0)}MB），不收`,
-      loadNorm: load.loadNorm,
+      cpuBusy: cpu.busy,
+      loadNorm: load.ok ? load.loadNorm : null,
       memAvailableMb: mem.memAvailableMb,
       workerMb,
       inFlight,
@@ -226,12 +301,13 @@ export function admitCapacity({
   const slots = Math.floor(headroomMb / workerMb);
   const why = sampleUnscanned
     ? `${est.error}；按保守占用 ${workerMb}MB/人，还能收 ${slots} 张`
-    : `负载 ${load.loadNorm.toFixed(2)} < ${pol.loadThreshold}，内存余量 ${headroomMb.toFixed(0)}MB，还能收 ${slots} 张`;
+    : `CPU 占用 ${(cpu.busy * 100).toFixed(0)}% < ${(pol.cpuThreshold * 100).toFixed(0)}%，内存余量 ${headroomMb.toFixed(0)}MB，还能收 ${slots} 张`;
   return {
     ok: true,
     slots: Math.max(0, slots),
     why,
-    loadNorm: load.loadNorm,
+    cpuBusy: cpu.busy,
+    loadNorm: load.ok ? load.loadNorm : null,
     memAvailableMb: mem.memAvailableMb,
     workerMb,
     inFlight,
@@ -299,7 +375,20 @@ function blockingSet(readyIssues, openIssues, openPrs) {
   return cited;
 }
 
-export function prioritizeReady(issues, { openIssues, openPrs } = {}) {
+function bornMs(issue) {
+  const t = Date.parse(issue && issue.createdAt);
+  if (Number.isFinite(t)) return t;
+  // createdAt 没查成时退回单号：号小的通常更老。不是精确等待时间，只是稳定次序。
+  return Number.isInteger(issue && issue.number) ? issue.number : 0;
+}
+
+function roundsOf(issue, roundsByIssue) {
+  if (!roundsByIssue || typeof roundsByIssue !== 'object') return 0;
+  const n = Number(roundsByIssue[issue && issue.number]);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+export function prioritizeReady(issues, { openIssues, openPrs, roundsByIssue } = {}) {
   if (!Array.isArray(issues)) return [];
   const blocking = blockingSet(issues, openIssues, openPrs);
   const rows = issues
@@ -308,8 +397,22 @@ export function prioritizeReady(issues, { openIssues, openPrs } = {}) {
       const blockedByOthers = blocking.has(i.number);
       const selfHeal = isSelfHeal(i);
       const rank = blockedByOthers ? 0 : selfHeal ? 1 : 2;
-      return { n: i.number, rank };
+      return { n: i.number, rank, rounds: roundsOf(i, roundsByIssue), born: bornMs(i) };
     });
-  rows.sort((a, b) => (a.rank - b.rank) || (a.n - b.n));
+  // 同类里：轮次多的先收口，再按等待时间（出生早的先），最后单号。
+  rows.sort((a, b) => (a.rank - b.rank) || (b.rounds - a.rounds) || (a.born - b.born) || (a.n - b.n));
   return rows.map((r) => r.n);
+}
+
+/** 老单还有审查/返工/冲突/收口泵时，普通新单最多留几个槽位。不是机器余量上限。 */
+export const MAX_NEW_DISPATCH_WHEN_OLD_BUSY = 1;
+
+/**
+ * 老单有可执行动作时，新派工槽位压到 1。
+ * slots 不是有限数字（老夹具不限张）时同样压到 1——这条是收口策略，不跟准入共用。
+ */
+export function capNewDispatchSlots(slots, oldBusy) {
+  if (!oldBusy) return slots;
+  if (!Number.isFinite(slots)) return MAX_NEW_DISPATCH_WHEN_OLD_BUSY;
+  return Math.min(Math.max(0, slots), MAX_NEW_DISPATCH_WHEN_OLD_BUSY);
 }

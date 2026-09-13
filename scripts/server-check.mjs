@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // scripts/server-check.mjs —— Linux 服务器派工底座探测（2026-08-24 拍板：运行时搬 Linux 服务器）
 //
-// 用途：服务器调通期间循环跑这一条，判断「orca 无头底座 + 派工要用的面」到不到位。
+// 用途：服务器调通期间循环跑这一条，判断「mirasim 派工底座 + 巡逻要用的面」到不到位。
 // 退出码三态（不许把没查成当通过）：
 //   0 = 全部查过且通
 //   1 = 有真红（查成了，结果不对）
 //   2 = 有没查成（探不到，既不是通也不是红）
 //
 // 检查器纪律（CLAUDE.md「自动检查」）：
-//  · 不复用被检查对象自己的解析逻辑——只吃 orca CLI 的 --json 契约，不 import 仓内 orca 封装。
+//  · 不复用被检查对象自己的解析逻辑。
 //  · 区分「扫完是 0 条」和「这次没扫到」：前者 ok，后者 unknown。
 //  · 输出不落在自己会读的范围内：--out 只许写仓外（默认 ~/.dao/server-check/）。
 //
@@ -21,13 +21,14 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { delimiter as PATH_DELIMITER, dirname, join, resolve } from 'node:path';
+import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
-import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
+import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
+import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -83,22 +84,6 @@ export function classifyOrcaStdout({ probed, reason, code, stdout = '', stderr =
   return { state: OK, payload };
 }
 
-/** orca 的 --json 契约：顶层 { ok, result } 或 { ok:false, error:{code,message} }。
- *  注意 orca 即使 ok:false 也退出 0——退出码不是信号，只认 JSON。 */
-function orcaJson(args, opts) {
-  return classifyOrcaStdout(run('orca', args, opts));
-}
-
-function checkOrcaOnPath() {
-  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = run('orca', ['--help'], { timeout: 20000 });
-  if (!r.probed) {
-    return { state: UNKNOWN, detail: `${r.reason}——PATH 里没有 orca？serve 启动时会装到 ~/.local/bin，确认 PATH 带上它` };
-  }
-  if (r.code !== 0) return { state: RED, detail: `orca --help 退出 ${r.code}` };
-  return { state: OK, detail: 'orca 可执行' };
-}
-
 function checkNotRoot() {
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   if (uid === null) return { state: UNKNOWN, detail: '本平台读不到 uid' };
@@ -108,155 +93,16 @@ function checkNotRoot() {
   return { state: OK, detail: `uid=${uid}（非 root）` };
 }
 
-// `orca status` 是查询，**恒返回 ok:true**——真信号在 result.runtime.reachable。
-// 只看 ok 会在 orca 已经死掉时报绿（2026-08-24 故意样本实测：runtimeId=none 却判通）。
-// 语义：orca 没起 = 查成了的根因红一条；下游各面因此探不到 = 没查成。
-/** 纯函数：`orca status` 的 result 判三态。恒 ok:true，所以只认 runtime.reachable。 */
-export function classifyRuntimeStatus(result) {
-  const runtime = result?.runtime;
-  if (!runtime || typeof runtime.reachable !== 'boolean') {
-    return { state: UNKNOWN, detail: 'status 契约变了：result.runtime.reachable 不是布尔' };
-  }
-  if (!runtime.reachable) {
-    return {
-      state: RED,
-      detail: `runtime 不可达（state=${runtime.state || '未给'}，app.running=${result?.app?.running}）`
-        + '——起：systemctl start orca-serve，或 LIBGL_ALWAYS_SOFTWARE=1 <AppRun> serve --port 6768 --json',
-    };
-  }
-  return { state: OK, detail: `runtime 可达（runtimeId=${runtime.runtimeId || '未给'}）` };
-}
-
-function checkRuntimeReachable() {
-  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = orcaJson(['status', '--json'], { timeout: 30000 });
-  if (r.state !== OK) return { ...r, detail: `status 本身没查成：${r.detail || ''}` };
-  return classifyRuntimeStatus(r.payload?.result);
-}
-
-/** 扫完是空的 → ok 但标 empty；没查成 → unknown。两者必须分得开。 */
-function checkListSurface(name, args, pick) {
-  // #984 退役牌：⑤⑥⑦ 走这条。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = orcaJson(args);
-  if (r.state !== OK) return { ...r, detail: `${name}：${r.detail || ''}` };
-  const list = pick(r.payload?.result);
-  if (!Array.isArray(list)) {
-    return { state: UNKNOWN, detail: `${name} 契约变了：拿不到数组（result 键=${Object.keys(r.payload?.result || {}).join(',')}）` };
-  }
-  return { state: OK, detail: `${name} 扫完 ${list.length} 条`, count: list.length };
-}
-
-/** 纯函数：land automation 在册且 enabled。不在=红；契约不对=没查成。 */
-export function classifyLandAutomation(list, name = LAND_AUTOMATION_NAME) {
-  if (!Array.isArray(list)) {
-    return { state: UNKNOWN, detail: 'automations 不是数组（没查成）' };
-  }
-  const hits = list.filter((a) => a && a.name === name);
-  if (hits.length === 0) {
-    return {
-      state: RED,
-      detail: `没有名为 ${name} 的 automation（不在 = 红）——跑 node scripts/install-land-automation.mjs`,
-    };
-  }
-  if (hits.length > 1) {
-    return { state: RED, detail: `名为 ${name} 的 automation 有 ${hits.length} 条（幂等坏了，先手工删到一条）` };
-  }
-  const hit = hits[0];
-  if (hit.enabled !== true) {
-    return { state: RED, detail: `${name} 在册但 enabled=${hit.enabled}（应为 true）` };
-  }
-  return { state: OK, detail: `${name} 在册且启用 id=${hit.id || '未给'}`, count: list.length };
-}
-
 function checkLandAutomation() {
-  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = orcaJson(['automations', 'list', '--json']);
-  if (r.state !== OK) return { ...r, detail: `automations list：${r.detail || ''}` };
-  const list = r.payload?.result?.automations;
-  if (!Array.isArray(list)) {
-    return {
-      state: UNKNOWN,
-      detail: `automations list 契约变了：拿不到数组（result 键=${Object.keys(r.payload?.result || {}).join(',')}）`,
-    };
-  }
-  return classifyLandAutomation(list);
-}
-
-function checkRepoRegistered() {
-  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = orcaJson(['repo', 'list', '--json']);
-  if (r.state !== OK) return { ...r, detail: `repo list：${r.detail || ''}` };
-  const repos = r.payload?.result?.repos;
-  if (!Array.isArray(repos)) return { state: UNKNOWN, detail: 'repo list 契约变了：result.repos 不是数组' };
-  let here;
-  try {
-    here = realpathSync(REPO_ROOT);
-  } catch {
-    return { state: UNKNOWN, detail: '读不到本仓真实路径' };
-  }
-  const hit = repos.find((x) => {
-    const p = x && (x.path || x.rootPath || x.localPath);
-    if (!p) return false;
-    try { return realpathSync(p) === here; } catch { return false; }
+  const en = run('systemctl', ['is-enabled', LAND_TIMER], { timeout: 10000 });
+  const timers = run('systemctl', ['list-timers', '--all'], { timeout: 10000 });
+  const r = classifyLandTimer({
+    probed: en.probed && timers.probed,
+    reason: !en.probed ? en.reason : (!timers.probed ? timers.reason : ''),
+    isEnabled: String(en.stdout || '').trim(),
+    timersText: `${timers.stdout || ''}\n${timers.stderr || ''}`,
   });
-  if (!hit) {
-    return {
-      state: RED,
-      detail: `本仓（${here}）没注册进 orca（已注册 ${repos.length} 个）——worktree create 会报 Missing repo selector（#762 同款）`,
-    };
-  }
-  return { state: OK, detail: `本仓已注册（id=${hit.id || '未给'}）` };
-}
-
-/** 纯函数：account list 的 result 判三态。认不出厂商键 = 契约变了 = 没查成，不是 0 个。 */
-export function classifyAccountsResult(result) {
-  const res = result || {};
-  const counts = {};
-  let total = 0;
-  for (const vendor of Object.keys(res)) {
-    const accounts = res[vendor] && res[vendor].accounts;
-    if (Array.isArray(accounts)) {
-      counts[vendor] = accounts.length;
-      total += accounts.length;
-    }
-  }
-  if (!Object.keys(counts).length) return { state: UNKNOWN, detail: 'account list 契约变了：认不出任何厂商键' };
-  const shape = Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ');
-  if (total === 0) {
-    // 2026-09-05 复审这条判据（本仓规矩：体检红项先问判据该不该在）。
-    // 它原本判真红「派工起得来终端也登不上」。而实测：这台机器托管账号一直是 0，
-    // 审官与工人却整天在跑——因为 #822 之后全员走 pi + 网关 keyFile，
-    // orca 的托管账号根本不在登录路径上了。判据的前提已经不成立。
-    //
-    // 不删这条：真回到 claude/codex CLI 直连时它还有用。降成「见」——
-    // 说清是「这台机器没用托管账号这条路」，而不是继续报一个谁也修不了的红。
-    // 永远红的检查会把真红淹掉，这比没有检查更糟。
-    return {
-      state: OK, count: 0, empty: true,
-      detail: `托管账号 0 个（${shape}）——本机不走这条登录路（#822 全员 pi + 网关 keyFile）。`
-        + '若改回 claude/codex CLI 直连，这里要先 orca account add',
-    };
-  }
-  return { state: OK, detail: `托管账号 ${total} 个（${shape}）`, count: total };
-}
-
-function checkAccounts() {
-  // #984 退役牌：orca 产品面。删条件 = mirasim 派工实跑 + orca 退役。现在不删。
-  const r = orcaJson(['account', 'list', '--json']);
-  if (r.state !== OK) return { ...r, detail: `account list：${r.detail || ''}` };
-  return classifyAccountsResult(r.payload?.result);
-}
-
-function checkDisplay() {
-  if (process.env.DISPLAY) return { state: OK, detail: `DISPLAY=${process.env.DISPLAY}（用现成显示，orca 不另起 Xvfb）` };
-  const r = run('command', ['-v', 'Xvfb'], { timeout: 5000 });
-  // command -v 不一定是可 spawn 的外部程序，退回查常见落点
-  const paths = ['/usr/bin/Xvfb', '/usr/local/bin/Xvfb'];
-  const found = (r.probed && r.code === 0 && r.stdout.trim()) || paths.find((p) => existsSync(p));
-  if (!found) {
-    return { state: RED, detail: 'DISPLAY 没设且找不到 Xvfb：orca serve 起不来（apt-get install -y xvfb）' };
-  }
-  return { state: OK, detail: `无 DISPLAY，靠 orca 自起 Xvfb（${found}）` };
+  return { state: r.state, detail: r.detail, count: r.count };
 }
 
 /** ⑪ 嵌套预算（#984）：dao.test 缩时后 dao-check 只要 ~15s，60s 够盖住余量。
@@ -562,25 +408,29 @@ function checkBotModel() {
   return classifyBotModelProbe(probeBotModel());
 }
 
-// —— ⑮ 卡死发现 timer ——
+// —— ⑮ 卡死发现已并进指挥官 ——
 // 另起一项，不改 ⑧ automations 那行（#829 已占用）；⑭ 是指挥官自检（#800）。
 //
-// 2026-09-06 用户拍板「删掉整层」后，这一格守的对象换了：屏面指纹那套
-// （dao-agent-stall + /home/orca/bin 垫片）整层退役，卡死发现只剩 dao-progress-watch。
-// 三个退役件全进影子清单——机器上还留着任何一个，就是没卸干净的影子制度。
+// ephemeral-lifecycle：盘面推进量不再独立 timer，commander-act 每轮自己跑。
+// 独立钟（progress-watch / nudge-stalled / 屏面指纹）任一还在 list-timers 或 /etc，
+// 就是没卸干净的影子制度。没并进指挥官也红——「timer 不在」不能当成「已经并进去了」。
 const RETIRED_STALL_SCRIPT = () => join(homedir(), 'bin', 'agent-stall-watch.mjs');
 const RETIRED_TIMERS = [
   { re: /\bagent-stall-watch\.timer\b/, what: 'agent-stall-watch.timer（Contabo 垫片）' },
   { re: /\bdao-agent-stall\.timer\b/, what: 'dao-agent-stall.timer（屏面指纹层，已退役）' },
+  { re: /\bdao-nudge-stalled\.timer\b/, what: 'dao-nudge-stalled.timer（推一把垫片，已退役）' },
+  { re: /\bdao-progress-watch\.timer\b/, what: 'dao-progress-watch.timer（已并进 commander-act）' },
 ];
 
-/** 纯函数：systemctl list-timers 文本 + 退役脚本是否还在 → 三态。 */
+/** 纯函数：list-timers 文本 + 退役脚本 + 是否并进指挥官 → 三态。 */
 export function classifyStallWatchTimer({
   probed = false,
   reason = '',
   timersText = '',
   retiredScriptExists = null,
   retiredScriptUnknown = false,
+  progressWatchFolded = false,
+  leftoverUnitFiles = [],
 } = {}) {
   if (retiredScriptUnknown) {
     return { state: UNKNOWN, detail: '退役脚本在不在没查成' };
@@ -589,32 +439,25 @@ export function classifyStallWatchTimer({
     return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
   }
   const text = String(timersText || '');
-  const official = /\bdao-progress-watch\.timer\b/.test(text);
   const leftovers = RETIRED_TIMERS.filter((t) => t.re.test(text)).map((t) => t.what);
   if (retiredScriptExists === true) leftovers.push('/home/orca/bin/agent-stall-watch.mjs');
+  for (const name of leftoverUnitFiles || []) {
+    const n = String(name || '').trim();
+    if (n && !leftovers.some((x) => x.includes(n))) leftovers.push(`/etc/systemd/system/${n}`);
+  }
   if (leftovers.length) {
     return {
       state: RED,
       detail: `退役件没卸干净（${leftovers.join('；')}）——落地即删，防影子制度`,
     };
   }
-  if (!official) {
+  if (!progressWatchFolded) {
     return {
       state: RED,
-      detail: 'dao-progress-watch.timer 不在册——sudo bash scripts/install-progress-watch.sh（装法见 host/machine/systemd/dao-progress-watch.service 文件头）',
+      detail: '盘面推进量还没并进 commander-act——scripts/commander.mjs 应调用 runProgressWatch；独立钟不许再装',
     };
   }
-  const line = text.split(/\r?\n/).find((l) => /\bdao-progress-watch\.timer\b/.test(l));
-  if (line) {
-    const next = line.trim().split(/\s+/)[0];
-    if (next === '-' || /^n\/a$/i.test(next)) {
-      return {
-        state: RED,
-        detail: 'dao-progress-watch.timer 在册但 NEXT 是横杠（空转，扫描等于没拉）——单元要用 OnCalendar，装完 list-timers 的 NEXT 必须是时间',
-      };
-    }
-  }
-  return { state: OK, detail: 'dao-progress-watch.timer 在册且 NEXT 不是横杠，屏面指纹层已退役' };
+  return { state: OK, detail: '盘面推进量已并进指挥官，独立 progress-watch / 推一把 / 屏面指纹钟已退役' };
 }
 
 // ⑯ 主树跟主分支 + 机器人吃新码（scripts/server-sync.sh，落地清单第 9 步）。没这个 timer，合并了的代码到不了运行中的机器人。
@@ -635,12 +478,29 @@ function checkStallWatchTimer() {
   } catch (e) {
     retiredUnknown = true;
   }
+  let folded = false;
+  try {
+    folded = /\brunProgressWatch\s*\(/.test(readFileSync(join(REPO_ROOT, 'scripts', 'commander.mjs'), 'utf8'));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `指挥官源码没查成：${String(e && e.message || e).slice(0, 80)}` };
+  }
+  const leftoverUnitFiles = [];
+  for (const name of [
+    'dao-progress-watch.timer', 'dao-progress-watch.service',
+    'dao-nudge-stalled.timer', 'dao-nudge-stalled.service',
+  ]) {
+    try {
+      if (existsSync(join('/etc/systemd/system', name))) leftoverUnitFiles.push(name);
+    } catch { /* 单个文件读失败不当没查成：list-timers 那面还在 */ }
+  }
   return classifyStallWatchTimer({
     probed: timers.probed,
     reason: timers.reason,
     timersText: `${timers.stdout || ''}\n${timers.stderr || ''}`,
     retiredScriptExists: retiredExists,
     retiredScriptUnknown: retiredUnknown,
+    progressWatchFolded: folded,
+    leftoverUnitFiles,
   });
 }
 
@@ -669,19 +529,15 @@ export function classifyTimerArmed({ probed = false, reason = '', units = null }
   //                        commander-act 派工人一跑好几分钟，扫到执行中就会被报成死态。
   //   其余（waiting / elapsed / dead）—— 没有下一次就是真死态，本闸要抓的正是它。
   // 判据缺 SubState 这一维，等于把「正在干活」读成「已经死了」。
-  const noNext = (u) => {
-    const n = u && u.next;
-    if (n == null) return true;
-    const t = String(n).trim();
-    return t === '' || t === '0' || t === 'n/a' || t === 'infinity';
-  };
+  const noNext = (u) => !hasNextElapse(u && u.next);
   const running = units.filter((u) => u && String(u.subState || '') === 'running');
   const dead = units.filter((u) => noNext(u) && String(u.subState || '') !== 'running');
   if (dead.length) {
+    const names = dead.map((u) => u.unit).join(' ');
     return {
       state: RED,
       detail: `${dead.length}/${units.length} 个 timer 没有下一次触发（${dead.map((u) => u.unit).join('、')}）——`
-        + '它们仍显示 active+enabled 但已经不会再跑；给单元加 OnCalendar 后 sudo systemctl restart <unit>',
+        + `它们仍显示 active+enabled 但已经不会再跑；sudo systemctl start ${names}（未启用则 enable --now）`,
     };
   }
   // 「现在还有下一次」不等于安全。只有单调时钟（OnBootSec/OnUnitActiveSec）的 timer
@@ -740,9 +596,20 @@ function checkTimerArmed() {
   // 我们（本仓 + 别的仓）装的一律在 `/etc/systemd/system/`。这个界线不靠任何人维护名单，
   // 且天然覆盖将来别的仓装上来的单元——`gw-remote-probe` 正是这么被捞回来的。
   const names = [...String(list.stdout || '').matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)].map((m) => m[1]);
+  // list-timers 不列 disabled 的单元（2026-09-07 实咬：dao-nudge-stalled 文件在 /etc、
+  // timer 是 disabled，⑱ 全绿）。仓里装进 /etc 的 .timer 必须进扫描面，表上没有 = 没启用。
+  let etcTimers = [];
+  try {
+    etcTimers = readdirSync('/etc/systemd/system').filter((f) => f.endsWith('.timer'));
+  } catch (e) {
+    return classifyTimerArmed({
+      probed: false,
+      reason: `/etc/systemd/system 读不了：${String(e && e.message || e).slice(0, 120)}——disabled 那一格没查成`,
+    });
+  }
   const units = [];
   const skipped = [];
-  for (const unit of [...new Set(names)]) {
+  for (const unit of [...new Set([...names, ...etcTimers])]) {
     // 不加 `--value`：`systemctl show` 按**它自己的属性顺序**输出，不按命令行顺序，
     // 靠下标取值会张冠李戴（第一版就把某个时间戳当成了单元路径）。按键名取，与顺序无关。
     const p = run('systemctl', ['show', unit, '-p', 'FragmentPath', '-p', 'SubState', '-p', 'NextElapseUSecRealtime', '-p', 'NextElapseUSecMonotonic'], { timeout: 8000 });
@@ -758,10 +625,8 @@ function checkTimerArmed() {
       return classifyTimerArmed({ probed: false, reason: `${unit} 的单元文件落在没见过的地方（${frag}）——判不出归属，不当「不归我管」` });
     }
     if (!mine) { skipped.push(unit); continue; }
-    const vals = ['NextElapseUSecRealtime', 'NextElapseUSecMonotonic']
-      .map((k) => kv.get(k) || '').filter(Boolean);
-    // 两个点位任意一个有值就算有下一次；两个都空才是死态。
-    const alive = vals.some((v) => v && v !== '0' && v !== 'n/a' && v !== 'infinity');
+    // 两个点位任意一个有真值就算有下一次；infinity/空 不算（与 ⑭ 共用 hasNextElapse）。
+    const next = combineNextElapse(kv.get('NextElapseUSecRealtime'), kv.get('NextElapseUSecMonotonic'));
     // SubState 分开「没有下一次」的两种：
     //   waiting = 在岗等下一次 → 没有下一次就是死态（本闸要抓的）
     //   running = 它触发的服务此刻正在跑 → 服务跑完才排下一次，**没有下一次是对的**
@@ -772,7 +637,7 @@ function checkTimerArmed() {
     // 读不到回 null（没查成），不回 false：那会把「没读着」报成「缺 OnCalendar」，是误报。
     let calendar = null;
     try { calendar = /^OnCalendar=/m.test(readFileSync(frag, 'utf8')); } catch { calendar = null; }
-    units.push({ unit, next: alive ? vals.join('|') : null, calendar, subState });
+    units.push({ unit, next: next || null, calendar, subState });
   }
   if (units.length === 0 && skipped.length > 0) {
     // 全机只有发行版的 timer：我们一个都没装上。这不是「都健康」。
@@ -1042,8 +907,82 @@ function checkRetiredCliOnPath() {
 //
 // **只报不装**：dao-sync 现在跑 orca 身份，写不了 /etc；而让它能写，正是
 // 2026-09-05 堵掉的那条提权路（root 解释 orca 可写的仓内脚本）。装单元是人的动作。
+//
+// #1164：只读 FragmentPath 正文看不见 drop-in。拷了 timer、忘了删 `.d/`，
+// 活日历仍是 :07/30，闸却绿。取数按 `systemctl cat` 的有效单元
+// （正文 + `/etc/systemd/system/<名>.d/*.conf`），再另锁探活 ExecStart 走仓内脚本。
 
-/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。 */
+/** 拼出 `systemctl cat` 剥掉首行 `# <FragmentPath>` 之后的有效单元。
+ * 没有 drop-in 时就是正文；有 `.d/*.conf` 时追加 `# <path>` + 内容，所以只拷正文会红。 */
+export function assembleEffectiveUnit(fragment, dropIns = []) {
+  if (!Array.isArray(dropIns) || dropIns.length === 0) return fragment;
+  let out = String(fragment);
+  if (!out.endsWith('\n')) out += '\n';
+  for (const d of dropIns) {
+    out += `# ${d.path}\n`;
+    const t = String(d.text ?? '');
+    out += t.endsWith('\n') ? t : `${t}\n`;
+  }
+  return out;
+}
+
+/** 剥掉 `systemctl cat` 自动加的第一行 `# <FragmentPath>`。后面若还有 `# <name>.d/` 就是 drop-in。 */
+export function liveTextFromSystemctlCat(stdout) {
+  const text = String(stdout ?? '');
+  const nl = text.indexOf('\n');
+  if (nl < 0) return text;
+  if (!/^# \//.test(text.slice(0, nl))) return text;
+  return text.slice(nl + 1);
+}
+
+function readLiveEffectiveUnit(name, etcDir) {
+  const fragmentPath = join(etcDir, name);
+  let fragment;
+  try {
+    fragment = readFileSync(fragmentPath, 'utf8');
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) {
+      return { live: null, unreadable: false };
+    }
+    return { live: null, unreadable: true };
+  }
+  const dropDir = join(etcDir, `${name}.d`);
+  let dropNames;
+  try {
+    dropNames = readdirSync(dropDir).filter((n) => n.endsWith('.conf') && !n.startsWith('.')).sort();
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) {
+      return { live: fragment, unreadable: false };
+    }
+    return { live: null, unreadable: true };
+  }
+  const dropIns = [];
+  for (const n of dropNames) {
+    const p = join(dropDir, n);
+    try {
+      dropIns.push({ path: p, text: readFileSync(p, 'utf8') });
+    } catch {
+      return { live: null, unreadable: true };
+    }
+  }
+  return { live: assembleEffectiveUnit(fragment, dropIns), unreadable: false };
+}
+
+/** 仓内单元目录 vs 机器 /etc（含 drop-in）。repoDir 读不了会抛，交给调用方当没查成。 */
+export function collectUnitDriftPairs({ repoDir, etcDir }) {
+  const names = readdirSync(repoDir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+  return names.map((name) => {
+    let repo = null;
+    try { repo = readFileSync(join(repoDir, name), 'utf8'); } catch { repo = null; }
+    const liveRead = readLiveEffectiveUnit(name, etcDir);
+    return { name, repo, live: liveRead.live, unreadable: liveRead.unreadable };
+  });
+}
+
+/** 纯函数：逐个单元比对仓内与机器上的内容。读不到 = 没查成，不当「一致」。
+ * 已比对且漂了的优先于没比成：#1104 合进的 dao-board-gc.service 机器上还 After=orca-serve，
+ * 但 nudge/land 没装让整项走 unknown，漂移被盖住。没装仍是 unknown（本函数不装单元）。
+ * `unreadable: true` 是「这格没测成」（.d/ 读不了），不是「没装」。 */
 export function classifyUnitDrift(pairs) {
   if (!Array.isArray(pairs)) return { state: UNKNOWN, detail: '单元清单不是数组——没查成' };
   // 扫出 0 个不是「都一致」，是判据失效（目录挪了、命名换了）
@@ -1052,41 +991,149 @@ export function classifyUnitDrift(pairs) {
   // 不归一化这条会天天红成噪音，而噪音久了就没人看。归一化放判据层（一把尺在一处），
   // 取数层只管把原文读出来。
   const norm = (t) => (t == null ? null : String(t).replace(/\r\n/g, '\n').trim());
-  const unreadable = pairs.filter((p) => p.repo == null || p.live == null);
-  const drifted = pairs.filter((p) => p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
-  if (unreadable.length) {
-    const who = unreadable.map((p) => `${p.name}(${p.repo == null ? '仓内读不到' : '机器上没装'})`);
-    return { state: UNKNOWN, detail: `${unreadable.length} 个单元没比成：${who.join('、')}——没查成，不是「一致」` };
-  }
-  if (drifted.length) {
+  const drifted = pairs.filter((p) => !p.unreadable && p.repo != null && p.live != null && norm(p.repo) !== norm(p.live));
+  // 「仓里有、机器上没有」和「两边都有但不一致」都是**确定的故障**，只是修法不同。
+  // 原来两者一起塞进 unreadable → UNKNOWN，于是 #818 的 dao-board-watch
+  // **从合进仓到 2026-09-11 一次没装过**，这条闸每轮说「没查成」而不是「红」——
+  // 「没查成」不当绿是对的，但它也不开单、不叫人，安静得像没事。
+  // 「机器上没装」根本不是没查成：仓里那份就是真相，缺的那头是缺，不是测不准。
+  const notInstalled = pairs.filter((p) => !p.unreadable && p.repo != null && p.live == null);
+  const reallyUnreadable = pairs.filter((p) => p.unreadable || p.repo == null);
+  if (drifted.length || notInstalled.length) {
+    const bits = [];
+    if (drifted.length) {
+      bits.push(`${drifted.length} 个仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`);
+    }
+    if (notInstalled.length) {
+      bits.push(`仓里有 ${notInstalled.length} 个机器上根本没有：${notInstalled.map((p) => p.name).join('、')}——这一格从没装上过`);
+    }
+    const unreadBit = reallyUnreadable.length
+      ? `；另外 ${reallyUnreadable.length} 个仓内读不到：${reallyUnreadable.map((p) => p.name).join('、')}`
+      : '';
     return {
       state: RED,
-      detail: `${drifted.length}/${pairs.length} 个单元仓里和机器上不是同一份：${drifted.map((p) => p.name).join('、')}`
-        + '——改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
+      detail: bits.join('；')
+        + unreadBit
+        + '。改了仓不等于装了机器。静态单元 sudo install -m 644 host/machine/systemd/<名> /etc/systemd/system/；'
         + '指挥官那两个是代码生成的，sudo node scripts/commander.mjs install。装完 daemon-reload',
     };
+  }
+  if (reallyUnreadable.length) {
+    return { state: UNKNOWN, detail: `${reallyUnreadable.length} 个单元仓内读不到：${reallyUnreadable.map((p) => p.name).join('、')}——没查成，不是「一致」` };
   }
   return { state: OK, detail: `${pairs.length} 个单元仓里和机器上一致` };
 }
 
+const PROBE_EXEC_FORBIDDEN = '/home/orca/bin/gw-remote-probe.mjs';
+const PROBE_SCRIPT_NAME = 'gw-remote-probe.mjs';
+
+function stripExecPrefixes(cmd) {
+  return String(cmd).replace(/^[-+@!:]+/, '');
+}
+
+function splitArgv(cmd) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|[^\s]+/g;
+  const s = String(cmd).trim();
+  if (!s) return null;
+  let m;
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[0]);
+  return out.length ? out : null;
+}
+
+/** 从 `systemctl show -p ExecStart` 或单元正文抽出 argv。注释行不算。 */
+export function parseExecStartArgv(text) {
+  const s = String(text ?? '');
+  const show = s.match(/argv\[\]=([^;]*?)\s*;/);
+  if (show) return splitArgv(show[1].trim());
+  let last = null;
+  for (const line of s.split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    const m = line.match(/^\s*ExecStart\s*=\s*(.*)$/);
+    if (m && m[1].trim()) last = stripExecPrefixes(m[1].trim());
+  }
+  if (last) return splitArgv(last);
+  return null;
+}
+
+/** 活 ExecStart 真正要跑的脚本路径（未 resolve）。解析失败返回 null。 */
+export function probeScriptFromExecStart(text) {
+  const argv = parseExecStartArgv(text);
+  if (!argv || !argv.length) return null;
+  const exe = basename(stripExecPrefixes(argv[0]));
+  let raw;
+  if (exe === PROBE_SCRIPT_NAME) raw = argv[0];
+  else if (exe === 'node' || exe === 'nodejs') raw = argv[1];
+  else raw = argv.find((a) => basename(a) === PROBE_SCRIPT_NAME);
+  if (raw == null || raw === '') return null;
+  return raw;
+}
+
+function resolvedProbeScript(p) {
+  if (p == null || p === '') return null;
+  const s = String(p);
+  // 相对路径跟的是检查进程 cwd，不是单元 WorkingDirectory——不当仓内脚本。
+  if (!isAbsolute(s)) return null;
+  return resolve(s);
+}
+
+/** 活体样本：机器上的 ExecStart 不是仓内脚本就红。仓内文件锁不够——#967 合进仓后机器仍跑 ~/bin/gw-remote-probe.mjs。
+ * 必须解析 argv 并跟 `expectedScript`（仓内单元正文里的绝对路径）比，不能对整段做子串包含：
+ * `/tmp/scripts/gw-remote-probe.mjs` 或注释里出现仓内路径都会把子串匹配骗绿（#1164 审官 P1）。
+ * `liveExecStart == null` 表示本格不发言（没装由漂移闸去红）。
+ * 期望路径从仓内单元解析（机器主树），不拿当前 worktree 的 REPO_ROOT。 */
+export function classifyProbeExecStart({ liveExecStart, expectedScript } = {}) {
+  if (liveExecStart == null) return { state: OK, skipped: true, detail: '' };
+  const expected = resolvedProbeScript(expectedScript);
+  if (!expected) {
+    return { state: UNKNOWN, detail: '没给期望脚本绝对路径——没查成' };
+  }
+  const actualRaw = probeScriptFromExecStart(liveExecStart);
+  const actual = resolvedProbeScript(actualRaw);
+  if (actual && actual === expected) {
+    return { state: OK, detail: 'gw-remote-probe ExecStart 走仓内脚本' };
+  }
+  const shown = actual || actualRaw || String(liveExecStart).slice(0, 180);
+  if (actual && actual === resolve(PROBE_EXEC_FORBIDDEN)) {
+    return {
+      state: RED,
+      detail: `gw-remote-probe.service 活 ExecStart 仍指向仓外旧脚本 ${PROBE_EXEC_FORBIDDEN}。装：sudo bash scripts/install-gw-remote-probe.sh`,
+    };
+  }
+  return {
+    state: RED,
+    detail: `gw-remote-probe.service 活 ExecStart 不是仓内脚本（要 ${expected}，实际：${shown}）。装：sudo bash scripts/install-gw-remote-probe.sh`,
+  };
+}
+
 function checkUnitDrift() {
   const dir = join(REPO_ROOT, 'host', 'machine', 'systemd');
-  let names;
+  let pairs;
   try {
-    names = readdirSync(dir).filter((n) => n.endsWith('.timer') || n.endsWith('.service'));
+    pairs = collectUnitDriftPairs({ repoDir: dir, etcDir: '/etc/systemd/system' });
   } catch (e) {
     return { state: UNKNOWN, detail: `仓内单元目录读不了（${e.message || e}）——没查成` };
   }
-  // CRLF/LF 与首尾空白不算漂移——仓在 Windows 上编辑、机器是 Linux，
-  // 不归一化的话这条会天天红成噪音，而噪音久了就没人看。
-  const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
-  const pairs = names.map((name) => {
-    let repo = null; let live = null;
-    try { repo = (readFileSync(join(dir, name), 'utf8')); } catch { repo = null; }
-    try { live = (readFileSync(join('/etc/systemd/system', name), 'utf8')); } catch { live = null; }
-    return { name, repo, live };
-  });
-  return classifyUnitDrift(pairs);
+  const drift = classifyUnitDrift(pairs);
+  const probe = pairs.find((p) => p.name === 'gw-remote-probe.service');
+  let liveExecStart = null;
+  let expectedScript = null;
+  // #1164 活 ExecStart：systemctl show，失败则退回有效单元正文
+  if (probe && !probe.unreadable && probe.live != null) {
+    const shown = run('systemctl', ['show', 'gw-remote-probe.service', '-p', 'ExecStart'], { timeout: 8000 });
+    liveExecStart = (shown.probed && shown.code === 0 && String(shown.stdout || '').trim())
+      ? String(shown.stdout)
+      : probe.live;
+    expectedScript = probe.repo ? probeScriptFromExecStart(probe.repo) : null;
+  }
+  const exec = classifyProbeExecStart({ liveExecStart, expectedScript });
+  if (exec.state === RED) {
+    return { state: RED, detail: drift.state === RED ? `${drift.detail}；${exec.detail}` : exec.detail };
+  }
+  if (exec.state === UNKNOWN && !exec.skipped) {
+    return { state: UNKNOWN, detail: drift.state === RED ? `${drift.detail}；${exec.detail}` : exec.detail };
+  }
+  return drift;
 }
 
 // —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
@@ -1229,40 +1276,52 @@ function checkGhEventBridge() {
   return classifyGhEventBridge({ probed: true, state });
 }
 
+/**
+ * ⑭ 把 commander status --json 的退出码和 detail 译成三态。
+ * 不许把成功改写成「在册且 enabled」，也不许把红改写成「去 install」——
+ * 09-10 实咬时文件已经对，status 自己会写出 start / enable --now。
+ */
+export function classifyCommanderStatus({ probed = false, reason = '', code, stdout = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `commander status 没跑成：${reason || ''}` };
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start < 0) {
+    return { state: UNKNOWN, detail: `commander status 不是 JSON（exit=${code}）：${text.trim().slice(0, 160)}` };
+  }
+  let payload;
+  try { payload = JSON.parse(text.slice(start)); }
+  catch (e) {
+    return { state: UNKNOWN, detail: `commander status JSON 坏了（exit=${code}）：${String(e.message).slice(0, 120)}` };
+  }
+  const detail = String(payload.detail || '').trim() || `指挥官自检 exit ${code}`;
+  if (code === 0) return { state: OK, detail };
+  if (code === 2) return { state: UNKNOWN, detail };
+  return { state: RED, detail };
+}
+
 const CHECKS = [
-  // #984 退役牌（现在不删）：①④⑤⑥⑦⑧⑨⑩⑬ 是 orca 产品面。orca 按 #880 验收后退役
-  // （用户 2026-09-06：「orca 要全撤了还检测它干嘛」）。工人仍从 orca 派（卡 B 返工 #982 在途），
-  // 盲删=退役前盲飞。删这 9 项的条件：mirasim 派工实跑 + orca 退役，到时一并删。
-  ['① orca 在 PATH', checkOrcaOnPath], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
   ['② 非 root 运行', checkNotRoot],
-  ['③ 显示面（DISPLAY 或 Xvfb）', checkDisplay],
-  ['④ runtime 可达', checkRuntimeReachable], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑤ worktree 面', () => checkListSurface('worktree ps', ['worktree', 'ps', '--json'], (x) => x?.worktrees)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑥ terminal 面', () => checkListSurface('terminal list', ['terminal', 'list', '--json'], (x) => x?.terminals)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑦ orchestration 面', () => checkListSurface('run-list', ['orchestration', 'run-list', '--json'], (x) => x?.runs)], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑧ automations 面（land 在册且启用）', checkLandAutomation], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑨ 本仓已注册进 orca', checkRepoRegistered], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑩ 托管账号可用', checkAccounts], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
+  ['⑧ land timer 在册且启用', checkLandAutomation],
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
-  ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds], // 退役条件：mirasim 派工实跑 + orca 退役（#984）
-  ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
-  ['⑮ 卡死发现 timer 在册且屏面指纹层已退役', checkStallWatchTimer],
+  ['⑭ 指挥官自检（commander status，#800）', () => {
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status', '--json'], { timeout: 60000 });
+    return classifyCommanderStatus(r);
+  }],
+  ['⑮ 卡死发现已并进指挥官且独立钟已退役', checkStallWatchTimer],
   ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
   ['⑰ 机器人自己的模型在网关还有货', checkBotModel],
   ['⑱ 每个 dao timer 都有下一次触发（防 active(elapsed) 死态）', checkTimerArmed],
   ['⑲ 退役 CLI 已不在 PATH（#960）', checkRetiredCliOnPath],
   ['⑳ 仓里的 systemd 单元与机器上装着的一致', checkUnitDrift],
   ['(21) 服务用户家目录没有 root 属主文件', checkRootOwnedInHome],
-  // 名字里必须点明「mirasim 侧」：这条只看得见 mirasim 执行的调用，orca 侧（pi→gw）不经 mirasim、
-  // 不在这两份账上。名字比覆盖面大 = 让人以为 orca 侧也查过了。
-  ['(22) mirasim 侧实跑腿与选型腿表对得上（#944；orca 侧不在覆盖内）', checkModelReconcile],
+  ['(22) mirasim 侧实跑腿与选型腿表对得上（#944）', checkModelReconcile],
   ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
 ];
 
 function outPath() {
   const dir = join(homedir(), '.dao', 'server-check');
-  // 仓外落盘：检查器读的是 orca 与仓内脚本，写这里不会成为下一轮输入
+  // 仓外落盘：检查器的输出不许落进自己会读的范围
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return join(dir, 'checks.jsonl');
 }
@@ -1279,13 +1338,6 @@ function selfTest() {
     return text ? 'non-empty' : UNKNOWN;
   })();
   if (emptyStdout !== UNKNOWN) failures.push('空 stdout 没被判成 unknown');
-
-  // 「扫完 0 条」必须是 ok，不能和 unknown 混
-  const emptyList = checkListSurface('假面', ['--version'], () => []);
-  if (emptyList.state !== OK || emptyList.count !== 0) {
-    // 上面这条会真跑 orca --version（可能没装），只在能跑通时断言
-    if (emptyList.state !== UNKNOWN) failures.push(`空列表判成了 ${emptyList.state}，应为 ok/count=0`);
-  }
 
   // #802：故意造「目录里没有 pi」——必须判红，不能当绿。
   const missingPi = classifyRequiredAgents({
@@ -1306,15 +1358,17 @@ function selfTest() {
     failures.push(`没扫到目录应判 unknown，实际 ${noCatalog.state}`);
   }
 
-  // #829：故意造「没有 land automation」——必须判红，不能当绿；查不成才是 unknown。
-  const noLand = classifyLandAutomation([]);
-  if (noLand.state !== RED) failures.push(`没有 land 应判红，实际 ${noLand.state}`);
-  const disabledLand = classifyLandAutomation([{ name: LAND_AUTOMATION_NAME, enabled: false, id: 'x' }]);
-  if (disabledLand.state !== RED) failures.push(`disable 应判红，实际 ${disabledLand.state}`);
-  const okLand = classifyLandAutomation([{ name: LAND_AUTOMATION_NAME, enabled: true, id: 'x' }]);
-  if (okLand.state !== OK) failures.push(`在册且启用应判 ok，实际 ${okLand.state}`);
-  const badShape = classifyLandAutomation(null);
-  if (badShape.state !== UNKNOWN) failures.push(`契约不对应判 unknown，实际 ${badShape.state}`);
+  // #829：land timer 未启用必须红；没探到必须没查成。
+  const noLand = classifyLandTimer({ probed: true, isEnabled: 'disabled', timersText: '' });
+  if (noLand.state !== 'red') failures.push(`land timer 未启用应判红，实际 ${noLand.state}`);
+  const landBlind = classifyLandTimer({ probed: false, reason: 'spawn 失败' });
+  if (landBlind.state !== 'unknown') failures.push(`systemctl 没探到应判 unknown，实际 ${landBlind.state}`);
+  const landOk = classifyLandTimer({
+    probed: true,
+    isEnabled: 'enabled',
+    timersText: `Wed 2026-09-07 01:17:00 CST 30min left n/a n/a ${LAND_TIMER} dao-land.service`,
+  });
+  if (landOk.state !== 'ok') failures.push(`land timer 在册应判 ok，实际 ${landOk.state}`);
 
   // #944：腿表标「停用」的腿实际在跑 —— 必须红；探针流量（非 200 / local 腿）不许被判成违规。
   const RECON_LEGS = [
@@ -1377,6 +1431,48 @@ function selfTest() {
   });
   if (blind.state !== UNKNOWN || !/没查成/.test(blind.detail)) {
     failures.push(`EACCES 应判没查成，实际 ${blind.state}：${blind.detail}`);
+  }
+
+  // #1164：正文对、drop-in 把日历改走 → 必须红。只读 FragmentPath 会绿。
+  const leftoverDropIn = classifyUnitDrift([{
+    name: 'gw-remote-probe.timer',
+    repo: '[Timer]\nOnCalendar=*:09/30\n',
+    live: assembleEffectiveUnit('[Timer]\nOnCalendar=*:09/30\n', [{
+      path: '/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf',
+      text: '[Timer]\nOnCalendar=*:07/30\n',
+    }]),
+  }]);
+  if (leftoverDropIn.state !== RED || !/gw-remote-probe\.timer/.test(leftoverDropIn.detail)) {
+    failures.push(`正文对但 drop-in 改日历应判红，实际 ${leftoverDropIn.state}：${leftoverDropIn.detail}`);
+  }
+  const expectedProbe = '/srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs';
+  const binExec = classifyProbeExecStart({
+    liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /home/orca/bin/gw-remote-probe.mjs ; ignore_errors=no }',
+    expectedScript: expectedProbe,
+  });
+  if (binExec.state !== RED || !/home\/orca\/bin/.test(binExec.detail)) {
+    failures.push(`活 ExecStart 指 ~/bin/gw-remote-probe.mjs 应判红，实际 ${binExec.state}：${binExec.detail}`);
+  }
+  const inRepoExec = classifyProbeExecStart({
+    liveExecStart: 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs ; ignore_errors=no }',
+    expectedScript: expectedProbe,
+  });
+  if (inRepoExec.state !== OK || inRepoExec.skipped) {
+    failures.push(`活 ExecStart 走仓内脚本应 ok，实际 ${inRepoExec.state}：${inRepoExec.detail}`);
+  }
+  const outsideSameName = classifyProbeExecStart({
+    liveExecStart: 'ExecStart=/usr/bin/node /tmp/scripts/gw-remote-probe.mjs',
+    expectedScript: expectedProbe,
+  });
+  if (outsideSameName.state !== RED || !/\/tmp\/scripts/.test(outsideSameName.detail)) {
+    failures.push(`仓外同名路径应判红，实际 ${outsideSameName.state}：${outsideSameName.detail}`);
+  }
+  const commentLies = classifyProbeExecStart({
+    liveExecStart: '# ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/gw-remote-probe.mjs\nExecStart=/usr/bin/node /tmp/gw-remote-probe.mjs\n',
+    expectedScript: expectedProbe,
+  });
+  if (commentLies.state !== RED || !/\/tmp\/gw-remote-probe/.test(commentLies.detail)) {
+    failures.push(`误导注释应判红，实际 ${commentLies.state}：${commentLies.detail}`);
   }
 
   if (failures.length) {
@@ -1447,6 +1543,6 @@ const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
 export {
-  CHECKS, orcaJson, checkListSurface, UNPROBEABLE_CODES,
+  CHECKS, UNPROBEABLE_CODES,
   loadTuiAgentCatalog, candidateTuiCatalogPaths,
 };

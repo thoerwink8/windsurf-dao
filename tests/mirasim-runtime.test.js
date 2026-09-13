@@ -8,8 +8,21 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const LIB = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
+
+// 夹具要一个「服务端报得出的合法版本号」。
+// 2026-09-10 起钉版本改成跟随在役版本（读 bundle 的 VERSION），不再有手打常量可抄——
+// 所以这里也从真源读：本机在役版本，读不到就退一个形状合法的假值。
+// 写死具体版本号会在每次升级后把「版本一致」的用例判成不符（0.0.307 那次 8 条一起红）。
+const PINNED_VERSION = (() => {
+  try {
+    const { installedVersion } = require(path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs'));
+    return installedVersion(require('node:os').homedir()) || '0.0.0';
+  } catch { return '0.0.0'; }
+})();
 
 const KEY = 'claude:a8d67849-7fe3-4d03-ae25-312b86952bf9';
 const UUID = 'a8d67849-7fe3-4d03-ae25-312b86952bf9';
@@ -18,7 +31,7 @@ const T0 = Date.parse('2026-09-04T06:43:00.000Z');
 // 服务端连上就推的 state 帧，字段照实测抄
 function goodState(over = {}) {
   return {
-    version: '0.0.282',
+    version: PINNED_VERSION,  // 跟随库内常量：写死会在每次升级后把「版本一致」的用例判成不符
     workdir: '/srv/work',
     home: '/srv',
     platform: 'linux',
@@ -55,6 +68,7 @@ async function runtimeWith(wire, over = {}) {
     homeDir: '/srv',
     connect: async () => wire,
     now: () => T0,
+    attachHooks: () => ({ ok: true }),
     ...over,
   });
 }
@@ -74,11 +88,14 @@ const ledgerRow = (over = {}) => ({
 });
 
 describe('契约断言', () => {
-  it('版本不符：抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
+  // 2026-09-10 改：钉版本默认改成「跟随本机在役版本」，不再比对具体值（那次因为手打常量
+  // 没跟上升级，96 条派工被拒）。所以「版本不符就拒派」这个能力现在需要**显式钉住**才触发——
+  // 这条测试跟着显式给 pinnedVersion，判别力（拒派=一帧都不发）原样保留。
+  it('显式钉住版本时：不符就抛 MirasimContractError，且一帧 prompt 都没发出去（这才叫拒派）', async () => {
     const wire = fakeWire(goodState({ version: '0.0.283' }), () => [
       { type: 'accepted', sessionKey: KEY, taskId: 't1' },
     ]);
-    const rt = await runtimeWith(wire);
+    const rt = await runtimeWith(wire, { pinnedVersion: '0.0.307' });
     await assert.rejects(
       () => rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' }),
       err => {
@@ -123,7 +140,7 @@ describe('契约断言', () => {
 
   it('缺关键字段（形状变了）也拒派', async () => {
     const { judgeContract } = await import(LIB);
-    const v = judgeContract({ version: '0.0.282', platform: 'linux', agentsAvailable: ['claude'] });
+    const v = judgeContract({ version: PINNED_VERSION, platform: 'linux', agentsAvailable: ['claude'] });
     assert.strictEqual(v.ok, false);
     assert.match(v.errors.join('；'), /state\.workdir 形状不符/);
     assert.match(v.errors.join('；'), /state\.home 形状不符/);
@@ -409,12 +426,82 @@ describe('判完工交叉核', () => {
     assert.match(v.reason, /incomplete/);
   });
 
+  // #1121：被杀死的会话 phase 照样是 done，死因只写进 error。两条死因串是 2026-09-07
+  // 从真会话上抄下来的原文，不是编的——工人 3 次、审官 8 次，全天 11 次判成「完工」。
+  const STALL_ERR = 'pi turn stalled past 30 minutes';
+  const CAPACITY_ERR = 'Selected model is at capacity. Please try a different model.';
+
+  for (const [name, err] of [['回合看门狗掐死工人', STALL_ERR], ['审官撞上游满载', CAPACITY_ERR]]) {
+    it(`#1121 ${name}：phase=done 但带死因 → failed（账本有成功行也不许判 done）`, async () => {
+      const { judgeCompletion } = await import(LIB);
+      const v = judgeCompletion({
+        // 账本里**有**起针后的成功行：会话被杀前已经打了几十个工具调用，
+        // 交叉核拦不住这一类——所以判据必须落在 error 上。
+        view: { phase: 'done', text: '读了一堆，什么也没写', toolCalls: [], error: err },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'failed');
+      assert.notStrictEqual(v.status, 'done');
+      assert.strictEqual(v.error, err, '死因原文不许被吞掉');
+      assert.equal(v.reason.includes(err), true);
+    });
+  }
+
+  it('#1121 反证：phase=done 且 error 为空 → 照旧走交叉核判 done（这条不是恒红）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    for (const empty of [null, undefined, '', '   ']) {
+      const v = judgeCompletion({
+        view: { phase: 'done', text: 'PONG', toolCalls: [], error: empty },
+        ledger: { readable: true, rows: [ledgerRow()] },
+        since: T0,
+      });
+      assert.strictEqual(v.status, 'done', `error=${JSON.stringify(empty)} 时应判 done`);
+    }
+  });
+
+  it('#1121 非终态不受影响：phase=running 带 error 仍判 running（不提前结算）', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const v = judgeCompletion({
+      view: { phase: 'running', error: CAPACITY_ERR },
+      ledger: { readable: true, rows: [] },
+      since: T0,
+    });
+    assert.strictEqual(v.status, 'running');
+  });
+
   it('会话清单的 runState 归一到 phase 这套词', async () => {
     const { metaView, readSessionView } = await import(LIB);
     assert.strictEqual(metaView({ runState: 'completed', preview: 'PONG' }).phase, 'done');
     assert.strictEqual(metaView({ runState: 'running' }).phase, 'running');
     assert.strictEqual(readSessionView({ runState: 'complete' }).phase, 'done');
     assert.strictEqual(readSessionView({ phase: 'done', incomplete: true }).incomplete, true);
+  });
+
+  // 2026-09-11 实咬（与 review-pending.countLiveReviewers 同一个病）：
+  // 上面那条用例只喂 `runState`，而**真实会话清单里没有这个字段**——
+  // 实测 listSessions 回的键是 `… state, phase, observedState …`。
+  // 于是夹具全绿、生产里 phase 恒为 null（「这条会话什么态」永远是不知道）。
+  // 这组用真实字段名喂，钉住那个夹具盲区。
+  it('【真字段】只给 state 也要归一出 phase（会话清单的真实形状）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'stopped' }).phase, 'stopped');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'running' }).phase, 'running');
+    assert.strictEqual(metaView({ sessionKey: 'k', state: 'completed' }).phase, 'done');
+  });
+
+  it('【真字段】state=incomplete 要标 incomplete（收尾没跑完，不是在役）', async () => {
+    const { metaView } = await import(LIB);
+    const v = metaView({ sessionKey: 'k', state: 'incomplete' });
+    assert.strictEqual(v.phase, 'incomplete');
+    assert.strictEqual(v.incomplete, true);
+  });
+
+  it('【真字段】只给 phase / observedState 也认；都没有才给 null（不编）', async () => {
+    const { metaView } = await import(LIB);
+    assert.strictEqual(metaView({ sessionKey: 'k', phase: 'failed' }).phase, 'failed');
+    assert.strictEqual(metaView({ sessionKey: 'k', observedState: 'gone' }).phase, 'gone');
+    assert.strictEqual(metaView({ sessionKey: 'k' }).phase, null);
   });
 });
 
@@ -538,6 +625,17 @@ describe('问答与工作区', () => {
     assert.deepStrictEqual(wire.sent.filter(f => f.type === 'addWorktree'), []);
   });
 
+  it('建树后闸没挂上 → 整段失败，不把树当建成', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listWorkspaces' ? [{
+      type: 'workspaces',
+      workspaces: [{ path: '/repo', name: 'repo', worktrees: [{ path: '/trees/feat-x', branch: 'feat-x' }] }],
+    }] : []));
+    const rt = await runtimeWith(wire, {
+      attachHooks: () => { throw new Error('控制面闸没挂上：写不上'); },
+    });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-x'), /控制面闸没挂上/);
+  });
+
   it('没有就建，并按 reqId 收应答、再列一次读回自证', async () => {
     let listed = 0;
     const wire = fakeWire(goodState(), f => {
@@ -611,5 +709,245 @@ describe('问答与工作区', () => {
       assert.match(err.message, /没查成/);
       return true;
     });
+  });
+});
+
+describe('测试隔离闸（#1152）', () => {
+  it('NODE_TEST_CONTEXT → 拒；空 env → 拒；生产旗标放行；测试不能 opt-in', async () => {
+    const { judgeTestExecutorIsolation, TEST_ISOLATION_MARK, REAL_EXECUTOR_ENV } = await import(LIB);
+    const blocked = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child-v8' });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.blocked, true);
+    assert.match(blocked.error, new RegExp(TEST_ISOLATION_MARK));
+    const noSpawn = judgeTestExecutorIsolation({ DAO_DISPATCH_NO_SPAWN: '1' });
+    assert.equal(noSpawn.ok, false);
+    assert.ok(noSpawn.signals.includes('DAO_DISPATCH_NO_SPAWN'));
+    const missing = judgeTestExecutorIsolation({});
+    assert.equal(missing.ok, false);
+    assert.equal(missing.why, 'missing-DAO_REAL_EXECUTOR');
+    const prod = judgeTestExecutorIsolation({ [REAL_EXECUTOR_ENV]: '1' });
+    assert.equal(prod.ok, true);
+    assert.equal(prod.blocked, false);
+    const cannotOptIn = judgeTestExecutorIsolation({ NODE_TEST_CONTEXT: 'child', [REAL_EXECUTOR_ENV]: '1' });
+    assert.equal(cannotOptIn.ok, false);
+    assert.equal(cannotOptIn.why, 'test-signal');
+  });
+
+  it('真连线 + 空 env：ensureWorkspace 在 open 前抛（env 丢失不再放行）', async () => {
+    const { createRuntime, TEST_ISOLATION_MARK } = await import(LIB);
+    const rt = createRuntime({ env: { PATH: '/bin' }, port: 59999 });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-iso'), err => {
+      assert.equal(err.name, 'MirasimRejectedError');
+      assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+      return true;
+    });
+  });
+
+  it('真连线 + 测试信号：ensureWorkspace / startSession 在 open 前抛', async () => {
+    const { createRuntime, TEST_ISOLATION_MARK } = await import(LIB);
+    const rt = createRuntime({ env: { NODE_TEST_CONTEXT: 'child' }, port: 59999 });
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-iso'), err => {
+      assert.equal(err.name, 'MirasimRejectedError');
+      assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+      return true;
+    });
+    await assert.rejects(
+      () => rt.startSession({ agent: 'claude', workdir: '/repo', prompt: 'x' }),
+      err => {
+        assert.equal(err.name, 'MirasimRejectedError');
+        assert.match(err.message, new RegExp(TEST_ISOLATION_MARK));
+        return true;
+      },
+    );
+  });
+
+  it('注入 connect 的单元测试不被隔离闸误伤', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-iso' }] : []));
+    const rt = await runtimeWith(wire, { env: { NODE_TEST_CONTEXT: 'child-v8' } });
+    const r = await rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: '只回 PONG' });
+    assert.equal(r.sessionKey, KEY);
+  });
+});
+
+describe('#1125 listSessions：会话名单是第六个动词', () => {
+  it('回了 sessions 数组 → ok，原样交出', async () => {
+    const sessions = [
+      { sessionKey: KEY, runState: 'streaming' },
+      { sessionKey: 'codex:dead', runState: 'done' },
+    ];
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions, hasMore: false }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    assert.equal(r.missing, false);
+    assert.deepEqual(r.sessions, sessions);
+    assert.ok(wire.sent.some(f => f.type === 'listSessions'));
+  });
+
+  it('没回可用数组 → missing，sessions 是 null 不是 []', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions' }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.missing, true);
+    assert.equal(r.sessions, null, 'null 才能让 countLiveReviewers 判没查成；[] 会当成 0 个在跑去拉满');
+  });
+
+  it('等不到帧 → missing，sessions 是 null', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /没查成/);
+  });
+
+  it('hasMore=true 扩大明确 global 查询，直到服务端证明完整', async () => {
+    let calls = 0;
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [{ sessionKey: KEY }], hasMore: ++calls === 1 }] : []);
+    const rt = await runtimeWith(wire);
+    const r = await rt.listSessions();
+    assert.equal(r.ok, true);
+    const requests = wire.sent.filter(f => f.type === 'listSessions');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].scope, 'global');
+    assert.ok(requests[1].limit > requests[0].limit);
+  });
+
+  it('缺完整性标志不能假报全局查成', async () => {
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{ type: 'sessions', sessions: [] }] : []);
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.equal(r.sessions, null);
+  });
+
+  it('prompt 已发送但 ACK 丢失是 uncertain，不能释放后重复派', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    await assert.rejects(rt.startSession({ agent: 'claude', workdir: '/tmp/dao-fake', prompt: 'fixture', clientRef: 'lost-ack' }), e => e.detail.launchUncertain === true && e.detail.clientRef === 'lost-ack');
+    assert.equal(wire.sent.filter(f => f.type === 'prompt').length, 1);
+  });
+});
+
+describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）', () => {
+  it('installedVersion 读出本机在役版本号', async () => {
+    const { installedVersion } = await import(LIB);
+    const v = installedVersion('/home/orca');
+    assert.ok(v === null || /^\d+\.\d+\.\d+/.test(v), `读出来应是版本号或 null，实际 ${v}`);
+  });
+
+  it('读不到时返回 null，不编一个版本出来', async () => {
+    const { installedVersion } = await import(LIB);
+    assert.strictEqual(installedVersion('/nonexistent-home-xyz'), null);
+  });
+
+  it('跟随模式：服务端版本与常量不同也放行——升级不该再拒派', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, true);
+  });
+
+  it('跟随模式仍拦「服务端不报版本」——形态突变不许静默走错', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /没报 version/);
+  });
+
+  it('跟随模式拦非法版本形状', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract({ version: 'not-a-version', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] });
+    assert.strictEqual(v.ok, false);
+  });
+
+  it('显式钉住时恢复严格语义', async () => {
+    const { judgeContract } = await import(LIB);
+    const v = judgeContract(
+      { version: '0.0.999', workdir: '/w', home: '/h', platform: 'linux', agentsAvailable: [] },
+      { pinnedVersion: '0.0.307' },
+    );
+    assert.strictEqual(v.ok, false);
+    assert.match(v.errors.join('；'), /版本不符/);
+  });
+});
+
+describe('建树幂等命中（2026-09-10 服务端 worktrees 缓存陈旧）', () => {
+  it('git 说分支已被某树占用，且该路径真实存在 → 当已有树复用，不报错', async () => {
+    // 服务端 worktrees 缓存实测会陈旧（69 条里 31 条有 branch，git 里真有的不在列表），
+    // findTree 因此漏判、走到新建，git 拒绝并在错误里给出真实路径。git 比缓存权威。
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-hit-'));
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: `fatal: 'feat-z' is already used by worktree at '${real}'` }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    const r = await rt.ensureWorkspace('/repo', 'feat-z');
+    assert.strictEqual(r.created, false);
+    assert.strictEqual(r.path, real);
+    assert.strictEqual(r.verified, true);
+  });
+
+  it('git 报的路径不存在 → 仍是拒绝，不许拿一个不存在的路径当成功', async () => {
+    const wire = fakeWire(goodState(), f => {
+      if (f.type === 'listWorkspaces') return [{ type: 'workspaces', workspaces: [{ path: '/repo', worktrees: [] }] }];
+      if (f.type === 'addWorktree') {
+        return [{ type: 'worktreeAdded', reqId: f.reqId, ok: false, error: "fatal: 'feat-z' is already used by worktree at '/nope/not/here'" }];
+      }
+      return [];
+    });
+    const rt = await runtimeWith(wire);
+    await assert.rejects(() => rt.ensureWorkspace('/repo', 'feat-z'), err => {
+      assert.strictEqual(err.name, 'MirasimRejectedError');
+      return true;
+    });
+  });
+});
+
+// 升级换没换干净（2026-09-10 的镜像面）：契约断言两边都读服务端，
+// 所以「盘上 promote 了新版、进程还在跑老版」它天生看不见。这条判官专门补这个盲区。
+describe('judgeVersionDrift：promote 出来的版本 vs 在役进程自报的版本', () => {
+  const load = () => import(LIB);
+
+  it('两个版本一致 → ok', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.307', service: 'mirasim-server.service' });
+    assert.equal(r.state, 'ok');
+    assert.equal(r.promoted, '0.0.307');
+  });
+
+  it('盘上 0.0.307、进程 0.0.282 → red（改了软链没重启的形态）', async () => {
+    const { judgeVersionDrift } = await load();
+    const r = judgeVersionDrift({ promoted: '0.0.307', reported: '0.0.282' });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /0\.0\.307/);
+    assert.match(r.detail, /0\.0\.282/);
+    // 说人话的三行缺一行，群里就只剩技术话——拆开断言，失败时看得出缺的是哪一行。
+    assert.equal(typeof r.plain?.what, 'string', 'red 缺 plain.what');
+    assert.equal(typeof r.plain?.impact, 'string', 'red 缺 plain.impact');
+    assert.equal(typeof r.plain?.plan, 'string', 'red 缺 plain.plan');
+  });
+
+  it('进程比盘上还新（回退没生效）同样 red —— 谁新谁旧都要人看一眼', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: '0.0.282', reported: '0.0.307' }).state, 'red');
+  });
+
+  it('取不到版本 → unknown，绝不是 ok（没查成 ≠ 查过没事）', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: null, reported: '0.0.307' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: null }).state, 'unknown');
+    assert.equal(judgeVersionDrift({}).state, 'unknown');
+    assert.match(judgeVersionDrift({}).detail, /没查成/);
+  });
+
+  it('形状不对的版本号当取不到，不当一致', async () => {
+    const { judgeVersionDrift } = await load();
+    assert.equal(judgeVersionDrift({ promoted: 'unknown', reported: 'unknown' }).state, 'unknown');
+    assert.equal(judgeVersionDrift({ promoted: '0.0.307', reported: ' 0.0.307 ' }).state, 'ok', '两侧空白该被规整');
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: dao-inbox
-description: 收件箱——别的会话（审计/巡检/另一台机器）把发现落盘到 docs/observations/，帅位每轮被提醒去读。想知道这条通道怎么工作、或要往里写东西时读。
+description: 收件箱——别的会话（审计/巡检/另一台机器）把发现落盘到 docs/observations/，指挥官盘点每 6 小时扫一次。想知道这条通道怎么工作、或要往里写东西时读。
 ---
 
 # 收件箱
@@ -15,7 +15,7 @@ description: 收件箱——别的会话（审计/巡检/另一台机器）把�
 
 ## 读与处置（帅位）
 
-每轮由全局 hook 注入一行提醒；未处置超 24 小时、或堆到 5 条、或有未提交的文件，注入的就不是提醒而是**硬性指令**：本轮先处置。
+指挥官盘点（`commander-inventory`，每 6 小时）会扫收件箱。未处置超 24 小时、或堆到 5 条、或有未提交的文件，盘点判红：开待拍板单并通知总控群，必须先处置。
 
 处置三选一，都要留痕：
 
@@ -30,11 +30,9 @@ description: 收件箱——别的会话（审计/巡检/另一台机器）把�
 ## 装在哪
 
 - 判断逻辑：`scripts/lib/inbox.mjs`（纯函数，可单测）
-- 钩子：本 skill 的 `hooks/inbox-check.mjs`，登记在**全局** `settings.json` 的 `UserPromptSubmit`
-- 因为是全局钩子，**每个项目都会跑**：新项目 `git clone` 完自动生效，不用装东西；仓里没有 `docs/observations/` 就静默
-- 闸：`tests/inbox.test.js`
+- 现役挂载面：指挥官盘点 `scripts/lib/commander-inventory.mjs`（`commander-inventory.timer` 每 6 小时）
+- 闸：`tests/inbox.test.js`（锁盘点调用 `assessInbox`；本页再写已死的 hook 名就红）
 
 ## 边界
 
-- 钩子退出码永远 0。硬拦靠**注入硬性指令**，不靠 exit 2——exit 2 挡掉的是用户说话，拦错了对象。
 - 「查不成」与「没有新东西」必须分开：目录读不了、git 查不成，都要报出来，不许静默当空。
