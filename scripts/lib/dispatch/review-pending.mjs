@@ -486,12 +486,24 @@ export function drainReviewPending({ dir, tickets, attach } = {}) {
     results.push(consumeReviewPending({ dir, ticket: t, attach }));
   }
   const failed = results.filter(r => !r.ok);
+  // #1239：顶层 error 必须带上**第一张失败票的真因**。
+  //
+  // 原先只有失败计数，`dao.mjs` 那侧 `fail(drained.error || '未全部成功', drained)`
+  // 取不到 error 字符串 → 只能印兜底文案。于是真因（`execution profile unverified:
+  // codex-relay-gpt-5.6-sol` 这类）躺在 results[].error 里没人读，日志里只剩一句
+  // 「未全部成功」——7 天里 23 次。这是「错误在传递中丢失」，不是「错误没发生」：
+  // 读日志的人据此查不出任何东西（#1233 / #1237 的同一族）。
+  //
+  // 取第一条而非拼接：认输/重试判据只读首行（judgeRetry / exhaustedComment 都取首行），
+  // 拼一长串反而会把判据要的那句挤掉。
+  const firstError = failed.length ? String(failed[0].error || failed[0].why || '').trim() : '';
   return {
     ok: failed.length === 0,
     unscanned: false,
     scanned: listed.length,
     drained: results.filter(r => r.ok).length,
     failed: failed.length,
+    ...(firstError ? { error: failed.length > 1 ? `${firstError}（共 ${failed.length} 张失败）` : firstError } : {}),
     results,
   };
 }

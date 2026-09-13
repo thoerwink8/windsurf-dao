@@ -185,7 +185,6 @@ export function normalizeGithubGraphql(data) {
   return { ok: true, issues, prs };
 }
 
-/** 供单测直接喂 gh issue/pr list 形态。 */
 export function normalizeGithubLists({ issues, prs } = {}) {
   if (!Array.isArray(issues) || !Array.isArray(prs)) {
     return { ok: false, error: 'issues/prs 必须是数组——没扫成' };
@@ -368,32 +367,6 @@ export function normalizeScanState({ anomalies, recommendations } = {}) {
 export function hashScanState(state) {
   const body = JSON.stringify(state ?? { anomalies: [], recommendations: [] });
   return createHash('sha256').update(body, 'utf8').digest('hex');
-}
-
-export function defaultStatePath() {
-  return join(tmpdir(), DEFAULT_STATE_BASENAME);
-}
-
-/** 读不到/坏 JSON/缺 hash → firstRun（fail-open 于报）。 */
-export function readLastState(path) {
-  if (!path) return { ok: false, firstRun: true, reason: 'no-path' };
-  try {
-    const raw = readFileSync(path, 'utf8');
-    const doc = JSON.parse(raw);
-    if (!doc || typeof doc.hash !== 'string' || !doc.hash) {
-      return { ok: false, firstRun: true, reason: 'bad-shape' };
-    }
-    return {
-      ok: true,
-      hash: doc.hash,
-      at: doc.at || null,
-      summary: typeof doc.summary === 'string' ? doc.summary : null,
-    };
-  } catch (e) {
-    const code = e && e.code;
-    if (code === 'ENOENT') return { ok: false, firstRun: true, reason: 'absent' };
-    return { ok: false, firstRun: true, reason: 'corrupt', error: String(e.message || e).slice(0, 120) };
-  }
 }
 
 export function writeLastState(path, { hash, summary, at = new Date().toISOString() } = {}) {

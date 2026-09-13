@@ -1501,12 +1501,6 @@ export function writeReworkBrief(action, { io: fsio = null, dir = null } = {}) {
   });
 }
 
-/** 返工卡名与注入指针。注入不带正文，只给「怎么切到 PR 分支 + 全文在哪」。 */
-// 卡名/摘要按返工种类分岔。工人会把 --spec 当任务边界读（memory spec-is-read-as-task-scope），
-// 所以解冲突的单绝不能写「照审官红项逐条改」——那张 PR 上一条红都没有，工人会去找不存在的东西。
-export function reworkCardName(action) {
-  return action.kind === 'rework' && action.conflict ? `解冲突 PR #${action.pr}` : `返工 PR #${action.pr}`;
-}
 export function reworkSpec(action, briefPath) {
   const checkout = `先 gh pr checkout ${action.pr} 切到该 PR 分支（改在本分支，别开新 PR）`;
   return action.conflict
