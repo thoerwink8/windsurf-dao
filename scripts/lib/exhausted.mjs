@@ -22,6 +22,22 @@ export function exhaustedPushPath(home) {
   return `${String(home || '').replace(/\/+$/, '')}/.dao/exhausted-push.json`;
 }
 
+/**
+ * 两条认输记录谁更新。`at`（ISO 时间串）是主判据；缺失/坏值按 0 算。
+ *
+ * `at` 相同时按 key 字典序收尾，**不靠对象插入序**——插入序取决于 JSON.parse 的顺序，
+ * 是「看起来稳定其实没有判据」的那种确定性。返回值 >0 表示 a 更新。
+ */
+export function comparePushRecency(a, aKey, b, bKey) {
+  const t = (v) => {
+    const n = Date.parse(String((v && v.at) || ''));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const d = t(a) - t(b);
+  if (d !== 0) return d;
+  return String(aKey || '').localeCompare(String(bKey || ''));
+}
+
 function labelNames(labels) {
   if (!Array.isArray(labels)) return [];
   const out = [];
@@ -181,12 +197,22 @@ export function planExhaustedLabelClear({ prs = [], ledger = {}, pushedThisRound
     if (names.includes(WAITING_USER_LABEL)) { skipped.push({ pr: n, why: 'waiting-user' }); continue; }
     const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null;
     if (!head) { skipped.push({ pr: n, why: 'head-unscanned' }); continue; }  // 没查成不动手（摘错要重认输一轮）
-    // 找这张 PR 在账本里的认输记录：key 是 pushed:<pr>@<head>
-    const recorded = Object.keys(book).find((k) => {
+    // 找这张 PR **最新**一条认输记录：key 是 pushed:<pr>@<head>，一张 PR 会攒下多条。
+    //
+    // 2026-09-13 实咬：这里原来是 `Object.keys(book).find(v => v.pr === n)`——`find` 取的是
+    // **第一条**（插入序最老的），不是最新一条。PR #1143 账本里有三条（a77faa7c → bc83fcf5 →
+    // 6c14ce71），find 永远命中 9-08 那条 a77faa7c，于是当前 head 6c14ce71 被误判成
+    // 「head 变了 = 新局面」→ 摘标 → 下一轮 worker-done 又打标又评论 → 再摘……
+    // 每 20 分钟一轮，刷了 136 条同 head 的认输评论，标在「有/无」之间反复横跳，
+    // 而 PR 一步没动。判据本身是对的（同 head 不摘）；错的是「跟哪条记录比」。
+    // 取最新：`at` 缺失的旧条目按 0 算，同 `at` 时按 key 字典序稳定收尾（不靠插入序）。
+    let latest = null;
+    for (const k of Object.keys(book)) {
       const v = book[k];
-      return v && Number(v.pr) === Number(n);
-    });
-    const recordedHead = recorded ? String(book[recorded].head || '') : '';
+      if (!v || Number(v.pr) !== Number(n)) continue;
+      if (!latest || comparePushRecency(v, k, book[latest], latest) > 0) latest = k;
+    }
+    const recordedHead = latest ? String(book[latest].head || '') : '';
     if (!recordedHead) { skipped.push({ pr: n, why: 'no-ledger-head' }); continue; }
     if (recordedHead === head) { skipped.push({ pr: n, why: 'same-head' }); continue; }
     if (justPushed.has(exhaustedPushKey(n, head) || '')) { skipped.push({ pr: n, why: 'just-pushed' }); continue; }
