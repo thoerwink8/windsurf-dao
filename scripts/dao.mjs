@@ -924,8 +924,8 @@ function cmdPrSyncLabels(args) {
  *
  * 缺口不在「判据太严」，在于**这类 PR 从来没落过账**。补上落账，判据一个字都不用改，
  * 也就不必去动 `identity === '工人'` 那道闸——那道闸仍然只放行「真有派工决定」的链。
- * 帅位自开这条链落的账本身是**诚实的**：model 是当场给的（必填，且必须是 registry 里的 id），
- * reviewer 由调用方给或稍后由 `pr-sync-labels` 补齐，两者都不是反推出来的。
+ * 帅位自开这条链落的账本身是**诚实的**：model 与 reviewer 都是当场给的（都必填，
+ * 且必须是 registry 里的 id，reviewer 还要与 model 换厂商），不是从 commit 前缀反推出来的。
  *
  * ## 失败方向
  *
@@ -935,18 +935,33 @@ function cmdPrSyncLabels(args) {
  */
 function cmdPrOpen(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'marshal', where: 'pr-open', defaultLocal: thisCheckoutRoot() });
-  const routing = loadOrFail();
-  const model = String(args.model || '').trim();
-  if (!model) fail('pr-open 要 --model（帅位自开也得说清是哪条腿交付的，否则这张 PR 进不了选型账）');
-  const known = (routing.models || []).some((m) => m && m.id === model);
-  if (!known) {
-    const ids = (routing.models || []).map((m) => m && m.id).filter(Boolean).join('、');
-    fail(`pr-open 的 --model ${model} 不在 registry（不落幽灵账）：可用 ${ids}`);
-  }
-  const reviewer = String(args.reviewer || '').trim() || null;
+  // 先查「参数齐不齐」，再查「参数对不对」：缺参数是调用方还没写全，报错要指那一处。
   const head = String(args.head || args.branch || '').trim();
   if (!head) fail('pr-open 要 --head <分支>（分支名是打标路的匹配键之一，不能靠猜）');
   if (!args.title) fail('pr-open 要 --title');
+  const routing = loadOrFail();
+  const model = String(args.model || '').trim();
+  if (!model) fail('pr-open 要 --model（帅位自开也得说清是哪条腿交付的，否则这张 PR 进不了选型账）');
+  const knownIds = (routing.models || []).map((m) => m && m.id).filter(Boolean);
+  if (!knownIds.includes(model)) {
+    fail(`pr-open 的 --model ${model} 不在 registry（不落幽灵账）：可用 ${knownIds.join('、')}`);
+  }
+  const reviewer = String(args.reviewer || '').trim();
+  // reviewer 也必填（2026-09-14 审官判红第 1 条）：打标路的判据是这条 `job.dispatch` 里
+  // `model` 与 `reviewer` **都在**（worker-done.mjs:274），缺 reviewer 一样回「需人工打标」。
+  // 原来写成「不给也行，稍后 pr-sync-labels 补齐」是错的——`pr-sync-labels` 只把账里**已有**
+  // 的字段打成标，它既不选审官也不写账（这是 memory `dispatched-label-alone-never-dispatches` 的同一形状：
+  // 少一个标，整条链静默卡住，而现场看起来像「已经交出去了」）。
+  if (!reviewer) fail('pr-open 要 --reviewer（打标路要求 model 与 reviewer 同时在账上；缺一个就永远「需人工打标」）');
+  // 「在 registry 里」不够——还得是**能当审官**的那个（有「审查」职责、没被 reviewerDisabled）。
+  // 同一个模型 id 既可能在工人侧也可能在审官侧，只查 id 存在就放行，落下去的是一条
+  // 「账上写着审官、实际起不来审官会话」的账——那是比缺字段更难查的坏账。
+  const reviewerIds = reviewerPasserIds(routing);
+  if (!reviewerIds.includes(reviewer)) {
+    fail(`pr-open 的 --reviewer ${reviewer} 不是可用审官（要 roles 含「审查」且没被 reviewerDisabled）：可用 ${reviewerIds.join('、')}`);
+  }
+  // 审查换厂商：这条链落账后审官就是定死的，开 PR 这一刻是唯一能拦住同厂的点。
+  refuseIfSameVendor({ workerId: model, reviewerId: reviewer, routing });
   const ghRepo = targetRepo.ownerName || DEFAULT_DAO_REPO;
   let body = args.body;
   if (args.bodyFile) {

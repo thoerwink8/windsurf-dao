@@ -622,4 +622,55 @@ describe('#1214 缺口 A：pr-open 落账后，打标路真的认得出这条链
     assert.notEqual(noHead.status, 0);
     assert.match(String(noHead.stdout || noHead.stderr), /--head/);
   });
+
+  // 审官 2026-09-14 判红第 1 条：文档原写「--reviewer 不给也行，稍后 pr-sync-labels 补齐」。
+  // 那是错的——打标路要求这条 job.dispatch 里 model 与 reviewer **同时在**，缺一个就是
+  // 「需人工打标」。所以缺 reviewer 必须当场拒，不能让一条打不上标的账落下去。
+  it('缺 --reviewer ⇒ 当场拒，且一条账都不落（缺它就永远打不上标）', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-norev-'));
+    try {
+      const { r, payload } = runPrOpen([], { ledgerDir });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /--reviewer/);
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  it('--reviewer 不在 registry ⇒ 拒，不落幽灵账', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-badrev-'));
+    try {
+      const { r, payload } = runPrOpen(['--reviewer', '审官-不存在的'], { ledgerDir });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /不是可用审官|不在 registry/);
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  // 「在 registry 里」不等于「能当审官」。composer-2.5 在 registry 里，roles 却没有「审查」——
+  // 放它过去就是一条「账上写着审官、起不来审官会话」的坏账，比缺字段更难查。
+  it('--reviewer 在 registry 但不能当审官 ⇒ 拒（roles 不含「审查」）', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-nonrev-'));
+    try {
+      const { r, payload } = runPrOpen(['--model', 'grok-4.6', '--reviewer', 'composer-2.5'], { ledgerDir });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /不是可用审官/);
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  // 同厂当场拒：这条链一落账审官就定死了，开 PR 是唯一能拦住「自己审自己」的点。
+  // 取 grok-4.6 + grok-mirasim-native：两个都在 registry、都是可用审官、真实供应商同为 grok——
+  // 只有厂商这一关能拦住它们（先前用 claude-opus 是错的：它 reviewerDisabled，先被上一条挡下，
+  // 于是这条测试根本走不到厂商闸，「配了正控」是假的）。
+  it('--reviewer 与 --model 同厂 ⇒ 当场拒（审查换厂商）', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-samevendor-'));
+    try {
+      const { r, payload } = runPrOpen(['--model', 'grok-4.6', '--reviewer', 'grok-mirasim-native'], { ledgerDir });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /同厂|换厂商/);
+      assert.equal(payload.vendorGate && payload.vendorGate.state, 'same_vendor',
+        '要走到厂商闸才算验到，别的闸挡下都不算：' + JSON.stringify(payload).slice(0, 200));
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
 });
