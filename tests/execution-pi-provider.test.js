@@ -236,21 +236,15 @@ test('a provider may declare several endpoints; only a declared pair is accepted
   assert.equal(inspectPiDirectProvider(slash.p, slash.options).ok, true);
 });
 
-test('anthropic direct is admitted on its own endpoint and protocol, still api_key-only', async () => {
+test('anthropic is not a pi leg: no endpoint of it is admitted', async () => {
   const { inspectPiDirectProvider } = await lib;
-  const build = patch => {
-    const s = comboSetup('anthropic', { model: 'claude-opus-5', api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' });
-    Object.assign(s.p, { id: 'anthropic-direct', nativeProviderId: 'anthropic', accountPoolId: 'anthropic-api' }, patch);
-    return s;
-  };
-  assert.equal(inspectPiDirectProvider(build().p, build().options).ok, true);
-  // Anthropic's native store is a literal api_key; an OAuth-only entry is still refused.
-  const oauth = build();
-  oauth.files.get('/fiction/.pi/agent/auth.json').anthropic = { type: 'oauth', access: 'token', refresh: 'token', expires: NOW + 1 };
-  assert.equal(inspectPiDirectProvider(oauth.p, oauth.options).reason, 'native_credential_missing');
-  // A same-named provider row on the completion protocol must not be accepted.
-  const wrong = build();
-  wrong.files.set('/fiction/.pi/agent/models-store.json', { anthropic: { checkedAt: NOW, models: [{ id: 'claude-opus-5', provider: 'anthropic', api: 'openai-completions', baseUrl: 'https://api.anthropic.com' }] } });
-  assert.equal(inspectPiDirectProvider(wrong.p, wrong.options).reason, 'native_model_endpoint_mismatch');
+  // User decision, 2026-09-13: Claude rides mirasim and reclaude only. anthropic must stay
+  // out of the frozen NATIVE table even when the profile, the store row and a literal
+  // api_key credential all agree -- the refusal is the decision, not a missing credential.
+  const s = comboSetup('anthropic', { model: 'claude-opus-5', api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' });
+  Object.assign(s.p, { id: 'anthropic-direct', nativeProviderId: 'anthropic', accountPoolId: 'anthropic-api' });
+  s.files.get('/fiction/.pi/agent/auth.json').anthropic = { type: 'api_key', key: 'sk-ant-literal' };
+  // Refused before any credential is even looked at: anthropic is not in the frozen table.
+  assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'unsupported_native_provider');
 });
 

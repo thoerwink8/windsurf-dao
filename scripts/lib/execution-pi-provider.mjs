@@ -15,6 +15,9 @@ import { isDeepStrictEqual } from 'node:util';
 // comes from the matched catalog row, not from a provider-wide default.
 // Providers are limited to literal api_key auth; an OAuth-only provider cannot be added here
 // without weakening that rule (see inspectPiDirectProvider's entry.type check).
+// anthropic is deliberately absent: it has no account behind it and it is not a pi leg at all.
+// Claude rides mirasim and reclaude only (user, 2026-09-13) — adding it back here would offer
+// dispatch a route that is ruled out by decision, not by a credential that might show up.
 const NATIVE = Object.freeze({
   deepseek: Object.freeze([{ baseUrl: 'https://api.deepseek.com', api: 'openai-completions' }]),
   'opencode-go': Object.freeze([
@@ -22,7 +25,6 @@ const NATIVE = Object.freeze({
     { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-responses' },
     { baseUrl: 'https://opencode.ai/zen/go', api: 'anthropic-messages' },
   ]),
-  anthropic: Object.freeze([{ baseUrl: 'https://api.anthropic.com', api: 'anthropic-messages' }]),
 });
 const samePair = (a, b) => !!a && !!b && a.api === b.api && String(a.baseUrl).replace(/\/+$/, '') === String(b.baseUrl).replace(/\/+$/, '');
 const DAY = 86_400_000;

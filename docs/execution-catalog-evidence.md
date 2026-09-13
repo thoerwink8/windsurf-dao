@@ -186,7 +186,8 @@ openai-responses, `opencode.ai/zen/go` for 2 anthropic-messages), `anthropic` 14
 `xai` is present as an **OAuth** entry, not an api_key, and `anthropic` has **no
 entry at all** in `~/.pi/agent/auth.json` even though `pi auth check --model
 anthropic/claude-opus-5` reports `ready` — that check proves a credential resolves,
-not that the upstream accepts it.
+not that the upstream accepts it. A roster appearing in the store means pi knows the
+model IDs, nothing more; it does not mean the provider is a leg we want to run.
 
 One bounded `pi -p --model <provider>/<id> "reply with the single word ok"` per row:
 
@@ -213,12 +214,21 @@ Consequences recorded in the catalog, not assumed from it:
   provider**, not one pair. The pair is matched exactly against the provider's own
   list and must equal the catalog row; the api_key-only, literal-key, fresh-catalog,
   single-model-match and exact-endpoint rules are unchanged.
-- **`deepseek` and `anthropic` are wired but not funded.** Direct DeepSeek returns
-  402 on the account and Anthropic's key is rejected as invalid; both transports
-  reach the vendor. Their catalog entries are inventories of what is configurable,
-  not usable routes.
-- **`xai` cannot be carried by this launcher.** Its credential is OAuth and the
-  launcher admits only a literal `api_key`; admitting OAuth would be a rule change.
+- **`deepseek` direct is wired but not funded.** Direct DeepSeek returns 402 on the
+  account. Its catalog entries are an inventory of what is configurable, not a usable
+  route.
+- **anthropic is not a pi leg (user decision, 2026-09-13).** Claude rides `mirasim`
+  and `reclaude` only; there is no anthropic account behind pi and none is planned.
+  The 14 anthropic profiles, the `anthropic` provider, the `anthropic-api` pool and the
+  `anthropic-direct-models` / `anthropic-prices` sources were therefore removed from the
+  catalog (55 → 41 profiles), and `anthropic` is **absent from the frozen `NATIVE` table**.
+  That absence is the decision, not a missing credential: `inspectPiDirectProvider` refuses
+  such a profile as `unsupported_native_provider` before it looks at any credential at all,
+  and a test locks that in.
+- **`xai` is not a pi leg either, but it does not need one.** The credential in
+  `~/.pi/agent/auth.json` is OAuth, which this launcher will not admit — but xai is
+  carried by the `grok` CLI (`/usr/bin/grok`), and `grok-mirasim-native` is already
+  `enabled` + `available` on the `local` route. So the OAuth rule costs nothing here.
 - **Registration is not dispatch.** Every profile added on 2026-09-13 is
   `enabled: false` with `availability.status: unavailable` and no execution
   evidence; `selectExecutionProfile` still refuses each one. No account balance,
