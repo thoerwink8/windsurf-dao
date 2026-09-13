@@ -1,9 +1,8 @@
 // scripts/lib/executor-binding.mjs —— 派工三动词的执行体绑定层（#880 卡 B）
 //
 // 改这段前必须知道：
-// - 调用方（dao.mjs 的 dispatch / worktree-create / worker-start）只说 executor 是谁，
-//   底下走 orca 还是 mirasim 由本文件决定。orca 退役那天删 createOrcaBinding 和策略里
-//   「默认: orca」，调用方一行不改——这是 #880 拍的架构。
+// - 调用方（dao.mjs 的 dispatch / worktree-create / worker-start）只说 executor 是谁。
+//   执行体只剩 mirasim。
 // - 策略只认 docs/model-routing.json 的「执行体」节。TOML 里不许有第二份（选型唯一真相源）。
 // - 缺该族配置 = 报警拒派。静默降级会把「这一族没人拍过板」变成「随便挑条腿烧额度」，
 //   而烧掉的额度撤不回来。判别用例钉住这条：拒派时**一个会话都不许起**。
@@ -20,9 +19,11 @@
 //   dispatch        → orca: dao.mjs 原有队列脊（派工单 + detached 执行体，本绑定不接）
 //                     mirasim: dispatchOne = ensureWorkspace + startSession（会话即卡）
 
-import { createRuntime, PINNED_VERSION } from './mirasim-runtime.mjs';
+import { createRuntime } from './mirasim-runtime.mjs';
+import { createExecutionRuntime } from './execution-runtime.mjs';
+import { ensureControlPlaneHooksPath } from './control-plane-write.mjs';
 
-export const EXECUTORS = ['orca', 'mirasim'];
+export const EXECUTORS = ['mirasim'];
 
 /** 策略节在选型 JSON 里的键名。改这里要同步 docs/model-routing.json。 */
 export const EXECUTOR_POLICY_KEY = '执行体';
@@ -100,7 +101,6 @@ export function readExecutorPolicy(routingOrRaw) {
     error: null,
     default: dflt,
     mirasim: normalizeMirasim(node.mirasim),
-    orca: (node.orca) || { 说明: '现役运行时（Orca worktree + terminal）' },
     raw: node,
     why: null,
   };
@@ -291,61 +291,18 @@ function resolveFamilyRoute({ mirasim, model, provider, emptyRoutesError }) {
 }
 
 /**
- * orca 绑定。执行器与 argv 组装都靠注入——本层不 import dao.mjs（会成环），
- * 也不自己拼 argv（那是 lib/dispatch/args.mjs 的事，抄第二份必然走偏）。
- */
-export function createOrcaBinding({ orca, argsWorktreeCreate, argsWorkerStart } = {}) {
-  if (typeof orca !== 'function') throw new Error('createOrcaBinding 要 orca 执行器');
-  if (typeof argsWorktreeCreate !== 'function') throw new Error('createOrcaBinding 要 argsWorktreeCreate');
-  if (typeof argsWorkerStart !== 'function') throw new Error('createOrcaBinding 要 argsWorkerStart');
-  return {
-    name: 'orca',
-    async worktreeCreate(spec = {}) {
-      const r = orca(argsWorktreeCreate({
-        name: spec.name,
-        noParent: spec.noParent,
-        setup: spec.setup,
-        parentWorktree: spec.parentWorktree,
-        baseBranch: spec.baseBranch,
-        issue: spec.issue,
-        comment: spec.comment,
-        repo: spec.repo,
-      }));
-      if (!r || r.ok !== true) return { ok: false, executor: 'orca', error: r?.error ?? 'worktree create 失败', native: r?.json ?? null };
-      return { ok: true, executor: 'orca', path: null, branch: null, created: true, native: r.json };
-    },
-    async workerStart(spec = {}) {
-      const r = orca(argsWorkerStart({
-        task: spec.task,
-        worktree: spec.worktree,
-        terminal: spec.terminal,
-        retryOf: spec.retryOf,
-        run: spec.run,
-      }));
-      if (!r || r.ok !== true) return { ok: false, executor: 'orca', error: r?.error ?? 'worker-start 失败', native: r?.json ?? null };
-      return { ok: true, executor: 'orca', native: r.json };
-    },
-    async dispatchOne() {
-      return {
-        ok: false,
-        executor: 'orca',
-        error: 'orca 的 dispatch 走 dao.mjs 原有队列脊（dispatch 写派工单 → dispatch-exec 后台执行），不经本绑定；orca 退役时那段整体删',
-      };
-    },
-  };
-}
-
-/**
  * mirasim 绑定。三个动词都落在卡 A 冻结的五动词上，签名一字不改。
  * 契约断言（钉版本 + 帧形状 + 执行体在不在）在 ensureWorkspace / startSession 里面，
  * 不符就抛且一帧 prompt 都不发——本层不再断第二遍（抄第二份判据必然走偏）。
  */
-export function createMirasimBinding({ runtime, policy } = {}) {
+export function createMirasimBinding({ runtime, policy, runtimeOpts, attachHooks } = {}) {
   // 钉版本的唯一真相源是策略（docs/model-routing.json 的 执行体.mirasim.钉版本）。
   // 不传等于 runtime 拿库内常量当真相：改路由表钉版本不生效——服务升级后照旧拒新版本，
   // 或策略已改新版本却继续放旧版本过（#884 审官 P1#5 实咬）。
-  // 策略没写（null）时才让 createRuntime 落库内默认，不在这里抄第二份默认值。
-  const rt = runtime || createRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined });
+  // 策略没写（null）时才让 createRuntime 落「本机在役版本」，不在这里抄第二份默认值——
+  // 而「本机」由 runtimeOpts.homeDir 定（缺了就拿真实 home，CI 上没有 VERSION 就会空转）。
+  const rt = runtime || createExecutionRuntime({ pinnedVersion: policy?.mirasim?.pinnedVersion || undefined, ...(runtimeOpts || {}) });
+  const attach = attachHooks || ensureControlPlaneHooksPath;
   return {
     name: 'mirasim',
     runtime: rt,
@@ -354,6 +311,19 @@ export function createMirasimBinding({ runtime, policy } = {}) {
       const branch = String(spec.branch || '').trim();
       if (!repo || !branch) return { ok: false, executor: 'mirasim', error: 'mirasim 建树要 repo（仓路径）和 branch（新分支名）' };
       const r = await rt.ensureWorkspace(repo, branch);
+      if (!r || !r.path) {
+        return { ok: false, executor: 'mirasim', error: 'mirasim 建树没返回 path', stage: 'worktree' };
+      }
+      const h = attach({ cwd: r.path });
+      if (!h || !h.ok) {
+        return {
+          ok: false,
+          executor: 'mirasim',
+          error: `控制面闸没挂上：${(h && h.why) || '没查成'}`,
+          stage: 'hooks',
+          path: r.path,
+        };
+      }
       return {
         ok: true,
         executor: 'mirasim',
@@ -361,6 +331,7 @@ export function createMirasimBinding({ runtime, policy } = {}) {
         branch: r.branch ?? branch,
         created: r.created === true,
         verified: r.verified !== false,
+        hooksPath: h.hooksPath,
         native: r,
       };
     },
@@ -370,6 +341,16 @@ export function createMirasimBinding({ runtime, policy } = {}) {
       const workdir = String(spec.workdir || '').trim();
       const prompt = String(spec.prompt || '');
       if (!workdir || !prompt) return { ok: false, executor: 'mirasim', error: 'mirasim 起会话要 workdir 和 prompt（任务书）' };
+      const h = attach({ cwd: workdir });
+      if (!h || !h.ok) {
+        return {
+          ok: false,
+          executor: 'mirasim',
+          error: `控制面闸没挂上：${(h && h.why) || '没查成'}`,
+          stage: 'hooks',
+          workdir,
+        };
+      }
       // #884 审官 P1#2：model 在上一行算出来却不往下传 = 服务端永远收不到具体模型，
       // 而回执里的 daoModel 只是同一个变量抄了一遍，证明不了「发过」。
       const started = await rt.startSession({ agent: route.agent, workdir, prompt, model: spec.model || undefined });
@@ -421,13 +402,12 @@ export function bindExecutor(opts = {}) {
     const policy = readExecutorPolicy(opts.routing);
     const named = judgeExecutorName(opts.executor, policy);
     if (!named.ok) return { ok: false, error: named.error, policy };
-    if (named.executor === 'orca') {
-      return { ok: true, executor: 'orca', name: 'orca', runtime: null, policy };
-    }
-    const runtimeFactory = opts.runtimeFactory || createRuntime;
-    const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || PINNED_VERSION;
+    // 两边合起来：#1174 的执行 runtime（带 ACP 后端）+ 2026-09-10 的钉版本跟随语义。
+    // 手打常量已删——它正是升级后全链拒派的根因，不许再回落过去。
+    const runtimeFactory = opts.runtimeFactory || createExecutionRuntime;
+    const pinned = (policy.mirasim && policy.mirasim.pinnedVersion) || undefined;
     const runtime = opts.runtime || runtimeFactory({ pinnedVersion: pinned, ...(opts.runtimeOpts || {}) });
-    const binding = createMirasimBinding({ runtime, policy });
+    const binding = createMirasimBinding({ runtime, policy, runtimeOpts: opts.runtimeOpts, attachHooks: opts.attachHooks });
     return {
       ok: true,
       executor: 'mirasim',
@@ -444,10 +424,5 @@ export function bindExecutor(opts = {}) {
 
   const named = judgeExecutorName(opts.executor, opts.policy);
   if (!named.ok) throw new Error(named.error);
-  if (named.executor === 'mirasim') return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy });
-  return createOrcaBinding({
-    orca: opts.orca,
-    argsWorktreeCreate: opts.argsWorktreeCreate,
-    argsWorkerStart: opts.argsWorkerStart,
-  });
+  return createMirasimBinding({ runtime: opts.runtime, policy: opts.policy, runtimeOpts: opts.runtimeOpts, attachHooks: opts.attachHooks });
 }

@@ -64,7 +64,7 @@ function injection(promptText, state) {
   return mode(["hook"], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: promptText }), state });
 }
 
-describe('dao-mode', () => {
+describe('dao-mode', { concurrency: 1 }, () => {
   it('① 四种结局各自不同形（规格要的三形 + 「读坏了」单列）', async (t) => {
     // ③ 文件压根不在
     const absent = injection("随便一句", path.join(SANDBOX, "不存在.json"));
@@ -590,3 +590,7 @@ describe('dao-mode', () => {
     });
   });
 });
+
+// 收尾清理：沙箱落在仓内 _tmp/mode-sandbox。宿主是 root 时它是 root 属主——
+// dao-check「仓内属主」项当场红，且 orca 侧下次跑测试 rmSync 直接 EACCES（2026-09-10 实咬）。
+process.on("exit", () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });

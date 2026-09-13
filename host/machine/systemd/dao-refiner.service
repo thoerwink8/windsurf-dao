@@ -30,6 +30,12 @@ User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_COLOR=1
+Environment=GH_NO_COLOR=1
+# #792：消歧官写 Issue 走 issue-gateway，不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# #792：token 卸了，~/.config/gh 的个人登录还能用。指向空目录，gh 找不到 hosts.yml。
+Environment=GH_CONFIG_DIR=/var/empty
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/refiner.mjs
 # 退出码 2 = 没查成，必须在 systemctl --failed 里看得见。
 # 不设 SuccessExitStatus：这里没有「1 是正常输出」那一档。

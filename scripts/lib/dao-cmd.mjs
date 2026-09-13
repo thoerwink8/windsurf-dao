@@ -121,7 +121,11 @@ export function findDispatchForTask(workerListJson, taskId) {
   return { ok: true, dispatchId: hits[hits.length - 1].dispatchId, scanned: workers.length };
 }
 // #762 拆分：repo 选择符移到 scripts/lib/dispatch/repo.mjs（保持对外 API 不变）
-export { argsRepoList, normalizeRepoRemote, resolveRepoSelector } from './dispatch/repo.mjs';
+export {
+  argsRepoList, normalizeRepoRemote, resolveRepoSelector,
+  parseOwnerNameRepo, githubRemoteUrlOf, ownerNameFromRemoteUrl, withGhRepo, assertRepoAuthorized,
+  looksLikeLocalRepoPath, splitRepoTarget, resolveLocalCheckout, repoPrKey,
+} from './dispatch/repo.mjs';
 
 // #762 拆分：worktree 生命周期域移到 scripts/lib/dispatch/worktree.mjs（保持对外 API 不变）
 import {
@@ -538,7 +542,7 @@ export function terminalsAfterLaunchPlan({ existingHandles, plan, createdHandle 
   return [...next];
 }
 
-/** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
+/** orca terminal send --json 的回执（已退役，只解析历史夹具）。真返回在 result.send；accepted=true 才算送达。
  * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
 export function extractTerminalSend(json) {
   const s = json?.result?.send;
@@ -638,18 +642,8 @@ export function isCiEnv(env = process.env) {
   return env.GITHUB_ACTIONS === 'true' || env.CI === 'true';
 }
 
-export function orcaHelpAvailable(spawn = spawnSync) {
-  // #984：可用性探测不是 --help 正文核验。15s 会把 dao.test 单套拖到 8s+；1.5s 够 ENOENT / 真二进制回 --help。
-  const r = spawn('orca', ['--help'], { windowsHide: true, encoding: 'utf8', timeout: 1500 });
-  if (r.error) {
-    const msg = r.error.message || String(r.error);
-    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg)
-      || r.error.code === 'ETIMEDOUT' || /ETIMEDOUT/i.test(msg);
-    return { ok: false, missing, error: msg };
-  }
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) return { ok: false, missing: false, error: 'orca --help 无输出' };
-  return { ok: true, missing: false };
+export function orcaHelpAvailable() {
+  return { ok: false, missing: true, error: 'orca 已退役' };
 }
 
 /**
@@ -668,17 +662,8 @@ export function helpCheckPolicy({ ci, orca } = {}) {
 /** 同一 cmd 的 live --help 正文。进程内缓存：catalog 自检扫 29 条命令时不串行重打 orca。 */
 const LIVE_HELP_CACHE = new Map();
 
-export function fetchOrcaHelp(cmd, spawnFn = spawnSync) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const key = parts.join(' ');
-  if (spawnFn === spawnSync && LIVE_HELP_CACHE.has(key)) return LIVE_HELP_CACHE.get(key);
-  const r = spawnFn('orca', [...parts, '--help'], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
-  if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
-  const text = `${r.stdout || ''}${r.stderr || ''}`;
-  if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);
-  if (spawnFn === spawnSync) LIVE_HELP_CACHE.set(key, text);
-  return text;
+export function fetchOrcaHelp(cmd) {
+  throw new Error(`orca 已退役，${cmd} --help 不再有对象`);
 }
 
 export function helpFixturePath(cmd, root = ROOT) {
@@ -699,28 +684,7 @@ export function fetchHelpPreferLive(cmd, { spawn: spawnFn = spawnSync, root = RO
 }
 
 function spawnOrcaHelpAsync(cmd) {
-  const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
-  return new Promise((resolve, reject) => {
-    const child = spawn('orca', [...parts, '--help'], { windowsHide: true });
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.on('error', reject);
-    child.on('close', (status) => {
-      const text = `${stdout}${stderr}`;
-      if (status !== 0 && !String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 退出 ${status}`));
-        return;
-      }
-      if (!String(text).trim()) {
-        reject(new Error(`orca ${cmd} --help 无输出`));
-        return;
-      }
-      resolve(text);
-    });
-  });
+  return Promise.reject(new Error(`orca 已退役，${cmd} --help 不再有对象`));
 }
 
 /**
@@ -890,22 +854,22 @@ export {
   DISAMBIGUATED_LABEL, checkIssueDisambiguated, assembleCardName,
 } from './dispatch/card.mjs';
 
-// ── #564 label 自动打：dispatch 记 issue，帅合并时同步到 PR ─────────
-// calibrate 读的是 PR 上的 model/* 与 type/*（每 label 必须有程序读它）；派工时 PR 还不存在，
-// 所以：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue；帅合并时由
-// `dao pr-sync-labels --pr <N>` 从 issue 同步到 PR。角色缺省写码（dispatch 默认写码类派工）。
-// #586：审官选型另记 reviewer/<模型>。label 记「决定」，工人完工时用 pickReviewer 复算。
+// ── #564 / #1116 label：决定在 dispatch 那一刻写进账本（model + reviewer + branch + repo）。
+// 工人交卷 / 起审官前按仓 + PR head 分支从账本打到 PR；选型只读 PR 自己的 label。
+// `dao pr-sync-labels --pr <N>` 是同一条打标动作（幂等）。查不到完整记录 ⇒ 需人工打标，不读 issue。
 
 // #762 拆分：完工结算 + label 选型域移到 scripts/lib/dispatch/worker-done.mjs（保持对外 API 不变）
 import {
   DEFAULT_DISPATCH_TYPE, REVIEWER_LABEL_PREFIX, dispatchLabelNames,
-  pickReviewer, pickModel, requireWorkerModel, collectIssueLabelsFromPr,
+  pickReviewer, pickModel, requireWorkerModel, collectPrLabels,
+  stampPrLabelsFromDispatch, pickWorkerDispatchByBranch,
   resolveWorkerFromPr, resolveReviewerFromPr, listPrReviews, planWorkerDone,
   completeWorkerDoneNotify, pickWorkerDoneDispatchId, linkedIssueNumbers,
 } from './dispatch/worker-done.mjs';
 export {
   DEFAULT_DISPATCH_TYPE, REVIEWER_LABEL_PREFIX, dispatchLabelNames,
-  pickReviewer, pickModel, requireWorkerModel, collectIssueLabelsFromPr,
+  pickReviewer, pickModel, requireWorkerModel, collectPrLabels,
+  stampPrLabelsFromDispatch, pickWorkerDispatchByBranch,
   resolveWorkerFromPr, resolveReviewerFromPr, listPrReviews, planWorkerDone,
   completeWorkerDoneNotify, pickWorkerDoneDispatchId, linkedIssueNumbers,
 } from './dispatch/worker-done.mjs';
@@ -994,9 +958,12 @@ export {
 export {
   REVIEW_PENDING_KIND, REVIEW_PENDING_VERSION, reviewPendingDir, reviewPendingPath,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL, REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+  REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+  REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -1015,7 +982,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -1025,12 +992,12 @@ const MULTI_FLAGS = new Set(['slice']);
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
-  'session-stop': new Set(['--session', '--json', '--help', '-h']),
+  'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--preflight', '--json', '--help', '-h',
-    // mirasim 路径（#880 卡 B）：--executor 选执行体，--branch/--repo 是 mirasim 建树要的。
-    // 与 worker-done / reviewer-create 同名同义（卡 C 已加），别在这里另起名字。
+    // --repo：跨仓 owner/name（#1024）。mirasim 默认路把 owner/name 与本地 checkout 拆开，
+    // 不再把 GitHub 选择符原样塞给 ensureWorkspace。与 worker-done / reviewer-create 同名同义。
     '--executor', '--branch', '--repo',
   ]),
   preflight: new Set(['--model', '--json', '--help', '-h']),
@@ -1063,13 +1030,14 @@ export const FLAGS_BY_VERB = {
     '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight',
     '--executor', '--branch', '--repo', '--force', '--json', '--help', '-h',
   ]),
-  'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'reviewer-done': new Set(['--pr', '--repo', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--repo',
+    '--json', '--help', '-h',
   ]),
-  'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
+  'review-pending-drain': new Set(['--pr', '--repo', '--force', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--executor', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop',
@@ -1088,11 +1056,12 @@ export const FLAGS_BY_VERB = {
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
-  'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
+  'pr-sync-labels': new Set(['--pr', '--repo', '--json', '--help', '-h']),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
   now: new Set(['--json', '--hours', '--host', '--no-server', '--help', '-h']),
+  board: new Set(['--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1151,15 +1120,12 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup] [--repo owner/name]
                   # 异步发射（2026-08-23 async-launch 拍板）：热路只做参数校验+写派工单到 _flow/queue/+拉起 detached 执行体，<1s 返回「已受理」；
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
-  dispatch-exec --order <派工单路径>
-                  # 内部动词：dispatch 拉起的后台执行体；结果落 <id>.out.json（派工失败请重派，不要手动重跑——复用旧 Run 会 consumer_fenced，见 #762）
-  dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
-                  # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
-                  # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
+                  # --repo owner/name：跨仓派工（#1024）。不传仍是本仓。目标仓不在该 role 的 installation 里就拒，报「这个仓没授权给 <role>」，不许回落本仓
+  # 已退役（调用即拒，#1150）：dispatch-exec / dispatch --batch。不要调它们。
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
                   # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
@@ -1172,38 +1138,32 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
                   # mirasim：worktree-create --executor mirasim --branch <分支> [--repo <仓路径>]（不要 --name；卡名闸在分岔之后，#884 P1）
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
-                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run] [--repo owner/name]
+                  # 不传 --reviewer 时自读 PR 自己的 reviewer/*（#1116）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
-                  # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
-                  # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
-  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run]
-                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
-                  # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
+                  # #826：身份消息失败不整树回滚（树与终端保留，只记红项；补发走 GitHub 评论，不要调 notify）
+                  # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
+                  # 交卷：发完工/返工 comment。#1125 起首审只入待审队列、不自己起审官；返工复用原会话再推一针
+                  # #677：成功路径不结算士兵 Dispatch，不开下一跳救人。不要调 notify。失败不得假装已下班。
                   # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
                   # #895：快马单没有 reviewer/* label 时用 --reviewer 指名审官（不传仍自读 label）
-  reviewer-done --pr <N> [--dry-run]
+  reviewer-done --pr <N> [--dry-run] [--repo owner/name]
                   # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
                   # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>]
-                  # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
-                  # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
-                  # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
-                  # #631：--skip-wait 显式跳过等完工——worker-done 失败后补审官时工人不会再发完工，硬等烧 600s；
-                  #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
-                  #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
-                  # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
-                  # #815：复用旧审官前 worker-read 核活性，不活或已结算就新建树；建树前 fetch origin/<分支> 按远端检出
-                  # #815：--model 显式指定工人模型（接手派单多个 model/* 时不许猜）
-  review-pending-drain [--pr <N>]
-                  # #815：消费 _flow/queue/review-pending/<pr>.json，逐条 reviewer-attach --skip-wait（供 #800 轮转）
-                  # worker-done 遇 depth 限制 / 审官终端在途派单：写队列并成功交卷（queued），不是「没查成」非零
-                  # 扫完 0 条是空转成功，目录读不了才没查成
-  pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
+  # reviewer-attach 已退役，调用即拒。补派审官走 reviewer-create（主路 review-pending-drain）。
+  review-pending-drain [--pr <N>] [--repo owner/name] [--force]
+                  # #1125：审官主路。工人首审交卷入队，本动词按在役审官数拉取（达上限拉 0，票留队列；没查成也不拉）
+                  # --pr 只隔离这一张（#1104 毒票不许拖死整队），仍过容量闸；带 --repo 只吃该仓的票
+                  # --force 才不过上限，只许人手；指挥官自动化不许带
+                  # 扫完 0 条是空转成功，目录读不了 / 在役数没查成才没查成
+  pr-sync-labels --pr <N> [--repo owner/name]
+                  # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
+                  # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）
@@ -1229,13 +1189,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # mirasim：worker-start --executor mirasim --worktree <树路径> --spec <文> --model <id> --reviewer <id> --confirm（不要 --task；会话即卡，#884 P1）
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
-  send (--terminal <handle> | --dispatch <id>) --text <文> [--enter] [--agent grok|claude|pi|codex]
-                  # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
-                  # #802/#815：--dispatch 用 worker-read 的 terminal.handle（真 agent），不要信派工单 workerHandle（常是空壳）
-  notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
-                  [--task-id <id> --dispatch-id <id> --from <handle> --dispatch-capability <token>]
-                  # 普通通知：dispatch: 活人直接投递。hop 审官→士兵 打进还活着的 id；已完工 fail-visible，不开下一跳救人（#677）
-                  # --type worker_done：省略 --to，必须带 --task-id/--dispatch-id/--outcome；发出后核 Dispatch 变 completed（#551）。士兵侧判定绿才允许发。
+  # send / notify 已退役，调用即拒。通知走 GitHub 评论 + 飞书 hub，不要调它们。
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
@@ -1252,6 +1206,10 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 与 next 的分工：next 只读本地文件出「下一步动作候选」，now 查 GitHub+服务器出「现在什么情况」
                   # 只读零副作用；一屏封顶（超了折叠成计数），--json 给机器；每段末尾列哪些源没查成
                   # 「没查成」与「没有」分开报：任一源挂掉只坏它自己那几行，绝不显示成一切正常
+  board [--json]
+                  # 看板 v0（#818）：一张表，issue / 合并请求 / 排队单各一行（阶段 / 耗时 / 模型）
+                  # 源挂掉只坏自己那几行，不许显示成一切正常；--json 给机器（三态信封）
+                  # 总控群问「状态」回的就是这张表；超时告警走 scripts/board-watch.mjs
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   preflight --model <id> [--json]
@@ -1274,15 +1232,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕
 
-notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
-落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
-收件人形态：dispatch:<id>（官方结构化收件箱，士兵↔审官互发用；#559 ①）、run:…（审官→帅）、
-term_…（低层通道）、省略（自己那条 Run 信箱）。
-delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
-普通 notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱。
---type worker_done 是结算口（#551）：必须带 --task-id/--dispatch-id/--outcome，省略 --to，
-发出后核 worker-show Dispatch 为 completed。缺身份、错 pane、落库但未 completed
-一律非零并报「未结算」。状态没查成标 unscanned，不许当成「查过仍是 dispatched」。
+send / notify / reviewer-attach / dispatch-exec / dispatch --batch 已退役（#1150），调用即拒。
+通知走 GitHub 评论 + 飞书 hub；补派审官走 reviewer-create。不要把这些名字当可照抄入口。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认；手写 --model 偏离该工种（默认写码）顺位 1 也要 --confirm（#754）。未知 --参数 一律非零。
@@ -1295,7 +1246,7 @@ merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 ma
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
-续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create / reviewer-attach 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
+续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——

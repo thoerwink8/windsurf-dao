@@ -8,6 +8,59 @@ const path = require('node:path');
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'session-reconcile.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
 
+it('a delivered passing PR waits for review rather than restarting its finished worker', async () => {
+  const { planReconcile } = await LOAD;
+  const params = { desired: [{ issue: 1167, job_id: 'dispatch-x', identity: '工人' }],
+    sessions: [], openIssues: [1167], openPrs: [{ isDraft: false, reworkRequired: false, body: '署名 issue #1167',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }] };
+  assert.equal(planReconcile(params).redispatches.length, 0);
+  const draft = structuredClone(params); draft.openPrs[0].isDraft = true;
+  assert.equal(planReconcile(draft).redispatches.length, 1);
+  const failed = structuredClone(params); failed.openPrs[0].statusCheckRollup[0].conclusion = 'FAILURE';
+  assert.equal(planReconcile(failed).redispatches.length, 1);
+  const rework = structuredClone(params); rework.openPrs[0].reworkRequired = true;
+  assert.equal(planReconcile(rework).redispatches.length, 1);
+  const multiple = structuredClone(params);
+  multiple.openPrs.push({ ...multiple.openPrs[0], isDraft: true });
+  assert.equal(planReconcile(multiple).redispatches.length, 1);
+  assert.equal(planReconcile({ ...params, openPrs: null }).unscanned, true);
+});
+
+it('failed rework still recovers on unchanged head despite a passing CI', async () => {
+  const { decide, reworkKey } = await import('../scripts/lib/commander-core.mjs');
+  for (const scenario of ['red', 'conflict', 'refreshed-conflict', 'waiting']) {
+    const issue = { number: 1167, title: '任务', body: '', labels: ['已消歧','model/grok-4.6','reviewer/gpt-5.6-luna'].map(name => ({ name })) };
+    const pr = { number: 1190, title: '修复', body: '署名 issue #1167', isDraft: false,
+      headRefOid: 'same-head', mergeable: scenario === 'refreshed-conflict' ? 'UNKNOWN' : scenario === 'conflict' ? 'CONFLICTING' : 'MERGEABLE',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }, { name: 'type/写码' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+    const r = decide({ github: { scanned: true, issues: [issue], prs: [pr] },
+      trees: { scanned: true, worktrees: [] }, reviewPending: { scanned: true, items: [] }, stall: { scanned: true, strikes: {} },
+      prReviews: { scanned: true, byPr: { 1190: { reviews: scenario === 'red' ? [{ state: 'CHANGES_REQUESTED', body: '修红项', commit_id: 'same-head' }] : [] } } },
+      sessions: { scanned: true, items: [{ key: 'grok:old', state: 'stopped', cwd: '/tmp/dao-1167' }] },
+      desiredJobs: { items: [{ job_id: 'old', identity: '工人', issue: 1167, model: 'grok-4.6' }] },
+      reworkDispatched: { [reworkKey(1190, 'same-head')]: { ok: true, at: new Date().toISOString() } },
+      viewMergeable: () => ({ ok: true, mergeable: 'CONFLICTING' }),
+      commanderPolicy: { requireModelInRouting: false }, healthRedModels: [], routingModels: ['grok-4.6','gpt-5.6-luna'] });
+    const recovery = r.actions.some(a => ['dispatch','rework'].includes(a.kind) && a.issue === 1167);
+    assert.equal(recovery, scenario !== 'waiting', scenario);
+  }
+});
+
+it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
+  const { isLiveSession } = await LOAD;
+  for (const state of ['stopped', 'rejected', 'gone', 'finished']) {
+    assert.equal(isLiveSession({ key: 'grok:fixture', state }).live, false, state);
+  }
+  assert.equal(isLiveSession({ key: 'grok:fixture', state: 'running' }).live, true);
+});
+
+it('successful finished reviewer remains reusable', async () => {
+  const { judgeReviewerSessionReuse } = await import('../scripts/lib/dispatch/reviewer-mirasim.mjs');
+  const r = judgeReviewerSessionReuse({ record: { sessionKey: 'codex:finished' }, view: { phase: 'finished' } });
+  assert.equal(r.reuse, true);
+});
+
 function dispatch(over = {}) {
   return {
     type: 'job.dispatch',
@@ -52,6 +105,25 @@ describe('期望集：只读未结 job.dispatch', () => {
     assert.equal(r.items[0].issue, 1043);
   });
 
+  it('保留 PR/仓/分支/审官，给差集消费方定位 PR', async () => {
+    const S = await LOAD;
+    const r = S.desiredFromEvents([
+      dispatch({
+        issue_number: 1116,
+        pr_number: 1118,
+        repo: 'acme/repo',
+        branch: 'dao-1',
+        reviewer: 'new-reviewer',
+        work_type: '写码',
+      }),
+    ]);
+    assert.equal(r.items[0].pr, 1118);
+    assert.equal(r.items[0].repo, 'acme/repo');
+    assert.equal(r.items[0].branch, 'dao-1');
+    assert.equal(r.items[0].reviewer, 'new-reviewer');
+    assert.equal(r.items[0].role, '写码');
+  });
+
   it('审官 job_id=gh-pr-N-review 认出 PR', async () => {
     const S = await LOAD;
     assert.equal(S.prOfDispatch({ job_id: 'gh-pr-1025-review' }), 1025);
@@ -69,6 +141,13 @@ describe('观测：活着 = 名单里有且非终态', () => {
   it('running 算活着', async () => {
     const S = await LOAD;
     assert.equal(S.isLiveSession({ key: 'pi:1', state: 'running' }).live, true);
+  });
+
+  it('incomplete 不算活执行者——短命会话已结束，下一轮允许重派', async () => {
+    const S = await LOAD;
+    const a = S.isLiveSession({ key: 'pi:1', state: 'incomplete' });
+    assert.equal(a.live, false);
+    assert.equal(a.unscanned, false);
   });
 
   it('没给对象 → unscanned，绝不当活着（方向交给调用方）', async () => {
@@ -104,13 +183,13 @@ describe('hasLiveExecutor：查不成当有人在做', () => {
     assert.equal(r.unscanned, false);
   });
 
-  it('incomplete 仍算活执行者——推一句继续，不重派（#1007/#1037 抢树）', async () => {
+  it('incomplete 不算活执行者——停会话后允许差集重派', async () => {
     const S = await LOAD;
     const r = S.hasLiveExecutor({
       sessions: [{ key: 'pi:1', state: 'incomplete', cwd: '/x/dao-885' }],
       issue: 885,
     });
-    assert.equal(r.live, true);
+    assert.equal(r.live, false);
     assert.equal(r.unscanned, false);
   });
 
@@ -173,6 +252,36 @@ describe('差集：该在却不在 → 重派；查不成零重派', () => {
     const S = await LOAD;
     const r = S.planReconcile({ desired, sessions: [], openIssues: [] });
     assert.deepEqual(r.redispatches, []);
+  });
+
+  it('单已关但对应 PR 还开着 → 仍列入差集（消费方读 PR 标签）', async () => {
+    const S = await LOAD;
+    const r = S.planReconcile({
+      desired,
+      sessions: [],
+      openIssues: [],
+      openPrs: [{ number: 885, body: '署名 issue #885', isDraft: true, reworkRequired: true }],
+    });
+    assert.equal(r.redispatches.length, 1);
+    assert.equal(r.redispatches[0].issue, 885);
+    assert.equal(r.redispatches[0].pr, 885);
+  });
+
+  it('差集项带上 PR/仓/分支，不把选型钉在事件账的旧 model 上', async () => {
+    const S = await LOAD;
+    const r = S.planReconcile({
+      desired: [{
+        job_id: 'dispatch-pi:dead', identity: '工人', issue: 885, pr: 10,
+        repo: 'acme/repo', branch: 'dao-1', model: 'old-worker',
+      }],
+      sessions: [],
+      openIssues: [885],
+      openPrs: [{ number: 10, body: '署名 issue #885', isDraft: true, reworkRequired: true }],
+    });
+    assert.equal(r.redispatches.length, 1);
+    assert.equal(r.redispatches[0].pr, 10);
+    assert.equal(r.redispatches[0].repo, 'acme/repo');
+    assert.equal(r.redispatches[0].branch, 'dao-1');
   });
 
   it('审官未结不走差集重派（现场 B 归 shouldRestartReviewer）', async () => {

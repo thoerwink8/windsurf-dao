@@ -381,20 +381,25 @@ describe('验收 7：不出网，单测毫秒级；CLI 注入假 gh', () => {
         existing.add(args[2]);
         return { ok: true, out: '' };
       }
-      if (args[0] === 'issue' && args[1] === 'edit') {
-        edits.push(args);
-        return { ok: true, out: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        comments.push(args);
-        return { ok: true, out: '' };
-      }
       return { ok: false, error: args.join(' ') };
+    };
+    const writeIssue = (req) => {
+      if (req.action === 'issue_edit_labels') {
+        const args = ['issue', 'edit', String(req.issue), ...req.add];
+        edits.push(args);
+        return { ok: true, number: req.issue, labels: req.add };
+      }
+      if (req.action === 'issue_comment') {
+        comments.push(['issue', 'comment', String(req.issue), '--body-file', 'gw']);
+        return { ok: true, number: req.issue };
+      }
+      return { ok: false, error: req.action };
     };
     const said = [];
     const r = runRefiner({
       args: {},
       runGh,
+      writeIssue,
       say: (t) => { said.push(t); return { ok: true }; },
       routingDoc: ROUTING,
     });
@@ -511,5 +516,25 @@ describe('硬边界：本单不改指挥官三件套、不放宽消歧闸', () =
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'lib', 'commander-core.mjs')), true);
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'commander.mjs')), true);
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'board-gc.mjs')), true);
+  });
+});
+
+// 2026-09-10 第二咬：labels key 直拼中文 label，网关 ASCII 闸 29 连败 0 成功。
+// 判别力在「真跑一次 applyPlan，把发给网关的 key 抓下来对着网关判据验」。
+describe('labels 的 idempotency_key 过得了网关的 ASCII 闸', () => {
+  it('中文 label 组合出的 key 合法、稳定、可区分', async () => {
+    const { applyPlan } = await CLI;
+    const KEY = import('file://' + path.join(ROOT, 'scripts', 'lib', 'escalation-key.mjs').replace(/\\/g, '/'));
+    const { isGatewayKeySafe } = await KEY;
+    const seen = [];
+    const writeIssue = (req) => { seen.push(req); return { ok: true }; };
+    const runGh = () => ({ ok: true, code: 0, out: '[]' });
+    const plan = { verdict: 'act', number: 1146, labelsToAdd: ['待拍板', 'model/gpt-5.6-luna'], comment: null };
+    const r = applyPlan(plan, { runGh, dryRun: false, writeIssue });
+    assert.equal(r.ok, true);
+    const label = seen.find((w) => w.action === 'issue_edit_labels');
+    assert.ok(label, '必须真发了打标写动作');
+    assert.equal(isGatewayKeySafe(label.idempotency_key), true, `key 过不了网关闸：${label.idempotency_key}`);
+    assert.match(label.idempotency_key, /^refiner:labels:1146:/);
   });
 });

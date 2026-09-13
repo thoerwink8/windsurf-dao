@@ -1,5 +1,8 @@
 # CLI 踩坑教学：Claude（`reclaude` CLI，模型 opus）
 
+> **Orca 执行体已退役（#1150）。** 现役工人由 `dao.mjs dispatch` 起 mirasim 会话，不要再 `orca terminal create`。
+> 下面是 orca 时代的踩坑档案，只在对照 launch 模板时读。
+>
 > 提炼自 `docs/model-routing.toml [providers.claude]`。
 
 ## 一句话特性
@@ -11,6 +14,10 @@ command 型（`start = "command"`）。凭据挂在 reclaude 链上，**裸 clau
 - **`--agent` 起不了 reclaude 链**（已知 agent 枚举会漂）——Claude 族终端必须 `orca terminal create --command` 读 launch。
 - **启动有配置同步期**：抢跑注入必被吞。要等 TUI 就绪（同 devin 的 `wait --for tui-idle` 教训，见 README 通用教训 2）。
 - **Fable 只留帅位**：派工须用户点名（拍板 2026-08-14，issue #443）。
+
+## GitHub Issue 写（#792）
+
+写 Issue 只走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`。
 
 ## 正确起法
 

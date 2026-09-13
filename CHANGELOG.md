@@ -2,6 +2,206 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.5.0 — 2026-09-12
+
+### 新功能
+- [cc] feat(lifecycle): 短命执行体 + 老单优先收口 (#1208)
+- [cc] feat: 删掉从 issue 标签反推派工决定这一层 (#1118)
+- [cc] feat: Orca 执行体彻底退役收尾（#1150） (#1153)
+- [cc] feat(onboard): skills 装载面合并式修复 + 自愈（#1146） (#1160)
+- [cc] feat(check): .git 属主一致性闸——root 残留一天两咬 (#1149) (#1155)
+
+### 修复与维护
+- [patrol] docs(obs): 控制面单轮探活红立刻掐死 git push
+- [patrol] docs(obs): 主树发散同步全绿；收件箱不查未推送
+- [cc] docs(obs): 判据不可判定靠加正则补不出来——#1159 十六轮返工环
+- [cc] fix(queue): 待审/派工队列钉在主 clone + 认 /pull/ 评论回执 (#1212)
+- [patrol] docs(obs): 控制面闸稳定来源在活工人树上指回自己，㊱仍绿
+- [patrol] docs(obs): 巡检会话继承 mirasim-server 的 GH_CONFIG_DIR=/var/empty，第一次 git push 被掐死
+- [patrol] docs(obs): failed-units闸被系统单元钉SKIP；skills-heal自愈钟没装
+- [cc] fix(gate): 控制面闸接到现役 git push 路径（#1165） (#1197)
+- [codex] fix(watchdog): 保存真实执行结果，停止重复通知和误报失败 (#1206)
+- [cc] fix(gc): 接上孤儿临时目录清扫，进程没查成不许删 (#1176) (#1195)
+- [cc] fix(inbox): 收件箱接到指挥官盘点，不再押在没人跑的 dao-check (#1192)
+- [grok] fix(check): ⑳ 比有效单元含 drop-in，探活 ExecStart 须走仓内脚本 (#1196)
+- [codex] fix(watchdog): 已交卷的工人不再被反复重派 (#1203)
+- [cc] fix(test): acp-runtime 跨进程 resume 在 CI 并行下不再误红 (#1183) (#1198)
+- [codex] fix(dispatch): verify missing task type before starting Mirasim workers (#1205)
+- [cc] fix(units): 凭据闸扫到指挥官生成单元（#1167） (#1190)
+- [cc] fix(probe): 三条红通道验真实请求，修假红 (#1184) (#1194)
+- [cc] fix(署名解析): 正文署名压过标题随手引用的 #N (#1191)
+- [cc] fix(check): 指挥官 timer enabled 但停摆必须红 (#1177) (#1193)
+- [cc] fix(harvest): 回流提示层改指现役 mirasim 士兵书 (#1189)
+- [codex] fix(watchdog): 已批准任务验证通过后自行完成合并 (#1201)
+- [codex] fix(watchdog): 告警恢复不等于已批准任务交付完成 (#1200)
+- [codex] fix(check): read branch protection through application credentials (#1199)
+- [codex] fix(watchdog): 已停工人不再占位，统领单不再提前关闭 (#1188)
+- [codex] fix(runtime): verify removed sessions against inventory and processes (#1187)
+- [codex] fix(runtime): 无界面的运行中工人不再被判为结束 (#1186)
+- [codex] fix(feishu): 拍板时即时确认，网络等待不再堵住按钮 (#1185)
+
+### 其它
+- [cc] test: 跟上 #1205——mirasim 派工补 type 走 marshal 网关 (#1207)
+- release: v2.4.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.4.0 — 2026-09-11
+
+### 新功能
+- [codex] feat(pending): explain decisions with STAR summaries
+- [cc] feat(dao-check): 本仓单元挂 systemctl --failed 要红（#1172/#1173 的第三格）
+- [cc] feat(commander): 推进量仪表——动作摘要连续相同就报警（一晚四个死点全靠它抓到）
+- [cc] feat(probe): mirasim-server ws 探活 + unit 收仓（#1151） (#1161)
+
+### 修复与维护
+- [codex] fix(feishu): apply STAR to generated cards
+- [codex] fix(feishu): show all pending cards and replace stale messages
+- [codex] fix(feishu): reply when pending list is nonempty
+- [codex] fix(feishu): route pending menu reads through marshal
+- [codex] fix(feishu): use marshal app for readonly GitHub queries
+- [codex] fix(usage): honor shared inbox permissions under restrictive umask
+- [cc] docs(obs): 禁网闸在 orca 身份下恒红 14 笔——堵住 land 推送，已排除本轮改动与全部测试套件
+- [cc] fix(闸): 两条判据比现实窄——只在 orca 身份下翻红的那种
+- [cc] docs(obs): 收件箱三条处置留痕（两真一已修）
+- [cc] fix(盘面): 三处「判据只看得见一半」——收件箱三张观察的处置
+- [cc] fix(units): GH_CONFIG_DIR=/var/empty 掐死了 git 凭据助手——账本五天没更新
+- [cc] fix(commander): policy 不在作用域（第二次同类笔误）+ 配静态闸防这一类
+- [cc] fix(escalate): 追加对象的幂等键含空白被网关拒——「追加进已有单」这条路一直没通
+- [cc] fix(commander): 一个动作炸了不许带走整轮 + 修我自己写的 run is not defined
+- [cc] fix(stall): 停滞警报不再报一次就静音——同指纹超 6 小时重喊
+- [cc] fix(exhausted): 「自动化认输」不再是单向闩——带 head 的判据就该随新 head 失效
+- [cc] fix(states): 状态与字段名收成一处正典 + 配契约闸——一晚九处同形状错的根治
+- [cc] fix(commander): 死动作会无限重复——审官叫不动时改产会开单的出口，不再静默刷 19 轮
+- [cc] fix(mirasim): metaView 读的 runState 也不存在——兜底路上的会话态恒为 null
+
+### 其它
+- release: v2.3.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.3.0 — 2026-09-10
+
+### 新功能
+- [pi] feat(dispatch): 派工链贯通 --repo，射程不再钉死本仓 (#1028)
+- [cc] feat(gc): 孤儿执行租约与中间态登记回收——死人占树的根因
+- [pi] feat(reviewer): 撞满载按顺位换厂——凭死因原文成立，删点将台死代码（#1122） (#1129)
+- [cc] feat(board): 看板 v0——一张表 + 超时告警发总控群（#818） (#1108)
+- [cc] feat(catalog): grok 原生腿取得执行级证据并回填（#1174）
+- [cc] feat(execution): 统一执行改造——ACP 无人值守 + 会话目录清理 + 补丁链闸（#1174 #1176） (#1175)
+- [cc] feat(check): 合并闸检查器——扫在管公开活仓的分支保护（#999） (#1110)
+- [cc] feat(channel): 会话级并发三件套——上限+顺位分流+熔断 (#1145) (#1169)
+- [cc] feat(mirasim): 钉版本改为跟随在役版本——升级不再需要谁记得改常量
+
+### 修复与维护
+- [cc] fix(mirasim): 带着死因的会话不许判完工——judgeCompletion 补读 error（#1121） (#1127)
+- [cc] fix(commander): 「认输」不再把 PR 永久焊死——条件齐了照合，认输只挡重试
+- [cc] docs(obs): 复审票拉不动的根因——字段名不存在 + 手打终态清单，且夹具与代码错在同一处
+- [cc] fix(review): 读的字段名不存在——28 个「在役审官」把上限 3 永久吃满，复审票一张拉不动
+- [cc] docs(obs): 补两处核实——本轮没真删错，且 #1150 另有一道牌接住
+- [cc] docs(obs): 会话记录的 updatedAt 会冻住——判活靠它，正在跑的会话 45 分钟后判 silent
+- [cc] fix(cli): session-stop 收下 --worktree——指挥官发起的停会话此前 100% 报「未知参数」
+- [cc] fix(execution): incomplete 不是「未结算预留」——#1150 卡整晚的根因，状态清单收成一处正典
+- [cc] fix(gate): 转义闸判据换轴——认「代码文本经 shell 落进文件」这个行为，不再认工具名
+- [cc] fix(execution): 观测集不再被过期会话拖成「没查成」——先问名单，实测 19-30s → 8.8s
+- [cc] fix(probe): codex 直连探针的 input 改成 responses 结构化形状——108 次「上游红」是它自己造的
+- [cc] fix(admission): 余量闸改量真 CPU 占用 + 收尾名额独立成池（用户 2026-09-10 拍板 A+B）
+- [cc] fix(admission): 模型准入归口——profile 未验不再连带冻掉在役落地的模型
+- [cc] fix(execution): 会话明确 gone 不再拖垮整张名单——差集重派解冻
+- [cc] fix(tests): 三处 _tmp 沙箱收尾自清——root 跑一次，属主闸红且 orca 下次 EACCES
+- [cc] docs(new-machine): codex 沙箱前置三件——bubblewrap + 二进制级 userns 放行
+- [cc] docs(observations): 处置报帅 key 闸条目——2af1fba9 已落，附实测前后对照
+- [cc] fix(gateway): 报帅 key 的闸对齐真闸（ASCII）——中文 label 不再被拒（收件箱 2026-09-10）
+- [cc] fix(mirasim): 建树幂等命中不再报错——服务端 worktrees 缓存会陈旧
+- [cc] fix(mirasim): 工作区匹配按 realpath——11 张单卡在建树的真根因
+
+### 其它
+- [patrol] #818 看板超时告警从未装上，⑮ 改成负向闸所以缺席仍绿
+- [patrol] 报帅规范化闸比网关真闸松，中文 key 每轮仍被拒
+- [patrol] 指挥官 act timer 已停，⑭ 只问 enabled 所以仍绿
+- release: v2.2.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.2.0 — 2026-09-09
+
+### 新功能
+- [cc] feat(commander): draft 搁置单收口泵——无会话超时派短会话三选一 (#1147) (#1162)
+- [pi] feat(review): 工人交卷改入队，审官按在役数拉取（#1125） (#1135)
+- [cc] feat(commander): 命中 human_holds 的单派 merge-policy=manual（#1094） (#1099)
+
+### 修复与维护
+- [cc] fix(commander): 报帅开单的 key 一律规范化——故障与告警不许同源失效
+- [cc] fix(mirasim): PINNED_VERSION 常量跟上 0.0.307——止血第二半
+- [cc] fix(routing): 钉版本 0.0.282→0.0.307 止血——生产派工链被契约断言拒死
+- [cc] fix(inbox): 6 条巡检观测补处置行——收件箱闸转绿
+- [codex] fix(commander): type/体系重派不回落 auto (#1163)
+
+### 其它
+- [patrol] #1015 凭据闸把额度采样的 git 推送掐死
+- [patrol] 收件箱从 hook 挪到 dao-check，skill 没改、新载体也没人跑
+- [patrol] orca 读不了 journal，盘点探针连红闸每轮没查成
+- release: v2.1.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.1.0 — 2026-09-08
+
+### 新功能
+- [cc] feat(routing): 审官 gpt 族 relay→direct——codex 直连网关 gptpool，停烧 mirasim 云额度（2026-09-08 用户拍板）
+- [pi] feat: 「将来某版」档——GitHub Milestone 两档 + 派工跳过 (#966) (#1107)
+- [pi] feat(gate): 控制面断了拦推送/部署，探测失败不拦（#948） (#1109)
+- [cc] feat(probe): 收 gw-remote-probe 进仓——单元+脚本+INDEX（#967） (#1106)
+
+### 修复与维护
+- [codex] fix(commander): 收口无人值守任务生命周期 (#1157)
+- [cc] fix(commander): 返工无 dao 树时从 PR 分支建树——快马 PR 不再永久交帅 (#1133) (#1144)
+- [cc] docs(routing): direct 的落地实况修准——codex 直连 pqapi（responses 约束），windsurf 优先挂 ai-gateway-stack#7
+- [cc] docs(西瓜清单): 录入 2026-09-08 全部拍板——scale-dozens 立项、orca-retire 重开、queued 档新增
+- [grok] fix(watchdog): ⑳ 已装却漂了不许被没装盖成没查成 (#1136)
+- [grok] fix(lifecycle): 刮名单超时 15s 仍偶发，改 30s (#1139)
+- [grok] fix(lifecycle): 会话名单超时放宽，看板勾完 (#1138)
+
+### 其它
+- [patrol] #967 合了，探活仍跑 ~/bin；drop-in 还撞 :07
+- [patrol] #948 控制面闸合了：没写腿，挂载面也不在现役工人上
+- [patrol] #1015 凭据闸扫不到每 20 分钟合并 PR 的指挥官单元
+- [pi] 收口跨宿主 GitHub 写权限：AI 只经 Bot 网关操作 Issue (#1015)
+- [patrol] #888 回流提示层钉在已退役的 orca 士兵书上
+- release: v2.0.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.0.0 — 2026-09-07
+
+### 破坏性变更
+- [grok] feat!: 删影响地图与 orca 派工脊，执行体只剩 mirasim (#1115)
+
+### 新功能
+- [grok] feat(lifecycle): 短命会话 + 核绿后 squash (#1134)
+- [grok] feat!: 删影响地图与 orca 派工脊，执行体只剩 mirasim (#1115)
+- [cc] feat(hub): 总控群播报改成 Card JSON 2.0 日报卡（#1052） (#1058)
+- [cc] feat(reconcile): 对账循环——未结 dispatch ∖ 活会话差集重派（#1056） (#1057)
+- [grok] feat(hub): 飞书私聊问答 + 总控群日报卡（#1029 #1052） (#1103)
+
+### 修复与维护
+- [pi] fix(nudge): 已关单/人还在/错分支不许再推一把 (#1102)
+- [grok] fix(watchdog): board-gc 不再问 orca，推一把跳过已关单 (#1104)
+- [cc] fix(handoff): 交卷闸 ① 降级为合并闸——基底新旧只在合并那一刻要紧（#1117） (#1119)
+- [cc] fix(escalate): 噪音单的根因是判据写窄了三个字——没查成不开单、去重按原因不按对象（#1063） (#1070)
+- [cc] docs: 落地清单补记事件驱动主路（实现已在 #997） (#964)
+
+### 其它
+- [patrol] 执行体只剩 mirasim，指挥官派工指针仍钉 orca 士兵书
+- [patrol] #1056 合了对账不推卡住的活人；routeSilent 是死代码
+- [patrol] orca-serve 从仓里删了，机器上还在；退役闸只扫仓所以全绿
+- [pi] 事后复审：帅位自写自合的 5 个 PR（#1092） (#1112)
+- [patrol] nudge timer 装了却 disabled；关单脚本把重开的单再关上
+- [cc] 帅窗红线改靶：禁主树写、不禁 worktree 里 commit/push（#1093） (#1100)
+- release: v1.0.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v1.0.0 — 2026-09-06
 
 ### 破坏性变更

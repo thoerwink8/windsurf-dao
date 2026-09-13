@@ -31,15 +31,39 @@ describe('dao 审官与完工', () => {
     });
 
     await t.test('postCommentOnce：没发过 → 真发', () => {
-      const posted = [];
+      const writes = [];
       const runGh = (argv) => {
         if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [] }) };
-        posted.push(argv.join(' '));
         return { ok: true, out: '' };
       };
-      const r = S.postCommentOnce({ kind: 'issue', number: '752', body: '完工：PR #758', runGh });
-      assert.ok(r.ok === true && !r.skipped && posted.length === 1 && /issue comment 752/.test(posted[0]),
-        '没发过真发  →  ' + JSON.stringify({ r, posted }));
+      const writeIssue = (req) => { writes.push(req); return { ok: true, number: 752 }; };
+      const r = S.postCommentOnce({
+        kind: 'issue', number: '752', body: '完工：PR #758', runGh,
+        writeIssue, host: 'worker-done', idempotency_key: 'worker-done:issue:758:752',
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.skipped, undefined);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].action, 'issue_comment');
+      assert.equal(writes[0].repo, 'thoerwink8/windsurf-dao');
+    });
+
+    await t.test('postCommentOnce：跨仓 issue 评论钉目标仓，不许落到默认 windsurf-dao', () => {
+      const writes = [];
+      const runGh = (argv) => {
+        if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [] }) };
+        return { ok: true, out: '' };
+      };
+      const writeIssue = (req) => { writes.push(req); return { ok: true, number: 12 }; };
+      const r = S.postCommentOnce({
+        kind: 'issue', number: '12', body: '完工：PR #12', runGh,
+        writeIssue, host: 'worker-done', repo: 'thoerwink8/ws-cleaner',
+        idempotency_key: 'worker-done:issue:12:12',
+      });
+      assert.equal(r.ok, true);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].repo, 'thoerwink8/ws-cleaner');
+      assert.notEqual(writes[0].repo, 'thoerwink8/windsurf-dao');
     });
 
     await t.test('postCommentOnce：评论列表没查成 → ok:false unscanned（不许当没发过放行）', () => {
@@ -65,16 +89,42 @@ describe('dao 审官与完工', () => {
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     await t.test('cmdWorkerDone 完工评论走 postCommentOnce（幂等）', () => {
-      const i = daoSrc.indexOf('function cmdWorkerDone(');
-      const seg = daoSrc.slice(i, i + 6000);
-      assert.ok(/postCommentOnce\(\{ kind: 'issue'/.test(seg) && /postCommentOnce\(\{ kind: 'pr'/.test(seg),
-        'worker-done 完工评论要幂等');
+      const i = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
+      const seg = daoSrc.slice(i, i + 8000);
+      assert.match(seg, /postCommentOnce\(\{\s*kind: 'issue'/);
+      assert.match(seg, /postCommentOnce\(\{ kind: 'pr'/);
     });
     await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
-      const i = daoSrc.indexOf('function cmdReviewerCreate(');
-      const seg = daoSrc.slice(i, i + 9000);
-      assert.ok(/resumedFromExisting/.test(seg) && /oneReviewerGate\.worktreePath/.test(seg),
-        'reviewer-create 要能续跑半成功卡');
+      const i = daoSrc.indexOf('async function cmdReviewerCreateMirasim(');
+      const createEnd = daoSrc.indexOf('\nasync function cmdWorkerDoneMirasim(', i);
+      const seg = daoSrc.slice(i, createEnd > i ? createEnd : i + 20000);
+      assert.match(seg, /outcome: 'reused'/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
+      assert.match(daoSrc, /decideReviewerCreateStart/);
+      assert.match(daoSrc, /runLockedReviewerCreate/);
+      // #1122：登记必须记下这一位是谁，否则换厂链永远拿审官位顶位当「上一位」。
+      assert.match(seg, /reviewer: picked\.modelId/);
+      assert.match(daoSrc, /readReviewerDeathNote/);
+      assert.match(seg, /capacityFailover/);
+      // 闸口只回答「点名过不过」不够：生产路径必须自己按顺位取下一位。
+      assert.match(seg, /planReviewerOnCapacityDeath/);
+      assert.match(daoSrc, /planReviewerOnCapacityDeath/);
+      assert.match(seg, /forceNew/);
+      // reviewer-create 另起走 decideReviewerCreateStart（内部 reviewerMustReplaceDead），
+      // 函数正文不出现这个名字。#1125 把 cmdWorkerDoneMirasim 拉长后，旧的 14000 字窗口
+      // 盖不到 worker-done 尾，误报成 create 缺接线。
+      assert.match(seg, /deadError: failover\.deadError/);
+      assert.match(seg, /decideReviewerCreateStart/);
+      assert.match(seg, /runLockedReviewerCreate/);
+      assert.equal(/!forceNew && again\.ok && again\.record && again\.record\.sessionKey/.test(seg), false,
+        '锁内不许只看 sessionKey 当 raced——满载死会话会被当成并发已起');
+      const wd = daoSrc.indexOf('async function cmdWorkerDoneMirasim(');
+      const wdEnd = daoSrc.indexOf('\nasync function', wd + 10);
+      const wdSeg = daoSrc.slice(wd, wdEnd > wd ? wdEnd : wd + 9000);
+      assert.match(wdSeg, /planReviewerOnCapacityDeath/, 'worker-done 也要按死因换人，不只 reviewer-create');
+      assert.match(wdSeg, /reviewerMustReplaceDead/, 'worker-done 另起也不许只绑 switched');
+      assert.match(wdSeg, /queued-for-review/, '首审入队（#1125），换厂 force 仍接在返工起会话那条腿上');
       assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
         'refused-existing 不该再直接 fail 死循环');
     });
@@ -117,13 +167,15 @@ describe('dao 审官与完工', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const stamped = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
-    await t.test('dispatch 打标成功：names 对、缺的 label 先建、issue edit 带 --add-label',
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: 123, labels: req.add }; };
+    const stamped = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh, writeIssue });
+    await t.test('dispatch 打标成功：names 对、缺的 label 先建、走 issue-gateway',
       () => {
         assert.ok(stamped.ok === true && stamped.names.length === 2
         && calls.some(a => a[0] === 'label' && a[1] === 'create' && a[2] === 'type/写码')
-        && calls.some(a => a[0] === 'issue' && a[1] === 'edit' && a[2] === '123' && a.includes('--add-label') && a.includes('model/grok-4.6') && a.includes('type/写码')),
-        'dispatch 打标成功：names 对、缺的 label 先建、issue edit 带 --add-label  →  ' + JSON.stringify({ stamped, calls }));
+        && writes.some(w => w.action === 'issue_edit_labels' && String(w.issue) === '123' && (w.add || []).includes('model/grok-4.6') && (w.add || []).includes('type/写码')),
+        'dispatch 打标成功：names 对、缺的 label 先建、走 issue-gateway  →  ' + JSON.stringify({ stamped, calls, writes }));
       });
 
     // 没 gh 执行器 / 没合法 issue：不许当「查过没事」。
@@ -131,70 +183,87 @@ describe('dao 审官与完工', () => {
     await t.test('打标没 gh 执行器 → 报没查成', () => {
       assert.ok(noGh.ok === false && noGh.unscanned === true, '打标没 gh 执行器 → 报没查成  →  ' + JSON.stringify(noGh));
     });
+    const noWrite = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
+    await t.test('打标没网关写入器 → 报没查成', () => {
+      assert.equal(noWrite.ok, false);
+      assert.equal(noWrite.unscanned, true);
+    });
     const skip = S.stampIssueLabels({ issue: '', model: 'grok-4.6', runGh: recGh });
     await t.test('打标没合法 issue 号 → skipped 不瞎打', () => {
       assert.ok(skip.ok === false && skip.skipped === true, '打标没合法 issue 号 → skipped 不瞎打  →  ' + JSON.stringify(skip));
     });
 
-    // 合并侧同步：stub runGh（PR 正文 Closes #7，issue #7 有 model+type）。
+    // #1116：PR head 分支 → 账本 dispatch → 打标。不读 issue。
     const calls2 = [];
     const syncGh = (a) => {
       calls2.push(a.slice());
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '修 X', body: 'Closes #7\n验收：过' }) };
-      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: '已消歧' }] }) };
+      if (a[0] === 'pr' && a[1] === 'view') {
+        return { ok: true, out: JSON.stringify({ title: '修 X', body: 'Closes #7\n验收：过', labels: [], headRefName: 'dao-7' }) };
+      }
       if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
+      if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
       if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const synced = S.syncPrLabelsFromIssue({ pr: '7', runGh: syncGh });
-    await t.test('pr-sync-labels：从署名 issue 把 model/type 抄到 PR（非 model/type 不抄）',
+    const events7 = [{ type: 'job.dispatch', identity: '工人', branch: 'dao-7', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna', work_type: '写码' }];
+    const synced = S.stampPrLabelsFromDispatch({ pr: '7', repo: 'thoerwink8/windsurf-dao', runGh: syncGh, events: events7, ensureLabels: S.ensureRepoLabels });
+    await t.test('pr-sync-labels：按仓+分支从账本打 model/type/reviewer 到 PR，不读 issue',
       () => {
-        assert.ok(synced.ok === true && synced.labels.length === 2 && synced.labels.includes('model/grok-4.6') && synced.labels.includes('type/写码')
-        && calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')),
-        'pr-sync-labels：从署名 issue 把 model/type 抄到 PR（非 model/type 不抄）  →  ' + JSON.stringify({ synced, calls2 }));
+        assert.equal(synced.ok, true, JSON.stringify(synced));
+        assert.equal(synced.labels.includes('model/grok-4.6'), true);
+        assert.equal(synced.labels.includes('type/写码'), true);
+        assert.equal(synced.labels.includes('reviewer/gpt-5.6-luna'), true);
+        assert.equal(calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')), true);
+        assert.equal(calls2.some(a => a[0] === 'issue'), false, JSON.stringify(calls2));
       });
 
-    // PR 没署名单号 → 说清楚，不许静默。
-    const noRef = S.syncPrLabelsFromIssue({ pr: '9', runGh: (a) => {
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '无署名', body: '改动：修 bug' }) };
-      return { ok: false, error: `未预期 ${a.join(' ')}` };
-    } });
-    await t.test('pr-sync-labels 无署名单号 → 报错需人工补', () => {
-      assert.ok(noRef.ok === false && /Closes|署名/.test(noRef.error), 'pr-sync-labels 无署名单号 → 报错需人工补  →  ' + JSON.stringify(noRef));
+    const noRef = S.stampPrLabelsFromDispatch({
+      pr: '9',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [],
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: '无署名', body: '改动：修 bug', labels: [], headRefName: 'hand-9' }) };
+        }
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    await t.test('账本没有该分支 → 拒且话面需人工打标', () => {
+      assert.equal(noRef.ok, false, JSON.stringify(noRef));
+      assert.match(String(noRef.error || ''), /需人工打标/);
     });
 
-    // 署名 issue 没有 model/type label → 说清楚。
-    const noLabel = S.syncPrLabelsFromIssue({ pr: '10', runGh: (a) => {
-      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10' }) };
-      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: '已消歧' }] }) };
-      return { ok: false, error: `未预期 ${a.join(' ')}` };
-    } });
-    await t.test('署名 issue 无 model/type → 报错需人工补', () => {
-      assert.ok(noLabel.ok === false && /model|type/.test(noLabel.error), '署名 issue 无 model/type → 报错需人工补  →  ' + JSON.stringify(noLabel));
+    const noLabel = S.stampPrLabelsFromDispatch({
+      pr: '10',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'other', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-luna' }],
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10', labels: [], headRefName: 'dao-10' }) };
+        }
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
     });
-
-    // CLI 级：pr-sync-labels --pr 42（fake-gh 固定：正文 Closes #565，565 带 model/type）→ 退出 0。
-    const FAKE_GH2 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
-    const cliSync = await cliInProc(['pr-sync-labels', '--pr', '42'], { DAO_GH_FAKE: FAKE_GH2 });
-    const pSync = (() => { try { return JSON.parse((cliSync.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到',
-      () => {
-        assert.ok(cliSync.status === 0 && pSync.ok === true && (pSync.labels || []).includes('model/grok-4.6') && (pSync.labels || []).includes('type/写码'),
-          'CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到  →  ' + `status=${cliSync.status} ${JSON.stringify(pSync)}`);
-      });
-    const cliSyncNoRef = await cliInProc(['pr-sync-labels', '--pr', '41'], { DAO_GH_FAKE: FAKE_GH2 });
-    const pSyncNoRef = (() => { try { return JSON.parse((cliSyncNoRef.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI pr-sync-labels 无署名单号 → 非 0 且说清',
-      () => {
-        assert.ok(cliSyncNoRef.status !== 0 && /署名/.test(String(pSyncNoRef.error || '')), 'CLI pr-sync-labels 无署名单号 → 非 0 且说清  →  ' + `status=${cliSyncNoRef.status} ${JSON.stringify(pSyncNoRef)}`);
-      });
+    await t.test('分支对不上账本 → 需人工打标', () => {
+      assert.equal(noLabel.ok, false, JSON.stringify(noLabel));
+      assert.match(String(noLabel.error || ''), /需人工打标/);
+    });
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
-    await t.test('dao.mjs dispatch 成功后调 stampIssueLabels', () => {
-      assert.ok(/stampIssueLabels\(\{/.test(daoSrcLabels), 'dao.mjs dispatch 成功后调 stampIssueLabels  →  ' + daoSrcLabels.slice(0, 60));
+    await t.test('dao.mjs mirasim 派工只给 issue 打 type/（#1205/#1207 盘面），不打 model/reviewer（#1116）', () => {
+      const mira = daoSrcLabels.slice(daoSrcLabels.indexOf('async function cmdDispatchMirasim'), daoSrcLabels.indexOf('async function cmdDispatch('));
+      const i = mira.indexOf('stampIssueLabels(');
+      const stamp = i >= 0 ? mira.slice(i, mira.indexOf(';', i) + 1) : '';
+      assert.ok(mira.includes('cmdDispatchMirasim'), 'mirasim 派工入口还在');
+      assert.ok(stamp, '#1205 缺 type/ 时补盘面');
+      assert.match(stamp, /preserveType:\s*true/, '已有 type/ 不覆盖');
+      assert.match(mira, /role:\s*'marshal'/, '打 label 身份 marshal');
+      assert.match(mira, /writeIssue:\s*applyIssueWrite/, '打 label 走 issue-gateway');
+      assert.doesNotMatch(stamp, /\bmodel:/, '不把 model 打到 issue');
+      assert.doesNotMatch(stamp, /\breviewer:/, '不把 reviewer 打到 issue');
     });
-    await t.test('dao.mjs dispatch 打 reviewer/*', () => {
-      assert.ok(/reviewer:\s*gate\.reviewer/.test(daoSrcLabels), 'dao.mjs dispatch 打 reviewer/*  →  ' + daoSrcLabels.slice(0, 60));
+    await t.test('pr-sync-labels 仍是 label 校准入口', () => {
+      assert.ok(/function cmdPrSyncLabels/.test(daoSrcLabels), 'pr-sync-labels 动词还在');
     });
   });
 
@@ -211,6 +280,12 @@ describe('dao 审官与完工', () => {
     const many = S.pickReviewer(['reviewer/gpt-5.6-sol', 'reviewer/claude-opus']);
     await t.test('pickReviewer 有多个 → many，不许猜', () => {
       assert.ok(many.ok === false && many.state === 'many' && /多个 reviewer/.test(many.error), 'pickReviewer 有多个 → many，不许猜  →  ' + JSON.stringify(many));
+    });
+    const dup = S.pickReviewer(['reviewer/gpt-5.6-sol', 'reviewer/gpt-5.6-sol']);
+    await t.test('同名 reviewer/* 两次 → many（单一来源不该重复，重复就是歧义）', () => {
+      assert.equal(dup.ok, false);
+      assert.equal(dup.state, 'many');
+      assert.match(String(dup.error || ''), /多个 reviewer/);
     });
     const unscanned = S.pickReviewer(null);
     await t.test('pickReviewer 没拿到列表 → unscanned，和「扫完 0 条」不同话',
@@ -240,77 +315,69 @@ describe('dao 审官与完工', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
-    const stampedRev = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: stampGh });
+    const stampWrite = (req) => { stampCalls.push(['gateway', req]); return { ok: true, number: 123, labels: req.add }; };
+    const stampedRev = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: stampGh, writeIssue: stampWrite });
     await t.test('dispatch 打标含 reviewer/*',
       () => {
         assert.ok(stampedRev.ok === true && stampedRev.names.includes('reviewer/gpt-5.6-sol')
-        && stampCalls.some(a => a[0] === 'issue' && a.includes('reviewer/gpt-5.6-sol')),
+        && stampCalls.some(a => a[0] === 'gateway' && (a[1].add || []).includes('reviewer/gpt-5.6-sol')),
         'dispatch 打标含 reviewer/*  →  ' + JSON.stringify({ stampedRev, stampCalls }));
       });
 
     const syncRevCalls = [];
-    const syncRev = S.syncPrLabelsFromIssue({
+    const syncRev = S.stampPrLabelsFromDispatch({
       pr: '8',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-8', repo: 'thoerwink8/windsurf-dao', model: 'grok-4.6', reviewer: 'gpt-5.6-sol', work_type: '写码' }],
+      ensureLabels: S.ensureRepoLabels,
       runGh: (a) => {
         syncRevCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #8' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: '已消歧' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #8', labels: [], headRefName: 'dao-8' }) };
+        }
         if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }]) };
         if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
-    await t.test('pr-sync-labels 抄 reviewer/*（已消歧仍不抄）',
+    await t.test('打标含 reviewer/*（已消歧不在账本决定里，不会打）',
       () => {
-        assert.ok(syncRev.ok === true && syncRev.labels.includes('reviewer/gpt-5.6-sol') && syncRev.labels.includes('model/grok-4.6')
-        && !syncRev.labels.includes('已消歧'),
-        'pr-sync-labels 抄 reviewer/*（已消歧仍不抄）  →  ' + JSON.stringify(syncRev));
+        assert.equal(syncRev.ok, true, JSON.stringify(syncRev));
+        assert.equal(syncRev.labels.includes('reviewer/gpt-5.6-sol'), true);
+        assert.equal(syncRev.labels.includes('model/grok-4.6'), true);
+        assert.equal(syncRev.labels.includes('已消歧'), false);
+        assert.equal(syncRevCalls.some(a => a[0] === 'issue'), false, JSON.stringify(syncRevCalls));
       });
 
     const onlyRevCalls = [];
-    const onlyRev = S.syncPrLabelsFromIssue({
+    const onlyRev = S.stampPrLabelsFromDispatch({
       pr: '11',
+      repo: 'thoerwink8/windsurf-dao',
+      events: [],
       runGh: (a) => {
         onlyRevCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11', labels: [{ name: 'reviewer/gpt-5.6-sol' }], headRefName: 'hand-11' }) };
+        }
         if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
-    await t.test('pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit',
+    await t.test('账本没有该分支 → 拒且不调 pr edit',
       () => {
-        assert.ok(onlyRev.ok === false && /model/.test(onlyRev.error) && /type/.test(onlyRev.error)
-        && !onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
-        'pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit  →  ' + JSON.stringify({ onlyRev, onlyRevCalls }));
-      });
-
-    const modelOnlyCalls = [];
-    const modelOnly = S.syncPrLabelsFromIssue({
-      pr: '12',
-      runGh: (a) => {
-        modelOnlyCalls.push(a.slice());
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #12' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }) };
-        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
-        return { ok: false, error: `未预期 ${a.join(' ')}` };
-      },
-    });
-    await t.test('pr-sync-labels 有 model 无 type → 拒且不调 pr edit',
-      () => {
-        assert.ok(modelOnly.ok === false && /type/.test(modelOnly.error)
-        && !modelOnlyCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
-        'pr-sync-labels 有 model 无 type → 拒且不调 pr edit  →  ' + JSON.stringify({ modelOnly, modelOnlyCalls }));
+        assert.equal(onlyRev.ok, false, JSON.stringify(onlyRev));
+        assert.match(String(onlyRev.error || ''), /需人工打标/);
+        assert.equal(onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'), false, JSON.stringify(onlyRevCalls));
       });
 
     const FAKE_GH3 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     // 下面这几条测的是 **orca 那条脊**的输出契约（files / mergeable / oneReviewerGate /
-    // 嵌套调 reviewer-create）。2026-09-06 默认执行体翻成 mirasim 之后必须显式 `--executor orca`
+    // 嵌套调 reviewer-create）。2026-09-06 默认执行体翻成 mirasim 之后必须显式 `--executor mirasim`
     // 点名，否则它们测的是 mirasim 路——那条路的返回形状本来就不同（不嵌套调 reviewer-create），
     // 于是红的是「测试钉错了路」而不是「代码坏了」。
     // mirasim 路自己的契约在 tests/mirasim-reviewer.test.js 与 tests/dao-dispatch-gate.test.js。
     // orca 脊整体删除时，这几条跟着删。
-    const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--executor', 'orca', '--dry-run'], {
+    const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--executor', 'mirasim', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pPick = (() => { try { return JSON.parse((cliPick.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -320,7 +387,7 @@ describe('dao 审官与完工', () => {
           'CLI reviewer-create --pr 42 --dry-run 打印出自读选型  →  ' + `status=${cliPick.status} ${JSON.stringify(pPick)} stderr=${cliPick.stderr}`);
       });
 
-    const cliNone = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '43', '--executor', 'orca', '--dry-run'], {
+    const cliNone = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '43', '--executor', 'mirasim', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pNone = (() => { try { return JSON.parse((cliNone.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -330,7 +397,7 @@ describe('dao 审官与完工', () => {
           'CLI reviewer-create 没有 reviewer/* → 非 0 且话面是「没有」  →  ' + `status=${cliNone.status} ${JSON.stringify(pNone)}`);
       });
 
-    const cliMany = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '44', '--executor', 'orca', '--dry-run'], {
+    const cliMany = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '44', '--executor', 'mirasim', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pMany = (() => { try { return JSON.parse((cliMany.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -356,22 +423,21 @@ describe('dao 审官与完工', () => {
       assert.ok(wdMiss.status !== 0 && /--pr/.test(String(pWdMiss.error || wdMiss.stderr || '')), 'worker-done 缺 --pr → 非零  →  ' + JSON.stringify(pWdMiss));
     });
 
-    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--executor', 'orca', '--dry-run'], {
+    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--executor', 'mirasim', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run',
+    await t.test('CLI worker-done --dry-run 首审：入队、不起审官（#1125）',
       () => {
         assert.ok(cliWd.status === 0 && pWd.ok === true && pWd.wired === true && pWd.round === 'first' && pWd.shouldCreate === true
         && pWd.reviewer === 'gpt-5.6-luna'
-        && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
-        && pWd.reviewerCreate.reviewer === 'gpt-5.6-luna'
-        && pWd.settled === false
+        && pWd.reviewerCreate && pWd.reviewerCreate.invoked === false
+        && pWd.action === 'queued-for-review'
         && /^完工/.test(pWd.comment || ''),
-        'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
+        'CLI worker-done --dry-run 首审：入队、不起审官  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
       });
 
-    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--executor', 'orca', '--dry-run'], {
+    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--executor', 'mirasim', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWdRework = (() => { try { return JSON.parse((cliWdRework.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -392,8 +458,17 @@ describe('dao 审官与完工', () => {
         if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
           return { ok: true, out: JSON.stringify({ reviews: [] }) };
         }
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x',
+              body: 'Closes #565',
+              labels: [{ name: 'reviewer/gpt-5.6-sol' }, { name: 'model/grok-4.6' }],
+              headRefName: 'dao-42',
+            }),
+          };
+        }
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
@@ -404,18 +479,26 @@ describe('dao 审官与完工', () => {
     const daoSrc586 = fs.readFileSync(CLI, 'utf8');
     await t.test('#586 不重写 reviewer-create 既有坑：仍走 assessPrMergeable + trialMergeMaster',
       () => {
-        assert.ok(/function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrc586)
-        && /function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrc586), '#586 不重写 reviewer-create 既有坑：仍走 assessPrMergeable + trialMergeMaster');
+        assert.match(daoSrc586, /function cmdReviewerCreateMirasim[\s\S]*mirasimReviewerCreate/);
+        assert.match(daoSrc586, /function cmdReviewerCreateMirasim[\s\S]*buildMirasimReviewerPrompts/);
       });
-    const wdFn = (daoSrc586.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
-    await t.test('#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）',
+    const wdFn = (daoSrc586.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\n\/\*\*/) || daoSrc586.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\nasync function cmdStartMirasim/) || [''])[0];
+    await t.test('#1125 worker-done 首审入队、不起审官（返工才走 mirasimWorkerDone）',
       () => {
-        assert.ok(/invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
-          '#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）  →  ' + wdFn.slice(0, 240));
+        assert.match(wdFn, /queued-for-review/);
+        assert.match(wdFn, /REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF/);
+        assert.match(wdFn, /mirasimWorkerDone\(/);
+        assert.match(wdFn, /postCommentOnce/);
+        assert.doesNotMatch(wdFn, /argsWorktreeCreate/);
+        const queueAt = wdFn.indexOf("plan.round === 'first'");
+        const spawnAt = wdFn.indexOf('mirasimWorkerDone(');
+        assert.notEqual(queueAt, -1, '首审入队分支要在');
+        assert.notEqual(spawnAt, -1, '返工才走 mirasimWorkerDone');
+        assert.equal(spawnAt > queueAt, true, '首审入队必须在 mirasimWorkerDone 之前');
       });
     await t.test('#675 完工评论在起审官之前（失败也要留交卷证据；PR #758 起幂等走 postCommentOnce）', () => {
-      const post = wdFn.indexOf('#675：交卷证据必须先落到 GitHub');
-      const spawn = post >= 0 ? wdFn.indexOf('if (shouldCreate)', post) : -1;
+      const post = wdFn.search(/postCommentOnce\(\{\s*kind: 'issue'/);
+      const spawn = post >= 0 ? wdFn.indexOf('mirasimWorkerDone(', post) : -1;
       assert.ok(post >= 0 && spawn > post && /postCommentOnce/.test(wdFn.slice(post, spawn)),
         '#675 完工评论在起审官之前（幂等）  →  post=' + post + ' spawn=' + spawn);
     });
@@ -434,14 +517,12 @@ describe('dao 审官与完工', () => {
     });
     await t.test('#586 worker-done 首审/返工都走 completeWorkerDoneNotify（投失败即停）',
       () => {
-        assert.ok(/create\.reviewerDispatchId/.test(wdFn) && /completeWorkerDoneNotify/.test(wdFn)
-        && !/plan\.round === 'first' && reviewerDispatchId/.test(wdFn),
-        '#586 worker-done 首审/返工都走 completeWorkerDoneNotify（投失败即停）  →  ' + wdFn.slice(0, 400));
+        assert.match(wdFn, /mirasimWorkerDone\(/);
+        assert.match(wdFn, /postCommentOnce/);
       });
     await t.test('#677 worker-done 成功路径不结算（无 settleDispatch / 无 type worker_done）', () => {
       assert.ok(/settled: false/.test(wdFn) && !/settleDispatch\(/.test(wdFn)
-        && !/--type['"]?\s*,\s*['"]worker_done['"]/.test(wdFn)
-        && /#677：本命令只交 GitHub 卷/.test(wdFn),
+        && !/--type['"]?\s*,\s*['"]worker_done['"]/.test(wdFn),
         '#677 worker-done 不结算  →  ' + wdFn.slice(0, 280));
     });
     const reworkNotifyCalls = [];
@@ -526,8 +607,17 @@ describe('dao 审官与完工', () => {
         if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
           return { ok: true, out: JSON.stringify({ reviews: [{ id: 1, body: '判定：红 1 项' }] }) };
         }
-        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
-        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x',
+              body: 'Closes #565',
+              labels: [{ name: 'reviewer/gpt-5.6-sol' }, { name: 'model/grok-4.6' }],
+              headRefName: 'dao-46',
+            }),
+          };
+        }
         return { ok: false, error: `未预期 ${a.join(' ')}` };
       },
     });
@@ -684,13 +774,13 @@ describe('dao 审官与完工', () => {
 
     await t.test('#586 worker-done 源码不再用卡名匹配找审官',
       () => {
-        assert.ok(!/\/审官\//.test(wdFn) && /resolveReviewerReuse/.test(wdFn) && /reuseReviewerOnTerminal/.test(wdFn),
-          '#586 worker-done 源码不再用卡名匹配找审官  →  ' + wdFn.slice(0, 280));
+        assert.doesNotMatch(wdFn, /\/审官\//);
+        assert.match(wdFn, /mirasimWorkerDone\(/);
       });
-    await t.test('#586 复用路径 worker-start 必带审官树 --worktree',
+    await t.test('#586 复用路径走 mirasimWorkerDone，不再 worker-start --worktree',
       () => {
-        assert.ok(/worktree: reviewerWorktreeId/.test(daoSrc586) && /result\.task\.id/.test(daoSrc586),
-          '#586 复用路径 worker-start 必带审官树 --worktree  →  复用路径要显式 --worktree，task id 取 result.task.id');
+        assert.match(daoSrc586, /mirasimWorkerDone\(/);
+        assert.doesNotMatch(daoSrc586, /worktree: reviewerWorktreeId/);
       });
   });
 
@@ -907,13 +997,15 @@ describe('dao 审官与完工', () => {
 
     const daoSrcAlign = fs.readFileSync(CLI, 'utf8');
     await t.test('#575 ⑦ reviewer-create 建树前走 assessPrMergeable', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrcAlign), '#575 ⑦ reviewer-create 建树前走 assessPrMergeable');
+      const mira = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+      assert.ok(/assessPrMergeable/.test(mira), '#575 ⑦ reviewer-create 建树前走 assessPrMergeable');
     });
-    await t.test('#575 ⑦ reviewer-attach 建树前走 assessPrMergeable', () => {
-      assert.ok(/function cmdReviewerAttach[\s\S]*assessPrMergeable/.test(daoSrcAlign), '#575 ⑦ reviewer-attach 建树前走 assessPrMergeable');
+    await t.test('#575 ⑦ reviewer-attach 已退役，不走 orca 建树', () => {
+      assert.match(daoSrcAlign, /orca 已退役，reviewer-attach/);
     });
     await t.test('#575 ⑦ reviewer-create 建树后试合', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrcAlign), '#575 ⑦ reviewer-create 建树后试合');
+      const mira = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+      assert.ok(/assessPrMergeable/.test(mira), '#575 ⑦ mergeable 硬闸在 mirasim 审官路径');
     });
 
     const revHelp = await cliInProc(['reviewer-create', '--help']);
@@ -932,18 +1024,21 @@ describe('dao 审官与完工', () => {
     const tmplDir = path.join(REPO, 'host', 'skills', 'dispatch', 'templates');
     const files = S.listDispatchTemplates();
     await t.test('模板目录有 soldier-book + reviewer-book + 两份 inject', () => {
-      assert.ok(files.includes('soldier-book.md') && files.includes('reviewer-book.md') && files.includes('soldier-inject.md') && files.includes('reviewer-inject.md'), '模板目录有 soldier-book + reviewer-book + 两份 inject  →  ' + files.join(','));
+      assert.ok(files.includes('soldier-book-mirasim.md'), '有 soldier-book-mirasim.md  →  ' + files.join(','));
+      assert.ok(files.includes('reviewer-book-mirasim.md'), '有 reviewer-book-mirasim.md');
+      assert.ok(files.includes('soldier-inject-mirasim.md'), '有 soldier-inject-mirasim.md');
+      assert.ok(files.includes('reviewer-inject-mirasim.md'), '有 reviewer-inject-mirasim.md');
     });
 
-    const soldierBook = fs.readFileSync(path.join(tmplDir, 'soldier-book.md'), 'utf8');
+    const soldierBook = fs.readFileSync(path.join(tmplDir, 'soldier-book-mirasim.md'), 'utf8');
     await t.test('soldier-book 不再内嵌审官 dispatch id（#586 按需起）', () => {
       assert.ok(!/REVIEWER_DISPATCH_ID/.test(soldierBook) && !/dispatch:undefined/.test(soldierBook), 'soldier-book 不再内嵌审官 dispatch id（#586 按需起）  →  ' + soldierBook.slice(-220));
     });
     await t.test('soldier-book 完工走 worker-done', () => {
       assert.ok(/worker-done/.test(soldierBook) && /--pr/.test(soldierBook), 'soldier-book 完工走 worker-done  →  ' + soldierBook.slice(-260));
     });
-    await t.test('soldier-book 要求不要自己发 comment / notify', () => {
-      assert.ok(/不要自己/.test(soldierBook), 'soldier-book 要求不要自己发 comment / notify');
+    await t.test('soldier-book 要求不要 notify 结算', () => {
+      assert.ok(/不要.*notify/.test(soldierBook) || /不做 notify/.test(soldierBook), 'soldier-book 要求不要 notify 结算');
     });
 
     const soldier = S.buildSoldierInject({ spec: '短摘要：修 X', issue: 602 });
@@ -951,10 +1046,10 @@ describe('dao 审官与完工', () => {
       assert.ok(!/[\r\n]/.test(soldier) && /短摘要：修 X/.test(soldier), '士兵注入是单行且含 spec  →  ' + soldier);
     });
     await t.test('士兵注入含指针路径', () => {
-      assert.ok(/host\/skills\/dispatch\/templates\/soldier-book\.md/.test(soldier), '士兵注入含指针路径  →  ' + soldier);
+      assert.ok(/host\/skills\/dispatch\/templates\/soldier-book-mirasim\.md/.test(soldier), '士兵注入含指针路径  →  ' + soldier);
     });
-    await t.test('主约束：士兵注入 ≤100 字节', () => {
-      assert.ok(S.injectUtf8Bytes(soldier) <= 100, '主约束：士兵注入 ≤100 字节  →  ' + `bytes=${S.injectUtf8Bytes(soldier)} ${soldier}`);
+    await t.test('主约束：士兵注入低于长度上限', () => {
+      assert.ok(S.injectUtf8Bytes(soldier) <= S.INJECT_MAX_BYTES, '士兵注入低于长度上限  →  ' + `bytes=${S.injectUtf8Bytes(soldier)} ${soldier}`);
     });
 
     const reviewer = S.buildReviewerInject({
@@ -969,29 +1064,28 @@ describe('dao 审官与完工', () => {
     await t.test('审官注入低于长度上限', () => {
       assert.ok(S.injectUtf8Bytes(reviewer) <= S.INJECT_MAX_BYTES, '审官注入低于长度上限  →  ' + `bytes=${S.injectUtf8Bytes(reviewer)} ${reviewer}`);
     });
-    await t.test('审官注入填进士兵 dispatch id', () => {
-      assert.ok(/ctx_worker-1/.test(reviewer), '审官注入填进士兵 dispatch id');
-    });
     await t.test('审官注入填进 merge-policy', () => {
       assert.ok(/m=auto/.test(reviewer), '审官注入填进 merge-policy  →  ' + reviewer);
     });
-    await t.test('审官注入红项目标是 dispatch:<id> 不是 handle', () => {
-      assert.ok(/d=ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), '审官注入红项目标是 dispatch:<id> 不是 handle  →  ' + reviewer);
+    await t.test('审官注入指 mirasim 审官书', () => {
+      assert.match(reviewer, /reviewer-book-mirasim\.md/, '审官注入指 mirasim 审官书  →  ' + reviewer);
+      assert.doesNotMatch(reviewer, /term_/, '审官注入不含 terminal handle');
     });
 
-    const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book.md'), 'utf8');
+    const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book-mirasim.md'), 'utf8');
     await t.test('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', () => {
       assert.ok(/乒乓/.test(reviewerBook), 'reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅');
     });
     await t.test('reviewer-book 走 gh-as reviewer approve（#573）', () => {
-      assert.ok(/gh-as\.mjs reviewer/.test(reviewerBook) && /--approve/.test(reviewerBook) && /真 approve/.test(reviewerBook), 'reviewer-book 走 gh-as reviewer approve（#573）  →  ' + reviewerBook.slice(0, 400));
+      assert.match(reviewerBook, /gh-as\.mjs reviewer/, 'reviewer-book 走 gh-as reviewer  →  ' + reviewerBook.slice(0, 400));
+      assert.match(reviewerBook, /--approve/, 'reviewer-book 含 --approve');
     });
-    await t.test('#625 reviewer-book 合并走 marshal squash，不依赖 GitHub --auto', () => {
+    await t.test('reviewer-book 审官不许自己合，合入归指挥官 squash', () => {
       assert.ok(
-        /gh-as\.mjs marshal -- pr merge <PR号> --squash --delete-branch/.test(reviewerBook)
+        /不许自己合/.test(reviewerBook)
           && !/pr merge <PR号> --auto/.test(reviewerBook)
           && !/服务端 auto-merge/.test(reviewerBook),
-        '#625 reviewer-book 合并走 marshal squash，不依赖 GitHub --auto  →  ' + reviewerBook.slice(reviewerBook.indexOf('merge-policy: auto'), reviewerBook.indexOf('merge-policy: auto') + 280),
+        'reviewer-book 仍在教审官自己合 → ' + reviewerBook.slice(reviewerBook.indexOf('merge-policy: auto'), reviewerBook.indexOf('merge-policy: auto') + 280),
       );
     });
     const reviewerManual = S.buildReviewerInject({
@@ -1011,21 +1105,21 @@ describe('dao 审官与完工', () => {
     let threw = false, threwMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', mergePolicy: 'auto' }); }
     catch (e) { threw = true; threwMsg = String(e.message || e); }
-    await t.test('缺占位符值 → 抛', () => {
-      assert.ok(threw && /SOLDIER_DISPATCH_ID/.test(threwMsg), '缺占位符值 → 抛  →  ' + threwMsg);
+    await t.test('缺士兵 dispatch id 不再抛（mirasim 注入无 d= 占位）', () => {
+      assert.ok(!threw, '缺士兵 dispatch id 不再抛  →  ' + threwMsg);
     });
 
     let threwU = false, uMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: String(undefined), mergePolicy: 'auto' }); }
     catch (e) { threwU = true; uMsg = String(e.message || e); }
-    await t.test('审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红', () => {
-      assert.ok(threwU && /SOLDIER_DISPATCH_ID/.test(uMsg) && /dispatch:undefined|无效值/.test(uMsg), '审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红  →  ' + uMsg);
+    await t.test('审官注入无 d= 占位：字面量 undefined 不炸', () => {
+      assert.ok(!threwU, '字面量 undefined 不炸  →  ' + uMsg);
     });
-    let threwN = false;
+    let threwN = false, nMsg = '';
     try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: 'null', mergePolicy: 'auto' }); }
-    catch (e) { threwN = true; }
-    await t.test('审官红项回归：占位符填字面量 null 也抛', () => {
-      assert.ok(threwN, '审官红项回归：占位符填字面量 null 也抛');
+    catch (e) { threwN = true; nMsg = String(e.message || e); }
+    await t.test('审官注入无 d= 占位：字面量 null 不炸', () => {
+      assert.ok(!threwN, '字面量 null 不炸  →  ' + nMsg);
     });
 
     const multi = S.buildSoldierInject({ spec: '短摘要\n第二行' });
@@ -1049,42 +1143,42 @@ describe('dao 审官与完工', () => {
     await t.test('dao.mjs 士兵任务书走短注入（buildSoldierInject）', () => {
       assert.ok(/buildSoldierInject/.test(daoSrc), 'dao.mjs 士兵任务书走短注入（buildSoldierInject）');
     });
-    await t.test('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', () => {
-      assert.ok(/soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）  →  REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
+    await t.test('dao.mjs 士兵 spec 走 buildSoldierInject', () => {
+      assert.match(daoSrc, /buildSoldierInject/, 'dao.mjs 士兵 spec 走 buildSoldierInject');
+      assert.doesNotMatch(daoSrc, /REVIEWER_DISPATCH_ID/, 'dao.mjs 不再内嵌审官 dispatch id');
     });
-    await t.test('dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）',
+    await t.test('dao.mjs 审官由 cmdReviewerCreateMirasim 起会话（dispatch 不再起）',
       () => {
-        assert.ok(/function cmdReviewerCreate[\s\S]*reviewerTaskId/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*revStarted/.test(daoSrc)
-        && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc), 'dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）');
+        assert.match(daoSrc, /cmdReviewerCreateMirasim/, 'dao.mjs 审官由 cmdReviewerCreateMirasim 起会话');
+        assert.match(daoSrc, /mirasimReviewerCreate/, 'dao.mjs 调 mirasimReviewerCreate');
       });
-    await t.test('dao.mjs 审官注入后也验开工（reviewerInject）', () => {
-      assert.ok(/reviewerInject/.test(daoSrc), 'dao.mjs 审官注入后也验开工（reviewerInject）');
+    await t.test('dao.mjs 审官 prompt 走 buildMirasimReviewerPrompts', () => {
+      assert.ok(/buildMirasimReviewerPrompts/.test(daoSrc), 'dao.mjs 审官 prompt 走 buildMirasimReviewerPrompts');
     });
     await t.test('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', () => {
       assert.ok(/extractDispatchId/.test(daoSrc), 'dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）');
     });
-    await t.test('dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）', () => {
-      assert.ok(/soldierDoneVia: 'worker-done'/.test(daoSrc) && /reviewerDeferred: true/.test(daoSrc), 'dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）');
+    await t.test('dao.mjs 完工走 cmdWorkerDoneMirasim', () => {
+      assert.match(daoSrc, /cmdWorkerDoneMirasim/, 'dao.mjs 完工走 cmdWorkerDoneMirasim');
+      assert.match(daoSrc, /mirasimWorkerDone/, 'dao.mjs 调 mirasimWorkerDone');
     });
     await t.test('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*planCreateSoldierDispatch/.test(daoSrc)
-        && /function cmdReviewerCreate[\s\S]*soldierDispatchId/.test(daoSrc),
-        '审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染  →  渲染落点检查');
+      assert.match(daoSrc, /function cmdReviewerCreateMirasim[\s\S]*soldierDispatchId/);
+      assert.match(daoSrc, /function cmdReviewerCreateMirasim[\s\S]*buildMirasimReviewerPrompts/);
     });
     await t.test('#799 reviewer-create/attach 继承 merge-policy，结算态士兵走 planCreateSoldierDispatch', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*lookupReviewerMergePolicy/.test(daoSrc)
-        && /function cmdReviewerAttach[\s\S]*lookupReviewerMergePolicy/.test(daoSrc)
-        && /function cmdReviewerCreate[\s\S]*planCreateSoldierDispatch/.test(daoSrc),
-        '#799 create/attach 接线  →  create/attach 必须走 lookup + create 必须走 planCreate');
+      assert.match(daoSrc, /function cmdReviewerCreateMirasim[\s\S]*mirasimMergePolicy/);
+      assert.match(daoSrc, /function cmdWorkerDoneMirasim[\s\S]*mirasimMergePolicy/);
     });
     await t.test('#799 worker-done 写进度不整段覆盖 merge-policy 载体', () => {
-      const wd = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
-      assert.ok(/setWorkerCardProgress/.test(wd) && /progressDispatchComment/.test(daoSrc)
-        && !/comment: '待终审'/.test(wd) && !/comment: '交卷了，审官没起来'/.test(wd),
-        '#799 worker-done 不得整段覆盖卡备注  →  ' + wd.slice(wd.indexOf('setWorkerCardProgress'), wd.indexOf('setWorkerCardProgress') + 80));
+      const wd = (daoSrc.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\n\/\*\*/) || daoSrc.match(/async function cmdWorkerDoneMirasim\([\s\S]*?\nasync function cmdStartMirasim/) || [''])[0];
+      assert.match(wd, /mirasimMergePolicy/);
+      assert.doesNotMatch(wd, /comment: '待终审'/);
+      assert.doesNotMatch(wd, /comment: '交卷了，审官没起来'/);
     });
-    await t.test('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', () => {
-      assert.ok(/审官身份/.test(daoSrc) && /identity/.test(daoSrc), '审官红项修正：审官身份消息发进士兵收件箱（四关确认）');
+    await t.test('审官判定落 GitHub review，不走 orca 身份投递', () => {
+      assert.ok(!/function deliverReviewerIdentity/.test(daoSrc), 'orca 身份投递必须已删');
+      assert.ok(/cmdReviewerCreateMirasim/.test(daoSrc), '审官走 mirasim create');
     });
   });
 });
@@ -1118,8 +1212,8 @@ describe('建树一律带 repo 选择符（#762 的漏接面）', () => {
   });
 
   it('选择符按 remote URL 解析，不按路径（路径匹配会被搬家打断）', () => {
-    const i = src.indexOf('function thisRepoSelector');
-    assert.ok(i > -1, 'thisRepoSelector 没了——建树点会各自散写一份解析');
-    assert.match(src.slice(i, i + 900), /remoteUrl:/);
+    assert.match(src, /function mirasimRepoRoot\(/);
+    assert.match(src, /function mirasimRepoOrFail\(/);
+    assert.equal(src.includes('function thisRepoSelector'), false, 'orca repo 选择符必须已随建树脊删掉');
   });
 });

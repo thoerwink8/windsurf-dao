@@ -40,7 +40,7 @@
 
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_PROFILE, profileAllows, looksLikeGreeting, safeGreetingReply, GREETING_FALLBACK,
+  DEFAULT_PROFILE, profileAllows, looksLikeGreeting, looksLikeStatusQuery, safeGreetingReply, GREETING_FALLBACK,
 } from './feishu-group-profile.mjs';
 import { ensurePlain } from './plain-words.mjs';
 
@@ -74,6 +74,14 @@ const MAX_SUMMARY_LEN = 60;
 const MAX_PENDING_LISTED = 5;
 /** 消歧记录：判重候选 = gh search 返回的「前 10 条」。块 B 自己再截一道，A 多返回也不越界。 */
 const MAX_DEDUP_CANDIDATES = 10;
+
+/** 群消息根 id 当幂等键（#792：同一条群消息重投不建第二张单）。 */
+export function feishuKey(inbound, kind) {
+  const root = inbound && inbound.rootId ? String(inbound.rootId) : '';
+  const msg = inbound && inbound.messageId ? String(inbound.messageId) : root;
+  const chat = inbound && inbound.chatId ? String(inbound.chatId) : '';
+  return `feishu:${chat}:${root}:${msg}:${kind || 'write'}`;
+}
 
 /** 块 A 入口：一次入站消息 → 回复 + 动作 + 新状态。 */
 export async function triage(inbound, deps) {
@@ -123,7 +131,7 @@ async function triageInner(inbound, deps) {
     dedupRanHere = true;
     if (dedup.matched.length > 0) {
       const top = dedup.matched[0];
-      await deps.ghComment(repo, top.number, commentBodyFor(inbound));
+      await deps.ghComment(repo, top.number, commentBodyFor(inbound), { idempotency_key: feishuKey(inbound, 'comment') });
       thread.phase = 'done';
       thread.issue = { number: top.number, url: top.url, existing: true };
       return { replies: [{ rootId, text: hitReply(dedup) }], actions: [], state: next };
@@ -153,6 +161,7 @@ async function triageInner(inbound, deps) {
       title,
       body: issueBody({ inbound, sections: rendered.sections, answers: q.answers }),
       labels: ['任务', gate],
+      idempotency_key: feishuKey(inbound, 'create'),
     });
     thread.phase = 'done';
     thread.issue = { number: created.number, url: created.url, existing: false };
@@ -179,7 +188,7 @@ async function triageInner(inbound, deps) {
 
   // done：同一话题新消息 = 补充信息 → 追评到已建/已命中单（决策文档「新信息追评」）。
   if (thread.issue) {
-    await deps.ghComment(repo, thread.issue.number, commentBodyFor(inbound));
+    await deps.ghComment(repo, thread.issue.number, commentBodyFor(inbound), { idempotency_key: feishuKey(inbound, 'comment') });
     return {
       replies: [{
         rootId,
@@ -235,11 +244,30 @@ async function triageHub(inbound, deps) {
       if (!profileAllows(profile, 'decision')) return refuse('decision');
       return reply('总控群现在不收拍板，请直接到那张单下面留言。', { intent: 'decision' });
     }
-    await deps.ghComment(pending.repo, pending.number, hubDecisionComment(inbound));
+    await deps.ghComment(pending.repo, pending.number, hubDecisionComment(inbound), { idempotency_key: feishuKey(inbound, 'comment') });
     return reply(
       `已记到 #${pending.number}（${shortRepo(pending.repo)}）：${sentence(oneSentence(inbound.text))}`,
       { intent: 'decision', landedTo: `${pending.repo}#${pending.number}` },
     );
+  }
+
+  // 「状态」回表（#818）：确定性闸，不靠 LLM 编盘面。问候仍不甩表。
+  if (looksLikeStatusQuery(inbound.text)) {
+    if (!profileAllows(profile, 'situation') || !allowed('situation')) {
+      if (!profileAllows(profile, 'situation')) return refuse('situation');
+      return reply('总控群现在不答盘面。', { intent: 'situation' });
+    }
+    if (typeof deps.boardTable !== 'function') {
+      return reply('看板这会儿读不到。', { intent: 'situation' });
+    }
+    let table;
+    try { table = await deps.boardTable(); }
+    catch (e) {
+      return reply(`看板没查成：${String(e && e.message || e).slice(0, 80)}`, { intent: 'situation' });
+    }
+    const text = String(table ?? '').trim();
+    if (!text) return reply('看板这会儿读不到。', { intent: 'situation' });
+    return reply(text, { intent: 'situation' });
   }
 
   // 短问候不走盘点（#875）：确定性闸，不靠 LLM 先甩一整段盘点。
@@ -297,7 +325,7 @@ async function triageHub(inbound, deps) {
       || (Number.isInteger(cls.issueNumber) && fallbackRepo
         ? { repo: fallbackRepo, number: cls.issueNumber } : null);
     if (!ref) return reply(HUB_DECISION_ASK, { intent });
-    await deps.ghComment(ref.repo, ref.number, hubDecisionComment(inbound));
+    await deps.ghComment(ref.repo, ref.number, hubDecisionComment(inbound), { idempotency_key: feishuKey(inbound, 'comment') });
     return reply(
       `已记到 #${ref.number}（${shortRepo(ref.repo)}）：${sentence(oneSentence(inbound.text))}`,
       { intent, landedTo: `${ref.repo}#${ref.number}` },

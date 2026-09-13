@@ -23,12 +23,7 @@ describe('#880 卡 F：任务书 mirasim 化', () => {
     assert.ok(mira.includes('#880'), 'mirasim 前言带 issue');
 
     const orca = buildSoldierInject({ spec: 'x', issue: '880' });
-    assert.equal(
-      orca,
-      '读 host/skills/dispatch/templates/soldier-book.md spec=x #880',
-      'orca 默认渲染逐字不变',
-    );
-    assert.ok(!/mirasim/.test(orca), 'orca 默认不指 mirasim 书');
+    assert.match(orca, /soldier-book-mirasim\.md/, '不传 executor 也走 mirasim 书（#1150 orca 书已删）');
   });
 
   it('buildReviewerInject 按 executor 选书；mirasim 无 d=/s=/fb=，orca 有 d=', async () => {
@@ -51,9 +46,8 @@ describe('#880 卡 F：任务书 mirasim 化', () => {
     const orca = buildReviewerInject({
       spec: 'x', issue: '880', pr: '900', soldierDispatchId: 'DISP1', mergePolicy: 'auto',
     });
-    assert.match(orca, /reviewer-book\.md/, 'orca 选 orca 审官书');
-    assert.ok(orca.includes('d=DISP1'), 'orca 默认仍带对方 dispatch d=');
-    assert.ok(!/mirasim/.test(orca), 'orca 默认不指 mirasim 书');
+    assert.match(orca, /reviewer-book-mirasim\.md/, '不传 executor 也走 mirasim 审官书');
+    assert.ok(!/\bd=/.test(orca), 'mirasim 审官注入没有对方 dispatch');
   });
 
   it('mirasim 士兵注入仍受 500 字节闸（超长 spec 抛）', async () => {

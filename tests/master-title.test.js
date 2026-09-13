@@ -7,10 +7,7 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'master-title.mjs');
-const FIX = path.join(REPO, 'scripts', 'lib', 'orca-json-fixtures.mjs');
-const DAO_CMD = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
 const T_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
-const F_LOAD = import('file://' + FIX.replace(/\\/g, '/'));
 
 describe('master-title', () => {
   it('定界区加删：不碰叙述其余部分', async (t) => {
@@ -96,7 +93,7 @@ describe('master-title', () => {
     const T = await T_LOAD;
     const calls = [];
     let comment = 'merge-policy:manual · 人写的进度';
-    const runOrca = (args) => {
+    const exec = (args) => {
       calls.push(args.slice());
       if (args[1] === 'show') {
         return { ok: true, json: { result: { worktree: { comment } } } };
@@ -110,7 +107,7 @@ describe('master-title', () => {
     const r = T.afterDispatchComment({
       name: '#499+#495 - 修通道',
       worktreeId: 'wt_task',
-      runOrca,
+      exec,
     });
     const sets = calls.filter(a => a[1] === 'set');
     await t.test('派工成功会写任务卡 comment', () => {
@@ -129,7 +126,7 @@ describe('master-title', () => {
     const rm = T.applyRemoveTicket({
       id: '#499',
       worktreeId: 'wt_task',
-      runOrca,
+      exec,
     });
     await t.test('删除入口去掉该号、叙述还在', () => {
       assert.ok(rm.ok && rm.comment === 'merge-policy:manual · 人写的进度｜[#495]', '删除入口去掉该号、叙述还在  →  ' + rm.comment);
@@ -138,7 +135,7 @@ describe('master-title', () => {
     const lie = T.afterDispatchComment({
       name: '#499 - 修通道',
       worktreeId: 'wt_task',
-      runOrca: (args) => {
+      exec: (args) => {
         if (args[1] === 'show') return { ok: true, json: { result: { worktree: { comment: '人写的进度' } } } };
         if (args[1] === 'set') return { ok: true, json: { ok: true } };
         return { ok: false, error: 'nope' };
@@ -155,7 +152,7 @@ describe('master-title', () => {
     const skip = T.afterDispatchComment({
       name: '通道探针',
       worktreeId: 'wt_task',
-      runOrca: (args) => {
+      exec: (args) => {
         if (args[1] === 'set') setCalled = true;
         return { ok: true, json: {} };
       },
@@ -181,7 +178,7 @@ describe('master-title', () => {
       name: '造 dao-project skill 与消歧门门控',
       issue: '565',
       worktreeId: 'wt_task',
-      runOrca: issueRunOrca,
+      exec: issueRunOrca,
     });
     await t.test('名里没单号但 --issue 有 → 写定界区（#565 漏记回归钉）',
       () => {
@@ -191,51 +188,20 @@ describe('master-title', () => {
       name: '#499 名里有号',
       issue: '565',
       worktreeId: 'wt_task',
-      runOrca: issueRunOrca,
+      exec: issueRunOrca,
     });
     await t.test('名里和 --issue 都有号 → 定界区去重合写',
       () => {
         assert.ok(withIssue2.ok === true && withIssue2.tickets.length === 2 && /#565/.test(withIssue2.comment), '名里和 --issue 都有号 → 定界区去重合写  →  ' + JSON.stringify(withIssue2));
       });
 
-    const noId = T.afterDispatchComment({ name: '#499 - x', runOrca: () => ({ ok: true }) });
+    const noId = T.afterDispatchComment({ name: '#499 - x', exec: () => ({ ok: true }) });
     await t.test('没 worktreeId → 报警不写', () => {
       assert.ok(noId.ok === false && /worktreeId/.test(noId.reason), '没 worktreeId → 报警不写  →  ' + JSON.stringify(noId));
     });
   });
 
-  it('真语料规矩：缺存档必须被拦', async (t) => {
-    const F = await F_LOAD;
-    // #762 按域拆分后 extract* 散在 dao-cmd.mjs + scripts/lib/dispatch/*.mjs，一并扫
-    const libDir = path.join(REPO, 'scripts', 'lib');
-    const texts = [fs.readFileSync(DAO_CMD, 'utf8')];
-    const dispatchDir = path.join(libDir, 'dispatch');
-    if (fs.existsSync(dispatchDir)) {
-      for (const name of fs.readdirSync(dispatchDir).filter(n => n.endsWith('.mjs')).sort()) {
-        texts.push(fs.readFileSync(path.join(dispatchDir, name), 'utf8'));
-      }
-    }
-    const live = F.checkOrcaJsonFixtures({
-      daoCmdText: texts.join('\n'),
-      fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json'),
-    });
-    await t.test('仓内 extract* 都有真语料', () => {
-      assert.ok(live.ok === true && live.unscanned === false && live.scanned.length > 0, '仓内 extract* 都有真语料  →  ' + JSON.stringify(live));
-    });
 
-    const poisoned = F.checkOrcaJsonFixtures({
-      daoCmdText: 'export function extractGhost(json) { return json; }\n',
-      fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json'),
-    });
-    await t.test('故意加 extractGhost 无语料 → 拦', () => {
-      assert.ok(poisoned.ok === false && poisoned.unscanned === false && poisoned.missing.some(m => /extractGhost/.test(m)), '故意加 extractGhost 无语料 → 拦  →  ' + JSON.stringify(poisoned));
-    });
-
-    const empty = F.checkOrcaJsonFixtures({ daoCmdText: 'export function foo() {}', fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json') });
-    await t.test('一个 extract* 都没有 → 没查成', () => {
-      assert.ok(empty.unscanned === true && empty.ok === false, '一个 extract* 都没有 → 没查成  →  ' + JSON.stringify(empty));
-    });
-  });
 
   it('#684 帅位定界区：事件点全量重写', async (t) => {
     const T = await T_LOAD;
@@ -248,7 +214,7 @@ describe('master-title', () => {
         return [id, c.comment || ''];
       }));
       const worktrees = () => cards.map(c => ({ ...c, comment: comments[c.worktreeId || c.id] }));
-      const runOrca = (args) => {
+      const exec = (args) => {
         if (args[0] === 'worktree' && args[1] === 'ps') {
           return { ok: true, json: { result: { worktrees: worktrees() } } };
         }
@@ -262,7 +228,7 @@ describe('master-title', () => {
         }
         return { ok: false, error: `unexpected ${args.join(' ')}` };
       };
-      return { runOrca, worktrees, comments };
+      return { exec, worktrees, comments };
     }
 
     const afterAdd = board([
@@ -273,7 +239,7 @@ describe('master-title', () => {
     const added = T.syncMasterTicketZone({
       worktrees: afterAdd.worktrees(),
       selfRepo: repo,
-      runOrca: afterAdd.runOrca,
+      exec: afterAdd.exec,
     });
     await t.test('造新增：派一单 → master 定界区出现该号', () => {
       assert.ok(added.ok && added.action === 'updated' && added.comment === '主会话：对话/派单/终审｜[#490 #495 #684]',
@@ -287,7 +253,7 @@ describe('master-title', () => {
     const removed = T.syncMasterTicketZone({
       worktrees: afterRm.worktrees(),
       selfRepo: repo,
-      runOrca: afterRm.runOrca,
+      exec: afterRm.exec,
     });
     await t.test('造删除：清卡 → 单号从定界区消失', () => {
       assert.ok(removed.ok && removed.comment === '主会话：对话/派单/终审｜[#490 #495]',
@@ -301,7 +267,7 @@ describe('master-title', () => {
     const converged = T.syncMasterTicketZone({
       worktrees: fake.worktrees(),
       selfRepo: repo,
-      runOrca: fake.runOrca,
+      exec: fake.exec,
     });
     await t.test('造假号：手改塞 #999 → 下一次事件收敛', () => {
       assert.ok(converged.ok && converged.comment === '主会话｜[#684]' && !/#999/.test(converged.comment),
@@ -316,7 +282,7 @@ describe('master-title', () => {
     const all = T.syncMasterTicketZone({
       worktrees: twoMarshals.worktrees(),
       selfRepo: repo,
-      runOrca: twoMarshals.runOrca,
+      exec: twoMarshals.exec,
     });
     await t.test('造多帅：无归属真相源 → 定界区写全体在途单', () => {
       assert.ok(all.ok && all.comment === '帅位｜[#611 #622]' && all.tickets.join(',') === '#611,#622',
@@ -341,7 +307,7 @@ describe('master-title', () => {
     const scoped = T.syncMasterTicketZone({
       worktrees: otherRepo.worktrees(),
       selfRepo: repo,
-      runOrca: otherRepo.runOrca,
+      exec: otherRepo.exec,
     });
     await t.test('外仓卡不进本仓定界区（#492）', () => {
       assert.ok(scoped.ok && scoped.comment === '帅位｜[#684]' && !/#1/.test(scoped.comment),
@@ -357,7 +323,7 @@ describe('master-title', () => {
     let setCalled = false;
     const noWrite = T.syncMasterTicketZone({
       worktrees: null,
-      runOrca: (args) => {
+      exec: (args) => {
         if (args[1] === 'set') setCalled = true;
         return { ok: true, json: {} };
       },
@@ -373,7 +339,7 @@ describe('master-title', () => {
     const cleared = T.syncMasterTicketZone({
       worktrees: emptyBoard.worktrees(),
       selfRepo: repo,
-      runOrca: emptyBoard.runOrca,
+      exec: emptyBoard.exec,
     });
     await t.test('扫完 0 张在途卡 → 定界区消失、前缀还在', () => {
       assert.ok(cleared.ok && cleared.comment === '帅位' && cleared.scanned === 0,
@@ -393,7 +359,7 @@ describe('master-title', () => {
     const missingMaster = T.syncMasterTicketZone({
       worktrees: [{ worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684 }],
       selfRepo: repo,
-      runOrca: () => { throw new Error('不该写'); },
+      exec: () => { throw new Error('不该写'); },
     });
     const liveStale = board([
       {
@@ -407,7 +373,7 @@ describe('master-title', () => {
     const rewritten = T.syncMasterTicketZone({
       worktrees: liveStale.worktrees(),
       selfRepo: repo,
-      runOrca: liveStale.runOrca,
+      exec: liveStale.exec,
     });
     await t.test('过期「见终端标题」前缀改成「见定界区」，定界区同时写上', () => {
       assert.ok(rewritten.ok && rewritten.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
@@ -430,7 +396,7 @@ describe('master-title', () => {
     const kept = T.syncMasterTicketZone({
       worktrees: alreadyNew.worktrees(),
       selfRepo: repo,
-      runOrca: alreadyNew.runOrca,
+      exec: alreadyNew.exec,
     });
     await t.test('已是「见定界区」的前缀保留，假号收敛', () => {
       assert.ok(kept.ok && kept.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
@@ -460,7 +426,7 @@ describe('master-title', () => {
         return [id, c.comment || ''];
       }));
       const worktrees = () => cards.map(c => ({ ...c, comment: comments[c.worktreeId || c.id] }));
-      const runOrca = (args) => {
+      const exec = (args) => {
         if (args[0] === 'worktree' && args[1] === 'ps') {
           return { ok: true, json: { result: { worktrees: worktrees() } } };
         }
@@ -474,7 +440,7 @@ describe('master-title', () => {
         }
         return { ok: false, error: `unexpected ${args.join(' ')}` };
       };
-      return { runOrca, worktrees, comments };
+      return { exec, worktrees, comments };
     }
     const multi = board([
       { worktreeId: masterId, isMainWorktree: true, repo: 'windsurf-dao', path: 'D:/frank/windsurf-dao', comment: '主会话：对话/派单/终审（在途单号见定界区）' },
@@ -486,7 +452,7 @@ describe('master-title', () => {
       worktrees: multi.worktrees(),
       repoId: SELF,
       pathHint: missPath,
-      runOrca: multi.runOrca,
+      exec: multi.exec,
     });
     await t.test('pathHint 失配 + repoId 显式 → 认本仓、外仓不进（#492）', () => {
       assert.ok(byRepoId.ok && byRepoId.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]' && !/#1/.test(byRepoId.comment),
@@ -496,7 +462,7 @@ describe('master-title', () => {
       worktrees: multi.worktrees(),
       repoName: 'windsurf-dao',
       pathHint: missPath,
-      runOrca: multi.runOrca,
+      exec: multi.exec,
     });
     await t.test('mirror 场景：无 repoId、repoName 认本仓（git remote 兜底）', () => {
       assert.ok(byRepoName.ok && byRepoName.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]' && !/#1/.test(byRepoName.comment),
@@ -505,7 +471,7 @@ describe('master-title', () => {
     const noHint = T.syncMasterTicketZone({
       worktrees: multi.worktrees(),
       pathHint: missPath,
-      runOrca: multi.runOrca,
+      exec: multi.exec,
     });
     await t.test('三个手段都没有 + 多仓 → 仍报警不写（没查成 ≠ 空盘）', () => {
       assert.ok(noHint.ok === false && noHint.unscanned === true && /分不出本仓/.test(noHint.reason),
@@ -526,7 +492,7 @@ describe('master-title', () => {
     const singleOk = T.syncMasterTicketZone({
       worktrees: single.worktrees(),
       pathHint: missPath,
-      runOrca: single.runOrca,
+      exec: single.exec,
     });
     await t.test('单仓 + pathHint 失配 → 单仓兜底照旧（不回归）', () => {
       assert.ok(singleOk.ok && singleOk.comment === '帅位｜[#684]',

@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
 const CLI = path.join(REPO, 'scripts', 'dao.mjs');
-const REVIEWER_BOOK = path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md');
+const REVIEWER_BOOK = path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book-mirasim.md');
 const S_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 
 function gitEnv() {
@@ -104,13 +104,8 @@ describe('#815 ① 复审待办队列 + drain', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     assert.ok(/writeReviewPendingOnFail/.test(daoSrc) && /reviewPending/.test(daoSrc),
       'worker-done 起败必须写队列');
-    assert.ok(/finishWorkerDoneSpawnFail/.test(daoSrc) && /queued-review-pending/.test(daoSrc),
-      'depth/在途派单入队后必须成功交卷');
-    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
-    assert.ok(/复审轮走队列/.test(book) && /review-pending-drain/.test(book),
-      'reviewer-book 必须写复审轮走队列');
-    assert.ok(/queued:true/.test(book.replace(/\s+/g, '')) || /queued:true/.test(book),
-      'reviewer-book 必须写成功交卷 queued');
+    assert.ok(/queued-for-review/.test(daoSrc) || /enqueueOnly:\s*true/.test(daoSrc) || /queued: true/.test(daoSrc),
+      '交卷入队后必须成功交卷');
   });
 
   it('#815 余洞：depth 2 / 在途派单不是没查成；待办写成则 queued 交卷', async () => {
@@ -193,11 +188,13 @@ describe('#815 ① 复审待办队列 + drain', () => {
       JSON.stringify(recovered));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    const reuseFn = (daoSrc.match(/function reuseReviewerOnTerminal\([\s\S]*?\nfunction /) || [''])[0];
-    assert.ok(/planReuseExistingLiveDispatch/.test(reuseFn) && /skipStart/.test(reuseFn),
-      '复用路径必须先核在途派单再决定 worker-start');
-    assert.ok(/planAfterWorkerStartActiveDispatch/.test(reuseFn),
-      'worker-start 撞在途派单必须沿用已有 id');
+    assert.ok(!/function reuseReviewerOnTerminal/.test(daoSrc),
+      'orca 复用审官终端路径必须已删');
+    assert.match(daoSrc, /decideReviewerCreateStart/,
+      'mirasim 审官复用必须接到 create 热路');
+    const miraSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs'), 'utf8');
+    assert.match(miraSrc, /judgeReviewerSessionReuse/,
+      '一 PR 一审官的复用判据在 reviewer-mirasim，不在已删的 orca attach 脊');
   });
 
   it('#815 余洞：指挥官轮转消费队列，reviewer-attach 只调一次', async () => {
@@ -209,6 +206,20 @@ describe('#815 ① 复审待办队列 + drain', () => {
     );
     assert.ok(/review-pending-drain/.test(attachCase),
       '指挥官 attach-reviewer 必须走 review-pending-drain → ' + attachCase.slice(0, 240));
+    assert.ok(!/'--pr'/.test(attachCase),
+      '#1125 attach-reviewer 不带 --pr：整队按容量拉，代表票只用来记账');
+    assert.ok(!/'--force'/.test(attachCase),
+      '指挥官不许 --force 绕上限');
+    assert.ok(/function drainReviewPending/.test(commanderSrc)
+      && /review-pending-drain/.test(commanderSrc),
+      'rereview/retry 的 drainReviewPending 必须带 --pr 调 review-pending-drain');
+    const rrFn = commanderSrc.slice(
+      commanderSrc.indexOf('function requestRereview'),
+      commanderSrc.indexOf('function drainReviewPending'),
+    );
+    assert.ok(/drainReviewPending/.test(rrFn),
+      'rereview 写完票当场 drain，不等下一轮 → ' + rrFn.slice(-240));
+    assert.ok(!/drain 下一轮消费/.test(rrFn), '不许再把审官推到下一轮');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-cmd-'));
     const built = S.buildReviewPendingTicket({
@@ -307,10 +318,9 @@ describe('#815 ② 派工单记真终端 + send --dispatch', () => {
     assert.ok(parsed.dispatch === 'ctx_802' && parsed.text === '红项', JSON.stringify(parsed));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/pickDispatchAgentTerminal/.test(daoSrc) && /created\.agentTerminalHandle/.test(daoSrc),
-      '派工单落盘必须补 agentTerminalHandle');
-    assert.ok(/function cmdSend[\s\S]*resolveSendTarget/.test(daoSrc),
-      'cmdSend 必须走 --dispatch 解析');
+    assert.ok(!/created\.agentTerminalHandle/.test(daoSrc),
+      'orca 派工单 agentTerminalHandle 必须已删');
+    assert.match(daoSrc, /orca 已退役，send/);
   });
 });
 
@@ -401,8 +411,7 @@ describe('#815 ③ 复用审官前 worker-read 核活性', () => {
     assert.ok(none.ok && none.action === 'create' && /扫完没有/.test(none.reason), JSON.stringify(none));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function cmdReviewerAttach[\s\S]*planReviewerAttachReuse[\s\S]*argsWorkerRead/.test(daoSrc),
-      'attach 复用前必须 worker-read');
+    assert.match(daoSrc, /orca 已退役，reviewer-attach/);
   });
 });
 
@@ -453,10 +462,9 @@ describe('#815 ④ 建审官树按 origin 检出', () => {
     assert.ok(aligned.ok === true, '按 origin 检出后应对上 PR head → ' + JSON.stringify(aligned));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function cmdReviewerCreate[\s\S]*prepareReviewerOriginRef/.test(daoSrc),
-      'reviewer-create 建树前必须 fetch origin');
-    assert.ok(/function cmdReviewerAttach[\s\S]*prepareReviewerOriginRef/.test(daoSrc),
-      'reviewer-attach 建树前必须 fetch origin');
+    assert.match(daoSrc, /function gitFetchRef/, 'reviewer-create mirasim 建树前必须 fetch');
+    assert.match(daoSrc, /cmdReviewerCreateMirasim/, '审官走 cmdReviewerCreateMirasim');
+    assert.match(daoSrc, /orca 已退役，reviewer-attach/);
   });
 });
 
@@ -500,13 +508,14 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
       if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
       return { ok: false, error: `未预期 ${a.join(' ')}` };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: 810, labels: req.add }; };
     const stamped = S.stampIssueLabels({
-      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh,
+      issue: '810', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: gh, writeIssue,
     });
     assert.ok(stamped.ok, JSON.stringify(stamped));
-    const edit = calls.find(a => a[0] === 'issue' && a[1] === 'edit');
-    assert.ok(!edit || !edit.includes('model/grok-4.6'),
-      'issue edit 不得带第二条 model/* → ' + JSON.stringify({ stamped, calls }));
+    assert.ok(!writes.some(w => (w.add || []).includes('model/grok-4.6')),
+      'issue-gateway 打标不得带第二条 model/* → ' + JSON.stringify({ stamped, writes, calls }));
 
     const many = S.requireWorkerModel(['model/pi-v2', 'model/grok-4.6', 'type/写码']);
     assert.ok(many.ok === false && many.state === 'many', JSON.stringify(many));
@@ -515,8 +524,7 @@ describe('#815 ⑤ 接手派单不重挂 model/*；attach --model', () => {
       model: 'grok-4.6',
       runGh: () => ({ ok: true, out: JSON.stringify({ title: 'x', body: '署名 issue #565', labels: [] }) }),
     });
-    // collectIssueLabelsFromPr 会先 pr view 再 issue view；上面的 runGh 对两种都返回同一 JSON。
-    // --model 显式指定时即使 label 读不全也用旗标。
+    // #1116：只读 PR 自己的 label；--model 显式指定时即使 label 读不全也用旗标。
     assert.ok(flagged.ok === true && flagged.source === 'flag' && flagged.modelId === 'grok-4.6',
       'attach --model 显式指定，不许猜 → ' + JSON.stringify(flagged));
 
@@ -545,25 +553,11 @@ describe('#815 ⑥ 审官注入失败不回滚树', () => {
       '还没有树才允许回滚 → ' + JSON.stringify(noTree));
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    assert.ok(/function keepCreated/.test(daoSrc), '注入失败走 keepCreated 不是 failCreated');
-    assert.ok(!/failCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
-      'create/attach 不得因开工验证失败 failCreated');
-    assert.ok(/keepCreated\([^)]*审官注入后开工验证失败/.test(daoSrc),
-      '开工验证失败必须 keepCreated');
-    assert.ok(/keepCreated\([^)]*审官 worker-start 失败/.test(daoSrc),
-      'worker-start 失败也不得整树回滚');
-
-    const createSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerCreate'), daoSrc.indexOf('function cmdReviewerAttach'));
-    const attachSeg = daoSrc.slice(daoSrc.indexOf('function cmdReviewerAttach'), daoSrc.indexOf('function cmdReviewerDone'));
-    assert.ok(/preferAgent:\s*true/.test(createSeg) && /preferAgent:\s*true/.test(attachSeg),
-      '审官 create/attach 必须 preferAgent，注入走 #805 --agent 探就绪');
-    const launchFn = daoSrc.match(/function launchAgentInWorktree[\s\S]*?\nfunction /)?.[0] || '';
-    assert.ok(/!preferAgent && !!\(launch && launch\.daoTrace\)/.test(launchFn),
-      'daoTrace 不得再把审官逼成 --command → ' + launchFn.slice(0, 240));
-
-    const book = fs.readFileSync(REVIEWER_BOOK, 'utf8');
-    assert.ok(/失败不回滚树/.test(book) && /start --model/.test(book),
-      'reviewer-book 必须写失败不回滚 + 接手命令');
+    assert.doesNotMatch(daoSrc, /function keepCreated/, 'orca keepCreated 必须已删');
+    assert.doesNotMatch(daoSrc, /function failCreated/, 'orca failCreated 必须已删');
+    const createSeg = daoSrc.slice(daoSrc.indexOf('async function cmdReviewerCreateMirasim'), daoSrc.indexOf('async function cmdWorkerDoneMirasim'));
+    assert.doesNotMatch(createSeg, /launchAgentInWorktree\(/);
+    assert.match(createSeg, /mirasimReviewerCreate\(/);
   });
 });
 
@@ -645,9 +639,117 @@ describe('#1014 复审票来源是写票时记下的事实', () => {
       'writeReviewPendingOnFail 必须填 worker-done-fail');
     assert.ok(/REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW/.test(commanderSrc),
       'requestRereview 必须填 commander-rereview');
+    assert.ok(/REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF/.test(daoSrc),
+      '#1125 首审入队必须填 worker-done-handoff');
     assert.ok(/attachReviewerWhy/.test(coreSrc), 'attach-reviewer 的 why 必须走分支函数');
     assert.ok(!/工人已交卷、worker-done 起审官失败入队/.test(daoSrc + commanderSrc + coreSrc),
       '写死的归因字符串必须从热路消失');
   });
+
+  it('#1125 首审入队票缺工人树仍拒写', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1125', workerWorktree: null, reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+    });
+    assert.equal(built.ok, false);
+    assert.match(built.error, /工人树/);
+  });
 });
 
+
+describe('队列落点钉在主 clone：跑在 worktree 里也写同一份队列（2026-09-12 实咬）', () => {
+  const MC = import('file://' + path.join(REPO, 'scripts', 'lib', 'main-checkout.mjs').replace(/\\/g, '/'));
+  const RP = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/'));
+  const DQ = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch-queue.mjs').replace(/\\/g, '/'));
+
+  // 造一个真 git 仓 + 挂在上面的**两棵**真 worktree（模拟工人树与复审树）。
+  // 判据必须来自真 git，手搓的假 spawn 只能证明「我按我以为的形状调了」。
+  //
+  // 2026-09-12 CI 变红：这三条原来钉的是**本机的绝对路径**（/srv/projects/windsurf-dao
+  // 与 /home/orca/mirasim-worktrees/…）。那些路径在 CI 上不存在 → `git -C 不存在的目录`
+  // 退出码非 0 → mainCheckoutRoot 退回「给什么树根就还什么」，三棵树各自成一个队列根。
+  // 于是同一条断言在开发机靠「路径真在那儿」蒙对、在 CI 上如实报红——而它要证明的
+  // 恰恰是「**任意**两棵树指向同一份队列」，跟本机路径存不存在无关。换成夹具就不看环境了。
+  function repoWithWorktrees() {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-root-')));
+    gitIn(root, ['init', '-q']);
+    gitIn(root, ['config', 'user.email', 't@t']);
+    gitIn(root, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(root, 'f.txt'), 'x\n');
+    gitIn(root, ['add', 'f.txt']);
+    gitIn(root, ['commit', '-q', '-m', 'init']);
+    const base = path.dirname(root);
+    const name = path.basename(root);
+    const wt1 = path.join(base, `${name}-worker`);
+    const wt2 = path.join(base, `${name}-reviewer`);
+    const m1 = gitIn(root, ['worktree', 'add', '-q', '-b', 'worker', wt1]);
+    const m2 = gitIn(root, ['worktree', 'add', '-q', '-b', 'reviewer', wt2]);
+    if (m1.status !== 0 || m2.status !== 0) return null;
+    return { root, wt1: fs.realpathSync(wt1), wt2: fs.realpathSync(wt2) };
+  }
+
+  // 夹具造不出来时不许静默 return（那就是「没查成」冒充「查过了」）。CI 上 git 一定在。
+  function mustWorktrees() {
+    const r = repoWithWorktrees();
+    assert.ok(r, '造不出真 worktree 夹具 → 本项没查成，不是绿');
+    return r;
+  }
+
+  it('worktree 与主树推同一个主 clone 根', async () => {
+    const { mainCheckoutRoot } = await MC;
+    const { root, wt1 } = mustWorktrees();
+    const fromMain = mainCheckoutRoot({ treeRoot: root });
+    const fromWt = mainCheckoutRoot({ treeRoot: wt1 });
+    assert.equal(fromWt, fromMain, 'worktree 里推出来的主 clone 根必须与主树一致');
+  });
+
+  it('三个不同树根 → 同一个待审队列目录（这是本单治的病）', async () => {
+    const { reviewPendingDir } = await RP;
+    const { root, wt1, wt2 } = mustWorktrees();
+    const a = reviewPendingDir({ root });
+    const b = reviewPendingDir({ root: wt1 });
+    const c = reviewPendingDir({ root: wt2 });
+    assert.equal(b, a, `工人树里的票必须落回主树队列：${b} ≠ ${a}`);
+    assert.equal(c, a, `复审树里的票必须落回主树队列：${c} ≠ ${a}`);
+  });
+
+  it('派工单队列走同一把尺（同根因，同一处修）', async () => {
+    const { dispatchQueueDir } = await DQ;
+    const { root, wt1, wt2 } = mustWorktrees();
+    const a = dispatchQueueDir({ root });
+    const b = dispatchQueueDir({ root: wt1 });
+    const c = dispatchQueueDir({ root: wt2 });
+    assert.equal(b, a, `工人树里的派工单必须落回主树队列：${b} ≠ ${a}`);
+    assert.equal(c, a, `复审树里的派工单必须落回主树队列：${c} ≠ ${a}`);
+  });
+
+  it('显式 root 仍生效：指向一个真 worktree 时归到它的主 clone', async () => {
+    const { reviewPendingDir } = await RP;
+    const { root, wt1 } = mustWorktrees();
+    const dir = reviewPendingDir({ root: wt1 });
+    assert.ok(dir.startsWith(root), `worktree 根的队列必须落在主 clone 下：${dir} 不在 ${root}`);
+  });
+
+  it('env 覆盖优先（测试隔真仓的路不许被这次改动堵掉）', async () => {
+    const { reviewPendingDir } = await RP;
+    const { dispatchQueueDir } = await DQ;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rp-env-'));
+    assert.equal(
+      reviewPendingDir({ root: '/srv/projects/windsurf-dao', env: { DAO_REVIEW_PENDING_DIR: tmp } }),
+      tmp,
+      'DAO_REVIEW_PENDING_DIR 必须原样生效');
+    assert.equal(
+      dispatchQueueDir({ root: '/srv/projects/windsurf-dao', env: { DAO_DISPATCH_QUEUE_DIR: tmp } }),
+      tmp,
+      'DAO_DISPATCH_QUEUE_DIR 必须原样生效');
+  });
+
+  it('不在 git 仓里不炸：退回给的树根，不新造失败面', async () => {
+    const { mainCheckoutRoot } = await MC;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-mc-nogit-'));
+    // 注意：非 git 目录下 `git rev-parse --git-common-dir` 会**退回 cwd**（不是失败），
+    // 所以这里给什么树根就该拿回什么——这条钉的是「不炸」，不是「探到 git」。
+    assert.equal(mainCheckoutRoot({ treeRoot: tmp }), tmp);
+  });
+});

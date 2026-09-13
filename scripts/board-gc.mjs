@@ -5,7 +5,7 @@
 // 并且需要建立一个能够自动清理的机制自动去发现，自动去清理」。
 //
 // 判据全在 scripts/lib/board-gc.mjs（纯函数、可测）。本文件只负责三件事：
-// 采事实（orca / gh / git）、把事实喂给判据、按判决调 dao.mjs worktree-rm。
+// 采事实（mirasim 树 / gh / git）、把事实喂给判据、按判决走 git 原生删树（#1104 removeTreeFallback 转正）。
 //
 // 与 board-reset 的分工：board-reset 是「重测前一锅端」（所有非主树顶层卡）；
 // 本命令是它的反面——**只清确实不需要的那几张**，其余一张不动。
@@ -18,19 +18,26 @@
 // 退出码：0 判完（清了或没得清） / 1 有 risky 要人判 / 2 没查成（一张都没动）。
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths } from './lib/board-gc.mjs';
+import { planBoardGc, formatBoardGc, planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths, descendantsOf } from './lib/board-gc.mjs';
+import { worktreeIdOf } from './lib/card-identity.mjs';
 import {
   DEFAULT_SILENCE_MS, scanLiveness, applyProgressMemory, assessLiveness,
-  sessionFromOrcaTerminal,
+  assessLivenessWithTree, sessionFromMirasimSession,
 } from './lib/liveness.mjs';
 import { recordBroadcast } from './lib/broadcast-io.mjs';
+import { scanMirasimTrees, DEFAULT_MIRASIM_ROOT } from './lib/mirasim-trees.mjs';
+import { checkTreeLease, scanSessionProcs } from './lib/dispatch/lease.mjs';
+import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { planSessionGc, planOrphanGc, markOrphanInUse } from './lib/session-dir-gc.mjs';
+import { planLeaseGc, judgeRegistryStuck } from './lib/lease-gc.mjs';
+import { scanProcCwds } from './lib/proc-cwds.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(HERE), '..');
-const DAO = join(ROOT, 'scripts', 'dao.mjs');
 
 function parseArgs(argv) {
   const out = { apply: false, say: false, json: false };
@@ -43,19 +50,103 @@ function parseArgs(argv) {
 }
 
 function run(cmd, args, { timeout = 60000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 << 20 });
+  // FORCE_COLOR / CLICOLOR_FORCE 会让 gh --json 刷成非 JSON。oneshot 没有 TTY 也挡不住它。
+  const env = { ...process.env, NO_COLOR: '1', GH_NO_COLOR: '1', TERM: 'dumb' };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  delete env.CLICOLOR;
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 << 20, env });
   return { code: r.status, out: String(r.stdout || ''), err: String(r.stderr || ''), failed: !!r.error };
 }
 
-function orcaJson(args) {
-  const bin = process.env.BOARD_GC_ORCA || 'orca';
-  const r = process.env.BOARD_GC_ORCA
-    ? run(process.execPath, [bin, ...args, '--json'])
-    : run(bin, [...args, '--json']);
-  const i = r.out.indexOf('{');
-  if (i < 0) return { ok: false, error: `没有 JSON（exit=${r.code}）${r.err.trim().slice(0, 160)}` };
-  try { return { ok: true, json: JSON.parse(r.out.slice(i)) }; }
-  catch (e) { return { ok: false, error: `JSON 解析失败：${e.message}` }; }
+/** 会话目录根。归档判决要按同一个根算路径，所以抽出来，不让两处各拼一次。 */
+function sessionsRoot() {
+  return process.env.BOARD_GC_SESSIONS
+    || join(process.env.HOME || process.env.USERPROFILE || '', '.mirasim', 'sessions');
+}
+
+/** 孤儿临时目录根（~/.codex/.tmp）。测的时候用 BOARD_GC_ORPHAN_TMP 指到沙箱。 */
+function orphanTmpRoot() {
+  return process.env.BOARD_GC_ORPHAN_TMP
+    || join(process.env.HOME || process.env.USERPROFILE || '', '.codex', '.tmp');
+}
+
+/**
+ * 列出临时目录的直接子目录。ENOENT = 没有，不是没查成。
+ * 时间读不出的条目仍进名单，交给判据留着。
+ */
+function listOrphanTmp(root) {
+  let ents;
+  try {
+    ents = readdirSync(root, { withFileTypes: true });
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return { ok: true, entries: [] };
+    return { ok: false, error: `临时目录读不了：${String(e && e.message || e).slice(0, 120)}` };
+  }
+  const entries = [];
+  for (const d of ents) {
+    if (!d.isDirectory()) continue;
+    const p = join(root, d.name);
+    let mtimeMs = NaN;
+    try { mtimeMs = Number(statSync(p).mtimeMs); } catch { /* 读不出就标 NaN，判据会留着 */ }
+    entries.push({ path: p, mtimeMs });
+  }
+  return { ok: true, entries };
+}
+
+/**
+ * 扫 /proc cwd，带相关进程覆盖证明。孤儿占用者不限于 mirasim 后代（git/codex 自己也算）。
+ * 判据在 lib/proc-cwds.mjs：别的用户 EACCES 预期内；本身份没核清才是没查成。
+ */
+function readProcCwds(io = {}) {
+  return scanProcCwds(io);
+}
+
+/** cwd 落在工作目录里（本身或子路径）就算占用。 */
+function hasLiveCwd(wd, liveCwds) {
+  const w = String(wd || '').replace(/\/+$/, '');
+  return !!w && (liveCwds || []).some((cwd) => cwd === w || cwd.startsWith(w + '/'));
+}
+
+/** issue 表 → 已关闭编号的字符串集合（判据按字符串比，跟 refsOf 的产出对齐）。 */
+function closedRefsFrom(issueState) {
+  const out = new Set();
+  if (!issueState) return out;
+  for (const [num, state] of issueState) if (state === 'CLOSED') out.add(String(num));
+  return out;
+}
+
+function listMirasimSessions() {
+  const root = sessionsRoot();
+  let agents;
+  try {
+    agents = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return { ok: true, sessions: [] };
+    return { ok: false, error: `mirasim 会话目录读不了：${String(e.message || e).slice(0, 120)}` };
+  }
+  const sessions = [];
+  for (const agent of agents) {
+    let ids = [];
+    try {
+      ids = readdirSync(join(root, agent), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch { continue; }
+    for (const id of ids) {
+      try {
+        const rec = JSON.parse(readFileSync(join(root, agent, id, 'record.json'), 'utf8'));
+        const s = sessionFromMirasimSession({
+          key: `${agent}:${id}`,
+          state: rec.runState || rec.state,
+          updatedAt: rec.updatedAt || rec.startedAt || rec.ts,
+          cwd: rec.workdir || rec.cwd,
+          title: rec.title,
+          preview: rec.runDetail || rec.preview,
+        });
+        if (s) sessions.push(s);
+      } catch { /* 还没落盘 */ }
+    }
+  }
+  return { ok: true, sessions };
 }
 
 /** 一次 gh 调用把所有 PR 状态拿全。拿不全就整体判没查成，不逐个猜。 */
@@ -201,22 +292,103 @@ function say(text) {
   recordBroadcast(String(text), { source: 'board-gc', now: new Date() });
 }
 
+/** 整树 path：显式 treePaths 优先；否则从盘面后代收集。有子卡却拿不齐 path → 没查成，不许删。 */
+function collectFallbackPaths(z, worktrees) {
+  if (Array.isArray(z && z.treePaths)) {
+    const paths = [...new Set(z.treePaths.filter(Boolean))];
+    if (!paths.length) return { ok: false, error: '整树 path 没给，未删' };
+    return { ok: true, paths };
+  }
+  if (Array.isArray(worktrees) && z && z.id) {
+    const root = worktrees.find((w) => String(worktreeIdOf(w)) === String(z.id))
+      || worktrees.find((w) => w && w.path && z.path && w.path === z.path);
+    if (root) {
+      const { descendants, missing } = descendantsOf(root, worktrees);
+      if (missing.length) return { ok: false, error: `有 ${missing.length} 个子卡 path 没查成，未删` };
+      const paths = [...new Set([root, ...descendants].map((w) => w && w.path).filter(Boolean))];
+      if (!paths.length) return { ok: false, error: '整树 path 没查成，未删' };
+      if (descendants.length && paths.length < 1 + descendants.length) {
+        return { ok: false, error: '有子卡但没拿到全部 path，未删' };
+      }
+      return { ok: true, paths };
+    }
+  }
+  if (!z || !z.path) return { ok: false, error: '没有树路径' };
+  if (Number(z.children) > 0) return { ok: false, error: '有子卡但没拿到子卡 path，未删' };
+  return { ok: true, paths: [z.path] };
+}
+
+function removeTreeFallback(z, opts = {}) {
+  const collected = collectFallbackPaths(z, opts.worktrees);
+  if (!collected.ok) return collected;
+  const paths = collected.paths;
+  const leaseCheck = opts.leaseCheck || checkTreeLease;
+  const strayCheck = opts.strayCheck || listStrayLedgerEvents;
+  const rmDir = opts.rmDir || rmSync;
+  for (const workdir of paths) {
+    const lease = leaseCheck({ workdir });
+    if (!lease.ok) return { ok: false, error: `租约没查成：${lease.error}` };
+    if (lease.verdict === 'held') return { ok: false, error: lease.why };
+  }
+  // 对照集合与 worktree-rm 同一处：本机 ~/.dao/ledger/events，不是仓内 ledger/。
+  const eventsDir = opts.mainEventsDir || ensureLocalLedger({ root: ROOT }).dir;
+  const stray = strayCheck({
+    treePaths: paths,
+    mainEventsDir: eventsDir,
+    readdir: opts.readdir,
+    exists: opts.exists,
+  });
+  if (!stray.ok) return { ok: false, error: `账本兜底没查成，未删：${stray.error}` };
+  if (stray.stray && stray.stray.length) {
+    return { ok: false, error: formatStrayLedgerError(stray.stray) };
+  }
+  // 子卡先于父卡（paths[0] 是根）。
+  const order = paths.slice().reverse();
+  let lastNote = '';
+  for (const p of order) {
+    const rm = typeof opts.gitRm === 'function'
+      ? opts.gitRm(p)
+      : run('git', ['-C', ROOT, 'worktree', 'remove', '--force', p], { timeout: 60000 });
+    if (rm && rm.code === 0) continue;
+    try {
+      rmDir(p, { force: true, recursive: true });
+      lastNote = `git worktree remove 失败后直接删目录：${((rm && (rm.err || rm.out)) || '').trim().slice(0, 80)}`;
+    } catch (e) {
+      return { ok: false, error: `删不掉 ${p}：${String(e && e.message || e).slice(0, 160)}` };
+    }
+  }
+  return lastNote ? { ok: true, note: lastNote } : { ok: true };
+}
+
+/**
+ * mirasim 扫盘面不带 branch。判据用 w.branch 查 branchState，空着就整张
+ * 「分支 (未知) 的状态没查成」，OPEN 无 PR 的工人卡永远清不掉。
+ * 游离 HEAD 没有分支名，用 detached:<path> 当键，远端同名一定不存在。
+ */
+function withGitBranch(w) {
+  if (!w || !w.path) return w;
+  const show = run('git', ['-C', w.path, 'branch', '--show-current'], { timeout: 20000 });
+  const named = show.code === 0 ? show.out.trim() : '';
+  if (named) return { ...w, branch: named };
+  return { ...w, branch: `detached:${w.path}` };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const ps = orcaJson(['worktree', 'list']);
-  if (!ps.ok) { console.error(`盘面没查成：${ps.error}`); process.exit(2); }
-  const worktrees = ps.json?.result?.worktrees;
-  if (!Array.isArray(worktrees)) { console.error('盘面没查成：result.worktrees 不是数组'); process.exit(2); }
+  const trees = scanMirasimTrees({
+    root: process.env.BOARD_GC_TREES || DEFAULT_MIRASIM_ROOT,
+    readdir: readdirSync,
+    stat: statSync,
+    join,
+  });
+  if (!trees.scanned) { console.error(`盘面没查成：${trees.error}`); process.exit(2); }
+  if (!Array.isArray(trees.worktrees)) { console.error('盘面没查成：mirasim 树面不是数组'); process.exit(2); }
+  const worktrees = trees.worktrees.map(withGitBranch);
 
-  const tm = orcaJson(['terminal', 'list']);
-  if (!tm.ok) { console.error(`终端没查成：${tm.error}`); process.exit(2); }
-  const terminals = tm.json?.result?.terminals;
-  if (!Array.isArray(terminals)) { console.error('终端没查成：result.terminals 不是数组'); process.exit(2); }
-
-  // 活性用同一把尺（liveness.mjs），本文件不另写判据。
-  // 屏面签名账本与 agent-stall-watch 分开存：两条命令各自的采样节奏不同，混用会互相把 since 洗掉。
-  const sessions = terminals.map((t) => sessionFromOrcaTerminal(t)).filter(Boolean);
+  const listed = listMirasimSessions();
+  if (!listed.ok) { console.error(`会话没查成：${listed.error}`); process.exit(2); }
+  const sessions = listed.sessions;
   const statePath = process.env.BOARD_GC_STATE
     || join(process.env.HOME || process.env.USERPROFILE || '.', '.dao', 'board-gc-progress.json');
   let memory = {};
@@ -237,12 +409,27 @@ function main() {
   }
   const live = scanLiveness({ sessions: progressed.sessions, thresholdMs });
   if (!live.ok) { console.error(`活性没查成：${live.error}`); process.exit(2); }
+  // 会话记录的时间戳会冻住（`2026-09-11-会话在跑记录说停.md`）：上游 run 断流后本地
+  // 执行体继续干、记录不再回写，一个两小时没变的旧值会被判成「它安静了 45 分钟」。
+  // 所以先扫一次会话进程，让「该树有活进程」压过时间判据（fail-open 到「留着」）。
+  // 扫不动（不是 root/orca 看不见别人的进程）→ treeState=unknown，**不改判**：
+  // 「没查成」既不当在跑也不当没在跑。
+  const procScan = scanSessionProcs();
+  if (procScan.unscanned) {
+    console.error(`提示：会话进程没扫成（${procScan.error}）——判决仍按记录与时间；--apply 时工作树/会话/租约/孤儿一律不删`);
+  }
   // 「活着」= 判据说 active。silent / unscanned / done 都不算活着——
   // 特别是 done：干完的会话不该让它那张卡永远免死。
   const alive = new Set();
+  const aliveByProc = [];
   for (const s2 of progressed.sessions) {
     if (!s2.worktreeId) continue;
-    if (assessLiveness(s2, { thresholdMs }).state === 'active') alive.add(s2.worktreeId);
+    const v = assessLivenessWithTree(s2, { thresholdMs, scan: procScan });
+    if (v.treeOverride) aliveByProc.push(s2.worktreeId);
+    if (v.state === 'active') alive.add(s2.worktreeId);
+  }
+  if (aliveByProc.length) {
+    console.error(`提示：${aliveByProc.length} 张卡的记录说安静、但该树有活进程——按在跑留着：${aliveByProc.slice(0, 5).join('、')}`);
   }
 
   const prs = fetchPrState();
@@ -267,7 +454,8 @@ function main() {
   // 干跑一个 git 写动作都不许有——所以整段挂在 --apply 里，干跑只在报告里说「会推哪条」。
   let final = plan;
   const jobs = planSalvage(plan);
-  if (args.apply && jobs.length) {
+  const procsOk = procScan && procScan.ok && !procScan.unscanned;
+  if (args.apply && jobs.length && procsOk) {
     const results = new Map();
     for (const j of jobs) {
       const r = pushSalvage(j);
@@ -284,6 +472,10 @@ function main() {
   }
 
   if (args.apply) {
+    // 进程面没查成 → 工作树/会话/租约/孤儿本轮都不删（#1176：查不清时保留）。
+    if (!procsOk) {
+      console.error(`进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录：${(procScan && procScan.error) || 'unscanned'}`);
+    } else {
     const results = new Map();
     for (const z of final.zombies) {
       if (Array.isArray(z.derived) && z.derived.length) {
@@ -302,12 +494,135 @@ function main() {
           continue;
         }
       }
-      const r = run(process.execPath, [DAO, 'worktree-rm', '--worktree', z.id], { timeout: 180000 });
+      const fb = removeTreeFallback(z, { worktrees });
+      const r = fb.ok
+        ? { code: 0, err: '', out: fb.note || '' }
+        : { code: 1, err: fb.error || '', out: '' };
       const error = (r.err.trim() || r.out.trim()).slice(0, 200);
       results.set(z.id, r.code === 0 ? { ok: true } : { ok: false, error: error || `exit ${r.code}` });
       console.log(`${r.code === 0 ? '已清' : '清不掉'} ${z.name}${r.code === 0 ? '' : '：' + error}`);
     }
     final = applyBoardGcRemoves(final, results);
+
+      // 顺手把过期会话目录归档（#1176）。复用上面已经扫过的 sessions 与 alive——
+      // 会话名单那一趟本来就是全量遍历（2026-09-10 实测 60 条要 20 秒），
+      // 再单开一个定时器读第二遍等于把最慢的一步跑两次。
+      const gcPlan = planSessionGc({
+        sessions: progressed.sessions.map((s) => {
+          const [agent, ...rest] = String(s.id).split(':');
+          return {
+            id: rest.join(':'),
+            agent,
+            dir: join(sessionsRoot(), agent, rest.join(':')),
+            alive: alive.has(s.worktreeId) || assessLivenessWithTree(s, { thresholdMs, scan: procScan }).state === 'active',
+            updatedAtMs: s.lastProgressAt == null ? NaN : s.lastProgressAt,
+            record: { workdir: s.worktreeId, title: s.label, preview: s.preview },
+          };
+        }),
+        closedRefs: issues == null ? new Set() : closedRefsFrom(issues),
+        boardScanned: issues != null,
+      });
+      // 顺手回收**孤儿执行租约**（#1175 实咬）：审官会话被上游断流打死会留下 state=running
+      // 的租约占着工作树，此后同一棵树的 reviewer-create 一律报「already has an active session」
+      // ——死人占树、活人进不来。判据在 lib/lease-gc.mjs（fail-closed：任何「没查成」都保留）。
+      // 复用上面扫到的 sessions（同一次全量枚举），不另打一趟。
+      try {
+        const stateByKey = new Map();
+        for (const s2 of progressed.sessions) {
+          const k = s2.sessionKey || s2.id;
+          if (k) stateByKey.set(String(k), s2.state || s2.runState || null);
+        }
+        const liveCwds = (procScan.procs || []).map((p) => String(p.cwd || '').replace(/\/+$/, '')).filter(Boolean);
+        const leases = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'leases'))
+          .filter((f) => f.endsWith('.json'))
+          .map((f) => {
+            const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
+            let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
+            return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000, hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
+          })
+          .filter(Boolean);
+        // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
+        const registryRecords = readdirSync(join(process.env.HOME || '', '.dao', 'execution', 'sessions'))
+          .filter((f) => f.endsWith('.json'))
+          .map((f) => {
+            const full = join(process.env.HOME || '', '.dao', 'execution', 'sessions', f);
+            try {
+              const d = JSON.parse(readFileSync(full, 'utf8'));
+              return { ...d, _file: full, hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
+            } catch { return null; }
+          })
+          .filter(Boolean);
+        const staleRecords = registryRecords
+          .map((r) => ({ r, j: judgeRegistryStuck(r, { sessionsScanned: listed.ok === true, sessionState: stateByKey.get(String(r.sessionKey || r.recordKey)) ?? null }) }))
+          .filter((x) => x.j.verdict === 'reap');
+        if (staleRecords.length) {
+          let cleaned = 0;
+          for (const { r, j } of staleRecords) {
+            try { rmSync(r._file, { force: true }); cleaned++; } catch { /* 下轮再来 */ }
+          }
+          if (cleaned) console.log(`中间态登记回收 ${cleaned} 条（${staleRecords[0].j.why}）`);
+        }
+        const leasePlan = planLeaseGc({ leases, sessions: stateByKey, sessionsScanned: listed.ok === true });
+        if (leasePlan.state === 'ok' && leasePlan.reap.length) {
+          let reaped = 0;
+          for (const l of leasePlan.reap) {
+            // 只动租约文件本身——树留给卡清理那一路（本文件的主职），不在这里顺手删树。
+            try { rmSync(l._file, { force: true }); reaped++; } catch { /* 删不掉下轮再来 */ }
+          }
+          if (reaped) console.log(`孤儿租约回收 ${reaped} 条（${leasePlan.detail}）`);
+        } else if (leasePlan.state === 'unknown') {
+          console.error(`租约没查成，本轮不回收：${leasePlan.detail}`);
+        }
+      } catch (e) {
+        // 租约目录不在（新机/从未起过会话）是正常态；其它错误报出来但不拦住本轮卡清理。
+        if (!/ENOENT/.test(String(e && e.code))) console.error(`租约回收出错（本轮跳过）：${String(e && e.message || e).slice(0, 140)}`);
+      }
+
+      if (gcPlan.state === 'ok' && gcPlan.remove.length) {
+        const archiveRoot = join(sessionsRoot(), '..', 'sessions-archive');
+        let archived = 0;
+        for (const s of gcPlan.remove) {
+          try {
+            const dest = join(archiveRoot, s.agent);
+            mkdirSync(dest, { recursive: true });
+            renameSync(s.dir, join(dest, s.id));
+            archived++;
+          } catch { /* 归档失败下一轮再来，不拦住本轮卡清理 */ }
+        }
+        if (archived) console.log(`会话目录归档 ${archived} 个（${gcPlan.detail}）`);
+      } else if (gcPlan.state === 'unknown') {
+        console.error(`会话目录没查成，本轮不归档：${gcPlan.detail}`);
+      }
+
+      // 第 3 层：无编号归属的临时目录按时效清（#1176）。INDEX 写了这层走 planOrphanGc，
+      // 驱动层以前没 import——判据绿、生产 ~/.codex/.tmp 照样只增不减。
+      const tmpRoot = orphanTmpRoot();
+      const listedTmp = listOrphanTmp(tmpRoot);
+      if (!listedTmp.ok) {
+        console.error(`临时目录没查成，本轮不扫：${listedTmp.error}`);
+      } else {
+        const cwdScan = readProcCwds();
+        if (!cwdScan.ok) {
+          console.error(`临时目录占用没查成，本轮不删：${cwdScan.error}`);
+        } else {
+          const marked = markOrphanInUse(listedTmp.entries, cwdScan.cwds, tmpRoot);
+          const orphanPlan = planOrphanGc({ entries: marked.entries, procsScanned: true });
+          console.log(`孤儿临时目录：${orphanPlan.detail}`);
+          if (orphanPlan.state === 'ok' && orphanPlan.remove.length) {
+            let removed = 0;
+            for (const e of orphanPlan.remove) {
+              const p = String(e.path || '');
+              const base = tmpRoot.replace(/\/+$/, '');
+              if (!p.startsWith(base + '/') || p === base) continue; // 逃出根外整条跳过
+              try { rmSync(p, { force: true, recursive: true }); removed++; } catch { /* 下轮再来 */ }
+            }
+            if (removed) console.log(`孤儿临时目录回收 ${removed} 个（${orphanPlan.detail}）`);
+          } else if (orphanPlan.state === 'unknown') {
+            console.error(`临时目录没查成，本轮不删：${orphanPlan.detail}`);
+          }
+        }
+      }
+    }
   }
 
   if (args.json) { console.log(JSON.stringify(final, null, 2)); }
@@ -337,4 +652,4 @@ const sameFile = (a, b) => {
 };
 if (sameFile(process.argv[1], HERE)) main();
 
-export { pushSalvage };
+export { pushSalvage, removeTreeFallback, readProcCwds, listOrphanTmp, orphanTmpRoot, hasLiveCwd };

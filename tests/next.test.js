@@ -4,7 +4,7 @@
 //         算出「现在该干什么」一行，按谁在等谁排
 //         ② 「扫完是空的」与「这次没扫到」不同形：盘面没扫到 ≠ 全空
 //         ③ standby 态（复用 dao-mode 的 state.json）不输出「待消歧」（⑤）
-//         ④ nextInjection 读侧喂 fixture（假 read/exists/orca/cache），不碰 orca / GitHub / 真文件
+//         ④ nextInjection 读侧喂 fixture（假 read/exists/cache），不碰盘面 IO / GitHub / 真文件
 // #807 起 flow/watchdog 心跳不再进这一行（本机守卫栈整层删，派工节奏归服务器指挥官）。
 
 const { describe, it } = require('node:test');
@@ -21,17 +21,6 @@ const boardFixture = {
   todo: [{ number: 4, status: '待消歧' }],
   scanned: 3,
   unscanned: false,
-};
-
-const psJson = {
-  result: {
-    worktrees: [
-      { isMainWorktree: true, displayName: 'master', agents: [] },
-      { displayName: '#575', agents: [{ state: 'done' }] },                   // 待收口
-      { displayName: '#4', agents: [], workspaceStatus: 'todo' },             // 待消歧
-      { displayName: '#588', workspaceStatus: 'in-progress', agents: [{ state: 'working' }] }, // 在途
-    ],
-  },
 };
 
 /** 环境变量临时覆写（读侧路径走 process.env，测试不碰真文件）。 */
@@ -118,7 +107,7 @@ describe('next', () => {
       });
   });
 
-  it('#576 nextInjection：读侧喂 fixture（假 read/exists/orca/cache），不碰真机', async (t) => {
+  it('#576 nextInjection：读侧喂 fixture（假 read/exists/cache），不碰真机', async (t) => {
     const H = await H_LOAD;
     const stateFile = 'C:/fake/dao/state.json';
 
@@ -130,11 +119,10 @@ describe('next', () => {
       throw new Error(`没喂这个文件的 fixture：${p}`);
     };
     const exists = (p) => Object.prototype.hasOwnProperty.call(files, p);
-    const orca = () => ({ status: 0, stdout: JSON.stringify(psJson) });
-    const cache = { load: () => null, save: () => {} };
+    const cache = { load: () => ({ ts: Date.now(), summary: boardFixture }), save: () => {} };
 
     await withEnv('DAO_STATE_FILE', stateFile, () => {
-      const line = H.nextInjection({ read, exists, orca, cache });
+      const line = H.nextInjection({ read, exists, cache });
       t.test('全 fixture → 动作候选齐全（无 flow/watchdog 位）', () => {
         const want = '[盘] 待收口 #575 · 待消歧 #4 · 在途 #588(做中)';
         assert.ok(line === want, '全 fixture 一行  →  ' + line);
@@ -145,8 +133,7 @@ describe('next', () => {
   it('#576 nextInjection：standby 态 fixture → 行里无待消歧', async (t) => {
     const H = await H_LOAD;
     const stateFile = 'C:/fake/dao/state.json';
-    const orca = () => ({ status: 0, stdout: JSON.stringify(psJson) });
-    const cache = { load: () => null, save: () => {} };
+    const cache = { load: () => ({ ts: Date.now(), summary: boardFixture }), save: () => {} };
 
     await t.test('standby → 无待消歧、待收口照常',
       () => withEnv('DAO_STATE_FILE', stateFile, () => {
@@ -156,7 +143,7 @@ describe('next', () => {
           throw new Error(`没喂这个文件的 fixture：${p}`);
         };
         const exists = (p) => Object.prototype.hasOwnProperty.call(files, p);
-        const line = H.nextInjection({ read, exists, orca, cache });
+        const line = H.nextInjection({ read, exists, cache });
         assert.ok(!/待消歧/.test(line) && /待收口 #575/.test(line), 'standby 无待消歧  →  ' + line);
       }));
 
@@ -164,7 +151,7 @@ describe('next', () => {
       () => withEnv('DAO_STATE_FILE', stateFile, () => {
         const read = () => { throw new Error('不应读文件'); };
         const exists = () => false;
-        const line = H.nextInjection({ read, exists, orca, cache });
+        const line = H.nextInjection({ read, exists, cache });
         assert.ok(/待消歧 #4/.test(line), 'mode 缺按常态  →  ' + line);
       }));
   });

@@ -1,4 +1,6 @@
-闭环框架：工人读 `host/skills/dispatch/templates/soldier-book.md`，审官读 `host/skills/dispatch/templates/reviewer-book.md`。注入只给一行指针；pi/codex 未测，指针仍是兜底。
+闭环框架：工人读 `host/skills/dispatch/templates/soldier-book-mirasim.md`，审官读 `host/skills/dispatch/templates/reviewer-book-mirasim.md`。注入只给一行指针。orca 版任务书已退役。
+
+GitHub Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792）。身份由网关固定 `dao-marshal[bot]`，不许裸 `gh issue create|comment|close|edit`，不许自选 token。幂等账与审计落 `~/.dao/issue-gateway`（不进 git）。
 
 ## 提问必须标推荐位
 
@@ -20,11 +22,11 @@
 
 ### 云 Linux VM 上「注定红/跳过」的项（非代码回归，别去修）
 
-`dao-check.mjs` 和完整测试套是给**操作者的 Windows 机**（装了 orca CLI、Claude `~/.claude/skills` 软链、`~/.dao` 账本、带 issues 权限的 gh）设计的；CI 也跑在 `windows-latest`。在干净的云 Linux VM（仓库 checkout 在 `/workspace`）上，以下红/跳过是环境差异造成的，**改代码解决不了**：
+`dao-check.mjs` 和完整测试套是给**操作者本机**（Claude `~/.claude/skills` 软链、`~/.dao` 账本、带 issues 权限的 gh）设计的；CI 也跑在 `windows-latest`。在干净的云 Linux VM（仓库 checkout 在 `/workspace`）上，以下红/跳过是环境差异造成的，**改代码解决不了**：
 
-- `dao.test.js`：`live orca --help 可跑`（缺 `orca` 二进制，ENOENT）、`真实目录+git：pi 假活 → fake-alive`（用 `powershell` 回填文件时间戳，Linux 无 powershell）。
+- `dao.test.js`：`真实目录+git：pi 假活 → fake-alive`（用 `powershell` 回填文件时间戳，Linux 无 powershell）。orca CLI 已退役，live `--help` 自检不再当现役红。
 - `ledger.test.js`：`resolveMainWorktreeRoot 认出本仓主树`（断言 checkout 目录名以 `windsurf-dao` 结尾，云上是 `/workspace`）。
-- `dao-check.mjs` 另会红「命令库 --help 自检没查成（orca ENOENT）」「态注入 hook 一个装载面都没点到（无 `~/.claude/skills` 软链）」「账本断流（无 `~/.dao` 历史账本）」，并把依赖 `gh issue list` 的项标 SKIP（云上 gh token 无 issues 权限）。飞书群有效性无实机映射（`~/.mirasim/keys/feishu-groups.json`）/ 无 lark-cli / 无凭据 → SKIP（不是绿）。
+- `dao-check.mjs` 另会红「态注入 hook 一个装载面都没点到（无 `~/.claude/skills` 软链）」「账本断流（无 `~/.dao` 历史账本）」，并把依赖 `gh issue list` 的项标 SKIP（云上 gh token 无 issues 权限）。飞书群有效性无实机映射（`~/.mirasim/keys/feishu-groups.json`）/ 无 lark-cli / 无凭据 → SKIP（不是绿）。
 
 判断真回归：先在**未改动**基线上 `node --test tests/*.test.js`，只有上述 3 条 leaf 红（会连带 2 个父套 + 顶层套共约 6 条）；多出的红才是你引入的。
 

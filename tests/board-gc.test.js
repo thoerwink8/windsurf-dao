@@ -4,8 +4,10 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 
 const LIB = 'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'board-gc.mjs').replace(/\\/g, '/');
+const CLI = 'file://' + path.join(__dirname, '..', 'scripts', 'board-gc.mjs').replace(/\\/g, '/');
 const LOAD = import(LIB);
 const LIVE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'liveness.mjs').replace(/\\/g, '/'));
 
@@ -252,16 +254,218 @@ describe('board-gc 命令：判据不许在驱动层重写一遍', () => {
     assert.match(src, /from '\.\/lib\/liveness\.mjs'/);
     assert.doesNotMatch(src, /lastOutputAt\s*[<>]/, '别在驱动层直接拿时间戳比大小');
   });
+  it('--apply 走 git 原生删树，不再问 orca worktree-rm', () => {
+    assert.match(src, /function removeTreeFallback/);
+    assert.match(src, /checkTreeLease/);
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.ok(i > -1, '找不到 git 删树主路径');
+    assert.doesNotMatch(src, /\[DAO,\s*'worktree-rm'/);
+  });
+  it('兜底删树前过账本孤本闸，有 stray / 没查成都不许删', () => {
+    const start = src.indexOf('function removeTreeFallback');
+    const end = src.indexOf('\nfunction ', start + 1);
+    const body = src.slice(start, end);
+    assert.match(body, /listStrayLedgerEvents/);
+    assert.match(body, /formatStrayLedgerError/);
+    const strayAt = body.indexOf('listStrayLedgerEvents');
+    const rmAt = body.indexOf("worktree', 'remove'");
+    assert.ok(strayAt > -1, '找不到 listStrayLedgerEvents');
+    assert.ok(rmAt > -1, '找不到 git worktree remove');
+    assert.ok(rmAt > strayAt, '孤本闸必须在 git worktree remove 之前');
+  });
+  it('采卡时用 git 填 branch，否则 OPEN 无 PR 的卡全是「分支 (未知) 没查成」', () => {
+    assert.match(src, /function withGitBranch/);
+    assert.match(src, /branch', '--show-current'/);
+    assert.match(src, /trees\.worktrees\.map\(withGitBranch\)/);
+    const i = src.indexOf('fetchBranchState(worktrees)');
+    assert.ok(i > -1, '找不到 fetchBranchState 调用，本闸在量空气');
+  });
+  it('调 gh 时剥掉 FORCE_COLOR / CLICOLOR_FORCE，否则 --json 会被刷成非 JSON', () => {
+    assert.match(src, /NO_COLOR/);
+    assert.match(src, /delete env\.FORCE_COLOR/);
+    assert.match(src, /delete env\.CLICOLOR_FORCE/);
+  });
   it('判决走 board-gc.mjs 纯函数', () => {
     assert.match(src, /planBoardGc\(\{/);
   });
-  it('默认不删：要 --apply 才调 worktree-rm', () => {
-    const i = src.indexOf("'worktree-rm'");
-    assert.ok(i > -1, '找不到 worktree-rm 调用，判据已失效');
+  it('默认不删：要 --apply 才调 git 删树', () => {
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.ok(i > -1, '找不到 git 删树主路径，判据已失效');
     assert.match(src.slice(Math.max(0, i - 1600), i), /if \(args\.apply\)/);
   });
   it('任何一节没查成都以退出码 2 收场，不装成扫完是空的', () => {
     assert.ok((src.match(/process\.exit\(2\)/g) || []).length >= 4);
+  });
+});
+
+describe('removeTreeFallback：账本孤本闸 fail-closed', () => {
+  const free = () => ({ ok: true, verdict: 'free' });
+  async function fallback() {
+    const { removeTreeFallback } = await import(CLI);
+    return removeTreeFallback;
+  }
+
+  it('树内有未进本机账本的 events/*.json → 拒绝，不调 git rm、不 rmSync', async () => {
+    const removeTreeFallback = await fallback();
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-stray-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-stray-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(workerDir, 'ledger', 'events', 'orphan-gc.json'), '{"type":"job.dispatch"}');
+    let gitRmCalled = false;
+    let rmDirCalled = false;
+    const r = removeTreeFallback({ path: workerDir }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+      rmDir: () => { rmDirCalled = true; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /orphan-gc\.json/);
+    assert.equal(gitRmCalled, false, '有孤本不许走到 git worktree remove');
+    assert.equal(rmDirCalled, false, '有孤本不许 rmSync');
+    assert.ok(fs.existsSync(path.join(workerDir, 'ledger', 'events', 'orphan-gc.json')));
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('账本没查成 → 拒绝，不删', async () => {
+    const removeTreeFallback = await fallback();
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: '/tmp/gc-unscanned' }, {
+      leaseCheck: free,
+      strayCheck: () => ({ ok: false, unscanned: true, stray: [], error: '主树账本目录没给，兜底没查成' }),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /没查成/);
+    assert.equal(gitRmCalled, false);
+  });
+
+  it('无孤本才走到 git worktree remove', async () => {
+    const removeTreeFallback = await fallback();
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-clean-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-clean-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: workerDir }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+      rmDir: () => { throw new Error('gitRm 已成功，不该 rmSync'); },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(gitRmCalled, true);
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('孤本只在子卡目录 → 拒绝，不调删除，子树还在', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-parent-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-child-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-main-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json'), '{"type":"job.dispatch"}');
+    const removed = [];
+    const r = removeTreeFallback({
+      path: parentDir,
+      treePaths: [parentDir, childDir],
+    }, {
+      leaseCheck: free,
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { removed.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: (p) => { removed.push(`rm:${p}`); },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /child-orphan\.json/);
+    assert.equal(removed.length, 0, '子卡有孤本不许走到删除');
+    assert.ok(fs.existsSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json')));
+    assert.ok(fs.existsSync(parentDir));
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('标明有子卡却没给子卡 path → 没查成，不删', async () => {
+    const removeTreeFallback = await fallback();
+    let gitRmCalled = false;
+    const r = removeTreeFallback({ path: '/tmp/gc-parent-only', children: 1 }, {
+      leaseCheck: free,
+      gitRm: () => { gitRmCalled = true; return { code: 0, err: '', out: '' }; },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /子卡/);
+    assert.equal(gitRmCalled, false);
+  });
+
+  it('生产路径 worktrees：孤本只在子卡目录 → 拒绝，不调删除且子树保留', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-parent-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-child-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-main-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json'), '{"type":"job.dispatch"}');
+    const removed = [];
+    const r = removeTreeFallback({
+      id: 'parent',
+      path: parentDir,
+      children: 1,
+    }, {
+      leaseCheck: free,
+      worktrees: [
+        { id: 'parent', path: parentDir, childWorktreeIds: ['child'] },
+        { id: 'child', path: childDir, parentWorktreeId: 'parent' },
+      ],
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { removed.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: (p) => { removed.push(`rm:${p}`); },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /child-orphan\.json/);
+    assert.equal(removed.length, 0, '生产路径子卡孤本不许走到删除');
+    assert.ok(fs.existsSync(path.join(childDir, 'ledger', 'events', 'child-orphan.json')));
+    assert.ok(fs.existsSync(parentDir), '父树必须保留');
+    assert.ok(fs.existsSync(childDir), '子树必须保留');
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('生产路径 worktrees：整树无孤本才报告成功，父卡和子卡都会被扫到', async () => {
+    const removeTreeFallback = await fallback();
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-p-'));
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-c-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gc-wt-clean-m-'));
+    fs.mkdirSync(path.join(parentDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(childDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    const scanned = [];
+    const r = removeTreeFallback({
+      id: 'parent',
+      path: parentDir,
+      children: 1,
+    }, {
+      leaseCheck: free,
+      worktrees: [
+        { id: 'parent', path: parentDir, childWorktreeIds: ['child'] },
+        { id: 'child', path: childDir, parentWorktreeId: 'parent' },
+      ],
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+      gitRm: (p) => { scanned.push(p); return { code: 0, err: '', out: '' }; },
+      rmDir: () => { throw new Error('gitRm 已成功，不该 rmSync'); },
+    });
+    assert.equal(r.ok, true);
+    assert.ok(scanned.includes(parentDir), '父卡 path 必须进删除名单');
+    assert.ok(scanned.includes(childDir), '子卡 path 必须进删除名单');
+    fs.rmSync(parentDir, { recursive: true, force: true });
+    fs.rmSync(childDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
   });
 });
 
@@ -504,7 +708,6 @@ describe('判定已交付的审官子卡可以单独出列', () => {
 // 自动化。每条反例都对着一种「以为救了其实没救」：推失败还照删、脏文件根本推不上去、
 // 把上一次的备份覆盖掉。删树不可逆，salvage 分支是唯一的备份，所以判据取最严的一档。
 const { spawnSync } = require('node:child_process');
-const os = require('node:os');
 
 describe('salvage 分支名：看得出救的是哪张卡，且是条合法分支名', () => {
   it('有单号有分支名 → salvage/<单号>-<分支名>（照抄人工救那两张卡的格式）', async () => {
@@ -828,32 +1031,32 @@ describe('board-gc 命令：救援这一步也不许在干跑时动手', () => {
   });
 
   it('删树读的是救援之后的名单，不是原判决', () => {
-    const i = src.indexOf("'worktree-rm'");
+    const i = src.indexOf('const fb = removeTreeFallback(z');
+    assert.notEqual(i, -1, '找不到 git 删树主路径');
     assert.match(src.slice(Math.max(0, i - 1200), i), /for \(const z of final\.zombies\)/);
   });
 
-  it('永远不许 --force：这条路上没有任何该覆盖的情形', () => {
-    // 只看真传给 git 的参数（带引号的那种），不看注释里提到的字样——
-    // 注释解释「为什么不用 --force」是好事，被自己的注释判红就没人敢写解释了。
-    assert.doesNotMatch(src, /['"`]--force/);
+  it('push 永远不许 --force；worktree remove --force 是删树不是覆盖远端', () => {
+    assert.doesNotMatch(src, /push[\s\S]{0,120}['"`]--force/);
   });
 
   it('救援判据走 lib 纯函数，不在驱动层重写一遍', () => {
-    assert.match(src, /planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths \} from '\.\/lib\/board-gc\.mjs'/);
+    assert.match(src, /planSalvage, applySalvage, applyBoardGcRemoves, dirtFrom, resolveDiscardPaths/);
+    assert.match(src, /from '\.\/lib\/board-gc\.mjs'/);
   });
 
   it('加了「被 import 时不跑 main」的开关后，直接跑仍然照跑（别把命令自己关掉）', () => {
-    // 喂一个什么都不吐的假 orca：盘面查不成 → 退出码 2。如果 main 没跑，退出码会是 0，
+    // 树根存在但不是目录 → 盘面没查成 → 退出码 2。如果 main 没跑，退出码会是 0，
     // 命令看着还在、其实一轮都不干活——加那个开关最可能造成的正是这种静默失效。
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-noorca-'));
-    const fake = path.join(dir, 'orca.mjs');
-    fs.writeFileSync(fake, '// 假 orca：一个字都不输出\n');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bgc-notadir-'));
+    const notDir = path.join(dir, 'not-a-dir');
+    fs.writeFileSync(notDir, 'x');
     try {
       const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'board-gc.mjs')], {
         encoding: 'utf8', windowsHide: true, timeout: 60000,
-        env: { ...process.env, BOARD_GC_ORCA: fake },
+        env: { ...process.env, BOARD_GC_TREES: notDir },
       });
-      assert.equal(r.status, 2, '盘面查不成该以 2 收场；如果是 0，多半是 main 根本没跑');
+      assert.equal(r.status, 2, '盘面没查成该以 2 收场；如果是 0，多半是 main 根本没跑');
       assert.match(String(r.stderr), /盘面没查成/);
     } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响判定 */ } }
   });
@@ -1072,5 +1275,175 @@ describe('board-gc #1001：dirty 只数 tracked，报告按实清分段', () => 
     const j = src.lastIndexOf('formatBoardGc');
     assert.notEqual(i, -1, '驱动层必须调 applyBoardGcRemoves 并回实清');
     assert.ok(j > i, '报告必须在并回实清结果之后出，否则标题又会撒谎');
+  });
+});
+
+// #1176：第 3 层「孤儿清扫」曾经只写了判据和 INDEX，驱动层从未 import。
+// 这组闸钉的是接线本身——删掉调用必须红，防止再出现「判据绿、生产只增不减」。
+describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'board-gc.mjs'), 'utf8');
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'host', 'machine', 'INDEX.md'), 'utf8');
+
+  it('INDEX 声称的 planOrphanGc 在驱动层真的调用，不是空气指针', () => {
+    assert.match(idx, /planOrphanGc/);
+    assert.match(src, /planOrphanGc\(/);
+  });
+
+  it('会话归档走 planSessionGc', () => {
+    assert.match(src, /planSessionGc\(/);
+  });
+
+  it('租约回收走 planLeaseGc，且把活进程标进 hasLiveProcess', () => {
+    assert.match(src, /planLeaseGc\(/);
+    assert.match(src, /hasLiveProcess/);
+  });
+
+  it('进程没查成时工作树/会话/租约/孤儿都不删，且跳过发生在调用之前', () => {
+    assert.match(src, /进程面没查成，本轮不删工作树、不归档会话、不回收租约、不扫临时目录/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('进程面没查成，本轮不删工作树');
+    const zombieAt = apply.indexOf('removeTreeFallback(');
+    const sessionAt = apply.indexOf('planSessionGc(');
+    const leaseAt = apply.indexOf('planLeaseGc(');
+    const orphanAt = apply.indexOf('planOrphanGc(');
+    assert.notEqual(skipAt, -1, '找不到进程面没查成的跳过');
+    assert.match(src, /args.apply && jobs.length && procsOk/, '备份推送也要过进程闸，不许在查不清时改远端');
+    assert.equal(zombieAt > skipAt, true, 'removeTreeFallback 必须在跳过之后');
+    assert.equal(sessionAt > skipAt, true, 'planSessionGc 必须在跳过之后');
+    assert.equal(leaseAt > skipAt, true, 'planLeaseGc 必须在跳过之后');
+    assert.equal(orphanAt > skipAt, true, 'planOrphanGc 必须在跳过之后');
+  });
+
+  it('stat/cmdline EACCES 时 procsOk 为假，--apply 不进删除路径', async () => {
+    const { scanSessionProcs } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const procScan = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['100', '200'],
+      readlink: () => '/wt/active',
+      read: () => { throw eacces; },
+    });
+    const procsOk = procScan && procScan.ok && !procScan.unscanned;
+    assert.equal(procScan.ok, false, JSON.stringify(procScan));
+    assert.equal(procScan.unscanned, true);
+    assert.equal(procsOk, false, 'board-gc 用同一公式算 procsOk，假值才能跳过删除');
+    assert.match(src, /const procsOk = procScan && procScan\.ok && !procScan\.unscanned/);
+    const apply = src.slice(src.indexOf('if (args.apply) {'));
+    const skipAt = apply.indexOf('if (!procsOk)');
+    for (const needle of ['removeTreeFallback(', 'planSessionGc(', 'planLeaseGc(', 'planOrphanGc(']) {
+      const at = apply.indexOf(needle);
+      assert.notEqual(at, -1, `apply 段找不到 ${needle}`);
+      assert.equal(at > skipAt, true, `${needle} 必须在 !procsOk 跳过之后`);
+    }
+  });
+
+  it('登记层回收前也标 hasLiveProcess，活进程不许当死人清掉', () => {
+    const from = src.indexOf('const registryRecords');
+    const call = src.indexOf('judgeRegistryStuck(r');
+    assert.notEqual(from, -1, '找不到登记层名单');
+    assert.notEqual(call, -1, '驱动层必须真调 judgeRegistryStuck');
+    assert.equal(from < call, true);
+    assert.match(src.slice(from, call), /hasLiveProcess:\s*hasLiveCwd/);
+  });
+
+  it('hasLiveCwd：cwd 落在工作目录或其子路径 → 占用', async () => {
+    const { hasLiveCwd } = await import(CLI);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1/src', '/home/other']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1']), true);
+    assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-2', '/home/other']), false);
+    assert.equal(hasLiveCwd('', ['/wt/dao-1']), false);
+  });
+
+  it('删临时目录前过根前缀闸，逃出根外整条跳过', () => {
+    assert.match(src, /逃出根外整条跳过/);
+  });
+
+  it('readProcCwds 走 scanProcCwds，不是自己吞掉 readlink 错误', () => {
+    assert.match(src, /scanProcCwds/);
+    const body = src.slice(src.indexOf('function readProcCwds'), src.indexOf('function hasLiveCwd'));
+    assert.match(body, /return scanProcCwds/);
+    assert.doesNotMatch(body, /catch \{ \/\* 别人的进程/);
+  });
+
+  it('readProcCwds：能解出 cwd → ok', async () => {
+    const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const r = readProcCwds({
+      readdir: () => ['1', '2', 'cpu'],
+      readlink: (p) => {
+        if (String(p).includes('/1/cwd')) return '/tmp/a/';
+        throw gone;
+      },
+      read: () => { throw gone; },
+      getuid: () => 999,
+    });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.cwds, ['/tmp/a']);
+  });
+
+  it('readProcCwds：/proc 读不动 → unscanned', async () => {
+    const { readProcCwds } = await import(CLI);
+    const r = readProcCwds({
+      readdir: () => { throw new Error('EACCES'); },
+      readlink: () => '',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+  });
+
+  it('readProcCwds：一个 cwd 都解不出 → unscanned，不是 0 条占用', async () => {
+    const { readProcCwds } = await import(CLI);
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const r = readProcCwds({
+      readdir: () => ['1', '2'],
+      readlink: () => { throw gone; },
+      read: () => { throw gone; },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.error, /没查成/);
+  });
+
+  it('readProcCwds：本身份部分 cwd 读失败 → unscanned（审官 P1 回归）', async () => {
+    const { readProcCwds } = await import(CLI);
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const r = readProcCwds({
+      getuid: () => 999,
+      readdir: () => ['10', '11'],
+      readlink: (p) => {
+        if (String(p).includes('/10/cwd')) return '/tmp/a';
+        if (String(p).includes('/11/cwd')) throw eacces;
+        if (String(p).includes('/11/exe')) return '/usr/bin/node';
+        throw eacces;
+      },
+      read: (p) => (String(p).endsWith('/11/status') ? 'Uid:\t999\t999\t999\t999\n' : ''),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.denied, 1);
+    assert.match(r.error, /没核清/);
+  });
+
+  it('listOrphanTmp：目录不存在当没有，不是没查成', async () => {
+    const { listOrphanTmp } = await import(CLI);
+    const r = listOrphanTmp(path.join(os.tmpdir(), 'no-codex-tmp-' + Date.now()));
+    assert.equal(r.ok, true);
+    assert.equal(r.entries.length, 0);
+  });
+
+  it('listOrphanTmp：只收目录并记下 mtime，文件不算', async () => {
+    const { listOrphanTmp } = await import(CLI);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orphan-tmp-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'git-old'));
+      fs.writeFileSync(path.join(dir, 'not-a-dir'), 'x');
+      const r = listOrphanTmp(dir);
+      assert.equal(r.ok, true);
+      assert.equal(r.entries.length, 1);
+      assert.equal(path.basename(r.entries[0].path), 'git-old');
+      assert.equal(Number.isFinite(r.entries[0].mtimeMs), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

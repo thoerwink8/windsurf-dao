@@ -13,6 +13,9 @@
 //
 // 纯函数：吃一串快照，吐停滞判决。一个 IO 都不碰。
 // 「没查成」和「没停滞」必须不同形——读不清就说没查成，不许当成没事。
+// #966：挂「将来某版」的单不是当前待办——不进派工队列，也不当「已消歧但没派出」停滞。
+
+import { isDeferredIssue } from './ready-queue-check.mjs';
 
 export const DEFAULT_MIN_ROUNDS = 5;
 export const DISAMBIGUATED_LABEL = '已消歧';
@@ -142,6 +145,7 @@ export function extractObjects(snapshot) {
       return { scanned: false, error: `issue #${it.number} 的 label 不是数组（没查成）`, objects: [], idle: false };
     }
     if (!names.includes(DISAMBIGUATED_LABEL)) continue;
+    if (isDeferredIssue(it)) continue; // #966：将来某版不该派，不是没派
     if (issueHasInflight(it.number, { prs })) continue;
     objects.push({
       kind: 'issue',
@@ -284,13 +288,44 @@ export function detectProgressStall(snapshots, { minRounds = DEFAULT_MIN_ROUNDS 
  * 推帅位去重：同一停滞指纹只推一次；指纹变了允许再推。
  * 账本键 = 指纹（哪个对象 + 停了几轮）。不走 escalate 开单。
  */
-export function planWake({ fingerprint, prevFingerprint, stalled } = {}) {
+/**
+ * 同一停滞指纹多久重推一次（毫秒）。默认 6 小时。
+ *
+ * 2026-09-11 实咬：原来 `fingerprint === prevFingerprint → wake:false`——
+ * 同一停滞只推一次，之后永久静音。后果：实测「盘面停滞 5 轮（23 个对象没动）」
+ * 在 09:12 推过一次之后，09:32、09:52… 每轮只往 journal 写一行，**不再惊动人**；
+ * 23 个对象冻了几小时，用户侧一片安静。
+ *
+ * 去重的本意是防刷屏（同一件事别每 20 分钟喊一次），但它把
+ * 「**一直没解决**」也一起静音了——而那恰恰是最该反复说的事。
+ * 所以改成**按墙钟节流**：同一指纹 6 小时内不重复，超过就再喊一次。
+ *
+ * 为什么是墙钟而不是轮数：轮数取决于 act 跑得多勤（机器忙时会被准入闸推后），
+ * 「6 小时没解决」用墙钟说才准确。这里**不是拿墙钟当闸**（那会随机误报），
+ * 是拿它当**提醒节奏**——判「有没有停滞」仍然只用确定性的轮数与签名。
+ */
+export const DEFAULT_REALERT_MS = 6 * 60 * 60 * 1000;
+
+export function planWake({ fingerprint, prevFingerprint, prevAt, stalled, now, realertMs = DEFAULT_REALERT_MS } = {}) {
   if (!stalled) return { wake: false, reason: 'no-stall', fingerprint: fingerprint || null };
   if (!fingerprint) return { wake: false, reason: 'no-fingerprint', fingerprint: null };
-  if (fingerprint === prevFingerprint) return { wake: false, reason: 'same-fingerprint', fingerprint };
-  return {
-    wake: true,
-    reason: prevFingerprint ? 'fingerprint-changed' : 'first',
-    fingerprint,
-  };
+  if (fingerprint !== prevFingerprint) {
+    return {
+      wake: true,
+      reason: prevFingerprint ? 'fingerprint-changed' : 'first',
+      fingerprint,
+    };
+  }
+  // 指纹没变 = 同一批对象还冻着。按墙钟节流重推——「一直没解决」要说第二遍。
+  const prevMs = Date.parse(String(prevAt || '')) || 0;
+  const nowMs = Date.parse(String(now || '')) || 0;
+  if (!prevMs || !nowMs) {
+    // 时间读不出来 → 不重推（宁可少喊一次，也不要每轮都喊）
+    return { wake: false, reason: 'prev-at-unscanned', fingerprint };
+  }
+  const ageMs = nowMs - prevMs;
+  if (ageMs >= realertMs) {
+    return { wake: true, reason: 'still-stalled', fingerprint, ageMs };
+  }
+  return { wake: false, reason: 'same-fingerprint', fingerprint, ageMs };
 }

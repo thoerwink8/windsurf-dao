@@ -7,27 +7,34 @@
 //   可立即起 = open issue 带「已消歧」label
 //              + 无在途 PR（标题/正文里的 GitHub 关闭关键词署名）
 //              + 无本地 worktree 卡（linkedIssue / 定界区 / ISSUE- / 旧 #N；PR- 不是 issue 号）
+//              + 没挂「将来某版」里程碑（#966：要做但不是现在，不是当前待办）
 // 并发上限随 #576 next 落地；落地前不发明一个数字。满位是正当理由，所以本项
 // 只出可见行、永不报红。没查成必须和「扫完 0 个」不同形。
 
 import { issueNumberFromWorktree } from './card-identity.mjs';
+import { linkedIssueNumbers } from './dispatch/worker-done.mjs';
 
 // 只认正向「已消歧」（#565）。近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门。
 const READY_LABEL = '已消歧';
 
-/** 本检查自己的署名正则，不复用 dao-check ⑭ / dao-cmd。
- * #657：新规范是「署名 issue #N」（非 GitHub 关单词，不触发自动关单），兼容旧关单词。 */
-const CLOSES_RE = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+export { linkedIssueNumbers };
 
-export function linkedIssueNumbers(text) {
-  const found = [];
-  const re = new RegExp(CLOSES_RE.source, CLOSES_RE.flags);
-  let m;
-  while ((m = re.exec(String(text || '')))) {
-    const n = Number(m[1] ?? m[2]);
-    if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
-  }
-  return found;
+// #966：GitHub Milestone 两档之一。挂了这一档 = 要做但不是现在，单保持 OPEN 以便
+// `gh issue list --milestone 将来某版` 一次列全；派工队列必须跳过，否则档挂了机器下一轮还派。
+export const DEFERRED_MILESTONE_TITLE = '将来某版';
+
+/** gh / GraphQL 的 milestone 可能是 {title}、裸字符串、或 null。缺字段当「没挂档」——
+ *  旧夹具没有这一格，不能把「没查成」洗成「扫完 0」。缺了就不当成推迟。 */
+export function milestoneTitleOf(issue) {
+  const m = issue && issue.milestone;
+  if (m == null) return null;
+  if (typeof m === 'string') return m;
+  if (typeof m === 'object' && m.title != null) return String(m.title);
+  return null;
+}
+
+export function isDeferredIssue(issue) {
+  return milestoneTitleOf(issue) === DEFERRED_MILESTONE_TITLE;
 }
 
 export function cardNumbersFromWorktrees(wts) {
@@ -84,6 +91,7 @@ export function inspectReadyQueue(snap) {
     if (inPr.has(i.number) || inCard.has(i.number)) continue;
     const names = labelNames(i);
     if (!names) continue;
+    if (isDeferredIssue(i)) continue;
     if (names.includes(READY_LABEL)) ready.push(i.number);
   }
   ready.sort((a, b) => a - b);

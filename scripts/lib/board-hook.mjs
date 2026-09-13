@@ -6,7 +6,7 @@
 // 改这个文件前必须知道的四条：
 //   1. 只报不拦：永远 exit 0。UserPromptSubmit hook 的输出只是进上下文，绝不挡住用户输入
 //      （hook 拦死会话的教训见 memory ralph-loop-disabled）。
-//   2. 数据取 orca 本地状态 + 60 秒 TTL 缓存，**不打 GitHub**——用户每说一句话就消耗一次
+//   2. 数据取 mirasim 树目录 + 60 秒 TTL 缓存，**不打 GitHub**——用户每说一句话就消耗一次
 //      API 配额（账号级共享池）。缓存 _flow/board-summary.json 是唯一的本地状态：
 //      新鲜（<60s）直接用，过期重算，不参与任何判断——它只是节流。
 //   3. 「扫完是空的」和「这次没扫到」必须不同形：[盘] 全 0 行 ≠ [盘] 没查成行。
@@ -14,12 +14,13 @@
 //   4. 别在这里复述别的文件的事实：在途/待消歧/待收口的本地口径见函数注释与 issue #564/#588，
 //      本文件只产出那一行字。#588 起这一行必须带单号和状态——只有计数，帅还是要「记得去查」。
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { runOrcaRaw } from './orca-run.mjs';
+
 import { displayNumberFromWorktree } from './card-identity.mjs';
+import { scanMirasimTrees } from './mirasim-trees.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -27,7 +28,6 @@ const ROOT = process.env.CLAUDE_PROJECT_DIR
   : join(SCRIPT_DIR, '..', '..');
 const CACHE_FILE = join(ROOT, '_flow', 'board-summary.json');
 const CACHE_TTL_MS = 60 * 1000;
-const ORCA_TIMEOUT_MS = 15000;
 
 function cardRef(w) {
   const name = String(w.displayName || '');
@@ -76,7 +76,7 @@ function fmtOnBoard(list) {
   return list.map(shortCardLabel).join(' ');
 }
 
-/** 从 orca worktree ps 的 JSON 算盘面（纯函数，测试喂 fixture 不碰 orca）。
+/** 从 worktree 盘面 JSON 算盘面（纯函数，测试喂 fixture）。
  * 口径（不打 GitHub；#588 起带单号和状态，不再只报计数）：
  *   在途 = 顶层任务卡里还在做 / 在审的（做中、审中）。
  *   待收口 = 顶层任务卡已做完、等帅合并/归档。
@@ -117,11 +117,6 @@ export function boardLine(summary) {
   return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit} · 盘面 ${fmtOnBoard(summary.onBoard)}`;
 }
 
-// spawn 唯一真源在 scripts/lib/orca-run.mjs——raw 结果由本文件调用点自己解析。
-function runOrca(args) {
-  return runOrcaRaw(args, { timeout: ORCA_TIMEOUT_MS });
-}
-
 function loadCache() {
   try {
     const doc = JSON.parse(readFileSync(CACHE_FILE, 'utf8'));
@@ -139,20 +134,22 @@ function saveCache(summary) {
 }
 
 /** 盘面摘要对象：缓存新鲜直接用；过期或没缓存就重算（只缓存成功那次，没查成不落缓存）。
- * cache 可注入（测试喂 fixture，不碰真缓存文件）；缺省走 _flow/board-summary.json。 */
-export function boardSummary({ orca = runOrca, cache = null } = {}) {
+ * cache 可注入（测试喂 fixture，不碰真缓存文件）；缺省走 _flow/board-summary.json。
+ * 盘面采 mirasim 树目录，不再问 orca worktree ps。 */
+export function boardSummary({ cache = null } = {}) {
   const load = cache && typeof cache.load === 'function' ? cache.load : loadCache;
   const save = cache && typeof cache.save === 'function' ? cache.save : saveCache;
   const cached = load();
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.summary;
-  const r = orca(['worktree', 'ps', '--json']);
-  if (r.error || r.status !== 0) {
-    return { unscanned: true, error: `orca worktree ps 失败（${r.error?.code || `exit ${r.status}`}）` };
+  const r = scanMirasimTrees({
+    readdir: (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name),
+    stat: statSync,
+    join,
+  });
+  if (!r.scanned) {
+    return { unscanned: true, error: `mirasim 树面没查成（${r.error}）` };
   }
-  let psJson;
-  try { psJson = JSON.parse(r.stdout); }
-  catch { return { unscanned: true, error: 'orca worktree ps 输出不是 JSON' }; }
-  const summary = summarizeBoard(psJson);
+  const summary = summarizeBoard({ result: { worktrees: r.worktrees || [] } });
   if (!summary.unscanned) save(summary);
   return summary;
 }
@@ -164,10 +161,10 @@ export function boardInjection() {
 
 // ── #576 next：动作候选层 ──────────────────────────────────────────
 // #807 起本机常驻进程（flow/watchdog）整层删掉：next 不再读心跳文件，只剩盘面 + 模式态。
-// 派工节奏与 PR 回流归服务器指挥官（commander.mjs），本行只报本地 orca 盘面。
+// 派工节奏与 PR 回流归服务器指挥官（commander.mjs），本行只报本地 mirasim 树面。
 
 /** 动作候选行（#576）：把「现在该干什么」算出来，按谁在等谁排，等人的排最前。
- * 纯函数：输入全是解析好的对象，测试喂 fixture 不碰 orca / GitHub。
+ * 纯函数：输入全是解析好的对象，测试喂 fixture 不碰盘面 IO / GitHub。
  * standby 态（mode.mode === 'standby'，复用 dao-mode 的 state.json，不造新开关）
  * 不输出「待消歧」栏（⑤）。mode 读不到 = 按常态（不隐藏），dao-mode hook 自报态。 */
 export function nextLine({ board, mode } = {}) {
@@ -209,9 +206,9 @@ function readJsonOr(path, read) {
 }
 
 /** 读侧（CLI 与 hook 共用）：盘面摘要 + 用户级模式态 → 一行动作候选。
- * 只读不写判断（board-summary 缓存过期经 orca worktree ps 重算，本地零 GitHub）。
- * read / exists / orca / cache 可注入（测试喂 fixture，不碰真机）。 */
-export function nextInjection({ read = readFileSync, exists = existsSync, orca = runOrca, cache = null } = {}) {
+ * 只读不写判断（board-summary 缓存过期经 mirasim 树面重算，本地零 GitHub）。
+ * read / exists / cache 可注入（测试喂 fixture，不碰真机）。 */
+export function nextInjection({ read = readFileSync, exists = existsSync, cache = null } = {}) {
   const modePath = modeStatePath();
   let mode = null;
   if (exists(modePath)) {
@@ -219,14 +216,14 @@ export function nextInjection({ read = readFileSync, exists = existsSync, orca =
     mode = doc && doc.mode ? { mode: String(doc.mode) } : { unreadable: true };
   }
 
-  return nextLine({ board: boardSummary({ orca, cache }), mode });
+  return nextLine({ board: boardSummary({ cache }), mode });
 }
 function main() {
   process.stdout.write(`${nextInjection()}\n`);
   process.exit(0);
 }
 
-// 只被命令行直跑（hook 面）时开工；被测试 import 时只导出纯函数，不碰 orca。
+// 只被命令行直跑（hook 面）时开工；被测试 import 时只导出纯函数，不碰盘面 IO。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }

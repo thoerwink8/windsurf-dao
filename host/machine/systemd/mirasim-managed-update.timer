@@ -1,0 +1,18 @@
+# /etc/systemd/system/mirasim-managed-update.timer
+#
+# 每天凌晨查一次官方最新版。挑 04:17 而不是整点：整点是所有定时器的默认落点，
+# 跟备份/巡检/日报撞在一起，升级要排空在途会话，最不该跟别人抢。
+#
+# Persistent=true：机器关过机、错过了触发点，开机后补跑一次——升级本来就该「最终发生」，
+# 不是「必须准点发生」。
+
+[Unit]
+Description=Mirasim managed server update (daily)
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target

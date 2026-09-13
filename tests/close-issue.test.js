@@ -19,6 +19,21 @@ function rollup(...conclusions) {
   return conclusions.map(c => ({ status: 'COMPLETED', conclusion: c }));
 }
 
+it('a merged subtask cannot close an umbrella with unfinished acceptance items', async () => {
+  const C = await LOAD;
+  const pr = { number: 1186, body: '署名 issue #1174', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') };
+  for (const body of ['- [x] 实现\n- [ ] 自动验收', '- [x] 实现\n+ [ ] 自动验收',
+    '- [x] 实现\n1. [ ] 自动验收', '```md\n- [x] 例子\n```', '<!--\n- [x] 例子\n-->',
+    '- [x] 实现\n```html\n<!--\n```\n- [ ] 验收', '    - [x] 缩进代码', '', undefined]) {
+    let writes = 0;
+    const r = C.closeIssueForPr({ pr,
+      runGh: () => ({ ok: true, json: { state: 'OPEN', url: 'https://github.com/o/r/issues/1174', labels: [{ name: '统领单' }], body } }),
+      writeIssue: () => { writes++; return { ok: true }; } });
+    assert.equal(r.action, 'none');
+    assert.equal(writes, 0);
+  }
+});
+
 describe('close-issue 署名单号', () => {
   it('#657 正文「署名 issue #N」是署名单号（非 GitHub 关单词，不触发自动关单）', async (t) => {
     const C = await LOAD;
@@ -36,16 +51,25 @@ describe('close-issue 署名单号', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('Fixes #12'), [12]);
     });
   });
-  it('attributedIssueNumber：标题 #N 优先，其次正文署名', async (t) => {
+  it('attributedIssueNumber：正文署名压过标题随手引用，标题裸 #N 只是退路', async (t) => {
     const C = await LOAD;
-    await t.test('标题带 #N 取标题', () => {
-      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 657);
+    await t.test('正文有署名时取正文，哪怕标题另有 #N', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 99);
     });
     await t.test('标题无号取正文署名', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '署名 issue #42' }), 42);
     });
+    await t.test('正文没有署名、标题有裸 #N → 标题退路', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '无追溯' }), 657);
+    });
     await t.test('都没有 → null', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '无追溯' }), null);
+    });
+    await t.test('#1159 语料：标题堵 #565、正文署名 #1152 → 1152', () => {
+      assert.strictEqual(C.attributedIssueNumber({
+        title: '[cc] fix(test): 测试结构性够不着真执行体，堵 #565 假会话泄漏',
+        body: '署名 issue #1152，关单交给 `scripts/close-issues.mjs`。',
+      }), 1152);
     });
   });
 });
@@ -98,18 +122,25 @@ describe('close-issue 判定', () => {
         const n = Number(args[2]);
         return { ok: true, json: { state: n === 10 ? 'CLOSED' : 'OPEN' } };
       }
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return { ok: true, json: [] };
+      }
       return { ok: true, json: {} };
     };
+    const writes = [];
+    const writeIssue = (req) => { writes.push(req); return { ok: true, number: Number(req.issue) }; };
     await t.test('绿→issue close', () => {
-      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'close' && r.issue === 9);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'close' && a[2] === '9'), '应调 issue close #9  →  ' + JSON.stringify(calls));
+      assert.equal(writes[0]?.action, 'issue_close');
+      assert.equal(String(writes[0]?.issue), '9');
     });
-    calls.length = 0;
+    writes.length = 0;
     await t.test('红且单已关→issue reopen', () => {
-      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh });
+      const r = C.closeIssueForPr({ pr: { number: 2, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: gh, writeIssue });
       assert.ok(r.ok && r.action === 'reopen' && r.issue === 10);
-      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'reopen' && a[2] === '10'), '应调 issue reopen #10  →  ' + JSON.stringify(calls));
+      assert.equal(writes[0]?.action, 'issue_reopen');
+      assert.equal(String(writes[0]?.issue), '10');
     });
     calls.length = 0;
     await t.test('红但单没关→不动', () => {
@@ -120,8 +151,45 @@ describe('close-issue 判定', () => {
     calls.length = 0;
     await t.test('绿但单已关→不动', () => {
       const r = C.closeIssueForPr({ pr: { number: 4, title: 'x', body: '署名 issue #10', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
-      assert.ok(r.ok && r.action === 'none');
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'close'), '绿但单已关不应重复 close  →  ' + JSON.stringify(calls));
+    });
+    calls.length = 0;
+    await t.test('绿该关但没注入 writeIssue → fail-closed，不许退回裸 gh issue close', () => {
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: gh });
+      assert.equal(r.ok, false);
+      assert.match(String(r.error), /issue-gateway 没注入/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
+    });
+    calls.length = 0;
+    await t.test('#1065：还有 OPEN 署名 PR → 本张合了也不关', () => {
+      const ghOpen = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return { ok: true, json: [{ number: 1104, title: '[grok] fix', body: '署名 issue #9、署名 issue #1097' }] };
+        }
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 1075, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: ghOpen });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(r.reason, /OPEN 署名 PR #1104/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
+    });
+    calls.length = 0;
+    await t.test('pr list 没查成 → 不许关（没查成 ≠ 没有别的 PR）', () => {
+      const ghFail = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+        if (args[0] === 'pr' && args[1] === 'list') return { ok: false, error: 'graphql timeout' };
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 1, title: 'x', body: '署名 issue #9', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') }, runGh: ghFail });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /没查成不许关/);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'close'), false);
     });
     calls.length = 0;
     await t.test('红且单已关但带「已顶替」标签→不弹回（2026-09-04：人拍过，机器让路）', () => {
@@ -130,6 +198,7 @@ describe('close-issue 判定', () => {
         if (args[0] === 'issue' && args[1] === 'view') {
           return { ok: true, json: { state: 'CLOSED', labels: [{ name: '任务' }, { name: '已顶替' }] } };
         }
+        if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
         return { ok: true, json: {} };
       };
       const r = C.closeIssueForPr({ pr: { number: 5, title: 'x', body: '署名 issue #12', state: 'MERGED', statusCheckRollup: rollup('FAILURE') }, runGh: ghLabeled });
@@ -217,9 +286,15 @@ describe('署名单号解析不许把补丁链标记当成 issue 号', () => {
     assert.equal(attributedIssueNumber(pr), 888, '链内序号不是单号，要落到正文署名上');
   });
 
-  it('判别力反证：标题里真的有单号时照旧优先用它', async () => {
+  it('正文署名压过标题里真的 #N——标题优先会把随手引用当成署名单', async () => {
     const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
     const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '署名 issue #888' };
-    assert.equal(attributedIssueNumber(pr), 945, '别把整条标题优先规则一刀切废掉');
+    assert.equal(attributedIssueNumber(pr), 888, '正文署名是权威；标题 #945 是随手引用');
+  });
+
+  it('判别力反证：正文没有署名单号时，标题裸 #N 仍是退路', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '没有署名这一行' };
+    assert.equal(attributedIssueNumber(pr), 945, '旧约定 [pi] #N 关单 不能废');
   });
 });
