@@ -121,12 +121,17 @@ function linkKeepers(face, keepers, dryRun) {
 /**
  * 这个 checkout 是不是**临时 worktree**（`.git` 是文件，指向主仓 .git/worktrees/<名>）。
  *
- * 为什么判它：装载面的链接必须指一个**活得比会话久**的 checkout。主树是 `/srv/projects/windsurf-dao`，
- * worktree 是干完就删的临时的树。2026-09-13 实咬：我从 `.claude/worktrees/<名>/` 里跑了自愈，
- * 它把 `/root/.claude/skills/dispatch` 链到了那个 worktree——那个树一删，链接全悬空，
- * 而且它是**照着 §11.1 的装法**在仓里跑出来的结果，不是谁手抖。
+ * 判它干什么：装载面的链接要指一个**活得比会话久**的 checkout。主树是
+ * `/srv/projects/windsurf-dao`，worktree 是干完就删的临时的树。2026-09-13 实咬：
+ * 从 `.claude/worktrees/<名>/` 里跑自愈，它把 `/root/.claude/skills/dispatch` 链到了
+ * 那个 worktree——树一删全悬空，而且那是**照着 §11.1 的装法**跑出来的结果。
  *
- * 全手工解析（读 .git 文件），不 shell git。
+ * **只在从 worktree 落盘时报警，不拦。** 第一版写成硬拦，当场打红了两套既有测试
+ * （`tests/onboard.test.js` 的 heal / e2e 用例要在临时树里真跑接回）——本仓判例
+ * `patch-stacking-is-two-strikes`：一个判据开始需要「哪些调用方例外」的清单，就说明
+ * 判据本身挑错了。这里真正要防的是**没人发现链接指到了临时树**，不是「临时树不许接回」。
+ *
+ * 全手工解析（读 .git 文件），不 shell git——root 身份跑时会撞 dubious ownership。
  */
 export function isLinkedWorktree(root) {
   try {
@@ -144,19 +149,12 @@ export function isLinkedWorktree(root) {
  *
  * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string}}
  */
-export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, allowWorktree = false, say = () => {} } = {}) {
-  // 从临时 worktree 里接回会把装载面链到一个干完就删的树（见 isLinkedWorktree 的注释）。
-  // 这不是「不许在 worktree 里跑」——是「跑之前先知道后果」，所以 dry-run 照跑，只拦落盘那一步。
-  if (!dryRun && !allowWorktree && isLinkedWorktree(root)) {
-    return {
-      ok: false,
-      kind: 'worktree',
-      worktree: true,
-      error: `${root} 是临时 worktree（.git 是文件）——从这里接回会把装载面链到这个树，树一删全悬空；`
-        + '要在 worktree 里预演用 --dry-run，真接回请到主树 /srv/projects/windsurf-dao 跑',
-      face: join(home || '', dir, 'skills'),
-    };
-  }
+export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, say = () => {} } = {}) {
+  // 从临时 worktree 里接回会把装载面链到一个干完就删的树。**只报不拦**（见 isLinkedWorktree
+  // 的注释：硬拦会打红「在临时树里真跑接回」的既有测试，而那不是要说的事）。
+  // 报出去的形态：接回照做，但返回里带 worktree 标记，调用方（skills-heal.mjs）会把它
+  // 打进一行醒目的告警——静默指到临时树才是真危险。
+  const fromWorktree = !dryRun && isLinkedWorktree(root);
   const c = classifySkillsMount({ root, home, dir });
   if (c.kind === 'unscanned') return { ok: false, unscanned: true, kind: c.kind, reason: c.reason, face: c.face };
   if (c.kind === 'file') {
@@ -192,6 +190,10 @@ export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, a
 
   const shapeChanged = c.kind === 'hijacked' || c.kind === 'dangling' || c.kind === 'missing';
   const changed = shapeChanged || linked.length > 0 || rebuilt.length > 0 || kept.length > 0;
+  if (changed && fromWorktree) {
+    say(`⚠ 这次是从临时 worktree（${root}）接回的：装载面链到了这个树，树一删就全悬空。`
+      + '收敛办法——到主树重跑一次 `node scripts/skills-heal.mjs` 即可（幂等，会把链接改成主树路径）。');
+  }
   if (changed) {
     say(`${dryRun ? '[拟] ' : ''}仓内链 ${linked.length} 补 / ${rebuilt.length} 重建，外来保留 ${kept.length}：${kept.join('、') || '无'}`);
   }
@@ -199,6 +201,7 @@ export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, a
     ok: true,
     changed,
     kind: c.kind,
+    worktree: fromWorktree || undefined,
     linked,
     rebuilt,
     kept,

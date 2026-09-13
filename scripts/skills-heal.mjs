@@ -47,15 +47,17 @@ const kindOf = (r) => (r.unscanned ? 'unscanned' : r.kind);
 const summary = results.map((r) => `${r.home}:${kindOf(r)}`).join(' ');
 if (failed) {
   const bad = results.filter((r) => r.unscanned || !r.ok);
-  const wt = bad.filter((r) => r.worktree);
   process.stderr.write(`[skills-heal] ${bad.length}/${results.length} 个家目录没接成：${bad.map((r) => `${r.home}(${r.reason || r.error || '未知'})`).join('；')}\n`);
-  // worktree 拦下时清一色 exit 2：这是「这个地点没法判」，不是「接回坏了」——
-  // 单元在 /srv 主树跑，永远不会走到这条；人从 worktree 里跑才会。
-  process.exit(wt.length === bad.length ? 2 : 1);
+  process.exit(1);
 }
 if (!changed.length) {
   say(`[skills-heal] ${results.length} 个装载面都已是逐个链接，无事可做（${summary}）`);
   process.exit(0);
 }
 say(`[skills-heal] ${DRY ? '拟' : '已'}接回 ${changed.length}/${results.length} 个：${summary}`);
+// 从临时 worktree 接回不算失败，但必须让人看见——静默指到会删的树才是真危险（见 lib/skills-mount.mjs）。
+if (results.some((r) => r.worktree)) {
+  process.stderr.write(`[skills-heal] ⚠ 本次是从临时 worktree（${root}）接回的，链接会随该树删除而悬空；`
+    + '到主树重跑一遍即可收敛（幂等）。\n');
+}
 process.exit(0);
