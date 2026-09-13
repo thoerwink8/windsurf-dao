@@ -250,6 +250,8 @@ describe('ready-queue', () => {
         '**不写** closes #1051。署名 issue #1101',
         '不写 closes #1051. 署名 issue #1101',
         '不应该写 closes #1051，署名 issue #1101',
+        '不应当写 closes #1051。署名 issue #1101',
+        '不需要写 closes #1051。署名 issue #1101',
       ]) {
         const r = Q.inspectReadyQueue({
           issues: [issue(1051, ['已消歧'])],

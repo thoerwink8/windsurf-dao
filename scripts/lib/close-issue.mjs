@@ -23,17 +23,23 @@
  * 空白再匹配，所以 `**不写** closes` 仍是一句。只丢掉「否定词 → 关单词/#N」
  * 那一段，同一分句后头的「署名 issue #N」留下。
  *
- * 「不」后面的接应按长词优先（应该/可以 先于 应/可），否则 `不应该写 closes`
- * 会被 `应` 吃掉、整句漏网。
+ * 关单词（closes/fixes/resolves）从否定词切到关键词，中间一段短汉语原样吃掉。
+ * 「不应当写 / 不需要写」是能愿动词词表漏网的实证，不再靠枚举接应。
+ * 「不论/不仅」这类不-复合连词用负向预查挡掉，避免「不论 Closes #N」被剥。
+ * 「署名」仍走能愿+动词接应：同一分句里「不关单 署名 issue #N」的署名是认领，不是被否定。
  */
 function negatedClaimRe() {
-  return new RegExp(
-    String.raw`(?:不(?:应该|可以|要|必|能|可|该|应)?|别|勿|无需|没有|未|非|禁止|切勿)`
+  // 不论/不仅/不管/不只/不但/不过：不-复合连词，不是「不要写 closes」。
+  const neg = String.raw`(?:不(?!论|仅|管|只|但|过)|别|勿|无需|没有|未|非|禁止|切勿)`;
+  const english = neg
+    + String.raw`[\s\u4e00-\u9fff]{0,16}?`
+    + String.raw`(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b`
+    + String.raw`(?:\s*[#＃]\s*\d+)?`;
+  const shuming = neg
+    + String.raw`(?:应该|应当|可以|需要|须要|必须|能够|要|必|能|可|该|应|须)?`
     + String.raw`(?:\s*(?:再|去|会|要|来|该|应|能|可|必|写|加|用|提|填|挂|打|标|带|记|关闭|关|把|将|被|请|还|也))*`
-    + String.raw`\s*(?:(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b|署名)`
-    + String.raw`(?:\s+issue)?(?:\s*[#＃]\s*\d+)?`,
-    'gi',
-  );
+    + String.raw`\s*署名(?:\s+issue)?(?:\s*[#＃]\s*\d+)?`;
+  return new RegExp(`(?:${english}|${shuming})`, 'gi');
 }
 
 /** Markdown/引号蒙成同长度空白，匹配下标能映回原文。 */
@@ -267,6 +273,15 @@ export function closeIssueForPr({ pr, runGh, writeIssue, dryRun = false, repo = 
   // 署名目标其实是 PR（gh issue view 对 PR 号也答得出，url 才是照妖镜）：跳过不污染 exit code。
   if (typeof issueUrl === 'string' && issueUrl.includes('/pull/')) {
     return { ok: true, action: 'none', reason: `署名目标 #${issue} 是 PR 不是 issue（标题/正文引用误中），跳过`, issue, pr: number };
+  }
+  // 生产关单必须把「目标还开着」接到标题裸退路。issue view 已经给出 state，
+  // 这里构造 openIssues 再判一次：OPEN 且只来自标题裸 #N → 不当交付物。
+  // 目标已 CLOSED 时不收严，保留历史退路（MERGED+红则 reopen）。
+  if (String(issueState).toUpperCase() === 'OPEN') {
+    const claimed = attributedIssueNumber(pr, { openIssues: new Set([issue]) });
+    if (!claimed) {
+      return { ok: true, action: 'none', reason: '无署名单号', pr: number };
+    }
   }
   // 人工判定「已顶替」的单不弹回（2026-09-04 实咬：#633/#651/#683/#684/#686/#693 六张被 sweep
   // 反复 reopen——署名 PR 合入时历史 check 红，脚本不区分「谁关的、为什么关」。带标签 = 人拍过，机器让路）。

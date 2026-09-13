@@ -83,6 +83,25 @@ describe('close-issue 署名单号', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: 'x', body: '**不写** closes #1051。署名 issue #1101' }), 1101);
     });
 
+    await t.test('审官反例：不应当写 / 不需要写 也不算认领（关单词不再靠能愿词表）', () => {
+      for (const body of [
+        '不应当写 closes #1051。署名 issue #1101',
+        '不需要写 closes #1051。署名 issue #1101',
+        '不应当写 fixes #1051。署名 issue #1101',
+        '不需要写 resolves #1051。署名 issue #1101',
+      ]) {
+        assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101], body);
+        assert.strictEqual(C.attributedIssueNumber({ title: 'x', body }), 1101, body);
+      }
+      // 去掉否定后照旧认领。
+      assert.deepStrictEqual(C.attributedIssueNumbers('应当写 closes #1051'), [1051]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('需要写 closes #1051'), [1051]);
+    });
+
+    await t.test('正控：同一分句「不关单 署名 issue #N」的署名仍是认领', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不关单 署名 issue #1101'), [1101]);
+    });
+
     await t.test('中英文标点切分：逗号/英文句号后的署名仍认，否定接应（不能/不该/不应/不必）也剥', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051，署名 issue #1101'), [1101]);
       assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051. 署名 issue #1101'), [1101]);
@@ -343,6 +362,85 @@ describe('close-issue 判定', () => {
       assert.match(String(r.reason), /无署名单号/);
       assert.equal(writes.length, 0);
       assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'view' && String(a[2]) === '1051'), false);
+    });
+    writes.length = 0;
+    await t.test('PR #1096 原句：标题挂回 + 正文关联、#1051 仍 OPEN、MERGED+绿 → 不写 issue_close', () => {
+      const pr1096 = {
+        number: 1096,
+        title: '挂回 #1051',
+        body: '关联 #1051（只作署名，不关单）',
+        state: 'MERGED',
+        statusCheckRollup: rollup('SUCCESS'),
+      };
+      assert.strictEqual(C.attributedIssueNumber(pr1096, { openIssues: new Set([1051]) }), null);
+      const r = C.closeIssueForPr({
+        pr: pr1096,
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'OPEN', url: 'https://github.com/thoerwink8/windsurf-dao/issues/1051', labels: [] } };
+          }
+          if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(String(r.reason), /无署名单号/);
+      assert.equal(writes.length, 0);
+      assert.equal(writes.some((w) => w && w.action === 'issue_close' && String(w.issue) === '1051'), false);
+    });
+    writes.length = 0;
+    await t.test('标题裸退路：目标已关、MERGED 但 check 红 → 仍 reopen（历史退路）', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 938,
+          title: 'feat(commander): 判红直接派返工工人——删掉「唤大脑」整层（#931，基于 #926）',
+          body: '',
+          state: 'MERGED',
+          statusCheckRollup: rollup('FAILURE'),
+        },
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'CLOSED', url: 'https://github.com/thoerwink8/windsurf-dao/issues/931', labels: [] } };
+          }
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'reopen');
+      assert.equal(r.issue, 931);
+      assert.equal(writes[0]?.action, 'issue_reopen');
+      assert.equal(String(writes[0]?.issue), '931');
+    });
+    writes.length = 0;
+    await t.test('正控：正文显式署名、目标 OPEN、MERGED+绿 → 仍 issue_close', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 1096,
+          title: '挂回 #1051',
+          body: '署名 issue #1101',
+          state: 'MERGED',
+          statusCheckRollup: rollup('SUCCESS'),
+        },
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'OPEN', url: 'https://github.com/thoerwink8/windsurf-dao/issues/1101', labels: [] } };
+          }
+          if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'close');
+      assert.equal(r.issue, 1101);
+      assert.equal(writes[0]?.action, 'issue_close');
+      assert.equal(String(writes[0]?.issue), '1101');
     });
   });
 });

@@ -441,6 +441,12 @@ describe('选型路径零残留', () => {
     assert.match(ci, /const scan = stripNegatedClaims\(text\)/);
   });
 
+  it('closeIssueForPr 对还开着的目标传入 openIssues（标题裸退路收严接到写动作）', () => {
+    const ci = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'close-issue.mjs'), 'utf8');
+    const fn = ci.slice(ci.indexOf('export function closeIssueForPr'));
+    assert.match(fn, /attributedIssueNumber\(pr,\s*\{\s*openIssues:/);
+  });
+
   it('job.dispatch schema 有 reviewer 与 branch 与 repo', () => {
     const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'schemas', 'events.schema.json'), 'utf8'));
     const variants = schema.oneOf || schema.anyOf || [];
