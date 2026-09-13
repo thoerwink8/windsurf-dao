@@ -37,7 +37,7 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
-  gatewayIdemKey,
+  gatewayIdemKey, escalateRoundSeed,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
@@ -2357,6 +2357,9 @@ function escalate(action, { state, dryRun, say,
   }
   if (verdict.verdict === 'noop') {
     say(`  报帅（${verdict.why}，不重开也不追加）：${action.why}`);
+    // 单已关时不发卡：卡的落点是一个关掉的单，用户点进去看不到任何待办
+    // （#1240：#1204 关了之后每轮仍在发卡，只是被 6 小时去重挡住，用户没看见而已）。
+    if (bookedState !== 'OPEN') return { ok: true, issue: booked.issue, skipped: 'closed-noop' };
     // OPEN 只免重开，不免发卡。首次发卡失败时 hubAskOnce 不会盖去重戳，
     // 下一轮必须再走 askEscalateCard，否则机器主动问用户会永久哑掉。
     askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
@@ -2436,9 +2439,21 @@ function escalate(action, { state, dryRun, say,
     return { ok: true, issue: existing };
   }
   if (dryRun) { say(`[dry] 报帅开待拍板单：${action.why}（marker=${marker}）`); return { ok: true, dryRun: true }; }
-  const opened = openIssue({ title: `[待拍板] ${escalateTitle(action)}`, body: escalateBody(action, marker, verdict) });
+  const opened = openIssue({
+    title: `[待拍板] ${escalateTitle(action)}`,
+    body: escalateBody(action, marker, verdict),
+    // #1240：开单这一轮的幂等键必须把本轮对象折进去，否则被收敛关掉的单会靠网关
+    // 去重账把下一次真发生永远退回旧单号（重开在网关那层从未发生）。
+    seed: escalateRoundSeed(action.reason, verdict.objects),
+  });
   if (opened.ok && opened.number) state.escalateLedger[key] = { issue: opened.number, at: nowIso(), objects: verdict.objects || [] };
-  say(`  ${opened.ok ? '报帅开单 #' + opened.number : '报帅开单失败：' + opened.error}：${action.why}`);
+  // 幂等键重放时 gateway 会把**上一次的同键单号**退回（scripts/lib/issue-gateway.mjs:483），
+  // 那张单可能是已关的。原先这里一律说「报帅开单 #N」，于是日志里看得见「开单」，
+  // 线上却没有新单——#1240 里 #1204 被这样报了上百轮。回执里 replay 字段就是判据。
+  const replayed = opened && (opened.replay === true || (opened.number && verdict.reopenedFrom && opened.number === verdict.reopenedFrom));
+  say(`  ${opened.ok
+    ? (replayed ? `报帅复用已有单 #${opened.number}（幂等重放，没新开）` : `报帅开单 #${opened.number}`)
+    : `报帅开单失败：${opened.error}`}：${action.why}`);
   if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
 }
@@ -2546,7 +2561,7 @@ function escalateBody(a, marker, verdict) {
       : `指挥官不自动处置这类，等你拍板。查重标记（勿删）：${marker}`,
   ].filter(Boolean).join('\n');
 }
-function openEscalationIssue({ title, body }) {
+function openEscalationIssue({ title, body, seed }) {
   ensureDir(STATE_DIR);
   const bodyFile = join(STATE_DIR, `escalate-${Date.now()}.md`);
   writeFileSync(bodyFile, body, 'utf8');
@@ -2554,23 +2569,33 @@ function openEscalationIssue({ title, body }) {
     || String(body || '').match(/查重标记[^\n]*/);
   // marker 是中文行（`查重标记（勿删）：…`），title 也可能带空格/JSON——直接当 key 必被网关拒收。
   // 先 escalationKeyOf 折成 ASCII 摘要，再过 gatewayIdemKey 整键闸（KEY_RE 1–200 可打印 ASCII）。
-  // 2026-09-10 实咬：派工失败 title 带着整段 JSON，故障与告警同源失效。
-  const keySeed = marker ? marker[0] : title;
+  // 2026-09-10 实咬：mirasim 升级后派工全失败，指挥官每次都想「报帅开单」把故障
+  // 报出来，但那条路同时报 missing_idempotency——key 回落到 title，而失败单的 title 是
+  // 「#1146 自动派工失败：{…}」，带空白和引号，网关判据不收。
+  //
+  // seed 覆盖（#1240）：报帅这条路必须能**区分同一原因的不同一轮**，否则被收敛关掉的单
+  // 会靠网关的去重账把下一次真发生永远退回旧单号（见 escalateRoundSeed 的注释）。
+  // 盘点那条不传 seed，仍按 marker 去重（它的 key 本身就带项名，不会和别轮撞）。
+  const keySeed = seed || (marker ? marker[0] : title);
   const key = gatewayIdemKey('commander-escalate', escalationKeyOf(keySeed));
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);
   if (!r.ok) return { ok: false, error: r.error };
   let number = null;
+  // replay 一并读出来：调用方要靠它区分「真开了一张」和「幂等键退回了旧单号」。
+  // 丢了它，日志就只能一律说「开单」——#1240 里 #1204 被这样报了上百轮。
+  let replay = false;
   try {
     const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
     if (j && j.number) number = Number(j.number);
+    replay = Boolean(j && j.replay === true);
   } catch { /* 回执不是 JSON 时退回 URL */ }
   if (number == null) {
     const m = String(r.out).match(/\/issues\/(\d+)/);
     number = m ? Number(m[1]) : null;
   }
-  return { ok: true, number };
+  return { ok: true, number, replay };
 }
 
 // ── 子命令 ──

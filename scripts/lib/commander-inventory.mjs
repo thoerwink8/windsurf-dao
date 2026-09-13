@@ -433,7 +433,10 @@ async function runInventoryAsync({ rest, ROOT, REPO, STATE_DIR, runGh, hubOnce, 
     if (dryRun) { log.push(`  [dry] 开待拍板单：${c.key}（marker=${marker}）`); continue; }
     const body = [`指挥官盘点体检发现异常（#800，只开单不自修）：`, ``, `- 项：${c.key}`, `- 详情：${c.detail}`, ``,
       `修要过你放行。查重标记（勿删）：${marker}`].join('\n');
-    const opened = openEscalationIssue({ title: `[待拍板] 盘点：${c.key}`, body });
+    // 标题只写「盘点：<项>」——`[待拍板]` 前缀由 openEscalationIssue 统一加。
+    // #1210 实咬：这里也手写了一遍前缀，开出来的是 `[待拍板] [待拍板] 盘点：inbox`。
+    // 凡是同一条款在两个地方各拼一次，早晚会拼出两份（判例 memory `hand-typed-constant-will-be-wrong`）。
+    const opened = openEscalationIssue({ title: `盘点：${c.key}`, body });
     log.push(`  ${opened.ok ? '开单 #' + opened.number : '开单失败：' + opened.error}：${c.key}`);
     if (opened.ok && opened.number) askInv(opened.number);
   }

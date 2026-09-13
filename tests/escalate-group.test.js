@@ -161,11 +161,34 @@ describe('judgeEscalation 四个出口分得开', () => {
     assert.equal(v.verdict, 'noop');
   });
 
-  it('记着的单已关 → 这件事又发生了，可以重开', async () => {
+  // #1240 改判：已关的单遇上**新对象**才重开。
+  // 原判据不看对象，只看「单关了没有」——于是同一件事每 20 分钟复读一次
+  // （#1154/#930 把已关的 #1204 报了上百轮，而线上没有新单）。
+  it('记着的单已关 + 新对象 → 重开一张', async () => {
+    const { judgeEscalation } = await LIB;
+    const v = judgeEscalation({ reason: 'missing-labels', issue: 1063 },
+      { booked: { issue: 900, objects: ['issue #1007'] }, bookedState: 'CLOSED' });
+    assert.equal(v.verdict, 'open');
+    assert.equal(v.reopenedFrom, 900);
+    assert.deepEqual(v.objects, ['issue #1007', 'issue #1063']);
+  });
+
+  // 这条就是 #1240 的现场：单关了、原因还在、对象还是那一个，线上什么都没变。
+  // 旧判据在这里判 open，于是每轮写一次「报帅开单 #1204」——而 #1204 早已 CLOSED，
+  // 幂等键把重复的开单请求退回同一个旧单号，账本也就永远记着它，循环不散。
+  it('记着的单已关 + 对象没变 → noop，不复读（#1240 防漂移）', async () => {
     const { judgeEscalation } = await LIB;
     const v = judgeEscalation({ reason: 'missing-labels', issue: 1007 },
       { booked: { issue: 900, objects: ['issue #1007'] }, bookedState: 'CLOSED' });
-    assert.equal(v.verdict, 'open');
+    assert.equal(v.verdict, 'noop');
+    assert.deepEqual(v.objects, ['issue #1007']);
+  });
+
+  it('记着的单已关 + 没认得出对象 → noop，无对象可增', async () => {
+    const { judgeEscalation } = await LIB;
+    const v = judgeEscalation({ reason: 'model-health-red' },
+      { booked: { issue: 900, objects: [] }, bookedState: 'CLOSED' });
+    assert.equal(v.verdict, 'noop');
   });
 
   // fail-closed 的方向：开单是**写**动作、不可撤（只能关），核不出状态时宁可不开。
@@ -383,6 +406,53 @@ describe('旧账本键必须折进新键（审官第 4 轮红②）', () => {
     const reason = greedy('escalate/missing-labels/issue-1007');
     assert.equal(reason, 'missing-labels/issue-1007');
     assert.equal(reason === 'missing-labels', false, '夹具失真了：旧剥法本该对不上');
+  });
+});
+
+// 「重开在网关那层从未发生」——#1240 的另一半。
+//
+// 网关按「动作 + 仓 + 幂等键」记账，同键永远退回**第一次**的结果（issue-gateway.mjs:483）。
+// 起因本身当键，就等于「这个起因这辈子只能开出一张单」：那张单被收敛关掉之后，
+// 同一个起因再真发生（带新对象、该开新单），请求还是被退回旧单号 —— 线上永远没有第二张。
+// 所以键必须带上**这一轮要说的对象清单**：清单变了才是新一轮，清单没变仍然去重。
+describe('开单幂等键要能分得开「同一轮」和「新一轮」', () => {
+  it('对象清单变了 → 键变（新对象真能开出一张新单）', async () => {
+    const { escalateRoundSeed } = await LIB;
+    assert.notEqual(
+      escalateRoundSeed('rework-no-issue', ['PR #930']),
+      escalateRoundSeed('rework-no-issue', ['PR #930', 'PR #1154']),
+    );
+  });
+
+  it('对象清单没变 → 键不变（同一轮重跑仍被网关去重）', async () => {
+    const { escalateRoundSeed } = await LIB;
+    assert.equal(
+      escalateRoundSeed('rework-no-issue', ['PR #930', 'PR #1154']),
+      escalateRoundSeed('rework-no-issue', ['PR #930', 'PR #1154']),
+    );
+  });
+
+  it('对象顺序与重复不影响键（同一件事只有一个键）', async () => {
+    const { escalateRoundSeed } = await LIB;
+    assert.equal(
+      escalateRoundSeed('missing-labels', ['PR #930', 'issue #1007']),
+      escalateRoundSeed('missing-labels', ['issue #1007', 'PR #930', 'PR #930']),
+    );
+  });
+
+  it('起因不同 → 键不同（不同的事不许共用键）', async () => {
+    const { escalateRoundSeed } = await LIB;
+    assert.notEqual(
+      escalateRoundSeed('missing-labels', ['PR #930']),
+      escalateRoundSeed('rework-no-issue', ['PR #930']),
+    );
+  });
+
+  it('键过网关真闸（ASCII 1–200，不是「无空白即可」）', async () => {
+    const { gatewayIdemKey, GATEWAY_KEY_RE, escalateRoundSeed: seed } = await LIB;
+    const { escalationKeyOf } = await import('../scripts/lib/escalation-key.mjs');
+    const key = gatewayIdemKey('commander-escalate', escalationKeyOf(seed('rework-no-issue', ['PR #930', 'PR #1154'])));
+    assert.match(key, GATEWAY_KEY_RE);
   });
 });
 
