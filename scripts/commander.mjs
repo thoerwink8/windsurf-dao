@@ -53,6 +53,7 @@ import { admitCapacity } from './lib/admission.mjs';
 import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-capacity.mjs';
 import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadBreaker } from './lib/provider-health.mjs';
@@ -868,7 +869,8 @@ function judgmentAtCurrentHead(json) {
 /**
  * 杀幽灵进程前再读一次 /proc/<pid>/cwd。规划到执行隔了小半轮，pid 可能已复用；
  * 对不上规划时的 cwd 就跳过，宁可下轮再收也不误杀。
- * readlink / kill 可注入，测试钉 cwd 对不上不杀。
+ * readlink 只有 ENOENT/ESRCH 才当 gone（linkErrorKind）；EACCES/EIO 是没查成，
+ * 不杀也不报成功。readlink / kill 可注入。
  */
 export function execReapOrphan(action, {
   dryRun, say, readlink = readlinkSync, kill = (pid, sig) => process.kill(pid, sig),
@@ -888,7 +890,15 @@ export function execReapOrphan(action, {
   for (const pid of pids) {
     let liveCwd = null;
     try { liveCwd = readlink(`/proc/${pid}/cwd`); }
-    catch { results.push({ pid, ok: true, gone: true }); continue; }
+    catch (e) {
+      if (linkErrorKind(e) === 'gone') {
+        results.push({ pid, ok: true, gone: true });
+      } else {
+        const why = String((e && e.code) || (e && e.message) || e);
+        results.push({ pid, ok: false, unscanned: true, error: `cwd 没查成：${why}` });
+      }
+      continue;
+    }
     if (String(liveCwd).replace(/\/+$/, '') !== want) {
       results.push({ pid, ok: true, skipped: 'cwd-mismatch', liveCwd });
       continue;
@@ -897,13 +907,33 @@ export function execReapOrphan(action, {
       kill(pid, 'SIGTERM');
       results.push({ pid, ok: true });
     } catch (e) {
-      if (e && e.code === 'ESRCH') results.push({ pid, ok: true, gone: true });
+      if (linkErrorKind(e) === 'gone') results.push({ pid, ok: true, gone: true });
       else results.push({ pid, ok: false, error: String(e.message || e) });
     }
   }
   const failed = results.filter((r) => r.ok !== true);
-  say(`  回收幽灵 ${cwd}：${results.filter((r) => r.ok).length}/${pids.length} 已 SIGTERM${failed.length ? `，失败 ${failed.length}` : ''}`);
-  return failed.length ? { ok: false, error: `有 ${failed.length} 个 pid 没杀成`, results } : { ok: true, results };
+  const term = results.filter((r) => r.ok === true && !r.gone && !r.skipped).length;
+  const gone = results.filter((r) => r.gone).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const unscanned = results.filter((r) => r.unscanned).length;
+  const killFailed = failed.length - unscanned;
+  const parts = [`${term}/${pids.length} 已 SIGTERM`];
+  if (gone) parts.push(`${gone} 已消失`);
+  if (skipped) parts.push(`${skipped} 跳过`);
+  if (unscanned) parts.push(`${unscanned} cwd 没查成`);
+  if (killFailed) parts.push(`失败 ${killFailed}`);
+  say(`  回收幽灵 ${cwd}：${parts.join('，')}`);
+  if (failed.length) {
+    return {
+      ok: false,
+      ...(unscanned ? { unscanned: true } : {}),
+      error: unscanned
+        ? `有 ${unscanned} 个 pid 的 cwd 没查成${killFailed ? `，另有 ${killFailed} 个没杀成` : ''}`
+        : `有 ${failed.length} 个 pid 没杀成`,
+      results,
+    };
+  }
+  return { ok: true, results };
 }
 
 /**
