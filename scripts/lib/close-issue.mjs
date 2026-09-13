@@ -136,7 +136,11 @@ export function attributedIssueNumber(pr, { openIssues = null } = {}) {
   const title = String((pr && pr.title) || '').replace(/\[chain:[^\]]*\]/gi, '');
   const titleExplicit = attributedIssueNumbers(title).filter((n) => n > 0);
   if (titleExplicit.length) return titleExplicit[0];
-  const t = title.match(/#(\d+)/);
+  // 第 3 级退路看剥否定之后的标题：被否定的 `closes #N` 不能再被裸 `#N` 捞回来。
+  // 审官反例：标题「不应该写 closes #1051」、正文空 → 旧实现 `title.match(/#(\d+)/)`
+  // 返 1051，`closeIssueForPr` 在 MERGED+绿时会 `issue_close #1051`。
+  // 「修一处 #945」没有否定，剥完还在，历史退路保留。
+  const t = stripNegatedClaims(title).match(/#(\d+)/);
   if (!t || !(Number(t[1]) > 0)) return null;
   const n = Number(t[1]);
   // 没有开放单名单（老调用方/夹具）→ 保持原行为，不凭猜收严。

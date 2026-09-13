@@ -120,6 +120,14 @@ describe('close-issue 署名单号', () => {
       };
       assert.strictEqual(C.attributedIssueNumber(pr), 1101);
     });
+
+    await t.test('审官反例：标题只有被否定的认领、正文空 → 不落入裸 #N 退路', () => {
+      const pr = { title: '不应该写 closes #1051', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(pr), null);
+      assert.strictEqual(C.attributedIssueNumber({ title: '**不写** closes #1051', body: '' }), null);
+      // 同一标题里否定之后还有真退路号，只捞后面那个。
+      assert.strictEqual(C.attributedIssueNumber({ title: '不应该写 closes #1051，修一处 #945', body: '' }), 945);
+    });
   });
 
   it('#1051 标题退路：目标单还开着时收严，已关的单照旧（判据是「拦谁」不是「拦什么词」）', async (t) => {
@@ -316,6 +324,25 @@ describe('close-issue 判定', () => {
       assert.ok(r.ok && r.action === 'none', JSON.stringify(r));
       assert.match(r.reason, /已顶替/);
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'reopen'), '带标签不应 reopen  →  ' + JSON.stringify(calls));
+    });
+    writes.length = 0;
+    await t.test('标题只有被否定的认领、正文空、MERGED+绿 → 不写 issue_close', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 1224,
+          title: '不应该写 closes #1051',
+          body: '',
+          state: 'MERGED',
+          statusCheckRollup: rollup('SUCCESS'),
+        },
+        runGh: gh,
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(String(r.reason), /无署名单号/);
+      assert.equal(writes.length, 0);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'view' && String(a[2]) === '1051'), false);
     });
   });
 });

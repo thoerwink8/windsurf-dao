@@ -261,6 +261,16 @@ describe('ready-queue', () => {
       }
     });
 
+    await t.test('审官反例：标题只有被否定的认领、正文空 → #1051 仍 ready', () => {
+      const r = Q.inspectReadyQueue({
+        issues: [issue(1051, ['已消歧'])],
+        prs: [{ title: '不应该写 closes #1051', body: '' }],
+        worktrees: [],
+      });
+      assert.equal(r.kind, 'ready');
+      assert.deepStrictEqual(r.ready, [1051]);
+    });
+
     await t.test('「关联 #N」不挡派工——这就是 #1051 停摆 7 天的根因', () => {
       const r = Q.inspectReadyQueue({
         issues: [issue(1051, ['已消歧'])],
