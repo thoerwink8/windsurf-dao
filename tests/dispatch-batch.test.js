@@ -18,6 +18,7 @@ describe('#1150 dispatch --batch 已退役', () => {
   it('dao.mjs dispatch --batch 当场拒', () => {
     const r = spawnSync(process.execPath, [
       CLI, 'dispatch', '--batch', '/tmp/no.json', '--name', 'x', '--issue', '1', '--model', 'grok-4.6',
+      '--dry-run',
     ], { encoding: 'utf8', cwd: REPO });
     let payload = {};
     try { payload = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }

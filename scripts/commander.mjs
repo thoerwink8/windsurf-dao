@@ -1276,7 +1276,10 @@ function prLink(n) { return `https://github.com/${REPO}/pull/${n}`; }
 function issueLink(n) { return `https://github.com/${REPO}/issues/${n}`; }
 
 export function runCmd(argv, timeout = 600000, { spawn = spawnSync } = {}) {
-  const r = spawn(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env: process.env });
+  // #1152：生产入口显式放行真执行体。dao.mjs 自己不许自打这面旗，否则测试瘦 env
+  // spawn 的子进程会把自己放行。指挥官是派工/起会话的唯一常规父进程。
+  const env = { ...process.env, DAO_REAL_EXECUTOR: '1' };
+  const r = spawn(argv[0], argv.slice(1), { windowsHide: true, encoding: 'utf8', cwd: ROOT, timeout, env });
   // Machine evidence must survive a nonzero exit. Only the human summary is shortened.
   const output = { out: String(r.stdout || ''), stderr: String(r.stderr || ''),
     status: r.status, signal: r.signal || null, spawnError: r.error?.code || (r.error ? 'SPAWN_ERROR' : null) };

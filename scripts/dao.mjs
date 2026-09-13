@@ -267,6 +267,7 @@ import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
 } from './lib/executor-binding.mjs';
+import { judgeTestExecutorIsolation, enableRealExecutorUnlessTest } from './lib/mirasim-runtime.mjs';
 import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
 
 
@@ -746,6 +747,10 @@ async function cmdDispatchMirasim(args, routing, gate) {
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   if (dup.blocked) fail(dup.error, { dup });
 
+  // #1152：测试环境结构性够不着真执行体。拒派闸失手时这一道仍拦住建树/起会话。
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
+
   // The Mirasim path bypasses legacy post-launch label stamping. Fill the
   // selected task type before starting, otherwise a later pr-sync-labels
   // refuses to merge a fully reviewed PR. Existing declared types win.
@@ -1006,6 +1011,8 @@ async function cmdWorktreeCreateMirasim(args, { policy }) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worktree-create' });
   const repo = targetRepo.localPath;
   const branch = mirasimBranchOrFail(args);
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim', repo, branch });
   const binding = bindExecutor({ executor: 'mirasim', policy });
   let r;
   try { r = await binding.worktreeCreate({ repo, branch }); }
@@ -1802,6 +1809,7 @@ async function readReviewerDeathNote(runtime, args, ownerName) {
 }
 
 async function cmdReviewerCreateMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('reviewer-create 要 --pr');
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'reviewer', where: 'reviewer-create', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
@@ -2004,6 +2012,7 @@ async function cmdReviewerCreateMirasim(args) {
 }
 
 async function cmdWorkerDoneMirasim(args) {
+  enableRealExecutorUnlessTest(process.env);
   if (!args.pr) fail('worker-done 要 --pr');
   let body = args.body;
   if (args.bodyFile) {
@@ -2219,6 +2228,9 @@ async function cmdStartMirasim(args) {
     });
     return;
   }
+
+  const isolation = judgeTestExecutorIsolation(process.env);
+  if (!isolation.ok) fail(isolation.error, { isolation, executor: 'mirasim' });
 
   if (!workdir) {
     try {

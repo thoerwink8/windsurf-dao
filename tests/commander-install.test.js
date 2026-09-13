@@ -31,6 +31,7 @@ describe('指挥官 systemd 单元模板（#848）', () => {
       assert.ok(v.ok, `${p} 不合格：${v.why}`);
       assert.match(text, /\nExecStart=\/usr\/bin\/node /, 'node 走绝对路径（它不在 ~/.local/bin 里，PATH 管不着）');
       assert.match(text, /\nUser=orca\n/, '仍以 orca 跑——PATH 里那两段是 orca 的家目录');
+      assert.match(text, /^Environment=DAO_REAL_EXECUTOR=1$/m, `${p} 必须声明生产执行体放行旗（#1152 allowlist）`);
     }
   });
 
