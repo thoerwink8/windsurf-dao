@@ -2,14 +2,21 @@
 //
 // 判据只来自工具入参/出参与退出码——本测试里没有一条「猜用户说话方式」的样本。
 //
-// 权威 schema 怎么来（composedSchema）：读真 schemas/events.schema.json，**只给真 schema 里
-// 还没有的类型**拿 fixtures/action-writers/proposed-types.json 补位。所以 W1（PR #893）合并后
-// 这套测试当场改用 W1 的真定义，不会出现「我的副本与权威各自演进」；同时最后那组「指针自退役」
-// 断言会报红，提醒删夹具。
+// 动作触发写口（#891 W5）：三个写口的正反样本 + 真落盘 + 幂等 + 脱敏。
+//
+// 判据只来自工具入参/出参与退出码——本测试里没有一条「猜用户说话方式」的样本。
 //
 // 另有一组「payload 形状必须符合权威 schema 声明」：写入侧只校验必填/enum/跨字段不变量，
 // **不校验 JSON Schema 的 type**（PR #893 自述）⇒ 两卡形状对不上时事件照样落盘且无人报警。
 // 那组就是这个静默漂移的报警器，并自带故意违规样本验判别力。
+//
+// 权威 schema 只有一处：真的 schemas/events.schema.json。
+//
+// 曾经这里还读一份 tests/fixtures/action-writers/proposed-types.json 补位——那是 W5 先落地、
+// W1（#893）还没进 master 时的临时垫片（三个类型当时不在真闭集里）。W1 一合，垫片就该退役；
+// 下面那组「自退役报警」就是为这一天配的，它现在报红了，也正是它该退休的确认信号。
+// 做两件事，不是删掉报警器：删垫片文件，并把报警器本身从「补位 + 报警」拆成两个仍会咬人的断言
+// （见文件末尾那组）。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -22,7 +29,6 @@ const HOOK = path.join(ROOT, 'scripts', 'lib', 'action-writers-hook.mjs');
 const AW_LOAD = import('file://' + AW.replace(/\\/g, '/'));
 const HOOK_LOAD = import('file://' + HOOK.replace(/\\/g, '/'));
 const REAL_SCHEMA = path.join(ROOT, 'schemas', 'events.schema.json');
-const PROPOSED = path.join(__dirname, 'fixtures', 'action-writers', 'proposed-types.json');
 
 // 测试自己的脱敏 stub：W2 的 redact.mjs 尚未合并，本测试不依赖它的实现，只依赖
 // 「redact(text) -> text」这个契约（PR 正文已写明这处依赖 W2）。
@@ -31,16 +37,9 @@ const stubRedact = s => String(s)
   .replace(/[A-Za-z]:[\\/][^\s"']+/g, '[REDACTED:path]')
   .replace(/(?:^|(?<=\s))\/(?:home|Users|d|c)\/[^\s"']+/g, '[REDACTED:path]');
 
-/**
- * 权威 schema：真 schema 优先，真 schema 还没有的类型才拿夹具补位（#893 合并后夹具自动失效，
- * 测试当场改用 W1 的真定义 —— 不会出现「我的副本与权威各自演进」那种漂移）。
- */
+/** 权威 schema 就是仓里那一份，不再有补位来源（垫片已随 W1 合入退役）。 */
 function composedSchema() {
-  const real = JSON.parse(fs.readFileSync(REAL_SCHEMA, 'utf8'));
-  const proposed = JSON.parse(fs.readFileSync(PROPOSED, 'utf8'));
-  const realTitles = new Set((real.oneOf || []).map(d => d.title));
-  const fill = proposed.oneOf.filter(d => !realTitles.has(d.title));
-  return { ...real, oneOf: [...real.oneOf, ...fill] };
+  return JSON.parse(fs.readFileSync(REAL_SCHEMA, 'utf8'));
 }
 
 /** 从权威 schema 抽某类型某字段的声明（测试自持解析，不复用 event-writer 的 schemaMeta）。 */
@@ -620,9 +619,18 @@ describe('action-writers-hook · 真落盘 / 幂等 / 缺类型降级 / 不阻�
   it('schema 闭集里没有该类型 ⇒ 跳过并说明，绝不改 schema、绝不阻断', async (t) => {
     const H = await HOOK_LOAD;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aw-noschema-'));
+    // 垫片退役后不能再靠「夹具补位」造出这种局面（真 schema 里三个类型都在）。
+    // 想验的还是同一件事：**想写的类型不在闭集里时不许写、不许报错、只要说清楚**。
+    // 那就把真 schema 里这一个类型摘掉——模拟的是「本 hook 比 schema 先走一步」，
+    // 而不是别的什么东西坏了。摘掉的必须是本次要写的那一个，否则样本空转（零样本 ≠ 通过）。
+    const real = JSON.parse(fs.readFileSync(REAL_SCHEMA, 'utf8'));
+    const pruned = { ...real, oneOf: real.oneOf.filter((d) => d.title !== 'decision.pending') };
+    assert.ok(pruned.oneOf.length === real.oneOf.length - 1, '摘类型没摘成，本次样本是空的');
+    const schemaFile = path.join(dir, 'pruned.schema.json');
+    fs.writeFileSync(schemaFile, JSON.stringify(pruned, null, 2));
     const r = await H.runHook({
       stdinText: JSON.stringify(preEvent()),
-      env: { LEDGER_EVENTS_DIR: dir, DAO_EVENTS_SCHEMA: REAL_SCHEMA },
+      env: { LEDGER_EVENTS_DIR: dir, DAO_EVENTS_SCHEMA: schemaFile },
       root: ROOT,
     });
     await t.test('不写 + notes 点名闭集缺该类型 + exit 0', () => {
@@ -688,19 +696,28 @@ describe('action-writers-hook · 真落盘 / 幂等 / 缺类型降级 / 不阻�
   });
 });
 
-describe('action-writers · 提议类型夹具的自退役报警', () => {
-  it('三个类型一旦进了真 schema，本夹具就该删（此断言即报警器）', async (t) => {
-    const real = JSON.parse(fs.readFileSync(REAL_SCHEMA, 'utf8'));
-    const realTitles = new Set((real.oneOf || []).map(d => d.title));
-    const proposed = JSON.parse(fs.readFileSync(PROPOSED, 'utf8'));
-    const landed = proposed.oneOf.map(d => d.title).filter(t2 => realTitles.has(t2));
-    await t.test('夹具与真 schema 不重叠（重叠 ⇒ 删夹具与本断言）', () => {
-      assert.ok(landed.length === 0,
-        '这些类型已进真 schema，请删 tests/fixtures/action-writers/proposed-types.json 及本断言  →  ' + landed.join(', '));
+describe('action-writers · 垫片退役后，权威 schema 仍被真的读着', () => {
+  // 这组取代了原来的「夹具自退役报警」。它当时干两件事，现在一件已经完成、一件必须留着：
+  //   1. 已完成：报红催删 tests/fixtures/action-writers/proposed-types.json。夹具已删，
+  //      补位来源没了 ⇒ 报警器不能再留住「读夹具」这件事，否则它自己就成了新的垫片。
+  //   2. 必须留着：**证明权威 schema 真的被读到了、且里面确实有这三个类型**。
+  //      删掉夹具之后，若 composedSchema 静默变成读空对象，形状校验器会「零声明 ⇒ 零违规」，
+  //      全绿——那正是本仓最忌讳的「没查成当成查过没事」（判例 memory
+  //      `predicate-must-tell-absence-from-negation`）。所以这里显式把三类型的声明钉住。
+  it('真 schema 里三个类型的声明都在，且校验器据它判得出违规', async (t) => {
+    const schema = composedSchema();
+    const titles = (schema.oneOf || []).map(d => d.title);
+    for (const want of ['decision.pending', 'decision.resolved', 'session.milestone']) {
+      await t.test(`${want} 在真闭集里`, () => {
+        assert.ok(titles.includes(want), `真 schema 里没有 ${want}——垫片删早了或 schema 被换过  →  实有 ${titles.join(', ')}`);
+      });
+    }
+    await t.test('零样本必须判「没查成」，不许当绿', () => {
+      assert.ok(titles.length >= 3, `真 schema 只声明了 ${titles.length} 个类型——这么读下去形状校验器永远报 0 违规`);
     });
-    await t.test('夹具本身没空（零样本 ⇒ 本次等于没查）', () => {
-      assert.ok(Array.isArray(proposed.oneOf) && proposed.oneOf.length === 3,
-        '夹具条数  →  ' + (proposed.oneOf || []).length);
+    await t.test('校验器在真 schema 下确实咬得住（正控）', () => {
+      const hit = shapeViolations(schema, 'session.milestone', { evidence: '不是数组' });
+      assert.deepEqual(hit.map((s) => s.split(':')[0]), ['evidence'], '真 schema 下坏 payload 没被点名  →  ' + JSON.stringify(hit));
     });
   });
 });
