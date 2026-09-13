@@ -20,12 +20,13 @@
 //   MIRASIM_STALL_ISSUE     推不出关联 issue 时的兜底 issue 号
 // 测试注入（tests/mirasim-stall.test.js 用 sweepOnce + 假依赖，不碰真服务）：
 //   MIRASIM_STALL_STATE     覆盖连红账本路径
-//   MIRASIM_STALL_WATCHDOG  假评论脚本（argv: issue body），替 gh-as watchdog
+//   MIRASIM_STALL_WATCHDOG  假评论脚本（argv: issue body-file），替 issue-gateway
 //
 // 退出码：0 扫完没事或已处理并自证 / 1 查成了但动作失败（停不成、评论没落、删了没自证掉）
 //        / 2 没查成（连不上、枚举失败、或任一会话的关键读链路 unknown）。
 // 「没查成」与「查过没事」永不合并：任一会话读不到快照/账本，整条命令就是 2，不打绿。
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -39,6 +40,7 @@ import {
   normPhase, isTerminalPhase, activeWorkdirs,
   wireListSessions, wireDeleteSession, wireRemoveWorktree, probeMirasim,
 } from './lib/mirasim-monitor.mjs';
+import { DEFAULT_REPO } from './lib/shuai-scan.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -78,16 +80,22 @@ function writeJsonFile(path, obj) {
   writeFileSync(path, JSON.stringify(obj, null, 1), 'utf8');
 }
 
-/** 落 watchdog 评论：默认走 gh-as watchdog，测试用 MIRASIM_STALL_WATCHDOG 假脚本换掉。 */
+/** 落 watchdog 评论：默认走 issue-gateway（#792，身份固定 marshal），测试用 MIRASIM_STALL_WATCHDOG 假脚本换掉。 */
 function postComment({ issue, body }) {
   const hook = process.env.MIRASIM_STALL_WATCHDOG;
   const dir = join(homedir(), '.dao');
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const tmp = join(dir, `mirasim-stall-comment-${Date.now()}.md`);
   writeFileSync(tmp, body, 'utf8');
+  const key = `mirasim-stall:${issue}:${createHash('sha256').update(String(body || '')).digest('hex').slice(0, 16)}`;
   const cmd = hook
     ? [process.execPath, hook, String(issue), tmp]
-    : [process.execPath, join(REPO_ROOT, 'scripts', 'gh-as.mjs'), 'watchdog', '--', 'issue', 'comment', String(issue), '--body-file', tmp];
+    : [
+      process.execPath, join(REPO_ROOT, 'scripts', 'issue-gateway.mjs'), 'comment',
+      '--repo', process.env.MIRASIM_STALL_REPO || DEFAULT_REPO,
+      '--issue', String(issue), '--body-file', tmp,
+      '--host', 'mirasim-stall-watch', '--idempotency-key', key,
+    ];
   const r = spawnSync(cmd[0], cmd.slice(1), { windowsHide: true, encoding: 'utf8', cwd: REPO_ROOT, timeout: 60000 });
   const ok = !r.error && r.status === 0;
   return { ok, detail: ok ? '评论已落' : `评论失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).slice(0, 200)}`, out: String(r.stdout || '').trim() };
