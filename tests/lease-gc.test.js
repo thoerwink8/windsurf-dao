@@ -1,7 +1,7 @@
 // 执行租约回收的判据（#1175 实咬：审官被上游断流打死，留下 running 租约永久占树）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeLease, planLeaseGc, judgeRegistryStuck, DEFAULT_LEASE_GRACE_MIN } from '../scripts/lib/lease-gc.mjs';
+import { judgeLease, planLeaseGc, judgeRegistryStuck, ageMinOf, DEFAULT_LEASE_GRACE_MIN } from '../scripts/lib/lease-gc.mjs';
 
 const lease = (over = {}) => ({ state: 'running', sessionKey: 'codex:11111111-2222-3333-4444-555555555555', workdir: '/x/dao-review-pr-1', ageMin: 120, ...over });
 const S = { sessionsScanned: true };
@@ -146,4 +146,30 @@ test('中间态 + 名单没查成 → 保留并标 unknown（fail-closed）', ()
 
 test('中间态 + 宽限期内 → 保留', () => {
   assert.equal(judgeRegistryStuck(rec({ updatedAt: Date.now() }), { sessionsScanned: true, sessionState: 'incomplete' }).verdict, 'keep');
+});
+
+test('ageMinOf 认记录字段，不认文件 mtime（失败回写会刷新 mtime）', () => {
+  const now = 1_700_000_000_000;
+  const updatedAt = now - 120 * 60000;
+  const age = ageMinOf({ updatedAt }, { now, mtimeMs: now });
+  assert.ok(age > 119 && age < 121, `got ${age}`);
+});
+
+test('ageMinOf 没有字段才退 mtime（老文件）', () => {
+  const now = 1_700_000_000_000;
+  const age = ageMinOf({}, { now, mtimeMs: now - 60 * 60000 });
+  assert.ok(age > 59 && age < 61, `got ${age}`);
+});
+
+test('ageMinOf 字段和 mtime 都没有 → NaN（fail-closed）', () => {
+  assert.equal(Number.isFinite(ageMinOf({}, { now: 1 })), false);
+});
+
+test('mtime 刚被刷新、字段仍是 2 小时前 → 过期且会话终态就回收', () => {
+  const now = 1_700_000_000_000;
+  const j = judgeRegistryStuck(
+    rec({ updatedAt: now - 120 * 60000 }),
+    { sessionsScanned: true, sessionState: 'incomplete', now },
+  );
+  assert.equal(j.verdict, 'reap');
 });
