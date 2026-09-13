@@ -176,6 +176,72 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
   });
 });
 
+// #1235：记账步骤不许当门。实测 #1143 判绿可合、CI 绿、MERGEABLE，只因账本里没有
+// job.dispatch（日报/升级链产生的 PR 都没有）打不上 label，在第①步 return，②pr merge
+// 根本不跑，24 小时撞 38 次、白挂一天——一个纯记账动作挡住了一次真实合并。
+describe('#1235 merge 记账步骤失败不挡合并', () => {
+  const silent = () => {};
+  /** 按 argv 子串决定成功/失败的假 run，用来构造「只有某一步坏」的场面 */
+  function runWhere(failOn) {
+    const calls = [];
+    const run = (argv) => {
+      const s = argv.join(' ');
+      calls.push(s);
+      return failOn && s.includes(failOn)
+        ? { ok: false, error: `${failOn} 故意失败` }
+        : { ok: true, out: '' };
+    };
+    return { calls, run };
+  }
+
+  it('打标签失败仍要真合并（#1143 的形状）', async () => {
+    const { execMerge } = await CMD;
+    const { calls, run } = runWhere('pr-sync-labels');
+    const r = execMerge({ pr: 1143, why: '判绿可合' }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, true, '记账失败不该让整张 PR 卡住  →  ' + JSON.stringify(r));
+    assert.ok(calls.some((c) => /pr merge/.test(c)), '②必须跑到：' + calls.join(' | '));
+    assert.equal(r.failed.length, 1, '失败要报出来（不是静默吞）  →  ' + JSON.stringify(r.failed));
+    assert.ok(/pr-sync-labels/.test(r.failed[0].step), '要点名是哪一步：' + r.failed[0].step);
+    assert.equal(r.failed[0].error, 'pr-sync-labels 故意失败', '要带原错误，不是「记账失败」四个字');
+  });
+
+  it('关单失败也算记账：PR 已经合了，不许报成没合', async () => {
+    const { execMerge } = await CMD;
+    const { calls, run } = runWhere('close-issues');
+    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, true, 'PR 已合，关单没成是另一件事  →  ' + JSON.stringify(r));
+    assert.ok(calls.some((c) => /pr merge/.test(c)));
+    assert.equal(r.failed.length, 1, '关单失败要进 failed');
+  });
+
+  it('真正的合并失败仍是失败（门没被这次放宽拆掉）', async () => {
+    const { execMerge } = await CMD;
+    const { calls, run } = runWhere('pr merge');
+    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, false, 'pr merge 失败必须判失败  →  ' + JSON.stringify(r));
+    assert.equal(r.error, 'pr merge 故意失败');
+    assert.ok(!calls.some((c) => /close-issues/.test(c)), '合并没成不该去关单（顺序依赖还在）');
+  });
+
+  it('打标必须在 merge 之前——合并后 PR 关了，标签就补不上（战绩会缺这张）', async () => {
+    const { execMerge } = await CMD;
+    const { calls, run } = runWhere(null);
+    execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    const syncAt = calls.findIndex((c) => /pr-sync-labels/.test(c));
+    const mergeAt = calls.findIndex((c) => /pr merge/.test(c));
+    assert.notEqual(syncAt, -1, 'label 仍要尝试同步');
+    assert.equal(syncAt < mergeAt, true, '顺序不许因为放宽而颠倒：' + calls.join(' | '));
+  });
+
+  it('全记账成功时 failed 为空（别把成功也报成有失败）', async () => {
+    const { execMerge } = await CMD;
+    const { run } = runWhere(null);
+    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.deepEqual(r.failed, []);
+    assert.equal(r.ok, true);
+  });
+});
+
 describe('#1117 审官任务书不许拿 ① 当交卷红', () => {
   const BOOKS = [
     'host/skills/dispatch/templates/reviewer-book-mirasim.md',

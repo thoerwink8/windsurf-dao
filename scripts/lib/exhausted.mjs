@@ -116,7 +116,7 @@ export function buildMarkExhausted({ pr, verb, tries, head, why, label, retryVer
       : `PR #${n} 自动化认输（${verb} 试满）`),
     comment: useWaiting
       ? waitingUserComment({ pr: n, verb, tries, head })
-      : exhaustedComment({ pr: n, verb, tries, head }),
+      : exhaustedComment({ pr: n, verb, tries, head, why }),
   };
 }
 

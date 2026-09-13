@@ -31,9 +31,15 @@ import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
 import {
-  proposeAddLabel, validateRetryDrain, escalateToOpenIssue, MAX_DRAIN_TRIES,
+  proposeAddLabel, validateRetryDrain, escalateToOpenIssue, stampedKey,
+  drainLedgerKey, epochOf, MAX_DRAIN_TRIES,
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
+// #1236：重试键的三件套（判据版本 / 键拼装 / drain 账键）转出去，让**测试与生产共用同一把键**。
+// 手拼字面量的测试在加版本那天会静默失配（测试假绿、生产卡死）——今天漏的是测试，
+// 明天就是写侧（#909 的形状）。
+export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
+// #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
 import { judgeRetry } from './retry-verdict.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
@@ -95,11 +101,28 @@ export function attachReviewerWhy(ticket) {
   return `PR #${pr} 复审票来源没查成`;
 }
 
-/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
-export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
+/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。
+ *  #1236：带判据版本——决定「推不推得动」的代码变了，旧账自动作废（见 lib/retry-epoch.mjs）。 */
+export function reworkKey(pr, head) {
+  return stampedKey(`rework:${pr}@${head}`);
+}
 
-/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
-export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。
+ *  #1236：同样带判据版本——泵不动的原因若是执行链坏了，修好后该重获机会。 */
+export function pumpDraftKey(pr) {
+  return stampedKey(`pump-draft:${pr}`);
+}
+
+/**
+ * #1236：复审键。原先在 decide / execute 各写一份字面量，这次抽成一个函数——
+ * 两处必须用**同一个**判据版本，写两份早晚分叉（#909 就是 decide 修了、写侧漏了，
+ * 账记到另一个格子，票还在队列却永远走不进 retry-drain）。
+ */
+export function rereviewKey(pr, head) {
+  return stampedKey(`rereview:${pr}@${head}`);
+}
+
+
 
 /**
  * 老单还有没有可执行动作（审查入队 / 判红返工 / 冲突 / 收口泵）。
@@ -1336,7 +1359,7 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = `rereview:${pr.number}@${a.head}`;
+      const rrKey = rereviewKey(pr.number, a.head);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;

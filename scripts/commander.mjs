@@ -42,6 +42,7 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
+  rereviewKey, epochOf,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -52,7 +53,7 @@ import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-
 import { sessionStateOf } from './lib/execution-states.mjs';
 import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
-import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadBreaker } from './lib/provider-health.mjs';
 import { healthRedIds } from './lib/model-admission.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
@@ -576,12 +577,21 @@ function buildSituation({ state } = {}) {
   let defaultWorkerModel = null;
   let channelCaps = null;
   let routingLegs = null;
+  // #1233：执行目录里起不来的顺位，剔了谁、为什么剔——报出去，别静默跳过。
+  let reviewerOrderSkipped = [];
+  let reviewerOrderUnscanned = null;
   try {
     const raw = loadRoutingJsonRaw();
     const models = modelsFromJson(raw);
     routingModels = models.filter((m) => m && m.id && m.reviewerDisabled !== true).map((m) => String(m.id));
     routingModelRecords = models;
-    reviewerOrder = reviewerSelectOrder(raw);
+    // #1233：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位（gpt-5.6-sol）在执行
+    // 目录里是 unverified，起审官必被拒 → 每张按顺位选了它的复审票 drain 必失败、试满 3 次
+    // 打「自动化认输」。这里按执行目录的实际可用性把顺位过一遍，**剔了谁要说得出来**。
+    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles() });
+    reviewerOrder = availability.usable;
+    reviewerOrderSkipped = availability.skipped;
+    if (availability.unscanned) reviewerOrderUnscanned = availability.unscanned;
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
     healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
@@ -591,6 +601,8 @@ function buildSituation({ state } = {}) {
     routingModels = null;
     routingModelRecords = null;
     reviewerOrder = null;
+    reviewerOrderSkipped = [];
+    reviewerOrderUnscanned = null;
     workerOrder = null;
     healthRedModels = [];
     defaultWorkerModel = null;
@@ -615,6 +627,10 @@ function buildSituation({ state } = {}) {
     wakeCounts: (state && state.wakeCounts) || {},
     reworkDispatched: (state && state.reworkDispatched) || {},
     drainLedger: (state && state.drainLedger) || {},
+    // #1236：本轮用的判据版本。重试键都带它，所以把它报出去——版本一变，
+    // 所有在途 PR 的重试计数归零（修法落地即自动重获机会）。没算成时 epoch 为 null，
+    // 那时键退回旧形态（今天的行为），这一点也要看得见，不许伪装成「版本一致」。
+    retryEpoch: (() => { const e = epochOf(); return { epoch: e.epoch, files: e.files, ...(e.ok ? {} : { unscanned: e.why }) }; })(),
     openIssueLedger: (state && state.openIssueLedger) || {},
     hubSeen: (state && state.hubSeen) || {},
     // 「自动化认输」的账本（键 pushed:<pr>@<head>）。decide 用它判「这个标是不是过期了」——
@@ -625,6 +641,8 @@ function buildSituation({ state } = {}) {
     routingModels,
     routingModelRecords,
     reviewerOrder,
+    reviewerOrderSkipped,
+    reviewerOrderUnscanned,
     workerOrder,
     healthRedModels,
     defaultWorkerModel,
@@ -644,6 +662,26 @@ function situationHealth(situation) {
   // 必查清单只认 SITUATION_SECTIONS（#1055：orca 退役后不在清单里，复制一份会再钉死）。
   const unscanned = SITUATION_SECTIONS.filter((s) => !situation[s]?.scanned);
   return { unscanned, allScanned: unscanned.length === 0 };
+}
+
+/**
+ * 审官顺位被剔了什么、剩下的还能不能起——每轮打一行（#1233）。
+ *
+ * 剔除了却不报，等于把「静默跳过」换了个地方发生：顺位表看起来还是原来那张，
+ * 而实际能叫的审官只剩几个，没人知道少了谁。三种状态不许混成一句：
+ *   没读到执行目录（没查成）/ 全被剔（一个能起的审官都没有）/ 剔了几个。
+ */
+function reviewerOrderNote(situation) {
+  const skipped = Array.isArray(situation.reviewerOrderSkipped) ? situation.reviewerOrderSkipped : [];
+  if (situation.reviewerOrderUnscanned) return [`  审官顺位：${situation.reviewerOrderUnscanned}`];
+  const order = Array.isArray(situation.reviewerOrder) ? situation.reviewerOrder : [];
+  if (order.length === 0 && skipped.length > 0) {
+    return [`  ⚠ 审官顺位：执行目录里一个能起的审官都没有（全被剔：${skipped.map((s) => s.id).join('、')}）`
+      + '——本轮没有审官可用，叫审官必失败'];
+  }
+  if (skipped.length === 0) return [];
+  return [`  审官顺位：剔掉 ${skipped.length} 位（执行目录里起不来）——`
+    + skipped.map((s) => `${s.id}：${s.why}`).join('；')];
 }
 
 // ── 手：hub 回流（带去重）──
@@ -914,13 +952,31 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
 /**
  * 合并动作：squash 打到此刻 master。① 基底落后只报不拦（ephemeral-lifecycle）。
  * run / judge 可注入，测试才能钉调用序列、不必起真 git。
+ *
+ * #1235：三步里只有 **pr merge** 是门，另两步是记账——打标签（calibrate 的战绩数据源）
+ * 和关单都靠它，但它们失败**说明不了这张 PR 不能合**。原先三步一个循环、任一失败就
+ * `return {ok:false}`，于是「账本里没有 job.dispatch 的非派工链 PR」（日报/升级链产生的
+ * PR 全是这种）会在第①步失败 → ②根本不跑。实测 #1143：判绿可合、CI 绿、MERGEABLE，
+ * 在这个死点上撞了 38 次/24h，白挂一天，而这只是打不上一个标签。
+ *
+ * 所以：记账步骤 best-effort，失败进 failures 一起报出去；**只有 pr merge 失败才算真失败**。
+ * 打标必须在 merge 之前——合并后 PR 关了就补不上标签，战绩会永久缺这一张。
  */
 export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+  const GATING = new Set(['pr merge']);
   const steps = [
     ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
     ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
     ['node', 'scripts/close-issues.mjs', '--pr', String(action.pr)],
   ];
+  // 判据取「真正干那件事」的那两个 token：`pr merge` 是门，`pr-sync-labels`/`close-issues` 是记账。
+  // 不按 argv 下标钉（#1117 的 approvalIssue 分支会往中间 splice 一步，下标会漂）。
+  const isGate = (argv) => {
+    const s = argv.join(' ');
+    for (const g of GATING) if (s.includes(g)) return true;
+    return false;
+  };
+
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
@@ -950,22 +1006,30 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     say(`  ① 基底落后（不拦 squash）：${String(freshness.detail || freshness.state).split('\n')[0]}`);
   }
   const calls = [];
+  const failed = [];            // 记账步骤的失败：报出去，但不挡这一轮合并（#1235）
   let releasedDraft = false, merged = false;
   for (const s of steps) {
     calls.push(s);
     const r = run(s);
     if (!r.ok) {
+      if (!isGate(s)) {
+        failed.push({ step: s.join(' '), error: r.error || '命令失败' });
+        say(`  merge 记账步骤失败（不挡合并）：${s.join(' ')} → ${r.error}`);
+        continue;
+      }
       if (action.approvalIssue && releasedDraft && !merged) {
         const restored = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr), '--undo']);
         if (!restored.ok) say(`  #${action.pr} 未能恢复草稿，需要核查：${restored.error}`);
       }
-      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls };
+      say(`  merge 步骤失败：${s.join(' ')} → ${r.error}`); return { ok: false, error: r.error, calls, failed };
     }
     if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
     if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
-  say(`  已合并 #${action.pr} 并关单`);
-  return { ok: true, calls, freshness };
+  say(failed.length
+    ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
+    : `  已合并 #${action.pr} 并关单`);
+  return { ok: true, calls, freshness, failed };
 }
 
 /**
@@ -1116,7 +1180,7 @@ function execMarkExhausted(action, { dryRun, say }) {
   const useWaiting = action.label === WAITING_USER_LABEL || action.verb === 'pump-draft';
   const comment = action.comment || (useWaiting
     ? waitingUserComment({ pr, verb: action.verb, tries: action.tries, head: action.head })
-    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head }));
+    : exhaustedComment({ pr, verb: action.verb, tries: action.tries, head: action.head, why: action.why }));
   const st = runGh(['pr', 'view', String(pr), '--repo', REPO, '--json', 'labels,state'], 20000);
   if (!st.ok) {
     say(`  认输标没查成，本轮不打：PR #${pr}（${st.error}）`);
@@ -1582,7 +1646,9 @@ function requestRereview(action, { state, dryRun, say }) {
   // tries 必须记：decide 那边靠它判「叫了几次还没落判定」。
   // 不记 ok——「票写出去了」不是「判定落了」，2026-09-05 就是把这两件事记成一条账，
   // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
-  state.reworkDispatched[action.stateKey || `rereview:${action.pr}@${action.head}`] = {
+  // #1236：退回 rereviewKey() 而不是就地拼字面量——写侧与 decide 侧必须同一个判据版本，
+  // 两处字面量分叉就是 #909 的形状（账记到另一个格子，票还在队列却永远走不进 retry-drain）。
+  state.reworkDispatched[action.stateKey || rereviewKey(action.pr, action.head)] = {
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
@@ -2549,8 +2615,15 @@ function cmdScan() {
     otherRepos: situation.otherRepos?.scanned
       ? situation.otherRepos.repos.map((r) => `${r.repo}: ${r.issues} issue / ${r.prs} PR`)
       : `没查成：${situation.otherRepos?.error || '缺节'}`,
+    // #1233：顺位被剔了谁必须出现在态势摘要里——只写进快照文件等于没人读。
+    reviewerOrder: {
+      usable: Array.isArray(situation.reviewerOrder) ? situation.reviewerOrder : null,
+      skipped: situation.reviewerOrderSkipped || [],
+      ...(situation.reviewerOrderUnscanned ? { unscanned: situation.reviewerOrderUnscanned } : {}),
+    },
   };
   console.log(JSON.stringify(summary, null, 2));
+  for (const line of reviewerOrderNote(situation)) console.error(line);
   process.exit(health.allScanned ? 0 : 2);
 }
 
@@ -2617,7 +2690,7 @@ function cmdAct(argv) {
   state._lastSituationFile = file;
 
   const { actions } = decide(situation);
-  const log = [];
+  const log = [...reviewerOrderNote(situation)];
   let cleanupFailures = 0;
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
@@ -2775,6 +2848,7 @@ if (isDirectRun) main();
 
 export {
   buildSituation, situationHealth, escalate, escalateDedupKey, execOpenIssue, scanStall,
+  reviewerOrderNote,
   countInflightWorkers,
   reapBrains,
   alreadyAppended,
