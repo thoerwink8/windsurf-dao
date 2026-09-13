@@ -1,0 +1,13 @@
+{
+  "expect": "ok",
+  "expectN": 1,
+  "max": 1,
+  "why": "1 张当前积压 + 2 张将来某版，阈值 1。若推迟进分母会变成 3>1 红；不进则 1/1 绿。",
+  "issues": [
+    { "number": 101, "title": "当前积压" },
+    { "number": 819, "title": "先过渡", "milestone": { "title": "将来某版" } },
+    { "number": 955, "title": "也先过渡", "milestone": { "title": "将来某版" } }
+  ],
+  "prs": [],
+  "worktrees": []
+}

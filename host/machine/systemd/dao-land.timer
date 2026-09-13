@@ -1,0 +1,15 @@
+# /etc/systemd/system/dao-land.timer
+#
+# 一小时一轮。挂在 :17 分，错开 board-gc :07 和整点。
+# 装法见同目录 dao-land.service 文件头。
+
+[Unit]
+Description=每小时跑一次 land 收工清理
+
+[Timer]
+OnCalendar=*:17:00
+Persistent=true
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

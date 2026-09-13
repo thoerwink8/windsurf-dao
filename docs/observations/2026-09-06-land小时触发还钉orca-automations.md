@@ -1,5 +1,7 @@
 # 机制巡检：收工 land 的小时触发仍钉在已停的 orca automations 上
 
+处置：#880（本 PR：land 改 systemd `dao-land.timer`，server-check ⑧ 认 timer）
+
 ## 结论
 
 合并后自动清树这条路，装机文档和活体闸都把它写成 `orca automations` 的 hourly 任务；`orca-serve` 已 disabled、runtime 不在，这条 hourly 根本唤不起来。指挥官只在自己刚合完一张 PR 时顺手调一次 land，人在 GitHub 上点 merge 的那些树没人收。闸 ⑧ 的测试把「没有这条 automation」锁成红，活路径却因为 `runtime_unavailable` 先变成没查成；server-check 在这台机器上没有心跳，连没查成都没人看。CHECKS 注释还写「工人仍从 orca 派（卡 B 返工 #982 在途）」——本轮 HEAD 已经是 #982 的合入，`MIRASIM_IS_ONLY_PATH = true`，这条前提不成立。

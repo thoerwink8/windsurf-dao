@@ -10,10 +10,12 @@ import { assembleCardName } from './card.mjs';
 import { argsWorktreeCreate } from './args.mjs';
 import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
 import { assertCrossVendor, vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
+import { judgeCapacityFailover } from '../dianjiangtai-reviewer-slot.mjs';
 import { normalizePipes } from '../next-launch.mjs';
 import { availabilityFor } from '../provider-health.mjs';
 import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
 import { preflightStopReport } from './launch.mjs';
+import { legAvailability } from '../channel-concurrency.mjs';
 
 export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
@@ -577,8 +579,19 @@ export function currentReviewerSeat(routing) {
  * 路由表自己的理由字段写的是「备选登记，**不顶审官位**」——那是数据里已有的事实，
  * 放开会把它们抬进审官位，与 #822「审官只用 Codex（GPT 主路）」相撞。
  * 同厂这条判据同时守住了两头：换人能换（luna↔sol），换厂仍然拒。
+ *
+ * 2026-09-07 用户拍板开了一个**凭证据成立**的例外（#1122）：上一位审官的会话**死于满载/看门狗**时
+ * 准许换厂。病是量出来的——当天 13 个审官 8 个死于 `at capacity`，而 GPT 一厂在顺位表里只有
+ * luna（满载）与 sol（熔断器 open），同厂无处可换，14 张 ready PR 里 11 张拿不到判定、
+ * master 两小时没前进。#822「审官只用 Codex」在一厂全灭时等于「不审」，那不是它的本意。
+ *
+ * 例外**不是一个旗标**：谁都能传的旗标 = 谁都能绕开审官位约束去点一个弱模型。
+ * 要换厂就得交出死掉那个会话的死因原文，且目标必须等于 nextReviewerAfter 算出来的**下一位**
+ * ——不许跳级点名。#679 的异厂要求由 nextReviewerAfter 内部的 assertCrossVendor 继续守着。
+ *
+ * @param capacityFailover 换厂凭证 {deadModelId, deadError, workerId, models, passerIds}；不传＝走老规矩
  */
-export function assertReviewerSeat({ reviewerId, routing } = {}) {
+export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {}) {
   const seat = currentReviewerSeat(routing);
   if (!seat.ok) return seat;
   const got = reviewerId == null ? '' : String(reviewerId).trim();
@@ -604,9 +617,30 @@ export function assertReviewerSeat({ reviewerId, routing } = {}) {
     };
   }
   if (gotVendor !== seatVendor) {
+    // 候选池由路由表补齐，调用方只需交出「上一位是谁、死于什么」——少一个能填错的入参，
+    // 也不让调用方有机会自带一份宽松的候选池把顺位绕开。
+    const pass = judgeCapacityFailover({
+      requested: got,
+      capacityFailover: capacityFailover && {
+        deadModelId: capacityFailover.deadModelId || seat.modelId,
+        deadError: capacityFailover.deadError,
+        workerId: capacityFailover.workerId,
+        models: Array.isArray(routing.models) ? routing.models : [],
+        passerIds: order,
+        order,
+      },
+    });
+    if (pass.ok) {
+      return {
+        ok: true, modelId: got, seat: seat.modelId, switched: true,
+        crossVendor: true, failover: 'capacity', why: pass.why,
+      };
+    }
     return {
       ok: false,
-      error: `审官位只许同厂换顺位（当前 ${seat.modelId}／${seatVendor}），不许换厂到 ${got}／${gotVendor}`,
+      unscanned: pass.unscanned === true,
+      error: `审官位只许同厂换顺位（当前 ${seat.modelId}／${seatVendor}），不许换厂到 ${got}／${gotVendor}`
+        + `——换厂只在上一位死于满载/看门狗时成立：${pass.error}`,
       seat: seat.modelId, requested: got,
     };
   }
@@ -778,7 +812,8 @@ export function planReviewerCreateAfterFail({ error } = {}) {
 }
 
 /** #675：起审官失败种类。terminal create 超时 / 注入未提交 / depth 限制 / 在途派单 / 没查成 必须分开。
- * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。 */
+ * #815 余洞：depth 2 与「终端已有在途派单」是已知拒派，不是没查成——worker-done 应入队交卷。
+ * #1145 余洞：门里两道闸的背压（租约被占 / 渠道满员）同理，两条都得认——见下面那段注释。 */
 export function classifyReviewerSpawnError(error) {
   const t = String(error || '');
   if (/Timed out waiting for terminal handle|terminal create 失败|terminal create 超时/i.test(t)) {
@@ -793,10 +828,33 @@ export function classifyReviewerSpawnError(error) {
   if (/already has an active dispatch/i.test(t)) {
     return { kind: 'active-dispatch', label: '审官终端已有在途派单' };
   }
+  // ── 门里的两种**背压**（#1145）：都不是「起审官失败」，是「这轮轮不到」──────────
+  // 起因是同一个：审官路径把背压当失败，于是去烧 drain 的重试预算，撞满 3 次把 PR
+  // 判成 mark-exhausted 认输——而实际上一个审官都还没起过。
+  //
+  // **两条都要接，缺一条等于没修**（memory 判例 fix-landed-at-one-call-site-only：
+  // 「一夜撞三次；带解释注释的修法最容易漏接，因为注释让人确信已经处理好了」）。
+  // mirasim 门里排着两道闸，各自抛一种背压，谁漏了谁那条路就继续烧预算：
+  //   · 租约闸（#1085，lease.mjs 的 LEASE_BUSY_REASON）——树里已经有人在干活
+  //   · 渠道闸（#1145，channel-concurrency.mjs 的 CHANNEL_FULL_REASON）——上游渠道满员/冷却中
+  // 认字样、不 import 那两个常量对象：这里判的是**错误串**（门抛出的 message 经
+  // mirasimReviewerCreate 包了一层），拿常量去比对象比不上，反而给人「已接上」的错觉。
+  if (/租约被占|lease-held/i.test(t)) {
+    return { kind: 'lease-held', label: '租约被占（背压，排队下轮）' };
+  }
+  if (/渠道满员|channel-full/i.test(t)) {
+    return { kind: 'channel-full', label: '渠道满员（背压，排队下轮）' };
+  }
   return { kind: 'unscanned', label: '没查成' };
 }
 
-const REVIEW_PENDING_HANDOFF_KINDS = new Set(['depth-limit', 'active-dispatch']);
+// **背压集合**：已知拒派 ⇒ 写进复审待办交指挥官下一轮，不算 fail。
+// 加新的拒起理由时改这一处，别在调用点各判一次「这个算失败还是算背压」——
+// 那正是 lease-held 漏了整整一轮的原因（#1145 返工时才发现）。
+// 「没查成」永远不在这里：拿不准不降级，必须停手报帅（有回归测试钉这条）。
+const REVIEW_PENDING_HANDOFF_KINDS = new Set([
+  'depth-limit', 'active-dispatch', 'channel-full', 'lease-held',
+]);
 
 /** 从 Orca「already has an active dispatch (ctx_…)」里抠已有 id。抠不到 = 没查成，不许猜。 */
 export function parseActiveDispatchId(error) {
@@ -916,14 +974,29 @@ export function reviewerSpawnQueuedComment({ error, pr } = {}) {
   ].join('\n');
 }
 
-export function postIssueComment({ issue, body, runGh } = {}) {
+export function postIssueComment({
+  issue, body, runGh, writeIssue,
+  repo = 'thoerwink8/windsurf-dao', host = 'dispatch',
+  idempotency_key,
+} = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };
   if (!String(body || '').trim()) return { ok: false, error: 'postIssueComment 没给正文' };
-  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'postIssueComment 没拿到 gh 执行器' };
-  const r = runGh(['issue', 'comment', n, '--body', String(body)]);
-  if (!r.ok) return { ok: false, error: `issue #${n} 发评论失败：${r.error}` };
-  return { ok: true, issue: n };
+  if (typeof writeIssue !== 'function') {
+    return { ok: false, unscanned: true, error: 'postIssueComment 没拿到 issue-gateway 写入器' };
+  }
+  const key = String(idempotency_key || '').trim();
+  if (!key) return { ok: false, error: 'postIssueComment 走网关要 idempotency_key' };
+  const r = writeIssue({
+    action: 'issue_comment',
+    repo,
+    issue: n,
+    body: String(body),
+    host,
+    idempotency_key: key,
+  });
+  if (!r || !r.ok) return { ok: false, error: `issue-gateway comment #${n} 失败：${r && r.error ? r.error : '没查成'}` };
+  return { ok: true, issue: n, via: 'issue-gateway' };
 }
 
 export function postPrComment({ pr, body, runGh } = {}) {
@@ -1021,14 +1094,18 @@ export function planReviewerDone({ pr, prState, reviews } = {}) {
 }
 
 /** 幂等发评论：同款已发过就跳过。拉取没查成 → ok:false unscanned（不瞎发也不瞎跳）。 */
-export function postCommentOnce({ kind, number, body, runGh } = {}) {
+export function postCommentOnce({
+  kind, number, body, runGh, writeIssue, repo, host, idempotency_key,
+} = {}) {
   const listed = listComments({ kind, number, runGh });
   if (!listed.ok) return { ok: false, unscanned: true, error: listed.error };
   if (commentAlreadyPosted(listed.comments, body)) {
     return { ok: true, skipped: true, alreadyPosted: true, [kind === 'pr' ? 'pr' : 'issue']: String(number) };
   }
   const post = kind === 'pr' ? postPrComment : postIssueComment;
-  const r = post({ pr: number, issue: number, body, runGh });
+  const r = post({
+    pr: number, issue: number, body, runGh, writeIssue, repo, host, idempotency_key,
+  });
   return { ...r, alreadyPosted: false };
 }
 
@@ -1045,10 +1122,14 @@ export function postCommentOnce({ kind, number, body, runGh } = {}) {
 // @param {string|null} [args.dispatchId]
 // @param {function} [args.probe] 注入探针（测试用）
 // @param {object} [args.policy] / [args.availabilityResult] / [args.now] 注入
-// @returns {Promise<{ok,stop,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
+// @param {object} [args.channelCaps]   #1145 渠道容量快照 { caps:{ch:n}, states } —— 缺则渠道剔除 inert
+// @param {object} [args.channelInFlight] #1145 渠道在途快照 { counts:{ch:n} }（或直接的 counts 对象）
+// @param {Set|string[]} [args.channelExcluded] #1145 本轮已 429 的渠道
+// @returns {Promise<{ok,stop,queued?,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
 export async function preflightReviewer({
   order = [], models = [], workerId = null, noPreflight = false, dispatchId = null,
   probe, policy, availabilityResult, now = new Date(), root, home,
+  channelCaps = null, channelInFlight = null, channelExcluded = null,
 } = {}) {
   const byId = new Map((models || []).map(m => [m.id, m]));
   // 同厂闸：顺位里与工人同厂的当场剔除，不放宽。
@@ -1073,6 +1154,42 @@ export async function preflightReviewer({
       report: '派前探一针：审官顺位无异厂候选，停手报帅。',
     };
   }
+  // 渠道满员剔除（#1145）：与上面的同厂剔除、下面的熔断剔除同一层同构。
+  // 只据「在途上限」剔（熔断仍由 availabilityFor / runPreflight 处理，不在这里重复）。
+  // 缺 channelCaps 快照 → inert（不剔），保证既有 preflightReviewer 行为不回归。
+  let channelNotes = [];
+  if (channelCaps && channelCaps.caps) {
+    const caps = channelCaps.caps || {};
+    const states = channelCaps.states || {};
+    const inFlight = (channelInFlight && (channelInFlight.counts || channelInFlight)) || {};
+    const excluded = channelExcluded instanceof Set
+      ? channelExcluded
+      : new Set(Array.isArray(channelExcluded) ? channelExcluded : []);
+    const kept = [];
+    const dropped = [];
+    for (const cand of vendorFiltered) {
+      const av = legAvailability(cand.landing, { caps, states, inFlight, excluded });
+      // 认不出渠道（no-channel）不据渠道剔——本闸只拦「已满员/本轮429」，其余保留。
+      if (av.available || av.reason === 'no-channel') { kept.push(cand); continue; }
+      if (av.reason === 'at-cap' || av.reason === 'excluded-429') {
+        dropped.push({ id: cand.id, channel: av.channel, why: av.why });
+        continue;
+      }
+      kept.push(cand); // breaker 等未传，理论到不了；保守保留
+    }
+    channelNotes = dropped.map(d => `渠道满员，剔除 ${d.id}（${d.channel}）分流到顺位下一腿`);
+    // 「渠道都满」≠「同厂全剔」：前者排队等下轮，不报帅停手；后者才是真无候选。
+    if (kept.length === 0 && dropped.length > 0) {
+      return {
+        ok: false, stop: false, queued: true, chosen: null, switched: false, probed: [], hardBlocked: [],
+        notes: channelNotes.concat('审官顺位内所有腿渠道都满员——票留队列等下轮（不硬挤）'),
+        skipped: false,
+        report: '派前探一针：审官顺位所有腿渠道满员，排队等下轮，不报帅。',
+      };
+    }
+    vendorFiltered.length = 0;
+    vendorFiltered.push(...kept);
+  }
   const pol = policy || loadDispatchPolicy(root ? { root } : {});
   const avail = availabilityResult
     || (pol.useHealthTable ? availabilityFor(vendorFiltered, { home, now: now instanceof Date ? now.getTime() : now, breakerPolicy: pol.breaker }) : undefined);
@@ -1088,7 +1205,7 @@ export async function preflightReviewer({
     switched: !!(r.chosen && top && r.chosen !== top),
     probed: r.probed,
     hardBlocked: r.hardBlocked,
-    notes: r.notes,
+    notes: channelNotes.concat(r.notes || []),
     skipped: r.skipped,
     unscannedFallback: !!r.unscannedFallback,
     report: r.stop ? preflightStopReport({ role: '审官', probed: r.probed, hardBlocked: r.hardBlocked }) : null,

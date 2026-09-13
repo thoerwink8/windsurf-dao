@@ -11,6 +11,7 @@ import {
   buildDailyCard, headlinesFromQueue, planDailySend,
 } from './feishu-daily-card.mjs';
 import { dayOf } from './broadcast-digest.mjs';
+import { mergeHubPending } from './hub-ask.mjs';
 
 function str(v) {
   return v == null ? '' : String(v).trim();
@@ -112,7 +113,7 @@ export function planHubCycle({
 }
 
 export function applyHubCycle(plan, {
-  issueCard, decideCard, digestLine, sendDaily, now, who,
+  issueCard, decideCard, digestLine, sendDaily, now, who, store,
 } = {}) {
   // 先发日报（用计划时的队列快照），再对账。对账产生的摘要入队留给下一期，
   // 不许被「发完清空队列」吞掉。
@@ -130,6 +131,14 @@ export function applyHubCycle(plan, {
   const applied = applyReconcilePlan(plan && plan.reconcile, {
     issueCard, decideCard, digestLine, now, who,
   });
+  // Only a confirmed card update retires its existing projection. A failed
+  // update remains pending so the next cycle retries it.
+  for (const r of applied.results) {
+    const pending = store?.hubPending?.[r.messageId];
+    if (r.kind !== 'decide' || r.result?.ok !== true || !r.decided || !pending
+      || r.key !== `${pending.repo}#${pending.number}`) continue;
+    mergeHubPending(store, r.messageId, { ...pending, decided: r.decided });
+  }
   return { reconcile: applied, daily };
 }
 

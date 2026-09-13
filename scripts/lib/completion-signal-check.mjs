@@ -1,7 +1,7 @@
 // 完工信号契约检查（#575 ⑥，dao-check 第 ⑯ 项）。
 //
 // 病：读侧认 issue comment 首行「完工」，工人只发编排层 worker_done → 指挥官看不见。
-// #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（并按需起审官）。
+// #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（#1125 起首审入队、不自己起审官）。
 // 检查逻辑自己持有契约文本，不 import review-state 的正则（自己查自己查不出错）。
 // 两边对不上（比如把 worker-brief 的「完工」改成「已完成」）必须报红。
 
@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 const FILES = {
   reviewState: 'scripts/lib/review-state.mjs',
-  brief: 'host/skills/dispatch/templates/soldier-book.md',
+  brief: 'host/skills/dispatch/templates/soldier-book-mirasim.md',
   dispatch: 'host/skills/dispatch/SKILL.md',
 };
 
@@ -55,13 +55,13 @@ export function checkCompletionSignal({ root, files } = {}) {
     problems.push(`review-state.mjs 缺首行正则 ${JUDGMENT_MARK}（改成 /^已完成/ 就会认不出工人评论）`);
   }
   if (!loaded.brief.includes(BRIEF_HEAD)) {
-    problems.push(`soldier-book 没教「${BRIEF_HEAD}」（把「完工」改成「已完成」就会踩这里）`);
+    problems.push(`soldier-book-mirasim 没教「${BRIEF_HEAD}」（把「完工」改成「已完成」就会踩这里）`);
   }
   if (!loaded.brief.includes(BRIEF_CMD)) {
-    problems.push(`soldier-book 没写发评论命令「${BRIEF_CMD}」`);
+    problems.push(`soldier-book-mirasim 没写发评论命令「${BRIEF_CMD}」`);
   }
   if (!loaded.brief.includes(BRIEF_EXAMPLE)) {
-    problems.push(`soldier-book 没给格式例子「${BRIEF_EXAMPLE}」`);
+    problems.push(`soldier-book-mirasim 没给格式例子「${BRIEF_EXAMPLE}」`);
   }
   if (!loaded.dispatch.includes(DISPATCH_MARK)) {
     problems.push(`dispatch skill 完工信号节没写「${DISPATCH_MARK}」`);
@@ -71,10 +71,10 @@ export function checkCompletionSignal({ root, files } = {}) {
     return {
       fail: [
         `完工信号契约两边对不上 ${problems.length} 处`,
-        'review-state.mjs 读首行「完工」，soldier-book / dispatch skill 必须教同一句话；改一边必须改另一边',
+        'review-state.mjs 读首行「完工」，soldier-book-mirasim / dispatch skill 必须教同一句话；改一边必须改另一边',
         problems.slice(0, 4).join('；'),
       ],
     };
   }
-  return { green: '完工信号契约：soldier-book / review-state 都读 issue comment 首行「完工」' };
+  return { green: '完工信号契约：soldier-book-mirasim / review-state 都读 issue comment 首行「完工」' };
 }

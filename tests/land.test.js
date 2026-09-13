@@ -18,7 +18,7 @@ const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'land-core.mjs
  */
 function landEnv() {
   const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'land-home-'));
-  return { ...process.env, HOME: emptyHome, USERPROFILE: emptyHome };
+  return { ...process.env, HOME: emptyHome, USERPROFILE: emptyHome, DAO_CONTROL_PLANE: 'true' };
 }
 
 describe('land 决策层', () => {

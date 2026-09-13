@@ -3,7 +3,7 @@
 // 工人写 PR 时不知道要写这段，等审官判红了才回来补，每张事故修复单白跑一轮返工。
 //
 // 这道闸守三件事：
-// ① 工人任务书 host/skills/dispatch/templates/soldier-book.md 里确实有这条；
+// ① 工人任务书 host/skills/dispatch/templates/soldier-book-mirasim.md 里确实有这条；
 // ② 三处落点（规矩原文 / 工人任务书 / 报帅单模板）说的是**同一件事**——防「各写各的、慢慢漂开」；
 // ③ 任务书里引用的「审官标准第 N 条」编号没漂——规矩原文里编号列表第 N 条仍是机制判定那条。
 //
@@ -21,9 +21,7 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const STANDARD = 'host/skills/dispatch/review-standard.md';   // 规矩原文（审官判红清单第 8 条）
-const SOLDIER = 'host/skills/dispatch/templates/soldier-book.md'; // 工人任务书（#929 补的就是这里）
-// mirasim 执行体版任务书。2026-09-05 补：#929 落地时它被漏掉了，
-// 于是**这条路上的工人看不到这道闸**——「只落一半的规矩」正是本单要治的病，却在本单自己身上又犯了一次。
+const SOLDIER = 'host/skills/dispatch/templates/soldier-book-mirasim.md'; // 工人任务书（#929 / #1150 orca 书已删）
 const SOLDIER_MIRASIM = 'host/skills/dispatch/templates/soldier-book-mirasim.md';
 const COMMANDER = 'scripts/commander.mjs';                     // 报帅单模板的必填栏
 
@@ -156,7 +154,7 @@ describe('#929 机制判定这条规矩，工人任务书里也得有', () => {
     // 2026-09-05 从三处扩到四处：mirasim 版任务书原本被漏掉，那条路上的工人看不到这道闸。
     // 「只落一半的规矩」正是本单要治的病，而本单自己先犯了一次——所以这里钉死落点清单，
     // 将来再多一份任务书，加进这个数组即可，漏加就会红在下面那条 scanned 断言上。
-    const SPOTS = [STANDARD, SOLDIER, SOLDIER_MIRASIM, COMMANDER];
+    const SPOTS = [...new Set([STANDARD, SOLDIER, SOLDIER_MIRASIM, COMMANDER])];
     const files = {};
     for (const rel of SPOTS) files[rel] = read(rel);
     const r = inspect({ files });

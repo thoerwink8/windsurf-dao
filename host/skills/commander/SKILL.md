@@ -26,15 +26,16 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 1. **读态势**：唤你的指针文本里有态势文件路径（`~/.dao/commander/situation-<ts>.json`）。
    读它 + 相关 issue/PR 的 GitHub 现状（**别信会话记忆，现读现判**）。
 2. **处置**：定位问题 → 写出具体修复方案（改哪个文件哪段、验收判据是什么）→ 落痕到对应 PR/issue →
-   用 `dao.mjs send`（工人终端）或 `dao.mjs notify`（审官）把方案**送达对方终端推动闭环**。
-   **只留 GitHub 评论不算送达**（工人不刷 GitHub）；送不动（终端死/没人接）才报帅，报帅时写明
-   「给了什么方案、送到哪、为什么没动」（用户 2026-09-04 拍板：帅位要负责给方案，不许只停手晾着）。
+   用 GitHub 评论（issue-gateway / `gh-as` worker 的 pr comment）或飞书 hub（`hub-say`）把方案送到工人或审官。
+   不要调 `dao.mjs send` / `dao.mjs notify`（已随 orca 编排退役，调用即拒）。
+   送不动才报帅，报帅时写明「给了什么方案、送到哪、为什么没动」（用户 2026-09-04 拍板：必须给方案，不许只停手晾着；#1150 送达口改 GitHub 评论 + 飞书 hub）。
 3. **收尾**：处置完（或判断「这条要报帅」后）**立即自行结束会话**。你是一次性的，赖着不走就是常驻 agent 会静默死掉的老毛病。
 
 ## 你能用的手（就这些，越界即停）
 
-- `node scripts/dao.mjs <verb>`：dispatch / reviewer-attach / worker-done / notify / reply / gate-create 等（用法 `node scripts/dao.mjs` 不带参数）。
-- 往单上落痕（返工方向、判断结论）：`node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>`（身份走 marshal，别用裸 gh 写动作；只读 view/list 可裸 gh）。
+- `node scripts/dao.mjs <verb>`：dispatch / reviewer-create / worker-done / review-pending-drain 等现役动词（用法 `node scripts/dao.mjs` 不带参数）。`reviewer-attach` / `notify` / `send` 已退役，调用即拒。
+- 往单上落痕（返工方向、判断结论）：`node scripts/issue-gateway.mjs comment --repo thoerwink8/windsurf-dao --issue <N> --body-file <文件> --host commander --idempotency-key <键>`（#792，身份由网关固定 marshal；只读 view/list 可裸 gh）。
+- 飞书总控群：`hub-say`（不要造第二套信箱）。
 - 读：`gh` 只读、仓内文件、`dao.mjs session-read`（读别的一次性会话）。
 
 ## 边界（硬红线，**不许**碰）
@@ -43,6 +44,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 - **不许改协作约定文件**：`CLAUDE.md`、`host/skills/*/SKILL.md`（含本书）、`docs/decisions/*`。
 - **不许花钱**：换供应商、充值、起大批工人这类有成本的动作。
 - **不许合并/关单/删树**：那是眼睛确定性做的或帅做的，不是你判断的范围。
+- **「先过渡、将来再接」不是待消歧、不是关掉**：交帅挂 GitHub Milestone `将来某版`（#966），自己不关、不派。
 - 以上任一撞到 → **不做，报帅**（`gh` 评论到相关单 + 打 `待拍板` label），然后自行结束会话。
 
 ## 判红 → 返工（眼睛确定性做，不唤你；#931）
@@ -57,7 +59,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
   （判绿只对当时那个 commit 有效，判红同理）。head 或 review 的 commit_id 没查成 ⇒ 按「没查成」走，
   既不清零也不当仍红。
 - **同一 PR 同一 head 只派一次**（记账 `rework:<pr>@<oid>`）；单轮上限沿用 `maxDispatchPerRound`。
-  红项全文取不到 / 署名 issue 的 model|reviewer 标签取不到 / 模型不在选型 —— 一律不派，各自 fail-visible。
+  红项全文取不到 / PR 的 model|reviewer 标签取不到 / 模型不在选型 —— 一律不派，各自 fail-visible。
 - 派工失败或成没成没查成 ⇒ 同 head **不自动重派**（会造重复工人），改报帅，人来定。
 
 **红项写不清楚时没人替工人翻译**——那是审官该被纠的问题（审官标准要求红项写「`文件:行号` + 现象 + 期望改法」），
@@ -78,7 +80,7 @@ description: 服务器指挥官任务书。眼睛（systemd 定时脚本）判�
 
 ## 回流
 
-处置有实质进展（给了修复方案、补了信息）→ 在单上留痕**且已送达对方终端**，眼睛下一轮 scan 会把状态迁移回流总控群。
+处置有实质进展（给了修复方案、补了信息）→ 在单上留痕**且已用 GitHub 评论或飞书 hub 送达**，眼睛下一轮 scan 会把状态迁移回流总控群。
 你自己**不**发心跳（心跳是眼睛静默 7 天时发的，不是你的活）。
 
 ## 一句话

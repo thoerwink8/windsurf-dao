@@ -1,10 +1,17 @@
 # CLI 踩坑教学：Codex（`codex` CLI，模型 gpt-5.6-sol，审官默认）
 
+> **Orca 执行体已退役（#1150）。** 现役审官由 `dao.mjs reviewer-create` 起 mirasim 会话，不要再 `worker-start --agent codex`。
+> 下面是 orca 时代的踩坑档案（`[Pasted Content]` / `--agent` 注入），只在对照 launch 模板时读。
+>
 > 每条都是实测踩出来的，不是推理。改代码/派工前先读本页 + `docs/model-routing.toml [providers.gpt]`。
 
 ## 一句话特性
 
 Codex 是 **agent 型**（`start = "agent"`）：必须走 `worker-start --agent codex`，由 orca 官方协议发送任务书（自动提交）。**不要 `terminal create --command` 再粘贴——Codex 把粘贴显示成 `[Pasted Content]` 永不发送**（#680 实证，2026-08-25 再踩）。
+
+## GitHub Issue 写（#792）
+
+写 Issue 只走 `node scripts/issue-gateway.mjs`，身份固定 `dao-marshal[bot]`。不许裸 `gh issue create|comment|close|edit`。
 
 ## 正确起法（#680 拍板）
 

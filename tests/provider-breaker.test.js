@@ -269,6 +269,48 @@ describe('全部 open → 报帅 + 总控群', () => {
     assert.equal(hubs.length, 2);
     assert.equal(loadBreakerDoc({ home }).doc.allOpenAlertedAt, new Date(T0 + 3000).toISOString());
   });
+
+  it('6h 跨窗口：真实网关幂等账不得吞掉第二次报警', async () => {
+    const { breakerAllOpenIdempotencyKey, ALL_OPEN_DEDUP_MS, applyIssueWrite } = await Promise.all([
+      import(LIB),
+      import('file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'issue-gateway.mjs').replace(/\\/g, '/')),
+    ]).then(([b, g]) => ({ ...b, ...g }));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'breaker-idemp-'));
+    const fake = {
+      runMarshal(args) {
+        if (args[1] === 'create') return { ok: true, out: 'https://github.com/thoerwink8/windsurf-dao/issues/88\n' };
+        if (args[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              number: 88, url: 'https://github.com/thoerwink8/windsurf-dao/issues/88',
+              state: 'OPEN', author: { login: 'dao-marshal[bot]', type: 'Bot' }, labels: [],
+            }),
+          };
+        }
+        return { ok: false, error: args.join(' ') };
+      },
+    };
+    const k1 = breakerAllOpenIdempotencyKey(T0);
+    const k2 = breakerAllOpenIdempotencyKey(T0 + ALL_OPEN_DEDUP_MS);
+    assert.notEqual(k1, k2);
+    const first = applyIssueWrite({
+      action: 'issue_create', repo: 'thoerwink8/windsurf-dao', title: 'a', body: 'b',
+      host: 'breaker', idempotency_key: k1,
+    }, { dir, runMarshal: fake.runMarshal });
+    const replay = applyIssueWrite({
+      action: 'issue_create', repo: 'thoerwink8/windsurf-dao', title: 'a', body: 'b',
+      host: 'breaker', idempotency_key: k1,
+    }, { dir, runMarshal: fake.runMarshal });
+    const second = applyIssueWrite({
+      action: 'issue_create', repo: 'thoerwink8/windsurf-dao', title: 'a2', body: 'b2',
+      host: 'breaker', idempotency_key: k2,
+    }, { dir, runMarshal: fake.runMarshal });
+    assert.equal(first.ok, true);
+    assert.equal(replay.replay, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.replay, false);
+  });
 });
 
 describe('ingest 三路只记事件', () => {

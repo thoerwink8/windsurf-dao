@@ -287,7 +287,8 @@ function windowView(w) {
  *    state    —— getState 的 state 对象（连不上/没查成传 null）
  *    relay    —— getRelay 的 relay 对象（同上）
  *    connectError —— 连不上时的原因（有值 → 服务多半没在跑）
- *    pinnedVersion —— 钉死版本（默认取卡 A 的 PINNED_VERSION，别在这儿抄第二份值）
+ *    pinnedVersion —— 跟卡 A 同一把尺：空/null = 跟随本机在役版本（默认，只要求报得出合法版本号）；
+ *      给具体值才比对（刻意钉住）。别在这儿抄第二份默认值。
  * 返回 {state:'ok'|'red'|'unknown', probed, version, versionOk, mode, available, agentRoutes, windows, notes}
  *  state 三态照检查器纪律：ok=查过且对；red=查过不对；unknown=没查成（连不上/缺字段）。
  *  available（真机 0.0.286 的 relay 帧确带此字段，typeof boolean）：false=中转明确不可用→红；
@@ -310,8 +311,19 @@ export function buildMirasimHealth({ state, relay, connectError, pinnedVersion =
     };
   }
   const version = typeof state.version === 'string' ? state.version : null;
-  const versionOk = version === pinnedVersion;
-  if (!versionOk) notes.push(`版本 ${version || '(空)'} ≠ 钉死 ${pinnedVersion}`);
+  const versionShapeOk = version !== null && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version);
+  let versionOk;
+  if (pinnedVersion == null) {
+    versionOk = versionShapeOk;
+    if (!versionOk) {
+      notes.push(version === null
+        ? '服务端没报 version 字段——帧形态变了，猜下去只会静默走错'
+        : `服务端报的 version 形状不符：${version}`);
+    }
+  } else {
+    versionOk = version === pinnedVersion;
+    if (!versionOk) notes.push(`版本 ${version || '(空)'} ≠ 钉死 ${pinnedVersion}`);
+  }
 
   let mode = null;
   let agentRoutes = null;

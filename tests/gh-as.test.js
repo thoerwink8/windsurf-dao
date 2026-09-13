@@ -139,6 +139,34 @@ describe('gh-as', () => {
     await t.test('GH_TOKEN 盖住本人', () => {
       assert.ok(calls[0].opts.env.GH_TOKEN === 't-live', 'GH_TOKEN 盖住本人  →  ' + String(calls[0].opts.env.GH_TOKEN));
     });
+    await t.test('剥掉 CLICOLOR_FORCE / FORCE_COLOR，否则 --json 不是 JSON', () => {
+      const env = calls[0].opts.env;
+      assert.equal(env.NO_COLOR, '1');
+      assert.equal(env.FORCE_COLOR, undefined);
+      assert.equal(env.CLICOLOR_FORCE, undefined);
+    });
+    await t.test('默认 maxBuffer 是明确上限，不是 spawnSync 的 1MiB', () => {
+      assert.equal(G.GH_SPAWN_MAX_BUFFER, 64 * 1024 * 1024);
+      assert.equal(calls[0].opts.maxBuffer, G.GH_SPAWN_MAX_BUFFER);
+    });
+
+    const tight = [];
+    const spawnTight = (cmd, args, opts) => {
+      tight.push(opts);
+      const err = new Error('spawnSync gh ENOBUFS');
+      err.code = 'ENOBUFS';
+      return { status: null, stdout: '', stderr: '', error: err };
+    };
+    const blown = G.ghAs('worker', ['pr', 'list', '--state', 'all', '--json', 'body'], {
+      dir, spawnImpl: spawnTight, maxBuffer: 1024,
+    });
+    await t.test('调用方可覆盖 maxBuffer', () => {
+      assert.equal(tight[0].maxBuffer, 1024);
+    });
+    await t.test('超限 ENOBUFS 是 error，不是静默截断', () => {
+      assert.equal(blown.ok, false);
+      assert.match(blown.error, /ENOBUFS/);
+    });
   });
 
   it('换 token / whoami：扫成 vs 没扫成', async (t) => {
@@ -294,6 +322,31 @@ describe('gh-as', () => {
     const noArgs = spawnSync(process.execPath, [CLI, 'worker'], { encoding: 'utf8' });
     await t.test('CLI 缺 gh 参数 exit 2', () => {
       assert.ok(noArgs.status === 2, 'CLI 缺 gh 参数 exit 2  →  ' + String(noArgs.status));
+    });
+
+    const G = await LIB_LOAD;
+    await t.test('isGhIssueWriteArgs 认写不认读', () => {
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'create', '--title', 't']), true);
+      assert.equal(G.isGhIssueWriteArgs(['--', 'issue', 'comment', '1']), true);
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'view', '1']), false);
+      assert.equal(G.isGhIssueWriteArgs(['issue', 'list']), false);
+      assert.equal(G.isGhIssueWriteArgs(['pr', 'create']), false);
+      assert.equal(G.isGhIssueWriteArgs(null), false);
+    });
+    const issueWrite = spawnSync(process.execPath, [CLI, 'worker', '--', 'issue', 'create', '--title', 't'], {
+      encoding: 'utf8', env: { ...process.env, DAO_APPS_DIR: empty },
+    });
+    await t.test('#792 CLI 写 Issue 先于凭据检查就拒', () => {
+      assert.equal(issueWrite.status, 2);
+      assert.match(issueWrite.stderr || '', /issue-gateway/);
+      assert.equal(/这台机器没装/.test(issueWrite.stderr || ''), false);
+    });
+    const marshalWrite = spawnSync(process.execPath, [CLI, 'marshal', 'issue', 'comment', '1', '--body', 'x'], {
+      encoding: 'utf8', env: { ...process.env, DAO_APPS_DIR: empty },
+    });
+    await t.test('#792 marshal 身份也不能经 CLI 写 Issue', () => {
+      assert.equal(marshalWrite.status, 2);
+      assert.match(marshalWrite.stderr || '', /issue-gateway/);
     });
   });
 

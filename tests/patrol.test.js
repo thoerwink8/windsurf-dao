@@ -275,6 +275,8 @@ describe('systemd 单元', () => {
     assert.match(s, /^SuccessExitStatus=0 1$/m, '1 = 查出越界已报帅，是正常输出');
     assert.ok(!/SuccessExitStatus=.*\b2\b/.test(s),
       '2 = 没查成，不许当成功——没查成必须在 systemctl --failed 里看得见');
+    assert.match(s, /^OnFailure=dao-patrol-failure\.service$/m,
+      '巡检失败必须主动告警，不能只留在 systemd failed');
   });
 
   it('timer：有墙钟触发点，且不是分钟级——巡检找的是攒出来的问题', () => {
@@ -308,11 +310,12 @@ describe('systemd 单元', () => {
 describe('装法', () => {
   const f = path.join(ROOT, 'scripts', 'install-dao-patrol.sh');
 
-  it('装机脚本在，且装的是这两个单元', () => {
+  it('装机脚本在，且装的是巡检、定时器和失败告警单元', () => {
     assert.ok(fs.existsSync(f), '装机脚本不在——单元躺在仓里没人装');
     const s = fs.readFileSync(f, 'utf8');
     assert.match(s, /dao-patrol\.service/);
     assert.match(s, /dao-patrol\.timer/);
+    assert.match(s, /dao-patrol-failure\.service/);
     assert.match(s, /systemctl enable --now dao-patrol\.timer/);
   });
 

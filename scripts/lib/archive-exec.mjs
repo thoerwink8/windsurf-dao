@@ -552,31 +552,6 @@ export function processMergedScan({
   return { ...planned, results };
 }
 
-export function formatMergedScanLog(scan, now) {
-  const ts = toIso(now || new Date());
-  if (!scan || scan.ok !== true) {
-    return JSON.stringify({
-      ts,
-      type: 'merged-scan',
-      result: 'unscanned',
-      reason: scan?.error || '盘面没查成',
-      scanned: 0,
-    });
-  }
-  const results = Array.isArray(scan.results) ? scan.results : [];
-  return JSON.stringify({
-    ts,
-    type: 'merged-scan',
-    result: 'scanned',
-    trees: scan.trees ?? null,
-    plans: (scan.plans || []).length,
-    removed: results.filter((r) => r.removed).length,
-    refused: results.filter((r) => r.result === 'refused').length,
-    unscanned: results.filter((r) => r.result === 'unscanned').length,
-    failed: results.filter((r) => r.result === 'rm-failed' || r.result === 'escalated').length,
-  });
-}
-
 export function formatArchiveExecLog(record, now) {
   const ts = record?.ts || toIso(now || new Date());
   return JSON.stringify({

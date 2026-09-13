@@ -178,3 +178,64 @@ describe('会话名：卡名压过终端标题（实咬：9 个静默审官一�
     assert.equal(S.sessionFromOrcaTerminal({ handle: 't', title: '帅位', lastOutputAt: min(1) }).label, '帅位');
   });
 });
+
+// ── #1166 之后的同形问题：记录的时间戳会冻住（观察 2026-09-11-会话在跑记录说停.md）──
+//
+// 病：`record.json` 的 `updatedAt` 记的是「服务端最后一次写记录」。上游 run 断流之后
+// 本地执行体继续干、记录不再回写，一个冻住的旧值会被判成「它安静了 45 分钟」。
+// 实测推演：同一条会话在 44 分钟时是 active、45 分钟时翻成 silent，此后可回收——
+// 而那一刻树里还有 18 个进程在跑整套测试。判据的可靠性不该依赖「恰好没跑到越线那一刻」。
+//
+// 改法：加一层树内进程判据，且**记录说安静但树里有活进程 → 按在跑处理**。
+// 这四条各自对着一个具体的翻车形态。
+describe('活性：树内进程压过冻住的时间戳', () => {
+  const TREE = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1150';
+  const scanWith = (cwd) => ({ ok: true, procs: [{ pid: 11, cwd }] });
+
+  it('记录冻住两小时、但树里有活进程 → active（这正是那条实咬）', async () => {
+    const S = await LOAD;
+    const frozen = { id: 's', worktreeId: TREE, driverState: 'running', lastProgressAt: NOW - 120 * 60000 };
+    const v = S.assessLivenessWithTree(frozen, { now: NOW, scan: scanWith(TREE) });
+    assert.equal(v.state, 'active', JSON.stringify(v));
+    assert.equal(v.treeOverride, true);
+  });
+
+  it('记录冻住、树里确实没进程 → 仍是 silent（不许把没进程的树永久免死）', async () => {
+    const S = await LOAD;
+    const frozen = { id: 's', worktreeId: TREE, driverState: 'running', lastProgressAt: NOW - 120 * 60000 };
+    const v = S.assessLivenessWithTree(frozen, { now: NOW, scan: scanWith('/somewhere/else') });
+    assert.equal(v.state, 'silent', JSON.stringify(v));
+    assert.equal(v.treeOverride, undefined);
+  });
+
+  // 「没查成」既不当在跑也不当没在跑——两种都是一种猜。这条跟上面两条同等重要：
+  // 扫不动进程的身份（非 root/orca）必须退化成「不改判」，而不是退化成「没在跑」。
+  it('进程面没查成 → 不改判，也不谎称在跑', async () => {
+    const S = await LOAD;
+    const frozen = { id: 's', worktreeId: TREE, driverState: 'running', lastProgressAt: NOW - 120 * 60000 };
+    const v = S.assessLivenessWithTree(frozen, { now: NOW, scan: { unscanned: true, error: '/proc 读不动' } });
+    assert.equal(v.state, 'silent');
+    assert.equal(v.treeOverride, undefined);
+    assert.equal(v.treeState, 'unknown');
+  });
+
+  it('mirasim 服务不在 = 查成了、结论是 0，不是没查成', async () => {
+    const S = await LOAD;
+    const r = S.treeProcessState(TREE, { scan: { ok: true, noServer: true, procs: [] } });
+    assert.equal(r.state, 'idle', JSON.stringify(r));
+  });
+
+  it('进程属于别的树不算这棵树的', async () => {
+    const S = await LOAD;
+    const r = S.treeProcessState(TREE, { scan: { ok: true, procs: [{ pid: 1, cwd: '/other' }, { pid: 2, cwd: TREE + '/' }] } });
+    assert.equal(r.state, 'running', '后缀斜杠要归一化，不然同一棵树被当成两棵');
+    assert.deepEqual(r.pids, [2]);
+  });
+
+  it('没给进程观测 / 没给树 → unknown，不许当成 idle', async () => {
+    const S = await LOAD;
+    assert.equal(S.treeProcessState(TREE, {}).state, 'unknown');
+    assert.equal(S.treeProcessState('', { scan: scanWith(TREE) }).state, 'unknown');
+    assert.equal(S.treeProcessState(TREE, { scan: { ok: false, error: 'x' } }).state, 'unknown');
+  });
+});
