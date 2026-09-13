@@ -64,15 +64,21 @@ export function waitingUserComment({ pr, verb, tries, head } = {}) {
   ].join('\n');
 }
 
-export function exhaustedComment({ pr, verb, tries, head } = {}) {
+export function exhaustedComment({ pr, verb, tries, head, why } = {}) {
   const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '?');
   const n = pr == null ? '?' : String(pr);
   const h = typeof head === 'string' && head.trim() ? head.trim() : null;
   const triesN = Number.isFinite(Number(tries)) ? Number(tries) : '?';
+  // 真因必须写进评论（#1233 实咬）：原来这里只有「动词 X 试了 3 次仍没推动」——读这句话的人
+  // 会去查 PR 为什么没动，而真正的原因（`execution profile unverified: codex-relay-gpt-5.6-sol`）
+  // 躺在 drain 的返回值里，一句话都没带出来。四张判绿可合的 PR 就这样被同一个必然失败卡住，
+  // 而认输理由让人往错的方向查。
+  const cause = typeof why === 'string' && why.trim() ? why.trim().split(/\r?\n/)[0].slice(0, 400) : null;
   return [
     `${EXHAUSTED_COMMENT_MARK} ${v} PR #${n}${h ? '@' + h : ''}`,
     '',
     `自动化认输：动词 ${v} 试了 ${triesN} 次仍没推动。`,
+    cause ? `最后一次失败的原因：${cause}` : '（这几次没留下具体原因——没查到什么挡住了它，只记了次数）',
     h ? `当前 head：${h}` : '当前 head 没查成，标打在 PR 上（属性不依赖 head）。',
     '',
     '指挥官从此跳过这张 PR，不再重试。帅位三选一：',
@@ -100,7 +106,7 @@ export function buildMarkExhausted({ pr, verb, tries, head, why, label } = {}) {
       : `PR #${n} 自动化认输（${verb} 试满）`),
     comment: useWaiting
       ? waitingUserComment({ pr: n, verb, tries, head })
-      : exhaustedComment({ pr: n, verb, tries, head }),
+      : exhaustedComment({ pr: n, verb, tries, head, why }),
   };
 }
 
