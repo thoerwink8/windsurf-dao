@@ -35,7 +35,7 @@ description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全�
 | 谁 | 做什么 | 禁止 |
 | --- | --- | --- |
 | **执行面**（后台子代理；兜底才是新会话/新终端） | `checkout -b` → 改码 → `dao-check` → `push` | **`gh pr create`**、worker 开 PR、裸 `gh` 退路 |
-| **帅窗** | 写任务书、派执行面；自己 worktree 里 `commit`/`push`；`gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | **主树上 git 写**；**自审自合**；**合并 reviews=0 的 PR**；**裸 `gh`**（必须 marshal） |
+| **帅窗** | 写任务书、派执行面；自己 worktree 里 `commit`/`push`；`dao pr-open` 开 draft（含落账打标）；`gh-as.mjs marshal`：`pr ready` / `pr comment` / `pr merge` | **主树上 git 写**；**自审自合**；**合并 reviews=0 的 PR**；**裸 `gh`**（必须 marshal） |
 
 帅窗在自己 worktree 里可以 `git commit` / `git push`（#1093 B1a）。**主树仍禁 git 写**（防的是共用主树 `git add -A` 卷走另一位帅的在途改动）。`create` / `ready` / `comment` / `merge` 留在帅窗走 marshal。**判定权永远不归帅位**：有独立跨厂审官 APPROVED 之前不许合。**帅位不得合并 reviews=0 的 PR。** 不要把用户支去新开一个聊天窗口。
 
@@ -84,18 +84,25 @@ commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 
 执行面**只**做到 push；**禁止**执行面 `gh pr create`、禁止 `gh-as.mjs worker -- pr create`、禁止裸 `gh` 开 PR 退路。推完把分支名回报帅窗。
 
-### 4. 帅窗：marshal 开 draft PR → 验收 → 收口
+### 4. 帅窗：开 draft PR → 验收 → 收口
 
-分支已在远端后，**帅窗**用 marshal（多行 body 用 `--body-file`；若当前在 master，加 `--head <branch> --base master`）：
+分支已在远端后，**帅窗**开 draft。**首选 `dao pr-open`**——它一条命令做完三件事：开 draft、把这条链落进账本、按账打标（`model/*` `type/*` `reviewer/*`）。
 
 ```bash
-node scripts/gh-as.mjs marshal -- pr create --draft --title "[cursor] <标题>" --body-file <文件> --head <branch> --base master
+node scripts/dao.mjs pr-open --title "[cursor] <标题>" --body-file <文件> \
+  --head <branch> --model <registry id> [--reviewer <id>]
 node scripts/gh-as.mjs marshal -- pr ready <N>
 node scripts/gh-as.mjs marshal -- pr comment <N> --body-file <文件>
 node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
 ```
 
-命令以 `gh-as` / `gh` 实际能力为准。缺 marshal 凭据报「这台机器没装」，**不许**退回裸 `gh` 或 worker 装成做完。
+**为什么不用裸 `marshal -- pr create`**：那样开出来的 PR 在账本里没有派工决定，打标路认不出这条链，于是永远卡在「需人工打标」——指挥官合不了、审官也叫不动（#1214 缺口 A，2026-09-13 有 13/17 张开放 PR 卡死在这上面）。`pr-open` 补的就是这条落账。
+
+- `--model` 必填，且必须是 `docs/model-routing.json` 里注册的 id——**不许从 commit 前缀猜家族**（猜出来的账进不了选型）。
+- `--reviewer` 不给也行：稍后 `node scripts/dao.mjs pr-sync-labels --pr <N>` 会按账把它补齐。
+- 打标失败**不挡**开 PR（记账不算门）：回执里会说清哪个标没打上，照着补即可。
+
+命令以 `gh-as` / `dao` 实际能力为准。缺 marshal 凭据报「这台机器没装」，**不许**退回裸 `gh` 或 worker 装成做完。裸 `marshal -- pr create` 仍可用（比如既有的分支要补一张 PR），但**要顺手跑一次 `pr-sync-labels`**，否则那张 PR 进不了自动链。
 
 PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致）。**不写 issue 号、不署名 issue**——本路没有 issue；关单脚本不适用。作者应为 **`dao-marshal[bot]`**。
 
@@ -125,5 +132,7 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 - 不要在**主树**里 `git commit` / `git push`；帅窗在自己 worktree 里可以写。不要自审自合，不要合并 reviews=0 的 PR。
 - 不要把用户支去新开聊天当必经路径；有子代理就派子代理。
 - 不要在执行面开 PR（含 worker / 裸 `gh`）；不要用裸 `gh` 做 create/ready/comment/merge。
+- **不要用裸 `marshal -- pr create` 开快路 PR**——那样开出来的单在账本里没有派工决定，
+  打标路认不出它，于是永远卡在「需人工打标」（#1214）。走 `dao pr-open`，或开完补一次 `pr-sync-labels`。
 - 不要把体系类改动包装成「极速模式」绕过 manual merge 与 PR 三问。
 - 不要开 issue「为了有个号」——要么真走开单三问，要么 PR 正文自洽。
