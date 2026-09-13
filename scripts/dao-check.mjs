@@ -202,7 +202,7 @@ import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
-import { classifyLaunchBinaries } from './lib/launch-binary.mjs';
+import { classifyLaunchBinaries, resolveProbePath, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -701,7 +701,14 @@ function checkLaunchBinaries() {
   const providers = Object.entries(doc.providers || {})
     .filter(([, p]) => p && typeof p === 'object')
     .map(([name, p]) => ({ name, cli: p.cli, launch: p.launch }));
-  const verdict = classifyLaunchBinaries({ providers, pathValue: process.env.PATH || '', homeDir: homedir() });
+  // 判据锚在**部署环境**的 PATH，不是碰巧跑检查那个 shell 的（2026-09-13 实咬：
+  // sudo/裸 shell 下 PATH 不含 ~/.local/bin，reclaude/devin 判「解析不到」→ 假红；
+  // 真实服务 commander-act.service 的 PATH 显式带着它）。见 launch-binary.mjs 的 resolveProbePath。
+  const { pathValue, source } = resolveProbePath(process.env, {
+    unitDir: join(ROOT, DEPLOY_UNIT_DIR),
+    io: { readdir: readdirSync, readFile: p => readFileSync(p, 'utf8') },
+  });
+  const verdict = classifyLaunchBinaries({ providers, pathValue, pathSource: source, homeDir: homedir() });
   if (verdict.state === 'unknown') {
     fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
     return;

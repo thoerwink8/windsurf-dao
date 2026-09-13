@@ -29,6 +29,61 @@ export const OFF_PATH_BIN = Object.freeze({
   'cursor-agent': '~/.local/share/cursor-agent/versions/2026.08.31-4057e58/cursor-agent',
 });
 
+/**
+ * 判定该按哪条 PATH。
+ *
+ * **这条判据的锚点是「部署环境」，不是「跑检查的那个 shell」**（2026-09-13 实咬）。
+ * 第一版直接吃 `process.env.PATH`，于是同一个仓在两处给相反结论：
+ *   · 手动 `node scripts/dao-check.mjs`（sudo/裸 shell）→ PATH 是 `/usr/local/sbin:…:/bin`，
+ *     **不含 `~/.local/bin`** → reclaude / devin 判「本机解析不到」→ 红；
+ *   · 真实服务 `commander-act.service` → PATH 显式写着 `/home/orca/.local/bin:…` → 解析得到。
+ * 也就是那条红是**探针自己的 PATH 造成的假失败**，与模板对不对无关
+ * （判例 memory `verify-systemd-via-systemctl`：手搓 shell 复现会因 PATH/生命周期不同而假失败）。
+ *
+ * 所以按这个顺序取，取到哪条就把哪条写进 detail：
+ *   ① 调用方显式给的 `DAO_DEPLOY_PATH`（测试与特殊现场用）；
+ *   ② **仓内部署单元** `host/machine/systemd/*.service` 里 `Environment=PATH=…` 的众数
+ *      —— 真相源在仓里，不硬编码进本模块，换机时它跟着单元文件一起改；
+ *   ③ 退回本进程的 PATH（并标明来源，让红项一眼可辨「是模板错还是我这条 PATH 不对」）。
+ *
+ * @param {object} [env]  取 ① 用
+ * @param {object} [io]   { readdir, readFile } 注入点，测试用
+ * @param {string} [unitDir] ② 的扫描目录
+ */
+export const DEPLOY_PATH_ENV = 'DAO_DEPLOY_PATH';
+export const DEPLOY_UNIT_DIR = 'host/machine/systemd';
+
+/** 从一份 systemd 单元文本里取 `Environment=PATH=…` 的值。取不到返回 null（不猜）。 */
+export function pathFromUnitText(text) {
+  const m = /^\s*Environment\s*=\s*"?PATH=([^"\n]+)"?\s*$/m.exec(String(text || ''));
+  return m ? m[1].trim() : null;
+}
+
+/** 仓内单元文件里的 PATH 众数（多份单元写同一条是常态；众数比「第一份」稳，不靠目录序）。 */
+export function deployPathFromUnits(unitDir, { readdir, readFile } = {}) {
+  if (!unitDir || typeof readdir !== 'function' || typeof readFile !== 'function') return null;
+  let names;
+  try { names = readdir(unitDir).filter(n => String(n).endsWith('.service')); } catch { return null; }
+  const tally = new Map();
+  for (const n of names) {
+    let text;
+    try { text = readFile(join(unitDir, n)); } catch { continue; }
+    const p = pathFromUnitText(text);
+    if (p) tally.set(p, (tally.get(p) || 0) + 1);
+  }
+  let best = null;
+  for (const [p, n] of tally) if (!best || n > best[1] || (n === best[1] && p < best[0])) best = [p, n];
+  return best ? best[0] : null;
+}
+
+export function resolveProbePath(env = process.env, { unitDir = null, io = {} } = {}) {
+  const deploy = String(env?.[DEPLOY_PATH_ENV] || '').trim();
+  if (deploy) return { pathValue: deploy, source: `env ${DEPLOY_PATH_ENV}` };
+  const fromUnits = deployPathFromUnits(unitDir, io);
+  if (fromUnits) return { pathValue: fromUnits, source: '仓内部署单元' };
+  return { pathValue: String(env?.PATH || ''), source: '本进程 PATH（仓内部署单元没读到）' };
+}
+
 /** 从一条 launch 命令里取「命令词」。取第一个非 `VAR=value` 的 token，去掉引号。
  *  与 dispatch/launch.mjs 的 `materializeLaunch` 同口径：先剥环境变量赋值前缀。
  *  **路径要留着**（`/opt/bin/agent` / `./x`）——剥成裸名会把它当 PATH 上的名字去找，
@@ -70,12 +125,14 @@ export function resolvesOnPath(word, { pathValue, exists = existsSync, access = 
  * @param {object} input
  * @param {Array}  input.providers  [{name, cli, launch}] —— 只取有 launch 的
  * @param {string} input.pathValue 判定用的 PATH（**必须显式传**，不许在函数里摸 process.env：
- *                                 否则测试只能测到跑测试那台机器的 PATH，判据跟着机器漂）
+ *                                 否则测试只能测到跑测试那台机器的 PATH，判据跟着机器漂）。
+ *                                 现场用 `resolveProbePath()` 取——它优先部署单元的 PATH。
  * @param {string} [input.homeDir] OFF_PATH_BIN 里 `~` 的展开点
+ * @param {string} [input.pathSource] 这条 PATH 从哪来（'deploy' / 'process'），进 detail 好定位
  * @param {object} [input.fs]      注入点（exists/access/stat），测试用
  * @returns {{state:'ok'|'red'|'unknown', detail:string, checked:number, broken:object[], excused:object[]}}
  */
-export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', fs = {} } = {}) {
+export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pathSource = '', fs = {} } = {}) {
   if (!Array.isArray(providers)) {
     return { state: 'unknown', detail: '拿不到 providers（没查成，不是「都对得上」）', checked: 0, broken: [], excused: [] };
   }
@@ -113,14 +170,18 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', fs 
     }
   }
 
+  // detail 里必须说清「在哪个 PATH 下判的、这条 PATH 从哪来」——宿主局部判据的结论
+  // 脱离它的 PATH 就没有意义，而红项要能一眼看出「是模板错了还是我这条 PATH 不对」。
+  const where = `PATH=${pathValue.slice(0, 60)}…${pathSource ? `（来源：${pathSource}）` : ''}`;
+
   if (broken.length === 0) {
     const words = [...new Set(excused.map(e => e.word))];
     const note = words.length ? `；${words.join('、')} 走显式落点` : '';
-    return { state: 'ok', checked: withLaunch.length, broken, excused, detail: `扫了 ${withLaunch.length} 个带 launch 的 provider，命令词本机都解析得出${note}（PATH=${pathValue.slice(0, 60)}…）` };
+    return { state: 'ok', checked: withLaunch.length, broken, excused, detail: `扫了 ${withLaunch.length} 个带 launch 的 provider，命令词本机都解析得出${note}（${where}）` };
   }
   const shown = broken.slice(0, 4).map(b => `${b.provider}.${b.field}=${b.word}（${b.why}）`).join('；');
   return {
     state: 'red', checked: withLaunch.length, broken, excused,
-    detail: `${broken.length} 处命令词本机解析不到 —— ${shown}${broken.length > 4 ? ' …' : ''}`,
+    detail: `${broken.length} 处命令词本机解析不到 —— ${shown}${broken.length > 4 ? ' …' : ''}（${where}）`,
   };
 }

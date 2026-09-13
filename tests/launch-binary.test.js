@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN } from '../scripts/lib/launch-binary.mjs';
+import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
 
 /** 假文件系统：only 集合里的路径算「存在且可执行」，其余一律不可解析。
  *  与真实 fs 同形（exists/access/stat），但不碰磁盘——本套不许依赖跑测试的机器上装了什么。 */
@@ -133,4 +133,41 @@ test('⑩ resolvesOnPath 只看可执行位，不看存在与否', () => {
   };
   assert.equal(resolvesOnPath('foo', { pathValue: '/usr/bin', ...fsNoExec }).ok, false);
   assert.equal(resolvesOnPath('foo', { pathValue: '/usr/bin', ...fakeFs(['/usr/bin/foo']) }).ok, true);
+});
+
+// ⑪ PATH 该按哪条判（2026-09-13 实咬）
+//
+// 第一版吃 `process.env.PATH`，于是同一个仓两处相反结论：手动跑 dao-check 时 PATH 不含
+// `~/.local/bin` → reclaude/devin 判「解析不到」→ 红；真实服务 commander-act.service 的
+// PATH 显式带着它 → 解析得到。**那条红是探针自己的 PATH 造成的假失败**，与模板对不对无关。
+// 判据的锚点是部署环境，不是跑检查那个 shell。这一套钉住三条来源的优先级。
+test('⑪ 探针 PATH 优先取部署单元，读不到才退回本进程', () => {
+  const unitDir = '/repo/host/machine/systemd';
+  const units = {
+    'a.service': '[Service]\nEnvironment=PATH=/deploy/bin:/usr/bin\n',
+    'b.service': '[Service]\nEnvironment=PATH=/deploy/bin:/usr/bin\n',
+    'c.service': '[Service]\nEnvironment=PATH=/other/bin\n',   // 少数派：不该被选中
+  };
+  const io = {
+    readdir: () => Object.keys(units),
+    readFile: (p) => { const n = p.split('/').pop(); if (!units[n]) { const e = new Error('ENOENT'); throw e; } return units[n]; },
+  };
+  // ① 显式给的最优先
+  assert.equal(resolveProbePath({ [DEPLOY_PATH_ENV]: '/explicit/bin', PATH: '/shell/bin' }).pathValue, '/explicit/bin');
+  // ② 没有显式就给单元众数（两份 /deploy/bin:/usr/bin 胜过一份 /other/bin）
+  const fromUnits = resolveProbePath({ PATH: '/shell/bin' }, { unitDir, io });
+  assert.equal(fromUnits.pathValue, '/deploy/bin:/usr/bin');
+  assert.match(fromUnits.source, /部署单元/);
+  // ③ 单元读不到才退回本进程 PATH，且**标明来源**——红项要能一眼看出「是模板错还是我这条 PATH 不对」
+  const fallback = resolveProbePath({ PATH: '/shell/bin' }, { unitDir, io: { readdir: () => { throw new Error('ENOENT'); }, readFile: () => '' } });
+  assert.equal(fallback.pathValue, '/shell/bin');
+  assert.match(fallback.source, /本进程 PATH/);
+});
+
+test('⑪b 单元里没写 PATH 的文件不参与取值（不拿空串当一条 PATH）', () => {
+  assert.equal(pathFromUnitText('[Service]\nExecStart=/usr/bin/node x\n'), null);
+  assert.equal(pathFromUnitText('Environment=PATH=/a:/b\n'), '/a:/b');
+  assert.equal(pathFromUnitText('Environment="PATH=/a:/b"\n'), '/a:/b');
+  // 全仓都没有 PATH → 返回 null（调用方退回本进程），不许编一条出来
+  assert.equal(deployPathFromUnits('/x', { readdir: () => ['z.service'], readFile: () => '[Service]\n' }), null);
 });
