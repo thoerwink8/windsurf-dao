@@ -25,7 +25,9 @@
 
 import { prApprovedReady, prApprovedDraft, prChecksRed, DEFAULT_REPO } from './shuai-scan.mjs';
 import { sessionStateOf } from './execution-states.mjs';
-import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
+import {
+  canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask, checksSucceeded,
+} from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
@@ -45,7 +47,7 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
-import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
+import { approvedToLand, lastJudgmentOf, manualMergeApproved } from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
   capNewDispatchSlots,
@@ -1156,12 +1158,37 @@ function collectCandidates(situation) {
     const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    // #1223（用户 2026-09-13 拍板选项①）：m=manual 必须是一路输入，不许从 pr.isDraft 反推。
+    //
+    // 反推的代价：PR #1218 转 draft 被 GitHub 拒（convertPullRequestToDraft 权限不足）
+    // → isDraft 变 false → 判绿就直接合，m=manual 静默失效，账本 0 条事件。
+    // 合门是**我们自己的决定**，在派工那一刻就产生，这里把它读回来，而不是每次去问 GitHub 的 draft 位。
+    const mergeSrc = attributedIssueOf(gh, pr);
+    const mergePlan = resolveIssueMergePolicy(mergeSrc, situation.askPolicy);
     const readyToLand = approvedToLand({
       greenAtHead,
       decisionApproved,
       atHead: mergeA.scanned ? mergeA.atHead : null,
       lastJudgment: lastJudgmentOf(allA),
+      mergePolicy: mergePlan.mergePolicy,
+      mergePolicySource: mergePlan.mergePolicySource,
     });
+    // manual 的 PR：判绿**不足以**放行，还要核拍板证据（批准单 + 当前 head + 全绿 CI）。
+    // 证据不齐 → 报帅等拍板（下面 draft 那支的老出口），不自动合。
+    // 只认查过的两档（framework / hold）；unscanned 不拦（见 land-decision 的注释）。
+    // 两档分开（2026-09-13：混在一处会把 draft 的老契约一起收窄掉，tests/commander.test.js 当场抓住）：
+    //   · draft —— 老契约，与 mergePolicy 无关。draft 的 PR 判绿一律报帅等拍板，不看 issue 扫没扫到。
+    //   · 非 draft 且查过确实是 manual（framework / hold）—— #1218 那一格，是本单新加的收严。
+    //     unscanned 不算：那是「这轮没扫到 issue」，不是「查过是 manual」。
+    const manualNeedsHuman = pr.isDraft
+      || (mergePlan.mergePolicy === 'manual' && mergePlan.mergePolicySource !== 'unscanned');
+    let manualApproved = false;
+    if (manualNeedsHuman && !pr.isDraft) {
+      manualApproved = manualMergeApproved({
+        pr, issue: mergeSrc, greenAtHead,
+        evidence: { explicitApprovalIssue, isApprovedExecutionTask, checksSucceeded },
+      }).ok;
+    }
     // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
     const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
     const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
@@ -1199,17 +1226,34 @@ function collectCandidates(situation) {
       continue;
     }
 
-    if (readyToLand && pr.isDraft) { // 判绿但 draft（manual 合门）→ 需拍板，报帅（不自动合）
+    if (manualNeedsHuman && mergeableNow) {
+      // ── m=manual 的出口（#1223，用户 2026-09-13 拍板选项①）──
+      //
+      // 走到这里说明两件事之一：
+      //   · PR 是 draft（老路：manual 的 PR 由收口泵保持 draft，判绿后报帅等拍板）；
+      //   · **PR 不是 draft 但合门是 manual**——这一格原先直接掉进「判绿就合」，
+      //     正是 #1218 被自动合并的那一格（转 draft 被 GitHub 拒 → 不是 draft → 判绿 → 合了）。
+      //
+      // 现在两格合流：都要核拍板证据，齐了才合，不齐就报帅等拍板。
       const approvedIssue = (gh.issues || []).find(i => Number(i.number) === explicitApprovalIssue(pr));
-      if (canReleaseApprovedDraft({ pr: { ...pr, mergeable: mergeableState }, issue: approvedIssue,
-        greenAtHead, expectedHead: pr.headRefOid })) {
+      const draftEvidence = !pr.isDraft ? false : canReleaseApprovedDraft({
+        pr: { ...pr, mergeable: mergeableState }, issue: approvedIssue,
+        greenAtHead, expectedHead: pr.headRefOid,
+      });
+      if (draftEvidence || manualApproved) {
         out.push(withNeeds({ kind: 'merge', pr: pr.number, head: pr.headRefOid,
-          approvalIssue: approvedIssue.number, title: pr.title || '',
+          approvalIssue: approvedIssue && approvedIssue.number, title: pr.title || '',
           why: '用户已批准执行，当前提交审查和检查均通过，自动解除合并等待' }, N.merge));
         out.push(withNeeds({ kind: 'land', why: '已批准任务合并后收尾' }, N.land));
         continue;
       }
-      out.push(withNeeds(hub(`PR #${pr.number} 判绿待人工合并（manual 合门）`, 'decide', { pr: pr.number }), N.merge));
+      // 报帅：话面按「是 draft 还是 manual 挡住」分开说，别让后人以为只有 draft 那条路。
+      out.push(withNeeds(hub(
+        pr.isDraft
+          ? `PR #${pr.number} 判绿待人工合并（manual 合门 · draft）`
+          : `PR #${pr.number} 判绿待人工合并（manual 合门 · 非 draft 也拦——#1218 那一格）`,
+        'decide', { pr: pr.number },
+      ), N.merge));
       continue;
     }
 
