@@ -16,5 +16,4 @@
 | ~/bin/agent-stall-watch.mjs | #833 退役的 Contabo 垫片路径（落地即删），不进 INDEX 不当产品落点；屏面指纹整层 2026-09-06 退役，卡死发现并进指挥官 cmdAct（scripts/progress-watch.mjs） |
 | ~/.dao/agent-stall-watch.json | #833 连红账本，运行时自建于仓外，可丢可重算；屏面指纹层退役后只剩指挥官/熔断读写它 |
 | ~/.dao/exhausted-push.json | #1000 认输推送账本（pushed:<pr>@<head>），看门狗运行时自建于仓外，可丢可重算；丢了最多对同一 head 再推一次帅位 |
-| ~/.codex/skills | CHANGELOG 历史条目（link-codex 已退、写入方曾归 cc-switch）。不是现产品落点，不进 INDEX、不装机 |
 | ~/.config/gh | GitHub 官方 CLI 个人登录（hosts.yml），不是 dao 产品落点。#792 写 Issue 的单元把 GH_CONFIG_DIR 指到空目录，不让读这里；dao-gh-events 例外：webhook forward 仍走这份登录。不进 INDEX、不装机、不拷 |

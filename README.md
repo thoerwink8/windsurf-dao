@@ -18,6 +18,7 @@
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/global-CLAUDE.md` | 用户级 `~/.claude/CLAUDE.md` 的真相源副本：换机跑 `node scripts/onboard.mjs` 自动同步（漂移由 SessionStart 哨兵报），git 不带机器配置 |
+| `docs/README.md` | docs/ 分层地图：任务与知识什么住哪、读取面是谁、怎么退出（含清单/计划文档挂 GitHub 单的联动退出，2026-09-08 拍板） |
 | memory 独立仓 | Claude 项目 memory（教训/坑/拍板，一条一个文件）住在独立仓 `thoerwink8/windsurf-dao-memory`，主仓不再持有；本机目录由 `node scripts/onboard.mjs` 接上（落点有内容时拒绝并指路人工并回，见 NEW-MACHINE §10），换机不丢；历史文档归档也在那的 `docs-archive/` |
 | `host/skills/grill-me/` | 一个拷问想法的技能：用户想被找茬时用它五步追问 |
 | `host/styles/`、`host/themes/`、`host/statusline.js` | Claude Code 的界面定制（提示词样式 / 主题 / 状态栏） |
