@@ -37,6 +37,7 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
+  gatewayIdemKey,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
@@ -2310,7 +2311,7 @@ function escalate(action, { state, dryRun, say,
     writeFileSync(bodyFile, body, 'utf8');
     const r = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
       '--repo', REPO, '--issue', String(booked.issue), '--body-file', bodyFile,
-      '--host', 'commander', '--idempotency-key', `commander-escalate:append:${booked.issue}:${keySafe(verdict.target)}`], 60000);
+      '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', booked.issue, verdict.target)], 60000);
     if (!r.ok) { say(`  报帅追加失败（#${booked.issue}，本轮不改账本，下轮再试）：${r.error}`); return { ok: false, error: r.error }; }
     // 只有真追加成功才记对象——记早了会让下一轮以为说过了，那个对象就永远不会被提起。
     state.escalateLedger[key] = { ...booked, objects: verdict.objects, at: nowIso() };
@@ -2362,7 +2363,7 @@ function escalate(action, { state, dryRun, say,
         writeFileSync(bodyFile, body, 'utf8');
         const put = cmd(['node', 'scripts/issue-gateway.mjs', 'comment',
           '--repo', REPO, '--issue', String(existing), '--body-file', bodyFile,
-          '--host', 'commander', '--idempotency-key', `commander-escalate:append:${existing}:${keySafe(t)}`], 60000);
+          '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'append', existing, t)], 60000);
         if (!put.ok) {
           say(`  追加失败（#${existing}，本轮不写账本，下轮再试）：${put.error}`);
           return { ok: false, error: put.error };
@@ -2428,7 +2429,7 @@ export function reconcileEscalations({ actions, situation, state, dryRun, say,
     writeFileSync(bodyFile, body, 'utf8');
     const closed = runCmd(['node', 'scripts/issue-gateway.mjs', 'close',
       '--repo', REPO, '--issue', String(item.issue), '--comment', body, '--reason', 'completed',
-      '--host', 'commander', '--idempotency-key', `commander-escalate:close:${item.issue}:${item.reason}`], 60000);
+      '--host', 'commander', '--idempotency-key', gatewayIdemKey('commander-escalate', 'close', item.issue, item.reason)], 60000);
     if (!closed.ok) { say(`  收敛关单失败（#${item.issue}，账本不动，下轮再试）：${closed.error}`); continue; }
     delete state.escalateLedger[item.key];
     say(`  收敛关单 #${item.issue}：原因 ${item.reason} 本轮已不再出现`);
@@ -2451,22 +2452,6 @@ function askEscalateCard({ state, key, number, action, dryRun, say, send }) {
 // 受影响清单在正文里滚动（业界形态：一条告警 + 受影响对象清单，不是每个对象一条告警）。
 function escalateTitle(a) { return String(a.reason || '').trim(); }
 
-/**
- * 幂等键里不许有空白（网关明规则：1–200 个可见字符、不能有空白）。
- *
- * 2026-09-11 实咬：`verdict.target` 的形状是 `PR #1154` / `issue #815`——**带空格**，
- * 直接拼进 `--idempotency-key` 会被网关拒：
- *
- *     报帅追加失败（#1182，本轮不改账本，下轮再试）：
- *     missing_idempotency: idempotency_key 必须是 1–200 个可见字符、不能有空白
- *
- * 于是「追加对象进已有单」这条路一直没通（第一次被走到是我新加的 reviewer-label-missing
- * 触发的）。键**只需要稳定唯一**，不需要好看——所以把空白折成 `-`，
- * 正文里的对象名照旧用可读原文（那才是给人看的）。
- */
-export function keySafe(s) {
-  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
-}
 function escalateBody(a, marker, verdict) {
   const door = doorOf(a.reason); // 双门制（2026-09-04 拍板）：确定性表判门，不靠模型现场判断
   const hours = Math.round(TWO_WAY_DEADLINE_MS / 3600000);
@@ -2507,12 +2492,11 @@ function openEscalationIssue({ title, body }) {
   writeFileSync(bodyFile, body, 'utf8');
   const marker = String(body || '').match(/\[commander-open-issue\][^\n]*/)
     || String(body || '').match(/查重标记[^\n]*/);
-  // key 不许含空白（网关判据）。回落到 title 时最容易踩：派工失败的 title 里带着整段
-  // JSON 错误，直接当 key 会被拒成 missing_idempotency——**故障与告警同源失效**，
-  // 2026-09-10 一晚 96 条派工失败没有任何一条报出来。所以这里一律规范化，
-  // 而不是指望调用方给的字符串正好合法。
+  // marker 是中文行（`查重标记（勿删）：…`），title 也可能带空格/JSON——直接当 key 必被网关拒收。
+  // 先 escalationKeyOf 折成 ASCII 摘要，再过 gatewayIdemKey 整键闸（KEY_RE 1–200 可打印 ASCII）。
+  // 2026-09-10 实咬：派工失败 title 带着整段 JSON，故障与告警同源失效。
   const keySeed = marker ? marker[0] : title;
-  const key = `commander-escalate:${escalationKeyOf(keySeed)}`;
+  const key = gatewayIdemKey('commander-escalate', escalationKeyOf(keySeed));
   const r = runCmd(['node', 'scripts/issue-gateway.mjs', 'create',
     '--repo', REPO, '--title', title, '--body-file', bodyFile, '--label', '待拍板',
     '--host', 'commander', '--idempotency-key', key], 60000);
