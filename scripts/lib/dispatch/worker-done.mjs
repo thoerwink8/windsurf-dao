@@ -10,6 +10,8 @@
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
 
 import { parseOwnerNameRepo } from './repo.mjs';
+// 认领判据只有一份实现，在关单侧（同时管着「被否定的分句不算认领」与标题退路收严）。这里不抄第二份。
+import { attributedIssueNumbers, attributedIssueNumber } from '../close-issue.mjs';
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
@@ -112,7 +114,10 @@ export function requireWorkerModel(labels) {
 
 /** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
  * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。
- * #1116：仓里原先两份正则（本文件认「关联」，ready-queue-check 不认）收成这一份。 */
+ * #1116：仓里原先两份正则（本文件认「关联」，ready-queue-check 不认）收成这一份。
+ *
+ * 这一份是**宽**口径，服务「这张 PR 跟哪些单有关」——给它抄 label、发完工 comment。
+ * 判「这张单是不是已经有在途 PR」必须用下面的 `claimedIssueNumbers`，别用这一份。 */
 export function linkedIssueNumbers(text) {
   const found = [];
   const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
@@ -122,6 +127,49 @@ export function linkedIssueNumbers(text) {
     if (Number.isInteger(t) && !found.includes(t)) found.push(t);
   }
   return found;
+}
+
+/**
+ * PR 里**认领**了哪张单（= 这张 PR 就是为它开的），不是顺带提过哪张单。
+ *
+ * 与 `linkedIssueNumbers` 的差别只有一条：**不认「关联 #N」**。
+ * 「关联」是 cross-reference（这 PR 碰过它），不是 claim（这 PR 是它的交付物）。
+ *
+ * 实现直接复用关单侧 `close-issue.mjs` 的 `attributedIssueNumbers`——同一份规格只有一个副本，
+ * 它同时管着「被否定的分句不算认领」（`不写 closes #N`）。
+ *
+ * `openIssues` 传进来时，标题裸匹配那一级会收严（目标单还开着就不认，见 `attributedIssueNumber`）。
+ * **在途判据必须传**：它手里就是开放单名单，而这正是「目标单还开着」的语境。
+ *
+ * 2026-09-13 实咬（#1051 停摆 7 天，三个缺陷叠在一起）：
+ *   ① 宽口径：PR #1096 正文写「挂回 #1051 作第 7 条同形」，那是**关联**
+ *      （它自己是 #1101 的交付物，正文里还写明「不写 closes #1051」）。
+ *      但 ready-queue-check 拿 `linkedIssueNumbers` 判「有在途 PR」，于是 #1051 被一张
+ *      与它无关、且自己还冲突躺平的 PR 永久焊死——三标齐全、消歧过门、admission 空 31 位，
+ *      7 天零派工、零报警。**宽口径用在判阻塞上，就是把「提过」当成「在做」。**
+ *   ② 否定式：那句「**不写 `closes #1051`**」本身也被正则读成了认领声明，
+ *      于是换窄口径也照样焊死。
+ *   ③ 标题裸匹配退路：正文零显式署名时，退路捞走了标题里的 `挂回 #1051`。
+ *      真机上退路捞 13 张，只有 #1143/#1051 两张错——**两张的目标单都是 OPEN**。
+ * 三个缺陷同源：正则不认上下文。
+ *
+ * #1096 作者当年已经发现两个口径不同（正文第 55 行原话：「关单正则只认 closes/fixes/署名 issue，
+ * 不含关联」），却没发现判阻塞那边用的是宽的那条——**口径不一致的危险，在于你只检查了另一半。**
+ */
+export function claimedIssueNumbers(text) {
+  return attributedIssueNumbers(text).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/**
+ * 整张 PR 认领的单号（含「标题裸匹配」那一级退路）——**判在途用这个**。
+ *
+ * 与 `claimedIssueNumbers(text)` 的差别：那个只看一段文本（收不到退路那一级），
+ * 这个吃 `pr` 对象，走的是与关单侧同一个 `attributedIssueNumber`，四级优先级完全一致。
+ * `openIssues` 传开放单号集合，让退路对「还开着的单」收严（见 `attributedIssueNumber`）。
+ */
+export function claimedIssueNumbersOfPr(pr, { openIssues = null } = {}) {
+  const n = attributedIssueNumber(pr, { openIssues });
+  return Number.isInteger(n) && n > 0 ? [n] : [];
 }
 
 function parseJsonOut(raw, what) {
