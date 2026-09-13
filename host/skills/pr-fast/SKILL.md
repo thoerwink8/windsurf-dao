@@ -90,7 +90,7 @@ commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 
 ```bash
 node scripts/dao.mjs pr-open --title "[cursor] <标题>" --body-file <文件> \
-  --head <branch> --model <registry id> [--reviewer <id>]
+  --head <branch> --model <registry id> --reviewer <registry id>
 node scripts/gh-as.mjs marshal -- pr ready <N>
 node scripts/gh-as.mjs marshal -- pr comment <N> --body-file <文件>
 node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
@@ -98,11 +98,19 @@ node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
 
 **为什么不用裸 `marshal -- pr create`**：那样开出来的 PR 在账本里没有派工决定，打标路认不出这条链，于是永远卡在「需人工打标」——指挥官合不了、审官也叫不动（#1214 缺口 A，2026-09-13 有 13/17 张开放 PR 卡死在这上面）。`pr-open` 补的就是这条落账。
 
-- `--model` 必填，且必须是 `docs/model-routing.json` 里注册的 id——**不许从 commit 前缀猜家族**（猜出来的账进不了选型）。
-- `--reviewer` 不给也行：稍后 `node scripts/dao.mjs pr-sync-labels --pr <N>` 会按账把它补齐。
+- `--model` / `--reviewer` **都必填**，都必须是 `docs/model-routing.json` 里注册的 id——**不许从 commit 前缀猜家族**（猜出来的账进不了选型）。
+  两个缺一不可，这不是保守：打标路的判据是「这条链上那条 `job.dispatch` 里 `model` 与 `reviewer` 都在」
+  （`scripts/lib/dispatch/worker-done.mjs:274`），**缺任一个都返回「需人工打标」**。
+- `pr-sync-labels` **不是补审官的入口**：它只按仓+分支读账、把账里已有的字段打成标，既不选审官也不写账。
+  账里缺 `reviewer`，它照样只会回「缺 model 或 reviewer——需人工打标」。
 - 打标失败**不挡**开 PR（记账不算门）：回执里会说清哪个标没打上，照着补即可。
 
-命令以 `gh-as` / `dao` 实际能力为准。缺 marshal 凭据报「这台机器没装」，**不许**退回裸 `gh` 或 worker 装成做完。裸 `marshal -- pr create` 仍可用（比如既有的分支要补一张 PR），但**要顺手跑一次 `pr-sync-labels`**，否则那张 PR 进不了自动链。
+命令以 `gh-as` / `dao` 实际能力为准。缺 marshal 凭据报「这台机器没装」，**不许**退回裸 `gh` 或 worker 装成做完。
+
+裸 `marshal -- pr create` 只在这些情形下可用，而且**都没有「跑一次 `pr-sync-labels` 就修好」这回事**——那条路只在账里已有完整 `job.dispatch`（含 `model` 与 `reviewer`）时才通：
+
+- 分支是**工人**开的（那种 PR 的账在派工那一刻就落了，见 `dao.mjs dispatch`）：裸 `pr create` 后跑一次 `pr-sync-labels` 确实能补上标。
+- 分支没有账、也不是工人开的（比如很久以前的旧分支）：**没有自动落账时机**。要么用 `dao pr-open` 新开一张（它当场落账），要么按人工处理——不要指望 `pr-sync-labels` 变出账来。
 
 PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致）。**不写 issue 号、不署名 issue**——本路没有 issue；关单脚本不适用。作者应为 **`dao-marshal[bot]`**。
 
@@ -133,6 +141,7 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 - 不要把用户支去新开聊天当必经路径；有子代理就派子代理。
 - 不要在执行面开 PR（含 worker / 裸 `gh`）；不要用裸 `gh` 做 create/ready/comment/merge。
 - **不要用裸 `marshal -- pr create` 开快路 PR**——那样开出来的单在账本里没有派工决定，
-  打标路认不出它，于是永远卡在「需人工打标」（#1214）。走 `dao pr-open`，或开完补一次 `pr-sync-labels`。
+  打标路认不出它，于是永远卡在「需人工打标」（#1214）。走 `dao pr-open`（当场落账）。
+- **不要把 `pr-sync-labels` 当成「补账」的命令**——它只把账里**已有**的字段打成标，缺 `reviewer` 一样报「需人工打标」。
 - 不要把体系类改动包装成「极速模式」绕过 manual merge 与 PR 三问。
 - 不要开 issue「为了有个号」——要么真走开单三问，要么 PR 正文自洽。
