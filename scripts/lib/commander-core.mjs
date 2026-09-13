@@ -948,6 +948,8 @@ function collectCandidates(situation) {
       prs: prList,
       ledger: situation.exhaustedPush || {},
       pushedThisRound: [],
+      // #1238：带上本轮判据版本。判据改过 → 按旧判据打的认输标自动过期。
+      epoch: epochOf().epoch,
     });
     for (const c of clearPlan.clears) {
       out.push(withNeeds({
