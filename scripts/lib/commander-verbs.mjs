@@ -19,6 +19,8 @@ import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
 // #1236：判据版本。**定义在这里**（不在 commander-core）——drainLedgerKey 也在这文件，
 // 而 commander-core → commander-verbs 是单向依赖，写在 core 会绕成环。
 import { retryEpoch, stampRetryKey } from './retry-epoch.mjs';
+// #1237：失败分类（terminal / retryable / unknown）——判据在那边，这里只消费。
+import { judgeRetry } from './retry-verdict.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -329,10 +331,30 @@ export function validateRetryDrain(input = {}) {
   const tries = Number(prevObj.tries) || 0;
   const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : 0;
 
+  // #1237：先问「这个失败再试一次会不会不一样」。判据在 lib/retry-verdict.mjs，
+  // 不在这里写词表——这里只消费结论。
+  //
+  // 为什么这一条要在 max-tries **之前**：7 天日志 274 条错误里 54% 是不可试的
+  // （树/文件已经不在了、账本里根本没这条记录、执行目录判死）。对它们试满 3 次
+  // = 白等 3×45 分钟才见到人，而每一次都不可能成功。
+  // 一次就交人 vs 两小时后交人，差的不是效率，是「这张卡还活着吗」。
+  //
+  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError）。
+  // 没记过原文 → verdict 为 unknown → 按可试处理（保守：宁可多试一次）。
+  const verdict = judgeRetry({ error: prevObj.lastError });
+  const hopeless = gated(
+    'retry-drain.hopeless',
+    verdict.verdict === 'terminal',
+    fail('hopeless', `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`,
+      { escalate: true, tries, retryVerdict: 'terminal', verdictWhy: verdict.why, error: prevObj.lastError || null }),
+    C,
+  );
+  if (hopeless) return hopeless;
+
   const exhausted = gated(
     'retry-drain.max-tries',
     tries >= maxTries,
-    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries }),
+    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries, retryVerdict: verdict.verdict }),
     C,
   );
   if (exhausted) return exhausted;
@@ -497,10 +519,17 @@ export function applyDrainLedger({
   if (!verdict.countTry || pr == null) return { ledger, wrote: false, verdict };
   const key = drainLedgerKey(pr, head);
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
+  // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
+  // 只存首行、截 400 字：账本是给人看的判据，不是日志转储。
+  const lastError = String((payload && (payload.error || payload.why)) || '').trim().split(/\r?\n/)[0].slice(0, 400) || null;
   return {
     ledger: {
       ...(ledger && typeof ledger === 'object' ? ledger : {}),
-      [key]: { at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1 },
+      [key]: {
+        at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1,
+        ...(lastError ? { lastError } : {}),
+      },
     },
     wrote: true,
     verdict,
