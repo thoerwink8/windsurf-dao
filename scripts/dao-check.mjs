@@ -115,6 +115,13 @@
 //    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
 // ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
 //    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
+// ㊲ 判据不得经过外壳的引号层（2026-09-13 用户拍板「赞同」，随 #1240）：扫仓内追踪面，
+//    `node -e`/`python3 -c` 等内联代码里出现 `$`、`--body` 参数里出现命令替换、gh issue
+//    写动作带 `--body`，都报红——外壳会先展开一轮，**命令照常 exit 0、输出照常像模像样**，
+//    错的只是判据本身（2026-09-13 实咬：`node -e "…/@e([0-9a-f]{12})$/…"` 的 `$/` 被吞）。
+//    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
+//    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
+//    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -169,6 +176,9 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles,
+} from './lib/inline-script-check.mjs';
 import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
 import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
@@ -1931,6 +1941,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkInlineScriptSamples();
+checkInlineScriptLive();
 checkFailedUnitsLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
@@ -2017,6 +2029,63 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkInlineScriptSamples() {
+  const r = inspectInlineScriptsFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '内联脚本闸样本没查成' : '内联脚本闸样本对不上',
+      '恢复 tests/fixtures/inline-script/{red,ok,empty}：红=内联代码含 $ 与 --body 含命令替换必须拦、绿=单引号无 $ 与 --body-file 必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkInlineScriptLive() {
+  const files = listScanFiles({
+    root: ROOT,
+    spawnSync,
+    readdir: (dir) => readdirSync(dir),
+    stat: (p) => statSync(p),
+  });
+  if (!files) {
+    fail(
+      '内联脚本闸 live 没查成',
+      '要能列出仓内追踪面（git ls-files 或遍历）；列不出 = 没查成，不是 0 个违规',
+      ROOT,
+    );
+    return;
+  }
+  const loaded = [];
+  for (const rel of files) {
+    try {
+      const text = readFileSync(join(ROOT, rel), 'utf8');
+      if (text.includes('\0')) continue;
+      loaded.push({ path: rel, text });
+    } catch { /* 读不出的不算样本，下一轮还在就会再碰 */ }
+  }
+  const r = inspectInlineScripts({ files: loaded });
+  if (r.unscanned) {
+    fail('内联脚本闸 live 没查成', '扫到的正文 0 份 = 没查成，不是 0 个违规', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    const first = r.violations[0];
+    fail(
+      `判据经过了外壳的引号层 ${r.violations.length} 处`,
+      `${first.fix}（例：${first.kind}）`,
+      r.violations.slice(0, 6).map((v) => `${v.file}:${v.line} ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸：扫了 ${r.scanned} 份文本，0 处判据经过外壳引号层`);
 }
 
 function checkFailedUnitsLive() {
