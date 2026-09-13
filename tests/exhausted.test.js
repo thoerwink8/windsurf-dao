@@ -315,14 +315,17 @@ describe('认输标签随新 head 自动摘除（自主运转的死点 A）', ()
     assert.equal(r.clears[0].head, 'NEWHEAD');
   });
 
-  it('反证：同一个 head 不许摘（那才是「已认输」的本意）', async () => {
+  it('反证：同一个 head、同一个判据版本 → 不许摘（那才是「已认输」的本意）', async () => {
     const { planExhaustedLabelClear } = await EX;
     const r = planExhaustedLabelClear({
       prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
-      ledger: { 'pushed:100@SAMEHEAD': { pr: 100, head: 'SAMEHEAD' } },
+      // #1238：账本键带判据版本；版本没变、head 没变 → 这次认输仍然成立。
+      ledger: { 'pushed:100@SAMEHEAD@eaaaaaaaaaaaa': { pr: 100, head: 'SAMEHEAD', at: '2026-09-13T00:00:00Z' } },
+      epoch: 'aaaaaaaaaaaa',
     });
     assert.equal(r.clears.length, 0);
-    assert.equal(r.skipped.some((x) => x.why === 'same-head'), true);
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true,
+      '两条都没变才算「仍认输」  →  ' + JSON.stringify(r.skipped));
   });
 
   it('「等用户」不摘——人没回话之前机器不该自己动', async () => {
@@ -332,6 +335,72 @@ describe('认输标签随新 head 自动摘除（自主运转的死点 A）', ()
       ledger: { 'pushed:100@OLDHEAD': { pr: 100, head: 'OLDHEAD' } },
     });
     assert.equal(r.clears.length, 0);
+  });
+
+  // ── #1238：判据变了，标也要过期 ────────────────────────────────────────────
+  // 2026-09-13 第二次实咬：摘标原先只认「工人推了新 head」，于是**判据修好了但没人推
+  // 新 head 的 PR 永远过期不了**。实测 6 张（#1225/#1213/#1211/#1209/#1111/#1148），
+  // 其中 #1111/#1148 的病早已修在 master 上，标还挂着；人对它们「摘标重推」也无效。
+  it('head 没动但判据版本变了 → 摘（挡住它的那套判据改过了）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    // 版本号**从真模块取**，不手打——手打 12 位 hex 这件事我当场就数错过两次
+    // （这正是「凡是需要手打的常量早晚会被凭印象填」那条判例的形状，只不过发生在我自己身上）。
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const oldEpoch = nowEpoch === 'aaaaaaaaaaaa' ? 'bbbbbbbbbbbb' : 'aaaaaaaaaaaa';
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { [`pushed:100@SAMEHEAD@e${oldEpoch}`]: { pr: 100, head: 'SAMEHEAD', at: '2026-09-10T00:00:00Z' } },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 1, JSON.stringify(r));
+    assert.equal(r.clears[0].reason, 'epoch-changed', '要说得出是版本变的，不是 head 变的');
+    assert.ok(r.clears[0].why.includes(oldEpoch), '旧版本要写在理由里  →  ' + r.clears[0].why);
+    assert.ok(r.clears[0].why.includes(nowEpoch), '新版本也要在  →  ' + r.clears[0].why);
+  });
+
+  it('老记录没带版本 → 按过期处理（留着 = 可能永久卡死）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { 'pushed:100@SAMEHEAD': { pr: 100, head: 'SAMEHEAD', at: '2026-09-07T00:00:00Z' } },
+      epoch: 'aaaaaaaaaaaa',
+    });
+    assert.equal(r.clears.length, 1, '加版本之前的记录无从判断，按过期处理');
+    assert.equal(r.clears[0].reason, 'epoch-missing');
+  });
+
+  it('本轮版本没算成 + 老记录 → 不动手（没依据不许摘）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'SAMEHEAD', [EXHAUSTED])],
+      ledger: { 'pushed:100@SAMEHEAD@eaaaaaaaaaaaa': { pr: 100, head: 'SAMEHEAD', at: '2026-09-07T00:00:00Z' } },
+      epoch: null,
+    });
+    assert.equal(r.clears.length, 0, '这一轮算不出判据版本，就没依据说标过期了');
+    assert.equal(r.skipped.some((x) => x.why === 'epoch-unscanned'), true);
+  });
+
+  it('一张 PR 多条记录 → 取 at 最新的那条比（不是 Object.keys 的第一条）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const oldEpoch = nowEpoch === 'aaaaaaaaaaaa' ? 'bbbbbbbbbbbb' : 'aaaaaaaaaaaa';
+    // 构造一个**只有按 at 取最新才判得对**的场面：
+    //   最老那条 = 旧版本的记录（按它比 → 摘，理由是 epoch-missing/changed）
+    //   最新那条 = 新版本、同 head（按它比 → 不摘：这次认输仍然成立）
+    // 误取最老那条 → 会摘掉一个**仍然成立**的标，把已经认输的 PR 重新放回流水线空转。
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])],
+      ledger: {
+        [`pushed:100@NEWHEAD@e${oldEpoch}`]: { pr: 100, head: 'NEWHEAD', at: '2026-09-07T00:00:00Z' },
+        [`pushed:100@NEWHEAD@e${nowEpoch}`]: { pr: 100, head: 'NEWHEAD', at: '2026-09-13T00:00:00Z' },
+      },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 0, '最新那条说这次认输仍成立，就不该摘  →  ' + JSON.stringify(r));
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true,
+      '要走到「同 head 同版本」这条判据上  →  ' + JSON.stringify(r.skipped));
   });
 
   it('反证：账本里没有认输记录 → 不摘（没认输过就无从谈「过期」）', async () => {
