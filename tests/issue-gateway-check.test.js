@@ -40,10 +40,17 @@ describe('issue-gateway-check 全宿主面', () => {
     assert.match(r.fail.join(' '), /soldier-book-mirasim|少接/);
   });
 
-  it('AGENTS.md 已删，不再是宿主面（#1098）；网关句改钉还在的常驻面', async () => {
-    const { HOST_SURFACES } = await CHECK_LOAD;
-    assert.equal(HOST_SURFACES.some((s) => s.rel === 'AGENTS.md'), false);
-    assert.equal(fs.existsSync(path.join(REPO, 'AGENTS.md')), false);
+  it('少接 AGENTS.md → 红（不是「别处有」就算过）', async () => {
+    const { checkIssueGatewaySurfaces, HOST_SURFACES } = await CHECK_LOAD;
+    const files = {};
+    for (const s of HOST_SURFACES) {
+      const p = path.join(REPO, s.rel);
+      files[s.rel] = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+    }
+    files['AGENTS.md'] = '# 无网关\n';
+    const r = checkIssueGatewaySurfaces({ root: REPO, files });
+    assert.ok(r.fail, JSON.stringify(r));
+    assert.match(r.fail.join(' '), /AGENTS|少接/);
   });
 
   it('少接 .cursor/hooks.json → 红', async () => {

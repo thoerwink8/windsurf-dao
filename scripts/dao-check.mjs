@@ -1288,7 +1288,7 @@ function checkEphemeralLifecycle() {
     handoff: read('scripts/lib/handoff-check.mjs'),
     miraReviewer: read('host/skills/dispatch/templates/reviewer-book-mirasim.md'),
     miraSoldier: read('host/skills/dispatch/templates/soldier-book-mirasim.md'),
-    agents: existsSync(join(ROOT, 'AGENTS.md')) ? read('AGENTS.md') : '',
+    agents: read('AGENTS.md'),
     nudgeInstall: read('scripts/install-nudge-stalled.sh'),
     progressInstall: read('scripts/install-progress-watch.sh'),
     core: read('scripts/lib/commander-core.mjs'),

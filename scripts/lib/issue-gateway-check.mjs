@@ -12,7 +12,7 @@ import { INSTALL_FILES } from './commander-inventory.mjs';
 export const HOST_SURFACES = [
   { id: 'claude-settings', rel: '.claude/settings.json', kind: 'hook-json', must: 'dispatch-gate' },
   { id: 'cursor-hooks', rel: '.cursor/hooks.json', kind: 'hook-json', must: 'dispatch-gate' },
-  // AGENTS.md 已随注入面瘦身删除（#1098）；网关句仍钉 CLAUDE.md / global-CLAUDE / 士兵书。
+  { id: 'agents', rel: 'AGENTS.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'claude-md', rel: 'CLAUDE.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'global-claude', rel: 'docs/global-CLAUDE.md', kind: 'resident-md', must: 'issue-gateway' },
   { id: 'dispatch-skill', rel: 'host/skills/dispatch/SKILL.md', kind: 'resident-md', must: 'issue-gateway' },
@@ -144,7 +144,7 @@ export function checkNoBareGhIssueWrite({ root, files, extraRels } = {}) {
     rels = Object.keys(files).filter((k) => k.endsWith('.md') || k.endsWith('.json'));
   } else {
     rels = [
-      'CLAUDE.md', 'docs/global-CLAUDE.md',
+      'AGENTS.md', 'CLAUDE.md', 'docs/global-CLAUDE.md',
       ...walkMd(join(root, 'host', 'skills'), 'host/skills', []),
       ...walkMd(join(root, 'docs', 'cli-notes'), 'docs/cli-notes', []),
     ];

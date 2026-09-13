@@ -60,11 +60,13 @@ describe('ephemeral-lifecycle', () => {
     assert.match(admit, /capNewDispatchSlots/);
   });
 
-  it('指挥官 / worker-brief 指 mirasim 书；AGENTS.md 已删', () => {
+  it('指挥官 / AGENTS / worker-brief 指 mirasim 书', () => {
     const commander = read('scripts/commander.mjs');
     assert.match(commander, /soldier-book-mirasim\.md/);
     assert.doesNotMatch(commander, /闭环框架见 host\/skills\/dispatch\/templates\/soldier-book\.md/);
-    assert.equal(existsSync(join(REPO, 'AGENTS.md')), false);
+    const agents = read('AGENTS.md').split('\n')[0];
+    assert.match(agents, /soldier-book-mirasim\.md/);
+    assert.match(agents, /reviewer-book-mirasim\.md/);
     const brief = read('host/skills/worker-brief/SKILL.md');
     assert.match(brief, /soldier-book-mirasim\.md/);
   });
@@ -91,7 +93,7 @@ describe('ephemeral-lifecycle', () => {
       handoff: read('scripts/lib/handoff-check.mjs'),
       miraReviewer: read('host/skills/dispatch/templates/reviewer-book-mirasim.md'),
       miraSoldier: read('host/skills/dispatch/templates/soldier-book-mirasim.md'),
-      agents: existsSync(join(REPO, 'AGENTS.md')) ? read('AGENTS.md') : '',
+      agents: read('AGENTS.md'),
       nudgeInstall: read('scripts/install-nudge-stalled.sh'),
       progressInstall: read('scripts/install-progress-watch.sh'),
       core: read('scripts/lib/commander-core.mjs'),

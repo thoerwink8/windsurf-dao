@@ -516,7 +516,7 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
 
-（这段是 2026-09 初的实测快照。当时那批红项清单记在仓根 `AGENTS.md` 里，该文件已随注入面瘦身删除——判断真回归不靠清单，靠基线：先在**未改动**的 master 上跑一遍，多出来的红才是你引入的。）
+（这段是 2026-09 初的实测快照。当时那批「云上注定红」清单曾写在仓根 `AGENTS.md`；该文件现只留 Codex/跨执行体常驻指针，不再抄红项清单——判断真回归靠基线：先在**未改动**的 master 上跑一遍，多出来的红才是你引入的。）
 
 ## 10. 接上 memory
 
