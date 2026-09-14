@@ -29,6 +29,12 @@ test('会话还在跑 → 保留（不赌）', () => {
   assert.equal(judgeLease(lease(), { ...S, sessionState: 'starting' }).verdict, 'keep');
 });
 
+test('waiting_user 按还在跑保留，不回收（#1174 T8）', () => {
+  for (const st of ['waiting_user', 'waiting', 'waiting_permission']) {
+    assert.equal(judgeLease(lease(), { ...S, sessionState: st }).verdict, 'keep', st);
+  }
+});
+
 test('宽限期内一律不动——刚起的会话有权存在', () => {
   const j = judgeLease(lease({ ageMin: 5 }), { ...S, sessionState: 'incomplete' });
   assert.equal(j.verdict, 'keep');

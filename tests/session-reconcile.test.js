@@ -55,6 +55,24 @@ it('stopped and rejected sessions use canonical terminal states and do not occup
   assert.equal(isLiveSession({ key: 'grok:fixture', state: 'running' }).live, true);
 });
 
+it('waiting_user is a live executor and blocks reconcile redispatch (#1174 T8)', async () => {
+  const { isLiveSession, hasLiveExecutor, planReconcile } = await LOAD;
+  for (const state of ['waiting_user', 'waiting', 'waiting_permission']) {
+    assert.equal(isLiveSession({ key: 'acp:wait', state }).live, true, state);
+  }
+  assert.equal(hasLiveExecutor({
+    sessions: [{ key: 'acp:wait', state: 'waiting_user', cwd: '/x/dao-1174' }],
+    issue: 1174,
+  }).live, true);
+  const r = planReconcile({
+    desired: [{ issue: 1174, job_id: 'dispatch-x', identity: '工人' }],
+    sessions: [{ key: 'acp:wait', state: 'waiting_user', cwd: '/x/dao-1174' }],
+    openIssues: [1174],
+    openPrs: [],
+  });
+  assert.equal(r.redispatches.length, 0, '等人时差集不许重派');
+});
+
 it('successful finished reviewer remains reusable', async () => {
   const { judgeReviewerSessionReuse } = await import('../scripts/lib/dispatch/reviewer-mirasim.mjs');
   const r = judgeReviewerSessionReuse({ record: { sessionKey: 'codex:finished' }, view: { phase: 'finished' } });

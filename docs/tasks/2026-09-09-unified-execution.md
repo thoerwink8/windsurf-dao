@@ -19,6 +19,9 @@
 - [ ] T6 指挥官接线：一套调度消费 Mirasim/ACP；首帧透传 local/cloud，完成判据不再要求 direct 必须有 relay 账本；负责人主会话。
 - [ ] T7 直接渠道：实际模型请求不用旧 2核2G New API；Windsurf/OpenCode/CommandCode 优先性价比模型，有权限/协议/计费证据才启用；负责人主会话。
 - [ ] T8 自动交互：任务内已知答案自动回应、必要人工问题持久 waiting_user；等待不被当卡死重派，取消和恢复验证通过；负责人主会话。
+  - [x] T8a 等待不被当卡死重派：`waiting_user` 进正典 `EXECUTION_WAITING`（不进终态）；`assessLiveness` 等十小时仍是 active；指挥官不停会话、不差集重派；租约按还在跑保留。证据：`tests/liveness.test.js`、`tests/commander.test.js`、`tests/session-reconcile.test.js`、`tests/lease-gc.test.js`。
+  - [ ] T8b 任务内已知答案自动回应：ACP `interactionPolicy` / worktree_scope 已有运行时测试，派工热路默认策略未在本切片重验。
+  - [ ] T8c 取消和恢复：ACP runtime 已有 cancel/resume 测试，指挥官恢复路径未在本切片重验。
 - [ ] T9 真实容量：逐档运行多轮工具任务，记录成功数、耗时、实际模型/渠道、进程/请求/测试负载、用量；不照抄历史 2/3/4 上限；负责人主会话。
 - [ ] T10 完整业务：至少一张真实 issue 由新机制产出可审 PR、完成独立验证与已授权合并；自动化运行观察无重复派工/假活，usage 可对账。
 - [ ] T11 发布收口：代码提交/CI/PR、部署版本、定时器 NEXT、回退证据齐全；关联历史单逐条处置并同步本清单。

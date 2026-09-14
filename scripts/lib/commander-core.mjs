@@ -1767,6 +1767,7 @@ function collectCandidates(situation) {
 
   // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  // waiting_user 不是 incomplete：人还没回话，停了等于把问题扔掉，下一轮对账会当「人没了」重派（#1174 T8）。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
     // 这里的 s 来自 execution-sessions.mjs，已经是**归一后**的形状（字段是 state），

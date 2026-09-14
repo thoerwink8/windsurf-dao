@@ -5,6 +5,8 @@ import {readSessionView} from '../scripts/lib/mirasim-runtime.mjs';
 test('an explicit pending interaction outranks legacy completed metadata',()=>{
  assert.equal(normalizeExecutionSession({runState:'completed',phase:'waiting_user',awaiting:true}).state,'waiting_user');
  assert.equal(normalizeExecutionSession({phase:'done',snapshot:{interactions:[{promptId:'q'}]}}).state,'waiting_user');
+ assert.equal(normalizeExecutionSession({phase:'waiting'}).state,'waiting_user');
+ assert.equal(normalizeExecutionSession({phase:'waiting_permission'}).state,'waiting_user');
 });
 test('answered questions are not permanent waits, and failures remain failures',()=>{
  assert.equal(normalizeExecutionSession({phase:'done',interactions:[{status:'answered'}]}).state,'done');

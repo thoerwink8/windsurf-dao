@@ -8,7 +8,7 @@ import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,Mirasim
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {scanSessionProcs} from './dispatch/lease.mjs';
-import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,EXECUTION_WAITING,isWaitingState,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
@@ -74,7 +74,7 @@ export function judgeExecutionCompletion(view) {
   const cancelled=['aborted','cancelled','canceled','stopped'].includes(phase);
   if(cancelled)return {status:'failed',reason:'session cancelled',confirmedBy:['session']};
   const pending=x=>x&&x.answered!==true&&!x.done&&!x.answeredAt&&!x.resolvedAt&&!['answered','cancelled','canceled','resolved','done'].includes(x.status);
-  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||['waiting_user','waiting_permission'].includes(phase))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
+  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||EXECUTION_WAITING.has(String(phase||'').toLowerCase()))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
   if(!phase)return {status:'unknown',reason:'session phase unavailable',confirmedBy:[]};
   if(view.error||snapshot.error||view.incomplete===true||snapshot.incomplete===true||['failed','error','incomplete','auth_required','unsupported_interaction'].includes(phase))return {status:'failed',reason:'session did not complete',confirmedBy:['session']};
   if(!TERMINAL.has(phase))return {status:'running',reason:'session active',confirmedBy:['session']};
@@ -327,7 +327,7 @@ export function createExecutionRuntime(opts={}) {
       if(held?.state==='pending')throw busy('launch is still awaiting acceptance','launch-pending');
       if(held?.state==='stopping'&&(automatic||held.cleanupOwner&&alive(held.cleanupOwner)))throw busy('session cleanup already owned');
       if(held?.cleanupVerified&&meta?.cleanupVerified)return {alreadyStopped:true};
-      if(automatic&&meta?.state==='waiting_user')throw busy('session is waiting for user');
+      if(automatic&&isWaitingState(meta))throw busy('session is waiting for user');
       const m=meta||{schemaVersion:1,recordKey:key,sessionKey:key,workdir:target,backend:String(key).startsWith('acp:')?'acp':'mirasim',state:'unknown',launchState:'accepted',taskCompleted:false,adopted:true};
       const clock=reservedClock(m,now());
       const next={...m,state:'stopping',cleanupVerified:false,cleanupToken,cleanupOwner:identity(process.pid),updatedAt:clock};
