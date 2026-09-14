@@ -5,10 +5,11 @@
 // 自愈器每 5 分钟对 orca 那份说「无事可做」，检查器对 root 那份报了三天红，
 // 谁也没错，是「同一条判据在两个地方各写了一份、还各用一个 home」。
 //
-// 判据：一个家目录有 `.claude/` 或有 `.mirasim/`，就说明那里装了执行体、
-// 也就有装载面要守。**不写死用户名**——手打的名字早晚漏（判例 memory
-// hand-typed-constant-will-be-wrong）：这台机器上 root 与 orca 都有装载面，
-// 换台机器用户名可能不同。
+// 判据：一个家目录有 `.claude/`，就说明那里有本检查要守的装载面
+// （`~/.claude/skills`，NEW-MACHINE §11）。**不把只有 `.mirasim/` 的家算进来**——
+// 那是 mirasim 自己的发现面，本检查/自愈既不查它也不该凭空建 `.claude/skills`。
+// **不写死用户名**——手打的名字早晚漏（判例 memory hand-typed-constant-will-be-wrong）：
+// 这台机器上 root 与 orca 都有 `.claude/`，换台机器用户名可能不同。
 //
 // 取不到家目录列表（读不了 /etc/passwd）时返回 unscanned，**不返回空数组**：
 // 「一个家目录都没有」和「这次没读到」必须分得开，否则整条自愈链会静默变成空转。
@@ -18,7 +19,7 @@ import { join } from 'node:path';
 
 /** 判定某目录算不算「有装载面的家目录」。导出供测试拿假目录造样本。 */
 export function looksLikeAgentHome(dir) {
-  return existsSync(join(dir, '.claude')) || existsSync(join(dir, '.mirasim'));
+  return existsSync(join(dir, '.claude'));
 }
 
 /** 从一份 passwd 文本里取家目录（第 6 栏，绝对路径）。 */
@@ -75,7 +76,7 @@ export function agentHomes({ env = process.env, readdir = readdirSync, readFile 
     let entries;
     try { entries = readdir(dir); } catch { continue; } // 不存在 / 没权限：不是「没装载面」，是够不着
     inspected++;
-    if (entries.includes('.claude') || entries.includes('.mirasim')) homes.push(dir);
+    if (entries.includes('.claude')) homes.push(dir);
   }
   if (inspected === 0) {
     return { ok: false, reason: `候选家目录 ${candidates.size} 个一个都读不到——没查成（≠ 都没有装载面）` };

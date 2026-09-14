@@ -332,3 +332,74 @@ describe('⑭ 与 ⑱ 对同一活数据口径一致', () => {
     }).state, 'ok');
   });
 });
+
+// OnCalendar 字符串去重抓不到 `*:06/5` ≡ `*:1/5`（systemd 回绕后同一串分钟）。
+describe('OnCalendar 语义展开后不得撞点', () => {
+  const CAL = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'on-calendar.mjs').split(path.sep).join('/'));
+  const INV = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-inventory.mjs').split(path.sep).join('/'));
+  const fs = require('node:fs');
+
+  it('故意样本：*:06/5 与 *:1/5 展开成同一串（字符串去重抓不到）', async () => {
+    const { expandOnCalendar, calendarOverlap } = await CAL;
+    const a = expandOnCalendar('*:06/5');
+    const b = expandOnCalendar('*:1/5');
+    assert.equal(a.ok, true, a.reason);
+    assert.equal(b.ok, true, b.reason);
+    assert.deepEqual([...a.slots].sort(), [...b.slots].sort(),
+      'systemd 回绕后 *:06/5 就是 *:1/5，闸必须当同一点位');
+    const ov = calendarOverlap('*:06/5', '*:1/5');
+    assert.equal(ov.ok, true, ov.reason);
+    assert.ok(ov.hits.length > 0);
+  });
+
+  it('反证：*:00/5 与 *:1/5、*:03/5 触发点不相交', async () => {
+    const { calendarOverlap } = await CAL;
+    for (const other of ['*:1/5', '*:03/5', '*:3/5', '*:07:00', '*:17:00']) {
+      const ov = calendarOverlap('*:00/5', other);
+      assert.equal(ov.ok, true, ov.reason);
+      assert.deepEqual(ov.hits, [], `*:00/5 不该撞 ${other}，撞了 ${ov.hits.slice(0, 5).join(',')}`);
+    }
+  });
+
+  it('认不出的写法 = 没查成，不许当不撞', async () => {
+    const { expandOnCalendar } = await CAL;
+    const r = expandOnCalendar('never-in-a-million-years');
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /不认识/);
+  });
+
+  it('仓内 + 生成式 timer 都能展开；heal-root 与任一现有点位不相交', async () => {
+    const { expandOnCalendar, calendarOverlap } = await CAL;
+    const M = await INV;
+    const dir = path.join(__dirname, '..', 'host', 'machine', 'systemd');
+    const units = fs.readdirSync(dir).filter((f) => f.endsWith('.timer')).map((u) => {
+      const s = fs.readFileSync(path.join(dir, u), 'utf8');
+      const m = s.match(/^OnCalendar=(.+)$/m);
+      return { unit: u, cal: m && m[1].trim() };
+    });
+    for (const [p, text] of Object.entries(M.INSTALL_FILES())) {
+      if (!p.endsWith('.timer')) continue;
+      const m = String(text).match(/^OnCalendar=(.+)$/m);
+      units.push({ unit: path.basename(p), cal: m && m[1].trim() });
+    }
+    assert.ok(units.length > 1, '一个 timer 都没扫到，本闸失效');
+
+    const expanded = [];
+    for (const u of units) {
+      assert.ok(u.cal, `${u.unit} 没有 OnCalendar`);
+      const e = expandOnCalendar(u.cal);
+      assert.equal(e.ok, true, `${u.unit} 展开失败：${e.reason}`);
+      expanded.push({ ...u, slots: e.slots });
+    }
+
+    const heal = expanded.find((u) => u.unit === 'dao-skills-heal-root.timer');
+    assert.ok(heal, '找不到 dao-skills-heal-root.timer');
+    for (const other of expanded) {
+      if (other.unit === heal.unit) continue;
+      const ov = calendarOverlap(heal.cal, other.cal);
+      assert.equal(ov.ok, true, ov.reason);
+      assert.deepEqual(ov.hits, [],
+        `dao-skills-heal-root（${heal.cal}）撞上 ${other.unit}（${other.cal}）：${ov.hits.slice(0, 8).join(',')}`);
+    }
+  });
+});

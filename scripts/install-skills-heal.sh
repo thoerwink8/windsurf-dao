@@ -104,8 +104,25 @@ for unit in dao-skills-heal.timer dao-skills-heal-root.timer; do
 done
 
 # 立即各跑一次：光装上不等于接得上（副本里少一个依赖文件也照样 list-timers 绿）。
-# 这里不看退出码——刚装完时 root 家可能正被劫，那正是它该修的状态，跑一次就接回了。
-systemctl start dao-skills-heal.service dao-skills-heal-root.service || true
+# 被劫是它该修的状态，修完 oneshot 仍是 Result=success / ExecMainStatus=0；
+# 缺依赖、脚本非零才是失败——任一失败就点名退出，不许再印 installed。
+start_oneshot() {
+  local unit="$1" result="" status=""
+  if ! systemctl start "$unit"; then
+    result="$(systemctl show "$unit" -p Result --value 2>/dev/null || echo unknown)"
+    status="$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || echo unknown)"
+    echo "启动失败：$unit（Result=$result ExecMainStatus=$status）——副本缺依赖或脚本非零退出，不能报 installed" >&2
+    exit 1
+  fi
+  result="$(systemctl show "$unit" -p Result --value 2>/dev/null || echo unknown)"
+  status="$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || echo unknown)"
+  if [[ "$result" != success ]] || [[ "$status" != 0 ]]; then
+    echo "启动失败：$unit（Result=$result ExecMainStatus=$status）——副本缺依赖或脚本非零退出，不能报 installed" >&2
+    exit 1
+  fi
+}
+start_oneshot dao-skills-heal.service
+start_oneshot dao-skills-heal-root.service
 
 systemctl list-timers --all --no-pager | grep -E 'dao-skills-heal(-root)?\.timer' || true
 echo "installed dao-skills-heal.timer + dao-skills-heal-root.timer（两只都有下一次触发）"

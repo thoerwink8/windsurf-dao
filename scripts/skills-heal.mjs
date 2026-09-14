@@ -8,12 +8,12 @@
 // 只动 <家目录>/.claude/skills 这一层，不删 <家目录>/.mirasim/skills。
 // 没查成 exit 2（跟「查过没事」分形）；接回失败 exit 1。
 //
-// 守的是**本机所有有装载面的家目录**，不是当前进程那一个（判据在 lib/skill-homes.mjs）。
+// 守的是**本机所有有 .claude/ 的家目录**，不是当前进程那一个（判据在 lib/skill-homes.mjs）。
 // 2026-09-13 实咬：单元 `User=orca` 只修得住 /home/orca，而 dao-check 看的是 /root，
 // root 那份被 mirasim 劫走后红了三天没人接——两个 home 各自都「对」，合起来没人管。
 //
 // 从临时 worktree 里不许真接回（会链到干完就删的树，见 lib/skills-mount.mjs
-// isLinkedWorktree）：要预演用 --dry-run，真要接回请到主树跑。
+// isLinkedWorktree）：要预演用 --dry-run，真要接回请到主树跑。硬拦时非零退出、不落任何链接。
 
 import { healSkillsMount } from './lib/skills-mount.mjs';
 import { repoRoot } from './lib/onboard-check.mjs';
@@ -30,7 +30,7 @@ if (!found.ok) {
 }
 if (!found.homes.length) {
   // 有家目录但一个装载面都没有 = 这台机器没装执行体，不是故障，但要说出来。
-  say('[skills-heal] 本机没有任何家目录带 .claude/ 或 .mirasim/，无装载面要守');
+  say('[skills-heal] 本机没有任何家目录带 .claude/，无装载面要守');
   process.exit(0);
 }
 
@@ -55,9 +55,4 @@ if (!changed.length) {
   process.exit(0);
 }
 say(`[skills-heal] ${DRY ? '拟' : '已'}接回 ${changed.length}/${results.length} 个：${summary}`);
-// 从临时 worktree 接回不算失败，但必须让人看见——静默指到会删的树才是真危险（见 lib/skills-mount.mjs）。
-if (results.some((r) => r.worktree)) {
-  process.stderr.write(`[skills-heal] ⚠ 本次是从临时 worktree（${root}）接回的，链接会随该树删除而悬空；`
-    + '到主树重跑一遍即可收敛（幂等）。\n');
-}
 process.exit(0);

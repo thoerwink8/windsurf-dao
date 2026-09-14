@@ -126,10 +126,9 @@ function linkKeepers(face, keepers, dryRun) {
  * 从 `.claude/worktrees/<名>/` 里跑自愈，它把 `/root/.claude/skills/dispatch` 链到了
  * 那个 worktree——树一删全悬空，而且那是**照着 §11.1 的装法**跑出来的结果。
  *
- * **只在从 worktree 落盘时报警，不拦。** 第一版写成硬拦，当场打红了两套既有测试
- * （`tests/onboard.test.js` 的 heal / e2e 用例要在临时树里真跑接回）——本仓判例
- * `patch-stacking-is-two-strikes`：一个判据开始需要「哪些调用方例外」的清单，就说明
- * 判据本身挑错了。这里真正要防的是**没人发现链接指到了临时树**，不是「临时树不许接回」。
+ * 非 dry-run 默认硬拦（生产路径 skills-heal.mjs / onboard.mjs 都不许传例外）。
+ * 测试若要在临时树里真跑接回，显式传 `allowWorktree: true`——这个参数不进 CLI、
+ * 不进环境变量，生产路径选不着。
  *
  * 全手工解析（读 .git 文件），不 shell git——root 身份跑时会撞 dubious ownership。
  */
@@ -147,18 +146,26 @@ export function isLinkedWorktree(root) {
  * 合并式接回。幂等：已经是真目录且仓内链齐 → changed=false。
  * 不删被劫目标里的任何东西。
  *
- * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string}}
+ * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], skipped?:boolean, unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string, worktree?:boolean}}
  */
-export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, say = () => {} } = {}) {
-  // 从临时 worktree 里接回会把装载面链到一个干完就删的树。**只报不拦**（见 isLinkedWorktree
-  // 的注释：硬拦会打红「在临时树里真跑接回」的既有测试，而那不是要说的事）。
-  // 报出去的形态：接回照做，但返回里带 worktree 标记，调用方（skills-heal.mjs）会把它
-  // 打进一行醒目的告警——静默指到临时树才是真危险。
-  const fromWorktree = !dryRun && isLinkedWorktree(root);
+export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, allowWorktree = false, say = () => {} } = {}) {
+  // 从临时 worktree 真接回会把装载面链到一个干完就删的树。dry-run 不动盘，照跑；
+  // 真写盘必须到主树，或测试显式 allowWorktree（生产 CLI 不传这个参数）。
+  if (!dryRun && !allowWorktree && isLinkedWorktree(root)) {
+    const face = join(home || '', dir, 'skills');
+    say(`拒绝：从临时 worktree（${root}）真接回会把装载面链到干完就删的树。预演用 --dry-run，真接回到主树跑。`);
+    return { ok: false, kind: 'worktree', worktree: true, error: `从临时 worktree 真接回被硬拦：${root}`, face };
+  }
   const c = classifySkillsMount({ root, home, dir });
   if (c.kind === 'unscanned') return { ok: false, unscanned: true, kind: c.kind, reason: c.reason, face: c.face };
   if (c.kind === 'file') {
     return { ok: false, kind: 'file', error: `${c.face} 不是目录也不是链接——先移走再跑`, face: c.face };
+  }
+  // 本检查的装载面是 <home>/.claude/skills。家目录里没有 .claude/（只有 .mirasim/ 也算）
+  // 就不是这块要守的执行体——不许 mkdir 凭空造出 Claude 发现面。
+  const faceParent = join(home, dir);
+  if (c.kind === 'missing' && !existsSync(faceParent)) {
+    return { ok: true, changed: false, skipped: true, kind: 'missing', reason: `${faceParent} 不在——不凭空造装载面`, face: c.face };
   }
   const srcNames = listSkillNames(c.src);
   if (!srcNames.length) {
@@ -190,10 +197,6 @@ export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, s
 
   const shapeChanged = c.kind === 'hijacked' || c.kind === 'dangling' || c.kind === 'missing';
   const changed = shapeChanged || linked.length > 0 || rebuilt.length > 0 || kept.length > 0;
-  if (changed && fromWorktree) {
-    say(`⚠ 这次是从临时 worktree（${root}）接回的：装载面链到了这个树，树一删就全悬空。`
-      + '收敛办法——到主树重跑一次 `node scripts/skills-heal.mjs` 即可（幂等，会把链接改成主树路径）。');
-  }
   if (changed) {
     say(`${dryRun ? '[拟] ' : ''}仓内链 ${linked.length} 补 / ${rebuilt.length} 重建，外来保留 ${kept.length}：${kept.join('、') || '无'}`);
   }
@@ -201,7 +204,6 @@ export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, s
     ok: true,
     changed,
     kind: c.kind,
-    worktree: fromWorktree || undefined,
     linked,
     rebuilt,
     kept,

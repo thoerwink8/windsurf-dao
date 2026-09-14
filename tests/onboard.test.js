@@ -499,7 +499,7 @@ describe('skills 装载面合并式接回', () => {
     const M = await MOUNT_LOAD;
     const S = await LIB_LOAD;
     const { home, mira } = mkHijackHome('heal');
-    const r = M.healSkillsMount({ root: REPO, home });
+    const r = M.healSkillsMount({ root: REPO, home, allowWorktree: true });
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.kind, 'hijacked');
     assert.equal(r.changed, true);
@@ -516,7 +516,7 @@ describe('skills 装载面合并式接回', () => {
     assert.equal(fs.readFileSync(path.join(mira, 'dispatch', 'SKILL.md'), 'utf8'), '被劫残留', '仓内同名那份留在 mira 里');
     const after = S.checkSkillsLink({ root: REPO, home });
     assert.equal(after.problem, undefined, '接回后 onboard 应绿（外来走 keeper 白名单） →  ' + JSON.stringify(after));
-    const r2 = M.healSkillsMount({ root: REPO, home });
+    const r2 = M.healSkillsMount({ root: REPO, home, allowWorktree: true });
     assert.equal(r2.ok, true);
     assert.equal(r2.changed, false, '再跑必须幂等');
   });
@@ -531,6 +531,52 @@ describe('skills 装载面合并式接回', () => {
     assert.ok(r.kept.includes('lark-im'));
     assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink(), before);
     assert.ok(fs.existsSync(mira));
+  });
+
+  it('临时 worktree 真接回硬拦，装载面原样、不落仓内链', async () => {
+    const M = await MOUNT_LOAD;
+    const { home } = mkHijackHome('wt-block');
+    const face = path.join(home, '.claude', 'skills');
+    const before = fs.readlinkSync(face);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-wt-root-'));
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /tmp/fake/.git/worktrees/x\n');
+    fs.mkdirSync(path.join(wt, 'host'));
+    fs.symlinkSync(path.join(REPO, 'host', 'skills'), path.join(wt, 'host', 'skills'));
+    const r = M.healSkillsMount({ root: wt, home });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.worktree, true);
+    assert.equal(fs.lstatSync(face).isSymbolicLink(), true, '硬拦后必须仍是整目录链接');
+    assert.equal(fs.readlinkSync(face), before);
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'skills', 'dispatch')) || fs.lstatSync(face).isSymbolicLink(), true);
+    // 走过 symlink 能看到 mira 里的 dispatch 残留，但 face 本身不许变成真目录
+    assert.equal(fs.lstatSync(face).isDirectory() && !fs.lstatSync(face).isSymbolicLink(), false);
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it('没有 .claude/ 的家（只有 .mirasim/）不凭空造装载面', async () => {
+    const M = await MOUNT_LOAD;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-mira-only-'));
+    fs.mkdirSync(path.join(home, '.mirasim', 'skills'), { recursive: true });
+    const r = M.healSkillsMount({ root: REPO, home, allowWorktree: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.skipped, true);
+    assert.equal(r.changed, false);
+    assert.equal(fs.existsSync(path.join(home, '.claude')), false, '不许 mkdir .claude');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('生产路径选不着 allowWorktree', () => {
+    const heal = fs.readFileSync(path.join(REPO, 'scripts', 'skills-heal.mjs'), 'utf8');
+    const onboard = fs.readFileSync(path.join(REPO, 'scripts', 'onboard.mjs'), 'utf8');
+    const healCall = heal.match(/healSkillsMount\(\{[^}]+\}/g) || [];
+    const onboardCall = onboard.match(/healSkillsMount\(\{[^}]+\}/g) || [];
+    assert.ok(healCall.length > 0, 'skills-heal.mjs 必须调用 healSkillsMount');
+    assert.ok(onboardCall.length > 0, 'onboard.mjs 必须调用 healSkillsMount');
+    for (const c of [...healCall, ...onboardCall]) {
+      assert.doesNotMatch(c, /allowWorktree/, '生产调用不许带测试例外：' + c);
+    }
+    assert.doesNotMatch(heal, /process\.argv.*allow-worktree|DAO_.*ALLOW_WORKTREE/i);
+    assert.doesNotMatch(onboard, /process\.argv.*allow-worktree|DAO_.*ALLOW_WORKTREE/i);
   });
 
   it('没查成（host/skills 不在）与查过没事不同形', async () => {
@@ -555,7 +601,8 @@ describe('skills 装载面合并式接回', () => {
     assert.equal(M.classifySkillsMount({ root: REPO, home: fileHome }).kind, 'file');
   });
 
-  it('onboard.mjs e2e：整目录 mirasim 形态实跑接回，外来仍可见', async () => {
+  it('onboard.mjs e2e：从 worktree 跑则硬拦不落链；主 clone 才接回', async () => {
+    const M = await MOUNT_LOAD;
     const { home, clone } = mkHome('e2e-hijack');
     await linkMemory(home, clone, REPO); mkCreds(home);
     const mira = path.join(home, '.mirasim', 'skills');
@@ -567,25 +614,37 @@ describe('skills 装载面合并式接回', () => {
     const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')], {
       env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: 'utf8', timeout: 15_000, windowsHide: true,
     });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.equal(fs.lstatSync(face).isSymbolicLink(), false, '接回后必须是真目录');
-    assert.equal(fs.lstatSync(path.join(face, 'dispatch')).isSymbolicLink(), true);
-    assert.equal(fs.existsSync(path.join(face, 'lark-im', 'SKILL.md')), true, 'lark-im 仍可见');
-    assert.equal(fs.existsSync(path.join(mira, 'lark-im', 'SKILL.md')), true, '原目录不许删');
+    if (M.isLinkedWorktree(REPO)) {
+      assert.notEqual(r.status, 0, 'worktree 上真接回必须非零：' + (r.stdout + r.stderr));
+      assert.equal(fs.lstatSync(face).isSymbolicLink(), true, '硬拦后必须仍是整目录链接');
+      assert.equal(fs.existsSync(path.join(mira, 'lark-im', 'SKILL.md')), true, '原目录不许删');
+    } else {
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.equal(fs.lstatSync(face).isSymbolicLink(), false, '接回后必须是真目录');
+      assert.equal(fs.lstatSync(path.join(face, 'dispatch')).isSymbolicLink(), true);
+      assert.equal(fs.existsSync(path.join(face, 'lark-im', 'SKILL.md')), true, 'lark-im 仍可见');
+      assert.equal(fs.existsSync(path.join(mira, 'lark-im', 'SKILL.md')), true, '原目录不许删');
+    }
   });
 
   it('skills-heal.mjs 被劫 exit 0 且接回；没查成 exit 2', () => {
     const script = path.join(REPO, 'scripts', 'skills-heal.mjs');
     const { home } = mkHijackHome('cli-heal');
+    // 主 clone 形态（.git 是目录）：生产路径硬拦的是 worktree，这条证接回本身。
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-main-root-'));
+    fs.mkdirSync(path.join(main, '.git'));
+    fs.mkdirSync(path.join(main, 'host'));
+    fs.symlinkSync(path.join(REPO, 'host', 'skills'), path.join(main, 'host', 'skills'));
     // HOME 指假家目录、DAO_SKILL_HOMES 只给这一个：不这么钉，「守哪几个家」会拿本机
     // /etc/passwd 真清单，测试就变成在真机上乱建链（2026-09-13 改多 home 时踩到）。
     const ok = spawnSync(process.execPath, [script], {
       encoding: 'utf8', windowsHide: true, timeout: 15_000,
-      env: { ...process.env, HOME: home, USERPROFILE: home, DAO_SKILL_HOMES: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home, DAO_SKILL_HOMES: home, DAO_REPO_ROOT: main },
     });
     assert.equal(ok.status, 0, String(ok.stderr || ok.stdout));
     assert.match(String(ok.stdout || ''), /已接回|接回/);
     assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isSymbolicLink(), false);
+    fs.rmSync(main, { recursive: true, force: true });
     // 没查成 = 一个候选家目录都读不到（覆盖值里全是够不着的路径），必须 exit 2 且说「没查成」。
     const empty = spawnSync(process.execPath, [script], {
       encoding: 'utf8', windowsHide: true, timeout: 15_000,
@@ -593,7 +652,7 @@ describe('skills 装载面合并式接回', () => {
     });
     assert.equal(empty.status, 2, String(empty.stderr || empty.stdout));
     assert.match(String(empty.stderr || ''), /没查成/);
-    // 反向控制：有家目录但那个家没装执行体（没有 .claude/ 也没有 .mirasim/）⇒ 不是故障，exit 0 说出来。
+    // 反向控制：有家目录但那个家没装执行体（没有 .claude/）⇒ 不是故障，exit 0 说出来。
     const bare = fs.mkdtempSync(path.join(require('os').tmpdir(), 'onboard-bare-home-'));
     const bareRun = spawnSync(process.execPath, [script], {
       encoding: 'utf8', windowsHide: true, timeout: 15_000,
@@ -602,6 +661,37 @@ describe('skills 装载面合并式接回', () => {
     assert.equal(bareRun.status, 0, String(bareRun.stderr || bareRun.stdout));
     assert.match(String(bareRun.stdout || ''), /无装载面要守/);
     fs.rmSync(bare, { recursive: true, force: true });
+    // 只有 .mirasim/ 也不守、不造 .claude/
+    const miraOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-cli-mira-'));
+    fs.mkdirSync(path.join(miraOnly, '.mirasim', 'skills'), { recursive: true });
+    const miraRun = spawnSync(process.execPath, [script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      env: { ...process.env, HOME: miraOnly, USERPROFILE: miraOnly, DAO_SKILL_HOMES: miraOnly },
+    });
+    assert.equal(miraRun.status, 0, String(miraRun.stderr || miraRun.stdout));
+    assert.match(String(miraRun.stdout || ''), /无装载面要守/);
+    assert.equal(fs.existsSync(path.join(miraOnly, '.claude')), false);
+    fs.rmSync(miraOnly, { recursive: true, force: true });
+  });
+
+  it('skills-heal.mjs 从 worktree 真接回非零退出，不落链', () => {
+    const script = path.join(REPO, 'scripts', 'skills-heal.mjs');
+    const { home } = mkHijackHome('cli-wt');
+    const face = path.join(home, '.claude', 'skills');
+    const before = fs.readlinkSync(face);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-cli-wt-'));
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /tmp/fake/.git/worktrees/x\n');
+    fs.mkdirSync(path.join(wt, 'host'));
+    fs.symlinkSync(path.join(REPO, 'host', 'skills'), path.join(wt, 'host', 'skills'));
+    const r = spawnSync(process.execPath, [script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home, DAO_SKILL_HOMES: home, DAO_REPO_ROOT: wt },
+    });
+    assert.notEqual(r.status, 0, String(r.stderr || r.stdout));
+    assert.match(String(r.stderr || r.stdout), /worktree|硬拦|拒绝/);
+    assert.equal(fs.lstatSync(face).isSymbolicLink(), true);
+    assert.equal(fs.readlinkSync(face), before);
+    fs.rmSync(wt, { recursive: true, force: true });
   });
 });
 
@@ -616,6 +706,11 @@ describe('skills 自愈装机', () => {
     assert.match(text, /EUID/);
     assert.match(text, /NextElapseUSecRealtime/);
     assert.match(text, /dao-skills-heal\.timer/);
+    assert.doesNotMatch(text, /systemctl start dao-skills-heal\.service dao-skills-heal-root\.service \|\| true/);
+    assert.match(text, /ExecMainStatus/);
+    assert.match(text, /Result=/);
+    assert.match(text, /start_oneshot dao-skills-heal\.service/);
+    assert.match(text, /start_oneshot dao-skills-heal-root\.service/);
   });
 
   it('NEW-MACHINE §9d/§11.1 有一行装法；INDEX 登记装载面形态', () => {

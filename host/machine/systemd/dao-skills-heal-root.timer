@@ -3,9 +3,10 @@
 # 每 5 分钟一轮，与 orca 那只同频。mirasim 随时可能把装载面劫走，自愈必须比
 # 「人想起来手工重链」勤。脚本幂等且无事可做时瞬间 exit 0，频率不是负担。
 #
-# 错开别的钟：dao-sync 是 *:1/5、orca 那只自愈是 *:03/5、board-gc 是 :07、land 是 :17。
-# 仓里有一道闸守着「仓内 .timer 的 OnCalendar 互不相同——撞点就是自己跟自己抢」
-# （2026-09-13 实咬：我第一版抄了 *:1/5，正好和 dao-sync 撞上，dao-check 当场报红）。
+# 挂 *:00/5：每小时 :00/:05/:10…，与 dao-sync 的 *:1/5（:01/:06/:11…）不是同一串。
+# 第一版写成 *:06/5，字符串跟 *:1/5 不同，systemd 回绕后展开却是同一组分钟
+# （systemd-analyze calendar 给出同一个 Next elapse）。闸在 tests/timer-armed.test.js
+# 的语义展开，不只是字符串去重。
 # OnCalendar 是必需的——只有单调时钟的 timer 停掉再起会进 active(elapsed) 死态
 # （2026-09-05 dao-agent-stall 实咬，timer-armed 闸守着）。
 #
@@ -15,7 +16,7 @@
 Description=每 5 分钟把 /root/.claude/skills 从 mirasim 形态接回仓内
 
 [Timer]
-OnCalendar=*:06/5
+OnCalendar=*:00/5
 OnBootSec=2min
 Persistent=true
 
