@@ -122,6 +122,98 @@ export function rereviewKey(pr, head) {
   return stampedKey(`rereview:${pr}@${head}`);
 }
 
+/**
+ * 「这张 PR 的认定红票投在哪个 commit 上」——**判红投在旧代码上**才是本函数要的答案。
+ *
+ * 2026-09-14 实咬（#1213 静默 16 小时）：红票投完、返工派成功、工人推了新 head，
+ * 新 head 上没人复审 → 叫审官 3 次失败 → 打认输标 → 永久焊死。而「返工已经落地、
+ * 那次判定已经过期」这个事实**盘面早就在报**（`rework-awaiting-recheck`），
+ * 只是没人拿它去解冻两处：认输标（`planExhaustedLabelClear` 的第 ④ 条）与复审重试账。
+ *
+ * 两处共用**这一份**结果——`#1233` 的教训就是同一个事实被两处各判一次，早晚分叉。
+ *
+ * 只收「没查成以外、红票确实不在当前 head 上」的条目：
+ *   · reviews 没查成 / 缺 commit_id / head 没查成 → 不进表（没依据，不据此解冻任何东西）；
+ *   · 无红票、或最后一条判定就是红且打在当前 head 上 → 不进表（那就是「真的刚判红」，该走返工）。
+ *
+ * @returns {Map<string, string>} PR 号 → 红票所在 commit oid（旧代码）
+ */
+export function staleRedBallots({ prs, reviewsByPr } = {}) {
+  const out = new Map();
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const raw = prReviewInput(reviewsByPr?.[pr.number]);
+    if (!Array.isArray(raw)) continue;         // reviews 没抓到 ⇒ 不进表（没查成 = 没依据）
+    const atHeadJudge = analyzeReviewsAtHead(raw, pr.headRefOid);
+    if (!atHeadJudge.scanned) continue;        // head 没查成 / 有判别态缺 commit_id ⇒ 不进表
+    if (atHeadJudge.atHead > 0) continue;      // 当前 head 上有判定 ⇒ 不是「红票投在旧代码上」
+    // 注意：这里**不能**读 atHeadJudge.latestRed —— 它只看打在当前 head 上的那几条，
+    // atHead === 0 时恒为 false（现场实测：红票投在 dc4c1dd7、head 是 56ad3686，它给 false）。
+    // 要问的是「这张 PR 的**全部**判定里，最后一条是不是红」，那是 analyzeReviews 的活儿。
+    const all = analyzeReviews(raw);
+    if (!all.scanned || all.latestRed !== true) continue;   // 末条不是红 ⇒ 与本判据无关
+    const red = [...raw].reverse().find((rv) => {
+      if (!rv || typeof rv !== 'object') return false;
+      if (normalizeReviewState(rv) !== 'CHANGES_REQUESTED') return false;
+      const cid = String(rv.commit_id || rv.commitId || '').trim();
+      return Boolean(cid);
+    });
+    const cid = red ? String(red.commit_id || red.commitId || '').trim() : '';
+    if (!cid || cid === String(pr.headRefOid || '').trim()) continue;
+    out.set(String(pr.number), cid);
+  }
+  return out;
+}
+
+/**
+ * 复审重试键：**同一份红票只该烧一次名额**。
+ *
+ * `rereview:<pr>@<head>` 只认 head，而「叫不动审官」这件事与 head 无关——同一张红票
+ * 叫 3 次失败就打认输（#1213 实测 3 次、#1096 3 次、#885 3 次）。可一旦红票**本来就投在旧代码上**，
+ * 那 3 次是在替「旧代码的红」烧的；工人已经推了新 head 之后，这笔账不该继续压着它。
+ *
+ * 所以键里带上红票所在 commit：红票换了（或红票过期了）⇒ 键变了 ⇒ tries 从 0 起算。
+ * 不带 `staleRedAt` 时行为与 `rereviewKey` 逐字一致（没依据永远退回旧行为）。
+ */
+export function rereviewBudgetKey(pr, head, staleRedAt) {
+  const oid = staleRedAt instanceof Map ? staleRedAt.get(String(pr)) : staleRedAt?.[pr];
+  const red = typeof oid === 'string' && oid.trim() ? oid.trim() : '';
+  return rereviewKey(pr, head) + (red ? `@red:${red}` : '');
+}
+
+/**
+ * 这份旧红票的**新**复审键已经试满——第 ④ 条解冻过一次之后，又走完了 `@red:<oid>` 名额。
+ *
+ * 不在这里再判「红票是不是投在旧代码上」（那是 `staleRedBallots` 的事）：本函数只读
+ * `rereviewBudgetKey` 算出来的键在账本里的 tries。键没带 `@red:`（没有旧红票 / 没注入表）
+ * 或 tries 不到上限 → 不收。`planExhaustedLabelClear` 拿这张表当 ④ 的一次性消费。
+ *
+ * 旧键 `rereview:<pr>@<head>` 试满不算——那正是 ④ 要解冻的那一轮（9 张现场 PR 的账）。
+ *
+ * @returns {Map<string, string>} PR 号 → 已经试满的那张红票 oid
+ */
+export function spentStaleReds({ prs, staleRedAt, reworkDispatched } = {}) {
+  const out = new Map();
+  const reds = staleRedAt instanceof Map
+    ? staleRedAt
+    : (staleRedAt && typeof staleRedAt === 'object' && !Array.isArray(staleRedAt)
+      ? new Map(Object.entries(staleRedAt)) : new Map());
+  const book = reworkDispatched && typeof reworkDispatched === 'object' ? reworkDispatched : {};
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : '';
+    if (!head) continue;
+    const k = rereviewBudgetKey(pr.number, head, reds);
+    const marker = k.lastIndexOf('@red:');
+    if (marker < 0) continue;
+    const tries = Number(book[k]?.tries) || 0;
+    if (tries < MAX_REREVIEW_TRIES) continue;
+    const red = k.slice(marker + 5);
+    if (red) out.set(String(pr.number), red);
+  }
+  return out;
+}
+
 
 
 /**
@@ -517,6 +609,10 @@ export const ACTION_NEEDS = {
   // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
   'reap-ticket': ['github', 'reviewPending'],
   // 摘「自动化认输」标要知道 PR 的当前 head 与 labels（都在 github 节）。
+  // 2026-09-14：第 ④ 条（红票投在旧代码上）要 prReviews——但**不**加进依赖节：
+  // 「reviews 没查成 ⇒ 连『推了新 head 该摘标』都不做」是把一条独立判据连坐停了。
+  // reviews 没查成时 staleRedAt 为空表，第 ④ 条自然不成立，其余三条照常。fail-closed 落在
+  // 判据内部（缺证据 ⇒ 不动手），不是靠把 github 节也一起停掉。
   'clear-exhausted': ['github'],
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
@@ -576,6 +672,13 @@ function collectCandidates(situation) {
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
+  // 「认定红票投在旧代码上」这张表由**调用方**注入（commander.mjs 用 staleRedBallots 算一次，
+  // 与 planExhaustedLabelClear 共用同一份）——decide 是纯函数，不自己再扫一遍 reviews：
+  // 同一个事实两处各判一次，早晚分叉（#1233 的教训）。没注入 = 空表 = 这两条解冻永不成立。
+  const staleRedAt = situation.staleRedAt instanceof Map
+    ? situation.staleRedAt
+    : (situation.staleRedAt && typeof situation.staleRedAt === 'object'
+      ? new Map(Object.entries(situation.staleRedAt)) : new Map());
   const effectiveMergeability = new Map();
   // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
   const nowMs = Date.parse(situation.at || '') || 0;
@@ -952,6 +1055,14 @@ function collectCandidates(situation) {
       pushedThisRound: [],
       // #1238：带上本轮判据版本。判据改过 → 按旧判据打的认输标自动过期。
       epoch: epochOf().epoch,
+      // 第 ④ 条：认定红票投在旧代码上 = 返工已落地、判定已过期。与复审重试账**同一份**表
+      // （commander.mjs 算一次传进来），不在这里再扫一遍 reviews。
+      staleRedAt: situation.staleRedAt || null,
+      // ④ 的一次性消费：这份旧红票的 `@red:<oid>` 键已经试满 → 不再摘。
+      // 用生产侧同一把键算，不在 exhausted.mjs 里重写一份（#1233：同一事实两处各判会分叉）。
+      spentStaleReds: spentStaleReds({
+        prs: prList, staleRedAt, reworkDispatched,
+      }),
     });
     for (const c of clearPlan.clears) {
       out.push(withNeeds({
@@ -1412,7 +1523,7 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = rereviewKey(pr.number, a.head);
+      const rrKey = rereviewBudgetKey(pr.number, a.head, staleRedAt);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
