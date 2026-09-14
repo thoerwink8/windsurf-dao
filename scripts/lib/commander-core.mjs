@@ -1165,11 +1165,17 @@ function collectCandidates(situation) {
     // 合门是**我们自己的决定**，在派工那一刻就产生，这里把它读回来，而不是每次去问 GitHub 的 draft 位。
     const mergeSrc = attributedIssueOf(gh, pr);
     const mergePlan = resolveIssueMergePolicy(mergeSrc, situation.askPolicy);
-    const readyToLand = approvedToLand({
+    const landArgs = {
       greenAtHead,
       decisionApproved,
       atHead: mergeA.scanned ? mergeA.atHead : null,
       lastJudgment: lastJudgmentOf(allA),
+    };
+    // 不带 mergePolicy：只问「当前 head 判绿条件齐了没有」。
+    // manual 合门必须先过这一问——红 review 要落到下面的返工/复审，不许被「待人工合并」吃掉。
+    const reviewReady = approvedToLand(landArgs);
+    const readyToLand = approvedToLand({
+      ...landArgs,
       mergePolicy: mergePlan.mergePolicy,
       mergePolicySource: mergePlan.mergePolicySource,
     });
@@ -1226,7 +1232,11 @@ function collectCandidates(situation) {
       continue;
     }
 
-    if (manualNeedsHuman && mergeableNow) {
+    // 只拦截已经满足当前 head 判绿条件的 PR。红 review 必须先落到下面的返工分支
+    // （#1225 返工：这支原先不看判绿、又排在 analyzeReviewsAtHead 之前，
+    // 非 draft + type/体系 + CHANGES_REQUESTED + CI 绿 + MERGEABLE 会被产成
+    // 「判绿待人工合并」然后 continue，既不派返工也不进复审）。
+    if (manualNeedsHuman && mergeableNow && reviewReady) {
       // ── m=manual 的出口（#1223，用户 2026-09-13 拍板选项①）──
       //
       // 走到这里说明两件事之一：
