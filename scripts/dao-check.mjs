@@ -735,7 +735,7 @@ function checkLaunchBinaries() {
   fail(
     `启动模板 ${verdict.broken.length} 处命令词本机解析不到`,
     '改 docs/model-routing.toml 的 cli/launch 用本机真有的名字（npm 包声明的 bin 与它建的符号链接不是一回事）；'
-    + '确实不在 PATH 的（如 cursor-agent 走版本目录）在 scripts/lib/launch-binary.mjs 的 OFF_PATH_BIN 里给真实落点',
+    + '确实不在 PATH 的（如 cursor-agent）走 launch-binary 与 ACP 相同的版本目录动态解析，不要钉死某次实测版本',
     verdict.detail,
   );
 }

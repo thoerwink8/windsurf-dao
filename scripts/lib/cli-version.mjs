@@ -21,7 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import os from 'node:os';
-import { OFF_PATH_BIN, resolvesOnPath } from './launch-binary.mjs';
+import { resolveOffPathBinary, resolvesOnPath } from './launch-binary.mjs';
 
 /** 载体的版本读法。key = 二进制名（与 launch-binary.mjs 的口径一致：解析得到什么名字就记什么）。
  *  `args` 是拿版本的参数——**devin 这类子命令形态与 `--version` 不同，必须分开配**，
@@ -48,11 +48,8 @@ export function effectivePath({ home = os.homedir(), env = process.env } = {}) {
 export function resolveProbeBinary(bin, { pathValue = process.env.PATH || '', homeDir = os.homedir(), fs = {} } = {}) {
   const onPath = resolvesOnPath(bin, { pathValue, ...fs });
   if (onPath.ok) return { command: onPath.where, via: 'path' };
-  const declared = OFF_PATH_BIN[bin];
-  if (declared) {
-    const abs = declared.startsWith('~') ? join(homeDir, declared.slice(1)) : declared;
-    if (resolvesOnPath(abs, { pathValue, ...fs }).ok) return { command: abs, via: 'off-path' };
-  }
+  const off = resolveOffPathBinary(bin, { homeDir, fs });
+  if (off) return { command: off, via: 'off-path' };
   return { command: null, via: 'unresolved' };
 }
 

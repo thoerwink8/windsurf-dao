@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveProbePath, pathFromUnitText, deployPathFromUnits, countExistingDirs, deploymentHostPresence, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
+import { classifyLaunchBinaries, commandWord, resolvesOnPath, OFF_PATH_BIN, resolveOffPathBinary, cursorAgentOffPathCandidates, resolveProbePath, pathFromUnitText, deployPathFromUnits, countExistingDirs, deploymentHostPresence, DEPLOY_PATH_ENV } from '../scripts/lib/launch-binary.mjs';
 
 const PATH_ = '/usr/bin:/bin';
 const HOME = '/home/u';
@@ -28,6 +28,19 @@ function fakeFs(only, { dirsPresent = true } = {}) {
     exists: has,
     access: (p) => { if (!has(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
     stat: (p) => { if (!has(p)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return { isFile: () => true }; },
+    readdir: (dir) => {
+      const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+      const kids = new Set();
+      for (const p of only) {
+        if (!p.startsWith(prefix)) continue;
+        const first = p.slice(prefix.length).split('/')[0];
+        if (first) kids.add(first);
+      }
+      if (kids.size === 0 && !has(dir)) {
+        const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
+      }
+      return [...kids];
+    },
   };
 }
 
@@ -80,23 +93,45 @@ test('⑤ 显式落点允许表：落点真在 → 记 excused 不红；落点�
   assert.equal(ok.state, 'ok');
   // cli 与 launch 两处各记一条——判据覆盖两个字段，不是重复。
   assert.deepEqual(ok.excused.map(e => [e.field, e.word]), [['launch', 'cursor-agent'], ['cli', 'cursor-agent']]);
+  assert.deepEqual(ok.excused.map(e => e.at), [abs, abs]);
   // 落点不存在 = 允许表不是免死金牌
   const gone = classifyLaunchBinaries({
     providers: [{ name: 'cursor-native', cli: 'cursor-agent', launch: 'cursor-agent --model {model}' }],
     pathValue: PATH_, homeDir: HOME, fs: fakeFs([]),
   });
   assert.equal(gone.state, 'red');
-  assert.match(gone.broken[0].why, /落点不存在/);
+  assert.match(gone.broken[0].why, /动态解析不到/);
 });
 
-test('⑥ 允许表里的路径必须是真路径，不许拿名字顶替', () => {
+test('⑥ 允许表是策略名，不是某次实测版本目录；PATH 上有真文件仍绿', () => {
   const v = classifyLaunchBinaries({
     providers: [{ name: 'cursor-native', cli: 'cursor-agent', launch: 'cursor-agent -m {model}' }],
     pathValue: PATH_, homeDir: HOME, fs: fakeFs(['/usr/bin/cursor-agent']),
   });
-  // 装了真在 PATH 上也不必进允许表；这条断言的是允许表本身的值形态。
-  assert.ok(OFF_PATH_BIN['cursor-agent'].includes('/'), '允许表要写真实落点，不是命令名');
+  assert.equal(OFF_PATH_BIN['cursor-agent'], 'cursor-versions');
+  assert.equal(String(OFF_PATH_BIN['cursor-agent']).includes('2026.08.31'), false, '不许把某次实测版本写成永久允许表值');
   assert.equal(v.state, 'ok');
+});
+
+test('⑤b 旧版本目录消失、新版本目录存在 → 仍解析得出（不许钉死某次实测版本）', () => {
+  const oldAbs = '/home/u/.local/share/cursor-agent/versions/2026.08.31-4057e58/cursor-agent';
+  const newAbs = '/home/u/.local/share/cursor-agent/versions/2026.10.01-9999/cursor-agent';
+  const currentAbs = '/home/u/.local/share/cursor-agent/versions/current/cursor-agent';
+  // 审官反例：旧目录不在、新目录在 → 旧实现 unresolved/red，现在必须绿
+  const migrated = classifyLaunchBinaries({
+    providers: [{ name: 'cursor-native', cli: 'cursor-agent', launch: 'cursor-agent --model {model}' }],
+    pathValue: PATH_, homeDir: HOME, fs: fakeFs([newAbs]),
+  });
+  assert.equal(migrated.state, 'ok');
+  assert.equal(migrated.excused[0].at, newAbs);
+  assert.equal(resolveOffPathBinary('cursor-agent', { homeDir: HOME, fs: fakeFs([newAbs]) }), newAbs);
+  assert.equal(resolveOffPathBinary('cursor-agent', { homeDir: HOME, fs: fakeFs([oldAbs]) }), oldAbs, '旧目录若还在也能解析，只是不再钉死它');
+  // current 优先于数字版本目录（与 ACP 同序）
+  assert.equal(resolveOffPathBinary('cursor-agent', { homeDir: HOME, fs: fakeFs([currentAbs, newAbs]) }), currentAbs);
+  assert.deepEqual(
+    cursorAgentOffPathCandidates(HOME, { readdir: () => ['2026.08.31-4057e58', '2026.10.01-9999'] }),
+    [currentAbs, newAbs, oldAbs],
+  );
 });
 
 test('⑦ 带路径的命令词按原样判，不走 PATH', () => {

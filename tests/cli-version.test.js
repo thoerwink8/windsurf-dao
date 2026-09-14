@@ -91,17 +91,41 @@ test('⑧ 变了才翻 lastChangedAt，没变保留原值', () => {
 test('⑨ cursor-agent 不在 PATH，读版本时必须走显式落点（不许拿裸名 spawn）', () => {
   // 第一次写就栽在这：六个载体里 cursor-agent 是唯一读成 ENOENT 的。
   // fs 注入：本套不许依赖跑测试那台机器上装了什么（判据跟着机器漂是最该避免的坏法）。
-  const abs = '/home/u/.local/share/cursor-agent/versions/2026.08.31-4057e58/cursor-agent';
+  const versions = '/home/u/.local/share/cursor-agent/versions';
+  const abs = `${versions}/2026.08.31-4057e58/cursor-agent`;
   const fs = {
     exists: (p) => p === abs,
     access: (p) => { if (p !== abs) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
     stat: (p) => { if (p !== abs) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return { isFile: () => true }; },
+    readdir: (dir) => {
+      if (dir !== versions) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+      return ['2026.08.31-4057e58'];
+    },
   };
   const resolved = resolveProbeBinary('cursor-agent', { pathValue: '/usr/bin:/bin', homeDir: '/home/u', fs });
   assert.equal(resolved.via, 'off-path');
   assert.equal(resolved.command, abs);
   // PATH 上没有、又没有显式落点的，老老实实说解析不到
   assert.equal(resolveProbeBinary('definitely-not-installed', { pathValue: '/usr/bin:/bin', homeDir: '/home/u', fs }).via, 'unresolved');
+});
+
+test('⑨b 旧版本目录消失、新版本目录存在 → 仍能解析（版本漂移才看得见，而不是没读成）', () => {
+  const versions = '/home/u/.local/share/cursor-agent/versions';
+  const oldAbs = `${versions}/2026.08.31-4057e58/cursor-agent`;
+  const newAbs = `${versions}/2026.10.01-9999/cursor-agent`;
+  const fs = {
+    exists: (p) => p === newAbs,
+    access: (p) => { if (p !== newAbs) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } },
+    stat: (p) => { if (p !== newAbs) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return { isFile: () => true }; },
+    readdir: (dir) => {
+      if (dir !== versions) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+      return ['2026.10.01-9999'];
+    },
+  };
+  const resolved = resolveProbeBinary('cursor-agent', { pathValue: '/usr/bin:/bin', homeDir: '/home/u', fs });
+  assert.equal(resolved.via, 'off-path');
+  assert.equal(resolved.command, newAbs);
+  assert.notEqual(resolved.command, oldAbs);
 });
 
 test('⑩ 解析不到的可执行文件不许静默当「版本没变」', () => {

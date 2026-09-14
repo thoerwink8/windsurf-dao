@@ -86,9 +86,12 @@ export const NATIVE_LOGIN_FILES = {
 
 /**
  * 落地 → 健康表 target key（两仓共用契约，见 issue #842）。
- * gw:  `gw:<组短名>/<模型>`；codex 直连： `direct:codex@pqapi/responses`。
+ * gw:  `gw:<组短名>/<模型>`；codex 直连 / 现役 GPT relay： `direct:codex@pqapi/responses`。
  * 本地登录型： `native:<provider>`（只够验凭据文件在不在，见 NATIVE_LOGIN_FILES）。
  * 认不出的 provider → null（调用方据此判 unscanned）。
+ *
+ * `mirasim-relay` 与旧 `gpt` 共用这一条唯一 target：周期探针仍写这个 key，
+ * 网关退役只改了选型落地的 provider 字符串，健康/熔断闸不能跟着摘掉。
  */
 export function probeTargetOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
@@ -99,7 +102,7 @@ export function probeTargetOf(landing) {
     if (!parts) return null;
     return `gw:${groupShort(parts.group)}/${parts.model}`;
   }
-  if (provider === 'gpt') {
+  if (provider === 'gpt' || provider === 'mirasim-relay') {
     return 'direct:codex@pqapi/responses';
   }
   if (NATIVE_LOGIN_FILES[provider]) {
@@ -191,7 +194,7 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
     };
   }
 
-  if (provider === 'gpt') {
+  if (provider === 'gpt' || provider === 'mirasim-relay') {
     const cx = codexConfig || loadCodexConfig({ home, read, exists });
     if (!cx.ok) {
       return { kind: 'unscanned', provider, target, why: cx.error };

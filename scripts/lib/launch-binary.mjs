@@ -17,17 +17,47 @@
 // 这是**宿主局部的**检查：放在别的机器上跑，PATH 不同结论就不同，所以判定结果里必须
 // 带上「在哪个 PATH 下判的」，并且查不出二进制时要能跟「根本没扫到样本」分开。
 
-import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, dirname } from 'node:path';
 
-/** `bin = "..."` 显式落点：明知它不在 PATH 上、但机器上有这个文件。
- *  这是**允许表**不是忽略表——每条都必须给出真实存在、可执行的那个路径，
- *  路径不存在照样红（否则它就变成了「写错名字的免死金牌」）。 */
+/** 脱 PATH 的二进制：标记「它不走 PATH」，落点按与 ACP 相同的规则现解析。
+ *  这是**允许表**不是忽略表——解析不到照样红（否则它就变成了「写错名字的免死金牌」）。
+ *  值是解析策略名，**不许写成某次实测的版本目录**（Cursor 升级会删旧目录，钉死就会
+ *  让真实 ACP 还能启动、本闸与版本漂移却一起失明）。 */
 export const OFF_PATH_BIN = Object.freeze({
-  // cursor-agent 官方装法是把版本目录放 ~/.local/share，靠 `current` 符号链接暴露；
-  // 本机没有 current，且 acp-runtime.mjs 自己按版本目录挑（不看 PATH）。
-  'cursor-agent': '~/.local/share/cursor-agent/versions/2026.08.31-4057e58/cursor-agent',
+  'cursor-agent': 'cursor-versions',
 });
+
+/** cursor-agent 版本目录候选：`current` 优先，否则按数字版本目录倒序（与 acp-runtime 同序）。 */
+export function cursorAgentOffPathCandidates(homeDir, { readdir = readdirSync } = {}) {
+  if (!homeDir) return [];
+  const versions = join(homeDir, '.local', 'share', 'cursor-agent', 'versions');
+  const out = [join(versions, 'current', 'cursor-agent')];
+  try {
+    for (const version of readdir(versions).filter((name) => /^\d/.test(name)).sort().reverse()) {
+      out.push(join(versions, version, 'cursor-agent'));
+    }
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+  return out;
+}
+
+/** 脱 PATH 二进制的真实可执行文件。找不到返回 null（调用方据此判红 / unresolved）。 */
+export function resolveOffPathBinary(bin, { homeDir = '', fs = {} } = {}) {
+  if (OFF_PATH_BIN[bin] !== 'cursor-versions') return null;
+  const access = fs.access || accessSync;
+  const stat = fs.stat || statSync;
+  const realpath = typeof fs.realpath === 'function' ? fs.realpath : realpathSync;
+  const executable = (p) => {
+    try { access(p, constants.X_OK); return stat(p).isFile(); } catch { return false; }
+  };
+  for (const candidate of cursorAgentOffPathCandidates(homeDir, { readdir: fs.readdir || readdirSync })) {
+    if (!executable(candidate)) continue;
+    try { return realpath(candidate); } catch { return candidate; }
+  }
+  return null;
+}
 
 /**
  * 判定该按哪条 PATH。
@@ -188,7 +218,7 @@ export function resolvesOnPath(word, { pathValue, exists = existsSync, access = 
  * @param {string} input.pathValue 判定用的 PATH（**必须显式传**，不许在函数里摸 process.env：
  *                                 否则测试只能测到跑测试那台机器的 PATH，判据跟着机器漂）。
  *                                 现场用 `resolveProbePath()` 取——它优先部署单元的 PATH。
- * @param {string} [input.homeDir] OFF_PATH_BIN 里 `~` 的展开点
+ * @param {string} [input.homeDir] 脱 PATH 解析（cursor-agent 版本目录）用的 home
  * @param {string} [input.pathSource] 这条 PATH 从哪来（'deploy' / 'process'），进 detail 好定位
  * @param {object} [input.fs]      注入点（exists/access/stat），测试用
  * @returns {{state:'ok'|'red'|'unknown', detail:string, checked:number, broken:object[], excused:object[]}}
@@ -230,20 +260,17 @@ export function classifyLaunchBinaries({ providers, pathValue, homeDir = '', pat
       if (!word) continue;
       const res = probe(word);
       if (res.ok) continue;
-      const declared = OFF_PATH_BIN[bareName(word)];
-      if (declared) {
-        const abs = declared.startsWith('~') ? join(homeDir || '', declared.slice(1)) : declared;
-        if (probe(abs).ok) {
+      if (OFF_PATH_BIN[bareName(word)]) {
+        const resolved = resolveOffPathBinary(bareName(word), { homeDir, fs });
+        if (resolved && probe(resolved).ok) {
           if (!excused.some(e => e.provider === p.name && e.field === field && e.word === word)) {
-            excused.push({ provider: p.name, field, word, at: declared });
+            excused.push({ provider: p.name, field, word, at: resolved });
           }
           continue;
         }
-        // 允许表的落点是**本模块自己维护的**绝对路径（OFF_PATH_BIN）。它不存在就是
-        // 这张表写错了或落点被挪走了——红。**不许按「目录不在本机」放过**：
-        // 那会让允许表变成「写错名字的免死金牌」，正是 ⑤ 号测试守着的东西。
-        // 与裸名的区别：裸名问的是「这台机器有没有」，允许表问的是「我写的落点对不对」。
-        broken.push({ provider: p.name, field, word, why: `在允许表里但落点不存在或不可执行：${declared}` });
+        // 允许表问的是「这类二进制本机按与运行时相同的规则解析得出吗」。
+        // 解析不到就是红——**不许按「目录不在本机」放过**，否则允许表变成免死金牌。
+        broken.push({ provider: p.name, field, word, why: '脱 PATH 动态解析不到（versions/current 与数字版本目录都没有可执行文件）' });
         continue;
       }
       // 关键分流：**解析失败时，它该在的目录本机在不在**。

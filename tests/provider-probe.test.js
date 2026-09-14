@@ -143,6 +143,14 @@ describe('planProbe', () => {
     assert.ok(p.url.endsWith('/responses'), p.url);
     assert.equal(p.target, 'direct:codex@pqapi/responses');
   });
+  it('mirasim-relay 与 gpt 共用同一条健康 target，不能改 provider 就把闸摘掉', async () => {
+    const { planProbe, probeTargetOf } = await import(LIB);
+    assert.equal(probeTargetOf({ provider: 'mirasim-relay' }), 'direct:codex@pqapi/responses');
+    assert.equal(probeTargetOf({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }), 'direct:codex@pqapi/responses');
+    const p = planProbe({ provider: 'mirasim-relay', cli_model: 'gpt-5.6-sol' }, { codexConfig: { ok: true, baseUrl: base, authPath: '/x/auth.json' } });
+    assert.equal(p.kind, 'codex-responses');
+    assert.equal(p.target, 'direct:codex@pqapi/responses');
+  });
   it('codexResponsesProbeBody 的 input 是结构化 message，不是裸字符串', async () => {
     const { codexResponsesProbeBody } = await import(LIB);
     const b = codexResponsesProbeBody({ model: 'gpt-5.6-luna', text: 'ping', maxOutputTokens: 8 });

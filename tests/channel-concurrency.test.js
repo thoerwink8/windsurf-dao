@@ -37,6 +37,10 @@ describe('channelKeyOf / legChannelKey —— 渠道键取自 target 池级前�
     const { channelKeyOf } = await CC;
     assert.equal(channelKeyOf(L('claude', 'opus')), 'mirasim');
   });
+  it('mirasim-relay 落地归 mirasim 渠道（健康闸走 probeTargetOf，渠道不跟成 pqapi）', async () => {
+    const { channelKeyOf } = await CC;
+    assert.equal(channelKeyOf(L('mirasim-relay')), 'mirasim');
+  });
   it('认不出的落地返回 null（fail-close 由调用方处理）', async () => {
     const { channelKeyOf } = await CC;
     assert.equal(channelKeyOf(L('cursor', 'x')), null);
