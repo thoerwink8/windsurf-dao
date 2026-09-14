@@ -46,10 +46,24 @@ describe('channelKeyOf / legChannelKey —— 渠道键取自 target 池级前�
     assert.equal(channelKeyOf(L('cursor', 'x')), null);
     assert.equal(channelKeyOf(null), null);
   });
-  it('mirasim 载体腿按供应商/执行侧判', async () => {
+  it('mirasim 中继腿按落地/供应商判，不按执行侧', async () => {
     const { legChannelKey } = await CC;
     assert.equal(legChannelKey({ 供应商: 'mirasim', 执行侧: 'mirasim', 落地: L('claude', 'opus') }), 'mirasim');
     assert.equal(legChannelKey({ 供应商: 'gw', 落地: GROK }), 'gw:grok');
+  });
+  it('本地登录型按 native:<provider> 分渠道，执行侧=mirasim 不并进中继', async () => {
+    const { channelKeyOf, legChannelKey } = await CC;
+    assert.equal(channelKeyOf(L('xai-native', 'grok-4.6')), 'native:xai-native');
+    assert.equal(channelKeyOf(L('cursor-native', 'composer-2.5')), 'native:cursor-native');
+    assert.equal(legChannelKey({
+      供应商: 'xai-native', 执行侧: 'mirasim', 落地: L('xai-native', 'grok-4.6'),
+    }), 'native:xai-native');
+    assert.equal(legChannelKey({
+      供应商: 'cursor-native', 执行侧: 'mirasim', 落地: L('cursor-native', 'composer-2.5'),
+    }), 'native:cursor-native');
+    // 没落地时也按供应商，不许因执行侧掉进 mirasim
+    assert.equal(legChannelKey({ 供应商: 'xai-native', 执行侧: 'mirasim' }), 'native:xai-native');
+    assert.equal(legChannelKey({ 供应商: 'mirasim', 执行侧: 'mirasim' }), 'mirasim');
   });
 });
 
@@ -361,6 +375,54 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
     assert.equal(r.ok, true);
     assert.deepEqual(r.bad, []);
     assert.ok(r.inService > 0, '一条在役腿都没扫到 ⇒ 本次等于没查');
+  });
+
+  it('真表：未测腿不与 grok/composer 共享「不限」渠道，8 个在途不得放行', async () => {
+    const { buildChannelCaps, resolveModelChannel, judgeChannelForModel, CONSERVATIVE_CAP } = await CC;
+    const fs = require('node:fs');
+    const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8'));
+    const r = buildChannelCaps(doc.腿);
+    assert.equal(r.ok, true);
+    assert.equal(r.caps['native:xai-native'], Infinity);
+    assert.equal(r.states['native:xai-native'], 'unlimited');
+    assert.equal(r.caps['native:cursor-native'], Infinity);
+    assert.equal(r.states['native:cursor-native'], 'unlimited');
+    assert.equal(r.states['mirasim'], 'pending');
+    assert.equal(r.caps['mirasim'], CONSERVATIVE_CAP);
+    assert.ok(r.pending.includes('mirasim'), `pending=${JSON.stringify(r.pending)}`);
+    const pendingModels = ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra', 'claude-opus-5', 'claude-fable-5'];
+    for (const model of pendingModels) {
+      const resolved = resolveModelChannel({ model, legs: doc.腿, caps: r.caps });
+      assert.ok(resolved, `${model} 在腿表里认不出渠道`);
+      assert.ok(
+        Number.isFinite(resolved.cap),
+        `${model} 继承了 Infinity（渠道 ${resolved.channel} cap=${resolved.cap}）`,
+      );
+      const j = judgeChannelForModel({
+        model, legs: doc.腿, caps: r.caps, states: r.states,
+        inFlight: { [resolved.channel]: 8 },
+      });
+      assert.equal(j.available, false, `${model} 8 个在途仍放行 cap=${j.cap} channel=${j.channel}`);
+      assert.equal(j.reason, 'at-cap');
+      assert.ok(Number.isFinite(j.cap));
+    }
+  });
+
+  it('同渠道误把「不限」和待填并在一起时，pending 模型仍不继承 Infinity', async () => {
+    const { buildChannelCaps, judgeChannelForModel, CONSERVATIVE_CAP } = await CC;
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = buildChannelCaps(legs);
+    assert.equal(r.caps.mirasim, Infinity);
+    const j = judgeChannelForModel({
+      model: 'gpt-5.6-sol', legs, caps: r.caps, states: r.states,
+      inFlight: { mirasim: 8 },
+    });
+    assert.equal(j.available, false);
+    assert.equal(j.reason, 'at-cap');
+    assert.equal(j.cap, CONSERVATIVE_CAP);
   });
 
   it('真表：在役「不限」只许用本腿证据，不得把别的腿写成已验证不限', async () => {

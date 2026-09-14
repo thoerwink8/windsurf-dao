@@ -41,6 +41,17 @@ import { acquireWorktreeLock } from './dispatch-lock.mjs';
 /** 「不限」哨兵：渠道容量已验证工人无限做也没出问题（grokpool）。与「待填」区分——一个放开，一个没人填过。 */
 export const CAP_UNLIMITED = '不限';
 
+/** 两条上限取更严的：有限值压过 Infinity；都有限取 min。 */
+function stricterCap(a, b) {
+  const na = Number(a);
+  const nb = Number(b);
+  const fa = Number.isFinite(na);
+  const fb = Number.isFinite(nb);
+  if (!fa) return fb ? nb : Infinity;
+  if (!fb) return na;
+  return Math.min(na, nb);
+}
+
 /**
  * 待填腿的**保守上限**。不是 Infinity（放开），也不是 0（拦死）——第三个答案，
  * 仓内先例是 admission.mjs 的 conservativeWorkerMb：「取偏大值收紧，不是放开」。
@@ -81,13 +92,17 @@ export function channelKeyOf(landing) {
   return cut < 0 ? target : target.slice(0, cut);
 }
 
-/** 腿节 → 渠道键。先认 mirasim 载体（供应商/执行侧），否则按落地算。 */
+/**
+ * 腿节 → 渠道键。落地优先，否则按供应商；**不按执行侧**。
+ * 执行侧=mirasim 只说明会话从 mirasim 起，不是容量池：xai-native / cursor-native
+ * 各走独立 native 池，并进 mirasim 会让 grok/composer 的「不限」放行未测 relay 腿。
+ */
 export function legChannelKey(leg) {
   if (!leg || typeof leg !== 'object') return null;
+  const fromLanding = channelKeyOf(leg['落地']);
+  if (fromLanding) return fromLanding;
   const via = String(leg['供应商'] || '');
-  const side = String(leg['执行侧'] || '');
-  if (via === 'mirasim' || side === 'mirasim') return 'mirasim';
-  return channelKeyOf(leg['落地']);
+  return via ? channelKeyOf({ provider: via }) : null;
 }
 
 /**
@@ -212,6 +227,9 @@ export function countInFlightByChannel(busyTrees, treeToChannel) {
  * pqapi(2) 的单当成 mirasim(5) 放过去——那正是 #1145 撞死的那一格。
  * 打平按渠道键排序取第一个（判据要确定，不许随 Object 顺序飘）。
  *
+ * 返回的 cap 再与**本模型自己的腿**取严：渠道级「不限」是别的模型的已验证结论，
+ * 未测/待填模型不得继承 Infinity（#1274：gpt-5.6-sol 曾因 grok/composer 不限被放行）。
+ *
  * @returns {{channel, cap, candidates:string[], source:'legs'|'models'}|null}
  */
 export function resolveModelChannel({ model, legs, models, caps } = {}) {
@@ -220,12 +238,17 @@ export function resolveModelChannel({ model, legs, models, caps } = {}) {
   const capTable = caps && typeof caps === 'object' ? caps : (buildChannelCaps(legs).caps || {});
   const candidates = new Set();
   let source = null;
+  let ownCap = null;
   for (const leg of Array.isArray(legs) ? legs : []) {
     if (!leg || typeof leg !== 'object') continue;
     if (String(leg['状态'] || '') !== '在役') continue;
     if (String(leg['模型'] || '') !== id) continue;
     const ch = legChannelKey(leg);
-    if (ch) { candidates.add(ch); source = 'legs'; }
+    if (!ch) continue;
+    candidates.add(ch);
+    source = 'legs';
+    const { cap } = resolveLegCap(leg['并发上限']);
+    ownCap = ownCap == null ? cap : stricterCap(ownCap, cap);
   }
   if (!candidates.size) {
     const rec = (Array.isArray(models) ? models : []).find((m) => m && String(m.id) === id);
@@ -240,9 +263,10 @@ export function resolveModelChannel({ model, legs, models, caps } = {}) {
     const b = Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity;
     if (a < b) pick = ch;
   }
+  const channelCap = Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity;
   return {
     channel: pick,
-    cap: Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity,
+    cap: ownCap == null ? channelCap : stricterCap(channelCap, ownCap),
     candidates: list,
     source,
   };
@@ -294,11 +318,13 @@ export function legAvailability(landing, opts = {}) {
  * checkChannelCapacity 的注释（全盘阻塞的代价远大于漏拦一个未登记模型，且机器总闸仍在）。
  */
 export function judgeChannelForModel({ model, legs, models, caps, states, inFlight = {}, breaker, now, breakerPolicy, excluded } = {}) {
-  const capTable = caps && typeof caps === 'object' ? caps : {};
+  const capTable = { ...(caps && typeof caps === 'object' ? caps : {}) };
   const resolved = resolveModelChannel({ model, legs, models, caps: capTable });
   if (!resolved) {
     return { available: true, attributed: false, channel: null, why: `模型 ${model == null ? '(空)' : model} 在腿表/选型里都认不出渠道——本闸不拦（机器总闸仍在）` };
   }
+  // 用本模型有效上限覆盖渠道表：pending 模型不读另一条腿写在同渠道上的 Infinity。
+  capTable[resolved.channel] = resolved.cap;
   const rec = (Array.isArray(models) ? models : []).find((m) => m && String(m.id) === String(model));
   const target = rec && rec.provider ? probeTargetOf({ provider: rec.provider, cli_model: rec.cli_model }) : null;
   const verdict = judgeChannelState({
