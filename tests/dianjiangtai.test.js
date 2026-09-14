@@ -695,8 +695,15 @@ describe('dianjiangtai', () => {
     await t.test('resolveModelId：grok → grok-4.6 且 ∈ registry', () => {
       assert.ok(resolveModelId("grok", models) === "grok-4.6" && models.some(m => m.id === "grok-4.6"), 'resolveModelId：grok → grok-4.6 且 ∈ registry');
     });
+    await t.test('resolveModelId：claude-opus-5 → claude-opus 且 ∈ registry', () => {
+      assert.equal(resolveModelId("claude-opus-5", models), "claude-opus");
+      assert.ok(models.some(m => m.id === "claude-opus"));
+    });
     await t.test('resolveModelId：未知串 → null', () => {
       assert.ok(resolveModelId("not-a-model", models) === null, 'resolveModelId：未知串 → null');
+    });
+    await t.test('resolveModelId：未登记的版本号写法不自动映射（fail-closed）', () => {
+      assert.equal(resolveModelId("claude-opus-6", models), null);
     });
     const recGrok = reconstructJob(backfillSnap.prs.find(p => p.number === 458) || {
       number: 458, title: "[grok] x", createdAt: "2026-08-15T02:00:00Z", mergedAt: "2026-08-15T02:00:00Z",
@@ -720,6 +727,34 @@ describe('dianjiangtai', () => {
     fs.rmSync(ghostDir, { recursive: true, force: true });
     await t.test('classifyFromGithub：model/grok 规范化', () => {
       assert.ok(classifyFromGithub({ title: "x", labels: [{ name: "model/grok" }] }, { models }).model === "grok-4.6", 'classifyFromGithub：model/grok 规范化');
+    });
+    await t.test('classifyFromGithub：model/claude-opus-5 规范化', () => {
+      const got = classifyFromGithub({ title: "x", labels: [{ name: "model/claude-opus-5" }] }, { models });
+      assert.equal(got.model, "claude-opus");
+    });
+    await t.test('classifyFromGithub：未知 model/* 仍 null（fail-closed）', () => {
+      const got = classifyFromGithub({ title: "x", labels: [{ name: "model/not-a-model" }] }, { models });
+      assert.equal(got.model, null);
+      assert.equal(got.unresolved, "not-a-model");
+    });
+    const recOpus5 = reconstructJob({
+      number: 901, title: "[cc] x", createdAt: "2026-09-04T02:00:00Z",
+      labels: [{ name: "model/claude-opus-5" }, { name: "type/写码" }], reviews: [],
+    }, { models });
+    await t.test('claude-opus-5 标签落账 id=claude-opus（∈ registry，不 skip）', () => {
+      assert.equal(recOpus5.skip, false);
+      assert.equal(recOpus5.model, "claude-opus");
+    });
+    await t.test('腿表里 registry id 的版本号写法必须能 resolve', () => {
+      const routing = JSON.parse(fs.readFileSync(path.join(REPO, "docs", "model-routing.json"), "utf8"));
+      const registryIds = models.map(m => m.id);
+      const names = [...new Set((routing["腿"] || []).map(l => l["模型"]).filter(Boolean))];
+      const unresolved = names.filter(raw => {
+        if (registryIds.includes(raw)) return false;
+        const looksLikeVersion = registryIds.some(id => raw.startsWith(`${id}-`));
+        return looksLikeVersion && resolveModelId(raw, models) === null;
+      });
+      assert.deepEqual(unresolved, []);
     });
     await t.test('回填夹具来自 GitHub 实录（有 source + prs）', () => {
       assert.ok(Array.isArray(backfillSnap.prs) && backfillSnap.prs.length >= 2 && /gh /.test(backfillSnap.source || ""), '回填夹具来自 GitHub 实录（有 source + prs）');

@@ -30,9 +30,18 @@ const TITLE_MODEL = [
   [/^\[cc\]/i, 'claude-opus'],
 ];
 
-// 标签短名 → registry id。model/grok 不是模型 id，必须映射，否则落账成幽灵格。
+// 标签短名 → registry id。`model/grok` 不是模型 id，必须映射，否则落账成幽灵格。
+//
+// 别名表**只放同一条腿的另一种写法**，不放「换个模型」：`claude-opus-5` 与 `claude-opus`
+// 是同一条 reclaude 腿（`policy/models.yml` 的 id 是 `claude-opus`，标签那侧写的是腿上的
+// 版本号），所以它是别名；而 `gpt-5.6-sol` → `grok-4.6` 那种就不是别名，是编造。
+//
+// #901 实咬（2026-09-14）：它带 `model/claude-opus-5`，别名表里没有 ⇒ 回填 skip
+// ⇒ 这张 PR 永远进不了账本，即 dao-check 的「账本断流」永远差它一个。
+// 账本断流这道闸绿不了，真正的新断流就淹在里面（恒红的闸等于没闸）。
 const MODEL_ALIASES = {
   grok: 'grok-4.6',
+  'claude-opus-5': 'claude-opus',
 };
 
 /** 标签/标题推出的原始串 → registry id；对不上返回 null（调用方 skip，不落幽灵账）。 */
