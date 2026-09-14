@@ -194,4 +194,23 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.reviewer, 'gpt-5.6-sol');
     assert.equal(got.workerSource, 'label');
   });
+
+  it('无署名快路 PR + 已有 review → 返工过，issue 为空，完工发在 PR 上', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1271',
+      body: '返工完成：PR #1271 红项已改',
+      runGh: fakeGh({
+        title: '[cc] fix(返工): 解冻',
+        body: '快路，无署名 issue',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-sol', 'type/写码'],
+        reviews: [{ state: 'CHANGES_REQUESTED', body: '修红项' }],
+        headRefName: 'dao-queue-selfheal',
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.round, 'rework');
+    assert.equal(got.issue, null);
+    assert.match(got.comment, /^返工完成/);
+  });
 });
