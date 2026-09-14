@@ -2721,6 +2721,16 @@ function checkLegCaps() {
     );
     return;
   }
+  if (v.noReason && v.noReason.length) {
+    fail(
+      `并发上限有 ${v.noReason.length} 条没写出处`,
+      '每个数与每个空格都要带出处：填了数写「并发上限依据」（哪天谁拍的 / 实测在哪），'
+      + '留空写「并发上限待填理由」（为什么还没测、谁在测）。'
+      + '2026-09-08 拍了 windsurf=6，表里这一格 null 躺了 6 天没人发现——档案与机器读的表是两条真相源，中间缺这道闸',
+      v.noReason.map((n) => `${n.id} 缺「${n.field}」`).slice(0, 6).join('；'),
+    );
+    return;
+  }
   if (v.pending.length) {
     // 走 notes 而不是只 green：greens 只在**全绿那一支**才打印（见文件末尾的输出段），
     // 一旦盘面有红项，绿行整批不显示——待填清单就此隐形，没人会去填真数。

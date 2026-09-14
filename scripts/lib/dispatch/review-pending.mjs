@@ -194,8 +194,55 @@ export function listReviewPending(dir) {
   return { ok: true, unscanned: false, scanned: tickets.length, tickets };
 }
 
-/** 上限默认值。2026-09-07 实测 gptpool 单腿同时活得下来约 3 个；可用 DAO_REVIEWER_CAP 覆盖。 */
-export const DEFAULT_REVIEWER_CAP = 3;
+/**
+ * 上限兜底值。**只在核数与渠道容量都读不到时用**（见 resolveReviewerCap）。
+ *
+ * 原先这里写死 3，注释说「2026-09-07 实测 gptpool 单腿同时活得下来约 3 个」。那次实测的前提
+ * 今天全没了：gptpool / pqapi / windsurf 的执行档都已 `enabled:false`，在役审官只剩
+ * `xai-native`（路由表「不限」）和 `mirasim-relay`（路由表 5），一条都不过网关。
+ * 拿网关时代的数字限 ACP 直连时代的并发，是 memory `hand-typed-constant-will-be-wrong` 的原样复发。
+ */
+export const REVIEWER_CAP_FLOOR = 2;
+
+/**
+ * 审官并发上限 = min(机器给收尾的名额, **在役审官落在的那些渠道**里最严的一条上游合同)。
+ *
+ * 两层各管各的：机器那层管「本机同时开得起几个会话」，渠道那层管「上游账号合同容许几条」。
+ * 把两层压成一个手打常量，就是任何一层变了都没人知道要改哪个数。
+ *
+ * **渠道那层只数在役审官真正落地的渠道**，不许拿整张容量表取严：
+ * 表里 `direct:codex@pqapi` 是 2、`gw:windsurf` 是 3，可这两条的执行档今天全是 `enabled:false`，
+ * 一个审官也不会落在上面。拿它们取严，等于让**不在役的腿**去限在役的活——
+ * 2026-09-14 第一版就是这么写的，算出来 2，比原来手打的 3 还紧，方向正好反了。
+ *
+ * @param cores       本机核数（admission.cores）；读不到传 null
+ * @param reviewerIds 在役审官 id（usableReviewerOrder().usable）；读不到传 null
+ * @param channelOf   在役审官 id → 渠道键（commander 侧同一把尺：按落地查）
+ * @returns 正整数上限
+ */
+export function resolveReviewerCap({ cores = null, reviewerIds = null, channelOf = null } = {}) {
+  const byMachine = Number.isInteger(cores) && cores > 0
+    ? Math.max(REVIEWER_CAP_FLOOR, cores)
+    : null;
+  let byChannel = null;
+  const ids = Array.isArray(reviewerIds) ? reviewerIds : null;
+  if (ids && ids.length > 0 && typeof channelOf === 'function') {
+    for (const id of ids) {
+      let cap = null;
+      try { cap = channelOf(id); } catch { cap = null; }
+      // null / Infinity = 「不限」或认不出渠道，不拿它去收紧别人；
+      // 只有显式有限值才参与取严（「不限」是用户对这条渠道的已验证结论）。
+      if (!Number.isFinite(cap) || cap <= 0) continue;
+      byChannel = byChannel === null ? cap : Math.min(byChannel, cap);
+    }
+  }
+  const both = [byMachine, byChannel].filter((n) => Number.isInteger(n) && n > 0);
+  if (both.length === 0) return REVIEWER_CAP_FLOOR;
+  return Math.max(REVIEWER_CAP_FLOOR, Math.min(...both));
+}
+
+/** @deprecated 兜底常量，别再当默认上限用——走 resolveReviewerCap。留着是为了老夹具不炸。 */
+export const DEFAULT_REVIEWER_CAP = REVIEWER_CAP_FLOOR;
 
 /**
  * 按资源拉取（#1125，2026-09-07 用户拍板）：队列里有多少张不重要，**能同时跑几个审官**才重要。

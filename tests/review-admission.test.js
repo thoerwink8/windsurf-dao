@@ -64,9 +64,66 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
     assert.deepEqual(empty.pull, []);
   });
 
-  it('默认上限是实测出来的 3', async () => {
-    const { DEFAULT_REVIEWER_CAP } = await RP;
-    assert.equal(DEFAULT_REVIEWER_CAP, 3);
+  // 2026-09-14：默认上限不再是手打的 3。那个 3 量于 2026-09-07，前提是「gptpool 只剩一条腿、
+  // 审官过网关」；今天 gptpool/pqapi/windsurf 的执行档全 enabled:false，审官走 xai-native 与
+  // mirasim-relay，一条都不过网关。改成两层取严：机器按核数，上游按路由表「腿」节并发上限。
+  describe('resolveReviewerCap：两层取严，读不到的那层不参与', () => {
+    const caps = { 'gw:grok': null, mirasim: 5, 'direct:codex@pqapi': 2, 'gw:windsurf': 3 };
+    const chanOf = (map) => (id) => (id in map ? caps[map[id]] ?? null : null);
+    // 今天的在役两位：grok 落 gw:grok（不限）、luna 落 mirasim（5）。
+    const 在役 = { 'grok-4.6': 'gw:grok', 'gpt-5.6-luna': 'mirasim' };
+
+    it('机器与渠道都有数 → 取严', async () => {
+      const { resolveReviewerCap } = await RP;
+      const ids = ['grok-4.6', 'gpt-5.6-luna'];
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ids, channelOf: chanOf(在役) }), 5, '渠道更严就听渠道');
+      assert.equal(resolveReviewerCap({ cores: 3, reviewerIds: ids, channelOf: chanOf(在役) }), 3, '机器更严就听机器');
+    });
+
+    it('**不在役**的腿不许参与取严（第一版就栽在这一格）', async () => {
+      const { resolveReviewerCap } = await RP;
+      // pqapi=2、windsurf=3 都在容量表里，但今天没有审官落在上面（执行档 enabled:false）。
+      // 拿整张表取严会算出 2——比原来手打的 3 还紧，方向正好反了。
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6', 'gpt-5.6-luna'], channelOf: chanOf(在役) }),
+        5,
+        '只该数在役那两条（不限 / 5），不该被 pqapi 的 2 拖下去',
+      );
+    });
+
+    it('「不限」的渠道不参与取严', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: chanOf(在役) }), 6,
+        '全是不限 ⇒ 只剩机器那层');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['x'], channelOf: () => Infinity }), 6,
+        'Infinity 也是不限');
+    });
+
+    it('渠道那层读不到 → 不参与，不许当成 0', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: null, channelOf: chanOf(在役) }), 6, '顺位读不到');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: null }), 6, '查渠道的函数没给');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: () => { throw new Error('炸'); } }), 6,
+        '查渠道抛了也只是这一位不参与，不许把整条闸拉成保底');
+    });
+
+    it('两层都读不到 → 落到保底，不许猜', async () => {
+      const { resolveReviewerCap, REVIEWER_CAP_FLOOR } = await RP;
+      assert.equal(REVIEWER_CAP_FLOOR, 2);
+      assert.equal(resolveReviewerCap({ cores: null, reviewerIds: null, channelOf: null }), 2);
+      assert.equal(resolveReviewerCap({}), 2);
+    });
+
+    it('保底压过取严：算出来比保底还小也不许低于保底', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => 1 }), 2,
+        '一条都拉不动会把复审整条冻住');
+    });
+
+    it('今天这台机器上算出来的是 5，不是 3（正控：真读路由表 + 真核数）', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6', 'gpt-5.6-luna'], channelOf: chanOf(在役) }), 5);
+    });
   });
 });
 

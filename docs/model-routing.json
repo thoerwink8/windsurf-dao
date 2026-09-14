@@ -404,6 +404,7 @@
     {
       "id": "grok-4.6@gw/orca",
       "并发上限": "不限",
+      "并发上限依据": "2026-09-08 拍板表：grokpool（xAI 直连）「用户判不限，工人无限做没出过问题」；长流复测 ≥8 全绿。实际受机器负载准入与网关机吞吐约束，不是真无限。",
       "模型": "grok-4.6",
       "族": "pi",
       "供应商": "gw",
@@ -418,7 +419,8 @@
     },
     {
       "id": "deepseek-v4-flash@gw/orca",
-      "并发上限": null,
+      "并发上限": 6,
+      "并发上限依据": "2026-09-08 拍板表：dspool「跟 windsurf 共享账号预算」⇒ 与 windsurf 同值 6。",
       "模型": "deepseek-v4-flash",
       "族": "pi",
       "供应商": "gw",
@@ -434,6 +436,7 @@
     {
       "id": "gpt-5.6-sol@pqapi/orca",
       "并发上限": 2,
+      "并发上限依据": "2026-09-08 拍板表 pqapi=2。注意原依据「CLI 会话 3-4」已于 09-09 撤回（未证实观察），2 是当日拍板初值本身，不是从那条观察推的。今天该腿两条 target 均熔断（健康表 503）。",
       "模型": "gpt-5.6-sol",
       "族": "codex",
       "供应商": "pqapi",
@@ -447,7 +450,8 @@
     },
     {
       "id": "gpt-5.6-luna@gw/orca",
-      "并发上限": null,
+      "并发上限": 6,
+      "并发上限依据": "2026-09-08 拍板（docs/decisions/2026-09-08-channel-concurrency-two-planes.md 表「填入初值」windsurf=6）。此前一直是 null，被按保守值 3 收紧——拍了没填，躺了 6 天没人发现。",
       "模型": "gpt-5.6-luna",
       "族": "pi",
       "供应商": "gw",
@@ -462,7 +466,8 @@
     },
     {
       "id": "glm-5.2@gw/orca",
-      "并发上限": null,
+      "并发上限": 6,
+      "并发上限依据": "同 gpt-5.6-luna@gw/orca：同一条 windsurf 渠道，2026-09-08 拍板 6。",
       "模型": "glm-5.2",
       "族": "pi",
       "供应商": "gw",
@@ -477,7 +482,8 @@
     },
     {
       "id": "gemini-3.7-flash@gw/orca",
-      "并发上限": null,
+      "并发上限": 6,
+      "并发上限依据": "同 gpt-5.6-luna@gw/orca：同一条 windsurf 渠道，2026-09-08 拍板 6。",
       "模型": "gemini-3.7-flash",
       "族": "pi",
       "供应商": "gw",
@@ -493,6 +499,7 @@
     {
       "id": "kimi-k3@gw/orca",
       "并发上限": null,
+      "并发上限待填理由": "2026-09-08 拍板表未覆盖 gw:sub 这条渠道，且至今没有工人或审官落在上面（320 条会话记录里 provider 只出现过 xai-native / mirasim-relay / cursor-native）。没有真实派工的会话死因就没有填数依据（拍板档案：探针只定初值，最终判据是会话死因统计）。按保守值 3 收紧，等这条渠道真正上量再填。",
       "模型": "kimi-k3",
       "族": "pi",
       "供应商": "gw",
@@ -508,6 +515,7 @@
     {
       "id": "composer-2.5@gw/orca",
       "并发上限": null,
+      "并发上限待填理由": "同 kimi-k3@gw/orca：同一条 gw:sub 渠道，无真实派工样本，按保守值 3 收紧。",
       "模型": "composer-2.5",
       "族": "pi",
       "供应商": "gw",
@@ -523,6 +531,7 @@
     {
       "id": "claude-fable-5@reclaude/terminal",
       "并发上限": "不限",
+      "并发上限依据": "reclaude 终端腿：并发受本机终端与 Max 订阅约束，不是上游账号合同数，故记「不限」，由机器负载准入兜底。",
       "模型": "claude-fable-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -553,6 +562,7 @@
     {
       "id": "claude-opus-5@mirasim/mirasim",
       "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板；当日未测，是拍的不是量的）。",
       "模型": "claude-opus-5",
       "族": "claude",
       "供应商": "mirasim",
@@ -575,6 +585,7 @@
     {
       "id": "claude-opus-5@reclaude/terminal",
       "并发上限": "不限",
+      "并发上限依据": "同 claude-fable-5@reclaude/terminal：reclaude 终端腿，上游不按会话计量，记「不限」，由机器负载准入兜底。",
       "模型": "claude-opus-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -590,6 +601,7 @@
     {
       "id": "gpt-5.6-luna@mirasim/mirasim",
       "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。这条是今天审官真正落地的腿——会话记录 profileId=codex-relay-gpt-5.6-luna / provider=mirasim-relay。",
       "模型": "gpt-5.6-luna",
       "族": "codex",
       "供应商": "mirasim",
@@ -601,6 +613,7 @@
     {
       "id": "gpt-5.6-sol@mirasim/mirasim",
       "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
       "模型": "gpt-5.6-sol",
       "族": "codex",
       "供应商": "mirasim",
@@ -612,6 +625,7 @@
     {
       "id": "gpt-6-astra@mirasim/mirasim",
       "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
       "模型": "gpt-6-astra",
       "族": "codex",
       "供应商": "mirasim",
@@ -623,6 +637,7 @@
     {
       "id": "claude-fable-5@mirasim/mirasim",
       "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
       "模型": "claude-fable-5",
       "族": "claude",
       "供应商": "mirasim",

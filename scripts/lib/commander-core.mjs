@@ -513,10 +513,30 @@ export const REREVIEW_GRACE_MIN = 45;
  * 而它原先连「把手上这些活收掉」一起拦——机器一满（slots=0），25 张 PR 一条判定都没有，
  * 满载空转等收尾（2026-09-10 实咬，见 finishSlots 处的注释）。
  *
- * 上限取 3 的理由：收尾动作主要是等模型回话的 IO，本机开销小（实测审官进程 ~2% CPU），
- * 但一轮里同时开太多会把当轮的决定表拉长、也不好定位；3 条够把「本轮的收尾队列」推着走。
+ * **上限不是手打的数**（2026-09-14 改）：原先写死 3，依据只是「一轮里开太多不好定位」的人体工学，
+ * 不是任何资源。实测 13 小时 40 轮里 14 轮被这个 3 卡住、少派 28 个收尾动作，而同期机器准入
+ * 报的是「还能收 28 张」——手打常量比真实容量紧一个数量级，正是 memory `hand-typed-constant-will-be-wrong`。
+ *
+ * 现在按机器比例算（`finishSlotCap`），依据是 2026-09-08 拍板「机器闸保持比例式（0.85×核数）」：
+ * 换大 VPS 时并发自动跟着扩，没有第二处要人记得去改的数字。
  */
-export const FINISH_SLOTS_MAX = 3;
+export const FINISH_SLOTS_FLOOR = 2;
+
+/**
+ * 收尾名额上限 = 核数（floor 2）。
+ *
+ * 为什么是「核数」而不是 0.85×核数：那条比例是给**新活**用的，新活是内存密集的长会话；
+ * 收尾是等模型回话的 IO（实测审官进程 ~2% CPU），每核跑一条仍有大量空闲。取核数是保守侧——
+ * 真按 IO 密度能开更多，但那要闭环死因数据支撑，现在还没有（见 #1145 档案「最终判据永远是
+ * 真实派工的会话死因统计」，而 execution/sessions 记录里根本没有 error 字段）。
+ *
+ * floor 2 保住 2026-09-10 那条性质：机器再满也得有收尾名额，否则 25 张 PR 一条判定都没有。
+ * `cores` 读不到（老夹具/准入没吐）→ 回落到 floor，**不猜一个默认核数**。
+ */
+export function finishSlotCap(cores) {
+  if (!Number.isInteger(cores) || cores <= 0) return FINISH_SLOTS_FLOOR;
+  return Math.max(FINISH_SLOTS_FLOOR, cores);
+}
 export const MAX_REREVIEW_TRIES = 3;
 // 返工派工失败后的重试节奏。与 drain / 复审同一套语义（45 分钟宽限、试满 3 次停手交人），
 // 故意不另造一套数字：三条路犯的是同一个「派了 ≠ 成了」，节奏不同只会让人以为它们是三件事。
@@ -805,17 +825,21 @@ function collectCandidates(situation) {
     draftDueForPump,
   });
   const newWorkSlots = capNewDispatchSlots(Math.max(0, slotsLeft - finishReserve), agingBusy);
-  // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 FINISH_SLOTS_MAX。
+  // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 finishSlotCap（按核数，不是手打常量）。
   // slots=Infinity（老夹具/未接准入）时跟着不限张，维持既有契约。
   //
   // **admission 没查成时收尾也归零**：读不到机器信号就不该起任何会话（fail-close），
   // 收尾同样吃 CPU——「读不到 ≠ 可以随便派」这条对两笔账一视同仁。
   // （写这版时先漏了这一格，shared-slots 的既有用例当场抓住：0 == 1。）
   let finishSlots = admissionUnscanned ? 0
-    : (dispatchSlots === Infinity ? Infinity : FINISH_SLOTS_MAX);
+    : (dispatchSlots === Infinity ? Infinity : finishSlotCap(admission?.cores));
+  // 收尾名额被领光的次数。**必须报**：原先名额用尽是完全静默的（reportAdmission 只在
+  // admissionUnscanned / dispatchSlots===0 时说话），于是「这一轮想派 10 个只派了 3 个」
+  // 在盘面上和「本来就只有 3 个要派」长得一模一样——限流不可观测，等于没人会去调它。
+  let finishDenied = 0;
   /** 领一个收尾名额（叫审官/返工/解冲突/收口泵）。不占新活名额。 */
   const takeFinishSlot = () => {
-    if (finishSlots <= 0) return false;
+    if (finishSlots <= 0) { finishDenied += 1; return false; }
     finishSlots -= 1;
     return true;
   };
@@ -1782,6 +1806,14 @@ function collectCandidates(situation) {
       workdir: s.cwd || s.workdir || s.worktree || null,
       why: '一轮说完，会话不常驻',
     }, ACTION_NEEDS['stop-session']));
+  }
+  if (finishDenied > 0) {
+    out.push(withNeeds(hub(
+      `收尾名额用尽：这一轮还有 ${finishDenied} 个收尾动作（叫审官/返工/解冲突/收口泵）领不到名额，排下一轮。`
+      + `本机 ${admission?.cores ?? '?'} 核 ⇒ 上限 ${finishSlotCap(admission?.cores)}；`
+      + `连着几轮都报这一条就是上限太紧，扩机器或改 finishSlotCap`,
+      'decide',
+    ), N.rereview));
   }
   return stops.concat(out);
 }

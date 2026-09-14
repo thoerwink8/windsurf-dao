@@ -358,4 +358,66 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
     assert.deepEqual(r.bad, []);
     assert.ok(r.inService > 0, '一条在役腿都没扫到 ⇒ 本次等于没查');
   });
+
+  // 2026-09-14 加的第三道：每个数与每个空格都要带出处。
+  // 起因：2026-09-08 拍了 windsurf=6，路由表这一格 null 躺了 6 天，闸按保守值 3 收紧，
+  // 全程零报警——「拍板档案」与「机器读的表」是两条真相源，中间没有闸。
+  describe('并发上限必须带出处（故意违规样本必须被拦下）', () => {
+    it('填了数但没写「并发上限依据」→ 点名', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([{ id: 'bare@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 6 }]);
+      assert.deepEqual(r.noReason.map((n) => [n.id, n.field]), [['bare@x', '并发上限依据']]);
+    });
+
+    it('留空但没写「并发上限待填理由」→ 点名', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([{ id: 'blank@x', 状态: '在役', 供应商: 'gw', 落地: GLM }]);
+      assert.deepEqual(r.noReason.map((n) => [n.id, n.field]), [['blank@x', '并发上限待填理由']]);
+    });
+
+    it('「不限」也要写依据——它是结论，不是缺省', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([{ id: 'inf@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: '不限' }]);
+      assert.deepEqual(r.noReason.map((n) => n.id), ['inf@x']);
+    });
+
+    it('空串 / 只有空白不算写了出处', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([
+        { id: 'empty@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 6, 并发上限依据: '' },
+        { id: 'ws@x', 状态: '在役', 供应商: 'gw', 落地: GLM, 并发上限: 6, 并发上限依据: '   ' },
+      ]);
+      assert.deepEqual(r.noReason.map((n) => n.id), ['empty@x', 'ws@x']);
+    });
+
+    it('写全了就不点名（正控：闸不是恒红）', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([
+        { id: 'good@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: 6, 并发上限依据: '2026-09-08 拍板' },
+        { id: 'pend@x', 状态: '在役', 供应商: 'gw', 落地: GLM, 并发上限待填理由: '这条渠道还没上量' },
+      ]);
+      assert.deepEqual(r.noReason, []);
+      assert.deepEqual(r.pending.map((p) => p.id), ['pend@x'], '待填仍然要列出来催填');
+    });
+
+    it('停用腿不要求出处', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([{ id: 'dead@x', 状态: '停用', 供应商: 'gw', 落地: GROK, 并发上限: 6 }]);
+      assert.deepEqual(r.noReason, []);
+    });
+
+    it('脏值只报脏值，不再重复报缺出处（一条腿只点一次名）', async () => {
+      const { validateLegCaps } = await CC;
+      const r = validateLegCaps([{ id: 'junk@x', 状态: '在役', 供应商: 'gw', 落地: GROK, 并发上限: '很多' }]);
+      assert.deepEqual(r.bad.map((b) => b.id), ['junk@x']);
+      assert.deepEqual(r.noReason, []);
+    });
+
+    it('真表：在役腿的出处全写齐（本次验收标准）', async () => {
+      const { validateLegCaps } = await CC;
+      const fs = require('node:fs');
+      const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8'));
+      assert.deepEqual(validateLegCaps(doc.腿).noReason, []);
+    });
+  });
 });

@@ -161,6 +161,7 @@ export function validateLegCaps(legs) {
   }
   const pending = [];
   const bad = [];
+  const noReason = [];
   let inService = 0;
   for (const leg of legs) {
     if (!leg || typeof leg !== 'object') continue;
@@ -168,10 +169,19 @@ export function validateLegCaps(legs) {
     inService += 1;
     const r = resolveLegCap(leg['并发上限']);
     const id = String(leg.id || leg['模型'] || '?');
-    if (r.bad) bad.push({ id, value: leg['并发上限'] });
-    else if (r.state === 'pending') pending.push({ id, channel: legChannelKey(leg) });
+    if (r.bad) { bad.push({ id, value: leg['并发上限'] }); continue; }
+    // 每个数与每个空格都要带出处（2026-09-14 加）。
+    // 起因：2026-09-08 拍了 windsurf=6，路由表这一格是 null 躺了 6 天，闸按保守值 3 收紧，
+    // 没有任何东西会喊——「拍板档案」和「机器读的表」是两条真相源，中间没有闸。
+    // 判据只看 JSON 自身，不去解析拍板 markdown：解析文档的检查会随排版失效，
+    // 而失效的检查看起来跟通过一模一样。
+    const why = r.state === 'pending' ? leg['并发上限待填理由'] : leg['并发上限依据'];
+    if (typeof why !== 'string' || !why.trim()) {
+      noReason.push({ id, state: r.state, field: r.state === 'pending' ? '并发上限待填理由' : '并发上限依据' });
+    }
+    if (r.state === 'pending') pending.push({ id, channel: legChannelKey(leg) });
   }
-  return { ok: true, pending, bad, conservativeCap: CONSERVATIVE_CAP, inService };
+  return { ok: true, pending, bad, noReason, conservativeCap: CONSERVATIVE_CAP, inService };
 }
 
 /**
