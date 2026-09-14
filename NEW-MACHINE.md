@@ -303,8 +303,8 @@ key 的真身在 `~/.config/ai-gateway/migration-1174/pqapi-sol.key`（C 类，�
 
 - 起法：`CODEX_HOME=~/.codex-sol codex ...`。执行目录里 `codex-pqapi-sol.connection.codexHome` 记的就是这个路径。
 - 验证（两条都要跑，只跑一条证不出没互相盖）：
-  1. `CODEX_HOME=~/.codex-sol codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头 `model: gpt-5.6-sol` / `provider: pqapi`。2026-09-14 复跑时抬头对了、20 秒内没有最终消息，所以执行目录标 `unverified`、`enabled: false`，不把没回完的请求写成 available。
-  2. 紧接着裸跑 `codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头仍是 `model: gpt-5.6-luna` / `provider: custom`（4317 桥）。
+  1. `CODEX_HOME=~/.codex-sol timeout 60s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头 `model: gpt-5.6-sol` / `provider: pqapi`。2026-09-14T21:38Z 复跑抬头对了，随后 `ERROR: Reconnecting... 1/5`，60 秒 timeout 124，没有最终消息。所以执行目录标 `unverified`、`enabled: false`，不把没回完的请求写成 available。
+  2. 紧接着裸跑 `timeout 45s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头仍是 `model: gpt-5.6-luna` / `provider: custom`（4317 桥），4.66s 回「收到」。
 
 ## 8. 本机工具坑
 

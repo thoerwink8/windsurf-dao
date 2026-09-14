@@ -1274,10 +1274,10 @@
       "defaultForModels": [],
       "availability": {
         "status": "unverified",
-        "checkedAt": "2026-09-14T21:27:00.000Z",
+        "checkedAt": "2026-09-14T21:38:49.000Z",
         "evidenceKind": "execution",
         "sourceId": "1174-codex-sol-home",
-        "reason": "专用 home 已落地且 enabled=false。2026-09-14T21:27Z 复跑 `CODEX_HOME=~/.codex-sol codex exec --skip-git-repo-check '只回两个字：收到'`：打出 model=gpt-5.6-sol / provider=pqapi 后 20 秒无最终消息（timeout 124）。证据不够标 available。默认 ~/.codex 仍走 4317 桥，两把 key 分家这件事本身成立。"
+        "reason": "专用 home 已落地且 enabled=false。2026-09-14T21:38:49Z 复跑 `CODEX_HOME=~/.codex-sol timeout 60s codex exec --skip-git-repo-check '只回两个字：收到'`：抬头 model=gpt-5.6-sol / provider=pqapi，随后 ERROR Reconnecting... 1/5，60s timeout 124，无最终消息（session 01a0a1db-c633-7a33-a09a-1a12046820b1）。紧接着裸跑同一条：抬头 model=gpt-5.6-luna / provider=custom，4.66s 回「收到」（session 01a0a1dc-f290-7f42-a8a8-b4e5761b4b63）。两把 key 分家成立；sol 请求当前无法复现最终消息，不标 available。"
       },
       "quality": {
         "status": "unverified",
