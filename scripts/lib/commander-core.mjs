@@ -524,6 +524,53 @@ export const REWORK_RETRY_GRACE_MIN = 45;
 export const MAX_REWORK_TRIES = 3;
 
 /**
+ * 「返工派成功了」的那条账多久之后可以当**工人已经死了**。
+ * 必须比 REWORK_RETRY_GRACE_MIN 宽：那条管的是「派失败了多久能再试」，这条管的是
+ * 「派成功了多久还没动静就算它没了」——后者要把工人真正干活的时间让出来，不然会在
+ * 工人干到一半时再派一个，两个工人抢同一棵树。
+ */
+export const REWORK_ORPHAN_GRACE_MIN = 180;
+
+/**
+ * 派成功的返工是不是**已经没人在做了**（孤儿）。
+ *
+ * 三条必须同时成立，缺一不解冻——解冻的代价是重复工人，比多等一轮贵：
+ *   ① 会话面确知「没有这条的活会话」：unscanned / unavailable 一律不算（fail-closed）
+ *   ② 距派出去超过 REWORK_ORPHAN_GRACE_MIN：给工人真正干活的时间
+ *   ③ head 没动：工人推了新东西 = 它活着或已交卷，这条账本来就不该再用
+ *
+ * ③ 在调用方天然成立（账本键就带 head），这里仍显式核一次——键的形状将来可能改，
+ * 判据不该指望键里恰好含着它要的事实。
+ *
+ * @param prev 账本里那条 `{ at, ok, head }`
+ * @param situation 取会话名单用；没有 sessions 节 ⇒ 观测面未接入 ⇒ 不解冻
+ */
+export function judgeReworkOrphan(pr, { prev, nowMs, situation } = {}) {
+  if (!prev || prev.ok !== true) return { orphan: false, why: '不是一条派成功的账' };
+  const head = typeof prev.head === 'string' ? prev.head.trim() : '';
+  const cur = pr && typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '';
+  if (!head || !cur || head !== cur) return { orphan: false, why: 'head 已经动了或没查成' };
+  const at = Date.parse(prev.at || '');
+  if (!Number.isFinite(at) || !Number.isFinite(nowMs)) return { orphan: false, why: '派出时刻没查成' };
+  const ageMin = (nowMs - at) / 60000;
+  if (ageMin < REWORK_ORPHAN_GRACE_MIN) {
+    return { orphan: false, why: `才派出去 ${Math.round(ageMin)} 分钟，还没到 ${REWORK_ORPHAN_GRACE_MIN} 分钟`, ageMin };
+  }
+  const live = hasLiveExecutor({
+    sessions: sessionListForLiveness(situation),
+    pr: pr && pr.number,
+    issue: attributedIssueNumber(pr),
+  });
+  if (live.unavailable) return { orphan: false, why: '会话观测面未接入，不猜' };
+  if (live.unscanned) return { orphan: false, why: '会话名单没查成，不猜' };
+  if (live.live) return { orphan: false, why: '还有活会话在做' };
+  return {
+    orphan: true, ageMin,
+    why: `返工 ${Math.round(ageMin / 60)} 小时前派成功，此后 head 一个字没动、会话名单里也没有活会话——工人已经没了`,
+  };
+}
+
+/**
  * 署名 issue 仍给 merge-policy / human_holds 用（正文在 issue 上）。
  * 选型（谁写码、谁来审）只读 PR 自己的 label（#1116），不从这里反推。
  *
@@ -1155,7 +1202,22 @@ function collectCandidates(situation) {
     // 账本里 ok 字段一直都在记，只是没人读。
     const prev = reworkDispatched[rkey];
     if (prev) {
-      if (prev.ok === true) return;        // 真派出去了：工人正在改，等它推新 head
+      // 派成功了，但工人**可能早就死了**。原来这里无条件 return，判据是「派出去过」，
+      // 而真正要问的是「现在还有没有人在做」——两者在工人静默退出时永久分叉：
+      // head 不会再变（没人推），账 ok:true 不会再变（没人重写），于是这张 PR 在这个 head 上
+      // 被自己的成功记录焊死。2026-09-14 实咬：#1154 的返工 09-14T05:37 派成功，14 小时后
+      // 会话名单里一条活的都没有、head 一个字没动、盘面每轮报「合不上」却零动作；
+      // #1091/#1216 同形状（exhausted.mjs 开头那段「pushRework 被 prev.ok === true 挡住」
+      // 记的就是这个症状，只记了没修）。唯一逃生口是判据版本换代把账本键作废——
+      // 靠改代码来解冻卡住的 PR，不是机制。
+      //
+      // 解冻判据必须**确知没人在做**，不是「没查到人」：会话面没接入 / 没查成一律维持旧行为，
+      // 否则观测面一抖就批量重派，造出一堆重复工人。确知没人 + 超过孤儿宽限 ⇒ 落回下面的
+      // 重试路，tries / 宽限 / MAX_REWORK_TRIES / terminal 判定原样全部适用，不新开一条绕闸的路。
+      if (prev.ok === true) {
+        const orphan = judgeReworkOrphan(pr, { prev, nowMs, situation });
+        if (!orphan.orphan) return;
+      }
       if (prev.unscanned === true) return; // 没查成：不知道有没有工人，fail-closed 不重派（重派会造重复工人）
       // 明确失败：上次没有工人被造出来，可以重试。但要宽限期 + 上限，
       // 否则失败原因没解决时会每轮刷一次（#849 刷单教训）。
