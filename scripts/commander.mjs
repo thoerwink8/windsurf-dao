@@ -454,12 +454,23 @@ function scanReviewPending() {
 export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
   const [owner, name] = REPO.split('/');
   const byPr = {};
+  // 跳过不给 byPr 的 PR（draft）必须**单独记下来**，见下面的 skipped（2026-09-14 实咬）。
+  const skipped = [];
   let anyFail = null;
   for (const pr of prs || []) {
     if (!pr) continue;
     // Approved manual tasks may be returned to draft by the reviewer. Their
     // actual votes must still reach the decision stage; other drafts wait.
-    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) continue;
+    //
+    // 2026-09-14 实咬（PR #1265/#1266 静默永不送审）：跳过的 PR **不进 byPr**，而下游
+    // `prReviewInput(undefined)` → `reviews === undefined` → `analyzeReviewsAtHead` 判
+    // `reviews-missing`（= 没抓到），commander 那一格按既有契约**静默 continue**。
+    // 于是「这张 PR 一条 review 都没有、该叫审官了」和「这张 PR 的 reviews 没抓到」
+    // 长得一模一样，而两者处置完全相反。这不是 draft 的问题——是**跳过没留痕**。
+    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) {
+      skipped.push(pr.number);
+      continue;
+    }
     // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
     // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
     const gh = read(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
@@ -471,8 +482,10 @@ export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
     } catch (e) { anyFail = String(e.message || e); }
   }
   // 只要抓到过（哪怕 0 条）就算 scanned；一条都没试成才 unscanned。
-  if (Object.keys(byPr).length === 0 && anyFail) return { scanned: false, error: `reviews 没查成：${anyFail}` };
-  return { scanned: true, byPr, ...(anyFail ? { partialError: anyFail } : {}) };
+  if (Object.keys(byPr).length === 0 && anyFail && skipped.length === 0) {
+    return { scanned: false, error: `reviews 没查成：${anyFail}` };
+  }
+  return { scanned: true, byPr, skipped, ...(anyFail ? { partialError: anyFail } : {}) };
 }
 
 /** #843：周期面把健康表 red / 撞死指纹记进熔断表（只记事件，判定在 applyEvent）。失败不挡 scan。 */
