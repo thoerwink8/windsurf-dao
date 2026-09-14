@@ -362,4 +362,26 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
     assert.deepEqual(r.bad, []);
     assert.ok(r.inService > 0, '一条在役腿都没扫到 ⇒ 本次等于没查');
   });
+
+  it('真表：在役「不限」只许用本腿证据，不得把别的腿写成已验证不限', async () => {
+    const { CAP_UNLIMITED } = await CC;
+    const fs = require('node:fs');
+    const doc = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8'));
+    const live = (doc.腿 || []).filter((leg) => leg && leg.状态 === '在役');
+    const models = live.map((leg) => String(leg.模型 || '')).filter(Boolean);
+    for (const leg of live) {
+      if (leg['并发上限'] !== CAP_UNLIMITED) continue;
+      const id = String(leg.id || '?');
+      const model = String(leg.模型 || '');
+      const basis = String(leg['并发上限依据'] || '');
+      assert.ok(model, `${id} 标不限但没有模型字段`);
+      assert.ok(basis.includes(model), `${id} 标不限但依据没点名本腿模型 ${model}`);
+      assert.ok(!/没查成/.test(basis), `${id} 标不限但依据写了没查成`);
+      assert.ok(!/并发上限\s*1/.test(String(leg.理由 || '')), `${id} 上限不限但理由仍写并发上限 1`);
+      for (const other of models) {
+        if (other === model) continue;
+        assert.ok(!basis.includes(other), `${id} 的不限依据点名了其它在役模型 ${other}`);
+      }
+    }
+  });
 });
