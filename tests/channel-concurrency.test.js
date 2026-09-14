@@ -65,6 +65,23 @@ describe('channelKeyOf / legChannelKey —— 渠道键取自 target 池级前�
     assert.equal(legChannelKey({ 供应商: 'xai-native', 执行侧: 'mirasim' }), 'native:xai-native');
     assert.equal(legChannelKey({ 供应商: 'mirasim', 执行侧: 'mirasim' }), 'mirasim');
   });
+  it('cursor-native 落地不因执行侧=mirasim 并进 mirasim 渠', async () => {
+    const { legChannelKey } = await CC;
+    const composer = {
+      供应商: 'cursor-native',
+      执行侧: 'mirasim',
+      落地: L('cursor-native', 'composer-2.5'),
+    };
+    const grok = {
+      供应商: 'xai-native',
+      执行侧: 'mirasim',
+      落地: L('xai-native', 'grok-4.6'),
+    };
+    assert.equal(legChannelKey(composer), 'native:cursor-native');
+    assert.equal(legChannelKey(grok), 'native:xai-native');
+    assert.notEqual(legChannelKey(composer), legChannelKey(grok));
+    assert.notEqual(legChannelKey(composer), 'mirasim');
+  });
 });
 
 describe('resolveLegCap —— 不限 / 待填 / 有限三态分得开', () => {
@@ -135,6 +152,30 @@ describe('buildChannelCaps —— 从腿表建渠道容量表', () => {
     ]);
     assert.equal(r.caps['gw:grok'], Infinity);
     assert.equal(r.states['gw:grok'], 'unlimited');
+  });
+  it('composer=1 不把 grok/luna 的 mirasim 渠压成 1', async () => {
+    const { buildChannelCaps } = await CC;
+    const r = buildChannelCaps([
+      { id: 'grok-4.6@xai-native/mirasim', 状态: '在役', 供应商: 'xai-native', 执行侧: 'mirasim', 落地: L('xai-native', 'grok-4.6'), 并发上限: '不限' },
+      { id: 'gpt-5.6-luna@mirasim-relay/mirasim', 状态: '在役', 供应商: 'mirasim-relay', 执行侧: 'mirasim', 落地: L('mirasim-relay'), 并发上限: '不限' },
+      { id: 'composer-2.5@cursor-native/mirasim', 状态: '在役', 供应商: 'cursor-native', 执行侧: 'mirasim', 落地: L('cursor-native', 'composer-2.5'), 并发上限: 1 },
+    ]);
+    assert.equal(r.ok, true);
+    assert.equal(r.caps['native:cursor-native'], 1);
+    assert.equal(r.caps['native:xai-native'], Infinity);
+    assert.equal(r.caps['mirasim'], Infinity);
+    assert.notEqual(r.caps['mirasim'], 1);
+  });
+  it('活表：composer 渠与 mirasim 渠分开，composer 上限不再压 mirasim', async () => {
+    const fs = await import('node:fs');
+    const { buildChannelCaps } = await CC;
+    const raw = JSON.parse(fs.readFileSync(path.join(REPO, 'docs/model-routing.json'), 'utf8'));
+    const r = buildChannelCaps(raw.腿);
+    assert.equal(r.ok, true);
+    assert.ok(r.caps['native:cursor-native'] != null, 'composer 有自己的渠');
+    assert.notEqual(r.caps['native:cursor-native'], r.caps['mirasim'], '两条渠必须分开');
+    assert.notEqual(r.caps['mirasim'], 1, 'mirasim 渠不许再被 composer 压成 1');
+    assert.equal(r.caps['native:xai-native'], Infinity, 'grok 仍不限');
   });
   it('同渠道多条显式有限值取最严（min）', async () => {
     const { buildChannelCaps } = await CC;

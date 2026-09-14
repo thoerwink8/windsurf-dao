@@ -95,7 +95,15 @@ export function channelKeyOf(landing) {
 /**
  * 腿节 → 渠道键。落地优先，否则按供应商；**不按执行侧**。
  * 执行侧=mirasim 只说明会话从 mirasim 起，不是容量池：xai-native / cursor-native
- * 各走独立 native 池，并进 mirasim 会让 grok/composer 的「不限」放行未测 relay 腿。
+ * 各走独立 native 池。
+ *
+ * 2026-09-15 实咬：composer-2.5 落地是 cursor-native，执行侧却写 mirasim，
+ * 旧逻辑把它和 grok/luna relay 算成同一条 `mirasim` 渠，再 `Math.min` 成 1，
+ * 整块盘面一次只能派一张。ACP/Cursor 订阅和 xAI/relay 不共享上游。
+ * 并进 mirasim 还会让 grok/composer 的「不限」放行未测 relay 腿。
+ *
+ * 没落地时走 channelKeyOf({ provider })，覆盖 native / mirasim / claude 等，
+ * 不在这里再手写一份供应商名单（会跟 probeTargetOf 漂）。
  */
 export function legChannelKey(leg) {
   if (!leg || typeof leg !== 'object') return null;
