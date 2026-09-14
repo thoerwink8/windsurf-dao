@@ -757,6 +757,36 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     assert.equal(/还有 2 个/.test(报满[0].subject), true, '要说清楚少派了几个');
   });
 
+  it('⑤d prReviews 没查成时，收尾名额用尽仍必须报满', async () => {
+    const { decide } = await CORE;
+    const issues = [];
+    const prs = [{
+      number: 101, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h101',
+      title: 'PR 101',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    }];
+    for (let i = 0; i < 5; i += 1) {
+      issues.push(labeledIssue(710 + i));
+      prs.push({
+        number: 760 + i, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `head${i}`,
+        body: `署名 issue #${710 + i}`, title: `PR ${760 + i}`,
+        labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+      });
+    }
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+      reviewPending: { scanned: true, items: [{ pr: 101 }] },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 0, cores: 2 },
+    }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '票路不依赖 prReviews，仍要叫审官');
+    assert.equal(byKind(r, 'rework').length, 0, '解冲突挂了 prReviews，总闸滤掉');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned'), 'prReviews 没查成要 fail-visible');
+    const 报满 = byKind(r, 'notify-hub').filter((a) => /收尾名额用尽/.test(a.subject || ''));
+    assert.equal(报满.length, 1, 'prReviews 没查成也不能把「名额用尽」滤掉');
+  });
+
   // 换大机器时并发自动跟着扩——这条是「删掉手打常量」的正控：同一份态势，只改核数，
   // 收尾动作数就跟着变。手打常量做不到这件事，那正是 2026-09-08 拍板「机器闸保持比例式」的由来。
   it('⑤c 收尾名额随核数走：6 核那一轮 5 张全派，3 核那一轮只派 3 张', async () => {

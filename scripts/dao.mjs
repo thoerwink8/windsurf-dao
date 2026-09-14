@@ -155,6 +155,7 @@ import {
   countLiveReviewers,
   planReviewAdmission,
   resolveReviewerCap,
+  reviewerIdsForCap,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -1433,11 +1434,13 @@ function cmdReviewerDone(args) {
  */
 async function admitReviewPull(tickets) {
   const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
-  // 上限不再是手打常量：机器那层按核数，上游那层按路由表「腿」节的并发上限，取严。
-  // 任一层读不到就不参与取严（不猜默认值），两层都读不到才落到 REVIEWER_CAP_FLOOR。
+  // 上限不再是手打常量：机器那层按核数，上游那层按**本轮票实际会用的审官**所落渠道取严。
+  // 全部可用候选里那条没用到的 cap=1 腿不许拖住整队。
+  // 有限渠道上限始终是最终上界；保底只在没有任何有限渠道约束时生效。
+  const usable = usableReviewerIds();
   const limit = Number.isInteger(cap) && cap > 0 ? cap : resolveReviewerCap({
     cores: (() => { try { return cpus()?.length ?? null; } catch { return null; } })(),
-    reviewerIds: usableReviewerIds(),
+    reviewerIds: reviewerIdsForCap(tickets, usable),
     channelOf: reviewerChannelCap,
   });
   let sessions = null;

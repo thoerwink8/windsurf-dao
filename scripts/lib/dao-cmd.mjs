@@ -953,7 +953,8 @@ export {
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
-  countLiveReviewers, planReviewAdmission, resolveReviewerCap, REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
+  countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
+  REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────

@@ -114,10 +114,48 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
       assert.equal(resolveReviewerCap({}), 2);
     });
 
-    it('保底压过取严：算出来比保底还小也不许低于保底', async () => {
+    it('有限渠道上限始终是最终上界：cap=1 不许被保底抬成 2', async () => {
       const { resolveReviewerCap } = await RP;
-      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => 1 }), 2,
-        '一条都拉不动会把复审整条冻住');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '渠道合同是 1 再开第 2 条就是 429');
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '两层都是 1 也还是 1，保底不许抬');
+      assert.equal(resolveReviewerCap({ cores: null, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '没核数时渠道 1 仍是 1');
+    });
+
+    it('保底只在没有任何有限渠道约束时生效', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => null }), 2,
+        '渠道不限/认不出 ⇒ 核数 1 仍保底 2');
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => Infinity }), 2,
+        'Infinity 也是不限，保底仍生效');
+    });
+
+    it('渠道约束只数本轮票实际会用的审官，未使用候选不许拖住整队', async () => {
+      const { resolveReviewerCap, reviewerIdsForCap } = await RP;
+      const channelOf = (id) => (id === 'tight-one' ? 1 : 5);
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['gpt-5.6-luna', 'tight-one'], channelOf }),
+        1,
+        '若误把未使用候选算进去，会被 cap=1 拖死',
+      );
+      const ids = reviewerIdsForCap(
+        [{ pr: '1', reviewer: 'gpt-5.6-luna' }],
+        ['gpt-5.6-luna', 'tight-one'],
+      );
+      assert.deepEqual(ids, ['gpt-5.6-luna']);
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ids, channelOf }), 5,
+        '只传队列实际用的模型 ⇒ 5，不被旁路候选拖住');
+    });
+
+    it('票上那位起不来时，渠道约束跟 drain 一样看同厂有效 fallback', async () => {
+      const { reviewerIdsForCap } = await RP;
+      const ids = reviewerIdsForCap(
+        [{ pr: '1', reviewer: 'gpt-5.6-sol' }],
+        ['gpt-5.6-luna', 'grok-4.6'],
+      );
+      assert.deepEqual(ids, ['gpt-5.6-luna'], 'sol 不在顺位 ⇒ 同厂 luna，不是 grok');
     });
 
     it('今天这台机器上算出来的是 5，不是 3（正控：真读路由表 + 真核数）', async () => {

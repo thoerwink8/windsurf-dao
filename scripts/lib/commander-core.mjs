@@ -1808,12 +1808,14 @@ function collectCandidates(situation) {
     }, ACTION_NEEDS['stop-session']));
   }
   if (finishDenied > 0) {
+    // 观测通知：名额已经在 collect 里耗尽，跟 PR review 查没查成无关。
+    // 挂 N.rereview（含 prReviews）时，reviews 没查成会把这条滤掉——限流又变静默。
     out.push(withNeeds(hub(
       `收尾名额用尽：这一轮还有 ${finishDenied} 个收尾动作（叫审官/返工/解冲突/收口泵）领不到名额，排下一轮。`
       + `本机 ${admission?.cores ?? '?'} 核 ⇒ 上限 ${finishSlotCap(admission?.cores)}；`
       + `连着几轮都报这一条就是上限太紧，扩机器或改 finishSlotCap`,
       'decide',
-    ), N.rereview));
+    ), N['notify-hub']));
   }
   return stops.concat(out);
 }

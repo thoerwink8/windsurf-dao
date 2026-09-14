@@ -420,4 +420,78 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
       assert.deepEqual(validateLegCaps(doc.腿).noReason, []);
     });
   });
+
+  describe('拍板有数、腿节仍待填 → 点名（对账闸）', () => {
+    const board = {
+      channels: {
+        'gw:windsurf': { cap: 6 },
+        'gw:grok': { cap: '不限' },
+        mirasim: { cap: 5 },
+      },
+    };
+
+    it('缺 channels / 空表 = 没查成，不是扫完 0 条', async () => {
+      const { parseDecidedChannelCaps, reconcileDecidedCaps } = await CC;
+      assert.equal(parseDecidedChannelCaps(null).unscanned, true);
+      assert.equal(parseDecidedChannelCaps({}).unscanned, true);
+      assert.equal(parseDecidedChannelCaps({ channels: {} }).unscanned, true);
+      const r = reconcileDecidedCaps([], null);
+      assert.equal(r.ok, false);
+      assert.equal(r.unscanned, true);
+    });
+
+    it('拍板有数、腿节仍为 null → 点名；任意待填理由不能放过', async () => {
+      const { reconcileDecidedCaps } = await CC;
+      const r = reconcileDecidedCaps([
+        {
+          id: 'luna@x', 状态: '在役', 供应商: 'gw', 落地: GLM,
+          并发上限: null, 并发上限待填理由: '随便写点',
+        },
+      ], board);
+      assert.equal(r.ok, true);
+      assert.deepEqual(r.stale.map((s) => [s.id, s.channel, s.decided]), [['luna@x', 'gw:windsurf', 6]]);
+    });
+
+    it('拍板没覆盖的渠道允许待填（正控：闸不是恒红）', async () => {
+      const { reconcileDecidedCaps } = await CC;
+      const r = reconcileDecidedCaps([
+        {
+          id: 'sub@x', 状态: '在役', 供应商: 'gw',
+          落地: L('gw', 'gw-sub/kimi-k3-high'),
+          并发上限: null, 并发上限待填理由: '09-08 表没覆盖 gw:sub',
+        },
+      ], board);
+      assert.deepEqual(r.stale, []);
+    });
+
+    it('已经填了数就不点名——不要求与快照逐字相等', async () => {
+      const { reconcileDecidedCaps } = await CC;
+      const r = reconcileDecidedCaps([
+        { id: 'luna@x', 状态: '在役', 供应商: 'gw', 落地: GLM, 并发上限: 4, 并发上限依据: '后来按死因改过' },
+      ], board);
+      assert.deepEqual(r.stale, []);
+    });
+
+    it('停用腿不参与对账', async () => {
+      const { reconcileDecidedCaps } = await CC;
+      const r = reconcileDecidedCaps([
+        { id: 'dead@x', 状态: '停用', 供应商: 'gw', 落地: GLM, 并发上限: null },
+      ], board);
+      assert.deepEqual(r.stale, []);
+    });
+
+    it('真表对账真拍板快照：零条 stale（闸不是恒红）', async () => {
+      const { reconcileDecidedCaps, DECIDED_CHANNEL_CAPS_REL } = await CC;
+      const fs = require('node:fs');
+      const legs = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')).腿;
+      const decided = JSON.parse(fs.readFileSync(path.join(REPO, DECIDED_CHANNEL_CAPS_REL), 'utf8'));
+      const r = reconcileDecidedCaps(legs, decided);
+      assert.equal(r.ok, true);
+      assert.deepEqual(r.stale, []);
+      assert.equal(decided.channels['gw:windsurf'].cap, 6);
+      assert.equal(decided.channels['direct:codex@pqapi'].cap, 2);
+      assert.equal(decided.channels.mirasim.cap, 5);
+      assert.equal(decided.channels['gw:grok'].cap, '不限');
+    });
+  });
 });
