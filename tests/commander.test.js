@@ -2942,3 +2942,95 @@ describe('nextDigestStreak：推进量仪表', () => {
     assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
   });
 });
+
+// ── 闸确定性拒绝：不看词、只看行为，且认输理由必须带真因（2026-09-14 实咬）──
+//
+// 病：drain 被闸当场拒时一个审官都没起来，却照记一次 try；judgeRetry 的词表认不出
+// 这几句闸拒（实测两句 retryable、一句 unknown），于是每 20 分钟白试一次，试满 3 次
+// 打「卡死/自动化认输」，写的理由是「叫了 3 次审官判定仍是 0」——与真因毫无关系。
+describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'bb22cc33dd44ee55ff6677889900aabbccddeeff';
+  const NOW = '2026-09-14T12:00:00.000Z';
+  // 真实原文（2026-09-14 journal 原样抄来）：judgeRetry 判它 retryable，词表救不了
+  const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+    + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+  const readyPr = (n) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '',
+    labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+  });
+  const situ = (rec, rereviewKey) => baseSituation({
+    at: NOW,
+    github: { scanned: true, issues: [], prs: [readyPr(902)] },
+    prReviews: { scanned: true, byPr: { 902: { reviews: [] } } },
+    reworkDispatched: { [rereviewKey(902, HEAD)]: { at: '2026-09-14T10:00:00.000Z', pr: 902, head: HEAD, kind: 'rereview', ...rec } },
+  });
+
+  it('①同一句闸拒连着 2 轮 → 提前交人，理由里是闸的原文而不是「判定仍是 0」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 2 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1, '连着拿回一模一样的拒绝 = 再试还是这个结果，停手');
+    assert.equal(marks[0].why.includes('换厂凭证'), true, '认输理由必须带闸的原文——看 PR 的人靠它决定下一步');
+    assert.equal(marks[0].why.includes('连着 2 轮'), true, '也要说清判据是什么');
+    assert.equal(byKind(r, 'rereview').length, 0, '不再白叫一次审官');
+  });
+
+  it('②试满 3 次且记下了原文 → 理由里也要带原文（原来这一格写的是无关的症状）', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 3, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].why.includes('最后一次叫审官是被拒的'), true);
+    assert.equal(marks[0].why.includes('换厂凭证'), true);
+  });
+
+  it('③负控：失败原文变了 → 情况变了，继续叫审官，不提前交人', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '只重复了一次还不算「一直是它」');
+    assert.equal(byKind(r, 'rereview').length, 1, '照常再叫一次');
+  });
+
+  it('④负控：上一轮没记下失败原文（没查成）→ 不许当成「一直是它」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, sameErrorRounds: 5 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '没原文就没有「一模一样」这回事');
+    assert.equal(byKind(r, 'rereview').length, 1);
+  });
+
+  it('⑤判据本身：judgeRepeatedFailure 与 foldFailureStreak 的四格', async () => {
+    const { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK } = await CORE;
+    assert.equal(SAME_ERROR_ROUNDS_TO_STUCK, 2);
+
+    // 累计：同一句连着出现 → 轮数涨
+    let rec = {};
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 1);
+    assert.equal(judgeRepeatedFailure(rec).stuck, false);
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 2);
+    assert.equal(judgeRepeatedFailure(rec).stuck, true);
+
+    // 换了一句 → 从头数（宁可多试一轮，也别把「情况变了」当没变）
+    assert.deepEqual(foldFailureStreak(rec, '另一种失败'), { lastError: '另一种失败', sameErrorRounds: 1 });
+    // 这轮成功了 → 清零
+    assert.deepEqual(foldFailureStreak(rec, null), { lastError: null, sameErrorRounds: 0 });
+    // 没有账 / 空原文
+    assert.equal(judgeRepeatedFailure(null).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '   ', sameErrorRounds: 9 }).stuck, false);
+  });
+
+  it('⑥判别力正控：这三句真实闸拒，judgeRetry 一句都判不出 terminal', async () => {
+    const { judgeRetry } = await import('../scripts/lib/retry-verdict.mjs');
+    const real = [
+      GATE,
+      'reviewer-attach 失败：先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）',
+      'reviewer-attach 失败：审官位只许审官顺位表里的模型（gpt-5.6-luna → gpt-5.6-sol → grok-4.6），kimi-k3 不在表里',
+    ];
+    for (const e of real) {
+      assert.notEqual(judgeRetry({ error: e }).verdict, 'terminal',
+        '词表认不出这些——所以才需要一条只看行为的判据；哪天词表补上了，这条断言会红，提醒回来删掉重复的那一层');
+    }
+  });
+});

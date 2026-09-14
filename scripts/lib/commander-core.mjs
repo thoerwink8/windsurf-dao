@@ -523,6 +523,56 @@ export const MAX_REREVIEW_TRIES = 3;
 export const REWORK_RETRY_GRACE_MIN = 45;
 export const MAX_REWORK_TRIES = 3;
 
+/** 同一句失败原文连着几轮出现就判「重试不会变」。2 = 看见它重复了一次。 */
+export const SAME_ERROR_ROUNDS_TO_STUCK = 2;
+
+/**
+ * 不看词、只看行为的「这个失败重试不会变」判据。
+ *
+ * `judgeRetry` 靠词表认失败类型，认不出的一律按「可试」放行——这是它的正确设计
+ * （宁可多试一次，也别把能自愈的推给人），但它只找得到**见过**的失败
+ * （memory `whitelist-fingerprints-cannot-find-unseen-failures`）。
+ *
+ * 2026-09-14 实咬：三句真实的闸拒原文喂进 judgeRetry，两句判 `retryable`、一句判 `unknown`，
+ * 没有一句判 terminal——而它们全都是**确定性拒绝**，输入不变就永远是这个结果：
+ *   · 「先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）」
+ *   · 「审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），不许换厂到 grok-4.6／grok」
+ *   · 「审官位只许审官顺位表里的模型（…），kimi-k3 不在表里」
+ * 于是每 20 分钟白试一次，试满 3 次打「卡死/自动化认输」，写的理由还是无关的
+ * 「叫了 3 次审官判定仍是 0」。
+ *
+ * 把这三句加进词表是**错的修法**：下一句没见过的照样漏（memory
+ * `predicate-must-tell-absence-from-negation`：先量行为再定判据，不用词表黑名单）。
+ * 这里改判**行为**——同一格上连着拿回一模一样的原文，就是「再试还是这个结果」的直接证据，
+ * 与那句话是谁写的、说的什么完全无关，没见过的新失败一样拦得住。
+ *
+ * 判「一模一样」用整串原文相等，不做归一化：错误里常带 head / 模型名 / 计数，
+ * 归一化会把「换了个模型仍然拒」和「同一个拒绝」揉成一件事，那正是要分开的两件。
+ * 反过来，原文只要变了一个字就重新计数——宁可多试一轮，也别把「情况变了」当成没变。
+ */
+export function judgeRepeatedFailure(prev) {
+  if (!prev || typeof prev !== 'object') return { stuck: false, why: '没有上一轮的账' };
+  const err = typeof prev.lastError === 'string' ? prev.lastError.trim() : '';
+  if (!err) return { stuck: false, why: '上一轮没记下失败原文——没查成不算「一直是它」' };
+  const rounds = Number(prev.sameErrorRounds);
+  if (!Number.isInteger(rounds) || rounds < SAME_ERROR_ROUNDS_TO_STUCK) {
+    return { stuck: false, rounds: Number.isInteger(rounds) ? rounds : 0, why: '还没重复够轮数' };
+  }
+  return { stuck: true, rounds, error: err, why: `连着 ${rounds} 轮拿回一模一样的失败原文` };
+}
+
+/**
+ * 把这一轮的失败原文并进账（exec 侧调用，纯函数好测）。
+ * 原文与上一轮**逐字相同** ⇒ 轮数 +1；变了 / 这轮成功了 ⇒ 从头数。
+ */
+export function foldFailureStreak(prev, error) {
+  const err = typeof error === 'string' ? error.trim() : '';
+  if (!err) return { lastError: null, sameErrorRounds: 0 };
+  const was = prev && typeof prev.lastError === 'string' ? prev.lastError.trim() : '';
+  const rounds = was === err ? (Number(prev?.sameErrorRounds) || 1) + 1 : 1;
+  return { lastError: err, sameErrorRounds: rounds };
+}
+
 /**
  * 署名 issue 仍给 merge-policy / human_holds 用（正文在 issue 上）。
  * 选型（谁写码、谁来审）只读 PR 自己的 label（#1116），不从这里反推。
@@ -1531,15 +1581,30 @@ function collectCandidates(situation) {
       const firstRound = a.judgedTotal === 0;
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
-      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
-        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
+      // 词表只认见过的字样，认不出的一律 retryable（`whitelist-fingerprints-cannot-find-unseen-failures`）。
+      // 补一条**不看词、只看行为**的判据：同一 (pr, head) 连着几轮拿回一模一样的失败原文，
+      // 就是「重试不会变」的直接证据，无论那句话谁写的、说的是什么。
+      const repeated = judgeRepeatedFailure(prev);
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal' || repeated.stuck) {
+        const hopeless = (rrVerdict.verdict === 'terminal' || repeated.stuck) && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: a.head,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
-          why: hopeless
-            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+          // 「判定仍是 0」只是**症状**。上一次叫审官如果是被闸当场拒的，那句拒绝原文才是
+          // 看 PR 的人唯一用得上的东西——它说得出下一步该做什么（去 rebase / 去换审官），
+          // 而「叫了 3 次没判定」说不出。2026-09-14 实咬：#1271 三轮全是
+          // 「审官位只许同厂换顺位……没交换厂凭证」，认输评论里一个字都没提，
+          // 读的人得自己去翻 journal 才知道真因。有原文就必须带上。
+          why: (() => {
+            const raw = prev?.lastError || prev?.error || null;
+            if (hopeless) {
+              return `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${raw || '无原文'}`
+                + (repeated.stuck ? `；判据：连着 ${repeated.rounds} 轮拿回一模一样的失败原文` : '');
+            }
+            const base = `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`;
+            return raw ? `${base}；最后一次叫审官是被拒的：${raw}` : base;
+          })(),
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;

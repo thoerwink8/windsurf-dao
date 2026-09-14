@@ -43,7 +43,7 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
-  rereviewKey, epochOf,
+  rereviewKey, epochOf, foldFailureStreak,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -1712,8 +1712,28 @@ function drainReviewPending(action, { state, dryRun, say }) {
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   if (action.repo) cmd.push('--repo', String(action.repo));
   const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  recordDrainAttempt(state, action, drainPayloadOf(r));
+  const payload = drainPayloadOf(r);
+  recordDrainAttempt(state, action, payload);
+  // drain 的失败原文原来只落进 drainLedger，而判「还要不要再叫审官」读的是 reworkDispatched
+  // ——两本账，于是 decide 那边 `prev.lastError` 永远是 undefined，#1237 埋的 terminal 出口
+  // 一次都没被走到过（2026-09-14 实测：闸每轮拒、每轮照记一次 try、试满打认输，
+  // 写的理由与真因无关）。这里把原文并进同一本账，让那条出口真的能用。
+  rememberDrainFailure(state, action, payload);
   return r;
+}
+
+/** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。 */
+function rememberDrainFailure(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  if (payload && payload.dryRun === true) return;
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = (state.reworkDispatched || {})[key];
+  if (!prev) return;                       // 没有这条账就没有要并的对象
+  const err = payload && payload.ok === true
+    ? null
+    : String((payload && payload.error) || '').trim() || null;
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
 }
 
 export function drainPayloadOf(runResult) {
