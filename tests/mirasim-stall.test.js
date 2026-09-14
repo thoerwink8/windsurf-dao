@@ -154,6 +154,12 @@ describe('activeWorkdirs / usageRecord / probeMirasimTarget', () => {
     assert.ok(set.has('/a'));
     assert.ok(!set.has('/b'));
     assert.ok(set.has('/c'));
+    const real = activeWorkdirs([
+      { workdir: '/done', state: 'completed', open: false },
+      { workdir: '/live', state: 'running', open: false },
+    ]);
+    assert.ok(!real.has('/done'), '真实名单字段是 state，不是 runState');
+    assert.ok(real.has('/live'));
   });
   it('usageRecord：读到窗 → readable，读不到 → 标没查成', async () => {
     const { usageRecord } = await import(MON);

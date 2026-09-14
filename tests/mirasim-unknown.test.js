@@ -618,6 +618,136 @@ describe('返工 P1（审官 round 2：读不到仍被编成已知值）', () =>
   });
 });
 
+describe('返工 P1（审官 round 3：真实 state 形状 / 半页清单 / CI 默认分支）', () => {
+  it('activeWorkdirs：{state:completed,open:false} 不算活动树', async () => {
+    const { activeWorkdirs } = await import(MON);
+    const set = activeWorkdirs([
+      { workdir: '/done', state: 'completed', open: false },
+      { workdir: '/run', state: 'running', open: false },
+      { workdir: '/open', state: 'completed', open: true },
+    ]);
+    assert.equal(set.has('/done'), false, '终态且不 open 必须出活动集，否则 land 拆不了、GC 也不收');
+    assert.equal(set.has('/run'), true);
+    assert.equal(set.has('/open'), true);
+  });
+
+  it('judgeGcSession：只给 state:completed 也认终态，TTL 过了要回收', async () => {
+    const { judgeGcSession } = await import(MON);
+    const r = judgeGcSession({
+      meta: { state: 'completed', updatedAt: T0 - 40 * MIN, open: false },
+      now: T0, ttlMs: 30 * MIN,
+    });
+    assert.equal(r.gc, true, r.reason);
+    assert.equal(r.terminal, true);
+  });
+
+  it('sweepOnce：state:completed 过 TTL 进 GC，不许放进 live', async () => {
+    const { sweepOnce } = await import(CLI);
+    const sessions = [{
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0 - 40 * MIN, workdir: '/done', open: false,
+    }];
+    let round = 0;
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => { round += 1; return round === 1 ? sessions : []; },
+      readSession: async () => liveView({ phase: 'done' }),
+      readLedger: async () => okLedger,
+      stopSession: async () => ({ ok: true }),
+      deleteSession: async () => ({ ok: true }),
+      removeWorktree: async () => ({ ok: true }),
+      isBranchMerged: () => false,
+      treeExists: () => false,
+      postComment: () => ({ ok: true }),
+      issueOf: () => 880,
+    }, { sessions: {} }, { ttlMs: 30 * MIN });
+    assert.equal(res.gced.length, 1, JSON.stringify(res));
+    assert.equal(res.live.length, 0, '终态会话不能进 live');
+    assert.equal(res.exit, 0);
+  });
+
+  it('wireListSessions：hasMore=true 半页返回 null，且请求带 scope:global', async () => {
+    const { wireListSessions } = await import(MON);
+    const sent = [];
+    const wire = {
+      send(f) { sent.push(f); },
+      async waitFor() {
+        return { type: 'sessions', sessions: [{ sessionKey: KEY, workdir: '/live' }], hasMore: true };
+      },
+      close() {},
+    };
+    const r = await wireListSessions(wire, 50);
+    assert.equal(r, null, '半页必须 unknown，不能把这一页交给删树');
+    assert.ok(sent.length >= 1);
+    assert.equal(sent[0].type, 'listSessions');
+    assert.equal(sent[0].scope, 'global');
+    assert.ok(Number(sent[0].limit) > 0);
+    if (sent.length > 1) assert.ok(sent[1].limit > sent[0].limit, 'hasMore=true 必须扩大 limit');
+  });
+
+  it('wireListSessions：缺 hasMore 不能当完整清单', async () => {
+    const { wireListSessions } = await import(MON);
+    const sent = [];
+    const wire = {
+      send(f) { sent.push(f); },
+      async waitFor() { return { type: 'sessions', sessions: [{ sessionKey: KEY }] }; },
+      close() {},
+    };
+    const r = await wireListSessions(wire, 50);
+    assert.equal(r, null);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].scope, 'global');
+  });
+
+  it('wireListSessions：hasMore=false 才交出这一页', async () => {
+    const { wireListSessions } = await import(MON);
+    const sessions = [{ sessionKey: KEY, state: 'running', workdir: '/w' }];
+    const wire = {
+      send() {},
+      async waitFor() { return { type: 'sessions', sessions, hasMore: false }; },
+      close() {},
+    };
+    const r = await wireListSessions(wire, 50);
+    assert.deepEqual(r, sessions);
+  });
+
+  it('defaultBranchOf：没有 origin/HEAD 时 origin/master XOR origin/main 可证；两边都在则 fail-closed', async () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const { spawnSync } = require('node:child_process');
+    const { defaultBranchOf } = await import(CLI);
+    const mk = (name) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), name));
+      const git = (args) => spawnSync('git', ['-c', 'init.defaultBranch=master', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir, encoding: 'utf8' });
+      const init = git(['init']);
+      assert.equal(init.status, 0, init.stderr);
+      fs.writeFileSync(path.join(dir, 'f'), 'x');
+      assert.equal(git(['add', 'f']).status, 0);
+      assert.equal(git(['commit', '-m', 'i']).status, 0);
+      return { dir, git };
+    };
+    const onlyMaster = mk('mira-def-master-');
+    assert.equal(onlyMaster.git(['update-ref', 'refs/remotes/origin/master', 'HEAD']).status, 0);
+    assert.equal(defaultBranchOf(onlyMaster.dir), 'master', 'CI checkout 常见：有 origin/master、无 origin/HEAD');
+
+    const onlyMain = mk('mira-def-main-');
+    assert.equal(onlyMain.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']).status, 0);
+    assert.equal(defaultBranchOf(onlyMain.dir), 'main');
+
+    const both = mk('mira-def-both-');
+    assert.equal(both.git(['update-ref', 'refs/remotes/origin/master', 'HEAD']).status, 0);
+    assert.equal(both.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']).status, 0);
+    assert.equal(defaultBranchOf(both.dir), null, 'master 与 main 都在必须没查成，不猜');
+
+    const headed = mk('mira-def-head-');
+    assert.equal(headed.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']).status, 0);
+    assert.equal(headed.git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']).status, 0);
+    assert.equal(defaultBranchOf(headed.dir), 'main', 'origin/HEAD 优先于 XOR');
+
+    for (const x of [onlyMaster, onlyMain, both, headed]) fs.rmSync(x.dir, { recursive: true, force: true });
+  });
+});
+
 describe('gapReport —— 「没查成」怎么传播的唯一出处', () => {
   it('任一格 known!==true 就整条 unknown，且说得出哪一格', async () => {
     const { gapReport } = await import(MON);

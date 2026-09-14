@@ -17,8 +17,9 @@
 //
 // ws op 名全部在 mirasim-server 的 server.cjs 里 grep 实证过，再连真机读回帧核对，
 // 不是照参考实现假定的（2026-09-04 探测；2026-09-04 于真机 0.0.286 复核过下面每个字段）：
-//   listSessions → {type:'sessions', sessions:[{sessionKey,agent,runState,updatedAt,numTurns,
-//                    preview,workdir,branch,open,model,source,...}]}
+//   listSessions → {type:'sessions', sessions:[{sessionKey,agent,state,phase,observedState,
+//                    updatedAt,numTurns,preview,workdir,branch,open,model,source,...}]}
+//                    （历史字段 runState 只作兜底，读状态一律走 sessionStateOf）
 //   getRelay     → {type:'relay', relay:{mode,available,agentRoutes,usage:{windows:[{label,
 //                    usedPercent,remainingPercent,resetAt,status}]},...}}
 //   deleteSession→ {type:'deleteSession', sessionKey, removeWorktree?:bool}（可连树一起删）
@@ -26,18 +27,16 @@
 // 判官只吃入参、不碰 IO；wire 包装只收发、不判对错——判据不复用发消息那层。
 
 import os from 'node:os';
-import { openWire, PINNED_VERSION, liveServerPorts, DEFAULT_PORT } from './mirasim-runtime.mjs';
+import { openWire, PINNED_VERSION, liveServerPorts, DEFAULT_PORT, listSessionsViaWire } from './mirasim-runtime.mjs';
+import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessionState } from './execution-states.mjs';
 
-// 相位词表与 mirasim-runtime.mjs 对齐（那边没导出，这里各留一份，改了要一起改）。
-// runState 词表取自 server.cjs 实证：`runState = ok ? 'completed' : 'incomplete'`，
-// 另有 'running' 与 'queued'；服务端自己把 incomplete 映射成 'stalled' 展示。所以：
-//   incomplete = 跑完了但没成 → 终态失败，不是卡死候选（别去 stop 一个已经停了的）。
-//   queued     = 还没开跑 → 天然没有活性，绝不能按「账本不涨」判死。
-// 真机 0.0.286 的 65 条会话里 30 条是 incomplete：把它当「还在跑」会一次误杀三十条。
-export const DONE_PHASES = new Set(['done', 'complete', 'completed']);
-export const FAILED_PHASES = new Set(['error', 'failed', 'aborted', 'cancelled', 'canceled', 'incomplete']);
+// 终态词表只认正典 EXECUTION_FINISHED（execution-states.mjs）。
+// 历史手打 TERMINAL_PHASES 漏了 stopped/gone/rejected，终态会话会被当成还在跑：
+// 活动树集放不出去、GC 不回收。queued/starting 是 mirasim 服务端的「还没开跑」，
+// 不在正典预留集里，stall 仍单独认——天然没有活性，绝不能按「账本不涨」判死。
+export const DONE_PHASES = new Set(EXECUTION_SUCCEEDED);
+export const FAILED_PHASES = new Set([...EXECUTION_FINISHED].filter(s => !EXECUTION_SUCCEEDED.has(s)));
 export const PENDING_PHASES = new Set(['queued', 'pending', 'starting']);
-const TERMINAL_PHASES = new Set([...DONE_PHASES, ...FAILED_PHASES]);
 
 /** runState / phase 归一（照 runtime 的 normPhase）。 */
 export function normPhase(raw) {
@@ -48,7 +47,9 @@ export function normPhase(raw) {
 }
 
 export function isTerminalPhase(phase) {
-  return TERMINAL_PHASES.has(normPhase(phase));
+  const raw = typeof phase === 'string' ? phase.trim().toLowerCase() : '';
+  if (!raw) return false;
+  return EXECUTION_FINISHED.has(raw) || EXECUTION_FINISHED.has(normPhase(raw));
 }
 
 // ── 「没查成」怎么传播：全文件唯一一处判据（PR #885 审官七条 P1 的共同修法）────────
@@ -175,7 +176,7 @@ export function judgeStall({ view, ledger, updatedAt, prev, now, stallMs } = {})
     return { status: 'unknown', reason: `${gaps.why}（没查成，不判死）`, sig, sinceTs: now, gaps: gaps.gaps };
   }
   const phase = normPhase(view.phase);
-  if (TERMINAL_PHASES.has(phase)) {
+  if (isTerminalPhase(phase)) {
     return { status: 'terminal', reason: `已到终态 ${phase}，不是卡死候选`, sig, sinceTs: now };
   }
   if (PENDING_PHASES.has(phase)) {
@@ -213,16 +214,18 @@ export function errorFingerprint(view) {
 
 /**
  * 会话 GC 判据。终态 + 不 open + 过 TTL 才回收。
- *  meta —— 会话清单一条 {runState,updatedAt,open}
+ *  meta —— 会话清单一条。状态走 sessionStateOf（真字段 state/phase/observedState，
+ *           历史 runState 只兜底），终态走正典 EXECUTION_FINISHED。
  * 返回 {gc, reason, terminal}
  * 「读不到」的三格全部 fail-closed 不回收：open 不是布尔、updatedAt 不是有效时间、now 不是数。
  */
 export function judgeGcSession({ meta, now, ttlMs } = {}) {
   const m = meta && typeof meta === 'object' ? meta : {};
-  const phase = normPhase(m.runState);
-  const terminal = TERMINAL_PHASES.has(phase);
+  const raw = sessionStateOf(m);
+  const phase = normPhase(raw);
+  const terminal = classifySessionState(m) === 'finished';
   if (!terminal) {
-    const why = PENDING_PHASES.has(phase) ? `${phase} 还没开跑` : `还在跑（${phase || '无 runState'}）`;
+    const why = PENDING_PHASES.has(phase) ? `${phase} 还没开跑` : `还在跑（${phase || '状态没查成'}）`;
     return { gc: false, terminal: false, reason: `${why}，不回收` };
   }
   if (m.open === true) return { gc: false, terminal: true, reason: `${phase} 但连接仍 open，先不回收` };
@@ -404,11 +407,14 @@ export function buildMirasimHealth({ state, relay, connectError, pinnedVersion =
 
 // ── wire 包装（只收发，不判对错；判据在上面的纯判官） ────────────────────────
 
-/** 枚举全部会话。返回 sessions[] 或 null（没查成）。 */
+/** 枚举全部会话。返回完整 sessions[]；未证明完整（半页 / 缺 hasMore / 超时）→ null。 */
 export async function wireListSessions(wire, timeoutMs = 6000) {
-  wire.send({ type: 'listSessions' });
-  const msg = await wire.waitFor(m => m && m.type === 'sessions', timeoutMs);
-  return msg && Array.isArray(msg.sessions) ? msg.sessions : null;
+  try {
+    const r = await listSessionsViaWire(wire, { timeoutMs });
+    return r && r.ok === true && r.complete === true && Array.isArray(r.sessions) ? r.sessions : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 读 relay 帧（模式/路由/额度窗）。返回 relay 对象或 null。 */
@@ -462,7 +468,7 @@ export function activeWorkdirs(sessions) {
   const set = new Set();
   for (const s of Array.isArray(sessions) ? sessions : []) {
     if (!s || typeof s !== 'object' || typeof s.workdir !== 'string' || !s.workdir) continue;
-    const terminal = TERMINAL_PHASES.has(normPhase(s.runState));
+    const terminal = classifySessionState(s) === 'finished';
     if (s.open === true || !terminal) set.add(s.workdir);
   }
   return set;

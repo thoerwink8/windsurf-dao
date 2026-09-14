@@ -147,6 +147,30 @@ export const DEFAULT_PORT = 4316;
  *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
 export const SESSIONS_TIMEOUT_MS = 30_000;
 
+/**
+ * 全局会话名单的分页/完整性判据（唯一出处）。
+ * 只有服务端给出 `hasMore:false` 才算完整；`hasMore:true` 必须继续扩大 limit；
+ * 缺完整性标志 / 超时 / 超上限 → `sessions:null`，半页不能交给删树路径。
+ */
+export async function listSessionsViaWire(wire, { timeoutMs = SESSIONS_TIMEOUT_MS, now = Date.now } = {}) {
+  const deadline = now() + timeoutMs;
+  for (let limit = 256; limit <= 32768; limit *= 2) {
+    wire.send({ type: 'listSessions', scope: 'global', limit });
+    const remain = Math.max(1, deadline - now());
+    const msg = await wire.waitFor(m => m && m.type === 'sessions', remain);
+    if (!msg || !Array.isArray(msg.sessions)) {
+      return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+    }
+    if (msg.hasMore === false) {
+      return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+    }
+    if (msg.hasMore !== true || now() >= deadline) {
+      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
+    }
+  }
+  return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
+}
+
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
 // 账本目录名就是后半段那个 uuid，交叉核靠这个映射。
 const SESSION_KEY_RE = /^([a-z][a-z0-9_-]*):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
@@ -1251,17 +1275,7 @@ export function createRuntime(opts = {}) {
   async function listSessions() {
     const wire = await open();
     try {
-      const deadline = now() + t.list;
-      for (let limit = 256; limit <= 32768; limit *= 2) {
-        wire.send({ type: 'listSessions', scope: 'global', limit });
-        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, deadline - now()));
-        if (!msg || !Array.isArray(msg.sessions)) {
-          return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
-        }
-        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
-        if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
-      }
-      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
+      return await listSessionsViaWire(wire, { timeoutMs: t.list, now });
     } catch (e) {
       return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
     } finally {

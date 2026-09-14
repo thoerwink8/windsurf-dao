@@ -152,5 +152,14 @@ describe('状态词表只有一份正典（防手打副本漂移）', () => {
     const CORE_SRC = fs.readFileSync(path.join(LIB, 'commander-core.mjs'), 'utf8');
     assert.equal(/s\.runState\s*\?\?|s\.runState\s*\|\|/.test(CORE_SRC), false,
       'commander-core 同样走正典');
+    const MON_SRC = fs.readFileSync(path.join(LIB, 'mirasim-monitor.mjs'), 'utf8');
+    assert.match(MON_SRC, /sessionStateOf|classifySessionState/,
+      '保活/GC 必须走正典读状态');
+    assert.equal(/\b(?:s|m)\.runState\b/.test(MON_SRC), false,
+      'mirasim-monitor 不许再自己点 runState——真实名单字段是 state/phase/observedState');
+    const STALL_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'agent-stall-watch-mirasim.mjs'), 'utf8');
+    assert.match(STALL_SRC, /classifySessionState/);
+    assert.equal(/\bs\.runState\b/.test(STALL_SRC), false,
+      'stall-watch 不许再自己点 s.runState');
   });
 });

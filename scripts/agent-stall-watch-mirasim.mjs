@@ -37,9 +37,10 @@ import {
 } from './lib/mirasim-runtime.mjs';
 import {
   judgeStall, judgeGcSession, judgeGcWorktree, errorFingerprint,
-  normPhase, isTerminalPhase, activeWorkdirs,
+  activeWorkdirs,
   wireListSessions, wireDeleteSession, wireRemoveWorktree, probeMirasim,
 } from './lib/mirasim-monitor.mjs';
+import { classifySessionState } from './lib/execution-states.mjs';
 import { DEFAULT_REPO } from './lib/shuai-scan.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -119,12 +120,30 @@ function gitCommonDir(dir) {
   return absGitPath(dir, gitText(dir, ['rev-parse', '--git-common-dir']));
 }
 
-/** 目标仓默认分支：只认 origin/HEAD，解不出就没查成——不猜 master/main。 */
-function defaultBranchOf(dir) {
+function gitRefExists(dir, ref) {
+  return gitText(dir, ['rev-parse', '--verify', '--quiet', ref]) !== null;
+}
+
+/**
+ * 目标仓默认分支。先认 origin/HEAD；没有时，origin/master 与 origin/main 恰好一个
+ * 存在才用那个。远程一个都没有，再看本地 heads/master 与 heads/main 的同样 XOR。
+ * 两个都在或都不在 → null（歧义，不猜，不删树）。干净 CI checkout 通常没有
+ * origin/HEAD，但 fetch-depth:0 会带 origin/master。
+ */
+export function defaultBranchOf(dir) {
   const originHead = gitText(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
-  if (!originHead) return null;
-  const b = originHead.replace(/^(?:refs\/remotes\/)?origin\//, '');
-  return b || null;
+  if (originHead) {
+    const b = originHead.replace(/^(?:refs\/remotes\/)?origin\//, '');
+    if (b) return b;
+  }
+  const originMaster = gitRefExists(dir, 'refs/remotes/origin/master');
+  const originMain = gitRefExists(dir, 'refs/remotes/origin/main');
+  if (originMaster !== originMain) return originMaster ? 'master' : 'main';
+  if (originMaster && originMain) return null;
+  const localMaster = gitRefExists(dir, 'refs/heads/master');
+  const localMain = gitRefExists(dir, 'refs/heads/main');
+  if (localMaster !== localMain) return localMaster ? 'master' : 'main';
+  return null;
 }
 
 const HOME_COMMON_DIR = gitCommonDir(REPO_ROOT);
@@ -220,10 +239,10 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     out.scanned++;
     const key = s.sessionKey;
     const prev = prevState.sessions[key];
-    const phase = normPhase(s.runState);
+    const kind = classifySessionState(s);
 
     // 终态 → GC
-    if (isTerminalPhase(phase)) {
+    if (kind === 'finished') {
       const g = judgeGcSession({ meta: s, now: now(), ttlMs });
       if (!g.gc) { nextState.sessions[key] = prev || { sig: null, sinceTs: now() }; continue; }
       // 树 GC：分支已合并才连树删。
