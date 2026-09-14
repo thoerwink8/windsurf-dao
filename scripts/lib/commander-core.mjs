@@ -181,6 +181,39 @@ export function rereviewBudgetKey(pr, head, staleRedAt) {
   return rereviewKey(pr, head) + (red ? `@red:${red}` : '');
 }
 
+/**
+ * 这份旧红票的**新**复审键已经试满——第 ④ 条解冻过一次之后，又走完了 `@red:<oid>` 名额。
+ *
+ * 不在这里再判「红票是不是投在旧代码上」（那是 `staleRedBallots` 的事）：本函数只读
+ * `rereviewBudgetKey` 算出来的键在账本里的 tries。键没带 `@red:`（没有旧红票 / 没注入表）
+ * 或 tries 不到上限 → 不收。`planExhaustedLabelClear` 拿这张表当 ④ 的一次性消费。
+ *
+ * 旧键 `rereview:<pr>@<head>` 试满不算——那正是 ④ 要解冻的那一轮（9 张现场 PR 的账）。
+ *
+ * @returns {Map<string, string>} PR 号 → 已经试满的那张红票 oid
+ */
+export function spentStaleReds({ prs, staleRedAt, reworkDispatched } = {}) {
+  const out = new Map();
+  const reds = staleRedAt instanceof Map
+    ? staleRedAt
+    : (staleRedAt && typeof staleRedAt === 'object' && !Array.isArray(staleRedAt)
+      ? new Map(Object.entries(staleRedAt)) : new Map());
+  const book = reworkDispatched && typeof reworkDispatched === 'object' ? reworkDispatched : {};
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : '';
+    if (!head) continue;
+    const k = rereviewBudgetKey(pr.number, head, reds);
+    const marker = k.lastIndexOf('@red:');
+    if (marker < 0) continue;
+    const tries = Number(book[k]?.tries) || 0;
+    if (tries < MAX_REREVIEW_TRIES) continue;
+    const red = k.slice(marker + 5);
+    if (red) out.set(String(pr.number), red);
+  }
+  return out;
+}
+
 
 
 /**
@@ -1025,6 +1058,11 @@ function collectCandidates(situation) {
       // 第 ④ 条：认定红票投在旧代码上 = 返工已落地、判定已过期。与复审重试账**同一份**表
       // （commander.mjs 算一次传进来），不在这里再扫一遍 reviews。
       staleRedAt: situation.staleRedAt || null,
+      // ④ 的一次性消费：这份旧红票的 `@red:<oid>` 键已经试满 → 不再摘。
+      // 用生产侧同一把键算，不在 exhausted.mjs 里重写一份（#1233：同一事实两处各判会分叉）。
+      spentStaleReds: spentStaleReds({
+        prs: prList, staleRedAt, reworkDispatched,
+      }),
     });
     for (const c of clearPlan.clears) {
       out.push(withNeeds({

@@ -515,6 +515,42 @@ describe('返工已落地 ⇒ 旧认输不成立（第 ④ 条：红票投在旧
     assert.equal(r.clears.length, 1);
     assert.equal(r.clears[0].reason, 'rework-landed');
   });
+
+  it('这份旧红票的新键已试满 → 不再摘（④ 一次性消费；否则 clear→rereview→mark 无限转）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp,
+      staleRedAt: { 1213: RED_OLD },
+      spentStaleReds: { 1213: RED_OLD },
+    });
+    assert.equal(r.clears.length, 0, JSON.stringify(r));
+    assert.equal(r.skipped.some((x) => x.why === 'stale-red-spent'), true,
+      '要说得出是「新键已试满」才不摘，不是默默掉进 same-head  →  ' + JSON.stringify(r.skipped));
+  });
+
+  it('新键试满但工人又推了新 head → 仍摘（① 不被 ④ 的消费连坐）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, 'NEWHEAD999', [EXHAUSTED_L])],
+      ledger: { [`pushed:1213@${HEAD}@e${stamp}`]: { at: '2026-09-13T21:30:32.028Z', pr: 1213, head: HEAD } },
+      epoch: stamp,
+      staleRedAt: { 1213: RED_OLD },
+      spentStaleReds: { 1213: RED_OLD },
+    });
+    assert.equal(r.clears.length, 1, JSON.stringify(r));
+    assert.equal(r.clears[0].reason, 'new-head');
+  });
+
+  it('消费表对不上当前红票 → ④ 仍成立（没依据不许假装已经试过）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp,
+      staleRedAt: { 1213: RED_OLD },
+      spentStaleReds: { 1213: 'cccccccccccccccccccccccccccccccccccccccc' },
+    });
+    assert.equal(r.clears.length, 1, JSON.stringify(r));
+    assert.equal(r.clears[0].reason, 'rework-landed');
+  });
 });
 
 describe('第 ④ 条的证据：staleRedBallots 只收「红票确实投在旧代码上」', () => {
@@ -583,5 +619,89 @@ describe('复审重试账：同一份红票只烧一次名额', () => {
     const old = rereviewKey(1213, HEAD);                       // 账本里 tries=3 的那条
     const now = rereviewBudgetKey(1213, HEAD, { 1213: RED });
     assert.notEqual(now, old, '键没变 ⇒ 读到老的 tries=3 ⇒ 摘了标也照样当场再认输一轮');
+  });
+});
+
+describe('第 ④ 条的一次性消费：spentStaleReds 只认「新键已试满」', () => {
+  const HEAD = '56ad3686b7d6c434c2d0394353e02efdf8c616b1';
+  const RED_OLD = 'dc4c1dd7b80ff4e5bc0d4193c0b0536a545ad438';
+  const prs = [{ number: 1213, headRefOid: HEAD }];
+
+  it('新键 tries 到顶 → 收下（第二次 mark-exhausted 之后 ④ 必须能看见）', async () => {
+    const { spentStaleReds, rereviewBudgetKey, MAX_REREVIEW_TRIES } = await CORE;
+    const k = rereviewBudgetKey(1213, HEAD, { 1213: RED_OLD });
+    const got = spentStaleReds({
+      prs, staleRedAt: { 1213: RED_OLD },
+      reworkDispatched: { [k]: { at: OLD, pr: 1213, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES } },
+    });
+    assert.equal(got.get('1213'), RED_OLD);
+  });
+
+  it('只有老键试满、新键还没烧过 → 不收（这正是 ④ 要解冻的那一轮）', async () => {
+    const { spentStaleReds, rereviewKey, MAX_REREVIEW_TRIES } = await CORE;
+    const got = spentStaleReds({
+      prs, staleRedAt: { 1213: RED_OLD },
+      reworkDispatched: {
+        [rereviewKey(1213, HEAD)]: { at: OLD, pr: 1213, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES },
+      },
+    });
+    assert.equal(got.size, 0);
+  });
+
+  it('新键未满 → 不收', async () => {
+    const { spentStaleReds, rereviewBudgetKey } = await CORE;
+    const k = rereviewBudgetKey(1213, HEAD, { 1213: RED_OLD });
+    const got = spentStaleReds({
+      prs, staleRedAt: { 1213: RED_OLD },
+      reworkDispatched: { [k]: { at: OLD, pr: 1213, head: HEAD, kind: 'rereview', tries: 1 } },
+    });
+    assert.equal(got.size, 0);
+  });
+});
+
+describe('第 ④ 条接线：第二次 mark-exhausted 后的下一轮不再摘标', () => {
+  const EXHAUSTED_L = '卡死/自动化认输';
+  const HEAD = '56ad3686b7d6c434c2d0394353e02efdf8c616b1';
+  const RED_OLD = 'dc4c1dd7b80ff4e5bc0d4193c0b0536a545ad438';
+  const prWith = (labels) => ({
+    number: 1213, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+    labels: labels.map((name) => ({ name })),
+  });
+  const reviews = { scanned: true, byPr: { 1213: { reviews: [{ state: 'CHANGES_REQUESTED', commit_id: RED_OLD, body: '改' }] } } };
+
+  it('第一次：老键试满、新键还没有 → 仍摘（现场 9 张要的就是这一下）', async () => {
+    const { decide, rereviewKey, MAX_REREVIEW_TRIES, epochOf } = await CORE;
+    const epoch = epochOf().epoch;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [prWith([EXHAUSTED_L])] },
+      prReviews: reviews,
+      staleRedAt: { 1213: RED_OLD },
+      exhaustedPush: { [`pushed:1213@${HEAD}@e${epoch}`]: { at: OLD, pr: 1213, head: HEAD } },
+      reworkDispatched: {
+        [rereviewKey(1213, HEAD)]: { at: OLD, pr: 1213, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES },
+      },
+    }));
+    const ce = byKind(r, 'clear-exhausted');
+    assert.equal(ce.length, 1, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'rereview').length, 0, '标还在，复审被 stuck 跳过');
+    assert.equal(byKind(r, 'mark-exhausted').length, 0);
+  });
+
+  it('第二次 mark-exhausted 后的下一轮：新键已试满 → 零 clear-exhausted（循环在这里断）', async () => {
+    const { decide, rereviewBudgetKey, MAX_REREVIEW_TRIES, epochOf } = await CORE;
+    const epoch = epochOf().epoch;
+    const redKey = rereviewBudgetKey(1213, HEAD, { 1213: RED_OLD });
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [prWith([EXHAUSTED_L])] },
+      prReviews: reviews,
+      staleRedAt: { 1213: RED_OLD },
+      exhaustedPush: { [`pushed:1213@${HEAD}@e${epoch}`]: { at: OLD, pr: 1213, head: HEAD } },
+      reworkDispatched: {
+        [redKey]: { at: OLD, pr: 1213, head: HEAD, kind: 'rereview', tries: MAX_REREVIEW_TRIES },
+      },
+    }));
+    assert.equal(byKind(r, 'clear-exhausted').length, 0, JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'rereview').length, 0);
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '标还在，不重复打');
   });
 });

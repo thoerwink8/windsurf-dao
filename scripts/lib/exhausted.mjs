@@ -214,11 +214,17 @@ export function planExhaustedPush({ prs = [], ledger = {}, epoch = null } = {}) 
  * 证据由调用方注入（`staleRedAt`，与 `pushRework` 解冻共用同一份 `analyzeReviewsAtHead`
  * 结果）——本模块零 IO，也不自己去读 reviews。
  *
+ * ④ 必须能停。红票还在旧 commit、head 也不动时，`redOid !== head` 会一直成立；
+ * 不解冻一次就焊死（本条要治的），解冻却不记「这份旧红票的新复审键已经试满」，
+ * 就会 `clear-exhausted → rereview → mark-exhausted → clear-exhausted` 无限转
+ * （PR #1261 审官红 ①）。调用方把「新键已试满」的 PR 放进 `spentStaleReds`——
+ * ④ 对它们不再摘，①②③ 照常（又推了新 head / 判据版本变了仍该摘）。
+ *
  * 所以判据有四条，任一成立就摘：
  *   ① 工人推了新 head           —— 新局面（原有）
  *   ② 判据版本变了             —— 挡住它的那套判据已经改了（#1238）
  *   ③ 认输记录没带版本（老键）  —— 加版本之前的记录，无从判断，按过期处理（#1238）
- *   ④ 红票投在旧代码上         —— 返工已落地、判定已过期（本次）
+ *   ④ 红票投在旧代码上         —— 返工已落地、判定已过期（本次）；同一份旧红票只解冻一次
  *
  * ③ 为什么按过期而不是保守留着：**留下的代价是「永久卡死」，摘掉的代价是「多试几次」**。
  * 两者不对称，且后者有重试上限兜底（#1236 的判据版本 + 试满交人）。④ 同理：
@@ -233,9 +239,13 @@ export function planExhaustedPush({ prs = [], ledger = {}, epoch = null } = {}) 
  * @param {Object|Map} staleRedAt  `{ <pr>: <红票所在的 commit oid> }`——**只有确知投在旧代码上**
  *   的才放进来；没查成 / 无红票 / 红票就在当前 head 上，一律不进这张表（缺项 = 这一条不成立，
  *   不阻塞其余三条）。判据在调用方（commander-core 的 staleRedBallot），本函数只读。
+ * @param {Object|Map} spentStaleReds  `{ <pr>: <已经用新复审键试满的那张红票 oid> }`——
+ *   第 ④ 条的一次性消费。这份旧红票已经解冻过、且 `@red:<oid>` 键已试满 → 不再摘。
+ *   缺 / 对不上当前红票 → ④ 仍可成立（没依据不许假装已经试过）。
  */
 export function planExhaustedLabelClear({
   prs = [], ledger = {}, pushedThisRound = [], epoch = null, staleRedAt = null,
+  spentStaleReds = null,
 } = {}) {
   const book = ledger && typeof ledger === 'object' ? ledger : {};
   const nowEpoch = typeof epoch === 'string' && /^[0-9a-f]{12}$/.test(epoch) ? epoch : null;
@@ -243,7 +253,12 @@ export function planExhaustedLabelClear({
   // Map 与普通对象都收（调用方可能从 Map 直接传）；缺 / 类型不对 → 空表，④ 永不成立。
   const redAt = staleRedAt instanceof Map
     ? staleRedAt
-    : (staleRedAt && typeof staleRedAt === 'object' ? new Map(Object.entries(staleRedAt)) : new Map());
+    : (staleRedAt && typeof staleRedAt === 'object' && !Array.isArray(staleRedAt)
+      ? new Map(Object.entries(staleRedAt)) : new Map());
+  const spentAt = spentStaleReds instanceof Map
+    ? spentStaleReds
+    : (spentStaleReds && typeof spentStaleReds === 'object' && !Array.isArray(spentStaleReds)
+      ? new Map(Object.entries(spentStaleReds)) : new Map());
   const clears = [];
   const skipped = [];
   for (const pr of Array.isArray(prs) ? prs : []) {
@@ -269,8 +284,12 @@ export function planExhaustedLabelClear({
     if (justPushed.has(exhaustedPushKey(n, head, nowEpoch) || '')) { skipped.push({ pr: n, why: 'just-pushed' }); continue; }
     // ④ 红票投在旧代码上：返工已经落地、那次判定已经过期。放在 ①②③ 之前判——
     // 它是**正面证据**（盘面同时在报「返工完了没人复审」），比「判据版本变了」这种间接信号硬。
+    // 同一份旧红票只解冻一次：新复审键（`@red:<oid>`）已经试满 → 不走 ④，掉进 ①②③。
     const redOid = redAt.get(n) ?? redAt.get(String(n));
-    if (typeof redOid === 'string' && redOid.trim() && redOid.trim() !== head) {
+    const redIsStale = typeof redOid === 'string' && redOid.trim() && redOid.trim() !== head;
+    const spentOid = spentAt.get(n) ?? spentAt.get(String(n));
+    const staleSpent = redIsStale && typeof spentOid === 'string' && spentOid.trim() === redOid.trim();
+    if (redIsStale && !staleSpent) {
       clears.push({
         pr: n, head, recordedHead, reason: 'rework-landed',
         why: `PR #${n} 的认定红票投在 ${redOid.trim().slice(0, 8)}，而 head 已经是 ${head.slice(0, 8)}`
@@ -298,7 +317,7 @@ export function planExhaustedLabelClear({
         });
         continue;
       }
-      skipped.push({ pr: n, why: 'same-head-same-epoch' });
+      skipped.push({ pr: n, why: staleSpent ? 'stale-red-spent' : 'same-head-same-epoch' });
       continue;
     }
     clears.push({
