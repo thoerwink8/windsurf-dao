@@ -79,6 +79,58 @@ export function judgeRetry({ error } = {}) {
  *   · terminal：**一次都不该试**，现在就交人
  *   · retryable：真试满了，机械重试确实无解
  */
+/** 同一句失败原文连着几轮出现就判「重试不会变」。2 = 看见它重复了一次。 */
+export const SAME_ERROR_ROUNDS_TO_STUCK = 2;
+
+/**
+ * 不看词、只看行为的「这个失败重试不会变」判据。
+ *
+ * `judgeRetry` 靠词表认失败类型，认不出的一律按「可试」放行——这是它的正确设计
+ * （宁可多试一次，也别把能自愈的推给人），但它只找得到**见过**的失败
+ * （memory `whitelist-fingerprints-cannot-find-unseen-failures`）。
+ *
+ * 2026-09-14 实咬：三句真实的闸拒原文喂进 judgeRetry，两句判 `retryable`、一句判 `unknown`，
+ * 没有一句判 terminal——而它们全都是**确定性拒绝**，输入不变就永远是这个结果：
+ *   · 「先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）」
+ *   · 「审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），不许换厂到 grok-4.6／grok」
+ *   · 「审官位只许审官顺位表里的模型（…），kimi-k3 不在表里」
+ * 于是每 20 分钟白试一次，试满 3 次打「卡死/自动化认输」，写的理由还是无关的
+ * 「叫了 3 次审官判定仍是 0」。
+ *
+ * 把这三句加进词表是**错的修法**：下一句没见过的照样漏（memory
+ * `predicate-must-tell-absence-from-negation`：先量行为再定判据，不用词表黑名单）。
+ * 这里改判**行为**——同一格上连着拿回一模一样的原文，就是「再试还是这个结果」的直接证据，
+ * 与那句话是谁写的、说的什么完全无关，没见过的新失败一样拦得住。
+ *
+ * 判「一模一样」用整串原文相等，**不做归一化**（含不 trim）：错误里常带 head / 模型名 / 计数，
+ * 归一化会把「换了个模型仍然拒」和「同一个拒绝」揉成一件事，那正是要分开的两件。
+ * 反过来，原文只要变了一个字就重新计数——宁可多试一轮，也别把「情况变了」当成没变。
+ * 空串 / 非字符串 = 没原文，不算「一直是它」；首尾空白也是原文的一部分。
+ */
+export function judgeRepeatedFailure(prev) {
+  if (!prev || typeof prev !== 'object') return { stuck: false, why: '没有上一轮的账' };
+  const err = typeof prev.lastError === 'string' ? prev.lastError : '';
+  if (!err) return { stuck: false, why: '上一轮没记下失败原文——没查成不算「一直是它」' };
+  const rounds = Number(prev.sameErrorRounds);
+  if (!Number.isInteger(rounds) || rounds < SAME_ERROR_ROUNDS_TO_STUCK) {
+    return { stuck: false, rounds: Number.isInteger(rounds) ? rounds : 0, why: '还没重复够轮数' };
+  }
+  return { stuck: true, rounds, error: err, why: `连着 ${rounds} 轮拿回一模一样的失败原文` };
+}
+
+/**
+ * 把这一轮的失败原文并进账（exec 侧调用，纯函数好测）。
+ * 原文与上一轮**逐字相同**（整串相等，不 trim）⇒ 轮数 +1；变了 / 这轮成功了 ⇒ 从头数。
+ * 空串 / 非字符串 ⇒ 清零。首尾空白也是原文，不算空。
+ */
+export function foldFailureStreak(prev, error) {
+  const err = typeof error === 'string' ? error : '';
+  if (!err) return { lastError: null, sameErrorRounds: 0 };
+  const was = prev && typeof prev.lastError === 'string' ? prev.lastError : '';
+  const rounds = was === err ? (Number(prev?.sameErrorRounds) || 1) + 1 : 1;
+  return { lastError: err, sameErrorRounds: rounds };
+}
+
 export function exhaustedReasonText({ verdict, tries, error, maxTries } = {}) {
   const n = Number(tries) || 0;
   const cap = Number(maxTries) || 0;

@@ -3016,9 +3016,15 @@ describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, (
     assert.deepEqual(foldFailureStreak(rec, '另一种失败'), { lastError: '另一种失败', sameErrorRounds: 1 });
     // 这轮成功了 → 清零
     assert.deepEqual(foldFailureStreak(rec, null), { lastError: null, sameErrorRounds: 0 });
-    // 没有账 / 空原文
+    // 没有账 / 空原文（空串才是没原文；空白也是原文，不做 trim）
     assert.equal(judgeRepeatedFailure(null).stuck, false);
-    assert.equal(judgeRepeatedFailure({ lastError: '   ', sameErrorRounds: 9 }).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '', sameErrorRounds: 9 }).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '   ', sameErrorRounds: 2 }).stuck, true,
+      '首尾空白也是原文，trim 会把「差一个空格」揉成同一句');
+    assert.deepEqual(foldFailureStreak({ lastError: 'foo', sameErrorRounds: 1 }, 'foo '),
+      { lastError: 'foo ', sameErrorRounds: 1 }, '尾空白变了 = 另一句');
+    assert.deepEqual(foldFailureStreak({ lastError: ' foo', sameErrorRounds: 1 }, 'foo'),
+      { lastError: 'foo', sameErrorRounds: 1 }, '首空白变了 = 另一句');
   });
 
   it('⑥判别力正控：这三句真实闸拒，judgeRetry 一句都判不出 terminal', async () => {
@@ -3031,6 +3037,103 @@ describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, (
     for (const e of real) {
       assert.notEqual(judgeRetry({ error: e }).verdict, 'terminal',
         '词表认不出这些——所以才需要一条只看行为的判据；哪天词表补上了，这条断言会红，提醒回来删掉重复的那一层');
+    }
+  });
+
+  it('⑦集成：连续两次 requestRereview + drain 同错 → sameErrorRounds 累到 2，不是每次从 1 开始', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey, decide, judgeRepeatedFailure } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const failDrain = () => ({
+        ok: false, status: 1,
+        out: JSON.stringify({ ok: false, error: GATE }),
+        stderr: '', error: GATE,
+      });
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：同错两轮',
+      };
+      const r1 = requestRereview(action, { state, dryRun: false, say: () => {}, run: failDrain });
+      assert.equal(r1.ok, false);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '第一轮 drain 失败，streak=1');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const r2 = requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {}, run: failDrain,
+      });
+      assert.equal(r2.ok, false);
+      assert.equal(state.reworkDispatched[key].tries, 2);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 2,
+        '第二轮必须累加；覆盖成只有 tries 的新对象会让同错永远从 1 开始');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+      assert.equal(judgeRepeatedFailure(state.reworkDispatched[key]).stuck, true);
+
+      const decided = decide(situ({
+        tries: state.reworkDispatched[key].tries,
+        lastError: state.reworkDispatched[key].lastError,
+        sameErrorRounds: state.reworkDispatched[key].sameErrorRounds,
+      }, rereviewKey));
+      assert.equal(byKind(decided, 'mark-exhausted').length, 1, '两轮同错之后 decide 提前交人');
+      assert.equal(byKind(decided, 'rereview').length, 0);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('⑧背压/没查成不清零 streak；真拉起审官才清零', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272h-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：背压',
+      };
+      requestRereview(action, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: false, status: 1, out: JSON.stringify({ ok: false, error: GATE }), stderr: '', error: GATE }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1);
+
+      const held = { ok: true, drained: 0, failed: 0, held: 2 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(held), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '满载 held 不算尝试，不许把 streak 清掉');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const unscanned = { ok: true, drained: 0, held: 2, unscanned: true };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(unscanned), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '没查成也不许清零');
+
+      const pulled = { ok: true, drained: 1, failed: 0, held: 0 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(pulled), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 0, '真拉起审官才清零');
+      assert.equal(state.reworkDispatched[key].lastError, null);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

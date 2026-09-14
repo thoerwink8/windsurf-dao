@@ -281,6 +281,58 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
       'node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', '905', '--repo', 'org/a',
     ]);
   });
+
+  const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+    + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+
+  it('未知但确定性的同一闸拒：tries=1 继续 ok；sameErrorRounds=2 当场 hopeless', async () => {
+    const { validateRetryDrain } = await VERBS;
+    const r1 = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: 1, lastError: GATE, sameErrorRounds: 1 } },
+    });
+    assert.equal(r1.ok, true, '只重复一次还放行：' + JSON.stringify(r1));
+    assert.equal(r1.tries, 2);
+
+    const r2 = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: 2, lastError: GATE, sameErrorRounds: 2 } },
+    });
+    assert.equal(r2.ok, false, '连着两轮同错必须停，不许白试到上限');
+    assert.equal(r2.code, 'hopeless');
+    assert.equal(r2.escalate, true);
+    assert.ok(String(r2.error).includes('一模一样') || String(r2.error).includes('换厂凭证'), r2.error);
+  });
+
+  it('applyDrainLedger：同一失败连写两次累加 streak；背压不写也不清零', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const payload = { ok: false, error: GATE };
+    let r = applyDrainLedger({ ledger: {}, pr: 905, head: null, payload, nowIso: OLD_AT });
+    assert.equal(r.wrote, true);
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 1);
+    assert.equal(r.ledger[RK.drain(905, null)].lastError, GATE);
+
+    r = applyDrainLedger({ ledger: r.ledger, pr: 905, head: null, payload, nowIso: OLD_AT });
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 2);
+    assert.equal(r.ledger[RK.drain(905, null)].tries, 2);
+
+    const held = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null,
+      payload: { ok: true, drained: 0, failed: 0, held: 2 },
+      nowIso: OLD_AT,
+    });
+    assert.equal(held.wrote, false);
+    assert.equal(held.ledger[RK.drain(905, null)].sameErrorRounds, 2, '满载不许把 streak 清掉');
+
+    const pulled = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null,
+      payload: { ok: true, drained: 1, failed: 0, held: 0 },
+      nowIso: OLD_AT,
+    });
+    assert.equal(pulled.wrote, true);
+    assert.equal(pulled.ledger[RK.drain(905, null)].sameErrorRounds, 0, '真拉起才清零');
+    assert.equal(pulled.ledger[RK.drain(905, null)].lastError, null);
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {
@@ -481,6 +533,22 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           queue: [{ pr: '905' }],
           ledger: {},
           nowMs: PAST,
+        }),
+      },
+      {
+        id: 'retry-drain.hopeless',
+        run: (checks) => V.validateRetryDrain({
+          _checks: checks,
+          pr: 905,
+          queue: [{ pr: '905' }],
+          nowMs: PAST,
+          ledger: {
+            [RK.drain(905, null)]: {
+              at: OLD_AT, tries: 2,
+              lastError: 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证',
+              sameErrorRounds: 2,
+            },
+          },
         }),
       },
       {
@@ -818,6 +886,36 @@ describe('#1125 审官红 1：满载持票不记 tries，宽限期后不绕闸',
     assert.equal(planned.ok, true);
     assert.ok(planned.argv.includes('--pr'), '毒票隔离仍带 --pr');
     assert.ok(!planned.argv.includes('--force'), '自动化不许 --force 绕上限');
+  });
+
+  it('drainLedger 连着 2 轮同一闸拒 → decide 产 mark-exhausted，不产 retry-drain', async () => {
+    const { decide } = await CORE;
+    const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+      + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+    const r = decide({
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
+      orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
+      prReviews: { scanned: true, byPr: {} },
+      stall: { scanned: true, strikes: {} },
+      wakeCounts: {},
+      reworkDispatched: {},
+      drainLedger: {
+        [RK.drain(920, null)]: { at: OLD_AT, pr: 920, tries: 2, lastError: GATE, sameErrorRounds: 2 },
+      },
+      commanderPolicy: { requireModelInRouting: false },
+      routingModels: MODELS.filter((m) => !m.reviewerDisabled).map((m) => m.id),
+      routingModelRecords: MODELS,
+      reviewerOrder: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+      workerOrder: ['grok-4.6', 'deepseek-v4-flash'],
+      healthRedModels: [],
+      at: '2026-09-05T12:00:00.000Z',
+    });
+    assert.equal(r.actions.filter((a) => a.kind === 'retry-drain').length, 0, '同错两轮不再白试');
+    const marks = r.actions.filter((a) => a.kind === 'mark-exhausted');
+    assert.equal(marks.length, 1, '接到队列主路径后必须提前交人');
+    assert.ok(String(marks[0].why).includes('一模一样') || String(marks[0].why).includes('换厂凭证'), marks[0].why);
   });
 });
 

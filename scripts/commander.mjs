@@ -31,6 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
+  classifyDrainAttempt,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -1665,7 +1666,7 @@ export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}
  * 写完等下一轮才 drain，审官会再睡 20 分钟（#1104 / 今晚 1134.json）。
  * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]。
  */
-function requestRereview(action, { state, dryRun, say }) {
+export function requestRereview(action, { state, dryRun, say, run }) {
   if (!action.reviewer) {
     const error = `PR #${action.pr} 要复审，但 PR 上没有 reviewer/ 标签——需人工打标，不猜审官`;
     say(`  ${error}`);
@@ -1686,7 +1687,7 @@ function requestRereview(action, { state, dryRun, say }) {
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
     say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
-    return drainReviewPending(action, { state, dryRun, say });
+    return drainReviewPending(action, { state, dryRun, say, run });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
@@ -1696,22 +1697,27 @@ function requestRereview(action, { state, dryRun, say }) {
   // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
   // #1236：退回 rereviewKey() 而不是就地拼字面量——写侧与 decide 侧必须同一个判据版本，
   // 两处字面量分叉就是 #909 的形状（账记到另一个格子，票还在队列却永远走不进 retry-drain）。
-  state.reworkDispatched[action.stateKey || rereviewKey(action.pr, action.head)] = {
+  // 失败 streak（lastError / sameErrorRounds）必须从上一轮带过来：每次覆盖成只有 tries
+  // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = state.reworkDispatched[key];
+  state.reworkDispatched[key] = {
+    ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
-  return drainReviewPending(action, { state, dryRun, say });
+  return drainReviewPending(action, { state, dryRun, say, run });
 }
 
 /** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
  *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
-function drainReviewPending(action, { state, dryRun, say }) {
+function drainReviewPending(action, { state, dryRun, say, run }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   if (action.repo) cmd.push('--repo', String(action.repo));
-  const r = runOrShow(cmd, { dryRun, say, why: action.why });
+  const r = runOrShow(cmd, { dryRun, say, why: action.why, run });
   const payload = drainPayloadOf(r);
   recordDrainAttempt(state, action, payload);
   // drain 的失败原文原来只落进 drainLedger，而判「还要不要再叫审官」读的是 reworkDispatched
@@ -1722,16 +1728,19 @@ function drainReviewPending(action, { state, dryRun, say }) {
   return r;
 }
 
-/** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。 */
+/** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
+ *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
-  if (payload && payload.dryRun === true) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = (state.reworkDispatched || {})[key];
   if (!prev) return;                       // 没有这条账就没有要并的对象
-  const err = payload && payload.ok === true
-    ? null
-    : String((payload && payload.error) || '').trim() || null;
+  const verdict = classifyDrainAttempt(payload);
+  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.reason === 'pulled';
+  const raw = !pulled && payload && (payload.error != null ? payload.error : payload.why);
+  const err = pulled ? null : (typeof raw === 'string' ? raw : (raw != null ? String(raw) : ''));
+  if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
   state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
 }
