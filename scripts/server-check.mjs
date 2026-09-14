@@ -161,7 +161,7 @@ export function providerToAgentId(name) {
   if (p === 'cursor') return 'cursor';
   if (p === 'grok') return 'grok';
   if (p === 'devin') return 'devin';
-  if (p === 'deepseek' || p === 'opencode-go' || p === 'gw') return 'pi';
+  if (p === 'opencode-go' || p === 'gw') return 'pi';
   return null;
 }
 

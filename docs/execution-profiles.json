@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-13T02:02:52.515Z",
+  "updatedAt": "2026-09-14T16:57:51.795Z",
   "freshness": {
     "maxAgeHours": 24,
     "priceMaxAgeHours": 24
@@ -59,10 +59,6 @@
     {
       "id": "pqapi",
       "kind": "reseller-api"
-    },
-    {
-      "id": "deepseek",
-      "kind": "api"
     }
   ],
   "accountPools": [
@@ -151,18 +147,6 @@
       }
     },
     {
-      "id": "deepseek-api",
-      "provider": "deepseek",
-      "billingUnit": "USD",
-      "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:46:57.986Z",
-        "evidenceKind": "model_list",
-        "sourceId": "deepseek-direct-models",
-        "reason": "authenticated official model list succeeded; generation and billing not exercised"
-      }
-    },
-    {
       "id": "windsurf-devin-subscription",
       "providers": [
         "devin-native",
@@ -247,14 +231,6 @@
       "metadataProvider": "opencode-go"
     },
     {
-      "id": "deepseek-prices",
-      "kind": "models-dev",
-      "provider": "deepseek",
-      "access": "public",
-      "url": "https://models.dev/api.json",
-      "metadataProvider": "deepseek"
-    },
-    {
       "id": "gateway-opencode-models",
       "kind": "openai-models",
       "provider": "newapi-opencode",
@@ -305,21 +281,6 @@
         ]
       },
       "note": "Public model endpoint; HTTP 200 with key does not establish generation entitlement."
-    },
-    {
-      "id": "deepseek-direct-models",
-      "kind": "openai-models",
-      "provider": "deepseek",
-      "access": "direct",
-      "url": "https://api.deepseek.com/models",
-      "credential": {
-        "kind": "provider-key",
-        "file": "~/.pi/agent/auth.json",
-        "jsonPath": [
-          "deepseek",
-          "key"
-        ]
-      }
     },
     {
       "id": "pi-native-configuration",
@@ -1172,90 +1133,6 @@
       }
     },
     {
-      "id": "deepseek-native-flash",
-      "backend": "mirasim",
-      "agent": "pi",
-      "model": "deepseek-v4-flash",
-      "route": "local",
-      "provider": "deepseek",
-      "accountPoolId": "deepseek-api",
-      "modelFamily": "deepseek",
-      "roles": [
-        "companion",
-        "review-low-risk"
-      ],
-      "enabled": false,
-      "defaultForModels": [],
-      "availability": {
-        "status": "unavailable",
-        "checkedAt": "2026-09-09T15:10:55.773Z",
-        "evidenceKind": "direct_http",
-        "sourceId": "pi-direct-http-probe",
-        "reason": "bounded direct tool request returned HTTP 402; provider payment required"
-      },
-      "quality": {
-        "status": "unverified",
-        "tier": "unknown",
-        "sourceId": null
-      },
-      "capabilities": {},
-      "pricing": {
-        "status": "reference",
-        "currency": "USD",
-        "unit": "per_million_tokens",
-        "inputPerMillion": 0.14,
-        "outputPerMillion": 0.28,
-        "cacheReadPerMillion": 0.0028,
-        "sourceId": "deepseek-prices",
-        "checkedAt": "2026-09-09T14:48:25.880Z",
-        "reason": "public_metadata_not_account_bill"
-      },
-      "modelSourceId": "deepseek-direct-models",
-      "pricingSourceId": "deepseek-prices",
-      "modelDiscovery": {
-        "status": "listed",
-        "checkedAt": "2026-09-09T14:48:25.880Z",
-        "sourceId": "deepseek-direct-models"
-      },
-      "nativeProviderId": "deepseek",
-      "agentModel": "deepseek/deepseek-v4-flash",
-      "connectionSourceId": "deepseek-direct-models",
-      "piConnection": {
-        "schemaVersion": 1,
-        "kind": "pi-native",
-        "providerId": "deepseek",
-        "modelId": "deepseek-v4-flash",
-        "api": "openai-completions",
-        "baseUrl": "https://api.deepseek.com",
-        "keyRef": {
-          "kind": "pi-auth",
-          "providerId": "deepseek"
-        }
-      },
-      "directProbe": {
-        "httpStatus": 402,
-        "elapsedMs": 1482,
-        "usage": {
-          "inputTokens": null,
-          "outputTokens": null,
-          "totalTokens": null
-        },
-        "actualCost": null,
-        "costStatus": "unknown",
-        "requestCount": 1,
-        "maxOutputTokens": 96,
-        "timeoutMs": 15000,
-        "sourceId": "pi-direct-http-probe"
-      },
-      "nativeBindingEvidence": {
-        "status": "verified",
-        "scope": "offline_pi_rpc_model_selection",
-        "sourceId": "pi-native-configuration",
-        "checkedAt": "2026-09-09T15:13:08.207Z",
-        "nativeConfigUnchanged": true
-      }
-    },
-    {
       "id": "codex-pqapi-sol",
       "backend": "mirasim",
       "agent": "codex",
@@ -1429,128 +1306,6 @@
         "checkedAt": "2026-09-09T15:13:08.208Z",
         "sourceId": "pqapi-free-models"
       }
-    },
-    {
-      "id": "deepseek-deepseek-flash",
-      "backend": "mirasim",
-      "agent": "pi",
-      "model": "deepseek-flash",
-      "route": "local",
-      "provider": "deepseek",
-      "accountPoolId": "deepseek-api",
-      "modelFamily": "deepseek",
-      "roles": [
-        "companion",
-        "implementation",
-        "review-low-risk"
-      ],
-      "enabled": false,
-      "defaultForModels": [],
-      "availability": {
-        "status": "unavailable",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "evidenceKind": "inventory",
-        "sourceId": "pi-native-configuration",
-        "reason": "native provider and literal api_key located; no successful generation, tool call or billing evidence for this exact model"
-      },
-      "quality": {
-        "status": "unverified",
-        "tier": "unknown",
-        "sourceId": null
-      },
-      "pricing": {
-        "status": "unknown",
-        "currency": null,
-        "unit": null,
-        "inputPerMillion": null,
-        "outputPerMillion": null,
-        "cacheReadPerMillion": null,
-        "sourceId": "deepseek-prices",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "reason": "model_price_not_listed"
-      },
-      "modelSourceId": "deepseek-direct-models",
-      "pricingSourceId": "deepseek-prices",
-      "modelDiscovery": {
-        "status": "listed",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "sourceId": "deepseek-direct-models"
-      },
-      "piConnection": {
-        "schemaVersion": 1,
-        "kind": "pi-native",
-        "providerId": "deepseek",
-        "modelId": "deepseek-flash",
-        "api": "openai-completions",
-        "baseUrl": "https://api.deepseek.com",
-        "keyRef": {
-          "kind": "pi-auth",
-          "providerId": "deepseek"
-        }
-      },
-      "nativeProviderId": "deepseek",
-      "agentModel": "deepseek/deepseek-flash"
-    },
-    {
-      "id": "deepseek-deepseek-v4-pro",
-      "backend": "mirasim",
-      "agent": "pi",
-      "model": "deepseek-v4-pro",
-      "route": "local",
-      "provider": "deepseek",
-      "accountPoolId": "deepseek-api",
-      "modelFamily": "deepseek",
-      "roles": [
-        "companion",
-        "implementation",
-        "review-low-risk"
-      ],
-      "enabled": false,
-      "defaultForModels": [],
-      "availability": {
-        "status": "unavailable",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "evidenceKind": "inventory",
-        "sourceId": "pi-native-configuration",
-        "reason": "native provider and literal api_key located; no successful generation, tool call or billing evidence for this exact model"
-      },
-      "quality": {
-        "status": "unverified",
-        "tier": "unknown",
-        "sourceId": null
-      },
-      "pricing": {
-        "status": "unknown",
-        "currency": null,
-        "unit": null,
-        "inputPerMillion": null,
-        "outputPerMillion": null,
-        "cacheReadPerMillion": null,
-        "sourceId": "deepseek-prices",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "reason": "model_price_not_listed"
-      },
-      "modelSourceId": "deepseek-direct-models",
-      "pricingSourceId": "deepseek-prices",
-      "modelDiscovery": {
-        "status": "listed",
-        "checkedAt": "2026-09-13T02:02:52.515Z",
-        "sourceId": "deepseek-direct-models"
-      },
-      "piConnection": {
-        "schemaVersion": 1,
-        "kind": "pi-native",
-        "providerId": "deepseek",
-        "modelId": "deepseek-v4-pro",
-        "api": "openai-completions",
-        "baseUrl": "https://api.deepseek.com",
-        "keyRef": {
-          "kind": "pi-auth",
-          "providerId": "deepseek"
-        }
-      },
-      "nativeProviderId": "deepseek",
-      "agentModel": "deepseek/deepseek-v4-pro"
     },
     {
       "id": "opencode-go-deepseek-v4-flash",
@@ -11066,73 +10821,6 @@
       ]
     },
     {
-      "sourceId": "deepseek-prices",
-      "status": "ok",
-      "checkedAt": "2026-09-09T14:48:25.880Z",
-      "lastSuccessAt": "2026-09-09T14:48:25.880Z",
-      "httpStatus": 200,
-      "evidenceKind": "public_metadata",
-      "models": [
-        {
-          "id": "deepseek-v4-flash-vision-exp",
-          "modelFamily": "deepseek",
-          "pricing": {
-            "status": "reference",
-            "currency": "USD",
-            "unit": "per_million_tokens",
-            "inputPerMillion": 0.14,
-            "outputPerMillion": 0.28,
-            "cacheReadPerMillion": 0.0028,
-            "sourceId": "deepseek-prices",
-            "checkedAt": "2026-09-09T14:48:25.880Z",
-            "reason": "public_metadata_not_account_bill"
-          },
-          "capabilities": {
-            "toolCall": true,
-            "contextWindow": 1000000
-          }
-        },
-        {
-          "id": "deepseek-v4-flash",
-          "modelFamily": "deepseek",
-          "pricing": {
-            "status": "reference",
-            "currency": "USD",
-            "unit": "per_million_tokens",
-            "inputPerMillion": 0.14,
-            "outputPerMillion": 0.28,
-            "cacheReadPerMillion": 0.0028,
-            "sourceId": "deepseek-prices",
-            "checkedAt": "2026-09-09T14:48:25.880Z",
-            "reason": "public_metadata_not_account_bill"
-          },
-          "capabilities": {
-            "toolCall": true,
-            "contextWindow": 1000000
-          }
-        },
-        {
-          "id": "deepseek-v4-pro",
-          "modelFamily": "deepseek",
-          "pricing": {
-            "status": "reference",
-            "currency": "USD",
-            "unit": "per_million_tokens",
-            "inputPerMillion": 0.435,
-            "outputPerMillion": 0.87,
-            "cacheReadPerMillion": 0.003625,
-            "sourceId": "deepseek-prices",
-            "checkedAt": "2026-09-09T14:48:25.880Z",
-            "reason": "public_metadata_not_account_bill"
-          },
-          "capabilities": {
-            "toolCall": true,
-            "contextWindow": 1000000
-          }
-        }
-      ]
-    },
-    {
       "sourceId": "gateway-opencode-models",
       "status": "ok",
       "checkedAt": "2026-09-09T14:48:25.880Z",
@@ -12693,64 +12381,6 @@
         {
           "id": "omen-alpha",
           "modelFamily": "unknown",
-          "pricing": {
-            "status": "unknown",
-            "currency": null,
-            "unit": null,
-            "inputPerMillion": null,
-            "outputPerMillion": null,
-            "cacheReadPerMillion": null,
-            "sourceId": null,
-            "checkedAt": null,
-            "reason": "model_list_has_no_verified_billing_price"
-          },
-          "capabilities": {}
-        }
-      ]
-    },
-    {
-      "sourceId": "deepseek-direct-models",
-      "status": "ok",
-      "checkedAt": "2026-09-09T14:48:25.880Z",
-      "lastSuccessAt": "2026-09-09T14:48:25.880Z",
-      "httpStatus": 200,
-      "evidenceKind": "model_list",
-      "models": [
-        {
-          "id": "deepseek-v4-flash",
-          "modelFamily": "deepseek",
-          "pricing": {
-            "status": "unknown",
-            "currency": null,
-            "unit": null,
-            "inputPerMillion": null,
-            "outputPerMillion": null,
-            "cacheReadPerMillion": null,
-            "sourceId": null,
-            "checkedAt": null,
-            "reason": "model_list_has_no_verified_billing_price"
-          },
-          "capabilities": {}
-        },
-        {
-          "id": "deepseek-v4-pro",
-          "modelFamily": "deepseek",
-          "pricing": {
-            "status": "unknown",
-            "currency": null,
-            "unit": null,
-            "inputPerMillion": null,
-            "outputPerMillion": null,
-            "cacheReadPerMillion": null,
-            "sourceId": null,
-            "checkedAt": null,
-            "reason": "model_list_has_no_verified_billing_price"
-          },
-          "capabilities": {}
-        },
-        {
-          "id": "deepseek-v4-flash-vision-exp",
-          "modelFamily": "deepseek",
           "pricing": {
             "status": "unknown",
             "currency": null,

@@ -99,8 +99,9 @@ test('server-check 判别力', async (t) => {
 
     await t.test('provider → agent id 自持映射（不 import launch.mjs）', () => {
       assert.equal(providerToAgentId('gw'), 'pi');
-      assert.equal(providerToAgentId('deepseek'), 'pi');
       assert.equal(providerToAgentId('opencode-go'), 'pi');
+      // deepseek 直连渠道 2026-09-15 已删（用户拍板）：认不出来才对。
+      assert.equal(providerToAgentId('deepseek'), null);
       assert.equal(providerToAgentId('devin'), 'devin');
       assert.equal(providerToAgentId('grok'), 'grok');
       assert.equal(providerToAgentId('gpt'), 'codex');
@@ -577,8 +578,8 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
 
     // 2026-09-12 网关退役后先前的期望值本身错了：cursor-agent / grok / codex 都被新 provider
     // （cursor-native / xai-native / mirasim-relay）在役使用，不该进退役清单；
-    // 而 pi 被孤立了——三个用它的 provider（deepseek / opencode-go / gw）都不在役，
-    // 它自己的执行目录条目（opencode-zen-*/commandcode-deepseek/windsurf-deepseek…）也全是 enabled:false。
+    // 而 pi 被孤立了——用它的 provider（opencode-go / gw；deepseek 那条 2026-09-15 直接删了）
+    // 都不在役，它自己的执行目录条目（opencode-zen-*/commandcode-deepseek/windsurf-deepseek…）也全是 enabled:false。
     // 断言只钉「在役的必须不在清单里」，不钉清单长度：每退一个 CLI 都改一次长度是假红的来源。
     await t.test('真文件推出来的清单：含 devin/pi，不含在役的 cursor-agent/grok/codex', () => {
       const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));

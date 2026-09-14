@@ -216,7 +216,6 @@ export function discoverExecutionCredentials({ home = os.homedir(), read = fs.re
   }
   const direct = [
     ['opencode-go', '.pi/agent/auth.json', ['opencode-go', 'key']],
-    ['deepseek', '.pi/agent/auth.json', ['deepseek', 'key']],
     ['commandcode', '.commandcode/auth.json', ['apiKey']],
     ['opencode-go', '.local/share/opencode/auth.json', ['opencode-go', 'key']],
     ['opencode', '.local/share/opencode/auth.json', ['opencode', 'key']],
