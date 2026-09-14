@@ -427,11 +427,14 @@ function scanAdmission({ worktrees, policy } = {}) {
  *
  * checkInFlight 没查成 → ok:false，调用方把渠道在途数当没查成（本闸这轮不据它放大准入）。
  */
-function scanChannelInFlight({ models, legs, caps } = {}) {
+function scanChannelInFlight({ models, legs, caps, sessions } = {}) {
   const flight = checkInFlight();
   if (!flight.ok) return { ok: false, unscanned: true, error: flight.error, counts: {}, unattributed: [] };
   const desired = scanDesiredJobs();
-  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps });
+  // 会话名单优先：它带 cwd+model，和在途树是精确 join。派工账本那条路从分支名抠号，
+  // 实测对在途树命中 0/1（861 条未结派工里一条都对不上），留作兜底。
+  const sessionItems = sessions && sessions.scanned === true && Array.isArray(sessions.items) ? sessions.items : null;
+  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps, sessions: sessionItems });
   return countInFlightByChannel(flight.trees || [], resolver);
 }
 
@@ -614,7 +617,7 @@ function buildSituation({ state } = {}) {
   const breakerIngest = ingestBreakerSignals();
   // #1145：渠道并发第二道闸的三份快照。缺任一 decide 侧闸 inert（不改既有派工路）。
   const channelInFlight = channelCaps && channelCaps.ok
-    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
+    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps, sessions })
     : null;
   const breaker = loadBreaker();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。

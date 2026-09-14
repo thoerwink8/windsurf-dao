@@ -369,13 +369,55 @@ export function modelOfTree(tree, jobs) {
 }
 
 /**
+ * 树 → 模型，走**会话名单**（精确 join，不猜）。
+ *
+ * 会话登记每条都带 `cwd` + `model`，这是「这棵树现在在跑什么模型」的所有者。
+ * 比 `modelOfTree(jobs)` 硬在两处：
+ *   · 那条路是从**分支名**里正则抠号，再回派工账本查——分支名复用（#1256）就抠错；
+ *   · 账本里的 job.dispatch 是「当初打算派什么」，会话名单是「此刻真的在跑什么」。
+ *
+ * 同一棵树有多条记录时取 `lastActivityAt` 最新的那条（同值取后出现的）：一棵树被反复
+ * 复用，旧记录是历史，不是现况。没有 lastActivityAt 的记录只在没有更好的候选时才用。
+ *
+ * @param tree      树路径
+ * @param sessions  会话名单（execution-sessions.mjs 的 sessions 数组，或形状相同的对象数组）
+ * @returns 模型 id（字符串）或 null（**没查到**，调用方按 unattributed 处理，不许硬塞进某渠道）
+ */
+export function modelOfTreeFromSessions(tree, sessions) {
+  const want = String(tree || '').replace(/\/+$/, '');
+  if (!want) return null;
+  let best = null;
+  let bestAt = -Infinity;
+  for (const s of Array.isArray(sessions) ? sessions : []) {
+    if (!s || typeof s !== 'object') continue;
+    const cwd = String(s.cwd || s.workdir || '').replace(/\/+$/, '');
+    if (!cwd || cwd !== want) continue;
+    const model = s.model == null ? '' : String(s.model).trim();
+    if (!model) continue;
+    const at = Number(s.lastActivityAt ?? s.updatedAt ?? s.seatAt);
+    const ts = Number.isFinite(at) ? at : -Infinity;
+    if (ts >= bestAt) { bestAt = ts; best = model; }
+  }
+  // 模型 id 上可能带执行修饰（实测见过 `composer-2.5[fast=true]`）。渠道按 id 本体查，
+  // 修饰不参与——不剥掉就查不到腿，整棵树白白掉进 unattributed。
+  return best ? best.replace(/\[[^\]]*\]\s*$/, '') : null;
+}
+
+/**
  * 造「树 → 渠道」解析器。**门里和决策层共用这一个**，不许各造一份：
  * 分子（在途数怎么归渠道）与分母（上限挂在哪个渠道）用同一把尺，否则闸会对着错的格子判满。
+ *
+ * 取模型的两条路，**会话名单优先**（2026-09-14）：
+ *   ① sessions —— 精确 join（cwd 对 cwd），是「此刻在跑什么」的所有者；
+ *   ② jobs    —— 从分支名抠号再回派工账本，是「当初打算派什么」的近似。
+ * 实测 ② 单独用时命中率 0/1：在途树 `dao-review-pr-1232` 在 861 条未结派工里一条都对不上，
+ * 于是渠道在途数恒为 `{}`，渠道闸对在途**永远不判满**——一道判不出满的闸等于没有闸。
+ * ② 留着是兜底（老夹具与没有会话名单的调用方），不是主路。
  */
-export function treeChannelResolver({ jobs, legs, models, caps } = {}) {
+export function treeChannelResolver({ jobs, legs, models, caps, sessions } = {}) {
   const capTable = caps && typeof caps === 'object' ? caps : (buildChannelCaps(legs).caps || {});
   return (tree) => {
-    const model = modelOfTree(tree, jobs);
+    const model = modelOfTreeFromSessions(tree, sessions) || modelOfTree(tree, jobs);
     if (!model) return null;
     const r = resolveModelChannel({ model, legs, models, caps: capTable });
     return r ? r.channel : null;

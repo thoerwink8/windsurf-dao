@@ -140,6 +140,91 @@ describe('buildChannelCaps —— 从腿表建渠道容量表', () => {
   });
 });
 
+// 2026-09-14 断链：渠道在途数的分子取不到，闸永远判不出满。
+//
+// 实咬：在途树 `dao-review-pr-1232` 在 861 条未结 job.dispatch 里一条都对不上
+// （modelOfTree 是从**分支名**抠号再回账本查，而这棵树的号不在未结账里），
+// 于是 channelInFlight.counts 恒为 {}，`n >= cap` 永远不成立——一道判不出满的闸等于没有闸。
+// 会话登记本来就有 cwd+model（323/323 条都有），只是那份名单没往外带。
+const LEGS = [
+  { id: 'grok@x', 状态: '在役', 模型: 'grok-4.6', 供应商: 'gw', 落地: GROK, 并发上限: '不限' },
+  { id: 'glm@x', 状态: '在役', 模型: 'glm-5.2', 供应商: 'gw', 落地: GLM, 并发上限: 6 },
+];
+const sess = (cwd, model, at, extra = {}) => ({ cwd, model, lastActivityAt: at, ...extra });
+
+describe('modelOfTreeFromSessions —— 树→模型走会话名单（精确 join，不猜分支名）', () => {
+  it('cwd 对上就取该条的 model', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    assert.equal(modelOfTreeFromSessions('/w/a', [sess('/w/a', 'grok-4.6', 1)]), 'grok-4.6');
+  });
+
+  it('尾斜杠不算差别（两边都归一化）', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    assert.equal(modelOfTreeFromSessions('/w/a/', [sess('/w/a', 'grok-4.6', 1)]), 'grok-4.6');
+    assert.equal(modelOfTreeFromSessions('/w/a', [sess('/w/a//', 'grok-4.6', 1)]), 'grok-4.6');
+  });
+
+  it('同一棵树多条记录 → 取 lastActivityAt 最新的（树会被反复复用，旧记录是历史）', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    const list = [sess('/w/a', 'grok-4.6', 100), sess('/w/a', 'glm-5.2', 900), sess('/w/a', 'gpt-5.6-sol', 500)];
+    assert.equal(modelOfTreeFromSessions('/w/a', list), 'glm-5.2');
+  });
+
+  it('模型 id 上的执行修饰要剥掉——不剥就查不到腿（实测见过 composer-2.5[fast=true]）', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    assert.equal(modelOfTreeFromSessions('/w/a', [sess('/w/a', 'composer-2.5[fast=true]', 1)]), 'composer-2.5');
+  });
+
+  it('查不到 → null（不许硬塞进某个渠道，塞错会误拦）', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    assert.equal(modelOfTreeFromSessions('/w/zzz', [sess('/w/a', 'grok-4.6', 1)]), null);
+    assert.equal(modelOfTreeFromSessions('/w/a', [sess('/w/a', '', 1)]), null, '空 model 不算查到');
+    assert.equal(modelOfTreeFromSessions('/w/a', null), null, '名单没给');
+    assert.equal(modelOfTreeFromSessions('', [sess('/w/a', 'grok-4.6', 1)]), null, '树路径是空');
+  });
+});
+
+describe('treeChannelResolver —— 会话名单优先，派工账本兜底', () => {
+  it('会话名单能归因时用它（本轮修的正是这一格）', async () => {
+    const { treeChannelResolver } = await CC;
+    // 账本里这棵树一条都对不上（jobs 空）——旧路在这里返回 null
+    const old = treeChannelResolver({ jobs: [], legs: LEGS, models: [] });
+    assert.equal(old('/w/dao-review-pr-1232'), null, '负控：光靠账本确实归不掉');
+    const now = treeChannelResolver({ jobs: [], legs: LEGS, models: [], sessions: [sess('/w/dao-review-pr-1232', 'glm-5.2', 1)] });
+    assert.equal(now('/w/dao-review-pr-1232'), 'gw:windsurf');
+  });
+
+  it('会话名单归不掉时回落派工账本（兜底没被删）', async () => {
+    const { treeChannelResolver } = await CC;
+    const jobs = [{ job_id: 'j1', issue: 77, model: 'grok-4.6' }];
+    const r = treeChannelResolver({ jobs, legs: LEGS, models: [], sessions: [sess('/w/别的树', 'glm-5.2', 1)] });
+    assert.equal(r('/w/dao-77'), 'gw:grok');
+  });
+
+  it('两条路都归不掉 → null', async () => {
+    const { treeChannelResolver } = await CC;
+    const r = treeChannelResolver({ jobs: [], legs: LEGS, models: [], sessions: [] });
+    assert.equal(r('/w/dao-999'), null);
+  });
+
+  it('两条路给出不同答案时以会话名单为准——它是「此刻在跑什么」，账本是「当初打算派什么」', async () => {
+    const { treeChannelResolver } = await CC;
+    const jobs = [{ job_id: 'j1', issue: 77, model: 'grok-4.6' }];   // 账本说 grok
+    const sessions = [sess('/w/dao-77', 'glm-5.2', 1)];              // 现场在跑 glm
+    const r = treeChannelResolver({ jobs, legs: LEGS, models: [], sessions });
+    assert.equal(r('/w/dao-77'), 'gw:windsurf', '分支名复用（#1256）时账本会指向旧派工，不能听它的');
+  });
+
+  it('接上去之后在途数真的数得出来（分子不再恒为 0）', async () => {
+    const { treeChannelResolver, countInFlightByChannel } = await CC;
+    const trees = ['/w/t1', '/w/t2', '/w/t3'];
+    const sessions = [sess('/w/t1', 'glm-5.2', 1), sess('/w/t2', 'glm-5.2', 1), sess('/w/t3', 'grok-4.6', 1)];
+    const out = countInFlightByChannel(trees, treeChannelResolver({ jobs: [], legs: LEGS, models: [], sessions }));
+    assert.deepEqual(out.counts, { 'gw:windsurf': 2, 'gw:grok': 1 });
+    assert.deepEqual(out.unattributed, []);
+  });
+});
+
 describe('countInFlightByChannel —— 在途按渠道计数（与租约闸同源）', () => {
   it('多棵树按渠道归并计数', async () => {
     const { countInFlightByChannel } = await CC;
