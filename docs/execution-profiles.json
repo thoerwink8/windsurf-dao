@@ -1273,11 +1273,11 @@
       "enabled": false,
       "defaultForModels": [],
       "availability": {
-        "status": "available",
-        "checkedAt": "2026-09-14T17:30:00.000Z",
+        "status": "unverified",
+        "checkedAt": "2026-09-14T21:27:00.000Z",
         "evidenceKind": "execution",
         "sourceId": "1174-codex-sol-home",
-        "reason": "CODEX_HOME=~/.codex-sol codex exec returned a real answer against https://api.pqapi.shop/v1 with wire_api=responses and model gpt-5.6-sol (session 01a0a0f8-5feb-7cd2-a8b8-276d2fe8e42c, 16231 tokens). The default ~/.codex was re-run right after and still answers through the local 4317 custom bridge (session 01a0a0f8-a197-75c0-b23e-a1b1c9f2db3e), so the two homes do not shadow each other."
+        "reason": "专用 home 已落地且 enabled=false。2026-09-14T21:27Z 复跑 `CODEX_HOME=~/.codex-sol codex exec --skip-git-repo-check '只回两个字：收到'`：打出 model=gpt-5.6-sol / provider=pqapi 后 20 秒无最终消息（timeout 124）。证据不够标 available。默认 ~/.codex 仍走 4317 桥，两把 key 分家这件事本身成立。"
       },
       "quality": {
         "status": "unverified",

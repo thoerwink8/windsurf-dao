@@ -37,7 +37,7 @@
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
-| D | ~/.codex-sol | gpt-5.6-sol 专用 CODEX_HOME（2026-09-15）。pqgpt 两把 key，而 auth.json 只有一个 OPENAI_API_KEY 字段，共存会静默互相盖掉，所以分家。起法 `CODEX_HOME=~/.codex-sol codex ...`；执行目录 `codex-pqapi-sol.connection.codexHome` 指着它。装法见 NEW-MACHINE.md 7e。本机配置，不拷 |
+| D | ~/.codex-sol | gpt-5.6-sol 专用 CODEX_HOME（2026-09-14）。pqgpt 两把 key，而 auth.json 只有一个 OPENAI_API_KEY 字段，共存会静默互相盖掉，所以分家。起法 `CODEX_HOME=~/.codex-sol codex ...`；执行目录 `codex-pqapi-sol.connection.codexHome` 指着它。装法见 NEW-MACHINE.md 7e。本机配置，不拷 |
 | C | ~/.codex-sol/auth.json | sol 那把 pqapi key 的落点（0600）。真身在 ~/.config/ai-gateway/migration-1174/pqapi-sol.key。不打印、不进 git |
 | D | ~/.codex-sol/config.toml | sol 专用 codex 配置：pqapi 直连 + wire_api=responses + model=gpt-5.6-sol。本机配置，不拷 |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |

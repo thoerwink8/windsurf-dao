@@ -279,7 +279,7 @@ Devin CLI 的选型顺位见 `docs/model-routing.json`；启动模板只信 `doc
 - 非交互冒烟：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。未信任目录必须关 workspace trust 检查，否则没提示可弹、当场失败。`--print` 跑完即退，**不能**当 Orca 工人。
 - 工人 TUI 起法只信路由表 launch（`--permission-mode dangerous` 全放行）。不要另造一份启动命令。
 
-## 7e. gpt-5.6-sol 的专用 CODEX_HOME（2026-09-15，换机必做）
+## 7e. gpt-5.6-sol 的专用 CODEX_HOME（2026-09-14，换机必做）
 
 pqgpt 给了**两把** key：一把对 `gpt-5.6-sol`，一把对其他模型。而 codex 的
 `auth.json` 只有 `OPENAI_API_KEY` 一个字段，两把装不下——后写的会把先写的盖掉，
