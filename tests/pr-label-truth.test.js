@@ -52,6 +52,10 @@ describe('pickWorkerDispatchByBranch', () => {
     assert.equal(noRepo.ok, false);
     assert.equal(noRepo.state, 'unscanned');
     assert.match(noRepo.error, /没给仓/);
+    const noBranch = pickWorkerDispatchByBranch([], '', REPO);
+    assert.equal(noBranch.ok, false);
+    assert.equal(noBranch.state, 'unscanned');
+    assert.match(noBranch.error, /没给分支名/);
   });
 
   it('缺 reviewer 的工人 dispatch 不当成功', async () => {
@@ -60,7 +64,7 @@ describe('pickWorkerDispatchByBranch', () => {
       { type: 'job.dispatch', identity: '工人', branch: 'dao-1116', repo: REPO, model: 'grok-4.6', work_type: '写码' },
     ], 'dao-1116', REPO);
     assert.equal(got.ok, false);
-    assert.equal(got.state, 'none');
+    assert.equal(got.state, 'invalid');
     assert.match(got.error, /缺 reviewer/);
     assert.match(got.error, /需人工打标/);
   });
@@ -71,6 +75,7 @@ describe('pickWorkerDispatchByBranch', () => {
       { type: 'job.dispatch', branch: 'dao-1116', repo: REPO, model: 'grok-4.6', reviewer: 'gpt-5.6-luna' },
     ], 'dao-1116', REPO);
     assert.equal(missing.ok, false);
+    assert.equal(missing.state, 'invalid');
     assert.match(missing.error, /缺 identity 或不是工人/);
     assert.match(missing.error, /需人工打标/);
     const broken = pickWorkerDispatchByBranch([
@@ -149,6 +154,26 @@ describe('pickWorkerDispatchByBranch', () => {
     ], 'dao-1', REPO);
     assert.equal(noRepoOnEvent.ok, true);
     assert.equal(noRepoOnEvent.repoAssumed, true);
+  });
+
+  it('已命中坏账不是 none：缺 model / 非法 identity 走 invalid，只有扫完没有才 none', async () => {
+    const { pickWorkerDispatchByBranch } = await WD;
+    const noChain = pickWorkerDispatchByBranch([], 'dao-1', REPO);
+    assert.equal(noChain.state, 'none');
+
+    const noModel = pickWorkerDispatchByBranch([
+      { type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO, reviewer: 'gpt-5.6-luna', work_type: '写码' },
+    ], 'dao-1', REPO);
+    assert.equal(noModel.ok, false);
+    assert.equal(noModel.state, 'invalid');
+    assert.match(noModel.error, /缺 model/);
+
+    const badId = pickWorkerDispatchByBranch([
+      { type: 'job.dispatch', identity: '审官', branch: 'dao-1', repo: REPO, model: 'grok-4.6', reviewer: 'gpt-5.6-luna' },
+    ], 'dao-1', REPO);
+    assert.equal(badId.ok, false);
+    assert.equal(badId.state, 'invalid');
+    assert.match(badId.error, /缺 identity 或不是工人/);
   });
 });
 
@@ -236,6 +261,8 @@ describe('stampPrLabelsFromDispatch', () => {
     };
     const stamped = stampPrLabelsFromDispatch({ pr: '1070', runGh, events: [], repo: REPO });
     assert.equal(stamped.ok, false);
+    assert.equal(stamped.state, 'none');
+    assert.equal(stamped.skipped, true);
     assert.match(stamped.error, /需人工打标/);
     const rev = resolveReviewerFromPr({ pr: '1070', runGh });
     assert.equal(rev.ok, false);
@@ -266,8 +293,43 @@ describe('stampPrLabelsFromDispatch', () => {
       events: [{ type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO, model: 'grok-4.6', work_type: '写码' }],
     });
     assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.state, 'invalid');
+    assert.equal(r.skipped, false);
     assert.match(r.error, /需人工打标/);
     assert.ok(!calls.some((a) => a[1] === 'edit'), JSON.stringify(calls));
+  });
+
+  it('缺 model 的已命中记录 skipped=false，不把坏账标成可跳过', async () => {
+    const { stampPrLabelsFromDispatch } = await WD;
+    const calls = [];
+    const r = stampPrLabelsFromDispatch({
+      pr: '1',
+      runGh: (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'x', body: '署名 issue #1',
+              labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }],
+              headRefName: 'dao-1',
+            }),
+          };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: '未预期 ' + args.join(' ') };
+      },
+      repo: REPO,
+      events: [{
+        type: 'job.dispatch', identity: '工人', branch: 'dao-1', repo: REPO,
+        reviewer: 'gpt-5.6-luna', work_type: '写码',
+      }],
+    });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.state, 'invalid');
+    assert.equal(r.skipped, false, '已命中坏账不许 skipped');
+    assert.match(r.error, /缺 model/);
+    assert.equal(calls.some((a) => a[1] === 'edit'), false, JSON.stringify(calls));
   });
 
   it('账本缺 reviewer（历史事件）取 PR 自己的 reviewer/*，账本有就以账本为准', async () => {
@@ -294,11 +356,13 @@ describe('stampPrLabelsFromDispatch', () => {
     // 两条都没有：仍拒，不许拿「账本没写」当放行
     const neither = pickWorkerDispatchByBranch([ev({})], 'dao-1', REPO, {});
     assert.equal(neither.ok, false);
+    assert.equal(neither.state, 'invalid');
     assert.match(neither.error, /需人工打标/);
 
-    // model 没有这种历史缺口：缺了就是拒，不许从标签补
+    // model 没有这种历史缺口：缺了就是拒，不许从标签补；已命中坏账不是 none
     const noModel = pickWorkerDispatchByBranch([ev({ model: '' })], 'dao-1', REPO, { reviewerHint: 'gpt-5.6-luna' });
     assert.equal(noModel.ok, false);
+    assert.equal(noModel.state, 'invalid');
     assert.match(noModel.error, /缺 model/);
   });
 
@@ -739,6 +803,23 @@ const completeEvent = {
   reviewer: 'gpt-5.6-luna',
   work_type: '写码',
 };
+const missingModelEvent = {
+  type: 'job.dispatch',
+  identity: '工人',
+  branch: FAKE_HEAD,
+  repo: REPO,
+  reviewer: 'gpt-5.6-luna',
+  work_type: '写码',
+};
+const badIdentityEvent = {
+  type: 'job.dispatch',
+  identity: '审官',
+  branch: FAKE_HEAD,
+  repo: REPO,
+  model: 'grok-4.6',
+  reviewer: 'gpt-5.6-luna',
+  work_type: '写码',
+};
 
 describe('CLI 已查成冲突 fail-closed，来源字段向外层返回', () => {
   it('reviewer-create：账本 sol vs PR 唯一标签 luna → 拒，不继续选 PR 标签', () => {
@@ -774,6 +855,46 @@ describe('CLI 已查成冲突 fail-closed，来源字段向外层返回', () => 
     assert.equal(payload.ok, true);
     assert.equal(payload.repoAssumed, false);
     assert.equal(payload.reviewerSource, 'ledger');
+    assert.equal(payload.reviewer, 'gpt-5.6-luna');
+  });
+
+  it('reviewer-create：同仓同分支工人账缺 model，PR 自有标签也拒', () => {
+    const { r, payload } = cliWithLedger('reviewer-create', 42, { events: [missingModelEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'invalid');
+    assert.match(String(payload.error || ''), /缺 model/);
+    assert.notEqual(payload.reviewer, 'gpt-5.6-luna');
+  });
+
+  it('worker-done：同仓同分支工人账缺 model，PR 自有标签也拒', () => {
+    const { r, payload } = cliWithLedger('worker-done', 42, { events: [missingModelEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'invalid');
+    assert.match(String(payload.error || ''), /缺 model/);
+  });
+
+  it('reviewer-create：同仓同分支账 identity 不是工人 → 拒', () => {
+    const { r, payload } = cliWithLedger('reviewer-create', 42, { events: [badIdentityEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'invalid');
+    assert.match(String(payload.error || ''), /缺 identity 或不是工人/);
+  });
+
+  it('worker-done：同仓同分支账 identity 不是工人 → 拒', () => {
+    const { r, payload } = cliWithLedger('worker-done', 42, { events: [badIdentityEvent] });
+    assert.notEqual(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state, 'invalid');
+    assert.match(String(payload.error || ''), /缺 identity 或不是工人/);
+  });
+
+  it('reviewer-create：扫完没有匹配的 job.dispatch 仍可跳过，认 PR 自有标签', () => {
+    const { r, payload } = cliWithLedger('reviewer-create', 42, { events: [] });
+    assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+    assert.equal(payload.ok, true);
     assert.equal(payload.reviewer, 'gpt-5.6-luna');
   });
 });

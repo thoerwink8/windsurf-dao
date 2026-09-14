@@ -914,7 +914,8 @@ function stampPrFromLedger({ pr, runGh, repo } = {}) {
 /**
  * 打标失败后还许不许继续只读已有 PR 标签。
  * 没查成（unscanned）→ 继续；不是派工链（skipped + none）→ 打不上不挡。
- * 已查成的冲突/歧义（conflict / many）必须 fail-closed，不许再猜。
+ * 已查成的冲突/歧义（conflict / many）和已查成坏账（invalid：缺 model、非法 identity）
+ * 必须 fail-closed，不许再猜、不许当「不是这条链」绕过。
  */
 function warnOrFailLedgerStamp(stamped, pr) {
   if (!stamped || stamped.ok) return;
@@ -2008,7 +2009,8 @@ async function cmdReviewerCreateMirasim(args) {
 
   // #1116：先按 PR head 分支从账本打标，再只读 PR label。
   // 没查成 / 不是派工链：打不上不挡，PR 上已有标就认。
-  // 已查成的冲突/歧义（账本 vs 标签不一致、多个 reviewer/*）：直接 fail-closed，不许再猜。
+  // 已查成的冲突/歧义（账本 vs 标签不一致、多个 reviewer/*）和已查成坏账
+  // （缺 model、非法 identity）：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
   warnOrFailLedgerStamp(stamped, args.pr);
 
@@ -2209,7 +2211,7 @@ async function cmdWorkerDoneMirasim(args) {
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
   // #1116：先按 PR head 分支从账本打标，再只读 PR label。
   // 没查成 / 不是派工链：打不上不挡，没标由 plan 拒。
-  // 已查成的冲突/歧义：直接 fail-closed，不许再猜。
+  // 已查成的冲突/歧义/坏账（缺 model、非法 identity）：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
   warnOrFailLedgerStamp(stamped, args.pr);
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的

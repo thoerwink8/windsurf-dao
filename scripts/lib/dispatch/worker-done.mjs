@@ -231,10 +231,17 @@ export function collectPrLabels({ pr, runGh } = {}) {
  *   repoAssumed —— 账本没写仓，仓是按「没写别的仓」推的（推不出才是拒绝）。
  *   reviewerSource —— 'ledger' 账本写了 / 'pr-label' 账本没写、取 PR 自己的 reviewer/*。
  * 账本与 PR 标签都有且不一致时**不猜**：两条都是「派工那刻的决定」，证不出哪条对，报人工。
- * model 没有这种缺口（1017 条事件全带 model），缺它仍是拒绝，不许推。 */
+ * model 没有这种缺口（1017 条事件全带 model），缺它仍是拒绝，不许推。
+ *
+ * 状态必须分得开，stamp 只把 `none` 标成可跳过：
+ *   none       —— 扫完没有匹配的 job.dispatch（不是这条派工链）
+ *   invalid    —— 已命中记录，但缺 model / 非法 identity / 缺 reviewer（已查成坏账）
+ *   conflict   —— 账本与 PR 标签都有且不一致
+ *   unscanned  —— 没查成（没给仓 / 事件列表不是数组 / 没给分支名）
+ */
 export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint } = {}) {
   const want = String(branch || '').trim();
-  if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
+  if (!want) return { ok: false, state: 'unscanned', error: '没给分支名（没查成，不许猜）' };
   const wantRepo = normalizeDispatchRepo(repo);
   if (!wantRepo) {
     return { ok: false, state: 'unscanned', error: '没给仓（没查成，不许猜）' };
@@ -271,7 +278,7 @@ export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint 
   if (hit.identity !== '工人') {
     return {
       ok: false,
-      state: 'none',
+      state: 'invalid',
       error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 identity 或不是工人——需人工打标`,
     };
   }
@@ -279,7 +286,7 @@ export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint 
   if (!model) {
     return {
       ok: false,
-      state: 'none',
+      state: 'invalid',
       error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model——需人工打标`,
     };
   }
@@ -298,7 +305,7 @@ export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint 
   if (!reviewer) {
     return {
       ok: false,
-      state: 'none',
+      state: 'invalid',
       error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 reviewer，PR 上也没有 reviewer/*`
         + '——需人工打标',
     };
@@ -377,6 +384,8 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
       pr: n,
       branch,
       repo: wantRepo,
+      // 只有「扫完没有这条派工链」（state=none）才 skipped。
+      // invalid / conflict 是已查成坏账，不许标成可跳过再去读 PR 标签。
       skipped: picked.state === 'none',
       error: picked.error,
     };
