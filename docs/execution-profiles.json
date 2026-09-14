@@ -1273,11 +1273,11 @@
       "enabled": false,
       "defaultForModels": [],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T15:10:55.773Z",
-        "evidenceKind": "model_list",
-        "sourceId": "migration-upstream-inventory",
-        "reason": "original provider key located and accepted by official models endpoint; task-scoped native Codex config and Responses execution not yet verified"
+        "status": "available",
+        "checkedAt": "2026-09-14T17:30:00.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-codex-sol-home",
+        "reason": "CODEX_HOME=~/.codex-sol codex exec returned a real answer against https://api.pqapi.shop/v1 with wire_api=responses and model gpt-5.6-sol (session 01a0a0f8-5feb-7cd2-a8b8-276d2fe8e42c, 16231 tokens). The default ~/.codex was re-run right after and still answers through the local 4317 custom bridge (session 01a0a0f8-a197-75c0-b23e-a1b1c9f2db3e), so the two homes do not shadow each other."
       },
       "quality": {
         "status": "unverified",
@@ -1306,7 +1306,8 @@
           "kind": "file",
           "file": "~/.config/ai-gateway/migration-1174/pqapi-sol.key"
         },
-        "configurationRequired": "task-scoped native Codex provider configuration; no global config written"
+        "codexHome": "~/.codex-sol",
+        "configurationRequired": "已落地：codex 的 auth.json 只有一个 OPENAI_API_KEY 字段，装不下 pqgpt 的两把 key，所以 sol 分家到自己的 CODEX_HOME。起法 CODEX_HOME=~/.codex-sol codex ...；默认 ~/.codex 保持原样（本机 4317 responses 桥 + gpt-5.6-luna）。装法见 NEW-MACHINE.md 7e"
       },
       "modelDiscovery": {
         "status": "listed",
