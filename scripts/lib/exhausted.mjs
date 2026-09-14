@@ -198,17 +198,52 @@ export function planExhaustedPush({ prs = [], ledger = {}, epoch = null } = {}) 
  * ③ 为什么按过期而不是保守留着：**留下的代价是「永久卡死」，摘掉的代价是「多试几次」**。
  * 两者不对称，且后者有重试上限兜底（#1236 的判据版本 + 试满交人）。
  *
+ * 2026-09-14 第三次实咬（本次）：上面三条**一条都不成立，而 PR 明明在等复审**。
+ *
+ * 现场 9 张（#1256 #1232 #1225 #1213 #1211 #1209 #1111 #1096 #885），时间线长这样：
+ *
+ *   红票投在旧代码 → 返工派成功（记账在**旧 head**，ok=true）→ 工人推了新 head
+ *   → 新 head 上没人复审（pushRework 被 `prev.ok === true` 挡住）→ 重试烧完 → 打认输标
+ *
+ * 于是：认输记录记的就是当前 head（① 不成立）、判据版本没变过（② 不成立）、
+ * 记录带着版本（③ 不成立）——标永久挂着，而盘面同时在报「返工完了没人复审」。**同一张 PR
+ * 上，一个判据说「没人复审」，另一个判据说「别再动它」。**
+ *
+ * 所以补第 ④ 条：**红票投在旧代码上 = 返工已经落地、判定已经过期**，这个事实本身就
+ * 让旧认输不成立——旧认输记的是「叫不动审官」，不是「代码没改」，两件事不该合成一个标。
+ * 证据由调用方注入（`staleRedAt`，与 `pushRework` 解冻共用同一份 `analyzeReviewsAtHead`
+ * 结果）——本模块零 IO，也不自己去读 reviews。
+ *
+ * 所以判据有四条，任一成立就摘：
+ *   ① 工人推了新 head           —— 新局面（原有）
+ *   ② 判据版本变了             —— 挡住它的那套判据已经改了（#1238）
+ *   ③ 认输记录没带版本（老键）  —— 加版本之前的记录，无从判断，按过期处理（#1238）
+ *   ④ 红票投在旧代码上         —— 返工已落地、判定已过期（本次）
+ *
+ * ③ 为什么按过期而不是保守留着：**留下的代价是「永久卡死」，摘掉的代价是「多试几次」**。
+ * 两者不对称，且后者有重试上限兜底（#1236 的判据版本 + 试满交人）。④ 同理：
+ * 不摘的代价是「静默 16 小时」（#1213 实测），摘掉的代价是「再叫一次审官」。
+ *
  * 只摘「自动化认输」，**不动「等用户」**——那是「已升级给人」，人没回话机器不该自己动。
  *
  * @param {Array} prs  开放 PR（要带 number / headRefOid / labels）
  * @param {Object} ledger  `pushed:<pr>@<head>[@e<epoch>]` → { at, pr, head }
  * @param {Array} pushedThisRound  本轮刚推过的键（刚认输的别当场又摘掉）
- * @param {string|null} epoch  本轮的判据版本（lib/retry-epoch.mjs）；拿不到就退回只认 ①
+ * @param {string|null} epoch  本轮的判据版本（lib/retry-epoch.mjs）；拿不到就退回只认 ①③
+ * @param {Object|Map} staleRedAt  `{ <pr>: <红票所在的 commit oid> }`——**只有确知投在旧代码上**
+ *   的才放进来；没查成 / 无红票 / 红票就在当前 head 上，一律不进这张表（缺项 = 这一条不成立，
+ *   不阻塞其余三条）。判据在调用方（commander-core 的 staleRedBallot），本函数只读。
  */
-export function planExhaustedLabelClear({ prs = [], ledger = {}, pushedThisRound = [], epoch = null } = {}) {
+export function planExhaustedLabelClear({
+  prs = [], ledger = {}, pushedThisRound = [], epoch = null, staleRedAt = null,
+} = {}) {
   const book = ledger && typeof ledger === 'object' ? ledger : {};
   const nowEpoch = typeof epoch === 'string' && /^[0-9a-f]{12}$/.test(epoch) ? epoch : null;
   const justPushed = new Set((Array.isArray(pushedThisRound) ? pushedThisRound : []).map(String));
+  // Map 与普通对象都收（调用方可能从 Map 直接传）；缺 / 类型不对 → 空表，④ 永不成立。
+  const redAt = staleRedAt instanceof Map
+    ? staleRedAt
+    : (staleRedAt && typeof staleRedAt === 'object' ? new Map(Object.entries(staleRedAt)) : new Map());
   const clears = [];
   const skipped = [];
   for (const pr of Array.isArray(prs) ? prs : []) {
@@ -232,6 +267,18 @@ export function planExhaustedLabelClear({ prs = [], ledger = {}, pushedThisRound
     if (!recordedHead) { skipped.push({ pr: n, why: 'no-ledger-head' }); continue; }
     const recordedEpoch = latest ? epochOfPushKey(latest.key) : null;
     if (justPushed.has(exhaustedPushKey(n, head, nowEpoch) || '')) { skipped.push({ pr: n, why: 'just-pushed' }); continue; }
+    // ④ 红票投在旧代码上：返工已经落地、那次判定已经过期。放在 ①②③ 之前判——
+    // 它是**正面证据**（盘面同时在报「返工完了没人复审」），比「判据版本变了」这种间接信号硬。
+    const redOid = redAt.get(n) ?? redAt.get(String(n));
+    if (typeof redOid === 'string' && redOid.trim() && redOid.trim() !== head) {
+      clears.push({
+        pr: n, head, recordedHead, reason: 'rework-landed',
+        why: `PR #${n} 的认定红票投在 ${redOid.trim().slice(0, 8)}，而 head 已经是 ${head.slice(0, 8)}`
+          + `——返工已经落地、那次判定已经过期，可新代码上没人复审（这正是「返工完了没人复审」）。`
+          + `旧认输记的是「叫不动审官」，不是「代码没改」，两件事不该合成一个标：摘标让它重回流水线`,
+      });
+      continue;
+    }
     if (recordedHead === head) {
       // head 没动。这时只有「判据变了」或「老记录没带版本」能让它过期。
       if (!recordedEpoch) {

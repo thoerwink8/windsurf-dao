@@ -44,7 +44,7 @@ import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   rereviewKey, epochOf,
-  SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead,
+  SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
@@ -637,6 +637,16 @@ function buildSituation({ state } = {}) {
     // 「自动化认输」的账本（键 pushed:<pr>@<head>）。decide 用它判「这个标是不是过期了」——
     // 标是无头的、账本带 head，二者一比就知道工人有没有推新东西（2026-09-11）。
     exhaustedPush: loadExhaustedPush(),
+    // #1233 的同一条纪律：同一个事实只判一次。这张表同时解冻两处——
+    // ① 认输标（planExhaustedLabelClear 的第 ④ 条）、② 复审重试账（rereviewBudgetKey 的键）；
+    // 两处各扫一遍 reviews 那天就会分叉，而「两处判据分叉」正是这一族断链的成因。
+    staleRedAt: (() => {
+      try {
+        if (!github || github.scanned !== true) return null;
+        if (!prReviews || prReviews.scanned !== true) return null;
+        return staleRedBallots({ prs: github.prs || [], reviewsByPr: prReviews.byPr });
+      } catch { return null; }   // 算不出来 ⇒ 空表 ⇒ 两条解冻不成立（退回今天的行为），但其余判据照常
+    })(),
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,

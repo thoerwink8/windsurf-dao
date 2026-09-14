@@ -440,3 +440,148 @@ describe('认输标签随新 head 自动摘除（自主运转的死点 A）', ()
     assert.match(src, /function execClearExhausted/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-09-14 实咬（本单）：认输记录 head == 当前 head、版本也对得上，而 PR 明明在等复审。
+// 9 张同形（#1256 #1232 #1225 #1213 #1211 #1209 #1111 #1096 #885）：红票→返工派成功（记在旧 head）
+// →工人推新 head→新 head 上没人复审→叫审官 3 次失败→打认输标→永久焊死 #1213 静默 16 小时。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('返工已落地 ⇒ 旧认输不成立（第 ④ 条：红票投在旧代码上）', () => {
+  // 上面那个 describe 里的 prWith / EXHAUSTED 是块级 const，这里各建一份（不跨块引用）。
+  const EXHAUSTED_L = '卡死/自动化认输';
+  const WAITING_L = '卡死/等用户';
+  const prWith = (n, head, labels) => ({ number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: head, labels: labels.map((name) => ({ name })) });
+  const HEAD = '56ad3686b7d6c434c2d0394353e02efdf8c616b1';
+  const RED_OLD = 'dc4c1dd7b80ff4e5bc0d4193c0b0536a545ad438';
+  const stamp = '9d7cf535fb03';
+  // 认输记录记的就是当前 head、且带着当前版本——①②③ 一条都不成立。
+  const ledger = { [`pushed:1213@${HEAD}@e${stamp}`]: { at: '2026-09-13T21:30:32.028Z', pr: 1213, head: HEAD } };
+
+  it('红票在旧代码上 + 认输记录就在当前 head ⇒ 摘标（这是改前摘不掉的那一格）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const before = planExhaustedLabelClear({ prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp });
+    assert.equal(before.clears.length, 0, '改前它就该摘不掉——这是本条的对照');
+    const after = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp,
+      staleRedAt: { 1213: RED_OLD },
+    });
+    assert.equal(after.clears.length, 1, JSON.stringify(after));
+    assert.equal(after.clears[0].reason, 'rework-landed');
+    assert.match(after.clears[0].why, /dc4c1dd7/);
+  });
+
+  it('红票就在当前 head 上 ⇒ 不摘（那是「真的刚判红」，该走返工不是解冻）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp,
+      staleRedAt: { 1213: HEAD },
+    });
+    assert.equal(r.clears.length, 0, JSON.stringify(r));
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true);
+  });
+
+  it('没给 staleRedAt（reviews 没查成）⇒ 第 ④ 条不成立，其余三条照旧', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    for (const opt of [undefined, null, {}, []]) {
+      const r = planExhaustedLabelClear({ prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp, staleRedAt: opt });
+      assert.equal(r.clears.length, 0, `staleRedAt=${JSON.stringify(opt)}`);
+    }
+    // 其余三条没被连坐：换成旧 head 照样摘
+    const r2 = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])],
+      ledger: { 'pushed:1213@OLDHEAD': { pr: 1213, head: 'OLDHEAD' } },
+      epoch: stamp, staleRedAt: null,
+    });
+    assert.equal(r2.clears.length, 1);
+    assert.equal(r2.clears[0].reason, 'new-head');
+  });
+
+  it('「等用户」照旧不摘——第 ④ 条也不许越过它', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L, WAITING_L])], ledger, epoch: stamp,
+      staleRedAt: { 1213: RED_OLD },
+    });
+    assert.equal(r.clears.length, 0);
+    assert.equal(r.skipped.some((x) => x.why === 'waiting-user'), true);
+  });
+
+  it('staleRedAt 收 Map 也收普通对象（调用方两种都可能传）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(1213, HEAD, [EXHAUSTED_L])], ledger, epoch: stamp,
+      staleRedAt: new Map([[1213, RED_OLD]]),
+    });
+    assert.equal(r.clears.length, 1);
+    assert.equal(r.clears[0].reason, 'rework-landed');
+  });
+});
+
+describe('第 ④ 条的证据：staleRedBallots 只收「红票确实投在旧代码上」', () => {
+  const HEAD = '56ad3686b7d6c434c2d0394353e02efdf8c616b1';
+  const RED_OLD = 'dc4c1dd7b80ff4e5bc0d4193c0b0536a545ad438';
+  const prs = [{ number: 1213, headRefOid: HEAD }];
+  const withReviews = (reviews) => ({ 1213: { reviews } });
+
+  it('正控：红票在旧代码上 ⇒ 收下那张红票的 commit', async () => {
+    const { staleRedBallots } = await CORE;
+    const got = staleRedBallots({ prs, reviewsByPr: withReviews([{ state: 'CHANGES_REQUESTED', commit_id: RED_OLD }]) });
+    assert.equal(got.get('1213'), RED_OLD);
+  });
+
+  it('反证：红票就在当前 head 上 ⇒ 不收（那是刚判红，不是「返工完了」）', async () => {
+    const { staleRedBallots } = await CORE;
+    const got = staleRedBallots({ prs, reviewsByPr: withReviews([{ state: 'CHANGES_REQUESTED', commit_id: HEAD }]) });
+    assert.equal(got.size, 0);
+  });
+
+  it('反证：末条判定是绿 ⇒ 不收（绿票过期是另一条判据，不许在这里冒充红）', async () => {
+    const { staleRedBallots } = await CORE;
+    const got = staleRedBallots({ prs, reviewsByPr: withReviews([
+      { state: 'CHANGES_REQUESTED', commit_id: RED_OLD },
+      { state: 'APPROVED', commit_id: RED_OLD },
+    ]) });
+    assert.equal(got.size, 0);
+  });
+
+  it('没查成的三种一律不收：reviews 缺 / 缺 commit_id / head 缺', async () => {
+    const { staleRedBallots } = await CORE;
+    assert.equal(staleRedBallots({ prs, reviewsByPr: {} }).size, 0);
+    assert.equal(staleRedBallots({ prs, reviewsByPr: withReviews([{ state: 'CHANGES_REQUESTED' }]) }).size, 0);
+    assert.equal(staleRedBallots({
+      prs: [{ number: 1 }],
+      reviewsByPr: { 1: { reviews: [{ state: 'CHANGES_REQUESTED', commit_id: RED_OLD }] } },
+    }).size, 0);
+  });
+
+  it('没有判别态 review（一条都没审）⇒ 不收', async () => {
+    const { staleRedBallots } = await CORE;
+    assert.equal(staleRedBallots({ prs, reviewsByPr: withReviews([]) }).size, 0);
+    assert.equal(staleRedBallots({ prs, reviewsByPr: withReviews([{ state: 'COMMENTED', commit_id: RED_OLD }]) }).size, 0);
+  });
+});
+
+describe('复审重试账：同一份红票只烧一次名额', () => {
+  const HEAD = '56ad';
+  const RED = 'dc4c1dd7b80ff4e5bc0d4193c0b0536a545ad438';
+
+  it('没给红票表 ⇒ 与老键逐字一致（没依据不许改行为）', async () => {
+    const { rereviewKey, rereviewBudgetKey } = await CORE;
+    assert.equal(rereviewBudgetKey(1213, HEAD, null), rereviewKey(1213, HEAD));
+    assert.equal(rereviewBudgetKey(1213, HEAD, {}), rereviewKey(1213, HEAD));
+    assert.equal(rereviewBudgetKey(1213, HEAD, new Map()), rereviewKey(1213, HEAD));
+  });
+
+  it('红票在旧代码上 ⇒ 键带上那张红票的 commit（红票换了 = 名额重算）', async () => {
+    const { rereviewBudgetKey } = await CORE;
+    const k = rereviewBudgetKey(1213, HEAD, { 1213: RED });
+    assert.equal(k.endsWith(`@red:${RED}`), true, k);
+  });
+
+  it('现场正控：改前那个「试满 3 次」的键，改后不再是同一个格子', async () => {
+    const { rereviewKey, rereviewBudgetKey } = await CORE;
+    const old = rereviewKey(1213, HEAD);                       // 账本里 tries=3 的那条
+    const now = rereviewBudgetKey(1213, HEAD, { 1213: RED });
+    assert.notEqual(now, old, '键没变 ⇒ 读到老的 tries=3 ⇒ 摘了标也照样当场再认输一轮');
+  });
+});
