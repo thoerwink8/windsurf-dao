@@ -1259,7 +1259,9 @@ describe('返工命令：原树短会话，不新派工', () => {
     assert.ok(i > -1, '找不到 dispatchRework——本闸判据失效，不是通过');
     const body = src.slice(i, i + 4500);
     assert.match(body, /findDaoTree/, '必须先找到原工人树');
-    assert.match(body, /dao\.mjs', 'start'/, '返工应在原树起短会话');
+    assert.match(body, /mirasimStartCmd/, '返工应在原树起短会话');
+    assert.match(src, /function mirasimStartCmd[\s\S]*?dao\.mjs', 'start'/);
+    assert.match(src, /function mirasimStartCmd[\s\S]*?'--pr'/, '起会话必须带 PR 号，判活才认得出快路工人');
     assert.match(src, /function rememberRework/);
     assert.doesNotMatch(body, /'--allow-dup'/, '不再走 dispatch 新派工');
   });
@@ -1347,6 +1349,9 @@ describe('返工建树路（#1142）：无 dao 树时从 PR 分支建树，可�
     assert.ok(start, '必须真的发了 start');
     assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-tree', 'start 必须用建树回执里的 path');
     assert.equal(start[start.indexOf('--model') + 1], 'grok-4.6');
+    assert.equal(start[start.indexOf('--pr') + 1], '987321', '返工会话必须带 PR 号写入元数据');
+    assert.equal(start[start.indexOf('--issue') + 1], '987654');
+    assert.equal(start[start.indexOf('--title') + 1], 'PR-#987321');
     const rec = state.reworkDispatched[`987321:abcdef12`] || Object.values(state.reworkDispatched)[0];
     assert.equal(rec.ok, true, '成功要记账');
   });
@@ -2241,7 +2246,7 @@ describe('decide：human_holds → merge-policy（#1094）', () => {
     const j = act.indexOf('function dispatchRework');
     assert.equal(j > -1, true);
     assert.doesNotMatch(act.slice(j, j + 2800), /dispatchMergePolicyArgs/);
-    assert.match(act.slice(j, j + 2800), /dao\.mjs', 'start'/);
+    assert.match(act.slice(j, j + 2800), /mirasimStartCmd/);
   });
 });
 
@@ -3024,5 +3029,55 @@ describe(`派成功的返工：工人没了要能重派`, () => {
     // 时钟读不到 ⇒ 保守
     const noClock = judgeReworkOrphan(pr, { prev: { ...old, at: '' }, nowMs, situation: { sessions: { scanned: true, items: [] } } });
     assert.equal(noClock.orphan, false, '派出时刻没查成不许当成早就过期');
+  });
+
+  it('⑦负控：无署名快路 PR + 任意分支名 + running 会话（标题里没有 PR 号）→ 不解冻', async () => {
+    const { decide, reworkKey, judgeReworkOrphan } = await CORE;
+    const pr = {
+      number: 1271, isDraft: false, mergeable: 'CONFLICTING',
+      headRefOid: HEAD, headRefName: 'dao-queue-selfheal',
+      body: '快路，无署名 issue',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const live = {
+      key: 'grok:worker', state: 'running',
+      cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-queue-selfheal',
+      title: 'Grok',
+    };
+    const nowMs = Date.parse(NOW);
+    const old = { at: '2026-09-14T06:00:00.000Z', pr: 1271, head: HEAD, ok: true, unscanned: false, tries: 1 };
+    const judged = judgeReworkOrphan(pr, {
+      prev: old, nowMs,
+      situation: { sessions: { scanned: true, items: [live] } },
+    });
+    assert.equal(judged.orphan, false, '工人还在原树里干活，不许因为标题对不上就再派一个');
+
+    const r = decide(baseSituation({
+      at: NOW,
+      github: { scanned: true, issues: [], prs: [pr] },
+      sessions: { scanned: true, items: [live] },
+      reworkDispatched: { [reworkKey(1271, HEAD)]: old },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '人还在干活，不许再塞一个进同一棵树');
+  });
+
+  it('⑦正对照：无署名快路 PR + running 会话在别的分支 → 仍是孤儿，允许重派', async () => {
+    const { judgeReworkOrphan } = await CORE;
+    const pr = {
+      number: 1271, isDraft: false, mergeable: 'CONFLICTING',
+      headRefOid: HEAD, headRefName: 'dao-queue-selfheal',
+      body: '快路，无署名 issue',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const other = {
+      key: 'grok:other', state: 'running',
+      cwd: '/home/orca/mirasim-worktrees/windsurf-dao/some-other-branch',
+      title: 'Grok',
+    };
+    const judged = judgeReworkOrphan(pr, {
+      prev: dispatched('2026-09-14T06:00:00.000Z'), nowMs: Date.parse(NOW),
+      situation: { sessions: { scanned: true, items: [other] } },
+    });
+    assert.equal(judged.orphan, true, '别的树上的活会话不是这条返工的工人');
   });
 });

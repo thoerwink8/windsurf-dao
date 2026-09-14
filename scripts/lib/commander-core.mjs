@@ -560,6 +560,7 @@ export function judgeReworkOrphan(pr, { prev, nowMs, situation } = {}) {
     sessions: sessionListForLiveness(situation),
     pr: pr && pr.number,
     issue: attributedIssueNumber(pr),
+    branch: pr && pr.headRefName,
   });
   if (live.unavailable) return { orphan: false, why: '会话观测面未接入，不猜' };
   if (live.unscanned) return { orphan: false, why: '会话名单没查成，不猜' };
@@ -788,6 +789,7 @@ function collectCandidates(situation) {
       sessions: sessionsForLive,
       pr: pr.number,
       issue: attributedIssueNumber(pr),
+      branch: pr.headRefName,
     });
     if (live.live || live.unavailable) return false;
     const prev = reworkDispatched[pumpDraftKey(pr.number)];
@@ -1492,6 +1494,7 @@ function collectCandidates(situation) {
         sessions: sessionListForLiveness(situation),
         pr: pr.number,
         issue: attributedIssueNumber(pr),
+        branch: pr.headRefName,
       });
       if (live.live) continue; // 有人在做，或会话名单没查成——不派
       if (live.unavailable && pr.isDraft) continue; // 观测面未接：draft 维持旧契约

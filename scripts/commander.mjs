@@ -1752,6 +1752,15 @@ function findDaoTree(issue, pr) {
   return null;
 }
 
+function mirasimStartCmd({ model, tree, spec, pr, issue }) {
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', model,
+    '--worktree', tree, '--prompt', spec];
+  if (pr != null) cmd.push('--pr', String(pr), '--title', `PR-#${pr}`);
+  if (issue != null) cmd.push('--issue', String(issue));
+  return cmd;
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
@@ -1829,9 +1838,9 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = n
     rememberRework(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
@@ -1878,9 +1887,9 @@ export function dispatchPumpDraft(action, { state, dryRun, say, run = runCmd, br
     rememberPumpDraft(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] pump-draft PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
