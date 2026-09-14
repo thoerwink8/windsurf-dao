@@ -115,6 +115,13 @@
 //    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
 // ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
 //    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
+// ㊲ 判据不得经过外壳的引号层（2026-09-13 用户拍板「赞同」，随 #1240）：扫仓内追踪面，
+//    `node -e`/`python3 -c` 等内联代码里出现 `$`、`--body` 参数里出现命令替换、gh issue
+//    写动作带 `--body`，都报红——外壳会先展开一轮，**命令照常 exit 0、输出照常像模像样**，
+//    错的只是判据本身（2026-09-13 实咬：`node -e "…/@e([0-9a-f]{12})$/…"` 的 `$/` 被吞）。
+//    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
+//    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
+//    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -128,6 +135,7 @@ import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
+import { PENDING_DECISION_LABEL } from './lib/hub-pending.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
@@ -169,6 +177,9 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
+} from './lib/inline-script-check.mjs';
 import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
 import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
@@ -1132,7 +1143,17 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 // 只拦数量，不拦「等了多久」：一张真的在等用户的单，用户出门两天它就超龄了，
 // 那不是违规（wall-clock 当闸必然误报，本仓已有判例）。年龄只报出来给人看。
 const PENDING_BOARD_MAX_DEFAULT = 5;
-const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
+// 判据是 **label**，不是标题前缀（#1240 顺带收口）。
+//
+// 标题那个 `[待拍板] ` 前缀是历史上「机器开的单长什么样」的记号，跟 label 说的是同一件事，
+// 于是同一件事有了两个真相源。而它俩**不同步**：机器开的单两侧都有（前缀 + label），
+// 人开的单只有 label，这个前缀还容易在标题里被当成普通文字（#1210 一度开成
+// `[待拍板] [待拍板] 盘点：inbox`，两道前缀）。按 prefix 数，等于按「有没有记得手写那个
+// 前缀」数——数出来的不是「有几件事在等人拍」。
+//
+// **不许退化成「数不出来就当 0」**：label 字段没读到时（`--json` 里少一项、
+// 对象形态变了）报红，不静默放过——那是「没查成」，不是「一张都没有」。
+const PENDING_LABEL = PENDING_DECISION_LABEL; // '待拍板'，真相源在 hub-pending.mjs（别再抄字面量）
 
 // 收件箱不在 dao-check。#1171：这条检查只在 land 推默认分支时才跑，机器上没人定时唤它，
 // 不是帅位会看见的腿。现役挂载面是指挥官盘点 commander-inventory（每 6 小时）。
@@ -1528,22 +1549,22 @@ function checkPendingBoardBacklog(board) {
     skip(`待拍板堆积：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  if (issues.array.some((i) => !i || typeof i.title !== 'string')) {
-    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title 的对象数组）');
+  if (issues.array.some((i) => !i || typeof i.title !== 'string' || !Array.isArray(i.labels))) {
+    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title + labels 的对象数组）——别当成「一张都没有」');
     return;
   }
-  const pending = issues.array.filter((i) => PENDING_TITLE_RE.test(i.title));
+  const pending = issues.array.filter((i) => i.labels.some((l) => (typeof l === 'string' ? l : l?.name) === PENDING_LABEL));
   const n = pending.length;
   if (n > max) {
     const 样 = pending.slice(0, 3).map((i) => `#${i.number}`).join(' ');
     fail(
-      `机器开的「待拍板」单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
+      `标着「待拍板」的开放单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
       '先判每张是不是假警报：假警报要去修产生它的那条判据，不是关掉了事；真要人拍的才留着',
-      'gh issue list --state open --limit 500 --json number,title | grep 待拍板',
+      `gh issue list --state open --limit 500 --json number,title,labels | grep ${PENDING_LABEL}`,
     );
     return;
   }
-  green(`机器开的「待拍板」单 ${n}/${max} 张`);
+  green(`标着「待拍板」的开放单 ${n}/${max} 张`);
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
@@ -1931,6 +1952,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkInlineScriptSamples();
+checkInlineScriptLive();
 checkFailedUnitsLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
@@ -2017,6 +2040,66 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkInlineScriptSamples() {
+  const r = inspectInlineScriptsFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '内联脚本闸样本没查成' : '内联脚本闸样本对不上',
+      '恢复 tests/fixtures/inline-script/{red,ok,empty}：红=内联代码含 $ 与 --body 含命令替换必须拦、绿=单引号无 $ 与 --body-file 必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkInlineScriptLive() {
+  const files = listScanFiles({
+    root: ROOT,
+    spawnSync,
+    readdir: (dir) => readdirSync(dir),
+    stat: (p) => statSync(p),
+  });
+  if (!files) {
+    fail(
+      '内联脚本闸 live 没查成',
+      '要能列出仓内追踪面（git ls-files 或遍历）；列不出 = 没查成，不是 0 个违规',
+      ROOT,
+    );
+    return;
+  }
+  const loaded = [];
+  for (const rel of files) {
+    // 样本目录（`tests/fixtures/**`）里放的就是**故意违规**的样本，是判别力的来源，
+    // 不是动手路径——live 扫它们等于闸给自己报红。
+    if (isSamplePath(rel)) continue;
+    try {
+      const text = readFileSync(join(ROOT, rel), 'utf8');
+      if (text.includes('\0')) continue;
+      loaded.push({ path: rel, text });
+    } catch { /* 读不出的不算样本，下一轮还在就会再碰 */ }
+  }
+  const r = inspectInlineScripts({ files: loaded });
+  if (r.unscanned) {
+    fail('内联脚本闸 live 没查成', '扫到的正文 0 份 = 没查成，不是 0 个违规', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    const first = r.violations[0];
+    fail(
+      `判据经过了外壳的引号层 ${r.violations.length} 处`,
+      `${first.fix}（例：${first.kind}）`,
+      r.violations.slice(0, 6).map((v) => `${v.file}:${v.line} ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸：扫了 ${r.scanned} 份文本，0 处判据经过外壳引号层`);
 }
 
 function checkFailedUnitsLive() {

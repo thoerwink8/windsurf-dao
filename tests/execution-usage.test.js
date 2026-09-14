@@ -230,6 +230,73 @@ test('collects default Mirasim, ACP context and session metadata with configured
   assert.equal(native.accountPoolId, 'cursor-pool');
 });
 
+test('protocol provider names are not vendors; grok native host maps to xai', async () => {
+  const M = await modulePromise;
+  const row = M.normalizeUsage({
+    agent: 'grok', source: 'mirasim-ledger',
+    event: {
+      sessionId: 'sid', model: 'grok-4.6', provider: 'openai-responses',
+      upstreamHost: 'cli-chat-proxy.grok.com', leg: 'direct', viaRelay: false,
+      input: 10, output: 1, usageKnown: true,
+    },
+  });
+  assert.equal(row.provider, 'xai');
+  assert.equal(row.reportedProvider, 'openai-responses');
+  assert.equal(row.billingSource, 'xai');
+  assert.equal(row.accountPoolId, null);
+  const cleaned = M.sanitizeUsageObservation(row);
+  assert.equal(cleaned.provider, 'xai');
+  assert.equal(cleaned.reportedProvider, 'openai-responses');
+});
+
+test('relay host is not the vendor; billing stays mirasim-relay', async () => {
+  const M = await modulePromise;
+  const row = M.normalizeUsage({
+    agent: 'codex', source: 'mirasim-ledger',
+    event: {
+      sessionId: 'sid', model: 'gpt-5.6-luna', provider: 'openai-responses',
+      upstreamHost: 'relay.mirasim.ai', leg: 'relay', viaRelay: true,
+      input: 10, output: 1, usageKnown: true,
+    },
+  });
+  assert.equal(row.provider, 'openai');
+  assert.equal(row.reportedProvider, 'openai-responses');
+  assert.equal(row.billingSource, 'mirasim-relay');
+});
+
+test('vendorTaskId in session metadata joins accountPoolId from usage sessionId', async t => {
+  const M = await modulePromise, f = fixture(t);
+  write(path.join(f.home, '.dao/execution/sessions', encodeURIComponent('grok:dispatch-1') + '.json'), {
+    sessionKey: 'grok:dispatch-1', agent: 'grok', model: 'grok-4.6',
+    vendorTaskId: 'backend-uuid', accountPoolId: 'xai-subscription', profileId: 'grok-mirasim-native',
+  });
+  write(path.join(f.home, '.mirasim/insights/usage-2026-09.ndjson'), ndjson({
+    id: 'backend-uuid:call', sessionId: 'backend-uuid', agent: 'grok', model: 'grok-4.6',
+    provider: 'openai-responses', upstreamHost: 'cli-chat-proxy.grok.com',
+    input: 7, output: 2, usageKnown: true,
+  }));
+  M.collectUsage(f);
+  const report = M.reportUsage(f);
+  assert.equal(report.groups.length, 1);
+  assert.equal(report.groups[0].provider, 'xai');
+  assert.equal(report.groups[0].accountPoolId, 'xai-subscription');
+  assert.equal(inputTotal(report), 7);
+});
+
+test('ambiguous model does not invent an account pool', async () => {
+  const M = await modulePromise;
+  const row = M.normalizeUsage({
+    agent: 'codex', source: 'mirasim-ledger',
+    event: {
+      sessionId: 'orphan', model: 'gpt-5.6-sol', provider: 'openai-responses',
+      upstreamHost: 'relay.mirasim.ai', viaRelay: true,
+      input: 3, output: 1, usageKnown: true,
+    },
+  });
+  assert.equal(row.provider, 'openai');
+  assert.equal(row.accountPoolId, null);
+});
+
 test('Cursor output without usage stays visible; account balances do not become task charges', async t => {
   const M = await modulePromise, f = fixture(t);
   M.appendUsage({ agent:'cursor', source:'cursor-output', event:{ type:'result', sessionId:'c', result:'PRIVATE RESPONSE', duration_ms:123 }, context:{taskId:'cursor-task'} }, f);

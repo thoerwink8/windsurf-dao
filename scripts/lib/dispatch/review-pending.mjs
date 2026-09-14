@@ -25,6 +25,7 @@ import { dispatchQueueDir } from '../dispatch-queue.mjs';
 import { mainCheckoutRoot } from '../main-checkout.mjs';
 import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
+import { vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
@@ -386,7 +387,35 @@ export function countLiveReviewers({ records, sessions } = {}) {
   return { ok: true, unscanned: false, count: live.length, live };
 }
 
-export function planReviewPendingDrain(ticket) {
+/**
+ * 票 → drain 计划。
+ *
+ * `usableReviewers`（可选）是「现在起得来的审官顺位」——由调用方从
+ * `reviewerSelectOrder` × 执行目录可用性算好传进来（本模块零 IO，不自己读目录）。
+ *
+ * 传了它，这里才敢动票上的审官：**票上那个起不来时，顺位往后取第一个能起的**，
+ * 并把「换了谁、为什么换」原样报出去（`switchedFrom` / `switchWhy`）。
+ *
+ * 为什么需要这一步（2026-09-14 实咬）：票在**写的那一刻**就把审官写死了
+ * （`buildReviewPendingTicket` 的 reviewer 是必填）。那一档后来死了（执行目录
+ * `availability=unverified`），新选的审官会被顺位表剔掉，**读票这条路却完全不看它**——
+ * 于是每 20 分钟拿同一个必败的模型去起一次，试满 3 次打「卡死/自动化认输」。
+ * 现场：#1225 #1216 两张票连续 5 轮没动，drain 报
+ * 「execution profile unverified: codex-relay-gpt-5.6-sol」，而指挥官每轮日志里
+ * 「审官顺位：剔掉 3 位……gpt-5.6-sol：availability=unverified」写得清清楚楚。
+ *
+ * 三条底线：
+ *   · 票上那个**能用**就一个字都不改（票是事实，不许无端改写）；
+ *   · **没给顺位表**（没查成）时一个字都不改——没有依据的换人是猜；
+ *   · 顺位**全都不能起**时照旧失败，不许退回到「那就用第一个」（那正是本单要治的病）。
+ *
+ * 换人只换**同厂**的（2026-09-14 实咬，我自己撞的）：第一版无脑取顺位第一个能起的，
+ * 而当前可用顺位是 [luna/gpt, grok-4.6/grok]——于是票上写着 luna 时被换成 grok，
+ * 当场被 `assertReviewerSeat` 拒：「审官位只许同厂换顺位」。**读票侧的换人不能越过审官位那条闸**，
+ * 它只是「同一位子换个起得来的同厂备选」。顺位里没有同厂备选 ⇒ 不换，照原样失败并如实报，
+ * 让 `reviewer-down` 走到帅位面前——那是一条人看得见的出路，猜一个会拒的值不是。
+ */
+export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
   if (ticket == null) {
     return { ok: false, unscanned: true, error: '待办没拿到（没查成）' };
   }
@@ -395,9 +424,23 @@ export function planReviewPendingDrain(ticket) {
   }
   const pr = String(ticket.pr ?? '').trim();
   const worktree = String(ticket.workerWorktree ?? '').trim();
-  const reviewer = String(ticket.reviewer ?? '').trim();
+  let reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
+  let switchedFrom = null;
+  let switchWhy = null;
+  const order = Array.isArray(usableReviewers) ? usableReviewers.map(String) : null;
+  if (order && order.length > 0 && !order.includes(reviewer)) {
+    // 只在**同厂**里换：跨厂换人是 assertReviewerSeat 的例外（要有满载/看门狗死因凭证），
+    // 读票侧拿不出那个凭证，换出来的值必被拒——换了个必拒的值等于没修。
+    const fam = vendorFamilyOf(reviewer);
+    const next = order.find((id) => fam && vendorFamilyOf(id) === fam) || null;
+    if (next) {
+      switchedFrom = reviewer;
+      switchWhy = `票上写的审官 ${reviewer} 现在起不来（不在可用顺位里），按顺位改用同厂备选 ${next}`;
+      reviewer = next;
+    }
+  }
   // 审官统一走 mirasim（2026-09-06 切流量第二步）。
   //
   // 原来这里按「票上有没有工人树」分两条路：有树 attach 到那棵树，没树才 create。
@@ -423,11 +466,12 @@ export function planReviewPendingDrain(ticket) {
     // 票上的工人树只做记录：mirasim 审官不挂在它上面，但排障时要知道活干在哪
     worktree: worktree || null,
     reviewer,
+    ...(switchedFrom ? { switchedFrom, switchWhy } : {}),
   };
 }
 
-export function consumeReviewPending({ dir, ticket, attach } = {}) {
-  const plan = planReviewPendingDrain(ticket);
+export function consumeReviewPending({ dir, ticket, attach, usableReviewers } = {}) {
+  const plan = planReviewPendingDrain(ticket, { usableReviewers });
   if (!plan.ok) return { ...plan, pr: ticket?.pr || null };
   if (typeof attach !== 'function') {
     return { ok: false, unscanned: true, error: 'drain 没拿到 attach 执行器（没查成）', pr: plan.pr };
@@ -466,7 +510,7 @@ export function consumeReviewPending({ dir, ticket, attach } = {}) {
   return { ok: true, pr: plan.pr, plan, attached };
 }
 
-export function drainReviewPending({ dir, tickets, attach } = {}) {
+export function drainReviewPending({ dir, tickets, attach, usableReviewers } = {}) {
   let listed = tickets;
   if (!Array.isArray(listed)) {
     const scan = listReviewPending(dir);
@@ -483,15 +527,27 @@ export function drainReviewPending({ dir, tickets, attach } = {}) {
   }
   const results = [];
   for (const t of listed) {
-    results.push(consumeReviewPending({ dir, ticket: t, attach }));
+    results.push(consumeReviewPending({ dir, ticket: t, attach, usableReviewers }));
   }
   const failed = results.filter(r => !r.ok);
+  // #1239：顶层 error 必须带上**第一张失败票的真因**。
+  //
+  // 原先只有失败计数，`dao.mjs` 那侧 `fail(drained.error || '未全部成功', drained)`
+  // 取不到 error 字符串 → 只能印兜底文案。于是真因（`execution profile unverified:
+  // codex-relay-gpt-5.6-sol` 这类）躺在 results[].error 里没人读，日志里只剩一句
+  // 「未全部成功」——7 天里 23 次。这是「错误在传递中丢失」，不是「错误没发生」：
+  // 读日志的人据此查不出任何东西（#1233 / #1237 的同一族）。
+  //
+  // 取第一条而非拼接：认输/重试判据只读首行（judgeRetry / exhaustedComment 都取首行），
+  // 拼一长串反而会把判据要的那句挤掉。
+  const firstError = failed.length ? String(failed[0].error || failed[0].why || '').trim() : '';
   return {
     ok: failed.length === 0,
     unscanned: false,
     scanned: listed.length,
     drained: results.filter(r => r.ok).length,
     failed: failed.length,
+    ...(firstError ? { error: failed.length > 1 ? `${firstError}（共 ${failed.length} 张失败）` : firstError } : {}),
     results,
   };
 }

@@ -31,9 +31,16 @@ import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
 import { hasPendingLabel } from './pending-disambiguation.mjs';
 import { attributedIssueNumber } from './close-issue.mjs';
 import {
-  proposeAddLabel, validateRetryDrain, escalateToOpenIssue,
+  proposeAddLabel, validateRetryDrain, escalateToOpenIssue, stampedKey,
+  drainLedgerKey, epochOf, MAX_DRAIN_TRIES,
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
+// #1236：重试键的三件套（判据版本 / 键拼装 / drain 账键）转出去，让**测试与生产共用同一把键**。
+// 手拼字面量的测试在加版本那天会静默失配（测试假绿、生产卡死）——今天漏的是测试，
+// 明天就是写侧（#909 的形状）。
+export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
+// #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
+import { judgeRetry } from './retry-verdict.mjs';
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -94,11 +101,120 @@ export function attachReviewerWhy(ticket) {
   return `PR #${pr} 复审票来源没查成`;
 }
 
-/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。 */
-export function reworkKey(pr, head) { return `rework:${pr}@${head}`; }
+/** 返工去重键：同一 PR 同一 head 只派一次（#931 边界）。act 侧按它记 state.reworkDispatched。
+ *  #1236：带判据版本——决定「推不推得动」的代码变了，旧账自动作废（见 lib/retry-epoch.mjs）。 */
+export function reworkKey(pr, head) {
+  return stampedKey(`rework:${pr}@${head}`);
+}
 
-/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。 */
-export function pumpDraftKey(pr) { return `pump-draft:${pr}`; }
+/** #1147 draft 收口泵：次数按张计，不按 head。新提交只影响「超没超龄」，不重置次数。
+ *  #1236：同样带判据版本——泵不动的原因若是执行链坏了，修好后该重获机会。 */
+export function pumpDraftKey(pr) {
+  return stampedKey(`pump-draft:${pr}`);
+}
+
+/**
+ * #1236：复审键。原先在 decide / execute 各写一份字面量，这次抽成一个函数——
+ * 两处必须用**同一个**判据版本，写两份早晚分叉（#909 就是 decide 修了、写侧漏了，
+ * 账记到另一个格子，票还在队列却永远走不进 retry-drain）。
+ */
+export function rereviewKey(pr, head) {
+  return stampedKey(`rereview:${pr}@${head}`);
+}
+
+/**
+ * 「这张 PR 的认定红票投在哪个 commit 上」——**判红投在旧代码上**才是本函数要的答案。
+ *
+ * 2026-09-14 实咬（#1213 静默 16 小时）：红票投完、返工派成功、工人推了新 head，
+ * 新 head 上没人复审 → 叫审官 3 次失败 → 打认输标 → 永久焊死。而「返工已经落地、
+ * 那次判定已经过期」这个事实**盘面早就在报**（`rework-awaiting-recheck`），
+ * 只是没人拿它去解冻两处：认输标（`planExhaustedLabelClear` 的第 ④ 条）与复审重试账。
+ *
+ * 两处共用**这一份**结果——`#1233` 的教训就是同一个事实被两处各判一次，早晚分叉。
+ *
+ * 只收「没查成以外、红票确实不在当前 head 上」的条目：
+ *   · reviews 没查成 / 缺 commit_id / head 没查成 → 不进表（没依据，不据此解冻任何东西）；
+ *   · 无红票、或最后一条判定就是红且打在当前 head 上 → 不进表（那就是「真的刚判红」，该走返工）。
+ *
+ * @returns {Map<string, string>} PR 号 → 红票所在 commit oid（旧代码）
+ */
+export function staleRedBallots({ prs, reviewsByPr } = {}) {
+  const out = new Map();
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const raw = prReviewInput(reviewsByPr?.[pr.number]);
+    if (!Array.isArray(raw)) continue;         // reviews 没抓到 ⇒ 不进表（没查成 = 没依据）
+    const atHeadJudge = analyzeReviewsAtHead(raw, pr.headRefOid);
+    if (!atHeadJudge.scanned) continue;        // head 没查成 / 有判别态缺 commit_id ⇒ 不进表
+    if (atHeadJudge.atHead > 0) continue;      // 当前 head 上有判定 ⇒ 不是「红票投在旧代码上」
+    // 注意：这里**不能**读 atHeadJudge.latestRed —— 它只看打在当前 head 上的那几条，
+    // atHead === 0 时恒为 false（现场实测：红票投在 dc4c1dd7、head 是 56ad3686，它给 false）。
+    // 要问的是「这张 PR 的**全部**判定里，最后一条是不是红」，那是 analyzeReviews 的活儿。
+    const all = analyzeReviews(raw);
+    if (!all.scanned || all.latestRed !== true) continue;   // 末条不是红 ⇒ 与本判据无关
+    const red = [...raw].reverse().find((rv) => {
+      if (!rv || typeof rv !== 'object') return false;
+      if (normalizeReviewState(rv) !== 'CHANGES_REQUESTED') return false;
+      const cid = String(rv.commit_id || rv.commitId || '').trim();
+      return Boolean(cid);
+    });
+    const cid = red ? String(red.commit_id || red.commitId || '').trim() : '';
+    if (!cid || cid === String(pr.headRefOid || '').trim()) continue;
+    out.set(String(pr.number), cid);
+  }
+  return out;
+}
+
+/**
+ * 复审重试键：**同一份红票只该烧一次名额**。
+ *
+ * `rereview:<pr>@<head>` 只认 head，而「叫不动审官」这件事与 head 无关——同一张红票
+ * 叫 3 次失败就打认输（#1213 实测 3 次、#1096 3 次、#885 3 次）。可一旦红票**本来就投在旧代码上**，
+ * 那 3 次是在替「旧代码的红」烧的；工人已经推了新 head 之后，这笔账不该继续压着它。
+ *
+ * 所以键里带上红票所在 commit：红票换了（或红票过期了）⇒ 键变了 ⇒ tries 从 0 起算。
+ * 不带 `staleRedAt` 时行为与 `rereviewKey` 逐字一致（没依据永远退回旧行为）。
+ */
+export function rereviewBudgetKey(pr, head, staleRedAt) {
+  const oid = staleRedAt instanceof Map ? staleRedAt.get(String(pr)) : staleRedAt?.[pr];
+  const red = typeof oid === 'string' && oid.trim() ? oid.trim() : '';
+  return rereviewKey(pr, head) + (red ? `@red:${red}` : '');
+}
+
+/**
+ * 这份旧红票的**新**复审键已经试满——第 ④ 条解冻过一次之后，又走完了 `@red:<oid>` 名额。
+ *
+ * 不在这里再判「红票是不是投在旧代码上」（那是 `staleRedBallots` 的事）：本函数只读
+ * `rereviewBudgetKey` 算出来的键在账本里的 tries。键没带 `@red:`（没有旧红票 / 没注入表）
+ * 或 tries 不到上限 → 不收。`planExhaustedLabelClear` 拿这张表当 ④ 的一次性消费。
+ *
+ * 旧键 `rereview:<pr>@<head>` 试满不算——那正是 ④ 要解冻的那一轮（9 张现场 PR 的账）。
+ *
+ * @returns {Map<string, string>} PR 号 → 已经试满的那张红票 oid
+ */
+export function spentStaleReds({ prs, staleRedAt, reworkDispatched } = {}) {
+  const out = new Map();
+  const reds = staleRedAt instanceof Map
+    ? staleRedAt
+    : (staleRedAt && typeof staleRedAt === 'object' && !Array.isArray(staleRedAt)
+      ? new Map(Object.entries(staleRedAt)) : new Map());
+  const book = reworkDispatched && typeof reworkDispatched === 'object' ? reworkDispatched : {};
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : '';
+    if (!head) continue;
+    const k = rereviewBudgetKey(pr.number, head, reds);
+    const marker = k.lastIndexOf('@red:');
+    if (marker < 0) continue;
+    const tries = Number(book[k]?.tries) || 0;
+    if (tries < MAX_REREVIEW_TRIES) continue;
+    const red = k.slice(marker + 5);
+    if (red) out.set(String(pr.number), red);
+  }
+  return out;
+}
+
+
 
 /**
  * 老单还有没有可执行动作（审查入队 / 判红返工 / 冲突 / 收口泵）。
@@ -493,6 +609,10 @@ export const ACTION_NEEDS = {
   // 回收死票要同时知道「队列里有什么」和「哪些 PR 还开着」——少一节都会把活票当死票剪掉。
   'reap-ticket': ['github', 'reviewPending'],
   // 摘「自动化认输」标要知道 PR 的当前 head 与 labels（都在 github 节）。
+  // 2026-09-14：第 ④ 条（红票投在旧代码上）要 prReviews——但**不**加进依赖节：
+  // 「reviews 没查成 ⇒ 连『推了新 head 该摘标』都不做」是把一条独立判据连坐停了。
+  // reviews 没查成时 staleRedAt 为空表，第 ④ 条自然不成立，其余三条照常。fail-closed 落在
+  // 判据内部（缺证据 ⇒ 不动手），不是靠把 github 节也一起停掉。
   'clear-exhausted': ['github'],
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
@@ -552,6 +672,13 @@ function collectCandidates(situation) {
   const stall = situation.stall || {};
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
+  // 「认定红票投在旧代码上」这张表由**调用方**注入（commander.mjs 用 staleRedBallots 算一次，
+  // 与 planExhaustedLabelClear 共用同一份）——decide 是纯函数，不自己再扫一遍 reviews：
+  // 同一个事实两处各判一次，早晚分叉（#1233 的教训）。没注入 = 空表 = 这两条解冻永不成立。
+  const staleRedAt = situation.staleRedAt instanceof Map
+    ? situation.staleRedAt
+    : (situation.staleRedAt && typeof situation.staleRedAt === 'object'
+      ? new Map(Object.entries(situation.staleRedAt)) : new Map());
   const effectiveMergeability = new Map();
   // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
   const nowMs = Date.parse(situation.at || '') || 0;
@@ -926,6 +1053,16 @@ function collectCandidates(situation) {
       prs: prList,
       ledger: situation.exhaustedPush || {},
       pushedThisRound: [],
+      // #1238：带上本轮判据版本。判据改过 → 按旧判据打的认输标自动过期。
+      epoch: epochOf().epoch,
+      // 第 ④ 条：认定红票投在旧代码上 = 返工已落地、判定已过期。与复审重试账**同一份**表
+      // （commander.mjs 算一次传进来），不在这里再扫一遍 reviews。
+      staleRedAt: situation.staleRedAt || null,
+      // ④ 的一次性消费：这份旧红票的 `@red:<oid>` 键已经试满 → 不再摘。
+      // 用生产侧同一把键算，不在 exhausted.mjs 里重写一份（#1233：同一事实两处各判会分叉）。
+      spentStaleReds: spentStaleReds({
+        prs: prList, staleRedAt, reworkDispatched,
+      }),
     });
     for (const c of clearPlan.clears) {
       out.push(withNeeds({
@@ -971,7 +1108,11 @@ function collectCandidates(situation) {
       continue;
     }
     if (drain.code === 'grace') continue;
-    if (drain.code === 'exhausted') {
+    // #1237：'hopeless' 与 'exhausted' 都产认输动作，但**理由不一样**，评论也要不一样：
+    //   hopeless  = 判据本身就是「拒」，一次都不该试 → 不该写「试了 N 次仍没推动」
+    //   exhausted = 真试满了，机械重试确实无解
+    // 混成一句话会误导读的人往错方向查（这正是 #1233 认输评论那个病的同一个形状）。
+    if (drain.code === 'exhausted' || drain.code === 'hopeless') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
       if (ticketRepo) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
@@ -980,6 +1121,8 @@ function collectCandidates(situation) {
       out.push(withNeeds(buildMarkExhausted({
         pr: it.pr, verb: 'drain', tries, head: itHead,
         why: drain.error,
+        retryVerdict: drain.retryVerdict || (drain.code === 'hopeless' ? 'terminal' : null),
+        maxTries: MAX_DRAIN_TRIES,
       }), N['mark-exhausted']));
       exhaustedThisRound.add(Number(it.pr));
       continue;
@@ -1019,19 +1162,78 @@ function collectCandidates(situation) {
       const tries = Number(prev.tries) || 1;
       const ageMin = (nowMs - (Date.parse(prev.at || '') || 0)) / 60000;
       if (Number.isFinite(ageMin) && ageMin < REWORK_RETRY_GRACE_MIN) return;
-      if (tries >= MAX_REWORK_TRIES) {
+      // #1237：先问「这个失败再试一次会不会不一样」，再决定烧不烧名额。
+      // 不可试的（树没了 / 标签缺 / 执行目录判死）当场交人，别白等 3×宽限期。
+      const rworkVerdict = judgeRetry({ error: prev.lastError || prev.error });
+      if (tries >= MAX_REWORK_TRIES || rworkVerdict.verdict === 'terminal') {
         if (prHasStuckLabel(pr)) return;
+        const hopeless = rworkVerdict.verdict === 'terminal' && tries < MAX_REWORK_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rework', tries, head,
-          why: `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
+          retryVerdict: rworkVerdict.verdict,
+          maxTries: MAX_REWORK_TRIES,
+          why: hopeless
+            ? `PR #${pr.number} 返工派不动，且这个失败重试不会变（第 ${tries} 次即交人）——${prev.lastError || prev.error || '无原文'}`
+            : `PR #${pr.number} 返工派了 ${tries} 次都没派成（当前 head ${String(head).slice(0, 8)}）——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         return;
       }
     }
     const issueNo = attributedIssueNumber(pr);
+    // 无署名 issue（pr-fast 快路，`host/skills/pr-fast/SKILL.md`：快路不收 issue）**不挡返工**。
+    //
+    // 2026-09-14 用户拍板「你决定如何推进」。原先这里当场报帅（`rework-no-issue`），
+    // 代价是快路 PR 一旦判红就永久停在这——审官的红项躺在 GitHub 上没人接，而报帅单
+    // 只是把「merge-policy 取不到」这件事又说了一遍，它拦不住任何真实风险：
+    //   · 返工的**动作**（照红项改）跟署名 issue 一点关系都没有；
+    //   · 唯一真依赖 issue 的是 **merge-policy**（human_holds 分类写在 issue 正文上，#1099）。
+    //     取不到就是「不许放行 auto」——那就是 **manual**，与 `mergePolicyUnscanned` 同一个
+    //     失败方向（本文件上面那条：没查成一律 manual，不许退回 auto）。
+    //
+    // 所以：无署名 ⇒ mergePolicy: manual + 如实写清理由，返工照派。
+    // 判据**没有放宽**：没有 human_holds 证据 ⇒ 不许自动合；只是不再把「推不动」当成处置。
     if (issueNo == null) {
-      out.push(withNeeds(esc(`PR #${pr.number} 要返工，但正文/标题里没有署名 issue——merge-policy 无从取，报帅`, { reason: 'rework-no-issue', pr: pr.number }), N.rework));
+      const rModel0 = labelValue(pr, 'model/');
+      const rReviewer0 = labelValue(pr, 'reviewer/');
+      if (!rModel0 || !rReviewer0) {
+        const filled0 = maybeAddLabel(pr, situation, {
+          on: 'pr',
+          pr: pr.number,
+          why: `PR #${pr.number} 要返工，PR 上缺 ${!rModel0 ? 'model/' : ''}${!rModel0 && !rReviewer0 ? '、' : ''}${!rReviewer0 ? 'reviewer/' : ''}——补唯一跨厂标签`,
+        }, N['add-label']);
+        if (filled0) { out.push(filled0); return; }
+        out.push(withNeeds(esc(`PR #${pr.number} 要返工，但 PR 上缺 ${!rModel0 ? 'model/' : ''}${!rModel0 && !rReviewer0 ? '、' : ''}${!rReviewer0 ? 'reviewer/' : ''} 标签，需人工打标（不读 issue、不猜）`, {
+          reason: 'missing-labels', pr: pr.number, title: pr.title || '',
+        }), N.rework));
+        return;
+      }
+      let g0 = assessDispatchModel(rModel0, { policy, enabledIds, redIds });
+      let model0 = rModel0;
+      let sub0 = null;
+      if (!g0.ok && (g0.reason === 'model-not-in-routing' || g0.reason === 'model-health-red')) {
+        const fb = situation.defaultWorkerModel;
+        const fbGate = fb ? assessDispatchModel(fb, { policy, enabledIds, redIds }) : { ok: false };
+        if (fb && fbGate.ok) { sub0 = { from: rModel0, to: fb, why: g0.why }; model0 = fb; g0 = fbGate; }
+      }
+      if (!g0.ok) {
+        out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${g0.why}`, { reason: g0.reason, pr: pr.number, model: rModel0 }), N.rework));
+        return;
+      }
+      if (!takeFinishSlot()) { reportAdmission(N.rework); return; }
+      reworkThisRound += 1;
+      out.push(withNeeds({
+        kind: 'rework', pr: pr.number, head, issue: null,
+        model: model0, reviewer: rReviewer0, redRounds,
+        title: pr.title || '', brief, reworkKey: rkey, conflict,
+        mergePolicy: 'manual',
+        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergePolicySource: 'no-issue',
+        ...(sub0 ? { substitutedModel: sub0 } : {}),
+        why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
+          + '；merge-policy:manual（无署名 issue，不许放行 auto）',
+      }, N.rework));
+      out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
       return;
     }
     // 署名单仍要扫到：merge-policy / human_holds 写在 issue 正文上（#1099）。
@@ -1321,16 +1523,23 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = `rereview:${pr.number}@${a.head}`;
+      const rrKey = rereviewBudgetKey(pr.number, a.head, staleRedAt);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
       if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
       const firstRound = a.judgedTotal === 0;
-      if (tries >= MAX_REREVIEW_TRIES) {
+      // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
+      const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
+        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: a.head,
-          why: `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+          retryVerdict: rrVerdict.verdict,
+          maxTries: MAX_REREVIEW_TRIES,
+          why: hopeless
+            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
+            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;

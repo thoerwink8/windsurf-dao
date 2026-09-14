@@ -31,6 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { modelFamily } from './execution-catalog.mjs';
 
 export const METRICS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'totalTokens', 'durationMs'];
 export const DEFAULT_LIMITS = Object.freeze({ maxSources: 4096, maxEntries: 30000, maxBytesPerSource: 4 * 1024 * 1024, maxLineBytes: 1024 * 1024, maxJsonBytes: 16 * 1024 * 1024, maxRows: 100000, maxGroups: 10000, maxRecords: 20000, maxCommittedPerRun: 1000 });
@@ -60,10 +61,45 @@ function value(objects, keys) {
   }
   return null;
 }
-function providerName(value, agent) {
+// Protocol / gateway ids are not vendors. #1174 T3: grok-4.6 via
+// openai-responses + cli-chat-proxy.grok.com was split into openai vs xai.
+const PROTOCOL_PROVIDERS = new Set(['openai-responses', 'openai-chat']);
+const AGENT_VENDOR = Object.freeze({ grok: 'xai', cursor: 'cursor', devin: 'cognition', windsurf: 'windsurf', claude: 'anthropic', codex: 'openai' });
+function isProtocol(p) {
+  return PROTOCOL_PROVIDERS.has(p);
+}
+function isGateway(p) {
+  if (!p) return false;
+  return /(?:^|-)(?:relay|pqapi|newapi)(?:-|$)/i.test(p) || p.startsWith('newapi-');
+}
+function hostVendor(host) {
+  const h = String(host || '').toLowerCase();
+  if (!h) return null;
+  if (/(?:^|\.)(?:grok\.com|x\.ai)$/.test(h)) return 'xai';
+  if (/(?:^|\.)openai\.com$/.test(h)) return 'openai';
+  if (/(?:^|\.)anthropic\.com$/.test(h)) return 'anthropic';
+  return null;
+}
+function asVendor(value) {
   const p = label(value);
-  if (p) return ({ 'openai-responses': 'openai', 'openai-chat': 'openai', 'x.ai': 'xai' })[p] || p;
-  return ({ grok: 'xai', cursor: 'cursor', devin: 'cognition', windsurf: 'windsurf', claude: 'anthropic', codex: 'openai' })[agent] || null;
+  if (!p || isProtocol(p) || isGateway(p)) return null;
+  if (p === 'x.ai') return 'xai';
+  if (p.endsWith('-native')) {
+    const base = p.slice(0, -7);
+    return asVendor(base);
+  }
+  return p;
+}
+function vendorName({ billingProvider, actualVendor, contextProvider, model, agent, upstreamHost } = {}) {
+  const family = modelFamily(model);
+  return first(
+    asVendor(billingProvider),
+    asVendor(actualVendor),
+    family !== 'unknown' ? family : null,
+    hostVendor(upstreamHost),
+    asVendor(contextProvider),
+    AGENT_VENDOR[agent] || null,
+  );
 }
 function money(x, fallbackUnit = null) {
   if (typeof x === 'number') return { amount: number(x), unit: label(fallbackUnit) };
@@ -107,8 +143,17 @@ export function normalizeUsage({ agent, source = 'unknown', event = {}, context 
   if (!callId && s === 'mirasim-ledger' && sessionId && eventId?.startsWith(`${sessionId}:`)) callId = eventId.slice(sessionId.length + 1);
   const callIds = unique([callId, label(root.callId), label(root.relayCallId), s === 'mirasim-ledger' && sessionId && eventId?.startsWith(`${sessionId}:`) ? eventId.slice(sessionId.length + 1) : null]);
   const profileId = label(first(c.profileId, root.profileId));
-  const reportedProvider = label(first(root.provider, e.provider, c.provider));
-  const provider = providerName(first(root.billingProvider, e.billingProvider, c.provider, reportedProvider), a);
+  const reportedProvider = label(first(root.provider, e.provider));
+  const model = displayLabel(first(e.model, root.model, u.model, root.agent?.model_name, envelope.model, c.model, Object.keys(object(u.modelUsage)).length === 1 ? Object.keys(u.modelUsage)[0] : null));
+  const upstreamHost = label(first(root.upstreamHost, e.upstreamHost, c.upstreamHost));
+  const provider = vendorName({
+    billingProvider: first(root.billingProvider, e.billingProvider),
+    actualVendor: first(c.actualVendor, root.actualVendor, e.actualVendor),
+    contextProvider: c.provider,
+    model,
+    agent: a,
+    upstreamHost,
+  });
   const route = label(first(root.route, e.route, typeof root.viaRelay === 'boolean' ? (root.viaRelay ? 'relay' : 'direct') : null, c.route));
   const poolMap = object(c.accountPools);
   const accountPoolId = label(first(c.accountPoolId, poolMap[profileId], poolMap[a], root.accountPoolId));
@@ -116,7 +161,8 @@ export function normalizeUsage({ agent, source = 'unknown', event = {}, context 
   // account object is copied. Pool aliases are operator-supplied, never dedup keys.
   const rawAccount = first(c.accountId, root.accountId, e.accountId);
   const accountId = (typeof rawAccount === 'string' || typeof rawAccount === 'number') ? `acct:${digest(String(rawAccount))}` : null;
-  const billingSource = displayLabel(first(root.billingSource, root.billing_source, e.billingSource, u.billingSource, c.billingSource, route === 'relay' || route === 'cloud' ? 'mirasim-relay' : null, reportedProvider, provider));
+  const viaRelay = root.viaRelay === true || e.viaRelay === true || root.leg === 'relay' || e.leg === 'relay' || upstreamHost === 'relay.mirasim.ai';
+  const billingSource = displayLabel(first(root.billingSource, root.billing_source, e.billingSource, u.billingSource, c.billingSource, route === 'relay' || route === 'cloud' || viaRelay ? 'mirasim-relay' : null, asVendor(reportedProvider), provider));
   let kind = label(first(c.usageKind, e.usageKind, u.usageKind, root.usageKind));
   let scope = label(first(c.usageScope, e.usageScope, u.scope, root.usageScope));
   const cumulative = first(e.cumulative, u.cumulative, root.cumulative);
@@ -134,7 +180,6 @@ export function normalizeUsage({ agent, source = 'unknown', event = {}, context 
     }
   }
   if (!['call', 'turn', 'session', 'account'].includes(scope)) scope = 'session';
-  const model = displayLabel(first(e.model, root.model, u.model, root.agent?.model_name, envelope.model, c.model, Object.keys(object(u.modelUsage)).length === 1 ? Object.keys(u.modelUsage)[0] : null));
   const estimate = money(first(u.estimatedCost, root.estimatedCost, root.costEstimate, u.cost_usd, root.total_cost_usd, root.cost_usd), 'USD');
   // Grok ticks have a reported unit, not an assumed USD conversion or a charge.
   if (estimate.amount === null && number(u.costUsdTicks) !== null) Object.assign(estimate, { amount: u.costUsdTicks, unit: 'USD_ticks' });
@@ -438,9 +483,12 @@ function readMetadata(home, limits, gaps) {
     if (!f.endsWith('.json')) return;
     try {
       const c = object(json(f));
-      for (const key of unique([c.sessionKey, c.sessionId, c.backendSessionId, decodeURIComponent(path.basename(f, '.json'))])) {
+      // vendorTaskId is the Mirasim backend UUID. Insights usage.sessionId is
+      // that UUID, not dispatch sessionKey (`grok:<dispatchId>`). Skip it and
+      // every group stays accountPoolId=null (#1174 T3).
+      for (const key of unique([c.sessionKey, c.sessionId, c.backendSessionId, c.vendorTaskId, decodeURIComponent(path.basename(f, '.json'))])) {
         map.set(key, c);
-        if (typeof key === 'string' && key.startsWith(`${c.agent}:`)) map.set(key.slice(c.agent.length + 1), c);
+        if (typeof key === 'string' && c.agent && key.startsWith(`${c.agent}:`)) map.set(key.slice(c.agent.length + 1), c);
       }
     } catch { gaps.push('invalid_context'); }
   });
