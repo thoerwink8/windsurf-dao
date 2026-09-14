@@ -47,6 +47,46 @@ it('failed rework still recovers on unchanged head despite a passing CI', async 
   }
 });
 
+it('UNKNOWN mergeable after worker-done is waiting, not a dead worker', async () => {
+  const { decide } = await import('../scripts/lib/commander-core.mjs');
+  const issue = {
+    number: 1133,
+    title: '短命会话',
+    body: '',
+    labels: ['已消歧', 'model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/体系'].map((name) => ({ name })),
+  };
+  const pr = {
+    number: 1253,
+    title: '回收幽灵',
+    body: '署名 issue #1133。关单交给 scripts/close-issues.mjs。',
+    isDraft: false,
+    headRefOid: 'new-head',
+    mergeable: 'UNKNOWN',
+    labels: [
+      { name: 'model/grok-4.6' },
+      { name: 'reviewer/gpt-5.6-luna' },
+      { name: 'type/体系' },
+      { name: '卡死/自动化认输' },
+    ],
+    statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
+  const r = decide({
+    github: { scanned: true, issues: [issue], prs: [pr] },
+    trees: { scanned: true, worktrees: [] },
+    reviewPending: { scanned: true, items: [] },
+    stall: { scanned: true, strikes: {} },
+    prReviews: { scanned: true, byPr: { 1253: { reviews: [{ state: 'CHANGES_REQUESTED', body: '旧 head 的红', commit_id: 'old-head' }] } } },
+    sessions: { scanned: true, items: [{ key: 'grok:old', state: 'stopped', cwd: '/tmp/dao-1133' }] },
+    desiredJobs: { items: [{ job_id: 'old', identity: '工人', issue: 1133, model: 'grok-4.6' }] },
+    viewMergeable: () => ({ ok: true, mergeable: 'UNKNOWN' }),
+    commanderPolicy: { requireModelInRouting: false },
+    healthRedModels: [],
+    routingModels: ['grok-4.6', 'gpt-5.6-luna'],
+  });
+  const recovery = r.actions.filter((a) => ['dispatch', 'rework'].includes(a.kind) && a.issue === 1133);
+  assert.equal(recovery.length, 0, JSON.stringify(recovery));
+});
+
 it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
   const { isLiveSession } = await LOAD;
   for (const state of ['stopped', 'rejected', 'gone', 'finished']) {

@@ -1220,11 +1220,19 @@ function collectCandidates(situation) {
     // 改法（最小）：只让「判绿」这一件事穿过这层标，其余动作照旧被认输挡住。
     // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」；
     // 真合不了的情况下面各道判据（CI 红、draft、冲突、head 零判定）各自会拦。
+    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
+    // 认输 PR 也要写入 map——后面差集重派读这张表。以前 `continue` 跳过写入，
+    // 差集拿到列表上的 UNKNOWN，把「GitHub 还在算」当成「工人死了」再派一个（#1133 / PR #1253）。
+    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
+    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
+    effectiveMergeability.set(pr.number, mergeableState);
+    const mergeableNow = mergeableState === 'MERGEABLE';
+
     const stuck = prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number));
     if (stuck) {
       const headR = pr.headRefOid;
       const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);
-      const mergeableR = String(resolveMergeable(pr, { viewMergeable: situation.viewMergeable }).mergeable || '').toUpperCase() === 'MERGEABLE';
+      const mergeableR = mergeableNow;
       // CI 是非卖品：例外只放「判绿」过去，不许绕过 CI 那道闸（写完本条时自己测出来的）。
       const ciR = prChecksRed(pr);
       if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
@@ -1256,11 +1264,6 @@ function collectCandidates(situation) {
       atHead: mergeA.scanned ? mergeA.atHead : null,
       lastJudgment: lastJudgmentOf(allA),
     });
-    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
-    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
-    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
-    effectiveMergeability.set(pr.number, mergeableState);
-    const mergeableNow = mergeableState === 'MERGEABLE';
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
@@ -1545,8 +1548,10 @@ function collectCandidates(situation) {
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
       openPrs: gh.scanned ? (gh.prs || []).map(pr => {
         const review = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
-        const mergeable = effectiveMergeability.get(pr.number) || pr.mergeable;
-        return { ...pr, reworkRequired: mergeable !== 'MERGEABLE' || !review.scanned || review.latestRed === true };
+        const mergeable = String(effectiveMergeability.get(pr.number) || pr.mergeable || '').toUpperCase();
+        // 差集「已交卷等审查」只在真冲突 / 当前 head 真红时才叫工人回来。
+        // UNKNOWN、审查没查成 ≠ 冲突：那是没查成，按 #1056 当有人在做，不许再派工人。
+        return { ...pr, reworkRequired: mergeable === 'CONFLICTING' || (review.scanned === true && review.latestRed === true) };
       }) : null,
       alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
