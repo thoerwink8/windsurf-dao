@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import {createExecutionRuntime} from './lib/execution-runtime.mjs';
-import {EXECUTION_WAITING} from './lib/execution-states.mjs';
+import {EXECUTION_WAITING,sessionStateOf} from './lib/execution-states.mjs';
 import {pathToFileURL} from 'node:url';
 export function normalizeExecutionSession(s) {
   const interactions=s.interactions||s.snapshot?.interactions||[];
-  const phase=String(s.phase??s.state??s.runState??'').toLowerCase();
+  const phase=sessionStateOf(s)||'';
   const waiting=s.awaiting===true||EXECUTION_WAITING.has(phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
-  const failed=!!s.error||['error','failed','aborted'].includes(s.phase);
+  const failed=!!s.error||['error','failed','aborted'].includes(phase);
   return {key:s.sessionKey??s.key??s.id??null,title:s.title??null,
-    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':s.phase??s.runState??s.state??null,
+    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':phase||null,
     cwd:s.workdir??s.cwd??null,lastActivityAt:s.seatAt??s.updatedAt??s.lastActivityAt??null,
     backend:String(s.sessionKey??s.key??'').startsWith('acp:')?'acp':'mirasim'};
 }

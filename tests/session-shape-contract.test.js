@@ -166,5 +166,9 @@ describe('状态词表只有一份正典（防手打副本漂移）', () => {
     const CORE_SRC = fs.readFileSync(path.join(LIB, 'commander-core.mjs'), 'utf8');
     assert.equal(/s\.runState\s*\?\?|s\.runState\s*\|\|/.test(CORE_SRC), false,
       'commander-core 同样走正典');
+    const ES = fs.readFileSync(path.join(REPO, 'scripts', 'execution-sessions.mjs'), 'utf8');
+    assert.match(ES, /sessionStateOf/, 'execution-sessions 必须走正典读状态，不许 phase 优先于 state');
+    assert.equal(/s\.phase\s*\?\?\s*s\.state/.test(ES), false,
+      'normalizeExecutionSession 不许再手写 phase??state（#1174 返工：waiting_user 会被盖成 running）');
   });
 });
