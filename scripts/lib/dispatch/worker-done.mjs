@@ -529,9 +529,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  if (!issue) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
-  }
+  // 快路 PR 没有署名单号是正常形态（pr-fast；指挥官 2026-09-14：无署名不挡返工）。
+  // 完工 comment 发 PR；有署名单才再发 issue。不许把「没单号」说成「没处可发」。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
