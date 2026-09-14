@@ -11,6 +11,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
@@ -227,6 +228,191 @@ describe('#581 合并后补 job.closed', () => {
     const r = execMerge({ pr: 1234 }, { say: silent, run, judge: () => ({ state: OK }),
       ledgerClose: () => { throw new Error('账本目录只读'); } });
     assert.equal(r.ok, true, '账本写不了是 ⑰ 的事，不是合并失败  →  ' + JSON.stringify({ ok: r.ok, error: r.error }));
+  });
+
+  it('execMerge 把 run 传给 ledgerClose，合并后能重读 reviews', async () => {
+    const { execMerge } = await CMD;
+    const { OK } = await HC;
+    const { run } = runOk();
+    let seen = null;
+    execMerge({ pr: 1234, why: '判绿可合' }, {
+      say: silent, run, judge: () => ({ state: OK }),
+      ledgerClose: (a) => { seen = a; return { ok: true }; },
+    });
+    assert.equal(typeof seen.run, 'function');
+    assert.equal(seen.pr, 1234);
+  });
+});
+
+const JOB = import('file://' + path.join(REPO, 'scripts', 'lib', 'ledger-job.mjs').replace(/\\/g, '/'));
+const DJ = import('file://' + path.join(REPO, 'scripts', 'lib', 'dianjiangtai-core.mjs').replace(/\\/g, '/'));
+const CAL = import('file://' + path.join(REPO, 'scripts', 'calibrate.mjs').replace(/\\/g, '/'));
+const SCHEMA = JSON.parse(fs.readFileSync(path.join(REPO, 'schemas', 'events.schema.json'), 'utf8'));
+
+function loadDirEvents(dir) {
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) =>
+    JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+}
+
+describe('#1228 合并后 job.closed 归真实模型、不伪造零返工', () => {
+  const silent = () => {};
+  const ts = '2026-09-14T12:00:00+08:00';
+
+  function tempCtx() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'closed-1228-'));
+    return { dir, schema: SCHEMA, machine: 'TEST-1228' };
+  }
+
+  it('dispatch=gpt-5.6-luna 的成功合并，能力账样本模型是 luna 不是 commander', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId } = await JOB;
+    const { buildSamples } = await DJ;
+    const ctx = tempCtx();
+    try {
+      const d = writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(12281), model: 'gpt-5.6-luna', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 12281,
+      });
+      assert.equal(d.ok, true, d.error);
+      const out = recordJobClosed({
+        pr: 12281, why: '判绿可合', say: silent, ctx,
+        reviews: [{ state: 'APPROVED', body: '判定：绿' }],
+      });
+      assert.equal(out['工人'].ok, true, out['工人'].error);
+      assert.equal(out['工人'].event.merged_by, 'gpt-5.6-luna');
+      assert.equal(out['审官'].skipped, 'no-dispatch');
+
+      const { samples } = buildSamples({
+        events: loadDirEvents(ctx.dir),
+        at: '2099-01-01T00:00:00+08:00',
+        registryByModel: {
+          'gpt-5.6-luna': { version: 'gpt-5.6-luna' },
+          commander: { version: 'commander' },
+        },
+      });
+      const hit = samples.filter((s) => s.jobId === 'gh-pr-12281');
+      assert.equal(hit.length, 1);
+      assert.equal(hit[0].model, 'gpt-5.6-luna');
+      assert.equal(samples.some((s) => s.model === 'commander'), false);
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('审官 dispatch 的 merged_by 是审官模型，不是 reviewer', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId, reviewerJobId } = await JOB;
+    const ctx = tempCtx();
+    try {
+      writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(12282), model: 'gpt-5.6-luna', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 12282,
+      });
+      writeJobDispatch({
+        ...ctx, ts, jobId: reviewerJobId(12282), model: 'gpt-5.6-sol', identity: '审官',
+        workType: '审查', terminal: 'test', prNumber: 12282,
+      });
+      const out = recordJobClosed({
+        pr: 12282, why: '判绿可合', say: silent, ctx,
+        reviews: [{ state: 'APPROVED' }],
+      });
+      assert.equal(out['审官'].ok, true, out['审官'].error);
+      assert.equal(out['审官'].event.merged_by, 'gpt-5.6-sol');
+      assert.equal(out['工人'].event.merged_by, 'gpt-5.6-luna');
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('先红后绿写入 worker_rework=1，不是零返工', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId } = await JOB;
+    const ctx = tempCtx();
+    try {
+      writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(12283), model: 'grok-4.6', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 12283,
+      });
+      const out = recordJobClosed({
+        pr: 12283, why: '判绿可合', say: silent, ctx,
+        reviews: [
+          { state: 'CHANGES_REQUESTED', body: '判定：红 2 项' },
+          { state: 'APPROVED', body: '判定：绿' },
+        ],
+      });
+      const ev = out['工人'].event;
+      assert.equal(out['工人'].ok, true, out['工人'].error);
+      assert.equal(ev.rework, true);
+      assert.equal(ev.worker_rework, 1);
+      assert.equal(ev.red_flags, 1);
+      assert.equal(ev.verdict_rounds, 2);
+      assert.notEqual(ev.attribution_source, 'unscanned');
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reviews 没查成不伪造零返工', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId } = await JOB;
+    const { reworkFromClosed } = await CAL;
+    const ctx = tempCtx();
+    try {
+      writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(12284), model: 'grok-4.6', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 12284,
+      });
+      const out = recordJobClosed({
+        pr: 12284, why: '判绿可合', say: silent, ctx,
+        reviewsUnscanned: true, reviewsError: 'gh 失败',
+      });
+      const ev = out['工人'].event;
+      assert.equal(out['工人'].ok, true, out['工人'].error);
+      assert.equal(ev.attribution_source, 'unscanned');
+      assert.equal(ev.worker_rework, undefined);
+      assert.equal(ev.red_flags, undefined);
+      assert.equal(reworkFromClosed(ev), null);
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('无 dispatch 的合并链 merged_by=unknown，不写 commander', async () => {
+    const { recordJobClosed } = await CMD;
+    const ctx = tempCtx();
+    try {
+      const out = recordJobClosed({
+        pr: 12285, why: '判绿可合', say: silent, ctx,
+        reviews: [{ state: 'APPROVED' }],
+      });
+      assert.equal(out['工人'].ok, true, out['工人'].error);
+      assert.equal(out['工人'].event.merged_by, 'unknown');
+      assert.equal(out['审官'].skipped, 'no-dispatch');
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gh 读 reviews 失败走 unscanned，不伪造 rework:false 当已知零', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId } = await JOB;
+    const { reworkFromClosed } = await CAL;
+    const ctx = tempCtx();
+    try {
+      writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(12286), model: 'grok-4.6', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 12286,
+      });
+      const out = recordJobClosed({
+        pr: 12286, why: '判绿可合', say: silent, ctx,
+        run: () => ({ ok: false, error: 'gh down' }),
+      });
+      const ev = out['工人'].event;
+      assert.equal(ev.attribution_source, 'unscanned');
+      assert.equal(reworkFromClosed(ev), null);
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
   });
 });
 

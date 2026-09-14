@@ -40,7 +40,10 @@ import {
   gatewayIdemKey, escalateRoundSeed,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
-import { loadLedgerContext, writeJobClosed, workerJobId, reviewerJobId, beijingIsoFrom } from './lib/ledger-job.mjs';
+import {
+  loadLedgerContext, writeJobClosed, workerJobId, reviewerJobId, beijingIsoFrom,
+  findJobDispatch, mergedByForClosed, verdictStatsFromReviews, scopeOverridesFor,
+} from './lib/ledger-job.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
@@ -1035,9 +1038,19 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
   // 会让指挥官下一轮再合一次。写不了就当场说出来，⑰ 会红——那是 ⑰ 该管的事。
   // 也不并进上面那个 failed（那是 #1235 的记账步骤）：job.closed 写不了同样不该触发再合一次。
   let closed;
-  try { closed = ledgerClose({ pr: action.pr, why: action.why, say }); }
+  try { closed = ledgerClose({ pr: action.pr, why: action.why, say, run }); }
   catch (e) { say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`); }
   return { ok: true, calls, freshness, failed, ledger: closed };
+}
+
+/** 合并后重读当前 PR 的判别态 review。没查成必须标 unscanned，不许当成零返工。 */
+function loadPrReviewsForClosed(pr, { run = runCmd } = {}) {
+  const viewed = parseGhJson(run, ['pr', 'view', String(pr), '--json', 'reviews'], `PR #${pr} reviews`);
+  if (!viewed.ok) return { ok: false, unscanned: true, reviews: null, error: viewed.error };
+  if (!viewed.json || !Array.isArray(viewed.json.reviews)) {
+    return { ok: false, unscanned: true, reviews: null, error: `PR #${pr} 缺 reviews 数组（没查成，不许当零返工）` };
+  }
+  return { ok: true, unscanned: false, reviews: viewed.json.reviews };
 }
 
 /**
@@ -1051,18 +1064,81 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
  *
  * 时机选在合并**成功之后**：失败路径不该记终态。写失败**不拦合并**（合并已经发生了，
  * 回滚不了），但必须当场说出来——静默失败正是它上次断六周的原因。
+ *
+ * merged_by 取对应 job.dispatch 的真实模型（handoff 后是接手者），不是角色名
+ * commander/reviewer——能力账 buildSamples 优先信 merged_by，写错模型会污染正样本。
+ * 返工字段按当前 PR 的判别态 review 写入；查不成走 attribution_source=unscanned，
+ * 不伪造 rework:false。
  */
-export function recordJobClosed({ pr, why = '', say = () => {} } = {}) {
+export function recordJobClosed({
+  pr, why = '', say = () => {},
+  ctx: injectedCtx,
+  run = runCmd,
+  reviews,
+  reviewsUnscanned = false,
+  reviewsError = '',
+} = {}) {
   try {
-    const ctx = loadLedgerContext({ root: ROOT });
+    const ctx = injectedCtx || loadLedgerContext({ root: ROOT });
     const ts = beijingIsoFrom(new Date());
+    const ledger = readLedgerEvents(ctx.dir);
+    const events = ledger.events || [];
+    const ledgerUnscanned = ledger.unscanned === true;
+
+    let reviewList = reviews;
+    let unscanned = reviewsUnscanned === true;
+    let unscannedError = reviewsError || '';
+    if (reviewList === undefined && !unscanned) {
+      const loaded = loadPrReviewsForClosed(pr, { run });
+      if (!loaded.ok || loaded.unscanned) {
+        unscanned = true;
+        unscannedError = loaded.error || 'reviews 没查成';
+        reviewList = [];
+      } else {
+        reviewList = loaded.reviews;
+      }
+    }
+    if (!Array.isArray(reviewList)) {
+      unscanned = true;
+      unscannedError = unscannedError || `PR #${pr} reviews 不是数组`;
+      reviewList = [];
+    }
+
+    const stats = verdictStatsFromReviews(reviewList, {
+      overrides: scopeOverridesFor(events, { prNumber: pr }),
+      unscanned,
+      unscannedError,
+    });
+    const statsUnscanned = stats.attributionSource === 'unscanned';
+    const knownRework = stats.workerRework != null;
+    const note = [stats.attributionNote, String(why || '').slice(0, 200)].filter(Boolean).join('；');
+
     const out = {};
     for (const [side, jobId] of [['工人', workerJobId(pr)], ['审官', reviewerJobId(pr)]]) {
       // 审官那次只在真派过审官时记（没派审官的单记一条不存在的终态＝伪造历史）。
-      if (side === '审官' && !hasReviewerDispatch(ctx, jobId)) { out[side] = { skipped: 'no-dispatch' }; continue; }
-      out[side] = writeJobClosed({ ...ctx, ts, jobId, success: true, rework: false,
-        mergedBy: side === '审官' ? 'reviewer' : 'commander',
-        prNumber: pr, attributionSource: 'commander-merge', attributionNote: String(why || '').slice(0, 200) });
+      // 账本没读成则宁可多记——漏掉这条差集靠的记录更糟。
+      if (side === '审官') {
+        const dispatched = Boolean(findJobDispatch(events, jobId, { prNumber: pr }));
+        if (!dispatched && !ledgerUnscanned) { out[side] = { skipped: 'no-dispatch' }; continue; }
+      }
+      const dispatch = findJobDispatch(events, jobId, { prNumber: pr });
+      const args = {
+        ...ctx, ts, jobId,
+        success: true,
+        rework: knownRework ? stats.workerRework > 0 : false,
+        mergedBy: mergedByForClosed({ events, jobId, dispatch }),
+        prNumber: pr,
+        attributionSource: stats.attributionSource || (statsUnscanned ? 'unscanned' : 'commander-merge'),
+        attributionNote: note || undefined,
+      };
+      if (!statsUnscanned) {
+        args.redFlags = stats.redFlags;
+        args.verdictRounds = stats.verdictRounds;
+        args.workerRework = stats.workerRework;
+        args.marshalRounds = stats.marshalRounds;
+        if (stats.triggeredBy) args.triggeredBy = stats.triggeredBy;
+      }
+      out[side] = writeJobClosed(args);
     }
     const failed = Object.entries(out).filter(([, r]) => r && r.ok === false);
     if (failed.length) {
@@ -1073,19 +1149,6 @@ export function recordJobClosed({ pr, why = '', say = () => {} } = {}) {
     say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`);
     return { error: String(e && e.message || e).slice(0, 160) };
   }
-}
-
-/** 这张 PR 有没有派过审官（查 reviewerJobId 对应的 job.dispatch）。
- *  读不到目录就按「有」判——宁可多记一条真终态，不许漏掉这条差集靠的记录。 */
-function hasReviewerDispatch(ctx, jobId) {
-  try {
-    for (const f of readdirSync(ctx.dir)) {
-      if (!f.endsWith('.json')) continue;
-      const e = JSON.parse(readFileSync(join(ctx.dir, f), 'utf8'));
-      if (e && e.type === 'job.dispatch' && e.job_id === jobId) return true;
-    }
-  } catch { return true; }
-  return false;
 }
 
 /**
