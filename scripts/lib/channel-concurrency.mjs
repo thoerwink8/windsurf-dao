@@ -73,7 +73,7 @@ export const ROUND_MS = 20 * 60 * 1000;
 export function channelKeyOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
   const provider = String(landing.provider || '');
-  if (provider === 'mirasim') return 'mirasim';
+  if (provider === 'mirasim' || provider === 'mirasim-relay') return 'mirasim';
   if (provider === 'claude' || provider === 'reclaude') return 'mirasim';
   const target = probeTargetOf(landing);
   if (!target) return null;

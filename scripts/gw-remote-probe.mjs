@@ -29,11 +29,11 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import os from "node:os";
 import { loadPolicy, probePlan } from "./lib/gateway-policy.mjs";
 import { buildHealthTable, mergeLegHealth, computeAlerts, plainTarget, buildRedAlert, responsesEventHasContent } from "./lib/probe-health.mjs";
-import { codexResponsesProbeBody } from "./lib/provider-probe.mjs";
+import { codexResponsesProbeBody, probeTargetOf, planProbe, runProbe, NATIVE_LOGIN_FILES } from "./lib/provider-probe.mjs";
 
 const argv = process.argv.slice(2);
 // #967：旧 --install 写出的 timer 只有单调时钟。必须在读策略之前拦——这条旗标不该去碰网关。
@@ -43,6 +43,8 @@ if (argv.includes("--install")) {
 }
 
 const GATEWAY = process.env.GW_BASE || "https://156.224.28.95.sslip.io";
+// 选型真相源在本仓（#842/#1145 同款：探测面从真相源派生，不手打清单）。
+const REPO_ROOT = resolve(dirname(new URL(import.meta.url).pathname), "..");
 const KEYS_DIR = process.env.GW_KEYS_DIR || join(os.homedir(), ".mirasim", "keys");
 const STATE_FILE = process.env.GW_PROBE_STATE || join(os.homedir(), ".local", "state", "gw-remote-probe.json");
 const HUB_SAY = process.env.HUB_SAY || "/home/orca/bin/hub-say";
@@ -174,7 +176,38 @@ async function probeDirect(direct) {
   } finally { clearTimeout(timer); }
 }
 
+// ④ native：不发现请求，只验凭据文件在不在（判据在 provider-probe.mjs）。走同一个 planProbe/runProbe，
+// 免得「探针的判据」和「派前预检的判据」两处各写一份、哪天分叉。
+async function probeNative(t) {
+  const landing = t.landing;
+  const target = probeTargetOf(landing);
+  const r = await runProbe(planProbe(landing, {}), {});
+  return { key: target || `native:${t.provider}`, kind: "native-login", state: r.state, code: r.code, ms: r.ms, why: r.why };
+}
+
 function readJson(f, dflt) { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return dflt; } }
+
+// ④ native：网关退役后，grok / composer 这些腿走的是官方 CLI 自己的登录态，不经网关——
+// 没有池、没有 HK 逐腿口，前三类都覆盖不到，健康表里它们曾经是空白（= 派工选型看不见它们）。
+// 探测面**从选型真相源的「腿」节现推**，不另手打一份 provider 清单（memory: 手打常量早晚填错）。
+// 读不到腿表 = 这类一条都不探（不是「都健康」）；判据本身在 provider-probe 的 planProbe/runProbe。
+function nativeTargets() {
+  const doc = readJson(REPO_ROOT + "/docs/model-routing.json", null);
+  const legs = doc && Array.isArray(doc["腿"]) ? doc["腿"] : null;
+  if (!legs) {
+    console.error("  ⚠ 读不到选型 JSON 的「腿」节——本轮不探本地登录型（不是「都健康」）");
+    return [];
+  }
+  const seen = new Map();
+  for (const leg of legs) {
+    if (!leg || leg["状态"] !== "在役") continue;
+    const landing = leg["落地"];
+    const provider = landing && landing.provider ? String(landing.provider) : "";
+    if (!provider || !NATIVE_LOGIN_FILES[provider] || seen.has(provider)) continue;
+    seen.set(provider, { provider, landing: { provider } });
+  }
+  return [...seen.values()];
+}
 function writeAtomic(f, obj) {
   mkdirSync(dirname(f), { recursive: true });
   const tmp = `${f}.tmp.${process.pid}`;
@@ -202,9 +235,12 @@ const results = [];
 const wantPool = PLAN.pools.filter(t => !only || t.key === only);
 const wantDirect = PLAN.direct.filter(t => !only || t.key === only);
 const wantLegs = !only || only.startsWith("leg:");
+const natives = nativeTargets();
+const wantNative = only ? natives.filter(t => `native:${t.provider}` === only) : natives;
 
 for (const t of wantPool) results.push(await probePool(t));
 for (const d of wantDirect) results.push(await probeDirect(d));
+for (const n of wantNative) results.push(await probeNative(n));
 if (wantLegs) {
   const legsDoc = await fetchLegs();
   const legs = only ? PLAN.legs.filter(l => l.key === only) : PLAN.legs;

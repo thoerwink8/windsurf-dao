@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { cursorAgentOffPathCandidates } from './launch-binary.mjs';
 
 export const ACP_PROFILES = Object.freeze({
   cursor: { command: 'cursor-agent', args: ['--trust', 'acp'] },
@@ -225,11 +226,7 @@ function defaultBinary(agent, homeDir, env) {
   if (agent === 'devin') candidates.push(path.join(homeDir, '.local/share/devin/cli/_versions/current/bin/devin'));
   if (agent === 'grok') candidates.push(path.join(homeDir, '.grok/bin/grok'));
   if (agent === 'cursor') {
-    const versions = path.join(homeDir, '.local/share/cursor-agent/versions');
-    candidates.push(path.join(versions, 'current/cursor-agent'));
-    try {
-      for (const version of fs.readdirSync(versions).filter(name => /^\d/.test(name)).sort().reverse()) candidates.push(path.join(versions, version, 'cursor-agent'));
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    candidates.push(...cursorAgentOffPathCandidates(homeDir, { readdir: (dir) => fs.readdirSync(dir) }));
   }
   for (const candidate of candidates) {
     try { fs.accessSync(candidate, fs.constants.X_OK); if (fs.statSync(candidate).isFile()) return fs.realpathSync(candidate); } catch {}
