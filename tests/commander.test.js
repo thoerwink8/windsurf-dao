@@ -2103,6 +2103,8 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
       // 判别：同一夹具、本仓过期票仍须穿过 stuck 派返工——修法不许把 #1208 也挡回去。
       const home = decide(sit({}));
       assert.equal(byKind(home, 'rework').length, 1, '本仓过期票 + 当前 head 有红，仍须派返工');
+      const homeNamed = decide(sit({ repo: 'thoerwink8/windsurf-dao' }));
+      assert.equal(byKind(homeNamed, 'rework').length, 1, '显式本仓 repo 同样须派返工');
     });
 
     it('跨仓同号过期票 + 本仓 stuck + 当前 head 零判定 → 不许 rereview', async () => {
@@ -2115,6 +2117,24 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
       const r = decide(sit);
       assert.equal(byKind(r, 'rereview').length, 0, '跨仓票不能让本仓 stuck PR 去叫复审');
       assert.equal(byKind(r, 'rework').length, 0);
+    });
+
+    // 生产路径 worker-done 给本仓票也写 repo: owner/name。非空 repo 一律 skip
+    // 会让真实本仓过期票进不了 staleTickets，PR 循环按纯号查询也命中不到，现场仍 noop。
+    it('显式本仓 repo + 过期票 + 认输标 → 仍须叫复审；跨仓同号仍不解冻', async () => {
+      const { decide } = await CORE;
+      const run = (repo) => {
+        const sit = stuckSit('newhead111', { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 4 } });
+        sit.reviewPending = { scanned: true, items: [{
+          pr: 909, repo, head: { name: null, oid: 'oldhead999' },
+          reviewer: 'gpt-5.6-luna', worker: null,
+        }] };
+        return byKind(decide(sit), 'rereview').map((a) => a.kind);
+      };
+      assert.deepEqual(run(null), ['rereview'], '空 repo 按本仓解冻');
+      assert.deepEqual(run('thoerwink8/windsurf-dao'), ['rereview'], '显式本仓 repo 必须按纯 PR 号参与 stale');
+      assert.deepEqual(run('THOERWINK8/WINDSURF-DAO'), ['rereview'], '本仓比较大小写不敏感');
+      assert.deepEqual(run('org/other'), [], '跨仓同号票不得解冻本仓 PR');
     });
   });
 });
@@ -2162,6 +2182,27 @@ describe('execRetryDrain：执行前重核现场 head（闸不许只在 decide �
     const { r } = await call(() => { called = true; return { ok: true, head: 'newhead111' }; }, { dryRun: true });
     assert.equal(called, false, 'dry-run 不该打 gh');
     assert.equal(r.ok, true);
+  });
+});
+
+describe('ticketScopeKey：本仓纯号、跨仓隔离、票/PR 循环共用', () => {
+  it('空 repo 与显式本仓（含大小写）都是纯 PR 号；跨仓才带仓前缀', async () => {
+    const { ticketScopeKey } = await CORE;
+    const home = 'thoerwink8/windsurf-dao';
+    assert.equal(ticketScopeKey({ pr: 909 }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: null }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: home }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: 'THOERWINK8/WINDSURF-DAO' }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: 'org/other' }, home), 'org/other#909');
+    // PR 循环查 {pr}、票循环查带 repo 的本仓票，必须命中同一把键。
+    assert.equal(
+      ticketScopeKey({ pr: 909 }, home),
+      ticketScopeKey({ pr: 909, repo: home }, home),
+    );
+    assert.notEqual(
+      ticketScopeKey({ pr: 909 }, home),
+      ticketScopeKey({ pr: 909, repo: 'org/other' }, home),
+    );
   });
 });
 

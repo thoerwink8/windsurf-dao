@@ -80,16 +80,29 @@ export function ticketHeadOid(head) {
   return typeof oid === 'string' && oid.trim() ? oid.trim() : null;
 }
 
-/** 复审票上的仓。空 = 本仓（指挥官扫到的 gh.prs）；非空 = 别仓，本仓列表不是它的现场。 */
+/** 复审票上的仓（归一化 owner/name）。空 = 未声明仓。 */
 function ticketRepoOf(it) {
-  return it && it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
+  return it ? normalizeCommanderRepo(it.repo) : '';
 }
 
-/** stale / 归属键：本仓纯 PR 号，跨仓 `owner/name#pr`。同号不同仓必须分开。 */
-function ticketScopeKey(it) {
+/**
+ * 票是否属于当前指挥官仓。空仓字段与显式本仓 repo 都算本仓——
+ * 生产路径 worker-done 会写 `repo: owner/name`，不能把非空一律当跨仓。
+ */
+function ticketIsHome(it, homeRepo) {
+  const repo = ticketRepoOf(it);
+  if (!repo) return true;
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(here) && repo === here;
+}
+
+/** stale / 归属键：本仓纯 PR 号，跨仓 `owner/name#pr`。同号不同仓必须分开。
+ *  空 repo 与显式本仓 repo 共用纯号——票循环和 PR 循环必须走同一把键。 */
+export function ticketScopeKey(it, homeRepo) {
   if (!it || it.pr == null) return null;
   const n = Number(it.pr);
   if (!Number.isFinite(n)) return null;
+  if (ticketIsHome(it, homeRepo)) return String(n);
   const repo = ticketRepoOf(it);
   return repo ? `${repo}#${n}` : String(n);
 }
@@ -591,6 +604,7 @@ function collectCandidates(situation) {
   const wakeCounts = situation.wakeCounts || {};
   const reworkDispatched = situation.reworkDispatched || {};
   const effectiveMergeability = new Map();
+  const homeRepo = situation.repo || DEFAULT_REPO;
   // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
   const nowMs = Date.parse(situation.at || '') || 0;
   let reworkThisRound = 0;
@@ -960,11 +974,12 @@ function collectCandidates(situation) {
   // 各算一份迟早对不上，而这里的失效方式正是「两处判据不同步」。
   const staleTickets = new Set();
   for (const it of rp.items || []) {
-    const scope = ticketScopeKey(it);
+    const scope = ticketScopeKey(it, homeRepo);
     if (!scope) continue;
     // 跨仓票的现场不在本仓 gh.prs。按纯 PR 号比对会把别仓过期票记成本仓 stale，
     // 本仓 stuck PR 就被绕过去派 rework/rereview（#1209 审官返工）。
-    if (ticketRepoOf(it)) continue;
+    // 空 repo 与显式本仓 repo 都是本仓：生产票带 owner/name，非空 ≠ 跨仓。
+    if (!ticketIsHome(it, homeRepo)) continue;
     const itHead0 = ticketHeadOid(it.head);
     const livePr0 = (gh.prs || []).find((p) => p && Number(p.number) === Number(it.pr));
     const liveHead0 = typeof livePr0?.headRefOid === 'string' ? livePr0.headRefOid.trim() : '';
@@ -995,9 +1010,9 @@ function collectCandidates(situation) {
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
-    const ticketRepo = ticketRepoOf(it);
+    const ticketHome = ticketIsHome(it, homeRepo);
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
-    if (!ticketRepo && ghScanned && !openPrs.has(Number(it.pr))) {
+    if (ticketHome && ghScanned && !openPrs.has(Number(it.pr))) {
       out.push(withNeeds({
         kind: 'reap-ticket', pr: it.pr, repo: null,
         why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
@@ -1018,7 +1033,7 @@ function collectCandidates(situation) {
     // 认输标永远没人摘、按当前 head 该叫的复审永远叫不出来（2026-09-12 审官打回 #1209 的第一条）。
     // 省额度那句的本意是「已经认输的 PR 不用再花额度重试 drain」，它管的是**重试**，
     // 不该顺手把「收殓过期票」也管了——那件事不花额度，只是把死票从流水线上取下来。
-    const staleTicket = staleTickets.has(ticketScopeKey(it));
+    const staleTicket = staleTickets.has(ticketScopeKey(it, homeRepo));
     if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     const drain = validateRetryDrain({
       pr: it.pr,
@@ -1048,7 +1063,7 @@ function collectCandidates(situation) {
     // 混成一句话会误导读的人往错方向查（这正是 #1233 认输评论那个病的同一个形状）。
     if (drain.code === 'exhausted' || drain.code === 'hopeless') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
-      if (ticketRepo) continue;
+      if (!ticketHome) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
       if (livePr && prHasStuckLabel(livePr)) continue;
       const tries = Number(drain.tries) || 0;
@@ -1217,7 +1232,7 @@ function collectCandidates(situation) {
     // 于是修法在事故现场一次都不生效，因为事故现场正是「认输标 + 当前 head 零判定」这个组合。
     // 放它过去不花额度：落到下面 rereview 分支只重写一张票，宽限期和试满照样管着。
     const stuck = prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number));
-    const staleTicketHere = staleTickets.has(ticketScopeKey({ pr: pr.number }));
+    const staleTicketHere = staleTickets.has(ticketScopeKey({ pr: pr.number }, homeRepo));
     if (stuck && !staleTicketHere) {
       const headR = pr.headRefOid;
       const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);
@@ -1554,7 +1569,6 @@ function collectCandidates(situation) {
         reason: 'unscanned', detail: 'reconcile-unscanned',
       }), N.dispatch));
     }
-    const homeRepo = situation.repo || DEFAULT_REPO;
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
       // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
