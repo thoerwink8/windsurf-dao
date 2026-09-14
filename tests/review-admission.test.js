@@ -64,9 +64,10 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
     assert.deepEqual(empty.pull, []);
   });
 
-  it('默认上限是实测出来的 3', async () => {
+  it('默认拉取预算是 8（gptpool=3 已退役；真闸是渠道+负载）', async () => {
     const { DEFAULT_REVIEWER_CAP } = await RP;
-    assert.equal(DEFAULT_REVIEWER_CAP, 3);
+    assert.equal(DEFAULT_REVIEWER_CAP, 8);
+    assert.ok(DEFAULT_REVIEWER_CAP > 3);
   });
 });
 

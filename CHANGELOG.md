@@ -2,6 +2,38 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.7.0 — 2026-09-14
+
+### 新功能
+- [cc] feat(routing): newapi 网关退役，选型只认统一执行目录（#1174） (#1213)
+- [cc] feat(pr-open): 帅位自开 PR 有了落账入口——账补上，打标判据一个字不放宽（#1214 缺口 A） (#1250)
+- [cc] feat(review): 审官标准第10条「同类扫描」——修一处必答全仓还有几处 (#930)
+- [cc] feat(events): 动作触发写口——待拍板/拍板结果/里程碑挂在具体动作上（#891 W5） (#897)
+
+### 修复与维护
+- [grok] fix(并发): composer ACP 从 mirasim 渠拆开，审官拉取预算 3→8 (#1279)
+- [patrol] docs(obs): #1274 并发上限未合入，生产主树工作区已经当生效
+- [patrol] docs(obs): #1174 网关探针仍打退役池，现役 native 腿永远 unscanned
+- [cc] fix(lease): 失败的清理不再重置宽限窗 (#1232)
+- [cc] fix(dispatch): 账本缺 repo/reviewer 的历史事件按来源收下 (#1118) (#1211)
+- [cc] fix(回填): claude-opus-5 是 claude-opus 同一条腿的另一种写法——别名表漏了它，#901 每轮把账本断流钉红（#1240） (#1248)
+- [patrol] docs(obs): #891 播报闸测绿但生产 0 处调用
+- [cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口 (#1096)
+- [cc] fix(认输): 返工已落地 ⇒ 旧认输不成立——同时解冻认输标与复审重试账 (#1261)
+- [cc] fix(审官): 票上写死的审官死了，读票时要按顺位换人（#1233 漏的另一半） (#1259)
+- [patrol] docs(obs): 飞书triage合了码没重启；grok关掉了claude钩子
+- [cc] docs(pr-fast): 快路开 PR 的首选入口改成 dao pr-open——裸 pr create 开出来的单进不了自动链 (#1252)
+- [cc] fix(now): 盘面看不见审官——登记落点与扫描目录是两条各写各的真相源 (#1257)
+- [cc] docs(inbox): 09-07 那五条观察逐条处置——三条已修、一条已被取代、一条仍活 (#1105)
+- [cc] fix(闸): 三处闸与挂载面漂开——Bash 闸回来了，两处断言不再数邻居 (#1249)
+- [cc] fix(feishu): 报帅单代号进群前换人话——「唤醒用尽」是 wake-exhausted 被直译 (#919)
+- [cc] fix(返工): 无署名 issue 不再挡返工——取不到 merge-policy 就是 manual，不是停手（#1240） (#1247)
+
+### 其它
+- release: v2.6.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.6.0 — 2026-09-13
 
 ### 新功能
