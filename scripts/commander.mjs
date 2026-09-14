@@ -691,6 +691,7 @@ function buildSituation({ state } = {}) {
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
+    routingLegs,
     reviewerOrder,
     reviewerOrderSkipped,
     reviewerOrderUnscanned,

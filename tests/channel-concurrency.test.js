@@ -466,6 +466,46 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
     assert.equal(j.cap, CONSERVATIVE_CAP);
   });
 
+  it('混合渠道：决策层 pickLeg 也不因另一条腿的不限放行 pending', async () => {
+    const { buildChannelCaps, pickLeg, legAvailability, judgeChannelForModel, CONSERVATIVE_CAP } = await CC;
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = buildChannelCaps(legs);
+    assert.equal(r.caps.mirasim, Infinity);
+    const landing = { provider: 'mirasim' };
+    const landingOf = () => landing;
+    const inFlight = { mirasim: 8 };
+    const landingOnly = legAvailability(landing, { caps: r.caps, states: r.states, inFlight });
+    assert.equal(landingOnly.available, true, '落地适配器在不带 model 时仍读渠道 Infinity——这正是本红项的对照');
+    assert.equal(landingOnly.cap, Infinity);
+    const judged = judgeChannelForModel({
+      model: 'gpt-5.6-sol', legs, caps: r.caps, states: r.states, inFlight,
+    });
+    const viaLanding = legAvailability(landing, {
+      caps: r.caps, states: r.states, inFlight, model: 'gpt-5.6-sol', legs,
+    });
+    assert.equal(judged.available, false);
+    assert.equal(viaLanding.available, false);
+    assert.equal(viaLanding.reason, 'at-cap');
+    assert.equal(viaLanding.cap, CONSERVATIVE_CAP);
+    const queued = pickLeg({
+      order: ['gpt-5.6-sol'], landingOf, caps: r.caps, states: r.states, inFlight, legs,
+    });
+    assert.equal(queued.ok, false);
+    assert.equal(queued.queued, true);
+    assert.equal(queued.tried[0].reason, 'at-cap');
+    const spilled = pickLeg({
+      order: ['gpt-5.6-sol', 'grok-4.6'], landingOf, caps: r.caps, states: r.states, inFlight, legs,
+    });
+    assert.equal(spilled.ok, true);
+    assert.equal(spilled.picked.model, 'grok-4.6');
+    assert.equal(spilled.picked.cap, Infinity);
+    assert.equal(spilled.spilledFrom[0].model, 'gpt-5.6-sol');
+    assert.equal(spilled.spilledFrom[0].reason, 'at-cap');
+  });
+
   it('真表：在役「不限」只许用本腿证据，不得把别的腿写成已验证不限', async () => {
     const { CAP_UNLIMITED } = await CC;
     const fs = require('node:fs');

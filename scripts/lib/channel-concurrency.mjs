@@ -312,8 +312,33 @@ function judgeChannelState({ channel, target, caps = {}, states = {}, inFlight =
   return { available: true, channel, target, cap, inFlight: n, pending: states[channel] === 'pending' };
 }
 
-/** 适配器①：按**落地**判（决策层用——commander 的工人闸、preflightReviewer 的顺位分流）。 */
+/**
+ * 适配器①：按**落地**判（决策层用——commander 的工人闸、preflightReviewer 的顺位分流）。
+ * 带了 model 且腿表/选型能解析到本模型渠道时，改走 judgeChannelForModel：
+ * 渠道级 Infinity 是别的腿的已验证结论，pending 腿不得继承（#1274）。
+ * 解析不出才退回落地；落地认不出渠道仍 fail-close。
+ */
 export function legAvailability(landing, opts = {}) {
+  const model = opts.model;
+  if (model != null && String(model) !== '' && (Array.isArray(opts.legs) || Array.isArray(opts.models))) {
+    const resolved = resolveModelChannel({
+      model, legs: opts.legs, models: opts.models, caps: opts.caps,
+    });
+    if (resolved) {
+      return judgeChannelForModel({
+        model,
+        legs: opts.legs,
+        models: opts.models,
+        caps: opts.caps,
+        states: opts.states,
+        inFlight: opts.inFlight,
+        breaker: opts.breaker,
+        now: opts.now,
+        breakerPolicy: opts.breakerPolicy,
+        excluded: opts.excluded,
+      });
+    }
+  }
   const channel = channelKeyOf(landing);
   if (!channel) return { available: false, channel: null, reason: 'no-channel', why: '落地认不出渠道，不起（fail-close）' };
   return judgeChannelState({ ...opts, channel, target: probeTargetOf(landing) });
@@ -348,6 +373,7 @@ export function judgeChannelForModel({ model, legs, models, caps, states, inFlig
  */
 export function pickLeg({
   order, landingOf, caps = {}, states = {}, inFlight = {}, breaker = null, now, breakerPolicy, excluded,
+  legs, models,
 } = {}) {
   const ids = Array.isArray(order) ? order : [];
   const getLanding = typeof landingOf === 'function' ? landingOf : () => null;
@@ -355,7 +381,10 @@ export function pickLeg({
   for (const id of ids) {
     const landing = getLanding(id);
     if (!landing) { spilledFrom.push({ model: id, reason: 'no-landing' }); continue; }
-    const av = legAvailability(landing, { caps, states, inFlight, breaker, now, breakerPolicy, excluded });
+    const av = legAvailability(landing, {
+      caps, states, inFlight, breaker, now, breakerPolicy, excluded,
+      model: id, legs, models,
+    });
     if (av.available) {
       return {
         ok: true,
