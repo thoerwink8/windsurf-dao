@@ -284,8 +284,14 @@ export function reviewerIdsForCap(tickets, usableReviewers) {
   return ids;
 }
 
-/** @deprecated 兜底常量，别再当默认上限用——走 resolveReviewerCap。留着是为了老夹具不炸。 */
-export const DEFAULT_REVIEWER_CAP = REVIEWER_CAP_FLOOR;
+/**
+ * 没传 cap 时的每轮拉取预算，不是上游容量。上游容量走渠道闸 + 负载准入。
+ * 旧值 3 来自已退役的 gptpool（2026-09-07：第 4 个 at capacity）。
+ * 2026-09-14 实测 grok-4.6 / composer-2.5 短并发 6/6、零容量拒绝；
+ * 8 = 实测 6 + 2 余量。DAO_REVIEWER_CAP 仍可覆盖。
+ * 生产路径走 resolveReviewerCap，不要拿这个常量当默认上限。
+ */
+export const DEFAULT_REVIEWER_CAP = 8;
 
 /**
  * 按资源拉取（#1125，2026-09-07 用户拍板）：队列里有多少张不重要，**能同时跑几个审官**才重要。
@@ -293,9 +299,8 @@ export const DEFAULT_REVIEWER_CAP = REVIEWER_CAP_FLOOR;
  * 用户的话：「工人做好不要自己去开 PR 唤起审官，让中间态、看门狗或者帅位去根据资源调度」。
  * 生产端（工人）不该决定消费端并发——工人跑得快是净收益，压它是白扔算力；该管的是拉取这一侧。
  *
- * 上限的由来是量出来的，不是拍的：`gptpool` 现在只剩一条能用的腿（pqapi 两条熔断，
- * 只剩 Windsurf luna），2026-09-07 实测同时活得下来约 3 个，起第 4 个就成片
- * `Selected model is at capacity`。所以 cap 是**上游腿容量**，不是机器资源。
+ * 这是每轮拉取预算，不是上游容量。上游容量走渠道闸（startSession）和负载准入。
+ * gptpool=3 已退役，不要再拿那条死腿的实测当全局硬顶。
  *
  * @param tickets       队列里的票（listReviewPending().tickets）
  * @param liveReviewers 在役审官会话数；null/非数 = 没查成

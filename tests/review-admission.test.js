@@ -163,6 +163,12 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
       assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6', 'gpt-5.6-luna'], channelOf: chanOf(在役) }), 5);
     });
   });
+
+  it('默认拉取预算是 8（gptpool=3 已退役；真闸是渠道+负载）', async () => {
+    const { DEFAULT_REVIEWER_CAP } = await RP;
+    assert.equal(DEFAULT_REVIEWER_CAP, 8);
+    assert.ok(DEFAULT_REVIEWER_CAP > 3);
+  });
 });
 
 describe('#1125 countLiveReviewers：只有会话名单里的 runState 算数', () => {
