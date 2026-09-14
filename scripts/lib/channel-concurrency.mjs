@@ -73,7 +73,7 @@ export const ROUND_MS = 20 * 60 * 1000;
 export function channelKeyOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
   const provider = String(landing.provider || '');
-  if (provider === 'mirasim') return 'mirasim';
+  if (provider === 'mirasim' || provider === 'mirasim-relay') return 'mirasim';
   if (provider === 'claude' || provider === 'reclaude') return 'mirasim';
   const target = probeTargetOf(landing);
   if (!target) return null;
@@ -81,13 +81,23 @@ export function channelKeyOf(landing) {
   return cut < 0 ? target : target.slice(0, cut);
 }
 
-/** 腿节 → 渠道键。先认 mirasim 载体（供应商/执行侧），否则按落地算。 */
+/**
+ * 腿节 → 渠道键。
+ *
+ * 限流池看落地/供应商，**不看执行侧**。执行侧只是谁起会话。
+ * 2026-09-15 实咬：composer-2.5 落地是 cursor-native，执行侧却写 mirasim，
+ * 旧逻辑把它和 grok/luna relay 算成同一条 `mirasim` 渠，再 `Math.min` 成 1，
+ * 整块盘面一次只能派一张。ACP/Cursor 订阅和 xAI/relay 不共享上游。
+ */
 export function legChannelKey(leg) {
   if (!leg || typeof leg !== 'object') return null;
+  const fromLanding = channelKeyOf(leg['落地']);
+  if (fromLanding) return fromLanding;
   const via = String(leg['供应商'] || '');
-  const side = String(leg['执行侧'] || '');
-  if (via === 'mirasim' || side === 'mirasim') return 'mirasim';
-  return channelKeyOf(leg['落地']);
+  if (via === 'mirasim' || via === 'mirasim-relay') return 'mirasim';
+  if (via === 'cursor-native') return 'native:cursor-native';
+  if (via === 'xai-native') return 'native:xai-native';
+  return null;
 }
 
 /**

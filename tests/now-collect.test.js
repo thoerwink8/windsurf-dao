@@ -143,6 +143,28 @@ describe('dao now 取数：本机 fillTreeHeads / lookupGitHead', () => {
   });
 });
 
+describe('dao now 取数：登记落点必须含真实写入方那个目录', () => {
+  const DAO = path.join(REPO, 'scripts', 'dao.mjs');
+
+  it('本机候选目录里有 ~/.dao/mirasim（否则每一张有审官的 PR 都判成「登记找不到」）', async () => {
+    const C = await load(COLLECT);
+    const dirs = C.localRegistryDirs({ repoRoot: '/repo', worktreePaths: ['/repo/.claude/worktrees/a'], home: '/home/orca' });
+    assert.ok(dirs.includes(path.join('/home/orca', '.dao', 'mirasim')), `候选目录里没有写入方那个目录：${dirs.join(', ')}`);
+  });
+
+  it('正控：写入方的 flowDir 与本动词扫的目录是同一个（抄判据信源，不信文案）', async () => {
+    const C = await load(COLLECT);
+    // 判据取自**写入方源码本身**：mirasimRegistry() 里 flowDir 那段。
+    // 手打一遍路径当判据，就会在写入方换落点时静默失配（判例 hand-typed-constant-will-be-wrong）。
+    const src = fs.readFileSync(DAO, 'utf8');
+    const m = /flowDir:\s*join\(homedir\(\),\s*'([^']+)',\s*'([^']+)'\)/.exec(src);
+    assert.ok(m, 'dao.mjs 里找不到 mirasimRegistry 的 flowDir（写入方换了写法，本判据要跟着改）');
+    const want = path.join('/home/orca', ...m.slice(1));
+    const dirs = C.localRegistryDirs({ repoRoot: '/repo', home: '/home/orca' });
+    assert.ok(dirs.includes(want), `写入方写到 ${want}，候选目录扫的是 ${dirs.join(', ')}`);
+  });
+});
+
 describe('dao now 取数：远端按登记 treePath 补采（含 /home/orca/wt-*）', () => {
   it('REG treePath=/home/orca/wt-unblock + TREE/PROC 同路径 → treeHead scanned 且会话 live', async () => {
     const C = await load(COLLECT);

@@ -124,12 +124,22 @@ describe('dao 启动与活性', () => {
       assert.ok(/cursor-agent/.test(gptPipe.command) && /gpt-5\.6-sol-high/.test(gptPipe.command), '#615 gpt 支路走 cursor / gpt-5.6-sol-high  →  ' + gptPipe.command);
     });
     const composer = S.resolveLaunch({ model: 'composer-2.5', routing });
-    await t.test('#822 composer 走 pi gw-sub', () => {
-      assert.ok(composer.provider === 'gw' && /pi --model/.test(composer.command) && /gw-sub\/composer-2.5/.test(composer.command), '#822 composer 走 pi gw-sub  →  ' + composer.command);
+    await t.test('composer 走 Cursor 订阅登录态（网关退役后不再是 pi gw-sub）', () => {
+      // 判据从选型真相源现推，不钉死命令字面（memory: test-side-oracle-weaker-than-real-gate）：
+      // 断言的是「provider 与命令同源于路由表那一条」，命令形状由 TOML 模板决定。
+      const entry = routing.models.find(m => m.id === 'composer-2.5');
+      assert.equal(composer.provider, entry.provider);
+      assert.equal(composer.provider, 'cursor-native');
+      assert.equal(/cursor-agent/.test(composer.command), true, 'composer 走 cursor-agent  →  ' + composer.command);
+      assert.equal(composer.command.includes(entry.cli_model), true, '命令里带上目录里的 cli_model  →  ' + composer.command);
     });
     const grokModel = S.resolveLaunch({ model: 'grok-4.6', routing });
-    await t.test('#822 写码 grok-4.6 走 pi gw/grok-4.6（不再是 Grok Build CLI）', () => {
-      assert.ok(grokModel.provider === 'gw' && /pi --model/.test(grokModel.command) && /gw\/grok-4\.6/.test(grokModel.command) && !/\bgrok -m\b/.test(grokModel.command), '#822 grok 工人走 pi  →  ' + grokModel.command);
+    await t.test('写码 grok-4.6 走官方 Grok CLI（网关退役后不再是 pi gw/grok-4.6）', () => {
+      const entry = routing.models.find(m => m.id === 'grok-4.6');
+      assert.equal(grokModel.provider, entry.provider);
+      assert.equal(grokModel.provider, 'xai-native');
+      assert.equal(/\bgrok -m\b/.test(grokModel.command), true, 'grok 工人走官方 CLI  →  ' + grokModel.command);
+      assert.equal(/pi --model/.test(grokModel.command), false, '不许再落到 pi  →  ' + grokModel.command);
     });
     const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
     await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {

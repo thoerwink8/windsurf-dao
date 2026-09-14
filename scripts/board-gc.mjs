@@ -33,7 +33,7 @@ import { checkTreeLease, scanSessionProcs } from './lib/dispatch/lease.mjs';
 import { formatStrayLedgerError, listStrayLedgerEvents } from './lib/dispatch/worktree.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { planSessionGc, planOrphanGc, markOrphanInUse } from './lib/session-dir-gc.mjs';
-import { planLeaseGc, judgeRegistryStuck } from './lib/lease-gc.mjs';
+import { planLeaseGc, judgeRegistryStuck, ageMinOf } from './lib/lease-gc.mjs';
 import { scanProcCwds } from './lib/proc-cwds.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -538,7 +538,8 @@ function main() {
           .map((f) => {
             const full = join(process.env.HOME || '', '.dao', 'execution', 'leases', f);
             let d; try { d = JSON.parse(readFileSync(full, 'utf8')); } catch { return null; }
-            return { ...d, _file: full, ageMin: (Date.now() - statSync(full).mtimeMs) / 60000, hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
+            // 年龄认记录时钟；mtime 只作老文件退路（失败回写会刷新 mtime，#1174 缺陷二）
+            return { ...d, _file: full, ageMin: ageMinOf(d, { mtimeMs: statSync(full).mtimeMs }), hasLiveProcess: hasLiveCwd(d.workdir, liveCwds) };
           })
           .filter(Boolean);
         // 登记层的中间态（stopping/uncertain/pending）同样会永久占树——同一份名单判两遍。
