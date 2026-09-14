@@ -229,6 +229,8 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
+import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
@@ -1446,6 +1448,22 @@ async function admitReviewPull(tickets) {
   return planReviewAdmission({ tickets, liveReviewers: counted.count, cap: limit });
 }
 
+/**
+ * 「现在起得来的审官顺位」——票上写死的那一位死了时，drain 靠它换人。
+ *
+ * 与指挥官**同一份判据**（`commander.mjs:592` 那三行）：顺位表 × 执行目录可用性。
+ * 这里自己再写一遍就会跟那边分叉——分叉那天两边的「可用审官」不一样，
+ * 而票读侧与选官侧的分歧正是本单要治的病。
+ *
+ * 读不到任何一份（路由表 / 执行目录）⇒ 回 `null`，调用方**不换人**：
+ * 「没查到依据」不等于「票上那个不能用」，拿它去换人是猜。
+ */
+function usableReviewerIds() {
+  try {
+    return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+  } catch { return null; }
+}
+
 async function cmdReviewPendingDrain(args) {
   const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'review-pending-drain' });
   const ghRepo = targetRepo.ownerName || undefined;
@@ -1499,6 +1517,9 @@ async function cmdReviewPendingDrain(args) {
   const drained = drainReviewPending({
     dir,
     tickets,
+    // 票上那位起不来时照顺位换人（判据与指挥官同源，见 usableReviewerIds 注释）。
+    // `--force` 是**人手**逃生口，人手跑时同样换——人手更不该拿一个已知死掉的模型去试。
+    usableReviewers: usableReviewerIds(),
     attach: (plan) => {
       const argv = [...plan.argv];
       if (ghRepo && !argv.includes('--repo')) argv.push('--repo', ghRepo);
