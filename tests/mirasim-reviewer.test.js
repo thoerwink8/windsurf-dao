@@ -491,6 +491,23 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(judgeReviewerSessionReuse({
       record: rec, view: { missing: false, phase: 'done', error: '' },
     }).reuse, true);
+    // 登记 oid 与当前 PR head 不同：旧会话审的是旧代码，即使 phase=done / 快照没查成也必须另起。
+    const stale = { ...rec, expectedOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+    const live = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    assert.equal(judgeReviewerSessionReuse({
+      record: stale, view: { missing: false, phase: 'done' }, liveHead: live,
+    }).reuse, false);
+    assert.equal(judgeReviewerSessionReuse({
+      record: stale, view: null, liveHead: live,
+    }).reuse, false);
+    // 没查成当前 head 时不猜，维持旧行为（复用）。
+    assert.equal(judgeReviewerSessionReuse({
+      record: stale, view: { missing: false, phase: 'done' },
+    }).reuse, true);
+    // 同一 head 上的正常完工仍复用。
+    assert.equal(judgeReviewerSessionReuse({
+      record: stale, view: { missing: false, phase: 'done' }, liveHead: stale.expectedOid,
+    }).reuse, true);
   });
 
   it('#1122 点名已是下一位时锁内不许把满载死会话当 raced 复用', async () => {

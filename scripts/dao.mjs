@@ -1829,6 +1829,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  readPrHead,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2078,9 +2079,11 @@ async function cmdReviewerCreateMirasim(args) {
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
     : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  const prHead = readPrHead(gh, args.pr);
+  const liveHead = prHead.ok === true ? prHead.expectedOid : null;
   const decided = decideReviewerCreateStart({
     force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view,
+    record: existingRecord, view: peek.view, liveHead,
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
@@ -2129,7 +2132,7 @@ async function cmdReviewerCreateMirasim(args) {
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view,
+      forceNew, record: againRecord, view: racePeek.view, liveHead,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
