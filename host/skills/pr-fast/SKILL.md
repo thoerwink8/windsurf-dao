@@ -90,7 +90,7 @@ commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 
 ```bash
 node scripts/dao.mjs pr-open --title "[cursor] <标题>" --body-file <文件> \
-  --head <branch> --model <registry id> --reviewer <registry id>
+  --head <branch> --reviewer <registry id> [--model <registry id>]
 node scripts/gh-as.mjs marshal -- pr ready <N>
 node scripts/gh-as.mjs marshal -- pr comment <N> --body-file <文件>
 node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
@@ -98,8 +98,9 @@ node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
 
 **为什么不用裸 `marshal -- pr create`**：那样开出来的 PR 在账本里没有派工决定，打标路认不出这条链，于是永远卡在「需人工打标」——指挥官合不了、审官也叫不动（#1214 缺口 A，2026-09-13 有 13/17 张开放 PR 卡死在这上面）。`pr-open` 补的就是这条落账。
 
-- `--model` / `--reviewer` **都必填**，都必须是 `docs/model-routing.json` 里注册的 id——**不许从 commit 前缀猜家族**（猜出来的账进不了选型）。
-  两个缺一不可，这不是保守：打标路的判据是「这条链上那条 `job.dispatch` 里 `model` 与 `reviewer` 都在」
+- `--reviewer` **必填**；`--model` **可省略**（省略时按当前审官座位 × 执行目录现算：跨厂、enabled 且 availability=available。执行目录没查成则拒绝自动选腿，必须显式给）。
+  两者都必须是 `docs/model-routing.json` 里注册的 id——**不许从 commit 前缀猜家族**（猜出来的账进不了选型）。
+  打标路的判据是「这条链上那条 `job.dispatch` 里 `model` 与 `reviewer` 都在」
   （`scripts/lib/dispatch/worker-done.mjs:274`），**缺任一个都返回「需人工打标」**。
 - `pr-sync-labels` **不是补审官的入口**：它只按仓+分支读账、把账里已有的字段打成标，既不选审官也不写账。
   账里缺 `reviewer`，它照样只会回「缺 model 或 reviewer——需人工打标」。

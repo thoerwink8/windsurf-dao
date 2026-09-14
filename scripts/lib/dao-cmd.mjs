@@ -1047,7 +1047,8 @@ export const FLAGS_BY_VERB = {
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
   'pr-sync-labels': new Set(['--pr', '--repo', '--json', '--help', '-h']),
-  // #1214 缺口 A：帅位自开 PR 的写侧。--model 必填（不许从提交前缀猜家族）；
+  // #1214 缺口 A：帅位自开 PR 的写侧。--model 可省略（省略时按当前审官座位 × 执行目录现算；
+  // 执行目录没查成则拒绝自动选腿，必须显式给）。不许从提交前缀猜家族。
   // --head 必填（分支名是打标匹配键）；正文走 --body-file（正文里的换行/引号不进命令行）。
   'pr-open': new Set([
     '--title', '--body', '--body-file', '--head', '--branch', '--base', '--model', '--reviewer',
@@ -1160,13 +1161,15 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N> [--repo owner/name]
                   # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
                   # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
-  pr-open --title <题> (--body <文>|--body-file <文件>) --head <分支> --model <registry id>
+  pr-open --title <题> (--body <文>|--body-file <文件>) --head <分支> [--model <registry id>]
           --reviewer <registry id> [--base master] [--work-type 写码] [--merge-policy auto|manual]
           [--issue <号>] [--repo owner/name]
                   # #1214 缺口 A：帅位自开 PR 的正式入口——开 draft + 落账（job.opened + job.dispatch）+ 打标
                   # 自开 PR 是合法动作，但此前没有落账动作 ⇒ 打标路永远查不到这条链 ⇒ 一律卡在「需人工打标」
-                  # --model 与 --reviewer 都必填且必须都在 registry 里（不许从提交前缀猜家族，也不落幽灵账）
-                  # 两个缺一不可：打标路要求这条 job.dispatch 里两者同时在；只给一个就白落一条账
+                  # --model 可省略：省略时按当前审官座位 × 执行目录现算（跨厂、enabled 且 availability=available）
+                  # 执行目录缺失 / 坏 JSON / 没权限 / 空目录 ⇒ 拒绝自动选腿，必须显式 --model
+                  # --reviewer 必填；两者都必须在 registry 里（不许从提交前缀猜家族，也不落幽灵账）
+                  # 打标路要求这条 job.dispatch 里 model 与 reviewer 同时在；只给一个就白落一条账
                   # reviewer 还必须与 model 换厂商（同厂当场拒，这是落账后唯一能拦的点）
                   # 打标失败只记账不当门：PR 已开、账已落，回执里说清哪个标没打上
   worktree-rm --worktree <sel> [--force]

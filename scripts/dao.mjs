@@ -362,72 +362,85 @@ function reviewerOrderOf(routing) {
 }
 
 /**
- * 与**当前审官座位**跨厂、且在役的工人腿。
+ * 读执行目录。缺失 / 坏 JSON / 没权限 / 空目录 ⇒ unscanned。
+ * 自动默认路径必须 fail-closed：没查成 ≠ 全都可用。
+ */
+export function readLiveProfiles(opts = {}) {
+  if (Object.prototype.hasOwnProperty.call(opts, 'profiles')) {
+    if (Array.isArray(opts.profiles) && opts.profiles.length > 0) return { profiles: opts.profiles };
+    return { unscanned: opts.unscanned || '执行目录没查成：profiles 为空或不存在' };
+  }
+  try {
+    const raw = loadExecutionProfiles();
+    if (!Array.isArray(raw)) return { unscanned: '执行目录没查成：profiles 不是数组' };
+    if (raw.length === 0) return { unscanned: '执行目录没查成：profiles 为空' };
+    return { profiles: raw };
+  } catch (e) {
+    const code = e && e.code;
+    const why = code === 'ENOENT' ? '文件不存在'
+      : code === 'EACCES' ? '没权限读'
+      : code === 'EISDIR' ? '路径是目录不是文件'
+      : String((e && e.message) || e);
+    return { unscanned: `执行目录没查成：${why}` };
+  }
+}
+
+/**
+ * 与**当前审官座位**跨厂、且执行目录里真正起得来的工人腿。
  *
  * 帅位自己开 PR 时手上没有派工账，只能自己挑一条腿。挑错的代价不是报个错——
  * 是开出一张**任何合法审官都派不上去**的 PR（2026-09-14 实咬，五张）：
  * 审官位闸只认当前座位或其同厂备选，而同厂闸又禁止工人与审官同厂 ⇒
  * 工人一旦与座位同厂，这张 PR 就没有合法审官了。
  *
- * 所以「能挑的腿」= 与座位跨厂的在役腿。列出来给 defaultMarshalWorker 挑，
- * 也给闸拒时的报错当建议——报错要说得出下一步做什么。
+ * 「起得来」复用 `usableReviewerOrder`（与 `resolveExecutionProfile` 同一套匹配）：
+ * profile id 或 defaultForModels 精确命中、enabled===true、availability===available、
+ * 映射含糊（多条 profile）一律剔除。enabled=true 但 unverified 的腿（如
+ * `devin-acp-deepseek`）会被执行器拒，不许进默认候选。
+ *
+ * 执行目录没查成 ⇒ `{ ids: [], unscanned }`。自动默认路径必须 fail-closed。
  */
-export function crossVendorWorkersFor(reviewerId, routing) {
+export function crossVendorWorkersFor(reviewerId, routing, opts = {}) {
   const models = routing?.models || [];
-  // 只在**在役**腿里挑。registry 里 41 条 profile 只有 7 条启用，剩下的是退役登记；
-  // 不过这道筛就会把 windsurf/pqapi/opencode 这些早就退役的腿推荐出去——
-  // 「在 registry 里」和「今天起得来」是两回事（2026-09-14 第一版实测推了 40 条，
-  // 里面甚至包含刚被拒掉的那一个）。
-  const live = inServiceModelIds();
-  const ids = [];
+  const candidates = [];
   for (const m of models) {
     if (!m || !m.id || m.id === reviewerId) continue;
-    if (live && !live.has(m.id)) continue;   // 查不出在役名单 ⇒ live 为 null ⇒ 不筛，宁可多列也别列空
     const gate = assertCrossVendor({ workerId: m.id, reviewerId, models });
-    if (gate.ok) ids.push(m.id);
+    if (gate.ok) candidates.push(m.id);
   }
-  return ids;
-}
-
-/** 执行目录里 enabled 的腿。读不到 ⇒ null（调用方按「没查成，不筛」处理，不许当成空集）。 */
-function inServiceModelIds() {
-  try {
-    const raw = loadExecutionProfiles();
-    const list = Array.isArray(raw) ? raw : (raw && raw.profiles) || null;
-    if (!Array.isArray(list)) return null;
-    const out = new Set();
-    for (const p of list) {
-      if (!p || p.enabled === false) continue;
-      for (const id of [p.model, ...(Array.isArray(p.defaultForModels) ? p.defaultForModels : [])]) {
-        if (typeof id !== 'string' || !id.trim()) continue;
-        out.add(id.replace(/\[[^\]]*\]\s*$/, '').trim());   // 去掉 `composer-2.5[fast=true]` 这类后缀
-      }
-    }
-    return out.size ? out : null;
-  } catch { return null; }
+  const catalog = readLiveProfiles(opts);
+  if (catalog.unscanned) return { ids: [], unscanned: catalog.unscanned };
+  // 与审官顺位同一把尺：自己再写一遍就会跟执行器分叉。
+  const filtered = usableReviewerOrder(candidates, { profiles: catalog.profiles });
+  return { ids: filtered.usable };
 }
 
 /**
- * 帅位自开 PR 时的默认工人腿：当前审官座位的跨厂在役腿里的第一条。
+ * 帅位自开 PR 时的默认工人腿：当前审官座位的跨厂、执行目录 available 腿里的第一条。
  *
  * 为什么不写死一个 id：写死的常量早晚被凭印象填（memory `hand-typed-constant-will-be-wrong`），
  * 而「谁坐审官位」是会变的——2026-09-03 就从 sol 换到过 luna。座位一换，
  * 写死的默认值就可能变成同厂，于是又开出一张派不上审官的 PR。
  * 这里每次按**当时的座位**现算，座位换了默认值自己跟着换。
- * 挑不出来 ⇒ 回 null，由调用方报「要 --model」，不许猜一个。
+ * 挑不出来 / 执行目录没查成 ⇒ model=null；没查成时带 unscanned，调用方拒绝自动选腿。
  */
-export function defaultMarshalWorker(routing) {
+export function pickMarshalWorker(routing, opts = {}) {
   const seat = currentReviewerSeat(routing);
-  if (!seat || !seat.ok) return null;
-  const ids = crossVendorWorkersFor(seat.modelId, routing);
-  if (!ids.length) return null;
+  if (!seat || !seat.ok) return { model: null, error: '审官座位没查成' };
+  const picked = crossVendorWorkersFor(seat.modelId, routing, opts);
+  if (picked.unscanned) return { model: null, unscanned: picked.unscanned };
+  if (!picked.ids.length) return { model: null };
   // 偏好顺序读 JSON（选型只认 JSON，2026-08-22 拍板），代码里不写 id。
-  // 偏好只**排序**，不放行：不在 ids 里（与座位同厂 / 不在役）的条目直接跳过，
+  // 偏好只**排序**，不放行：不在 ids 里（与座位同厂 / 起不来）的条目直接跳过，
   // 所以座位换人时这里不用改，写错一个 id 也只会退回现算的第一条，不会开出派不上审官的 PR。
   for (const p of marshalPrLegPreference()) {
-    if (ids.includes(p)) return p;
+    if (picked.ids.includes(p)) return { model: p };
   }
-  return ids[0];
+  return { model: picked.ids[0] };
+}
+
+export function defaultMarshalWorker(routing, opts = {}) {
+  return pickMarshalWorker(routing, opts).model;
 }
 
 /** `帅.自开PR工人.模型` 里没禁用的 id，按顺位。读不到 ⇒ 空表（调用方退回现算顺序）。 */
@@ -1037,8 +1050,9 @@ function cmdPrSyncLabels(args) {
  *
  * 缺口不在「判据太严」，在于**这类 PR 从来没落过账**。补上落账，判据一个字都不用改，
  * 也就不必去动 `identity === '工人'` 那道闸——那道闸仍然只放行「真有派工决定」的链。
- * 帅位自开这条链落的账本身是**诚实的**：model 与 reviewer 都是当场给的（都必填，
- * 且必须是 registry 里的 id，reviewer 还要与 model 换厂商），不是从 commit 前缀反推出来的。
+ * 帅位自开这条链落的账本身是**诚实的**：reviewer 当场必填；model 可省略（省略时按
+ * 当前审官座位 × 执行目录现算），两者都必须是 registry 里的 id，reviewer 还要与
+ * model 换厂商。不许从 commit 前缀反推。
  *
  * ## 失败方向
  *
@@ -1053,10 +1067,14 @@ function cmdPrOpen(args) {
   if (!head) fail('pr-open 要 --head <分支>（分支名是打标路的匹配键之一，不能靠猜）');
   if (!args.title) fail('pr-open 要 --title');
   const routing = loadOrFail();
-  const model = String(args.model || '').trim() || defaultMarshalWorker(routing);
+  const picked = String(args.model || '').trim() ? null : pickMarshalWorker(routing);
+  const model = String(args.model || '').trim() || (picked && picked.model);
   if (!model) {
+    if (picked && picked.unscanned) {
+      fail('pr-open 执行目录没查成，不能自动挑腿，请显式 --model：' + picked.unscanned);
+    }
     fail('pr-open 要 --model（帅位自开也得说清是哪条腿交付的，否则这张 PR 进不了选型账）；'
-      + '本来会自动挑一条与当前审官座位跨厂的在役腿，但一条都没挑出来');
+      + '本来会按当前审官座位 × 执行目录现算（跨厂、enabled 且 availability=available），但一条都没挑出来');
   }
   const knownIds = (routing.models || []).map((m) => m && m.id).filter(Boolean);
   if (!knownIds.includes(model)) {
@@ -1093,10 +1111,11 @@ function cmdPrOpen(args) {
     // 建议按**座位**算，不是按被拒的那个 reviewer 算——第一版按后者算，
     // 于是把刚被拒掉的 codex-relay-gpt-5.6-luna 自己也列进了「换这个就成立」。
     const seatNow = currentReviewerSeat(routing);
-    const alt = seatNow && seatNow.ok ? crossVendorWorkersFor(seatNow.modelId, routing) : [];
+    const alt = seatNow && seatNow.ok ? crossVendorWorkersFor(seatNow.modelId, routing) : { ids: [] };
+    const altIds = Array.isArray(alt.ids) ? alt.ids : [];
     fail(`pr-open 的 ${model} × ${reviewer} 这一对，派审官时会被审官位闸拒：${seatGate.error}`
-      + `；换个与审官座位跨厂的工人腿就成立${alt.length ? `，例如 ${alt.join('、')}` : '（但一条都没挑出来）'}`,
-    { seatGate, model, reviewer, suggest: alt });
+      + `；换个与审官座位跨厂的工人腿就成立${altIds.length ? `，例如 ${altIds.join('、')}` : '（但一条都没挑出来）'}`,
+    { seatGate, model, reviewer, suggest: altIds });
   }
   const ghRepo = targetRepo.ownerName || DEFAULT_DAO_REPO;
   let body = args.body;
