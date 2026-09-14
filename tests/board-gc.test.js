@@ -1346,6 +1346,11 @@ describe('#1176 会话/租约/孤儿清扫接到驱动层', () => {
     assert.match(src.slice(from, call), /hasLiveProcess:\s*hasLiveCwd/);
   });
 
+  it('租约年龄走 ageMinOf，不直接认文件 mtime（失败回写会刷新 mtime）', () => {
+    assert.match(src, /ageMinOf\(/);
+    assert.equal(/ageMin:\s*\(Date\.now\(\)\s*-\s*statSync\(full\)\.mtimeMs\)/.test(src), false);
+  });
+
   it('hasLiveCwd：cwd 落在工作目录或其子路径 → 占用', async () => {
     const { hasLiveCwd } = await import(CLI);
     assert.equal(hasLiveCwd('/wt/dao-1', ['/wt/dao-1/src', '/home/other']), true);
