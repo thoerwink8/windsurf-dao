@@ -171,4 +171,11 @@ describe('状态词表只有一份正典（防手打副本漂移）', () => {
     assert.equal(/s\.phase\s*\?\?\s*s\.state/.test(ES), false,
       'normalizeExecutionSession 不许再手写 phase??state（#1174 返工：waiting_user 会被盖成 running）');
   });
+
+  it('execution-runtime ACP 默认策略走正典，不手写 worktreeScope 规则（#1174 T8b）', () => {
+    const src = fs.readFileSync(path.join(LIB, 'execution-runtime.mjs'), 'utf8');
+    assert.match(src, /resolveStartInteractionPolicy/, 'ACP 热路必须走 acp-interaction-policy 正典');
+    assert.equal(/worktreeScope\s*:\s*true/.test(src), false,
+      '不许在 execution-runtime 里再手写一份 worktree 规则');
+  });
 });

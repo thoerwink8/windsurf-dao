@@ -20,8 +20,8 @@
 - [ ] T7 直接渠道：实际模型请求不用旧 2核2G New API；Windsurf/OpenCode/CommandCode 优先性价比模型，有权限/协议/计费证据才启用；负责人主会话。
 - [ ] T8 自动交互：任务内已知答案自动回应、必要人工问题持久 waiting_user；等待不被当卡死重派，取消和恢复验证通过；负责人主会话。
   - [x] T8a 等待不被当卡死重派：`waiting_user` 进正典 `EXECUTION_WAITING`（不进终态）；`assessLiveness` 等十小时仍是 active；指挥官不停会话、不差集重派；租约按还在跑保留。证据：`tests/liveness.test.js`、`tests/commander.test.js`、`tests/session-reconcile.test.js`、`tests/lease-gc.test.js`。
-  - [ ] T8b 任务内已知答案自动回应：ACP `interactionPolicy` / worktree_scope 已有运行时测试，派工热路默认策略未在本切片重验。
-  - [ ] T8c 取消和恢复：ACP runtime 已有 cancel/resume 测试，指挥官恢复路径未在本切片重验。
+  - [x] T8b 任务内已知答案自动回应：ACP 热路 `execution-runtime.startSession` 无显式策略时挂正典 worktree 默认策略（T1 放过的读/改 + git 前缀）；显式策略（含空规则）不合并；MCP 选择题不猜。证据：`scripts/lib/acp-interaction-policy.mjs`、`tests/acp-interaction-policy.test.js`、`tests/execution-runtime.test.js`。
+  - [x] T8c 取消和恢复：ACP runtime 已有 cancel/resume；指挥官把 cancelled 当终态，不停会话、差集可再派短会话。证据：`tests/commander.test.js`「cancelled 会话 → 不停会话、同一张单可再派」、`tests/session-reconcile.test.js`、`tests/execution-runtime.test.js` resume。
 - [ ] T9 真实容量：逐档运行多轮工具任务，记录成功数、耗时、实际模型/渠道、进程/请求/测试负载、用量；不照抄历史 2/3/4 上限；负责人主会话。
 - [ ] T10 完整业务：至少一张真实 issue 由新机制产出可审 PR、完成独立验证与已授权合并；自动化运行观察无重复派工/假活，usage 可对账。
 - [ ] T11 发布收口：代码提交/CI/PR、部署版本、定时器 NEXT、回退证据齐全；关联历史单逐条处置并同步本清单。

@@ -131,6 +131,23 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(byKind(r, 'dispatch').length, 0, '等人时不许再派一张');
   });
 
+  it('cancelled 会话 → 不停会话、同一张单可再派（#1174 T8c 差集再起）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [
+        { key: 'acp:cancelled', state: 'cancelled', cwd: '/x/dao-900', title: 'ISSUE-#900' },
+      ] },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '已取消不是 incomplete，不必再停');
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1, '取消后同一张单可以再派（指挥官恢复=差集再起短会话）');
+    assert.equal(d[0].issue, 900);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [

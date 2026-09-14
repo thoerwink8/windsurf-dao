@@ -12,6 +12,7 @@ import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,EXECUTI
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
+import {resolveStartInteractionPolicy} from './acp-interaction-policy.mjs';
 
 // 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
 // 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
@@ -163,6 +164,8 @@ export function createExecutionRuntime(opts={}) {
     if(!['acp','mirasim'].includes(selected)||!/^[a-z][a-z0-9-]*$/.test(actual.agent||''))throw new Error('invalid execution backend or agent');
     actual.route??=selected==='acp'?'local':'auto';
     if(!(['local','native','direct'].includes(actual.route)&&selected==='acp')&&!(['local','cloud','auto'].includes(actual.route)&&selected==='mirasim'))throw new Error('invalid execution route');
+    // #1174 T8b：ACP 热路默认挂 worktree 已知权限。显式策略不合并。闸装在 prepare，四个调用点绕不开。
+    if(selected==='acp') actual.interactionPolicy=resolveStartInteractionPolicy({backend:selected,workdir:actual.workdir,interactionPolicy:spec.interactionPolicy});
     if(spec.resumeFrom) {
       const prior=metadata(spec.resumeFrom);if(!prior)throw new Error('resume requires persistent execution metadata');
       for(const [name,value] of Object.entries({backend:selected,agent:actual.agent,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,route:actual.route,actualModel:p?.model||actual.model,workdir:actual.workdir})) {
