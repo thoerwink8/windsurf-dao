@@ -42,27 +42,31 @@ describe('#679 起审官同厂硬闸', () => {
     });
     const { loadRoutingPolicy } = await POLICY_LOAD;
     const liveModels = loadRoutingPolicy().models;
-    // #843 判别性：grok(xAI) 工人 + luna(OpenAI) 审官 → 放行。两者网关落地都是 gw，但真实供应商
-    // 家族 grok≠gpt，跨厂成立。这是 #822/#828 埋洞的修复：从前按 provider(gw==gw) 误判成同厂拒绝。
+    // #843 判别性：grok(xAI) 工人 + luna(OpenAI) 审官 → 放行。判据是真实供应商家族
+    // grok≠gpt，这是 #822/#828 埋洞的修复：从前按 provider 相等就误判成同厂拒绝。
+    // 2026-09-12 网关退役后两条腿的落地不再相同（xai-native vs mirasim-relay），
+    // 所以这里不再断言「同经 gw」——断言的是「跨厂结论由家族给出」。
     const lunaGate = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('grok 工人 + luna 审官 → 放行（真实供应商 grok/xAI ≠ gpt/OpenAI，虽同经 gw）', () => {
+    await t.test('grok 工人 + luna 审官 → 放行（真实供应商 grok/xAI ≠ gpt/OpenAI）', () => {
       assert.ok(lunaGate.ok === true && lunaGate.state === 'pass'
         && lunaGate.workerVendor === 'grok' && lunaGate.reviewerVendor === 'gpt'
-        && lunaGate.workerProvider === 'gw' && lunaGate.reviewerProvider === 'gw',
+        && lunaGate.reviewerProvider !== lunaGate.workerProvider,
       '#843 grok 工人 + luna 审官应放行  →  ' + JSON.stringify(lunaGate));
     });
-    // 判别性另一半：同为 OpenAI 家族（sol 直连 gpt、luna 经 gw）→ 同厂拒绝。堵上按 provider 判时
-    // gpt(provider gpt) vs luna(provider gw) 会被误当跨厂放行的旧洞。
+    // 判别性另一半：同为 OpenAI 家族（sol 与 luna 落地都是 mirasim-relay）→ 同厂拒绝。
+    // 堵上按 provider 判时 gpt 家族自审被误当跨厂放行的旧洞。
     const gptOnGpt = assertCrossVendor({ workerId: 'gpt-5.6-sol', reviewerId: 'gpt-5.6-luna', models: liveModels });
-    await t.test('gpt-sol 工人 + gpt-luna 审官 → 同厂拒绝（都是 OpenAI，落地 gpt/gw 不同也拒）', () => {
+    await t.test('gpt-sol 工人 + gpt-luna 审官 → 同厂拒绝（都是 OpenAI，落地不同也拒）', () => {
       assert.ok(gptOnGpt.ok === false && gptOnGpt.state === 'same_vendor'
         && gptOnGpt.workerVendor === 'gpt' && gptOnGpt.reviewerVendor === 'gpt',
       'gpt 家族自审应拒  →  ' + JSON.stringify(gptOnGpt));
     });
     const liveGpt = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-sol', models: liveModels });
-    await t.test('grok 工人（gw）+ gpt-sol 审官 → 通过（grok/xAI ≠ gpt/OpenAI）', () => {
-      assert.ok(liveGpt.ok === true && liveGpt.state === 'pass' && liveGpt.workerProvider === 'gw' && liveGpt.reviewerProvider === 'gpt',
-        'gw 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
+    await t.test('grok 工人 + gpt-sol 审官 → 通过（grok/xAI ≠ gpt/OpenAI）', () => {
+      assert.equal(liveGpt.ok, true, 'grok 工人 + Codex 审官  →  ' + JSON.stringify(liveGpt));
+      assert.equal(liveGpt.state, 'pass', JSON.stringify(liveGpt));
+      assert.equal(liveGpt.workerVendor, 'grok', JSON.stringify(liveGpt));
+      assert.equal(liveGpt.reviewerVendor, 'gpt', JSON.stringify(liveGpt));
     });
     const same = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'grok-4.6', models: MODELS });
     await t.test('grok 工人 + grok 审官 → 同厂拒绝', () => {
@@ -128,10 +132,9 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(one.ok === true && one.modelId === 'grok-4.6', JSON.stringify(one));
     });
     const dup = S.requireWorkerModel(['model/grok-4.6', 'type/写码', 'model/grok-4.6', 'reviewer/kimi-k3']);
-    await t.test('同名 model/* 出现两次（署两张单）→ 仍是一个模型', () => {
-      assert.equal(dup.ok, true);
-      assert.equal(dup.state, 'one');
-      assert.equal(dup.modelId, 'grok-4.6');
+    await t.test('同名 model/* 出现两次 → many（单一来源不该重复，重复就是歧义）', () => {
+      assert.equal(dup.ok, false);
+      assert.equal(dup.state, 'many');
     });
     const many = S.requireWorkerModel(['model/grok-4.6', 'model/pi-v2']);
     await t.test('两个不同的 model/* → many，不许猜', () => {
@@ -139,40 +142,48 @@ describe('#679 起审官同厂硬闸', () => {
       assert.equal(many.state, 'many');
     });
     const revDup = S.pickReviewer(['reviewer/kimi-k3', 'type/写码', 'reviewer/kimi-k3']);
-    await t.test('同名 reviewer/* 出现两次 → 仍是一个审官', () => {
-      assert.equal(revDup.ok, true);
-      assert.equal(revDup.state, 'one');
-      assert.equal(revDup.modelId, 'kimi-k3');
+    await t.test('同名 reviewer/* 出现两次 → many（单一来源不该重复）', () => {
+      assert.equal(revDup.ok, false);
+      assert.equal(revDup.state, 'many');
     });
   });
 
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {
     const slot = await SLOT_LOAD;
     const order = await reviewerOrder();
-    const passerIds = ['gpt-5.6-sol', 'claude-opus', 'kimi-k3'];
+    // 候选池：审官序里与工人 grok 异厂的只有 GPT 两位。passerIds 只留 sol → 走完仍是起点，
+    // 下一位落在谁身上由实测决定，不能钉死（2026-09-12 网关退役后 kimi/glm 两条禁用条目
+    // 退出了顺位表，钉死的名字会当场假红）。
     const grokWorker = slot.nextReviewerAfter({
-      currentId: 'gpt-5.6-sol', models: MODELS, passerIds, workerId: 'grok-4.6', order,
+      currentId: 'gpt-5.6-sol', models: MODELS, passerIds: ['gpt-5.6-sol'], workerId: 'grok-4.6', order,
     });
-    await t.test('工人 grok、当前 GPT → 下一位 kimi，不是 grok', () => {
-      assert.ok(grokWorker.ok && grokWorker.next === 'kimi-k3' && grokWorker.next !== 'grok-4.6',
-        JSON.stringify(grokWorker));
+    await t.test('工人 grok、候选池只剩 sol → 没有下一位（不是同厂冲突）', () => {
+      assert.equal(grokWorker.ok, false, JSON.stringify(grokWorker));
+      assert.equal(grokWorker.exhausted, true, JSON.stringify(grokWorker));
+      assert.match(grokWorker.error, /没有下一位/);
+      assert.doesNotMatch(grokWorker.error, /同厂/, '报同厂是把排障引向不存在的厂商冲突');
     });
-    const skipKimi = slot.nextReviewerAfter({
+    // 顺位表里与工人 grok 异厂的只剩 GPT；sol 后面只可能接同厂的 grok-4.6 → 走完仍同厂则升级。
+    // 判别性：这一条必须给「异厂候选」，拿 grok-4.6 当工人时下一步只能是它自己那一厂。
+    const skipSibling = slot.nextReviewerAfter({
       currentId: 'gpt-5.6-sol',
       models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: 'kimi-k3',
+      passerIds: ['gpt-5.6-sol', 'grok-4.6'],
+      workerId: 'grok-4.6',
       order,
     });
     await t.test('选型序走完仍同厂 → 升级，不落到工人那一厂', () => {
-      assert.ok(skipKimi.ok === false && skipKimi.exhausted === true && /同厂/.test(skipKimi.error),
-        JSON.stringify(skipKimi));
+      assert.equal(skipSibling.ok, false, JSON.stringify(skipSibling));
+      assert.equal(skipSibling.exhausted, true, JSON.stringify(skipSibling));
+      assert.match(skipSibling.error, /同厂/);
     });
+    // 空池样本的工人要与顺位表里任何候选都不同厂，否则分不清「空池」和「同厂」——claude-opus
+    // 的家族 claude 不在顺位表里，正合适（拿 grok-4.6 当工人则会被误判成同厂那条）。
     const noNext = slot.nextReviewerAfter({
       currentId: 'gpt-5.6-sol',
       models: MODELS,
       passerIds: ['gpt-5.6-sol'],
-      workerId: 'kimi-k3',
+      workerId: 'claude-opus',
       order,
     });
     await t.test('没有下一位 ≠ 仍同厂（#729/#730 排障被误导实证：候选池空了不许报成厂商冲突）', () => {
@@ -183,39 +194,183 @@ describe('#679 起审官同厂硬闸', () => {
     });
   });
 
-  it('容量换人同一条：跳过工人那一厂；没查成工人则升级', async (t) => {
+  it('#1122 容量换厂：跳过工人那一厂；没查成工人则不许换', async (t) => {
     const slot = await SLOT_LOAD;
     const order = await reviewerOrder();
     const models = MODELS;
     const passerIds = ['gpt-5.6-sol', 'kimi-k3'];
-    const ok = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      workerId: 'grok-4.6',
-      order,
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+
+    const ok = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, workerId: 'grok-4.6', order },
     });
     await t.test('工人 grok 时 GPT 下一档仍是 kimi', () => {
-      assert.ok(ok.ok && ok.action === 'switch' && ok.to === 'kimi-k3' && ok.pr === 664, JSON.stringify(ok));
+      assert.equal(ok.ok, true, JSON.stringify(ok));
     });
-    const same = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      workerId: 'kimi-k3',
+
+    const same = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, workerId: 'kimi-k3', order },
+    });
+    await t.test('下一档就是工人那一厂 → 拒，不换过去（#679 不许破）', () => {
+      assert.equal(same.ok, false, JSON.stringify(same));
+      assert.match(same.error, /同厂/);
+    });
+
+    const miss = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, models, passerIds, order },
+    });
+    await t.test('没查成工人模型 → 不许换人', () => {
+      assert.equal(miss.ok, false, JSON.stringify(miss));
+    });
+  });
+
+  it('#1122 换厂的例外必须凭证据成立，不是裸旗标', async (t) => {
+    const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
+    const base = { deadModelId: 'gpt-5.6-sol', models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: 'grok-4.6', order };
+
+    await t.test('死因不是满载/看门狗那一类 → 拒（换厂不是挑模型的后门）', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: '审官判红：测试没跑' },
+      });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /不是满载/);
+    });
+
+    await t.test('没给死因 → 没查成，不是放行', () => {
+      const r = slot.judgeCapacityFailover({ requested: 'kimi-k3', capacityFailover: { ...base, deadError: '' } });
+      assert.equal(r.ok, false);
+      assert.equal(r.unscanned, true);
+    });
+
+    await t.test('压根没交凭证 → 拒', () => {
+      assert.equal(slot.judgeCapacityFailover({ requested: 'kimi-k3' }).ok, false);
+    });
+
+    await t.test('跳级点名（该换 kimi 却点 glm）→ 拒', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'glm-5.2',
+        capacityFailover: { ...base, deadError: 'pi turn stalled past 30 minutes' },
+      });
+      assert.equal(r.ok, false);
+      assert.match(r.error, /不许跳级点名/);
+    });
+
+    await t.test('看门狗那一类死因同样算数（不只认 at capacity）', () => {
+      const r = slot.judgeCapacityFailover({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: 'pi turn stalled past 30 minutes' },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+    });
+  });
+
+  it('#1122 生产路径选人：标签还钉着死人时按顺位取下一位', async (t) => {
+    const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
+    const base = {
+      deadModelId: 'gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
+      workerId: 'grok-4.6',
       order,
+    };
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+
+    await t.test('请求仍是刚死的那位 → 自动换成下一位', () => {
+      // 2026-09-12 网关退役把 kimi/glm 两条禁用条目移出顺位表，顺位变成 luna→sol→grok-4.6。
+      // 「刚死的那位」取 luna 而不是 sol：请求 sol 时它后面只剩同厂的 grok-4.6，样本编不出来；
+      // luna 后面正接 sol（异厂），本条考的仍是「标签还钉着死人 → 换下一位」。
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: { ...base, deadModelId: 'gpt-5.6-luna', deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, true);
     });
-    await t.test('下一档就是工人那一厂 → 升级，不换过去', () => {
-      assert.ok(same.ok === false && same.action === 'escalate' && /同厂/.test(same.error), JSON.stringify(same));
+
+    await t.test('没点名（标签空）→ 也取下一位，不卡在闸口', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: '',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
     });
-    const miss = slot.planCapacitySwitch({
-      displayName: 'PR-#664 审官·gpt-5.6-sol',
-      models,
-      passerIds,
-      order,
+
+    await t.test('点名正好是下一位 → 放行（switched=false，另起不绑这一位）', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'kimi-k3',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, false);
     });
-    await t.test('没查成工人模型 → 升级不许换人', () => {
-      assert.ok(miss.ok === false && miss.action === 'escalate' && miss.unscanned === true, JSON.stringify(miss));
+
+    await t.test('点名跳级 → 拒', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'glm-5.2',
+        capacityFailover: { ...base, deadError: DEAD },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /不许跳级点名/);
+    });
+
+    await t.test('标签钉着更早一跳（luna）而刚死的是 sol → 取 kimi，不当跳级', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: {
+          ...base,
+          deadError: DEAD,
+          passerIds: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+          order: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+        },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'kimi-k3');
+      assert.equal(r.switched, true);
+    });
+
+    await t.test('死因不是满载 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: '审官判红' },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, false);
+    });
+
+    await t.test('没交凭证 → 原样返回，不换', () => {
+      const r = slot.planReviewerOnCapacityDeath({ requested: 'gpt-5.6-sol' });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+    });
+
+    await t.test('下一档就是工人那一厂 → 拒（#679 不许破）', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...base, deadError: DEAD, workerId: 'kimi-k3' },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /同厂/);
+    });
+
+    await t.test('满载死因但没查成上一位是谁 → 不换厂，不是把起审官打死', () => {
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-luna',
+        capacityFailover: { ...base, deadModelId: null, deadError: DEAD },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.switched, false);
+      assert.equal(r.reviewerId, 'gpt-5.6-luna');
     });
   });
 
@@ -272,10 +427,9 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(fromLabel.ok && fromLabel.source === 'label' && fromLabel.modelId === 'kimi-k3', JSON.stringify(fromLabel));
     });
     const fromDup = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'model/kimi-k3'] });
-    await t.test('同名 model/* 收集两遍仍认唯一', () => {
-      assert.equal(fromDup.ok, true);
-      assert.equal(fromDup.source, 'label');
-      assert.equal(fromDup.modelId, 'kimi-k3');
+    await t.test('同名 model/* 收集两遍 → many（#1116 不再去重）', () => {
+      assert.equal(fromDup.ok, false);
+      assert.equal(fromDup.state, 'many');
     });
     const unscanned = resolveActualWorkerModel({});
     await t.test('两边都没有 → 没查成，不许从卡名猜', () => {
@@ -290,25 +444,27 @@ describe('#679 起审官同厂硬闸', () => {
     await t.test('卡名仍是请求模型 grok（过期）', () => {
       assert.ok(staleCard.ok && staleCard.model === 'grok-4.6', JSON.stringify(staleCard));
     });
-    const wrong = slot.planCapacitySwitch({
-      displayName: 'PR-#680 审官·gpt-5.6-sol',
-      models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: staleCard.model,
-      order,
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+    const wrong = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: {
+        deadModelId: 'gpt-5.6-sol', deadError: DEAD,
+        models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: staleCard.model, order,
+      },
     });
     await t.test('误读过期卡名 grok → 会换到实际工人同厂的 kimi', () => {
-      assert.ok(wrong.ok && wrong.to === 'kimi-k3', JSON.stringify(wrong));
+      assert.equal(wrong.ok, true, JSON.stringify(wrong));
     });
-    const right = slot.planCapacitySwitch({
-      displayName: 'PR-#680 审官·gpt-5.6-sol',
-      models: MODELS,
-      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
-      workerId: actual.modelId,
-      order,
+    const right = slot.judgeCapacityFailover({
+      requested: 'kimi-k3',
+      capacityFailover: {
+        deadModelId: 'gpt-5.6-sol', deadError: DEAD,
+        models: MODELS, passerIds: ['gpt-5.6-sol', 'kimi-k3'], workerId: actual.modelId, order,
+      },
     });
-    await t.test('按实际 kimi 换人 → 升级，不换到同厂', () => {
-      assert.ok(right.ok === false && right.action === 'escalate' && /同厂/.test(right.error), JSON.stringify(right));
+    await t.test('按实际 kimi 换人 → 拒，不换到同厂', () => {
+      assert.equal(right.ok, false, JSON.stringify(right));
+      assert.match(right.error, /同厂/);
     });
   });
 
@@ -356,15 +512,17 @@ describe('#679 起审官同厂硬闸', () => {
       CLI, 'reviewer-attach', '--pr', '42', '--worktree', 'wt_w', '--reviewer', 'grok-4.6', '--dry-run',
     ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pAttachSame = payload(attachSame);
-    await t.test('attach grok 到 grok 工人 → 非零且同厂', () => {
-      assert.ok(attachSame.status !== 0 && /同厂/.test(String(pAttachSame.error || '')), JSON.stringify(pAttachSame));
+    await t.test('attach 随 orca 卡退役，调用即拒', () => {
+      assert.notEqual(attachSame.status, 0, JSON.stringify(pAttachSame));
+      assert.match(String(pAttachSame.error || ''), /orca 已退役/);
     });
     const attachPass = spawnSync(process.execPath, [
       CLI, 'reviewer-attach', '--pr', '42', '--worktree', 'wt_w', '--reviewer', 'gpt-5.6-sol', '--dry-run',
     ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pAttachPass = payload(attachPass);
-    await t.test('attach gpt 到 grok 工人 → dry-run 通过', () => {
-      assert.ok(attachPass.status === 0 && pAttachPass.ok === true, JSON.stringify(pAttachPass));
+    await t.test('attach 退役 stub 不因同厂/异厂分岔', () => {
+      assert.notEqual(attachPass.status, 0, JSON.stringify(pAttachPass));
+      assert.match(String(pAttachPass.error || ''), /orca 已退役/);
     });
 
     const createSame = spawnSync(process.execPath, [

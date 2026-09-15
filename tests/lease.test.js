@@ -112,7 +112,81 @@ describe('没查成一律按占用（fail-close）', () => {
     assert.equal(got.noServer, true);
     assert.deepEqual(got.procs, []);
   });
+
+  // #1176 审官 P1：任意读出一条 cwd 不算核清。本身份还有没读成的，
+  // 不能因为已经看到 mirasim 服务就放行删除 / 放行「树是空的」。
+  it('本身份部分 cwd 没核清 → 没查成，即使已经读到别的 cwd', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['767216', '3015939', '11'],
+      read: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(p)?.[1];
+        if (p.endsWith('/status')) return 'Uid:\t999\t999\t999\t999\n';
+        if (p.endsWith('/cmdline')) return pid === '767216' ? 'mirasim-server/x/server.cjs' : 'y';
+        if (p.endsWith('/comm')) return 'codex\n';
+        const ppid = { 767216: 1, 3015939: 767216, 11: 1 }[pid];
+        return `${pid} (x) S ${ppid} 0 0`;
+      },
+      readlink: (p) => {
+        if (String(p).includes('/11/cwd')) throw eacces;
+        if (String(p).includes('/11/exe')) return '/usr/bin/node';
+        return 树1040;
+      },
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.match(got.error, /没核清/);
+  });
+
+  it('服务不在也不能跳过覆盖证明', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['1', '11'],
+      read: (p) => (p.endsWith('/status') ? 'Uid:\t999\t999\t999\t999\n' : p.endsWith('/stat') ? '1 (init) S 1 0 0' : ''),
+      readlink: (p) => {
+        if (String(p).includes('/11/cwd')) throw eacces;
+        if (String(p).includes('/11/exe')) return '/usr/bin/node';
+        return '/';
+      },
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.equal(got.noServer, undefined);
+    assert.match(got.error, /没核清/);
+  });
+
+  it('别人的进程 cwd EACCES 不挡：本身份核清后仍能认出会话', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['1', '767216', '3015939'],
+      read: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(p)?.[1];
+        if (p.endsWith('/status')) return pid === '1' ? 'Uid:\t0\t0\t0\t0\n' : 'Uid:\t999\t999\t999\t999\n';
+        if (p.endsWith('/cmdline')) return pid === '767216' ? 'mirasim-server/x/server.cjs' : 'y';
+        if (p.endsWith('/comm')) return 'codex\n';
+        const ppid = { 1: 0, 767216: 1, 3015939: 767216 }[pid];
+        return `${pid} (x) S ${ppid} 0 0`;
+      },
+      readlink: (p) => {
+        if (String(p).includes('/1/cwd') || String(p).includes('/1/exe')) throw eacces;
+        return pidCwd(p);
+      },
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.procs.some((p) => p.pid === 3015939), true);
+  });
 });
+
+function pidCwd(p) {
+  const pid = /\/proc\/(\d+)\//.exec(String(p))?.[1];
+  return pid === '3015939' ? 树1040 : '/';
+}
 
 describe('只认 mirasim 服务的后代', () => {
   // 机器上可能同时有第二个 mirasim 实例（实测 /tmp/mirasim-unix-smoke 那两个 pi
@@ -215,6 +289,119 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
     // 钉逐字的后果实测过：同文件加一个导出（LEASE_BUSY_REASON）就把这条测试弄红，
     // 而闸本身一点没坏。判据要盯住会出事的那件事，不是盯住代码长什么样。
     assert.match(src, /import \{[^}]*\bcheckTreeLease\b[^}]*\} from '\.\/dispatch\/lease\.mjs'/);
+  });
+});
+
+describe('覆盖证明与会话扫描共用一份 PID 快照（#1176 审官 P1）', () => {
+  // 审官判别性复现：第二次 PID 列表扩成 ['10','2','3'] 时，旧实现
+  // ok:true、procs 只有 pid 2、total:3——新出现的 PID 3 在目标树里，
+  // 既不进 procs 也不 unscanned。
+  it('第一次扫描后出现的本身份 PID 不许静默漏掉', async () => {
+    const { scanSessionProcs } = await LEASE;
+    let readdirCalls = 0;
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => {
+        readdirCalls += 1;
+        return readdirCalls === 1 ? ['10', '2'] : ['10', '2', '3'];
+      },
+      read: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(p)?.[1];
+        if (p.endsWith('/status')) return 'Uid:\t999\t999\t999\t999\n';
+        if (p.endsWith('/cmdline')) return pid === '10' ? 'mirasim-server/x/server.cjs' : 'y';
+        if (p.endsWith('/comm')) return 'worker\n';
+        const ppid = { 10: 1, 2: 10, 3: 10 }[pid];
+        return `${pid} (x) S ${ppid} 0 0`;
+      },
+      readlink: (p) => {
+        const pid = /\/proc\/(\d+)\//.exec(String(p))?.[1];
+        return pid === '10' ? '/' : '/wt/active';
+      },
+    });
+    const silentDrop = got.ok === true
+      && Array.isArray(got.procs)
+      && got.procs.some((p) => p.pid === 2)
+      && !got.procs.some((p) => p.pid === 3)
+      && got.total === 3;
+    assert.equal(silentDrop, false, JSON.stringify({ readdirCalls, result: got }));
+    assert.equal(readdirCalls, 1, '必须复用覆盖证明那一份 PID 快照，不许再读一次 /proc');
+    assert.equal(got.ok, true);
+    assert.equal(got.total, 2);
+    assert.deepEqual(got.procs, [{ pid: 2, comm: 'worker', cwd: '/wt/active' }]);
+  });
+});
+
+describe('stat/cmdline 没查成不许折叠成 noServer（#1176 审官 P1）', () => {
+  const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+  const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+  // 审官判别性实验：cwd 全部可读，stat/cmdline 对所有 PID 返回 EACCES。
+  // 旧实现 {"ok":true,"procs":[],"resolved":2,"total":2,"noServer":true}。
+  it('cwd 核清但 stat/cmdline 全是 EACCES → unscanned，不是 noServer', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      getuid: () => 999,
+      readdir: () => ['100', '200'],
+      readlink: () => '/wt/active',
+      read: () => { throw eacces; },
+    });
+    assert.equal(got.ok, false, JSON.stringify(got));
+    assert.equal(got.unscanned, true);
+    assert.notEqual(got.noServer, true);
+    assert.match(String(got.error || ''), /stat|cmdline/);
+  });
+
+  it('stat 没有 comm 右括号 → unscanned，不是跳过当没服务', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100', '200'],
+      readlink: () => '/',
+      read: (p) => (p.endsWith('/stat') ? '100 (broken' : ''),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.notEqual(got.noServer, true);
+    assert.match(got.error, /右括号/);
+  });
+
+  it('ppid 字段缺失 → unscanned', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100'],
+      readlink: () => '/',
+      read: (p) => (p.endsWith('/stat') ? '100 (x) S' : ''),
+    });
+    assert.equal(got.ok, false);
+    assert.equal(got.unscanned, true);
+    assert.match(got.error, /ppid/);
+  });
+
+  it('某个 pid 的 stat ENOENT → 当退了，其余核清仍可认 noServer', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['100', '200'],
+      readlink: () => '/',
+      read: (p) => {
+        if (String(p).includes('/100/stat')) throw gone;
+        if (p.endsWith('/stat')) return '200 (init) S 1 0 0';
+        return '';
+      },
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.noServer, true);
+    assert.deepEqual(got.procs, []);
+  });
+
+  it('cmdline 空串是内核线程的正常形态，仍算查成了且没有服务', async () => {
+    const { scanSessionProcs } = await LEASE;
+    const got = scanSessionProcs({
+      readdir: () => ['1', '2'],
+      read: (p) => (p.endsWith('/stat') ? '1 (init) S 1 0 0' : ''),
+      readlink: () => '/',
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.noServer, true);
+    assert.deepEqual(got.procs, []);
   });
 });
 

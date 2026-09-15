@@ -192,43 +192,42 @@ describe('planAttachSoldierDispatch（#631 活性闸 + skip-wait 决策矩阵）
 });
 
 describe('buildReviewerInject skip-wait 标记（#631 注入契约）', () => {
-  it('skip-wait → 注入带 s=1', async () => {
+  it('mirasim 审官注入无 orca 的 s=/d= 编排标记', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: 'ctx_worker', mergePolicy: 'auto', skipWait: true,
     });
-    assert.ok(/ s=1/.test(text), 'skip-wait 标记进注入 → ' + text);
-    assert.ok(/d=ctx_worker/.test(text), 'd 保留 → ' + text);
+    assert.match(text, /reviewer-book-mirasim\.md/);
+    assert.match(text, /p=626/);
+    assert.match(text, /m=auto/);
+    assert.doesNotMatch(text, / s=1/);
+    assert.doesNotMatch(text, /d=ctx_worker/);
   });
 
-  it('非 skip-wait → 注入不带 s 标记（worker-done 路径不变）', async () => {
+  it('非 skip-wait 同样是 mirasim 形态', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: 'ctx_worker', mergePolicy: 'auto', skipWait: false,
     });
-    assert.ok(!/ s=1/.test(text), '默认不带 s=1 → ' + text);
-    assert.ok(/p=626 d=ctx_worker m=auto$/.test(text), '默认形态不变 → ' + text);
+    assert.match(text, /p=626 m=auto/);
+    assert.doesNotMatch(text, / s=1/);
   });
 
-  it('skip-wait 无收件人：显式传 "" → 渲染成 d= 不炸（红项上帅）', async () => {
+  it('skip-wait 无收件人：显式传 "" 不炸', async () => {
     const S = await S_LOAD;
     const text = S.buildReviewerInject({
       spec: '按审官任务书审 PR #626', pr: '626',
       soldierDispatchId: '', mergePolicy: 'auto', skipWait: true,
     });
-    assert.ok(/d= /.test(text) || /d=$/.test(text.replace(/ s=1$/, '')), '空 d 渲染成 d= → ' + text);
-    assert.ok(/ s=1/.test(text), 's=1 仍在 → ' + text);
+    assert.match(text, /p=626 m=auto/);
   });
 
-  it('skip-wait 无收件人但传 null → 仍抛（dispatch:undefined 硬闸不因 skip-wait 松动）', async () => {
+  it('skip-wait 无收件人但传 null → 模板无 d= 占位也不再抛', async () => {
     const S = await S_LOAD;
-    let threw = false, msg = '';
-    try {
-      S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: null, mergePolicy: 'auto', skipWait: true });
-    } catch (e) { threw = true; msg = String(e.message || e); }
-    assert.ok(threw && /SOLDIER_DISPATCH_ID/.test(msg), 'null 必须抛 → ' + msg);
+    const text = S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: null, mergePolicy: 'auto', skipWait: true });
+    assert.match(text, /p=1 m=auto/);
   });
 });
 
@@ -268,8 +267,8 @@ describe('#799 planCreateSoldierDispatch（结算态士兵仍起审官）', () =
       spec: '按审官任务书审 PR #797', pr: '797',
       soldierDispatchId: r.soldierDispatchId, mergePolicy: 'auto',
     });
-    assert.ok(/d= /.test(inject) || /d= m=/.test(inject) || /d=$/.test(inject.replace(/ m=.*$/, '')),
-      '注入空 d= → ' + inject);
+    assert.match(inject, /reviewer-book-mirasim\.md/);
+    assert.doesNotMatch(inject, /d=ctx_/);
   });
 
   it('活士兵 → 注入真 id，身份可投（#552 闸对活人仍走）', async () => {
@@ -342,8 +341,8 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
       spec: '按审官任务书审 PR #798', pr: '798',
       soldierDispatchId: '', mergePolicy: r.mergePolicy, fallbackReason: r.fallbackReason,
     });
-    assert.ok(/m=auto/.test(inject) && /fb=账本无mergePolicy/.test(inject),
-      '任务书写明回退原因 → ' + inject);
+    assert.ok(/m=auto/.test(inject), '回退 auto 写入任务书 → ' + inject);
+    assert.ok(!/fb=/.test(inject), 'mirasim 注入无 fb= 编排标记 → ' + inject);
   });
 
   it('账本没查成 → 回退 auto，原因是读不到（与「没有字段」分开）', async () => {
@@ -365,6 +364,64 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
     });
     assert.ok(r.ok && r.mergePolicy === 'manual' && r.source === 'comment',
       '卡备注兜底 → ' + JSON.stringify(r));
+  });
+
+  // 2026-09-15 实咬：#1275 / #1276 / #1277 的账本记的是 manual 但没留 merge_reason。
+  // resolveReviewerMergePolicy 原样透传 null，buildMirasimReviewerPrompts 的硬闸
+  // 「m=manual 必须带 r=<原因>」当场拒——每 20 分钟拒一次，试满 3 次打「卡死/自动化认输」，
+  // 而认输评论写的是「叫了 3 次审官判定仍是 0」，把确定性拒绝伪装成重试没推动。
+  // 旗标那一侧该拒（调用方现在就能补）；账本/卡备注是恢复出来的历史，没有可补的对象。
+  it('账本 manual 但没留理由 → 补一句如实说明，不留 null（否则审官任务书渲不出来）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: null },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.mergePolicy, 'manual', '安全相关的那半原样保留，不许退回 auto');
+    assert.equal(r.source, 'ledger');
+    assert.equal(r.reasonSynthesized, true, '要标出这句理由是补的，不是原始判据');
+    assert.match(String(r.mergeReason), /账本/, '话面要说清楚是从哪恢复的  →  ' + r.mergeReason);
+    assert.match(String(r.mergeReason), /待帅位补/, '要让读的人知道这不是真理由  →  ' + r.mergeReason);
+  });
+
+  it('补出来的理由能过审官任务书那条硬闸（本单要治的就是这个死锁）', async () => {
+    const S = await S_LOAD;
+    const MI = await import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs').replace(/\\/g, '/'));
+    const policyPlan = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: null },
+    });
+    const built = MI.buildMirasimReviewerPrompts({
+      pr: '1277', policyPlan, render: S.buildReviewerInject,
+    });
+    assert.equal(built.ok, true, '不许再被「m=manual 必须带 r=<原因>」拒  →  ' + JSON.stringify(built));
+    assert.equal(built.mergePolicy, 'manual');
+    assert.match(built.prompt, /m=manual/, '任务书仍是 manual  →  ' + built.prompt);
+  });
+
+  it('账本有理由时一个字都不改（补理由只在缺的时候发生）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: '改协作约定' },
+    });
+    assert.equal(r.mergeReason, '改协作约定');
+    assert.equal(r.reasonSynthesized, undefined, '没补就不许打这个标');
+  });
+
+  it('账本 auto 不受影响（auto 本来就没有理由）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'auto', mergeReason: null },
+    });
+    assert.equal(r.mergePolicy, 'auto');
+    assert.equal(r.mergeReason, null);
+    assert.equal(r.reasonSynthesized, undefined);
+  });
+
+  it('显式 --merge-policy manual 缺理由仍然拒（调用方补得上，不许跟着放水）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({ explicitPolicy: 'manual', explicitReason: '  ' });
+    assert.equal(r.ok, false, '旗标那一侧该拒  →  ' + JSON.stringify(r));
+    assert.match(String(r.error), /--merge-reason/);
   });
 
   it('显式 --merge-policy auto 压过账本 manual', async () => {

@@ -97,7 +97,10 @@ describe('land e2e（真 git 临时仓）', () => {
     g(work, 'worktree', 'add', path.join(tmp, 'wt-dm'), 'wtdm-b');
     fs.writeFileSync(path.join(tmp, 'wt-dm', 'scratch.txt'), '还在试的东西');
     commit('c2'); // master 领先 origin 1 个 → 该推；也让上面两条零提交支变成「主干上的严格祖先」（#898 真实时序）
-    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], {
+      encoding: 'utf8',
+      env: { ...process.env, DAO_CONTROL_PLANE: 'true' },
+    });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     // 推到了
     assert.equal(g(bare, 'rev-parse', 'master'), g(work, 'rev-parse', 'master'), '主分支要推上远端');
@@ -140,7 +143,10 @@ describe('land e2e（真 git 临时仓）', () => {
     g(work, ...env, 'merge', '--no-ff', '-m', 'merge merged-b', 'merged-b');
     g(work, 'push', 'origin', 'master'); // 推平，让「有活」只可能来自那条可删的分支
     const land = path.join(REPO, 'scripts', 'land.mjs');
-    const has = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
+    const has = spawnSync(process.execPath, [land, '--has-work', work], {
+      encoding: 'utf8',
+      env: { ...process.env, DAO_CONTROL_PLANE: 'true' },
+    });
     assert.equal(has.status, 0, has.stdout + has.stderr);
     assert.match(has.stdout, /有活/);
     const branches = g(work, 'for-each-ref', 'refs/heads', '--format=%(refname:short)').split(/\r?\n/);
@@ -158,7 +164,10 @@ describe('land e2e（真 git 临时仓）', () => {
     g('init', '-b', 'master', '.');
     spawnSync('git', ['-C', tmp, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'c'], { encoding: 'utf8' });
     g('checkout', '-b', 'feat');
-    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), tmp], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), tmp], {
+      encoding: 'utf8',
+      env: { ...process.env, DAO_CONTROL_PLANE: 'true' },
+    });
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stdout, /派生分支/, '要说清为什么拒绝、该走哪条路');
   });

@@ -1,0 +1,27 @@
+{
+  "issue": 1174,
+  "taskId": "1174-sol-relay-execution",
+  "sessionKey": "codex:53f08e23-b997-4807-b8ab-f4541f8c52ea",
+  "observedAt": "2026-09-13T05:13:43.155Z",
+  "backend": "mirasim",
+  "agent": "codex",
+  "model": "gpt-5.6-sol",
+  "workdir": "/tmp/sol-verify-wt",
+  "phase": "done",
+  "numTurns": null,
+  "error": null,
+  "toolCalls": [
+    {
+      "id": "call_JWTgy6JJqrPEp2G0MWJY7RMY",
+      "name": "shell",
+      "status": "done"
+    }
+  ],
+  "probe": {
+    "file": "proof-sol.txt",
+    "expectedToken": "SOL_VERIFY_TOKEN_9c4e21",
+    "tokenEchoed": true,
+    "text": "SOL_VERIFY_TOKEN_9c4e21"
+  },
+  "why": "此前 availability 只有 inventory 级证据（relay 报 configured/ok 且清单列了模型），执行目录据此拒绝用它起审官。本次用底层 mirasim runtime 直接起会话取得执行级证据，与 1174-luna-relay-execution 同口径。profiles 只在取证进程的内存里放行，取证脚本本身不写回目录。"
+}

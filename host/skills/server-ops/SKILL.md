@@ -7,6 +7,12 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 
 只写「改这台机器前必须知道什么」。装法见 `NEW-MACHINE.md` §9d。
 
+## skills 装载面自愈（#1146）
+
+- 单元模板：`host/machine/systemd/dao-skills-heal.service`（装法在文件头）。
+- 幂等安装（要 root）：`scripts/install-skills-heal.sh`。装法见 `NEW-MACHINE.md` §11.1，本页不复制。
+- 探活：`systemctl list-timers` 里要有 `dao-skills-heal.timer`，**NEXT 不能是 `-`**。dao-check ㉚：没装 SKIP，被劫红。
+
 ## land timer
 
 - 单元模板：`host/machine/systemd/dao-land.service` + `.timer`（装法在文件头）。
@@ -19,6 +25,15 @@ description: 给服务器上的帅/工人用的运维便签。改这台机器上
 - 幂等安装（要 root）：`sudo bash scripts/install-miraquota-contabo.sh`。装完自己验 NEXT，并以 orca 跑一次 `--dry-run`。
 - 一条命令：`node scripts/miraquota-contabo-sync.mjs --once`（timer 调同一条；`--dry-run` 只打印）。
 - 探活：`systemctl list-timers` 里要有 `miraquota-contabo.timer`，**NEXT 不能是 `-`**。多机页出现 `contabo`，额度数对得上 `getRelay` 的 usage windows。
+
+## 看板阶段超时（墙钟闸）
+
+v0 零界面（#818）：一张表 + 墙钟超 `docs/dispatch-policy.json` 的 `board.workerWallHoursMax` 才报到总控群。跟上面「连续 N 轮没动」不是同一把尺。
+
+- 单元模板：`host/machine/systemd/dao-board-watch.service` + `.timer`（装法在 service 文件头）。
+- 幂等安装（要 root）：`sudo bash scripts/install-board-watch.sh`。
+- 一条命令：`node scripts/board-watch.mjs`（timer 调同一条；`--dry-run` 只打印）。读表：`node scripts/dao.mjs board [--json]`。
+- 探活：`systemctl list-timers` 里要有 `dao-board-watch.timer`，**NEXT 不能是 `-`**。源没查成 exit 2，不许当成没超时。
 
 ## 卡死发现（盘面推进量）
 

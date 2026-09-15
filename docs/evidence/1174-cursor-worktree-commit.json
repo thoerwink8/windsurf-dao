@@ -1,0 +1,92 @@
+{
+  "issue": 1174,
+  "taskId": "1174-T1-cursor-worktree-commit",
+  "sessionKey": "acp:b6fe9d95-1c46-44bb-8726-e19466b36442",
+  "observedAt": "2026-09-09T18:07:34.306Z",
+  "backend": "acp",
+  "agent": "cursor",
+  "model": "composer-2.5[fast=true]",
+  "workdir": "/tmp/dao-acp-e2e/worktree",
+  "phase": "done",
+  "stopReason": "end_turn",
+  "toolCalls": [
+    {
+      "kind": "read",
+      "status": "completed",
+      "title": "Read data.txt"
+    },
+    {
+      "kind": "execute",
+      "status": "completed",
+      "title": "`git status && git log -3 --oneline`"
+    },
+    {
+      "kind": "edit",
+      "status": "completed",
+      "title": "Edit `/tmp/dao-acp-e2e/worktree/data.txt`"
+    },
+    {
+      "kind": "execute",
+      "status": "completed",
+      "title": "`git add data.txt && git commit --trailer \"Co-authored-by: Cursor <[email]>\" -m \"$(cat <<'EOF'\ngamma-change\nEOF\n)\" && gi"
+    }
+  ],
+  "interactions": [
+    {
+      "method": "session/request_permission",
+      "status": "answered",
+      "answerSource": "worktree_scope",
+      "permission": "worktree_scoped",
+      "segments": [
+        [
+          "git",
+          "status"
+        ],
+        [
+          "git",
+          "log",
+          "-3",
+          "--oneline"
+        ]
+      ]
+    },
+    {
+      "method": "session/request_permission",
+      "status": "answered",
+      "answerSource": "worktree_scope",
+      "permission": "worktree_scoped",
+      "segments": [
+        [
+          "git",
+          "add",
+          "data.txt"
+        ],
+        [
+          "git",
+          "commit",
+          "--trailer",
+          "Co-authored-by: Cursor <[email]>",
+          "-m",
+          "gamma-change"
+        ],
+        [
+          "git",
+          "rev-parse",
+          "HEAD"
+        ]
+      ]
+    }
+  ],
+  "cleanup": {
+    "verified": true,
+    "survivors": []
+  },
+  "manualAnswers": 0,
+  "artifact": {
+    "commit": "ef26cf20306267de1f8b1c281d41b8ce1abfaf90",
+    "subject": "gamma-change",
+    "diffstat": "data.txt | 1 +",
+    "worktreeCleanAfter": true
+  },
+  "processSurvivors": []
+}

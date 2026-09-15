@@ -143,6 +143,35 @@ describe('planProbe', () => {
     assert.ok(p.url.endsWith('/responses'), p.url);
     assert.equal(p.target, 'direct:codex@pqapi/responses');
   });
+  it('mirasim-relay 与 gpt 共用同一条健康 target，不能改 provider 就把闸摘掉', async () => {
+    const { planProbe, probeTargetOf } = await import(LIB);
+    assert.equal(probeTargetOf({ provider: 'mirasim-relay' }), 'direct:codex@pqapi/responses');
+    assert.equal(probeTargetOf({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }), 'direct:codex@pqapi/responses');
+    const p = planProbe({ provider: 'mirasim-relay', cli_model: 'gpt-5.6-sol' }, { codexConfig: { ok: true, baseUrl: base, authPath: '/x/auth.json' } });
+    assert.equal(p.kind, 'codex-responses');
+    assert.equal(p.target, 'direct:codex@pqapi/responses');
+  });
+  it('codexResponsesProbeBody 的 input 是结构化 message，不是裸字符串', async () => {
+    const { codexResponsesProbeBody } = await import(LIB);
+    const b = codexResponsesProbeBody({ model: 'gpt-5.6-luna', text: 'ping', maxOutputTokens: 8 });
+    assert.equal(b.model, 'gpt-5.6-luna');
+    assert.equal(b.stream, true);
+    assert.equal(b.max_output_tokens, 8);
+    assert.equal(Array.isArray(b.input), true);
+    assert.equal(typeof b.input, 'object');
+    assert.notEqual(typeof b.input, 'string');
+    assert.equal(b.input[0].type, 'message');
+    assert.equal(b.input[0].role, 'user');
+    assert.equal(b.input[0].content[0].type, 'input_text');
+    assert.equal(b.input[0].content[0].text, 'ping');
+  });
+  it('planProbe(gpt) 的 body.input 也是结构化 message（与周期探针同一份 helper）', async () => {
+    const { planProbe } = await import(LIB);
+    const p = planProbe({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }, { codexConfig: { ok: true, baseUrl: base, authPath: '/x/auth.json' } });
+    assert.equal(Array.isArray(p.body.input), true);
+    assert.equal(p.body.input[0].type, 'message');
+    assert.equal(p.body.input[0].content[0].type, 'input_text');
+  });
   it('cursor/opencode-go/devin/grok → unscanned（不许当绿）', async () => {
     const { planProbe } = await import(LIB);
     for (const provider of ['cursor', 'opencode-go', 'devin', 'grok']) {
@@ -336,5 +365,48 @@ describe('extractFinish / settleScan（纯函数判据）', () => {
     const cut = { code: 200, ms: 1, netError: 'terminated' };
     assert.equal(settleScan('gw-openai', newScan(), cut).state, 'red');
     assert.equal(settleScan('gw-openai', { ...newScan(), gotContent: true }, cut).state, 'no_finish');
+  });
+});
+
+// 本地登录型（网关退役后 grok/composer 走官方 CLI 自己的登录态）：
+// 探不到会话健康，只有凭据文件在不在这一层证据——缺=红，在=unscanned，**永远不许绿**。
+describe('native-login：缺凭据红 / 有凭据也不许绿', () => {
+  const noFile = () => false;
+
+  it('probeTargetOf 给本地登录型算出 native:<provider> 键', async () => {
+    const { probeTargetOf } = await import(LIB);
+    assert.equal(probeTargetOf({ provider: 'xai-native', cli_model: 'grok-4.6' }), 'native:xai-native');
+    assert.equal(probeTargetOf({ provider: 'cursor-native' }), 'native:cursor-native');
+    // 不在表里的 provider 认不出 → null（调用方据此判 unscanned，不猜一个键出来）
+    assert.equal(probeTargetOf({ provider: 'opencode-go' }), null);
+  });
+
+  it('缺凭据文件 = red（派工必然起不来，这是确定的事实）', async () => {
+    const { planProbe, runProbe } = await import(LIB);
+    const plan = planProbe({ provider: 'xai-native' }, {});
+    assert.equal(plan.kind, 'native-login');
+    const r = await runProbe(plan, { exists: noFile });
+    assert.equal(r.state, 'red');
+    assert.match(r.why, /凭据不在/);
+  });
+
+  it('凭据文件在 = unscanned，且 why 说清「文件在 ≠ 会话健康」', async () => {
+    const { planProbe, runProbe } = await import(LIB);
+    const plan = planProbe({ provider: 'xai-native' }, {});
+    const r = await runProbe(plan, { exists: () => true });
+    assert.equal(r.state, 'unscanned');
+    assert.match(r.why, /文件在 ≠ 会话健康/);
+  });
+
+  it('本地登录型整表单源：provider-probe 与 execution-catalog 用同一份路径表', async () => {
+    const probe = await import(LIB);
+    const catalog = await import('file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'execution-catalog.mjs').replace(/\\/g, '/'));
+    const { NATIVE_LOGIN_FILES } = probe;
+    const names = Object.keys(NATIVE_LOGIN_FILES);
+    assert.deepEqual(names.sort(), ['cursor-native', 'devin-native', 'xai-native']);
+    // 凭据盘点必须逐条用同一份路径（两处各手打一份是「加一个 provider 要记得改两处」的由来）
+    const inv = catalog.discoverExecutionCredentials({ home: '/tmp/h', read: () => '', exists: () => false });
+    const native = inv.filter(e => e.kind === 'native-login').map(e => e.location).sort();
+    assert.deepEqual(native, names.map(p => `~/${NATIVE_LOGIN_FILES[p]}`).sort());
   });
 });

@@ -542,3 +542,10 @@ describe('session-audit-hook · 落点与真跑', () => {
     }
   });
 });
+
+// 收尾清理：变异手/夹具都落在仓内 _tmp/session-audit-sandbox。谁跑这套测试，
+// 谁就在仓里留下 ~370 个文件——**宿主是 root 时它们全是 root 属主**，
+// 于是紧接着跑的 dao-check「仓内属主」项当场红，且每次重跑可复现（2026-09-10 实咬：
+// 刚合并完 #1175 复跑 dao-check 就看到 360 个 root 文件，一路查到是这套自己的落盘）。
+// 目录本身 gitignored，但属主不看 gitignore。
+process.on('exit', () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });

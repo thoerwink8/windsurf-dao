@@ -9,8 +9,9 @@
 //      本实现按 pi-gateway.ts 的真实路由分流——「拼一模一样的请求」优先于简化描述。）
 //   - codex（gpt-5.6-sol）：pqapi 直连，wire_api=responses → /v1/responses，
 //     key 在 ~/.codex/auth.json 的 OPENAI_API_KEY，base_url 在 config.toml。
-//   - 其它 provider（grok Build / cursor / opencode-go / devin）：没有可对齐的
-//     网关端点 → unscanned，**不许当绿**。
+//   - 本地登录型（grok Build / composer / devin，表见 NATIVE_LOGIN_FILES）：没有可对齐的
+//     网关端点 → 只验凭据文件在不在（缺=红，在=unscanned，**不许当绿**）。
+//   - 其余不认识或有登录态、探不到的 provider：unscanned，**不许当绿**。
 //
 // 判据两条都要满足：**收到真内容** + **流正常收尾**（#953）。四态互不合并：
 //   green     = 2xx + 至少一段非空 content/reasoning/text + 见到本口的收尾事件；
@@ -38,6 +39,21 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const PROBE_MESSAGE = 'ping';
 const PROBE_MAX_TOKENS = 8;
 
+/**
+ * Codex /responses 探针请求体。input 必须是结构化 message，不能是裸字符串。
+ * 2026-09-10 实咬：裸 'ping' 被本机 responses→chat 桥转成空 messages，上游回
+ * `field messages is required` → 500，健康表把探针自己造的红记成「上游挂了」。
+ * 周期探针 gw-remote-probe.mjs 必须用这一份，不许再手写一份。
+ */
+export function codexResponsesProbeBody({ model, text = PROBE_MESSAGE, maxOutputTokens = PROBE_MAX_TOKENS } = {}) {
+  return {
+    model,
+    stream: true,
+    max_output_tokens: maxOutputTokens,
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: String(text ?? '') }] }],
+  };
+}
+
 /** 组 id → 健康表短名：gw（grok 组）→ grok，gw-dspool → dspool。 */
 function groupShort(groupId) {
   const g = String(groupId || '');
@@ -54,9 +70,28 @@ function splitGwModel(cliModel) {
 }
 
 /**
+ * 本地登录型 provider 的**凭据文件**（相对 ~）。2026-09-12 网关退役后，
+ * grok / composer 这些腿走的是官方 CLI 自己的登录态，不经 newapi 网关——
+ * 没有 HTTP 端点可探（探真请求要烧订阅额度，见 human_holds「花钱」），
+ * 所以探测面只到「凭据文件在不在」这一层，且**文件在 ≠ 会话健康**。
+ *
+ * 本表是唯一真相：execution-catalog.mjs 的凭据盘点从这里取（原先两处各手打一份，
+ * 见 memory `hand-typed-constant-will-be-wrong`）。加 provider 只改这里。
+ */
+export const NATIVE_LOGIN_FILES = {
+  'xai-native': '.grok/auth.json',
+  'cursor-native': '.config/cursor/auth.json',
+  'devin-native': '.local/share/devin/credentials.toml',
+};
+
+/**
  * 落地 → 健康表 target key（两仓共用契约，见 issue #842）。
- * gw:  `gw:<组短名>/<模型>`；codex 直连： `direct:codex@pqapi/responses`。
+ * gw:  `gw:<组短名>/<模型>`；codex 直连 / 现役 GPT relay： `direct:codex@pqapi/responses`。
+ * 本地登录型： `native:<provider>`（只够验凭据文件在不在，见 NATIVE_LOGIN_FILES）。
  * 认不出的 provider → null（调用方据此判 unscanned）。
+ *
+ * `mirasim-relay` 与旧 `gpt` 共用这一条唯一 target：周期探针仍写这个 key，
+ * 网关退役只改了选型落地的 provider 字符串，健康/熔断闸不能跟着摘掉。
  */
 export function probeTargetOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
@@ -67,8 +102,11 @@ export function probeTargetOf(landing) {
     if (!parts) return null;
     return `gw:${groupShort(parts.group)}/${parts.model}`;
   }
-  if (provider === 'gpt') {
+  if (provider === 'gpt' || provider === 'mirasim-relay') {
     return 'direct:codex@pqapi/responses';
+  }
+  if (NATIVE_LOGIN_FILES[provider]) {
+    return `native:${provider}`;
   }
   return null;
 }
@@ -116,7 +154,8 @@ export function loadCodexConfig({ home = os.homedir(), read = readFileSync, exis
 
 /**
  * planProbe(landing) → { kind, url, headers（打码描述，不含 key 明文）, body, target, provider, model }。
- * kind ∈ gw-openai | gw-anthropic | codex-responses | unscanned。
+ * kind ∈ gw-openai | gw-anthropic | codex-responses | native-login | unscanned。
+ * native-login 无 url（不发现请求，只验凭据文件在不在，见 runProbe）。
  * gatewayConfig / codexConfig 可注入（测试用）；不给则现读盘（url 用真值，key 仍不进返回）。
  */
 export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exists } = {}) {
@@ -155,7 +194,7 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
     };
   }
 
-  if (provider === 'gpt') {
+  if (provider === 'gpt' || provider === 'mirasim-relay') {
     const cx = codexConfig || loadCodexConfig({ home, read, exists });
     if (!cx.ok) {
       return { kind: 'unscanned', provider, target, why: cx.error };
@@ -165,7 +204,7 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
       kind: 'codex-responses',
       url: `${cx.baseUrl}/responses`,
       headers: { Authorization: 'Bearer <codex OPENAI_API_KEY>', 'Content-Type': 'application/json' },
-      body: { model, stream: true, max_output_tokens: 16, input: PROBE_MESSAGE },
+      body: codexResponsesProbeBody({ model }),
       target,
       provider,
       model,
@@ -173,7 +212,14 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
     };
   }
 
-  // grok Build / cursor / opencode-go / devin：没有可对齐的网关端点 → 不许当绿。
+  // 本地登录型（grok Build / composer / devin）：没有 HTTP 端点可探 → 只验凭据文件在不在。
+  // 缺文件 = 红（派工一定起不来，是确定的事实）；文件在 = unscanned（文件在 ≠ 会话健康，
+  // 会话可能过期/被顶掉，那只有真跑一条才知道，而真跑要烧订阅额度——见文件头 NATIVE_LOGIN_FILES）。
+  if (NATIVE_LOGIN_FILES[provider]) {
+    return { kind: 'native-login', provider, target, cliModel, nativeFile: NATIVE_LOGIN_FILES[provider] };
+  }
+
+  // opencode-go / windsurf 之类：既没有可对齐的网关端点，也不在本地登录表里 → 不许当绿。
   return { kind: 'unscanned', provider, target, why: `provider ${provider || '(空)'} 没有可对齐的探测端点` };
 }
 
@@ -364,6 +410,18 @@ export function settleScan(kind, scan, { code = null, ms = 0, timeoutMs = null, 
  * fetchImpl 可注入（测试用 fake server）。
  */
 export async function runProbe(plan, { timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl, home, read, exists, gatewayConfig } = {}) {
+  // 本地登录型：不发现请求，只验凭据文件在不在（判据写在 planProbe 的注释里）。
+  if (plan && plan.kind === 'native-login') {
+    const isThere = exists || existsSync;
+    const h = home || os.homedir();
+    const rel = String(plan.nativeFile || '');
+    const file = join(h, rel);
+    if (!rel) return { state: 'unscanned', code: null, ms: 0, why: `本地登录表里没有 ${plan.provider} 的凭据文件路径` };
+    if (!isThere(file)) {
+      return { state: 'red', code: null, ms: 0, why: `本地登录凭据不在：~/${rel}（派工必然起不来）` };
+    }
+    return { state: 'unscanned', code: null, ms: 0, why: `凭据文件在（~/${rel}），但文件在 ≠ 会话健康——不真跑一条验不出，不报绿` };
+  }
   if (!plan || plan.kind === 'unscanned' || !plan.url) {
     return { state: 'unscanned', code: null, ms: 0, why: plan?.why || '未知 provider，不探（不许当绿）' };
   }

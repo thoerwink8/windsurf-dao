@@ -77,9 +77,10 @@
 // ㉙ 发布策略 schema（#817）：docs/release-policy.json 可解析且过 schema（四个顶层键 /
 //    confirm 三级 / bump 表 / 每项目 demo）。检查器自持解析，不 import 消费方；
 //    红/绿/空夹具验判别力；文件不在 / JSON 坏了 / 四个顶层键都没有 = 没查成。
-// ㉚ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
-//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
-//    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
+// ㉚ skill 发现面符号链接（#793 / #1146）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
+//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红。整目录链接（mirasim 劫走）
+//    报「被劫」，本机无 ~/.claude/skills 报 SKIP「没装」——两种红/跳必须分形，常红等于没有检查。
+//    接回走 onboard / dao-skills-heal.timer，本项只报警。0 个 skill = 没查成
 // ㉛ 派前探 + 熔断 + 指挥官策略（#842 / #843 / #849）：docs/dispatch-policy.json 的 preflight 取值范围
 //    （enabled/useHealthTable 布尔、timeoutMs 500~60000、maxCandidates 整数 1~12）、breaker
 //    （windowHours 1–168、failuresToTrip 1–20、cooldownHours 0.25–168、halfOpenProbes 1–5）、
@@ -93,6 +94,34 @@
 // ㉝ 帅位不得自合 reviews=0 的 PR（#1093）：author 与 mergedBy 同为 marshal 且 reviews=0 ⇒ 红。
 //    检查器自持 marshal 登录名，不 import gh.mjs；红/绿/空夹具验判别力；0 个 PR = 没查成。
 //    live 出网，只在 --full 跑；基准 PR 之后才对照（存量自合并是另一单）。
+// ㉞ 合并闸形状（#999）：在管公开活仓该有 master 保护，形状必须是
+//    required=["check"]、enforce_admins=false、strict=false。扫描面从 INDEX E 类 /
+//    群映射 / 发布策略并出，不手写仓名单。live 只验本仓（别的公开仓如 miraquota-win
+//    刻意没装闸，扫进去会永远红）。live 打 GET branches/master（CI contents:read 够）；
+//    完整 /protection 要 Administration，CI/App 403 → SKIP 仍绿 = 闸不存在。
+//    缺 gh / 连摘要都 403 SKIP 不是绿；空清单 / 探头失败 = 没查成。
+//    strict 不在摘要里，live 盖不住「有人把 strict 拨成 true」——装闸脚本走完整 /protection。
+//    不造分发器：配置动作用 scripts/apply-branch-protection.mjs，一次一个仓。
+// ㉟ 在管仓 .git 属主一致性（#1149）：windsurf-dao / ai-gateway-stack 的 `.git` 里出现
+//    root 属主文件即红，红项点名文件并给出 `chown -R orca:orca <repo>/.git`。
+//    扫完 0 条和仓路径不在必须分开（后者没查成，不是绿）。find 任意非零 / stderr
+//    （含 Permission denied）也是没查成，不许把部分扫描当干净。工作区属主闸故意
+//    `-not -path './.git/*'`，本项另开一道不改那条。Windows 无 uid 跳过。
+// ㉠ 测试结构性够不着真执行体（#1152）：运行时 allowlist（默认拦，DAO_REAL_EXECUTOR=1
+//    才放；测试信号不能选择加入）。红夹具必须点出 env-lost 与测试不能 opt-in；
+//    绿夹具必须是生产旗标。ensureWorkspace / startSession / cmdDispatchMirasim /
+//    cmdStartMirasim / cmdWorktreeCreateMirasim / execution-runtime 都要在真 IO 前过闸。
+//    指挥官 runCmd 与 systemd 模板必须打 DAO_REAL_EXECUTOR=1。
+//    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
+// ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
+//    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
+// ㊲ 判据不得经过外壳的引号层（2026-09-13 用户拍板「赞同」，随 #1240）：扫仓内追踪面，
+//    `node -e`/`python3 -c` 等内联代码里出现 `$`、`--body` 参数里出现命令替换、gh issue
+//    写动作带 `--body`，都报红——外壳会先展开一轮，**命令照常 exit 0、输出照常像模像样**，
+//    错的只是判据本身（2026-09-13 实咬：`node -e "…/@e([0-9a-f]{12})$/…"` 的 `$/` 被吞）。
+//    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
+//    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
+//    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -105,10 +134,13 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
+import { PENDING_DECISION_LABEL } from './lib/hub-pending.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
+import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
@@ -147,9 +179,21 @@ import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
 import {
+  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
+} from './lib/inline-script-check.mjs';
+import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
+import {
+  inspectBranchProtectionFixtures, inspectThisRepoProtection,
+  collectManagedReposFromRoot, repoSlugFromRemote,
+} from './lib/branch-protection-check.mjs';
+import {
+  classifyGitOwnership, scanGitRepo, inspectGitOwnershipFixtures, interpretFindRootOwned, DEFAULT_MANAGED_REPOS,
+} from './lib/git-ownership-check.mjs';
+import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
+import { classifyChainDepth } from './lib/chain-depth-check.mjs';
 import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
@@ -158,11 +202,19 @@ import {
   inspectMarshalSelfMerge, inspectMarshalSelfMergeFixtures,
   MARSHAL_SELFMERGE_BASELINE_PR,
 } from './lib/marshal-selfmerge-check.mjs';
-import { parseInboxDoc, assessInbox } from './lib/inbox.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
 import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
+import {
+  inspectTestExecutorIsolationFixtures, inspectTestExecutorIsolationLive,
+  inspectIsolationWiring,
+} from './lib/test-executor-isolation-check.mjs';
+import { readBranchProtection } from './lib/branch-protection-io.mjs';
+import {
+  checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
+} from './lib/retired-verb-advert-check.mjs';
+import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -643,6 +695,63 @@ function checkRoutingProvidersToml() {
   }
 }
 
+/** provider 启动模板里的命令词，本机解析得了吗（#2026-09-13 实咬：command-code 写错一个月没人发现）。
+ *  判据实现是纯函数（scripts/lib/launch-binary.mjs），这里只负责喂输入。
+ *  PATH 从本进程取——这是**宿主局部**判据，换台机器结论就不同，所以前提文字里带 PATH。 */
+function checkLaunchBinaries() {
+  if (!existsSync(ROUTING_FILE)) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 不在，本次等于没查', ROUTING_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+  } catch (e) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 解析失败（另有一项会单独报解析错）', String(e.message || e).slice(0, 120));
+    return;
+  }
+  const providers = Object.entries(doc.providers || {})
+    .filter(([, p]) => p && typeof p === 'object')
+    .map(([name, p]) => ({ name, cli: p.cli, launch: p.launch }));
+  // 判据锚在**部署环境**的 PATH，不是碰巧跑检查那个 shell 的（2026-09-13 实咬：
+  // sudo/裸 shell 下 PATH 不含 ~/.local/bin，reclaude/devin 判「解析不到」→ 假红；
+  // 真实服务 commander-act.service 的 PATH 显式带着它）。见 launch-binary.mjs 的 resolveProbePath。
+  const { pathValue, source } = resolveProbePath(process.env, {
+    unitDir: join(ROOT, DEPLOY_UNIT_DIR),
+    io: { readdir: readdirSync, readFile: p => readFileSync(p, 'utf8') },
+  });
+  // **这条检查只在部署宿主上跑**（2026-09-13 CI 实咬，run 34744690601）。
+  // 它问的是「这台机器上那些 agent CLI 解析得了吗」——CI runner 上答案当然是「解析不了」，
+  // 于是 24 处红、`--all-tests` 稳定退出 1。**那不是模板的 24 个错误，是问错了机器。**
+  //
+  // 判据用部署宿主的专属落点（`~/.mirasim/run` 等），不用「PATH 里目录在不在」——
+  // 后者在 CI 上会被 `/usr/bin` 这些通用目录兜住，两次都判成「是本机」（见
+  // launch-binary.mjs 的 deploymentHostPresence 注释，判例 patch-stacking-is-two-strikes）。
+  //
+  // 不是宿主 ⇒ `unscanned`（没查成），既不判红也不判绿。按项目规矩：
+  // 输出必须能区分「扫完查出 0 条」与「这次没扫到任何样本」——在这里连样本都没有。
+  const hostPresence = deploymentHostPresence({ homeDir: homedir() });
+  if (hostPresence.host !== true) {
+    skip(`启动模板命令词：这条检查是宿主局部的，本机不是部署宿主（${hostPresence.why || '判不了'}）——本次没查成，不是绿也不是红`);
+    return;
+  }
+  const verdict = classifyLaunchBinaries({ providers, pathValue, pathSource: source, homeDir: homedir() });
+  if (verdict.state === 'unknown') {
+    fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
+    return;
+  }
+  if (verdict.state === 'ok') {
+    green(`启动模板命令词 ${verdict.checked} 个 provider 本机都解析得出${verdict.excused.length ? `（${verdict.excused.length} 处走显式落点）` : ''}`);
+    return;
+  }
+  fail(
+    `启动模板 ${verdict.broken.length} 处命令词本机解析不到`,
+    '改 docs/model-routing.toml 的 cli/launch 用本机真有的名字（npm 包声明的 bin 与它建的符号链接不是一回事）；'
+    + '确实不在 PATH 的（如 cursor-agent）走 launch-binary 与 ACP 相同的版本目录动态解析，不要钉死某次实测版本',
+    verdict.detail,
+  );
+}
+
 function checkRoutingPolicyJson() {
   if (!existsSync(ROUTING_POLICY_FILE)) {
     fail('docs/model-routing.json 不在', '选型 JSON 缺失 ⇒ 本次等于没查；恢复文件', ROUTING_POLICY_FILE);
@@ -899,6 +1008,19 @@ function checkDispatchGateAlive() {
   else fail(...r.fail);
 }
 
+function checkControlPlaneAlive() {
+  const r = checkControlPlaneProduction({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkControlPlaneDropPointAlive() {
+  const r = checkControlPlaneDropPoint();
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
+  else fail(...r.fail);
+}
+
 // ── ⑨ 本机 memory 断链检查（local-only，issue #503 / 判据改写 #529 / #807）─────────────
 // 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向
 // **windsurf-dao-memory 独立仓 clone** 的符号链接（memory 已自 #518 搬出主仓），
@@ -924,8 +1046,8 @@ function checkMemoryLinkAlive() {
 
 // ── ㉚ skill 发现面符号链接（local-only，issue #793）────────────────────
 // 仓内 host/skills/<名>/ 每个 skill，在本机宿主发现面 ~/.claude/skills/<名> 必须是指向仓内
-// host/skills/<名> 的符号链接（NEW-MACHINE §11；建链是手动动作，#565 拍板 symlink 归帅建，
-// 本检查只报警不自动建链）。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
+// host/skills/<名> 的符号链接（NEW-MACHINE §11）。整目录链接 = 被劫（#1146），无发现面 = 没装。
+// 接回走 onboard / dao-skills-heal.timer，本检查只报警。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
 // 实现放 scripts/lib/skill-link-check.mjs，让 tests/skill-link.test.js 拿假 root + 假 HOME 造
 // 违规样本（缺链/普通目录/悬空/指错=红，全链齐=绿，无 ~/.claude/skills=SKIP，空 host/skills=没查成）
 // 单独验判别力，不必跑整个 dao-check（那会递归）。
@@ -1080,53 +1202,20 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 // 只拦数量，不拦「等了多久」：一张真的在等用户的单，用户出门两天它就超龄了，
 // 那不是违规（wall-clock 当闸必然误报，本仓已有判例）。年龄只报出来给人看。
 const PENDING_BOARD_MAX_DEFAULT = 5;
-const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
+// 判据是 **label**，不是标题前缀（#1240 顺带收口）。
+//
+// 标题那个 `[待拍板] ` 前缀是历史上「机器开的单长什么样」的记号，跟 label 说的是同一件事，
+// 于是同一件事有了两个真相源。而它俩**不同步**：机器开的单两侧都有（前缀 + label），
+// 人开的单只有 label，这个前缀还容易在标题里被当成普通文字（#1210 一度开成
+// `[待拍板] [待拍板] 盘点：inbox`，两道前缀）。按 prefix 数，等于按「有没有记得手写那个
+// 前缀」数——数出来的不是「有几件事在等人拍」。
+//
+// **不许退化成「数不出来就当 0」**：label 字段没读到时（`--json` 里少一项、
+// 对象形态变了）报红，不静默放过——那是「没查成」，不是「一张都没有」。
+const PENDING_LABEL = PENDING_DECISION_LABEL; // '待拍板'，真相源在 hub-pending.mjs（别再抄字面量）
 
-// ── 收件箱（2026-09-06 从 hook 挪到这里）──────────────────────────────────────
-//
-// 原设计：全局 settings.json 的 UserPromptSubmit hook 每轮提醒。**实测这台服务器上根本没装**
-// ——global-CLAUDE.md 写着「每轮由全局 hook 提醒」，两个 settings.json 里一个 inbox 字样都没有，
-// 所以那两条 open 的 observation 躺了一天没人管。文档说有、实际没有，又一次「上游就绪≠下游执行」。
-//
-// 更根本的问题是载体选错了：UserPromptSubmit 是 Claude Code 独有的，而执行体已经全在 mirasim 上
-// （codex / pi 会话根本没有这种 hook）。把「会不会被读到」押在某一个客户端的钩子上，
-// 换个执行体就静默失效。
-//
-// 所以挪到 dao-check：它是帅位每次 land 的必经之路，与客户端无关。判据复用 inbox.mjs 的
-// assessInbox（不另造第二套口径）：超时 / 堆积 / 未提交 → block 判红，否则只念一遍。
-function checkInbox() {
-  const dir = join(ROOT, 'docs', 'observations');
-  if (!existsSync(dir)) { green('收件箱：docs/observations 不在——本仓没这条通道'); return; }
-  let docs = [];
-  try {
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith('.md')) continue;
-      const p = join(dir, name);
-      const parsed = parseInboxDoc(readFileSync(p, 'utf8'), { name, mtimeMs: statSync(p).mtimeMs });
-      if (parsed) docs.push(parsed);
-    }
-  } catch (e) {
-    fail('收件箱没查成', '读不了 docs/observations——不是「没有新东西」', String(e.message || e).slice(0, 80));
-    return;
-  }
-  // 未提交的最危险：落盘了但别的机器看不到，等于没写（这条通道的立身之本就是进 git）。
-  const st = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--', 'docs/observations'], { encoding: 'utf8', windowsHide: true });
-  const untracked = st.status === 0
-    ? String(st.stdout || '').split(/\r?\n/).filter(l => l.startsWith('??')).map(l => l.slice(3).trim()).filter(Boolean)
-    : [];
-  const assessed = assessInbox({ docs, untracked });
-  if (assessed.unscanned) { fail('收件箱没查成', assessed.lines.join('；'), ''); return; }
-  if (assessed.mode === 'block') {
-    fail(`收件箱要先处置：${assessed.pending.length} 条未处置（超时 ${assessed.overdue.length}，未提交 ${untracked.length}）`,
-      '每条落成 issue、或文件里加一行「处置：<结论>」、或 status 标 wontfix 加理由；未提交的先 git add',
-      assessed.lines.slice(0, 3).join('；'));
-    return;
-  }
-  if (assessed.mode === 'notice') {
-    for (const l of assessed.lines) notes.push(`收件箱：${l}`);
-  }
-  green(`收件箱：对照 ${docs.length} 条，未处置 ${assessed.pending.length}`);
-}
+// 收件箱不在 dao-check。#1171：这条检查只在 land 推默认分支时才跑，机器上没人定时唤它，
+// 不是帅位会看见的腿。现役挂载面是指挥官盘点 commander-inventory（每 6 小时）。
 
 // ── 西瓜清单（2026-09-06）─────────────────────────────────────────────────────
 //
@@ -1168,6 +1257,56 @@ function checkRepoOwnership() {
     return;
   }
   green('仓内属主：扫完 0 个 root 属主文件');
+}
+
+function findRootOwnedInGitDir(gitDir) {
+  return interpretFindRootOwned(spawnSync('find', [gitDir, '-user', 'root', '-print'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }));
+}
+
+function checkGitOwnershipSamples() {
+  const r = inspectGitOwnershipFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '.git 属主闸样本没查成' : '.git 属主闸样本对不上',
+      '恢复 tests/fixtures/git-ownership/{red,ok,empty}.json：红=点名 root 文件必须拦、绿必须过、仓不在必须没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`.git 属主闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkGitOwnershipLive() {
+  if (process.platform === 'win32') { skip('.git 属主：Windows 无 uid 概念，本项跳过'); return; }
+  const exists = (p) => existsSync(p);
+  const isDir = (p) => {
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
+  const statUid = (p) => statSync(p).uid;
+  const scans = DEFAULT_MANAGED_REPOS.map((repo) => scanGitRepo({
+    name: repo.name,
+    path: repo.path,
+    exists,
+    isDir,
+    statUid,
+    findRootOwned: findRootOwnedInGitDir,
+  }));
+  // 本机一台都没有（CI / 开发机 / 云 VM）→ SKIP 不是绿。分类器对「仓不在」仍判
+  // unscanned，单测钉那条；live 若因此 fail 会把 land 卡在「这台机器本来就不托管这两仓」。
+  if (scans.every((s) => s.exists === false)) {
+    skip('.git 属主：本机没有 /srv/projects 在管仓，本项没查成');
+    return;
+  }
+  const r = classifyGitOwnership(scans);
+  if (r.kind === 'ok') green(r.line);
+  else if (r.kind === 'skip') skip(r.line);
+  else fail(r.line, r.howToFix, r.evidence);
 }
 
 function checkInitiatives() {
@@ -1279,35 +1418,23 @@ function checkEphemeralLifecycle() {
     try { return readFileSync(join(ROOT, rel), 'utf8'); }
     catch (e) { problems.push(`${rel} 读不了：${String(e && e.message || e).slice(0, 60)}`); return ''; }
   };
-  const gone = (rel) => existsSync(join(ROOT, rel));
-  const dao = read('scripts/dao.mjs');
-  const commander = read('scripts/commander.mjs');
-  const handoff = read('scripts/lib/handoff-check.mjs');
-  const miraReviewer = read('host/skills/dispatch/templates/reviewer-book-mirasim.md');
-  const miraSoldier = read('host/skills/dispatch/templates/soldier-book-mirasim.md');
-  const agents = read('AGENTS.md');
-  const nudgeInstall = read('scripts/install-nudge-stalled.sh');
-  const progressInstall = read('scripts/install-progress-watch.sh');
-  if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
-  if (dao && !/enqueueOnly:\s*true/.test(dao)) problems.push('worker-done 没入队（enqueueOnly）');
-  if (commander && !/\brunProgressWatch\s*\(/.test(commander)) problems.push('指挥官没并进 progress-watch');
-  if (commander && !/soldier-book-mirasim\.md/.test(commander)) problems.push('指挥官派工指针还钉 orca 士兵书');
-  if (agents && !/soldier-book-mirasim\.md/.test(agents.split('\n')[0] || '')) problems.push('AGENTS.md 首行还钉 orca 书');
-  if (miraReviewer && /pr merge/.test(miraReviewer)) problems.push('审官 mirasim 书还在教 pr merge');
-  if (miraSoldier && /按需起审官/.test(miraSoldier)) problems.push('士兵 mirasim 书还在教按需起审官');
-  if (handoff && !/merge:\s*\{\s*advisory:\s*\[[^\]]*['"]①['"]/.test(handoff.replace(/\s+/g, ' '))) {
-    problems.push('合并闸 ① 没标 advisory');
-  }
-  // 已删/退役路径：行里必须带「已删」字，否则交卷闸 ④ 把负向检查当成指向空气的指针。
-  if (gone('scripts/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 垫片还在仓里');
-  if (gone('scripts/lib/nudge-stalled.mjs')) problems.push('已删的 nudge-stalled 闸还在仓里');
-  if (gone('host/machine/systemd/dao-nudge-stalled.timer')) problems.push('已删的 nudge timer 单元还在仓里');
-  if (gone('host/machine/systemd/dao-progress-watch.timer')) problems.push('已删的 progress-watch timer 单元还在仓里');
-  if (nudgeInstall && !/disable --now dao-nudge-stalled/.test(nudgeInstall)) problems.push('nudge 安装脚本没改成卸载');
-  if (progressInstall && !/disable --now dao-progress-watch/.test(progressInstall)) problems.push('progress-watch 安装脚本没改成卸载');
-  if (!gone('scripts/land.mjs') || !gone('scripts/close-issues.mjs')) {
-    problems.push('land / close-issues 旁路脚本丢了');
-  }
+  const files = {
+    dao: read('scripts/dao.mjs'),
+    commander: read('scripts/commander.mjs'),
+    handoff: read('scripts/lib/handoff-check.mjs'),
+    miraReviewer: read('host/skills/dispatch/templates/reviewer-book-mirasim.md'),
+    miraSoldier: read('host/skills/dispatch/templates/soldier-book-mirasim.md'),
+    agents: read('AGENTS.md'),
+    nudgeInstall: read('scripts/install-nudge-stalled.sh'),
+    progressInstall: read('scripts/install-progress-watch.sh'),
+    core: read('scripts/lib/commander-core.mjs'),
+    admit: read('scripts/lib/admission.mjs'),
+    reap: read('scripts/lib/ephemeral-reap.mjs'),
+  };
+  problems.push(...inspectEphemeralLifecycleSources({
+    files,
+    exists: (rel) => existsSync(join(ROOT, rel)),
+  }));
   if (problems.length) {
     fail(`短命会话闸红 ${problems.length} 处`, 'done_when 是机器可算的事实，红了就还没完', problems.slice(0, 6).join('；'));
     return;
@@ -1340,6 +1467,54 @@ function checkOrcaRetirement() {
     return;
   }
   green('orca 产品面已清（无 spawn orca / 无 orca-serve 单元 / 无整段删脊）');
+}
+
+// ── 现役帮助不许宣传已退役入口（#1150 审官红 2）────────────────────────
+// USAGE / 派工手册 / 指挥官任务书再把 reviewer-attach、notify、send、
+// dispatch-exec、dispatch --batch、terminal send 写成可照抄路径就会把操作者引到死路。
+// 夹具红/绿/空验判别力；0 个现役文件 = 没查成。
+function checkRetiredVerbAdvertSamples() {
+  const r = inspectRetiredVerbAdvertFixtures(join(ROOT, 'tests', 'fixtures', 'retired-verb-advert'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '退役入口宣传闸样本没查成' : '退役入口宣传闸样本对不上',
+      '恢复 tests/fixtures/retired-verb-advert/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`退役入口宣传闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkRetiredVerbAdvertLive() {
+  const r = checkRetiredVerbAdvert({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+// ── 补丁链层数闸（memory patch-stacking-is-two-strikes 的 gate）──────────────
+// 规矩是「同一种办法连错两次就换路」——第 2 层就该停手从零重推。所以 ≥3 层是
+// **停手没发生**的确定性证据。判据在 lib/chain-depth-check.mjs（只认锚里的最大层号，
+// 不数提交条数：同一层可以有很多次提交）。
+function checkChainDepth() {
+  const r = spawnSync('git', ['-C', ROOT, 'log', '--all', '--grep=chain:', '--oneline'],
+    { encoding: 'utf8', windowsHide: true, maxBuffer: 32 << 20 });
+  if (r.error || r.status !== 0) {
+    // 「git 跑不了」和「扫完 0 条锚」必须分开，否则闸静默开门。
+    fail('补丁链层数没查成', 'git log 跑不了就别说没有超深的链',
+      String(r.error?.message || r.stderr || `退出码 ${r.status}`).slice(0, 80));
+    return;
+  }
+  const lines = String(r.stdout || '').split('\n').filter((s) => s.trim());
+  const v = classifyChainDepth({ lines });
+  if (v.state === 'unknown') { fail('补丁链层数没查成', 'git log 输出读不出来', v.detail); return; }
+  if (v.state === 'red') {
+    fail(v.detail,
+      '第 2 层就该停手：跑 grill-ai，画出补丁链，从本质需求从零重推，把「删掉整层」的备选摆出来',
+      v.over.map((o) => `${o.slug}#${o.depth}`).join('、'));
+    return;
+  }
+  green(`补丁链层数：${v.detail}`);
 }
 
 // ── 竞争 PR 闸（2026-09-06）───────────────────────────────────────────────────
@@ -1489,22 +1664,22 @@ function checkPendingBoardBacklog(board) {
     skip(`待拍板堆积：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  if (issues.array.some((i) => !i || typeof i.title !== 'string')) {
-    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title 的对象数组）');
+  if (issues.array.some((i) => !i || typeof i.title !== 'string' || !Array.isArray(i.labels))) {
+    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title + labels 的对象数组）——别当成「一张都没有」');
     return;
   }
-  const pending = issues.array.filter((i) => PENDING_TITLE_RE.test(i.title));
+  const pending = issues.array.filter((i) => i.labels.some((l) => (typeof l === 'string' ? l : l?.name) === PENDING_LABEL));
   const n = pending.length;
   if (n > max) {
     const 样 = pending.slice(0, 3).map((i) => `#${i.number}`).join(' ');
     fail(
-      `机器开的「待拍板」单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
+      `标着「待拍板」的开放单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
       '先判每张是不是假警报：假警报要去修产生它的那条判据，不是关掉了事；真要人拍的才留着',
-      'gh issue list --state open --limit 500 --json number,title | grep 待拍板',
+      `gh issue list --state open --limit 500 --json number,title,labels | grep ${PENDING_LABEL}`,
     );
     return;
   }
-  green(`机器开的「待拍板」单 ${n}/${max} 张`);
+  green(`标着「待拍板」的开放单 ${n}/${max} 张`);
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
@@ -1820,10 +1995,13 @@ checkSkillLinksAlive();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkRoutingProvidersToml();
+checkLaunchBinaries();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();
 checkDispatchGateAlive();
+checkControlPlaneAlive();
+checkControlPlaneDropPointAlive();
 checkMemoryLinkAlive();
 checkMasterTitleSamples();
 checkCardCommentSamples();
@@ -1857,22 +2035,29 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkLegsSamples();
 checkLegsLive();
+checkLegCaps();
 if (FULL) checkModelLabelNames(); else netParked('model/* label 命名 live', '要打 gh label list');
 checkHarvestSamples();
 if (FULL) checkHarvestLive(); else netParked('回流段孤儿 live', '要打 gh pr list');
-checkInbox();
 checkRepoOwnership();
+checkGitOwnershipSamples();
+checkGitOwnershipLive();
 checkInitiatives();
 checkListExitSamples();
 if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
 checkOrcaRetirement();
+checkRetiredVerbAdvertSamples();
+checkRetiredVerbAdvertLive();
+checkChainDepth();
 checkCompetingPrsSamples();
 if (FULL) checkCompetingPrsLive(); else netParked('竞争 PR 闸 live', '要打 gh pr list + 逐个 pr view');
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
 checkOrphanTestLive();
+checkTestExecutorIsolationSamples();
+checkTestExecutorIsolationLive();
 checkVersionCarrierSamples();
 checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
@@ -1885,8 +2070,14 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkInlineScriptSamples();
+checkInlineScriptLive();
+checkFailedUnitsLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
+checkBranchProtectionSamples();
+checkBranchProtectionCatalog();
+checkBranchProtectionLive();
 
 function checkDispatchPolicySamples() {
   const r = inspectDispatchPolicyFixtures(join(ROOT, 'tests', 'fixtures', 'dispatch-policy-check'));
@@ -1919,7 +2110,7 @@ function checkDispatchPolicyLive() {
     );
     return;
   }
-  green('dispatch-policy.json preflight/breaker/commander/hubChat 取值合范围');
+  green('dispatch-policy.json preflight/breaker/commander/hubChat/board 取值合范围');
 }
 
 function checkUnitRestartSamples() {
@@ -1969,6 +2160,112 @@ function checkUnitRestartLive() {
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
 }
 
+function checkInlineScriptSamples() {
+  const r = inspectInlineScriptsFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '内联脚本闸样本没查成' : '内联脚本闸样本对不上',
+      '恢复 tests/fixtures/inline-script/{red,ok,empty}：红=内联代码含 $ 与 --body 含命令替换必须拦、绿=单引号无 $ 与 --body-file 必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkInlineScriptLive() {
+  const files = listScanFiles({
+    root: ROOT,
+    spawnSync,
+    readdir: (dir) => readdirSync(dir),
+    stat: (p) => statSync(p),
+  });
+  if (!files) {
+    fail(
+      '内联脚本闸 live 没查成',
+      '要能列出仓内追踪面（git ls-files 或遍历）；列不出 = 没查成，不是 0 个违规',
+      ROOT,
+    );
+    return;
+  }
+  const loaded = [];
+  for (const rel of files) {
+    // 样本目录（`tests/fixtures/**`）里放的就是**故意违规**的样本，是判别力的来源，
+    // 不是动手路径——live 扫它们等于闸给自己报红。
+    if (isSamplePath(rel)) continue;
+    try {
+      const text = readFileSync(join(ROOT, rel), 'utf8');
+      if (text.includes('\0')) continue;
+      loaded.push({ path: rel, text });
+    } catch { /* 读不出的不算样本，下一轮还在就会再碰 */ }
+  }
+  const r = inspectInlineScripts({ files: loaded });
+  if (r.unscanned) {
+    fail('内联脚本闸 live 没查成', '扫到的正文 0 份 = 没查成，不是 0 个违规', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    const first = r.violations[0];
+    fail(
+      `判据经过了外壳的引号层 ${r.violations.length} 处`,
+      `${first.fix}（例：${first.kind}）`,
+      r.violations.slice(0, 6).map((v) => `${v.file}:${v.line} ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸：扫了 ${r.scanned} 份文本，0 处判据经过外壳引号层`);
+}
+
+function checkFailedUnitsLive() {
+  // 探不到 systemd（Windows / 无 systemctl）→ unknown，不做成绿（本仓硬规矩）。
+  const probe = spawnSync('systemctl', ['--failed', '--no-pager', '--plain'], {
+    encoding: 'utf8', timeout: 10000, windowsHide: true,
+  });
+  if (probe.error || probe.status !== 0) {
+    skip(`本仓单元有没有挂掉没查成：systemctl --failed 探不到（无 systemd？）${String(probe.error || probe.status || '').slice(0, 120)}`);
+    return;
+  }
+  const output = `${probe.stdout || ''}\n${probe.stderr || ''}`;
+  // 失败单元的 unit 文件在 /etc/systemd/system（要读得到才判得了归属）。
+  const unitTexts = {};
+  for (const m of output.matchAll(/^(\S+\.service)\s/gm)) {
+    const name = m[1];
+    for (const p of [join('/etc/systemd/system', name), join(ROOT, 'host', 'machine', 'systemd', name)]) {
+      if (existsSync(p)) { unitTexts[name] = readFileSync(p, 'utf8'); break; }
+    }
+  }
+  // 「跑成过吗」：问配对的 timer 有没有过触发。判不了 → 保守当「没跑成过」（红）。
+  const arming = {};
+  for (const name of Object.keys(unitTexts)) {
+    const base = name.replace(/\.service$/, '');
+    const timerPath = join('/etc/systemd/system', `${base}.timer`);
+    const hasTimerFile = existsSync(timerPath);
+    let timerProps = '';
+    if (hasTimerFile) {
+      const tp = spawnSync('systemctl', ['show', `${base}.timer`, '-p', 'LastTriggerUSec', '-p', 'LastTriggerUSecRealtime'], {
+        encoding: 'utf8', timeout: 10000, windowsHide: true,
+      });
+      timerProps = String((tp && tp.stdout) || '');
+    }
+    const ever = hasEverRun({ serviceName: name, timerProps, hasTimerFile });
+    arming[name] = ever === true;
+  }
+  const r = classifyFailedUnits({ output, repoRoot: ROOT, unitTexts, arming });
+  if (r.state === 'red') {
+    fail(`本仓 ${r.failed.length} 个单元挂在 systemctl --failed 里`, r.plain.impact + '；' + r.plain.plan, r.detail);
+    return;
+  }
+  if (r.state === 'unknown') {
+    skip(`本仓单元有没有挂掉没查成：${r.detail}`);
+    return;
+  }
+  green(r.detail);
+}
+
 function checkMarshalSelfMergeSamples() {
   const r = inspectMarshalSelfMergeFixtures({
     exists: (rel) => existsSync(join(ROOT, rel)),
@@ -2011,6 +2308,96 @@ function checkMarshalSelfMergeLive() {
     return;
   }
   green(r.line);
+}
+
+function checkBranchProtectionSamples() {
+  const r = inspectBranchProtectionFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '合并闸形状样本没查成' : '合并闸形状样本对不上',
+      '恢复 tests/fixtures/branch-protection/{red,ok,empty}：红=缺保护/contexts 不对/enforce_admins:true/strict:true 必须拦、绿必须过、空=[] 没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`合并闸形状样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkBranchProtectionCatalog() {
+  const origin = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  const originSlug = origin.status === 0 ? repoSlugFromRemote(origin.stdout) : null;
+  const r = collectManagedReposFromRoot({
+    root: ROOT,
+    originSlug,
+    exists: (p) => existsSync(p),
+    readFile: (p) => readFileSync(p, 'utf8'),
+  });
+  if (r.unscanned) {
+    fail(
+      '合并闸扫描面没查成',
+      'INDEX E 类 / 群映射 / 发布策略 / origin 要扫得出在管仓；0 个 = 没查成，不是 0 个违规',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.slugs.length) {
+    fail('合并闸扫描面没查成', '扫出 0 个仓（没查成，不是 0 个违规）', '');
+    return;
+  }
+  green(`合并闸扫描面：${r.slugs.length} 个在管仓（不手写名单）`);
+}
+
+function checkBranchProtectionLive() {
+  const origin = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  if (origin.error && origin.error.code === 'ENOENT') {
+    skip('合并闸 live：git 不可用（ENOENT）——本次没查成，不是绿');
+    return;
+  }
+  const originSlug = origin.status === 0 ? repoSlugFromRemote(origin.stdout) : null;
+  if (!originSlug) {
+    fail(
+      '合并闸 live 没查成',
+      'git remote get-url origin 要能抽出 OWNER/REPO',
+      String(origin.stderr || origin.stdout || origin.error || '').trim().slice(0, 160),
+    );
+    return;
+  }
+  const r = inspectThisRepoProtection({
+    originSlug,
+    spawnGh: (args) => readBranchProtection(args, { readAsCli: (args) => {
+      const g = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
+      return { error: g.error || null, status: g.status, stdout: g.stdout || '', stderr: g.stderr || '' };
+    } }),
+  });
+  if (r.skip) {
+    skip(`合并闸 live：${r.error || '缺 gh / 无权限'}——SKIP 不是绿`);
+    return;
+  }
+  if (r.unscanned) {
+    fail(
+      '合并闸 live 没查成',
+      'gh api repos/.../branches/master 要能跑（contents:read）；连摘要都读不到才是没查成',
+      r.error || '',
+    );
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `本仓 master 合并闸形状不对 ${(r.violations || []).length} 处`,
+      'required=["check"]、enforcement_level=non_admins（=enforce_admins:false）；装：node scripts/apply-branch-protection.mjs --repo OWNER/REPO',
+      (r.violations || []).map((v) => v.why).join('；'),
+    );
+    return;
+  }
+  green(`本仓 master 合并闸形状对（${originSlug}）`);
+
 }
 
 function checkReleasePolicySamples() {
@@ -2135,6 +2522,73 @@ function checkOrphanTestSamples() {
     return;
   }
   green(`孤儿测试闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkTestExecutorIsolationSamples() {
+  const r = inspectTestExecutorIsolationFixtures(join(ROOT, 'tests', 'fixtures', 'test-executor-isolation'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '测试隔离闸样本没查成' : '测试隔离闸样本对不上',
+      '恢复 tests/fixtures/test-executor-isolation/{red,ok,empty}：红夹具必须是 env JSON（不许 *.js），必须点出 env-lost 与测试不能 opt-in；绿夹具必须是生产 DAO_REAL_EXECUTOR=1；空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`测试隔离闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（allowlist 有判别力）`);
+}
+
+function checkTestExecutorIsolationLive() {
+  const dir = join(ROOT, 'tests');
+  const r = inspectTestExecutorIsolationLive({
+    dir,
+    readdir: readdirSync,
+  });
+  if (r.unscanned) {
+    fail('测试隔离闸 live 没查成', 'tests/ 下要有 *.test.js，读失败不是「没有真派工」', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `测试隔离闸 live 红`,
+      'tests/ 下要有测试文件；真 spawn 靠运行时 allowlist 拦',
+      (r.violations || []).map((v) => `${v.file}: ${v.why}`).join('；') || r.error || '',
+    );
+    return;
+  }
+  const runtimeFile = join(ROOT, 'scripts', 'lib', 'mirasim-runtime.mjs');
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  const executionFile = join(ROOT, 'scripts', 'lib', 'execution-runtime.mjs');
+  const commanderFile = join(ROOT, 'scripts', 'commander.mjs');
+  const unitFile = join(ROOT, 'scripts', 'lib', 'commander-inventory.mjs');
+  const missing = [runtimeFile, daoFile, executionFile, commanderFile, unitFile].filter((p) => !existsSync(p));
+  if (missing.length) {
+    fail(
+      '测试隔离闸接线没查成',
+      '恢复 mirasim-runtime / dao / execution-runtime / commander / commander-inventory',
+      missing.join('；'),
+    );
+    return;
+  }
+  const wiring = inspectIsolationWiring({
+    runtimeSrc: readFileSync(runtimeFile, 'utf8'),
+    daoSrc: readFileSync(daoFile, 'utf8'),
+    executionSrc: readFileSync(executionFile, 'utf8'),
+    commanderSrc: readFileSync(commanderFile, 'utf8'),
+    unitSrc: readFileSync(unitFile, 'utf8'),
+  });
+  if (wiring.unscanned) {
+    fail('测试隔离闸接线没查成', '给齐 runtime/dao/execution/commander/unit 正文再扫', wiring.error || '');
+    return;
+  }
+  if (!wiring.ok) {
+    fail(
+      `测试隔离闸接线丢了 ${wiring.problems.length} 处`,
+      'allowlist 判官 + 真 IO 前过闸 + 指挥官/systemd 打 DAO_REAL_EXECUTOR=1',
+      wiring.problems.join('；'),
+    );
+    return;
+  }
+  green(`测试隔离闸：${r.scanned} 套测试；allowlist 接线与生产入口打旗在`);
 }
 
 function checkOrphanTestLive() {
@@ -2345,6 +2799,55 @@ function checkLegsLive() {
   const n = nPlusOneReport(doc);
   const warn = [...c.warnings, ...n.exposures];
   green(`腿表 ${doc.腿.length} 条四轴合法、与职责树互证${warn.length ? `；单轴裸奔 ${n.exposures.length} 处（只报不拦，补腿归 #880 卡 H/B）` : ''}`);
+}
+
+// #1145 渠道并发上限字段：在役腿的 `并发上限`。
+// **待填不红**（它是故意未配置，且已按保守值 CONSERVATIVE_CAP 收紧，见 channel-concurrency.mjs），
+// 但必须**显式列出来**——闸对待填渠道按保守值判满，盘面看不见就没人去填真数。
+// **腿节形状坏了才红**（那是没查成，不是「扫完是 0」）。
+function checkLegCaps() {
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+  } catch (e) {
+    fail('并发上限没查成', '选型 JSON 读失败', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  let validateLegCaps;
+  try {
+    ({ validateLegCaps } = require('./lib/channel-concurrency.mjs'));
+  } catch (e) {
+    fail('并发上限校验器加载失败', '修 scripts/lib/channel-concurrency.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+  const v = validateLegCaps(doc && doc.腿);
+  if (!v.ok) {
+    fail('并发上限没查成', '§#1145：腿节必须是数组；补 腿 节', v.error || ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.inService === 0) {
+    // 「扫完 0 条在役腿」与「没查成」分得开：这里是查成了但一条在役腿都没有，
+    // 那样本身就没有判别力（闸没有任何腿可判），按没查成报。
+    fail('并发上限失去判别力', '一条在役腿都没扫到 ⇒ 本次等于没查；确认腿节 状态=在役 的条目', ROUTING_POLICY_FILE);
+    return;
+  }
+  if (v.bad.length) {
+    fail(
+      `并发上限有 ${v.bad.length} 条脏值`,
+      '并发上限只许正整数 / "不限" / null（待填）；0、负数、杂串都不是合法上限',
+      v.bad.map((b) => `${b.id}=${JSON.stringify(b.value)}`).slice(0, 6).join(' '),
+    );
+    return;
+  }
+  if (v.pending.length) {
+    // 走 notes 而不是只 green：greens 只在**全绿那一支**才打印（见文件末尾的输出段），
+    // 一旦盘面有红项，绿行整批不显示——待填清单就此隐形，没人会去填真数。
+    // notes 的「见」行两支都打，这条清单才真的看得见。
+    notes.push(`并发上限待填 ${v.pending.length} 条（已按保守值 ${v.conservativeCap} 收紧，**不是**放行）：${v.pending.map((p) => p.id).slice(0, 8).join('、')}${v.pending.length > 8 ? ' …' : ''}\n    填法：docs/model-routing.json 腿节该条的「并发上限」写实测并发数（已验证不限写 "不限"）`);
+    green(`并发上限：在役 ${v.inService} 条腿字段齐（待填 ${v.pending.length} 条按保守值 ${v.conservativeCap} 收紧）`);
+    return;
+  }
+  green(`并发上限：在役 ${v.inService} 条腿全部填实（无待填）`);
 }
 
 function checkVendorGateSamples() {

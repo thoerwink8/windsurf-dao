@@ -1,7 +1,7 @@
 // 完工信号契约检查（#575 ⑥，dao-check 第 ⑯ 项）。
 //
 // 病：读侧认 issue comment 首行「完工」，工人只发编排层 worker_done → 指挥官看不见。
-// #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（并按需起审官）。
+// #575 ⑥ 订正：交棒发 issue comment；#586 工人走 worker-done 发这条 comment（#1125 起首审入队、不自己起审官）。
 // 检查逻辑自己持有契约文本，不 import review-state 的正则（自己查自己查不出错）。
 // 两边对不上（比如把 worker-brief 的「完工」改成「已完成」）必须报红。
 

@@ -215,6 +215,7 @@ export function writeJobDispatch({
   dir, ts, machine, schema, jobId, model, identity, workType,
   modelVersion, terminal, priceSnapshot, decisionId, prNumber, extra = {},
 } = {}) {
+  // extra.reviewer / extra.branch / extra.repo 由调用方在派工那一刻写入（#1116）。
   if (!jobId) return { ok: false, skipped: false, error: 'job.dispatch 缺 job_id' };
   if (!model) return { ok: false, skipped: false, error: 'job.dispatch 缺 model' };
   if (!ts) return { ok: false, skipped: false, error: 'job.dispatch 缺 ts' };
@@ -237,6 +238,56 @@ export function writeJobDispatch({
         price_snapshot: priceSnapshot ?? { source: 'live', note: '派工时刻空快照' },
         decision_id: decisionId ?? hashOf({ source: 'live', job_id: jobId, model, identity, ts }),
         ...(prNumber != null ? { pr_number: prNumber } : {}),
+        ...extra,
+      },
+    });
+    return { ok: true, skipped: false, path: w.path, event: w.event };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true, error: String(e.message || e) };
+    return { ok: false, skipped: false, error: String(e.message || e) };
+  }
+}
+
+/**
+ * 帅位自开的 PR 落一条 job.opened（#1214 缺口 A）。
+ *
+ * 为什么需要它：打标路（`pickWorkerDispatchByBranch`）的判据是「这条链上有没有派工决定」，
+ * 而帅位自己开 PR 是合法动作、决定不在账本里——于是这类 PR 永久卡在「需人工打标」。
+ * 缺口不在判据太严，在于**这类 PR 从来没有落过账**：补上落账，判据一个字都不用改。
+ *
+ * 与 `dianjiangtai-backfill` 的重建事件同形（同 job_id 约定、同字段名），
+ * 这样「回填出来的历史单」与「帅位当场开的单」在账本里长得一样，消费方只需认一种形状。
+ */
+export function writeJobOpened({
+  dir, ts, machine, schema, jobId, model, identity, workType,
+  scale = '未知', risk = '低', reversible = true,
+  candidateModels, why, prNumber, issueNumber, extra = {},
+} = {}) {
+  if (!jobId) return { ok: false, skipped: false, error: 'job.opened 缺 job_id' };
+  if (!ts) return { ok: false, skipped: false, error: 'job.opened 缺 ts' };
+  try {
+    const seq = nextSeq(dir, machine);
+    const w = writeEvent({
+      dir,
+      type: 'job.opened',
+      ts,
+      machine,
+      seq,
+      schema,
+      payload: {
+        job_id: jobId,
+        task_class: '帅位自开',
+        work_type: workType,
+        identity,
+        scale,
+        risk,
+        reversible,
+        task_tokens: null,
+        candidate_models: candidateModels || [model].filter(Boolean),
+        selected: model,
+        why: String(why || '').trim() || '帅位自开 PR，落账以便打标路认得这条链',
+        ...(prNumber != null ? { pr_number: prNumber } : {}),
+        ...(issueNumber != null ? { issue_number: issueNumber } : {}),
         ...extra,
       },
     });
@@ -434,11 +485,6 @@ export function recordPair({ ctx, ts, source, worker, reviewer }) {
     });
   }
   return out;
-}
-
-/** 给测试与调用方拼路径用；不读事件内容（读事件是检查方自己的事）。 */
-export function eventPathHint(dir, machine) {
-  return join(dir, `*-${machine}.json`);
 }
 
 /** 给 amend 找所属 job：优先 --pr 的 gh-pr-N，否则 issue 对上的工人 dispatch。 */

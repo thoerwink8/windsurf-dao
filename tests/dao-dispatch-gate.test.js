@@ -22,7 +22,7 @@ describe('dao 派工硬闸', () => {
       // 它已经没有服务对象（2026-09-06 实测 orca 树 0 棵、运行时不在），但代码还在，
       // 删之前必须继续被测，所以显式点名 orca。
       // mirasim 路径的对等硬闸另有一套（本文件末「mirasim 单轨派工硬闸」）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', ...args], { encoding: 'utf8', cwd: REPO });
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...args], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -66,10 +66,12 @@ describe('dao 派工硬闸', () => {
     await t.test('显式 auto 无需理由 → 通过', () => {
       assert.ok(autoExplicit.status === 0 && p1e.mergePolicy === 'auto', '显式 auto 无需理由 → 通过  →  ' + JSON.stringify(p1e));
     });
+    // 2026-09-10 选路一：执行目录里的 grok-mirasim-native 接管 grok-4.6，
+    // 走原生 Grok CLI 而不是 pi 包装（实测 route=local，不烧 relay 额度）。
     await t.test('#615 dry-run 带 slate 且 grok 在名单里', () => {
       assert.equal(p1e.executor, 'mirasim', JSON.stringify(p1e));
       assert.equal(p1e.daoModel, 'grok-4.6');
-      assert.equal(p1e.agent, 'pi');
+      assert.equal(p1e.agent, 'grok');
     });
 
     const noModel = dispatch(['--merge-policy', 'auto', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
@@ -111,9 +113,9 @@ describe('dao 派工硬闸', () => {
       assert.equal(pOk.ok, true, JSON.stringify(pOk));
       assert.equal(pOk.reviewer, 'gpt-5.6-sol');
     });
-    await t.test('dry-run 工人走 pi gw/grok-4.6', () => {
-      assert.equal(pOk.agent, 'pi', JSON.stringify(pOk));
-      assert.equal(pOk.family, 'pi');
+    await t.test('dry-run 工人走原生 grok（选路一：执行目录接管）', () => {
+      assert.equal(pOk.agent, 'grok', JSON.stringify(pOk));
+      assert.equal(pOk.family, 'xai'); // profile 的 modelFamily 用厂商名（xAI），同 luna→openai
       assert.equal(pOk.daoModel, 'grok-4.6');
     });
 
@@ -355,6 +357,22 @@ describe('dao 派工硬闸', () => {
       assert.equal((pFail.disambiguation || {}).unscanned, true);
     });
 
+    // #1152：空账本 + 565 有 label 是当年真派工烧额度的路径。
+    // 同进程 cliInProc（env 丢不了）走到隔离闸，不许建树/起会话。
+    const isoLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1152-iso-l-'));
+    const isoQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1152-iso-q-'));
+    const isoEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: isoQueue, LEDGER_EVENTS_DIR: isoLedger };
+    const cliIso = await cliInProc(['dispatch', '--executor', 'mirasim', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], isoEnv);
+    const pIso = (() => { try { return JSON.parse((cliIso.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    await t.test('#1152 空账本+已消歧：隔离闸拦住真执行体，不建树不起会话', () => {
+      assert.notEqual(cliIso.status, 0, JSON.stringify(pIso).slice(0, 300));
+      assert.equal(pIso.ok, false);
+      assert.match(String(pIso.error || ''), /结构性够不着真执行体/);
+      assert.equal(pIso.sessionKey, undefined);
+      assert.equal(pIso.path, undefined);
+      assert.equal(pIso.workerId, undefined);
+    });
+
     const daoSrc565 = fs.readFileSync(CLI, 'utf8');
     await t.test('dao.mjs dispatch 与 worker-start 都调消歧门', () => {
       assert.ok((daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, 'dao.mjs dispatch 与 worker-start 都调消歧门  →  ' + daoSrc565.slice(0, 60));
@@ -372,7 +390,7 @@ describe('dao 派工硬闸', () => {
     const S = await S_LOAD;
     function dispatchRaw(extra) {
       // 同上：本套测 orca 那条脊，切流量后要显式点名（默认已是 mirasim）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', ...extra], { encoding: 'utf8', cwd: REPO });
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -652,7 +670,7 @@ describe('dao 派工硬闸', () => {
 describe('mirasim 单轨派工硬闸', () => {
   const { assert, fs, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
   const base = ['--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--split', 'no', '--split-reason', '单测'];
-  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
   const payload = (r) => {
     try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
     catch { return { raw: r.stdout, err: r.stderr }; }
@@ -806,6 +824,48 @@ describe('#1055 dao start/session 动词切 mirasim', () => {
       assert.notEqual(r.status, 0, verb);
       assert.match(String(p.error || r.stdout), /--session/);
     }
+  });
+
+  // 2026-09-11 实咬：commander 给 session-stop 传了 --worktree（它自己 710 行加的），
+  // 而白名单里没登记这个旗标 → 每一轮 commander 发起的停会话都报「未知参数: --worktree」，
+  // **一个都没停成**，死会话就这么一直留在盘上占树。
+  // 单点补一个词不算修——所以这里钉的是**类**：commander 里每一处 dao.mjs 调用，
+  // 它传的每个旗标都必须在白名单里。下次谁再加一个旗标，先在仓里红。
+  //
+  // 边界靠**括号深度**（不是行数、不是跨行大正则）：
+  //   行粒度会把上下文的别的脚本/别的调用卷进来（第一版误报 pr-sync-labels 收到
+  //   --squash，那是紧接着 gh-as.mjs 那行的）；跨行正则又容易被嵌套数组骗过。
+  //   从 `'scripts/dao.mjs', '<verb>'` 起，数 ()[] 的净深度，回到 0 就该收手。
+  it('commander 里每处 dao.mjs 调用传的旗标，白名单都必须收（防「未知参数」静默全灭）', async () => {
+    const S = await S_LOAD;
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+
+    const offenders = [];
+    let checked = 0;
+    const headRe = /['"]scripts\/dao\.mjs['"]\s*,\s*['"]([a-z-]+)['"]/g;
+    let m;
+    while ((m = headRe.exec(src)) !== null) {
+      const verb = m[1];
+      const allowed = S.FLAGS_BY_VERB[verb];
+      if (!allowed) continue;
+      checked += 1;
+      // 从动词之后扫到该调用的括号闭合处
+      let depth = 1; // `[` 或 `(` 已经开着了
+      let i = headRe.lastIndex;
+      let body = '';
+      while (i < src.length && depth > 0) {
+        const ch = src[i];
+        if (ch === '(' || ch === '[') depth += 1;
+        else if (ch === ')' || ch === ']') depth -= 1;
+        if (depth > 0) body += ch;
+        i += 1;
+      }
+      for (const f of body.match(/--[a-z][a-z-]*/g) || []) {
+        if (!allowed.has(f)) offenders.push(`${verb} 收到 ${f}（白名单没有）`);
+      }
+    }
+    assert.ok(checked >= 5, `只抓到 ${checked} 处调用——没匹配上说明这个检查已经查不到东西了`);
+    assert.deepEqual(offenders, [], offenders.join('；'));
   });
 
   it('dao.mjs 里 orca 绑定整段删的标记还在——本单不做代码清理', () => {

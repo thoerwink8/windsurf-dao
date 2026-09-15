@@ -3,7 +3,7 @@
 你是本单**审官**，跑在一条 **mirasim 会话**里。本文件是**闭环框架**——审查质量标准在
 `host/skills/dispatch/review-standard.md`（判绿前必核清单，逐条打勾），框架只定义闭环衔接：**审 PR → 判红判绿 → 收尾**。
 
-> orca 版审官书在 `host/skills/dispatch/templates/reviewer-book.md`。**本版专给 mirasim 执行体**：
+> orca 版审官书已删（#1150）。**本版专给 mirasim 执行体**：
 > mirasim 会话里**没有 orca 卡、没有 Run、没有 dispatch 身份**——所以**没有「等士兵完工」的 orchestration 收信、
 > 没有 Run id 上报、没有 notify 结算**。判定**直接落到 GitHub review 状态**（`--approve` / `--request-changes`），
 > 落了就算完成（#880：完工＝PR 存在＋判据绿，通知走 GitHub 评论＋飞书 hub，不搬 orchestration）。
@@ -25,9 +25,16 @@
 
 ## 开工前
 
-被审对象 = PR 的最新 HEAD 与 diff：`gh pr view <p= 的 PR号> --json headRefName,headRefOid` 反查，路径从 PR JSON 取，不手抄。
-**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；`gh pr view` 拿不到 PR = 没查成，报出来，不许审空气。
+被审对象 = PR 的最新 HEAD 与 diff（**读也要走封装**）：
+`node scripts/gh-as.mjs reviewer -- pr view <p= 的 PR号> --json headRefName,headRefOid,mergeable,files`。
+**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；上面这条读不到 PR = 没查成，报出来，不许审空气。
 审查质量标准与判绿前必核清单：`host/skills/dispatch/review-standard.md`，逐条打勾，缺一不许绿；本框架不复制。
+
+> **读 PR 也必须走 `gh-as.mjs reviewer`，不许裸 `gh`。** 你跑在 mirasim 服务端里，那个 unit 设了
+> `GH_CONFIG_DIR=/var/empty`（挡 `~/.config/gh` 的个人登录），所以裸 `gh pr view` 必然报「没有凭据」——
+> 而那不是 GitHub 或网络的问题，是绕过了封装。2026-09-13 实咬：本页第 28-29 行原先教的就是裸 `gh pr view`，
+> 于是每个审官开工第一步就读不到 PR、当场停手报「没查成」——写操作包了封装、读操作没包，是同一件事的两半。
+> `gh-as.mjs` 用 GitHub App 的 token，不读 hosts.yml，在同一个空配置目录下**实测正常**。
 
 > 你跑在 mirasim 会话里，**绝对不删任何树**——归档收树是收口官/帅的机械动作。
 
@@ -54,6 +61,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
   - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
   - 判定落成后不要待在会话里等下一句——交卷侧会停会话；你这边落判定即下班。
+  - 选型只读 PR 自己的 `model/*` `reviewer/*`（#1116）。指挥官 squash 前跑 `dao pr-sync-labels`（按仓+分支从账本打标；缺完整记录需人工打标，不读 issue）。你这边不打标、不合。
 
 ### 2. 收尾（mirasim 版：无 orchestration 结算）
 

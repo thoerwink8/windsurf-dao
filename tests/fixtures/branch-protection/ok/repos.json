@@ -1,0 +1,25 @@
+[
+  {
+    "slug": "org/live",
+    "meta": { "private": false, "archived": false, "has_pages": false, "name": "live" },
+    "protection": {
+      "required_status_checks": { "strict": false, "contexts": ["check"] },
+      "enforce_admins": false
+    }
+  },
+  {
+    "slug": "org/private-ok",
+    "meta": { "private": true, "archived": false, "has_pages": false, "name": "private-ok" },
+    "protection": null
+  },
+  {
+    "slug": "org/archived-ok",
+    "meta": { "private": false, "archived": true, "has_pages": false, "name": "archived-ok" },
+    "protection": null
+  },
+  {
+    "slug": "org/pages-ok",
+    "meta": { "private": false, "archived": false, "has_pages": true, "name": "pages-ok" },
+    "protection": null
+  }
+]

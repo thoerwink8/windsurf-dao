@@ -283,7 +283,7 @@ export function ghExecutable() {
 // 64MiB 是明确上限：够当前数据量、超限仍是 error（不是静默截断）。调用方可覆盖。
 export const GH_SPAWN_MAX_BUFFER = 64 * 1024 * 1024;
 
-export function spawnGh(args, { token, cwd, inherit = false, spawnImpl, maxBuffer } = {}) {
+export function spawnGh(args, { token, cwd, inherit = false, spawnImpl, repo, maxBuffer } = {}) {
   if (!Array.isArray(args) || args.length === 0) {
     return { ok: false, error: '缺 gh 参数' };
   }
@@ -294,6 +294,8 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl, maxBuffe
   delete env.FORCE_COLOR;
   delete env.CLICOLOR_FORCE;
   delete env.CLICOLOR;
+  const ghRepo = repo && String(repo).trim();
+  if (ghRepo) env.GH_REPO = ghRepo;
   const opts = {
     cwd,
     env,
@@ -327,6 +329,7 @@ export function ghAs(role, args, opts = {}) {
     cwd: opts.cwd,
     inherit: opts.inherit,
     spawnImpl: opts.spawnImpl,
+    repo: opts.repo,
     maxBuffer: opts.maxBuffer,
   });
 }

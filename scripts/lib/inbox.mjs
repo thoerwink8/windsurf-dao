@@ -7,11 +7,11 @@
 // 用户拍板（三问）：
 //   ① 内容改状态、不删——它是判例档案，删掉等于把判例扔了。
 //   ② 同步靠 git，不另造通道；但**写入方没提交**才是当天的病根，所以未跟踪也要报。
-//   ③ 每轮提醒挂在已有的 UserPromptSubmit 注入点；零条时不注入，不占 token。
+//   ③ 当时拍板「每轮提醒挂 UserPromptSubmit」；那条腿服务器上没装，#1171 改挂指挥官盘点。
 //   牙口：提醒 + 超时硬拦（只提醒不拦的规矩，在渐变状态下等于永不触发——memory
 //   rule-without-trigger-is-not-a-rule）。
 //
-// 本模块只做判断，不碰文件系统、不注入。取数与注入在 hook 里，便于单测。
+// 本模块只做判断，不碰文件系统、不注入。取数与开单在指挥官盘点里，便于单测。
 
 export const INBOX_DIR_REL = 'docs/observations';
 export const STATUS_NEW = 'new';

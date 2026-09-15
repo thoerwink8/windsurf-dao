@@ -265,4 +265,70 @@ describe('timer 没有下一次：正在跑 vs 真死态', () => {
     ] });
     assert.equal(r.state, 'red', 'elapsed 是 systemd 对死态的原话，要有一条直接钉它');
   });
+
+  it('enabled + next 空 + SubState=dead → 红，文案指向 start 不指向 install（#1177）', async () => {
+    const { classifyTimerArmed } = await MOD;
+    const r = classifyTimerArmed({ probed: true, units: [
+      { unit: 'commander-act.timer', next: null, calendar: true, subState: 'dead' },
+    ] });
+    assert.equal(r.state, 'red', '09-10 那次：enabled 但 dead、NEXT=-，⑱ 必须红');
+    assert.match(r.detail, /commander-act\.timer/);
+    assert.match(r.detail, /systemctl start commander-act\.timer/);
+    assert.doesNotMatch(r.detail, /install/, '文件已经对，不许指向重装');
+    assert.doesNotMatch(r.detail, /加 OnCalendar/, '墙钟已经在文件里，不是缺 OnCalendar');
+  });
+});
+
+// #1177：⑭（lib/timer-armed）和 ⑱（server-check.classifyTimerArmed）必须对同一份活数据同判。
+describe('⑭ 与 ⑱ 对同一活数据口径一致', () => {
+  const LIB = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'timer-armed.mjs').split(path.sep).join('/'));
+  const SC = import('../scripts/server-check.mjs');
+
+  it('enabled + NEXT 空 + SubState=dead → 两边都红', async () => {
+    const T = await LIB;
+    const S = await SC;
+    assert.equal(S.classifyTimerArmed({
+      probed: true,
+      units: [{ unit: 'commander-act.timer', next: null, calendar: true, subState: 'dead' }],
+    }).state, 'red');
+    assert.equal(T.classifyTimerArmed({
+      probed: true,
+      timers: [{
+        unit: 'commander-act.timer', isEnabled: 'enabled',
+        activeState: 'inactive', subState: 'dead', next: '',
+      }],
+    }).state, 'red');
+  });
+
+  it('active(elapsed) + NEXT 空 → 两边都红（⑭ 不许因 active 放行）', async () => {
+    const T = await LIB;
+    const S = await SC;
+    assert.equal(S.classifyTimerArmed({
+      probed: true,
+      units: [{ unit: 'commander-act.timer', next: null, calendar: true, subState: 'elapsed' }],
+    }).state, 'red');
+    assert.equal(T.classifyTimerArmed({
+      probed: true,
+      timers: [{
+        unit: 'commander-act.timer', isEnabled: 'enabled',
+        activeState: 'active', subState: 'elapsed', next: '',
+      }],
+    }).state, 'red');
+  });
+
+  it('running + NEXT 空 → 两边都绿', async () => {
+    const T = await LIB;
+    const S = await SC;
+    assert.equal(S.classifyTimerArmed({
+      probed: true,
+      units: [{ unit: 'commander-act.timer', next: null, calendar: true, subState: 'running' }],
+    }).state, 'ok');
+    assert.equal(T.classifyTimerArmed({
+      probed: true,
+      timers: [{
+        unit: 'commander-act.timer', isEnabled: 'enabled',
+        activeState: 'active', subState: 'running', next: '',
+      }],
+    }).state, 'ok');
+  });
 });

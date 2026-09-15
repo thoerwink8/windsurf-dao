@@ -458,14 +458,16 @@ describe('验收 7：不出网，单测毫秒级；CLI 注入假 gh', () => {
   });
 });
 
-describe('选型 JSON 加了消歧角色，通道是 gw/grok-4.6', () => {
-  it('工人.消歧 顺位 1 是 grok-4.6 / gw', () => {
+describe('选型 JSON 加了消歧角色，通道随落地说', () => {
+  it('工人.消歧 顺位 1 是 grok-4.6，落地 provider 与 cli_model 自洽', () => {
     const slot = ROUTING.工人 && ROUTING.工人.消歧 && ROUTING.工人.消歧.模型;
     assert.equal(Array.isArray(slot), true);
     const first = slot.find((m) => m && m.禁用 !== true && m.顺位 === 1);
     assert.equal(first.id, 'grok-4.6');
-    assert.equal(first.provider, 'gw');
-    assert.equal(first.cli_model, 'gw/grok-4.6');
+    // 不钉死通道：网关退役后落地 provider 由选型真相源说了算，测试只核「id 与 cli_model 同源」
+    // （钉死字面的话，每换一次通道这条测试就假红一次——判据该跟着真相源走）。
+    assert.equal(first.provider, 'xai-native');
+    assert.equal(first.cli_model, first.id);
   });
 
   it('pickDispatchLabels 打的是下一跳工人（写码），不读 工人.消歧', async () => {
@@ -516,5 +518,25 @@ describe('硬边界：本单不改指挥官三件套、不放宽消歧闸', () =
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'lib', 'commander-core.mjs')), true);
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'commander.mjs')), true);
     assert.equal(fs.existsSync(path.join(ROOT, 'scripts', 'board-gc.mjs')), true);
+  });
+});
+
+// 2026-09-10 第二咬：labels key 直拼中文 label，网关 ASCII 闸 29 连败 0 成功。
+// 判别力在「真跑一次 applyPlan，把发给网关的 key 抓下来对着网关判据验」。
+describe('labels 的 idempotency_key 过得了网关的 ASCII 闸', () => {
+  it('中文 label 组合出的 key 合法、稳定、可区分', async () => {
+    const { applyPlan } = await CLI;
+    const KEY = import('file://' + path.join(ROOT, 'scripts', 'lib', 'escalation-key.mjs').replace(/\\/g, '/'));
+    const { isGatewayKeySafe } = await KEY;
+    const seen = [];
+    const writeIssue = (req) => { seen.push(req); return { ok: true }; };
+    const runGh = () => ({ ok: true, code: 0, out: '[]' });
+    const plan = { verdict: 'act', number: 1146, labelsToAdd: ['待拍板', 'model/gpt-5.6-luna'], comment: null };
+    const r = applyPlan(plan, { runGh, dryRun: false, writeIssue });
+    assert.equal(r.ok, true);
+    const label = seen.find((w) => w.action === 'issue_edit_labels');
+    assert.ok(label, '必须真发了打标写动作');
+    assert.equal(isGatewayKeySafe(label.idempotency_key), true, `key 过不了网关闸：${label.idempotency_key}`);
+    assert.match(label.idempotency_key, /^refiner:labels:1146:/);
   });
 });

@@ -7,15 +7,30 @@
 
 export const EXHAUSTED_LABEL = '卡死/自动化认输';
 export const WAITING_USER_LABEL = '卡死/等用户';
-export const EXHAUSTED_VERBS = new Set(['drain', 'rework', 'rereview']);
+export const EXHAUSTED_VERBS = new Set(['drain', 'rework', 'rereview', 'pump-draft']);
 export const EXHAUSTED_COMMENT_MARK = '[commander-exhausted]';
 
-/** 账本键必须带 @head。只用 pr 会把修好的新局面永久挡住（PR #909 / df87014a）。 */
-export function exhaustedPushKey(pr, head) {
+/** 账本键必须带 @head。只用 pr 会把修好的新局面永久挡住（PR #909 / df87014a）。
+ *  #1238：再带一段**判据版本**——「这个标是按哪一版判据打的」原先没记，
+ *  于是判据改了、标还挂着，谁都不知道它过期没有。 */
+export function exhaustedPushKey(pr, head, epoch) {
   const n = pr == null ? '' : String(pr).trim();
   const h = typeof head === 'string' ? head.trim() : '';
   if (!n || !h) return null;
-  return `pushed:${n}@${h}`;
+  const base = `pushed:${n}@${h}`;
+  const e = typeof epoch === 'string' && /^[0-9a-f]{12}$/.test(epoch) ? epoch : null;
+  return e ? `${base}@e${e}` : base;
+}
+
+/**
+ * 从账本键里取判据版本。没带（老键）→ null。
+ *
+ * 这个函数存在的理由：**老记录必须能被认出来是老的**。取了 null 就当「判据未知」处理，
+ * 不许当成「判据没变」——那会让 #1143 那批在加版本之前认输的标永远过期不了。
+ */
+export function epochOfPushKey(key) {
+  const m = /@e([0-9a-f]{12})$/.exec(String(key || ''));
+  return m ? m[1] : null;
 }
 
 export function exhaustedPushPath(home) {
@@ -46,7 +61,7 @@ export function prHasWaitingUserLabel(pr) {
   return labelNames(pr && pr.labels).includes(WAITING_USER_LABEL);
 }
 
-export function exhaustedComment({ pr, verb, tries, head } = {}) {
+export function waitingUserComment({ pr, verb, tries, head } = {}) {
   const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '?');
   const n = pr == null ? '?' : String(pr);
   const h = typeof head === 'string' && head.trim() ? head.trim() : null;
@@ -54,7 +69,38 @@ export function exhaustedComment({ pr, verb, tries, head } = {}) {
   return [
     `${EXHAUSTED_COMMENT_MARK} ${v} PR #${n}${h ? '@' + h : ''}`,
     '',
-    `自动化认输：动词 ${v} 试了 ${triesN} 次仍没推动。`,
+    `draft 收口泵试了 ${triesN} 次仍是 draft。已打「${WAITING_USER_LABEL}」，指挥官不再泵。`,
+    h ? `当前 head：${h}` : '当前 head 没查成，标打在 PR 上（属性不依赖 head）。',
+    '',
+    '帅位三选一：',
+    '1. 去掉该标——已解决，下轮可再泵',
+    '2. 补验收 / 转正式 / 关掉 PR',
+    '3. 保持等用户，看门狗不再推',
+  ].join('\n');
+}
+
+export function exhaustedComment({ pr, verb, tries, head, why, retryVerdict, maxTries } = {}) {
+  const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '?');
+  const n = pr == null ? '?' : String(pr);
+  const h = typeof head === 'string' && head.trim() ? head.trim() : null;
+  const triesN = Number.isFinite(Number(tries)) ? Number(tries) : '?';
+  // 真因必须写进评论（#1233 实咬）：原来这里只有「动词 X 试了 3 次仍没推动」——读这句话的人
+  // 会去查这张 PR 为什么没动，而真正的原因（`execution profile unverified: codex-relay-gpt-5.6-sol`）
+  // 躺在 drain 的返回值里，一句话都没带出来。四张判绿可合的 PR 就这样被同一个必然失败卡住，
+  // 而认输理由让人往错的方向查。
+  const cause = typeof why === 'string' && why.trim() ? why.trim().split(/\r?\n/)[0].slice(0, 400) : null;
+  // #1237：两种结局必须分得开。「一次都不该试」和「真试满了」读起来是两件事——
+  // 拿「试了 N 次仍没推动」去描述一个判据必拒的失败，是同一族误导（#1233 的教训）。
+  const cap = Number.isFinite(Number(maxTries)) ? Number(maxTries) : null;
+  const hopeless = retryVerdict === 'terminal';
+  const headline = hopeless
+    ? `自动化交人：动词 ${v} 的失败重试不会变（成因在重试能改变的范围之外），第 ${triesN} 次即停手，不烧满 ${cap || '?'} 次名额。`
+    : `自动化认输：动词 ${v} 试了 ${triesN} 次仍没推动。`;
+  return [
+    `${EXHAUSTED_COMMENT_MARK} ${v} PR #${n}${h ? '@' + h : ''}`,
+    '',
+    headline,
+    cause ? `最后一次失败的原因：${cause}` : '（这几次没留下具体原因——没查到什么挡住了它，只记了次数）',
     h ? `当前 head：${h}` : '当前 head 没查成，标打在 PR 上（属性不依赖 head）。',
     '',
     '指挥官从此跳过这张 PR，不再重试。帅位三选一：',
@@ -66,16 +112,26 @@ export function exhaustedComment({ pr, verb, tries, head } = {}) {
   ].join('\n');
 }
 
-export function buildMarkExhausted({ pr, verb, tries, head, why } = {}) {
+export function buildMarkExhausted({ pr, verb, tries, head, why, label, retryVerdict, maxTries } = {}) {
   const n = pr == null ? null : Number.isFinite(Number(pr)) ? Number(pr) : pr;
+  const v = EXHAUSTED_VERBS.has(verb) ? verb : String(verb || '');
+  const useWaiting = label === WAITING_USER_LABEL || v === 'pump-draft';
   return {
     kind: 'mark-exhausted',
     pr: n,
-    verb: EXHAUSTED_VERBS.has(verb) ? verb : String(verb || ''),
+    verb: v,
     tries: Number(tries) || 0,
     head: typeof head === 'string' && head.trim() ? head.trim() : null,
-    why: why || `PR #${n} 自动化认输（${verb} 试满）`,
-    comment: exhaustedComment({ pr: n, verb, tries, head }),
+    label: useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL,
+    // #1237：把判据结论带在动作上，执行侧与看板都能读，不必从评论正文里反解。
+    retryVerdict: retryVerdict || null,
+    maxTries: Number.isFinite(Number(maxTries)) ? Number(maxTries) : null,
+    why: why || (useWaiting
+      ? `PR #${n} draft 收口泵试满，打「${WAITING_USER_LABEL}」交帅`
+      : `PR #${n} 自动化认输（${verb} 试满）`),
+    comment: useWaiting
+      ? waitingUserComment({ pr: n, verb, tries, head })
+      : exhaustedComment({ pr: n, verb, tries, head, why }),
   };
 }
 
@@ -83,7 +139,7 @@ export function buildMarkExhausted({ pr, verb, tries, head, why } = {}) {
  * 看门狗：带「卡死/自动化认输」的开放 PR，同一 (pr, head) 只推一次。
  * 换成「卡死/等用户」/摘标/关掉 → 不再推。head 没查成 → 不推、不写无 head 键。
  */
-export function planExhaustedPush({ prs = [], ledger = {} } = {}) {
+export function planExhaustedPush({ prs = [], ledger = {}, epoch = null } = {}) {
   const book = ledger && typeof ledger === 'object' ? ledger : {};
   const pushes = [];
   const skipped = [];
@@ -105,7 +161,7 @@ export function planExhaustedPush({ prs = [], ledger = {} } = {}) {
       skipped.push({ pr: n, why: 'head-unscanned' });
       continue;
     }
-    const key = exhaustedPushKey(n, head);
+    const key = exhaustedPushKey(n, head, epoch);
     if (book[key]) {
       skipped.push({ pr: n, why: 'already-pushed', key });
       continue;
@@ -119,4 +175,156 @@ export function planExhaustedPush({ prs = [], ledger = {} } = {}) {
     });
   }
   return { pushes, skipped };
+}
+
+/**
+ * 「卡死/自动化认输」是**带 head、带判据版本**的判据，不是永久标签——过期就摘。
+ *
+ * 2026-09-11 实咬：这个标被写成单向闩，写它的路径好几处、摘它的一处都没有，
+ * 而 `prHasStuckLabel` 一票否决该 PR 的全部动作 → 12 张 PR 被永久焊死。
+ * 设计意图本来就不是永久的（本文件开头：「账本键必须带 @head」）。
+ *
+ * 2026-09-13 第二次实咬（#1238）：摘标只认「工人推了新 head」，于是**判据修好了但没人推
+ * 新 head 的 PR 永远过期不了**。实测 6 张（#1225/#1213/#1211/#1209/#1111/#1148），
+ * 其中 #1111/#1148 的病（审官读 PR 走裸 gh，在 GH_CONFIG_DIR=/var/empty 下必失败）
+ * 早已修在 master 上——标还挂着，因为「病修好了」原先不是一条能触发摘标的判据。
+ * 人对它们做「摘标重推」也无效（#1111 上有更正），因为重推仍读到旧账。
+ *
+ * 所以判据有三条，任一成立就摘：
+ *   ① 工人推了新 head           —— 新局面（原有）
+ *   ② 判据版本变了             —— 挡住它的那套判据已经改了（#1238 新增）
+ *   ③ 认输记录没带版本（老键）  —— 加版本之前的记录，无从判断，按过期处理（#1238）
+ *
+ * ③ 为什么按过期而不是保守留着：**留下的代价是「永久卡死」，摘掉的代价是「多试几次」**。
+ * 两者不对称，且后者有重试上限兜底（#1236 的判据版本 + 试满交人）。
+ *
+ * 2026-09-14 第三次实咬（本次）：上面三条**一条都不成立，而 PR 明明在等复审**。
+ *
+ * 现场 9 张（#1256 #1232 #1225 #1213 #1211 #1209 #1111 #1096 #885），时间线长这样：
+ *
+ *   红票投在旧代码 → 返工派成功（记账在**旧 head**，ok=true）→ 工人推了新 head
+ *   → 新 head 上没人复审（pushRework 被 `prev.ok === true` 挡住）→ 重试烧完 → 打认输标
+ *
+ * 于是：认输记录记的就是当前 head（① 不成立）、判据版本没变过（② 不成立）、
+ * 记录带着版本（③ 不成立）——标永久挂着，而盘面同时在报「返工完了没人复审」。**同一张 PR
+ * 上，一个判据说「没人复审」，另一个判据说「别再动它」。**
+ *
+ * 所以补第 ④ 条：**红票投在旧代码上 = 返工已经落地、判定已经过期**，这个事实本身就
+ * 让旧认输不成立——旧认输记的是「叫不动审官」，不是「代码没改」，两件事不该合成一个标。
+ * 证据由调用方注入（`staleRedAt`，与 `pushRework` 解冻共用同一份 `analyzeReviewsAtHead`
+ * 结果）——本模块零 IO，也不自己去读 reviews。
+ *
+ * ④ 必须能停。红票还在旧 commit、head 也不动时，`redOid !== head` 会一直成立；
+ * 不解冻一次就焊死（本条要治的），解冻却不记「这份旧红票的新复审键已经试满」，
+ * 就会 `clear-exhausted → rereview → mark-exhausted → clear-exhausted` 无限转
+ * （PR #1261 审官红 ①）。调用方把「新键已试满」的 PR 放进 `spentStaleReds`——
+ * ④ 对它们不再摘，①②③ 照常（又推了新 head / 判据版本变了仍该摘）。
+ *
+ * 所以判据有四条，任一成立就摘：
+ *   ① 工人推了新 head           —— 新局面（原有）
+ *   ② 判据版本变了             —— 挡住它的那套判据已经改了（#1238）
+ *   ③ 认输记录没带版本（老键）  —— 加版本之前的记录，无从判断，按过期处理（#1238）
+ *   ④ 红票投在旧代码上         —— 返工已落地、判定已过期（本次）；同一份旧红票只解冻一次
+ *
+ * ③ 为什么按过期而不是保守留着：**留下的代价是「永久卡死」，摘掉的代价是「多试几次」**。
+ * 两者不对称，且后者有重试上限兜底（#1236 的判据版本 + 试满交人）。④ 同理：
+ * 不摘的代价是「静默 16 小时」（#1213 实测），摘掉的代价是「再叫一次审官」。
+ *
+ * 只摘「自动化认输」，**不动「等用户」**——那是「已升级给人」，人没回话机器不该自己动。
+ *
+ * @param {Array} prs  开放 PR（要带 number / headRefOid / labels）
+ * @param {Object} ledger  `pushed:<pr>@<head>[@e<epoch>]` → { at, pr, head }
+ * @param {Array} pushedThisRound  本轮刚推过的键（刚认输的别当场又摘掉）
+ * @param {string|null} epoch  本轮的判据版本（lib/retry-epoch.mjs）；拿不到就退回只认 ①③
+ * @param {Object|Map} staleRedAt  `{ <pr>: <红票所在的 commit oid> }`——**只有确知投在旧代码上**
+ *   的才放进来；没查成 / 无红票 / 红票就在当前 head 上，一律不进这张表（缺项 = 这一条不成立，
+ *   不阻塞其余三条）。判据在调用方（commander-core 的 staleRedBallot），本函数只读。
+ * @param {Object|Map} spentStaleReds  `{ <pr>: <已经用新复审键试满的那张红票 oid> }`——
+ *   第 ④ 条的一次性消费。这份旧红票已经解冻过、且 `@red:<oid>` 键已试满 → 不再摘。
+ *   缺 / 对不上当前红票 → ④ 仍可成立（没依据不许假装已经试过）。
+ */
+export function planExhaustedLabelClear({
+  prs = [], ledger = {}, pushedThisRound = [], epoch = null, staleRedAt = null,
+  spentStaleReds = null,
+} = {}) {
+  const book = ledger && typeof ledger === 'object' ? ledger : {};
+  const nowEpoch = typeof epoch === 'string' && /^[0-9a-f]{12}$/.test(epoch) ? epoch : null;
+  const justPushed = new Set((Array.isArray(pushedThisRound) ? pushedThisRound : []).map(String));
+  // Map 与普通对象都收（调用方可能从 Map 直接传）；缺 / 类型不对 → 空表，④ 永不成立。
+  const redAt = staleRedAt instanceof Map
+    ? staleRedAt
+    : (staleRedAt && typeof staleRedAt === 'object' && !Array.isArray(staleRedAt)
+      ? new Map(Object.entries(staleRedAt)) : new Map());
+  const spentAt = spentStaleReds instanceof Map
+    ? spentStaleReds
+    : (spentStaleReds && typeof spentStaleReds === 'object' && !Array.isArray(spentStaleReds)
+      ? new Map(Object.entries(spentStaleReds)) : new Map());
+  const clears = [];
+  const skipped = [];
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    if (!pr || pr.number == null) continue;
+    const n = pr.number;
+    if (!Array.isArray(pr.labels)) { skipped.push({ pr: n, why: 'labels-unscanned' }); continue; }
+    const names = labelNames(pr.labels);
+    if (!names.includes(EXHAUSTED_LABEL)) continue;          // 没这个标，不是本函数的事
+    if (names.includes(WAITING_USER_LABEL)) { skipped.push({ pr: n, why: 'waiting-user' }); continue; }
+    const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null;
+    if (!head) { skipped.push({ pr: n, why: 'head-unscanned' }); continue; }  // 没查成不动手（摘错要重认输一轮）
+    // 找这张 PR 的认输记录。取 **at 最新**的那条，不是 Object.keys 里第一条——
+    // 一张 PR 在账本里有几十条（#1118 有 32 条），Object.keys 的顺序是插入顺序，
+    // 拿第一条 = 拿最老的，比较出来的「工人推了新东西」是拿 7 天前的 head 比的。
+    const mine = Object.keys(book)
+      .filter((k) => { const v = book[k]; return v && Number(v.pr) === Number(n); })
+      .map((k) => ({ key: k, at: Date.parse(book[k].at || '') || 0, head: String(book[k].head || '') }))
+      .sort((a, b) => b.at - a.at);
+    const latest = mine[0] || null;
+    const recordedHead = latest ? latest.head : '';
+    if (!recordedHead) { skipped.push({ pr: n, why: 'no-ledger-head' }); continue; }
+    const recordedEpoch = latest ? epochOfPushKey(latest.key) : null;
+    if (justPushed.has(exhaustedPushKey(n, head, nowEpoch) || '')) { skipped.push({ pr: n, why: 'just-pushed' }); continue; }
+    // ④ 红票投在旧代码上：返工已经落地、那次判定已经过期。放在 ①②③ 之前判——
+    // 它是**正面证据**（盘面同时在报「返工完了没人复审」），比「判据版本变了」这种间接信号硬。
+    // 同一份旧红票只解冻一次：新复审键（`@red:<oid>`）已经试满 → 不走 ④，掉进 ①②③。
+    const redOid = redAt.get(n) ?? redAt.get(String(n));
+    const redIsStale = typeof redOid === 'string' && redOid.trim() && redOid.trim() !== head;
+    const spentOid = spentAt.get(n) ?? spentAt.get(String(n));
+    const staleSpent = redIsStale && typeof spentOid === 'string' && spentOid.trim() === redOid.trim();
+    if (redIsStale && !staleSpent) {
+      clears.push({
+        pr: n, head, recordedHead, reason: 'rework-landed',
+        why: `PR #${n} 的认定红票投在 ${redOid.trim().slice(0, 8)}，而 head 已经是 ${head.slice(0, 8)}`
+          + `——返工已经落地、那次判定已经过期，可新代码上没人复审（这正是「返工完了没人复审」）。`
+          + `旧认输记的是「叫不动审官」，不是「代码没改」，两件事不该合成一个标：摘标让它重回流水线`,
+      });
+      continue;
+    }
+    if (recordedHead === head) {
+      // head 没动。这时只有「判据变了」或「老记录没带版本」能让它过期。
+      if (!recordedEpoch) {
+        clears.push({
+          pr: n, head, recordedHead, reason: 'epoch-missing',
+          why: `PR #${n} 的认输记录是加判据版本之前写的（head ${head.slice(0, 8)}）——`
+            + `无从判断它是不是还成立。留着 = 可能永久卡死，摘掉 = 最多多试几次（有上限兜底），故按过期处理，摘标重回流水线`,
+        });
+        continue;
+      }
+      if (!nowEpoch) { skipped.push({ pr: n, why: 'epoch-unscanned' }); continue; } // 本轮版本没算成，没依据，不动手
+      if (recordedEpoch !== nowEpoch) {
+        clears.push({
+          pr: n, head, recordedHead, reason: 'epoch-changed',
+          why: `PR #${n} 认输时的判据版本 ${recordedEpoch} 已不是现在的 ${nowEpoch}`
+            + `——挡住它的那套判据改过了，旧认输对新判据不成立，摘标让它重获机会`,
+        });
+        continue;
+      }
+      skipped.push({ pr: n, why: staleSpent ? 'stale-red-spent' : 'same-head-same-epoch' });
+      continue;
+    }
+    clears.push({
+      pr: n, head, recordedHead, reason: 'new-head',
+      why: `PR #${n} 认输记录在 head ${recordedHead.slice(0, 8)}，现在已是 ${head.slice(0, 8)}`
+        + `——工人推了新东西 = 新局面，旧认输不成立，摘标让它重回流水线`,
+    });
+  }
+  return { clears, skipped };
 }

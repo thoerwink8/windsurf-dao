@@ -17,21 +17,21 @@ describe('#826 身份消息失败不整树回滚', () => {
     const failed = S.planIdentityKeep({ identityOk: false, identityError: 'no_active_sender_terminal' });
     assert.ok(failed.ok && failed.keep === true && failed.rollback === false && failed.identityFailed === true,
       '失败必须保留树 → ' + JSON.stringify(failed));
-    assert.ok(/notify --from/.test(failed.warning) && /不回滚/.test(failed.warning),
-      '红项要提示补发 --from → ' + failed.warning);
+    assert.match(failed.warning, /不回滚/);
+    assert.match(failed.warning, /GitHub 评论/);
+    assert.match(failed.warning, /不要调 dao\.mjs notify/);
     const ok = S.planIdentityKeep({ identityOk: true });
     assert.ok(ok.ok && ok.identityFailed === false && ok.rollback === false,
       '成功不得标失败 → ' + JSON.stringify(ok));
   });
 
   it('古路（failCreated 因身份消息）已退役：create/attach/reuse 身份失败不再 rollback', () => {
-    assert.ok(/function deliverReviewerIdentity/.test(DAO_SRC), '身份投递走共享辅助');
+    assert.ok(!/function deliverReviewerIdentity/.test(DAO_SRC),
+      'orca 审官身份投递辅助已随执行体删');
     assert.ok(!/failCreated\([^)]*审官身份消息没送到/.test(DAO_SRC),
       'reviewer-create/attach 不得因身份消息 failCreated');
     assert.ok(!/复用审官身份消息没送到士兵/.test(DAO_SRC),
       'reuse 不得因身份消息整跳失败');
-    assert.ok(/identityFailed/.test(DAO_SRC) && /planIdentityKeep/.test(DAO_SRC),
-      '成功路径要带 identityFailed 红项');
   });
 });
 

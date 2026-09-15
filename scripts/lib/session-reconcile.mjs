@@ -13,12 +13,11 @@
 //   同一 issue 已有活执行者 ⇒ 拒绝再派。
 
 import { unclosedJobIds } from './ledger-query.mjs';
+import { EXECUTION_FINISHED, sessionStateOf } from './execution-states.mjs';
+import { checksSucceeded, explicitApprovalIssue } from './approved-merge.mjs';
 
 /** 驱动自报的终态：人已经走了，名单里留着也不算活执行者。 */
-const DEAD_STATES = new Set([
-  'completed', 'complete', 'done', 'finished',
-  'failed', 'error', 'aborted', 'cancelled', 'canceled',
-]);
+const DEAD_STATES = EXECUTION_FINISHED;
 
 function positiveInt(v) {
   const n = Number(v);
@@ -68,11 +67,15 @@ export function desiredFromEvents(events) {
       identity: e.identity || null,
       issue: issueOfDispatch(e),
       pr: prOfDispatch(e),
+      repo: e.repo || null,
+      branch: e.branch || null,
       card_name: cardNameOf(e) || null,
       terminal: e.terminal || null,
       dispatch_id: e.dispatch_id || null,
       ts: e.ts || null,
       model: e.model || null,
+      reviewer: e.reviewer || null,
+      role: e.work_type || e.role || null,
     });
   }
   return { unscanned: false, items };
@@ -90,7 +93,7 @@ export function isLiveSession(s) {
   if (!key) {
     return { live: false, unscanned: true, why: '会话没有 key——没查成' };
   }
-  const raw = String(s.state || s.runState || '').toLowerCase();
+  const raw = sessionStateOf(s) || '';
   if (DEAD_STATES.has(raw)) {
     return { live: false, unscanned: false, why: `终态 ${raw}` };
   }
@@ -177,6 +180,14 @@ function asNumberSet(v) {
   return new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0));
 }
 
+/** 差集项对应的开放 PR：只认 desired 上记下的 PR 号，对不上就是没有，不猜。 */
+export function openPrMatchingDesired(d, openPrs) {
+  if (!d || !Array.isArray(openPrs)) return null;
+  const want = Number(d.pr);
+  if (!Number.isInteger(want) || want <= 0) return null;
+  return openPrs.find((p) => p && Number(p.number) === want) || null;
+}
+
 /**
  * 审官静默要不要重起（#1043 现场 B）。
  * 目标 PR 已不在开放名单 = 干完了，不报警不重起。
@@ -207,6 +218,7 @@ export function planReconcile({
   desired,
   sessions,
   openIssues,
+  openPrs = [],
   alreadyQueued,
   maxPerRound = 2,
   dispatchedThisRound = 0,
@@ -235,6 +247,15 @@ export function planReconcile({
   }
 
   const queued = asNumberSet(alreadyQueued) || new Set();
+  if (!Array.isArray(openPrs)) return { unscanned: true, redispatches: [], reports: ['交卷状态未查成，不猜测需要重派的工人'] };
+  const deliveryByIssue = new Map();
+  for (const pr of openPrs) {
+    const issue = explicitApprovalIssue(pr);
+    if (!issue) continue;
+    const delivered = pr?.isDraft === false && pr.reworkRequired === false && checksSucceeded(pr);
+    deliveryByIssue.set(issue, (deliveryByIssue.get(issue) ?? true) && delivered);
+  }
+  const delivered = new Set([...deliveryByIssue].filter(([, done]) => done).map(([issue]) => issue));
   const byIssue = new Map();
   const reports = [];
   for (const d of desired) {
@@ -251,8 +272,11 @@ export function planReconcile({
   let used = Number(dispatchedThisRound) || 0;
   const cap = Number.isInteger(maxPerRound) && maxPerRound > 0 ? maxPerRound : 2;
   for (const [issue, d] of byIssue) {
-    if (!open.has(issue)) continue; // 单已关：不是漏救，是完工
+    const matchedPr = openPrMatchingDesired(d, openPrs);
+    // 单已关且没有对应开放 PR：完工。单已关但 PR 还开着：差集仍要按 PR 标签消费。
+    if (!open.has(issue) && !matchedPr) continue;
     if (queued.has(issue)) continue; // 本轮已经要派，不造第二份
+    if (delivered.has(issue)) continue; // 已交卷等审查/合并；判红返工走独立的 PR 路径。
     const live = hasLiveExecutor({ sessions, issue, pr: d.pr });
     if (live.unscanned) {
       reports.push(`#${issue} 活会话没查成——当有人在做，不重派`);
@@ -263,6 +287,9 @@ export function planReconcile({
     used += 1;
     redispatches.push({
       issue,
+      pr: (matchedPr && matchedPr.number) || d.pr || null,
+      repo: d.repo || null,
+      branch: d.branch || null,
       job_id: d.job_id,
       model: d.model || null,
       why: `#${issue} 账上有未结派工 ${d.job_id}，名单里没有活会话——差集重派`,

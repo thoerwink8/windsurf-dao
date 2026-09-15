@@ -1,0 +1,21 @@
+{
+  "issue": 1174,
+  "taskId": "1174-luna-relay-execution",
+  "sessionKey": "codex:5e165b05-657b-4b81-8bdd-c4db58f2d824",
+  "observedAt": "2026-09-10T19:40:00.000Z",
+  "backend": "mirasim",
+  "agent": "codex",
+  "model": "gpt-5.6-luna",
+  "workdir": "/tmp/luna-verify-b",
+  "phase": "done",
+  "numTurns": 1,
+  "error": null,
+  "toolCalls": [{ "name": "shell", "status": "done" }],
+  "probe": {
+    "file": "proof.txt",
+    "expectedToken": "LUNA_VERIFY_TOKEN_7fa31c",
+    "tokenEchoed": true,
+    "text": "I'll read proof.txt without changing any files.\n\nLUNA_VERIFY_TOKEN_7fa31c"
+  },
+  "why": "此前 availability 只有 inventory 级证据（relay 报 configured/ok 且清单列了模型），执行目录据此拒绝用它起审官——闸拦得对。本次用底层 mirasim runtime 直接起会话取得执行级证据后回填，不是直接改标记。"
+}

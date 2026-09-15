@@ -421,7 +421,7 @@ export function escalateAllOpen({
   // 开单失败、或有单号但发卡失败，都退回纯文字——总控群不能哑掉。
   // 去重戳只在实际送达后盖（settleAllOpen 看 sent）；发卡失败信息留在 ask 里。
   const issue = openIssue({
-    title: '[待拍板] 编排层熔断：全部路径 open',
+    title: '编排层熔断：全部路径 open',   // 前缀由 label 承载（#1240），标题不再重复一遍
     body: `${text}\n\n查重标记（勿删）：[breaker-all-open]`,
     now,
   });

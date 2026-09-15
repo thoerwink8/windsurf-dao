@@ -19,6 +19,21 @@ function rollup(...conclusions) {
   return conclusions.map(c => ({ status: 'COMPLETED', conclusion: c }));
 }
 
+it('a merged subtask cannot close an umbrella with unfinished acceptance items', async () => {
+  const C = await LOAD;
+  const pr = { number: 1186, body: '署名 issue #1174', state: 'MERGED', statusCheckRollup: rollup('SUCCESS') };
+  for (const body of ['- [x] 实现\n- [ ] 自动验收', '- [x] 实现\n+ [ ] 自动验收',
+    '- [x] 实现\n1. [ ] 自动验收', '```md\n- [x] 例子\n```', '<!--\n- [x] 例子\n-->',
+    '- [x] 实现\n```html\n<!--\n```\n- [ ] 验收', '    - [x] 缩进代码', '', undefined]) {
+    let writes = 0;
+    const r = C.closeIssueForPr({ pr,
+      runGh: () => ({ ok: true, json: { state: 'OPEN', url: 'https://github.com/o/r/issues/1174', labels: [{ name: '统领单' }], body } }),
+      writeIssue: () => { writes++; return { ok: true }; } });
+    assert.equal(r.action, 'none');
+    assert.equal(writes, 0);
+  }
+});
+
 describe('close-issue 署名单号', () => {
   it('#657 正文「署名 issue #N」是署名单号（非 GitHub 关单词，不触发自动关单）', async (t) => {
     const C = await LOAD;
@@ -36,16 +51,163 @@ describe('close-issue 署名单号', () => {
       assert.deepStrictEqual(C.attributedIssueNumbers('Fixes #12'), [12]);
     });
   });
-  it('attributedIssueNumber：标题 #N 优先，其次正文署名', async (t) => {
+
+  it('#1051 被否定的分句不算认领——「不写 closes #N」是声明不做，不是认领', async (t) => {
     const C = await LOAD;
-    await t.test('标题带 #N 取标题', () => {
-      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 657);
+
+    await t.test('PR #1096 原句：挂回 #1051 的那段不再把 #1051 读成认领', () => {
+      // 现场原文（PR #1096 正文「## 不做什么」一节）。
+      const body = [
+        '- **不写 `closes #1051`**。#1051 的实体工作（给四+三条同形各配一个会报警的执行者）一件都没做。',
+        '',
+        '署名 issue #1101',
+      ].join('\n');
+      assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101]);
+    });
+
+    await t.test('正控：同一句去掉否定词后照旧认领（不是把整行屏蔽）', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('写 closes #1051'), [1051]);
+    });
+
+    await t.test('正控：否定只作用于它所在的分句，别处的认领不受牵连', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051。署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051\n署名 issue #1101'), [1101]);
+      // 反过来：先认领、后否定另一张单 —— 认领的那张必须留住。
+      assert.deepStrictEqual(C.attributedIssueNumbers('署名 issue #1101\n不写 closes #1051'), [1101]);
+    });
+
+    await t.test('审官反例：不应该写 / **不写** 仍不算认领，后续署名留下', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051。署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('**不写** closes #1051。署名 issue #1101'), [1101]);
+      assert.strictEqual(C.attributedIssueNumber({ title: 'x', body: '不应该写 closes #1051。署名 issue #1101' }), 1101);
+      assert.strictEqual(C.attributedIssueNumber({ title: 'x', body: '**不写** closes #1051。署名 issue #1101' }), 1101);
+    });
+
+    await t.test('审官反例：不应当写 / 不需要写 也不算认领（关单词不再靠能愿词表）', () => {
+      for (const body of [
+        '不应当写 closes #1051。署名 issue #1101',
+        '不需要写 closes #1051。署名 issue #1101',
+        '不应当写 fixes #1051。署名 issue #1101',
+        '不需要写 resolves #1051。署名 issue #1101',
+      ]) {
+        assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101], body);
+        assert.strictEqual(C.attributedIssueNumber({ title: 'x', body }), 1101, body);
+      }
+      // 去掉否定后照旧认领。
+      assert.deepStrictEqual(C.attributedIssueNumbers('应当写 closes #1051'), [1051]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('需要写 closes #1051'), [1051]);
+    });
+
+    await t.test('正控：同一分句「不关单 署名 issue #N」的署名仍是认领', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不关单 署名 issue #1101'), [1101]);
+    });
+
+    await t.test('中英文标点切分：逗号/英文句号后的署名仍认，否定接应（不能/不该/不应/不必）也剥', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051，署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不写 closes #1051. 署名 issue #1101'), [1101]);
+      assert.deepStrictEqual(C.attributedIssueNumbers('不应该写 closes #1051 署名 issue #1101'), [1101]);
+      for (const body of ['不能写 closes #1051。署名 issue #1101', '不该写 closes #1051。署名 issue #1101',
+        '不应写 closes #1051。署名 issue #1101', '不必写 closes #1051。署名 issue #1101']) {
+        assert.deepStrictEqual(C.attributedIssueNumbers(body), [1101], body);
+      }
+    });
+
+    await t.test('正控：不论/不仅 不是否定认领（不-复合词别误伤）', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('不论 Closes #564 还是 Fixes #12'), [564, 12]);
+    });
+
+    await t.test('正控：Closes 出现在叙述里（非否定）仍认领', () => {
+      assert.deepStrictEqual(C.attributedIssueNumbers('这个 PR Closes #564，顺手修了别处'), [564]);
+    });
+
+    await t.test('stripNegatedClaims 保留换行结构（正文压过标题的优先级不变）', () => {
+      const out = C.stripNegatedClaims('不写 closes #1\n署名 issue #2');
+      assert.match(out, /\n/);
+      assert.doesNotMatch(out, /closes #1/);
+      assert.match(out, /署名 issue #2/);
+    });
+
+    await t.test('没有否定词时原样返回（快路径不改写正文）', () => {
+      const src = '署名 issue #657\n参考 #498 #480';
+      assert.strictEqual(C.stripNegatedClaims(src), src);
+    });
+
+    await t.test('attributedIssueNumber 整条链路也干净：#1096 归到 #1101，不是 #1051', () => {
+      const pr = {
+        title: '[cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口',
+        body: '- **不写 `closes #1051`**。\n\n署名 issue #1101',
+      };
+      assert.strictEqual(C.attributedIssueNumber(pr), 1101);
+    });
+
+    await t.test('审官反例：标题只有被否定的认领、正文空 → 不落入裸 #N 退路', () => {
+      const pr = { title: '不应该写 closes #1051', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(pr), null);
+      assert.strictEqual(C.attributedIssueNumber({ title: '**不写** closes #1051', body: '' }), null);
+      // 同一标题里否定之后还有真退路号，只捞后面那个。
+      assert.strictEqual(C.attributedIssueNumber({ title: '不应该写 closes #1051，修一处 #945', body: '' }), 945);
+    });
+  });
+
+  it('#1051 标题退路：目标单还开着时收严，已关的单照旧（判据是「拦谁」不是「拦什么词」）', async (t) => {
+    const C = await LOAD;
+    // PR #1096 的真实处境：正文零显式署名（剥掉否定后），只有标题里提到 #1051。
+    const pr = {
+      title: '[cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口',
+      body: '',
+    };
+
+    await t.test('目标单还开着 → 不返号（#1051 就是这样被焊死 7 天的）', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr, { openIssues: new Set([1051]) }), null);
+    });
+
+    await t.test('目标单已关 → 照旧返号（历史 PR 本该这么归因，12 张真 PR 全靠这一条）', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr, { openIssues: new Set([1101, 1102]) }), 1051);
+    });
+
+    await t.test('不传 openIssues（老调用方/夹具）→ 保持原行为，不凭猜收严', () => {
+      assert.strictEqual(C.attributedIssueNumber(pr), 1051);
+    });
+
+    await t.test('正控：正文显式署名不受收严影响（第 1 级永远权威）', () => {
+      const withBody = { ...pr, body: '署名 issue #1101' };
+      assert.strictEqual(C.attributedIssueNumber(withBody, { openIssues: new Set([1101, 1051]) }), 1101);
+    });
+
+    await t.test('正控：标题显式「署名 issue #N」不受收严影响（第 2 级）', () => {
+      const titled = { title: '[cc] x 署名 issue #1051', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(titled, { openIssues: new Set([1051]) }), 1051);
+    });
+
+    await t.test('PR #1216 真实处境：#1143 开着 → 不再误认（它是「刷了 135 条评论的根因」）', () => {
+      const p = { title: '[cc] fix(exhausted): 认输标按「最新」记录比对——#1143 刷了 135 条评论的根因', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(p, { openIssues: new Set([1143]) }), null);
+    });
+
+    await t.test('PR #938 真实处境：#931 已关 → 照旧认（那是真交付：「（#931，基于 #926）」）', () => {
+      const p = { title: 'feat(commander): 判红直接派返工工人——删掉「唤大脑」整层（#931，基于 #926）', body: '' };
+      assert.strictEqual(C.attributedIssueNumber(p, { openIssues: new Set([926]) }), 931);
+    });
+  });
+  it('attributedIssueNumber：正文署名压过标题随手引用，标题裸 #N 只是退路', async (t) => {
+    const C = await LOAD;
+    await t.test('正文有署名时取正文，哪怕标题另有 #N', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '署名 issue #99' }), 99);
     });
     await t.test('标题无号取正文署名', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '署名 issue #42' }), 42);
     });
+    await t.test('正文没有署名、标题有裸 #N → 标题退路', () => {
+      assert.strictEqual(C.attributedIssueNumber({ title: '[pi] #657 关单', body: '无追溯' }), 657);
+    });
     await t.test('都没有 → null', () => {
       assert.strictEqual(C.attributedIssueNumber({ title: '修 bug', body: '无追溯' }), null);
+    });
+    await t.test('#1159 语料：标题堵 #565、正文署名 #1152 → 1152', () => {
+      assert.strictEqual(C.attributedIssueNumber({
+        title: '[cc] fix(test): 测试结构性够不着真执行体，堵 #565 假会话泄漏',
+        body: '署名 issue #1152，关单交给 `scripts/close-issues.mjs`。',
+      }), 1152);
     });
   });
 });
@@ -182,6 +344,104 @@ describe('close-issue 判定', () => {
       assert.match(r.reason, /已顶替/);
       assert.ok(!calls.some(a => a[0] === 'issue' && a[1] === 'reopen'), '带标签不应 reopen  →  ' + JSON.stringify(calls));
     });
+    writes.length = 0;
+    await t.test('标题只有被否定的认领、正文空、MERGED+绿 → 不写 issue_close', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 1224,
+          title: '不应该写 closes #1051',
+          body: '',
+          state: 'MERGED',
+          statusCheckRollup: rollup('SUCCESS'),
+        },
+        runGh: gh,
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(String(r.reason), /无署名单号/);
+      assert.equal(writes.length, 0);
+      assert.equal(calls.some((a) => a[0] === 'issue' && a[1] === 'view' && String(a[2]) === '1051'), false);
+    });
+    writes.length = 0;
+    await t.test('PR #1096 原句：标题挂回 + 正文关联、#1051 仍 OPEN、MERGED+绿 → 不写 issue_close', () => {
+      const pr1096 = {
+        number: 1096,
+        title: '挂回 #1051',
+        body: '关联 #1051（只作署名，不关单）',
+        state: 'MERGED',
+        statusCheckRollup: rollup('SUCCESS'),
+      };
+      assert.strictEqual(C.attributedIssueNumber(pr1096, { openIssues: new Set([1051]) }), null);
+      const r = C.closeIssueForPr({
+        pr: pr1096,
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'OPEN', url: 'https://github.com/thoerwink8/windsurf-dao/issues/1051', labels: [] } };
+          }
+          if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'none');
+      assert.match(String(r.reason), /无署名单号/);
+      assert.equal(writes.length, 0);
+      assert.equal(writes.some((w) => w && w.action === 'issue_close' && String(w.issue) === '1051'), false);
+    });
+    writes.length = 0;
+    await t.test('标题裸退路：目标已关、MERGED 但 check 红 → 仍 reopen（历史退路）', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 938,
+          title: 'feat(commander): 判红直接派返工工人——删掉「唤大脑」整层（#931，基于 #926）',
+          body: '',
+          state: 'MERGED',
+          statusCheckRollup: rollup('FAILURE'),
+        },
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'CLOSED', url: 'https://github.com/thoerwink8/windsurf-dao/issues/931', labels: [] } };
+          }
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'reopen');
+      assert.equal(r.issue, 931);
+      assert.equal(writes[0]?.action, 'issue_reopen');
+      assert.equal(String(writes[0]?.issue), '931');
+    });
+    writes.length = 0;
+    await t.test('正控：正文显式署名、目标 OPEN、MERGED+绿 → 仍 issue_close', () => {
+      const r = C.closeIssueForPr({
+        pr: {
+          number: 1096,
+          title: '挂回 #1051',
+          body: '署名 issue #1101',
+          state: 'MERGED',
+          statusCheckRollup: rollup('SUCCESS'),
+        },
+        runGh: (args) => {
+          calls.push(args.slice());
+          if (args[0] === 'issue' && args[1] === 'view') {
+            return { ok: true, json: { state: 'OPEN', url: 'https://github.com/thoerwink8/windsurf-dao/issues/1101', labels: [] } };
+          }
+          if (args[0] === 'pr' && args[1] === 'list') return { ok: true, json: [] };
+          return { ok: true, json: {} };
+        },
+        writeIssue,
+      });
+      assert.equal(r.ok, true);
+      assert.equal(r.action, 'close');
+      assert.equal(r.issue, 1101);
+      assert.equal(writes[0]?.action, 'issue_close');
+      assert.equal(String(writes[0]?.issue), '1101');
+    });
   });
 });
 
@@ -262,9 +522,15 @@ describe('署名单号解析不许把补丁链标记当成 issue 号', () => {
     assert.equal(attributedIssueNumber(pr), 888, '链内序号不是单号，要落到正文署名上');
   });
 
-  it('判别力反证：标题里真的有单号时照旧优先用它', async () => {
+  it('正文署名压过标题里真的 #N——标题优先会把随手引用当成署名单', async () => {
     const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
     const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '署名 issue #888' };
-    assert.equal(attributedIssueNumber(pr), 945, '别把整条标题优先规则一刀切废掉');
+    assert.equal(attributedIssueNumber(pr), 888, '正文署名是权威；标题 #945 是随手引用');
+  });
+
+  it('判别力反证：正文没有署名单号时，标题裸 #N 仍是退路', async () => {
+    const { attributedIssueNumber } = await import('../scripts/lib/close-issue.mjs');
+    const pr = { title: '[cc] fix(x): 修一处 #945 [chain:foo#2]', body: '没有署名这一行' };
+    assert.equal(attributedIssueNumber(pr), 945, '旧约定 [pi] #N 关单 不能废');
   });
 });

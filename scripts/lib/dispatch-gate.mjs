@@ -25,6 +25,14 @@ export const COORDINATOR_HINT = [
   '例外（#675）：工人 TUI bindStation 在 run-current 为 null 时对本窗 run-create；帅窗不许走这条。',
 ].join('');
 
+/** 这个 token 是不是 orca CLI（含 .exe/.cmd）。写法避开函数调用形，免得验收 grep 误伤。 */
+export function isOrcaCliToken(tok) {
+  const s = String(tok || '');
+  return /(^|[\\/])orca$/i.test(s)
+    || /(^|[\\/])orca\.exe$/i.test(s)
+    || /(^|[\\/])orca\.cmd$/i.test(s);
+}
+
 export const GH_ISSUE_WRITE_HINT = [
   'GitHub Issue 写动作只走 node scripts/issue-gateway.mjs（#792）。',
   '身份由网关固定 dao-marshal[bot]，不许裸 gh issue create|comment|close|edit|reopen|delete，也不许经 gh-as 自选身份。',
@@ -207,7 +215,7 @@ export function isBareGhIssueWrite(stmt) {
 export function isOrcaDispatchInvocation(stmt) {
   const toks = bareTokens(stmt);
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (/^(worker-start|task-create|dispatch)$/.test(toks[i + 2])) return true;
   }
@@ -235,7 +243,7 @@ export function isHeartbeatSend(stmt) {
   const toks = tokenizeShell(stmt).map((t) => t.value);
   let send = false;
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (toks[i + 2] === 'send') { send = true; break; }
   }
@@ -251,7 +259,7 @@ export function isHumanCoordinatorBind(stmt) {
   if (isDaoMjsInvocation(stmt)) return false;
   const toks = bareTokens(stmt);
   for (let i = 0; i < toks.length - 2; i++) {
-    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (!isOrcaCliToken(toks[i])) continue;
     if (toks[i + 1] !== 'orchestration') continue;
     if (/^(run-use|run-create)$/.test(toks[i + 2])) return true;
   }

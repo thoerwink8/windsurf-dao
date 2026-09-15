@@ -37,6 +37,21 @@ describe('acquireWorktreeLock：互斥 + 死进程拆锁', () => {
     assert.equal(r.ok, true, '死 pid 应拆锁让出  →  ' + JSON.stringify(r));
     r.release();
   });
+
+  it('timeoutMs=0 清掉死锁后立即再抢一次拿到', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-t0-dead-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, '999999');
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 0,
+      sleepFn: () => { throw new Error('timeout=0 不该睡'); },
+      pidAlive: () => false,
+    });
+    assert.equal(r.ok, true, '清掉死锁后 timeout=0 也应拿到  →  ' + JSON.stringify(r));
+    assert.equal(fs.readFileSync(lockPath, 'utf8').trim(), String(process.pid));
+    r.release();
+  });
 });
 
 // staleMs 兜底：pid 读不出 / pid 被无关活进程复用时 pidAlive 判不出，靠 mtime 年龄拆锁。
@@ -81,6 +96,21 @@ describe('acquireWorktreeLock：staleMs 过期锁按 mtime 拆', () => {
       stat: statAged(11 * MIN), pidAlive: () => true,
     });
     assert.equal(r.ok, true, '超龄锁不管 pid 活不活都拆  →  ' + JSON.stringify(r));
+    r.release();
+  });
+
+  it('timeoutMs=0 清掉过期锁后立即再抢一次拿到', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-t0-expired-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    fs.writeFileSync(lockPath, '');
+    const r = acquireWorktreeLock({
+      lockPath, timeoutMs: 0, staleMs: 10 * MIN,
+      sleepFn: () => { throw new Error('timeout=0 不该睡'); },
+      stat: statAged(11 * MIN),
+      pidAlive: () => { throw new Error('pid 空不该问 pidAlive'); },
+    });
+    assert.equal(r.ok, true, '清掉过期锁后 timeout=0 也应拿到  →  ' + JSON.stringify(r));
     r.release();
   });
 

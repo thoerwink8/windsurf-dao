@@ -83,6 +83,73 @@ describe('工具使用闸：heredoc 吞转义', () => {
   });
 });
 
+// 根治版判据（2026-09-10 用户指名要的「永久根治」）。
+//
+// 起因：旧判据只认 `cat > x.mjs <<EOF` 一种形态，实测 python3 heredoc / sed -i /
+// node -e / perl -i / tee / 重定向四个以上形态**全部哑火**，而那晚的正则正是经
+// python3 heredoc 变形的。判据轴从「认工具名」换成「认行为」：
+// **要写文件 + 含转义 + 碰的是代码/配置文本**——下次换工具照样命中。
+describe('工具使用闸：代码文本经 shell 落进文件（根治版）', () => {
+  it('违规样本：python3 heredoc 写正则 —— 必须被注中（旧判据在这里是哑的）', async () => {
+    const S = await LOAD;
+    const cmd = 'python3 - <<\'PY\'\nimport re\nprint(re.sub(r"\\s+", " ", "a  b"))\nPY';
+    const notes = S.classifyBash(cmd);
+    assert.ok(notes.some((n) => n.id === 'shell-escape-into-file'), JSON.stringify(notes));
+    assert.match(S.renderToolUseGate(notes), /Write\/Edit/);
+  });
+
+  it('违规样本：sed -i 改含转义的代码', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('sed -i "s|old|new \\d+|" scripts/lib/x.mjs'));
+  });
+
+  it('违规样本：node -e 显式写文件', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('node -e "require(\'fs\').writeFileSync(\'a.mjs\',\'/\\s+/;\')"'));
+  });
+
+  it('违规样本：perl 就地编辑（含 -pi 合并写法）', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('perl -pi -e "s/\\s+/_/g" a.json'), '合并写法 -pi');
+    assert.ok(S.isShellEscapeIntoFile('perl -i -pe "s/\\s+/_/g" a.json'), '分开写法 -i -pe');
+    assert.ok(S.isShellEscapeIntoFile('sed -i.bak "s/\\d+/N/g" a.mjs'), '-i 带后缀');
+  });
+
+  it('违规样本：tee / 重定向写 json', async () => {
+    const S = await LOAD;
+    assert.ok(S.isShellEscapeIntoFile('echo \'{"a":"\\d"}\' | tee a.json'));
+    assert.ok(S.isShellEscapeIntoFile('echo "const r = /\\d+/" > a.mjs'));
+    assert.ok(S.isShellEscapeIntoFile('printf "const r = /\\s+/" >> a.mjs'));
+  });
+
+  it('反证：只读命令不许注（git / grep 含转义也不行）', async () => {
+    const S = await LOAD;
+    assert.equal(S.classifyBash('git status --short').length, 0);
+    assert.equal(S.classifyBash('grep -n "\\d" scripts/x.mjs').length, 0);
+    assert.equal(S.classifyBash('rg -e "\\s+" docs/').length, 0);
+  });
+
+  it('反证：写文件但不含转义 —— 不许注（误报会让人无视闸）', async () => {
+    const S = await LOAD;
+    assert.equal(S.classifyBash('echo hello > note.txt').length, 0);
+    assert.equal(S.classifyBash('sed -i "s/a/b/" a.mjs').length, 0);
+  });
+
+  it('反证：fd 重定向与数字比较不算写文件', async () => {
+    const S = await LOAD;
+    assert.equal(S.writesToFile('cat a 2>&1 | head'), false);
+    assert.equal(S.writesToFile('test 1 2 -gt 1'), false);
+  });
+
+  it('两条判据都中时只注一次（heredoc 是根治判据的特例，不重复刷屏）', async () => {
+    const S = await LOAD;
+    const cmd = "cat > x.mjs <<'EOF'\nconst re = /\\s+/;\nEOF";
+    const notes = S.classifyBash(cmd);
+    assert.equal(notes.filter((n) => n.id === 'heredoc-escape').length, 1);
+    assert.equal(notes.filter((n) => n.id === 'shell-escape-into-file').length, 0, '被特例覆盖时不重复注');
+  });
+});
+
 describe('工具使用闸：python 是 stub', () => {
   it('违规样本：裸 python -c —— 必须被注中', async () => {
     const S = await LOAD;
@@ -318,5 +385,38 @@ describe('手搓 shell 跑 systemd 管着的脚本要提醒', () => {
     const { classifyBash } = await LIB;
     const n = classifyBash('ssh contabo "node scripts/commander.mjs act"');
     assert.equal(n.filter((x) => x.id === 'handrolled-systemd').length, 0);
+  });
+});
+
+describe('第 5 条：读凭据库只取结构，不取值（2026-09-13 实咬）', () => {
+  it('判别力正控：认得出读 auth.json 的各种形态', async () => {
+    const { readsCredentialStore } = await LOAD;
+    // 同一个行为换工具名——判据轴是行为，所以这四种都得命中。
+    assert.equal(readsCredentialStore('cat ~/.pi/agent/auth.json'), true);
+    assert.equal(readsCredentialStore('node -e "JSON.parse(require(\'fs\').readFileSync(\'/home/orca/.pi/agent/auth.json\',\'utf8\'))"'), true);
+    assert.equal(readsCredentialStore('jq . ~/.pi/agent/auth.json'), true);
+    assert.equal(readsCredentialStore('python3 -c "import json;print(json.load(open(\'/root/.claude/.credentials.json\')))"'), true);
+    assert.equal(readsCredentialStore('cat ~/.config/pi/secrets.toml'), true);
+    assert.equal(readsCredentialStore('cat /etc/ssl/private/server.pem'), true);
+  });
+
+  it('判别力反证：正常命令与形似文件名都不许被命中', async () => {
+    const { readsCredentialStore } = await LOAD;
+    // 反证一：命令里根本没有凭据库。
+    assert.equal(readsCredentialStore('cat docs/execution-profiles.json'), false);
+    assert.equal(readsCredentialStore('node scripts/dao-check.mjs'), false);
+    assert.equal(readsCredentialStore('grep -rn "provider" scripts/lib/'), false);
+    // 反证二：像是凭据库但其实不是（后缀/词边界要守住）。
+    assert.equal(readsCredentialStore('cat docs/auth.json.md'), false);
+    assert.equal(readsCredentialStore('cat .environment'), false);
+    assert.equal(readsCredentialStore('grep -rn "AUTHENTICATION" src/'), false);
+  });
+
+  it('命中时经 classifyBash 出注，且文案点名「不打印值」', async () => {
+    const { classifyBash, CREDENTIAL_NOTE } = await LOAD;
+    const notes = classifyBash('cat ~/.pi/agent/auth.json');
+    assert.deepEqual(notes.map((n) => n.id), ['reads-credential-store']);
+    assert.deepEqual(notes.map((n) => n.text), [CREDENTIAL_NOTE]);
+    assert.match(CREDENTIAL_NOTE, /前缀/);
   });
 });

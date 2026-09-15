@@ -84,6 +84,12 @@ export function selectCandidates(issues) {
       skipped.push({ number: issue.number, reason: '已消歧' });
       continue;
     }
+    if (names.includes('已拍板')) {
+      // A user may approve postponement, not execution. Do not re-ask, and
+      // do not manufacture 已消歧 (the separate dispatch permission).
+      skipped.push({ number: issue.number, reason: '用户已拍板，保留其执行或延期决定' });
+      continue;
+    }
     if (names.includes(PENDING_LABEL)) {
       skipped.push({ number: issue.number, reason: '待消歧' });
       continue;

@@ -253,13 +253,43 @@ describe('progress-detect：推帅位指纹', () => {
     const w1 = S.planWake({ fingerprint: first.fingerprint, prevFingerprint: null, stalled: true });
     assert.equal(w1.wake, true);
     assert.equal(w1.reason, 'first');
-    const w2 = S.planWake({ fingerprint: first.fingerprint, prevFingerprint: first.fingerprint, stalled: true });
+    // 同指纹 + 有墙钟 → 节流期内不重推（2026-09-11 起 planWake 需要时间戳才能判节流；
+    // 不给时间戳一律不重推——宁可少喊一次，也不要每轮都喊）
+    const T0 = '2026-09-11T00:00:00.000Z';
+    const w2 = S.planWake({
+      fingerprint: first.fingerprint, prevFingerprint: first.fingerprint,
+      prevAt: T0, now: '2026-09-11T01:00:00.000Z', stalled: true,
+    });
     assert.equal(w2.wake, false);
     assert.equal(w2.reason, 'same-fingerprint');
     const changed = `${first.fingerprint}\nextra`;
     const w3 = S.planWake({ fingerprint: changed, prevFingerprint: first.fingerprint, stalled: true });
     assert.equal(w3.wake, true);
     assert.equal(w3.reason, 'fingerprint-changed');
+  });
+
+  // 2026-09-11 实咬：原来同指纹就永久静音，于是「盘面停滞 5 轮（23 个对象没动）」
+  // 09:12 推过一次之后每轮只写 journal，23 个对象冻了几小时而用户侧一片安静。
+  // 去重防刷屏是对的，但它把「一直没解决」也一起静音了——那才是最该反复说的。
+  it('【停在原地也要重喊】同指纹超过节流窗 → still-stalled 再推一次', async () => {
+    const S = await load(LIB);
+    const fp = 'same-fingerprint-abc';
+    const t0 = '2026-09-11T00:00:00.000Z';
+    const soon = S.planWake({ fingerprint: fp, prevFingerprint: fp, prevAt: t0, now: '2026-09-11T05:59:00.000Z', stalled: true });
+    assert.equal(soon.wake, false, '节流窗内不重推');
+    assert.equal(soon.reason, 'same-fingerprint');
+    const later = S.planWake({ fingerprint: fp, prevFingerprint: fp, prevAt: t0, now: '2026-09-11T06:01:00.000Z', stalled: true });
+    assert.equal(later.wake, true, '过 6 小时必须再喊');
+    assert.equal(later.reason, 'still-stalled');
+  });
+
+  it('【反证】没停滞不喊；时间读不出不重推（宁少喊一次也不刷屏）', async () => {
+    const S = await load(LIB);
+    const fp = 'x';
+    assert.equal(S.planWake({ fingerprint: fp, prevFingerprint: null, stalled: false }).wake, false);
+    const noTime = S.planWake({ fingerprint: fp, prevFingerprint: fp, stalled: true });
+    assert.equal(noTime.wake, false);
+    assert.equal(noTime.reason, 'prev-at-unscanned');
   });
 });
 
@@ -414,7 +444,7 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
 });
 
 describe('commander-inventory 退役：stale-pr 被推进量覆盖', () => {
-  it('源码不再跑超龄 PR 那一项；其余 7 项还在', () => {
+  it('源码不再跑超龄 PR 那一项；其余项还在，inbox 也在', () => {
     const src = fs.readFileSync(INV, 'utf8');
     assert.doesNotMatch(src, /function checkStalePrs/);
     assert.doesNotMatch(src, /key: 'stale-pr'/);
@@ -425,5 +455,6 @@ describe('commander-inventory 退役：stale-pr 被推进量覆盖', () => {
     assert.match(src, /landing-empty/);
     assert.match(src, /stale-running/);
     assert.match(src, /pending-surface/);
+    assert.match(src, /function checkInbox/);
   });
 });
