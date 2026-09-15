@@ -70,6 +70,28 @@ describe('活性：mirasim 驱动', () => {
     assert.equal(S.assessLiveness(fresh, { now: NOW }).state, 'silent');
     assert.equal(S.assessLiveness(stale, { now: NOW }).state, 'silent');
   });
+
+  it('waiting_user 等了十小时仍是 active，不是 silent（#1174 T8）', async () => {
+    const S = await LOAD;
+    for (const state of ['waiting_user', 'waiting', 'waiting_permission']) {
+      const stale = S.sessionFromMirasimSession({
+        key: 'acp:wait', title: 'ISSUE-#1174', state, lastActivityAt: min(600),
+      });
+      const a = S.assessLiveness(stale, { now: NOW });
+      assert.equal(a.state, 'active', state);
+      assert.equal(a.waiting, true, state);
+      assert.equal(S.routeSilent(stale).action, 'skip', `${state} 不许 nudge/重派`);
+    }
+  });
+
+  it('waiting_user 没有活动时间戳也不是没查成——问题还在', async () => {
+    const S = await LOAD;
+    const s = S.sessionFromMirasimSession({ key: 'acp:wait', state: 'waiting_user' });
+    assert.equal(s.unscanned, false);
+    const a = S.assessLiveness(s, { now: NOW });
+    assert.equal(a.state, 'active');
+    assert.equal(a.waiting, true);
+  });
 });
 
 describe('活性：扫一轮的三态可辨', () => {

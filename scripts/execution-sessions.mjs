@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import {createExecutionRuntime} from './lib/execution-runtime.mjs';
+import {EXECUTION_WAITING,sessionStateOf} from './lib/execution-states.mjs';
 import {pathToFileURL} from 'node:url';
 export function normalizeExecutionSession(s) {
   const interactions=s.interactions||s.snapshot?.interactions||[];
-  const waiting=s.awaiting===true||['waiting','waiting_user','waiting_permission'].includes(s.phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
-  const failed=!!s.error||['error','failed','aborted'].includes(s.phase);
+  const phase=sessionStateOf(s)||'';
+  const waiting=s.awaiting===true||EXECUTION_WAITING.has(phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
+  const failed=!!s.error||['error','failed','aborted'].includes(phase);
   const issue=Number(s.issue??s.issue_number);
   const pr=Number(s.pr??s.pr_number);
   return {key:s.sessionKey??s.key??s.id??null,title:s.title??null,
-    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':s.phase??s.runState??s.state??null,
+    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':phase||null,
     cwd:s.workdir??s.cwd??null,lastActivityAt:s.seatAt??s.updatedAt??s.lastActivityAt??null,
     backend:String(s.sessionKey??s.key??'').startsWith('acp:')?'acp':'mirasim',
     ...(Number.isInteger(issue)&&issue>0?{issue}:{}),

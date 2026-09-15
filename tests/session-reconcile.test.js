@@ -49,10 +49,45 @@ it('failed rework still recovers on unchanged head despite a passing CI', async 
 
 it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
   const { isLiveSession } = await LOAD;
-  for (const state of ['stopped', 'rejected', 'gone', 'finished']) {
+  for (const state of ['stopped', 'rejected', 'gone', 'finished', 'cancelled', 'canceled']) {
     assert.equal(isLiveSession({ key: 'grok:fixture', state }).live, false, state);
   }
   assert.equal(isLiveSession({ key: 'grok:fixture', state: 'running' }).live, true);
+});
+
+it('cancelled session does not block reconcile redispatch (#1174 T8c)', async () => {
+  const { isLiveSession, hasLiveExecutor, planReconcile } = await LOAD;
+  assert.equal(isLiveSession({ key: 'acp:cancelled', state: 'cancelled' }).live, false);
+  assert.equal(hasLiveExecutor({
+    sessions: [{ key: 'acp:cancelled', state: 'cancelled', cwd: '/x/dao-1174' }],
+    issue: 1174,
+  }).live, false);
+  const r = planReconcile({
+    desired: [{ issue: 1174, job_id: 'dispatch-x', identity: '工人' }],
+    sessions: [{ key: 'acp:cancelled', state: 'cancelled', cwd: '/x/dao-1174' }],
+    openIssues: [1174],
+    openPrs: [],
+  });
+  assert.equal(r.redispatches.length, 1, '取消后差集可以再派');
+  assert.equal(r.redispatches[0].issue, 1174);
+});
+
+it('waiting_user is a live executor and blocks reconcile redispatch (#1174 T8)', async () => {
+  const { isLiveSession, hasLiveExecutor, planReconcile } = await LOAD;
+  for (const state of ['waiting_user', 'waiting', 'waiting_permission']) {
+    assert.equal(isLiveSession({ key: 'acp:wait', state }).live, true, state);
+  }
+  assert.equal(hasLiveExecutor({
+    sessions: [{ key: 'acp:wait', state: 'waiting_user', cwd: '/x/dao-1174' }],
+    issue: 1174,
+  }).live, true);
+  const r = planReconcile({
+    desired: [{ issue: 1174, job_id: 'dispatch-x', identity: '工人' }],
+    sessions: [{ key: 'acp:wait', state: 'waiting_user', cwd: '/x/dao-1174' }],
+    openIssues: [1174],
+    openPrs: [],
+  });
+  assert.equal(r.redispatches.length, 0, '等人时差集不许重派');
 });
 
 it('successful finished reviewer remains reusable', async () => {
