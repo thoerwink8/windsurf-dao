@@ -126,6 +126,86 @@ describe('decide：自己做（确定性）', () => {
     assert.match(stops[0].why, /done/);
   });
 
+  it('#1133 §2：rejected 无 vendor sessionKey 且已清退，经投影后不得再 stop', async () => {
+    const { decide } = await CORE;
+    const { normalizeExecutionSession } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'execution-sessions.mjs').replace(/\\/g, '/')
+    );
+    const projected = normalizeExecutionSession({
+      sessionKey: null, key: 'launch:test', state: 'rejected', cleanupVerified: true,
+    });
+    assert.equal(projected.cleanupVerified, true, '投影必须把已确认清退证据带到消费端');
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [projected] },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '旧实现会拿 launch:test 每轮 stop');
+  });
+
+  it('#1133 §2：42 条已清退 rejected 回放不再空转，真会话仍回收、活会话不误杀', async () => {
+    const { decide } = await CORE;
+    const { normalizeExecutionSession } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'execution-sessions.mjs').replace(/\\/g, '/')
+    );
+    const rejected = Array.from({ length: 42 }, (_, i) => normalizeExecutionSession({
+      sessionKey: null, key: `launch:test-${i}`, state: 'rejected', cleanupVerified: true,
+    }));
+    const items = [
+      ...rejected,
+      normalizeExecutionSession({ sessionKey: 'codex:done-reviewer', key: 'codex:done-reviewer', state: 'done' }),
+      normalizeExecutionSession({ sessionKey: 'pi:dead', key: 'pi:dead', state: 'incomplete' }),
+      normalizeExecutionSession({ sessionKey: 'codex:from-launch', key: 'launch:has-vendor', state: 'done' }),
+      normalizeExecutionSession({ sessionKey: 'codex:live', key: 'codex:live', state: 'running' }),
+      normalizeExecutionSession({ sessionKey: 'codex:stream', key: 'codex:stream', state: 'streaming' }),
+      normalizeExecutionSession({ sessionKey: 'codex:wait', key: 'codex:wait', phase: 'waiting_user', awaiting: true }),
+      normalizeExecutionSession({ sessionKey: 'codex:unk', key: 'codex:unk', state: 'unknown' }),
+      normalizeExecutionSession({ sessionKey: null, key: 'launch:pending', state: 'pending' }),
+      normalizeExecutionSession({ sessionKey: null, key: 'launch:uncertain', state: 'uncertain' }),
+    ];
+    const r = decide(baseSituation({ sessions: { scanned: true, items } }));
+    const stops = byKind(r, 'stop-session').map((s) => s.sessionKey).sort();
+    assert.deepEqual(stops, ['codex:done-reviewer', 'codex:from-launch', 'pi:dead']);
+    assert.equal(items.length, 42 + 9, '不删历史账，42 条仍在投影里');
+    assert.equal(items.filter((s) => s.cleanupVerified === true).length, 42);
+    assert.notEqual(items.find((s) => s.key === 'launch:pending')?.cleanupVerified, true);
+  });
+
+  it('#1133 §2：名单没查成不许拿残留 items 去 stop', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: {
+        scanned: false,
+        error: '会话名单超时',
+        items: [{ sessionKey: 'codex:done', key: 'codex:done', state: 'done' }],
+      },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '没查成不得动手，不许洗成已查成的空名单');
+  });
+
+  it('名单没有、/proc 还占着树 → reap-orphan', async () => {
+    const { decide } = await CORE;
+    // cwd 必须落在测试当时的 worktreesRoot() 下。CI runner 的 homedir
+    // 不是 /home/orca，写死路径在钳根之后必假红。
+    const { worktreesRoot } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const cwd = `${worktreesRoot()}/windsurf-dao/dao-review-pr-1099`;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [] },
+      lease: { scanned: true, procs: [{ pid: 1369724, comm: 'node', cwd }] },
+    }));
+    const reaps = byKind(r, 'reap-orphan');
+    assert.equal(reaps.length, 1);
+    assert.equal(reaps[0].cwd, cwd);
+    assert.deepEqual(reaps[0].pids, [1369724]);
+  });
+
+  it('lease 没查成 → 不产 reap-orphan', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [] },
+      lease: { scanned: false, error: '没扫成', procs: [] },
+    }));
+    assert.equal(byKind(r, 'reap-orphan').length, 0);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
@@ -1493,7 +1573,7 @@ describe('跨仓感知只感知不派工', () => {
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
     assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
-    assert.match(src, /sessions, desiredJobs,/, '对账循环观测/期望集也要放进态势');
+    assert.match(src, /sessions, lease, desiredJobs,/, '对账循环观测/期望集也要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
@@ -2784,7 +2864,8 @@ describe('对账循环 scan 真的接进态势', () => {
   it('buildSituation 采了 sessions 和 desiredJobs', () => {
     assert.match(src, /const sessions = scanSessions\(\);/);
     assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
-    assert.match(src, /sessions, desiredJobs,/);
+    assert.match(src, /const lease = scanLease\(\);/);
+    assert.match(src, /sessions, lease, desiredJobs,/);
   });
 
   it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
