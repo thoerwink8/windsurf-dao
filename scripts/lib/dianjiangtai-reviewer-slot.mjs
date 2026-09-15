@@ -117,14 +117,37 @@ export function isCapacityDeath(error) {
   return t !== '' && CAPACITY_DEATH_RE.test(t);
 }
 
+/**
+ * 第二条同样成立的凭证：**这条腿最近根本跑不完**（判据见 lib/leg-liveness.mjs）。
+ *
+ * 2026-09-15 实咬：整条 gpt 腿断流，18/23 次会话 incomplete，盘面 34 张 PR 零判定，
+ * 而上面那张词表里没有 "stream disconnected" 这几个字，于是闸不许换到活着的 grok 腿。
+ * 词表只认见过的失败——再加一个词，下一种新死法照样卡住（这也正是
+ * 「同一种办法连错两次就换路」要拦的）。所以加的是**行为证据**，不是新词。
+ *
+ * 凭证由调用方算好传进来（本模块零 IO）：`legEvidence` 就是 judgeLegDown 的返回值。
+ * `scanned !== true` 一律不成立——读不到会话就不许判腿断，否则「把日志弄坏」会变成换厂后门。
+ */
+export function isLegDownEvidence(legEvidence) {
+  const e = legEvidence;
+  if (!e || typeof e !== 'object') return false;
+  return e.scanned === true && e.down === true;
+}
+
 function nextAfterDead(f) {
   if (!f || typeof f !== 'object') return { ok: false, error: '没交换厂凭证' };
   const deadError = f.deadError == null ? '' : String(f.deadError).trim();
   if (!deadError) {
     return { ok: false, unscanned: true, error: '没给上一位审官的死因原文（没查成，不许猜着放行）' };
   }
-  if (!isCapacityDeath(deadError)) {
-    return { ok: false, error: `上一位的死因不是满载/看门狗那一类（${deadError.slice(0, 80)}）` };
+  // 两条凭证任一成立即可：① 死因就是满载/看门狗（快路，一次就够）；
+  // ② 这条腿最近根本跑不完（行为证据，不管它死时说了什么）。
+  const legDown = isLegDownEvidence(f.legEvidence);
+  if (!isCapacityDeath(deadError) && !legDown) {
+    const tail = f.legEvidence && f.legEvidence.scanned === true
+      ? `；这条腿的近况：${String(f.legEvidence.why || '').slice(0, 80)}`
+      : '；也没给这条腿的近况证据（没查成，不许猜着放行）';
+    return { ok: false, error: `上一位的死因不是满载/看门狗那一类（${deadError.slice(0, 80)}）${tail}` };
   }
   if (f.deadModelId == null || String(f.deadModelId).trim() === '') {
     return { ok: false, unscanned: true, error: '没查成上一位审官是谁，不许猜着换人' };
@@ -147,7 +170,10 @@ function nextAfterDead(f) {
     next: next.next,
     deadModelId: String(f.deadModelId),
     deadError,
-    why: `上一位 ${f.deadModelId} 死于「${deadError.slice(0, 60)}」，按顺位换 ${next.next}`,
+    legDown,
+    why: legDown && !isCapacityDeath(deadError)
+      ? `${f.deadModelId} 这条腿最近跑不完（${String(f.legEvidence.why || '').slice(0, 70)}），按顺位换 ${next.next}`
+      : `上一位 ${f.deadModelId} 死于「${deadError.slice(0, 60)}」，按顺位换 ${next.next}`,
   };
 }
 
@@ -182,7 +208,9 @@ export function judgeCapacityFailover({ requested, capacityFailover } = {}) {
 export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}) {
   const requestedId = requested == null ? '' : String(requested).trim();
   const f = capacityFailover;
-  if (!f || typeof f !== 'object' || !isCapacityDeath(f.deadError)) {
+  // 与 nextAfterDead 同一把尺：死因是满载/看门狗，**或者**这条腿最近根本跑不完。
+  // 两处判据必须同源——只改一处会让「闸放行了但腿不换人」这种半通不通的状态出现。
+  if (!f || typeof f !== 'object' || (!isCapacityDeath(f.deadError) && !isLegDownEvidence(f.legEvidence))) {
     return { ok: true, reviewerId: requestedId, switched: false };
   }
   const next = nextAfterDead(f);

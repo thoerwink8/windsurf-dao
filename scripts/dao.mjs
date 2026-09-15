@@ -270,6 +270,16 @@ import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { verdictOnHead } from './lib/review-state.mjs';
 import { listPrReviews } from './lib/dispatch/worker-done.mjs';
+import { judgeLegDown } from './lib/leg-liveness.mjs';
+import { readLegRecords } from './lib/leg-liveness-io.mjs';
+
+/** 这条腿最近跑得怎么样——换厂的第二条凭证（判据 lib/leg-liveness.mjs）。取不到就如实说没查成。 */
+function legEvidenceFor(modelId) {
+  const got = readLegRecords(modelId);
+  if (!got.scanned) return { down: false, scanned: false, why: got.error };
+  return judgeLegDown(got.records);
+}
+
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -2083,6 +2093,8 @@ async function cmdReviewerCreateMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    // 第二条凭证：死因词表认不出的新死法，靠「这条腿最近跑不完」也算数（#1290）
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
   const planned = planReviewerOnCapacityDeath({
@@ -2314,6 +2326,7 @@ async function cmdWorkerDoneMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   const planned = planReviewerOnCapacityDeath({
     requested: plan.reviewer, capacityFailover: failoverCtx,

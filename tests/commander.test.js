@@ -112,6 +112,20 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(stops.filter((s) => s.sessionKey === 'pi:live').length, 0);
   });
 
+  it('done 会话也要 stop-session——审官交卷后进程不许占渠道', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [
+        { key: 'codex:done-reviewer', state: 'done', cwd: '/x/dao-review-pr-1279' },
+        { key: 'codex:live', state: 'streaming', cwd: '/x/dao-review-pr-1280' },
+        { key: 'codex:already', state: 'stopped', cwd: '/x/dao-review-pr-1278' },
+      ] },
+    }));
+    const stops = byKind(r, 'stop-session');
+    assert.deepEqual(stops.map((s) => s.sessionKey), ['codex:done-reviewer']);
+    assert.match(stops[0].why, /done/);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
