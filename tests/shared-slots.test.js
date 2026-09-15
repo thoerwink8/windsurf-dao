@@ -146,6 +146,23 @@ describe('死票不占会话名额（审官红③ / #1291）', () => {
     assert.equal(kinds(got, 'attach-reviewer').length, 0, '死票不许起审官');
     assert.equal(kinds(got, 'dispatch').length, 1, '死票清理不占名额，新活该派');
   });
+
+  it('slots=1、本仓带 repo 字段的已合并死票、另有一张 ready → reap-ticket 并且派那张新活', async () => {
+    const { decide } = await CORE;
+    // 生产态势：worker-done / scanReviewPending 会给本仓票写 repo: owner/name。
+    // 旧实现把任何非空 repo 当跨仓保活，死票占 reviewReserve，slots=1 时新活派不出。
+    const s = situation({
+      issues: [readyIssue(201)],
+      ticket: [{ pr: 101, repo: 'thoerwink8/windsurf-dao' }],
+      slots: 1,
+    });
+    s.repo = 'thoerwink8/windsurf-dao';
+    s.github.prs = [];
+    const got = decide(s);
+    assert.equal(kinds(got, 'reap-ticket').length, 1, '本仓带 repo 的死票要回收');
+    assert.equal(kinds(got, 'attach-reviewer').length, 0, '本仓死票不许起审官');
+    assert.equal(kinds(got, 'dispatch').length, 1, '本仓带 repo 的死票不占名额，新活该派');
+  });
 });
 
 describe('旧夹具兼容：没给 admission 就不限张', () => {

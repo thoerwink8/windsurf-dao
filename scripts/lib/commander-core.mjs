@@ -548,6 +548,17 @@ export function normalizeCommanderRepo(raw) {
   return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(s) ? s : '';
 }
 
+/**
+ * 票仓非空且与本仓不同才算跨仓。
+ * 本仓交卷票本来就会带 repo（worker-done 写 owner/name，scanReviewPending 原样保留），
+ * 不能把「有 repo 字段」当成跨仓——否则死票占名额、也不产 reap-ticket。
+ */
+export function ticketRepoIsForeign(ticketRepo, homeRepo) {
+  const want = normalizeCommanderRepo(ticketRepo);
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(want && here && want !== here);
+}
+
 function prRepoOf(pr) {
   if (!pr || typeof pr !== 'object') return '';
   if (typeof pr.repo === 'string') return normalizeCommanderRepo(pr.repo);
@@ -563,7 +574,7 @@ export function correspondingPrForRedispatch(rd, prs, { homeRepo } = {}) {
   const list = Array.isArray(prs) ? prs : [];
   const wantRepo = normalizeCommanderRepo(rd && rd.repo);
   const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
-  if (wantRepo && here && wantRepo !== here) return null;
+  if (ticketRepoIsForeign(rd && rd.repo, homeRepo)) return null;
   const scoped = list.filter((p) => {
     if (!p) return false;
     const prRepo = prRepoOf(p);
@@ -803,8 +814,8 @@ function collectCandidates(situation) {
   const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
   const reviewTicketIsLive = (it) => {
     if (!it || it.pr == null) return false;
-    const ticketRepo = it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
-    if (ticketRepo) return true;
+    // 只有票仓非空且与本仓不同，才按跨仓票保守保活。本仓带同值 repo 的票仍按 openPrs 判死。
+    if (ticketRepoIsForeign(it.repo, situation.repo)) return true;
     if (!ghScanned) return true;
     return openPrs.has(Number(it.pr));
   };
@@ -1087,7 +1098,6 @@ function collectCandidates(situation) {
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
-    const ticketRepo = it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
     if (!reviewTicketIsLive(it)) {
       out.push(withNeeds({
@@ -1125,7 +1135,7 @@ function collectCandidates(situation) {
     // 混成一句话会误导读的人往错方向查（这正是 #1233 认输评论那个病的同一个形状）。
     if (drain.code === 'exhausted' || drain.code === 'hopeless') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
-      if (ticketRepo) continue;
+      if (ticketRepoIsForeign(it.repo, situation.repo)) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
       if (livePr && prHasStuckLabel(livePr)) continue;
       const tries = Number(drain.tries) || 0;
@@ -1680,11 +1690,9 @@ function collectCandidates(situation) {
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
       // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
-      const wantRepo = normalizeCommanderRepo(rd && rd.repo);
-      const here = normalizeCommanderRepo(homeRepo);
       const pr = correspondingPrForRedispatch(rd, gh.prs, { homeRepo });
       if (!pr) {
-        const cross = wantRepo && here && wantRepo !== here;
+        const cross = ticketRepoIsForeign(rd && rd.repo, homeRepo);
         out.push(withNeeds(esc(
           cross
             ? `#${rd.issue} 差集要重派，目标仓 ${rd.repo} 不是当前指挥官仓 ${homeRepo}，需人工补标（不得用同号本仓 PR）`
