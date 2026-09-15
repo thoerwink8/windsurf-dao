@@ -156,7 +156,10 @@ test('interrupted tail is not checkpointed until newline commits the complete ev
   write(p, ndjson(usage(1)) + tail.slice(0, 25));
   const options = { ...f, sources: [{ path: p, source: 'grok-acp', agent: 'grok' }] };
   let result = M.collectUsage(options);
-  assert.equal(result.committed, 1); assert.equal(result.complete, false);
+  assert.equal(result.committed, 1);
+  assert.equal(result.complete, true);
+  assert.equal(result.status.includes('interrupted_tail'), true);
+  assert.equal(result.gaps.includes('interrupted_tail'), false);
   fs.appendFileSync(p, tail.slice(25) + '\n');
   result = M.collectUsage(options);
   assert.equal(result.committed, 1);
@@ -340,7 +343,11 @@ test('installer and service restrict execution to orca with a clean credential e
   assert.match(service,/^NoNewPrivileges=true$/m);
   assert.match(installer,/runuser -u orca -- env -i HOME=\/home\/orca/);
   assert.match(installer,/NextElapseUSecRealtime/);
+  assert.match(installer,/usageExportInstallFiles/);
+  assert.match(installer,/install -D -o root -g root -m 644/);
   assert.match(timer,/^OnCalendar=/m);
+  const timeout=(service.match(/^TimeoutStartSec=(\d+)$/m) || [])[1];
+  assert.equal(Number(timeout) >= 300, true, '90 秒会把正常一轮掐死');
 });
 
 test('same-process normalized API appends the allowlisted snapshot idempotently', async t => {
@@ -478,7 +485,10 @@ test('incomplete or missing root inbox is explicit, and unexpected serialized fi
   assert.doesNotMatch(JSON.stringify(cleaned),/SECRET EXTRA|SECRET AUTH|credentials|prompt/);
   assert.deepEqual(cleaned.aliases,row.aliases);
   write(path.join(inbox,'manifest.json'),{schema:1,complete:false,exportedAt:new Date().toISOString()});
-  assert.ok(M.importUsageInbox(inbox,f).gaps.includes('inbox_export_incomplete'));
+  const incomplete=M.importUsageInbox(inbox,f);
+  assert.equal(incomplete.status.includes('inbox_export_incomplete'), true);
+  assert.equal(incomplete.gaps.includes('inbox_export_incomplete'), false);
+  assert.equal(incomplete.complete, true);
 });
 
 function cursorAccountFixture(t){
@@ -558,9 +568,11 @@ test('privileged export unit executes only installed root-owned code and leaves 
   assert.match(unit,/^User=root$/m);assert.match(unit,/^PrivateNetwork=true$/m);
   assert.match(unit,/ExecStart=.*\/usr\/local\/lib\/dao-execution-usage\/execution-usage-export\.mjs/);
   assert.doesNotMatch(unit,/ExecStart=.*\/srv\//);
-  assert.match(installer,/install -o root -g root -m 644 .*execution-usage-export\.mjs/);
+  assert.match(installer,/usageExportInstallFiles/);
   assert.match(collector,/^User=orca$/m);assert.match(collector,/--inbox \/var\/lib\/dao-execution-usage\/root-inbox/);
   assert.doesNotMatch(installer,/chmod.*\/root|setfacl.*\/root/);
+  const timeout=(unit.match(/^TimeoutStartSec=(\d+)$/m) || [])[1];
+  assert.equal(Number(timeout) >= 300, true, '导出 90 秒墙钟会 SIGTERM');
 });
 
 test('global commit budget resumes both NDJSON and JSON arrays without starving later sources',async t=>{
@@ -580,4 +592,81 @@ test('root publication and inbox import bound new durable writes while preservin
   for(let i=0;i<3;i++){const p=M.publishUsageInbox({dir:f.dir,inbox,readerGid:process.getgid?.()??0,limits:{maxCommittedPerRun:1}});assert.equal(p.published,1);assert.equal(p.complete,i===2);}
   for(let i=0;i<3;i++)assert.equal(M.importUsageInbox(inbox,{dir:consumer,limits:{maxCommittedPerRun:1}}).committed,1);
   assert.equal(inputTotal(M.reportUsage({dir:consumer})),60);
+});
+
+test('status-class catch-up does not fail collection; unreadable source does', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, 'raw.ndjson');
+  write(p, ndjson(usage(1), usage(2), usage(3)));
+  const pending = M.collectUsage({ ...f, limits: { maxBytesPerSource: Buffer.byteLength(ndjson(usage(1))) }, sources: [{ path: p, source: 'grok-acp', agent: 'grok' }] });
+  assert.equal(pending.committed, 1);
+  assert.equal(pending.complete, true);
+  assert.equal(pending.status.includes('source_scan_pending'), true);
+  assert.equal(pending.gaps.includes('source_scan_pending'), false);
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const pendingCode = await main(['--collect', '--json', '--home', f.home, '--source', `grok-acp=${p}`]);
+  assert.equal(pendingCode, 0);
+  const bad = path.join(f.home, 'missing.ndjson');
+  const broken = M.collectUsage({ ...f, sources: [{ path: bad, source: 'grok-acp', agent: 'grok' }] });
+  assert.equal(broken.complete, false);
+  assert.equal(broken.gaps.includes('source_missing'), true);
+  const faultCode = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'fault-dir'), '--source', `grok-acp=${bad}`]);
+  assert.equal(faultCode, 2);
+});
+
+test('append-only insights after a complete sweep do not rescan history', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, '.mirasim/insights/usage-2026-09.ndjson');
+  write(p, ndjson(usage(1), usage(2)));
+  assert.equal(M.collectUsage(f).committed, 2);
+  fs.appendFileSync(p, ndjson(usage(3)));
+  const second = M.collectUsage(f);
+  assert.equal(second.committed, 1);
+  assert.equal(second.duplicates, 0);
+  assert.equal(inputTotal(M.reportUsage(f)), 60);
+});
+
+test('stale incomplete inbox remains a fault; fresh incomplete is status', async t => {
+  const M = await modulePromise, f = fixture(t), inbox = path.join(f.home, 'inbox');
+  write(path.join(inbox, 'manifest.json'), { schema: 1, complete: false, exportedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString() });
+  const stale = M.importUsageInbox(inbox, f);
+  assert.equal(stale.status.includes('inbox_export_incomplete'), true);
+  assert.equal(stale.gaps.includes('inbox_export_stale'), true);
+  assert.equal(stale.complete, false);
+});
+
+test('export install list follows relative imports including require', async () => {
+  const M = await modulePromise;
+  const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+  const req = (p) => `const { parse } = req${'uire'}('${p}');\n`;
+  const files = {
+    'execution-usage-export.mjs': spec('./lib/execution-usage.mjs'),
+    'lib/execution-usage.mjs': spec('./execution-catalog.mjs'),
+    'lib/execution-catalog.mjs': spec('./provider-probe.mjs'),
+    'lib/provider-probe.mjs': req('./smol-toml.cjs'),
+    'lib/smol-toml.cjs': 'module.exports = {};\n',
+  };
+  const listed = M.usageExportInstallFiles({
+    scriptsDir: '/scripts',
+    readFile: abs => {
+      const rel = abs.replace(/\\/g, '/').slice('/scripts/'.length);
+      if (!files[rel]) { const e = new Error('enoent'); e.code = 'ENOENT'; throw e; }
+      return files[rel];
+    },
+  });
+  assert.deepEqual([...listed].sort(), Object.keys(files).sort());
+  const live = M.usageExportInstallFiles();
+  assert.equal(live.includes('execution-usage-export.mjs'), true);
+  assert.equal(live.includes('lib/execution-usage.mjs'), true);
+  assert.equal(live.includes('lib/execution-catalog.mjs'), true);
+  assert.equal(live.includes('lib/provider-probe.mjs'), true);
+});
+
+test('usage install copy classifier is unknown when missing, red when stale, ok when matched', async () => {
+  const M = await modulePromise;
+  const expected = [{ path: 'lib/execution-usage.mjs', content: 'new' }];
+  assert.equal(M.classifyUsageInstallCopy({ expected, installed: null }).state, 'unknown');
+  assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'old' } }).state, 'red');
+  assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'new' } }).state, 'ok');
+  assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: {} }).state, 'unknown');
 });

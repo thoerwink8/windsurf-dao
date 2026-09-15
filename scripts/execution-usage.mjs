@@ -43,7 +43,10 @@ export async function main(argv = process.argv.slice(2)) {
     if (result.accountSnapshots.length) console.log(`Account snapshots (not task charges): ${JSON.stringify(result.accountSnapshots)}`);
     if (result.unallocatedSummaries.length) console.log(`Unallocated session summaries: ${JSON.stringify(result.unallocatedSummaries)}`);
     if (result.gaps.length) console.log(`Collection gaps: ${result.gaps.join(', ')}`);
+    const status = collected?.status || result.status || [];
+    if (status.length) console.log(`Collection status: ${status.join(', ')}`);
   }
+  if (collect) return collected?.busy || collected?.gaps?.length ? 2 : 0;
   return result.complete ? 0 : 2;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
