@@ -41,14 +41,24 @@ export function recordIsLeg(rec, modelId) {
   return profile !== '' && profile.endsWith(want);
 }
 
-/** `codex:02923a47-…` → `{ agent: 'codex', id: '02923a47-…' }`；形态不对回 null。 */
+/**
+ * `codex:02923a47-…` → `{ agent: 'codex', id: '02923a47-…' }`；形态不对回 null。
+ *
+ * 两段都钉死形状，**不是**「不含斜杠就行」（#1290 首审逮到的）：第一版用
+ * `^[A-Za-z0-9_.-]+$` 放行，于是 `..:<uuid>` 也算合法，拼出来的路径
+ * `join(mirasimDir, '..', id, 'record.json')` 直接越出 sessions 目录去读它的父目录。
+ * 单靠「挡斜杠」永远挡不住 `..`——要挡的是**点**能不能单独成段。
+ */
+const AGENT_RE = /^[a-z][a-z0-9_-]*$/;
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 export function splitSessionKey(key) {
   const s = String(key || '').trim();
   const i = s.indexOf(':');
   if (i <= 0 || i === s.length - 1) return null;
   const agent = s.slice(0, i);
   const id = s.slice(i + 1);
-  if (!/^[A-Za-z0-9_.-]+$/.test(agent) || !/^[A-Za-z0-9_.-]+$/.test(id)) return null;
+  if (!AGENT_RE.test(agent) || !UUID_RE.test(id)) return null;
   return { agent, id };
 }
 

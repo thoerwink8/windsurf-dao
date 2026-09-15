@@ -18,6 +18,8 @@ import { recordIsLeg, splitSessionKey } from '../scripts/lib/leg-liveness-io.mjs
 import {
   isCapacityDeath, isLegDownEvidence, judgeCapacityFailover, planReviewerOnCapacityDeath,
 } from '../scripts/lib/dianjiangtai-reviewer-slot.mjs';
+import { assertReviewerSeat } from '../scripts/lib/dispatch/reviewer.mjs';
+import { EXECUTION_SUCCEEDED, EXECUTION_RESERVED } from '../scripts/lib/execution-states.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DAO_MJS = readFileSync(join(REPO, 'scripts', 'dao.mjs'), 'utf8');
@@ -99,12 +101,15 @@ describe('腿况判据', () => {
     assert.equal(got.down, false);
   });
 
-  it('failed / gone / unknown 都算没跑完', () => {
+  it('failed / gone / incomplete 算没跑完；字面 unknown 不当样本', () => {
     const got = judgeLegDown([
       { state: 'failed', at: ago(1) }, { state: 'gone', at: ago(2) },
-      { state: 'unknown', at: ago(3) }, { state: 'incomplete', at: ago(4) },
-      { state: 'failed', at: ago(5) }, { state: 'completed', at: ago(6) },
+      { state: 'unknown', at: ago(3) },      // 正典里没有这个词 ⇒ 不投票，不算死
+      { state: 'incomplete', at: ago(4) },
+      { state: 'failed', at: ago(5) }, { state: 'aborted', at: ago(6) },
+      { state: 'completed', at: ago(7) },
     ], { now: NOW });
+    assert.equal(got.samples, 6, 'unknown 不该进样本');
     assert.equal(got.dead, 5);
     assert.equal(got.down, true);
   });
@@ -137,14 +142,25 @@ describe('样本取自哪里', () => {
     assert.equal(recordIsLeg({ model: 'x' }, null), false);
   });
 
-  it('会话键拆成 agent + id', () => {
-    assert.deepEqual(splitSessionKey('codex:02923a47-bc9b'), { agent: 'codex', id: '02923a47-bc9b' });
+  it('形态不对的键回 null——不许把它拼进路径', () => {
+    const uuid = '12345678-1234-1234-1234-123456789012';
+    const bad = [
+      '', 'codex', ':abc', 'codex:', 'codex:../../etc', 'a/b:c',
+      // #1290 首审逮到的：挡斜杠挡不住 `..`，它能让路径越出 sessions 目录
+      `..:${uuid}`, `.:${uuid}`, `../..:${uuid}`,
+      'codex:not-a-uuid',            // id 必须是规范 UUID
+      `Codex:${uuid}`,               // agent 只许小写起头
+      `1codex:${uuid}`,              // agent 不许数字开头
+      `co dex:${uuid}`,
+    ];
+    for (const k of bad) assert.equal(splitSessionKey(k), null, `${k} 应该判不出来`);
   });
 
-  it('形态不对的键回 null——不许把它拼进路径', () => {
-    for (const bad of ['', 'codex', ':abc', 'codex:', 'codex:../../etc', 'a/b:c']) {
-      assert.equal(splitSessionKey(bad), null, `${bad} 应该判不出来`);
-    }
+  it('合法的键照旧认得出', () => {
+    assert.deepEqual(splitSessionKey('codex:02923a47-bc9b-492f-a537-20b23b8691ba'),
+      { agent: 'codex', id: '02923a47-bc9b-492f-a537-20b23b8691ba' });
+    assert.deepEqual(splitSessionKey('grok-native:12345678-1234-1234-1234-123456789012'),
+      { agent: 'grok-native', id: '12345678-1234-1234-1234-123456789012' });
   });
 });
 
@@ -234,5 +250,88 @@ describe('dao.mjs 里的接线（正控：没接上这几条要红）', () => {
 
   it('腿况取不到时如实报没查成，不是当成「腿没断」也不是当成「腿断了」', () => {
     assert.match(DAO_MJS, /if \(!got\.scanned\) return \{ down: false, scanned: false, why: got\.error \}/);
+  });
+});
+
+describe('状态词走正典，不许另写一张表（#1290 首审逮到的）', () => {
+  it('正典的成功态一个都不许算死', () => {
+    for (const st of EXECUTION_SUCCEEDED) {
+      const got = judgeLegDown(
+        [...Array(6)].map((_, i) => ({ state: st, at: ago(i + 1) })), { now: NOW });
+      assert.equal(got.dead, 0, `${st} 不该算死`);
+      assert.equal(got.down, false);
+    }
+  });
+
+  it('预留态（启动/收尾走了一半）不当样本——答案还不知道，不许投死票', () => {
+    for (const st of EXECUTION_RESERVED) {
+      const got = judgeLegDown(
+        [...Array(6)].map((_, i) => ({ state: st, at: ago(i + 1) })), { now: NOW });
+      assert.equal(got.samples, 0, `${st} 不该进样本`);
+      assert.equal(got.down, false);
+    }
+  });
+
+  it('正典之外的词不当样本——认不出的状态不许当死', () => {
+    const got = judgeLegDown(
+      [...Array(6)].map((_, i) => ({ state: 'unknown', at: ago(i + 1) })), { now: NOW });
+    assert.equal(got.samples, 0);
+    assert.equal(got.down, false);
+  });
+
+  it('正典里的非成功终态照旧算死', () => {
+    for (const st of ['failed', 'error', 'aborted', 'incomplete', 'gone', 'stopped']) {
+      const got = judgeLegDown(
+        [...Array(6)].map((_, i) => ({ state: st, at: ago(i + 1) })), { now: NOW });
+      assert.equal(got.down, true, `${st} 该算死`);
+    }
+  });
+
+  it('本模块不许自己写状态表', () => {
+    const src = readFileSync(join(REPO, 'scripts', 'lib', 'leg-liveness.mjs'), 'utf8');
+    assert.match(src, /from '\.\/execution-states\.mjs'/);
+    assert.doesNotMatch(src, /new Set\(\['(completed|done|running)/);
+  });
+});
+
+describe('生产接线：凭证要一路传到真正说了算的那道闸', () => {
+  const routing = {
+    models: [
+      { id: 'gpt-5.6-luna', vendor: 'gpt', reviewer: true },
+      { id: 'gpt-5.6-sol', vendor: 'gpt', reviewer: true },
+      { id: 'grok-4.6', vendor: 'grok', reviewer: true },
+    ],
+    reviewerOrder: ['gpt-5.6-luna', 'gpt-5.6-sol', 'grok-4.6'],
+  };
+  const ctx = {
+    deadModelId: 'gpt-5.6-sol',
+    deadError: 'stream disconnected before completion: stream closed before response.completed',
+    workerId: 'claude-opus-5',
+    legEvidence: { scanned: true, down: true, why: '最近 22 次会话死了 18 次（82%）' },
+  };
+
+  it('assertReviewerSeat 收到腿况证据就放行跨厂——纯判据绿而生产红，等于没修', () => {
+    const got = assertReviewerSeat({ reviewerId: 'grok-4.6', routing, capacityFailover: ctx });
+    assert.equal(got.ok, true, got.error);
+    assert.equal(got.crossVendor, true);
+  });
+
+  it('同一条路，没腿况证据时照旧拒（闸没被放松）', () => {
+    const { legEvidence, ...noEvidence } = ctx;
+    const got = assertReviewerSeat({ reviewerId: 'grok-4.6', routing, capacityFailover: noEvidence });
+    assert.equal(got.ok, false);
+  });
+
+  it('腿况没查成时照旧拒——把日志弄坏不是换厂后门', () => {
+    const got = assertReviewerSeat({
+      reviewerId: 'grok-4.6', routing,
+      capacityFailover: { ...ctx, legEvidence: { scanned: false, down: true } },
+    });
+    assert.equal(got.ok, false);
+  });
+
+  it('reviewer.mjs 重建凭证时必须带上 legEvidence（正控：漏了这一行生产就不通）', () => {
+    const src = readFileSync(join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer.mjs'), 'utf8');
+    assert.match(src, /legEvidence: capacityFailover\.legEvidence/);
   });
 });

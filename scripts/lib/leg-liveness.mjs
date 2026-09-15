@@ -39,10 +39,20 @@ export const DEAD_RATIO = 0.75;
 /** 多旧的会话就不算数了（毫秒）。默认 6 小时：再早的死跟「现在跑不跑得动」无关。 */
 export const SAMPLE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
-/** 跑完了的结局。其余（incomplete/failed/gone/unknown/null）一律算没跑完。 */
-const FINISHED_OK = new Set(['completed', 'done']);
-/** 还在跑的不算样本——它既没成功也没失败。 */
-const STILL_RUNNING = new Set(['running', 'streaming', 'accepted', 'queued']);
+// 状态词一律走正典 `lib/execution-states.mjs`，**不许在这里另写一张表**。
+//
+// #1290 首审当场逮到：第一版手抄了两个 Set，于是正典里的成功态 `complete`/`finished`
+// 被算成死、管理态 `pending`/`stopping`（启动或收尾只走了一半，答案还不知道）也被算成死。
+// 五条 `pending` 样本就能把一条健康的腿判成跑不动，进而触发错误换厂。
+// 判例 memory `hand-typed-constant-will-be-wrong`：凡是要手打的常量早晚被凭印象填。
+//
+// 三分法（与正典同源）：
+//   · RESERVED（pending/uncertain/stopping）＋ 活着的（running/streaming/…）→ **不当样本**
+//   · SUCCEEDED（done/completed/complete/finished）                        → 样本，不算死
+//   · 其余 FINISHED（failed/error/aborted/incomplete/gone/…）              → 样本，算死
+//   · 正典之外的词（含字面 `unknown`）                                     → **不当样本**
+//     ——认不出的状态不许当死：判不出来就别投票，这是本仓「没查成 ≠ 查过没事」的同一条。
+import { EXECUTION_SUCCEEDED, EXECUTION_FINISHED, EXECUTION_RESERVED } from './execution-states.mjs';
 
 function stateOf(r) {
   return String((r && (r.state ?? r.runState ?? r.observedState)) || '').trim().toLowerCase();
@@ -79,7 +89,8 @@ export function judgeLegDown(records, {
     if (!r || typeof r !== 'object') continue;
     const st = stateOf(r);
     if (!st) continue;                 // 结局读不出来的不当样本，也不当死
-    if (STILL_RUNNING.has(st)) continue;
+    if (EXECUTION_RESERVED.has(st)) continue;   // 启动/收尾走了一半，答案还不知道
+    if (!EXECUTION_FINISHED.has(st)) continue;  // 还在跑的、以及正典认不出的词，都不投票
     const at = atOf(r);
     if (at == null) continue;          // 时间读不出来 ⇒ 判不了新旧，不当样本
     if (now - at > windowMs) continue;
@@ -92,7 +103,7 @@ export function judgeLegDown(records, {
     };
   }
   fresh.sort((a, b) => b.at - a.at);
-  const dead = fresh.filter((r) => !FINISHED_OK.has(r.st)).length;
+  const dead = fresh.filter((r) => !EXECUTION_SUCCEEDED.has(r.st)).length;
   const ratio = dead / fresh.length;
   // **不额外要求「最近一次也是死的」**（2026-09-15 实测否掉的第一版）：
   // 那条加上去之后，luna 明明 22 次死 18 次（82%），只因为最后一次侥幸跑完，
