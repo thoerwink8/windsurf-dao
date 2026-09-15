@@ -27,7 +27,10 @@
 //
 // 5. 删 hook 必须能证明是自家失效的。2026-09-14 EOF 之后父进程 17709 次重连，
 //    卡住的是自家孤儿 hook；宽扫 webhook-forwarder.github.com 会把别人的活 hook
-//    一起干掉。没归属证据就空着手，不许猜。
+//    一起干掉。归属证据只有已保存的 ownedHookId。created_at / host / events
+//    在另一台机器或另一个桥实例上完全相同，不能用来认领或删除。
+//    清退失败后旧 orphanHookId 必须隔离，不许再当新子进程的 ping 目标。
+//    没归属证据就空着手，不许猜。
 
 /** 订阅的事件类型。每一类都对得上判据表里的一行，加之前先问那一行在哪。 */
 export const FORWARD_EVENTS = ['pull_request', 'pull_request_review'];
@@ -164,9 +167,6 @@ export const FORWARDER_HOST = 'webhook-forwarder.github.com';
 export const RECONNECT_BASE_MS = 5 * 1000;
 export const RECONNECT_CAP_MS = 5 * 60 * 1000;
 
-/** hook.created_at 相对 spawnAt 允许的钟差。先打戳再 spawn，GitHub 侧可能略早或略晚。 */
-export const HOOK_SPAWN_SKEW_MS = 15 * 1000;
-
 /** 子进程起来后第一次自证 ping 等多久。等满 ping 周期才发，初始 ping 丢失就得人补。 */
 export const FIRST_PING_MS = 10 * 1000;
 
@@ -209,76 +209,84 @@ export function isOwnForwarderHook(hook, { events = FORWARD_EVENTS } = {}) {
   return true;
 }
 
-function createdMs(hook) {
-  const t = Date.parse(String(hook?.created_at || ''));
-  return Number.isFinite(t) ? t : null;
-}
-
 /**
  * 只返回**能证明是自家、且不是当前桥**的失效 hook id。
- * 没查成 / 认不出 / 多于一根候选 → 空数组，不许宽扫。
+ * 归属证据只有 ownedHookId。没这份证据 / 认不出 → 空数组，不许宽扫，
+ * 也不许凭 created_at + host + events 的时间窗口唯一性下手。
  */
 export function ownInvalidHookIds({
   hooks,
   ownedHookId = null,
   liveHookId = null,
-  spawnAt = null,
   events = FORWARD_EVENTS,
-  skewMs = HOOK_SPAWN_SKEW_MS,
 } = {}) {
   if (!Array.isArray(hooks)) return [];
   const owned = asHookId(ownedHookId);
+  if (owned == null) return [];
   const live = asHookId(liveHookId);
-  const notLive = (id) => live == null || id !== live;
-
-  if (owned != null) {
-    const hook = hooks.find((h) => asHookId(h?.id) === owned);
-    if (!hook || !notLive(owned) || !isOwnForwarderHook(hook, { events })) return [];
-    return [owned];
-  }
-
-  const spawn = spawnAt == null ? null : Date.parse(String(spawnAt));
-  if (!Number.isFinite(spawn)) return [];
-  const candidates = [];
-  for (const h of hooks) {
-    if (!isOwnForwarderHook(h, { events })) continue;
-    const id = asHookId(h.id);
-    if (id == null || !notLive(id)) continue;
-    const c = createdMs(h);
-    if (c == null || c < spawn - skewMs) continue;
-    candidates.push(id);
-  }
-  return candidates.length === 1 ? candidates : [];
+  if (live != null && owned === live) return [];
+  const hook = hooks.find((h) => asHookId(h?.id) === owned);
+  if (!hook || !isOwnForwarderHook(hook, { events })) return [];
+  return [owned];
 }
 
 /**
- * 初始 ping 丢失时，从清单认下当前桥的 hook。认不出返回 null，不猜。
+ * 初始 ping 丢失时，只认已保存的 ownedHookId。
+ * created_at / host / events 不能证明是本桥，不凭时间窗口猜。
+ * skipHookIds 里的 id 即使对得上也不认（清退失败后的旧 orphan）。
+ * 认不出返回 null，保持 unresolved。
  */
 export function claimLiveHook({
   hooks,
   ownedHookId = null,
-  spawnAt = null,
+  skipHookIds = [],
   events = FORWARD_EVENTS,
-  skewMs = HOOK_SPAWN_SKEW_MS,
 } = {}) {
   if (!Array.isArray(hooks)) return null;
   const owned = asHookId(ownedHookId);
-  if (owned != null) {
-    const hook = hooks.find((h) => asHookId(h?.id) === owned);
-    if (hook && isOwnForwarderHook(hook, { events })) return owned;
+  if (owned == null) return null;
+  for (const raw of skipHookIds || []) {
+    if (asHookId(raw) === owned) return null;
   }
-  const spawn = spawnAt == null ? null : Date.parse(String(spawnAt));
-  if (!Number.isFinite(spawn)) return null;
-  const candidates = [];
-  for (const h of hooks) {
-    if (!isOwnForwarderHook(h, { events })) continue;
-    const c = createdMs(h);
-    if (c == null || c < spawn - skewMs) continue;
-    const id = asHookId(h.id);
-    if (id == null) continue;
-    candidates.push(id);
+  const hook = hooks.find((h) => asHookId(h?.id) === owned);
+  if (hook && isOwnForwarderHook(hook, { events })) return owned;
+  return null;
+}
+
+/**
+ * 清退之后，已退出子进程的旧 hook 不许再当新子进程的 ping 目标。
+ * 删除失败 / 结果未知 / 清单仍含旧 ID → 丢掉这条 orphan 证据。
+ * 其它情况同样隔离：新桥按新通道的 ping 认，不沿用旧 ID。
+ */
+export function isolateOrphanAfterSweep({
+  orphanHookId = null,
+  listed = false,
+  deletedIds = [],
+  failedIds = [],
+  remainingIds = null,
+} = {}) {
+  const orphan = asHookId(orphanHookId);
+  if (orphan == null) return { orphanHookId: null, isolated: false, why: null };
+
+  const deleted = new Set((deletedIds || []).map(asHookId).filter((id) => id != null));
+  const failed = new Set((failedIds || []).map(asHookId).filter((id) => id != null));
+  const remaining = remainingIds == null
+    ? null
+    : new Set(remainingIds.map(asHookId).filter((id) => id != null));
+
+  if (!listed) {
+    return { orphanHookId: null, isolated: true, why: '清单没查成，旧 orphan 不沿用' };
   }
-  return candidates.length === 1 ? candidates[0] : null;
+  if (failed.has(orphan)) {
+    return { orphanHookId: null, isolated: true, why: '删除失败，旧 orphan 不沿用' };
+  }
+  if (remaining && remaining.has(orphan)) {
+    return { orphanHookId: null, isolated: true, why: '清单仍含旧 hook，旧 orphan 不沿用' };
+  }
+  if (deleted.has(orphan)) {
+    return { orphanHookId: null, isolated: true, why: '旧 hook 已清退，新桥不沿用' };
+  }
+  return { orphanHookId: null, isolated: true, why: '新子进程不沿用已退出子进程的 hook' };
 }
 
 /** ping 接口的结果：404 = hook 没了，旧 id 不许沿用。 */

@@ -326,6 +326,8 @@ describe('兜底与权限：两样最容易被顺手拆掉的东西', () => {
     assert.equal(/staleForwarderHooks/.test(src), false, '宽扫函数还在，09-16 补修就是要拆掉它');
     assert.match(src, /ownInvalidHookIds/);
     assert.match(src, /claimLiveHook/);
+    assert.match(src, /isolateOrphanAfterSweep/);
+    assert.match(src, /skipHookIds/);
     assert.match(src, /planReconnectBackoff/);
     assert.match(src, /shouldSpawnForward/);
     assert.equal(/if \(state\.hookId == null\) return;/.test(src), false,
@@ -389,7 +391,7 @@ describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
     assert.deepEqual(ids, []);
   });
 
-  it('spawn 之后唯一新出现的自家 forwarder hook 可以认作孤儿', async () => {
+  it('故意违规样本：没有 ownedHookId 时，时间窗口内唯一同形 hook 也不许删', async () => {
     const { ownInvalidHookIds } = await LIB;
     const ids = ownInvalidHookIds({
       hooks: [ownOrphan, foreignLive, ci],
@@ -397,7 +399,7 @@ describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
       liveHookId: null,
       spawnAt: SPAWN,
     });
-    assert.deepEqual(ids, [679102785]);
+    assert.deepEqual(ids, [], 'created_at/host/events 在另一台机器上也一样，不能当归属证据');
   });
 
   it('故意违规样本：启动后出现两根自家形态的 hook，认不出哪根——全都不删', async () => {
@@ -427,14 +429,22 @@ describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
     })), false);
   });
 
-  it('反例：初始 ping 丢失，hookId 空，启动后唯一自家 hook 能认下', async () => {
+  it('有 ownedHookId 且清单对得上，才认领', async () => {
+    const { claimLiveHook } = await LIB;
+    assert.equal(claimLiveHook({
+      hooks: [ownOrphan, foreignLive, ci],
+      ownedHookId: 679102785,
+    }), 679102785);
+  });
+
+  it('故意违规样本：没有 ownedHookId 时，时间窗口内唯一同形 hook 也不许认领', async () => {
     const { claimLiveHook } = await LIB;
     const id = claimLiveHook({
       hooks: [ownOrphan, foreignLive, ci],
       ownedHookId: null,
       spawnAt: SPAWN,
     });
-    assert.equal(id, 679102785);
+    assert.equal(id, null, '初始 ping 丢失只能保持 unresolved，不许凭时间窗口猜');
   });
 
   it('认不出时 claim 返回 null——不猜别人的活 hook', async () => {
@@ -442,6 +452,82 @@ describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
     assert.equal(claimLiveHook({ hooks: [foreignLive, ci], ownedHookId: null, spawnAt: SPAWN }), null);
     assert.equal(claimLiveHook({ hooks: null, spawnAt: SPAWN }), null);
     assert.equal(claimLiveHook({ hooks: [ownOrphan, hook({ id: 679871907 })], spawnAt: SPAWN }), null);
+  });
+
+  it('反例：外部桥在本次时间窗口创建、且它是唯一候选——不许删、不许认领', async () => {
+    const { ownInvalidHookIds, claimLiveHook } = await LIB;
+    const foreignNow = hook({
+      id: 777,
+      created_at: '2026-09-14T22:21:05.000Z',
+    });
+    assert.deepEqual(ownInvalidHookIds({
+      hooks: [foreignNow],
+      ownedHookId: null,
+      liveHookId: null,
+      spawnAt: SPAWN,
+    }), [], '审官复现：唯一候选 777 仍是外部 hook，不能删');
+    assert.equal(claimLiveHook({
+      hooks: [foreignNow],
+      ownedHookId: null,
+      spawnAt: SPAWN,
+    }), null, '审官复现：唯一候选 777 仍是外部 hook，不能认领');
+  });
+
+  it('反例：DELETE 失败后旧 orphanHookId 不许再当新桥 ping 目标', async () => {
+    const { isolateOrphanAfterSweep, claimLiveHook } = await LIB;
+    const oldHook = hook({ id: 100, created_at: '2026-09-14T22:21:05.000Z' });
+    const newHook = hook({ id: 200, created_at: '2026-09-14T22:22:05.000Z' });
+    const iso = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [],
+      failedIds: [100],
+      remainingIds: [100, 200],
+    });
+    assert.equal(iso.orphanHookId, null);
+    assert.equal(iso.isolated, true);
+    assert.match(iso.why, /删除失败/);
+    assert.equal(claimLiveHook({
+      hooks: [oldHook, newHook],
+      ownedHookId: iso.orphanHookId,
+      spawnAt: '2026-09-14T22:22:00.000Z',
+    }), null, '隔离后不得认领旧 100；新 200 仅凭时间/host/events 也不认');
+    assert.equal(claimLiveHook({
+      hooks: [oldHook, newHook],
+      ownedHookId: 100,
+      skipHookIds: [100],
+    }), null, '即使调用方忘了清空，skipHookIds 也要挡住旧 ID');
+  });
+
+  it('清单没查成或旧 ID 仍在清单里，都要隔离 orphan', async () => {
+    const { isolateOrphanAfterSweep } = await LIB;
+    const unknown = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: false,
+      remainingIds: null,
+    });
+    assert.equal(unknown.orphanHookId, null);
+    assert.match(unknown.why, /清单没查成/);
+
+    const stillThere = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [],
+      failedIds: [],
+      remainingIds: [100, 200],
+    });
+    assert.equal(stillThere.orphanHookId, null);
+    assert.match(stillThere.why, /清单仍含旧 hook/);
+
+    const swept = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [100],
+      failedIds: [],
+      remainingIds: [200],
+    });
+    assert.equal(swept.orphanHookId, null);
+    assert.equal(swept.isolated, true);
   });
 
   it('认下后 ping 404：失效不沿用', async () => {

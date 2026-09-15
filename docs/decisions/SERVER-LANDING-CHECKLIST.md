@@ -495,9 +495,9 @@ GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道
 
 补在既有桥内，不造公网入口、不新加常驻组件：
 
-- 只删能证明是自家的失效 hook（`ownInvalidHookIds`）；没归属证据就空着手，不宽扫别人的活 hook，不删当前桥。
-- `hookId` 空时按启动后唯一自家 hook 认领（`claimLiveHook`）；ping 404 作废旧 id，不沿用。
+- 只删能证明是自家的失效 hook（`ownInvalidHookIds` 认 ownedHookId）；没这份证据就空着手。created_at / host / events 不能证明归属，不凭时间窗口唯一性认领或删除。
+- `hookId` 空时只认已保存的 ownedHookId（`claimLiveHook`）；清退失败则隔离旧 orphan，保持 unresolved。ping 404 作废旧 id，不沿用。
 - 重连退避 5s 起跳、封顶 5 分钟，attempt/atCap 写进状态和 journal。
 - 当前桥还活着不许再 spawn 第二条 forward。
 
-闸：`tests/gh-events.test.js` 里 EOF 遗留 hook 与初始 ping 丢失两条反例。
+闸：`tests/gh-events.test.js` 里 EOF 遗留 hook、外部时间窗口唯一候选、以及 DELETE 失败后旧 orphan 隔离三条反例。
