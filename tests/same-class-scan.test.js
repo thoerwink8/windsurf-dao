@@ -48,6 +48,16 @@ describe('同类扫描段闸（审官标准第 9 条）', () => {
     assert.ok(r.missing.some(m => m.includes('命令')), JSON.stringify(r));
   });
 
+  it('行内代码里的 grep 不算可复跑命令（必须独立行或围栏）', async () => {
+    // 审官对 PR #1280 的红项：把 grep 写在「命令：」后的行内代码里，
+    // COMMAND_RE 认不到；只写「零命中」也不算原样输出。
+    const { gateSameClassScan } = await load();
+    const body = '## 同类扫描\n命令：`grep -n "raw !== \'incomplete\'" scripts/lib/commander-core.mjs` 本单改完后零命中。只此一处。';
+    const r = gateSameClassScan({ title: 'fix: x', body });
+    assert.equal(r.state, 'violation', JSON.stringify(r));
+    assert.ok(r.missing.some(m => m.includes('命令')), JSON.stringify(r));
+  });
+
   it('有命令但没写结论 → violation（贴了输出不等于交代了结论）', async () => {
     const { gateSameClassScan } = await load();
     const body = '## 同类扫描\n\n```\ngrep -rn foo scripts/\n```\n\n（贴了一堆输出）';
