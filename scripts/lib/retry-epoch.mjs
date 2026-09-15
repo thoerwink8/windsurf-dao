@@ -41,6 +41,13 @@ const ROOT = path.resolve(HERE, '..', '..');
  *   · dispatch/lease.mjs    —— 树租约（起不来的另一大类）
  *   · commander-verbs.mjs   —— retry-drain 的账键与闸
  *   · model-routing-json.mjs —— 顺位 × 执行目录可用性（#1233）
+ *   · channel-concurrency.mjs —— 渠道上限（「渠道已满员，拒起会话」这一类拒）
+ *   · dispatch/review-pending.mjs —— 拉取预算与票→reviewer-create 的换人计划
+ *
+ * 后两条是 2026-09-15 补的：#1279 把 composer 从 mirasim 渠拆开、上限 1→5、
+ * 拉取预算 3→8，**改的正是「这张 PR 现在推不推得动」**，却一个 EPOCH 文件都没碰。
+ * 于是 19 张在上限=1 时代试满 3 次的 PR，修法落地后旧账仍在、认输标仍焊着，
+ * 指挥官连续 9 轮零动作——闸在，但它看的那五个文件里没有出事的那一个。
  *
  * 不追求完备。**漏一个文件 = 那类修法落地后旧账仍作废不了**（退回今天的行为，
  * 不比现在差）；**多一个文件 = 无关改动也会重置计数**（多试 3 次，代价可忽略）。
@@ -52,6 +59,8 @@ export const EPOCH_FILES = [
   'scripts/lib/dispatch/lease.mjs',
   'scripts/lib/commander-verbs.mjs',
   'scripts/lib/model-routing-json.mjs',
+  'scripts/lib/channel-concurrency.mjs',
+  'scripts/lib/dispatch/review-pending.mjs',
 ];
 
 /**

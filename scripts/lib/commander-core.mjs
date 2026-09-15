@@ -60,6 +60,7 @@ import {
   capNewDispatchSlots,
 } from './admission.mjs';
 import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
+import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
 import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
 
@@ -67,7 +68,7 @@ export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session', 'pump-draft', 'clear-exhausted', 'reap-tree',
+  'stop-session', 'pump-draft', 'clear-exhausted', 'reap-tree', 'reap-orphan',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -714,6 +715,8 @@ export const ACTION_NEEDS = {
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
   'stop-session': [],
+  // 幽灵进程只认 /proc + 会话名单；两面都由 collectCandidates 自己看 scanned，不进总闸。
+  'reap-orphan': [],
   // #1147 draft 收口泵：只认 github 上的 draft + lastCommittedAt。会话名单不进
   // SITUATION_SECTIONS（没查成只挡住泵，不许把合并/叫审官整轮停掉）。
   'pump-draft': ['github'],
@@ -1478,6 +1481,14 @@ function collectCandidates(situation) {
     // 改法（最小）：只让「判绿」这一件事穿过这层标，其余动作照旧被认输挡住。
     // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」；
     // 真合不了的情况下面各道判据（CI 红、draft、冲突、head 零判定）各自会拦。
+    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
+    // 认输 PR 也要写入 map——后面差集重派读这张表。以前 `continue` 跳过写入，
+    // 差集拿到列表上的 UNKNOWN，把「GitHub 还在算」当成「工人死了」再派一个（#1133 / PR #1253）。
+    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
+    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
+    effectiveMergeability.set(pr.number, mergeableState);
+    const mergeableNow = mergeableState === 'MERGEABLE';
+
     //
     // 2026-09-12 补第二个例外：**票头过期的票**也要穿过去。
     // 上面那个例外只放了「判绿」，#1208 的形态（认输标 + 过期票 + 当前 head 零判定）照样是 noop——
@@ -1488,7 +1499,7 @@ function collectCandidates(situation) {
     if (stuck && !staleTicketHere) {
       const headR = pr.headRefOid;
       const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);
-      const mergeableR = String(resolveMergeable(pr, { viewMergeable: situation.viewMergeable }).mergeable || '').toUpperCase() === 'MERGEABLE';
+      const mergeableR = mergeableNow;
       // CI 是非卖品：例外只放「判绿」过去，不许绕过 CI 那道闸（写完本条时自己测出来的）。
       const ciR = prChecksRed(pr);
       if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
@@ -1551,11 +1562,6 @@ function collectCandidates(situation) {
         evidence: { explicitApprovalIssue, isApprovedExecutionTask, checksSucceeded },
       }).ok;
     }
-    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
-    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
-    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
-    effectiveMergeability.set(pr.number, mergeableState);
-    const mergeableNow = mergeableState === 'MERGEABLE';
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
@@ -1888,8 +1894,10 @@ function collectCandidates(situation) {
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
       openPrs: gh.scanned ? (gh.prs || []).map(pr => {
         const review = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
-        const mergeable = effectiveMergeability.get(pr.number) || pr.mergeable;
-        return { ...pr, reworkRequired: mergeable !== 'MERGEABLE' || !review.scanned || review.latestRed === true };
+        const mergeable = String(effectiveMergeability.get(pr.number) || pr.mergeable || '').toUpperCase();
+        // 差集「已交卷等审查」只在真冲突 / 当前 head 真红时才叫工人回来。
+        // UNKNOWN、审查没查成 ≠ 冲突：那是没查成，按 #1056 当有人在做，不许再派工人。
+        return { ...pr, reworkRequired: mergeable === 'CONFLICTING' || (review.scanned === true && review.latestRed === true) };
       }) : null,
       alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
@@ -2006,12 +2014,15 @@ function collectCandidates(situation) {
   // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
   // 返工被「渠道 mirasim 已满员（在途 1 ≥ 上限 1）」拒掉。done/completed/failed
   // 与 incomplete 一样是终态，走正典 classifySessionState，不再手写一份词表。
+  // 已确认清退（cleanupVerified）不再 stop：rejected 无 vendor sessionKey 的登记
+  // 投影若丢掉这个字段，每轮会拿 launch: 键空转。#1133 §2。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
     const raw = sessionStateOf(s) || '';
     if (!raw) continue;
     if (raw === 'stopped' || raw === 'gone' || raw === 'cancelled' || raw === 'canceled') continue;
     if (classifySessionState(s) !== 'finished') continue;
+    if (s && s.cleanupVerified === true) continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;
     stops.push(withNeeds({
@@ -2020,6 +2031,17 @@ function collectCandidates(situation) {
       workdir: s.cwd || s.workdir || s.worktree || null,
       why: `一轮说完（${raw}），会话不常驻`,
     }, ACTION_NEEDS['stop-session']));
+  }
+  // 名单里没有活会话、/proc 还占着树：stop-session 杀不到（没有 key）。
+  const orphanReaps = planOrphanReaps({
+    procs: situation.lease && situation.lease.scanned === true ? situation.lease.procs : null,
+    sessions: situation.sessions && situation.sessions.scanned === true
+      ? (situation.sessions.items || []) : null,
+    sessionsScanned: situation.sessions ? situation.sessions.scanned === true : false,
+    leaseScanned: situation.lease ? situation.lease.scanned === true : false,
+  });
+  for (const a of orphanReaps.actions || []) {
+    stops.push(withNeeds(a, ACTION_NEEDS['reap-orphan']));
   }
   if (finishDenied > 0) {
     // 观测通知：名额已经在 collect 里耗尽，跟 PR review 查没查成无关。
@@ -2045,6 +2067,7 @@ function collectCandidates(situation) {
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   sessions:      { scanned, items:[{key,title,state,cwd}], error } —— #1056 观测集；不进 SITUATION_SECTIONS
+ *   lease:         { scanned, procs:[{pid,comm,cwd}], error } —— /proc 会话进程；不进总闸，没查成则不产 reap-orphan
  *   desiredJobs:   { unscanned, items:[{job_id,issue,pr,identity,model}], error } —— #1056 期望集（未结 job.dispatch）
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
