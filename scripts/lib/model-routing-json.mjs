@@ -98,6 +98,20 @@ export function reviewerSelectOrder(doc) {
 }
 
 /**
+ * 执行目录匹配：精确 profile id 优先；没有精确命中才查 `defaultForModels`。
+ * `resolveExecutionProfile` 与 `usableReviewerOrder` 共用这一份，alias 与
+ * profile id 同名是合法目录形状，不许判成含糊。
+ */
+export function matchExecutionProfiles(spec, profiles) {
+  const list = Array.isArray(profiles) ? profiles : [];
+  const requested = spec.profileId || spec.profile || (list.some((p) => p && p.id === spec.model) ? spec.model : null);
+  const matches = requested
+    ? list.filter((p) => p && p.id === requested)
+    : list.filter((p) => p && Array.isArray(p.defaultForModels) && p.defaultForModels.includes(spec.model));
+  return { requested, matches };
+}
+
+/**
  * 把「审官顺位」按**执行目录的实际可用性**过一遍（#1233）。
  *
  * 病（2026-09-13 实咬）：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位
@@ -107,7 +121,9 @@ export function reviewerSelectOrder(doc) {
  * 而认输评论只写「试了 3 次仍没推动」，真因埋在 drain 的返回值里没人看见。
  *
  * 所以这里做两件事，缺一不可：
- *   1. 顺位里**起不来的剔除**（usable）；
+ *   1. 顺位里**起不来的剔除**（usable）——与 `resolveExecutionProfile` 同一套完整准入
+ *      （enabled、availability、backend∈{mirasim,acp}、agent、model；缺字段 / 非法 backend
+ *      一律剔除，否则选出的腿执行器当场抛 invalid execution profile）；
  *   2. 剔了谁、为什么剔，**原样报出来**（`skipped`）——静默跳过会让下一个「选了必死的
  *      模型」继续以别的面目复发。
  *
@@ -128,13 +144,18 @@ export function usableReviewerOrder(order, { profiles } = {}) {
   const usable = [];
   const skipped = [];
   for (const id of list) {
-    // 与 resolveExecutionProfile 同一套匹配：先按 profile id 精确命中，再看 defaultForModels。
-    // 自己写一份会跟那条闸分叉（分叉那天没人发现——判据只在红的时候才被读）。
-    const matches = catalog.filter((p) => p && (p.id === id || (Array.isArray(p.defaultForModels) && p.defaultForModels.includes(id))));
+    const { matches } = matchExecutionProfiles({ model: id }, catalog);
     if (matches.length === 0) { skipped.push({ id, why: '执行目录里没有这个模型的 profile' }); continue; }
     if (matches.length > 1) { skipped.push({ id, why: `执行目录里匹配到 ${matches.length} 条 profile，含糊` }); continue; }
     const p = matches[0];
     if (p.enabled !== true) { skipped.push({ id, why: `profile ${p.id} 未启用` }); continue; }
+    // 与 resolveExecutionProfile 同一套完整准入：enabled / availability 之外，
+    // 执行器还要合法 backend∈{mirasim,acp} 且 agent、model 都在。缺任何一项
+    // 执行器抛 invalid execution profile，这里放行就会选出一条起不来的腿。
+    if (!['mirasim', 'acp'].includes(p.backend) || !p.agent || !p.model) {
+      skipped.push({ id, why: `profile ${p.id} 缺少合法 backend/agent/model` });
+      continue;
+    }
     const availability = typeof p.availability === 'string' ? p.availability : p.availability?.status;
     if (availability && availability !== 'available') {
       skipped.push({ id, why: `profile ${p.id} 的 availability=${availability}` });

@@ -333,6 +333,11 @@ test('completion rejects partial/empty observations; task acceptance is separate
   assert.equal(judgeExecutionCompletion({phase:'done',text:'preview',partial:true}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:''}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:null,error:'unreadable'}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:'unfinished',incomplete:true}).status,'failed');assert.match(judgeExecutionCompletion({phase:'done',text:'turn ended'}).reason,/artifacts/);
 });
 test('profiles reject disabled/unavailable/ambiguous choices and support registered IDs',()=>{assert.equal(resolveExecutionProfile({model:profile.id},[profile]).id,profile.id);assert.throws(()=>resolveExecutionProfile({profileId:profile.id},[{...profile,enabled:false}]),/disabled/);assert.throws(()=>resolveExecutionProfile({profileId:profile.id},[{...profile,availability:{status:'unverified'}}]),/unverified/);assert.throws(()=>resolveExecutionProfile({model:'alias'},[{...profile,defaultForModels:['alias']},{...profile,id:'second',defaultForModels:['alias']}]),/ambiguous/);});
+test('exact profile id wins over same-name defaultForModels alias',()=>{
+  const exact={...profile,id:'grok-4.6',model:'grok-4.6'};
+  const alias={...profile,id:'native-grok',model:'grok-4.6',defaultForModels:['grok-4.6']};
+  assert.equal(resolveExecutionProfile({model:'grok-4.6'},[exact,alias]).id,'grok-4.6');
+});
 test('maintenance corruption fails closed and promoted version respects service home',t=>{const f=fixture(t),file=path.join(f.dir,'maintenance.json');fs.writeFileSync(file,'{bad');assert.throws(()=>maintenanceStatus(file));assert.equal(promotedVersion(f.dir,'0.0.282'),'0.0.282');const current=path.join(f.dir,'mirasim-server/current');fs.mkdirSync(current,{recursive:true});fs.writeFileSync(path.join(current,'VERSION'),'0.0.307\n');assert.equal(promotedVersion(f.dir,'0.0.282'),'0.0.307');});
 
 // ensureGitWorkspace is the "give the worker a tree" half of a real ACP task, so it

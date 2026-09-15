@@ -153,11 +153,12 @@ describe('规则「选型只认统一执行目录」：启用条目不许落在�
 // 每张按顺位选了它的复审票 drain 必失败、试满 3 次打「自动化认输」。
 describe('#1233 审官顺位按执行目录可用性过滤', () => {
   const M = () => import('file://' + path.join(REPO, 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/'));
+  const runnable = { backend: 'mirasim', agent: 'grok', model: 'x' };
   const PROFILES = [
-    { id: 'm-ok', enabled: true, availability: { status: 'available' } },
-    { id: 'm-unverified', enabled: true, availability: { status: 'unverified' } },
-    { id: 'm-off', enabled: false, availability: { status: 'available' } },
-    { id: 'm-ok-by-default', enabled: true, availability: 'available', defaultForModels: ['alias-model'] },
+    { id: 'm-ok', enabled: true, availability: { status: 'available' }, ...runnable, model: 'm-ok' },
+    { id: 'm-unverified', enabled: true, availability: { status: 'unverified' }, ...runnable, model: 'm-unverified' },
+    { id: 'm-off', enabled: false, availability: { status: 'available' }, ...runnable, model: 'm-off' },
+    { id: 'm-ok-by-default', enabled: true, availability: 'available', defaultForModels: ['alias-model'], ...runnable, model: 'alias-model' },
   ];
 
   it('起不来的剔除，并点名为什么', async () => {
@@ -184,6 +185,36 @@ describe('#1233 审官顺位按执行目录可用性过滤', () => {
     assert.deepEqual(r.usable, order, '没读到目录时不许凭空剔人（没有依据）');
     assert.deepEqual(r.skipped, []);
     assert.ok(r.unscanned, '「没读到」必须与「读到了、全都可用」分得开  →  ' + JSON.stringify(r));
+  });
+
+  it('缺少 backend/agent/model 的 profile 不得进可用序（与 resolveExecutionProfile 同一把尺）', async () => {
+    const { usableReviewerOrder } = await M();
+    const { resolveExecutionProfile } = await import('file://' + path.join(REPO, 'scripts', 'lib', 'execution-runtime.mjs').replace(/\\/g, '/'));
+    const profiles = [
+      { id: 'm-ok', enabled: true, availability: { status: 'available' }, backend: 'mirasim', agent: 'grok', model: 'm-ok' },
+      { id: 'broken', enabled: true, availability: { status: 'available' }, defaultForModels: ['alias-broken'] },
+      { id: 'bad-backend', enabled: true, availability: { status: 'available' }, backend: 'nope', agent: 'x', model: 'y', defaultForModels: ['alias-bad-backend'] },
+    ];
+    const r = usableReviewerOrder(['m-ok', 'alias-broken', 'alias-bad-backend'], { profiles });
+    assert.deepEqual(r.usable, ['m-ok'], '缺字段 / 非法 backend 都必须剔除  →  ' + JSON.stringify(r));
+    assert.deepEqual(r.skipped.map((s) => s.id), ['alias-broken', 'alias-bad-backend']);
+    assert.ok(/backend|agent|model/.test(r.skipped[0].why), '理由要点名缺的字段  →  ' + r.skipped[0].why);
+    assert.ok(/backend|agent|model/.test(r.skipped[1].why), '非法 backend 也要点名  →  ' + r.skipped[1].why);
+    assert.throws(() => resolveExecutionProfile({ model: 'alias-broken' }, profiles), /invalid execution profile broken/);
+    assert.throws(() => resolveExecutionProfile({ model: 'alias-bad-backend' }, profiles), /invalid execution profile bad-backend/);
+  });
+
+  it('精确 profile 与 alias 同名时精确命中仍可用（与 resolveExecutionProfile 同一套）', async () => {
+    const { usableReviewerOrder } = await M();
+    const { resolveExecutionProfile } = await import('file://' + path.join(REPO, 'scripts', 'lib', 'execution-runtime.mjs').replace(/\\/g, '/'));
+    const profiles = [
+      { id: 'grok-4.6', enabled: true, availability: { status: 'available' }, backend: 'mirasim', agent: 'grok', model: 'grok-4.6' },
+      { id: 'native-grok', enabled: true, availability: { status: 'available' }, backend: 'mirasim', agent: 'grok', model: 'grok-4.6', defaultForModels: ['grok-4.6'] },
+    ];
+    const r = usableReviewerOrder(['grok-4.6'], { profiles });
+    assert.deepEqual(r.usable, ['grok-4.6'], '精确命中不许被 alias 判成含糊  →  ' + JSON.stringify(r));
+    assert.deepEqual(r.skipped, []);
+    assert.equal(resolveExecutionProfile({ model: 'grok-4.6' }, profiles).id, 'grok-4.6');
   });
 
   it('空顺位 ⇒ 不是 allDead（扫完就没有，跟「有但全废」是两件事）', async () => {

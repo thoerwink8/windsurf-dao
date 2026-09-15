@@ -953,16 +953,19 @@ function prOpenEnv({ ledgerDir, newPr = '901' } = {}) {
   };
 }
 
-function runPrOpen(extraArgs, { ledgerDir, newPr } = {}) {
+function runPrOpen(extraArgs, { ledgerDir, newPr, omitModel, envExtra } = {}) {
   const { log, env } = prOpenEnv({ ledgerDir, newPr });
-  const r = spawnSync(process.execPath, [
+  const argv = [
     path.join(ROOT, 'scripts', 'dao.mjs'), 'pr-open',
     '--title', '[cc] 帅位自开的活',
     '--body', '## 目标\n\n解环。\n\n## 验收标准\n\n- [ ] 打得上标\n\n## 进展\n\n- [ ] 待开工',
     '--head', 'cc/seat-opened',
-    '--model', 'claude-opus',
-    ...extraArgs,
-  ], { encoding: 'utf8', cwd: ROOT, env, timeout: 60000 });
+  ];
+  if (!omitModel) argv.push('--model', 'claude-opus');
+  argv.push(...extraArgs);
+  const r = spawnSync(process.execPath, argv, {
+    encoding: 'utf8', cwd: ROOT, env: { ...env, ...(envExtra || {}) }, timeout: 60000,
+  });
   const logText = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
   try { fs.unlinkSync(log); } catch { /* 测完收 */ }
   return { r, logText, payload: lastJson(r) };
@@ -1084,5 +1087,55 @@ describe('#1214 缺口 A：pr-open 落账后，打标路真的认得出这条链
         '要走到厂商闸才算验到，别的闸挡下都不算：' + JSON.stringify(payload).slice(0, 200));
       assert.equal(ledgerEvents(ledgerDir).length, 0);
     } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  // 审官 2026-09-14 返工红 3：CLI 必须覆盖真正不传 --model 的入口，不能只测导出的纯函数。
+  it('不传 --model ⇒ 按当前审官座位 × 执行目录现算，落到 grok-4.6', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-nomodel-'));
+    try {
+      const { r, payload, logText } = runPrOpen(['--reviewer', 'gpt-5.6-luna'], { ledgerDir, omitModel: true });
+      assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr, logText }));
+      assert.equal(payload.ok, true);
+      assert.equal(payload.model, 'grok-4.6');
+      assert.equal(payload.reviewer, 'gpt-5.6-luna');
+      assert.match(logText, /pr create/);
+      const d = ledgerEvents(ledgerDir).find((e) => e.type === 'job.dispatch');
+      assert.equal(d && d.model, 'grok-4.6');
+    } finally { fs.rmSync(ledgerDir, { recursive: true, force: true }); }
+  });
+
+  // 审官 2026-09-14 返工红 2：执行目录没查成时自动选腿 fail-closed，假 GitHub 0 次调用。
+  it('不传 --model 且执行目录坏 JSON ⇒ 拒，假 GitHub 0 次调用', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-badcat-'));
+    const broken = path.join(os.tmpdir(), `dao-priopen-broken-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(broken, '{not json');
+    try {
+      const { r, payload, logText } = runPrOpen(['--reviewer', 'gpt-5.6-luna'], {
+        ledgerDir, omitModel: true, envExtra: { DAO_EXECUTION_PROFILES: broken },
+      });
+      assert.notEqual(r.status, 0, JSON.stringify(payload));
+      assert.match(String(payload.error || r.stderr || ''), /执行目录没查成|请显式 --model/);
+      assert.equal(/pr create/.test(logText), false, '没查成不许去开 PR：' + logText);
+      assert.equal(ledgerEvents(ledgerDir).length, 0);
+    } finally {
+      fs.rmSync(ledgerDir, { recursive: true, force: true });
+      try { fs.unlinkSync(broken); } catch { /* 测完收 */ }
+    }
+  });
+
+  it('显式 --model 时执行目录坏了也不挡（自动选才 fail-closed）', () => {
+    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-priopen-explicit-badcat-'));
+    const broken = path.join(os.tmpdir(), `dao-priopen-broken-ok-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(broken, '{not json');
+    try {
+      const { r, payload } = runPrOpen(['--reviewer', 'gpt-5.6-luna'], {
+        ledgerDir, envExtra: { DAO_EXECUTION_PROFILES: broken },
+      });
+      assert.equal(r.status, 0, JSON.stringify({ payload, stderr: r.stderr }));
+      assert.equal(payload.model, 'claude-opus');
+    } finally {
+      fs.rmSync(ledgerDir, { recursive: true, force: true });
+      try { fs.unlinkSync(broken); } catch { /* 测完收 */ }
+    }
   });
 });

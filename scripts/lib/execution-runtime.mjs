@@ -12,6 +12,7 @@ import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,session
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
+import {matchExecutionProfiles} from './model-routing-json.mjs';
 
 // 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
 // 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
@@ -33,8 +34,7 @@ export function maintenanceStatus(file,now=Date.now()) {
   return {blocked:state.active===true&&until>now,reason:state.reason||'Mirasim upgrade',expiresAt:until};
 }
 export function resolveExecutionProfile(spec,profiles) {
-  const requested=spec.profileId||spec.profile||(profiles.some(p=>p.id===spec.model)?spec.model:null);
-  const matches=requested?profiles.filter(p=>p.id===requested):profiles.filter(p=>Array.isArray(p.defaultForModels)&&p.defaultForModels.includes(spec.model));
+  const {requested,matches}=matchExecutionProfiles(spec,profiles);
   if(matches.length>1)throw new Error('ambiguous execution profile: '+(requested||spec.model));
   const p=matches[0];
   if(requested&&!p)throw new Error('unknown execution profile '+requested);
@@ -519,7 +519,7 @@ export function createExecutionRuntime(opts={}) {
     return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,resumeFrom:key});
   }
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
-    profileForModel:model=>{const matches=profiles.filter(p=>p.id===model||p.defaultForModels?.includes(model));if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},
+    profileForModel:model=>{const {matches}=matchExecutionProfiles({model},profiles);if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},
     ensureWorkspace:async(repo,branch)=>{
       assertExecutorIsolation();
       assertMutationAllowed();
