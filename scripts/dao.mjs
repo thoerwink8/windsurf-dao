@@ -20,7 +20,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpus, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './lib/yaml-min.mjs';
@@ -154,7 +154,8 @@ import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
   planReviewAdmission,
-  DEFAULT_REVIEWER_CAP,
+  resolveReviewerCap,
+  reviewerIdsForCap,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -229,6 +230,9 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
+import { resolveModelChannel } from './lib/channel-concurrency.mjs';
+import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
+import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
@@ -237,6 +241,7 @@ import { applyIssueWrite } from './lib/issue-gateway.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
+  writeJobOpened,
   writeJobOverride, resolveAmendTarget, formatAmendComment, workerJobId,
   linkAliasesToSuccessor, resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
@@ -263,6 +268,16 @@ import {
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { judgeLegDown } from './lib/leg-liveness.mjs';
+import { readLegRecords } from './lib/leg-liveness-io.mjs';
+
+/** 这条腿最近跑得怎么样——换厂的第二条凭证（判据 lib/leg-liveness.mjs）。取不到就如实说没查成。 */
+function legEvidenceFor(modelId) {
+  const got = readLegRecords(modelId);
+  if (!got.scanned) return { down: false, scanned: false, why: got.error };
+  return judgeLegDown(got.records);
+}
+
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -864,17 +879,30 @@ function loadDispatchEventsForStamp() {
   }
 }
 
-/** 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。 */
+/**
+ * 打标/落账用的 GitHub owner/name：显式 --repo 优先，否则从本仓 origin 推。推不出就没查成。
+ *
+ * 不传 --repo = 本仓（与 resolveMirasimRepoTarget 同口径），所以「省略」这一路必须真去问 origin，
+ * 不能落 null：账本 repo 是选型打标的匹配键（#1116），写 null 等于这条派工链事后查不回来。
+ * 本仓 origin 探不到时退到 ROOT——同机另一个 checkout 上看不到 origin 不代表派工不是本仓的。
+ */
 function resolveDispatchRepoName(explicit) {
   const parsed = parseOwnerNameRepo(explicit);
   if (parsed.ok && !parsed.omitted) return { ok: true, ownerName: parsed.ownerName };
-  const remote = gitRemoteOriginUrl(thisCheckoutRoot());
-  if (!remote.ok) {
-    return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${remote.error}` };
+  const root = thisCheckoutRoot();
+  const tried = root === ROOT ? [root] : [root, ROOT];
+  let lastError = '';
+  for (const dir of tried) {
+    const remote = gitRemoteOriginUrl(dir);
+    if (!remote.ok) { lastError = remote.error; continue; }
+    const resolved = ownerNameFromRemoteUrl(remote.url);
+    if (resolved.ok) return resolved;
+    lastError = resolved.error;
   }
-  return ownerNameFromRemoteUrl(remote.url);
+  return { ok: false, unscanned: true, error: `本仓 GitHub owner/name 没查成：${lastError}` };
 }
 
+/** 落账用：解析不出就 null。派工不许因为「仓名没查成」而拒绝——本仓 origin 正常时永远拿得到。 */
 function resolveDispatchRepo(explicit) {
   const r = resolveDispatchRepoName(explicit);
   return r.ok ? r.ownerName : null;
@@ -895,6 +923,22 @@ function stampPrFromLedger({ pr, runGh, repo } = {}) {
   });
 }
 
+/**
+ * 打标失败后还许不许继续只读已有 PR 标签。
+ * 没查成（unscanned）→ 继续；不是派工链（skipped + none）→ 打不上不挡。
+ * 已查成的冲突/歧义（conflict / many）和已查成坏账（invalid：缺 model、非法 identity）
+ * 必须 fail-closed，不许再猜、不许当「不是这条链」绕过。
+ */
+function warnOrFailLedgerStamp(stamped, pr) {
+  if (!stamped || stamped.ok) return;
+  if (stamped.unscanned) {
+    console.error(`[dao] PR #${pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
+    return;
+  }
+  if (stamped.skipped && stamped.state === 'none') return;
+  fail(stamped.error, stamped);
+}
+
 function cmdPrSyncLabels(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'pr-sync-labels', defaultLocal: thisCheckoutRoot() });
   const r = stampPrFromLedger({
@@ -904,6 +948,142 @@ function cmdPrSyncLabels(args) {
   });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
+}
+
+/**
+ * 帅位自开 PR：开 draft + 落账 + 打标（#1214 缺口 A）。
+ *
+ * ## 为什么要有这个动词
+ *
+ * 帅位自己开 PR 是**合法**动作（`host/skills/pr-fast/SKILL.md`：快路不收 issue，
+ * PR 正文三段式、作者是 marshal）。但它此前**没有任何落账动作**，于是打标路
+ * （`pickWorkerDispatchByBranch`：认 `job.dispatch` + 身份 + model + reviewer）永远查不到这条链，
+ * 这类 PR 一律卡在「需人工打标」——指挥官合不了，审官也叫不动。
+ *
+ * 用户 2026-09-13 拍板（#1214 评论 `1214-decision-20260913-a2-1`）：走一条**显式打标入口**
+ * 先把卡住的解开，自动化补标留到解环之后再单独谈。本动词就是那条入口的写侧。
+ *
+ * ## 为什么不放宽判据
+ *
+ * 缺口不在「判据太严」，在于**这类 PR 从来没落过账**。补上落账，判据一个字都不用改，
+ * 也就不必去动 `identity === '工人'` 那道闸——那道闸仍然只放行「真有派工决定」的链。
+ * 帅位自开这条链落的账本身是**诚实的**：model 与 reviewer 都是当场给的（都必填，
+ * 且必须是 registry 里的 id，reviewer 还要与 model 换厂商），不是从 commit 前缀反推出来的。
+ *
+ * ## 失败方向
+ *
+ * 落账在开 PR **之后**：先拿到 PR 号才能把 `pr_number` 写进事件，而 PR 号是这条账的用处所在。
+ * 落账失败 ⇒ 报失败（但 PR 已开，回执里带 pr 号与 URL）——**不许静默**：
+ * 静默正是本缺口原来那副样子，一张开出来却打不上标的 PR 看起来与正常 PR 毫无区别。
+ */
+function cmdPrOpen(args) {
+  const targetRepo = resolveMirasimRepoTarget(args, { role: 'marshal', where: 'pr-open', defaultLocal: thisCheckoutRoot() });
+  // 先查「参数齐不齐」，再查「参数对不对」：缺参数是调用方还没写全，报错要指那一处。
+  const head = String(args.head || args.branch || '').trim();
+  if (!head) fail('pr-open 要 --head <分支>（分支名是打标路的匹配键之一，不能靠猜）');
+  if (!args.title) fail('pr-open 要 --title');
+  const routing = loadOrFail();
+  const model = String(args.model || '').trim();
+  if (!model) fail('pr-open 要 --model（帅位自开也得说清是哪条腿交付的，否则这张 PR 进不了选型账）');
+  const knownIds = (routing.models || []).map((m) => m && m.id).filter(Boolean);
+  if (!knownIds.includes(model)) {
+    fail(`pr-open 的 --model ${model} 不在 registry（不落幽灵账）：可用 ${knownIds.join('、')}`);
+  }
+  const reviewer = String(args.reviewer || '').trim();
+  // reviewer 也必填（2026-09-14 审官判红第 1 条）：打标路的判据是这条 `job.dispatch` 里
+  // `model` 与 `reviewer` **都在**（worker-done.mjs:274），缺 reviewer 一样回「需人工打标」。
+  // 原来写成「不给也行，稍后 pr-sync-labels 补齐」是错的——`pr-sync-labels` 只把账里**已有**
+  // 的字段打成标，它既不选审官也不写账（这是 memory `dispatched-label-alone-never-dispatches` 的同一形状：
+  // 少一个标，整条链静默卡住，而现场看起来像「已经交出去了」）。
+  if (!reviewer) fail('pr-open 要 --reviewer（打标路要求 model 与 reviewer 同时在账上；缺一个就永远「需人工打标」）');
+  // 「在 registry 里」不够——还得是**能当审官**的那个（有「审查」职责、没被 reviewerDisabled）。
+  // 同一个模型 id 既可能在工人侧也可能在审官侧，只查 id 存在就放行，落下去的是一条
+  // 「账上写着审官、实际起不来审官会话」的账——那是比缺字段更难查的坏账。
+  const reviewerIds = reviewerPasserIds(routing);
+  if (!reviewerIds.includes(reviewer)) {
+    fail(`pr-open 的 --reviewer ${reviewer} 不是可用审官（要 roles 含「审查」且没被 reviewerDisabled）：可用 ${reviewerIds.join('、')}`);
+  }
+  // 审查换厂商：这条链落账后审官就是定死的，开 PR 这一刻是唯一能拦住同厂的点。
+  refuseIfSameVendor({ workerId: model, reviewerId: reviewer, routing });
+  const ghRepo = targetRepo.ownerName || DEFAULT_DAO_REPO;
+  let body = args.body;
+  if (args.bodyFile) {
+    try { body = readFileSync(args.bodyFile, 'utf8'); }
+    catch (e) { fail(`pr-open 读 --body-file 失败：${e.message || e}`); }
+  }
+  if (!body || !String(body).trim()) fail('pr-open 要 --body 或 --body-file（PR 正文三段式：目标/验收标准/进展）');
+
+  const gh = ghRunnerForTarget(targetRepo, { role: 'marshal' });
+  // 正文经**临时文件**给 gh，不走 argv：正文里有换行、引号、反引号，
+  // 而这条命令的每一层中转都会再吃一次转义（本仓判例 `shell-escape-into-file`）。
+  // 临时文件写完就删，路径里的内容一个字节都不进命令行。
+  const bodyFile = join(tmpdir(), `dao-pr-open-${process.pid}-${Date.now()}.md`);
+  try { writeFileSync(bodyFile, String(body), 'utf8'); }
+  catch (e) { fail(`pr-open 写正文临时文件失败：${e.message || e}`); }
+  const argv = ['pr', 'create', '--draft', '--title', String(args.title), '--body-file', bodyFile, '--head', head, '--base', args.base || 'master'];
+  let created;
+  try { created = runPrCreate({ gh, argv }); }
+  finally { try { unlinkSync(bodyFile); } catch { /* 删不掉不影响结果，临时目录会被回收 */ } }
+  if (!created.ok) fail(`pr-open 开 PR 失败：${created.error}`, { pr: created.pr });
+  const prNumber = created.pr;
+  const url = created.url || `https://github.com/${ghRepo}/pull/${prNumber}`;
+
+  const ctx = loadLedgerContext({ root: ROOT });
+  const ts = beijingIsoFrom(new Date());
+  const jobId = workerJobId(prNumber);
+  const opened = writeJobOpened({
+    ...ctx, ts, jobId, model, identity: '工人', workType: args.workType || '写码',
+    candidateModels: [model], prNumber,
+    why: `帅位自开 PR（pr-open）：${String(args.title).trim()}`,
+    extra: { source: 'dao-pr-open', branch: head, repo: ghRepo, ...(reviewer ? { reviewer } : {}) },
+  });
+  if (!opened.ok && !opened.skipped) {
+    fail(`PR #${prNumber} 已开（${url}），但账本没写上：${opened.error}——这张 PR 现在打不上标，补账前不要指望自动推进`,
+      { pr: prNumber, url, ledger: opened });
+  }
+  const dispatched = writeJobDispatch({
+    ...ctx, ts, jobId, model, identity: '工人', workType: args.workType || '写码',
+    terminal: 'marshal', prNumber,
+    extra: {
+      source: 'dao-pr-open', branch: head, repo: ghRepo,
+      ...(reviewer ? { reviewer } : {}),
+      ...(args.mergePolicy ? { merge_policy: args.mergePolicy } : {}),
+      ...(args.mergeReason ? { merge_reason: args.mergeReason } : {}),
+      ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
+    },
+  });
+  if (!dispatched.ok && !dispatched.skipped) {
+    fail(`PR #${prNumber} 已开（${url}），job.dispatch 没写上：${dispatched.error}——打标路读的正是这一条`,
+      { pr: prNumber, url, ledger: dispatched });
+  }
+
+  // 打标是**记账**不是门（与 commander 合并路同一口径）：打不上要说清，但不把已开出来的 PR 判失败。
+  const stamped = stampPrFromLedger({ pr: prNumber, runGh: gh, repo: ghRepo });
+  emit({
+    ok: true, pr: prNumber, url, branch: head, repo: ghRepo,
+    model, reviewer, draft: true,
+    ledgerWritten: !!(opened.ok && dispatched.ok),
+    ledgerSkipped: !!(opened.skipped || dispatched.skipped),
+    stamped: stamped.ok ? { ok: true, labels: stamped.labels || stamped.added || null } : { ok: false, error: stamped.error },
+    note: stamped.ok
+      ? 'draft PR 已开、账已落、标已打；交卷前记得 pr ready'
+      : 'draft PR 已开、账已落，但这次没打上标（记账不算失败）：' + stamped.error,
+  });
+}
+
+/** 开 PR 并取回执；`gh pr create` 的回执是 URL，从 URL 尾段取号（取不到就只报 URL，不编号）。 */
+function runPrCreate({ gh, argv }) {
+  const r = gh(argv);
+  if (!r.ok) return { ok: false, error: r.error || 'gh pr create 失败' };
+  return parsePrCreateOut(String(r.out || ''));
+}
+
+/** gh pr create 回执是 URL；从 URL 尾段取号。取不到只报 URL，不编号。 */
+function parsePrCreateOut(out) {
+  const url = (out.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/) || [])[0] || null;
+  const n = url ? Number(url.split('/').pop()) : null;
+  if (!n) return { ok: false, error: `gh pr create 回执里取不到 PR 号：${out.trim().slice(0, 200)}` };
+  return { ok: true, pr: n, url };
 }
 
 function lookupReviewerMergePolicy({
@@ -1292,8 +1472,17 @@ function cmdReviewerDone(args) {
  * 名单读不到 ⇒ 没查成 ⇒ 这一轮拉 0 张，票留在队列，不许当成「0 个在跑」去拉满。
  */
 async function admitReviewPull(tickets) {
-  const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
-  const limit = Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_REVIEWER_CAP;
+  // 上限不再是手打常量：机器那层按核数，上游那层按**本轮票实际会用的审官**所落渠道取严。
+  // 全部可用候选里那条没用到的 cap=1 腿不许拖住整队。
+  // 有限渠道上限始终是最终上界；保底只在没有任何有限渠道约束时生效。
+  const usable = usableReviewerIds();
+  // DAO_REVIEWER_CAP 也走同一个函数（只收紧不放宽）——这里不许再出现「有环境值就整段跳过取严」的平级分支。
+  const limit = resolveReviewerCap({
+    cores: (() => { try { return cpus()?.length ?? null; } catch { return null; } })(),
+    reviewerIds: reviewerIdsForCap(tickets, usable),
+    channelOf: reviewerChannelCap,
+    envCap: process.env.DAO_REVIEWER_CAP,
+  });
   let sessions = null;
   try {
     const routing = loadRouting();
@@ -1307,6 +1496,37 @@ async function admitReviewPull(tickets) {
   const records = mirasimRegistry().listAll ? mirasimRegistry().listAll() : null;
   const counted = countLiveReviewers({ records, sessions });
   return planReviewAdmission({ tickets, liveReviewers: counted.count, cap: limit });
+}
+
+/**
+ * 「现在起得来的审官顺位」——票上写死的那一位死了时，drain 靠它换人。
+ *
+ * 与指挥官**同一份判据**（`commander.mjs:592` 那三行）：顺位表 × 执行目录可用性。
+ * 这里自己再写一遍就会跟那边分叉——分叉那天两边的「可用审官」不一样，
+ * 而票读侧与选官侧的分歧正是本单要治的病。
+ *
+ * 读不到任何一份（路由表 / 执行目录）⇒ 回 `null`，调用方**不换人**：
+ * 「没查到依据」不等于「票上那个不能用」，拿它去换人是猜。
+ */
+function usableReviewerIds() {
+  try {
+    return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+  } catch { return null; }
+}
+
+/**
+ * 一位审官落在哪条渠道、那条渠道的上限是几（`resolveReviewerCap` 的渠道那层）。
+ *
+ * 走 `resolveModelChannel`（#1145 的正典），不自己按 provider 拼渠道键——自己拼那天，
+ * 「同一个模型算哪条渠道」在这里和指挥官里就会给出两个答案。
+ * 认不出 / 不限 ⇒ 回 null，调用方据此**不拿它去收紧**（不限不是 0）。
+ */
+function reviewerChannelCap(id) {
+  try {
+    const raw = loadRoutingJsonRaw();
+    const hit = resolveModelChannel({ model: id, legs: raw['腿'], models: raw['模型'] });
+    return hit && Number.isFinite(hit.cap) ? hit.cap : null;
+  } catch { return null; }
 }
 
 async function cmdReviewPendingDrain(args) {
@@ -1362,6 +1582,9 @@ async function cmdReviewPendingDrain(args) {
   const drained = drainReviewPending({
     dir,
     tickets,
+    // 票上那位起不来时照顺位换人（判据与指挥官同源，见 usableReviewerIds 注释）。
+    // `--force` 是**人手**逃生口，人手跑时同样换——人手更不该拿一个已知死掉的模型去试。
+    usableReviewers: usableReviewerIds(),
     attach: (plan) => {
       const argv = [...plan.argv];
       if (ghRepo && !argv.includes('--repo')) argv.push('--repo', ghRepo);
@@ -1820,12 +2043,12 @@ async function cmdReviewerCreateMirasim(args) {
   const bind = bindExecutor({ executor: named.name, routing });
   if (!bind.ok) fail(bind.error, { executor: named.name });
 
-  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡——
-  // 不是派工链 / 账本没查成时，PR 上已有标就认，没标则 resolve* 拒并说「需人工打标」。
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。
+  // 没查成 / 不是派工链：打不上不挡，PR 上已有标就认。
+  // 已查成的冲突/歧义（账本 vs 标签不一致、多个 reviewer/*）和已查成坏账
+  // （缺 model、非法 identity）：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
-  if (!stamped.ok && stamped.unscanned) {
-    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
-  }
+  warnOrFailLedgerStamp(stamped, args.pr);
 
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
@@ -1841,6 +2064,8 @@ async function cmdReviewerCreateMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    // 第二条凭证：死因词表认不出的新死法，靠「这条腿最近跑不完」也算数（#1290）
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
   const planned = planReviewerOnCapacityDeath({
@@ -2022,11 +2247,11 @@ async function cmdWorkerDoneMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'worker-done', defaultLocal: thisCheckoutRoot() });
   const gh = ghRunnerForTarget(targetRepo, { role: 'worker' });
   const ghR = ghRunnerForTarget(targetRepo, { role: 'reviewer' });
-  // #1116：先按 PR head 分支从账本打标，再只读 PR label。打不上不挡，没标由 plan 拒。
+  // #1116：先按 PR head 分支从账本打标，再只读 PR label。
+  // 没查成 / 不是派工链：打不上不挡，没标由 plan 拒。
+  // 已查成的冲突/歧义/坏账（缺 model、非法 identity）：直接 fail-closed，不许再猜。
   const stamped = stampPrFromLedger({ pr: args.pr, runGh: gh, repo: targetRepo.ownerName });
-  if (!stamped.ok && stamped.unscanned) {
-    console.error(`[dao] PR #${args.pr} 账本打标没查成（选型仍只读 PR label）：${stamped.error}`);
-  }
+  warnOrFailLedgerStamp(stamped, args.pr);
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
@@ -2055,6 +2280,7 @@ async function cmdWorkerDoneMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   const planned = planReviewerOnCapacityDeath({
     requested: plan.reviewer, capacityFailover: failoverCtx,
@@ -2087,14 +2313,17 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  const postedIssue = postCommentOnce({
-    kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
-    writeIssue: applyIssueWrite, host: 'worker-done',
-    // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
-    repo: targetRepo.ownerName || undefined,
-    idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
-  });
-  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
+  if (plan.issue) {
+    postedIssue = postCommentOnce({
+      kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
+      writeIssue: applyIssueWrite, host: 'worker-done',
+      // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
+      repo: targetRepo.ownerName || undefined,
+      idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
+    });
+    if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  }
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
@@ -2422,6 +2651,7 @@ function main(argv = process.argv) {
     case 'liveness': return cmdLiveness(args);
     case 'check-help': return cmdCheckHelp();
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
+    case 'pr-open': return cmdPrOpen(args);
     case 'ledger-query': return cmdLedgerQuery(args);
     case 'preflight': return cmdPreflight(args);
     case 'breaker': return cmdBreaker(args);

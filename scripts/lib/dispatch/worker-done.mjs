@@ -10,6 +10,8 @@
 // 三态必须分得开：查到一个 / 扫完没有 / 没查成——后两者都拒，不许猜。
 
 import { parseOwnerNameRepo } from './repo.mjs';
+// 认领判据只有一份实现，在关单侧（同时管着「被否定的分句不算认领」与标题退路收严）。这里不抄第二份。
+import { attributedIssueNumbers, attributedIssueNumber } from '../close-issue.mjs';
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
@@ -112,7 +114,10 @@ export function requireWorkerModel(labels) {
 
 /** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
  * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。
- * #1116：仓里原先两份正则（本文件认「关联」，ready-queue-check 不认）收成这一份。 */
+ * #1116：仓里原先两份正则（本文件认「关联」，ready-queue-check 不认）收成这一份。
+ *
+ * 这一份是**宽**口径，服务「这张 PR 跟哪些单有关」——给它抄 label、发完工 comment。
+ * 判「这张单是不是已经有在途 PR」必须用下面的 `claimedIssueNumbers`，别用这一份。 */
 export function linkedIssueNumbers(text) {
   const found = [];
   const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
@@ -122,6 +127,49 @@ export function linkedIssueNumbers(text) {
     if (Number.isInteger(t) && !found.includes(t)) found.push(t);
   }
   return found;
+}
+
+/**
+ * PR 里**认领**了哪张单（= 这张 PR 就是为它开的），不是顺带提过哪张单。
+ *
+ * 与 `linkedIssueNumbers` 的差别只有一条：**不认「关联 #N」**。
+ * 「关联」是 cross-reference（这 PR 碰过它），不是 claim（这 PR 是它的交付物）。
+ *
+ * 实现直接复用关单侧 `close-issue.mjs` 的 `attributedIssueNumbers`——同一份规格只有一个副本，
+ * 它同时管着「被否定的分句不算认领」（`不写 closes #N`）。
+ *
+ * `openIssues` 传进来时，标题裸匹配那一级会收严（目标单还开着就不认，见 `attributedIssueNumber`）。
+ * **在途判据必须传**：它手里就是开放单名单，而这正是「目标单还开着」的语境。
+ *
+ * 2026-09-13 实咬（#1051 停摆 7 天，三个缺陷叠在一起）：
+ *   ① 宽口径：PR #1096 正文写「挂回 #1051 作第 7 条同形」，那是**关联**
+ *      （它自己是 #1101 的交付物，正文里还写明「不写 closes #1051」）。
+ *      但 ready-queue-check 拿 `linkedIssueNumbers` 判「有在途 PR」，于是 #1051 被一张
+ *      与它无关、且自己还冲突躺平的 PR 永久焊死——三标齐全、消歧过门、admission 空 31 位，
+ *      7 天零派工、零报警。**宽口径用在判阻塞上，就是把「提过」当成「在做」。**
+ *   ② 否定式：那句「**不写 `closes #1051`**」本身也被正则读成了认领声明，
+ *      于是换窄口径也照样焊死。
+ *   ③ 标题裸匹配退路：正文零显式署名时，退路捞走了标题里的 `挂回 #1051`。
+ *      真机上退路捞 13 张，只有 #1143/#1051 两张错——**两张的目标单都是 OPEN**。
+ * 三个缺陷同源：正则不认上下文。
+ *
+ * #1096 作者当年已经发现两个口径不同（正文第 55 行原话：「关单正则只认 closes/fixes/署名 issue，
+ * 不含关联」），却没发现判阻塞那边用的是宽的那条——**口径不一致的危险，在于你只检查了另一半。**
+ */
+export function claimedIssueNumbers(text) {
+  return attributedIssueNumbers(text).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/**
+ * 整张 PR 认领的单号（含「标题裸匹配」那一级退路）——**判在途用这个**。
+ *
+ * 与 `claimedIssueNumbers(text)` 的差别：那个只看一段文本（收不到退路那一级），
+ * 这个吃 `pr` 对象，走的是与关单侧同一个 `attributedIssueNumber`，四级优先级完全一致。
+ * `openIssues` 传开放单号集合，让退路对「还开着的单」收严（见 `attributedIssueNumber`）。
+ */
+export function claimedIssueNumbersOfPr(pr, { openIssues = null } = {}) {
+  const n = attributedIssueNumber(pr, { openIssues });
+  return Number.isInteger(n) && n > 0 ? [n] : [];
 }
 
 function parseJsonOut(raw, what) {
@@ -173,12 +221,27 @@ export function collectPrLabels({ pr, runGh } = {}) {
   };
 }
 
-/** 工人 job.dispatch：先按分支取最新一条（另一仓的完整记录不算这条链；
+/**
+ * 工人 job.dispatch：先按分支取最新一条（另一仓的完整记录不算这条链；
  * 缺 repo 的后写残缺仍是最新一条），再校验 repo/identity/model/reviewer。
- * 最新一条缺任一字段或身份非法 → 人工补标，不回退旧的完整记录。 */
-export function pickWorkerDispatchByBranch(events, branch, repo) {
+ * 挑最新一条的规则不变——缺字段的残缺仍是最新一条，不回退旧的完整记录。
+ *
+ * 缺 repo / reviewer 是同一类历史缺口（#1118 才把这两项写进账本，#1116 之前一条都没有），
+ * 所以按同一口径收下，都在返回值里说清来源：
+ *   repoAssumed —— 账本没写仓，仓是按「没写别的仓」推的（推不出才是拒绝）。
+ *   reviewerSource —— 'ledger' 账本写了 / 'pr-label' 账本没写、取 PR 自己的 reviewer/*。
+ * 账本与 PR 标签都有且不一致时**不猜**：两条都是「派工那刻的决定」，证不出哪条对，报人工。
+ * model 没有这种缺口（1017 条事件全带 model），缺它仍是拒绝，不许推。
+ *
+ * 状态必须分得开，stamp 只把 `none` 标成可跳过：
+ *   none       —— 扫完没有匹配的 job.dispatch（不是这条派工链）
+ *   invalid    —— 已命中记录，但缺 model / 非法 identity / 缺 reviewer（已查成坏账）
+ *   conflict   —— 账本与 PR 标签都有且不一致
+ *   unscanned  —— 没查成（没给仓 / 事件列表不是数组 / 没给分支名）
+ */
+export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint } = {}) {
   const want = String(branch || '').trim();
-  if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
+  if (!want) return { ok: false, state: 'unscanned', error: '没给分支名（没查成，不许猜）' };
   const wantRepo = normalizeDispatchRepo(repo);
   if (!wantRepo) {
     return { ok: false, state: 'unscanned', error: '没给仓（没查成，不许猜）' };
@@ -204,14 +267,8 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
   }
   const hit = keyed[keyed.length - 1];
   const hitRepo = normalizeDispatchRepo(hit.repo);
-  if (!hitRepo) {
-    return {
-      ok: false,
-      state: 'none',
-      error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 repo——需人工打标`,
-    };
-  }
-  if (hitRepo !== wantRepo) {
+  // 缺 repo 的历史事件（#1116 之前）：按本仓收下，不拒。明确写别的仓的在上一步已被滤掉。
+  if (hitRepo && hitRepo !== wantRepo) {
     return {
       ok: false,
       state: 'none',
@@ -221,17 +278,36 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
   if (hit.identity !== '工人') {
     return {
       ok: false,
-      state: 'none',
+      state: 'invalid',
       error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 identity 或不是工人——需人工打标`,
     };
   }
   const model = String(hit.model || '').trim();
-  const reviewer = String(hit.reviewer || '').trim();
-  if (!model || !reviewer) {
+  if (!model) {
     return {
       ok: false,
-      state: 'none',
-      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model 或 reviewer——需人工打标`,
+      state: 'invalid',
+      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model——需人工打标`,
+    };
+  }
+  // reviewer：账本写了就用账本的；没写（历史事件）退到调用方给的 PR 标签，两条都没有才拒。
+  const hint = String(reviewerHint || '').trim();
+  const fromLedger = String(hit.reviewer || '').trim();
+  if (fromLedger && hint && fromLedger !== hint) {
+    return {
+      ok: false,
+      state: 'conflict',
+      error: `仓 ${wantRepo} 分支 ${want} 账本审官 ${fromLedger} 与 PR 标签 ${hint} 不一致`
+        + '——两条都是派工那刻的决定，证不出哪条对，需人工打标',
+    };
+  }
+  const reviewer = fromLedger || hint;
+  if (!reviewer) {
+    return {
+      ok: false,
+      state: 'invalid',
+      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 reviewer，PR 上也没有 reviewer/*`
+        + '——需人工打标',
     };
   }
   const role = String(hit.work_type || hit.role || '').trim();
@@ -244,6 +320,10 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
     role: role || DEFAULT_DISPATCH_TYPE,
     branch: want,
     repo: wantRepo,
+    // 账本这条没写 repo，仓是按「没写别的仓」推的（历史事件）。调用方要能说清这一层。
+    repoAssumed: !hitRepo,
+    // 账本没写 reviewer，审官是按 PR 标签取的（历史事件）。'ledger' = 账本写的。
+    reviewerSource: fromLedger ? 'ledger' : 'pr-label',
   };
 }
 
@@ -279,13 +359,33 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
       error: `PR #${n} 在 ${collected.repo}，打标目标是 ${wantRepo}——需人工打标（不许跨仓套标）`,
     };
   }
-  const picked = pickWorkerDispatchByBranch(events, branch, wantRepo);
+  // reviewer 的历史缺口（#1118 前的账本没这项）用 PR 自己的 reviewer/* 补——PR 标签是审官
+  // 选型的既有真相源（pickReviewer），不是从 issue 反推。没有标签才拒。
+  // 多个（含同名重复）reviewer/* 一律 fail-closed：不许拿账本单值把歧义抹平。
+  const hint = pickReviewer(collected.labels);
+  if (!hint.ok && hint.state === 'many') {
+    return {
+      ok: false,
+      state: 'many',
+      skipped: false,
+      pr: n,
+      branch,
+      repo: wantRepo,
+      error: `${hint.error}——需人工打标`,
+      labels: hint.labels,
+    };
+  }
+  const picked = pickWorkerDispatchByBranch(events, branch, wantRepo, {
+    reviewerHint: hint.ok ? hint.modelId : '',
+  });
   if (!picked.ok) {
     return {
       ...picked,
       pr: n,
       branch,
       repo: wantRepo,
+      // 只有「扫完没有这条派工链」（state=none）才 skipped。
+      // invalid / conflict 是已查成坏账，不许标成可跳过再去读 PR 标签。
       skipped: picked.state === 'none',
       error: picked.error,
     };
@@ -341,6 +441,8 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
     reviewer: picked.reviewer,
     role: picked.role,
     refs: collected.refs,
+    repoAssumed: picked.repoAssumed === true,
+    reviewerSource: picked.reviewerSource,
   };
 }
 
@@ -427,9 +529,9 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  if (!issue) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
-  }
+  // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。完工 comment 发在 PR
+  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷（#1270 返工实咬）。
+  // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';

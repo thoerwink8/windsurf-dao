@@ -396,21 +396,3 @@ export function formatUnclosedDetails(rows) {
   return lines.join('\n');
 }
 
-export function formatLedgerQuery(result) {
-  if (!result || result.kind === 'unscanned') {
-    return `没查成：${result && result.error ? result.error : '查询失败'}`;
-  }
-  if (result.kind === 'zero') return result.line;
-  const lines = [result.line];
-  for (const e of result.events) {
-    const bits = [
-      e.ts || '?',
-      e.type || '?',
-      e.job_id || '-',
-      e.pr_number != null ? `pr=${e.pr_number}` : null,
-      e.model || null,
-    ].filter(Boolean);
-    lines.push(bits.join('  '));
-  }
-  return lines.join('\n');
-}

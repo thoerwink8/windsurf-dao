@@ -5,19 +5,20 @@
 //
 // 判据（#577 正文，本检查自己解析，不调用 dao-cmd / ⑭ 的 closesNumbers）：
 //   可立即起 = open issue 带「已消歧」label
-//              + 无在途 PR（标题/正文里的 GitHub 关闭关键词署名）
+//              + 无在途 PR（标题/正文里**认领**这张单的署名）
 //              + 无本地 worktree 卡（linkedIssue / 定界区 / ISSUE- / 旧 #N；PR- 不是 issue 号）
 //              + 没挂「将来某版」里程碑（#966：要做但不是现在，不是当前待办）
 // 并发上限随 #576 next 落地；落地前不发明一个数字。满位是正当理由，所以本项
 // 只出可见行、永不报红。没查成必须和「扫完 0 个」不同形。
 
 import { issueNumberFromWorktree } from './card-identity.mjs';
-import { linkedIssueNumbers } from './dispatch/worker-done.mjs';
+import { linkedIssueNumbers, claimedIssueNumbers, claimedIssueNumbersOfPr } from './dispatch/worker-done.mjs';
 
 // 只认正向「已消歧」（#565）。近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门。
 const READY_LABEL = '已消歧';
 
-export { linkedIssueNumbers };
+// `linkedIssueNumbers` 的 re-export 留给旧消费方；**判在途用的是 `claimedIssueNumbers`**。
+export { linkedIssueNumbers, claimedIssueNumbers };
 
 // #966：GitHub Milestone 两档之一。挂了这一档 = 要做但不是现在，单保持 OPEN 以便
 // `gh issue list --milestone 将来某版` 一次列全；派工队列必须跳过，否则档挂了机器下一轮还派。
@@ -79,9 +80,22 @@ export function inspectReadyQueue(snap) {
     return { kind: 'unscanned', ready: null, line: '可立即起：没查成（issue 没有 labels 字段，≠ 扫完是 0）' };
   }
 
+  // 在途 = 有 PR **认领**这张单。三处收严，缺一处都会把「提到」当成「在做」：
+  //   ① 认领口径（`attributedIssueNumber`），不是宽口径 `linkedIssueNumbers`——「关联 #N」是交叉引用；
+  //   ② 剥掉被否定的分句——「不写 closes #N」是声明不做；
+  //   ③ 标题裸匹配那一级退路，对**还开着的号**收严——#1051 被 #1096 标题「挂回 #1051」焊死 7 天。
+  //
+  // 「还开着」必须**含开着的 PR**：GitHub 的 issue 与 PR 共用号段，而引用的目标常常是一张 PR
+  // （#1216 标题「#1143 刷了 135 条评论的根因」，#1143 是 PR、不在 issues 面里）。只按 issues 面
+  // 构造名单，这条收严就对这些引用整个失效——2026-09-13 实测：带 {1143} 时返回 null，
+  // 只传 issues 面那份名单时又返 1143。
+  const openNumbers = new Set();
+  for (const i of snap.issues) if (i && Number.isInteger(i.number)) openNumbers.add(i.number);
+  for (const p of snap.prs) if (p && Number.isInteger(p.number)) openNumbers.add(p.number);
   const inPr = new Set();
   for (const p of snap.prs) {
-    for (const n of linkedIssueNumbers(`${p?.title || ''}\n${p?.body || ''}`)) inPr.add(n);
+    for (const n of claimedIssueNumbersOfPr(p, { openIssues: openNumbers })) inPr.add(n);
+    for (const n of claimedIssueNumbers(`${p?.title || ''}\n${p?.body || ''}`)) inPr.add(n);
   }
   const inCard = new Set(cards.numbers);
 

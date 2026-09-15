@@ -25,9 +25,16 @@
 
 ## 开工前
 
-被审对象 = PR 的最新 HEAD 与 diff：`gh pr view <p= 的 PR号> --json headRefName,headRefOid` 反查，路径从 PR JSON 取，不手抄。
-**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；`gh pr view` 拿不到 PR = 没查成，报出来，不许审空气。
+被审对象 = PR 的最新 HEAD 与 diff（**读也要走封装**）：
+`node scripts/gh-as.mjs reviewer -- pr view <p= 的 PR号> --json headRefName,headRefOid,mergeable,files`。
+**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；上面这条读不到 PR = 没查成，报出来，不许审空气。
 审查质量标准与判绿前必核清单：`host/skills/dispatch/review-standard.md`，逐条打勾，缺一不许绿；本框架不复制。
+
+> **读 PR 也必须走 `gh-as.mjs reviewer`，不许裸 `gh`。** 你跑在 mirasim 服务端里，那个 unit 设了
+> `GH_CONFIG_DIR=/var/empty`（挡 `~/.config/gh` 的个人登录），所以裸 `gh pr view` 必然报「没有凭据」——
+> 而那不是 GitHub 或网络的问题，是绕过了封装。2026-09-13 实咬：本页第 28-29 行原先教的就是裸 `gh pr view`，
+> 于是每个审官开工第一步就读不到 PR、当场停手报「没查成」——写操作包了封装、读操作没包，是同一件事的两半。
+> `gh-as.mjs` 用 GitHub App 的 token，不读 hosts.yml，在同一个空配置目录下**实测正常**。
 
 > 你跑在 mirasim 会话里，**绝对不删任何树**——归档收树是收口官/帅的机械动作。
 

@@ -237,9 +237,12 @@ export function buildDailyCard({
       content: ensurePlain(`**本期发生了什么**\n${happened}`, 'feishu-daily-card/happened'),
       margin: '0px 0px 12px 0px',
     },
+    // 飞书 Card 2.0 拒收 1.0 的 note（实咬 200861：unsupported tag note，日报一张都发不出去）。
     {
-      tag: 'note',
-      elements: [{ tag: 'plain_text', content: ensurePlain(note, 'feishu-daily-card/note') }],
+      tag: 'markdown',
+      content: ensurePlain(note, 'feishu-daily-card/note'),
+      text_size: 'notation',
+      margin: '0px 0px 12px 0px',
     },
     {
       tag: 'column_set',
@@ -284,11 +287,6 @@ export function isDailyAction(value) {
 export function isDailyListPending(value) {
   const v = value && typeof value === 'object' ? value : {};
   return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PENDING;
-}
-
-export function isDailyListPrs(value) {
-  const v = value && typeof value === 'object' ? value : {};
-  return isDailyAction(v) && str(v.action) === DAILY_CALLBACK_LIST_PRS;
 }
 
 /** 日报卡按钮：toast 一句，不改卡、不写 GitHub。card === null 告诉回包路径别换待拍板卡。 */

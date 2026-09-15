@@ -99,6 +99,57 @@ export function escalateDedupKey(action) {
   return `escalate/${String(action?.reason || 'x')}`;
 }
 
+/**
+ * 开单那一轮的幂等键种子。
+ *
+ * **为什么不能只用起因**（#1240 的另一半，2026-09-14）：网关按「动作 + 仓 + 幂等键」记账，
+ * 同键永远退回**第一次**那个结果（`issue-gateway.mjs:483`）。而一张被收敛关掉的单，
+ * 键还留在网关账上——同一个起因第二次真发生（带了新对象、该开新单）时，
+ * 请求会被退回到那张已关的旧单，于是「重开」这件事**在网关这一层就从来没发生过**。
+ * 日志说开单、线上没开单，判据那一半再对也没用。
+ *
+ * 折法：把**这一轮要说的对象清单**折进种子。清单变了（新对象出现）⇒ 新键 ⇒ 真能开新单；
+ * 清单没变 ⇒ 同键 ⇒ 网关去重继续生效（幂等没有被削弱）。
+ * 清单是有序去重的，同一轮的两次调用必得同一个键。
+ */
+export function escalateRoundSeed(reason, objects) {
+  // 去重后**排序**：键必须只由「集合」决定，不由产出顺序决定——顺序一变键就变，
+  // 同一轮内两次调用会开出两张单（那正是本键存在的目的被自己破坏）。
+  const objs = [...new Set((Array.isArray(objects) ? objects : [])
+    .filter((o) => o != null && String(o) !== '')
+    .map(String))].sort();
+  return `open:${String(reason || 'x')}:${objs.join(',')}`;
+}
+
+import { createHash } from 'node:crypto';
+
+/** issue-gateway 的 KEY_RE 只收可打印 ASCII、无空白（scripts/lib/issue-gateway.mjs）。
+ *  报帅的 key 一旦拼进中文 marker（`查重标记（勿删）：…`）或带空格的对象名（`issue #966`），
+ *  网关整条拒收——而报帅正是最不能静默丢的路（2026-09-08 实咬：开单/追加每轮全被拒，
+ *  失败循环重试，用户一张单都看不到）。
+ *
+ *  折法（顺序不能反——PR #1143 审官红：空白对象先哈希会换键，旧 append 账失效）：
+ *    1. 能直接过闸的原样返回；
+ *    2. 否则按旧 keySafe 折每一段（trim、空白→`-`、剥非法、截 120）。折完整键若已过真闸，
+ *       必须沿用——`PR #1154` 已落账为 `commander-escalate:append:123:PR-#1154`；
+ *    3. 旧结果仍会被真闸拒（非 ASCII term、整键超长）才哈希折叠。同输入必同键。 */
+export const GATEWAY_KEY_RE = /^[\x21-\x7E]{1,200}$/;
+/** 旧 commander.keySafe 的段折法。只给 gatewayIdemKey 做跨版本兼容，不单独当闸。 */
+function legacyKeySafe(s) {
+  return String(s == null ? '' : s).trim().replace(/\s+/g, '-').replace(/[^\x21-\x7e一-鿿-]/g, '').slice(0, 120) || 'none';
+}
+export function gatewayIdemKey(...parts) {
+  const segs = parts.filter((p) => p != null && String(p) !== '').map(String);
+  const raw = segs.join(':');
+  if (!raw) return 'x';
+  if (GATEWAY_KEY_RE.test(raw)) return raw;
+  const legacy = segs.map(legacyKeySafe).join(':');
+  if (GATEWAY_KEY_RE.test(legacy)) return legacy;
+  const ascii = raw.replace(/[^\x21-\x7E]+/g, '-');
+  const h = createHash('sha256').update(raw).digest('hex').slice(0, 12);
+  return `${ascii.slice(0, 180)}~${h}`;
+}
+
 /** 受影响对象的稳定标识（进正文清单，不进键）。认不出对象 → null，按「无对象」记。 */
 export function escalateTarget(action) {
   if (!action) return null;
@@ -143,19 +194,44 @@ export function judgeEscalation(action, { booked = null, bookedState = null, str
     return { verdict: 'unscanned', why: `账本记着 #${booked.issue}，核不出状态——开单不可撤，本轮不开`, target };
   }
   if (bookedState !== 'OPEN') {
-    // 单被人关了 = 这件事被处置过了。再发生就是新一轮，可以重开。
-    return { verdict: 'open', why: `#${booked.issue} 已关，这件事又发生了`, target, objects: target ? [target] : [] };
+    // 单被关了 = 这件事被处置过了。再发生就是新一轮，可以重开——**但只在这次有新东西可说时**。
+    //
+    // #1240 实咬（2026-09-13）：#1154/#930 每 20 分钟把「报帅开单 #1204」打进日志，
+    // 而 #1204 早在 09-12 就被轮末收敛关掉了。链条是：原因持续存在 → 收敛关单 →
+    // 下一轮这条判据判 open → gateway 按幂等键把旧单号退回 → 账本记的仍是 #1204 → 循环。
+    // 每一轮的「重开」都只是把同一个 #1204 报一遍，线上没有新的单，也没有新的对象。
+    //
+    // 判据改按**对象**分（这才是人做事的最小单位，跟上面 append 出口同一条口径）：
+    //   · 对象没登记过 → 重开，把新对象带进正文清单一并说清（真新信息，不该被吞）
+    //   · 对象登记过   → noop，只进 status（同一件事已经说过了，再说一遍是噪音）
+    // 没有对象（term 类）时按「登记过」算：无对象可增，重开等于复读。
+    const seen = Array.isArray(booked.objects) ? booked.objects : [];
+    if (!target || seen.includes(target)) {
+      return {
+        verdict: 'noop',
+        why: `#${booked.issue} 已关，但这次没有新对象（${target || '无对象'}）——只进 status，不复读一张已关的单`,
+        target,
+        objects: seen,
+      };
+    }
+    return {
+      verdict: 'open',
+      why: `#${booked.issue} 已关，原因又发生且带来新对象 ${target}——重开一张（不是往已关的那张上追加）`,
+      target,
+      objects: [...seen, target],
+      reopenedFrom: booked.issue,
+    };
   }
-  const seen = Array.isArray(booked.objects) ? booked.objects : [];
-  if (target && !seen.includes(target)) {
+  const seenOpen = Array.isArray(booked.objects) ? booked.objects : [];
+  if (target && !seenOpen.includes(target)) {
     return {
       verdict: 'append',
       why: `#${booked.issue} 在管同一个原因，本次是新对象 ${target}——追加进那张单，不新开`,
       target,
-      objects: [...seen, target],
+      objects: [...seenOpen, target],
     };
   }
-  return { verdict: 'noop', why: `#${booked.issue} 在管同一个原因，对象也已登记`, target, objects: seen };
+  return { verdict: 'noop', why: `#${booked.issue} 在管同一个原因，对象也已登记`, target, objects: seenOpen };
 }
 
 /**

@@ -2,6 +2,94 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.7.1 — 2026-09-15
+
+### 修复与维护
+- [cc] fix(换厂): 腿断的判据从死因词表换成行为——整条 gpt 腿死了，闸却不许换人 (#1290)
+- [grok] fix(指挥官): 审官 phase=done 也要停会话，别把进程留在渠道里 (#1280)
+- [cc] fix(execution): devin ACP 的模型确实钉得住，T1c 解封（#1174） (#1275)
+- [patrol] docs(obs): 用量导出/采集 TimeoutStartSec=90，活任务被 SIGTERM，采集账从 23:29 起没写完
+- [patrol] docs(obs): ws 连红达自愈阈值，在途会话进程把重启焊死，控制面 false 全机掐 push
+- fix(并发): 收尾名额与审官上限不再手打 3——按核数与在役腿取严，拍板值补进路由表 (#1265)
+- fix(派工): 自己开的 draft 单永不送审——跳过没留痕，下游读成「reviews 没抓到」 (#1270)
+- [cc] docs(inbox): 按当前 HEAD 重核 #1105 五条观察的源码行号 (#1256)
+- [patrol] docs(obs): #930 同类扫描闸测绿，生产 0 处调用，今天的 fix PR 缺段也合进去了
+- [cc] fix(hub): 日报卡脚注从 note 换成 markdown——飞书 2.0 拒收 note（#1052） (#1114)
+- [cc] fix(审官): 账本恢复出的 manual 缺理由不再死锁——补一句如实说明，不留 null (#1283)
+- [patrol] docs(obs): 现役 GPT 健康键探的仍是本机桥，上游还是退役网关
+- [patrol] docs(obs): #1218 合了，root 用量副本仍把 grok 记成 openai
+- [patrol] docs(obs): 事件桥通道死了，父进程仍绿，㉓ 挂在没人跑的 server-check
+
+### 其它
+- release: v2.7.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.7.0 — 2026-09-14
+
+### 新功能
+- [cc] feat(routing): newapi 网关退役，选型只认统一执行目录（#1174） (#1213)
+- [cc] feat(pr-open): 帅位自开 PR 有了落账入口——账补上，打标判据一个字不放宽（#1214 缺口 A） (#1250)
+- [cc] feat(review): 审官标准第10条「同类扫描」——修一处必答全仓还有几处 (#930)
+- [cc] feat(events): 动作触发写口——待拍板/拍板结果/里程碑挂在具体动作上（#891 W5） (#897)
+
+### 修复与维护
+- [grok] fix(并发): composer ACP 从 mirasim 渠拆开，审官拉取预算 3→8 (#1279)
+- [patrol] docs(obs): #1274 并发上限未合入，生产主树工作区已经当生效
+- [patrol] docs(obs): #1174 网关探针仍打退役池，现役 native 腿永远 unscanned
+- [cc] fix(lease): 失败的清理不再重置宽限窗 (#1232)
+- [cc] fix(dispatch): 账本缺 repo/reviewer 的历史事件按来源收下 (#1118) (#1211)
+- [cc] fix(回填): claude-opus-5 是 claude-opus 同一条腿的另一种写法——别名表漏了它，#901 每轮把账本断流钉红（#1240） (#1248)
+- [patrol] docs(obs): #891 播报闸测绿但生产 0 处调用
+- [cc] docs(inbox): 两条观察处置——land 小时触发挂回 #1051，cacheRead 查证收口 (#1096)
+- [cc] fix(认输): 返工已落地 ⇒ 旧认输不成立——同时解冻认输标与复审重试账 (#1261)
+- [cc] fix(审官): 票上写死的审官死了，读票时要按顺位换人（#1233 漏的另一半） (#1259)
+- [patrol] docs(obs): 飞书triage合了码没重启；grok关掉了claude钩子
+- [cc] docs(pr-fast): 快路开 PR 的首选入口改成 dao pr-open——裸 pr create 开出来的单进不了自动链 (#1252)
+- [cc] fix(now): 盘面看不见审官——登记落点与扫描目录是两条各写各的真相源 (#1257)
+- [cc] docs(inbox): 09-07 那五条观察逐条处置——三条已修、一条已被取代、一条仍活 (#1105)
+- [cc] fix(闸): 三处闸与挂载面漂开——Bash 闸回来了，两处断言不再数邻居 (#1249)
+- [cc] fix(feishu): 报帅单代号进群前换人话——「唤醒用尽」是 wake-exhausted 被直译 (#919)
+- [cc] fix(返工): 无署名 issue 不再挡返工——取不到 merge-policy 就是 manual，不是停手（#1240） (#1247)
+
+### 其它
+- release: v2.6.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.6.0 — 2026-09-13
+
+### 新功能
+- [cc] feat(闸): 判据不得经过外壳的引号层——dao-check ㊲（#1240）
+
+### 修复与维护
+- [cc] fix(待拍板): 判据改按 label 数，标题不再重复一道前缀（#1240） (#1246)
+- [cc] fix(报帅): 幂等重放不再刷新账本时间——翻账本要看得出那是张旧单（#1240） (#1242)
+- [cc] fix(报帅): 已关的单遇上老对象不再复读——日志说的事要和线上一致（#1240） (#1241)
+- [cc] docs: 渠道并发两平面拍板档案 + README 退役条目更正 (#1156) (#1148)
+- [patrol] docs(obs): #1226 处置进了 master 代码没进；巡检失败告警挂在启动器上
+- [cc] fix(闸): 样本是判据的输入不是动手路径——live 扫描跳过它们
+- [cc] chore(收件箱): 两条 skills 巡检补处置记录（#1226）
+- [cc] refactor(注入面): 精简 AGENTS.md 为 Codex 入口，活规则搬 ask-gate (#1098)
+- [cc] chore(清理): 删 24 个零引用导出 + 修一处错误传递丢失 (#1239) (#1239)
+- [cc] fix(认输): 判据改了标要过期——摘标不再只认「工人推了新 head」 (#1238) (#1238)
+- [cc] fix(commander): 报帅 key 过网关 ASCII 闸——中文 marker 每轮被拒，报帅全军覆没 (#1133) (#1143)
+- [cc] fix(重试): 不可试的失败当场交人，不白等三个宽限期 (#1237) (#1237)
+- [cc] fix(审官): 顺位按执行目录可用性过滤，剔了谁必须说得出来 (#1233) (#1234)
+- [cc] fix(重试): 重试账加判据版本——修法落地后旧账自动作废 (#1236) (#1236)
+- [cc] fix(merge): 记账步骤失败不再挡住合并 (#1235) (#1235)
+- [grok] fix(署名): 在途判据把「提到」当成「在做」——#1051 被无关 PR 焊死 7 天 (#1224)
+- [patrol] docs(obs): ㉚只看claude现役agents被劫；⑳被故意drop-in钉红
+- [cc] fix(usage): 用量归属认模型家族，不认协议名 (#1218)
+- [patrol] docs(obs): mirasim-bridge drop-in 把 User=orca 改成 root
+- [cc] fix(test): 测试结构性够不着真执行体，堵 565 假会话泄漏 (#1159)
+- [patrol] docs(obs): 凭据闸扫指挥官模板不扫 /etc 活单元
+
+### 其它
+- release: v2.5.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.5.0 — 2026-09-12
 
 ### 新功能

@@ -197,6 +197,8 @@ gh api -X DELETE repos/OWNER/REPO/branches/master/protection           # 拆（�
 
 Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
 
+**手起的会话（人直接敲 `claude`，不经 Mirasim / cc-switch）另设 `autoCompactWindow=200000`**，落在那台机器 `~/.claude/settings.json`（2026-09-07 用户拍板）。依据是当晚一次 7 小时帅位长会话的实测：967 次调用、cacheRead 2.96 亿 / output 69 万 = **428×**，单次 cacheRead 中位 287,889，而静态注入面（CLAUDE.md + skills 清单 + memory 索引 + CLI 内置）只占 45,606——**84% 是会话历史累积**，砍约定文件最多打七折，压窗口才动得了数量级。上面 500k 那条管的是 cc-switch 下发链路，两条互不覆盖；Mirasim 起的会话走它自己的 `--settings` 临时文件（当时实测强写 800000），改本机 settings 对它无效。
+
 ## 6. pi 怎么配
 
 pi 是 DeepSeek 系工人的 CLI。装与验：
@@ -249,12 +251,13 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
 
 ## 7b. command-code 怎么配
 
-command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
+command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名是 `command-code`，它在 `bin` 里声明了 `cmd` / `cmdc` / `command-code` / `commandcode` 四个入口，但 **npm 只建出三个符号链接**：`cmd`、`cmdc`、`commandcode`（2026-09-13 实测本机 `/usr/bin/` 下只有这三个）。
 
-- 装机：`npm i -g command-code`；验证：`command-code --version`（本机 v1.26.0）。
-- **登录必须在真 TTY 里跑**（Ink raw mode）：`command-code login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`command-code status` 应回 `Authenticated as <用户名>`。
-- 模型列表（无需登录）：`command-code --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
-- 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
+- **`command-code` 这个不带缩写的名字本机不存在**，用它会 `command not found`——`docs/model-routing.toml` 的 `cli`/`launch` 在 2026-09-13 之前写的就是它，是坏值，已改 `cmdc`。**别用 `cmd`**（撞 Windows cmd.exe）。
+- 装机：`npm i -g command-code`；验证：`cmdc --version`（本机 v1.41.0）。
+- **登录必须在真 TTY 里跑**（Ink raw mode）：`cmdc login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`cmdc status` 应回 `Authenticated as <用户名>`。
+- 模型列表（无需登录）：`cmdc --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
+- 非交互契约：`cmdc -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
 - 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
 
 ## 7c. cursor 怎么配
@@ -512,7 +515,9 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 ### 搬过去之后本仓的红项变化（实测）
 
-orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+
+（这段是 2026-09 初的实测快照。当时那批「云上注定红」清单曾写在仓根 `AGENTS.md`；该文件现只留 Codex/跨执行体常驻指针，不再抄红项清单——判断真回归靠基线：先在**未改动**的 master 上跑一遍，多出来的红才是你引入的。）
 
 ## 10. 接上 memory
 

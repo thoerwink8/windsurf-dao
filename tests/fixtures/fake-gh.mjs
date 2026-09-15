@@ -162,6 +162,14 @@ if (args[0] === 'pr' && args[1] === 'edit') {
   process.stdout.write(JSON.stringify({ number: Number(args[2]) }));
   process.exit(0);
 }
+// #1214 缺口 A：`dao pr-open` 的 CLI 测试也要走假 gh（CI 无 GH_TOKEN）。
+// 回执照真 gh 的形态给 URL——取号那一步是**被测逻辑的一部分**，替身不许替它把号直接算好，
+// 否则「从回执里取号」这段永远没被验过（判例：测侧判据比真闸松）。
+if (args[0] === 'pr' && args[1] === 'create') {
+  const n = String(process.env.DAO_GH_FAKE_NEW_PR || '901');
+  process.stdout.write(`https://github.com/thoerwink8/windsurf-dao/pull/${n}\n`);
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'comment') {
   process.stdout.write(JSON.stringify({ id: 1, pr: Number(args[2]) }));
   process.exit(0);

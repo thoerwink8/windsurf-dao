@@ -86,15 +86,15 @@ $ grep -n After= /etc/systemd/system/dao-board-gc.service /etc/systemd/system/da
 
 ### 3. 三把闸的扫描面都把「机器上多出来的」定义成不存在
 
-退役闸 `scripts/dao-check.mjs:1231-1234`（`checkOrcaRetirement`）的 grep 范围是 `scripts` / `tests` / `host/machine/systemd`，显式不扫 `docs/`，也**不扫 `/etc`**：
+退役闸当前 HEAD `scripts/dao-check.mjs:1330` `checkOrcaRetirement`（原文 `:1231-1234` 已漂移）的 grep 范围是 `scripts` / `tests` / `host/machine/systemd`，显式不扫 `docs/`，也**不扫 `/etc`**：
 
 ```
 grep -rlnE 'spawn(Sync)?\(\s*['"]orca['"]|…|orca-serve\.service|…' scripts tests host/machine/systemd
 ```
 
-本轮当场用同一条模式扫那三个目录：0 行，grep 退出 1。按 1247–1252 行，这一格会绿（「orca 产品面已清」）。本轮没跑完整 `node scripts/dao-check.mjs`（没验证它打印出来是不是绿）。按代码路径和这次 grep，会绿。
+本轮当场用同一条模式扫那三个目录：0 行，grep 退出 1。按当前 HEAD `:1354`（原文 1247–1252 行已漂移），这一格会绿（「orca 产品面已清」）。本轮没跑完整 `node scripts/dao-check.mjs`（没验证它打印出来是不是绿）。按代码路径和这次 grep，会绿。
 
-⑳ `scripts/server-check.mjs:917-933`（`checkUnitDrift`）只 `readdir` 仓内 `host/machine/systemd/`，再拿同名去读 `/etc`。仓里没有的名字根本不进 `pairs`。本轮用它自己的纯函数喂「仓有 / 机无」+「内容漂了」：
+⑳ 当前 HEAD `scripts/server-check.mjs:1109` `checkUnitDrift`（原文 `:917-933` 已漂移）经 `collectUnitDriftPairs` `:972` 只 `readdir` 仓内 `host/machine/systemd/`，再拿同名去读 `/etc`。仓里没有的名字根本不进 `pairs`。本轮用它自己的纯函数喂「仓有 / 机无」+「内容漂了」：
 
 ```
 $ node --input-type=module -e '... classifyUnitDrift([{name:"dao-land.timer", repo:"A", live:null}, {name:"dao-board-gc.service", repo:"After=network-online.target", live:"After=… orca-serve.service"}])'
@@ -102,13 +102,13 @@ state: unknown
 detail: 1 个单元没比成：dao-land.timer(机器上没装)——没查成，不是「一致」
 ```
 
-`unreadable` 先返回（`scripts/server-check.mjs:900-904`），内容漂移那一截根本走不到。本轮仓内有、`/etc` 没有的是 `dao-land.{service,timer}` / `dao-gh-events.service` / `miraquota-contabo.{service,timer}` 共 5 个——⑳ 会 unknown，`dao-board-gc.service` 与 `dao-patrol.service` 的真漂移被盖掉。`orca-serve.service` 连 unknown 的名单都进不去。
+`unreadable` 当时先返回 unknown（原文 `:900-904`），内容漂移那一截根本走不到。本轮仓内有、`/etc` 没有的是 `dao-land.{service,timer}` / `dao-gh-events.service` / `miraquota-contabo.{service,timer}` 共 5 个——当时 ⑳ 会 unknown，`dao-board-gc.service` 与 `dao-patrol.service` 的真漂移被盖掉。`orca-serve.service` 连 unknown 的名单都进不去。当前 HEAD `classifyUnitDrift` `:986` 已把「机器上没装」判红，漂移不再被没装盖住。
 
-测试把「没装 → unknown」锁死：`tests/server-check.test.js:606-610`。全仓没有「机器上多一份仓里没有的单元 → 红」的样本。
+测试当时把「没装 → unknown」锁死（原文 `tests/server-check.test.js:606-610`）。当前 HEAD 同形样本是 `:671`「机器上压根没装 → red」。全仓没有「机器上多一份仓里没有的单元 → 红」的样本。
 
 ⑮ `scripts/server-check.mjs:417-420` 的影子清单只有 `agent-stall-watch.timer` 和 `dao-agent-stall.timer`。`orca-serve` 不在里面。本轮 `systemctl list-timers --all` 28 行，没有 `orca-serve`（它是 service 不是 timer），⑮ 按 454 行会走到「progress-watch 在册」的绿。本轮没跑完整 `server-check.mjs`（没验证打印）。
 
-指挥官盘点 `scripts/lib/commander-inventory.mjs:99-121` 的 `checkTimers` 只问 `commander-act.timer` / `commander-inventory.timer` 是否 enabled。
+指挥官盘点当前 HEAD `scripts/lib/commander-inventory.mjs:97` `checkTimers`（原文 `:99-121`）只问 `commander-act.timer` / `commander-inventory.timer` 是否 enabled。
 
 `NEW-MACHINE.md:335` 整节还是「9d. Linux 服务器起 Orca 无头运行时」；`:374` 仍写「单元在 `host/machine/systemd/orca-serve.service`，装法见文件头注释」——那个文件已经不在仓里。新机照装机文档走，会去装一份仓里没有的单元。
 
