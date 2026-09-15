@@ -7,6 +7,9 @@
 const { describe, it } = require('node:test');
 const { assert, fs, os, path, spawnSync, REPO, CLI, LIB, S_LOAD, DAO_LOAD, cliInProc, ROUTING_LOAD, waitForOutJson } = require('./helpers/dao-harness');
 
+// 凡是 spawn 出 dao.mjs 的用例都要带上它：消歧门会真去读 issue，不替就打外网。
+const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
+
 describe('dao 派工硬闸', () => {
   it('④⑤⑥ 派工硬闸（merge-policy 默认 auto；manual 必带理由；缺 model/reviewer 报错）', async (t) => {
     const S = await S_LOAD;
@@ -22,7 +25,14 @@ describe('dao 派工硬闸', () => {
       // 它已经没有服务对象（2026-09-06 实测 orca 树 0 棵、运行时不在），但代码还在，
       // 删之前必须继续被测，所以显式点名 orca。
       // mirasim 路径的对等硬闸另有一套（本文件末「mirasim 单轨派工硬闸」）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...args], { encoding: 'utf8', cwd: REPO });
+      // DAO_GH_FAKE 不是可选的：dispatch 的消歧门会真去读 issue，一路走到
+      // gh-as 换 installation token，也就是 api.github.com。少传它，这一条用例
+      // 就在打真实外网——本文件 12 次、reviewer-vendor-gate 2 次，正好是禁网闸
+      // 长期报的那 14 次（2026-09-15 逐文件测出来的）。断言不依赖真数据，
+      // 网络错误被吞掉，所以测试照样绿——绿的测试也能在偷偷出网。
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...args], {
+        encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH },
+      });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -238,7 +248,7 @@ describe('dao 派工硬闸', () => {
 
     const ws = spawnSync(process.execPath, [
       CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h',
-    ], { encoding: 'utf8', cwd: REPO });
+    ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pWs = payload(ws);
     await t.test('worker-start 缺 model/reviewer → 非零', () => {
       assert.ok(ws.status !== 0 && String(pWs.error || '').includes('--model'), 'worker-start 缺 model/reviewer → 非零  →  ' + JSON.stringify(pWs));
@@ -247,7 +257,7 @@ describe('dao 派工硬闸', () => {
     const wsManual = spawnSync(process.execPath, [
       CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h',
       '--merge-policy', 'manual', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
-    ], { encoding: 'utf8', cwd: REPO });
+    ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     const pWsManual = payload(wsManual);
     await t.test('worker-start manual 无理由 → 非零', () => {
       assert.ok(wsManual.status !== 0 && /--merge-reason/.test(pWsManual.error || ''), 'worker-start manual 无理由 → 非零  →  ' + JSON.stringify(pWsManual));
@@ -298,7 +308,6 @@ describe('dao 派工硬闸', () => {
     // CLI 级：假 gh（CI 无 GH_TOKEN，dao.mjs 消歧门读 DAO_GH_FAKE 用它替真 gh；
     // 判据固定：565 有「已消歧」、559 无、999 = gh 失败）。真 gh 的端到端验收在合并证据里手跑。
     // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
-    const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
     const cliHas = await cliInProc(['dispatch', '--executor', 'mirasim', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], cliEnv);
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
@@ -390,7 +399,7 @@ describe('dao 派工硬闸', () => {
     const S = await S_LOAD;
     function dispatchRaw(extra) {
       // 同上：本套测 orca 那条脊，切流量后要显式点名（默认已是 mirasim）。
-      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
+      return spawnSync(process.execPath, [CLI, 'dispatch', '--executor', 'mirasim', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -670,7 +679,7 @@ describe('dao 派工硬闸', () => {
 describe('mirasim 单轨派工硬闸', () => {
   const { assert, fs, spawnSync, REPO, CLI } = require('./helpers/dao-harness');
   const base = ['--executor', 'mirasim', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-luna', '--split', 'no', '--split-reason', '单测'];
-  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO });
+  const run = (extra) => spawnSync(process.execPath, [CLI, 'dispatch', '--dry-run', ...extra], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
   const payload = (r) => {
     try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
     catch { return { raw: r.stdout, err: r.stderr }; }
