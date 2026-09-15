@@ -15,6 +15,7 @@ export function normalizeExecutionSession(s) {
     model:s.model??s.requestedModel??null,
     provider:s.provider??s.actualVendor??null,
     profileId:s.profileId??null,
+    cleanupVerified:s.cleanupVerified??null,
     backend:String(s.sessionKey??s.key??'').startsWith('acp:')?'acp':'mirasim'};
 }
 export async function main() {

@@ -37,6 +37,7 @@ import {
   inspectAvailability, resolveBreakerPolicy, applyEvent, loadBreakerDoc, saveBreakerDoc,
 } from './provider-breaker.mjs';
 import { acquireWorktreeLock } from './dispatch-lock.mjs';
+import { classifySessionState } from './execution-states.mjs';
 
 /** 「不限」哨兵：渠道容量已验证工人无限做也没出问题（grokpool）。与「待填」区分——一个放开，一个没人填过。 */
 export const CAP_UNLIMITED = '不限';
@@ -376,8 +377,14 @@ export function modelOfTree(tree, jobs) {
  *   · 那条路是从**分支名**里正则抠号，再回派工账本查——分支名复用（#1256）就抠错；
  *   · 账本里的 job.dispatch 是「当初打算派什么」，会话名单是「此刻真的在跑什么」。
  *
- * 同一棵树有多条记录时取 `lastActivityAt` 最新的那条（同值取后出现的）：一棵树被反复
- * 复用，旧记录是历史，不是现况。没有 lastActivityAt 的记录只在没有更好的候选时才用。
+ * 同一棵树有多条记录时，**只认仍占树的那几条**，再在其中取 `lastActivityAt` 最新
+ * （同值取后出现的）。登记目录会留下已终态历史：终态条的时间戳经常比当前 running
+ * 还新（收尾写盘晚于启动），按时间取最大值会把树记到已经结束的渠道，当前渠道
+ * 的 cap 就被绕过去。没有可证明当前占树的记录 → `null`，调用方走账本兜底，
+ * **不许拿历史终态猜「此刻在跑什么」**。
+ *
+ * 「仍占树」读正典 `classifySessionState`：live / reserved 才算；finished 与
+ * 读不出状态（null）都不算。`cleanupVerified === true` 也不算——收尾已核过，树已释放。
  *
  * @param tree      树路径
  * @param sessions  会话名单（execution-sessions.mjs 的 sessions 数组，或形状相同的对象数组）
@@ -394,6 +401,7 @@ export function modelOfTreeFromSessions(tree, sessions) {
     if (!cwd || cwd !== want) continue;
     const model = s.model == null ? '' : String(s.model).trim();
     if (!model) continue;
+    if (!sessionOccupiesTree(s)) continue;
     const at = Number(s.lastActivityAt ?? s.updatedAt ?? s.seatAt);
     const ts = Number.isFinite(at) ? at : -Infinity;
     if (ts >= bestAt) { bestAt = ts; best = model; }
@@ -401,6 +409,16 @@ export function modelOfTreeFromSessions(tree, sessions) {
   // 模型 id 上可能带执行修饰（实测见过 `composer-2.5[fast=true]`）。渠道按 id 本体查，
   // 修饰不参与——不剥掉就查不到腿，整棵树白白掉进 unattributed。
   return best ? best.replace(/\[[^\]]*\]\s*$/, '') : null;
+}
+
+/**
+ * 这条登记是否还能当「此刻占着这棵树」的证据。
+ * 读不出状态 ≠ 在跑；已核过收尾 ≠ 还占着。
+ */
+function sessionOccupiesTree(session) {
+  if (session.cleanupVerified === true) return false;
+  const cls = classifySessionState(session);
+  return cls === 'live' || cls === 'reserved';
 }
 
 /**
@@ -477,7 +495,9 @@ export function applyChannelFailure(doc, { target, now, roundMs = ROUND_MS, why,
 
 /**
  * 门内用的可持久化归因源：读 `~/.dao/execution/sessions/*.json`。
- * 登记条带 workdir + model，形状喂给 `modelOfTreeFromSessions`（cwd / model / lastActivityAt）。
+ * 登记条带 workdir + model + 状态，形状喂给 `modelOfTreeFromSessions`
+ * （cwd / model / lastActivityAt / state / cleanupVerified）。状态必须带上：丢掉的话
+ * 下游只能按时间戳猜，历史终态会盖住当前在途。
  * 目录不在、读不动、单条坏 JSON → 跳过（与 loadJobs 同：归不到渠道进 unattributed，不把整闸 fail-close）。
  */
 export function loadSessionAttribution({ home = os.homedir(), dir } = {}) {
@@ -499,6 +519,11 @@ export function loadSessionAttribution({ home = os.homedir(), dir } = {}) {
       cwd,
       model,
       lastActivityAt: rec.updatedAt ?? rec.lastActivityAt ?? rec.startedAt ?? rec.createdAt ?? null,
+      // 原样带给 classifySessionState / sessionOccupiesTree，不在这里编默认状态。
+      state: rec.state ?? null,
+      phase: rec.phase ?? null,
+      observedState: rec.observedState ?? null,
+      cleanupVerified: rec.cleanupVerified ?? null,
     });
   }
   return out;

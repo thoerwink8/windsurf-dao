@@ -152,7 +152,7 @@ const LEGS = [
   { id: 'grok@x', 状态: '在役', 模型: 'grok-4.6', 供应商: 'gw', 落地: GROK, 并发上限: '不限' },
   { id: 'glm@x', 状态: '在役', 模型: 'glm-5.2', 供应商: 'gw', 落地: GLM, 并发上限: 6 },
 ];
-const sess = (cwd, model, at, extra = {}) => ({ cwd, model, lastActivityAt: at, ...extra });
+const sess = (cwd, model, at, extra = {}) => ({ cwd, model, lastActivityAt: at, state: 'running', ...extra });
 
 describe('modelOfTreeFromSessions —— 树→模型走会话名单（精确 join，不猜分支名）', () => {
   it('cwd 对上就取该条的 model', async () => {
@@ -166,10 +166,40 @@ describe('modelOfTreeFromSessions —— 树→模型走会话名单（精确 jo
     assert.equal(modelOfTreeFromSessions('/w/a', [sess('/w/a//', 'grok-4.6', 1)]), 'grok-4.6');
   });
 
-  it('同一棵树多条记录 → 取 lastActivityAt 最新的（树会被反复复用，旧记录是历史）', async () => {
+  it('同一棵树多条仍占树的记录 → 取 lastActivityAt 最新的', async () => {
     const { modelOfTreeFromSessions } = await CC;
     const list = [sess('/w/a', 'grok-4.6', 100), sess('/w/a', 'glm-5.2', 900), sess('/w/a', 'gpt-5.6-sol', 500)];
     assert.equal(modelOfTreeFromSessions('/w/a', list), 'glm-5.2');
+  });
+
+  it('终态记录时间更新也不能盖住当前 running（审官复现）', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    const list = [
+      sess('/w/a', 'grok-4.6', 200, { state: 'done' }),
+      sess('/w/a', 'glm-5.2', 100, { state: 'running' }),
+    ];
+    assert.equal(modelOfTreeFromSessions('/w/a', list), 'glm-5.2');
+  });
+
+  it('只有终态历史记录 → null，不猜此刻在跑什么', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    const list = [
+      sess('/w/a', 'grok-4.6', 200, { state: 'done' }),
+      sess('/w/a', 'glm-5.2', 100, { state: 'stopped', cleanupVerified: true }),
+    ];
+    assert.equal(modelOfTreeFromSessions('/w/a', list), null);
+  });
+
+  it('读不出状态 / 收尾已核过 → 不算占树', async () => {
+    const { modelOfTreeFromSessions } = await CC;
+    assert.equal(modelOfTreeFromSessions('/w/a', [{ cwd: '/w/a', model: 'grok-4.6', lastActivityAt: 9 }]), null,
+      '没有 state 不是可证明的当前记录');
+    assert.equal(modelOfTreeFromSessions('/w/a', [
+      sess('/w/a', 'grok-4.6', 9, { state: 'running', cleanupVerified: true }),
+    ]), null, 'cleanupVerified 已核过 = 树已释放');
+    assert.equal(modelOfTreeFromSessions('/w/a', [
+      sess('/w/a', 'glm-5.2', 1, { state: 'stopping' }),
+    ]), 'glm-5.2', '预留态仍可能占树');
   });
 
   it('模型 id 上的执行修饰要剥掉——不剥就查不到腿（实测见过 composer-2.5[fast=true]）', async () => {
@@ -298,7 +328,7 @@ describe('门内路径：会话名单接入 checkChannelCapacity / admitAndReser
     const { loadSessionAttribution, checkChannelCapacity } = await CC;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1266-reg-'));
     fs.writeFileSync(path.join(dir, 'grok%3Aabc.json'), JSON.stringify({
-      workdir: TREE, model: 'grok-4.6', updatedAt: 9, state: 'running',
+      workdir: TREE, model: 'grok-4.6', updatedAt: 9, state: 'running', cleanupVerified: false,
     }));
     fs.writeFileSync(path.join(dir, 'junk.json'), 'not json');
     fs.writeFileSync(path.join(dir, 'nomodel.json'), JSON.stringify({ workdir: '/w/other' }));
@@ -306,6 +336,8 @@ describe('门内路径：会话名单接入 checkChannelCapacity / admitAndReser
     assert.equal(sessions.length, 1);
     assert.equal(sessions[0].cwd, TREE);
     assert.equal(sessions[0].model, 'grok-4.6');
+    assert.equal(sessions[0].state, 'running');
+    assert.equal(sessions[0].cleanupVerified, false);
     const io = { ...ioBase, loadSessions: () => sessions };
     const v = checkChannelCapacity({ model: 'grok-4.6', io });
     assert.equal(v.verdict, 'full');
@@ -316,6 +348,75 @@ describe('门内路径：会话名单接入 checkChannelCapacity / admitAndReser
     const { loadSessionAttribution } = await CC;
     const sessions = loadSessionAttribution({ dir: path.join(os.tmpdir(), 'dao-1266-no-such-' + Date.now()) });
     assert.deepEqual(sessions, []);
+  });
+
+  it('登记文件同一 workdir：终态新记录不覆盖旧 running', async () => {
+    const { loadSessionAttribution, modelOfTreeFromSessions } = await CC;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1266-mix-'));
+    fs.writeFileSync(path.join(dir, 'done.json'), JSON.stringify({
+      workdir: '/w/a', model: 'grok-4.6', updatedAt: 200, state: 'done', cleanupVerified: true,
+    }));
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({
+      workdir: '/w/a', model: 'glm-5.2', updatedAt: 100, state: 'running', cleanupVerified: false,
+    }));
+    const sessions = loadSessionAttribution({ dir });
+    assert.equal(sessions.length, 2);
+    const byModel = Object.fromEntries(sessions.map((s) => [s.model, s]));
+    assert.equal(byModel['grok-4.6'].state, 'done');
+    assert.equal(byModel['grok-4.6'].cleanupVerified, true);
+    assert.equal(byModel['glm-5.2'].state, 'running');
+    assert.equal(byModel['glm-5.2'].cleanupVerified, false);
+    assert.equal(modelOfTreeFromSessions('/w/a', sessions), 'glm-5.2');
+  });
+
+  it('审官复现：终态时间更新盖不住当前 running，glm cap=1 必须判满', async () => {
+    const { readChannelFacts, checkChannelCapacity } = await CC;
+    const MIX_LEGS = [
+      { id: 'grok@x', 状态: '在役', 模型: 'grok-4.6', 供应商: 'gw', 落地: GROK, 并发上限: 1 },
+      { id: 'glm@x', 状态: '在役', 模型: 'glm-5.2', 供应商: 'gw', 落地: GLM, 并发上限: 1 },
+    ];
+    const tree = '/w/a';
+    const io = {
+      loadRouting: () => ({ 腿: MIX_LEGS }),
+      loadModels: () => [],
+      checkInFlight: () => ({ ok: true, trees: [tree], count: 1 }),
+      loadJobs: () => [],
+      loadBreaker: () => null,
+      loadSessions: () => [
+        sess(tree, 'grok-4.6', 200, { state: 'done' }),
+        sess(tree, 'glm-5.2', 100, { state: 'running' }),
+      ],
+    };
+    const facts = readChannelFacts({ io });
+    assert.deepEqual(facts.procCounts, { 'gw:windsurf': 1 });
+    assert.deepEqual(facts.unattributed, []);
+    const glm = checkChannelCapacity({ model: 'glm-5.2', io });
+    assert.equal(glm.verdict, 'full');
+    assert.equal(glm.reason, 'at-cap');
+    assert.equal(glm.channel, 'gw:windsurf');
+    assert.equal(glm.inFlight, 1);
+    assert.equal(glm.cap, 1);
+    const grok = checkChannelCapacity({ model: 'grok-4.6', io });
+    assert.equal(grok.verdict, 'free', '已结束的 grok 不许把树记到自己头上');
+    assert.equal(grok.inFlight, 0);
+  });
+
+  it('只有终态历史记录 → 不计入在途渠道，回落账本仍归不掉则 unattributed', async () => {
+    const { loadSessionAttribution, readChannelFacts, checkChannelCapacity } = await CC;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1266-done-'));
+    fs.writeFileSync(path.join(dir, 'old.json'), JSON.stringify({
+      workdir: TREE, model: 'grok-4.6', updatedAt: 900, state: 'done', cleanupVerified: true,
+    }));
+    const sessions = loadSessionAttribution({ dir });
+    assert.equal(sessions[0].state, 'done');
+    assert.equal(sessions[0].cleanupVerified, true);
+    const io = { ...ioBase, loadSessions: () => sessions };
+    const facts = readChannelFacts({ io });
+    assert.deepEqual(facts.procCounts, {});
+    assert.deepEqual(facts.unattributed, [TREE]);
+    const v = checkChannelCapacity({ model: 'grok-4.6', io });
+    assert.equal(v.verdict, 'free');
+    assert.equal(v.inFlight, 0);
   });
 });
 
