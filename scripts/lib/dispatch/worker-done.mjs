@@ -531,6 +531,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
   // 快路 PR（pr-fast）没有署名单：完工 comment 发在 PR 上，不挡交卷。
   // 有署名单才发 issue comment。没处可发的是「连 PR 号都没有」，不是「没有 issue」。
+  // 拒掉 = 快路永远交不了卷（#1270 返工实咬）。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';

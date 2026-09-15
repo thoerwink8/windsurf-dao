@@ -237,9 +237,12 @@ export function buildDailyCard({
       content: ensurePlain(`**本期发生了什么**\n${happened}`, 'feishu-daily-card/happened'),
       margin: '0px 0px 12px 0px',
     },
+    // 飞书 Card 2.0 拒收 1.0 的 note（实咬 200861：unsupported tag note，日报一张都发不出去）。
     {
-      tag: 'note',
-      elements: [{ tag: 'plain_text', content: ensurePlain(note, 'feishu-daily-card/note') }],
+      tag: 'markdown',
+      content: ensurePlain(note, 'feishu-daily-card/note'),
+      text_size: 'notation',
+      margin: '0px 0px 12px 0px',
     },
     {
       tag: 'column_set',
