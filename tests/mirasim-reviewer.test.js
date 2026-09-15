@@ -317,6 +317,23 @@ describe('mirasimWorkerDone 编排', () => {
     assert.equal(res.action, 'reworked-new');
     assert.equal(rt.calls.start.length, 1);
   });
+
+  it('返工轮 + 会话还在跑 + 无等答问题 → 不另起（树已同步，lease 被占）', async () => {
+    const { mirasimWorkerDone } = await import(RM);
+    const rt = fakeRuntime();
+    rt.readSession = async () => ({ via: 'snapshot', phase: 'streaming', snapshot: { interactions: [] } });
+    const reg = memRegistry();
+    reg.write('883', { pr: '883', sessionKey: 'codex:aaaa1111-2222-3333-4444-555555555555', treePath: '/mira/tree', expectedOid: HEAD });
+    const res = await mirasimWorkerDone({
+      runtime: rt, gh: fakeGh({ reviews: [{ state: 'CHANGES_REQUESTED' }] }), readTreeHead: async () => rt._head, registry: reg,
+      pr: '883', repo: '/repo', prompt: '审', reworkPrompt: '复审',
+      reviewerModel: 'gpt-5.6-luna', workerModel: 'claude-opus',
+      models: MODELS, mirasimPolicy: MIRASIM_POLICY, round: 'rework',
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.action, 'reworked-live');
+    assert.equal(rt.calls.start.length, 0, '在役审官占着树，另起会被 lease-held');
+  });
 });
 
 // ── #886 返工审官 5 条的判别测试 ───────────────────────────────────────────────

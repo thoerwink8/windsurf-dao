@@ -195,10 +195,119 @@ export function listReviewPending(dir) {
 }
 
 /**
- * 每轮拉取预算，不是上游容量。上游容量走渠道闸 + 负载准入。
+ * 上限兜底值。**只在没有任何有限渠道约束时用**（见 resolveReviewerCap）。
+ *
+ * 原先这里写死 3，注释说「2026-09-07 实测 gptpool 单腿同时活得下来约 3 个」。那次实测的前提
+ * 今天全没了：gptpool / pqapi / windsurf 的执行档都已 `enabled:false`，在役审官只剩
+ * `xai-native`（路由表「不限」）和 `mirasim-relay`（路由表 5），一条都不过网关。
+ * 拿网关时代的数字限 ACP 直连时代的并发，是 memory `hand-typed-constant-will-be-wrong` 的原样复发。
+ *
+ * 有限渠道上限始终是最终上界：合同是 1 就不能为了保底再开第 2 条去撞 429。
+ */
+export const REVIEWER_CAP_FLOOR = 2;
+
+/**
+ * 审官并发上限 = min(机器核数, **本轮实际会用的审官**所落渠道里最严的一条上游合同)。
+ *
+ * 两层各管各的：机器那层管「本机同时开得起几个会话」，渠道那层管「上游账号合同容许几条」。
+ * 把两层压成一个手打常量，就是任何一层变了都没人知道要改哪个数。
+ *
+ * **渠道那层只数本轮票真正会用的审官**（票上那位，或同厂有效 fallback），不许：
+ *   · 拿整张容量表取严——不在役的腿会把在役的活拖死（2026-09-14 第一版，算出 2）；
+ *   · 拿全部可用候选取严——队列用不到的那条 cap=1 腿会把整队压死。
+ *
+ * **有限渠道上限始终是最终上界**。保底只在没有任何有限渠道约束时生效——
+ * `channelOf() => 1` 必须回 1，不许被保底抬成 2（两层取严的本意；抬上去会重演 429）。
+ *
+ * **`DAO_REVIEWER_CAP` 只收紧、不放宽**，而且必须从这里走。它原先在 `dao.mjs` 里是一条
+ * 平级分支（`env ? env : resolveReviewerCap(...)`），整段渠道取严被绕过去——
+ * 队列实际落在 cap=1 的渠道时 `DAO_REVIEWER_CAP=8` 仍会拉 8 张，造出一批必被渠道闸拒绝的
+ * 启动尝试，跟「有限渠道上限始终是最终上界」正面矛盾（#1265 审官判红第 1 条）。
+ * 这个逃生口的用途是人手临时**压**并发，不是抬过上游合同——所以它跟前两层一起取严。
+ * 接在参数上而不是留在调用方：留在调用方，下一个调用点还会再写一遍那条平级分支。
+ *
+ * @param cores       本机核数（admission.cores）；读不到传 null
+ * @param reviewerIds 本轮实际会用的审官 id（reviewerIdsForCap 的产物）；读不到传 null
+ * @param channelOf   审官 id → 有限渠道上限（认不出 / 不限回 null 或 Infinity）
+ * @param envCap      人手逃生口（DAO_REVIEWER_CAP 的原文）；非正整数 = 没给，不参与
+ * @returns 正整数上限
+ */
+export function resolveReviewerCap({ cores = null, reviewerIds = null, channelOf = null, envCap = null } = {}) {
+  // 一条规则管到底：环境变量到手就是字符串，parseInt 是它一直以来的读法（`2.5` 读成 2，只会更严）。
+  // 数字与字符串走同一条，免得同一个值从两个入口进来得出两个上限。
+  const env = Number.parseInt(String(envCap ?? ''), 10);
+  const byEnv = Number.isInteger(env) && env > 0 ? env : null;
+  const resolved = resolveReviewerCapWithoutEnv({ cores, reviewerIds, channelOf });
+  // 只收紧：取严之后仍可能被逃生口压得更低，但永远不会被它抬高。
+  return byEnv == null ? resolved : Math.min(byEnv, resolved);
+}
+
+function resolveReviewerCapWithoutEnv({ cores = null, reviewerIds = null, channelOf = null } = {}) {
+  const byMachine = Number.isInteger(cores) && cores > 0 ? cores : null;
+  let byChannel = null;
+  const ids = Array.isArray(reviewerIds) ? reviewerIds : null;
+  if (ids && ids.length > 0 && typeof channelOf === 'function') {
+    for (const id of ids) {
+      let cap = null;
+      try { cap = channelOf(id); } catch { cap = null; }
+      // null / Infinity = 「不限」或认不出渠道，不拿它去收紧别人；
+      // 只有显式有限值才参与取严（「不限」是用户对这条渠道的已验证结论）。
+      if (!Number.isFinite(cap) || cap <= 0) continue;
+      byChannel = byChannel === null ? cap : Math.min(byChannel, cap);
+    }
+  }
+  const channelBound = Number.isInteger(byChannel) && byChannel > 0 ? byChannel : null;
+  if (channelBound != null) {
+    if (Number.isInteger(byMachine) && byMachine > 0) return Math.min(byMachine, channelBound);
+    return channelBound;
+  }
+  if (Number.isInteger(byMachine) && byMachine > 0) return Math.max(REVIEWER_CAP_FLOOR, byMachine);
+  return REVIEWER_CAP_FLOOR;
+}
+
+/**
+ * 票上那位若已不在可用顺位，换成同厂第一个能起的。没依据就不换。
+ * 与 planReviewPendingDrain 同一把尺——cap 与 drain 换人必须看同一位审官。
+ */
+export function effectiveReviewerOf(ticket, usableReviewers) {
+  const named = String(ticket?.reviewer ?? '').trim();
+  if (!named) return { reviewer: null, switched: false };
+  const order = Array.isArray(usableReviewers) ? usableReviewers.map(String) : null;
+  if (!order || order.length === 0 || order.includes(named)) {
+    return { reviewer: named, switched: false };
+  }
+  const fam = vendorFamilyOf(named);
+  const next = order.find((id) => fam && vendorFamilyOf(id) === fam) || null;
+  if (!next) return { reviewer: named, switched: false };
+  return { reviewer: next, switched: true, switchedFrom: named };
+}
+
+/**
+ * 本轮拉取该按哪些审官算渠道约束。
+ *
+ * 只数票上的 reviewer（或同厂有效 fallback），不数「可用但本轮用不到」的候选。
+ * 一个 cap=1 的未使用候选若参与取严，会把 cap=5 的整队拖死。
+ */
+export function reviewerIdsForCap(tickets, usableReviewers) {
+  const ids = [];
+  const seen = new Set();
+  if (!Array.isArray(tickets)) return ids;
+  for (const t of tickets) {
+    const picked = effectiveReviewerOf(t, usableReviewers);
+    const id = picked.reviewer;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 没传 cap 时的每轮拉取预算，不是上游容量。上游容量走渠道闸 + 负载准入。
  * 旧值 3 来自已退役的 gptpool（2026-09-07：第 4 个 at capacity）。
  * 2026-09-14 实测 grok-4.6 / composer-2.5 短并发 6/6、零容量拒绝；
  * 8 = 实测 6 + 2 余量。DAO_REVIEWER_CAP 仍可覆盖。
+ * 生产路径走 resolveReviewerCap，不要拿这个常量当默认上限。
  */
 export const DEFAULT_REVIEWER_CAP = 8;
 
@@ -428,22 +537,17 @@ export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
   }
   const pr = String(ticket.pr ?? '').trim();
   const worktree = String(ticket.workerWorktree ?? '').trim();
-  let reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
+  const picked = effectiveReviewerOf(ticket, usableReviewers);
+  let reviewer = picked.reviewer;
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
   let switchedFrom = null;
   let switchWhy = null;
-  const order = Array.isArray(usableReviewers) ? usableReviewers.map(String) : null;
-  if (order && order.length > 0 && !order.includes(reviewer)) {
+  if (picked.switched) {
     // 只在**同厂**里换：跨厂换人是 assertReviewerSeat 的例外（要有满载/看门狗死因凭证），
     // 读票侧拿不出那个凭证，换出来的值必被拒——换了个必拒的值等于没修。
-    const fam = vendorFamilyOf(reviewer);
-    const next = order.find((id) => fam && vendorFamilyOf(id) === fam) || null;
-    if (next) {
-      switchedFrom = reviewer;
-      switchWhy = `票上写的审官 ${reviewer} 现在起不来（不在可用顺位里），按顺位改用同厂备选 ${next}`;
-      reviewer = next;
-    }
+    switchedFrom = picked.switchedFrom;
+    switchWhy = `票上写的审官 ${picked.switchedFrom} 现在起不来（不在可用顺位里），按顺位改用同厂备选 ${reviewer}`;
   }
   // 审官统一走 mirasim（2026-09-06 切流量第二步）。
   //

@@ -112,6 +112,20 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(stops.filter((s) => s.sessionKey === 'pi:live').length, 0);
   });
 
+  it('done 会话也要 stop-session——审官交卷后进程不许占渠道', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [
+        { key: 'codex:done-reviewer', state: 'done', cwd: '/x/dao-review-pr-1279' },
+        { key: 'codex:live', state: 'streaming', cwd: '/x/dao-review-pr-1280' },
+        { key: 'codex:already', state: 'stopped', cwd: '/x/dao-review-pr-1278' },
+      ] },
+    }));
+    const stops = byKind(r, 'stop-session');
+    assert.deepEqual(stops.map((s) => s.sessionKey), ['codex:done-reviewer']);
+    assert.match(stops[0].why, /done/);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
@@ -724,8 +738,10 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
   // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX=3）。
   // 缘由：机器一满 slots=0，连「把手上这些 PR 收掉」也被拦住——25 张 PR 一条判定都没有、
   // 满载空转等收尾（实咬）。新活仍旧一个不派，那半边的本意不变（见下一条用例）。
-  it('⑤单轮返工领收尾名额：上限 FINISH_SLOTS_MAX，超出的排队下轮，不丢也不 escalate', async () => {
-    const { decide, FINISH_SLOTS_MAX } = await CORE;
+  it('⑤单轮返工领收尾名额：上限按核数算，超出的排队下轮，不丢也不 escalate', async () => {
+    const { decide, finishSlotCap } = await CORE;
+    assert.equal(finishSlotCap(3), 3, '本例按 3 核算，上限就该是 3');
+    const FINISH_SLOTS_MAX = finishSlotCap(3);
     const issues = [];
     const prs = [];
     const byPr = {};
@@ -739,7 +755,7 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
       prReviews: { scanned: true, byPr },
       commanderPolicy: { requireModelInRouting: false },
       // 机器满载：新活一个不派（slots=0），但返工属于收尾，照样领自己的名额
-      admission: { ok: true, slots: 0 },
+      admission: { ok: true, slots: 0, cores: 3 },
     }));
     const w = byKind(r, 'rework');
     assert.equal(w.length, FINISH_SLOTS_MAX, `机器满载时返工仍要能推进，最多 ${FINISH_SLOTS_MAX} 个，实际 ${w.length}`);
@@ -748,6 +764,63 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     // 回流 = 每个真派出去的返工一条 + 一条「机器满、不收新活」的群通知（那是另一回事，分开数）。
     const dispatched = byKind(r, 'notify-hub').filter((a) => a.moment === 'dispatched');
     assert.equal(dispatched.length, FINISH_SLOTS_MAX, '回流只跟着真派出去的那几个');
+    // 名额被领光必须**说出来**。原先这里完全静默：「想派 5 个只派了 3 个」与
+    // 「本来就只有 3 个要派」在盘面上一模一样，于是这个手打的 3 卡了 13 小时没人发现。
+    const 报满 = byKind(r, 'notify-hub').filter((a) => /收尾名额用尽/.test(a.subject || ''));
+    assert.equal(报满.length, 1, '收尾名额用尽要报一条，且只报一条');
+    assert.equal(/还有 2 个/.test(报满[0].subject), true, '要说清楚少派了几个');
+  });
+
+  it('⑤d prReviews 没查成时，收尾名额用尽仍必须报满', async () => {
+    const { decide } = await CORE;
+    const issues = [];
+    const prs = [{
+      number: 101, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h101',
+      title: 'PR 101',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    }];
+    for (let i = 0; i < 5; i += 1) {
+      issues.push(labeledIssue(710 + i));
+      prs.push({
+        number: 760 + i, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `head${i}`,
+        body: `署名 issue #${710 + i}`, title: `PR ${760 + i}`,
+        labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+      });
+    }
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+      reviewPending: { scanned: true, items: [{ pr: 101 }] },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 0, cores: 2 },
+    }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '票路不依赖 prReviews，仍要叫审官');
+    assert.equal(byKind(r, 'rework').length, 0, '解冲突挂了 prReviews，总闸滤掉');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned'), 'prReviews 没查成要 fail-visible');
+    const 报满 = byKind(r, 'notify-hub').filter((a) => /收尾名额用尽/.test(a.subject || ''));
+    assert.equal(报满.length, 1, 'prReviews 没查成也不能把「名额用尽」滤掉');
+  });
+
+  // 换大机器时并发自动跟着扩——这条是「删掉手打常量」的正控：同一份态势，只改核数，
+  // 收尾动作数就跟着变。手打常量做不到这件事，那正是 2026-09-08 拍板「机器闸保持比例式」的由来。
+  it('⑤c 收尾名额随核数走：6 核那一轮 5 张全派，3 核那一轮只派 3 张', async () => {
+    const { decide } = await CORE;
+    const issues = [];
+    const prs = [];
+    const byPr = {};
+    for (let i = 0; i < 5; i += 1) {
+      issues.push(labeledIssue(710 + i));
+      prs.push(redPr(760 + i, `head${i}`, 710 + i));
+      byPr[760 + i] = { reviews: [redReview(`第 ${i} 张的红项全文`, `head${i}`)] };
+    }
+    const run = (cores) => byKind(decide(baseSituation({
+      github: { scanned: true, issues, prs },
+      prReviews: { scanned: true, byPr },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 0, cores },
+    })), 'rework').length;
+    assert.equal(run(3), 3, '3 核 ⇒ 3 张');
+    assert.equal(run(6), 5, '6 核 ⇒ 上限 6，队列只有 5 张就全派');
   });
 
   it('⑤b 机器满载时新活仍然一个不派（收尾名额不许漏成新活名额）', async () => {
@@ -1259,7 +1332,9 @@ describe('返工命令：原树短会话，不新派工', () => {
     assert.ok(i > -1, '找不到 dispatchRework——本闸判据失效，不是通过');
     const body = src.slice(i, i + 4500);
     assert.match(body, /findDaoTree/, '必须先找到原工人树');
-    assert.match(body, /dao\.mjs', 'start'/, '返工应在原树起短会话');
+    assert.match(body, /mirasimStartCmd/, '返工应在原树起短会话');
+    assert.match(src, /function mirasimStartCmd[\s\S]*?dao\.mjs', 'start'/);
+    assert.match(src, /function mirasimStartCmd[\s\S]*?'--pr'/, '起会话必须带 PR 号，判活才认得出快路工人');
     assert.match(src, /function rememberRework/);
     assert.doesNotMatch(body, /'--allow-dup'/, '不再走 dispatch 新派工');
   });
@@ -1347,6 +1422,9 @@ describe('返工建树路（#1142）：无 dao 树时从 PR 分支建树，可�
     assert.ok(start, '必须真的发了 start');
     assert.equal(start[start.indexOf('--worktree') + 1], '/tmp/fake-tree', 'start 必须用建树回执里的 path');
     assert.equal(start[start.indexOf('--model') + 1], 'grok-4.6');
+    assert.equal(start[start.indexOf('--pr') + 1], '987321', '返工会话必须带 PR 号写入元数据');
+    assert.equal(start[start.indexOf('--issue') + 1], '987654');
+    assert.equal(start[start.indexOf('--title') + 1], 'PR-#987321');
     const rec = state.reworkDispatched[`987321:abcdef12`] || Object.values(state.reworkDispatched)[0];
     assert.equal(rec.ok, true, '成功要记账');
   });
@@ -2046,6 +2124,200 @@ describe('drain 账本按 PR+head 记（新 head 要给新机会）', () => {
     assert.equal(byKind(r, 'retry-drain').length, 0, '无 head 的旧键对不上 pr:909@samehead');
     assert.equal(byKind(r, 'attach-reviewer').length, 1, '当没账，重新 attach 并应写新键');
   });
+
+  // #1208 事故现场的原形，回归样本：票头停在旧 commit、账钉在旧键上试满、
+  // **且 PR 正挂着「卡死/自动化认输」**——最后这一条把 stale-head 判定整段截断了。
+  // 修法若只把 liveHead 接进 validateRetryDrain，这个样本照样输出 noop：
+  // `if (livePr && prHasStuckLabel(livePr)) continue` 排在它前面，
+  // 于是过期票永远收不掉、认输标永远摘不掉、按当前 head 该叫的复审一次也叫不出来。
+  describe('过期票 + 认输标同时在场（#1208 原形）', () => {
+    // 署名 issue 必须在场，且带 reviewer/：叫审官要从**署名 issue**取厂商（reviewerLabelFor）。
+    // issue 缺了走的是「叫不动审官」那条报帅路——那是另一格，不是这份样本要测的。
+    // ticketHead 单独给，不从现场 head 推：这两者**必须能分开**才是这张单要测的东西。
+    // 第一版把票头写成 `oid || 'oldhead999'`，于是「过期票」那条用例的票头跟着现场 head 一起变成
+    // 新值——票当场不过期了，stale? 一路 false，测的东西被夹具自己抹平（实测踩到）。
+    const stuckSit = (oid, ledger, { ticketHead = 'oldhead999', ...prOver } = {}) => baseSituation({
+      at: '2026-09-12T12:00:00.000Z',
+      github: {
+        scanned: true,
+        issues: [labeledIssue(909)],
+        prs: [{
+          number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: oid,
+          body: '署名 issue #909',
+          // 返工选型只读 PR 自己的 label（#1116），所以 model/ 必须打在 PR 上，不是只打 issue。
+          labels: [{ name: '卡死/自动化认输' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }], ...prOver,
+        }],
+      },
+      reviewPending: { scanned: true, items: [ticket(909, ticketHead)] },
+      drainLedger: ledger,
+      // 当前 head 上一条判定都没有 ⇒ 正是该叫复审的形状。
+      // 六条红全打在旧 commit 上（#1208 现场就是 6 条），带 commit_id 才算「判别态」——
+      // 判别态缺 commit_id 会被判成「没查成」，那是另一格，不是这份样本要测的东西。
+      prReviews: { scanned: true, byPr: { 909: { reviews: [
+        redReview('红项 1', 'c1'), redReview('红项 2', 'c2'), redReview('红项 3', 'c3'),
+        redReview('红项 4', 'c4'), redReview('红项 5', 'c5'), redReview('红项 6', 'c6'),
+      ] } } },
+    });
+
+    it('票头过期 + 认输标 + 旧键试满 → 仍须叫复审，不许 noop', async () => {
+      const { decide } = await CORE;
+      const r = decide(stuckSit('newhead111', { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 4 } }));
+      const rr = byKind(r, 'rereview');
+      assert.equal(rr.length, 1, '过期票必须能被收殓，落到按当前 head 重写票');
+      assert.equal(rr[0].head, 'newhead111', '重写票要用现场 head，不是票头快照');
+      assert.equal(byKind(r, 'retry-drain').length, 0, '不许拿过期票去重试');
+      assert.equal(byKind(r, 'mark-exhausted').length, 0, '过期票不是「试满了」，不许认输');
+    });
+
+    it('认输标 + 票头**没过期** → 仍省额度，不重试 drain', async () => {
+      const { decide } = await CORE;
+      const r = decide(stuckSit('samehead', { [RK.drain(909, 'samehead')]: { at: OLD, pr: '909', tries: 1 } },
+        { ticketHead: 'samehead' }));
+      assert.equal(byKind(r, 'retry-drain').length, 0, '#1000 省额度那句不能被这条修法拆掉');
+      assert.equal(byKind(r, 'rereview').length, 0);
+    });
+
+    // 判别力：拿不到现场 head 时不许假装票没过期（absence ≠ fresh）。
+    it('当前 head 取不到 → 票头无从比对，按老路省额度', async () => {
+      const { decide } = await CORE;
+      const r = decide(stuckSit(null, { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 4 } }));
+      assert.equal(byKind(r, 'retry-drain').length, 0);
+      assert.equal(byKind(r, 'rereview').length, 0, '没现场证据时不重写票，也不认输');
+      assert.equal(byKind(r, 'mark-exhausted').length, 0);
+    });
+
+    // 审官返工：staleTickets 若只按 PR 号建集合，跨仓同号过期票会把本仓 stuck 否决绕开。
+    // 形状：别仓票 { pr:909, repo:org/other, head:oldhead }，本仓 #909 仍挂认输标。
+    it('跨仓同号过期票 + 本仓 stuck + 当前 head 有红 → 不许 rework', async () => {
+      const { decide } = await CORE;
+      const HEAD = 'newhead111';
+      const sit = (ticketOver) => baseSituation({
+        at: '2026-09-12T12:00:00.000Z',
+        github: {
+          scanned: true,
+          issues: [labeledIssue(909)],
+          prs: [{
+            number: 909, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+            body: '署名 issue #909',
+            // 同上：返工选型只读 PR 自己的 label（#1116）。
+            labels: [{ name: '卡死/自动化认输' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }],
+          }],
+        },
+        reviewPending: { scanned: true, items: [{
+          pr: 909, head: { name: null, oid: 'oldhead' },
+          reviewer: 'gpt-5.6-luna', worker: null, ...ticketOver,
+        }] },
+        prReviews: { scanned: true, byPr: { 909: { reviews: [
+          redReview('别仓过期票不该触发本仓返工', HEAD),
+        ] } } },
+      });
+      const foreign = decide(sit({ repo: 'org/other' }));
+      assert.equal(byKind(foreign, 'rework').length, 0, '跨仓票不能绕过本仓 stuck 否决去派返工');
+      assert.equal(byKind(foreign, 'rereview').length, 0);
+      // 判别：同一夹具、本仓过期票仍须穿过 stuck 派返工——修法不许把 #1208 也挡回去。
+      const home = decide(sit({}));
+      assert.equal(byKind(home, 'rework').length, 1, '本仓过期票 + 当前 head 有红，仍须派返工');
+      const homeNamed = decide(sit({ repo: 'thoerwink8/windsurf-dao' }));
+      assert.equal(byKind(homeNamed, 'rework').length, 1, '显式本仓 repo 同样须派返工');
+    });
+
+    it('跨仓同号过期票 + 本仓 stuck + 当前 head 零判定 → 不许 rereview', async () => {
+      const { decide } = await CORE;
+      const sit = stuckSit('newhead111', { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 4 } });
+      sit.reviewPending = { scanned: true, items: [{
+        pr: 909, repo: 'org/other', head: { name: null, oid: 'oldhead999' },
+        reviewer: 'gpt-5.6-luna', worker: null,
+      }] };
+      const r = decide(sit);
+      assert.equal(byKind(r, 'rereview').length, 0, '跨仓票不能让本仓 stuck PR 去叫复审');
+      assert.equal(byKind(r, 'rework').length, 0);
+    });
+
+    // 生产路径 worker-done 给本仓票也写 repo: owner/name。非空 repo 一律 skip
+    // 会让真实本仓过期票进不了 staleTickets，PR 循环按纯号查询也命中不到，现场仍 noop。
+    it('显式本仓 repo + 过期票 + 认输标 → 仍须叫复审；跨仓同号仍不解冻', async () => {
+      const { decide } = await CORE;
+      const run = (repo) => {
+        const sit = stuckSit('newhead111', { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 4 } });
+        sit.reviewPending = { scanned: true, items: [{
+          pr: 909, repo, head: { name: null, oid: 'oldhead999' },
+          reviewer: 'gpt-5.6-luna', worker: null,
+        }] };
+        return byKind(decide(sit), 'rereview').map((a) => a.kind);
+      };
+      assert.deepEqual(run(null), ['rereview'], '空 repo 按本仓解冻');
+      assert.deepEqual(run('thoerwink8/windsurf-dao'), ['rereview'], '显式本仓 repo 必须按纯 PR 号参与 stale');
+      assert.deepEqual(run('THOERWINK8/WINDSURF-DAO'), ['rereview'], '本仓比较大小写不敏感');
+      assert.deepEqual(run('org/other'), [], '跨仓同号票不得解冻本仓 PR');
+    });
+  });
+});
+
+// 执行侧的 stale-head 二次校验（#1209 审官第二条）。决策说「票没过期」到真去 drain 之间
+// 隔着几秒到几分钟，工人可能刚推了新 head。**只在 decide 侧装闸等于没装**：
+// 执行侧如果照旧拿 action 里的票头去比，比的是它自己，一定自洽。
+describe('execRetryDrain：执行前重核现场 head（闸不许只在 decide 侧成立）', () => {
+  const OLD = '2026-09-05T00:00:00.000Z';
+  const ledgerOk = { [RK.drain(909, 'oldhead999')]: { at: OLD, pr: '909', tries: 1 } };
+  const action = () => ({
+    pr: 909, head: 'oldhead999', queue: [{ pr: 909, head: { name: null, oid: 'oldhead999' } }], why: '测',
+  });
+  const call = async (readHead, { dryRun = false } = {}) => {
+    const M = await import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const says = [];
+    const state = { drainLedger: { ...ledgerOk } };
+    const r = M.execRetryDrain(action(), {
+      state, dryRun, say: (s) => says.push(String(s)), readHead, run: () => ({ ok: true, out: '' }),
+    });
+    return { r, says, state };
+  };
+
+  it('现场 head 仍是票头 → 放行', async () => {
+    const { r } = await call(() => ({ ok: true, head: 'oldhead999' }));
+    assert.equal(r.ok, true);
+  });
+
+  it('现场 head 已经变了 → 当场拒（stale-head），不跑旧票', async () => {
+    const { r, says } = await call(() => ({ ok: true, head: 'newhead111' }));
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'stale-head');
+    assert.ok(says.some((s) => s.includes('不重试这张票') || s.includes('校验拒')), '拒的时候要说出来，不能静默');
+  });
+
+  // 判别力：查不到现场 head 时不许放行。放行就等于闸变成「查到才拦」，gh 抽风一次全过。
+  it('现场 head 没查成 → 也不放行（fail-closed）', async () => {
+    const { r } = await call(() => ({ ok: false, error: 'gh 超时' }));
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'head-unscanned');
+  });
+
+  it('dry-run 不查现场（拿票头当现场），只演不判', async () => {
+    let called = false;
+    const { r } = await call(() => { called = true; return { ok: true, head: 'newhead111' }; }, { dryRun: true });
+    assert.equal(called, false, 'dry-run 不该打 gh');
+    assert.equal(r.ok, true);
+  });
+});
+
+describe('ticketScopeKey：本仓纯号、跨仓隔离、票/PR 循环共用', () => {
+  it('空 repo 与显式本仓（含大小写）都是纯 PR 号；跨仓才带仓前缀', async () => {
+    const { ticketScopeKey } = await CORE;
+    const home = 'thoerwink8/windsurf-dao';
+    assert.equal(ticketScopeKey({ pr: 909 }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: null }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: home }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: 'THOERWINK8/WINDSURF-DAO' }, home), '909');
+    assert.equal(ticketScopeKey({ pr: 909, repo: 'org/other' }, home), 'org/other#909');
+    // PR 循环查 {pr}、票循环查带 repo 的本仓票，必须命中同一把键。
+    assert.equal(
+      ticketScopeKey({ pr: 909 }, home),
+      ticketScopeKey({ pr: 909, repo: home }, home),
+    );
+    assert.notEqual(
+      ticketScopeKey({ pr: 909 }, home),
+      ticketScopeKey({ pr: 909, repo: 'org/other' }, home),
+    );
+  });
 });
 
 describe('ticketHeadOid：两种票形态都要取得出', () => {
@@ -2268,7 +2540,7 @@ describe('decide：human_holds → merge-policy（#1094）', () => {
     const j = act.indexOf('function dispatchRework');
     assert.equal(j > -1, true);
     assert.doesNotMatch(act.slice(j, j + 2800), /dispatchMergePolicyArgs/);
-    assert.match(act.slice(j, j + 2800), /dao\.mjs', 'start'/);
+    assert.match(act.slice(j, j + 2800), /mirasimStartCmd/);
   });
 });
 
@@ -2967,5 +3239,139 @@ describe('nextDigestStreak：推进量仪表', () => {
       lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
     }
     assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
+  });
+});
+
+// ── 派成功的返工，工人死了以后要能解冻（2026-09-14 实咬：#1154 冻了 14 小时）──
+//
+// 病：`prev.ok === true` 无条件挡住重派。判据是「派出去过」，要问的却是「现在还有没有人在做」。
+// 工人静默退出后两边都不会再变：head 没人推、账没人重写 ⇒ 这张 PR 在这个 head 上被自己的
+// 成功记录焊死，唯一出口是改代码换判据版本把账本键作废。
+describe(`派成功的返工：工人没了要能重派`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'aa11bb22cc33dd44ee55ff6677889900aabbccdd';
+  const NOW = '2026-09-14T12:00:00.000Z';
+  const conflictPr = (n) => ({
+    number: n, isDraft: false, mergeable: 'CONFLICTING', headRefOid: HEAD, body: '',
+    labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+  });
+  // 账上记着「派成功了」，at 由各测试给
+  const dispatched = (at) => ({ at, pr: 901, head: HEAD, ok: true, unscanned: false, tries: 1 });
+  const situ = ({ at, sessions, reworkKey }) => {
+    const s = baseSituation({
+      at: NOW,
+      github: { scanned: true, issues: [], prs: [conflictPr(901)] },
+      reworkDispatched: { [reworkKey(901, HEAD)]: dispatched(at) },
+    });
+    if (sessions !== undefined) s.sessions = sessions;
+    return s;
+  };
+  const liveSession = { key: 'k1', title: 'PR-#901 解冲突', state: 'running' };
+  const deadSession = { key: 'k1', title: 'PR-#901 解冲突', state: 'done' };
+
+  it('①超过孤儿宽限 + 会话面确知没有活会话 → 重派返工', async () => {
+    const { decide, reworkKey } = await CORE;
+    // 6 小时前派成功；会话名单查到了，里面这条已是终态
+    const r = decide(situ({ at: '2026-09-14T06:00:00.000Z', sessions: { scanned: true, items: [deadSession] }, reworkKey }));
+    assert.equal(byKind(r, 'rework').length, 1, '工人没了、head 没动、冲突还在 → 必须再派一个');
+    assert.equal(byKind(r, 'rework')[0].conflict, true, '走的是解冲突那条路');
+  });
+
+  it('②负控：会话名单没查成 → 不重派（观测面一抖就批量重派会造重复工人）', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(situ({ at: '2026-09-14T06:00:00.000Z', sessions: { scanned: false, error: '故意没查成' }, reworkKey }));
+    assert.equal(byKind(r, 'rework').length, 0, '没查成不是「没人」，不许猜');
+  });
+
+  it('③负控：会话观测面根本没接入（老夹具）→ 维持旧行为，不重派', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(situ({ at: '2026-09-14T06:00:00.000Z', reworkKey }));
+    assert.equal(byKind(r, 'rework').length, 0, '没有 sessions 节时按旧契约走');
+  });
+
+  it('④负控：还有活会话在做 → 不重派', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(situ({ at: '2026-09-14T06:00:00.000Z', sessions: { scanned: true, items: [liveSession] }, reworkKey }));
+    assert.equal(byKind(r, 'rework').length, 0, '人还在干活，不许再塞一个进同一棵树');
+  });
+
+  it('⑤负控：才派出去 1 小时（未到孤儿宽限）→ 不重派，把干活时间让出来', async () => {
+    const { decide, reworkKey } = await CORE;
+    const r = decide(situ({ at: '2026-09-14T11:00:00.000Z', sessions: { scanned: true, items: [deadSession] }, reworkKey }));
+    assert.equal(byKind(r, 'rework').length, 0, '宽限期内不解冻——会话登记落后于真进程是常态');
+  });
+
+  it('⑥判据本身：judgeReworkOrphan 对每种「不解冻」都要说得出理由', async () => {
+    const { judgeReworkOrphan, REWORK_ORPHAN_GRACE_MIN } = await CORE;
+    const nowMs = Date.parse(NOW);
+    const pr = conflictPr(901);
+    const old = dispatched('2026-09-14T06:00:00.000Z');
+    assert.equal(REWORK_ORPHAN_GRACE_MIN > 45, true, '孤儿宽限必须比返工重试宽限宽，否则会在工人干活时插队');
+
+    const yes = judgeReworkOrphan(pr, { prev: old, nowMs, situation: { sessions: { scanned: true, items: [deadSession] } } });
+    assert.equal(yes.orphan, true);
+
+    // head 动了 ⇒ 这条账本来就不该再用
+    const moved = judgeReworkOrphan({ ...pr, headRefOid: 'ffffffffffffffffffffffffffffffffffffffff' },
+      { prev: old, nowMs, situation: { sessions: { scanned: true, items: [deadSession] } } });
+    assert.equal(moved.orphan, false, 'head 动了不算孤儿');
+
+    // 派失败的账不归这条判据管（走下面原有的 tries/宽限/上限）
+    const failed = judgeReworkOrphan(pr, { prev: { ...old, ok: false }, nowMs, situation: { sessions: { scanned: true, items: [] } } });
+    assert.equal(failed.orphan, false, '只判「派成功」的那种账');
+
+    // 时钟读不到 ⇒ 保守
+    const noClock = judgeReworkOrphan(pr, { prev: { ...old, at: '' }, nowMs, situation: { sessions: { scanned: true, items: [] } } });
+    assert.equal(noClock.orphan, false, '派出时刻没查成不许当成早就过期');
+  });
+
+  it('⑦负控：无署名快路 PR + 任意分支名 + running 会话（标题里没有 PR 号）→ 不解冻', async () => {
+    const { decide, reworkKey, judgeReworkOrphan } = await CORE;
+    const pr = {
+      number: 1271, isDraft: false, mergeable: 'CONFLICTING',
+      headRefOid: HEAD, headRefName: 'dao-queue-selfheal',
+      body: '快路，无署名 issue',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const live = {
+      key: 'grok:worker', state: 'running',
+      cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-queue-selfheal',
+      title: 'Grok',
+    };
+    const nowMs = Date.parse(NOW);
+    const old = { at: '2026-09-14T06:00:00.000Z', pr: 1271, head: HEAD, ok: true, unscanned: false, tries: 1 };
+    const judged = judgeReworkOrphan(pr, {
+      prev: old, nowMs,
+      situation: { sessions: { scanned: true, items: [live] } },
+    });
+    assert.equal(judged.orphan, false, '工人还在原树里干活，不许因为标题对不上就再派一个');
+
+    const r = decide(baseSituation({
+      at: NOW,
+      github: { scanned: true, issues: [], prs: [pr] },
+      sessions: { scanned: true, items: [live] },
+      reworkDispatched: { [reworkKey(1271, HEAD)]: old },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '人还在干活，不许再塞一个进同一棵树');
+  });
+
+  it('⑦正对照：无署名快路 PR + running 会话在别的分支 → 仍是孤儿，允许重派', async () => {
+    const { judgeReworkOrphan } = await CORE;
+    const pr = {
+      number: 1271, isDraft: false, mergeable: 'CONFLICTING',
+      headRefOid: HEAD, headRefName: 'dao-queue-selfheal',
+      body: '快路，无署名 issue',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const other = {
+      key: 'grok:other', state: 'running',
+      cwd: '/home/orca/mirasim-worktrees/windsurf-dao/some-other-branch',
+      title: 'Grok',
+    };
+    const judged = judgeReworkOrphan(pr, {
+      prev: dispatched('2026-09-14T06:00:00.000Z'), nowMs: Date.parse(NOW),
+      situation: { sessions: { scanned: true, items: [other] } },
+    });
+    assert.equal(judged.orphan, true, '别的树上的活会话不是这条返工的工人');
   });
 });
