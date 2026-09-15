@@ -693,6 +693,39 @@ describe('选型路径零残留', () => {
   });
 });
 
+describe('快路无署名单号也能交卷', () => {
+  // 指挥官 #1240：快路 PR 无署名不挡返工。worker-done 原先对称地拒（「完工 comment 没处可发」），
+  // 于是快路判红后工人改完正文却交不了卷。评论落 PR；没署名单就不给 issue 发。
+  it('planWorkerDone 无署名 → ok，issue 为 null，评论首行仍是返工完成', async () => {
+    const { planWorkerDone } = await WD;
+    const r = planWorkerDone({
+      pr: '1265',
+      body: '返工完成：补正文',
+      runGh: (args) => {
+        if (args[0] === 'pr' && args[1] === 'view' && String(args).includes('reviews')) {
+          return { ok: true, out: JSON.stringify({ reviews: [{ id: 1, state: 'CHANGES_REQUESTED' }] }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            ok: true,
+            out: JSON.stringify({
+              title: 'fix(并发): 收尾名额与审官上限不再手打 3',
+              body: '快路无署名 issue',
+              labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-luna' }, { name: 'type/写码' }],
+              headRefName: 'dao-finish-slots',
+            }),
+          };
+        }
+        return { ok: false, error: '未预期 ' + args.join(' ') };
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.issue, null);
+    assert.equal(r.round, 'rework');
+    assert.match(r.comment, /^返工完成/);
+  });
+});
+
 function lastJson(r) {
   try { return JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
   catch { return { raw: r.stdout, err: r.stderr }; }
