@@ -2252,9 +2252,17 @@ async function cmdWorkerDoneMirasim(args) {
 
   // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
   // 却给审官注入 m=auto，审官会绕过「需人工合并」的边界。
-  const policyPlan = mirasimMergePolicy(args, {
-    issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
-  });
+  // 快路无署名单：取不到 human_holds，不许放行 auto（与 commander-core 快路返工同一失败方向）。
+  const policyPlan = plan.issue
+    ? mirasimMergePolicy(args, {
+      issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
+    })
+    : {
+      ok: true,
+      mergePolicy: 'manual',
+      mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+      source: 'no-issue',
+    };
   if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, ...plan });
   const books = buildMirasimReviewerPrompts({
     pr: String(plan.pr), issue: plan.issue,
@@ -2274,14 +2282,17 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  const postedIssue = postCommentOnce({
-    kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
-    writeIssue: applyIssueWrite, host: 'worker-done',
-    // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
-    repo: targetRepo.ownerName || undefined,
-    idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
-  });
-  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工评论只发 PR' };
+  if (plan.issue) {
+    postedIssue = postCommentOnce({
+      kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
+      writeIssue: applyIssueWrite, host: 'worker-done',
+      // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
+      repo: targetRepo.ownerName || undefined,
+      idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
+    });
+    if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  }
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 

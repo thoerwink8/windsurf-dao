@@ -529,9 +529,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  if (!issue) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
-  }
+  // 快路 PR 无署名 issue（pr-fast）。票和审官任务书都已认 issue:null；
+  // 完工评论发到 PR 会话，不挡交卷。merge-policy 仍因取不到 human_holds 走 manual。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';

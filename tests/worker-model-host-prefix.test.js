@@ -194,4 +194,35 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.reviewer, 'gpt-5.6-sol');
     assert.equal(got.workerSource, 'label');
   });
+
+  it('快路无署名单但标齐 → 放行，issue 为 null（完工评论发 PR）', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1286',
+      body: '返工完成：PR #1286',
+      runGh: fakeGh({
+        title: '[cc] fix(心跳): x',
+        body: '快路，正文里没有署名单这一行',
+        labels: ['model/claude-opus-5', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [{ id: 1, body: '判定：红 2 项' }],
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.issue, null);
+    assert.equal(got.round, 'rework');
+    assert.match(got.comment, /^返工完成/);
+  });
+
+  it('dao.mjs 快路无署名单 → 完工评论只发 PR，merge-policy 走 manual', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'dao.mjs'), 'utf8');
+    const start = src.indexOf('async function cmdWorkerDoneMirasim');
+    const end = src.indexOf('async function cmdStartMirasim', start);
+    assert.equal(start >= 0, true);
+    assert.equal(end > start, true);
+    const fn = src.slice(start, end);
+    assert.match(fn, /if \(plan\.issue\) \{/);
+    assert.match(fn, /快路无署名单，完工评论只发 PR/);
+    assert.match(fn, /source: 'no-issue'/);
+    assert.match(fn, /不许放行 auto/);
+  });
 });
