@@ -258,6 +258,48 @@ describe('预加载闸装上之后的真实行为', () => {
   });
 });
 
+test('owner 被 SIGKILL 时，卡在无 timeout 的同步调用里也必须退', { timeout: 15000 }, async () => {
+  // 审官红项的判别实验：主线程定时器在同步子进程调用里排不上。
+  // 树要跟生产一样——owner 是孩子的亲爹，不是兄弟。看门狗只给亲儿子装。
+  const preload = pathToFileURL(join(REPO, 'tests', 'helpers', 'parent-alive.mjs')).href;
+  const ownerPath = join(REPO, 'tests', 'helpers', 'dao-check-owner-fixture.mjs');
+  const env = { ...process.env, DAO_SYNC_BLOCK_PRELOAD: preload, [OWNER_POLL_ENV]: '100' };
+  delete env.NODE_TEST_CONTEXT;
+  env.NODE_OPTIONS = '';
+
+  const owner = spawn(process.execPath, [ownerPath], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env,
+  });
+  let out = '';
+  owner.stdout.on('data', (d) => { out += d; });
+
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  let childPid = 0;
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    childPid = Number(String(out).trim());
+    if (Number.isInteger(childPid) && childPid > 0) break;
+    await wait(50);
+  }
+  assert.equal(Number.isInteger(childPid), true, `owner 没报出孩子 pid（stdout=${JSON.stringify(out)}）`);
+  assert.equal(childPid > 0, true);
+
+  await wait(500);
+  assert.equal(alive(owner.pid), true, 'owner 现在该活着——不然 SIGKILL 验的是空气');
+  assert.equal(alive(childPid), true, '孩子现在该卡在同步调用里——不然这条什么都没验到');
+
+  process.kill(owner.pid, 'SIGKILL');
+  const t0 = Date.now();
+  while (alive(childPid) && Date.now() - t0 < 3000) await wait(50);
+  assert.equal(alive(childPid), false, `owner SIGKILL 后 3s 孩子还在（elapsed ${Date.now() - t0}ms）——同步阻塞期间的清理没生效`);
+
+  try { process.kill(owner.pid, 'SIGKILL'); } catch { /* 已经没了 */ }
+  try { process.kill(childPid, 'SIGKILL'); } catch { /* 已经没了 */ }
+});
+
 describe('dao-check 里的接线（正控：接错了这几条要红）', () => {
   it('spawn 不许带 detached——它会把每套测试变成进程组头，acp-runtime 的 pgid 判据当场飘红', () => {
     assert.doesNotMatch(DAO_CHECK, /spawn\(cmd, args, \{[^}]*detached/);
@@ -297,6 +339,14 @@ describe('dao-check 里的接线（正控：接错了这几条要红）', () => 
 
   it('owner pid 传给子进程，否则子进程侧那层永远 no-op', () => {
     assert.match(DAO_CHECK, /\[OWNER_PID_ENV\]: String\(process\.pid\)/);
+  });
+
+  it('子进程侧必须有同步阻塞期间也能用的清理，不许把未设 timeout 的 spawnSync 当成有界', () => {
+    const src = readFileSync(join(REPO, 'tests', 'helpers', 'parent-alive.mjs'), 'utf8');
+    assert.match(src, /owner-watchdog\.py/);
+    assert.match(src, /process\.ppid/);
+    assert.doesNotMatch(src, /process\.dlopen/);
+    assert.doesNotMatch(src, /每个 spawnSync 都自带 timeout/);
   });
 });
 

@@ -349,7 +349,8 @@ function runOneSuite(dir, f) {
         timedOut = true;
         out += timeoutNote(f, budgetMs);
         // 只杀这一个 pid（为什么不连进程组一起杀：见上面 spawn 处那段）。
-        // 它自己起的孙子会留下来，但那一层由 parent-alive.mjs 兜底：dao-check 一走它们就退。
+        // 它自己起的孙子会留下来，但那一层由 parent-alive.mjs 兜底：
+        // owner 亲儿子另有旁路看门狗（同步阻塞也杀得掉）；孙子靠主线程定时器。
         try { child.kill('SIGKILL'); } catch { /* 已经没了 */ }
       }, budgetMs);
     }

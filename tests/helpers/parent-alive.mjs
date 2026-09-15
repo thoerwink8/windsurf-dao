@@ -15,18 +15,48 @@
 //
 // 没有 DAO_CHECK_OWNER_PID 时整个模块什么都不做——手敲 `node --test` 不受影响。
 //
-// 管不到的一种：**子进程正卡在一个长的同步调用里**（比如一串 spawnSync）。
-// 那时事件循环根本不转，定时器排在后面永远轮不上。实测 2026-09-15：SIGKILL 掉
-// dao-check 后 dao-dispatch-gate.test.js 又活了一分多钟才走——它整套都是 spawnSync。
-// 这一层的承诺因此只到「不会永生」：同步段跑完就会被抓住，而同步段本身是有界的
-// （每个 spawnSync 都自带 timeout）。真正永生的形态是「挂在 IO 上等一个不来的事件」，
-// 那种事件循环空着，这一层一抓一个准——本次那个 35 小时的孤儿正是这种。
+// 主线程定时器管不到「卡在同步调用里」（事件循环不转）。仓内现有测试大量
+// spawnSync 没设 timeout，不能把「同步段有界」当前提（2026-09-15 审官红项：
+// SIGKILL owner 后 dao-dispatch-gate.test.js 以 PPID=1 继续活，正卡在无
+// timeout 的 spawnSync 上）。
+//
+// 旁路看门狗（owner-watchdog.py）有自己的事件循环，同步阻塞也杀得掉。
+// 只给 owner 的亲儿子装——那正是 dao-check 起的 `node --test`。孙子（CLI、
+// ACP 会话）不装：ACP 必须活过「发起它的那个进程」（acp-runtime 有断言），
+// 第一版把 PR_SET_PDEATHSIG 打在 node 本体上，那条当场红。看门狗看的是
+// owner pid，不是立即父进程。Worker 线程的 unref 在 spawnSync 期间不会转，
+// 不能拿来当同步段的清理。
 
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_TOKEN, ownerPollMs, ORPHAN_EXIT_CODE, ownerAlive, orphanNote } from '../../scripts/lib/test-child-guard.mjs';
 
 const ownerPid = Number(process.env[OWNER_PID_ENV]);
 const token = process.env[OWNER_TOKEN_ENV] || OWNER_TOKEN;
+
+function startOwnerWatchdog() {
+  if (process.ppid !== ownerPid) return;
+  const script = fileURLToPath(new URL('./owner-watchdog.py', import.meta.url));
+  try {
+    const child = spawn('python3', ['-I', '-B', script], {
+      stdio: 'ignore',
+      windowsHide: true,
+      env: {
+        PATH: process.env.PATH || '/usr/bin:/bin',
+        HOME: process.env.HOME || '',
+        DAO_WD_OWNER: String(ownerPid),
+        DAO_WD_VICTIM: String(process.pid),
+        DAO_WD_TOKEN: String(token),
+        DAO_WD_POLL: String(ownerPollMs(process.env)),
+      },
+    });
+    child.on('error', () => {});
+    if (typeof child.unref === 'function') child.unref();
+  } catch {
+    // fail-open：看门狗起不来就只剩主线程定时器
+  }
+}
 
 function readCmdline(pid) {
   try {
@@ -41,6 +71,7 @@ function probe(pid) {
 }
 
 if (Number.isInteger(ownerPid) && ownerPid > 0) {
+  startOwnerWatchdog();
   const tick = () => {
     let verdict;
     try {
