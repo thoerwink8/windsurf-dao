@@ -28,12 +28,17 @@
 // 不能拿来当同步段的清理。
 
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_TOKEN, ownerPollMs, ORPHAN_EXIT_CODE, ownerAlive, orphanNote } from '../../scripts/lib/test-child-guard.mjs';
+import {
+  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
+  ownerPollMs, ORPHAN_EXIT_CODE, ownerAlive, orphanNote,
+  readProcStarttime, readProcBootId,
+} from '../../scripts/lib/test-child-guard.mjs';
 
 const ownerPid = Number(process.env[OWNER_PID_ENV]);
-const token = process.env[OWNER_TOKEN_ENV] || OWNER_TOKEN;
+const token = process.env[OWNER_TOKEN_ENV] || '';
+const starttime = process.env[OWNER_STARTTIME_ENV] || '';
+const bootId = process.env[OWNER_BOOT_ENV] || '';
 
 function startOwnerWatchdog() {
   if (process.ppid !== ownerPid) return;
@@ -48,6 +53,8 @@ function startOwnerWatchdog() {
         DAO_WD_OWNER: String(ownerPid),
         DAO_WD_VICTIM: String(process.pid),
         DAO_WD_TOKEN: String(token),
+        DAO_WD_STARTTIME: String(starttime),
+        DAO_WD_BOOT: String(bootId),
         DAO_WD_POLL: String(ownerPollMs(process.env)),
       },
     });
@@ -55,14 +62,6 @@ function startOwnerWatchdog() {
     if (typeof child.unref === 'function') child.unref();
   } catch {
     // fail-open：看门狗起不来就只剩主线程定时器
-  }
-}
-
-function readCmdline(pid) {
-  try {
-    return readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-  } catch {
-    return null;  // 进程没了，或本机没有 /proc——由 probe 分辨
   }
 }
 
@@ -75,7 +74,15 @@ if (Number.isInteger(ownerPid) && ownerPid > 0) {
   const tick = () => {
     let verdict;
     try {
-      verdict = ownerAlive({ pid: ownerPid, token, readCmdline, probe });
+      verdict = ownerAlive({
+        pid: ownerPid,
+        token,
+        starttime,
+        bootId,
+        readStarttime: readProcStarttime,
+        readBootId: readProcBootId,
+        probe,
+      });
     } catch {
       return;  // 闸自己出错不许影响被测进程
     }

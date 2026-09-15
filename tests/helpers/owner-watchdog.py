@@ -33,23 +33,37 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
-def _owner_alive(pid: int, token: str) -> bool:
+def _owner_alive(pid: int, starttime: str, boot: str) -> bool:
     try:
-        with open(f"/proc/{pid}/cmdline", "rb") as fh:
-            raw = fh.read().decode("utf-8", "replace")
-        return token in raw
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as fh:
+            s = fh.read()
+        closed = s.rfind(")")
+        fields = s[closed + 2 :].strip().split()
+        got = fields[19] if len(fields) > 19 else ""
+        if starttime:
+            if got != starttime:
+                return False
+            if boot:
+                try:
+                    with open("/proc/sys/kernel/random/boot_id", "r", encoding="utf-8") as fh:
+                        if fh.read().strip() != boot:
+                            return False
+                except Exception:
+                    pass
+            return True
+        return _pid_alive(pid)
     except FileNotFoundError:
-        pass
+        return False
     except Exception:
         return True
-    return _pid_alive(pid)
 
 
 def main() -> int:
     try:
         owner = int(os.environ["DAO_WD_OWNER"])
         victim = int(os.environ["DAO_WD_VICTIM"])
-        token = os.environ["DAO_WD_TOKEN"]
+        starttime = os.environ.get("DAO_WD_STARTTIME", "")
+        boot = os.environ.get("DAO_WD_BOOT", "")
         poll = max(0.05, int(os.environ.get("DAO_WD_POLL", "30000")) / 1000.0)
     except (KeyError, ValueError):
         return 0
@@ -58,7 +72,7 @@ def main() -> int:
     while True:
         if not _pid_alive(victim):
             return 0
-        if not _owner_alive(owner, token):
+        if not _owner_alive(owner, starttime, boot):
             try:
                 os.kill(victim, signal.SIGKILL)
             except ProcessLookupError:

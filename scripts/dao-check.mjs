@@ -145,7 +145,9 @@ import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import {
   createChildRegistry, suiteTimeoutMs, timeoutNote, SUITE_TIMEOUT_ENV,
-  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_TOKEN,
+  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
+  readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
+  formatOwnerToken,
 } from './lib/test-child-guard.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
@@ -284,7 +286,10 @@ const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
 // 起过的测试子进程都登记在这儿，dao-check 一走就全杀掉。
 // 2026-09-15 实咬：不登记的后果是一个 `node --test` 孤儿吃掉 5.98 GB 活了 35 小时。
 // 判据与两层分工见 scripts/lib/test-child-guard.mjs 头部。
-const testChildren = createChildRegistry();
+const testChildren = createChildRegistry({ listProcesses: listLinuxProcesses });
+const OWNER_STARTTIME = readProcStarttime(process.pid) || '';
+const OWNER_BOOT = readProcBootId() || '';
+const OWNER_TOKEN_VALUE = formatOwnerToken({ bootId: OWNER_BOOT, starttime: OWNER_STARTTIME });
 let childCleanupArmed = false;
 function armTestChildCleanup() {
   if (childCleanupArmed) return;
@@ -318,14 +323,16 @@ function runOneSuite(dir, f) {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
         [OWNER_PID_ENV]: String(process.pid),
-        [OWNER_TOKEN_ENV]: OWNER_TOKEN,
+        [OWNER_TOKEN_ENV]: OWNER_TOKEN_VALUE,
+        [OWNER_STARTTIME_ENV]: OWNER_STARTTIME,
+        [OWNER_BOOT_ENV]: OWNER_BOOT,
         NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href} --import ${pathToFileURL(orphanGuard).href}`.trim(),
       };
       // **不要加 detached**（2026-09-15 实测否掉的第一版）：它让每套测试自成进程组，
       // 而 acp-runtime.mjs:109 正是用 `pgid === pid` 判「这个进程是不是一个组的头」。
       // 加了之后 acp-runtime / execution-runtime 在有负载时随机报红：master 三连绿、
       // 带 detached 四跑两红、去掉后三连绿。组杀换来的那点覆盖面不值这个价——
-      // 孙子那一层交给 parent-alive.mjs（它看的是 owner pid，跟进程组无关）。
+      // 超时按 ppid 树清后代，跳过 pgid===pid 的组头（ACP）。
       armTestChildCleanup();
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
       testChildren.add(child.pid, { label: f });
@@ -348,10 +355,9 @@ function runOneSuite(dir, f) {
       watchdog = setTimeout(() => {
         timedOut = true;
         out += timeoutNote(f, budgetMs);
-        // 只杀这一个 pid（为什么不连进程组一起杀：见上面 spawn 处那段）。
-        // 它自己起的孙子会留下来，但那一层由 parent-alive.mjs 兜底：
-        // owner 亲儿子另有旁路看门狗（同步阻塞也杀得掉）；孙子靠主线程定时器。
-        try { child.kill('SIGKILL'); } catch { /* 已经没了 */ }
+        // 杀 runner 及其非 detached 后代。dao-check 自己还活着，parent-alive
+        // 不会让孙子自杀——寿命归属在这一刀。ACP 等组头跳过。
+        try { killProcessTree(child.pid, { listProcesses: listLinuxProcesses }); } catch { /* 已经没了 */ }
       }, budgetMs);
     }
     child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));

@@ -1,4 +1,4 @@
-// scripts/lib/test-child-guard.mjs —— dao-check 测试子进程的寿命判据（纯逻辑，无 IO）
+// scripts/lib/test-child-guard.mjs —— dao-check 测试子进程的寿命判据
 //
 // 2026-09-15 实咬：本机 8 GB 内存里有 5.98 GB 是**一个孤儿测试进程**——
 // `node --test tests/session-events.test.js`，PPID=1，已经跑了 1 天 11 小时 28 分。
@@ -10,13 +10,18 @@
 // 子进程，而且它长得一点都不像故障：ps 里就是一行正常的 node --test。
 //
 // 两层，覆盖面不同，缺一不可：
-//   ① 本文件（父进程侧）：注册表 + 每套超时。父进程还活着时，它保证挂住的套子被砍。
+//   ① 本文件（父进程侧）：注册表 + 每套超时 + 按套子的后代树清理。
+//      父进程还活着时，它保证挂住的套子和它的非 detached 后代被砍。
+//      ACP 等刻意 setsid 的进程（pgid === pid）不砍——它们必须活过发起进程。
 //   ② tests/helpers/parent-alive.mjs（子进程侧）：父进程被 SIGKILL 时，①的定时器
 //      跟着父进程一起没了，只有子进程自己发现「爹没了」才救得回来。
 //      主线程定时器管不到卡在 spawnSync 里的进程（事件循环不转，仓内测试也并非
 //      每个 spawnSync 都有 timeout）。② 给 owner 的亲儿子另起旁路看门狗
 //      （owner-watchdog.py）：独立事件循环，同步阻塞也杀得掉。不把
 //      PR_SET_PDEATHSIG 打在 node 本体上——ACP 会话必须活过发起进程。
+//
+// owner 身份是 pid + /proc starttime（+ boot_id）。cmdline 子串「dao-check」
+// 不是身份：路径/参数碰巧带这四个字的新进程会把 pid 复用误判成旧 owner。
 //
 // 为什么超时判**没查成而不是绿**：跑不完的套子没给出任何安全性，把它算绿就是
 // 「没查成当成查过没事」。为什么不判成普通的红：红的含义是「测试发现了问题」，
@@ -26,6 +31,11 @@
 // 是「等到这个份上已经不可能拿到结果了」。刻度按实测定：本机最慢的一套
 // acp-runtime.test.js 空载 33.5s，池宽 6 抢占时按 3 倍算约 100s，默认 10 分钟 ≈ 18 倍余量。
 // 想再放宽用 DAO_CHECK_SUITE_TIMEOUT_MS（毫秒；0 = 关掉超时，回到出事前的行为）。
+//
+// 寿命判据本身是纯函数（listProcesses / readStarttime 可注入）。Linux 默认读
+// /proc 的实现附在同文件，生产接线不用再抄一份解析。
+
+import { readdirSync, readFileSync } from 'node:fs';
 
 export const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
 export const SUITE_TIMEOUT_ENV = 'DAO_CHECK_SUITE_TIMEOUT_MS';
@@ -68,7 +78,7 @@ export function timeoutNote(file, ms) {
  * `kill` 可注入，测试才验得了「真去杀了谁、用了什么信号」——拿真 spawn 验这件事
  * 会把测试变成又慢又飘的那种。
  */
-export function createChildRegistry({ kill } = {}) {
+export function createChildRegistry({ kill, listProcesses } = {}) {
   const doKill = typeof kill === 'function' ? kill : process.kill.bind(process);
   const live = new Map();
 
@@ -94,27 +104,39 @@ export function createChildRegistry({ kill } = {}) {
      *   missing 发的时候已经没了（ESRCH）——正常竞态，不是错
      *   failed  其它错误（权限等），要让人看见
      *
-     * **只杀登记的那个 pid，不连进程组**。第一版用 `kill(-pid)` 连组杀，为此给
-     * spawn 加了 `detached: true`；2026-09-15 实测那个 detached 会让
-     * acp-runtime / execution-runtime 随机报红——acp-runtime.mjs:109 用
-     * `pgid === pid` 判「是不是进程组头」，detached 正好把每套测试变成组头
-     * （master 三连绿、带 detached 四跑两红、去掉后三连绿）。
-     * 孙子那一层改由 tests/helpers/parent-alive.mjs 兜底，它看 owner pid，与进程组无关。
+     * **只杀登记的那个 pid 及其非 detached 后代，不连进程组**。第一版用
+     * `kill(-pid)` 连组杀，为此给 spawn 加了 `detached: true`；2026-09-15
+     * 实测那个 detached 会让 acp-runtime / execution-runtime 随机报红——
+     * acp-runtime.mjs:109 用 `pgid === pid` 判「是不是进程组头」，detached
+     * 正好把每套测试变成组头（master 三连绿、带 detached 四跑两红、去掉后三连绿）。
+     * 后代按 ppid 树走、跳过 pgid===pid 的组头（ACP 等刻意脱离的会话）。
      */
     killAll(signal = 'SIGKILL') {
+      const extra = [];
+      if (typeof listProcesses === 'function') {
+        let procs = [];
+        try { procs = listProcesses() || []; } catch { procs = []; }
+        for (const pid of live.keys()) {
+          extra.push(...descendantPids(pid, procs, { skipGroupLeaders: true }));
+        }
+      }
       const killed = [];
       const missing = [];
       const failed = [];
-      for (const pid of [...live.keys()]) {
+      const seen = new Set();
+      for (const pid of [...extra, ...live.keys()]) {
+        const n = Number(pid);
+        if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue;
+        seen.add(n);
         try {
-          doKill(pid, signal);
-          killed.push(pid);
+          doKill(n, signal);
+          killed.push(n);
         } catch (e) {
-          if (e && e.code === 'ESRCH') missing.push(pid);
-          else failed.push({ pid, error: String((e && e.message) || e) });
+          if (e && e.code === 'ESRCH') missing.push(n);
+          else failed.push({ pid: n, error: String((e && e.message) || e) });
         }
-        live.delete(pid);
       }
+      live.clear();
       return { killed, missing, failed };
     },
   };
@@ -132,6 +154,9 @@ export function createChildRegistry({ kill } = {}) {
 
 export const OWNER_PID_ENV = 'DAO_CHECK_OWNER_PID';
 export const OWNER_TOKEN_ENV = 'DAO_CHECK_OWNER_TOKEN';
+export const OWNER_STARTTIME_ENV = 'DAO_CHECK_OWNER_STARTTIME';
+export const OWNER_BOOT_ENV = 'DAO_CHECK_OWNER_BOOT';
+/** 旧 cmdline 子串，不再当身份。生产 token 是 `bootId:starttime`。 */
 export const OWNER_TOKEN = 'dao-check';
 /** 多久看一眼爹还在不在。30s：孤儿多活半分钟没关系，每秒轮询 /proc 才是新负担。 */
 export const OWNER_POLL_MS = 30 * 1000;
@@ -143,36 +168,110 @@ export function ownerPollMs(env = {}) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : OWNER_POLL_MS;
 }
 
+export function formatOwnerToken({ bootId, starttime } = {}) {
+  const start = String(starttime || '');
+  if (!start) return '';
+  return `${String(bootId || '')}:${start}`;
+}
+
+/** token 形态是 `bootId:starttime`。固定子串 `dao-check` 解析不出身份。 */
+export function parseOwnerIdentity({ token, starttime, bootId } = {}) {
+  const start = starttime != null && String(starttime) !== '' ? String(starttime) : '';
+  const boot = bootId != null && String(bootId) !== '' ? String(bootId) : '';
+  if (start) return { starttime: start, bootId: boot };
+  const raw = String(token || '');
+  const i = raw.lastIndexOf(':');
+  if (i < 0) return { starttime: '', bootId: '' };
+  const maybeStart = raw.slice(i + 1);
+  const maybeBoot = raw.slice(0, i);
+  if (!maybeStart) return { starttime: '', bootId: '' };
+  return { starttime: maybeStart, bootId: maybeBoot };
+}
+
+/**
+ * 解析 `/proc/<pid>/stat` 里括号后的字段。starttime 是字段 22（下标 19）。
+ * 纯函数，测试不用碰真 /proc。
+ */
+export function parseProcStat(stat) {
+  const s = String(stat || '');
+  const closed = s.lastIndexOf(')');
+  if (closed < 0) return null;
+  const fields = s.slice(closed + 2).trim().split(/\s+/);
+  if (fields.length < 20) return null;
+  return {
+    state: fields[0],
+    ppid: Number(fields[1]),
+    pgid: Number(fields[2]),
+    starttime: fields[19],
+  };
+}
+
+export function readProcStarttime(pid) {
+  try {
+    const parsed = parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    return parsed && parsed.starttime ? parsed.starttime : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readProcBootId() {
+  try {
+    return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 那个 pid 还是不是当初起我们的 dao-check。
  *
- * `readCmdline(pid)` 读 `/proc/<pid>/cmdline`（读不到返回 null），`probe(pid)` 是
- * `process.kill(pid, 0)` 那种存活探。**两样都要**：
- *   · 光用 probe：pid 会被复用。35 小时足够让同一个 pid 变成别的进程，
- *     那时探到「活着」就把孤儿判成了合法子进程——正是本单要治的病。
- *   · 光用 cmdline：非 Linux 没有 /proc，判据当场失效。
- * 所以有 /proc 时以 cmdline 为准（能识破 pid 复用），没有时退回 probe 并**说明是退回的**。
+ * 唯一身份是 **starttime（+ boot_id）**，不是 cmdline 子串。
+ * `node /tmp/not-the-owner-dao-check-helper.mjs` 这种路径碰巧带 `dao-check`
+ * 的新进程，pid 复用之后不能被认成旧 owner。
+ *
+ * `readStarttime(pid)` / `readBootId(pid)` 读 `/proc`（读不到返回 null），
+ * `probe(pid)` 是 `process.kill(pid, 0)` 那种存活探。
+ *   · 光用 probe：pid 会被复用。35 小时足够让同一个 pid 变成别的进程。
+ *   · 光用 cmdline 子串：路径/参数碰巧带 `dao-check` 就会误判。
+ * 有 starttime 就以它为准；读不到时退回 probe 并**说明是退回的**。
+ *
+ * `readCmdline` 仍接受（旧调用点不用改），但**不再当身份**。
  *
  * 返回 `{ alive, basis }`；判不出来一律 `alive: true`（fail-open）——
  * 这层是兜底止血，不是闸；判错方向会误杀正在跑的测试，那比漏掉一个孤儿糟得多。
  */
-export function ownerAlive({ pid, token = OWNER_TOKEN, readCmdline, probe } = {}) {
+export function ownerAlive({
+  pid,
+  token = '',
+  starttime,
+  bootId,
+  readStarttime,
+  readBootId,
+  readCmdline: _readCmdline,
+  probe,
+} = {}) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return { alive: true, basis: 'no-owner' };
 
-  if (typeof readCmdline === 'function') {
-    let raw;
-    try {
-      raw = readCmdline(n);
-    } catch {
-      raw = null;
+  const expected = parseOwnerIdentity({ token, starttime, bootId });
+
+  if (expected.starttime && typeof readStarttime === 'function') {
+    let got = null;
+    try { got = readStarttime(n); } catch { got = null; }
+    if (got != null && String(got) !== '') {
+      if (String(got) !== expected.starttime) {
+        return { alive: false, basis: 'starttime-mismatch' };
+      }
+      if (expected.bootId && typeof readBootId === 'function') {
+        let boot = null;
+        try { boot = readBootId(n); } catch { boot = null; }
+        if (boot != null && String(boot) !== '' && String(boot) !== expected.bootId) {
+          return { alive: false, basis: 'boot-mismatch' };
+        }
+      }
+      return { alive: true, basis: 'starttime' };
     }
-    if (raw != null) {
-      // cmdline 是 NUL 分隔的，直接找子串即可
-      const hit = String(raw).includes(String(token));
-      return { alive: hit, basis: hit ? 'cmdline' : 'cmdline-mismatch' };
-    }
-    // 读不到：进程没了，或者本机没有 /proc。下面用 probe 分辨。
   }
 
   if (typeof probe !== 'function') return { alive: true, basis: 'no-probe' };
@@ -191,4 +290,98 @@ export const ORPHAN_EXIT_CODE = 97;
 export function orphanNote(ownerPid, basis) {
   return `dao-check：起我的那个 dao-check（pid ${ownerPid}）已经不在了（判据 ${basis}），`
     + `本进程自行退出，免得变成没人管的孤儿（退出码 ${ORPHAN_EXIT_CODE}）`;
+}
+
+/**
+ * runner 的后代 pid。`skipGroupLeaders`（默认开）跳过 pgid===pid 且不是
+ * root 自己的进程——那是 setsid / detached 出来的 ACP 会话，必须留着。
+ * 跳过组头时也不再顺着它往下走，它的孩子跟它一起留。
+ */
+export function descendantPids(rootPid, procs, { skipGroupLeaders = true } = {}) {
+  const root = Number(rootPid);
+  if (!Number.isInteger(root) || root <= 0 || !Array.isArray(procs)) return [];
+  const childrenOf = new Map();
+  for (const row of procs) {
+    const pid = Number(row && row.pid);
+    const ppid = Number(row && row.ppid);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(ppid)) continue;
+    if (!childrenOf.has(ppid)) childrenOf.set(ppid, []);
+    childrenOf.get(ppid).push(row);
+  }
+  const out = [];
+  const seen = new Set([root]);
+  const queue = [root];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const row of childrenOf.get(parent) || []) {
+      const pid = Number(row.pid);
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      const pgid = Number(row.pgid);
+      const isLeader = skipGroupLeaders && Number.isInteger(pgid) && pgid === pid && pid !== root;
+      if (isLeader) continue;
+      out.push(pid);
+      queue.push(pid);
+    }
+  }
+  return out;
+}
+
+export function listLinuxProcesses() {
+  if (process.platform !== 'linux') return [];
+  let names;
+  try {
+    names = readdirSync('/proc');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const pid = Number(name);
+      const parsed = parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+      if (!parsed || ['Z', 'X'].includes(parsed.state)) continue;
+      if (!Number.isInteger(parsed.ppid) || !Number.isInteger(parsed.pgid)) continue;
+      out.push({ pid, ppid: parsed.ppid, pgid: parsed.pgid, starttime: parsed.starttime });
+    } catch {
+      // 扫描中途进程没了
+    }
+  }
+  return out;
+}
+
+/**
+ * 杀 root 及其非 detached 后代。先列树再动手，避免杀 root 之后孩子被 init
+ * 收走、下一轮扫不到。组头（ACP）不在名单里。
+ */
+export function killProcessTree(rootPid, {
+  listProcesses,
+  kill,
+  skipGroupLeaders = true,
+  signal = 'SIGKILL',
+} = {}) {
+  const doKill = typeof kill === 'function' ? kill : process.kill.bind(process);
+  let procs = [];
+  if (typeof listProcesses === 'function') {
+    try { procs = listProcesses() || []; } catch { procs = []; }
+  }
+  const descendants = descendantPids(rootPid, procs, { skipGroupLeaders });
+  const killed = [];
+  const missing = [];
+  const failed = [];
+  const seen = new Set();
+  for (const pid of [...descendants, Number(rootPid)]) {
+    const n = Number(pid);
+    if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue;
+    seen.add(n);
+    try {
+      doKill(n, signal);
+      killed.push(n);
+    } catch (e) {
+      if (e && e.code === 'ESRCH') missing.push(n);
+      else failed.push({ pid: n, error: String((e && e.message) || e) });
+    }
+  }
+  return { killed, missing, failed, descendants };
 }
