@@ -17,6 +17,7 @@ import {
   classifyStallWatchTimer,
   classifyBotModelProbe,
   classifyCommanderStatus,
+  classifyMirasimHealth,
   parseEnvFile,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
@@ -252,6 +253,53 @@ test('server-check 判别力', async (t) => {
       assert.match(entry, /'status',\s*'--json'/);
       assert.doesNotMatch(entry, /install/);
       assert.doesNotMatch(entry, /在册且 enabled/);
+    });
+  });
+
+  await t.test('classifyMirasimHealth（㉔ 违规 relay/健康样本经新入口拦）', async (t) => {
+    await t.test('available:false 的健康 JSON → red', () => {
+      const r = classifyMirasimHealth({
+        probed: true,
+        code: 1,
+        stdout: JSON.stringify({
+          health: {
+            state: 'red',
+            notes: ['relay.available=false——云端中转当前不可用（派前探针不许放行）'],
+          },
+        }),
+      });
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /available:false|健康红/);
+    });
+
+    await t.test('agentRoutes claude:"bogus" 的健康 JSON → unknown，不当 ok', () => {
+      const r = classifyMirasimHealth({
+        probed: true,
+        code: 2,
+        stdout: JSON.stringify({
+          health: {
+            state: 'unknown',
+            agentRoutes: { claude: 'bogus' },
+            notes: ['claude 路由是 "bogus"，不是 direct/relay'],
+          },
+        }),
+      });
+      assert.equal(r.state, 'unknown');
+      assert.match(r.detail, /bogus|没查成/);
+    });
+
+    await t.test('没探到 → unknown', () => {
+      const r = classifyMirasimHealth({ probed: false, reason: 'spawn 失败：ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('CHECKS (24) 走 --health --json + classifyMirasimHealth', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['(24) mirasim 执行体健康");
+      assert.ok(i > -1, '找不到 (24) CHECKS 条目');
+      const entry = src.slice(i, i + 500);
+      assert.match(entry, /classifyMirasimHealth/);
+      assert.match(entry, /'--health',\s*'--json'/);
     });
   });
 

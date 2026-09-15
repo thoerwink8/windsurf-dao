@@ -569,52 +569,63 @@ describe('返工 P1（审官 round 2：读不到仍被编成已知值）', () =>
     const root = path.resolve(__dirname, '..');
     const ownHome = worktreeOwnership(root);
     assert.equal(ownHome.ok, true, ownHome.why);
-    assert.equal(ownHome.defaultBranch, 'master');
+    assert.ok(ownHome.defaultBranch, ownHome.why);
 
+    // CI 的 detached pull/N/merge 没有本地 master。夹具自己在 HEAD 上建一条分支，
+    // 用永远存在的 HEAD 证明已合并，不依赖审查仓碰巧有哪条本地分支。
+    const name = `mira-ext-merged-${process.pid}-${Date.now().toString(36)}`;
+    const made = spawnSync('git', ['branch', name, 'HEAD'], { cwd: root, encoding: 'utf8' });
+    assert.equal(made.status, 0, made.stderr || made.stdout);
     const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'mira-ext-wt-'));
     const git = (args, cwd = ext) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
-    assert.equal(git(['init']).status, 0);
-    fs.writeFileSync(path.join(ext, 'f'), 'x');
-    assert.equal(git(['add', 'f']).status, 0);
-    assert.equal(git(['commit', '-m', 'i']).status, 0);
-    const mergedList = spawnSync('git', ['branch', '--merged', 'master', '--format=%(refname:short)'], { cwd: root, encoding: 'utf8' });
-    const name = String(mergedList.stdout || '').split(/\n/).map(s => s.trim()).find(b => b && b !== 'master' && !b.includes(' '));
-    assert.ok(name, '根仓要有一条已合并的非默认分支，才咬得动这条');
-    assert.equal(git(['checkout', '-b', name]).status, 0);
-    fs.writeFileSync(path.join(ext, 'g'), 'y');
-    assert.equal(git(['add', 'g']).status, 0);
-    assert.equal(git(['commit', '-m', 'ahead']).status, 0);
+    try {
+      const mergedList = spawnSync('git', ['branch', '--merged', 'HEAD', '--format=%(refname:short)'], { cwd: root, encoding: 'utf8' });
+      assert.equal(mergedList.status, 0, mergedList.stderr);
+      const names = String(mergedList.stdout || '').split(/\n/).map(s => s.trim());
+      assert.ok(names.includes(name), `夹具分支 ${name} 必须能被 --merged HEAD 证明已合并`);
 
-    assert.equal(worktreeOwnership(ext).ok, false, '外部仓不得冒充本仓');
-    assert.notEqual(isBranchMerged(name, ext), true, '不许拿审查仓 --merged 套到外部路径');
+      assert.equal(git(['init']).status, 0);
+      fs.writeFileSync(path.join(ext, 'f'), 'x');
+      assert.equal(git(['add', 'f']).status, 0);
+      assert.equal(git(['commit', '-m', 'i']).status, 0);
+      assert.equal(git(['checkout', '-b', name]).status, 0);
+      fs.writeFileSync(path.join(ext, 'g'), 'y');
+      assert.equal(git(['add', 'g']).status, 0);
+      assert.equal(git(['commit', '-m', 'ahead']).status, 0);
 
-    const sessions = [{
-      sessionKey: KEY, agent: 'claude', runState: 'completed',
-      updatedAt: T0 - 40 * MIN, workdir: ext, branch: null, open: false,
-    }];
-    let round = 0;
-    const calls = [];
-    const res = await sweepOnce({
-      now: () => T0,
-      listSessions: async () => { round += 1; return round === 1 ? sessions : []; },
-      readSession: async () => liveView({ phase: 'done' }),
-      readLedger: async () => okLedger,
-      stopSession: async () => ({ ok: true }),
-      deleteSession: async (_k, o) => { calls.push(o); return { ok: true }; },
-      removeWorktree: async () => ({ ok: true }),
-      isBranchMerged,
-      worktreeOwnership,
-      branchOfWorktree,
-      treeExists: () => true,
-      postComment: () => ({ ok: true }),
-      issueOf: () => 880,
-    }, { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(res.gced[0].removeTree, false, res.gced[0].treeReason);
-    assert.equal(res.unscanned, true);
-    assert.equal(res.exit, 2);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].removeWorktree, false);
-    fs.rmSync(ext, { recursive: true, force: true });
+      assert.equal(worktreeOwnership(ext).ok, false, '外部仓不得冒充本仓');
+      assert.notEqual(isBranchMerged(name, ext), true, '不许拿审查仓 --merged 套到外部路径');
+
+      const sessions = [{
+        sessionKey: KEY, agent: 'claude', runState: 'completed',
+        updatedAt: T0 - 40 * MIN, workdir: ext, branch: null, open: false,
+      }];
+      let round = 0;
+      const calls = [];
+      const res = await sweepOnce({
+        now: () => T0,
+        listSessions: async () => { round += 1; return round === 1 ? sessions : []; },
+        readSession: async () => liveView({ phase: 'done' }),
+        readLedger: async () => okLedger,
+        stopSession: async () => ({ ok: true }),
+        deleteSession: async (_k, o) => { calls.push(o); return { ok: true }; },
+        removeWorktree: async () => ({ ok: true }),
+        isBranchMerged,
+        worktreeOwnership,
+        branchOfWorktree,
+        treeExists: () => true,
+        postComment: () => ({ ok: true }),
+        issueOf: () => 880,
+      }, { sessions: {} }, { ttlMs: 30 * MIN });
+      assert.equal(res.gced[0].removeTree, false, res.gced[0].treeReason);
+      assert.equal(res.unscanned, true);
+      assert.equal(res.exit, 2);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].removeWorktree, false);
+    } finally {
+      spawnSync('git', ['branch', '-D', name], { cwd: root, encoding: 'utf8' });
+      fs.rmSync(ext, { recursive: true, force: true });
+    }
   });
 });
 
@@ -764,5 +775,165 @@ describe('gapReport —— 「没查成」怎么传播的唯一出处', () => {
     for (const v of [undefined, null, 0, '', 'true', 1]) {
       assert.equal(gapReport([{ name: 'x', known: v }]).ok, false, `known=${JSON.stringify(v)} 不该算查成`);
     }
+  });
+});
+
+describe('返工 P1（审官 round 4：TTL / 路由枚举 / open 未知 / 报帅没落）', () => {
+  const okRelay = () => ({
+    mode: 'cloud',
+    available: true,
+    agentRoutes: { claude: 'relay', dsh: 'direct' },
+    usage: { windows: [{ label: '5h', usedPercent: 1, remainingPercent: 99 }] },
+  });
+
+  it('TTL 非法/非正：判官不回收，sweepOnce 不进 GC 且非零', async () => {
+    const { judgeGcSession, knownPositiveMs } = await import(MON);
+    const { sweepOnce } = await import(CLI);
+    assert.equal(knownPositiveMs('not-a-number'), null);
+    assert.equal(knownPositiveMs(0), null);
+    assert.equal(knownPositiveMs(-1), null);
+    assert.equal(knownPositiveMs(NaN), null);
+    const meta = { state: 'completed', updatedAt: T0, open: false };
+    for (const bad of ['not-a-number', 0, -1, NaN, Number('not-a-number')]) {
+      const r = judgeGcSession({ meta, now: T0, ttlMs: typeof bad === 'string' ? Number(bad) : bad });
+      assert.equal(r.gc, false, `ttl=${bad} 仍回收了：${r.reason}`);
+      assert.match(r.reason, /TTL|没查成/);
+    }
+    const sessions = [{
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0, workdir: '/x', open: false,
+    }];
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => sessions,
+      readSession: async () => liveView({ phase: 'done' }),
+      readLedger: async () => okLedger,
+      stopSession: async () => ({ ok: true }),
+      deleteSession: async () => ({ ok: true }),
+      removeWorktree: async () => ({ ok: true }),
+      isBranchMerged: () => true,
+      postComment: () => ({ ok: true }),
+      issueOf: () => 880,
+    }, { sessions: {} }, { ttlMs: Number('not-a-number') });
+    assert.equal(res.gced.length, 0, JSON.stringify(res.gced));
+    assert.equal(res.unscanned, true);
+    assert.notEqual(res.exit, 0);
+  });
+
+  it('agentRoutes claude:"bogus"：健康 unknown，探针 unknown，不许当 direct 放行', async () => {
+    const { buildMirasimHealth, probeMirasimTarget } = await import(MON);
+    const h = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: { ...okRelay(), agentRoutes: { claude: 'bogus' } },
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(h.state, 'unknown', JSON.stringify(h.notes));
+    assert.equal(h.agentRoutes, null);
+    assert.equal(probeMirasimTarget({ agent: 'claude', health: h }).state, 'unknown');
+    const leaked = probeMirasimTarget({
+      agent: 'claude',
+      health: { ...h, state: 'ok', agentRoutes: { claude: 'bogus' } },
+    });
+    assert.equal(leaked.state, 'unknown', 'health 被编成 ok 时探针也必须拒 bogus');
+  });
+
+  it('mode 空串/未知值 → 健康 unknown；direct 腿仍可 ok', async () => {
+    const { buildMirasimHealth, probeMirasimTarget } = await import(MON);
+    const empty = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: { ...okRelay(), mode: '' },
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(empty.state, 'unknown', JSON.stringify(empty.notes));
+    const bogusMode = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: { ...okRelay(), mode: 'bogus-mode' },
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(bogusMode.state, 'unknown', JSON.stringify(bogusMode.notes));
+    const ok = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: okRelay(),
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(ok.state, 'ok', JSON.stringify(ok.notes));
+    assert.equal(probeMirasimTarget({ agent: 'dsh', health: ok }).state, 'ok');
+    assert.equal(probeMirasimTarget({ agent: 'claude', health: ok }).state, 'ok');
+  });
+
+  it('activeWorkdirs：终态且 open 非布尔/缺失必须继续保护 workdir', async () => {
+    const { activeWorkdirs } = await import(MON);
+    const set = activeWorkdirs([
+      { workdir: '/str', state: 'completed', open: 'true' },
+      { workdir: '/miss', state: 'completed' },
+      { workdir: '/done', state: 'completed', open: false },
+      { workdir: '/run', state: 'running', open: false },
+    ]);
+    assert.equal(set.has('/str'), true, 'open:"true" 没查成，land 不许拆');
+    assert.equal(set.has('/miss'), true, '缺 open 没查成，land 不许拆');
+    assert.equal(set.has('/done'), false);
+    assert.equal(set.has('/run'), true);
+  });
+
+  it('错误指纹两连同但推不出 issue、无 fallback → 报帅没落，非零', async () => {
+    const { errorFingerprint } = await import(MON);
+    const { sweepOnce } = await import(CLI);
+    const view = liveView({ error: 'view.error: boom' });
+    const fp = errorFingerprint(view);
+    assert.ok(fp);
+    const comments = [];
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => ([{
+        sessionKey: KEY, agent: 'claude', runState: 'running',
+        updatedAt: T0, workdir: '/w/x', branch: 'no-issue', open: true,
+      }]),
+      readSession: async () => view,
+      readLedger: async () => okLedger,
+      stopSession: async () => ({ ok: true }),
+      deleteSession: async () => ({ ok: true }),
+      removeWorktree: async () => ({ ok: true }),
+      isBranchMerged: () => null,
+      postComment: (a) => { comments.push(a); return { ok: true }; },
+      issueOf: () => null,
+    }, { sessions: { [KEY]: { sig: 'prev', sinceTs: T0, errFp: fp } } }, { stallMs: 8 * MIN, ttlMs: 30 * MIN });
+    assert.equal(res.escalated.length, 1);
+    assert.equal(comments.length, 0, '没目标不许假装评论已落');
+    assert.equal(res.actionFailed, true);
+    assert.equal(res.unscanned, true);
+    assert.notEqual(res.exit, 0);
+    assert.ok(res.unknown.some(u => u.key === KEY));
+  });
+
+  it('违规 relay 样本经 server-check classifyMirasimHealth 入口拦下', async () => {
+    const { buildMirasimHealth } = await import(MON);
+    const CHECK = 'file://' + path.resolve(__dirname, '..', 'scripts', 'server-check.mjs').replace(/\\/g, '/');
+    const { classifyMirasimHealth } = await import(CHECK);
+    const bogus = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: { ...okRelay(), agentRoutes: { claude: 'bogus' } },
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(bogus.state, 'unknown');
+    const via24 = classifyMirasimHealth({
+      probed: true,
+      code: 2,
+      stdout: JSON.stringify({ health: bogus }),
+    });
+    assert.equal(via24.state, 'unknown', via24.detail);
+    assert.match(via24.detail, /bogus|路由|没查成/);
+
+    const redH = buildMirasimHealth({
+      state: { version: '0.0.282' },
+      relay: { ...okRelay(), available: false },
+      pinnedVersion: '0.0.282',
+    });
+    assert.equal(redH.state, 'red');
+    const viaRed = classifyMirasimHealth({
+      probed: true,
+      code: 1,
+      stdout: JSON.stringify({ health: redH }),
+    });
+    assert.equal(viaRed.state, 'red', viaRed.detail);
   });
 });

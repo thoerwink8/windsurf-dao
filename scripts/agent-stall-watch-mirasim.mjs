@@ -37,7 +37,7 @@ import {
 } from './lib/mirasim-runtime.mjs';
 import {
   judgeStall, judgeGcSession, judgeGcWorktree, errorFingerprint,
-  activeWorkdirs,
+  activeWorkdirs, knownPositiveMs,
   wireListSessions, wireDeleteSession, wireRemoveWorktree, probeMirasim,
 } from './lib/mirasim-monitor.mjs';
 import { classifySessionState } from './lib/execution-states.mjs';
@@ -48,7 +48,12 @@ const REPO_ROOT = resolve(dirname(HERE), '..');
 const DEFAULT_STATE = join(homedir(), '.dao', 'mirasim-stall-watch.json');
 const USAGE_FILE = join(homedir(), '.dao', 'mirasim-usage.json');
 const STALL_MS = Number(process.env.MIRASIM_STALL_MS || 8 * 60_000);   // 8 分钟没动静判卡死
-const TTL_MS = Number(process.env.MIRASIM_GC_TTL_MS || 30 * 60_000);   // 终态静置 30 分钟回收
+const DEFAULT_TTL_MS = 30 * 60_000;
+const TTL_MS = (() => {
+  const raw = process.env.MIRASIM_GC_TTL_MS;
+  if (raw == null || String(raw).trim() === '') return DEFAULT_TTL_MS;
+  return knownPositiveMs(raw); // 非法/非正 → null，入口与 sweepOnce 拒绝进入 GC
+})();
 
 function parseArgs(argv) {
   const out = { mode: null, dryRun: false, json: false, state: process.env.MIRASIM_STALL_STATE || DEFAULT_STATE };
@@ -218,13 +223,18 @@ function isBranchMerged(branch, workdir) {
 export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
   const now = deps.now || (() => Date.now());
   const stallMs = opts.stallMs ?? STALL_MS;
-  const ttlMs = opts.ttlMs ?? TTL_MS;
   const dryRun = !!opts.dryRun;
   // 绝不回收的树：本仓根（主树）。真机会话的 workdir 里就有挂 master 的树，
   // 没这道闸 + branch 反查一开，第一遍就能把主树删掉。
   const protectPaths = opts.protectPaths ?? [REPO_ROOT];
   const nextState = { sessions: {} };
   const out = { scanned: 0, stalled: [], gced: [], escalated: [], live: [], unknown: [], unscanned: false, actionFailed: false };
+
+  const ttlMs = knownPositiveMs(opts.ttlMs ?? TTL_MS);
+  if (ttlMs == null) {
+    out.unscanned = true;
+    return { ...out, nextState: prevState, exit: 2, reason: 'GC TTL 不是有限正数（没查成，不进 GC）' };
+  }
 
   const sessions = await deps.listSessions();
   if (!Array.isArray(sessions)) {
@@ -317,7 +327,16 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     if (fp && prevFp && fp === prevFp) {
       const issue = (deps.issueOf ? deps.issueOf(s) : null) || opts.fallbackIssue;
       out.escalated.push({ key, fp, issue });
-      if (!dryRun && issue) {
+      if (!issue) {
+        // 报帅必须落地。没目标不是「已处理」，是没查成：标 unknown + 动作失败，非零。
+        out.unknown.push({
+          key,
+          reason: '错误指纹两连同但推不出关联 issue，报帅没落（没查成）',
+          gaps: [{ name: 'issue', why: 'issueOf 与 fallbackIssue 都空' }],
+        });
+        out.unscanned = true;
+        out.actionFailed = true;
+      } else if (!dryRun) {
         const body = escalateBody({ s, fp, view });
         const r = deps.postComment({ issue, body });
         if (!r.ok) out.actionFailed = true;
@@ -481,6 +500,11 @@ async function main(argv = process.argv.slice(2)) {
   if (args.mode === 'health') { process.exit(await runHealth(args)); }
   if (args.mode !== 'once') {
     console.error('要么 --once（保活+回收）要么 --health（健康段）');
+    process.exit(2);
+  }
+  const ttlRaw = process.env.MIRASIM_GC_TTL_MS;
+  if (ttlRaw != null && String(ttlRaw).trim() !== '' && knownPositiveMs(ttlRaw) == null) {
+    console.error(`MIRASIM_GC_TTL_MS 必须是有限正数，拒绝进入 GC（收到 ${JSON.stringify(ttlRaw)}）`);
     process.exit(2);
   }
   const runtime = createRuntime();

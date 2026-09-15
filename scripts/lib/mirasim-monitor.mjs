@@ -12,7 +12,8 @@
 //   「读不到 / 没查成」一旦被编成「已知值」（账本读不到编成稳定的 rows='x'、partial 预览当
 //   完整正文、Number(null) 折成 0、缺 text 折成 ''、sessions:null 当空集），就会走进判死 / 回收 / 报健康 ok。
 //   所以本文件只有 **一处** 判「查成了没有」——下面「没查成怎么传播」那一段
-//   （gapReport / knownTimestamp / knownPercent / stallReadGaps）。新增判据一律从那儿取结论，
+//   （gapReport / knownTimestamp / knownPercent / knownPositiveMs / knownRelayMode /
+//    knownAgentRoutes / stallReadGaps）。新增判据一律从那儿取结论，
 //   别在各自函数里另打补丁（八处补丁＝八个新洞）。
 //
 // ws op 名全部在 mirasim-server 的 server.cjs 里 grep 实证过，再连真机读回帧核对，
@@ -217,7 +218,8 @@ export function errorFingerprint(view) {
  *  meta —— 会话清单一条。状态走 sessionStateOf（真字段 state/phase/observedState，
  *           历史 runState 只兜底），终态走正典 EXECUTION_FINISHED。
  * 返回 {gc, reason, terminal}
- * 「读不到」的三格全部 fail-closed 不回收：open 不是布尔、updatedAt 不是有效时间、now 不是数。
+ * 「读不到」的格子全部 fail-closed 不回收：open 不是布尔、updatedAt 不是有效时间、
+ * now 不是数、TTL 不是有限正数（NaN TTL 会让 age < NaN 为 false，终态立刻被回收）。
  */
 export function judgeGcSession({ meta, now, ttlMs } = {}) {
   const m = meta && typeof meta === 'object' ? meta : {};
@@ -232,6 +234,10 @@ export function judgeGcSession({ meta, now, ttlMs } = {}) {
   if (typeof m.open !== 'boolean') {
     return { gc: false, terminal: true, reason: 'open 字段读不到，判不了连接还在不在（没查成，不回收）' };
   }
+  const ttl = knownPositiveMs(ttlMs);
+  if (ttl == null) {
+    return { gc: false, terminal: true, reason: 'TTL 不是有限正数（没查成，不回收）' };
+  }
   const at = knownTimestamp(m.updatedAt);
   const nowMs = knownTimestamp(now);
   if (at === null) {
@@ -243,11 +249,11 @@ export function judgeGcSession({ meta, now, ttlMs } = {}) {
   }
   if (nowMs === null) return { gc: false, terminal: true, reason: '没给有效的 now，算不出 TTL（没查成，不回收）' };
   const age = nowMs - at;
-  if (age < ttlMs) {
+  if (age < ttl) {
     return {
       gc: false,
       terminal: true,
-      reason: `${phase} 但只过了 ${Math.round(age / 60000)} 分钟（TTL ${Math.round(ttlMs / 60000)} 分钟）`,
+      reason: `${phase} 但只过了 ${Math.round(age / 60000)} 分钟（TTL ${Math.round(ttl / 60000)} 分钟）`,
     };
   }
   return { gc: true, terminal: true, reason: `${phase} 且静置 ${Math.round(age / 60000)} 分钟 > TTL，回收` };
@@ -299,6 +305,52 @@ export function knownPercent(v) {
   } else return null;
   if (!Number.isFinite(n) || n < 0 || n > 100) return null;
   return n;
+}
+
+/**
+ * 时长毫秒（唯一出处）。只认有限正数或纯数字串。
+ * 非法 / 0 / 负 / NaN / Infinity 一律 null ——**绝不**走 Number()
+ * （Number('not-a-number')===NaN，age < NaN 为 false，终态会话会被立刻 GC）。
+ */
+export function knownPositiveMs(v) {
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return null;
+    if (!/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) return null;
+    n = Number(s);
+  } else return null;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+/** relay.mode 真机帧是 cloud / local（miraquota 真机 + 统一执行体文档）。空串/未知值 = 没查成。 */
+export const RELAY_MODES = new Set(['cloud', 'local']);
+/** agentRoutes 值只认这两格。其它字符串（含 bogus）不是「不走 relay」，是没查成。 */
+export const ROUTE_LEGS = new Set(['direct', 'relay']);
+
+export function knownRelayMode(raw) {
+  if (typeof raw !== 'string') return { known: false, mode: null, why: '缺字段' };
+  const mode = raw.trim();
+  if (!mode) return { known: false, mode: null, why: 'mode 是空串' };
+  if (!RELAY_MODES.has(mode)) return { known: false, mode: null, why: `mode=${mode} 不是 cloud/local` };
+  return { known: true, mode, why: null };
+}
+
+export function knownAgentRoutes(raw) {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { known: false, routes: null, why: '缺字段或不是对象' };
+  }
+  const routes = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!k) return { known: false, routes: null, why: 'agentRoutes 有空键' };
+    if (!ROUTE_LEGS.has(v)) {
+      return { known: false, routes: null, why: `${k} 路由是 ${JSON.stringify(v)}，不是 direct/relay` };
+    }
+    routes[k] = v;
+  }
+  return { known: true, routes, why: null };
 }
 
 /** 一个额度窗折成健康表要的形状。缺字段保持 null，不折成 0。 */
@@ -376,14 +428,22 @@ export function buildMirasimHealth({ state, relay, connectError, pinnedVersion =
   if (!relay || typeof relay !== 'object') {
     notes.push('没收到 relay 帧，模式/路由/可用性/额度窗没查成');
   } else {
-    mode = typeof relay.mode === 'string' ? relay.mode : null;
-    agentRoutes = relay.agentRoutes && typeof relay.agentRoutes === 'object' ? relay.agentRoutes : null;
+    const modeJ = knownRelayMode(relay.mode);
+    mode = modeJ.known ? modeJ.mode : null;
+    const routesJ = knownAgentRoutes(relay.agentRoutes);
+    agentRoutes = routesJ.known ? routesJ.routes : null;
     available = typeof relay.available === 'boolean' ? relay.available : null;
     const ws = relay.usage && Array.isArray(relay.usage.windows) ? relay.usage.windows : null;
     if (ws) windows = ws.map(windowView);
     else notes.push('relay 帧里没有 usage.windows，额度窗没查成');
-    if (mode == null) notes.push('relay 帧里没有 mode，中转模式没查成');
-    if (agentRoutes == null) notes.push('relay 帧里没有 agentRoutes，各 agent 路由没查成');
+    if (!modeJ.known) {
+      notes.push(modeJ.why === '缺字段' ? 'relay 帧里没有 mode，中转模式没查成' : `relay 帧 mode 不合法：${modeJ.why}`);
+    }
+    if (!routesJ.known) {
+      notes.push(routesJ.why === '缺字段或不是对象'
+        ? 'relay 帧里没有 agentRoutes，各 agent 路由没查成'
+        : `relay 帧 agentRoutes 不合法：${routesJ.why}`);
+    }
     if (available === false) notes.push('relay.available=false——云端中转当前不可用（派前探针不许放行）');
     else if (available == null) notes.push('relay 帧里没有 available 字段，中转可用性没查成');
   }
@@ -463,13 +523,14 @@ export async function wireRemoveWorktree(wire, { path } = {}, ackMs = 1500) {
 // 帅位 2026-09-04 补：健康表段、派前 relay 腿探活、land 保护树、#881 额度统计——
 // 全部读同一份采集，别各连各的、各判各的。
 
-/** 活动会话的 workdir 集合（给 land 保护「mirasim 在用的树」）。open 或非终态都算在用。 */
+/** 活动会话的 workdir 集合（给 land 保护「mirasim 在用的树」）。open 或非终态都算在用。
+ *  终态且 open===false 才出保护集。open 缺失/非布尔与 judgeGcSession 一样当没查成，继续保护。 */
 export function activeWorkdirs(sessions) {
   const set = new Set();
   for (const s of Array.isArray(sessions) ? sessions : []) {
     if (!s || typeof s !== 'object' || typeof s.workdir !== 'string' || !s.workdir) continue;
     const terminal = classifySessionState(s) === 'finished';
-    if (s.open === true || !terminal) set.add(s.workdir);
+    if (s.open !== false || !terminal) set.add(s.workdir);
   }
   return set;
 }
@@ -606,11 +667,12 @@ export function probeMirasimTarget({ agent, health } = {}) {
   if (health.state !== 'ok') {
     return { target, state: 'unknown', why: health.notes?.join('；') || `健康段 ${health.state || '不是 ok'}（没查成，不按路由放行）` };
   }
-  const routes = health.agentRoutes;
-  if (!routes) return { target, state: 'unknown', why: '没读到 agentRoutes（没查成）' };
-  const leg = routes[agent];
+  const parsed = knownAgentRoutes(health.agentRoutes);
+  if (!parsed.known) return { target, state: 'unknown', why: parsed.why === '缺字段或不是对象' ? '没读到 agentRoutes（没查成）' : parsed.why };
+  const leg = parsed.routes[agent];
   if (leg == null) return { target, state: 'unknown', why: `agentRoutes 里没有 ${agent}（没查成）` };
-  if (leg !== 'relay') return { target, state: 'ok', why: `${agent} 走 ${leg}（不烧 mirasim relay 腿）` };
+  if (leg === 'direct') return { target, state: 'ok', why: `${agent} 走 direct（不烧 mirasim relay 腿）` };
+  if (leg !== 'relay') return { target, state: 'unknown', why: `${agent} 路由是 ${JSON.stringify(leg)}，不是 direct/relay（没查成）` };
   // 走 relay：available 必须明确为 true，再看额度窗读到没
   if (health.available === false) {
     return { target, state: 'red', why: `${agent}→relay 但 relay.available=false（中转不可用，不许放行）` };

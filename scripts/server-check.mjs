@@ -1299,6 +1299,36 @@ export function classifyCommanderStatus({ probed = false, reason = '', code, std
   return { state: RED, detail };
 }
 
+/**
+ * ㉔ mirasim 执行体健康：把 `--health --json` 的出口译成三态。
+ * 不 import 被检查对象的判官（纪律：不复用被检查对象自己的解析逻辑），只认它交出的
+ * health.state / 退出码。违规 relay 样本先被 --health 判红/unknown，再经这里拦下。
+ */
+export function classifyMirasimHealth({ probed = false, reason = '', code, stdout = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${reason || ''}` };
+  const text = String(stdout || '');
+  const start = text.indexOf('{');
+  if (start >= 0) {
+    try {
+      const payload = JSON.parse(text.slice(start));
+      const health = payload && payload.health && typeof payload.health === 'object' ? payload.health : null;
+      const st = health && typeof health.state === 'string' ? health.state : null;
+      const notes = Array.isArray(health?.notes) ? health.notes.join('；') : '';
+      const head = notes || `mirasim 执行体 ${st || '?'}`;
+      if (st === 'ok') return { state: OK, detail: head };
+      if (st === 'red') return { state: RED, detail: `mirasim 健康红：${head}` };
+      if (st === 'unknown') return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+      return { state: UNKNOWN, detail: `mirasim 健康状态不是三态（${st ?? '缺'}）：${head}` };
+    } catch {
+      // JSON 坏了：退回退出码，不当绿
+    }
+  }
+  const head = text.split('\n')[0].trim();
+  if (code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
+  if (code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+  return { state: RED, detail: `mirasim 健康红：${head}` };
+}
+
 const CHECKS = [
   ['② 非 root 运行', checkNotRoot],
   ['⑧ land timer 在册且启用', checkLandAutomation],
@@ -1318,12 +1348,8 @@ const CHECKS = [
   ['(22) mirasim 侧实跑腿与选型腿表对得上（#944）', checkModelReconcile],
   ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
   ['(24) mirasim 执行体健康（版本/relay 模式/额度窗，#880 卡 D）', () => {
-    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'agent-stall-watch-mirasim.mjs'), '--health'], { timeout: 30000 });
-    if (!r.probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${r.reason}` };
-    const head = String(r.stdout || '').split('\n')[0].trim();
-    if (r.code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
-    if (r.code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
-    return { state: RED, detail: `mirasim 健康红：${head}` };
+    const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'agent-stall-watch-mirasim.mjs'), '--health', '--json'], { timeout: 30000 });
+    return classifyMirasimHealth(r);
   }],
 ];
 
@@ -1377,6 +1403,44 @@ function selfTest() {
     timersText: `Wed 2026-09-07 01:17:00 CST 30min left n/a n/a ${LAND_TIMER} dao-land.service`,
   });
   if (landOk.state !== 'ok') failures.push(`land timer 在册应判 ok，实际 ${landOk.state}`);
+
+  // #880 卡 D / PR #885：违规 relay/健康样本必须经 ㉔ 入口拦下，不能只在底层纯函数里红。
+  const miraRed = classifyMirasimHealth({
+    probed: true,
+    code: 1,
+    stdout: JSON.stringify({
+      health: {
+        state: 'red',
+        mode: 'cloud',
+        available: false,
+        agentRoutes: { claude: 'relay' },
+        notes: ['relay.available=false——云端中转当前不可用（派前探针不许放行）'],
+      },
+    }),
+  });
+  if (miraRed.state !== RED) {
+    failures.push(`故意 available:false 应经 (24) 判红，实际 ${miraRed.state}：${miraRed.detail}`);
+  }
+  const miraBogus = classifyMirasimHealth({
+    probed: true,
+    code: 2,
+    stdout: JSON.stringify({
+      health: {
+        state: 'unknown',
+        mode: 'cloud',
+        available: true,
+        agentRoutes: { claude: 'bogus' },
+        notes: ['relay 帧 agentRoutes 不合法：claude 路由是 "bogus"，不是 direct/relay'],
+      },
+    }),
+  });
+  if (miraBogus.state !== UNKNOWN) {
+    failures.push(`故意路由 bogus 应经 (24) 判 unknown，实际 ${miraBogus.state}：${miraBogus.detail}`);
+  }
+  const miraBlind = classifyMirasimHealth({ probed: false, reason: 'spawn 失败：ENOENT' });
+  if (miraBlind.state !== UNKNOWN) {
+    failures.push(`--health 没跑成应判 unknown，实际 ${miraBlind.state}`);
+  }
 
   // #944：腿表标「停用」的腿实际在跑 —— 必须红；探针流量（非 200 / local 腿）不许被判成违规。
   const RECON_LEGS = [
