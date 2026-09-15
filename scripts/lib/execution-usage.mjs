@@ -63,7 +63,10 @@ function finishUsageResult(result) {
   const split = partitionUsageCodes(result.gaps);
   result.status = unique([...(result.status || []), ...split.status]);
   result.gaps = split.gaps;
-  result.complete = result.gaps.length === 0;
+  // complete is independent of "no faults": catch-up/bounds live on status, and
+  // a caller may already have marked the scan unfinished. Never promote that
+  // to success just because gaps were partitioned out (#1231 / PR #1301).
+  result.complete = result.complete !== false && result.gaps.length === 0 && result.status.length === 0;
   return result;
 }
 
@@ -367,8 +370,12 @@ export function importUsageInbox(inbox, input = {}) {
     if (!fs.lstatSync(inbox).isDirectory() || fs.lstatSync(inbox).isSymbolicLink()) throw new Error('unsafe_inbox');
     const manifest = json(path.join(inbox, 'manifest.json'));
     if (!manifest || manifest.schema !== 1) { result.gaps.push('inbox_manifest_missing'); return finishUsageResult(result); }
-    if (!manifest.complete) result.gaps.push('inbox_export_incomplete');
+    if (!manifest.complete) {
+      result.gaps.push('inbox_export_incomplete');
+      result.complete = false;
+    }
     if (Array.isArray(manifest.gaps)) result.gaps.push(...manifest.gaps);
+    if (Array.isArray(manifest.status)) result.status.push(...manifest.status);
     const age = Date.now() - Date.parse(manifest.exportedAt);
     if (!Number.isFinite(age) || age > 15 * 60 * 1000) result.gaps.push('inbox_export_stale');
     const budget = { count: 0, max: options.limits.maxRows + 512 };
@@ -387,7 +394,10 @@ export function importUsageInbox(inbox, input = {}) {
       const added = appendUsage(row, options);
       result[added.committed ? 'committed' : 'duplicates']++;
     });
-    if (budget.exhausted) result.gaps.push('inbox_scan_limit');
+    if (budget.exhausted) {
+      result.gaps.push('inbox_scan_limit');
+      result.complete = false;
+    }
   } catch (e) { result.gaps.push(e.code === 'ENOENT' ? 'inbox_missing' : 'inbox_invalid'); }
   return finishUsageResult(result);
 }
@@ -422,14 +432,21 @@ export function publishUsageInbox({ dir, inbox, readerGid, limits: requestedLimi
     if (!buckets.has(bucket)) { sharedDir(bucket); buckets.add(bucket); }
     if (atomic(hashedDest, row, true, { mode: 0o640, gid: readerGid })) published++;
   });
-  const collection = json(path.join(dir, 'collection.json'));
-  const exportFaults = Array.isArray(collection?.gaps) ? collection.gaps : [];
+  const collection = json(path.join(dir, 'collection.json')) || {};
+  const split = partitionUsageCodes([
+    ...(Array.isArray(collection.gaps) ? collection.gaps : []),
+    budget.exhausted ? 'inbox_scan_limit' : null,
+  ]);
+  const status = unique([
+    ...(Array.isArray(collection.status) ? collection.status : []),
+    ...split.status,
+  ]);
   const manifest = {
     schema: 1, origin: 'root-mirasim', exportedAt: new Date().toISOString(),
-    complete: !budget.exhausted && exportFaults.length === 0,
+    complete: !budget.exhausted && split.gaps.length === 0 && status.length === 0 && collection.complete !== false,
     rows: count, published,
-    gaps: unique([...exportFaults, budget.exhausted ? 'inbox_scan_limit' : null]),
-    status: Array.isArray(collection?.status) ? collection.status : [],
+    gaps: split.gaps,
+    status,
     sourceTypes: ['mirasim-ledger','mirasim-session','mirasim-traffic'],
   };
   atomic(path.join(inbox, 'manifest.json'), manifest, false, { mode: 0o640, gid: readerGid });
@@ -692,7 +709,10 @@ function collectFile(spec, options, metadata, totals) {
     let i = cp.fingerprint === fingerprint && cp.size === stat.size && cp.mtimeMs === stat.mtimeMs ? cp.entryOffset || 0 : 0;
     for (; i < entries.length && totals.committed < limits.maxCommittedPerRun; i++) if (entries[i] && typeof entries[i] === 'object') commit(entries[i], i);
     atomic(checkpointFile, { fingerprint, size: stat.size, mtimeMs: stat.mtimeMs, entryOffset: i, complete: i === entries.length });
-    if (i < entries.length) totals.gaps.push('collection_commit_limit');
+    if (i < entries.length) {
+      totals.gaps.push('collection_commit_limit');
+      totals.complete = false;
+    }
     return;
   }
   let offset = cp.fingerprint === fingerprint && cp.offset <= stat.size ? cp.offset : 0;
@@ -740,6 +760,7 @@ function collectFile(spec, options, metadata, totals) {
     const code = totals.committed >= limits.maxCommittedPerRun ? 'collection_commit_limit' : start === 0 && bytes >= limits.maxLineBytes ? 'line_size_limit' : next < offset + bytes && bytes < limits.maxBytesPerSource ? 'interrupted_tail' : 'source_scan_pending';
     const idle = code === 'source_scan_pending' && next === offset && totals.committed === committedBefore;
     totals.gaps.push(idle ? 'source_scan_stalled' : code);
+    totals.complete = false;
   }
 }
 
@@ -768,7 +789,11 @@ export function collectUsage(input = {}) {
     const sources = input.sources || [...discover(options, totals.gaps), ...(Array.isArray(config?.sources) ? config.sources : [])];
     if (sources.length > options.limits.maxSources) totals.gaps.push('source_limit');
     for (const spec of sources.slice(0, options.limits.maxSources)) {
-      if (totals.committed >= options.limits.maxCommittedPerRun) { totals.gaps.push('collection_commit_limit'); break; }
+      if (totals.committed >= options.limits.maxCommittedPerRun) {
+        totals.gaps.push('collection_commit_limit');
+        totals.complete = false;
+        break;
+      }
       totals.sources++;
       collectFile(spec, options, metadata, totals);
     }
@@ -779,6 +804,7 @@ export function collectUsage(input = {}) {
       totals.duplicates += imported.duplicates;
       totals.gaps.push(...imported.gaps);
       totals.status.push(...(imported.status || []));
+      if (imported.complete === false) totals.complete = false;
     }
     if (!totals.sources && !totals.imported && !(input.inboxes || config?.inboxes || []).length) totals.gaps.push('no_usage_sources');
     finishUsageResult(totals);
