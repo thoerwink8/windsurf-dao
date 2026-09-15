@@ -219,12 +219,30 @@ export const REVIEWER_CAP_FLOOR = 2;
  * **有限渠道上限始终是最终上界**。保底只在没有任何有限渠道约束时生效——
  * `channelOf() => 1` 必须回 1，不许被保底抬成 2（两层取严的本意；抬上去会重演 429）。
  *
+ * **`DAO_REVIEWER_CAP` 只收紧、不放宽**，而且必须从这里走。它原先在 `dao.mjs` 里是一条
+ * 平级分支（`env ? env : resolveReviewerCap(...)`），整段渠道取严被绕过去——
+ * 队列实际落在 cap=1 的渠道时 `DAO_REVIEWER_CAP=8` 仍会拉 8 张，造出一批必被渠道闸拒绝的
+ * 启动尝试，跟「有限渠道上限始终是最终上界」正面矛盾（#1265 审官判红第 1 条）。
+ * 这个逃生口的用途是人手临时**压**并发，不是抬过上游合同——所以它跟前两层一起取严。
+ * 接在参数上而不是留在调用方：留在调用方，下一个调用点还会再写一遍那条平级分支。
+ *
  * @param cores       本机核数（admission.cores）；读不到传 null
  * @param reviewerIds 本轮实际会用的审官 id（reviewerIdsForCap 的产物）；读不到传 null
  * @param channelOf   审官 id → 有限渠道上限（认不出 / 不限回 null 或 Infinity）
+ * @param envCap      人手逃生口（DAO_REVIEWER_CAP 的原文）；非正整数 = 没给，不参与
  * @returns 正整数上限
  */
-export function resolveReviewerCap({ cores = null, reviewerIds = null, channelOf = null } = {}) {
+export function resolveReviewerCap({ cores = null, reviewerIds = null, channelOf = null, envCap = null } = {}) {
+  // 一条规则管到底：环境变量到手就是字符串，parseInt 是它一直以来的读法（`2.5` 读成 2，只会更严）。
+  // 数字与字符串走同一条，免得同一个值从两个入口进来得出两个上限。
+  const env = Number.parseInt(String(envCap ?? ''), 10);
+  const byEnv = Number.isInteger(env) && env > 0 ? env : null;
+  const resolved = resolveReviewerCapWithoutEnv({ cores, reviewerIds, channelOf });
+  // 只收紧：取严之后仍可能被逃生口压得更低，但永远不会被它抬高。
+  return byEnv == null ? resolved : Math.min(byEnv, resolved);
+}
+
+function resolveReviewerCapWithoutEnv({ cores = null, reviewerIds = null, channelOf = null } = {}) {
   const byMachine = Number.isInteger(cores) && cores > 0 ? cores : null;
   let byChannel = null;
   const ids = Array.isArray(reviewerIds) ? reviewerIds : null;

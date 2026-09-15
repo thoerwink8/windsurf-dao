@@ -149,6 +149,59 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
         '只传队列实际用的模型 ⇒ 5，不被旁路候选拖住');
     });
 
+    // #1265 审官判红第 1 条：`DAO_REVIEWER_CAP` 原先在 dao.mjs 里是一条**平级分支**
+    // （`env ? env : resolveReviewerCap(...)`），有环境值就整段跳过渠道取严。
+    // 于是队列实际落在 cap=1 的渠道时，DAO_REVIEWER_CAP=8 仍会拉 8 张——
+    // 造出一批必被渠道闸拒绝的启动尝试，跟「有限渠道上限始终是最终上界」正面矛盾。
+    it('DAO_REVIEWER_CAP 只收紧不放宽：渠道 cap=1 时给 8 仍然是 1', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 1, envCap: '8' }),
+        1,
+        '逃生口不许抬过上游合同——抬上去就是一批注定被拒的启动尝试',
+      );
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: 8 }),
+        5,
+        '渠道 5 比环境值 8 严 ⇒ 听渠道',
+      );
+    });
+
+    it('DAO_REVIEWER_CAP 比两层都严时听它——它是人手临时压并发的口子', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: '2' }), 2);
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: null, channelOf: null, envCap: 1 }), 1);
+    });
+
+    it('DAO_REVIEWER_CAP 给的不是正整数 ⇒ 当没给，不许因此把上限压成 0', async () => {
+      const { resolveReviewerCap, REVIEWER_CAP_FLOOR } = await RP;
+      for (const bad of ['', '0', '-1', 'abc', null, undefined, NaN]) {
+        assert.equal(
+          resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: bad }),
+          5,
+          `envCap=${JSON.stringify(bad)} 该被忽略`,
+        );
+      }
+      assert.equal(resolveReviewerCap({ envCap: 'abc' }), REVIEWER_CAP_FLOOR);
+      // 小数按 parseInt 读（环境变量到手是字符串，这是它一直以来的读法），只会更严，不会更松。
+      for (const 小数 of ['2.5', 2.5]) {
+        assert.equal(
+          resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: 小数 }),
+          2,
+          `envCap=${JSON.stringify(小数)} 该读成 2，且数字与字符串同一条规则`,
+        );
+      }
+    });
+
+    it('生产接线正控：dao.mjs 把环境值交给 resolveReviewerCap，不再自己开平级分支', () => {
+      const src = require('node:fs').readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
+      const 取严处 = src.slice(src.indexOf('async function admitReviewPull'), src.indexOf('async function admitReviewPull') + 1200);
+      assert.match(取严处, /envCap:\s*process\.env\.DAO_REVIEWER_CAP/,
+        '环境值必须作为 envCap 传进取严函数');
+      assert.doesNotMatch(取严处, /DAO_REVIEWER_CAP[\s\S]{0,200}\?\s*cap\s*:/,
+        '不许再出现「有环境值就整段跳过取严」的平级分支');
+    });
+
     it('票上那位起不来时，渠道约束跟 drain 一样看同厂有效 fallback', async () => {
       const { reviewerIdsForCap } = await RP;
       const ids = reviewerIdsForCap(

@@ -1462,15 +1462,16 @@ function cmdReviewerDone(args) {
  * 名单读不到 ⇒ 没查成 ⇒ 这一轮拉 0 张，票留在队列，不许当成「0 个在跑」去拉满。
  */
 async function admitReviewPull(tickets) {
-  const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
   // 上限不再是手打常量：机器那层按核数，上游那层按**本轮票实际会用的审官**所落渠道取严。
   // 全部可用候选里那条没用到的 cap=1 腿不许拖住整队。
   // 有限渠道上限始终是最终上界；保底只在没有任何有限渠道约束时生效。
   const usable = usableReviewerIds();
-  const limit = Number.isInteger(cap) && cap > 0 ? cap : resolveReviewerCap({
+  // DAO_REVIEWER_CAP 也走同一个函数（只收紧不放宽）——这里不许再出现「有环境值就整段跳过取严」的平级分支。
+  const limit = resolveReviewerCap({
     cores: (() => { try { return cpus()?.length ?? null; } catch { return null; } })(),
     reviewerIds: reviewerIdsForCap(tickets, usable),
     channelOf: reviewerChannelCap,
+    envCap: process.env.DAO_REVIEWER_CAP,
   });
   let sessions = null;
   try {
