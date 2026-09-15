@@ -2,6 +2,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const REPO = path.resolve(__dirname, '..');
 const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
@@ -222,6 +224,98 @@ describe('treeChannelResolver —— 会话名单优先，派工账本兜底', (
     const out = countInFlightByChannel(trees, treeChannelResolver({ jobs: [], legs: LEGS, models: [], sessions }));
     assert.deepEqual(out.counts, { 'gw:windsurf': 2, 'gw:grok': 1 });
     assert.deepEqual(out.unattributed, []);
+  });
+});
+
+// 审官 PR #1266 第二轮红项：解析器接了名单，门内 readChannelFacts 没接。
+// 生产入口 checkChannelCapacity / admitAndReserveChannel 仍只用账本兜底，
+// 账本归不掉的在途树进 unattributed，procCounts={}，cap=1 继续当 0 放行。
+describe('门内路径：会话名单接入 checkChannelCapacity / admitAndReserveChannel', () => {
+  const TREE = '/w/dao-review-pr-1232';
+  const GATE_LEGS = [{
+    id: 'grok@gw/orca', 状态: '在役', 模型: 'grok-4.6', 供应商: 'gw',
+    落地: { provider: 'gw', cli_model: 'gw/grok-4.6' }, 并发上限: 1,
+  }];
+  const ioBase = {
+    loadRouting: () => ({ 腿: GATE_LEGS }),
+    loadModels: () => [],
+    checkInFlight: () => ({ ok: true, trees: [TREE], count: 1 }),
+    loadJobs: () => [],
+    loadBreaker: () => null,
+  };
+
+  it('负控：账本空、也没会话名单 → 在途进 unattributed，cap=1 仍判 free（审官复现的断链）', async () => {
+    const { readChannelFacts, checkChannelCapacity } = await CC;
+    const facts = readChannelFacts({ io: ioBase });
+    assert.equal(facts.ok, true);
+    assert.deepEqual(facts.procCounts, {});
+    assert.deepEqual(facts.unattributed, [TREE]);
+    const v = checkChannelCapacity({ model: 'grok-4.6', io: ioBase });
+    assert.equal(v.verdict, 'free');
+    assert.equal(v.inFlight, 0);
+  });
+
+  it('账本归不掉、会话名单能归因 → checkChannelCapacity 对 cap=1 判满', async () => {
+    const { readChannelFacts, checkChannelCapacity } = await CC;
+    const io = { ...ioBase, loadSessions: () => [sess(TREE, 'grok-4.6', 1)] };
+    const facts = readChannelFacts({ io });
+    assert.deepEqual(facts.procCounts, { 'gw:grok': 1 });
+    assert.deepEqual(facts.unattributed, []);
+    const v = checkChannelCapacity({ model: 'grok-4.6', io });
+    assert.equal(v.ok, true);
+    assert.equal(v.verdict, 'full');
+    assert.equal(v.reason, 'at-cap');
+    assert.equal(v.channel, 'gw:grok');
+    assert.equal(v.inFlight, 1);
+    assert.equal(v.cap, 1);
+  });
+
+  it('同一条穿过 admitAndReserveChannel：cap=1 背压，不占槽', async () => {
+    const { admitAndReserveChannel } = await CC;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1266-admit-'));
+    const io = { ...ioBase, loadSessions: () => [sess(TREE, 'grok-4.6', 1)] };
+    const r = admitAndReserveChannel({ model: 'grok-4.6', io, home, now: 1 });
+    assert.equal(r.ok, true);
+    assert.equal(r.verdict, 'full');
+    assert.equal(r.reason, 'at-cap');
+    assert.equal(r.inFlight, 1);
+    assert.equal(r.cap, 1);
+    // 满员那条不写预占；release 是 noop，调了也不该留下 .res
+    const left = [];
+    const walk = (d) => {
+      if (!fs.existsSync(d)) return;
+      for (const n of fs.readdirSync(d)) {
+        const p = path.join(d, n);
+        if (fs.statSync(p).isDirectory()) walk(p);
+        else if (n.endsWith('.res')) left.push(p);
+      }
+    };
+    walk(path.join(home, '.dao'));
+    assert.deepEqual(left, []);
+  });
+
+  it('登记文件（可持久化源）读出来就能喂给门：cap=1 判满', async () => {
+    const { loadSessionAttribution, checkChannelCapacity } = await CC;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1266-reg-'));
+    fs.writeFileSync(path.join(dir, 'grok%3Aabc.json'), JSON.stringify({
+      workdir: TREE, model: 'grok-4.6', updatedAt: 9, state: 'running',
+    }));
+    fs.writeFileSync(path.join(dir, 'junk.json'), 'not json');
+    fs.writeFileSync(path.join(dir, 'nomodel.json'), JSON.stringify({ workdir: '/w/other' }));
+    const sessions = loadSessionAttribution({ dir });
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].cwd, TREE);
+    assert.equal(sessions[0].model, 'grok-4.6');
+    const io = { ...ioBase, loadSessions: () => sessions };
+    const v = checkChannelCapacity({ model: 'grok-4.6', io });
+    assert.equal(v.verdict, 'full');
+    assert.equal(v.reason, 'at-cap');
+  });
+
+  it('登记目录不在 → []（查成了的空，不是没查成）', async () => {
+    const { loadSessionAttribution } = await CC;
+    const sessions = loadSessionAttribution({ dir: path.join(os.tmpdir(), 'dao-1266-no-such-' + Date.now()) });
+    assert.deepEqual(sessions, []);
   });
 });
 

@@ -476,21 +476,36 @@ export function applyChannelFailure(doc, { target, now, roundMs = ROUND_MS, why,
 // ── 薄壳：门里用的生产入口（这两个碰盘，上面全是纯函数）──────────────────────
 
 /**
- * 门里的渠道上限判据（生产入口）。**取数与判据分离**：本函数只取数，判定全在
- * judgeChannelForModel。三态出口，与租约闸一一对应：
- *   { ok:true, verdict:'free' }              → 放行
- *   { ok:true, verdict:'full', reason, why } → 满员/熔断，调用方按**背压**排队下轮
- *   { ok:false, unscanned:true, error }      → 没查成，调用方 fail-close 拒起
- *
- * 哪些算「没查成」（收紧）：路由表读不出来、/proc 在途数读不出来。
- * 哪些**故意不收紧**：`model` 没给、或这个模型在腿表/选型里都认不出渠道。
- *   理由：那不是「读失败」，是**结构性缺席**（调用方没钉模型 / 模型没登记）。
- *   收紧的代价是**所有不带 model 的会话全起不来**（dao start、临时会话），
- *   那是全盘阻塞；而漏拦的代价有兜底——未登记模型在 commander 侧被
- *   assessDispatchModel 的 model-not-in-routing 拦着，机器总闸 admission 也仍在。
+ * 门内用的可持久化归因源：读 `~/.dao/execution/sessions/*.json`。
+ * 登记条带 workdir + model，形状喂给 `modelOfTreeFromSessions`（cwd / model / lastActivityAt）。
+ * 目录不在、读不动、单条坏 JSON → 跳过（与 loadJobs 同：归不到渠道进 unattributed，不把整闸 fail-close）。
  */
+export function loadSessionAttribution({ home = os.homedir(), dir } = {}) {
+  const root = dir || join(home, '.dao', 'execution', 'sessions');
+  let names;
+  try { names = readdirSync(root); }
+  catch { return []; }
+  const out = [];
+  for (const name of Array.isArray(names) ? names : []) {
+    if (!String(name).endsWith('.json')) continue;
+    let rec;
+    try { rec = JSON.parse(String(readFileSync(join(root, String(name)), 'utf8'))); }
+    catch { continue; }
+    if (!rec || typeof rec !== 'object') continue;
+    const cwd = String(rec.workdir || rec.cwd || '').replace(/\/+$/, '');
+    const model = String(rec.model || rec.requestedModel || rec.actualModel || '').trim();
+    if (!cwd || !model) continue;
+    out.push({
+      cwd,
+      model,
+      lastActivityAt: rec.updatedAt ?? rec.lastActivityAt ?? rec.startedAt ?? rec.createdAt ?? null,
+    });
+  }
+  return out;
+}
+
 /**
- * 取数：把判渠道要的四份快照读出来。**故意放在锁外**——它是读，且是本段里最慢的一步
+ * 取数：把判渠道要的快照读出来。**故意放在锁外**——它是读，且是本段里最慢的一步
  * （/proc 扫几百个 pid）。放锁里会把临界区从毫秒级拉长，而 #849 那把锁的等待是**忙自旋**
  * （dispatch-lock.mjs 的 sleep 是 `while (Date.now() < t) {}`），临界区一长，等待者就烧 CPU，
  * 在这台常年负载 19-20 的机器上比原问题更糟。
@@ -522,8 +537,16 @@ export function readChannelFacts({ model, io = {} } = {}) {
     return { ok: false, unscanned: true, error: `渠道在途数没查成（${flight.error || '在途判据没给'}）` };
   }
   const jobs = typeof io.loadJobs === 'function' ? io.loadJobs() : [];
+  // 会话登记优先：门里没有指挥官那份已扫名单，不能再起一次 40s 的 listSessions。
+  // 同等准确的可持久化源是 ~/.dao/execution/sessions/*.json（workdir+model 实测全覆盖）。
+  // 没注入 / 读失败 → []，回落账本；归不掉进 unattributed，不把整闸 fail-close。
+  let sessions = [];
+  try {
+    const loaded = typeof io.loadSessions === 'function' ? io.loadSessions() : [];
+    if (Array.isArray(loaded)) sessions = loaded;
+  } catch { sessions = []; }
   const counted = countInFlightByChannel(flight.trees || [], treeChannelResolver({
-    jobs, legs: raw['腿'], models, caps: capsDoc.caps,
+    jobs, legs: raw['腿'], models, caps: capsDoc.caps, sessions,
   }));
   if (!counted.ok) return { ok: false, unscanned: true, error: `渠道在途数没查成（${counted.error}）` };
   const breaker = typeof io.loadBreaker === 'function' ? io.loadBreaker() : null;
@@ -552,6 +575,20 @@ function shapeVerdict(verdict, { unattributedTrees = 0, reservations = 0 } = {})
   };
 }
 
+/**
+ * 门里的渠道上限判据（生产入口）。**取数与判据分离**：本函数只取数，判定全在
+ * judgeChannelForModel。三态出口，与租约闸一一对应：
+ *   { ok:true, verdict:'free' }              → 放行
+ *   { ok:true, verdict:'full', reason, why } → 满员/熔断，调用方按**背压**排队下轮
+ *   { ok:false, unscanned:true, error }      → 没查成，调用方 fail-close 拒起
+ *
+ * 哪些算「没查成」（收紧）：路由表读不出来、/proc 在途数读不出来。
+ * 哪些**故意不收紧**：`model` 没给、或这个模型在腿表/选型里都认不出渠道。
+ *   理由：那不是「读失败」，是**结构性缺席**（调用方没钉模型 / 模型没登记）。
+ *   收紧的代价是**所有不带 model 的会话全起不来**（dao start、临时会话），
+ *   那是全盘阻塞；而漏拦的代价有兜底——未登记模型在 commander 侧被
+ *   assessDispatchModel 的 model-not-in-routing 拦着，机器总闸 admission 也仍在。
+ */
 export function checkChannelCapacity({
   model, now = Date.now(), io = {}, breakerPolicy,
 } = {}) {
