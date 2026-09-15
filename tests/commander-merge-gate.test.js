@@ -414,6 +414,43 @@ describe('#1228 合并后 job.closed 归真实模型、不伪造零返工', () =
       fs.rmSync(ctx.dir, { recursive: true, force: true });
     }
   });
+
+  it('账本含坏 JSON + 无审官 dispatch 不产生审官 job.closed，归因保持 unscanned', async () => {
+    const { recordJobClosed } = await CMD;
+    const { writeJobDispatch, workerJobId, reviewerJobId } = await JOB;
+    const { reworkFromClosed } = await CAL;
+    const ctx = tempCtx();
+    try {
+      const d = writeJobDispatch({
+        ...ctx, ts, jobId: workerJobId(19002), model: 'grok-4.6', identity: '工人',
+        workType: '写码', terminal: 'test', prNumber: 19002,
+      });
+      assert.equal(d.ok, true, d.error);
+      fs.writeFileSync(path.join(ctx.dir, 'bad.json'), '{not json');
+      // reviews 已读到、且只有 APPROVED：完整账本时会写成 inferred + worker_rework=0。
+      const out = recordJobClosed({
+        pr: 19002, why: '判绿可合', say: silent, ctx,
+        reviews: [{ state: 'APPROVED', body: '判定：绿' }],
+      });
+      assert.equal(out['审官'].skipped, 'no-dispatch');
+      assert.equal(out['审官'].ok, undefined);
+      assert.equal(out['工人'].ok, true, out['工人'].error);
+      assert.equal(out['工人'].event.attribution_source, 'unscanned');
+      assert.equal(out['工人'].event.worker_rework, undefined);
+      assert.notEqual(out['工人'].event.attribution_source, 'inferred');
+      assert.equal(reworkFromClosed(out['工人'].event), null);
+
+      const closed = fs.readdirSync(ctx.dir).filter((f) => f.endsWith('.json')).flatMap((f) => {
+        try { return [JSON.parse(fs.readFileSync(path.join(ctx.dir, f), 'utf8'))]; }
+        catch { return []; }
+      }).filter((e) => e && e.type === 'job.closed');
+      const reviewerId = reviewerJobId(19002);
+      assert.equal(closed.filter((e) => e.job_id === reviewerId).length, 0);
+      assert.equal(closed.filter((e) => e.job_id === workerJobId(19002)).length, 1);
+    } finally {
+      fs.rmSync(ctx.dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // #1235：记账步骤不许当门。实测 #1143 判绿可合、CI 绿、MERGEABLE，只因账本里没有

@@ -1067,8 +1067,10 @@ function loadPrReviewsForClosed(pr, { run = runCmd } = {}) {
  *
  * merged_by 取对应 job.dispatch 的真实模型（handoff 后是接手者），不是角色名
  * commander/reviewer——能力账 buildSamples 优先信 merged_by，写错模型会污染正样本。
- * 返工字段按当前 PR 的判别态 review 写入；查不成走 attribution_source=unscanned，
- * 不伪造 rework:false。
+ * 返工字段按当前 PR 的判别态 review 写入；reviews 或账本没查成走
+ * attribution_source=unscanned，不伪造 worker_rework=0。审官那条只在能确认
+ * job.dispatch（含可验证的 rename handoff）时才记——账本不完整且看不到
+ * dispatch，不许把「没有证据」写成终态。
  */
 export function recordJobClosed({
   pr, why = '', say = () => {},
@@ -1103,9 +1105,16 @@ export function recordJobClosed({
       unscannedError = unscannedError || `PR #${pr} reviews 不是数组`;
       reviewList = [];
     }
+    // 账本不完整时，overrides / dispatch 集合都不可信。reviews 读到了也不能据此
+    // 写成 inferred / worker_rework=0——那是把「没查成」当成「查过没事」。
+    if (ledgerUnscanned) {
+      unscanned = true;
+      const ledgerErr = ledger.error || '账本没查成';
+      unscannedError = unscannedError ? `${unscannedError}；${ledgerErr}` : ledgerErr;
+    }
 
     const stats = verdictStatsFromReviews(reviewList, {
-      overrides: scopeOverridesFor(events, { prNumber: pr }),
+      overrides: ledgerUnscanned ? [] : scopeOverridesFor(events, { prNumber: pr }),
       unscanned,
       unscannedError,
     });
@@ -1115,13 +1124,13 @@ export function recordJobClosed({
 
     const out = {};
     for (const [side, jobId] of [['工人', workerJobId(pr)], ['审官', reviewerJobId(pr)]]) {
-      // 审官那次只在真派过审官时记（没派审官的单记一条不存在的终态＝伪造历史）。
-      // 账本没读成则宁可多记——漏掉这条差集靠的记录更糟。
-      if (side === '审官') {
-        const dispatched = Boolean(findJobDispatch(events, jobId, { prNumber: pr }));
-        if (!dispatched && !ledgerUnscanned) { out[side] = { skipped: 'no-dispatch' }; continue; }
-      }
       const dispatch = findJobDispatch(events, jobId, { prNumber: pr });
+      // 审官那条只在能确认 job.dispatch（含 rename handoff）时才记。
+      // 账本没查成 ≠ 查过「没派过」——看不到 dispatch 就跳过，不许伪造终态。
+      if (side === '审官' && !dispatch) {
+        out[side] = { skipped: 'no-dispatch' };
+        continue;
+      }
       const args = {
         ...ctx, ts, jobId,
         success: true,
