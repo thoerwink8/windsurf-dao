@@ -64,15 +64,24 @@ describe('审官也吃名额（本次修的核心）', () => {
   // 2026-09-10 修订：机器满载不再让收尾归零（收尾领自己的名额池）。
   // #1007 二期的本意（审官不许不限张）由 FINISH_SLOTS_MAX 保住——见下一条。
   it('slots=0（机器满）→ 收尾照起，但**仍有上限**，不因为机器满就不限张', async () => {
-    const { decide, FINISH_SLOTS_MAX } = await CORE;
+    const { decide, finishSlotCap, FINISH_SLOTS_FLOOR } = await CORE;
     const r = decide(situation({
       // 一张票只喊一次 drain（#1125），这里靠多张返工票把收尾名额吃满
       ticket: [{ pr: 101 }, { pr: 102 }],
       slots: 0,
     }));
     assert.equal(kinds(r, 'attach-reviewer').length, 1, '机器满载时收尾仍要能推进（本轮要修的正是这一格）');
-    assert.ok(FINISH_SLOTS_MAX >= 1, '收尾名额是个有上限的池子，不是不限张');
-    assert.ok(FINISH_SLOTS_MAX <= 5, '上限别大开——#1007 二期的教训是审官不许不限张');
+    // 2026-09-14：上限从手打常量 3 换成按核数算。「有上限」这条性质原样保留，
+    // 判据从「常量落在某个区间」改成「函数在任何核数下都吐有限正整数」。
+    assert.equal(FINISH_SLOTS_FLOOR, 2, '机器再满也保底 2 个收尾名额（2026-09-10 那条性质）');
+    for (const cores of [null, 0, 1, 2, 6, 32]) {
+      const cap = finishSlotCap(cores);
+      assert.equal(Number.isInteger(cap) && cap >= FINISH_SLOTS_FLOOR, true, `cores=${cores} 时上限 ${cap} 不是 ≥floor 的整数`);
+      assert.equal(Number.isFinite(cap), true, `cores=${cores} 时上限成了不限张——#1007 二期的教训`);
+    }
+    assert.equal(finishSlotCap(6), 6, '6 核 ⇒ 6 个收尾名额');
+    assert.equal(finishSlotCap(1), 2, '1 核也保底 2 个');
+    assert.equal(finishSlotCap(null), 2, '核数读不到 ⇒ 落到保底，不许猜一个默认核数');
   });
 
   it('排队下轮不算失败：不产 escalate', async () => {
@@ -84,8 +93,10 @@ describe('审官也吃名额（本次修的核心）', () => {
 });
 
 describe('总量：新活不超机器余量，收尾不超自己的池子', () => {
-  it('新活数 ≤ slots；收尾数 ≤ FINISH_SLOTS_MAX（两笔账各自封顶）', async () => {
-    const { decide, FINISH_SLOTS_MAX } = await CORE;
+  it('新活数 ≤ slots；收尾数 ≤ finishSlotCap（两笔账各自封顶）', async () => {
+    const { decide, finishSlotCap } = await CORE;
+    // 夹具不给 cores ⇒ 上限落到保底值，这里就按保底值封顶。
+    const FINISH_SLOTS_MAX = finishSlotCap(null);
     for (const slots of [1, 2, 3, 5]) {
       const r = decide(situation({
         issues: [readyIssue(201), readyIssue(202), readyIssue(203), readyIssue(204)],
