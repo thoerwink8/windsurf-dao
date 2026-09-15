@@ -26,7 +26,7 @@ LastTriggerUSec=Sun 2026-09-06 00:32:00 CST
 NextElapseUSecRealtime=Sun 2026-09-06 00:47:00 CST
 ```
 
-脚本把三个退出码写死在文件头（`scripts/agent-stall-watch.mjs:20`）：
+脚本把三个退出码写死在文件头（当时 `d7e97d1e` `scripts/agent-stall-watch.mjs:20`；该文件已随 #1067 / `881b7849` 删除）：
 
 ```
 退出码：0 扫完没事或已处理 / 1 有真红没处理完 / 2 没查成。
@@ -34,7 +34,7 @@ NextElapseUSecRealtime=Sun 2026-09-06 00:47:00 CST
 
 末尾 `process.exit(failed ? 1 : ...)`（同文件 608 行）。单元**没有** `SuccessExitStatus`（`host/machine/systemd/dao-agent-stall.service` 全文无此行；对照 `dao-patrol.service` / `dao-board-gc.service` 写了 `SuccessExitStatus=0 1`）。所以 1 就是 systemd 眼里的失败——这是故意的，不是配漏。
 
-闸怎么判「这项健康」（`scripts/server-check.mjs:554-586` `classifyAgentStallWatch`）：
+闸怎么判「这项健康」当时在 `d7e97d1e` 的 `scripts/server-check.mjs:571` `classifyAgentStallWatch`（原文 `:554-586` 当时已是 `checkFeishuTriage`，函数声明在 `:571`；该函数已随 #1067 / `881b7849` 删除，⑮ 改守盘面推进量退役）：
 
 - `list-timers` 文本里有 `dao-agent-stall.timer` → 官方在册
 - 没有 `agent-stall-watch.timer`、没有 `/home/orca/bin/agent-stall-watch.mjs` → 垫片已退役

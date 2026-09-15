@@ -84,16 +84,19 @@ launch_note = """
 """
 
 [providers.commandcode]
-cli = "command-code"
+cli = "cmdc"
 start = "command"
-launch = "command-code -m {model} --skip-onboarding --yolo"
+launch = "cmdc -m {model} --skip-onboarding --yolo"
 launch_model = "deepseek/deepseek-v4-flash"
 # 2026-08-16 帅实测：命令发出后需补一记空回车才执行（与 pi/grok 同坑），之后约 20 秒内 TUI 就绪。45s = 20s + 余量。
 probe_wait_ms = 45000
 launch_note = """
 Command Code 官方 CLI，本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，Orca agent 识别清单不含它，`worker-start --terminal` 必返回 `agent_unconfigured`；需进 git 的活走 pi/codex/claude 在册通道）。
-模型 id 两段式 `deepseek/deepseek-v4-flash`（-m 直传）。可执行文件是 `cmdc`（`command-code` 也可用），
-不是 `cmd`（撞 Windows cmd.exe）。装机与登录见 NEW-MACHINE.md「command-code 怎么配」节。
+模型 id 两段式 `deepseek/deepseek-v4-flash`（-m 直传）。可执行文件 `cmdc`（npm 包 `command-code` 1.41.0 声明了
+`cmd`/`cmdc`/`command-code`/`commandcode` 四个 bin，但**只建了 `cmd`/`cmdc`/`commandcode` 三个符号链接**，
+`command-code` 这个不带缩写的名字本机没有——2026-09-13 实测 `command -v command-code` 为空，
+用它会 `command not found`。本文件 2026-09-13 前写的就是它，是坏值）。别用 `cmd`（撞 Windows cmd.exe）。
+装机与登录见 NEW-MACHINE.md「command-code 怎么配」节。
 启动坑（2026-08-16 帅实测）：
 - 登录必须真 TTY（Ink raw mode），无 TTY 报 "Raw mode is not supported"；登录只能用户跑 `command-code login`。
 - 自动化一律 `--skip-onboarding`，否则撞 onboarding 会静默挂住（同 #500 型坑）。
@@ -234,3 +237,54 @@ decided = "2026-08-26"
 
 [providers.minimax-h3]
 note = "AI 带货视频候选（远期），未接入，无路由。"
+
+# ── 2026-09-12 网关退役新增：官方 CLI 直连型 ────────────────────────────────
+# 这三节是「落地.provider」的登记位：派工选型读 docs/model-routing.json 的腿，
+# 腿的 落地.provider 必须在这里有节，否则 resolveLaunch 当场抛「不在路由表」。
+# 起法真相在 docs/execution-profiles.json（backend/agent/route），本表只登记
+# 二进制名与那条线的坑——两处各写一份起法就会分叉（memory: hand-typed-constant-will-be-wrong）。
+
+[providers.mirasim-relay]
+cli = "codex"
+start = "agent"
+launch = "codex --dangerously-bypass-approvals-and-sandbox -m {model}"
+launch_model = "gpt-5.6-sol"
+launch_note = """
+GPT 家族经 mirasim-relay 走（#842 网关退役）：官方 codex CLI 自己的登录态，不经 newapi。
+选型 = docs/execution-profiles.json 里 backend=mirasim / agent=codex / route=cloud 那几条。
+本表这条 launch 是**备用直起模板**（codex 装在 /usr/bin/codex）；日常派工走 execution-profiles 的 mirasim 会话。
+网关时代这些腿的 落地.provider 是 gw，退役后一律改指本 provider——查历史用 git log，别照着旧文档配。
+"""
+why = "2026-09-12 拍板（用户「a」）：newapi 网关从派工选型退役，GPT 腿改官方 codex CLI 直连 relay。"
+decided = "2026-09-12"
+
+[providers.xai-native]
+cli = "grok"
+start = "agent"
+launch = "grok -m {model} --effort xhigh --always-approve"
+launch_model = "grok-4.6"
+launch_note = """
+Grok 家族走官方 CLI 自己的登录态（/usr/bin/grok，凭据 ~/.grok/auth.json），不经网关。
+选型 = docs/execution-profiles.json 的 grok-mirasim-native（backend=mirasim / agent=grok / route=local）。
+本表这条 launch 与 [providers.grok] 同形，是备用直起模板；日常派工走 execution-profiles 的 mirasim 会话。
+健康面：本地登录型**探不到会话健康**，探针只判凭据文件在不在（见 lib/provider-probe.mjs NATIVE_LOGIN_FILES），
+文件在也不报绿。
+"""
+why = "2026-09-12 拍板（用户「a」）：网关退役后 grok 腿改官方 CLI 直连，凭据在 ~/.grok/auth.json。"
+decided = "2026-09-12"
+
+[providers.cursor-native]
+cli = "cursor-agent"
+start = "agent"
+launch = "cursor-agent --model {model} --force --trust"
+launch_model = "composer-2.5"
+probe_wait_ms = 45000
+launch_note = """
+Composer 走 Cursor 订阅登录态（凭据 ~/.config/cursor/auth.json），后端是 ACP 不是 TUI 注入。
+选型 = docs/execution-profiles.json 的 cursor-acp-composer（backend=acp / agent=cursor / route=local，并发上限 1）。
+本表 launch 沿用 [providers.cursor] 的模板（`--force` 放行命令 + `--trust` 免弹 Workspace Trust，#648/#649）；
+**本机没装 cursor-agent**（`command -v` 空），这条模板是登记位与备用通道，不是当前实跑路径。
+派工选型里 composer-2.5 的族由 执行体.mirasim.模型前缀族 解析，与 [providers.cursor] 那节的历史理由无关。
+"""
+why = "2026-09-12 拍板（用户「a」）：网关退役后 composer 腿改官方 CLI 直连，凭据在 ~/.config/cursor/auth.json。"
+decided = "2026-09-12"

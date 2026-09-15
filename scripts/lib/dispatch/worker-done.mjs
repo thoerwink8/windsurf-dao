@@ -223,12 +223,27 @@ export function collectPrLabels({ pr, runGh } = {}) {
   };
 }
 
-/** 工人 job.dispatch：先按分支取最新一条（另一仓的完整记录不算这条链；
+/**
+ * 工人 job.dispatch：先按分支取最新一条（另一仓的完整记录不算这条链；
  * 缺 repo 的后写残缺仍是最新一条），再校验 repo/identity/model/reviewer。
- * 最新一条缺任一字段或身份非法 → 人工补标，不回退旧的完整记录。 */
-export function pickWorkerDispatchByBranch(events, branch, repo) {
+ * 挑最新一条的规则不变——缺字段的残缺仍是最新一条，不回退旧的完整记录。
+ *
+ * 缺 repo / reviewer 是同一类历史缺口（#1118 才把这两项写进账本，#1116 之前一条都没有），
+ * 所以按同一口径收下，都在返回值里说清来源：
+ *   repoAssumed —— 账本没写仓，仓是按「没写别的仓」推的（推不出才是拒绝）。
+ *   reviewerSource —— 'ledger' 账本写了 / 'pr-label' 账本没写、取 PR 自己的 reviewer/*。
+ * 账本与 PR 标签都有且不一致时**不猜**：两条都是「派工那刻的决定」，证不出哪条对，报人工。
+ * model 没有这种缺口（1017 条事件全带 model），缺它仍是拒绝，不许推。
+ *
+ * 状态必须分得开，stamp 只把 `none` 标成可跳过：
+ *   none       —— 扫完没有匹配的 job.dispatch（不是这条派工链）
+ *   invalid    —— 已命中记录，但缺 model / 非法 identity / 缺 reviewer（已查成坏账）
+ *   conflict   —— 账本与 PR 标签都有且不一致
+ *   unscanned  —— 没查成（没给仓 / 事件列表不是数组 / 没给分支名）
+ */
+export function pickWorkerDispatchByBranch(events, branch, repo, { reviewerHint } = {}) {
   const want = String(branch || '').trim();
-  if (!want) return { ok: false, state: 'none', error: '没给分支名（没查成，不许猜）' };
+  if (!want) return { ok: false, state: 'unscanned', error: '没给分支名（没查成，不许猜）' };
   const wantRepo = normalizeDispatchRepo(repo);
   if (!wantRepo) {
     return { ok: false, state: 'unscanned', error: '没给仓（没查成，不许猜）' };
@@ -254,14 +269,8 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
   }
   const hit = keyed[keyed.length - 1];
   const hitRepo = normalizeDispatchRepo(hit.repo);
-  if (!hitRepo) {
-    return {
-      ok: false,
-      state: 'none',
-      error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 repo——需人工打标`,
-    };
-  }
-  if (hitRepo !== wantRepo) {
+  // 缺 repo 的历史事件（#1116 之前）：按本仓收下，不拒。明确写别的仓的在上一步已被滤掉。
+  if (hitRepo && hitRepo !== wantRepo) {
     return {
       ok: false,
       state: 'none',
@@ -271,17 +280,36 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
   if (hit.identity !== '工人') {
     return {
       ok: false,
-      state: 'none',
+      state: 'invalid',
       error: `仓 ${wantRepo} 分支 ${want} 最新 job.dispatch 缺 identity 或不是工人——需人工打标`,
     };
   }
   const model = String(hit.model || '').trim();
-  const reviewer = String(hit.reviewer || '').trim();
-  if (!model || !reviewer) {
+  if (!model) {
     return {
       ok: false,
-      state: 'none',
-      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model 或 reviewer——需人工打标`,
+      state: 'invalid',
+      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 model——需人工打标`,
+    };
+  }
+  // reviewer：账本写了就用账本的；没写（历史事件）退到调用方给的 PR 标签，两条都没有才拒。
+  const hint = String(reviewerHint || '').trim();
+  const fromLedger = String(hit.reviewer || '').trim();
+  if (fromLedger && hint && fromLedger !== hint) {
+    return {
+      ok: false,
+      state: 'conflict',
+      error: `仓 ${wantRepo} 分支 ${want} 账本审官 ${fromLedger} 与 PR 标签 ${hint} 不一致`
+        + '——两条都是派工那刻的决定，证不出哪条对，需人工打标',
+    };
+  }
+  const reviewer = fromLedger || hint;
+  if (!reviewer) {
+    return {
+      ok: false,
+      state: 'invalid',
+      error: `仓 ${wantRepo} 分支 ${want} 最新工人 job.dispatch 缺 reviewer，PR 上也没有 reviewer/*`
+        + '——需人工打标',
     };
   }
   const role = String(hit.work_type || hit.role || '').trim();
@@ -294,6 +322,10 @@ export function pickWorkerDispatchByBranch(events, branch, repo) {
     role: role || DEFAULT_DISPATCH_TYPE,
     branch: want,
     repo: wantRepo,
+    // 账本这条没写 repo，仓是按「没写别的仓」推的（历史事件）。调用方要能说清这一层。
+    repoAssumed: !hitRepo,
+    // 账本没写 reviewer，审官是按 PR 标签取的（历史事件）。'ledger' = 账本写的。
+    reviewerSource: fromLedger ? 'ledger' : 'pr-label',
   };
 }
 
@@ -329,13 +361,33 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
       error: `PR #${n} 在 ${collected.repo}，打标目标是 ${wantRepo}——需人工打标（不许跨仓套标）`,
     };
   }
-  const picked = pickWorkerDispatchByBranch(events, branch, wantRepo);
+  // reviewer 的历史缺口（#1118 前的账本没这项）用 PR 自己的 reviewer/* 补——PR 标签是审官
+  // 选型的既有真相源（pickReviewer），不是从 issue 反推。没有标签才拒。
+  // 多个（含同名重复）reviewer/* 一律 fail-closed：不许拿账本单值把歧义抹平。
+  const hint = pickReviewer(collected.labels);
+  if (!hint.ok && hint.state === 'many') {
+    return {
+      ok: false,
+      state: 'many',
+      skipped: false,
+      pr: n,
+      branch,
+      repo: wantRepo,
+      error: `${hint.error}——需人工打标`,
+      labels: hint.labels,
+    };
+  }
+  const picked = pickWorkerDispatchByBranch(events, branch, wantRepo, {
+    reviewerHint: hint.ok ? hint.modelId : '',
+  });
   if (!picked.ok) {
     return {
       ...picked,
       pr: n,
       branch,
       repo: wantRepo,
+      // 只有「扫完没有这条派工链」（state=none）才 skipped。
+      // invalid / conflict 是已查成坏账，不许标成可跳过再去读 PR 标签。
       skipped: picked.state === 'none',
       error: picked.error,
     };
@@ -412,6 +464,8 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
     reviewer: picked.reviewer,
     role: picked.role,
     refs: collected.refs,
+    repoAssumed: picked.repoAssumed === true,
+    reviewerSource: picked.reviewerSource,
   };
 }
 
@@ -498,8 +552,9 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  // 快路（pr-fast）不收 issue。没署名单号 ≠ 交不了卷：完工评论落 PR。
-  // 指挥官 #1240：无署名不挡返工。这边对称：无署名不挡交卷。
+  // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。完工 comment 发在 PR
+  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷（#1270 返工实咬）。
+  // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';

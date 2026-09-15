@@ -203,6 +203,41 @@ linuxTest('exclusive stopping reservation covers backend stop and process cleanu
 linuxTest('empty processes plus weak stop acknowledgement cannot clear a queued vendor session',async t=>{
   const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'queued',text:''});const r=await rt.stopSession(s.sessionKey);assert.equal(r.ok,false);assert.equal(lease(f).value.state,'stopping');await assert.rejects(rt.startSession(spec(f)),e=>e.detail?.busy===true);
 });
+// #1174 缺陷二：失败的清理若写 updatedAt=now()，看门狗每轮再试一次就把宽限窗归零。
+linuxTest('failed cleanup does not refresh the grace clock on retry',async t=>{
+  let t0=1_700_000_000_000;
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}});
+  const rt=runtime(f,{mirasimRuntime:m,now:()=>t0});
+  const s=await rt.startSession(spec(f));
+  const startedAt=records(f)[0].updatedAt;
+  m.views.set(s.sessionKey,{phase:'queued',text:''});
+  t0+=20*60*1000;
+  const r1=await rt.stopSession(s.sessionKey);
+  assert.equal(r1.ok,false);
+  const first=records(f)[0].updatedAt;
+  assert.notEqual(first,startedAt,'进入 stopping 时要钉住时钟');
+  assert.equal(first,t0);
+  assert.equal(lease(f).value.updatedAt,first);
+  t0+=20*60*1000;
+  const r2=await rt.stopSession(s.sessionKey);
+  assert.equal(r2.ok,false);
+  assert.equal(records(f)[0].updatedAt,first,'失败重试不许刷新宽限时钟');
+  assert.equal(lease(f).value.updatedAt,first);
+  assert.equal(records(f)[0].state,'stopping');
+  assert.equal(lease(f).value.state,'stopping');
+});
+linuxTest('successful cleanup may advance updatedAt to stopped',async t=>{
+  let t0=1_700_000_000_000;
+  const f=fixture(t),m=fakeRuntime();
+  const rt=runtime(f,{mirasimRuntime:m,now:()=>t0});
+  const s=await rt.startSession(spec(f));
+  t0+=1000;
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true);
+  assert.equal(records(f)[0].state,'stopped');
+  assert.equal(records(f)[0].updatedAt,t0);
+  assert.equal(lease(f).value.updatedAt,t0);
+});
 // 2026-09-12 实咬（审官树被永久占住 56 分钟，只能等对账兜底）：
 // 上游断流打死的会话，session-read 回的是 `partial:true` 的清单预览（快照没回帧）。
 // 那时 judgeExecutionCompletion 一律回 unknown、stopSession 又手打 ['done','failed'] 卡 view，

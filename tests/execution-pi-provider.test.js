@@ -202,3 +202,49 @@ test('CommandCode loopback probe remains authenticated, bounded, redirect-disabl
   } });
   assert.equal(r.ok, true); assert.equal(r.actualCost, null); assert.equal(r.executionProfilePromoted, false);
 });
+
+// One provider is allowed to serve more than one (api, baseUrl) pair. The pair must be
+// matched exactly against that provider's own list; a provider-wide default would admit a
+// row on the strength of its provider name even though its protocol or endpoint differs.
+function comboSetup(provider, { model, api, baseUrl, declaredApi = api, declaredBaseUrl = baseUrl }) {
+  const s = setup(provider);
+  Object.assign(s.p, { model, agentModel: `${provider}/${model}`, piConnection: { schemaVersion: 1, kind: 'pi-native', providerId: provider, modelId: model, api: declaredApi, baseUrl: declaredBaseUrl, keyRef: { kind: 'pi-auth', providerId: provider } } });
+  s.files.set(`/fiction/.pi/agent/models-store.json`, { [provider]: { checkedAt: NOW, models: [{ id: model, provider, api, baseUrl }] } });
+  return s;
+}
+
+test('a provider may declare several endpoints; only a declared pair is accepted', async () => {
+  const { inspectPiDirectProvider } = await lib;
+  const anthropicTransport = comboSetup('opencode-go', { model: 'minimax-m3', api: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go' });
+  assert.equal(inspectPiDirectProvider(anthropicTransport.p, anthropicTransport.options).ok, true);
+  const responsesTransport = comboSetup('opencode-go', { model: 'gpt-5.6-luna', api: 'openai-responses', baseUrl: 'https://opencode.ai/zen/go/v1' });
+  assert.equal(inspectPiDirectProvider(responsesTransport.p, responsesTransport.options).ok, true);
+  // Every case below agrees with its catalog row, so it can only fail on the pair itself.
+  for (const [api, baseUrl] of [
+    ['anthropic-messages', 'https://opencode.ai/zen/go/v1'],
+    ['anthropic-messages', 'https://api.anthropic.com'],
+    ['openai-completions', 'https://opencode.ai/zen/go'],
+    ['openai-responses', 'https://opencode.ai/zen/go'],
+    ['openai-completions', 'https://reseller.example/v1'],
+    ['openai-completions', 'https://opencode.ai/zen/go/v1/extra'],
+  ]) {
+    const s = comboSetup('opencode-go', { model: 'minimax-m3', api, baseUrl });
+    assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'connection_descriptor_mismatch');
+  }
+  // A trailing slash is the same endpoint, not a new one: that comparison stays tolerant.
+  const slash = comboSetup('opencode-go', { model: 'gpt-5.6-luna', api: 'openai-responses', baseUrl: 'https://opencode.ai/zen/go/v1/' });
+  assert.equal(inspectPiDirectProvider(slash.p, slash.options).ok, true);
+});
+
+test('anthropic is not a pi leg: no endpoint of it is admitted', async () => {
+  const { inspectPiDirectProvider } = await lib;
+  // User decision, 2026-09-13: Claude rides mirasim and reclaude only. anthropic must stay
+  // out of the frozen NATIVE table even when the profile, the store row and a literal
+  // api_key credential all agree -- the refusal is the decision, not a missing credential.
+  const s = comboSetup('anthropic', { model: 'claude-opus-5', api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' });
+  Object.assign(s.p, { id: 'anthropic-direct', nativeProviderId: 'anthropic', accountPoolId: 'anthropic-api' });
+  s.files.get('/fiction/.pi/agent/auth.json').anthropic = { type: 'api_key', key: 'sk-ant-literal' };
+  // Refused before any credential is even looked at: anthropic is not in the frozen table.
+  assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'unsupported_native_provider');
+});
+

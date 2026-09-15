@@ -625,6 +625,11 @@ export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {
         deadModelId: capacityFailover.deadModelId || seat.modelId,
         deadError: capacityFailover.deadError,
         workerId: capacityFailover.workerId,
+        // 腿况证据必须**转发**：这里是生产路径上真正说了算的那道闸。
+        // #1290 首审当场逮到——纯判据放行了，这里重建凭证时把 legEvidence 丢了，
+        // 于是「新死法 + 腿况成立」在单测里绿、在生产上照旧被拒。
+        // 判例 memory `fix-landed-at-one-call-site-only`：修法只接一个调用点等于没接。
+        legEvidence: capacityFailover.legEvidence,
         models: Array.isArray(routing.models) ? routing.models : [],
         passerIds: order,
         order,
@@ -706,6 +711,30 @@ export function pickMergePolicyFromLedger({ events, issue, pr, dispatchId } = {}
 }
 
 /**
+ * 恢复出来的 manual 缺理由时，补一句**如实说明**的理由，而不是留 null。
+ *
+ * 为什么不留 null（2026-09-15 实咬）：`buildMirasimReviewerPrompts` 有一条硬闸
+ * 「m=manual 必须带 r=<原因>」。旗标那一侧该拒——调用方现在就能补上；
+ * 但账本与卡备注是**恢复出来的历史**，没有可补的对象，拒了就是死锁：
+ * #1275 / #1276 / #1277 三张票每 20 分钟被同一句话拒一次，试满 3 次打
+ * 「卡死/自动化认输」，而认输评论写的是「叫了 3 次审官判定仍是 0」——
+ * 把一个**确定性拒绝**记成了「重试没推动」，人照着那句话去查永远查不到真因。
+ *
+ * 这与 `commander-core.mjs` 的 `dispatchMergePolicyArgs` 是同一套处置：
+ * 那边也是 manual 缺理由就补一句「理由没写上——不许退回 auto」再往下走。
+ * 两处都不退回 auto——**安全相关的那半（manual）原样保留**，补的只是解释文字。
+ *
+ * 补的话必须能被人一眼认出是补的，不许编一个听起来像真的理由：
+ * 审官读到它就知道「要人工合并，但为什么没记下来」，而不是以为自己看到了原始判据。
+ */
+function recoveredManualReason(policy, reason, whence) {
+  const r = String(reason || '').trim();
+  if (r) return r;
+  if (policy !== 'manual') return null;
+  return `${whence}里记的是 manual，但没留理由——按 manual 办（不许退回 auto），理由待帅位补`;
+}
+
+/**
  * #799：审官任务书的 merge-policy。
  * 显式旗标 > 账本 > 卡备注；都读不到才回退 auto，并带 fallbackReason 写进任务书。
  */
@@ -732,8 +761,11 @@ export function resolveReviewerMergePolicy({
     return {
       ok: true,
       mergePolicy: ledger.mergePolicy,
-      mergeReason: ledger.mergeReason || null,
+      mergeReason: recoveredManualReason(ledger.mergePolicy, ledger.mergeReason, '账本'),
       source: 'ledger',
+      ...(ledger.mergePolicy === 'manual' && !String(ledger.mergeReason || '').trim()
+        ? { reasonSynthesized: true }
+        : {}),
     };
   }
 
@@ -744,8 +776,11 @@ export function resolveReviewerMergePolicy({
     return {
       ok: true,
       mergePolicy: fromComment.mergePolicy,
-      mergeReason: fromComment.mergeReason || null,
+      mergeReason: recoveredManualReason(fromComment.mergePolicy, fromComment.mergeReason, '卡备注'),
       source: 'comment',
+      ...(fromComment.mergePolicy === 'manual' && !String(fromComment.mergeReason || '').trim()
+        ? { reasonSynthesized: true }
+        : {}),
     };
   }
 

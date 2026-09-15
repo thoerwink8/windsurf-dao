@@ -90,7 +90,7 @@ DropInPaths=/etc/systemd/system/gw-remote-probe.timer.d/oncalendar.conf
 
 仓内 `dao-board-gc.timer` / 机器上同文件都是 `OnCalendar=*:07:00`。drop-in 的 `:07/30` 就是装机脚本注释里那次碰撞。本轮 `list-timers`：probe NEXT=`00:37`（drop-in），board-gc NEXT=`01:07:46`。
 
-⑳ 的取数（`scripts/server-check.mjs:959-964` `checkUnitDrift`）只 `readFileSync('/etc/systemd/system/' + name)`，**不读** `.d/`。drop-in 单独留下时，即便有人把 timer 正文拷成和仓里一样，⑳ 也会绿，活日历仍是 `:07/30`。装机脚本那句「⑳ 也会报漂移」对 drop-in 这一层不成立。
+⑳ 的取数当时（原文 `:959-964` `checkUnitDrift`）只 `readFileSync('/etc/systemd/system/' + name)`，**不读** `.d/`。drop-in 单独留下时，即便有人把 timer 正文拷成和仓里一样，⑳ 也会绿，活日历仍是 `:07/30`。当前 HEAD `scripts/server-check.mjs:972` `collectUnitDriftPairs` 经 `readLiveEffectiveUnit` 拼 drop-in（注释 `:911-916`，#1164），只拷正文会红。装机脚本那句「⑳ 也会报漂移」对当时那一版的 drop-in 层不成立。
 
 本轮用 ⑳ 自己的纯函数对这台机器实跑：`state=red`，detail 点名 `gw-remote-probe.service`、`gw-remote-probe.timer`（外加 close-issues / board-gc / sync / feishu-triage 的凭据行漂移，以及 land / gh-events / miraquota-contabo 没装）。server-check 在这台机器上没有心跳（已报 `2026-09-06-server-check无心跳.md`），`ls /home/orca/.dao/server-check` 仍是 `No such file or directory`——⑳ 现在会红，但没人跑。
 
