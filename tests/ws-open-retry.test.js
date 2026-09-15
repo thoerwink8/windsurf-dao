@@ -109,4 +109,27 @@ describe('回环 ws 开连接重试', () => {
     }), () => true);
     assert.equal(flat[1] > flat[0], true, '退避要随次数递增');
   });
+
+  it('⑧接线：createRuntime.open 真走 connectWithRetry（第一次抖、第二次通）', async () => {
+    const { createRuntime } = await RT;
+    let calls = 0;
+    const wire = {
+      state: {
+        version: '0.0.282', workdir: '/srv', home: '/srv', platform: 'linux',
+        agentsAvailable: ['claude'],
+      },
+      send() {},
+      async waitFor(pred) {
+        return pred({ type: 'sessions', sessions: [] }) ? { type: 'sessions', sessions: [] } : null;
+      },
+      close() {},
+    };
+    const rt = createRuntime({
+      connect: async () => { calls += 1; if (calls === 1) throw unavailable(); return wire; },
+      sleep: async () => {},
+    });
+    const v = await rt.handshake();
+    assert.equal(calls, 2, '拆掉 open() 的重试，这一条会回到一次就死');
+    assert.equal(v.sessionsOk, true);
+  });
 });
