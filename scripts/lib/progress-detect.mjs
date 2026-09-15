@@ -194,6 +194,12 @@ export const DIGEST_STUCK_ALERT_KEY = 'digest-stuck';
 /**
  * 停了多久 → 一个给人看的严重度词。只进文案，不进去重键。
  * 一轮 ≈ 20 分钟：阈值内「注意」，翻倍「警告」，四倍以上「故障」。
+ *
+ * **只能喂真实不封顶的轮数。** 别拿 `runProgressWatch` 的 `rounds` 喂它：
+ * 那个值等于快照窗口长度（`readSnapshots(dir, {limit: minRounds})` 只取 5 份），
+ * 停 100 轮它也还是 5，分档永远只能得出「注意」——那是个做不到的承诺
+ * （#1285 审官当场用 100 份相同快照证伪）。
+ * 当前唯一合格的输入是指挥官的 `state.digestStreak`：它逐轮累加，不封顶。
  */
 export function stallSeverity(rounds, threshold) {
   const n = Number(rounds) || 0;

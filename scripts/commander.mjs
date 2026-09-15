@@ -2788,11 +2788,21 @@ function cmdAct(argv) {
   } else if (progressWatch.wake) {
     log.push(`  盘面停滞：${progressWatch.report}`);
     // 键是常量：指纹进键会让停滞清单每抖一下就多发一条（实咬 300 条，见 progress-detect.mjs）。
-    // 节流全交给 HUB_DEDUP_MS，卡着就每 6 小时稳定响一声。严重度进文案，不进键。
+    // 节流全交给 HUB_DEDUP_MS，卡着就每 6 小时稳定响一声。
+    //
+    // 两类 wake 必须分开（#1285 审官指出）：`wake` 不等于「停滞」——
+    // 认输 PR 推送也会让 wake=true 而 stalled=false、wakeReason='exhausted'。
+    // 混用一个键会让「盘面没停滞」的认输播报去挤占停滞告警的 6 小时窗口，
+    // 两件事互相盖住对方。所以按 stalled 分流，各用各的常量键。
+    //
+    // 这里**不加严重度**：progressWatch.rounds 由窗口长度决定（readSnapshots 只取
+    // minRounds=5 份快照），停 100 轮它也还是 5——拿它分档永远只能得出「注意」，
+    // 那是个做不到的承诺。真实的、不封顶的停滞轮数在 digestStreak 那一侧，
+    // 严重度只挂在那里（见下面 digest-stuck 分支）。
     hubOnce({
       state,
-      key: STALL_ALERT_KEY,
-      text: `[指挥官｜${stallSeverity(progressWatch.rounds, DEFAULT_MIN_ROUNDS)}] ${progressWatch.report}`,
+      key: progressWatch.stalled ? STALL_ALERT_KEY : `progress-watch:${progressWatch.wakeReason || 'wake'}`,
+      text: `[指挥官] ${progressWatch.report}`,
       dryRun,
     });
   } else {

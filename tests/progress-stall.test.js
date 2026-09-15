@@ -461,9 +461,13 @@ describe('#1285 停滞播报的去重键不带内容', () => {
 
   it('commander 不再把指纹 / digest 拼进 hubOnce 的键', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
-    assert.doesNotMatch(src, /key: `progress-watch:\$\{/, '指纹进键就是 300 条的来源');
+    // 禁的是把**内容快照**拼进键：指纹（含轮数+每个对象的 key=sig）和 digest（整套动作）。
+    // 不禁 wakeReason —— 它是个有界的小枚举（first / still-stalled / exhausted …），
+    // 不随盘面内容膨胀，正是用来把「停滞」和「认输唤醒」分成两路的（审官第 2 条）。
+    assert.doesNotMatch(src, /key: `progress-watch:\$\{progressWatch\.fingerprint/, '指纹进键就是 300 条的来源');
     assert.doesNotMatch(src, /key: `digest-stuck:\$\{/, 'digest 进键就是 10 小时只发 1 条的来源');
-    assert.match(src, /key: STALL_ALERT_KEY/);
+    assert.doesNotMatch(src, /key: `[^`]*\$\{vac\.digest/, 'digest 换个写法进键同样不行');
+    assert.match(src, /key: progressWatch\.stalled \? STALL_ALERT_KEY/);
     assert.match(src, /key: DIGEST_STUCK_ALERT_KEY/);
   });
 
@@ -480,6 +484,47 @@ describe('#1285 停滞播报的去重键不带内容', () => {
     const M = await import('file://' + LIB.replace(/\\/g, '/'));
     assert.equal(M.stallSeverity(4, 0), '故障');
     assert.equal(M.stallSeverity(0, 5), '注意');
+  });
+
+  // 审官（#1285 第 2 条）指出的真问题：wake 不等于 stalled。
+  // runProgressWatch 的 wake = `!!planned.wake || exhaustedLines.length > 0`，
+  // 认输 PR 推送会让 wake=true 而 stalled=false、wakeReason='exhausted'。
+  // 两类事混用同一个键，会互相挤占对方的 6 小时去重窗口。
+  it('停滞与认输唤醒分流到不同的键（wake=true 不代表 stalled）', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.match(
+      src,
+      /key: progressWatch\.stalled \? STALL_ALERT_KEY : `progress-watch:\$\{progressWatch\.wakeReason/,
+      '停滞才用 STALL_ALERT_KEY；非停滞的 wake 另走一个键  →  没找到分流写法',
+    );
+  });
+
+  // 审官（#1285 第 1 条）用 100 份相同快照证伪了我原来的升级承诺。
+  // 这条把那个上限钉死，防止有人看着「注意」两个字又去给 progress-watch 加分档。
+  it('runProgressWatch 的 rounds 被快照窗口封顶——不许拿它做严重度分档', async () => {
+    const M = await import('file://' + LIB.replace(/\\/g, '/'));
+    // 快照形状照 extractObjects 的要求造：github + reviewPending 两段都要 scanned:true。
+    const snap = {
+      github: { scanned: true, prs: [{ number: 909, headRefOid: 'a'.repeat(40), mergeable: 'MERGEABLE' }], issues: [] },
+      reviewPending: { scanned: true, items: [] },
+    };
+    const snapshots = Array.from({ length: 100 }, () => snap);
+    const v = M.detectProgressStall(snapshots, { minRounds: 5 });
+    assert.equal(v.stalled, true, '100 份相同快照当然是停滞');
+    assert.equal(v.rounds, 5, 'rounds 等于窗口长度，不是真实停滞轮数  →  ' + v.rounds);
+    assert.equal(M.stallSeverity(v.rounds, 5), '注意',
+      '拿它分档永远只能得出「注意」——这就是那个做不到的承诺');
+    assert.equal(M.stallSeverity(100, 5), '故障',
+      '真实不封顶的轮数（digestStreak）才分得出档');
+  });
+
+  it('commander 只给 digest-stuck 挂严重度，不给 progress-watch 挂', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const stallBlock = src.slice(src.indexOf('key: progressWatch.stalled'), src.indexOf('key: progressWatch.stalled') + 400);
+    assert.doesNotMatch(stallBlock, /stallSeverity/,
+      'progress-watch 分支不许用 stallSeverity（rounds 封顶，分不出档）');
+    assert.match(src, /key: DIGEST_STUCK_ALERT_KEY[\s\S]{0,200}stallSeverity\(state\.digestStreak/,
+      'digest-stuck 分支要用 digestStreak 分档（它不封顶）');
   });
 
   it('stallFingerprint 仍在（它还用来判「这轮和上轮是不是同一批」，只是不再当播报键）', async () => {
