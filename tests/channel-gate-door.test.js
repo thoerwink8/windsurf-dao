@@ -101,6 +101,12 @@ describe('闸的位置：源码判据（照租约闸那套锚点断言）', () =
     assert.equal(/checkChannelCapacity\(/.test(切出默认闸()), false, '门里用只读判据＝两个并发都判没满都放行');
   });
 
+  it('默认闸把会话登记喂给占槽入口（门内归因，不只决策层）', () => {
+    const body = 切出默认闸();
+    assert.match(body, /loadSessions:/, '门内 io 没接 loadSessions——账本归不掉的在途树仍当 0');
+    assert.match(body, /loadSessionAttribution\(/, '生产取数必须读登记文件，不许再 spawn 40s 名单');
+  });
+
   it('占了槽的每条出路都退槽 —— release 在 finally 里', async () => {
     const { fn } = 切出();
     assert.match(fn, /releaseSlot\(\)/, '没退槽：预占泄漏会让该渠道少一个名额到 TTL 到点');
