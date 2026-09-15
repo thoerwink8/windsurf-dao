@@ -1028,13 +1028,15 @@ describe('辅助纯函数', () => {
     const { countsAsProgress } = await CORE;
     const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
 
-    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 1 }), true, '第 1 轮：跟上轮不同，算推进');
-    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 2 }), false, '第 2 轮起：同一套动作，磨盘');
+    // streak 语义跟 nextDigestStreak 对齐：0=新摘要，≥1=已经连续相同。
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 0 }), true, '新摘要（streak=0）算推进');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 1 }), false, '第一轮重复（streak=1）就是磨盘');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 2 }), false, '第二轮重复');
     assert.equal(countsAsProgress({ actions: stuck, digestStreak: 9 }), false, '实咬那一次：9 轮相同');
 
-    assert.equal(countsAsProgress({ actions: [{ kind: 'noop' }], digestStreak: 1 }), false,
+    assert.equal(countsAsProgress({ actions: [{ kind: 'noop' }], digestStreak: 0 }), false,
       'noop 本来就不算，streak 再新也不算');
-    assert.equal(countsAsProgress({ actions: [{ kind: 'escalate', reason: 'unscanned' }], digestStreak: 1 }), false,
+    assert.equal(countsAsProgress({ actions: [{ kind: 'escalate', reason: 'unscanned' }], digestStreak: 0 }), false,
       '纯 unscanned-escalate 同理');
   });
 
@@ -1048,8 +1050,47 @@ describe('辅助纯函数', () => {
 
   it('countsAsProgress：真有新动作时照常算推进（别把闸修成永远不响）', async () => {
     const { countsAsProgress } = await CORE;
-    assert.equal(countsAsProgress({ actions: [{ kind: 'dispatch', issue: 7 }], digestStreak: 1 }), true);
-    assert.equal(countsAsProgress({ actions: [{ kind: 'merge', pr: 9 }], digestStreak: 1 }), true);
+    assert.equal(countsAsProgress({ actions: [{ kind: 'dispatch', issue: 7 }], digestStreak: 0 }), true);
+    assert.equal(countsAsProgress({ actions: [{ kind: 'merge', pr: 9 }], digestStreak: 0 }), true);
+  });
+
+  // 审官红项：不要只手工传入与生产语义不一致的 streak:1。
+  // 生产路径是 nextDigestStreak 写回 state.digestStreak，再交给 countsAsProgress。
+  it('countsAsProgress ← nextDigestStreak：连续 9 轮同一摘要，从第一轮重复起就不算推进', async () => {
+    const { countsAsProgress, nextDigestStreak } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+    let lastDigest = null;
+    let lastStreak = 0;
+    const streaks = [];
+    const progress = [];
+    for (let i = 0; i < 9; i += 1) {
+      const vac = nextDigestStreak({
+        actions: stuck,
+        lastDigest,
+        lastStreak,
+        threshold: 6,
+      });
+      lastDigest = vac.digest;
+      lastStreak = vac.streak;
+      streaks.push(vac.streak);
+      progress.push(countsAsProgress({ actions: stuck, digestStreak: vac.streak }));
+    }
+    assert.deepEqual(streaks, [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      'nextDigestStreak：首个新摘要 0，第二轮相同才 1');
+    assert.deepEqual(progress, [true, false, false, false, false, false, false, false, false],
+      '磨盘从第一轮重复起就不刷新锚点（旧实现是 0:true, 1:true, 2:false）');
+
+    const moved = nextDigestStreak({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      lastDigest,
+      lastStreak,
+      threshold: 6,
+    });
+    assert.equal(moved.streak, 0, 'digest 变了归零');
+    assert.equal(countsAsProgress({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      digestStreak: moved.streak,
+    }), true, '真换动作后锚点恢复刷新');
   });
 
   it('actionsDigest：同一批动作稳定同键、顺序无关；noop 不入键', async () => {

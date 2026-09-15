@@ -2858,6 +2858,7 @@ function cmdAct(argv) {
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
   // 不是 hasLiveAction：同一套动作重复 N 轮也「有动作」，但盘面没动。
   // 拿它当锚点会让心跳永远不到期（实咬 10 小时，见 countsAsProgress 头部）。
+  // state.digestStreak 已是本轮 nextDigestStreak 写回后的值：0=新摘要，≥1=磨盘。
   if (countsAsProgress({ actions, digestStreak: state.digestStreak })) state.lastActivityAt = nowIso();
   else {
     const hb = heartbeatDue({ state });

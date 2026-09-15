@@ -1873,6 +1873,10 @@ export function hasLiveAction(actions = []) {
  * 判据补上第二个条件：**动作摘要跟上一轮不一样**。同一套动作重复 = 磨盘，不刷新锚点，
  * 于是静默计时正常走，心跳该响就响。
  *
+ * `digestStreak` 必须是 `nextDigestStreak` 写回后的值（commander.mjs 先写 state 再调本函数）：
+ *   · 0 = 本轮摘要跟上轮不同（或首轮）→ 算推进
+ *   · ≥1 = 已经连续相同 → 磨盘，从第一轮重复起就不刷新锚点
+ *
  * `digestStreak` 拿不到（undefined/非数）时退回旧行为——没查成不许当成「停了」，
  * 那会把正常运转误报成死机。
  */
@@ -1880,7 +1884,7 @@ export function countsAsProgress({ actions = [], digestStreak } = {}) {
   if (!hasLiveAction(actions)) return false;
   const n = Number(digestStreak);
   if (!Number.isFinite(n)) return true;   // 没查成 ⇒ 退回旧行为
-  return n <= 1;                          // 1 = 这一轮的动作跟上一轮不同
+  return n === 0;                         // nextDigestStreak：新摘要 0；第二轮相同才 ≥1
 }
 
 /**
