@@ -287,6 +287,40 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'decide'));
   });
 
+  // #1225 返工：manual 合门曾不看当前 head 是否判绿，又排在返工逻辑之前。
+  // 复现形状：非 draft / draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE
+  // → 旧行为产「判绿待人工合并」然后 continue；期望落到既有返工分支。
+  function manualRedSit({ isDraft, number = 1225, issue = 1223, head = 'h1225' }) {
+    const labels = [
+      { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/体系' },
+    ];
+    const pr = {
+      ...redPr(number, head, issue),
+      isDraft,
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels,
+    };
+    return baseSituation({
+      github: { scanned: true, issues: [labeledIssue(issue, { labels })], prs: [pr] },
+      prReviews: { scanned: true, byPr: { [number]: { reviews: [redReview('红项全文：先改接线', head)] } } },
+    });
+  }
+  function assertReworkNotManualHub(r) {
+    assert.equal(byKind(r, 'rework').length, 1, '红 review 必须派返工');
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rework')[0].brief, '红项全文：先改接线');
+    const hijack = byKind(r, 'notify-hub').filter((a) => a.moment === 'decide' || /判绿待人工合并/.test(a.subject || ''));
+    assert.equal(hijack.length, 0, '不许产「判绿待人工合并」把返工吃掉');
+  }
+  it('非 draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE → rework，不是 notify-hub', async () => {
+    const { decide } = await CORE;
+    assertReworkNotManualHub(decide(manualRedSit({ isDraft: false })));
+  });
+  it('draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE → rework，不是 notify-hub', async () => {
+    const { decide } = await CORE;
+    assertReworkNotManualHub(decide(manualRedSit({ isDraft: true })));
+  });
+
   it('review-pending 队列有条目 → attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
