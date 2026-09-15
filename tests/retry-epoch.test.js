@@ -129,4 +129,19 @@ describe('#1236 四个重试键都带上同一个版本', () => {
     assert.ok(k.startsWith('rereview:4321@'), '还是老前缀  →  ' + k);
     assert.ok(k.includes(head), 'head 还在，没被版本挤掉  →  ' + k);
   });
+
+  // 2026-09-15 实咬：#1279 改的是渠道上限（1→5）与拉取预算（3→8）——正是「这张 PR 现在
+  // 推不推得动」的判据——却一个 EPOCH 文件都没碰。旧账没作废，19 张 PR 的认输标继续焊着，
+  // 指挥官连续 9 轮零动作。把这两个文件钉死在这里：谁要删它，得先解释怎么让并发修法作废旧账。
+  it('渠道上限与拉取预算在判据集里（#1279 漏的就是这两个）', async () => {
+    const { EPOCH_FILES } = await M;
+    assert.ok(
+      EPOCH_FILES.includes('scripts/lib/channel-concurrency.mjs'),
+      '「渠道已满员，拒起会话」是重试失败的一大类，改了它旧账必须作废  →  ' + JSON.stringify(EPOCH_FILES),
+    );
+    assert.ok(
+      EPOCH_FILES.includes('scripts/lib/dispatch/review-pending.mjs'),
+      '拉取预算与票→reviewer-create 的换人计划同理  →  ' + JSON.stringify(EPOCH_FILES),
+    );
+  });
 });
