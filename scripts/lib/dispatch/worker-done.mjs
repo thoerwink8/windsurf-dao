@@ -529,9 +529,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  if (!issue) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
-  }
+  // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。完工 comment 发在 PR
+  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷（#1270 返工实咬）。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
