@@ -18,8 +18,10 @@ import { isDeepStrictEqual } from 'node:util';
 // anthropic is deliberately absent: it has no account behind it and it is not a pi leg at all.
 // Claude rides mirasim and reclaude only (user, 2026-09-13) — adding it back here would offer
 // dispatch a route that is ruled out by decision, not by a credential that might show up.
+// deepseek 直连也不在：用户 2026-09-15 拍板「deepseek渠道直接删掉，不要留」，
+// 账号与 key 已从 ~/.pi/agent/auth.json 移除。DeepSeek 型号仍能派——走 devin /
+// opencode-go / commandcode 那几条渠道，它们是另外的账号池。
 const NATIVE = Object.freeze({
-  deepseek: Object.freeze([{ baseUrl: 'https://api.deepseek.com', api: 'openai-completions' }]),
   'opencode-go': Object.freeze([
     { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-completions' },
     { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-responses' },
@@ -108,7 +110,7 @@ export function planPiAdapterConfiguration(profile, options = {}) {
 }
 
 /** Reads credentials in memory, returns only a descriptor. Does not execute Pi or write files.
- * keyRef schema: {kind:'pi-auth', providerId:'deepseek'|'opencode-go'}.
+ * keyRef schema: {kind:'pi-auth', providerId:'opencode-go'}.
  * The file is always <agentDir>/auth.json and its entry must be a literal api_key.
  * No custom path, command expansion, env-key override or credential value is accepted.
  */

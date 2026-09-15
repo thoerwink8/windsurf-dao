@@ -202,14 +202,17 @@ test('Pi native credentials are discovered; relabeling a known group key cannot 
   const { discoverExecutionCredentials, refreshExecutionCatalog } = await lib;
   const files = new Map([
     ['/fiction/.mirasim/keys/opencode.key', 'group-secret'],
-    ['/fiction/.pi/agent/auth.json', JSON.stringify({ 'opencode-go': { type: 'api_key', key: 'native-secret' }, deepseek: { type: 'api_key', key: 'group-secret' } })],
+    ['/fiction/.pi/agent/auth.json', JSON.stringify({ 'opencode-go': { type: 'api_key', key: 'native-secret' }, opencode: { type: 'api_key', key: 'group-secret' } })],
+    ['/fiction/.local/share/opencode/auth.json', JSON.stringify({ opencode: { type: 'api_key', key: 'group-secret' } })],
   ]);
   const read = file => { if (!files.has(file)) throw new Error('missing'); return files.get(file); };
   const rows = discoverExecutionCredentials({ home: '/fiction', read, exists: file => files.has(file) });
   const native = rows.find(r => r.provider === 'opencode-go' && r.location === '~/.pi/agent/auth.json');
   assert.equal(native.present, true); assert.equal(native.kind, 'provider-key');
-  assert.equal(rows.find(r => r.provider === 'deepseek').kind, 'newapi-group');
-  const c = withSource({ access: 'direct', credential: { kind: 'provider-key', file: '~/.pi/agent/auth.json', jsonPath: ['deepseek', 'key'] } });
+  // 换个名字挂到别的直连 provider 名下，也还得认出它是网关组 key（2026-09-15：原先拿
+  // deepseek 当这个「别的 provider」，那条渠道已删，换成同样在直连表里的 opencode）
+  assert.equal(rows.find(r => r.provider === 'opencode' && r.location === '~/.local/share/opencode/auth.json').kind, 'newapi-group');
+  const c = withSource({ access: 'direct', credential: { kind: 'provider-key', file: '~/.pi/agent/auth.json', jsonPath: ['opencode', 'key'] } });
   const r = await refreshExecutionCatalog(c, { now: NOW, home: '/fiction', read, fetchImpl: () => assert.fail('group key must not leave for upstream') });
   assert.equal(r.ok, false); assert.equal(r.catalog.snapshots[0].reason, 'credential_kind_mismatch');
   assert.ok(!JSON.stringify(r).includes('group-secret'));
