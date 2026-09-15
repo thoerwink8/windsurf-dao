@@ -7,6 +7,15 @@
 const { describe, it } = require('node:test');
 const { assert, fs, os, path, spawnSync, REPO, CLI, LIB, S_LOAD, DAO_LOAD, cliInProc, ROUTING_LOAD, waitForOutJson } = require('./helpers/dao-harness');
 
+// #1174：成对 now/sleep。只在 sleep 时推进；墙钟停 60ms 也不许把 unsubmitted-paste 吃成 failed。
+function fakeClock(startMs = 1_000) {
+  let t = startMs;
+  return {
+    now: () => t,
+    sleep: (ms) => { t += Math.max(1, ms); },
+  };
+}
+
 describe('dao 开工验证', () => {
   it('#602：开工验证保留；#619 订正粘贴定性', async (t) => {
     const S = await S_LOAD;
@@ -14,13 +23,13 @@ describe('dao 开工验证', () => {
     const CLEAN = '短摘要：修命令库\nThinking...\n';
     const LOADING = 'Starting MCP servers (0/5)\n';
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
-    const noopSleep = () => {};
+    const clock = fakeClock();
 
     const a = S.verifyStartedPolling({
       dispatchId: 'ctx_a',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
       proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('开工验证：worker-read 证明（transcript）→ started', () => {
       assert.ok(a.ok === true && a.state === 'started', '开工验证：worker-read 证明（transcript）→ started  →  ' + JSON.stringify(a));
@@ -30,7 +39,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_b',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
       proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('已有开工证明时 Pasted Content 不挡', () => {
       assert.ok(b.ok === true && b.state === 'started', '已有开工证明时 Pasted Content 不挡  →  ' + JSON.stringify(b));
@@ -40,7 +49,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_d',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
       proofOnce: unproven,
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 60, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('TUI 加载期不算开工 → 超时 failed', () => {
       assert.ok(d.ok === false && d.state === 'failed' && /超时/.test(d.reason), 'TUI 加载期不算开工 → 超时 failed  →  ' + JSON.stringify(d));
@@ -50,7 +59,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_e',
       readOnce: () => ({ error: 'terminal read timeout' }),
       proofOnce: unproven,
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 60, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('全程没读成 → 超时 failed 且带 unscanned', () => {
       assert.ok(e.ok === false && e.unscanned && e.unscanned.unscanned === true, '全程没读成 → 超时 failed 且带 unscanned  →  ' + JSON.stringify(e));
@@ -60,7 +69,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_g',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CLEAN] } } }),
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('pi 正常提交：proof 不可用 + 屏面稳定 → started（proofFallback）',
       () => {
@@ -75,7 +84,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail: [readsH <= 4 ? LOADING : CLEAN] } } };
       },
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'session_not_reported' }),
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('pi 加载开头：加载期不算绿，结束后连续稳定才判绿',
       () => {
@@ -86,7 +95,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_j',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [] } } }),
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+      timeoutMs: 60, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
     });
     await t.test('proof 不可用 + 空屏 → 不许判绿，超时 failed',
       () => {
@@ -104,7 +113,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail: [readsK <= 2 ? '任务书：' + EXPECT_877 + '\n' : SPIN] } } };
       },
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官', expect: EXPECT_877,
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官', expect: EXPECT_877,
     });
     await t.test('#877 指纹只闪 2 轮就滚屏、之后 Working → started（workingAfterInject）', () => {
       assert.ok(k.ok === true && k.state === 'started' && k.workingAfterInject === true,
@@ -115,7 +124,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_m',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [SPIN] } } }),
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '审官', expect: EXPECT_877,
+      timeoutMs: 60, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官', expect: EXPECT_877,
     });
     await t.test('#877 反例：从未见过任务书指纹、只有 Working → 仍超时 failed（#762 不回归）', () => {
       assert.ok(m.ok === false && m.state === 'failed' && /超时/.test(m.reason),
@@ -204,7 +213,7 @@ describe('dao 开工验证', () => {
     const CURSOR_STUCK = '[Pasted text #1 +86 lines]\n→ 短摘要：修命令库\n';
     const CLEAN = '短摘要：审 PR #619\nThinking...\n';
     const WORKING = '短摘要：修命令库\nRunning: reading scripts/lib/dao-cmd.mjs\n';
-    const noopSleep = () => {};
+    const clock = fakeClock();
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
     const unavailable = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' });
 
@@ -216,7 +225,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail: [MARKER] } } };
       },
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('#679：粘贴后等到超时仍在框里才 unsubmitted-paste，不是首拍即杀', () => {
       assert.ok(fastFail.ok === false && fastFail.state === 'unsubmitted-paste' && fastFail.pasteSubmitted === false && waitReads > 1 && fastFail.elapsedMs >= 40 && /注入未提交/.test(fastFail.reason) && /禁止粘贴当开工/.test(fastFail.reason) && !/超时/.test(fastFail.reason) && typeof fastFail.text === 'string' && /Pasted Content/.test(fastFail.text), '等到超时仍在框里  →  ' + JSON.stringify({ fastFail, waitReads }));
@@ -226,7 +235,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_cursor_only',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CURSOR_ONLY] } } }),
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('故意只贴不发：等到超时仍只有 [Pasted text] → 红，不许当开工', () => {
       assert.ok(cursorOnly.ok === false && cursorOnly.state === 'unsubmitted-paste' && cursorOnly.pasteSubmitted === false && /禁止粘贴当开工/.test(cursorOnly.reason), '等到超时仍只有 [Pasted text] → 红  →  ' + JSON.stringify(cursorOnly));
@@ -236,7 +245,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_cursor_stuck',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CURSOR_STUCK] } } }),
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('故意违规：粘贴块 + 未发 follow-up，等到超时 → 红，不许假装开工', () => {
       assert.ok(cursorStuck.ok === false && cursorStuck.state === 'unsubmitted-paste' && cursorStuck.pasteSubmitted === false, '等到超时仍未发  →  ' + JSON.stringify(cursorStuck));
@@ -251,7 +260,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail } } };
       },
       proofOnce: unavailable,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('#679：粘贴后指纹消失且在干活 → 绿，不是立刻杀', () => {
       assert.ok(pasteThenWork.ok === true && pasteThenWork.state === 'started' && recN > 2 && pasteThenWork.proofFallback === true, '粘贴后发出去  →  ' + JSON.stringify({ pasteThenWork, recN }));
@@ -273,7 +282,7 @@ describe('dao 开工验证', () => {
           ? unproven()
           : { ok: true, proven: true, source: 'transcript' };
       },
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('绿样本：worker-read 真 transcript 证明 session → started（外部证据优先于屏上粘贴行）', () => {
       assert.ok(provenSession.ok === true && provenSession.state === 'started' && proofReads === 2 && provenReads === 1, '绿样本：worker-read 真 transcript → started  →  ' + JSON.stringify({ provenSession, proofReads, provenReads }));
@@ -283,7 +292,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_stuck',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
       proofOnce: unproven,
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 60, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('无证明 + 等到超时仍是粘贴块 → unsubmitted-paste', () => {
       assert.ok(stillStuck.ok === false && stillStuck.state === 'unsubmitted-paste' && stillStuck.pasteSubmitted === false && /注入未提交/.test(stillStuck.reason) && stillStuck.text, '等到超时仍是粘贴块  →  ' + JSON.stringify(stillStuck));
@@ -293,7 +302,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_clean',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CLEAN] } } }),
       proofOnce: unavailable,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('绿样本：屏面干净 + proof 不可用 → 稳定轮判开工（agent 真在干活）', () => {
       assert.ok(cleanOk.ok === true && cleanOk.state === 'started' && cleanOk.proofFallback === true, '屏面干净 + proof 不可用 → 稳定轮判开工  →  ' + JSON.stringify(cleanOk));
@@ -303,7 +312,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_work',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [WORKING] } } }),
       proofOnce: unavailable,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('绿样本：Cursor 粘贴后状态行 Running → 真在干活，不当未提交 → 稳定轮绿', () => {
       assert.ok(workOk.ok === true && workOk.state === 'started' && workOk.proofFallback === true, 'Cursor 粘贴后在干活 → 稳定轮绿  →  ' + JSON.stringify(workOk));
@@ -315,7 +324,7 @@ describe('dao 开工验证', () => {
         dispatchId: `ctx_h${i}`,
         readOnce: () => ({ ok: true, result: { terminal: { tail: [`[Pasted Content ${4000 + i} chars]`] } } }),
         proofOnce: unproven,
-        timeoutMs: 40, intervalMs: 5, sleep: noopSleep, label: '审官',
+        timeoutMs: 40, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
       }));
     }
     await t.test('连续 10 个只贴不发样本：全部红、全部 pasteSubmitted:false、零垫片', () => {
@@ -345,7 +354,7 @@ describe('dao 开工验证', () => {
     const CURSOR_ALONE = '[Pasted text #1 +86 lines]\n';                                  // 审红1：#634 原现场，只有粘贴块
     const CURSOR_FOLLOWUP_ALONE = '→ 短摘要：修命令库\n';                                   // 第二条指纹：只有 → 行未发
     const CURSOR_WORK_WORD = '[Pasted text #1 +86 lines]\n→ 短摘要：Reading Cursor 粘贴并提交\n'; // 审红2：follow-up 正文含 Reading
-    const noopSleep = () => {};
+    const clock = fakeClock();
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
     const unavailable = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' });
 
@@ -427,7 +436,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } };
       },
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('故意只贴不发：粘贴块 + follow-up → 等到超时才红，pasteSubmitted:false', () => {
       assert.ok(pollFast.ok === false && pollFast.state === 'unsubmitted-paste' && fastReads > 1 && pollFast.pasteSubmitted === false, '等到超时才红  →  ' + JSON.stringify({ pollFast, fastReads }));
@@ -442,7 +451,7 @@ describe('dao 开工验证', () => {
         return { ok: true, result: { terminal: { tail: ['Running: reading files'] } } };
       },
       proofOnce: unavailable,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('绿样本：屏上没有未提交粘贴、状态行在干活 → 稳定轮判开工', () => {
       assert.ok(pollRecover.ok === true && pollRecover.state === 'started' && pollRecover.proofFallback === true, '绿样本：屏上没有未提交粘贴、在干活 → 稳定轮绿  →  ' + JSON.stringify(pollRecover));
@@ -452,7 +461,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_poll_stuck',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }),
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('Cursor 未提交（无 sendEnter）→ 等到超时才报注入未提交', () => {
       assert.ok(pollStuck.ok === false && pollStuck.state === 'unsubmitted-paste' && /注入未提交/.test(pollStuck.reason) && !/超时/.test(pollStuck.reason) && /Pasted text/.test(pollStuck.evidence), 'Cursor 未提交等到超时  →  ' + JSON.stringify(pollStuck));
@@ -462,7 +471,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_poll_work',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', 'Running: reading scripts/lib/dao-cmd.mjs'] } } }),
       proofOnce: unavailable,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('Cursor 已提交 + 在干活 → 不报未提交，屏面稳定判开工', () => {
       assert.ok(pollWork.ok === true && pollWork.state === 'started' && pollWork.proofFallback === true, 'Cursor 已提交 + 在干活 → 屏面稳定判开工  →  ' + JSON.stringify(pollWork));
@@ -474,7 +483,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_poll_alone',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } }),
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('审红1：只有粘贴块 → 等到超时才红', () => {
       assert.ok(pollAlone.ok === false && pollAlone.state === 'unsubmitted-paste' && /注入未提交/.test(pollAlone.reason) && !/超时/.test(pollAlone.reason), '审红1：只有粘贴块等到超时  →  ' + JSON.stringify(pollAlone));
@@ -484,7 +493,7 @@ describe('dao 开工验证', () => {
       dispatchId: 'ctx_poll_workword',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：Reading Cursor 粘贴并提交'] } } }),
       proofOnce: unproven,
-      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
     });
     await t.test('审红2：follow-up 正文含 Reading → 等到超时才红', () => {
       assert.ok(pollWorkWord.ok === false && pollWorkWord.state === 'unsubmitted-paste', '审红2：follow-up 正文含 Reading 等到超时  →  ' + JSON.stringify(pollWorkWord));
@@ -493,7 +502,7 @@ describe('dao 开工验证', () => {
 
   it('#680：cursor [Pasted text] 是提交后残留；codex [Pasted Content] 仍是未提交', async (t) => {
     const S = await S_LOAD;
-    const noopSleep = () => {};
+    const clock = fakeClock();
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
     const PASTE = '[Pasted text #1 +86 lines]';
     const CODEX = '[Pasted Content 5037 chars]';
@@ -507,7 +516,7 @@ describe('dao 开工验证', () => {
           result: { terminal: { tail: ['Working', PASTE] } },
         }),
         proofOnce: unproven,
-        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+        timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
       });
       assert.ok(r.ok === true && r.state === 'started' && r.cursorStart === 'working' && /Pasted text/.test(r.text),
         'cursor 残留+Working → 绿  →  ' + JSON.stringify(r));
@@ -522,7 +531,7 @@ describe('dao 开工验证', () => {
           result: { terminal: { tail: ['Working', PASTE] } },
         }),
         proofOnce: unproven,
-        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+        timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
       });
       assert.ok(r.ok === true && r.state === 'started', JSON.stringify(r));
     });
@@ -538,7 +547,7 @@ describe('dao 开工验证', () => {
           return { ok: true, result: { terminal: { tail: [body, PASTE] } } };
         },
         proofOnce: unproven,
-        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+        timeoutMs: 5000, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '工人',
       });
       assert.ok(r.ok === true && r.state === 'started' && r.cursorStart === 'output-moving' && n > 1,
         'cursor 输出在动 → 绿  →  ' + JSON.stringify({ r, n }));
@@ -550,7 +559,7 @@ describe('dao 开工验证', () => {
         provider: 'gpt',
         readOnce: () => ({ ok: true, result: { terminal: { tail: [CODEX] } } }),
         proofOnce: unproven,
-        timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+        timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
       });
       assert.ok(r.ok === false && r.state === 'unsubmitted-paste' && /Pasted Content/.test(r.evidence || ''),
         'codex 未提交仍拦  →  ' + JSON.stringify(r));
@@ -561,7 +570,7 @@ describe('dao 开工验证', () => {
         dispatchId: 'ctx_codex_default',
         readOnce: () => ({ ok: true, result: { terminal: { tail: [CODEX] } } }),
         proofOnce: unproven,
-        timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+        timeoutMs: 50, intervalMs: 5, sleep: clock.sleep, now: clock.now, label: '审官',
       });
       assert.ok(r.ok === false && r.state === 'unsubmitted-paste', JSON.stringify(r));
     });
@@ -579,14 +588,6 @@ describe('dao 开工验证', () => {
     const S = await S_LOAD;
     const MARKER = '› [Pasted Content 4700 chars]\n';
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
-
-    function fakeClock(startMs) {
-      let t = startMs;
-      return {
-        now: () => t,
-        sleep: (ms) => { t += Math.max(1, ms); },
-      };
-    }
 
     await t.test('短超时：粘贴等到超时才 unsubmitted-paste，不是首拍即杀', () => {
       const c = fakeClock(1_000);
@@ -652,6 +653,39 @@ describe('dao 开工验证', () => {
       });
       assert.equal(r, null);
       assert.ok(naps > 1, JSON.stringify({ r, naps }));
+    });
+  });
+
+  it('#1174：开工探针成对假时钟；首读前停 60ms 仍是 unsubmitted-paste', async (t) => {
+    const S = await S_LOAD;
+    const MARKER = '› [Pasted Content 4700 chars]\n';
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+
+    await t.test('成对 now/sleep：调用前推进 60ms 仍等到 unsubmitted-paste，reads>1', () => {
+      const c = fakeClock(1_000);
+      c.sleep(60);
+      let reads = 0;
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_1174_clock',
+        readOnce: () => {
+          reads += 1;
+          return { ok: true, result: { terminal: { tail: [MARKER] } } };
+        },
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: c.sleep, now: c.now, label: '审官',
+      });
+      assert.equal(r.ok, false);
+      assert.equal(r.state, 'unsubmitted-paste');
+      assert.equal(r.pasteSubmitted, false);
+      assert.ok(reads > 1, JSON.stringify({ reads, r }));
+      assert.ok(r.elapsedMs >= 50, JSON.stringify({ elapsedMs: r.elapsedMs, reads }));
+    });
+
+    await t.test('本文件相关轮询不再用空 sleep + 默认 Date.now', () => {
+      const src = fs.readFileSync(__filename, 'utf8');
+      assert.doesNotMatch(src, /sleep:\s*noopSleep/);
+      assert.match(src, /function fakeClock\(/);
+      assert.match(src, /sleep: clock\.sleep, now: clock\.now/);
     });
   });
 
