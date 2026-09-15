@@ -13,7 +13,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { verdictOnHead } from '../scripts/lib/review-state.mjs';
-import { judgeReviewerSessionReuse, decideReviewerCreateStart, runLockedReviewerCreate } from '../scripts/lib/dispatch/reviewer-mirasim.mjs';
+import { judgeReviewerSessionReuse, decideReviewerCreateStart, runLockedReviewerCreate, mustRecheckVerdictUnderLock } from '../scripts/lib/dispatch/reviewer-mirasim.mjs';
 import { judgeVerdictOnHead } from '../scripts/dao.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -142,6 +142,65 @@ describe('透传：包装函数不许把 verdictOnHead 吃掉', () => {
   });
 });
 
+describe('锁外 true、锁内新 HEAD 无判定 ⇒ 必须 create（#1293 二审 P1）', () => {
+  // 审官判别性实证：旧 HEAD 有判定、当前 HEAD 已变化且没有判定。
+  // 只透传锁外 verdict → outsideReuse:true, lockedRaced:true, createCalls:0（新提交没审官）。
+  // 持锁后重读并把这份快照交给 runLockedReviewerCreate → createCalls:1。
+  const fakeGh = ({ headOid, reviews, headOk = true }) => (argv) => {
+    const json = argv[argv.length - 1];
+    if (json === 'headRefOid') {
+      return headOk
+        ? { ok: true, out: JSON.stringify({ headRefOid: headOid }) }
+        : { ok: false, error: 'simulated gh failure' };
+    }
+    if (json === 'reviews') return { ok: true, out: JSON.stringify({ reviews }) };
+    return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
+  };
+
+  it('终态 reuse 必须持锁重读，在役/没查成才许锁外退出', () => {
+    assert.equal(mustRecheckVerdictUnderLock({ reuse: true, view: { phase: 'done' } }), true);
+    assert.equal(mustRecheckVerdictUnderLock({ reuse: true, view: { phase: 'failed' } }), true);
+    assert.equal(mustRecheckVerdictUnderLock({ reuse: true, view: { phase: 'running' } }), false);
+    assert.equal(mustRecheckVerdictUnderLock({ reuse: true, view: null }), false);
+    assert.equal(mustRecheckVerdictUnderLock({ reuse: false, view: { phase: 'done' } }), false);
+  });
+
+  it('锁外旧 HEAD 有判定、锁内新 HEAD 无判定 ⇒ create()，不许 reused', async () => {
+    const outside = decideReviewerCreateStart({
+      force: false, switched: false, deadError: null,
+      record, view: { phase: 'done' }, verdictOnHead: true,
+    });
+    assert.equal(outside.reuse.reuse, true, '锁外快照会判 reuse');
+    assert.equal(
+      mustRecheckVerdictUnderLock({ reuse: outside.reuse.reuse, view: { phase: 'done' } }),
+      true,
+      '终态 reuse 不许在锁外 emit 退出，否则锁内重读跑不到',
+    );
+
+    const lockedVerdict = judgeVerdictOnHead('1293', record, null, {
+      runGh: fakeGh({ headOid: HEAD, reviews: [] }),
+    });
+    assert.equal(lockedVerdict, false, '新 HEAD 确认没有判定');
+
+    let createCalls = 0;
+    const locked = await runLockedReviewerCreate({
+      forceNew: false, record, view: { phase: 'done' }, verdictOnHead: lockedVerdict,
+      create: () => { createCalls += 1; return { ok: true }; },
+    });
+    assert.equal(locked.raced, false, JSON.stringify(locked));
+    assert.equal(locked.outcome, undefined);
+    assert.equal(createCalls, 1, '锁内新 HEAD 无判定必须调用 create()');
+
+    // 对照：把锁外旧值透传进去会跳过 create——这就是本 P1 要钉死的病。
+    const stale = await runLockedReviewerCreate({
+      forceNew: false, record, view: { phase: 'done' }, verdictOnHead: true,
+      create: () => { throw new Error('透传锁外 true 不该走到 create'); },
+    });
+    assert.equal(stale.raced, true);
+    assert.equal(stale.outcome, 'reused');
+  });
+});
+
 describe('对账目标是 PR 当前 head，不是登记里的 expectedOid（#1293 审官 P1）', () => {
   // record.expectedOid 钉着旧提交；GitHub 上 PR 已推到 HEAD。
   const staleRecord = { sessionKey: 'codex:02923a47-bc9b-492f-a537-20b23b8691ba', expectedOid: OLD };
@@ -192,12 +251,27 @@ describe('生产接线（正控：漏一处就等于没修）', () => {
     const lockAt = DAO.indexOf('withWorktreeLock(async () => {');
     const recomputeAt = DAO.indexOf('const lockedVerdict = ');
     const callAt = DAO.indexOf('runLockedReviewerCreate({');
-    assert.ok(lockAt > -1 && recomputeAt > -1 && callAt > -1, '锁内重读的结构没了——本闸判据已失效，不是通过');
+    assert.ok(lockAt > -1, 'withWorktreeLock 还在');
+    assert.ok(recomputeAt > -1, 'lockedVerdict 还在');
+    assert.ok(callAt > -1, 'runLockedReviewerCreate 还在');
     assert.ok(recomputeAt > lockAt, 'lockedVerdict 必须在锁内算（等锁期间 head 可能变了）');
     assert.ok(recomputeAt < callAt, '先重读再判 race');
     assert.match(DAO, /runLockedReviewerCreate\(\{\s*forceNew, record: againRecord, view: racePeek\.view, verdictOnHead: lockedVerdict,/);
     // forceNew 短路时不许白打两次 gh（judgeReviewerCreateRace 根本不看 verdictOnHead）
     assert.match(DAO, /const lockedVerdict = \(!forceNew && againRecord && againRecord\.sessionKey\)/);
+  });
+
+  it('终态 reuse 不许在锁外 emit 退出（否则 lockedVerdict 重读跑不到）', () => {
+    const reuseAt = DAO.indexOf('if (decided.reuse.reuse');
+    const lockAt = DAO.indexOf('withWorktreeLock(async () => {');
+    assert.ok(reuseAt > -1, 'reuse 出口还在');
+    assert.ok(lockAt > reuseAt, 'reuse 出口必须在进锁之前');
+    const seg = DAO.slice(reuseAt, lockAt);
+    assert.match(seg, /mustRecheckVerdictUnderLock/);
+    const gateAt = seg.indexOf('mustRecheckVerdictUnderLock');
+    const emitAt = seg.indexOf("outcome: 'reused'");
+    assert.ok(gateAt > -1, 'mustRecheck 闸要写在 reuse 出口里');
+    assert.ok(emitAt > gateAt, '锁外 reused 出口必须先过 mustRecheck 闸，不能无条件 process.exit');
   });
 
   it('对账目标从 GitHub 读当前 headRefOid，不读登记里的 expectedOid（#1293 审官 P1）', () => {

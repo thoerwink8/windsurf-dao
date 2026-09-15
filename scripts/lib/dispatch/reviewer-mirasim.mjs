@@ -201,6 +201,21 @@ export function decideReviewerCreateStart({ force, switched, deadError, record, 
 }
 
 /**
+ * 锁外 reuse=true 时，终态会话的判定快照在两次 gh / 等锁之间会过期（#1293 二审 P1）。
+ *
+ * 现场：锁外读到旧 head 有判定 → emit reused 直接退出，持锁后的重读根本跑不到；
+ * 等锁或两次读取之间 PR 已推新 head，新 head 没有判定，新提交就没有审官。
+ *
+ * 终态 + 复用 ⇒ 必须持锁后重读 headRefOid/reviews，不许在锁外退出。
+ * 在役 / 没查成 ⇒ 仍可锁外复用（在役审官还在干活；没查成 fail-closed 不烧额度）。
+ */
+export function mustRecheckVerdictUnderLock({ reuse, view } = {}) {
+  if (reuse !== true) return false;
+  const phase = sessionStateOf(view) || '';
+  return EXECUTION_FINISHED.has(phase);
+}
+
+/**
  * 把 probeDir 三态收成 decideReworkReviewerHandoff 的 treeExists。
  * 不能收成布尔：unscanned 必须是 undefined，才会走 fail 而不是入队。
  */
@@ -262,10 +277,10 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
  *
- * `verdictOnHead` 必须透传锁外算好的同一份三态值（#1293 审官 P1 实咬）：
- * 锁外 decideReviewerCreateStart 已按「终态且当前 head 无判定」判了 start，
- * 锁内复查不传这个值就会以 undefined 重判——终态 done 落回复用，create() 不执行，
- * PR 重新冻回那个没交卷的审官上。
+ * `verdictOnHead` 必须是**持锁后**重读的当前 head 快照，不是锁外那份（#1293 二审 P1）：
+ * 锁外 true（旧 head 有判定）在等锁期间 PR 可能已推新 head；拿旧值判 race 会跳过 create。
+ * 漏传（undefined）同样错——终态 done 会落回复用（#1293 一审 P1）。
+ * 调用方：forceNew 短路时不必重读（judgeReviewerCreateRace 根本不看这个值）。
  */
 export async function runLockedReviewerCreate({ forceNew, record, view, verdictOnHead, create } = {}) {
   if (typeof create !== 'function') {

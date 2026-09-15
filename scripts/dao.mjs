@@ -1883,6 +1883,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2142,7 +2143,12 @@ async function cmdReviewerCreateMirasim(args) {
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  if (decided.reuse.reuse) {
+  // #1293 二审 P1：终态 reuse 的判定快照会过期。锁外 true 若在这里 emit 退出，
+  // 下面 lockedVerdict 重读根本跑不到——等锁期间推了新 head，新提交就没有审官。
+  // dry-run 仍按锁外快照预览（本来就不进锁）。
+  if (decided.reuse.reuse && (args.dryRun || !mustRecheckVerdictUnderLock({
+    reuse: true, view: peek.view,
+  }))) {
     emit({
       ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
