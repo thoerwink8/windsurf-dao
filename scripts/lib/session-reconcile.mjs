@@ -101,12 +101,20 @@ export function isLiveSession(s) {
 }
 
 /**
- * 一条会话在盯哪个 issue / 哪张 PR。只从 title / cwd 读结构化痕迹，
- * 不读 draft、不读登记文件、不读 resultPath。
+ * 一条会话在盯哪个 issue / 哪张 PR。
+ * 认三处：显式 pr/issue 字段（起会话时写入的元数据）、title/label 里的结构化字样、
+ * cwd 末段 `dao-review-pr-N` / `dao-N`。不读 draft、不读登记文件、不读 resultPath。
+ *
+ * 快路无署名 PR 的工作树是 `<仓>/<分支>`，末段对不上 `dao-N`——那种用
+ * `sessionMatchesBranch`，不要往这里塞分支名当单号。
  */
 export function sessionSubjects(s) {
   const issues = new Set();
   const prs = new Set();
+  const nIssue = positiveInt(s && (s.issue ?? s.issue_number));
+  const nPr = positiveInt(s && (s.pr ?? s.pr_number));
+  if (nIssue) issues.add(nIssue);
+  if (nPr) prs.add(nPr);
   const title = String((s && (s.title || s.label)) || '');
   const cwd = String((s && (s.cwd || s.workdir || s.worktreeId)) || '').replace(/\\/g, '/');
   for (const m of title.matchAll(/ISSUE-#?(\d+)/gi)) issues.add(Number(m[1]));
@@ -123,14 +131,50 @@ export function sessionSubjects(s) {
   return { issues, prs };
 }
 
+/** 与 ensureGitWorkspace 同一份目录名：非法字符换成 `-`。 */
+function worktreeDirName(branch) {
+  const raw = String(branch || '').trim();
+  return raw ? raw.replace(/[^\w.-]/g, '-') : '';
+}
+
+function sessionCwdNorm(s) {
+  return String((s && (s.cwd || s.workdir || s.worktreeId)) || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function sessionCwdTail(s) {
+  return sessionCwdNorm(s).split('/').filter(Boolean).pop() || '';
+}
+
+/**
+ * 会话工作树是不是这张 PR 的分支。快路 PR 的真实布局是 `<仓>/<分支>`，
+ * 标题里常常没有 PR 号——只认 `dao-N` 会把还在干活的工人判成孤儿。
+ */
+export function sessionMatchesBranch(s, branch) {
+  const raw = String(branch || '').trim();
+  if (!raw) return false;
+  const tail = sessionCwdTail(s);
+  if (!tail) return false;
+  const dir = worktreeDirName(raw);
+  if (tail === raw || (dir && tail === dir)) return true;
+  const cwd = sessionCwdNorm(s);
+  return cwd.endsWith(`/${raw}`) || (dir && cwd.endsWith(`/${dir}`));
+}
+
+function sessionMatchesTarget(s, { issue, pr, branch } = {}) {
+  const subj = sessionSubjects(s);
+  const wantIssue = positiveInt(issue);
+  const wantPr = positiveInt(pr);
+  if (wantIssue && subj.issues.has(wantIssue)) return true;
+  if (wantPr && subj.prs.has(wantPr)) return true;
+  if (sessionMatchesBranch(s, branch)) return true;
+  return false;
+}
+
 function sessionMatchesDispatch(s, d) {
   const key = String((s && (s.key || s.id)) || '');
   if (d.dispatch_id && key && key === String(d.dispatch_id)) return true;
   if (d.job_id && key && d.job_id === `dispatch-${key}`) return true;
-  const subj = sessionSubjects(s);
-  if (d.issue && subj.issues.has(d.issue)) return true;
-  if (d.pr && subj.prs.has(d.pr)) return true;
-  return false;
+  return sessionMatchesTarget(s, { issue: d.issue, pr: d.pr, branch: d.branch });
 }
 
 /**
@@ -142,21 +186,16 @@ function sessionMatchesDispatch(s, d) {
  *   命中且活着             → live:true
  *   扫完没有命中的活会话   → live:false
  */
-export function hasLiveExecutor({ sessions, issue, pr } = {}) {
+export function hasLiveExecutor({ sessions, issue, pr, branch } = {}) {
   if (sessions === undefined) {
     return { live: false, unscanned: false, unavailable: true, why: '观测面未接入' };
   }
   if (!Array.isArray(sessions)) {
     return { live: true, unscanned: true, why: '会话名单没查成，当作有人在做' };
   }
-  const wantIssue = positiveInt(issue);
-  const wantPr = positiveInt(pr);
   for (const s of sessions) {
     if (!s) continue;
-    const subj = sessionSubjects(s);
-    const matches = (wantIssue && subj.issues.has(wantIssue))
-      || (wantPr && subj.prs.has(wantPr));
-    if (!matches) continue;
+    if (!sessionMatchesTarget(s, { issue, pr, branch })) continue;
     const a = isLiveSession(s);
     if (a.unscanned) {
       return { live: true, unscanned: true, why: a.why, session: s };
@@ -277,7 +316,7 @@ export function planReconcile({
     if (!open.has(issue) && !matchedPr) continue;
     if (queued.has(issue)) continue; // 本轮已经要派，不造第二份
     if (delivered.has(issue)) continue; // 已交卷等审查/合并；判红返工走独立的 PR 路径。
-    const live = hasLiveExecutor({ sessions, issue, pr: d.pr });
+    const live = hasLiveExecutor({ sessions, issue, pr: d.pr, branch: d.branch });
     if (live.unscanned) {
       reports.push(`#${issue} 活会话没查成——当有人在做，不重派`);
       continue;

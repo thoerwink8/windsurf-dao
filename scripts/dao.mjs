@@ -784,9 +784,11 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   let sess;
   try {
+    const dispatchIssue = Number(args.issue);
     sess = await bind.runtime.startSession({
       agent: route.agent, workdir: tree.path, prompt,
       model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
+      ...(Number.isInteger(dispatchIssue) && dispatchIssue > 0 ? { issue: dispatchIssue } : {}),
     });
   } catch (e) {
     // 租约被占是**背压**不是失败：树里有人在干活，排队下一轮就行。busy 原样透出去，
@@ -2446,12 +2448,20 @@ async function cmdStartMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'start', defaultLocal: thisCheckoutRoot() });
   const repo = targetRepo.localPath;
   const branch = args.branch || gitBranchName(ROOT).branch || 'master';
+  const asPositiveInt = (v) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const issue = asPositiveInt(args.issue);
+  const pr = asPositiveInt(args.pr);
+  const title = typeof args.title === 'string' && args.title.trim() ? args.title.trim() : null;
 
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
       agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
       repo, ghRepo: targetRepo.ownerName || null, branch, workdir: workdir || '(ensureWorkspace 后才有)',
+      pr, issue, title,
       promptBytes: Buffer.byteLength(String(args.prompt), 'utf8'),
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
     });
@@ -2477,6 +2487,9 @@ async function cmdStartMirasim(args) {
     sess = await bind.runtime.startSession({
       agent: route.agent, workdir, prompt: args.prompt,
       model: args.model, clientRef: `dao-start-${Date.now()}`,
+      ...(issue ? { issue } : {}),
+      ...(pr ? { pr } : {}),
+      ...(title ? { title } : {}),
     });
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
@@ -2489,7 +2502,7 @@ async function cmdStartMirasim(args) {
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     handle: sess.sessionKey, // 兼容指挥官旧字段：brainSessions 的键就是这个
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
-    repo, branch, workdir,
+    repo, branch, workdir, pr, issue, title,
   });
 }
 
