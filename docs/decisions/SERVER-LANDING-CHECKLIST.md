@@ -488,3 +488,16 @@ GitHub 从同一条通道送回来；那是**自己造出来的样本**，通道
 **本 PR 没有在生产上装任何东西。** 合并后执行 `sudo bash scripts/install-dao-gh-events.sh`。
 遗弃草稿 PR #964 的分支 `feat/956-gh-event-bridge` 原样保留；本跳是按帅位 2026-09-06 05:40
 值守记录在当前 master 上重做（单元路径已改到 `/srv/projects/windsurf-dao`）。
+
+### 2026-09-16：EOF 孤儿 hook 与初始 ping 丢失（#956 补修）
+
+09-14 22:21 `gh webhook forward` 异常 EOF 后，自家孤儿 hook 卡住重连；父进程按 5 秒无上界重试（现场 17709 次），自证 ping 停约 30 小时。03:52 靠 systemd 重启恢复，删的是唯一自家孤儿 hook；新 hook 起来后初始 ping 在连接 ready 前 404，`hookId` 为空导致 `sendPing` 永久跳过。
+
+补在既有桥内，不造公网入口、不新加常驻组件：
+
+- 只删能证明是自家的失效 hook（`ownInvalidHookIds`）；没归属证据就空着手，不宽扫别人的活 hook，不删当前桥。
+- `hookId` 空时按启动后唯一自家 hook 认领（`claimLiveHook`）；ping 404 作废旧 id，不沿用。
+- 重连退避 5s 起跳、封顶 5 分钟，attempt/atCap 写进状态和 journal。
+- 当前桥还活着不许再 spawn 第二条 forward。
+
+闸：`tests/gh-events.test.js` 里 EOF 遗留 hook 与初始 ping 丢失两条反例。

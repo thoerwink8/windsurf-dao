@@ -47,7 +47,10 @@ import { createInterface } from 'node:readline';
 import { DEFAULT_REPO } from './lib/shuai-scan.mjs';
 import {
   FORWARD_EVENTS, HEARTBEAT_MS, PING_INTERVAL_MS, DEFAULT_COOLDOWN_MS,
+  FIRST_PING_MS, FORWARDER_HOST,
   createForwardParser, routeEvent, planTrigger, classifyGhEventBridge,
+  asHookId, ownInvalidHookIds, claimLiveHook, interpretHookPingResult,
+  planReconnectBackoff, shouldSpawnForward,
 } from './lib/gh-events.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -121,38 +124,57 @@ function cmdStatus(argv) {
   process.exit(v.state === 'ok' ? 0 : v.state === 'red' ? 1 : 2);
 }
 
-// 启动时扫掉遗留的 forwarder hook。两条实测（2026-09-05，别照直觉推）：
+// 启动/重连时只扫**自家失效** hook。两条实测（2026-09-05，别照直觉推）：
 //   · 只 SIGTERM 桥、没管子进程 → **子进程活下来了**，连接还在、hook 还在仓上。
 //     这是真见过的那次（手跑调试时 pkill 桥，事后 `gh api .../hooks` 里还挂着一个）。
 //   · SIGKILL 桥和子进程 → hook **自己没了**。连接一断，GitHub 那边的 forwarder 自己收摊，
 //     不需要 gh 来删。所以「硬杀会漏 hook」这个直觉是错的。
-// 也就是说真正会漏的是**孤儿子进程**。systemd 那边用 KillMode=control-group 堵住了
-// （整个 cgroup 一起收 SIGTERM），这个扫描是给手跑调试、以及任何绕过 cgroup 的杀法兜底。
-// 代价一次 API 调用，换掉的是一个无声故障：仓上 hook 攒到 20 个上限之后，
-// 桥起得来、心跳照跳，就是一个事件都收不到。
-export const FORWARDER_HOST = 'webhook-forwarder.github.com';
+// 也就是说真正会漏的是**孤儿子进程留下的自家 hook**。systemd 用 KillMode=control-group
+// 堵住了 cgroup 内的孤儿进程；这个扫描是给手跑调试、EOF 后父进程自己重连、以及
+// 任何绕过 cgroup 的杀法兜底。
+// 2026-09-14 实咬：宽扫所有 webhook-forwarder hook 会误伤别人的活 hook；
+// EOF 后只 5 秒重连、不扫自家孤儿，会把通道卡死几十小时。归属判据在 ownInvalidHookIds。
+export { FORWARDER_HOST, ownInvalidHookIds, claimLiveHook };
 
-export function staleForwarderHooks(hooks) {
-  if (!Array.isArray(hooks)) return [];
-  return hooks
-    .filter((h) => h && typeof h.config?.url === 'string' && h.config.url.includes(FORWARDER_HOST))
-    .map((h) => h.id)
-    .filter((id) => Number.isFinite(Number(id)));
+function isChildAlive(c) {
+  return !!(c && c.exitCode === null && !c.killed);
 }
 
-function sweepStaleHooks() {
+function listHooks() {
   const list = spawnSync(FORWARD_CMD, ['api', `repos/${REPO}/hooks`], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-  if (list.status !== 0) { out({ type: 'hook-sweep-skipped', why: String(list.stderr || '').trim().slice(0, 200) }); return; }
-  let hooks = null;
-  try { hooks = JSON.parse(list.stdout || '[]'); } catch { out({ type: 'hook-sweep-skipped', why: 'hook 清单解析不了' }); return; }
-  const stale = staleForwarderHooks(hooks);
-  for (const id of stale) {
+  if (list.status !== 0) {
+    out({ type: 'hook-list-failed', why: String(list.stderr || '').trim().slice(0, 200) });
+    return null;
+  }
+  try { return JSON.parse(list.stdout || '[]'); }
+  catch { out({ type: 'hook-list-failed', why: 'hook 清单解析不了' }); return null; }
+}
+
+function sweepOwnInvalidHooks(ctx) {
+  const hooks = listHooks();
+  if (!hooks) { out({ type: 'hook-sweep-skipped', why: '清单没查成，不删' }); return; }
+  const ids = ownInvalidHookIds({ hooks, events: FORWARD_EVENTS, ...ctx });
+  if (!ids.length) {
+    out({ type: 'hook-sweep', deleted: [], note: '没有可安全删除的自家失效 hook' });
+    return;
+  }
+  for (const id of ids) {
     const del = spawnSync(FORWARD_CMD, ['api', '-X', 'DELETE', `repos/${REPO}/hooks/${id}`], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-    out({ type: 'hook-swept', hookId: id, ok: del.status === 0, note: '上一条命留下的 forwarder hook' });
+    out({ type: 'hook-swept', hookId: id, ok: del.status === 0, note: '自家失效 hook' });
   }
 }
 
+function previousOwnership() {
+  const prev = readState();
+  if (!prev.probed || !prev.state || typeof prev.state !== 'object') {
+    return { ownedHookId: null, spawnAt: null };
+  }
+  const owned = asHookId(prev.state.hookId) || asHookId(prev.state.forward?.orphanHookId);
+  return { ownedHookId: owned, spawnAt: prev.state.forward?.spawnAt || null };
+}
+
 function runBridge({ dryRun, once }) {
+  const prevOwn = previousOwnership();
   const state = {
     schema: 1,
     pid: process.pid,
@@ -167,7 +189,11 @@ function runBridge({ dryRun, once }) {
     triggers: {},
     // recentExits 存的是断开时刻，不是累计次数：跑了三个月自然会断过几次，
     // 「在抽风」要看的是**近一小时断了几次**。留最近 20 条够算，不留成日志。
-    forward: { restarts: 0, lastExitAt: null, lastExitCode: null, recentExits: [] },
+    forward: {
+      restarts: 0, lastExitAt: null, lastExitCode: null, recentExits: [],
+      spawnAt: null, attempt: 0, backoffMs: 0, atCap: false,
+      orphanHookId: prevOwn.ownedHookId,
+    },
   };
   saveState(state);
 
@@ -175,6 +201,11 @@ function runBridge({ dryRun, once }) {
   const scheduled = new Map();     // unit -> timeout handle
   let child = null;
   let stopping = false;
+  let reconnectTimer = null;
+  let firstPingTimer = null;
+  let reconnectAttempt = 0;
+  let pingRetryCount = 0;
+  let spawnAt = null;
 
   const fire = (unit, why) => {
     const r = triggerUnit(unit, { dryRun });
@@ -200,16 +231,56 @@ function runBridge({ dryRun, once }) {
     out({ type: 'deferred', unit, why, inMs: delay });
   };
 
+  const markChannelLive = () => {
+    reconnectAttempt = 0;
+    pingRetryCount = 0;
+    state.forward.attempt = 0;
+    state.forward.backoffMs = 0;
+    state.forward.atCap = false;
+    state.forward.orphanHookId = null;
+  };
+
+  const armPingRetry = () => {
+    if (stopping || state.ping.recvAt || firstPingTimer || pingRetryCount >= 5) return;
+    pingRetryCount += 1;
+    firstPingTimer = setTimeout(() => { firstPingTimer = null; sendPing(); }, FIRST_PING_MS);
+    if (firstPingTimer.unref) firstPingTimer.unref();
+  };
+
   // 自证 ping：朝自己的 hook 打一针，等它从同一条通道回来。
-  // hook_id 是从第一个 ping 的负载里学来的，不额外调 API 找。
+  // hookId 优先从收到的 ping 学；初始 ping 丢失时按归属从清单认，404 则作废不沿用。
   const sendPing = () => {
-    if (state.hookId == null) return;
-    const r = spawnSync(FORWARD_CMD, ['api', '-X', 'POST', `repos/${REPO}/hooks/${state.hookId}/pings`], {
+    if (stopping) return;
+    let hookId = asHookId(state.hookId);
+    if (hookId == null) {
+      const hooks = listHooks();
+      hookId = claimLiveHook({
+        hooks,
+        ownedHookId: asHookId(state.forward.orphanHookId),
+        spawnAt,
+        events: FORWARD_EVENTS,
+      });
+      if (hookId == null) {
+        out({ type: 'ping-unresolved', why: 'hookId 还没认下，稍后自愈' });
+        armPingRetry();
+        return;
+      }
+      state.hookId = hookId;
+      out({ type: 'hook', hookId, note: '清单认下（初始 ping 丢失自愈）' });
+      saveState(state);
+    }
+    const r = spawnSync(FORWARD_CMD, ['api', '-X', 'POST', `repos/${REPO}/hooks/${hookId}/pings`], {
       encoding: 'utf8', timeout: 30000, windowsHide: true,
     });
     state.ping.sentAt = nowIso();
-    if (r.status !== 0) {
-      out({ type: 'ping-send-failed', error: String(r.stderr || '').trim().slice(0, 200) });
+    const parsed = interpretHookPingResult({ status: r.status, stderr: r.stderr, stdout: r.stdout });
+    if (!parsed.ok) {
+      out({ type: 'ping-send-failed', hookId, gone: parsed.gone, error: parsed.why });
+      if (parsed.gone) {
+        out({ type: 'hook-invalidated', hookId, why: 'ping 404，旧 hookId 不沿用' });
+        state.hookId = null;
+        armPingRetry();
+      }
     }
     saveState(state);
   };
@@ -220,6 +291,7 @@ function runBridge({ dryRun, once }) {
     if (route.kind === 'ping') {
       state.counts.pings += 1;
       state.ping.recvAt = nowIso();
+      markChannelLive();
       if (route.hookId != null && state.hookId !== route.hookId) {
         state.hookId = route.hookId;
         out({ type: 'hook', hookId: route.hookId, note: '自证 ping 的落点已认下' });
@@ -238,7 +310,49 @@ function runBridge({ dryRun, once }) {
     for (const u of route.units) wake(u, route.why);
   };
 
+  const scheduleReconnect = ({ why, ownedHookId, deadSpawnAt }) => {
+    if (stopping) return;
+    if (reconnectTimer) return;
+    const owned = asHookId(ownedHookId);
+    if (owned) state.forward.orphanHookId = owned;
+    const plan = planReconnectBackoff({ attempt: reconnectAttempt });
+    reconnectAttempt += 1;
+    state.forward.attempt = reconnectAttempt;
+    state.forward.backoffMs = plan.delayMs;
+    state.forward.atCap = plan.atCap;
+    saveState(state);
+    out({
+      type: 'forward-reconnect', why, attempt: reconnectAttempt,
+      delayMs: plan.delayMs, atCap: plan.atCap, orphanHookId: owned,
+    });
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (stopping) return;
+      const decision = shouldSpawnForward({ childAlive: isChildAlive(child), stopping });
+      if (!decision.spawn) {
+        out({ type: 'forward-spawn-skipped', why: decision.why });
+        return;
+      }
+      sweepOwnInvalidHooks({
+        ownedHookId: asHookId(state.forward.orphanHookId),
+        liveHookId: null,
+        spawnAt: deadSpawnAt,
+      });
+      startForward();
+    }, plan.delayMs);
+    if (reconnectTimer.unref) reconnectTimer.unref();
+  };
+
   const startForward = () => {
+    const decision = shouldSpawnForward({ childAlive: isChildAlive(child), stopping });
+    if (!decision.spawn) {
+      out({ type: 'forward-spawn-skipped', why: decision.why });
+      return;
+    }
+    spawnAt = nowIso();
+    state.forward.spawnAt = spawnAt;
+    pingRetryCount = 0;
+    saveState(state);
     const args = ['webhook', 'forward', `--repo=${REPO}`, `--events=${FORWARD_EVENTS.join(',')}`];
     child = spawn(FORWARD_CMD, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const parser = createForwardParser();
@@ -248,18 +362,26 @@ function runBridge({ dryRun, once }) {
     });
     createInterface({ input: child.stderr }).on('line', (l) => diag(`[forward] ${l}`));
     child.on('exit', (code) => {
+      const deadSpawnAt = spawnAt;
+      const owned = asHookId(state.hookId) || asHookId(state.forward.orphanHookId);
+      state.hookId = null;
       state.forward.lastExitAt = nowIso();
       state.forward.lastExitCode = code;
       state.forward.recentExits = [...(state.forward.recentExits || []), nowIso()].slice(-20);
+      if (owned) state.forward.orphanHookId = owned;
       saveState(state);
       if (stopping) return;
       // forward 掉了就重连。**心跳照旧在跳**，所以光看心跳看不出通道断——
       // 断的证据只有「ping 不回来了」，那一条在 classifyGhEventBridge 里判。
+      // 重连前先按归属扫自家孤儿，退避有上界；不再 5 秒一次空转。
       state.forward.restarts += 1;
-      out({ type: 'forward-exit', code, note: `第 ${state.forward.restarts} 次重连，5 秒后` });
-      setTimeout(startForward, 5000);
+      out({ type: 'forward-exit', code, note: `第 ${state.forward.restarts} 次重连` });
+      scheduleReconnect({ why: `forward exit ${code}`, ownedHookId: owned, deadSpawnAt });
     });
-    out({ type: 'forward-start', repo: REPO, events: FORWARD_EVENTS, dryRun: !!dryRun });
+    if (firstPingTimer) { clearTimeout(firstPingTimer); firstPingTimer = null; }
+    firstPingTimer = setTimeout(() => { firstPingTimer = null; sendPing(); }, FIRST_PING_MS);
+    if (firstPingTimer.unref) firstPingTimer.unref();
+    out({ type: 'forward-start', repo: REPO, events: FORWARD_EVENTS, dryRun: !!dryRun, spawnAt });
   };
 
   const beat = setInterval(() => { state.heartbeatAt = nowIso(); saveState(state); }, HEARTBEAT_MS);
@@ -269,6 +391,8 @@ function runBridge({ dryRun, once }) {
     if (stopping) return;
     stopping = true;
     clearInterval(beat); clearInterval(ping);
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (firstPingTimer) { clearTimeout(firstPingTimer); firstPingTimer = null; }
     for (const h of scheduled.values()) clearTimeout(h);
     out({ type: 'stopping', code });
     if (!child || child.exitCode !== null || child.killed) return process.exit(code);
@@ -282,7 +406,11 @@ function runBridge({ dryRun, once }) {
   process.on('SIGTERM', () => stop(0));
   process.on('SIGINT', () => stop(0));
 
-  sweepStaleHooks();
+  sweepOwnInvalidHooks({
+    ownedHookId: prevOwn.ownedHookId,
+    liveHookId: null,
+    spawnAt: prevOwn.spawnAt,
+  });
   startForward();
 }
 
