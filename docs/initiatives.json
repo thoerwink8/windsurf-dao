@@ -19,7 +19,10 @@
       "next_action": "#1150 已消歧带标，等指挥官派工（卡在机器负载准入，审官批次跑完自然放行）。",
       "next_action_as_of": "2026-09-08",
       "status": "active",
-      "started": "2026-09-04"
+      "started": "2026-09-04",
+      "issues": [
+        1150
+      ]
     },
     {
       "id": "scale-dozens",
@@ -29,7 +32,14 @@
       "next_action": "按 docs/tasks/2026-09-09-unified-execution.md 并行实现 ACP、统一用量、受控升级和模型目录；主会话负责指挥官接线与端到端验收。",
       "next_action_as_of": "2026-09-09",
       "status": "active",
-      "started": "2026-09-08"
+      "started": "2026-09-08",
+      "issues": [
+        1145,
+        1146,
+        1147,
+        1151,
+        1152
+      ]
     },
     {
       "id": "branch-hygiene",
