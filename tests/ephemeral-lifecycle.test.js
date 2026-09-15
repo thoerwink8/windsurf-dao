@@ -100,6 +100,7 @@ describe('ephemeral-lifecycle', () => {
       admit: read('scripts/lib/admission.mjs'),
       reap: read('scripts/lib/ephemeral-reap.mjs'),
       lease: read('scripts/lib/dispatch/lease.mjs'),
+      sessions: read('scripts/execution-sessions.mjs'),
     };
     const exists = (rel) => existsSync(join(REPO, rel));
     assert.deepEqual(inspectEphemeralLifecycleSources({ files, exists }), []);
@@ -148,6 +149,18 @@ describe('ephemeral-lifecycle', () => {
       exists,
     });
     assert.equal(noOrphanFn.includes('租约闸没有幽灵回收纯函数'), true, JSON.stringify(noOrphanFn));
+
+    const noCleanupProj = inspectEphemeralLifecycleSources({
+      files: { ...files, sessions: files.sessions.replace(/cleanupVerified/g, 'cleanupGone') },
+      exists,
+    });
+    assert.equal(noCleanupProj.includes('会话投影没把 cleanupVerified 带到消费端'), true, JSON.stringify(noCleanupProj));
+
+    const noCleanupStop = inspectEphemeralLifecycleSources({
+      files: { ...files, core: files.core.replace(/cleanupVerified\s*===\s*true/g, 'cleanupGone === true') },
+      exists,
+    });
+    assert.equal(noCleanupStop.includes('指挥官 stop 候选没认已确认清退证据'), true, JSON.stringify(noCleanupStop));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {

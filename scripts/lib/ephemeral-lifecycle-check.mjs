@@ -18,6 +18,7 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
   const admit = files.admit || '';
   const reap = files.reap || '';
   const lease = files.lease || '';
+  const sessions = files.sessions || '';
 
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
   if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
@@ -26,6 +27,12 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
   if (core && !/planOrphanReaps/.test(core)) problems.push('指挥官没产幽灵进程回收');
   if (commander && !/execReapOrphan/.test(commander)) problems.push('指挥官没执行幽灵进程回收');
   if (lease && !/export function planOrphanReaps/.test(lease)) problems.push('租约闸没有幽灵回收纯函数');
+  if (sessions && !/export function normalizeExecutionSession[\s\S]{0,900}cleanupVerified/.test(sessions)) {
+    problems.push('会话投影没把 cleanupVerified 带到消费端');
+  }
+  if (core && !/cleanupVerified\s*===\s*true/.test(core)) {
+    problems.push('指挥官 stop 候选没认已确认清退证据');
+  }
   if (admit && !/capNewDispatchSlots/.test(admit)) problems.push('老单优先没有把新单槽位压到 1');
   if (reap && !/planTreeReaps/.test(reap)) problems.push('清树判据 planTreeReaps 丢了');
   if (commander && !/leftoverIncompleteAfterStops/.test(commander)) {

@@ -10,6 +10,17 @@ test('answered questions are not permanent waits, and failures remain failures',
  assert.equal(normalizeExecutionSession({phase:'done',interactions:[{status:'answered'}]}).state,'done');
  assert.equal(normalizeExecutionSession({phase:'error',error:'upstream failed',awaiting:true}).state,'failed');
 });
+test('rejected launch with verified cleanup keeps that evidence for decide',()=>{
+ const projected=normalizeExecutionSession({sessionKey:null,key:'launch:test',state:'rejected',cleanupVerified:true});
+ assert.equal(projected.cleanupVerified,true);
+ assert.equal(projected.state,'rejected');
+ assert.equal(projected.sessionKey,null);
+ assert.equal(projected.key,'launch:test');
+});
+test('missing cleanupVerified is not synthesized as a successful cleanup',()=>{
+ const projected=normalizeExecutionSession({sessionKey:null,key:'launch:pending',state:'uncertain'});
+ assert.notEqual(projected.cleanupVerified,true);
+});
 test('Mirasim snapshot interactions survive public read view normalization',()=>{
  const interactions=[{promptId:'q',questions:[{id:'format'}]}];
  assert.deepEqual(readSessionView({phase:'done',text:'question',interactions}).interactions,interactions);

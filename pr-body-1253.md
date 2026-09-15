@@ -12,6 +12,8 @@
 
 本轮：GitHub 报 `CONFLICTING`。合入 origin/master（#1265 收尾名额按核数、#1270 draft 跳过留痕）。冲突只在 `commander-core` 收尾：两边都留——幽灵回收 + 名额用尽通知。新 head 让看门狗再推复审。幽灵回收 / cwd 三态 / 差集 UNKNOWN 修法都还在。
 
+本轮（#1133 计划第 2 节）：42 条 `rejected` 无 vendor sessionKey、`cleanupVerified=true` 被投影丢掉证据后，每轮对 `launch:` 键 `stop-session` 失败空转。复用本 PR，不新开。不改预算与渠道规则，不杀健康会话。
+
 ## 验收标准
 
 - [x] `planOrphanReaps`：名单 completed/空 + 树上有 pid → 产 `reap-orphan`；running 在这棵树 → 不产；名单没查成 → 不杀
@@ -23,7 +25,11 @@
 - [x] 差集 `reworkRequired` 只认 `CONFLICTING` 或当前 head 真红；UNKNOWN / 审查没查成不当返工
 - [x] 认输 PR 也写入 mergeable map，差集不再读到列表上的 UNKNOWN 就再派工人
 - [x] 夹具：CI 绿 + UNKNOWN + 旧 head 的红 + 已停工人 + 卡死标 → 0 条 dispatch/rework
-- [x] 新增检查器接线有拦截证据：故意摘掉 `planOrphanReaps` / `execReapOrphan` / `export function planOrphanReaps` 后，检查器当场报红 3 处；恢复后绿。见「上线证据（故意违规被当场拦下）」
+- [x] 新增检查器接线有拦截证据：故意摘掉幽灵回收三接线 + `cleanupVerified` 投影/消费后，检查器当场报红 5 处；恢复后绿。见「上线证据（故意违规被当场拦下）」
+- [x] `{sessionKey:null, key:'launch:test', state:'rejected', cleanupVerified:true}` 经 `normalizeExecutionSession` 再进 `decide` → 0 条 `stop-session`；旧实现会红
+- [x] 正控：已确认 vendor session 的 done/incomplete 仍回收；running/streaming/waiting_user/unknown 不误杀
+- [x] `uncertain`/`pending` 且 `cleanupVerified` 缺失不当成功清退；不按 `launch:` 前缀过滤；不删历史账
+- [x] 42 条法国 VPS 同形回放不再重复 stop；名单没查成不拿残留 items 去 stop
 - [x] 分支含最新 origin/master；相关套绿；`node scripts/dao-check.mjs`；`node scripts/handoff-check.mjs` 通
 
 ## 进展
@@ -38,13 +44,14 @@
 - [x] 合入 origin/master（#1261 认输解冻等）；三处修法冲突 0，都还在
 - [x] 本轮解 CONFLICTING：合入 origin/master（#1265 / #1270）。`commander-core` 收尾两边都留。HEAD `c5194eed`
 - [x] 返工红 1（检查器拦截证据）：正文补可复跑故意违规样本；摘接线当场红、恢复后绿
+- [x] #1133 计划第 2 节：投影带上 `cleanupVerified`，`decide` 已清退不再 stop；TDD 整链反例先红后绿
 
 相关套：
 
 ```
-$ node --test tests/lease.test.js tests/commander.test.js tests/ephemeral-lifecycle.test.js tests/ephemeral-reap.test.js tests/commander-verbs.test.js tests/session-reconcile.test.js tests/exhausted.test.js
-# tests 412
-# pass 412
+$ node --test tests/lease.test.js tests/commander.test.js tests/ephemeral-lifecycle.test.js tests/ephemeral-reap.test.js tests/commander-verbs.test.js tests/session-reconcile.test.js tests/exhausted.test.js tests/execution-session-view.test.js
+# tests 421
+# pass 421
 # fail 0
 ```
 
@@ -60,11 +67,20 @@ execReapOrphan({cwd:'.../dao-1',pids:[4242]}, {
 
 判别实验（差集 UNKNOWN，本轮实咬）：CI 绿、列表 UNKNOWN、重查仍 UNKNOWN、旧 head CHANGES_REQUESTED、工人已 stopped、PR 带「卡死/自动化认输」→ `decide` 对 #1133 零 `dispatch` / `rework`。MERGEABLE 同形也是零。CONFLICTING 才重派。
 
+判别实验（#1133 计划第 2 节，TDD 整链反例）：
+
+```
+normalizeExecutionSession({sessionKey:null, key:'launch:test', state:'rejected', cleanupVerified:true})
+→ cleanupVerified === true，再进 decide → 0 条 stop-session
+42 条同形 + done/incomplete/vendor-from-launch 仍回收；running/streaming/waiting_user/unknown/pending/uncertain 0 条 stop
+旧实现：投影丢掉 cleanupVerified，42 条全部对 launch:test-N 产 stop-session
+```
+
 `node scripts/dao-check.mjs` 本机末行（恢复后的绿，本轮返工实测）：
 
 ```
 ok  短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量
-dao check: 好的（263 项，3 条可见，15 项跳过，143.5s）
+dao check: 好的（263 项，3 条可见，15 项跳过，358.9s）
 ```
 
 `node scripts/handoff-check.mjs` 本机判定：
@@ -77,9 +93,9 @@ dao check: 好的（263 项，3 条可见，15 项跳过，143.5s）
 
 ## 上线证据（故意违规被当场拦下）
 
-本 PR 改了自动检查器：`scripts/dao-check.mjs` 的 `checkEphemeralLifecycle` 新增读 `lease.mjs`（约 :1376），`scripts/lib/ephemeral-lifecycle-check.mjs` 新增三条接线（`planOrphanReaps` / `execReapOrphan` / `export function planOrphanReaps`）。合并证据是「故意违规被当场拦下」，不是「dao-check 通过」。`tests/ephemeral-lifecycle.test.js` 的变异单测是代码内证据，不能替代本段。
+本 PR 改了自动检查器：`scripts/dao-check.mjs` 的 `checkEphemeralLifecycle` 读 `lease.mjs` 与 `execution-sessions.mjs`，`scripts/lib/ephemeral-lifecycle-check.mjs` 钉五处接线（`planOrphanReaps` / `execReapOrphan` / `export function planOrphanReaps` / 投影 `cleanupVerified` / `decide` 认 `cleanupVerified === true`）。合并证据是「故意违规被当场拦下」，不是「dao-check 通过」。`tests/ephemeral-lifecycle.test.js` 的变异单测是代码内证据，不能替代本段。
 
-可复跑（仓库根）：把本 PR 新增三处接线从源码摘掉，走 dao-check 同一条 `inspectEphemeralLifecycleSources`；`finally` 写回原文。`X` / `ok` 两行与 `dao-check.mjs` 的 `fail()` / `green()` 原文同一句。
+可复跑（仓库根）：把本 PR 新增五处接线从源码摘掉，走 dao-check 同一条 `inspectEphemeralLifecycleSources`；`finally` 写回原文。`X` / `ok` 两行与 `dao-check.mjs` 的 `fail()` / `green()` 原文同一句。
 
 ```bash
 node --input-type=module <<'NODE'
@@ -102,6 +118,7 @@ const filesOf = () => ({
   admit: read('scripts/lib/admission.mjs'),
   reap: read('scripts/lib/ephemeral-reap.mjs'),
   lease: read('scripts/lib/dispatch/lease.mjs'),
+  sessions: read('scripts/execution-sessions.mjs'),
 });
 const inspectNow = () => inspectEphemeralLifecycleSources({ files: filesOf(), exists });
 const print = (label, problems) => {
@@ -118,14 +135,16 @@ const targets = [
   ['scripts/lib/commander-core.mjs', 'planOrphanReaps', 'planGoneReaps'],
   ['scripts/commander.mjs', 'execReapOrphan', 'execGoneOrphan'],
   ['scripts/lib/dispatch/lease.mjs', 'export function planOrphanReaps', 'export function planGoneReaps'],
+  ['scripts/execution-sessions.mjs', 'cleanupVerified', 'cleanupGone'],
+  ['scripts/lib/commander-core.mjs', 'cleanupVerified === true', 'cleanupGone === true'],
 ];
-const originals = targets.map(([rel]) => [rel, read(rel)]);
+const originals = [...new Set(targets.map(([rel]) => rel))].map((rel) => [rel, read(rel)]);
 try {
   print('恢复前/绿（现行源码）', inspectNow());
   for (const [rel, from, to] of targets) {
     writeFileSync(join(ROOT, rel), read(rel).split(from).join(to));
   }
-  print('故意违规（摘掉 planOrphanReaps / execReapOrphan / export function planOrphanReaps）', inspectNow());
+  print('故意违规（摘掉幽灵回收三接线 + cleanupVerified 投影/消费）', inspectNow());
 } finally {
   for (const [rel, text] of originals) writeFileSync(join(ROOT, rel), text);
 }
@@ -138,15 +157,15 @@ NODE
 ```
 === 恢复前/绿（现行源码） ===
   ok  短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量
-=== 故意违规（摘掉 planOrphanReaps / execReapOrphan / export function planOrphanReaps） ===
-  X  短命会话闸红 3 处
+=== 故意违规（摘掉幽灵回收三接线 + cleanupVerified 投影/消费） ===
+  X  短命会话闸红 5 处
      修：done_when 是机器可算的事实，红了就还没完
-     指挥官没产幽灵进程回收；指挥官没执行幽灵进程回收；租约闸没有幽灵回收纯函数
+     指挥官没产幽灵进程回收；指挥官没执行幽灵进程回收；租约闸没有幽灵回收纯函数；会话投影没把 cleanupVerified 带到消费端；指挥官 stop 候选没认已确认清退证据
 === 恢复后/绿 ===
   ok  短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量
 ```
 
-摘接线当场红 3 处，恢复后绿。完整 `node scripts/dao-check.mjs` 恢复后末行见上节。
+摘接线当场红 5 处，恢复后绿。完整 `node scripts/dao-check.mjs` 恢复后末行见上节。
 
 ## 机制判定
 
@@ -155,6 +174,8 @@ NODE
 cwd 复核：还会再犯吗？**会——如果把非 ENOENT/ESRCH 当 gone。** 机制：复用 `linkErrorKind`，只把 ENOENT/ESRCH 当 gone，其余返回可见 `unscanned` 且 `ok:false`。
 
 差集误派：还会再犯吗？**会——如果 `reworkRequired` 写成 `mergeable !== MERGEABLE`。** 列表 GraphQL 常 UNKNOWN；认输 PR 以前 `continue` 还不写 map，差集读到 UNKNOWN，把交卷停会话当成工人死了再派。机制：差集只认 `CONFLICTING` 与当前 head 真红；UNKNOWN / 审查没查成按 #1056「没查成当有人在做」。认输 PR 也写入 mergeable map。本会话就是那次误派的现场：修法在本 PR、master 还没有，指挥官又派了一个工人。合入 master 之后这条才生效。
+
+清退空转：还会再犯吗？**会——如果投影丢掉 `cleanupVerified`。** 42 条 `rejected` 无 vendor sessionKey、清理已核过，名单投影只留 `key=launch:…`，`decide` 当终态再 `stop-session`，执行口没有真会话就失败，下一轮原样再来。机制：`normalizeExecutionSession` 把 `cleanupVerified` 带到消费端；`decide` 只在 `cleanupVerified === true` 时跳过 stop。不按 `launch:` 前缀过滤，不把缺失字段当成已清退，不删历史账。
 
 ## 同类扫描
 
@@ -183,8 +204,20 @@ tests/session-reconcile.test.js  夹具
 
 **结论：只此一处生产映射。** 本轮已改。
 
+形状 3：「已确认清退后仍对登记键重复 stop（投影丢掉 cleanupVerified）」。
+
+```
+scripts/execution-sessions.mjs:4,12,18  生产投影，已带 cleanupVerified
+scripts/lib/commander-core.mjs:1841      decide 认 cleanupVerified === true
+scripts/lib/execution-runtime.mjs        写 cleanupVerified，不投影给指挥官
+scripts/lib/lease-gc.mjs:81              注释
+scripts/lib/execution-states.mjs:111     注释
+```
+
+**结论：只此一处生产投影 + 只此一处 stop 候选消费。** 本轮已改。不重复 #1288（测试后代回收）/ #1292（租约占用与死票）。
+
 ## 回流
 
-- 产物：`planOrphanReaps` + `execReapOrphan`（三态 cwd）+ 差集 `reworkRequired` 只认冲突/当前 head 真红。
-- 为什么通用：① 记账说没人、内核说有人，回收要用同一把尺；② 「没查成当成没有 / 当成已经消失 / 当成工人死了」是这仓反复咬过的病。
-- 建议落点：已落 `lease.mjs` / `proc-cwds.mjs` / `commander-core.mjs`。
+- 产物：`planOrphanReaps` + `execReapOrphan`（三态 cwd）+ 差集 `reworkRequired` 只认冲突/当前 head 真红 + 投影带 `cleanupVerified`、已清退不再 stop。
+- 为什么通用：① 记账说没人、内核说有人，回收要用同一把尺；② 「没查成当成没有 / 当成已经消失 / 当成工人死了 / 当成还没清退」是这仓反复咬过的病。
+- 建议落点：已落 `lease.mjs` / `proc-cwds.mjs` / `commander-core.mjs` / `execution-sessions.mjs`。

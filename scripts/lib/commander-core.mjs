@@ -1830,12 +1830,15 @@ function collectCandidates(situation) {
   // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
   // 返工被「渠道 mirasim 已满员（在途 1 ≥ 上限 1）」拒掉。done/completed/failed
   // 与 incomplete 一样是终态，走正典 classifySessionState，不再手写一份词表。
+  // 已确认清退（cleanupVerified）不再 stop：rejected 无 vendor sessionKey 的登记
+  // 投影若丢掉这个字段，每轮会拿 launch: 键空转。#1133 §2。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
     const raw = sessionStateOf(s) || '';
     if (!raw) continue;
     if (raw === 'stopped' || raw === 'gone' || raw === 'cancelled' || raw === 'canceled') continue;
     if (classifySessionState(s) !== 'finished') continue;
+    if (s && s.cleanupVerified === true) continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;
     stops.push(withNeeds({
