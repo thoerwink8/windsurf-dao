@@ -47,12 +47,15 @@ export function readBoard(path = BOARD_FILE, now = Date.now()) {
   if (age > BOARD_STALE_MS) {
     return { scanned: false, why: `已过期 ${Math.round(age / 60000)} 分钟——指挥官可能没在跑` };
   }
-  // waitingUser 写侧可能是 null（GitHub 没扫到）。null 是「没查成」，不是「没有」，
-  // 所以这里保持 null 原样，由判据决定怎么办，不许在这层偷偷变成 0。
+  // waitingUser 写侧在 GitHub 没扫到时记 null。null / 缺字段 = 没查成，不是 0。
+  // 整份盘面因此不能当已查成——判定侧若 Number(null)||0，提问闸会静默关掉。
+  if (doc.waitingUser == null) {
+    return { scanned: false, why: 'waitingUser 没查成（GitHub 未扫描）' };
+  }
   return {
     scanned: true,
     stalledRounds: Number(doc.stalledRounds) || 0,
-    waitingUser: doc.waitingUser == null ? null : Number(doc.waitingUser) || 0,
+    waitingUser: Number(doc.waitingUser) || 0,
     at: doc.at,
   };
 }

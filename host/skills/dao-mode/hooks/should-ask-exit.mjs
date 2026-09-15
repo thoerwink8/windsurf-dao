@@ -30,7 +30,8 @@ export const EXIT_DEFAULTS = { hours: 8, messages: 3, offTopic: 2, stalled: 6 };
  * @param {object} s
  * @param {string} s.mode 'normal' | 'standby' | 'focus'
  * @param {object} [s.board] 盘面事实 `{scanned, stalledRounds, waitingUser, why}`。
- *   `scanned !== true` 一律当没查成，退回时长/消息数兜底。
+ *   `scanned !== true` 或 `waitingUser == null` 一律当没查成，退回时长/消息数兜底。
+ *   `waitingUser: 0` 才是「查过，没有」；`null` 是「没查成」，`Number(null)===0` 会把两者并掉。
  * @returns {{ask: boolean, reasons: string[], basis?: string}} ask=true 时 reasons 是人话理由。
  *   `basis` 说明这次是按盘面判的还是兜底判的——排障时要分得开。
  */
@@ -45,7 +46,9 @@ export function shouldAskExit({
     // 偏离与盘面无关：连续两次偏离 = 用户在派新活，本来就在场。两套判据下都保留。
     if (offTopicStreak >= t.offTopic) reasons.push(`连续偏离 ${offTopicStreak} 次`);
 
-    if (board && board.scanned === true) {
+    // waitingUser 必须是查过的数字。null / 缺字段 = GitHub 没查成。
+    // Number(null)===0，会把「没查成」当成「没有等用户」，闸就静默失效。
+    if (board && board.scanned === true && board.waitingUser != null) {
       // 主判据：只有「卡住了、只有用户能解」才打扰。
       const stalled = Number(board.stalledRounds) || 0;
       const waiting = Number(board.waitingUser) || 0;

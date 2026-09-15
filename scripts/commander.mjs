@@ -2975,4 +2975,5 @@ export {
   alreadyAppended,
   scanSessions, scanDesiredJobs,
   ensureTreeFromPr, dispatchRework,
+  writeBoardStuck,
 };

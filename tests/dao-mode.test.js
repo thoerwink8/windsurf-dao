@@ -552,6 +552,33 @@ describe('dao-mode', { concurrency: 1 }, () => {
       });
       assert.strictEqual(r.basis, 'fallback');
     });
+
+    // 审官红项：GitHub 未查成时 waitingUser 是 null。Number(null)===0，
+    // 若当「没有等用户」走 board 路，提问闸会静默失效。
+    await t.test('scanned:true 但 waitingUser:null ⇒ 强制兜底（不许 Number(null) 当 0）', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: null },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('scanned:true 但缺 waitingUser 字段 ⇒ 同样兜底', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0 },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('waitingUser:0 仍是「查过，没有」——挂再久也不打扰', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: 0 },
+      });
+      assert.strictEqual(r.ask, false, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'board');
+    });
   });
 
   // ⚠️ 这里 import 的是 read-board.mjs，**不是** dao-mode.mjs。
@@ -593,6 +620,101 @@ describe('dao-mode', { concurrency: 1 }, () => {
       const r = readBoard(p, T0);
       assert.strictEqual(r.scanned, false);
       assert.ok(String(r.why).includes('过期'), r.why);
+    });
+    await t.test('waitingUser:null ⇒ 没查成（GitHub 未扫描，不是「没有等用户」）', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: null,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('waitingUser'), r.why);
+    });
+    await t.test('缺 waitingUser 字段 ⇒ 同样没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+    });
+    await t.test('waitingUser:0 ⇒ 查成，表示已查过且没有', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, true, JSON.stringify(r));
+      assert.strictEqual(r.waitingUser, 0);
+    });
+  });
+
+  // 审官红项：从 commander 写侧串到 read / 判定。GitHub 没扫到时写 waitingUser:null，
+  // 读侧必须 scanned:false，判定侧在时长已超阈值时必须走兜底问，不许 ask:false/basis:board。
+  it('#1287 GitHub 未扫描：写侧 null → 读侧没查成 → 时长超阈值走兜底', async (t) => {
+    const { writeBoardStuck } = await import('../scripts/commander.mjs');
+    const { readBoard } = await import('../host/skills/dao-mode/hooks/read-board.mjs');
+    const { shouldAskExit } = await import('../host/skills/dao-mode/hooks/should-ask-exit.mjs');
+    const { WAITING_USER_LABEL } = await import('../scripts/lib/exhausted.mjs');
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'dao-board-write-'));
+    const p = path.join(dir, 'board-stuck.json');
+    const at = '2026-09-15T12:00:00.000Z';
+    const now = Date.parse(at) + 60 * 1000;
+
+    await t.test('github.scanned=false 写出 null，读成没查成，满 9 小时必须兜底问', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: false } },
+        digestStreak: 0,
+        file: p,
+      });
+      const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+      assert.strictEqual(written.waitingUser, null, '写侧 GitHub 没扫到必须记 null，不记 0');
+      assert.strictEqual(written.stalledRounds, 0);
+
+      const board = readBoard(p, now);
+      assert.strictEqual(board.scanned, false, JSON.stringify(board));
+      assert.ok(String(board.why).includes('waitingUser'), board.why);
+
+      const verdict = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board,
+      });
+      assert.strictEqual(verdict.ask, true, JSON.stringify(verdict));
+      assert.strictEqual(verdict.basis, 'fallback');
+    });
+
+    await t.test('github 已扫且无「等用户」→ waitingUser:0，挂再久也不打扰', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: true, prs: [] } },
+        digestStreak: 0,
+        file: p,
+      });
+      const healthy = readBoard(p, now);
+      assert.strictEqual(healthy.scanned, true, JSON.stringify(healthy));
+      assert.strictEqual(healthy.waitingUser, 0);
+      const quiet = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board: healthy,
+      });
+      assert.strictEqual(quiet.ask, false, JSON.stringify(quiet));
+      assert.strictEqual(quiet.basis, 'board');
+    });
+
+    await t.test('github 已扫且有「等用户」→ 立刻打扰', () => {
+      writeBoardStuck({
+        situation: {
+          at,
+          github: {
+            scanned: true,
+            prs: [{ number: 1, labels: [{ name: WAITING_USER_LABEL }] }],
+          },
+        },
+        digestStreak: 0,
+        file: p,
+      });
+      const waiting = readBoard(p, now);
+      assert.strictEqual(waiting.scanned, true, JSON.stringify(waiting));
+      assert.strictEqual(waiting.waitingUser, 1);
+      const stuck = shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0, board: waiting,
+      });
+      assert.strictEqual(stuck.ask, true, JSON.stringify(stuck));
+      assert.strictEqual(stuck.basis, 'board');
     });
   });
 
