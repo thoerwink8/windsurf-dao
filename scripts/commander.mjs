@@ -65,7 +65,7 @@ import {
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
@@ -1729,7 +1729,8 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
 }
 
 /** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
- *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。 */
+ *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
@@ -1738,8 +1739,7 @@ function rememberDrainFailure(state, action, payload) {
   const verdict = classifyDrainAttempt(payload);
   if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
   const pulled = verdict.reason === 'pulled';
-  const raw = !pulled && payload && (payload.error != null ? payload.error : payload.why);
-  const err = pulled ? null : (typeof raw === 'string' ? raw : (raw != null ? String(raw) : ''));
+  const err = pulled ? null : drainErrorText(payload);
   if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
   state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };

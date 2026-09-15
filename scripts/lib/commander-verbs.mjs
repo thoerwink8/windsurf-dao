@@ -525,12 +525,15 @@ export const retryKeysSync = {
  * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
  * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
  */
-/** drain 账里的失败原文：只存首行、截 400 字。不做 trim——比的是这一截的逐字相等。 */
-function drainErrorExcerpt(payload) {
-  const raw = payload && (payload.error || payload.why);
+/**
+ * drain / 复审两条写路径共用的失败原文。完整原文，不 trim、不截行、不截字——
+ * `foldFailureStreak` 比的就是这一串；截过再比会把不同失败揉成同错。
+ */
+export function drainErrorText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const raw = payload.error != null && payload.error !== '' ? payload.error : payload.why;
   if (raw == null || raw === '') return '';
-  const s = typeof raw === 'string' ? raw : String(raw);
-  return s.split(/\r?\n/)[0].slice(0, 400);
+  return typeof raw === 'string' ? raw : String(raw);
 }
 
 export function applyDrainLedger({
@@ -542,14 +545,16 @@ export function applyDrainLedger({
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
   // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
   // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
-  // 只存首行、截 400 字：账本是给人看的判据，不是日志转储。
+  // 存完整原文交给 foldFailureStreak：截首行 / 截 400 字会把「前缀相同、后文不同」
+  // 两句失败揉成同一错（审官在 1f646efc 上实测 E×400+A vs E×400+B → hopeless）。
+  // 人读摘要走 exhaustedReasonText / exhaustedComment，不在比较键上截。
   // 成功拉起审官才清零 streak；失败没原文则保留上一轮（没查成不算「一直是它」，也不当成功）。
   const pulled = verdict.reason === 'pulled';
-  const excerpt = drainErrorExcerpt(payload);
+  const err = drainErrorText(payload);
   const streak = pulled
     ? foldFailureStreak(prev, null)
-    : excerpt
-      ? foldFailureStreak(prev, excerpt)
+    : err
+      ? foldFailureStreak(prev, err)
       : {
           lastError: prev && typeof prev.lastError === 'string' ? prev.lastError : null,
           sameErrorRounds: Number.isInteger(Number(prev?.sameErrorRounds)) ? Number(prev.sameErrorRounds) : 0,

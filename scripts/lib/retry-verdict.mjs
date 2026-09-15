@@ -106,6 +106,9 @@ export const SAME_ERROR_ROUNDS_TO_STUCK = 2;
  * 归一化会把「换了个模型仍然拒」和「同一个拒绝」揉成一件事，那正是要分开的两件。
  * 反过来，原文只要变了一个字就重新计数——宁可多试一轮，也别把「情况变了」当成没变。
  * 空串 / 非字符串 = 没原文，不算「一直是它」；首尾空白也是原文的一部分。
+ *
+ * 调用方必须把**完整原文**传进来。截首行、截 N 字都是归一化，会把「前缀相同、后文不同」
+ * 的两句失败揉成同一错。人读摘要走 exhaustedReasonText / exhaustedComment，不在比较键上截。
  */
 export function judgeRepeatedFailure(prev) {
   if (!prev || typeof prev !== 'object') return { stuck: false, why: '没有上一轮的账' };
@@ -122,6 +125,7 @@ export function judgeRepeatedFailure(prev) {
  * 把这一轮的失败原文并进账（exec 侧调用，纯函数好测）。
  * 原文与上一轮**逐字相同**（整串相等，不 trim）⇒ 轮数 +1；变了 / 这轮成功了 ⇒ 从头数。
  * 空串 / 非字符串 ⇒ 清零。首尾空白也是原文，不算空。
+ * 比较的就是传入的那一串：调用方截过再传入，这里看不见被截掉的差别。
  */
 export function foldFailureStreak(prev, error) {
   const err = typeof error === 'string' ? error : '';

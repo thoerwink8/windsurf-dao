@@ -333,6 +333,63 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     assert.equal(pulled.ledger[RK.drain(905, null)].sameErrorRounds, 0, '真拉起才清零');
     assert.equal(pulled.ledger[RK.drain(905, null)].lastError, null);
   });
+
+  it('applyDrainLedger：前 400 字相同但后文不同 ≠ 同错，不判 hopeless', async () => {
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    const b = 'E'.repeat(400) + 'B';
+    assert.equal(drainErrorText({ error: a }), a, '抽取必须留下完整原文，不许截成 400 个 E');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    assert.equal(r.ledger[RK.drain(905, null)].lastError, a);
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 1);
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: b }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, b, '账本必须留下带后缀的完整原文');
+    assert.equal(rec.sameErrorRounds, 1, '后文不同必须从头数，不许被截成 400 个 E 后判同错');
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, true, '前缀相同、后缀不同不许判 hopeless：' + JSON.stringify(v));
+    assert.notEqual(v.code, 'hopeless');
+  });
+
+  it('applyDrainLedger：第一行相同但第二行不同 ≠ 同错', async () => {
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'gate refused\nhead=aaa';
+    const b = 'gate refused\nhead=bbb';
+    assert.equal(drainErrorText({ error: a }), a, '第二行是原文的一部分，不许只留首行');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: b }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, b);
+    assert.equal(rec.sameErrorRounds, 1, '第二行不同 = 另一句');
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, true, '只截首行会把这两句揉成同错：' + JSON.stringify(v));
+    assert.notEqual(v.code, 'hopeless');
+  });
+
+  it('applyDrainLedger：完整长原文连写两次仍 hopeless（正控：不是长了就不比）', async () => {
+    const { applyDrainLedger, validateRetryDrain } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, a);
+    assert.equal(rec.sameErrorRounds, 2);
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, false);
+    assert.equal(v.code, 'hopeless');
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {
@@ -932,6 +989,19 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     assert.ok(/marshal/.test(src), 'PR 合并等仍走 marshal 身份');
   });
 
+  it('drainErrorText 不截行不截字；applyDrainLedger 走它，不再自截', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'commander-verbs.mjs'), 'utf8');
+    const i = src.indexOf('export function drainErrorText');
+    assert.ok(i > -1, '找不到 drainErrorText');
+    const fnEnd = src.indexOf('export function applyDrainLedger', i);
+    const fn = src.slice(i, fnEnd > i ? fnEnd : i + 600);
+    assert.doesNotMatch(fn, /slice\s*\(/, '抽取函数自己不许截字');
+    assert.doesNotMatch(fn, /split\s*\(/, '抽取函数自己不许截行');
+    const apply = src.slice(fnEnd, src.indexOf('export function validateOpenIssue', fnEnd));
+    assert.match(apply, /drainErrorText\(/, 'applyDrainLedger 必须走共用抽取');
+    assert.doesNotMatch(apply, /drainErrorExcerpt/, '旧截断函数不许还在写侧');
+  });
+
   it('attach-reviewer 记账走 applyDrainLedger，满载不记 tries；自动化不许 --force', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     const i = src.indexOf("case 'attach-reviewer':");
@@ -948,6 +1018,11 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     const rec = src.slice(recI, recI + 800);
     assert.match(rec, /applyDrainLedger\(/, '记账必须走 applyDrainLedger，满载才不会记 tries');
     assert.match(rec, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    const memI = src.indexOf('function rememberDrainFailure');
+    assert.ok(memI > -1, '找不到 rememberDrainFailure');
+    const memEnd = src.indexOf('export function drainPayloadOf', memI);
+    const mem = src.slice(memI, memEnd > memI ? memEnd : memI + 800);
+    assert.match(mem, /drainErrorText\(/, '复审账与 drain 账必须用同一份原文抽取，不许各截各的');
     const drainI = src.indexOf('function drainReviewPending');
     assert.ok(drainI > -1, '找不到 drainReviewPending');
     const drainEnd = src.indexOf('function drainPayloadOf', drainI);

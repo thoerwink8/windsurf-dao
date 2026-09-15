@@ -3136,4 +3136,49 @@ describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, (
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('⑨两条写路径对「前 400 字同、后文不同 / 第二行不同」结论一致，且都不判 stuck', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272e-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { drainErrorText } = await import('../scripts/lib/commander-verbs.mjs');
+      const { rereviewKey, judgeRepeatedFailure } = await CORE;
+      const cases = [
+        { a: 'E'.repeat(400) + 'A', b: 'E'.repeat(400) + 'B', label: '前 400 字相同但后文不同' },
+        { a: 'gate refused\nhead=aaa', b: 'gate refused\nhead=bbb', label: '第一行相同但第二行不同' },
+      ];
+      for (const { a, b, label } of cases) {
+        assert.equal(drainErrorText({ error: a }), a, label + '：抽取不许截');
+        const key = rereviewKey(902, HEAD);
+        const state = { reworkDispatched: {}, drainLedger: {} };
+        const action = {
+          kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+          stateKey: key, tries: 1, why: '集成：' + label,
+        };
+        const runOf = (err) => () => ({
+          ok: false, status: 1, out: JSON.stringify({ ok: false, error: err }), stderr: '', error: err,
+        });
+        requestRereview(action, { state, dryRun: false, say: () => {}, run: runOf(a) });
+        requestRereview({ ...action, tries: 2 }, { state, dryRun: false, say: () => {}, run: runOf(b) });
+        const drainRec = Object.values(state.drainLedger)[0];
+        const rrRec = state.reworkDispatched[key];
+        assert.ok(drainRec, label + '：drain 账必须写下');
+        assert.equal(drainRec.lastError, b, label + '：drain 账必须留下完整后一句');
+        assert.equal(rrRec.lastError, b, label + '：复审账必须留下完整后一句');
+        assert.equal(drainRec.sameErrorRounds, 1, label + '：drain 账不许判同错');
+        assert.equal(rrRec.sameErrorRounds, 1, label + '：复审账不许判同错');
+        assert.equal(drainRec.lastError, rrRec.lastError, label + '：两条路径 lastError 必须一致');
+        assert.equal(drainRec.sameErrorRounds, rrRec.sameErrorRounds, label + '：两条路径 streak 必须一致');
+        assert.equal(judgeRepeatedFailure(drainRec).stuck, false, label);
+        assert.equal(judgeRepeatedFailure(rrRec).stuck, false, label);
+      }
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
