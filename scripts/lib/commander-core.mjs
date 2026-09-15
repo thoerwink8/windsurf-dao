@@ -1512,6 +1512,9 @@ function collectCandidates(situation) {
       // 产出的动作 head:undefined，执行侧写票时 head.oid=null，票上没 head，重试键也对不上。
       // 落回 PR 自己的 headRefOid：判据源头本来就是它（analyzeReviewsAtHead 的第二个入参）。
       const headForAction = a.head || (typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '');
+      // 票上的 head、复审账键、给人看的文案必须用同一份 head。a.head 在
+      // reviews-missing 时是 undefined，用它拼 rrKey 会得到 rereview:N@undefined@epoch，
+      // 跟「同一 PR + 同一 head」对不上（2026-09-15 审官红项）。
       // #971 / #1116：缺 reviewer/ 时先补 PR 自己的标签。等宽限期不会让标签自己长出来；
       // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。不读 issue。
       //
@@ -1533,7 +1536,7 @@ function collectCandidates(situation) {
         if (!prHasStuckLabel(pr)) {
           const issueNo = attributedIssueNumber(pr);
           out.push(withNeeds(esc(
-            `PR #${pr.number} 交卷可合、当前 head ${String(a.head).slice(0, 8)} 零判定，但叫不动审官：`
+            `PR #${pr.number} 交卷可合、当前 head ${String(headForAction).slice(0, 8)} 零判定，但叫不动审官：`
             + `PR 上取不到 reviewer/ 标签，自动补标也补不上。`
             + `这张 PR 会一直挂到有人给 PR 打上 reviewer/ 为止（不读 issue、不猜）`,
             { reason: 'reviewer-label-missing', pr: pr.number, issue: issueNo },
@@ -1541,7 +1544,7 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = rereviewBudgetKey(pr.number, a.head, staleRedAt);
+      const rrKey = rereviewBudgetKey(pr.number, headForAction, staleRedAt);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;

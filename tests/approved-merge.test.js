@@ -91,7 +91,7 @@ test('scanPrReviews 跳过 draft 要留痕：skipped 里点名，不许让它长
 });
 
 test('draft 零判定要进复审队列：不再静默 continue，且 head 落在 PR 自己的 headRefOid 上', async () => {
-  const { decide } = await import('../scripts/lib/commander-core.mjs');
+  const { decide, rereviewKey } = await import('../scripts/lib/commander-core.mjs');
   const { scanPrReviews } = await import('../scripts/commander.mjs');
   const head = 'c'.repeat(40);
   const draft = { number: 903, isDraft: true, headRefOid: head, labels: [{ name: 'reviewer/grok-4.6' }] };
@@ -108,9 +108,41 @@ test('draft 零判定要进复审队列：不再静默 continue，且 head 落�
   const rr = r.actions.find(a => a.kind === 'rereview' && Number(a.pr) === 903);
   assert.ok(rr, 'draft 零判定必须产 rereview：' + JSON.stringify(r.actions.map(a => a.kind)));
   assert.equal(rr.head, head, 'head 要落回 PR 自己的 headRefOid（a.head 在没 scanned 时是 undefined）');
+  assert.equal(rr.stateKey, rereviewKey(903, head), 'stateKey 必须用 headForAction，不许 @undefined');
   assert.equal(rr.scanSkipped, true, '票上要写清这一票是因为 scan 跳过，不是"没抓到"');
   assert.match(rr.why, /一条判定都没有/, '零判定的措辞不许说成「N 条判定都打在旧 commit 上」');
   assert.equal(/undefined/.test(rr.why), false, '不许把 undefined 写进给人看的话里');
+  assert.equal(/undefined/.test(String(rr.stateKey)), false, '账键不许带 undefined');
+});
+
+test('draft 跳过 + 非 draft 请求失败：没有任何 reviews 请求成功 → scanned:false，skipped 遮不住', async () => {
+  const { scanPrReviews } = await import('../scripts/commander.mjs');
+  const { decide } = await import('../scripts/lib/commander-core.mjs');
+  const draft = { number: 9901, isDraft: true, headRefOid: 'a'.repeat(40), labels: [{ name: 'reviewer/grok-4.6' }] };
+  const ready = { number: 9902, isDraft: false, headRefOid: 'b'.repeat(40), labels: [{ name: 'reviewer/grok-4.6' }] };
+  const read = (args) => {
+    assert.equal(String(args[2]).endsWith('/9901/reviews'), false, 'draft 不该去查 reviews（省额度那条要保住）');
+    return { ok: false, error: 'simulated reviews API failure' };
+  };
+  const s = scanPrReviews([draft, ready], { issues: [], read });
+  assert.equal(s.scanned, false, '没有任何 reviews 请求成功时必须 scanned:false');
+  assert.match(String(s.error), /simulated reviews API failure/);
+  assert.equal(s.partialError, undefined, '整节没查成走 error，不许用 partialError 伪装 scanned');
+  assert.deepEqual(s.byPr || {}, {}, '一条 reviews 都没抓到');
+  const r = decide({
+    github: { scanned: true, issues: [], prs: [draft, ready] },
+    trees: { scanned: true, worktrees: [] },
+    reviewPending: { scanned: true, items: [] },
+    prReviews: s,
+    stall: { scanned: true, strikes: {} },
+    admission: { ok: true, slots: 10, cores: 6 },
+    commanderPolicy: { requireModelInRouting: false },
+  });
+  const rereviewFailed = r.actions.filter(a => a.kind === 'rereview' && Number(a.pr) === 9902);
+  assert.deepEqual(rereviewFailed, [], '失败的非 draft 不许被 skipped draft 带成零判定');
+  const failVisible = r.actions.find(a => a.kind === 'escalate');
+  assert.equal(failVisible && failVisible.reason, 'unscanned');
+  assert.equal((failVisible.missing || []).includes('prReviews'), true);
 });
 
 test('负控：reviews 真没抓到（不是跳过）仍按旧契约静默跳过，不产动作', async () => {

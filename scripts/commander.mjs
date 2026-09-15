@@ -481,9 +481,12 @@ export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
       byPr[pr.number] = { reviews: arr, bodies: arr.map((x) => x.body || '') };
     } catch (e) { anyFail = String(e.message || e); }
   }
-  // 只要抓到过（哪怕 0 条）就算 scanned；一条都没试成才 unscanned。
-  if (Object.keys(byPr).length === 0 && anyFail && skipped.length === 0) {
-    return { scanned: false, error: `reviews 没查成：${anyFail}` };
+  // 只要抓到过（哪怕 0 条）就算 scanned；没有任何 reviews 请求成功才 unscanned。
+  // skipped draft 不能把非 draft 的失败遮成 scanned:true——否则下游对那张失败的
+  // 非 draft 看到 reviews-missing 且 skippedByScan=false，静默 continue，真实
+  // 扫描故障进不了 fail-visible（2026-09-15 审官红项，混合夹具回归）。
+  if (Object.keys(byPr).length === 0 && anyFail) {
+    return { scanned: false, error: `reviews 没查成：${anyFail}`, skipped };
   }
   return { scanned: true, byPr, skipped, ...(anyFail ? { partialError: anyFail } : {}) };
 }
