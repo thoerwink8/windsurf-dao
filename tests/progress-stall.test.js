@@ -450,25 +450,27 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
 //     ⇒ 停滞的定义就是这套动作不变，越是真停住越只发一条；实测 10 小时冻死只发过 1 条
 // 判据：键是常量、严重度只进文案。两条方向相反的断言都要有，只钉一头会漏另一头。
 describe('#1285 停滞播报的去重键不带内容', () => {
-  it('两个播报键都是常量，不含轮数 / 对象 / digest', async () => {
+  it('三个播报键都是常量，不含轮数 / 对象 / digest，停滞与认输不共用', async () => {
     const M = await import('file://' + LIB.replace(/\\/g, '/'));
     assert.equal(M.STALL_ALERT_KEY, 'progress-watch:stall');
+    assert.equal(M.EXHAUSTED_WAKE_ALERT_KEY, 'progress-watch:exhausted');
     assert.equal(M.DIGEST_STUCK_ALERT_KEY, 'digest-stuck');
-    for (const k of [M.STALL_ALERT_KEY, M.DIGEST_STUCK_ALERT_KEY]) {
+    assert.notEqual(M.STALL_ALERT_KEY, M.EXHAUSTED_WAKE_ALERT_KEY, '停滞和认输必须各用各的键');
+    for (const k of [M.STALL_ALERT_KEY, M.EXHAUSTED_WAKE_ALERT_KEY, M.DIGEST_STUCK_ALERT_KEY]) {
       assert.doesNotMatch(k, /rounds:|=|\n/, '键里不许有内容，否则内容一变就是新键  →  ' + k);
     }
   });
 
-  it('commander 不再把指纹 / digest 拼进 hubOnce 的键', () => {
+  it('commander 不再把指纹 / digest / wakeReason 拼进 hubOnce 的键', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
-    // 禁的是把**内容快照**拼进键：指纹（含轮数+每个对象的 key=sig）和 digest（整套动作）。
-    // 不禁 wakeReason —— 它是个有界的小枚举（first / still-stalled / exhausted …），
-    // 不随盘面内容膨胀，正是用来把「停滞」和「认输唤醒」分成两路的（审官第 2 条）。
     assert.doesNotMatch(src, /key: `progress-watch:\$\{progressWatch\.fingerprint/, '指纹进键就是 300 条的来源');
     assert.doesNotMatch(src, /key: `digest-stuck:\$\{/, 'digest 进键就是 10 小时只发 1 条的来源');
     assert.doesNotMatch(src, /key: `[^`]*\$\{vac\.digest/, 'digest 换个写法进键同样不行');
-    assert.match(src, /key: progressWatch\.stalled \? STALL_ALERT_KEY/);
+    assert.doesNotMatch(src, /key: `progress-watch:\$\{progressWatch\.wakeReason/, 'wakeReason 进键就不是常量键');
+    assert.match(src, /planProgressWatchAlert\(progressWatch\)/);
+    assert.match(src, /key: surface\.key/);
     assert.match(src, /key: DIGEST_STUCK_ALERT_KEY/);
+    assert.doesNotMatch(src, /else if \(progressWatch\.wake\)/, '不许再按 wake 进同一个停滞分支');
   });
 
   it('严重度随停滞轮数升级，且只用于文案', async () => {
@@ -486,17 +488,63 @@ describe('#1285 停滞播报的去重键不带内容', () => {
     assert.equal(M.stallSeverity(0, 5), '注意');
   });
 
-  // 审官（#1285 第 2 条）指出的真问题：wake 不等于 stalled。
-  // runProgressWatch 的 wake = `!!planned.wake || exhaustedLines.length > 0`，
-  // 认输 PR 推送会让 wake=true 而 stalled=false、wakeReason='exhausted'。
-  // 两类事混用同一个键，会互相挤占对方的 6 小时去重窗口。
-  it('停滞与认输唤醒分流到不同的键（wake=true 不代表 stalled）', () => {
-    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
-    assert.match(
-      src,
-      /key: progressWatch\.stalled \? STALL_ALERT_KEY : `progress-watch:\$\{progressWatch\.wakeReason/,
-      '停滞才用 STALL_ALERT_KEY；非停滞的 wake 另走一个键  →  没找到分流写法',
-    );
+  // 审官（#1285 返工）要的是运行级分流，不是源码正则：
+  // wake=true && stalled=false 不得输出「盘面停滞」，也不得与停滞告警共用/生成内容型键。
+  it('wake=true 且 stalled=false：文案不是盘面停滞，键是独立常量', async () => {
+    const M = await load(LIB);
+    const got = M.planProgressWatchAlert({
+      ok: true,
+      wake: true,
+      stalled: false,
+      wakeReason: 'exhausted',
+      report: '盘面空闲，不算停滞\nPR #1018 自动化认输，等你拍',
+    });
+    assert.equal(got.kind, 'exhausted-wake');
+    assert.doesNotMatch(got.log, /盘面停滞/, '认输唤醒不得写成盘面停滞  →  ' + got.log);
+    assert.match(got.log, /认输唤醒/);
+    assert.equal(got.key, M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.notEqual(got.key, M.STALL_ALERT_KEY);
+    assert.doesNotMatch(got.key, /rounds:|=|\n|1018|exhausted-pr/);
+    const otherReason = M.planProgressWatchAlert({
+      ok: true, wake: true, stalled: false, wakeReason: 'something-new', report: 'x',
+    });
+    assert.equal(otherReason.key, got.key, 'wakeReason 变了键也必须还是那个常量');
+  });
+
+  it('认输推送的真实 runProgressWatch 结果经分流后不报盘面停滞', async () => {
+    const W = await load(CLI);
+    const M = await load(LIB);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-exhausted-surface-'));
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(dir, `situation-2026-09-06T0${i}-00-00-000Z.json`), JSON.stringify(emptySnap()), 'utf8');
+    }
+    const r = W.runProgressWatch({
+      dir, state: path.join(dir, 'state.json'), rounds: 5, dryRun: false,
+      exhaustedPush: ({ lines }) => { lines.push('PR #1018 自动化认输，等你拍'); return { ok: true, pushed: 1 }; },
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.wake, true);
+    assert.equal(r.stalled, false);
+    assert.equal(r.wakeReason, 'exhausted');
+    const surface = M.planProgressWatchAlert(r);
+    assert.doesNotMatch(surface.log, /盘面停滞/, '真实认输唤醒不得输出盘面停滞  →  ' + surface.log);
+    assert.equal(surface.key, M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.notEqual(surface.key, M.STALL_ALERT_KEY);
+  });
+
+  it('stalled=true 走停滞分支，与认输键不共用', async () => {
+    const M = await load(LIB);
+    const got = M.planProgressWatchAlert({
+      ok: true,
+      wake: true,
+      stalled: true,
+      wakeReason: 'first',
+      report: '盘面停滞 5 轮（1 个对象没动）：PR #909',
+    });
+    assert.equal(got.kind, 'stalled');
+    assert.match(got.log, /^\s+盘面停滞：/);
+    assert.equal(got.key, M.STALL_ALERT_KEY);
+    assert.notEqual(got.key, M.EXHAUSTED_WAKE_ALERT_KEY);
   });
 
   // 审官（#1285 第 1 条）用 100 份相同快照证伪了我原来的升级承诺。
@@ -520,8 +568,11 @@ describe('#1285 停滞播报的去重键不带内容', () => {
 
   it('commander 只给 digest-stuck 挂严重度，不给 progress-watch 挂', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
-    const stallBlock = src.slice(src.indexOf('key: progressWatch.stalled'), src.indexOf('key: progressWatch.stalled') + 400);
-    assert.doesNotMatch(stallBlock, /stallSeverity/,
+    const act = src.slice(
+      src.indexOf('const progressWatch = runProgressWatch'),
+      src.indexOf('// 先回收上一轮的大脑'),
+    );
+    assert.doesNotMatch(act, /stallSeverity/,
       'progress-watch 分支不许用 stallSeverity（rounds 封顶，分不出档）');
     assert.match(src, /key: DIGEST_STUCK_ALERT_KEY[\s\S]{0,200}stallSeverity\(state\.digestStreak/,
       'digest-stuck 分支要用 digestStreak 分档（它不封顶）');

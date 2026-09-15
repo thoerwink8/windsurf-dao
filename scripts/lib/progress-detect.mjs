@@ -189,7 +189,46 @@ export function stallFingerprint(objects, rounds) {
  * 严重度不进键，进**文案**（见 stallSeverity），否则「越停越严重」又会变成新键刷屏。
  */
 export const STALL_ALERT_KEY = 'progress-watch:stall';
+/** 认输唤醒的去重键。跟停滞键分开：wake≠stalled，混用会互相挤占 6 小时窗口。 */
+export const EXHAUSTED_WAKE_ALERT_KEY = 'progress-watch:exhausted';
 export const DIGEST_STUCK_ALERT_KEY = 'digest-stuck';
+
+/**
+ * 指挥官把 progress-watch 结果写成一行日志 + 可选播报键。
+ *
+ * `wake` 不是「停滞」：认输 PR 推送会让 wake=true 而 stalled=false。
+ * 两类必须独立分支、独立常量键——进同一个「盘面停滞」分支会把没停的盘面
+ * 报成停滞；``progress-watch:${wakeReason}`` 也不是常量键。
+ */
+export function planProgressWatchAlert(progressWatch) {
+  const pw = progressWatch || {};
+  if (pw.ok !== true) {
+    return {
+      kind: 'unscanned',
+      log: `  盘面推进量没查成：${pw.error || pw.report || '未知'}`,
+      key: null,
+    };
+  }
+  if (pw.stalled) {
+    return {
+      kind: 'stalled',
+      log: `  盘面停滞：${pw.report}`,
+      key: STALL_ALERT_KEY,
+    };
+  }
+  if (pw.wake) {
+    return {
+      kind: 'exhausted-wake',
+      log: `  认输唤醒：${pw.report}`,
+      key: EXHAUSTED_WAKE_ALERT_KEY,
+    };
+  }
+  return {
+    kind: 'ok',
+    log: `  盘面推进量：${pw.report}`,
+    key: null,
+  };
+}
 
 /**
  * 停了多久 → 一个给人看的严重度词。只进文案，不进去重键。
