@@ -533,6 +533,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷
   //（#1270 返工实咬；本 PR 保护的也是同一形态）。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
+  // 有署名单才再发 issue。不许把「没单号」说成「没处可发」。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
