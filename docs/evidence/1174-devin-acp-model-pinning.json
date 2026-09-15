@@ -1,0 +1,34 @@
+{
+  "issue": 1174,
+  "taskId": "1174-devin-acp-model-pinning",
+  "sessionKey": "acp:ce65fb6d-6b82-473c-8c78-5406b108afe3",
+  "backendSessionId": "tropical-hardhat",
+  "observedAt": "2026-09-14T16:45:09.232Z",
+  "startedAt": "2026-09-14T16:44:54.673Z",
+  "acceptedAt": "2026-09-14T16:44:58.909Z",
+  "endedAt": "2026-09-14T16:45:09.232Z",
+  "backend": "acp",
+  "agent": "devin",
+  "workdir": "/home/orca/mirasim-worktrees/windsurf-dao/t1c-devin-verify",
+  "requestedModel": "deepseek-v4-flash-max",
+  "model": "deepseek-v4-flash-max",
+  "validatedModel": "deepseek-v4-flash-max",
+  "modelLabel": "DeepSeek V4 Flash Max",
+  "phase": "done",
+  "error": null,
+  "stopReason": "end_turn",
+  "text": "握手完成",
+  "cleanup": {
+    "verified": true,
+    "survivors": []
+  },
+  "usage": {
+    "inputTokens": 20866,
+    "outputTokens": 62,
+    "totalTokens": 20928
+  },
+  "runtime": "createAcpRuntime",
+  "pinPath": "scripts/acp-session-runner.mjs session/set_config_option then reread currentValue",
+  "onDiskStatus": "/home/orca/.dao/execution/acp/sessions/ce65fb6d-6b82-473c-8c78-5406b108afe3/status.json",
+  "note": "checkedAt must equal this observedAt (UTC). Do not convert China-local calendar dates into a Zulu timestamp. The 2026-09-09 swe-1-7-medium reading was the bare handshake default at that time; the 2026-09-14 handshake default is swe-2-high. Pinning happens after session/new."
+}

@@ -112,6 +112,20 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(stops.filter((s) => s.sessionKey === 'pi:live').length, 0);
   });
 
+  it('done 会话也要 stop-session——审官交卷后进程不许占渠道', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [
+        { key: 'codex:done-reviewer', state: 'done', cwd: '/x/dao-review-pr-1279' },
+        { key: 'codex:live', state: 'streaming', cwd: '/x/dao-review-pr-1280' },
+        { key: 'codex:already', state: 'stopped', cwd: '/x/dao-review-pr-1278' },
+      ] },
+    }));
+    const stops = byKind(r, 'stop-session');
+    assert.deepEqual(stops.map((s) => s.sessionKey), ['codex:done-reviewer']);
+    assert.match(stops[0].why, /done/);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
@@ -724,8 +738,10 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
   // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX=3）。
   // 缘由：机器一满 slots=0，连「把手上这些 PR 收掉」也被拦住——25 张 PR 一条判定都没有、
   // 满载空转等收尾（实咬）。新活仍旧一个不派，那半边的本意不变（见下一条用例）。
-  it('⑤单轮返工领收尾名额：上限 FINISH_SLOTS_MAX，超出的排队下轮，不丢也不 escalate', async () => {
-    const { decide, FINISH_SLOTS_MAX } = await CORE;
+  it('⑤单轮返工领收尾名额：上限按核数算，超出的排队下轮，不丢也不 escalate', async () => {
+    const { decide, finishSlotCap } = await CORE;
+    assert.equal(finishSlotCap(3), 3, '本例按 3 核算，上限就该是 3');
+    const FINISH_SLOTS_MAX = finishSlotCap(3);
     const issues = [];
     const prs = [];
     const byPr = {};
@@ -739,7 +755,7 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
       prReviews: { scanned: true, byPr },
       commanderPolicy: { requireModelInRouting: false },
       // 机器满载：新活一个不派（slots=0），但返工属于收尾，照样领自己的名额
-      admission: { ok: true, slots: 0 },
+      admission: { ok: true, slots: 0, cores: 3 },
     }));
     const w = byKind(r, 'rework');
     assert.equal(w.length, FINISH_SLOTS_MAX, `机器满载时返工仍要能推进，最多 ${FINISH_SLOTS_MAX} 个，实际 ${w.length}`);
@@ -748,6 +764,63 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     // 回流 = 每个真派出去的返工一条 + 一条「机器满、不收新活」的群通知（那是另一回事，分开数）。
     const dispatched = byKind(r, 'notify-hub').filter((a) => a.moment === 'dispatched');
     assert.equal(dispatched.length, FINISH_SLOTS_MAX, '回流只跟着真派出去的那几个');
+    // 名额被领光必须**说出来**。原先这里完全静默：「想派 5 个只派了 3 个」与
+    // 「本来就只有 3 个要派」在盘面上一模一样，于是这个手打的 3 卡了 13 小时没人发现。
+    const 报满 = byKind(r, 'notify-hub').filter((a) => /收尾名额用尽/.test(a.subject || ''));
+    assert.equal(报满.length, 1, '收尾名额用尽要报一条，且只报一条');
+    assert.equal(/还有 2 个/.test(报满[0].subject), true, '要说清楚少派了几个');
+  });
+
+  it('⑤d prReviews 没查成时，收尾名额用尽仍必须报满', async () => {
+    const { decide } = await CORE;
+    const issues = [];
+    const prs = [{
+      number: 101, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'h101',
+      title: 'PR 101',
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+    }];
+    for (let i = 0; i < 5; i += 1) {
+      issues.push(labeledIssue(710 + i));
+      prs.push({
+        number: 760 + i, isDraft: false, mergeable: 'CONFLICTING', headRefOid: `head${i}`,
+        body: `署名 issue #${710 + i}`, title: `PR ${760 + i}`,
+        labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' }],
+      });
+    }
+    const r = decide(baseSituation({
+      github: { scanned: true, issues, prs },
+      prReviews: { scanned: false, error: 'reviews 没查成' },
+      reviewPending: { scanned: true, items: [{ pr: 101 }] },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 0, cores: 2 },
+    }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 1, '票路不依赖 prReviews，仍要叫审官');
+    assert.equal(byKind(r, 'rework').length, 0, '解冲突挂了 prReviews，总闸滤掉');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned'), 'prReviews 没查成要 fail-visible');
+    const 报满 = byKind(r, 'notify-hub').filter((a) => /收尾名额用尽/.test(a.subject || ''));
+    assert.equal(报满.length, 1, 'prReviews 没查成也不能把「名额用尽」滤掉');
+  });
+
+  // 换大机器时并发自动跟着扩——这条是「删掉手打常量」的正控：同一份态势，只改核数，
+  // 收尾动作数就跟着变。手打常量做不到这件事，那正是 2026-09-08 拍板「机器闸保持比例式」的由来。
+  it('⑤c 收尾名额随核数走：6 核那一轮 5 张全派，3 核那一轮只派 3 张', async () => {
+    const { decide } = await CORE;
+    const issues = [];
+    const prs = [];
+    const byPr = {};
+    for (let i = 0; i < 5; i += 1) {
+      issues.push(labeledIssue(710 + i));
+      prs.push(redPr(760 + i, `head${i}`, 710 + i));
+      byPr[760 + i] = { reviews: [redReview(`第 ${i} 张的红项全文`, `head${i}`)] };
+    }
+    const run = (cores) => byKind(decide(baseSituation({
+      github: { scanned: true, issues, prs },
+      prReviews: { scanned: true, byPr },
+      commanderPolicy: { requireModelInRouting: false },
+      admission: { ok: true, slots: 0, cores },
+    })), 'rework').length;
+    assert.equal(run(3), 3, '3 核 ⇒ 3 张');
+    assert.equal(run(6), 5, '6 核 ⇒ 上限 6，队列只有 5 张就全派');
   });
 
   it('⑤b 机器满载时新活仍然一个不派（收尾名额不许漏成新活名额）', async () => {

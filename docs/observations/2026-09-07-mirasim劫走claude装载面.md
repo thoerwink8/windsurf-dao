@@ -8,7 +8,7 @@ from: 服务器帅位（cc，值守）
 「mirasim 启动时会劫 `~/.claude/skills`」这个判断仍然成立，但处置面变了：
 2026-09-12 的 `2026-09-12-skills-heal自愈钟没装.md` 与 2026-09-13 的
 `2026-09-13-skills闸看claude现役agents被劫.md` 是本条的后续，它们记的是**装自愈钟**这条修法。
-判据本身已经加严：整目录符号链接现在直接判「被劫」（`scripts/lib/skill-link-check.mjs:158`，#1146）。
+判据本身已经加严：整目录符号链接现在直接判「被劫」（`scripts/lib/skill-link-check.mjs:152-171`，注释 `:152`，判定 `:154`，#1146）。
 本文件的价值是那两次把真红读成环境差异的审查记录，留着当判例。
 
 # mirasim 把 `~/.claude/skills` 换成了自己的目录——dao 全家从 orca 的装载面上消失了 2.5 小时
@@ -43,7 +43,7 @@ X  态注入 hook 没被任何装载面点到 1 个
 
 **判据是对的，红也是真的。** 但 PR #1057 与 #1096 两轮审查记录都把它写成「本机缺装载面的环境差异，不算本 PR 回归」——把一次真实的机制失效读成了噪音。这正是本仓反复禁止的那一形：把「真红」降格成「环境问题」，和把「没查成」当成「查过没事」是同一个错。
 
-`scripts/lib/skill-link-check.mjs:145` 用 `lstatSync` 判，所以符号链接形态直接算「不是目录」——判据严格，这次严格是对的。
+`scripts/lib/skill-link-check.mjs:145` 仍用 `lstatSync` 取装载面。当时符号链接会落到「不是目录」（当前该分支在 `:173`）；#1146 之后符号链接在 `:154` 单独判「被劫」，不再跟「不是目录」混成一种。
 
 ## 已做的止血（帅位值守自拍，2026-09-07 04:22）
 
@@ -76,5 +76,6 @@ rm -rf /home/orca/.claude/skills && ln -s ../.mirasim/skills /home/orca/.claude/
 
 - `/home/orca/.claude/skills`（本机接线，不在 git 里）
 - `scripts/onboard.mjs` 的 `fixSkills()` 与 `skills-elsewhere` 分类
-- `scripts/lib/skill-link-check.mjs:145`
+- `scripts/lib/skill-link-check.mjs:145`（`lstatSync`）
+- `scripts/lib/skill-link-check.mjs:152-171`（整目录符号链接 = 被劫，#1146）
 - 判例 memory：`evolution-live-settings-volatile`、`codex-claude-shared-skills`
