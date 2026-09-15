@@ -1020,6 +1020,38 @@ describe('辅助纯函数', () => {
     assert.equal(hasLiveAction([{ kind: 'escalate', reason: 'two-red' }]), true, '报帅算动静');
   });
 
+  // 2026-09-15 实咬：连续 9 轮唯一动作都是同一条 escalate(missing-labels, #1174)，
+  // hasLiveAction 判 true ⇒ lastActivityAt 每 20 分钟刷新 ⇒ 心跳永远不到期，
+  // 系统自认一切正常，而盘面冻了 10 小时、22/26 张 PR 被跳过。
+  // 「有动作」不等于「有推进」，锚点判据要加上「这轮跟上轮不一样」。
+  it('countsAsProgress：同一套动作重复就不算推进（心跳锚点不许被磨盘刷新）', async () => {
+    const { countsAsProgress } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 1 }), true, '第 1 轮：跟上轮不同，算推进');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 2 }), false, '第 2 轮起：同一套动作，磨盘');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 9 }), false, '实咬那一次：9 轮相同');
+
+    assert.equal(countsAsProgress({ actions: [{ kind: 'noop' }], digestStreak: 1 }), false,
+      'noop 本来就不算，streak 再新也不算');
+    assert.equal(countsAsProgress({ actions: [{ kind: 'escalate', reason: 'unscanned' }], digestStreak: 1 }), false,
+      '纯 unscanned-escalate 同理');
+  });
+
+  it('countsAsProgress：streak 没查成时退回旧行为（不许把正常运转误报成死机）', async () => {
+    const { countsAsProgress } = await CORE;
+    const live = [{ kind: 'dispatch', issue: 1 }];
+    assert.equal(countsAsProgress({ actions: live }), true, 'undefined');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: null }), true, 'null');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: 'x' }), true, '非数');
+  });
+
+  it('countsAsProgress：真有新动作时照常算推进（别把闸修成永远不响）', async () => {
+    const { countsAsProgress } = await CORE;
+    assert.equal(countsAsProgress({ actions: [{ kind: 'dispatch', issue: 7 }], digestStreak: 1 }), true);
+    assert.equal(countsAsProgress({ actions: [{ kind: 'merge', pr: 9 }], digestStreak: 1 }), true);
+  });
+
   it('actionsDigest：同一批动作稳定同键、顺序无关；noop 不入键', async () => {
     const { actionsDigest } = await CORE;
     const a = [{ kind: 'dispatch', issue: 1 }, { kind: 'merge', pr: 2 }];
