@@ -24,7 +24,7 @@
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed, DEFAULT_REPO } from './shuai-scan.mjs';
-import { sessionStateOf } from './execution-states.mjs';
+import { sessionStateOf, classifySessionState } from './execution-states.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
@@ -1823,22 +1823,26 @@ function collectCandidates(situation) {
     }
   }
 
-  // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
+  // 短命会话：终态立刻停。树留着，下一轮差集再起短会话。
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  //
+  // 旧口径只停 incomplete（mirasim「一轮跑完在等下一句」）。Codex 审官交卷后
+  // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
+  // 返工被「渠道 mirasim 已满员（在途 1 ≥ 上限 1）」拒掉。done/completed/failed
+  // 与 incomplete 一样是终态，走正典 classifySessionState，不再手写一份词表。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
-    // 这里的 s 来自 execution-sessions.mjs，已经是**归一后**的形状（字段是 state），
-    // 所以读 `state` 本来就对。改成走正典（sessionStateOf）是为了统一入口：
-    // 每个消费者各写一份兜底链是本晚的病根，写对一次不代表下次改形状时还跟着改。
     const raw = sessionStateOf(s) || '';
-    if (raw !== 'incomplete') continue;
+    if (!raw) continue;
+    if (raw === 'stopped' || raw === 'gone' || raw === 'cancelled' || raw === 'canceled') continue;
+    if (classifySessionState(s) !== 'finished') continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;
     stops.push(withNeeds({
       kind: 'stop-session',
       sessionKey: String(key),
       workdir: s.cwd || s.workdir || s.worktree || null,
-      why: '一轮说完，会话不常驻',
+      why: `一轮说完（${raw}），会话不常驻`,
     }, ACTION_NEEDS['stop-session']));
   }
   // 名单里没有活会话、/proc 还占着树：stop-session 杀不到（没有 key）。
