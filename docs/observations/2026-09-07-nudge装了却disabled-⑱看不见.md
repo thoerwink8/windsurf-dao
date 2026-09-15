@@ -55,7 +55,7 @@ dao-nudge-stalled.timer        disabled enabled
 
 ### 3. 闸 ⑱ 的取数面把 disabled 定义成「不存在」
 
-`scripts/server-check.mjs:728-742`（`checkTimerArmed`）：
+当前 HEAD `scripts/server-check.mjs:584` `checkTimerArmed`（原文 `:728-742` 已漂移）：
 
 ```
 const list = run('systemctl', ['list-timers', '--all', '--no-legend', '--no-pager'], …);
@@ -64,7 +64,7 @@ const names = […matchAll(/\b([a-z0-9@_.-]+\.timer)\b/g)…];
 
 它只扫 `list-timers` 吐出来的名字，再按 `FragmentPath` 是否在 `/etc/systemd/system/` 圈定「我们的」。disabled 的单元不进这张表，圈定步骤根本轮不到它。
 
-`classifyTimerArmed` 的注释写明（同文件 654-655 行）：「与『装没装』『enable 没 enable』都无关」。所以这一格即使有心跳，也答不出「仓里要求在跑的 timer，机器上关着」。
+`classifyTimerArmed` 的注释写明（当前 HEAD `:515-516`；原文 654-655 行）：「与『装没装』『enable 没 enable』都无关」。所以这一格即使有心跳，也答不出「仓里要求在跑的 timer，机器上关着」。
 
 闸 ⑳ 只比文件内容（同文件 `classifyUnitDrift` / `checkUnitDrift`）。本轮两边 md5 相同，⑳ 会绿。⑮ 只认 `dao-progress-watch.timer`（发现面），不认 nudge（处置面）。
 

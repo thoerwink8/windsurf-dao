@@ -24,7 +24,7 @@
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed, DEFAULT_REPO } from './shuai-scan.mjs';
-import { sessionStateOf } from './execution-states.mjs';
+import { sessionStateOf, classifySessionState } from './execution-states.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
@@ -515,10 +515,30 @@ export const REREVIEW_GRACE_MIN = 45;
  * 而它原先连「把手上这些活收掉」一起拦——机器一满（slots=0），25 张 PR 一条判定都没有，
  * 满载空转等收尾（2026-09-10 实咬，见 finishSlots 处的注释）。
  *
- * 上限取 3 的理由：收尾动作主要是等模型回话的 IO，本机开销小（实测审官进程 ~2% CPU），
- * 但一轮里同时开太多会把当轮的决定表拉长、也不好定位；3 条够把「本轮的收尾队列」推着走。
+ * **上限不是手打的数**（2026-09-14 改）：原先写死 3，依据只是「一轮里开太多不好定位」的人体工学，
+ * 不是任何资源。实测 13 小时 40 轮里 14 轮被这个 3 卡住、少派 28 个收尾动作，而同期机器准入
+ * 报的是「还能收 28 张」——手打常量比真实容量紧一个数量级，正是 memory `hand-typed-constant-will-be-wrong`。
+ *
+ * 现在按机器比例算（`finishSlotCap`），依据是 2026-09-08 拍板「机器闸保持比例式（0.85×核数）」：
+ * 换大 VPS 时并发自动跟着扩，没有第二处要人记得去改的数字。
  */
-export const FINISH_SLOTS_MAX = 3;
+export const FINISH_SLOTS_FLOOR = 2;
+
+/**
+ * 收尾名额上限 = 核数（floor 2）。
+ *
+ * 为什么是「核数」而不是 0.85×核数：那条比例是给**新活**用的，新活是内存密集的长会话；
+ * 收尾是等模型回话的 IO（实测审官进程 ~2% CPU），每核跑一条仍有大量空闲。取核数是保守侧——
+ * 真按 IO 密度能开更多，但那要闭环死因数据支撑，现在还没有（见 #1145 档案「最终判据永远是
+ * 真实派工的会话死因统计」，而 execution/sessions 记录里根本没有 error 字段）。
+ *
+ * floor 2 保住 2026-09-10 那条性质：机器再满也得有收尾名额，否则 25 张 PR 一条判定都没有。
+ * `cores` 读不到（老夹具/准入没吐）→ 回落到 floor，**不猜一个默认核数**。
+ */
+export function finishSlotCap(cores) {
+  if (!Number.isInteger(cores) || cores <= 0) return FINISH_SLOTS_FLOOR;
+  return Math.max(FINISH_SLOTS_FLOOR, cores);
+}
 export const MAX_REREVIEW_TRIES = 3;
 // 返工派工失败后的重试节奏。与 drain / 复审同一套语义（45 分钟宽限、试满 3 次停手交人），
 // 故意不另造一套数字：三条路犯的是同一个「派了 ≠ 成了」，节奏不同只会让人以为它们是三件事。
@@ -807,17 +827,21 @@ function collectCandidates(situation) {
     draftDueForPump,
   });
   const newWorkSlots = capNewDispatchSlots(Math.max(0, slotsLeft - finishReserve), agingBusy);
-  // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 FINISH_SLOTS_MAX。
+  // 收尾名额池：非负的 dispatchSlots 之外**另拿**一笔，上限见 finishSlotCap（按核数，不是手打常量）。
   // slots=Infinity（老夹具/未接准入）时跟着不限张，维持既有契约。
   //
   // **admission 没查成时收尾也归零**：读不到机器信号就不该起任何会话（fail-close），
   // 收尾同样吃 CPU——「读不到 ≠ 可以随便派」这条对两笔账一视同仁。
   // （写这版时先漏了这一格，shared-slots 的既有用例当场抓住：0 == 1。）
   let finishSlots = admissionUnscanned ? 0
-    : (dispatchSlots === Infinity ? Infinity : FINISH_SLOTS_MAX);
+    : (dispatchSlots === Infinity ? Infinity : finishSlotCap(admission?.cores));
+  // 收尾名额被领光的次数。**必须报**：原先名额用尽是完全静默的（reportAdmission 只在
+  // admissionUnscanned / dispatchSlots===0 时说话），于是「这一轮想派 10 个只派了 3 个」
+  // 在盘面上和「本来就只有 3 个要派」长得一模一样——限流不可观测，等于没人会去调它。
+  let finishDenied = 0;
   /** 领一个收尾名额（叫审官/返工/解冲突/收口泵）。不占新活名额。 */
   const takeFinishSlot = () => {
-    if (finishSlots <= 0) return false;
+    if (finishSlots <= 0) { finishDenied += 1; return false; }
     finishSlots -= 1;
     return true;
   };
@@ -1483,8 +1507,17 @@ function collectCandidates(situation) {
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
-    if (!a.scanned) {
-      // 「没查成」与「查过确实没红」必须分开。reviews-missing 沿用既有契约静默跳过；
+    // 2026-09-14 实咬（#1265/#1266 静默永不送审，挂了 4 小时没人叫审官）：
+    // `reviews-missing` 有两种来源，处置**相反**，原来是同一格：
+    //   ① 这张 PR 的 reviews **没抓到**（网络/接口失败）——按既有契约静默跳过，不臆测；
+    //   ② 这张 PR **主动没去抓**（scanPrReviews 跳过 draft，不进 byPr）——这不是「没抓到」，
+    //      是「**零判定**、该叫审官了」。当年跳 draft 是为了省额度，可省下来的代价是
+    //      下游把它读成「没查成」并静默 continue，于是 draft PR 永远不会进复审队列，
+    //      而**唯一**能把它变 non-draft 的收口泵又要等 24 小时超龄——两条路都堵着。
+    // 判据：`reviews.skipped` 里点名了这张 PR ⇒ 按「零判定」走（它必然是 draft）。
+    const skippedByScan = reviews && Array.isArray(reviews.skipped)
+      && reviews.skipped.some((n) => Number(n) === Number(pr.number));
+    if (!a.scanned && !(a.reason === 'reviews-missing' && skippedByScan)) {
       // head / commit_id 没查成走 fail-visible 的 unscanned escalate（escalate 对 unscanned 是静默进 status，不开单不刷屏）。
       if (a.reason !== 'reviews-missing') {
         const headMissing = a.reason === 'head-unscanned';
@@ -1509,7 +1542,19 @@ function collectCandidates(situation) {
     // 所以这里不记 ok：**走到这个分支本身就是「上一次没落地」的证据**（判定真落了 a.atHead 就 > 0，
     // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
     // 试满仍无判定 ⇒ 停手报帅，不死循环。
-    if (a.atHead === 0) {
+    // 零判定有两种走法，判据都是「当前 head 缺判定」，做法都是写一张复审待办票交给 drain：
+    //   · 历史上审过、这批判定全打在旧 commit 上 → 复审；
+    //   · 一条 review 都没有（含 scan 主动跳过的 draft）→ 首审。
+    // 别拆成两条规则。`skippedByScan` 那种没 scanned 但**确实零判定**，一样要走进来。
+    if (a.atHead === 0 || (skippedByScan && a.reason === 'reviews-missing')) {
+      // 这一步的 head 取 a.head（判据用的是它），但**没 scanned 时 a.head 是 undefined**——
+      // 跳过 draft 那种零判定正是没 scanned，于是 a.head 为空，后面 takeFinishSlot 之后
+      // 产出的动作 head:undefined，执行侧写票时 head.oid=null，票上没 head，重试键也对不上。
+      // 落回 PR 自己的 headRefOid：判据源头本来就是它（analyzeReviewsAtHead 的第二个入参）。
+      const headForAction = a.head || (typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '');
+      // 票上的 head、复审账键、给人看的文案必须用同一份 head。a.head 在
+      // reviews-missing 时是 undefined，用它拼 rrKey 会得到 rereview:N@undefined@epoch，
+      // 跟「同一 PR + 同一 head」对不上（2026-09-15 审官红项）。
       // #971 / #1116：缺 reviewer/ 时先补 PR 自己的标签。等宽限期不会让标签自己长出来；
       // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。不读 issue。
       //
@@ -1531,7 +1576,7 @@ function collectCandidates(situation) {
         if (!prHasStuckLabel(pr)) {
           const issueNo = attributedIssueNumber(pr);
           out.push(withNeeds(esc(
-            `PR #${pr.number} 交卷可合、当前 head ${String(a.head).slice(0, 8)} 零判定，但叫不动审官：`
+            `PR #${pr.number} 交卷可合、当前 head ${String(headForAction).slice(0, 8)} 零判定，但叫不动审官：`
             + `PR 上取不到 reviewer/ 标签，自动补标也补不上。`
             + `这张 PR 会一直挂到有人给 PR 打上 reviewer/ 为止（不读 issue、不猜）`,
             { reason: 'reviewer-label-missing', pr: pr.number, issue: issueNo },
@@ -1539,23 +1584,26 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = rereviewBudgetKey(pr.number, a.head, staleRedAt);
+      const rrKey = rereviewBudgetKey(pr.number, headForAction, staleRedAt);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
       if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
-      const firstRound = a.judgedTotal === 0;
+      const firstRound = a.scanned ? a.judgedTotal === 0 : true;
+      // 零判定有两种来源，措辞必须分开——`a.judgedTotal` 在没 scanned 时是 undefined，
+      // 原来的三元式会写出「PR #N 的 undefined 条判定都打在旧 commit 上」这种把人带沟里的话
+      // （2026-09-14 自测当场看到）。说清「一条 review 都没有」和「判定都过期了」是两回事。
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
       if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
         const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
-          pr: pr.number, verb: 'rereview', tries, head: a.head,
+          pr: pr.number, verb: 'rereview', tries, head: headForAction,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
           why: hopeless
             ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;
@@ -1563,14 +1611,16 @@ function collectCandidates(situation) {
       // 复审也是起审官会话，同样领名额（理由同 attach-reviewer）。
       if (!takeFinishSlot()) { reportAdmission(N['attach-reviewer']); continue; }
       out.push(withNeeds({
-        kind: 'rereview', pr: pr.number, head: a.head,
+        kind: 'rereview', pr: pr.number, head: headForAction,
         issue: attributedIssueNumber(pr),
         reviewer,
         stateKey: rrKey,
         tries: tries + 1,
         why: firstRound
-          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${a.head.slice(0, 8)} 没人审——叫审官`
-          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${String(headForAction).slice(0, 8)} 没人审——叫审官`
+          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${String(headForAction).slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+        // 票上写清这一票为什么存在：首审 / 复审 / **scan 跳过没抓**（后者是真断链，进轮次账要留痕）
+        ...(skippedByScan ? { scanSkipped: true } : {}),
       }, N['attach-reviewer']));
       continue;
     }
@@ -1781,23 +1831,37 @@ function collectCandidates(situation) {
     }
   }
 
-  // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
+  // 短命会话：终态立刻停。树留着，下一轮差集再起短会话。
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  //
+  // 旧口径只停 incomplete（mirasim「一轮跑完在等下一句」）。Codex 审官交卷后
+  // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
+  // 返工被「渠道 mirasim 已满员（在途 1 ≥ 上限 1）」拒掉。done/completed/failed
+  // 与 incomplete 一样是终态，走正典 classifySessionState，不再手写一份词表。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
-    // 这里的 s 来自 execution-sessions.mjs，已经是**归一后**的形状（字段是 state），
-    // 所以读 `state` 本来就对。改成走正典（sessionStateOf）是为了统一入口：
-    // 每个消费者各写一份兜底链是本晚的病根，写对一次不代表下次改形状时还跟着改。
     const raw = sessionStateOf(s) || '';
-    if (raw !== 'incomplete') continue;
+    if (!raw) continue;
+    if (raw === 'stopped' || raw === 'gone' || raw === 'cancelled' || raw === 'canceled') continue;
+    if (classifySessionState(s) !== 'finished') continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;
     stops.push(withNeeds({
       kind: 'stop-session',
       sessionKey: String(key),
       workdir: s.cwd || s.workdir || s.worktree || null,
-      why: '一轮说完，会话不常驻',
+      why: `一轮说完（${raw}），会话不常驻`,
     }, ACTION_NEEDS['stop-session']));
+  }
+  if (finishDenied > 0) {
+    // 观测通知：名额已经在 collect 里耗尽，跟 PR review 查没查成无关。
+    // 挂 N.rereview（含 prReviews）时，reviews 没查成会把这条滤掉——限流又变静默。
+    out.push(withNeeds(hub(
+      `收尾名额用尽：这一轮还有 ${finishDenied} 个收尾动作（叫审官/返工/解冲突/收口泵）领不到名额，排下一轮。`
+      + `本机 ${admission?.cores ?? '?'} 核 ⇒ 上限 ${finishSlotCap(admission?.cores)}；`
+      + `连着几轮都报这一条就是上限太紧，扩机器或改 finishSlotCap`,
+      'decide',
+    ), N['notify-hub']));
   }
   return stops.concat(out);
 }
