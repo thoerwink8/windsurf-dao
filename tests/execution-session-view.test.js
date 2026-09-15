@@ -8,6 +8,10 @@ test('an explicit pending interaction outranks legacy completed metadata',()=>{
  assert.equal(normalizeExecutionSession({phase:'waiting'}).state,'waiting_user');
  assert.equal(normalizeExecutionSession({phase:'waiting_permission'}).state,'waiting_user');
 });
+test('normalize keeps explicit pr/issue so unsigned fast-path sessions still match',()=>{
+ assert.deepEqual(normalizeExecutionSession({sessionKey:'grok:1',phase:'running',workdir:'/x/dao-queue-selfheal',pr:1271,issue:42}).pr,1271);
+ assert.equal(normalizeExecutionSession({sessionKey:'grok:1',phase:'running',workdir:'/x/dao-queue-selfheal',pr:1271,issue:42}).issue,42);
+});
 test('answered questions are not permanent waits, and failures remain failures',()=>{
  assert.equal(normalizeExecutionSession({phase:'done',interactions:[{status:'answered'}]}).state,'done');
  assert.equal(normalizeExecutionSession({phase:'error',error:'upstream failed',awaiting:true}).state,'failed');

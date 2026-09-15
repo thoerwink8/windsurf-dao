@@ -246,6 +246,57 @@ describe('hasLiveExecutor：查不成当有人在做', () => {
     assert.equal(r.live, true);
     assert.equal(r.unscanned, true);
   });
+
+  it('无署名 PR + 任意分支名 + running cwd → 有活执行者（标题里没有 PR 号）', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running', title: 'Grok',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-queue-selfheal',
+      }],
+      pr: 1271,
+      branch: 'dao-queue-selfheal',
+    });
+    assert.equal(r.live, true);
+    assert.equal(r.unscanned, false);
+  });
+
+  it('分支名带斜杠时按建树目录名（非法字符变 -）也能命中', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/cc-fix-branch',
+      }],
+      pr: 99,
+      branch: 'cc/fix-branch',
+    });
+    assert.equal(r.live, true);
+  });
+
+  it('会话元数据显式 pr 字段也能命中（不靠标题、不靠 cwd）', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{ key: 'grok:1', state: 'running', cwd: '/tmp/random-tree', pr: 1271 }],
+      pr: 1271,
+    });
+    assert.equal(r.live, true);
+    const issues = S.sessionSubjects({ pr: 1271, cwd: '/tmp/random-tree' });
+    assert.equal(issues.prs.has(1271), true);
+  });
+
+  it('别的分支上的 running 会话不算这条 PR 的活执行者', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running', title: 'Grok',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/some-other-branch',
+      }],
+      pr: 1271,
+      branch: 'dao-queue-selfheal',
+    });
+    assert.equal(r.live, false);
+  });
 });
 
 describe('差集：该在却不在 → 重派；查不成零重派', () => {

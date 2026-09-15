@@ -7,10 +7,14 @@ export function normalizeExecutionSession(s) {
   const phase=sessionStateOf(s)||'';
   const waiting=s.awaiting===true||EXECUTION_WAITING.has(phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
   const failed=!!s.error||['error','failed','aborted'].includes(phase);
+  const issue=Number(s.issue??s.issue_number);
+  const pr=Number(s.pr??s.pr_number);
   return {key:s.sessionKey??s.key??s.id??null,title:s.title??null,
     state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':phase||null,
     cwd:s.workdir??s.cwd??null,lastActivityAt:s.seatAt??s.updatedAt??s.lastActivityAt??null,
-    backend:String(s.sessionKey??s.key??'').startsWith('acp:')?'acp':'mirasim'};
+    backend:String(s.sessionKey??s.key??'').startsWith('acp:')?'acp':'mirasim',
+    ...(Number.isInteger(issue)&&issue>0?{issue}:{}),
+    ...(Number.isInteger(pr)&&pr>0?{pr}:{})};
 }
 export async function main() {
 try {

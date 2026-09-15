@@ -1,0 +1,13 @@
+{
+  "source": "docs/decisions/2026-09-08-channel-concurrency-two-planes.md",
+  "asOf": "2026-09-08",
+  "why": "拍板档案的机器可读落点。dao-check 拿它跟 docs/model-routing.json 腿节对账：这里有数的渠道，在役腿不许再 null。数字是 09-08 填入初值，不是运行时真相源——运行时仍只读路由表。",
+  "channels": {
+    "direct:codex@pqapi": { "cap": 2 },
+    "gw:windsurf": { "cap": 6 },
+    "mirasim": { "cap": 5 },
+    "gw:grok": { "cap": "不限" },
+    "cursor": { "cap": 2 },
+    "gw:dspool": { "cap": 6, "shareWith": "gw:windsurf" }
+  }
+}
