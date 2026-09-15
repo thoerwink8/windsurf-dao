@@ -211,4 +211,21 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.issue, null, JSON.stringify(got));
     assert.equal(got.round, 'rework');
   });
+
+  it('快路无署名单：plan 不拒，issue 空，完工 comment 走 PR', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1270',
+      body: '返工完成：PR #1270',
+      runGh: fakeGh({
+        title: 'fix(派工): 快路',
+        body: '快路按设计不署名 issue',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [{ state: 'CHANGES_REQUESTED' }],
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.issue, null);
+    assert.equal(got.round, 'rework');
+  });
 });

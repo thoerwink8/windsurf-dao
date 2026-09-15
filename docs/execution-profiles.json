@@ -1120,11 +1120,11 @@
         "devin-deepseek-v4-flash-max"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T18:20:00.000Z",
+        "status": "available",
+        "checkedAt": "2026-09-14T16:45:09.232Z",
         "evidenceKind": "execution",
-        "sourceId": "1174-devin-worktree-commit",
-        "reason": "worktree read+edit+git commit verified end to end (commit 2219daf, cleanup verified) but the ACP handshake reported model swe-1-7-medium, NOT the pinned deepseek-v4-flash-max; devin model pinning stays unproven"
+        "sourceId": "1174-devin-acp-model-pinning",
+        "reason": "T1c model pinning verified: a real run through createAcpRuntime recorded requestedModel=model=validatedModel=deepseek-v4-flash-max with phase done and error null (session acp:ce65fb6d-6b82-473c-8c78-5406b108afe3, backend session tropical-hardhat, modelLabel 'DeepSeek V4 Flash Max', 20866 in / 62 out tokens, observedAt 2026-09-14T16:45:09.232Z). Evidence docs/evidence/1174-devin-acp-model-pinning.json. The 2026-09-09 swe-1-7-medium reading is superseded: a bare `devin acp` handshake defaults to swe-2-high, and the runner pins the model afterwards via session/set_config_option, which devin now honours. Worktree read+edit+git commit stays verified from commit 2219daf. Concurrent lease and session/load remain unverified and are not claimed here."
       },
       "quality": {
         "status": "unverified",
