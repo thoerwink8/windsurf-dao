@@ -261,12 +261,17 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
 /**
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ *
+ * `verdictOnHead` 必须透传锁外算好的同一份三态值（#1293 审官 P1 实咬）：
+ * 锁外 decideReviewerCreateStart 已按「终态且当前 head 无判定」判了 start，
+ * 锁内复查不传这个值就会以 undefined 重判——终态 done 落回复用，create() 不执行，
+ * PR 重新冻回那个没交卷的审官上。
  */
-export async function runLockedReviewerCreate({ forceNew, record, view, create } = {}) {
+export async function runLockedReviewerCreate({ forceNew, record, view, verdictOnHead, create } = {}) {
   if (typeof create !== 'function') {
     return { ok: false, error: '要注入 create（起审官会话）' };
   }
-  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
   if (race.raced) {
     return {
       ok: true,

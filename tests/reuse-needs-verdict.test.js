@@ -13,7 +13,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { verdictOnHead } from '../scripts/lib/review-state.mjs';
-import { judgeReviewerSessionReuse, decideReviewerCreateStart } from '../scripts/lib/dispatch/reviewer-mirasim.mjs';
+import { judgeReviewerSessionReuse, decideReviewerCreateStart, runLockedReviewerCreate } from '../scripts/lib/dispatch/reviewer-mirasim.mjs';
+import { judgeVerdictOnHead } from '../scripts/dao.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HEAD = 'a'.repeat(40);
@@ -123,6 +124,58 @@ describe('透传：包装函数不许把 verdictOnHead 吃掉', () => {
     });
     assert.equal(got.start, false);
   });
+
+  it('runLockedReviewerCreate 也要传（#1293 审官 P1：锁内漏传 = 锁外白判）', async () => {
+    let created = 0;
+    const locked = await runLockedReviewerCreate({
+      forceNew: false, record, view: { phase: 'done' }, verdictOnHead: false,
+      create: () => { created += 1; return { ok: true }; },
+    });
+    assert.equal(locked.raced, false, JSON.stringify(locked));
+    assert.equal(created, 1, '终态且当前 head 无判定：锁内必须走到 create，不许落回复用');
+
+    const reused = await runLockedReviewerCreate({
+      forceNew: false, record, view: { phase: 'done' }, verdictOnHead: true,
+      create: () => { throw new Error('当前 head 已有判定，不许再起'); },
+    });
+    assert.equal(reused.raced, true, JSON.stringify(reused));
+  });
+});
+
+describe('对账目标是 PR 当前 head，不是登记里的 expectedOid（#1293 审官 P1）', () => {
+  // record.expectedOid 钉着旧提交；GitHub 上 PR 已推到 HEAD。
+  const staleRecord = { sessionKey: 'codex:02923a47-bc9b-492f-a537-20b23b8691ba', expectedOid: OLD };
+  const fakeGh = ({ headOid, reviews, headOk = true }) => (argv) => {
+    const json = argv[argv.length - 1];
+    if (json === 'headRefOid') {
+      return headOk
+        ? { ok: true, out: JSON.stringify({ headRefOid: headOid }) }
+        : { ok: false, error: 'simulated gh failure' };
+    }
+    if (json === 'reviews') return { ok: true, out: JSON.stringify({ reviews }) };
+    return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
+  };
+
+  it('判定只打在登记钉的旧提交上 ⇒ false（确认当前 head 没有）', () => {
+    const got = judgeVerdictOnHead('1293', staleRecord, null, {
+      runGh: fakeGh({ headOid: HEAD, reviews: [rv('APPROVED', OLD)] }),
+    });
+    assert.equal(got, false, '旧提交上的判定不许误认作当前 head 已判定');
+  });
+
+  it('判定打在 GitHub 读到的当前 head 上 ⇒ true', () => {
+    const got = judgeVerdictOnHead('1293', staleRecord, null, {
+      runGh: fakeGh({ headOid: HEAD, reviews: [rv('CHANGES_REQUESTED', HEAD)] }),
+    });
+    assert.equal(got, true);
+  });
+
+  it('当前 head 读不到 ⇒ null（没查成），不许拿登记里的 oid 顶上', () => {
+    const got = judgeVerdictOnHead('1293', staleRecord, null, {
+      runGh: fakeGh({ headOid: HEAD, reviews: [rv('APPROVED', HEAD)], headOk: false }),
+    });
+    assert.equal(got, null);
+  });
 });
 
 describe('生产接线（正控：漏一处就等于没修）', () => {
@@ -131,6 +184,17 @@ describe('生产接线（正控：漏一处就等于没修）', () => {
   it('reviewer-create 真的算了这个判据并传进去', () => {
     assert.match(DAO, /const verdict = judgeVerdictOnHead\(args\.pr, existingRecord, targetRepo\)/);
     assert.match(DAO, /verdictOnHead: verdict/);
+  });
+
+  it('锁内复查也拿到同一份 verdict（#1293 审官 P1：漏传则锁内落回复用）', () => {
+    assert.match(DAO, /runLockedReviewerCreate\(\{\s*forceNew, record: againRecord, view: racePeek\.view, verdictOnHead: verdict,/);
+  });
+
+  it('对账目标从 GitHub 读当前 headRefOid，不读登记里的 expectedOid（#1293 审官 P1）', () => {
+    const fn = DAO.match(/export function judgeVerdictOnHead[\s\S]*?\n\}/);
+    assert.ok(fn, 'judgeVerdictOnHead 要能从 dao.mjs 里截出来');
+    assert.match(fn[0], /'headRefOid'/);
+    assert.doesNotMatch(fn[0], /record\.expectedOid/);
   });
 
   it('读不到判定时给 null，不给 false——否则每轮都重复起会话', () => {

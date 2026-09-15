@@ -1524,15 +1524,25 @@ function reviewerChannelCap(id) {
 /**
  * 当前 head 上有没有审官判定（三态：true / false / null=没查成）。
  * 读不到一律 null——复用判据只在**确认没有**时才另起，不许拿「读不到」去重复烧额度。
+ *
+ * 对账目标是 reviewer 角色从 GitHub 读到的 PR **当前** headRefOid，不是登记里的
+ * expectedOid（#1293 审官 P1 实咬）：登记可能钉着旧提交（审官树/登记没跟上新 push），
+ * 旧提交上的 APPROVED / CHANGES_REQUESTED 会被误认作当前 head 已判定，
+ * 终态会话因此被复用，新提交永远没人审。
+ *
+ * runGh 可注入（测试）；默认走 reviewer 角色的 gh。
  */
-function judgeVerdictOnHead(pr, record, targetRepo) {
+export function judgeVerdictOnHead(pr, record, targetRepo, { runGh } = {}) {
   if (!record || !record.sessionKey) return null;   // 没有在役登记，复用判据走不到这一步
-  const head = record.expectedOid == null ? '' : String(record.expectedOid).trim();
+  const gh = runGh || ghRunnerForTarget(targetRepo, { role: 'reviewer' });
+  const meta = gh(['pr', 'view', String(pr), '--json', 'headRefOid']);
+  if (!meta || !meta.ok) return null;
+  let head = '';
+  try {
+    head = String(JSON.parse(meta.out).headRefOid || '').trim();
+  } catch { return null; }
   if (!head) return null;
-  const listed = listPrReviews({
-    pr,
-    runGh: ghRunnerForTarget(targetRepo, { role: 'reviewer' }),
-  });
+  const listed = listPrReviews({ pr, runGh: gh });
   if (!listed.ok) return null;
   return verdictOnHead(listed.reviews, head);
 }
@@ -2177,7 +2187,7 @@ async function cmdReviewerCreateMirasim(args) {
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view,
+      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: verdict,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
