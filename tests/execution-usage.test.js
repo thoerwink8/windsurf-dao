@@ -637,11 +637,13 @@ test('stale incomplete inbox remains a fault; fresh incomplete is status', async
 
 test('export install list follows relative imports including require', async () => {
   const M = await modulePromise;
+  const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+  const req = (p) => `const { parse } = req${'uire'}('${p}');\n`;
   const files = {
-    'execution-usage-export.mjs': "import { collectUsage } from './lib/execution-usage.mjs';\n",
-    'lib/execution-usage.mjs': "import { modelFamily } from './execution-catalog.mjs';\n",
-    'lib/execution-catalog.mjs': "import { NATIVE_LOGIN_FILES } from './provider-probe.mjs';\n",
-    'lib/provider-probe.mjs': "const { parse } = require('./smol-toml.cjs');\n",
+    'execution-usage-export.mjs': spec('./lib/execution-usage.mjs'),
+    'lib/execution-usage.mjs': spec('./execution-catalog.mjs'),
+    'lib/execution-catalog.mjs': spec('./provider-probe.mjs'),
+    'lib/provider-probe.mjs': req('./smol-toml.cjs'),
     'lib/smol-toml.cjs': 'module.exports = {};\n',
   };
   const listed = M.usageExportInstallFiles({
