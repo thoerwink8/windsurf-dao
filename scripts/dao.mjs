@@ -266,6 +266,8 @@ import {
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { verdictOnHead } from './lib/review-state.mjs';
+import { listPrReviews } from './lib/dispatch/worker-done.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -1493,6 +1495,22 @@ function usableReviewerIds() {
   } catch { return null; }
 }
 
+/**
+ * 当前 head 上有没有审官判定（三态：true / false / null=没查成）。
+ * 读不到一律 null——复用判据只在**确认没有**时才另起，不许拿「读不到」去重复烧额度。
+ */
+function judgeVerdictOnHead(pr, record, targetRepo) {
+  if (!record || !record.sessionKey) return null;   // 没有在役登记，复用判据走不到这一步
+  const head = record.expectedOid == null ? '' : String(record.expectedOid).trim();
+  if (!head) return null;
+  const listed = listPrReviews({
+    pr,
+    runGh: ghRunnerForTarget(targetRepo, { role: 'reviewer' }),
+  });
+  if (!listed.ok) return null;
+  return verdictOnHead(listed.reviews, head);
+}
+
 async function cmdReviewPendingDrain(args) {
   const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'review-pending-drain' });
   const ghRepo = targetRepo.ownerName || undefined;
@@ -2078,9 +2096,13 @@ async function cmdReviewerCreateMirasim(args) {
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
     : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  // #1289：复用还要问一句「它真的交了判定吗」。会话 phase=done 只说明会话结束了，
+  // 不说明活干完了——实测审官把结论写在会话文本里却从没调 gh pr review，
+  // 下一轮复用它，PR 就永久冻着。判据是 GitHub 上当前 head 有没有判定，三态。
+  const verdict = judgeVerdictOnHead(args.pr, existingRecord, targetRepo);
   const decided = decideReviewerCreateStart({
     force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view,
+    record: existingRecord, view: peek.view, verdictOnHead: verdict,
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。

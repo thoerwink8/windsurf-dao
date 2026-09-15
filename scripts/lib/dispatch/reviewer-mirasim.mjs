@@ -90,8 +90,10 @@ export function judgeReviewTreeSync({ treeHead, expectedOid } = {}) {
  * @param record 登记记录（defaultReviewerRegistry.read().record）
  * @param view   runtime.readSession(sessionKey) 的返回；没查就传 null
  * @param force  人工 --force：明说要另起一个
+ * @param verdictOnHead 这个 PR 的**当前 head** 上有没有审官判定：
+ *        `true` 有 / `false` 确认没有 / `null|undefined` 没查成。见下方 #1289 那节。
  */
-export function judgeReviewerSessionReuse({ record, view, force } = {}) {
+export function judgeReviewerSessionReuse({ record, view, force, verdictOnHead } = {}) {
   if (force === true) return { reuse: false, checked: false, why: '--force：人工要求另起审官会话' };
   const key = record && record.sessionKey ? String(record.sessionKey).trim() : '';
   if (!key) return { reuse: false, checked: false, why: '登记里没有 sessionKey（确认缺失）→ 可新建' };
@@ -125,6 +127,29 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
       why: `会话 ${key} 死于「${String(view.error).trim().slice(0, 60)}」→ 可新建（撞满载换厂）`,
     };
   }
+  // #1289（2026-09-15 实咬）：**「会话结束了」不等于「活干完了」。**
+  //
+  // 现场：19 张 PR 冻了一整天。审官会话跑完、分析做完、结论写在会话文本里
+  // （实测读到「核心检查结果已齐…还确认了一个实质逻辑洞…」），但它**从没调
+  // gh pr review 把判定落到 GitHub**，然后以 phase=done 收尾。下一轮 reviewer-create
+  // 看到 done + 无 error，判「正常完工」→ 复用 → 一个字都不发生 → PR 永久冻结。
+  // 实测 6 张连派 6 次，outcome 全是 reused，GitHub 上判定停在前一天。
+  //
+  // 「一 PR 一审官」的本意是别重复烧额度，不是把 PR 锁死在一个没交卷的审官上。
+  // 所以复用的条件从「会话没死」改成「会话没死 **且** 它真的交了判定」。
+  //
+  // 三态严格分开（这一条是本仓最常复发的病）：
+  //   · true  → 判定在当前 head 上，真审完了，复用
+  //   · false → **确认**没有判定，而会话已经终态 ⇒ 等于没审，可新建
+  //   · null  → 没查成 ⇒ 维持原样复用，不许拿「读不到」去重复烧额度
+  const terminal = EXECUTION_FINISHED.has(phase);
+  if (terminal && verdictOnHead === false) {
+    return {
+      reuse: false, sessionKey: key, checked: true, phase,
+      why: `会话 ${key} phase=${phase} 已收尾，但当前 head 上没有它交的判定——`
+        + `会话结束 ≠ 活干完了，等于没审 → 可新建`,
+    };
+  }
   return { reuse: true, sessionKey: key, checked: true, phase: phase || null, why: `登记里有在役会话 ${key}，复用（一 PR 一审官）` };
 }
 
@@ -142,14 +167,14 @@ export function reviewerMustReplaceDead({ force, switched, deadError } = {}) {
  * 锁内复查：有 sessionKey 不等于「并发已起」。
  * 满载/看门狗死会话走同一套 judgeReviewerSessionReuse，不算 raced。
  */
-export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
+export function judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead } = {}) {
   if (forceNew === true) {
     return { raced: false, why: '必须另起（force / 换厂 / 满载死会话）' };
   }
   if (!record || !record.sessionKey) {
     return { raced: false, why: '锁内复查没有 sessionKey' };
   }
-  const reuse = judgeReviewerSessionReuse({ record, view, force: false });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: false, verdictOnHead });
   if (reuse.reuse) {
     return { raced: true, record, sessionKey: reuse.sessionKey, why: reuse.why };
   }
@@ -163,10 +188,10 @@ export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
  * 第二次 peek 失败（view=null）时，没 force 会按「没查成」复用死会话——
  * 所以 forceNew 认死因，不认 requested 变没变。
  */
-export function decideReviewerCreateStart({ force, switched, deadError, record, view } = {}) {
+export function decideReviewerCreateStart({ force, switched, deadError, record, view, verdictOnHead } = {}) {
   const forceNew = reviewerMustReplaceDead({ force, switched, deadError });
-  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew });
-  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew, verdictOnHead });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
   return {
     forceNew,
     reuse,
