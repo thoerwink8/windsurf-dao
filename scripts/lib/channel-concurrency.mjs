@@ -74,7 +74,7 @@ export const ROUND_MS = 20 * 60 * 1000;
 export function channelKeyOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
   const provider = String(landing.provider || '');
-  if (provider === 'mirasim') return 'mirasim';
+  if (provider === 'mirasim' || provider === 'mirasim-relay') return 'mirasim';
   if (provider === 'claude' || provider === 'reclaude') return 'mirasim';
   const target = probeTargetOf(landing);
   if (!target) return null;
@@ -82,13 +82,23 @@ export function channelKeyOf(landing) {
   return cut < 0 ? target : target.slice(0, cut);
 }
 
-/** 腿节 → 渠道键。先认 mirasim 载体（供应商/执行侧），否则按落地算。 */
+/**
+ * 腿节 → 渠道键。
+ *
+ * 限流池看落地/供应商，**不看执行侧**。执行侧只是谁起会话。
+ * 2026-09-15 实咬：composer-2.5 落地是 cursor-native，执行侧却写 mirasim，
+ * 旧逻辑把它和 grok/luna relay 算成同一条 `mirasim` 渠，再 `Math.min` 成 1，
+ * 整块盘面一次只能派一张。ACP/Cursor 订阅和 xAI/relay 不共享上游。
+ */
 export function legChannelKey(leg) {
   if (!leg || typeof leg !== 'object') return null;
+  const fromLanding = channelKeyOf(leg['落地']);
+  if (fromLanding) return fromLanding;
   const via = String(leg['供应商'] || '');
-  const side = String(leg['执行侧'] || '');
-  if (via === 'mirasim' || side === 'mirasim') return 'mirasim';
-  return channelKeyOf(leg['落地']);
+  if (via === 'mirasim' || via === 'mirasim-relay') return 'mirasim';
+  if (via === 'cursor-native') return 'native:cursor-native';
+  if (via === 'xai-native') return 'native:xai-native';
+  return null;
 }
 
 /**
@@ -162,6 +172,7 @@ export function validateLegCaps(legs) {
   }
   const pending = [];
   const bad = [];
+  const noReason = [];
   let inService = 0;
   for (const leg of legs) {
     if (!leg || typeof leg !== 'object') continue;
@@ -169,10 +180,79 @@ export function validateLegCaps(legs) {
     inService += 1;
     const r = resolveLegCap(leg['并发上限']);
     const id = String(leg.id || leg['模型'] || '?');
-    if (r.bad) bad.push({ id, value: leg['并发上限'] });
-    else if (r.state === 'pending') pending.push({ id, channel: legChannelKey(leg) });
+    if (r.bad) { bad.push({ id, value: leg['并发上限'] }); continue; }
+    // 每个数与每个空格都要带出处（2026-09-14 加）。
+    // 「写了出处」不等于「拍板值已对齐」——那一道对账见 reconcileDecidedCaps。
+    const why = r.state === 'pending' ? leg['并发上限待填理由'] : leg['并发上限依据'];
+    if (typeof why !== 'string' || !why.trim()) {
+      noReason.push({ id, state: r.state, field: r.state === 'pending' ? '并发上限待填理由' : '并发上限依据' });
+    }
+    if (r.state === 'pending') pending.push({ id, channel: legChannelKey(leg) });
   }
-  return { ok: true, pending, bad, conservativeCap: CONSERVATIVE_CAP, inService };
+  return { ok: true, pending, bad, noReason, conservativeCap: CONSERVATIVE_CAP, inService };
+}
+
+/** 09-08 拍板快照的机器可读落点。运行时仍只读路由表；本文件只给对账闸用。 */
+export const DECIDED_CHANNEL_CAPS_REL = 'docs/decisions/2026-09-08-channel-caps.json';
+
+/**
+ * 解析拍板容量表。缺 channels / 一条有效渠道都没有 = 没查成，不是「扫完 0 条」。
+ * 有效 = 正整数或「不限」。0/到期/杂串不进对账（那是生命周期，不是「已有数」）。
+ */
+export function parseDecidedChannelCaps(doc) {
+  if (!doc || typeof doc !== 'object' || !doc.channels || typeof doc.channels !== 'object') {
+    return { ok: false, unscanned: true, error: '拍板容量表缺 channels 对象', channels: {} };
+  }
+  const channels = {};
+  for (const [ch, rec] of Object.entries(doc.channels)) {
+    if (!ch || !rec || typeof rec !== 'object') continue;
+    const cap = rec.cap;
+    if (cap === CAP_UNLIMITED || cap === '不限') {
+      channels[ch] = { cap: CAP_UNLIMITED, state: 'unlimited' };
+    } else if (Number.isInteger(cap) && cap >= 1) {
+      channels[ch] = { cap, state: 'capped' };
+    }
+  }
+  if (Object.keys(channels).length === 0) {
+    return { ok: false, unscanned: true, error: '拍板容量表一条有效渠道都没有', channels: {} };
+  }
+  return { ok: true, channels };
+}
+
+/**
+ * 拍板有数、腿节仍待填 → 点名。
+ *
+ * 这是「拍板档案有数、腿节还是 null 就判红」的机器判据。不解析 markdown 表
+ * （排版一变检查看起来跟通过一模一样）；对账对象是 DECIDED_CHANNEL_CAPS_REL。
+ * 任意「待填理由」不能放过——理由是注释，不是对齐。
+ *
+ * 不要求腿节数字与快照逐字相等：快照是 09-08 填入初值，之后按死因统计改数是正路；
+ * 只拦「已经拍过还空着」。
+ */
+export function reconcileDecidedCaps(legs, board) {
+  if (!Array.isArray(legs)) {
+    return { ok: false, unscanned: true, error: '腿节不是数组——拍板容量对账没查成', stale: [] };
+  }
+  const parsed = board && board.ok === true && board.channels
+    ? board
+    : parseDecidedChannelCaps(board);
+  if (!parsed.ok) return { ok: false, unscanned: true, error: parsed.error, stale: [] };
+  const stale = [];
+  for (const leg of legs) {
+    if (!leg || typeof leg !== 'object') continue;
+    if (String(leg['状态'] || '') !== '在役') continue;
+    const ch = legChannelKey(leg);
+    if (!ch || !parsed.channels[ch]) continue;
+    const r = resolveLegCap(leg['并发上限']);
+    if (r.state !== 'pending') continue;
+    stale.push({
+      id: String(leg.id || leg['模型'] || '?'),
+      channel: ch,
+      decided: parsed.channels[ch].cap,
+      actual: Object.prototype.hasOwnProperty.call(leg, '并发上限') ? leg['并发上限'] : null,
+    });
+  }
+  return { ok: true, stale, channels: parsed.channels };
 }
 
 /**

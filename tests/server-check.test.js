@@ -575,18 +575,39 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
       assert.deepEqual(r.map((x) => x.cli), ['devin'], '天天在用的 pi 不许被报成退役');
     });
 
-    await t.test('真文件推出来的清单：含 devin/cursor-agent/grok，不含 pi/codex', () => {
+    // 2026-09-12 网关退役后先前的期望值本身错了：cursor-agent / grok / codex 都被新 provider
+    // （cursor-native / xai-native / mirasim-relay）在役使用，不该进退役清单；
+    // 而 pi 被孤立了——三个用它的 provider（deepseek / opencode-go / gw）都不在役，
+    // 它自己的执行目录条目（opencode-zen-*/commandcode-deepseek/windsurf-deepseek…）也全是 enabled:false。
+    // 断言只钉「在役的必须不在清单里」，不钉清单长度：每退一个 CLI 都改一次长度是假红的来源。
+    await t.test('真文件推出来的清单：含 devin/pi，不含在役的 cursor-agent/grok/codex', () => {
       const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));
       const svc = inServiceProviders(JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')));
       assert.equal(cat.unscanned, false);
       assert.equal(svc.unscanned, false);
       const names = retiredClis({ clis: cat.clis, inService: svc.providers }).map((x) => x.cli);
-      for (const want of ['devin', 'cursor-agent', 'grok']) {
-        assert.ok(names.includes(want), `#822 退役的 ${want} 该在清单里，实际 ${JSON.stringify(names)}`);
-      }
-      for (const live of ['pi', 'codex']) {
-        assert.ok(!names.includes(live), `在役的 ${live} 不该进退役清单，实际 ${JSON.stringify(names)}`);
-      }
+      assert.deepEqual(names.filter((n) => ['devin', 'pi'].includes(n)).sort(), ['devin', 'pi'],
+        '无路可走的 CLI 该进清单  →  ' + JSON.stringify(names));
+      assert.deepEqual(names.filter((n) => ['cursor-agent', 'grok', 'codex'].includes(n)), [],
+        '在役的 CLI 不该进退役清单  →  ' + JSON.stringify(names));
+      assert.equal(retiredClis({ clis: cat.clis, inService: svc.providers }).every((x) => x.providers.length > 0), true,
+        '每条都要说清是替哪些 provider 服务的（否则没法判它是真退役还是解析漏了）');
+    });
+    await t.test('方向一：清单里的每个 CLI，替它服务的 provider 一个都不在役', () => {
+      const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));
+      const svc = inServiceProviders(JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')));
+      const live = new Set(svc.providers.map(String));
+      const leak = retiredClis({ clis: cat.clis, inService: svc.providers })
+        .filter((x) => x.providers.some((p) => live.has(String(p))))
+        .map((x) => x.cli);
+      assert.deepEqual(leak, [], '漏报在役 CLI 比多报一个更糟（会把人引去删还在用的二进制）');
+    });
+    await t.test('方向二：反着推一遍——给一个纯在役目录，清单必须空', () => {
+      const r = retiredClis({
+        clis: [{ provider: 'xai-native', cli: 'grok' }, { provider: 'mirasim-relay', cli: 'codex' }],
+        inService: ['xai-native', 'mirasim-relay'],
+      });
+      assert.deepEqual(r, [], '判据不是恒红');
     });
   });
 

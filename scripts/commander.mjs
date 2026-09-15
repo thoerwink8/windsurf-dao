@@ -47,6 +47,7 @@ import {
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
+import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
@@ -456,12 +457,23 @@ function scanReviewPending() {
 export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
   const [owner, name] = REPO.split('/');
   const byPr = {};
+  // 跳过不给 byPr 的 PR（draft）必须**单独记下来**，见下面的 skipped（2026-09-14 实咬）。
+  const skipped = [];
   let anyFail = null;
   for (const pr of prs || []) {
     if (!pr) continue;
     // Approved manual tasks may be returned to draft by the reviewer. Their
     // actual votes must still reach the decision stage; other drafts wait.
-    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) continue;
+    //
+    // 2026-09-14 实咬（PR #1265/#1266 静默永不送审）：跳过的 PR **不进 byPr**，而下游
+    // `prReviewInput(undefined)` → `reviews === undefined` → `analyzeReviewsAtHead` 判
+    // `reviews-missing`（= 没抓到），commander 那一格按既有契约**静默 continue**。
+    // 于是「这张 PR 一条 review 都没有、该叫审官了」和「这张 PR 的 reviews 没抓到」
+    // 长得一模一样，而两者处置完全相反。这不是 draft 的问题——是**跳过没留痕**。
+    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) {
+      skipped.push(pr.number);
+      continue;
+    }
     // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
     // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
     const gh = read(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
@@ -472,9 +484,14 @@ export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
       byPr[pr.number] = { reviews: arr, bodies: arr.map((x) => x.body || '') };
     } catch (e) { anyFail = String(e.message || e); }
   }
-  // 只要抓到过（哪怕 0 条）就算 scanned；一条都没试成才 unscanned。
-  if (Object.keys(byPr).length === 0 && anyFail) return { scanned: false, error: `reviews 没查成：${anyFail}` };
-  return { scanned: true, byPr, ...(anyFail ? { partialError: anyFail } : {}) };
+  // 只要抓到过（哪怕 0 条）就算 scanned；没有任何 reviews 请求成功才 unscanned。
+  // skipped draft 不能把非 draft 的失败遮成 scanned:true——否则下游对那张失败的
+  // 非 draft 看到 reviews-missing 且 skippedByScan=false，静默 continue，真实
+  // 扫描故障进不了 fail-visible（2026-09-15 审官红项，混合夹具回归）。
+  if (Object.keys(byPr).length === 0 && anyFail) {
+    return { scanned: false, error: `reviews 没查成：${anyFail}`, skipped };
+  }
+  return { scanned: true, byPr, skipped, ...(anyFail ? { partialError: anyFail } : {}) };
 }
 
 /** #843：周期面把健康表 red / 撞死指纹记进熔断表（只记事件，判定在 applyEvent）。失败不挡 scan。 */
@@ -494,6 +511,43 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
     return { ok: false, error: String(e.message || e) };
   }
 }
+
+/** 载体（agent CLI）版本漂移：读进态势，好让「某条腿突然不好使」时有第一条线索。
+ *
+ *  用户 2026-09-13 拍板：只做「版本变了要说」，不钉死（理由见 scripts/lib/cli-version.mjs 文件头）。
+ *  **不进任何拦截路径**——红了不拦、读不到也不拦，只把漂移放进态势与台账。
+ *
+ *  节流：六个载体一轮 spawn 约 4 秒（实测定，最慢 cmdc 3.1s），而 scan 是热路径，
+ *  所以按 TTL 跳读——上次读成功且没超时就直接用落表的记录，不重复 spawn。
+ *  读不成时**回 {scanned:false}** 而不是空数组：本系统最该避免的错就是把「没查成」说成「没变」。 */
+const CLI_VERSION_TTL_MS = 30 * 60 * 1000;
+function scanCliVersions({ now = Date.now() } = {}) {
+  try {
+    const prev = loadVersionState({ home: homedir() });
+    const lastAt = prev.updatedAt ? Date.parse(prev.updatedAt) : NaN;
+    if (prev.present && Number.isFinite(lastAt) && now - lastAt < CLI_VERSION_TTL_MS) {
+      return { scanned: true, cached: true, statePresent: true, versions: prev.versions, updatedAt: prev.updatedAt, drift: null };
+    }
+    const script = join(ROOT, 'scripts', 'cli-versions.mjs');
+    const r = spawnSync(process.execPath, [script, '--json'], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+    if (r.error || r.status !== 0 || !r.stdout) {
+      return { scanned: false, error: r.error ? String(r.error.code || r.error.message) : `退出码 ${r.status}` };
+    }
+    const parsed = JSON.parse(r.stdout);
+    // statePresent=false 表示这是第一次记录基线——此时**没比过任何东西**，
+    // 调用方必须把这种与「比过、没变」分开说（本系统最老的那个错：把没查成说成查过没事）。
+    const statePresent = !!parsed.statePresent;
+    const drift = statePresent ? parsed.drift : null;
+    return {
+      scanned: true, cached: false, statePresent, versions: parsed.current || {},
+      updatedAt: new Date(now).toISOString(),
+      drift, summary: statePresent ? (parsed.summary || '') : '',
+    };
+  } catch (e) {
+    return { scanned: false, error: String(e.message || e).slice(0, 160) };
+  }
+}
+
 
 /** 在世会话清单。orca 终端已退役，改采 mirasim 会话名单。没查成回 ok:false，不当成「一个都没有」。 */
 function listLiveTerminals() {
@@ -620,6 +674,8 @@ function buildSituation({ state } = {}) {
     ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps, sessions })
     : null;
   const breaker = loadBreaker();
+  // 载体版本漂移：只入态势与台账，不进任何拦截路径（用户 2026-09-13 拍板「只做变了要说」）。
+  const cliVersions = scanCliVersions();
   // #1017：decide 对列表 UNKNOWN 的 PR 单张只查 --json mergeable。执行器挂在态势上，decide 本身不 spawn。
   const viewMergeable = (n) => fetchPrMergeable((args) => runGh(args, 20000), n);
   return {
@@ -662,6 +718,7 @@ function buildSituation({ state } = {}) {
     defaultWorkerModel,
     channelCaps,
     channelInFlight,
+    cliVersions,
     breaker,
     askPolicy,
   };
@@ -1140,20 +1197,53 @@ function execClearExhausted(action, { dryRun, say, run = runCmd } = {}) {
   return { ok: true, cleared: true };
 }
 
-function execRetryDrain(action, { state, dryRun, say }) {
+export function execRetryDrain(action, { state, dryRun, say, readHead = livePrHead, run = runCmd }) {
+  // 决策说「这张票没过期」到执行这张票之间隔着几秒到几分钟，工人可能刚推了新 head。
+  // 二次校验必须拿现场的 head，不能拿决策时的快照——否则闸只在 decide 侧成立，
+  // 执行侧读的是票头（旧值），一定自洽，闸等于没装（2026-09-12 审官打回 #1209 的第二条）。
+  // 查不到现场 head 就不放行：拿不到现场证据时放行，闸就变成「查到才拦」，抽风一次全过。
+  const repo = action.repo && String(action.repo).trim() ? String(action.repo).trim() : REPO;
+  let liveHeadForCheck = '';
+  if (dryRun) {
+    liveHeadForCheck = String(action.head || '');
+  } else {
+    const cur = readHead(action, repo);
+    if (!cur.ok) {
+      say(`  当前 head 没核成，不重试这张票：#${action.pr}（${cur.error}）`);
+      return { ok: false, error: `当前 head 没核成：${cur.error}`, code: 'head-unscanned' };
+    }
+    liveHeadForCheck = cur.head;
+  }
+  // 现场 head 走 **opts.liveHead**。planRetryDrainCmd 只从 opts 读 liveHead，
+  // 把它塞进 action 是无效的——而且 action 里本来就有 `head`（票头），
+  // 展开 `...action` 看着像「顺手带上」，实际什么都没带，校验拿到「票头 vs 票头」，
+  // 一定自洽、闸又变成没装（第二版就是这么写的，探针当场抓到）。
   const planned = planRetryDrainCmd(action, {
     queue: action.queue,
     ledger: (state && state.drainLedger) || {},
     nowMs: Date.parse(nowIso()) || 0,
+    liveHead: liveHeadForCheck,
   });
   if (!planned.ok) {
     say(`  retry-drain 校验拒：${planned.error}`);
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
-  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why, run });
   // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
   recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+/** 现场 head 读取器（execRetryDrain 的二次校验用）：查不成返回 ok:false，调用方 fail-closed。 */
+function livePrHead(action, repo) {
+  const r = runGh(['pr', 'view', String(action.pr), '--repo', repo, '--json', 'headRefOid'], 20000);
+  if (!r.ok) return { ok: false, error: r.error };
+  let got;
+  try { got = JSON.parse(r.out || '{}'); }
+  catch { return { ok: false, error: 'headRefOid 解析失败' }; }
+  const head = typeof got.headRefOid === 'string' ? got.headRefOid.trim() : '';
+  if (!head) return { ok: false, error: 'headRefOid 是空的' };
+  return { ok: true, head };
 }
 
 // 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
@@ -1714,6 +1804,15 @@ function findDaoTree(issue, pr) {
   return null;
 }
 
+function mirasimStartCmd({ model, tree, spec, pr, issue }) {
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', model,
+    '--worktree', tree, '--prompt', spec];
+  if (pr != null) cmd.push('--pr', String(pr), '--title', `PR-#${pr}`);
+  if (issue != null) cmd.push('--issue', String(issue));
+  return cmd;
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
@@ -1791,9 +1890,9 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = n
     rememberRework(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
@@ -1840,9 +1939,9 @@ export function dispatchPumpDraft(action, { state, dryRun, say, run = runCmd, br
     rememberPumpDraft(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] pump-draft PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
@@ -2721,6 +2820,21 @@ function cmdAct(argv) {
   const { actions } = decide(situation);
   const log = [...reviewerOrderNote(situation)];
   let cleanupFailures = 0;
+  // 载体版本漂移：变了就报一句（用户 2026-09-13 拍板「只做变了要说，不钉死」）。
+  // 与盘面推进量并排——两件事都是「本轮无声发生、只有日志能看出来」的那一类。
+  // 读不成时明说「没查成」，不许与「没变」共用一种输出。
+  const cliV = situation.cliVersions || { scanned: false, error: '态势里没有这一节' };
+  if (!cliV.scanned) {
+    log.push(`  载体版本没查成：${cliV.error || '未知'}`);
+  } else if (!cliV.statePresent) {
+    // 第一次跑：记住了六个载体现值，但**没比过任何东西**——不许说「无变化」，
+    // 那会把「还没基线」说成「查过没事」（本系统最老的那个错）。
+    log.push('  载体版本：首次记录基线（还没有上次可比，本次不算「无变化」）');
+  } else if (cliV.drift && (cliV.drift.changed?.length || cliV.drift.gone?.length || cliV.drift.appeared?.length || cliV.drift.unreadable?.length)) {
+    log.push(`  载体版本漂移：${cliV.summary}`);
+  } else {
+    log.push(`  载体版本无变化${cliV.cached ? '（用缓存的记录）' : ''}`);
+  }
   // 盘面推进量：并进本轮，不再另开 timer。快照刚写完，这一轮算进窗口。
   const progressWatch = runProgressWatch({
     dir: STATE_DIR,
