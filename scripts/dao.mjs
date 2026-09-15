@@ -238,6 +238,7 @@ import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { writeStdoutAndExit } from './lib/stdout-exit.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -1726,11 +1727,10 @@ async function cmdNow(args) {
   const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
 }
 
 /**
@@ -1743,11 +1743,10 @@ async function cmdBoard(args) {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const { board, elapsedMs } = await collectBoard({ cwd: root, root, now: new Date().toISOString() });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`${formatBoardTable(board)}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`${formatBoardTable(board)}\n`);
 }
 
 function cmdCheckHelp() {

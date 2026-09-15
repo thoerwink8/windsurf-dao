@@ -23,7 +23,9 @@ import { join } from 'node:path';
 export const DEFAULT_BUDGET_MS = 15000;
 const GH_TIMEOUT_MS = 9000;
 const GIT_TIMEOUT_MS = 6000;
-const SSH_TIMEOUT_MS = 11000;
+/** ssh 与本机自扫共用。整条 `dao now` 15 秒预算，这一路必须短于它；不许靠放宽超时掩盖复杂度。 */
+export const SCAN_TIMEOUT_MS = 11000;
+const SSH_TIMEOUT_MS = SCAN_TIMEOUT_MS;
 
 /** 跑一条命令。永不抛：失败也回 {ok:false,error}，好让调用方把它变成「没查成」。 */
 export function run(cmd, args, { cwd, timeout = GH_TIMEOUT_MS, input } = {}) {
@@ -309,6 +311,28 @@ export function lookupGitHead(treePath, { runGit = defaultRunGit, exists = exist
 //     所以候选根是一串（$HOME / /home/orca / /root），扫到哪个算哪个。
 //  2. root 读 orca 的仓，git 报 dubious ownership 直接 fatal —— 每次调用现加
 //     `-c safe.directory="*"`（只影响这一次调用，不写任何配置，本动词零写入）。
+/** 从登记 JSON 抽 treePath。必须吃 pretty JSON 的空格（`"treePath": "/p"`）；旧 grep 无空格会漏。 */
+export const TREE_PATH_SED = 's/.*"treePath"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p';
+
+/**
+ * 吃 `ls -l /proc/PID/cwd` 的 stdout：有 ` -> path` 才是读得成的 cwd。
+ * 沿 cwd 往上走，命中 TPLIST 里的登记树 = 原 `case "$cwd" in "$tp"|"$tp"/*`。
+ * 不在 shell 里对每个 pid 再扫一遍 TPLIST（231×114 次读文件会单独吃掉数秒）。
+ */
+export const PROC_AWK = [
+  'BEGIN { while ((getline p < tplist) > 0) if (p != "") paths[p]=1; close(tplist) }',
+  '{ n = index($0, "/proc/"); if (n == 0) next;',
+  'rest = substr($0, n + 6); arrow = index(rest, "/cwd -> "); if (arrow == 0) next;',
+  'pid = substr(rest, 1, arrow - 1); if (pid !~ /^[0-9]+$/) next;',
+  'cwd = substr(rest, arrow + 8); cur = cwd; depth = 0;',
+  'while (cur != "" && depth++ < 64) {',
+  'if (cur in paths) { printf "PROC\\t%s\\t%s\\n", pid, cwd; break }',
+  'if (cur == "/") break;',
+  'pos = 0; for (i = length(cur); i > 0; i--) { if (substr(cur, i, 1) == "/") { pos = i; break } }',
+  'if (pos <= 1) cur = "/"; else cur = substr(cur, 1, pos - 1);',
+  '} }',
+].join(' ');
+
 export const REMOTE_SCRIPT = [
   'set -u',
   'TPLIST=$(mktemp 2>/dev/null || echo /tmp/now-collect-tp.$$)',
@@ -316,8 +340,8 @@ export const REMOTE_SCRIPT = [
   ': > "$TPLIST"',
   ': > "$DLIST"',
   // 候选根会互相重叠（`$HOME` 与 `/home/orca` 在本机是同一个目录），不去重就会把同一批文件
-  // 扫两遍——2026-09-14 实测：8 个 DIROK 里有 4 个是重复的，188 份登记里 94 份读了两遍，
-  // 整段 12.4 秒（超了调用方的 11 秒预算），于是本机自扫天天超时、天天报「没查成」。
+  // 扫两遍。treePath 用整目录一次 sed，不要逐份起 python3——2026-09-16 实咬：117 份登记
+  // × 解释器启动 ≈ 6.3s，再加 /proc 就把 11 秒预算打爆，自扫天天超时。
   'for root in "$HOME" /home/orca /root; do',
   '  for d in "$root"/windsurf-dao/_flow/mirasim "$root"/wt-*/_flow/mirasim "$root"/mirasim-worktrees/*/*/_flow/mirasim "$root"/.dao/mirasim; do',
   '    case "$d" in *"*"*) continue;; esac',
@@ -329,18 +353,21 @@ export const REMOTE_SCRIPT = [
   '  [ -n "$d" ] || continue',
   '  if [ ! -d "$d" ]; then printf "DIRMISS\\t%s\\n" "$d"; continue; fi',
   '  printf "DIROK\\t%s\\n" "$d"',
+  '  any=',
   '  for f in "$d"/reviewer-*.json; do',
   '    [ -f "$f" ] || continue',
+  '    any=1',
   '    printf "REG\\t%s\\t%s\\n" "$f" "$(base64 -w0 < "$f")"',
-  '    tp=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(\\"treePath\\") or \\"\\")" "$f" 2>/dev/null) || tp=',
-  '    if [ -z "$tp" ]; then tp=$(grep -o "\\"treePath\\":\\"[^\\"]*\\"" "$f" 2>/dev/null | head -n 1 | cut -d "\\"" -f 4); fi',
-  '    if [ -n "$tp" ]; then printf "%s\\n" "$tp" >> "$TPLIST"; fi',
   '  done',
+  '  if [ -n "$any" ]; then',
+  ['    sed -n \'', TREE_PATH_SED, '\' "$d"/reviewer-*.json >> "$TPLIST" || true'].join(''),
+  '  fi',
   'done < "$DLIST"',
   'rm -f "$DLIST"',
   'sort -u "$TPLIST" -o "$TPLIST" 2>/dev/null || true',
   'while IFS= read -r tp; do',
   '  [ -n "$tp" ] || continue',
+  '  if [ ! -d "$tp" ]; then printf "TREE\\t%s\\t-\\n" "$tp"; continue; fi',
   '  oid=$(git -c safe.directory="*" -C "$tp" rev-parse HEAD 2>/dev/null) || oid=-',
   '  printf "TREE\\t%s\\t%s\\n" "$tp" "$oid"',
   'done < "$TPLIST"',
@@ -350,17 +377,7 @@ export const REMOTE_SCRIPT = [
   '  oid=$(git -c safe.directory="*" -C "$t" rev-parse HEAD 2>/dev/null) || oid=-',
   '  printf "TREE\\t%s\\t%s\\n" "$t" "$oid"',
   'done',
-  'for p in /proc/[0-9]*; do',
-  '  cwd=$(readlink "$p/cwd" 2>/dev/null) || continue',
-  '  hit=0',
-  '  while IFS= read -r tp; do',
-  '    [ -n "$tp" ] || continue',
-  '    case "$cwd" in "$tp"|"$tp"/*) hit=1;; esac',
-  '  done < "$TPLIST"',
-  '  if [ "$hit" = 1 ]; then',
-  '    printf "PROC\\t%s\\t%s\\n" "$(basename "$p")" "$cwd"',
-  '  fi',
-  'done',
+  ['ls -l /proc/[0-9]*/cwd 2>/dev/null | awk -v tplist="$TPLIST" \'', PROC_AWK, '\''].join(''),
   'rm -f "$TPLIST"',
   'printf "END\\n"',
 ].join('\n');
@@ -418,8 +435,8 @@ export function attachRemoteTreeHeads(regs, trees) {
  *   · 只在 ssh 没成时才用，ssh 通了就以远端为准（真跨机部署时行为不变）；
  *   · 用了要说出来（`via: 'local-self-scan'`），别让「本机兜底」在盘面上长得像「远端正常」。
  */
-export async function fetchLocalSelfScan({ cwd } = {}) {
-  const r = await run('sh', ['-s'], { cwd, timeout: SSH_TIMEOUT_MS, input: REMOTE_SCRIPT });
+export async function fetchLocalSelfScan({ cwd, runFn = run, timeout = SCAN_TIMEOUT_MS, script = REMOTE_SCRIPT } = {}) {
+  const r = await runFn('sh', ['-s'], { cwd, timeout, input: script });
   if (!r.ok) return { registries: { scanned: false, error: `本机自扫起不来：${r.error}` }, sessions: { scanned: false, error: `本机自扫起不来：${r.error}` } };
   const p = parseRemoteScan(r.out);
   if (!p.ended) {

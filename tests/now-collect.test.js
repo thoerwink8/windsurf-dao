@@ -224,3 +224,116 @@ describe('dao now 取数：远端按登记 treePath 补采（含 /home/orca/wt-*
     assert.doesNotMatch(C.REMOTE_SCRIPT, /case "\$cwd" in \*mirasim-worktrees\*/);
   });
 });
+
+const OLD_PER_FILE_PYTHON = [
+  'for f in "$d"/reviewer-*.json; do',
+  '  [ -f "$f" ] || continue',
+  '  printf "REG\\t%s\\t%s\\n" "$f" "$(base64 -w0 < "$f")"',
+  '  tp=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(\\"treePath\\") or \\"\\")" "$f" 2>/dev/null) || tp=',
+  '  if [ -z "$tp" ]; then tp=$(grep -o "\\"treePath\\":\\"[^\\"]*\\"" "$f" 2>/dev/null | head -n 1 | cut -d "\\"" -f 4); fi',
+  '  if [ -n "$tp" ]; then printf "%s\\n" "$tp" >> "$TPLIST"; fi',
+  'done',
+].join('\n');
+
+function spawnsPythonPerRegistry(script) {
+  return /python3\s+-c/.test(script);
+}
+
+function extractsPrettyTreePath(script) {
+  return /treePath/.test(script) && /\[\[:space:\]\]/.test(script);
+}
+
+function nestedProcReadlink(script) {
+  return /readlink "\$p\/cwd"/.test(script);
+}
+
+describe('dao now 取数：自扫复杂度（#1297）', () => {
+  it('构造旧实现（逐份 python3 -c / 无空格 grep / 逐 pid readlink）必须被判违规', () => {
+    assert.equal(spawnsPythonPerRegistry(OLD_PER_FILE_PYTHON), true);
+    assert.equal(extractsPrettyTreePath(OLD_PER_FILE_PYTHON), false, '旧 grep 假定 "treePath":"p"，pretty JSON 会漏');
+    assert.equal(nestedProcReadlink(OLD_REMOTE_TREE_ONLY), true);
+  });
+
+  it('现役 REMOTE_SCRIPT 不起 python，sed 吃 pretty JSON 空格，/proc 不逐 pid readlink', async () => {
+    const C = await load(COLLECT);
+    assert.equal(spawnsPythonPerRegistry(C.REMOTE_SCRIPT), false);
+    assert.doesNotMatch(C.REMOTE_SCRIPT, /python3/);
+    assert.equal(extractsPrettyTreePath(C.REMOTE_SCRIPT), true);
+    assert.ok(C.REMOTE_SCRIPT.includes(C.TREE_PATH_SED), '脚本必须用同一条 TREE_PATH_SED');
+    assert.equal(nestedProcReadlink(C.REMOTE_SCRIPT), false);
+    assert.ok(C.REMOTE_SCRIPT.includes(C.PROC_AWK), '脚本必须用同一条 PROC_AWK');
+    assert.match(C.REMOTE_SCRIPT, /ls -l \/proc\/\[0-9\]\*\/cwd/);
+  });
+
+  it('PROC_AWK：cwd 等于或落在登记树下才打 PROC；没箭头的行忽略', async () => {
+    const C = await load(COLLECT);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'now-proc-awk-'));
+    try {
+      const tp = path.join(dir, 'tp');
+      fs.writeFileSync(tp, `${WT}\n`);
+      const ls = [
+        `lrwxrwxrwx 1 orca orca 0 Jan 1 /proc/42/cwd -> ${WT}`,
+        `lrwxrwxrwx 1 orca orca 0 Jan 1 /proc/43/cwd -> ${WT}/src`,
+        'lrwxrwxrwx 1 root root 0 Jan 1 /proc/1/cwd',
+        'lrwxrwxrwx 1 orca orca 0 Jan 1 /proc/9/cwd -> /tmp/other',
+      ].join('\n') + '\n';
+      const r = await C.run('awk', ['-v', `tplist=${tp}`, C.PROC_AWK], { input: ls, timeout: 2000 });
+      assert.equal(r.ok, true, r.error);
+      const p = C.parseRemoteScan(`${r.out}END\n`);
+      const cwds = p.procs.map((x) => `${x.pid}:${x.cwd}`).sort();
+      assert.deepEqual(cwds, [`42:${WT}`, `43:${WT}/src`]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('TREE_PATH_SED 抽出 pretty 与 compact 的 treePath', async () => {
+    const C = await load(COLLECT);
+    const pretty = '{\n  "treePath": "/home/orca/wt-unblock"\n}\n';
+    const compact = '{"treePath":"/home/orca/wt-unblock"}\n';
+    const a = await C.run('sed', ['-n', C.TREE_PATH_SED], { input: pretty, timeout: 2000 });
+    const b = await C.run('sed', ['-n', C.TREE_PATH_SED], { input: compact, timeout: 2000 });
+    assert.equal(a.ok, true, a.error);
+    assert.equal(b.ok, true, b.error);
+    assert.equal(String(a.out).trim(), '/home/orca/wt-unblock');
+    assert.equal(String(b.out).trim(), '/home/orca/wt-unblock');
+  });
+
+  it('输出没 END → 两侧都 unscanned', async () => {
+    const C = await load(COLLECT);
+    const r = await C.fetchLocalSelfScan({
+      runFn: async () => ({ ok: true, out: 'DIROK\t/x\n' }),
+    });
+    assert.equal(r.registries.scanned, false);
+    assert.equal(r.sessions.scanned, false);
+    assert.match(r.registries.error, /没查成|没跑完/);
+  });
+
+  it('故意拖过预算 → 明确 unscanned', { timeout: 5000 }, async () => {
+    const C = await load(COLLECT);
+    const r = await C.fetchLocalSelfScan({
+      timeout: 80,
+      script: 'sleep 2\nprintf END\n',
+    });
+    assert.equal(r.registries.scanned, false);
+    assert.equal(r.sessions.scanned, false);
+    assert.match(r.registries.error, /没查成/);
+  });
+
+  it('本机自扫在 11 秒内完成并返回 END', { timeout: 15000 }, async () => {
+    const C = await load(COLLECT);
+    const t0 = Date.now();
+    const r = await C.run('sh', ['-s'], { timeout: C.SCAN_TIMEOUT_MS, input: C.REMOTE_SCRIPT });
+    const ms = Date.now() - t0;
+    assert.ok(r.ok, r.error);
+    const p = C.parseRemoteScan(r.out);
+    assert.equal(p.ended, true, `没收到 END（${ms}ms）：${String(r.out).slice(-200)}`);
+    assert.ok(ms < C.SCAN_TIMEOUT_MS, `自扫 ${ms}ms，超了 ${C.SCAN_TIMEOUT_MS}`);
+    const withPath = p.regs.filter((x) => x && x.treePath);
+    if (withPath.length) {
+      const hits = withPath.filter((x) => p.trees.has(x.treePath));
+      assert.ok(hits.length > 0, '登记有 treePath 却没打出 TREE（sed 抽路径失败）');
+    }
+  });
+});
+
