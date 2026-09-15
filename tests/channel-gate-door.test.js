@@ -49,6 +49,7 @@ async function runtimeWith(wire, over = {}) {
     connect: async () => wire,
     now: () => T0,
     leaseCheck: freeLease,   // 隔离：本测只验渠道闸，租约恒放行
+    claimOccupancy: () => ({ ok: true, release() {} }),
     ...over,
   });
 }
