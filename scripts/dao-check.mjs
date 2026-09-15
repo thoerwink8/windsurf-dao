@@ -2755,8 +2755,10 @@ function checkLegCaps() {
     return;
   }
   let validateLegCaps;
+  let reconcileDecidedCaps;
+  let DECIDED_CHANNEL_CAPS_REL;
   try {
-    ({ validateLegCaps } = require('./lib/channel-concurrency.mjs'));
+    ({ validateLegCaps, reconcileDecidedCaps, DECIDED_CHANNEL_CAPS_REL } = require('./lib/channel-concurrency.mjs'));
   } catch (e) {
     fail('并发上限校验器加载失败', '修 scripts/lib/channel-concurrency.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
     return;
@@ -2777,6 +2779,41 @@ function checkLegCaps() {
       `并发上限有 ${v.bad.length} 条脏值`,
       '并发上限只许正整数 / "不限" / null（待填）；0、负数、杂串都不是合法上限',
       v.bad.map((b) => `${b.id}=${JSON.stringify(b.value)}`).slice(0, 6).join(' '),
+    );
+    return;
+  }
+  if (v.noReason && v.noReason.length) {
+    fail(
+      `并发上限有 ${v.noReason.length} 条没写出处`,
+      '每个数与每个空格都要带出处：填了数写「并发上限依据」（哪天谁拍的 / 实测在哪），'
+      + '留空写「并发上限待填理由」（为什么还没测、谁在测）。'
+      + '2026-09-08 拍了 windsurf=6，表里这一格 null 躺了 6 天没人发现——档案与机器读的表是两条真相源，中间缺这道闸',
+      v.noReason.map((n) => `${n.id} 缺「${n.field}」`).slice(0, 6).join('；'),
+    );
+    return;
+  }
+  const decidedPath = join(ROOT, DECIDED_CHANNEL_CAPS_REL);
+  let decidedDoc;
+  try {
+    decidedDoc = JSON.parse(readFileSync(decidedPath, 'utf8'));
+  } catch (e) {
+    fail(
+      '拍板容量表没查成',
+      `恢复 ${DECIDED_CHANNEL_CAPS_REL}（09-08 拍板的机器可读落点；对账闸读它，不解析 markdown 表）`,
+      String(e.message || e).split(/\r?\n/)[0].slice(0, 160),
+    );
+    return;
+  }
+  const rec = reconcileDecidedCaps(doc && doc.腿, decidedDoc);
+  if (!rec.ok) {
+    fail('拍板容量对账没查成', rec.error || `补 ${DECIDED_CHANNEL_CAPS_REL} 的 channels`, decidedPath);
+    return;
+  }
+  if (rec.stale.length) {
+    fail(
+      `拍板有数、腿节仍待填 ${rec.stale.length} 条`,
+      `${DECIDED_CHANNEL_CAPS_REL} 里已有数的渠道，路由表对应在役腿不许再 null。写待填理由不能代替填数。`,
+      rec.stale.map((s) => `${s.id} ${s.channel} 拍板=${JSON.stringify(s.decided)} 表=${JSON.stringify(s.actual)}`).slice(0, 6).join('；'),
     );
     return;
   }

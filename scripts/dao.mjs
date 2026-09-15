@@ -20,7 +20,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { cpus, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './lib/yaml-min.mjs';
@@ -154,7 +154,8 @@ import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
   planReviewAdmission,
-  DEFAULT_REVIEWER_CAP,
+  resolveReviewerCap,
+  reviewerIdsForCap,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -229,6 +230,7 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
+import { resolveModelChannel } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
@@ -1460,8 +1462,17 @@ function cmdReviewerDone(args) {
  * 名单读不到 ⇒ 没查成 ⇒ 这一轮拉 0 张，票留在队列，不许当成「0 个在跑」去拉满。
  */
 async function admitReviewPull(tickets) {
-  const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
-  const limit = Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_REVIEWER_CAP;
+  // 上限不再是手打常量：机器那层按核数，上游那层按**本轮票实际会用的审官**所落渠道取严。
+  // 全部可用候选里那条没用到的 cap=1 腿不许拖住整队。
+  // 有限渠道上限始终是最终上界；保底只在没有任何有限渠道约束时生效。
+  const usable = usableReviewerIds();
+  // DAO_REVIEWER_CAP 也走同一个函数（只收紧不放宽）——这里不许再出现「有环境值就整段跳过取严」的平级分支。
+  const limit = resolveReviewerCap({
+    cores: (() => { try { return cpus()?.length ?? null; } catch { return null; } })(),
+    reviewerIds: reviewerIdsForCap(tickets, usable),
+    channelOf: reviewerChannelCap,
+    envCap: process.env.DAO_REVIEWER_CAP,
+  });
   let sessions = null;
   try {
     const routing = loadRouting();
@@ -1490,6 +1501,21 @@ async function admitReviewPull(tickets) {
 function usableReviewerIds() {
   try {
     return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+  } catch { return null; }
+}
+
+/**
+ * 一位审官落在哪条渠道、那条渠道的上限是几（`resolveReviewerCap` 的渠道那层）。
+ *
+ * 走 `resolveModelChannel`（#1145 的正典），不自己按 provider 拼渠道键——自己拼那天，
+ * 「同一个模型算哪条渠道」在这里和指挥官里就会给出两个答案。
+ * 认不出 / 不限 ⇒ 回 null，调用方据此**不拿它去收紧**（不限不是 0）。
+ */
+function reviewerChannelCap(id) {
+  try {
+    const raw = loadRoutingJsonRaw();
+    const hit = resolveModelChannel({ model: id, legs: raw['腿'], models: raw['模型'] });
+    return hit && Number.isFinite(hit.cap) ? hit.cap : null;
   } catch { return null; }
 }
 
