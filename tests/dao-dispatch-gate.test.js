@@ -779,6 +779,8 @@ describe('#1055 dao start/session 动词切 mirasim', () => {
     const S = await S_LOAD;
     assert.ok(S.FLAGS_BY_VERB.start.has('--prompt'));
     assert.ok(S.FLAGS_BY_VERB.start.has('--executor'));
+    assert.ok(S.FLAGS_BY_VERB.start.has('--pr'));
+    assert.ok(S.FLAGS_BY_VERB.start.has('--issue'));
     assert.ok(S.VERBS.includes('session-read'));
     assert.ok(S.VERBS.includes('session-stop'));
     assert.ok(S.FLAGS_BY_VERB['session-read'].has('--session'));
@@ -799,6 +801,18 @@ describe('#1055 dao start/session 动词切 mirasim', () => {
     assert.equal(p.executor, 'mirasim');
     assert.equal(p.sessionKey, undefined);
     assert.ok(p.agent, 'dry-run 要把 agent 落点打出来');
+  });
+
+  it('start --executor mirasim 接受 --pr/--issue/--title 并在 dry-run 回执里带上', async () => {
+    const r = await cliInProc([
+      'start', '--executor', 'mirasim', '--model', 'grok-4.6', '--prompt', 'ping',
+      '--pr', '1271', '--issue', '42', '--title', 'PR-#1271', '--dry-run',
+    ]);
+    const p = payloadOf(r);
+    assert.equal(r.status, 0, JSON.stringify(p));
+    assert.equal(p.pr, 1271);
+    assert.equal(p.issue, 42);
+    assert.equal(p.title, 'PR-#1271');
   });
 
   it('start --executor mirasim 缺 --prompt 当场拒，不静默走 orca 脊', async () => {
