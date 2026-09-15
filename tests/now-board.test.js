@@ -157,6 +157,7 @@ describe('dao now：审官登记 / 会话 / 树', () => {
     const S = await load(BOARD);
     const tree = '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-900';
     assert.equal(S.judgeSession({ sessions: okEnv([{ pid: '1', cwd: tree }]), treePath: tree }).state, 'live');
+    assert.equal(S.judgeSession({ sessions: okEnv([{ pid: '1', cwd: tree + '/scripts' }]), treePath: tree }).state, 'live');
     assert.equal(S.judgeSession({ sessions: okEnv([]), treePath: tree }).state, 'gone');
     assert.equal(S.judgeSession({ sessions: deadEnv('连不上'), treePath: tree }).state, 'unscanned');
     assert.equal(S.judgeSession({ sessions: okEnv([]), treePath: null }).state, 'unscanned',

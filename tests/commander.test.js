@@ -1807,6 +1807,33 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
     assert.equal(attach[0].repo, 'org/a');
     assert.equal(attach[0].pr, 12);
   });
+
+  it('本仓带同值 repo 的票、PR 不在开放列表 → reap-ticket', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      repo: 'thoerwink8/windsurf-dao',
+      github: { scanned: true, issues: [], prs: [] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 101, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null, repo: 'thoerwink8/windsurf-dao' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket').map((a) => a.pr), [101]);
+    assert.deepEqual(byKind(r, 'attach-reviewer'), []);
+  });
+
+  it('本仓带同值 repo 的票、PR 还开着 → 不回收', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      repo: 'thoerwink8/windsurf-dao',
+      github: { scanned: true, issues: [], prs: [{ number: 890, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'aaa' }] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 890, head: 'aaa', reviewer: 'gpt-5.6-luna', worker: null, repo: 'thoerwink8/windsurf-dao' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
 });
 
 // ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，

@@ -89,6 +89,11 @@ export function acquireWorktreeLock({
       const release = () => {
         if (released) return;
         released = true;
+        // 显式释放必须摘掉 exit 钩子：常驻指挥官每次起会话都走占用声明，
+        // 不摘就把已释放的闭包堆在 process 上（#1292 审官红：20 次后 MaxListenersExceededWarning）。
+        if (typeof process !== 'undefined' && typeof process.removeListener === 'function') {
+          process.removeListener('exit', release);
+        }
         try { close(fd); } catch { /* ignore */ }
         try { unlink(path); } catch { /* ignore */ }
       };
@@ -100,7 +105,7 @@ export function acquireWorktreeLock({
     } catch (e) {
       const code = e && e.code;
       if (code !== 'EEXIST') {
-        return { ok: false, error: `建树锁打不开 ${path}：${String(e.message || e)}` };
+        return { ok: false, code: 'open-failed', error: `建树锁打不开 ${path}：${String(e.message || e)}` };
       }
       const holder = readLockPid(path, { read, exists });
       const dead = holder != null && !pidAlive(holder);
@@ -120,7 +125,7 @@ export function acquireWorktreeLock({
       sleepFn(50);
     }
   }
-  return { ok: false, error: `建树锁等超时（${timeoutMs}ms）：${path}` };
+  return { ok: false, code: 'timeout', error: `建树锁等超时（${timeoutMs}ms）：${path}` };
 }
 
 /** 同步包一段建树回调：拿到锁才跑，无论成败都放锁。fail()/throw 也会放锁。 */
