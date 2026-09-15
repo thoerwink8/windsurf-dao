@@ -253,6 +253,13 @@ test('server-check 判别力', async (t) => {
       assert.doesNotMatch(entry, /install/);
       assert.doesNotMatch(entry, /在册且 enabled/);
     });
+    await t.test('CHECKS (24) 用量特权副本走 classifyUsageInstallCopy', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['(24) 用量特权副本");
+      assert.ok(i > -1, '找不到 (24) CHECKS 条目');
+      const entry = src.slice(i, i + 200);
+      assert.match(entry, /checkUsageInstallCopy/);
+    });
   });
 
   await t.test('classifyStallWatchTimer（⑮ 卡死发现已并进指挥官，独立钟是影子制度）', async (t) => {

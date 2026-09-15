@@ -29,6 +29,7 @@ import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
 import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
+import { classifyUsageInstallCopy, usageExportInstallFiles } from './lib/execution-usage.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -1136,6 +1137,35 @@ function checkUnitDrift() {
   return drift;
 }
 
+const USAGE_INSTALL_ROOT = '/usr/local/lib/dao-execution-usage';
+
+function checkUsageInstallCopy() {
+  let files;
+  try {
+    files = usageExportInstallFiles({ scriptsDir: join(REPO_ROOT, 'scripts') });
+  } catch (e) {
+    return { state: UNKNOWN, detail: `用量装机名单算不出：${String(e.message || e).slice(0, 160)}——没查成` };
+  }
+  if (!existsSync(USAGE_INSTALL_ROOT)) {
+    const r = classifyUsageInstallCopy({ expected: files.map((path) => ({ path, content: '' })), installed: null });
+    return { state: UNKNOWN, detail: r.detail };
+  }
+  const expected = [];
+  const installed = {};
+  for (const rel of files) {
+    let content;
+    try { content = readFileSync(join(REPO_ROOT, 'scripts', rel), 'utf8'); }
+    catch (e) { return { state: UNKNOWN, detail: `仓内 ${rel} 读不了（${e.code || e.message}）——没查成` }; }
+    expected.push({ path: rel, content });
+    try { installed[rel] = readFileSync(join(USAGE_INSTALL_ROOT, rel), 'utf8'); }
+    catch (e) {
+      if (e && e.code !== 'ENOENT') installed[rel] = { unreadable: true };
+    }
+  }
+  const r = classifyUsageInstallCopy({ expected, installed });
+  return { state: r.state === 'ok' ? OK : r.state === 'red' ? RED : UNKNOWN, detail: r.detail };
+}
+
 // —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
 //
 // 症状不像权限问题：`.git/index` 落成 root 后 orca 的 git 写操作失败，
@@ -1317,6 +1347,7 @@ const CHECKS = [
   ['(21) 服务用户家目录没有 root 属主文件', checkRootOwnedInHome],
   ['(22) mirasim 侧实跑腿与选型腿表对得上（#944）', checkModelReconcile],
   ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
+  ['(24) 用量特权副本跟仓内 import 闭包一致（#1231）', checkUsageInstallCopy],
 ];
 
 function outPath() {
@@ -1473,6 +1504,24 @@ function selfTest() {
   });
   if (commentLies.state !== RED || !/\/tmp\/gw-remote-probe/.test(commentLies.detail)) {
     failures.push(`误导注释应判红，实际 ${commentLies.state}：${commentLies.detail}`);
+  }
+  const usageMissing = classifyUsageInstallCopy({ expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }], installed: null });
+  if (usageMissing.state !== 'unknown' || !/没装或没查成/.test(usageMissing.detail)) {
+    failures.push(`用量副本目录不在应 unknown，实际 ${usageMissing.state}：${usageMissing.detail}`);
+  }
+  const usageStale = classifyUsageInstallCopy({
+    expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
+    installed: { 'lib/execution-usage.mjs': 'old' },
+  });
+  if (usageStale.state !== 'red' || !/install-execution-usage/.test(usageStale.detail)) {
+    failures.push(`用量副本字节不对应判红，实际 ${usageStale.state}：${usageStale.detail}`);
+  }
+  const usageOk = classifyUsageInstallCopy({
+    expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
+    installed: { 'lib/execution-usage.mjs': 'new' },
+  });
+  if (usageOk.state !== 'ok') {
+    failures.push(`用量副本一致应 ok，实际 ${usageOk.state}：${usageOk.detail}`);
   }
 
   if (failures.length) {

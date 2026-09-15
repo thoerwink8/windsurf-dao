@@ -31,10 +31,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { modelFamily } from './execution-catalog.mjs';
 
 export const METRICS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'totalTokens', 'durationMs'];
 export const DEFAULT_LIMITS = Object.freeze({ maxSources: 4096, maxEntries: 30000, maxBytesPerSource: 4 * 1024 * 1024, maxLineBytes: 1024 * 1024, maxJsonBytes: 16 * 1024 * 1024, maxRows: 100000, maxGroups: 10000, maxRecords: 20000, maxCommittedPerRun: 1000 });
+// Catch-up / designed bounds. They stay visible on `status`, but must not fail
+// the oneshot: that is what turned every 5-minute tick into background noise (#1231).
+export const USAGE_STATUS_CODES = Object.freeze(['source_scan_pending', 'interrupted_tail', 'collection_commit_limit', 'inbox_export_incomplete', 'inbox_scan_limit']);
+const USAGE_STATUS_SET = new Set(USAGE_STATUS_CODES);
+const USAGE_IMPORT_RE = /(?:from|import)\s+['"](\.[^'"]+)['"]|require\(\s*['"](\.[^'"]+)['"]\s*\)/g;
 const digest = x => createHash('sha256').update(typeof x === 'string' ? x : JSON.stringify(x)).digest('hex');
 const object = x => x && typeof x === 'object' && !Array.isArray(x) ? x : {};
 const first = (...xs) => xs.find(x => x !== undefined && x !== null) ?? null;
@@ -43,6 +49,71 @@ const label = x => (typeof x === 'string' || typeof x === 'number') && /^[\p{L}\
 const displayLabel = x => typeof x === 'string' && x.length <= 180 && label(x.replace(/[\[\]=(), ]/g, '')) ? x : label(x);
 const hashId = x => label(x) ? digest(String(x)) : null;
 const unique = xs => [...new Set(xs.filter(x => x !== null && x !== undefined))];
+
+export function partitionUsageCodes(codes) {
+  const status = [], gaps = [];
+  for (const c of unique(Array.isArray(codes) ? codes : [])) {
+    if (USAGE_STATUS_SET.has(c)) status.push(c);
+    else gaps.push(c);
+  }
+  return { status, gaps };
+}
+
+function finishUsageResult(result) {
+  const split = partitionUsageCodes(result.gaps);
+  result.status = unique([...(result.status || []), ...split.status]);
+  result.gaps = split.gaps;
+  result.complete = result.gaps.length === 0;
+  return result;
+}
+
+/** Relative paths under scripts/ that the root exporter must copy. Follows
+ * static import/require, so a new relative dependency cannot be left behind. */
+export function usageExportInstallFiles({
+  scriptsDir = fileURLToPath(new URL('..', import.meta.url)),
+  entry = 'execution-usage-export.mjs',
+  readFile = abs => fs.readFileSync(abs, 'utf8'),
+} = {}) {
+  const root = path.resolve(scriptsDir);
+  const out = [], seen = new Set(), queue = [entry.replace(/\\/g, '/')];
+  while (queue.length) {
+    const rel = queue.shift();
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = path.resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('usage_install_escape');
+    const text = readFile(abs);
+    out.push(rel);
+    USAGE_IMPORT_RE.lastIndex = 0;
+    for (let m; (m = USAGE_IMPORT_RE.exec(text));) {
+      const spec = m[1] || m[2];
+      if (!spec || !spec.startsWith('.')) continue;
+      const next = path.relative(root, path.resolve(path.dirname(abs), spec)).replace(/\\/g, '/');
+      if (!next || next.startsWith('..')) continue;
+      queue.push(next);
+    }
+  }
+  return out;
+}
+
+export function classifyUsageInstallCopy({ expected, installed } = {}) {
+  if (installed == null) return { state: 'unknown', detail: '用量特权副本目录不在——没装或没查成，不当绿' };
+  if (!Array.isArray(expected) || expected.length === 0) return { state: 'unknown', detail: '装机名单是空的——没查成，不当绿' };
+  const missing = [], stale = [], unreadable = [];
+  for (const item of expected) {
+    const rel = item?.path, want = item?.content;
+    if (typeof rel !== 'string' || typeof want !== 'string') return { state: 'unknown', detail: '装机名单条目坏了——没查成' };
+    const live = installed[rel];
+    if (live && typeof live === 'object' && live.unreadable) { unreadable.push(rel); continue; }
+    if (typeof live !== 'string') { missing.push(rel); continue; }
+    if (live !== want) stale.push(rel);
+  }
+  if (unreadable.length) return { state: 'unknown', detail: `用量特权副本 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}——没查成` };
+  if (missing.length || stale.length) {
+    return { state: 'red', detail: `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh` };
+  }
+  return { state: 'ok', detail: `用量特权副本 ${expected.length} 个文件与仓内一致` };
+}
 const normalized = new WeakMap();
 const defaults = options => {
   const home = options.home || os.homedir();
@@ -291,27 +362,34 @@ export function sanitizeUsageObservation(input) {
 }
 
 export function importUsageInbox(inbox, input = {}) {
-  const options = defaults(input), result = { committed: 0, duplicates: 0, gaps: [] };
+  const options = defaults(input), result = { committed: 0, duplicates: 0, gaps: [], status: [] };
   try {
     if (!fs.lstatSync(inbox).isDirectory() || fs.lstatSync(inbox).isSymbolicLink()) throw new Error('unsafe_inbox');
     const manifest = json(path.join(inbox, 'manifest.json'));
-    if (!manifest || manifest.schema !== 1) { result.gaps.push('inbox_manifest_missing'); return result; }
+    if (!manifest || manifest.schema !== 1) { result.gaps.push('inbox_manifest_missing'); return finishUsageResult(result); }
     if (!manifest.complete) result.gaps.push('inbox_export_incomplete');
+    if (Array.isArray(manifest.gaps)) result.gaps.push(...manifest.gaps);
     const age = Date.now() - Date.parse(manifest.exportedAt);
     if (!Number.isFinite(age) || age > 15 * 60 * 1000) result.gaps.push('inbox_export_stale');
     const budget = { count: 0, max: options.limits.maxRows + 512 };
     let rows = 0;
     walk(path.join(inbox, 'rows'), budget, f => {
-      if (!/^[a-f0-9]{64}\.json$/.test(path.basename(f))) return;
+      const name = path.basename(f);
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) return;
       if (++rows > options.limits.maxRows) { budget.exhausted = true; return; }
-      const row = sanitizeUsageObservation(json(f, 65536));
+      const id = name.slice(0, 64);
+      if (fs.existsSync(path.join(options.dir, 'rows', id.slice(0, 2), `${id}.json`))) {
+        result.duplicates++;
+        return;
+      }
       if (result.committed >= options.limits.maxCommittedPerRun) { budget.exhausted = true; return; }
+      const row = sanitizeUsageObservation(json(f, 65536));
       const added = appendUsage(row, options);
       result[added.committed ? 'committed' : 'duplicates']++;
     });
     if (budget.exhausted) result.gaps.push('inbox_scan_limit');
   } catch (e) { result.gaps.push(e.code === 'ENOENT' ? 'inbox_missing' : 'inbox_invalid'); }
-  return result;
+  return finishUsageResult(result);
 }
 
 /** Publish only normalized rows. Shared parents must be root-owned in production;
@@ -331,17 +409,29 @@ export function publishUsageInbox({ dir, inbox, readerGid, limits: requestedLimi
   let count = 0, published = 0;
   const buckets = new Set();
   walk(path.join(dir, 'rows'), budget, f => {
-    if (!/^[a-f0-9]{64}\.json$/.test(path.basename(f))) return;
+    const name = path.basename(f);
+    if (!/^[a-f0-9]{64}\.json$/.test(name)) return;
     if (++count > options.limits.maxRows) { budget.exhausted = true; return; }
-    const row = sanitizeUsageObservation(json(f, 65536)), id = digest(row);
-    const bucket = path.join(inbox, 'rows', id.slice(0,2));
+    const id = name.slice(0, 64);
+    const destination = path.join(inbox, 'rows', id.slice(0, 2), `${id}.json`);
+    if (fs.existsSync(destination)) return;
+    if (published >= options.limits.maxCommittedPerRun) { budget.exhausted = true; return; }
+    const row = sanitizeUsageObservation(json(f, 65536)), hashed = digest(row);
+    const hashedDest = path.join(inbox, 'rows', hashed.slice(0, 2), `${hashed}.json`);
+    const bucket = path.dirname(hashedDest);
     if (!buckets.has(bucket)) { sharedDir(bucket); buckets.add(bucket); }
-    const destination = path.join(bucket, `${id}.json`);
-    if (!fs.existsSync(destination) && published >= options.limits.maxCommittedPerRun) { budget.exhausted = true; return; }
-    if (atomic(destination, row, true, { mode: 0o640, gid: readerGid })) published++;
+    if (atomic(hashedDest, row, true, { mode: 0o640, gid: readerGid })) published++;
   });
   const collection = json(path.join(dir, 'collection.json'));
-  const manifest = { schema: 1, origin: 'root-mirasim', exportedAt: new Date().toISOString(), complete: !budget.exhausted && collection?.complete === true, rows: count, published, sourceTypes: ['mirasim-ledger','mirasim-session','mirasim-traffic'] };
+  const exportFaults = Array.isArray(collection?.gaps) ? collection.gaps : [];
+  const manifest = {
+    schema: 1, origin: 'root-mirasim', exportedAt: new Date().toISOString(),
+    complete: !budget.exhausted && exportFaults.length === 0,
+    rows: count, published,
+    gaps: unique([...exportFaults, budget.exhausted ? 'inbox_scan_limit' : null]),
+    status: Array.isArray(collection?.status) ? collection.status : [],
+    sourceTypes: ['mirasim-ledger','mirasim-session','mirasim-traffic'],
+  };
   atomic(path.join(inbox, 'manifest.json'), manifest, false, { mode: 0o640, gid: readerGid });
   return manifest;
 }
@@ -606,18 +696,23 @@ function collectFile(spec, options, metadata, totals) {
     return;
   }
   let offset = cp.fingerprint === fingerprint && cp.offset <= stat.size ? cp.offset : 0;
-  // Insights can be backfilled in place. Complete a bounded sweep before starting
-  // a new generation, even if this busy file keeps growing between timer ticks.
+  // Insights can be backfilled in place (same size, new mtime). Append-only growth
+  // keeps the cursor: rescanning tens of thousands of historical rows is what
+  // turned a 90s oneshot into SIGTERM (#1231).
   let target = cp.target;
   let targetMtime = cp.targetMtime;
   if (cp.tail && stat.size > target) { target = stat.size; targetMtime = stat.mtimeMs; }
   if (!target || offset >= target || cp.fingerprint !== fingerprint || target > stat.size) {
     if (cp.size === stat.size && cp.mtimeMs === stat.mtimeMs && offset === stat.size) return;
-    if (spec.rewrite && (cp.mtimeMs !== stat.mtimeMs || cp.size !== stat.size)) offset = 0;
+    if (spec.rewrite && (cp.mtimeMs !== stat.mtimeMs || cp.size !== stat.size)) {
+      const grew = Number.isFinite(cp.size) && stat.size > cp.size;
+      if (!grew) offset = 0;
+    }
     target = stat.size; targetMtime = stat.mtimeMs;
   }
   const amount = Math.min(target - offset, limits.maxBytesPerSource);
   if (amount <= 0) return;
+  const committedBefore = totals.committed;
   const buffer = Buffer.alloc(amount);
   const fd = fs.openSync(spec.path, 'r');
   let bytes;
@@ -641,7 +736,11 @@ function collectFile(spec, options, metadata, totals) {
   // Source bytes can advance only after all corresponding rows have committed.
   const next = offset + start;
   atomic(checkpointFile, { fingerprint, offset: next, target, targetMtime, context: streamContext, tail: next < target && offset + bytes >= target, size: next >= target ? target : cp.size, mtimeMs: next >= target ? targetMtime : cp.mtimeMs });
-  if (next < target) totals.gaps.push(totals.committed >= limits.maxCommittedPerRun ? 'collection_commit_limit' : start === 0 && bytes >= limits.maxLineBytes ? 'line_size_limit' : next < offset + bytes && bytes < limits.maxBytesPerSource ? 'interrupted_tail' : 'source_scan_pending');
+  if (next < target) {
+    const code = totals.committed >= limits.maxCommittedPerRun ? 'collection_commit_limit' : start === 0 && bytes >= limits.maxLineBytes ? 'line_size_limit' : next < offset + bytes && bytes < limits.maxBytesPerSource ? 'interrupted_tail' : 'source_scan_pending';
+    const idle = code === 'source_scan_pending' && next === offset && totals.committed === committedBefore;
+    totals.gaps.push(idle ? 'source_scan_stalled' : code);
+  }
 }
 
 export function collectUsage(input = {}) {
@@ -656,13 +755,13 @@ export function collectUsage(input = {}) {
     let alive = true;
     if (Number.isSafeInteger(pid)) { try { process.kill(pid, 0); } catch (err) { alive = err.code !== 'ESRCH'; } }
     else alive = Date.now() - fs.statSync(lock).mtimeMs < 120000;
-    if (alive) return { complete: false, busy: true, committed: 0, duplicates: 0, gaps: ['collector_busy'] };
+    if (alive) return { complete: false, busy: true, committed: 0, duplicates: 0, gaps: ['collector_busy'], status: [] };
     fs.rmSync(lock, { recursive: true, force: true });
-    try { fs.mkdirSync(lock, { mode: 0o700 }); } catch { return { complete: false, busy: true, committed: 0, duplicates: 0, gaps: ['collector_busy'] }; }
+    try { fs.mkdirSync(lock, { mode: 0o700 }); } catch { return { complete: false, busy: true, committed: 0, duplicates: 0, gaps: ['collector_busy'], status: [] }; }
   }
   try {
     atomic(path.join(lock, 'owner.json'), { pid: process.pid });
-    const totals = { complete: true, committed: 0, duplicates: 0, sources: 0, gaps: [] };
+    const totals = { complete: true, committed: 0, duplicates: 0, sources: 0, gaps: [], status: [] };
     const metadata = options.mirasimOnly ? new Map() : readMetadata(options.home, options.limits, totals.gaps);
     const config = options.readConfig === false ? null : json(path.join(options.home, '.dao/execution/usage-config.json'));
     options.accountPools ||= object(config?.accountPools);
@@ -679,10 +778,10 @@ export function collectUsage(input = {}) {
       totals.imported += imported.committed;
       totals.duplicates += imported.duplicates;
       totals.gaps.push(...imported.gaps);
+      totals.status.push(...(imported.status || []));
     }
-    totals.gaps = unique(totals.gaps);
     if (!totals.sources && !totals.imported && !(input.inboxes || config?.inboxes || []).length) totals.gaps.push('no_usage_sources');
-    totals.complete = totals.gaps.length === 0;
+    finishUsageResult(totals);
     atomic(path.join(options.dir, 'collection.json'), { ...totals, collectedAt: new Date().toISOString() });
     return totals;
   } finally { fs.rmSync(lock, { recursive: true, force: true }); }
@@ -891,5 +990,5 @@ export function reportUsage(input = {}) {
     const reconciliationGaps = [...taskGaps.get(taskId) || []];
     return { taskId, agents: unique(rs.map(r => r.agent)), tokens, charges, metrics, complete: tokens === 'reported' && charges === 'reported' && reconciliationGaps.length === 0, sources: unique(rs.flatMap(r => r.sources)), apiSources: unique(rs.map(r => r.apiSource)), accountCheckedAt: rs.some(r => r.agent === 'cursor') ? accountCollection?.checkedAt ?? null : null, gaps: reconciliationGaps, missing: [tokens !== 'reported' ? 'tokens_not_fully_reported' : null, charges !== 'reported' ? 'charge_not_fully_reported' : null, reconciliationGaps.length ? 'accounting_reconciliation_gap' : null].filter(Boolean) };
   });
-  return { schema: 1, generatedAt: new Date().toISOString(), complete: gaps.size === 0 && [...groups.values()].every(g => g.gaps.length === 0), accountingComplete: taskAccounting.length > 0 && taskAccounting.every(t => t.complete), taskAccounting, groupBy, observations: rows.length, deduplicatedRecords: records.length, groups: [...groups.values()], accountSnapshots, unallocatedSummaries, gaps: [...gaps], collection, accountCollection };
+  return { schema: 1, generatedAt: new Date().toISOString(), complete: gaps.size === 0 && [...groups.values()].every(g => g.gaps.length === 0), accountingComplete: taskAccounting.length > 0 && taskAccounting.every(t => t.complete), taskAccounting, groupBy, observations: rows.length, deduplicatedRecords: records.length, groups: [...groups.values()], accountSnapshots, unallocatedSummaries, gaps: [...gaps], status: collection?.status || [], collection, accountCollection };
 }
