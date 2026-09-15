@@ -13,7 +13,7 @@
 // readTreeHead / registry）全注入，测试不碰真服务。跨厂闸复用 assertCrossVendor（照旧）。
 
 import { analyzeGithubReviews } from '../review-state.mjs';
-import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf } from '../execution-states.mjs';
+import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessionState } from '../execution-states.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
@@ -837,6 +837,16 @@ export async function mirasimWorkerDone({
       }
       // interact 没成 → 退到新起一针（不静默）。
     }
+  }
+  // 在役/预留会话占着树：新起会被 lease-held。树已经同步到新 HEAD，
+  // 一 PR 一审官 = 把新码交给还在跑的那位，不另起第二个。
+  const classified = classifySessionState(reuse.view);
+  if (classified === 'live' || classified === 'reserved') {
+    return {
+      ok: true, action: 'reworked-live', round: theRound, reviewCount, sessionKey,
+      treePath, treeHead, expectedOid: prHead.expectedOid, treeSync, reuse,
+      why: `审官会话还在跑（${classified}/${sessionStateOf(reuse.view) || ''}），树已同步到新 HEAD，不另起第二个`,
+    };
   }
   const created = await mirasimReviewerCreate({
     runtime, gh, readTreeHead, prepareRef, syncTree,
