@@ -52,7 +52,9 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
-import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
+import {
+  approvedToLand, lastJudgmentOf, lastApprovedCommitId, needsDockProof, provePureDock,
+} from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
   capNewDispatchSlots,
@@ -510,6 +512,54 @@ function prReviewInput(entry) {
   if (!entry || typeof entry !== 'object') return undefined;
   if (Array.isArray(entry.reviews)) return entry.reviews;
   return entry.bodies;
+}
+
+function dockOf(situation, prNumber) {
+  const table = situation && situation.dockByPr;
+  if (table == null || typeof table !== 'object') {
+    return { state: 'unknown', why: '对接证明没采' };
+  }
+  const v = table[prNumber] != null ? table[prNumber] : table[String(prNumber)];
+  if (!v || typeof v !== 'object') return { state: 'unknown', why: '这张 PR 没有对接证明' };
+  return v;
+}
+
+/**
+ * 生产取证：只对「旧批准、当前 head 零判定」的 PR 跑树级对接证明。
+ * decide 保持纯函数，证明表由眼睛注入 situation.dockByPr。
+ */
+export function collectDockProofs(situation, { run, masterRef = 'origin/master' } = {}) {
+  const prs = (situation && situation.github && situation.github.prs) || [];
+  const byPr = (situation && situation.prReviews && situation.prReviews.byPr) || {};
+  const out = {};
+  for (const pr of prs) {
+    if (!pr || pr.number == null) continue;
+    const raw = prReviewInput(byPr[pr.number]);
+    const mergeA = analyzeReviewsAtHead(raw, pr.headRefOid);
+    const last = lastJudgmentOf(analyzeReviews(raw));
+    const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    if (!needsDockProof({
+      greenAtHead,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment: last,
+    })) continue;
+    const approved = lastApprovedCommitId(raw);
+    if (!approved.scanned || !approved.commit) {
+      out[pr.number] = { state: 'unknown', why: '批准 commit 没查成' };
+      continue;
+    }
+    if (typeof run !== 'function') {
+      out[pr.number] = { state: 'unknown', why: '取证 run 没给' };
+      continue;
+    }
+    out[pr.number] = provePureDock({
+      approved: approved.commit,
+      head: pr.headRefOid,
+      masterRef,
+      run,
+    });
+  }
+  return out;
 }
 
 function esc(why, extra = {}) {
@@ -1502,7 +1552,7 @@ function collectCandidates(situation) {
       const ciR = prChecksRed(pr);
       if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
         out.push(withNeeds({
-          kind: 'merge', pr: pr.number, title: pr.title || '',
+          kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
           why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE——已认输但条件齐了，照合（认输只挡重试，不挡合并）',
         }, N.merge));
         out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等）' }, N.land));
@@ -1517,17 +1567,38 @@ function collectCandidates(situation) {
     // 后果是自动合并这条路**从来没通过电**：审官判绿了，指挥官这一格永远进不去，
     // PR 就一直挂着等人。判红那一维同样在帅位盘面上隐形（shuai-scan 的 prRed 只看 CI）。
     // 改成按当前 head 看真 review（analyzeReviewsAtHead，与下面判红同一判据，绿红一把尺）：
-    //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
+    //   · 当前 head 独立审查绿才通常放行（#1133：聚合 APPROVED 不能单独代替 HEAD 证据）；
     //   · 没查成一律不合，与「查过确实没绿」分开。
+    // mergePolicy / manual 拍板证据是 PR #1225 的事，本续项不复制。
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
     const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const redAtHead = mergeA.scanned && mergeA.latestRed === true;
+    const lastJudgment = lastJudgmentOf(allA);
+    const dockNeeded = needsDockProof({
+      greenAtHead,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment,
+    });
+    const dock = dockNeeded ? dockOf(situation, pr.number) : null;
+    if (dockNeeded && !(dock && dock.state === 'ok')) {
+      if (!dock || dock.state !== 'red') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 旧批准要继承但纯对接没查成：${(dock && dock.why) || '没证明'}`,
+          { reason: 'unscanned', pr: pr.number, missing: ['dockProof'] },
+        ), N.merge));
+        continue;
+      }
+      // dock.red：批准后有新树内容，落到下面复审，不合。
+    }
     const readyToLand = approvedToLand({
       greenAtHead,
       decisionApproved,
       atHead: mergeA.scanned ? mergeA.atHead : null,
-      lastJudgment: lastJudgmentOf(allA),
+      lastJudgment,
+      redAtHead,
+      dock,
     });
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
@@ -1551,10 +1622,10 @@ function collectCandidates(situation) {
         }
       }
       out.push(withNeeds({
-        kind: 'merge', pr: pr.number, title: pr.title || '',
+        kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
         why: greenAtHead
           ? '审官判绿（当前 head）+ CI 绿 + MERGEABLE'
-          : '审官已放行（head 因对接 master 变了，不再审）+ CI 绿 + MERGEABLE',
+          : '审官已放行（已证明纯对接 master，不再审）+ CI 绿 + MERGEABLE',
       }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));

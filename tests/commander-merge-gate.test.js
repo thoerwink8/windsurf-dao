@@ -16,6 +16,17 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const CMD = import('file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
 const HC = import('file://' + path.join(REPO, 'scripts', 'lib', 'handoff-check.mjs').replace(/\\/g, '/'));
+const MERGE_HEAD = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+function prViewOut(head = MERGE_HEAD, number = 1234) {
+  return JSON.stringify({
+    number, state: 'OPEN', title: 'x', body: '',
+    headRefOid: head, isDraft: false, mergeable: 'MERGEABLE',
+    statusCheckRollup: [], reviews: [],
+  });
+}
+function mergeAction(over = {}) {
+  return { pr: 1234, head: MERGE_HEAD, why: '判绿可合', ...over };
+}
 
 /**
  * 假 run：按 argv 的前几个词查表。表里没有的命令一律抛——
@@ -37,6 +48,8 @@ const FAIL = (error) => ({ ok: false, error });
 /** 各条命令都成功的底表；每个用例只覆盖它关心的那一条。 */
 function baseTable(extra = {}) {
   return {
+    'node scripts/gh-as.mjs marshal -- pr view 1234 --json number,state': OKOUT(prViewOut(MERGE_HEAD, 1234)),
+    'node scripts/gh-as.mjs marshal -- pr view 1143 --json number,state': OKOUT(prViewOut(MERGE_HEAD, 1143)),
     'node scripts/gh-as.mjs marshal -- pr view': OKOUT('feature-branch\n'),
     'git fetch --quiet origin': OKOUT(''),
     'git rev-parse --verify --quiet origin/feature-branch': OKOUT('abc1234abc1234abc1234abc1234abc1234abcd\n'),
@@ -116,10 +129,13 @@ describe('#1117 合并闸：judgeMergeFreshness 采事实', () => {
 });
 
 describe('#1117 合并闸：execMerge 调用序列', () => {
-  function spyRun() {
+  function spyRun(head = MERGE_HEAD, number = 1234) {
     const calls = [];
     const run = (argv) => {
-      calls.push(argv.join(' '));
+      const s = argv.join(' ');
+      calls.push(s);
+      if (/pr view/.test(s) && /headRefOid/.test(s)) return { ok: true, out: prViewOut(head, number) };
+      if (/pr view/.test(s) && /headRefName/.test(s)) return { ok: true, out: 'feature-branch\n' };
       return { ok: true, out: '' };
     };
     return { calls, run };
@@ -131,7 +147,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { RED } = await HC;
     const { calls, run } = spyRun();
     const r = execMerge(
-      { pr: 1234, why: '判绿可合' },
+      mergeAction(),
       { say: silent, run, judge: () => ({ state: RED, detail: '本树切自旧 origin/master' }) },
     );
     assert.equal(r.ok, true);
@@ -145,7 +161,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { UNKNOWN } = await HC;
     const { calls, run } = spyRun();
     const r = execMerge(
-      { pr: 1234 },
+      mergeAction(),
       { say: silent, run, judge: () => ({ state: UNKNOWN, detail: '拉不到远端' }) },
     );
     assert.equal(r.ok, true);
@@ -157,7 +173,7 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
     const { OK } = await HC;
     const { calls, run } = spyRun();
     const r = execMerge(
-      { pr: 1234 },
+      mergeAction(),
       { say: silent, run, judge: () => ({ state: OK, detail: '基底含最新 origin/master' }) },
     );
     assert.equal(r.ok, true);
@@ -182,14 +198,14 @@ describe('#1117 合并闸：execMerge 调用序列', () => {
 describe('#1235 merge 记账步骤失败不挡合并', () => {
   const silent = () => {};
   /** 按 argv 子串决定成功/失败的假 run，用来构造「只有某一步坏」的场面 */
-  function runWhere(failOn) {
+  function runWhere(failOn, head = MERGE_HEAD, number = 1143) {
     const calls = [];
     const run = (argv) => {
       const s = argv.join(' ');
       calls.push(s);
-      return failOn && s.includes(failOn)
-        ? { ok: false, error: `${failOn} 故意失败` }
-        : { ok: true, out: '' };
+      if (/pr view/.test(s) && /headRefOid/.test(s)) return { ok: true, out: prViewOut(head, number) };
+      if (failOn && s.includes(failOn)) return { ok: false, error: `${failOn} 故意失败` };
+      return { ok: true, out: '' };
     };
     return { calls, run };
   }
@@ -197,7 +213,7 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
   it('打标签失败仍要真合并（#1143 的形状）', async () => {
     const { execMerge } = await CMD;
     const { calls, run } = runWhere('pr-sync-labels');
-    const r = execMerge({ pr: 1143, why: '判绿可合' }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    const r = execMerge({ pr: 1143, head: MERGE_HEAD, why: '判绿可合' }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     assert.equal(r.ok, true, '记账失败不该让整张 PR 卡住  →  ' + JSON.stringify(r));
     assert.ok(calls.some((c) => /pr merge/.test(c)), '②必须跑到：' + calls.join(' | '));
     assert.equal(r.failed.length, 1, '失败要报出来（不是静默吞）  →  ' + JSON.stringify(r.failed));
@@ -208,7 +224,7 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
   it('关单失败也算记账：PR 已经合了，不许报成没合', async () => {
     const { execMerge } = await CMD;
     const { calls, run } = runWhere('close-issues');
-    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    const r = execMerge({ pr: 1143, head: MERGE_HEAD }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     assert.equal(r.ok, true, 'PR 已合，关单没成是另一件事  →  ' + JSON.stringify(r));
     assert.ok(calls.some((c) => /pr merge/.test(c)));
     assert.equal(r.failed.length, 1, '关单失败要进 failed');
@@ -217,7 +233,7 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
   it('真正的合并失败仍是失败（门没被这次放宽拆掉）', async () => {
     const { execMerge } = await CMD;
     const { calls, run } = runWhere('pr merge');
-    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    const r = execMerge({ pr: 1143, head: MERGE_HEAD }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     assert.equal(r.ok, false, 'pr merge 失败必须判失败  →  ' + JSON.stringify(r));
     assert.equal(r.error, 'pr merge 故意失败');
     assert.ok(!calls.some((c) => /close-issues/.test(c)), '合并没成不该去关单（顺序依赖还在）');
@@ -226,7 +242,7 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
   it('打标必须在 merge 之前——合并后 PR 关了，标签就补不上（战绩会缺这张）', async () => {
     const { execMerge } = await CMD;
     const { calls, run } = runWhere(null);
-    execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    execMerge({ pr: 1143, head: MERGE_HEAD }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     const syncAt = calls.findIndex((c) => /pr-sync-labels/.test(c));
     const mergeAt = calls.findIndex((c) => /pr merge/.test(c));
     assert.notEqual(syncAt, -1, 'label 仍要尝试同步');
@@ -236,9 +252,68 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
   it('全记账成功时 failed 为空（别把成功也报成有失败）', async () => {
     const { execMerge } = await CMD;
     const { run } = runWhere(null);
-    const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    const r = execMerge({ pr: 1143, head: MERGE_HEAD }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     assert.deepEqual(r.failed, []);
     assert.equal(r.ok, true);
+  });
+});
+
+describe('#1133 全路径 HEAD 锁', () => {
+  const silent = () => {};
+
+  it('没有 approvalIssue 的 auto 路径也要带 --match-head-commit', async () => {
+    const { execMerge } = await CMD;
+    const calls = [];
+    const run = (argv) => {
+      const s = argv.join(' ');
+      calls.push(s);
+      if (/pr view/.test(s) && /headRefOid/.test(s)) return { ok: true, out: prViewOut() };
+      return { ok: true, out: '' };
+    };
+    const r = execMerge(mergeAction(), { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const merge = calls.find((c) => /pr merge/.test(c));
+    assert.match(merge, /--match-head-commit/);
+    assert.match(merge, new RegExp(MERGE_HEAD));
+  });
+
+  it('没带期望 HEAD → 拒绝合入', async () => {
+    const { execMerge } = await CMD;
+    const calls = [];
+    const run = (argv) => { calls.push(argv.join(' ')); return { ok: true, out: '' }; };
+    const r = execMerge({ pr: 1234, why: '判绿可合' }, { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /期望 HEAD/);
+    assert.equal(calls.some((c) => /pr merge/.test(c)), false);
+  });
+
+  it('判定后 HEAD 改变 → 拒绝合入，不调 pr merge', async () => {
+    const { execMerge } = await CMD;
+    const calls = [];
+    const run = (argv) => {
+      const s = argv.join(' ');
+      calls.push(s);
+      if (/pr view/.test(s) && /headRefOid/.test(s)) {
+        return { ok: true, out: prViewOut('b'.repeat(40)) };
+      }
+      return { ok: true, out: '' };
+    };
+    const r = execMerge(mergeAction(), { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, 'head-changed');
+    assert.equal(calls.some((c) => /pr merge/.test(c)), false);
+  });
+
+  it('重读 HEAD 没查成 → 拒绝合入', async () => {
+    const { execMerge } = await CMD;
+    const run = (argv) => {
+      const s = argv.join(' ');
+      if (/pr view/.test(s) && /headRefOid/.test(s)) return { ok: false, error: 'timeout' };
+      return { ok: true, out: '' };
+    };
+    const r = execMerge(mergeAction(), { say: silent, run, judge: () => ({ state: 'ok' }) });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
   });
 });
 
