@@ -11,8 +11,12 @@
 // 判别力自检问句：把 hook 从 settings 里删掉、把 symlink 断开、把输出写死成一句话，
 // 这三件事里任何一件发生，下面是否都至少有一条断言变红？
 //
-// 状态文件一律走 DAO_STATE_FILE 指到沙箱，DAO_NO_ORCA=1 关掉态标——本测试不碰
-// 本机 ~/.claude/state.json，也不改任何 Orca 卡片。
+// 状态文件一律走 DAO_STATE_FILE 指到沙箱，盘面走 DAO_BOARD_FILE 指到本测试
+// 专用的不存在路径，DAO_NO_ORCA=1 关掉态标——本测试不碰本机 ~/.claude/state.json、
+// 也不读指挥官刚写的 ~/.dao/board-stuck.json，更不改任何 Orca 卡片。
+// 生产 hook 每次非常态都会 readBoard()；不钉死盘面路径，测试结果就取决于本机
+// 有没有一份新鲜健康盘面（审官用 DAO_BOARD_FILE 指向 stalledRounds:0 的文件，
+// 把旧时长/消息兜底断言打红了 4 条）。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -25,17 +29,27 @@ const SKILL_DIR = path.join(REPO, "host", "skills", "dao-mode");
 const HOOK = path.join(SKILL_DIR, "hooks", "dao-mode.mjs");
 const SANDBOX = path.join(REPO, "_tmp", "mode-sandbox");
 const STATE = path.join(SANDBOX, "state.json");
+// 故意不创建：默认走「盘面没查成 → 时长/消息兜底」。要测盘面契约时用 opts.env 覆盖。
+const BOARD_ABSENT = path.join(SANDBOX, "board-stuck.absent.json");
 
 // 沙箱初始化（原文件在模块加载时清理重建；这里保持在 describe 的 it 运行前执行）
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 fs.mkdirSync(SANDBOX, { recursive: true });
 
-/** 跑 dao-mode.mjs 的一个子命令，状态文件固定指向沙箱。 */
+/** 跑 dao-mode.mjs 的一个子命令，状态文件与盘面都钉在沙箱（盘面默认不存在）。 */
 function mode(args, opts = {}) {
   const r = spawnSync(process.execPath, [HOOK, ...args], {
     encoding: "utf8",
     input: opts.input === undefined ? "" : opts.input,
-    env: { ...process.env, DAO_STATE_FILE: opts.state || STATE, DAO_NO_ORCA: "1", ...(opts.env || {}) },
+    env: {
+      ...process.env,
+      DAO_STATE_FILE: opts.state || STATE,
+      DAO_NO_ORCA: "1",
+      // 必须写在 process.env 之后、opts.env 之前：父进程 DAO_BOARD_FILE 不得泄漏，
+      // 单测仍可用 opts.env 注入一份真盘面。
+      DAO_BOARD_FILE: BOARD_ABSENT,
+      ...(opts.env || {}),
+    },
   });
   return { status: r.status, out: (r.stdout || "") + (r.stderr || ""), stdout: r.stdout || "" };
 }
@@ -788,6 +802,50 @@ describe('dao-mode', { concurrency: 1 }, () => {
     const crash = mode(["hook"], { input: JSON.stringify({ prompt: "x" }), state: path.join(SANDBOX, "none.json"), env: { DAO_MODE_TEST_CRASH: "1" } });
     await t.test('hook 崩溃 ⇒ exit 0 + 明说降级 + 不冒充常态（#607 补验 #488 那条）', () => {
       assert.ok(crash.status === 0 && /状态机自己出错了/.test(crash.out) && !/常态 · 无锁/.test(crash.out), `status=${crash.status} out=${crash.out.slice(0, 200)}`);
+    });
+  });
+
+  // 审官红项：mode() 以前只钉 DAO_STATE_FILE，父进程 DAO_BOARD_FILE 会漏进 hook。
+  // 指挥官写一份新鲜健康盘面，旧时长/消息兜底断言就被新契约屏蔽。
+  it('#1287 hook 测试不读宿主盘面：默认钉到不存在路径，opts.env 仍可覆盖', async (t) => {
+    const healthyPath = path.join(SANDBOX, "host-healthy-board.json");
+    fs.writeFileSync(healthyPath, JSON.stringify({
+      at: new Date().toISOString(), stalledRounds: 0, waitingUser: 0,
+    }), "utf8");
+    const oldFile = path.join(SANDBOX, "isolate-standby.json");
+    fs.writeFileSync(oldFile, JSON.stringify(stateDoc("standby", { hoursAgo: 8.5 })), "utf8");
+
+    const prev = process.env.DAO_BOARD_FILE;
+    process.env.DAO_BOARD_FILE = healthyPath;
+    try {
+      const leaked = injection("早安", oldFile);
+      await t.test('父进程 env 指向新鲜健康盘面 ⇒ 旧时长兜底仍注入', () => {
+        assert.ok(/现在必须问是否退出值守/.test(leaked.out), "→  " + leaked.out.slice(0, 300));
+      });
+      await t.test('时长超但消息未超 ⇒ 理由仍是时长（宿主盘面不得改断言）', () => {
+        assert.ok(/已值守 8\.[0-9] 小时/.test(leaked.out) && !/此间用户发了/.test(leaked.out), "→  " + leaked.out.slice(0, 300));
+      });
+    } finally {
+      if (prev === undefined) delete process.env.DAO_BOARD_FILE;
+      else process.env.DAO_BOARD_FILE = prev;
+    }
+
+    const withBoard = mode(["hook"], {
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "早安" }),
+      state: oldFile,
+      env: { DAO_BOARD_FILE: healthyPath },
+    });
+    await t.test('opts.env 覆盖为健康盘面 ⇒ 屏蔽时长兜底', () => {
+      assert.ok(!/现在必须问是否退出值守/.test(withBoard.out), "→  " + withBoard.out.slice(0, 300));
+    });
+
+    const missingBoard = mode(["hook"], {
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "早安" }),
+      state: oldFile,
+      env: { DAO_BOARD_FILE: path.join(SANDBOX, "does-not-exist-board.json") },
+    });
+    await t.test('opts.env 指向不存在盘面 ⇒ 时长兜底仍在', () => {
+      assert.ok(/现在必须问是否退出值守/.test(missingBoard.out), "→  " + missingBoard.out.slice(0, 300));
     });
   });
 
