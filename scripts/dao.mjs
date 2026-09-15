@@ -230,7 +230,7 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
-import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
@@ -385,6 +385,23 @@ export function readLiveProfiles(opts = {}) {
   }
 }
 
+/** 工人 / 自开 PR 工人职责里当前没禁用的模型才许进自动候选。没 raw 时退回合并后的禁用旗。 */
+function isEnabledWorkerLeg(m, routing) {
+  const raw = routing?.raw;
+  const id = String(m.id);
+  if (raw && typeof raw === 'object') {
+    const worker = raw['工人'];
+    if (worker && typeof worker === 'object') {
+      for (const workType of Object.keys(worker)) {
+        if (rankOrderFromTree(raw, '工人', workType).includes(id)) return true;
+      }
+    }
+    if (marshalPrLegPreference().includes(id)) return true;
+    return false;
+  }
+  return m.reviewerDisabled !== true;
+}
+
 /**
  * 与**当前审官座位**跨厂、且执行目录里真正起得来的工人腿。
  *
@@ -393,10 +410,13 @@ export function readLiveProfiles(opts = {}) {
  * 审官位闸只认当前座位或其同厂备选，而同厂闸又禁止工人与审官同厂 ⇒
  * 工人一旦与座位同厂，这张 PR 就没有合法审官了。
  *
- * 「起得来」复用 `usableReviewerOrder`（与 `resolveExecutionProfile` 同一套匹配）：
+ * 「起得来」复用 `usableReviewerOrder`（与 `resolveExecutionProfile` 同一套完整准入）：
  * profile id 或 defaultForModels 精确命中、enabled===true、availability===available、
- * 映射含糊（多条 profile）一律剔除。enabled=true 但 unverified 的腿（如
- * `devin-acp-deepseek`）会被执行器拒，不许进默认候选。
+ * backend∈{mirasim,acp} 且 agent/model 都在、映射含糊（多条 profile）一律剔除。
+ * enabled=true 但 unverified 或缺字段的腿会被执行器拒，不许进默认候选。
+ *
+ * 候选只收工人 / 自开 PR 工人职责里未禁用的模型——路由 JSON 标了 `禁用` 的
+ * （如 `deepseek-v4-flash`）即使执行目录 available 也不许被自动挑中。
  *
  * 执行目录没查成 ⇒ `{ ids: [], unscanned }`。自动默认路径必须 fail-closed。
  */
@@ -405,6 +425,7 @@ export function crossVendorWorkersFor(reviewerId, routing, opts = {}) {
   const candidates = [];
   for (const m of models) {
     if (!m || !m.id || m.id === reviewerId) continue;
+    if (!isEnabledWorkerLeg(m, routing)) continue;
     const gate = assertCrossVendor({ workerId: m.id, reviewerId, models });
     if (gate.ok) candidates.push(m.id);
   }

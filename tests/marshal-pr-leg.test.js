@@ -69,12 +69,18 @@ describe('帅位自开 PR 的工人腿', { concurrency: false }, () => {
     assert.equal(typeof one['理由'] === 'string' && one['理由'].length > 40, true, '理由要说清为什么是这条腿');
   });
 
+  const runnable = (over) => ({
+    backend: 'mirasim', agent: 'grok', model: 'x', enabled: true,
+    availability: { status: 'available' },
+    ...over,
+  });
+
   it('⑥unverified 控制样本不进可选集，即使它是偏好腿', async () => {
     const { defaultMarshalWorker, crossVendorWorkersFor } = await DAO;
     const routing = await loadRouting();
     const profiles = [
-      { id: 'grok-mirasim-native', enabled: true, availability: { status: 'unverified' }, defaultForModels: ['grok-4.6'] },
-      { id: 'cursor-acp-composer', enabled: true, availability: { status: 'available' }, defaultForModels: ['composer-2.5'] },
+      runnable({ id: 'grok-mirasim-native', availability: { status: 'unverified' }, defaultForModels: ['grok-4.6'], model: 'grok-4.6' }),
+      runnable({ id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor', defaultForModels: ['composer-2.5'], model: 'composer-2.5' }),
     ];
     const { ids } = crossVendorWorkersFor('gpt-5.6-luna', routing, { profiles });
     assert.equal(ids.includes('grok-4.6'), false, '偏好腿 unverified 也必须剔除');
@@ -87,9 +93,9 @@ describe('帅位自开 PR 的工人腿', { concurrency: false }, () => {
     const routing = await loadRouting();
     const { ids } = crossVendorWorkersFor('gpt-5.6-luna', routing, {
       profiles: [
-        { id: 'a', enabled: true, availability: { status: 'available' }, defaultForModels: ['grok-4.6'] },
-        { id: 'b', enabled: true, availability: { status: 'available' }, defaultForModels: ['grok-4.6'] },
-        { id: 'cursor-acp-composer', enabled: true, availability: { status: 'available' }, defaultForModels: ['composer-2.5'] },
+        runnable({ id: 'a', defaultForModels: ['grok-4.6'], model: 'grok-4.6' }),
+        runnable({ id: 'b', defaultForModels: ['grok-4.6'], model: 'grok-4.6' }),
+        runnable({ id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor', defaultForModels: ['composer-2.5'], model: 'composer-2.5' }),
       ],
     });
     assert.equal(ids.includes('grok-4.6'), false, '两条 profile 都声明 grok-4.6 = 含糊，执行器也会拒');
@@ -172,5 +178,35 @@ describe('帅位自开 PR 的工人腿', { concurrency: false }, () => {
     assert.match(USAGE, /省略时按当前审官座位/);
     assert.match(USAGE, /执行目录缺失 \/ 坏 JSON \/ 没权限 \/ 空目录/);
     assert.doesNotMatch(USAGE, /--model 与 --reviewer 都必填/);
+  });
+
+  it('⑩available 但缺 backend/agent/model 的 profile 不得进可选集（执行器也会拒）', async () => {
+    const { crossVendorWorkersFor } = await DAO;
+    const { resolveExecutionProfile } = await import('../scripts/lib/execution-runtime.mjs');
+    const routing = await loadRouting();
+    const profiles = [
+      { id: 'broken', enabled: true, availability: { status: 'available' }, defaultForModels: ['grok-4.6'] },
+      runnable({ id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor', defaultForModels: ['composer-2.5'], model: 'composer-2.5' }),
+    ];
+    const { ids } = crossVendorWorkersFor('gpt-5.6-luna', routing, { profiles });
+    assert.equal(ids.includes('grok-4.6'), false, '缺字段的 available profile 不许当自动候选');
+    assert.equal(ids.includes('composer-2.5'), true, '字段齐的跨厂腿留下');
+    assert.throws(() => resolveExecutionProfile({ model: 'grok-4.6' }, profiles), /invalid execution profile broken/);
+  });
+
+  it('⑪路由表已禁用的模型即使 execution profile available 也不选', async () => {
+    const { defaultMarshalWorker, crossVendorWorkersFor } = await DAO;
+    const routing = await loadRouting();
+    const disabled = routing.models.find((m) => m.id === 'deepseek-v4-flash');
+    assert.equal(disabled && disabled.reviewerDisabled, true, '夹具前提：deepseek-v4-flash 在路由表是禁用');
+    const profiles = [
+      runnable({ id: 'dspool-flash', defaultForModels: ['deepseek-v4-flash'], model: 'deepseek-v4-flash' }),
+      runnable({ id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor', defaultForModels: ['composer-2.5'], model: 'composer-2.5' }),
+    ];
+    const { ids } = crossVendorWorkersFor('gpt-5.6-luna', routing, { profiles });
+    assert.equal(ids.includes('deepseek-v4-flash'), false, '禁用模型不许进自动候选，哪怕 profile available');
+    assert.equal(ids.includes('composer-2.5'), true);
+    assert.notEqual(defaultMarshalWorker(routing, { profiles }), 'deepseek-v4-flash');
+    assert.equal(defaultMarshalWorker(routing, { profiles }), 'composer-2.5');
   });
 });
