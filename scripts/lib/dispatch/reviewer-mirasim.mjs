@@ -248,6 +248,7 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
 /**
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ * liveHead 必须是持锁后读到的当前 PR head，不许传入锁外快照。
  */
 export async function runLockedReviewerCreate({ forceNew, record, view, create, liveHead } = {}) {
   if (typeof create !== 'function') {

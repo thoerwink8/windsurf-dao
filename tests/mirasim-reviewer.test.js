@@ -578,6 +578,39 @@ describe('#886 ②一 PR 一审官（judgeReviewerSessionReuse）', () => {
     assert.equal(liveLocked.outcome, 'reused');
   });
 
+  it('锁外 liveHead 与登记相同、锁内 liveHead 已变 → 不许 reused，必须新建', async () => {
+    const { decideReviewerCreateStart, runLockedReviewerCreate } = await import(RM);
+    const rec = {
+      sessionKey: 'codex:old-head-done',
+      expectedOid: HEAD,
+    };
+    const doneView = { missing: false, phase: 'done' };
+    const outside = decideReviewerCreateStart({
+      force: false, switched: false, deadError: '',
+      record: rec, view: doneView, liveHead: HEAD,
+    });
+    assert.equal(outside.reuse.reuse, true, '锁外快照仍会判复用：' + JSON.stringify(outside.reuse));
+
+    let created = 0;
+    const locked = await runLockedReviewerCreate({
+      forceNew: false, record: rec, view: doneView, liveHead: NEW,
+      create: async () => {
+        created += 1;
+        return { ok: true, sessionKey: 'codex:new-head' };
+      },
+    });
+    assert.equal(locked.raced, false, JSON.stringify(locked));
+    assert.equal(created, 1, '锁内 head 已变必须新建，不许沿用锁外 reused');
+    assert.equal(locked.res && locked.res.sessionKey, 'codex:new-head');
+
+    const sameHead = await runLockedReviewerCreate({
+      forceNew: false, record: rec, view: doneView, liveHead: HEAD,
+      create: () => { throw new Error('同一 head 不许再起'); },
+    });
+    assert.equal(sameHead.raced, true, JSON.stringify(sameHead));
+    assert.equal(sameHead.outcome, 'reused');
+  });
+
   it('重复首审（登记里已有在役会话）→ 复用，startSession 一次都不调', async () => {
     const { mirasimWorkerDone } = await import(RM);
     const rig = reworkRig({ treeHead: HEAD });
@@ -789,6 +822,16 @@ describe('审官登记表落点必须跨树共享', () => {
     assert.equal(lockAt < createAt && createAt < writeAt, true, '起会话与写登记都要在锁内');
     assert.match(block, /const again = registry\.read\(args\.pr, ownerName\)/, '锁内复查必须带仓——只认 PR 号会把别仓会话当自己的');
     assert.match(block, /stage: 'lock'/, '锁没拿到要硬失败，不许当成可以起');
+    const lockBody = block.slice(lockAt);
+    assert.match(lockBody, /readPrHead\(/, '复用发出前必须在锁内重读 PR head');
+    assert.match(lockBody, /liveHead:\s*lockedLiveHead/, '锁内新建/复用必须用锁内读取的 head');
+    assert.equal(/liveHead:\s*liveHead/.test(lockBody), false,
+      'runLockedReviewerCreate 不许继续吃锁外 liveHead 快照');
+    const beforeLock = block.slice(0, lockAt);
+    assert.equal(/if \(decided\.reuse\.reuse\)/.test(beforeLock), false,
+      '锁外 reuse 早退会用过期 liveHead 把旧会话报成 reused');
+    assert.equal(/const liveHead = prHead/.test(beforeLock), false,
+      '锁外不得再留一份给复用/新建用的 liveHead 快照');
   });
 
   it('同一个 PR 在两棵树上问，答案必须一样（registry 只认 pr，不认 cwd）', async () => {
