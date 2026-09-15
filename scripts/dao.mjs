@@ -2300,7 +2300,7 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单号，完工 comment 只发 PR' };
   if (plan.issue) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,

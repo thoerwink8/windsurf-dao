@@ -530,7 +530,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
   // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。完工 comment 发在 PR
-  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷（#1270 返工实咬）。
+  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷
+  // （#1270 返工实咬；本单 PR #1288 同形）。有署名单号时仍发 issue + PR 两处。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;

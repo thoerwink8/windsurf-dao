@@ -195,6 +195,24 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.workerSource, 'label');
   });
 
+  it('快路 PR 无署名单号：不拒，issue 为空，完工只发 PR comment', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1288',
+      body: '返工完成：同步阻塞',
+      runGh: fakeGh({
+        title: '[cc] fix(dao-check): 测试孤儿',
+        body: '快路无署名',
+        labels: ['model/claude-opus-5', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [{ id: 1, body: '判定：红 1 项' }],
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.issue, null);
+    assert.equal(got.round, 'rework');
+    assert.equal(got.shouldCreate, false);
+  });
+
   it('快路无署名单：plan 不拒，issue 空，完工 comment 走 PR', async () => {
     const { planWorkerDone } = await WD;
     const got = planWorkerDone({

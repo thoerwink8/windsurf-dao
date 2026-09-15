@@ -143,6 +143,12 @@ import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-chec
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import {
+  createChildRegistry, suiteTimeoutMs, timeoutNote, SUITE_TIMEOUT_ENV,
+  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
+  readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
+  formatOwnerToken,
+} from './lib/test-child-guard.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   judgeHarvest, inspectHarvestFixtures,
@@ -277,6 +283,26 @@ function parseTapSummary(output) {
 // 池宽 6：再大收益递减且增加临时目录/端口互相踩踏的概率。输出仍按文件名序打印，与串行时代一致。
 const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
 
+// 起过的测试子进程都登记在这儿，dao-check 一走就全杀掉。
+// 2026-09-15 实咬：不登记的后果是一个 `node --test` 孤儿吃掉 5.98 GB 活了 35 小时。
+// 判据与两层分工见 scripts/lib/test-child-guard.mjs 头部。
+const testChildren = createChildRegistry({ listProcesses: listLinuxProcesses });
+const OWNER_STARTTIME = readProcStarttime(process.pid) || '';
+const OWNER_BOOT = readProcBootId() || '';
+const OWNER_TOKEN_VALUE = formatOwnerToken({ bootId: OWNER_BOOT, starttime: OWNER_STARTTIME });
+let childCleanupArmed = false;
+function armTestChildCleanup() {
+  if (childCleanupArmed) return;
+  childCleanupArmed = true;
+  // 'exit' 里只许同步调用——killAll 全同步，就是为了能挂在这里。
+  process.on('exit', () => { testChildren.killAll('SIGKILL'); });
+  // 装了 SIGINT/SIGTERM 处理器就没有默认终止了，必须自己退。
+  // 退出码沿用 shell 惯例（128+信号号），别让上游把「被打断」读成「检查通过」。
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(sig, () => { testChildren.killAll('SIGKILL'); process.exit(code); });
+  }
+}
+
 function runOneSuite(dir, f) {
   return new Promise((resolveOne) => {
     const p = join(dir, f);
@@ -289,13 +315,27 @@ function runOneSuite(dir, f) {
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      // 第二道预加载：父进程被 SIGKILL 时上面那套超时跟着一起没了，只有子进程
+      // 自己能发现「爹没了」。判据见 tests/helpers/parent-alive.mjs。
+      const orphanGuard = join(ROOT, 'tests', 'helpers', 'parent-alive.mjs');
       const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
       const env = {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+        [OWNER_PID_ENV]: String(process.pid),
+        [OWNER_TOKEN_ENV]: OWNER_TOKEN_VALUE,
+        [OWNER_STARTTIME_ENV]: OWNER_STARTTIME,
+        [OWNER_BOOT_ENV]: OWNER_BOOT,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href} --import ${pathToFileURL(orphanGuard).href}`.trim(),
       };
+      // **不要加 detached**（2026-09-15 实测否掉的第一版）：它让每套测试自成进程组，
+      // 而 acp-runtime.mjs:109 正是用 `pgid === pid` 判「这个进程是不是一个组的头」。
+      // 加了之后 acp-runtime / execution-runtime 在有负载时随机报红：master 三连绿、
+      // 带 detached 四跑两红、去掉后三连绿。组杀换来的那点覆盖面不值这个价——
+      // 超时按 ppid 树清后代，跳过 pgid===pid 的组头（ACP）。
+      armTestChildCleanup();
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
+      testChildren.add(child.pid, { label: f });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -303,7 +343,23 @@ function runOneSuite(dir, f) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const t0 = Date.now();
-    const finish = (extra) => resolveOne({ f, ...extra });
+    const { ms: budgetMs } = suiteTimeoutMs(process.env);
+    let timedOut = false;
+    let watchdog = null;
+    const finish = (extra) => {
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+      testChildren.remove(child.pid);
+      resolveOne({ f, timedOut, ...extra });
+    };
+    if (budgetMs > 0) {
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        out += timeoutNote(f, budgetMs);
+        // 杀 runner 及其非 detached 后代。dao-check 自己还活着，parent-alive
+        // 不会让孙子自杀——寿命归属在这一刀。ACP 等组头跳过。
+        try { killProcessTree(child.pid, { listProcesses: listLinuxProcesses }); } catch { /* 已经没了 */ }
+      }, budgetMs);
+    }
     child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
     child.on('close', (code) => finish({ status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
@@ -382,9 +438,15 @@ async function runTests() {
   }
   await Promise.all(Array.from({ length: Math.min(TEST_POOL, suites.length) }, worker));
   results.sort((a, b) => (a.f < b.f ? -1 : 1));
-  for (const { f, status, out } of results) {
+  for (const { f, status, out, timedOut } of results) {
     const tap = parseTapSummary(out);
-    if (status === 0) {
+    if (timedOut) {
+      // 「这次没测到」不是「测试红」：下一步不一样，一个改代码、一个查为什么挂住。
+      const { ms: budgetMs } = suiteTimeoutMs(process.env);
+      fail(`测试没查成：${f}（跑满 ${(budgetMs / 1000).toFixed(0)}s 被中止）`,
+        `这套挂住了，本次拿不到它的结论。复现：node --test tests/${f}；确需更久：${SUITE_TIMEOUT_ENV}=<毫秒>`,
+        out.slice(-400));
+    } else if (status === 0) {
       // 零样本报红：node --test 跑了但一条测试都没扫到 = 本次没查成，不是绿。
       if (tap.tests === 0 || tap.tests == null) {
         fail(`测试没查成：${f}`, 'node --test 跑了但 0 条测试（发现规则/文件形态变了）', out.slice(0, 200));
