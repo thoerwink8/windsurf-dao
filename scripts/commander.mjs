@@ -1765,7 +1765,10 @@ export function drainPayloadOf(runResult) {
   if (!runResult) return { ok: false };
   if (runResult.dryRun === true) return { ok: true, dryRun: true };
   const doc = parseDaoResult(runResult.out);
-  return doc ? { ...doc, ok: runResult.ok === true && doc.ok === true } : { ok: runResult.ok === true };
+  if (doc) return { ...doc, ok: runResult.ok === true && doc.ok === true };
+  // 无结构化回执：比较键用完整 stderr/stdout。runCmd.error 是人读摘要（已截），不许当键。
+  const raw = runResult.stderr || runResult.out;
+  return { ok: runResult.ok === true, ...(raw ? { error: String(raw) } : {}) };
 }
 
 function recordDrainAttempt(state, action, payload) {

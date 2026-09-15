@@ -952,7 +952,7 @@ export {
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
-  planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  planReviewPendingDrain, consumeReviewPending, drainReviewPending, attachReceiptFromSpawn,
   countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
   REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';

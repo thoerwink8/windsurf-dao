@@ -390,6 +390,52 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
     assert.equal(v.ok, false);
     assert.equal(v.code, 'hopeless');
   });
+
+  it('review-pending-drain 无 JSON/超时 fallback：前 400 字同、后文不同不判 hopeless', async () => {
+    const { attachReceiptFromSpawn, drainReviewPending } = await import(
+      'file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/')
+    );
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    const b = 'E'.repeat(400) + 'B';
+    const ticket = { pr: '905', reviewer: 'gpt-5.6-sol' };
+    const shapes = [
+      { label: '无 JSON', spawned: (stderr) => ({ status: 1, stdout: 'not-json timeout noise', stderr }) },
+      { label: '超时', spawned: (stderr) => ({
+        status: null, signal: 'SIGTERM', stdout: '', stderr,
+        error: { message: 'spawnSync ETIMEDOUT' },
+      }) },
+    ];
+    for (const { label, spawned } of shapes) {
+      const through = (stderr) => {
+        const attached = attachReceiptFromSpawn(spawned(stderr));
+        assert.equal(attached.ok, false, label);
+        assert.equal(attached.error, stderr, label + '：回执必须留下完整 stderr，不许截成 400 个 E');
+        const drained = drainReviewPending({ tickets: [ticket], attach: () => attached });
+        assert.equal(drained.ok, false, label);
+        assert.match(drained.error, new RegExp(stderr.slice(-1) + '$'), label + '：顶层 error 必须带上后缀');
+        // dao.mjs fail() 把 drained.error 写进 JSON；指挥官 drainPayloadOf 再抽出来。
+        return { ok: false, error: drained.error };
+      };
+      const pa = through(a);
+      const pb = through(b);
+      assert.equal(drainErrorText(pa).includes(a), true, label);
+      assert.notEqual(drainErrorText(pa), drainErrorText(pb), label);
+      assert.ok(drainErrorText(pa).length > 400, label);
+      let r = applyDrainLedger({
+        ledger: {}, pr: 905, head: null, payload: pa, nowIso: OLD_AT,
+      });
+      r = applyDrainLedger({
+        ledger: r.ledger, pr: 905, head: null, payload: pb, nowIso: OLD_AT,
+      });
+      const rec = r.ledger[RK.drain(905, null)];
+      assert.equal(rec.sameErrorRounds, 1, label + '：截 400 字会把这两句揉成同错');
+      assert.ok(String(rec.lastError).endsWith('B'), label);
+      const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+      assert.equal(v.ok, true, label + ' 不许判 hopeless：' + JSON.stringify(v));
+      assert.notEqual(v.code, 'hopeless', label);
+    }
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {
@@ -1032,9 +1078,23 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     assert.ok(!/'--force'/.test(drain), '自动化 drain 不许 --force');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(drain), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
     const daoSrc = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
-    const drainCmd = daoSrc.slice(daoSrc.indexOf('async function cmdReviewPendingDrain'), daoSrc.indexOf('async function cmdReviewPendingDrain') + 2200);
+    const drainCmdStart = daoSrc.indexOf('async function cmdReviewPendingDrain');
+    const drainCmdEnd = daoSrc.indexOf('function cmdSend', drainCmdStart);
+    const drainCmd = daoSrc.slice(drainCmdStart, drainCmdEnd > drainCmdStart ? drainCmdEnd : drainCmdStart + 4000);
     assert.match(drainCmd, /args\.force/, '不过上限只认 --force');
     assert.doesNotMatch(drainCmd, /args\.pr\s*\n\s*\? \{ ok: true/, '--pr 不许再当逃生口绕上限');
+    assert.match(drainCmd, /attachReceiptFromSpawn/, '无 JSON/超时必须走共用回执，不许内联截断');
+    assert.doesNotMatch(drainCmd, /slice\s*\(\s*0\s*,\s*400\s*\)/, 'attach fallback 不许截 400 字当比较键');
+    const rpSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs'), 'utf8');
+    const attachI = rpSrc.indexOf('export function attachReceiptFromSpawn');
+    assert.ok(attachI > -1, '找不到 attachReceiptFromSpawn');
+    const attachFn = rpSrc.slice(attachI, rpSrc.indexOf('export function consumeReviewPending', attachI));
+    assert.doesNotMatch(attachFn, /slice\s*\(/, '回执函数自己不许截字');
+    const cmdSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const payloadI = cmdSrc.indexOf('export function drainPayloadOf');
+    const payloadFn = cmdSrc.slice(payloadI, payloadI + 700);
+    assert.match(payloadFn, /runResult\.stderr \|\| runResult\.out/, '无 JSON 时比较键走完整 stderr/out');
+    assert.doesNotMatch(payloadFn, /runResult\.error/, 'runCmd.error 是人读摘要，不许当比较键');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {

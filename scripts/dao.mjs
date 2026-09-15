@@ -150,6 +150,7 @@ import {
   writeReviewPending,
   listReviewPending,
   drainReviewPending,
+  attachReceiptFromSpawn,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
@@ -1583,17 +1584,8 @@ async function cmdReviewPendingDrain(args) {
         cwd: ROOT,
         timeout: 600000,
       });
-      let json = null;
-      try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
-      if (spawned.error || (spawned.status !== 0 && spawned.status != null) || !json || json.ok !== true) {
-        return {
-          ok: false,
-          error: (json && json.error)
-            || String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`).trim().slice(0, 400),
-          json,
-        };
-      }
-      return { ok: true, json };
+      // 无 JSON / 超时 / 信号：完整 stderr 进比较键，不在这里截 400 字。
+      return attachReceiptFromSpawn(spawned);
     },
   });
   if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
