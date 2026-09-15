@@ -2300,16 +2300,17 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  const postedIssue = plan.issue
-    ? postCommentOnce({
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
+  if (plan.issue) {
+    postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
       writeIssue: applyIssueWrite, host: 'worker-done',
       // 跨仓交卷必须把 owner/name 交给网关。不传会落到默认 windsurf-dao，正是本单禁止的回落。
       repo: targetRepo.ownerName || undefined,
       idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
-    })
-    : { ok: true, skipped: true, reason: 'no-issue' };
-  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+    });
+    if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
+  }
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 

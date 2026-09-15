@@ -1491,8 +1491,17 @@ function collectCandidates(situation) {
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
-    if (!a.scanned) {
-      // 「没查成」与「查过确实没红」必须分开。reviews-missing 沿用既有契约静默跳过；
+    // 2026-09-14 实咬（#1265/#1266 静默永不送审，挂了 4 小时没人叫审官）：
+    // `reviews-missing` 有两种来源，处置**相反**，原来是同一格：
+    //   ① 这张 PR 的 reviews **没抓到**（网络/接口失败）——按既有契约静默跳过，不臆测；
+    //   ② 这张 PR **主动没去抓**（scanPrReviews 跳过 draft，不进 byPr）——这不是「没抓到」，
+    //      是「**零判定**、该叫审官了」。当年跳 draft 是为了省额度，可省下来的代价是
+    //      下游把它读成「没查成」并静默 continue，于是 draft PR 永远不会进复审队列，
+    //      而**唯一**能把它变 non-draft 的收口泵又要等 24 小时超龄——两条路都堵着。
+    // 判据：`reviews.skipped` 里点名了这张 PR ⇒ 按「零判定」走（它必然是 draft）。
+    const skippedByScan = reviews && Array.isArray(reviews.skipped)
+      && reviews.skipped.some((n) => Number(n) === Number(pr.number));
+    if (!a.scanned && !(a.reason === 'reviews-missing' && skippedByScan)) {
       // head / commit_id 没查成走 fail-visible 的 unscanned escalate（escalate 对 unscanned 是静默进 status，不开单不刷屏）。
       if (a.reason !== 'reviews-missing') {
         const headMissing = a.reason === 'head-unscanned';
@@ -1517,7 +1526,19 @@ function collectCandidates(situation) {
     // 所以这里不记 ok：**走到这个分支本身就是「上一次没落地」的证据**（判定真落了 a.atHead 就 > 0，
     // 根本进不来）。只记 tries，并给上一票一段宽限期——审官正在看的时候别每 20 分钟重发一张。
     // 试满仍无判定 ⇒ 停手报帅，不死循环。
-    if (a.atHead === 0) {
+    // 零判定有两种走法，判据都是「当前 head 缺判定」，做法都是写一张复审待办票交给 drain：
+    //   · 历史上审过、这批判定全打在旧 commit 上 → 复审；
+    //   · 一条 review 都没有（含 scan 主动跳过的 draft）→ 首审。
+    // 别拆成两条规则。`skippedByScan` 那种没 scanned 但**确实零判定**，一样要走进来。
+    if (a.atHead === 0 || (skippedByScan && a.reason === 'reviews-missing')) {
+      // 这一步的 head 取 a.head（判据用的是它），但**没 scanned 时 a.head 是 undefined**——
+      // 跳过 draft 那种零判定正是没 scanned，于是 a.head 为空，后面 takeFinishSlot 之后
+      // 产出的动作 head:undefined，执行侧写票时 head.oid=null，票上没 head，重试键也对不上。
+      // 落回 PR 自己的 headRefOid：判据源头本来就是它（analyzeReviewsAtHead 的第二个入参）。
+      const headForAction = a.head || (typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '');
+      // 票上的 head、复审账键、给人看的文案必须用同一份 head。a.head 在
+      // reviews-missing 时是 undefined，用它拼 rrKey 会得到 rereview:N@undefined@epoch，
+      // 跟「同一 PR + 同一 head」对不上（2026-09-15 审官红项）。
       // #971 / #1116：缺 reviewer/ 时先补 PR 自己的标签。等宽限期不会让标签自己长出来；
       // 执行侧 requestRereview 没 reviewer 会拒，票写出去也是空转。不读 issue。
       //
@@ -1539,7 +1560,7 @@ function collectCandidates(situation) {
         if (!prHasStuckLabel(pr)) {
           const issueNo = attributedIssueNumber(pr);
           out.push(withNeeds(esc(
-            `PR #${pr.number} 交卷可合、当前 head ${String(a.head).slice(0, 8)} 零判定，但叫不动审官：`
+            `PR #${pr.number} 交卷可合、当前 head ${String(headForAction).slice(0, 8)} 零判定，但叫不动审官：`
             + `PR 上取不到 reviewer/ 标签，自动补标也补不上。`
             + `这张 PR 会一直挂到有人给 PR 打上 reviewer/ 为止（不读 issue、不猜）`,
             { reason: 'reviewer-label-missing', pr: pr.number, issue: issueNo },
@@ -1547,23 +1568,26 @@ function collectCandidates(situation) {
         }
         continue;
       }
-      const rrKey = rereviewBudgetKey(pr.number, a.head, staleRedAt);
+      const rrKey = rereviewBudgetKey(pr.number, headForAction, staleRedAt);
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
       if (prev && Number.isFinite(ageMin) && ageMin < REREVIEW_GRACE_MIN) continue; // 上一票还在宽限期，审官可能正在看
-      const firstRound = a.judgedTotal === 0;
+      const firstRound = a.scanned ? a.judgedTotal === 0 : true;
+      // 零判定有两种来源，措辞必须分开——`a.judgedTotal` 在没 scanned 时是 undefined，
+      // 原来的三元式会写出「PR #N 的 undefined 条判定都打在旧 commit 上」这种把人带沟里的话
+      // （2026-09-14 自测当场看到）。说清「一条 review 都没有」和「判定都过期了」是两回事。
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
       if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
         const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
-          pr: pr.number, verb: 'rereview', tries, head: a.head,
+          pr: pr.number, verb: 'rereview', tries, head: headForAction,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
           why: hopeless
             ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${a.head.slice(0, 8)} 判定仍是 0——停手交人`,
+            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`,
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;
@@ -1571,14 +1595,16 @@ function collectCandidates(situation) {
       // 复审也是起审官会话，同样领名额（理由同 attach-reviewer）。
       if (!takeFinishSlot()) { reportAdmission(N['attach-reviewer']); continue; }
       out.push(withNeeds({
-        kind: 'rereview', pr: pr.number, head: a.head,
+        kind: 'rereview', pr: pr.number, head: headForAction,
         issue: attributedIssueNumber(pr),
         reviewer,
         stateKey: rrKey,
         tries: tries + 1,
         why: firstRound
-          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${a.head.slice(0, 8)} 没人审——叫审官`
-          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${a.head.slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+          ? `PR #${pr.number} 交卷可合但一条判定都没有，当前 head ${String(headForAction).slice(0, 8)} 没人审——叫审官`
+          : `PR #${pr.number} 的 ${a.judgedTotal} 条判定都打在旧 commit 上，当前 head ${String(headForAction).slice(0, 8)} 没人审——叫审官复审（第 ${tries + 1} 次）`,
+        // 票上写清这一票为什么存在：首审 / 复审 / **scan 跳过没抓**（后者是真断链，进轮次账要留痕）
+        ...(skippedByScan ? { scanSkipped: true } : {}),
       }, N['attach-reviewer']));
       continue;
     }
