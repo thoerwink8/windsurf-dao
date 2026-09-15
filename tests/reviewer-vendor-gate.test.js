@@ -491,10 +491,12 @@ describe('#679 起审官同厂硬闸', () => {
 
   it('CLI：dispatch 预检不再闸同厂（2026-08-23 拍板），闸在 reviewer-attach/create', async (t) => {
     function dispatch(model, reviewer) {
+      // 本 it 里别的 spawn 都带了 DAO_GH_FAKE，只有这个函数漏了——于是 --issue 1
+      // 的消歧门去读真 issue，一路打到 api.github.com（2026-09-15 逐文件测出 2 次）。
       return spawnSync(process.execPath, [
         CLI, 'dispatch', '--executor', 'mirasim', '--model', model, '--reviewer', reviewer, '--confirm',
         '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '1', '--dry-run',
-      ], { encoding: 'utf8', cwd: REPO });
+      ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     }
     const same = dispatch('grok-4.6', 'grok-4.6');
     const pSame = payload(same);
