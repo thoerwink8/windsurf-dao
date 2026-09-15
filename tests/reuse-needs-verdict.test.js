@@ -186,8 +186,18 @@ describe('生产接线（正控：漏一处就等于没修）', () => {
     assert.match(DAO, /verdictOnHead: verdict/);
   });
 
-  it('锁内复查也拿到同一份 verdict（#1293 审官 P1：漏传则锁内落回复用）', () => {
-    assert.match(DAO, /runLockedReviewerCreate\(\{\s*forceNew, record: againRecord, view: racePeek\.view, verdictOnHead: verdict,/);
+  it('锁内复查用持锁后重读的 lockedVerdict，不是锁外那份（#1293 二审 P1：等锁期间 head 变了会误判 reused）', () => {
+    // 锁内必须重新算：judgeVerdictOnHead 的第二次调用出现在 withWorktreeLock 之后，
+    // 且 runLockedReviewerCreate 拿的是 lockedVerdict 而不是锁外的 verdict。
+    const lockAt = DAO.indexOf('withWorktreeLock(async () => {');
+    const recomputeAt = DAO.indexOf('const lockedVerdict = ');
+    const callAt = DAO.indexOf('runLockedReviewerCreate({');
+    assert.ok(lockAt > -1 && recomputeAt > -1 && callAt > -1, '锁内重读的结构没了——本闸判据已失效，不是通过');
+    assert.ok(recomputeAt > lockAt, 'lockedVerdict 必须在锁内算（等锁期间 head 可能变了）');
+    assert.ok(recomputeAt < callAt, '先重读再判 race');
+    assert.match(DAO, /runLockedReviewerCreate\(\{\s*forceNew, record: againRecord, view: racePeek\.view, verdictOnHead: lockedVerdict,/);
+    // forceNew 短路时不许白打两次 gh（judgeReviewerCreateRace 根本不看 verdictOnHead）
+    assert.match(DAO, /const lockedVerdict = \(!forceNew && againRecord && againRecord\.sessionKey\)/);
   });
 
   it('对账目标从 GitHub 读当前 headRefOid，不读登记里的 expectedOid（#1293 审官 P1）', () => {

@@ -2186,8 +2186,16 @@ async function cmdReviewerCreateMirasim(args) {
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
+    // #1293 审官 P1（第二轮实咬）：锁外那份 verdict 在等锁期间可能已过期——
+    // 锁外快照是「旧 head 有判定（true）」，等锁期间 PR 推了新 head 而新 head 还没判定，
+    // 拿旧值判 race 会把终态会话误报 reused，新提交就没有审官。
+    // 复用判定必须在持锁后重读当前 headRefOid + reviews，用这份锁内快照。
+    // forceNew 为真时 judgeReviewerCreateRace 短路、根本不看 verdictOnHead，省掉这两次 gh 调用。
+    const lockedVerdict = (!forceNew && againRecord && againRecord.sessionKey)
+      ? judgeVerdictOnHead(args.pr, againRecord, targetRepo)
+      : null;
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: verdict,
+      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: lockedVerdict,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
