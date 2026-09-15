@@ -188,6 +188,7 @@
 - [x] 指挥官对 `incomplete` 产 `stop-session`（审官落判定后一轮说完即 incomplete）
 - [x] 返工/冲突改在原树 `dao.mjs start`，不新 `dispatch`
 - [x] 验收：交卷后 `/proc` 不再有该树的 pi/codex/node 会话进程——#1134 合入后该树 0 进程
+- [x] 指挥官对照 `/proc` 与会话名单：名单没有活会话、树上还有会话进程 → `reap-orphan`（SIGTERM）。名单没查成 / 活会话缺 cwd → 不杀。#1142 落后地基已换，在现行代码重做（本条）
 
 ### 5. 交卷入队 + 同一准入
 
