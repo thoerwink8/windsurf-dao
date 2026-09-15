@@ -17,8 +17,10 @@
 //      跟着父进程一起没了，只有子进程自己发现「爹没了」才救得回来。
 //      主线程定时器管不到卡在 spawnSync 里的进程（事件循环不转，仓内测试也并非
 //      每个 spawnSync 都有 timeout）。② 给 owner 的亲儿子另起旁路看门狗
-//      （owner-watchdog.py）：独立事件循环，同步阻塞也杀得掉。不把
-//      PR_SET_PDEATHSIG 打在 node 本体上——ACP 会话必须活过发起进程。
+//      （owner-watchdog.py）：独立事件循环，同步阻塞也杀得掉。owner 死后
+//      按 ppid 树清 runner 的非 detached 后代（跳过 pgid===pid 的 ACP），
+//      不把「只杀 runner」当成整棵树已清。不把 PR_SET_PDEATHSIG 打在 node
+//      本体上——ACP 会话必须活过发起进程。
 //
 // owner 身份是 pid + /proc starttime（+ boot_id）。cmdline 子串「dao-check」
 // 不是身份：路径/参数碰巧带这四个字的新进程会把 pid 复用误判成旧 owner。
@@ -149,8 +151,11 @@ export function createChildRegistry({ kill, listProcesses } = {}) {
 // 所以子进程自己也要能判「爹还在不在」。
 //
 // 不能只比 `process.ppid === 1`：孙子进程（测试 spawn 出去的 CLI）的 ppid 是它爹，
-// 爹是测试进程，测试进程死了它才变 1。判据统一成「那个**特定的** dao-check 还在不在」，
-// 任意深度的后代都适用（DAO_CHECK_OWNER_PID 随 env 一路继承）。
+// 爹是测试进程，测试进程死了它才变 1。判据统一成「那个**特定的** dao-check 还在不在」。
+// NODE_OPTIONS 会一路继承，但仓内有测试显式覆盖它（spawnSync 的 env 只留 PATH），
+// 那些后代装不上 parent-alive，不能靠「env 继承」声称任意深度已经成立。
+// owner-death 路径由亲儿子上的旁路看门狗按 ppid 树清掉完整的非 detached 后代
+// （跳过 pgid===pid 的 ACP），这才是任意深度。
 
 export const OWNER_PID_ENV = 'DAO_CHECK_OWNER_PID';
 export const OWNER_TOKEN_ENV = 'DAO_CHECK_OWNER_TOKEN';

@@ -26,6 +26,43 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 const DAO_CHECK = readFileSync(join(REPO, 'scripts', 'dao-check.mjs'), 'utf8');
 
+function pidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; } catch { return false; }
+}
+
+function waitMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function reapPids(pids) {
+  const roots = [...new Set((pids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  let extra = [];
+  try {
+    const procs = listLinuxProcesses();
+    for (const root of roots) extra = extra.concat(descendantPids(root, procs, { skipGroupLeaders: false }));
+  } catch { extra = []; }
+  const seen = new Set();
+  for (const pid of [...extra, ...roots]) {
+    const n = Number(pid);
+    if (!Number.isInteger(n) || n <= 0 || seen.has(n) || n === process.pid || n === process.ppid) continue;
+    seen.add(n);
+    try { process.kill(n, 'SIGKILL'); } catch { /* 已经没了 */ }
+  }
+}
+
+function reapAfter(t, getPids) {
+  t.after(async () => {
+    const pids = typeof getPids === 'function' ? getPids() : getPids;
+    reapPids(pids);
+    const t0 = Date.now();
+    const live = () => (typeof getPids === 'function' ? getPids() : pids || [])
+      .map(Number).filter((n) => pidAlive(n));
+    while (live().length && Date.now() - t0 < 2000) await waitMs(50);
+  });
+}
+
 describe('每套超时的刻度', () => {
   it('不设环境变量 = 默认 10 分钟', () => {
     assert.deepEqual(suiteTimeoutMs({}), { ms: DEFAULT_SUITE_TIMEOUT_MS, source: 'default' });
@@ -149,18 +186,18 @@ describe('子进程注册表', () => {
     assert.deepEqual(sent, [111]);
   });
 
-  it('真去杀一个真的进程：登记 → killAll → 它真的没了', async () => {
+  it('真去杀一个真的进程：登记 → killAll → 它真的没了', async (t) => {
     const victim = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
-    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    assert.equal(alive(victim.pid), true, '现在应该还活着——不然这条测试什么都没验到');
+    reapAfter(t, () => [victim.pid]);
+    assert.equal(pidAlive(victim.pid), true, '现在应该还活着——不然这条测试什么都没验到');
 
     const r = createChildRegistry();
     r.add(victim.pid);
     const got = r.killAll('SIGKILL');
     assert.deepEqual(got.killed, [victim.pid]);
 
-    await new Promise((res) => setTimeout(res, 300));
-    assert.equal(alive(victim.pid), false);
+    await waitMs(300);
+    assert.equal(pidAlive(victim.pid), false);
   });
 });
 
@@ -321,7 +358,7 @@ describe('预加载闸装上之后的真实行为', () => {
   });
 });
 
-test('owner 被 SIGKILL 时，卡在无 timeout 的同步调用里也必须退', { timeout: 15000 }, async () => {
+test('owner 被 SIGKILL 时，卡在无 timeout 的同步调用里也必须退', { timeout: 15000 }, async (t) => {
   // 审官红项的判别实验：主线程定时器在同步子进程调用里排不上。
   // 树要跟生产一样——owner 是孩子的亲爹，不是兄弟。看门狗只给亲儿子装。
   const preload = pathToFileURL(join(REPO, 'tests', 'helpers', 'parent-alive.mjs')).href;
@@ -330,37 +367,35 @@ test('owner 被 SIGKILL 时，卡在无 timeout 的同步调用里也必须退',
   delete env.NODE_TEST_CONTEXT;
   env.NODE_OPTIONS = '';
 
+  const tracked = [];
+  reapAfter(t, () => tracked);
   const owner = spawn(process.execPath, [ownerPath], {
     stdio: ['ignore', 'pipe', 'ignore'],
     env,
   });
+  tracked.push(owner.pid);
   let out = '';
   owner.stdout.on('data', (d) => { out += d; });
-
-  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let childPid = 0;
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     childPid = Number(String(out).trim());
     if (Number.isInteger(childPid) && childPid > 0) break;
-    await wait(50);
+    await waitMs(50);
   }
   assert.equal(Number.isInteger(childPid), true, `owner 没报出孩子 pid（stdout=${JSON.stringify(out)}）`);
   assert.equal(childPid > 0, true);
+  tracked.push(childPid);
 
-  await wait(500);
-  assert.equal(alive(owner.pid), true, 'owner 现在该活着——不然 SIGKILL 验的是空气');
-  assert.equal(alive(childPid), true, '孩子现在该卡在同步调用里——不然这条什么都没验到');
+  await waitMs(500);
+  assert.equal(pidAlive(owner.pid), true, 'owner 现在该活着——不然 SIGKILL 验的是空气');
+  assert.equal(pidAlive(childPid), true, '孩子现在该卡在同步调用里——不然这条什么都没验到');
 
   process.kill(owner.pid, 'SIGKILL');
   const t0 = Date.now();
-  while (alive(childPid) && Date.now() - t0 < 3000) await wait(50);
-  assert.equal(alive(childPid), false, `owner SIGKILL 后 3s 孩子还在（elapsed ${Date.now() - t0}ms）——同步阻塞期间的清理没生效`);
-
-  try { process.kill(owner.pid, 'SIGKILL'); } catch { /* 已经没了 */ }
-  try { process.kill(childPid, 'SIGKILL'); } catch { /* 已经没了 */ }
+  while (pidAlive(childPid) && Date.now() - t0 < 3000) await waitMs(50);
+  assert.equal(pidAlive(childPid), false, `owner SIGKILL 后 3s 孩子还在（elapsed ${Date.now() - t0}ms）——同步阻塞期间的清理没生效`);
 });
 
 describe('dao-check 里的接线（正控：接错了这几条要红）', () => {
@@ -415,6 +450,17 @@ describe('dao-check 里的接线（正控：接错了这几条要红）', () => 
     assert.doesNotMatch(src, /process\.dlopen/);
     assert.doesNotMatch(src, /每个 spawnSync 都自带 timeout/);
   });
+
+  it('owner-death 路径清的是非 detached 整棵树，不只 runner 一个 pid', () => {
+    const wd = readFileSync(join(REPO, 'tests', 'helpers', 'owner-watchdog.py'), 'utf8');
+    assert.match(wd, /_kill_tree/);
+    assert.match(wd, /_descendant_pids/);
+    assert.match(wd, /skip_group_leaders/);
+    const src = readFileSync(join(REPO, 'tests', 'helpers', 'parent-alive.mjs'), 'utf8');
+    assert.match(src, /killProcessTree/);
+    const guard = readFileSync(join(REPO, 'scripts', 'lib', 'test-child-guard.mjs'), 'utf8');
+    assert.doesNotMatch(guard, /任意深度的后代都适用（DAO_CHECK_OWNER_PID 随 env 一路继承）/);
+  });
 });
 
 describe('按套子清后代', () => {
@@ -453,47 +499,54 @@ describe('按套子清后代', () => {
   });
 });
 
-test('看门狗真的砍得掉挂住的套子（端到端）', { timeout: 30000 }, async () => {
+test('看门狗真的砍得掉挂住的套子（端到端）', { timeout: 30000 }, async (t) => {
   // 造一套永远不结束的测试，照 runOneSuite 的形状起它，再让注册表动手。
   // 判据是「进程真的没了」，不是「函数返回了」。
   // （跑整个 dao-check 来验这件事要两分钟，太贵；那一层的证据在 PR 正文的违规样本里。）
   const dir = mkdtempSync(join(tmpdir(), 'dao-hang-'));
-  try {
-    const hang = join(dir, 'hang.test.js');
-    // 空转的 Promise 不够：事件循环一空 node 自己就退了，那样测的是「它自己死了」。
-    // 挂一个长定时器把循环撑住，才是真的挂住。
-    writeFileSync(hang, "import {test} from 'node:test';\ntest('永不结束', async () => { await new Promise(() => { setTimeout(() => {}, 3600000); }); });\n");
-
-    // NODE_TEST_CONTEXT 必须清掉：node 的测试运行器给子进程设了它，
-    // 里层 `node --test` 继承到之后会以为自己就是那个被跑的测试文件，秒退 0。
-    // 不清的话这条测试测的是「它自己死了」，跟看门狗一点关系都没有。
-    const env = { ...process.env };
-    delete env.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', hang], {
-      stdio: 'ignore', cwd: REPO, env,
-    });
-    const r = createChildRegistry();
-    r.add(child.pid);
-
-    await new Promise((res) => setTimeout(res, 800));
-    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    assert.equal(alive(child.pid), true, '挂住的套子现在应该还活着——不然这条测试什么都没验到');
-
-    r.killAll('SIGKILL');
-    await new Promise((res) => setTimeout(res, 400));
-    assert.equal(alive(child.pid), false, '看门狗该把它杀掉');
-  } finally {
+  const tracked = [];
+  t.after(async () => {
+    reapPids(tracked);
+    await waitMs(200);
     rmSync(dir, { recursive: true, force: true });
-  }
+  });
+  const hang = join(dir, 'hang.test.js');
+  // 空转的 Promise 不够：事件循环一空 node 自己就退了，那样测的是「它自己死了」。
+  // 挂一个长定时器把循环撑住，才是真的挂住。
+  writeFileSync(hang, "import {test} from 'node:test';\ntest('永不结束', async () => { await new Promise(() => { setTimeout(() => {}, 3600000); }); });\n");
+
+  // NODE_TEST_CONTEXT 必须清掉：node 的测试运行器给子进程设了它，
+  // 里层 `node --test` 继承到之后会以为自己就是那个被跑的测试文件，秒退 0。
+  // 不清的话这条测试测的是「它自己死了」，跟看门狗一点关系都没有。
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const child = spawn(process.execPath, ['--test', '--test-reporter=tap', hang], {
+    stdio: 'ignore', cwd: REPO, env,
+  });
+  tracked.push(child.pid);
+  const r = createChildRegistry();
+  r.add(child.pid);
+
+  await waitMs(800);
+  assert.equal(pidAlive(child.pid), true, '挂住的套子现在应该还活着——不然这条测试什么都没验到');
+
+  r.killAll('SIGKILL');
+  await waitMs(400);
+  assert.equal(pidAlive(child.pid), false, '看门狗该把它杀掉');
 });
 
-test('套子超时后非 detached 后代必须没了，刻意 detached 的留下', { timeout: 20000 }, async () => {
+test('套子超时后非 detached 后代必须没了，刻意 detached 的留下', { timeout: 20000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dao-hang-tree-'));
   const pidFile = join(dir, 'pids.json');
-  let detachedPid = 0;
-  try {
-    const hang = join(dir, 'hang-tree.test.js');
-    writeFileSync(hang, `
+  const tracked = [];
+  t.after(async () => {
+    reapPids(tracked);
+    const t0 = Date.now();
+    while (tracked.some((pid) => pidAlive(pid)) && Date.now() - t0 < 2000) await waitMs(50);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const hang = join(dir, 'hang-tree.test.js');
+  writeFileSync(hang, `
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -505,42 +558,105 @@ test('永不结束且留下后代', async () => {
   await new Promise(() => { setTimeout(() => {}, 3600000); });
 });
 `);
-    const env = { ...process.env };
-    delete env.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', hang], {
-      stdio: 'ignore', cwd: REPO, env,
-    });
-    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const child = spawn(process.execPath, ['--test', '--test-reporter=tap', hang], {
+    stdio: 'ignore', cwd: REPO, env,
+  });
+  tracked.push(child.pid);
 
-    let pids = null;
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      try {
-        pids = JSON.parse(readFileSync(pidFile, 'utf8'));
-        if (pids.grandchild > 0 && pids.detached > 0) break;
-      } catch { /* 还没写出 */ }
-      await wait(50);
-    }
-    assert.equal(pids != null, true, 'runner 没写出 pids 文件');
-    assert.equal(pids.grandchild > 0, true, `grandchild pid 非法：${JSON.stringify(pids)}`);
-    assert.equal(pids.detached > 0, true, `detached pid 非法：${JSON.stringify(pids)}`);
-    detachedPid = pids.detached;
-    await wait(200);
-    assert.equal(alive(child.pid), true, 'runner 现在该活着——不然这条验的是空气');
-    assert.equal(alive(pids.grandchild), true, '非 detached 后代现在该活着——不然没验到残留');
-    assert.equal(alive(pids.detached), true, 'detached 现在该活着——不然没验到「该留的留下」');
-
-    killProcessTree(child.pid, { listProcesses: listLinuxProcesses });
-    const t0 = Date.now();
-    while ((alive(child.pid) || alive(pids.grandchild)) && Date.now() - t0 < 3000) await wait(50);
-    assert.equal(alive(child.pid), false, 'runner 超时后自己必须没了');
-    assert.equal(alive(pids.grandchild), false, 'runner 超时后非 detached 后代必须没了——不能只验 runner 消失');
-    assert.equal(alive(pids.detached), true, '刻意 detached 的 ACP 类进程必须留下');
-  } finally {
-    if (detachedPid) {
-      try { process.kill(detachedPid, 'SIGKILL'); } catch { /* 已经没了 */ }
-    }
-    rmSync(dir, { recursive: true, force: true });
+  let pids = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      pids = JSON.parse(readFileSync(pidFile, 'utf8'));
+      if (pids.grandchild > 0 && pids.detached > 0) break;
+    } catch { /* 还没写出 */ }
+    await waitMs(50);
   }
+  assert.equal(pids != null, true, 'runner 没写出 pids 文件');
+  assert.equal(pids.grandchild > 0, true, `grandchild pid 非法：${JSON.stringify(pids)}`);
+  assert.equal(pids.detached > 0, true, `detached pid 非法：${JSON.stringify(pids)}`);
+  tracked.push(pids.grandchild, pids.detached);
+  await waitMs(200);
+  assert.equal(pidAlive(child.pid), true, 'runner 现在该活着——不然这条验的是空气');
+  assert.equal(pidAlive(pids.grandchild), true, '非 detached 后代现在该活着——不然没验到残留');
+  assert.equal(pidAlive(pids.detached), true, 'detached 现在该活着——不然没验到「该留的留下」');
+
+  killProcessTree(child.pid, { listProcesses: listLinuxProcesses });
+  const t0 = Date.now();
+  while ((pidAlive(child.pid) || pidAlive(pids.grandchild)) && Date.now() - t0 < 3000) await waitMs(50);
+  assert.equal(pidAlive(child.pid), false, 'runner 超时后自己必须没了');
+  assert.equal(pidAlive(pids.grandchild), false, 'runner 超时后非 detached 后代必须没了——不能只验 runner 消失');
+  assert.equal(pidAlive(pids.detached), true, '刻意 detached 的 ACP 类进程必须留下');
+});
+
+test('owner SIGKILL 后多层同步阻塞且清掉 NODE_OPTIONS 的后代必须没了，detached 留下', { timeout: 20000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dao-owner-tree-'));
+  const pidFile = join(dir, 'pids.json');
+  const tracked = [];
+  t.after(async () => {
+    reapPids(tracked);
+    const t0 = Date.now();
+    while (tracked.some((pid) => pidAlive(pid)) && Date.now() - t0 < 2000) await waitMs(50);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const preload = pathToFileURL(join(REPO, 'tests', 'helpers', 'parent-alive.mjs')).href;
+  const ownerPath = join(REPO, 'tests', 'helpers', 'dao-check-owner-fixture.mjs');
+  const env = {
+    ...process.env,
+    DAO_SYNC_BLOCK_PRELOAD: preload,
+    DAO_SYNC_BLOCK_TREE: '1',
+    DAO_TREE_PID_FILE: pidFile,
+    [OWNER_POLL_ENV]: '100',
+  };
+  delete env.NODE_TEST_CONTEXT;
+  env.NODE_OPTIONS = '';
+
+  const owner = spawn(process.execPath, [ownerPath], {
+    stdio: 'ignore',
+    env,
+  });
+  tracked.push(owner.pid);
+
+  let pids = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      pids = JSON.parse(readFileSync(pidFile, 'utf8'));
+      if (pids.owner > 0 && pids.middle > 0 && pids.deepest > 0 && pids.hang > 0 && pids.detached > 0) break;
+    } catch { /* 还没写出 */ }
+    await waitMs(50);
+  }
+  assert.equal(pids != null, true, `owner 树没写出 pids（file=${pidFile}）`);
+  assert.equal(pids.middle > 0, true, `middle pid 非法：${JSON.stringify(pids)}`);
+  assert.equal(pids.deepest > 0, true, `deepest pid 非法：${JSON.stringify(pids)}`);
+  assert.equal(pids.hang > 0, true, `hang pid 非法：${JSON.stringify(pids)}`);
+  assert.equal(pids.detached > 0, true, `detached pid 非法：${JSON.stringify(pids)}`);
+  tracked.push(pids.middle, pids.deepest, pids.hang, pids.detached);
+
+  await waitMs(500);
+  assert.equal(pidAlive(owner.pid), true, 'owner 现在该活着——不然 SIGKILL 验的是空气');
+  assert.equal(pidAlive(pids.middle), true, '中间层现在该卡在 spawnSync 里');
+  assert.equal(pidAlive(pids.deepest), true, '最深层现在该活着——它清掉了 NODE_OPTIONS');
+  assert.equal(pidAlive(pids.hang), true, '最深层的同步孩子现在该活着');
+  assert.equal(pidAlive(pids.detached), true, 'detached 现在该活着——不然没验到「该留的留下」');
+
+  process.kill(owner.pid, 'SIGKILL');
+  const t0 = Date.now();
+  while (
+    (pidAlive(pids.middle) || pidAlive(pids.deepest) || pidAlive(pids.hang))
+    && Date.now() - t0 < 3000
+  ) await waitMs(50);
+
+  assert.equal(pidAlive(owner.pid), false, 'owner 自己必须没了');
+  assert.equal(pidAlive(pids.middle), false, '中间层（runner）必须没了');
+  assert.equal(
+    pidAlive(pids.deepest),
+    false,
+    `owner SIGKILL 后 3s 最深层还在（elapsed ${Date.now() - t0}ms）——NODE_OPTIONS 被覆盖后不能靠 parent-alive 自杀，看门狗必须按树清`,
+  );
+  assert.equal(pidAlive(pids.hang), false, '最深层的非 detached 孩子也必须没了');
+  assert.equal(pidAlive(pids.detached), true, '刻意 detached 的 ACP 类进程必须留下');
 });

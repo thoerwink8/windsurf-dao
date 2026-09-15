@@ -21,18 +21,20 @@
 // timeout 的 spawnSync 上）。
 //
 // 旁路看门狗（owner-watchdog.py）有自己的事件循环，同步阻塞也杀得掉。
+// owner 死后它按 ppid 树清 runner 的非 detached 后代，不只杀 runner 自己——
+// 仓内有测试显式覆盖 NODE_OPTIONS，那些孙子装不上本模块。
 // 只给 owner 的亲儿子装——那正是 dao-check 起的 `node --test`。孙子（CLI、
 // ACP 会话）不装：ACP 必须活过「发起它的那个进程」（acp-runtime 有断言），
 // 第一版把 PR_SET_PDEATHSIG 打在 node 本体上，那条当场红。看门狗看的是
-// owner pid，不是立即父进程。Worker 线程的 unref 在 spawnSync 期间不会转，
-// 不能拿来当同步段的清理。
+// owner pid，不是立即父进程；组头（pgid===pid）跳过。Worker 线程的 unref
+// 在 spawnSync 期间不会转，不能拿来当同步段的清理。
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
   ownerPollMs, ORPHAN_EXIT_CODE, ownerAlive, orphanNote,
-  readProcStarttime, readProcBootId,
+  readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
 } from '../../scripts/lib/test-child-guard.mjs';
 
 const ownerPid = Number(process.env[OWNER_PID_ENV]);
@@ -90,6 +92,17 @@ if (Number.isInteger(ownerPid) && ownerPid > 0) {
     try {
       process.stderr.write(orphanNote(ownerPid, verdict.basis) + '\n');
     } catch { /* stderr 都写不了就算了，该退还是退 */ }
+    try {
+      // 事件循环还能转时，自己把非 detached 后代清掉再退。卡在 spawnSync
+      // 里这条走不到，改由旁路看门狗按树杀。
+      killProcessTree(process.pid, {
+        listProcesses: listLinuxProcesses,
+        kill: (pid, sig) => {
+          if (pid === process.pid) return;
+          process.kill(pid, sig);
+        },
+      });
+    } catch { /* 清树失败也得退，否则自己变成孤儿 */ }
     process.exit(ORPHAN_EXIT_CODE);
   };
   const timer = setInterval(tick, ownerPollMs(process.env));
