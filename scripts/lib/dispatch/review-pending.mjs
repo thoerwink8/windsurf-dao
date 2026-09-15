@@ -578,6 +578,27 @@ export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
   };
 }
 
+/**
+ * 把 reviewer-create 子进程的 spawn 结果收成 attach 回执。
+ * 无 JSON / 超时 / 非零退出时，error 必须是完整 stderr/error——这串会进 drain 账当比较键
+ * （consumeReviewPending 包一层「reviewer-attach 失败：」之后，applyDrainLedger / foldFailureStreak 逐字比）。
+ * 人读摘要截字不在这里做。
+ */
+export function attachReceiptFromSpawn(spawned = {}) {
+  let json = null;
+  try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
+  if (spawned.error || (spawned.status !== 0 && spawned.status != null) || spawned.signal || !json || json.ok !== true) {
+    const structured = json && json.error != null && json.error !== '' ? json.error : null;
+    const fallback = String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`);
+    return {
+      ok: false,
+      error: structured == null ? fallback : (typeof structured === 'string' ? structured : String(structured)),
+      json,
+    };
+  }
+  return { ok: true, json };
+}
+
 export function consumeReviewPending({ dir, ticket, attach, usableReviewers } = {}) {
   const plan = planReviewPendingDrain(ticket, { usableReviewers });
   if (!plan.ok) return { ...plan, pr: ticket?.pr || null };
