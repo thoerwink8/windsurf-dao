@@ -22,6 +22,20 @@ const OLD = 'b'.repeat(40);
 const record = { sessionKey: 'codex:02923a47-bc9b-492f-a537-20b23b8691ba', expectedOid: HEAD };
 const rv = (state, oid) => ({ state, commit: { oid } });
 
+/** 注入 gh：认一次快照 `headRefOid,reviews`，也认拆开的字段（用来钉死分读竞态）。 */
+const fakeGh = ({ headOid, reviews, headOk = true }) => (argv) => {
+  const json = String(argv[argv.length - 1] || '');
+  const fields = json.split(',');
+  if (fields.includes('headRefOid') && !headOk) {
+    return { ok: false, error: 'simulated gh failure' };
+  }
+  const out = {};
+  if (fields.includes('headRefOid')) out.headRefOid = headOid;
+  if (fields.includes('reviews')) out.reviews = reviews;
+  if (Object.keys(out).length === 0) return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
+  return { ok: true, out: JSON.stringify(out) };
+};
+
 describe('当前 head 上有没有判定（三态）', () => {
   it('判定打在当前 head ⇒ true', () => {
     assert.equal(verdictOnHead([rv('CHANGES_REQUESTED', HEAD)], HEAD), true);
@@ -146,16 +160,6 @@ describe('锁外 true、锁内新 HEAD 无判定 ⇒ 必须 create（#1293 二�
   // 审官判别性实证：旧 HEAD 有判定、当前 HEAD 已变化且没有判定。
   // 只透传锁外 verdict → outsideReuse:true, lockedRaced:true, createCalls:0（新提交没审官）。
   // 持锁后重读并把这份快照交给 runLockedReviewerCreate → createCalls:1。
-  const fakeGh = ({ headOid, reviews, headOk = true }) => (argv) => {
-    const json = argv[argv.length - 1];
-    if (json === 'headRefOid') {
-      return headOk
-        ? { ok: true, out: JSON.stringify({ headRefOid: headOid }) }
-        : { ok: false, error: 'simulated gh failure' };
-    }
-    if (json === 'reviews') return { ok: true, out: JSON.stringify({ reviews }) };
-    return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
-  };
 
   it('终态 reuse 必须持锁重读，在役/没查成才许锁外退出', () => {
     assert.equal(mustRecheckVerdictUnderLock({ reuse: true, view: { phase: 'done' } }), true);
@@ -204,16 +208,6 @@ describe('锁外 true、锁内新 HEAD 无判定 ⇒ 必须 create（#1293 二�
 describe('对账目标是 PR 当前 head，不是登记里的 expectedOid（#1293 审官 P1）', () => {
   // record.expectedOid 钉着旧提交；GitHub 上 PR 已推到 HEAD。
   const staleRecord = { sessionKey: 'codex:02923a47-bc9b-492f-a537-20b23b8691ba', expectedOid: OLD };
-  const fakeGh = ({ headOid, reviews, headOk = true }) => (argv) => {
-    const json = argv[argv.length - 1];
-    if (json === 'headRefOid') {
-      return headOk
-        ? { ok: true, out: JSON.stringify({ headRefOid: headOid }) }
-        : { ok: false, error: 'simulated gh failure' };
-    }
-    if (json === 'reviews') return { ok: true, out: JSON.stringify({ reviews }) };
-    return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
-  };
 
   it('判定只打在登记钉的旧提交上 ⇒ false（确认当前 head 没有）', () => {
     const got = judgeVerdictOnHead('1293', staleRecord, null, {
@@ -277,11 +271,61 @@ describe('生产接线（正控：漏一处就等于没修）', () => {
   it('对账目标从 GitHub 读当前 headRefOid，不读登记里的 expectedOid（#1293 审官 P1）', () => {
     const fn = DAO.match(/export function judgeVerdictOnHead[\s\S]*?\n\}/);
     assert.ok(fn, 'judgeVerdictOnHead 要能从 dao.mjs 里截出来');
-    assert.match(fn[0], /'headRefOid'/);
+    assert.match(fn[0], /'headRefOid,reviews'/);
     assert.doesNotMatch(fn[0], /record\.expectedOid/);
+    assert.doesNotMatch(fn[0], /listPrReviews/);
   });
 
   it('读不到判定时给 null，不给 false——否则每轮都重复起会话', () => {
-    assert.match(DAO, /if \(!listed\.ok\) return null;/);
+    const fn = DAO.match(/export function judgeVerdictOnHead[\s\S]*?\n\}/);
+    assert.ok(fn, 'judgeVerdictOnHead 要能从 dao.mjs 里截出来');
+    assert.match(fn[0], /if \(!snap \|\| !snap\.ok\) return null;/);
+    assert.match(fn[0], /if \(!Array\.isArray\(reviews\)\) return null;/);
+  });
+});
+
+describe('headRefOid 与 reviews 必须同一快照（#1293 三审 P1）', () => {
+  // 审官判别性复现：注入的 runGh 在第一次 headRefOid 读取后把实际 HEAD 从 OLD 推到 HEAD，
+  // 第二次 reviews 仍返回旧提交票。分两次读会得出 true（旧 OID 对上旧票），
+  // 而 actualHead 已是 HEAD、HEAD 上没有审官。
+  it('两次独立读取之间 HEAD 被推走 ⇒ 不许得出 true', () => {
+    let liveHead = OLD;
+    const calls = [];
+    const runGh = (argv) => {
+      const json = String(argv[argv.length - 1] || '');
+      calls.push(json);
+      const fields = json.split(',');
+      const out = {};
+      if (fields.includes('headRefOid')) out.headRefOid = liveHead;
+      if (fields.includes('reviews')) out.reviews = [rv('APPROVED', OLD)];
+      if (fields.includes('headRefOid') && !fields.includes('reviews')) liveHead = HEAD;
+      if (Object.keys(out).length === 0) {
+        return { ok: false, error: `unexpected argv: ${argv.join(' ')}` };
+      }
+      return { ok: true, out: JSON.stringify(out) };
+    };
+
+    const got = judgeVerdictOnHead('1293', record, null, { runGh });
+    const raced = {
+      verdict: got, calls, actualHead: liveHead, oldReviewOid: OLD,
+    };
+    if (liveHead === HEAD) {
+      // 读完再核对 OID：竞态窗口已打开，旧票对不上新 HEAD，不许 true。
+      assert.notEqual(got, true, JSON.stringify(raced));
+    } else {
+      // 一次快照：push 发生在函数返回之后，head 与 reviews 仍一致。
+      assert.ok(
+        calls.some((c) => c.includes('headRefOid') && c.includes('reviews')),
+        `head 与 reviews 必须同一次读取：${JSON.stringify(calls)}`,
+      );
+      assert.equal(got, true, JSON.stringify(raced));
+    }
+  });
+
+  it('一次快照里 head=新、reviews 仍是旧票 ⇒ false（确认当前 head 没有）', () => {
+    const got = judgeVerdictOnHead('1293', record, null, {
+      runGh: fakeGh({ headOid: HEAD, reviews: [rv('APPROVED', OLD)] }),
+    });
+    assert.equal(got, false);
   });
 });

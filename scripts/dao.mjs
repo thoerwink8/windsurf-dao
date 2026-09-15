@@ -269,7 +269,6 @@ import {
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { verdictOnHead } from './lib/review-state.mjs';
-import { listPrReviews } from './lib/dispatch/worker-done.mjs';
 import { judgeLegDown } from './lib/leg-liveness.mjs';
 import { readLegRecords } from './lib/leg-liveness-io.mjs';
 
@@ -1540,21 +1539,26 @@ function reviewerChannelCap(id) {
  * 旧提交上的 APPROVED / CHANGES_REQUESTED 会被误认作当前 head 已判定，
  * 终态会话因此被复用，新提交永远没人审。
  *
+ * head 与 reviews 必须同一次 `gh pr view --json headRefOid,reviews` 快照里读。
+ * 分两次读的话，第一次拿到旧 OID `H`、两次之间 PR 推到 `N`、第二次仍返回 `H`
+ * 上的票，函数会得出 true，而 `N` 没有审官（#1293 三审 P1）。
+ *
  * runGh 可注入（测试）；默认走 reviewer 角色的 gh。
  */
 export function judgeVerdictOnHead(pr, record, targetRepo, { runGh } = {}) {
   if (!record || !record.sessionKey) return null;   // 没有在役登记，复用判据走不到这一步
   const gh = runGh || ghRunnerForTarget(targetRepo, { role: 'reviewer' });
-  const meta = gh(['pr', 'view', String(pr), '--json', 'headRefOid']);
-  if (!meta || !meta.ok) return null;
-  let head = '';
+  const snap = gh(['pr', 'view', String(pr), '--json', 'headRefOid,reviews']);
+  if (!snap || !snap.ok) return null;
+  let parsed;
   try {
-    head = String(JSON.parse(meta.out).headRefOid || '').trim();
+    parsed = JSON.parse(snap.out);
   } catch { return null; }
+  const head = String((parsed && parsed.headRefOid) || '').trim();
   if (!head) return null;
-  const listed = listPrReviews({ pr, runGh: gh });
-  if (!listed.ok) return null;
-  return verdictOnHead(listed.reviews, head);
+  const reviews = parsed && parsed.reviews;
+  if (!Array.isArray(reviews)) return null;
+  return verdictOnHead(reviews, head);
 }
 
 async function cmdReviewPendingDrain(args) {
@@ -2207,8 +2211,8 @@ async function cmdReviewerCreateMirasim(args) {
     // #1293 审官 P1（第二轮实咬）：锁外那份 verdict 在等锁期间可能已过期——
     // 锁外快照是「旧 head 有判定（true）」，等锁期间 PR 推了新 head 而新 head 还没判定，
     // 拿旧值判 race 会把终态会话误报 reused，新提交就没有审官。
-    // 复用判定必须在持锁后重读当前 headRefOid + reviews，用这份锁内快照。
-    // forceNew 为真时 judgeReviewerCreateRace 短路、根本不看 verdictOnHead，省掉这两次 gh 调用。
+    // 复用判定必须在持锁后重读当前 headRefOid + reviews（同一次快照），用这份锁内快照。
+    // forceNew 为真时 judgeReviewerCreateRace 短路、根本不看 verdictOnHead，省掉这次 gh 快照。
     const lockedVerdict = (!forceNew && againRecord && againRecord.sessionKey)
       ? judgeVerdictOnHead(args.pr, againRecord, targetRepo)
       : null;
