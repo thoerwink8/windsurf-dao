@@ -170,6 +170,39 @@ export function stallFingerprint(objects, rounds) {
   return `rounds:${Number(rounds) || 0}\n${body}`;
 }
 
+/**
+ * 停滞播报的**去重键**——故意是常量，不带指纹。
+ *
+ * 2026-09-15 实咬：原来的键是 `progress-watch:${stallFingerprint(...)}`，而指纹
+ * 就是「轮数 + 每个停滞对象的 key=sig」。于是停滞清单动一个号 = 新键 = 再发一条，
+ * 播报账里攒出 **约 300 个 `progress-watch:rounds:5\npr:…` 键**，一周三百条
+ * 「这些 PR 没动」——必然被人关掉。
+ *
+ * 另一头坏得正相反：`digest-stuck:${digest}` 的键是「这一套动作」，而停滞的定义
+ * 恰恰是**这套动作一直不变** ⇒ 越是真停住，键越不变，越只发那一条。实测
+ * 09-15 03:31 发过一条之后，盘面又冻了 10 小时，一条都没有。
+ *
+ * 两处同一个病：**去重键跟被报告的事实同构**。抖动的刷屏，真死的静默。
+ *
+ * 改法是把内容从键里拿掉，只留常量——剩下的节流交给 `HUB_DEDUP_MS`（6 小时）。
+ * 净效果：盘面卡着就每 6 小时稳定响一声，卡多久响多久；清单怎么抖都不额外加条数。
+ * 严重度不进键，进**文案**（见 stallSeverity），否则「越停越严重」又会变成新键刷屏。
+ */
+export const STALL_ALERT_KEY = 'progress-watch:stall';
+export const DIGEST_STUCK_ALERT_KEY = 'digest-stuck';
+
+/**
+ * 停了多久 → 一个给人看的严重度词。只进文案，不进去重键。
+ * 一轮 ≈ 20 分钟：阈值内「注意」，翻倍「警告」，四倍以上「故障」。
+ */
+export function stallSeverity(rounds, threshold) {
+  const n = Number(rounds) || 0;
+  const t = Number(threshold) > 0 ? Number(threshold) : 1;
+  if (n >= t * 4) return '故障';
+  if (n >= t * 2) return '警告';
+  return '注意';
+}
+
 export function formatStallItem(item, rounds) {
   const n = Number(rounds) || 0;
   if (!item) return `不明对象连续 ${n} 轮没动`;

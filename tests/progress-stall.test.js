@@ -443,6 +443,54 @@ describe('叫醒主路：shuai-scan CLI 吃 progress-watch', () => {
   });
 });
 
+// 2026-09-15 实咬：播报的去重键跟被报告的事实同构，两头一起坏。
+//   · progress-watch 的键带 stallFingerprint（轮数 + 每个停滞对象 key=sig）
+//     ⇒ 清单抖一下就是新键，播报账里攒出约 300 个 `progress-watch:rounds:5\npr:…`
+//   · digest-stuck 的键带 digest（这一套动作）
+//     ⇒ 停滞的定义就是这套动作不变，越是真停住越只发一条；实测 10 小时冻死只发过 1 条
+// 判据：键是常量、严重度只进文案。两条方向相反的断言都要有，只钉一头会漏另一头。
+describe('#1285 停滞播报的去重键不带内容', () => {
+  it('两个播报键都是常量，不含轮数 / 对象 / digest', async () => {
+    const M = await import('file://' + LIB.replace(/\\/g, '/'));
+    assert.equal(M.STALL_ALERT_KEY, 'progress-watch:stall');
+    assert.equal(M.DIGEST_STUCK_ALERT_KEY, 'digest-stuck');
+    for (const k of [M.STALL_ALERT_KEY, M.DIGEST_STUCK_ALERT_KEY]) {
+      assert.doesNotMatch(k, /rounds:|=|\n/, '键里不许有内容，否则内容一变就是新键  →  ' + k);
+    }
+  });
+
+  it('commander 不再把指纹 / digest 拼进 hubOnce 的键', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    assert.doesNotMatch(src, /key: `progress-watch:\$\{/, '指纹进键就是 300 条的来源');
+    assert.doesNotMatch(src, /key: `digest-stuck:\$\{/, 'digest 进键就是 10 小时只发 1 条的来源');
+    assert.match(src, /key: STALL_ALERT_KEY/);
+    assert.match(src, /key: DIGEST_STUCK_ALERT_KEY/);
+  });
+
+  it('严重度随停滞轮数升级，且只用于文案', async () => {
+    const M = await import('file://' + LIB.replace(/\\/g, '/'));
+    assert.equal(M.stallSeverity(5, 5), '注意');
+    assert.equal(M.stallSeverity(9, 5), '注意');
+    assert.equal(M.stallSeverity(10, 5), '警告');
+    assert.equal(M.stallSeverity(20, 5), '故障');
+    assert.equal(M.stallSeverity(100, 5), '故障', '再久也只是故障，不许再分档——分档进不了键，多分没用');
+  });
+
+  it('阈值非法时不许崩，按 1 算（没查成不许当没事）', async () => {
+    const M = await import('file://' + LIB.replace(/\\/g, '/'));
+    assert.equal(M.stallSeverity(4, 0), '故障');
+    assert.equal(M.stallSeverity(0, 5), '注意');
+  });
+
+  it('stallFingerprint 仍在（它还用来判「这轮和上轮是不是同一批」，只是不再当播报键）', async () => {
+    const M = await import('file://' + LIB.replace(/\\/g, '/'));
+    assert.equal(typeof M.stallFingerprint, 'function');
+    const a = M.stallFingerprint([{ key: 'pr:1', sig: 'x' }], 5);
+    const b = M.stallFingerprint([{ key: 'pr:1', sig: 'y' }], 5);
+    assert.notEqual(a, b, '指纹本身仍要能分辨内容变化');
+  });
+});
+
 describe('commander-inventory 退役：stale-pr 被推进量覆盖', () => {
   it('源码不再跑超龄 PR 那一项；其余项还在，inbox 也在', () => {
     const src = fs.readFileSync(INV, 'utf8');

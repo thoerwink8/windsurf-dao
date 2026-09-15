@@ -84,6 +84,9 @@ import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, upd
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import {
+  DEFAULT_MIN_ROUNDS, DIGEST_STUCK_ALERT_KEY, STALL_ALERT_KEY, stallSeverity,
+} from './lib/progress-detect.mjs';
 import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -2784,10 +2787,12 @@ function cmdAct(argv) {
     log.push(`  盘面推进量没查成：${progressWatch.error || progressWatch.report}`);
   } else if (progressWatch.wake) {
     log.push(`  盘面停滞：${progressWatch.report}`);
+    // 键是常量：指纹进键会让停滞清单每抖一下就多发一条（实咬 300 条，见 progress-detect.mjs）。
+    // 节流全交给 HUB_DEDUP_MS，卡着就每 6 小时稳定响一声。严重度进文案，不进键。
     hubOnce({
       state,
-      key: `progress-watch:${progressWatch.fingerprint || 'stall'}`,
-      text: `[指挥官] ${progressWatch.report}`,
+      key: STALL_ALERT_KEY,
+      text: `[指挥官｜${stallSeverity(progressWatch.rounds, DEFAULT_MIN_ROUNDS)}] ${progressWatch.report}`,
       dryRun,
     });
   } else {
@@ -2845,10 +2850,14 @@ function cmdAct(argv) {
     state.lastActionDigest = vac.digest;
     if (vac.stuck) {
       log.push(`  推进量：连续 ${vac.streak} 轮动作摘要完全相同——停住了，不是还在跑`);
+      // 键不许带 digest：停滞的定义就是「这套动作一直不变」，键跟着它走 ⇒ 越是真停住越只发一条。
+      // 实咬 2026-09-15：03:31 发过 `digest-stuck:escalate:missing-labels:i1174` 一条之后，
+      // 盘面又冻了 10 小时，播报账里再没第二条。改成常量键，节流交给 HUB_DEDUP_MS。
       hubOnce({
         state,
-        key: `digest-stuck:${vac.digest}`,
-        text: `[指挥官] 连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
+        key: DIGEST_STUCK_ALERT_KEY,
+        text: `[指挥官｜${stallSeverity(state.digestStreak, DIGEST_STREAK_ALERT)}] `
+          + `连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
           + `盘面没在推进。当前这一套动作：\n${log.filter((l) => l.startsWith('· ')).slice(0, 6).join('\n')}`,
         dryRun,
       });
