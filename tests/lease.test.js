@@ -492,4 +492,26 @@ describe('占用声明：第二个拿不到，失败释放（审官红④ / #129
       sessionClaimPath(TREE, { home: '/h', root: ROOT }),
     );
   });
+
+  it('重复 20 次 claim/release 后 exit listener 不增长', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-exit-'));
+    const lockPath = path.join(dir, 'session.lock');
+    const warnings = [];
+    const onWarn = (w) => { warnings.push(w); };
+    process.on('warning', onWarn);
+    const before = process.listenerCount('exit');
+    try {
+      for (let i = 0; i < 20; i++) {
+        const r = claimTreeOccupancy({ workdir: 树1040, lockPath });
+        assert.equal(r.ok, true, `第 ${i + 1} 次应拿到`);
+        r.release();
+      }
+      assert.equal(process.listenerCount('exit'), before, '占用声明释放必须摘掉 exit listener');
+      const leaked = warnings.filter((w) => w && w.name === 'MaxListenersExceededWarning');
+      assert.equal(leaked.length, 0, leaked.map((w) => String(w.message || w)).join('; '));
+    } finally {
+      process.removeListener('warning', onWarn);
+    }
+  });
 });

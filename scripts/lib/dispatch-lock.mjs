@@ -89,6 +89,11 @@ export function acquireWorktreeLock({
       const release = () => {
         if (released) return;
         released = true;
+        // 显式释放必须摘掉 exit 钩子：常驻指挥官每次起会话都走占用声明，
+        // 不摘就把已释放的闭包堆在 process 上（#1292 审官红：20 次后 MaxListenersExceededWarning）。
+        if (typeof process !== 'undefined' && typeof process.removeListener === 'function') {
+          process.removeListener('exit', release);
+        }
         try { close(fd); } catch { /* ignore */ }
         try { unlink(path); } catch { /* ignore */ }
       };
