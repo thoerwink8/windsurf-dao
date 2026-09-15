@@ -647,11 +647,14 @@ describe('dao 派工硬闸', () => {
   });
 
   it('#984：dispatch --dry-run 不打网', async (t) => {
+    // 这条用例本身打了网（2026-09-15 实咬）：它带 --issue 1 却没给 DAO_GH_FAKE，
+    // 消歧门去读真 issue，一路走到 gh-as 换 installation token。
+    // 名字叫「不打网」的测试自己在打网，而且它照样绿——因为断言只看 dryRun 字段。
     const dry = await cliInProc([
       'dispatch', '--executor', 'mirasim', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
       '--confirm', '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分',
       '--issue', '1', '--dry-run',
-    ]);
+    ], { ...process.env, DAO_GH_FAKE: FAKE_GH });
     let p = {};
     try { p = JSON.parse((dry.stdout || '').trim().split(/\r?\n/).pop()); } catch { p = { raw: dry.stdout }; }
     await t.test('dry-run 退出 0', () => {
