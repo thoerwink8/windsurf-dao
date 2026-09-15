@@ -2374,8 +2374,8 @@ async function cmdWorkerDoneMirasim(args) {
       repo: targetRepo.ownerName || undefined,
       idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
     });
-    if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   }
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
