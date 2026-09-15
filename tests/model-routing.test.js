@@ -204,6 +204,19 @@ describe('#1233 审官顺位按执行目录可用性过滤', () => {
     assert.throws(() => resolveExecutionProfile({ model: 'alias-bad-backend' }, profiles), /invalid execution profile bad-backend/);
   });
 
+  it('精确 profile 与 alias 同名时精确命中仍可用（与 resolveExecutionProfile 同一套）', async () => {
+    const { usableReviewerOrder } = await M();
+    const { resolveExecutionProfile } = await import('file://' + path.join(REPO, 'scripts', 'lib', 'execution-runtime.mjs').replace(/\\/g, '/'));
+    const profiles = [
+      { id: 'grok-4.6', enabled: true, availability: { status: 'available' }, backend: 'mirasim', agent: 'grok', model: 'grok-4.6' },
+      { id: 'native-grok', enabled: true, availability: { status: 'available' }, backend: 'mirasim', agent: 'grok', model: 'grok-4.6', defaultForModels: ['grok-4.6'] },
+    ];
+    const r = usableReviewerOrder(['grok-4.6'], { profiles });
+    assert.deepEqual(r.usable, ['grok-4.6'], '精确命中不许被 alias 判成含糊  →  ' + JSON.stringify(r));
+    assert.deepEqual(r.skipped, []);
+    assert.equal(resolveExecutionProfile({ model: 'grok-4.6' }, profiles).id, 'grok-4.6');
+  });
+
   it('空顺位 ⇒ 不是 allDead（扫完就没有，跟「有但全废」是两件事）', async () => {
     const { usableReviewerOrder } = await M();
     const r = usableReviewerOrder([], { profiles: PROFILES });

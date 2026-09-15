@@ -209,4 +209,18 @@ describe('帅位自开 PR 的工人腿', { concurrency: false }, () => {
     assert.notEqual(defaultMarshalWorker(routing, { profiles }), 'deepseek-v4-flash');
     assert.equal(defaultMarshalWorker(routing, { profiles }), 'composer-2.5');
   });
+
+  it('⑫精确 profile 与 alias 同名时精确命中仍进可选集', async () => {
+    const { crossVendorWorkersFor } = await DAO;
+    const { resolveExecutionProfile } = await import('../scripts/lib/execution-runtime.mjs');
+    const routing = await loadRouting();
+    const profiles = [
+      runnable({ id: 'grok-4.6', model: 'grok-4.6' }),
+      runnable({ id: 'native-grok', model: 'grok-4.6', defaultForModels: ['grok-4.6'] }),
+      runnable({ id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor', defaultForModels: ['composer-2.5'], model: 'composer-2.5' }),
+    ];
+    const { ids } = crossVendorWorkersFor('gpt-5.6-luna', routing, { profiles });
+    assert.equal(ids.includes('grok-4.6'), true, '精确 profile 与 alias 同名仍可用，执行器也会放行');
+    assert.equal(resolveExecutionProfile({ model: 'grok-4.6' }, profiles).id, 'grok-4.6');
+  });
 });

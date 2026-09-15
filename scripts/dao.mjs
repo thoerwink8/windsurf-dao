@@ -413,8 +413,8 @@ function isEnabledWorkerLeg(m, routing) {
  * 工人一旦与座位同厂，这张 PR 就没有合法审官了。
  *
  * 「起得来」复用 `usableReviewerOrder`（与 `resolveExecutionProfile` 同一套完整准入）：
- * profile id 或 defaultForModels 精确命中、enabled===true、availability===available、
- * backend∈{mirasim,acp} 且 agent/model 都在、映射含糊（多条 profile）一律剔除。
+ * 精确 profile id 优先、无精确命中才查 defaultForModels、enabled===true、availability===available、
+ * backend∈{mirasim,acp} 且 agent/model 都在、无精确命中时多条 alias 一律剔除。
  * enabled=true 但 unverified 或缺字段的腿会被执行器拒，不许进默认候选。
  *
  * 候选只收工人 / 自开 PR 工人职责里未禁用的模型——路由 JSON 标了 `禁用` 的

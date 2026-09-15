@@ -98,6 +98,20 @@ export function reviewerSelectOrder(doc) {
 }
 
 /**
+ * 执行目录匹配：精确 profile id 优先；没有精确命中才查 `defaultForModels`。
+ * `resolveExecutionProfile` 与 `usableReviewerOrder` 共用这一份，alias 与
+ * profile id 同名是合法目录形状，不许判成含糊。
+ */
+export function matchExecutionProfiles(spec, profiles) {
+  const list = Array.isArray(profiles) ? profiles : [];
+  const requested = spec.profileId || spec.profile || (list.some((p) => p && p.id === spec.model) ? spec.model : null);
+  const matches = requested
+    ? list.filter((p) => p && p.id === requested)
+    : list.filter((p) => p && Array.isArray(p.defaultForModels) && p.defaultForModels.includes(spec.model));
+  return { requested, matches };
+}
+
+/**
  * 把「审官顺位」按**执行目录的实际可用性**过一遍（#1233）。
  *
  * 病（2026-09-13 实咬）：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位
@@ -130,9 +144,7 @@ export function usableReviewerOrder(order, { profiles } = {}) {
   const usable = [];
   const skipped = [];
   for (const id of list) {
-    // 与 resolveExecutionProfile 同一套匹配：先按 profile id 精确命中，再看 defaultForModels。
-    // 自己写一份会跟那条闸分叉（分叉那天没人发现——判据只在红的时候才被读）。
-    const matches = catalog.filter((p) => p && (p.id === id || (Array.isArray(p.defaultForModels) && p.defaultForModels.includes(id))));
+    const { matches } = matchExecutionProfiles({ model: id }, catalog);
     if (matches.length === 0) { skipped.push({ id, why: '执行目录里没有这个模型的 profile' }); continue; }
     if (matches.length > 1) { skipped.push({ id, why: `执行目录里匹配到 ${matches.length} 条 profile，含糊` }); continue; }
     const p = matches[0];
