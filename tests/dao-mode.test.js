@@ -823,7 +823,8 @@ describe('dao-mode', { concurrency: 1 }, () => {
         assert.ok(/现在必须问是否退出值守/.test(leaked.out), "→  " + leaked.out.slice(0, 300));
       });
       await t.test('时长超但消息未超 ⇒ 理由仍是时长（宿主盘面不得改断言）', () => {
-        assert.ok(/已值守 8\.[0-9] 小时/.test(leaked.out) && !/此间用户发了/.test(leaked.out), "→  " + leaked.out.slice(0, 300));
+        assert.match(leaked.out, /已值守 8\.[0-9] 小时/, "→  " + leaked.out.slice(0, 300));
+        assert.equal(/此间用户发了/.test(leaked.out), false, "→  " + leaked.out.slice(0, 300));
       });
     } finally {
       if (prev === undefined) delete process.env.DAO_BOARD_FILE;
