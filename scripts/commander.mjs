@@ -101,6 +101,8 @@ const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
 const CAPACITY_SAMPLE_PATH = process.env.DAO_CAPACITY_SAMPLES
   || join(homedir(), '.dao', 'ephemeral-lifecycle', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
+// 值守提问闸的主判据落点（#1287）。读侧是 dao-mode 的 UserPromptSubmit hook。
+const BOARD_STUCK_PATH = process.env.DAO_BOARD_FILE || join(homedir(), '.dao', 'board-stuck.json');
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
 const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projects/windsurf-dao';
@@ -347,6 +349,40 @@ function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
   } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 每轮覆盖写「盘面卡没卡」，给值守提问闸当主判据（2026-09-15 用户拍板）。
+ *
+ * 为什么另开一个小文件，而不是让 dao-mode 的 hook 去读 situation-*.json：
+ * dao-mode 是**跨项目**的全局 hook，不该知道 windsurf-dao 的内部状态长什么样。
+ * 这里约定一份项目无关、字段极少的落点，写坏了也只影响提问闸的主判据，
+ * 读侧会退回时长/消息数兜底。
+ *
+ * 只写两个量：
+ *   stalledRounds —— 连续多少轮动作摘要完全相同（= 磨盘轮数）
+ *   waitingUser   —— 挂着「卡死/等用户」的 PR 数（只有人能解的那些）
+ *
+ * **每轮都写**，哪怕一切正常（写 0）。不写的后果是文件停在最后一次的好消息上，
+ * 读侧会把「编排已经不跑了」读成「盘面很健康」——所以读侧还配了过期判定。
+ */
+function writeBoardStuck({ situation, digestStreak, log, file = BOARD_STUCK_PATH } = {}) {
+  const gh = (situation && situation.github) || {};
+  // 没扫到 GitHub 时 waitingUser 记 null，不记 0——0 是「查过，没有」，null 是「没查成」。
+  const waitingUser = gh.scanned === true && Array.isArray(gh.prs)
+    ? gh.prs.filter((p) => (p?.labels || []).some((l) => (l?.name || l) === WAITING_USER_LABEL)).length
+    : null;
+  const row = {
+    at: (situation && situation.at) || new Date().toISOString(),
+    stalledRounds: Number(digestStreak) || 0,
+    waitingUser,
+  };
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(row, null, 2), 'utf8');
+  } catch (e) {
+    if (log) log.push(`  盘面卡况没写成：${String(e.message || e).slice(0, 60)}`);
+  }
 }
 
 /**
@@ -2882,6 +2918,9 @@ function cmdAct(argv) {
   }
   runHubProjection({ situation, dryRun, log });
   if (!dryRun) {
+    writeBoardStuck({ situation, digestStreak: state.digestStreak, log });
+  }
+  if (!dryRun) {
     const ad = situation.admission || {};
     appendCapacitySample(snapshotCapacity({
       at: situation.at,
@@ -2952,4 +2991,5 @@ export {
   alreadyAppended,
   scanSessions, scanDesiredJobs,
   ensureTreeFromPr, dispatchRework,
+  writeBoardStuck,
 };

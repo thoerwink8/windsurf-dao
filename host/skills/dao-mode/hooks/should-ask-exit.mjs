@@ -5,31 +5,66 @@
 // 本模块只做可机械判定的部分。
 //
 // 阈值默认值依据（不许凭猜）：
-//   hours    8 —— 一觉通常 ≤ 8 小时；值守/专注挂满 8 小时仍无动静，说明多半不是「睡觉」
-//                 而是忘了退/离开了。2026-08-17 事故就是值守挂了 17.2 小时无人质疑。
-//   messages 3 —— 容忍进入值守后的 1~2 条「尾巴」（晚安、补充授权），第 3 条起视为用户
-//                 回来工作。UserPromptSubmit 每次触发就是一条在场证据，本函数消费它。
 //   offTopic 2 —— 复用「同一种办法连错两次就换路」：连续两次偏离 = 用户在派新活，必然在场。
+//   stalled  6 —— 一轮 ≈ 20 分钟；盘面连续 6 轮零推进 ≈ 2 小时，已经不是「正在跑」。
+//   hours    8 / messages 3 —— **只在盘面事实读不到时才用的兜底**，来历见下。
 //
-// 阈值可配：调用方从环境变量 DAO_EXIT_HOURS / DAO_EXIT_MESSAGES / DAO_EXIT_OFFTOPIC 读，
-// 本模块保持纯函数（不读 env）。
+// 2026-09-15 用户拍板改判据。原来值守的提问条件是「挂了多久 / 用户说了几句」，
+// 依据写的是「一觉通常 ≤ 8 小时，挂满 8 小时多半是忘了退」。那是为「过一夜」设计的，
+// 而这位用户的真实用法是**长期挂着、随时插话**：131 小时里发了 300 多条消息，
+// 于是三条阈值在第一天就全部永久触发，警告连响 130 小时。
+// **永远在响的警告等于没有警告**——它训练人（和 AI）把它当背景音。
+//
+// 该打扰用户的时机不是「挂了多久」，是**有事卡住了、只有他能解**：
+// 盘面连续 N 轮零推进、或有对象挂着「等用户」。没有这些就别打扰，有了就立刻打扰。
+//
+// 兜底不许删：盘面事实**读不到**时退回时长/消息数那套旧判据。
+// 「没查成」不许当成「没卡住」——那会让提问闸静默失效，比多问几次糟得多。
+//
+// 阈值可配：调用方从环境变量 DAO_EXIT_HOURS / DAO_EXIT_MESSAGES / DAO_EXIT_OFFTOPIC /
+// DAO_EXIT_STALLED 读，本模块保持纯函数（不读 env）。
 
-export const EXIT_DEFAULTS = { hours: 8, messages: 3, offTopic: 2 };
+export const EXIT_DEFAULTS = { hours: 8, messages: 3, offTopic: 2, stalled: 6 };
 
 /**
- * @param {{mode: string, hours?: number, messages?: number, offTopicStreak?: number, thresholds?: object}} s
- * @returns {{ask: boolean, reasons: string[]}} ask=true 时 reasons 是人话理由，供注入直接拼结论行。
+ * @param {object} s
+ * @param {string} s.mode 'normal' | 'standby' | 'focus'
+ * @param {object} [s.board] 盘面事实 `{scanned, stalledRounds, waitingUser, why}`。
+ *   `scanned !== true` 或 `waitingUser == null` 一律当没查成，退回时长/消息数兜底。
+ *   `waitingUser: 0` 才是「查过，没有」；`null` 是「没查成」，`Number(null)===0` 会把两者并掉。
+ * @returns {{ask: boolean, reasons: string[], basis?: string}} ask=true 时 reasons 是人话理由。
+ *   `basis` 说明这次是按盘面判的还是兜底判的——排障时要分得开。
  */
-export function shouldAskExit({ mode, hours = 0, messages = 0, offTopicStreak = 0, thresholds } = {}) {
+export function shouldAskExit({
+  mode, hours = 0, messages = 0, offTopicStreak = 0, board = null, thresholds,
+} = {}) {
   const t = { ...EXIT_DEFAULTS, ...(thresholds || {}) };
   if (mode === 'normal') return { ask: false, reasons: [] };
 
   if (mode === 'standby') {
     const reasons = [];
+    // 偏离与盘面无关：连续两次偏离 = 用户在派新活，本来就在场。两套判据下都保留。
+    if (offTopicStreak >= t.offTopic) reasons.push(`连续偏离 ${offTopicStreak} 次`);
+
+    // waitingUser 必须是查过的数字。null / 缺字段 = GitHub 没查成。
+    // Number(null)===0，会把「没查成」当成「没有等用户」，闸就静默失效。
+    if (board && board.scanned === true && board.waitingUser != null) {
+      // 主判据：只有「卡住了、只有用户能解」才打扰。
+      const stalled = Number(board.stalledRounds) || 0;
+      const waiting = Number(board.waitingUser) || 0;
+      if (stalled >= t.stalled) {
+        reasons.push(`盘面连续 ${stalled} 轮零推进（约 ${Math.round(stalled * 20 / 60 * 10) / 10} 小时）`);
+      }
+      if (waiting > 0) reasons.push(`${waiting} 个对象挂着「等用户」，只有你能解`);
+      return { ask: reasons.length > 0, reasons, basis: 'board' };
+    }
+
+    // 兜底：盘面没查成 ⇒ 退回旧判据。不许把「没查成」当成「没卡住」。
     if (hours >= t.hours) reasons.push(`已值守 ${fmtHours(hours)}`);
     if (messages >= t.messages) reasons.push(`此间用户发了 ${messages} 条消息`);
-    if (offTopicStreak >= t.offTopic) reasons.push(`连续偏离 ${offTopicStreak} 次`);
-    return { ask: reasons.length > 0, reasons };
+    const why = board && board.why ? `（盘面没查成：${board.why}）` : '（盘面事实没读到）';
+    if (reasons.length > 0) reasons.push(`按时长/消息数兜底判的${why}`);
+    return { ask: reasons.length > 0, reasons, basis: 'fallback' };
   }
 
   if (mode === 'focus') {
