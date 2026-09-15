@@ -31,7 +31,7 @@
 // 自己查自己查不出错——判完工的判据不复用发消息那一层的解析。
 
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import os from 'node:os';
 import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
@@ -146,6 +146,30 @@ export const DEFAULT_PORT = 4316;
  *  2026-09-09 实咬：负载 20 时 30s 才判超时；snapshot 默认 6s 会把「慢」误判成「死」，
  *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
 export const SESSIONS_TIMEOUT_MS = 30_000;
+
+/**
+ * 全局会话名单的分页/完整性判据（唯一出处）。
+ * 只有服务端给出 `hasMore:false` 才算完整；`hasMore:true` 必须继续扩大 limit；
+ * 缺完整性标志 / 超时 / 超上限 → `sessions:null`，半页不能交给删树路径。
+ */
+export async function listSessionsViaWire(wire, { timeoutMs = SESSIONS_TIMEOUT_MS, now = Date.now } = {}) {
+  const deadline = now() + timeoutMs;
+  for (let limit = 256; limit <= 32768; limit *= 2) {
+    wire.send({ type: 'listSessions', scope: 'global', limit });
+    const remain = Math.max(1, deadline - now());
+    const msg = await wire.waitFor(m => m && m.type === 'sessions', remain);
+    if (!msg || !Array.isArray(msg.sessions)) {
+      return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+    }
+    if (msg.hasMore === false) {
+      return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+    }
+    if (msg.hasMore !== true || now() >= deadline) {
+      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
+    }
+  }
+  return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
+}
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
 // 账本目录名就是后半段那个 uuid，交叉核靠这个映射。
@@ -393,13 +417,16 @@ function normPhase(raw) {
 }
 
 /**
- * 从快照抽出 readSession 对外的四个字段。快照里没有的字段一律给 null / 空，不编。
+ * 从快照抽出 readSession 对外的字段。快照里没有的字段一律给 null，不编。
+ * text：字段在且是字符串才算已知（空串合法）；缺字段 / 非字符串 → text:null + textKnown:false，
+ * 不许折成 '' 跟「正文就是空的」混在一起。
  * incomplete 为真时，phase 即使是 done 也不算干完——服务端用它标「收尾了但没跑完」。
  */
 export function readSessionView(snapshot) {
   const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const phase = normPhase(s.phase) || normPhase(s.runState);
-  const text = typeof s.text === 'string' ? s.text : '';
+  const textKnown = typeof s.text === 'string';
+  const text = textKnown ? s.text : null;
   const toolCalls = Array.isArray(s.toolCalls)
     ? s.toolCalls.filter(t => t && typeof t === 'object').map(t => ({
       id: t.id ?? null,
@@ -410,7 +437,7 @@ export function readSessionView(snapshot) {
   let error = null;
   if (typeof s.error === 'string' && s.error) error = s.error;
   else if (s.error && typeof s.error === 'object' && typeof s.error.message === 'string') error = s.error.message;
-  return { phase, text, toolCalls, error, incomplete: s.incomplete === true,
+  return { phase, text, textKnown, toolCalls, error, incomplete: s.incomplete === true,
     // waiting_user 判据要用到交互清单（#1174）：快照里有就原样透传，没有就不给字段——不编空数组。
     ...(Array.isArray(s.interactions) ? { interactions: s.interactions } : {}) };
 }
@@ -572,6 +599,13 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       reason: `快照说完工，但账本没读到（${ledger?.why || '没给账本'}）——交叉核没做成，判没查成`,
     };
   }
+  if (typeof ledger.bad === 'number' && ledger.bad > 0) {
+    return {
+      status: 'unknown',
+      confirmedBy: ['snapshot'],
+      reason: `快照说完工，但账本有 ${ledger.bad} 行坏行——交叉核用的是不完整账本，判没查成`,
+    };
+  }
   const rows = Array.isArray(ledger.rows) ? ledger.rows : [];
   const fresh = rows.filter(r => {
     const ts = Date.parse(r?.ts || '');
@@ -642,7 +676,10 @@ export function readLedger({ sessionKey, homeDir, io = defaultLedgerIo } = {}) {
       rows.push(...parsed.rows);
       bad += parsed.bad;
     }
-    return { readable: true, rows, bad, dir, why: null };
+    if (bad > 0) {
+      return { readable: false, rows, bad, dir, why: `账本有 ${bad} 行不是合法 JSON 对象，整份没查成` };
+    }
+    return { readable: true, rows, bad: 0, dir, why: null };
   } catch (e) {
     return { readable: false, rows: [], why: `账本读失败：${e?.message || e}` };
   }
@@ -1124,7 +1161,7 @@ export function createRuntime(opts = {}) {
       }
       if (!shape.missing) {
         // 收到帧但形状不对：这是契约问题，不许当「没这条会话」糊过去
-        return { phase: null, text: '', toolCalls: [], error: null, missing: false, via: 'snapshot', why: shape.errors.join('；') };
+        return { phase: null, text: null, textKnown: false, toolCalls: [], error: null, missing: false, via: 'snapshot', why: shape.errors.join('；') };
       }
       wire.send({ type: 'listSessions' });
       const listed = await wire.waitFor(m => m.type === 'sessions', t.snapshot);
@@ -1137,7 +1174,7 @@ export function createRuntime(opts = {}) {
         };
       }
       return {
-        phase: null, text: '', toolCalls: [], error: null,
+        phase: null, text: null, textKnown: false, toolCalls: [], error: null,
         missing: true, partial: false, via: null,
         why: `快照和会话清单都没读到（没查成）：${metaShape.errors.join('；')}`,
       };
@@ -1238,17 +1275,7 @@ export function createRuntime(opts = {}) {
   async function listSessions() {
     const wire = await open();
     try {
-      const deadline = now() + t.list;
-      for (let limit = 256; limit <= 32768; limit *= 2) {
-        wire.send({ type: 'listSessions', scope: 'global', limit });
-        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, deadline - now()));
-        if (!msg || !Array.isArray(msg.sessions)) {
-          return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
-        }
-        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
-        if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
-      }
-      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
+      return await listSessionsViaWire(wire, { timeoutMs: t.list, now });
     } catch (e) {
       return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
     } finally {
@@ -1313,3 +1340,39 @@ export const interact = (sessionKey, answer) => runtime().interact(sessionKey, a
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);
 export const handshake = () => runtime().handshake();
+
+// ── 卡 D 用：开一条原始 ws ─────────────────────────────────────────────────
+// 监控/回收/健康要枚举会话、读 relay 帧，这些不在五动词里；但它们和五动词共用同一条
+// 连线层——这里只把 defaultConnect 暴露出去，绝不在别处另造第二份 ws 收发（CLAUDE.md）。
+// 返回的 wire 形状同五动词内部用的那条：{ send, waitFor, close, state, closed, failure }。
+// 端口解析必须跟 runtime() 那条一模一样（opts → MIRASIM_PORT → 默认）：
+// 不然本机服务在 4970 时这条腿去敲 4316，读不到令牌，报「服务多半没在跑」——
+// 那是**没查成**被说成了「没有」，下游会拿它当「没有会话在用树」去删树（2026-09-04 实咬）。
+export async function openWire({ homeDir = os.homedir(), port, openTimeoutMs = 8_000, connect = defaultConnect } = {}) {
+  const p = Number(port || process.env.MIRASIM_PORT || DEFAULT_PORT);
+  return connect({ homeDir, port: p, openTimeoutMs });
+}
+
+/**
+ * 本机有哪些端口上确实有 mirasim 服务在跑。判据＝回环令牌文件（服务在跑才写、
+ * 一端口一份 ~/.mirasim/run/local-<port>.token）。
+ * 返回 {readable, ports:[number]}；readable=false ⇒ 连「有没有服务」都没查成，
+ * 调用方不许据此断言「没有服务」（那正是删树误判的入口）。
+ */
+export function liveServerPorts(homeDir = os.homedir()) {
+  const dir = dirname(tokenFile(homeDir, 0));
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    // 目录不存在 = 这台机器上从没起过 mirasim（是事实）；其它错 = 没查成
+    if (e?.code === 'ENOENT') return { readable: true, ports: [], why: `${dir} 不存在（这台机器没起过 mirasim）` };
+    return { readable: false, ports: [], why: `读不到 ${dir}：${e?.message || e}` };
+  }
+  const ports = [];
+  for (const n of names) {
+    const m = /^local-(\d{2,6})\.token$/.exec(n);
+    if (m) ports.push(Number(m[1]));
+  }
+  return { readable: true, ports, why: null };
+}

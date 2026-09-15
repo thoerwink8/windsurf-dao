@@ -363,6 +363,17 @@ describe('判完工交叉核', () => {
     assert.match(v.reason, /没查成/);
   });
 
+  it('快照 done 但账本有坏行 → 交叉核拒绝不完整账本', async () => {
+    const { judgeCompletion } = await import(LIB);
+    const v = judgeCompletion({
+      view: { phase: 'done' },
+      ledger: { readable: true, rows: [ledgerRow()], bad: 1 },
+      since: T0,
+    });
+    assert.strictEqual(v.status, 'unknown');
+    assert.match(v.reason, /坏行|不完整/);
+  });
+
   it('快照 done 但账本里没有起针后的行 → 两边不一致，判没查成', async () => {
     const { judgeCompletion } = await import(LIB);
     const v = judgeCompletion({
@@ -476,6 +487,12 @@ describe('判完工交叉核', () => {
     assert.strictEqual(metaView({ runState: 'running' }).phase, 'running');
     assert.strictEqual(readSessionView({ runState: 'complete' }).phase, 'done');
     assert.strictEqual(readSessionView({ phase: 'done', incomplete: true }).incomplete, true);
+    const missingText = readSessionView({ phase: 'running' });
+    assert.strictEqual(missingText.textKnown, false);
+    assert.strictEqual(missingText.text, null);
+    const emptyText = readSessionView({ phase: 'running', text: '' });
+    assert.strictEqual(emptyText.textKnown, true);
+    assert.strictEqual(emptyText.text, '');
   });
 
   // 2026-09-11 实咬（与 review-pending.countLiveReviewers 同一个病）：
@@ -518,10 +535,27 @@ describe('账本与日志解析', () => {
         readFile: () => JSON.stringify(ledgerRow()) + '\n{坏行\n' + JSON.stringify(ledgerRow({ callId: 'c2' })) + '\n',
       },
     });
-    assert.strictEqual(r.readable, true);
+    assert.strictEqual(r.readable, false, '坏行必须让整份账本没查成，不许拿剩余行继续判');
     assert.strictEqual(r.rows.length, 2);
     assert.strictEqual(r.bad, 1);
+    assert.match(r.why, /坏行|没查成/);
     assert.ok(seen[0].includes(UUID), '目录名要用 sessionKey 的 uuid 段');
+  });
+
+  it('账本全是合法行才 readable', async () => {
+    const { readLedger } = await import(LIB);
+    const r = readLedger({
+      sessionKey: KEY,
+      homeDir: '/srv',
+      io: {
+        exists: () => true,
+        readdir: () => ['index-0.ndjson'],
+        readFile: () => JSON.stringify(ledgerRow()) + '\n',
+      },
+    });
+    assert.strictEqual(r.readable, true);
+    assert.strictEqual(r.bad, 0);
+    assert.strictEqual(r.rows.length, 1);
   });
 
   it('账本目录不在：readable=false，不返回「0 行」冒充没事', async () => {

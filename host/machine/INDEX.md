@@ -70,6 +70,7 @@
 | D | ~/bin/probe-health.mjs | #967 收进仓前与探针同目录的健康表纯函数。仓内真相源 `scripts/lib/probe-health.mjs`。禁拷、不进 git |
 | D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）；mirasim-ws-probe 探活状态（~/.local/state/mirasim-ws-probe.json，#1151，仓内脚本 scripts/mirasim-ws-probe.mjs）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
+| A | ~/.dao/mirasim-usage.json | mirasim 云端额度窗采集（#880 卡 D 写、#881 读）。schema `mirasim-usage/1`：updatedAt/host/port/mode/agentRoutes/windows[]（label/usedPercent/remainingPercent/status）。`scripts/agent-stall-watch-mirasim.mjs --health` 落盘，一个文件一个写者。不进 git，换机重生成 |
 | D | ~/.dao/progress-watch.json | 盘面推进量账本（#1004）。指挥官 `cmdAct` 每轮调 `progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
 | D | ~/.dao/board-watch.json | 看板 v0 阶段超时告警账本（#818）。`board-watch.mjs` 写「主体:阶段」指纹，同一阶段不重报到总控群。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
