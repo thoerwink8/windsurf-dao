@@ -45,6 +45,7 @@
 - [x] 本轮解 CONFLICTING：合入 origin/master（#1265 / #1270）。`commander-core` 收尾两边都留。HEAD `c5194eed`
 - [x] 返工红 1（检查器拦截证据）：正文补可复跑故意违规样本；摘接线当场红、恢复后绿
 - [x] #1133 计划第 2 节：投影带上 `cleanupVerified`，`decide` 已清退不再 stop；TDD 整链反例先红后绿
+- [x] 合入 origin/master：投影同时保留 master 的 issue/pr 字段与本分支的 cleanupVerified；认输 mergeable map 与票头过期例外都留
 
 相关套：
 
