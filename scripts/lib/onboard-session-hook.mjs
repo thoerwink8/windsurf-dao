@@ -22,15 +22,16 @@ try {
   const { readFileSync, readdirSync } = await import('node:fs');
   const { join, dirname } = await import('node:path');
   const { fileURLToPath } = await import('node:url');
-  const { initiativeLines, planDocLines, parseFrontmatter } = await import('./session-brief.mjs');
+  const { initiativeLines, planDocLines, ingestPlanDocs, unreadPlanLines } = await import('./session-brief.mjs');
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   const doc = JSON.parse(readFileSync(join(root, 'docs', 'initiatives.json'), 'utf8'));
   const dir = join(root, 'docs', 'decisions');
-  const plans = readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => {
-    try { return { file: `docs/decisions/${f}`, fm: parseFrontmatter(readFileSync(join(dir, f), 'utf8')) }; }
-    catch { return null; }
-  });
-  const lines = [...initiativeLines(doc), ...planDocLines(plans)];
+  const ingested = ingestPlanDocs(readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => {
+    const file = `docs/decisions/${f}`;
+    try { return { file, ok: true, text: readFileSync(join(dir, f), 'utf8') }; }
+    catch (e) { return { file, ok: false, error: String(e && (e.code || e.message) || e).slice(0, 80) }; }
+  }));
+  const lines = [...initiativeLines(doc), ...planDocLines(ingested.entries), ...unreadPlanLines(ingested)];
   if (lines.length) process.stdout.write(lines.join('\n') + '\n');
 } catch (e) {
   process.stdout.write(`[清单] 开场简报没查成：${e && (e.code || e.message) || '未知错误'}（≠ 清单是空的）\n`);

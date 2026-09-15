@@ -129,7 +129,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { parseFrontmatter, collectExitTargets, judgeListExit } from './lib/session-brief.mjs';
+import { parseFrontmatter, collectExitTargets, judgeListExit, ingestPlanDocs } from './lib/session-brief.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
@@ -1361,12 +1361,11 @@ function listExitPlanDocs() {
   let files;
   try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); }
   catch (e) { return { unscanned: true, error: String(e.message || e).slice(0, 80) }; }
-  const entries = [];
-  for (const f of files) {
-    try { entries.push({ file: `docs/decisions/${f}`, fm: parseFrontmatter(readFileSync(join(dir, f), 'utf8')) }); }
-    catch { /* 单个读不了不毁整扫；没 frontmatter 的本来就不进闸 */ }
-  }
-  return { entries };
+  return ingestPlanDocs(files.map((f) => {
+    const file = `docs/decisions/${f}`;
+    try { return { file, ok: true, text: readFileSync(join(dir, f), 'utf8') }; }
+    catch (e) { return { file, ok: false, error: String(e.message || e).slice(0, 80) }; }
+  }));
 }
 
 function checkListExitSamples() {
@@ -1381,7 +1380,20 @@ function checkListExitSamples() {
   if (!green_.ok) { fail('清单退场闸夹具：还有单开着却被误咬', '有 OPEN 单就不该判退场', JSON.stringify(green_).slice(0, 120)); return; }
   const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
   if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
-  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成');
+  const swallowed = ingestPlanDocs([
+    { file: 'docs/decisions/plain.md', ok: true, text: '# 普通文档\n' },
+    { file: 'docs/decisions/locked.md', ok: false, error: 'EACCES' },
+  ]);
+  if (!swallowed.unscanned) {
+    fail('清单退场闸夹具：单文件读失败没标没查成', '读失败必须 unscanned，不许当没这份文件（否则零目标会绿）', JSON.stringify(swallowed).slice(0, 160));
+    return;
+  }
+  const swallowedTargets = collectExitTargets({ initiativesDoc: { initiatives: [] }, planDocs: swallowed.entries });
+  if (swallowedTargets.length !== 0) {
+    fail('清单退场闸夹具：读失败文件不该变成挂钩对象', 'entries 只收读成的；没读成的走 unscanned', `收到 ${swallowedTargets.length}`);
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿');
 }
 
 function checkListExitLive() {
@@ -1389,7 +1401,7 @@ function checkListExitLive() {
   try { doc = JSON.parse(readFileSync(join(ROOT, 'docs', 'initiatives.json'), 'utf8')); }
   catch (e) { skip(`清单退场闸：initiatives.json 读不了（${String(e.message || e).slice(0, 60)}）——本次没查成`); return; }
   const plans = listExitPlanDocs();
-  if (plans.unscanned) { skip(`清单退场闸：decisions 目录没查成（${plans.error}）`); return; }
+  if (plans.unscanned) { skip(`清单退场闸：${plans.error}——本次没查成，不是绿`); return; }
   const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans.entries });
   if (!targets.length) { green('清单退场闸：0 个挂钩对象（active 清单/计划都没挂 issues，不是没查成）'); return; }
   const nums = [...new Set(targets.flatMap((t) => t.issues))];

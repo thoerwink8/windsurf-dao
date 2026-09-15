@@ -39,6 +39,40 @@ export function planDocLines(entries) {
 }
 
 /**
+ * 把 decisions/*.md 的读结果收成闸/简报输入。
+ * 单文件读失败必须标 unscanned，不许当「没这份文件」——否则 in-progress 计划读不出
+ * 会从退场闸和开场简报同时消失，闸把「没扫到」当零目标放行。
+ * results: [{ file, ok, text?, error? }]
+ */
+export function ingestPlanDocs(results) {
+  const list = Array.isArray(results) ? results : [];
+  const entries = [];
+  const unread = [];
+  for (const r of list) {
+    if (!r || r.ok !== true) {
+      unread.push({ file: (r && r.file) || '?', error: (r && r.error) || '读失败' });
+      continue;
+    }
+    entries.push({ file: r.file, fm: parseFrontmatter(r.text) });
+  }
+  if (unread.length) {
+    return {
+      unscanned: true,
+      error: `有 ${unread.length} 个计划文档没读成：${unread.map((u) => u.file).join('、')}`,
+      entries,
+      unread,
+    };
+  }
+  return { unscanned: false, entries, unread: [] };
+}
+
+/** 开场简报：读失败的计划文档打「没查成」，不许静默。 */
+export function unreadPlanLines(ingested) {
+  if (!ingested || !ingested.unscanned) return [];
+  return [`[清单] 计划文档没查成：${ingested.error}（≠ 没有进行中的计划）`];
+}
+
+/**
  * 清单退场闸（联动退出）的挂钩对象：active 西瓜 + in-progress 计划文档里带 issues 的。
  * 没带 issues 的不进闸（它们的退出走各自 done_when / 人工），这不是漏——闸只咬「单全关了还赖着」。
  */

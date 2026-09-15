@@ -53,6 +53,17 @@ describe('开场简报行', () => {
     assert.equal(lines.length, 1);
     assert.match(lines[0], /\[计划\] docs\/decisions\/a\.md 未收口（挂 #7 #8）/);
   });
+  it('单文件读失败 → 开场打没查成，不是静默', async () => {
+    const { ingestPlanDocs, planDocLines, unreadPlanLines } = await LIB;
+    const ingested = ingestPlanDocs([
+      { file: 'docs/decisions/a.md', ok: true, text: '---\nstatus: in-progress\nissues: [7]\n---\n' },
+      { file: 'docs/decisions/locked.md', ok: false, error: 'EACCES' },
+    ]);
+    const lines = [...planDocLines(ingested.entries), ...unreadPlanLines(ingested)];
+    assert.equal(ingested.unscanned, true);
+    assert.match(lines.find((l) => l.startsWith('[计划]')), /a\.md 未收口（挂 #7）/);
+    assert.match(lines.find((l) => /没查成/.test(l)), /locked\.md/);
+  });
 });
 
 describe('清单退场闸（联动退出）判官', () => {
@@ -100,5 +111,17 @@ describe('清单退场闸（联动退出）判官', () => {
     const { judgeListExit } = await LIB;
     const r = judgeListExit({ targets: [], states: {} });
     assert.equal(r.ok, true);
+  });
+  it('单文件读失败不得当零目标绿', async () => {
+    const { ingestPlanDocs, collectExitTargets } = await LIB;
+    const plans = ingestPlanDocs([
+      { file: 'docs/decisions/plain.md', ok: true, text: '# 无 frontmatter\n' },
+      { file: 'docs/decisions/locked.md', ok: false, error: 'EACCES' },
+    ]);
+    assert.equal(plans.unscanned, true, '读失败必须 unscanned  →  ' + JSON.stringify(plans));
+    assert.match(plans.error, /locked\.md/);
+    const targets = collectExitTargets({ initiativesDoc: { initiatives: [] }, planDocs: plans.entries });
+    assert.equal(targets.length, 0, '可读文件没有挂钩对象——这就是静默绿陷阱：只看 targets.length 会绿');
+    assert.equal(plans.unscanned, true, '调用方必须先看 unscanned，不得把零目标当查过没事');
   });
 });
