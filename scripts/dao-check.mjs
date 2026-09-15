@@ -1381,8 +1381,8 @@ function checkListExitSamples() {
   const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
   if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
   const swallowed = ingestPlanDocs([
-    { file: 'docs/decisions/plain.md', ok: true, text: '# 普通文档\n' },
-    { file: 'docs/decisions/locked.md', ok: false, error: 'EACCES' },
+    { file: 'docs/decisions/q.md', ok: true, text: '# 普通文档\n' },
+    { file: 'docs/decisions/r.md', ok: false, error: 'EACCES' },
   ]);
   if (!swallowed.unscanned) {
     fail('清单退场闸夹具：单文件读失败没标没查成', '读失败必须 unscanned，不许当没这份文件（否则零目标会绿）', JSON.stringify(swallowed).slice(0, 160));
