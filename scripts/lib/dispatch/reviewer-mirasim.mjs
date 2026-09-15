@@ -13,7 +13,7 @@
 // readTreeHead / registry）全注入，测试不碰真服务。跨厂闸复用 assertCrossVendor（照旧）。
 
 import { analyzeGithubReviews } from '../review-state.mjs';
-import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf } from '../execution-states.mjs';
+import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessionState } from '../execution-states.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
@@ -90,8 +90,10 @@ export function judgeReviewTreeSync({ treeHead, expectedOid } = {}) {
  * @param record 登记记录（defaultReviewerRegistry.read().record）
  * @param view   runtime.readSession(sessionKey) 的返回；没查就传 null
  * @param force  人工 --force：明说要另起一个
+ * @param verdictOnHead 这个 PR 的**当前 head** 上有没有审官判定：
+ *        `true` 有 / `false` 确认没有 / `null|undefined` 没查成。见下方 #1289 那节。
  */
-export function judgeReviewerSessionReuse({ record, view, force } = {}) {
+export function judgeReviewerSessionReuse({ record, view, force, verdictOnHead } = {}) {
   if (force === true) return { reuse: false, checked: false, why: '--force：人工要求另起审官会话' };
   const key = record && record.sessionKey ? String(record.sessionKey).trim() : '';
   if (!key) return { reuse: false, checked: false, why: '登记里没有 sessionKey（确认缺失）→ 可新建' };
@@ -125,6 +127,29 @@ export function judgeReviewerSessionReuse({ record, view, force } = {}) {
       why: `会话 ${key} 死于「${String(view.error).trim().slice(0, 60)}」→ 可新建（撞满载换厂）`,
     };
   }
+  // #1289（2026-09-15 实咬）：**「会话结束了」不等于「活干完了」。**
+  //
+  // 现场：19 张 PR 冻了一整天。审官会话跑完、分析做完、结论写在会话文本里
+  // （实测读到「核心检查结果已齐…还确认了一个实质逻辑洞…」），但它**从没调
+  // gh pr review 把判定落到 GitHub**，然后以 phase=done 收尾。下一轮 reviewer-create
+  // 看到 done + 无 error，判「正常完工」→ 复用 → 一个字都不发生 → PR 永久冻结。
+  // 实测 6 张连派 6 次，outcome 全是 reused，GitHub 上判定停在前一天。
+  //
+  // 「一 PR 一审官」的本意是别重复烧额度，不是把 PR 锁死在一个没交卷的审官上。
+  // 所以复用的条件从「会话没死」改成「会话没死 **且** 它真的交了判定」。
+  //
+  // 三态严格分开（这一条是本仓最常复发的病）：
+  //   · true  → 判定在当前 head 上，真审完了，复用
+  //   · false → **确认**没有判定，而会话已经终态 ⇒ 等于没审，可新建
+  //   · null  → 没查成 ⇒ 维持原样复用，不许拿「读不到」去重复烧额度
+  const terminal = EXECUTION_FINISHED.has(phase);
+  if (terminal && verdictOnHead === false) {
+    return {
+      reuse: false, sessionKey: key, checked: true, phase,
+      why: `会话 ${key} phase=${phase} 已收尾，但当前 head 上没有它交的判定——`
+        + `会话结束 ≠ 活干完了，等于没审 → 可新建`,
+    };
+  }
   return { reuse: true, sessionKey: key, checked: true, phase: phase || null, why: `登记里有在役会话 ${key}，复用（一 PR 一审官）` };
 }
 
@@ -142,14 +167,14 @@ export function reviewerMustReplaceDead({ force, switched, deadError } = {}) {
  * 锁内复查：有 sessionKey 不等于「并发已起」。
  * 满载/看门狗死会话走同一套 judgeReviewerSessionReuse，不算 raced。
  */
-export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
+export function judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead } = {}) {
   if (forceNew === true) {
     return { raced: false, why: '必须另起（force / 换厂 / 满载死会话）' };
   }
   if (!record || !record.sessionKey) {
     return { raced: false, why: '锁内复查没有 sessionKey' };
   }
-  const reuse = judgeReviewerSessionReuse({ record, view, force: false });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: false, verdictOnHead });
   if (reuse.reuse) {
     return { raced: true, record, sessionKey: reuse.sessionKey, why: reuse.why };
   }
@@ -163,16 +188,31 @@ export function judgeReviewerCreateRace({ forceNew, record, view } = {}) {
  * 第二次 peek 失败（view=null）时，没 force 会按「没查成」复用死会话——
  * 所以 forceNew 认死因，不认 requested 变没变。
  */
-export function decideReviewerCreateStart({ force, switched, deadError, record, view } = {}) {
+export function decideReviewerCreateStart({ force, switched, deadError, record, view, verdictOnHead } = {}) {
   const forceNew = reviewerMustReplaceDead({ force, switched, deadError });
-  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew });
-  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew, verdictOnHead });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
   return {
     forceNew,
     reuse,
     race,
     start: reuse.reuse !== true && race.raced !== true,
   };
+}
+
+/**
+ * 锁外 reuse=true 时，终态会话的判定快照在两次 gh / 等锁之间会过期（#1293 二审 P1）。
+ *
+ * 现场：锁外读到旧 head 有判定 → emit reused 直接退出，持锁后的重读根本跑不到；
+ * 等锁或两次读取之间 PR 已推新 head，新 head 没有判定，新提交就没有审官。
+ *
+ * 终态 + 复用 ⇒ 必须持锁后重读 headRefOid/reviews，不许在锁外退出。
+ * 在役 / 没查成 ⇒ 仍可锁外复用（在役审官还在干活；没查成 fail-closed 不烧额度）。
+ */
+export function mustRecheckVerdictUnderLock({ reuse, view } = {}) {
+  if (reuse !== true) return false;
+  const phase = sessionStateOf(view) || '';
+  return EXECUTION_FINISHED.has(phase);
 }
 
 /**
@@ -236,12 +276,17 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
 /**
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ *
+ * `verdictOnHead` 必须是**持锁后**重读的当前 head 快照，不是锁外那份（#1293 二审 P1）：
+ * 锁外 true（旧 head 有判定）在等锁期间 PR 可能已推新 head；拿旧值判 race 会跳过 create。
+ * 漏传（undefined）同样错——终态 done 会落回复用（#1293 一审 P1）。
+ * 调用方：forceNew 短路时不必重读（judgeReviewerCreateRace 根本不看这个值）。
  */
-export async function runLockedReviewerCreate({ forceNew, record, view, create } = {}) {
+export async function runLockedReviewerCreate({ forceNew, record, view, verdictOnHead, create } = {}) {
   if (typeof create !== 'function') {
     return { ok: false, error: '要注入 create（起审官会话）' };
   }
-  const race = judgeReviewerCreateRace({ forceNew, record, view });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
   if (race.raced) {
     return {
       ok: true,
@@ -472,7 +517,7 @@ export async function mirasimReviewerCreate({
   //   这里把审官模型 id 当 model 传进去**尝试**覆盖——0.0.282 认不认是实测题（见 PR 正文
   //   「选型脱节」：真机看账本 model= 那行）。认→精确；不认→选型退化为「只选族/agent」。
   let sess;
-  try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}` }); }
+  try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}`, pr: Number(pr) || null, title: `PR-#${pr}` }); }
   catch (e) {
     // 门里的**背压**标记必须原样透出去（#1145 / #1085）：租约被占、渠道满员都带
     // detail.busy=true，它们不是「起审官失败」而是「这轮轮不到」。丢掉这个标记的后果是
@@ -792,6 +837,16 @@ export async function mirasimWorkerDone({
       }
       // interact 没成 → 退到新起一针（不静默）。
     }
+  }
+  // 在役/预留会话占着树：新起会被 lease-held。树已经同步到新 HEAD，
+  // 一 PR 一审官 = 把新码交给还在跑的那位，不另起第二个。
+  const classified = classifySessionState(reuse.view);
+  if (classified === 'live' || classified === 'reserved') {
+    return {
+      ok: true, action: 'reworked-live', round: theRound, reviewCount, sessionKey,
+      treePath, treeHead, expectedOid: prHead.expectedOid, treeSync, reuse,
+      why: `审官会话还在跑（${classified}/${sessionStateOf(reuse.view) || ''}），树已同步到新 HEAD，不另起第二个`,
+    };
   }
   const created = await mirasimReviewerCreate({
     runtime, gh, readTreeHead, prepareRef, syncTree,

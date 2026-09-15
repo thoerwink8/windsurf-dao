@@ -625,6 +625,11 @@ export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {
         deadModelId: capacityFailover.deadModelId || seat.modelId,
         deadError: capacityFailover.deadError,
         workerId: capacityFailover.workerId,
+        // 腿况证据必须**转发**：这里是生产路径上真正说了算的那道闸。
+        // #1290 首审当场逮到——纯判据放行了，这里重建凭证时把 legEvidence 丢了，
+        // 于是「新死法 + 腿况成立」在单测里绿、在生产上照旧被拒。
+        // 判例 memory `fix-landed-at-one-call-site-only`：修法只接一个调用点等于没接。
+        legEvidence: capacityFailover.legEvidence,
         models: Array.isArray(routing.models) ? routing.models : [],
         passerIds: order,
         order,

@@ -716,7 +716,8 @@ describe('返工复用原 PR', () => {
     assert.match(src, /复用这张 PR，不开第二张/);
     const i = src.indexOf('function dispatchRework');
     const body = src.slice(i, i + 4500);
-    assert.match(body, /dao\.mjs', 'start'/);
+    assert.match(body, /mirasimStartCmd/);
+    assert.match(src, /function mirasimStartCmd[\s\S]*?dao\.mjs', 'start'/);
     assert.doesNotMatch(body, /'--allow-dup'/);
   });
 });
