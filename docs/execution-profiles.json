@@ -12561,13 +12561,6 @@
         "evidence": "native_auth_field"
       },
       {
-        "provider": "deepseek",
-        "kind": "provider-key",
-        "present": true,
-        "location": "~/.pi/agent/auth.json",
-        "evidence": "native_auth_field"
-      },
-      {
         "provider": "commandcode",
         "kind": "provider-key",
         "present": false,

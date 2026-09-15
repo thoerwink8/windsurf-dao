@@ -124,7 +124,7 @@ The JSON snapshots hold exact IDs and per-source timestamps. At the observed tim
 | --- | --- | --- |
 | `https://opencode.ai/zen/v1/models` | 70 IDs | Public Zen catalog; includes `deepseek-v4-flash`, `deepseek-v4-flash-free`, `gpt-5-nano`, `gpt-5.4-mini`, `gpt-5.4-nano` |
 | `https://opencode.ai/zen/go/v1/models` | 35 IDs | Public Go catalog; includes `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
-| `https://api.deepseek.com/models` with native key | 3 IDs | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
+| DeepSeek official models endpoint with native key (channel deleted 2026-09-15; row kept as dated observation) | 3 IDs | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
 | NewAPI OpenCode group | 7 IDs | Filtered gateway listing, not the Go provider's complete menu |
 | NewAPI CommandCode group | 6 IDs | Includes `deepseek/deepseek-v4-flash`; not a direct provider entitlement check |
 | NewAPI Windsurf group | 48 IDs | Includes `deepseek-v4-flash-max`; not Devin Pro billing evidence |
@@ -180,7 +180,7 @@ the **carrier** does, which is the thing dispatch actually uses, and it disagree
 with the earlier probe in one place.
 
 `~/.pi/agent/models-store.json` was refreshed with `pi update --models`. The
-authenticated rosters are: `deepseek` 2 IDs (`api.deepseek.com`, openai-completions),
+authenticated rosters are: `deepseek` 2 IDs (official OpenAI-completions endpoint; channel deleted 2026-09-15),
 `opencode-go` 27 IDs (`opencode.ai/zen/go/v1` for 20 openai-completions and 4
 openai-responses, `opencode.ai/zen/go` for 2 anthropic-messages), `anthropic` 14 IDs.
 `xai` is present as an **OAuth** entry, not an api_key, and `anthropic` has **no
