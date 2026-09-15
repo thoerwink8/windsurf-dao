@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 
 const CORE = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
+const REVIEW_PENDING = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/'));
 
 function readyIssue(n) {
   return {
@@ -65,6 +66,7 @@ describe('审官也吃名额（本次修的核心）', () => {
   // #1007 二期的本意（审官不许不限张）由 FINISH_SLOTS_MAX 保住——见下一条。
   it('slots=0（机器满）→ 收尾照起，但**仍有上限**，不因为机器满就不限张', async () => {
     const { decide, FINISH_SLOTS_MAX } = await CORE;
+    const { DEFAULT_REVIEWER_CAP } = await REVIEW_PENDING;
     const r = decide(situation({
       // 一张票只喊一次 drain（#1125），这里靠多张返工票把收尾名额吃满
       ticket: [{ pr: 101 }, { pr: 102 }],
@@ -72,7 +74,11 @@ describe('审官也吃名额（本次修的核心）', () => {
     }));
     assert.equal(kinds(r, 'attach-reviewer').length, 1, '机器满载时收尾仍要能推进（本轮要修的正是这一格）');
     assert.ok(FINISH_SLOTS_MAX >= 1, '收尾名额是个有上限的池子，不是不限张');
-    assert.ok(FINISH_SLOTS_MAX <= 5, '上限别大开——#1007 二期的教训是审官不许不限张');
+    // 2026-09-15：原来这里钉的是手打的 5（配手打的 FINISH_SLOTS_MAX = 3）。
+    // 上限改成按机器算之后，「不许不限张」的真刻度是审官自己的上限——
+    // 收尾名额比上游真限额还宽就是漏闸，钉那个，不再钉一个跟着要改的数字。
+    assert.ok(FINISH_SLOTS_MAX <= DEFAULT_REVIEWER_CAP,
+      `上限别大开——收尾 ${FINISH_SLOTS_MAX} 不许超过审官上限 ${DEFAULT_REVIEWER_CAP}`);
   });
 
   it('排队下轮不算失败：不产 escalate', async () => {

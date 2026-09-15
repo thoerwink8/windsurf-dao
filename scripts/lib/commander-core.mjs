@@ -47,7 +47,9 @@ import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   reviewPendingSourceOf,
+  DEFAULT_REVIEWER_CAP,
 } from './dispatch/review-pending.mjs';
+import { cpus } from 'node:os';
 import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
@@ -513,10 +515,40 @@ export const REREVIEW_GRACE_MIN = 45;
  * 而它原先连「把手上这些活收掉」一起拦——机器一满（slots=0），25 张 PR 一条判定都没有，
  * 满载空转等收尾（2026-09-10 实咬，见 finishSlots 处的注释）。
  *
- * 上限取 3 的理由：收尾动作主要是等模型回话的 IO，本机开销小（实测审官进程 ~2% CPU），
- * 但一轮里同时开太多会把当轮的决定表拉长、也不好定位；3 条够把「本轮的收尾队列」推着走。
+ * **不再手打 3**（2026-09-15 改）。那个 3 当初的理由是「一轮开太多不好定位」，
+ * 不是资源理由；而它实测就是限流点：
+ *
+ *   · 盘面 21 张 PR 等复审，审官在役 0、上限 8，**一轮只派 3 张**
+ *     ⇒ 扫一遍要 7 轮 × 20 分钟 ≈ 2.3 小时，队列一直排着。
+ *   · 同时 5 个审官在跑时实测（6 核机）：每个 ≈ 3.7% CPU / 174M RSS
+ *     （codex CLI + app-server 两进程），10 个 codex 进程合计 18.7% CPU / 868M；
+ *     内存已用 3793M / 可用 8166M。按上限 8 满跑也只有 ~30% CPU / 1.4G。
+ *
+ * 也就是说 3 比**已经声明过的**审官上限（DEFAULT_REVIEWER_CAP=8，那个数是 2026-09-14
+ * 实测 6 并发零容量拒绝 + 2 余量定的）更紧，是一个多余的第二道闸。
+ * 判例 memory `hand-typed-constant-will-be-wrong`：两个各自手打的数早晚互相打架。
+ *
+ * 新判据：取**已有的两个数的较小值**，不新造数字——
+ *   · 审官上限 `DEFAULT_REVIEWER_CAP`（上游并发的真限额，可用 DAO_REVIEWER_CAP 覆盖）
+ *   · 本机核数（收尾虽是 IO 等待，但每个都带一个本地 CLI 进程）
+ * 再兜一个下界 3：机器再小也要留得下「本轮把手上的活推过终点线」的余地，
+ * 这正是这笔名额存在的理由。
+ *
+ * 真正的节流仍在别处、且一点没松：机器余量准入（admissionUnscanned ⇒ 收尾归零）、
+ * 渠道并发闸、以及拉取预算 `planReviewAdmission`。这里只是不再比它们更紧。
  */
-export const FINISH_SLOTS_MAX = 3;
+export const FINISH_SLOTS_FLOOR = 3;
+
+export function finishSlotsMax({ reviewerCap = DEFAULT_REVIEWER_CAP, cores } = {}) {
+  const cap = Number(reviewerCap);
+  const n = Number(cores);
+  const byCap = Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : DEFAULT_REVIEWER_CAP;
+  const byCores = Number.isFinite(n) && n > 0 ? Math.floor(n) : byCap;
+  return Math.max(FINISH_SLOTS_FLOOR, Math.min(byCap, byCores));
+}
+
+/** 本机算出来的值。夹具要别的数就直接调 finishSlotsMax()。 */
+export const FINISH_SLOTS_MAX = finishSlotsMax({ cores: (cpus() || []).length });
 export const MAX_REREVIEW_TRIES = 3;
 // 返工派工失败后的重试节奏。与 drain / 复审同一套语义（45 分钟宽限、试满 3 次停手交人），
 // 故意不另造一套数字：三条路犯的是同一个「派了 ≠ 成了」，节奏不同只会让人以为它们是三件事。

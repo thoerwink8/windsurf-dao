@@ -721,7 +721,7 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     assert.ok(byKind(retired, 'escalate').some((a) => a.reason === 'model-not-in-routing'));
   });
 
-  // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX=3）。
+  // 2026-09-10 改契约：返工不再跟新活共用机器余量名额，改领**收尾名额**（上限 FINISH_SLOTS_MAX）。
   // 缘由：机器一满 slots=0，连「把手上这些 PR 收掉」也被拦住——25 张 PR 一条判定都没有、
   // 满载空转等收尾（实咬）。新活仍旧一个不派，那半边的本意不变（见下一条用例）。
   it('⑤单轮返工领收尾名额：上限 FINISH_SLOTS_MAX，超出的排队下轮，不丢也不 escalate', async () => {
@@ -729,7 +729,10 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     const issues = [];
     const prs = [];
     const byPr = {};
-    for (let i = 0; i < 5; i += 1) {
+    // 喂比上限多两张，才测得出「超出的排队下轮」。
+    // 张数跟着 FINISH_SLOTS_MAX 走：这个上限 2026-09-15 起按机器算，写死张数会跟着要改。
+    const n = FINISH_SLOTS_MAX + 2;
+    for (let i = 0; i < n; i += 1) {
       issues.push(labeledIssue(710 + i));
       prs.push(redPr(760 + i, `head${i}`, 710 + i));
       byPr[760 + i] = { reviews: [redReview(`第 ${i} 张的红项全文`, `head${i}`)] };
@@ -743,7 +746,11 @@ describe('decide：判红 → 直接派返工工人（#931，删掉「唤大脑�
     }));
     const w = byKind(r, 'rework');
     assert.equal(w.length, FINISH_SLOTS_MAX, `机器满载时返工仍要能推进，最多 ${FINISH_SLOTS_MAX} 个，实际 ${w.length}`);
-    assert.deepEqual(w.map((a) => a.pr), [760, 761, 762]);
+    assert.deepEqual(
+      w.map((a) => a.pr),
+      Array.from({ length: FINISH_SLOTS_MAX }, (_, i) => 760 + i),
+      '领到名额的是排在前面的那几张，不是随机挑',
+    );
     assert.equal(byKind(r, 'escalate').length, 0, '超上限是排队下轮，不是报帅');
     // 回流 = 每个真派出去的返工一条 + 一条「机器满、不收新活」的群通知（那是另一回事，分开数）。
     const dispatched = byKind(r, 'notify-hub').filter((a) => a.moment === 'dispatched');
