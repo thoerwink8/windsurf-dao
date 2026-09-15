@@ -1865,6 +1865,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  readPrHead,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2112,28 +2113,6 @@ async function cmdReviewerCreateMirasim(args) {
       executor: 'mirasim', stage: 'registry', pr: String(args.pr),
     });
   }
-  const existingRecord = existing.ok ? existing.record : null;
-  const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
-    ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
-    : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
-  const decided = decideReviewerCreateStart({
-    force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view,
-  });
-  const forceNew = decided.forceNew;
-  // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  if (decided.reuse.reuse) {
-    emit({
-      ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
-      reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
-      agent: existingRecord.agent || null, treePath: existingRecord.treePath || null,
-      expectedOid: existingRecord.expectedOid || null,
-      mergePolicy: books.mergePolicy, mergePolicySource: books.source,
-      reuse: { reuse: true, checked: decided.reuse.checked, why: decided.reuse.why, peekWhy: peek.why || null },
-      why: `${decided.reuse.why}（要另起加 --force）`,
-    });
-  }
-
   const repo = targetRepo.localPath;
   if (args.dryRun) {
     emit({
@@ -2149,6 +2128,8 @@ async function cmdReviewerCreateMirasim(args) {
 
   // 起会话 + 写登记必须在同一把 per-PR 锁里，并在锁内**再读一次登记**（double-check）：
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
+  // 复用结果发出前必须在锁内重读 PR head：锁外快照在等锁期间会过期，沿用它会把旧
+  // head 上的会话报成 reused（本闸要修的竞态）。新建路径同样只用这次锁内读取。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr, ownerName);
     if (again && again.ok !== true && again.missing !== true) {
@@ -2163,11 +2144,17 @@ async function cmdReviewerCreateMirasim(args) {
     }
     const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
-    const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
+    const racePeek = (againRecord && againRecord.sessionKey)
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
+    const lockedHead = readPrHead(gh, args.pr);
+    const lockedLiveHead = lockedHead.ok === true ? lockedHead.expectedOid : null;
+    const decided = decideReviewerCreateStart({
+      force: args.force, switched: planned.switched, deadError: failover.deadError,
+      record: againRecord, view: racePeek.view, liveHead: lockedLiveHead,
+    });
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view,
+      forceNew: decided.forceNew, record: againRecord, view: racePeek.view, liveHead: lockedLiveHead,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
@@ -2193,7 +2180,16 @@ async function cmdReviewerCreateMirasim(args) {
         };
       },
     });
-    if (locked.raced) return { raced: true, record: againRecord };
+    if (locked.raced) {
+      return {
+        raced: true,
+        record: againRecord,
+        why: locked.why,
+        checked: decided.reuse.checked,
+        peekWhy: racePeek.why || null,
+        liveHead: lockedLiveHead,
+      };
+    }
     const created = locked.res;
     if (!created || !created.ok) return { res: created };
     return { res: created, w: created.registryWrite };
@@ -2206,14 +2202,21 @@ async function cmdReviewerCreateMirasim(args) {
     });
   }
   if (guarded.raced) {
+    const reuseWhy = guarded.why || '锁内复查：这个 PR 已经有审官会话了';
     emit({
       ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: guarded.record.sessionKey,
       agent: guarded.record.agent || null, treePath: guarded.record.treePath || null,
       expectedOid: guarded.record.expectedOid || null,
+      liveHead: guarded.liveHead || null,
       mergePolicy: books.mergePolicy, mergePolicySource: books.source,
-      reuse: { reuse: true, checked: false, why: '锁内复查发现别的进程刚起过（并发抢锁）' },
-      why: '锁内复查：这个 PR 已经有审官会话了（要另起加 --force）',
+      reuse: {
+        reuse: true,
+        checked: guarded.checked ?? false,
+        why: reuseWhy,
+        peekWhy: guarded.peekWhy || null,
+      },
+      why: `${reuseWhy}（要另起加 --force）`,
     });
   }
   const res = guarded.res;
@@ -2313,7 +2316,7 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单号，完工 comment 只发 PR' };
   if (plan.issue) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
