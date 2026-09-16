@@ -12967,6 +12967,13 @@
         "evidence": "requires_endpoint_and_key_provenance"
       },
       {
+        "provider": "pqapi",
+        "kind": "unknown",
+        "present": true,
+        "location": "~/.codex-sol/auth.json",
+        "evidence": "requires_endpoint_and_key_provenance"
+      },
+      {
         "provider": "cursor-native",
         "kind": "native-login",
         "present": true,

@@ -300,6 +300,7 @@ pqgpt 给了**两把** key：一把对 `gpt-5.6-sol`，一把对其他模型。�
 
 key 的真身在 `~/.config/ai-gateway/migration-1174/pqapi-sol.key`（C 类，不进 git）。
 目录 0700、两个文件 0600。
+执行目录 `credentialInventory` 分两行登记：默认 `~/.codex/auth.json`（luna）和 `~/.codex-sol/auth.json`（sol），不能合成一条。
 
 - 起法：`CODEX_HOME=~/.codex-sol codex ...`。执行目录里 `codex-pqapi-sol.connection.codexHome` 记的就是这个路径。
 - 验证（两条都要跑，只跑一条证不出没互相盖）：
