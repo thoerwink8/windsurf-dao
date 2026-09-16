@@ -56,6 +56,7 @@ const PR_HEAD = {
 function prPayload(n, extra) {
   const issue = {
     42: '565', 43: '568', 44: '569', 45: '570', 46: '565', 47: '571', 48: '572', 49: '573',
+    50: '565',
   }[String(n)];
   const labels = issue ? (ISSUE_LABELS[issue] || []) : [];
   return { reviews: [], labels, ...PR_HEAD, ...extra };
@@ -152,6 +153,17 @@ if (args[0] === 'pr' && args[1] === 'view') {
     process.stdout.write(JSON.stringify(prPayload(n, {
       title: '家族查不出的假 id',
       body: 'Closes #573',
+    })));
+    process.exit(0);
+  }
+  if (n === '50') {
+    process.stdout.write(JSON.stringify(prPayload(n, {
+      title: '审查轮次预算跨仓夹具',
+      body: '署名 issue #565',
+      reviews: [
+        { id: 1, state: 'CHANGES_REQUESTED', body: '红1', commit_id: PR_HEAD.headRefOid },
+        { id: 2, state: 'CHANGES_REQUESTED', body: '红2', commit_id: PR_HEAD.headRefOid },
+      ],
     })));
     process.exit(0);
   }

@@ -7,7 +7,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const LIVE = path.join(REPO, 'docs', 'release-policy.json');
@@ -242,6 +244,55 @@ describe('decide：超限停手，不派返工/复审', () => {
     assert.equal(byKind(r, 'mark-exhausted').length, 0);
   });
 
+  it('budget.unscanned + 当前 head 两条红 → escalate/unscanned，不 rework', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [redPr(885, HEAD, 1227)] },
+      prReviews: { scanned: true, byPr: { 885: { reviews: nReds(2, HEAD) } } },
+      reviewRoundsBudget: { unscanned: true, error: '故意没读到上限' },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '策略没读到不许当无限预算去派返工');
+    assert.equal(byKind(r, 'rereview').length, 0);
+    assert.equal(byKind(r, 'attach-reviewer').length, 0);
+    const un = byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned');
+    assert.equal(un.length, 1);
+    assert.equal(un[0].reason, 'unscanned');
+    assert.match(un[0].why, /上限没查成/);
+  });
+
+  it('CONFLICTING + rounds>=max → 不派解冲突返工，打等用户标', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      ...redPr(885, HEAD, 1227),
+      mergeable: 'CONFLICTING',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 885: { reviews: nReds(2, HEAD) } } },
+      reviewRoundsBudget: { max: 2 },
+    }));
+    assert.equal(byKind(r, 'rework').length, 0, '超限冲突不许再消耗一轮返工');
+    const stop = byKind(r, 'mark-exhausted');
+    assert.equal(stop.length, 1);
+    assert.equal(stop[0].verb, 'review-rounds');
+  });
+
+  it('CONFLICTING + 策略可读但还没审过 → 仍派解冲突（缺 reviews 不是上限没查成）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      ...redPr(885, HEAD, 1227),
+      mergeable: 'CONFLICTING',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [pr] },
+      prReviews: { scanned: true, byPr: {} },
+      reviewRoundsBudget: { max: 2 },
+    }));
+    assert.equal(byKind(r, 'rework').length, 1);
+    assert.equal(byKind(r, 'rework')[0].conflict, true);
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned').length, 0);
+  });
+
   it('待审票 + 已满轮次 → 不 attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
@@ -295,6 +346,24 @@ describe('planWorkerDone：超限 halt，不起下一轮', () => {
     assert.equal(got.reviewRounds.rounds, 2);
   });
 
+  it('budget.unscanned → halt，仍算交卷、不起下一轮', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '885',
+      body: '返工完成：已改',
+      reviewRoundsBudget: { unscanned: true, error: '故意没读到上限' },
+      runGh: fakeGh({
+        title: '[cc] fix',
+        labels,
+        reviews: nReds(2, 'h'),
+      }),
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.round, 'rework');
+    assert.equal(got.halt, 'review-rounds-unscanned');
+    assert.equal(got.reviewRounds.state, 'unscanned');
+  });
+
   it('0 条 review、max=2 → 首审，不 halt', async () => {
     const { planWorkerDone } = await WD;
     const got = planWorkerDone({
@@ -316,16 +385,107 @@ describe('热路真的读了这个模块', () => {
     assert.match(src, /askReviewRoundsCard/);
   });
 
-  it('dao.mjs 交卷 / 起审官都过闸', () => {
+  it('dao.mjs 交卷 / 起审官都过闸，读目标仓策略，unscanned 也拦', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
-    assert.match(src, /reviewRoundsBudget:\s*reviewRoundsBudgetOf/);
+    assert.equal(
+      (src.match(/reviewRoundsBudgetOf\(targetRepo\.localPath\)/g) || []).length,
+      2,
+      'reviewer-create / worker-done 都要按目标仓路径读策略',
+    );
+    assert.doesNotMatch(src, /reviewRoundsBudgetOf\(\)/);
     assert.match(src, /judgeNextReviewRound/);
     assert.match(src, /REVIEW_ROUNDS_HALT/);
+    assert.match(src, /REVIEW_ROUNDS_UNSCANNED/);
     assert.match(src, /reviewRoundsExceededError/);
+    assert.match(src, /reviewRoundsUnscannedError/);
+    assert.match(src, /nextReviewRoundBlocked/);
   });
 
   it('scripts/ 里 review_rounds_max 出现在读 JSON 的库，不是再抄一份', () => {
     const lib = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'review-rounds-budget.mjs'), 'utf8');
     assert.match(lib, /budget\?\.per_issue\?\.review_rounds_max/);
+  });
+});
+
+function lastJson(r) {
+  try { return JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { return { raw: r.stdout, err: r.stderr }; }
+}
+
+function writePolicyRepo(max) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-1227-budget-'));
+  fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+  const live = JSON.parse(fs.readFileSync(LIVE, 'utf8'));
+  if (max == null) return dir;
+  live.budget.per_issue.review_rounds_max = max;
+  fs.writeFileSync(path.join(dir, 'docs', 'release-policy.json'), JSON.stringify(live));
+  return dir;
+}
+
+function cliBudget(verb, repoPath) {
+  return spawnSync(process.execPath, [
+    path.join(REPO, 'scripts', 'dao.mjs'),
+    verb, '--pr', '50', '--executor', 'mirasim', '--dry-run',
+    '--repo', repoPath,
+  ], {
+    encoding: 'utf8',
+    cwd: REPO,
+    env: {
+      ...process.env,
+      DAO_GH_FAKE: path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs'),
+    },
+  });
+}
+
+describe('热路：跨仓读目标仓策略，unscanned 当场拦', () => {
+  it('目标仓改 review_rounds_max 后 reviewer-create / worker-done 跟着变', () => {
+    const tight = writePolicyRepo(1);
+    const loose = writePolicyRepo(6);
+    try {
+      const createTight = cliBudget('reviewer-create', tight);
+      const pCreateTight = lastJson(createTight);
+      assert.notEqual(createTight.status, 0, JSON.stringify(pCreateTight));
+      assert.match(String(pCreateTight.error || ''), /review-rounds-exceeded/);
+
+      const createLoose = cliBudget('reviewer-create', loose);
+      const pCreateLoose = lastJson(createLoose);
+      assert.equal(createLoose.status, 0, JSON.stringify({ payload: pCreateLoose, stderr: createLoose.stderr }));
+      assert.equal(pCreateLoose.ok, true);
+      assert.notEqual(pCreateLoose.reviewRounds && pCreateLoose.reviewRounds.state, 'exceeded');
+
+      const doneTight = cliBudget('worker-done', tight);
+      const pDoneTight = lastJson(doneTight);
+      assert.equal(doneTight.status, 0, JSON.stringify(pDoneTight));
+      assert.equal(pDoneTight.halt, 'review-rounds-exceeded');
+      assert.equal(pDoneTight.action, 'review-rounds-exceeded');
+
+      const doneLoose = cliBudget('worker-done', loose);
+      const pDoneLoose = lastJson(doneLoose);
+      assert.equal(doneLoose.status, 0, JSON.stringify(pDoneLoose));
+      assert.equal(pDoneLoose.halt, null);
+      assert.notEqual(pDoneLoose.action, 'review-rounds-exceeded');
+    } finally {
+      fs.rmSync(tight, { recursive: true, force: true });
+      fs.rmSync(loose, { recursive: true, force: true });
+    }
+  });
+
+  it('目标仓缺策略文件 → reviewer-create 拒；worker-done 交卷但不入下一轮', () => {
+    const missing = writePolicyRepo(null);
+    try {
+      const create = cliBudget('reviewer-create', missing);
+      const pCreate = lastJson(create);
+      assert.notEqual(create.status, 0, JSON.stringify(pCreate));
+      assert.match(String(pCreate.error || ''), /review-rounds-unscanned/);
+
+      const done = cliBudget('worker-done', missing);
+      const pDone = lastJson(done);
+      assert.equal(done.status, 0, JSON.stringify(pDone));
+      assert.equal(pDone.halt, 'review-rounds-unscanned');
+      assert.equal(pDone.action, 'review-rounds-unscanned');
+      assert.notEqual(pDone.action, 'queued-for-review');
+    } finally {
+      fs.rmSync(missing, { recursive: true, force: true });
+    }
   });
 });

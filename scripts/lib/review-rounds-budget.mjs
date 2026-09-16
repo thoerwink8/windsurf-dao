@@ -16,6 +16,7 @@ import { WAITING_USER_LABEL } from './exhausted.mjs';
 
 export const POLICY_REL = 'docs/release-policy.json';
 export const HALT_CODE = 'review-rounds-exceeded';
+export const UNSCANNED_CODE = 'review-rounds-unscanned';
 
 function str(v) {
   return v == null ? '' : String(v).trim();
@@ -64,8 +65,9 @@ export function loadReviewRoundsBudgetFile(file) {
 /**
  * 要不要拦下一轮审查。
  *
- * budget 没给 / unscanned → skip（调用方没注入闸，不等于「上限是无限」；
- * 生产路径必须注入。测试夹具可不注入，以免改到无关用例）。
+ * budget 没给 → skip（测试夹具可不注入，以免改到无关用例）。
+ * 生产路径必须注入；注入后 unscanned / exceeded 都要拦下一轮。
+ * 只认 exceeded 会把「策略没读到」当成无限预算。
  * reviews 不是数组 → unscanned（没查成，不许当 0 轮）。
  */
 export function judgeNextReviewRound({ reviews, budget } = {}) {
@@ -90,9 +92,21 @@ export function judgeNextReviewRound({ reviews, budget } = {}) {
   return { state: 'ok', rounds, max };
 }
 
+/** 没查成与超限都要拦下一轮。只认 exceeded = 策略旁路。 */
+export function nextReviewRoundBlocked(judged) {
+  const state = judged && judged.state;
+  return state === 'exceeded' || state === 'unscanned';
+}
+
 export function reviewRoundsExceededError({ pr, rounds, max } = {}) {
   const n = pr == null ? '?' : String(pr);
   return `${HALT_CODE}：PR #${n} 审查轮次 ${rounds}/${max}，不起下一轮`;
+}
+
+export function reviewRoundsUnscannedError({ pr, error } = {}) {
+  const n = pr == null ? '?' : String(pr);
+  const detail = str(error) || `${POLICY_REL} 的审查轮次上限没查成`;
+  return `${UNSCANNED_CODE}：PR #${n} 审查轮次上限没查成（${detail}），不起下一轮`;
 }
 
 export function reviewRoundsStopComment({ pr, rounds, max, head } = {}) {

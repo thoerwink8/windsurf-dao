@@ -12,7 +12,12 @@
 import { parseOwnerNameRepo } from './repo.mjs';
 // 认领判据只有一份实现，在关单侧（同时管着「被否定的分句不算认领」与标题退路收严）。这里不抄第二份。
 import { attributedIssueNumbers, attributedIssueNumber } from '../close-issue.mjs';
-import { judgeNextReviewRound, HALT_CODE as REVIEW_ROUNDS_HALT } from '../review-rounds-budget.mjs';
+import {
+  judgeNextReviewRound,
+  nextReviewRoundBlocked,
+  HALT_CODE as REVIEW_ROUNDS_HALT,
+  UNSCANNED_CODE as REVIEW_ROUNDS_UNSCANNED,
+} from '../review-rounds-budget.mjs';
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
@@ -588,7 +593,9 @@ export function planWorkerDone({ pr, body, runGh, reviewer, reviewRoundsBudget }
     shouldCreate,
     reviewCount: listed.count,
     reviewRounds,
-    halt: reviewRounds.state === 'exceeded' ? REVIEW_ROUNDS_HALT : null,
+    halt: !nextReviewRoundBlocked(reviewRounds) ? null
+      : reviewRounds.state === 'exceeded' ? REVIEW_ROUNDS_HALT
+        : REVIEW_ROUNDS_UNSCANNED,
     pr: n,
     issue,
     reviewer: resolved.modelId,

@@ -1542,15 +1542,32 @@ function collectCandidates(situation) {
     out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
   }
 
-  /** #1227：rounds >= review_rounds_max 就停手上报，不再派返工/复审。绿的仍合。 */
+  /** #1227：超限或上限没查成都停手，不再派返工/复审。绿的仍合（合门在这之前）。 */
   function haltReviewRoundsIfExceeded(pr, { reviews: rev, situation: sit, out: sink, exhaustedThisRound: marked, homeRepo: repo }) {
     if (!pr || pr.number == null) return false;
     if (marked.has(Number(pr.number))) return true;
+    const budget = sit.reviewRoundsBudget;
+    // 策略没读到才 fail-closed。reviews 缺数组是零判定/没抓到，留给后面那几格，
+    // 否则 CONFLICTING 且 byPr 没有条目的 PR 会被这里连坐成不停手也不解冲突。
+    if (budget && (budget.unscanned || !Number.isInteger(budget.max) || budget.max < 1)) {
+      sink.push(withNeeds(esc(
+        `PR #${pr.number} 审查轮次上限没查成（${budget.error || '没查成'}）——不起下一轮返工/复审`,
+        {
+          reason: 'unscanned',
+          pr: pr.number,
+          missing: ['reviewRoundsBudget'],
+          detail: 'review-rounds-unscanned',
+        },
+      ), N.escalate));
+      marked.add(Number(pr.number));
+      return true;
+    }
     const raw = prReviewInput(rev.byPr?.[pr.number]);
-    const judged = judgeNextReviewRound({ reviews: raw, budget: sit.reviewRoundsBudget });
+    const judged = judgeNextReviewRound({
+      reviews: Array.isArray(raw) ? raw : [],
+      budget,
+    });
     if (judged.state !== 'exceeded') return false;
-    const atHead = analyzeReviewsAtHead(raw, pr.headRefOid);
-    if (atHead.scanned && atHead.latestGreen) return false;
     if (prHasStuckLabel(pr)) {
       marked.add(Number(pr.number));
       return true;
@@ -1709,6 +1726,13 @@ function collectCandidates(situation) {
       continue;
     }
 
+    // #1227：预算闸必须在会产返工/复审/待审票的动作之前。
+    // 写在 CONFLICTING 后面时，超限冲突 PR 会先被派成解冲突返工，闸根本走不到。
+    // 合门已经在上面处理完：绿+可合的照样合，这里只拦下一轮消耗。
+    if (haltReviewRoundsIfExceeded(pr, {
+      reviews, situation, out, exhaustedThisRound, homeRepo,
+    })) continue;
+
     // 冲突态：审官判不了冲突 PR——GitHub 对 CONFLICTING 连 CI 都不触发，叫审官必然白跑，
     // drain 试满后每轮开一张 [待拍板] 单。这一格原本整个空着：指挥官只认 MERGEABLE（合并）
     // 和判红（返工），CONFLICTING 从所有分支里漏掉，9 张 PR 卡在这里没有任何动作（2026-09-06 实测）。
@@ -1759,11 +1783,6 @@ function collectCandidates(situation) {
 
     // 审官已经放行：head 变了只因对接 master。不要因为当前 head 零判定再叫一轮审官。
     if (readyToLand) continue;
-
-    // #1227：审查轮次已经满了，不要再派返工、也不要再叫第 N+1 轮审官。
-    if (haltReviewRoundsIfExceeded(pr, {
-      reviews, situation, out, exhaustedThisRound, homeRepo,
-    })) continue;
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);

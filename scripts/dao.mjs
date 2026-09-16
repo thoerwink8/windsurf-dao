@@ -232,7 +232,9 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import {
   loadReviewRoundsBudgetFile, judgeNextReviewRound, reviewRoundsExceededError,
-  HALT_CODE as REVIEW_ROUNDS_HALT, POLICY_REL as RELEASE_POLICY_REL,
+  reviewRoundsUnscannedError, nextReviewRoundBlocked,
+  HALT_CODE as REVIEW_ROUNDS_HALT, UNSCANNED_CODE as REVIEW_ROUNDS_UNSCANNED,
+  POLICY_REL as RELEASE_POLICY_REL,
 } from './lib/review-rounds-budget.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
@@ -2115,12 +2117,15 @@ async function cmdReviewerCreateMirasim(args) {
   const listedRounds = listPrReviews({ pr: args.pr, runGh: gh });
   if (!listedRounds.ok) fail(listedRounds.error, { pr: String(args.pr) });
   const reviewRounds = judgeNextReviewRound({
-    reviews: listedRounds.reviews, budget: reviewRoundsBudgetOf(),
+    reviews: listedRounds.reviews, budget: reviewRoundsBudgetOf(targetRepo.localPath),
   });
-  if (reviewRounds.state === 'exceeded') {
-    fail(reviewRoundsExceededError({
-      pr: args.pr, rounds: reviewRounds.rounds, max: reviewRounds.max,
-    }), { pr: String(args.pr), reviewRounds });
+  if (nextReviewRoundBlocked(reviewRounds)) {
+    const haltError = reviewRounds.state === 'exceeded'
+      ? reviewRoundsExceededError({
+        pr: args.pr, rounds: reviewRounds.rounds, max: reviewRounds.max,
+      })
+      : reviewRoundsUnscannedError({ pr: args.pr, error: reviewRounds.error });
+    fail(haltError, { pr: String(args.pr), reviewRounds });
   }
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: picked.modelId, routing,
@@ -2319,7 +2324,7 @@ async function cmdWorkerDoneMirasim(args) {
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
   const plan = planWorkerDone({
     pr: args.pr, body, runGh: gh, reviewer: args.reviewer,
-    reviewRoundsBudget: reviewRoundsBudgetOf(),
+    reviewRoundsBudget: reviewRoundsBudgetOf(targetRepo.localPath),
   });
   if (!plan.ok) fail(plan.error, plan);
   const routing = loadOrFail();
@@ -2368,12 +2373,21 @@ async function cmdWorkerDoneMirasim(args) {
   if (!books.ok) fail(books.error, { policyPlan, ...plan });
 
   if (args.dryRun) {
+    const haltWhy = plan.halt === REVIEW_ROUNDS_HALT
+      ? reviewRoundsExceededError({
+        pr: plan.pr, rounds: (plan.reviewRounds || {}).rounds, max: (plan.reviewRounds || {}).max,
+      })
+      : plan.halt === REVIEW_ROUNDS_UNSCANNED
+        ? reviewRoundsUnscannedError({ pr: plan.pr, error: (plan.reviewRounds || {}).error })
+        : null;
     emit({
       ok: true, dryRun: true, executor: 'mirasim', settled: false, ...plan, workerModel,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
-      ...(plan.round === 'first'
-        ? { action: 'queued-for-review', why: '首审 dry-run：将入待审队列，不起审官（#1125）' }
-        : {}),
+      ...(haltWhy
+        ? { action: plan.halt, why: haltWhy }
+        : plan.round === 'first'
+          ? { action: 'queued-for-review', why: '首审 dry-run：将入待审队列，不起审官（#1125）' }
+          : {}),
     });
     return;
   }
@@ -2438,13 +2452,15 @@ async function cmdWorkerDoneMirasim(args) {
       why,
     });
   };
-  if (plan.halt === REVIEW_ROUNDS_HALT) {
+  if (plan.halt === REVIEW_ROUNDS_HALT || plan.halt === REVIEW_ROUNDS_UNSCANNED) {
     const rr = plan.reviewRounds || {};
     emit({
       ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
-      postedIssue, postedPr, action: REVIEW_ROUNDS_HALT,
-      why: reviewRoundsExceededError({ pr: plan.pr, rounds: rr.rounds, max: rr.max }),
+      postedIssue, postedPr, action: plan.halt,
+      why: plan.halt === REVIEW_ROUNDS_HALT
+        ? reviewRoundsExceededError({ pr: plan.pr, rounds: rr.rounds, max: rr.max })
+        : reviewRoundsUnscannedError({ pr: plan.pr, error: rr.error }),
     });
     return;
   }
