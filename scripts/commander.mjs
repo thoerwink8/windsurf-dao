@@ -2784,17 +2784,20 @@ function cmdAct(argv) {
     exhaustedPush: dryRun ? null : pushExhaustedToShuai,
   });
   // wake ≠ stalled：认输推送会叫醒但盘面未必停。分流在 planProgressWatchAlert
-  // （独立常量键 + 独立文案）。节流交给 HUB_DEDUP_MS。
+  // （独立常量键 + 独立文案）。同轮可以两条一起到，必须逐条 hubOnce，
+  // 否则停滞键的 6 小时窗口会把认输吞掉。节流交给 HUB_DEDUP_MS。
   // 这里不加严重度：progressWatch.rounds 被快照窗口封顶，分档永远只能得出「注意」。
-  const surface = planProgressWatchAlert(progressWatch);
-  log.push(surface.log);
-  if (surface.key) {
-    hubOnce({
-      state,
-      key: surface.key,
-      text: `[指挥官] ${progressWatch.report}`,
-      dryRun,
-    });
+  const plannedAlert = planProgressWatchAlert(progressWatch);
+  for (const surface of plannedAlert.surfaces) {
+    log.push(surface.log);
+    if (surface.key) {
+      hubOnce({
+        state,
+        key: surface.key,
+        text: `[指挥官] ${surface.text}`,
+        dryRun,
+      });
+    }
   }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });

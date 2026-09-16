@@ -468,9 +468,16 @@ describe('#1285 停滞播报的去重键不带内容', () => {
     assert.doesNotMatch(src, /key: `[^`]*\$\{vac\.digest/, 'digest 换个写法进键同样不行');
     assert.doesNotMatch(src, /key: `progress-watch:\$\{progressWatch\.wakeReason/, 'wakeReason 进键就不是常量键');
     assert.match(src, /planProgressWatchAlert\(progressWatch\)/);
+    assert.match(src, /for \(const surface of plannedAlert\.surfaces\)/, '指挥官必须逐条 surface 调 hubOnce，不能只看 primary');
     assert.match(src, /key: surface\.key/);
+    assert.match(src, /text: `\[指挥官\] \$\{surface\.text\}`/, '播报正文必须是该条 surface 自己的文案，不能用合并 report');
     assert.match(src, /key: DIGEST_STUCK_ALERT_KEY/);
     assert.doesNotMatch(src, /else if \(progressWatch\.wake\)/, '不许再按 wake 进同一个停滞分支');
+    const act = src.slice(
+      src.indexOf('const progressWatch = runProgressWatch'),
+      src.indexOf('// 先回收上一轮的大脑'),
+    );
+    assert.doesNotMatch(act, /progressWatch\.report/, '组合态不许把合并报告当唯一播报正文');
   });
 
   it('严重度随停滞轮数升级，且只用于文案', async () => {
@@ -545,6 +552,83 @@ describe('#1285 停滞播报的去重键不带内容', () => {
     assert.match(got.log, /^\s+盘面停滞：/);
     assert.equal(got.key, M.STALL_ALERT_KEY);
     assert.notEqual(got.key, M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.equal(got.surfaces.length, 1, '没有认输行时不该多造一条认输 surface');
+  });
+
+  it('stalled=true 且同时有认输行：两类键和文案都保留', async () => {
+    const W = await load(CLI);
+    const M = await load(LIB);
+    const snaps = readFixture(STALL_FIXTURE);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-stall-exhausted-'));
+    snaps.forEach((s, i) => {
+      fs.writeFileSync(path.join(dir, `situation-2026-09-06T0${i}-00-00-000Z.json`), JSON.stringify(s), 'utf8');
+    });
+    const r = W.runProgressWatch({
+      dir, state: path.join(dir, 'state.json'), rounds: 5, dryRun: false,
+      exhaustedPush: ({ lines }) => { lines.push('PR #1018 自动化认输，等你拍'); return { ok: true, pushed: 1 }; },
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.stalled, true);
+    assert.equal(r.wake, true);
+    assert.equal(r.exhaustedWake, true, '组合态必须单独标认输，不能只靠 wakeReason');
+    assert.match(r.stallReport, /盘面停滞/);
+    assert.match(r.stallReport, /PR #909/);
+    assert.doesNotMatch(r.stallReport, /自动化认输/);
+    assert.match(r.exhaustedReport, /PR #1018 自动化认输/);
+    assert.doesNotMatch(r.exhaustedReport, /盘面停滞/);
+
+    const planned = M.planProgressWatchAlert(r);
+    const stall = planned.surfaces.find((s) => s.key === M.STALL_ALERT_KEY);
+    const exh = planned.surfaces.find((s) => s.key === M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.ok(stall, '必须保留停滞 surface：' + JSON.stringify(planned.surfaces));
+    assert.ok(exh, '必须保留认输 surface：' + JSON.stringify(planned.surfaces));
+    assert.equal(stall.kind, 'stalled');
+    assert.equal(exh.kind, 'exhausted-wake');
+    assert.match(stall.log, /盘面停滞/);
+    assert.match(stall.text, /PR #909/);
+    assert.doesNotMatch(stall.log, /认输唤醒/);
+    assert.doesNotMatch(stall.text, /自动化认输/);
+    assert.match(exh.log, /认输唤醒/);
+    assert.match(exh.text, /PR #1018 自动化认输/);
+    assert.doesNotMatch(exh.log, /盘面停滞/);
+    assert.doesNotMatch(exh.text, /盘面停滞/);
+    assert.notEqual(stall.key, exh.key, '两类键必须能分别走 hubOnce 的 6 小时窗口');
+    assert.doesNotMatch(stall.key, /rounds:|=|\n/);
+    assert.doesNotMatch(exh.key, /rounds:|=|\n/);
+  });
+
+  it('停滞键刚播过、同轮新来认输行：认输 surface 仍在（不会被停滞窗口吞掉）', async () => {
+    const W = await load(CLI);
+    const M = await load(LIB);
+    const snaps = readFixture(STALL_FIXTURE);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-stall-then-exhausted-'));
+    snaps.forEach((s, i) => {
+      fs.writeFileSync(path.join(dir, `situation-2026-09-06T0${i}-00-00-000Z.json`), JSON.stringify(s), 'utf8');
+    });
+    const state = path.join(dir, 'state.json');
+    const first = W.runProgressWatch({ dir, state, rounds: 5, dryRun: false });
+    assert.equal(first.stalled, true);
+    assert.equal(first.wake, true, '首轮停滞应叫醒');
+    assert.equal(first.exhaustedWake, false);
+
+    const second = W.runProgressWatch({
+      dir, state, rounds: 5, dryRun: false,
+      exhaustedPush: ({ lines }) => { lines.push('PR #1018 自动化认输，等你拍'); return { ok: true, pushed: 1 }; },
+    });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(second.stalled, true);
+    assert.equal(second.wake, true, '认输行必须叫醒，哪怕停滞指纹已经推过');
+    assert.equal(second.exhaustedWake, true);
+    assert.equal(second.wakeReason, 'exhausted');
+
+    const planned = M.planProgressWatchAlert(second);
+    const stall = planned.surfaces.find((s) => s.key === M.STALL_ALERT_KEY);
+    const exh = planned.surfaces.find((s) => s.key === M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.ok(stall, '停滞面仍在，去重交给 hubOnce 按键节流');
+    assert.ok(exh, '认输面必须独立存在，不能因为停滞刚播过而丢失');
+    assert.equal(exh.key, M.EXHAUSTED_WAKE_ALERT_KEY);
+    assert.match(exh.text, /PR #1018 自动化认输/);
+    assert.doesNotMatch(exh.text, /盘面停滞/);
   });
 
   // 审官（#1285 第 1 条）用 100 份相同快照证伪了我原来的升级承诺。

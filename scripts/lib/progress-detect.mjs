@@ -193,41 +193,90 @@ export const STALL_ALERT_KEY = 'progress-watch:stall';
 export const EXHAUSTED_WAKE_ALERT_KEY = 'progress-watch:exhausted';
 export const DIGEST_STUCK_ALERT_KEY = 'digest-stuck';
 
+function hasExhaustedSurface(pw) {
+  if (pw.exhaustedWake === true) return true;
+  if (Array.isArray(pw.exhaustedLines) && pw.exhaustedLines.length > 0) return true;
+  if (typeof pw.exhaustedReport === 'string' && pw.exhaustedReport.trim()) return true;
+  if (pw.exhausted && Number(pw.exhausted.pushed) > 0) return true;
+  if (pw.wakeReason === 'exhausted') return true;
+  // 历史形状：非停滞的 wake 就是认输推送（runProgressWatch 在没停时只会被认输行叫醒）
+  return !!pw.wake && !pw.stalled;
+}
+
+function stallTextOf(pw) {
+  const s = String(pw.stallReport || '').trim();
+  if (s) return pw.stallReport;
+  return pw.report;
+}
+
+function exhaustedTextOf(pw) {
+  if (typeof pw.exhaustedReport === 'string' && pw.exhaustedReport.trim()) return pw.exhaustedReport;
+  if (Array.isArray(pw.exhaustedLines) && pw.exhaustedLines.length) return pw.exhaustedLines.join('\n');
+  const stall = String(pw.stallReport || '').trim();
+  const report = String(pw.report || '');
+  if (pw.stalled && stall && report.startsWith(stall)) {
+    return report.slice(stall.length).replace(/^\n/, '');
+  }
+  return pw.report;
+}
+
+function withPrimary(surfaces) {
+  const primary = surfaces[0] || { kind: 'ok', log: '', key: null, text: '' };
+  return { ...primary, surfaces };
+}
+
 /**
- * 指挥官把 progress-watch 结果写成一行日志 + 可选播报键。
+ * 指挥官把 progress-watch 结果写成一行或多行日志 + 可选播报键。
  *
  * `wake` 不是「停滞」：认输 PR 推送会让 wake=true 而 stalled=false。
  * 两类必须独立分支、独立常量键——进同一个「盘面停滞」分支会把没停的盘面
  * 报成停滞；``progress-watch:${wakeReason}`` 也不是常量键。
+ *
+ * 同轮可以同时 stalled 和认输。必须返回两条 surface，让指挥官分别对
+ * `STALL_ALERT_KEY` 与 `EXHAUSTED_WAKE_ALERT_KEY` 走 hubOnce；先判 stalled
+ * 就 return 会把认输并进停滞文案，认输再也走不到自己的 6 小时窗口。
+ *
+ * 返回 `{ surfaces, ...primary }`。primary 是第一条，方便单面调用方；
+ * 指挥官必须迭代 `surfaces`，不能只看 primary。
  */
 export function planProgressWatchAlert(progressWatch) {
   const pw = progressWatch || {};
   if (pw.ok !== true) {
-    return {
+    return withPrimary([{
       kind: 'unscanned',
       log: `  盘面推进量没查成：${pw.error || pw.report || '未知'}`,
       key: null,
-    };
+      text: pw.error || pw.report || '未知',
+    }]);
   }
+  const surfaces = [];
   if (pw.stalled) {
-    return {
+    const text = stallTextOf(pw);
+    surfaces.push({
       kind: 'stalled',
-      log: `  盘面停滞：${pw.report}`,
+      log: `  盘面停滞：${text}`,
       key: STALL_ALERT_KEY,
-    };
+      text,
+    });
   }
-  if (pw.wake) {
-    return {
+  if (hasExhaustedSurface(pw)) {
+    const text = exhaustedTextOf(pw);
+    surfaces.push({
       kind: 'exhausted-wake',
-      log: `  认输唤醒：${pw.report}`,
+      log: `  认输唤醒：${text}`,
       key: EXHAUSTED_WAKE_ALERT_KEY,
-    };
+      text,
+    });
   }
-  return {
-    kind: 'ok',
-    log: `  盘面推进量：${pw.report}`,
-    key: null,
-  };
+  if (!surfaces.length) {
+    surfaces.push({
+      kind: 'ok',
+      log: `  盘面推进量：${pw.report}`,
+      key: null,
+      text: pw.report || '',
+    });
+  }
+  return withPrimary(surfaces);
 }
 
 /**
