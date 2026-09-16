@@ -64,6 +64,7 @@ import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
 import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { UNSIGNED_ISSUE_MERGE_REASON } from './dispatch/reviewer.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -1397,7 +1398,7 @@ function collectCandidates(situation) {
         model: model0, reviewer: rReviewer0, redRounds,
         title: pr.title || '', brief, reworkKey: rkey, conflict,
         mergePolicy: 'manual',
-        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
         mergePolicySource: 'no-issue',
         ...(sub0 ? { substitutedModel: sub0 } : {}),
         why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
