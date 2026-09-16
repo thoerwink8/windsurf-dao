@@ -46,6 +46,7 @@ import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   rereviewKey, epochOf, foldFailureStreak,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
+  collectDockProofs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
 import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
@@ -712,6 +713,14 @@ function buildSituation({ state } = {}) {
         return staleRedBallots({ prs: github.prs || [], reviewsByPr: prReviews.byPr });
       } catch { return null; }   // 算不出来 ⇒ 空表 ⇒ 两条解冻不成立（退回今天的行为），但其余判据照常
     })(),
+    // #1133：旧批准继承的树级证明。没采成 = null，decide 对需要继承的 PR fail-closed。
+    dockByPr: (() => {
+      try {
+        if (!github || github.scanned !== true) return null;
+        if (!prReviews || prReviews.scanned !== true) return null;
+        return collectDockProofs({ github, prReviews }, { run: runCmd });
+      } catch { return null; }
+    })(),
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
@@ -1111,9 +1120,12 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  *
  * 所以：记账步骤 best-effort，失败进 failures 一起报出去；**只有 pr merge 失败才算真失败**。
  * 打标必须在 merge 之前——合并后 PR 关了就补不上标签，战绩会永久缺这一张。
+ *
+ * #1133：所有真实 `gh pr merge` 都钉 `--match-head-commit`。不因为没 approvalIssue 就跳过 HEAD 锁。
  */
 export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
   const GATING = new Set(['pr merge']);
+  const expectedHead = String((action && action.head) || '').trim();
   const steps = [
     ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
     ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
@@ -1126,29 +1138,47 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     for (const g of GATING) if (s.includes(g)) return true;
     return false;
   };
+  if (!expectedHead) {
+    const error = 'merge 没带期望 HEAD，拒绝合入';
+    say(`  #${action.pr} ${error}`);
+    return { ok: false, error };
+  }
+  const mergeArgv = steps.find((s) => s.includes('pr') && s.includes('merge'));
+  if (mergeArgv && !mergeArgv.includes('--match-head-commit')) {
+    mergeArgv.push('--match-head-commit', expectedHead);
+  }
 
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
+  const read = args => {
+    const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+    try { return r && r.ok ? JSON.parse(r.out) : null; } catch { return null; }
+  };
+  const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
+  const liveHead = pr && typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '';
+  if (!liveHead) {
+    const error = '执行前重读 PR HEAD 没查成，拒绝合入';
+    say(`  #${action.pr} ${error}`);
+    return { ok: false, unscanned: true, error };
+  }
+  if (liveHead !== expectedHead) {
+    say(`  #${action.pr} HEAD 已从判定时的 ${expectedHead} 变成 ${liveHead}，拒绝合入`);
+    return { ok: true, skipped: 'head-changed' };
+  }
   if (action.approvalIssue) {
-    const read = args => {
-      const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
-      try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; }
-    };
-    const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
     const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
     const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
       commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
     const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
     if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
-      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead: action.head })) {
+      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead })) {
       say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
       return { ok: true, skipped: 'approval-not-current' };
     }
     steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
-    steps[2].push('--match-head-commit', action.head);
   }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
@@ -1573,11 +1603,19 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
 }
 
 /**
- * 逐条执行动作，并管住一条纪律：**派工没成，就不许再发「已自动派单」**
- * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
+ * 逐条执行动作，并管住两条纪律：
+ *   1. **派工没成，就不许再发「已自动派单」**
+ *      （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
+ *   2. **merge 没合入（skipped / 失败），就不许跑配套 land、不许发「已自动合并」**
+ *      （#1133：execMerge 在 HEAD 变了时返回 `{ok:true, skipped:'head-changed'}`，
+ *      不认这个取消态会把拒绝伪装成成功）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
 export const DISPATCHING_KINDS = new Set(['dispatch', 'rework', 'pump-draft']);
+
+function mergeCompleted(r) {
+  return !!(r && r.ok === true && !r.skipped);
+}
 
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
@@ -1586,11 +1624,19 @@ export function runActions(actions, { exec, log = [] } = {}) {
   // 拿不到这些原因就等于「本轮没出现过」——连续计数每轮归零（第 N 轮永远到不了），
   // 而且已有的同因 OPEN 单会被判成「本轮已消失」自动关掉。
   const generated = [];
+  // 配套 land 跟在最近一次 merge 后面：那次没合入就不收尾。列表里根本没有 merge 时
+  // （派工测试夹具也会夹一条 land）照跑，不把「没合过」当成「合失败」。
+  let mergeSeen = false;
+  let lastMergeCompleted = false;
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action.kind === 'notify-hub'
       && ((action.issue != null && failedIssues.has(String(action.issue)))
         || (action.pr != null && failedPrs.has(String(action.pr))))) {
-      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 派工没成，不发喜报`);
+      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 没成，不发喜报`);
+      continue;
+    }
+    if (action.kind === 'land' && mergeSeen && !lastMergeCompleted) {
+      log.push('· land 略：合并未完成，不收尾');
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
@@ -1604,6 +1650,14 @@ export function runActions(actions, { exec, log = [] } = {}) {
       const msg = String((e && e.message) || e);
       log.push(`  执行炸了（已跳过，不影响本轮其余动作）：${msg}`);
       r = { ok: false, error: msg, threw: true };
+    }
+    if (action.kind === 'merge') {
+      mergeSeen = true;
+      lastMergeCompleted = mergeCompleted(r);
+      if (!lastMergeCompleted) {
+        if (action.pr != null) failedPrs.add(String(action.pr));
+        log.push(`  合并未完成（${(r && r.skipped) || (r && r.error) || '失败'}），不发已合并、不收尾`);
+      }
     }
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
     // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
