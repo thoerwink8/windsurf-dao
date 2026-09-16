@@ -1435,6 +1435,8 @@ function checkEphemeralLifecycle() {
     core: read('scripts/lib/commander-core.mjs'),
     admit: read('scripts/lib/admission.mjs'),
     reap: read('scripts/lib/ephemeral-reap.mjs'),
+    lease: read('scripts/lib/dispatch/lease.mjs'),
+    sessions: read('scripts/execution-sessions.mjs'),
   };
   problems.push(...inspectEphemeralLifecycleSources({
     files,

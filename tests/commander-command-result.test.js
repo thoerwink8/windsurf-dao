@@ -98,6 +98,27 @@ it('nested held drain reaches the shared ledger classifier without consuming a t
   assert.equal(drainPayloadOf({ ok: false, out: JSON.stringify(payload) }).ok, false);
 });
 
+it('no JSON drain receipt keeps full stderr as comparison key, not the truncated human error', async () => {
+  const { drainPayloadOf } = await CMD;
+  const { applyDrainLedger, drainErrorText } = await VERBS;
+  const a = 'E'.repeat(400) + 'A';
+  const b = 'E'.repeat(400) + 'B';
+  const pa = drainPayloadOf({ ok: false, out: 'not a receipt', stderr: a, error: a.slice(0, 300) });
+  const pb = drainPayloadOf({ ok: false, out: 'not a receipt', stderr: b, error: b.slice(0, 300) });
+  assert.equal(drainErrorText(pa), a);
+  assert.equal(drainErrorText(pb), b);
+  assert.equal(pa.error, a);
+  let r = applyDrainLedger({
+    ledger: {}, pr: 987321, head: 'abc', payload: pa, nowIso: '2026-09-12T00:00:00Z',
+  });
+  r = applyDrainLedger({
+    ledger: r.ledger, pr: 987321, head: 'abc', payload: pb, nowIso: '2026-09-12T00:00:00Z',
+  });
+  const rec = r.ledger[r.key];
+  assert.equal(rec.sameErrorRounds, 1, '截成人读摘要会把前 400 字相同的两句判成同错');
+  assert.ok(String(rec.lastError).endsWith('B'));
+});
+
 for (const kind of ['rework', 'pump-draft']) {
   for (const isBusy of [true, false]) {
     it(`${kind}: ${isBusy ? 'busy preserves tries and emits no escalation' : 'genuine failure consumes a try and escalates'}`, async () => {
