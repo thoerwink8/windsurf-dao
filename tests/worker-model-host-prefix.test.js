@@ -195,6 +195,37 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.workerSource, 'label');
   });
 
+  it('快路无署名单号：有 model/* + reviewer/* 仍可交卷，comment 只发 PR', async () => {
+    const { planWorkerDone } = await WD;
+    const first = planWorkerDone({
+      pr: '1274',
+      body: '完工：快路',
+      runGh: fakeGh({
+        title: '[cc] fix',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [],
+        body: '快路，没有署名单号',
+      }),
+    });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(first.issue, null);
+    assert.equal(first.round, 'first');
+    const rework = planWorkerDone({
+      pr: '1274',
+      body: '返工完成：快路',
+      runGh: fakeGh({
+        title: '[cc] fix',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [{ state: 'CHANGES_REQUESTED' }],
+        body: '快路，没有署名单号',
+      }),
+    });
+    assert.equal(rework.ok, true, JSON.stringify(rework));
+    assert.equal(rework.issue, null);
+    assert.equal(rework.round, 'rework');
+    assert.match(rework.comment, /^返工完成/);
+  });
+
   it('快路无署名单但标齐 → 放行，issue 为 null（完工评论发 PR）', async () => {
     const { planWorkerDone } = await WD;
     const got = planWorkerDone({
