@@ -12,6 +12,7 @@ const {
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
   resolveMainWorktreeRoot, scopeOverridesFor, describeAttribution,
   resolveAmendTarget, formatAmendComment, linkAliasesToSuccessor,
+  findJobDispatch, mergedByForClosed,
 } = require('../scripts/lib/ledger-job.mjs');
 const { unclosedJobIds, describeUnclosedJobs, readLedgerEvents, queryLedger } = require('../scripts/lib/ledger-query.mjs');
 const { redKindFromClosed, formatRedCell } = require('../scripts/calibrate.mjs');
@@ -214,6 +215,25 @@ describe('ledger', () => {
     });
     await t.test('reworkFromClosed 扣 marshal_rounds', () => {
       assert.ok(reworkFromClosed({ verdict_rounds: 3, marshal_rounds: 1 }) === 1, 'reworkFromClosed 扣 marshal_rounds');
+    });
+    await t.test('reworkFromClosed 没查成不是零返工', () => {
+      assert.equal(reworkFromClosed({ rework: false, attribution_source: 'unscanned' }), null);
+    });
+    await t.test('mergedByForClosed 用 dispatch.model，无 dispatch 写 unknown', () => {
+      const withDispatch = mergedByForClosed({
+        events: [{ type: 'job.dispatch', job_id: 'gh-pr-8', model: 'gpt-5.6-luna' }],
+        jobId: 'gh-pr-8',
+      });
+      const noDispatch = mergedByForClosed({ events: [], jobId: 'gh-pr-8' });
+      assert.equal(withDispatch, 'gpt-5.6-luna');
+      assert.equal(noDispatch, 'unknown');
+    });
+    await t.test('findJobDispatch 能跟上 rename handoff', () => {
+      const d = findJobDispatch([
+        { type: 'job.dispatch', job_id: 'dispatch-x', model: 'grok-4.6', pr_number: 9 },
+        { type: 'job.handoff', job_id: 'dispatch-x', from_job_id: 'dispatch-x', to_job_id: 'gh-pr-9', to_model: 'grok-4.6' },
+      ], 'gh-pr-9');
+      assert.equal(d && d.job_id, 'dispatch-x');
     });
   });
 
