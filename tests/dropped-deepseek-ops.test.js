@@ -6,6 +6,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -118,8 +119,34 @@ describe('dropped-deepseek-ops', () => {
   it('URL/catalog 扫描覆盖不了这句：纯域名检查会漏', () => {
     const prose = '**pi 保持 DeepSeek 官方 API 原通道。**';
     assert.equal(/api\.deepseek\.com/.test(prose), false);
+    // 夹具负例：本行正则含已删 catalog id，扫描 A 若纳入 tests 会命中；不是现行指针。
     assert.equal(/deepseek-native-flash/.test(prose), false);
     assert.ok(scanDroppedDeepseekOps(prose).length > 0);
+  });
+
+  it('扫描 A：已删 catalog ID 排除测试夹具后 0 处现行指针', () => {
+    const r = spawnSync(
+      'grep',
+      [
+        '-RnE',
+        'deepseek-native-flash|deepseek-direct-models|deepseek-api|deepseek-prices|deepseek-deepseek-flash|deepseek-deepseek-v4-pro',
+        '--include=*.md',
+        '--include=*.json',
+        '--include=*.mjs',
+        '--include=*.js',
+        '--include=*.toml',
+        '--include=*.yml',
+        '--include=*.ts',
+        '--exclude-dir=ledger',
+        '--exclude-dir=node_modules',
+        '--exclude-dir=.git',
+        '--exclude-dir=tests',
+        '.',
+      ],
+      { cwd: REPO, encoding: 'utf8' },
+    );
+    assert.equal(r.status, 1, `stdout=${r.stdout}\nstderr=${r.stderr}`);
+    assert.equal(String(r.stdout || '').trim(), '');
   });
 
   it('现行启动/操作文档 0 条残留；必扫文件缺失 = 没查成', () => {
