@@ -3421,6 +3421,7 @@ describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, (
       const cases = [
         { a: 'E'.repeat(400) + 'A', b: 'E'.repeat(400) + 'B', label: '前 400 字相同但后文不同' },
         { a: 'gate refused\nhead=aaa', b: 'gate refused\nhead=bbb', label: '第一行相同但第二行不同' },
+        { a: 'gate refused\n', b: 'gate refused', label: '尾换行 vs 无换行' },
       ];
       for (const { a, b, label } of cases) {
         assert.equal(drainErrorText({ error: a }), a, label + '：抽取不许截');

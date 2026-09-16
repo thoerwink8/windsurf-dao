@@ -471,6 +471,69 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
       assert.notEqual(v.code, 'hopeless', label);
     }
   });
+
+  it('review-pending-drain 真实链：首尾空白不同 ≠ 同错，不判 hopeless', async () => {
+    const { attachReceiptFromSpawn, drainReviewPending } = await import(
+      'file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/')
+    );
+    const { drainPayloadOf } = await import(
+      'file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/')
+    );
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const ticket = { pr: '905', reviewer: 'gpt-5.6-sol' };
+    const pairs = [
+      { a: 'gate refused\n', b: 'gate refused', label: '尾换行 vs 无换行' },
+      { a: ' gate refused', b: 'gate refused', label: '首空格 vs 无空格' },
+      { a: 'gate refused ', b: 'gate refused', label: '尾空格 vs 无空格' },
+    ];
+    const through = (stderr) => {
+      const attached = attachReceiptFromSpawn({ status: 1, stdout: 'not-json', stderr });
+      assert.equal(attached.ok, false);
+      assert.equal(attached.error, stderr, '回执必须留下完整 stderr，含首尾空白');
+      const drained = drainReviewPending({ tickets: [ticket], attach: () => attached });
+      assert.equal(drained.ok, false);
+      assert.ok(
+        String(drained.error).endsWith(stderr),
+        `顶层 error 必须保留 stderr 原文（含空白），实际=${JSON.stringify(drained.error)}`,
+      );
+      // dao.mjs fail() 把 drained 整份 emit 成 JSON；指挥官 drainPayloadOf 再抽出来。
+      // runCmd.error 是人读摘要（已 trim+截），不许当比较键——这里故意塞一份截过的。
+      const emitted = JSON.stringify({ ok: false, error: drained.error, ...drained });
+      return drainPayloadOf({
+        ok: false, status: 1, out: emitted, stderr: '',
+        error: String(drained.error).trim().slice(0, 300),
+      });
+    };
+    for (const { a, b, label } of pairs) {
+      const pa = through(a);
+      const pb = through(b);
+      assert.equal(drainErrorText(pa).includes(a), true, label);
+      assert.notEqual(drainErrorText(pa), drainErrorText(pb), label + '：trim 会把这两句揉成一句');
+      let r = applyDrainLedger({
+        ledger: {}, pr: 905, head: null, payload: pa, nowIso: OLD_AT,
+      });
+      r = applyDrainLedger({
+        ledger: r.ledger, pr: 905, head: null, payload: pb, nowIso: OLD_AT,
+      });
+      const rec = r.ledger[RK.drain(905, null)];
+      assert.equal(rec.sameErrorRounds, 1, label + '：trim 会把 sameErrorRounds 累到 2');
+      const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+      assert.equal(v.ok, true, label + ' 不许判 hopeless：' + JSON.stringify(v));
+      assert.notEqual(v.code, 'hopeless', label);
+    }
+    // 正控：同一份带尾换行的原文连写两次，仍 hopeless——不是空白就不比。
+    const same = through('gate refused\n');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: same, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: same, nowIso: OLD_AT,
+    });
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 2);
+    const hopeless = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(hopeless.ok, false);
+    assert.equal(hopeless.code, 'hopeless');
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {
@@ -1175,6 +1238,10 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     assert.ok(attachI > -1, '找不到 attachReceiptFromSpawn');
     const attachFn = rpSrc.slice(attachI, rpSrc.indexOf('export function consumeReviewPending', attachI));
     assert.doesNotMatch(attachFn, /slice\s*\(/, '回执函数自己不许截字');
+    const drainAggI = rpSrc.indexOf('export function drainReviewPending');
+    assert.ok(drainAggI > -1, '找不到 drainReviewPending 聚合');
+    const drainAgg = rpSrc.slice(drainAggI);
+    assert.doesNotMatch(drainAgg, /\.trim\s*\(/, '顶层 error 是比较键，不许 trim 首尾空白');
     const cmdSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     const payloadI = cmdSrc.indexOf('export function drainPayloadOf');
     const payloadFn = cmdSrc.slice(payloadI, payloadI + 700);

@@ -669,7 +669,10 @@ export function drainReviewPending({ dir, tickets, attach, usableReviewers } = {
   //
   // 取第一条而非拼接：认输/重试判据只读首行（judgeRetry / exhaustedComment 都取首行），
   // 拼一长串反而会把判据要的那句挤掉。
-  const firstError = failed.length ? String(failed[0].error || failed[0].why || '').trim() : '';
+  //
+  // 这一串会经 drainPayloadOf / applyDrainLedger 进比较键：完整原文，不 trim。
+  // 首尾空白也是原文（`gate refused\n` ≠ `gate refused`）；长度限制只留人读摘要层。
+  const firstError = failed.length ? String(failed[0].error || failed[0].why || '') : '';
   return {
     ok: failed.length === 0,
     unscanned: false,
