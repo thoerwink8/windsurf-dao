@@ -109,6 +109,37 @@ test('executor rechecks evidence, pins head and restores draft if merge fails', 
   }
 });
 
+test('auto merge without approvalIssue still pins --match-head-commit and refuses a moved HEAD', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const head = 'a'.repeat(40);
+  const pr = {
+    number: 77, state: 'OPEN', headRefOid: head, isDraft: false, mergeable: 'MERGEABLE',
+    statusCheckRollup: [], reviews: [],
+  };
+  const calls = [];
+  const run = args => {
+    calls.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(pr) };
+    return { ok: true, out: '' };
+  };
+  const ok = execMerge({ pr: 77, head }, { say() {}, run, judge: () => ({ state: 'ok' }) });
+  assert.equal(ok.ok, true);
+  const merge = calls.find(a => a[5] === 'merge');
+  assert.equal(merge.at(-2), '--match-head-commit');
+  assert.equal(merge.at(-1), head);
+
+  const moved = { ...pr, headRefOid: 'b'.repeat(40) };
+  const calls2 = [];
+  const run2 = args => {
+    calls2.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(moved) };
+    return { ok: true, out: '' };
+  };
+  const skipped = execMerge({ pr: 77, head }, { say() {}, run: run2, judge: () => ({ state: 'ok' }) });
+  assert.equal(skipped.skipped, 'head-changed');
+  assert.equal(calls2.some(a => a[5] === 'merge'), false);
+});
+
 // ── 2026-09-14 断链：draft 被 scanPrReviews 跳过，下游把它读成「没抓到」，静默永不送审 ──
 //
 // 实咬：#1265/#1266 自己开的单，挂了 4 小时没有任何东西叫审官。

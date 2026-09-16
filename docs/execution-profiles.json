@@ -1274,10 +1274,10 @@
       "defaultForModels": [],
       "availability": {
         "status": "unverified",
-        "checkedAt": "2026-09-09T15:10:55.773Z",
-        "evidenceKind": "model_list",
-        "sourceId": "migration-upstream-inventory",
-        "reason": "original provider key located and accepted by official models endpoint; task-scoped native Codex config and Responses execution not yet verified"
+        "checkedAt": "2026-09-14T21:38:49.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1174-codex-sol-home",
+        "reason": "专用 home 已落地且 enabled=false。2026-09-14T21:38:49Z 复跑 `CODEX_HOME=~/.codex-sol timeout 60s codex exec --skip-git-repo-check '只回两个字：收到'`：抬头 model=gpt-5.6-sol / provider=pqapi，随后 ERROR Reconnecting... 1/5，60s timeout 124，无最终消息（session 01a0a1db-c633-7a33-a09a-1a12046820b1）。紧接着裸跑同一条：抬头 model=gpt-5.6-luna / provider=custom，4.66s 回「收到」（session 01a0a1dc-f290-7f42-a8a8-b4e5761b4b63）。两把 key 分家成立；sol 请求当前无法复现最终消息，不标 available。"
       },
       "quality": {
         "status": "unverified",
@@ -1306,7 +1306,8 @@
           "kind": "file",
           "file": "~/.config/ai-gateway/migration-1174/pqapi-sol.key"
         },
-        "configurationRequired": "task-scoped native Codex provider configuration; no global config written"
+        "codexHome": "~/.codex-sol",
+        "configurationRequired": "已落地：codex 的 auth.json 只有一个 OPENAI_API_KEY 字段，装不下 pqgpt 的两把 key，所以 sol 分家到自己的 CODEX_HOME。起法 CODEX_HOME=~/.codex-sol codex ...；默认 ~/.codex 保持原样（本机 4317 responses 桥 + gpt-5.6-luna）。装法见 NEW-MACHINE.md 7e"
       },
       "modelDiscovery": {
         "status": "listed",
@@ -12963,6 +12964,13 @@
         "kind": "unknown",
         "present": true,
         "location": "~/.codex/auth.json",
+        "evidence": "requires_endpoint_and_key_provenance"
+      },
+      {
+        "provider": "pqapi",
+        "kind": "unknown",
+        "present": true,
+        "location": "~/.codex-sol/auth.json",
         "evidence": "requires_endpoint_and_key_provenance"
       },
       {

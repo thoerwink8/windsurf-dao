@@ -189,12 +189,15 @@ test('credential inventory distinguishes group key, native key and misleading ol
     ['/fiction/.pi/agent/pi-gateway.json', JSON.stringify({ providers: [{ id: 'gw-opencode', keyFile: '/fiction/.mirasim/keys/opencode.key' }] })],
     ['/fiction/.mirasim/keys/opencode.key', 'private-group'], ['/fiction/.mirasim/keys/mycodex.key', 'private-group'],
     ['/fiction/.codex/auth.json', JSON.stringify({ OPENAI_API_KEY: 'private-group' })],
+    ['/fiction/.codex-sol/auth.json', JSON.stringify({ OPENAI_API_KEY: 'private-sol' })],
     ['/fiction/.commandcode/auth.json', JSON.stringify({ apiKey: 'private-native' })],
   ]);
   const rows = discoverExecutionCredentials({ home: '/fiction', read: file => { if (!files.has(file)) throw new Error('missing'); return files.get(file); }, exists: file => files.has(file) });
   assert.equal(rows.find(r => r.provider === 'opencode-go').kind, 'newapi-group');
   assert.equal(rows.find(r => r.provider === 'commandcode' && r.kind === 'provider-key').present, true);
-  assert.equal(rows.find(r => r.provider === 'pqapi').kind, 'newapi-group');
+  assert.equal(rows.find(r => r.location === '~/.codex/auth.json').kind, 'newapi-group');
+  assert.equal(rows.find(r => r.location === '~/.codex-sol/auth.json').present, true);
+  assert.equal(rows.find(r => r.location === '~/.codex-sol/auth.json').kind, 'unknown');
   assert.ok(!JSON.stringify(rows).includes('private-'));
 });
 

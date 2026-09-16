@@ -41,6 +41,17 @@ import { acquireWorktreeLock } from './dispatch-lock.mjs';
 /** 「不限」哨兵：渠道容量已验证工人无限做也没出问题（grokpool）。与「待填」区分——一个放开，一个没人填过。 */
 export const CAP_UNLIMITED = '不限';
 
+/** 两条上限取更严的：有限值压过 Infinity；都有限取 min。 */
+function stricterCap(a, b) {
+  const na = Number(a);
+  const nb = Number(b);
+  const fa = Number.isFinite(na);
+  const fb = Number.isFinite(nb);
+  if (!fa) return fb ? nb : Infinity;
+  if (!fb) return na;
+  return Math.min(na, nb);
+}
+
 /**
  * 待填腿的**保守上限**。不是 Infinity（放开），也不是 0（拦死）——第三个答案，
  * 仓内先例是 admission.mjs 的 conservativeWorkerMb：「取偏大值收紧，不是放开」。
@@ -82,22 +93,24 @@ export function channelKeyOf(landing) {
 }
 
 /**
- * 腿节 → 渠道键。
+ * 腿节 → 渠道键。落地优先，否则按供应商；**不按执行侧**。
+ * 执行侧=mirasim 只说明会话从 mirasim 起，不是容量池：xai-native / cursor-native
+ * 各走独立 native 池。
  *
- * 限流池看落地/供应商，**不看执行侧**。执行侧只是谁起会话。
  * 2026-09-15 实咬：composer-2.5 落地是 cursor-native，执行侧却写 mirasim，
  * 旧逻辑把它和 grok/luna relay 算成同一条 `mirasim` 渠，再 `Math.min` 成 1，
  * 整块盘面一次只能派一张。ACP/Cursor 订阅和 xAI/relay 不共享上游。
+ * 并进 mirasim 还会让 grok/composer 的「不限」放行未测 relay 腿。
+ *
+ * 没落地时走 channelKeyOf({ provider })，覆盖 native / mirasim / claude 等，
+ * 不在这里再手写一份供应商名单（会跟 probeTargetOf 漂）。
  */
 export function legChannelKey(leg) {
   if (!leg || typeof leg !== 'object') return null;
   const fromLanding = channelKeyOf(leg['落地']);
   if (fromLanding) return fromLanding;
   const via = String(leg['供应商'] || '');
-  if (via === 'mirasim' || via === 'mirasim-relay') return 'mirasim';
-  if (via === 'cursor-native') return 'native:cursor-native';
-  if (via === 'xai-native') return 'native:xai-native';
-  return null;
+  return via ? channelKeyOf({ provider: via }) : null;
 }
 
 /**
@@ -292,6 +305,9 @@ export function countInFlightByChannel(busyTrees, treeToChannel) {
  * pqapi(2) 的单当成 mirasim(5) 放过去——那正是 #1145 撞死的那一格。
  * 打平按渠道键排序取第一个（判据要确定，不许随 Object 顺序飘）。
  *
+ * 返回的 cap 再与**本模型自己的腿**取严：渠道级「不限」是别的模型的已验证结论，
+ * 未测/待填模型不得继承 Infinity（#1274：gpt-5.6-sol 曾因 grok/composer 不限被放行）。
+ *
  * @returns {{channel, cap, candidates:string[], source:'legs'|'models'}|null}
  */
 export function resolveModelChannel({ model, legs, models, caps } = {}) {
@@ -300,12 +316,17 @@ export function resolveModelChannel({ model, legs, models, caps } = {}) {
   const capTable = caps && typeof caps === 'object' ? caps : (buildChannelCaps(legs).caps || {});
   const candidates = new Set();
   let source = null;
+  let ownCap = null;
   for (const leg of Array.isArray(legs) ? legs : []) {
     if (!leg || typeof leg !== 'object') continue;
     if (String(leg['状态'] || '') !== '在役') continue;
     if (String(leg['模型'] || '') !== id) continue;
     const ch = legChannelKey(leg);
-    if (ch) { candidates.add(ch); source = 'legs'; }
+    if (!ch) continue;
+    candidates.add(ch);
+    source = 'legs';
+    const { cap } = resolveLegCap(leg['并发上限']);
+    ownCap = ownCap == null ? cap : stricterCap(ownCap, cap);
   }
   if (!candidates.size) {
     const rec = (Array.isArray(models) ? models : []).find((m) => m && String(m.id) === id);
@@ -320,9 +341,10 @@ export function resolveModelChannel({ model, legs, models, caps } = {}) {
     const b = Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity;
     if (a < b) pick = ch;
   }
+  const channelCap = Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity;
   return {
     channel: pick,
-    cap: Number.isFinite(capTable[pick]) ? capTable[pick] : Infinity,
+    cap: ownCap == null ? channelCap : stricterCap(channelCap, ownCap),
     candidates: list,
     source,
   };
@@ -360,8 +382,33 @@ function judgeChannelState({ channel, target, caps = {}, states = {}, inFlight =
   return { available: true, channel, target, cap, inFlight: n, pending: states[channel] === 'pending' };
 }
 
-/** 适配器①：按**落地**判（决策层用——commander 的工人闸、preflightReviewer 的顺位分流）。 */
+/**
+ * 适配器①：按**落地**判（决策层用——commander 的工人闸、preflightReviewer 的顺位分流）。
+ * 带了 model 且腿表/选型能解析到本模型渠道时，改走 judgeChannelForModel：
+ * 渠道级 Infinity 是别的腿的已验证结论，pending 腿不得继承（#1274）。
+ * 解析不出才退回落地；落地认不出渠道仍 fail-close。
+ */
 export function legAvailability(landing, opts = {}) {
+  const model = opts.model;
+  if (model != null && String(model) !== '' && (Array.isArray(opts.legs) || Array.isArray(opts.models))) {
+    const resolved = resolveModelChannel({
+      model, legs: opts.legs, models: opts.models, caps: opts.caps,
+    });
+    if (resolved) {
+      return judgeChannelForModel({
+        model,
+        legs: opts.legs,
+        models: opts.models,
+        caps: opts.caps,
+        states: opts.states,
+        inFlight: opts.inFlight,
+        breaker: opts.breaker,
+        now: opts.now,
+        breakerPolicy: opts.breakerPolicy,
+        excluded: opts.excluded,
+      });
+    }
+  }
   const channel = channelKeyOf(landing);
   if (!channel) return { available: false, channel: null, reason: 'no-channel', why: '落地认不出渠道，不起（fail-close）' };
   return judgeChannelState({ ...opts, channel, target: probeTargetOf(landing) });
@@ -374,11 +421,13 @@ export function legAvailability(landing, opts = {}) {
  * checkChannelCapacity 的注释（全盘阻塞的代价远大于漏拦一个未登记模型，且机器总闸仍在）。
  */
 export function judgeChannelForModel({ model, legs, models, caps, states, inFlight = {}, breaker, now, breakerPolicy, excluded } = {}) {
-  const capTable = caps && typeof caps === 'object' ? caps : {};
+  const capTable = { ...(caps && typeof caps === 'object' ? caps : {}) };
   const resolved = resolveModelChannel({ model, legs, models, caps: capTable });
   if (!resolved) {
     return { available: true, attributed: false, channel: null, why: `模型 ${model == null ? '(空)' : model} 在腿表/选型里都认不出渠道——本闸不拦（机器总闸仍在）` };
   }
+  // 用本模型有效上限覆盖渠道表：pending 模型不读另一条腿写在同渠道上的 Infinity。
+  capTable[resolved.channel] = resolved.cap;
   const rec = (Array.isArray(models) ? models : []).find((m) => m && String(m.id) === String(model));
   const target = rec && rec.provider ? probeTargetOf({ provider: rec.provider, cli_model: rec.cli_model }) : null;
   const verdict = judgeChannelState({
@@ -394,6 +443,7 @@ export function judgeChannelForModel({ model, legs, models, caps, states, inFlig
  */
 export function pickLeg({
   order, landingOf, caps = {}, states = {}, inFlight = {}, breaker = null, now, breakerPolicy, excluded,
+  legs, models,
 } = {}) {
   const ids = Array.isArray(order) ? order : [];
   const getLanding = typeof landingOf === 'function' ? landingOf : () => null;
@@ -401,7 +451,10 @@ export function pickLeg({
   for (const id of ids) {
     const landing = getLanding(id);
     if (!landing) { spilledFrom.push({ model: id, reason: 'no-landing' }); continue; }
-    const av = legAvailability(landing, { caps, states, inFlight, breaker, now, breakerPolicy, excluded });
+    const av = legAvailability(landing, {
+      caps, states, inFlight, breaker, now, breakerPolicy, excluded,
+      model: id, legs, models,
+    });
     if (av.available) {
       return {
         ok: true,

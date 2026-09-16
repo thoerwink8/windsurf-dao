@@ -31,6 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
+  classifyDrainAttempt,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -43,8 +44,9 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, canReleaseApprovedManual, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
-  rereviewKey, epochOf,
+  rereviewKey, epochOf, foldFailureStreak,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
+  collectDockProofs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
 import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
@@ -65,7 +67,7 @@ import {
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
@@ -733,10 +735,19 @@ function buildSituation({ state } = {}) {
         return staleRedBallots({ prs: github.prs || [], reviewsByPr: prReviews.byPr });
       } catch { return null; }   // 算不出来 ⇒ 空表 ⇒ 两条解冻不成立（退回今天的行为），但其余判据照常
     })(),
+    // #1133：旧批准继承的树级证明。没采成 = null，decide 对需要继承的 PR fail-closed。
+    dockByPr: (() => {
+      try {
+        if (!github || github.scanned !== true) return null;
+        if (!prReviews || prReviews.scanned !== true) return null;
+        return collectDockProofs({ github, prReviews }, { run: runCmd });
+      } catch { return null; }
+    })(),
     commanderPolicy: policy.commander || { requireModelInRouting: true },
     admission: scanAdmission({ worktrees: orca.worktrees, policy: policy.commander }),
     routingModels,
     routingModelRecords,
+    routingLegs,
     reviewerOrder,
     reviewerOrderSkipped,
     reviewerOrderUnscanned,
@@ -1131,11 +1142,14 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  *
  * 所以：记账步骤 best-effort，失败进 failures 一起报出去；**只有 pr merge 失败才算真失败**。
  * 打标必须在 merge 之前——合并后 PR 关了就补不上标签，战绩会永久缺这一张。
+ *
+ * #1133：所有真实 `gh pr merge` 都钉 `--match-head-commit`。不因为没 approvalIssue 就跳过 HEAD 锁。
  */
 export function execMerge(action, {
   dryRun, say, run = runCmd, judge = judgeMergeFreshness, writeMergeLedger = null,
 } = {}) {
   const GATING = new Set(['pr merge']);
+  const expectedHead = String((action && action.head) || '').trim();
   const steps = [
     ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
     ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'merge', String(action.pr), '--squash', '--delete-branch'],
@@ -1148,33 +1162,55 @@ export function execMerge(action, {
     for (const g of GATING) if (s.includes(g)) return true;
     return false;
   };
-  const mergeArgv = () => steps.find((s) => s[4] === 'pr' && s[5] === 'merge');
   const evidenceMode = action.evidenceMode
     || (action.approvalIssue ? 'draft' : null);
+  if (evidenceMode === 'manual' && (!action.approvalIssue || !action.head)) {
+    say(`  #${action.pr} 非 draft manual 缺批准单或预期 HEAD，拒绝裸合`);
+    return { ok: false, error: 'manual-merge-unbound' };
+  }
+  if (!expectedHead) {
+    const error = 'merge 没带期望 HEAD，拒绝合入';
+    say(`  #${action.pr} ${error}`);
+    return { ok: false, error };
+  }
+  const mergeArgv = () => steps.find((s) => s.includes('pr') && s.includes('merge'));
+  const pinHead = () => {
+    const merge = mergeArgv();
+    if (merge && !merge.includes('--match-head-commit')) {
+      merge.push('--match-head-commit', expectedHead);
+    }
+  };
+  pinHead();
 
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
-  if (evidenceMode === 'manual' && (!action.approvalIssue || !action.head)) {
-    say(`  #${action.pr} 非 draft manual 缺批准单或预期 HEAD，拒绝裸合`);
-    return { ok: false, error: 'manual-merge-unbound' };
+  const read = args => {
+    const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
+    try { return r && r.ok ? JSON.parse(r.out) : null; } catch { return null; }
+  };
+  const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
+  const liveHead = pr && typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '';
+  if (!liveHead) {
+    const error = '执行前重读 PR HEAD 没查成，拒绝合入';
+    say(`  #${action.pr} ${error}`);
+    return { ok: false, unscanned: true, error };
+  }
+  if (liveHead !== expectedHead) {
+    say(`  #${action.pr} HEAD 已从判定时的 ${expectedHead} 变成 ${liveHead}，拒绝合入`);
+    return { ok: true, skipped: 'head-changed' };
   }
   if (evidenceMode === 'draft' || evidenceMode === 'manual') {
-    const read = args => {
-      const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
-      try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; }
-    };
-    const pr = read(['pr', 'view', String(action.pr), '--json', 'number,state,title,body,headRefOid,isDraft,mergeable,statusCheckRollup,reviews']);
     const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
     const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
       commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
     const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
     const greenAtHead = approval.scanned && approval.latestGreen === true;
     const bound = evidenceMode === 'draft'
-      ? canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead: action.head })
-      : canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead: action.head });
+      ? canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead })
+      : canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead });
     if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN' || !bound) {
       say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
       return { ok: true, skipped: 'approval-not-current' };
@@ -1182,8 +1218,6 @@ export function execMerge(action, {
     if (evidenceMode === 'draft') {
       steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
     }
-    const merge = mergeArgv();
-    if (merge && action.head) merge.push('--match-head-commit', action.head);
   }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
@@ -1649,11 +1683,19 @@ export function classifyDispatchResult({ present, doc, waitedMs }) {
 }
 
 /**
- * 逐条执行动作，并管住一条纪律：**派工没成，就不许再发「已自动派单」**
- * （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
+ * 逐条执行动作，并管住两条纪律：
+ *   1. **派工没成，就不许再发「已自动派单」**
+ *      （2026-09-04 实咬：#787 派工其实失败了，群里照样收到喜报——报喜不报忧比不报还坏）。
+ *   2. **merge 没合入（skipped / 失败），就不许跑配套 land、不许发「已自动合并」**
+ *      （#1133：execMerge 在 HEAD 变了时返回 `{ok:true, skipped:'head-changed'}`，
+ *      不认这个取消态会把拒绝伪装成成功）。
  * exec 可注入，所以这条纪律测得到；dry-run 也走这里，预览里同样看得见抑制与报帅。
  */
 export const DISPATCHING_KINDS = new Set(['dispatch', 'rework', 'pump-draft']);
+
+function mergeCompleted(r) {
+  return !!(r && r.ok === true && !r.skipped);
+}
 
 export function runActions(actions, { exec, log = [] } = {}) {
   const failedIssues = new Set();
@@ -1662,11 +1704,19 @@ export function runActions(actions, { exec, log = [] } = {}) {
   // 拿不到这些原因就等于「本轮没出现过」——连续计数每轮归零（第 N 轮永远到不了），
   // 而且已有的同因 OPEN 单会被判成「本轮已消失」自动关掉。
   const generated = [];
+  // 配套 land 跟在最近一次 merge 后面：那次没合入就不收尾。列表里根本没有 merge 时
+  // （派工测试夹具也会夹一条 land）照跑，不把「没合过」当成「合失败」。
+  let mergeSeen = false;
+  let lastMergeCompleted = false;
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action.kind === 'notify-hub'
       && ((action.issue != null && failedIssues.has(String(action.issue)))
         || (action.pr != null && failedPrs.has(String(action.pr))))) {
-      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 派工没成，不发喜报`);
+      log.push(`· notify-hub 略：${action.pr != null ? 'PR #' + action.pr : '#' + action.issue} 没成，不发喜报`);
+      continue;
+    }
+    if (action.kind === 'land' && mergeSeen && !lastMergeCompleted) {
+      log.push('· land 略：合并未完成，不收尾');
       continue;
     }
     log.push(`· ${action.kind}${action.why ? '（' + action.why + '）' : ''}`);
@@ -1680,6 +1730,14 @@ export function runActions(actions, { exec, log = [] } = {}) {
       const msg = String((e && e.message) || e);
       log.push(`  执行炸了（已跳过，不影响本轮其余动作）：${msg}`);
       r = { ok: false, error: msg, threw: true };
+    }
+    if (action.kind === 'merge') {
+      mergeSeen = true;
+      lastMergeCompleted = mergeCompleted(r);
+      if (!lastMergeCompleted) {
+        if (action.pr != null) failedPrs.add(String(action.pr));
+        log.push(`  合并未完成（${(r && r.skipped) || (r && r.error) || '失败'}），不发已合并、不收尾`);
+      }
     }
     // dry-run 也要判：预览若照打「已自动派单」，这条纪律就等于没上线
     // 背压先于失败判：树里有人在干活不是「派工失败」，是「这轮轮不到它」。
@@ -1872,7 +1930,7 @@ export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}
  * 写完等下一轮才 drain，审官会再睡 20 分钟（#1104 / 今晚 1134.json）。
  * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]。
  */
-function requestRereview(action, { state, dryRun, say }) {
+export function requestRereview(action, { state, dryRun, say, run }) {
   if (!action.reviewer) {
     const error = `PR #${action.pr} 要复审，但 PR 上没有 reviewer/ 标签——需人工打标，不猜审官`;
     say(`  ${error}`);
@@ -1893,7 +1951,7 @@ function requestRereview(action, { state, dryRun, say }) {
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
     say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
-    return drainReviewPending(action, { state, dryRun, say });
+    return drainReviewPending(action, { state, dryRun, say, run });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
@@ -1903,31 +1961,62 @@ function requestRereview(action, { state, dryRun, say }) {
   // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
   // #1236：退回 rereviewKey() 而不是就地拼字面量——写侧与 decide 侧必须同一个判据版本，
   // 两处字面量分叉就是 #909 的形状（账记到另一个格子，票还在队列却永远走不进 retry-drain）。
-  state.reworkDispatched[action.stateKey || rereviewKey(action.pr, action.head)] = {
+  // 失败 streak（lastError / sameErrorRounds）必须从上一轮带过来：每次覆盖成只有 tries
+  // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = state.reworkDispatched[key];
+  state.reworkDispatched[key] = {
+    ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
-  return drainReviewPending(action, { state, dryRun, say });
+  return drainReviewPending(action, { state, dryRun, say, run });
 }
 
 /** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
  *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
-function drainReviewPending(action, { state, dryRun, say }) {
+function drainReviewPending(action, { state, dryRun, say, run }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   if (action.repo) cmd.push('--repo', String(action.repo));
-  const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  recordDrainAttempt(state, action, drainPayloadOf(r));
+  const r = runOrShow(cmd, { dryRun, say, why: action.why, run });
+  const payload = drainPayloadOf(r);
+  recordDrainAttempt(state, action, payload);
+  // drain 的失败原文原来只落进 drainLedger，而判「还要不要再叫审官」读的是 reworkDispatched
+  // ——两本账，于是 decide 那边 `prev.lastError` 永远是 undefined，#1237 埋的 terminal 出口
+  // 一次都没被走到过（2026-09-14 实测：闸每轮拒、每轮照记一次 try、试满打认输，
+  // 写的理由与真因无关）。这里把原文并进同一本账，让那条出口真的能用。
+  rememberDrainFailure(state, action, payload);
   return r;
+}
+
+/** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
+ *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+function rememberDrainFailure(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = (state.reworkDispatched || {})[key];
+  if (!prev) return;                       // 没有这条账就没有要并的对象
+  const verdict = classifyDrainAttempt(payload);
+  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.reason === 'pulled';
+  const err = pulled ? null : drainErrorText(payload);
+  if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
 }
 
 export function drainPayloadOf(runResult) {
   if (!runResult) return { ok: false };
   if (runResult.dryRun === true) return { ok: true, dryRun: true };
   const doc = parseDaoResult(runResult.out);
-  return doc ? { ...doc, ok: runResult.ok === true && doc.ok === true } : { ok: runResult.ok === true };
+  if (doc) return { ...doc, ok: runResult.ok === true && doc.ok === true };
+  // 无结构化回执：比较键用完整 stderr/stdout。runCmd.error 是人读摘要（已截），不许当键。
+  const raw = runResult.stderr || runResult.out;
+  return { ok: runResult.ok === true, ...(raw ? { error: String(raw) } : {}) };
 }
 
 function recordDrainAttempt(state, action, payload) {
