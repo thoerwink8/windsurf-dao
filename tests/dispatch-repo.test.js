@@ -152,22 +152,25 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     const env = { DAO_REVIEW_PENDING_DIR: dir };
     // #1174：这四次只验仓筛选。非早退 cliInProc 会走 admitReviewPull 读真实 runtime。
     // 只给这四次加 --force，不改共享 helper、不改生产容量。
+    // PR #1292 对同一四处也加了 --force（合入 #1265 后 cap 满会把 tickets 抽空）。
+    // 两边产物都留：本单多 held=0 / why / 正控；#1292 的租约修法不在本树。
     const pull = async (args) => {
-      const r = await cliInProc([...args, '--force'], env);
+      const r = await cliInProc(args, env);
       return JSON.parse(r.stdout);
     };
-    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run']);
+    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run', '--force']);
     assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
     assert.equal(p1.held, 0);
     assert.match(String(p1.why), /--force 人手逃生口/);
-    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run']);
+    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run', '--force']);
     assert.deepEqual(p2.tickets.map(t => t.pr), ['9002'], '无仓旧票不该被 --pr 挡在外面');
     assert.equal(p2.held, 0);
     assert.match(String(p2.why), /--force 人手逃生口/);
-    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run']);
+    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run', '--force']);
     assert.deepEqual(p3.tickets.map(t => t.pr), [], '别仓同号票不该被本仓 --pr 顺手拉走');
     assert.equal(p3.held, 0);
-    const all = await pull(['review-pending-drain', '--dry-run']);
+    assert.match(String(p3.why), /--force 人手逃生口/);
+    const all = await pull(['review-pending-drain', '--dry-run', '--force']);
     assert.deepEqual(all.tickets.map(t => t.pr), ['9001', '9002'], '不带 --pr 时本仓票全吃，别仓票剔');
     assert.equal(all.held, 0);
     assert.match(String(all.why), /--force 人手逃生口/);
