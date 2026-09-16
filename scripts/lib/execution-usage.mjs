@@ -993,6 +993,9 @@ export function reportUsage(input = {}) {
   try { collection = json(path.join(options.dir, 'collection.json')); } catch { gaps.add('invalid_collection_state'); }
   if (!rows.length) gaps.add('no_usage_records');
   if (collection?.gaps) for (const g of collection.gaps) gaps.add(g);
+  // Catch-up/bounds live on collection.status with complete=false and empty
+  // gaps. Promoting that to a complete report made --collect --json lie.
+  const collectionUnfinished = collection?.complete === false || (collection?.status || []).length > 0;
   let accountCollection = null;
   try { accountCollection = json(path.join(options.dir, 'cursor-account-sync.json')); } catch { gaps.add('invalid_account_collection_state'); }
   for (const g of accountCollection?.gaps || []) gaps.add(g);
@@ -1016,5 +1019,5 @@ export function reportUsage(input = {}) {
     const reconciliationGaps = [...taskGaps.get(taskId) || []];
     return { taskId, agents: unique(rs.map(r => r.agent)), tokens, charges, metrics, complete: tokens === 'reported' && charges === 'reported' && reconciliationGaps.length === 0, sources: unique(rs.flatMap(r => r.sources)), apiSources: unique(rs.map(r => r.apiSource)), accountCheckedAt: rs.some(r => r.agent === 'cursor') ? accountCollection?.checkedAt ?? null : null, gaps: reconciliationGaps, missing: [tokens !== 'reported' ? 'tokens_not_fully_reported' : null, charges !== 'reported' ? 'charge_not_fully_reported' : null, reconciliationGaps.length ? 'accounting_reconciliation_gap' : null].filter(Boolean) };
   });
-  return { schema: 1, generatedAt: new Date().toISOString(), complete: gaps.size === 0 && [...groups.values()].every(g => g.gaps.length === 0), accountingComplete: taskAccounting.length > 0 && taskAccounting.every(t => t.complete), taskAccounting, groupBy, observations: rows.length, deduplicatedRecords: records.length, groups: [...groups.values()], accountSnapshots, unallocatedSummaries, gaps: [...gaps], status: collection?.status || [], collection, accountCollection };
+  return { schema: 1, generatedAt: new Date().toISOString(), complete: gaps.size === 0 && [...groups.values()].every(g => g.gaps.length === 0) && !collectionUnfinished, accountingComplete: taskAccounting.length > 0 && taskAccounting.every(t => t.complete), taskAccounting, groupBy, observations: rows.length, deduplicatedRecords: records.length, groups: [...groups.values()], accountSnapshots, unallocatedSummaries, gaps: [...gaps], status: collection?.status || [], collection, accountCollection };
 }

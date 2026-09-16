@@ -657,6 +657,40 @@ test('commit limit leaves collection incomplete without failing the oneshot', as
   assert.equal(code, 0);
 });
 
+test('reportUsage and CLI json stay incomplete for status-only collection bounds', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, 'events.ndjson');
+  write(p, ndjson(usage(1), usage(2)));
+  const dir = path.join(f.home, 'usage-limit');
+  const collected = M.collectUsage({
+    home: f.home, dir,
+    limits: { maxCommittedPerRun: 1 },
+    sources: [{ path: p, source: 'grok-acp', agent: 'grok' }],
+  });
+  assert.equal(collected.complete, false);
+  assert.deepEqual(collected.gaps, []);
+  assert.equal(collected.status.includes('collection_commit_limit'), true);
+
+  const report = M.reportUsage({ home: f.home, dir });
+  assert.equal(report.complete, false);
+  assert.deepEqual(report.gaps, []);
+  assert.equal(report.status.includes('collection_commit_limit'), true);
+
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  try {
+    await main(['--json', '--home', f.home, '--dir', dir]);
+  } finally {
+    console.log = orig;
+  }
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.deepEqual(printed.gaps, []);
+  assert.equal(printed.status.includes('collection_commit_limit'), true);
+});
+
 test('root catch-up status and bounded inbox export stay incomplete after orca import', async t => {
   const M = await modulePromise, f = fixture(t);
   const { exportRootMirasim } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage-export.mjs')));
@@ -700,8 +734,21 @@ test('root catch-up status and bounded inbox export stay incomplete after orca i
   assert.equal(boundedImport.status.includes('inbox_scan_limit'), true);
   assert.deepEqual(boundedImport.gaps, []);
   const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
-  const code = await main(['--collect', '--json', '--home', path.join(f.home, 'cli-home'), '--dir', path.join(f.home, 'cli-orca'), '--inbox', boundInbox]);
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  let code;
+  try {
+    code = await main(['--collect', '--json', '--home', path.join(f.home, 'cli-home'), '--dir', path.join(f.home, 'cli-orca'), '--inbox', boundInbox]);
+  } finally {
+    console.log = orig;
+  }
   assert.equal(code, 0);
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.equal(printed.status.includes('inbox_export_incomplete'), true);
+  assert.equal(printed.status.includes('inbox_scan_limit'), true);
+  assert.deepEqual(printed.gaps, []);
 });
 
 test('export install list follows relative imports including require', async () => {
