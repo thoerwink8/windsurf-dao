@@ -15,10 +15,32 @@ const FIX = path.join(__dirname, 'fixtures', 'review-tier', 'basic');
 const TPL = path.join(__dirname, 'fixtures', 'review-tier', 'tpl');
 const LOAD = import('file://' + LIB.split(path.sep).join('/'));
 
+function writeScriptsTree(scripts, spec) {
+  if (spec.scriptsFiles) {
+    for (const [rel, body] of Object.entries(spec.scriptsFiles)) {
+      const abs = path.join(scripts, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body);
+    }
+    return;
+  }
+  const sample = spec.capInCode
+    ? 'const n = policy.budget.per_issue.review_rounds_max;\n'
+    : spec.selfHit
+      ? '// 注释里的 review_rounds_max 不算接线\nconst s = \'review_rounds_max\';\nconst n = 6;\n'
+      : 'const n = 6;\n';
+  fs.writeFileSync(path.join(scripts, 'sample.mjs'), sample);
+  if (spec.selfHit) {
+    const libDir = path.join(scripts, 'lib');
+    fs.mkdirSync(libDir, { recursive: true });
+    fs.writeFileSync(path.join(libDir, 'review-tier-check.mjs'), fs.readFileSync(LIB, 'utf8'));
+  }
+}
+
 /**
  * 按夹具内容铺一个临时目录，返回 check 要的 paths。
  * @param {string} name 临时目录名
- * @param {{standard:string,reviewer:string,soldier:string,capInCode:boolean,policyRaw?:string}} spec
+ * @param {{files:object, capInCode?:boolean, selfHit?:boolean, scriptsFiles?:object}} spec
  */
 function stage(name, spec) {
   const dir = path.join(FIX, name);
@@ -29,10 +51,7 @@ function stage(name, spec) {
   }
   const scripts = path.join(dir, 'scripts');
   fs.mkdirSync(scripts, { recursive: true });
-  fs.writeFileSync(
-    path.join(scripts, 'sample.mjs'),
-    spec.capInCode ? 'const n = policy.per_issue.review_rounds_max;\n' : 'const n = 6;\n',
-  );
+  writeScriptsTree(scripts, spec);
   return {
     standard: path.join(dir, 'review-standard.md'),
     reviewerBook: path.join(dir, 'reviewer-book.md'),
@@ -70,7 +89,33 @@ describe('review-tier-check', () => {
     const { inspectReviewTiers } = await LOAD;
     const r = inspectReviewTiers({ root: __dirname, paths: stage('red-nocode', { files: okFiles(), capInCode: false }) });
     assert.equal(r.kind, 'red');
-    assert.match(r.evidence, /0 处读 review_rounds_max/);
+    assert.match(r.evidence, /没有生产代码读/);
+  });
+
+  it('只有检查器自身命中（注释/字符串自命中同在）→ 红', async () => {
+    const { inspectReviewTiers } = await LOAD;
+    const r = inspectReviewTiers({
+      root: __dirname,
+      paths: stage('red-selfhit', { files: okFiles(), selfHit: true }),
+    });
+    assert.equal(r.kind, 'red');
+    assert.match(r.evidence, /检查器自身\/注释\/字符串自命中不算/);
+  });
+
+  it('检查器自身命中 + 另有生产消费者 → 绿（只排除自身，不误杀真消费者）', async () => {
+    const { inspectReviewTiers } = await LOAD;
+    const r = inspectReviewTiers({
+      root: __dirname,
+      paths: stage('ok-with-checker', {
+        files: okFiles(),
+        scriptsFiles: {
+          'lib/review-tier-check.mjs': fs.readFileSync(LIB, 'utf8'),
+          'lib/review-cap.mjs': 'const n = policy.budget.per_issue.review_rounds_max;\n',
+        },
+      }),
+    });
+    assert.equal(r.kind, 'ok');
+    assert.match(r.line, /生产代码读到/);
   });
 
   it('审官书漏指标准页 → 红（审官读的是它，不指等于没接线）', async () => {
@@ -117,5 +162,29 @@ describe('review-tier-check', () => {
     const r = inspectReviewTiers({ root: __dirname, paths: stage('bad-json', { files, capInCode: true }) });
     assert.equal(r.kind, 'unscanned');
     assert.match(r.line, /不是合法 JSON/);
+  });
+});
+
+describe('review-cap 生产消费者', () => {
+  it('读到正数上限', async () => {
+    const { readReviewRoundsMax, loadReviewRoundsMax, fuseChoiceRequired } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'review-cap.mjs').split(path.sep).join('/')
+    );
+    assert.equal(readReviewRoundsMax({ budget: { per_issue: { review_rounds_max: 6 } } }).cap, 6);
+    assert.equal(loadReviewRoundsMax('{"budget":{"per_issue":{"review_rounds_max":6}}}').cap, 6);
+    assert.equal(fuseChoiceRequired(5, 6).required, false);
+    assert.equal(fuseChoiceRequired(6, 6).required, true);
+    assert.equal(fuseChoiceRequired(7, 6).required, true);
+  });
+
+  it('不是正数 / 坏 JSON / 轮次没查成 → unscanned', async () => {
+    const { readReviewRoundsMax, loadReviewRoundsMax, fuseChoiceRequired } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'lib', 'review-cap.mjs').split(path.sep).join('/')
+    );
+    assert.equal(readReviewRoundsMax(null).unscanned, true);
+    assert.equal(readReviewRoundsMax({ budget: { per_issue: { review_rounds_max: 0 } } }).unscanned, true);
+    assert.equal(loadReviewRoundsMax('{nope').unscanned, true);
+    assert.equal(fuseChoiceRequired(1, null).unscanned, true);
+    assert.equal(fuseChoiceRequired(undefined, 6).unscanned, true);
   });
 });

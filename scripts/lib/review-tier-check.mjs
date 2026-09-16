@@ -6,20 +6,48 @@
 //
 // 本库只做**可机械判定**的两件事：
 //   ① 标准页真的有分级节（P1/P2/P3 三档齐全）、审官书/士兵书真的指到它；
-//   ② release-policy 的 review_rounds_max 真的有代码读它（否则熔断永远不会触发）。
+//   ② release-policy 的 review_rounds_max 真的有**生产代码**读它
+//     （检查器自身 / 注释 / 字符串自命中不算；否则熔断永远不会触发）。
 // 「审官标得对不对」是判断题，归审官与帅侧抽查，本库不碰——**不装作能判它**。
 //
 // 判据不许复用被检查对象自己的解析逻辑（自己查自己查不出错）：本库只做字符串在场性
 // 与正则扫描，不 import 那几个文档的任何解析器。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 /** 标准页必须同时出现这三档的档位名；缺一 = 分级没落地。 */
 const TIERS = ['P1', 'P2', 'P3'];
 
 /** 熔断说法：这几条同时在场才算「到轮数必须二选一」写进去了。 */
 const CAP_MARKERS = ['review_rounds_max', '拆单', '改判'];
+
+/** 接线闸自己。它读阈值是为了核别人，不能把自己算成熔断已接线。 */
+const CHECKER_NAMES = new Set(['review-tier-check.mjs', 'review-tier-check.js']);
+
+/**
+ * 生产代码读阈值的语法：属性访问 `.budget.per_issue.review_rounds_max`（含可选链）。
+ * 裸字符串、注释、检查器自命中都不是消费者——那正是本闸曾经静默放行的形状。
+ */
+const CONSUMER_ACCESS = /(?:\?\.|\.)budget(?:\?\.|\.)per_issue(?:\?\.|\.)review_rounds_max\b/;
+
+/** 剥掉注释和字符串，剩下的才拿去对属性访问。 */
+function stripJsNoise(src) {
+  return String(src)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    .replace(/`(?:\\.|[^`\\])*`/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, '""')
+    .replace(/"(?:\\.|[^"\\])*"/g, '""');
+}
+
+function isCapConsumerSource(src) {
+  return CONSUMER_ACCESS.test(stripJsNoise(src));
+}
+
+function isCheckerFile(abs) {
+  return CHECKER_NAMES.has(basename(abs));
+}
 
 /** 读一个文件；读不到返回 null（调用方据此判「没查成」，不是「没问题」）。 */
 function readOrNull(abs) {
@@ -106,12 +134,13 @@ export function inspectReviewTiers({ root, paths: override } = {}) {
     else if (!TIERS.every((t) => new RegExp(`\\b${t}\\b`).test(docs[k]))) bad.push(`${label}指了标准页但正文没提档位`);
   }
 
-  // ①-c 熔断的轮数上限必须真的被代码读到。
+  // ①-c 熔断的轮数上限必须真的被生产代码读到。
   //
-  // 判据：scripts/ 下有人**读** budget.per_issue.review_rounds_max。
+  // 判据：scripts/ 下有人用属性访问读 budget.per_issue.review_rounds_max。
+  // 检查器自身、注释、字符串字面量都不算——那是本闸曾经把「只有自己命中」判绿的洞。
   // 注意两种「没扫到」的意思完全不同，必须分开报（CLAUDE.md 自动检查节）：
   //   · 扫不到任何 .mjs 样本 → 没查成（unscanned），不是「没有硬编码」；
-  //   · 扫到 N 个样本但 0 处引用 → 红（阈值没人读，熔断永不触发，#1227）。
+  //   · 扫到 N 个样本但 0 个生产消费者 → 红（阈值没人读，熔断永不触发，#1227）。
   const scriptsDir = override ? scriptsPath : join(root, 'scripts');
   let sawInCode = false;
   let scannedFiles = 0;
@@ -132,7 +161,8 @@ export function inspectReviewTiers({ root, paths: override } = {}) {
           const t = readOrNull(abs);
           if (t == null) continue;
           scannedFiles += 1;
-          if (t.includes('review_rounds_max')) sawInCode = true;
+          if (isCheckerFile(abs)) continue;
+          if (isCapConsumerSource(t)) sawInCode = true;
         }
       }
     };
@@ -146,7 +176,7 @@ export function inspectReviewTiers({ root, paths: override } = {}) {
     };
   }
   if (!sawInCode) {
-    bad.push(`scripts/ 下 ${scannedFiles} 个 .mjs 里 0 处读 review_rounds_max——熔断永远不触发（#1227）`);
+    bad.push(`scripts/ 下 ${scannedFiles} 个脚本里没有生产代码读 budget.per_issue.review_rounds_max（检查器自身/注释/字符串自命中不算）——熔断永远不触发（#1227）`);
   }
 
   if (bad.length) {
@@ -160,6 +190,6 @@ export function inspectReviewTiers({ root, paths: override } = {}) {
 
   return {
     kind: 'ok',
-    line: `红项分级已接线：标准页三档齐全 + 审官书/士兵书都指到 + 熔断上限被 ${scannedFiles} 个脚本样本中的代码读到`,
+    line: `红项分级已接线：标准页三档齐全 + 审官书/士兵书都指到 + 熔断上限被生产代码读到`,
   };
 }

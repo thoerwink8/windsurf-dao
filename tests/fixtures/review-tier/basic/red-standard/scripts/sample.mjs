@@ -1,1 +1,1 @@
-const n = policy.per_issue.review_rounds_max;
+const n = policy.budget.per_issue.review_rounds_max;

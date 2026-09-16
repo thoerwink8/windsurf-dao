@@ -1560,7 +1560,8 @@ function checkEphemeralLifecycle() {
 // 第一步就退化成「谁也不知道该标 P1 还是 P2」。
 //
 // 只核**可机械判定**的两件事：标准页三档齐全且两份任务书真指到它、
-// 熔断上限真有代码读。判据在 lib/review-tier-check.mjs（不 import 那几个文档的任何解析器——
+// 熔断上限真有生产代码读（检查器自身 / 注释 / 字符串自命中不算）。
+// 判据在 lib/review-tier-check.mjs（不 import 那几个文档的任何解析器——
 // 自己查自己查不出错）。「审官标得对不对」是判断题，归审官与帅侧抽查，本闸不装作能判。
 function checkReviewTiers() {
   const r = inspectReviewTiers({ root: ROOT });
