@@ -2,6 +2,7 @@
 // 判别力铁律：故意违规样本必须被咬住；「没查成」与「查过没事」必须分得开。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('path');
 
 const LIB = import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'session-brief.mjs').replace(/\\/g, '/'));
@@ -86,6 +87,58 @@ describe('清单退场闸（联动退出）判官', () => {
       ],
     });
     assert.deepEqual(t.map((e) => e.name), ['x', 'a.md']);
+  });
+  it('done_when 指向的 OPEN 统领单漏挂 issues 不得误报 stale', async () => {
+    const { collectExitTargets, judgeListExit } = await LIB;
+    // 复现 2026-09-16 实咬：scale-dozens 的 issues 只有已关前置单，统领 #1174 写在 done_when。
+    const targets = collectExitTargets({
+      initiativesDoc: { initiatives: [{
+        id: 'scale-dozens',
+        status: 'active',
+        done_when: '统领 #1174 的 T1–T11 均有测试/部署/真实任务证据且已收口',
+        issues: [1145, 1146, 1147, 1151, 1152],
+      }] },
+      planDocs: [],
+    });
+    assert.deepEqual(targets[0].issues, [1145, 1146, 1147, 1151, 1152, 1174]);
+    const openUmbrella = judgeListExit({
+      targets,
+      states: {
+        1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED',
+        1151: 'CLOSED', 1152: 'CLOSED', 1174: 'OPEN',
+      },
+    });
+    assert.equal(openUmbrella.ok, true);
+    assert.deepEqual(openUmbrella.stale, []);
+    const allClosed = judgeListExit({
+      targets,
+      states: {
+        1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED',
+        1151: 'CLOSED', 1152: 'CLOSED', 1174: 'CLOSED',
+      },
+    });
+    assert.equal(allClosed.ok, false);
+    assert.deepEqual(allClosed.stale.map((t) => t.name), ['scale-dozens']);
+  });
+  it('真实西瓜清单：active 条目 done_when 里的单号都在挂钩里', async () => {
+    const { hookedIssues, issueRefsInText, collectExitTargets, judgeListExit } = await LIB;
+    const doc = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'docs', 'initiatives.json'), 'utf8'));
+    for (const i of doc.initiatives.filter((x) => x && x.status === 'active')) {
+      const hooked = hookedIssues(i);
+      for (const n of issueRefsInText(i.done_when)) {
+        assert.ok(hooked.includes(n), `${i.id} 的 done_when #${n} 必须在挂钩里，否则会误报 stale`);
+      }
+    }
+    const scale = doc.initiatives.find((x) => x.id === 'scale-dozens');
+    assert.ok(scale, 'scale-dozens 还在清单里');
+    const targets = collectExitTargets({ initiativesDoc: { initiatives: [scale] }, planDocs: [] });
+    assert.ok(targets[0].issues.includes(1174), 'scale-dozens 挂钩必须含统领 #1174');
+    const r = judgeListExit({
+      targets,
+      states: Object.fromEntries(targets[0].issues.map((n) => [n, n === 1174 ? 'OPEN' : 'CLOSED'])),
+    });
+    assert.equal(r.ok, true, '统领 OPEN 时不得把 scale-dozens 判 stale：' + JSON.stringify(r));
+    assert.deepEqual(r.stale, []);
   });
   it('故意违规样本：挂的单全 CLOSED 还在推 → 咬住（这条红不了闸就没生效）', async () => {
     const { judgeListExit } = await LIB;

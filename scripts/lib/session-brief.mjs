@@ -72,17 +72,50 @@ export function unreadPlanLines(ingested) {
   return [`[清单] 计划文档没查成：${ingested.error}（≠ 没有进行中的计划）`];
 }
 
+/** 从正文抽 #单号，去重保序。只认 #123，不认没井号的数字。 */
+export function issueRefsInText(text) {
+  const found = [];
+  const re = /#(\d+)/g;
+  const s = String(text || '');
+  let m;
+  while ((m = re.exec(s))) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
+  }
+  return found;
+}
+
+function uniquePosInts(nums) {
+  const found = [];
+  for (const raw of nums) {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
+  }
+  return found;
+}
+
+/**
+ * 西瓜条目的退场挂钩：`issues` 字段 ∪ `done_when` 里的 #单号。
+ * 2026-09-16 实咬：scale-dozens 的 issues 只挂了已关前置单，统领 #1174 写在 done_when 里，
+ * live 闸把仍在推的目标误报 stale。done_when 是完成判据，里面点名的单不得被漏挂。
+ */
+export function hookedIssues(initiative) {
+  const listed = Array.isArray(initiative && initiative.issues) ? initiative.issues : [];
+  return uniquePosInts([...listed, ...issueRefsInText(initiative && initiative.done_when)]);
+}
+
 /**
  * 清单退场闸（联动退出）的挂钩对象：active 西瓜 + in-progress 计划文档里带 issues 的。
- * 没带 issues 的不进闸（它们的退出走各自 done_when / 人工），这不是漏——闸只咬「单全关了还赖着」。
+ * 西瓜挂钩含 issues 字段和 done_when 里的 #单号；两者都空的不进闸（退出走各自 done_when / 人工）。
+ * 闸只咬「单全关了还赖着」——漏挂统领单不得把仍在推的目标误报该收摊。
  */
 export function collectExitTargets({ initiativesDoc = null, planDocs = [] } = {}) {
   const targets = [];
   const list = Array.isArray(initiativesDoc && initiativesDoc.initiatives) ? initiativesDoc.initiatives : [];
   for (const i of list) {
-    if (i && i.status === 'active' && Array.isArray(i.issues) && i.issues.length) {
-      targets.push({ kind: 'initiative', name: i.id || i.name, issues: i.issues });
-    }
+    if (!i || i.status !== 'active') continue;
+    const issues = hookedIssues(i);
+    if (issues.length) targets.push({ kind: 'initiative', name: i.id || i.name, issues });
   }
   for (const e of (Array.isArray(planDocs) ? planDocs : [])) {
     if (e && e.fm && e.fm.status === 'in-progress' && Array.isArray(e.fm.issues) && e.fm.issues.length) {

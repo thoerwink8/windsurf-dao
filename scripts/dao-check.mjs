@@ -1393,7 +1393,29 @@ function checkListExitSamples() {
     fail('清单退场闸夹具：读失败文件不该变成挂钩对象', 'entries 只收读成的；没读成的走 unscanned', `收到 ${swallowedTargets.length}`);
     return;
   }
-  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿');
+  // 2026-09-16 实咬：scale-dozens 的 issues 只挂已关前置单，统领写在 done_when。
+  const leaked = collectExitTargets({
+    initiativesDoc: { initiatives: [{
+      id: 'scale-dozens',
+      status: 'active',
+      done_when: '统领 #1174 的 T1–T11 均有测试/部署/真实任务证据且已收口',
+      issues: [1145, 1146, 1147, 1151, 1152],
+    }] },
+    planDocs: [],
+  });
+  if (!leaked[0] || !leaked[0].issues.includes(1174)) {
+    fail('清单退场闸夹具：done_when 统领单漏挂没并进挂钩', 'done_when 里的 #单号必须进 issues 集合', JSON.stringify(leaked).slice(0, 160));
+    return;
+  }
+  const leakedVerdict = judgeListExit({
+    targets: leaked,
+    states: { 1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED', 1151: 'CLOSED', 1152: 'CLOSED', 1174: 'OPEN' },
+  });
+  if (!leakedVerdict.ok || leakedVerdict.stale.length) {
+    fail('清单退场闸夹具：OPEN 统领单漏挂后误报 stale', 'done_when 指向的 OPEN 单不得因漏挂 issues 被判该收摊', JSON.stringify(leakedVerdict).slice(0, 160));
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale');
 }
 
 function checkListExitLive() {
