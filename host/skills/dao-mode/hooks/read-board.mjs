@@ -52,10 +52,24 @@ export function readBoard(path = BOARD_FILE, now = Date.now()) {
   if (doc.waitingUser == null) {
     return { scanned: false, why: 'waitingUser 没查成（GitHub 未扫描）' };
   }
+  // 契约：两个量都是非负整数。字符串 / 布尔 / NaN / 负数经 Number(...)||0
+  // 都会变成「健康 0」，提问闸按 basis:board 放行，坏数据就静默屏蔽兜底。
+  const waiting = asNonNegInt(doc.waitingUser, 'waitingUser');
+  if (waiting.why) return { scanned: false, why: waiting.why };
+  const stalled = asNonNegInt(doc.stalledRounds, 'stalledRounds');
+  if (stalled.why) return { scanned: false, why: stalled.why };
   return {
     scanned: true,
-    stalledRounds: Number(doc.stalledRounds) || 0,
-    waitingUser: Number(doc.waitingUser) || 0,
+    stalledRounds: stalled.value,
+    waitingUser: waiting.value,
     at: doc.at,
   };
+}
+
+/** 缺字段、非法类型、NaN、负数一律不是非负整数。 */
+function asNonNegInt(v, name) {
+  if (!Number.isInteger(v) || v < 0) {
+    return { why: `${name} 不是非负整数（读到 ${JSON.stringify(v)}）` };
+  }
+  return { value: v };
 }

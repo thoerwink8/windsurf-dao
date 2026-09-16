@@ -593,6 +593,25 @@ describe('dao-mode', { concurrency: 1 }, () => {
       assert.strictEqual(r.ask, false, JSON.stringify(r));
       assert.strictEqual(r.basis, 'board');
     });
+    await t.test('scanned:true 但 waitingUser 非法类型 ⇒ 强制兜底', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: 'corrupt' },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('scanned:true 但 stalledRounds 缺失/非法 ⇒ 强制兜底', () => {
+      for (const bad of [
+        { scanned: true, waitingUser: 0 },
+        { scanned: true, stalledRounds: 'corrupt', waitingUser: 0 },
+        { scanned: true, stalledRounds: -1, waitingUser: 0 },
+      ]) {
+        const r = shouldAskExit({ mode: 'standby', hours: 9, messages: 0, board: bad });
+        assert.strictEqual(r.ask, true, JSON.stringify({ bad, r }));
+        assert.strictEqual(r.basis, 'fallback', JSON.stringify({ bad, r }));
+      }
+    });
   });
 
   // ⚠️ 这里 import 的是 read-board.mjs，**不是** dao-mode.mjs。
@@ -657,6 +676,43 @@ describe('dao-mode', { concurrency: 1 }, () => {
       const r = readBoard(p, T0);
       assert.strictEqual(r.scanned, true, JSON.stringify(r));
       assert.strictEqual(r.waitingUser, 0);
+    });
+    // 审官红项：Number("corrupt")||0 会把坏快照读成健康 0，提问闸按 basis:board 放行。
+    await t.test('waitingUser 非法类型 ⇒ 没查成（不许 Number("corrupt") 当 0）', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: 'corrupt',
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('waitingUser'), r.why);
+    });
+    await t.test('缺 stalledRounds ⇒ 没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('stalledRounds'), r.why);
+    });
+    await t.test('stalledRounds 非法类型 ⇒ 没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 'corrupt', waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('stalledRounds'), r.why);
+    });
+    await t.test('stalledRounds / waitingUser 负数 ⇒ 没查成', () => {
+      for (const bad of [
+        { stalledRounds: -1, waitingUser: 0 },
+        { stalledRounds: 0, waitingUser: -1 },
+      ]) {
+        fs.writeFileSync(p, JSON.stringify({
+          at: new Date(T0 - 60000).toISOString(), ...bad,
+        }), 'utf8');
+        const r = readBoard(p, T0);
+        assert.strictEqual(r.scanned, false, JSON.stringify({ bad, r }));
+      }
     });
   });
 
@@ -729,6 +785,56 @@ describe('dao-mode', { concurrency: 1 }, () => {
       });
       assert.strictEqual(stuck.ask, true, JSON.stringify(stuck));
       assert.strictEqual(stuck.basis, 'board');
+    });
+
+    // 写侧先落一份合法快照，再把字段改坏——模拟文件被写坏 / 旧写侧。
+    // 读侧必须 scanned:false，判定侧满 9 小时必须兜底问，不许 basis:board。
+    await t.test('写侧合法快照被改成 waitingUser:"corrupt" → 读没查成 → 时长超阈值走兜底', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: true, prs: [] } },
+        digestStreak: 0,
+        file: p,
+      });
+      const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+      written.waitingUser = 'corrupt';
+      fs.writeFileSync(p, JSON.stringify(written), 'utf8');
+
+      const board = readBoard(p, now);
+      assert.strictEqual(board.scanned, false, JSON.stringify(board));
+      assert.ok(String(board.why).includes('waitingUser'), board.why);
+
+      const verdict = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board,
+      });
+      assert.strictEqual(verdict.ask, true, JSON.stringify(verdict));
+      assert.strictEqual(verdict.basis, 'fallback');
+    });
+
+    await t.test('写侧合法快照缺 stalledRounds / 改成非法值 → 读没查成 → 时长超阈值走兜底', () => {
+      for (const mutate of [
+        (row) => { delete row.stalledRounds; },
+        (row) => { row.stalledRounds = 'corrupt'; },
+        (row) => { row.stalledRounds = -3; },
+      ]) {
+        writeBoardStuck({
+          situation: { at, github: { scanned: true, prs: [] } },
+          digestStreak: 0,
+          file: p,
+        });
+        const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+        mutate(written);
+        fs.writeFileSync(p, JSON.stringify(written), 'utf8');
+
+        const board = readBoard(p, now);
+        assert.strictEqual(board.scanned, false, JSON.stringify({ written, board }));
+        assert.ok(String(board.why).includes('stalledRounds'), board.why);
+
+        const verdict = shouldAskExit({
+          mode: 'standby', hours: 9, messages: 0, board,
+        });
+        assert.strictEqual(verdict.ask, true, JSON.stringify({ written, verdict }));
+        assert.strictEqual(verdict.basis, 'fallback');
+      }
     });
   });
 
