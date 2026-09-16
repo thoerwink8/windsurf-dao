@@ -317,6 +317,74 @@ describe('#1133 全路径 HEAD 锁', () => {
   });
 });
 
+describe('#1133 runActions：merge skip 后不 land、不发已合并', () => {
+  it('head-changed 后不执行配套 land 与「已自动合并」通知', async () => {
+    const { runActions } = await CMD;
+    const actions = [
+      { kind: 'merge', pr: 1308, head: MERGE_HEAD, why: '判绿可合' },
+      { kind: 'land', why: '合并后收工清理' },
+      { kind: 'notify-hub', pr: 1308, moment: 'merged', subject: 'PR #1308 已自动合并' },
+    ];
+    const seen = [];
+    const log = [];
+    runActions(actions, {
+      exec: (a) => {
+        seen.push(a.kind);
+        if (a.kind === 'merge') return { ok: true, skipped: 'head-changed' };
+        return { ok: true };
+      },
+      log,
+    });
+    assert.deepEqual(seen, ['merge'], `merge skip 后不得继续：${JSON.stringify(seen)}`);
+    assert.equal(log.some((l) => /land 略/.test(l)), true);
+    assert.equal(log.some((l) => /notify-hub 略/.test(l)), true);
+    assert.equal(log.some((l) => /已自动合并/.test(l) && !/略/.test(l)), false);
+  });
+
+  it('approval-not-current 与 merge 失败同样拦配套收尾', async () => {
+    const { runActions } = await CMD;
+    for (const r of [{ ok: true, skipped: 'approval-not-current' }, { ok: false, error: 'merge failed' }]) {
+      const seen = [];
+      runActions([
+        { kind: 'merge', pr: 77, head: MERGE_HEAD },
+        { kind: 'land' },
+        { kind: 'notify-hub', pr: 77, moment: 'merged', subject: 'PR #77 已自动合并' },
+      ], { exec: (a) => { seen.push(a.kind); return a.kind === 'merge' ? r : { ok: true }; } });
+      assert.deepEqual(seen, ['merge'], JSON.stringify({ r, seen }));
+    }
+  });
+
+  it('真合入后配套 land 与通知照发；另一张 skip 的不殃及', async () => {
+    const { runActions } = await CMD;
+    const seen = [];
+    runActions([
+      { kind: 'merge', pr: 1, head: MERGE_HEAD },
+      { kind: 'land' },
+      { kind: 'notify-hub', pr: 1, moment: 'merged', subject: 'PR #1 已自动合并' },
+      { kind: 'merge', pr: 2, head: MERGE_HEAD },
+      { kind: 'land' },
+      { kind: 'notify-hub', pr: 2, moment: 'merged', subject: 'PR #2 已自动合并' },
+    ], {
+      exec: (a) => {
+        seen.push(`${a.kind}:${a.pr || ''}`);
+        if (a.kind === 'merge' && a.pr === 2) return { ok: true, skipped: 'head-changed' };
+        return { ok: true };
+      },
+    });
+    assert.deepEqual(seen, ['merge:1', 'land:', 'notify-hub:1', 'merge:2']);
+  });
+
+  it('列表里没有 merge 时 land 仍跑（派工夹具反证）', async () => {
+    const { runActions } = await CMD;
+    const seen = [];
+    runActions(
+      [{ kind: 'dispatch', issue: 1 }, { kind: 'notify-hub', issue: 1 }, { kind: 'land' }],
+      { exec: (a) => { seen.push(a.kind); return { ok: true }; } },
+    );
+    assert.deepEqual(seen, ['dispatch', 'notify-hub', 'land']);
+  });
+});
+
 describe('#1117 审官任务书不许拿 ① 当交卷红', () => {
   const BOOKS = [
     'host/skills/dispatch/templates/reviewer-book-mirasim.md',

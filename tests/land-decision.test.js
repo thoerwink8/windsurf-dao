@@ -23,6 +23,40 @@ describe('lastJudgmentOf', () => {
   });
 });
 
+describe('lastApprovedCommitId', () => {
+  const cid = (n) => String(n).repeat(40);
+  it('最后一条是 APPROVED → 取出该 commit', async () => {
+    const { lastApprovedCommitId } = await LOAD;
+    const r = lastApprovedCommitId([
+      { state: 'APPROVED', commit_id: cid('a') },
+    ]);
+    assert.equal(r.scanned, true);
+    assert.equal(r.commit, cid('a'));
+    assert.equal(r.revoked, undefined);
+  });
+  it('APPROVED 后 DISMISSED → 撤销继承，不返回旧 commit', async () => {
+    const { lastApprovedCommitId } = await LOAD;
+    const r = lastApprovedCommitId([
+      { state: 'APPROVED', commit_id: cid('a') },
+      { state: 'DISMISSED', commit_id: cid('a') },
+    ]);
+    assert.equal(r.scanned, true);
+    assert.equal(r.commit, null);
+    assert.equal(r.revoked, true);
+  });
+  it('DISMISSED 之后又有新 APPROVED → 认新批准', async () => {
+    const { lastApprovedCommitId } = await LOAD;
+    const r = lastApprovedCommitId([
+      { state: 'APPROVED', commit_id: cid('a') },
+      { state: 'DISMISSED', commit_id: cid('a') },
+      { state: 'APPROVED', commit_id: cid('b') },
+    ]);
+    assert.equal(r.scanned, true);
+    assert.equal(r.commit, cid('b'));
+    assert.equal(r.revoked, undefined);
+  });
+});
+
 describe('approvedToLand', () => {
   it('当前 head 上是绿 → 可合', async () => {
     const { approvedToLand } = await LOAD;
@@ -333,5 +367,37 @@ describe('provePureDock 真 git', () => {
     } finally {
       repo.cleanup();
     }
+  });
+
+  it('APPROVED 后 DISMISSED → 对接证明 unknown，即使树级取证会相同', async () => {
+    const { collectDockProofs } = await CORE;
+    const { lastJudgmentOf } = await LOAD;
+    const { analyzeReviews } = await CORE;
+    const approved = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    const tree = 'c'.repeat(40);
+    let mergeTree = 0;
+    const run = (argv) => {
+      if (argv[0] === 'git' && argv[1] === 'merge-tree') {
+        mergeTree += 1;
+        return { ok: true, out: `${tree}\n` };
+      }
+      if (argv[0] === 'git' && argv[1] === 'rev-parse') {
+        return { ok: true, out: `${String(argv[argv.length - 1]).replace(/\^{commit}$/, '')}\n` };
+      }
+      return { ok: true, out: '' };
+    };
+    const reviews = [
+      { state: 'APPROVED', commit_id: approved },
+      { state: 'DISMISSED', commit_id: approved },
+    ];
+    assert.equal(lastJudgmentOf(analyzeReviews(reviews)), null, '撤销后最后判别不得仍是 APPROVED');
+    const r = collectDockProofs({
+      github: { scanned: true, prs: [{ number: 1, headRefOid: head }] },
+      prReviews: { scanned: true, byPr: { 1: { reviews } } },
+    }, { run, masterRef: 'd'.repeat(40) });
+    assert.equal(r[1].state, 'unknown', JSON.stringify(r[1]));
+    assert.match(String(r[1].why), /DISMISSED|撤销/);
+    assert.equal(mergeTree, 0, '撤销后不许再拿树级相同当继承');
   });
 });

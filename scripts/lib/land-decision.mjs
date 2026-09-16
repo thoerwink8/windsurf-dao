@@ -24,18 +24,31 @@ export function lastJudgmentOf(all) {
   return null;
 }
 
-/** 历史上最后一条判别态若是 APPROVED，取出它打在哪个 commit 上。 */
+/**
+ * 历史上最后一条判别态若是 APPROVED，取出它打在哪个 commit 上。
+ * DISMISSED 终止继承：其后若没有新的 APPROVED，commit 为空且 revoked=true。
+ */
 export function lastApprovedCommitId(reviews) {
   if (!Array.isArray(reviews)) return { scanned: false };
   let last = null;
   for (const rv of reviews) {
     const state = normalizeReviewState(rv);
+    if (state === 'DISMISSED') {
+      last = { state: 'DISMISSED', cid: reviewCommitId(rv) || null };
+      continue;
+    }
     if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue;
     const cid = reviewCommitId(rv);
     if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
     last = { state, cid };
   }
-  if (!last || last.state !== 'APPROVED') return { scanned: true, commit: null };
+  if (!last || last.state !== 'APPROVED') {
+    return {
+      scanned: true,
+      commit: null,
+      ...(last && last.state === 'DISMISSED' ? { revoked: true } : {}),
+    };
+  }
   return { scanned: true, commit: last.cid };
 }
 

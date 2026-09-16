@@ -672,6 +672,28 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
     assert.equal(byKind(r, 'rereview').length, 1);
   });
 
+  it('APPROVED 后 DISMISSED：即使注入 dock ok 也不合，当前 HEAD 要重新拿批准', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'newhead000000000000000000000000000000bbb';
+    const OLD = 'oldhead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: OLD },
+        { state: 'DISMISSED', commit_id: OLD },
+      ] } } },
+      dockByPr: { 1102: { state: 'ok', why: '树相同不得压过撤销' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, `撤销后不许合，实得 ${kinds(r)}`);
+    assert.equal(byKind(r, 'rereview').length, 1, `当前 HEAD 要重新拿批准，实得 ${kinds(r)}`);
+  });
+
   it('②红就打在当前 head → 照常派返工工人（判别力反证：别把整条路一刀切废掉）', async () => {
     const { decide } = await CORE;
     const pr = redPr(899, NEW, 801);

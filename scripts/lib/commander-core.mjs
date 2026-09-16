@@ -538,12 +538,18 @@ export function collectDockProofs(situation, { run, masterRef = 'origin/master' 
     const mergeA = analyzeReviewsAtHead(raw, pr.headRefOid);
     const last = lastJudgmentOf(analyzeReviews(raw));
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const atHead = mergeA.scanned ? mergeA.atHead : null;
+    const approved = lastApprovedCommitId(raw);
+    // DISMISSED 撤销了旧批准：即使虚拟合入树相同也不得继承，要当前 HEAD 重新拿到 APPROVED。
+    if (approved.revoked && greenAtHead !== true && atHead === 0) {
+      out[pr.number] = { state: 'unknown', why: '批准已被 DISMISSED 撤销，不得继承' };
+      continue;
+    }
     if (!needsDockProof({
       greenAtHead,
-      atHead: mergeA.scanned ? mergeA.atHead : null,
+      atHead,
       lastJudgment: last,
     })) continue;
-    const approved = lastApprovedCommitId(raw);
     if (!approved.scanned || !approved.commit) {
       out[pr.number] = { state: 'unknown', why: '批准 commit 没查成' };
       continue;
