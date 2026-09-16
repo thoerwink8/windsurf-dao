@@ -455,6 +455,55 @@ describe('子目录 cwd 与树根是同一棵树（审官红① / #1291）', () 
   });
 });
 
+describe('cwdBelongsToTree：Windows 分隔符（审官红 · #1292）', () => {
+  const TREE = 'D:\\frank\\windsurf-dao\\dao-review-pr-900';
+
+  it('Windows 树根 + 子目录 cwd 算同一棵树', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(cwdBelongsToTree(TREE, TREE), true);
+    assert.equal(cwdBelongsToTree(`${TREE}\\scripts`, TREE), true);
+  });
+
+  it('一侧已归一成 / 另一侧仍是 \\ 也对得上', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-review-pr-900\\scripts',
+        'D:/frank/windsurf-dao/dao-review-pr-900',
+      ),
+      true,
+    );
+  });
+
+  it('dao-105 不该被 dao-1055 占住', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-1055\\scripts',
+        'D:\\frank\\windsurf-dao\\dao-105',
+      ),
+      false,
+    );
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-1055',
+        'D:\\frank\\windsurf-dao\\dao-105',
+      ),
+      false,
+    );
+  });
+
+  it('Windows 子目录 cwd 仍归一到树根', async () => {
+    const { worktreeRootOf } = await LEASE;
+    const ROOT = 'D:\\frank\\mirasim-worktrees';
+    const WIN_TREE = `${ROOT}\\windsurf-dao\\dao-1007`;
+    assert.equal(
+      worktreeRootOf(`${WIN_TREE}\\scripts`, { root: ROOT }),
+      'D:/frank/mirasim-worktrees/windsurf-dao/dao-1007',
+    );
+  });
+});
+
 describe('占用声明：第二个拿不到，失败释放（审官红④ / #1291）', () => {
   const fs = require('node:fs');
   const os = require('node:os');

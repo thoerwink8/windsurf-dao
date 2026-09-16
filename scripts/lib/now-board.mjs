@@ -172,14 +172,9 @@ export function judgeSession({ sessions, treePath } = {}) {
   const t = tri(sessions);
   if (t.state === 'unscanned') return { state: 'unscanned', why: `审官会话没查成：${t.why}`, count: 0 };
   if (!treePath) return { state: 'unscanned', why: '没有审官树路径，会话对不上号（没查成）', count: 0 };
-  const want = normPath(treePath);
-  const count = t.items.filter(s => s && cwdBelongsToTree(s.cwd, want)).length;
+  const count = t.items.filter(s => s && cwdBelongsToTree(s.cwd, treePath)).length;
   if (count > 0) return { state: 'live', why: null, count };
   return { state: 'gone', why: '这棵审官树上没有活着的执行体进程', count: 0 };
-}
-
-function normPath(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
 /** 审官树 head 对不对得上 PR head。树 head 读不到 = 没查成，不许当「一致」。 */

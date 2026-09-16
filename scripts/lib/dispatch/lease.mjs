@@ -45,6 +45,10 @@ export function worktreesRoot(home = homedir()) {
   return process.env.MIRASIM_WORKTREES || join(home, 'mirasim-worktrees');
 }
 
+function normCwd(v) {
+  return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 /**
  * 把任意 cwd 归一成「这棵工作树的根」。布局是 `<根>/<仓>/<分支>`，再往下都是树上的子目录。
  * 审官红① / #1291：busyTrees 把子目录 cwd 当成另一棵树，judgeTreeLease 又只认精确相等——
@@ -54,8 +58,8 @@ export function worktreesRoot(home = homedir()) {
  * 给不出根（cwd 不在 root 下、层数不够）→ null，调用方自己决定怎么处理。
  */
 export function worktreeRootOf(cwd, { root = worktreesRoot() } = {}) {
-  const base = String(root || '').replace(/\/+$/, '');
-  const path = String(cwd || '').replace(/\/+$/, '');
+  const base = normCwd(root);
+  const path = normCwd(cwd);
   if (!base || !path) return null;
   const prefix = `${base}/`;
   if (path !== base && !path.startsWith(prefix)) return null;
@@ -67,10 +71,10 @@ export function worktreeRootOf(cwd, { root = worktreesRoot() } = {}) {
   return `${base}/${parts[0]}/${parts[1]}`;
 }
 
-/** cwd 是这棵树的根，或落在它的子目录里。前缀要比斜杠，dao-105 不该被 dao-1055 占住。 */
+/** cwd 是这棵树的根，或落在它的子目录里。两侧 `/` `\` 都归一；前缀要比斜杠，dao-105 不该被 dao-1055 占住。 */
 export function cwdBelongsToTree(cwd, tree) {
-  const c = String(cwd || '').replace(/\/+$/, '');
-  const t = String(tree || '').replace(/\/+$/, '');
+  const c = normCwd(cwd);
+  const t = normCwd(tree);
   if (!c || !t) return false;
   return c === t || c.startsWith(`${t}/`);
 }
@@ -265,14 +269,10 @@ export function busyTrees(procs, { root = worktreesRoot() } = {}) {
   return { ok: true, trees, count: trees.length };
 }
 
-function normCwd(v) {
-  return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-/** 活会话保护整棵工作树：精确相等，或树内子目录。前缀必须带斜杠，避免 dao-live 误护 dao-live-old。 */
+/** 活会话保护整棵工作树。尺就是 cwdBelongsToTree：前缀带斜杠，避免 dao-live 误护 dao-live-old。 */
 function cwdInLiveTree(cwd, liveTrees) {
   for (const live of liveTrees) {
-    if (cwd === live || cwd.startsWith(`${live}/`)) return true;
+    if (cwdBelongsToTree(cwd, live)) return true;
   }
   return false;
 }
@@ -324,7 +324,7 @@ export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned
   // 回收范围必须和 busyTrees 同一把尺——只收工作树根下的 cwd。
   // 不钳根的话，mirasim-server 在主仓 /srv、家目录、/tmp 上的任意后代都会被当幽灵 SIGTERM，
   // 帅位自己的会话就跑在主仓里。前缀带斜杠，防 /tmp/mirasim-worktrees-fake 混进来。
-  const base = String(root).replace(/\/+$/, '');
+  const base = normCwd(root);
   const byTree = new Map();
   for (const p of procs) {
     if (!p || !Number.isInteger(Number(p.pid))) continue;
