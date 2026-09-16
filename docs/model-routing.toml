@@ -113,7 +113,7 @@ Command Code 官方 CLI，本仓用途 = **非交互查证/测速**（2026-08-16
 pi 接不上 commandcode 的根因（2026-08-16 帅·A 实测，不是 key 的问题）：
 - Provider API 协议通：`https://api.commandcode.ai/provider/v1/chat/completions`（OpenAI 兼容）与 `/messages`（Anthropic 兼容）实测可用，`Authorization: Bearer <key>`，模型列表在 `/provider/v1/models`（55 个）。
 - 但 pi 的 provider 是**代码里注册**的，不是配置里声明的：往 `~/.pi/agent/models-store.json` 凭空写一个 `commandcode` provider 会被静默忽略，`pi auth check --provider commandcode` 返回 `{"status":"not_ready","reason":"provider_not_found"}`，`pi --list-models` 也不列出。
-- 所以「拿到 apikey 就能在 pi 里用」这个前提**不成立**；要在 pi 里用的唯一路是写 provider 插件，而插件方案 2026-08-16 已拍板不采用。**pi 保持 DeepSeek 官方 API 原通道。**
+- 所以「拿到 apikey 就能在 pi 里用」这个前提**不成立**；要在 pi 里用的唯一路是写 provider 插件，而插件方案 2026-08-16 已拍板不采用。**pi 不接 commandcode，也不走已删的 DeepSeek 官方直连**——DeepSeek 型号走仍在役的 opencode-go / gw-dspool；commandcode 只走本节 `cmdc` CLI。
 """
 why = "用户 2026-08-16 购买 Command Code 会员（$10/月 GOAT 档），用于**非交互查证/测速**：同一道题实测 5.5s（deepseek-v4-flash）出结果，官方 CLI 断链会明确报错（vs 社区插件可能静默退回默认 provider）。当前不能承载需进 git 的 Orca 工人（2026-08-16 帅·A 裁定：Orca agent 识别清单不含它，worker-start --terminal 必返回 agent_unconfigured）。GOAT 覆盖面只有开源模型（Claude/GPT 全系 MODEL_NOT_IN_PLAN），Gemini 本机不可用（2026-08-16 帅·A 实测）。"
 decided = "2026-08-16"
@@ -223,7 +223,7 @@ Windsurf IDE 驱动 Devin 走 ACP（`devin acp`），Orca 的 agent schema 里�
 非交互形态（-p --prompt-file，可指定 --model）2026-08-26 凌晨全链验证过（PR #776 MERGED），
 保留在 docs/cli-notes/devin.md 作为备用通道；本表默认交互形态（用户拍板 2026-08-26）。
 """
-why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连（#688）；2026-08-26 实测交互 TUI 形态可用（补粘+回车），选型恢复 devin（#771 全链实测）。"
+why = "用户 2026-08-21 拍板：写码通道优先级当时是 devin > opencode-go > 官方直连（#688；官方直连 2026-09-15 已删）。2026-08-26 实测交互 TUI 形态可用（补粘+回车），选型恢复 devin（#771 全链实测）。"
 decided = "2026-08-26"
 
 [providers.minimax-h3]
