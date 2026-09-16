@@ -154,13 +154,15 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
       const r = await cliInProc(args, env);
       return JSON.parse(r.stdout);
     };
-    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run']);
+    // --force：本用例钉的是 --pr 按仓筛选，不是现场在役/上限。合入 #1274 后上限跟负载走，
+    // 本机在役一顶满，筛选正确的票也会被 admit 收成 []。
+    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run', '--force']);
     assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
-    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run']);
+    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run', '--force']);
     assert.deepEqual(p2.tickets.map(t => t.pr), ['9002'], '无仓旧票不该被 --pr 挡在外面');
-    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run']);
+    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run', '--force']);
     assert.deepEqual(p3.tickets.map(t => t.pr), [], '别仓同号票不该被本仓 --pr 顺手拉走');
-    const all = await pull(['review-pending-drain', '--dry-run']);
+    const all = await pull(['review-pending-drain', '--dry-run', '--force']);
     assert.deepEqual(all.tickets.map(t => t.pr), ['9001', '9002'], '不带 --pr 时本仓票全吃，别仓票剔');
   });
 
