@@ -368,6 +368,14 @@ describe('OnCalendar 语义展开后不得撞点', () => {
     assert.match(r.reason, /不认识/);
   });
 
+  it('systemd 会拒的非法日历不得当有效展开（不得按模数折回装绿）', async () => {
+    const { expandOnCalendar } = await CAL;
+    for (const cal of ['*:60/5', '*:99', '*-*-* 24/6:23:00', '*-*-* 04:99:00']) {
+      const r = expandOnCalendar(cal);
+      assert.equal(r.ok, false, `${cal} 必须没查成，现在 ${JSON.stringify(r)}`);
+    }
+  });
+
   it('仓内 + 生成式 timer 都能展开；heal-root 与任一现有点位不相交', async () => {
     const { expandOnCalendar, calendarOverlap } = await CAL;
     const M = await INV;

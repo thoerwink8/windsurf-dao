@@ -1,13 +1,14 @@
 # /etc/systemd/system/dao-skills-heal-root.service
 #
 # 为什么需要第二只钟（2026-09-13 实咬）：`dao-skills-heal.service` 跑在 `User=orca`，
-# 修得住 `/home/orca/.claude/skills`；而 `dao-check` 是 root 跑的会话在跑，看的是
-# `/root/.claude/skills`。两个 home 各自都「对」，合起来没人管——root 那份被 mirasim
-# 劫成整目录链接后红了三天，自愈钟每 5 分钟对 orca 那份说「无事可做」。
+# 修得住它够得着的家（通常 `/home/orca/.claude/skills`）；而 `dao-check` 是 root
+# 跑的会话，看的是 `/root/.claude/skills`。两个 home 各自都「对」，合起来没人管——
+# root 那份被 mirasim 劫成整目录链接后红了三天，自愈钟每 5 分钟对 orca 那份说「无事可做」。
 #
 # 归属为什么不能只留 orca 那只：`host/machine/INDEX.md` A 类把 `~/.claude/skills`
-# 定成本仓的活，root 的 `~/.claude` 和 orca 的同样要守。root 的家目录 700，
-# orca 身份够不着，只能以 root 修。
+# 定成本仓的活。root 家 700，第三个用户的家 orca 也常够不着，只能以 root 枚举并修
+# **本机每个有 `.claude/` 的家**（passwd 清单，不写死用户名、不钉 DAO_SKILL_HOMES）。
+# 只有 `.mirasim/` 的家不纳入。
 #
 # 以 root 解释仓内脚本的安全前提，与 dao-execution-usage-export 同一条：
 # 跑的是**安装到 root 自有目录的副本**，不是仓内可写的那份——否则每个能写仓的
@@ -15,10 +16,10 @@
 #
 # 装法：sudo bash scripts/install-skills-heal.sh（与 orca 那只同一个脚本）
 # 验：systemctl list-timers 里 dao-skills-heal-root.timer 的 NEXT 必须是时间；
-#     dao-check ㉚ 对 /root 与 /home/orca 两个家都绿。
+#     dao-check ㉚ 对每个有 .claude/ 的家都绿。
 
 [Unit]
-Description=windsurf-dao skills 装载面自愈（root 家目录，#1146 多 home）
+Description=windsurf-dao skills 装载面自愈（root 枚举本机每个有 .claude/ 的家，#1146）
 After=network-online.target
 
 [Service]
@@ -26,7 +27,7 @@ Type=oneshot
 User=root
 Group=root
 Environment=HOME=/root
-Environment=DAO_SKILL_HOMES=/root
+# 不要钉 DAO_SKILL_HOMES=/root：钉死就扫不到第三个家。枚举走 skill-homes.mjs（passwd + HOME）。
 # 跑的是 /usr/local 下的副本，从副本位置推不出仓在哪——仓根由单元写死在这里。
 # 换仓目录要一并改（scripts/install-skills-heal.sh 会按实际路径重写这一行）。
 Environment=DAO_REPO_ROOT=/srv/projects/windsurf-dao
@@ -39,7 +40,8 @@ ExecStart=/usr/bin/node /usr/local/lib/dao-skills-heal/skills-heal.mjs
 SuccessExitStatus=0
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/root/.claude
+# /home 整棵可写：第三个用户的家不在 /root/.claude 下；脚本硬范围仍是 <家>/.claude/skills。
+ReadWritePaths=/root/.claude /home
 PrivateTmp=true
 RestrictAddressFamilies=AF_UNIX
 NoNewPrivileges=true

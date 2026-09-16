@@ -726,4 +726,17 @@ describe('skills 自愈装机', () => {
     assert.match(unit, /GH_CONFIG_DIR=\/var\/empty/);
     assert.match(unit, /scripts\/skills-heal\.mjs/);
   });
+
+  it('root 单元枚举全部有 .claude/ 的家，不钉死 /root；文档不把 .mirasim-only 当装载面', () => {
+    const unit = fs.readFileSync(path.join(REPO, 'host', 'machine', 'systemd', 'dao-skills-heal-root.service'), 'utf8');
+    assert.doesNotMatch(unit, /^Environment=DAO_SKILL_HOMES=/m, '钉 DAO_SKILL_HOMES=/root 就扫不到第三个家');
+    assert.match(unit, /^ReadWritePaths=\/root\/\.claude \/home$/m);
+    const nm = fs.readFileSync(path.join(REPO, 'NEW-MACHINE.md'), 'utf8');
+    assert.doesNotMatch(nm, /有 `\.claude\/` 或 `\.mirasim\/` 就守/);
+    assert.doesNotMatch(nm, /各一只/);
+    assert.match(nm, /只有 `\.mirasim\/`/);
+    const ops = fs.readFileSync(path.join(REPO, 'host', 'skills', 'server-ops', 'SKILL.md'), 'utf8');
+    assert.doesNotMatch(ops, /有 `\.claude\/` 或 `\.mirasim\/` 就守/);
+    assert.match(ops, /只有 `\.mirasim\/`/);
+  });
 });

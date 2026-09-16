@@ -13,7 +13,7 @@
 # 装法见同目录 dao-skills-heal-root.service 文件头。
 
 [Unit]
-Description=每 5 分钟把 /root/.claude/skills 从 mirasim 形态接回仓内
+Description=每 5 分钟把本机各家 ~/.claude/skills 从 mirasim 形态接回仓内（root 枚举）
 
 [Timer]
 OnCalendar=*:00/5

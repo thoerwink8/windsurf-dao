@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # 幂等安装 skills 装载面自愈 timer（#1146）。要 root：sudo bash scripts/install-skills-heal.sh
 #
-# 装两只钟，各守一个家目录：
-#   dao-skills-heal.timer       User=orca，守 /home/orca（跑仓内脚本）
-#   dao-skills-heal-root.timer  User=root，守 /root（跑 /usr/local 下的安装副本）
-# 2026-09-13 实咬：只有 orca 那只时，root 那份装载面被 mirasim 劫走后没人接，
-# dao-check ㉚ 红了三天。详见 scripts/lib/skill-homes.mjs 文件头。
+# 装两只钟：
+#   dao-skills-heal.timer       User=orca，修自己够得着的家（通常 /home/orca；跑仓内脚本）
+#   dao-skills-heal-root.timer  User=root，按 passwd 枚举本机每个有 .claude/ 的家
+#                               （跑 /usr/local 下的安装副本；不钉 DAO_SKILL_HOMES）
+# 2026-09-13 实咬：只有 orca 那只时，root 那份装载面被劫走后没人接，dao-check ㉚ 红了三天。
+# 第三个用户的家 orca 同样够不着，全部目标由 root 那只接。只有 .mirasim/ 的家不纳入。
+# 详见 scripts/lib/skill-homes.mjs 文件头。
 #
 # 不 chmod 仓内任何东西：可执行位归 git 记（100755）。装机时再 chmod 会把工作树弄脏，
 # 而主树同步走的是 merge --ff-only——脏树直接 Aborting，同步从此停摆（2026-09-05 实咬）。
@@ -126,5 +128,5 @@ start_oneshot dao-skills-heal-root.service
 
 systemctl list-timers --all --no-pager | grep -E 'dao-skills-heal(-root)?\.timer' || true
 echo "installed dao-skills-heal.timer + dao-skills-heal-root.timer（两只都有下一次触发）"
-echo "验：dao-check ㉚ 对每个有装载面的家目录都必须绿（判据 scripts/lib/skill-homes.mjs）"
+echo "验：dao-check ㉚ 对每个有 .claude/ 的家目录都必须绿（只有 .mirasim/ 的家不纳入；判据 scripts/lib/skill-homes.mjs）"
 

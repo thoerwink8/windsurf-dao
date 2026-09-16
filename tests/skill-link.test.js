@@ -439,6 +439,64 @@ describe('skill-link', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('passwd 读不了时回退 HOME/USERPROFILE（含 Windows 盘符），不把当前家丢掉', async () => {
+    const { agentHomes } = await import('../scripts/lib/skill-homes.mjs');
+    const enoent = () => {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    const winHome = 'C:/Users/alice';
+    const win = agentHomes({
+      env: { USERPROFILE: winHome },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === winHome) return ['.claude', 'Desktop'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(win.ok, true, 'Windows 无 passwd 也要守 USERPROFILE 下的 .claude  →  ' + JSON.stringify(win));
+    assert.deepEqual(win.homes, [winHome]);
+
+    const backslash = 'C:\\Users\\bob';
+    const winBs = agentHomes({
+      env: { USERPROFILE: backslash },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === backslash) return ['.claude'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(winBs.ok, true, JSON.stringify(winBs));
+    assert.deepEqual(winBs.homes, [backslash]);
+
+    const unix = '/home/alice';
+    const posix = agentHomes({
+      env: { HOME: unix },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === unix) return ['.claude'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(posix.ok, true, JSON.stringify(posix));
+    assert.deepEqual(posix.homes, [unix]);
+
+    const miss = agentHomes({
+      env: { USERPROFILE: 'relative/nope' },
+      readFile: enoent,
+      readdir: enoent,
+    });
+    assert.equal(miss.ok, false, 'passwd 没有且 USERPROFILE 不是绝对路径 ⇒ 没查成  →  ' + JSON.stringify(miss));
+    assert.match(miss.reason, /passwd|HOME|USERPROFILE/);
+  });
+
   it('硬塞一个只有 .mirasim/ 的家进检查 ⇒ SKIP 不是红，也不造 .claude/skills', async () => {
     const { checkSkillLinks } = await import('../scripts/lib/skill-link-check.mjs');
     const root = makeRoot('mira-skip');

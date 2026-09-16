@@ -398,10 +398,11 @@ orca account add --help
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
 # skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal{,-root}.*）
-#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；两只单元每 5 分钟各守一个家目录、合并式接回，不删 mirasim 自有 skill
-#   dao-skills-heal.timer 跑在 User=orca（守 /home/orca）；dao-skills-heal-root.timer 跑在 User=root（守 /root，
-#   跑的是装到 /usr/local/lib/dao-skills-heal 的副本——以 root 解释仓内脚本等于给每个能写仓的执行体一条 root 通道）
-#   验：systemctl list-timers 里两只 timer 的 NEXT 都必须是时间；dao-check ㉚ 对每个有装载面的家目录都绿（被劫红、没装 SKIP）
+#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；两只单元每 5 分钟合并式接回，不删 mirasim 自有 skill
+#   dao-skills-heal.timer 跑在 User=orca（修够得着的家）；dao-skills-heal-root.timer 跑在 User=root
+#   （按 passwd 枚举每个有 .claude/ 的家；跑的是装到 /usr/local/lib/dao-skills-heal 的副本——以 root
+#   解释仓内脚本等于给每个能写仓的执行体一条 root 通道）。只有 .mirasim/ 的家不纳入。
+#   验：systemctl list-timers 里两只 timer 的 NEXT 都必须是时间；dao-check ㉚ 对每个有 .claude/ 的家都绿（被劫红、没装 SKIP）
 # mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
 #   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
 #   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
@@ -602,12 +603,12 @@ mirasim 每次启动可能把装载面劫成 `~/.claude/skills → ~/.mirasim/sk
 sudo bash scripts/install-skills-heal.sh
 ```
 
-装两只钟，**本机每个有装载面的家目录各一只**（判据 `scripts/lib/skill-homes.mjs`：那个家有 `.claude/` 或 `.mirasim/` 就守）：
+装两只钟：orca 修自己够得着的家；root 按 passwd 枚举本机每个有 `.claude/` 的家并修（不写死用户名、不钉 `DAO_SKILL_HOMES`）。判据 `scripts/lib/skill-homes.mjs`：**有 `.claude/` 才纳入**。只有 `.mirasim/`、没有 `.claude/` 的家不纳入本检查，也不凭空建 `.claude/skills`。
 
 | 单元 | 跑在 | 守 |
 |---|---|---|
-| `dao-skills-heal.timer` | `User=orca` | `/home/orca`，跑仓内脚本 |
-| `dao-skills-heal-root.timer` | `User=root` | `/root`，跑 `/usr/local/lib/dao-skills-heal` 的安装副本 |
+| `dao-skills-heal.timer` | `User=orca` | 该身份够得着的家（通常 `/home/orca`），跑仓内脚本 |
+| `dao-skills-heal-root.timer` | `User=root` | 本机每个有 `.claude/` 的家（passwd 清单），跑 `/usr/local/lib/dao-skills-heal` 的安装副本 |
 
 为什么是两只（2026-09-13 实咬）：只有 orca 那只时，`dao-check`（root 会话跑的，看 `/root`）报了三天「装载面被劫」，而自愈钟每 5 分钟对 orca 那份说「无事可做」——两边各修各看的家，合起来没人管。root 的家 700，orca 身份够不着，只能以 root 修。
 

@@ -9,8 +9,8 @@
 // 没查成 exit 2（跟「查过没事」分形）；接回失败 exit 1。
 //
 // 守的是**本机所有有 .claude/ 的家目录**，不是当前进程那一个（判据在 lib/skill-homes.mjs）。
-// 2026-09-13 实咬：单元 `User=orca` 只修得住 /home/orca，而 dao-check 看的是 /root，
-// root 那份被 mirasim 劫走后红了三天没人接——两个 home 各自都「对」，合起来没人管。
+// 2026-09-13 实咬：单元 `User=orca` 只修得住够得着的家，而 dao-check 看的是 /root，
+// root 那份被 mirasim 劫走后红了三天没人接。root 那只不钉 DAO_SKILL_HOMES，按 passwd 枚举。
 //
 // 从临时 worktree 里不许真接回（会链到干完就删的树，见 lib/skills-mount.mjs
 // isLinkedWorktree）：要预演用 --dry-run，真要接回请到主树跑。硬拦时非零退出、不落任何链接。

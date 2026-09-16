@@ -11,8 +11,11 @@
 // **不写死用户名**——手打的名字早晚漏（判例 memory hand-typed-constant-will-be-wrong）：
 // 这台机器上 root 与 orca 都有 `.claude/`，换台机器用户名可能不同。
 //
-// 取不到家目录列表（读不了 /etc/passwd）时返回 unscanned，**不返回空数组**：
+// 取不到家目录列表时返回 unscanned，**不返回空数组**：
 // 「一个家目录都没有」和「这次没读到」必须分得开，否则整条自愈链会静默变成空转。
+// passwd 读不了（Windows / 无 /etc/passwd）时回退当前 HOME/USERPROFILE，
+// 不能把可读的当前家直接丢掉——否则 dao-check ㉚ SKIP、skills-heal exit 2，
+// 坏掉的 ~/.claude/skills 发现面无人检查。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -44,6 +47,20 @@ function passwdHomes(readFile = readFileSync) {
   return null;
 }
 
+/** POSIX `/…` 或 Windows `C:\` / `C:/`。相对路径不许进候选。 */
+function isAbsoluteHome(p) {
+  const s = String(p || '').trim();
+  if (!s) return false;
+  if (s.startsWith('/')) return true;
+  return /^[A-Za-z]:[\\/]/.test(s);
+}
+
+function normalizeHome(p) {
+  const s = String(p || '').trim();
+  if (!isAbsoluteHome(s)) return '';
+  return s.replace(/[\\/]+$/, '') || s;
+}
+
 /**
  * 该守哪几个装载面。
  *
@@ -58,16 +75,27 @@ export function agentHomes({ env = process.env, readdir = readdirSync, readFile 
   const override = String((env && (env.DAO_SKILL_HOMES || env.DAO_AGENT_HOMES)) || '').trim();
   if (override) {
     for (const h of override.split(/[,:]/).map((s) => s.trim()).filter(Boolean)) {
-      if (h.startsWith('/')) candidates.add(h.replace(/\/+$/, '') || '/');
+      const n = normalizeHome(h);
+      if (n) candidates.add(n);
     }
     if (!candidates.size) return { ok: false, reason: `DAO_SKILL_HOMES 里没有绝对路径：${override}` };
   } else {
     const fromPasswd = passwdHomes(readFile);
-    if (!fromPasswd) return { ok: false, reason: '读不了 /etc/passwd——取不到家目录清单（≠ 一个都没有）' };
-    for (const h of fromPasswd) candidates.add(h);
-    // 当前进程的家目录也纳入：passwd 里没有运行身份时（容器/临时用户）不至于漏掉自己。
-    const cur = String((env && (env.HOME || env.USERPROFILE)) || '').trim();
-    if (cur.startsWith('/')) candidates.add(cur.replace(/\/+$/, '') || '/');
+    if (fromPasswd) {
+      for (const h of fromPasswd) candidates.add(h);
+    }
+    // 当前进程的家也纳入：passwd 没有运行身份（容器/临时用户）或根本没有
+    // /etc/passwd（Windows）时，不能把可读的 HOME/USERPROFILE 直接丢掉。
+    const cur = normalizeHome(env && (env.HOME || env.USERPROFILE));
+    if (cur) candidates.add(cur);
+    if (!candidates.size) {
+      return {
+        ok: false,
+        reason: fromPasswd
+          ? 'passwd 与 HOME/USERPROFILE 都没有可用的家目录（≠ 一个都没有）'
+          : '读不了 /etc/passwd，且当前 HOME/USERPROFILE 也不是绝对路径——取不到家目录清单（≠ 一个都没有）',
+      };
+    }
   }
 
   const homes = [];
