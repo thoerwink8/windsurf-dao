@@ -150,7 +150,7 @@ import {
   readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
   formatOwnerToken,
 } from './lib/test-child-guard.mjs';
-import { inspectReviewTiers } from './lib/review-tier-check.mjs'; ([cc] feat(review): 红项分级 P1挡合/P2落单/P3不追 + 熔断二选一（用户拍板走甲）)
+import { inspectReviewTiers } from './lib/review-tier-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   judgeHarvest, inspectHarvestFixtures,
