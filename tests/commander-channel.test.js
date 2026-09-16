@@ -126,6 +126,53 @@ describe('指挥官：审官顺位分流（第二层）', () => {
   });
 });
 
+describe('指挥官：混合渠道 pending 不继承 Infinity（#1274）', () => {
+  const MIXED_LEGS = [
+    { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+    { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+  ];
+  const MIXED_RECORDS = [
+    { id: 'grok-4.6', provider: 'mirasim' },
+    { id: 'gpt-5.6-sol', provider: 'mirasim' },
+  ];
+  const mixedSituation = (over = {}) => situation({
+    routingModelRecords: MIXED_RECORDS,
+    routingLegs: MIXED_LEGS,
+    routingModels: ['grok-4.6', 'gpt-5.6-sol'],
+    reviewerOrder: ['gpt-5.6-sol', 'grok-4.6'],
+    channelCaps: { ok: true, caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
+    channelInFlight: { ok: true, counts: { mirasim: 8 } },
+    ...over,
+  });
+
+  it('工人闸：pending 模型 8 个在途不派，不限模型仍派得出', async () => {
+    const { decide } = await CORE;
+    const r = decide(mixedSituation({
+      github: {
+        scanned: true,
+        issues: [readyIssue(901, 'gpt-5.6-sol'), readyIssue(902, 'grok-4.6')],
+        prs: [],
+      },
+    }));
+    const ds = dispatches(r);
+    assert.equal(ds.length, 1);
+    assert.equal(ds[0].issue, 902);
+    assert.equal(ds[0].model, 'grok-4.6');
+    const queued = r.actions.find((a) => a.kind === 'notify-hub' && /渠道 mirasim 已满员/.test(a.subject || ''));
+    assert.ok(queued, 'pending 工人应触发渠道满员排队');
+  });
+
+  it('审官选腿：pending 满员分流到同渠道的不限腿', async () => {
+    const { chooseReviewerLeg } = await CORE;
+    const r = chooseReviewerLeg(mixedSituation());
+    assert.equal(r.ok, true);
+    assert.equal(r.picked.model, 'grok-4.6');
+    assert.equal(r.picked.cap, Infinity);
+    assert.equal(r.spilledFrom[0].model, 'gpt-5.6-sol');
+    assert.equal(r.spilledFrom[0].reason, 'at-cap');
+  });
+});
+
 describe('缺渠道快照 = 老夹具：闸 inert，不改既有派工路', () => {
   it('没有 channelCaps → 照常派，不受渠道限制', async () => {
     const { decide } = await CORE;

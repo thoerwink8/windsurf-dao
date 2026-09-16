@@ -212,6 +212,55 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.round, 'rework');
   });
 
+  it('快路无署名单号：有 model/* + reviewer/* 仍可交卷，comment 只发 PR', async () => {
+    const { planWorkerDone } = await WD;
+    const first = planWorkerDone({
+      pr: '1274',
+      body: '完工：快路',
+      runGh: fakeGh({
+        title: '[cc] fix',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [],
+        body: '快路，没有署名单号',
+      }),
+    });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(first.issue, null);
+    assert.equal(first.round, 'first');
+    const rework = planWorkerDone({
+      pr: '1274',
+      body: '返工完成：快路',
+      runGh: fakeGh({
+        title: '[cc] fix',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/写码'],
+        reviews: [{ state: 'CHANGES_REQUESTED' }],
+        body: '快路，没有署名单号',
+      }),
+    });
+    assert.equal(rework.ok, true, JSON.stringify(rework));
+    assert.equal(rework.issue, null);
+    assert.equal(rework.round, 'rework');
+  });
+
+  it('无署名快路 PR + 已有 review → 返工过，issue 为空，完工发在 PR 上', async () => {
+    const { planWorkerDone } = await WD;
+    const got = planWorkerDone({
+      pr: '1271',
+      body: '返工完成：PR #1271 红项已改',
+      runGh: fakeGh({
+        title: '[cc] fix(返工): 解冻',
+        body: '快路，无署名 issue',
+        labels: ['model/grok-4.6', 'reviewer/gpt-5.6-sol', 'type/写码'],
+        reviews: [{ state: 'CHANGES_REQUESTED', body: '修红项' }],
+        headRefName: 'dao-queue-selfheal',
+      }),
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.round, 'rework');
+    assert.equal(got.issue, null);
+    assert.match(got.comment, /^返工完成/);
+  });
+
   it('快路无署名单：plan 不拒，issue 空，完工 comment 走 PR', async () => {
     const { planWorkerDone } = await WD;
     const got = planWorkerDone({
@@ -227,5 +276,6 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(got.ok, true, JSON.stringify(got));
     assert.equal(got.issue, null);
     assert.equal(got.round, 'rework');
+    assert.match(got.comment, /^返工完成/);
   });
 });

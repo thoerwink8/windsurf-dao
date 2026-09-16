@@ -234,6 +234,20 @@ describe('三态：ok / red / unscanned', () => {
     assert.match(r.detail, /重连 2 次/, '虽然判绿，也要把重连次数摆出来给人看见');
   });
 
+  it('重连退避写进红项详情——告警可见', async () => {
+    const { classifyGhEventBridge } = await LIB;
+    const r = classifyGhEventBridge({
+      probed: true, now: NOW,
+      state: healthy({
+        ping: { intervalMs: 10 * MIN, sentAt: ago(1 * MIN), recvAt: ago(90 * MIN) },
+        forward: { attempt: 12, backoffMs: 5 * MIN, atCap: true, restarts: 12, recentExits: [] },
+      }),
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /重连第 12 次/);
+    assert.match(r.detail, /已到上界/);
+  });
+
   it('故意违规样本：事件收到了却叫不动单元（sudoers 没装）——红，且点名是哪个', async () => {
     const { classifyGhEventBridge } = await LIB;
     const r = classifyGhEventBridge({
@@ -307,17 +321,19 @@ describe('兜底与权限：两样最容易被顺手拆掉的东西', () => {
       'mixed 只把 SIGTERM 给主进程，gh webhook forward 会活下来变孤儿，连接和 hook 都还在');
   });
 
-  it('孤儿留下的 hook，下次启动要扫掉——只扫 forwarder 那种，别的一根汗毛不许碰', async () => {
-    const B = await import(toUrl(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs')));
-    const hooks = [
-      { id: 1, config: { url: 'https://webhook-forwarder.github.com/hook' } },
-      { id: 2, config: { url: 'https://ci.example.com/gh' } },      // 别人的，不许动
-      { id: 3, config: {} },                                         // 没有 url，不许猜
-      { id: 4, config: { url: 'https://webhook-forwarder.github.com/hook' } },
-    ];
-    assert.deepEqual(B.staleForwarderHooks(hooks), [1, 4]);
-    assert.deepEqual(B.staleForwarderHooks(null), [], '查不到清单就别删——没查成不是「没有」');
-    assert.deepEqual(B.staleForwarderHooks([]), []);
+  it('桥不许再宽扫全部 forwarder hook——归属函数必须接上', async () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs'), 'utf8');
+    assert.equal(/staleForwarderHooks/.test(src), false, '宽扫函数还在，09-16 补修就是要拆掉它');
+    assert.match(src, /ownInvalidHookIds/);
+    assert.match(src, /claimLiveHook/);
+    assert.match(src, /isolateOrphanAfterSweep/);
+    assert.match(src, /skipHookIds/);
+    assert.match(src, /planReconnectBackoff/);
+    assert.match(src, /shouldSpawnForward/);
+    assert.equal(/if \(state\.hookId == null\) return;/.test(src), false,
+      'hookId 为空直接 return，就是 03:54 要人补 ping 的那条');
+    assert.equal(/setTimeout\(startForward,\s*5000\)/.test(src), false,
+      '5 秒无上界重连还在，17709 次还会再来');
   });
 
   it('桥不许起本地监听：一旦改回 --url，签名校验就必须补回来', () => {
@@ -326,3 +342,234 @@ describe('兜底与权限：两样最容易被顺手拆掉的东西', () => {
       '出现了本地监听/--url——那才真有一个「谁都能 POST 进来」的口子，必须同时加 X-Hub-Signature-256 校验');
   });
 });
+
+describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
+  const FWD = 'https://webhook-forwarder.github.com/abc';
+  const OWN_EVENTS = ['pull_request', 'pull_request_review'];
+  const SPAWN = '2026-09-14T22:21:00.000Z';
+  const hook = ({ id, url = FWD, events = OWN_EVENTS, created_at = '2026-09-14T22:21:05.000Z' }) => ({
+    id, events, created_at, config: { url },
+  });
+  const ownOrphan = hook({ id: 679102785 });
+  const foreignLive = hook({ id: 111, created_at: '2026-09-10T00:00:00.000Z' });
+  const ci = hook({ id: 2, url: 'https://ci.example.com/gh', events: ['push'] });
+  const otherForwarder = hook({
+    id: 222,
+    url: 'https://webhook-forwarder.github.com/other',
+    events: ['push', '*'],
+    created_at: '2026-09-14T22:21:08.000Z',
+  });
+
+  it('反例：EOF 遗留自家 hook，别人的活 hook 和 CI hook 都不许删', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    const ids = ownInvalidHookIds({
+      hooks: [ownOrphan, foreignLive, ci, otherForwarder],
+      ownedHookId: 679102785,
+      liveHookId: null,
+    });
+    assert.deepEqual(ids, [679102785]);
+  });
+
+  it('故意违规样本：没有归属证据时，即使全是 forwarder 也不许宽扫', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    const ids = ownInvalidHookIds({
+      hooks: [ownOrphan, foreignLive, ci],
+      ownedHookId: null,
+      liveHookId: null,
+      spawnAt: null,
+    });
+    assert.deepEqual(ids, [], '旧 staleForwarderHooks 会返回 [679102785, 111]，那就是误伤');
+  });
+
+  it('当前桥的 live hook 即使也是 owned，不许删', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    const ids = ownInvalidHookIds({
+      hooks: [ownOrphan, ci],
+      ownedHookId: 679102785,
+      liveHookId: 679102785,
+    });
+    assert.deepEqual(ids, []);
+  });
+
+  it('故意违规样本：没有 ownedHookId 时，时间窗口内唯一同形 hook 也不许删', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    const ids = ownInvalidHookIds({
+      hooks: [ownOrphan, foreignLive, ci],
+      ownedHookId: null,
+      liveHookId: null,
+      spawnAt: SPAWN,
+    });
+    assert.deepEqual(ids, [], 'created_at/host/events 在另一台机器上也一样，不能当归属证据');
+  });
+
+  it('故意违规样本：启动后出现两根自家形态的 hook，认不出哪根——全都不删', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    const twin = hook({ id: 679871907, created_at: '2026-09-14T22:21:06.000Z' });
+    const ids = ownInvalidHookIds({
+      hooks: [ownOrphan, twin, ci],
+      ownedHookId: null,
+      liveHookId: null,
+      spawnAt: SPAWN,
+    });
+    assert.deepEqual(ids, []);
+  });
+
+  it('查不到清单就别删——没查成不是「没有」', async () => {
+    const { ownInvalidHookIds } = await LIB;
+    assert.deepEqual(ownInvalidHookIds({ hooks: null, ownedHookId: 679102785 }), []);
+    assert.deepEqual(ownInvalidHookIds({ hooks: [], ownedHookId: 679102785 }), []);
+  });
+
+  it('子串撞 FORWARDER_HOST 的假地址不许认', async () => {
+    const { isForwarderUrl, isOwnForwarderHook } = await LIB;
+    assert.equal(isForwarderUrl('https://evil.example/webhook-forwarder.github.com'), false);
+    assert.equal(isOwnForwarderHook(hook({
+      id: 9,
+      url: 'https://evil.example/webhook-forwarder.github.com',
+    })), false);
+  });
+
+  it('有 ownedHookId 且清单对得上，才认领', async () => {
+    const { claimLiveHook } = await LIB;
+    assert.equal(claimLiveHook({
+      hooks: [ownOrphan, foreignLive, ci],
+      ownedHookId: 679102785,
+    }), 679102785);
+  });
+
+  it('故意违规样本：没有 ownedHookId 时，时间窗口内唯一同形 hook 也不许认领', async () => {
+    const { claimLiveHook } = await LIB;
+    const id = claimLiveHook({
+      hooks: [ownOrphan, foreignLive, ci],
+      ownedHookId: null,
+      spawnAt: SPAWN,
+    });
+    assert.equal(id, null, '初始 ping 丢失只能保持 unresolved，不许凭时间窗口猜');
+  });
+
+  it('认不出时 claim 返回 null——不猜别人的活 hook', async () => {
+    const { claimLiveHook } = await LIB;
+    assert.equal(claimLiveHook({ hooks: [foreignLive, ci], ownedHookId: null, spawnAt: SPAWN }), null);
+    assert.equal(claimLiveHook({ hooks: null, spawnAt: SPAWN }), null);
+    assert.equal(claimLiveHook({ hooks: [ownOrphan, hook({ id: 679871907 })], spawnAt: SPAWN }), null);
+  });
+
+  it('反例：外部桥在本次时间窗口创建、且它是唯一候选——不许删、不许认领', async () => {
+    const { ownInvalidHookIds, claimLiveHook } = await LIB;
+    const foreignNow = hook({
+      id: 777,
+      created_at: '2026-09-14T22:21:05.000Z',
+    });
+    assert.deepEqual(ownInvalidHookIds({
+      hooks: [foreignNow],
+      ownedHookId: null,
+      liveHookId: null,
+      spawnAt: SPAWN,
+    }), [], '审官复现：唯一候选 777 仍是外部 hook，不能删');
+    assert.equal(claimLiveHook({
+      hooks: [foreignNow],
+      ownedHookId: null,
+      spawnAt: SPAWN,
+    }), null, '审官复现：唯一候选 777 仍是外部 hook，不能认领');
+  });
+
+  it('反例：DELETE 失败后旧 orphanHookId 不许再当新桥 ping 目标', async () => {
+    const { isolateOrphanAfterSweep, claimLiveHook } = await LIB;
+    const oldHook = hook({ id: 100, created_at: '2026-09-14T22:21:05.000Z' });
+    const newHook = hook({ id: 200, created_at: '2026-09-14T22:22:05.000Z' });
+    const iso = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [],
+      failedIds: [100],
+      remainingIds: [100, 200],
+    });
+    assert.equal(iso.orphanHookId, null);
+    assert.equal(iso.isolated, true);
+    assert.match(iso.why, /删除失败/);
+    assert.equal(claimLiveHook({
+      hooks: [oldHook, newHook],
+      ownedHookId: iso.orphanHookId,
+      spawnAt: '2026-09-14T22:22:00.000Z',
+    }), null, '隔离后不得认领旧 100；新 200 仅凭时间/host/events 也不认');
+    assert.equal(claimLiveHook({
+      hooks: [oldHook, newHook],
+      ownedHookId: 100,
+      skipHookIds: [100],
+    }), null, '即使调用方忘了清空，skipHookIds 也要挡住旧 ID');
+  });
+
+  it('清单没查成或旧 ID 仍在清单里，都要隔离 orphan', async () => {
+    const { isolateOrphanAfterSweep } = await LIB;
+    const unknown = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: false,
+      remainingIds: null,
+    });
+    assert.equal(unknown.orphanHookId, null);
+    assert.match(unknown.why, /清单没查成/);
+
+    const stillThere = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [],
+      failedIds: [],
+      remainingIds: [100, 200],
+    });
+    assert.equal(stillThere.orphanHookId, null);
+    assert.match(stillThere.why, /清单仍含旧 hook/);
+
+    const swept = isolateOrphanAfterSweep({
+      orphanHookId: 100,
+      listed: true,
+      deletedIds: [100],
+      failedIds: [],
+      remainingIds: [200],
+    });
+    assert.equal(swept.orphanHookId, null);
+    assert.equal(swept.isolated, true);
+  });
+
+  it('认下后 ping 404：失效不沿用', async () => {
+    const { interpretHookPingResult } = await LIB;
+    const gone = interpretHookPingResult({
+      status: 1,
+      stderr: 'gh: Not Found (HTTP 404)\n{"message":"Not Found"}',
+    });
+    assert.equal(gone.ok, false);
+    assert.equal(gone.gone, true);
+
+    const ok = interpretHookPingResult({ status: 0, stderr: '', stdout: '' });
+    assert.equal(ok.ok, true);
+    assert.equal(ok.gone, false);
+
+    const transient = interpretHookPingResult({ status: 1, stderr: 'gh: API rate limit (HTTP 403)' });
+    assert.equal(transient.ok, false);
+    assert.equal(transient.gone, false);
+  });
+
+  it('退避有上界：第 20 次也不会短过 cap，不会 5 秒一次打到 17709 次', async () => {
+    const { planReconnectBackoff, RECONNECT_BASE_MS, RECONNECT_CAP_MS } = await LIB;
+    const first = planReconnectBackoff({ attempt: 0 });
+    assert.equal(first.delayMs, RECONNECT_BASE_MS);
+    assert.equal(first.atCap, false);
+    const late = planReconnectBackoff({ attempt: 20 });
+    assert.equal(late.delayMs, RECONNECT_CAP_MS);
+    assert.equal(late.atCap, true);
+    assert.equal(late.delayMs >= RECONNECT_CAP_MS, true);
+  });
+
+  it('当前桥还活着不许再 spawn 第二条', async () => {
+    const { shouldSpawnForward } = await LIB;
+    assert.deepEqual(shouldSpawnForward({ childAlive: true, stopping: false }), {
+      spawn: false, why: '当前桥还在，不启第二桥',
+    });
+    assert.deepEqual(shouldSpawnForward({ childAlive: false, stopping: true }), {
+      spawn: false, why: '正在停',
+    });
+    assert.deepEqual(shouldSpawnForward({ childAlive: false, stopping: false }), {
+      spawn: true, why: null,
+    });
+  });
+});
+
