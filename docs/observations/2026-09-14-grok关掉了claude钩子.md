@@ -1,4 +1,8 @@
 ---
+status: done
+---
+
+---
 status: new
 ---
 
@@ -68,3 +72,5 @@ ls: cannot access '/srv/projects/windsurf-dao/.grok/hooks': No such file or dire
 ## 建议的最小改造
 
 删掉「闸活着 = `.claude/settings.json` + `.cursor/hooks.json` 文本过夹具」这一层假设。⑬（以及问人闸 / 工具闸 / 动作写口的挂载检查）问的应是**现役执行体实际会跑的钩子目录**。这台机器上那是 `~/.grok/hooks/` 和仓内 `.grok/hooks/`（Grok 手册自己的发现面）。Claude 兼容源已经关掉，就不要再拿它当绿。不要再往 `.claude/settings.json` 加新 PreToolUse 当「现役执行体会响」——#897 今天刚加过一次，本会话 0 个钩子进程。
+
+处置：#1051（同一形状「闸看的那一层 ≠ 跑的那一层」，归类单；2026-09-16 帅位盘点，判据 review_rounds_max 未接线见 #1227）

@@ -130,6 +130,7 @@ import {
   progressDispatchComment,
   pickMergePolicyFromLedger,
   resolveReviewerMergePolicy,
+  unsignedIssueMergePolicy,
   isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
@@ -1119,6 +1120,7 @@ function lookupReviewerMergePolicy({
     explicitReason,
     ledger,
     comment,
+    issue,
   });
 }
 
@@ -1981,8 +1983,13 @@ function gitFetchRef(repo, prBranch, expectedOid, reviewBranch) {
   return { ok: true, branch, checkedOut, target: String(target) };
 }
 
-/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。 */
+/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。
+ * 无署名且没有显式旗标：取不到 human_holds，直接 manual，不翻账本（账本缺字段会 fallback auto）。 */
 function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
+  const hasIssue = issue != null && String(issue).trim() !== '';
+  if (!hasIssue && !String(args.mergePolicy || '').trim()) {
+    return unsignedIssueMergePolicy();
+  }
   return lookupReviewerMergePolicy({
     explicitPolicy: args.mergePolicy,
     explicitReason: args.mergeReason,
@@ -2116,6 +2123,7 @@ async function cmdReviewerCreateMirasim(args) {
 
   const issueRef = args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null;
   // #886 审官第 4 条：merge-policy 从原派工恢复（显式旗标 > 账本 > 卡备注），不许硬编码 auto。
+  // 快路无署名单：取不到 human_holds，走与 worker-done 同一条 no-issue manual，不许 fallback auto。
   const policyPlan = mirasimMergePolicy(args, {
     issue: issueRef, pr: args.pr, dispatchId: args.soldierDispatch || null,
   });
@@ -2334,6 +2342,7 @@ async function cmdWorkerDoneMirasim(args) {
 
   // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
   // 却给审官注入 m=auto，审官会绕过「需人工合并」的边界。
+  // 快路无署名单：mirasimMergePolicy 走 no-issue manual（与 commander-core 快路返工同一失败方向）。
   const policyPlan = mirasimMergePolicy(args, {
     issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
   });
@@ -2356,7 +2365,7 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '无署名单（快路 PR），完工 comment 只发 PR' };
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工评论只发 PR' };
   if (plan.issue != null) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
@@ -2396,6 +2405,8 @@ async function cmdWorkerDoneMirasim(args) {
       source: REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
       // 仓键用 GitHub owner/name，不许把 localPath 塞进来（路径过不了 parseOwnerNameRepo，还会把跨仓票落到 12.json）。
       repo: targetRepo.ownerName || null,
+      mergePolicy: books.mergePolicy,
+      mergeReason: books.mergeReason,
     });
     if (!built.ok) fail(built.error, { ...plan, postedIssue, postedPr });
     const wrote = writeReviewPending({ dir, ticket: built.ticket });

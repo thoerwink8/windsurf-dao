@@ -278,6 +278,14 @@ describe('闸接在起会话入口上（守住别被摘掉）', () => {
     assert.ok(fn.indexOf('leaseCheck(') < fn.indexOf('await open()'), '闸必须排在 open() 前面');
   });
 
+  it('占用声明在发 prompt 之前，失败要释放', async () => {
+    const { fn, src } = 切出();
+    assert.match(src, /opts\.claimOccupancy \|\| claimTreeOccupancy/, '默认必须是真占用锁');
+    assert.match(fn, /claimOccupancy\(/, '起会话入口没过占用声明');
+    assert.ok(fn.indexOf('claimOccupancy(') < fn.indexOf('await open()'), '占用声明必须排在 open() 前面');
+    assert.match(fn, /releaseClaim\(\)/, '失败路径必须释放');
+  });
+
   it('没查成要抛，不许当成放行', async () => {
     const { fn } = 切出();
     assert.match(fn, /lease\.ok[\s\S]{0,200}throw new MirasimUnavailableError/, '没查成必须抛（fail-close）');
@@ -422,6 +430,140 @@ describe('/proc/<pid>/stat 解析', () => {
       readlink: () => 树1055,
     });
     assert.deepEqual(got.procs.map((p) => p.pid), [200], 'ppid 解析错就认不出它是服务的后代');
+  });
+});
+
+describe('子目录 cwd 与树根是同一棵树（审官红① / #1291）', () => {
+  const ROOT = '/fake-home/mirasim-worktrees';
+  const TREE = `${ROOT}/windsurf-dao/dao-1007`;
+
+  it('cwd 落在 scripts/ 时租约仍是 held，busyTrees 也只数这一棵', async () => {
+    const { judgeTreeLease, busyTrees, worktreeRootOf } = await LEASE;
+    const procs = [{ pid: 9, comm: 'pi', cwd: `${TREE}/scripts` }];
+    assert.equal(worktreeRootOf(`${TREE}/scripts`, { root: ROOT }), TREE);
+    assert.equal(judgeTreeLease({ workdir: TREE, procs }).verdict, 'held');
+    const busy = busyTrees(procs, { root: ROOT });
+    assert.equal(busy.count, 1);
+    assert.deepEqual(busy.trees, [TREE]);
+  });
+
+  it('树名互为前缀时仍不许误判（dao-105 vs dao-1055）', async () => {
+    const { judgeTreeLease, busyTrees } = await LEASE;
+    const procs = [{ pid: 1, comm: 'pi', cwd: `${ROOT}/windsurf-dao/dao-1055/scripts` }];
+    assert.equal(judgeTreeLease({ workdir: `${ROOT}/windsurf-dao/dao-105`, procs }).verdict, 'free');
+    assert.deepEqual(busyTrees(procs, { root: ROOT }).trees, [`${ROOT}/windsurf-dao/dao-1055`]);
+  });
+});
+
+describe('cwdBelongsToTree：Windows 分隔符（审官红 · #1292）', () => {
+  const TREE = 'D:\\frank\\windsurf-dao\\dao-review-pr-900';
+
+  it('Windows 树根 + 子目录 cwd 算同一棵树', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(cwdBelongsToTree(TREE, TREE), true);
+    assert.equal(cwdBelongsToTree(`${TREE}\\scripts`, TREE), true);
+  });
+
+  it('一侧已归一成 / 另一侧仍是 \\ 也对得上', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-review-pr-900\\scripts',
+        'D:/frank/windsurf-dao/dao-review-pr-900',
+      ),
+      true,
+    );
+  });
+
+  it('dao-105 不该被 dao-1055 占住', async () => {
+    const { cwdBelongsToTree } = await LEASE;
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-1055\\scripts',
+        'D:\\frank\\windsurf-dao\\dao-105',
+      ),
+      false,
+    );
+    assert.equal(
+      cwdBelongsToTree(
+        'D:\\frank\\windsurf-dao\\dao-1055',
+        'D:\\frank\\windsurf-dao\\dao-105',
+      ),
+      false,
+    );
+  });
+
+  it('Windows 子目录 cwd 仍归一到树根', async () => {
+    const { worktreeRootOf } = await LEASE;
+    const ROOT = 'D:\\frank\\mirasim-worktrees';
+    const WIN_TREE = `${ROOT}\\windsurf-dao\\dao-1007`;
+    assert.equal(
+      worktreeRootOf(`${WIN_TREE}\\scripts`, { root: ROOT }),
+      'D:/frank/mirasim-worktrees/windsurf-dao/dao-1007',
+    );
+  });
+});
+
+describe('占用声明：第二个拿不到，失败释放（审官红④ / #1291）', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  it('两个并发抢同一棵树，第二个拿不到', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-'));
+    const lockPath = path.join(dir, 'session.lock');
+    const a = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(a.ok, true, '第一个应拿到');
+    const b = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(b.ok, false, '第二个应拿不到');
+    assert.equal(b.busy, true);
+    a.release();
+    const c = claimTreeOccupancy({ workdir: 树1040, lockPath });
+    assert.equal(c.ok, true, '释放后第三个应拿到');
+    c.release();
+  });
+
+  it('持锁 pid 已死 → 拆过期锁再抢', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-dead-'));
+    const lockPath = path.join(dir, 'session.lock');
+    fs.writeFileSync(lockPath, '999999');
+    const r = claimTreeOccupancy({
+      workdir: 树1040, lockPath, pidAlive: () => false,
+    });
+    assert.equal(r.ok, true, '死 pid 应拆锁让出');
+    r.release();
+  });
+
+  it('子目录 cwd 与树根抢同一把占用锁', async () => {
+    const { sessionClaimPath } = await LEASE;
+    const ROOT = '/fake-home/mirasim-worktrees';
+    const TREE = `${ROOT}/windsurf-dao/dao-1007`;
+    assert.equal(
+      sessionClaimPath(`${TREE}/scripts`, { home: '/h', root: ROOT }),
+      sessionClaimPath(TREE, { home: '/h', root: ROOT }),
+    );
+  });
+
+  it('重复 20 次 claim/release 后 exit listener 不增长', async () => {
+    const { claimTreeOccupancy } = await LEASE;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-session-claim-exit-'));
+    const lockPath = path.join(dir, 'session.lock');
+    const warnings = [];
+    const onWarn = (w) => { warnings.push(w); };
+    process.on('warning', onWarn);
+    const before = process.listenerCount('exit');
+    try {
+      for (let i = 0; i < 20; i++) {
+        const r = claimTreeOccupancy({ workdir: 树1040, lockPath });
+        assert.equal(r.ok, true, `第 ${i + 1} 次应拿到`);
+        r.release();
+      }
+      assert.equal(process.listenerCount('exit'), before, '占用声明释放必须摘掉 exit listener');
+      const leaked = warnings.filter((w) => w && w.name === 'MaxListenersExceededWarning');
+      assert.equal(leaked.length, 0, leaked.map((w) => String(w.message || w)).join('; '));
+    } finally {
+      process.removeListener('warning', onWarn);
+    }
   });
 });
 

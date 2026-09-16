@@ -47,7 +47,7 @@ node --version
 
 | 文件 | 里面是什么 | 不带的后果 |
 |---|---|---|
-| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 派工选型见 `docs/model-routing.json`；走 og 通道的工人缺 key 一起手就挂 |
+| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）。直连 `deepseek` 键 2026-09-15 已删，不要再填 | 派工选型见 `docs/model-routing.json`；走 og 通道的工人缺 key 一起手就挂 |
 | `~/.dao/apps/*.{pem,json}` | 四个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并、看门狗报事故全断。详 §4b |
 
 新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
@@ -207,12 +207,8 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- **ds-flash 写码通道走 gw-dspool**（选型顺位以 `docs/model-routing.json` 为准，2026-09-03 拍板）：派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）。网关凭据与分组归 `ai-gateway-stack`（INDEX E 类，本仓不写装法）。`opencode-go` 因服务器 403 RegionError 降为顺位 2，凭据仍填 `~/.pi/agent/auth.json` 的 `opencode-go` 键（取 key 见 §4）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
-  - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
-- **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
-  - 这条止血本身没被验证过——下次真 503 是当场报错（止血生效）还是又切了（止血失效）。本机 `watchdog.mjs` 的 model-change 检测 #807 已删。
-  - 与 go-fallback 扩展的交互（#569 核对）：扩展的降级查找 `modelRegistry.find("deepseek", model.id)` 与兜底 `find("deepseek", "deepseek-v4-flash")` 现在都找不到 `-direct` 改名后的模型 → 扩展明确报「无可用模型，无法降级」而不是悄悄切走。**这是止血想要的形态**（错误上浮有人看见），不是故障；将来若想让扩展能切直连，把 `PI_GO_FALLBACK_MODEL` 设成 `deepseek-v4-flash-direct` 即可（同时失去「静默切换」的保护，慎重）。
-  - 将来 deepseek 充值后要走直连：模型名是带 `-direct` 的那个，`pi --provider deepseek --model deepseek-v4-flash-direct`（`cli_model` 字段表达不了这条通道差异的坑见 `docs/model-routing.toml`）。
+- **ds-flash 写码通道走 gw-dspool**（选型顺位以 `docs/model-routing.json` 为准，2026-09-03 拍板）：派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）。网关凭据与分组归 `ai-gateway-stack`（INDEX E 类，本仓不写装法）。`opencode-go` 因服务器 403 RegionError 降为顺位 2，凭据仍填 `~/.pi/agent/auth.json` 的 `opencode-go` 键（取 key 见 §4）。2026-09-15 直连渠道已删，不要再填 `auth.json` 的 `deepseek` 键、不要 `pi --provider deepseek`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
+  - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（go-fallback 默认不再切备用，见 §6b），并发派多个工人前先掂量。
 - 三条验证命令：
   - `pi --list-models`：预期列出模型表（配好 Go 后会多出 20 个 `opencode-go` 模型）。
   - `pi auth check --provider opencode-go --json`：预期 `{"status":"ready",...}`；回 `credentials_not_configured` 就是 §4 的 key 没带。
@@ -220,15 +216,15 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 
 ## 6b. pi 扩展怎么配（go-fallback，issue #520）
 
-go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话接着把活做完（不是重启、不是从头来）。
+go-fallback 扩展：opencode Go 通道限流/额度顶时，若配置了备用 provider，把当前会话切过去把活做完（不是重启、不是从头来）。**2026-09-15 直连渠道已删**：默认备用列表为空，`deepseek` 写进环境变量也会被滤掉，不会读凭据、不会切过去。og 撞顶时错误上浮给人看。
 
 - 源码在仓内 `host/pi-extensions/go-fallback.ts` + 它 import 的 `go-fallback-core.mjs`（仓库资产，不留在本机自生自灭；**两个文件都要**——2026-09-02 前本节只叫拷 .ts，装上就是坏的）。装了 pi 的机器由 §0 的 `onboard.mjs` 拷到 `~/.pi/agent/extensions/`；仓里更新了没装、或本机手改，哨兵报 `pi-ext-drift`，重跑 onboard 重拷（手改的留 `.bak-<ts>`）。
   验证已生效（新开 pi 会话后扩展自动加载，对所有 pi 工人生效，不用改 orca 派工链路）：
   ```bash
   ls ~/.pi/agent/extensions/go-fallback.ts ~/.pi/agent/extensions/go-fallback-core.mjs   # 都在即生效（pi 每次启动扫 extensions/ 目录）
   ```
-- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连 DeepSeek 前必须探余额，402 / 没钱不算降级、明确报错。直连凭据缺失时同样明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
-- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
+- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即找备用；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才找（给 pi 内置 auto-retry 一次机会）。默认没有备用 → 明确报「无可用备用模型」，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（备用目标，默认空，`deepseek` 会被滤掉）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
 - 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
   ```bash
   node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景

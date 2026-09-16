@@ -45,6 +45,9 @@ export function loadLedgerEvents(dir) {
 
 export function reworkFromClosed(closed) {
   if (!closed) return null;
+  // schema 要求 rework 是布尔，没查成时写口仍得填一个；三态以 attribution_source 为准，
+  // 不许把必填 false 读成「零返工」。
+  if (closed.attribution_source === 'unscanned') return null;
   if (closed.worker_rework != null) return closed.worker_rework;
   const marshal = Number(closed.marshal_rounds) || 0;
   if (closed.verdict_rounds != null) return Math.max(0, Number(closed.verdict_rounds) - 1 - marshal);

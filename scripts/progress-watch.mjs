@@ -315,16 +315,25 @@ export function runProgressWatch({
   }
   // 认输推送与停滞判定是两条独立线：认输查不成不拖红主线（它有自己的账本去重），
   // 但那句「没查成」必须进报告并叫醒——不许长得像「查过没事」。
+  // 组合态（stalled 且有认输行）也必须把两段正文分开交给分流函数，合并进
+  // 同一份 report 会让认输挤进停滞键的 6 小时窗口。
   const exhaustedLines = [];
   const exhausted = exhaustedPush ? exhaustedPush({ dryRun, lines: exhaustedLines }) : null;
-  const report = [formatReport(verdict), ...exhaustedLines].join('\n');
+  const exhaustedWake = exhaustedLines.length > 0;
+  const stallReport = formatReport(verdict);
+  const exhaustedReport = exhaustedLines.join('\n');
+  const report = [stallReport, ...exhaustedLines].filter(Boolean).join('\n');
   return {
     ok: true,
     exit: 0,
     scanned: true,
     stalled: !!verdict.stalled,
-    wake: !!planned.wake || exhaustedLines.length > 0,
-    wakeReason: planned.wake ? planned.reason : (exhaustedLines.length ? 'exhausted' : planned.reason),
+    wake: !!planned.wake || exhaustedWake,
+    wakeReason: planned.wake ? planned.reason : (exhaustedWake ? 'exhausted' : planned.reason),
+    exhaustedWake,
+    stallReport,
+    exhaustedReport,
+    exhaustedLines: exhaustedLines.slice(),
     dryRun,
     fingerprint: planned.fingerprint,
     items: verdict.items || [],

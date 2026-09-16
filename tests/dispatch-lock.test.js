@@ -139,6 +139,50 @@ describe('acquireWorktreeLock：staleMs 过期锁按 mtime 拆', () => {
   });
 });
 
+describe('acquireWorktreeLock：显式 release 摘掉 exit 钩子（#1292 审官红 1）', () => {
+  it('重复 20 次拿锁/释放后 listener 数不增长，也不触发 MaxListenersExceededWarning', async () => {
+    const { acquireWorktreeLock } = await LOCK;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-exit-leak-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    const warnings = [];
+    const onWarn = (w) => { warnings.push(w); };
+    process.on('warning', onWarn);
+    const before = process.listenerCount('exit');
+    try {
+      for (let i = 0; i < 20; i++) {
+        const r = acquireWorktreeLock({ lockPath, timeoutMs: 0 });
+        assert.equal(r.ok, true, `第 ${i + 1} 次应拿到`);
+        r.release();
+      }
+      assert.equal(process.listenerCount('exit'), before, '显式 release 必须摘掉 exit listener');
+      const leaked = warnings.filter((w) => w && w.name === 'MaxListenersExceededWarning');
+      assert.equal(leaked.length, 0, leaked.map((w) => String(w.message || w)).join('; '));
+    } finally {
+      process.removeListener('warning', onWarn);
+    }
+  });
+
+  it('没调 release 时 process.exit 仍拆锁文件', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-exit-hook-'));
+    const lockPath = path.join(dir, 'dispatch-worktree.lock');
+    const worker = path.join(dir, 'worker.mjs');
+    fs.writeFileSync(worker, `
+import { existsSync } from 'node:fs';
+import { acquireWorktreeLock } from ${JSON.stringify('file://' + LOCK_SRC.replace(/\\\\/g, '/'))};
+const lockPath = process.argv[2];
+const got = acquireWorktreeLock({ lockPath, timeoutMs: 0 });
+if (!got.ok) { console.error('LOCK_FAIL ' + got.error); process.exit(2); }
+if (!existsSync(lockPath)) { console.error('LOCK_MISSING'); process.exit(3); }
+process.exit(0);
+`);
+    const child = spawnSync(process.execPath, [worker, lockPath], {
+      encoding: 'utf8', timeout: 8000,
+    });
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    assert.equal(fs.existsSync(lockPath), false, 'exit 钩子应拆锁');
+  });
+});
+
 describe('判别性实验：并发 3 进程抢锁全部成功，临界区不重叠', () => {
   it('3 个子进程同时抢同一把锁，全部进临界区且 maxInside=1', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-wtlock-3p-'));

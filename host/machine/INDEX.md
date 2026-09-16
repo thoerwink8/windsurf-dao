@@ -61,7 +61,7 @@
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |
 | D | ~/.dao/execution | #1174 统一任务元数据、ACP 状态/进程租约/交互、用量事件与升级维护旗标。只迁移经过核对的记录，不把活进程状态当作可复制配置 |
-| D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
+| D | ~/.dao/locks | 指挥官建树串行锁（#849）+ 起会话占用声明（#1291）。`dispatch-lock.mjs` 写 `dispatch-worktree.lock`；`lease.mjs` 写 `session-<hash>.lock`（一棵树一把，O_EXCL）。内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树/起会话时删掉等于放锁） |
 | D | ~/.dao/session-audit | 审计闸每会话状态（#891）。`scripts/session-audit-hook.mjs` 每轮末写 `<session_id>.json`：`since`（本轮窗口起点）、`pending`（判过漏记还没补记的产出键）、`reminded`（提示过的 audit.bypass id）。缓存性质——删掉等于下一轮当首轮，账本不受影响；换机不拷 |
 | D | ~/.dao/control-plane.json | 控制面闸探测落点（#948 / #1165）。写腿：`scripts/mirasim-ws-probe.mjs` 每轮把握手三态写成 `{reachable:true\|false}`（没查成不写 reachable）。读腿：`scripts/lib/control-plane-gate.mjs`。文件不在 / JSON 坏 / 缺字段一律 unscanned（没查成 ≠ 断了），reachable=false 才拦 git push / 部署。现役挂载面是 git pre-push 与 land.mjs，不只 Claude/Cursor hook。运行态，换机不拷 |
 | A | ~/.dao/no-network | 测试期禁网闸的违规账（2026-09-06）。`tests/helpers/no-network.mjs` 每拦一次连外网就追加一行 ndjson，dao-check 跑完读它判红——拦下不等于报警，调用方常把网络错吞了。落仓外是硬要求：检查器的输出不许进自己的扫描面。不进 git，换机重生成 |
@@ -79,7 +79,7 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
-| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。`~/.codex/skills` 见 ignore.md 历史条。本仓只读、不写装法 |
+| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。本仓只读、不写装法 |
 | E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
 | E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
 | E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |

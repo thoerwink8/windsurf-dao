@@ -63,7 +63,8 @@ test('非 draft manual 执行层复核证据、锁 HEAD，不走要求 isDraft �
   };
   const r = execMerge(
     { pr: 1191, approvalIssue: 1182, head, evidenceMode: 'manual' },
-    { say() {}, run, judge: () => ({ state: 'ok' }) },
+    { say() {}, run, judge: () => ({ state: 'ok' }),
+      ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) },
   );
   assert.equal(r.ok, true);
   const merge = calls.find(a => a[5] === 'merge');
@@ -96,7 +97,9 @@ test('executor rechecks evidence, pins head and restores draft if merge fails', 
       if (args[5] === 'merge' && scenario === 'merge-failed') return { ok: false, error: 'head moved' };
       return { ok: true, out: '' };
     };
-    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }) });
+    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }),
+      // 注入替身：真写会往本机账本塞一条 gh-pr-1191 的假终态，污染 ⑰ 的对照集合。
+      ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) });
     const merge = calls.find(a => a[5] === 'merge');
     if (['head-changed', 'review-stale', 'approval-removed'].includes(scenario)) {
       assert.equal(merge, undefined);
@@ -122,7 +125,8 @@ test('auto merge without approvalIssue still pins --match-head-commit and refuse
     if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(pr) };
     return { ok: true, out: '' };
   };
-  const ok = execMerge({ pr: 77, head }, { say() {}, run, judge: () => ({ state: 'ok' }) });
+  const ok = execMerge({ pr: 77, head }, { say() {}, run, judge: () => ({ state: 'ok' }),
+    ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) });
   assert.equal(ok.ok, true);
   const merge = calls.find(a => a[5] === 'merge');
   assert.equal(merge.at(-2), '--match-head-commit');

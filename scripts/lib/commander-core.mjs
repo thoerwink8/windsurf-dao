@@ -70,6 +70,7 @@ import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
 import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { UNSIGNED_ISSUE_MERGE_REASON } from './dispatch/reviewer.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -766,6 +767,17 @@ export function normalizeCommanderRepo(raw) {
   return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(s) ? s : '';
 }
 
+/**
+ * 票仓非空且与本仓不同才算跨仓。
+ * 本仓交卷票本来就会带 repo（worker-done 写 owner/name，scanReviewPending 原样保留），
+ * 不能把「有 repo 字段」当成跨仓——否则死票占名额、也不产 reap-ticket。
+ */
+export function ticketRepoIsForeign(ticketRepo, homeRepo) {
+  const want = normalizeCommanderRepo(ticketRepo);
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(want && here && want !== here);
+}
+
 function prRepoOf(pr) {
   if (!pr || typeof pr !== 'object') return '';
   if (typeof pr.repo === 'string') return normalizeCommanderRepo(pr.repo);
@@ -781,7 +793,7 @@ export function correspondingPrForRedispatch(rd, prs, { homeRepo } = {}) {
   const list = Array.isArray(prs) ? prs : [];
   const wantRepo = normalizeCommanderRepo(rd && rd.repo);
   const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
-  if (wantRepo && here && wantRepo !== here) return null;
+  if (ticketRepoIsForeign(rd && rd.repo, homeRepo)) return null;
   const scoped = list.filter((p) => {
     if (!p) return false;
     const prRepo = prRepoOf(p);
@@ -1017,11 +1029,25 @@ function collectCandidates(situation) {
   // 开销也小（进程平均 2% CPU，其余是等模型回话的 IO 等待）。所以收尾名额**不受
   // dispatchSlots 约束**，只受下面自己的上限（本机同时最多几个收尾动作）管。
   // 反过来，机器满载时新活仍然一个不派——那半边的本意不动。
-  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  // 死票（已合并/已关）只产 reap-ticket，不占会话名额（审官红③ / #1291）。
+  // 存活判据与下面回收那一节同一把尺：没扫成 / 窗口截断 / 跨仓都不能证明它死了。
+  const PR_WINDOW = 100;
+  const prList = gh.prs || [];
+  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
+  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  const reviewTicketIsLive = (it) => {
+    if (!it || it.pr == null) return false;
+    // 只有票仓非空且与本仓不同，才按跨仓票保守保活。本仓带同值 repo 的票仍按 openPrs 判死。
+    if (ticketRepoIsForeign(it.repo, situation.repo)) return true;
+    if (!ghScanned) return true;
+    return openPrs.has(Number(it.pr));
+  };
+  const liveReviewItems = (rp.items || []).filter(reviewTicketIsLive);
+  const reviewReserve = liveReviewItems.length > 0 ? 1 : 0;
   const finishReserve = reviewReserve + stalledPumpCount;
   // 老单还有审查/返工/冲突/收口泵时，普通新单最多 1 个槽位（#1174）。
   const agingBusy = oldTicketsHaveWork({
-    reviewPending: rp.items,
+    reviewPending: liveReviewItems,
     prs: gh.prs,
     reviewsByPr: reviews.byPr,
     draftDueForPump,
@@ -1278,10 +1304,7 @@ function collectCandidates(situation) {
   // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
   // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
   // 那时「不在列表里」不再是死票的证据，一张都不剪。
-  const PR_WINDOW = 100;
-  const prList = gh.prs || [];
-  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
-  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  // PR_WINDOW / prList / ghScanned / openPrs 在上面预留名额时已经算过——同一把尺。
   const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
   // 票头过期 = 这张票问的不是现在的 head。它必须能穿过「已认输就跳过」那道否决，
   // 否则过期票收不掉、认输标摘不掉、按当前 head 该叫的复审永远叫不出来（#1208，见 commander-verbs
@@ -1335,7 +1358,7 @@ function collectCandidates(situation) {
     if (!it || it.pr == null) continue;
     const ticketHome = ticketIsHome(it, homeRepo);
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
-    if (ticketHome && ghScanned && !openPrs.has(Number(it.pr))) {
+    if (!reviewTicketIsLive(it)) {
       out.push(withNeeds({
         kind: 'reap-ticket', pr: it.pr, repo: null,
         why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
@@ -1514,7 +1537,7 @@ function collectCandidates(situation) {
         model: model0, reviewer: rReviewer0, redRounds,
         title: pr.title || '', brief, reworkKey: rkey, conflict,
         mergePolicy: 'manual',
-        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
         mergePolicySource: 'no-issue',
         ...(sub0 ? { substitutedModel: sub0 } : {}),
         why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
@@ -2090,11 +2113,9 @@ function collectCandidates(situation) {
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
       // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
-      const wantRepo = normalizeCommanderRepo(rd && rd.repo);
-      const here = normalizeCommanderRepo(homeRepo);
       const pr = correspondingPrForRedispatch(rd, gh.prs, { homeRepo });
       if (!pr) {
-        const cross = wantRepo && here && wantRepo !== here;
+        const cross = ticketRepoIsForeign(rd && rd.repo, homeRepo);
         out.push(withNeeds(esc(
           cross
             ? `#${rd.issue} 差集要重派，目标仓 ${rd.repo} 不是当前指挥官仓 ${homeRepo}，需人工补标（不得用同号本仓 PR）`
@@ -2303,9 +2324,38 @@ export function heartbeatDue({ state = {}, now = Date.now(), silenceDays = 7 } =
   return { due: true, reason: `已静默 ≥ ${silenceDays} 天`, sinceMs: now - anchor };
 }
 
-/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——决定要不要刷新 lastActivityAt。 */
+/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——只看动作本身长什么样。 */
 export function hasLiveAction(actions = []) {
   return actions.some((a) => a && a.kind !== 'noop' && !(a.kind === 'escalate' && a.reason === 'unscanned'));
+}
+
+/**
+ * 这一轮算不算「盘面在推进」——心跳的锚点判据。
+ *
+ * 2026-09-15 实咬：`hasLiveAction` 只看动作**长什么样**，不看它有没有改变什么。
+ * 昨晚连续 9 轮唯一的动作都是同一条 `{kind:'escalate', reason:'missing-labels', issue:1174}`，
+ * 它 kind 不是 noop、reason 不是 unscanned ⇒ 判成「有动静」⇒ `lastActivityAt` 每 20 分钟
+ * 刷新一次 ⇒ **心跳永远不到期，系统自认一切正常**，而盘面整整冻了 10 小时、
+ * 26 张开放 PR 有 22 张被跳过。
+ *
+ * 「服务没挂」和「活在推进」是两回事，原判据只测了前者（判例 memory `clean-exit-is-still-down`
+ * 的同族：干净退出照样是死了，这里是干净空转照样是停了）。
+ *
+ * 判据补上第二个条件：**动作摘要跟上一轮不一样**。同一套动作重复 = 磨盘，不刷新锚点，
+ * 于是静默计时正常走，心跳该响就响。
+ *
+ * `digestStreak` 必须是 `nextDigestStreak` 写回后的值（commander.mjs 先写 state 再调本函数）：
+ *   · 0 = 本轮摘要跟上轮不同（或首轮）→ 算推进
+ *   · ≥1 = 已经连续相同 → 磨盘，从第一轮重复起就不刷新锚点
+ *
+ * `digestStreak` 拿不到（undefined/非数）时退回旧行为——没查成不许当成「停了」，
+ * 那会把正常运转误报成死机。
+ */
+export function countsAsProgress({ actions = [], digestStreak } = {}) {
+  if (!hasLiveAction(actions)) return false;
+  const n = Number(digestStreak);
+  if (!Number.isFinite(n)) return true;   // 没查成 ⇒ 退回旧行为
+  return n === 0;                         // nextDigestStreak：新摘要 0；第二轮相同才 ≥1
 }
 
 /**
