@@ -66,6 +66,7 @@ import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
 import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { UNSIGNED_ISSUE_MERGE_REASON } from './dispatch/reviewer.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -1461,7 +1462,7 @@ function collectCandidates(situation) {
         model: model0, reviewer: rReviewer0, redRounds,
         title: pr.title || '', brief, reworkKey: rkey, conflict,
         mergePolicy: 'manual',
-        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
         mergePolicySource: 'no-issue',
         ...(sub0 ? { substitutedModel: sub0 } : {}),
         why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
@@ -2189,9 +2190,38 @@ export function heartbeatDue({ state = {}, now = Date.now(), silenceDays = 7 } =
   return { due: true, reason: `已静默 ≥ ${silenceDays} 天`, sinceMs: now - anchor };
 }
 
-/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——决定要不要刷新 lastActivityAt。 */
+/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——只看动作本身长什么样。 */
 export function hasLiveAction(actions = []) {
   return actions.some((a) => a && a.kind !== 'noop' && !(a.kind === 'escalate' && a.reason === 'unscanned'));
+}
+
+/**
+ * 这一轮算不算「盘面在推进」——心跳的锚点判据。
+ *
+ * 2026-09-15 实咬：`hasLiveAction` 只看动作**长什么样**，不看它有没有改变什么。
+ * 昨晚连续 9 轮唯一的动作都是同一条 `{kind:'escalate', reason:'missing-labels', issue:1174}`，
+ * 它 kind 不是 noop、reason 不是 unscanned ⇒ 判成「有动静」⇒ `lastActivityAt` 每 20 分钟
+ * 刷新一次 ⇒ **心跳永远不到期，系统自认一切正常**，而盘面整整冻了 10 小时、
+ * 26 张开放 PR 有 22 张被跳过。
+ *
+ * 「服务没挂」和「活在推进」是两回事，原判据只测了前者（判例 memory `clean-exit-is-still-down`
+ * 的同族：干净退出照样是死了，这里是干净空转照样是停了）。
+ *
+ * 判据补上第二个条件：**动作摘要跟上一轮不一样**。同一套动作重复 = 磨盘，不刷新锚点，
+ * 于是静默计时正常走，心跳该响就响。
+ *
+ * `digestStreak` 必须是 `nextDigestStreak` 写回后的值（commander.mjs 先写 state 再调本函数）：
+ *   · 0 = 本轮摘要跟上轮不同（或首轮）→ 算推进
+ *   · ≥1 = 已经连续相同 → 磨盘，从第一轮重复起就不刷新锚点
+ *
+ * `digestStreak` 拿不到（undefined/非数）时退回旧行为——没查成不许当成「停了」，
+ * 那会把正常运转误报成死机。
+ */
+export function countsAsProgress({ actions = [], digestStreak } = {}) {
+  if (!hasLiveAction(actions)) return false;
+  const n = Number(digestStreak);
+  if (!Number.isFinite(n)) return true;   // 没查成 ⇒ 退回旧行为
+  return n === 0;                         // nextDigestStreak：新摘要 0；第二轮相同才 ≥1
 }
 
 /**
