@@ -133,6 +133,7 @@ import { parseFrontmatter, collectExitTargets, judgeListExit, ingestPlanDocs } f
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
+import { agentHomes } from './lib/skill-homes.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
@@ -1116,9 +1117,18 @@ function checkMemoryLinkAlive() {
 // 单独验判别力，不必跑整个 dao-check（那会递归）。
 
 function checkSkillLinksAlive() {
+  // 本机**每个**有装载面的家目录都查（判据在 lib/skill-homes.mjs）。2026-09-13 实咬：
+  // 只看 $HOME 会漏——单元 `User=orca` 与 dao-check（root）各看各的家，root 那份被劫
+  // 后自愈钟对 orca 说「无事可做」，红挂在那儿没人接。
+  const found = agentHomes();
+  if (!found.ok) {
+    skip(`本机有哪几个家目录要守没查成：${found.reason}`);
+    return;
+  }
   const r = checkSkillLinks({
     root: ROOT,
     home: process.env.HOME || process.env.USERPROFILE || '',
+    homes: found.homes,
     isCi: process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true',
   });
   if (r.green) green(r.green);

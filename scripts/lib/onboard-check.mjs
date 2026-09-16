@@ -33,6 +33,21 @@ export function repoRootOfThisFile() {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 }
 
+/** 仓根：本文件所在 checkout，除非 DAO_REPO_ROOT 显式指定。
+ *  用途只有一个——root 那只自愈单元跑的是安装到 /usr/local 的副本（见
+ *  host/machine/systemd/dao-skills-heal-root.service），从副本位置按相对路径
+ *  推不出仓在哪，必须由单元把仓根写进环境。装到 /usr/local 的副本必须走这条路；
+ *  仓内跑（orca 那只、onboard、dao-check）永远用本文件位置，环境变量只当兜底。 */
+export function repoRoot({ env = process.env } = {}) {
+  const explicit = String((env && env.DAO_REPO_ROOT) || '').trim();
+  if (explicit.startsWith('/')) {
+    const abs = resolve(explicit);
+    // 只认「像个 checkout」的目录：少这一道，单元环境被改就能把仓内 skill 链到任意目录。
+    if (existsSync(join(abs, 'host', 'skills')) || existsSync(join(abs, 'host', 'machine'))) return abs;
+  }
+  return repoRootOfThisFile();
+}
+
 const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
 
 /** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），

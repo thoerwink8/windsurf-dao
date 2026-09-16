@@ -95,13 +95,17 @@ export function resolveGitCommonDir(start) {
 }
 
 /**
- * @param {{root: string, home: string, isCi?: boolean}} opts root=仓库根（host/skills 真相源），
- *        home=放 .claude/ 的那个目录（USERPROFILE 或 HOME），isCi=CI 环境标记
- *        （GITHUB_ACTIONS/CI 置真；CI 只为 ⑧ 装带 hook 的 skill，发现面非全量 ⇒ SKIP 不是绿）
+ * 本机每个有装载面的家目录各查一遍（#1146 洞：只看 $HOME 会漏掉另一个家的那份）。
+ *
+ * @param {{root: string, home?: string, homes?: string[], isCi?: boolean}} opts
+ *        root=仓库根（host/skills 真相源）；home=单个家目录（旧签名，保持兼容）；
+ *        homes=家目录数组（优先）；都不给则按 lib/skill-homes.mjs 的判据现算。
+ *        isCi=CI 环境标记（GITHUB_ACTIONS/CI 置真；CI 只为 ⑧ 装带 hook 的 skill，
+ *        发现面非全量 ⇒ SKIP 不是绿）
  * @returns {{green?: string, skip?: string, fail?: [string, string, string]}} 状态与 dao-check 的
  *          green()/skip()/fail() 对齐；skip 与 green 必须能被输出格式分开（SKIP 前缀 + 不计绿）。
  */
-export function checkSkillLinks({ root, home, isCi = false }) {
+export function checkSkillLinks({ root, home, homes, isCi = false }) {
   if (isCi) {
     return { skip: 'CI 环境：~/.claude/skills 发现面只在操作者机器上建链（CI 只为 ⑧ 装带 hook 的 skill），本项无法验证（SKIP 不是绿）' };
   }
@@ -139,13 +143,36 @@ export function checkSkillLinks({ root, home, isCi = false }) {
     return { fail: ['本仓 git 归属探测不了', '本次没查成：确认在 git 仓内跑 dao-check（链接归属校验需要 common-dir）', rootReal] };
   }
 
+  const targets = Array.isArray(homes) && homes.length ? homes : [home];
+  const fails = [];
+  const skips = [];
+  const greens = [];
+  for (const h of targets) {
+    const r = checkOneHome({ home: h, names, rootCommon });
+    if (r.fail) fails.push(r.fail);
+    else if (r.skip) skips.push(r.skip);
+    else greens.push(r.green);
+  }
+  if (fails.length) {
+    // 只要有任何一个家目录被劫/缺链就报红——一个家的装载面坏了，那条腿上的 skill 就是不可见。
+    return { fail: [
+      fails.length === 1 ? fails[0][0] : `${fails.length} 个家目录的 skill 发现面有问题`,
+      fails.map((f) => f[1]).join('；'),
+      fails.map((f) => f[2]).join('；'),
+    ] };
+  }
+  if (!greens.length) return { skip: skips.join('；') };
+  return { green: `${greens.join('；')}${skips.length ? `（另有 ${skips.length} 个家目录没装：${skips.length} 处）` : ''}` };
+}
+
+function checkOneHome({ home, names, rootCommon }) {
   const face = join(home, '.claude', 'skills');
   let faceSt;
   try {
     faceSt = lstatSync(face);
   } catch (e) {
     if (e && e.code === 'ENOENT') {
-      return { skip: `本机没装 ~/.claude/skills（${face}）⇒ CI/新机未建链，本项无法验证（SKIP 不是绿，≠ 被劫）` };
+      return { skip: `本机没装 ${face} ⇒ 新机未建链，本项无法验证（SKIP 不是绿，≠ 被劫）` };
     }
     return { fail: ['~/.claude/skills 探测不了', '确认 ~/.claude 可读；读不了 = 本次没查成', `${face}: ${String(e.message || e).slice(0, 120)}`] };
   }
@@ -159,19 +186,19 @@ export function checkSkillLinks({ root, home, isCi = false }) {
       let linkText = face;
       try { linkText = String(readlinkSync(face)).slice(0, 120); } catch { /* ignore */ }
       return { fail: [
-        '~/.claude/skills 是断链（目标不在）',
+        `${face} 是断链（目标不在）`,
         '跑 node scripts/onboard.mjs 或等 dao-skills-heal.timer 接回；不要手工 ln -sfn 整目录',
         `${face} → ${linkText}（${String(e && e.code || e).slice(0, 60)}）`,
       ] };
     }
     return { fail: [
-      'skills 装载面被劫（整目录链接）',
+      `${face} 被劫（整目录链接）`,
       '跑 node scripts/onboard.mjs 或等 dao-skills-heal.timer 下个周期接回；不要手工 ln -sfn 整目录（下一次 mirasim 启动还会劫走）',
       `${face} → ${target}`,
     ] };
   }
   if (!faceSt.isDirectory()) {
-    return { fail: ['~/.claude/skills 不是目录', '宿主发现面坏了：删掉这个文件，按 NEW-MACHINE §11 重建为目录', face] };
+    return { fail: [`${face} 不是目录`, '宿主发现面坏了：删掉这个文件，按 NEW-MACHINE §11 重建为目录', face] };
   }
 
   const bad = [];
@@ -215,10 +242,10 @@ export function checkSkillLinks({ root, home, isCi = false }) {
 
   if (bad.length > 0) {
     return { fail: [
-      `skill 发现面缺链/指错 ${bad.length} 个（共 ${names.length} 个 skill）`,
+      `${face} 缺链/指错 ${bad.length} 个（共 ${names.length} 个 skill）`,
       `跑 node scripts/onboard.mjs 或等 dao-skills-heal.timer 接回（NEW-MACHINE §11）`,
       bad.join('；'),
     ] };
   }
-  return { green: `skill 发现面符号链接 ${good.length} 个已接（~/.claude/skills/<名> → host/skills/<名>）` };
+  return { green: `${face} 已接 ${good.length} 个（→ host/skills/<名>）` };
 }
