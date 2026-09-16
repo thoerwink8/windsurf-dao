@@ -315,6 +315,22 @@ export function shouldSpawnForward({ childAlive = false, stopping = false } = {}
   return { spawn: true, why: null };
 }
 
+/**
+ * Node ChildProcess 还活着吗。
+ *
+ * 外部 SIGTERM/SIGKILL 之后：exitCode 仍是 null、killed 仍是 false
+ * （killed 只表示**父进程**调过 child.kill()）。只有 signalCode 能说明已经退了。
+ * 只看前两字段会把死的当活的，重连被 skip
+ * （2026-09-16 故障演练：12:11:58 forward-exit，12:12:03 spawn-skipped）。
+ */
+export function isChildAlive(c) {
+  if (!c) return false;
+  if (c.exitCode != null) return false;
+  if (c.signalCode != null) return false;
+  if (c.killed) return false;
+  return true;
+}
+
 export function classifyGhEventBridge({
   probed = false, reason = '', state = null, now = Date.now(),
   heartbeatMs = HEARTBEAT_MS, pingIntervalMs = PING_INTERVAL_MS, graceMs = STARTUP_GRACE_MS,
