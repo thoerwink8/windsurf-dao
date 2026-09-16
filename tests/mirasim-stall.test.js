@@ -227,6 +227,21 @@ describe('sweepOnce —— 一遍扫：卡死停+评论、终态回收', () => {
     assert.equal(deps.calls.stop.length, 0);
   });
 
+  it('stopSession 失败 → actionFailed 且 exit 非零（评论落成也不算已处理）', async () => {
+    const { sweepOnce } = await import(CLI);
+    const { activitySig } = await import(MON);
+    const deps = fakeDeps();
+    deps.stopSession = async k => { deps.calls.stop.push(k); return { ok: false, why: '停会话被拒' }; };
+    const sig1 = activitySig({ ledger: { readable: true, rows: [{}, {}] }, text: '一直卡在工具调用', updatedAt: T0 - 30 * MIN });
+    const prev = { sessions: { [KEY]: { sig: sig1, sinceTs: T0 - 20 * MIN, errFp: null } } };
+    const res = await sweepOnce(deps, prev, { stallMs: 8 * MIN, ttlMs: 30 * MIN });
+    assert.equal(res.stalled.length, 1, JSON.stringify(res.stalled));
+    assert.equal(res.stalled[0].stop.ok, false);
+    assert.equal(deps.calls.comment.length, 1);
+    assert.equal(res.actionFailed, true);
+    assert.notEqual(res.exit, 0);
+  });
+
   it('dry-run：判出卡死但不真停不真删', async () => {
     const { sweepOnce } = await import(CLI);
     const { activitySig } = await import(MON);

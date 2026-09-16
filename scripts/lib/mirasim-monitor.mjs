@@ -188,12 +188,22 @@ export function judgeStall({ view, ledger, updatedAt, prev, now, stallMs } = {})
   if (changed) {
     return { status: 'live', reason: `${phase} 且活性在动（账本/正文/时间戳有前进）`, sig, sinceTs: now };
   }
+  const stall = knownPositiveMs(stallMs);
+  if (stall == null) {
+    return {
+      status: 'unknown',
+      reason: '判死阈值不是有限正数（没查成，不判死）',
+      sig,
+      sinceTs: now,
+      gaps: [{ name: 'stallMs', why: `stallMs=${String(stallMs)} 不是有限正数` }],
+    };
+  }
   const stillMs = Number.isFinite(prev.sinceTs) ? now - prev.sinceTs : 0;
-  if (stillMs >= stallMs) {
+  if (stillMs >= stall) {
     const mins = Math.round(stillMs / 60000);
     return {
       status: 'stalled',
-      reason: `${phase} 卡着不动：账本没涨、正文没变已 ${mins} 分钟（阈值 ${Math.round(stallMs / 60000)} 分钟）`,
+      reason: `${phase} 卡着不动：账本没涨、正文没变已 ${mins} 分钟（阈值 ${Math.round(stall / 60000)} 分钟）`,
       sig,
       sinceTs: prev.sinceTs,
     };

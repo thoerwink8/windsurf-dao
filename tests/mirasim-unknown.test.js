@@ -937,3 +937,73 @@ describe('返工 P1（审官 round 4：TTL / 路由枚举 / open 未知 / 报帅
     assert.equal(viaRed.state, 'red', viaRed.detail);
   });
 });
+
+describe('返工 P1（审官 round 5：stop 失败 / stallMs 非法）', () => {
+  it('stopSession 失败 → actionFailed 且 exit 非零（评论落成也不算已处理）', async () => {
+    const { sweepOnce } = await import(CLI);
+    const { activitySig } = await import(MON);
+    const view = liveView({ text: '一直卡在工具调用' });
+    const sig = activitySig({ ledger: okLedger, text: view.text, updatedAt: T0 - 30 * MIN });
+    const calls = { stop: [], comment: [] };
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => ([{
+        sessionKey: KEY, agent: 'claude', title: '卡死的',
+        runState: 'running', updatedAt: T0 - 30 * MIN,
+        workdir: '/w/880d', branch: 'mirasim-keepalive-880d', open: true,
+      }]),
+      readSession: async () => view,
+      readLedger: async () => okLedger,
+      stopSession: async k => { calls.stop.push(k); return { ok: false, why: '停会话被拒' }; },
+      deleteSession: async () => ({ ok: true }),
+      removeWorktree: async () => ({ ok: true }),
+      isBranchMerged: () => null,
+      postComment: a => { calls.comment.push(a); return { ok: true }; },
+      issueOf: () => 880,
+    }, { sessions: { [KEY]: { sig, sinceTs: T0 - 20 * MIN, errFp: null } } }, { stallMs: 8 * MIN, ttlMs: 30 * MIN });
+    assert.equal(res.stalled.length, 1, JSON.stringify(res.stalled));
+    assert.equal(res.stalled[0].stop.ok, false);
+    assert.match(String(res.stalled[0].why || res.stalled[0].stop.why), /停会话被拒|没成/);
+    assert.equal(calls.comment.length, 1, '评论落成也不许把没停成报成已处理');
+    assert.equal(res.actionFailed, true);
+    assert.notEqual(res.exit, 0);
+  });
+
+  it('stallMs 非法/非正：判官不判死，sweepOnce 不 stop 且非零', async () => {
+    const { judgeStall, activitySig, knownPositiveMs } = await import(MON);
+    const { sweepOnce } = await import(CLI);
+    assert.equal(knownPositiveMs(0), null);
+    assert.equal(knownPositiveMs(-1), null);
+    assert.equal(knownPositiveMs(NaN), null);
+    assert.equal(knownPositiveMs(Infinity), null);
+    const prev = { sig: activitySig({ ledger: okLedger, text: '在跑', updatedAt: T0 - 20 * MIN }), sinceTs: T0 - 20 * MIN };
+    for (const bad of [0, -1, NaN, Infinity, Number('not-a-number')]) {
+      const r = judgeStall({
+        view: liveView(), ledger: okLedger, updatedAt: T0 - 20 * MIN,
+        prev, now: T0, stallMs: bad,
+      });
+      assert.notEqual(r.status, 'stalled', `stallMs=${bad} 仍判死：${r.reason}`);
+      assert.equal(r.status, 'unknown', r.reason);
+      assert.match(r.reason, /有限正数|没查成/);
+    }
+    function unused() { throw new Error('非法 stallMs 不该进扫'); }
+    for (const bad of [0, -1, NaN, Infinity]) {
+      const res = await sweepOnce({
+        now: () => T0,
+        listSessions: unused,
+        readSession: unused,
+        readLedger: unused,
+        stopSession: unused,
+        deleteSession: unused,
+        removeWorktree: unused,
+        isBranchMerged: unused,
+        postComment: unused,
+        issueOf: unused,
+      }, { sessions: { [KEY]: { sig: prev.sig, sinceTs: T0 - 20 * MIN } } }, { stallMs: bad, ttlMs: 30 * MIN });
+      assert.equal(res.stalled.length, 0, JSON.stringify(res.stalled));
+      assert.equal(res.unscanned, true);
+      assert.notEqual(res.exit, 0);
+      assert.match(String(res.reason || ''), /有限正数|stall/);
+    }
+  });
+});

@@ -14,7 +14,7 @@
 //   node scripts/agent-stall-watch-mirasim.mjs --health [--json]  只出健康段并落额度文件
 //
 // 运维/验收旋钮：
-//   MIRASIM_STALL_MS        判死阈值毫秒（默认 8 分钟）
+//   MIRASIM_STALL_MS        判死阈值毫秒（默认 8 分钟；必须是有限正数，0/负/NaN/Infinity 拒绝进入）
 //   MIRASIM_GC_TTL_MS       终态回收 TTL 毫秒（默认 30 分钟）
 //   MIRASIM_STALL_ONLY      只处置 sessionKey 含该串的会话（缩爆炸半径）
 //   MIRASIM_STALL_ISSUE     推不出关联 issue 时的兜底 issue 号
@@ -47,7 +47,12 @@ const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
 const DEFAULT_STATE = join(homedir(), '.dao', 'mirasim-stall-watch.json');
 const USAGE_FILE = join(homedir(), '.dao', 'mirasim-usage.json');
-const STALL_MS = Number(process.env.MIRASIM_STALL_MS || 8 * 60_000);   // 8 分钟没动静判卡死
+const DEFAULT_STALL_MS = 8 * 60_000;   // 8 分钟没动静判卡死
+const STALL_MS = (() => {
+  const raw = process.env.MIRASIM_STALL_MS;
+  if (raw == null || String(raw).trim() === '') return DEFAULT_STALL_MS;
+  return knownPositiveMs(raw); // 非法/非正 → null，入口与 sweepOnce 拒绝进入
+})();
 const DEFAULT_TTL_MS = 30 * 60_000;
 const TTL_MS = (() => {
   const raw = process.env.MIRASIM_GC_TTL_MS;
@@ -222,7 +227,6 @@ function isBranchMerged(branch, workdir) {
  */
 export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
   const now = deps.now || (() => Date.now());
-  const stallMs = opts.stallMs ?? STALL_MS;
   const dryRun = !!opts.dryRun;
   // 绝不回收的树：本仓根（主树）。真机会话的 workdir 里就有挂 master 的树，
   // 没这道闸 + branch 反查一开，第一遍就能把主树删掉。
@@ -230,6 +234,11 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
   const nextState = { sessions: {} };
   const out = { scanned: 0, stalled: [], gced: [], escalated: [], live: [], unknown: [], unscanned: false, actionFailed: false };
 
+  const stallMs = knownPositiveMs(opts.stallMs ?? STALL_MS);
+  if (stallMs == null) {
+    out.unscanned = true;
+    return { ...out, nextState: prevState, exit: 2, reason: '判死阈值不是有限正数（没查成，不 stop）' };
+  }
   const ttlMs = knownPositiveMs(opts.ttlMs ?? TTL_MS);
   if (ttlMs == null) {
     out.unscanned = true;
@@ -349,14 +358,18 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
       out.stalled.push({ key, reason: j.reason, issue });
       if (!dryRun) {
         const stop = await deps.stopSession(key);
+        // 停不成 → 非零。评论落成也不能把「活会话还在跑」报成已处理。
+        if (!stop?.ok) out.actionFailed = true;
         let phaseAfter = null;
         if (deps.readSession) { const v2 = await deps.readSession(key); phaseAfter = v2?.phase ?? null; }
         const body = stallBody({ s, reason: j.reason, stop, phaseAfter });
         const r = issue ? deps.postComment({ issue, body }) : { ok: false, detail: '没有关联 issue，评论没落' };
         if (!r.ok) out.actionFailed = true;
-        out.stalled[out.stalled.length - 1].stop = stop;
-        out.stalled[out.stalled.length - 1].phaseAfter = phaseAfter;
-        out.stalled[out.stalled.length - 1].comment = r;
+        const rec = out.stalled[out.stalled.length - 1];
+        rec.stop = stop;
+        rec.phaseAfter = phaseAfter;
+        rec.comment = r;
+        if (!stop?.ok) rec.why = stop?.why || 'stopSession 没成';
       }
       continue;
     }
@@ -500,6 +513,11 @@ async function main(argv = process.argv.slice(2)) {
   if (args.mode === 'health') { process.exit(await runHealth(args)); }
   if (args.mode !== 'once') {
     console.error('要么 --once（保活+回收）要么 --health（健康段）');
+    process.exit(2);
+  }
+  const stallRaw = process.env.MIRASIM_STALL_MS;
+  if (stallRaw != null && String(stallRaw).trim() !== '' && knownPositiveMs(stallRaw) == null) {
+    console.error(`MIRASIM_STALL_MS 必须是有限正数，拒绝进入保活（收到 ${JSON.stringify(stallRaw)}）`);
     process.exit(2);
   }
   const ttlRaw = process.env.MIRASIM_GC_TTL_MS;

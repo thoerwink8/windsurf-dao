@@ -1301,32 +1301,31 @@ export function classifyCommanderStatus({ probed = false, reason = '', code, std
 
 /**
  * ㉔ mirasim 执行体健康：把 `--health --json` 的出口译成三态。
- * 不 import 被检查对象的判官（纪律：不复用被检查对象自己的解析逻辑），只认它交出的
- * health.state / 退出码。违规 relay 样本先被 --health 判红/unknown，再经这里拦下。
+ * 不 import 被检查对象的判官（纪律：不复用被检查对象自己的解析逻辑），只认可解析
+ * 且含合法 health.state 的 JSON。空 stdout / 普通文本 / JSON 后带尾随垃圾一律 unknown，
+ * 不许用 exit=0 猜绿。违规 relay 样本先被 --health 判红/unknown，再经这里拦下。
  */
 export function classifyMirasimHealth({ probed = false, reason = '', code, stdout = '' } = {}) {
   if (!probed) return { state: UNKNOWN, detail: `mirasim --health 没跑成：${reason || ''}` };
   const text = String(stdout || '');
   const start = text.indexOf('{');
-  if (start >= 0) {
-    try {
-      const payload = JSON.parse(text.slice(start));
-      const health = payload && payload.health && typeof payload.health === 'object' ? payload.health : null;
-      const st = health && typeof health.state === 'string' ? health.state : null;
-      const notes = Array.isArray(health?.notes) ? health.notes.join('；') : '';
-      const head = notes || `mirasim 执行体 ${st || '?'}`;
-      if (st === 'ok') return { state: OK, detail: head };
-      if (st === 'red') return { state: RED, detail: `mirasim 健康红：${head}` };
-      if (st === 'unknown') return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
-      return { state: UNKNOWN, detail: `mirasim 健康状态不是三态（${st ?? '缺'}）：${head}` };
-    } catch {
-      // JSON 坏了：退回退出码，不当绿
-    }
+  if (start < 0) {
+    return { state: UNKNOWN, detail: `mirasim --health 不是 JSON（exit=${code}）：${text.trim().slice(0, 160)}` };
   }
-  const head = text.split('\n')[0].trim();
-  if (code === 0) return { state: OK, detail: head || 'mirasim 执行体 ok' };
-  if (code === 2) return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
-  return { state: RED, detail: `mirasim 健康红：${head}` };
+  let payload;
+  try {
+    payload = JSON.parse(text.slice(start));
+  } catch (e) {
+    return { state: UNKNOWN, detail: `mirasim --health JSON 坏了（exit=${code}）：${String(e.message).slice(0, 120)}` };
+  }
+  const health = payload && payload.health && typeof payload.health === 'object' ? payload.health : null;
+  const st = health && typeof health.state === 'string' ? health.state : null;
+  const notes = Array.isArray(health?.notes) ? health.notes.join('；') : '';
+  const head = notes || `mirasim 执行体 ${st || '?'}`;
+  if (st === 'ok') return { state: OK, detail: head };
+  if (st === 'red') return { state: RED, detail: `mirasim 健康红：${head}` };
+  if (st === 'unknown') return { state: UNKNOWN, detail: `mirasim 健康没查成（连不上/缺字段）：${head}` };
+  return { state: UNKNOWN, detail: `mirasim 健康状态不是三态（${st ?? '缺'}）：${head}` };
 }
 
 const CHECKS = [
@@ -1440,6 +1439,22 @@ function selfTest() {
   const miraBlind = classifyMirasimHealth({ probed: false, reason: 'spawn 失败：ENOENT' });
   if (miraBlind.state !== UNKNOWN) {
     failures.push(`--health 没跑成应判 unknown，实际 ${miraBlind.state}`);
+  }
+  const miraEmpty = classifyMirasimHealth({ probed: true, code: 0, stdout: '' });
+  if (miraEmpty.state !== UNKNOWN) {
+    failures.push(`--health 空 stdout 即使 exit 0 也应 unknown，实际 ${miraEmpty.state}`);
+  }
+  const miraGarbage = classifyMirasimHealth({ probed: true, code: 0, stdout: 'garbage' });
+  if (miraGarbage.state !== UNKNOWN) {
+    failures.push(`--health 普通文本即使 exit 0 也应 unknown，实际 ${miraGarbage.state}`);
+  }
+  const miraTrail = classifyMirasimHealth({
+    probed: true,
+    code: 0,
+    stdout: '{"health":{"state":"unknown"}}\ntrailing',
+  });
+  if (miraTrail.state !== UNKNOWN) {
+    failures.push(`--health JSON 后带尾随垃圾即使 exit 0 也应 unknown，实际 ${miraTrail.state}`);
   }
 
   // #944：腿表标「停用」的腿实际在跑 —— 必须红；探针流量（非 200 / local 腿）不许被判成违规。

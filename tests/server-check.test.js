@@ -293,6 +293,25 @@ test('server-check 判别力', async (t) => {
       assert.equal(r.state, 'unknown');
     });
 
+    await t.test('空 stdout 即使 exit 0 也是 unknown，不许猜绿', () => {
+      const r = classifyMirasimHealth({ probed: true, code: 0, stdout: '' });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('普通文本即使 exit 0 也是 unknown', () => {
+      const r = classifyMirasimHealth({ probed: true, code: 0, stdout: 'garbage' });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('JSON 后带尾随垃圾即使 exit 0 也是 unknown', () => {
+      const r = classifyMirasimHealth({
+        probed: true,
+        code: 0,
+        stdout: '{"health":{"state":"unknown"}}\ntrailing',
+      });
+      assert.equal(r.state, 'unknown');
+    });
+
     await t.test('CHECKS (24) 走 --health --json + classifyMirasimHealth', () => {
       const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
       const i = src.indexOf("['(24) mirasim 执行体健康");
