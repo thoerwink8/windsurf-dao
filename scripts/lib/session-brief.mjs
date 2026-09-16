@@ -2,6 +2,31 @@
 // 纯函数层：解析/判定不碰 IO，hook 与 dao-check 各自喂数据。
 // 读取面与退出机制共用同一个字段（status / issues）——见 docs/README.md「联动退出」。
 
+/**
+ * 挂钩去重保序。正整数保留为 number；非法值也保留。
+ * 改这段前必须知道：滤掉非法值会让 collectExitTargets 把「配了坏挂钩的 active 条目」
+ * 当成没挂钩，live 闸走「0 个对象」绿——坏配置被静默放行。非法值留给 judgeListExit
+ * 查不到 OPEN/CLOSED，落到 unscanned。
+ */
+function uniqueIssueHooks(nums) {
+  const found = [];
+  const seen = new Set();
+  for (const raw of nums) {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0) {
+      const key = `n:${n}`;
+      if (!seen.has(key)) { seen.add(key); found.push(n); }
+      continue;
+    }
+    const keep = Number.isInteger(n) ? n : raw;
+    const key = `bad:${typeof keep === 'number' ? keep : String(keep)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(keep);
+  }
+  return found;
+}
+
 /** decisions/ 计划文档的 frontmatter（YAML-lite：只认 status 与 issues 两个键，容错不抛）。 */
 export function parseFrontmatter(text) {
   const t = String(text || '');
@@ -14,7 +39,7 @@ export function parseFrontmatter(text) {
   if (st) out.status = st[1];
   const is = head.match(/^issues:\s*\[([^\]]*)\]/m);
   if (is) {
-    out.issues = is[1].split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
+    out.issues = uniqueIssueHooks(is[1].split(',').map((s) => s.trim()).filter(Boolean));
   }
   return (out.status || out.issues) ? out : null;
 }
@@ -85,29 +110,22 @@ export function issueRefsInText(text) {
   return found;
 }
 
-function uniquePosInts(nums) {
-  const found = [];
-  for (const raw of nums) {
-    const n = Number(raw);
-    if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
-  }
-  return found;
-}
-
 /**
  * 西瓜条目的退场挂钩：`issues` 字段 ∪ `done_when` 里的 #单号。
  * 2026-09-16 实咬：scale-dozens 的 issues 只挂了已关前置单，统领 #1174 写在 done_when 里，
  * live 闸把仍在推的目标误报 stale。done_when 是完成判据，里面点名的单不得被漏挂。
+ * issues 里的非法值原样保留（见 uniqueIssueHooks），不得滤成「没挂钩」。
  */
 export function hookedIssues(initiative) {
   const listed = Array.isArray(initiative && initiative.issues) ? initiative.issues : [];
-  return uniquePosInts([...listed, ...issueRefsInText(initiative && initiative.done_when)]);
+  return uniqueIssueHooks([...listed, ...issueRefsInText(initiative && initiative.done_when)]);
 }
 
 /**
  * 清单退场闸（联动退出）的挂钩对象：active 西瓜 + in-progress 计划文档里带 issues 的。
  * 西瓜挂钩含 issues 字段和 done_when 里的 #单号；两者都空的不进闸（退出走各自 done_when / 人工）。
  * 闸只咬「单全关了还赖着」——漏挂统领单不得把仍在推的目标误报该收摊。
+ * 配了非法 issues 的条目仍进闸：状态查询落到 unscanned，不许当零目标绿。
  */
 export function collectExitTargets({ initiativesDoc = null, planDocs = [] } = {}) {
   const targets = [];

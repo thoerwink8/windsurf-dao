@@ -1415,7 +1415,20 @@ function checkListExitSamples() {
     fail('清单退场闸夹具：OPEN 统领单漏挂后误报 stale', 'done_when 指向的 OPEN 单不得因漏挂 issues 被判该收摊', JSON.stringify(leakedVerdict).slice(0, 160));
     return;
   }
-  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale');
+  const badCfg = collectExitTargets({
+    initiativesDoc: { initiatives: [{ id: 'bad', status: 'active', issues: ['not-an-issue'] }] },
+    planDocs: [],
+  });
+  if (!badCfg.length) {
+    fail('清单退场闸夹具：坏挂钩被滤成零目标', '非法 issues 必须进闸，不许消失后走 0 个对象绿', JSON.stringify(badCfg).slice(0, 160));
+    return;
+  }
+  const badVerdict = judgeListExit({ targets: badCfg, states: {} });
+  if (badVerdict.ok || !badVerdict.unscanned) {
+    fail('清单退场闸夹具：坏挂钩没判没查成', '非法 issues 必须 unscanned，不许零目标绿', JSON.stringify(badVerdict).slice(0, 160));
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale、坏挂钩不静默绿');
 }
 
 function checkListExitLive() {

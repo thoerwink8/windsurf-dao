@@ -32,6 +32,7 @@ issues: [1133]        # 统领单/挂钩单号；退出机制靠它联动
 - `dao-check --full` 跑「清单退场闸」：active 西瓜 / in-progress 计划文档挂的单**全部关闭**却还没标 done → 红。
   红的意思是「该收摊了」：人工核一眼 done_when，一行 commit 把 status 翻成 done——翻状态是拍板动作，不自动代拍。
   单个计划文档读失败标 `unscanned`（没查成），不得当零目标放行；开场 hook 同步打「没查成」。
+  坏的 `issues` 挂钩（非正整数）原样保留，状态查询落到 `unscanned`，不得滤成「0 个对象」绿。
 - 状态翻成 done 后，SessionStart hook 自然停念（读取面与退出机制共用同一个字段，不会漂）。
 
 ## 为什么不大搬家

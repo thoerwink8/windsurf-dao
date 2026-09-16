@@ -21,10 +21,10 @@ describe('parseFrontmatter：计划文档头', () => {
     assert.equal(parseFrontmatter(''), null);
     assert.equal(parseFrontmatter(null), null);
   });
-  it('issues 里的脏值被滤掉', async () => {
+  it('issues 里的脏值原样保留（滤掉会让退场闸当零目标绿）', async () => {
     const { parseFrontmatter } = await LIB;
     const fm = parseFrontmatter('---\nissues: [12, abc, -3, 0]\n---\n');
-    assert.deepEqual(fm.issues, [12]);
+    assert.deepEqual(fm.issues, [12, 'abc', -3, 0]);
   });
 });
 
@@ -164,6 +164,35 @@ describe('清单退场闸（联动退出）判官', () => {
     const { judgeListExit } = await LIB;
     const r = judgeListExit({ targets: [], states: {} });
     assert.equal(r.ok, true);
+  });
+  it('坏的 issues 配置不得当零目标绿', async () => {
+    const { collectExitTargets, judgeListExit, parseFrontmatter } = await LIB;
+    const targets = collectExitTargets({
+      initiativesDoc: { initiatives: [
+        { id: 'bad', status: 'active', issues: ['not-an-issue'] },
+      ] },
+      planDocs: [
+        { file: 'p.md', fm: parseFrontmatter('---\nstatus: in-progress\nissues: [abc]\n---\n') },
+      ],
+    });
+    assert.deepEqual(targets.map((t) => t.name), ['bad', 'p.md']);
+    const r = judgeListExit({ targets, states: {} });
+    assert.equal(r.ok, false, '非法挂钩不得走 0 个对象绿：' + JSON.stringify(r));
+    assert.equal(r.unscanned, true);
+    assert.match(r.error, /没查成/);
+  });
+  it('坏挂钩夹在合法单号里也不得滤掉后放行或误报 stale', async () => {
+    const { collectExitTargets, judgeListExit } = await LIB;
+    const targets = collectExitTargets({
+      initiativesDoc: { initiatives: [
+        { id: 'mixed', status: 'active', issues: [1145, 'not-an-issue'] },
+      ] },
+    });
+    assert.deepEqual(targets[0].issues, [1145, 'not-an-issue']);
+    const r = judgeListExit({ targets, states: { 1145: 'CLOSED' } });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.deepEqual(r.stale, []);
   });
   it('单文件读失败不得当零目标绿', async () => {
     const { ingestPlanDocs, collectExitTargets } = await LIB;
