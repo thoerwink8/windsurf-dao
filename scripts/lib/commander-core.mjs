@@ -63,7 +63,7 @@ import {
 import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
-import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -356,6 +356,8 @@ export function chooseReviewerLeg(situation = {}, { order, excluded } = {}) {
     breaker: situation.breaker || null,
     now: nowMs,
     excluded,
+    legs: situation.routingLegs,
+    models: recs,
   });
 }
 
@@ -967,12 +969,26 @@ function collectCandidates(situation) {
   };
   // 工人的 model 由 PR 标签钉死（#1116；不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
   // 认不出落地 → 本闸不拦（其它闸会挡）。返回 { ok, channel, why }。
+  // 有腿表时走 judgeChannelForModel：pending 模型不读同渠道另一条腿的 Infinity（#1274）。
+  const routingLegs = Array.isArray(situation.routingLegs) ? situation.routingLegs : null;
   const channelAdmits = (model) => {
     if (!chSnap) return { ok: true, channel: null };
+    if (routingLegs) {
+      const judged = judgeChannelForModel({
+        model, legs: routingLegs, models: modelRecs, caps: chCaps, states: chStates,
+        inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      });
+      if (judged.attributed) {
+        return judged.available
+          ? { ok: true, channel: judged.channel }
+          : { ok: false, channel: judged.channel, why: judged.why, reason: judged.reason };
+      }
+    }
     const landing = landingOfModel(model);
     if (!landing) return { ok: true, channel: null };
     const av = legAvailability(landing, {
       caps: chCaps, states: chStates, inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      model, legs: routingLegs, models: modelRecs,
     });
     return av.available
       ? { ok: true, channel: av.channel }
