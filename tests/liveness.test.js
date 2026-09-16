@@ -232,6 +232,13 @@ describe('活性：树内进程压过冻住的时间戳', () => {
     assert.deepEqual(r.pids, [2]);
   });
 
+  it('cwd 落在树的子目录里仍算这棵树（与租约同一把尺）', async () => {
+    const S = await LOAD;
+    const r = S.treeProcessState(TREE, { scan: { ok: true, procs: [{ pid: 9, cwd: TREE + '/scripts' }] } });
+    assert.equal(r.state, 'running', JSON.stringify(r));
+    assert.deepEqual(r.pids, [9]);
+  });
+
   it('没给进程观测 / 没给树 → unknown，不许当成 idle', async () => {
     const S = await LOAD;
     assert.equal(S.treeProcessState(TREE, {}).state, 'unknown');

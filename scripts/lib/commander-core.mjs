@@ -714,6 +714,17 @@ export function normalizeCommanderRepo(raw) {
   return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(s) ? s : '';
 }
 
+/**
+ * 票仓非空且与本仓不同才算跨仓。
+ * 本仓交卷票本来就会带 repo（worker-done 写 owner/name，scanReviewPending 原样保留），
+ * 不能把「有 repo 字段」当成跨仓——否则死票占名额、也不产 reap-ticket。
+ */
+export function ticketRepoIsForeign(ticketRepo, homeRepo) {
+  const want = normalizeCommanderRepo(ticketRepo);
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(want && here && want !== here);
+}
+
 function prRepoOf(pr) {
   if (!pr || typeof pr !== 'object') return '';
   if (typeof pr.repo === 'string') return normalizeCommanderRepo(pr.repo);
@@ -729,7 +740,7 @@ export function correspondingPrForRedispatch(rd, prs, { homeRepo } = {}) {
   const list = Array.isArray(prs) ? prs : [];
   const wantRepo = normalizeCommanderRepo(rd && rd.repo);
   const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
-  if (wantRepo && here && wantRepo !== here) return null;
+  if (ticketRepoIsForeign(rd && rd.repo, homeRepo)) return null;
   const scoped = list.filter((p) => {
     if (!p) return false;
     const prRepo = prRepoOf(p);
@@ -965,11 +976,25 @@ function collectCandidates(situation) {
   // 开销也小（进程平均 2% CPU，其余是等模型回话的 IO 等待）。所以收尾名额**不受
   // dispatchSlots 约束**，只受下面自己的上限（本机同时最多几个收尾动作）管。
   // 反过来，机器满载时新活仍然一个不派——那半边的本意不动。
-  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  // 死票（已合并/已关）只产 reap-ticket，不占会话名额（审官红③ / #1291）。
+  // 存活判据与下面回收那一节同一把尺：没扫成 / 窗口截断 / 跨仓都不能证明它死了。
+  const PR_WINDOW = 100;
+  const prList = gh.prs || [];
+  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
+  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  const reviewTicketIsLive = (it) => {
+    if (!it || it.pr == null) return false;
+    // 只有票仓非空且与本仓不同，才按跨仓票保守保活。本仓带同值 repo 的票仍按 openPrs 判死。
+    if (ticketRepoIsForeign(it.repo, situation.repo)) return true;
+    if (!ghScanned) return true;
+    return openPrs.has(Number(it.pr));
+  };
+  const liveReviewItems = (rp.items || []).filter(reviewTicketIsLive);
+  const reviewReserve = liveReviewItems.length > 0 ? 1 : 0;
   const finishReserve = reviewReserve + stalledPumpCount;
   // 老单还有审查/返工/冲突/收口泵时，普通新单最多 1 个槽位（#1174）。
   const agingBusy = oldTicketsHaveWork({
-    reviewPending: rp.items,
+    reviewPending: liveReviewItems,
     prs: gh.prs,
     reviewsByPr: reviews.byPr,
     draftDueForPump,
@@ -1226,10 +1251,7 @@ function collectCandidates(situation) {
   // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
   // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
   // 那时「不在列表里」不再是死票的证据，一张都不剪。
-  const PR_WINDOW = 100;
-  const prList = gh.prs || [];
-  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
-  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  // PR_WINDOW / prList / ghScanned / openPrs 在上面预留名额时已经算过——同一把尺。
   const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
   // 票头过期 = 这张票问的不是现在的 head。它必须能穿过「已认输就跳过」那道否决，
   // 否则过期票收不掉、认输标摘不掉、按当前 head 该叫的复审永远叫不出来（#1208，见 commander-verbs
@@ -1283,7 +1305,7 @@ function collectCandidates(situation) {
     if (!it || it.pr == null) continue;
     const ticketHome = ticketIsHome(it, homeRepo);
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
-    if (ticketHome && ghScanned && !openPrs.has(Number(it.pr))) {
+    if (!reviewTicketIsLive(it)) {
       out.push(withNeeds({
         kind: 'reap-ticket', pr: it.pr, repo: null,
         why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
@@ -1977,11 +1999,9 @@ function collectCandidates(situation) {
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
       // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
-      const wantRepo = normalizeCommanderRepo(rd && rd.repo);
-      const here = normalizeCommanderRepo(homeRepo);
       const pr = correspondingPrForRedispatch(rd, gh.prs, { homeRepo });
       if (!pr) {
-        const cross = wantRepo && here && wantRepo !== here;
+        const cross = ticketRepoIsForeign(rd && rd.repo, homeRepo);
         out.push(withNeeds(esc(
           cross
             ? `#${rd.issue} 差集要重派，目标仓 ${rd.repo} 不是当前指挥官仓 ${homeRepo}，需人工补标（不得用同号本仓 PR）`
