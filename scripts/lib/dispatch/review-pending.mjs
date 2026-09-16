@@ -25,6 +25,8 @@ import { dispatchQueueDir } from '../dispatch-queue.mjs';
 import { mainCheckoutRoot } from '../main-checkout.mjs';
 import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
+import { vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
+import { unsignedIssueMergePolicy } from './reviewer.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
@@ -86,6 +88,7 @@ export function reviewPendingPath(dir, pr, repo) {
 
 export function buildReviewPendingTicket({
   pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source, repo,
+  mergePolicy, mergeReason,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
@@ -114,6 +117,23 @@ export function buildReviewPendingTicket({
     if (!keyed.ok) return { ok: false, error: keyed.error };
     repoField = keyed.ownerName;
   }
+  const issueField = issue == null || String(issue).trim() === '' ? null : String(issue).trim();
+  const policyField = mergePolicy == null || String(mergePolicy).trim() === ''
+    ? null : String(mergePolicy).trim();
+  let reasonField = mergeReason == null || String(mergeReason).trim() === ''
+    ? null : String(mergeReason).trim();
+  if (policyField) {
+    if (policyField !== 'auto' && policyField !== 'manual') {
+      return { ok: false, error: `复审待办 mergePolicy 只认 auto|manual，实际 ${policyField}` };
+    }
+    if (!issueField && policyField === 'auto') {
+      return { ok: false, error: '无署名 issue 的复审待办不许 mergePolicy=auto' };
+    }
+    if (policyField === 'manual' && !reasonField) {
+      return { ok: false, error: '复审待办 m=manual 必须给 mergeReason' };
+    }
+    if (policyField !== 'manual') reasonField = null;
+  }
   return {
     ok: true,
     ticket: {
@@ -123,7 +143,7 @@ export function buildReviewPendingTicket({
       head: { name: name || null, oid: oid || null },
       workerWorktree: workerWorktree && String(workerWorktree).trim() ? String(workerWorktree).trim() : null,
       reviewer: String(reviewer).trim(),
-      issue: issue == null || String(issue).trim() === '' ? null : String(issue).trim(),
+      issue: issueField,
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
@@ -131,6 +151,7 @@ export function buildReviewPendingTicket({
       error: error ? String(error) : null,
       source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
+      ...(policyField ? { mergePolicy: policyField, mergeReason: reasonField } : {}),
     },
   };
 }
@@ -193,8 +214,122 @@ export function listReviewPending(dir) {
   return { ok: true, unscanned: false, scanned: tickets.length, tickets };
 }
 
-/** 上限默认值。2026-09-07 实测 gptpool 单腿同时活得下来约 3 个；可用 DAO_REVIEWER_CAP 覆盖。 */
-export const DEFAULT_REVIEWER_CAP = 3;
+/**
+ * 上限兜底值。**只在没有任何有限渠道约束时用**（见 resolveReviewerCap）。
+ *
+ * 原先这里写死 3，注释说「2026-09-07 实测 gptpool 单腿同时活得下来约 3 个」。那次实测的前提
+ * 今天全没了：gptpool / pqapi / windsurf 的执行档都已 `enabled:false`，在役审官只剩
+ * `xai-native`（路由表「不限」）和 `mirasim-relay`（路由表 5），一条都不过网关。
+ * 拿网关时代的数字限 ACP 直连时代的并发，是 memory `hand-typed-constant-will-be-wrong` 的原样复发。
+ *
+ * 有限渠道上限始终是最终上界：合同是 1 就不能为了保底再开第 2 条去撞 429。
+ */
+export const REVIEWER_CAP_FLOOR = 2;
+
+/**
+ * 审官并发上限 = min(机器核数, **本轮实际会用的审官**所落渠道里最严的一条上游合同)。
+ *
+ * 两层各管各的：机器那层管「本机同时开得起几个会话」，渠道那层管「上游账号合同容许几条」。
+ * 把两层压成一个手打常量，就是任何一层变了都没人知道要改哪个数。
+ *
+ * **渠道那层只数本轮票真正会用的审官**（票上那位，或同厂有效 fallback），不许：
+ *   · 拿整张容量表取严——不在役的腿会把在役的活拖死（2026-09-14 第一版，算出 2）；
+ *   · 拿全部可用候选取严——队列用不到的那条 cap=1 腿会把整队压死。
+ *
+ * **有限渠道上限始终是最终上界**。保底只在没有任何有限渠道约束时生效——
+ * `channelOf() => 1` 必须回 1，不许被保底抬成 2（两层取严的本意；抬上去会重演 429）。
+ *
+ * **`DAO_REVIEWER_CAP` 只收紧、不放宽**，而且必须从这里走。它原先在 `dao.mjs` 里是一条
+ * 平级分支（`env ? env : resolveReviewerCap(...)`），整段渠道取严被绕过去——
+ * 队列实际落在 cap=1 的渠道时 `DAO_REVIEWER_CAP=8` 仍会拉 8 张，造出一批必被渠道闸拒绝的
+ * 启动尝试，跟「有限渠道上限始终是最终上界」正面矛盾（#1265 审官判红第 1 条）。
+ * 这个逃生口的用途是人手临时**压**并发，不是抬过上游合同——所以它跟前两层一起取严。
+ * 接在参数上而不是留在调用方：留在调用方，下一个调用点还会再写一遍那条平级分支。
+ *
+ * @param cores       本机核数（admission.cores）；读不到传 null
+ * @param reviewerIds 本轮实际会用的审官 id（reviewerIdsForCap 的产物）；读不到传 null
+ * @param channelOf   审官 id → 有限渠道上限（认不出 / 不限回 null 或 Infinity）
+ * @param envCap      人手逃生口（DAO_REVIEWER_CAP 的原文）；非正整数 = 没给，不参与
+ * @returns 正整数上限
+ */
+export function resolveReviewerCap({ cores = null, reviewerIds = null, channelOf = null, envCap = null } = {}) {
+  // 一条规则管到底：环境变量到手就是字符串，parseInt 是它一直以来的读法（`2.5` 读成 2，只会更严）。
+  // 数字与字符串走同一条，免得同一个值从两个入口进来得出两个上限。
+  const env = Number.parseInt(String(envCap ?? ''), 10);
+  const byEnv = Number.isInteger(env) && env > 0 ? env : null;
+  const resolved = resolveReviewerCapWithoutEnv({ cores, reviewerIds, channelOf });
+  // 只收紧：取严之后仍可能被逃生口压得更低，但永远不会被它抬高。
+  return byEnv == null ? resolved : Math.min(byEnv, resolved);
+}
+
+function resolveReviewerCapWithoutEnv({ cores = null, reviewerIds = null, channelOf = null } = {}) {
+  const byMachine = Number.isInteger(cores) && cores > 0 ? cores : null;
+  let byChannel = null;
+  const ids = Array.isArray(reviewerIds) ? reviewerIds : null;
+  if (ids && ids.length > 0 && typeof channelOf === 'function') {
+    for (const id of ids) {
+      let cap = null;
+      try { cap = channelOf(id); } catch { cap = null; }
+      // null / Infinity = 「不限」或认不出渠道，不拿它去收紧别人；
+      // 只有显式有限值才参与取严（「不限」是用户对这条渠道的已验证结论）。
+      if (!Number.isFinite(cap) || cap <= 0) continue;
+      byChannel = byChannel === null ? cap : Math.min(byChannel, cap);
+    }
+  }
+  const channelBound = Number.isInteger(byChannel) && byChannel > 0 ? byChannel : null;
+  if (channelBound != null) {
+    if (Number.isInteger(byMachine) && byMachine > 0) return Math.min(byMachine, channelBound);
+    return channelBound;
+  }
+  if (Number.isInteger(byMachine) && byMachine > 0) return Math.max(REVIEWER_CAP_FLOOR, byMachine);
+  return REVIEWER_CAP_FLOOR;
+}
+
+/**
+ * 票上那位若已不在可用顺位，换成同厂第一个能起的。没依据就不换。
+ * 与 planReviewPendingDrain 同一把尺——cap 与 drain 换人必须看同一位审官。
+ */
+export function effectiveReviewerOf(ticket, usableReviewers) {
+  const named = String(ticket?.reviewer ?? '').trim();
+  if (!named) return { reviewer: null, switched: false };
+  const order = Array.isArray(usableReviewers) ? usableReviewers.map(String) : null;
+  if (!order || order.length === 0 || order.includes(named)) {
+    return { reviewer: named, switched: false };
+  }
+  const fam = vendorFamilyOf(named);
+  const next = order.find((id) => fam && vendorFamilyOf(id) === fam) || null;
+  if (!next) return { reviewer: named, switched: false };
+  return { reviewer: next, switched: true, switchedFrom: named };
+}
+
+/**
+ * 本轮拉取该按哪些审官算渠道约束。
+ *
+ * 只数票上的 reviewer（或同厂有效 fallback），不数「可用但本轮用不到」的候选。
+ * 一个 cap=1 的未使用候选若参与取严，会把 cap=5 的整队拖死。
+ */
+export function reviewerIdsForCap(tickets, usableReviewers) {
+  const ids = [];
+  const seen = new Set();
+  if (!Array.isArray(tickets)) return ids;
+  for (const t of tickets) {
+    const picked = effectiveReviewerOf(t, usableReviewers);
+    const id = picked.reviewer;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 没传 cap 时的每轮拉取预算，不是上游容量。上游容量走渠道闸 + 负载准入。
+ * 旧值 3 来自已退役的 gptpool（2026-09-07：第 4 个 at capacity）。
+ * 2026-09-14 实测 grok-4.6 / composer-2.5 短并发 6/6、零容量拒绝；
+ * 8 = 实测 6 + 2 余量。DAO_REVIEWER_CAP 仍可覆盖。
+ * 生产路径走 resolveReviewerCap，不要拿这个常量当默认上限。
+ */
+export const DEFAULT_REVIEWER_CAP = 8;
 
 /**
  * 按资源拉取（#1125，2026-09-07 用户拍板）：队列里有多少张不重要，**能同时跑几个审官**才重要。
@@ -202,9 +337,8 @@ export const DEFAULT_REVIEWER_CAP = 3;
  * 用户的话：「工人做好不要自己去开 PR 唤起审官，让中间态、看门狗或者帅位去根据资源调度」。
  * 生产端（工人）不该决定消费端并发——工人跑得快是净收益，压它是白扔算力；该管的是拉取这一侧。
  *
- * 上限的由来是量出来的，不是拍的：`gptpool` 现在只剩一条能用的腿（pqapi 两条熔断，
- * 只剩 Windsurf luna），2026-09-07 实测同时活得下来约 3 个，起第 4 个就成片
- * `Selected model is at capacity`。所以 cap 是**上游腿容量**，不是机器资源。
+ * 这是每轮拉取预算，不是上游容量。上游容量走渠道闸（startSession）和负载准入。
+ * gptpool=3 已退役，不要再拿那条死腿的实测当全局硬顶。
  *
  * @param tickets       队列里的票（listReviewPending().tickets）
  * @param liveReviewers 在役审官会话数；null/非数 = 没查成
@@ -386,7 +520,64 @@ export function countLiveReviewers({ records, sessions } = {}) {
   return { ok: true, unscanned: false, count: live.length, live };
 }
 
-export function planReviewPendingDrain(ticket) {
+/**
+ * 待审票上的 merge-policy → reviewer-create 旗标。
+ *
+ * 无署名 issue（快路）取不到 human_holds：票上没写也要注入 m=manual。
+ * 旧票没有 mergePolicy 字段时走同一分支，不许退回 auto（PR #1286 审官红项）。
+ * auto 不传旗标——有署名单仍让 reviewer-create 自己从账本恢复。
+ */
+export function mergePolicyDrainArgv(ticket = {}) {
+  const unsigned = ticket.issue == null || String(ticket.issue).trim() === '';
+  let policy = ticket.mergePolicy == null || String(ticket.mergePolicy).trim() === ''
+    ? null : String(ticket.mergePolicy).trim();
+  let reason = ticket.mergeReason == null || String(ticket.mergeReason).trim() === ''
+    ? null : String(ticket.mergeReason).trim();
+  if (unsigned) {
+    if (policy === 'auto') {
+      return { ok: false, error: '无署名 issue 的待办不许 mergePolicy=auto' };
+    }
+    const fallback = unsignedIssueMergePolicy();
+    policy = policy || fallback.mergePolicy;
+    reason = reason || fallback.mergeReason;
+  }
+  if (policy === 'manual') {
+    if (!reason) return { ok: false, error: '待办 m=manual 缺理由' };
+    return { ok: true, argv: ['--merge-policy', 'manual', '--merge-reason', reason] };
+  }
+  if (!policy || policy === 'auto') return { ok: true, argv: [] };
+  return { ok: false, error: `待办 mergePolicy 只认 auto|manual，实际 ${policy}` };
+}
+
+/**
+ * 票 → drain 计划。
+ *
+ * `usableReviewers`（可选）是「现在起得来的审官顺位」——由调用方从
+ * `reviewerSelectOrder` × 执行目录可用性算好传进来（本模块零 IO，不自己读目录）。
+ *
+ * 传了它，这里才敢动票上的审官：**票上那个起不来时，顺位往后取第一个能起的**，
+ * 并把「换了谁、为什么换」原样报出去（`switchedFrom` / `switchWhy`）。
+ *
+ * 为什么需要这一步（2026-09-14 实咬）：票在**写的那一刻**就把审官写死了
+ * （`buildReviewPendingTicket` 的 reviewer 是必填）。那一档后来死了（执行目录
+ * `availability=unverified`），新选的审官会被顺位表剔掉，**读票这条路却完全不看它**——
+ * 于是每 20 分钟拿同一个必败的模型去起一次，试满 3 次打「卡死/自动化认输」。
+ * 现场：#1225 #1216 两张票连续 5 轮没动，drain 报
+ * 「execution profile unverified: codex-relay-gpt-5.6-sol」，而指挥官每轮日志里
+ * 「审官顺位：剔掉 3 位……gpt-5.6-sol：availability=unverified」写得清清楚楚。
+ *
+ * 三条底线：
+ *   · 票上那个**能用**就一个字都不改（票是事实，不许无端改写）；
+ *   · **没给顺位表**（没查成）时一个字都不改——没有依据的换人是猜；
+ *   · 顺位**全都不能起**时照旧失败，不许退回到「那就用第一个」（那正是本单要治的病）。
+ *
+ * 换人只换**同厂**的（2026-09-14 实咬，我自己撞的）：第一版无脑取顺位第一个能起的，
+ * 而当前可用顺位是 [luna/gpt, grok-4.6/grok]——于是票上写着 luna 时被换成 grok，
+ * 当场被 `assertReviewerSeat` 拒：「审官位只许同厂换顺位」。**读票侧的换人不能越过审官位那条闸**，
+ * 它只是「同一位子换个起得来的同厂备选」。顺位里没有同厂备选 ⇒ 不换，照原样失败并如实报，
+ * 让 `reviewer-down` 走到帅位面前——那是一条人看得见的出路，猜一个会拒的值不是。
+ */
+export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
   if (ticket == null) {
     return { ok: false, unscanned: true, error: '待办没拿到（没查成）' };
   }
@@ -395,9 +586,18 @@ export function planReviewPendingDrain(ticket) {
   }
   const pr = String(ticket.pr ?? '').trim();
   const worktree = String(ticket.workerWorktree ?? '').trim();
-  const reviewer = String(ticket.reviewer ?? '').trim();
   if (!pr) return { ok: false, error: '待办缺 pr' };
+  const picked = effectiveReviewerOf(ticket, usableReviewers);
+  let reviewer = picked.reviewer;
   if (!reviewer) return { ok: false, error: '待办缺 reviewer' };
+  let switchedFrom = null;
+  let switchWhy = null;
+  if (picked.switched) {
+    // 只在**同厂**里换：跨厂换人是 assertReviewerSeat 的例外（要有满载/看门狗死因凭证），
+    // 读票侧拿不出那个凭证，换出来的值必被拒——换了个必拒的值等于没修。
+    switchedFrom = picked.switchedFrom;
+    switchWhy = `票上写的审官 ${picked.switchedFrom} 现在起不来（不在可用顺位里），按顺位改用同厂备选 ${reviewer}`;
+  }
   // 审官统一走 mirasim（2026-09-06 切流量第二步）。
   //
   // 原来这里按「票上有没有工人树」分两条路：有树 attach 到那棵树，没树才 create。
@@ -413,6 +613,9 @@ export function planReviewPendingDrain(ticket) {
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
   if (ticket.repo) argv.push('--repo', String(ticket.repo));
+  const policyArgv = mergePolicyDrainArgv(ticket);
+  if (!policyArgv.ok) return { ok: false, error: policyArgv.error };
+  argv.push(...policyArgv.argv);
   return {
     ok: true,
     verb: 'reviewer-create',
@@ -423,11 +626,33 @@ export function planReviewPendingDrain(ticket) {
     // 票上的工人树只做记录：mirasim 审官不挂在它上面，但排障时要知道活干在哪
     worktree: worktree || null,
     reviewer,
+    ...(switchedFrom ? { switchedFrom, switchWhy } : {}),
   };
 }
 
-export function consumeReviewPending({ dir, ticket, attach } = {}) {
-  const plan = planReviewPendingDrain(ticket);
+/**
+ * 把 reviewer-create 子进程的 spawn 结果收成 attach 回执。
+ * 无 JSON / 超时 / 非零退出时，error 必须是完整 stderr/error——这串会进 drain 账当比较键
+ * （consumeReviewPending 包一层「reviewer-attach 失败：」之后，applyDrainLedger / foldFailureStreak 逐字比）。
+ * 人读摘要截字不在这里做。
+ */
+export function attachReceiptFromSpawn(spawned = {}) {
+  let json = null;
+  try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
+  if (spawned.error || (spawned.status !== 0 && spawned.status != null) || spawned.signal || !json || json.ok !== true) {
+    const structured = json && json.error != null && json.error !== '' ? json.error : null;
+    const fallback = String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`);
+    return {
+      ok: false,
+      error: structured == null ? fallback : (typeof structured === 'string' ? structured : String(structured)),
+      json,
+    };
+  }
+  return { ok: true, json };
+}
+
+export function consumeReviewPending({ dir, ticket, attach, usableReviewers } = {}) {
+  const plan = planReviewPendingDrain(ticket, { usableReviewers });
   if (!plan.ok) return { ...plan, pr: ticket?.pr || null };
   if (typeof attach !== 'function') {
     return { ok: false, unscanned: true, error: 'drain 没拿到 attach 执行器（没查成）', pr: plan.pr };
@@ -466,7 +691,7 @@ export function consumeReviewPending({ dir, ticket, attach } = {}) {
   return { ok: true, pr: plan.pr, plan, attached };
 }
 
-export function drainReviewPending({ dir, tickets, attach } = {}) {
+export function drainReviewPending({ dir, tickets, attach, usableReviewers } = {}) {
   let listed = tickets;
   if (!Array.isArray(listed)) {
     const scan = listReviewPending(dir);
@@ -483,15 +708,30 @@ export function drainReviewPending({ dir, tickets, attach } = {}) {
   }
   const results = [];
   for (const t of listed) {
-    results.push(consumeReviewPending({ dir, ticket: t, attach }));
+    results.push(consumeReviewPending({ dir, ticket: t, attach, usableReviewers }));
   }
   const failed = results.filter(r => !r.ok);
+  // #1239：顶层 error 必须带上**第一张失败票的真因**。
+  //
+  // 原先只有失败计数，`dao.mjs` 那侧 `fail(drained.error || '未全部成功', drained)`
+  // 取不到 error 字符串 → 只能印兜底文案。于是真因（`execution profile unverified:
+  // codex-relay-gpt-5.6-sol` 这类）躺在 results[].error 里没人读，日志里只剩一句
+  // 「未全部成功」——7 天里 23 次。这是「错误在传递中丢失」，不是「错误没发生」：
+  // 读日志的人据此查不出任何东西（#1233 / #1237 的同一族）。
+  //
+  // 取第一条而非拼接：认输/重试判据只读首行（judgeRetry / exhaustedComment 都取首行），
+  // 拼一长串反而会把判据要的那句挤掉。
+  //
+  // 这一串会经 drainPayloadOf / applyDrainLedger 进比较键：完整原文，不 trim。
+  // 首尾空白也是原文（`gate refused\n` ≠ `gate refused`）；长度限制只留人读摘要层。
+  const firstError = failed.length ? String(failed[0].error || failed[0].why || '') : '';
   return {
     ok: failed.length === 0,
     unscanned: false,
     scanned: listed.length,
     drained: results.filter(r => r.ok).length,
     failed: failed.length,
+    ...(firstError ? { error: failed.length > 1 ? `${firstError}（共 ${failed.length} 张失败）` : firstError } : {}),
     results,
   };
 }

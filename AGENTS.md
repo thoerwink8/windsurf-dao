@@ -2,35 +2,6 @@
 
 GitHub Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792）。身份由网关固定 `dao-marshal[bot]`，不许裸 `gh issue create|comment|close|edit`，不许自选 token。幂等账与审计落 `~/.dao/issue-gateway`（不进 git）。
 
-## 提问必须标推荐位
+Codex / 跨执行体常驻：改动在 git worktree 里做；交卷前跑 `node scripts/dao-check.mjs`；commit 前缀按执行体（`[codex]` / `[cc]` / `[grok]` / `[pi]`）；出问题先回退。细则：`CLAUDE.md`。提问标推荐位：`host/skills/ask-gate/SKILL.md`。怎么跑测试：`README.md`。
 
-每次 `AskUserQuestion`（以及同等的多选提问）三处都要写，不是三选一：
-
-1. **标题**：写明推荐哪一条，人扫一眼就知道荐什么。
-2. **选项**：推荐项放第一项，label 末尾写 `(Recommended)`。
-3. **介绍**：用大白话讲来龙去脉——今晚怎么走到这一问、为什么荐这条。不许只甩术语，也不许只写「我推荐第一项」。
-
-反例：选项有 `(Recommended)` 但介绍全是内部词；或推荐只写在聊天里、题干/标题没有。
-
-## Cursor Cloud specific instructions
-
-这是一个**纯 Node.js 工具仓**：没有 `package.json`、没有 `node_modules`、无第三方依赖（所有 import 都是 `node:` 内置模块）。只要 Node ≥ 20.11（CI 用 22，云 VM 已装 22）即可跑，**无需 `npm install`**——更新脚本因此是空跑。
-
-- **跑「应用」（自检）**：`node scripts/dao-check.mjs`，退出码 0 = 环境健康。它自发现并逐套跑 `tests/*.test.js`，外加脱敏 / skill / git 等关卡。
-- **跑测试**：`node --test tests/*.test.js`。**别用 `node --test tests/`**（Node 24 会把 `tests/` 当模块报 MODULE_NOT_FOUND，见 README）。单套复现：`node --test tests/<name>.test.js`。
-- **「lint」**：本仓没有传统 linter；等价物是密钥扫描 `node scripts/dao-redact.mjs --scan <路径>`（命中即 exit 1）与上面的 `dao-check.mjs`。
-
-### 云 Linux VM 上「注定红/跳过」的项（非代码回归，别去修）
-
-`dao-check.mjs` 和完整测试套是给**操作者本机**（Claude `~/.claude/skills` 软链、`~/.dao` 账本、带 issues 权限的 gh）设计的；CI 也跑在 `windows-latest`。在干净的云 Linux VM（仓库 checkout 在 `/workspace`）上，以下红/跳过是环境差异造成的，**改代码解决不了**：
-
-- `dao.test.js`：`真实目录+git：pi 假活 → fake-alive`（用 `powershell` 回填文件时间戳，Linux 无 powershell）。orca CLI 已退役，live `--help` 自检不再当现役红。
-- `ledger.test.js`：`resolveMainWorktreeRoot 认出本仓主树`（断言 checkout 目录名以 `windsurf-dao` 结尾，云上是 `/workspace`）。
-- `dao-check.mjs` 另会红「态注入 hook 一个装载面都没点到（无 `~/.claude/skills` 软链）」「账本断流（无 `~/.dao` 历史账本）」，并把依赖 `gh issue list` 的项标 SKIP（云上 gh token 无 issues 权限）。飞书群有效性无实机映射（`~/.mirasim/keys/feishu-groups.json`）/ 无 lark-cli / 无凭据 → SKIP（不是绿）。
-
-判断真回归：先在**未改动**基线上 `node --test tests/*.test.js`，只有上述 3 条 leaf 红（会连带 2 个父套 + 顶层套共约 6 条）；多出的红才是你引入的。
-
-### 坑
-
-- `scripts/event-write.mjs` 的 `--dir` 是**相对仓库根**解析，不是相对 cwd——相对路径会写进 `/workspace/ledger/` 污染工作树。测试/演示写事件请给**绝对路径**。
-- 工人跑 git 前建议 `git config core.editor true` + `git config core.pager cat`（NEW-MACHINE §8b），避免 `git commit`（无 `-m`）/`rebase --continue` 拉起编辑器挂死。
+本文件是 Codex 项目指令入口，只放跨执行体必须常驻的规则和指针。体积大的 Cursor Cloud / 云 VM 红项说明已迁出，不要搬回来。

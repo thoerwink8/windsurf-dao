@@ -25,9 +25,16 @@
 
 ## 开工前
 
-被审对象 = PR 的最新 HEAD 与 diff：`gh pr view <p= 的 PR号> --json headRefName,headRefOid` 反查，路径从 PR JSON 取，不手抄。
-**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；`gh pr view` 拿不到 PR = 没查成，报出来，不许审空气。
+被审对象 = PR 的最新 HEAD 与 diff（**读也要走封装**）：
+`node scripts/gh-as.mjs reviewer -- pr view <p= 的 PR号> --json headRefName,headRefOid,mergeable,files`。
+**PR 已经存在你才开工**（士兵开完 PR、转正式后才轮到你）；上面这条读不到 PR = 没查成，报出来，不许审空气。
 审查质量标准与判绿前必核清单：`host/skills/dispatch/review-standard.md`，逐条打勾，缺一不许绿；本框架不复制。
+
+> **读 PR 也必须走 `gh-as.mjs reviewer`，不许裸 `gh`。** 你跑在 mirasim 服务端里，那个 unit 设了
+> `GH_CONFIG_DIR=/var/empty`（挡 `~/.config/gh` 的个人登录），所以裸 `gh pr view` 必然报「没有凭据」——
+> 而那不是 GitHub 或网络的问题，是绕过了封装。2026-09-13 实咬：本页第 28-29 行原先教的就是裸 `gh pr view`，
+> 于是每个审官开工第一步就读不到 PR、当场停手报「没查成」——写操作包了封装、读操作没包，是同一件事的两半。
+> `gh-as.mjs` 用 GitHub App 的 token，不读 hosts.yml，在同一个空配置目录下**实测正常**。
 
 > 你跑在 mirasim 会话里，**绝对不删任何树**——归档收树是收口官/帅的机械动作。
 
@@ -46,10 +53,19 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 
 缺凭据会报「这台机器没装」——那是没查成，不许改走本人 `gh` 装成交过卷。
 
-- **红**（有要返工的项）：走 `--request-changes`，正文把每条的**位置 / 问题 / 期望**写清。
-  士兵读 PR 的 review 状态就知道被打回——**mirasim 路径不用 `notify` 打红项到 dispatch**（没有 dispatch），
+- **红**（有要返工的项）：走 `--request-changes`，正文把每条的**位置 / 问题 / 期望**写清，
+  **每条前面必须标级别 `P1`/`P2`/`P3`**（判据与档位见 `review-standard.md`「红项分级」节）。
+  - **P1 = 挡住合并**（行为错、安全/竞态、假证据、缺第 8/9/10 条必答段、判别实验没跑）：本 PR 必须修完。
+  - **P2 = 不挡合，但必须当场落单**：你开 follow-up 单（走 `scripts/issue-gateway.mjs`），
+    把单号写进正文 `另单：#NNNN` 行。只写「建议以后修」不落单 = 那条按 P1 处理。
+  - **P3 = 不挡不追**：命名、措辞、可选重构、纯知识分享。
+  - **不标级别 = 按 P1 处理**（防呆）。能用 GitHub `suggestion` 块的 P2/P3 就用它——士兵一键 Apply，往返最省。
+  - 士兵读 PR 的 review 状态就知道被打回——**mirasim 路径不用 `notify` 打红项到 dispatch**（没有 dispatch），
   红项写进 GitHub review 正文即送达。**不要自己拼 `task-create` / `worker-start` 开下一跳救人**。
 - **判绿**：`--approve` 落到 GitHub 即收尾。**不许自己合**（指挥官当轮 squash；落后 ≠ 冲突，不要为对齐 master 再审一轮）。
+  - 判绿前核一遍：正文里标了 `另单：#NNNN` 的那些**单是不是真存在**——P2 挂了单才算数。
+  - **已到 `review_rounds_max` 轮**（见 `docs/release-policy.json`）还要判红时，不许再写「请修 P2」：
+    二选一 —— **① 改判**（剩下的真 P1 之外重新分档，P2 落单，判绿）或 **② 拆单**（把剩下的 P1 切出去成新单，当前这块先合）。
   - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。
   - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
     `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
@@ -72,6 +88,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 - 拿不到就报出来：`gh-as` / `gh` 命令失败、凭据缺失（「这台机器没装」）、文件读不到、PR 读不到，一律**报出来并升级**，
   不许编造红项 / 执行证据（#541 假审教训：审空气 + 编行号）。
 - 问帅：mirasim 会话里问帅 = 直接在回复正文提问，帅经 `interact` 答（**不要调 `dao.mjs ask`**——那走 orchestration，mirasim 会话没有 Run）。提问即停手等答。
+- **不得改被审代码后再批准**（2026-09-16 补，#1308 实咬）：改了码然后自批，只能靠第二个独立会话才确认代码没问题——那一次两轮审查其实是一轮。要改就交出批准资格：改成建议（`suggestion` 块），或改完明确由另一条独立审查复核。
 - 乒乓两轮仍红才上帅（换人信号，既有规矩不改）。
 - 查这张单在网关花了多少：按 `dao_task` 查（怎么查见 ai-gateway-stack #3）。
 - 判绿前必核清单（headRefOid 对树、真跑检查、判别性实验、基线在改动之外……）：`host/skills/dispatch/review-standard.md`，逐条打勾，缺一不许绿。

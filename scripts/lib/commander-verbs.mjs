@@ -16,6 +16,12 @@
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { ROLES } from './gh.mjs';
 import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
+// #1236：判据版本。**定义在这里**（不在 commander-core）——drainLedgerKey 也在这文件，
+// 而 commander-core → commander-verbs 是单向依赖，写在 core 会绕成环。
+import { retryEpoch, stampRetryKey } from './retry-epoch.mjs';
+// #1237：失败分类（terminal / retryable / unknown）——判据在那边，这里只消费。
+// 行为 streak（judgeRepeatedFailure）也在那边：词表认不出的同一闸拒，靠「连着一模一样」拦。
+import { judgeRetry, judgeRepeatedFailure, foldFailureStreak } from './retry-verdict.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -44,6 +50,8 @@ export const CHECKS = {
   'retry-drain.pr': true,
   'retry-drain.queue': true,
   'retry-drain.attempted': true,
+  'retry-drain.stale-head': true,
+  'retry-drain.hopeless': true,
   'retry-drain.max-tries': true,
   'retry-drain.grace': true,
   'open-issue.reason': true,
@@ -321,15 +329,70 @@ export function validateRetryDrain(input = {}) {
   if (never) return never;
   const prevObj = prev && typeof prev === 'object' ? prev : { at: '', tries: 0 };
 
+  // 票上的 head 是**写票那一刻**的快照，只做记录（reviewer-create 的 expectedOid 另有来源，
+  // 见 planReviewPendingDrain / reviewer-mirasim.judgeReviewerHead）。而账本键
+  // `pr:<n>@<head>` 也钉在那个 head 上，于是「票头过期」会把整条重试链冻住：
+  // 工人推了新 head 之后旧票还在队列，重试每次都读同一格账、tries 只涨不换格，
+  // 试满 3 次就永久认输——而认输的判据（那个 head）早就不代表现场了。
+  //
+  // 2026-09-12 实咬：PR #1208 的票头停在 1fec6850，PR 已是 41a79e75；
+  // drain 账 pr:1208@1fec6850 tries=4，decide 每轮产一条 mark-exhausted，
+  // **本该叫的复审一次也没叫**——有出口的路被一张过期票堵死了。
+  //
+  // 票头 != 当前 head ⇒ 这票代表的那次重试已经无意义，它不是「试过了」，是「问错了对象」。
+  // 不烧名额：当场拒，让 decide 落回 rereview 分支按**当前 head** 重新写票。
+  const liveHead = typeof input.liveHead === 'string' && input.liveHead.trim() ? input.liveHead.trim() : '';
+  const ticketHead = typeof input.head === 'string' && input.head.trim() ? input.head.trim() : '';
+  const stale = gated(
+    'retry-drain.stale-head',
+    Boolean(liveHead) && Boolean(ticketHead) && ticketHead !== liveHead,
+    fail('stale-head',
+      `PR #${pr} 的复审票头 ${ticketHead.slice(0, 8) || '缺'} 与当前 head ${liveHead.slice(0, 8)} 对不上`
+      + `——票过期，不重试这张，按当前 head 重写`),
+    C,
+  );
+  if (stale) return stale;
+
   const graceMin = Number.isFinite(input.graceMin) ? input.graceMin : DRAIN_GRACE_MIN;
   const maxTries = Number.isFinite(input.maxTries) ? input.maxTries : MAX_DRAIN_TRIES;
   const tries = Number(prevObj.tries) || 0;
   const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : 0;
 
+  // #1237：先问「这个失败再试一次会不会不一样」。判据在 lib/retry-verdict.mjs，
+  // 不在这里写词表——这里只消费结论。
+  //
+  // 为什么这一条要在 max-tries **之前**：7 天日志 274 条错误里 54% 是不可试的
+  // （树/文件已经不在了、账本里根本没这条记录、执行目录判死）。对它们试满 3 次
+  // = 白等 3×45 分钟才见到人，而每一次都不可能成功。
+  // 一次就交人 vs 两小时后交人，差的不是效率，是「这张卡还活着吗」。
+  //
+  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError / sameErrorRounds）。
+  // 没记过原文 → verdict 为 unknown → 按可试处理（保守：宁可多试一次）。
+  // 词表认不出时，行为 streak 补上：同一原文连着 SAME_ERROR_ROUNDS_TO_STUCK 轮 = 再试还是它。
+  const verdict = judgeRetry({ error: prevObj.lastError });
+  const repeated = judgeRepeatedFailure(prevObj);
+  const hopelessNow = verdict.verdict === 'terminal' || repeated.stuck;
+  const hopelessWhy = verdict.verdict === 'terminal'
+    ? `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`
+    : `PR #${pr} 连着 ${repeated.rounds} 轮拿回一模一样的失败原文——当场交人：${prevObj.lastError || '（无原文）'}`;
+  const hopeless = gated(
+    'retry-drain.hopeless',
+    hopelessNow,
+    fail('hopeless', hopelessWhy,
+      {
+        escalate: true, tries,
+        retryVerdict: verdict.verdict === 'terminal' ? 'terminal' : verdict.verdict,
+        verdictWhy: verdict.verdict === 'terminal' ? verdict.why : repeated.why,
+        error: prevObj.lastError || null,
+      }),
+    C,
+  );
+  if (hopeless) return hopeless;
+
   const exhausted = gated(
     'retry-drain.max-tries',
     tries >= maxTries,
-    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries }),
+    fail('exhausted', `PR #${pr} 已试 ${tries} 次仍在队列——停手交人`, { escalate: true, tries, retryVerdict: verdict.verdict }),
     C,
   );
   if (exhausted) return exhausted;
@@ -356,6 +419,7 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
   const v = validateRetryDrain({
     pr: action.pr,
     head: action.head,
+    liveHead: opts.liveHead,
     queue: opts.queue,
     ledger: opts.ledger,
     nowMs: opts.nowMs,
@@ -422,19 +486,82 @@ export function openIssueDedupKey(reason, target) {
   return `${String(reason || '')}+${String(target || '')}`;
 }
 
+/**
+ * #1236：判据版本，进程内只算一次。
+ *
+ * 「只算一次」不是性能优化（137KB 哈希不到 5ms），是**一致性**：一个进程里有几十处建键，
+ * 必须用同一个版本号。若逐次重读文件，中途有人改了文件（派工链在跑的同时有人在 worktree
+ * 里提交）就会出现同一轮里两套键，账记到两个格子——正是 #909 那个形状。
+ * 缓存的是**值**不是**文件**，所以不存在「缓存何时失效」的问题：进程活多久就用多久。
+ */
+let EPOCH_CACHE = null;
+export function epochOf({ reload = false } = {}) {
+  if (!reload && EPOCH_CACHE) return EPOCH_CACHE;
+  EPOCH_CACHE = retryEpoch();
+  return EPOCH_CACHE;
+}
+
+// #1236：把 stampRetryKey 从本模块转出去（re-export），让 commander-core 只依赖
+// commander-verbs 这一个方向，不必为了一个纯函数再 import 一层（也就不会绕成环）。
+export { stampRetryKey };
+
+/** retry-epoch 的 stampRetryKey 包一层本进程的版本号，调用方不必自己取 epoch。 */
+export function stampedKey(base) { return stampRetryKey(base, epochOf().epoch); }
+
 /** drain 账本键：有 head 写 pr:<pr>@<head>，拿不到退回 pr:<pr>（没查成，不猜）。
  *  decide 与 execute 必须走这一个门面——#909 修了 decide 侧、漏了 attach-reviewer 写侧，
- *  账记到另一个格子，票还在队列却永远走不进 retry-drain。 */
-export function drainLedgerKey(pr, head) {
+ *  账记到另一个格子，票还在队列却永远走不进 retry-drain。
+ *  #1236：带判据版本——决定「drain 推不推得动」的代码变了，旧账自动作废（lib/retry-epoch.mjs）。 */
+/**
+ * 形态部分：`pr:<pr>@<head>`（拿不到 head 退回 `pr:<pr>`）。
+ * **常量、与判据版本无关**，给同步上下文（构造 fixture）用。
+ *
+ * 为什么拆出这一半：账本键会出现在测试的**同步** fixture 里（`sit()` 这种返回普通对象的
+ * 地方），那里 `await` 用不了。逼调用方去 await 一个纯拼字符串的函数，结果就是测试退回
+ * 手拼字面量——而手拼正是加判据版本那天静默失配的根源（测试假绿、生产卡死）。
+ */
+export function drainLedgerShape(pr, head) {
   const p = pr == null ? '' : String(pr).trim();
   const headOid = typeof head === 'string' && head.trim() ? head.trim() : null;
   return headOid ? `pr:${p}@${headOid}` : `pr:${p}`;
 }
 
+export function drainLedgerKey(pr, head) {
+  return stampedKey(drainLedgerShape(pr, head));
+}
+
+/**
+ * 同步建键门面：`{ rework, rereview, pump, drain }`，参数与对应的 Key() 函数一致。
+ *
+ * **这是给同步 context 用的**（fixture / 纯函数测试）：判据版本在**模块加载时**取一次，
+ * 于是每个键都是同步可算的普通字符串。生产侧不要在长跑的进程里用它——
+ * 那个进程应当在**每轮开头**取一次版本（`epochOf()`）并全程沿用，否则同一轮里两套键
+ * 会把账记到两个格子（#909 的形状）。
+ *
+ * 版本值本身是同一份：`epochOf()` 进程内只算一次，所以这里取到的与 Key() 函数取到的一致。
+ */
+export const retryKeysSync = {
+  rework: (pr, head) => stampedKey(`rework:${pr}@${head}`),
+  rereview: (pr, head) => stampedKey(`rereview:${pr}@${head}`),
+  pump: (pr) => stampedKey(`pump-draft:${pr}`),
+  drain: (pr, head) => stampedKey(drainLedgerShape(pr, head)),
+};
+
 /**
  * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
  * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
  */
+/**
+ * drain / 复审两条写路径共用的失败原文。完整原文，不 trim、不截行、不截字——
+ * `foldFailureStreak` 比的就是这一串；截过再比会把不同失败揉成同错。
+ */
+export function drainErrorText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const raw = payload.error != null && payload.error !== '' ? payload.error : payload.why;
+  if (raw == null || raw === '') return '';
+  return typeof raw === 'string' ? raw : String(raw);
+}
+
 export function applyDrainLedger({
   ledger = {}, pr, head, payload, nowIso, _checks,
 } = {}) {
@@ -442,10 +569,29 @@ export function applyDrainLedger({
   if (!verdict.countTry || pr == null) return { ledger, wrote: false, verdict };
   const key = drainLedgerKey(pr, head);
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
+  // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
+  // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
+  // 存完整原文交给 foldFailureStreak：截首行 / 截 400 字会把「前缀相同、后文不同」
+  // 两句失败揉成同一错（审官在 1f646efc 上实测 E×400+A vs E×400+B → hopeless）。
+  // 人读摘要走 exhaustedReasonText / exhaustedComment，不在比较键上截。
+  // 成功拉起审官才清零 streak；失败没原文则保留上一轮（没查成不算「一直是它」，也不当成功）。
+  const pulled = verdict.reason === 'pulled';
+  const err = drainErrorText(payload);
+  const streak = pulled
+    ? foldFailureStreak(prev, null)
+    : err
+      ? foldFailureStreak(prev, err)
+      : {
+          lastError: prev && typeof prev.lastError === 'string' ? prev.lastError : null,
+          sameErrorRounds: Number.isInteger(Number(prev?.sameErrorRounds)) ? Number(prev.sameErrorRounds) : 0,
+        };
   return {
     ledger: {
       ...(ledger && typeof ledger === 'object' ? ledger : {}),
-      [key]: { at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1 },
+      [key]: {
+        at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1,
+        ...streak,
+      },
     },
     wrote: true,
     verdict,
@@ -522,7 +668,10 @@ export function renderOpenIssueBody(input = {}) {
   if (!body.includes(v.original) || !body.includes(`- 原因：${v.reason}`)) {
     return fail('body-missing-source', '渲染丢了原文或 reason，不开');
   }
-  return { ok: true, body, title: `[待拍板] ${v.reason}${link ? '：' + link : ''}`, key: v.key, role: v.role };
+  // 标题不再带 `[待拍板] ` 前缀（#1240）：待拍板由 **label** 承载，前缀是同一件事的第二个
+  // 真相源，而它俩会不同步（人开的单只有 label；#1210 一度开出两道前缀）。
+  // 单里照样有 label（见上面 argv 的 --label），收件人靠 label 找它。
+  return { ok: true, body, title: `${v.reason}${link ? '：' + link : ''}`, key: v.key, role: v.role };
 }
 
 export function planOpenIssueCmd(action = {}, { repo, bodyPath } = {}) {

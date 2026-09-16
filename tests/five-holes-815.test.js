@@ -277,6 +277,14 @@ describe('#815 ① 复审待办队列 + drain', () => {
     assert.ok(drained.ok === false && drained.failed === 1 && drained.drained === 0,
       'drain 必须非零且不计入 drained → ' + JSON.stringify(drained));
     assert.ok(fs.existsSync(pendingPath), 'drain 失败后待办仍在');
+
+    // #1239：顶层 error 必须带出真因。原先只有计数，调用方（dao.mjs 的
+    // `fail(drained.error || '未全部成功')`）取不到字符串 → 日志里只剩兜底文案
+    // 「review-pending-drain 未全部成功」，7 天里 23 次，读的人据此查不出任何东西。
+    assert.ok(/删不掉|清理失败/.test(drained.error || ''),
+      '顶层 error 必须带上第一张失败票的真因 → ' + JSON.stringify(drained.error));
+    assert.ok(!/^review-pending-drain 未全部成功$/.test(drained.error || ''),
+      '不许退化成兜底文案（那等于没带）');
   });
 });
 
@@ -587,6 +595,89 @@ describe('复审待办：缺工人树走 reviewer-create（#884 实咬）', () =
   it('缺 reviewer 仍判失败（缺树不等于什么都能猜）', async () => {
     const S = await S_LOAD;
     assert.equal(S.planReviewPendingDrain({ pr: '901', workerWorktree: null, reviewer: '' }).ok, false);
+  });
+});
+
+// PR #1286 审官红项：快路 issue:null 票 drain 不带 manual 旗标，reviewer-create
+// 对 resolveReviewerMergePolicy({}) 回退 auto，存在自动合并风险。
+describe('快路无署名：manual 合门穿过待审票 → drain → reviewer-create', () => {
+  it('issue:null 旧票（没写 mergePolicy）drain argv 仍带 --merge-policy manual', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({
+      pr: '1286', workerWorktree: 'wt-1286', reviewer: 'gpt-5.6-luna',
+    });
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    assert.equal(plan.argv[plan.argv.indexOf('--merge-policy') + 1], 'manual', plan.argv.join(' '));
+    const reason = plan.argv[plan.argv.indexOf('--merge-reason') + 1];
+    assert.match(String(reason), /human_holds/);
+    assert.equal(plan.argv.includes('auto'), false, plan.argv.join(' '));
+  });
+
+  it('有署名单的票不擅自加 manual 旗标（仍让 reviewer-create 从账本恢复）', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({
+      pr: '884', workerWorktree: null, reviewer: 'gpt-5.6-luna', issue: '880',
+    });
+    assert.deepEqual(plan.argv, [
+      'reviewer-create', '--pr', '884', '--reviewer', 'gpt-5.6-luna',
+      '--executor', 'mirasim', '--issue', '880',
+    ]);
+  });
+
+  it('票上写了 manual → drain 原样穿过，reviewer-create 解析后不得 fallback auto', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1286',
+      workerWorktree: 'wt-1286',
+      reviewer: 'gpt-5.6-luna',
+      issue: null,
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+      mergePolicy: 'manual',
+      mergeReason: S.UNSIGNED_ISSUE_MERGE_REASON,
+    });
+    assert.equal(built.ok, true, JSON.stringify(built));
+    assert.equal(built.ticket.mergePolicy, 'manual');
+    const plan = S.planReviewPendingDrain(built.ticket);
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    const parsed = S.parseArgs(['node', 'scripts/dao.mjs', ...plan.argv]);
+    assert.equal(parsed.verb, 'reviewer-create');
+    assert.equal(parsed.pr, '1286');
+    assert.equal(parsed.mergePolicy, 'manual');
+    assert.match(String(parsed.mergeReason), /human_holds/);
+    assert.equal(parsed.issue, undefined);
+    const resolved = S.resolveReviewerMergePolicy({
+      explicitPolicy: parsed.mergePolicy,
+      explicitReason: parsed.mergeReason,
+      ledger: { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' },
+      comment: { mergePolicy: null, mergeReason: null },
+      issue: parsed.issue ?? null,
+    });
+    assert.equal(resolved.ok, true, JSON.stringify(resolved));
+    assert.equal(resolved.mergePolicy, 'manual');
+    assert.equal(resolved.source, 'flag');
+    assert.notEqual(resolved.mergePolicy, 'auto');
+    const books = (await import('file://' + path.join(REPO, 'scripts/lib/dispatch/reviewer-mirasim.mjs').replace(/\\/g, '/'))).buildMirasimReviewerPrompts({
+      pr: parsed.pr,
+      issue: parsed.issue ?? null,
+      soldierDispatchId: '',
+      policyPlan: resolved,
+      render: S.buildReviewerInject,
+    });
+    assert.equal(books.ok, true, JSON.stringify(books));
+    assert.equal(books.mergePolicy, 'manual');
+    assert.match(books.prompt, /m=manual/);
+    assert.doesNotMatch(books.prompt, /m=auto/);
+  });
+
+  it('无署名票写 mergePolicy=auto 当场拒', async () => {
+    const S = await S_LOAD;
+    const built = S.buildReviewPendingTicket({
+      pr: '1286', workerWorktree: 'wt', reviewer: 'gpt-5.6-luna',
+      source: S.REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
+      mergePolicy: 'auto',
+    });
+    assert.equal(built.ok, false);
+    assert.match(String(built.error), /不许 mergePolicy=auto/);
   });
 });
 

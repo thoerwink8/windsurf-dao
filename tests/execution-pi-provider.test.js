@@ -5,8 +5,10 @@ const lib = import('../scripts/lib/execution-pi-provider.mjs');
 const NOW = Date.parse('2026-09-09T16:00:00Z');
 const TEST_CREDENTIAL = 'native-test-value';
 
-function setup(provider = 'deepseek') {
-  const baseUrl = provider === 'deepseek' ? 'https://api.deepseek.com' : 'https://opencode.ai/zen/go/v1';
+// deepseek 直连渠道 2026-09-15 已删（用户拍板），原生 pi 只剩 opencode-go 一家。
+// 夹具因此不再写死 .deepseek，改用 s.provider 取键——再删一家时这里不用跟着改。
+function setup(provider = 'opencode-go') {
+  const baseUrl = 'https://opencode.ai/zen/go/v1';
   const p = { id: `${provider}-direct`, backend: 'mirasim', agent: 'pi', model: 'deepseek-v4-flash', route: 'local', provider, nativeProviderId: provider, agentModel: `${provider}/deepseek-v4-flash`, accountPoolId: `${provider}-pool`, enabled: false, availability: { status: 'unverified' } };
   const files = new Map([
     ['/fiction/.pi/agent/auth.json', { [provider]: { type: 'api_key', key: 'native-test-value' }, gw: { type: 'api_key', key: 'group-test-value' } }],
@@ -37,7 +39,7 @@ function success(request, mutate = () => {}) {
 
 test('prepares both genuine Pi provider/model selectors, local route, original account pool and no secret', async () => {
   const { preparePiDirectLaunch } = await lib;
-  for (const id of ['deepseek', 'opencode-go']) {
+  for (const id of ['opencode-go']) {
     const { p, options, files } = setup(id), before = JSON.stringify([...files]);
     const r = preparePiDirectLaunch(p, { workdir: '/task', prompt: 'Inspect files', model: 'deepseek-v4-flash', apiKey: 'must-not-forward' }, options);
     assert.equal(r.ok, true); assert.equal(r.launchSpec.model, `${id}/deepseek-v4-flash`);
@@ -53,20 +55,22 @@ test('prepares both genuine Pi provider/model selectors, local route, original a
 
 test('rejects foreign providers, opaque models, prefix/route/model overrides and arbitrary key references', async () => {
   const { preparePiDirectLaunch } = await lib;
-  for (const patch of [{ nativeProviderId: 'gw' }, { provider: 'reseller' }, { route: 'cloud' }, { backend: 'acp' }, { model: 'deepseek/v4-flash' }, { model: 'flash*' }, { agentModel: 'gw-dspool/deepseek-v4-flash' }]) {
+  // 第一条是删渠道的正控：deepseek 以前是在册原生 provider，现在必须被拒。
+  // 它要是又能过，说明 NATIVE 里被人加回去了。
+  for (const patch of [{ nativeProviderId: 'deepseek', provider: 'deepseek' }, { nativeProviderId: 'gw' }, { provider: 'reseller' }, { route: 'cloud' }, { backend: 'acp' }, { model: 'deepseek/v4-flash' }, { model: 'flash*' }, { agentModel: 'gw-dspool/deepseek-v4-flash' }]) {
     const s = setup(); Object.assign(s.p, patch); assert.equal(preparePiDirectLaunch(s.p, {}, s.options).ok, false);
   }
   for (const request of [{ route: 'cloud' }, { route: 'auto' }, { model: 'deepseek-v4-pro' }, { provider: 'gw' }, { agent: 'codex' }, { profileId: 'other' }, { accountPoolId: 'other' }]) {
     const s = setup(); assert.equal(preparePiDirectLaunch(s.p, request, s.options).ok, false);
   }
-  const s = setup(); s.p.piConnection = { schemaVersion: 1, kind: 'pi-native', providerId: 'deepseek', modelId: s.p.model, api: 'openai-completions', baseUrl: s.baseUrl, keyRef: { kind: 'pi-auth', providerId: 'deepseek', file: '/somewhere/secret' } };
+  const s = setup(); s.p.piConnection = { schemaVersion: 1, kind: 'pi-native', providerId: 'opencode-go', modelId: s.p.model, api: 'openai-completions', baseUrl: s.baseUrl, keyRef: { kind: 'pi-auth', providerId: 'opencode-go', file: '/somewhere/secret' } };
   assert.equal(preparePiDirectLaunch(s.p, {}, s.options).reason, 'unsupported_key_reference');
 });
 
 test('missing/malformed/command/env native credentials and copied gateway credentials fail closed', async () => {
   const { inspectPiDirectProvider } = await lib;
   for (const key of ['', '!print-a-key', '${NATIVE_KEY}', 'has\nnewline', 'group-test-value']) {
-    const s = setup(); s.files.get('/fiction/.pi/agent/auth.json').deepseek.key = key;
+    const s = setup(); s.files.get('/fiction/.pi/agent/auth.json')[s.provider].key = key;
     assert.equal(inspectPiDirectProvider(s.p, s.options).ok, false);
   }
   const s = setup(); s.files.set('/fiction/.mirasim/keys/opencode.key', 'native-test-value');
@@ -78,16 +82,16 @@ test('missing/malformed/command/env native credentials and copied gateway creden
 test('native model registry must contain an exact fresh unique model on the official endpoint', async () => {
   const { inspectPiDirectProvider } = await lib;
   for (const mutate of [c => { c.checkedAt = NOW - 2 * 86_400_000; }, c => { c.checkedAt = NOW + 1; }, c => { delete c.checkedAt; }, c => { c.models[0].id = 'deepseek-v4-pro'; }, c => { c.models[0].baseUrl = 'https://reseller.example/v1'; }, c => { c.models[0].provider = 'gw'; }, c => { c.models[0].api = 'anthropic-messages'; }, c => { c.models.push(c.models[0]); }]) {
-    const s = setup(); mutate(s.files.get('/fiction/.pi/agent/models-store.json').deepseek);
+    const s = setup(); mutate(s.files.get('/fiction/.pi/agent/models-store.json')[s.provider]);
     assert.equal(inspectPiDirectProvider(s.p, s.options).ok, false);
   }
 });
 
 test('native provider shadowing, custom overrides, wrong Pi home and unreadable provenance are explicit blockers', async () => {
   const { inspectPiDirectProvider } = await lib;
-  const s = setup(); s.files.set('/fiction/.pi/agent/models.json', { providers: { deepseek: { baseUrl: 'https://api.deepseek.com' } } });
+  const s = setup(); s.files.set('/fiction/.pi/agent/models.json', { providers: { 'opencode-go': { baseUrl: 'https://opencode.ai/zen/go/v1' } } });
   assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'native_provider_has_custom_override');
-  s.files.delete('/fiction/.pi/agent/models.json'); s.files.set('/fiction/.pi/agent/pi-gateway.json', { providers: [{ id: 'deepseek' }] });
+  s.files.delete('/fiction/.pi/agent/models.json'); s.files.set('/fiction/.pi/agent/pi-gateway.json', { providers: [{ id: 'opencode-go' }] });
   assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'native_provider_shadowed_by_gateway');
   s.files.delete('/fiction/.pi/agent/pi-gateway.json');
   assert.equal(inspectPiDirectProvider(s.p, { ...s.options, env: { PI_CODING_AGENT_DIR: '/another' } }).reason, 'pi_agent_directory_mismatch');
@@ -108,7 +112,7 @@ test('tool probe requires explicit opt-in and bounded limits, never retries', as
 
 test('real tool-call protocol, finish and nonce all required; receipt includes usage but no text or credentials', async () => {
   const { probePiDirectTools } = await lib;
-  for (const provider of ['deepseek', 'opencode-go']) {
+  for (const provider of ['opencode-go']) {
     const s = setup(provider);
     const r = await probePiDirectTools(s.p, { ...s.options, allowLiveRequest: true, fetchImpl: async (url, req) => {
       assert.equal(url, `${s.baseUrl}/chat/completions`); assert.equal(req.method, 'POST'); assert.equal(req.redirect, 'error');
@@ -202,3 +206,49 @@ test('CommandCode loopback probe remains authenticated, bounded, redirect-disabl
   } });
   assert.equal(r.ok, true); assert.equal(r.actualCost, null); assert.equal(r.executionProfilePromoted, false);
 });
+
+// One provider is allowed to serve more than one (api, baseUrl) pair. The pair must be
+// matched exactly against that provider's own list; a provider-wide default would admit a
+// row on the strength of its provider name even though its protocol or endpoint differs.
+function comboSetup(provider, { model, api, baseUrl, declaredApi = api, declaredBaseUrl = baseUrl }) {
+  const s = setup(provider);
+  Object.assign(s.p, { model, agentModel: `${provider}/${model}`, piConnection: { schemaVersion: 1, kind: 'pi-native', providerId: provider, modelId: model, api: declaredApi, baseUrl: declaredBaseUrl, keyRef: { kind: 'pi-auth', providerId: provider } } });
+  s.files.set(`/fiction/.pi/agent/models-store.json`, { [provider]: { checkedAt: NOW, models: [{ id: model, provider, api, baseUrl }] } });
+  return s;
+}
+
+test('a provider may declare several endpoints; only a declared pair is accepted', async () => {
+  const { inspectPiDirectProvider } = await lib;
+  const anthropicTransport = comboSetup('opencode-go', { model: 'minimax-m3', api: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go' });
+  assert.equal(inspectPiDirectProvider(anthropicTransport.p, anthropicTransport.options).ok, true);
+  const responsesTransport = comboSetup('opencode-go', { model: 'gpt-5.6-luna', api: 'openai-responses', baseUrl: 'https://opencode.ai/zen/go/v1' });
+  assert.equal(inspectPiDirectProvider(responsesTransport.p, responsesTransport.options).ok, true);
+  // Every case below agrees with its catalog row, so it can only fail on the pair itself.
+  for (const [api, baseUrl] of [
+    ['anthropic-messages', 'https://opencode.ai/zen/go/v1'],
+    ['anthropic-messages', 'https://api.anthropic.com'],
+    ['openai-completions', 'https://opencode.ai/zen/go'],
+    ['openai-responses', 'https://opencode.ai/zen/go'],
+    ['openai-completions', 'https://reseller.example/v1'],
+    ['openai-completions', 'https://opencode.ai/zen/go/v1/extra'],
+  ]) {
+    const s = comboSetup('opencode-go', { model: 'minimax-m3', api, baseUrl });
+    assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'connection_descriptor_mismatch');
+  }
+  // A trailing slash is the same endpoint, not a new one: that comparison stays tolerant.
+  const slash = comboSetup('opencode-go', { model: 'gpt-5.6-luna', api: 'openai-responses', baseUrl: 'https://opencode.ai/zen/go/v1/' });
+  assert.equal(inspectPiDirectProvider(slash.p, slash.options).ok, true);
+});
+
+test('anthropic is not a pi leg: no endpoint of it is admitted', async () => {
+  const { inspectPiDirectProvider } = await lib;
+  // User decision, 2026-09-13: Claude rides mirasim and reclaude only. anthropic must stay
+  // out of the frozen NATIVE table even when the profile, the store row and a literal
+  // api_key credential all agree -- the refusal is the decision, not a missing credential.
+  const s = comboSetup('anthropic', { model: 'claude-opus-5', api: 'anthropic-messages', baseUrl: 'https://api.anthropic.com' });
+  Object.assign(s.p, { id: 'anthropic-direct', nativeProviderId: 'anthropic', accountPoolId: 'anthropic-api' });
+  s.files.get('/fiction/.pi/agent/auth.json').anthropic = { type: 'api_key', key: 'sk-ant-literal' };
+  // Refused before any credential is even looked at: anthropic is not in the frozen table.
+  assert.equal(inspectPiDirectProvider(s.p, s.options).reason, 'unsupported_native_provider');
+});
+

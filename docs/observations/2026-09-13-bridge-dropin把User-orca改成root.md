@@ -1,4 +1,8 @@
 ---
+status: done
+---
+
+---
 status: new
 ---
 
@@ -129,3 +133,5 @@ root:root 644 /usr/local/lib/dao-execution-usage/execution-usage-export.mjs
 删掉「提权 = `host/machine/systemd/*.service` 正文里的 `User=`」这一层。问的是 systemd **正在跑的有效单元**（`systemctl cat` / 正文 + `/etc/.../<名>.d/*.conf`）里，`ExecStart` 指向 orca 可写路径、有效 `User=` 为空或 root 的那些。扫出 0 个也红。本仓目录白名单留着，下一次仓外再加一个 drop-in 照样看不见。
 
 桥若必须读 root 会话的 `/proc/<pid>/environ`：把 `mirasim-bridge.mjs` 拷到 root-owned 路径再 `ExecStart` 那份，和 `dao-execution-usage-export` 同一把尺。不要在 drop-in 里写 `User=root` 却继续解释 `/srv/projects/` 下 orca 可写的文件。
+
+处置：#1051（同一形状「闸看的那一层 ≠ 跑的那一层」，归类单；2026-09-16 帅位盘点，判据 review_rounds_max 未接线见 #1227）

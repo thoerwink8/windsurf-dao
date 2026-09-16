@@ -154,13 +154,17 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
       const r = await cliInProc(args, env);
       return JSON.parse(r.stdout);
     };
-    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run']);
+    // --force：本条只钉 --pr 仓隔离，不查在役审官、也不过容量闸。
+    // 不带会走 listSessions（预算 30s），dao-check 6 路并行时 30s×4 把同池的 11s 自扫拖红，
+    // 筛选断言也因 tickets 缺失崩掉。合入 #1274 后现场在役=上限时 dry-run 还会把已筛出的票全部 hold，
+    // 断言看起来像「--pr 把本仓票筛掉了」。
+    const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run', '--force']);
     assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
-    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run']);
+    const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run', '--force']);
     assert.deepEqual(p2.tickets.map(t => t.pr), ['9002'], '无仓旧票不该被 --pr 挡在外面');
-    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run']);
+    const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run', '--force']);
     assert.deepEqual(p3.tickets.map(t => t.pr), [], '别仓同号票不该被本仓 --pr 顺手拉走');
-    const all = await pull(['review-pending-drain', '--dry-run']);
+    const all = await pull(['review-pending-drain', '--dry-run', '--force']);
     assert.deepEqual(all.tickets.map(t => t.pr), ['9001', '9002'], '不带 --pr 时本仓票全吃，别仓票剔');
   });
 
@@ -512,5 +516,82 @@ describe('#1024 复审：跨仓按仓+PR 键，同号不串',
     assert.equal(bad.ok, false);
     assert.match(String(bad.error), /带空格/);
     assert.equal(fs.existsSync(path.join(dir, '12.json')), false);
+  });
+});
+
+describe('2026-09-14 断链：票上写死的审官死了，读票时要按顺位换人', () => {
+  // 现场：#1225 #1216 两张票连续 5 轮没动。票上写死 gpt-5.6-sol，而它在执行目录里
+  // availability=unverified，起审官必被拒；指挥官每轮日志都在剔它，读票这条路却完全不看。
+  const T = { pr: '1225', reviewer: 'gpt-5.6-sol', issue: '1223' };
+  const USABLE = ['gpt-5.6-luna', 'grok-4.6', 'kimi-k3'];
+
+  it('票上的起不来 ⇒ 顺位往后取第一个能起的**同厂**备选，并说清换了谁、为什么', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain(T, { usableReviewers: USABLE });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.reviewer, 'gpt-5.6-luna');
+    assert.equal(plan.switchedFrom, 'gpt-5.6-sol');
+    assert.match(String(plan.switchWhy), /gpt-5\.6-sol/);
+    assert.equal(plan.argv[plan.argv.indexOf('--reviewer') + 1], 'gpt-5.6-luna');
+  });
+
+  it('顺位里只剩异厂能起 ⇒ 不换，照原样失败（跨厂换人要凭证，读票侧拿不出）', async () => {
+    const S = await S_LOAD;
+    // 现场实咬：可用顺位就是 [luna/gpt, grok-4.6/grok]，票上写 sol/gpt 时若不筛厂
+    // 会换成 grok，当场被 assertReviewerSeat 拒「只许同厂换顺位」——换了个必拒的值。
+    const plan = S.planReviewPendingDrain(T, { usableReviewers: ['grok-4.6'] });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.reviewer, 'gpt-5.6-sol');
+    assert.equal(plan.switchedFrom, undefined);
+  });
+
+  it('票上那位认不出厂 ⇒ 不换（没查成不猜）', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ ...T, reviewer: '某不存在的模型' }, { usableReviewers: USABLE });
+    assert.equal(plan.reviewer, '某不存在的模型');
+    assert.equal(plan.switchedFrom, undefined);
+  });
+
+  it('反向正控：票上的能用 ⇒ 一个字都不改（换人不是常开后门）', async () => {
+    const S = await S_LOAD;
+    const plan = S.planReviewPendingDrain({ ...T, reviewer: 'grok-4.6' }, { usableReviewers: USABLE });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.reviewer, 'grok-4.6');
+    assert.equal(plan.switchedFrom, undefined);
+    assert.equal(plan.switchWhy, undefined);
+    assert.equal(plan.argv[plan.argv.indexOf('--reviewer') + 1], 'grok-4.6');
+  });
+
+  it('没给顺位表（没查成）⇒ 一个字都不改：没依据的换人是猜', async () => {
+    const S = await S_LOAD;
+    for (const opts of [undefined, {}, { usableReviewers: null }, { usableReviewers: [] }]) {
+      const plan = S.planReviewPendingDrain(T, opts);
+      assert.equal(plan.reviewer, 'gpt-5.6-sol', `opts=${JSON.stringify(opts)}`);
+      assert.equal(plan.switchedFrom, undefined);
+    }
+  });
+
+  it('drain 把顺位表透传到票上（不是每张票各猜一份）', async () => {
+    const S = await S_LOAD;
+    const seen = [];
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-drain-switch-'));
+    try {
+      const built = S.buildReviewPendingTicket({
+        ...T, workerWorktree: 'wt-1225', head: { name: null, oid: 'a'.repeat(40) },
+        source: S.REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
+      });
+      assert.equal(built.ok, true, JSON.stringify(built));
+      assert.equal(S.writeReviewPending({ dir, ticket: built.ticket }).ok, true);
+      const out = S.drainReviewPending({
+        dir,
+        tickets: S.listReviewPending(dir).tickets,
+        usableReviewers: USABLE,
+        attach: (plan) => { seen.push(plan); return { ok: true }; },
+      });
+      assert.equal(out.ok, true, JSON.stringify(out));
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].reviewer, 'gpt-5.6-luna');
+      assert.equal(seen[0].switchedFrom, 'gpt-5.6-sol');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

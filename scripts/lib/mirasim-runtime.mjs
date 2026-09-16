@@ -33,7 +33,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import { checkTreeLease, checkInFlight, claimTreeOccupancy, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
 } from './channel-concurrency.mjs';
@@ -192,13 +192,6 @@ export const TEST_ISOLATION_MARK = '结构性够不着真执行体';
 
 /** 生产入口显式放行真执行体的 env 名。dao.mjs 自己不许自打这面旗。 */
 export const REAL_EXECUTOR_ENV = 'DAO_REAL_EXECUTOR';
-
-/** 指挥官 spawn 子进程时打上放行旗。测试进程不要调。 */
-export function withRealExecutorEnv(env = process.env) {
-  const e = env && typeof env === 'object' ? { ...env } : {};
-  e[REAL_EXECUTOR_ENV] = '1';
-  return e;
-}
 
 /**
  * 工人会话里跑的生产入口（worker-done / reviewer-create）给本进程打旗。
@@ -825,6 +818,8 @@ export function createRuntime(opts = {}) {
   const now = opts.now || (() => Date.now());
   // 租约判据可注入：单测给假的，生产读盘。默认必须是真闸——不给就不检查等于没有闸。
   const leaseCheck = opts.leaseCheck || checkTreeLease;
+  // 占用声明同样可注入。默认真锁；测试给假的，免得各用例去抢同一把仓外锁。
+  const claimOccupancy = opts.claimOccupancy || claimTreeOccupancy;
   // 渠道并发判据同理（#1145）。默认真闸，取数在 defaultChannelAdmit（读路由表 / /proc / 账本）。
   const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
   // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
@@ -983,6 +978,27 @@ export function createRuntime(opts = {}) {
       });
     }
 
+    // 占用声明必须在发 prompt 之前原子拿到。两个并发 startSession 都可能在
+    // 第一个会话进程出现前读到 free——/proc 闸挡不住这一窗（审官红④ / #1291）。
+    // 拿不到 = 背压，不发 prompt；失败路径必须释放，成功返回也释放（占位交给真进程）。
+    const claim = claimOccupancy({ workdir, home: homeDir });
+    if (!claim.ok) {
+      if (claim.busy) {
+        throw new MirasimRejectedError(`占用声明被占，拒起会话：${claim.error}`, {
+          workdir, busy: true, reason: claim.reason || LEASE_BUSY_REASON,
+        });
+      }
+      throw new MirasimUnavailableError(`占用声明没查成，拒起会话：${claim.error}`, { workdir });
+    }
+    let claimReleased = false;
+    const releaseClaim = () => {
+      if (claimReleased) return;
+      claimReleased = true;
+      try { if (typeof claim.release === 'function') claim.release(); } catch { /* 释放失败不挡返回 */ }
+    };
+
+    try {
+
     // 渠道并发闸（#1145）：挨着租约闸，同样装在门里、同样排在 open() 前面——
     // 满员时连 ws 都不开。装在门里的理由与租约闸一字不差：四个调用点
     // （dao dispatch / dao start / 审官 create / 推一把）全从这道门过，绕不开；
@@ -1065,6 +1081,9 @@ export function createRuntime(opts = {}) {
       // 退槽。**删不掉不许让起会话失败**：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个
       // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
       try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
+    }
+    } finally {
+      releaseClaim();
     }
     } catch (error) {
       // promptSent && !explicitlyRejected = prompt 发出去了但没拿到明确拒绝 ⇒ 起会话状态不确定。
@@ -1312,9 +1331,6 @@ export function createRuntime(opts = {}) {
 // 默认实例：dao.mjs 直接引这五个动词，不必关心连线细节。
 let shared = null;
 const runtime = () => (shared ||= createRuntime());
-/** 只给测试用：换掉默认实例。 */
-export function _setSharedRuntime(r) { shared = r; }
-
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);

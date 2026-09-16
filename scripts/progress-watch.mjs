@@ -29,6 +29,7 @@ import {
 } from './lib/progress-detect.mjs';
 import { runGh } from './lib/dao-cmd.mjs';
 import { planExhaustedPush, exhaustedPushPath } from './lib/exhausted.mjs';
+import { epochOf } from './lib/commander-verbs.mjs';
 
 /** 与 shuai-scan 同一叫醒哨兵：有停滞且指纹变了才打到 stdout。 */
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
@@ -189,7 +190,8 @@ export function pushExhaustedToShuai({ dryRun = false, lines = [] } = {}) {
   }
   const ledgerPath = process.env.PROGRESS_WATCH_EXHAUSTED_LEDGER || exhaustedPushPath(homedir());
   const ledger = loadJson(ledgerPath);
-  const plan = planExhaustedPush({ prs: got.prs, ledger });
+  // #1238：推送账也带判据版本——认输标本身现在按版本判断过期，账与标必须同一套。
+  const plan = planExhaustedPush({ prs: got.prs, ledger, epoch: epochOf().epoch });
   for (const p of plan.pushes) {
     lines.push(p.text);
     if (!dryRun) ledger[p.key] = { at: new Date().toISOString(), pr: p.pr, head: p.head };
@@ -313,16 +315,25 @@ export function runProgressWatch({
   }
   // 认输推送与停滞判定是两条独立线：认输查不成不拖红主线（它有自己的账本去重），
   // 但那句「没查成」必须进报告并叫醒——不许长得像「查过没事」。
+  // 组合态（stalled 且有认输行）也必须把两段正文分开交给分流函数，合并进
+  // 同一份 report 会让认输挤进停滞键的 6 小时窗口。
   const exhaustedLines = [];
   const exhausted = exhaustedPush ? exhaustedPush({ dryRun, lines: exhaustedLines }) : null;
-  const report = [formatReport(verdict), ...exhaustedLines].join('\n');
+  const exhaustedWake = exhaustedLines.length > 0;
+  const stallReport = formatReport(verdict);
+  const exhaustedReport = exhaustedLines.join('\n');
+  const report = [stallReport, ...exhaustedLines].filter(Boolean).join('\n');
   return {
     ok: true,
     exit: 0,
     scanned: true,
     stalled: !!verdict.stalled,
-    wake: !!planned.wake || exhaustedLines.length > 0,
-    wakeReason: planned.wake ? planned.reason : (exhaustedLines.length ? 'exhausted' : planned.reason),
+    wake: !!planned.wake || exhaustedWake,
+    wakeReason: planned.wake ? planned.reason : (exhaustedWake ? 'exhausted' : planned.reason),
+    exhaustedWake,
+    stallReport,
+    exhaustedReport,
+    exhaustedLines: exhaustedLines.slice(),
     dryRun,
     fingerprint: planned.fingerprint,
     items: verdict.items || [],

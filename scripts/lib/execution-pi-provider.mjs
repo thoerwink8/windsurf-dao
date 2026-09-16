@@ -8,10 +8,27 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
+// Per provider, the exact (api, baseUrl) pairs Pi's own catalog may declare for that provider.
+// More than one pair per provider is real: opencode-go serves some models over
+// anthropic-messages at https://opencode.ai/zen/go while the rest use openai-completions
+// at .../go/v1. A pair absent from this table is never accepted — the match is exact and
+// comes from the matched catalog row, not from a provider-wide default.
+// Providers are limited to literal api_key auth; an OAuth-only provider cannot be added here
+// without weakening that rule (see inspectPiDirectProvider's entry.type check).
+// anthropic is deliberately absent: it has no account behind it and it is not a pi leg at all.
+// Claude rides mirasim and reclaude only (user, 2026-09-13) — adding it back here would offer
+// dispatch a route that is ruled out by decision, not by a credential that might show up.
+// deepseek 直连也不在：用户 2026-09-15 拍板「deepseek渠道直接删掉，不要留」，
+// 账号与 key 已从 ~/.pi/agent/auth.json 移除。DeepSeek 型号仍能派——走 devin /
+// opencode-go / commandcode 那几条渠道，它们是另外的账号池。
 const NATIVE = Object.freeze({
-  deepseek: { baseUrl: 'https://api.deepseek.com', api: 'openai-completions' },
-  'opencode-go': { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-completions' },
+  'opencode-go': Object.freeze([
+    { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-completions' },
+    { baseUrl: 'https://opencode.ai/zen/go/v1', api: 'openai-responses' },
+    { baseUrl: 'https://opencode.ai/zen/go', api: 'anthropic-messages' },
+  ]),
 });
+const samePair = (a, b) => !!a && !!b && a.api === b.api && String(a.baseUrl).replace(/\/+$/, '') === String(b.baseUrl).replace(/\/+$/, '');
 const DAY = 86_400_000;
 const COMMANDCODE_URL = 'http://127.0.0.1:4342/v1';
 const COMMANDCODE_MODEL = 'deepseek/deepseek-v4-flash';
@@ -93,7 +110,7 @@ export function planPiAdapterConfiguration(profile, options = {}) {
 }
 
 /** Reads credentials in memory, returns only a descriptor. Does not execute Pi or write files.
- * keyRef schema: {kind:'pi-auth', providerId:'deepseek'|'opencode-go'}.
+ * keyRef schema: {kind:'pi-auth', providerId:'opencode-go'}.
  * The file is always <agentDir>/auth.json and its entry must be a literal api_key.
  * No custom path, command expansion, env-key override or credential value is accepted.
  */
@@ -111,9 +128,12 @@ export function inspectPiDirectProvider(profile, options = {}) {
     if (!cleanId(modelId)) return fail('exact_upstream_model_required');
     const modelSelector = `${providerId}/${modelId}`;
     if (profile.agentModel && profile.agentModel !== modelSelector) return fail('model_selector_mismatch');
-    const descriptor = profile.piConnection;
-    if (descriptor && (descriptor.schemaVersion !== 1 || descriptor.kind !== 'pi-native' || descriptor.providerId !== providerId || descriptor.modelId !== modelId || descriptor.baseUrl !== native.baseUrl || descriptor.api !== native.api)) return fail('connection_descriptor_mismatch');
-    if (descriptor?.keyRef && (Object.keys(descriptor.keyRef).some(k => !['kind', 'providerId'].includes(k)) || descriptor.keyRef.kind !== 'pi-auth' || descriptor.keyRef.providerId !== providerId)) return fail('unsupported_key_reference');
+    // The descriptor must name a pair this provider is allowed to serve. Which one is not
+    // re-derived from the provider: the catalog row below must agree with it exactly.
+    const declared = profile.piConnection;
+    const pinned = declared && samePair({ api: declared.api, baseUrl: declared.baseUrl }, declared) ? native.find(n => samePair(n, declared)) : native[0];
+    if (declared && (declared.schemaVersion !== 1 || declared.kind !== 'pi-native' || declared.providerId !== providerId || declared.modelId !== modelId || !pinned)) return fail('connection_descriptor_mismatch');
+    if (declared?.keyRef && (Object.keys(declared.keyRef).some(k => !['kind', 'providerId'].includes(k)) || declared.keyRef.kind !== 'pi-auth' || declared.keyRef.providerId !== providerId)) return fail('unsupported_key_reference');
     const context = nativeContext(options);
     if (!path.isAbsolute(context.homeDir) || !path.isAbsolute(context.agentDir)) return fail('absolute_agent_directory_required');
     // Mirasim must launch under this same native Pi home. A global override could reroute it.
@@ -139,10 +159,11 @@ export function inspectPiDirectProvider(profile, options = {}) {
     const matches = rows.filter(m => m?.id === modelId);
     if (matches.length !== 1) return fail('exact_model_not_in_native_catalog');
     const model = matches[0];
-    if (model.provider !== providerId || model.api !== native.api || model.baseUrl?.replace(/\/+$/, '') !== native.baseUrl) return fail('native_model_endpoint_mismatch');
+    if (model.provider !== providerId || !native.some(n => samePair(n, model))) return fail('native_model_endpoint_mismatch');
+    const endpoint = native.find(n => samePair(n, model));
     return {
       ok: true, status: 'prepared',
-      connection: { schemaVersion: 1, kind: 'pi-native', providerId, modelId, modelSelector, baseUrl: native.baseUrl, api: native.api, agentDir, keyRef: { kind: 'pi-auth', providerId }, catalogCheckedAt: new Date(Number.isFinite(catalog.checkedAt) ? catalog.checkedAt : Date.parse(catalog.checkedAt)).toISOString() },
+      connection: { schemaVersion: 1, kind: 'pi-native', providerId, modelId, modelSelector, baseUrl: endpoint.baseUrl, api: endpoint.api, agentDir, keyRef: { kind: 'pi-auth', providerId }, catalogCheckedAt: new Date(Number.isFinite(catalog.checkedAt) ? catalog.checkedAt : Date.parse(catalog.checkedAt)).toISOString() },
       configuration: { required: false, mechanism: 'existing_native_provider_and_auth_store', agentDir },
       evidence: { scope: 'native_configuration_only', executionVerified: false, billingVerified: false },
     };

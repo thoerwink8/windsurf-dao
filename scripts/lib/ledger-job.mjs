@@ -248,6 +248,56 @@ export function writeJobDispatch({
   }
 }
 
+/**
+ * 帅位自开的 PR 落一条 job.opened（#1214 缺口 A）。
+ *
+ * 为什么需要它：打标路（`pickWorkerDispatchByBranch`）的判据是「这条链上有没有派工决定」，
+ * 而帅位自己开 PR 是合法动作、决定不在账本里——于是这类 PR 永久卡在「需人工打标」。
+ * 缺口不在判据太严，在于**这类 PR 从来没有落过账**：补上落账，判据一个字都不用改。
+ *
+ * 与 `dianjiangtai-backfill` 的重建事件同形（同 job_id 约定、同字段名），
+ * 这样「回填出来的历史单」与「帅位当场开的单」在账本里长得一样，消费方只需认一种形状。
+ */
+export function writeJobOpened({
+  dir, ts, machine, schema, jobId, model, identity, workType,
+  scale = '未知', risk = '低', reversible = true,
+  candidateModels, why, prNumber, issueNumber, extra = {},
+} = {}) {
+  if (!jobId) return { ok: false, skipped: false, error: 'job.opened 缺 job_id' };
+  if (!ts) return { ok: false, skipped: false, error: 'job.opened 缺 ts' };
+  try {
+    const seq = nextSeq(dir, machine);
+    const w = writeEvent({
+      dir,
+      type: 'job.opened',
+      ts,
+      machine,
+      seq,
+      schema,
+      payload: {
+        job_id: jobId,
+        task_class: '帅位自开',
+        work_type: workType,
+        identity,
+        scale,
+        risk,
+        reversible,
+        task_tokens: null,
+        candidate_models: candidateModels || [model].filter(Boolean),
+        selected: model,
+        why: String(why || '').trim() || '帅位自开 PR，落账以便打标路认得这条链',
+        ...(prNumber != null ? { pr_number: prNumber } : {}),
+        ...(issueNumber != null ? { issue_number: issueNumber } : {}),
+        ...extra,
+      },
+    });
+    return { ok: true, skipped: false, path: w.path, event: w.event };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true, error: String(e.message || e) };
+    return { ok: false, skipped: false, error: String(e.message || e) };
+  }
+}
+
 export function writeJobOverride({
   dir, ts, machine, schema, jobId, model, identity, workType,
   triggeredBy, why, prNumber, issueNumber, extra = {},
@@ -360,6 +410,58 @@ export function linkAliasesToSuccessor({
   return out;
 }
 
+/** 按 job_id 取对应 job.dispatch；没有精确命中时跟 rename handoff，再退到同 PR 同侧。 */
+export function findJobDispatch(events, jobId, { prNumber } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  let exact = null;
+  for (const e of list) {
+    if (e && e.type === 'job.dispatch' && e.job_id === jobId) exact = e;
+  }
+  if (exact) return exact;
+
+  const fromIds = new Set();
+  for (const e of list) {
+    if (e && e.type === 'job.handoff' && e.to_job_id === jobId && e.from_job_id) {
+      fromIds.add(String(e.from_job_id));
+    }
+  }
+  let renamed = null;
+  for (const e of list) {
+    if (e && e.type === 'job.dispatch' && fromIds.has(String(e.job_id))) renamed = e;
+  }
+  if (renamed) return renamed;
+
+  if (prNumber == null) return null;
+  const wantReview = String(jobId).endsWith('-review');
+  let byPr = null;
+  for (const e of list) {
+    if (!e || e.type !== 'job.dispatch') continue;
+    if (Number(e.pr_number) !== Number(prNumber)) continue;
+    const id = String(e.job_id || '');
+    const isReview = id.endsWith('-review') || e.identity === '审官';
+    if (isReview === wantReview) byPr = e;
+  }
+  return byPr;
+}
+
+/**
+ * job.closed.merged_by = 最终合并作者模型。有 handoff 用接手者，否则用 dispatch.model。
+ * 无 dispatch 的合并链写 unknown——不许拿角色名 commander/reviewer 冒充模型。
+ */
+export function mergedByForClosed({ events, jobId, dispatch } = {}) {
+  const d = dispatch || findJobDispatch(events, jobId);
+  let toModel = '';
+  for (const e of events || []) {
+    if (!e || e.type !== 'job.handoff') continue;
+    const hits = e.job_id === jobId
+      || e.to_job_id === jobId
+      || (d && d.job_id && (e.job_id === d.job_id || e.to_job_id === d.job_id));
+    if (hits && e.to_model) toModel = String(e.to_model).trim();
+  }
+  const fromDispatch = d && d.model != null ? String(d.model).trim() : '';
+  return toModel || fromDispatch || 'unknown';
+}
+
 export function writeJobClosed({
   dir, ts, machine, schema, jobId, success, rework, mergedBy,
   prNumber, redFlags, verdictRounds, workerRework, marshalRounds, triggeredBy,
@@ -435,11 +537,6 @@ export function recordPair({ ctx, ts, source, worker, reviewer }) {
     });
   }
   return out;
-}
-
-/** 给测试与调用方拼路径用；不读事件内容（读事件是检查方自己的事）。 */
-export function eventPathHint(dir, machine) {
-  return join(dir, `*-${machine}.json`);
 }
 
 /** 给 amend 找所属 job：优先 --pr 的 gh-pr-N，否则 issue 对上的工人 dispatch。 */

@@ -387,3 +387,36 @@ describe('手搓 shell 跑 systemd 管着的脚本要提醒', () => {
     assert.equal(n.filter((x) => x.id === 'handrolled-systemd').length, 0);
   });
 });
+
+describe('第 5 条：读凭据库只取结构，不取值（2026-09-13 实咬）', () => {
+  it('判别力正控：认得出读 auth.json 的各种形态', async () => {
+    const { readsCredentialStore } = await LOAD;
+    // 同一个行为换工具名——判据轴是行为，所以这四种都得命中。
+    assert.equal(readsCredentialStore('cat ~/.pi/agent/auth.json'), true);
+    assert.equal(readsCredentialStore('node -e "JSON.parse(require(\'fs\').readFileSync(\'/home/orca/.pi/agent/auth.json\',\'utf8\'))"'), true);
+    assert.equal(readsCredentialStore('jq . ~/.pi/agent/auth.json'), true);
+    assert.equal(readsCredentialStore('python3 -c "import json;print(json.load(open(\'/root/.claude/.credentials.json\')))"'), true);
+    assert.equal(readsCredentialStore('cat ~/.config/pi/secrets.toml'), true);
+    assert.equal(readsCredentialStore('cat /etc/ssl/private/server.pem'), true);
+  });
+
+  it('判别力反证：正常命令与形似文件名都不许被命中', async () => {
+    const { readsCredentialStore } = await LOAD;
+    // 反证一：命令里根本没有凭据库。
+    assert.equal(readsCredentialStore('cat docs/execution-profiles.json'), false);
+    assert.equal(readsCredentialStore('node scripts/dao-check.mjs'), false);
+    assert.equal(readsCredentialStore('grep -rn "provider" scripts/lib/'), false);
+    // 反证二：像是凭据库但其实不是（后缀/词边界要守住）。
+    assert.equal(readsCredentialStore('cat docs/auth.json.md'), false);
+    assert.equal(readsCredentialStore('cat .environment'), false);
+    assert.equal(readsCredentialStore('grep -rn "AUTHENTICATION" src/'), false);
+  });
+
+  it('命中时经 classifyBash 出注，且文案点名「不打印值」', async () => {
+    const { classifyBash, CREDENTIAL_NOTE } = await LOAD;
+    const notes = classifyBash('cat ~/.pi/agent/auth.json');
+    assert.deepEqual(notes.map((n) => n.id), ['reads-credential-store']);
+    assert.deepEqual(notes.map((n) => n.text), [CREDENTIAL_NOTE]);
+    assert.match(CREDENTIAL_NOTE, /前缀/);
+  });
+});

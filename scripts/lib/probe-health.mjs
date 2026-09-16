@@ -14,6 +14,8 @@ export function plainTarget(key) {
   if (k.startsWith('gw:')) { const g = k.slice(3).split('/')[0]; return `${g.replace(/pool$/, '')} 模型池`; }
   if (k.startsWith('leg:')) return `${k.slice(4)} 这条线`;
   if (k.startsWith('direct:') || k === 'codex') return 'codex 审官直连';
+  // 本地登录型（网关退役后 grok/composer 走官方 CLI 自己的登录态）：说人话就是「那条本地登录」。
+  if (k.startsWith('native:')) return `${k.slice(7)} 本地登录`;
   return k;
 }
 export function buildRedAlert(bad, plan) {
@@ -22,6 +24,7 @@ export function buildRedAlert(bad, plan) {
   const impact = [];
   if (kinds.has('gw')) impact.push('整个池的备选链都不通，走它的工人和审官会卡');
   if (kinds.has('leg')) impact.push('单条线不通，走池的还有兜底');
+  if (kinds.has('native')) impact.push('本地登录的凭据丢了，走它的腿必然起不来');
   if (kinds.has('direct') || kinds.has('codex')) impact.push('codex 审官那条路不通');
   return `网关有 ${bad.length} 条线路连续 ${plan.strikesToAlert} 次没回真内容：${names.join('、')}
 影响：${impact.join('；')}
