@@ -36,6 +36,29 @@ function waitMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** 等子进程被回收（close），不是墙钟猜。僵尸对 kill(pid,0) 仍成功，固定 300ms 在并发池会误红。 */
+function waitClose(child, ms = 3000) {
+  return new Promise((resolve, reject) => {
+    if (!child) {
+      reject(new Error('waitClose 没有 child'));
+      return;
+    }
+    if (child.exitCode != null || child.signalCode != null) {
+      resolve({ code: child.exitCode, signal: child.signalCode });
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.off('close', onClose);
+      reject(new Error(`等 close 超时 ${ms}ms pid=${child.pid}`));
+    }, ms);
+    const onClose = (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    };
+    child.once('close', onClose);
+  });
+}
+
 function reapPids(pids) {
   const roots = [...new Set((pids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   let extra = [];
@@ -189,14 +212,20 @@ describe('子进程注册表', () => {
   it('真去杀一个真的进程：登记 → killAll → 它真的没了', async (t) => {
     const victim = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
     reapAfter(t, () => [victim.pid]);
+    t.after(async () => { try { await waitClose(victim, 2000); } catch { /* 已经没了 */ } });
+    await new Promise((resolve, reject) => {
+      victim.once('spawn', resolve);
+      victim.once('error', reject);
+    });
     assert.equal(pidAlive(victim.pid), true, '现在应该还活着——不然这条测试什么都没验到');
 
+    const closed = waitClose(victim, 3000);
     const r = createChildRegistry();
     r.add(victim.pid);
     const got = r.killAll('SIGKILL');
     assert.deepEqual(got.killed, [victim.pid]);
 
-    await waitMs(300);
+    await closed;
     assert.equal(pidAlive(victim.pid), false);
   });
 });
@@ -451,6 +480,23 @@ describe('dao-check 里的接线（正控：接错了这几条要红）', () => 
     assert.doesNotMatch(src, /每个 spawnSync 都自带 timeout/);
   });
 
+  it('真杀进程回归等 close 回收，不许固定等 300ms', () => {
+    const src = readFileSync(join(HERE, 'test-child-guard.test.js'), 'utf8');
+    const slice = src.slice(src.indexOf('真去杀一个真的进程'), src.indexOf("describe('子进程侧"));
+    assert.match(slice, /const closed = waitClose\(victim/);
+    assert.match(slice, /await closed/);
+    assert.doesNotMatch(slice, /waitMs\(300\)/);
+  });
+
+  it('ACP hold 清退走原生 stopSession，child-guard 仍跳过组头——不在本单再实现一套杀树', () => {
+    const acp = readFileSync(join(REPO, 'tests', 'acp-runtime.test.js'), 'utf8');
+    assert.match(acp, /hold 等刻意永不结束的 fixture 必须走原生 stopSession/);
+    assert.match(acp, /await runtime\.stopSession\(session\.key\)/);
+    const guard = readFileSync(join(REPO, 'scripts', 'lib', 'test-child-guard.mjs'), 'utf8');
+    assert.match(guard, /skipGroupLeaders:\s*true/);
+    assert.doesNotMatch(guard, /acpCleanupTree/);
+  });
+
   it('owner-death 路径清的是非 detached 整棵树，不只 runner 一个 pid', () => {
     const wd = readFileSync(join(REPO, 'tests', 'helpers', 'owner-watchdog.py'), 'utf8');
     assert.match(wd, /_kill_tree/);
@@ -530,8 +576,9 @@ test('看门狗真的砍得掉挂住的套子（端到端）', { timeout: 30000 
   await waitMs(800);
   assert.equal(pidAlive(child.pid), true, '挂住的套子现在应该还活着——不然这条测试什么都没验到');
 
+  const closed = waitClose(child, 3000);
   r.killAll('SIGKILL');
-  await waitMs(400);
+  await closed;
   assert.equal(pidAlive(child.pid), false, '看门狗该把它杀掉');
 });
 
