@@ -7,7 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
-import {scanSessionProcs} from './dispatch/lease.mjs';
+import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
 import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
@@ -141,7 +141,7 @@ export function createExecutionRuntime(opts={}) {
   function processCheck(workdir) {
     const s=scan();
     if(s?.ok!==true||!Array.isArray(s.procs))throw busy('worktree process scan incomplete','lease-unscanned');
-    return s.procs.filter(p=>p&&String(p.cwd).replace(/\/+$/,'')===workdir.replace(/\/+$/,''));
+    return s.procs.filter(p=>p&&cwdBelongsToTree(p.cwd,workdir));
   }
   function assertAdmission() {
     const maintenance=maintenanceStatus(path.join(stateDir,'maintenance.json'),now());
@@ -179,7 +179,7 @@ export function createExecutionRuntime(opts={}) {
     if(sessionKey&&(!SESSION_KEY.test(sessionKey)||!sessionKey.startsWith('acp:')))throw new Error('invalid preallocated sessionKey');
     const recordKey=sessionKey||'launch:'+launchId;
     actual={...actual,...(sessionKey?{sessionKey}:{}),taskId:spec.taskId||spec.clientRef||crypto.randomUUID(),clientRef:spec.clientRef||'dao-launch:'+launchId};
-    const meta={schemaVersion:1,recordKey,sessionKey,launchId,attemptId:launchId,backend:selected,agent:actual.agent,model:actual.model,requestedModel:spec.model||p?.model||null,actualModel:p?.model||actual.model,profileId:p?.id||null,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,actualVendor:actual.actualVendor??null,route:actual.route,taskId:actual.taskId,clientRef:actual.clientRef,issue:spec.issue??null,pr:spec.pr??null,workdir:actual.workdir,createdAt:now(),startedAt:now(),updatedAt:now(),state:'pending',launchState:'pending',taskCompleted:false,completionScope:'agent-turn',owner:identity(process.pid),...(spec.resumeFrom?{resumeFrom:spec.resumeFrom}:{})};
+    const meta={schemaVersion:1,recordKey,sessionKey,launchId,attemptId:launchId,backend:selected,agent:actual.agent,model:actual.model,requestedModel:spec.model||p?.model||null,actualModel:p?.model||actual.model,profileId:p?.id||null,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,actualVendor:actual.actualVendor??null,route:actual.route,taskId:actual.taskId,clientRef:actual.clientRef,issue:spec.issue??null,pr:spec.pr??null,title:(typeof spec.title==='string'&&spec.title.trim())?spec.title.trim():null,workdir:actual.workdir,createdAt:now(),startedAt:now(),updatedAt:now(),state:'pending',launchState:'pending',taskCompleted:false,completionScope:'agent-turn',owner:identity(process.pid),...(spec.resumeFrom?{resumeFrom:spec.resumeFrom}:{})};
     return {actual,meta,token:crypto.randomUUID()};
   }
   async function reapMirasim(workdir) {
@@ -516,7 +516,7 @@ export function createExecutionRuntime(opts={}) {
     const view=await readSession(key);
     if(view.missing||(!TERMINAL.has(view.phase)&&view.phase!=='interrupted'))throw busy('only a stopped or interrupted session can be resumed');
     const stopped=await stopSession(key);if(!stopped?.ok)throw new Error('resume cleanup is unverified');
-    return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,resumeFrom:key});
+    return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,title:m.title,resumeFrom:key});
   }
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
     profileForModel:model=>{const {matches}=matchExecutionProfiles({model},profiles);if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},

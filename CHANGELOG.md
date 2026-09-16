@@ -2,6 +2,29 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.7.1 — 2026-09-15
+
+### 修复与维护
+- [cc] fix(换厂): 腿断的判据从死因词表换成行为——整条 gpt 腿死了，闸却不许换人 (#1290)
+- [grok] fix(指挥官): 审官 phase=done 也要停会话，别把进程留在渠道里 (#1280)
+- [cc] fix(execution): devin ACP 的模型确实钉得住，T1c 解封（#1174） (#1275)
+- [patrol] docs(obs): 用量导出/采集 TimeoutStartSec=90，活任务被 SIGTERM，采集账从 23:29 起没写完
+- [patrol] docs(obs): ws 连红达自愈阈值，在途会话进程把重启焊死，控制面 false 全机掐 push
+- fix(并发): 收尾名额与审官上限不再手打 3——按核数与在役腿取严，拍板值补进路由表 (#1265)
+- fix(派工): 自己开的 draft 单永不送审——跳过没留痕，下游读成「reviews 没抓到」 (#1270)
+- [cc] docs(inbox): 按当前 HEAD 重核 #1105 五条观察的源码行号 (#1256)
+- [patrol] docs(obs): #930 同类扫描闸测绿，生产 0 处调用，今天的 fix PR 缺段也合进去了
+- [cc] fix(hub): 日报卡脚注从 note 换成 markdown——飞书 2.0 拒收 note（#1052） (#1114)
+- [cc] fix(审官): 账本恢复出的 manual 缺理由不再死锁——补一句如实说明，不留 null (#1283)
+- [patrol] docs(obs): 现役 GPT 健康键探的仍是本机桥，上游还是退役网关
+- [patrol] docs(obs): #1218 合了，root 用量副本仍把 grok 记成 openai
+- [patrol] docs(obs): 事件桥通道死了，父进程仍绿，㉓ 挂在没人跑的 server-check
+
+### 其它
+- release: v2.7.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.7.0 — 2026-09-14
 
 ### 新功能

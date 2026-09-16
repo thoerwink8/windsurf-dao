@@ -40,7 +40,10 @@ export function analyzeGithubReviews(reviews) {
     if (state === 'CHANGES_REQUESTED') {
       redRounds += 1;
       latestJudged = 'red';
+      continue;
     }
+    // DISMISSED 终止上一张判别票：旧 APPROVED 不得再当最后一条绿。
+    if (state === 'DISMISSED') latestJudged = 'dismissed';
   }
   return {
     scanned: true,
@@ -68,4 +71,33 @@ export function judgedReviewCount(reviews) {
     if (s === 'APPROVED' || s === 'CHANGES_REQUESTED') n += 1;
   }
   return n;
+}
+
+/**
+ * 当前 head 上有没有审官交的判定。**三态**，不是布尔。
+ *
+ * 2026-09-15 实咬（#1289）：审官会话跑完、分析做完、结论写在会话文本里，
+ * 但从没调 `gh pr review` 落到 GitHub，然后以 phase=done 收尾。下游把
+ * 「会话结束」读成「审完了」，于是复用那个没交卷的会话，PR 冻了一整天。
+ * 判「审完了没有」的唯一硬证据是 GitHub 上这个 head 有没有判定——不是会话状态。
+ *
+ * 返回 `true` / `false`（确认没有）/ `null`（没查成）。
+ * 三者必须分开：把「没查成」当成「没有判定」会去重复烧额度，
+ * 当成「有判定」会把 PR 继续冻着——两个方向都错，所以读不清就说读不清。
+ *
+ * @param reviews gh `pr view --json reviews` 的数组
+ * @param headOid 当前 headRefOid
+ */
+export function verdictOnHead(reviews, headOid) {
+  if (!Array.isArray(reviews)) return null;
+  const head = String(headOid || '').trim();
+  if (!head) return null;              // 不知道 head 就判不了「打在 head 上」
+  for (const rv of reviews) {
+    const state = normalizeReviewState(rv);
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue;
+    const oid = String((rv && rv.commit && rv.commit.oid) || '').trim();
+    if (!oid) return null;             // 有判定但读不到它打在哪个 commit ⇒ 没查成
+    if (oid === head) return true;
+  }
+  return false;
 }

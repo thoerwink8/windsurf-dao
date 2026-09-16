@@ -625,6 +625,11 @@ export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {
         deadModelId: capacityFailover.deadModelId || seat.modelId,
         deadError: capacityFailover.deadError,
         workerId: capacityFailover.workerId,
+        // 腿况证据必须**转发**：这里是生产路径上真正说了算的那道闸。
+        // #1290 首审当场逮到——纯判据放行了，这里重建凭证时把 legEvidence 丢了，
+        // 于是「新死法 + 腿况成立」在单测里绿、在生产上照旧被拒。
+        // 判例 memory `fix-landed-at-one-call-site-only`：修法只接一个调用点等于没接。
+        legEvidence: capacityFailover.legEvidence,
         models: Array.isArray(routing.models) ? routing.models : [],
         passerIds: order,
         order,
@@ -730,11 +735,35 @@ function recoveredManualReason(policy, reason, whence) {
 }
 
 /**
+ * 无署名 issue（快路 PR，pr-fast 按设计不收 issue）取不到 human_holds。
+ * 没查成不许放行 auto——与 commander-core 快路返工同一失败方向（#1240）。
+ */
+export const UNSIGNED_ISSUE_MERGE_REASON =
+  'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）';
+
+export function unsignedIssueMergePolicy() {
+  return {
+    ok: true,
+    mergePolicy: 'manual',
+    mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
+    source: 'no-issue',
+  };
+}
+
+function issueIsUnsigned(issue) {
+  return issue !== undefined && (issue == null || String(issue).trim() === '');
+}
+
+/**
  * #799：审官任务书的 merge-policy。
- * 显式旗标 > 账本 > 卡备注；都读不到才回退 auto，并带 fallbackReason 写进任务书。
+ * 显式旗标 > 账本 > 卡备注；无署名 issue 走 manual（取不到 human_holds）；
+ * 都读不到才回退 auto，并带 fallbackReason 写进任务书。
+ *
+ * `issue` 三态：省略（undefined）= 这次查找没把署名纳入；显式 null/空 = 快路无署名。
+ * 只有后一种才切 manual——旧测试不传 issue，仍走 fallback auto。
  */
 export function resolveReviewerMergePolicy({
-  explicitPolicy, explicitReason, ledger, comment,
+  explicitPolicy, explicitReason, ledger, comment, issue,
 } = {}) {
   const explicit = String(explicitPolicy || '').trim();
   if (explicit) {
@@ -778,6 +807,8 @@ export function resolveReviewerMergePolicy({
         : {}),
     };
   }
+
+  if (issueIsUnsigned(issue)) return unsignedIssueMergePolicy();
 
   return {
     ok: true,
@@ -1155,11 +1186,13 @@ export function postCommentOnce({
 // @param {object} [args.channelCaps]   #1145 渠道容量快照 { caps:{ch:n}, states } —— 缺则渠道剔除 inert
 // @param {object} [args.channelInFlight] #1145 渠道在途快照 { counts:{ch:n} }（或直接的 counts 对象）
 // @param {Set|string[]} [args.channelExcluded] #1145 本轮已 429 的渠道
+// @param {Array} [args.legs]  路由表腿节；有则按本模型有效上限剔，pending 不继承同渠道 Infinity
 // @returns {Promise<{ok,stop,queued?,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
 export async function preflightReviewer({
   order = [], models = [], workerId = null, noPreflight = false, dispatchId = null,
   probe, policy, availabilityResult, now = new Date(), root, home,
   channelCaps = null, channelInFlight = null, channelExcluded = null,
+  legs = null,
 } = {}) {
   const byId = new Map((models || []).map(m => [m.id, m]));
   // 同厂闸：顺位里与工人同厂的当场剔除，不放宽。
@@ -1198,7 +1231,10 @@ export async function preflightReviewer({
     const kept = [];
     const dropped = [];
     for (const cand of vendorFiltered) {
-      const av = legAvailability(cand.landing, { caps, states, inFlight, excluded });
+      const av = legAvailability(cand.landing, {
+        caps, states, inFlight, excluded,
+        model: cand.id, legs, models,
+      });
       // 认不出渠道（no-channel）不据渠道剔——本闸只拦「已满员/本轮429」，其余保留。
       if (av.available || av.reason === 'no-channel') { kept.push(cand); continue; }
       if (av.reason === 'at-cap' || av.reason === 'excluded-429') {

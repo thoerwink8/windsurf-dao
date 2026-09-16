@@ -37,8 +37,11 @@ export function planRestore({ pending, current }) {
 // 这是删掉一层，不是再加 SKIP_GW 开关；环境变量覆盖留给测试（fake-go）和旧垫片，
 // 默认值才是生产真相。2026-09-03 的 PI_GO_FALLBACK_PRIMARIES=opencode-go 垫片合并后退役。
 export const DEFAULT_PRIMARIES = "opencode-go,mirasim";
-// 直连 deepseek 仍是 og 撞顶时的唯一备用；切之前必须探余额，402 / 没钱不算降级。
-export const DEFAULT_FALLBACK_PROVIDERS = "deepseek";
+// 2026-09-15：直连 deepseek 渠道已删（用户拍板「不要留」）。默认备用为空——
+// og 撞顶就上浮错误，不再 setModel 切到官方直连。环境变量仍可指定别的备用
+// （测试用 fake-ds），但 deepseek 即使用户写进 PI_GO_FALLBACK_PROVIDERS 也会被滤掉。
+export const DEFAULT_FALLBACK_PROVIDERS = "";
+export const DROPPED_FALLBACK_PROVIDERS = Object.freeze(["deepseek"]);
 export const DEFAULT_TRANSIENT_AFTER = 2;
 
 export function parseProviderList(value, fallback) {
@@ -46,16 +49,20 @@ export function parseProviderList(value, fallback) {
   return String(src).split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+export function isDroppedFallback(provider) {
+  return DROPPED_FALLBACK_PROVIDERS.includes(String(provider || "").toLowerCase());
+}
+
 export function resolveProviderLists(env = {}) {
   return {
     primaries: parseProviderList(
       env.PI_GO_FALLBACK_PRIMARIES || env.PI_GO_FALLBACK_PRIMARY,
       DEFAULT_PRIMARIES
-    ),
+    ).filter((p) => !isDroppedFallback(p)),
     fallbacks: parseProviderList(
       env.PI_GO_FALLBACK_PROVIDERS || env.PI_GO_FALLBACK_PROVIDER,
       DEFAULT_FALLBACK_PROVIDERS
-    ),
+    ).filter((p) => !isDroppedFallback(p)),
   };
 }
 
@@ -80,63 +87,14 @@ export function planSwitch({
   return { action: "switch" };
 }
 
-/** 直连 deepseek 切之前必须探余额。别的备用（测试用 fake-ds）不探。 */
-export function needsBalanceProbe(provider) {
-  return provider === "deepseek";
-}
-
 /**
- * 读 DeepSeek /user/balance 的结果。402、没钱、探不成 → 都不算可用备用。
- * 缺 balance_infos 也 fail-closed：看不清余额就当没钱，避免再踩 2026-09-03 的 402。
+ * 选定一个备用 provider 之后：同通道跳过；已删的直连渠道永远 skip。
+ * 测试用 fake-ds 不在黑名单里，环境变量指定即可用。
  */
-export function interpretBalanceProbe({ status, body } = {}) {
-  const code = Number(status);
-  if (code === 402) return { ok: false, reason: "insufficient-balance" };
-  if (!Number.isFinite(code) || code < 200 || code >= 300) {
-    return { ok: false, reason: `http-${Number.isFinite(code) ? code : "na"}` };
-  }
-  let data = body;
-  if (typeof body === "string") {
-    try { data = JSON.parse(body); } catch { return { ok: false, reason: "bad-json" }; }
-  }
-  if (!data || typeof data !== "object") return { ok: false, reason: "bad-json" };
-  const nested = data.error && typeof data.error === "object" ? data.error.message : "";
-  const msg = String(data.message || nested || "");
-  if (/insufficient balance/i.test(msg)) return { ok: false, reason: "insufficient-balance" };
-  if (data.is_available === false) return { ok: false, reason: "unavailable" };
-  const infos = data.balance_infos;
-  if (!Array.isArray(infos)) return { ok: false, reason: "no-balance-info" };
-  const hasMoney = infos.some((i) => Number(i && i.total_balance) > 0);
-  if (!hasMoney) return { ok: false, reason: "zero-balance" };
-  return { ok: true };
-}
-
-export async function probeDeepseekBalance({ fetchFn, apiKey, url } = {}) {
-  if (!apiKey) return { ok: false, reason: "no-key" };
-  const fetchImpl = fetchFn || globalThis.fetch;
-  if (typeof fetchImpl !== "function") return { ok: false, reason: "no-fetch" };
-  const endpoint = url || "https://api.deepseek.com/user/balance";
-  try {
-    const res = await fetchImpl(endpoint, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const text = typeof res.text === "function" ? await res.text() : "";
-    return interpretBalanceProbe({ status: res.status, body: text });
-  } catch (e) {
-    return { ok: false, reason: "probe-error", detail: String(e && e.message || e) };
-  }
-}
-
-/**
- * 选定一个备用 provider 之后：同通道跳过；deepseek 必须有成功的余额探针才用。
- * probe 缺省 = 没探过 → skip（fail-closed，切到 402 账号不算降级）。
- */
-export function planFallbackTarget({ provider, currentProvider, probe } = {}) {
+export function planFallbackTarget({ provider, currentProvider } = {}) {
   if (!provider || provider === currentProvider) return { action: "skip", reason: "same-provider" };
-  if (!needsBalanceProbe(provider)) return { action: "use" };
-  if (!probe) return { action: "skip", reason: "unprobed" };
-  if (probe.ok === true) return { action: "use" };
-  return { action: "skip", reason: probe.reason || "probe-failed" };
+  if (isDroppedFallback(provider)) return { action: "skip", reason: "dropped-channel" };
+  return { action: "use" };
 }
 
 /**

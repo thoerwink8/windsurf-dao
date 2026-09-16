@@ -154,8 +154,9 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
       const r = await cliInProc(args, env);
       return JSON.parse(r.stdout);
     };
-    // dry-run 仍过容量闸（admitReviewPull 读现场会话）。本用例只验 --pr 仓筛，
-    // 不把断言绑到现场在役审官数——满载时 pull=[]，看起来像「本仓票被筛掉」。
+    // --force：本用例钉的是仓隔离，不是容量闸。合入 #1274 后 dry-run 仍过容量闸
+    // （admitReviewPull 读现场会话）；现场在役=上限时会把已筛出的票全部 hold，
+    // 断言看起来像「--pr 把本仓票筛掉了」。不把断言绑到现场在役审官数。
     const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run', '--force']);
     assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
     const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run', '--force']);

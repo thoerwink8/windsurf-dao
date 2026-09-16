@@ -24,7 +24,7 @@
 //   review-state.mjs analyzeGithubReviews —— GitHub APPROVED / CHANGES_REQUESTED
 
 import { prApprovedReady, prApprovedDraft, prChecksRed, DEFAULT_REPO } from './shuai-scan.mjs';
-import { sessionStateOf } from './execution-states.mjs';
+import { sessionStateOf, classifySessionState } from './execution-states.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue } from './approved-merge.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { analyzeGithubReviews, normalizeReviewState } from './review-state.mjs';
@@ -40,7 +40,10 @@ import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './
 // 明天就是写侧（#909 的形状）。
 export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
 // #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
-import { judgeRetry } from './retry-verdict.mjs';
+import {
+  judgeRetry, judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK,
+} from './retry-verdict.mjs';
+export { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK };
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -52,20 +55,24 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
-import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
+import {
+  approvedToLand, lastJudgmentOf, lastApprovedCommitId, needsDockProof, provePureDock,
+} from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
   capNewDispatchSlots,
 } from './admission.mjs';
 import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
+import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
-import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { UNSIGNED_ISSUE_MERGE_REASON } from './dispatch/reviewer.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
   'notify-hub', 'wake-brain', 'escalate', 'noop',
   'add-label', 'retry-drain', 'open-issue', 'reap-ticket', 'mark-exhausted',
-  'stop-session', 'pump-draft', 'clear-exhausted', 'reap-tree',
+  'stop-session', 'pump-draft', 'clear-exhausted', 'reap-tree', 'reap-orphan',
 ];
 
 // 报帅停手的默认门槛：同一撞死终端唤醒大脑到这个次数仍没闭环 → 转报帅（#800）。
@@ -78,6 +85,33 @@ export function ticketHeadOid(head) {
   if (typeof head === 'string') return head.trim() || null;
   const oid = head && typeof head === 'object' ? head.oid : null;
   return typeof oid === 'string' && oid.trim() ? oid.trim() : null;
+}
+
+/** 复审票上的仓（归一化 owner/name）。空 = 未声明仓。 */
+function ticketRepoOf(it) {
+  return it ? normalizeCommanderRepo(it.repo) : '';
+}
+
+/**
+ * 票是否属于当前指挥官仓。空仓字段与显式本仓 repo 都算本仓——
+ * 生产路径 worker-done 会写 `repo: owner/name`，不能把非空一律当跨仓。
+ */
+function ticketIsHome(it, homeRepo) {
+  const repo = ticketRepoOf(it);
+  if (!repo) return true;
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(here) && repo === here;
+}
+
+/** stale / 归属键：本仓纯 PR 号，跨仓 `owner/name#pr`。同号不同仓必须分开。
+ *  空 repo 与显式本仓 repo 共用纯号——票循环和 PR 循环必须走同一把键。 */
+export function ticketScopeKey(it, homeRepo) {
+  if (!it || it.pr == null) return null;
+  const n = Number(it.pr);
+  if (!Number.isFinite(n)) return null;
+  if (ticketIsHome(it, homeRepo)) return String(n);
+  const repo = ticketRepoOf(it);
+  return repo ? `${repo}#${n}` : String(n);
 }
 
 /** #1014：attach-reviewer 的 why 按票上记下的来源写，不许写死、不许猜。
@@ -325,6 +359,8 @@ export function chooseReviewerLeg(situation = {}, { order, excluded } = {}) {
     breaker: situation.breaker || null,
     now: nowMs,
     excluded,
+    legs: situation.routingLegs,
+    models: recs,
   });
 }
 
@@ -441,20 +477,28 @@ export function analyzeReviewsAtHead(reviews, head) {
   const h = typeof head === 'string' ? head.trim() : '';
   if (!h) return { scanned: false, reason: 'head-unscanned' };
   const judged = [];
+  const events = [];
   for (const rv of reviews) {
     const state = normalizeReviewState(rv);
-    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue; // COMMENTED 等不参与判别，缺 commit_id 也无所谓
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED' && state !== 'DISMISSED') continue;
     const cid = rv && typeof rv === 'object' ? String(rv.commit_id || rv.commitId || '').trim() : '';
     if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
-    judged.push({ rv, cid });
+    const event = { rv, cid, state };
+    events.push(event);
+    if (state !== 'DISMISSED') judged.push(event);
   }
-  const atHead = judged.filter((x) => x.cid === h);
+  const atHeadEvents = events.filter((x) => x.cid === h);
+  const lastDismissed = atHeadEvents.map((x) => x.state).lastIndexOf('DISMISSED');
+  const effectiveAtHead = (lastDismissed >= 0 ? atHeadEvents.slice(lastDismissed + 1) : atHeadEvents)
+    .filter((x) => x.state !== 'DISMISSED');
   return {
-    ...analyzeGithubReviews(atHead.map((x) => x.rv)),
+    // DISMISSED 要留在当前 head 的时间序列里，才能终止同 head 上的旧 APPROVED；
+    // 但它不是有效判定，所以 atHead / judged 仍只统计 APPROVED 与 CHANGES_REQUESTED。
+    ...analyzeGithubReviews(effectiveAtHead.map((x) => x.rv)),
     head: h,
     judgedTotal: judged.length,
-    atHead: atHead.length,
-    judged: atHead.map((x) => x.rv),
+    atHead: effectiveAtHead.length,
+    judged: effectiveAtHead.map((x) => x.rv),
   };
 }
 
@@ -482,6 +526,60 @@ function prReviewInput(entry) {
   if (!entry || typeof entry !== 'object') return undefined;
   if (Array.isArray(entry.reviews)) return entry.reviews;
   return entry.bodies;
+}
+
+function dockOf(situation, prNumber) {
+  const table = situation && situation.dockByPr;
+  if (table == null || typeof table !== 'object') {
+    return { state: 'unknown', why: '对接证明没采' };
+  }
+  const v = table[prNumber] != null ? table[prNumber] : table[String(prNumber)];
+  if (!v || typeof v !== 'object') return { state: 'unknown', why: '这张 PR 没有对接证明' };
+  return v;
+}
+
+/**
+ * 生产取证：只对「旧批准、当前 head 零判定」的 PR 跑树级对接证明。
+ * decide 保持纯函数，证明表由眼睛注入 situation.dockByPr。
+ */
+export function collectDockProofs(situation, { run, masterRef = 'origin/master' } = {}) {
+  const prs = (situation && situation.github && situation.github.prs) || [];
+  const byPr = (situation && situation.prReviews && situation.prReviews.byPr) || {};
+  const out = {};
+  for (const pr of prs) {
+    if (!pr || pr.number == null) continue;
+    const raw = prReviewInput(byPr[pr.number]);
+    const mergeA = analyzeReviewsAtHead(raw, pr.headRefOid);
+    const last = lastJudgmentOf(analyzeReviews(raw));
+    const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const atHead = mergeA.scanned ? mergeA.atHead : null;
+    const approved = lastApprovedCommitId(raw);
+    // DISMISSED 撤销了旧批准：即使虚拟合入树相同也不得继承，要当前 HEAD 重新拿到 APPROVED。
+    if (approved.revoked && greenAtHead !== true && atHead === 0) {
+      out[pr.number] = { state: 'unknown', why: '批准已被 DISMISSED 撤销，不得继承' };
+      continue;
+    }
+    if (!needsDockProof({
+      greenAtHead,
+      atHead,
+      lastJudgment: last,
+    })) continue;
+    if (!approved.scanned || !approved.commit) {
+      out[pr.number] = { state: 'unknown', why: '批准 commit 没查成' };
+      continue;
+    }
+    if (typeof run !== 'function') {
+      out[pr.number] = { state: 'unknown', why: '取证 run 没给' };
+      continue;
+    }
+    out[pr.number] = provePureDock({
+      approved: approved.commit,
+      head: pr.headRefOid,
+      masterRef,
+      run,
+    });
+  }
+  return out;
 }
 
 function esc(why, extra = {}) {
@@ -544,6 +642,54 @@ export const REWORK_RETRY_GRACE_MIN = 45;
 export const MAX_REWORK_TRIES = 3;
 
 /**
+ * 「返工派成功了」的那条账多久之后可以当**工人已经死了**。
+ * 必须比 REWORK_RETRY_GRACE_MIN 宽：那条管的是「派失败了多久能再试」，这条管的是
+ * 「派成功了多久还没动静就算它没了」——后者要把工人真正干活的时间让出来，不然会在
+ * 工人干到一半时再派一个，两个工人抢同一棵树。
+ */
+export const REWORK_ORPHAN_GRACE_MIN = 180;
+
+/**
+ * 派成功的返工是不是**已经没人在做了**（孤儿）。
+ *
+ * 三条必须同时成立，缺一不解冻——解冻的代价是重复工人，比多等一轮贵：
+ *   ① 会话面确知「没有这条的活会话」：unscanned / unavailable 一律不算（fail-closed）
+ *   ② 距派出去超过 REWORK_ORPHAN_GRACE_MIN：给工人真正干活的时间
+ *   ③ head 没动：工人推了新东西 = 它活着或已交卷，这条账本来就不该再用
+ *
+ * ③ 在调用方天然成立（账本键就带 head），这里仍显式核一次——键的形状将来可能改，
+ * 判据不该指望键里恰好含着它要的事实。
+ *
+ * @param prev 账本里那条 `{ at, ok, head }`
+ * @param situation 取会话名单用；没有 sessions 节 ⇒ 观测面未接入 ⇒ 不解冻
+ */
+export function judgeReworkOrphan(pr, { prev, nowMs, situation } = {}) {
+  if (!prev || prev.ok !== true) return { orphan: false, why: '不是一条派成功的账' };
+  const head = typeof prev.head === 'string' ? prev.head.trim() : '';
+  const cur = pr && typeof pr.headRefOid === 'string' ? pr.headRefOid.trim() : '';
+  if (!head || !cur || head !== cur) return { orphan: false, why: 'head 已经动了或没查成' };
+  const at = Date.parse(prev.at || '');
+  if (!Number.isFinite(at) || !Number.isFinite(nowMs)) return { orphan: false, why: '派出时刻没查成' };
+  const ageMin = (nowMs - at) / 60000;
+  if (ageMin < REWORK_ORPHAN_GRACE_MIN) {
+    return { orphan: false, why: `才派出去 ${Math.round(ageMin)} 分钟，还没到 ${REWORK_ORPHAN_GRACE_MIN} 分钟`, ageMin };
+  }
+  const live = hasLiveExecutor({
+    sessions: sessionListForLiveness(situation),
+    pr: pr && pr.number,
+    issue: attributedIssueNumber(pr),
+    branch: pr && pr.headRefName,
+  });
+  if (live.unavailable) return { orphan: false, why: '会话观测面未接入，不猜' };
+  if (live.unscanned) return { orphan: false, why: '会话名单没查成，不猜' };
+  if (live.live) return { orphan: false, why: '还有活会话在做' };
+  return {
+    orphan: true, ageMin,
+    why: `返工 ${Math.round(ageMin / 60)} 小时前派成功，此后 head 一个字没动、会话名单里也没有活会话——工人已经没了`,
+  };
+}
+
+/**
  * 署名 issue 仍给 merge-policy / human_holds 用（正文在 issue 上）。
  * 选型（谁写码、谁来审）只读 PR 自己的 label（#1116），不从这里反推。
  *
@@ -568,6 +714,17 @@ export function normalizeCommanderRepo(raw) {
   return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(s) ? s : '';
 }
 
+/**
+ * 票仓非空且与本仓不同才算跨仓。
+ * 本仓交卷票本来就会带 repo（worker-done 写 owner/name，scanReviewPending 原样保留），
+ * 不能把「有 repo 字段」当成跨仓——否则死票占名额、也不产 reap-ticket。
+ */
+export function ticketRepoIsForeign(ticketRepo, homeRepo) {
+  const want = normalizeCommanderRepo(ticketRepo);
+  const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
+  return Boolean(want && here && want !== here);
+}
+
 function prRepoOf(pr) {
   if (!pr || typeof pr !== 'object') return '';
   if (typeof pr.repo === 'string') return normalizeCommanderRepo(pr.repo);
@@ -583,7 +740,7 @@ export function correspondingPrForRedispatch(rd, prs, { homeRepo } = {}) {
   const list = Array.isArray(prs) ? prs : [];
   const wantRepo = normalizeCommanderRepo(rd && rd.repo);
   const here = normalizeCommanderRepo(homeRepo) || normalizeCommanderRepo(DEFAULT_REPO);
-  if (wantRepo && here && wantRepo !== here) return null;
+  if (ticketRepoIsForeign(rd && rd.repo, homeRepo)) return null;
   const scoped = list.filter((p) => {
     if (!p) return false;
     const prRepo = prRepoOf(p);
@@ -637,6 +794,8 @@ export const ACTION_NEEDS = {
   // 认输打标写的是 PR。github 没查成不知道有没有标，不许盲打。
   'mark-exhausted': ['github'],
   'stop-session': [],
+  // 幽灵进程只认 /proc + 会话名单；两面都由 collectCandidates 自己看 scanned，不进总闸。
+  'reap-orphan': [],
   // #1147 draft 收口泵：只认 github 上的 draft + lastCommittedAt。会话名单不进
   // SITUATION_SECTIONS（没查成只挡住泵，不许把合并/叫审官整轮停掉）。
   'pump-draft': ['github'],
@@ -700,6 +859,7 @@ function collectCandidates(situation) {
     : (situation.staleRedAt && typeof situation.staleRedAt === 'object'
       ? new Map(Object.entries(situation.staleRedAt)) : new Map());
   const effectiveMergeability = new Map();
+  const homeRepo = situation.repo || DEFAULT_REPO;
   // 时钟从态势里取（不用 Date.now）：decide 是纯函数，同一份态势必须产同一批动作。
   const nowMs = Date.parse(situation.at || '') || 0;
   let reworkThisRound = 0;
@@ -761,6 +921,7 @@ function collectCandidates(situation) {
       sessions: sessionsForLive,
       pr: pr.number,
       issue: attributedIssueNumber(pr),
+      branch: pr.headRefName,
     });
     if (live.live || live.unavailable) return false;
     const prev = reworkDispatched[pumpDraftKey(pr.number)];
@@ -815,11 +976,25 @@ function collectCandidates(situation) {
   // 开销也小（进程平均 2% CPU，其余是等模型回话的 IO 等待）。所以收尾名额**不受
   // dispatchSlots 约束**，只受下面自己的上限（本机同时最多几个收尾动作）管。
   // 反过来，机器满载时新活仍然一个不派——那半边的本意不动。
-  const reviewReserve = (rp.items || []).length > 0 ? 1 : 0;
+  // 死票（已合并/已关）只产 reap-ticket，不占会话名额（审官红③ / #1291）。
+  // 存活判据与下面回收那一节同一把尺：没扫成 / 窗口截断 / 跨仓都不能证明它死了。
+  const PR_WINDOW = 100;
+  const prList = gh.prs || [];
+  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
+  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  const reviewTicketIsLive = (it) => {
+    if (!it || it.pr == null) return false;
+    // 只有票仓非空且与本仓不同，才按跨仓票保守保活。本仓带同值 repo 的票仍按 openPrs 判死。
+    if (ticketRepoIsForeign(it.repo, situation.repo)) return true;
+    if (!ghScanned) return true;
+    return openPrs.has(Number(it.pr));
+  };
+  const liveReviewItems = (rp.items || []).filter(reviewTicketIsLive);
+  const reviewReserve = liveReviewItems.length > 0 ? 1 : 0;
   const finishReserve = reviewReserve + stalledPumpCount;
   // 老单还有审查/返工/冲突/收口泵时，普通新单最多 1 个槽位（#1174）。
   const agingBusy = oldTicketsHaveWork({
-    reviewPending: rp.items,
+    reviewPending: liveReviewItems,
     prs: gh.prs,
     reviewsByPr: reviews.byPr,
     draftDueForPump,
@@ -884,12 +1059,26 @@ function collectCandidates(situation) {
   };
   // 工人的 model 由 PR 标签钉死（#1116；不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
   // 认不出落地 → 本闸不拦（其它闸会挡）。返回 { ok, channel, why }。
+  // 有腿表时走 judgeChannelForModel：pending 模型不读同渠道另一条腿的 Infinity（#1274）。
+  const routingLegs = Array.isArray(situation.routingLegs) ? situation.routingLegs : null;
   const channelAdmits = (model) => {
     if (!chSnap) return { ok: true, channel: null };
+    if (routingLegs) {
+      const judged = judgeChannelForModel({
+        model, legs: routingLegs, models: modelRecs, caps: chCaps, states: chStates,
+        inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      });
+      if (judged.attributed) {
+        return judged.available
+          ? { ok: true, channel: judged.channel }
+          : { ok: false, channel: judged.channel, why: judged.why, reason: judged.reason };
+      }
+    }
     const landing = landingOfModel(model);
     if (!landing) return { ok: true, channel: null };
     const av = legAvailability(landing, {
       caps: chCaps, states: chStates, inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      model, legs: routingLegs, models: modelRecs,
     });
     return av.available
       ? { ok: true, channel: av.channel }
@@ -1062,11 +1251,25 @@ function collectCandidates(situation) {
   // 主查询是 pullRequests(first:100, states:OPEN)——含 draft，所以 draft 票不会被误剪。
   // 但取满 100 条就说明窗口可能被截断，掉出窗口的活 PR 会长得和「已关」一模一样，
   // 那时「不在列表里」不再是死票的证据，一张都不剪。
-  const PR_WINDOW = 100;
-  const prList = gh.prs || [];
-  const ghScanned = gh.scanned === true && prList.length < PR_WINDOW;
-  const openPrs = new Set(prList.map((p) => Number(p?.number)).filter(Number.isFinite));
+  // PR_WINDOW / prList / ghScanned / openPrs 在上面预留名额时已经算过——同一把尺。
   const exhaustedThisRound = new Set(); // 本轮刚认输的 PR：标还没打上，PR 循环也要跳过
+  // 票头过期 = 这张票问的不是现在的 head。它必须能穿过「已认输就跳过」那道否决，
+  // 否则过期票收不掉、认输标摘不掉、按当前 head 该叫的复审永远叫不出来（#1208，见 commander-verbs
+  // 的 retry-drain.stale-head）。在两道循环**之前**算一次，PR 循环的 stuck 否决要用同一个集合——
+  // 各算一份迟早对不上，而这里的失效方式正是「两处判据不同步」。
+  const staleTickets = new Set();
+  for (const it of rp.items || []) {
+    const scope = ticketScopeKey(it, homeRepo);
+    if (!scope) continue;
+    // 跨仓票的现场不在本仓 gh.prs。按纯 PR 号比对会把别仓过期票记成本仓 stale，
+    // 本仓 stuck PR 就被绕过去派 rework/rereview（#1209 审官返工）。
+    // 空 repo 与显式本仓 repo 都是本仓：生产票带 owner/name，非空 ≠ 跨仓。
+    if (!ticketIsHome(it, homeRepo)) continue;
+    const itHead0 = ticketHeadOid(it.head);
+    const livePr0 = (gh.prs || []).find((p) => p && Number(p.number) === Number(it.pr));
+    const liveHead0 = typeof livePr0?.headRefOid === 'string' ? livePr0.headRefOid.trim() : '';
+    if (liveHead0 && itHead0 && itHead0 !== liveHead0) staleTickets.add(scope);
+  }
 
   // 「自动化认输」是带 head 的判据，不是永久标签——工人推了新 head = 新局面，摘标放回流水线。
   // 2026-09-11 实咬：这个标只写不摘，12 张 PR 被永久焊死（decide 对它们零动作）。
@@ -1100,9 +1303,9 @@ function collectCandidates(situation) {
 
   for (const it of rp.items || []) {
     if (!it || it.pr == null) continue;
-    const ticketRepo = it.repo && String(it.repo).trim() ? String(it.repo).trim() : '';
+    const ticketHome = ticketIsHome(it, homeRepo);
     // 跨仓票：本仓开放列表不能证明它死了。指挥官本单不扫别仓，不许当死票回收。
-    if (!ticketRepo && ghScanned && !openPrs.has(Number(it.pr))) {
+    if (!reviewTicketIsLive(it)) {
       out.push(withNeeds({
         kind: 'reap-ticket', pr: it.pr, repo: null,
         why: `PR #${it.pr} 已不在开放列表（合并/已关）——复审票是死票，回收，不再叫审官`,
@@ -1110,13 +1313,25 @@ function collectCandidates(situation) {
       continue;
     }
     const livePr = (gh.prs || []).find((p) => p && Number(p.number) === Number(it.pr));
-    if (livePr && prHasStuckLabel(livePr)) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     // 票里的 head 有两种形态：字符串，或 {name, oid}（写票的一侧给的是后者）。
     // 取不出就传 null——退回旧键，不是猜一个。
     const itHead = ticketHeadOid(it.head);
+    // 票头是写票那一刻的快照，不是现场。带上当前 head，让「票过期」与「真试过」分开
+    // （2026-09-12 #1208：票头停在旧 commit，重试账钉在旧键上，试满后永久认输，
+    //  而按当前 head 本该叫的那轮复审一次也没叫出来）。见 commander-verbs 的 retry-drain.stale-head。
+    const liveHead = typeof livePr?.headRefOid === 'string' ? livePr.headRefOid.trim() : '';
+    // 判据顺序是负载的：**先判票过没过期，再判这张 PR 要不要省额度**。
+    // 反过来写，#1208 那类事故会整段够不着——事故现场 PR 正挂着「卡死/自动化认输」，
+    // 那句 `if (stuck) continue` 会在 stale-head 之前把整条票路掐掉，于是票永远是过期的旧票、
+    // 认输标永远没人摘、按当前 head 该叫的复审永远叫不出来（2026-09-12 审官打回 #1209 的第一条）。
+    // 省额度那句的本意是「已经认输的 PR 不用再花额度重试 drain」，它管的是**重试**，
+    // 不该顺手把「收殓过期票」也管了——那件事不花额度，只是把死票从流水线上取下来。
+    const staleTicket = staleTickets.has(ticketScopeKey(it, homeRepo));
+    if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     const drain = validateRetryDrain({
       pr: it.pr,
       head: itHead,
+      liveHead,
       queue: rp.items,
       ledger: situation.drainLedger || {},
       nowMs,
@@ -1132,13 +1347,16 @@ function collectCandidates(situation) {
       continue;
     }
     if (drain.code === 'grace') continue;
+    // 票头过期：不许拿它去 attach-reviewer（那张票问的不是现在的 head），也不许认输。
+    // 落到下面 PR 循环的 rereview 分支——它按**当前 head** 重新写票，tries 从新键起算。
+    if (drain.code === 'stale-head') continue;
     // #1237：'hopeless' 与 'exhausted' 都产认输动作，但**理由不一样**，评论也要不一样：
     //   hopeless  = 判据本身就是「拒」，一次都不该试 → 不该写「试了 N 次仍没推动」
     //   exhausted = 真试满了，机械重试确实无解
     // 混成一句话会误导读的人往错方向查（这正是 #1233 认输评论那个病的同一个形状）。
     if (drain.code === 'exhausted' || drain.code === 'hopeless') {
       // 跨仓票打在本仓同号 PR 上会标错仓。指挥官本单不扫别仓，停手不打标。
-      if (ticketRepo) continue;
+      if (!ticketHome) continue;
       // #1000：认输是 PR 属性，不再 escalate 开单（开单去重会把出口捂死）。
       if (livePr && prHasStuckLabel(livePr)) continue;
       const tries = Number(drain.tries) || 0;
@@ -1179,7 +1397,22 @@ function collectCandidates(situation) {
     // 账本里 ok 字段一直都在记，只是没人读。
     const prev = reworkDispatched[rkey];
     if (prev) {
-      if (prev.ok === true) return;        // 真派出去了：工人正在改，等它推新 head
+      // 派成功了，但工人**可能早就死了**。原来这里无条件 return，判据是「派出去过」，
+      // 而真正要问的是「现在还有没有人在做」——两者在工人静默退出时永久分叉：
+      // head 不会再变（没人推），账 ok:true 不会再变（没人重写），于是这张 PR 在这个 head 上
+      // 被自己的成功记录焊死。2026-09-14 实咬：#1154 的返工 09-14T05:37 派成功，14 小时后
+      // 会话名单里一条活的都没有、head 一个字没动、盘面每轮报「合不上」却零动作；
+      // #1091/#1216 同形状（exhausted.mjs 开头那段「pushRework 被 prev.ok === true 挡住」
+      // 记的就是这个症状，只记了没修）。唯一逃生口是判据版本换代把账本键作废——
+      // 靠改代码来解冻卡住的 PR，不是机制。
+      //
+      // 解冻判据必须**确知没人在做**，不是「没查到人」：会话面没接入 / 没查成一律维持旧行为，
+      // 否则观测面一抖就批量重派，造出一堆重复工人。确知没人 + 超过孤儿宽限 ⇒ 落回下面的
+      // 重试路，tries / 宽限 / MAX_REWORK_TRIES / terminal 判定原样全部适用，不新开一条绕闸的路。
+      if (prev.ok === true) {
+        const orphan = judgeReworkOrphan(pr, { prev, nowMs, situation });
+        if (!orphan.orphan) return;
+      }
       if (prev.unscanned === true) return; // 没查成：不知道有没有工人，fail-closed 不重派（重派会造重复工人）
       // 明确失败：上次没有工人被造出来，可以重试。但要宽限期 + 上限，
       // 否则失败原因没解决时会每轮刷一次（#849 刷单教训）。
@@ -1251,7 +1484,7 @@ function collectCandidates(situation) {
         model: model0, reviewer: rReviewer0, redRounds,
         title: pr.title || '', brief, reworkKey: rkey, conflict,
         mergePolicy: 'manual',
-        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
         mergePolicySource: 'no-issue',
         ...(sub0 ? { substitutedModel: sub0 } : {}),
         why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
@@ -1352,16 +1585,30 @@ function collectCandidates(situation) {
     // 改法（最小）：只让「判绿」这一件事穿过这层标，其余动作照旧被认输挡住。
     // 认输的本意是「别再机械重试审官/返工」，不是「永远不许合一张已经合格的 PR」；
     // 真合不了的情况下面各道判据（CI 红、draft、冲突、head 零判定）各自会拦。
+    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
+    // 认输 PR 也要写入 map——后面差集重派读这张表。以前 `continue` 跳过写入，
+    // 差集拿到列表上的 UNKNOWN，把「GitHub 还在算」当成「工人死了」再派一个（#1133 / PR #1253）。
+    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
+    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
+    effectiveMergeability.set(pr.number, mergeableState);
+    const mergeableNow = mergeableState === 'MERGEABLE';
+
+    //
+    // 2026-09-12 补第二个例外：**票头过期的票**也要穿过去。
+    // 上面那个例外只放了「判绿」，#1208 的形态（认输标 + 过期票 + 当前 head 零判定）照样是 noop——
+    // 于是修法在事故现场一次都不生效，因为事故现场正是「认输标 + 当前 head 零判定」这个组合。
+    // 放它过去不花额度：落到下面 rereview 分支只重写一张票，宽限期和试满照样管着。
     const stuck = prHasStuckLabel(pr) || exhaustedThisRound.has(Number(pr.number));
-    if (stuck) {
+    const staleTicketHere = staleTickets.has(ticketScopeKey({ pr: pr.number }, homeRepo));
+    if (stuck && !staleTicketHere) {
       const headR = pr.headRefOid;
       const greenR = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), headR);
-      const mergeableR = String(resolveMergeable(pr, { viewMergeable: situation.viewMergeable }).mergeable || '').toUpperCase() === 'MERGEABLE';
+      const mergeableR = mergeableNow;
       // CI 是非卖品：例外只放「判绿」过去，不许绕过 CI 那道闸（写完本条时自己测出来的）。
       const ciR = prChecksRed(pr);
       if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
         out.push(withNeeds({
-          kind: 'merge', pr: pr.number, title: pr.title || '',
+          kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
           why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE——已认输但条件齐了，照合（认输只挡重试，不挡合并）',
         }, N.merge));
         out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等）' }, N.land));
@@ -1376,23 +1623,39 @@ function collectCandidates(situation) {
     // 后果是自动合并这条路**从来没通过电**：审官判绿了，指挥官这一格永远进不去，
     // PR 就一直挂着等人。判红那一维同样在帅位盘面上隐形（shuai-scan 的 prRed 只看 CI）。
     // 改成按当前 head 看真 review（analyzeReviewsAtHead，与下面判红同一判据，绿红一把尺）：
-    //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
+    //   · 当前 head 独立审查绿才通常放行（#1133：聚合 APPROVED 不能单独代替 HEAD 证据）；
     //   · 没查成一律不合，与「查过确实没绿」分开。
+    // mergePolicy / manual 拍板证据是 PR #1225 的事，本续项不复制。
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
     const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const redAtHead = mergeA.scanned && mergeA.latestRed === true;
+    const lastJudgment = lastJudgmentOf(allA);
+    const dockNeeded = needsDockProof({
+      greenAtHead,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment,
+    });
+    const dock = dockNeeded ? dockOf(situation, pr.number) : null;
+    if (dockNeeded && !(dock && dock.state === 'ok')) {
+      if (!dock || dock.state !== 'red') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 旧批准要继承但纯对接没查成：${(dock && dock.why) || '没证明'}`,
+          { reason: 'unscanned', pr: pr.number, missing: ['dockProof'] },
+        ), N.merge));
+        continue;
+      }
+      // dock.red：批准后有新树内容，落到下面复审，不合。
+    }
     const readyToLand = approvedToLand({
       greenAtHead,
       decisionApproved,
       atHead: mergeA.scanned ? mergeA.atHead : null,
-      lastJudgment: lastJudgmentOf(allA),
+      lastJudgment,
+      redAtHead,
+      dock,
     });
-    // #1017：list / GraphQL 上 mergeable 常恒 UNKNOWN。未知态才单张重查，已知态不烧配额。
-    const resolvedMergeable = resolveMergeable(pr, { viewMergeable: situation.viewMergeable });
-    const mergeableState = String(resolvedMergeable.mergeable || '').toUpperCase();
-    effectiveMergeability.set(pr.number, mergeableState);
-    const mergeableNow = mergeableState === 'MERGEABLE';
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
       const ci = prChecksRed(pr);
@@ -1415,10 +1678,10 @@ function collectCandidates(situation) {
         }
       }
       out.push(withNeeds({
-        kind: 'merge', pr: pr.number, title: pr.title || '',
+        kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
         why: greenAtHead
           ? '审官判绿（当前 head）+ CI 绿 + MERGEABLE'
-          : '审官已放行（head 因对接 master 变了，不再审）+ CI 绿 + MERGEABLE',
+          : '审官已放行（已证明纯对接 master，不再审）+ CI 绿 + MERGEABLE',
       }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
@@ -1454,6 +1717,7 @@ function collectCandidates(situation) {
         sessions: sessionListForLiveness(situation),
         pr: pr.number,
         issue: attributedIssueNumber(pr),
+        branch: pr.headRefName,
       });
       if (live.live) continue; // 有人在做，或会话名单没查成——不派
       if (live.unavailable && pr.isDraft) continue; // 观测面未接：draft 维持旧契约
@@ -1579,15 +1843,30 @@ function collectCandidates(situation) {
       // （2026-09-14 自测当场看到）。说清「一条 review 都没有」和「判定都过期了」是两回事。
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
-      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
-        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
+      // 词表只认见过的字样，认不出的一律 retryable（`whitelist-fingerprints-cannot-find-unseen-failures`）。
+      // 补一条**不看词、只看行为**的判据：同一 (pr, head) 连着几轮拿回一模一样的失败原文，
+      // 就是「重试不会变」的直接证据，无论那句话谁写的、说的是什么。
+      const repeated = judgeRepeatedFailure(prev);
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal' || repeated.stuck) {
+        const hopeless = (rrVerdict.verdict === 'terminal' || repeated.stuck) && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: headForAction,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
-          why: hopeless
-            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`,
+          // 「判定仍是 0」只是**症状**。上一次叫审官如果是被闸当场拒的，那句拒绝原文才是
+          // 看 PR 的人唯一用得上的东西——它说得出下一步该做什么（去 rebase / 去换审官），
+          // 而「叫了 3 次没判定」说不出。2026-09-14 实咬：#1271 三轮全是
+          // 「审官位只许同厂换顺位……没交换厂凭证」，认输评论里一个字都没提，
+          // 读的人得自己去翻 journal 才知道真因。有原文就必须带上。
+          why: (() => {
+            const raw = prev?.lastError || prev?.error || null;
+            if (hopeless) {
+              return `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${raw || '无原文'}`
+                + (repeated.stuck ? `；判据：连着 ${repeated.rounds} 轮拿回一模一样的失败原文` : '');
+            }
+            const base = `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`;
+            return raw ? `${base}；最后一次叫审官是被拒的：${raw}` : base;
+          })(),
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;
@@ -1703,8 +1982,10 @@ function collectCandidates(situation) {
       openIssues: gh.scanned ? (gh.issues || []).map((i) => i && i.number).filter((n) => Number.isInteger(n)) : null,
       openPrs: gh.scanned ? (gh.prs || []).map(pr => {
         const review = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
-        const mergeable = effectiveMergeability.get(pr.number) || pr.mergeable;
-        return { ...pr, reworkRequired: mergeable !== 'MERGEABLE' || !review.scanned || review.latestRed === true };
+        const mergeable = String(effectiveMergeability.get(pr.number) || pr.mergeable || '').toUpperCase();
+        // 差集「已交卷等审查」只在真冲突 / 当前 head 真红时才叫工人回来。
+        // UNKNOWN、审查没查成 ≠ 冲突：那是没查成，按 #1056 当有人在做，不许再派工人。
+        return { ...pr, reworkRequired: mergeable === 'CONFLICTING' || (review.scanned === true && review.latestRed === true) };
       }) : null,
       alreadyQueued: out.map((a) => a.issue || a.approvalIssue).filter((n) => Number.isInteger(n)),
       maxPerRound: reconcileCap > 0 ? reconcileCap : 1,
@@ -1715,15 +1996,12 @@ function collectCandidates(situation) {
         reason: 'unscanned', detail: 'reconcile-unscanned',
       }), N.dispatch));
     }
-    const homeRepo = situation.repo || DEFAULT_REPO;
     for (const rd of plan.redispatches) {
       // #1116：差集重派的选型只读对应 PR 的 label，不回退 issue 上的旧标。
       // 匹配键带仓：跨仓同号不得套本仓 PR 的 model/reviewer。
-      const wantRepo = normalizeCommanderRepo(rd && rd.repo);
-      const here = normalizeCommanderRepo(homeRepo);
       const pr = correspondingPrForRedispatch(rd, gh.prs, { homeRepo });
       if (!pr) {
-        const cross = wantRepo && here && wantRepo !== here;
+        const cross = ticketRepoIsForeign(rd && rd.repo, homeRepo);
         out.push(withNeeds(esc(
           cross
             ? `#${rd.issue} 差集要重派，目标仓 ${rd.repo} 不是当前指挥官仓 ${homeRepo}，需人工补标（不得用同号本仓 PR）`
@@ -1815,23 +2093,41 @@ function collectCandidates(situation) {
     }
   }
 
-  // 短命会话：一轮说完（incomplete）的进程立刻列入停止。树留着，下一轮差集再起短会话。
+  // 短命会话：终态立刻停。树留着，下一轮差集再起短会话。
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  //
+  // 旧口径只停 incomplete（mirasim「一轮跑完在等下一句」）。Codex 审官交卷后
+  // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
+  // 返工被「渠道 mirasim 已满员（在途 1 ≥ 上限 1）」拒掉。done/completed/failed
+  // 与 incomplete 一样是终态，走正典 classifySessionState，不再手写一份词表。
+  // 已确认清退（cleanupVerified）不再 stop：rejected 无 vendor sessionKey 的登记
+  // 投影若丢掉这个字段，每轮会拿 launch: 键空转。#1133 §2。
   const stops = [];
   for (const s of sessionListForLiveness(situation) || []) {
-    // 这里的 s 来自 execution-sessions.mjs，已经是**归一后**的形状（字段是 state），
-    // 所以读 `state` 本来就对。改成走正典（sessionStateOf）是为了统一入口：
-    // 每个消费者各写一份兜底链是本晚的病根，写对一次不代表下次改形状时还跟着改。
     const raw = sessionStateOf(s) || '';
-    if (raw !== 'incomplete') continue;
+    if (!raw) continue;
+    if (raw === 'stopped' || raw === 'gone' || raw === 'cancelled' || raw === 'canceled') continue;
+    if (classifySessionState(s) !== 'finished') continue;
+    if (s && s.cleanupVerified === true) continue;
     const key = s && (s.key || s.id || s.sessionKey);
     if (!key) continue;
     stops.push(withNeeds({
       kind: 'stop-session',
       sessionKey: String(key),
       workdir: s.cwd || s.workdir || s.worktree || null,
-      why: '一轮说完，会话不常驻',
+      why: `一轮说完（${raw}），会话不常驻`,
     }, ACTION_NEEDS['stop-session']));
+  }
+  // 名单里没有活会话、/proc 还占着树：stop-session 杀不到（没有 key）。
+  const orphanReaps = planOrphanReaps({
+    procs: situation.lease && situation.lease.scanned === true ? situation.lease.procs : null,
+    sessions: situation.sessions && situation.sessions.scanned === true
+      ? (situation.sessions.items || []) : null,
+    sessionsScanned: situation.sessions ? situation.sessions.scanned === true : false,
+    leaseScanned: situation.lease ? situation.lease.scanned === true : false,
+  });
+  for (const a of orphanReaps.actions || []) {
+    stops.push(withNeeds(a, ACTION_NEEDS['reap-orphan']));
   }
   if (finishDenied > 0) {
     // 观测通知：名额已经在 collect 里耗尽，跟 PR review 查没查成无关。
@@ -1857,6 +2153,7 @@ function collectCandidates(situation) {
  *   prReviews:     { scanned, byPr:{ <n>:{ reviews:[{state,body,commit_id}], bodies:[...] } }, error }（decide 优先 reviews）
  *   stall:         { scanned, strikes:{ <term>:{strikes,sig} }, error }
  *   sessions:      { scanned, items:[{key,title,state,cwd}], error } —— #1056 观测集；不进 SITUATION_SECTIONS
+ *   lease:         { scanned, procs:[{pid,comm,cwd}], error } —— /proc 会话进程；不进总闸，没查成则不产 reap-orphan
  *   desiredJobs:   { unscanned, items:[{job_id,issue,pr,identity,model}], error } —— #1056 期望集（未结 job.dispatch）
  *   wakeCounts:    { <target>: n }——撞死指纹 `stall:<term>` / 代拍 `daipai:issue-<n>`（#931 后 PR 判红不再走唤醒）
  *   reworkDispatched: { `rework:<pr>@<oid>`: {...} }——该 PR 该 head 已派过返工工人；act 侧派工后记账
@@ -1913,9 +2210,38 @@ export function heartbeatDue({ state = {}, now = Date.now(), silenceDays = 7 } =
   return { due: true, reason: `已静默 ≥ ${silenceDays} 天`, sinceMs: now - anchor };
 }
 
-/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——决定要不要刷新 lastActivityAt。 */
+/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——只看动作本身长什么样。 */
 export function hasLiveAction(actions = []) {
   return actions.some((a) => a && a.kind !== 'noop' && !(a.kind === 'escalate' && a.reason === 'unscanned'));
+}
+
+/**
+ * 这一轮算不算「盘面在推进」——心跳的锚点判据。
+ *
+ * 2026-09-15 实咬：`hasLiveAction` 只看动作**长什么样**，不看它有没有改变什么。
+ * 昨晚连续 9 轮唯一的动作都是同一条 `{kind:'escalate', reason:'missing-labels', issue:1174}`，
+ * 它 kind 不是 noop、reason 不是 unscanned ⇒ 判成「有动静」⇒ `lastActivityAt` 每 20 分钟
+ * 刷新一次 ⇒ **心跳永远不到期，系统自认一切正常**，而盘面整整冻了 10 小时、
+ * 26 张开放 PR 有 22 张被跳过。
+ *
+ * 「服务没挂」和「活在推进」是两回事，原判据只测了前者（判例 memory `clean-exit-is-still-down`
+ * 的同族：干净退出照样是死了，这里是干净空转照样是停了）。
+ *
+ * 判据补上第二个条件：**动作摘要跟上一轮不一样**。同一套动作重复 = 磨盘，不刷新锚点，
+ * 于是静默计时正常走，心跳该响就响。
+ *
+ * `digestStreak` 必须是 `nextDigestStreak` 写回后的值（commander.mjs 先写 state 再调本函数）：
+ *   · 0 = 本轮摘要跟上轮不同（或首轮）→ 算推进
+ *   · ≥1 = 已经连续相同 → 磨盘，从第一轮重复起就不刷新锚点
+ *
+ * `digestStreak` 拿不到（undefined/非数）时退回旧行为——没查成不许当成「停了」，
+ * 那会把正常运转误报成死机。
+ */
+export function countsAsProgress({ actions = [], digestStreak } = {}) {
+  if (!hasLiveAction(actions)) return false;
+  const n = Number(digestStreak);
+  if (!Number.isFinite(n)) return true;   // 没查成 ⇒ 退回旧行为
+  return n === 0;                         // nextDigestStreak：新摘要 0；第二轮相同才 ≥1
 }
 
 /**

@@ -595,8 +595,8 @@
     },
     {
       "id": "claude-fable-5@reclaude/terminal",
-      "并发上限": "不限",
-      "并发上限依据": "reclaude 终端腿：并发受本机终端与 Max 订阅约束，不是上游账号合同数，故记「不限」，由机器负载准入兜底。",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板；当日未测，是拍的不是量的）。",
       "模型": "claude-fable-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -649,8 +649,8 @@
     },
     {
       "id": "claude-opus-5@reclaude/terminal",
-      "并发上限": "不限",
-      "并发上限依据": "同 claude-fable-5@reclaude/terminal：reclaude 终端腿，上游不按会话计量，记「不限」，由机器负载准入兜底。",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板；当日未测，是拍的不是量的）。",
       "模型": "claude-opus-5",
       "族": "claude",
       "供应商": "reclaude",
@@ -714,7 +714,7 @@
     {
       "id": "grok-4.6@xai-native/mirasim",
       "并发上限": "不限",
-      "并发上限依据": "同已退役的 grok-4.6@gw/orca：2026-09-08 拍板表 grokpool「用户判不限，工人无限做没出过问题」；网关退役后本腿是 grok 的唯一真路（#1174/#1213）。实际受机器负载准入约束，不是真无限。",
+      "并发上限依据": "2026-09-14 本腿实测：短并发同起 6 个 6/6 成、零容量类拒绝；中短会话 6 路全程 streaming，5/6 产出 4100–6900 字符。本格只记 grok-4.6。十几分钟量级真审官会话尚未测到，故不填具体数字。",
       "模型": "grok-4.6",
       "族": "pi",
       "供应商": "xai-native",
@@ -729,8 +729,8 @@
     },
     {
       "id": "gpt-5.6-sol@mirasim-relay/mirasim",
-      "并发上限": "不限",
-      "并发上限依据": "网关退役时（#1174/#1213）按本腿落地写入「不限」：mirasim-relay 不是 09-08 拍板表里的网关池合同。同渠道的 gpt-5.6-sol@mirasim/mirasim 仍是拍板初值 5，渠道层取严。",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
       "模型": "gpt-5.6-sol",
       "族": "codex",
       "供应商": "mirasim-relay",
@@ -744,8 +744,8 @@
     },
     {
       "id": "gpt-5.6-luna@mirasim-relay/mirasim",
-      "并发上限": "不限",
-      "并发上限依据": "网关退役时（#1174/#1213）按本腿落地写入「不限」：mirasim-relay 不是 09-08 拍板表里的网关池合同。同渠道的 gpt-5.6-luna@mirasim/mirasim 仍是拍板初值 5，渠道层取严。",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。这条是今天审官真正落地的腿——会话记录 profileId=codex-relay-gpt-5.6-luna / provider=mirasim-relay。",
       "模型": "gpt-5.6-luna",
       "族": "codex",
       "供应商": "mirasim-relay",
@@ -759,15 +759,15 @@
     },
     {
       "id": "composer-2.5@cursor-native/mirasim",
-      "并发上限": 1,
-      "并发上限依据": "本腿是订阅制本机会话（cursor-subscription），上游按订阅限流，多条并发一起撞 429 比排队慢。#1174/#1213 登记为 1；#1279 把本腿从 mirasim 渠拆到 native:cursor-native，避免 composer=1 把 grok/luna 压成同一条渠。",
+      "并发上限": "不限",
+      "并发上限依据": "2026-09-14 本腿实测：短并发同起 6 个 6/6 成、零容量类拒绝；中短会话 6 路全程 6/6 产出 3800–5500 字符。本格只记 composer-2.5。旧「订阅 429 ⇒ 上限 1」与本次实测不符，作废。",
       "模型": "composer-2.5",
       "族": "pi",
       "供应商": "cursor-native",
       "执行侧": "mirasim",
       "状态": "在役",
       "拍板": "2026-09-12",
-      "理由": "执行目录 cursor-acp-composer（available）。走共用 ACP 通道，不经 mirasim-server relay；执行侧认载体（mirasim），不写已退役的 orca。并发上限 1：本腿是订阅制本机会话（cursor-subscription），上游按订阅限流，多条并发一起撞 429 比排队慢。族记 pi 不记 claude：族是本腿走哪条 CLI 协议、完工证据长什么样——本条走 ACP 的 cursor 会话，既不进 mirasim-server 的 relay，也不产生 claude 会话的 result 帧。§73 约束①（mirasim 执行 claude 族时供应商锁死 mirasim）是 mirasim-server relay 通道的实测事实，管不到 ACP；记成 claude 会让它误撞该约束，也让「审查换厂商」按 vendorFamilyOf(composer-2.5)=composer 独立成一家、与族标签对不上。派工选型面与此一致：执行体.mirasim.模型前缀族 里 composer→pi，模型 id 与族标签两处同值。",
+      "理由": "执行目录 cursor-acp-composer（available）。走共用 ACP 通道，不经 mirasim-server relay；执行侧认载体（mirasim），不写已退役的 orca。并发上限不限：2026-09-14 本腿实测短并发 6/6、中短会话 6/6 产出 3800–5500 字符、零容量类拒绝；旧「上限 1 / 多并发撞订阅 429」与实测不符，作废。族记 pi 不记 claude：族是本腿走哪条 CLI 协议、完工证据长什么样——本条走 ACP 的 cursor 会话，既不进 mirasim-server 的 relay，也不产生 claude 会话的 result 帧。§73 约束①（mirasim 执行 claude 族时供应商锁死 mirasim）是 mirasim-server relay 通道的实测事实，管不到 ACP；记成 claude 会让它误撞该约束，也让「审查换厂商」按 vendorFamilyOf(composer-2.5)=composer 独立成一家、与族标签对不上。派工选型面与此一致：执行体.mirasim.模型前缀族 里 composer→pi，模型 id 与族标签两处同值。",
       "落地": {
         "provider": "cursor-native",
         "cli_model": "composer-2.5"
