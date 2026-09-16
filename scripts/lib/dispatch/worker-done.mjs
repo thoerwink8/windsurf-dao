@@ -557,6 +557,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   // 没处可发的是「连 PR 号都没有」，不是「没有 issue」。
   // 拒掉 = 快路永远交不了卷（#1270 返工实咬）。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
+  // 有署名单才再发 issue。不许把「没单号」说成「没处可发」。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
