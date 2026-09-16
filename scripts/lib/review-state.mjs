@@ -40,7 +40,10 @@ export function analyzeGithubReviews(reviews) {
     if (state === 'CHANGES_REQUESTED') {
       redRounds += 1;
       latestJudged = 'red';
+      continue;
     }
+    // DISMISSED 终止上一张判别票：旧 APPROVED 不得再当最后一条绿。
+    if (state === 'DISMISSED') latestJudged = 'dismissed';
   }
   return {
     scanned: true,

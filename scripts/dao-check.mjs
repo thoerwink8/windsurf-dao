@@ -129,6 +129,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { parseFrontmatter, collectExitTargets, judgeListExit, ingestPlanDocs } from './lib/session-brief.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
@@ -1414,6 +1415,109 @@ function checkInitiatives() {
   green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
+// ── 清单退场闸（2026-09-08 拍板「联动退出」：挂的单全关了，清单/计划文档就该收摊）──────
+// 读取面与退出共用 status/issues 字段，见 docs/README.md。判官纯函数在 session-brief.mjs。
+
+function listExitPlanDocs() {
+  const dir = join(ROOT, 'docs', 'decisions');
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); }
+  catch (e) { return { unscanned: true, error: String(e.message || e).slice(0, 80) }; }
+  return ingestPlanDocs(files.map((f) => {
+    const file = `docs/decisions/${f}`;
+    try { return { file, ok: true, text: readFileSync(join(dir, f), 'utf8') }; }
+    catch (e) { return { file, ok: false, error: String(e.message || e).slice(0, 80) }; }
+  }));
+}
+
+function checkListExitSamples() {
+  // 故意违规样本：挂的单全 CLOSED 却还 active/in-progress → 必须被咬住，否则闸没生效。
+  const doc = { initiatives: [{ id: 'x', status: 'active', issues: [11, 12], next_action: 'n' }] };
+  const plans = [{ file: 'docs/decisions/p.md', fm: parseFrontmatter('---\nstatus: in-progress\nissues: [13]\n---\n正文') }];
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans });
+  if (targets.length !== 2) { fail('清单退场闸夹具：挂钩对象收集不对', '该收 2 个（西瓜 x + 计划 p.md）', `收到 ${targets.length}`); return; }
+  const red = judgeListExit({ targets, states: { 11: 'CLOSED', 12: 'CLOSED', 13: 'CLOSED' } });
+  if (red.ok || red.stale.length !== 2) { fail('清单退场闸夹具：全关单的赖着不走没被咬住', '判官对故意违规样本必须红', JSON.stringify(red).slice(0, 120)); return; }
+  const green_ = judgeListExit({ targets, states: { 11: 'OPEN', 12: 'CLOSED', 13: 'OPEN' } });
+  if (!green_.ok) { fail('清单退场闸夹具：还有单开着却被误咬', '有 OPEN 单就不该判退场', JSON.stringify(green_).slice(0, 120)); return; }
+  const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
+  if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
+  const swallowed = ingestPlanDocs([
+    { file: 'docs/decisions/q.md', ok: true, text: '# 普通文档\n' },
+    { file: 'docs/decisions/r.md', ok: false, error: 'EACCES' },
+  ]);
+  if (!swallowed.unscanned) {
+    fail('清单退场闸夹具：单文件读失败没标没查成', '读失败必须 unscanned，不许当没这份文件（否则零目标会绿）', JSON.stringify(swallowed).slice(0, 160));
+    return;
+  }
+  const swallowedTargets = collectExitTargets({ initiativesDoc: { initiatives: [] }, planDocs: swallowed.entries });
+  if (swallowedTargets.length !== 0) {
+    fail('清单退场闸夹具：读失败文件不该变成挂钩对象', 'entries 只收读成的；没读成的走 unscanned', `收到 ${swallowedTargets.length}`);
+    return;
+  }
+  // 2026-09-16 实咬：scale-dozens 的 issues 只挂已关前置单，统领写在 done_when。
+  const leaked = collectExitTargets({
+    initiativesDoc: { initiatives: [{
+      id: 'scale-dozens',
+      status: 'active',
+      done_when: '统领 #1174 的 T1–T11 均有测试/部署/真实任务证据且已收口',
+      issues: [1145, 1146, 1147, 1151, 1152],
+    }] },
+    planDocs: [],
+  });
+  if (!leaked[0] || !leaked[0].issues.includes(1174)) {
+    fail('清单退场闸夹具：done_when 统领单漏挂没并进挂钩', 'done_when 里的 #单号必须进 issues 集合', JSON.stringify(leaked).slice(0, 160));
+    return;
+  }
+  const leakedVerdict = judgeListExit({
+    targets: leaked,
+    states: { 1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED', 1151: 'CLOSED', 1152: 'CLOSED', 1174: 'OPEN' },
+  });
+  if (!leakedVerdict.ok || leakedVerdict.stale.length) {
+    fail('清单退场闸夹具：OPEN 统领单漏挂后误报 stale', 'done_when 指向的 OPEN 单不得因漏挂 issues 被判该收摊', JSON.stringify(leakedVerdict).slice(0, 160));
+    return;
+  }
+  const badCfg = collectExitTargets({
+    initiativesDoc: { initiatives: [{ id: 'bad', status: 'active', issues: ['not-an-issue'] }] },
+    planDocs: [],
+  });
+  if (!badCfg.length) {
+    fail('清单退场闸夹具：坏挂钩被滤成零目标', '非法 issues 必须进闸，不许消失后走 0 个对象绿', JSON.stringify(badCfg).slice(0, 160));
+    return;
+  }
+  const badVerdict = judgeListExit({ targets: badCfg, states: {} });
+  if (badVerdict.ok || !badVerdict.unscanned) {
+    fail('清单退场闸夹具：坏挂钩没判没查成', '非法 issues 必须 unscanned，不许零目标绿', JSON.stringify(badVerdict).slice(0, 160));
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale、坏挂钩不静默绿');
+}
+
+function checkListExitLive() {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(ROOT, 'docs', 'initiatives.json'), 'utf8')); }
+  catch (e) { skip(`清单退场闸：initiatives.json 读不了（${String(e.message || e).slice(0, 60)}）——本次没查成`); return; }
+  const plans = listExitPlanDocs();
+  if (plans.unscanned) { skip(`清单退场闸：${plans.error}——本次没查成，不是绿`); return; }
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans.entries });
+  if (!targets.length) { green('清单退场闸：0 个挂钩对象（active 清单/计划都没挂 issues，不是没查成）'); return; }
+  const nums = [...new Set(targets.flatMap((t) => t.issues))];
+  const states = {};
+  for (const n of nums) {
+    const r = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
+    if (r.status === 0) states[n] = String(r.stdout || '').trim();
+  }
+  const verdict = judgeListExit({ targets, states });
+  if (verdict.unscanned) { skip(`清单退场闸：${verdict.error}——本次没查成，不是绿`); return; }
+  if (!verdict.ok) {
+    fail(`清单该收摊没收摊：${verdict.stale.length} 个对象挂的单全关了还标着在推`,
+      '人工核一眼 done_when，一行 commit 把 status 翻成 done（西瓜条目/计划文档 frontmatter）——联动退出见 docs/README.md',
+      verdict.stale.map((t) => `${t.kind}:${t.name}`).join('、'));
+    return;
+  }
+  green(`清单退场闸：${targets.length} 个挂钩对象都还有在途单，没有赖着的`);
+}
+
 // ── orca 产品面残留（linux 用户名 /home/orca 不是产品，不进这条）────────────────
 // 认这些才算还没退役：真 spawn orca CLI、createOrcaBinding、orca-serve 单元、
 // dao.mjs 标了「整段删」的那条脊。判例档案（docs/decisions、docs/observations）不扫。
@@ -2050,6 +2154,8 @@ checkRepoOwnership();
 checkGitOwnershipSamples();
 checkGitOwnershipLive();
 checkInitiatives();
+checkListExitSamples();
+if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
 checkOrcaRetirement();
 checkRetiredVerbAdvertSamples();
