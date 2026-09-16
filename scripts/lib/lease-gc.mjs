@@ -18,6 +18,23 @@ import { EXECUTION_FINISHED, blocksWorktree } from './execution-states.mjs';
 export const DEFAULT_LEASE_GRACE_MIN = 30;
 
 /**
+ * 宽限年龄只认记录里的时钟字段，不认「刚被写过」的文件 mtime。
+ *
+ * 2026-09-12 实咬（#1174 缺陷二）：失败的清理会 atomic 回写 `stopping`，
+ * 文件 mtime 跟着刷新。看门狗每轮再试一次 stop-session，重置它的正是等它的那个循环，
+ * 宽限窗永远到不了。登记层原先读 `updatedAt`、租约层读 mtime——同一份现实两个年龄。
+ *
+ * 有 `updatedAt`/`acceptedAt` 就用字段；没有才退 mtime（老文件）。两边都走这里。
+ */
+export function ageMinOf(record, { now = Date.now(), mtimeMs = null } = {}) {
+  const at = Number(record?.updatedAt) || Number(record?.acceptedAt) || 0;
+  if (Number.isFinite(at) && at > 0) return (now - at) / 60000;
+  const mt = Number(mtimeMs);
+  if (Number.isFinite(mt) && mt > 0) return (now - mt) / 60000;
+  return NaN;
+}
+
+/**
  * 单条租约的判决。
  *
  * 判决顺序是安全边界，不许调换：
@@ -82,8 +99,7 @@ export function judgeRegistryStuck(record, { sessionState = null, sessionsScanne
   const st = String(record?.state || '');
   // 不再手打状态清单：读挡人侧同一句话。它说不挡，就没有回收的理由。
   if (!blocksWorktree(st)) return { verdict: 'keep', why: `${key} 状态 ${st || '空'} 已经不挡工作树了` };
-  const at = Number(record?.updatedAt) || Number(record?.acceptedAt) || 0;
-  const ageMin = at > 0 ? (now - at) / 60000 : NaN;
+  const ageMin = ageMinOf(record, { now });
   if (!Number.isFinite(ageMin)) return { verdict: 'keep', unknown: true, why: `${key} 记录年龄没查成——不猜（fail-closed）` };
   if (ageMin < graceMin) return { verdict: 'keep', why: `${key} 停在 ${st} ${ageMin.toFixed(0)} 分钟 < 宽限 ${graceMin} 分钟` };
   if (!sessionsScanned) return { verdict: 'keep', unknown: true, why: `${key} 会话名单没查成——不猜（fail-closed）` };

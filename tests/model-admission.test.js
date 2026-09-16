@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { healthRedIds } from '../scripts/lib/model-admission.mjs';
+import { availabilityFor } from '../scripts/lib/provider-health.mjs';
 
 const routed = (id, over = {}) => ({ id, provider: 'gw', cli_model: `gw/grokpool/${id}`, ...over });
 const profileOnly = (id) => ({ id, provider: '', cli_model: undefined });
@@ -71,4 +72,44 @@ test('空输入/坏输入不抛', () => {
   assert.deepEqual(healthRedIds({}), []);
   assert.deepEqual(healthRedIds({ models: [] }), []);
   assert.deepEqual(healthRedIds({ models: [routed('a')], profiles: null, breaker: null }), []);
+});
+
+test('现役 mirasim-relay 模型：health red、breaker open、恢复三态', () => {
+  const models = [{ id: 'gpt-5.6-sol', provider: 'mirasim-relay' }];
+  const now = Date.parse('2026-09-03T12:00:00Z');
+  const target = 'direct:codex@pqapi/responses';
+  const via = (health, breaker) => (list, opts) => availabilityFor(list, { ...opts, health, breaker });
+  const healthOf = (state) => ({
+    ok: true, present: true, unknown: false, table: { [target]: { state } },
+  });
+  const breakerOpen = {
+    ok: true, present: true,
+    targets: { [target]: { state: 'open', cooldownUntil: '2026-09-03T12:30:00Z' } },
+  };
+  const breakerClosed = { ok: true, present: true, targets: { [target]: { state: 'closed' } } };
+
+  assert.deepEqual(
+    healthRedIds({
+      models, profiles: [], breaker: breakerClosed, now,
+      availabilityForFn: via(healthOf('red'), breakerClosed),
+    }),
+    ['gpt-5.6-sol'],
+    'relay 健康红必须进准入红名单',
+  );
+  assert.deepEqual(
+    healthRedIds({
+      models, profiles: [], breaker: breakerOpen, now,
+      availabilityForFn: via(healthOf('green'), breakerOpen),
+    }),
+    ['gpt-5.6-sol'],
+    'relay 熔断 open 必须拦',
+  );
+  assert.deepEqual(
+    healthRedIds({
+      models, profiles: [], breaker: breakerClosed, now,
+      availabilityForFn: via(healthOf('green'), breakerClosed),
+    }),
+    [],
+    '恢复后必须放行',
+  );
 });

@@ -251,12 +251,13 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
 
 ## 7b. command-code 怎么配
 
-command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
+command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名是 `command-code`，它在 `bin` 里声明了 `cmd` / `cmdc` / `command-code` / `commandcode` 四个入口，但 **npm 只建出三个符号链接**：`cmd`、`cmdc`、`commandcode`（2026-09-13 实测本机 `/usr/bin/` 下只有这三个）。
 
-- 装机：`npm i -g command-code`；验证：`command-code --version`（本机 v1.26.0）。
-- **登录必须在真 TTY 里跑**（Ink raw mode）：`command-code login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`command-code status` 应回 `Authenticated as <用户名>`。
-- 模型列表（无需登录）：`command-code --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
-- 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
+- **`command-code` 这个不带缩写的名字本机不存在**，用它会 `command not found`——`docs/model-routing.toml` 的 `cli`/`launch` 在 2026-09-13 之前写的就是它，是坏值，已改 `cmdc`。**别用 `cmd`**（撞 Windows cmd.exe）。
+- 装机：`npm i -g command-code`；验证：`cmdc --version`（本机 v1.41.0）。
+- **登录必须在真 TTY 里跑**（Ink raw mode）：`cmdc login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`cmdc status` 应回 `Authenticated as <用户名>`。
+- 模型列表（无需登录）：`cmdc --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
+- 非交互契约：`cmdc -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
 - 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
 
 ## 7c. cursor 怎么配
@@ -273,10 +274,38 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 Devin CLI 的选型顺位见 `docs/model-routing.json`；启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
 
-- 装机：官方 Devin 安装器（本机二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`）。验证：`where.exe devin` 能找到；`devin models list` 含 `deepseek-v4-flash-max`。
-- 登录只能用户做：`devin auth`。凭据在 `%LOCALAPPDATA%\devin\credentials.toml`（C 类，不进 git）。
+- 装机：官方 Devin 安装器。Windows 二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`；Linux 落到 `~/.local/share/devin/cli/_versions/current/bin/devin`，再链到 `~/.local/bin/devin`。验证：`devin --version`；`devin models list` 含 `deepseek-v4-flash-max`。
+- 登录只能用户做：`devin auth`。凭据 Windows 在 `%LOCALAPPDATA%\devin\credentials.toml`，Linux 在 `~/.local/share/devin/credentials.toml`（C 类，0600，不进 git）。`devin auth status` 应回 `Logged in` + 当前套餐。
 - 非交互冒烟：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。未信任目录必须关 workspace trust 检查，否则没提示可弹、当场失败。`--print` 跑完即退，**不能**当 Orca 工人。
 - 工人 TUI 起法只信路由表 launch（`--permission-mode dangerous` 全放行）。不要另造一份启动命令。
+
+## 7e. gpt-5.6-sol 的专用 CODEX_HOME（2026-09-14，换机必做）
+
+pqgpt 给了**两把** key：一把对 `gpt-5.6-sol`，一把对其他模型。而 codex 的
+`auth.json` 只有 `OPENAI_API_KEY` 一个字段，两把装不下——后写的会把先写的盖掉，
+盖掉之后没有任何报错，只是 sol 那条腿悄悄换成了另一个账号。
+
+分家，不是二选一。默认 `~/.codex` 保持原样（本机 4317 responses 桥，
+`model = gpt-5.6-luna`）；sol 单独一个 home：
+
+```
+~/.codex-sol/auth.json    0600  {"OPENAI_API_KEY": <pqapi-sol.key 的内容>}
+~/.codex-sol/config.toml  0600  model_provider = "pqapi"
+                                model = "gpt-5.6-sol"
+                                [model_providers.pqapi]
+                                base_url = "https://api.pqapi.shop/v1"
+                                wire_api = "responses"
+                                requires_openai_auth = true
+```
+
+key 的真身在 `~/.config/ai-gateway/migration-1174/pqapi-sol.key`（C 类，不进 git）。
+目录 0700、两个文件 0600。
+执行目录 `credentialInventory` 分两行登记：默认 `~/.codex/auth.json`（luna）和 `~/.codex-sol/auth.json`（sol），不能合成一条。
+
+- 起法：`CODEX_HOME=~/.codex-sol codex ...`。执行目录里 `codex-pqapi-sol.connection.codexHome` 记的就是这个路径。
+- 验证（两条都要跑，只跑一条证不出没互相盖）：
+  1. `CODEX_HOME=~/.codex-sol timeout 60s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头 `model: gpt-5.6-sol` / `provider: pqapi`。2026-09-14T21:38Z 复跑抬头对了，随后 `ERROR: Reconnecting... 1/5`，60 秒 timeout 124，没有最终消息。所以执行目录标 `unverified`、`enabled: false`，不把没回完的请求写成 available。
+  2. 紧接着裸跑 `timeout 45s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头仍是 `model: gpt-5.6-luna` / `provider: custom`（4317 桥），4.66s 回「收到」。
 
 ## 8. 本机工具坑
 

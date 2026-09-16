@@ -189,12 +189,15 @@ test('credential inventory distinguishes group key, native key and misleading ol
     ['/fiction/.pi/agent/pi-gateway.json', JSON.stringify({ providers: [{ id: 'gw-opencode', keyFile: '/fiction/.mirasim/keys/opencode.key' }] })],
     ['/fiction/.mirasim/keys/opencode.key', 'private-group'], ['/fiction/.mirasim/keys/mycodex.key', 'private-group'],
     ['/fiction/.codex/auth.json', JSON.stringify({ OPENAI_API_KEY: 'private-group' })],
+    ['/fiction/.codex-sol/auth.json', JSON.stringify({ OPENAI_API_KEY: 'private-sol' })],
     ['/fiction/.commandcode/auth.json', JSON.stringify({ apiKey: 'private-native' })],
   ]);
   const rows = discoverExecutionCredentials({ home: '/fiction', read: file => { if (!files.has(file)) throw new Error('missing'); return files.get(file); }, exists: file => files.has(file) });
   assert.equal(rows.find(r => r.provider === 'opencode-go').kind, 'newapi-group');
   assert.equal(rows.find(r => r.provider === 'commandcode' && r.kind === 'provider-key').present, true);
-  assert.equal(rows.find(r => r.provider === 'pqapi').kind, 'newapi-group');
+  assert.equal(rows.find(r => r.location === '~/.codex/auth.json').kind, 'newapi-group');
+  assert.equal(rows.find(r => r.location === '~/.codex-sol/auth.json').present, true);
+  assert.equal(rows.find(r => r.location === '~/.codex-sol/auth.json').kind, 'unknown');
   assert.ok(!JSON.stringify(rows).includes('private-'));
 });
 
@@ -261,7 +264,13 @@ test('real catalog is structurally valid; no V4.1/GPT4omini/Llama IDs fabricated
   const relay = c.profiles.filter(p => /relay/.test(p.provider));
   assert.deepEqual([...new Set(relay.map(p => p.backend))], ['mirasim']);
   assert.deepEqual([...new Set(relay.map(p => p.route))], ['cloud']);
-  assert.deepEqual(c.profiles.filter(p => /v4[.-]1|gpt4omini|llama/i.test(p.model ?? '')).map(p => p.id), []);
+  assert.deepEqual(c.profiles.filter(p => /gpt4omini|llama/i.test(p.model ?? '')).map(p => p.id), []);
+  // deepseek-v4 ids are deliberately NOT banned here any more. The old ban listed
+  // v4.1 as fabricated; the upstream roster now genuinely carries deepseek-v4.1-flash
+  // (2026-09-13 store refresh), so the ban was asserting something false. Roster ids
+  // are covered where they are actually enforced: inspectPiDirectProvider matches each
+  // profile's model against the live store and fails exact_model_not_in_native_catalog.
+  // Generic shapes that no vendor uses stay banned above.
   const pools = c.profiles.filter(p => ['devin-native', 'windsurf'].includes(p.provider)).map(p => p.accountPoolId);
   assert.equal(new Set(pools).size, 1, 'user-confirmed shared allowance must not create duplicate quotas');
 });

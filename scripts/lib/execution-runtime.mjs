@@ -86,6 +86,16 @@ function busy(message,reason='lease-held'){const e=new Error(message);e.code='bu
 // 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
 const RESERVED=EXECUTION_RESERVED;
 const FINISHED=EXECUTION_FINISHED;
+// 已经停在 stopping 时，宽限时钟不许被重试或失败回写刷新。
+// 看门狗每轮对 stopping 再 stop-session；失败路径若写 updatedAt=now()，
+// 重置它的正是等它的那个循环，宽限窗永远到不了（#1174 缺陷二，2026-09-12 实咬）。
+function reservedClock(record, fallback) {
+  if (record && String(record.state || '') === 'stopping') {
+    const at = Number(record.updatedAt) || Number(record.acceptedAt) || Number(record.startedAt);
+    if (Number.isFinite(at) && at > 0) return at;
+  }
+  return fallback;
+}
 // `judgeExecutionCompletion` 的 status 值域只有两个词，且由它自己从正典映射而来。
 // 谁要判「这次收尾验过了没」，读这句话，别去卡 view 的原始状态词——
 // 手打 ['done','failed'] 去卡 view 的那版漏了 `incomplete`，把树永久锁死（2026-09-12 实咬）。
@@ -169,7 +179,7 @@ export function createExecutionRuntime(opts={}) {
     if(sessionKey&&(!SESSION_KEY.test(sessionKey)||!sessionKey.startsWith('acp:')))throw new Error('invalid preallocated sessionKey');
     const recordKey=sessionKey||'launch:'+launchId;
     actual={...actual,...(sessionKey?{sessionKey}:{}),taskId:spec.taskId||spec.clientRef||crypto.randomUUID(),clientRef:spec.clientRef||'dao-launch:'+launchId};
-    const meta={schemaVersion:1,recordKey,sessionKey,launchId,attemptId:launchId,backend:selected,agent:actual.agent,model:actual.model,requestedModel:spec.model||p?.model||null,actualModel:p?.model||actual.model,profileId:p?.id||null,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,actualVendor:actual.actualVendor??null,route:actual.route,taskId:actual.taskId,clientRef:actual.clientRef,issue:spec.issue??null,pr:spec.pr??null,workdir:actual.workdir,createdAt:now(),startedAt:now(),updatedAt:now(),state:'pending',launchState:'pending',taskCompleted:false,completionScope:'agent-turn',owner:identity(process.pid),...(spec.resumeFrom?{resumeFrom:spec.resumeFrom}:{})};
+    const meta={schemaVersion:1,recordKey,sessionKey,launchId,attemptId:launchId,backend:selected,agent:actual.agent,model:actual.model,requestedModel:spec.model||p?.model||null,actualModel:p?.model||actual.model,profileId:p?.id||null,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,actualVendor:actual.actualVendor??null,route:actual.route,taskId:actual.taskId,clientRef:actual.clientRef,issue:spec.issue??null,pr:spec.pr??null,title:(typeof spec.title==='string'&&spec.title.trim())?spec.title.trim():null,workdir:actual.workdir,createdAt:now(),startedAt:now(),updatedAt:now(),state:'pending',launchState:'pending',taskCompleted:false,completionScope:'agent-turn',owner:identity(process.pid),...(spec.resumeFrom?{resumeFrom:spec.resumeFrom}:{})};
     return {actual,meta,token:crypto.randomUUID()};
   }
   async function reapMirasim(workdir) {
@@ -319,9 +329,10 @@ export function createExecutionRuntime(opts={}) {
       if(held?.cleanupVerified&&meta?.cleanupVerified)return {alreadyStopped:true};
       if(automatic&&meta?.state==='waiting_user')throw busy('session is waiting for user');
       const m=meta||{schemaVersion:1,recordKey:key,sessionKey:key,workdir:target,backend:String(key).startsWith('acp:')?'acp':'mirasim',state:'unknown',launchState:'accepted',taskCompleted:false,adopted:true};
-      const next={...m,state:'stopping',cleanupVerified:false,cleanupToken,cleanupOwner:identity(process.pid),updatedAt:now()};
+      const clock=reservedClock(m,now());
+      const next={...m,state:'stopping',cleanupVerified:false,cleanupToken,cleanupOwner:identity(process.pid),updatedAt:clock};
       atomic(metaFile(key),next);
-      const lease={...held,token:held?.token||crypto.randomUUID(),recordKey:key,sessionKey:key,backend:m.backend,workdir:target,state:'stopping',cleanupToken,cleanupOwner:next.cleanupOwner,cleanupVerified:false};
+      const lease={...held,token:held?.token||crypto.randomUUID(),recordKey:key,sessionKey:key,backend:m.backend,workdir:target,state:'stopping',cleanupToken,cleanupOwner:next.cleanupOwner,cleanupVerified:false,updatedAt:clock};
       atomic(file,lease);return {lease,meta:next,wasUncertain:m.state==='uncertain'||m.launchState==='uncertain'};
     });
     if(claimed.alreadyStopped)return {ok:true,verified:true,alreadyStopped:true};
@@ -359,8 +370,9 @@ export function createExecutionRuntime(opts={}) {
         const held=readJson(file);if(held?.cleanupToken!==cleanupToken||held.sessionKey!==key)throw busy('cleanup ownership changed');
         const current=metadata(key)||claimed.meta;
         const complete=result?.ok===true;
-        atomic(metaFile(key),{...current,state:complete?'stopped':'stopping',cleanupVerified:complete,cleanupToken:null,cleanupOwner:null,updatedAt:now(),taskCompleted:false});
-        atomic(file,{...held,state:complete?'stopped':'stopping',cleanupVerified:complete,cleanupToken:null,cleanupOwner:null});
+        const clock=complete?now():reservedClock(current,Number(current.updatedAt)||now());
+        atomic(metaFile(key),{...current,state:complete?'stopped':'stopping',cleanupVerified:complete,cleanupToken:null,cleanupOwner:null,updatedAt:clock,taskCompleted:false});
+        atomic(file,{...held,state:complete?'stopped':'stopping',cleanupVerified:complete,cleanupToken:null,cleanupOwner:null,updatedAt:clock});
       });
     }
   }
@@ -504,7 +516,7 @@ export function createExecutionRuntime(opts={}) {
     const view=await readSession(key);
     if(view.missing||(!TERMINAL.has(view.phase)&&view.phase!=='interrupted'))throw busy('only a stopped or interrupted session can be resumed');
     const stopped=await stopSession(key);if(!stopped?.ok)throw new Error('resume cleanup is unverified');
-    return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,resumeFrom:key});
+    return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,title:m.title,resumeFrom:key});
   }
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
     profileForModel:model=>{const matches=profiles.filter(p=>p.id===model||p.defaultForModels?.includes(model));if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},

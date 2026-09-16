@@ -20,7 +20,8 @@ import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
 // 而 commander-core → commander-verbs 是单向依赖，写在 core 会绕成环。
 import { retryEpoch, stampRetryKey } from './retry-epoch.mjs';
 // #1237：失败分类（terminal / retryable / unknown）——判据在那边，这里只消费。
-import { judgeRetry } from './retry-verdict.mjs';
+// 行为 streak（judgeRepeatedFailure）也在那边：词表认不出的同一闸拒，靠「连着一模一样」拦。
+import { judgeRetry, judgeRepeatedFailure, foldFailureStreak } from './retry-verdict.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -49,6 +50,8 @@ export const CHECKS = {
   'retry-drain.pr': true,
   'retry-drain.queue': true,
   'retry-drain.attempted': true,
+  'retry-drain.stale-head': true,
+  'retry-drain.hopeless': true,
   'retry-drain.max-tries': true,
   'retry-drain.grace': true,
   'open-issue.reason': true,
@@ -326,6 +329,30 @@ export function validateRetryDrain(input = {}) {
   if (never) return never;
   const prevObj = prev && typeof prev === 'object' ? prev : { at: '', tries: 0 };
 
+  // 票上的 head 是**写票那一刻**的快照，只做记录（reviewer-create 的 expectedOid 另有来源，
+  // 见 planReviewPendingDrain / reviewer-mirasim.judgeReviewerHead）。而账本键
+  // `pr:<n>@<head>` 也钉在那个 head 上，于是「票头过期」会把整条重试链冻住：
+  // 工人推了新 head 之后旧票还在队列，重试每次都读同一格账、tries 只涨不换格，
+  // 试满 3 次就永久认输——而认输的判据（那个 head）早就不代表现场了。
+  //
+  // 2026-09-12 实咬：PR #1208 的票头停在 1fec6850，PR 已是 41a79e75；
+  // drain 账 pr:1208@1fec6850 tries=4，decide 每轮产一条 mark-exhausted，
+  // **本该叫的复审一次也没叫**——有出口的路被一张过期票堵死了。
+  //
+  // 票头 != 当前 head ⇒ 这票代表的那次重试已经无意义，它不是「试过了」，是「问错了对象」。
+  // 不烧名额：当场拒，让 decide 落回 rereview 分支按**当前 head** 重新写票。
+  const liveHead = typeof input.liveHead === 'string' && input.liveHead.trim() ? input.liveHead.trim() : '';
+  const ticketHead = typeof input.head === 'string' && input.head.trim() ? input.head.trim() : '';
+  const stale = gated(
+    'retry-drain.stale-head',
+    Boolean(liveHead) && Boolean(ticketHead) && ticketHead !== liveHead,
+    fail('stale-head',
+      `PR #${pr} 的复审票头 ${ticketHead.slice(0, 8) || '缺'} 与当前 head ${liveHead.slice(0, 8)} 对不上`
+      + `——票过期，不重试这张，按当前 head 重写`),
+    C,
+  );
+  if (stale) return stale;
+
   const graceMin = Number.isFinite(input.graceMin) ? input.graceMin : DRAIN_GRACE_MIN;
   const maxTries = Number.isFinite(input.maxTries) ? input.maxTries : MAX_DRAIN_TRIES;
   const tries = Number(prevObj.tries) || 0;
@@ -339,14 +366,25 @@ export function validateRetryDrain(input = {}) {
   // = 白等 3×45 分钟才见到人，而每一次都不可能成功。
   // 一次就交人 vs 两小时后交人，差的不是效率，是「这张卡还活着吗」。
   //
-  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError）。
+  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError / sameErrorRounds）。
   // 没记过原文 → verdict 为 unknown → 按可试处理（保守：宁可多试一次）。
+  // 词表认不出时，行为 streak 补上：同一原文连着 SAME_ERROR_ROUNDS_TO_STUCK 轮 = 再试还是它。
   const verdict = judgeRetry({ error: prevObj.lastError });
+  const repeated = judgeRepeatedFailure(prevObj);
+  const hopelessNow = verdict.verdict === 'terminal' || repeated.stuck;
+  const hopelessWhy = verdict.verdict === 'terminal'
+    ? `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`
+    : `PR #${pr} 连着 ${repeated.rounds} 轮拿回一模一样的失败原文——当场交人：${prevObj.lastError || '（无原文）'}`;
   const hopeless = gated(
     'retry-drain.hopeless',
-    verdict.verdict === 'terminal',
-    fail('hopeless', `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`,
-      { escalate: true, tries, retryVerdict: 'terminal', verdictWhy: verdict.why, error: prevObj.lastError || null }),
+    hopelessNow,
+    fail('hopeless', hopelessWhy,
+      {
+        escalate: true, tries,
+        retryVerdict: verdict.verdict === 'terminal' ? 'terminal' : verdict.verdict,
+        verdictWhy: verdict.verdict === 'terminal' ? verdict.why : repeated.why,
+        error: prevObj.lastError || null,
+      }),
     C,
   );
   if (hopeless) return hopeless;
@@ -381,6 +419,7 @@ export function planRetryDrainCmd(action = {}, opts = {}) {
   const v = validateRetryDrain({
     pr: action.pr,
     head: action.head,
+    liveHead: opts.liveHead,
     queue: opts.queue,
     ledger: opts.ledger,
     nowMs: opts.nowMs,
@@ -512,6 +551,17 @@ export const retryKeysSync = {
  * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
  * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
  */
+/**
+ * drain / 复审两条写路径共用的失败原文。完整原文，不 trim、不截行、不截字——
+ * `foldFailureStreak` 比的就是这一串；截过再比会把不同失败揉成同错。
+ */
+export function drainErrorText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const raw = payload.error != null && payload.error !== '' ? payload.error : payload.why;
+  if (raw == null || raw === '') return '';
+  return typeof raw === 'string' ? raw : String(raw);
+}
+
 export function applyDrainLedger({
   ledger = {}, pr, head, payload, nowIso, _checks,
 } = {}) {
@@ -521,14 +571,26 @@ export function applyDrainLedger({
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
   // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
   // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
-  // 只存首行、截 400 字：账本是给人看的判据，不是日志转储。
-  const lastError = String((payload && (payload.error || payload.why)) || '').trim().split(/\r?\n/)[0].slice(0, 400) || null;
+  // 存完整原文交给 foldFailureStreak：截首行 / 截 400 字会把「前缀相同、后文不同」
+  // 两句失败揉成同一错（审官在 1f646efc 上实测 E×400+A vs E×400+B → hopeless）。
+  // 人读摘要走 exhaustedReasonText / exhaustedComment，不在比较键上截。
+  // 成功拉起审官才清零 streak；失败没原文则保留上一轮（没查成不算「一直是它」，也不当成功）。
+  const pulled = verdict.reason === 'pulled';
+  const err = drainErrorText(payload);
+  const streak = pulled
+    ? foldFailureStreak(prev, null)
+    : err
+      ? foldFailureStreak(prev, err)
+      : {
+          lastError: prev && typeof prev.lastError === 'string' ? prev.lastError : null,
+          sameErrorRounds: Number.isInteger(Number(prev?.sameErrorRounds)) ? Number(prev.sameErrorRounds) : 0,
+        };
   return {
     ledger: {
       ...(ledger && typeof ledger === 'object' ? ledger : {}),
       [key]: {
         at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1,
-        ...(lastError ? { lastError } : {}),
+        ...streak,
       },
     },
     wrote: true,

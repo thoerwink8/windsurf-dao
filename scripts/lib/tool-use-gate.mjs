@@ -1,13 +1,13 @@
-// scripts/lib/tool-use-gate.mjs —— Bash 命令文本上的两条确定性判据。
+// scripts/lib/tool-use-gate.mjs —— Bash 命令文本上的几条确定性判据。
 //
-// 改这段代码前必须知道的五条：
+// 改这段代码前必须知道的六条：
 //
 // 1. 判据早就有了，缺的是触发。memory `heredoc-eats-backslash-escapes` 和
 //    `python-stub-use-py` 每轮只注入索引行，具体内容要主动 recall——2026-09-05
 //    一轮对话里两条被踩三次，每次都是「我有这条却又踩了」。本模块只负责看命令
 //    文本给不给注，怎么触发在 host/skills/tool-use-gate/hooks/。
 //
-// 2. **永不拦**。命中只注一句，不命中就闭嘴。拦错了会挡住正常工作，而这两条
+// 2. **永不拦**。命中只注一句，不命中就闭嘴。拦错了会挡住正常工作，而这几条
 //    本来就有误报面（不是每个 heredoc 都含转义）。与 ask-gate 同口径。
 //
 // 3. 机器只看命令文本，不理解意图。heredoc 三条（有 heredoc、目标是 js/ts、
@@ -19,6 +19,10 @@
 //    每轮闪窗）。
 //
 // 5. 与同日 ask-gate 同型不同事，不是第二层补丁。那边挂提问工具，这边挂 Bash。
+//
+// 6. 每条判据的**判据轴是行为，不是工具名**（2026-09-10 定的调子）：换工具名不该
+//    漏判，所以 `readsCredentialStore` 认的是「命令文本指向凭据库」，不区分
+//    cat / jq / node -e / python3。加新判据时照这条走。
 
 export const BASH_TOOLS = ['Bash'];
 
@@ -219,6 +223,42 @@ export function isHandRolledSystemdRun(command, unitScripts) {
   return false;
 }
 
+export const CREDENTIAL_NOTE =
+  '[工具使用闸] 这条命令要读凭据库（auth.json / credentials.json / .env / *.pem 这类）。'
+  + '读的时候一律只取**结构**——键名、条数、凭据类型、key 的前缀和长度——绝不把值打进输出：'
+  + '值一旦落到会话记录里就等于泄露，而且它长得跟正常输出一样，没人会当场发现。'
+  + '要看清形状就只 map 键名和 `type` 字段，`key`/`access`/`refresh` 一律不打印。';
+
+/**
+ * 命令文本是否在读一个凭据库。
+ *
+ * 判据来源：2026-09-13 一次读取 `~/.pi/agent/auth.json` 时整个 `key` 值被打了
+ * 出来——十条供应商密钥进了会话记录。当时的本意只是「看清结构」，而输出里带了值。
+ * 同一份纪律（只看前缀/长度/provider 名）早就写在全局约定里，缺的是触发。
+ *
+ * 与 tool-use-gate 其余判据同口径：**永不拦，只注**。判据轴是行为——命令文本
+ * 指向凭据库就算命中，不区分 `cat` / `node -e` / `jq` / `grep`。
+ * 误报面：这些名字出现在路径里就命中（比如 `grep -rn "auth.json" scripts/`），
+ * 这可以接受——那种命令也确实是在拿凭据库当主题，提一句不亏。
+ */
+export function readsCredentialStore(command) {
+  const cmd = String(command || '');
+  if (!cmd) return false;
+  // 前界用 `(?<![a-z0-9_])`——注意**允许前缀是 `.`**：`credentials?` 这种可选 s
+  // 会把前面的点一起吃进匹配，于是 `~/.claude/.credentials.json` 的值命位前面
+  // 是 `e`（来自 `claude`），点界被跳过了（2026-09-13 实测两轮才定位）。
+  // 排掉的是紧贴标识符（`mycredentials.json`）和不点开头（`auth.json.md`）两种误报，
+  // 这两种都另有一道下界兜着。
+  // 后界用 `(?![\w.])` 而不是 `\b`：`.` 在 `\b` 眼里是词边界，`auth.json.md`
+  // 会被 `\b` 判成命中（同一次实测）。
+  if (/(?<![a-z0-9_])auth\.json(?![\w.])/.test(cmd)) return true;
+  if (/(?<![a-z0-9_])credentials?\.json(?![\w.])/.test(cmd)) return true;
+  if (/(?<![a-z0-9_])secrets?\.(?:json|ya?ml|toml)(?![\w.])/.test(cmd)) return true;
+  if (/(?<![a-z0-9_])\.env(?:\.\w+)?(?![\w.])/.test(cmd)) return true;
+  if (/\.(?:pem|p12|pfx)(?![\w.])/.test(cmd)) return true;
+  return false;
+}
+
 export function classifyBash(command, { unitScripts = [] } = {}) {
   const cmd = String(command || '');
   const notes = [];
@@ -228,9 +268,9 @@ export function classifyBash(command, { unitScripts = [] } = {}) {
   else if (isShellEscapeIntoFile(cmd)) notes.push({ id: 'shell-escape-into-file', text: SHELL_ESCAPE_NOTE });
   if (isPythonStub(cmd)) notes.push({ id: 'python-stub', text: PYTHON_NOTE });
   if (isHandRolledSystemdRun(cmd, unitScripts)) notes.push({ id: 'handrolled-systemd', text: SYSTEMD_NOTE });
+  if (readsCredentialStore(cmd)) notes.push({ id: 'reads-credential-store', text: CREDENTIAL_NOTE });
   return notes;
 }
-
 /** 注入给模型看的那段字。空 notes → 空串（hook 此时应闭嘴，不要吐空 JSON）。 */
 export function renderToolUseGate(notes) {
   if (!Array.isArray(notes) || notes.length === 0) return '';

@@ -64,9 +64,163 @@ describe('#1125 planReviewAdmission：按在役审官数拉取', () => {
     assert.deepEqual(empty.pull, []);
   });
 
-  it('默认上限是实测出来的 3', async () => {
+  // 2026-09-14：默认上限不再是手打的 3。那个 3 量于 2026-09-07，前提是「gptpool 只剩一条腿、
+  // 审官过网关」；今天 gptpool/pqapi/windsurf 的执行档全 enabled:false，审官走 xai-native 与
+  // mirasim-relay，一条都不过网关。改成两层取严：机器按核数，上游按路由表「腿」节并发上限。
+  describe('resolveReviewerCap：两层取严，读不到的那层不参与', () => {
+    const caps = { 'gw:grok': null, mirasim: 5, 'direct:codex@pqapi': 2, 'gw:windsurf': 3 };
+    const chanOf = (map) => (id) => (id in map ? caps[map[id]] ?? null : null);
+    // 今天的在役两位：grok 落 gw:grok（不限）、luna 落 mirasim（5）。
+    const 在役 = { 'grok-4.6': 'gw:grok', 'gpt-5.6-luna': 'mirasim' };
+
+    it('机器与渠道都有数 → 取严', async () => {
+      const { resolveReviewerCap } = await RP;
+      const ids = ['grok-4.6', 'gpt-5.6-luna'];
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ids, channelOf: chanOf(在役) }), 5, '渠道更严就听渠道');
+      assert.equal(resolveReviewerCap({ cores: 3, reviewerIds: ids, channelOf: chanOf(在役) }), 3, '机器更严就听机器');
+    });
+
+    it('**不在役**的腿不许参与取严（第一版就栽在这一格）', async () => {
+      const { resolveReviewerCap } = await RP;
+      // pqapi=2、windsurf=3 都在容量表里，但今天没有审官落在上面（执行档 enabled:false）。
+      // 拿整张表取严会算出 2——比原来手打的 3 还紧，方向正好反了。
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6', 'gpt-5.6-luna'], channelOf: chanOf(在役) }),
+        5,
+        '只该数在役那两条（不限 / 5），不该被 pqapi 的 2 拖下去',
+      );
+    });
+
+    it('「不限」的渠道不参与取严', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: chanOf(在役) }), 6,
+        '全是不限 ⇒ 只剩机器那层');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['x'], channelOf: () => Infinity }), 6,
+        'Infinity 也是不限');
+    });
+
+    it('渠道那层读不到 → 不参与，不许当成 0', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: null, channelOf: chanOf(在役) }), 6, '顺位读不到');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: null }), 6, '查渠道的函数没给');
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6'], channelOf: () => { throw new Error('炸'); } }), 6,
+        '查渠道抛了也只是这一位不参与，不许把整条闸拉成保底');
+    });
+
+    it('两层都读不到 → 落到保底，不许猜', async () => {
+      const { resolveReviewerCap, REVIEWER_CAP_FLOOR } = await RP;
+      assert.equal(REVIEWER_CAP_FLOOR, 2);
+      assert.equal(resolveReviewerCap({ cores: null, reviewerIds: null, channelOf: null }), 2);
+      assert.equal(resolveReviewerCap({}), 2);
+    });
+
+    it('有限渠道上限始终是最终上界：cap=1 不许被保底抬成 2', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '渠道合同是 1 再开第 2 条就是 429');
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '两层都是 1 也还是 1，保底不许抬');
+      assert.equal(resolveReviewerCap({ cores: null, reviewerIds: ['a'], channelOf: () => 1 }), 1,
+        '没核数时渠道 1 仍是 1');
+    });
+
+    it('保底只在没有任何有限渠道约束时生效', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => null }), 2,
+        '渠道不限/认不出 ⇒ 核数 1 仍保底 2');
+      assert.equal(resolveReviewerCap({ cores: 1, reviewerIds: ['a'], channelOf: () => Infinity }), 2,
+        'Infinity 也是不限，保底仍生效');
+    });
+
+    it('渠道约束只数本轮票实际会用的审官，未使用候选不许拖住整队', async () => {
+      const { resolveReviewerCap, reviewerIdsForCap } = await RP;
+      const channelOf = (id) => (id === 'tight-one' ? 1 : 5);
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['gpt-5.6-luna', 'tight-one'], channelOf }),
+        1,
+        '若误把未使用候选算进去，会被 cap=1 拖死',
+      );
+      const ids = reviewerIdsForCap(
+        [{ pr: '1', reviewer: 'gpt-5.6-luna' }],
+        ['gpt-5.6-luna', 'tight-one'],
+      );
+      assert.deepEqual(ids, ['gpt-5.6-luna']);
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ids, channelOf }), 5,
+        '只传队列实际用的模型 ⇒ 5，不被旁路候选拖住');
+    });
+
+    // #1265 审官判红第 1 条：`DAO_REVIEWER_CAP` 原先在 dao.mjs 里是一条**平级分支**
+    // （`env ? env : resolveReviewerCap(...)`），有环境值就整段跳过渠道取严。
+    // 于是队列实际落在 cap=1 的渠道时，DAO_REVIEWER_CAP=8 仍会拉 8 张——
+    // 造出一批必被渠道闸拒绝的启动尝试，跟「有限渠道上限始终是最终上界」正面矛盾。
+    it('DAO_REVIEWER_CAP 只收紧不放宽：渠道 cap=1 时给 8 仍然是 1', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 1, envCap: '8' }),
+        1,
+        '逃生口不许抬过上游合同——抬上去就是一批注定被拒的启动尝试',
+      );
+      assert.equal(
+        resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: 8 }),
+        5,
+        '渠道 5 比环境值 8 严 ⇒ 听渠道',
+      );
+    });
+
+    it('DAO_REVIEWER_CAP 比两层都严时听它——它是人手临时压并发的口子', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: '2' }), 2);
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: null, channelOf: null, envCap: 1 }), 1);
+    });
+
+    it('DAO_REVIEWER_CAP 给的不是正整数 ⇒ 当没给，不许因此把上限压成 0', async () => {
+      const { resolveReviewerCap, REVIEWER_CAP_FLOOR } = await RP;
+      for (const bad of ['', '0', '-1', 'abc', null, undefined, NaN]) {
+        assert.equal(
+          resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: bad }),
+          5,
+          `envCap=${JSON.stringify(bad)} 该被忽略`,
+        );
+      }
+      assert.equal(resolveReviewerCap({ envCap: 'abc' }), REVIEWER_CAP_FLOOR);
+      // 小数按 parseInt 读（环境变量到手是字符串，这是它一直以来的读法），只会更严，不会更松。
+      for (const 小数 of ['2.5', 2.5]) {
+        assert.equal(
+          resolveReviewerCap({ cores: 6, reviewerIds: ['a'], channelOf: () => 5, envCap: 小数 }),
+          2,
+          `envCap=${JSON.stringify(小数)} 该读成 2，且数字与字符串同一条规则`,
+        );
+      }
+    });
+
+    it('生产接线正控：dao.mjs 把环境值交给 resolveReviewerCap，不再自己开平级分支', () => {
+      const src = require('node:fs').readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
+      const 取严处 = src.slice(src.indexOf('async function admitReviewPull'), src.indexOf('async function admitReviewPull') + 1200);
+      assert.match(取严处, /envCap:\s*process\.env\.DAO_REVIEWER_CAP/,
+        '环境值必须作为 envCap 传进取严函数');
+      assert.doesNotMatch(取严处, /DAO_REVIEWER_CAP[\s\S]{0,200}\?\s*cap\s*:/,
+        '不许再出现「有环境值就整段跳过取严」的平级分支');
+    });
+
+    it('票上那位起不来时，渠道约束跟 drain 一样看同厂有效 fallback', async () => {
+      const { reviewerIdsForCap } = await RP;
+      const ids = reviewerIdsForCap(
+        [{ pr: '1', reviewer: 'gpt-5.6-sol' }],
+        ['gpt-5.6-luna', 'grok-4.6'],
+      );
+      assert.deepEqual(ids, ['gpt-5.6-luna'], 'sol 不在顺位 ⇒ 同厂 luna，不是 grok');
+    });
+
+    it('今天这台机器上算出来的是 5，不是 3（正控：真读路由表 + 真核数）', async () => {
+      const { resolveReviewerCap } = await RP;
+      assert.equal(resolveReviewerCap({ cores: 6, reviewerIds: ['grok-4.6', 'gpt-5.6-luna'], channelOf: chanOf(在役) }), 5);
+    });
+  });
+
+  it('默认拉取预算是 8（gptpool=3 已退役；真闸是渠道+负载）', async () => {
     const { DEFAULT_REVIEWER_CAP } = await RP;
-    assert.equal(DEFAULT_REVIEWER_CAP, 3);
+    assert.equal(DEFAULT_REVIEWER_CAP, 8);
+    assert.ok(DEFAULT_REVIEWER_CAP > 3);
   });
 });
 

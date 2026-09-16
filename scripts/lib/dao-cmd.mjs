@@ -952,8 +952,9 @@ export {
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
-  planReviewPendingDrain, consumeReviewPending, drainReviewPending,
-  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
+  planReviewPendingDrain, consumeReviewPending, drainReviewPending, attachReceiptFromSpawn,
+  countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
+  REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -980,7 +981,7 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
-  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--pr', '--issue', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
   'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
@@ -1125,8 +1126,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
                   # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
-  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--dry-run]
+  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--pr <N>] [--issue <N>] [--title <名>] [--dry-run]
                   # #1055：mirasim 一步到位起一次性会话（prompt 就是注入，不要 start+send 两步）；返回 sessionKey
+                  # --pr/--issue/--title 写入会话元数据，判活才能对上快路无署名 PR（工作树是 <仓>/<分支>）
   session-read --session <sessionKey>
                   # #1055：同步读 mirasim 会话（phase / text）；commander reapBrains 的取数路
   session-stop --session <sessionKey>
@@ -1161,11 +1163,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
                   # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
   pr-open --title <题> (--body <文>|--body-file <文件>) --head <分支> --model <registry id>
-          [--reviewer <id>] [--base master] [--work-type 写码] [--merge-policy auto|manual]
+          --reviewer <registry id> [--base master] [--work-type 写码] [--merge-policy auto|manual]
           [--issue <号>] [--repo owner/name]
                   # #1214 缺口 A：帅位自开 PR 的正式入口——开 draft + 落账（job.opened + job.dispatch）+ 打标
                   # 自开 PR 是合法动作，但此前没有落账动作 ⇒ 打标路永远查不到这条链 ⇒ 一律卡在「需人工打标」
-                  # --model 必填且必须是 registry 里的 id（不许从提交前缀猜家族，也不落幽灵账）
+                  # --model 与 --reviewer 都必填且必须都在 registry 里（不许从提交前缀猜家族，也不落幽灵账）
+                  # 两个缺一不可：打标路要求这条 job.dispatch 里两者同时在；只给一个就白落一条账
+                  # reviewer 还必须与 model 换厂商（同厂当场拒，这是落账后唯一能拦的点）
                   # 打标失败只记账不当门：PR 已开、账已落，回执里说清哪个标没打上
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
