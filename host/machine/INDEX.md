@@ -79,7 +79,7 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
-| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。`~/.codex/skills` 见 ignore.md 历史条。本仓只读、不写装法 |
+| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。本仓只读、不写装法 |
 | E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
 | E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
 | E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |
