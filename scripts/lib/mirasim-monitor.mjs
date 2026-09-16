@@ -28,7 +28,7 @@
 // 判官只吃入参、不碰 IO；wire 包装只收发、不判对错——判据不复用发消息那层。
 
 import os from 'node:os';
-import { openWire, PINNED_VERSION, liveServerPorts, DEFAULT_PORT, listSessionsViaWire } from './mirasim-runtime.mjs';
+import { openWire, PINNED_VERSION, liveServerPorts, DEFAULT_PORT, listSessionsViaWire, SESSIONS_TIMEOUT_MS } from './mirasim-runtime.mjs';
 import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessionState } from './execution-states.mjs';
 
 // 终态词表只认正典 EXECUTION_FINISHED（execution-states.mjs）。
@@ -477,8 +477,10 @@ export function buildMirasimHealth({ state, relay, connectError, pinnedVersion =
 
 // ── wire 包装（只收发，不判对错；判据在上面的纯判官） ────────────────────────
 
-/** 枚举全部会话。返回完整 sessions[]；未证明完整（半页 / 缺 hasMore / 超时）→ null。 */
-export async function wireListSessions(wire, timeoutMs = 6000) {
+/** 枚举全部会话。返回完整 sessions[]；未证明完整（半页 / 缺 hasMore / 超时）→ null。
+ *  默认预算复用运行时 SESSIONS_TIMEOUT_MS（30s），不是 snapshot 的 6s：65 条忙机会话
+ *  超过 6s 会被当成 sessions=null，保活/GC 整轮 exit=2（PR #885 审官实咬）。 */
+export async function wireListSessions(wire, timeoutMs = SESSIONS_TIMEOUT_MS) {
   try {
     const r = await listSessionsViaWire(wire, { timeoutMs });
     return r && r.ok === true && r.complete === true && Array.isArray(r.sessions) ? r.sessions : null;

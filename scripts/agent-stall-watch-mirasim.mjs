@@ -16,7 +16,8 @@
 // 运维/验收旋钮：
 //   MIRASIM_STALL_MS        判死阈值毫秒（默认 8 分钟；必须是有限正数，0/负/NaN/Infinity 拒绝进入）
 //   MIRASIM_GC_TTL_MS       终态回收 TTL 毫秒（默认 30 分钟）
-//   MIRASIM_STALL_ONLY      只处置 sessionKey 含该串的会话（缩爆炸半径）
+//   MIRASIM_STALL_ONLY      只对 sessionKey 含该串的会话做 stop/报帅/GC（缩爆炸半径）。
+//                           会话清单仍全量，活动树保护不按这个筛。
 //   MIRASIM_STALL_ISSUE     推不出关联 issue 时的兜底 issue 号
 // 测试注入（tests/mirasim-stall.test.js 用 sweepOnce + 假依赖，不碰真服务）：
 //   MIRASIM_STALL_STATE     覆盖连红账本路径
@@ -33,7 +34,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  createRuntime, readLedger, openWire,
+  createRuntime, readLedger, openWire, SESSIONS_TIMEOUT_MS,
 } from './lib/mirasim-runtime.mjs';
 import {
   judgeStall, judgeGcSession, judgeGcWorktree, errorFingerprint,
@@ -220,7 +221,7 @@ function isBranchMerged(branch, workdir) {
  *   isBranchMerged(branch, workdir) / worktreeOwnership(path) / branchOfWorktree(path) / treeExists(path)
  *   postComment({issue,body}) / now()
  *   issueOf(session) —— 从会话推关联 issue（推不出用 fallbackIssue）
- * opts: { stallMs, ttlMs, dryRun, fallbackIssue, protectPaths }
+ * opts: { stallMs, ttlMs, dryRun, fallbackIssue, protectPaths, only }
  * 返回 { scanned, stalled[], gced[], escalated[], live[], unknown[], unscanned, actionFailed, nextState, exit }
  * exit：2 = 有没查成的（枚举失败 / 任一会话读链路 unknown）；1 = 查成了但动作失败
  *      （停不成 / 评论没落 / 删了但回读没自证）；0 = 扫完且该做的都自证做成了。
@@ -250,14 +251,21 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     out.unscanned = true;
     return { ...out, nextState: prevState, exit: 2, reason: '枚举会话没查成（listSessions 没回 sessions 帧）' };
   }
+  // 活动树必须看全局清单。MIRASIM_STALL_ONLY 只缩小 stop/报帅/GC 的候选，
+  // 不能把「同树还有活会话」筛出保护集（PR #885 审官实咬）。
   const active = activeWorkdirs(sessions);
+  const only = (opts.only == null || String(opts.only).trim() === '') ? null : String(opts.only);
   const pendingVerify = []; // 删过、等回读自证的（「送进去了」≠「删掉了」）
 
   for (const s of sessions) {
     if (!s || typeof s.sessionKey !== 'string') continue;
-    out.scanned++;
     const key = s.sessionKey;
     const prev = prevState.sessions[key];
+    if (only && !key.includes(only)) {
+      if (prev) nextState.sessions[key] = prev;
+      continue;
+    }
+    out.scanned++;
     const kind = classifySessionState(s);
 
     // 终态 → GC
@@ -454,8 +462,8 @@ export function escalateBody({ s, fp, view }) {
 
 // ── 真依赖装配 ────────────────────────────────────────────────────────────────
 
-async function withWire(fn, opts = {}) {
-  const wire = await openWire(opts);
+async function withWire(fn, { open = openWire, ...opts } = {}) {
+  const wire = await open(opts);
   try { return await fn(wire); } finally { wire.close(); }
 }
 
@@ -465,22 +473,17 @@ function issueFromBranch(branch) {
   return m ? Number(m[1]) : null;
 }
 
-async function realDeps(runtime) {
-  // MIRASIM_STALL_ONLY：把这一遍的处置范围锁到 sessionKey 含该串的会话（缩爆炸半径，
-  // 真机验收/单会话止血用）。不设＝全扫。
-  const only = process.env.MIRASIM_STALL_ONLY || null;
+export async function realDeps(runtime, { open = openWire } = {}) {
+  // 清单必须全量：活动树保护看全局事实。MIRASIM_STALL_ONLY 由 sweepOnce 只套在
+  // stop / 报帅 / GC 候选上（缩爆炸半径，真机验收/单会话止血用）。不设＝全扫。
   return {
     now: () => Date.now(),
-    listSessions: () => withWire(async w => {
-      const all = await wireListSessions(w);
-      if (!Array.isArray(all) || !only) return all;
-      return all.filter(s => typeof s?.sessionKey === 'string' && s.sessionKey.includes(only));
-    }),
+    listSessions: () => withWire(async w => wireListSessions(w, SESSIONS_TIMEOUT_MS), { open }),
     readSession: k => runtime.readSession(k),
     readLedger: k => readLedger({ sessionKey: k, homeDir: homedir() }),
     stopSession: k => runtime.stopSession(k),
-    deleteSession: (k, o) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: !!o?.removeWorktree })),
-    removeWorktree: p => withWire(w => wireRemoveWorktree(w, { path: p })),
+    deleteSession: (k, o) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: !!o?.removeWorktree }), { open }),
+    removeWorktree: p => withWire(w => wireRemoveWorktree(w, { path: p }), { open }),
     isBranchMerged,
     worktreeOwnership,
     branchOfWorktree,
@@ -531,7 +534,11 @@ async function main(argv = process.argv.slice(2)) {
   const fallbackIssue = Number(process.env.MIRASIM_STALL_ISSUE) || null;
   let res;
   try {
-    res = await sweepOnce(deps, prev, { dryRun: args.dryRun, fallbackIssue });
+    res = await sweepOnce(deps, prev, {
+      dryRun: args.dryRun,
+      fallbackIssue,
+      only: process.env.MIRASIM_STALL_ONLY || null,
+    });
   } catch (e) {
     console.error(`⚠️ mirasim 保活没查成：${e?.message || e}`);
     process.exit(2);
@@ -556,4 +563,4 @@ async function main(argv = process.argv.slice(2)) {
 const isDirect = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirect) main();
 
-export { parseArgs, isBranchMerged, issueFromBranch, branchOfWorktree };
+export { parseArgs, isBranchMerged, issueFromBranch, branchOfWorktree, SESSIONS_TIMEOUT_MS };

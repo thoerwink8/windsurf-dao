@@ -13,6 +13,7 @@ const path = require('node:path');
 
 const MON = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-monitor.mjs').replace(/\\/g, '/');
 const CLI = 'file://' + path.resolve(__dirname, '..', 'scripts', 'agent-stall-watch-mirasim.mjs').replace(/\\/g, '/');
+const RUNTIME = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'mirasim-runtime.mjs').replace(/\\/g, '/');
 const LC = 'file://' + path.resolve(__dirname, '..', 'scripts', 'lib', 'land-core.mjs').replace(/\\/g, '/');
 
 const T0 = 1_788_000_000_000;
@@ -1004,6 +1005,189 @@ describe('返工 P1（审官 round 5：stop 失败 / stallMs 非法）', () => {
       assert.equal(res.unscanned, true);
       assert.notEqual(res.exit, 0);
       assert.match(String(res.reason || ''), /有限正数|stall/);
+    }
+  });
+});
+
+describe('返工 P1（审官 round 6：枚举超时 / STALL_ONLY 共树）', () => {
+  const LIVE_KEY = 'claude:c0ffeeee-1111-4111-8111-111111111111';
+  const STALL_KEY = 'claude:dddddddd-2222-4222-8222-222222222222';
+  const TREE = '/w/shared-880d';
+
+  it('wireListSessions 默认预算复用 SESSIONS_TIMEOUT_MS，不是 snapshot 的 6s', async () => {
+    const { wireListSessions } = await import(MON);
+    const { SESSIONS_TIMEOUT_MS } = await import(RUNTIME);
+    assert.equal(SESSIONS_TIMEOUT_MS, 30_000);
+    const waits = [];
+    const wire = {
+      send() {},
+      async waitFor(_pred, t) {
+        waits.push(t);
+        return { type: 'sessions', sessions: [], hasMore: false };
+      },
+      close() {},
+    };
+    const r = await wireListSessions(wire);
+    assert.deepEqual(r, []);
+    assert.equal(waits.length, 1);
+    assert.ok(waits[0] >= 15_000, JSON.stringify(waits));
+    assert.ok(waits[0] <= SESSIONS_TIMEOUT_MS, JSON.stringify(waits));
+  });
+
+  it('realDeps.listSessions：显式 SESSIONS_TIMEOUT_MS，且 MIRASIM_STALL_ONLY 不筛清单', async () => {
+    const { realDeps } = await import(CLI);
+    const { SESSIONS_TIMEOUT_MS } = await import(RUNTIME);
+    const live = {
+      sessionKey: LIVE_KEY, agent: 'claude', state: 'running',
+      updatedAt: T0, workdir: TREE, branch: 'live-880d', open: true,
+    };
+    const dead = {
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0 - 40 * MIN, workdir: TREE, branch: 'done-880x', open: false,
+    };
+    let listed = [live, dead];
+    const waits = [];
+    const fakeOpen = async () => ({
+      send(f) { if (f && f.type === 'listSessions') waits.push({ type: f.type }); },
+      async waitFor(pred, t) {
+        waits.push({ type: 'wait', t });
+        const msg = { type: 'sessions', sessions: listed, hasMore: false };
+        if (typeof pred === 'function' && pred(msg)) return msg;
+        return null;
+      },
+      close() {},
+    });
+    const prevOnly = process.env.MIRASIM_STALL_ONLY;
+    process.env.MIRASIM_STALL_ONLY = KEY;
+    try {
+      const deps = await realDeps({
+        readSession: async () => ({ phase: 'done', missing: false }),
+        readLedger: async () => okLedger,
+        stopSession: async () => ({ ok: true }),
+      }, { open: fakeOpen });
+      const all = await deps.listSessions();
+      assert.equal(Array.isArray(all), true);
+      assert.equal(all.length, 2, JSON.stringify(all.map(s => s.sessionKey)));
+      assert.equal(all.some(s => s.sessionKey === LIVE_KEY), true);
+      assert.equal(all.some(s => s.sessionKey === KEY), true);
+      const listWaits = waits.filter(w => typeof w.t === 'number').map(w => w.t);
+      assert.ok(listWaits.length >= 1, JSON.stringify(waits));
+      assert.ok(listWaits[0] >= 15_000, JSON.stringify(listWaits));
+      assert.ok(listWaits[0] <= SESSIONS_TIMEOUT_MS, JSON.stringify(listWaits));
+    } finally {
+      if (prevOnly === undefined) delete process.env.MIRASIM_STALL_ONLY;
+      else process.env.MIRASIM_STALL_ONLY = prevOnly;
+    }
+  });
+
+  it('MIRASIM_STALL_ONLY 共树：被筛掉但仍在跑的会话护住树，且不 stop 范围外卡死会话', async () => {
+    const { sweepOnce } = await import(CLI);
+    const { activitySig } = await import(MON);
+    const live = {
+      sessionKey: LIVE_KEY, agent: 'claude', state: 'running',
+      updatedAt: T0, workdir: TREE, branch: 'live-880d', open: true,
+    };
+    const dead = {
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0 - 40 * MIN, workdir: TREE, branch: 'done-880x', open: false,
+    };
+    const stalled = {
+      sessionKey: STALL_KEY, agent: 'claude', state: 'running',
+      updatedAt: T0 - 30 * MIN, workdir: '/w/other-880d', branch: 'stall-880y', open: true,
+    };
+    const stallView = liveView({ text: '一直卡在工具调用' });
+    const stallSig = activitySig({ ledger: okLedger, text: stallView.text, updatedAt: T0 - 30 * MIN });
+    const calls = { stop: [], del: [] };
+    let round = 0;
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => {
+        round += 1;
+        return round === 1 ? [live, dead, stalled] : [live, stalled];
+      },
+      readSession: async () => stallView,
+      readLedger: async () => okLedger,
+      stopSession: async k => { calls.stop.push(k); return { ok: true }; },
+      deleteSession: async (k, o) => { calls.del.push({ k, o }); return { ok: true }; },
+      removeWorktree: async () => ({ ok: true }),
+      isBranchMerged: () => true,
+      worktreeOwnership: () => ({ ok: true, defaultBranch: 'master', why: null }),
+      branchOfWorktree: () => 'done-880x',
+      treeExists: () => false,
+      postComment: () => ({ ok: true }),
+      issueOf: () => 880,
+    }, {
+      sessions: { [STALL_KEY]: { sig: stallSig, sinceTs: T0 - 20 * MIN, errFp: null } },
+    }, { stallMs: 8 * MIN, ttlMs: 30 * MIN, only: KEY });
+
+    assert.equal(res.gced.length, 1, JSON.stringify(res.gced));
+    assert.equal(res.gced[0].key, KEY);
+    assert.equal(res.gced[0].removeTree, false, JSON.stringify(res.gced[0]));
+    assert.deepEqual(calls.del, [{ k: KEY, o: { removeWorktree: false } }]);
+    assert.deepEqual(calls.stop, []);
+    assert.equal(res.stalled.length, 0, JSON.stringify(res.stalled));
+    assert.equal(res.exit, 0);
+  });
+
+  it('realDeps 路径共树反例：env 筛掉活会话后仍不得 removeWorktree', async () => {
+    const { realDeps, sweepOnce } = await import(CLI);
+    const live = {
+      sessionKey: LIVE_KEY, agent: 'claude', state: 'running',
+      updatedAt: T0, workdir: TREE, branch: 'live-880d', open: true,
+    };
+    const dead = {
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0 - 40 * MIN, workdir: TREE, branch: 'done-880x', open: false,
+    };
+    let listed = [live, dead];
+    const waits = [];
+    const fakeOpen = async () => ({
+      send(f) {
+        if (f && f.type === 'deleteSession') {
+          listed = listed.filter(s => s.sessionKey !== f.sessionKey);
+        }
+      },
+      async waitFor(pred, t) {
+        waits.push(t);
+        const msg = { type: 'sessions', sessions: listed, hasMore: false };
+        if (typeof pred === 'function' && pred(msg)) return msg;
+        return null;
+      },
+      close() {},
+    });
+    const calls = { stop: [], del: [] };
+    const prevOnly = process.env.MIRASIM_STALL_ONLY;
+    process.env.MIRASIM_STALL_ONLY = KEY;
+    try {
+      const wired = await realDeps({
+        readSession: async () => ({ phase: 'done', missing: false, text: '', error: null }),
+        readLedger: async () => okLedger,
+        stopSession: async k => { calls.stop.push(k); return { ok: true }; },
+      }, { open: fakeOpen });
+      const origDel = wired.deleteSession;
+      wired.deleteSession = async (k, o) => {
+        calls.del.push({ k, o });
+        return origDel(k, o);
+      };
+      const res = await sweepOnce({
+        ...wired,
+        now: () => T0,
+        isBranchMerged: () => true,
+        worktreeOwnership: () => ({ ok: true, defaultBranch: 'master', why: null }),
+        branchOfWorktree: () => 'done-880x',
+        treeExists: () => false,
+        postComment: () => ({ ok: true }),
+        issueOf: () => 880,
+      }, { sessions: {} }, { stallMs: 8 * MIN, ttlMs: 30 * MIN, only: KEY });
+      assert.equal(res.gced.length, 1, JSON.stringify(res.gced));
+      assert.equal(res.gced[0].removeTree, false, JSON.stringify(res.gced[0]));
+      assert.deepEqual(calls.del, [{ k: KEY, o: { removeWorktree: false } }]);
+      assert.deepEqual(calls.stop, []);
+      assert.equal(res.exit, 0);
+      assert.ok(waits.some(t => t >= 15_000), JSON.stringify(waits));
+    } finally {
+      if (prevOnly === undefined) delete process.env.MIRASIM_STALL_ONLY;
+      else process.env.MIRASIM_STALL_ONLY = prevOnly;
     }
   });
 });
