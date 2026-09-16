@@ -410,6 +410,58 @@ export function linkAliasesToSuccessor({
   return out;
 }
 
+/** 按 job_id 取对应 job.dispatch；没有精确命中时跟 rename handoff，再退到同 PR 同侧。 */
+export function findJobDispatch(events, jobId, { prNumber } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  let exact = null;
+  for (const e of list) {
+    if (e && e.type === 'job.dispatch' && e.job_id === jobId) exact = e;
+  }
+  if (exact) return exact;
+
+  const fromIds = new Set();
+  for (const e of list) {
+    if (e && e.type === 'job.handoff' && e.to_job_id === jobId && e.from_job_id) {
+      fromIds.add(String(e.from_job_id));
+    }
+  }
+  let renamed = null;
+  for (const e of list) {
+    if (e && e.type === 'job.dispatch' && fromIds.has(String(e.job_id))) renamed = e;
+  }
+  if (renamed) return renamed;
+
+  if (prNumber == null) return null;
+  const wantReview = String(jobId).endsWith('-review');
+  let byPr = null;
+  for (const e of list) {
+    if (!e || e.type !== 'job.dispatch') continue;
+    if (Number(e.pr_number) !== Number(prNumber)) continue;
+    const id = String(e.job_id || '');
+    const isReview = id.endsWith('-review') || e.identity === '审官';
+    if (isReview === wantReview) byPr = e;
+  }
+  return byPr;
+}
+
+/**
+ * job.closed.merged_by = 最终合并作者模型。有 handoff 用接手者，否则用 dispatch.model。
+ * 无 dispatch 的合并链写 unknown——不许拿角色名 commander/reviewer 冒充模型。
+ */
+export function mergedByForClosed({ events, jobId, dispatch } = {}) {
+  const d = dispatch || findJobDispatch(events, jobId);
+  let toModel = '';
+  for (const e of events || []) {
+    if (!e || e.type !== 'job.handoff') continue;
+    const hits = e.job_id === jobId
+      || e.to_job_id === jobId
+      || (d && d.job_id && (e.job_id === d.job_id || e.to_job_id === d.job_id));
+    if (hits && e.to_model) toModel = String(e.to_model).trim();
+  }
+  const fromDispatch = d && d.model != null ? String(d.model).trim() : '';
+  return toModel || fromDispatch || 'unknown';
+}
+
 export function writeJobClosed({
   dir, ts, machine, schema, jobId, success, rework, mergedBy,
   prNumber, redFlags, verdictRounds, workerRework, marshalRounds, triggeredBy,

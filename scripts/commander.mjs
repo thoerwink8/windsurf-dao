@@ -41,6 +41,10 @@ import {
   gatewayIdemKey, escalateRoundSeed,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
+import {
+  loadLedgerContext, writeJobClosed, workerJobId, reviewerJobId, beijingIsoFrom,
+  findJobDispatch, mergedByForClosed, verdictStatsFromReviews, scopeOverridesFor,
+} from './lib/ledger-job.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, countsAsProgress, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
@@ -1126,7 +1130,7 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  *
  * #1133：所有真实 `gh pr merge` 都钉 `--match-head-commit`。不因为没 approvalIssue 就跳过 HEAD 锁。
  */
-export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness, ledgerClose = recordJobClosed } = {}) {
   const GATING = new Set(['pr merge']);
   const expectedHead = String((action && action.head) || '').trim();
   const steps = [
@@ -1212,7 +1216,130 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
   say(failed.length
     ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
     : `  已合并 #${action.pr} 并关单`);
-  return { ok: true, calls, freshness, failed };
+  // 账本写失败不许把「合并成功」判成失败：合并已经发生、回滚不了，把它报成 failed
+  // 会让指挥官下一轮再合一次。写不了就当场说出来，⑰ 会红——那是 ⑰ 该管的事。
+  // 也不并进上面那个 failed（那是 #1235 的记账步骤）：job.closed 写不了同样不该触发再合一次。
+  let closed;
+  try { closed = ledgerClose({ pr: action.pr, why: action.why, say, run }); }
+  catch (e) { say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`); }
+  return { ok: true, calls, freshness, failed, ledger: closed };
+}
+
+/** 合并后重读当前 PR 的判别态 review。没查成必须标 unscanned，不许当成零返工。 */
+function loadPrReviewsForClosed(pr, { run = runCmd } = {}) {
+  const viewed = parseGhJson(run, ['pr', 'view', String(pr), '--json', 'reviews'], `PR #${pr} reviews`);
+  if (!viewed.ok) return { ok: false, unscanned: true, reviews: null, error: viewed.error };
+  if (!viewed.json || !Array.isArray(viewed.json.reviews)) {
+    return { ok: false, unscanned: true, reviews: null, error: `PR #${pr} 缺 reviews 数组（没查成，不许当零返工）` };
+  }
+  return { ok: true, unscanned: false, reviews: viewed.json.reviews };
+}
+
+/**
+ * 合并后补 `job.closed`（#581 的差集判据靠它，dao-check ⑰ 直接读它）。
+ *
+ * 2026-09-13 实咬：这条链**断了六周没人发现**。写 job.closed 的代码在
+ * `scripts/flow.mjs` 里，flow 被 #807（删 Windows 本机编排层）整段删除，
+ * 写口没接回来——账本里 `job.dispatch` 一路在写（commander/dao 各处都接了），
+ * 而 `job.closed` 自 09-08 起 0 条，**111 张已合并带标 PR 对不上**，⑰ 的
+ * 差集报告从那时起就是一片红。旧判据说「新代码会写 closed」，那时是对的，现在不是。
+ *
+ * 时机选在合并**成功之后**：失败路径不该记终态。写失败**不拦合并**（合并已经发生了，
+ * 回滚不了），但必须当场说出来——静默失败正是它上次断六周的原因。
+ *
+ * merged_by 取对应 job.dispatch 的真实模型（handoff 后是接手者），不是角色名
+ * commander/reviewer——能力账 buildSamples 优先信 merged_by，写错模型会污染正样本。
+ * 返工字段按当前 PR 的判别态 review 写入；reviews 或账本没查成走
+ * attribution_source=unscanned，不伪造 worker_rework=0。审官那条只在能确认
+ * job.dispatch（含可验证的 rename handoff）时才记——账本不完整且看不到
+ * dispatch，不许把「没有证据」写成终态。
+ */
+export function recordJobClosed({
+  pr, why = '', say = () => {},
+  ctx: injectedCtx,
+  run = runCmd,
+  reviews,
+  reviewsUnscanned = false,
+  reviewsError = '',
+} = {}) {
+  try {
+    const ctx = injectedCtx || loadLedgerContext({ root: ROOT });
+    const ts = beijingIsoFrom(new Date());
+    const ledger = readLedgerEvents(ctx.dir);
+    const events = ledger.events || [];
+    const ledgerUnscanned = ledger.unscanned === true;
+
+    let reviewList = reviews;
+    let unscanned = reviewsUnscanned === true;
+    let unscannedError = reviewsError || '';
+    if (reviewList === undefined && !unscanned) {
+      const loaded = loadPrReviewsForClosed(pr, { run });
+      if (!loaded.ok || loaded.unscanned) {
+        unscanned = true;
+        unscannedError = loaded.error || 'reviews 没查成';
+        reviewList = [];
+      } else {
+        reviewList = loaded.reviews;
+      }
+    }
+    if (!Array.isArray(reviewList)) {
+      unscanned = true;
+      unscannedError = unscannedError || `PR #${pr} reviews 不是数组`;
+      reviewList = [];
+    }
+    // 账本不完整时，overrides / dispatch 集合都不可信。reviews 读到了也不能据此
+    // 写成 inferred / worker_rework=0——那是把「没查成」当成「查过没事」。
+    if (ledgerUnscanned) {
+      unscanned = true;
+      const ledgerErr = ledger.error || '账本没查成';
+      unscannedError = unscannedError ? `${unscannedError}；${ledgerErr}` : ledgerErr;
+    }
+
+    const stats = verdictStatsFromReviews(reviewList, {
+      overrides: ledgerUnscanned ? [] : scopeOverridesFor(events, { prNumber: pr }),
+      unscanned,
+      unscannedError,
+    });
+    const statsUnscanned = stats.attributionSource === 'unscanned';
+    const knownRework = stats.workerRework != null;
+    const note = [stats.attributionNote, String(why || '').slice(0, 200)].filter(Boolean).join('；');
+
+    const out = {};
+    for (const [side, jobId] of [['工人', workerJobId(pr)], ['审官', reviewerJobId(pr)]]) {
+      const dispatch = findJobDispatch(events, jobId, { prNumber: pr });
+      // 审官那条只在能确认 job.dispatch（含 rename handoff）时才记。
+      // 账本没查成 ≠ 查过「没派过」——看不到 dispatch 就跳过，不许伪造终态。
+      if (side === '审官' && !dispatch) {
+        out[side] = { skipped: 'no-dispatch' };
+        continue;
+      }
+      const args = {
+        ...ctx, ts, jobId,
+        success: true,
+        rework: knownRework ? stats.workerRework > 0 : false,
+        mergedBy: mergedByForClosed({ events, jobId, dispatch }),
+        prNumber: pr,
+        attributionSource: stats.attributionSource || (statsUnscanned ? 'unscanned' : 'commander-merge'),
+        attributionNote: note || undefined,
+      };
+      if (!statsUnscanned) {
+        args.redFlags = stats.redFlags;
+        args.verdictRounds = stats.verdictRounds;
+        args.workerRework = stats.workerRework;
+        args.marshalRounds = stats.marshalRounds;
+        if (stats.triggeredBy) args.triggeredBy = stats.triggeredBy;
+      }
+      out[side] = writeJobClosed(args);
+    }
+    const failed = Object.entries(out).filter(([, r]) => r && r.ok === false);
+    if (failed.length) {
+      say(`  ⚠ 账本 job.closed 没写全（不拦合并，但 ⑰ 会红）：${failed.map(([k, r]) => `${k}:${r.error}`).join('；')}`);
+    }
+    return out;
+  } catch (e) {
+    say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`);
+    return { error: String(e && e.message || e).slice(0, 160) };
+  }
 }
 
 /**
