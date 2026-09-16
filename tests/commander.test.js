@@ -237,11 +237,12 @@ describe('decide：自己做（确定性）', () => {
     const { decide } = await CORE;
     const pr = {
       number: 910, title: 'Z', isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
+      headRefOid: 'h910',
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 910: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并' }] } } },
+      prReviews: { scanned: true, byPr: { 910: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并', commit_id: 'h910' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 1);
     assert.equal(byKind(r, 'land').length, 1, '合并后调 land（幂等）');
@@ -320,12 +321,13 @@ describe('decide：自己做（确定性）', () => {
     const { decide } = await CORE;
     const pr = {
       number: 912, title: 'Y', isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
+      headRefOid: 'h912',
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
       // reviewer-book #807 起不写「判定：」行——只看 bodies 会把这条判成 COMMENTED
-      prReviews: { scanned: true, byPr: { 912: { reviews: [{ state: 'APPROVED', body: '看过 diff，逻辑对，可合并' }], bodies: ['看过 diff，逻辑对，可合并'] } } },
+      prReviews: { scanned: true, byPr: { 912: { reviews: [{ state: 'APPROVED', body: '看过 diff，逻辑对，可合并', commit_id: 'h912' }], bodies: ['看过 diff，逻辑对，可合并'] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 1, '真 approve 白话正文必须走 merge');
     assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'approved-without-review'), '不许误报 approved-without-review');
@@ -349,11 +351,12 @@ describe('decide：自己做（确定性）', () => {
     const { decide } = await CORE;
     const pr = {
       number: 911, isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
+      headRefOid: 'h911',
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], body: '',
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 911: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并' }] } } },
+      prReviews: { scanned: true, byPr: { 911: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并', commit_id: 'h911' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0, 'CI 红绝不合');
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'approved-but-ci-red'));
@@ -361,8 +364,14 @@ describe('decide：自己做（确定性）', () => {
 
   it('判绿但 draft（manual 合门）→ 需拍板回流，不自动合', async () => {
     const { decide } = await CORE;
-    const pr = { number: 912, isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', body: '' };
-    const r = decide(baseSituation({ github: { scanned: true, issues: [], prs: [pr] } }));
+    const pr = {
+      number: 912, isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
+      headRefOid: 'h912d', body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 912: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: 'h912d' }] } } },
+    }));
     assert.equal(byKind(r, 'merge').length, 0);
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'decide'));
   });
@@ -478,7 +487,7 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
     assert.ok(byKind(r2, 'escalate').some((a) => (a.missing || []).includes('stall')));
   });
 
-  it('判绿待合并但该 PR reviews 没查成 → escalate，不合', async () => {
+  it('聚合 APPROVED 但该 PR reviews 没查成 → 不合（不能拿聚合值代替 HEAD 证据）', async () => {
     const { decide } = await CORE;
     const pr = {
       number: 950, isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
@@ -489,7 +498,6 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
       prReviews: { scanned: true, byPr: {} }, // section 查成但该 PR 的 fetch 缺
     }));
     assert.equal(byKind(r, 'merge').length, 0, '判定行没查成绝不合');
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'unscanned'));
   });
 
   // 审官 #840 红①：三条交叉组合原样加成红样本——散落 if 会被它们绕过，入口总闸必须挡住。
@@ -601,7 +609,7 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
     assert.deepEqual(kinds(r), ['rereview'], '旧红 + 新 head 没判定 = 同一轮再看，不是对接 master');
   });
 
-  it('旧 head 核绿、新 head 没判定 + MERGEABLE → 直接合，不再审', async () => {
+  it('旧 head 核绿、新 head 没判定、没有对接证明 → 不合（不许把任意改码当纯对接）', async () => {
     const { decide } = await CORE;
     const HEAD = 'newhead000000000000000000000000000000bbb';
     const OLD = 'oldhead000000000000000000000000000000aaa';
@@ -616,8 +624,95 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
         { state: 'APPROVED', body: '绿', commit_id: OLD },
       ] } } },
     }));
-    assert.ok(byKind(r, 'merge').length >= 1, `应 squash，实得 ${kinds(r)}`);
-    assert.equal(byKind(r, 'rereview').length, 0, '对接 master 不许再叫审官');
+    assert.equal(byKind(r, 'merge').length, 0, `没证明不许合，实得 ${kinds(r)}`);
+    const esc = byKind(r, 'escalate').filter((a) => a.reason === 'unscanned');
+    assert.equal(esc.length, 1);
+    assert.equal((esc[0].missing || []).includes('dockProof'), true);
+  });
+
+  it('旧 head 核绿、新 head 没判定 + 已证明纯对接 + MERGEABLE → 直接合，不再审', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'newhead000000000000000000000000000000bbb';
+    const OLD = 'oldhead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: OLD },
+      ] } } },
+      dockByPr: { 1102: { state: 'ok', why: '纯对接' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 1, `应 squash，实得 ${kinds(r)}`);
+    assert.equal(byKind(r, 'merge')[0].head, HEAD);
+    assert.equal(byKind(r, 'rereview').length, 0, '已证明纯对接不许再叫审官');
+  });
+
+  it('旧批准之后树里有新逻辑 → 复审，不合', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'newhead000000000000000000000000000000bbb';
+    const OLD = 'oldhead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: OLD },
+      ] } } },
+      dockByPr: { 1102: { state: 'red', why: 'HEAD 含新树内容' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rereview').length, 1);
+  });
+
+  it('APPROVED 后 DISMISSED：即使注入 dock ok 也不合，当前 HEAD 要重新拿批准', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'newhead000000000000000000000000000000bbb';
+    const OLD = 'oldhead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: OLD },
+        { state: 'DISMISSED', commit_id: OLD },
+      ] } } },
+      dockByPr: { 1102: { state: 'ok', why: '树相同不得压过撤销' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, `撤销后不许合，实得 ${kinds(r)}`);
+    assert.equal(byKind(r, 'rereview').length, 1, `当前 HEAD 要重新拿批准，实得 ${kinds(r)}`);
+  });
+
+  it('当前 HEAD 的 APPROVED 被 DISMISSED 后也不合，必须重新拿批准', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'samehead000000000000000000000000000000aaa';
+    const pr = {
+      number: 1102, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1102', title: 'nudge',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1102: { reviews: [
+        { state: 'APPROVED', body: '绿', commit_id: HEAD },
+        { state: 'DISMISSED', commit_id: HEAD },
+      ] } } },
+      dockByPr: { 1102: { state: 'ok', why: '不能绕过撤销' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, `撤销后不许合，实得 ${kinds(r)}`);
+    assert.equal(byKind(r, 'rereview').length, 1, `当前 HEAD 要重新拿批准，实得 ${kinds(r)}`);
   });
 
   it('②红就打在当前 head → 照常派返工工人（判别力反证：别把整条路一刀切废掉）', async () => {
@@ -1030,13 +1125,14 @@ describe('decide：自动路径边界（审官建议）', () => {
           labeledIssue(11),
         ],
         prs: [
-          { number: 20, isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '' },
-          { number: 21, isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', body: '' },
+          { number: 20, isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', headRefOid: 'h20', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '' },
+          { number: 21, isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', headRefOid: 'h21', body: '' },
           redPr(22, 'h22', 11),
           { number: 23, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', headRefOid: 'h23', body: '正文里没有署名单号' },
         ] },
       prReviews: { scanned: true, byPr: {
-        20: { reviews: [{ state: 'APPROVED', body: '可以合' }] },
+        20: { reviews: [{ state: 'APPROVED', body: '可以合', commit_id: 'h20' }] },
+        21: { reviews: [{ state: 'APPROVED', body: '可以合', commit_id: 'h21' }] },
         22: { reviews: [redReview('一处要改', 'h22')] },
         23: { reviews: [redReview('三处', 'h23'), redReview('两处', 'h23')] },
       } },
@@ -1171,6 +1267,79 @@ describe('辅助纯函数', () => {
     assert.equal(hasLiveAction([{ kind: 'escalate', reason: 'unscanned' }]), false);
     assert.equal(hasLiveAction([{ kind: 'dispatch', issue: 1 }]), true);
     assert.equal(hasLiveAction([{ kind: 'escalate', reason: 'two-red' }]), true, '报帅算动静');
+  });
+
+  // 2026-09-15 实咬：连续 9 轮唯一动作都是同一条 escalate(missing-labels, #1174)，
+  // hasLiveAction 判 true ⇒ lastActivityAt 每 20 分钟刷新 ⇒ 心跳永远不到期，
+  // 系统自认一切正常，而盘面冻了 10 小时、22/26 张 PR 被跳过。
+  // 「有动作」不等于「有推进」，锚点判据要加上「这轮跟上轮不一样」。
+  it('countsAsProgress：同一套动作重复就不算推进（心跳锚点不许被磨盘刷新）', async () => {
+    const { countsAsProgress } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+
+    // streak 语义跟 nextDigestStreak 对齐：0=新摘要，≥1=已经连续相同。
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 0 }), true, '新摘要（streak=0）算推进');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 1 }), false, '第一轮重复（streak=1）就是磨盘');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 2 }), false, '第二轮重复');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 9 }), false, '实咬那一次：9 轮相同');
+
+    assert.equal(countsAsProgress({ actions: [{ kind: 'noop' }], digestStreak: 0 }), false,
+      'noop 本来就不算，streak 再新也不算');
+    assert.equal(countsAsProgress({ actions: [{ kind: 'escalate', reason: 'unscanned' }], digestStreak: 0 }), false,
+      '纯 unscanned-escalate 同理');
+  });
+
+  it('countsAsProgress：streak 没查成时退回旧行为（不许把正常运转误报成死机）', async () => {
+    const { countsAsProgress } = await CORE;
+    const live = [{ kind: 'dispatch', issue: 1 }];
+    assert.equal(countsAsProgress({ actions: live }), true, 'undefined');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: null }), true, 'null');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: 'x' }), true, '非数');
+  });
+
+  it('countsAsProgress：真有新动作时照常算推进（别把闸修成永远不响）', async () => {
+    const { countsAsProgress } = await CORE;
+    assert.equal(countsAsProgress({ actions: [{ kind: 'dispatch', issue: 7 }], digestStreak: 0 }), true);
+    assert.equal(countsAsProgress({ actions: [{ kind: 'merge', pr: 9 }], digestStreak: 0 }), true);
+  });
+
+  // 审官红项：不要只手工传入与生产语义不一致的 streak:1。
+  // 生产路径是 nextDigestStreak 写回 state.digestStreak，再交给 countsAsProgress。
+  it('countsAsProgress ← nextDigestStreak：连续 9 轮同一摘要，从第一轮重复起就不算推进', async () => {
+    const { countsAsProgress, nextDigestStreak } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+    let lastDigest = null;
+    let lastStreak = 0;
+    const streaks = [];
+    const progress = [];
+    for (let i = 0; i < 9; i += 1) {
+      const vac = nextDigestStreak({
+        actions: stuck,
+        lastDigest,
+        lastStreak,
+        threshold: 6,
+      });
+      lastDigest = vac.digest;
+      lastStreak = vac.streak;
+      streaks.push(vac.streak);
+      progress.push(countsAsProgress({ actions: stuck, digestStreak: vac.streak }));
+    }
+    assert.deepEqual(streaks, [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      'nextDigestStreak：首个新摘要 0，第二轮相同才 1');
+    assert.deepEqual(progress, [true, false, false, false, false, false, false, false, false],
+      '磨盘从第一轮重复起就不刷新锚点（旧实现是 0:true, 1:true, 2:false）');
+
+    const moved = nextDigestStreak({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      lastDigest,
+      lastStreak,
+      threshold: 6,
+    });
+    assert.equal(moved.streak, 0, 'digest 变了归零');
+    assert.equal(countsAsProgress({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      digestStreak: moved.streak,
+    }), true, '真换动作后锚点恢复刷新');
   });
 
   it('actionsDigest：同一批动作稳定同键、顺序无关；noop 不入键', async () => {
@@ -1543,23 +1712,42 @@ describe('decide：判绿按真 review 而非 reviewDecision（实咬）', () =>
       github: { scanned: true, issues: [], prs: [pr] },
       prReviews: { scanned: true, byPr: { 960: { reviews: over.reviews !== undefined ? over.reviews
         : [{ state: 'APPROVED', body: '看过了，可以合', commit_id: 'h960' }] } } },
+      ...(over.dockByPr ? { dockByPr: over.dockByPr } : {}),
     });
   }
   it('reviewDecision 为 null 但当前 head 上是 APPROVED → 照样 merge', async () => {
     const { decide } = await CORE;
     const r = decide(greenSit());
     assert.equal(byKind(r, 'merge').length, 1, 'reviewDecision 恒 null 的仓也必须能自动合');
+    assert.equal(byKind(r, 'merge')[0].head, 'h960');
     assert.equal(byKind(r, 'land').length, 1);
   });
-  it('绿打在旧 head 上 + MERGEABLE → squash（对接 master，不再审）', async () => {
+  it('绿打在旧 head 上 + 已证明纯对接 + MERGEABLE → squash，不再审', async () => {
+    const { decide } = await CORE;
+    const r = decide(greenSit({
+      reviews: [{ state: 'APPROVED', body: '旧的', commit_id: 'old' }],
+      dockByPr: { 960: { state: 'ok' } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 1, '落后可合的 PR 应直接 squash');
+    assert.equal(byKind(r, 'merge')[0].head, 'h960');
+    assert.equal(byKind(r, 'rereview').length, 0);
+  });
+  it('绿打在旧 head 上但没有对接证明 → 不合', async () => {
     const { decide } = await CORE;
     const r = decide(greenSit({ reviews: [{ state: 'APPROVED', body: '旧的', commit_id: 'old' }] }));
-    assert.equal(byKind(r, 'merge').length, 1, '落后可合的 PR 应直接 squash');
-    assert.equal(byKind(r, 'rereview').length, 0);
+    assert.equal(byKind(r, 'merge').length, 0);
   });
   it('当前 head 上是 CHANGES_REQUESTED → 不合，走返工', async () => {
     const { decide } = await CORE;
     const r = decide(greenSit({ reviews: [{ state: 'CHANGES_REQUESTED', body: '不行', commit_id: 'h960' }] }));
+    assert.equal(byKind(r, 'merge').length, 0);
+  });
+  it('当前 HEAD 红票不能被聚合 APPROVED 压掉', async () => {
+    const { decide } = await CORE;
+    const r = decide(greenSit({
+      pr: { reviewDecision: 'APPROVED' },
+      reviews: [{ state: 'CHANGES_REQUESTED', body: '不行', commit_id: 'h960' }],
+    }));
     assert.equal(byKind(r, 'merge').length, 0);
   });
 });
@@ -3320,6 +3508,247 @@ describe('nextDigestStreak：推进量仪表', () => {
       lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
     }
     assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
+  });
+});
+
+// ── 闸确定性拒绝：不看词、只看行为，且认输理由必须带真因（2026-09-14 实咬）──
+//
+// 病：drain 被闸当场拒时一个审官都没起来，却照记一次 try；judgeRetry 的词表认不出
+// 这几句闸拒（实测两句 retryable、一句 unknown），于是每 20 分钟白试一次，试满 3 次
+// 打「卡死/自动化认输」，写的理由是「叫了 3 次审官判定仍是 0」——与真因毫无关系。
+describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'bb22cc33dd44ee55ff6677889900aabbccddeeff';
+  const NOW = '2026-09-14T12:00:00.000Z';
+  // 真实原文（2026-09-14 journal 原样抄来）：judgeRetry 判它 retryable，词表救不了
+  const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+    + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+  const readyPr = (n) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '',
+    labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+  });
+  const situ = (rec, rereviewKey) => baseSituation({
+    at: NOW,
+    github: { scanned: true, issues: [], prs: [readyPr(902)] },
+    prReviews: { scanned: true, byPr: { 902: { reviews: [] } } },
+    reworkDispatched: { [rereviewKey(902, HEAD)]: { at: '2026-09-14T10:00:00.000Z', pr: 902, head: HEAD, kind: 'rereview', ...rec } },
+  });
+
+  it('①同一句闸拒连着 2 轮 → 提前交人，理由里是闸的原文而不是「判定仍是 0」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 2 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1, '连着拿回一模一样的拒绝 = 再试还是这个结果，停手');
+    assert.equal(marks[0].why.includes('换厂凭证'), true, '认输理由必须带闸的原文——看 PR 的人靠它决定下一步');
+    assert.equal(marks[0].why.includes('连着 2 轮'), true, '也要说清判据是什么');
+    assert.equal(byKind(r, 'rereview').length, 0, '不再白叫一次审官');
+  });
+
+  it('②试满 3 次且记下了原文 → 理由里也要带原文（原来这一格写的是无关的症状）', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 3, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].why.includes('最后一次叫审官是被拒的'), true);
+    assert.equal(marks[0].why.includes('换厂凭证'), true);
+  });
+
+  it('③负控：失败原文变了 → 情况变了，继续叫审官，不提前交人', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '只重复了一次还不算「一直是它」');
+    assert.equal(byKind(r, 'rereview').length, 1, '照常再叫一次');
+  });
+
+  it('④负控：上一轮没记下失败原文（没查成）→ 不许当成「一直是它」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, sameErrorRounds: 5 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '没原文就没有「一模一样」这回事');
+    assert.equal(byKind(r, 'rereview').length, 1);
+  });
+
+  it('⑤判据本身：judgeRepeatedFailure 与 foldFailureStreak 的四格', async () => {
+    const { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK } = await CORE;
+    assert.equal(SAME_ERROR_ROUNDS_TO_STUCK, 2);
+
+    // 累计：同一句连着出现 → 轮数涨
+    let rec = {};
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 1);
+    assert.equal(judgeRepeatedFailure(rec).stuck, false);
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 2);
+    assert.equal(judgeRepeatedFailure(rec).stuck, true);
+
+    // 换了一句 → 从头数（宁可多试一轮，也别把「情况变了」当没变）
+    assert.deepEqual(foldFailureStreak(rec, '另一种失败'), { lastError: '另一种失败', sameErrorRounds: 1 });
+    // 这轮成功了 → 清零
+    assert.deepEqual(foldFailureStreak(rec, null), { lastError: null, sameErrorRounds: 0 });
+    // 没有账 / 空原文（空串才是没原文；空白也是原文，不做 trim）
+    assert.equal(judgeRepeatedFailure(null).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '', sameErrorRounds: 9 }).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '   ', sameErrorRounds: 2 }).stuck, true,
+      '首尾空白也是原文，trim 会把「差一个空格」揉成同一句');
+    assert.deepEqual(foldFailureStreak({ lastError: 'foo', sameErrorRounds: 1 }, 'foo '),
+      { lastError: 'foo ', sameErrorRounds: 1 }, '尾空白变了 = 另一句');
+    assert.deepEqual(foldFailureStreak({ lastError: ' foo', sameErrorRounds: 1 }, 'foo'),
+      { lastError: 'foo', sameErrorRounds: 1 }, '首空白变了 = 另一句');
+  });
+
+  it('⑥判别力正控：这三句真实闸拒，judgeRetry 一句都判不出 terminal', async () => {
+    const { judgeRetry } = await import('../scripts/lib/retry-verdict.mjs');
+    const real = [
+      GATE,
+      'reviewer-attach 失败：先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）',
+      'reviewer-attach 失败：审官位只许审官顺位表里的模型（gpt-5.6-luna → gpt-5.6-sol → grok-4.6），kimi-k3 不在表里',
+    ];
+    for (const e of real) {
+      assert.notEqual(judgeRetry({ error: e }).verdict, 'terminal',
+        '词表认不出这些——所以才需要一条只看行为的判据；哪天词表补上了，这条断言会红，提醒回来删掉重复的那一层');
+    }
+  });
+
+  it('⑦集成：连续两次 requestRereview + drain 同错 → sameErrorRounds 累到 2，不是每次从 1 开始', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey, decide, judgeRepeatedFailure } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const failDrain = () => ({
+        ok: false, status: 1,
+        out: JSON.stringify({ ok: false, error: GATE }),
+        stderr: '', error: GATE,
+      });
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：同错两轮',
+      };
+      const r1 = requestRereview(action, { state, dryRun: false, say: () => {}, run: failDrain });
+      assert.equal(r1.ok, false);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '第一轮 drain 失败，streak=1');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const r2 = requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {}, run: failDrain,
+      });
+      assert.equal(r2.ok, false);
+      assert.equal(state.reworkDispatched[key].tries, 2);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 2,
+        '第二轮必须累加；覆盖成只有 tries 的新对象会让同错永远从 1 开始');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+      assert.equal(judgeRepeatedFailure(state.reworkDispatched[key]).stuck, true);
+
+      const decided = decide(situ({
+        tries: state.reworkDispatched[key].tries,
+        lastError: state.reworkDispatched[key].lastError,
+        sameErrorRounds: state.reworkDispatched[key].sameErrorRounds,
+      }, rereviewKey));
+      assert.equal(byKind(decided, 'mark-exhausted').length, 1, '两轮同错之后 decide 提前交人');
+      assert.equal(byKind(decided, 'rereview').length, 0);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('⑧背压/没查成不清零 streak；真拉起审官才清零', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272h-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：背压',
+      };
+      requestRereview(action, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: false, status: 1, out: JSON.stringify({ ok: false, error: GATE }), stderr: '', error: GATE }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1);
+
+      const held = { ok: true, drained: 0, failed: 0, held: 2 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(held), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '满载 held 不算尝试，不许把 streak 清掉');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const unscanned = { ok: true, drained: 0, held: 2, unscanned: true };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(unscanned), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '没查成也不许清零');
+
+      const pulled = { ok: true, drained: 1, failed: 0, held: 0 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(pulled), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 0, '真拉起审官才清零');
+      assert.equal(state.reworkDispatched[key].lastError, null);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('⑨两条写路径对「前 400 字同、后文不同 / 第二行不同」结论一致，且都不判 stuck', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272e-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { drainErrorText } = await import('../scripts/lib/commander-verbs.mjs');
+      const { rereviewKey, judgeRepeatedFailure } = await CORE;
+      const cases = [
+        { a: 'E'.repeat(400) + 'A', b: 'E'.repeat(400) + 'B', label: '前 400 字相同但后文不同' },
+        { a: 'gate refused\nhead=aaa', b: 'gate refused\nhead=bbb', label: '第一行相同但第二行不同' },
+        { a: 'gate refused\n', b: 'gate refused', label: '尾换行 vs 无换行' },
+      ];
+      for (const { a, b, label } of cases) {
+        assert.equal(drainErrorText({ error: a }), a, label + '：抽取不许截');
+        const key = rereviewKey(902, HEAD);
+        const state = { reworkDispatched: {}, drainLedger: {} };
+        const action = {
+          kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+          stateKey: key, tries: 1, why: '集成：' + label,
+        };
+        const runOf = (err) => () => ({
+          ok: false, status: 1, out: JSON.stringify({ ok: false, error: err }), stderr: '', error: err,
+        });
+        requestRereview(action, { state, dryRun: false, say: () => {}, run: runOf(a) });
+        requestRereview({ ...action, tries: 2 }, { state, dryRun: false, say: () => {}, run: runOf(b) });
+        const drainRec = Object.values(state.drainLedger)[0];
+        const rrRec = state.reworkDispatched[key];
+        assert.ok(drainRec, label + '：drain 账必须写下');
+        assert.equal(drainRec.lastError, b, label + '：drain 账必须留下完整后一句');
+        assert.equal(rrRec.lastError, b, label + '：复审账必须留下完整后一句');
+        assert.equal(drainRec.sameErrorRounds, 1, label + '：drain 账不许判同错');
+        assert.equal(rrRec.sameErrorRounds, 1, label + '：复审账不许判同错');
+        assert.equal(drainRec.lastError, rrRec.lastError, label + '：两条路径 lastError 必须一致');
+        assert.equal(drainRec.sameErrorRounds, rrRec.sameErrorRounds, label + '：两条路径 streak 必须一致');
+        assert.equal(judgeRepeatedFailure(drainRec).stuck, false, label);
+        assert.equal(judgeRepeatedFailure(rrRec).stuck, false, label);
+      }
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

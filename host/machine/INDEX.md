@@ -37,10 +37,14 @@
 | D | ~/.codex | codex 根。子项见下行，不整目录镜像 |
 | C | ~/.codex/auth.json | codex 登录态（OPENAI_API_KEY）。派前探针只读它拼 codex 直连凭据（#842），不打印。不进 git |
 | D | ~/.codex/config.toml | codex 直连配置（base_url/model/wire_api）。派前探针只读 base_url 拼 /v1/responses（#842）。本机配置，不拷 |
+| D | ~/.codex-sol | gpt-5.6-sol 专用 CODEX_HOME（2026-09-14）。pqgpt 两把 key，而 auth.json 只有一个 OPENAI_API_KEY 字段，共存会静默互相盖掉，所以分家。起法 `CODEX_HOME=~/.codex-sol codex ...`；执行目录 `codex-pqapi-sol.connection.codexHome` 指着它。装法见 NEW-MACHINE.md 7e。本机配置，不拷 |
+| C | ~/.codex-sol/auth.json | sol 那把 pqapi key 的落点（0600）。真身在 ~/.config/ai-gateway/migration-1174/pqapi-sol.key。不打印、不进 git |
+| D | ~/.codex-sol/config.toml | sol 专用 codex 配置：pqapi 直连 + wire_api=responses + model=gpt-5.6-sol。本机配置，不拷 |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | C | ~/.config/cursor | Cursor 原生登录态；ACP 只使用现有认证，不公开或随仓复制 |
 | C | ~/.grok/auth.json | Grok Build 订阅凭据与续期状态，禁进 git、禁打印 |
 | D | ~/.local/share | 原生 Cursor/Devin CLI 版本、会话与凭据根；按产品管理，不整目录镜像 |
+| C | ~/.local/share/devin/credentials.toml | Linux 上 Devin CLI 登录态（`devin auth`）。0600，不进 git。Windows 同物见 `~/AppData/Local/devin` |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
@@ -75,7 +79,7 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
-| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。`~/.codex/skills` 见 ignore.md 历史条。本仓只读、不写装法 |
+| E | ~/.mirasim/skills | 归 `ai-gateway-stack`。mirasim 自有 skill（`lark-*` / `eval`）与执行体共用发现面。#1146 装载面被劫时的目标；onboard / dao-skills-heal 合并保留，不删。`~/.claude/skills` 整目录链到这里 = 被劫（接回后是真目录 + 逐个链）。本仓只读、不写装法 |
 | E | ~/.mirasim/setting.json | 归 `ai-gateway-stack`。含登录与 relay 状态，升级保留服务用户自己的配置，不复制 root 身份 |
 | E | ~/.mirasim/app | 归 `ai-gateway-stack`。Mirasim 安装/版本运行目录，本仓仅作能力和版本观测 |
 | E | ~/.mirasim/certs | 归 `ai-gateway-stack`。Mirasim 本机流量记录证书，敏感运行材料，不进 git |

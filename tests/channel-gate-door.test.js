@@ -370,18 +370,37 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
     loadBreaker: () => null,
   });
 
+  it('真表：gpt-5.6-sol 不因 grok/composer「不限」被生产入口放行', async () => {
+    const b = await bits();
+    const caps = b.buildChannelCaps(b.raw.腿);
+    const resolved = b.resolveModelChannel({
+      model: 'gpt-5.6-sol', legs: b.raw.腿, models: b.modelsFromJson(b.raw), caps: caps.caps,
+    });
+    assert.ok(resolved, 'gpt-5.6-sol 认不出渠道');
+    assert.ok(Number.isFinite(resolved.cap), `pending 腿继承了 Infinity：${resolved.channel} cap=${resolved.cap}`);
+    const jobs = [];
+    const trees = [];
+    for (let i = 1; i <= 8; i += 1) {
+      jobs.push({ pr: 9000 + i, model: 'gpt-5.6-sol' });
+      trees.push(`/root/mirasim-worktrees/windsurf-dao/dao-review-pr-${9000 + i}`);
+    }
+    const rLots = b.checkChannelCapacity({
+      model: 'gpt-5.6-sol', now: T0,
+      io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, trees, jobs),
+    });
+    assert.equal(rLots.verdict, 'full', `8 个 gpt-5.6-sol 在途仍 free（channel=${rLots.channel} cap=${rLots.cap}）`);
+    assert.equal(rLots.reason, 'at-cap');
+  });
+
   // 审官模型：#1145 的起因就是「一轮起 10 个审官全部 429」，所以判别点选审官这条腿。
-  for (const model of ['gpt-5.6-luna', 'gpt-5.6-sol']) {
+  // 不限模型（grok/composer）钉「再多也不因上限拦」；pending 模型钉「占满则拦」。
+  for (const model of ['gpt-5.6-luna', 'gpt-5.6-sol', 'grok-4.6', 'composer-2.5']) {
     it(`${model}：在途占满该渠道上限 → 生产入口判 full；少一个 → free`, async () => {
       const b = await bits();
       const caps = b.buildChannelCaps(b.raw.腿);
       const resolved = b.resolveModelChannel({ model, legs: b.raw.腿, models: b.modelsFromJson(b.raw), caps: caps.caps });
       assert.ok(resolved, `${model} 在腿表里认不出渠道——判据失效，不是「检查通过」`);
       const cap = resolved.cap;
-      // 拆到最简：两个条件分开断，失败时看得出是哪半坏了（复合断言看不出）。
-      assert.equal(Number.isFinite(cap), true, `${model} 的渠道 ${resolved.channel} 上限不是有限值（${cap}）——本用例失去判别力`);
-      assert.ok(cap >= 1, `${model} 的渠道 ${resolved.channel} 上限 ${cap} < 1——本用例失去判别力`);
-
       const mk = (n) => {
         const jobs = []; const trees = [];
         for (let i = 1; i <= n; i += 1) {
@@ -390,6 +409,17 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
         }
         return { jobs, trees };
       };
+
+      // 腿表「不限」是拍板结论，不是没填。本用例对有限上限钉「满则拦」，
+      // 对不限钉「在途再多也不因上限判 full」——两条都是不变量，都不写死数字。
+      if (!Number.isFinite(cap)) {
+        const lots = mk(8);
+        const rLots = b.checkChannelCapacity({ model, now: T0, io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, lots.trees, lots.jobs) });
+        assert.equal(rLots.verdict, 'free', `${model} 渠道 ${resolved.channel} 已「不限」，8 个在途仍被拦（${rLots.reason}）`);
+        assert.equal(rLots.channel, resolved.channel);
+        return;
+      }
+      assert.ok(cap >= 1, `${model} 的渠道 ${resolved.channel} 上限 ${cap} < 1——本用例失去判别力`);
 
       const full = mk(cap);
       const rFull = b.checkChannelCapacity({ model, now: T0, io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, full.trees, full.jobs) });
@@ -404,6 +434,34 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
       assert.equal(rFree.inFlight, cap - 1);
     });
   }
+
+  it('夹具有限上限：在途 = cap 判 full，少一个判 free（不靠活表数字）', async () => {
+    const b = await bits();
+    const raw = JSON.parse(JSON.stringify(b.raw));
+    for (const leg of raw.腿 || []) {
+      if (leg && leg.状态 === '在役') leg['并发上限'] = 2;
+    }
+    const { checkChannelCapacity, buildChannelCaps, resolveModelChannel } = await import(CC);
+    const caps = buildChannelCaps(raw.腿);
+    const resolved = resolveModelChannel({ model: 'gpt-5.6-luna', legs: raw.腿, models: b.modelsFromJson(raw), caps: caps.caps });
+    assert.equal(resolved.cap, 2);
+    const jobs = [{ pr: 9001, model: 'gpt-5.6-luna' }, { pr: 9002, model: 'gpt-5.6-luna' }];
+    const trees = ['/root/mirasim-worktrees/windsurf-dao/dao-review-pr-9001', '/root/mirasim-worktrees/windsurf-dao/dao-review-pr-9002'];
+    const io = {
+      loadRouting: () => raw,
+      loadModels: (r) => b.modelsFromJson(r),
+      checkInFlight: () => ({ ok: true, trees, count: trees.length }),
+      loadJobs: () => jobs,
+      loadBreaker: () => null,
+    };
+    const full = checkChannelCapacity({ model: 'gpt-5.6-luna', now: T0, io });
+    assert.equal(full.verdict, 'full');
+    assert.equal(full.inFlight, 2);
+    const underIo = { ...io, checkInFlight: () => ({ ok: true, trees: trees.slice(0, 1), count: 1 }), loadJobs: () => jobs.slice(0, 1) };
+    const under = checkChannelCapacity({ model: 'gpt-5.6-luna', now: T0, io: underIo });
+    assert.equal(under.verdict, 'free');
+    assert.equal(under.inFlight, 1);
+  });
 
   it('在途读不出来 → ok:false（fail-close），不是「扫完是 0」', async () => {
     const b = await bits();

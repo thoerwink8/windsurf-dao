@@ -20,9 +20,12 @@ selectors (`deepseek/deepseek-v4-flash`, `opencode-go/deepseek-v4-flash`) and of
 endpoints. Native auth/settings/model-store content was unchanged. One bounded
 synthetic tool-protocol request per provider (96 maximum output tokens, 15s timeout,
 no retry or tool execution) returned DeepSeek **402 in 1482ms** and OpenCode Go
-**403 in 626ms**. Usage and actual cost were not returned. Both profiles remain
-disabled/unavailable; these failed direct requests do not certify Mirasim execution.
-All small token prices below remain reference metadata, not measured charges.
+**403 in 626ms**. Usage and actual cost were not returned. The OpenCode Go profile
+remains disabled/unavailable. The official DeepSeek direct selector is a dated
+2026-09-09/13 observation — that channel was deleted 2026-09-15 and is not a
+current catalog profile. These failed direct requests do not certify Mirasim
+execution. All small token prices below remain reference metadata, not measured
+charges.
 
 CommandCode now has an explicit `pi-openai-adapter` connection for main's deployment
 at `http://127.0.0.1:4342/v1`. The helper allows authenticated HTTP only at this
@@ -65,7 +68,7 @@ checks. No further CommandCode probe was issued by this subtask.
 | Devin native | `~/.local/share/devin/credentials.toml`; current login is Devin Pro | Prior native read task succeeded; ACP initialize/session-new succeeded; current official account model list returned 210 variants | ACP prompt with pinned model, recovery, tools and actual Pro charges |
 | Grok native | `~/.grok/auth.json` | Prior native read succeeded; ACP advertised `grok-4.6` and `grok-4.5`; newer Mirasim roster supports Grok | Production orca was 0.0.282 and lacked Grok; validate upgraded Mirasim execution |
 | OpenCode Go direct | `~/.pi/agent/auth.json` → `opencode-go.key` | Present, different from known NewAPI keys; official model list GET returned 200 / 35 IDs | This endpoint is also public: no generation entitlement, remaining quota, or tool success established |
-| DeepSeek direct | `~/.pi/agent/auth.json` → `deepseek.key` | Present, different from known NewAPI keys; authenticated official model list GET returned 200 / 3 IDs | Exact Mirasim/Pi provider binding, generation and tools |
+| DeepSeek direct (2026-09-09 observation; official channel deleted 2026-09-15 — not a current path) | `~/.pi/agent/auth.json` → `deepseek.key` (removed 2026-09-15) | 2026-09-09: present, different from known NewAPI keys; authenticated official model list GET returned 200 / 3 IDs | Channel retired; do not bind or refresh |
 | OpenCode Zen direct | Native OpenCode auth store not found in this host's standard paths | Public model list GET returned 200 / 70 IDs | Native API credential and paid/free generation entitlement |
 | CommandCode direct | Original apiKey now extracted privately from the remote adapter config | NewAPI CommandCode group lists 6 IDs; native apiBase/projectSlug located | Proprietary adapter and direct tools still need qualification |
 | Windsurf direct | Current `~/.config/ai-gateway/windsurf.key` equals the NewAPI Windsurf group key | Group model list GET returned 200 / 48 IDs | Windsurf account/adapter credentials and renewal have not been migrated |
@@ -75,7 +78,9 @@ checks. No further CommandCode probe was issued by this subtask.
 The original search of native OpenCode/CommandCode stores was incomplete: the gateway
 repository's `secrets/secrets.env.example` points specifically to Pi's auth store.
 That additional search found the native OpenCode Go and DeepSeek keys above.
-The CLI's `discover` command now checks both stores. Key values, hashes, email
+The DeepSeek key was removed on 2026-09-15 with the official channel; the row is
+a dated observation, not a current credential. The CLI's `discover` command now
+checks both stores. Key values, hashes, email
 addresses, provider account IDs and raw authentication responses are not recorded.
 
 `~/.mirasim/keys/opencode.key`, `cmdcode.key`, and `windsurf.key` are NewAPI group
@@ -124,7 +129,7 @@ The JSON snapshots hold exact IDs and per-source timestamps. At the observed tim
 | --- | --- | --- |
 | `https://opencode.ai/zen/v1/models` | 70 IDs | Public Zen catalog; includes `deepseek-v4-flash`, `deepseek-v4-flash-free`, `gpt-5-nano`, `gpt-5.4-mini`, `gpt-5.4-nano` |
 | `https://opencode.ai/zen/go/v1/models` | 35 IDs | Public Go catalog; includes `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
-| `https://api.deepseek.com/models` with native key | 3 IDs | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
+| DeepSeek official models endpoint with native key (channel deleted 2026-09-15; row kept as dated observation) | 3 IDs | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-vision-exp` |
 | NewAPI OpenCode group | 7 IDs | Filtered gateway listing, not the Go provider's complete menu |
 | NewAPI CommandCode group | 6 IDs | Includes `deepseek/deepseek-v4-flash`; not a direct provider entitlement check |
 | NewAPI Windsurf group | 48 IDs | Includes `deepseek-v4-flash-max`; not Devin Pro billing evidence |
@@ -142,7 +147,7 @@ illustrative model names.
 | OpenCode Zen `deepseek-v4-flash`, models.dev `opencode` | 0.14 | 0.28 | 0.028 | Reference |
 | OpenCode Zen `deepseek-v4-flash-free`, models.dev `opencode` | 0 | 0 | 0 | Reference; a listed free rate is not executable entitlement |
 | OpenCode Go `deepseek-v4-flash`, models.dev `opencode-go` | 0.22 | 0.66 | 0.007 | Reference; subscription debit not measured |
-| DeepSeek direct `deepseek-v4-flash`, models.dev `deepseek` | 0.14 | 0.28 | 0.0028 | Reference; actual account bill not measured |
+| DeepSeek direct `deepseek-v4-flash`, models.dev `deepseek` (dated 2026-09-09; official channel deleted 2026-09-15) | 0.14 | 0.28 | 0.0028 | Historical reference; not a current catalog price source |
 | Devin official Flash low/high/max variants | 0.14 | 0.28 | See snapshot | Official menu reference; actual Pro debit not measured |
 | CommandCode / Windsurf / Cursor / Grok subscription / Mirasim relay | Unknown | Unknown | Unknown | No fresh comparable account price |
 
@@ -180,7 +185,7 @@ the **carrier** does, which is the thing dispatch actually uses, and it disagree
 with the earlier probe in one place.
 
 `~/.pi/agent/models-store.json` was refreshed with `pi update --models`. The
-authenticated rosters are: `deepseek` 2 IDs (`api.deepseek.com`, openai-completions),
+authenticated rosters are: `deepseek` 2 IDs (official OpenAI-completions endpoint; channel deleted 2026-09-15),
 `opencode-go` 27 IDs (`opencode.ai/zen/go/v1` for 20 openai-completions and 4
 openai-responses, `opencode.ai/zen/go` for 2 anthropic-messages), `anthropic` 14 IDs.
 `xai` is present as an **OAuth** entry, not an api_key, and `anthropic` has **no
@@ -214,9 +219,14 @@ Consequences recorded in the catalog, not assumed from it:
   provider**, not one pair. The pair is matched exactly against the provider's own
   list and must equal the catalog row; the api_key-only, literal-key, fresh-catalog,
   single-model-match and exact-endpoint rules are unchanged.
-- **`deepseek` direct is wired but not funded.** Direct DeepSeek returns 402 on the
-  account. Its catalog entries are an inventory of what is configurable, not a usable
-  route.
+- **Official DeepSeek direct is not a pi leg (user decision, 2026-09-15).** Direct
+  DeepSeek previously returned 402 on the account; that is a dated probe, not a
+  current route. Its provider, account pool, three disabled profiles and two
+  sources were removed from the catalog (41 → 38 profiles), and that provider is
+  **absent from the frozen `NATIVE` table**. That absence is the decision, not a
+  missing credential: `inspectPiDirectProvider` refuses a native provider id of
+  `deepseek` as `unsupported_native_provider` before it looks at any credential
+  at all, and a test locks that in.
 - **anthropic is not a pi leg (user decision, 2026-09-13).** Claude rides `mirasim`
   and `reclaude` only; there is no anthropic account behind pi and none is planned.
   The 14 anthropic profiles, the `anthropic` provider, the `anthropic-api` pool and the
@@ -271,10 +281,11 @@ The main runtime can read the JSON's `profiles` array directly. Explicit IDs:
 * Cursor uses `cursor-acp-composer`; pinned Devin uses `devin-acp-deepseek`.
   `devin-acp-default` is disabled because the original handshake did not expose
   the selected default model identity. It must not be an independent reviewer.
-* `opencode-go-deepseek` and `deepseek-native-flash` expose both `nativeProviderId`
-  and `agentModel`. The execution adapter must honor these, rather than sending
-  the bare upstream ID into Pi's current default `gw` provider. No Pi settings or
-  Mirasim model configuration were written here.
+* `opencode-go-deepseek` exposes both `nativeProviderId` and `agentModel`. The
+  execution adapter must honor these, rather than sending the bare upstream ID
+  into Pi's current default `gw` provider. No Pi settings or Mirasim model
+  configuration were written here. Official DeepSeek-direct profile IDs are not
+  current catalog entries and must not be sent to the adapter.
 
 Every implicit alias is unique and has `implicitSelection.authorized: true` and
 `fallback: none`. Runtime integration must reject a route override that silently
@@ -321,10 +332,13 @@ already authorized fee paths. No automatic route mutation occurs in selection.
 node scripts/execution-catalog.mjs list --json
 node scripts/execution-catalog.mjs discover --home /home/orca --json
 node scripts/execution-catalog.mjs refresh --home /home/orca --json
-node scripts/execution-catalog.mjs refresh --home /home/orca --source deepseek-direct-models --json
+node scripts/execution-catalog.mjs refresh --home /home/orca --source opencode-go-models --json
 node scripts/execution-catalog.mjs select --role companion --allow-unknown-price --json
 node --test tests/execution-catalog.test.js
 ```
+
+`--source` must name an id that still exists in `docs/execution-profiles.json`.
+Retired sources are not refresh targets.
 
 `refresh` atomically replaces only the chosen catalog (`--catalog` / `--output`).
 The checked-in catalog is always mode `0644`, including after refresh under a

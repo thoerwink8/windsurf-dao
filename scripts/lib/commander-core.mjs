@@ -40,7 +40,10 @@ import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './
 // 明天就是写侧（#909 的形状）。
 export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
 // #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
-import { judgeRetry } from './retry-verdict.mjs';
+import {
+  judgeRetry, judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK,
+} from './retry-verdict.mjs';
+export { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK };
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -52,7 +55,9 @@ import { resolveMergeable } from './dispatch/git.mjs';
 import {
   hasLiveExecutor, sessionListForLiveness, planReconcile,
 } from './session-reconcile.mjs';
-import { approvedToLand, lastJudgmentOf } from './land-decision.mjs';
+import {
+  approvedToLand, lastJudgmentOf, lastApprovedCommitId, needsDockProof, provePureDock,
+} from './land-decision.mjs';
 import {
   prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
   capNewDispatchSlots,
@@ -60,7 +65,8 @@ import {
 import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
 import { planOrphanReaps } from './dispatch/lease.mjs';
 import { classifyAsk } from './ask-gate.mjs';
-import { legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { judgeChannelForModel, legAvailability, pickLeg, takeChannelSlot } from './channel-concurrency.mjs';
+import { UNSIGNED_ISSUE_MERGE_REASON } from './dispatch/reviewer.mjs';
 
 export const ACTION_KINDS = [
   'dispatch', 'rework', 'rereview', 'attach-reviewer', 'merge', 'land',
@@ -353,6 +359,8 @@ export function chooseReviewerLeg(situation = {}, { order, excluded } = {}) {
     breaker: situation.breaker || null,
     now: nowMs,
     excluded,
+    legs: situation.routingLegs,
+    models: recs,
   });
 }
 
@@ -469,20 +477,28 @@ export function analyzeReviewsAtHead(reviews, head) {
   const h = typeof head === 'string' ? head.trim() : '';
   if (!h) return { scanned: false, reason: 'head-unscanned' };
   const judged = [];
+  const events = [];
   for (const rv of reviews) {
     const state = normalizeReviewState(rv);
-    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue; // COMMENTED 等不参与判别，缺 commit_id 也无所谓
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED' && state !== 'DISMISSED') continue;
     const cid = rv && typeof rv === 'object' ? String(rv.commit_id || rv.commitId || '').trim() : '';
     if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
-    judged.push({ rv, cid });
+    const event = { rv, cid, state };
+    events.push(event);
+    if (state !== 'DISMISSED') judged.push(event);
   }
-  const atHead = judged.filter((x) => x.cid === h);
+  const atHeadEvents = events.filter((x) => x.cid === h);
+  const lastDismissed = atHeadEvents.map((x) => x.state).lastIndexOf('DISMISSED');
+  const effectiveAtHead = (lastDismissed >= 0 ? atHeadEvents.slice(lastDismissed + 1) : atHeadEvents)
+    .filter((x) => x.state !== 'DISMISSED');
   return {
-    ...analyzeGithubReviews(atHead.map((x) => x.rv)),
+    // DISMISSED 要留在当前 head 的时间序列里，才能终止同 head 上的旧 APPROVED；
+    // 但它不是有效判定，所以 atHead / judged 仍只统计 APPROVED 与 CHANGES_REQUESTED。
+    ...analyzeGithubReviews(effectiveAtHead.map((x) => x.rv)),
     head: h,
     judgedTotal: judged.length,
-    atHead: atHead.length,
-    judged: atHead.map((x) => x.rv),
+    atHead: effectiveAtHead.length,
+    judged: effectiveAtHead.map((x) => x.rv),
   };
 }
 
@@ -510,6 +526,60 @@ function prReviewInput(entry) {
   if (!entry || typeof entry !== 'object') return undefined;
   if (Array.isArray(entry.reviews)) return entry.reviews;
   return entry.bodies;
+}
+
+function dockOf(situation, prNumber) {
+  const table = situation && situation.dockByPr;
+  if (table == null || typeof table !== 'object') {
+    return { state: 'unknown', why: '对接证明没采' };
+  }
+  const v = table[prNumber] != null ? table[prNumber] : table[String(prNumber)];
+  if (!v || typeof v !== 'object') return { state: 'unknown', why: '这张 PR 没有对接证明' };
+  return v;
+}
+
+/**
+ * 生产取证：只对「旧批准、当前 head 零判定」的 PR 跑树级对接证明。
+ * decide 保持纯函数，证明表由眼睛注入 situation.dockByPr。
+ */
+export function collectDockProofs(situation, { run, masterRef = 'origin/master' } = {}) {
+  const prs = (situation && situation.github && situation.github.prs) || [];
+  const byPr = (situation && situation.prReviews && situation.prReviews.byPr) || {};
+  const out = {};
+  for (const pr of prs) {
+    if (!pr || pr.number == null) continue;
+    const raw = prReviewInput(byPr[pr.number]);
+    const mergeA = analyzeReviewsAtHead(raw, pr.headRefOid);
+    const last = lastJudgmentOf(analyzeReviews(raw));
+    const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const atHead = mergeA.scanned ? mergeA.atHead : null;
+    const approved = lastApprovedCommitId(raw);
+    // DISMISSED 撤销了旧批准：即使虚拟合入树相同也不得继承，要当前 HEAD 重新拿到 APPROVED。
+    if (approved.revoked && greenAtHead !== true && atHead === 0) {
+      out[pr.number] = { state: 'unknown', why: '批准已被 DISMISSED 撤销，不得继承' };
+      continue;
+    }
+    if (!needsDockProof({
+      greenAtHead,
+      atHead,
+      lastJudgment: last,
+    })) continue;
+    if (!approved.scanned || !approved.commit) {
+      out[pr.number] = { state: 'unknown', why: '批准 commit 没查成' };
+      continue;
+    }
+    if (typeof run !== 'function') {
+      out[pr.number] = { state: 'unknown', why: '取证 run 没给' };
+      continue;
+    }
+    out[pr.number] = provePureDock({
+      approved: approved.commit,
+      head: pr.headRefOid,
+      masterRef,
+      run,
+    });
+  }
+  return out;
 }
 
 function esc(why, extra = {}) {
@@ -989,12 +1059,26 @@ function collectCandidates(situation) {
   };
   // 工人的 model 由 PR 标签钉死（#1116；不像审官是家族），渠道满员时**不擅自换模型**，只排队等下轮。
   // 认不出落地 → 本闸不拦（其它闸会挡）。返回 { ok, channel, why }。
+  // 有腿表时走 judgeChannelForModel：pending 模型不读同渠道另一条腿的 Infinity（#1274）。
+  const routingLegs = Array.isArray(situation.routingLegs) ? situation.routingLegs : null;
   const channelAdmits = (model) => {
     if (!chSnap) return { ok: true, channel: null };
+    if (routingLegs) {
+      const judged = judgeChannelForModel({
+        model, legs: routingLegs, models: modelRecs, caps: chCaps, states: chStates,
+        inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      });
+      if (judged.attributed) {
+        return judged.available
+          ? { ok: true, channel: judged.channel }
+          : { ok: false, channel: judged.channel, why: judged.why, reason: judged.reason };
+      }
+    }
     const landing = landingOfModel(model);
     if (!landing) return { ok: true, channel: null };
     const av = legAvailability(landing, {
       caps: chCaps, states: chStates, inFlight: chInFlight, breaker: chBreaker, now: nowMs, excluded: chExcluded,
+      model, legs: routingLegs, models: modelRecs,
     });
     return av.available
       ? { ok: true, channel: av.channel }
@@ -1400,7 +1484,7 @@ function collectCandidates(situation) {
         model: model0, reviewer: rReviewer0, redRounds,
         title: pr.title || '', brief, reworkKey: rkey, conflict,
         mergePolicy: 'manual',
-        mergeReason: 'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）',
+        mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
         mergePolicySource: 'no-issue',
         ...(sub0 ? { substitutedModel: sub0 } : {}),
         why: why + (sub0 ? `；原模型 ${sub0.from} 派不出（${sub0.why}），顶班 ${sub0.to}` : '')
@@ -1524,7 +1608,7 @@ function collectCandidates(situation) {
       const ciR = prChecksRed(pr);
       if (greenR.scanned && greenR.latestGreen === true && mergeableR && !pr.isDraft && !ciR.red) {
         out.push(withNeeds({
-          kind: 'merge', pr: pr.number, title: pr.title || '',
+          kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
           why: '审官判绿（当前 head）+ CI 绿 + MERGEABLE——已认输但条件齐了，照合（认输只挡重试，不挡合并）',
         }, N.merge));
         out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等）' }, N.land));
@@ -1539,17 +1623,38 @@ function collectCandidates(situation) {
     // 后果是自动合并这条路**从来没通过电**：审官判绿了，指挥官这一格永远进不去，
     // PR 就一直挂着等人。判红那一维同样在帅位盘面上隐形（shuai-scan 的 prRed 只看 CI）。
     // 改成按当前 head 看真 review（analyzeReviewsAtHead，与下面判红同一判据，绿红一把尺）：
-    //   · reviewDecision=APPROVED 仍然认（开了分支保护的仓走这条）；
+    //   · 当前 head 独立审查绿才通常放行（#1133：聚合 APPROVED 不能单独代替 HEAD 证据）；
     //   · 没查成一律不合，与「查过确实没绿」分开。
+    // mergePolicy / manual 拍板证据是 PR #1225 的事，本续项不复制。
     const mergeA = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
     const allA = analyzeReviews(prReviewInput(reviews.byPr?.[pr.number]));
     const decisionApproved = String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
     const greenAtHead = mergeA.scanned && mergeA.latestGreen === true;
+    const redAtHead = mergeA.scanned && mergeA.latestRed === true;
+    const lastJudgment = lastJudgmentOf(allA);
+    const dockNeeded = needsDockProof({
+      greenAtHead,
+      atHead: mergeA.scanned ? mergeA.atHead : null,
+      lastJudgment,
+    });
+    const dock = dockNeeded ? dockOf(situation, pr.number) : null;
+    if (dockNeeded && !(dock && dock.state === 'ok')) {
+      if (!dock || dock.state !== 'red') {
+        out.push(withNeeds(esc(
+          `PR #${pr.number} 旧批准要继承但纯对接没查成：${(dock && dock.why) || '没证明'}`,
+          { reason: 'unscanned', pr: pr.number, missing: ['dockProof'] },
+        ), N.merge));
+        continue;
+      }
+      // dock.red：批准后有新树内容，落到下面复审，不合。
+    }
     const readyToLand = approvedToLand({
       greenAtHead,
       decisionApproved,
       atHead: mergeA.scanned ? mergeA.atHead : null,
-      lastJudgment: lastJudgmentOf(allA),
+      lastJudgment,
+      redAtHead,
+      dock,
     });
 
     if (readyToLand && !pr.isDraft && mergeableNow) {
@@ -1573,10 +1678,10 @@ function collectCandidates(situation) {
         }
       }
       out.push(withNeeds({
-        kind: 'merge', pr: pr.number, title: pr.title || '',
+        kind: 'merge', pr: pr.number, head: pr.headRefOid, title: pr.title || '',
         why: greenAtHead
           ? '审官判绿（当前 head）+ CI 绿 + MERGEABLE'
-          : '审官已放行（head 因对接 master 变了，不再审）+ CI 绿 + MERGEABLE',
+          : '审官已放行（已证明纯对接 master，不再审）+ CI 绿 + MERGEABLE',
       }, N.merge));
       out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等；清树归 #829，本单只调 land）' }, N.land));
       out.push(withNeeds(hub(`PR #${pr.number} 已自动合并`, 'merged', { pr: pr.number }), N.merge));
@@ -1738,15 +1843,30 @@ function collectCandidates(situation) {
       // （2026-09-14 自测当场看到）。说清「一条 review 都没有」和「判定都过期了」是两回事。
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
-      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
-        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
+      // 词表只认见过的字样，认不出的一律 retryable（`whitelist-fingerprints-cannot-find-unseen-failures`）。
+      // 补一条**不看词、只看行为**的判据：同一 (pr, head) 连着几轮拿回一模一样的失败原文，
+      // 就是「重试不会变」的直接证据，无论那句话谁写的、说的是什么。
+      const repeated = judgeRepeatedFailure(prev);
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal' || repeated.stuck) {
+        const hopeless = (rrVerdict.verdict === 'terminal' || repeated.stuck) && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: headForAction,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
-          why: hopeless
-            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`,
+          // 「判定仍是 0」只是**症状**。上一次叫审官如果是被闸当场拒的，那句拒绝原文才是
+          // 看 PR 的人唯一用得上的东西——它说得出下一步该做什么（去 rebase / 去换审官），
+          // 而「叫了 3 次没判定」说不出。2026-09-14 实咬：#1271 三轮全是
+          // 「审官位只许同厂换顺位……没交换厂凭证」，认输评论里一个字都没提，
+          // 读的人得自己去翻 journal 才知道真因。有原文就必须带上。
+          why: (() => {
+            const raw = prev?.lastError || prev?.error || null;
+            if (hopeless) {
+              return `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${raw || '无原文'}`
+                + (repeated.stuck ? `；判据：连着 ${repeated.rounds} 轮拿回一模一样的失败原文` : '');
+            }
+            const base = `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`;
+            return raw ? `${base}；最后一次叫审官是被拒的：${raw}` : base;
+          })(),
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;
@@ -2090,9 +2210,38 @@ export function heartbeatDue({ state = {}, now = Date.now(), silenceDays = 7 } =
   return { due: true, reason: `已静默 ≥ ${silenceDays} 天`, sinceMs: now - anchor };
 }
 
-/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——决定要不要刷新 lastActivityAt。 */
+/** 动作清单里是否有「有动静」的动作（非 noop、非纯 unscanned-escalate）——只看动作本身长什么样。 */
 export function hasLiveAction(actions = []) {
   return actions.some((a) => a && a.kind !== 'noop' && !(a.kind === 'escalate' && a.reason === 'unscanned'));
+}
+
+/**
+ * 这一轮算不算「盘面在推进」——心跳的锚点判据。
+ *
+ * 2026-09-15 实咬：`hasLiveAction` 只看动作**长什么样**，不看它有没有改变什么。
+ * 昨晚连续 9 轮唯一的动作都是同一条 `{kind:'escalate', reason:'missing-labels', issue:1174}`，
+ * 它 kind 不是 noop、reason 不是 unscanned ⇒ 判成「有动静」⇒ `lastActivityAt` 每 20 分钟
+ * 刷新一次 ⇒ **心跳永远不到期，系统自认一切正常**，而盘面整整冻了 10 小时、
+ * 26 张开放 PR 有 22 张被跳过。
+ *
+ * 「服务没挂」和「活在推进」是两回事，原判据只测了前者（判例 memory `clean-exit-is-still-down`
+ * 的同族：干净退出照样是死了，这里是干净空转照样是停了）。
+ *
+ * 判据补上第二个条件：**动作摘要跟上一轮不一样**。同一套动作重复 = 磨盘，不刷新锚点，
+ * 于是静默计时正常走，心跳该响就响。
+ *
+ * `digestStreak` 必须是 `nextDigestStreak` 写回后的值（commander.mjs 先写 state 再调本函数）：
+ *   · 0 = 本轮摘要跟上轮不同（或首轮）→ 算推进
+ *   · ≥1 = 已经连续相同 → 磨盘，从第一轮重复起就不刷新锚点
+ *
+ * `digestStreak` 拿不到（undefined/非数）时退回旧行为——没查成不许当成「停了」，
+ * 那会把正常运转误报成死机。
+ */
+export function countsAsProgress({ actions = [], digestStreak } = {}) {
+  if (!hasLiveAction(actions)) return false;
+  const n = Number(digestStreak);
+  if (!Number.isFinite(n)) return true;   // 没查成 ⇒ 退回旧行为
+  return n === 0;                         // nextDigestStreak：新摘要 0；第二轮相同才 ≥1
 }
 
 /**
