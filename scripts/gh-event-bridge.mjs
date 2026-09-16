@@ -50,7 +50,7 @@ import {
   FIRST_PING_MS, FORWARDER_HOST,
   createForwardParser, routeEvent, planTrigger, classifyGhEventBridge,
   asHookId, ownInvalidHookIds, claimLiveHook, isolateOrphanAfterSweep,
-  interpretHookPingResult, planReconnectBackoff, shouldSpawnForward,
+  interpretHookPingResult, planReconnectBackoff, shouldSpawnForward, isChildAlive,
 } from './lib/gh-events.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -134,11 +134,7 @@ function cmdStatus(argv) {
 // 任何绕过 cgroup 的杀法兜底。
 // 2026-09-14 实咬：宽扫所有 webhook-forwarder hook 会误伤别人的活 hook；
 // EOF 后只 5 秒重连、不扫自家孤儿，会把通道卡死几十小时。归属判据在 ownInvalidHookIds。
-export { FORWARDER_HOST, ownInvalidHookIds, claimLiveHook, isolateOrphanAfterSweep };
-
-function isChildAlive(c) {
-  return !!(c && c.exitCode === null && !c.killed);
-}
+export { FORWARDER_HOST, ownInvalidHookIds, claimLiveHook, isolateOrphanAfterSweep, isChildAlive };
 
 function listHooks() {
   const list = spawnSync(FORWARD_CMD, ['api', `repos/${REPO}/hooks`], { encoding: 'utf8', timeout: 30000, windowsHide: true });
@@ -395,7 +391,7 @@ function runBridge({ dryRun, once }) {
       if (ev) { try { onEvent(ev); } catch (e) { diag(`处理事件出错：${e.stack || e}`); } }
     });
     createInterface({ input: child.stderr }).on('line', (l) => diag(`[forward] ${l}`));
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       const owned = asHookId(state.hookId) || asHookId(state.forward.orphanHookId);
       state.hookId = null;
       state.forward.lastExitAt = nowIso();
@@ -408,8 +404,11 @@ function runBridge({ dryRun, once }) {
       // 断的证据只有「ping 不回来了」，那一条在 classifyGhEventBridge 里判。
       // 重连前先按归属扫自家孤儿，退避有上界；不再 5 秒一次空转。
       state.forward.restarts += 1;
-      out({ type: 'forward-exit', code, note: `第 ${state.forward.restarts} 次重连` });
-      scheduleReconnect({ why: `forward exit ${code}`, ownedHookId: owned });
+      out({ type: 'forward-exit', code, signal: signal || null, note: `第 ${state.forward.restarts} 次重连` });
+      scheduleReconnect({
+        why: signal ? `forward ${signal}` : `forward exit ${code}`,
+        ownedHookId: owned,
+      });
     });
     if (firstPingTimer) { clearTimeout(firstPingTimer); firstPingTimer = null; }
     firstPingTimer = setTimeout(() => { firstPingTimer = null; sendPing(); }, FIRST_PING_MS);
@@ -428,7 +427,8 @@ function runBridge({ dryRun, once }) {
     if (firstPingTimer) { clearTimeout(firstPingTimer); firstPingTimer = null; }
     for (const h of scheduled.values()) clearTimeout(h);
     out({ type: 'stopping', code });
-    if (!child || child.exitCode !== null || child.killed) return process.exit(code);
+    // killed 只表示父进程发过信号，不等于已经退了；外部信号退出要看 signalCode。
+    if (!child || child.exitCode != null || child.signalCode != null) return process.exit(code);
     // 等子进程真的退掉再走：它要用这段时间把自己建的 hook 从仓上删掉。
     // 干等固定毫秒数是不够的（那是一次网络往返），所以听 exit；实在不退再硬走。
     const bail = setTimeout(() => { out({ type: 'stop-timeout', note: 'forward 没按时退，hook 可能留在仓上，下次启动会扫掉' }); process.exit(code); }, 20000);
