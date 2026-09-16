@@ -156,7 +156,10 @@ test('interrupted tail is not checkpointed until newline commits the complete ev
   write(p, ndjson(usage(1)) + tail.slice(0, 25));
   const options = { ...f, sources: [{ path: p, source: 'grok-acp', agent: 'grok' }] };
   let result = M.collectUsage(options);
-  assert.equal(result.committed, 1); assert.equal(result.complete, false);
+  assert.equal(result.committed, 1);
+  assert.equal(result.complete, false);
+  assert.equal(result.status.includes('interrupted_tail'), true);
+  assert.equal(result.gaps.includes('interrupted_tail'), false);
   fs.appendFileSync(p, tail.slice(25) + '\n');
   result = M.collectUsage(options);
   assert.equal(result.committed, 1);
@@ -340,7 +343,11 @@ test('installer and service restrict execution to orca with a clean credential e
   assert.match(service,/^NoNewPrivileges=true$/m);
   assert.match(installer,/runuser -u orca -- env -i HOME=\/home\/orca/);
   assert.match(installer,/NextElapseUSecRealtime/);
+  assert.match(installer,/usageExportInstallFiles/);
+  assert.match(installer,/install -D -o root -g root -m 644/);
   assert.match(timer,/^OnCalendar=/m);
+  const timeout=(service.match(/^TimeoutStartSec=(\d+)$/m) || [])[1];
+  assert.equal(Number(timeout) >= 300, true, '90 秒会把正常一轮掐死');
 });
 
 test('same-process normalized API appends the allowlisted snapshot idempotently', async t => {
@@ -478,7 +485,10 @@ test('incomplete or missing root inbox is explicit, and unexpected serialized fi
   assert.doesNotMatch(JSON.stringify(cleaned),/SECRET EXTRA|SECRET AUTH|credentials|prompt/);
   assert.deepEqual(cleaned.aliases,row.aliases);
   write(path.join(inbox,'manifest.json'),{schema:1,complete:false,exportedAt:new Date().toISOString()});
-  assert.ok(M.importUsageInbox(inbox,f).gaps.includes('inbox_export_incomplete'));
+  const incomplete=M.importUsageInbox(inbox,f);
+  assert.equal(incomplete.status.includes('inbox_export_incomplete'), true);
+  assert.equal(incomplete.gaps.includes('inbox_export_incomplete'), false);
+  assert.equal(incomplete.complete, false);
 });
 
 function cursorAccountFixture(t){
@@ -558,9 +568,11 @@ test('privileged export unit executes only installed root-owned code and leaves 
   assert.match(unit,/^User=root$/m);assert.match(unit,/^PrivateNetwork=true$/m);
   assert.match(unit,/ExecStart=.*\/usr\/local\/lib\/dao-execution-usage\/execution-usage-export\.mjs/);
   assert.doesNotMatch(unit,/ExecStart=.*\/srv\//);
-  assert.match(installer,/install -o root -g root -m 644 .*execution-usage-export\.mjs/);
+  assert.match(installer,/usageExportInstallFiles/);
   assert.match(collector,/^User=orca$/m);assert.match(collector,/--inbox \/var\/lib\/dao-execution-usage\/root-inbox/);
   assert.doesNotMatch(installer,/chmod.*\/root|setfacl.*\/root/);
+  const timeout=(unit.match(/^TimeoutStartSec=(\d+)$/m) || [])[1];
+  assert.equal(Number(timeout) >= 300, true, '导出 90 秒墙钟会 SIGTERM');
 });
 
 test('global commit budget resumes both NDJSON and JSON arrays without starving later sources',async t=>{
@@ -580,4 +592,264 @@ test('root publication and inbox import bound new durable writes while preservin
   for(let i=0;i<3;i++){const p=M.publishUsageInbox({dir:f.dir,inbox,readerGid:process.getgid?.()??0,limits:{maxCommittedPerRun:1}});assert.equal(p.published,1);assert.equal(p.complete,i===2);}
   for(let i=0;i<3;i++)assert.equal(M.importUsageInbox(inbox,{dir:consumer,limits:{maxCommittedPerRun:1}}).committed,1);
   assert.equal(inputTotal(M.reportUsage({dir:consumer})),60);
+});
+
+test('missing collection state cannot publish a complete inbox', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const inbox = path.join(f.home, 'inbox');
+  M.appendUsage({ agent: 'grok', source: 'mirasim-ledger', event: usage(1) }, f);
+  assert.equal(fs.existsSync(path.join(f.dir, 'collection.json')), false);
+  const published = M.publishUsageInbox({
+    dir: f.dir, inbox, readerGid: process.getgid?.() ?? 0,
+  });
+  assert.equal(published.complete, false);
+  assert.deepEqual(published.gaps, []);
+  const imported = M.importUsageInbox(inbox, { dir: path.join(f.home, 'consumer') });
+  assert.equal(imported.complete, false);
+  assert.equal(imported.status.includes('inbox_export_incomplete'), true);
+});
+
+test('status-class catch-up does not fail collection; unreadable source does', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, 'raw.ndjson');
+  write(p, ndjson(usage(1), usage(2), usage(3)));
+  const pending = M.collectUsage({ ...f, limits: { maxBytesPerSource: Buffer.byteLength(ndjson(usage(1))) }, sources: [{ path: p, source: 'grok-acp', agent: 'grok' }] });
+  assert.equal(pending.committed, 1);
+  assert.equal(pending.complete, false);
+  assert.equal(pending.status.includes('source_scan_pending'), true);
+  assert.equal(pending.gaps.includes('source_scan_pending'), false);
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const pendingCode = await main(['--collect', '--json', '--home', f.home, '--source', `grok-acp=${p}`]);
+  assert.equal(pendingCode, 0);
+  const bad = path.join(f.home, 'missing.ndjson');
+  const broken = M.collectUsage({ ...f, sources: [{ path: bad, source: 'grok-acp', agent: 'grok' }] });
+  assert.equal(broken.complete, false);
+  assert.equal(broken.gaps.includes('source_missing'), true);
+  const faultCode = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'fault-dir'), '--source', `grok-acp=${bad}`]);
+  assert.equal(faultCode, 2);
+});
+
+test('append-only insights after a complete sweep do not rescan history', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, '.mirasim/insights/usage-2026-09.ndjson');
+  write(p, ndjson(usage(1), usage(2)));
+  assert.equal(M.collectUsage(f).committed, 2);
+  fs.appendFileSync(p, ndjson(usage(3)));
+  const second = M.collectUsage(f);
+  assert.equal(second.committed, 1);
+  assert.equal(second.duplicates, 0);
+  assert.equal(inputTotal(M.reportUsage(f)), 60);
+});
+
+test('stale incomplete inbox remains a fault; fresh incomplete is status', async t => {
+  const M = await modulePromise, f = fixture(t), inbox = path.join(f.home, 'inbox');
+  write(path.join(inbox, 'manifest.json'), { schema: 1, complete: false, exportedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString() });
+  const stale = M.importUsageInbox(inbox, f);
+  assert.equal(stale.status.includes('inbox_export_incomplete'), true);
+  assert.equal(stale.gaps.includes('inbox_export_stale'), true);
+  assert.equal(stale.complete, false);
+});
+
+test('commit limit leaves collection incomplete without failing the oneshot', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const jsonPath = path.join(f.home, 'events.json');
+  const ndjsonPath = path.join(f.home, 'events.ndjson');
+  write(jsonPath, [usage(1), usage(2)]);
+  write(ndjsonPath, ndjson(usage(1), usage(2)));
+  for (const [file, source] of [[jsonPath, 'cursor-account'], [ndjsonPath, 'grok-acp']]) {
+    const result = M.collectUsage({
+      home: f.home, dir: path.join(f.home, `usage-${source}`),
+      limits: { maxCommittedPerRun: 1 },
+      sources: [{ path: file, source, agent: 'grok' }],
+    });
+    assert.equal(result.committed, 1);
+    assert.deepEqual(result.gaps, []);
+    assert.equal(result.complete, false);
+    assert.equal(result.status.includes('collection_commit_limit'), true);
+  }
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const code = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'cli-limit'), '--source', `grok-acp=${ndjsonPath}`]);
+  assert.equal(code, 0);
+});
+
+test('collect exit code follows report faults while status-class stays 0', async t => {
+  const f = fixture(t);
+  const p = path.join(f.home, 'unknown.json');
+  write(p, { usage: { input_tokens: 1 } });
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  let code;
+  try {
+    code = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'unknown-dir'), '--source', `grok-acp=${p}`]);
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(code, 2);
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.equal(printed.groups[0].gaps.includes('unknown_usage_semantics'), true);
+});
+
+test('reportUsage and CLI json stay incomplete for status-only collection bounds', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const p = path.join(f.home, 'events.ndjson');
+  write(p, ndjson(usage(1), usage(2)));
+  const dir = path.join(f.home, 'usage-limit');
+  const collected = M.collectUsage({
+    home: f.home, dir,
+    limits: { maxCommittedPerRun: 1 },
+    sources: [{ path: p, source: 'grok-acp', agent: 'grok' }],
+  });
+  assert.equal(collected.complete, false);
+  assert.deepEqual(collected.gaps, []);
+  assert.equal(collected.status.includes('collection_commit_limit'), true);
+
+  const report = M.reportUsage({ home: f.home, dir });
+  assert.equal(report.complete, false);
+  assert.deepEqual(report.gaps, []);
+  assert.equal(report.status.includes('collection_commit_limit'), true);
+
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  try {
+    await main(['--json', '--home', f.home, '--dir', dir]);
+  } finally {
+    console.log = orig;
+  }
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.deepEqual(printed.gaps, []);
+  assert.equal(printed.status.includes('collection_commit_limit'), true);
+});
+
+test('root catch-up status and bounded inbox export stay incomplete after orca import', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const { exportRootMirasim } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage-export.mjs')));
+  const rootHome = path.join(f.home, 'root-workbench');
+  const privateDir = path.join(f.home, 'root-private');
+  const inbox = path.join(f.home, 'root-inbox');
+  const orcaDir = path.join(f.home, 'orca-usage');
+  const row = n => ({ id: `shared-session:call-${n}`, sessionId: 'shared-session', agent: 'codex', providerCallId: `req-${n}`, input: n * 10, output: n, model: 'gpt-model', viaRelay: true });
+  write(path.join(rootHome, '.mirasim/insights/usage-2026-09.ndjson'), ndjson(row(1), row(2), row(3)));
+  const pending = exportRootMirasim({
+    home: rootHome, dir: privateDir, inbox,
+    readerGid: process.getgid?.() ?? 0,
+    limits: { maxBytesPerSource: Buffer.byteLength(ndjson(row(1))) },
+  });
+  assert.equal(pending.collection.status.includes('source_scan_pending'), true);
+  assert.equal(pending.exported.status.includes('source_scan_pending'), true);
+  assert.equal(pending.exported.complete, false);
+  const pendingImport = M.importUsageInbox(inbox, { dir: orcaDir });
+  assert.equal(pendingImport.status.includes('source_scan_pending'), true);
+  assert.equal(pendingImport.complete, false);
+  assert.equal(pendingImport.gaps.includes('source_scan_pending'), false);
+
+  const boundPrivate = path.join(f.home, 'bound-private');
+  const boundInbox = path.join(f.home, 'bound-inbox');
+  const boundOrca = path.join(f.home, 'bound-orca');
+  for (let i = 1; i <= 3; i++) M.appendUsage({ agent: 'codex', source: 'mirasim-ledger', event: usage(i) }, { dir: boundPrivate, home: f.home });
+  write(path.join(boundPrivate, 'collection.json'), { complete: true, gaps: [], status: [] });
+  const bounded = M.publishUsageInbox({
+    dir: boundPrivate, inbox: boundInbox,
+    readerGid: process.getgid?.() ?? 0,
+    limits: { maxCommittedPerRun: 1 },
+  });
+  assert.equal(bounded.published, 1);
+  assert.equal(bounded.complete, false);
+  assert.equal(bounded.status.includes('inbox_scan_limit'), true);
+  assert.equal(bounded.gaps.includes('inbox_scan_limit'), false);
+  const boundedImport = M.importUsageInbox(boundInbox, { dir: boundOrca });
+  assert.equal(boundedImport.committed, 1);
+  assert.equal(boundedImport.complete, false);
+  assert.equal(boundedImport.status.includes('inbox_export_incomplete'), true);
+  assert.equal(boundedImport.status.includes('inbox_scan_limit'), true);
+  assert.deepEqual(boundedImport.gaps, []);
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  let code;
+  try {
+    code = await main(['--collect', '--json', '--home', path.join(f.home, 'cli-home'), '--dir', path.join(f.home, 'cli-orca'), '--inbox', boundInbox]);
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(code, 0);
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.equal(printed.status.includes('inbox_export_incomplete'), true);
+  assert.equal(printed.status.includes('inbox_scan_limit'), true);
+  assert.deepEqual(printed.gaps, []);
+});
+
+test('export install list follows relative imports including require', async () => {
+  const M = await modulePromise;
+  const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+  const req = (p) => `const { parse } = req${'uire'}('${p}');\n`;
+  const files = {
+    'execution-usage-export.mjs': spec('./lib/execution-usage.mjs'),
+    'lib/execution-usage.mjs': spec('./execution-catalog.mjs'),
+    'lib/execution-catalog.mjs': spec('./provider-probe.mjs'),
+    'lib/provider-probe.mjs': req('./smol-toml.cjs'),
+    'lib/smol-toml.cjs': 'module.exports = {};\n',
+  };
+  const listed = M.usageExportInstallFiles({
+    scriptsDir: '/scripts',
+    readFile: abs => {
+      const rel = abs.replace(/\\/g, '/').slice('/scripts/'.length);
+      if (!files[rel]) { const e = new Error('enoent'); e.code = 'ENOENT'; throw e; }
+      return files[rel];
+    },
+  });
+  assert.deepEqual([...listed].sort(), Object.keys(files).sort());
+  const live = M.usageExportInstallFiles();
+  assert.equal(live.includes('execution-usage-export.mjs'), true);
+  assert.equal(live.includes('lib/execution-usage.mjs'), true);
+  assert.equal(live.includes('lib/execution-catalog.mjs'), true);
+  assert.equal(live.includes('lib/provider-probe.mjs'), true);
+});
+
+test('usage install copy classifier: confirmed missing is red, unreadable stays unknown', async () => {
+  const M = await modulePromise;
+  const expected = [{ path: 'lib/execution-usage.mjs', content: 'new' }];
+  const missing = M.classifyUsageInstallCopy({ expected, installed: null });
+  assert.equal(missing.state, 'red');
+  assert.match(missing.detail, /没装/);
+  assert.match(missing.detail, /install-execution-usage/);
+  assert.doesNotMatch(missing.detail, /没查成/);
+  const unread = M.classifyUsageInstallCopy({
+    expected,
+    installed: { 'lib/execution-usage.mjs': { unreadable: true } },
+  });
+  assert.equal(unread.state, 'unknown');
+  assert.match(unread.detail, /读不了|没查成/);
+  assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'old' } }).state, 'red');
+  assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'new' } }).state, 'ok');
+  assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: {} }).state, 'unknown');
+  assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: null }).state, 'unknown');
+  const mixedMissing = M.classifyUsageInstallCopy({
+    expected: [
+      { path: 'lib/missing.mjs', content: 'a' },
+      { path: 'lib/blocked.mjs', content: 'b' },
+    ],
+    installed: { 'lib/blocked.mjs': { unreadable: true } },
+  });
+  assert.equal(mixedMissing.state, 'red', '确定缺失不得被另一份 EACCES 洗成 unknown');
+  assert.match(mixedMissing.detail, /missing/);
+  assert.match(mixedMissing.detail, /blocked/);
+  assert.match(mixedMissing.detail, /读不了/);
+  const mixedStale = M.classifyUsageInstallCopy({
+    expected: [
+      { path: 'lib/stale.mjs', content: 'new' },
+      { path: 'lib/blocked.mjs', content: 'b' },
+    ],
+    installed: { 'lib/stale.mjs': 'old', 'lib/blocked.mjs': { unreadable: true } },
+  });
+  assert.equal(mixedStale.state, 'red');
+  assert.match(mixedStale.detail, /stale/);
+  assert.match(mixedStale.detail, /blocked/);
 });

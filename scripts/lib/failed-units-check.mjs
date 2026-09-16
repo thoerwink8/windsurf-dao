@@ -65,10 +65,9 @@ export function hasEverRun({ serviceName, timerProps = '', hasTimerFile = false 
  * （本仓判例 hand-typed-constant-will-be-wrong）。这样别的仓的单元、系统自带
  * 单元不会误报，而「仓里的单元被装成别的名字」也不会漏。
  *
- * **已经被放弃的那一档**：本仓有个单元（`dao-execution-usage.service`）按设计
- * 用 exit 2 表示「采集不完整，要人看得见」，而它**每 5 分钟必然重进一次
- * `--failed`**——因为 charge 这类字段结构上就报不全。那种常亮红灯跟
- * miraquota 那五天一样，最后一定没人看。所以判据把两件事分开：
+ * **已经被放弃的那一档**：oneshot 用 exit 2 表示「这次有故障、要人看得见」。
+ * 配对 timer 已经响过、只是最近一次非零 → 不把「曾经跑成过」的单元当成从没活过。
+ * 常亮红灯跟 miraquota 那五天一样，最后一定没人看。所以判据把两件事分开：
  *
  *   - 单元**从没成功过**（timer 的 LastTrigger 空 / 从未 active）→ red，这是真故障
  *   - 单元**跑成过、只是最近一次非零** → 不红，但列进 `flaky` 如实报出来

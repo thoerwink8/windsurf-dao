@@ -26,6 +26,7 @@ import { mainCheckoutRoot } from '../main-checkout.mjs';
 import { EXECUTION_FINISHED, EXECUTION_RESERVED, sessionStateOf } from '../execution-states.mjs';
 import { repoPrKey } from './repo.mjs';
 import { vendorFamilyOf } from '../reviewer-vendor-gate.mjs';
+import { unsignedIssueMergePolicy } from './reviewer.mjs';
 
 export const REVIEW_PENDING_KIND = 'dao-review-pending';
 export const REVIEW_PENDING_VERSION = 1;
@@ -87,6 +88,7 @@ export function reviewPendingPath(dir, pr, repo) {
 
 export function buildReviewPendingTicket({
   pr, head, workerWorktree, reviewer, issue, round, error, workerModel, soldierDispatch, ts, source, repo,
+  mergePolicy, mergeReason,
 } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, error: '复审待办要 pr' };
@@ -115,6 +117,23 @@ export function buildReviewPendingTicket({
     if (!keyed.ok) return { ok: false, error: keyed.error };
     repoField = keyed.ownerName;
   }
+  const issueField = issue == null || String(issue).trim() === '' ? null : String(issue).trim();
+  const policyField = mergePolicy == null || String(mergePolicy).trim() === ''
+    ? null : String(mergePolicy).trim();
+  let reasonField = mergeReason == null || String(mergeReason).trim() === ''
+    ? null : String(mergeReason).trim();
+  if (policyField) {
+    if (policyField !== 'auto' && policyField !== 'manual') {
+      return { ok: false, error: `复审待办 mergePolicy 只认 auto|manual，实际 ${policyField}` };
+    }
+    if (!issueField && policyField === 'auto') {
+      return { ok: false, error: '无署名 issue 的复审待办不许 mergePolicy=auto' };
+    }
+    if (policyField === 'manual' && !reasonField) {
+      return { ok: false, error: '复审待办 m=manual 必须给 mergeReason' };
+    }
+    if (policyField !== 'manual') reasonField = null;
+  }
   return {
     ok: true,
     ticket: {
@@ -124,7 +143,7 @@ export function buildReviewPendingTicket({
       head: { name: name || null, oid: oid || null },
       workerWorktree: workerWorktree && String(workerWorktree).trim() ? String(workerWorktree).trim() : null,
       reviewer: String(reviewer).trim(),
-      issue: issue == null || String(issue).trim() === '' ? null : String(issue).trim(),
+      issue: issueField,
       round: round || null,
       workerModel: workerModel ? String(workerModel).trim() : null,
       soldierDispatch: soldierDispatch ? String(soldierDispatch).trim() : null,
@@ -132,6 +151,7 @@ export function buildReviewPendingTicket({
       error: error ? String(error) : null,
       source: src,
       ts: Number.isNaN(when.getTime()) ? new Date().toISOString() : when.toISOString(),
+      ...(policyField ? { mergePolicy: policyField, mergeReason: reasonField } : {}),
     },
   };
 }
@@ -501,6 +521,35 @@ export function countLiveReviewers({ records, sessions } = {}) {
 }
 
 /**
+ * 待审票上的 merge-policy → reviewer-create 旗标。
+ *
+ * 无署名 issue（快路）取不到 human_holds：票上没写也要注入 m=manual。
+ * 旧票没有 mergePolicy 字段时走同一分支，不许退回 auto（PR #1286 审官红项）。
+ * auto 不传旗标——有署名单仍让 reviewer-create 自己从账本恢复。
+ */
+export function mergePolicyDrainArgv(ticket = {}) {
+  const unsigned = ticket.issue == null || String(ticket.issue).trim() === '';
+  let policy = ticket.mergePolicy == null || String(ticket.mergePolicy).trim() === ''
+    ? null : String(ticket.mergePolicy).trim();
+  let reason = ticket.mergeReason == null || String(ticket.mergeReason).trim() === ''
+    ? null : String(ticket.mergeReason).trim();
+  if (unsigned) {
+    if (policy === 'auto') {
+      return { ok: false, error: '无署名 issue 的待办不许 mergePolicy=auto' };
+    }
+    const fallback = unsignedIssueMergePolicy();
+    policy = policy || fallback.mergePolicy;
+    reason = reason || fallback.mergeReason;
+  }
+  if (policy === 'manual') {
+    if (!reason) return { ok: false, error: '待办 m=manual 缺理由' };
+    return { ok: true, argv: ['--merge-policy', 'manual', '--merge-reason', reason] };
+  }
+  if (!policy || policy === 'auto') return { ok: true, argv: [] };
+  return { ok: false, error: `待办 mergePolicy 只认 auto|manual，实际 ${policy}` };
+}
+
+/**
  * 票 → drain 计划。
  *
  * `usableReviewers`（可选）是「现在起得来的审官顺位」——由调用方从
@@ -564,6 +613,9 @@ export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
   if (ticket.issue) argv.push('--issue', String(ticket.issue));
   if (ticket.soldierDispatch) argv.push('--soldier-dispatch', String(ticket.soldierDispatch));
   if (ticket.repo) argv.push('--repo', String(ticket.repo));
+  const policyArgv = mergePolicyDrainArgv(ticket);
+  if (!policyArgv.ok) return { ok: false, error: policyArgv.error };
+  argv.push(...policyArgv.argv);
   return {
     ok: true,
     verb: 'reviewer-create',
@@ -576,6 +628,27 @@ export function planReviewPendingDrain(ticket, { usableReviewers } = {}) {
     reviewer,
     ...(switchedFrom ? { switchedFrom, switchWhy } : {}),
   };
+}
+
+/**
+ * 把 reviewer-create 子进程的 spawn 结果收成 attach 回执。
+ * 无 JSON / 超时 / 非零退出时，error 必须是完整 stderr/error——这串会进 drain 账当比较键
+ * （consumeReviewPending 包一层「reviewer-attach 失败：」之后，applyDrainLedger / foldFailureStreak 逐字比）。
+ * 人读摘要截字不在这里做。
+ */
+export function attachReceiptFromSpawn(spawned = {}) {
+  let json = null;
+  try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
+  if (spawned.error || (spawned.status !== 0 && spawned.status != null) || spawned.signal || !json || json.ok !== true) {
+    const structured = json && json.error != null && json.error !== '' ? json.error : null;
+    const fallback = String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`);
+    return {
+      ok: false,
+      error: structured == null ? fallback : (typeof structured === 'string' ? structured : String(structured)),
+      json,
+    };
+  }
+  return { ok: true, json };
 }
 
 export function consumeReviewPending({ dir, ticket, attach, usableReviewers } = {}) {
@@ -648,7 +721,10 @@ export function drainReviewPending({ dir, tickets, attach, usableReviewers } = {
   //
   // 取第一条而非拼接：认输/重试判据只读首行（judgeRetry / exhaustedComment 都取首行），
   // 拼一长串反而会把判据要的那句挤掉。
-  const firstError = failed.length ? String(failed[0].error || failed[0].why || '').trim() : '';
+  //
+  // 这一串会经 drainPayloadOf / applyDrainLedger 进比较键：完整原文，不 trim。
+  // 首尾空白也是原文（`gate refused\n` ≠ `gate refused`）；长度限制只留人读摘要层。
+  const firstError = failed.length ? String(failed[0].error || failed[0].why || '') : '';
   return {
     ok: failed.length === 0,
     unscanned: false,

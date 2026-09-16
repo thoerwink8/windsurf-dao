@@ -316,6 +316,224 @@ describe('retry-drain 校验：只对队列里的票，派了 ≠ 成了', () =>
       'node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', '905', '--repo', 'org/a',
     ]);
   });
+
+  const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+    + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+
+  it('未知但确定性的同一闸拒：tries=1 继续 ok；sameErrorRounds=2 当场 hopeless', async () => {
+    const { validateRetryDrain } = await VERBS;
+    const r1 = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: 1, lastError: GATE, sameErrorRounds: 1 } },
+    });
+    assert.equal(r1.ok, true, '只重复一次还放行：' + JSON.stringify(r1));
+    assert.equal(r1.tries, 2);
+
+    const r2 = validateRetryDrain({
+      pr: 905, queue: queued, nowMs: PAST,
+      ledger: { [RK.drain(905, null)]: { at: OLD_AT, tries: 2, lastError: GATE, sameErrorRounds: 2 } },
+    });
+    assert.equal(r2.ok, false, '连着两轮同错必须停，不许白试到上限');
+    assert.equal(r2.code, 'hopeless');
+    assert.equal(r2.escalate, true);
+    assert.ok(String(r2.error).includes('一模一样') || String(r2.error).includes('换厂凭证'), r2.error);
+  });
+
+  it('applyDrainLedger：同一失败连写两次累加 streak；背压不写也不清零', async () => {
+    const { applyDrainLedger } = await VERBS;
+    const payload = { ok: false, error: GATE };
+    let r = applyDrainLedger({ ledger: {}, pr: 905, head: null, payload, nowIso: OLD_AT });
+    assert.equal(r.wrote, true);
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 1);
+    assert.equal(r.ledger[RK.drain(905, null)].lastError, GATE);
+
+    r = applyDrainLedger({ ledger: r.ledger, pr: 905, head: null, payload, nowIso: OLD_AT });
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 2);
+    assert.equal(r.ledger[RK.drain(905, null)].tries, 2);
+
+    const held = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null,
+      payload: { ok: true, drained: 0, failed: 0, held: 2 },
+      nowIso: OLD_AT,
+    });
+    assert.equal(held.wrote, false);
+    assert.equal(held.ledger[RK.drain(905, null)].sameErrorRounds, 2, '满载不许把 streak 清掉');
+
+    const pulled = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null,
+      payload: { ok: true, drained: 1, failed: 0, held: 0 },
+      nowIso: OLD_AT,
+    });
+    assert.equal(pulled.wrote, true);
+    assert.equal(pulled.ledger[RK.drain(905, null)].sameErrorRounds, 0, '真拉起才清零');
+    assert.equal(pulled.ledger[RK.drain(905, null)].lastError, null);
+  });
+
+  it('applyDrainLedger：前 400 字相同但后文不同 ≠ 同错，不判 hopeless', async () => {
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    const b = 'E'.repeat(400) + 'B';
+    assert.equal(drainErrorText({ error: a }), a, '抽取必须留下完整原文，不许截成 400 个 E');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    assert.equal(r.ledger[RK.drain(905, null)].lastError, a);
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 1);
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: b }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, b, '账本必须留下带后缀的完整原文');
+    assert.equal(rec.sameErrorRounds, 1, '后文不同必须从头数，不许被截成 400 个 E 后判同错');
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, true, '前缀相同、后缀不同不许判 hopeless：' + JSON.stringify(v));
+    assert.notEqual(v.code, 'hopeless');
+  });
+
+  it('applyDrainLedger：第一行相同但第二行不同 ≠ 同错', async () => {
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'gate refused\nhead=aaa';
+    const b = 'gate refused\nhead=bbb';
+    assert.equal(drainErrorText({ error: a }), a, '第二行是原文的一部分，不许只留首行');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: b }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, b);
+    assert.equal(rec.sameErrorRounds, 1, '第二行不同 = 另一句');
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, true, '只截首行会把这两句揉成同错：' + JSON.stringify(v));
+    assert.notEqual(v.code, 'hopeless');
+  });
+
+  it('applyDrainLedger：完整长原文连写两次仍 hopeless（正控：不是长了就不比）', async () => {
+    const { applyDrainLedger, validateRetryDrain } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: { ok: false, error: a }, nowIso: OLD_AT,
+    });
+    const rec = r.ledger[RK.drain(905, null)];
+    assert.equal(rec.lastError, a);
+    assert.equal(rec.sameErrorRounds, 2);
+    const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(v.ok, false);
+    assert.equal(v.code, 'hopeless');
+  });
+
+  it('review-pending-drain 无 JSON/超时 fallback：前 400 字同、后文不同不判 hopeless', async () => {
+    const { attachReceiptFromSpawn, drainReviewPending } = await import(
+      'file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/')
+    );
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const a = 'E'.repeat(400) + 'A';
+    const b = 'E'.repeat(400) + 'B';
+    const ticket = { pr: '905', reviewer: 'gpt-5.6-sol' };
+    const shapes = [
+      { label: '无 JSON', spawned: (stderr) => ({ status: 1, stdout: 'not-json timeout noise', stderr }) },
+      { label: '超时', spawned: (stderr) => ({
+        status: null, signal: 'SIGTERM', stdout: '', stderr,
+        error: { message: 'spawnSync ETIMEDOUT' },
+      }) },
+    ];
+    for (const { label, spawned } of shapes) {
+      const through = (stderr) => {
+        const attached = attachReceiptFromSpawn(spawned(stderr));
+        assert.equal(attached.ok, false, label);
+        assert.equal(attached.error, stderr, label + '：回执必须留下完整 stderr，不许截成 400 个 E');
+        const drained = drainReviewPending({ tickets: [ticket], attach: () => attached });
+        assert.equal(drained.ok, false, label);
+        assert.match(drained.error, new RegExp(stderr.slice(-1) + '$'), label + '：顶层 error 必须带上后缀');
+        // dao.mjs fail() 把 drained.error 写进 JSON；指挥官 drainPayloadOf 再抽出来。
+        return { ok: false, error: drained.error };
+      };
+      const pa = through(a);
+      const pb = through(b);
+      assert.equal(drainErrorText(pa).includes(a), true, label);
+      assert.notEqual(drainErrorText(pa), drainErrorText(pb), label);
+      assert.ok(drainErrorText(pa).length > 400, label);
+      let r = applyDrainLedger({
+        ledger: {}, pr: 905, head: null, payload: pa, nowIso: OLD_AT,
+      });
+      r = applyDrainLedger({
+        ledger: r.ledger, pr: 905, head: null, payload: pb, nowIso: OLD_AT,
+      });
+      const rec = r.ledger[RK.drain(905, null)];
+      assert.equal(rec.sameErrorRounds, 1, label + '：截 400 字会把这两句揉成同错');
+      assert.ok(String(rec.lastError).endsWith('B'), label);
+      const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+      assert.equal(v.ok, true, label + ' 不许判 hopeless：' + JSON.stringify(v));
+      assert.notEqual(v.code, 'hopeless', label);
+    }
+  });
+
+  it('review-pending-drain 真实链：首尾空白不同 ≠ 同错，不判 hopeless', async () => {
+    const { attachReceiptFromSpawn, drainReviewPending } = await import(
+      'file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/')
+    );
+    const { drainPayloadOf } = await import(
+      'file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/')
+    );
+    const { applyDrainLedger, validateRetryDrain, drainErrorText } = await VERBS;
+    const ticket = { pr: '905', reviewer: 'gpt-5.6-sol' };
+    const pairs = [
+      { a: 'gate refused\n', b: 'gate refused', label: '尾换行 vs 无换行' },
+      { a: ' gate refused', b: 'gate refused', label: '首空格 vs 无空格' },
+      { a: 'gate refused ', b: 'gate refused', label: '尾空格 vs 无空格' },
+    ];
+    const through = (stderr) => {
+      const attached = attachReceiptFromSpawn({ status: 1, stdout: 'not-json', stderr });
+      assert.equal(attached.ok, false);
+      assert.equal(attached.error, stderr, '回执必须留下完整 stderr，含首尾空白');
+      const drained = drainReviewPending({ tickets: [ticket], attach: () => attached });
+      assert.equal(drained.ok, false);
+      assert.ok(
+        String(drained.error).endsWith(stderr),
+        `顶层 error 必须保留 stderr 原文（含空白），实际=${JSON.stringify(drained.error)}`,
+      );
+      // dao.mjs fail() 把 drained 整份 emit 成 JSON；指挥官 drainPayloadOf 再抽出来。
+      // runCmd.error 是人读摘要（已 trim+截），不许当比较键——这里故意塞一份截过的。
+      const emitted = JSON.stringify({ ok: false, error: drained.error, ...drained });
+      return drainPayloadOf({
+        ok: false, status: 1, out: emitted, stderr: '',
+        error: String(drained.error).trim().slice(0, 300),
+      });
+    };
+    for (const { a, b, label } of pairs) {
+      const pa = through(a);
+      const pb = through(b);
+      assert.equal(drainErrorText(pa).includes(a), true, label);
+      assert.notEqual(drainErrorText(pa), drainErrorText(pb), label + '：trim 会把这两句揉成一句');
+      let r = applyDrainLedger({
+        ledger: {}, pr: 905, head: null, payload: pa, nowIso: OLD_AT,
+      });
+      r = applyDrainLedger({
+        ledger: r.ledger, pr: 905, head: null, payload: pb, nowIso: OLD_AT,
+      });
+      const rec = r.ledger[RK.drain(905, null)];
+      assert.equal(rec.sameErrorRounds, 1, label + '：trim 会把 sameErrorRounds 累到 2');
+      const v = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+      assert.equal(v.ok, true, label + ' 不许判 hopeless：' + JSON.stringify(v));
+      assert.notEqual(v.code, 'hopeless', label);
+    }
+    // 正控：同一份带尾换行的原文连写两次，仍 hopeless——不是空白就不比。
+    const same = through('gate refused\n');
+    let r = applyDrainLedger({
+      ledger: {}, pr: 905, head: null, payload: same, nowIso: OLD_AT,
+    });
+    r = applyDrainLedger({
+      ledger: r.ledger, pr: 905, head: null, payload: same, nowIso: OLD_AT,
+    });
+    assert.equal(r.ledger[RK.drain(905, null)].sameErrorRounds, 2);
+    const hopeless = validateRetryDrain({ pr: 905, queue: queued, nowMs: PAST, ledger: r.ledger });
+    assert.equal(hopeless.ok, false);
+    assert.equal(hopeless.code, 'hopeless');
+  });
 });
 
 describe('open-issue 校验：原文+reason、三问、去重', () => {
@@ -528,6 +746,22 @@ describe('变异：把每个校验摘掉，违规样本必须被放行', () => {
           liveHead: 'newhead',
           ledger: { [RK.drain(905, 'oldhead')]: { at: OLD_AT, tries: 1 } },
           nowMs: PAST,
+        }),
+      },
+      {
+        id: 'retry-drain.hopeless',
+        run: (checks) => V.validateRetryDrain({
+          _checks: checks,
+          pr: 905,
+          queue: [{ pr: '905' }],
+          nowMs: PAST,
+          ledger: {
+            [RK.drain(905, null)]: {
+              at: OLD_AT, tries: 2,
+              lastError: 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证',
+              sameErrorRounds: 2,
+            },
+          },
         }),
       },
       {
@@ -904,6 +1138,36 @@ describe('#1125 审官红 1：满载持票不记 tries，宽限期后不绕闸',
     assert.ok(planned.argv.includes('--pr'), '毒票隔离仍带 --pr');
     assert.ok(!planned.argv.includes('--force'), '自动化不许 --force 绕上限');
   });
+
+  it('drainLedger 连着 2 轮同一闸拒 → decide 产 mark-exhausted，不产 retry-drain', async () => {
+    const { decide } = await CORE;
+    const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+      + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+    const r = decide({
+      github: { scanned: true, issues: [], prs: [{ number: 920, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'head920' }] },
+      orca: { scanned: true, worktrees: [] },
+      trees: { scanned: true, worktrees: [] },
+      reviewPending: { scanned: true, items: [{ pr: 920, reviewer: 'gpt-5.6-luna' }] },
+      prReviews: { scanned: true, byPr: {} },
+      stall: { scanned: true, strikes: {} },
+      wakeCounts: {},
+      reworkDispatched: {},
+      drainLedger: {
+        [RK.drain(920, null)]: { at: OLD_AT, pr: 920, tries: 2, lastError: GATE, sameErrorRounds: 2 },
+      },
+      commanderPolicy: { requireModelInRouting: false },
+      routingModels: MODELS.filter((m) => !m.reviewerDisabled).map((m) => m.id),
+      routingModelRecords: MODELS,
+      reviewerOrder: ['gpt-5.6-luna', 'gpt-5.6-sol', 'kimi-k3'],
+      workerOrder: ['grok-4.6', 'deepseek-v4-flash'],
+      healthRedModels: [],
+      at: '2026-09-05T12:00:00.000Z',
+    });
+    assert.equal(r.actions.filter((a) => a.kind === 'retry-drain').length, 0, '同错两轮不再白试');
+    const marks = r.actions.filter((a) => a.kind === 'mark-exhausted');
+    assert.equal(marks.length, 1, '接到队列主路径后必须提前交人');
+    assert.ok(String(marks[0].why).includes('一模一样') || String(marks[0].why).includes('换厂凭证'), marks[0].why);
+  });
 });
 
 describe('执行层真接了三个动词（不是只测纯函数）', () => {
@@ -917,6 +1181,19 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     }
     assert.ok(/issue-gateway\.mjs/.test(src), 'Issue 写动作要走 issue-gateway（#792）');
     assert.ok(/marshal/.test(src), 'PR 合并等仍走 marshal 身份');
+  });
+
+  it('drainErrorText 不截行不截字；applyDrainLedger 走它，不再自截', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'commander-verbs.mjs'), 'utf8');
+    const i = src.indexOf('export function drainErrorText');
+    assert.ok(i > -1, '找不到 drainErrorText');
+    const fnEnd = src.indexOf('export function applyDrainLedger', i);
+    const fn = src.slice(i, fnEnd > i ? fnEnd : i + 600);
+    assert.doesNotMatch(fn, /slice\s*\(/, '抽取函数自己不许截字');
+    assert.doesNotMatch(fn, /split\s*\(/, '抽取函数自己不许截行');
+    const apply = src.slice(fnEnd, src.indexOf('export function validateOpenIssue', fnEnd));
+    assert.match(apply, /drainErrorText\(/, 'applyDrainLedger 必须走共用抽取');
+    assert.doesNotMatch(apply, /drainErrorExcerpt/, '旧截断函数不许还在写侧');
   });
 
   it('attach-reviewer 记账走 applyDrainLedger，满载不记 tries；自动化不许 --force', () => {
@@ -935,6 +1212,11 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     const rec = src.slice(recI, recI + 800);
     assert.match(rec, /applyDrainLedger\(/, '记账必须走 applyDrainLedger，满载才不会记 tries');
     assert.match(rec, /ticketHeadOid\(/, 'head 两种形态必须过同一门面');
+    const memI = src.indexOf('function rememberDrainFailure');
+    assert.ok(memI > -1, '找不到 rememberDrainFailure');
+    const memEnd = src.indexOf('export function drainPayloadOf', memI);
+    const mem = src.slice(memI, memEnd > memI ? memEnd : memI + 800);
+    assert.match(mem, /drainErrorText\(/, '复审账与 drain 账必须用同一份原文抽取，不许各截各的');
     const drainI = src.indexOf('function drainReviewPending');
     assert.ok(drainI > -1, '找不到 drainReviewPending');
     const drainEnd = src.indexOf('function drainPayloadOf', drainI);
@@ -944,9 +1226,27 @@ describe('执行层真接了三个动词（不是只测纯函数）', () => {
     assert.ok(!/'--force'/.test(drain), '自动化 drain 不许 --force');
     assert.ok(!/`pr:\$\{action\.pr\}`/.test(drain), '禁止手写旧键 pr:<N>——那是 #909 漏接的那一处');
     const daoSrc = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
-    const drainCmd = daoSrc.slice(daoSrc.indexOf('async function cmdReviewPendingDrain'), daoSrc.indexOf('async function cmdReviewPendingDrain') + 2200);
+    const drainCmdStart = daoSrc.indexOf('async function cmdReviewPendingDrain');
+    const drainCmdEnd = daoSrc.indexOf('function cmdSend', drainCmdStart);
+    const drainCmd = daoSrc.slice(drainCmdStart, drainCmdEnd > drainCmdStart ? drainCmdEnd : drainCmdStart + 4000);
     assert.match(drainCmd, /args\.force/, '不过上限只认 --force');
     assert.doesNotMatch(drainCmd, /args\.pr\s*\n\s*\? \{ ok: true/, '--pr 不许再当逃生口绕上限');
+    assert.match(drainCmd, /attachReceiptFromSpawn/, '无 JSON/超时必须走共用回执，不许内联截断');
+    assert.doesNotMatch(drainCmd, /slice\s*\(\s*0\s*,\s*400\s*\)/, 'attach fallback 不许截 400 字当比较键');
+    const rpSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs'), 'utf8');
+    const attachI = rpSrc.indexOf('export function attachReceiptFromSpawn');
+    assert.ok(attachI > -1, '找不到 attachReceiptFromSpawn');
+    const attachFn = rpSrc.slice(attachI, rpSrc.indexOf('export function consumeReviewPending', attachI));
+    assert.doesNotMatch(attachFn, /slice\s*\(/, '回执函数自己不许截字');
+    const drainAggI = rpSrc.indexOf('export function drainReviewPending');
+    assert.ok(drainAggI > -1, '找不到 drainReviewPending 聚合');
+    const drainAgg = rpSrc.slice(drainAggI);
+    assert.doesNotMatch(drainAgg, /\.trim\s*\(/, '顶层 error 是比较键，不许 trim 首尾空白');
+    const cmdSrc = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const payloadI = cmdSrc.indexOf('export function drainPayloadOf');
+    const payloadFn = cmdSrc.slice(payloadI, payloadI + 700);
+    assert.match(payloadFn, /runResult\.stderr \|\| runResult\.out/, '无 JSON 时比较键走完整 stderr/out');
+    assert.doesNotMatch(payloadFn, /runResult\.error/, 'runCmd.error 是人读摘要，不许当比较键');
   });
 
   it('decide 产出白名单外 kind 仍抛（FORBIDDEN 样本）', async () => {

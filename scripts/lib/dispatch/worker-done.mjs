@@ -15,6 +15,10 @@ import { attributedIssueNumbers, attributedIssueNumber } from '../close-issue.mj
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
+// 三个前缀各有各的「恰好一条」判据（`pickModel` / `pickReviewer` / 类型这一格），
+// 打标时要按同一组前缀清旧标——在这里命名一次，别让前缀字符串散在各处手打。
+export const MODEL_LABEL_PREFIX = 'model/';
+export const TYPE_LABEL_PREFIX = 'type/';
 
 export function dispatchLabelNames({ model, role, reviewer } = {}) {
   const names = [];
@@ -69,8 +73,6 @@ export function pickReviewer(labels) {
     label: hits[0],
   };
 }
-
-const MODEL_LABEL_PREFIX = 'model/';
 
 /** 从 label 列表读出唯一的工人模型。三态同分：一个 / 没有 / 多个。 */
 export function pickModel(labels) {
@@ -409,8 +411,27 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
   const existing = collected.labels;
   const add = names.filter((name) => !existing.includes(name));
   const skipped = names.filter((name) => existing.includes(name)).map((name) => ({ name, reason: 'already' }));
-  if (add.length) {
-    if (typeof ensureLabels === 'function') {
+  // 同一前缀的**旧**标要摘掉（2026-09-14 实咬，#1256）。
+  //
+  // 为什么必须摘：`pickModel` 的判据是「这个前缀下**恰好一条**」，两条同前缀一律拒
+  // （`worker-done.mjs:87` 的 state:'many' ⇒ 起审官被拒）。于是「工人换过模型」这类 PR
+  // 会**永久**卡死：打标路只加不减，`model/grok-4.6` 与 `model/claude-opus-5` 并存，
+  // 而两边都是「合法打的标」，没有任何东西会去调和。
+  // 现场（#1256）：drain 报「有多个 model/* label（model/grok-4.6、model/claude-opus-5，不许猜一个），
+  // 拒绝起审官」，那一轮审官一个都起不来。
+  //
+  // 只摘**同一前缀**、且不在本次 names 里的：别的前缀（type/ reviewer/）各有自己的判据，
+  // 一次打标顺手清掉它们会误伤（比如人工临时加的标）。
+  const drop = [];
+  for (const prefix of [MODEL_LABEL_PREFIX, REVIEWER_LABEL_PREFIX, TYPE_LABEL_PREFIX]) {
+    const wanted = names.filter((name) => name.startsWith(prefix));
+    if (wanted.length !== 1) continue;   // 本次要打的不是恰好一条 ⇒ 不碰这个前缀
+    for (const name of existing) {
+      if (name.startsWith(prefix) && !wanted.includes(name)) drop.push(name);
+    }
+  }
+  if (add.length || drop.length) {
+    if (add.length && typeof ensureLabels === 'function') {
       const ensured = ensureLabels({ names: add, runGh });
       if (!ensured || !ensured.ok) {
         return {
@@ -425,6 +446,7 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
     }
     const flags = [];
     for (const name of add) flags.push('--add-label', name);
+    for (const name of drop) flags.push('--remove-label', name);
     const edit = runGh(['pr', 'edit', n, ...flags]);
     if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}`, pr: n, branch, repo: wantRepo };
   }
@@ -435,6 +457,7 @@ export function stampPrLabelsFromDispatch({ pr, runGh, events, ensureLabels, rep
     repo: wantRepo,
     names,
     add,
+    drop,
     skipped,
     labels: names,
     model: picked.model,
@@ -529,10 +552,13 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   const resolved = resolveReviewerFromPr({ pr: n, reviewer, runGh });
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
-  // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。完工 comment 发在 PR
-  // 自己身上——GitHub 上 PR 就是那条线程。拒掉 = 快路永远交不了卷
-  //（#1270 返工实咬；本 PR 保护的也是同一形态）。
+  // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。票和审官任务书都已认 issue:null；
+  // 完工评论发到 PR 会话（GitHub 上 PR 就是那条线程）。有署名单才发 issue comment。
+  // 没处可发的是「连 PR 号都没有」，不是「没有 issue」。
+  // 拒掉 = 快路永远交不了卷（#1270 返工实咬；本 PR 保护的也是同一形态）。
+  // merge-policy 仍因取不到 human_holds 走 manual。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
+  // 有署名单才再发 issue。不许把「没单号」说成「没处可发」。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
   const round = listed.count > 0 ? 'rework' : 'first';
