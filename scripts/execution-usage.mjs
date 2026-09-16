@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { collectUsage, reportUsage, syncCursorAccountUsage } from './lib/execution-usage.mjs';
+import { collectUsage, partitionUsageCodes, reportUsage, syncCursorAccountUsage } from './lib/execution-usage.mjs';
 import { pathToFileURL } from 'node:url';
 
 export async function main(argv = process.argv.slice(2)) {
@@ -46,7 +46,15 @@ export async function main(argv = process.argv.slice(2)) {
     const status = collected?.status || result.status || [];
     if (status.length) console.log(`Collection status: ${status.join(', ')}`);
   }
-  if (collect) return collected?.busy || collected?.gaps?.length ? 2 : 0;
+  if (collect) {
+    const faults = partitionUsageCodes([
+      ...(collected?.busy ? ['collector_busy'] : []),
+      ...(collected?.gaps || []),
+      ...(result.gaps || []),
+      ...(result.groups || []).flatMap(g => g.gaps || []),
+    ]).gaps;
+    return faults.length ? 2 : 0;
+  }
   return result.complete ? 0 : 2;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

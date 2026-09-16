@@ -594,6 +594,21 @@ test('root publication and inbox import bound new durable writes while preservin
   assert.equal(inputTotal(M.reportUsage({dir:consumer})),60);
 });
 
+test('missing collection state cannot publish a complete inbox', async t => {
+  const M = await modulePromise, f = fixture(t);
+  const inbox = path.join(f.home, 'inbox');
+  M.appendUsage({ agent: 'grok', source: 'mirasim-ledger', event: usage(1) }, f);
+  assert.equal(fs.existsSync(path.join(f.dir, 'collection.json')), false);
+  const published = M.publishUsageInbox({
+    dir: f.dir, inbox, readerGid: process.getgid?.() ?? 0,
+  });
+  assert.equal(published.complete, false);
+  assert.deepEqual(published.gaps, []);
+  const imported = M.importUsageInbox(inbox, { dir: path.join(f.home, 'consumer') });
+  assert.equal(imported.complete, false);
+  assert.equal(imported.status.includes('inbox_export_incomplete'), true);
+});
+
 test('status-class catch-up does not fail collection; unreadable source does', async t => {
   const M = await modulePromise, f = fixture(t);
   const p = path.join(f.home, 'raw.ndjson');
@@ -655,6 +670,26 @@ test('commit limit leaves collection incomplete without failing the oneshot', as
   const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
   const code = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'cli-limit'), '--source', `grok-acp=${ndjsonPath}`]);
   assert.equal(code, 0);
+});
+
+test('collect exit code follows report faults while status-class stays 0', async t => {
+  const f = fixture(t);
+  const p = path.join(f.home, 'unknown.json');
+  write(p, { usage: { input_tokens: 1 } });
+  const { main } = await import(pathToFileURL(path.join(root, 'scripts/execution-usage.mjs')));
+  const logs = [];
+  const orig = console.log;
+  console.log = s => logs.push(String(s));
+  let code;
+  try {
+    code = await main(['--collect', '--json', '--home', f.home, '--dir', path.join(f.home, 'unknown-dir'), '--source', `grok-acp=${p}`]);
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(code, 2);
+  const printed = JSON.parse(logs.find(s => s.startsWith('{')));
+  assert.equal(printed.complete, false);
+  assert.equal(printed.groups[0].gaps.includes('unknown_usage_semantics'), true);
 });
 
 test('reportUsage and CLI json stay incomplete for status-only collection bounds', async t => {

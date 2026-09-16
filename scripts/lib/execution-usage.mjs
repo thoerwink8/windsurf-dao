@@ -432,18 +432,19 @@ export function publishUsageInbox({ dir, inbox, readerGid, limits: requestedLimi
     if (!buckets.has(bucket)) { sharedDir(bucket); buckets.add(bucket); }
     if (atomic(hashedDest, row, true, { mode: 0o640, gid: readerGid })) published++;
   });
-  const collection = json(path.join(dir, 'collection.json')) || {};
+  const collection = json(path.join(dir, 'collection.json'));
+  const collectionState = object(collection);
   const split = partitionUsageCodes([
-    ...(Array.isArray(collection.gaps) ? collection.gaps : []),
+    ...(Array.isArray(collectionState.gaps) ? collectionState.gaps : []),
     budget.exhausted ? 'inbox_scan_limit' : null,
   ]);
   const status = unique([
-    ...(Array.isArray(collection.status) ? collection.status : []),
+    ...(Array.isArray(collectionState.status) ? collectionState.status : []),
     ...split.status,
   ]);
   const manifest = {
     schema: 1, origin: 'root-mirasim', exportedAt: new Date().toISOString(),
-    complete: !budget.exhausted && split.gaps.length === 0 && status.length === 0 && collection.complete !== false,
+    complete: !budget.exhausted && split.gaps.length === 0 && status.length === 0 && collection?.complete === true,
     rows: count, published,
     gaps: split.gaps,
     status,
