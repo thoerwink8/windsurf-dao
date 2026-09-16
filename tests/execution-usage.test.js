@@ -813,11 +813,22 @@ test('export install list follows relative imports including require', async () 
   assert.equal(live.includes('lib/provider-probe.mjs'), true);
 });
 
-test('usage install copy classifier is unknown when missing, red when stale, ok when matched', async () => {
+test('usage install copy classifier: confirmed missing is red, unreadable stays unknown', async () => {
   const M = await modulePromise;
   const expected = [{ path: 'lib/execution-usage.mjs', content: 'new' }];
-  assert.equal(M.classifyUsageInstallCopy({ expected, installed: null }).state, 'unknown');
+  const missing = M.classifyUsageInstallCopy({ expected, installed: null });
+  assert.equal(missing.state, 'red');
+  assert.match(missing.detail, /没装/);
+  assert.match(missing.detail, /install-execution-usage/);
+  assert.doesNotMatch(missing.detail, /没查成/);
+  const unread = M.classifyUsageInstallCopy({
+    expected,
+    installed: { 'lib/execution-usage.mjs': { unreadable: true } },
+  });
+  assert.equal(unread.state, 'unknown');
+  assert.match(unread.detail, /读不了|没查成/);
   assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'old' } }).state, 'red');
   assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'new' } }).state, 'ok');
   assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: {} }).state, 'unknown');
+  assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: null }).state, 'unknown');
 });

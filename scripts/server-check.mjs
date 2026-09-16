@@ -1138,32 +1138,48 @@ function checkUnitDrift() {
 }
 
 const USAGE_INSTALL_ROOT = '/usr/local/lib/dao-execution-usage';
+const MISSING_INSTALL_CODES = new Set(['ENOENT', 'ENOTDIR']);
 
-function checkUsageInstallCopy() {
+/** 用量特权副本闸。existsSync 遇 EACCES 返 false，会把「看不见」洗成「没有」；
+ *  所以 stat/read 看 e.code：ENOENT/ENOTDIR = red，权限等读失败 = unknown。 */
+export function checkUsageInstallCopy({
+  root = USAGE_INSTALL_ROOT,
+  scriptsDir = join(REPO_ROOT, 'scripts'),
+  stat = (p) => statSync(p),
+  readRepo = (p) => readFileSync(p, 'utf8'),
+  readInstalled = (p) => readFileSync(p, 'utf8'),
+} = {}) {
+  const map = (r) => ({ state: r.state === 'ok' ? OK : r.state === 'red' ? RED : UNKNOWN, detail: r.detail });
   let files;
   try {
-    files = usageExportInstallFiles({ scriptsDir: join(REPO_ROOT, 'scripts') });
+    files = usageExportInstallFiles({ scriptsDir, readFile: readRepo });
   } catch (e) {
     return { state: UNKNOWN, detail: `用量装机名单算不出：${String(e.message || e).slice(0, 160)}——没查成` };
   }
-  if (!existsSync(USAGE_INSTALL_ROOT)) {
-    const r = classifyUsageInstallCopy({ expected: files.map((path) => ({ path, content: '' })), installed: null });
-    return { state: UNKNOWN, detail: r.detail };
+  try {
+    stat(root);
+  } catch (e) {
+    const code = e && e.code;
+    const expected = files.map((path) => ({ path, content: '' }));
+    if (MISSING_INSTALL_CODES.has(code)) {
+      return map(classifyUsageInstallCopy({ expected, installed: null }));
+    }
+    const installed = Object.fromEntries(files.map((rel) => [rel, { unreadable: true }]));
+    return map(classifyUsageInstallCopy({ expected, installed }));
   }
   const expected = [];
   const installed = {};
   for (const rel of files) {
     let content;
-    try { content = readFileSync(join(REPO_ROOT, 'scripts', rel), 'utf8'); }
+    try { content = readRepo(join(scriptsDir, rel)); }
     catch (e) { return { state: UNKNOWN, detail: `仓内 ${rel} 读不了（${e.code || e.message}）——没查成` }; }
     expected.push({ path: rel, content });
-    try { installed[rel] = readFileSync(join(USAGE_INSTALL_ROOT, rel), 'utf8'); }
+    try { installed[rel] = readInstalled(join(root, rel)); }
     catch (e) {
-      if (e && e.code !== 'ENOENT') installed[rel] = { unreadable: true };
+      if (!e || !MISSING_INSTALL_CODES.has(e.code)) installed[rel] = { unreadable: true };
     }
   }
-  const r = classifyUsageInstallCopy({ expected, installed });
-  return { state: r.state === 'ok' ? OK : r.state === 'red' ? RED : UNKNOWN, detail: r.detail };
+  return map(classifyUsageInstallCopy({ expected, installed }));
 }
 
 // —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
@@ -1506,8 +1522,27 @@ function selfTest() {
     failures.push(`误导注释应判红，实际 ${commentLies.state}：${commentLies.detail}`);
   }
   const usageMissing = classifyUsageInstallCopy({ expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }], installed: null });
-  if (usageMissing.state !== 'unknown' || !/没装或没查成/.test(usageMissing.detail)) {
-    failures.push(`用量副本目录不在应 unknown，实际 ${usageMissing.state}：${usageMissing.detail}`);
+  if (usageMissing.state !== 'red' || !/没装/.test(usageMissing.detail) || /没查成/.test(usageMissing.detail)) {
+    failures.push(`用量副本目录不在应 red（确认缺失），实际 ${usageMissing.state}：${usageMissing.detail}`);
+  }
+  const usageUnread = classifyUsageInstallCopy({
+    expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
+    installed: { 'lib/execution-usage.mjs': { unreadable: true } },
+  });
+  if (usageUnread.state !== 'unknown' || !/没查成/.test(usageUnread.detail)) {
+    failures.push(`用量副本读不了应 unknown，实际 ${usageUnread.state}：${usageUnread.detail}`);
+  }
+  const usageRootGone = checkUsageInstallCopy({
+    stat: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+  });
+  if (usageRootGone.state !== RED || !/没装/.test(usageRootGone.detail)) {
+    failures.push(`用量副本目录 ENOENT 应 red，实际 ${usageRootGone.state}：${usageRootGone.detail}`);
+  }
+  const usageRootBlind = checkUsageInstallCopy({
+    stat: () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; },
+  });
+  if (usageRootBlind.state !== UNKNOWN || !/没查成/.test(usageRootBlind.detail)) {
+    failures.push(`用量副本目录 EACCES 应 unknown，实际 ${usageRootBlind.state}：${usageRootBlind.detail}`);
   }
   const usageStale = classifyUsageInstallCopy({
     expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
@@ -1528,7 +1563,7 @@ function selfTest() {
     console.error('self-test 红：\n  - ' + failures.join('\n  - '));
     return 1;
   }
-  console.log('self-test 绿：探不到 → unknown（不当通过）；扫完 0 条 → ok。');
+  console.log('self-test 绿：探不到 → unknown（不当通过）；扫完 0 条 → ok；缺特权副本 → red。');
   return 0;
 }
 

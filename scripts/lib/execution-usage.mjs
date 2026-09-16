@@ -99,9 +99,11 @@ export function usageExportInstallFiles({
   return out;
 }
 
+/** 仓内名单 vs 机器上特权副本。确认不在（installed==null 或条目缺）= red；
+ *  权限等读失败（unreadable）= unknown。existsSync 分不出这两种，调用方必须看 e.code。 */
 export function classifyUsageInstallCopy({ expected, installed } = {}) {
-  if (installed == null) return { state: 'unknown', detail: '用量特权副本目录不在——没装或没查成，不当绿' };
   if (!Array.isArray(expected) || expected.length === 0) return { state: 'unknown', detail: '装机名单是空的——没查成，不当绿' };
+  if (installed == null) return { state: 'red', detail: '用量特权副本目录不在——没装。装：sudo bash scripts/install-execution-usage.sh' };
   const missing = [], stale = [], unreadable = [];
   for (const item of expected) {
     const rel = item?.path, want = item?.content;

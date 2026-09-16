@@ -30,6 +30,7 @@ import {
   classifyExecutableEntry,
   whichOnPath,
   scanRetiredClis,
+  checkUsageInstallCopy,
   DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
 import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
@@ -259,6 +260,17 @@ test('server-check 判别力', async (t) => {
       assert.ok(i > -1, '找不到 (24) CHECKS 条目');
       const entry = src.slice(i, i + 200);
       assert.match(entry, /checkUsageInstallCopy/);
+    });
+    await t.test('CHECKS (24) 取数不用 existsSync（EACCES 不能洗成没有）', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const start = src.indexOf('const MISSING_INSTALL_CODES');
+      const end = src.indexOf('function checkRootOwnedInHome');
+      assert.notEqual(start, -1, '找不到 MISSING_INSTALL_CODES');
+      assert.equal(end > start, true, '找不到 checkRootOwnedInHome 边界');
+      const fn = src.slice(start, end);
+      assert.doesNotMatch(fn, /existsSync\(/);
+      assert.match(fn, /ENOENT/);
+      assert.match(fn, /ENOTDIR/);
     });
   });
 
@@ -664,6 +676,54 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
       });
       assert.equal(r.state, 'red');
     });
+  });
+});
+
+test('(24) 用量特权副本三态：确认缺失 red，权限读失败 unknown', async (t) => {
+  const boom = (code) => () => { const e = new Error(code); e.code = code; throw e; };
+
+  await t.test('目录 ENOENT → red（仓里有、机器上没有，不是没查成）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('ENOENT') });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /没装/);
+    assert.match(r.detail, /install-execution-usage/);
+    assert.doesNotMatch(r.detail, /没查成/);
+  });
+
+  await t.test('目录 ENOTDIR → red（确认不是目录，等同缺失）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('ENOTDIR') });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /没装/);
+  });
+
+  await t.test('目录 EACCES → unknown（看不见，不当成没有）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('EACCES') });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /读不了|没查成/);
+  });
+
+  await t.test('目录 EPERM → unknown', () => {
+    const r = checkUsageInstallCopy({ stat: boom('EPERM') });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没查成/);
+  });
+
+  await t.test('目录在、文件 ENOENT → red', () => {
+    const r = checkUsageInstallCopy({
+      stat: () => ({ isDirectory: () => true }),
+      readInstalled: boom('ENOENT'),
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /缺 /);
+  });
+
+  await t.test('目录在、文件 EACCES → unknown', () => {
+    const r = checkUsageInstallCopy({
+      stat: () => ({ isDirectory: () => true }),
+      readInstalled: boom('EACCES'),
+    });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /读不了|没查成/);
   });
 });
 
