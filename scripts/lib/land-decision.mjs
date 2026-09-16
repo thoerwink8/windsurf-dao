@@ -18,7 +18,8 @@ export function lastJudgmentOf(all) {
 /**
  * 这张 PR 现在能不能当「审官已经放行、可以合入」。
  * greenAtHead：当前 head 上最后一条是绿。
- * decisionApproved：GitHub 聚合 reviewDecision（开了分支保护才有）。
+ * latestRed：当前 head 上最后一条是红——**优先于**聚合 APPROVED / 旧 head 绿。
+ * decisionApproved：GitHub 聚合 reviewDecision（开了分支保护才有；会被当前 head 红否掉）。
  * atHead === 0 且历史上最后一条是 APPROVED：head 只因对接 master 变了。
  * mergePolicy：这张 PR 的合门（'manual' | 'auto' | null）。见下。
  *
@@ -49,23 +50,26 @@ export function approvedToLand({
   decisionApproved = false,
   atHead = null,
   lastJudgment = null,
+  latestRed = false,
   mergePolicy = null,
   mergePolicySource = null,
 } = {}) {
+  // 当前 HEAD 的红判定优先：聚合 reviewDecision 或旧 HEAD 的 APPROVED 不得开合门。
+  // #1225 返工：列表快照还是 APPROVED、逐条 reviews 已是当前 HEAD CHANGES_REQUESTED
+  // 时，旧公式仍把 decisionApproved 当绿，manual 出口产「待人工合并」把返工吃掉。
+  if (latestRed === true) return false;
   const green = greenAtHead === true || decisionApproved === true
     || (atHead === 0 && lastJudgment === 'APPROVED');
   if (!green) return false;
   // manual：判绿也不放行。是否真能合，由调用点拿拍板证据另判。
   //
-  // **只认「查过、确实是 manual」那两档**（framework / hold）：
-  //   · framework —— issue 带 type/体系，是查到的；
-  //   · hold      —— classifyAsk 命中 human_holds，也是查到的。
-  // `unscanned` 那一档**不拦**：它代表「issue 没扫到 / 正文没读成」，不是「查过是 manual」。
-  // 拿它当 manual 会把「这轮没扫到这张 PR 的 issue」变成「所有 PR 都不许合」——
-  // 2026-09-13 写完本条当场被 tests/exhausted.test.js 抓住：夹具只给 prs 不给 issues，
-  // 于是每条判绿的 PR 都变成「待人工合并」，把一整片无关用例打红。
-  // 没查成是「这条判据这轮不生效」，与「查过确实是 manual」是两回事。
-  if (mergePolicy === 'manual' && mergePolicySource !== 'unscanned') return false;
+  // 三档都拦（#1223：没查成不许退回 auto）：
+  //   · framework —— issue 带 type/体系；
+  //   · hold      —— classifyAsk 命中 human_holds；
+  //   · unscanned —— 账本/署名单没查成。旧实现把这一档排除出闸，于是
+  //     「署名 issue 没扫到」直接产 merge。mergePolicySource 仍接收，供调用点留痕。
+  void mergePolicySource;
+  if (mergePolicy === 'manual') return false;
   return true;
 }
 

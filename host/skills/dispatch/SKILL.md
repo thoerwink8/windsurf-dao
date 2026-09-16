@@ -190,7 +190,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 - 士兵任务书（`host/skills/dispatch/templates/soldier-book-mirasim.md`）**不内嵌**审官 dispatch id——派工那一刻审官还不存在。士兵完工调 `dao.mjs worker-done --pr N`（发完工 comment；首审入队，由指挥官按在役审官数拉取），不要自己 notify。orca 版任务书已删（#1150）。
 - 审官任务书（`host/skills/dispatch/templates/reviewer-book-mirasim.md`）判定落到 GitHub review；红项写进 `--request-changes` 正文。orca 版审官书已删（#1150）。
 - 闭环通知走 GitHub 评论（issue-gateway / `gh-as` worker 的 pr comment）+ 飞书 hub。`dao.mjs notify` / `dao.mjs send` 已随 orca 编排退役，调用即拒。不要调它们。
-- 审官任务书还写：乒乓两轮仍红才上帅；绿 → `--approve` 落到 GitHub，合入由指挥官 squash（审官不许自己合）；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
+- 审官任务书还写：乒乓两轮仍红才上帅；绿 → `--approve` 落到 GitHub，合入由指挥官 squash（审官不许自己合）；**manual 先把 PR 转 draft（`node scripts/pr-mark-draft.mjs <PR号>`，失败必须报帅，#1223）再通知帅「需人工合并」** → 通知帅「可归档」。
 - 归档由帅侧关卡执行（#665：MERGED 扫描收树；可归档只加速）。审官不能 rm 自己所在的树，只负责把「可归档」通知到帅。
 - 模板是原则 + 「以当时的任务书为准」，不复制会随 #530 过时的具体职责（#507 教训）。
 

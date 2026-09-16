@@ -59,7 +59,8 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 - **判绿**：`--approve` 落到 GitHub 即收尾。**不许自己合**（指挥官当轮 squash；落后 ≠ 冲突，不要为对齐 master 再审一轮）。
   - **① 基底含最新 master 不属于交卷判据，不许拿它判红**（#1117）。
   - `m=manual`（例外，前言带 `r=` 理由）：判绿后把 PR 转 draft：
-    `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo`，review 正文写「需人工合并，理由：<r= 的值>」。
+    `node scripts/pr-mark-draft.mjs <PR号>`（不要直接 `pr ready --undo`——失败必须非零退出并报帅，#1223）。
+    非零 = 没转成，当场停手报帅，不许当合门已挂上。review 正文写「需人工合并，理由：<r= 的值>」。
   - 判定落成后不要待在会话里等下一句——交卷侧会停会话；你这边落判定即下班。
   - 选型只读 PR 自己的 `model/*` `reviewer/*`（#1116）。指挥官 squash 前跑 `dao pr-sync-labels`（按仓+分支从账本打标；缺完整记录需人工打标，不读 issue）。你这边不打标、不合。
 
@@ -69,7 +70,7 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 所以**不发 `notify`、不发 `--type worker_done`、不取 Run id**（orca 版那两跳在这里都不存在）。
 
 - 判绿（`m=auto`）：APPROVED 落成即闭环。合入由指挥官 squash；可归档信号 = PR 已 MERGED + 有 APPROVED review。归档仍由收口官/帅做。
-- 判绿但 `m=manual`：转 draft + review 正文写明「需人工合并」即收尾，帅合并解 draft。
+- 判绿但 `m=manual`：`pr-mark-draft.mjs` 转 draft 成功 + review 正文写明「需人工合并」即收尾，帅合并解 draft。转 draft 失败必须报帅，不许静默降级。
 - 判红：`--request-changes` 落 GitHub 即收尾这一轮，士兵返工后重开一轮审（士兵再调 `worker-done`，首行「返工完成」）。
 
 > **确认落成才算收尾**：`gh-as reviewer -- pr review` 非零 = 没落成，当场报出来并重试，不许把「发过了」当「判定到位了」。

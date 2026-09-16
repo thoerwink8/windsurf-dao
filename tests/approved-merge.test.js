@@ -10,6 +10,16 @@ function data() {
   greenAtHead: true, expectedHead: head };
 }
 
+test('non-draft manual 不要求 isDraft，但仍要批准单 + 当前 HEAD + CI', async () => {
+  const { canReleaseApprovedManual, canReleaseApprovedDraft } = await load;
+  const x = data();
+  x.pr.isDraft = false;
+  assert.equal(canReleaseApprovedDraft(x), false, 'draft 路仍要求 isDraft');
+  assert.equal(canReleaseApprovedManual(x), true, 'manual 路吃非 draft');
+  x.pr.headRefOid = 'b'.repeat(40);
+  assert.equal(canReleaseApprovedManual(x), false, 'HEAD 变了不合');
+});
+
 test('only explicitly approved execution with current review and complete CI can release draft', async () => {
   const { canReleaseApprovedDraft } = await load;
   assert.equal(canReleaseApprovedDraft(data()), true);
@@ -38,6 +48,38 @@ test('commander emits approval-bound merge rather than another user question', a
   const merge = r.actions.find(a => a.kind === 'merge');
   assert.equal(merge?.approvalIssue, 1182);
   assert.equal(merge?.head, head);
+});
+
+test('非 draft manual 执行层复核证据、锁 HEAD，不走要求 isDraft 的 draft 路', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const x = data();
+  x.pr.isDraft = false;
+  const calls = [];
+  const run = args => {
+    calls.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(x.pr) };
+    if (args[4] === 'issue' && args[5] === 'view') return { ok: true, out: JSON.stringify(x.issue) };
+    return { ok: true, out: '' };
+  };
+  const r = execMerge(
+    { pr: 1191, approvalIssue: 1182, head, evidenceMode: 'manual' },
+    { say() {}, run, judge: () => ({ state: 'ok' }) },
+  );
+  assert.equal(r.ok, true);
+  const merge = calls.find(a => a[5] === 'merge');
+  assert.equal(merge.at(-2), '--match-head-commit');
+  assert.equal(merge.at(-1), head);
+  assert.equal(calls.some(a => a[5] === 'ready'), false, '非 draft 不许先 pr ready');
+});
+
+test('非 draft manual 丢了批准单或 HEAD → 拒绝裸合', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const r = execMerge(
+    { pr: 1225, evidenceMode: 'manual' },
+    { say() {}, run: () => { throw new Error('不该打 gh'); }, judge: () => ({ state: 'ok' }) },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'manual-merge-unbound');
 });
 
 test('executor rechecks evidence, pins head and restores draft if merge fails', async () => {

@@ -11,6 +11,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
@@ -239,6 +240,51 @@ describe('#1235 merge 记账步骤失败不挡合并', () => {
     const r = execMerge({ pr: 1143 }, { say: silent, run, judge: () => ({ state: 'ok' }) });
     assert.deepEqual(r.failed, []);
     assert.equal(r.ok, true);
+  });
+
+  it('合并成功要调 writeMergeLedger；失败不写', async () => {
+    const { execMerge } = await CMD;
+    const { run } = runWhere(null);
+    const written = [];
+    const r = execMerge(
+      { pr: 1225, why: '判绿可合' },
+      { say: silent, run, judge: () => ({ state: 'ok' }), writeMergeLedger: (a) => { written.push(a.pr); return { ok: true }; } },
+    );
+    assert.equal(r.ok, true);
+    assert.deepEqual(written, [1225]);
+    const written2 = [];
+    const fail = execMerge(
+      { pr: 1225 },
+      {
+        say: silent,
+        run: runWhere('pr merge').run,
+        judge: () => ({ state: 'ok' }),
+        writeMergeLedger: (a) => { written2.push(a.pr); return { ok: true }; },
+      },
+    );
+    assert.equal(fail.ok, false);
+    assert.deepEqual(written2, [], '没合成不许落合并账');
+  });
+
+  it('recordPrMergeMilestone 落盘过 schema，重复写跳过', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-ledger-'));
+    const { recordPrMergeMilestone } = await CMD;
+    const { loadLedgerContext } = await import('../scripts/lib/ledger-job.mjs');
+    const ctx = loadLedgerContext({
+      root: REPO, eventsDir: dir, machine: 'test-merge-ledger',
+    });
+    const r = recordPrMergeMilestone({ pr: 1225, why: '判绿可合' }, { ctx });
+    assert.equal(r.ok, true, r.error);
+    const names = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    assert.equal(names.length, 1);
+    const ev = JSON.parse(fs.readFileSync(path.join(dir, names[0]), 'utf8'));
+    assert.equal(ev.type, 'session.milestone');
+    assert.equal(ev.kind, 'pr-merge');
+    assert.equal(ev.pr_number, 1225);
+    assert.equal(ev.milestone_key, 'pr-merge:pr-1225');
+    const again = recordPrMergeMilestone({ pr: 1225, why: '判绿可合' }, { ctx });
+    assert.equal(again.ok, true);
+    assert.equal(again.skipped, true);
   });
 });
 

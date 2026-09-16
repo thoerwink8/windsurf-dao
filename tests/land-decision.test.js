@@ -27,6 +27,18 @@ describe('approvedToLand', () => {
     const { approvedToLand } = await LOAD;
     assert.equal(approvedToLand({ decisionApproved: true, atHead: 0, lastJudgment: null }), true);
   });
+  it('当前 HEAD 红优先：聚合 APPROVED 也不可合', async () => {
+    const { approvedToLand } = await LOAD;
+    assert.equal(approvedToLand({
+      decisionApproved: true, greenAtHead: false, latestRed: true, atHead: 1,
+    }), false);
+  });
+  it('当前 HEAD 红优先：旧 head 绿也不可合', async () => {
+    const { approvedToLand } = await LOAD;
+    assert.equal(approvedToLand({
+      greenAtHead: false, atHead: 1, lastJudgment: 'APPROVED', latestRed: true,
+    }), false);
+  });
   it('旧 head 上核绿、新 head 还没判定 → 可合（对接 master，不再审）', async () => {
     const { approvedToLand } = await LOAD;
     assert.equal(approvedToLand({
@@ -75,14 +87,12 @@ describe('approvedToLand 认 mergePolicy（#1218 那一格）', () => {
     assert.equal(approvedToLand({ mergePolicy: 'auto' }), false);
   });
 
-  // 2026-09-13：这一档是写完收窄当天被 tests/commander.test.js + tests/exhausted.test.js
-  // 当场抓住的——夹具只给 prs 不给 issues，于是「没扫到」被当成「查过是 manual」，
-  // 一整片无关用例的每条判绿 PR 都变成「待人工合并」。
-  it('unscanned（没扫到 issue）**不拦**——没查成 ≠ 查过是 manual', async () => {
+  // #1223：没查成不许退回 auto。旧实现把 unscanned 排除出闸，署名单没扫到就直接合。
+  it('unscanned（没查成）也拦——不许退回 auto', async () => {
     const { approvedToLand } = await LOAD;
     assert.equal(approvedToLand({
       greenAtHead: true, mergePolicy: 'manual', mergePolicySource: 'unscanned',
-    }), true, '没扫到不该把这张 PR 变成待人工合并');
+    }), false, '没查成不许开自动合门');
   });
   it('正控：查过确实是 manual 的两档都拦', async () => {
     const { approvedToLand } = await LOAD;

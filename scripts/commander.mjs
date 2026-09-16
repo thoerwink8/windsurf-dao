@@ -40,7 +40,7 @@ import {
   gatewayIdemKey, escalateRoundSeed,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
-import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
+import { canReleaseApprovedDraft, canReleaseApprovedManual, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   rereviewKey, epochOf,
@@ -79,6 +79,10 @@ import {
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
+import {
+  loadLedgerContext, beijingIsoFrom, isDuplicateWriteError,
+} from './lib/ledger-job.mjs';
+import { writeEvent, nextSeq } from './lib/event-writer.mjs';
 import { desiredFromEvents } from './lib/session-reconcile.mjs';
 import { acceptSessionsFrame } from './mirasim-sessions.mjs';
 import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
@@ -269,15 +273,31 @@ function scanSessions() {
  * 全量读（readLedgerEvents），不用 10 分钟去重窗的索引——差集要的是「现在该在的人」，
  * 裁掉 10 分钟前的未结派工等于把死工人洗成「账上没有」。
  */
-function scanDesiredJobs() {
+function readHomeLedger() {
   let dir;
   try { dir = ensureLocalLedger({ root: ROOT }).dir; }
-  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, items: [] }; }
-  const listed = readLedgerEvents(dir);
-  if (listed.unscanned) {
-    return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
+  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, events: [] }; }
+  return readLedgerEvents(dir);
+}
+
+function scanDesiredJobs(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { unscanned: true, error: src.error || '事件账没查成', items: [] };
   }
-  return desiredFromEvents(listed.events);
+  return desiredFromEvents(src.events);
+}
+
+/** 合并侧要的派工 merge-policy：未结/已结的 job.dispatch 都要，不能只用期望集。 */
+function scanDispatchLedger(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { scanned: false, error: src.error || '事件账没查成', events: [] };
+  }
+  return {
+    scanned: true,
+    events: (src.events || []).filter((e) => e && e.type === 'job.dispatch'),
+  };
 }
 
 /**
@@ -630,7 +650,9 @@ function buildSituation({ state } = {}) {
   const stall = scanStall();
   const sessions = scanSessions();
   const lease = scanLease();
-  const desiredJobs = scanDesiredJobs();
+  const ledgerListed = readHomeLedger();
+  const desiredJobs = scanDesiredJobs(ledgerListed);
+  const dispatchLedger = scanDispatchLedger(ledgerListed);
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let routingModelRecords = null;
@@ -686,7 +708,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, lease, desiredJobs,
+    sessions, lease, desiredJobs, dispatchLedger,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -858,7 +880,7 @@ function execAction(action, { state, dryRun, log }) {
     case 'reap-orphan':
       return execReapOrphan(action, { dryRun, say });
     case 'merge':
-      return execMerge(action, { dryRun, say });
+      return execMerge(action, { dryRun, say, writeMergeLedger: recordPrMergeMilestone });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
@@ -1110,7 +1132,9 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  * 所以：记账步骤 best-effort，失败进 failures 一起报出去；**只有 pr merge 失败才算真失败**。
  * 打标必须在 merge 之前——合并后 PR 关了就补不上标签，战绩会永久缺这一张。
  */
-export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+export function execMerge(action, {
+  dryRun, say, run = runCmd, judge = judgeMergeFreshness, writeMergeLedger = null,
+} = {}) {
   const GATING = new Set(['pr merge']);
   const steps = [
     ['node', 'scripts/dao.mjs', 'pr-sync-labels', '--pr', String(action.pr)],
@@ -1124,13 +1148,20 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     for (const g of GATING) if (s.includes(g)) return true;
     return false;
   };
+  const mergeArgv = () => steps.find((s) => s[4] === 'pr' && s[5] === 'merge');
+  const evidenceMode = action.evidenceMode
+    || (action.approvalIssue ? 'draft' : null);
 
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
       + `\n    ${steps.map((s) => s.join(' ')).join('\n    ')}`);
     return { ok: true, dryRun: true, calls: [] };
   }
-  if (action.approvalIssue) {
+  if (evidenceMode === 'manual' && (!action.approvalIssue || !action.head)) {
+    say(`  #${action.pr} 非 draft manual 缺批准单或预期 HEAD，拒绝裸合`);
+    return { ok: false, error: 'manual-merge-unbound' };
+  }
+  if (evidenceMode === 'draft' || evidenceMode === 'manual') {
     const read = args => {
       const r = run(['node', 'scripts/gh-as.mjs', 'marshal', '--', ...args]);
       try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; }
@@ -1140,13 +1171,19 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
       commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
     const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
-    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
-      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead: action.head })) {
+    const greenAtHead = approval.scanned && approval.latestGreen === true;
+    const bound = evidenceMode === 'draft'
+      ? canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead: action.head })
+      : canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead: action.head });
+    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN' || !bound) {
       say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
       return { ok: true, skipped: 'approval-not-current' };
     }
-    steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
-    steps[2].push('--match-head-commit', action.head);
+    if (evidenceMode === 'draft') {
+      steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    }
+    const merge = mergeArgv();
+    if (merge && action.head) merge.push('--match-head-commit', action.head);
   }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
@@ -1174,10 +1211,51 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
     if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
+  if (merged && typeof writeMergeLedger === 'function') {
+    const logged = writeMergeLedger(action);
+    if (logged && logged.ok === false) {
+      failed.push({ step: 'merge-ledger', error: logged.error || '合并账本没落下' });
+      say(`  合并账本没落下（不挡已合）：${logged.error || '没查成'}`);
+    }
+  }
   say(failed.length
     ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
     : `  已合并 #${action.pr} 并关单`);
   return { ok: true, calls, freshness, failed };
+}
+
+/** 指挥官 squash 不走 bash hook，必须自己落 session.milestone（#1223 第 4 点）。 */
+export function recordPrMergeMilestone(action, { ctx: given } = {}) {
+  try {
+    const ctx = given || loadLedgerContext({ root: ROOT });
+    const seq = nextSeq(ctx.dir, ctx.machine);
+    const repo = String(REPO || '').split('/')[1] || String(REPO || 'windsurf-dao');
+    const n = Number(action && action.pr);
+    writeEvent({
+      dir: ctx.dir,
+      type: 'session.milestone',
+      ts: beijingIsoFrom(new Date()),
+      machine: ctx.machine,
+      seq,
+      schema: ctx.schema,
+      payload: {
+        kind: 'pr-merge',
+        repo,
+        pr_number: Number.isInteger(n) ? n : null,
+        milestone_key: `pr-merge:pr-${action.pr}`,
+        evidence: [
+          `execMerge pr ${action.pr}`,
+          String((action && action.why) || '指挥官 squash'),
+        ],
+        identity: '协调者',
+        refs: [`PR #${action.pr}`],
+      },
+    });
+    return { ok: true };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true };
+    return { ok: false, error: String(e.message || e) };
+  }
 }
 
 /**

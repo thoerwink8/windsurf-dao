@@ -60,6 +60,10 @@ export const HUMAN_DECISION_REASONS = new Set([
   // 它是「已经发生的越界改动」，要人去看那个提交、决定留还是回滚——机器代不了。
   // 本条是穷举闸上线第一次跑就抓出来的漏网，原本谁都没想起它（scripts/commander.mjs:1196）。
   'patrol-out-of-bounds',
+  // #1223：m=manual 的 PR 不是 draft——转 draft 失败或闸被拿掉，人来判，不许当 auto。
+  'manual-not-draft',
+  // 非 draft manual 证据齐了但批准单/HEAD 没带上动作——拒绝裸合，人来核。
+  'manual-merge-unbound',
 ]);
 
 /**
