@@ -257,7 +257,7 @@ describe('planWorkerDone 手开 PR 没标就拒', () => {
     assert.equal(start >= 0, true);
     assert.equal(end > start, true);
     const fn = src.slice(start, end);
-    assert.match(fn, /if \(plan\.issue\) \{/);
+    assert.match(fn, /if \(plan\.issue != null\) \{/);
     assert.match(fn, /快路无署名单，完工评论只发 PR/);
     assert.match(fn, /source: 'no-issue'/);
     assert.match(fn, /不许放行 auto/);

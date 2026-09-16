@@ -530,8 +530,10 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   if (!resolved.ok) return resolved;
   const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
   // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。票和审官任务书都已认 issue:null；
-  // 完工评论发到 PR 会话（GitHub 上 PR 就是那条线程），不挡交卷。拒掉 = 快路永远交不了卷
-  //（#1270 返工实咬；本 PR 保护的也是同一形态）。merge-policy 仍因取不到 human_holds 走 manual。
+  // 完工评论发到 PR 会话（GitHub 上 PR 就是那条线程）。有署名单才发 issue comment。
+  // 没处可发的是「连 PR 号都没有」，不是「没有 issue」。
+  // 拒掉 = 快路永远交不了卷（#1270 返工实咬；本 PR 保护的也是同一形态）。
+  // merge-policy 仍因取不到 human_holds 走 manual。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;

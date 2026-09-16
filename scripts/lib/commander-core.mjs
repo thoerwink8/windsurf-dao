@@ -40,7 +40,10 @@ import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './
 // 明天就是写侧（#909 的形状）。
 export { drainLedgerKey, epochOf, stampedKey } from './commander-verbs.mjs';
 // #1237：失败分类——判据在 lib/retry-verdict.mjs，这里只消费。
-import { judgeRetry } from './retry-verdict.mjs';
+import {
+  judgeRetry, judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK,
+} from './retry-verdict.mjs';
+export { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK };
 import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
@@ -1716,15 +1719,30 @@ function collectCandidates(situation) {
       // （2026-09-14 自测当场看到）。说清「一条 review 都没有」和「判定都过期了」是两回事。
       // #1237：同上——判据会永远拒的（执行目录 unverified 这类）当场交人。
       const rrVerdict = judgeRetry({ error: prev?.lastError || prev?.error });
-      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal') {
-        const hopeless = rrVerdict.verdict === 'terminal' && tries < MAX_REREVIEW_TRIES;
+      // 词表只认见过的字样，认不出的一律 retryable（`whitelist-fingerprints-cannot-find-unseen-failures`）。
+      // 补一条**不看词、只看行为**的判据：同一 (pr, head) 连着几轮拿回一模一样的失败原文，
+      // 就是「重试不会变」的直接证据，无论那句话谁写的、说的是什么。
+      const repeated = judgeRepeatedFailure(prev);
+      if (tries >= MAX_REREVIEW_TRIES || rrVerdict.verdict === 'terminal' || repeated.stuck) {
+        const hopeless = (rrVerdict.verdict === 'terminal' || repeated.stuck) && tries < MAX_REREVIEW_TRIES;
         out.push(withNeeds(buildMarkExhausted({
           pr: pr.number, verb: 'rereview', tries, head: headForAction,
           retryVerdict: rrVerdict.verdict,
           maxTries: MAX_REREVIEW_TRIES,
-          why: hopeless
-            ? `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${prev?.lastError || prev?.error || '无原文'}`
-            : `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`,
+          // 「判定仍是 0」只是**症状**。上一次叫审官如果是被闸当场拒的，那句拒绝原文才是
+          // 看 PR 的人唯一用得上的东西——它说得出下一步该做什么（去 rebase / 去换审官），
+          // 而「叫了 3 次没判定」说不出。2026-09-14 实咬：#1271 三轮全是
+          // 「审官位只许同厂换顺位……没交换厂凭证」，认输评论里一个字都没提，
+          // 读的人得自己去翻 journal 才知道真因。有原文就必须带上。
+          why: (() => {
+            const raw = prev?.lastError || prev?.error || null;
+            if (hopeless) {
+              return `PR #${pr.number} 叫不动审官，且这个失败重试不会变（第 ${tries} 次即交人）——${raw || '无原文'}`
+                + (repeated.stuck ? `；判据：连着 ${repeated.rounds} 轮拿回一模一样的失败原文` : '');
+            }
+            const base = `PR #${pr.number} 叫了 ${tries} 次审官，当前 head ${String(headForAction).slice(0, 8)} 判定仍是 0——停手交人`;
+            return raw ? `${base}；最后一次叫审官是被拒的：${raw}` : base;
+          })(),
         }), N['mark-exhausted']));
         exhaustedThisRound.add(Number(pr.number));
         continue;
