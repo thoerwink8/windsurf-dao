@@ -1,4 +1,8 @@
 ---
+status: done
+---
+
+---
 status: new
 ---
 
@@ -84,3 +88,5 @@ fatal: could not read Username for 'https://github.com': terminal prompts disabl
 ## 建议的最小改造
 
 删掉「巡检的 git push 环境 = `dao-patrol.service` 那份 Environment」这一层假设。闸要是还用单元文件当凭据环境的真相源，至少把 **mirasim-server 派生出来、会 `git push` 的会话**算进去：要么 spawn 时清掉 `GH_CONFIG_DIR`，要么巡检改走已经有安装 token 的那条写腿（不要个人 `hosts.yml`）。只盯 `dao-patrol.service` 正文，会继续绿，下轮第一次 `git push` 继续死。
+
+处置：#1051（同一形状「闸看的那一层 ≠ 跑的那一层」，归类单；2026-09-16 帅位盘点，判据 review_rounds_max 未接线见 #1227）
