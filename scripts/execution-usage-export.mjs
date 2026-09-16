@@ -22,9 +22,10 @@ export function main(argv = process.argv.slice(2)) {
   const readerGid = Number(execFileSync('/usr/bin/id', ['-g', 'orca'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, windowsHide: true }).trim());
   const result = exportRootMirasim({ readerGid });
   console.log(JSON.stringify(result));
-  // Partial bounded scans publish a manifest with complete=false. The orca
-  // collector imports committed rows and reports the gap in its own exit code.
-  return 0;
+  // Status-class catch-up stays visible on the manifest. Exit 2 is only a
+  // fault (unreadable / bad format / stall), so the oneshot is not a
+  // permanent --failed noise source (#1231).
+  return result.collection?.busy || result.collection?.gaps?.length ? 2 : 0;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try { process.exitCode = main(); }

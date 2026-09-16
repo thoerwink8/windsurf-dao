@@ -34,9 +34,7 @@ describe('本仓单元挂 systemctl --failed', () => {
     assert.deepEqual(Object.keys(r.plain || {}).sort(), ['impact', 'plan', 'what'], '红要带人话三行');
   });
 
-  // 这一档是本仓设计使然：dao-execution-usage 按设计用 exit 2 表示「采集不完整」，
-  // 而 charge 这类字段结构上报不全 ⇒ 它每 5 分钟必然重进 --failed。
-  // 那种常亮红灯跟 miraquota 那五天一样，最后一定没人看——所以「跑成过、最近一次非零」
+  // oneshot 用 exit 2 表示这次有故障。配对 timer 已经响过、只是最近一次非零
   // 不判红，但必须列进 flaky 说出来（不红不等于不说）。
   it('本仓 unit 跑成过、只是最近一次非零 → 不红，但列进 flaky 如实报', async () => {
     const { classifyFailedUnits } = await LOAD;

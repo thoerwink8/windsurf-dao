@@ -60,6 +60,7 @@ async function runtimeFor({ cap, home, opened, now = () => T0 }) {
     connect: async () => wireFactory(opened)(),
     now,
     leaseCheck: () => ({ ok: true, verdict: 'free' }), // 隔离：只测渠道占槽
+    claimOccupancy: () => ({ ok: true, release() {} }),
     channelAdmit: ({ model }) => admitAndReserveChannel({
       model, now: now(), home,
       io: {
@@ -152,6 +153,7 @@ describe('预占的生命周期', () => {
       connect: async () => ({ state: { ...goodState(), version: '0.0.999' }, sent: [], send() {}, async waitFor() { return null; }, close() {} }),
       now: () => T0,
       leaseCheck: () => ({ ok: true, verdict: 'free' }),
+      claimOccupancy: () => ({ ok: true, release() {} }),
       channelAdmit: ({ model }) => admitAndReserveChannel({
         model, now: T0, home,
         io: {
@@ -247,6 +249,7 @@ describe('锁本身的失效面', () => {
     const rt = createRuntime({
       homeDir: '/srv', connect: async () => { throw new Error('不该连'); }, now: () => T0,
       leaseCheck: () => ({ ok: true, verdict: 'free' }),
+      claimOccupancy: () => ({ ok: true, release() {} }),
       channelAdmit: () => ({ ok: false, unscanned: true, error: '渠道占槽锁没拿到（超时）' }),
     });
     await assert.rejects(

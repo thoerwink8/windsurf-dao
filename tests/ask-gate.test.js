@@ -537,12 +537,20 @@ describe('问人闸第二格：边界——不建账本、不加 dao-check、不
     assert.equal(entries[0].hooks.length, 1);
   });
 
-  it('随仓 settings.json 的问人闸还是原来那一条，timeout 没另开挂点', () => {
+  it('随仓 settings.json 的问人闸仍挂在那一条 PreToolUse 上（同格可以再挂别人，本闸不吃亏）', () => {
+    // 原判据是 `ask[0].hooks.length === 1`——数的是「这一格住了几口人」。
+    // 2026-09-14 实测：#897（动作触发写口）也在这一格挂了 action-writers-hook，
+    // 于是这条断言报红，而问人闸本身一个字节没动。**「这一格只有我」不是本闸的判据，
+    // 本闸的判据是「我在这一格」**——数邻居的断言，别人合法搬进来那天就会误报。
     const doc = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
     const ask = doc.hooks.PreToolUse.filter((e) => /AskUserQuestion/.test(e.matcher || ''));
-    assert.equal(ask.length, 1);
-    assert.equal(ask[0].hooks.length, 1);
-    assert.match(ask[0].hooks[0].command, /ask-gate\.mjs/);
+    assert.equal(ask.length, 1, '问人闸的挂点数量变了');
+    assert.equal(ask[0].hooks.filter((h) => /ask-gate\.mjs/.test(h.command)).length, 1, '这一格里问人闸不是恰好一条');
+    assert.equal(ask[0].hooks.find((h) => /ask-gate\.mjs/.test(h.command)).timeout, 10, '本闸的 timeout 被改过');
+    // 同格邻居必须各自独立可辨：谁的命令行里都不许出现第二个脚本名（串一起就分不清谁没响）。
+    for (const h of ask[0].hooks) {
+      assert.equal((String(h.command).match(/[\w.-]+\.mjs/g) || []).length, 1, `这一格里有命令行挂了不止一个脚本：${h.command}`);
+    }
   });
 
   it('dao-check.mjs 没有为本格新增检查项（本单边界：不加 dao-check 项）', () => {

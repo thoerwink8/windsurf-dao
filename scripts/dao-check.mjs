@@ -115,6 +115,13 @@
 //    源码扫描器已退役（停机问题，16 轮补正则不收敛）。0 个测试文件 = 没查成。
 // ㊱ 控制面闸现役挂载（#1165）：git pre-push / land.mjs 问 decideControlPlane，
 //    mirasim-ws-probe 写落点；false 拦、true 放、没查成放。落点从未出现过 → SKIP 不是绿。
+// ㊲ 判据不得经过外壳的引号层（2026-09-13 用户拍板「赞同」，随 #1240）：扫仓内追踪面，
+//    `node -e`/`python3 -c` 等内联代码里出现 `$`、`--body` 参数里出现命令替换、gh issue
+//    写动作带 `--body`，都报红——外壳会先展开一轮，**命令照常 exit 0、输出照常像模像样**，
+//    错的只是判据本身（2026-09-13 实咬：`node -e "…/@e([0-9a-f]{12})$/…"` 的 `$/` 被吞）。
+//    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
+//    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
+//    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -122,12 +129,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { parseFrontmatter, collectExitTargets, judgeListExit, ingestPlanDocs } from './lib/session-brief.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
+import { PENDING_DECISION_LABEL } from './lib/hub-pending.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { inspectOpenIssueCount, inspectOpenIssueCountFixtures } from './lib/open-issue-count-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
@@ -135,6 +144,12 @@ import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-chec
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import {
+  createChildRegistry, suiteTimeoutMs, timeoutNote, SUITE_TIMEOUT_ENV,
+  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
+  readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
+  formatOwnerToken,
+} from './lib/test-child-guard.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   judgeHarvest, inspectHarvestFixtures,
@@ -169,6 +184,9 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
+} from './lib/inline-script-check.mjs';
 import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
 import {
   inspectBranchProtectionFixtures, inspectThisRepoProtection,
@@ -202,6 +220,7 @@ import { readBranchProtection } from './lib/branch-protection-io.mjs';
 import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
+import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -265,6 +284,26 @@ function parseTapSummary(output) {
 // 池宽 6：再大收益递减且增加临时目录/端口互相踩踏的概率。输出仍按文件名序打印，与串行时代一致。
 const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
 
+// 起过的测试子进程都登记在这儿，dao-check 一走就全杀掉。
+// 2026-09-15 实咬：不登记的后果是一个 `node --test` 孤儿吃掉 5.98 GB 活了 35 小时。
+// 判据与两层分工见 scripts/lib/test-child-guard.mjs 头部。
+const testChildren = createChildRegistry({ listProcesses: listLinuxProcesses });
+const OWNER_STARTTIME = readProcStarttime(process.pid) || '';
+const OWNER_BOOT = readProcBootId() || '';
+const OWNER_TOKEN_VALUE = formatOwnerToken({ bootId: OWNER_BOOT, starttime: OWNER_STARTTIME });
+let childCleanupArmed = false;
+function armTestChildCleanup() {
+  if (childCleanupArmed) return;
+  childCleanupArmed = true;
+  // 'exit' 里只许同步调用——killAll 全同步，就是为了能挂在这里。
+  process.on('exit', () => { testChildren.killAll('SIGKILL'); });
+  // 装了 SIGINT/SIGTERM 处理器就没有默认终止了，必须自己退。
+  // 退出码沿用 shell 惯例（128+信号号），别让上游把「被打断」读成「检查通过」。
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(sig, () => { testChildren.killAll('SIGKILL'); process.exit(code); });
+  }
+}
+
 function runOneSuite(dir, f) {
   return new Promise((resolveOne) => {
     const p = join(dir, f);
@@ -277,13 +316,27 @@ function runOneSuite(dir, f) {
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      // 第二道预加载：父进程被 SIGKILL 时上面那套超时跟着一起没了，只有子进程
+      // 自己能发现「爹没了」。判据见 tests/helpers/parent-alive.mjs。
+      const orphanGuard = join(ROOT, 'tests', 'helpers', 'parent-alive.mjs');
       const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
       const env = {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+        [OWNER_PID_ENV]: String(process.pid),
+        [OWNER_TOKEN_ENV]: OWNER_TOKEN_VALUE,
+        [OWNER_STARTTIME_ENV]: OWNER_STARTTIME,
+        [OWNER_BOOT_ENV]: OWNER_BOOT,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href} --import ${pathToFileURL(orphanGuard).href}`.trim(),
       };
+      // **不要加 detached**（2026-09-15 实测否掉的第一版）：它让每套测试自成进程组，
+      // 而 acp-runtime.mjs:109 正是用 `pgid === pid` 判「这个进程是不是一个组的头」。
+      // 加了之后 acp-runtime / execution-runtime 在有负载时随机报红：master 三连绿、
+      // 带 detached 四跑两红、去掉后三连绿。组杀换来的那点覆盖面不值这个价——
+      // 超时按 ppid 树清后代，跳过 pgid===pid 的组头（ACP）。
+      armTestChildCleanup();
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
+      testChildren.add(child.pid, { label: f });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -291,7 +344,23 @@ function runOneSuite(dir, f) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const t0 = Date.now();
-    const finish = (extra) => resolveOne({ f, ...extra });
+    const { ms: budgetMs } = suiteTimeoutMs(process.env);
+    let timedOut = false;
+    let watchdog = null;
+    const finish = (extra) => {
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+      testChildren.remove(child.pid);
+      resolveOne({ f, timedOut, ...extra });
+    };
+    if (budgetMs > 0) {
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        out += timeoutNote(f, budgetMs);
+        // 杀 runner 及其非 detached 后代。dao-check 自己还活着，parent-alive
+        // 不会让孙子自杀——寿命归属在这一刀。ACP 等组头跳过。
+        try { killProcessTree(child.pid, { listProcesses: listLinuxProcesses }); } catch { /* 已经没了 */ }
+      }, budgetMs);
+    }
     child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
     child.on('close', (code) => finish({ status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
@@ -370,9 +439,15 @@ async function runTests() {
   }
   await Promise.all(Array.from({ length: Math.min(TEST_POOL, suites.length) }, worker));
   results.sort((a, b) => (a.f < b.f ? -1 : 1));
-  for (const { f, status, out } of results) {
+  for (const { f, status, out, timedOut } of results) {
     const tap = parseTapSummary(out);
-    if (status === 0) {
+    if (timedOut) {
+      // 「这次没测到」不是「测试红」：下一步不一样，一个改代码、一个查为什么挂住。
+      const { ms: budgetMs } = suiteTimeoutMs(process.env);
+      fail(`测试没查成：${f}（跑满 ${(budgetMs / 1000).toFixed(0)}s 被中止）`,
+        `这套挂住了，本次拿不到它的结论。复现：node --test tests/${f}；确需更久：${SUITE_TIMEOUT_ENV}=<毫秒>`,
+        out.slice(-400));
+    } else if (status === 0) {
       // 零样本报红：node --test 跑了但一条测试都没扫到 = 本次没查成，不是绿。
       if (tap.tests === 0 || tap.tests == null) {
         fail(`测试没查成：${f}`, 'node --test 跑了但 0 条测试（发现规则/文件形态变了）', out.slice(0, 200));
@@ -680,6 +755,63 @@ function checkRoutingProvidersToml() {
   } else {
     fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；选型只许 docs/model-routing.json；TOML 禁止 [[models]]/[[routes]]/[[bans]]/[[rules]]', problems.slice(0, 10).join(' '));
   }
+}
+
+/** provider 启动模板里的命令词，本机解析得了吗（#2026-09-13 实咬：command-code 写错一个月没人发现）。
+ *  判据实现是纯函数（scripts/lib/launch-binary.mjs），这里只负责喂输入。
+ *  PATH 从本进程取——这是**宿主局部**判据，换台机器结论就不同，所以前提文字里带 PATH。 */
+function checkLaunchBinaries() {
+  if (!existsSync(ROUTING_FILE)) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 不在，本次等于没查', ROUTING_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+  } catch (e) {
+    fail('启动模板命令词没查成', 'docs/model-routing.toml 解析失败（另有一项会单独报解析错）', String(e.message || e).slice(0, 120));
+    return;
+  }
+  const providers = Object.entries(doc.providers || {})
+    .filter(([, p]) => p && typeof p === 'object')
+    .map(([name, p]) => ({ name, cli: p.cli, launch: p.launch }));
+  // 判据锚在**部署环境**的 PATH，不是碰巧跑检查那个 shell 的（2026-09-13 实咬：
+  // sudo/裸 shell 下 PATH 不含 ~/.local/bin，reclaude/devin 判「解析不到」→ 假红；
+  // 真实服务 commander-act.service 的 PATH 显式带着它）。见 launch-binary.mjs 的 resolveProbePath。
+  const { pathValue, source } = resolveProbePath(process.env, {
+    unitDir: join(ROOT, DEPLOY_UNIT_DIR),
+    io: { readdir: readdirSync, readFile: p => readFileSync(p, 'utf8') },
+  });
+  // **这条检查只在部署宿主上跑**（2026-09-13 CI 实咬，run 34744690601）。
+  // 它问的是「这台机器上那些 agent CLI 解析得了吗」——CI runner 上答案当然是「解析不了」，
+  // 于是 24 处红、`--all-tests` 稳定退出 1。**那不是模板的 24 个错误，是问错了机器。**
+  //
+  // 判据用部署宿主的专属落点（`~/.mirasim/run` 等），不用「PATH 里目录在不在」——
+  // 后者在 CI 上会被 `/usr/bin` 这些通用目录兜住，两次都判成「是本机」（见
+  // launch-binary.mjs 的 deploymentHostPresence 注释，判例 patch-stacking-is-two-strikes）。
+  //
+  // 不是宿主 ⇒ `unscanned`（没查成），既不判红也不判绿。按项目规矩：
+  // 输出必须能区分「扫完查出 0 条」与「这次没扫到任何样本」——在这里连样本都没有。
+  const hostPresence = deploymentHostPresence({ homeDir: homedir() });
+  if (hostPresence.host !== true) {
+    skip(`启动模板命令词：这条检查是宿主局部的，本机不是部署宿主（${hostPresence.why || '判不了'}）——本次没查成，不是绿也不是红`);
+    return;
+  }
+  const verdict = classifyLaunchBinaries({ providers, pathValue, pathSource: source, homeDir: homedir() });
+  if (verdict.state === 'unknown') {
+    fail('启动模板命令词没查成', 'providers 为空或 PATH 取不到——没查成不等于都对得上', verdict.detail);
+    return;
+  }
+  if (verdict.state === 'ok') {
+    green(`启动模板命令词 ${verdict.checked} 个 provider 本机都解析得出${verdict.excused.length ? `（${verdict.excused.length} 处走显式落点）` : ''}`);
+    return;
+  }
+  fail(
+    `启动模板 ${verdict.broken.length} 处命令词本机解析不到`,
+    '改 docs/model-routing.toml 的 cli/launch 用本机真有的名字（npm 包声明的 bin 与它建的符号链接不是一回事）；'
+    + '确实不在 PATH 的（如 cursor-agent）走 launch-binary 与 ACP 相同的版本目录动态解析，不要钉死某次实测版本',
+    verdict.detail,
+  );
 }
 
 function checkRoutingPolicyJson() {
@@ -1132,7 +1264,17 @@ const OPEN_ISSUE_MAX_DEFAULT = 30;
 // 只拦数量，不拦「等了多久」：一张真的在等用户的单，用户出门两天它就超龄了，
 // 那不是违规（wall-clock 当闸必然误报，本仓已有判例）。年龄只报出来给人看。
 const PENDING_BOARD_MAX_DEFAULT = 5;
-const PENDING_TITLE_RE = /^\s*\[待拍板\]/;
+// 判据是 **label**，不是标题前缀（#1240 顺带收口）。
+//
+// 标题那个 `[待拍板] ` 前缀是历史上「机器开的单长什么样」的记号，跟 label 说的是同一件事，
+// 于是同一件事有了两个真相源。而它俩**不同步**：机器开的单两侧都有（前缀 + label），
+// 人开的单只有 label，这个前缀还容易在标题里被当成普通文字（#1210 一度开成
+// `[待拍板] [待拍板] 盘点：inbox`，两道前缀）。按 prefix 数，等于按「有没有记得手写那个
+// 前缀」数——数出来的不是「有几件事在等人拍」。
+//
+// **不许退化成「数不出来就当 0」**：label 字段没读到时（`--json` 里少一项、
+// 对象形态变了）报红，不静默放过——那是「没查成」，不是「一张都没有」。
+const PENDING_LABEL = PENDING_DECISION_LABEL; // '待拍板'，真相源在 hub-pending.mjs（别再抄字面量）
 
 // 收件箱不在 dao-check。#1171：这条检查只在 land 推默认分支时才跑，机器上没人定时唤它，
 // 不是帅位会看见的腿。现役挂载面是指挥官盘点 commander-inventory（每 6 小时）。
@@ -1273,6 +1415,109 @@ function checkInitiatives() {
   green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
+// ── 清单退场闸（2026-09-08 拍板「联动退出」：挂的单全关了，清单/计划文档就该收摊）──────
+// 读取面与退出共用 status/issues 字段，见 docs/README.md。判官纯函数在 session-brief.mjs。
+
+function listExitPlanDocs() {
+  const dir = join(ROOT, 'docs', 'decisions');
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); }
+  catch (e) { return { unscanned: true, error: String(e.message || e).slice(0, 80) }; }
+  return ingestPlanDocs(files.map((f) => {
+    const file = `docs/decisions/${f}`;
+    try { return { file, ok: true, text: readFileSync(join(dir, f), 'utf8') }; }
+    catch (e) { return { file, ok: false, error: String(e.message || e).slice(0, 80) }; }
+  }));
+}
+
+function checkListExitSamples() {
+  // 故意违规样本：挂的单全 CLOSED 却还 active/in-progress → 必须被咬住，否则闸没生效。
+  const doc = { initiatives: [{ id: 'x', status: 'active', issues: [11, 12], next_action: 'n' }] };
+  const plans = [{ file: 'docs/decisions/p.md', fm: parseFrontmatter('---\nstatus: in-progress\nissues: [13]\n---\n正文') }];
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans });
+  if (targets.length !== 2) { fail('清单退场闸夹具：挂钩对象收集不对', '该收 2 个（西瓜 x + 计划 p.md）', `收到 ${targets.length}`); return; }
+  const red = judgeListExit({ targets, states: { 11: 'CLOSED', 12: 'CLOSED', 13: 'CLOSED' } });
+  if (red.ok || red.stale.length !== 2) { fail('清单退场闸夹具：全关单的赖着不走没被咬住', '判官对故意违规样本必须红', JSON.stringify(red).slice(0, 120)); return; }
+  const green_ = judgeListExit({ targets, states: { 11: 'OPEN', 12: 'CLOSED', 13: 'OPEN' } });
+  if (!green_.ok) { fail('清单退场闸夹具：还有单开着却被误咬', '有 OPEN 单就不该判退场', JSON.stringify(green_).slice(0, 120)); return; }
+  const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
+  if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
+  const swallowed = ingestPlanDocs([
+    { file: 'docs/decisions/q.md', ok: true, text: '# 普通文档\n' },
+    { file: 'docs/decisions/r.md', ok: false, error: 'EACCES' },
+  ]);
+  if (!swallowed.unscanned) {
+    fail('清单退场闸夹具：单文件读失败没标没查成', '读失败必须 unscanned，不许当没这份文件（否则零目标会绿）', JSON.stringify(swallowed).slice(0, 160));
+    return;
+  }
+  const swallowedTargets = collectExitTargets({ initiativesDoc: { initiatives: [] }, planDocs: swallowed.entries });
+  if (swallowedTargets.length !== 0) {
+    fail('清单退场闸夹具：读失败文件不该变成挂钩对象', 'entries 只收读成的；没读成的走 unscanned', `收到 ${swallowedTargets.length}`);
+    return;
+  }
+  // 2026-09-16 实咬：scale-dozens 的 issues 只挂已关前置单，统领写在 done_when。
+  const leaked = collectExitTargets({
+    initiativesDoc: { initiatives: [{
+      id: 'scale-dozens',
+      status: 'active',
+      done_when: '统领 #1174 的 T1–T11 均有测试/部署/真实任务证据且已收口',
+      issues: [1145, 1146, 1147, 1151, 1152],
+    }] },
+    planDocs: [],
+  });
+  if (!leaked[0] || !leaked[0].issues.includes(1174)) {
+    fail('清单退场闸夹具：done_when 统领单漏挂没并进挂钩', 'done_when 里的 #单号必须进 issues 集合', JSON.stringify(leaked).slice(0, 160));
+    return;
+  }
+  const leakedVerdict = judgeListExit({
+    targets: leaked,
+    states: { 1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED', 1151: 'CLOSED', 1152: 'CLOSED', 1174: 'OPEN' },
+  });
+  if (!leakedVerdict.ok || leakedVerdict.stale.length) {
+    fail('清单退场闸夹具：OPEN 统领单漏挂后误报 stale', 'done_when 指向的 OPEN 单不得因漏挂 issues 被判该收摊', JSON.stringify(leakedVerdict).slice(0, 160));
+    return;
+  }
+  const badCfg = collectExitTargets({
+    initiativesDoc: { initiatives: [{ id: 'bad', status: 'active', issues: ['not-an-issue'] }] },
+    planDocs: [],
+  });
+  if (!badCfg.length) {
+    fail('清单退场闸夹具：坏挂钩被滤成零目标', '非法 issues 必须进闸，不许消失后走 0 个对象绿', JSON.stringify(badCfg).slice(0, 160));
+    return;
+  }
+  const badVerdict = judgeListExit({ targets: badCfg, states: {} });
+  if (badVerdict.ok || !badVerdict.unscanned) {
+    fail('清单退场闸夹具：坏挂钩没判没查成', '非法 issues 必须 unscanned，不许零目标绿', JSON.stringify(badVerdict).slice(0, 160));
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale、坏挂钩不静默绿');
+}
+
+function checkListExitLive() {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(ROOT, 'docs', 'initiatives.json'), 'utf8')); }
+  catch (e) { skip(`清单退场闸：initiatives.json 读不了（${String(e.message || e).slice(0, 60)}）——本次没查成`); return; }
+  const plans = listExitPlanDocs();
+  if (plans.unscanned) { skip(`清单退场闸：${plans.error}——本次没查成，不是绿`); return; }
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans.entries });
+  if (!targets.length) { green('清单退场闸：0 个挂钩对象（active 清单/计划都没挂 issues，不是没查成）'); return; }
+  const nums = [...new Set(targets.flatMap((t) => t.issues))];
+  const states = {};
+  for (const n of nums) {
+    const r = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
+    if (r.status === 0) states[n] = String(r.stdout || '').trim();
+  }
+  const verdict = judgeListExit({ targets, states });
+  if (verdict.unscanned) { skip(`清单退场闸：${verdict.error}——本次没查成，不是绿`); return; }
+  if (!verdict.ok) {
+    fail(`清单该收摊没收摊：${verdict.stale.length} 个对象挂的单全关了还标着在推`,
+      '人工核一眼 done_when，一行 commit 把 status 翻成 done（西瓜条目/计划文档 frontmatter）——联动退出见 docs/README.md',
+      verdict.stale.map((t) => `${t.kind}:${t.name}`).join('、'));
+    return;
+  }
+  green(`清单退场闸：${targets.length} 个挂钩对象都还有在途单，没有赖着的`);
+}
+
 // ── orca 产品面残留（linux 用户名 /home/orca 不是产品，不进这条）────────────────
 // 认这些才算还没退役：真 spawn orca CLI、createOrcaBinding、orca-serve 单元、
 // dao.mjs 标了「整段删」的那条脊。判例档案（docs/decisions、docs/observations）不扫。
@@ -1294,6 +1539,8 @@ function checkEphemeralLifecycle() {
     core: read('scripts/lib/commander-core.mjs'),
     admit: read('scripts/lib/admission.mjs'),
     reap: read('scripts/lib/ephemeral-reap.mjs'),
+    lease: read('scripts/lib/dispatch/lease.mjs'),
+    sessions: read('scripts/execution-sessions.mjs'),
   };
   problems.push(...inspectEphemeralLifecycleSources({
     files,
@@ -1528,22 +1775,22 @@ function checkPendingBoardBacklog(board) {
     skip(`待拍板堆积：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  if (issues.array.some((i) => !i || typeof i.title !== 'string')) {
-    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title 的对象数组）');
+  if (issues.array.some((i) => !i || typeof i.title !== 'string' || !Array.isArray(i.labels))) {
+    fail('待拍板堆积没查成', 'gh issue list 输出形态不对（要带 title + labels 的对象数组）——别当成「一张都没有」');
     return;
   }
-  const pending = issues.array.filter((i) => PENDING_TITLE_RE.test(i.title));
+  const pending = issues.array.filter((i) => i.labels.some((l) => (typeof l === 'string' ? l : l?.name) === PENDING_LABEL));
   const n = pending.length;
   if (n > max) {
     const 样 = pending.slice(0, 3).map((i) => `#${i.number}`).join(' ');
     fail(
-      `机器开的「待拍板」单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
+      `标着「待拍板」的开放单堆了 ${n} 张，超阈值 ${max}（${样}…）`,
       '先判每张是不是假警报：假警报要去修产生它的那条判据，不是关掉了事；真要人拍的才留着',
-      'gh issue list --state open --limit 500 --json number,title | grep 待拍板',
+      `gh issue list --state open --limit 500 --json number,title,labels | grep ${PENDING_LABEL}`,
     );
     return;
   }
-  green(`机器开的「待拍板」单 ${n}/${max} 张`);
+  green(`标着「待拍板」的开放单 ${n}/${max} 张`);
 }
 
 // ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
@@ -1859,6 +2106,7 @@ checkSkillLinksAlive();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkRoutingProvidersToml();
+checkLaunchBinaries();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
 checkModeHookAlive();
@@ -1906,6 +2154,8 @@ checkRepoOwnership();
 checkGitOwnershipSamples();
 checkGitOwnershipLive();
 checkInitiatives();
+checkListExitSamples();
+if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
 checkOrcaRetirement();
 checkRetiredVerbAdvertSamples();
@@ -1931,6 +2181,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkInlineScriptSamples();
+checkInlineScriptLive();
 checkFailedUnitsLive();
 checkMarshalSelfMergeSamples();
 if (FULL) checkMarshalSelfMergeLive(); else netParked('帅位 reviews=0 自合并 live', '要打 gh pr list');
@@ -2017,6 +2269,66 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkInlineScriptSamples() {
+  const r = inspectInlineScriptsFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '内联脚本闸样本没查成' : '内联脚本闸样本对不上',
+      '恢复 tests/fixtures/inline-script/{red,ok,empty}：红=内联代码含 $ 与 --body 含命令替换必须拦、绿=单引号无 $ 与 --body-file 必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkInlineScriptLive() {
+  const files = listScanFiles({
+    root: ROOT,
+    spawnSync,
+    readdir: (dir) => readdirSync(dir),
+    stat: (p) => statSync(p),
+  });
+  if (!files) {
+    fail(
+      '内联脚本闸 live 没查成',
+      '要能列出仓内追踪面（git ls-files 或遍历）；列不出 = 没查成，不是 0 个违规',
+      ROOT,
+    );
+    return;
+  }
+  const loaded = [];
+  for (const rel of files) {
+    // 样本目录（`tests/fixtures/**`）里放的就是**故意违规**的样本，是判别力的来源，
+    // 不是动手路径——live 扫它们等于闸给自己报红。
+    if (isSamplePath(rel)) continue;
+    try {
+      const text = readFileSync(join(ROOT, rel), 'utf8');
+      if (text.includes('\0')) continue;
+      loaded.push({ path: rel, text });
+    } catch { /* 读不出的不算样本，下一轮还在就会再碰 */ }
+  }
+  const r = inspectInlineScripts({ files: loaded });
+  if (r.unscanned) {
+    fail('内联脚本闸 live 没查成', '扫到的正文 0 份 = 没查成，不是 0 个违规', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    const first = r.violations[0];
+    fail(
+      `判据经过了外壳的引号层 ${r.violations.length} 处`,
+      `${first.fix}（例：${first.kind}）`,
+      r.violations.slice(0, 6).map((v) => `${v.file}:${v.line} ${v.why}`).join('；'),
+    );
+    return;
+  }
+  green(`内联脚本闸：扫了 ${r.scanned} 份文本，0 处判据经过外壳引号层`);
 }
 
 function checkFailedUnitsLive() {
@@ -2613,8 +2925,10 @@ function checkLegCaps() {
     return;
   }
   let validateLegCaps;
+  let reconcileDecidedCaps;
+  let DECIDED_CHANNEL_CAPS_REL;
   try {
-    ({ validateLegCaps } = require('./lib/channel-concurrency.mjs'));
+    ({ validateLegCaps, reconcileDecidedCaps, DECIDED_CHANNEL_CAPS_REL } = require('./lib/channel-concurrency.mjs'));
   } catch (e) {
     fail('并发上限校验器加载失败', '修 scripts/lib/channel-concurrency.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
     return;
@@ -2635,6 +2949,41 @@ function checkLegCaps() {
       `并发上限有 ${v.bad.length} 条脏值`,
       '并发上限只许正整数 / "不限" / null（待填）；0、负数、杂串都不是合法上限',
       v.bad.map((b) => `${b.id}=${JSON.stringify(b.value)}`).slice(0, 6).join(' '),
+    );
+    return;
+  }
+  if (v.noReason && v.noReason.length) {
+    fail(
+      `并发上限有 ${v.noReason.length} 条没写出处`,
+      '每个数与每个空格都要带出处：填了数写「并发上限依据」（哪天谁拍的 / 实测在哪），'
+      + '留空写「并发上限待填理由」（为什么还没测、谁在测）。'
+      + '2026-09-08 拍了 windsurf=6，表里这一格 null 躺了 6 天没人发现——档案与机器读的表是两条真相源，中间缺这道闸',
+      v.noReason.map((n) => `${n.id} 缺「${n.field}」`).slice(0, 6).join('；'),
+    );
+    return;
+  }
+  const decidedPath = join(ROOT, DECIDED_CHANNEL_CAPS_REL);
+  let decidedDoc;
+  try {
+    decidedDoc = JSON.parse(readFileSync(decidedPath, 'utf8'));
+  } catch (e) {
+    fail(
+      '拍板容量表没查成',
+      `恢复 ${DECIDED_CHANNEL_CAPS_REL}（09-08 拍板的机器可读落点；对账闸读它，不解析 markdown 表）`,
+      String(e.message || e).split(/\r?\n/)[0].slice(0, 160),
+    );
+    return;
+  }
+  const rec = reconcileDecidedCaps(doc && doc.腿, decidedDoc);
+  if (!rec.ok) {
+    fail('拍板容量对账没查成', rec.error || `补 ${DECIDED_CHANNEL_CAPS_REL} 的 channels`, decidedPath);
+    return;
+  }
+  if (rec.stale.length) {
+    fail(
+      `拍板有数、腿节仍待填 ${rec.stale.length} 条`,
+      `${DECIDED_CHANNEL_CAPS_REL} 里已有数的渠道，路由表对应在役腿不许再 null。写待填理由不能代替填数。`,
+      rec.stale.map((s) => `${s.id} ${s.channel} 拍板=${JSON.stringify(s.decided)} 表=${JSON.stringify(s.actual)}`).slice(0, 6).join('；'),
     );
     return;
   }

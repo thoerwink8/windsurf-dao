@@ -49,9 +49,14 @@ async function setup(t, scenario = 'complete', overrides = {}) {
     handshakeTimeoutMs: 5000, killGraceMs: 60, controlTimeoutMs: 6000,
     acpProfiles: Object.fromEntries(['cursor', 'devin', 'grok'].map(agent => [agent, { command: process.execPath, args: [fixture, scenario] }])), ...overrides };
   const runtime = createAcpRuntime(options);
+  // hold 等刻意永不结束的 fixture 必须走原生 stopSession（#1267 T8 / acpCleanupTree）。
+  // 不要在测试里另写一套杀进程组：child-guard 跳过 pgid===pid 的 ACP 组头是生产约束。
   t.after(async () => {
-    const list = await runtime.listSessions();
-    for (const session of list.sessions || []) await runtime.stopSession(session.key);
+    let list = { sessions: [] };
+    try { list = await runtime.listSessions(); } catch { list = { sessions: [] }; }
+    for (const session of list.sessions || []) {
+      try { await runtime.stopSession(session.key); } catch { /* 停失败也继续拆目录 */ }
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   });
   const start = extra => runtime.startSession({ agent: 'cursor', workdir, prompt: 'Fixture task', ...extra });
@@ -280,10 +285,19 @@ test('ACP durable runtime (isolated fake executables only)', { skip: process.pla
   });
 
   await t.test('independent dao processes cannot both acquire the same workdir', async t => {
-    const { options, workdir } = await setup(t, 'hold');
+    const { runtime, options, workdir } = await setup(t, 'hold');
     const code = `import {createAcpRuntime} from ${JSON.stringify(pathToFileURL(path.join(root, 'scripts/lib/acp-runtime.mjs')).href)};try {const rt=createAcpRuntime(${JSON.stringify(options)});console.log(JSON.stringify({ok:true,...await rt.startSession(${JSON.stringify({ agent: 'cursor', workdir, prompt: 'race' })})}));}catch(error){console.log(JSON.stringify({ok:false,code:error.code}));}`;
+    const callers = [];
+    t.after(() => {
+      for (const child of callers) {
+        if (child.exitCode == null && child.signalCode == null) {
+          try { child.kill('SIGKILL'); } catch { /* 已经没了 */ }
+        }
+      }
+    });
     const launch = () => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'] });
+      callers.push(child);
       let output = '';
       child.stdout.on('data', chunk => { output += chunk; });
       child.on('error', reject);
@@ -292,6 +306,8 @@ test('ACP durable runtime (isolated fake executables only)', { skip: process.pla
     const results = await Promise.all([launch(), launch(), launch()]);
     assert.equal(results.filter(result => result.ok).length, 1);
     assert.equal(results.filter(result => result.code === 'workdir_locked').length, 2);
+    const won = results.find(result => result.ok);
+    if (won?.sessionKey) assert.equal((await runtime.stopSession(won.sessionKey)).verified, true);
   });
 
   await t.test('allow permission policy requires an exact scope, while scoped read resumes', async t => {

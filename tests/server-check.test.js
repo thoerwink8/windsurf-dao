@@ -31,6 +31,9 @@ import {
   classifyExecutableEntry,
   whichOnPath,
   scanRetiredClis,
+  checkUsageInstallCopy,
+  walkUsageInstallFiles,
+  judgeUsageInstallCopy,
   DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
 import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
@@ -100,8 +103,9 @@ test('server-check 判别力', async (t) => {
 
     await t.test('provider → agent id 自持映射（不 import launch.mjs）', () => {
       assert.equal(providerToAgentId('gw'), 'pi');
-      assert.equal(providerToAgentId('deepseek'), 'pi');
       assert.equal(providerToAgentId('opencode-go'), 'pi');
+      // deepseek 直连渠道 2026-09-15 已删（用户拍板）：认不出来才对。
+      assert.equal(providerToAgentId('deepseek'), null);
       assert.equal(providerToAgentId('devin'), 'devin');
       assert.equal(providerToAgentId('grok'), 'grok');
       assert.equal(providerToAgentId('gpt'), 'codex');
@@ -254,9 +258,32 @@ test('server-check 判别力', async (t) => {
       assert.doesNotMatch(entry, /install/);
       assert.doesNotMatch(entry, /在册且 enabled/);
     });
+    await t.test('CHECKS (24) 用量特权副本走 checkUsageInstallCopy', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const i = src.indexOf("['(24) 用量特权副本");
+      assert.ok(i > -1, '找不到 (24) CHECKS 条目');
+      const entry = src.slice(i, i + 200);
+      assert.match(entry, /checkUsageInstallCopy/);
+    });
+    await t.test('(24) 不 import 用量库的解析器/分类器', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const imports = [...src.matchAll(/^import\s+[\s\S]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+      assert.equal(imports.includes('./lib/execution-usage.mjs'), false);
+    });
+    await t.test('CHECKS (24) 取数不用 existsSync（EACCES 不能洗成没有）', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const start = src.indexOf('const MISSING_INSTALL_CODES');
+      const end = src.indexOf('function checkRootOwnedInHome');
+      assert.notEqual(start, -1, '找不到 MISSING_INSTALL_CODES');
+      assert.equal(end > start, true, '找不到 checkRootOwnedInHome 边界');
+      const fn = src.slice(start, end);
+      assert.doesNotMatch(fn, /existsSync\(/);
+      assert.match(fn, /ENOENT/);
+      assert.match(fn, /ENOTDIR/);
+    });
   });
 
-  await t.test('classifyMirasimHealth（㉔ 违规 relay/健康样本经新入口拦）', async (t) => {
+  await t.test('classifyMirasimHealth（(25) 违规 relay/健康样本经新入口拦）', async (t) => {
     await t.test('available:false 的健康 JSON → red', () => {
       const r = classifyMirasimHealth({
         probed: true,
@@ -312,10 +339,10 @@ test('server-check 判别力', async (t) => {
       assert.equal(r.state, 'unknown');
     });
 
-    await t.test('CHECKS (24) 走 --health --json + classifyMirasimHealth', () => {
+    await t.test('CHECKS (25) 走 --health --json + classifyMirasimHealth', () => {
       const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
-      const i = src.indexOf("['(24) mirasim 执行体健康");
-      assert.ok(i > -1, '找不到 (24) CHECKS 条目');
+      const i = src.indexOf("['(25) mirasim 执行体健康");
+      assert.ok(i > -1, '找不到 (25) CHECKS 条目');
       const entry = src.slice(i, i + 500);
       assert.match(entry, /classifyMirasimHealth/);
       assert.match(entry, /'--health',\s*'--json'/);
@@ -642,18 +669,39 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
       assert.deepEqual(r.map((x) => x.cli), ['devin'], '天天在用的 pi 不许被报成退役');
     });
 
-    await t.test('真文件推出来的清单：含 devin/cursor-agent/grok，不含 pi/codex', () => {
+    // 2026-09-12 网关退役后先前的期望值本身错了：cursor-agent / grok / codex 都被新 provider
+    // （cursor-native / xai-native / mirasim-relay）在役使用，不该进退役清单；
+    // 而 pi 被孤立了——用它的 provider（opencode-go / gw；deepseek 那条 2026-09-15 直接删了）
+    // 都不在役，它自己的执行目录条目（opencode-zen-*/commandcode-deepseek/windsurf-deepseek…）也全是 enabled:false。
+    // 断言只钉「在役的必须不在清单里」，不钉清单长度：每退一个 CLI 都改一次长度是假红的来源。
+    await t.test('真文件推出来的清单：含 devin/pi，不含在役的 cursor-agent/grok/codex', () => {
       const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));
       const svc = inServiceProviders(JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')));
       assert.equal(cat.unscanned, false);
       assert.equal(svc.unscanned, false);
       const names = retiredClis({ clis: cat.clis, inService: svc.providers }).map((x) => x.cli);
-      for (const want of ['devin', 'cursor-agent', 'grok']) {
-        assert.ok(names.includes(want), `#822 退役的 ${want} 该在清单里，实际 ${JSON.stringify(names)}`);
-      }
-      for (const live of ['pi', 'codex']) {
-        assert.ok(!names.includes(live), `在役的 ${live} 不该进退役清单，实际 ${JSON.stringify(names)}`);
-      }
+      assert.deepEqual(names.filter((n) => ['devin', 'pi'].includes(n)).sort(), ['devin', 'pi'],
+        '无路可走的 CLI 该进清单  →  ' + JSON.stringify(names));
+      assert.deepEqual(names.filter((n) => ['cursor-agent', 'grok', 'codex'].includes(n)), [],
+        '在役的 CLI 不该进退役清单  →  ' + JSON.stringify(names));
+      assert.equal(retiredClis({ clis: cat.clis, inService: svc.providers }).every((x) => x.providers.length > 0), true,
+        '每条都要说清是替哪些 provider 服务的（否则没法判它是真退役还是解析漏了）');
+    });
+    await t.test('方向一：清单里的每个 CLI，替它服务的 provider 一个都不在役', () => {
+      const cat = parseProviderClis(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.toml'), 'utf8'));
+      const svc = inServiceProviders(JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'model-routing.json'), 'utf8')));
+      const live = new Set(svc.providers.map(String));
+      const leak = retiredClis({ clis: cat.clis, inService: svc.providers })
+        .filter((x) => x.providers.some((p) => live.has(String(p))))
+        .map((x) => x.cli);
+      assert.deepEqual(leak, [], '漏报在役 CLI 比多报一个更糟（会把人引去删还在用的二进制）');
+    });
+    await t.test('方向二：反着推一遍——给一个纯在役目录，清单必须空', () => {
+      const r = retiredClis({
+        clis: [{ provider: 'xai-native', cli: 'grok' }, { provider: 'mirasim-relay', cli: 'codex' }],
+        inService: ['xai-native', 'mirasim-relay'],
+      });
+      assert.deepEqual(r, [], '判据不是恒红');
     });
   });
 
@@ -703,6 +751,179 @@ test('⑲ 退役 CLI 还在 PATH（#960，#868 的四条坑逐条钉死）', asy
       });
       assert.equal(r.state, 'red');
     });
+  });
+});
+
+test('(24) 用量特权副本三态：确认缺失 red，权限读失败 unknown', async (t) => {
+  const boom = (code) => () => { const e = new Error(code); e.code = code; throw e; };
+
+  await t.test('目录 ENOENT → red（仓里有、机器上没有，不是没查成）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('ENOENT') });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /没装/);
+    assert.match(r.detail, /install-execution-usage/);
+    assert.doesNotMatch(r.detail, /没查成/);
+  });
+
+  await t.test('目录 ENOTDIR → red（确认不是目录，等同缺失）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('ENOTDIR') });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /没装/);
+  });
+
+  await t.test('目录 EACCES → unknown（看不见，不当成没有）', () => {
+    const r = checkUsageInstallCopy({ stat: boom('EACCES') });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /读不了|没查成/);
+  });
+
+  await t.test('目录 EPERM → unknown', () => {
+    const r = checkUsageInstallCopy({ stat: boom('EPERM') });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /没查成/);
+  });
+
+  await t.test('目录在、文件 ENOENT → red', () => {
+    const r = checkUsageInstallCopy({
+      stat: () => ({ isDirectory: () => true }),
+      readInstalled: boom('ENOENT'),
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /缺 /);
+  });
+
+  await t.test('目录在、文件 EACCES → unknown', () => {
+    const r = checkUsageInstallCopy({
+      stat: () => ({ isDirectory: () => true }),
+      readInstalled: boom('EACCES'),
+    });
+    assert.equal(r.state, 'unknown');
+    assert.match(r.detail, /读不了|没查成/);
+  });
+
+  await t.test('分类器：缺 + 读不了 → red，正文附带读不了', () => {
+    const r = judgeUsageInstallCopy({
+      expected: [
+        { path: 'lib/missing.mjs', content: 'a' },
+        { path: 'lib/blocked.mjs', content: 'b' },
+      ],
+      installed: { 'lib/blocked.mjs': { unreadable: true } },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /missing/);
+    assert.match(r.detail, /blocked/);
+    assert.match(r.detail, /读不了/);
+  });
+
+  await t.test('入口可读、一份 ENOENT、一份 EACCES → red（确定缺失优先）', () => {
+    const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+    const files = {
+      'execution-usage-export.mjs': spec('./lib/missing.mjs') + spec('./lib/blocked.mjs'),
+      'lib/missing.mjs': 'export default 1;\n',
+      'lib/blocked.mjs': 'export default 2;\n',
+    };
+    const scriptsDir = '/scripts';
+    const installRoot = '/install';
+    const relOf = (abs, base) => String(abs).replace(/\\/g, '/').slice(String(base).length).replace(/^\//, '');
+    const r = checkUsageInstallCopy({
+      root: installRoot,
+      scriptsDir,
+      stat: () => ({ isDirectory: () => true }),
+      readRepo: (abs) => {
+        const rel = relOf(abs, scriptsDir);
+        if (!Object.hasOwn(files, rel)) {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        return files[rel];
+      },
+      readInstalled: (abs) => {
+        const rel = relOf(abs, installRoot);
+        if (rel === 'lib/missing.mjs') {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        if (rel === 'lib/blocked.mjs') {
+          const e = new Error('EACCES');
+          e.code = 'EACCES';
+          throw e;
+        }
+        return files[rel];
+      },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /missing/);
+    assert.match(r.detail, /blocked/);
+    assert.match(r.detail, /读不了/);
+  });
+});
+
+test('(24) 独立闭包闸：生产解析器漏文件时仍红', async (t) => {
+  const { usageExportInstallFiles, classifyUsageInstallCopy } = await import('../scripts/lib/execution-usage.mjs');
+  const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+  const dyn = (p) => `void im${'port'}('${p}');\n`;
+  const files = {
+    'execution-usage-export.mjs': spec('./lib/execution-usage.mjs') + dyn('./lib/hidden-dep.mjs'),
+    'lib/execution-usage.mjs': 'export const x = 1;\n',
+    'lib/hidden-dep.mjs': 'export const y = 2;\n',
+  };
+  const scriptsDir = '/scripts';
+  const installRoot = '/install';
+  const relOf = (abs, base) => String(abs).replace(/\\/g, '/').slice(String(base).length).replace(/^\//, '');
+  const readAt = (base) => (abs) => {
+    const rel = relOf(abs, base);
+    if (!Object.hasOwn(files, rel)) {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    }
+    return files[rel];
+  };
+
+  await t.test('独立名单是生产名单的超集（真仓库闭包）', () => {
+    const prod = usageExportInstallFiles();
+    const indep = walkUsageInstallFiles();
+    for (const f of prod) assert.equal(indep.includes(f), true, `独立闸漏了 ${f}`);
+  });
+
+  await t.test('动态 import 被生产名单漏掉、独立闸抓住，副本缺它则红', () => {
+    const prod = usageExportInstallFiles({ scriptsDir, readFile: readAt(scriptsDir) });
+    const indep = walkUsageInstallFiles({ scriptsDir, readFile: readAt(scriptsDir) });
+    assert.equal(prod.includes('lib/hidden-dep.mjs'), false);
+    assert.equal(indep.includes('lib/hidden-dep.mjs'), true);
+
+    const installed = Object.fromEntries(prod.map((p) => [p, files[p]]));
+    const prodJudge = classifyUsageInstallCopy({
+      expected: prod.map((path) => ({ path, content: files[path] })),
+      installed,
+    });
+    const indepJudge = judgeUsageInstallCopy({
+      expected: indep.map((path) => ({ path, content: files[path] })),
+      installed,
+    });
+    assert.equal(prodJudge.state, 'ok');
+    assert.equal(indepJudge.state, 'red');
+    assert.match(indepJudge.detail, /hidden-dep/);
+
+    const r = checkUsageInstallCopy({
+      root: installRoot,
+      scriptsDir,
+      stat: () => ({ isDirectory: () => true }),
+      readRepo: readAt(scriptsDir),
+      readInstalled: (abs) => {
+        const rel = relOf(abs, installRoot);
+        if (!prod.includes(rel)) {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        return files[rel];
+      },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /hidden-dep/);
   });
 });
 

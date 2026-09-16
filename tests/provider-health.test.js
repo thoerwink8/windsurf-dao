@@ -78,6 +78,41 @@ describe('availabilityFor 熔断表（#843）', () => {
   });
 });
 
+describe('现役 mirasim-relay 接通健康/熔断 target', () => {
+  const RELAY = [{ id: 'gpt-5.6-sol', provider: 'mirasim-relay' }];
+  const TARGET = 'direct:codex@pqapi/responses';
+  it('health red → 后置；breaker open → 直接拦；恢复 → 空闲', async () => {
+    const { availabilityFor } = await import(LIB);
+    const healthOf = (state) => ({
+      ok: true, present: true, unknown: false, path: '/x',
+      table: { [TARGET]: { state } },
+    });
+    const red = availabilityFor(RELAY, {
+      health: healthOf('red'), breaker: { present: false, targets: {} }, now: NOW,
+    });
+    assert.equal(red.availability['gpt-5.6-sol'], 'red');
+    assert.equal(red.deprioritize.has('gpt-5.6-sol'), true);
+    assert.equal(red.hardBlocked['gpt-5.6-sol'], undefined);
+
+    const open = availabilityFor(RELAY, {
+      health: healthOf('green'),
+      breaker: { present: true, targets: { [TARGET]: { state: 'open', cooldownUntil: '2026-09-03T12:30:00Z' } } },
+      now: NOW,
+    });
+    assert.match(open.availability['gpt-5.6-sol'], /^cooldown\(until /);
+    assert.ok(open.hardBlocked['gpt-5.6-sol']);
+
+    const recovered = availabilityFor(RELAY, {
+      health: healthOf('green'),
+      breaker: { present: true, targets: { [TARGET]: { state: 'closed' } } },
+      now: NOW,
+    });
+    assert.equal(recovered.availability['gpt-5.6-sol'], '空闲');
+    assert.equal(recovered.deprioritize.has('gpt-5.6-sol'), false);
+    assert.equal(Object.keys(recovered.hardBlocked).length, 0);
+  });
+});
+
 describe('loadHealthTable 过期判定', () => {
   it('age > 2×interval → unknown', async () => {
     const { loadHealthTable } = await import(LIB);

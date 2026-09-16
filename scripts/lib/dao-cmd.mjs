@@ -870,7 +870,8 @@ import {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, unsignedIssueMergePolicy,
+  UNSIGNED_ISSUE_MERGE_REASON, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
@@ -882,7 +883,8 @@ export {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, unsignedIssueMergePolicy,
+  UNSIGNED_ISSUE_MERGE_REASON, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
@@ -952,8 +954,9 @@ export {
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
-  planReviewPendingDrain, consumeReviewPending, drainReviewPending,
-  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
+  planReviewPendingDrain, mergePolicyDrainArgv, consumeReviewPending, drainReviewPending, attachReceiptFromSpawn,
+  countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
+  REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -972,7 +975,7 @@ export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'session-read', 'session-stop', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next', 'now', 'board',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'pr-open', 'ledger-query', 'amend', 'next', 'now', 'board',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'breaker', 'leg', 'raw',
 ];
 
@@ -980,7 +983,7 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
-  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--pr', '--issue', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
   'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
@@ -1047,6 +1050,12 @@ export const FLAGS_BY_VERB = {
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
   'pr-sync-labels': new Set(['--pr', '--repo', '--json', '--help', '-h']),
+  // #1214 缺口 A：帅位自开 PR 的写侧。--model 必填（不许从提交前缀猜家族）；
+  // --head 必填（分支名是打标匹配键）；正文走 --body-file（正文里的换行/引号不进命令行）。
+  'pr-open': new Set([
+    '--title', '--body', '--body-file', '--head', '--branch', '--base', '--model', '--reviewer',
+    '--work-type', '--merge-policy', '--merge-reason', '--issue', '--repo', '--json', '--help', '-h',
+  ]),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
   next: new Set(['--help', '-h']),
@@ -1119,8 +1128,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
                   # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
-  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--dry-run]
+  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--pr <N>] [--issue <N>] [--title <名>] [--dry-run]
                   # #1055：mirasim 一步到位起一次性会话（prompt 就是注入，不要 start+send 两步）；返回 sessionKey
+                  # --pr/--issue/--title 写入会话元数据，判活才能对上快路无署名 PR（工作树是 <仓>/<分支>）
   session-read --session <sessionKey>
                   # #1055：同步读 mirasim 会话（phase / text）；commander reapBrains 的取数路
   session-stop --session <sessionKey>
@@ -1134,7 +1144,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
-                  # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
+                  # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账；无署名 issue（快路）走 manual，不许退回 auto；其余读不到才回退 auto 并 fb= 写原因
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项；补发走 GitHub 评论，不要调 notify）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
@@ -1154,6 +1164,15 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N> [--repo owner/name]
                   # 合并前：仓+PR head 分支→账本 dispatch→打 model/* type/* reviewer/* 到 PR（#1116）
                   # 缺仓/分支/model/reviewer 或 identity 不是工人 → 失败并说需人工打标，不许报成功留下半套标
+  pr-open --title <题> (--body <文>|--body-file <文件>) --head <分支> --model <registry id>
+          --reviewer <registry id> [--base master] [--work-type 写码] [--merge-policy auto|manual]
+          [--issue <号>] [--repo owner/name]
+                  # #1214 缺口 A：帅位自开 PR 的正式入口——开 draft + 落账（job.opened + job.dispatch）+ 打标
+                  # 自开 PR 是合法动作，但此前没有落账动作 ⇒ 打标路永远查不到这条链 ⇒ 一律卡在「需人工打标」
+                  # --model 与 --reviewer 都必填且必须都在 registry 里（不许从提交前缀猜家族，也不落幽灵账）
+                  # 两个缺一不可：打标路要求这条 job.dispatch 里两者同时在；只给一个就白落一条账
+                  # reviewer 还必须与 model 换厂商（同厂当场拒，这是落账后唯一能拦的点）
+                  # 打标失败只记账不当门：PR 已开、账已落，回执里说清哪个标没打上
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）
@@ -1236,7 +1255,7 @@ merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 ma
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
-续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
+续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；无署名 issue（快路）取不到 human_holds，走 manual，不许退回 auto；其余读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——

@@ -29,10 +29,13 @@
 // 闸装在 mirasim-runtime 的 startSession 里，不装在各调用点：四个调用点
 // （dao dispatch / dao start / 审官 create / 推一把）全从那一道门过，装在门里绕不开。
 
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { scanProcCwds, linkErrorKind } from '../proc-cwds.mjs';
+import { acquireWorktreeLock } from '../dispatch-lock.mjs';
+import { classifySessionState } from '../execution-states.mjs';
 
 /** 认 mirasim 服务进程用的字样。取自它自己的 argv：`…/mirasim-server/<版本>/server.cjs`。 */
 export const MIRASIM_SERVER_MARK = 'mirasim-server';
@@ -40,6 +43,40 @@ export const MIRASIM_SERVER_MARK = 'mirasim-server';
 /** 派工树根 `~/mirasim-worktrees`（登记在 host/machine/INDEX.md D 类）。布局 `<根>/<仓>/<分支>`。 */
 export function worktreesRoot(home = homedir()) {
   return process.env.MIRASIM_WORKTREES || join(home, 'mirasim-worktrees');
+}
+
+function normCwd(v) {
+  return String(v || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * 把任意 cwd 归一成「这棵工作树的根」。布局是 `<根>/<仓>/<分支>`，再往下都是树上的子目录。
+ * 审官红① / #1291：busyTrees 把子目录 cwd 当成另一棵树，judgeTreeLease 又只认精确相等——
+ * 同一会话既被重复计数，也可能在人 cd 进 scripts/ 时放行第二个会话。
+ * 分母和租约必须共用这一把尺。
+ *
+ * 给不出根（cwd 不在 root 下、层数不够）→ null，调用方自己决定怎么处理。
+ */
+export function worktreeRootOf(cwd, { root = worktreesRoot() } = {}) {
+  const base = normCwd(root);
+  const path = normCwd(cwd);
+  if (!base || !path) return null;
+  const prefix = `${base}/`;
+  if (path !== base && !path.startsWith(prefix)) return null;
+  const rest = path.slice(prefix.length);
+  if (!rest) return null;
+  const parts = rest.split('/').filter(Boolean);
+  // 至少 <仓>/<分支> 两层才是一棵树；一层仓目录本身不是会话落点。
+  if (parts.length < 2) return null;
+  return `${base}/${parts[0]}/${parts[1]}`;
+}
+
+/** cwd 是这棵树的根，或落在它的子目录里。两侧 `/` `\` 都归一；前缀要比斜杠，dao-105 不该被 dao-1055 占住。 */
+export function cwdBelongsToTree(cwd, tree) {
+  const c = normCwd(cwd);
+  const t = normCwd(tree);
+  if (!c || !t) return false;
+  return c === t || c.startsWith(`${t}/`);
 }
 
 /**
@@ -190,7 +227,7 @@ export function judgeTreeLease({ workdir, procs } = {}) {
     return { verdict: 'held', why: '没拿到进程观测数组——没查成，按占用处理（fail-close）' };
   }
 
-  const holders = procs.filter((p) => p && String(p.cwd).replace(/\/+$/, '') === tree);
+  const holders = procs.filter((p) => p && cwdBelongsToTree(p.cwd, tree));
   if (!holders.length) return { verdict: 'free', why: `${tree} 里没有会话进程在干活` };
   return {
     verdict: 'held',
@@ -223,11 +260,97 @@ export function busyTrees(procs, { root = worktreesRoot() } = {}) {
   for (const p of procs) {
     const cwd = String((p && p.cwd) || '').replace(/\/+$/, '');
     // 前缀要带斜杠：光比 includes('mirasim-worktrees') 会把 /tmp/mirasim-worktrees-fake 也算进来。
-    if (!cwd || !cwd.startsWith(`${base}/`)) continue;
-    seen.add(cwd);
+    // 子目录 cwd 归一到 <仓>/<分支>，跟 judgeTreeLease 共用 worktreeRootOf。
+    const tree = worktreeRootOf(cwd, { root: base });
+    if (!tree) continue;
+    seen.add(tree);
   }
   const trees = [...seen].sort();
   return { ok: true, trees, count: trees.length };
+}
+
+/** 活会话保护整棵工作树。尺就是 cwdBelongsToTree：前缀带斜杠，避免 dao-live 误护 dao-live-old。 */
+function cwdInLiveTree(cwd, liveTrees) {
+  for (const live of liveTrees) {
+    if (cwdBelongsToTree(cwd, live)) return true;
+  }
+  return false;
+}
+
+/**
+ * 名单里没有活会话、/proc 上还占着树 → 回收幽灵进程。
+ *
+ * 2026-09-08 实咬：三只 Codex 挂了 7 小时，mirasim 名单 0 条对应记录，
+ * stop-session 只杀 incomplete，杀不到。租约还握在死人口里。
+ *
+ * 这里对照的是「名单 vs /proc」，不是用名单自己判活性去起会话。
+ * 起会话那条路仍只认 /proc（见文件头）。两边对不上才杀。
+ *
+ * 没查成（名单 / 进程观测）→ 空动作，不许当「没有幽灵」去杀。
+ * 活会话缺 cwd → 整轮不杀（对不上树就可能误杀）。
+ *
+ * 活/死走 execution-states 正典：incomplete 是终态，不护树。
+ *
+ * @returns {{ok:true, actions:Array, skipped?:string}|{ok:false, unscanned:true, error:string, actions:[]}}
+ */
+export function planOrphanReaps({ procs, sessions, sessionsScanned, leaseScanned, root = worktreesRoot() } = {}) {
+  if (sessionsScanned !== true) {
+    return { ok: true, actions: [], skipped: 'sessions-unscanned' };
+  }
+  if (leaseScanned !== true) {
+    return { ok: true, actions: [], skipped: 'lease-unscanned' };
+  }
+  if (!Array.isArray(procs)) {
+    return { ok: false, unscanned: true, error: '没拿到进程观测数组——不杀（没查成）', actions: [] };
+  }
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, error: '没拿到会话名单数组——不杀（没查成）', actions: [] };
+  }
+
+  const liveTrees = new Set();
+  let liveWithoutCwd = false;
+  for (const s of sessions) {
+    const cwd = normCwd(s && (s.cwd || s.workdir || s.worktree));
+    const cls = classifySessionState(s);
+    if (cls === 'finished') continue;
+    // live / reserved / 读不出状态：都当「可能还在」，缺 cwd 整轮放过。
+    if (!cwd) { liveWithoutCwd = true; continue; }
+    liveTrees.add(cwd);
+  }
+  if (liveWithoutCwd) {
+    return { ok: true, actions: [], skipped: 'live-session-cwd-missing' };
+  }
+
+  // 回收范围必须和 busyTrees 同一把尺——只收工作树根下的 cwd。
+  // 不钳根的话，mirasim-server 在主仓 /srv、家目录、/tmp 上的任意后代都会被当幽灵 SIGTERM，
+  // 帅位自己的会话就跑在主仓里。前缀带斜杠，防 /tmp/mirasim-worktrees-fake 混进来。
+  const base = normCwd(root);
+  const byTree = new Map();
+  for (const p of procs) {
+    if (!p || !Number.isInteger(Number(p.pid))) continue;
+    const pid = Number(p.pid);
+    if (pid <= 1) continue;
+    const cwd = normCwd(p.cwd);
+    if (!cwd) continue;
+    if (!cwd.startsWith(`${base}/`)) continue;
+    // 保护活会话所在整棵树，不只精确相等。
+    // 会话登记在树根，测试/构建会把 cwd 切到 packages/api 这类子目录。
+    if (cwdInLiveTree(cwd, liveTrees)) continue;
+    if (!byTree.has(cwd)) byTree.set(cwd, []);
+    byTree.get(cwd).push({ pid, comm: p.comm || null });
+  }
+
+  const actions = [];
+  for (const [cwd, holders] of [...byTree.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const pids = [...new Set(holders.map((h) => h.pid))];
+    actions.push({
+      kind: 'reap-orphan',
+      cwd,
+      pids,
+      why: `名单里没有活会话，/proc 还占着 ${cwd}（${holders.map((h) => `${h.comm || '?'} pid ${h.pid}`).join('、')}）`,
+    });
+  }
+  return { ok: true, actions };
 }
 
 /**
@@ -256,4 +379,58 @@ export function checkTreeLease({ workdir, io } = {}) {
     scanned: { procs: scan.procs.length, resolved: scan.resolved, total: scan.total, noServer: scan.noServer === true },
     ...judgeTreeLease({ workdir, procs: scan.procs }),
   };
+}
+
+// ── 占用声明（堵住「先读 /proc、再发 prompt」的 TOCTOU）──────────────────────
+//
+// 两个并发 startSession 都可能在第一个会话进程出现前读到 free，随后同时被服务端接受。
+// /proc 闸挡不住这一窗。这里用 O_EXCL 锁文件做跨进程原子声明：第二个拿不到就拒起，
+// 失败（以及成功返回）都释放——成功之后占位的是真会话进程，下一轮 /proc 闸接着守。
+// 落点 ~/.dao/locks/session-<hash>.lock，跟建树锁同一目录（INDEX D 类已登记）。
+//
+// 锁原语复用 acquireWorktreeLock（timeoutMs=0，不自旋）。不在 startSession 里直接
+// 调那把锁：渠道闸的源码测试钉死门里不许出现 acquireWorktreeLock（忙自旋不能持过
+// 网络 I/O）。占用声明不自旋，拿不到就这轮不派。
+
+export const SESSION_CLAIM_REL = ['.dao', 'locks'];
+export const SESSION_CLAIM_STALE_MS = 2 * 60 * 1000;
+
+export function sessionClaimPath(workdir, { home = homedir(), root } = {}) {
+  const raw = String(workdir || '').replace(/\/+$/, '');
+  // 跟 busyTrees / 租约同一把尺：子目录 cwd 必须和树根抢同一把锁。
+  const tree = worktreeRootOf(raw, root != null ? { root } : {}) || raw;
+  const hash = createHash('sha256').update(tree).digest('hex').slice(0, 16);
+  return join(home, ...SESSION_CLAIM_REL, `session-${hash}.lock`);
+}
+
+/**
+ * 原子占用声明。第二个并发拿不到；持锁 pid 已死或锁过期则拆了再抢。
+ * 不自旋等待——起会话不该堵在别人后面，拿不到就这轮不派。
+ */
+export function claimTreeOccupancy({
+  workdir,
+  home,
+  lockPath,
+  staleMs = SESSION_CLAIM_STALE_MS,
+  ...io
+} = {}) {
+  const tree = String(workdir || '').replace(/\/+$/, '');
+  if (!tree) return { ok: false, error: '没给 workdir，占用声明无从下' };
+  const path = lockPath || sessionClaimPath(tree, home ? { home } : {});
+  const got = acquireWorktreeLock({
+    ...io,
+    lockPath: path,
+    staleMs,
+    timeoutMs: 0,
+  });
+  if (got.ok) return got;
+  if (got.code === 'timeout') {
+    return {
+      ok: false,
+      busy: true,
+      reason: LEASE_BUSY_REASON,
+      error: `${tree} 占用声明已被别人拿走（${path}）`,
+    };
+  }
+  return { ok: false, error: got.error || `占用声明打不开 ${path}` };
 }

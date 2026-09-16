@@ -1,5 +1,5 @@
 ---
-status: new
+status: done
 ---
 
 # 机制巡检：#1146 自愈钟今早合进 master，机器没装；拿来验「装上了」的 ㉚ 此刻是绿
@@ -98,3 +98,9 @@ detail: 3 个仓里和机器上不是同一份：feishu-triage.service、gw-remo
 删掉「单独一只要 sudo 才装得上的自愈 timer，再用 ㉚ 绿当探活」这一层。
 
 自愈脚本已经是 orca 能跑的 `node scripts/skills-heal.mjs`。挂到已经在跑的 `commander-inventory` 或 `dao-land` 上（都是 `User=orca`），不必再经 `/etc`。㉚ 继续只报被劫/缺链。探活就是「盘点/land 的 journal 里有 skills-heal 这一行」，不要把 skill 链接检查冒充 timer 心跳。
+
+## 处置（2026-09-13）
+
+处置：#1226。装上了，而且比「把自愈挂到 orca 单元上」更彻底——本条的建议是「挂到已经在跑的 commander-inventory / dao-land（都是 User=orca）」，但 root 的家目录 700，orca 身份根本够不着，挂上去照样修不了 root 那份。改法是保留 systemd 钟并补第二只 `dao-skills-heal-root.timer`（`User=root`，跑 `/usr/local` 下的安装副本），同时把「该守哪几个家目录」抽成一份判据 `scripts/lib/skill-homes.mjs`，㉚ 和自愈共用。
+
+本条点出的第二件事（㉚ 不看 timer 在不在，钟根本没装时也绿）仍然成立：本 PR 没给 ㉚ 加「timer 在不在」那一格——`dao-check` 是**可出网/可不出网**两种跑法都要能用的本地检查，而 timer 探活属于 `server-check.mjs` ⑳ 的活（那格没人跑，已单报 `2026-09-06-server-check无心跳.md`）。加装机文档把「两只 timer 的 NEXT 都不是 `-`」写成验收行。

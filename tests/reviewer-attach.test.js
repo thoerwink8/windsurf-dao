@@ -329,6 +329,25 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
     assert.ok(!/m=auto/.test(inject), '不得渲染成 auto → ' + inject);
   });
 
+  it('无署名 issue（显式 null）+ 账本缺字段 → manual，不得 fallback auto', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' },
+      comment: { mergePolicy: null, mergeReason: null },
+      issue: null,
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.mergePolicy, 'manual', JSON.stringify(r));
+    assert.equal(r.source, 'no-issue', JSON.stringify(r));
+    assert.match(String(r.mergeReason), /human_holds/);
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #1286', pr: '1286',
+      soldierDispatchId: '', mergePolicy: r.mergePolicy, mergeReason: r.mergeReason,
+    });
+    assert.ok(/m=manual/.test(inject), '注入 m=manual → ' + inject);
+    assert.ok(!/m=auto/.test(inject), '不得渲染成 auto → ' + inject);
+  });
+
   it('读不到记账 → 回退 auto，任务书 fb= 写明原因', async () => {
     const S = await S_LOAD;
     const r = S.resolveReviewerMergePolicy({
@@ -364,6 +383,64 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
     });
     assert.ok(r.ok && r.mergePolicy === 'manual' && r.source === 'comment',
       '卡备注兜底 → ' + JSON.stringify(r));
+  });
+
+  // 2026-09-15 实咬：#1275 / #1276 / #1277 的账本记的是 manual 但没留 merge_reason。
+  // resolveReviewerMergePolicy 原样透传 null，buildMirasimReviewerPrompts 的硬闸
+  // 「m=manual 必须带 r=<原因>」当场拒——每 20 分钟拒一次，试满 3 次打「卡死/自动化认输」，
+  // 而认输评论写的是「叫了 3 次审官判定仍是 0」，把确定性拒绝伪装成重试没推动。
+  // 旗标那一侧该拒（调用方现在就能补）；账本/卡备注是恢复出来的历史，没有可补的对象。
+  it('账本 manual 但没留理由 → 补一句如实说明，不留 null（否则审官任务书渲不出来）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: null },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.mergePolicy, 'manual', '安全相关的那半原样保留，不许退回 auto');
+    assert.equal(r.source, 'ledger');
+    assert.equal(r.reasonSynthesized, true, '要标出这句理由是补的，不是原始判据');
+    assert.match(String(r.mergeReason), /账本/, '话面要说清楚是从哪恢复的  →  ' + r.mergeReason);
+    assert.match(String(r.mergeReason), /待帅位补/, '要让读的人知道这不是真理由  →  ' + r.mergeReason);
+  });
+
+  it('补出来的理由能过审官任务书那条硬闸（本单要治的就是这个死锁）', async () => {
+    const S = await S_LOAD;
+    const MI = await import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'reviewer-mirasim.mjs').replace(/\\/g, '/'));
+    const policyPlan = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: null },
+    });
+    const built = MI.buildMirasimReviewerPrompts({
+      pr: '1277', policyPlan, render: S.buildReviewerInject,
+    });
+    assert.equal(built.ok, true, '不许再被「m=manual 必须带 r=<原因>」拒  →  ' + JSON.stringify(built));
+    assert.equal(built.mergePolicy, 'manual');
+    assert.match(built.prompt, /m=manual/, '任务书仍是 manual  →  ' + built.prompt);
+  });
+
+  it('账本有理由时一个字都不改（补理由只在缺的时候发生）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: '改协作约定' },
+    });
+    assert.equal(r.mergeReason, '改协作约定');
+    assert.equal(r.reasonSynthesized, undefined, '没补就不许打这个标');
+  });
+
+  it('账本 auto 不受影响（auto 本来就没有理由）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: true, mergePolicy: 'auto', mergeReason: null },
+    });
+    assert.equal(r.mergePolicy, 'auto');
+    assert.equal(r.mergeReason, null);
+    assert.equal(r.reasonSynthesized, undefined);
+  });
+
+  it('显式 --merge-policy manual 缺理由仍然拒（调用方补得上，不许跟着放水）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({ explicitPolicy: 'manual', explicitReason: '  ' });
+    assert.equal(r.ok, false, '旗标那一侧该拒  →  ' + JSON.stringify(r));
+    assert.match(String(r.error), /--merge-reason/);
   });
 
   it('显式 --merge-policy auto 压过账本 manual', async () => {

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { NATIVE_LOGIN_FILES } from './provider-probe.mjs';
 
 export const DEFAULT_CATALOG_PATH = fileURLToPath(new URL('../../docs/execution-profiles.json', import.meta.url));
 const HOUR = 3_600_000;
@@ -215,7 +216,6 @@ export function discoverExecutionCredentials({ home = os.homedir(), read = fs.re
   }
   const direct = [
     ['opencode-go', '.pi/agent/auth.json', ['opencode-go', 'key']],
-    ['deepseek', '.pi/agent/auth.json', ['deepseek', 'key']],
     ['commandcode', '.commandcode/auth.json', ['apiKey']],
     ['opencode-go', '.local/share/opencode/auth.json', ['opencode-go', 'key']],
     ['opencode', '.local/share/opencode/auth.json', ['opencode', 'key']],
@@ -227,10 +227,15 @@ export function discoverExecutionCredentials({ home = os.homedir(), read = fs.re
     inventory.push({ provider, kind: isGroup ? 'newapi-group' : 'provider-key', present: typeof value === 'string' && !!value.trim(), location: `~/${file}`, evidence: isGroup ? 'matches_gateway_key' : 'native_auth_field' });
   }
   // An old base_url is not enough: the key may have since been replaced with a group key.
-  const codex = readJson(path.join(home, '.codex/auth.json'), read);
-  const codexKey = codex?.OPENAI_API_KEY;
-  inventory.push({ provider: 'pqapi', kind: codexKey && groupKeys.includes(codexKey) ? 'newapi-group' : 'unknown', present: !!codexKey, location: '~/.codex/auth.json', evidence: codexKey && groupKeys.includes(codexKey) ? 'matches_gateway_key' : 'requires_endpoint_and_key_provenance' });
-  for (const [provider, file] of [['cursor-native', '.config/cursor/auth.json'], ['devin-native', '.local/share/devin/credentials.toml'], ['xai-native', '.grok/auth.json']]) {
+  // 默认 home 与 sol 专用 home 各一份：auth.json 只有一个 OPENAI_API_KEY，两把 key 不能写进同一个文件。
+  for (const rel of ['.codex/auth.json', '.codex-sol/auth.json']) {
+    const codex = readJson(path.join(home, rel), read);
+    const codexKey = codex?.OPENAI_API_KEY;
+    inventory.push({ provider: 'pqapi', kind: codexKey && groupKeys.includes(codexKey) ? 'newapi-group' : 'unknown', present: !!codexKey, location: `~/${rel}`, evidence: codexKey && groupKeys.includes(codexKey) ? 'matches_gateway_key' : 'requires_endpoint_and_key_provenance' });
+  }
+  // 本地登录型：**表与探针共用一份**（provider-probe.mjs 的 NATIVE_LOGIN_FILES）——
+  // 同一组 provider/路径原先在两处各手打一遍，加一个 provider 就要记得改两个地方。
+  for (const [provider, file] of Object.entries(NATIVE_LOGIN_FILES)) {
     inventory.push({ provider, kind: 'native-login', present: exists(path.join(home, file)), location: `~/${file}`, evidence: 'file_presence_only_not_session_health' });
   }
   return inventory;
