@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -31,6 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
+  classifyDrainAttempt,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -43,7 +44,7 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
-  rereviewKey, epochOf,
+  rereviewKey, epochOf, foldFailureStreak,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
@@ -53,7 +54,8 @@ import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
 import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-capacity.mjs';
 import { sessionStateOf } from './lib/execution-states.mjs';
-import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadBreaker } from './lib/provider-health.mjs';
@@ -64,7 +66,7 @@ import {
 } from './lib/handoff-check.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import {
-  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger,
+  planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
 } from './lib/commander-verbs.mjs';
 import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
@@ -333,6 +335,12 @@ function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
   } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+function scanLease() {
+  const scan = scanSessionProcs();
+  if (!scan.ok) return { scanned: false, error: scan.error, procs: [] };
+  return { scanned: true, procs: scan.procs, noServer: scan.noServer === true };
 }
 
 function leftoverIncomplete(situation, stopResults) {
@@ -622,6 +630,7 @@ function buildSituation({ state } = {}) {
   const prReviews = github.scanned ? scanPrReviews(github.prs, { issues: github.issues }) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const sessions = scanSessions();
+  const lease = scanLease();
   const desiredJobs = scanDesiredJobs();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
@@ -678,7 +687,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, desiredJobs,
+    sessions, lease, desiredJobs,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -848,6 +857,8 @@ function execAction(action, { state, dryRun, log }) {
         { dryRun, say, why: action.why },
       );
     }
+    case 'reap-orphan':
+      return execReapOrphan(action, { dryRun, say });
     case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
@@ -922,6 +933,76 @@ function judgmentAtCurrentHead(json) {
   }
   const delivered = a.latestGreen === true || a.latestRed === true || a.green === true;
   return { ok: true, delivered };
+}
+
+/**
+ * 杀幽灵进程前再读一次 /proc/<pid>/cwd。规划到执行隔了小半轮，pid 可能已复用；
+ * 对不上规划时的 cwd 就跳过，宁可下轮再收也不误杀。
+ * readlink 只有 ENOENT/ESRCH 才当 gone（linkErrorKind）；EACCES/EIO 是没查成，
+ * 不杀也不报成功。readlink / kill 可注入。
+ */
+export function execReapOrphan(action, {
+  dryRun, say, readlink = readlinkSync, kill = (pid, sig) => process.kill(pid, sig),
+} = {}) {
+  const cwd = String(action.cwd || '');
+  const pids = Array.isArray(action.pids) ? action.pids.map(Number).filter((n) => Number.isInteger(n) && n > 1) : [];
+  if (!cwd || !pids.length) {
+    say('  reap-orphan 缺 cwd/pids，不动手');
+    return { ok: false, error: 'reap-orphan 要 cwd 和 pids' };
+  }
+  if (dryRun) {
+    say(`[dry] 回收幽灵 ${cwd} pids ${pids.join(',')}`);
+    return { ok: true, dryRun: true };
+  }
+  const want = cwd.replace(/\/+$/, '');
+  const results = [];
+  for (const pid of pids) {
+    let liveCwd = null;
+    try { liveCwd = readlink(`/proc/${pid}/cwd`); }
+    catch (e) {
+      if (linkErrorKind(e) === 'gone') {
+        results.push({ pid, ok: true, gone: true });
+      } else {
+        const why = String((e && e.code) || (e && e.message) || e);
+        results.push({ pid, ok: false, unscanned: true, error: `cwd 没查成：${why}` });
+      }
+      continue;
+    }
+    if (String(liveCwd).replace(/\/+$/, '') !== want) {
+      results.push({ pid, ok: true, skipped: 'cwd-mismatch', liveCwd });
+      continue;
+    }
+    try {
+      kill(pid, 'SIGTERM');
+      results.push({ pid, ok: true });
+    } catch (e) {
+      if (linkErrorKind(e) === 'gone') results.push({ pid, ok: true, gone: true });
+      else results.push({ pid, ok: false, error: String(e.message || e) });
+    }
+  }
+  const failed = results.filter((r) => r.ok !== true);
+  const term = results.filter((r) => r.ok === true && !r.gone && !r.skipped).length;
+  const gone = results.filter((r) => r.gone).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const unscanned = results.filter((r) => r.unscanned).length;
+  const killFailed = failed.length - unscanned;
+  const parts = [`${term}/${pids.length} 已 SIGTERM`];
+  if (gone) parts.push(`${gone} 已消失`);
+  if (skipped) parts.push(`${skipped} 跳过`);
+  if (unscanned) parts.push(`${unscanned} cwd 没查成`);
+  if (killFailed) parts.push(`失败 ${killFailed}`);
+  say(`  回收幽灵 ${cwd}：${parts.join('，')}`);
+  if (failed.length) {
+    return {
+      ok: false,
+      ...(unscanned ? { unscanned: true } : {}),
+      error: unscanned
+        ? `有 ${unscanned} 个 pid 的 cwd 没查成${killFailed ? `，另有 ${killFailed} 个没杀成` : ''}`
+        : `有 ${failed.length} 个 pid 没杀成`,
+      results,
+    };
+  }
+  return { ok: true, results };
 }
 
 /**
@@ -1715,7 +1796,7 @@ export function writePumpDraftBrief(action, { io: fsio = null, dir = null } = {}
  * 写完等下一轮才 drain，审官会再睡 20 分钟（#1104 / 今晚 1134.json）。
  * 同一 PR 同一 head 只写一次：记 state.reworkDispatched[rereview:<pr>@<oid>]。
  */
-function requestRereview(action, { state, dryRun, say }) {
+export function requestRereview(action, { state, dryRun, say, run }) {
   if (!action.reviewer) {
     const error = `PR #${action.pr} 要复审，但 PR 上没有 reviewer/ 标签——需人工打标，不猜审官`;
     say(`  ${error}`);
@@ -1736,7 +1817,7 @@ function requestRereview(action, { state, dryRun, say }) {
   if (!built.ok) { say(`  复审待办造不出：${built.error}`); return { ok: false, error: built.error }; }
   if (dryRun) {
     say(`[dry] 写复审待办 ${reviewPendingPath(dir, action.pr, action.repo)}（${action.why}）`);
-    return drainReviewPending(action, { state, dryRun, say });
+    return drainReviewPending(action, { state, dryRun, say, run });
   }
   const w = writeReviewPending({ dir, ticket: built.ticket });
   if (!w.ok) { say(`  复审待办写不进去：${w.error}`); return { ok: false, error: w.error }; }
@@ -1746,31 +1827,62 @@ function requestRereview(action, { state, dryRun, say }) {
   // 结果 #894/#899/#905 的票派成功、审官起来就死、判定 0 条，而账本认为已办完，永不重试。
   // #1236：退回 rereviewKey() 而不是就地拼字面量——写侧与 decide 侧必须同一个判据版本，
   // 两处字面量分叉就是 #909 的形状（账记到另一个格子，票还在队列却永远走不进 retry-drain）。
-  state.reworkDispatched[action.stateKey || rereviewKey(action.pr, action.head)] = {
+  // 失败 streak（lastError / sameErrorRounds）必须从上一轮带过来：每次覆盖成只有 tries
+  // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = state.reworkDispatched[key];
+  state.reworkDispatched[key] = {
+    ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
     tries: Number(action.tries) || 1,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
-  return drainReviewPending(action, { state, dryRun, say });
+  return drainReviewPending(action, { state, dryRun, say, run });
 }
 
 /** 走 blessed 路径 review-pending-drain。必须带 --pr：全队列一把清时毒票会拖死别的 PR（#1104）。
  *  --pr 仍过容量闸；不过上限只认 --force，自动化不许带。 */
-function drainReviewPending(action, { state, dryRun, say }) {
+function drainReviewPending(action, { state, dryRun, say, run }) {
   const cmd = action.pr != null
     ? ['node', 'scripts/dao.mjs', 'review-pending-drain', '--pr', String(action.pr)]
     : ['node', 'scripts/dao.mjs', 'review-pending-drain'];
   if (action.repo) cmd.push('--repo', String(action.repo));
-  const r = runOrShow(cmd, { dryRun, say, why: action.why });
-  recordDrainAttempt(state, action, drainPayloadOf(r));
+  const r = runOrShow(cmd, { dryRun, say, why: action.why, run });
+  const payload = drainPayloadOf(r);
+  recordDrainAttempt(state, action, payload);
+  // drain 的失败原文原来只落进 drainLedger，而判「还要不要再叫审官」读的是 reworkDispatched
+  // ——两本账，于是 decide 那边 `prev.lastError` 永远是 undefined，#1237 埋的 terminal 出口
+  // 一次都没被走到过（2026-09-14 实测：闸每轮拒、每轮照记一次 try、试满打认输，
+  // 写的理由与真因无关）。这里把原文并进同一本账，让那条出口真的能用。
+  rememberDrainFailure(state, action, payload);
   return r;
+}
+
+/** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
+ *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+function rememberDrainFailure(state, action, payload) {
+  if (!state || action == null || action.pr == null) return;
+  const key = action.stateKey || rereviewKey(action.pr, action.head);
+  const prev = (state.reworkDispatched || {})[key];
+  if (!prev) return;                       // 没有这条账就没有要并的对象
+  const verdict = classifyDrainAttempt(payload);
+  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.reason === 'pulled';
+  const err = pulled ? null : drainErrorText(payload);
+  if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
+  state.reworkDispatched = state.reworkDispatched || {};
+  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
 }
 
 export function drainPayloadOf(runResult) {
   if (!runResult) return { ok: false };
   if (runResult.dryRun === true) return { ok: true, dryRun: true };
   const doc = parseDaoResult(runResult.out);
-  return doc ? { ...doc, ok: runResult.ok === true && doc.ok === true } : { ok: runResult.ok === true };
+  if (doc) return { ...doc, ok: runResult.ok === true && doc.ok === true };
+  // 无结构化回执：比较键用完整 stderr/stdout。runCmd.error 是人读摘要（已截），不许当键。
+  const raw = runResult.stderr || runResult.out;
+  return { ok: runResult.ok === true, ...(raw ? { error: String(raw) } : {}) };
 }
 
 function recordDrainAttempt(state, action, payload) {

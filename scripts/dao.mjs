@@ -150,6 +150,7 @@ import {
   writeReviewPending,
   listReviewPending,
   drainReviewPending,
+  attachReceiptFromSpawn,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
@@ -238,6 +239,7 @@ import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { writeStdoutAndExit } from './lib/stdout-exit.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -268,6 +270,7 @@ import {
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { verdictOnHead } from './lib/review-state.mjs';
 import { judgeLegDown } from './lib/leg-liveness.mjs';
 import { readLegRecords } from './lib/leg-liveness-io.mjs';
 
@@ -1531,6 +1534,37 @@ function reviewerChannelCap(id) {
   } catch { return null; }
 }
 
+/**
+ * 当前 head 上有没有审官判定（三态：true / false / null=没查成）。
+ * 读不到一律 null——复用判据只在**确认没有**时才另起，不许拿「读不到」去重复烧额度。
+ *
+ * 对账目标是 reviewer 角色从 GitHub 读到的 PR **当前** headRefOid，不是登记里的
+ * expectedOid（#1293 审官 P1 实咬）：登记可能钉着旧提交（审官树/登记没跟上新 push），
+ * 旧提交上的 APPROVED / CHANGES_REQUESTED 会被误认作当前 head 已判定，
+ * 终态会话因此被复用，新提交永远没人审。
+ *
+ * head 与 reviews 必须同一次 `gh pr view --json headRefOid,reviews` 快照里读。
+ * 分两次读的话，第一次拿到旧 OID `H`、两次之间 PR 推到 `N`、第二次仍返回 `H`
+ * 上的票，函数会得出 true，而 `N` 没有审官（#1293 三审 P1）。
+ *
+ * runGh 可注入（测试）；默认走 reviewer 角色的 gh。
+ */
+export function judgeVerdictOnHead(pr, record, targetRepo, { runGh } = {}) {
+  if (!record || !record.sessionKey) return null;   // 没有在役登记，复用判据走不到这一步
+  const gh = runGh || ghRunnerForTarget(targetRepo, { role: 'reviewer' });
+  const snap = gh(['pr', 'view', String(pr), '--json', 'headRefOid,reviews']);
+  if (!snap || !snap.ok) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(snap.out);
+  } catch { return null; }
+  const head = String((parsed && parsed.headRefOid) || '').trim();
+  if (!head) return null;
+  const reviews = parsed && parsed.reviews;
+  if (!Array.isArray(reviews)) return null;
+  return verdictOnHead(reviews, head);
+}
+
 async function cmdReviewPendingDrain(args) {
   const targetRepo = assertCrossRepoOrFail(args.repo, { role: 'reviewer', where: 'review-pending-drain' });
   const ghRepo = targetRepo.ownerName || undefined;
@@ -1595,17 +1629,8 @@ async function cmdReviewPendingDrain(args) {
         cwd: ROOT,
         timeout: 600000,
       });
-      let json = null;
-      try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
-      if (spawned.error || (spawned.status !== 0 && spawned.status != null) || !json || json.ok !== true) {
-        return {
-          ok: false,
-          error: (json && json.error)
-            || String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`).trim().slice(0, 400),
-          json,
-        };
-      }
-      return { ok: true, json };
+      // 无 JSON / 超时 / 信号：完整 stderr 进比较键，不在这里截 400 字。
+      return attachReceiptFromSpawn(spawned);
     },
   });
   if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
@@ -1726,11 +1751,10 @@ async function cmdNow(args) {
   const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
 }
 
 /**
@@ -1743,11 +1767,10 @@ async function cmdBoard(args) {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const { board, elapsedMs } = await collectBoard({ cwd: root, root, now: new Date().toISOString() });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`${formatBoardTable(board)}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`${formatBoardTable(board)}\n`);
 }
 
 function cmdCheckHelp() {
@@ -1867,6 +1890,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2118,13 +2142,22 @@ async function cmdReviewerCreateMirasim(args) {
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
     : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  // #1289：复用还要问一句「它真的交了判定吗」。会话 phase=done 只说明会话结束了，
+  // 不说明活干完了——实测审官把结论写在会话文本里却从没调 gh pr review，
+  // 下一轮复用它，PR 就永久冻着。判据是 GitHub 上当前 head 有没有判定，三态。
+  const verdict = judgeVerdictOnHead(args.pr, existingRecord, targetRepo);
   const decided = decideReviewerCreateStart({
     force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view,
+    record: existingRecord, view: peek.view, verdictOnHead: verdict,
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  if (decided.reuse.reuse) {
+  // #1293 二审 P1：终态 reuse 的判定快照会过期。锁外 true 若在这里 emit 退出，
+  // 下面 lockedVerdict 重读根本跑不到——等锁期间推了新 head，新提交就没有审官。
+  // dry-run 仍按锁外快照预览（本来就不进锁）。
+  if (decided.reuse.reuse && (args.dryRun || !mustRecheckVerdictUnderLock({
+    reuse: true, view: peek.view,
+  }))) {
     emit({
       ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
@@ -2168,8 +2201,16 @@ async function cmdReviewerCreateMirasim(args) {
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
+    // #1293 审官 P1（第二轮实咬）：锁外那份 verdict 在等锁期间可能已过期——
+    // 锁外快照是「旧 head 有判定（true）」，等锁期间 PR 推了新 head 而新 head 还没判定，
+    // 拿旧值判 race 会把终态会话误报 reused，新提交就没有审官。
+    // 复用判定必须在持锁后重读当前 headRefOid + reviews（同一次快照），用这份锁内快照。
+    // forceNew 为真时 judgeReviewerCreateRace 短路、根本不看 verdictOnHead，省掉这次 gh 快照。
+    const lockedVerdict = (!forceNew && againRecord && againRecord.sessionKey)
+      ? judgeVerdictOnHead(args.pr, againRecord, targetRepo)
+      : null;
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view,
+      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: lockedVerdict,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
@@ -2315,8 +2356,8 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '快路无署名单号，完工 comment 只发 PR' };
-  if (plan.issue) {
+  let postedIssue = { ok: true, skipped: true, why: '无署名单（快路 PR），完工 comment 只发 PR' };
+  if (plan.issue != null) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
       writeIssue: applyIssueWrite, host: 'worker-done',
