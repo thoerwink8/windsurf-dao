@@ -315,6 +315,23 @@ export function shouldSpawnForward({ childAlive = false, stopping = false } = {}
   return { spawn: true, why: null };
 }
 
+/**
+ * Node ChildProcess 还活着吗。
+ *
+ * 只认 exitCode / signalCode：任一非 null 才算已退出。
+ * `killed` 只表示父进程已经成功发出过信号，不表示子进程已经退出——
+ * child.kill 之后、exit 事件之前仍可能活着，这时再 spawn 会起第二条。
+ * 外部 SIGTERM/SIGKILL：exitCode 仍是 null、killed 仍是 false，只有 signalCode
+ * 能说明已经退了（2026-09-16 故障演练：12:11:58 forward-exit，12:12:03 spawn-skipped）。
+ * 停止路径由 shouldSpawnForward 的 stopping 挡住，不靠把还活着的子进程判死。
+ */
+export function isChildAlive(c) {
+  if (!c) return false;
+  if (c.exitCode != null) return false;
+  if (c.signalCode != null) return false;
+  return true;
+}
+
 export function classifyGhEventBridge({
   probed = false, reason = '', state = null, now = Date.now(),
   heartbeatMs = HEARTBEAT_MS, pingIntervalMs = PING_INTERVAL_MS, graceMs = STARTUP_GRACE_MS,

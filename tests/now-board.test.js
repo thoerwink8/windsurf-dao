@@ -157,10 +157,37 @@ describe('dao now：审官登记 / 会话 / 树', () => {
     const S = await load(BOARD);
     const tree = '/home/orca/mirasim-worktrees/windsurf-dao/dao-review-pr-900';
     assert.equal(S.judgeSession({ sessions: okEnv([{ pid: '1', cwd: tree }]), treePath: tree }).state, 'live');
+    assert.equal(S.judgeSession({ sessions: okEnv([{ pid: '1', cwd: tree + '/scripts' }]), treePath: tree }).state, 'live');
     assert.equal(S.judgeSession({ sessions: okEnv([]), treePath: tree }).state, 'gone');
     assert.equal(S.judgeSession({ sessions: deadEnv('连不上'), treePath: tree }).state, 'unscanned');
     assert.equal(S.judgeSession({ sessions: okEnv([]), treePath: null }).state, 'unscanned',
       '没有树路径就对不上号，只能算没查成');
+  });
+
+  it('Windows 树根 + 子目录 cwd 仍是 live（审官红 · #1292）', async () => {
+    const S = await load(BOARD);
+    const got = S.judgeSession({
+      sessions: {
+        scanned: true,
+        items: [{ cwd: 'D:\\frank\\windsurf-dao\\dao-review-pr-900\\scripts' }],
+      },
+      treePath: 'D:\\frank\\windsurf-dao\\dao-review-pr-900',
+    });
+    assert.equal(got.state, 'live');
+    assert.equal(got.count, 1);
+  });
+
+  it('Windows 树名互为前缀不许误判（dao-105 vs dao-1055）', async () => {
+    const S = await load(BOARD);
+    const got = S.judgeSession({
+      sessions: {
+        scanned: true,
+        items: [{ cwd: 'D:\\frank\\windsurf-dao\\dao-1055\\scripts' }],
+      },
+      treePath: 'D:\\frank\\windsurf-dao\\dao-105',
+    });
+    assert.equal(got.state, 'gone');
+    assert.equal(got.count, 0);
   });
 
   it('审官树 head：一致 / 落后 / 读不到（读不到不许当一致）', async () => {

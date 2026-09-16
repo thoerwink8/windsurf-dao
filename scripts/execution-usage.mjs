@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { collectUsage, reportUsage, syncCursorAccountUsage } from './lib/execution-usage.mjs';
+import { collectUsage, partitionUsageCodes, reportUsage, syncCursorAccountUsage } from './lib/execution-usage.mjs';
 import { pathToFileURL } from 'node:url';
 
 export async function main(argv = process.argv.slice(2)) {
@@ -43,6 +43,17 @@ export async function main(argv = process.argv.slice(2)) {
     if (result.accountSnapshots.length) console.log(`Account snapshots (not task charges): ${JSON.stringify(result.accountSnapshots)}`);
     if (result.unallocatedSummaries.length) console.log(`Unallocated session summaries: ${JSON.stringify(result.unallocatedSummaries)}`);
     if (result.gaps.length) console.log(`Collection gaps: ${result.gaps.join(', ')}`);
+    const status = collected?.status || result.status || [];
+    if (status.length) console.log(`Collection status: ${status.join(', ')}`);
+  }
+  if (collect) {
+    const faults = partitionUsageCodes([
+      ...(collected?.busy ? ['collector_busy'] : []),
+      ...(collected?.gaps || []),
+      ...(result.gaps || []),
+      ...(result.groups || []).flatMap(g => g.gaps || []),
+    ]).gaps;
+    return faults.length ? 2 : 0;
   }
   return result.complete ? 0 : 2;
 }

@@ -19,6 +19,8 @@ InaccessiblePaths=-/root/.mirasim/keys -/root/.config
 PrivateTmp=true
 PrivateNetwork=true
 RestrictAddressFamilies=AF_UNIX
-TimeoutStartSec=90
+# 90s SIGTERM'd a live 40k-row publish (2026-09-16). Skip already-copied
+# rows; this ceiling covers a bounded 1000-row catch-up, not a full rescan.
+TimeoutStartSec=300
 StandardOutput=journal
 StandardError=journal
