@@ -9,7 +9,7 @@
 // 本文件只动 ~/.claude/skills 这一层，绝不 rm -rf 被劫目标。
 // onboard.mjs 与 scripts/skills-heal.mjs（systemd 自愈）共用这一份。
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 const linkType = () => (process.platform === 'win32' ? 'junction' : undefined);
@@ -119,16 +119,53 @@ function linkKeepers(face, keepers, dryRun) {
 }
 
 /**
+ * 这个 checkout 是不是**临时 worktree**（`.git` 是文件，指向主仓 .git/worktrees/<名>）。
+ *
+ * 判它干什么：装载面的链接要指一个**活得比会话久**的 checkout。主树是
+ * `/srv/projects/windsurf-dao`，worktree 是干完就删的临时的树。2026-09-13 实咬：
+ * 从 `.claude/worktrees/<名>/` 里跑自愈，它把 `/root/.claude/skills/dispatch` 链到了
+ * 那个 worktree——树一删全悬空，而且那是**照着 §11.1 的装法**跑出来的结果。
+ *
+ * 非 dry-run 默认硬拦（生产路径 skills-heal.mjs / onboard.mjs 都不许传例外）。
+ * 测试若要在临时树里真跑接回，显式传 `allowWorktree: true`——这个参数不进 CLI、
+ * 不进环境变量，生产路径选不着。
+ *
+ * 全手工解析（读 .git 文件），不 shell git——root 身份跑时会撞 dubious ownership。
+ */
+export function isLinkedWorktree(root) {
+  try {
+    const st = lstatSync(join(root || '', '.git'));
+    if (!st || !st.isFile()) return false; // 目录形态 = 主 clone / 主树
+    return /^gitdir:\s*\S+/m.test(readFileSync(join(root, '.git'), 'utf8'));
+  } catch {
+    return false; // 读不到就不判它是 worktree（没依据时不拦，交给别处）
+  }
+}
+
+/**
  * 合并式接回。幂等：已经是真目录且仓内链齐 → changed=false。
  * 不删被劫目标里的任何东西。
  *
- * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string}}
+ * @returns {{ok:boolean, changed?:boolean, kind?:string, linked?:string[], rebuilt?:string[], kept?:string[], skipped?:boolean, unscanned?:boolean, error?:string, reason?:string, face?:string, target?:string, worktree?:boolean}}
  */
-export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, say = () => {} } = {}) {
+export function healSkillsMount({ root, home, dir = '.claude', dryRun = false, allowWorktree = false, say = () => {} } = {}) {
+  // 从临时 worktree 真接回会把装载面链到一个干完就删的树。dry-run 不动盘，照跑；
+  // 真写盘必须到主树，或测试显式 allowWorktree（生产 CLI 不传这个参数）。
+  if (!dryRun && !allowWorktree && isLinkedWorktree(root)) {
+    const face = join(home || '', dir, 'skills');
+    say(`拒绝：从临时 worktree（${root}）真接回会把装载面链到干完就删的树。预演用 --dry-run，真接回到主树跑。`);
+    return { ok: false, kind: 'worktree', worktree: true, error: `从临时 worktree 真接回被硬拦：${root}`, face };
+  }
   const c = classifySkillsMount({ root, home, dir });
   if (c.kind === 'unscanned') return { ok: false, unscanned: true, kind: c.kind, reason: c.reason, face: c.face };
   if (c.kind === 'file') {
     return { ok: false, kind: 'file', error: `${c.face} 不是目录也不是链接——先移走再跑`, face: c.face };
+  }
+  // 本检查的装载面是 <home>/.claude/skills。家目录里没有 .claude/（只有 .mirasim/ 也算）
+  // 就不是这块要守的执行体——不许 mkdir 凭空造出 Claude 发现面。
+  const faceParent = join(home, dir);
+  if (c.kind === 'missing' && !existsSync(faceParent)) {
+    return { ok: true, changed: false, skipped: true, kind: 'missing', reason: `${faceParent} 不在——不凭空造装载面`, face: c.face };
   }
   const srcNames = listSkillNames(c.src);
   if (!srcNames.length) {

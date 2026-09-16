@@ -74,7 +74,13 @@
    首审交卷只写待审票，由指挥官按在役审官数拉取；返工才复用原会话再推一针。交卷成功后本会话会被停掉（树留着）。**mirasim 路径没有 orchestration 结算**：不要 `notify --type worker_done`、不要取 Run id、不要写卡备注——那几步在 mirasim 会话里没有对应物，`worker-done` 之后你不再有「结算这一跳」的动作。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，先照报错修，修不好升级给帅；退出码 0 才算交卷成功。
 4. 交卷后**等审**：审官红项会经 GitHub（`--request-changes` review）打回。你自己读 PR 的 review 状态判有没有被打回——
-   红了逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。
+   **看清楚每条前面标的级别**（`P1`/`P2`/`P3`，判据见 `host/skills/dispatch/review-standard.md`）：
+   - **P1 = 必须修**，本 PR 修完才算返工完成；
+   - **P2 = 不挡合**：审官已开了 follow-up 单（正文 `另单：#NNNN`），**你不用在本 PR 修它**；
+   - **P3 = 不用管**。
+   - 有 `suggestion` 块的，直接 GitHub 上点 Apply 即可，不必重新想改法。
+   修完 P1 → commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。判定绿由收口官在 GitHub 落 APPROVED，你无需再结算。
+   - **只改 P1、不动 P2/P3，不算偷工**——这是分级制度设计的本意，不是让你绕过审官。审官若把 P2 当 P1 打了（没标级别），那条按 P1 处理。
 
 文件内容例子（首行以「完工」开头；返工轮首行以「返工完成」开头）：
 
