@@ -1,29 +1,33 @@
 /**
- * go-fallback — opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话继续干活（issue #520）。
+ * go-fallback — opencode Go 通道限流/额度顶时切到备用 provider（issue #520）。
  *
- * 为什么需要它：
+ * 2026-09-15：直连 deepseek 渠道已删（用户拍板「不要留」）。默认备用列表为空，
+ * 且 deepseek 即使被写进 PI_GO_FALLBACK_PROVIDERS 也会被滤掉，不会读 auth、
+ * 不会探余额、不会 setModel 切过去。og 撞顶时错误上浮。测试用 fake-ds 仍可
+ * 通过环境变量覆盖（e2e 走这条）。
+ *
+ * 为什么还留这个扩展：
  * - opencode Go 是美元额度制（账户级共享），撞顶后 pi 对 GoUsageLimitError 这类额度耗尽错误
  *   判定为 non-retryable（pi-ai utils/retry.js 的 NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN），
- *   内置 auto-retry 直接放弃，工人当场挂掉、任务半途而废。
- * - 本扩展在 agent_end 捕获 stopReason=error 的最后一轮，把当前会话切到直连 DeepSeek 后
- *   队列一条 followUp 消息继续干活——不是重启、不是从头来（会话上下文完整保留）。
+ *   内置 auto-retry 直接放弃。有备用 provider 时，本扩展把当前会话切过去继续干活——
+ *   不是重启、不是从头来（会话上下文完整保留）。没有备用时明确报错，不假装切过。
  *
- * 机制（源码核对 + 本机实测，证据见 PR 正文）：
+ * 机制：
  * - 错误分类：
  *   · hard（额度耗尽类：GoUsageLimitError / FreeUsageLimitError / Monthly usage limit /
- *     quota / billing / available balance …）→ 首次失败立即降级（pi 不会重试这类错误）。
- *   · transient（429 / rate limit / overloaded / 5xx …）→ 连续第 N 次失败才降级
+ *     quota / billing / available balance …）→ 首次失败立即找备用（pi 不会重试这类错误）。
+ *   · transient（429 / rate limit / overloaded / 5xx …）→ 连续第 N 次失败才找备用
  *     （默认 N=2，给 pi 内置 auto-retry 一次机会；N 可用环境变量覆盖）。
- * - 降级 = pi.setModel(直连同 id 模型) + sendUserMessage(followUp) 续跑。
+ * - 降级 = pi.setModel(备用同 id 模型) + sendUserMessage(followUp) 续跑。
  *   pi 的 agent.continue() 每次重建 loop config 时重读 agent.state.model，
  *   所以 setModel 之后的续跑用的是新模型（不是请求发起时锁定的旧模型）。
- * - 直连凭据缺失：pi.setModel 返回 false（且 modelRegistry.find 也可能找不到）→ 明确报错，
+ * - 备用凭据缺失：pi.setModel 返回 false（且 modelRegistry.find 也可能找不到）→ 明确报错，
  *   不静默降级、不假装切过。
  * - setModel 会把新模型写进 settings.json 默认值（异步写队列）；降级后恢复原默认——
  *   立即恢复一次（尽力），并在 agent_settled / session_shutdown 再各补一次
  *   （写队列是异步落盘，首次恢复可能被队列里的旧值覆盖，补刀是必须的）。
  *   只改 defaultProvider/defaultModel 两个字段，不碰用户在降级后改的其它设置。
- *   这样后续按默认启动的 worker 不会静默变成直连（#519 的 Go 主通道不能被这次降级改掉）。
+ *   这样后续按默认启动的 worker 不会静默变成备用通道（#519 的 Go 主通道不能被这次降级改掉）。
  * - 切换可见性：appendEntry（会话持久记录）+ ui.notify（TUI 提示）+ 一条 custom 消息
  *   （进上下文 + 上屏）+ stderr 日志，否则「切过了」和「本来就没限流」分不开。
  *
@@ -32,11 +36,9 @@
  *     主通道 provider 列表（逗号分隔），默认 "opencode-go,mirasim"
  *     （#841：不含 gw/grok/xai——网关错误归网关自己降级，扩展不插第二层）
  *   PI_GO_FALLBACK_PROVIDERS / PI_GO_FALLBACK_PROVIDER
- *     降级目标 provider 列表（逗号分隔），默认 "deepseek"
- *     切到 deepseek 前必须探余额，402 / 没钱不算降级。
+ *     降级目标 provider 列表（逗号分隔），默认空。deepseek 写入也会被滤掉。
  *   PI_GO_FALLBACK_MODEL     降级目标默认模型（同 id 不存在时兜底），默认 "deepseek-v4-flash"
  *   PI_GO_FALLBACK_TRANSIENT_AFTER  transient 错误连续失败几次后降级，默认 2
- *   PI_GO_FALLBACK_BALANCE_URL  余额探针地址（测试注入；默认 DeepSeek /user/balance）
  *
  * 纯逻辑在 go-fallback-core.mjs（node 22 可测），本文件只做运行时接线。
  */
@@ -46,8 +48,6 @@ import {
   classifyFallbackError,
   resolveProviderLists,
   planSwitch,
-  needsBalanceProbe,
-  probeDeepseekBalance,
   planFallbackTarget,
   DEFAULT_TRANSIENT_AFTER,
 } from "./go-fallback-core.mjs";
@@ -128,19 +128,6 @@ function restoreDefaults() {
   }
 }
 
-function readDeepseekKey() {
-  try {
-    const fs = require("fs");
-    const path = require("path");
-    const auth = JSON.parse(fs.readFileSync(path.join(agentDir(), "auth.json"), "utf8"));
-    const rec = auth && auth.deepseek;
-    if (!rec) return "";
-    return rec.key || rec.apiKey || "";
-  } catch {
-    return "";
-  }
-}
-
 export default function (pi) {
   pi.on("agent_end", async (event, ctx) => {
     // 只在主通道（Go / mirasim）上动作；网关 gw/grok/xai 不在 PRIMARIES 默认里（#841）。
@@ -183,21 +170,10 @@ export default function (pi) {
       return;
     }
 
-    // 找降级模型：同 id 优先，找不到用默认兜底模型。deepseek 必须余额探针过才用。
+    // 找降级模型：同 id 优先，找不到用默认兜底模型。已删渠道（deepseek）在决策层就被滤掉。
     let fallback = null;
     for (const provider of FALLBACK_PROVIDERS) {
-      // 没探过的 deepseek 先探再判；别的备用（测试 fake-ds）直接用。
-      let probe = null;
-      if (needsBalanceProbe(provider)) {
-        probe = await probeDeepseekBalance({
-          apiKey: readDeepseekKey(),
-          url: process.env.PI_GO_FALLBACK_BALANCE_URL,
-        });
-        if (!probe.ok) {
-          console.error(`[go-fallback] deepseek 余额探针未过（${probe.reason}），不算降级`);
-        }
-      }
-      const use = planFallbackTarget({ provider, currentProvider: model.provider, probe });
+      const use = planFallbackTarget({ provider, currentProvider: model.provider });
       if (use.action !== "use") continue;
       fallback = ctx.modelRegistry.find(provider, model.id) ||
         ctx.modelRegistry.find(provider, FALLBACK_MODEL);
@@ -205,11 +181,12 @@ export default function (pi) {
       fallback = null;
     }
     if (!fallback) {
+      const targets = FALLBACK_PROVIDERS.length ? FALLBACK_PROVIDERS.join(",") : "（默认无备用）";
       ctx.ui.notify(
-        `go-fallback: 无可用备用模型（${FALLBACK_PROVIDERS.join(",")}；${model.id}/${FALLBACK_MODEL}），无法降级`,
+        `go-fallback: 无可用备用模型（${targets}；${model.id}/${FALLBACK_MODEL}），无法降级`,
         "error"
       );
-      console.error(`[go-fallback] 无降级模型: ${FALLBACK_PROVIDERS.join(",")} ${model.id}/${FALLBACK_MODEL}`);
+      console.error(`[go-fallback] 无降级模型: ${targets} ${model.id}/${FALLBACK_MODEL}`);
       return;
     }
 
@@ -262,7 +239,7 @@ export default function (pi) {
       pi.sendMessage(
         {
           customType: "go-fallback-record",
-          content: `〔go-fallback〕opencode Go 通道（${model.provider}/${model.id}）限流/额度耗尽，已自动切到直连 ${fallback.provider}/${fallback.id} 继续。原因：${text.slice(0, 240)}`,
+          content: `〔go-fallback〕opencode Go 通道（${model.provider}/${model.id}）限流/额度耗尽，已自动切到备用 ${fallback.provider}/${fallback.id} 继续。原因：${text.slice(0, 240)}`,
           display: true,
           details: record,
         },
@@ -272,16 +249,16 @@ export default function (pi) {
 
     // 可见记录三：TUI 提示
     try {
-      ctx.ui.notify(`go-fallback: 已切直连 ${fallback.id} 继续（${text.slice(0, 60)}）`, "warning");
+      ctx.ui.notify(`go-fallback: 已切备用 ${fallback.id} 继续（${text.slice(0, 60)}）`, "warning");
     } catch {}
 
-    // 续跑：hard（额度耗尽）时 pi 不会重试，必须自己触发续跑——followUp 让当前任务在直连通道上继续
+    // 续跑：hard（额度耗尽）时 pi 不会重试，必须自己触发续跑——followUp 让当前任务在备用通道上继续
     // （不重启、不从头来）。transient 时 pi 的内置 auto-retry 会在 setModel 后自己继续（重读新模型），
     // 不需要额外触发，也不留多余的收尾轮。
     if (kind === "hard") {
       try {
         pi.sendUserMessage(
-          `〔系统：go-fallback〕opencode Go 通道限流/额度耗尽，本会话已自动切换到直连 ${fallback.provider}/${fallback.id} 继续。请接着当前任务往下做：不要重新开始、不要重复已完成步骤，把没做完的部分做完。`,
+          `〔系统：go-fallback〕opencode Go 通道限流/额度耗尽，本会话已自动切换到备用 ${fallback.provider}/${fallback.id} 继续。请接着当前任务往下做：不要重新开始、不要重复已完成步骤，把没做完的部分做完。`,
           { deliverAs: "followUp" }
         );
       } catch (e) {

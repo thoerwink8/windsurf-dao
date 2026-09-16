@@ -2,7 +2,7 @@
 // - Port 8457 = "fake-go"   (mimics opencode.ai/zen/go):
 //     GO_MODE=quota（默认）: req#1 OK with tool call, then 429 GoUsageLimitError（额度耗尽，non-retryable）
 //     GO_MODE=rate-limit     : every request 429 rate_limit_error（瞬时限流，pi 会内置重试）
-// - Port 8458 = "fake-ds"   (mimics direct api.deepseek.com): req#1 tool call, req>=2 text
+// - Port 8458 = "fake-ds"   (generic OpenAI-compatible fallback; not a live vendor): req#1 tool call, req>=2 text
 // Every request is logged to <base>/requests.jsonl for evidence.
 import http from "node:http";
 import fs from "node:fs";

@@ -735,11 +735,35 @@ function recoveredManualReason(policy, reason, whence) {
 }
 
 /**
+ * 无署名 issue（快路 PR，pr-fast 按设计不收 issue）取不到 human_holds。
+ * 没查成不许放行 auto——与 commander-core 快路返工同一失败方向（#1240）。
+ */
+export const UNSIGNED_ISSUE_MERGE_REASON =
+  'PR 正文/标题里没有署名 issue——取不到 human_holds 判据，不许放行 auto（快路 PR 属正常形态）';
+
+export function unsignedIssueMergePolicy() {
+  return {
+    ok: true,
+    mergePolicy: 'manual',
+    mergeReason: UNSIGNED_ISSUE_MERGE_REASON,
+    source: 'no-issue',
+  };
+}
+
+function issueIsUnsigned(issue) {
+  return issue !== undefined && (issue == null || String(issue).trim() === '');
+}
+
+/**
  * #799：审官任务书的 merge-policy。
- * 显式旗标 > 账本 > 卡备注；都读不到才回退 auto，并带 fallbackReason 写进任务书。
+ * 显式旗标 > 账本 > 卡备注；无署名 issue 走 manual（取不到 human_holds）；
+ * 都读不到才回退 auto，并带 fallbackReason 写进任务书。
+ *
+ * `issue` 三态：省略（undefined）= 这次查找没把署名纳入；显式 null/空 = 快路无署名。
+ * 只有后一种才切 manual——旧测试不传 issue，仍走 fallback auto。
  */
 export function resolveReviewerMergePolicy({
-  explicitPolicy, explicitReason, ledger, comment,
+  explicitPolicy, explicitReason, ledger, comment, issue,
 } = {}) {
   const explicit = String(explicitPolicy || '').trim();
   if (explicit) {
@@ -783,6 +807,8 @@ export function resolveReviewerMergePolicy({
         : {}),
     };
   }
+
+  if (issueIsUnsigned(issue)) return unsignedIssueMergePolicy();
 
   return {
     ok: true,

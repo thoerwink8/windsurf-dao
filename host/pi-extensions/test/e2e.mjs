@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// go-fallback 端到端验收（issue #520；#841 后仍只覆盖 opencode-go → 直连这条原功能）
+// go-fallback 端到端验收（issue #520；#841 后覆盖 opencode-go → 环境变量指定的备用 fake-ds）
 //
 // 用法（在仓库根或本目录）：
 //   node host/pi-extensions/test/e2e.mjs              # 硬限流（quota）场景：首轮放行、随后 429 额度耗尽
 //   node host/pi-extensions/test/e2e.mjs rate-limit   # 瞬时限流场景：全程 429 rate_limit_error
-//   node host/pi-extensions/test/e2e.mjs no-creds     # 直连凭据缺失场景（预期明确报错、不许静默降级成功）
+//   node host/pi-extensions/test/e2e.mjs no-creds     # 备用凭据缺失场景（预期明确报错、不许静默降级成功）
 //
 // #841 判别性（gw 连续 403 不切 / og 仍切）不在本脚本：本脚本靠 PI_GO_FALLBACK_PRIMARY=fake-go
 // 覆盖主通道，若改成 PRIMARY=gw 等于把 bug 加回来。默认 PRIMARIES 不含 gw 的断言在
@@ -12,7 +12,7 @@
 //
 // 干的事：
 //   1. 造一个一次性 pi 环境（PI_CODING_AGENT_DIR / 会话目录独立，不碰本机 ~/.pi/agent）
-//   2. 起 fake 上游（fake-go 先放行一轮工具调用、再 429 额度耗尽；fake-ds 直连成功）。
+//   2. 起 fake 上游（fake-go 先放行一轮工具调用、再 429 额度耗尽；fake-ds 备用成功）。
 //      端口用随机空闲端口 + 环境变量传递，绝不占用固定端口——防止残留进程劫持测试。
 //   3. 用 pi --print 派一个「跑一半」的任务：先写 PHASE1_BEFORE_CUTOVER，再回复 PHASE2
 //   4. 断言，缺一报错：

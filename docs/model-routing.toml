@@ -23,19 +23,11 @@ launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
 DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @earendil-works/pi-coding-agent；别装上游 @mariozechner/pi-coding-agent，装法与坑见 NEW-MACHINE.md §6）。
-派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
+派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件本节 default_model 为固化点）。
 峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
 
-2026-08-16 起本节降为**应急直连通道**：通道规则唯一落点见 [providers.opencode-go].why（2026-08-16 追加拍板）。
-两条通道跑的是同一个模型，所以模型条目只有一条（战绩记在一处，不拆两本账）。
-
-**-direct 止血（#569）与 cli_model 的限制**：本机 `~/.pi/agent/models-store.json` 的 deepseek provider
-两条 model id 已加 `-direct` 后缀（deepseek-v4-flash-direct / deepseek-v4-pro-direct），断掉 pi 内置
-「同 model id 找别的 provider」的静默 fallback（2026-08-16 实证：og 503 → ds 直连 1ms 内切换，成本翻倍
-除账单外零信号）。**本文件表达不了这条通道差异**：[[models]] 的 cli_model 只有一个字段，两个通道的
-真实模型名不同（opencode-go 侧 `deepseek-v4-flash` / 直连侧 `deepseek-v4-flash-direct`），这儿只能记
-主通道的。将来充值后切直连派工时，在 launch 模板/派工参数里显式写 `-direct` 模型名（NEW-MACHINE §6），
-别指望本文件帮你变。本机 watchdog.mjs 的 model-change 检测 #807 已删。
+2026-09-15：官方直连渠道已删（用户拍板「不要留」）。本节是 DeepSeek **型号**的启动模板，
+launch 走 opencode-go，不是官方直连。型号仍派得出去，渠道是 og / gw-dspool / commandcode / devin。
 """
 
 [providers.grok]
@@ -121,7 +113,7 @@ Command Code 官方 CLI，本仓用途 = **非交互查证/测速**（2026-08-16
 pi 接不上 commandcode 的根因（2026-08-16 帅·A 实测，不是 key 的问题）：
 - Provider API 协议通：`https://api.commandcode.ai/provider/v1/chat/completions`（OpenAI 兼容）与 `/messages`（Anthropic 兼容）实测可用，`Authorization: Bearer <key>`，模型列表在 `/provider/v1/models`（55 个）。
 - 但 pi 的 provider 是**代码里注册**的，不是配置里声明的：往 `~/.pi/agent/models-store.json` 凭空写一个 `commandcode` provider 会被静默忽略，`pi auth check --provider commandcode` 返回 `{"status":"not_ready","reason":"provider_not_found"}`，`pi --list-models` 也不列出。
-- 所以「拿到 apikey 就能在 pi 里用」这个前提**不成立**；要在 pi 里用的唯一路是写 provider 插件，而插件方案 2026-08-16 已拍板不采用。**pi 保持 DeepSeek 官方 API 原通道。**
+- 所以「拿到 apikey 就能在 pi 里用」这个前提**不成立**；要在 pi 里用的唯一路是写 provider 插件，而插件方案 2026-08-16 已拍板不采用。**pi 不接 commandcode，也不走已删的 DeepSeek 官方直连**——DeepSeek 型号走仍在役的 opencode-go / gw-dspool；commandcode 只走本节 `cmdc` CLI。
 """
 why = "用户 2026-08-16 购买 Command Code 会员（$10/月 GOAT 档），用于**非交互查证/测速**：同一道题实测 5.5s（deepseek-v4-flash）出结果，官方 CLI 断链会明确报错（vs 社区插件可能静默退回默认 provider）。当前不能承载需进 git 的 Orca 工人（2026-08-16 帅·A 裁定：Orca agent 识别清单不含它，worker-start --terminal 必返回 agent_unconfigured）。GOAT 覆盖面只有开源模型（Claude/GPT 全系 MODEL_NOT_IN_PLAN），Gemini 本机不可用（2026-08-16 帅·A 实测）。"
 decided = "2026-08-16"
@@ -156,13 +148,12 @@ Zen 与 Go 在 pi 里是两个独立 provider（`opencode` / `opencode-go`），
 限额与折算价见 https://opencode.ai/docs/go/ 与账号控制台，本文件不复制会过期的数字。
 """
 why = """
-本字段仍是 **og vs 直连** 规则的权威落点（用户 2026-08-16 拍板）：[providers.deepseek] 直连只在用户拍板时启用——
-撞额度顶后必须报给用户，由用户在「等恢复 / 充值 / 换模型 / 停单 / 手动切直连」之间决定，**AI 不得自行切换到直连**。
+2026-09-15：官方直连渠道已删。og 撞额度顶后必须报给用户，由用户在「等恢复 / 换模型 / 停单」之间决定，**AI 不得自行切到已删渠道**。
 2026-09-03：ds-flash 写码日常通道改 gw-dspool（本节降为顺位 2；服务器实测 403 RegionError，需 opencode 后台 opt-in）；ds-pro 判断仍走本节。
 写码 A 位是另一条通道（Devin CLI 的 flash-max，#688），见 JSON 顺位；本节是 flash 的 fallback 之一。
-判例（2026-08-16 og 402 成本跃迁）：og 撞顶报 402 后，擅自先切 ds 直连、再换 claude-opus，成本从 ¥0.05 级
+判例（2026-08-16 og 402 成本跃迁）：og 撞顶报 402 后，擅自先切官方直连、再换 claude-opus，成本从 ¥0.05 级
 跃到 $10 级——「AI 自行切换」的代价样本，故立此规。
-与直连 deepseek 是同一模型、能力相同、无质量风险，额度池比按量便宜（官方口径 $10/月买 6 倍价值额度）。
+额度池比按量便宜（官方口径 $10/月买 6 倍价值额度）。
 """
 decided = "2026-08-16"
 
@@ -232,7 +223,7 @@ Windsurf IDE 驱动 Devin 走 ACP（`devin acp`），Orca 的 agent schema 里�
 非交互形态（-p --prompt-file，可指定 --model）2026-08-26 凌晨全链验证过（PR #776 MERGED），
 保留在 docs/cli-notes/devin.md 作为备用通道；本表默认交互形态（用户拍板 2026-08-26）。
 """
-why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连（#688）；2026-08-26 实测交互 TUI 形态可用（补粘+回车），选型恢复 devin（#771 全链实测）。"
+why = "用户 2026-08-21 拍板：写码通道优先级当时是 devin > opencode-go > 官方直连（#688；官方直连 2026-09-15 已删）。2026-08-26 实测交互 TUI 形态可用（补粘+回车），选型恢复 devin（#771 全链实测）。"
 decided = "2026-08-26"
 
 [providers.minimax-h3]
