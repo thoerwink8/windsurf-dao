@@ -22,7 +22,9 @@ ProtectSystem=strict
 ReadWritePaths=/home/orca/.dao/execution/usage
 PrivateTmp=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-TimeoutStartSec=90
+# 90s SIGTERM'd a live 40k-row round (2026-09-16). Bounded incremental work
+# plus this ceiling: SIGTERM is not the collection-gap exit.
+TimeoutStartSec=300
 StandardOutput=journal
 StandardError=journal
-# Exit 2 is an explicit collection gap; leave it visible as failed.
+# Exit 2 is an explicit collection fault; leave it visible as failed.

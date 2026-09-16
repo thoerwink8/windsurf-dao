@@ -12,7 +12,7 @@
 // 只是要看得见总量。降预算是显式动作——改这个数字本身就是一次记账。
 
 /** 当前允许的 spawnSync 调用总数。第二刀每做一批就把这个数改小，不许只加不减。 */
-export const SPAWN_BUDGET = 153;
+export const SPAWN_BUDGET = 155;
 
 /**
  * 数的是**调用**，不是「提到」。
@@ -35,6 +35,11 @@ export const BUDGET_NOTE = '第二刀做到 134；合入 dao now 测试 +3、再
   + '#1146 skills 装载面 CLI 黑盒 +3（onboard.mjs 整目录劫持 e2e ×1、skills-heal.mjs 被劫 exit 0 / 没查成 exit 2 ×2），'
   + '验的是 systemd 认的退出码和 onboard 真把 skills-elsewhere 接上，进程内跑等于不验 CLI 边界，预算 151；'
   + '#1165 控制面闸现役 git push / land.mjs 真推送黑盒 +2，预算 153；'
+  + '孤儿测试进程闸 +3（test-child-guard 验预加载装上之后的真实进程行为：爹活着时一个字不打印 ×1、'
+  + '没记 owner pid 时 no-op ×1、爹没了时自己退出且退出码认得出 ×1），吃掉 2 格余量后溢出 1，预算 154——'
+  + '这一闸的判据就是「另一个进程的寿命」，进程内跑等于不验；造死 pid 那一处已复用上一条的返回值省掉；'
+  + '合入 origin/master 的 dropped-deepseek-ops 现行指针 grep 黑盒 +1，预算 155——'
+  + '扫的是整树现行文档，进程内跑等于不验检索面；'
   + '剩下的是真建树/真发请求的动词，进程内跑会共享模块状态互相污染，转它们要先隔离状态；目标 ≤40';
 
 /**

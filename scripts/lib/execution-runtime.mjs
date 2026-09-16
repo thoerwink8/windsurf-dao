@@ -7,7 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
-import {scanSessionProcs} from './dispatch/lease.mjs';
+import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
 import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,EXECUTION_WAITING,isWaitingState,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
@@ -142,7 +142,7 @@ export function createExecutionRuntime(opts={}) {
   function processCheck(workdir) {
     const s=scan();
     if(s?.ok!==true||!Array.isArray(s.procs))throw busy('worktree process scan incomplete','lease-unscanned');
-    return s.procs.filter(p=>p&&String(p.cwd).replace(/\/+$/,'')===workdir.replace(/\/+$/,''));
+    return s.procs.filter(p=>p&&cwdBelongsToTree(p.cwd,workdir));
   }
   function assertAdmission() {
     const maintenance=maintenanceStatus(path.join(stateDir,'maintenance.json'),now());

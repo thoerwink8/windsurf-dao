@@ -329,6 +329,25 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
     assert.ok(!/m=auto/.test(inject), '不得渲染成 auto → ' + inject);
   });
 
+  it('无署名 issue（显式 null）+ 账本缺字段 → manual，不得 fallback auto', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' },
+      comment: { mergePolicy: null, mergeReason: null },
+      issue: null,
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.mergePolicy, 'manual', JSON.stringify(r));
+    assert.equal(r.source, 'no-issue', JSON.stringify(r));
+    assert.match(String(r.mergeReason), /human_holds/);
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #1286', pr: '1286',
+      soldierDispatchId: '', mergePolicy: r.mergePolicy, mergeReason: r.mergeReason,
+    });
+    assert.ok(/m=manual/.test(inject), '注入 m=manual → ' + inject);
+    assert.ok(!/m=auto/.test(inject), '不得渲染成 auto → ' + inject);
+  });
+
   it('读不到记账 → 回退 auto，任务书 fb= 写明原因', async () => {
     const S = await S_LOAD;
     const r = S.resolveReviewerMergePolicy({

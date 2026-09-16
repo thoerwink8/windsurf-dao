@@ -18,6 +18,7 @@
 
 import { shouldRestartReviewer } from './session-reconcile.mjs';
 import { EXECUTION_WAITING, isWaitingState } from './execution-states.mjs';
+import { cwdBelongsToTree } from './dispatch/lease.mjs';
 
 /** 默认静默阈值：45 分钟。够长到不误伤长思考/长跑测试，够短到不至于像今天那样躺 10 小时。 */
 export const DEFAULT_SILENCE_MS = 45 * 60 * 1000;
@@ -283,7 +284,7 @@ export function treeProcessState(tree, { scan } = {}) {
     return { state: 'idle', why: 'mirasim 服务没在跑，该树不可能有会话进程' };
   }
   const procs = Array.isArray(scan.procs) ? scan.procs : [];
-  const hits = procs.filter((p) => String(p && p.cwd || '').replace(/\/+$/, '') === want);
+  const hits = procs.filter((p) => cwdBelongsToTree(p && p.cwd, want));
   if (!hits.length) return { state: 'idle', why: `该树没有活着的会话进程（扫到 ${procs.length} 个会话进程，都不在这棵树）` };
   return {
     state: 'running',

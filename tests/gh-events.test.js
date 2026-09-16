@@ -9,6 +9,7 @@
 //   · sudoers 白名单没开宽（桥能叫醒的单元只有写死的那两个）
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -570,6 +571,201 @@ describe('2026-09-16 补修：EOF 孤儿 hook 与初始 ping 丢失', () => {
     assert.deepEqual(shouldSpawnForward({ childAlive: false, stopping: false }), {
       spawn: true, why: null,
     });
+  });
+});
+
+describe('2026-09-16 补修：外部信号退出不得假活', () => {
+  async function liveChild() {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    return child;
+  }
+
+  function waitExit(child, ms = 8000) {
+    return new Promise((resolve, reject) => {
+      if (child.exitCode != null || child.signalCode != null) {
+        return resolve({ code: child.exitCode, signal: child.signalCode });
+      }
+      const t = setTimeout(() => reject(new Error(`子进程 ${child.pid} 等退出超时`)), ms);
+      child.once('exit', (code, signal) => {
+        clearTimeout(t);
+        resolve({ code, signal });
+      });
+    });
+  }
+
+  function reap(child) {
+    if (!child || child.exitCode != null || child.signalCode != null) return;
+    try { process.kill(child.pid, 'SIGKILL'); } catch { /* 已经不在 */ }
+  }
+
+  it('事故原样：exitCode=null、killed=false、signalCode=SIGTERM → 必须判死并允许重连', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const ghost = { exitCode: null, killed: false, signalCode: 'SIGTERM' };
+    assert.equal(isChildAlive(ghost), false);
+    assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(ghost), stopping: false }), {
+      spawn: true, why: null,
+    });
+  });
+
+  it('审官复现：exitCode=null、signalCode=null、killed=true → 仍算活着，不得再 spawn', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const midKill = { exitCode: null, signalCode: null, killed: true };
+    assert.equal(isChildAlive(midKill), true);
+    assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(midKill), stopping: false }), {
+      spawn: false, why: '当前桥还在，不启第二桥',
+    });
+    assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(midKill), stopping: true }), {
+      spawn: false, why: '正在停',
+    });
+  });
+
+  it('发出 child.kill 后、exit 事件前：真实子进程仍活着，不得再 spawn', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    // 忽略 SIGTERM，把「已发信号、尚未退出」窗口拉长到可断言。
+    const child = spawn(
+      process.execPath,
+      ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'],
+      { stdio: 'ignore' },
+    );
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    try {
+      assert.equal(isChildAlive(child), true);
+      assert.equal(child.kill('SIGTERM'), true);
+      assert.equal(child.killed, true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      assert.equal(isChildAlive(child), true);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: false, why: '当前桥还在，不启第二桥',
+      });
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: true }), {
+        spawn: false, why: '正在停',
+      });
+    } finally {
+      reap(child);
+      await waitExit(child).catch(() => {});
+    }
+  });
+
+  it('外部 SIGTERM：真实子进程 exitCode 仍 null、killed 仍 false，必须判死并允许重连', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const child = await liveChild();
+    try {
+      assert.equal(isChildAlive(child), true);
+      process.kill(child.pid, 'SIGTERM');
+      const exited = await waitExit(child);
+      assert.equal(exited.signal, 'SIGTERM');
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, 'SIGTERM');
+      assert.equal(child.killed, false);
+      assert.equal(isChildAlive(child), false);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: true, why: null,
+      });
+    } finally {
+      reap(child);
+    }
+  });
+
+  it('外部 SIGKILL：真实子进程同样判死并允许重连', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const child = await liveChild();
+    try {
+      process.kill(child.pid, 'SIGKILL');
+      const exited = await waitExit(child);
+      assert.equal(exited.signal, 'SIGKILL');
+      assert.equal(child.exitCode, null);
+      assert.equal(child.killed, false);
+      assert.equal(isChildAlive(child), false);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: true, why: null,
+      });
+    } finally {
+      reap(child);
+    }
+  });
+
+  it('正常 exit：真实子进程判死并允许重连', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const child = spawn(process.execPath, ['-e', 'process.exit(7)'], { stdio: 'ignore' });
+    try {
+      const exited = await waitExit(child);
+      assert.equal(exited.code, 7);
+      assert.equal(child.exitCode, 7);
+      assert.equal(child.signalCode, null);
+      assert.equal(isChildAlive(child), false);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: true, why: null,
+      });
+    } finally {
+      reap(child);
+    }
+  });
+
+  it('存活子进程不得再 spawn 第二条', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const child = await liveChild();
+    try {
+      assert.equal(isChildAlive(child), true);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: false, why: '当前桥还在，不启第二桥',
+      });
+    } finally {
+      reap(child);
+      await waitExit(child).catch(() => {});
+    }
+  });
+
+  it('停止过程：即使真实子进程已死也不许重连', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const child = await liveChild();
+    try {
+      process.kill(child.pid, 'SIGTERM');
+      await waitExit(child);
+      assert.equal(isChildAlive(child), false);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: true }), {
+        spawn: false, why: '正在停',
+      });
+    } finally {
+      reap(child);
+    }
+  });
+
+  it('观测边界：forward 刚被打死但 ping 还新 → classify 仍绿（靠重连，不靠立刻判红）', async () => {
+    const { classifyGhEventBridge } = await LIB;
+    const r = classifyGhEventBridge({
+      probed: true, now: NOW,
+      state: healthy({
+        forward: {
+          restarts: 1,
+          lastExitAt: ago(5 * 1000),
+          lastExitCode: null,
+          lastExitSignal: 'SIGTERM',
+          recentExits: [ago(5 * 1000)],
+        },
+      }),
+    });
+    assert.equal(r.state, 'ok');
+    assert.match(r.detail, /在守着/);
+  });
+
+  it('桥必须用 lib 的 isChildAlive；本地假活判据和 stop 忽略 signalCode 都不许还在', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'gh-event-bridge.mjs'), 'utf8');
+    const lib = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'gh-events.mjs'), 'utf8');
+    assert.match(lib, /export function isChildAlive/);
+    assert.match(lib, /signalCode/);
+    assert.equal(/if \(c\.killed\) return false/.test(lib), false);
+    assert.match(src, /isChildAlive/);
+    assert.equal(/function isChildAlive/.test(src), false);
+    assert.equal(/exitCode === null && !c\.killed/.test(src), false);
+    assert.match(src, /signalCode/);
   });
 });
 
