@@ -53,6 +53,7 @@ import {
   collectDockProofs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
+import { loadReviewRoundsMax, fuseChoiceRequired } from './lib/review-cap.mjs';
 import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
@@ -1892,6 +1893,10 @@ export function reworkBriefPath(action, { dir = null } = {}) {
 
 /** 红项全文正文：原样转录，不摘要、不改写（#931 的整个理由就是「别再让 AI 翻译一遍」）。 */
 export function reworkBriefText(action) {
+  const cap = Number.isFinite(Number(action.reviewRoundsMax)) && Number(action.reviewRoundsMax) > 0
+    ? Number(action.reviewRoundsMax)
+    : null;
+  const fuse = cap != null ? fuseChoiceRequired(action.redRounds, cap) : null;
   return [
     `# 返工任务：PR #${action.pr}`,
     '',
@@ -1899,6 +1904,8 @@ export function reworkBriefText(action) {
     // 不写 `署名 issue #null`（读任务书的人会去找那张单）。
     ...(action.issue != null ? [`- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`] : [`- 审官红项打在 head ${action.head} 上；**无署名 issue**（快路 PR）`]),
     `- 当前 head 上的判红轮数：${action.redRounds}`,
+    ...(cap != null ? [`- 审查轮次上限：${cap}（docs/release-policy.json budget.per_issue.review_rounds_max）`] : []),
+    ...(fuse && fuse.required ? ['- **已到上限**：剩下的只能改判或拆单，不许再写一轮「请修 P2」'] : []),
     '- 下面是审官那条 CHANGES_REQUESTED review 的**正文全文**（未摘要、未改写）：',
     '',
     '---',
@@ -2139,8 +2146,23 @@ function ensureTreeFromPr(action, { dryRun, say, run = runCmd }) {
   return { ok: true, tree: path, headRef };
 }
 
+function reviewRoundsMaxFromPolicy() {
+  try {
+    const r = loadReviewRoundsMax(readFileSync(join(ROOT, 'docs', 'release-policy.json'), 'utf8'));
+    return r.cap;
+  } catch {
+    return undefined;
+  }
+}
+
+function withReviewCap(action) {
+  if (Number.isFinite(Number(action.reviewRoundsMax)) && Number(action.reviewRoundsMax) > 0) return action;
+  const cap = reviewRoundsMaxFromPolicy();
+  return cap ? { ...action, reviewRoundsMax: cap } : action;
+}
+
 function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
-  const written = writeReworkBrief(action, { dir: briefDir });
+  const written = writeReworkBrief(withReviewCap(action), { dir: briefDir });
   if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
   const spec = reworkSpec(action, written.path);
   try { buildSoldierInject({ spec, issue: action.issue }); }

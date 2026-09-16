@@ -150,6 +150,7 @@ import {
   readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
   formatOwnerToken,
 } from './lib/test-child-guard.mjs';
+import { inspectReviewTiers } from './lib/review-tier-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   judgeHarvest, inspectHarvestFixtures,
@@ -1553,6 +1554,25 @@ function checkEphemeralLifecycle() {
   green('短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量');
 }
 
+// ── 红项分级接线闸（2026-09-16 用户拍板走甲，#1227）─────────────────────────
+// 这一条本身就是当天挖出的病的判据：规矩写了、模板指了，但没有任何东西核它，
+// 于是「机制装了但没生效」（#1051 同一形状）。分级制度若只活在 markdown 里，
+// 第一步就退化成「谁也不知道该标 P1 还是 P2」。
+//
+// 只核**可机械判定**的两件事：标准页三档齐全且两份任务书真指到它、
+// 熔断上限真有生产代码读（检查器自身 / 注释 / 字符串自命中不算）。
+// 判据在 lib/review-tier-check.mjs（不 import 那几个文档的任何解析器——
+// 自己查自己查不出错）。「审官标得对不对」是判断题，归审官与帅侧抽查，本闸不装作能判。
+function checkReviewTiers() {
+  const r = inspectReviewTiers({ root: ROOT });
+  if (r.kind === 'ok') { green(r.line); return; }
+  if (r.kind === 'unscanned') {
+    fail(r.line, r.howToFix || '落点被挪走时必须同轮改闸，否则闸静默开门', r.evidence || '');
+    return;
+  }
+  fail(r.line, r.howToFix || '把缺的那一层接上', r.evidence || '');
+}
+
 function checkOrcaRetirement() {
   const r = spawnSync(
     'grep',
@@ -2157,6 +2177,7 @@ checkInitiatives();
 checkListExitSamples();
 if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
+checkReviewTiers();
 checkOrcaRetirement();
 checkRetiredVerbAdvertSamples();
 checkRetiredVerbAdvertLive();
