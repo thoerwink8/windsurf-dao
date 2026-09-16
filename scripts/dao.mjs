@@ -199,6 +199,7 @@ import {
   ensureRepoLabels,
   resolveReviewerFromPr,
   resolveWorkerFromPr,
+  listPrReviews,
   planWorkerDone,
   completeWorkerDoneNotify,
   pickWorkerDoneDispatchId,
@@ -229,6 +230,10 @@ import {
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
+import {
+  loadReviewRoundsBudgetFile, judgeNextReviewRound, reviewRoundsExceededError,
+  HALT_CODE as REVIEW_ROUNDS_HALT, POLICY_REL as RELEASE_POLICY_REL,
+} from './lib/review-rounds-budget.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { resolveModelChannel } from './lib/channel-concurrency.mjs';
@@ -1893,6 +1898,10 @@ import {
   mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
+function reviewRoundsBudgetOf(root = ROOT) {
+  return loadReviewRoundsBudgetFile(join(root, RELEASE_POLICY_REL));
+}
+
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
 function thisCheckoutRoot() {
   const r = spawnSync('git', ['-C', ROOT, 'rev-parse', '--git-common-dir'], { windowsHide: true, encoding: 'utf8' });
@@ -2103,6 +2112,16 @@ async function cmdReviewerCreateMirasim(args) {
   // 的那一刻，不补这一句就等于顺手关掉了这道闸——切流量必须把闸一起搬过去，
   // 否则「闸还在代码里」和「闸还在这条路上」是两回事（memory bypassing-wrapper-loses-its-checks）。
   // 闸在选人之后：换厂前标签上的死人可能与工人同厂，先闸会把退路自己砍掉。
+  const listedRounds = listPrReviews({ pr: args.pr, runGh: gh });
+  if (!listedRounds.ok) fail(listedRounds.error, { pr: String(args.pr) });
+  const reviewRounds = judgeNextReviewRound({
+    reviews: listedRounds.reviews, budget: reviewRoundsBudgetOf(),
+  });
+  if (reviewRounds.state === 'exceeded') {
+    fail(reviewRoundsExceededError({
+      pr: args.pr, rounds: reviewRounds.rounds, max: reviewRounds.max,
+    }), { pr: String(args.pr), reviewRounds });
+  }
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: picked.modelId, routing,
   });
@@ -2298,7 +2317,10 @@ async function cmdWorkerDoneMirasim(args) {
   // #895 快马单没有 reviewer/* label，靠显式 --reviewer 指名。这个参数原来只接在 orca 路的
   // 调用点上（memory fix-landed-at-one-call-site-only），mirasim 路漏传 → 快马单在这条路上
   // 一律「没有 reviewer/* label」拒掉。label 优先级不变：不传才自读。
-  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh, reviewer: args.reviewer });
+  const plan = planWorkerDone({
+    pr: args.pr, body, runGh: gh, reviewer: args.reviewer,
+    reviewRoundsBudget: reviewRoundsBudgetOf(),
+  });
   if (!plan.ok) fail(plan.error, plan);
   const routing = loadOrFail();
   const execPolicy = readExecutorPolicy(routing);
@@ -2416,6 +2438,16 @@ async function cmdWorkerDoneMirasim(args) {
       why,
     });
   };
+  if (plan.halt === REVIEW_ROUNDS_HALT) {
+    const rr = plan.reviewRounds || {};
+    emit({
+      ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+      postedIssue, postedPr, action: REVIEW_ROUNDS_HALT,
+      why: reviewRoundsExceededError({ pr: plan.pr, rounds: rr.rounds, max: rr.max }),
+    });
+    return;
+  }
   if (plan.round === 'first') {
     await enqueueHandoff('首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官');
     return;

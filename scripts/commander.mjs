@@ -74,6 +74,7 @@ import { pruneDeadStrikes, stallWatchPath } from './lib/agent-stall-detect.mjs';
 import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment, exhaustedPushPath,
 } from './lib/exhausted.mjs';
+import { loadReviewRoundsBudgetFile, POLICY_REL as RELEASE_POLICY_REL } from './lib/review-rounds-budget.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
   runHubAsk, sendCardViaLarkCli, pendingFromAsk,
@@ -737,6 +738,7 @@ function buildSituation({ state } = {}) {
     cliVersions,
     breaker,
     askPolicy,
+    reviewRoundsBudget: loadReviewRoundsBudgetFile(join(ROOT, RELEASE_POLICY_REL)),
   };
 }
 
@@ -898,7 +900,7 @@ function execAction(action, { state, dryRun, log }) {
     case 'reap-ticket':
       return execReapTicket(action, { state, dryRun, say });
     case 'mark-exhausted':
-      return execMarkExhausted(action, { dryRun, say });
+      return execMarkExhausted(action, { state, dryRun, say });
     case 'clear-exhausted':
       return execClearExhausted(action, { dryRun, say });
     case 'reap-tree':
@@ -1384,7 +1386,17 @@ function execReapTicket(action, { state, dryRun, say }) {
   return { ok: true, removed };
 }
 
-function execMarkExhausted(action, { dryRun, say }) {
+function askReviewRoundsCard(action, { state, dryRun, say, send = sendHubAsk }) {
+  const fields = action && action.hubAsk;
+  if (!fields || !fields.number) return { sent: false, skipped: 'no-card' };
+  const r = hubAskOnce({
+    state, key: `review-rounds:${action.pr}`, fields, dryRun, send,
+  });
+  say(`  ${r.sent ? (r.dryRun ? '[dry] ' : '') + 'hub 卡：审查轮次停手 PR #' + action.pr : 'hub 卡略：' + (r.reason || r.error)}`);
+  return r;
+}
+
+function execMarkExhausted(action, { state, dryRun, say }) {
   const pr = action.pr;
   if (pr == null) {
     say('  mark-exhausted 缺 pr，不动手');
@@ -1415,6 +1427,7 @@ function execMarkExhausted(action, { dryRun, say }) {
   }
   if (labels.includes(EXHAUSTED_LABEL) || labels.includes(WAITING_USER_LABEL)) {
     say(`  PR #${pr} 已有认输/等用户标，不重复评论`);
+    askReviewRoundsCard(action, { state, dryRun, say });
     return { ok: true, skipped: 'already-labeled' };
   }
   const label = useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL;
@@ -1424,6 +1437,7 @@ function execMarkExhausted(action, { dryRun, say }) {
   const color = useWaiting ? 'FBCA04' : 'B60205';
   if (dryRun) {
     say(`[dry] 给 PR #${pr} 打「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`);
+    askReviewRoundsCard(action, { state, dryRun, say });
     return { ok: true, dryRun: true, label };
   }
   ensureDir(STATE_DIR);
@@ -1446,9 +1460,11 @@ function execMarkExhausted(action, { dryRun, say }) {
     'pr', 'comment', String(pr), '--repo', REPO, '--body-file', bodyFile], 20000);
   if (!commented.ok) {
     say(`  「${label}」已打、评论失败：${commented.error}`);
+    askReviewRoundsCard(action, { state, dryRun, say });
     return { ok: true, labeled: true, commented: false, error: commented.error, label };
   }
   say(`  PR #${pr} 已打「${label}」并评论（${action.verb} × ${action.tries}）`);
+  askReviewRoundsCard(action, { state, dryRun, say });
   return { ok: true, labeled: true, commented: true, label };
 }
 

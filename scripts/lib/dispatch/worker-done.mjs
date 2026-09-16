@@ -12,6 +12,7 @@
 import { parseOwnerNameRepo } from './repo.mjs';
 // 认领判据只有一份实现，在关单侧（同时管着「被否定的分句不算认领」与标题退路收严）。这里不抄第二份。
 import { attributedIssueNumbers, attributedIssueNumber } from '../close-issue.mjs';
+import { judgeNextReviewRound, HALT_CODE as REVIEW_ROUNDS_HALT } from '../review-rounds-budget.mjs';
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
 export const REVIEWER_LABEL_PREFIX = 'reviewer/';
@@ -545,7 +546,7 @@ export function listPrReviews({ pr, runGh } = {}) {
 }
 
 /** 完工计划：按已有 review 条数分首审 / 返工。#1125：首审只入队。 */
-export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
+export function planWorkerDone({ pr, body, runGh, reviewer, reviewRoundsBudget } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };
   // #895：快马单没有 reviewer/* label，允许显式 --reviewer 指名审官（label 优先级不变：不传才自读）。
@@ -560,6 +561,10 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   // 有署名单才再发 issue。不许把「没单号」说成「没处可发」。
   const listed = listPrReviews({ pr: n, runGh });
   if (!listed.ok) return listed;
+  const reviewRounds = judgeNextReviewRound({
+    reviews: listed.reviews,
+    budget: reviewRoundsBudget,
+  });
   const round = listed.count > 0 ? 'rework' : 'first';
   const prefix = round === 'rework' ? '返工完成' : '完工';
   const custom = body == null ? '' : String(body);
@@ -582,6 +587,8 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
     round,
     shouldCreate,
     reviewCount: listed.count,
+    reviewRounds,
+    halt: reviewRounds.state === 'exceeded' ? REVIEW_ROUNDS_HALT : null,
     pr: n,
     issue,
     reviewer: resolved.modelId,

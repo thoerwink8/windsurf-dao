@@ -27,6 +27,7 @@ const TERMINAL = [
   /找不到卡|不存在/,
   /unverified|disabled|invalid execution profile|unknown execution profile/i, // 执行目录判死
   /not a git repository|bad revision/i,
+  /review-rounds-exceeded/,                   // #1227 预算闸：再试不会让轮次变少
 ];
 
 /** 可试：成因会随时间改变。命中即照常走「宽限期 + 试满」。 */
@@ -158,6 +159,7 @@ export const RETRY_VERDICT_PROBES = {
     'reviewer-attach 失败：起审官会话没查成：execution profile unverified: codex-relay-gpt-5.6-sol',
     '仓 thoerwink8/windsurf-dao 分支 dao-1174 最新 job.dispatch 缺 repo——需人工打标',
     '找不到卡：path:/home/orca/mirasim-worktrees/windsurf-dao/dao-1152',
+    'review-rounds-exceeded：PR #885 审查轮次 8/6，不起下一轮',
   ],
   mustBeRetryable: [
     'mirasim 起会话失败: worktree already has an active or unknown session',

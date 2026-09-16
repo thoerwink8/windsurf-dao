@@ -35,6 +35,7 @@ import {
   drainLedgerKey, epochOf, MAX_DRAIN_TRIES,
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
+import { judgeNextReviewRound, buildReviewRoundsStopAction } from './review-rounds-budget.mjs';
 // #1236：重试键的三件套（判据版本 / 键拼装 / drain 账键）转出去，让**测试与生产共用同一把键**。
 // 手拼字面量的测试在加版本那天会静默失配（测试假绿、生产卡死）——今天漏的是测试，
 // 明天就是写侧（#909 的形状）。
@@ -1305,6 +1306,10 @@ function collectCandidates(situation) {
     // 不该顺手把「收殓过期票」也管了——那件事不花额度，只是把死票从流水线上取下来。
     const staleTicket = staleTickets.has(ticketScopeKey(it, homeRepo));
     if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
+    // #1227：审查轮次已经满了，不要再为这张票起第 N+1 个审官。
+    if (livePr && haltReviewRoundsIfExceeded(livePr, {
+      reviews, situation, out, exhaustedThisRound, homeRepo,
+    })) continue;
     const drain = validateRetryDrain({
       pr: it.pr,
       head: itHead,
@@ -1537,6 +1542,31 @@ function collectCandidates(situation) {
     out.push(withNeeds(hub(hubText, 'dispatched', { pr: pr.number }), N.rework));
   }
 
+  /** #1227：rounds >= review_rounds_max 就停手上报，不再派返工/复审。绿的仍合。 */
+  function haltReviewRoundsIfExceeded(pr, { reviews: rev, situation: sit, out: sink, exhaustedThisRound: marked, homeRepo: repo }) {
+    if (!pr || pr.number == null) return false;
+    if (marked.has(Number(pr.number))) return true;
+    const raw = prReviewInput(rev.byPr?.[pr.number]);
+    const judged = judgeNextReviewRound({ reviews: raw, budget: sit.reviewRoundsBudget });
+    if (judged.state !== 'exceeded') return false;
+    const atHead = analyzeReviewsAtHead(raw, pr.headRefOid);
+    if (atHead.scanned && atHead.latestGreen) return false;
+    if (prHasStuckLabel(pr)) {
+      marked.add(Number(pr.number));
+      return true;
+    }
+    sink.push(withNeeds(buildReviewRoundsStopAction({
+      pr: pr.number,
+      rounds: judged.rounds,
+      max: judged.max,
+      head: typeof pr.headRefOid === 'string' ? pr.headRefOid : null,
+      issue: attributedIssueNumber(pr),
+      repo,
+    }), N['mark-exhausted']));
+    marked.add(Number(pr.number));
+    return true;
+  }
+
   // ③ PR 驱动：判绿合并 / manual 待拍板 / 审官轮次
   // 老单优先：轮次多的先收口，再按等待时间（出生早的先）。
   const prsAged = [...(gh.prs || [])].sort((a, b) => {
@@ -1729,6 +1759,11 @@ function collectCandidates(situation) {
 
     // 审官已经放行：head 变了只因对接 master。不要因为当前 head 零判定再叫一轮审官。
     if (readyToLand) continue;
+
+    // #1227：审查轮次已经满了，不要再派返工、也不要再叫第 N+1 轮审官。
+    if (haltReviewRoundsIfExceeded(pr, {
+      reviews, situation, out, exhaustedThisRound, homeRepo,
+    })) continue;
 
     // 红轮数按**当前 head** 重算：工人推了新 head ⇒ 旧红不作数，该 PR 回到「等审官」（不派返工）。
     const a = analyzeReviewsAtHead(prReviewInput(reviews.byPr?.[pr.number]), pr.headRefOid);
