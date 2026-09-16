@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
 import { extractDeltaContent } from './lib/provider-probe.mjs';
@@ -29,7 +29,6 @@ import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
 import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
-import { classifyUsageInstallCopy, usageExportInstallFiles } from './lib/execution-usage.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -1139,6 +1138,70 @@ function checkUnitDrift() {
 
 const USAGE_INSTALL_ROOT = '/usr/local/lib/dao-execution-usage';
 const MISSING_INSTALL_CODES = new Set(['ENOENT', 'ENOTDIR']);
+// (24) 自持闭包名单：比装机脚本那条多认动态 import('./x') 和 require 与括号间空白。
+// 装机名单漏文件时本闸仍能翻红；不得 import 用量库的解析器/分类器。
+const USAGE_INSTALL_SPEC_RE = /(?:\bfrom\b|\bimport\b)\s*['"](\.[^'"]+)['"]|\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)|\brequire\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+
+/** 仓内 scripts/ 相对路径闭包。独立于装机脚本用的那份名单。 */
+export function walkUsageInstallFiles({
+  scriptsDir = join(REPO_ROOT, 'scripts'),
+  entry = 'execution-usage-export.mjs',
+  readFile = (abs) => readFileSync(abs, 'utf8'),
+} = {}) {
+  const root = resolve(scriptsDir);
+  const out = [];
+  const seen = new Set();
+  const queue = [String(entry).replace(/\\/g, '/')];
+  while (queue.length) {
+    const rel = queue.shift();
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + sep)) throw new Error('usage_install_escape');
+    const text = readFile(abs);
+    out.push(rel);
+    USAGE_INSTALL_SPEC_RE.lastIndex = 0;
+    for (let m; (m = USAGE_INSTALL_SPEC_RE.exec(text)); ) {
+      const spec = m[1] || m[2] || m[3];
+      if (!spec || spec[0] !== '.') continue;
+      const next = relative(root, resolve(dirname(abs), spec)).replace(/\\/g, '/');
+      if (!next || next.startsWith('..')) continue;
+      queue.push(next);
+    }
+  }
+  return out;
+}
+
+/** 仓内名单 vs 机器上特权副本。确认不在 = red；权限等读失败 = unknown。 */
+export function judgeUsageInstallCopy({ expected, installed } = {}) {
+  if (!Array.isArray(expected) || expected.length === 0) {
+    return { state: UNKNOWN, detail: '装机名单是空的——没查成，不当绿' };
+  }
+  if (installed == null) {
+    return { state: RED, detail: '用量特权副本目录不在——没装。装：sudo bash scripts/install-execution-usage.sh' };
+  }
+  const missing = [];
+  const stale = [];
+  const unreadable = [];
+  for (const item of expected) {
+    const rel = item?.path;
+    const want = item?.content;
+    if (typeof rel !== 'string' || typeof want !== 'string') {
+      return { state: UNKNOWN, detail: '装机名单条目坏了——没查成' };
+    }
+    const live = installed[rel];
+    if (live && typeof live === 'object' && live.unreadable) { unreadable.push(rel); continue; }
+    if (typeof live !== 'string') { missing.push(rel); continue; }
+    if (live !== want) stale.push(rel);
+  }
+  if (unreadable.length) {
+    return { state: UNKNOWN, detail: `用量特权副本 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}——没查成` };
+  }
+  if (missing.length || stale.length) {
+    return { state: RED, detail: `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh` };
+  }
+  return { state: OK, detail: `用量特权副本 ${expected.length} 个文件与仓内一致` };
+}
 
 /** 用量特权副本闸。existsSync 遇 EACCES 返 false，会把「看不见」洗成「没有」；
  *  所以 stat/read 看 e.code：ENOENT/ENOTDIR = red，权限等读失败 = unknown。 */
@@ -1149,10 +1212,9 @@ export function checkUsageInstallCopy({
   readRepo = (p) => readFileSync(p, 'utf8'),
   readInstalled = (p) => readFileSync(p, 'utf8'),
 } = {}) {
-  const map = (r) => ({ state: r.state === 'ok' ? OK : r.state === 'red' ? RED : UNKNOWN, detail: r.detail });
   let files;
   try {
-    files = usageExportInstallFiles({ scriptsDir, readFile: readRepo });
+    files = walkUsageInstallFiles({ scriptsDir, readFile: readRepo });
   } catch (e) {
     return { state: UNKNOWN, detail: `用量装机名单算不出：${String(e.message || e).slice(0, 160)}——没查成` };
   }
@@ -1162,10 +1224,10 @@ export function checkUsageInstallCopy({
     const code = e && e.code;
     const expected = files.map((path) => ({ path, content: '' }));
     if (MISSING_INSTALL_CODES.has(code)) {
-      return map(classifyUsageInstallCopy({ expected, installed: null }));
+      return judgeUsageInstallCopy({ expected, installed: null });
     }
     const installed = Object.fromEntries(files.map((rel) => [rel, { unreadable: true }]));
-    return map(classifyUsageInstallCopy({ expected, installed }));
+    return judgeUsageInstallCopy({ expected, installed });
   }
   const expected = [];
   const installed = {};
@@ -1179,7 +1241,7 @@ export function checkUsageInstallCopy({
       if (!e || !MISSING_INSTALL_CODES.has(e.code)) installed[rel] = { unreadable: true };
     }
   }
-  return map(classifyUsageInstallCopy({ expected, installed }));
+  return judgeUsageInstallCopy({ expected, installed });
 }
 
 // —— (21) 服务用户的家目录里有没有 root 属主的文件（2026-09-05 实咬）——
@@ -1521,11 +1583,11 @@ function selfTest() {
   if (commentLies.state !== RED || !/\/tmp\/gw-remote-probe/.test(commentLies.detail)) {
     failures.push(`误导注释应判红，实际 ${commentLies.state}：${commentLies.detail}`);
   }
-  const usageMissing = classifyUsageInstallCopy({ expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }], installed: null });
+  const usageMissing = judgeUsageInstallCopy({ expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }], installed: null });
   if (usageMissing.state !== 'red' || !/没装/.test(usageMissing.detail) || /没查成/.test(usageMissing.detail)) {
     failures.push(`用量副本目录不在应 red（确认缺失），实际 ${usageMissing.state}：${usageMissing.detail}`);
   }
-  const usageUnread = classifyUsageInstallCopy({
+  const usageUnread = judgeUsageInstallCopy({
     expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
     installed: { 'lib/execution-usage.mjs': { unreadable: true } },
   });
@@ -1544,14 +1606,14 @@ function selfTest() {
   if (usageRootBlind.state !== UNKNOWN || !/没查成/.test(usageRootBlind.detail)) {
     failures.push(`用量副本目录 EACCES 应 unknown，实际 ${usageRootBlind.state}：${usageRootBlind.detail}`);
   }
-  const usageStale = classifyUsageInstallCopy({
+  const usageStale = judgeUsageInstallCopy({
     expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
     installed: { 'lib/execution-usage.mjs': 'old' },
   });
   if (usageStale.state !== 'red' || !/install-execution-usage/.test(usageStale.detail)) {
     failures.push(`用量副本字节不对应判红，实际 ${usageStale.state}：${usageStale.detail}`);
   }
-  const usageOk = classifyUsageInstallCopy({
+  const usageOk = judgeUsageInstallCopy({
     expected: [{ path: 'lib/execution-usage.mjs', content: 'new' }],
     installed: { 'lib/execution-usage.mjs': 'new' },
   });

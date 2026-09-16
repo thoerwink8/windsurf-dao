@@ -31,6 +31,8 @@ import {
   whichOnPath,
   scanRetiredClis,
   checkUsageInstallCopy,
+  walkUsageInstallFiles,
+  judgeUsageInstallCopy,
   DAO_CHECK_NESTED_TIMEOUT_MS,
 } from '../scripts/server-check.mjs';
 import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
@@ -254,12 +256,17 @@ test('server-check 判别力', async (t) => {
       assert.doesNotMatch(entry, /install/);
       assert.doesNotMatch(entry, /在册且 enabled/);
     });
-    await t.test('CHECKS (24) 用量特权副本走 classifyUsageInstallCopy', () => {
+    await t.test('CHECKS (24) 用量特权副本走 checkUsageInstallCopy', () => {
       const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
       const i = src.indexOf("['(24) 用量特权副本");
       assert.ok(i > -1, '找不到 (24) CHECKS 条目');
       const entry = src.slice(i, i + 200);
       assert.match(entry, /checkUsageInstallCopy/);
+    });
+    await t.test('(24) 不 import 用量库的解析器/分类器', () => {
+      const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
+      const imports = [...src.matchAll(/^import\s+[\s\S]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+      assert.equal(imports.includes('./lib/execution-usage.mjs'), false);
     });
     await t.test('CHECKS (24) 取数不用 existsSync（EACCES 不能洗成没有）', () => {
       const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
@@ -724,6 +731,73 @@ test('(24) 用量特权副本三态：确认缺失 red，权限读失败 unknown
     });
     assert.equal(r.state, 'unknown');
     assert.match(r.detail, /读不了|没查成/);
+  });
+});
+
+test('(24) 独立闭包闸：生产解析器漏文件时仍红', async (t) => {
+  const { usageExportInstallFiles, classifyUsageInstallCopy } = await import('../scripts/lib/execution-usage.mjs');
+  const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+  const dyn = (p) => `void im${'port'}('${p}');\n`;
+  const files = {
+    'execution-usage-export.mjs': spec('./lib/execution-usage.mjs') + dyn('./lib/hidden-dep.mjs'),
+    'lib/execution-usage.mjs': 'export const x = 1;\n',
+    'lib/hidden-dep.mjs': 'export const y = 2;\n',
+  };
+  const scriptsDir = '/scripts';
+  const installRoot = '/install';
+  const relOf = (abs, base) => String(abs).replace(/\\/g, '/').slice(String(base).length).replace(/^\//, '');
+  const readAt = (base) => (abs) => {
+    const rel = relOf(abs, base);
+    if (!Object.hasOwn(files, rel)) {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    }
+    return files[rel];
+  };
+
+  await t.test('独立名单是生产名单的超集（真仓库闭包）', () => {
+    const prod = usageExportInstallFiles();
+    const indep = walkUsageInstallFiles();
+    for (const f of prod) assert.equal(indep.includes(f), true, `独立闸漏了 ${f}`);
+  });
+
+  await t.test('动态 import 被生产名单漏掉、独立闸抓住，副本缺它则红', () => {
+    const prod = usageExportInstallFiles({ scriptsDir, readFile: readAt(scriptsDir) });
+    const indep = walkUsageInstallFiles({ scriptsDir, readFile: readAt(scriptsDir) });
+    assert.equal(prod.includes('lib/hidden-dep.mjs'), false);
+    assert.equal(indep.includes('lib/hidden-dep.mjs'), true);
+
+    const installed = Object.fromEntries(prod.map((p) => [p, files[p]]));
+    const prodJudge = classifyUsageInstallCopy({
+      expected: prod.map((path) => ({ path, content: files[path] })),
+      installed,
+    });
+    const indepJudge = judgeUsageInstallCopy({
+      expected: indep.map((path) => ({ path, content: files[path] })),
+      installed,
+    });
+    assert.equal(prodJudge.state, 'ok');
+    assert.equal(indepJudge.state, 'red');
+    assert.match(indepJudge.detail, /hidden-dep/);
+
+    const r = checkUsageInstallCopy({
+      root: installRoot,
+      scriptsDir,
+      stat: () => ({ isDirectory: () => true }),
+      readRepo: readAt(scriptsDir),
+      readInstalled: (abs) => {
+        const rel = relOf(abs, installRoot);
+        if (!prod.includes(rel)) {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        return files[rel];
+      },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /hidden-dep/);
   });
 });
 
