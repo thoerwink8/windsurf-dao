@@ -99,8 +99,10 @@ export function usageExportInstallFiles({
   return out;
 }
 
-/** 仓内名单 vs 机器上特权副本。确认不在（installed==null 或条目缺）= red；
- *  权限等读失败（unreadable）= unknown。existsSync 分不出这两种，调用方必须看 e.code。 */
+/** 仓内名单 vs 机器上特权副本。确认不在（installed==null 或条目缺）/ 字节漂移 = red；
+ *  权限等读失败（unreadable）= unknown。同一批既有确定缺失/漂移又有读失败时，
+ *  missing/stale 优先 red，正文附带 unreadable；仅没有任何确定故障才 unknown。
+ *  existsSync 分不出这两种，调用方必须看 e.code。 */
 export function classifyUsageInstallCopy({ expected, installed } = {}) {
   if (!Array.isArray(expected) || expected.length === 0) return { state: 'unknown', detail: '装机名单是空的——没查成，不当绿' };
   if (installed == null) return { state: 'red', detail: '用量特权副本目录不在——没装。装：sudo bash scripts/install-execution-usage.sh' };
@@ -113,10 +115,12 @@ export function classifyUsageInstallCopy({ expected, installed } = {}) {
     if (typeof live !== 'string') { missing.push(rel); continue; }
     if (live !== want) stale.push(rel);
   }
-  if (unreadable.length) return { state: 'unknown', detail: `用量特权副本 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}——没查成` };
   if (missing.length || stale.length) {
-    return { state: 'red', detail: `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh` };
+    let detail = `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh`;
+    if (unreadable.length) detail += `；另有 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}`;
+    return { state: 'red', detail };
   }
+  if (unreadable.length) return { state: 'unknown', detail: `用量特权副本 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}——没查成` };
   return { state: 'ok', detail: `用量特权副本 ${expected.length} 个文件与仓内一致` };
 }
 const normalized = new WeakMap();

@@ -732,6 +732,64 @@ test('(24) 用量特权副本三态：确认缺失 red，权限读失败 unknown
     assert.equal(r.state, 'unknown');
     assert.match(r.detail, /读不了|没查成/);
   });
+
+  await t.test('分类器：缺 + 读不了 → red，正文附带读不了', () => {
+    const r = judgeUsageInstallCopy({
+      expected: [
+        { path: 'lib/missing.mjs', content: 'a' },
+        { path: 'lib/blocked.mjs', content: 'b' },
+      ],
+      installed: { 'lib/blocked.mjs': { unreadable: true } },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /missing/);
+    assert.match(r.detail, /blocked/);
+    assert.match(r.detail, /读不了/);
+  });
+
+  await t.test('入口可读、一份 ENOENT、一份 EACCES → red（确定缺失优先）', () => {
+    const spec = (p) => `import { x } fr${'om'} '${p}';\n`;
+    const files = {
+      'execution-usage-export.mjs': spec('./lib/missing.mjs') + spec('./lib/blocked.mjs'),
+      'lib/missing.mjs': 'export default 1;\n',
+      'lib/blocked.mjs': 'export default 2;\n',
+    };
+    const scriptsDir = '/scripts';
+    const installRoot = '/install';
+    const relOf = (abs, base) => String(abs).replace(/\\/g, '/').slice(String(base).length).replace(/^\//, '');
+    const r = checkUsageInstallCopy({
+      root: installRoot,
+      scriptsDir,
+      stat: () => ({ isDirectory: () => true }),
+      readRepo: (abs) => {
+        const rel = relOf(abs, scriptsDir);
+        if (!Object.hasOwn(files, rel)) {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        return files[rel];
+      },
+      readInstalled: (abs) => {
+        const rel = relOf(abs, installRoot);
+        if (rel === 'lib/missing.mjs') {
+          const e = new Error('ENOENT');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        if (rel === 'lib/blocked.mjs') {
+          const e = new Error('EACCES');
+          e.code = 'EACCES';
+          throw e;
+        }
+        return files[rel];
+      },
+    });
+    assert.equal(r.state, 'red');
+    assert.match(r.detail, /missing/);
+    assert.match(r.detail, /blocked/);
+    assert.match(r.detail, /读不了/);
+  });
 });
 
 test('(24) 独立闭包闸：生产解析器漏文件时仍红', async (t) => {

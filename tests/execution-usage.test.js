@@ -831,4 +831,25 @@ test('usage install copy classifier: confirmed missing is red, unreadable stays 
   assert.equal(M.classifyUsageInstallCopy({ expected, installed: { 'lib/execution-usage.mjs': 'new' } }).state, 'ok');
   assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: {} }).state, 'unknown');
   assert.equal(M.classifyUsageInstallCopy({ expected: [], installed: null }).state, 'unknown');
+  const mixedMissing = M.classifyUsageInstallCopy({
+    expected: [
+      { path: 'lib/missing.mjs', content: 'a' },
+      { path: 'lib/blocked.mjs', content: 'b' },
+    ],
+    installed: { 'lib/blocked.mjs': { unreadable: true } },
+  });
+  assert.equal(mixedMissing.state, 'red', '确定缺失不得被另一份 EACCES 洗成 unknown');
+  assert.match(mixedMissing.detail, /missing/);
+  assert.match(mixedMissing.detail, /blocked/);
+  assert.match(mixedMissing.detail, /读不了/);
+  const mixedStale = M.classifyUsageInstallCopy({
+    expected: [
+      { path: 'lib/stale.mjs', content: 'new' },
+      { path: 'lib/blocked.mjs', content: 'b' },
+    ],
+    installed: { 'lib/stale.mjs': 'old', 'lib/blocked.mjs': { unreadable: true } },
+  });
+  assert.equal(mixedStale.state, 'red');
+  assert.match(mixedStale.detail, /stale/);
+  assert.match(mixedStale.detail, /blocked/);
 });

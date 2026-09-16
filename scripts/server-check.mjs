@@ -1172,7 +1172,9 @@ export function walkUsageInstallFiles({
   return out;
 }
 
-/** 仓内名单 vs 机器上特权副本。确认不在 = red；权限等读失败 = unknown。 */
+/** 仓内名单 vs 机器上特权副本。确认不在 / 字节漂移 = red；权限等读失败 = unknown。
+ *  同一批既有确定缺失/漂移又有读失败时，missing/stale 优先 red，正文附带 unreadable；
+ *  仅没有任何确定故障才 unknown。 */
 export function judgeUsageInstallCopy({ expected, installed } = {}) {
   if (!Array.isArray(expected) || expected.length === 0) {
     return { state: UNKNOWN, detail: '装机名单是空的——没查成，不当绿' };
@@ -1194,11 +1196,15 @@ export function judgeUsageInstallCopy({ expected, installed } = {}) {
     if (typeof live !== 'string') { missing.push(rel); continue; }
     if (live !== want) stale.push(rel);
   }
+  if (missing.length || stale.length) {
+    let detail = `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh`;
+    if (unreadable.length) {
+      detail += `；另有 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}`;
+    }
+    return { state: RED, detail };
+  }
   if (unreadable.length) {
     return { state: UNKNOWN, detail: `用量特权副本 ${unreadable.length} 个读不了：${unreadable.slice(0, 3).join('、')}——没查成` };
-  }
-  if (missing.length || stale.length) {
-    return { state: RED, detail: `用量特权副本与仓内不一致：缺 ${missing.join('、') || '无'}，旧 ${stale.join('、') || '无'}。装：sudo bash scripts/install-execution-usage.sh` };
   }
   return { state: OK, detail: `用量特权副本 ${expected.length} 个文件与仓内一致` };
 }
@@ -1619,6 +1625,45 @@ function selfTest() {
   });
   if (usageOk.state !== 'ok') {
     failures.push(`用量副本一致应 ok，实际 ${usageOk.state}：${usageOk.detail}`);
+  }
+  const usageMixed = judgeUsageInstallCopy({
+    expected: [
+      { path: 'lib/missing.mjs', content: 'a' },
+      { path: 'lib/blocked.mjs', content: 'b' },
+    ],
+    installed: { 'lib/blocked.mjs': { unreadable: true } },
+  });
+  if (usageMixed.state !== 'red' || !/missing/.test(usageMixed.detail) || !/blocked/.test(usageMixed.detail) || !/读不了/.test(usageMixed.detail)) {
+    failures.push(`用量副本缺+读不了应 red 并附带读不了，实际 ${usageMixed.state}：${usageMixed.detail}`);
+  }
+  const mixedFiles = {
+    'execution-usage-export.mjs': "import './lib/missing.mjs';\nimport './lib/blocked.mjs';\n",
+    'lib/missing.mjs': 'export default 1;\n',
+    'lib/blocked.mjs': 'export default 2;\n',
+  };
+  const mixedRel = (abs, base) => String(abs).replace(/\\/g, '/').slice(String(base).length).replace(/^\//, '');
+  const usageMixedCheck = checkUsageInstallCopy({
+    root: '/install',
+    scriptsDir: '/scripts',
+    stat: () => ({ isDirectory: () => true }),
+    readRepo: (abs) => mixedFiles[mixedRel(abs, '/scripts')],
+    readInstalled: (abs) => {
+      const rel = mixedRel(abs, '/install');
+      if (rel === 'lib/missing.mjs') {
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      }
+      if (rel === 'lib/blocked.mjs') {
+        const e = new Error('EACCES');
+        e.code = 'EACCES';
+        throw e;
+      }
+      return mixedFiles[rel];
+    },
+  });
+  if (usageMixedCheck.state !== RED || !/missing/.test(usageMixedCheck.detail) || !/blocked/.test(usageMixedCheck.detail)) {
+    failures.push(`入口可读+缺+EACCES 应 red，实际 ${usageMixedCheck.state}：${usageMixedCheck.detail}`);
   }
 
   if (failures.length) {
