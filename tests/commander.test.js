@@ -1227,6 +1227,16 @@ describe('act：返工的手（#931）', () => {
     assert.ok(text.includes('abcdef1234567890'), '写清红项打在哪个 head 上');
   });
 
+  it('到了审查轮次上限，任务书写明只能改判或拆单', async () => {
+    const M = await MOD();
+    const text = M.reworkBriefText({ ...action, redRounds: 6, reviewRoundsMax: 6 });
+    assert.ok(text.includes('审查轮次上限：6'), '上限必须是生产代码读出来的数，不是写死在任务书里');
+    assert.ok(text.includes('只能改判或拆单'), '到上限还判红就不能再写一轮请修 P2');
+    const under = M.reworkBriefText({ ...action, redRounds: 1, reviewRoundsMax: 6 });
+    assert.ok(under.includes('审查轮次上限：6'));
+    assert.ok(!under.includes('已到上限'), '没到上限不喊熔断');
+  });
+
   it('返工注入指针过得了 500 字节硬闸（长红项不进注入，只进文件）', async () => {
     const M = await MOD();
     const tpl = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'template.mjs').replace(/\\/g, '/'));

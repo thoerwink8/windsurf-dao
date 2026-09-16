@@ -90,13 +90,25 @@ export function judgeReviewTreeSync({ treeHead, expectedOid } = {}) {
  * @param record 登记记录（defaultReviewerRegistry.read().record）
  * @param view   runtime.readSession(sessionKey) 的返回；没查就传 null
  * @param force  人工 --force：明说要另起一个
+ * @param liveHead 当前 PR head oid。有值且与登记 expectedOid 不同 → 旧会话审的是旧代码，必须另起。
  * @param verdictOnHead 这个 PR 的**当前 head** 上有没有审官判定：
  *        `true` 有 / `false` 确认没有 / `null|undefined` 没查成。见下方 #1289 那节。
  */
-export function judgeReviewerSessionReuse({ record, view, force, verdictOnHead } = {}) {
+export function judgeReviewerSessionReuse({ record, view, force, liveHead, verdictOnHead } = {}) {
   if (force === true) return { reuse: false, checked: false, why: '--force：人工要求另起审官会话' };
   const key = record && record.sessionKey ? String(record.sessionKey).trim() : '';
   if (!key) return { reuse: false, checked: false, why: '登记里没有 sessionKey（确认缺失）→ 可新建' };
+  const recorded = record && record.expectedOid ? String(record.expectedOid).trim() : '';
+  const live = liveHead == null ? '' : String(liveHead).trim();
+  // 2026-09-15 实咬：#1274 审官已 done 且 GitHub 上 CHANGES_REQUESTED 打在旧 commit，
+  // 工人推了新 head 后 drain 再调 reviewer-create，这里仍复用（phase=done 算「正常完工」），
+  // 复审票被吃掉、新 head 永远没人审。head 对不上 = 旧会话不是在役审官。
+  if (recorded && live && recorded !== live) {
+    return {
+      reuse: false, sessionKey: key, checked: true,
+      why: `登记 expectedOid ${recorded.slice(0, 12)} 不是当前 PR head ${live.slice(0, 12)} → 可新建`,
+    };
+  }
   if (view == null) {
     return { reuse: true, sessionKey: key, checked: false, why: '会话状态没查成，按登记复用（不许把没查成当成没有会话去重复烧额度）' };
   }
@@ -167,14 +179,14 @@ export function reviewerMustReplaceDead({ force, switched, deadError } = {}) {
  * 锁内复查：有 sessionKey 不等于「并发已起」。
  * 满载/看门狗死会话走同一套 judgeReviewerSessionReuse，不算 raced。
  */
-export function judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead } = {}) {
+export function judgeReviewerCreateRace({ forceNew, record, view, liveHead, verdictOnHead } = {}) {
   if (forceNew === true) {
     return { raced: false, why: '必须另起（force / 换厂 / 满载死会话）' };
   }
   if (!record || !record.sessionKey) {
     return { raced: false, why: '锁内复查没有 sessionKey' };
   }
-  const reuse = judgeReviewerSessionReuse({ record, view, force: false, verdictOnHead });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: false, liveHead, verdictOnHead });
   if (reuse.reuse) {
     return { raced: true, record, sessionKey: reuse.sessionKey, why: reuse.why };
   }
@@ -188,10 +200,10 @@ export function judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead 
  * 第二次 peek 失败（view=null）时，没 force 会按「没查成」复用死会话——
  * 所以 forceNew 认死因，不认 requested 变没变。
  */
-export function decideReviewerCreateStart({ force, switched, deadError, record, view, verdictOnHead } = {}) {
+export function decideReviewerCreateStart({ force, switched, deadError, record, view, liveHead, verdictOnHead } = {}) {
   const forceNew = reviewerMustReplaceDead({ force, switched, deadError });
-  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew, verdictOnHead });
-  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
+  const reuse = judgeReviewerSessionReuse({ record, view, force: forceNew, liveHead, verdictOnHead });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, liveHead, verdictOnHead });
   return {
     forceNew,
     reuse,
@@ -276,17 +288,18 @@ export function decideReworkReviewerHandoff({ rec, treeExists } = {}) {
 /**
  * 锁内：满载死会话不算 raced，必须走到 create（startSession）。
  * reviewer-create 的锁内块只调这一份，不许再手写 sessionKey 判断。
+ * liveHead 必须是持锁后读到的当前 PR head，不许传入锁外快照。
  *
  * `verdictOnHead` 必须是**持锁后**重读的当前 head 快照，不是锁外那份（#1293 二审 P1）：
  * 锁外 true（旧 head 有判定）在等锁期间 PR 可能已推新 head；拿旧值判 race 会跳过 create。
  * 漏传（undefined）同样错——终态 done 会落回复用（#1293 一审 P1）。
  * 调用方：forceNew 短路时不必重读（judgeReviewerCreateRace 根本不看这个值）。
  */
-export async function runLockedReviewerCreate({ forceNew, record, view, verdictOnHead, create } = {}) {
+export async function runLockedReviewerCreate({ forceNew, record, view, create, liveHead, verdictOnHead } = {}) {
   if (typeof create !== 'function') {
     return { ok: false, error: '要注入 create（起审官会话）' };
   }
-  const race = judgeReviewerCreateRace({ forceNew, record, view, verdictOnHead });
+  const race = judgeReviewerCreateRace({ forceNew, record, view, liveHead, verdictOnHead });
   if (race.raced) {
     return {
       ok: true,
@@ -394,7 +407,7 @@ export function readReviewVerdict({ reviews, sessionText } = {}) {
 
 // ── 编排（IO 全注入） ─────────────────────────────────────────────────────────
 
-function readPrHead(gh, pr) {
+export function readPrHead(gh, pr) {
   const r = gh(['pr', 'view', String(pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!r.ok) return { ok: false, error: `gh 读 PR #${pr} 失败（没查成）：${r.error}` };
   let j;
