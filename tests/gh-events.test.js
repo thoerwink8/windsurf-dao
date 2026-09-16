@@ -611,6 +611,49 @@ describe('2026-09-16 补修：外部信号退出不得假活', () => {
     });
   });
 
+  it('审官复现：exitCode=null、signalCode=null、killed=true → 仍算活着，不得再 spawn', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    const midKill = { exitCode: null, signalCode: null, killed: true };
+    assert.equal(isChildAlive(midKill), true);
+    assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(midKill), stopping: false }), {
+      spawn: false, why: '当前桥还在，不启第二桥',
+    });
+    assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(midKill), stopping: true }), {
+      spawn: false, why: '正在停',
+    });
+  });
+
+  it('发出 child.kill 后、exit 事件前：真实子进程仍活着，不得再 spawn', async () => {
+    const { isChildAlive, shouldSpawnForward } = await LIB;
+    // 忽略 SIGTERM，把「已发信号、尚未退出」窗口拉长到可断言。
+    const child = spawn(
+      process.execPath,
+      ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'],
+      { stdio: 'ignore' },
+    );
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    try {
+      assert.equal(isChildAlive(child), true);
+      assert.equal(child.kill('SIGTERM'), true);
+      assert.equal(child.killed, true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      assert.equal(isChildAlive(child), true);
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: false }), {
+        spawn: false, why: '当前桥还在，不启第二桥',
+      });
+      assert.deepEqual(shouldSpawnForward({ childAlive: isChildAlive(child), stopping: true }), {
+        spawn: false, why: '正在停',
+      });
+    } finally {
+      reap(child);
+      await waitExit(child).catch(() => {});
+    }
+  });
+
   it('外部 SIGTERM：真实子进程 exitCode 仍 null、killed 仍 false，必须判死并允许重连', async () => {
     const { isChildAlive, shouldSpawnForward } = await LIB;
     const child = await liveChild();
@@ -718,6 +761,7 @@ describe('2026-09-16 补修：外部信号退出不得假活', () => {
     const lib = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'gh-events.mjs'), 'utf8');
     assert.match(lib, /export function isChildAlive/);
     assert.match(lib, /signalCode/);
+    assert.equal(/if \(c\.killed\) return false/.test(lib), false);
     assert.match(src, /isChildAlive/);
     assert.equal(/function isChildAlive/.test(src), false);
     assert.equal(/exitCode === null && !c\.killed/.test(src), false);
