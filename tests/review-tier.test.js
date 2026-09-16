@@ -5,15 +5,21 @@
 //
 // 夹具内容改从 tpl/ 只读模板拷进来——之前测试自己拿最小桩覆盖夹具，
 // 绿夹具被覆盖后测试红，看起来像判据坏了，其实是夹具被测试写脏了。
-const { describe, it } = require('node:test');
+const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'review-tier-check.mjs');
-const FIX = path.join(__dirname, 'fixtures', 'review-tier', 'basic');
+// 运行时产物写系统临时目录，不写进仓：早先写在 tests/fixtures/review-tier/basic/ 下并入了库，
+// 跑一次测试就往工作树里塞一堆不是夹具的文件（`git status` 一片脏）。
+// 只读模板留在 tpl/，那才是真夹具。
+const FIX = path.join(os.tmpdir(), `review-tier-test-${process.pid}`);
 const TPL = path.join(__dirname, 'fixtures', 'review-tier', 'tpl');
 const LOAD = import('file://' + LIB.split(path.sep).join('/'));
+
+after(() => { try { fs.rmSync(FIX, { recursive: true, force: true }); } catch { /* 清不掉不拦测试 */ } });
 
 function writeScriptsTree(scripts, spec) {
   if (spec.scriptsFiles) {
