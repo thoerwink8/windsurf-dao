@@ -953,7 +953,8 @@ export {
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
   planReviewPendingDrain, consumeReviewPending, drainReviewPending,
-  countLiveReviewers, planReviewAdmission, DEFAULT_REVIEWER_CAP, REVIEW_ADMISSION_CHECKS,
+  countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
+  REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -980,7 +981,7 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
-  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--dry-run', '--json', '--help', '-h']),
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--prompt', '--executor', '--branch', '--repo', '--pr', '--issue', '--dry-run', '--json', '--help', '-h']),
   'session-read': new Set(['--session', '--json', '--help', '-h']),
   'session-stop': new Set(['--session', '--worktree', '--json', '--help', '-h']),
   dispatch: new Set([
@@ -1125,8 +1126,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
                   # orca 路：#633 空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
-  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--dry-run]
+  start --executor mirasim --model <id> --prompt <文> [--worktree <路径>] [--repo <仓>] [--branch <分支>] [--pr <N>] [--issue <N>] [--title <名>] [--dry-run]
                   # #1055：mirasim 一步到位起一次性会话（prompt 就是注入，不要 start+send 两步）；返回 sessionKey
+                  # --pr/--issue/--title 写入会话元数据，判活才能对上快路无署名 PR（工作树是 <仓>/<分支>）
   session-read --session <sessionKey>
                   # #1055：同步读 mirasim 会话（phase / text）；commander reapBrains 的取数路
   session-stop --session <sessionKey>

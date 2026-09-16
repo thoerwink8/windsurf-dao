@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -53,7 +53,8 @@ import { loadDispatchPolicy } from './lib/preflight.mjs';
 import { admitCapacity } from './lib/admission.mjs';
 import { snapshotCapacity, leftoverIncompleteAfterStops } from './lib/ephemeral-capacity.mjs';
 import { sessionStateOf } from './lib/execution-states.mjs';
-import { checkInFlight, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/lease.mjs';
+import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadBreaker } from './lib/provider-health.mjs';
@@ -335,6 +336,12 @@ function appendAdmissionSample(row, file = ADMISSION_SAMPLE_PATH) {
   } catch { /* 样本写不进不挡本轮判定 */ }
 }
 
+function scanLease() {
+  const scan = scanSessionProcs();
+  if (!scan.ok) return { scanned: false, error: scan.error, procs: [] };
+  return { scanned: true, procs: scan.procs, noServer: scan.noServer === true };
+}
+
 function leftoverIncomplete(situation, stopResults) {
   const sec = situation && situation.sessions;
   if (!sec || sec.scanned !== true || !Array.isArray(sec.items)) return null;
@@ -454,12 +461,23 @@ function scanReviewPending() {
 export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
   const [owner, name] = REPO.split('/');
   const byPr = {};
+  // 跳过不给 byPr 的 PR（draft）必须**单独记下来**，见下面的 skipped（2026-09-14 实咬）。
+  const skipped = [];
   let anyFail = null;
   for (const pr of prs || []) {
     if (!pr) continue;
     // Approved manual tasks may be returned to draft by the reviewer. Their
     // actual votes must still reach the decision stage; other drafts wait.
-    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) continue;
+    //
+    // 2026-09-14 实咬（PR #1265/#1266 静默永不送审）：跳过的 PR **不进 byPr**，而下游
+    // `prReviewInput(undefined)` → `reviews === undefined` → `analyzeReviewsAtHead` 判
+    // `reviews-missing`（= 没抓到），commander 那一格按既有契约**静默 continue**。
+    // 于是「这张 PR 一条 review 都没有、该叫审官了」和「这张 PR 的 reviews 没抓到」
+    // 长得一模一样，而两者处置完全相反。这不是 draft 的问题——是**跳过没留痕**。
+    if (pr.isDraft && !isApprovedExecutionTask(issues.find(i => Number(i.number) === explicitApprovalIssue(pr)))) {
+      skipped.push(pr.number);
+      continue;
+    }
     // commit_id 必取：判红/判绿只对它当时看的那个 commit 有效（#911）。
     // 取不到 commit_id 的判别态 review = 没查成，不是「旧红」也不是「新红」。
     const gh = read(['api', `repos/${owner}/${name}/pulls/${pr.number}/reviews`, '--paginate',
@@ -470,9 +488,14 @@ export function scanPrReviews(prs, { issues = [], read = runGh } = {}) {
       byPr[pr.number] = { reviews: arr, bodies: arr.map((x) => x.body || '') };
     } catch (e) { anyFail = String(e.message || e); }
   }
-  // 只要抓到过（哪怕 0 条）就算 scanned；一条都没试成才 unscanned。
-  if (Object.keys(byPr).length === 0 && anyFail) return { scanned: false, error: `reviews 没查成：${anyFail}` };
-  return { scanned: true, byPr, ...(anyFail ? { partialError: anyFail } : {}) };
+  // 只要抓到过（哪怕 0 条）就算 scanned；没有任何 reviews 请求成功才 unscanned。
+  // skipped draft 不能把非 draft 的失败遮成 scanned:true——否则下游对那张失败的
+  // 非 draft 看到 reviews-missing 且 skippedByScan=false，静默 continue，真实
+  // 扫描故障进不了 fail-visible（2026-09-15 审官红项，混合夹具回归）。
+  if (Object.keys(byPr).length === 0 && anyFail) {
+    return { scanned: false, error: `reviews 没查成：${anyFail}`, skipped };
+  }
+  return { scanned: true, byPr, skipped, ...(anyFail ? { partialError: anyFail } : {}) };
 }
 
 /** #843：周期面把健康表 red / 撞死指纹记进熔断表（只记事件，判定在 applyEvent）。失败不挡 scan。 */
@@ -606,6 +629,7 @@ function buildSituation({ state } = {}) {
   const prReviews = github.scanned ? scanPrReviews(github.prs, { issues: github.issues }) : { scanned: false, error: 'github 没查成，跳过 reviews' };
   const stall = scanStall();
   const sessions = scanSessions();
+  const lease = scanLease();
   const desiredJobs = scanDesiredJobs();
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
@@ -662,7 +686,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, desiredJobs,
+    sessions, lease, desiredJobs,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -831,6 +855,8 @@ function execAction(action, { state, dryRun, log }) {
         { dryRun, say, why: action.why },
       );
     }
+    case 'reap-orphan':
+      return execReapOrphan(action, { dryRun, say });
     case 'merge':
       return execMerge(action, { dryRun, say });
     case 'land':
@@ -905,6 +931,76 @@ function judgmentAtCurrentHead(json) {
   }
   const delivered = a.latestGreen === true || a.latestRed === true || a.green === true;
   return { ok: true, delivered };
+}
+
+/**
+ * 杀幽灵进程前再读一次 /proc/<pid>/cwd。规划到执行隔了小半轮，pid 可能已复用；
+ * 对不上规划时的 cwd 就跳过，宁可下轮再收也不误杀。
+ * readlink 只有 ENOENT/ESRCH 才当 gone（linkErrorKind）；EACCES/EIO 是没查成，
+ * 不杀也不报成功。readlink / kill 可注入。
+ */
+export function execReapOrphan(action, {
+  dryRun, say, readlink = readlinkSync, kill = (pid, sig) => process.kill(pid, sig),
+} = {}) {
+  const cwd = String(action.cwd || '');
+  const pids = Array.isArray(action.pids) ? action.pids.map(Number).filter((n) => Number.isInteger(n) && n > 1) : [];
+  if (!cwd || !pids.length) {
+    say('  reap-orphan 缺 cwd/pids，不动手');
+    return { ok: false, error: 'reap-orphan 要 cwd 和 pids' };
+  }
+  if (dryRun) {
+    say(`[dry] 回收幽灵 ${cwd} pids ${pids.join(',')}`);
+    return { ok: true, dryRun: true };
+  }
+  const want = cwd.replace(/\/+$/, '');
+  const results = [];
+  for (const pid of pids) {
+    let liveCwd = null;
+    try { liveCwd = readlink(`/proc/${pid}/cwd`); }
+    catch (e) {
+      if (linkErrorKind(e) === 'gone') {
+        results.push({ pid, ok: true, gone: true });
+      } else {
+        const why = String((e && e.code) || (e && e.message) || e);
+        results.push({ pid, ok: false, unscanned: true, error: `cwd 没查成：${why}` });
+      }
+      continue;
+    }
+    if (String(liveCwd).replace(/\/+$/, '') !== want) {
+      results.push({ pid, ok: true, skipped: 'cwd-mismatch', liveCwd });
+      continue;
+    }
+    try {
+      kill(pid, 'SIGTERM');
+      results.push({ pid, ok: true });
+    } catch (e) {
+      if (linkErrorKind(e) === 'gone') results.push({ pid, ok: true, gone: true });
+      else results.push({ pid, ok: false, error: String(e.message || e) });
+    }
+  }
+  const failed = results.filter((r) => r.ok !== true);
+  const term = results.filter((r) => r.ok === true && !r.gone && !r.skipped).length;
+  const gone = results.filter((r) => r.gone).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const unscanned = results.filter((r) => r.unscanned).length;
+  const killFailed = failed.length - unscanned;
+  const parts = [`${term}/${pids.length} 已 SIGTERM`];
+  if (gone) parts.push(`${gone} 已消失`);
+  if (skipped) parts.push(`${skipped} 跳过`);
+  if (unscanned) parts.push(`${unscanned} cwd 没查成`);
+  if (killFailed) parts.push(`失败 ${killFailed}`);
+  say(`  回收幽灵 ${cwd}：${parts.join('，')}`);
+  if (failed.length) {
+    return {
+      ok: false,
+      ...(unscanned ? { unscanned: true } : {}),
+      error: unscanned
+        ? `有 ${unscanned} 个 pid 的 cwd 没查成${killFailed ? `，另有 ${killFailed} 个没杀成` : ''}`
+        : `有 ${failed.length} 个 pid 没杀成`,
+      results,
+    };
+  }
+  return { ok: true, results };
 }
 
 /**
@@ -1178,20 +1274,53 @@ function execClearExhausted(action, { dryRun, say, run = runCmd } = {}) {
   return { ok: true, cleared: true };
 }
 
-function execRetryDrain(action, { state, dryRun, say }) {
+export function execRetryDrain(action, { state, dryRun, say, readHead = livePrHead, run = runCmd }) {
+  // 决策说「这张票没过期」到执行这张票之间隔着几秒到几分钟，工人可能刚推了新 head。
+  // 二次校验必须拿现场的 head，不能拿决策时的快照——否则闸只在 decide 侧成立，
+  // 执行侧读的是票头（旧值），一定自洽，闸等于没装（2026-09-12 审官打回 #1209 的第二条）。
+  // 查不到现场 head 就不放行：拿不到现场证据时放行，闸就变成「查到才拦」，抽风一次全过。
+  const repo = action.repo && String(action.repo).trim() ? String(action.repo).trim() : REPO;
+  let liveHeadForCheck = '';
+  if (dryRun) {
+    liveHeadForCheck = String(action.head || '');
+  } else {
+    const cur = readHead(action, repo);
+    if (!cur.ok) {
+      say(`  当前 head 没核成，不重试这张票：#${action.pr}（${cur.error}）`);
+      return { ok: false, error: `当前 head 没核成：${cur.error}`, code: 'head-unscanned' };
+    }
+    liveHeadForCheck = cur.head;
+  }
+  // 现场 head 走 **opts.liveHead**。planRetryDrainCmd 只从 opts 读 liveHead，
+  // 把它塞进 action 是无效的——而且 action 里本来就有 `head`（票头），
+  // 展开 `...action` 看着像「顺手带上」，实际什么都没带，校验拿到「票头 vs 票头」，
+  // 一定自洽、闸又变成没装（第二版就是这么写的，探针当场抓到）。
   const planned = planRetryDrainCmd(action, {
     queue: action.queue,
     ledger: (state && state.drainLedger) || {},
     nowMs: Date.parse(nowIso()) || 0,
+    liveHead: liveHeadForCheck,
   });
   if (!planned.ok) {
     say(`  retry-drain 校验拒：${planned.error}`);
     return { ok: false, error: planned.error, code: planned.code, escalate: planned.escalate };
   }
-  const r = runOrShow(planned.argv, { dryRun, say, why: action.why });
+  const r = runOrShow(planned.argv, { dryRun, say, why: action.why, run });
   // 达上限 / 没查成拉 0 是背压，不记 tries——否则 45 分钟后整队绕闸（#1125 审官红 1）。
   recordDrainAttempt(state, action, drainPayloadOf(r));
   return r;
+}
+
+/** 现场 head 读取器（execRetryDrain 的二次校验用）：查不成返回 ok:false，调用方 fail-closed。 */
+function livePrHead(action, repo) {
+  const r = runGh(['pr', 'view', String(action.pr), '--repo', repo, '--json', 'headRefOid'], 20000);
+  if (!r.ok) return { ok: false, error: r.error };
+  let got;
+  try { got = JSON.parse(r.out || '{}'); }
+  catch { return { ok: false, error: 'headRefOid 解析失败' }; }
+  const head = typeof got.headRefOid === 'string' ? got.headRefOid.trim() : '';
+  if (!head) return { ok: false, error: 'headRefOid 是空的' };
+  return { ok: true, head };
 }
 
 // 死票回收：删票 + 抹掉它的 drain 账。两样一起删——只删票会留下 tries 账，
@@ -1752,6 +1881,15 @@ function findDaoTree(issue, pr) {
   return null;
 }
 
+function mirasimStartCmd({ model, tree, spec, pr, issue }) {
+  const cmd = ['node', 'scripts/dao.mjs', 'start',
+    '--executor', 'mirasim', '--model', model,
+    '--worktree', tree, '--prompt', spec];
+  if (pr != null) cmd.push('--pr', String(pr), '--title', `PR-#${pr}`);
+  if (issue != null) cmd.push('--issue', String(issue));
+  return cmd;
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
@@ -1829,9 +1967,9 @@ function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = n
     rememberRework(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] rework PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };
@@ -1878,9 +2016,9 @@ export function dispatchPumpDraft(action, { state, dryRun, say, run = runCmd, br
     rememberPumpDraft(state, action, written, verdict);
     return verdict;
   }
-  const cmd = ['node', 'scripts/dao.mjs', 'start',
-    '--executor', 'mirasim', '--model', action.model,
-    '--worktree', tree, '--prompt', spec];
+  const cmd = mirasimStartCmd({
+    model: action.model, tree, spec, pr: action.pr, issue: action.issue,
+  });
   if (dryRun) {
     say(`[dry] pump-draft PR #${action.pr}（${action.why}）原树 ${tree}：\n    ${cmd.join(' ')}`);
     return { ok: true, dryRun: true, tree };

@@ -8,6 +8,45 @@ const { describe, it } = require('node:test');
 const { assert, fs, os, path, spawnSync, REPO, CLI, LIB, S_LOAD, DAO_LOAD, cliInProc, ROUTING_LOAD, waitForOutJson } = require('./helpers/dao-harness');
 
 describe('dao 审官与完工', () => {
+  // 话面承诺的开关必须真的收得进来（PR #1057 实咬）。
+  // cmdReviewerCreateMirasim 读 args.force、复用时还打印「要另起加 --force」，
+  // 但 FLAGS_BY_VERB['reviewer-create'] 里没有 --force ⇒ parseArgs 当未知参数拒掉，
+  // args.force 恒 undefined。**它自己指的逃生门打不开**，返工后的 PR 复审再也起不来。
+  // 第二条不钉这一次，钉这一类：函数里读了 args.X，白名单里就必须有 --x。
+  it('#1057 实咬：reviewer-create 读了哪些 args，白名单里就得有哪些 flag', async (t) => {
+    const S = await S_LOAD;
+
+    await t.test('parseArgs 收得下 --force（改动前这里会抛「未知参数」）', () => {
+      const parsed = S.parseArgs(['node', 'dao', 'reviewer-create', '--pr', '1057', '--force']);
+      assert.equal(parsed.force, true);
+      assert.equal(parsed.pr, '1057');
+    });
+
+    // 从源码里抽 cmdReviewerCreateMirasim 的函数体，把它读的 args.X 全列出来。
+    // 不复用被检查对象自己的解析：这里只做定界 + 正则取名，不 import dao.mjs。
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8').split(/\r?\n/);
+    const start = src.findIndex(l => /^(async )?function cmdReviewerCreateMirasim\b/.test(l));
+    const end = src.findIndex((l, i) => i > start && /^(async )?function /.test(l));
+    await t.test('定界拿得到函数体（拿不到 = 本条没查成，不是通过）', () => {
+      assert.ok(start >= 0, 'cmdReviewerCreateMirasim 找不到——函数改名了就来更新本条');
+      assert.ok(end > start, '函数尾界找不到');
+    });
+
+    const read = [...new Set(src.slice(start, end).join('\n').match(/args\.[a-zA-Z][a-zA-Z0-9]*/g) || [])]
+      .map(s => s.slice('args.'.length))
+      .map(camel => `--${camel.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}`)
+      .sort();
+    await t.test('扫到了样本（0 个 = 没查成）', () => {
+      assert.ok(read.length > 0, `没从函数体里扫到任何 args.X（${start}..${end}）`);
+    });
+
+    const allowed = S.FLAGS_BY_VERB['reviewer-create'];
+    await t.test('读到的每个 flag 都在 reviewer-create 白名单里', () => {
+      assert.deepEqual(read.filter(f => !allowed.has(f)), []);
+    });
+  });
+
+
   it('PR #758 教训：完工评论幂等（重试不重发）+ 半成功审官卡续跑', async (t) => {
     const S = await S_LOAD;
 

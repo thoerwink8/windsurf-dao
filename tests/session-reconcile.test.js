@@ -47,6 +47,46 @@ it('failed rework still recovers on unchanged head despite a passing CI', async 
   }
 });
 
+it('UNKNOWN mergeable after worker-done is waiting, not a dead worker', async () => {
+  const { decide } = await import('../scripts/lib/commander-core.mjs');
+  const issue = {
+    number: 1133,
+    title: '短命会话',
+    body: '',
+    labels: ['已消歧', 'model/grok-4.6', 'reviewer/gpt-5.6-luna', 'type/体系'].map((name) => ({ name })),
+  };
+  const pr = {
+    number: 1253,
+    title: '回收幽灵',
+    body: '署名 issue #1133。关单交给 scripts/close-issues.mjs。',
+    isDraft: false,
+    headRefOid: 'new-head',
+    mergeable: 'UNKNOWN',
+    labels: [
+      { name: 'model/grok-4.6' },
+      { name: 'reviewer/gpt-5.6-luna' },
+      { name: 'type/体系' },
+      { name: '卡死/自动化认输' },
+    ],
+    statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
+  const r = decide({
+    github: { scanned: true, issues: [issue], prs: [pr] },
+    trees: { scanned: true, worktrees: [] },
+    reviewPending: { scanned: true, items: [] },
+    stall: { scanned: true, strikes: {} },
+    prReviews: { scanned: true, byPr: { 1253: { reviews: [{ state: 'CHANGES_REQUESTED', body: '旧 head 的红', commit_id: 'old-head' }] } } },
+    sessions: { scanned: true, items: [{ key: 'grok:old', state: 'stopped', cwd: '/tmp/dao-1133' }] },
+    desiredJobs: { items: [{ job_id: 'old', identity: '工人', issue: 1133, model: 'grok-4.6' }] },
+    viewMergeable: () => ({ ok: true, mergeable: 'UNKNOWN' }),
+    commanderPolicy: { requireModelInRouting: false },
+    healthRedModels: [],
+    routingModels: ['grok-4.6', 'gpt-5.6-luna'],
+  });
+  const recovery = r.actions.filter((a) => ['dispatch', 'rework'].includes(a.kind) && a.issue === 1133);
+  assert.equal(recovery.length, 0, JSON.stringify(recovery));
+});
+
 it('stopped and rejected sessions use canonical terminal states and do not occupy workers', async () => {
   const { isLiveSession } = await LOAD;
   for (const state of ['stopped', 'rejected', 'gone', 'finished']) {
@@ -210,6 +250,57 @@ describe('hasLiveExecutor：查不成当有人在做', () => {
     });
     assert.equal(r.live, true);
     assert.equal(r.unscanned, true);
+  });
+
+  it('无署名 PR + 任意分支名 + running cwd → 有活执行者（标题里没有 PR 号）', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running', title: 'Grok',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-queue-selfheal',
+      }],
+      pr: 1271,
+      branch: 'dao-queue-selfheal',
+    });
+    assert.equal(r.live, true);
+    assert.equal(r.unscanned, false);
+  });
+
+  it('分支名带斜杠时按建树目录名（非法字符变 -）也能命中', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/cc-fix-branch',
+      }],
+      pr: 99,
+      branch: 'cc/fix-branch',
+    });
+    assert.equal(r.live, true);
+  });
+
+  it('会话元数据显式 pr 字段也能命中（不靠标题、不靠 cwd）', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{ key: 'grok:1', state: 'running', cwd: '/tmp/random-tree', pr: 1271 }],
+      pr: 1271,
+    });
+    assert.equal(r.live, true);
+    const issues = S.sessionSubjects({ pr: 1271, cwd: '/tmp/random-tree' });
+    assert.equal(issues.prs.has(1271), true);
+  });
+
+  it('别的分支上的 running 会话不算这条 PR 的活执行者', async () => {
+    const S = await LOAD;
+    const r = S.hasLiveExecutor({
+      sessions: [{
+        key: 'grok:1', state: 'running', title: 'Grok',
+        cwd: '/home/orca/mirasim-worktrees/windsurf-dao/some-other-branch',
+      }],
+      pr: 1271,
+      branch: 'dao-queue-selfheal',
+    });
+    assert.equal(r.live, false);
   });
 });
 

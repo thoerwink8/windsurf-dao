@@ -240,6 +240,9 @@ export function admitCapacity({
 } = {}) {
   const pol = resolveAdmissionPolicy(policy);
   const hints = pol.renamedKeyHints;
+  // 核数随准入一起吐出来：收尾名额要按机器比例算（不许手打常量），算的人在 commander-core，
+  // 但只有这里手上有 nproc。读不到 → null，调用方按「没查成」处理，不许自己猜一个默认核数。
+  const cores = Number.isInteger(nproc) && nproc > 0 ? nproc : null;
 
   const mem = parseMeminfo(meminfoText);
   if (!mem.ok) {
@@ -270,6 +273,7 @@ export function admitCapacity({
       slots: 0,
       why: `CPU 占用率 ${(cpu.busy * 100).toFixed(0)}% ≥ 阈值 ${(pol.cpuThreshold * 100).toFixed(0)}%，机器已忙，不收`
         + (load.ok ? `（loadavg 归一 ${load.loadNorm.toFixed(2)}，只报趋势）` : ''),
+      cores,
       cpuBusy: cpu.busy,
       loadNorm: load.ok ? load.loadNorm : null,
       memAvailableMb: mem.memAvailableMb,
@@ -289,6 +293,7 @@ export function admitCapacity({
       ok: true,
       slots: 0,
       why: `内存余量 ${headroomMb.toFixed(0)}MB ≤ 0（可用 ${mem.memAvailableMb.toFixed(0)}MB − 预留 ${pol.memReserveMb}MB − 在途 ${inFlight}×${workerMb.toFixed(0)}MB），不收`,
+      cores,
       cpuBusy: cpu.busy,
       loadNorm: load.ok ? load.loadNorm : null,
       memAvailableMb: mem.memAvailableMb,
@@ -306,6 +311,7 @@ export function admitCapacity({
     ok: true,
     slots: Math.max(0, slots),
     why,
+    cores,
     cpuBusy: cpu.busy,
     loadNorm: load.ok ? load.loadNorm : null,
     memAvailableMb: mem.memAvailableMb,

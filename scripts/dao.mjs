@@ -20,7 +20,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { cpus, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './lib/yaml-min.mjs';
@@ -154,7 +154,8 @@ import {
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
   planReviewAdmission,
-  DEFAULT_REVIEWER_CAP,
+  resolveReviewerCap,
+  reviewerIdsForCap,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -229,6 +230,7 @@ import {
 import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
+import { resolveModelChannel } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
@@ -236,6 +238,7 @@ import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { writeStdoutAndExit } from './lib/stdout-exit.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -266,6 +269,17 @@ import {
 } from './lib/run-lifecycle.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter, planReviewerOnCapacityDeath } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { verdictOnHead } from './lib/review-state.mjs';
+import { judgeLegDown } from './lib/leg-liveness.mjs';
+import { readLegRecords } from './lib/leg-liveness-io.mjs';
+
+/** 这条腿最近跑得怎么样——换厂的第二条凭证（判据 lib/leg-liveness.mjs）。取不到就如实说没查成。 */
+function legEvidenceFor(modelId) {
+  const got = readLegRecords(modelId);
+  if (!got.scanned) return { down: false, scanned: false, why: got.error };
+  return judgeLegDown(got.records);
+}
+
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
@@ -772,9 +786,11 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   let sess;
   try {
+    const dispatchIssue = Number(args.issue);
     sess = await bind.runtime.startSession({
       agent: route.agent, workdir: tree.path, prompt,
       model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
+      ...(Number.isInteger(dispatchIssue) && dispatchIssue > 0 ? { issue: dispatchIssue } : {}),
     });
   } catch (e) {
     // 租约被占是**背压**不是失败：树里有人在干活，排队下一轮就行。busy 原样透出去，
@@ -1460,8 +1476,17 @@ function cmdReviewerDone(args) {
  * 名单读不到 ⇒ 没查成 ⇒ 这一轮拉 0 张，票留在队列，不许当成「0 个在跑」去拉满。
  */
 async function admitReviewPull(tickets) {
-  const cap = Number.parseInt(process.env.DAO_REVIEWER_CAP || '', 10);
-  const limit = Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_REVIEWER_CAP;
+  // 上限不再是手打常量：机器那层按核数，上游那层按**本轮票实际会用的审官**所落渠道取严。
+  // 全部可用候选里那条没用到的 cap=1 腿不许拖住整队。
+  // 有限渠道上限始终是最终上界；保底只在没有任何有限渠道约束时生效。
+  const usable = usableReviewerIds();
+  // DAO_REVIEWER_CAP 也走同一个函数（只收紧不放宽）——这里不许再出现「有环境值就整段跳过取严」的平级分支。
+  const limit = resolveReviewerCap({
+    cores: (() => { try { return cpus()?.length ?? null; } catch { return null; } })(),
+    reviewerIds: reviewerIdsForCap(tickets, usable),
+    channelOf: reviewerChannelCap,
+    envCap: process.env.DAO_REVIEWER_CAP,
+  });
   let sessions = null;
   try {
     const routing = loadRouting();
@@ -1491,6 +1516,52 @@ function usableReviewerIds() {
   try {
     return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
   } catch { return null; }
+}
+
+/**
+ * 一位审官落在哪条渠道、那条渠道的上限是几（`resolveReviewerCap` 的渠道那层）。
+ *
+ * 走 `resolveModelChannel`（#1145 的正典），不自己按 provider 拼渠道键——自己拼那天，
+ * 「同一个模型算哪条渠道」在这里和指挥官里就会给出两个答案。
+ * 认不出 / 不限 ⇒ 回 null，调用方据此**不拿它去收紧**（不限不是 0）。
+ */
+function reviewerChannelCap(id) {
+  try {
+    const raw = loadRoutingJsonRaw();
+    const hit = resolveModelChannel({ model: id, legs: raw['腿'], models: raw['模型'] });
+    return hit && Number.isFinite(hit.cap) ? hit.cap : null;
+  } catch { return null; }
+}
+
+/**
+ * 当前 head 上有没有审官判定（三态：true / false / null=没查成）。
+ * 读不到一律 null——复用判据只在**确认没有**时才另起，不许拿「读不到」去重复烧额度。
+ *
+ * 对账目标是 reviewer 角色从 GitHub 读到的 PR **当前** headRefOid，不是登记里的
+ * expectedOid（#1293 审官 P1 实咬）：登记可能钉着旧提交（审官树/登记没跟上新 push），
+ * 旧提交上的 APPROVED / CHANGES_REQUESTED 会被误认作当前 head 已判定，
+ * 终态会话因此被复用，新提交永远没人审。
+ *
+ * head 与 reviews 必须同一次 `gh pr view --json headRefOid,reviews` 快照里读。
+ * 分两次读的话，第一次拿到旧 OID `H`、两次之间 PR 推到 `N`、第二次仍返回 `H`
+ * 上的票，函数会得出 true，而 `N` 没有审官（#1293 三审 P1）。
+ *
+ * runGh 可注入（测试）；默认走 reviewer 角色的 gh。
+ */
+export function judgeVerdictOnHead(pr, record, targetRepo, { runGh } = {}) {
+  if (!record || !record.sessionKey) return null;   // 没有在役登记，复用判据走不到这一步
+  const gh = runGh || ghRunnerForTarget(targetRepo, { role: 'reviewer' });
+  const snap = gh(['pr', 'view', String(pr), '--json', 'headRefOid,reviews']);
+  if (!snap || !snap.ok) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(snap.out);
+  } catch { return null; }
+  const head = String((parsed && parsed.headRefOid) || '').trim();
+  if (!head) return null;
+  const reviews = parsed && parsed.reviews;
+  if (!Array.isArray(reviews)) return null;
+  return verdictOnHead(reviews, head);
 }
 
 async function cmdReviewPendingDrain(args) {
@@ -1688,11 +1759,10 @@ async function cmdNow(args) {
   const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
 }
 
 /**
@@ -1705,11 +1775,10 @@ async function cmdBoard(args) {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const { board, elapsedMs } = await collectBoard({ cwd: root, root, now: new Date().toISOString() });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`${formatBoardTable(board)}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`${formatBoardTable(board)}\n`);
 }
 
 function cmdCheckHelp() {
@@ -1829,6 +1898,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2028,6 +2098,8 @@ async function cmdReviewerCreateMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    // 第二条凭证：死因词表认不出的新死法，靠「这条腿最近跑不完」也算数（#1290）
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
   const planned = planReviewerOnCapacityDeath({
@@ -2078,13 +2150,22 @@ async function cmdReviewerCreateMirasim(args) {
   const peek = args.dryRun || !existingRecord || !existingRecord.sessionKey
     ? { view: null, why: args.dryRun ? 'dry-run 不探会话' : null }
     : await peekReviewerSession(bind.runtime, existingRecord.sessionKey);
+  // #1289：复用还要问一句「它真的交了判定吗」。会话 phase=done 只说明会话结束了，
+  // 不说明活干完了——实测审官把结论写在会话文本里却从没调 gh pr review，
+  // 下一轮复用它，PR 就永久冻着。判据是 GitHub 上当前 head 有没有判定，三态。
+  const verdict = judgeVerdictOnHead(args.pr, existingRecord, targetRepo);
   const decided = decideReviewerCreateStart({
     force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view,
+    record: existingRecord, view: peek.view, verdictOnHead: verdict,
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
-  if (decided.reuse.reuse) {
+  // #1293 二审 P1：终态 reuse 的判定快照会过期。锁外 true 若在这里 emit 退出，
+  // 下面 lockedVerdict 重读根本跑不到——等锁期间推了新 head，新提交就没有审官。
+  // dry-run 仍按锁外快照预览（本来就不进锁）。
+  if (decided.reuse.reuse && (args.dryRun || !mustRecheckVerdictUnderLock({
+    reuse: true, view: peek.view,
+  }))) {
     emit({
       ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
@@ -2128,8 +2209,16 @@ async function cmdReviewerCreateMirasim(args) {
     const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
+    // #1293 审官 P1（第二轮实咬）：锁外那份 verdict 在等锁期间可能已过期——
+    // 锁外快照是「旧 head 有判定（true）」，等锁期间 PR 推了新 head 而新 head 还没判定，
+    // 拿旧值判 race 会把终态会话误报 reused，新提交就没有审官。
+    // 复用判定必须在持锁后重读当前 headRefOid + reviews（同一次快照），用这份锁内快照。
+    // forceNew 为真时 judgeReviewerCreateRace 短路、根本不看 verdictOnHead，省掉这次 gh 快照。
+    const lockedVerdict = (!forceNew && againRecord && againRecord.sessionKey)
+      ? judgeVerdictOnHead(args.pr, againRecord, targetRepo)
+      : null;
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view,
+      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: lockedVerdict,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
@@ -2242,6 +2331,7 @@ async function cmdWorkerDoneMirasim(args) {
     models: routing.models || [],
     passerIds: reviewerOrderOf(routing),
     order: reviewerOrderOf(routing),
+    legEvidence: legEvidenceFor(failover.deadModelId),
   } : null;
   const planned = planReviewerOnCapacityDeath({
     requested: plan.reviewer, capacityFailover: failoverCtx,
@@ -2415,12 +2505,20 @@ async function cmdStartMirasim(args) {
   const targetRepo = resolveMirasimRepoTarget(args, { role: 'worker', where: 'start', defaultLocal: thisCheckoutRoot() });
   const repo = targetRepo.localPath;
   const branch = args.branch || gitBranchName(ROOT).branch || 'master';
+  const asPositiveInt = (v) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const issue = asPositiveInt(args.issue);
+  const pr = asPositiveInt(args.pr);
+  const title = typeof args.title === 'string' && args.title.trim() ? args.title.trim() : null;
 
   if (args.dryRun) {
     emit({
       ok: true, dryRun: true, executor: 'mirasim',
       agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
       repo, ghRepo: targetRepo.ownerName || null, branch, workdir: workdir || '(ensureWorkspace 后才有)',
+      pr, issue, title,
       promptBytes: Buffer.byteLength(String(args.prompt), 'utf8'),
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
     });
@@ -2446,6 +2544,9 @@ async function cmdStartMirasim(args) {
     sess = await bind.runtime.startSession({
       agent: route.agent, workdir, prompt: args.prompt,
       model: args.model, clientRef: `dao-start-${Date.now()}`,
+      ...(issue ? { issue } : {}),
+      ...(pr ? { pr } : {}),
+      ...(title ? { title } : {}),
     });
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
@@ -2458,7 +2559,7 @@ async function cmdStartMirasim(args) {
     sessionKey: sess.sessionKey, taskId: sess.taskId ?? null, startedAt: sess.startedAt,
     handle: sess.sessionKey, // 兼容指挥官旧字段：brainSessions 的键就是这个
     agent: route.agent, family: route.family, mode: route.mode, daoModel: args.model,
-    repo, branch, workdir,
+    repo, branch, workdir, pr, issue, title,
   });
 }
 
