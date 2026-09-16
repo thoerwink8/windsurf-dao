@@ -555,7 +555,7 @@ export function planWorkerDone({ pr, body, runGh, reviewer } = {}) {
   // 快路 PR 按设计不署名 issue（pr-fast：不写 issue 号）。票和审官任务书都已认 issue:null；
   // 完工评论发到 PR 会话（GitHub 上 PR 就是那条线程）。有署名单才发 issue comment。
   // 没处可发的是「连 PR 号都没有」，不是「没有 issue」。
-  // 拒掉 = 快路永远交不了卷（#1270 返工实咬；本 PR 保护的也是同一形态）。
+  // 拒掉 = 快路永远交不了卷（#1270 返工实咬；#1288 同形）。
   // merge-policy 仍因取不到 human_holds 走 manual。
   // 指挥官 #1240 是同一条对称：无署名不挡返工，这边是无署名不挡交卷。
   // 有署名单才再发 issue。不许把「没单号」说成「没处可发」。
