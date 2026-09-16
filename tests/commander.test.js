@@ -162,6 +162,86 @@ describe('decide：自己做（确定性）', () => {
     assert.match(stops[0].why, /done/);
   });
 
+  it('#1133 §2：rejected 无 vendor sessionKey 且已清退，经投影后不得再 stop', async () => {
+    const { decide } = await CORE;
+    const { normalizeExecutionSession } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'execution-sessions.mjs').replace(/\\/g, '/')
+    );
+    const projected = normalizeExecutionSession({
+      sessionKey: null, key: 'launch:test', state: 'rejected', cleanupVerified: true,
+    });
+    assert.equal(projected.cleanupVerified, true, '投影必须把已确认清退证据带到消费端');
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [projected] },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '旧实现会拿 launch:test 每轮 stop');
+  });
+
+  it('#1133 §2：42 条已清退 rejected 回放不再空转，真会话仍回收、活会话不误杀', async () => {
+    const { decide } = await CORE;
+    const { normalizeExecutionSession } = await import(
+      'file://' + path.join(__dirname, '..', 'scripts', 'execution-sessions.mjs').replace(/\\/g, '/')
+    );
+    const rejected = Array.from({ length: 42 }, (_, i) => normalizeExecutionSession({
+      sessionKey: null, key: `launch:test-${i}`, state: 'rejected', cleanupVerified: true,
+    }));
+    const items = [
+      ...rejected,
+      normalizeExecutionSession({ sessionKey: 'codex:done-reviewer', key: 'codex:done-reviewer', state: 'done' }),
+      normalizeExecutionSession({ sessionKey: 'pi:dead', key: 'pi:dead', state: 'incomplete' }),
+      normalizeExecutionSession({ sessionKey: 'codex:from-launch', key: 'launch:has-vendor', state: 'done' }),
+      normalizeExecutionSession({ sessionKey: 'codex:live', key: 'codex:live', state: 'running' }),
+      normalizeExecutionSession({ sessionKey: 'codex:stream', key: 'codex:stream', state: 'streaming' }),
+      normalizeExecutionSession({ sessionKey: 'codex:wait', key: 'codex:wait', phase: 'waiting_user', awaiting: true }),
+      normalizeExecutionSession({ sessionKey: 'codex:unk', key: 'codex:unk', state: 'unknown' }),
+      normalizeExecutionSession({ sessionKey: null, key: 'launch:pending', state: 'pending' }),
+      normalizeExecutionSession({ sessionKey: null, key: 'launch:uncertain', state: 'uncertain' }),
+    ];
+    const r = decide(baseSituation({ sessions: { scanned: true, items } }));
+    const stops = byKind(r, 'stop-session').map((s) => s.sessionKey).sort();
+    assert.deepEqual(stops, ['codex:done-reviewer', 'codex:from-launch', 'pi:dead']);
+    assert.equal(items.length, 42 + 9, '不删历史账，42 条仍在投影里');
+    assert.equal(items.filter((s) => s.cleanupVerified === true).length, 42);
+    assert.notEqual(items.find((s) => s.key === 'launch:pending')?.cleanupVerified, true);
+  });
+
+  it('#1133 §2：名单没查成不许拿残留 items 去 stop', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: {
+        scanned: false,
+        error: '会话名单超时',
+        items: [{ sessionKey: 'codex:done', key: 'codex:done', state: 'done' }],
+      },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '没查成不得动手，不许洗成已查成的空名单');
+  });
+
+  it('名单没有、/proc 还占着树 → reap-orphan', async () => {
+    const { decide } = await CORE;
+    // cwd 必须落在测试当时的 worktreesRoot() 下。CI runner 的 homedir
+    // 不是 /home/orca，写死路径在钳根之后必假红。
+    const { worktreesRoot } = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'lease.mjs').replace(/\\/g, '/'));
+    const cwd = `${worktreesRoot()}/windsurf-dao/dao-review-pr-1099`;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [] },
+      lease: { scanned: true, procs: [{ pid: 1369724, comm: 'node', cwd }] },
+    }));
+    const reaps = byKind(r, 'reap-orphan');
+    assert.equal(reaps.length, 1);
+    assert.equal(reaps[0].cwd, cwd);
+    assert.deepEqual(reaps[0].pids, [1369724]);
+  });
+
+  it('lease 没查成 → 不产 reap-orphan', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      sessions: { scanned: true, items: [] },
+      lease: { scanned: false, error: '没扫成', procs: [] },
+    }));
+    assert.equal(byKind(r, 'reap-orphan').length, 0);
+  });
+
   it('#1056：已消歧但同一 issue 已有活会话 → 不派（幂等键是 issue）', async () => {
     const { decide } = await CORE;
     const issue = { number: 900, title: '补 X', labels: [
@@ -1529,7 +1609,7 @@ describe('跨仓感知只感知不派工', () => {
   it('buildSituation 里真的采了这一面', () => {
     assert.match(src, /const otherRepos = scanOtherRepos\(\);/, '没采就等于没接');
     assert.match(src, /github, orca, trees, reviewPending, prReviews, stall, otherRepos,/, '采了要放进态势');
-    assert.match(src, /sessions, desiredJobs,/, '对账循环观测/期望集也要放进态势');
+    assert.match(src, /sessions, lease, desiredJobs,/, '对账循环观测/期望集也要放进态势');
   });
 
   it('不维护管辖清单——授权范围就是清单', () => {
@@ -2793,7 +2873,8 @@ describe('对账循环 scan 真的接进态势', () => {
   it('buildSituation 采了 sessions 和 desiredJobs', () => {
     assert.match(src, /const sessions = scanSessions\(\);/);
     assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
-    assert.match(src, /sessions, desiredJobs,/);
+    assert.match(src, /const lease = scanLease\(\);/);
+    assert.match(src, /sessions, lease, desiredJobs,/);
   });
 
   it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
@@ -3248,6 +3329,247 @@ describe('nextDigestStreak：推进量仪表', () => {
       lastDigest = r.digest; streak = r.streak; stuck = r.stuck;
     }
     assert.equal(stuck, true, '死动作不是「没动作」，必须算进推进量');
+  });
+});
+
+// ── 闸确定性拒绝：不看词、只看行为，且认输理由必须带真因（2026-09-14 实咬）──
+//
+// 病：drain 被闸当场拒时一个审官都没起来，却照记一次 try；judgeRetry 的词表认不出
+// 这几句闸拒（实测两句 retryable、一句 unknown），于是每 20 分钟白试一次，试满 3 次
+// 打「卡死/自动化认输」，写的理由是「叫了 3 次审官判定仍是 0」——与真因毫无关系。
+describe(`闸确定性拒绝要能自己认出来，认输理由要带真因`, () => {
+  const CORE = import('../scripts/lib/commander-core.mjs');
+  const HEAD = 'bb22cc33dd44ee55ff6677889900aabbccddeeff';
+  const NOW = '2026-09-14T12:00:00.000Z';
+  // 真实原文（2026-09-14 journal 原样抄来）：judgeRetry 判它 retryable，词表救不了
+  const GATE = 'reviewer-attach 失败：审官位只许同厂换顺位（当前 gpt-5.6-luna／gpt），'
+    + '不许换厂到 grok-4.6／grok——换厂只在上一位死于满载/看门狗时成立：没交换厂凭证';
+  const readyPr = (n) => ({
+    number: n, isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD, body: '',
+    labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+  });
+  const situ = (rec, rereviewKey) => baseSituation({
+    at: NOW,
+    github: { scanned: true, issues: [], prs: [readyPr(902)] },
+    prReviews: { scanned: true, byPr: { 902: { reviews: [] } } },
+    reworkDispatched: { [rereviewKey(902, HEAD)]: { at: '2026-09-14T10:00:00.000Z', pr: 902, head: HEAD, kind: 'rereview', ...rec } },
+  });
+
+  it('①同一句闸拒连着 2 轮 → 提前交人，理由里是闸的原文而不是「判定仍是 0」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 2 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1, '连着拿回一模一样的拒绝 = 再试还是这个结果，停手');
+    assert.equal(marks[0].why.includes('换厂凭证'), true, '认输理由必须带闸的原文——看 PR 的人靠它决定下一步');
+    assert.equal(marks[0].why.includes('连着 2 轮'), true, '也要说清判据是什么');
+    assert.equal(byKind(r, 'rereview').length, 0, '不再白叫一次审官');
+  });
+
+  it('②试满 3 次且记下了原文 → 理由里也要带原文（原来这一格写的是无关的症状）', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 3, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    const marks = byKind(r, 'mark-exhausted');
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].why.includes('最后一次叫审官是被拒的'), true);
+    assert.equal(marks[0].why.includes('换厂凭证'), true);
+  });
+
+  it('③负控：失败原文变了 → 情况变了，继续叫审官，不提前交人', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, lastError: GATE, sameErrorRounds: 1 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '只重复了一次还不算「一直是它」');
+    assert.equal(byKind(r, 'rereview').length, 1, '照常再叫一次');
+  });
+
+  it('④负控：上一轮没记下失败原文（没查成）→ 不许当成「一直是它」', async () => {
+    const { decide, rereviewKey } = await CORE;
+    const r = decide(situ({ tries: 1, sameErrorRounds: 5 }, rereviewKey));
+    assert.equal(byKind(r, 'mark-exhausted').length, 0, '没原文就没有「一模一样」这回事');
+    assert.equal(byKind(r, 'rereview').length, 1);
+  });
+
+  it('⑤判据本身：judgeRepeatedFailure 与 foldFailureStreak 的四格', async () => {
+    const { judgeRepeatedFailure, foldFailureStreak, SAME_ERROR_ROUNDS_TO_STUCK } = await CORE;
+    assert.equal(SAME_ERROR_ROUNDS_TO_STUCK, 2);
+
+    // 累计：同一句连着出现 → 轮数涨
+    let rec = {};
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 1);
+    assert.equal(judgeRepeatedFailure(rec).stuck, false);
+    rec = { ...rec, ...foldFailureStreak(rec, GATE) };
+    assert.equal(rec.sameErrorRounds, 2);
+    assert.equal(judgeRepeatedFailure(rec).stuck, true);
+
+    // 换了一句 → 从头数（宁可多试一轮，也别把「情况变了」当没变）
+    assert.deepEqual(foldFailureStreak(rec, '另一种失败'), { lastError: '另一种失败', sameErrorRounds: 1 });
+    // 这轮成功了 → 清零
+    assert.deepEqual(foldFailureStreak(rec, null), { lastError: null, sameErrorRounds: 0 });
+    // 没有账 / 空原文（空串才是没原文；空白也是原文，不做 trim）
+    assert.equal(judgeRepeatedFailure(null).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '', sameErrorRounds: 9 }).stuck, false);
+    assert.equal(judgeRepeatedFailure({ lastError: '   ', sameErrorRounds: 2 }).stuck, true,
+      '首尾空白也是原文，trim 会把「差一个空格」揉成同一句');
+    assert.deepEqual(foldFailureStreak({ lastError: 'foo', sameErrorRounds: 1 }, 'foo '),
+      { lastError: 'foo ', sameErrorRounds: 1 }, '尾空白变了 = 另一句');
+    assert.deepEqual(foldFailureStreak({ lastError: ' foo', sameErrorRounds: 1 }, 'foo'),
+      { lastError: 'foo', sameErrorRounds: 1 }, '首空白变了 = 另一句');
+  });
+
+  it('⑥判别力正控：这三句真实闸拒，judgeRetry 一句都判不出 terminal', async () => {
+    const { judgeRetry } = await import('../scripts/lib/retry-verdict.mjs');
+    const real = [
+      GATE,
+      'reviewer-attach 失败：先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）',
+      'reviewer-attach 失败：审官位只许审官顺位表里的模型（gpt-5.6-luna → gpt-5.6-sol → grok-4.6），kimi-k3 不在表里',
+    ];
+    for (const e of real) {
+      assert.notEqual(judgeRetry({ error: e }).verdict, 'terminal',
+        '词表认不出这些——所以才需要一条只看行为的判据；哪天词表补上了，这条断言会红，提醒回来删掉重复的那一层');
+    }
+  });
+
+  it('⑦集成：连续两次 requestRereview + drain 同错 → sameErrorRounds 累到 2，不是每次从 1 开始', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey, decide, judgeRepeatedFailure } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const failDrain = () => ({
+        ok: false, status: 1,
+        out: JSON.stringify({ ok: false, error: GATE }),
+        stderr: '', error: GATE,
+      });
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：同错两轮',
+      };
+      const r1 = requestRereview(action, { state, dryRun: false, say: () => {}, run: failDrain });
+      assert.equal(r1.ok, false);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '第一轮 drain 失败，streak=1');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const r2 = requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {}, run: failDrain,
+      });
+      assert.equal(r2.ok, false);
+      assert.equal(state.reworkDispatched[key].tries, 2);
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 2,
+        '第二轮必须累加；覆盖成只有 tries 的新对象会让同错永远从 1 开始');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+      assert.equal(judgeRepeatedFailure(state.reworkDispatched[key]).stuck, true);
+
+      const decided = decide(situ({
+        tries: state.reworkDispatched[key].tries,
+        lastError: state.reworkDispatched[key].lastError,
+        sameErrorRounds: state.reworkDispatched[key].sameErrorRounds,
+      }, rereviewKey));
+      assert.equal(byKind(decided, 'mark-exhausted').length, 1, '两轮同错之后 decide 提前交人');
+      assert.equal(byKind(decided, 'rereview').length, 0);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('⑧背压/没查成不清零 streak；真拉起审官才清零', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272h-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { rereviewKey } = await CORE;
+      const key = rereviewKey(902, HEAD);
+      const state = { reworkDispatched: {} };
+      const action = {
+        kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+        stateKey: key, tries: 1, why: '集成：背压',
+      };
+      requestRereview(action, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: false, status: 1, out: JSON.stringify({ ok: false, error: GATE }), stderr: '', error: GATE }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1);
+
+      const held = { ok: true, drained: 0, failed: 0, held: 2 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(held), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '满载 held 不算尝试，不许把 streak 清掉');
+      assert.equal(state.reworkDispatched[key].lastError, GATE);
+
+      const unscanned = { ok: true, drained: 0, held: 2, unscanned: true };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(unscanned), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 1, '没查成也不许清零');
+
+      const pulled = { ok: true, drained: 1, failed: 0, held: 0 };
+      requestRereview({ ...action, tries: 2 }, {
+        state, dryRun: false, say: () => {},
+        run: () => ({ ok: true, status: 0, out: JSON.stringify(pulled), stderr: '' }),
+      });
+      assert.equal(state.reworkDispatched[key].sameErrorRounds, 0, '真拉起审官才清零');
+      assert.equal(state.reworkDispatched[key].lastError, null);
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('⑨两条写路径对「前 400 字同、后文不同 / 第二行不同」结论一致，且都不判 stuck', async () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-1272e-'));
+    const prevDir = process.env.DAO_REVIEW_PENDING_DIR;
+    process.env.DAO_REVIEW_PENDING_DIR = dir;
+    try {
+      const { requestRereview } = await import('../scripts/commander.mjs');
+      const { drainErrorText } = await import('../scripts/lib/commander-verbs.mjs');
+      const { rereviewKey, judgeRepeatedFailure } = await CORE;
+      const cases = [
+        { a: 'E'.repeat(400) + 'A', b: 'E'.repeat(400) + 'B', label: '前 400 字相同但后文不同' },
+        { a: 'gate refused\nhead=aaa', b: 'gate refused\nhead=bbb', label: '第一行相同但第二行不同' },
+        { a: 'gate refused\n', b: 'gate refused', label: '尾换行 vs 无换行' },
+      ];
+      for (const { a, b, label } of cases) {
+        assert.equal(drainErrorText({ error: a }), a, label + '：抽取不许截');
+        const key = rereviewKey(902, HEAD);
+        const state = { reworkDispatched: {}, drainLedger: {} };
+        const action = {
+          kind: 'rereview', pr: 902, head: HEAD, reviewer: 'gpt-5.6-sol',
+          stateKey: key, tries: 1, why: '集成：' + label,
+        };
+        const runOf = (err) => () => ({
+          ok: false, status: 1, out: JSON.stringify({ ok: false, error: err }), stderr: '', error: err,
+        });
+        requestRereview(action, { state, dryRun: false, say: () => {}, run: runOf(a) });
+        requestRereview({ ...action, tries: 2 }, { state, dryRun: false, say: () => {}, run: runOf(b) });
+        const drainRec = Object.values(state.drainLedger)[0];
+        const rrRec = state.reworkDispatched[key];
+        assert.ok(drainRec, label + '：drain 账必须写下');
+        assert.equal(drainRec.lastError, b, label + '：drain 账必须留下完整后一句');
+        assert.equal(rrRec.lastError, b, label + '：复审账必须留下完整后一句');
+        assert.equal(drainRec.sameErrorRounds, 1, label + '：drain 账不许判同错');
+        assert.equal(rrRec.sameErrorRounds, 1, label + '：复审账不许判同错');
+        assert.equal(drainRec.lastError, rrRec.lastError, label + '：两条路径 lastError 必须一致');
+        assert.equal(drainRec.sameErrorRounds, rrRec.sameErrorRounds, label + '：两条路径 streak 必须一致');
+        assert.equal(judgeRepeatedFailure(drainRec).stuck, false, label);
+        assert.equal(judgeRepeatedFailure(rrRec).stuck, false, label);
+      }
+    } finally {
+      if (prevDir === undefined) delete process.env.DAO_REVIEW_PENDING_DIR;
+      else process.env.DAO_REVIEW_PENDING_DIR = prevDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -150,6 +150,7 @@ import {
   writeReviewPending,
   listReviewPending,
   drainReviewPending,
+  attachReceiptFromSpawn,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
@@ -238,6 +239,7 @@ import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
 import { applyGitIdentity, whoami } from './lib/gh.mjs';
 import { applyIssueWrite } from './lib/issue-gateway.mjs';
+import { writeStdoutAndExit } from './lib/stdout-exit.mjs';
 
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
@@ -1627,17 +1629,8 @@ async function cmdReviewPendingDrain(args) {
         cwd: ROOT,
         timeout: 600000,
       });
-      let json = null;
-      try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
-      if (spawned.error || (spawned.status !== 0 && spawned.status != null) || !json || json.ok !== true) {
-        return {
-          ok: false,
-          error: (json && json.error)
-            || String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`).trim().slice(0, 400),
-          json,
-        };
-      }
-      return { ok: true, json };
+      // 无 JSON / 超时 / 信号：完整 stderr 进比较键，不在这里截 400 字。
+      return attachReceiptFromSpawn(spawned);
     },
   });
   if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
@@ -1758,11 +1751,10 @@ async function cmdNow(args) {
   const progressStalls = collectProgressStalls({ dir: progressDir });
   const board = renderNow({ ...raw, progressStalls, windowHours: hours });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs: raw.elapsedMs, progressStateDir: progressDir, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`推进记录源：${progressDir}\n${formatNow(board, { maxLines: DEFAULT_MAX_LINES })}\n`);
 }
 
 /**
@@ -1775,11 +1767,10 @@ async function cmdBoard(args) {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const { board, elapsedMs } = await collectBoard({ cwd: root, root, now: new Date().toISOString() });
   if (args.json === true) {
-    console.log(JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2));
-    process.exit(0);
+    writeStdoutAndExit(`${JSON.stringify({ ok: true, elapsedMs, updatedAt: board.updatedAt, board }, null, 2)}\n`);
+    return;
   }
-  process.stdout.write(`${formatBoardTable(board)}\n`);
-  process.exit(0);
+  writeStdoutAndExit(`${formatBoardTable(board)}\n`);
 }
 
 function cmdCheckHelp() {
@@ -2365,8 +2356,8 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
-  if (plan.issue) {
+  let postedIssue = { ok: true, skipped: true, why: '无署名单（快路 PR），完工 comment 只发 PR' };
+  if (plan.issue != null) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
       writeIssue: applyIssueWrite, host: 'worker-done',

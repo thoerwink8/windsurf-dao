@@ -22,6 +22,17 @@ test('state outranks conflicting phase; waiting_user is kept',()=>{
  assert.equal(normalizeExecutionSession({state:'',phase:'waiting_user'}).state,'waiting_user');
  assert.equal(normalizeExecutionSession({state:'WAITING_USER',phase:'running'}).state,'waiting_user');
 });
+test('rejected launch with verified cleanup keeps that evidence for decide',()=>{
+ const projected=normalizeExecutionSession({sessionKey:null,key:'launch:test',state:'rejected',cleanupVerified:true});
+ assert.equal(projected.cleanupVerified,true);
+ assert.equal(projected.state,'rejected');
+ assert.equal(projected.sessionKey,null);
+ assert.equal(projected.key,'launch:test');
+});
+test('missing cleanupVerified is not synthesized as a successful cleanup',()=>{
+ const projected=normalizeExecutionSession({sessionKey:null,key:'launch:pending',state:'uncertain'});
+ assert.notEqual(projected.cleanupVerified,true);
+});
 test('Mirasim snapshot interactions survive public read view normalization',()=>{
  const interactions=[{promptId:'q',questions:[{id:'format'}]}];
  assert.deepEqual(readSessionView({phase:'done',text:'question',interactions}).interactions,interactions);

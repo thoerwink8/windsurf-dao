@@ -521,6 +521,122 @@ describe('execReapTree fail-closed', () => {
   });
 });
 
+describe('execReapOrphan fail-closed', () => {
+  it('cwd 对不上规划 → 不杀', async () => {
+    const M = await CMD();
+    const killed = [];
+    const r = M.execReapOrphan(
+      { cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1', pids: [4242] },
+      {
+        dryRun: false,
+        say: () => {},
+        readlink: () => '/tmp/other',
+        kill: (pid) => { killed.push(pid); },
+      },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(killed, []);
+    assert.equal(r.results[0].skipped, 'cwd-mismatch');
+  });
+
+  it('cwd 对得上 → SIGTERM', async () => {
+    const M = await CMD();
+    const killed = [];
+    const cwd = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1';
+    const r = M.execReapOrphan(
+      { cwd, pids: [4242] },
+      {
+        dryRun: false,
+        say: () => {},
+        readlink: () => cwd,
+        kill: (pid, sig) => { killed.push({ pid, sig }); },
+      },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(killed, [{ pid: 4242, sig: 'SIGTERM' }]);
+  });
+
+  it('pid 已经没了（ENOENT/ESRCH）→ 当成功，不红', async () => {
+    const M = await CMD();
+    for (const code of ['ENOENT', 'ESRCH']) {
+      const r = M.execReapOrphan(
+        { cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1', pids: [4242] },
+        {
+          dryRun: false,
+          say: () => {},
+          readlink: () => { const e = new Error('gone'); e.code = code; throw e; },
+          kill: () => { throw new Error('不该杀'); },
+        },
+      );
+      assert.equal(r.ok, true, code + JSON.stringify(r));
+      assert.equal(r.results[0].gone, true, code);
+      assert.equal(r.results[0].unscanned, undefined, code);
+    }
+  });
+
+  it('cwd EACCES/EIO → 不杀、不报成功、标 unscanned', async () => {
+    const M = await CMD();
+    for (const code of ['EACCES', 'EIO']) {
+      const killed = [];
+      const logs = [];
+      const r = M.execReapOrphan(
+        { cwd: '/home/orca/mirasim-worktrees/windsurf-dao/dao-1', pids: [4242] },
+        {
+          dryRun: false,
+          say: (m) => logs.push(m),
+          readlink: () => { throw Object.assign(new Error('permission denied'), { code }); },
+          kill: () => { killed.push(1); throw new Error('must not kill'); },
+        },
+      );
+      assert.equal(r.ok, false, code + JSON.stringify(r));
+      assert.equal(r.unscanned, true, code);
+      assert.equal(r.results[0].ok, false, code);
+      assert.equal(r.results[0].unscanned, true, code);
+      assert.equal(r.results[0].gone, undefined, code);
+      assert.deepEqual(killed, []);
+      const log = logs.join('\n');
+      assert.match(log, /cwd 没查成/);
+      assert.match(log, /0\/1 已 SIGTERM/);
+    }
+  });
+
+  it('混排：gone + EACCES + 对得上 → 只杀对得上的，总结果不报成功', async () => {
+    const M = await CMD();
+    const cwd = '/home/orca/mirasim-worktrees/windsurf-dao/dao-1';
+    const killed = [];
+    const logs = [];
+    const r = M.execReapOrphan(
+      { cwd, pids: [111, 222, 333] },
+      {
+        dryRun: false,
+        say: (m) => logs.push(m),
+        readlink: (p) => {
+          if (String(p).includes('/111/')) {
+            throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+          }
+          if (String(p).includes('/222/')) {
+            throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+          }
+          return cwd;
+        },
+        kill: (pid, sig) => { killed.push({ pid, sig }); },
+      },
+    );
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.unscanned, true);
+    assert.equal(r.results[0].gone, true);
+    assert.equal(r.results[1].unscanned, true);
+    assert.equal(r.results[2].ok, true);
+    assert.equal(r.results[2].gone, undefined);
+    assert.equal(r.results[2].skipped, undefined);
+    assert.deepEqual(killed, [{ pid: 333, sig: 'SIGTERM' }]);
+    const log = logs.join('\n');
+    assert.match(log, /1\/3 已 SIGTERM/);
+    assert.match(log, /cwd 没查成/);
+    assert.match(log, /已消失/);
+  });
+});
+
 describe('容量对比', () => {
   it('初始有 incomplete、stop 成功、样本残留为 0', async () => {
     const { leftoverIncompleteAfterStops, countLeftoverAfterHandoff } = await CAP;
