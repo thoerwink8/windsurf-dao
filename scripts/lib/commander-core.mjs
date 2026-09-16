@@ -471,20 +471,28 @@ export function analyzeReviewsAtHead(reviews, head) {
   const h = typeof head === 'string' ? head.trim() : '';
   if (!h) return { scanned: false, reason: 'head-unscanned' };
   const judged = [];
+  const events = [];
   for (const rv of reviews) {
     const state = normalizeReviewState(rv);
-    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue; // COMMENTED 等不参与判别，缺 commit_id 也无所谓
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED' && state !== 'DISMISSED') continue;
     const cid = rv && typeof rv === 'object' ? String(rv.commit_id || rv.commitId || '').trim() : '';
     if (!cid) return { scanned: false, reason: 'commit-id-unscanned' };
-    judged.push({ rv, cid });
+    const event = { rv, cid, state };
+    events.push(event);
+    if (state !== 'DISMISSED') judged.push(event);
   }
-  const atHead = judged.filter((x) => x.cid === h);
+  const atHeadEvents = events.filter((x) => x.cid === h);
+  const lastDismissed = atHeadEvents.map((x) => x.state).lastIndexOf('DISMISSED');
+  const effectiveAtHead = (lastDismissed >= 0 ? atHeadEvents.slice(lastDismissed + 1) : atHeadEvents)
+    .filter((x) => x.state !== 'DISMISSED');
   return {
-    ...analyzeGithubReviews(atHead.map((x) => x.rv)),
+    // DISMISSED 要留在当前 head 的时间序列里，才能终止同 head 上的旧 APPROVED；
+    // 但它不是有效判定，所以 atHead / judged 仍只统计 APPROVED 与 CHANGES_REQUESTED。
+    ...analyzeGithubReviews(effectiveAtHead.map((x) => x.rv)),
     head: h,
     judgedTotal: judged.length,
-    atHead: atHead.length,
-    judged: atHead.map((x) => x.rv),
+    atHead: effectiveAtHead.length,
+    judged: effectiveAtHead.map((x) => x.rv),
   };
 }
 

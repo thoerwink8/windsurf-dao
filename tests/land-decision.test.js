@@ -23,6 +23,22 @@ describe('lastJudgmentOf', () => {
   });
 });
 
+describe('analyzeReviewsAtHead', () => {
+  it('当前 HEAD 的 APPROVED 被 DISMISSED 后不再算绿', async () => {
+    const { analyzeReviewsAtHead } = await CORE;
+    const head = 'h'.repeat(40);
+    const r = analyzeReviewsAtHead([
+      { state: 'APPROVED', commit_id: head },
+      { state: 'DISMISSED', commit_id: head },
+    ], head);
+    assert.equal(r.scanned, true);
+    assert.equal(r.latestGreen, false);
+    assert.equal(r.latestRed, false);
+    assert.equal(r.atHead, 0);
+    assert.deepEqual(r.judged, []);
+  });
+});
+
 describe('lastApprovedCommitId', () => {
   const cid = (n) => String(n).repeat(40);
   it('最后一条是 APPROVED → 取出该 commit', async () => {
