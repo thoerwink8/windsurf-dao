@@ -137,6 +137,45 @@ describe('#1331 attachReceiptFromSpawn：结构化字段要提到顶层', () => 
   });
 });
 
+describe('#1331 返工 / 收口泵那条路：同一个判据，回执形状不同', () => {
+  // 返工派的是 `dao.mjs start`，回执是 runCmd 的形状（out 里一行 JSON），
+  // 与复审那条路（reviewer-attach 的结构化回执）不是同一个形状，但判据必须是同一个。
+  const startFailure = (json) => ({
+    ok: false, status: 1, out: JSON.stringify(json), stderr: '',
+    error: String(json.error || '').slice(0, 300),
+  });
+
+  it('start 的 ws 断连回执 → 判环境（这就是 #885 / #1284 被烧掉预算的那一条）', async () => {
+    const { judgeEnvFailure } = await RP;
+    const { drainPayloadOf } = await import(
+      'file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const receipt = startFailure({
+      ok: false, error: 'mirasim 起会话失败: 连不上回环 ws',
+      executor: 'mirasim', code: 'unavailable', agent: 'grok',
+    });
+    assert.equal(judgeEnvFailure({ attached: drainPayloadOf(receipt) }).env, true);
+  });
+
+  it('start 的确定性失败（无 code）→ 不是环境，照旧记账', async () => {
+    const { judgeEnvFailure } = await RP;
+    const { drainPayloadOf } = await import(
+      'file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const receipt = startFailure({ ok: false, error: 'mirasim 建树失败: 分支不存在', executor: 'mirasim' });
+    assert.equal(judgeEnvFailure({ attached: drainPayloadOf(receipt) }).env, false);
+  });
+
+  it('非 dao 回执（自动合并成功 / 找不到树）→ 不是环境', async () => {
+    const { judgeEnvFailure } = await RP;
+    const { drainPayloadOf } = await import(
+      'file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    for (const v of [{ ok: true, integrated: true },
+      { ok: false, unscanned: true, error: '找不到工人树 dao-1284，不新派工' }]) {
+      assert.equal(judgeEnvFailure({ attached: drainPayloadOf(v) }).env, false,
+        `${JSON.stringify(v)} 不该判成环境`);
+    }
+  });
+});
+
 describe('#1331 判别性实验：三次 ws 断连，老判据认输、新判据一次没烧', () => {
   it('同一张 PR 连撞三次断连后仍有满额重试预算', async () => {
     const { classifyDrainAttempt } = await RP;

@@ -2208,15 +2208,37 @@ function mirasimStartCmd({ model, tree, spec, pr, issue }) {
   return cmd;
 }
 
+/**
+ * 这次派工失败，是「执行体自己够不着」还是「这张 PR 的事」（#1331）。
+ *
+ * 返工 / 收口泵派的是 `dao.mjs start`，回执是 runCmd 的形状（out 里一行 JSON）。
+ * 先按 drainPayloadOf 解出结构化回执，再交给与复审那侧**同一个**纯函数判——
+ * 同一个事实不许两处各判一次（#1233 的形状）。
+ *
+ * 解不出 / 没有 code（老回执、非 JSON、超时被杀）一律判「不是环境」，照旧记一次尝试：
+ * 宁可多烧一次，也不要把真失败悄悄变成无限重试。
+ */
+function envFailureOf(runResult) {
+  try {
+    return judgeEnvFailure({ attached: drainPayloadOf(runResult) });
+  } catch {
+    return { env: false, why: '回执解不出（没查成）——按真失败记账', code: null, stage: null };
+  }
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
+  // #1331：ws 断连这一轮**一个工人都没造出来**，不算这张 PR 试过返工。
+  // 实测 2026-09-17：#885 / #1284 的返工正是这样被烧掉预算的（7 天 66 次）。
+  const env = envFailureOf(verdict);
   state.reworkDispatched[rkey] = {
     at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1,
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
   };
 }
 
@@ -2317,10 +2339,13 @@ function rememberPumpDraft(state, action, written, verdict) {
   state.reworkDispatched = state.reworkDispatched || {};
   const pkey = action.pumpKey || pumpDraftKey(action.pr);
   const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  const env = envFailureOf(verdict);   // #1331：同上，环境轮不算这张 PR 泵过
   state.reworkDispatched[pkey] = {
     at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1, kind: 'pump-draft',
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
+    kind: 'pump-draft',
   };
 }
 
