@@ -19,22 +19,47 @@
 // 4. **key 用 provider-probe 的那一套**，别在这里再发明一份。codex 经 mirasim 起的会话一律
 //    走它注入的代理（HTTPS_PROXY + 自家 MITM CA，实测于 app-server 的 /proc/<pid>/environ），
 //    出口是 relay，所以 agent=codex 归 `relay:codex`；其余 agent 按选型表的落地算。
+//
+// 5. **断流不是腿坏（#1386，2026-09-17 实咬）。** `incomplete` / `timeout` 是长流跑到一半被掐：
+//    首字节 11–116 秒全到、短流全成、断点散在 10–36 分钟。grok 46 条里 20 条 incomplete、0 条
+//    限流/鉴权码，熔断器却据此把一条当天真干出活的腿判死，四张 PR 返工逐条拒派、盘面停滞 5 轮。
+//    而审官那条腿（codex 经 relay）同时同形状地断——两条独立的腿一起坏，坏的是共用的传输层，
+//    换腿救不了。所以断流单列第三类 `stream`：进账、进 why、不进分母。
+//
+// 6. **`turn.finish` 自带 agent/model/sessionId**（diag 文件里 props 还是 JSON 字串）。全机共用一个
+//    bootId，多路并发时 FIFO 会张冠李戴（同一窗口 grok 的自杀数被搬给 codex 8 条）。finish 自带身份
+//    就用它，FIFO 只是没身份时的退路。
 
 /** 我们自己造成的结束：不算上游失败，也不算成功。 */
 export const SELF_INFLICTED_CODES = new Set(['interrupted', 'aborted']);
+
+/** 长流被掐：传输层的事，不证明腿坏，也不证明腿好。进账不进分母。 */
+export const STREAM_BREAK_CODES = new Set(['incomplete', 'timeout']);
+
+/** 事件的 props：analytics 文件里是对象，diag 文件里是 JSON 字串——两种都认，认不出回 {}。 */
+export function propsOf(e) {
+  const raw = e && e.props;
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    try { const p = JSON.parse(raw); return p && typeof p === 'object' ? p : {}; } catch { return {}; }
+  }
+  return {};
+}
 
 /** mirasim 起的 codex 会话的传输腿。所有 codex 模型（luna / sol / …）共用这条腿，坏是一起坏。 */
 export const RELAY_CODEX_TARGET = 'relay:codex';
 
 /**
  * 一条 turn.finish 的归类。
- * @returns {'ok'|'self'|'upstream'}
+ * @returns {'ok'|'self'|'stream'|'upstream'}
  */
 export function classifyTurnOutcome(props) {
   const p = props && typeof props === 'object' ? props : {};
   if (p.ok === true) return 'ok';
   const code = p.errorCode == null ? '' : String(p.errorCode);
-  return SELF_INFLICTED_CODES.has(code) ? 'self' : 'upstream';
+  if (SELF_INFLICTED_CODES.has(code)) return 'self';
+  if (STREAM_BREAK_CODES.has(code)) return 'stream';
+  return 'upstream';
 }
 
 /**
@@ -42,7 +67,7 @@ export function classifyTurnOutcome(props) {
  * 事件可来自多个文件、顺序以传入为准（调用方按文件名排好）。同 id 的重复事件只算一次。
  *
  * @param {Array<{id?:string,name:string,ts:string,bootId?:string,props?:object}>} events
- * @returns {Array<{ts:string,agent:string,model:string,kind:'ok'|'self'|'upstream',errorCode:string|null,durationMs:number|null}>}
+ * @returns {Array<{ts:string,agent:string,model:string,kind:'ok'|'self'|'stream'|'upstream',errorCode:string|null,durationMs:number|null}>}
  */
 export function pairTurnEvents(events) {
   const pending = new Map(); // bootId → [{agent, model}]
@@ -50,21 +75,29 @@ export function pairTurnEvents(events) {
   const out = [];
   for (const e of Array.isArray(events) ? events : []) {
     if (!e || typeof e !== 'object') continue;
-    if (e.id != null) {
-      const id = String(e.id);
+    const id = e.id != null ? String(e.id) : (e.eventId != null ? String(e.eventId) : null);
+    if (id != null) {
       if (seen.has(id)) continue;
       seen.add(id);
     }
     const boot = e.bootId == null ? '' : String(e.bootId);
-    const props = e.props && typeof e.props === 'object' ? e.props : {};
+    const props = propsOf(e);
     if (e.name === 'turn.submit') {
       if (!pending.has(boot)) pending.set(boot, []);
-      pending.get(boot).push({ agent: String(props.agent || '?'), model: String(props.model || '?') });
+      pending.get(boot).push({ agent: String(props.agent || e.agent || '?'), model: String(props.model || e.model || '?') });
       continue;
     }
     if (e.name !== 'turn.finish') continue;
     const q = pending.get(boot);
-    const head = q && q.length ? q.shift() : { agent: '?', model: '?' };
+    let head;
+    if (e.agent && e.model) {
+      // finish 自带身份就用它；顺手把队里同身份的那条 submit 消掉，别让它错配给下一条。
+      head = { agent: String(e.agent), model: String(e.model) };
+      const i = q ? q.findIndex((s) => s.agent === head.agent && s.model === head.model) : -1;
+      if (i >= 0) q.splice(i, 1);
+    } else {
+      head = q && q.length ? q.shift() : { agent: '?', model: '?' };
+    }
     out.push({
       ts: typeof e.ts === 'string' ? e.ts : '',
       agent: head.agent,
@@ -93,8 +126,9 @@ export function turnTargetOf(turn, { models, probeTargetForModel } = {}) {
 }
 
 /**
- * 按 key 汇总窗口内的成败。`total` 只算 ok + upstream（自杀不进分母——它既不证明腿好也不证明腿坏）。
- * @returns {Record<string, {ok:number, upstream:number, self:number, total:number, lastTs:string|null}>}
+ * 按 key 汇总窗口内的成败。`total` 只算 ok + upstream：自杀与断流都不进分母——前者是我们自己停的，
+ * 后者是传输层掐的（#1386），两者都既不证明腿好也不证明腿坏。
+ * @returns {Record<string, {ok:number, upstream:number, self:number, stream:number, total:number, lastTs:string|null}>}
  */
 export function summarizeTurnOutcomes(turns, { sinceMs = 0, targetOf } = {}) {
   const map = typeof targetOf === 'function' ? targetOf : () => null;
@@ -105,9 +139,10 @@ export function summarizeTurnOutcomes(turns, { sinceMs = 0, targetOf } = {}) {
     if (!Number.isFinite(ms) || ms < sinceMs) continue;
     const key = map(t);
     if (!key) continue;
-    const row = out[key] || (out[key] = { ok: 0, upstream: 0, self: 0, total: 0, lastTs: null });
+    const row = out[key] || (out[key] = { ok: 0, upstream: 0, self: 0, stream: 0, total: 0, lastTs: null });
+    if (!(t.kind in row)) continue;
     row[t.kind] += 1;
-    if (t.kind !== 'self') row.total += 1;
+    if (t.kind === 'ok' || t.kind === 'upstream') row.total += 1;
     if (!row.lastTs || t.ts > row.lastTs) row.lastTs = t.ts;
   }
   return out;

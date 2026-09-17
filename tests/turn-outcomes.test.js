@@ -21,15 +21,26 @@ const ev = (name, ts, props, boot = 'b1') => ({ id: `e${++seq}`, name, ts: iso(t
 const submit = (ts, agent, model, boot) => ev('turn.submit', ts, { agent, model }, boot);
 const finish = (ts, ok, errorCode, boot) => ev('turn.finish', ts, ok ? { ok: true, errorCode: null } : { ok: false, errorCode }, boot);
 
-describe('classifyTurnOutcome：三分，不是两分', () => {
-  it('ok / 自杀（interrupted、aborted）/ 上游', async () => {
+describe('classifyTurnOutcome：四分，不是两分', () => {
+  it('ok / 自杀（interrupted、aborted）/ 断流（incomplete、timeout，#1386）/ 上游', async () => {
     const { classifyTurnOutcome } = await TO;
     assert.equal(classifyTurnOutcome({ ok: true }), 'ok');
     assert.equal(classifyTurnOutcome({ ok: false, errorCode: 'interrupted' }), 'self');
     assert.equal(classifyTurnOutcome({ ok: false, errorCode: 'aborted' }), 'self');
-    for (const code of ['other', 'incomplete', 'timeout', null, undefined, '']) {
+    assert.equal(classifyTurnOutcome({ ok: false, errorCode: 'incomplete' }), 'stream', '长流被掐不是腿坏');
+    assert.equal(classifyTurnOutcome({ ok: false, errorCode: 'timeout' }), 'stream');
+    for (const code of ['other', 'rate_limit', null, undefined, '']) {
       assert.equal(classifyTurnOutcome({ ok: false, errorCode: code }), 'upstream', `errorCode=${code} 是上游失败`);
     }
+  });
+
+  it('props 是 JSON 字串（diag 文件的写法）也认', async () => {
+    const { propsOf, pairTurnEvents } = await TO;
+    assert.deepEqual(propsOf({ props: '{"ok":false,"errorCode":"incomplete"}' }), { ok: false, errorCode: 'incomplete' });
+    assert.deepEqual(propsOf({ props: '{half' }), {});
+    assert.deepEqual(propsOf({}), {});
+    const turns = pairTurnEvents([{ id: 'x', name: 'turn.finish', ts: iso(T0), bootId: 'b', agent: 'grok', model: 'grok-4.6', props: '{"ok":false,"errorCode":"incomplete","durationMs":2036823}' }]);
+    assert.deepEqual(turns.map((t) => [t.agent, t.kind, t.durationMs]), [['grok', 'stream', 2036823]], '字串 props 不许折成「upstream」');
   });
 });
 
@@ -49,8 +60,20 @@ describe('pairTurnEvents：submit→finish 按 bootId FIFO 配对', () => {
     assert.deepEqual(turns.map((t) => [t.agent, t.model, t.kind]), [
       ['codex', 'gpt-5.6-luna', 'ok'],
       ['grok', 'grok-4.6', 'upstream'],
-      ['?', '?', 'upstream'],
+      ['?', '?', 'stream'],
     ]);
+  });
+
+  it('finish 自带 agent/model 时以它为准，FIFO 不许张冠李戴（#1386 第二个洞）', async () => {
+    const { pairTurnEvents } = await TO;
+    // 两路并发：codex 先 submit、grok 后 submit；grok 先 finish。纯 FIFO 会把 grok 的结果记到 codex 头上。
+    const turns = pairTurnEvents([
+      submit(T0, 'codex', 'gpt-5.6-luna'),
+      submit(T0 + 1, 'grok', 'grok-4.6'),
+      { id: 'f1', name: 'turn.finish', ts: iso(T0 + 10), bootId: 'b1', agent: 'grok', model: 'grok-4.6', props: { ok: false, errorCode: 'interrupted' } },
+      { id: 'f2', name: 'turn.finish', ts: iso(T0 + 20), bootId: 'b1', agent: 'codex', model: 'gpt-5.6-luna', props: { ok: true } },
+    ]);
+    assert.deepEqual(turns.map((t) => [t.agent, t.kind]), [['grok', 'self'], ['codex', 'ok']]);
   });
 
   it('不同 bootId 各排各的队', async () => {
@@ -95,7 +118,7 @@ describe('summarizeTurnOutcomes：自杀不进分母', () => {
       { ts: iso(T0 + 3), agent: 'codex', model: 'x', kind: 'self' },
     ];
     const s = summarizeTurnOutcomes(turns, { sinceMs: T0, targetOf: () => 'relay:codex' });
-    assert.deepEqual(s['relay:codex'], { ok: 1, upstream: 1, self: 2, total: 2, lastTs: iso(T0 + 3) });
+    assert.deepEqual(s['relay:codex'], { ok: 1, upstream: 1, self: 2, stream: 0, total: 2, lastTs: iso(T0 + 3) });
     assert.equal(failRatePct(s['relay:codex']), 50, '2 条自杀不许把 50% 算成 75%');
     assert.equal(failRatePct({ total: 0, upstream: 0 }), null, '没样本 ≠ 0%');
     assert.deepEqual(summarizeTurnOutcomes(turns, { sinceMs: T0, targetOf: () => null }), {}, '认不出 key 的一律跳过');
@@ -155,6 +178,37 @@ describe('ingestTurnOutcomes：真实失败率开闸，样本不足不动，幂�
     assert.equal(resolveTurnPolicy({ ...POL, turnWindowHours: 3 }).turnWindowHours, 3);
     const doc = ingestTurnOutcomes(row(1, 2, iso(T0)), { targets: {} }, pol, T0);
     assert.equal(doc.targets[KEY].failures.length, 1, '3 条样本、67% 失败，按覆盖门槛要记');
+  });
+});
+
+describe('判别性实验：#1386 grok 那 46 条的真实形状——断流不许判死腿', () => {
+  it('4 ok / 20 incomplete / 22 interrupted ⇒ total=4，样本不足不评；腿保持 closed', async () => {
+    const { pairTurnEvents, summarizeTurnOutcomes, failRatePct } = await TO;
+    const { ingestTurnOutcomes } = await BR;
+    const events = [];
+    let t = T0;
+    const fin = (ok, code) => events.push({ id: `g${events.length}`, name: 'turn.finish', ts: iso(t += 60e3), bootId: 'b', agent: 'grok', model: 'grok-4.6', props: JSON.stringify(ok ? { ok: true } : { ok: false, errorCode: code }) });
+    for (let i = 0; i < 4; i++) fin(true);
+    for (let i = 0; i < 20; i++) fin(false, 'incomplete');
+    for (let i = 0; i < 22; i++) fin(false, 'interrupted');
+    const s = summarizeTurnOutcomes(pairTurnEvents(events), { sinceMs: T0, targetOf: () => 'native:xai-native' });
+    assert.deepEqual({ ...s['native:xai-native'], lastTs: null }, { ok: 4, upstream: 0, self: 22, stream: 20, total: 4, lastTs: null });
+    assert.equal(failRatePct(s['native:xai-native']), 0);
+    const POL = { windowHours: 24, failuresToTrip: 3, cooldownHours: 1, halfOpenProbes: 1 };
+    const doc = ingestTurnOutcomes(s, { targets: {} }, POL, t);
+    assert.deepEqual(doc.targets, {}, '2026-09-17 那把闸不该开');
+  });
+
+  it('真上游失败（other/rate_limit）照样判：8 ok / 12 other 连三轮 ⇒ open，why 里点名断流不计', async () => {
+    const { ingestTurnOutcomes } = await BR;
+    const POL = { windowHours: 24, failuresToTrip: 3, cooldownHours: 1, halfOpenProbes: 1 };
+    let doc = { targets: {} };
+    for (let i = 0; i < 3; i++) {
+      const t = T0 + i * 20 * 60e3;
+      doc = ingestTurnOutcomes({ 'native:xai-native': { ok: 8, upstream: 12 + i, self: 0, stream: 30, total: 20 + i, lastTs: iso(t) } }, doc, POL, t);
+    }
+    assert.equal(doc.targets['native:xai-native'].state, 'open', '断流不计不等于上游失败也不计');
+    assert.match(doc.targets['native:xai-native'].why, /30 条是断流/);
   });
 });
 
