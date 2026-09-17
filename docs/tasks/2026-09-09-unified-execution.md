@@ -19,6 +19,7 @@
 - [ ] T5 扩展执行目录：模型、agent、后端、渠道、账户池、角色、成本分开；确认真实供应商模型列表及 DeepSeek V4.1 Flash 是否可用；负责人 Chandrasekhar。
 - [ ] T6 指挥官接线：一套调度消费 Mirasim/ACP；首帧透传 local/cloud，完成判据不再要求 direct 必须有 relay 账本；负责人主会话。
 - [ ] T7 直接渠道：实际模型请求不用旧 2核2G New API；Windsurf/OpenCode/CommandCode 优先性价比模型，有权限/协议/计费证据才启用；负责人主会话。
+  - [x] T7a 周期探针/派前探默认不再对退役 newapi 发模型请求：`gw:` 池默认 skip（人工诊断 `--include-retired-gw`）；`planProbe(mirasim-relay)` 不拼 4317；sslip.io / `127.0.0.1:4317` 判退役。证据：`scripts/lib/retired-gateway-probe.mjs`、`tests/retired-gateway-probe.test.js`、`tests/provider-probe.test.js`。T7 顶层仍缺：Windsurf/OpenCode/CommandCode 有证据才启用；本机 `responses-chat-bridge` 仍在跑（不在本切片）。
 - [ ] T8 自动交互：任务内已知答案自动回应、必要人工问题持久 waiting_user；等待不被当卡死重派，取消和恢复验证通过；负责人主会话。
   - [x] T8a 等待不被当卡死重派：`waiting_user` 进正典 `EXECUTION_WAITING`（不进终态）；`assessLiveness` 等十小时仍是 active；指挥官不停会话、不差集重派；租约按还在跑保留。证据：`tests/liveness.test.js`、`tests/commander.test.js`、`tests/session-reconcile.test.js`、`tests/lease-gc.test.js`。
   - [x] T8b 任务内已知答案自动回应：ACP 热路 `execution-runtime.startSession` 无显式策略时挂正典 worktree 默认策略（T1 放过的读/改 + git 前缀）；显式策略（含空规则）不合并；MCP 选择题不猜。证据：`scripts/lib/acp-interaction-policy.mjs`、`tests/acp-interaction-policy.test.js`、`tests/execution-runtime.test.js`。

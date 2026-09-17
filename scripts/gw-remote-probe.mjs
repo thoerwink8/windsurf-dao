@@ -24,6 +24,7 @@
  *   node gw-remote-probe.mjs --strict        # 有红项就退出码 1（手动/CI 用）
  *   node gw-remote-probe.mjs --quiet         # 只探只落表、不报警（调试用）
  *   node gw-remote-probe.mjs --only <key>    # 只探某个 target（后台「只探这条」），其余原样留在表里
+ *   node gw-remote-probe.mjs --include-retired-gw  # 人工诊断：才对退役 newapi 池/4317 桥发模型请求（#1174 T7）
  * 装单元：sudo bash scripts/install-gw-remote-probe.sh
  *   （#967：本脚本不再写 systemd 单元。旧 --install 会写出缺 OnCalendar 的 timer，停一次再起就永不再跑。）
  */
@@ -34,8 +35,15 @@ import os from "node:os";
 import { loadPolicy, probePlan } from "./lib/gateway-policy.mjs";
 import { buildHealthTable, mergeLegHealth, computeAlerts, plainTarget, buildRedAlert, responsesEventHasContent } from "./lib/probe-health.mjs";
 import { codexResponsesProbeBody, probeTargetOf, planProbe, runProbe, NATIVE_LOGIN_FILES } from "./lib/provider-probe.mjs";
+import {
+  includeRetiredGateway,
+  isRetiredNewApiUrl,
+  pruneHealthKeys,
+  selectPoolProbes,
+} from "./lib/retired-gateway-probe.mjs";
 
 const argv = process.argv.slice(2);
+const includeRetired = includeRetiredGateway(argv);
 // #967：旧 --install 写出的 timer 只有单调时钟。必须在读策略之前拦——这条旗标不该去碰网关。
 if (argv.includes("--install")) {
   console.error("gw-remote-probe --install 已退役（#967）。旧模板没有 OnCalendar，停一次再起会进 active(elapsed) 死态且无人报警。装法：sudo bash scripts/install-gw-remote-probe.sh");
@@ -232,14 +240,30 @@ const only = onlyIdx >= 0 ? argv[onlyIdx + 1] : null;
 // 探针把被探对象探挂是最蠢的假阳性。一轮约 1 分钟，30 分钟的定时器完全够。
 const nowIso = new Date().toISOString();
 const results = [];
-const wantPool = PLAN.pools.filter(t => !only || t.key === only);
+const poolPick = selectPoolProbes(PLAN.pools, { includeRetired, only });
+const skippedKeys = poolPick.skipped.map((s) => s.key);
+const wantPool = poolPick.jobs;
 const wantDirect = PLAN.direct.filter(t => !only || t.key === only);
 const wantLegs = !only || only.startsWith("leg:");
 const natives = nativeTargets();
 const wantNative = only ? natives.filter(t => `native:${t.provider}` === only) : natives;
 
+if (!includeRetired && poolPick.skipped.length) {
+  console.error(`  · 跳过 ${poolPick.skipped.length} 个退役 newapi 池（#1174 T7）。人工诊断：--include-retired-gw`);
+}
 for (const t of wantPool) results.push(await probePool(t));
-for (const d of wantDirect) results.push(await probeDirect(d));
+for (const d of wantDirect) {
+  const conn = readCodexConn(d);
+  if (!includeRetired && isRetiredNewApiUrl(conn.baseUrl)) {
+    skippedKeys.push(d.key);
+    results.push({
+      key: d.key, kind: "direct", state: "unscanned", code: null, ms: null,
+      why: `跳过退役 newapi 桥（${conn.baseUrl}）；人工诊断加 --include-retired-gw`,
+    });
+    continue;
+  }
+  results.push(await probeDirect(d));
+}
 for (const n of wantNative) results.push(await probeNative(n));
 if (wantLegs) {
   const legsDoc = await fetchLegs();
@@ -248,9 +272,13 @@ if (wantLegs) {
   for (const l of legs) results.push({ key: l.key, ...merged[l.key] });
 }
 
-// 折进上一份表（strikes/lastGreenAt 从旧表续）；--only 时其余 target 原样保留
+// 折进上一份表（strikes/lastGreenAt 从旧表续）；--only 时其余 target 原样保留。
+// 默认路径没探的 gw: 池必须从表里拿掉——否则 updatedAt 一新，旧绿看起来像刚探过。
 const prevTable = readJson(HEALTH_FILE, null);
-const table = buildHealthTable(prevTable, results, PLAN.intervalMin, nowIso);
+const folded = buildHealthTable(prevTable, results, PLAN.intervalMin, nowIso);
+const table = only
+  ? folded
+  : { ...folded, targets: pruneHealthKeys(folded.targets, skippedKeys.filter((k) => String(k).startsWith("gw:"))) };
 writeAtomic(HEALTH_FILE, table);
 
 // journal：本轮探到的每条一行

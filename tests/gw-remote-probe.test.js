@@ -181,6 +181,15 @@ describe('周期探针 responses 请求体不许再漂成裸字符串', () => {
   });
 });
 
+describe('#1174 T7 默认不打退役 newapi', () => {
+  it('主脚本默认 skip 池，诊断旗标才放行', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    assert.match(src, /includeRetiredGateway/);
+    assert.match(src, /selectPoolProbes/);
+    assert.match(src, /--include-retired-gw/);
+  });
+});
+
 describe('直连 responses：空 content 不算通', () => {
   it('response.completed + content:[] 即使序列化很长也是红', async () => {
     const { responsesEventHasContent } = await import(HEALTH);
