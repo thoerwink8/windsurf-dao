@@ -304,6 +304,51 @@ describe('decide：超限停手，不派返工/复审', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned').length, 0);
   });
 
+  it('draft/skipped 且 byPr 缺失、历史判别已达 max → 不 rereview（没查成不是 0 轮）', async () => {
+    const { decide } = await CORE;
+    const { scanPrReviews } = await import('file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const draft = { ...redPr(885, HEAD, 1227), isDraft: true };
+    const history = nReds(2, HEAD);
+    const scanned = scanPrReviews([draft], {
+      issues: [],
+      read: (args) => {
+        if (String(args[2] || '').endsWith('/885/reviews')) {
+          return { ok: true, out: JSON.stringify(history) };
+        }
+        throw new Error('未预期的 gh 调用：' + args.join(' '));
+      },
+    });
+    assert.deepEqual(scanned.skipped, [885]);
+    assert.equal(scanned.byPr[885], undefined, 'draft 仍不进 byPr（省额度）');
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [draft] },
+      prReviews: scanned,
+      reviewRoundsBudget: { max: 2 },
+      admission: { ok: true, slots: 10, cores: 6 },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 0, '扫描器没读到历史 ≠ 0 轮，不许再叫审官');
+    assert.equal(byKind(r, 'rework').length, 0);
+    assert.equal(byKind(r, 'attach-reviewer').length, 0);
+    const un = byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned');
+    assert.equal(un.length, 1, '没查成必须 fail-closed 上报，不能静默当 0：' + JSON.stringify(kinds(r)));
+    assert.equal(un[0].reason, 'unscanned');
+    assert.equal((un[0].missing || []).includes('prReviews'), true);
+    assert.match(un[0].why, /scan 跳过/);
+  });
+
+  it('skipped 但 byPr 确认是空数组 → 按 0 轮，draft 仍可叫首审', async () => {
+    const { decide } = await CORE;
+    const draft = { ...redPr(885, HEAD, 1227), isDraft: true };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [draft] },
+      prReviews: { scanned: true, byPr: { 885: { reviews: [] } }, skipped: [885] },
+      reviewRoundsBudget: { max: 2 },
+      admission: { ok: true, slots: 10, cores: 6 },
+    }));
+    assert.equal(byKind(r, 'rereview').length, 1, '确认读到空数组才是 0 轮：' + JSON.stringify(kinds(r)));
+    assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned').length, 0);
+  });
+
   it('已有「卡死/自动化认输」+ rounds=max → 仍打等用户标并发卡，不是 noop', async () => {
     const { decide } = await CORE;
     const pr = {

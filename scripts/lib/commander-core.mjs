@@ -1625,8 +1625,8 @@ function collectCandidates(situation) {
     if (!pr || pr.number == null) return false;
     if (marked.has(Number(pr.number))) return true;
     const budget = sit.reviewRoundsBudget;
-    // 策略没读到才 fail-closed。reviews 缺数组是零判定/没抓到，留给后面那几格，
-    // 否则 CONFLICTING 且 byPr 没有条目的 PR 会被这里连坐成不停手也不解冲突。
+    // 策略没读到才 fail-closed。reviews 缺数组对「没跳过」的 PR 仍按 0 轮留给后面
+    // 那几格，否则 CONFLICTING 且 byPr 没有条目会被这里连坐成不停手也不解冲突。
     if (budget && (budget.unscanned || !Number.isInteger(budget.max) || budget.max < 1)) {
       sink.push(withNeeds(esc(
         `PR #${pr.number} 审查轮次上限没查成（${budget.error || '没查成'}）——不起下一轮返工/复审`,
@@ -1641,10 +1641,30 @@ function collectCandidates(situation) {
       return true;
     }
     const raw = prReviewInput(rev.byPr?.[pr.number]);
+    const skippedByScan = !!(rev && Array.isArray(rev.skipped)
+      && rev.skipped.some((n) => Number(n) === Number(pr.number)));
+    // scan 主动跳过且 byPr 缺失 = 没读到历史，不是 0 轮。换成 [] 会让 draft
+    // 已满轮次仍走 rereview（PR #1322 审官红项）。只有确认读到空数组才按 0 轮。
+    const reviewsForJudge = (skippedByScan && !Array.isArray(raw))
+      ? raw
+      : (Array.isArray(raw) ? raw : []);
     const judged = judgeNextReviewRound({
-      reviews: Array.isArray(raw) ? raw : [],
+      reviews: reviewsForJudge,
       budget,
     });
+    if (judged.state === 'unscanned') {
+      sink.push(withNeeds(esc(
+        `PR #${pr.number} 审查轮次没查成（scan 跳过且 byPr 没有条目）——不起下一轮返工/复审`,
+        {
+          reason: 'unscanned',
+          pr: pr.number,
+          missing: ['prReviews'],
+          detail: 'review-rounds-unscanned',
+        },
+      ), N.escalate));
+      marked.add(Number(pr.number));
+      return true;
+    }
     if (judged.state !== 'exceeded') return false;
     // 已有自动化认输标也要产出动作：执行侧升级成等用户并发幂等总控群卡。
     // 只 marked 不产动作 = 超限上报整条旁路（PR #1322 审官红项）。
