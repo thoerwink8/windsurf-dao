@@ -77,7 +77,7 @@ test('空输入/坏输入不抛', () => {
 test('现役 mirasim-relay 模型：health red、breaker open、恢复三态', () => {
   const models = [{ id: 'gpt-5.6-sol', provider: 'mirasim-relay' }];
   const now = Date.parse('2026-09-03T12:00:00Z');
-  const target = 'direct:codex@pqapi/responses';
+  const target = 'relay:codex'; // #1342：relay 自己的 key
   const via = (health, breaker) => (list, opts) => availabilityFor(list, { ...opts, health, breaker });
   const healthOf = (state) => ({
     ok: true, present: true, unknown: false, table: { [target]: { state } },

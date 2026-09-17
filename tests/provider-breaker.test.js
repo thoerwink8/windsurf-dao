@@ -29,6 +29,28 @@ function failN(applyEvent, n, start = T0) {
   return s;
 }
 
+describe('#1342 ingest-turns 动词', () => {
+  it('summarize 注入没查成 ⇒ skipped，熔断表一字不改；有账 ⇒ 落表', async () => {
+    const { runBreakerCommand } = await import(LIB);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brk-turns-'));
+    const unscanned = runBreakerCommand({ action: 'ingest-turns' }, {
+      home, now: T0, policy: POL, summarizeTurns: () => ({ unscanned: true, why: '事件目录不在', summary: {} }),
+    });
+    assert.equal(unscanned.ok, true);
+    assert.equal(unscanned.skipped, true);
+    assert.equal(fs.existsSync(path.join(home, '.dao', 'provider-breaker.json')), false, '没查成不许落表');
+    const fed = runBreakerCommand({ action: 'ingest-turns' }, {
+      home, now: T0, policy: POL,
+      summarizeTurns: () => ({ unscanned: false, summary: { 'relay:codex': { ok: 2, upstream: 6, self: 0, total: 8, lastTs: new Date(T0).toISOString() } }, files: ['x'] }),
+    });
+    assert.equal(fed.ok, true);
+    assert.equal(fed.doc.targets['relay:codex'].failures.length, 1);
+    assert.equal(fed.doc.targets['relay:codex'].lastTurnAt, new Date(T0).toISOString());
+    const noInject = runBreakerCommand({ action: 'ingest-turns' }, { home, now: T0, policy: POL });
+    assert.equal(noInject.ok, false, '没有 summarize 注入必须报错，不许静默当空');
+  });
+});
+
 describe('applyEvent / isAvailable 状态机', () => {
   it('24h 内 3 红 → open，cooldownUntil = now + 24h', async () => {
     const { applyEvent, isAvailable } = await import(LIB);

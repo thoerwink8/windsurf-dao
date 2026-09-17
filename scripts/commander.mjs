@@ -65,13 +65,14 @@ import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/l
 import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
-import { loadBreaker } from './lib/provider-health.mjs';
+import { loadBreaker, probeTargetForModel } from './lib/provider-health.mjs';
 import { healthRedIds } from './lib/model-admission.mjs';
+import { readTurnEvents, pairTurnEvents, summarizeTurnOutcomes, turnTargetOf } from './lib/turn-outcomes.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
-import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { runBreakerCommand, resolveTurnPolicy } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
@@ -574,10 +575,38 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
     const inj = { now, policy: policy.breaker, hubAsk };
     const health = runBreakerCommand({ action: 'ingest-health' }, inj);
     const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
-    return { ok: true, health, stall };
+    // #1342：第三路信号——真实 turn 结果。探针一分钟一针、真流量一小时几十条；
+    // 2026-09-17 实咬：pqapi 探针 green、熔断 closed，同时 relay 上生产 turn 2 ok / 6 error。
+    const turns = runBreakerCommand({ action: 'ingest-turns' }, { ...inj, summarizeTurns: summarizeTurnsFromHome });
+    return { ok: true, health, stall, turns };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
+}
+
+/**
+ * 真实 turn 结果 → 每条腿的成败汇总（给 breaker ingest-turns 注入）。
+ * 数据源是 mirasim 的分析事件（只读），key 映射与健康表同一套（probeTargetForModel）。
+ * 读不到一律 unscanned：熔断器据此什么都不动。
+ */
+export function summarizeTurnsFromHome({ home = homedir(), now = Date.now(), policy } = {}) {
+  const windowHours = resolveTurnPolicy(policy).turnWindowHours;
+  const sinceMs = now - windowHours * 3600 * 1000;
+  const read = readTurnEvents({
+    home, sinceMs,
+    readdir: (d) => readdirSync(d),
+    readFile: (p, enc) => readFileSync(p, enc),
+    stat: (p) => statSync(p),
+  });
+  if (!read.ok) return { unscanned: true, why: read.why, summary: {}, files: [] };
+  let models = null;
+  try { models = modelsFromJson(loadRoutingJsonRaw()); } catch { models = null; }
+  const turns = pairTurnEvents(read.events);
+  const summary = summarizeTurnOutcomes(turns, {
+    sinceMs,
+    targetOf: (t) => turnTargetOf(t, { models, probeTargetForModel }),
+  });
+  return { unscanned: false, summary, files: read.files, turns: turns.length };
 }
 
 /** 载体（agent CLI）版本漂移：读进态势，好让「某条腿突然不好使」时有第一条线索。
@@ -717,12 +746,13 @@ function buildSituation({ state } = {}) {
     // #1233：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位（gpt-5.6-sol）在执行
     // 目录里是 unverified，起审官必被拒 → 每张按顺位选了它的复审票 drain 必失败、试满 3 次
     // 打「自动化认输」。这里按执行目录的实际可用性把顺位过一遍，**剔了谁要说得出来**。
-    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles() });
+    // #1342：判红名单先算，审官顺位要问它——目录里 available 的腿真实 turn 可以 25% 成功率。
+    healthRedModels = loadHealthRedIds(models);
+    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles(), redIds: healthRedModels });
     reviewerOrder = availability.usable;
     reviewerOrderSkipped = availability.skipped;
     if (availability.unscanned) reviewerOrderUnscanned = availability.unscanned;
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
-    healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
     routingLegs = raw['腿'];
     channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）

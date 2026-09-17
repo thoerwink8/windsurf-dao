@@ -80,7 +80,7 @@ describe('availabilityFor 熔断表（#843）', () => {
 
 describe('现役 mirasim-relay 接通健康/熔断 target', () => {
   const RELAY = [{ id: 'gpt-5.6-sol', provider: 'mirasim-relay' }];
-  const TARGET = 'direct:codex@pqapi/responses';
+  const TARGET = 'relay:codex'; // #1342：relay 自己的 key，不再与 pqapi 直连共用
   it('health red → 后置；breaker open → 直接拦；恢复 → 空闲', async () => {
     const { availabilityFor } = await import(LIB);
     const healthOf = (state) => ({
