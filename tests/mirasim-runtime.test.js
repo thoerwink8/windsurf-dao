@@ -162,6 +162,21 @@ describe('契约断言', () => {
     assert.strictEqual(sentPrompt.effort, 'low');
   });
 
+  it('#1174 T6 首帧透传 local / cloud，auto 不发具体渠道', async () => {
+    const run = async (route) => {
+      const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+        ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-route' }] : []));
+      const rt = await runtimeWith(wire);
+      await rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: 'x', route });
+      return wire.sent.find(f => f.type === 'prompt');
+    };
+    assert.strictEqual((await run('cloud')).route, 'cloud');
+    assert.strictEqual((await run('local')).route, 'local');
+    assert.strictEqual((await run('auto')).route, null);
+    const omitted = await run(undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(omitted, 'route'), false);
+  });
+
   it('应答帧的 sessionKey 形状不对：判契约不符，不硬着头皮往下走', async () => {
     const wire = fakeWire(goodState(), f => (f.type === 'prompt'
       ? [{ type: 'accepted', sessionKey: 'a8d67849', taskId: '' }] : []));
@@ -363,6 +378,31 @@ describe('判完工交叉核', () => {
     });
     assert.strictEqual(v.status, 'unknown');
     assert.match(v.reason, /没查成/);
+  });
+
+  it('#1174 T6：direct/local/ACP 快照 done 不要求 relay 账本；cloud 仍要', async () => {
+    const { judgeCompletion, completionSkipsRelayLedger } = await import(LIB);
+    const missing = { readable: false, rows: [], why: '这个会话还没有账本目录' };
+    const doneView = { phase: 'done', text: 'PONG', toolCalls: [], error: null };
+    assert.equal(completionSkipsRelayLedger({ route: 'local' }), true);
+    assert.equal(completionSkipsRelayLedger({ route: 'direct' }), true);
+    assert.equal(completionSkipsRelayLedger({ backend: 'acp' }), true);
+    assert.equal(completionSkipsRelayLedger({ route: 'cloud' }), false);
+    assert.equal(completionSkipsRelayLedger({}), false);
+    const local = judgeCompletion({ view: doneView, ledger: missing, since: T0, route: 'local' });
+    assert.strictEqual(local.status, 'done');
+    assert.deepStrictEqual(local.confirmedBy, ['snapshot']);
+    assert.match(local.reason, /不经 relay/);
+    const acp = judgeCompletion({ view: doneView, ledger: missing, since: T0, backend: 'acp' });
+    assert.strictEqual(acp.status, 'done');
+    const cloud = judgeCompletion({ view: doneView, ledger: missing, since: T0, route: 'cloud' });
+    assert.strictEqual(cloud.status, 'unknown');
+    assert.match(cloud.reason, /没查成/);
+    const killed = judgeCompletion({
+      view: { phase: 'done', text: '半截', error: 'pi turn stalled past 30 minutes' },
+      ledger: missing, since: T0, route: 'local',
+    });
+    assert.strictEqual(killed.status, 'failed');
   });
 
   it('快照 done 但账本里没有起针后的行 → 两边不一致，判没查成', async () => {

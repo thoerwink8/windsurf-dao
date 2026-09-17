@@ -17,7 +17,7 @@ import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessio
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
 import { listPrReviews } from './worker-done.mjs';
-import { judgeAgentRoute } from '../executor-binding.mjs';
+import { judgeAgentRoute, startSessionRouteFields } from '../executor-binding.mjs';
 import { assessPrMergeable, fetchPrMergeable, resolveMergeable } from './git.mjs';
 import { repoPrKey } from './repo.mjs';
 
@@ -452,7 +452,17 @@ export async function mirasimReviewerCreate({
 
   // 2. agent 路由：模型 → mirasim agent（gpt → codex relay）。查不到就拒派。
   const profile = runtime.profileForModel?.(reviewerModel);
-  const route = profile ? { ok: true, agent: profile.agent, mode: profile.route, family: profile.modelFamily, profileId: profile.id } : judgeAgentRoute(reviewerModel, mirasimPolicy);
+  const route = profile ? {
+    ok: true,
+    agent: profile.agent,
+    mode: profile.route,
+    family: profile.modelFamily,
+    profileId: profile.id,
+    backend: profile.backend,
+    provider: profile.provider,
+    accountPoolId: profile.accountPoolId,
+    route: profile.route,
+  } : judgeAgentRoute(reviewerModel, mirasimPolicy);
   if (!route.ok) return { ok: false, stage: 'route', error: route.error, route };
 
   // 3. 读 PR head。
@@ -530,7 +540,7 @@ export async function mirasimReviewerCreate({
   //   这里把审官模型 id 当 model 传进去**尝试**覆盖——0.0.282 认不认是实测题（见 PR 正文
   //   「选型脱节」：真机看账本 model= 那行）。认→精确；不认→选型退化为「只选族/agent」。
   let sess;
-  try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}`, pr: Number(pr) || null, title: `PR-#${pr}` }); }
+  try { sess = await runtime.startSession({ agent: route.agent, workdir: treePath, prompt, model: reviewerModel, clientRef: `dao-review-${pr}-${now()}`, pr: Number(pr) || null, title: `PR-#${pr}`, ...startSessionRouteFields(route) }); }
   catch (e) {
     // 门里的**背压**标记必须原样透出去（#1145 / #1085）：租约被占、渠道满员都带
     // detail.busy=true，它们不是「起审官失败」而是「这轮轮不到」。丢掉这个标记的后果是

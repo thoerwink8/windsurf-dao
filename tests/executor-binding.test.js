@@ -795,6 +795,83 @@ describe('具体 model 透传到 runtime.startSession（#884 P1#2，四轮）', 
   });
 });
 
+describe('#1174 T6 首帧透传 local/cloud，profile 优先于前缀族', () => {
+  it('wireExecutionRoute：relay→cloud，direct→local，认不出不猜', async () => {
+    const S = await import(LIB);
+    assert.equal(S.wireExecutionRoute('relay'), 'cloud');
+    assert.equal(S.wireExecutionRoute('cloud'), 'cloud');
+    assert.equal(S.wireExecutionRoute('direct'), 'local');
+    assert.equal(S.wireExecutionRoute('local'), 'local');
+    assert.equal(S.wireExecutionRoute('native'), 'local');
+    assert.equal(S.wireExecutionRoute('auto'), 'auto');
+    assert.equal(S.wireExecutionRoute('mystery'), undefined);
+    assert.equal(S.wireExecutionRoute(''), undefined);
+  });
+
+  it('有 execution profile 时 composer-2.5 走 cursor ACP local，不掉回 pi', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const profile = {
+      id: 'cursor-acp-composer',
+      backend: 'acp',
+      agent: 'cursor',
+      model: 'composer-2.5[fast=true]',
+      route: 'local',
+      provider: 'cursor-native',
+      accountPoolId: 'cursor-sub',
+      modelFamily: 'cursor',
+    };
+    const rt = fakeRuntime();
+    rt.profileForModel = (id) => (id === 'composer-2.5' ? profile : null);
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p, attachHooks: skipHooks });
+    const r = await binding.workerStart({ workdir: '/tree', prompt: '任务书', model: 'composer-2.5' });
+    assert.equal(r.ok, true, r.error || '');
+    const spec = rt.calls.startSession[0];
+    assert.equal(spec.agent, 'cursor');
+    assert.equal(spec.backend, 'acp');
+    assert.equal(spec.route, 'local');
+    assert.equal(spec.profileId, 'cursor-acp-composer');
+    assert.equal(spec.provider, 'cursor-native');
+    assert.notEqual(spec.agent, 'pi');
+  });
+
+  it('无 profile 时 relay 腿首帧 route=cloud，direct 腿 route=local', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const relayRt = fakeRuntime();
+    const relay = S.createMirasimBinding({ runtime: relayRt, policy: p, attachHooks: skipHooks });
+    const a = await relay.workerStart({ workdir: '/tree', prompt: '任务书', model: 'claude-opus', provider: 'claude' });
+    assert.equal(a.ok, true, a.error || '');
+    assert.equal(relayRt.calls.startSession[0].route, 'cloud');
+    assert.equal(relayRt.calls.startSession[0].agent, 'claude');
+    const directRt = fakeRuntime();
+    const direct = S.createMirasimBinding({ runtime: directRt, policy: p, attachHooks: skipHooks });
+    const b = await direct.workerStart({ workdir: '/tree', prompt: '任务书', model: 'pi-direct-fixture' });
+    assert.equal(b.ok, true, b.error || '');
+    assert.equal(directRt.calls.startSession[0].route, 'local');
+    assert.equal(directRt.calls.startSession[0].agent, 'pi');
+  });
+
+  it('dispatchOne 同样把 profile 的 local 送到 startSession，且不先被前缀族拒派', async () => {
+    const S = await import(LIB);
+    const p = S.readExecutorPolicy(policyDoc());
+    const profile = {
+      id: 'cursor-acp-composer', backend: 'acp', agent: 'cursor',
+      model: 'composer-2.5[fast=true]', route: 'local', provider: 'cursor-native',
+    };
+    const rt = fakeRuntime();
+    rt.profileForModel = (id) => (id === 'composer-2.5' ? profile : null);
+    const binding = S.createMirasimBinding({ runtime: rt, policy: p, attachHooks: skipHooks });
+    const r = await binding.dispatchOne({
+      repo: '/repo', branch: 'dao-1174-t6', prompt: '任务书', model: 'composer-2.5',
+    });
+    assert.equal(r.ok, true, r.error || '');
+    assert.equal(rt.calls.startSession[0].agent, 'cursor');
+    assert.equal(rt.calls.startSession[0].route, 'local');
+    assert.equal(rt.calls.startSession[0].backend, 'acp');
+  });
+});
+
 // #884 审官 P1#3（四轮）：mirasim 的 worker-start 少了 dispatch 那道注入闸，
 // 于是超长 --spec 让 buildSoldierInject 的异常直接甩成 Node 栈：stdout 空、退出 1、
 // 用户看到的是 at cmdWorkerStartMirasim。公开 CLI 不许这样报错。

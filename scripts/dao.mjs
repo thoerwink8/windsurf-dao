@@ -287,6 +287,7 @@ function legEvidenceFor(modelId) {
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
+  startSessionRouteFields,
 } from './lib/executor-binding.mjs';
 import { judgeTestExecutorIsolation, enableRealExecutorUnlessTest } from './lib/mirasim-runtime.mjs';
 import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
@@ -795,6 +796,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
       agent: route.agent, workdir: tree.path, prompt,
       model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
       ...(Number.isInteger(dispatchIssue) && dispatchIssue > 0 ? { issue: dispatchIssue } : {}),
+      ...startSessionRouteFields(route),
     });
   } catch (e) {
     // 租约被占是**背压**不是失败：树里有人在干活，排队下一轮就行。busy 原样透出去，
