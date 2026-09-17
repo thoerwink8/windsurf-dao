@@ -2577,6 +2577,11 @@ async function cmdStartMirasim(args) {
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
       executor: 'mirasim', repo, branch, workdir, agent: route.agent,
+      // #1331：`code` 必须原样透出去。`reviewer-create` 那条路早就带着它，唯独 start 没带，
+      // 于是返工/收口泵那侧只能拿错误文本去猜「这次是环境还是这张 PR 的事」。
+      // 实测 7 天 99 次起会话失败里 66 次是「连不上回环 ws」（MirasimUnavailableError，
+      // code='unavailable'），而它们全被记成「这张 PR 又试了一次」。
+      ...(e?.code ? { code: String(e.code) } : {}),
       ...(e?.detail?.busy === true ? { busy: true, reason: e.detail.reason, holders: e.detail.holders } : {}),
     });
   }

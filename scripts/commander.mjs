@@ -31,7 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
-  classifyDrainAttempt,
+  classifyDrainAttempt, judgeEnvFailure,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -2100,10 +2100,20 @@ export function requestRereview(action, { state, dryRun, say, run }) {
   // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = state.reworkDispatched[key];
+  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」——回环 ws 断连时
+  // 这一轮一个审官都没起过。但写票这一刻还不知道审官起不起得来（drain 在下面才跑），
+  // 所以这里**照旧乐观记一次**，同时把记之前的值留在 triesBeforeAttempt：
+  // 等 drain 的真账回来，`rememberDrainFailure` 判出是环境就回滚到这个值。
+  //
+  // 为什么不改成「按上一轮的 envUnreachable 猜」：那样每次断连风暴的**第一轮**仍会烧掉
+  // 一次（判据落后一拍）。三次断连烧 1 次比烧 3 次好，但仍是错的——而这里有确定的事实
+  // 可用（本轮 drain 的回执），没有理由去猜。
+  const triesBefore = Number(prev?.tries) || 0;
   state.reworkDispatched[key] = {
     ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
-    tries: Number(action.tries) || 1,
+    tries: Number(action.tries) || triesBefore + 1,
+    triesBeforeAttempt: triesBefore,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
   return drainReviewPending(action, { state, dryRun, say, run });
@@ -2129,19 +2139,46 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
 
 /** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
  *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
- *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。
+ *
+ *  #1331：环境类失败（执行体自己够不着）**并原文、回滚 tries**。原文要留下来
+ *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），但这一轮
+ *  一个审官都没起过，不该算这张 PR 试过——回滚到 requestRereview 记下的
+ *  `triesBeforeAttempt`。判据见 judgeEnvFailure。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = (state.reworkDispatched || {})[key];
   if (!prev) return;                       // 没有这条账就没有要并的对象
   const verdict = classifyDrainAttempt(payload);
-  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
-  const pulled = verdict.reason === 'pulled';
+  const env = verdict.reason === 'env-unreachable';
+  if (!verdict.countTry && !env) return;   // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.countTry && verdict.reason === 'pulled';
   const err = pulled ? null : drainErrorText(payload);
   if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
-  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
+  state.reworkDispatched[key] = {
+    ...prev,
+    ...foldFailureStreak(prev, err),
+    ...(settleAttemptTries(prev, env) == null ? {} : { tries: settleAttemptTries(prev, env) }),
+    envUnreachable: env,
+  };
+}
+
+/**
+ * 这一轮该把 tries 回滚到几（#1331）。返回 `null` = 不动这个字段。
+ *
+ * 回滚只在**确知是环境**时发生，且只回滚到本轮开始前的值（`triesBeforeAttempt`），
+ * **不是清零**——清零会把「之前真试过 2 次」一起抹掉，那是往反方向错。
+ * 缺 `triesBeforeAttempt`（老账 / 别的写入路径写的）时维持现值，不猜。
+ */
+export function settleAttemptTries(prev, env) {
+  if (env !== true) return null;
+  // `prev` 必须显式判：`Number(null && x)` 是 **0**，不是 NaN——
+  // 拿它当「回滚到 0」就把「没有账」当成了「本轮之前一次都没试过」。
+  if (!prev || typeof prev !== 'object') return null;
+  const before = Number(prev.triesBeforeAttempt);
+  return Number.isInteger(before) && before >= 0 ? before : null;
 }
 
 export function drainPayloadOf(runResult) {
@@ -2192,15 +2229,37 @@ function mirasimStartCmd({ model, tree, spec, pr, issue }) {
   return cmd;
 }
 
+/**
+ * 这次派工失败，是「执行体自己够不着」还是「这张 PR 的事」（#1331）。
+ *
+ * 返工 / 收口泵派的是 `dao.mjs start`，回执是 runCmd 的形状（out 里一行 JSON）。
+ * 先按 drainPayloadOf 解出结构化回执，再交给与复审那侧**同一个**纯函数判——
+ * 同一个事实不许两处各判一次（#1233 的形状）。
+ *
+ * 解不出 / 没有 code（老回执、非 JSON、超时被杀）一律判「不是环境」，照旧记一次尝试：
+ * 宁可多烧一次，也不要把真失败悄悄变成无限重试。
+ */
+function envFailureOf(runResult) {
+  try {
+    return judgeEnvFailure({ attached: drainPayloadOf(runResult) });
+  } catch {
+    return { env: false, why: '回执解不出（没查成）——按真失败记账', code: null, stage: null };
+  }
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
+  // #1331：ws 断连这一轮**一个工人都没造出来**，不算这张 PR 试过返工。
+  // 实测 2026-09-17：#885 / #1284 的返工正是这样被烧掉预算的（7 天 66 次）。
+  const env = envFailureOf(verdict);
   state.reworkDispatched[rkey] = {
     at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1,
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
   };
 }
 
@@ -2301,10 +2360,13 @@ function rememberPumpDraft(state, action, written, verdict) {
   state.reworkDispatched = state.reworkDispatched || {};
   const pkey = action.pumpKey || pumpDraftKey(action.pr);
   const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  const env = envFailureOf(verdict);   // #1331：同上，环境轮不算这张 PR 泵过
   state.reworkDispatched[pkey] = {
     at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1, kind: 'pump-draft',
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
+    kind: 'pump-draft',
   };
 }
 
