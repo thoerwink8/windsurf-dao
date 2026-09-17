@@ -112,6 +112,42 @@ describe('decide：自己做（确定性）', () => {
     assert.equal(stops.filter((s) => s.sessionKey === 'pi:live').length, 0);
   });
 
+  it('waiting_user 会话 → 不停会话、不重派同一张单（#1174 T8）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [
+        { key: 'acp:wait', state: 'waiting_user', cwd: '/x/dao-900', title: 'ISSUE-#900' },
+        { key: 'pi:dead', state: 'incomplete', cwd: '/x/dao-901' },
+      ] },
+    }));
+    const stops = byKind(r, 'stop-session');
+    assert.equal(stops.length, 1, 'incomplete 仍停，waiting_user 不停');
+    assert.equal(stops[0].sessionKey, 'pi:dead');
+    assert.equal(stops.filter((s) => s.sessionKey === 'acp:wait').length, 0);
+    assert.equal(byKind(r, 'dispatch').length, 0, '等人时不许再派一张');
+  });
+
+  it('cancelled 会话 → 不停会话、同一张单可再派（#1174 T8c 差集再起）', async () => {
+    const { decide } = await CORE;
+    const issue = { number: 900, title: '补 X', labels: [
+      { name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/写码' },
+    ] };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [] },
+      sessions: { scanned: true, items: [
+        { key: 'acp:cancelled', state: 'cancelled', cwd: '/x/dao-900', title: 'ISSUE-#900' },
+      ] },
+    }));
+    assert.equal(byKind(r, 'stop-session').length, 0, '已取消不是 incomplete，不必再停');
+    const d = byKind(r, 'dispatch');
+    assert.equal(d.length, 1, '取消后同一张单可以再派（指挥官恢复=差集再起短会话）');
+    assert.equal(d[0].issue, 900);
+  });
+
   it('done 会话也要 stop-session——审官交卷后进程不许占渠道', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
