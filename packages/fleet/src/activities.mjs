@@ -1,4 +1,5 @@
 const SHA = /^[a-f0-9]{40}$/;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const branchOf = task => `dao/issue-${task.issue}-g${task.generation}`;
 const jsonBlock = text => {
   const fence = /```(?:json)?\s*([\s\S]*?)```/g;
@@ -11,14 +12,14 @@ const jsonBlock = text => {
   try { return JSON.parse(candidate.slice(start, end + 1)); } catch { return null; }
 };
 
-export function createActivities({ runtime, gh, git, projects, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, projects, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw Object.assign(new Error(`no local checkout mapped for ${repository}`), { code: 'UNSUPPORTED_CAPABILITY' });
     return path;
   };
-  const runGh = async (args, { cwd } = {}) => {
-    const result = await gh(args, { cwd });
+  const runGh = async (args, { cwd, role } = {}) => {
+    const result = await gh(args, { cwd, role });
     if (!result?.ok) throw Object.assign(new Error(String(result?.error || 'gh failed').slice(0, 300)), { code: 'SERVICE_UNAVAILABLE' });
     try { return JSON.parse(result.out || '{}'); }
     catch { throw Object.assign(new Error('gh returned non-JSON'), { code: 'SERVICE_UNAVAILABLE' }); }
@@ -77,28 +78,32 @@ export function createActivities({ runtime, gh, git, projects, reviewerPrompt, l
       const { key, status } = await runSession(task, prepared.checkpoint, prompt, 'executor');
       if (status !== 'done') throw Object.assign(new Error(`executor session ${status}`), { code: status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED' });
       const head = await headOf(prepared.checkpoint);
-      const pushed = await git(['push', '-u', 'origin', `HEAD:refs/heads/${prepared.branch}`], { cwd: prepared.checkpoint });
+      const expectedNew = feedback?.head || prepared.head;
+      if (head === expectedNew) throw Object.assign(new Error('executor produced no new commit'), { code: 'UNSUPPORTED_CAPABILITY' });
+      const pushed = await git(['push', '-u', 'origin', `HEAD:refs/heads/${prepared.branch}`], { cwd: prepared.checkpoint, env: typeof pushEnv === 'function' ? pushEnv() : pushEnv });
       if (pushed.status !== 0) throw Object.assign(new Error(`push failed: ${String(pushed.err || '').slice(0, 200)}`), { code: 'SERVICE_UNAVAILABLE' });
-      const pr = await runGh(['pr', 'list', '--head', prepared.branch, '--state', 'open', '--json', 'number', '--limit', '1'], { cwd: prepared.checkpoint });
+      const pr = await runGh(['pr', 'list', '--head', prepared.branch, '--state', 'open', '--json', 'number', '--limit', '1'], { cwd: prepared.checkpoint, role: 'worker' });
       let number = Array.isArray(pr) && pr[0]?.number;
       if (!number) {
-        const created = await gh(['pr', 'create', '--draft', '--base', 'master', '--head', prepared.branch, '--title', `[fleet] ${task.id}`, '--body', `Fleet task ${task.id}. Contract checks: ${task.contract.requiredChecks.join(', ')}.`], { cwd: prepared.checkpoint });
+        const created = await gh(['pr', 'create', '--draft', '--base', 'master', '--head', prepared.branch, '--title', `[fleet] ${task.id}`, '--body', `Fleet task ${task.id}. Contract checks: ${task.contract.requiredChecks.join(', ')}.`], { cwd: prepared.checkpoint, role: 'worker' });
         if (!created?.ok) throw Object.assign(new Error(`pr create failed: ${String(created?.error || '').slice(0, 200)}`), { code: 'SERVICE_UNAVAILABLE' });
         number = Number(String(created.out).trim().split('/').pop());
       }
       if (!Number.isSafeInteger(number) || number <= 0) throw Object.assign(new Error('pr number unresolved'), { code: 'SERVICE_UNAVAILABLE' });
       return { repository: task.repository, head, pr: number, checkpoint: prepared.checkpoint, sessionKey: key };
     },
-    async verify(task, artifact) {
-      const view = await runGh(['pr', 'view', String(artifact.pr), '--json', 'headRefOid,statusCheckRollup'], { cwd: artifact.checkpoint });
-      const head = String(view?.headRefOid || '');
-      const rollup = Array.isArray(view?.statusCheckRollup) ? view.statusCheckRollup : null;
-      if (!rollup) return { scanned: false, head, checks: [] };
-      return {
-        scanned: true,
-        head,
-        checks: rollup.map(check => ({ name: check.name || check.context, status: check.status, conclusion: check.conclusion ?? null })),
-      };
+    async verify(task, artifact, { waitMs = 0, pollMs = 15000 } = {}) {
+      const deadline = Date.now() + Math.max(0, waitMs);
+      for (;;) {
+        const view = await runGh(['pr', 'view', String(artifact.pr), '--json', 'headRefOid,statusCheckRollup'], { cwd: artifact.checkpoint, role: 'marshal' });
+        const head = String(view?.headRefOid || '');
+        const rollup = Array.isArray(view?.statusCheckRollup) ? view.statusCheckRollup : null;
+        if (!rollup) return { scanned: false, head, checks: [] };
+        const checks = rollup.map(check => ({ name: check.name || check.context, status: check.status, conclusion: check.conclusion ?? null }));
+        const settled = head === artifact.head && checks.length > 0 && checks.every(check => check.status === 'COMPLETED');
+        if (settled || Date.now() >= deadline) return { scanned: true, head, checks };
+        await sleep(pollMs);
+      }
     },
     async review(task, artifact, { checks }) {
       const repo = projectPath(task.repository);

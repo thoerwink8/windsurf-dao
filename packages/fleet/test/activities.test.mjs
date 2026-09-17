@@ -60,10 +60,15 @@ describe('activities bind the workflow to real systems', () => {
   });
   it('execute opens a draft PR only when none exists, and fails loudly when the number is unresolvable', async () => {
     const created = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[]' } : args[1] === 'create' ? { ok: true, out: 'https://github.com/owner/repo/pull/23' } : { ok: true, out: '{}' }) });
-    const artifact = await created.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1' }, round: 0 });
+    const artifact = await created.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 });
     assert.equal(artifact.pr, 23);
     const broken = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[]' } : { ok: true, out: 'no url here' }) });
-    await assert.rejects(broken.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1' }, round: 0 }), /pr number unresolved/);
+    await assert.rejects(broken.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 }), /pr number unresolved/);
+  });
+  it('execute refuses to push when no new commit was produced', async () => {
+    const { activities, calls } = harness({ git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: 'b'.repeat(40) } : { status: 0, out: '' }) });
+    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 }), /no new commit/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
   });
   it('a session that does not finish is a failure, never an empty result', async () => {
     const { activities } = harness({ runtime: { waitForCompletion: async () => ({ status: 'unknown' }) } });

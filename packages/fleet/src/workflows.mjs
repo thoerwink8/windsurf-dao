@@ -17,7 +17,6 @@ export async function fusionTaskWorkflow(input, options = {}) {
   const scope = new CancellationScope();
   const activityOptions = {
     startToCloseTimeout: `${task.limits.stepTimeoutSeconds}s`,
-    heartbeatTimeout: `${Math.min(30, task.limits.stepTimeoutSeconds)}s`,
     retry: { maximumAttempts: 1 },
     ...(options.activityTaskQueue ? { taskQueue: options.activityTaskQueue } : {}),
   };

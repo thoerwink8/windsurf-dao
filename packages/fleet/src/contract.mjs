@@ -3,13 +3,18 @@ const text = value => typeof value === 'string' && value.trim().length > 0;
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const unknown = reason => ({ state: 'unscanned', reason });
 
+export function taskIdOf({ repository, issue, generation = 1 } = {}) {
+  if (!text(repository) || !positive(issue) || !positive(generation)) throw new Error('invalid task identity');
+  return `dao/${repository.toLowerCase()}/issue/${issue}/g${generation}`;
+}
+
 export function normalizeTask(input) {
   if (!input || typeof input !== 'object') throw new Error('invalid task');
   if (!text(input.repository) || !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(input.repository)) throw new Error('invalid repository');
   if (!positive(input.issue)) throw new Error('invalid issue');
   if (!positive(input.generation)) throw new Error('invalid issue generation');
   const repository = input.repository.toLowerCase();
-  const id = `dao/${repository}/issue/${input.issue}/g${input.generation}`;
+  const id = taskIdOf({ repository, issue: input.issue, generation: input.generation });
   if (input.id !== undefined && input.id !== id) throw new Error('task identity mismatch');
   const checks = input.contract?.requiredChecks;
   if (!Array.isArray(checks) || !checks.length || checks.some(name => !text(name)) || new Set(checks).size !== checks.length) throw new Error('required checks must be explicit and unique');
