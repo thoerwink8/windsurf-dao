@@ -244,8 +244,16 @@ describe('换厂闸认不认这条新凭证', () => {
 
 describe('dao.mjs 里的接线（正控：没接上这几条要红）', () => {
   it('两处换厂凭证都带上了腿况', () => {
-    const hits = DAO_MJS.match(/legEvidence: legEvidenceFor\(failover\.deadModelId\)/g) || [];
-    assert.equal(hits.length, 2);
+    // 组装收进 capacityFailoverCtx，两处调用点共用——不许再各写一份漏腿况。
+    assert.match(DAO_MJS, /function capacityFailoverCtx\(/);
+    assert.match(DAO_MJS, /legEvidence: legEvidenceFor\(failover\.deadModelId\)/);
+    const createSeg = DAO_MJS.slice(
+      DAO_MJS.indexOf('async function cmdReviewerCreateMirasim('),
+      DAO_MJS.indexOf('async function cmdWorkerDoneMirasim('),
+    );
+    const doneSeg = DAO_MJS.slice(DAO_MJS.indexOf('async function cmdWorkerDoneMirasim('));
+    assert.match(createSeg, /capacityFailoverCtx\(/, 'reviewer-create 没走 capacityFailoverCtx');
+    assert.match(doneSeg, /capacityFailoverCtx\(/, 'worker-done 没走 capacityFailoverCtx');
   });
 
   it('腿况取不到时如实报没查成，不是当成「腿没断」也不是当成「腿断了」', () => {

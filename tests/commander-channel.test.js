@@ -141,11 +141,11 @@ describe('指挥官：混合渠道 pending 不继承 Infinity（#1274）', () =>
     routingModels: ['grok-4.6', 'gpt-5.6-sol'],
     reviewerOrder: ['gpt-5.6-sol', 'grok-4.6'],
     channelCaps: { ok: true, caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
-    channelInFlight: { ok: true, counts: { mirasim: 8 } },
+    channelInFlight: { ok: true, counts: { mirasim: 3 } },
     ...over,
   });
 
-  it('工人闸：pending 模型 8 个在途不派，不限模型仍派得出', async () => {
+  it('工人闸：pending 模型 3 个在途不派，不限模型仍派得出', async () => {
     const { decide } = await CORE;
     const r = decide(mixedSituation({
       github: {

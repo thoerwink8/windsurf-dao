@@ -2,6 +2,37 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.9.0 — 2026-09-17
+
+### 新功能
+- [cc] feat(execution): T8 等人不重派 + ACP 热路默认 worktree 策略 (#1174) (#1267)
+- [cc] feat(熔断): 真实 turn 结果喂熔断器；relay 自己一把 key；审官顺位问熔断（#1342） (#1369)
+- [cc] feat(查资料): 搜索默认改走 ddgs，配 onboard 检查（用户拍板）
+
+### 修复与维护
+- fix(并发): 渠道在途数的分子恒为 0——会话名单没带 model，闸永远判不出满 (#1266)
+- [grok] fix(routing): 审官顺位加 terra/astra 两席（#1359，#1360 同分支重开） (#1364)
+- [cc] fix(mirasim): 回环 ws 连不上时重试三次，别一次就判死 (#1277)
+- [patrol] docs(obs): #1226 已合，活 root 自愈钟仍钉 /root 且与 dao-sync 撞点
+- [grok] fix(审官): 换厂无合法目标时退回原席位重试（#1354）
+- [cc] docs(查资料): fetch MCP 重装接线 + WebSearch 断在上游的判据
+- [cc] fix(值守): 提问闸改看盘面卡没卡，不看挂了多久（用户拍板） (#1287)
+- [patrol] docs(obs): #1339 优先证据走裸 gh，审官环境取不到 CI
+- [cc] docs: 盘面排障产物归位——收件箱三条处置 + 盲设计题归档 (#1351)
+- [cc] fix(重试账): 控制面抖一下不算这张 PR 试过——三条路一起修（#1331） (#1348)
+- [cc] fix(审查标准): 第 3 条改成引用 CI 证据——审官重跑全量是走不到投票的主因 (#1339)
+- [cc] fix(闸): 已删 catalog 扫描排除 .claude/worktrees——别的分支的副本不是本树现行文档 (#1334)
+- [cc] fix(审官): 工人交卷那条路漏传 verdictOnHead——返工后复用死会话，一个字都不发生 (#1341)
+- [patrol] docs(obs): #1231 副本闸挂在没人跑的 server-check，活副本仍是 09-11
+- [patrol] docs(obs): #1324 分级闸绿，合门返工仍只认 GitHub 红绿
+
+### 其它
+- [grok] test(隔离): 审官拉取 dry-run 避开容量 IO；开工探针成对假时钟 (#1320)
+- [cc] test(禁网): 补上漏传的 DAO_GH_FAKE——14 次真打 api.github.com 清零，dao-check 首次全绿 (#1284)
+- release: v2.8.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.8.0 — 2026-09-16
 
 ### 新功能

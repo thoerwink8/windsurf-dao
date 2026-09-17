@@ -1016,6 +1016,7 @@ export const FLAGS_BY_VERB = {
   'worker-done': new Set([
     '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--from',
     '--reviewer', '--executor', '--branch', '--repo',
+    '--merge-policy', '--merge-reason',
     '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([

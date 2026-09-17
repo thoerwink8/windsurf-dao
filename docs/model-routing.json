@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-12",
+  "updated": "2026-09-17",
   "工人": {
     "写码": {
       "模型": [
@@ -222,6 +222,28 @@
           "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
         },
         {
+          "id": "gpt-5.6-terra",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "2026-09-17 用户拍板「加」：把已登记且已启用、与 grok 工人跨厂的 codex-relay 席位加进审官顺位表。profile id=codex-relay-gpt-5.6-terra，落地 mirasim-relay。不提高单次成功率，提高一轮里还有没有下一位可换。根治仍是 #1342。",
+          "拍板": "2026-09-17",
+          "status": "试用",
+          "trial_since": "2026-09-17",
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
+        },
+        {
+          "id": "gpt-6-astra",
+          "顺位": 4,
+          "禁用": false,
+          "理由": "2026-09-17 用户拍板「加」：把已登记且已启用、与 grok 工人跨厂的 codex-relay 席位加进审官顺位表。profile id=codex-relay-gpt-6-astra，落地 mirasim-relay。不提高单次成功率，提高一轮里还有没有下一位可换。根治仍是 #1342。",
+          "拍板": "2026-09-17",
+          "status": "试用",
+          "trial_since": "2026-09-17",
+          "provider": "mirasim-relay",
+          "落地说明": "2026-09-12 网关退役：选型只认统一执行目录（docs/execution-profiles.json）。本模型在目录里的启用条目走的不是网关，落地 provider 由网关组 id 改回真路口，腿表相应登记真路腿。newapi 网关不再出现在任何派工路径上。"
+        },
+        {
           "id": "gpt-5.6-luna",
           "顺位": 1,
           "禁用": false,
@@ -391,7 +413,9 @@
       "id": "ban-gpt-ui",
       "模型": [
         "gpt-5.6-sol",
-        "gpt-5.6-luna"
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-6-astra"
       ],
       "工种": [
         "UI"
@@ -753,6 +777,36 @@
       "状态": "在役",
       "拍板": "2026-09-12",
       "理由": "执行目录 codex-relay-gpt-5.6-luna（available，#1174 真会话 codex:5e165b05 phase=done）",
+      "落地": {
+        "provider": "mirasim-relay"
+      }
+    },
+    {
+      "id": "gpt-5.6-terra@mirasim-relay/mirasim",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
+      "模型": "gpt-5.6-terra",
+      "族": "codex",
+      "供应商": "mirasim-relay",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-17",
+      "理由": "执行目录 codex-relay-gpt-5.6-terra。#1359 审官顺位加席，落地从目录抄（provider=mirasim-relay，enabled: true）。",
+      "落地": {
+        "provider": "mirasim-relay"
+      }
+    },
+    {
+      "id": "gpt-6-astra@mirasim-relay/mirasim",
+      "并发上限": 5,
+      "并发上限依据": "2026-09-08 拍板表：mirasim 中继 = 5（用户拍板）。",
+      "模型": "gpt-6-astra",
+      "族": "codex",
+      "供应商": "mirasim-relay",
+      "执行侧": "mirasim",
+      "状态": "在役",
+      "拍板": "2026-09-17",
+      "理由": "执行目录 codex-relay-gpt-6-astra。#1359 审官顺位加席，落地从目录抄（provider=mirasim-relay，enabled: true）。",
       "落地": {
         "provider": "mirasim-relay"
       }

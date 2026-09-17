@@ -553,6 +553,23 @@ export function resolveReviewerReuse({
   };
 }
 
+/**
+ * 换厂候选池：调用方给的 order 若是策略顺位的子序列（更严的可用性过滤），用它；
+ * 否则用策略顺位。调用方不许自带一份更宽松的池把顺位绕开。
+ */
+function failoverCandidateOrder(routing, capacityFailover) {
+  const policy = Array.isArray(routing?.reviewerOrder) ? routing.reviewerOrder.map(String) : [];
+  const given = Array.isArray(capacityFailover?.order) ? capacityFailover.order.map(String) : null;
+  if (given == null) return policy;
+  let i = 0;
+  for (const id of given) {
+    const at = policy.indexOf(id, i);
+    if (at < 0) return policy;
+    i = at + 1;
+  }
+  return given;
+}
+
 /** 路由表当前审官位（审官.审查 A 位 = reviewerOrder[0]；#843 过渡期为 gpt-5.6-luna，常态 Codex gpt-5.6-sol）。没查成 ≠ 扫完没有。 */
 export function currentReviewerSeat(routing) {
   if (routing == null) {
@@ -617,8 +634,10 @@ export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {
     };
   }
   if (gotVendor !== seatVendor) {
-    // 候选池由路由表补齐，调用方只需交出「上一位是谁、死于什么」——少一个能填错的入参，
-    // 也不让调用方有机会自带一份宽松的候选池把顺位绕开。
+    // 候选池默认由路由表补齐；若调用方给的 order 是策略顺位的子序列
+    // （生产路径的可用性过滤），用更严的那份——否则 sol 满载仍会把 unverified
+    // 的 terra 当成「下一位」，已验证的 grok 反被判跳级。
+    const failoverOrder = failoverCandidateOrder(routing, capacityFailover);
     const pass = judgeCapacityFailover({
       requested: got,
       capacityFailover: capacityFailover && {
@@ -631,8 +650,8 @@ export function assertReviewerSeat({ reviewerId, routing, capacityFailover } = {
         // 判例 memory `fix-landed-at-one-call-site-only`：修法只接一个调用点等于没接。
         legEvidence: capacityFailover.legEvidence,
         models: Array.isArray(routing.models) ? routing.models : [],
-        passerIds: order,
-        order,
+        passerIds: failoverOrder,
+        order: failoverOrder,
       },
     });
     if (pass.ok) {
