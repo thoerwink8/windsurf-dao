@@ -36,6 +36,7 @@ import os from 'node:os';
 import { checkTreeLease, checkInFlight, claimTreeOccupancy, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
+  loadSessionAttribution,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
 import { attachControlPlaneHooksOrThrow } from './control-plane-write.mjs';
@@ -821,10 +822,11 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 
 /**
  * 渠道并发闸的**取数薄壳**（#1145）。判定与占槽都在 lib/channel-concurrency.mjs，
- * 这里只负责把三份快照读出来：
+ * 这里只负责把快照读出来：
  *   · 路由表「腿」节 → 渠道上限（并发上限字段）
  *   · /proc 在途树 → 渠道在途数（**与租约闸同源**：同一个 checkInFlight，不复用 mirasim 自己的记账）
- *   · 派工账本未结 job → 树归哪个模型（树→模型→渠道的那一跳）
+ *   · 会话登记（~/.dao/execution/sessions）→ 树归哪个模型（cwd 对 cwd，不猜分支名）
+ *   · 派工账本未结 job → 上一条归不掉时的兜底
  *   · 熔断表 → 冷却中的渠道等同满员
  * 任一读不出来 ⇒ 返回 ok:false，门里 fail-close 拒起。
  *
@@ -851,6 +853,12 @@ function defaultChannelAdmit({ model, now } = {}) {
           const desired = desiredFromEvents(listed.events);
           return desired.items || [];
         } catch { return []; }
+      },
+      loadSessions: () => {
+        // 门里没有指挥官那份已扫名单；不在起会话路径上再 spawn 一次 40s 的 listSessions。
+        // 登记文件与名单同源（workdir+model），读盘失败回 []，回落账本。
+        try { return loadSessionAttribution(); }
+        catch { return []; }
       },
     },
   });
