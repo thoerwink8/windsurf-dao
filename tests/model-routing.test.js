@@ -170,6 +170,39 @@ describe('#1233 审官顺位按执行目录可用性过滤', () => {
     assert.ok(r.skipped[2].why.includes('没有这个模型'), '理由要带目录里没有  →  ' + r.skipped[2].why);
   });
 
+  it('#1342 熔断/健康判红的顺位也剔，理由点名；没传判红名单 ⇒ 不据此剔', async () => {
+    const { usableReviewerOrder } = await M();
+    const order = ['m-ok', 'alias-model'];
+    const r = usableReviewerOrder(order, { profiles: PROFILES, redIds: ['m-ok'] });
+    assert.deepEqual(r.usable, ['alias-model'], '目录里 available 但熔断 open 的腿不许再当审官  →  ' + JSON.stringify(r));
+    assert.equal(r.skipped.length, 1);
+    assert.equal(r.skipped[0].id, 'm-ok');
+    assert.match(r.skipped[0].why, /熔断|健康/);
+    const none = usableReviewerOrder(order, { profiles: PROFILES });
+    assert.deepEqual(none.usable, order, '没有判红名单 = 没依据，不剔');
+    const set = usableReviewerOrder(order, { profiles: PROFILES, redIds: new Set(['alias-model']) });
+    assert.deepEqual(set.usable, ['m-ok'], 'Set 与数组都收');
+  });
+
+  it('#1342 全红即旁路：判红名单把顺位剔空时不剔、照派，并把旁路说出来', async () => {
+    const { usableReviewerOrder } = await M();
+    const order = ['m-ok', 'alias-model'];
+    // 2026-09-17 实测：relay 78%、grok 原生 76% 同时判红——剔空 = 盘面又冻，今天花一天解的病。
+    const r = usableReviewerOrder(order, { profiles: PROFILES, redIds: ['m-ok', 'alias-model'] });
+    assert.deepEqual(r.usable, order, '一条 25% 的腿比「没有审官」强，重试预算已经在兜底');
+    assert.deepEqual(r.skipped, [], '旁路时不算剔');
+    assert.match(String(r.breakerBypassed), /全红即旁路/, '旁路必须说出来，不许静默  →  ' + JSON.stringify(r));
+    assert.equal(r.allDead, false);
+    // 目录本身起不来的仍然剔（旁路只管判红那一层）
+    const mixed = usableReviewerOrder(['m-ok', 'm-off'], { profiles: PROFILES, redIds: ['m-ok'] });
+    assert.deepEqual(mixed.usable, ['m-ok'], 'm-off 是目录停用不是判红，照剔；只剩 m-ok 一个判红的 ⇒ 全红旁路留它');
+    assert.ok(mixed.breakerBypassed);
+    // 剔到只剩一个不算全红
+    const one = usableReviewerOrder(order, { profiles: PROFILES, redIds: ['m-ok'] });
+    assert.deepEqual(one.usable, ['alias-model']);
+    assert.equal(one.breakerBypassed, undefined);
+  });
+
   it('顺位全起不来 ⇒ allDead，不许退回到「就用第一个」', async () => {
     const { usableReviewerOrder } = await M();
     const r = usableReviewerOrder(['m-unverified', 'm-off'], { profiles: PROFILES });
