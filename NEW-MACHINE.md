@@ -794,8 +794,12 @@ ddgs text -q "关键词" -m 5 -nc
 Linux 上若没有 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`（以服务用户跑，别用 root——
 root 会在服务用户家目录里留下 root 属主文件）。
 
-- **`~/.local/bin` 不在 PATH 上**（两台机器都不在，`uv tool install` 装完自己会警告这件事）。
-  调用写全路径，或跑一次 `uv tool update-shell`。
+- **`~/.local/bin` 默认不在 PATH 上**（`uv tool install` 装完自己会警告）。调用写全路径，或把它加进 PATH。
+  法国 VPS 已经有了：systemd 单元的 `Environment=PATH=/home/orca/.local/bin:...` 和 orca 的登录 shell 都带着它，无需再动。
+  Windows 帅位 2026-09-17 补上了，但**要放在 PATH 末尾，别放开头**——`uv tool update-shell` 是往开头插的，
+  而这台机器的 `~/.local/bin` 里还躺着 `claude.exe`（233MB 原生版）、`agent`、`cursor-agent`、`grok`；
+  放开头会把全机器的裸 `claude` 从 nvm shim 换成那个原生二进制，是个没人要的副作用。
+  改完 **PATH 只对新进程生效**：Mirasim 起的会话继承的是 Mirasim 启动那一刻的环境块，得重启 Mirasim 才认。
 - **`-o json` 是存文件不是打印**，会在当前目录落 `text_<query>_<时间戳>.json`；在共用主树里跑等于
   留垃圾（2026-09-17 实咬，落进了仓根）。要机器读就解析 stdout。
 - `-b google` 两台机器都回 0 条，别用。

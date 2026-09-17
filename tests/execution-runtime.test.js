@@ -8,7 +8,7 @@ import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace} from '../scripts/lib/execution-runtime.mjs';
 import {stableHooksDir} from '../scripts/lib/control-plane-write.mjs';
-import {acquireExecutionFence,withExecutionFence,writeExecutionRecord} from '../scripts/lib/execution-fence.mjs';
+import {acquireExecutionFence,withExecutionFence,writeExecutionRecord,describeFenceFailure,FLOCK_TIMEOUT_MS} from '../scripts/lib/execution-fence.mjs';
 
 const linuxTest=(name,fn)=>test(name,{skip:process.platform!=='linux',timeout:10000},fn);
 const key=(agent='codex')=>agent+':'+crypto.randomUUID();
@@ -116,6 +116,31 @@ linuxTest('root-compatible fence mode does not inherit restrictive umask',t=>{
 linuxTest('fence refuses symlink replacement and makes contention explicit',async t=>{
   const f=fixture(t);fs.mkdirSync(f.stateDir,{recursive:true});fs.symlinkSync('/nonexistent-fixture',path.join(f.stateDir,'admission.lock'));assert.throws(()=>acquireExecutionFence({stateDir:f.stateDir}));fs.unlinkSync(path.join(f.stateDir,'admission.lock'));
   const h=acquireExecutionFence({stateDir:f.stateDir});try{await assert.rejects(withExecutionFence({stateDir:f.stateDir,timeoutMs:0},()=>{}),e=>e.detail?.reason==='admission-held');}finally{h.release();}
+});
+// 「锁被占」不抛（走 status===1），所以这条消息只会在 flock 自己没跑成时出现。
+// 三种没跑成后果与修法都不同，消息必须分得开——不分开就只能靠猜复现（#1358）。
+test('flock 没跑成的三种样子在消息里分得开：起不来 / 超时 / 被信号杀',()=>{
+  const at={elapsedMs:1987.4,lockPath:'/tmp/x/admission.lock',timeoutMs:FLOCK_TIMEOUT_MS};
+  const spawnFailed=describeFenceFailure({error:Object.assign(new Error('spawn EAGAIN'),{code:'EAGAIN'}),status:null},at);
+  const timedOut=describeFenceFailure({error:Object.assign(new Error('timeout'),{code:'ETIMEDOUT'}),status:null},at);
+  const killed=describeFenceFailure({status:null,signal:'SIGKILL'},at);
+  const oddStatus=describeFenceFailure({status:127},at);
+  assert.match(spawnFailed,/EAGAIN/);
+  assert.match(timedOut,/ETIMEDOUT/);
+  assert.match(killed,/killed by SIGKILL/);
+  assert.match(oddStatus,/exit status 127/);
+  assert.notEqual(spawnFailed,timedOut);          // 起不来 ≠ 超时：一个查 fork 上限，一个查负载
+  assert.notEqual(timedOut,killed);
+});
+test('消息带着现场：耗时、超时预算、锁路径——下一次抖动不必再复现一轮',()=>{
+  const msg=describeFenceFailure({error:Object.assign(new Error('t'),{code:'ETIMEDOUT'})},
+    {elapsedMs:2001.6,lockPath:'/home/orca/.dao/execution/admission.lock',timeoutMs:FLOCK_TIMEOUT_MS});
+  assert.match(msg,/2002ms/);                                        // 实际耗时
+  assert.match(msg,new RegExp(`timeout ${FLOCK_TIMEOUT_MS}ms`));     // 预算，好判是不是贴着超时
+  assert.match(msg,/\/home\/orca\/\.dao\/execution\/admission\.lock/); // 哪把锁：真机的还是测试临时的
+});
+test('耗时取不到时说「未知」，不打印 NaN——没量到不等于量到 0',()=>{
+  assert.match(describeFenceFailure({status:127},{lockPath:'/tmp/l',timeoutMs:FLOCK_TIMEOUT_MS}),/耗时未知/);
 });
 linuxTest('Mirasim persists a keyless pending reservation before the first network call',async t=>{
   const f=fixture(t),m=fakeRuntime();let observed;
