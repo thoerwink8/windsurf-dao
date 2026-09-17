@@ -477,6 +477,15 @@ describe('sessions 帧形状：null / 非数组 = 没查成，不许折成空名
     assert.deepEqual(r.list, []);
   });
 
+  it('{type:sessions, complete:false} → ok:false，即使 sessions 是数组', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({ type: 'sessions', sessions: [], complete: false, partial: true, ok: false });
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.deepEqual(r.list, []);
+    assert.match(r.why, /不完整/);
+  });
+
   it('其它 type 跳过，不当成 sessions 帧', async () => {
     const { acceptSessionsFrame } = await SESS;
     const r = acceptSessionsFrame({ type: 'state' });

@@ -145,7 +145,8 @@ export const DEFAULT_PORT = 4316;
 /** listSessions / handshake 等 sessions 帧的预算。
  *  跟 `scripts/mirasim-sessions.mjs` 的 MIRASIM_LS_TIMEOUT_MS 默认同值。
  *  2026-09-09 实咬：负载 20 时 30s 才判超时；snapshot 默认 6s 会把「慢」误判成「死」，
- *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。 */
+ *  探活连红就重启。读单条 snapshot 仍用 6s——那是另一条路，不共用这一格。
+ *  #1397：listSessions 这份预算从建连开始算，不是连上之后再另开一轮。 */
 export const SESSIONS_TIMEOUT_MS = 30_000;
 
 // sessionKey 的真形状：<执行体>:<uuid>（实测 listSessions 回的就是 "claude:a8d67849-…"）。
@@ -200,23 +201,37 @@ export function isWsOpenRetryable(err) {
   return why !== undefined || String(err.message || '').includes('连不上');
 }
 
-/** 带退避的开连接。不可重试的错误**原样抛**，不包一层、不改 code。 */
+/** 带退避的开连接。不可重试的错误**原样抛**，不包一层、不改 code。
+ *  `deadlineMs` 是端到端截止（含建连/退避），剩余不够就停，不另开一轮。 */
 export async function connectWithRetry({
   connect, homeDir, port, openTimeoutMs,
   tries = WS_OPEN_TRIES, backoffMs = WS_OPEN_BACKOFF_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   random = Math.random,
+  now = Date.now,
+  deadlineMs = null,
 } = {}) {
   const n = Number.isInteger(tries) && tries > 0 ? tries : 1;
+  const cap = Number.isFinite(Number(openTimeoutMs)) && Number(openTimeoutMs) > 0 ? Number(openTimeoutMs) : 8_000;
   let last = null;
   for (let i = 1; i <= n; i += 1) {
+    const rem = deadlineMs == null ? cap : Math.max(0, deadlineMs - now());
+    if (deadlineMs != null && rem <= 0) {
+      if (last && last.detail && typeof last.detail === 'object') last.detail.wsOpenTries = i - 1;
+      throw last || new MirasimUnavailableError('建连预算用尽', { why: 'deadline' });
+    }
     try {
-      return await connect({ homeDir, port, openTimeoutMs });
+      return await connect({ homeDir, port, openTimeoutMs: Math.min(cap, rem) });
     } catch (e) {
       if (!isWsOpenRetryable(e)) throw e;   // 判定类：立刻抛，别拖
       last = e;
       if (i === n) break;
-      await sleep(Math.round(backoffMs * i * (1 + 0.4 * random())));
+      const sleepFor = Math.round(backoffMs * i * (1 + 0.4 * random()));
+      if (deadlineMs != null && now() + sleepFor >= deadlineMs) {
+        if (last.detail && typeof last.detail === 'object') last.detail.wsOpenTries = i;
+        throw last;
+      }
+      await sleep(sleepFor);
     }
   }
   // 重试完还是连不上 ⇒ 这不是抖动，是真不可用。把试了几次写进 detail，
@@ -912,11 +927,13 @@ export function createRuntime(opts = {}) {
   // 只重试**连不上**这一种（MirasimUnavailableError 里的握手失败）。契约不符、版本钉死、
   // 渠道满员这些是**判定**，不是抖动，重试一万次结果一样——重试它们只会把真结论拖慢
   // （本文件上面那条注释写得很清楚：契约不符「调用方不许把它当重试一次就好」）。
-  const open = () => connectWithRetry({
-    connect, homeDir, port, openTimeoutMs: t.open,
+  const open = (o = {}) => connectWithRetry({
+    connect, homeDir, port, openTimeoutMs: o.openTimeoutMs ?? t.open,
     tries: opts.wsOpenTries ?? WS_OPEN_TRIES,
     backoffMs: opts.wsOpenBackoffMs ?? WS_OPEN_BACKOFF_MS,
     sleep: opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))),
+    now,
+    deadlineMs: o.deadlineMs,
   });
   const isolationEnv = opts.env || process.env;
   const usingRealWire = connect === defaultConnect;
@@ -1329,26 +1346,43 @@ export function createRuntime(opts = {}) {
    *
    * 读不到一律回 {ok:false, missing:true}，**绝不回空数组**：下游拿「0 个在跑」会一次
    * 把上游池子拉满，那正是 #1125 要治的病。
-   * 等帧预算是 t.list（默认 SESSIONS_TIMEOUT_MS / MIRASIM_LS_TIMEOUT_MS），不是 snapshot 的 6s。
+   * 端到端预算是 t.list（默认 SESSIONS_TIMEOUT_MS / MIRASIM_LS_TIMEOUT_MS），
+   * **含建连/重试/等 state**，不是「连上之后再另开 30 秒」（#1397）。
+   * 调用方可传 timeoutMs 覆盖，把剩余时间接着往下传。
    */
-  async function listSessions() {
-    const wire = await open();
+  async function listSessions(listOpts = {}) {
+    const given = Number(listOpts.timeoutMs);
+    const budget = Number.isFinite(given) && given > 0 ? given : t.list;
+    const wrapUp = Number(listOpts.wrapUpMs);
+    const wrapUpMs = Number.isFinite(wrapUp) && wrapUp >= 0 ? wrapUp : 0;
+    const deadline = now() + budget;
+    const remaining = () => Math.max(0, deadline - now() - wrapUpMs);
+    const fail = (why, extra = {}) => ({ ok: false, missing: true, sessions: null, why, ...extra });
+    if (remaining() <= 0) return fail('会话名单没读成：端到端预算在建连前已尽', { stage: 'connect' });
+    let wire;
     try {
-      const deadline = now() + t.list;
+      wire = await open({ deadlineMs: now() + remaining() });
+    } catch (e) {
+      return fail(`会话名单没读成：${String(e?.message || e)}`, { stage: 'connect' });
+    }
+    try {
+      if (remaining() <= 0) return fail('会话名单没读成：建连耗尽预算', { stage: 'connect' });
       for (let limit = 256; limit <= 32768; limit *= 2) {
-        wire.send({ type: 'listSessions', scope: 'global', limit });
-        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, deadline - now()));
+        const waitMs = remaining();
+        if (waitMs <= 0) return fail('会话枚举未证明完整（hasMore 缺失或超时）', { partial: true, stage: 'list' });
+        wire.send({ type: 'listSessions', scope: listOpts.scope || 'global', limit });
+        const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, waitMs));
         if (!msg || !Array.isArray(msg.sessions)) {
-          return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
+          return fail('服务端没回可用的 sessions 帧（没查成）', { stage: 'list' });
         }
         if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
-        if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
+        if (msg.hasMore !== true || remaining() <= 0) return fail('会话枚举未证明完整（hasMore 缺失或超时）', { partial: true, stage: 'list' });
       }
-      return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
+      return fail('会话枚举超过上限，不能当完整清单', { partial: true, stage: 'list' });
     } catch (e) {
-      return { ok: false, missing: true, sessions: null, why: `会话名单没读成：${String(e?.message || e)}` };
+      return fail(`会话名单没读成：${String(e?.message || e)}`, { stage: 'list' });
     } finally {
-      wire.close();
+      try { wire.close(); } catch { /* 收尾失败不改判 */ }
     }
   }
 
@@ -1404,7 +1438,7 @@ const runtime = () => (shared ||= createRuntime());
 export const ensureWorkspace = (repo, branch) => runtime().ensureWorkspace(repo, branch);
 export const startSession = args => runtime().startSession(args);
 export const readSession = sessionKey => runtime().readSession(sessionKey);
-export const listSessions = () => runtime().listSessions();
+export const listSessions = (o) => runtime().listSessions(o);
 export const interact = (sessionKey, answer) => runtime().interact(sessionKey, answer);
 export const stopSession = sessionKey => runtime().stopSession(sessionKey);
 export const waitForCompletion = (sessionKey, o) => runtime().waitForCompletion(sessionKey, o);

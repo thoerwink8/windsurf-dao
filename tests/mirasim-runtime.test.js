@@ -896,6 +896,45 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     assert.equal(r.sessions, null);
   });
 
+  it('#1397 建连计入名单预算：open 吃尽后不发 listSessions、挂断、sessions 是 null', async () => {
+    let clock = 0;
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions: [], hasMore: false }] : []));
+    const rt = await runtimeWith(wire, {
+      now: () => clock,
+      listTimeoutMs: 5_000,
+      sleep: async () => {},
+      connect: async ({ openTimeoutMs }) => { clock += openTimeoutMs; return wire; },
+    });
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.equal(r.stage, 'connect');
+    assert.equal(wire.sent.some(f => f.type === 'listSessions'), false);
+    assert.equal(wire.hungUp, true);
+  });
+
+  it('#1397 慢建连+慢名单累计越界：统一 deadline 收尾，不当完整空名单', async () => {
+    let clock = 0;
+    const wire = fakeWire(goodState(), () => []);
+    wire.waitFor = async (_pred, timeoutMs) => {
+      clock += 20_000;
+      if (timeoutMs < 20_000) return null;
+      return { type: 'sessions', sessions: [], hasMore: false };
+    };
+    const rt = await runtimeWith(wire, {
+      now: () => clock,
+      openTimeoutMs: 20_000,
+      listTimeoutMs: 30_000,
+      sleep: async () => {},
+      connect: async () => { clock += 14_000; return wire; },
+    });
+    const r = await rt.listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.equal(wire.hungUp, true);
+    assert.match(String(r.why || ''), /没查成|超时|预算/);
+  });
+
   it('prompt 已发送但 ACK 丢失是 uncertain，不能释放后重复派', async () => {
     const wire = fakeWire(goodState(), () => []);
     const rt = await runtimeWith(wire);

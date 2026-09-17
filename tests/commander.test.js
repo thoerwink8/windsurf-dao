@@ -3363,6 +3363,19 @@ describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单
       assert.match(String(r.error || ''), /不是数组|没查成/);
     } finally { restore(); }
   });
+
+  it('complete:false 的部分枚举 → scanned:false，有条目也不当完整观测集', async () => {
+    const { scanSessions } = await MOD();
+    const script = path.join(__dirname, 'fixtures', 'mirasim-sessions-partial.mjs');
+    process.env.DAO_MIRASIM_LS = script;
+    try {
+      const r = scanSessions();
+      assert.equal(r.scanned, false);
+      assert.equal(r.partial, true);
+      assert.equal(Array.isArray(r.items), true);
+      assert.equal(r.items.length, 1);
+    } finally { restore(); }
+  });
 });
 
 // ── #1147 draft 收口泵：无会话超时派短会话；泵满打「卡死/等用户」 ──

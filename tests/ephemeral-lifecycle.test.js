@@ -167,5 +167,7 @@ describe('ephemeral-lifecycle', () => {
     assert.match(read('scripts/mirasim-sessions.mjs'), /MIRASIM_LS_TIMEOUT_MS \|\| 30000/);
     assert.match(read('scripts/commander.mjs'), /MIRASIM_LS_TIMEOUT_MS: process\.env\.MIRASIM_LS_TIMEOUT_MS \|\| '30000'/);
     assert.match(read('scripts/commander.mjs'), /timeout:\s*40000/);
+    assert.doesNotMatch(read('scripts/commander.mjs'), /timeout:\s*55000/);
+    assert.match(read('scripts/commander.mjs'), /DAO_EXECUTION_SCAN_BUDGET_MS: process\.env\.DAO_EXECUTION_SCAN_BUDGET_MS \|\| '38000'/);
   });
 });
