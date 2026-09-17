@@ -159,6 +159,36 @@ describe('假 runtime：主树零 stop，工人只停自己', () => {
 });
 
 describe('部分失败假成功', () => {
+  it('清单 ok:false 但仍有 sessions：按归属停本 PR 工人', async () => {
+    const { stopWorkerDoneSessions } = await CLEAN;
+    const rt = fakeRuntime(SESSIONS);
+    const r = await stopWorkerDoneSessions(rt, WORKER, IDENTITY, {
+      listSessions: async () => {
+        rt.listed += 1;
+        return { ok: false, sessions: SESSIONS, errors: [{ error: 'other session unknown' }] };
+      },
+      stopOne: async (key, workdir) => rt.stopSession(key, { workdir }),
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.stopCount, 1);
+    assert.deepEqual(r.stopped.map((x) => x.sessionKey), ['claude:worker-1400']);
+  });
+
+  it('清单 ok:false 且没有本 PR 工人：失败，stop 0', async () => {
+    const { stopWorkerDoneSessions } = await CLEAN;
+    const rt = fakeRuntime(SESSIONS);
+    const others = SESSIONS.filter((s) => s.sessionKey !== 'claude:worker-1400');
+    const r = await stopWorkerDoneSessions(rt, WORKER, IDENTITY, {
+      listSessions: async () => ({ ok: false, sessions: others, why: 'partial' }),
+      stopOne: async (key, workdir) => rt.stopSession(key, { workdir }),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.match(r.error, /不完整|partial/);
+    assert.equal(r.stopCount, 0);
+    assert.deepEqual(rt.stops, []);
+  });
+
   it('清单没查成：非零形态，stop 0 次', async () => {
     const { stopWorkerDoneSessions } = await CLEAN;
     const rt = fakeRuntime(SESSIONS, { listOk: false, listError: '上游不可用' });

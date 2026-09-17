@@ -197,16 +197,21 @@ export async function stopWorkerDoneSessions(runtime, cwd, identity = {}, hooks 
       ...empty,
     };
   }
-  if (!listed || listed.ok === false) {
+  // execution-runtime 的 listSessions：个别会话读失败时 ok:false，但 sessions 仍是数组。
+  // 有数组就能按归属过滤；没数组才是真没查成。不完整且找不到本 PR 工人 → 失败。
+  if (!listed) {
+    return { ok: false, unscanned: true, error: '会话清单没查成', ...empty };
+  }
+  const sessions = Array.isArray(listed.sessions) ? listed.sessions : null;
+  if (!sessions) {
     return {
       ok: false, unscanned: true,
-      error: (listed && (listed.error || listed.why)) || '会话清单没查成',
+      error: (listed.error || listed.why) || '会话清单没查成',
       ...empty,
     };
   }
-  const sessions = Array.isArray(listed.sessions) ? listed.sessions : null;
   const plan = planWorkerDoneStops({
-    cwd, ...identity, sessions, listedOk: sessions != null,
+    cwd, ...identity, sessions, listedOk: true,
   });
   const stopOne = typeof hooks.stopOne === 'function'
     ? hooks.stopOne
@@ -216,7 +221,17 @@ export async function stopWorkerDoneSessions(runtime, cwd, identity = {}, hooks 
       }
       return runtime.stopSession(key, { workdir });
     };
-  return applyWorkerDoneStops(plan, { stopOne });
+  const applied = await applyWorkerDoneStops(plan, { stopOne });
+  if (listed.ok === false && plan.ok === true && plan.refuse !== true && plan.hits.length === 0) {
+    return {
+      ok: false, unscanned: true, partial: true,
+      error: (listed.error || listed.why) || '会话清单不完整，且没有核到本 PR 工人',
+      stopped: applied.stopped || [],
+      scanned: applied.scanned || 0,
+      stopCount: applied.stopCount || 0,
+    };
+  }
+  return applied;
 }
 
 /** 收尾失败时给 CLI 的细分回执。评论/入队已经发生的事实必须还在。 */
