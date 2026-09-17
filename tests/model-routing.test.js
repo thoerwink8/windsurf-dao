@@ -209,4 +209,24 @@ describe('#1233 审官顺位按执行目录可用性过滤', () => {
     for (const id of order) if (i < r.usable.length && id === r.usable[i]) i += 1;
     assert.equal(i, r.usable.length, '可用序必须是原顺位的子序列  →  ' + JSON.stringify(r.usable));
   });
+
+  it('容量换人候选：读得到目录就只用 usable；没读到不剔', async () => {
+    const { orderForCapacityFailover } = await M();
+    const policy = ['m-ok', 'm-unverified', 'm-off'];
+    assert.deepEqual(
+      orderForCapacityFailover(policy, { profiles: PROFILES }),
+      ['m-ok'],
+      'unverified / 未启用不得进换人候选',
+    );
+    assert.deepEqual(
+      orderForCapacityFailover(policy, {}),
+      policy,
+      '没读到目录时不许凭空剔人',
+    );
+    assert.deepEqual(
+      orderForCapacityFailover(['m-unverified', 'm-off'], { profiles: PROFILES }),
+      [],
+      '全灭必须是空数组，不许退回未验证席位',
+    );
+  });
 });
