@@ -501,6 +501,47 @@ describe('skill-link', () => {
     assert.match(miss.reason, /passwd|HOME|USERPROFILE/);
   });
 
+  it('DAO_SKILL_HOMES 覆盖值：Windows 盘符整段保留，逗号/分号/POSIX 冒号仍是分隔（#1330）', async () => {
+    const { splitHomeOverride, agentHomes } = await import('../scripts/lib/skill-homes.mjs');
+    assert.deepEqual(splitHomeOverride('C:/Users/alice'), ['C:/Users/alice'], '正斜杠盘符不得拆成 C 和 /Users/alice');
+    assert.deepEqual(splitHomeOverride('C:\\Users\\bob'), ['C:\\Users\\bob'], '反斜杠盘符不得拆成 C 和 \\Users\\bob');
+    assert.deepEqual(splitHomeOverride('C:/Users/alice,D:/Users/bob'), ['C:/Users/alice', 'D:/Users/bob']);
+    assert.deepEqual(splitHomeOverride('C:\\Users\\alice;C:\\Users\\bob'), ['C:\\Users\\alice', 'C:\\Users\\bob']);
+    assert.deepEqual(splitHomeOverride('/home/a:/home/b'), ['/home/a', '/home/b'], 'POSIX 冒号列表仍拆两项');
+    assert.deepEqual(splitHomeOverride('/home/a,/home/b'), ['/home/a', '/home/b']);
+    assert.deepEqual(splitHomeOverride('C:/Users/alice:/home/bob'), ['C:/Users/alice', '/home/bob']);
+
+    const enoent = () => {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    const only = (want, entries) => (dir) => {
+      if (dir === want) return entries;
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+
+    const slash = 'C:/Users/alice';
+    const win = agentHomes({
+      env: { DAO_SKILL_HOMES: slash },
+      readFile: enoent,
+      readdir: only(slash, ['.claude', 'Desktop']),
+    });
+    assert.equal(win.ok, true, 'C:/ 覆盖值必须整段进候选  →  ' + JSON.stringify(win));
+    assert.deepEqual(win.homes, [slash]);
+
+    const backslash = 'C:\\Users\\bob';
+    const winBs = agentHomes({
+      env: { DAO_SKILL_HOMES: backslash },
+      readFile: enoent,
+      readdir: only(backslash, ['.claude']),
+    });
+    assert.equal(winBs.ok, true, 'C:\\ 覆盖值必须整段进候选  →  ' + JSON.stringify(winBs));
+    assert.deepEqual(winBs.homes, [backslash]);
+  });
+
   it('硬塞一个只有 .mirasim/ 的家进检查 ⇒ SKIP 不是红，也不造 .claude/skills', async () => {
     const { checkSkillLinks } = await import('../scripts/lib/skill-link-check.mjs');
     const root = makeRoot('mira-skip');
