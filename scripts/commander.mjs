@@ -1425,20 +1425,32 @@ function execMarkExhausted(action, { state, dryRun, say }) {
     say(`  PR #${pr} 已是 ${prState}，不打认输标`);
     return { ok: true, skipped: 'not-open' };
   }
-  if (labels.includes(EXHAUSTED_LABEL) || labels.includes(WAITING_USER_LABEL)) {
-    say(`  PR #${pr} 已有认输/等用户标，不重复评论`);
+  const hasWaiting = labels.includes(WAITING_USER_LABEL);
+  const hasExhausted = labels.includes(EXHAUSTED_LABEL);
+  // 已是「等用户」：标不用再打，评论不重复，卡仍走幂等（首次失败下一轮还能发）。
+  if (hasWaiting) {
+    say(`  PR #${pr} 已有等用户标，不重复评论`);
+    askReviewRoundsCard(action, { state, dryRun, say });
+    return { ok: true, skipped: 'already-labeled' };
+  }
+  // 已有自动化认输、本动作仍要打认输：不重复。要打等用户则不能在这里旁路——下面升级。
+  if (hasExhausted && !useWaiting) {
+    say(`  PR #${pr} 已有认输标，不重复评论`);
     askReviewRoundsCard(action, { state, dryRun, say });
     return { ok: true, skipped: 'already-labeled' };
   }
   const label = useWaiting ? WAITING_USER_LABEL : EXHAUSTED_LABEL;
+  const upgradeFromExhausted = hasExhausted && useWaiting;
   const desc = useWaiting
     ? 'draft 收口泵试满仍搁置，等帅位三选一'
     : '自动化认输：机械重试无解，等帅位三选一';
   const color = useWaiting ? 'FBCA04' : 'B60205';
   if (dryRun) {
-    say(`[dry] 给 PR #${pr} 打「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`);
+    say(upgradeFromExhausted
+      ? `[dry] 把 PR #${pr} 的「${EXHAUSTED_LABEL}」升级成「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`
+      : `[dry] 给 PR #${pr} 打「${label}」并评论（${action.verb} 试了 ${action.tries} 次）`);
     askReviewRoundsCard(action, { state, dryRun, say });
-    return { ok: true, dryRun: true, label };
+    return { ok: true, dryRun: true, label, upgraded: upgradeFromExhausted || undefined };
   }
   ensureDir(STATE_DIR);
   const created = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
@@ -1454,6 +1466,15 @@ function execMarkExhausted(action, { state, dryRun, say }) {
     say(`  打「${label}」失败：${tagged.error}`);
     return tagged;
   }
+  if (upgradeFromExhausted) {
+    const dropped = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
+      'pr', 'edit', String(pr), '--repo', REPO, '--remove-label', EXHAUSTED_LABEL], 20000);
+    if (!dropped.ok) {
+      say(`  「${label}」已打，摘「${EXHAUSTED_LABEL}」失败：${dropped.error}`);
+      askReviewRoundsCard(action, { state, dryRun, say });
+      return { ok: true, labeled: true, upgraded: false, error: dropped.error, label };
+    }
+  }
   const bodyFile = join(STATE_DIR, `exhausted-${pr}-${Date.now()}.md`);
   writeFileSync(bodyFile, comment, 'utf8');
   const commented = runCmd(['node', 'scripts/gh-as.mjs', 'marshal', '--',
@@ -1463,9 +1484,11 @@ function execMarkExhausted(action, { state, dryRun, say }) {
     askReviewRoundsCard(action, { state, dryRun, say });
     return { ok: true, labeled: true, commented: false, error: commented.error, label };
   }
-  say(`  PR #${pr} 已打「${label}」并评论（${action.verb} × ${action.tries}）`);
+  say(upgradeFromExhausted
+    ? `  PR #${pr} 已把「${EXHAUSTED_LABEL}」升级成「${label}」并评论（${action.verb} × ${action.tries}）`
+    : `  PR #${pr} 已打「${label}」并评论（${action.verb} × ${action.tries}）`);
   askReviewRoundsCard(action, { state, dryRun, say });
-  return { ok: true, labeled: true, commented: true, label };
+  return { ok: true, labeled: true, commented: true, label, upgraded: upgradeFromExhausted || undefined };
 }
 
 function execOpenIssue(action, { state, dryRun, say, send = sendHubAsk }) {

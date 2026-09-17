@@ -161,6 +161,29 @@ describe('ephemeral-lifecycle', () => {
       exists,
     });
     assert.equal(noCleanupStop.includes('指挥官 stop 候选没认已确认清退证据'), true, JSON.stringify(noCleanupStop));
+
+    const noHaltBranch = inspectEphemeralLifecycleSources({
+      files: {
+        ...files,
+        dao: files.dao.replace(
+          /plan\.halt === REVIEW_ROUNDS_HALT \|\| plan\.halt === REVIEW_ROUNDS_UNSCANNED/g,
+          'plan.halt === "nope" || plan.halt === "nope2"',
+        ),
+      },
+      exists,
+    });
+    assert.equal(noHaltBranch.includes('worker-done 超限早退分支丢了'), true, JSON.stringify(noHaltBranch));
+
+    const haltAt = files.dao.indexOf('if (plan.halt === REVIEW_ROUNDS_HALT || plan.halt === REVIEW_ROUNDS_UNSCANNED)');
+    assert.ok(haltAt > 0, '现役源码找不到超限早退分支');
+    const noHaltStop = inspectEphemeralLifecycleSources({
+      files: {
+        ...files,
+        dao: files.dao.slice(0, haltAt) + files.dao.slice(haltAt).replace('stopSessionsAtCwd', 'stopGoneAtCwd'),
+      },
+      exists,
+    });
+    assert.equal(noHaltStop.includes('worker-done 超限/unscanned 早退没停会话'), true, JSON.stringify(noHaltStop));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {

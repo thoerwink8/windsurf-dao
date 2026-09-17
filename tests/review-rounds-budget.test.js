@@ -293,6 +293,87 @@ describe('decide：超限停手，不派返工/复审', () => {
     assert.equal(byKind(r, 'escalate').filter((a) => a.detail === 'review-rounds-unscanned').length, 0);
   });
 
+  it('已有「卡死/自动化认输」+ rounds=max → 仍打等用户标并发卡，不是 noop', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      ...redPr(885, HEAD, 1227),
+      labels: [
+        { name: '卡死/自动化认输' },
+        { name: 'model/grok-4.6' },
+        { name: 'reviewer/gpt-5.6-sol' },
+        { name: 'type/写码' },
+      ],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 885: { reviews: nReds(2, HEAD) } } },
+      reviewRoundsBudget: { max: 2 },
+    }));
+    assert.notEqual(kinds(r).join(','), 'noop', JSON.stringify(r.actions));
+    assert.equal(byKind(r, 'rework').length, 0, '超限不许再派返工');
+    assert.equal(byKind(r, 'rereview').length, 0);
+    const stop = byKind(r, 'mark-exhausted');
+    assert.equal(stop.length, 1, JSON.stringify(r.actions));
+    assert.equal(stop[0].verb, 'review-rounds');
+    assert.equal(stop[0].label, '卡死/等用户');
+    assert.equal(stop[0].hubAsk.number, 1227);
+    assert.match(stop[0].comment, /审查轮次 2\/2/);
+  });
+
+  it('已有「卡死/等用户」+ rounds=max → 仍产停手动作（执行侧幂等发卡），不是 noop', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      ...redPr(885, HEAD, 1227),
+      labels: [
+        { name: '卡死/等用户' },
+        { name: 'model/grok-4.6' },
+        { name: 'reviewer/gpt-5.6-sol' },
+        { name: 'type/写码' },
+      ],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [labeledIssue(1227)], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 885: { reviews: nReds(2, HEAD) } } },
+      reviewRoundsBudget: { max: 2 },
+    }));
+    assert.notEqual(kinds(r).join(','), 'noop', JSON.stringify(r.actions));
+    const stop = byKind(r, 'mark-exhausted');
+    assert.equal(stop.length, 1);
+    assert.equal(stop[0].label, '卡死/等用户');
+    assert.ok(stop[0].hubAsk);
+  });
+
+  it('待审票 + 自动化认输标 + 已满轮次 → 不 attach-reviewer，仍停手上报', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      ...redPr(885, HEAD, 1227),
+      labels: [
+        { name: '卡死/自动化认输' },
+        { name: 'model/grok-4.6' },
+        { name: 'reviewer/gpt-5.6-sol' },
+        { name: 'type/写码' },
+      ],
+    };
+    const r = decide(baseSituation({
+      github: {
+        scanned: true, issues: [labeledIssue(1227)],
+        prs: [pr],
+      },
+      prReviews: { scanned: true, byPr: { 885: { reviews: nReds(2, HEAD) } } },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 885, reviewer: 'gpt-5.6-sol', worker: 'wt-x', head: HEAD, source: 'worker-done-handoff' }],
+      },
+      reviewRoundsBudget: { max: 2 },
+    }));
+    assert.equal(byKind(r, 'attach-reviewer').length, 0);
+    assert.equal(byKind(r, 'retry-drain').length, 0);
+    const stop = byKind(r, 'mark-exhausted');
+    assert.equal(stop.length, 1);
+    assert.equal(stop[0].verb, 'review-rounds');
+    assert.equal(stop[0].label, '卡死/等用户');
+  });
+
   it('待审票 + 已满轮次 → 不 attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
@@ -383,6 +464,39 @@ describe('热路真的读了这个模块', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
     assert.match(src, /reviewRoundsBudget:\s*loadReviewRoundsBudgetFile/);
     assert.match(src, /askReviewRoundsCard/);
+  });
+
+  it('worker-done 超限/unscanned 非 dry-run 早退都停当前会话', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
+    const start = src.indexOf('async function cmdWorkerDoneMirasim');
+    const end = src.indexOf('async function cmdStartMirasim', start);
+    assert.ok(start > 0, 'cmdWorkerDoneMirasim 没了');
+    assert.ok(end > start, 'cmdWorkerDoneMirasim 切不到 cmdStartMirasim');
+    const fn = src.slice(start, end);
+    const haltIf = fn.indexOf('if (plan.halt === REVIEW_ROUNDS_HALT || plan.halt === REVIEW_ROUNDS_UNSCANNED)');
+    assert.ok(haltIf > 0, '超限早退分支丢了');
+    const haltBlock = fn.slice(haltIf, fn.indexOf("if (plan.round === 'first')", haltIf));
+    assert.match(haltBlock, /REVIEW_ROUNDS_HALT/);
+    assert.match(haltBlock, /REVIEW_ROUNDS_UNSCANNED/);
+    assert.match(haltBlock, /stopSessionsAtCwd/);
+    assert.match(haltBlock, /\bstopped\b/);
+    assert.match(haltBlock, /交卷后停会话/);
+    assert.match(haltBlock, /stopped\.ok !== true|stopped\.ok === false/);
+    assert.doesNotMatch(haltBlock, /dryRun/);
+  });
+
+  it('execMarkExhausted 已有自动化认输时升级为等用户，不是整段旁路', () => {
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'commander.mjs'), 'utf8');
+    const i = src.indexOf('function execMarkExhausted');
+    const j = src.indexOf('\nfunction execOpenIssue', i);
+    assert.ok(i > 0, 'execMarkExhausted 没了');
+    assert.ok(j > i, 'execMarkExhausted 切不到 execOpenIssue');
+    const body = src.slice(i, j);
+    assert.match(body, /upgradeFromExhausted/);
+    assert.match(body, /--remove-label',\s*EXHAUSTED_LABEL/);
+    assert.match(body, /WAITING_USER_LABEL/);
+    assert.match(body, /askReviewRoundsCard/);
+    assert.match(body, /hasExhausted && !useWaiting/);
   });
 
   it('dao.mjs 交卷 / 起审官都过闸，读目标仓策略，unscanned 也拦', () => {

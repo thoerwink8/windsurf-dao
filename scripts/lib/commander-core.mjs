@@ -1305,11 +1305,13 @@ function collectCandidates(situation) {
     // 省额度那句的本意是「已经认输的 PR 不用再花额度重试 drain」，它管的是**重试**，
     // 不该顺手把「收殓过期票」也管了——那件事不花额度，只是把死票从流水线上取下来。
     const staleTicket = staleTickets.has(ticketScopeKey(it, homeRepo));
-    if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     // #1227：审查轮次已经满了，不要再为这张票起第 N+1 个审官。
+    // 预算闸必须在 stuck continue 之前：已有「卡死/自动化认输」时仍要升级成「卡死/等用户」并发卡。
+    // 省额度那句只管 drain 重试，不能把超限上报也掐掉。
     if (livePr && haltReviewRoundsIfExceeded(livePr, {
       reviews, situation, out, exhaustedThisRound, homeRepo,
     })) continue;
+    if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
     const drain = validateRetryDrain({
       pr: it.pr,
       head: itHead,
@@ -1568,10 +1570,8 @@ function collectCandidates(situation) {
       budget,
     });
     if (judged.state !== 'exceeded') return false;
-    if (prHasStuckLabel(pr)) {
-      marked.add(Number(pr.number));
-      return true;
-    }
+    // 已有自动化认输标也要产出动作：执行侧升级成等用户并发幂等总控群卡。
+    // 只 marked 不产动作 = 超限上报整条旁路（PR #1322 审官红项）。
     sink.push(withNeeds(buildReviewRoundsStopAction({
       pr: pr.number,
       rounds: judged.rounds,
@@ -1637,6 +1637,11 @@ function collectCandidates(situation) {
         }, N.merge));
         out.push(withNeeds({ kind: 'land', why: '合并后收工清理（land 幂等）' }, N.land));
         out.push(withNeeds(hub(`PR #${pr.number} 认输之后审官仍判绿，已自动合并`, 'merged', { pr: pr.number }), N.merge));
+      } else {
+        // 认输标不能把审查轮次超限上报旁路：自动化认输要升级成等用户并发卡。
+        haltReviewRoundsIfExceeded(pr, {
+          reviews, situation, out, exhaustedThisRound, homeRepo,
+        });
       }
       continue;
     }

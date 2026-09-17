@@ -2454,10 +2454,20 @@ async function cmdWorkerDoneMirasim(args) {
   };
   if (plan.halt === REVIEW_ROUNDS_HALT || plan.halt === REVIEW_ROUNDS_UNSCANNED) {
     const rr = plan.reviewRounds || {};
+    let stopped = { ok: true, skipped: true };
+    try {
+      stopped = await stopSessionsAtCwd(bind.runtime, process.cwd());
+    } catch (e) {
+      fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, { ...plan, postedIssue, postedPr });
+    }
+    if (!stopped || stopped.ok !== true) {
+      fail(`交卷后停会话失败：${(stopped && stopped.error) || '没查成'}`, { ...plan, postedIssue, postedPr, stopped });
+    }
     emit({
       ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
       postedIssue, postedPr, action: plan.halt,
+      stopped,
       why: plan.halt === REVIEW_ROUNDS_HALT
         ? reviewRoundsExceededError({ pr: plan.pr, rounds: rr.rounds, max: rr.max })
         : reviewRoundsUnscannedError({ pr: plan.pr, error: rr.error }),

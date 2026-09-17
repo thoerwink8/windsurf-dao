@@ -22,6 +22,28 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
 
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
   if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
+  if (dao) {
+    const wdStart = dao.indexOf('async function cmdWorkerDoneMirasim');
+    const wdEnd = dao.indexOf('async function cmdStartMirasim', wdStart);
+    const wd = wdStart >= 0 && wdEnd > wdStart ? dao.slice(wdStart, wdEnd) : '';
+    const haltAt = wd.search(/if \(plan\.halt === REVIEW_ROUNDS_HALT \|\| plan\.halt === REVIEW_ROUNDS_UNSCANNED\)/);
+    if (haltAt < 0) {
+      problems.push('worker-done 超限早退分支丢了');
+    } else {
+      const rest = wd.slice(haltAt);
+      const nextIf = rest.search(/\n  if \(plan\.round === 'first'\)/);
+      const haltBlock = nextIf >= 0 ? rest.slice(0, nextIf) : rest.slice(0, 1600);
+      if (!/stopSessionsAtCwd/.test(haltBlock)) {
+        problems.push('worker-done 超限/unscanned 早退没停会话');
+      }
+      if (!/\bstopped\b/.test(haltBlock)) {
+        problems.push('worker-done 超限早退输出没带 stopped');
+      }
+      if (!/stopped\.ok !== true/.test(haltBlock) && !/stopped\.ok === false/.test(haltBlock)) {
+        problems.push('worker-done 超限早退停会话失败没有 fail-visible');
+      }
+    }
+  }
   if (core && !/'reap-tree'/.test(core)) problems.push('指挥官动作表没有 reap-tree');
   if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');
   if (core && !/planOrphanReaps/.test(core)) problems.push('指挥官没产幽灵进程回收');
