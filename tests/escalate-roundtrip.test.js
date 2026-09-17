@@ -247,6 +247,166 @@ describe('alreadyAppended：三个出口分得开', () => {
   });
 });
 
+// #1240 残余：无对象已关单必须走 reopen，不许 create 撞旧幂等账装成「开过」。
+describe('#1240 残余：已关无对象 → reopen，同轮二次幂等', () => {
+  const ACTION = {
+    kind: 'escalate',
+    reason: 'unscanned',
+    why: '观测集没查成（会话名单读不到）——当有人在做，不重派',
+  };
+
+  it('正控：账本记着已关 #1305、无对象 → 调 reopen，不调 create', async () => {
+    const { escalate, escalateDedupKey } = await CMD;
+    const key = escalateDedupKey(ACTION);
+    const state = {
+      escalateLedger: { [key]: { issue: 1305, objects: [], at: '2026-09-15T21:00:00Z' } },
+      escalateStreak: { unscanned: 5 },
+      hubSeen: { [`esc:${key}`]: new Date().toISOString() },
+    };
+    const opens = [];
+    const cmds = [];
+    const logs = [];
+    const r = escalate(ACTION, {
+      state,
+      dryRun: false,
+      say: (m) => logs.push(m),
+      gh: (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'view') {
+          // bookedState 读取 + reopen 前读 closedAt
+          if (argv.includes('state,closedAt') || (argv.includes('--json') && String(argv).includes('closedAt'))) {
+            return { ok: true, out: JSON.stringify({ state: 'CLOSED', closedAt: '2026-09-15T21:44:24Z' }) };
+          }
+          return { ok: true, out: 'CLOSED\n' };
+        }
+        if (argv[0] === 'search') return { ok: true, out: '[]' };
+        return { ok: false, error: `没夹具：${argv.join(' ')}` };
+      },
+      cmd: (argv) => {
+        cmds.push(argv.slice());
+        return { ok: true, out: JSON.stringify({ ok: true, number: 1305, replay: false }) + '\n' };
+      },
+      send: () => ({ ok: true }),
+      openIssue: (x) => { opens.push(x); return { ok: true, number: 42, replay: false }; },
+    });
+    assert.equal(opens.length, 0, '已关同因单不许走 create');
+    assert.equal(r.reopened, true);
+    assert.equal(r.number, 1305);
+    assert.equal(cmds.length, 1);
+    assert.equal(cmds[0].includes('reopen'), true, `应调 gateway reopen，实际：${cmds[0].join(' ')}`);
+    assert.equal(cmds[0].includes('1305'), true);
+    assert.equal(state.escalateLedger[key].issue, 1305);
+    assert.equal(logs.some((l) => /报帅重开 #1305/.test(l)), true, `日志应报重开：${logs.join(' | ')}`);
+    assert.equal(logs.some((l) => /幂等重放，没新开/.test(l)), false, '正控不得报「幂等重放，没新开」');
+  });
+
+  it('负控：同轮连发两次 reopen，第二次不再写（幂等键含 closedAt）', async () => {
+    const { escalate, escalateDedupKey } = await CMD;
+    const key = escalateDedupKey(ACTION);
+    const mkState = () => ({
+      escalateLedger: { [key]: { issue: 1305, objects: [], at: '2026-09-15T21:00:00Z' } },
+      escalateStreak: { unscanned: 5 },
+      hubSeen: { [`esc:${key}`]: new Date().toISOString() },
+    });
+    const state = mkState();
+    let reopenCalls = 0;
+    let closedAtReads = 0;
+    const gh = (argv) => {
+      if (argv[0] === 'issue' && argv[1] === 'view') {
+        const jsonFlag = argv.indexOf('--json');
+        const fields = jsonFlag >= 0 ? String(argv[jsonFlag + 1] || '') : '';
+        if (fields.includes('closedAt')) {
+          closedAtReads += 1;
+          // 第一次还是 CLOSED；第二次（同轮）已是 OPEN → 走「已是 OPEN」短路
+          if (closedAtReads === 1) {
+            return { ok: true, out: JSON.stringify({ state: 'CLOSED', closedAt: '2026-09-15T21:44:24Z' }) };
+          }
+          return { ok: true, out: JSON.stringify({ state: 'OPEN', closedAt: null }) };
+        }
+        return { ok: true, out: closedAtReads === 0 ? 'CLOSED\n' : 'OPEN\n' };
+      }
+      if (argv[0] === 'search') return { ok: true, out: '[]' };
+      return { ok: false, error: `没夹具：${argv.join(' ')}` };
+    };
+    const cmd = (argv) => {
+      if (argv.includes('reopen')) {
+        reopenCalls += 1;
+        return { ok: true, out: JSON.stringify({ ok: true, number: 1305, replay: false }) + '\n' };
+      }
+      return { ok: true, out: '{}\n' };
+    };
+    const first = escalate(ACTION, { state, dryRun: false, say: () => {}, gh, cmd, send: () => ({ ok: true }), openIssue: () => ({ ok: true, number: 99 }) });
+    assert.equal(first.reopened, true);
+    assert.equal(reopenCalls, 1);
+    // 第一发成功后账本还在；第二发 bookedState 会读到 OPEN → noop，不进 reopen。
+    // 为了测「同轮 reopen 幂等」，把账本状态仍假装 CLOSED，强制再走 reopen 入口。
+    state.escalateLedger[key] = { issue: 1305, objects: [], at: '2026-09-15T21:00:00Z' };
+    const second = escalate(ACTION, {
+      state,
+      dryRun: false,
+      say: () => {},
+      gh: (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'view') {
+          const jsonFlag = argv.indexOf('--json');
+          const fields = jsonFlag >= 0 ? String(argv[jsonFlag + 1] || '') : '';
+          // bookedState 查询用 -q .state → 仍报 CLOSED，逼进 reopen
+          if (fields === 'state' || (argv.includes('-q') && argv.includes('.state'))) {
+            return { ok: true, out: 'CLOSED\n' };
+          }
+          if (fields.includes('closedAt')) {
+            return { ok: true, out: JSON.stringify({ state: 'OPEN', closedAt: null }) };
+          }
+          return { ok: true, out: 'CLOSED\n' };
+        }
+        if (argv[0] === 'search') return { ok: true, out: '[]' };
+        return { ok: false, error: `没夹具：${argv.join(' ')}` };
+      },
+      cmd,
+      send: () => ({ ok: true }),
+      openIssue: () => ({ ok: true, number: 99 }),
+    });
+    assert.equal(second.reopened, true);
+    assert.equal(second.replay, true, '第二发应短路为已 OPEN / 幂等重放');
+    assert.equal(reopenCalls, 1, '同轮不得第二次调 gateway reopen');
+  });
+
+  it('账本空 + 查重命中已关单 → 仍 reopen，不 create', async () => {
+    const { escalate, escalateDedupKey } = await CMD;
+    const key = escalateDedupKey(ACTION);
+    const state = {
+      escalateLedger: {},
+      escalateStreak: { unscanned: 5 },
+      hubSeen: { [`esc:${key}`]: new Date().toISOString() },
+    };
+    const opens = [];
+    const cmds = [];
+    const r = escalate(ACTION, {
+      state,
+      dryRun: false,
+      say: () => {},
+      gh: (argv) => {
+        if (argv[0] === 'search') {
+          return { ok: true, out: JSON.stringify([{ number: 1305, state: 'CLOSED' }]) };
+        }
+        if (argv[0] === 'issue' && argv[1] === 'view') {
+          return { ok: true, out: JSON.stringify({ state: 'CLOSED', closedAt: '2026-09-15T21:44:24Z' }) };
+        }
+        return { ok: false, error: `没夹具：${argv.join(' ')}` };
+      },
+      cmd: (argv) => {
+        cmds.push(argv.slice());
+        return { ok: true, out: JSON.stringify({ ok: true, number: 1305, replay: false }) + '\n' };
+      },
+      send: () => ({ ok: true }),
+      openIssue: (x) => { opens.push(x); return { ok: true, number: 42 }; },
+    });
+    assert.equal(opens.length, 0, '查重命中已关单不许 create');
+    assert.equal(r.reopened, true);
+    assert.equal(r.number, 1305);
+    assert.equal(cmds.some((c) => c.includes('reopen')), true);
+    assert.equal(state.escalateLedger[key].issue, 1305);
+  });
+});
+
 // 审官第 4 轮红②后半：同样一份旧账本喂给 escalate()，不许再开一张。
 describe('红②后半：旧键账本在途 → escalate 不新开', () => {
   it('账本只有 escalate/missing-labels/issue-1007 时，同因新对象走追加不走开单', async () => {

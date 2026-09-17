@@ -38,7 +38,7 @@ import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } fro
 import {
   isUnscannedReason, escalateDedupKey, judgeEscalation, appendCommentBody,
   reconcileEscalationRound, closeCommentBody, escalateTarget, migrateEscalateLedger,
-  gatewayIdemKey, escalateRoundSeed,
+  gatewayIdemKey, escalateRoundSeed, reopenCommentBody,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
@@ -3021,16 +3021,44 @@ function escalate(action, { state, dryRun, say,
     askEscalateCard({ state, key, number: booked.issue, action, dryRun, say, send });
     return { ok: true, issue: booked.issue, appended: verdict.target };
   }
-  if (booked && booked.issue && bookedState && bookedState !== 'OPEN') {
-    delete state.escalateLedger[key]; // 已关：这件事又发生了，可以再开
+  // #1240 残余：已关同因单走 reopen，不走 create。幂等键只管同轮；跨轮看 issue 状态。
+  const reopenTarget = verdict.reopenedFrom
+    || (booked && booked.issue && bookedState && bookedState !== 'OPEN' ? booked.issue : null);
+  if (reopenTarget) {
+    return reopenEscalation({
+      action, state, key, dryRun, say, send, cmd, gh,
+      number: reopenTarget,
+      objects: verdict.objects || [],
+      why: verdict.why,
+    });
   }
-  // 查重：已有 open 带此标记的单 → 不重复开
-  const found = gh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
+  // 查重：带此标记的单（含已关）。OPEN → 不重复开；CLOSED → reopen（账本被删后的退路）。
+  // 只搜 open 会漏掉已关的 #1305，下一步 create 再撞同幂等键，日志报「幂等重放」而线上静默。
+  const found = gh(['search', 'issues', '--repo', REPO, '--match', 'body', marker, '--json', 'number,state', '--limit', '5'], 30000);
   let existing = null;
+  let existingState = null;
   let searchOk = false;
   if (found.ok) {
-    try { const arr = JSON.parse(found.out || '[]'); searchOk = true; if (arr.length) existing = arr[0].number; }
-    catch { searchOk = false; }
+    try {
+      const arr = JSON.parse(found.out || '[]');
+      searchOk = true;
+      let openHit = null;
+      let closedHit = null;
+      for (const x of arr || []) {
+        if (x == null || x.number == null) continue;
+        const s = String(x.state || '').toUpperCase();
+        if (s === 'CLOSED') { if (!closedHit) closedHit = x; }
+        // state 缺省当 OPEN：旧夹具 / 只搜 open 的回执没有 state 字段
+        else if (!openHit) openHit = x;
+      }
+      if (openHit) {
+        existing = openHit.number;
+        existingState = 'OPEN';
+      } else if (closedHit) {
+        existing = closedHit.number;
+        existingState = 'CLOSED';
+      }
+    } catch { searchOk = false; }
   }
   // 查重没查成 ≠ 没有重复。这是个**写**动作，fail-open 的代价是多开一张单，
   // 而开单不可撤（只能关）。所以没查成一律不开——本轮静默，下轮查得成时再开。
@@ -3039,8 +3067,16 @@ function escalate(action, { state, dryRun, say,
     say(`  查重没查成（本轮不开单，下轮再判）：${found.error || '搜索返回不可解析'}`);
     return { ok: true, skipped: 'dedup-unscanned' };
   }
+  if (existing && existingState === 'CLOSED') {
+    return reopenEscalation({
+      action, state, key, dryRun, say, send, cmd, gh,
+      number: existing,
+      objects: verdict.objects || [],
+      why: verdict.why || `#${existing} 已关，查重命中后重开`,
+    });
+  }
   if (existing) {
-    // 账本没这条键、gh 搜到了已有单（状态文件丢了 / 换机 / 旧键迁移）。两件事都要做：
+    // 账本没这条键、gh 搜到了已有 OPEN 单（状态文件丢了 / 换机 / 旧键迁移）。两件事都要做：
     //   ① 把本次对象**追加到那张单上**——只写账本不留言，用户在单里永远看不到后来的对象；
     //   ② 写回账本——不写回，下一轮又走到这里，每个新对象都当成第一次，清单永远攒不起来。
     // 顺序不能反：留言成了才记账本。记早了而留言失败，下轮会以为说过了，那个对象就永远不会被提起。
@@ -3082,10 +3118,22 @@ function escalate(action, { state, dryRun, say,
     // 标题不带 `[待拍板] ` 前缀（#1240）：那件事由 --label 承载，前缀是第二个真相源。
     title: escalateTitle(action),
     body: escalateBody(action, marker, verdict),
-    // #1240：开单这一轮的幂等键必须把本轮对象折进去，否则被收敛关掉的单会靠网关
-    // 去重账把下一次真发生永远退回旧单号（重开在网关那层从未发生）。
+    // create 的同轮幂等种子。已关同因单的跨轮重开走上面的 reopen 分支，不靠换种子。
     seed: escalateRoundSeed(action.reason, verdict.objects),
   });
+  if (opened.ok && opened.number && opened.replay) {
+    // 安全网：查重漏了已关单、create 却撞上旧幂等账 → 不要把已关号写回账本装成刚开。
+    const st = gh(['issue', 'view', String(opened.number), '--repo', REPO, '--json', 'state', '-q', '.state'], 20000);
+    const stateNow = st.ok ? String(st.out).trim().toUpperCase() : '';
+    if (stateNow === 'CLOSED') {
+      return reopenEscalation({
+        action, state, key, dryRun, say, send, cmd, gh,
+        number: opened.number,
+        objects: verdict.objects || [],
+        why: verdict.why || `#${opened.number} 幂等退回的是已关单——改走 reopen`,
+      });
+    }
+  }
   if (opened.ok && opened.number) {
     // 账本的 `at` = 「这张单是什么时候为这件事开的」。幂等键重放时**不许刷新**：
     // 刷新它等于宣称「刚开了一张」，而线上一张都没开——#1240 里 #1204 的
@@ -3097,15 +3145,74 @@ function escalate(action, { state, dryRun, say,
       objects: verdict.objects || [],
     };
   }
-  // 幂等键重放时 gateway 会把**上一次的同键单号**退回（scripts/lib/issue-gateway.mjs:483），
-  // 那张单可能是已关的。原先这里一律说「报帅开单 #N」，于是日志里看得见「开单」，
-  // 线上却没有新单——#1240 里 #1204 被这样报了上百轮。回执里 replay 字段就是判据。
-  const replayed = opened && (opened.replay === true || (opened.number && verdict.reopenedFrom && opened.number === verdict.reopenedFrom));
+  // 幂等键重放时 gateway 会把**上一次的同键单号**退回（scripts/lib/issue-gateway.mjs:483）。
+  // 回执里 replay 字段区分「真开了一张」和「同轮去重退回」。
+  const replayed = opened && opened.replay === true;
   say(`  ${opened.ok
     ? (replayed ? `报帅复用已有单 #${opened.number}（幂等重放，没新开）` : `报帅开单 #${opened.number}`)
     : `报帅开单失败：${opened.error}`}：${action.why}`);
   if (opened.ok && opened.number) askEscalateCard({ state, key, number: opened.number, action, dryRun, say, send });
   return opened;
+}
+
+/**
+ * 已关同因单的重开入口（#1240 残余）。
+ * 幂等键 = issue + reason + closedAt：同一次关闭的同轮连发去重；下一次再关再开换新键。
+ */
+function reopenEscalation({ action, state, key, dryRun, say, send, cmd, gh, number, objects, why }) {
+  if (dryRun) {
+    say(`[dry] 报帅重开 #${number}：${action.why}`);
+    return { ok: true, dryRun: true, issue: number, reopened: true };
+  }
+  // closedAt 进键：同一轮两次 reopen 同键；关了又开一轮必须是新键，否则又撞旧账静默。
+  const viewed = gh(['issue', 'view', String(number), '--repo', REPO, '--json', 'state,closedAt'], 20000);
+  let closedAt = 'unknown';
+  if (viewed.ok) {
+    try {
+      const j = JSON.parse(String(viewed.out || '').trim() || '{}');
+      const st = String(j.state || '').toUpperCase();
+      if (st === 'OPEN') {
+        // 已是 OPEN（同轮第二发或别人先重开了）——写回账本，不再调 reopen。
+        const prevAt = state.escalateLedger?.[key]?.at;
+        state.escalateLedger[key] = {
+          issue: number,
+          at: prevAt || nowIso(),
+          objects: Array.isArray(objects) ? objects : [],
+        };
+        say(`  报帅重开 #${number}（已是 OPEN，不重复写）：${action.why}`);
+        askEscalateCard({ state, key, number, action, dryRun, say, send });
+        return { ok: true, number, issue: number, reopened: true, replay: true };
+      }
+      if (j.closedAt) closedAt = String(j.closedAt);
+    } catch { /* 回执不可解析时 closedAt 留 unknown，同轮仍可去重 */ }
+  }
+  const body = reopenCommentBody({ reason: action.reason, objects, why, at: nowIso() });
+  ensureDir(STATE_DIR);
+  writeFileSync(join(STATE_DIR, `escalate-reopen-${Date.now()}.md`), body, 'utf8');
+  const idem = gatewayIdemKey('commander-escalate', 'reopen', number, action.reason, closedAt);
+  const r = cmd(['node', 'scripts/issue-gateway.mjs', 'reopen',
+    '--repo', REPO, '--issue', String(number), '--comment', body,
+    '--host', 'commander', '--idempotency-key', idem], 60000);
+  if (!r.ok) {
+    say(`  报帅重开失败（#${number}，本轮不改账本，下轮再试）：${r.error}`);
+    return { ok: false, error: r.error };
+  }
+  let replay = false;
+  try {
+    const j = JSON.parse(String(r.out || '').trim().split('\n').pop() || '{}');
+    replay = Boolean(j && j.replay === true);
+  } catch { /* 回执不是 JSON 时按真重开记 */ }
+  const prevAt = state.escalateLedger?.[key]?.at;
+  state.escalateLedger[key] = {
+    issue: number,
+    at: prevAt || nowIso(),
+    objects: Array.isArray(objects) ? objects : [],
+  };
+  say(`  ${replay
+    ? `报帅重开 #${number}（同轮幂等重放，未再写一次）`
+    : `报帅重开 #${number}`}：${action.why}`);
+  askEscalateCard({ state, key, number, action, dryRun, say, send });
+  return { ok: true, number, issue: number, reopened: true, replay };
 }
 /**
  * 轮末收敛：连续轮计数 + 原因消失自动关单（#1063）。
