@@ -739,6 +739,18 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 装出来的 bin 名不等于包名，装完 `ls $bin\*.cmd` 对一眼再写路径
 （`@playwright/mcp` → `playwright-mcp.cmd`，`chrome-devtools-mcp` → 同名）。
 
+`fetch` 是 Python 包，同样别用 `uvx`（那也是现场解包），钉法：
+
+```powershell
+uv tool install mcp-server-fetch          # 落 ~\.local\bin\mcp-server-fetch.exe
+claude mcp add fetch -s user -- "$env:USERPROFILE\.local\bin\mcp-server-fetch.exe"
+```
+
+它默认**遵守 robots.txt**：模型主动发起的抓取撞上 disallow 会直接失败，看起来像"又断了"，
+真因在站点规则不在链路。确需绕过时给命令加 `--ignore-robots-txt`（这是放宽站点声明，按需再说）。
+另有一条无害告警 `A working NPM installation was not found`：readabilipy 在 Windows 上找不到
+`npm.cmd`，退回纯 Python 提取，正文照样出得来。
+
 两个执行坑（2026-09-01 本机各栽一次）：
 
 - **`claude mcp add` 必须在 PowerShell 里跑，别在 Git Bash**。Git Bash 会把 `/c`
