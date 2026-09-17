@@ -29,15 +29,17 @@ describe('回环 ws 开连接重试', () => {
     assert.equal(slept.length, 1, '重试前要退避，别贴着脸重连');
   });
 
-  it('②一直连不上 → 试满才抛，并在 detail 里留下试了几次', async () => {
+  it('②一直连不上 → 试满才抛原错，并在 detail 里留下试了几次', async () => {
     const { connectWithRetry, WS_OPEN_TRIES } = await RT;
     let calls = 0;
+    let lastThrown;
     await assert.rejects(
       connectWithRetry({
-        connect: async () => { calls += 1; throw unavailable(); },
+        connect: async () => { calls += 1; lastThrown = unavailable(); throw lastThrown; },
         sleep: async () => {}, random: () => 0,
       }),
       (e) => {
+        assert.equal(e, lastThrown, '试满后抛的是原错，不许包一层新错');
         assert.equal(e.code, 'unavailable');
         assert.equal(e.detail.wsOpenTries, WS_OPEN_TRIES, '要分得清「一次就死」和「试满都不行」');
         return true;
