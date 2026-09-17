@@ -2583,6 +2583,7 @@ async function cmdStartMirasim(args) {
       ...(issue ? { issue } : {}),
       ...(pr ? { pr } : {}),
       ...(title ? { title } : {}),
+      ...startSessionRouteFields(route),
     });
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {

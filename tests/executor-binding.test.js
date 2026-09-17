@@ -870,6 +870,12 @@ describe('#1174 T6 首帧透传 local/cloud，profile 优先于前缀族', () =>
     assert.equal(rt.calls.startSession[0].route, 'local');
     assert.equal(rt.calls.startSession[0].backend, 'acp');
   });
+
+  it('dao.mjs dispatch 与 start 两条热路都摊 startSessionRouteFields（同类扫描）', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'dao.mjs'), 'utf8');
+    const n = src.split('startSessionRouteFields(route)').length - 1;
+    assert.equal(n, 2, `dispatch + start 各一处，实际 ${n}`);
+  });
 });
 
 // #884 审官 P1#3（四轮）：mirasim 的 worker-start 少了 dispatch 那道注入闸，
