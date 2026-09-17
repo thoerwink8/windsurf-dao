@@ -273,12 +273,14 @@ if (wantLegs) {
 }
 
 // 折进上一份表（strikes/lastGreenAt 从旧表续）；--only 时其余 target 原样保留。
-// 默认路径没探的 gw: 池必须从表里拿掉——否则 updatedAt 一新，旧绿看起来像刚探过。
+// 本轮故意没探的 gw: 池必须从表里拿掉——含 --only 命中但仍被默认 skip 的那条。
+// 否则表级 updatedAt 一新，消费端会把旧绿当成刚探过。
 const prevTable = readJson(HEALTH_FILE, null);
 const folded = buildHealthTable(prevTable, results, PLAN.intervalMin, nowIso);
-const table = only
-  ? folded
-  : { ...folded, targets: pruneHealthKeys(folded.targets, skippedKeys.filter((k) => String(k).startsWith("gw:"))) };
+const table = {
+  ...folded,
+  targets: pruneHealthKeys(folded.targets, skippedKeys.filter((k) => String(k).startsWith("gw:"))),
+};
 writeAtomic(HEALTH_FILE, table);
 
 // journal：本轮探到的每条一行

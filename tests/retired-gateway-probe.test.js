@@ -48,6 +48,13 @@ describe('selectPoolProbes / pruneHealthKeys', () => {
     assert.equal(next['gw:grokpool/grok-4.6'], undefined);
     assert.equal(next['native:xai-native'].kind, 'native-login');
   });
+
+  it('--only 命中默认跳过的池：该 key 进 skipped，其它池不进 jobs/skipped', async () => {
+    const { selectPoolProbes } = await import(LIB);
+    const r = selectPoolProbes(pools, { includeRetired: false, only: 'gw:gptpool/gpt-5.6' });
+    assert.deepEqual(r.jobs, []);
+    assert.deepEqual(r.skipped.map((s) => s.key), ['gw:gptpool/gpt-5.6']);
+  });
 });
 
 describe('周期探针源码闸', () => {
@@ -61,6 +68,11 @@ describe('周期探针源码闸', () => {
       src,
       /const wantPool = PLAN\.pools\.filter/,
       '不许再无条件 for PLAN.pools 发请求',
+    );
+    assert.doesNotMatch(
+      src,
+      /only\s*\?\s*folded/,
+      '--only 命中但仍 skip 的 gw: 池也必须 prune，不能 folded 原样留旧绿',
     );
   });
 });
