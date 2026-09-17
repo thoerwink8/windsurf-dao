@@ -176,6 +176,30 @@ describe('#1331 返工 / 收口泵那条路：同一个判据，回执形状不�
   });
 });
 
+describe('#1331 settleAttemptTries：回滚到本轮之前，不是清零', () => {
+  const CM = import('file://' + path.join(REPO, 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+
+  it('确知是环境 → 回滚到 triesBeforeAttempt', async () => {
+    const { settleAttemptTries } = await CM;
+    assert.equal(settleAttemptTries({ tries: 1, triesBeforeAttempt: 0 }, true), 0);
+  });
+
+  it('之前真试过的次数不许被抹掉', async () => {
+    const { settleAttemptTries } = await CM;
+    assert.equal(settleAttemptTries({ tries: 3, triesBeforeAttempt: 2 }, true), 2,
+      '清零会把「真试过 2 次」一起抹掉——那是往反方向错，这张 PR 就永远不会交人了');
+  });
+
+  it('不是环境 / 没依据 → 不动这个字段', async () => {
+    const { settleAttemptTries } = await CM;
+    assert.equal(settleAttemptTries({ tries: 3, triesBeforeAttempt: 2 }, false), null, '真失败不回滚');
+    assert.equal(settleAttemptTries({ tries: 3 }, true), null, '老账没有 triesBeforeAttempt：维持现值，不猜');
+    assert.equal(settleAttemptTries(null, true), null);
+    assert.equal(settleAttemptTries({ tries: 3, triesBeforeAttempt: 'x' }, true), null);
+    assert.equal(settleAttemptTries({ tries: 3, triesBeforeAttempt: -1 }, true), null);
+  });
+});
+
 describe('#1331 判别性实验：三次 ws 断连，老判据认输、新判据一次没烧', () => {
   it('同一张 PR 连撞三次断连后仍有满额重试预算', async () => {
     const { classifyDrainAttempt } = await RP;

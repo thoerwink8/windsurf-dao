@@ -2100,16 +2100,20 @@ export function requestRereview(action, { state, dryRun, say, run }) {
   // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = state.reworkDispatched[key];
-  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」。回环 ws 断连时这一轮
-  // 一个审官都没起过，记 tries 的后果是 3 次断连（每次不到 1 秒、彼此隔几分钟）就把这张 PR
-  // 判永久认输，判词还写成「叫了 3 次审官，判定仍是 0」——环境恢复了也没人管它。
-  // 判据取上一轮账上的 envUnreachable（结构化字段判出来的，见 judgeEnvFailure）。
-  const envLast = prev && prev.envUnreachable === true;
+  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」——回环 ws 断连时
+  // 这一轮一个审官都没起过。但写票这一刻还不知道审官起不起得来（drain 在下面才跑），
+  // 所以这里**照旧乐观记一次**，同时把记之前的值留在 triesBeforeAttempt：
+  // 等 drain 的真账回来，`rememberDrainFailure` 判出是环境就回滚到这个值。
+  //
+  // 为什么不改成「按上一轮的 envUnreachable 猜」：那样每次断连风暴的**第一轮**仍会烧掉
+  // 一次（判据落后一拍）。三次断连烧 1 次比烧 3 次好，但仍是错的——而这里有确定的事实
+  // 可用（本轮 drain 的回执），没有理由去猜。
+  const triesBefore = Number(prev?.tries) || 0;
   state.reworkDispatched[key] = {
     ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
-    tries: envLast ? (Number(prev.tries) || 0) : (Number(action.tries) || (Number(prev?.tries) || 0) + 1),
-    envUnreachable: envLast,
+    tries: Number(action.tries) || triesBefore + 1,
+    triesBeforeAttempt: triesBefore,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
   return drainReviewPending(action, { state, dryRun, say, run });
@@ -2137,9 +2141,10 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
  *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
  *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。
  *
- *  #1331：环境类失败（执行体自己够不着）**并原文、不动 tries**。原文要留下来
- *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），
- *  但不去加这个 PR 的重试次数——见 judgeEnvFailure 与 requestRereview 的 tries 那行。 */
+ *  #1331：环境类失败（执行体自己够不着）**并原文、回滚 tries**。原文要留下来
+ *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），但这一轮
+ *  一个审官都没起过，不该算这张 PR 试过——回滚到 requestRereview 记下的
+ *  `triesBeforeAttempt`。判据见 judgeEnvFailure。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
@@ -2155,9 +2160,25 @@ function rememberDrainFailure(state, action, payload) {
   state.reworkDispatched[key] = {
     ...prev,
     ...foldFailureStreak(prev, err),
-    // 写侧的唯一真相：这一轮起审官时执行体够不够得着。下一轮的 tries 判据读它。
+    ...(settleAttemptTries(prev, env) == null ? {} : { tries: settleAttemptTries(prev, env) }),
     envUnreachable: env,
   };
+}
+
+/**
+ * 这一轮该把 tries 回滚到几（#1331）。返回 `null` = 不动这个字段。
+ *
+ * 回滚只在**确知是环境**时发生，且只回滚到本轮开始前的值（`triesBeforeAttempt`），
+ * **不是清零**——清零会把「之前真试过 2 次」一起抹掉，那是往反方向错。
+ * 缺 `triesBeforeAttempt`（老账 / 别的写入路径写的）时维持现值，不猜。
+ */
+export function settleAttemptTries(prev, env) {
+  if (env !== true) return null;
+  // `prev` 必须显式判：`Number(null && x)` 是 **0**，不是 NaN——
+  // 拿它当「回滚到 0」就把「没有账」当成了「本轮之前一次都没试过」。
+  if (!prev || typeof prev !== 'object') return null;
+  const before = Number(prev.triesBeforeAttempt);
+  return Number.isInteger(before) && before >= 0 ? before : null;
 }
 
 export function drainPayloadOf(runResult) {
