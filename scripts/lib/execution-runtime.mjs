@@ -8,11 +8,12 @@ import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,Mirasim
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
-import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,EXECUTION_WAITING,isWaitingState,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
 import {matchExecutionProfiles} from './model-routing-json.mjs';
+import {resolveStartInteractionPolicy} from './acp-interaction-policy.mjs';
 
 // 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
 // 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
@@ -74,7 +75,7 @@ export function judgeExecutionCompletion(view) {
   const cancelled=['aborted','cancelled','canceled','stopped'].includes(phase);
   if(cancelled)return {status:'failed',reason:'session cancelled',confirmedBy:['session']};
   const pending=x=>x&&x.answered!==true&&!x.done&&!x.answeredAt&&!x.resolvedAt&&!['answered','cancelled','canceled','resolved','done'].includes(x.status);
-  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||['waiting_user','waiting_permission'].includes(phase))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
+  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||EXECUTION_WAITING.has(String(phase||'').toLowerCase()))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
   if(!phase)return {status:'unknown',reason:'session phase unavailable',confirmedBy:[]};
   if(view.error||snapshot.error||view.incomplete===true||snapshot.incomplete===true||['failed','error','incomplete','auth_required','unsupported_interaction'].includes(phase))return {status:'failed',reason:'session did not complete',confirmedBy:['session']};
   if(!TERMINAL.has(phase))return {status:'running',reason:'session active',confirmedBy:['session']};
@@ -163,6 +164,8 @@ export function createExecutionRuntime(opts={}) {
     if(!['acp','mirasim'].includes(selected)||!/^[a-z][a-z0-9-]*$/.test(actual.agent||''))throw new Error('invalid execution backend or agent');
     actual.route??=selected==='acp'?'local':'auto';
     if(!(['local','native','direct'].includes(actual.route)&&selected==='acp')&&!(['local','cloud','auto'].includes(actual.route)&&selected==='mirasim'))throw new Error('invalid execution route');
+    // #1174 T8b：ACP 热路默认挂 worktree 已知权限。显式策略不合并。闸装在 prepare，四个调用点绕不开。
+    if(selected==='acp') actual.interactionPolicy=resolveStartInteractionPolicy({backend:selected,workdir:actual.workdir,interactionPolicy:spec.interactionPolicy});
     if(spec.resumeFrom) {
       const prior=metadata(spec.resumeFrom);if(!prior)throw new Error('resume requires persistent execution metadata');
       for(const [name,value] of Object.entries({backend:selected,agent:actual.agent,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,route:actual.route,actualModel:p?.model||actual.model,workdir:actual.workdir})) {
@@ -327,7 +330,7 @@ export function createExecutionRuntime(opts={}) {
       if(held?.state==='pending')throw busy('launch is still awaiting acceptance','launch-pending');
       if(held?.state==='stopping'&&(automatic||held.cleanupOwner&&alive(held.cleanupOwner)))throw busy('session cleanup already owned');
       if(held?.cleanupVerified&&meta?.cleanupVerified)return {alreadyStopped:true};
-      if(automatic&&meta?.state==='waiting_user')throw busy('session is waiting for user');
+      if(automatic&&isWaitingState(meta))throw busy('session is waiting for user');
       const m=meta||{schemaVersion:1,recordKey:key,sessionKey:key,workdir:target,backend:String(key).startsWith('acp:')?'acp':'mirasim',state:'unknown',launchState:'accepted',taskCompleted:false,adopted:true};
       const clock=reservedClock(m,now());
       const next={...m,state:'stopping',cleanupVerified:false,cleanupToken,cleanupOwner:identity(process.pid),updatedAt:clock};

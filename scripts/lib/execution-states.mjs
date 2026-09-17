@@ -26,6 +26,21 @@ export const EXECUTION_FINISHED = new Set([
 export const EXECUTION_RESERVED = new Set(['pending', 'uncertain', 'stopping']);
 
 /**
+ * 等人：这一轮没死，是卡在必须人答的问题上。
+ * 归类仍是 live（占着树、不许差集重派），但活性侧绝不能拿「没推进」把它判成 silent——
+ * silent 会走 nudge / 停会话 / 清树，等于把问题扔掉再派一个新人（#1174 T8）。
+ */
+export const EXECUTION_WAITING = new Set(['waiting_user', 'waiting', 'waiting_permission']);
+
+/** 这条记录是不是「等人」。字符串或会话对象都行；读不出返回 false，不猜。 */
+export function isWaitingState(input) {
+  const st = typeof input === 'string'
+    ? String(input).trim().toLowerCase()
+    : sessionStateOf(input);
+  return st != null && st !== '' && EXECUTION_WAITING.has(st);
+}
+
+/**
  * `judgeExecutionCompletion()` 的 status 值域里，**「已结束」的那半边**。
  *
  * 为什么它也在正典里（2026-09-12 实咬）：那个函数把整张 `EXECUTION_FINISHED` 折叠成

@@ -149,6 +149,31 @@ linuxTest('ACP preallocates its durable key and preserves profile/account/model 
   const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});const r=await rt.startSession({...spec(f),agent:'cursor',model:profile.id,profileId:profile.id,provider:profile.provider,accountPoolId:profile.accountPoolId,route:'local'});
   assert.equal(a.calls.start[0].sessionKey,r.sessionKey);assert.match(r.sessionKey,/^acp:/);assert.equal(r.model,profile.model);assert.equal(r.actualVendor,'cursor');assert.equal(r.issue,1174);assert.equal(rt.profileForModel(profile.id).id,profile.id);
 });
+linuxTest('ACP start without policy attaches the canonical worktree interactionPolicy (#1174 T8b)',async t=>{
+  const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
+  await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture'});
+  const pol=a.calls.start[0].interactionPolicy;
+  assert.equal(pol.rules.length,1);
+  assert.equal(pol.rules[0].worktreeScope,true);
+  assert.equal(pol.rules[0].workdir,fs.realpathSync(f.workdir));
+  assert.equal(pol.rules[0].answer.grant,'once');
+  assert.deepEqual(pol.rules[0].toolKinds,['read','edit','execute']);
+  assert.equal(pol.rules.some(r=>r.method==='mcp/dao_ask_user_question'),false);
+});
+linuxTest('ACP start with explicit policy does not merge the default (#1174 T8b)',async t=>{
+  const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
+  const custom={rules:[{method:'mcp/dao_ask_user_question',answer:{answers:[{questionId:'choice',selectedOptionIds:['alpha']}]}}]};
+  await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture',interactionPolicy:custom});
+  assert.deepEqual(a.calls.start[0].interactionPolicy,custom);
+  const f2=fixture(t),empty=fakeRuntime(),rtEmpty=runtime(f2,{profiles:[profile],acpRuntime:empty});
+  await rtEmpty.startSession({profileId:profile.id,workdir:f2.workdir,prompt:'fixture',interactionPolicy:{rules:[]}});
+  assert.deepEqual(empty.calls.start[0].interactionPolicy,{rules:[]});
+});
+linuxTest('Mirasim start does not attach an ACP interactionPolicy (#1174 T8b)',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  await rt.startSession(spec(f));
+  assert.equal(m.calls.start[0].interactionPolicy,undefined);
+});
 linuxTest('profile route/account/backend/model overrides fail before launch',async t=>{
   const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
   for(const patch of [{route:'cloud'},{accountPoolId:'different'},{provider:'different'},{agent:'devin'},{backend:'mirasim'},{model:'other'}])await assert.rejects(rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture',...patch}));
@@ -327,7 +352,7 @@ linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
 linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/结构性够不着真执行体|live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
 
 test('nested Mirasim interactions and awaiting override apparent completion/incomplete',()=>{
-  const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');
+  const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');
 });
 test('completion rejects partial/empty observations; task acceptance is separate',()=>{
   assert.equal(judgeExecutionCompletion({phase:'done',text:'preview',partial:true}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:''}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:null,error:'unreadable'}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:'unfinished',incomplete:true}).status,'failed');assert.match(judgeExecutionCompletion({phase:'done',text:'turn ended'}).reason,/artifacts/);
