@@ -141,6 +141,11 @@ describe('dropped-deepseek-ops', () => {
         '--exclude-dir=node_modules',
         '--exclude-dir=.git',
         '--exclude-dir=tests',
+        // .claude/worktrees/ 下是**别的分支的工作副本**，不是本树现行文档。
+        // 2026-09-17 实咬：8 棵残留树里 skills-heal-home 带着 dao-1226 的旧 catalog
+        // 文件，扫描 A 把它当现行指针命中 → master 自身红 → 全仓推送被 land 挡住。
+        // 扫描面必须只含本树，否则「谁在这台机器上留过树」会变成判据的一部分。
+        '--exclude-dir=.claude',
         '.',
       ],
       { cwd: REPO, encoding: 'utf8' },

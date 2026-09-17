@@ -8,6 +8,7 @@ const REPO = path.resolve(__dirname, '..');
 const toUrl = (p) => 'file://' + p.replace(/\\/g, '/');
 const REAP = import(toUrl(path.join(REPO, 'scripts/lib/ephemeral-reap.mjs')));
 const CORE = import(toUrl(path.join(REPO, 'scripts/lib/commander-core.mjs')));
+const ASK = import(toUrl(path.join(REPO, 'scripts/lib/ask-gate.mjs')));
 const ADMIT = import(toUrl(path.join(REPO, 'scripts/lib/admission.mjs')));
 const CAP = import(toUrl(path.join(REPO, 'scripts/lib/ephemeral-capacity.mjs')));
 const CMD = () => import(toUrl(path.join(REPO, 'scripts/commander.mjs')));
@@ -284,9 +285,17 @@ describe('老单优先', () => {
 });
 
 describe('decide 产 reap-tree', () => {
+  async function clearAsk() {
+    return (await ASK).parsePolicy(JSON.stringify({
+      human_holds: ['独有红线词QQQ'],
+      confirm: { patch: { who: 'auto' }, minor: { who: 'admin:1' }, major: { who: 'admin:1' } },
+      version: { bump_by_commit_type: { fix: 'patch', feat: 'minor' } },
+    }));
+  }
   it('核绿可合的 PR，对应审官树无活会话 → 清单里有 reap-tree', async () => {
     const { decide } = await CORE;
     const r = decide({
+      askPolicy: await clearAsk(),
       github: {
         scanned: true,
         issues: [{
@@ -328,6 +337,7 @@ describe('decide 产 reap-tree', () => {
   it('同 issue 两棵工人树 + 一合一开 → decide 不清工人树', async () => {
     const { decide } = await CORE;
     const r = decide({
+      askPolicy: await clearAsk(),
       github: {
         scanned: true,
         issues: [{

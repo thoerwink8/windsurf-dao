@@ -357,12 +357,57 @@ export const REVIEW_ADMISSION_CHECKS = {
 };
 
 /**
+ * 这次失败是不是「执行体自己够不着」，而不是「这个 PR 叫不动审官」（#1331）。
+ *
+ * 病（2026-09-17 实咬，第三次现场）：回环 ws 断连让起审官会话当场失败。按现行账，这算
+ * **这个 PR 试过了一次**——3 次断连（每次不到 1 秒，彼此隔几分钟）就把它判「自动化认输，
+ * 永久交人」。可这三次里**没有一个审官被真正起过**：账记的是「环境抖了三次」，判词写的是
+ * 「叫了 3 次审官，判定仍是 0」。环境恢复后那张 PR 再没人管——重试预算已经烧光，也没有解冻口。
+ *
+ * 判据取**结构化字段**，不取症状词：`MirasimUnavailableError.code === 'unavailable'`，
+ * 由 `reviewer-mirasim.mjs` 的 start 阶段原样带进 attach 回执，这里只做两次解引用
+ * （results[0].attached.code）。词表判据（retry-verdict 的 TERMINAL/RETRYABLE）不在这里用：
+ * 那是「要不要再试」的判据，这是「这一次算不算试过」的判据，两者判错了后果不同
+ * ——memory `whitelist-fingerprints-cannot-find-unseen-failures`。
+ *
+ * 为什么不是「所有 start 阶段失败都不算」：顺位表里没有的模型、执行目录 unverified
+ * 这类**确定性拒绝**必须是尝试，否则每 20 分钟白试一次、永远不交人（#1237 那类）。
+ * 只有「执行体自己不可达」才是环境。
+ *
+ * 反向兜底：字段缺失（老回执 / 别的失败形态）一律判 false，照旧记一次尝试——宁可多烧一次，
+ * 也不要把真失败悄悄变成「没试过」而无限重试。
+ *
+ * @returns {{env: boolean, why: string, code: string|null, stage: string|null}}
+ */
+export function judgeEnvFailure(payload) {
+  const miss = { env: false, why: '没有「执行体不可达」的证据——按真失败记账', code: null, stage: null };
+  if (!payload || typeof payload !== 'object') return miss;
+  // 单张票的回执（consumeReviewPending 的返回）与整队的回执（drainReviewPending 的返回）都要能喂进来。
+  const one = Array.isArray(payload.results) && payload.results.length ? payload.results[0] : payload;
+  const att = one && typeof one === 'object' ? one.attached : null;
+  if (!att || typeof att !== 'object') return miss;
+  const code = att.code != null && att.code !== '' ? String(att.code) : null;
+  const stage = att.stage != null && att.stage !== '' ? String(att.stage) : null;
+  if (code === 'unavailable') {
+    return {
+      env: true, code, stage,
+      why: `起审官会话时执行体自己够不着（code=${code}${stage ? `，阶段 ${stage}` : ''}）`
+        + '——这一轮没起过审官，不算这个 PR 试过',
+    };
+  }
+  return { ...miss, code, stage };
+}
+
+/**
  * drain 算不算「试过」（#1125 审官红 1）。达上限 / 没查成拉 0 是背压，不是失败——
  * 记 tries 会让 45 分钟后 retry-drain --pr 把容量闸冲掉。测试把闸摘掉，满载必须被记成试过。
+ *
+ * #1331 再加一态：执行体自己不可达（回环 ws 断连）也不算试过——见 judgeEnvFailure。
  */
 export const DRAIN_ATTEMPT_CHECKS = {
   'held-not-try': true,
   'unscanned-not-try': true,
+  'env-not-try': true,
 };
 
 export function classifyDrainAttempt(payload, { _checks } = {}) {
@@ -387,6 +432,17 @@ export function classifyDrainAttempt(payload, { _checks } = {}) {
       return { countTry: true, reason: 'held-but-gate-off', held };
     }
     return { countTry: false, reason: held > 0 ? 'held' : 'empty', held };
+  }
+  // 排在 failed 之前：环境类失败**也是 ok:false**，但它不该消耗这个 PR 的重试预算。
+  // 判在 pulled 之后（ok:true 的路径根本走不到这里），只对失败那一支生效。
+  if (payload.ok !== true) {
+    const env = judgeEnvFailure(payload);
+    if (env.env) {
+      if (C['env-not-try'] !== true) {
+        return { countTry: true, reason: 'env-but-gate-off', drained, failed, held, envWhy: env.why };
+      }
+      return { countTry: false, reason: 'env-unreachable', drained, failed, held, envWhy: env.why };
+    }
   }
   return {
     countTry: true,
@@ -642,9 +698,19 @@ export function attachReceiptFromSpawn(spawned = {}) {
   if (spawned.error || (spawned.status !== 0 && spawned.status != null) || spawned.signal || !json || json.ok !== true) {
     const structured = json && json.error != null && json.error !== '' ? json.error : null;
     const fallback = String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`);
+    // #1331：`code` / `stage` 与 `error` 一样提到顶层。原来它们只活在 `json` 里，
+    // 于是判「这次失败是环境还是这个 PR 的事」得下钻两层，而 `json` 在非 JSON / 超时 /
+    // 被信号杀这三种路径上是 null——判据够不着就只能退回读错误文本，那正是词表判据
+    // （memory `whitelist-fingerprints-cannot-find-unseen-failures`）。
+    // 结构化字段判结构化的事：`code==='unavailable'` 由 MirasimUnavailableError 产生，
+    // 经 dao.mjs 的 fail(res.error, {...res}) 原样进 JSON。
+    const code = json && json.code != null && json.code !== '' ? String(json.code) : null;
+    const stage = json && json.stage != null && json.stage !== '' ? String(json.stage) : null;
     return {
       ok: false,
       error: structured == null ? fallback : (typeof structured === 'string' ? structured : String(structured)),
+      ...(code ? { code } : {}),
+      ...(stage ? { stage } : {}),
       json,
     };
   }
