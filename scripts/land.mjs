@@ -134,18 +134,37 @@ const mergedSet = new Set(
 const worktrees = parseWorktrees(git(['worktree', 'list', '--porcelain']).out);
 let occupied = worktrees.slice();
 
+const mergeFacts = new Map();
+const mergeFactsFor = (name) => {
+  const refs = git(['rev-parse', name, defaultBranch]);
+  if (refs.status !== 0) return { contributes: null, everHadContent: null };
+  const key = `${name}\n${refs.out}`;
+  if (!mergeFacts.has(key)) mergeFacts.set(key, collectBranchMergeFacts({ git, branch: name, defaultBranch }));
+  return mergeFacts.get(key);
+};
+
 let removeCount = 0;
 for (let i = 0; i < worktrees.length; i++) {
   const w = worktrees[i];
   const abs = resolve(w.path);
+  const protectedTree = i === 0
+    || abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase()
+    || isExecutorManaged(abs) || w.branch === defaultBranch || w.detached;
+  const status = protectedTree ? null : git(['status', '--porcelain'], { cwd: abs });
+  if (status && status.status !== 0) {
+    say(`[收工] 留树 ${w.path}：工作区状态没查成，本轮不动`);
+    unfinished = true;
+    continue;
+  }
+  const dirty = status ? status.out !== '' : false;
   const d = decideWorktreeRemove({
     branch: w.branch,
     merged: !!w.branch && mergedSet.has(w.branch),
     // squash 合并会产生全新 commit，原分支的提交在 master 里根本不存在，
     // 所以 `--merged` 这类按提交号比对的判据必然判「没合」——审官树因此每合一个 PR 漏拆一棵（#839）。
     // 按**内容**再问一次：合进去树变不变。变=真有没落地的活，不变=已经在里面了。
-    ...(w.branch ? (({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: w.branch, defaultBranch })) : { contributes: null, everHadContent: null }),
-    dirty: git(['status', '--porcelain'], { cwd: abs }).out !== '',
+    ...(w.branch && !protectedTree && !dirty ? (({ contributes, everHadContent }) => ({ contributes, everHadContent }))(mergeFactsFor(w.branch)) : { contributes: null, everHadContent: null }),
+    dirty,
     isMain: i === 0,
     isCurrent: abs.toLowerCase() === resolve(root).toLowerCase() || abs.toLowerCase() === cwd.toLowerCase(),
     isDefaultBranch: w.branch === defaultBranch,
@@ -163,14 +182,16 @@ for (let i = 0; i < worktrees.length; i++) {
 
 let deleteCount = 0;
 for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean)) {
+  const checkedOutAt = branchCheckedOutAt(occupied, name);
+  const protectedBranch = name === defaultBranch || name === branch || !!checkedOutAt;
   const d = decideBranchDelete({
     name,
     merged: mergedSet.has(name),
-    ...(({ contributes, everHadContent }) => ({ contributes, everHadContent }))(collectBranchMergeFacts({ git, branch: name, defaultBranch })),
+    ...(!protectedBranch ? (({ contributes, everHadContent }) => ({ contributes, everHadContent }))(mergeFactsFor(name)) : {}),
     isDefault: name === defaultBranch,
     isCurrent: name === branch,
     // 任何注册中的树占用即留支（含主树；主树那条另有 isDefault/isCurrent 先拦，说法不冲突）。
-    checkedOutAt: branchCheckedOutAt(occupied, name),
+    checkedOutAt,
   });
   if (!d.del) { if (!d.reason.includes('默认分支') && !d.reason.includes('当前分支')) say(`[收工] 留支 ${name}：${d.reason}`); continue; }
   deleteCount += 1;
