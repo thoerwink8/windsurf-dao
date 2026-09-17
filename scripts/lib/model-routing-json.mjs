@@ -172,6 +172,23 @@ export function usableReviewerOrder(order, { profiles, redIds } = {}) {
   };
 }
 
+/**
+ * 生产容量换人用的候选顺位。
+ *
+ * 与默认选型同一把尺（#1233）：执行目录读得到就只用 `usable`；
+ * 没读到（`unscanned`）不剔。`usable` 为空 = 一个能起的都没有，返回 `[]`，
+ * 调用方必须显式失败，不许退回 `unverified` 席位去 `resolveExecutionProfile`。
+ *
+ * 策略顺位纯函数（`nextReviewerAfter` / `planReviewerOnCapacityDeath`）仍认全表；
+ * 过滤只发生在生产接线把候选池塞进换人凭证的那一步。
+ */
+export function orderForCapacityFailover(policyOrder, { profiles } = {}) {
+  const list = Array.isArray(policyOrder) ? policyOrder.map(String) : [];
+  const r = usableReviewerOrder(list, { profiles });
+  if (r.unscanned) return list;
+  return r.usable;
+}
+
 function toLegacyModel(entry, roles) {
   const landing = landingOf(entry);
   const legacy = {
