@@ -259,6 +259,36 @@ linuxTest('#1350 reaped worktree does not excuse a vendor session that is still 
   const rec=records(f).find(x=>x.sessionKey===s.sessionKey);
   assert.equal(rec.cleanupVerified,false);assert.equal(rec.state,'stopping');
 });
+// 同一路径被后来者复用：租约文件归 B，A 的记录终态、树没了 → 原来永远 busy「session no longer owns」。
+linuxTest('#1350 reaped worktree whose lease moved to a later session: settle own record, leave the lease alone',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  m.views.set(a.sessionKey,{phase:'done',text:'delivered',toolCalls:[]});
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session',state:'stopped',cleanupVerified:true}));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(a.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.foreignLease,true);
+  const rec=records(f).find(x=>x.sessionKey===a.sessionKey);
+  assert.equal(rec.cleanupVerified,true);assert.equal(rec.state,'stopped');
+  assert.equal(JSON.parse(fs.readFileSync(file)).sessionKey,'codex:later-session','别人的租约一个字不碰');
+  assert.deepEqual(m.calls.stop,[a.sessionKey]);
+});
+linuxTest('#1350 foreign lease on an existing worktree is still busy',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session'}));
+  await assert.rejects(rt.stopSession(a.sessionKey),e=>e.detail?.busy===true);
+  assert.notEqual(records(f).find(x=>x.sessionKey===a.sessionKey).cleanupVerified,true);
+});
+linuxTest('#1350 foreign lease + reaped worktree but vendor still running: record stays',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session'}));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(a.sessionKey);
+  assert.equal(r.ok,false);assert.equal(r.uncertain,true);
+  assert.notEqual(records(f).find(x=>x.sessionKey===a.sessionKey).cleanupVerified,true);
+});
 linuxTest('#1350 missing snapshot on an existing worktree is still unknown, not terminal',async t=>{
   const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});
   const s=await rt.startSession(spec(f));
