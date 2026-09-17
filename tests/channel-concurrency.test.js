@@ -70,6 +70,20 @@ describe('channelKeyOf / legChannelKey —— 渠道键取自 target 池级前�
     assert.notEqual(legChannelKey(composer), legChannelKey(grok));
     assert.notEqual(legChannelKey(composer), 'mirasim');
   });
+  it('本地登录型按 native:<provider> 分渠道，执行侧=mirasim 不并进中继', async () => {
+    const { channelKeyOf, legChannelKey } = await CC;
+    assert.equal(channelKeyOf(L('xai-native', 'grok-4.6')), 'native:xai-native');
+    assert.equal(channelKeyOf(L('cursor-native', 'composer-2.5')), 'native:cursor-native');
+    assert.equal(legChannelKey({
+      供应商: 'xai-native', 执行侧: 'mirasim', 落地: L('xai-native', 'grok-4.6'),
+    }), 'native:xai-native');
+    assert.equal(legChannelKey({
+      供应商: 'cursor-native', 执行侧: 'mirasim', 落地: L('cursor-native', 'composer-2.5'),
+    }), 'native:cursor-native');
+    // 没落地时也按供应商，不许因执行侧掉进 mirasim
+    assert.equal(legChannelKey({ 供应商: 'xai-native', 执行侧: 'mirasim' }), 'native:xai-native');
+    assert.equal(legChannelKey({ 供应商: 'mirasim', 执行侧: 'mirasim' }), 'mirasim');
+  });
 });
 
 describe('resolveLegCap —— 不限 / 待填 / 有限三态分得开', () => {
@@ -681,6 +695,73 @@ describe('validateLegCaps —— dao-check 的判据（故意违规样本必须�
     assert.equal(r.ok, true);
     assert.deepEqual(r.bad, []);
     assert.ok(r.inService > 0, '一条在役腿都没扫到 ⇒ 本次等于没查');
+  });
+
+  it('同渠道误把「不限」和待填并在一起时，pending 模型仍不继承 Infinity', async () => {
+    const { buildChannelCaps, resolveModelChannel, judgeChannelForModel, CONSERVATIVE_CAP } = await CC;
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = buildChannelCaps(legs);
+    assert.equal(r.caps.mirasim, Infinity);
+    assert.equal(r.states.mirasim, 'unlimited');
+    const resolved = resolveModelChannel({ model: 'gpt-5.6-sol', legs, caps: r.caps });
+    assert.equal(resolved.cap, CONSERVATIVE_CAP);
+    const j = judgeChannelForModel({
+      model: 'gpt-5.6-sol', legs, caps: r.caps, states: r.states,
+      inFlight: { mirasim: 3 },
+    });
+    assert.equal(j.available, false);
+    assert.equal(j.reason, 'at-cap');
+    assert.equal(j.cap, CONSERVATIVE_CAP);
+    assert.equal(j.inFlight, 3);
+    const grok = judgeChannelForModel({
+      model: 'grok-4.6', legs, caps: r.caps, states: r.states,
+      inFlight: { mirasim: 3 },
+    });
+    assert.equal(grok.available, true);
+    assert.equal(grok.cap, Infinity);
+  });
+
+  it('混合渠道：决策层 pickLeg 也不因另一条腿的不限放行 pending', async () => {
+    const { buildChannelCaps, pickLeg, legAvailability, judgeChannelForModel, CONSERVATIVE_CAP } = await CC;
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = buildChannelCaps(legs);
+    assert.equal(r.caps.mirasim, Infinity);
+    const landing = { provider: 'mirasim' };
+    const landingOf = () => landing;
+    const inFlight = { mirasim: 3 };
+    const landingOnly = legAvailability(landing, { caps: r.caps, states: r.states, inFlight });
+    assert.equal(landingOnly.available, true, '落地适配器在不带 model 时仍读渠道 Infinity——这正是本红项的对照');
+    assert.equal(landingOnly.cap, Infinity);
+    const judged = judgeChannelForModel({
+      model: 'gpt-5.6-sol', legs, caps: r.caps, states: r.states, inFlight,
+    });
+    const viaLanding = legAvailability(landing, {
+      caps: r.caps, states: r.states, inFlight, model: 'gpt-5.6-sol', legs,
+    });
+    assert.equal(judged.available, false);
+    assert.equal(viaLanding.available, false);
+    assert.equal(viaLanding.reason, 'at-cap');
+    assert.equal(viaLanding.cap, CONSERVATIVE_CAP);
+    const queued = pickLeg({
+      order: ['gpt-5.6-sol'], landingOf, caps: r.caps, states: r.states, inFlight, legs,
+    });
+    assert.equal(queued.ok, false);
+    assert.equal(queued.queued, true);
+    assert.equal(queued.tried[0].reason, 'at-cap');
+    const spilled = pickLeg({
+      order: ['gpt-5.6-sol', 'grok-4.6'], landingOf, caps: r.caps, states: r.states, inFlight, legs,
+    });
+    assert.equal(spilled.ok, true);
+    assert.equal(spilled.picked.model, 'grok-4.6');
+    assert.equal(spilled.picked.cap, Infinity);
+    assert.equal(spilled.spilledFrom[0].model, 'gpt-5.6-sol');
+    assert.equal(spilled.spilledFrom[0].reason, 'at-cap');
   });
 
   // 2026-09-14 加的第三道：每个数与每个空格都要带出处。

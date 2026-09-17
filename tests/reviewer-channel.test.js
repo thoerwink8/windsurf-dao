@@ -65,6 +65,48 @@ describe('preflightReviewer：渠道满员剔除（#1145 审官侧运行时闭�
     assert.equal(r.chosen, 'gpt-5.6-sol');
   });
 
+  it('混合渠道：pending 审官不因同渠道「不限」腿被放行', async () => {
+    const { preflightReviewer } = await import(REVIEWER);
+    const mixedModels = [
+      { id: 'gpt-5.6-sol', provider: 'mirasim', cli_model: 'gpt-5.6-sol' },
+      { id: 'grok-4.6', provider: 'mirasim', cli_model: 'grok-4.6' },
+    ];
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = await preflightReviewer({
+      order: ['gpt-5.6-sol', 'grok-4.6'], models: mixedModels, workerId: null, policy: POLICY, probe: allGreen,
+      channelCaps: { caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
+      channelInFlight: { counts: { mirasim: 3 } },
+      legs,
+    });
+    assert.equal(r.stop, false);
+    assert.equal(r.chosen, 'grok-4.6');
+    assert.ok(r.notes.some(n => /渠道满员，剔除 gpt-5\.6-sol/.test(n)), `应剔除 pending 腿，notes=${JSON.stringify(r.notes)}`);
+    assert.ok(!r.probed.find(p => p.model === 'gpt-5.6-sol'));
+  });
+
+  it('混合渠道：顺位只剩 pending 且渠道 Infinity 仍排队', async () => {
+    const { preflightReviewer } = await import(REVIEWER);
+    const mixedModels = [
+      { id: 'gpt-5.6-sol', provider: 'mirasim', cli_model: 'gpt-5.6-sol' },
+    ];
+    const legs = [
+      { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+      { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+    ];
+    const r = await preflightReviewer({
+      order: ['gpt-5.6-sol'], models: mixedModels, workerId: null, policy: POLICY, probe: allGreen,
+      channelCaps: { caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
+      channelInFlight: { counts: { mirasim: 3 } },
+      legs,
+    });
+    assert.equal(r.queued, true);
+    assert.equal(r.stop, false);
+    assert.equal(r.chosen, null);
+  });
+
   it('同厂全剔仍是真无候选（stop 报帅），不被渠道层改判', async () => {
     const { preflightReviewer } = await import(REVIEWER);
     // workerId 与两腿同厂（都判 same_vendor）→ vendorFiltered 空 → stop:true，先于渠道层返回

@@ -1160,11 +1160,13 @@ export function postCommentOnce({
 // @param {object} [args.channelCaps]   #1145 渠道容量快照 { caps:{ch:n}, states } —— 缺则渠道剔除 inert
 // @param {object} [args.channelInFlight] #1145 渠道在途快照 { counts:{ch:n} }（或直接的 counts 对象）
 // @param {Set|string[]} [args.channelExcluded] #1145 本轮已 429 的渠道
+// @param {Array} [args.legs]  路由表腿节；有则按本模型有效上限剔，pending 不继承同渠道 Infinity
 // @returns {Promise<{ok,stop,queued?,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
 export async function preflightReviewer({
   order = [], models = [], workerId = null, noPreflight = false, dispatchId = null,
   probe, policy, availabilityResult, now = new Date(), root, home,
   channelCaps = null, channelInFlight = null, channelExcluded = null,
+  legs = null,
 } = {}) {
   const byId = new Map((models || []).map(m => [m.id, m]));
   // 同厂闸：顺位里与工人同厂的当场剔除，不放宽。
@@ -1203,7 +1205,10 @@ export async function preflightReviewer({
     const kept = [];
     const dropped = [];
     for (const cand of vendorFiltered) {
-      const av = legAvailability(cand.landing, { caps, states, inFlight, excluded });
+      const av = legAvailability(cand.landing, {
+        caps, states, inFlight, excluded,
+        model: cand.id, legs, models,
+      });
       // 认不出渠道（no-channel）不据渠道剔——本闸只拦「已满员/本轮429」，其余保留。
       if (av.available || av.reason === 'no-channel') { kept.push(cand); continue; }
       if (av.reason === 'at-cap' || av.reason === 'excluded-429') {
