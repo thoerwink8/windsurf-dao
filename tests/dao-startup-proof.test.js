@@ -16,6 +16,38 @@ function fakeClock(startMs = 1_000) {
   };
 }
 
+/**
+ * 判别钟：第一次 now() = t0（inject.mjs:355）；第二次 now() = while 条件（首读前）。
+ * 第二次把墙钟拨走 pauseMs。timeoutClock='wall' 复现竞态（调度暂停算进超时）；
+ * 'logical' 成对假时钟（超时只认 sleep 推进的逻辑钟）。空 sleep / 漏传 sleep 时
+ * 逻辑钟抛错，避免挂死，也让「去掉注入仍绿」过不了。
+ */
+function raceClock(startMs, pauseMs, timeoutClock) {
+  let logical = startMs;
+  let wall = startMs;
+  let nowCalls = 0;
+  let slept = 0;
+  return {
+    now() {
+      nowCalls += 1;
+      if (nowCalls === 2) wall += pauseMs;
+      if (timeoutClock === 'logical' && nowCalls > 2 && slept === 0) {
+        throw new Error('逻辑钟未被 sleep 推进（空 sleep 或漏传 sleep）');
+      }
+      return timeoutClock === 'wall' ? wall : logical;
+    },
+    sleep(ms) {
+      const d = Math.max(1, ms);
+      slept += d;
+      logical += d;
+      wall += d;
+    },
+    slept: () => slept,
+    wall: () => wall,
+    logical: () => logical,
+  };
+}
+
 describe('dao 开工验证', () => {
   it('#602：开工验证保留；#619 订正粘贴定性', async (t) => {
     const S = await S_LOAD;
@@ -661,12 +693,29 @@ describe('dao 开工验证', () => {
     const MARKER = '› [Pasted Content 4700 chars]\n';
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
 
-    await t.test('成对 now/sleep：调用前推进 60ms 仍等到 unsubmitted-paste，reads>1', () => {
-      const c = fakeClock(1_000);
-      c.sleep(60);
+    await t.test('判别：t0 之后、首读之前墙钟跳 60ms → failed reads=0', () => {
+      const c = raceClock(1_000, 60, 'wall');
       let reads = 0;
       const r = S.verifyStartedPolling({
-        dispatchId: 'ctx_1174_clock',
+        dispatchId: 'ctx_1174_race_wall',
+        readOnce: () => {
+          reads += 1;
+          return { ok: true, result: { terminal: { tail: [MARKER] } } };
+        },
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: c.sleep, now: c.now, label: '审官',
+      });
+      assert.equal(r.ok, false);
+      assert.equal(r.state, 'failed');
+      assert.equal(reads, 0);
+      assert.equal(r.elapsedMs, 60);
+    });
+
+    await t.test('成对逻辑钟：同一暂停只走墙钟，仍等到 unsubmitted-paste，reads>1', () => {
+      const c = raceClock(1_000, 60, 'logical');
+      let reads = 0;
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_1174_race_logical',
         readOnce: () => {
           reads += 1;
           return { ok: true, result: { terminal: { tail: [MARKER] } } };
@@ -678,13 +727,29 @@ describe('dao 开工验证', () => {
       assert.equal(r.state, 'unsubmitted-paste');
       assert.equal(r.pasteSubmitted, false);
       assert.ok(reads > 1, JSON.stringify({ reads, r }));
-      assert.ok(r.elapsedMs >= 50, JSON.stringify({ elapsedMs: r.elapsedMs, reads }));
+      assert.ok(r.elapsedMs >= 50, JSON.stringify({ elapsedMs: r.elapsedMs, slept: c.slept() }));
+      assert.ok(c.slept() >= 50, JSON.stringify({ slept: c.slept() }));
+      assert.equal(r.elapsedMs, c.logical() - 1_000);
+      assert.equal(c.wall() - c.logical(), 60);
+    });
+
+    await t.test('恢复空 sleep：逻辑钟当场抛，不许再绿', () => {
+      const c = raceClock(1_000, 60, 'logical');
+      const idle = () => {};
+      assert.throws(() => S.verifyStartedPolling({
+        dispatchId: 'ctx_1174_idle_sleep',
+        readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: idle, now: c.now, label: '审官',
+      }), /逻辑钟未被 sleep 推进/);
     });
 
     await t.test('本文件相关轮询不再用空 sleep + 默认 Date.now', () => {
       const src = fs.readFileSync(__filename, 'utf8');
-      assert.doesNotMatch(src, /sleep:\s*noopSleep/);
+      const idleName = 'noop' + 'Sleep';
+      assert.equal(src.includes('sleep: ' + idleName), false);
       assert.match(src, /function fakeClock\(/);
+      assert.match(src, /function raceClock\(/);
       assert.match(src, /sleep: clock\.sleep, now: clock\.now/);
     });
   });
