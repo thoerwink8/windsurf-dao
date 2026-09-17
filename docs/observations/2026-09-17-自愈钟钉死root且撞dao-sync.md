@@ -1,5 +1,6 @@
 ---
-status: new
+status: done
+处置: "#1408（systemd 单元合了 23 小时没上机：测试只读仓内文件，改字符串就绿）"
 ---
 
 # 机制巡检：#1226 合进 master 23 小时了，活着的 root 自愈钟仍钉 `DAO_SKILL_HOMES=/root`，OnCalendar 仍是会跟 dao-sync 撞点的 `*:06/5`
