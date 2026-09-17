@@ -133,14 +133,19 @@ export function matchExecutionProfiles(spec, profiles) {
  * 没读到执行目录时**不剔任何人**（没有依据），但 `unscanned` 要说出来——「没读到」和
  * 「读到了、全都可用」必须分得开。
  *
+ * 2026-09-17 再补一层（#1342）：**问熔断器**。顺位只问执行目录的静态可用性，而一条腿可以
+ * 目录里 available、真实 turn 成功率 25%（relay 那天）。判红名单由调用方用 model-admission
+ * 的 healthRedIds 算好传进来（同一个判据，不在这里再抄一份）；没传 = 不据此剔（没依据）。
+ *
  * @param {string[]} order 审官顺位（reviewerSelectOrder 的输出）
- * @param {{profiles?: Array}} opts profiles 来自 loadExecutionProfiles()
+ * @param {{profiles?: Array, redIds?: Iterable<string>}} opts profiles 来自 loadExecutionProfiles()；redIds 来自 healthRedIds()
  * @returns {{usable: string[], skipped: Array<{id: string, why: string}>, allDead: boolean, unscanned?: string}}
  */
-export function usableReviewerOrder(order, { profiles } = {}) {
+export function usableReviewerOrder(order, { profiles, redIds } = {}) {
   const list = Array.isArray(order) ? order.map(String) : [];
   const catalog = Array.isArray(profiles) ? profiles : null;
   if (!catalog) return { usable: list, skipped: [], allDead: false, unscanned: '执行目录没读到（没查成：不据此剔除任何顺位）' };
+  const red = redIds ? new Set([...redIds].map(String)) : null;
   const usable = [];
   const skipped = [];
   for (const id of list) {
@@ -163,7 +168,29 @@ export function usableReviewerOrder(order, { profiles } = {}) {
     }
     usable.push(id);
   }
-  return { usable, skipped, allDead: usable.length === 0 && list.length > 0 };
+  // 第二层：健康表/熔断器判红（#1342）。只对**目录里起得来**的那些判——目录停用/未验的
+  // 已经在上面剔了，不算进「全红」的分母。
+  //
+  // 全红即旁路（Portkey circuit breaker 的「all targets OPEN → bypass」）：判红名单会把起得来的
+  // 顺位剔空时**不剔**，但把这件事说出来。理由：一条 25% 成功率的腿比「没有审官」强——盘面
+  // 冻住是 2026-09-17 花一天解掉的病，不许由这层再造一次；重试预算（3 次 + 判据版本）在给浪费兜底。
+  // 只剔到剩一个不算全红——剩那个就派。
+  let breakerBypassed;
+  if (red && red.size > 0 && usable.length > 0) {
+    const notRed = usable.filter((id) => !red.has(id));
+    if (notRed.length === 0) {
+      breakerBypassed = `审官顺位 ${usable.join('/')} 全部被健康表/熔断器判红——全红即旁路，照顺位派，不让盘面因为没审官冻住`;
+    } else {
+      for (const id of usable) {
+        if (red.has(id)) skipped.push({ id, why: '健康表/熔断器判红（真实 turn 失败率或探针红），本轮不派它当审官' });
+      }
+      usable.splice(0, usable.length, ...notRed);
+    }
+  }
+  return {
+    usable, skipped, allDead: usable.length === 0 && list.length > 0,
+    ...(breakerBypassed ? { breakerBypassed } : {}),
+  };
 }
 
 function toLegacyModel(entry, roles) {

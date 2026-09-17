@@ -84,14 +84,21 @@ export const NATIVE_LOGIN_FILES = {
   'devin-native': '.local/share/devin/credentials.toml',
 };
 
+/** mirasim 起的 codex 会话的传输腿 key（与 lib/turn-outcomes.mjs 的 RELAY_CODEX_TARGET 同值，那边不 import 这边以免环）。 */
+export const RELAY_CODEX_TARGET = 'relay:codex';
+
 /**
  * 落地 → 健康表 target key（两仓共用契约，见 issue #842）。
- * gw:  `gw:<组短名>/<模型>`；codex 直连 / 现役 GPT relay： `direct:codex@pqapi/responses`。
+ * gw:  `gw:<组短名>/<模型>`；codex 直连 pqapi： `direct:codex@pqapi/responses`；
+ * 现役 GPT relay（mirasim 注入代理走 relay.mirasim.ai）： `relay:codex`。
  * 本地登录型： `native:<provider>`（只够验凭据文件在不在，见 NATIVE_LOGIN_FILES）。
  * 认不出的 provider → null（调用方据此判 unscanned）。
  *
- * `mirasim-relay` 与旧 `gpt` 共用这一条唯一 target：周期探针仍写这个 key，
- * 网关退役只改了选型落地的 provider 字符串，健康/熔断闸不能跟着摘掉。
+ * `mirasim-relay` 原来与旧 `gpt` **共用** pqapi 那把 key（2026-09-12 网关退役时的权宜：
+ * 「只改了落地字符串，闸不能跟着摘掉」）。2026-09-17 实咬：同机同时段 pqapi 探针 green、
+ * 熔断 closed，而 relay 上的生产 turn 2 ok / 6 error——两条传输腿一点关系都没有，
+ * 共用 key 等于拿 A 的体温判 B 的病。现在 relay 自己一把 key；它没有合成探针，
+ * 健康表里查不到 = unknown（不拦），成败由真实 turn 结果喂熔断器（ingest-turns）。
  */
 export function probeTargetOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
@@ -102,7 +109,8 @@ export function probeTargetOf(landing) {
     if (!parts) return null;
     return `gw:${groupShort(parts.group)}/${parts.model}`;
   }
-  if (provider === 'gpt' || provider === 'mirasim-relay') {
+  if (provider === 'mirasim-relay') return RELAY_CODEX_TARGET;
+  if (provider === 'gpt') {
     return 'direct:codex@pqapi/responses';
   }
   if (NATIVE_LOGIN_FILES[provider]) {

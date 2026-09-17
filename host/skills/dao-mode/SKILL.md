@@ -80,7 +80,9 @@ node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs standby --decide "选型；改
 node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs selfie --what "拍了什么" --category "归为哪一类" --basis "依据授权清单哪一条"
 ```
 
-登记是「可追溯」不是「可判定」：分类对不对仍是你自己说了算，但必须显式写出来，用户退出值守时能逐条对账。该不该问退出的判定不需要你记得——UserPromptSubmit hook 每轮把**结论**注入上下文（阈值默认：值守满 8 小时 / 用户发满 3 条消息 / 连续偏离 2 次，环境变量 `DAO_EXIT_HOURS` / `DAO_EXIT_MESSAGES` / `DAO_EXIT_OFFTOPIC` 可配）。
+登记是「可追溯」不是「可判定」：分类对不对仍是你自己说了算，但必须显式写出来，用户退出值守时能逐条对账。该不该问退出的判定不需要你记得——UserPromptSubmit hook 每轮把**结论**注入上下文。
+
+值守主判据看盘面（指挥官每轮覆盖写 `~/.dao/board-stuck.json`）：新鲜快照上「连续停滞 6 轮」或有对象挂着「等用户」才问。盘面超过 90 分钟、读不到、读坏（字段缺失 / 非法类型 / 负数）一律当没查成，退回旧兜底：值守满 8 小时 / 用户发满 3 条消息。连续偏离 2 次与盘面无关，两套都保留。环境变量 `DAO_EXIT_STALLED`（默认 6）/ `DAO_EXIT_HOURS` / `DAO_EXIT_MESSAGES` / `DAO_EXIT_OFFTOPIC` 可配。
 
 ### 退出值守
 

@@ -147,6 +147,19 @@ function inspectBreakerFields(obj, prefix) {
     const h = obj.halfOpenProbes;
     if (!Number.isInteger(h) || h < 1 || h > 5) problems.push(`${p}.halfOpenProbes 越界（要整数 1~5，实际 ${obj.halfOpenProbes}）`);
   }
+  // #1342：真实 turn 结果喂熔断的两道门（provider-breaker 的 TURN_OUTCOME_DEFAULTS）。
+  if (obj.turnMinRequests !== undefined) {
+    const n = obj.turnMinRequests;
+    if (!Number.isInteger(n) || n < 1 || n > 500) problems.push(`${p}.turnMinRequests 越界（要整数 1~500，实际 ${obj.turnMinRequests}）`);
+  }
+  if (obj.turnFailRatePct !== undefined) {
+    const r = Number(obj.turnFailRatePct);
+    if (!Number.isFinite(r) || r < 1 || r > 100) problems.push(`${p}.turnFailRatePct 越界（要 1~100，实际 ${obj.turnFailRatePct}）`);
+  }
+  if (obj.turnWindowHours !== undefined) {
+    const w = Number(obj.turnWindowHours);
+    if (!Number.isFinite(w) || w < 1 || w > 168) problems.push(`${p}.turnWindowHours 越界（要 1~168，实际 ${obj.turnWindowHours}）`);
+  }
   return problems;
 }
 

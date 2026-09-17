@@ -424,9 +424,12 @@ orca account add --help
 #   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
-# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal.*）
-#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；本单元每 5 分钟合并式接回，不删 mirasim 自有 skill
-#   验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间；dao-check ㉚ 绿（被劫红、没装 SKIP）
+# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal{,-root}.*）
+#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；两只单元每 5 分钟合并式接回，不删 mirasim 自有 skill
+#   dao-skills-heal.timer 跑在 User=orca（修够得着的家）；dao-skills-heal-root.timer 跑在 User=root
+#   （按 passwd 枚举每个有 .claude/ 的家；跑的是装到 /usr/local/lib/dao-skills-heal 的副本——以 root
+#   解释仓内脚本等于给每个能写仓的执行体一条 root 通道）。只有 .mirasim/ 的家不纳入。
+#   验：systemctl list-timers 里两只 timer 的 NEXT 都必须是时间；dao-check ㉚ 对每个有 .claude/ 的家都绿（被劫红、没装 SKIP）
 # mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
 #   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
 #   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
@@ -629,7 +632,16 @@ mirasim 每次启动可能把装载面劫成 `~/.claude/skills → ~/.mirasim/sk
 sudo bash scripts/install-skills-heal.sh
 ```
 
-验：`systemctl list-timers` 里 `dao-skills-heal.timer` 的 NEXT 必须是时间。故意把装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
+装两只钟：orca 修自己够得着的家；root 按 passwd 枚举本机每个有 `.claude/` 的家并修（不写死用户名、不钉 `DAO_SKILL_HOMES`）。判据 `scripts/lib/skill-homes.mjs`：**有 `.claude/` 才纳入**。只有 `.mirasim/`、没有 `.claude/` 的家不纳入本检查，也不凭空建 `.claude/skills`。
+
+| 单元 | 跑在 | 守 |
+|---|---|---|
+| `dao-skills-heal.timer` | `User=orca` | 该身份够得着的家（通常 `/home/orca`），跑仓内脚本 |
+| `dao-skills-heal-root.timer` | `User=root` | 本机每个有 `.claude/` 的家（passwd 清单），跑 `/usr/local/lib/dao-skills-heal` 的安装副本 |
+
+为什么是两只（2026-09-13 实咬）：只有 orca 那只时，`dao-check`（root 会话跑的，看 `/root`）报了三天「装载面被劫」，而自愈钟每 5 分钟对 orca 那份说「无事可做」——两边各修各看的家，合起来没人管。root 的家 700，orca 身份够不着，只能以 root 修。
+
+验：`systemctl list-timers` 里两只 timer 的 NEXT 都必须是时间。故意把某个装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
@@ -727,6 +739,18 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 装出来的 bin 名不等于包名，装完 `ls $bin\*.cmd` 对一眼再写路径
 （`@playwright/mcp` → `playwright-mcp.cmd`，`chrome-devtools-mcp` → 同名）。
 
+`fetch` 是 Python 包，同样别用 `uvx`（那也是现场解包），钉法：
+
+```powershell
+uv tool install mcp-server-fetch          # 落 ~\.local\bin\mcp-server-fetch.exe
+claude mcp add fetch -s user -- "$env:USERPROFILE\.local\bin\mcp-server-fetch.exe"
+```
+
+它默认**遵守 robots.txt**：模型主动发起的抓取撞上 disallow 会直接失败，看起来像"又断了"，
+真因在站点规则不在链路。确需绕过时给命令加 `--ignore-robots-txt`（这是放宽站点声明，按需再说）。
+另有一条无害告警 `A working NPM installation was not found`：readabilipy 在 Windows 上找不到
+`npm.cmd`，退回纯 Python 提取，正文照样出得来。
+
 两个执行坑（2026-09-01 本机各栽一次）：
 
 - **`claude mcp add` 必须在 PowerShell 里跑，别在 Git Bash**。Git Bash 会把 `/c`
@@ -756,6 +780,38 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 现场解包型就报 `mcp-slow-boot`（只报不修——那是用户自己的文件）。测单个 server 的启动耗时别用
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
+
+## 13a. 查资料的本机搜索 CLI（ddgs）——每台机器都要装
+
+内置 WebSearch 跑在 API 上游，慢或断的时候本机一点办法没有。`ddgs` 走本机出网、不碰那条链，
+所以 docs-lookup skill 把它定为搜索的默认路。**两台机器都装**：
+
+```bash
+uv tool install ddgs            # 落 ~/.local/bin/ddgs(.exe)
+ddgs text -q "关键词" -m 5 -nc
+```
+
+Linux 上若没有 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`（以服务用户跑，别用 root——
+root 会在服务用户家目录里留下 root 属主文件）。
+
+- **`~/.local/bin` 不在 PATH 上**（两台机器都不在，`uv tool install` 装完自己会警告这件事）。
+  调用写全路径，或跑一次 `uv tool update-shell`。
+- **`-o json` 是存文件不是打印**，会在当前目录落 `text_<query>_<时间戳>.json`；在共用主树里跑等于
+  留垃圾（2026-09-17 实咬，落进了仓根）。要机器读就解析 stdout。
+- `-b google` 两台机器都回 0 条，别用。
+- **验**：`node scripts/onboard.mjs --dry-run` 会报 `search-cli-missing`（只报不修，装包要出网）。
+
+后端实测（2026-09-17，同一句查询，`-m 3`）：
+
+| 后端 | Windows 帅位 | 法国 VPS |
+|---|---|---|
+| `brave` | **1.36s** | 2.28s |
+| `duckduckgo` | 3.26s | **1.74s** |
+| `bing` | 3.86s | 5.54s |
+| `google` | 0 条 | 0 条 |
+| 默认 `auto` | 7.7s | 3.34s |
+
+哪家最快按机器不同，别把某台的数字当通例；不确定就用默认 `auto`，它会自己换家。
 
 ## 13b. Linux 服务器上的浏览器（2026-09-06 装，Ubuntu 24.04 实测）
 

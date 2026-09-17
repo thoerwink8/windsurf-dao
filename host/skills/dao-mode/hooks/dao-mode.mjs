@@ -24,11 +24,13 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shouldAskExit, EXIT_DEFAULTS } from './should-ask-exit.mjs';
+import { readBoard } from './read-board.mjs';
 
 // ── 落点 ────────────────────────────────────────────────────────────
 // 默认 ~/.claude/state.json（用户级、跨会话跨工作区唯一）。测试与实证用 DAO_STATE_FILE 覆写。
 
 const STATE_FILE = process.env.DAO_STATE_FILE || join(homedir(), '.claude', 'state.json');
+
 
 // 注入文本里要给 AI 一条能照抄的记账命令，所以 SELF 要是**装载路径**而不是 symlink 解析后的仓内路径。
 // 宿主跑插件 hook 时会给 CLAUDE_PLUGIN_ROOT；拿不到就退回自己的真实路径（直接手跑 CLI 的情形）。
@@ -170,10 +172,12 @@ function renderInjection(doc, prompt) {
     hours,
     messages: doc.userMessages || 0,
     offTopicStreak: doc.offTopicStreak || 0,
+    board: readBoard(),
     thresholds: {
       hours: numEnv('DAO_EXIT_HOURS', EXIT_DEFAULTS.hours),
       messages: numEnv('DAO_EXIT_MESSAGES', EXIT_DEFAULTS.messages),
       offTopic: numEnv('DAO_EXIT_OFFTOPIC', EXIT_DEFAULTS.offTopic),
+      stalled: numEnv('DAO_EXIT_STALLED', EXIT_DEFAULTS.stalled),
     },
   });
   if (verdict.ask) {

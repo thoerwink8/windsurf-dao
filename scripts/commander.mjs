@@ -31,7 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
-  classifyDrainAttempt,
+  classifyDrainAttempt, judgeEnvFailure,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -44,8 +44,9 @@ import { attributedIssueNumber } from './lib/close-issue.mjs';
 import {
   loadLedgerContext, writeJobClosed, workerJobId, reviewerJobId, beijingIsoFrom,
   findJobDispatch, mergedByForClosed, verdictStatsFromReviews, scopeOverridesFor,
+  isDuplicateWriteError,
 } from './lib/ledger-job.mjs';
-import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
+import { canReleaseApprovedDraft, canReleaseApprovedManual, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
   decide, heartbeatDue, hasLiveAction, countsAsProgress, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   rereviewKey, epochOf, foldFailureStreak,
@@ -64,13 +65,14 @@ import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/l
 import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
-import { loadBreaker } from './lib/provider-health.mjs';
+import { loadBreaker, probeTargetForModel } from './lib/provider-health.mjs';
 import { healthRedIds } from './lib/model-admission.mjs';
+import { readTurnEvents, pairTurnEvents, summarizeTurnOutcomes, turnTargetOf } from './lib/turn-outcomes.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
-import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { runBreakerCommand, resolveTurnPolicy } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
@@ -86,6 +88,7 @@ import {
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
+import { writeEvent, nextSeq } from './lib/event-writer.mjs';
 import { desiredFromEvents } from './lib/session-reconcile.mjs';
 import { acceptSessionsFrame } from './mirasim-sessions.mjs';
 import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
@@ -112,6 +115,8 @@ const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
 const CAPACITY_SAMPLE_PATH = process.env.DAO_CAPACITY_SAMPLES
   || join(homedir(), '.dao', 'ephemeral-lifecycle', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
+// 值守提问闸的主判据落点（#1287）。读侧是 dao-mode 的 UserPromptSubmit hook。
+const BOARD_STUCK_PATH = process.env.DAO_BOARD_FILE || join(homedir(), '.dao', 'board-stuck.json');
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
 const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projects/windsurf-dao';
@@ -279,15 +284,31 @@ function scanSessions() {
  * 全量读（readLedgerEvents），不用 10 分钟去重窗的索引——差集要的是「现在该在的人」，
  * 裁掉 10 分钟前的未结派工等于把死工人洗成「账上没有」。
  */
-function scanDesiredJobs() {
+function readHomeLedger() {
   let dir;
   try { dir = ensureLocalLedger({ root: ROOT }).dir; }
-  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, items: [] }; }
-  const listed = readLedgerEvents(dir);
-  if (listed.unscanned) {
-    return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
+  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, events: [] }; }
+  return readLedgerEvents(dir);
+}
+
+function scanDesiredJobs(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { unscanned: true, error: src.error || '事件账没查成', items: [] };
   }
-  return desiredFromEvents(listed.events);
+  return desiredFromEvents(src.events);
+}
+
+/** 合并侧要的派工 merge-policy：未结/已结的 job.dispatch 都要，不能只用期望集。 */
+function scanDispatchLedger(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { scanned: false, error: src.error || '事件账没查成', events: [] };
+  }
+  return {
+    scanned: true,
+    events: (src.events || []).filter((e) => e && e.type === 'job.dispatch'),
+  };
 }
 
 /**
@@ -364,6 +385,40 @@ function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
   } catch { /* 样本写不进不挡本轮判定 */ }
+}
+
+/**
+ * 每轮覆盖写「盘面卡没卡」，给值守提问闸当主判据（2026-09-15 用户拍板）。
+ *
+ * 为什么另开一个小文件，而不是让 dao-mode 的 hook 去读 situation-*.json：
+ * dao-mode 是**跨项目**的全局 hook，不该知道 windsurf-dao 的内部状态长什么样。
+ * 这里约定一份项目无关、字段极少的落点，写坏了也只影响提问闸的主判据，
+ * 读侧会退回时长/消息数兜底。
+ *
+ * 只写两个量：
+ *   stalledRounds —— 连续多少轮动作摘要完全相同（= 磨盘轮数）
+ *   waitingUser   —— 挂着「卡死/等用户」的 PR 数（只有人能解的那些）
+ *
+ * **每轮都写**，哪怕一切正常（写 0）。不写的后果是文件停在最后一次的好消息上，
+ * 读侧会把「编排已经不跑了」读成「盘面很健康」——所以读侧还配了过期判定。
+ */
+function writeBoardStuck({ situation, digestStreak, log, file = BOARD_STUCK_PATH } = {}) {
+  const gh = (situation && situation.github) || {};
+  // 没扫到 GitHub 时 waitingUser 记 null，不记 0——0 是「查过，没有」，null 是「没查成」。
+  const waitingUser = gh.scanned === true && Array.isArray(gh.prs)
+    ? gh.prs.filter((p) => (p?.labels || []).some((l) => (l?.name || l) === WAITING_USER_LABEL)).length
+    : null;
+  const row = {
+    at: (situation && situation.at) || new Date().toISOString(),
+    stalledRounds: Number(digestStreak) || 0,
+    waitingUser,
+  };
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(row, null, 2), 'utf8');
+  } catch (e) {
+    if (log) log.push(`  盘面卡况没写成：${String(e.message || e).slice(0, 60)}`);
+  }
 }
 
 /**
@@ -520,10 +575,38 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
     const inj = { now, policy: policy.breaker, hubAsk };
     const health = runBreakerCommand({ action: 'ingest-health' }, inj);
     const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
-    return { ok: true, health, stall };
+    // #1342：第三路信号——真实 turn 结果。探针一分钟一针、真流量一小时几十条；
+    // 2026-09-17 实咬：pqapi 探针 green、熔断 closed，同时 relay 上生产 turn 2 ok / 6 error。
+    const turns = runBreakerCommand({ action: 'ingest-turns' }, { ...inj, summarizeTurns: summarizeTurnsFromHome });
+    return { ok: true, health, stall, turns };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
+}
+
+/**
+ * 真实 turn 结果 → 每条腿的成败汇总（给 breaker ingest-turns 注入）。
+ * 数据源是 mirasim 的分析事件（只读），key 映射与健康表同一套（probeTargetForModel）。
+ * 读不到一律 unscanned：熔断器据此什么都不动。
+ */
+export function summarizeTurnsFromHome({ home = homedir(), now = Date.now(), policy } = {}) {
+  const windowHours = resolveTurnPolicy(policy).turnWindowHours;
+  const sinceMs = now - windowHours * 3600 * 1000;
+  const read = readTurnEvents({
+    home, sinceMs,
+    readdir: (d) => readdirSync(d),
+    readFile: (p, enc) => readFileSync(p, enc),
+    stat: (p) => statSync(p),
+  });
+  if (!read.ok) return { unscanned: true, why: read.why, summary: {}, files: [] };
+  let models = null;
+  try { models = modelsFromJson(loadRoutingJsonRaw()); } catch { models = null; }
+  const turns = pairTurnEvents(read.events);
+  const summary = summarizeTurnOutcomes(turns, {
+    sinceMs,
+    targetOf: (t) => turnTargetOf(t, { models, probeTargetForModel }),
+  });
+  return { unscanned: false, summary, files: read.files, turns: turns.length };
 }
 
 /** 载体（agent CLI）版本漂移：读进态势，好让「某条腿突然不好使」时有第一条线索。
@@ -640,7 +723,9 @@ function buildSituation({ state } = {}) {
   const stall = scanStall();
   const sessions = scanSessions();
   const lease = scanLease();
-  const desiredJobs = scanDesiredJobs();
+  const ledgerListed = readHomeLedger();
+  const desiredJobs = scanDesiredJobs(ledgerListed);
+  const dispatchLedger = scanDispatchLedger(ledgerListed);
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let routingModelRecords = null;
@@ -661,12 +746,13 @@ function buildSituation({ state } = {}) {
     // #1233：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位（gpt-5.6-sol）在执行
     // 目录里是 unverified，起审官必被拒 → 每张按顺位选了它的复审票 drain 必失败、试满 3 次
     // 打「自动化认输」。这里按执行目录的实际可用性把顺位过一遍，**剔了谁要说得出来**。
-    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles() });
+    // #1342：判红名单先算，审官顺位要问它——目录里 available 的腿真实 turn 可以 25% 成功率。
+    healthRedModels = loadHealthRedIds(models);
+    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles(), redIds: healthRedModels });
     reviewerOrder = availability.usable;
     reviewerOrderSkipped = availability.skipped;
     if (availability.unscanned) reviewerOrderUnscanned = availability.unscanned;
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
-    healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
     routingLegs = raw['腿'];
     channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）
@@ -696,7 +782,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, lease, desiredJobs,
+    sessions, lease, desiredJobs, dispatchLedger,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -877,7 +963,7 @@ function execAction(action, { state, dryRun, log }) {
     case 'reap-orphan':
       return execReapOrphan(action, { dryRun, say });
     case 'merge':
-      return execMerge(action, { dryRun, say });
+      return execMerge(action, { dryRun, say, writeMergeLedger: recordPrMergeMilestone });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
@@ -1131,7 +1217,9 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  *
  * #1133：所有真实 `gh pr merge` 都钉 `--match-head-commit`。不因为没 approvalIssue 就跳过 HEAD 锁。
  */
-export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness, ledgerClose = recordJobClosed } = {}) {
+export function execMerge(action, {
+  dryRun, say, run = runCmd, judge = judgeMergeFreshness, writeMergeLedger = null, ledgerClose = recordJobClosed,
+} = {}) {
   const GATING = new Set(['pr merge']);
   const expectedHead = String((action && action.head) || '').trim();
   const steps = [
@@ -1146,15 +1234,25 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     for (const g of GATING) if (s.includes(g)) return true;
     return false;
   };
+  const evidenceMode = action.evidenceMode
+    || (action.approvalIssue ? 'draft' : null);
+  if (evidenceMode === 'manual' && (!action.approvalIssue || !action.head)) {
+    say(`  #${action.pr} 非 draft manual 缺批准单或预期 HEAD，拒绝裸合`);
+    return { ok: false, error: 'manual-merge-unbound' };
+  }
   if (!expectedHead) {
     const error = 'merge 没带期望 HEAD，拒绝合入';
     say(`  #${action.pr} ${error}`);
     return { ok: false, error };
   }
-  const mergeArgv = steps.find((s) => s.includes('pr') && s.includes('merge'));
-  if (mergeArgv && !mergeArgv.includes('--match-head-commit')) {
-    mergeArgv.push('--match-head-commit', expectedHead);
-  }
+  const mergeArgv = () => steps.find((s) => s.includes('pr') && s.includes('merge'));
+  const pinHead = () => {
+    const merge = mergeArgv();
+    if (merge && !merge.includes('--match-head-commit')) {
+      merge.push('--match-head-commit', expectedHead);
+    }
+  };
+  pinHead();
 
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
@@ -1176,17 +1274,22 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     say(`  #${action.pr} HEAD 已从判定时的 ${expectedHead} 变成 ${liveHead}，拒绝合入`);
     return { ok: true, skipped: 'head-changed' };
   }
-  if (action.approvalIssue) {
+  if (evidenceMode === 'draft' || evidenceMode === 'manual') {
     const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
     const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
       commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
     const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
-    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
-      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead })) {
+    const greenAtHead = approval.scanned && approval.latestGreen === true;
+    const bound = evidenceMode === 'draft'
+      ? canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead })
+      : canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead });
+    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN' || !bound) {
       say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
       return { ok: true, skipped: 'approval-not-current' };
     }
-    steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    if (evidenceMode === 'draft') {
+      steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    }
   }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
@@ -1213,6 +1316,13 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     }
     if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
     if (s[4] === 'pr' && s[5] === 'merge') merged = true;
+  }
+  if (merged && typeof writeMergeLedger === 'function') {
+    const logged = writeMergeLedger(action);
+    if (logged && logged.ok === false) {
+      failed.push({ step: 'merge-ledger', error: logged.error || '合并账本没落下' });
+      say(`  合并账本没落下（不挡已合）：${logged.error || '没查成'}`);
+    }
   }
   say(failed.length
     ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
@@ -1340,6 +1450,40 @@ export function recordJobClosed({
   } catch (e) {
     say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`);
     return { error: String(e && e.message || e).slice(0, 160) };
+  }
+}
+
+/** 指挥官 squash 不走 bash hook，必须自己落 session.milestone（#1223 第 4 点）。 */
+export function recordPrMergeMilestone(action, { ctx: given } = {}) {
+  try {
+    const ctx = given || loadLedgerContext({ root: ROOT });
+    const seq = nextSeq(ctx.dir, ctx.machine);
+    const repo = String(REPO || '').split('/')[1] || String(REPO || 'windsurf-dao');
+    const n = Number(action && action.pr);
+    writeEvent({
+      dir: ctx.dir,
+      type: 'session.milestone',
+      ts: beijingIsoFrom(new Date()),
+      machine: ctx.machine,
+      seq,
+      schema: ctx.schema,
+      payload: {
+        kind: 'pr-merge',
+        repo,
+        pr_number: Number.isInteger(n) ? n : null,
+        milestone_key: `pr-merge:pr-${action.pr}`,
+        evidence: [
+          `execMerge pr ${action.pr}`,
+          String((action && action.why) || '指挥官 squash'),
+        ],
+        identity: '协调者',
+        refs: [`PR #${action.pr}`],
+      },
+    });
+    return { ok: true };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true };
+    return { ok: false, error: String(e.message || e) };
   }
 }
 
@@ -2022,10 +2166,20 @@ export function requestRereview(action, { state, dryRun, say, run }) {
   // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = state.reworkDispatched[key];
+  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」——回环 ws 断连时
+  // 这一轮一个审官都没起过。但写票这一刻还不知道审官起不起得来（drain 在下面才跑），
+  // 所以这里**照旧乐观记一次**，同时把记之前的值留在 triesBeforeAttempt：
+  // 等 drain 的真账回来，`rememberDrainFailure` 判出是环境就回滚到这个值。
+  //
+  // 为什么不改成「按上一轮的 envUnreachable 猜」：那样每次断连风暴的**第一轮**仍会烧掉
+  // 一次（判据落后一拍）。三次断连烧 1 次比烧 3 次好，但仍是错的——而这里有确定的事实
+  // 可用（本轮 drain 的回执），没有理由去猜。
+  const triesBefore = Number(prev?.tries) || 0;
   state.reworkDispatched[key] = {
     ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
-    tries: Number(action.tries) || 1,
+    tries: Number(action.tries) || triesBefore + 1,
+    triesBeforeAttempt: triesBefore,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
   return drainReviewPending(action, { state, dryRun, say, run });
@@ -2051,19 +2205,46 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
 
 /** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
  *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
- *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。
+ *
+ *  #1331：环境类失败（执行体自己够不着）**并原文、回滚 tries**。原文要留下来
+ *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），但这一轮
+ *  一个审官都没起过，不该算这张 PR 试过——回滚到 requestRereview 记下的
+ *  `triesBeforeAttempt`。判据见 judgeEnvFailure。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = (state.reworkDispatched || {})[key];
   if (!prev) return;                       // 没有这条账就没有要并的对象
   const verdict = classifyDrainAttempt(payload);
-  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
-  const pulled = verdict.reason === 'pulled';
+  const env = verdict.reason === 'env-unreachable';
+  if (!verdict.countTry && !env) return;   // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.countTry && verdict.reason === 'pulled';
   const err = pulled ? null : drainErrorText(payload);
   if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
-  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
+  state.reworkDispatched[key] = {
+    ...prev,
+    ...foldFailureStreak(prev, err),
+    ...(settleAttemptTries(prev, env) == null ? {} : { tries: settleAttemptTries(prev, env) }),
+    envUnreachable: env,
+  };
+}
+
+/**
+ * 这一轮该把 tries 回滚到几（#1331）。返回 `null` = 不动这个字段。
+ *
+ * 回滚只在**确知是环境**时发生，且只回滚到本轮开始前的值（`triesBeforeAttempt`），
+ * **不是清零**——清零会把「之前真试过 2 次」一起抹掉，那是往反方向错。
+ * 缺 `triesBeforeAttempt`（老账 / 别的写入路径写的）时维持现值，不猜。
+ */
+export function settleAttemptTries(prev, env) {
+  if (env !== true) return null;
+  // `prev` 必须显式判：`Number(null && x)` 是 **0**，不是 NaN——
+  // 拿它当「回滚到 0」就把「没有账」当成了「本轮之前一次都没试过」。
+  if (!prev || typeof prev !== 'object') return null;
+  const before = Number(prev.triesBeforeAttempt);
+  return Number.isInteger(before) && before >= 0 ? before : null;
 }
 
 export function drainPayloadOf(runResult) {
@@ -2114,15 +2295,37 @@ function mirasimStartCmd({ model, tree, spec, pr, issue }) {
   return cmd;
 }
 
+/**
+ * 这次派工失败，是「执行体自己够不着」还是「这张 PR 的事」（#1331）。
+ *
+ * 返工 / 收口泵派的是 `dao.mjs start`，回执是 runCmd 的形状（out 里一行 JSON）。
+ * 先按 drainPayloadOf 解出结构化回执，再交给与复审那侧**同一个**纯函数判——
+ * 同一个事实不许两处各判一次（#1233 的形状）。
+ *
+ * 解不出 / 没有 code（老回执、非 JSON、超时被杀）一律判「不是环境」，照旧记一次尝试：
+ * 宁可多烧一次，也不要把真失败悄悄变成无限重试。
+ */
+function envFailureOf(runResult) {
+  try {
+    return judgeEnvFailure({ attached: drainPayloadOf(runResult) });
+  } catch {
+    return { env: false, why: '回执解不出（没查成）——按真失败记账', code: null, stage: null };
+  }
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
+  // #1331：ws 断连这一轮**一个工人都没造出来**，不算这张 PR 试过返工。
+  // 实测 2026-09-17：#885 / #1284 的返工正是这样被烧掉预算的（7 天 66 次）。
+  const env = envFailureOf(verdict);
   state.reworkDispatched[rkey] = {
     at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1,
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
   };
 }
 
@@ -2223,10 +2426,13 @@ function rememberPumpDraft(state, action, written, verdict) {
   state.reworkDispatched = state.reworkDispatched || {};
   const pkey = action.pumpKey || pumpDraftKey(action.pr);
   const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  const env = envFailureOf(verdict);   // #1331：同上，环境轮不算这张 PR 泵过
   state.reworkDispatched[pkey] = {
     at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1, kind: 'pump-draft',
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
+    kind: 'pump-draft',
   };
 }
 
@@ -3253,6 +3459,9 @@ function cmdAct(argv) {
   }
   runHubProjection({ situation, dryRun, log });
   if (!dryRun) {
+    writeBoardStuck({ situation, digestStreak: state.digestStreak, log });
+  }
+  if (!dryRun) {
     const ad = situation.admission || {};
     appendCapacitySample(snapshotCapacity({
       at: situation.at,
@@ -3323,4 +3532,5 @@ export {
   alreadyAppended,
   scanSessions, scanDesiredJobs,
   ensureTreeFromPr, dispatchRework,
+  writeBoardStuck,
 };
