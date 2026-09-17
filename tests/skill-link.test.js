@@ -357,4 +357,165 @@ describe('skill-link', () => {
     fs.rmSync(OUTSIDE, { recursive: true, force: true });
     fs.rmSync(SANDBOX, { recursive: true, force: true });
   });
+
+  // 「只看 $HOME 会漏掉另一个家的装载面」（#1146 洞，2026-09-13 实咬）。
+  // 现场：单元 User=orca 只修得住 /home/orca，dao-check 是 root 跑、看的是 /root，
+  // root 那份被 mirasim 劫走后自愈钟每 5 分钟说「无事可做」，红挂在那儿没人接。
+  it('一个家目录绿、另一个被劫 ⇒ 必须报红（只看 $HOME 会漏）', async () => {
+    const { checkSkillLinks } = await import('../scripts/lib/skill-link-check.mjs');
+    const root = makeRoot('multi-home');
+    const good = makeHome('multi-home-good');
+    const bad = makeHome('multi-home-bad');
+    for (const s of SKILLS) linkSkill(good, s, path.join(root, 'host', 'skills', s));
+    // 第二个家：整目录链到别处（mirasim 劫法）
+    fs.rmSync(path.join(bad, '.claude', 'skills'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(bad, '.mirasim', 'skills'), { recursive: true });
+    fs.symlinkSync(path.join(bad, '.mirasim', 'skills'), path.join(bad, '.claude', 'skills'), linkType());
+
+    const only = checkSkillLinks({ root, home: good });
+    assert.equal(only.green !== undefined, true, '正向控制：只传好的那个家 ⇒ 绿（证明不是恒红）  →  ' + JSON.stringify(only).slice(0, 200));
+
+    const both = checkSkillLinks({ root, home: good, homes: [good, bad] });
+    assert.ok(!!both.fail, '坏的那个家必须进判据  →  ' + JSON.stringify(both).slice(0, 300));
+    assert.match(both.fail[2], /multi-home-bad/, '证据行要点名是哪个家被劫  →  ' + both.fail[2]);
+    assert.doesNotMatch(both.fail[2], /multi-home-good\/\.claude/, '绿的那个家不许进证据（否则看不出坏在哪）');
+
+    fs.rmSync(path.join(SANDBOX, 'homes', 'multi-home-good'), { recursive: true, force: true });
+    fs.rmSync(path.join(SANDBOX, 'homes', 'multi-home-bad'), { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('两个家都绿 ⇒ 绿，且报告里两个家都点到名', async () => {
+    const { checkSkillLinks } = await import('../scripts/lib/skill-link-check.mjs');
+    const root = makeRoot('multi-green');
+    const a = makeHome('multi-green-a');
+    const b = makeHome('multi-green-b');
+    for (const s of SKILLS) {
+      linkSkill(a, s, path.join(root, 'host', 'skills', s));
+      linkSkill(b, s, path.join(root, 'host', 'skills', s));
+    }
+    const r = checkSkillLinks({ root, home: a, homes: [a, b] });
+    assert.equal(r.fail, undefined, JSON.stringify(r).slice(0, 300));
+    assert.match(r.green, /multi-green-a/);
+    assert.match(r.green, /multi-green-b/);
+    fs.rmSync(path.join(SANDBOX, 'homes', 'multi-green-a'), { recursive: true, force: true });
+    fs.rmSync(path.join(SANDBOX, 'homes', 'multi-green-b'), { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('「哪个家要守」的判据：有 .claude/ 才算，只有 .mirasim/ 不算，且取不到清单时报没查成', async () => {
+    const { agentHomes, homesFromPasswd, looksLikeAgentHome } = await import('../scripts/lib/skill-homes.mjs');
+    const dir = path.join(SANDBOX, 'homes-probe');
+    fs.mkdirSync(path.join(dir, 'with-claude', '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'with-mirasim', '.mirasim'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'bare'), { recursive: true });
+
+    assert.equal(looksLikeAgentHome(path.join(dir, 'with-claude')), true, '有 .claude/ ⇒ 要守');
+    assert.equal(looksLikeAgentHome(path.join(dir, 'with-mirasim')), false, '只有 .mirasim/ ⇒ 不守（那是 mirasim 发现面，不凭空造 .claude/skills）');
+    assert.equal(looksLikeAgentHome(path.join(dir, 'bare')), false, '光秃秃的家 ⇒ 不守（不凭空造装载面）');
+
+    const pw = 'root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n';
+    assert.deepEqual(homesFromPasswd(pw), ['/root', '/nonexistent'], 'passwd 第 6 栏取家目录');
+
+    // 显式覆盖：够不着 passwd 的容器里也能指定；相对路径不许进（会凭空扫到别处）
+    const r = agentHomes({ env: { DAO_SKILL_HOMES: `${path.join(dir, 'with-claude')},relative/path` }, readdir: fs.readdirSync, readFile: fs.readFileSync });
+    assert.deepEqual(r.homes, [path.join(dir, 'with-claude')], '相对路径必须被丢掉  →  ' + JSON.stringify(r));
+
+    // 覆盖里全是垃圾路径 ⇒ 没查成，不是「一个家都没有」
+    const bad = agentHomes({ env: { DAO_SKILL_HOMES: 'nope' }, readdir: fs.readdirSync, readFile: fs.readFileSync });
+    assert.equal(bad.ok, false, '覆盖值里没有绝对路径 ⇒ 没查成，不许当空列表  →  ' + JSON.stringify(bad));
+
+    // 一个候选都读不到 ⇒ 没查成（「没读到」和「都没有装载面」必须分得开）
+    const none = agentHomes({ env: { DAO_SKILL_HOMES: '/nope-a,/nope-b' }, readdir: fs.readdirSync, readFile: fs.readFileSync });
+    assert.equal(none.ok, false, '候选一个都读不到 ⇒ 没查成  →  ' + JSON.stringify(none));
+
+    const miraOnly = agentHomes({
+      env: { DAO_SKILL_HOMES: path.join(dir, 'with-mirasim') },
+      readdir: fs.readdirSync, readFile: fs.readFileSync,
+    });
+    assert.equal(miraOnly.ok, true, JSON.stringify(miraOnly));
+    assert.deepEqual(miraOnly.homes, [], '只有 .mirasim/ 的家不得进守护名单');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('passwd 读不了时回退 HOME/USERPROFILE（含 Windows 盘符），不把当前家丢掉', async () => {
+    const { agentHomes } = await import('../scripts/lib/skill-homes.mjs');
+    const enoent = () => {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    const winHome = 'C:/Users/alice';
+    const win = agentHomes({
+      env: { USERPROFILE: winHome },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === winHome) return ['.claude', 'Desktop'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(win.ok, true, 'Windows 无 passwd 也要守 USERPROFILE 下的 .claude  →  ' + JSON.stringify(win));
+    assert.deepEqual(win.homes, [winHome]);
+
+    const backslash = 'C:\\Users\\bob';
+    const winBs = agentHomes({
+      env: { USERPROFILE: backslash },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === backslash) return ['.claude'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(winBs.ok, true, JSON.stringify(winBs));
+    assert.deepEqual(winBs.homes, [backslash]);
+
+    const unix = '/home/alice';
+    const posix = agentHomes({
+      env: { HOME: unix },
+      readFile: enoent,
+      readdir: (dir) => {
+        if (dir === unix) return ['.claude'];
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      },
+    });
+    assert.equal(posix.ok, true, JSON.stringify(posix));
+    assert.deepEqual(posix.homes, [unix]);
+
+    const miss = agentHomes({
+      env: { USERPROFILE: 'relative/nope' },
+      readFile: enoent,
+      readdir: enoent,
+    });
+    assert.equal(miss.ok, false, 'passwd 没有且 USERPROFILE 不是绝对路径 ⇒ 没查成  →  ' + JSON.stringify(miss));
+    assert.match(miss.reason, /passwd|HOME|USERPROFILE/);
+  });
+
+  it('硬塞一个只有 .mirasim/ 的家进检查 ⇒ SKIP 不是红，也不造 .claude/skills', async () => {
+    const { checkSkillLinks } = await import('../scripts/lib/skill-link-check.mjs');
+    const root = makeRoot('mira-skip');
+    const good = makeHome('mira-skip-good');
+    for (const s of SKILLS) linkSkill(good, s, path.join(root, 'host', 'skills', s));
+    const mira = path.join(SANDBOX, 'homes', 'mira-skip-only');
+    fs.mkdirSync(path.join(mira, '.mirasim', 'skills'), { recursive: true });
+
+    const onlyMira = checkSkillLinks({ root, home: mira, homes: [mira] });
+    assert.equal(onlyMira.fail, undefined, '没有 .claude/skills 是没装，不是被劫  →  ' + JSON.stringify(onlyMira).slice(0, 300));
+    assert.ok(onlyMira.skip, '必须 SKIP  →  ' + JSON.stringify(onlyMira).slice(0, 300));
+
+    const mixed = checkSkillLinks({ root, home: good, homes: [good, mira] });
+    assert.equal(mixed.fail, undefined, JSON.stringify(mixed).slice(0, 300));
+    assert.match(mixed.green, /mira-skip-good/);
+    assert.equal(fs.existsSync(path.join(mira, '.claude')), false, '检查不得凭空建 .claude');
+
+    fs.rmSync(path.join(SANDBOX, 'homes', 'mira-skip-good'), { recursive: true, force: true });
+    fs.rmSync(mira, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

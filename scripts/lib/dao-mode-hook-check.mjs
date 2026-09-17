@@ -61,7 +61,14 @@ function runRegistered(command, stateFile, pluginRoot) {
     encoding: 'utf8',
     input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: 'dao check 自检' }),
     timeout: 30000,
-    env: { ...process.env, DAO_STATE_FILE: stateFile, CLAUDE_PLUGIN_ROOT: pluginRoot || '' },
+    env: {
+      ...process.env,
+      DAO_STATE_FILE: stateFile,
+      CLAUDE_PLUGIN_ROOT: pluginRoot || '',
+      // 与 tests/dao-mode.test.js 的 mode() 同病：生产 hook 非常态会读盘面。
+      // 活检比的是状态文件四形，不许被宿主 ~/.dao/board-stuck.json 改输出。
+      DAO_BOARD_FILE: join(tmpdir(), `dao-check-board-absent-${process.pid}.json`),
+    },
   });
   return { status: r.status, out: ((r.stdout || '') + (r.stderr || '')).trim() };
 }

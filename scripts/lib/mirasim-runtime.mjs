@@ -33,7 +33,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { checkTreeLease, checkInFlight, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
+import { checkTreeLease, checkInFlight, claimTreeOccupancy, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
   loadSessionAttribution,
@@ -826,6 +826,8 @@ export function createRuntime(opts = {}) {
   const now = opts.now || (() => Date.now());
   // 租约判据可注入：单测给假的，生产读盘。默认必须是真闸——不给就不检查等于没有闸。
   const leaseCheck = opts.leaseCheck || checkTreeLease;
+  // 占用声明同样可注入。默认真锁；测试给假的，免得各用例去抢同一把仓外锁。
+  const claimOccupancy = opts.claimOccupancy || claimTreeOccupancy;
   // 渠道并发判据同理（#1145）。默认真闸，取数在 defaultChannelAdmit（读路由表 / /proc / 账本）。
   const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
   // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
@@ -984,6 +986,27 @@ export function createRuntime(opts = {}) {
       });
     }
 
+    // 占用声明必须在发 prompt 之前原子拿到。两个并发 startSession 都可能在
+    // 第一个会话进程出现前读到 free——/proc 闸挡不住这一窗（审官红④ / #1291）。
+    // 拿不到 = 背压，不发 prompt；失败路径必须释放，成功返回也释放（占位交给真进程）。
+    const claim = claimOccupancy({ workdir, home: homeDir });
+    if (!claim.ok) {
+      if (claim.busy) {
+        throw new MirasimRejectedError(`占用声明被占，拒起会话：${claim.error}`, {
+          workdir, busy: true, reason: claim.reason || LEASE_BUSY_REASON,
+        });
+      }
+      throw new MirasimUnavailableError(`占用声明没查成，拒起会话：${claim.error}`, { workdir });
+    }
+    let claimReleased = false;
+    const releaseClaim = () => {
+      if (claimReleased) return;
+      claimReleased = true;
+      try { if (typeof claim.release === 'function') claim.release(); } catch { /* 释放失败不挡返回 */ }
+    };
+
+    try {
+
     // 渠道并发闸（#1145）：挨着租约闸，同样装在门里、同样排在 open() 前面——
     // 满员时连 ws 都不开。装在门里的理由与租约闸一字不差：四个调用点
     // （dao dispatch / dao start / 审官 create / 推一把）全从这道门过，绕不开；
@@ -1066,6 +1089,9 @@ export function createRuntime(opts = {}) {
       // 退槽。**删不掉不许让起会话失败**：预占有 TTL + pid 判死兜底，最坏是这个渠道少一个
       // 名额到 TTL 到点。这里也刻意不抛——在 finally 里抛会把真错误（上面那些）盖掉。
       try { releaseSlot(); } catch { /* 同上：TTL/pid 兜底，不掩盖真错误 */ }
+    }
+    } finally {
+      releaseClaim();
     }
     } catch (error) {
       // promptSent && !explicitlyRejected = prompt 发出去了但没拿到明确拒绝 ⇒ 起会话状态不确定。

@@ -33,12 +33,27 @@ export function repoRootOfThisFile() {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 }
 
+/** 仓根：本文件所在 checkout，除非 DAO_REPO_ROOT 显式指定。
+ *  用途只有一个——root 那只自愈单元跑的是安装到 /usr/local 的副本（见
+ *  host/machine/systemd/dao-skills-heal-root.service），从副本位置按相对路径
+ *  推不出仓在哪，必须由单元把仓根写进环境。装到 /usr/local 的副本必须走这条路；
+ *  仓内跑（orca 那只、onboard、dao-check）永远用本文件位置，环境变量只当兜底。 */
+export function repoRoot({ env = process.env } = {}) {
+  const explicit = String((env && env.DAO_REPO_ROOT) || '').trim();
+  if (explicit.startsWith('/')) {
+    const abs = resolve(explicit);
+    // 只认「像个 checkout」的目录：少这一道，单元环境被改就能把仓内 skill 链到任意目录。
+    if (existsSync(join(abs, 'host', 'skills')) || existsSync(join(abs, 'host', 'machine'))) return abs;
+  }
+  return repoRootOfThisFile();
+}
+
 const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
 
 /** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），
  *  别各写各的：一边算修不了、另一边还让它把退出码染红，就成了永远红的报警。 */
 export const ONBOARD_REPORT_ONLY = new Set([
-  'creds-missing', 'mcp-slow-boot', 'statusline-dangling', 'pi-wrong-package',
+  'creds-missing', 'mcp-slow-boot', 'statusline-dangling', 'pi-wrong-package', 'search-cli-missing',
   // 家目录里的外来/悬空 skill：删别人的东西不是 onboard 的活，看清楚再由人决定。
   'skills-stray', 'skills-dangling-stray',
 ]);
@@ -191,6 +206,7 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
   take(checkStatusLine({ home }));
   take(checkPiExtensions({ root, home }));
   take(checkPiPackage({}));
+  take(checkSearchCli({ home }));
 
   const mem = checkMemoryLink({ root, home });
   if (mem.fail) problems.push({ id: 'memory-broken', msg: `memory 断链：${mem.fail[0]}` });
@@ -284,6 +300,26 @@ export function checkPiPackage({ pathDirs = String(process.env.PATH ?? '').split
     }
   }
   return {};
+}
+
+export const SEARCH_CLI = 'ddgs';
+/** 查资料的本机搜索 CLI。内置 WebSearch 跑在 API 上游（本机只把请求送到 ANTHROPIC_BASE_URL），
+ *  上游那一跳慢或断的时候本机毫无办法——docs-lookup skill 因此把 `ddgs` 定为首选路。
+ *  装它的是 `uv tool install`，落点 ~/.local/bin **不在两台机器的 PATH 上**，所以这里必须显式补进候选目录，
+ *  否则装了也判「没装」（同一个坑在 launch-binary.mjs 的 resolveProbePath 注释里已记过一次）。
+ *  只报不修：装包要出网，不该由一条检查悄悄替人做主。 */
+export function checkSearchCli({ home, pathDirs = String(process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':') } = {}) {
+  const names = process.platform === 'win32' ? [`${SEARCH_CLI}.exe`, `${SEARCH_CLI}.cmd`, SEARCH_CLI] : [SEARCH_CLI];
+  const dirs = [...pathDirs, join(home, '.local', 'bin')];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const name of names) if (existsSync(join(dir, name))) return {};
+  }
+  return { problem: {
+    id: 'search-cli-missing',
+    msg: `${SEARCH_CLI} 没装（查资料首选路，见 docs-lookup skill）——\`uv tool install ${SEARCH_CLI}\`；`
+       + '装完它落 ~/.local/bin，那个目录不在 PATH 上，调用写全路径或跑 `uv tool update-shell`',
+  } };
 }
 
 /** ④ 慢启动的 MCP 服务器：命令是 npx/uvx 且带 @latest（或裸包名）——每次开会话现场解包。

@@ -17,6 +17,8 @@
 // 驱动适配器只需回答一句话：这个会话上次真动是什么时候（外加驱动自己知道的终态）。
 
 import { shouldRestartReviewer } from './session-reconcile.mjs';
+import { EXECUTION_WAITING, isWaitingState } from './execution-states.mjs';
+import { cwdBelongsToTree } from './dispatch/lease.mjs';
 
 /** 默认静默阈值：45 分钟。够长到不误伤长思考/长跑测试，够短到不至于像今天那样躺 10 小时。 */
 export const DEFAULT_SILENCE_MS = 45 * 60 * 1000;
@@ -79,8 +81,10 @@ export function sessionFromMirasimSession(s) {
   // incomplete = mirasim 自己的 30 分钟计时：一轮跑完在等下一句话。这是确定的「卡住」，
   // 不是「没时间戳所以没查成」——2026-09-06 五个工人全是这个态，推一句「继续」就活了。
   const stalledTurn = raw === 'incomplete';
+  // waiting_user 也是确定态：人还没回话。缺时间戳不当没查成，否则 45 分钟后会被当僵尸清掉。
+  const waiting = EXECUTION_WAITING.has(raw);
   const at = parseAt(s.lastActivityAt ?? s.updatedAt ?? s.ts);
-  const unscanned = !terminal && !stalledTurn && at == null;
+  const unscanned = !terminal && !stalledTurn && !waiting && at == null;
   return {
     id: String(s.key),
     driver: 'mirasim',
@@ -98,21 +102,26 @@ export function sessionFromMirasimSession(s) {
 }
 
 /**
- * 单个会话的活性。顺序：没查成 → 驱动自报终态 → 时间判据。
- * 「没查成」永远排在最前，因为它和「查过没事」必须分得开（本仓硬规矩）。
+ * 单个会话的活性。顺序：等人 → 没查成 → 驱动自报终态 → 时间判据。
+ * 「没查成」仍排在静默前面，因为它和「查过没事」必须分得开。
+ * 等人插在最前：缺时间戳也不能把「问题还在」判成没查成或卡住（#1174 T8）。
  */
 export function assessLiveness(session, { now = Date.now(), thresholdMs = DEFAULT_SILENCE_MS } = {}) {
   if (!session || typeof session !== 'object') {
     return { state: 'unscanned', why: '没给会话对象——没查成' };
   }
+  const rawState = String(session.driverState || session.state || session.phase || '').toLowerCase();
+  // 等人优先于「没查成」和静默：问题还在，停手是设计，不是卡住（#1174 T8）。
+  if (isWaitingState(rawState) || isWaitingState(session)) {
+    return { state: 'active', waiting: true, why: '会话在等用户，不是卡住' };
+  }
   if (session.unscanned) {
     return { state: 'unscanned', why: session.why || '驱动答不上「上次真动」——没查成' };
   }
-  const terminal = DRIVER_TERMINAL_STATES.get(String(session.driverState || '').toLowerCase());
+  const terminal = DRIVER_TERMINAL_STATES.get(rawState);
   if (terminal) return { state: 'done', why: `驱动自报 ${session.driverState}` };
   // incomplete = mirasim 自己判「这一轮卡在等下一句话」。阈值还没到也是卡住——
   // 不认这一档，routeSilent 的 nudge 永远喂不到今天那种 30 分钟计时样本。
-  const rawState = String(session.driverState || '').toLowerCase();
   if (rawState === 'incomplete') {
     const at = parseAt(session.lastProgressAt);
     const silentMs = at == null ? 0 : Math.max(0, now - at);
@@ -171,6 +180,9 @@ export function scanLiveness({ sessions, now = Date.now(), thresholdMs = DEFAULT
  * 本函数只给意图，不越级动手。
  */
 export function routeSilent(session, { openPrs } = {}) {
+  if (isWaitingState(session) || isWaitingState(session?.driverState) || session?.waiting === true) {
+    return { action: 'skip', why: '会话在等用户，不是卡住，不推不重派' };
+  }
   const text = [session?.label, session?.title, session?.cwd, session?.workdir, session?.worktreeId]
     .map((x) => String(x || '')).join(' ');
   const isReviewer = /审官|reviewer|dao-review-pr-\d+/i.test(text);
@@ -272,7 +284,7 @@ export function treeProcessState(tree, { scan } = {}) {
     return { state: 'idle', why: 'mirasim 服务没在跑，该树不可能有会话进程' };
   }
   const procs = Array.isArray(scan.procs) ? scan.procs : [];
-  const hits = procs.filter((p) => String(p && p.cwd || '').replace(/\/+$/, '') === want);
+  const hits = procs.filter((p) => cwdBelongsToTree(p && p.cwd, want));
   if (!hits.length) return { state: 'idle', why: `该树没有活着的会话进程（扫到 ${procs.length} 个会话进程，都不在这棵树）` };
   return {
     state: 'running',

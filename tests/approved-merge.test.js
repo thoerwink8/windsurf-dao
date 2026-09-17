@@ -10,6 +10,16 @@ function data() {
   greenAtHead: true, expectedHead: head };
 }
 
+test('non-draft manual 不要求 isDraft，但仍要批准单 + 当前 HEAD + CI', async () => {
+  const { canReleaseApprovedManual, canReleaseApprovedDraft } = await load;
+  const x = data();
+  x.pr.isDraft = false;
+  assert.equal(canReleaseApprovedDraft(x), false, 'draft 路仍要求 isDraft');
+  assert.equal(canReleaseApprovedManual(x), true, 'manual 路吃非 draft');
+  x.pr.headRefOid = 'b'.repeat(40);
+  assert.equal(canReleaseApprovedManual(x), false, 'HEAD 变了不合');
+});
+
 test('only explicitly approved execution with current review and complete CI can release draft', async () => {
   const { canReleaseApprovedDraft } = await load;
   assert.equal(canReleaseApprovedDraft(data()), true);
@@ -40,6 +50,39 @@ test('commander emits approval-bound merge rather than another user question', a
   assert.equal(merge?.head, head);
 });
 
+test('非 draft manual 执行层复核证据、锁 HEAD，不走要求 isDraft 的 draft 路', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const x = data();
+  x.pr.isDraft = false;
+  const calls = [];
+  const run = args => {
+    calls.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(x.pr) };
+    if (args[4] === 'issue' && args[5] === 'view') return { ok: true, out: JSON.stringify(x.issue) };
+    return { ok: true, out: '' };
+  };
+  const r = execMerge(
+    { pr: 1191, approvalIssue: 1182, head, evidenceMode: 'manual' },
+    { say() {}, run, judge: () => ({ state: 'ok' }),
+      ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) },
+  );
+  assert.equal(r.ok, true);
+  const merge = calls.find(a => a[5] === 'merge');
+  assert.equal(merge.at(-2), '--match-head-commit');
+  assert.equal(merge.at(-1), head);
+  assert.equal(calls.some(a => a[5] === 'ready'), false, '非 draft 不许先 pr ready');
+});
+
+test('非 draft manual 丢了批准单或 HEAD → 拒绝裸合', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const r = execMerge(
+    { pr: 1225, evidenceMode: 'manual' },
+    { say() {}, run: () => { throw new Error('不该打 gh'); }, judge: () => ({ state: 'ok' }) },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'manual-merge-unbound');
+});
+
 test('executor rechecks evidence, pins head and restores draft if merge fails', async () => {
   const { execMerge } = await import('../scripts/commander.mjs');
   for (const scenario of ['success', 'head-changed', 'merge-failed', 'review-stale', 'approval-removed']) {
@@ -54,7 +97,9 @@ test('executor rechecks evidence, pins head and restores draft if merge fails', 
       if (args[5] === 'merge' && scenario === 'merge-failed') return { ok: false, error: 'head moved' };
       return { ok: true, out: '' };
     };
-    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }) });
+    execMerge({ pr: 1191, approvalIssue: 1182, head }, { say() {}, run, judge: () => ({ state: 'ok' }),
+      // 注入替身：真写会往本机账本塞一条 gh-pr-1191 的假终态，污染 ⑰ 的对照集合。
+      ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) });
     const merge = calls.find(a => a[5] === 'merge');
     if (['head-changed', 'review-stale', 'approval-removed'].includes(scenario)) {
       assert.equal(merge, undefined);
@@ -65,6 +110,38 @@ test('executor rechecks evidence, pins head and restores draft if merge fails', 
       assert.equal(calls.some(a => a.includes('--undo')), scenario === 'merge-failed');
     }
   }
+});
+
+test('auto merge without approvalIssue still pins --match-head-commit and refuses a moved HEAD', async () => {
+  const { execMerge } = await import('../scripts/commander.mjs');
+  const head = 'a'.repeat(40);
+  const pr = {
+    number: 77, state: 'OPEN', headRefOid: head, isDraft: false, mergeable: 'MERGEABLE',
+    statusCheckRollup: [], reviews: [],
+  };
+  const calls = [];
+  const run = args => {
+    calls.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(pr) };
+    return { ok: true, out: '' };
+  };
+  const ok = execMerge({ pr: 77, head }, { say() {}, run, judge: () => ({ state: 'ok' }),
+    ledgerClose: () => ({ worker: { ok: true }, reviewer: { ok: true } }) });
+  assert.equal(ok.ok, true);
+  const merge = calls.find(a => a[5] === 'merge');
+  assert.equal(merge.at(-2), '--match-head-commit');
+  assert.equal(merge.at(-1), head);
+
+  const moved = { ...pr, headRefOid: 'b'.repeat(40) };
+  const calls2 = [];
+  const run2 = args => {
+    calls2.push(args);
+    if (args[4] === 'pr' && args[5] === 'view') return { ok: true, out: JSON.stringify(moved) };
+    return { ok: true, out: '' };
+  };
+  const skipped = execMerge({ pr: 77, head }, { say() {}, run: run2, judge: () => ({ state: 'ok' }) });
+  assert.equal(skipped.skipped, 'head-changed');
+  assert.equal(calls2.some(a => a[5] === 'merge'), false);
 });
 
 // ── 2026-09-14 断链：draft 被 scanPrReviews 跳过，下游把它读成「没抓到」，静默永不送审 ──

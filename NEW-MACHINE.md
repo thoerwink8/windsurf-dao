@@ -47,7 +47,7 @@ node --version
 
 | 文件 | 里面是什么 | 不带的后果 |
 |---|---|---|
-| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 派工选型见 `docs/model-routing.json`；走 og 通道的工人缺 key 一起手就挂 |
+| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）。直连 `deepseek` 键 2026-09-15 已删，不要再填 | 派工选型见 `docs/model-routing.json`；走 og 通道的工人缺 key 一起手就挂 |
 | `~/.dao/apps/*.{pem,json}` | 四个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并、看门狗报事故全断。详 §4b |
 
 新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
@@ -207,12 +207,8 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- **ds-flash 写码通道走 gw-dspool**（选型顺位以 `docs/model-routing.json` 为准，2026-09-03 拍板）：派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）。网关凭据与分组归 `ai-gateway-stack`（INDEX E 类，本仓不写装法）。`opencode-go` 因服务器 403 RegionError 降为顺位 2，凭据仍填 `~/.pi/agent/auth.json` 的 `opencode-go` 键（取 key 见 §4）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
-  - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
-- **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
-  - 这条止血本身没被验证过——下次真 503 是当场报错（止血生效）还是又切了（止血失效）。本机 `watchdog.mjs` 的 model-change 检测 #807 已删。
-  - 与 go-fallback 扩展的交互（#569 核对）：扩展的降级查找 `modelRegistry.find("deepseek", model.id)` 与兜底 `find("deepseek", "deepseek-v4-flash")` 现在都找不到 `-direct` 改名后的模型 → 扩展明确报「无可用模型，无法降级」而不是悄悄切走。**这是止血想要的形态**（错误上浮有人看见），不是故障；将来若想让扩展能切直连，把 `PI_GO_FALLBACK_MODEL` 设成 `deepseek-v4-flash-direct` 即可（同时失去「静默切换」的保护，慎重）。
-  - 将来 deepseek 充值后要走直连：模型名是带 `-direct` 的那个，`pi --provider deepseek --model deepseek-v4-flash-direct`（`cli_model` 字段表达不了这条通道差异的坑见 `docs/model-routing.toml`）。
+- **ds-flash 写码通道走 gw-dspool**（选型顺位以 `docs/model-routing.json` 为准，2026-09-03 拍板）：派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）。网关凭据与分组归 `ai-gateway-stack`（INDEX E 类，本仓不写装法）。`opencode-go` 因服务器 403 RegionError 降为顺位 2，凭据仍填 `~/.pi/agent/auth.json` 的 `opencode-go` 键（取 key 见 §4）。2026-09-15 直连渠道已删，不要再填 `auth.json` 的 `deepseek` 键、不要 `pi --provider deepseek`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
+  - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（go-fallback 默认不再切备用，见 §6b），并发派多个工人前先掂量。
 - 三条验证命令：
   - `pi --list-models`：预期列出模型表（配好 Go 后会多出 20 个 `opencode-go` 模型）。
   - `pi auth check --provider opencode-go --json`：预期 `{"status":"ready",...}`；回 `credentials_not_configured` 就是 §4 的 key 没带。
@@ -220,15 +216,15 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 
 ## 6b. pi 扩展怎么配（go-fallback，issue #520）
 
-go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话接着把活做完（不是重启、不是从头来）。
+go-fallback 扩展：opencode Go 通道限流/额度顶时，若配置了备用 provider，把当前会话切过去把活做完（不是重启、不是从头来）。**2026-09-15 直连渠道已删**：默认备用列表为空，`deepseek` 写进环境变量也会被滤掉，不会读凭据、不会切过去。og 撞顶时错误上浮给人看。
 
 - 源码在仓内 `host/pi-extensions/go-fallback.ts` + 它 import 的 `go-fallback-core.mjs`（仓库资产，不留在本机自生自灭；**两个文件都要**——2026-09-02 前本节只叫拷 .ts，装上就是坏的）。装了 pi 的机器由 §0 的 `onboard.mjs` 拷到 `~/.pi/agent/extensions/`；仓里更新了没装、或本机手改，哨兵报 `pi-ext-drift`，重跑 onboard 重拷（手改的留 `.bak-<ts>`）。
   验证已生效（新开 pi 会话后扩展自动加载，对所有 pi 工人生效，不用改 orca 派工链路）：
   ```bash
   ls ~/.pi/agent/extensions/go-fallback.ts ~/.pi/agent/extensions/go-fallback-core.mjs   # 都在即生效（pi 每次启动扫 extensions/ 目录）
   ```
-- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连 DeepSeek 前必须探余额，402 / 没钱不算降级、明确报错。直连凭据缺失时同样明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
-- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
+- 行为：只在主通道（默认 `opencode-go,mirasim`）上动作；**网关 `gw` / `grok` / `xai` 不归本扩展管**（#841：渠道级降级唯一归网关，2026-09-03 实咬 gw 403 被切到没钱的直连 402）。命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即找备用；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才找（给 pi 内置 auto-retry 一次机会）。默认没有备用 → 明确报「无可用备用模型」，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARIES`（主通道，默认 `opencode-go,mirasim`，不含 gw）、`PI_GO_FALLBACK_PROVIDERS`（备用目标，默认空，`deepseek` 会被滤掉）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。服务器上 2026-09-03 的 `export PI_GO_FALLBACK_PRIMARIES=opencode-go` 垫片在 #841 合并部署后删掉——默认已经正确，垫片是第二层补丁。
 - 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
   ```bash
   node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景
@@ -274,10 +270,38 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 Devin CLI 的选型顺位见 `docs/model-routing.json`；启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
 
-- 装机：官方 Devin 安装器（本机二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`）。验证：`where.exe devin` 能找到；`devin models list` 含 `deepseek-v4-flash-max`。
-- 登录只能用户做：`devin auth`。凭据在 `%LOCALAPPDATA%\devin\credentials.toml`（C 类，不进 git）。
+- 装机：官方 Devin 安装器。Windows 二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`；Linux 落到 `~/.local/share/devin/cli/_versions/current/bin/devin`，再链到 `~/.local/bin/devin`。验证：`devin --version`；`devin models list` 含 `deepseek-v4-flash-max`。
+- 登录只能用户做：`devin auth`。凭据 Windows 在 `%LOCALAPPDATA%\devin\credentials.toml`，Linux 在 `~/.local/share/devin/credentials.toml`（C 类，0600，不进 git）。`devin auth status` 应回 `Logged in` + 当前套餐。
 - 非交互冒烟：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。未信任目录必须关 workspace trust 检查，否则没提示可弹、当场失败。`--print` 跑完即退，**不能**当 Orca 工人。
 - 工人 TUI 起法只信路由表 launch（`--permission-mode dangerous` 全放行）。不要另造一份启动命令。
+
+## 7e. gpt-5.6-sol 的专用 CODEX_HOME（2026-09-14，换机必做）
+
+pqgpt 给了**两把** key：一把对 `gpt-5.6-sol`，一把对其他模型。而 codex 的
+`auth.json` 只有 `OPENAI_API_KEY` 一个字段，两把装不下——后写的会把先写的盖掉，
+盖掉之后没有任何报错，只是 sol 那条腿悄悄换成了另一个账号。
+
+分家，不是二选一。默认 `~/.codex` 保持原样（本机 4317 responses 桥，
+`model = gpt-5.6-luna`）；sol 单独一个 home：
+
+```
+~/.codex-sol/auth.json    0600  {"OPENAI_API_KEY": <pqapi-sol.key 的内容>}
+~/.codex-sol/config.toml  0600  model_provider = "pqapi"
+                                model = "gpt-5.6-sol"
+                                [model_providers.pqapi]
+                                base_url = "https://api.pqapi.shop/v1"
+                                wire_api = "responses"
+                                requires_openai_auth = true
+```
+
+key 的真身在 `~/.config/ai-gateway/migration-1174/pqapi-sol.key`（C 类，不进 git）。
+目录 0700、两个文件 0600。
+执行目录 `credentialInventory` 分两行登记：默认 `~/.codex/auth.json`（luna）和 `~/.codex-sol/auth.json`（sol），不能合成一条。
+
+- 起法：`CODEX_HOME=~/.codex-sol codex ...`。执行目录里 `codex-pqapi-sol.connection.codexHome` 记的就是这个路径。
+- 验证（两条都要跑，只跑一条证不出没互相盖）：
+  1. `CODEX_HOME=~/.codex-sol timeout 60s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头 `model: gpt-5.6-sol` / `provider: pqapi`。2026-09-14T21:38Z 复跑抬头对了，随后 `ERROR: Reconnecting... 1/5`，60 秒 timeout 124，没有最终消息。所以执行目录标 `unverified`、`enabled: false`，不把没回完的请求写成 available。
+  2. 紧接着裸跑 `timeout 45s codex exec --skip-git-repo-check "只回两个字：收到"` → 抬头仍是 `model: gpt-5.6-luna` / `provider: custom`（4317 桥），4.66s 回「收到」。
 
 ## 8. 本机工具坑
 
@@ -400,9 +424,12 @@ orca account add --help
 #   验：systemctl list-timers 里 gw-remote-probe.timer 的 NEXT 必须是时间，不能是 `-`（必须有 OnCalendar，现行 *:09/30）
 #   仓内脚本 scripts/gw-remote-probe.mjs；本机旧落点 ~/bin/gw-remote-probe.mjs 与同目录 ~/bin/probe-health.mjs 收进仓后不再是真相源
 #   不要再跑 node ~/bin/gw-remote-probe.mjs --install（那份模板没有 OnCalendar）
-# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal.*）
-#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；本单元每 5 分钟合并式接回，不删 mirasim 自有 skill
-#   验：systemctl list-timers 里 dao-skills-heal.timer 的 NEXT 必须是时间；dao-check ㉚ 绿（被劫红、没装 SKIP）
+# skills 装载面自愈（#1146）：sudo bash scripts/install-skills-heal.sh（单元 host/machine/systemd/dao-skills-heal{,-root}.*）
+#   mirasim 启动会把 ~/.claude/skills 整目录劫成 ~/.mirasim/skills；两只单元每 5 分钟合并式接回，不删 mirasim 自有 skill
+#   dao-skills-heal.timer 跑在 User=orca（修够得着的家）；dao-skills-heal-root.timer 跑在 User=root
+#   （按 passwd 枚举每个有 .claude/ 的家；跑的是装到 /usr/local/lib/dao-skills-heal 的副本——以 root
+#   解释仓内脚本等于给每个能写仓的执行体一条 root 通道）。只有 .mirasim/ 的家不纳入。
+#   验：systemctl list-timers 里两只 timer 的 NEXT 都必须是时间；dao-check ㉚ 对每个有 .claude/ 的家都绿（被劫红、没装 SKIP）
 # mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
 #   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
 #   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
@@ -605,7 +632,16 @@ mirasim 每次启动可能把装载面劫成 `~/.claude/skills → ~/.mirasim/sk
 sudo bash scripts/install-skills-heal.sh
 ```
 
-验：`systemctl list-timers` 里 `dao-skills-heal.timer` 的 NEXT 必须是时间。故意把装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
+装两只钟：orca 修自己够得着的家；root 按 passwd 枚举本机每个有 `.claude/` 的家并修（不写死用户名、不钉 `DAO_SKILL_HOMES`）。判据 `scripts/lib/skill-homes.mjs`：**有 `.claude/` 才纳入**。只有 `.mirasim/`、没有 `.claude/` 的家不纳入本检查，也不凭空建 `.claude/skills`。
+
+| 单元 | 跑在 | 守 |
+|---|---|---|
+| `dao-skills-heal.timer` | `User=orca` | 该身份够得着的家（通常 `/home/orca`），跑仓内脚本 |
+| `dao-skills-heal-root.timer` | `User=root` | 本机每个有 `.claude/` 的家（passwd 清单），跑 `/usr/local/lib/dao-skills-heal` 的安装副本 |
+
+为什么是两只（2026-09-13 实咬）：只有 orca 那只时，`dao-check`（root 会话跑的，看 `/root`）报了三天「装载面被劫」，而自愈钟每 5 分钟对 orca 那份说「无事可做」——两边各修各看的家，合起来没人管。root 的家 700，orca 身份够不着，只能以 root 修。
+
+验：`systemctl list-timers` 里两只 timer 的 NEXT 都必须是时间。故意把某个装载面换成 mirasim 形态后，下个周期（最多 5 分钟）接回，`ls ~/.claude/skills/lark-im` 仍在。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
@@ -703,6 +739,18 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 装出来的 bin 名不等于包名，装完 `ls $bin\*.cmd` 对一眼再写路径
 （`@playwright/mcp` → `playwright-mcp.cmd`，`chrome-devtools-mcp` → 同名）。
 
+`fetch` 是 Python 包，同样别用 `uvx`（那也是现场解包），钉法：
+
+```powershell
+uv tool install mcp-server-fetch          # 落 ~\.local\bin\mcp-server-fetch.exe
+claude mcp add fetch -s user -- "$env:USERPROFILE\.local\bin\mcp-server-fetch.exe"
+```
+
+它默认**遵守 robots.txt**：模型主动发起的抓取撞上 disallow 会直接失败，看起来像"又断了"，
+真因在站点规则不在链路。确需绕过时给命令加 `--ignore-robots-txt`（这是放宽站点声明，按需再说）。
+另有一条无害告警 `A working NPM installation was not found`：readabilipy 在 Windows 上找不到
+`npm.cmd`，退回纯 Python 提取，正文照样出得来。
+
 两个执行坑（2026-09-01 本机各栽一次）：
 
 - **`claude mcp add` 必须在 PowerShell 里跑，别在 Git Bash**。Git Bash 会把 `/c`
@@ -732,6 +780,38 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 现场解包型就报 `mcp-slow-boot`（只报不修——那是用户自己的文件）。测单个 server 的启动耗时别用
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
+
+## 13a. 查资料的本机搜索 CLI（ddgs）——每台机器都要装
+
+内置 WebSearch 跑在 API 上游，慢或断的时候本机一点办法没有。`ddgs` 走本机出网、不碰那条链，
+所以 docs-lookup skill 把它定为搜索的默认路。**两台机器都装**：
+
+```bash
+uv tool install ddgs            # 落 ~/.local/bin/ddgs(.exe)
+ddgs text -q "关键词" -m 5 -nc
+```
+
+Linux 上若没有 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`（以服务用户跑，别用 root——
+root 会在服务用户家目录里留下 root 属主文件）。
+
+- **`~/.local/bin` 不在 PATH 上**（两台机器都不在，`uv tool install` 装完自己会警告这件事）。
+  调用写全路径，或跑一次 `uv tool update-shell`。
+- **`-o json` 是存文件不是打印**，会在当前目录落 `text_<query>_<时间戳>.json`；在共用主树里跑等于
+  留垃圾（2026-09-17 实咬，落进了仓根）。要机器读就解析 stdout。
+- `-b google` 两台机器都回 0 条，别用。
+- **验**：`node scripts/onboard.mjs --dry-run` 会报 `search-cli-missing`（只报不修，装包要出网）。
+
+后端实测（2026-09-17，同一句查询，`-m 3`）：
+
+| 后端 | Windows 帅位 | 法国 VPS |
+|---|---|---|
+| `brave` | **1.36s** | 2.28s |
+| `duckduckgo` | 3.26s | **1.74s** |
+| `bing` | 3.86s | 5.54s |
+| `google` | 0 条 | 0 条 |
+| 默认 `auto` | 7.7s | 3.34s |
+
+哪家最快按机器不同，别把某台的数字当通例；不确定就用默认 `auto`，它会自己换家。
 
 ## 13b. Linux 服务器上的浏览器（2026-09-06 装，Ubuntu 24.04 实测）
 

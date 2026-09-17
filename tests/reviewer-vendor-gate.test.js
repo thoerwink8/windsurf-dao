@@ -354,13 +354,15 @@ describe('#679 起审官同厂硬闸', () => {
       assert.equal(r.reviewerId, 'gpt-5.6-sol');
     });
 
-    await t.test('下一档就是工人那一厂 → 拒（#679 不许破）', () => {
+    await t.test('下一档就是工人那一厂 → 退回原席位重试，不落到工人那一厂（#1354 / #679 不破）', () => {
       const r = slot.planReviewerOnCapacityDeath({
         requested: 'gpt-5.6-sol',
         capacityFailover: { ...base, deadError: DEAD, workerId: 'kimi-k3' },
       });
-      assert.equal(r.ok, false, JSON.stringify(r));
-      assert.match(r.error, /同厂/);
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, false);
+      assert.match(r.why, /换厂无合法目标，留在原席位重试/);
     });
 
     await t.test('满载死因但没查成上一位是谁 → 不换厂，不是把起审官打死', () => {
@@ -371,6 +373,88 @@ describe('#679 起审官同厂硬闸', () => {
       assert.equal(r.ok, true, JSON.stringify(r));
       assert.equal(r.switched, false);
       assert.equal(r.reviewerId, 'gpt-5.6-luna');
+    });
+  });
+
+  it('#1354 换厂无合法目标：两种 exhausted 分出口，unscanned 不放宽', async (t) => {
+    const slot = await SLOT_LOAD;
+    const DEAD = 'Selected model is at capacity. Please try a different model.';
+    // 现场形：顺位 luna→sol→grok，工人 grok。不读 live routing，免得加席位把正控编没。
+    const three = [
+      { id: 'gpt-5.6-luna', provider: 'gpt', roles: ['审查'] },
+      { id: 'gpt-5.6-sol', provider: 'gpt', roles: ['审查'] },
+      { id: 'grok-4.6', provider: 'grok', roles: ['写码'] },
+    ];
+    const order = ['gpt-5.6-luna', 'gpt-5.6-sol', 'grok-4.6'];
+    const failover = {
+      deadModelId: 'gpt-5.6-sol',
+      deadError: DEAD,
+      workerId: 'grok-4.6',
+      models: three,
+    };
+
+    await t.test('正控：最后一个跨厂席位，剩余全同厂 → 退回原席位重试', () => {
+      const next = slot.nextReviewerAfter({
+        currentId: 'gpt-5.6-sol', models: three, passerIds: order, workerId: 'grok-4.6', order,
+      });
+      assert.equal(next.ok, false, JSON.stringify(next));
+      assert.equal(next.exhausted, true);
+      assert.equal(next.reason, 'same_vendor');
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...failover, passerIds: order, order },
+      });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.reviewerId, 'gpt-5.6-sol');
+      assert.equal(r.switched, false);
+      assert.equal(r.why, '换厂无合法目标，留在原席位重试');
+    });
+
+    await t.test('负控：checked===0 候选池真空 → 仍 fail，不与同厂全剔走同一出口', () => {
+      const emptyOrder = ['gpt-5.6-luna', 'gpt-5.6-sol'];
+      const next = slot.nextReviewerAfter({
+        currentId: 'gpt-5.6-sol', models: three, passerIds: emptyOrder, workerId: 'grok-4.6', order: emptyOrder,
+      });
+      assert.equal(next.ok, false, JSON.stringify(next));
+      assert.equal(next.exhausted, true);
+      assert.equal(next.reason, 'empty_pool');
+      assert.match(next.error, /候选池空了/);
+      assert.notEqual(next.reason, 'same_vendor');
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: { ...failover, passerIds: emptyOrder, order: emptyOrder },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.error, /候选池空了/);
+      assert.notEqual(r.why, '换厂无合法目标，留在原席位重试');
+    });
+
+    await t.test('负控二：unscanned（查不出厂商）仍不放宽', () => {
+      const pool = [
+        ...three,
+        { id: 'kimi-k3', provider: 'cursor', roles: ['审查'] },
+      ];
+      const scanOrder = ['gpt-5.6-sol', 'kimi-k3'];
+      const next = slot.nextReviewerAfter({
+        currentId: 'gpt-5.6-sol', models: pool, passerIds: scanOrder,
+        workerId: 'mystery-xyz', order: scanOrder,
+      });
+      assert.equal(next.ok, false, JSON.stringify(next));
+      assert.equal(next.unscanned, true);
+      assert.notEqual(next.reason, 'same_vendor');
+      const r = slot.planReviewerOnCapacityDeath({
+        requested: 'gpt-5.6-sol',
+        capacityFailover: {
+          ...failover,
+          models: pool,
+          passerIds: scanOrder,
+          order: scanOrder,
+          workerId: 'mystery-xyz',
+        },
+      });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(r.unscanned, true);
+      assert.notEqual(r.why, '换厂无合法目标，留在原席位重试');
     });
   });
 
@@ -491,10 +575,12 @@ describe('#679 起审官同厂硬闸', () => {
 
   it('CLI：dispatch 预检不再闸同厂（2026-08-23 拍板），闸在 reviewer-attach/create', async (t) => {
     function dispatch(model, reviewer) {
+      // 本 it 里别的 spawn 都带了 DAO_GH_FAKE，只有这个函数漏了——于是 --issue 1
+      // 的消歧门去读真 issue，一路打到 api.github.com（2026-09-15 逐文件测出 2 次）。
       return spawnSync(process.execPath, [
         CLI, 'dispatch', '--executor', 'mirasim', '--model', model, '--reviewer', reviewer, '--confirm',
         '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '1', '--dry-run',
-      ], { encoding: 'utf8', cwd: REPO });
+      ], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH } });
     }
     const same = dispatch('grok-4.6', 'grok-4.6');
     const pSame = payload(same);

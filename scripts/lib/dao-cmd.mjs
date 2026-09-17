@@ -870,7 +870,8 @@ import {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, unsignedIssueMergePolicy,
+  UNSIGNED_ISSUE_MERGE_REASON, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
@@ -882,7 +883,8 @@ export {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, reviewerSpawnQueuedComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
-  pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy, unsignedIssueMergePolicy,
+  UNSIGNED_ISSUE_MERGE_REASON, planReviewerAttachReuse,
   planReviewerKeepOnFail, planReviewerDone, preflightReviewer,
   planFastPathReviewer, fastPathStandInComment, fastPathStandInCreateArgs,
   isFastPathStandIn, FASTPATH_STANDIN_MARK,
@@ -952,7 +954,7 @@ export {
   REVIEW_PENDING_SOURCE_WORKER_DONE,
   REVIEW_PENDING_SOURCES, reviewPendingSourceOf,
   buildReviewPendingTicket, writeReviewPending, readReviewPending, listReviewPending,
-  planReviewPendingDrain, consumeReviewPending, drainReviewPending,
+  planReviewPendingDrain, mergePolicyDrainArgv, consumeReviewPending, drainReviewPending, attachReceiptFromSpawn,
   countLiveReviewers, planReviewAdmission, resolveReviewerCap, reviewerIdsForCap, effectiveReviewerOf,
   REVIEWER_CAP_FLOOR, REVIEW_ADMISSION_CHECKS,
 } from './dispatch/review-pending.mjs';
@@ -1142,7 +1144,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
-                  # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
+                  # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账；无署名 issue（快路）走 manual，不许退回 auto；其余读不到才回退 auto 并 fb= 写原因
                   # #826：身份消息失败不整树回滚（树与终端保留，只记红项；补发走 GitHub 评论，不要调 notify）
                   # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--reviewer <模型id>] [--from <handle>] [--dry-run] [--repo owner/name]
@@ -1253,7 +1255,7 @@ merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 ma
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
-续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
+续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create 继承派工记账的 merge-policy（#799）；无署名 issue（快路）取不到 human_holds，走 manual，不许退回 auto；其余读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——

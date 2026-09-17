@@ -130,6 +130,7 @@ import {
   progressDispatchComment,
   pickMergePolicyFromLedger,
   resolveReviewerMergePolicy,
+  unsignedIssueMergePolicy,
   isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
@@ -150,6 +151,7 @@ import {
   writeReviewPending,
   listReviewPending,
   drainReviewPending,
+  attachReceiptFromSpawn,
   REVIEW_PENDING_SOURCE_WORKER_DONE_FAIL,
   REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
   countLiveReviewers,
@@ -231,8 +233,10 @@ import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { resolveModelChannel } from './lib/channel-concurrency.mjs';
-import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
@@ -1118,6 +1122,7 @@ function lookupReviewerMergePolicy({
     explicitReason,
     ledger,
     comment,
+    issue,
   });
 }
 
@@ -1514,7 +1519,13 @@ async function admitReviewPull(tickets) {
  */
 function usableReviewerIds() {
   try {
-    return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+    const raw = loadRoutingJsonRaw();
+    const profiles = loadExecutionProfiles();
+    // #1342：与指挥官同一个判据（healthRedIds）——目录里 available 的腿真实 turn 可以 25% 成功率，
+    // 熔断 open 的模型不许再被票上写着就照派。判红名单算不出（表没查成）= 不据此剔，只按目录。
+    let redIds = [];
+    try { redIds = healthRedIds({ models: modelsFromJson(raw), profiles, breaker: loadBreaker() }); } catch { redIds = []; }
+    return usableReviewerOrder(reviewerSelectOrder(raw), { profiles, redIds }).usable;
   } catch { return null; }
 }
 
@@ -1628,17 +1639,8 @@ async function cmdReviewPendingDrain(args) {
         cwd: ROOT,
         timeout: 600000,
       });
-      let json = null;
-      try { json = JSON.parse(String(spawned.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* 非 JSON */ }
-      if (spawned.error || (spawned.status !== 0 && spawned.status != null) || !json || json.ok !== true) {
-        return {
-          ok: false,
-          error: (json && json.error)
-            || String(spawned.stderr || spawned.error?.message || `reviewer-attach exit ${spawned.status}`).trim().slice(0, 400),
-          json,
-        };
-      }
-      return { ok: true, json };
+      // 无 JSON / 超时 / 信号：完整 stderr 进比较键，不在这里截 400 字。
+      return attachReceiptFromSpawn(spawned);
     },
   });
   if (!drained.ok) fail(drained.error || 'review-pending-drain 未全部成功', drained);
@@ -1898,6 +1900,7 @@ import {
   buildMirasimReviewerPrompts, peekReviewerSession,
   reviewerMustReplaceDead,
   decideReviewerCreateStart, decideReworkReviewerHandoff, treeExistsFromProbe, runLockedReviewerCreate,
+  readPrHead,
   mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
 
@@ -1989,8 +1992,13 @@ function gitFetchRef(repo, prBranch, expectedOid, reviewBranch) {
   return { ok: true, branch, checkedOut, target: String(target) };
 }
 
-/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。 */
+/** mirasim 审官路径的 merge-policy：走与 orca 同一条 lookupReviewerMergePolicy（不硬编码 auto）。
+ * 无署名且没有显式旗标：取不到 human_holds，直接 manual，不翻账本（账本缺字段会 fallback auto）。 */
 function mirasimMergePolicy(args, { issue, pr, dispatchId } = {}) {
+  const hasIssue = issue != null && String(issue).trim() !== '';
+  if (!hasIssue && !String(args.mergePolicy || '').trim()) {
+    return unsignedIssueMergePolicy();
+  }
   return lookupReviewerMergePolicy({
     explicitPolicy: args.mergePolicy,
     explicitReason: args.mergeReason,
@@ -2124,6 +2132,7 @@ async function cmdReviewerCreateMirasim(args) {
 
   const issueRef = args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null;
   // #886 审官第 4 条：merge-policy 从原派工恢复（显式旗标 > 账本 > 卡备注），不许硬编码 auto。
+  // 快路无署名单：取不到 human_holds，走与 worker-done 同一条 no-issue manual，不许 fallback auto。
   const policyPlan = mirasimMergePolicy(args, {
     issue: issueRef, pr: args.pr, dispatchId: args.soldierDispatch || null,
   });
@@ -2154,9 +2163,13 @@ async function cmdReviewerCreateMirasim(args) {
   // 不说明活干完了——实测审官把结论写在会话文本里却从没调 gh pr review，
   // 下一轮复用它，PR 就永久冻着。判据是 GitHub 上当前 head 有没有判定，三态。
   const verdict = judgeVerdictOnHead(args.pr, existingRecord, targetRepo);
+  const outerHead = existingRecord && existingRecord.sessionKey
+    ? readPrHead(gh, args.pr)
+    : { ok: false };
+  const outerLiveHead = outerHead.ok === true ? outerHead.expectedOid : null;
   const decided = decideReviewerCreateStart({
     force: args.force, switched: planned.switched, deadError: failover.deadError,
-    record: existingRecord, view: peek.view, verdictOnHead: verdict,
+    record: existingRecord, view: peek.view, verdictOnHead: verdict, liveHead: outerLiveHead,
   });
   const forceNew = decided.forceNew;
   // #886 审官第 2 条：一 PR 一审官。登记里已有在役会话就复用/返回，不再起第二个烧额度。
@@ -2171,11 +2184,13 @@ async function cmdReviewerCreateMirasim(args) {
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: decided.reuse.sessionKey,
       agent: existingRecord.agent || null, treePath: existingRecord.treePath || null,
       expectedOid: existingRecord.expectedOid || null,
+      liveHead: outerLiveHead,
       mergePolicy: books.mergePolicy, mergePolicySource: books.source,
       reuse: { reuse: true, checked: decided.reuse.checked, why: decided.reuse.why, peekWhy: peek.why || null },
       why: `${decided.reuse.why}（要另起加 --force）`,
     });
   }
+
 
   const repo = targetRepo.localPath;
   if (args.dryRun) {
@@ -2192,6 +2207,8 @@ async function cmdReviewerCreateMirasim(args) {
 
   // 起会话 + 写登记必须在同一把 per-PR 锁里，并在锁内**再读一次登记**（double-check）：
   // 上面那次 read 在锁外，只挡得住「已经起过的」，挡不住「正在起的」。
+  // 复用结果发出前必须在锁内重读 PR head：锁外快照在等锁期间会过期，沿用它会把旧
+  // head 上的会话报成 reused（本闸要修的竞态）。新建路径同样只用这次锁内读取。
   const guarded = await withWorktreeLock(async () => {
     const again = registry.read(args.pr, ownerName);
     if (again && again.ok !== true && again.missing !== true) {
@@ -2206,9 +2223,11 @@ async function cmdReviewerCreateMirasim(args) {
     }
     const againRecord = again.ok ? again.record : null;
     // 锁内复查走同一套 reuse 判据：满载死会话不算 raced。只看 sessionKey 会把刚死的那位当并发已起。
-    const racePeek = (againRecord && againRecord.sessionKey && !args.dryRun)
+    const racePeek = (againRecord && againRecord.sessionKey)
       ? await peekReviewerSession(bind.runtime, againRecord.sessionKey)
       : { view: null };
+    const lockedHead = readPrHead(gh, args.pr);
+    const lockedLiveHead = lockedHead.ok === true ? lockedHead.expectedOid : null;
     // #1293 审官 P1（第二轮实咬）：锁外那份 verdict 在等锁期间可能已过期——
     // 锁外快照是「旧 head 有判定（true）」，等锁期间 PR 推了新 head 而新 head 还没判定，
     // 拿旧值判 race 会把终态会话误报 reused，新提交就没有审官。
@@ -2217,8 +2236,12 @@ async function cmdReviewerCreateMirasim(args) {
     const lockedVerdict = (!forceNew && againRecord && againRecord.sessionKey)
       ? judgeVerdictOnHead(args.pr, againRecord, targetRepo)
       : null;
+    const decided = decideReviewerCreateStart({
+      force: args.force, switched: planned.switched, deadError: failover.deadError,
+      record: againRecord, view: racePeek.view, liveHead: lockedLiveHead, verdictOnHead: lockedVerdict,
+    });
     const locked = await runLockedReviewerCreate({
-      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: lockedVerdict,
+      forceNew, record: againRecord, view: racePeek.view, verdictOnHead: lockedVerdict, liveHead: lockedLiveHead,
       create: async () => {
         const created = await mirasimReviewerCreate({
           runtime: bind.runtime, gh, readTreeHead: gitHeadOf,
@@ -2244,7 +2267,16 @@ async function cmdReviewerCreateMirasim(args) {
         };
       },
     });
-    if (locked.raced) return { raced: true, record: againRecord };
+    if (locked.raced) {
+      return {
+        raced: true,
+        record: againRecord,
+        why: locked.why,
+        checked: decided.reuse.checked,
+        peekWhy: racePeek.why || null,
+        liveHead: lockedLiveHead,
+      };
+    }
     const created = locked.res;
     if (!created || !created.ok) return { res: created };
     return { res: created, w: created.registryWrite };
@@ -2257,14 +2289,21 @@ async function cmdReviewerCreateMirasim(args) {
     });
   }
   if (guarded.raced) {
+    const reuseWhy = guarded.why || '锁内复查：这个 PR 已经有审官会话了';
     emit({
       ok: true, executor: 'mirasim', outcome: 'reused', pr: String(args.pr),
       reviewer: picked.modelId, worker: worker.modelId, sessionKey: guarded.record.sessionKey,
       agent: guarded.record.agent || null, treePath: guarded.record.treePath || null,
       expectedOid: guarded.record.expectedOid || null,
+      liveHead: guarded.liveHead || null,
       mergePolicy: books.mergePolicy, mergePolicySource: books.source,
-      reuse: { reuse: true, checked: false, why: '锁内复查发现别的进程刚起过（并发抢锁）' },
-      why: '锁内复查：这个 PR 已经有审官会话了（要另起加 --force）',
+      reuse: {
+        reuse: true,
+        checked: guarded.checked ?? false,
+        why: reuseWhy,
+        peekWhy: guarded.peekWhy || null,
+      },
+      why: `${reuseWhy}（要另起加 --force）`,
     });
   }
   const res = guarded.res;
@@ -2342,6 +2381,7 @@ async function cmdWorkerDoneMirasim(args) {
 
   // #886 审官第 4 条：审官任务书的 m= 必须来自原派工，不许硬编码 auto——原单 m=manual
   // 却给审官注入 m=auto，审官会绕过「需人工合并」的边界。
+  // 快路无署名单：mirasimMergePolicy 走 no-issue manual（与 commander-core 快路返工同一失败方向）。
   const policyPlan = mirasimMergePolicy(args, {
     issue: plan.issue, pr: plan.pr, dispatchId: args.soldierDispatch || null,
   });
@@ -2364,8 +2404,8 @@ async function cmdWorkerDoneMirasim(args) {
     return;
   }
 
-  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工 comment 只发 PR' };
-  if (plan.issue) {
+  let postedIssue = { ok: true, skipped: true, why: '快路无署名单，完工评论只发 PR' };
+  if (plan.issue != null) {
     postedIssue = postCommentOnce({
       kind: 'issue', number: plan.issue, body: plan.comment, runGh: gh,
       writeIssue: applyIssueWrite, host: 'worker-done',
@@ -2373,8 +2413,8 @@ async function cmdWorkerDoneMirasim(args) {
       repo: targetRepo.ownerName || undefined,
       idempotency_key: `worker-done:issue:${plan.pr}:${plan.issue}`,
     });
-    if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   }
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue });
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
@@ -2404,6 +2444,8 @@ async function cmdWorkerDoneMirasim(args) {
       source: REVIEW_PENDING_SOURCE_WORKER_DONE_HANDOFF,
       // 仓键用 GitHub owner/name，不许把 localPath 塞进来（路径过不了 parseOwnerNameRepo，还会把跨仓票落到 12.json）。
       repo: targetRepo.ownerName || null,
+      mergePolicy: books.mergePolicy,
+      mergeReason: books.mergeReason,
     });
     if (!built.ok) fail(built.error, { ...plan, postedIssue, postedPr });
     const wrote = writeReviewPending({ dir, ticket: built.ticket });
@@ -2543,6 +2585,11 @@ async function cmdStartMirasim(args) {
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
       executor: 'mirasim', repo, branch, workdir, agent: route.agent,
+      // #1331：`code` 必须原样透出去。`reviewer-create` 那条路早就带着它，唯独 start 没带，
+      // 于是返工/收口泵那侧只能拿错误文本去猜「这次是环境还是这张 PR 的事」。
+      // 实测 7 天 99 次起会话失败里 66 次是「连不上回环 ws」（MirasimUnavailableError，
+      // code='unavailable'），而它们全被记成「这张 PR 又试了一次」。
+      ...(e?.code ? { code: String(e.code) } : {}),
       ...(e?.detail?.busy === true ? { busy: true, reason: e.detail.reason, holders: e.detail.holders } : {}),
     });
   }

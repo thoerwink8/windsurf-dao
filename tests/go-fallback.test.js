@@ -19,12 +19,12 @@ const CORE = path.resolve(__dirname, '..', 'host', 'pi-extensions', 'go-fallback
 const TS = path.resolve(__dirname, '..', 'host', 'pi-extensions', 'go-fallback.ts');
 const CORE_LOAD = import('file://' + CORE.replace(/\\/g, '/'));
 
-// 降级现场：原默认 opencode-go/deepseek-v4-flash，setModel 试图写 deepseek/deepseek-v4-flash
+// 降级现场：原默认 opencode-go/deepseek-v4-flash，setModel 试图写备用 fake-ds
 const PENDING = {
   path: 'settings.json',
   provider: 'opencode-go',
   model: 'deepseek-v4-flash',
-  fallbackProvider: 'deepseek',
+  fallbackProvider: 'fake-ds',
   fallbackModel: 'deepseek-v4-flash',
 };
 
@@ -36,9 +36,9 @@ describe('go-fallback-core planRestore', () => {
 
   it('② 当前值 == 降级值 → restore（降级写已落盘，必须写回原值）', async () => {
     const C = await CORE_LOAD;
-    const r = C.planRestore({ pending: PENDING, current: { provider: 'deepseek', model: 'deepseek-v4-flash' } });
-    assert.strictEqual(r.action, 'restore', '看到降级值必须恢复——否则后续按默认启动的 worker 静默变直连');
-    assert.deepStrictEqual(r.from, { provider: 'deepseek', model: 'deepseek-v4-flash' }, '日志要带上被还原的降级值');
+    const r = C.planRestore({ pending: PENDING, current: { provider: 'fake-ds', model: 'deepseek-v4-flash' } });
+    assert.strictEqual(r.action, 'restore', '看到降级值必须恢复——否则后续按默认启动的 worker 静默变备用通道');
+    assert.deepStrictEqual(r.from, { provider: 'fake-ds', model: 'deepseek-v4-flash' }, '日志要带上被还原的降级值');
   });
 
   it('③ 当前值 == 原值 → wait（核心修复：不许清 pending 放弃补刀）', async () => {
@@ -56,10 +56,10 @@ describe('go-fallback-core planRestore', () => {
     assert.deepStrictEqual(r.from, { provider: 'anthropic', model: 'claude-x' }, '日志要带上用户值');
   });
 
-  it('⑤ 边界：原值本来就是直连（original == fallback）→ restore 幂等无害', async () => {
+  it('⑤ 边界：原值本来就是备用通道（original == fallback）→ restore 幂等无害', async () => {
     const C = await CORE_LOAD;
-    const pending = { ...PENDING, provider: 'deepseek' }; // 原默认就是 deepseek 直连
-    const r = C.planRestore({ pending, current: { provider: 'deepseek', model: 'deepseek-v4-flash' } });
+    const pending = { ...PENDING, provider: 'fake-ds' };
+    const r = C.planRestore({ pending, current: { provider: 'fake-ds', model: 'deepseek-v4-flash' } });
     assert.strictEqual(r.action, 'restore', '写回原值==写入现值，幂等');
   });
 
@@ -68,7 +68,7 @@ describe('go-fallback-core planRestore', () => {
     const C = await CORE_LOAD;
     const cases = [
       [{ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'wait'],
-      [{ provider: 'deepseek', model: 'deepseek-v4-flash' }, 'restore'],
+      [{ provider: 'fake-ds', model: 'deepseek-v4-flash' }, 'restore'],
       [{ provider: 'opencode-go', model: 'other-model' }, 'respect-user'], // provider 同、model 不同也是用户改
       [{ provider: 'other', model: 'deepseek-v4-flash' }, 'respect-user'],
     ];
@@ -111,11 +111,14 @@ describe('go-fallback-core #841 网关不归扩展管', () => {
     assert.equal(lists.primaries.includes('gw'), false);
     assert.equal(lists.primaries.includes('grok'), false);
     assert.equal(lists.primaries.includes('xai'), false);
-    assert.deepStrictEqual(lists.fallbacks, ['deepseek']);
+    assert.deepStrictEqual(lists.fallbacks, []);
+    assert.equal(lists.fallbacks.includes('deepseek'), false);
     // 接线层不许再写回旧默认——#794 就是这么把 gw 塞进 PRIMARIES 的。
     const ts = fs.readFileSync(TS, 'utf8');
     assert.equal(/opencode-go,mirasim,gw,grok,xai/.test(ts), false);
     assert.match(ts, /resolveProviderLists\(process\.env\)/);
+    assert.equal(/api\.deepseek\.com/.test(fs.readFileSync(CORE, 'utf8') + ts), false);
+    assert.equal(/auth\.deepseek/.test(ts), false);
   });
 
   it('测试覆盖仍认 PI_GO_FALLBACK_PRIMARY（e2e 的 fake-go 靠这条）', async () => {
@@ -197,62 +200,63 @@ describe('go-fallback-core #841 网关不归扩展管', () => {
   });
 });
 
-describe('go-fallback-core 直连余额探针', () => {
-  it('只有 deepseek 要探；测试用 fake-ds 不探', async () => {
+describe('go-fallback-core 直连渠道已删', () => {
+  it('默认 fallback 永远不含 deepseek，常量也不是 deepseek', async () => {
     const C = await CORE_LOAD;
-    assert.equal(C.needsBalanceProbe('deepseek'), true);
-    assert.equal(C.needsBalanceProbe('fake-ds'), false);
-    assert.equal(C.needsBalanceProbe('opencode-go'), false);
+    const lists = C.resolveProviderLists({});
+    assert.deepStrictEqual(lists.fallbacks, []);
+    assert.equal(lists.fallbacks.includes('deepseek'), false);
+    assert.notEqual(C.DEFAULT_FALLBACK_PROVIDERS, 'deepseek');
+    assert.equal(C.DEFAULT_FALLBACK_PROVIDERS, '');
+    assert.deepStrictEqual([...C.DROPPED_FALLBACK_PROVIDERS], ['deepseek']);
   });
 
-  it('没探过的 deepseek → skip（切到 402 账号不算降级）', async () => {
+  it('环境变量写 deepseek 也滤掉（不许人工例外把渠道加回来）', async () => {
+    const C = await CORE_LOAD;
+    assert.deepStrictEqual(
+      C.resolveProviderLists({ PI_GO_FALLBACK_PROVIDERS: 'deepseek' }).fallbacks,
+      []
+    );
+    assert.deepStrictEqual(
+      C.resolveProviderLists({ PI_GO_FALLBACK_PROVIDERS: 'fake-ds,deepseek,other' }).fallbacks,
+      ['fake-ds', 'other']
+    );
+    assert.deepStrictEqual(
+      C.resolveProviderLists({ PI_GO_FALLBACK_PRIMARIES: 'deepseek,opencode-go' }).primaries,
+      ['opencode-go']
+    );
+  });
+
+  it('planFallbackTarget 对 deepseek 永远 skip，即使声称探过余额', async () => {
     const C = await CORE_LOAD;
     const r = C.planFallbackTarget({ provider: 'deepseek', currentProvider: 'opencode-go' });
     assert.equal(r.action, 'skip');
-    assert.equal(r.reason, 'unprobed');
-  });
-
-  it('HTTP 402 / Insufficient Balance / 余额 0 → 都 skip', async () => {
-    const C = await CORE_LOAD;
-    assert.equal(C.interpretBalanceProbe({ status: 402, body: '{}' }).ok, false);
-    assert.equal(C.interpretBalanceProbe({ status: 402, body: '{}' }).reason, 'insufficient-balance');
-    assert.equal(C.interpretBalanceProbe({
-      status: 200,
-      body: { message: 'Insufficient Balance' },
-    }).reason, 'insufficient-balance');
-    assert.equal(C.interpretBalanceProbe({
-      status: 200,
-      body: { is_available: true, balance_infos: [{ total_balance: '0' }] },
-    }).reason, 'zero-balance');
-    assert.equal(C.interpretBalanceProbe({ status: 200, body: { is_available: true } }).reason, 'no-balance-info');
-  });
-
-  it('有余额才 use；探失败 fail-closed', async () => {
-    const C = await CORE_LOAD;
-    const ok = C.interpretBalanceProbe({
-      status: 200,
-      body: { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '12.5' }] },
-    });
-    assert.equal(ok.ok, true);
-    assert.equal(C.planFallbackTarget({
-      provider: 'deepseek', currentProvider: 'opencode-go', probe: ok,
-    }).action, 'use');
-    assert.equal(C.planFallbackTarget({
-      provider: 'deepseek', currentProvider: 'opencode-go',
-      probe: { ok: false, reason: 'insufficient-balance' },
-    }).action, 'skip');
+    assert.equal(r.reason, 'dropped-channel');
     assert.equal(C.planFallbackTarget({
       provider: 'fake-ds', currentProvider: 'fake-go',
     }).action, 'use');
+    assert.equal(C.planFallbackTarget({
+      provider: 'opencode-go', currentProvider: 'opencode-go',
+    }).reason, 'same-provider');
   });
 
-  it('probeDeepseekBalance 把 402 正文交给 interpret，不抛', async () => {
+  it('判别性：默认输出不再把 deepseek 当 fallback', async () => {
     const C = await CORE_LOAD;
-    const r = await C.probeDeepseekBalance({
-      apiKey: 'k',
-      fetchFn: async () => ({ status: 402, text: async () => '{"message":"Insufficient Balance"}' }),
+    const lists = C.resolveProviderLists({});
+    const env = C.resolveProviderLists({ PI_GO_FALLBACK_PROVIDERS: 'deepseek' });
+    const dump = {
+      primaries: lists.primaries,
+      fallbacks: lists.fallbacks,
+      constant: C.DEFAULT_FALLBACK_PROVIDERS,
+      envDeepseek: env.fallbacks,
+      plan: C.planFallbackTarget({ provider: 'deepseek', currentProvider: 'opencode-go' }),
+    };
+    assert.deepStrictEqual(dump, {
+      primaries: ['opencode-go', 'mirasim'],
+      fallbacks: [],
+      constant: '',
+      envDeepseek: [],
+      plan: { action: 'skip', reason: 'dropped-channel' },
     });
-    assert.equal(r.ok, false);
-    assert.equal(r.reason, 'insufficient-balance');
   });
 });

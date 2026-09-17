@@ -20,7 +20,8 @@ import { classifyDrainAttempt } from './dispatch/review-pending.mjs';
 // 而 commander-core → commander-verbs 是单向依赖，写在 core 会绕成环。
 import { retryEpoch, stampRetryKey } from './retry-epoch.mjs';
 // #1237：失败分类（terminal / retryable / unknown）——判据在那边，这里只消费。
-import { judgeRetry } from './retry-verdict.mjs';
+// 行为 streak（judgeRepeatedFailure）也在那边：词表认不出的同一闸拒，靠「连着一模一样」拦。
+import { judgeRetry, judgeRepeatedFailure, foldFailureStreak } from './retry-verdict.mjs';
 
 export const DEFAULT_GH_ROLE = 'marshal';
 export const ADD_LABEL_PREFIXES = ['reviewer/', 'model/'];
@@ -50,6 +51,7 @@ export const CHECKS = {
   'retry-drain.queue': true,
   'retry-drain.attempted': true,
   'retry-drain.stale-head': true,
+  'retry-drain.hopeless': true,
   'retry-drain.max-tries': true,
   'retry-drain.grace': true,
   'open-issue.reason': true,
@@ -364,14 +366,25 @@ export function validateRetryDrain(input = {}) {
   // = 白等 3×45 分钟才见到人，而每一次都不可能成功。
   // 一次就交人 vs 两小时后交人，差的不是效率，是「这张卡还活着吗」。
   //
-  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError）。
+  // 判据落在**上一轮记下的失败原文**上（applyDrainLedger 存进 lastError / sameErrorRounds）。
   // 没记过原文 → verdict 为 unknown → 按可试处理（保守：宁可多试一次）。
+  // 词表认不出时，行为 streak 补上：同一原文连着 SAME_ERROR_ROUNDS_TO_STUCK 轮 = 再试还是它。
   const verdict = judgeRetry({ error: prevObj.lastError });
+  const repeated = judgeRepeatedFailure(prevObj);
+  const hopelessNow = verdict.verdict === 'terminal' || repeated.stuck;
+  const hopelessWhy = verdict.verdict === 'terminal'
+    ? `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`
+    : `PR #${pr} 连着 ${repeated.rounds} 轮拿回一模一样的失败原文——当场交人：${prevObj.lastError || '（无原文）'}`;
   const hopeless = gated(
     'retry-drain.hopeless',
-    verdict.verdict === 'terminal',
-    fail('hopeless', `PR #${pr} 的失败重试不会变——当场交人，不烧满名额：${prevObj.lastError || '（无原文）'}`,
-      { escalate: true, tries, retryVerdict: 'terminal', verdictWhy: verdict.why, error: prevObj.lastError || null }),
+    hopelessNow,
+    fail('hopeless', hopelessWhy,
+      {
+        escalate: true, tries,
+        retryVerdict: verdict.verdict === 'terminal' ? 'terminal' : verdict.verdict,
+        verdictWhy: verdict.verdict === 'terminal' ? verdict.why : repeated.why,
+        error: prevObj.lastError || null,
+      }),
     C,
   );
   if (hopeless) return hopeless;
@@ -538,6 +551,17 @@ export const retryKeysSync = {
  * drain 账只在「真动手」时记 tries。达上限 / 没查成拉 0 是背压，
  * 记了会在宽限期后走 retry-drain --pr 把容量闸冲掉（#1125 审官红 1）。
  */
+/**
+ * drain / 复审两条写路径共用的失败原文。完整原文，不 trim、不截行、不截字——
+ * `foldFailureStreak` 比的就是这一串；截过再比会把不同失败揉成同错。
+ */
+export function drainErrorText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const raw = payload.error != null && payload.error !== '' ? payload.error : payload.why;
+  if (raw == null || raw === '') return '';
+  return typeof raw === 'string' ? raw : String(raw);
+}
+
 export function applyDrainLedger({
   ledger = {}, pr, head, payload, nowIso, _checks,
 } = {}) {
@@ -547,14 +571,26 @@ export function applyDrainLedger({
   const prev = ledger && typeof ledger === 'object' ? ledger[key] : null;
   // #1237：把失败原文**存进账本**。原先只记次数，于是下一轮要判「这个失败值不值得再试」
   // 时无从下手——原文只活在那一轮的进程内存里，轮与轮之间丢了。
-  // 只存首行、截 400 字：账本是给人看的判据，不是日志转储。
-  const lastError = String((payload && (payload.error || payload.why)) || '').trim().split(/\r?\n/)[0].slice(0, 400) || null;
+  // 存完整原文交给 foldFailureStreak：截首行 / 截 400 字会把「前缀相同、后文不同」
+  // 两句失败揉成同一错（审官在 1f646efc 上实测 E×400+A vs E×400+B → hopeless）。
+  // 人读摘要走 exhaustedReasonText / exhaustedComment，不在比较键上截。
+  // 成功拉起审官才清零 streak；失败没原文则保留上一轮（没查成不算「一直是它」，也不当成功）。
+  const pulled = verdict.reason === 'pulled';
+  const err = drainErrorText(payload);
+  const streak = pulled
+    ? foldFailureStreak(prev, null)
+    : err
+      ? foldFailureStreak(prev, err)
+      : {
+          lastError: prev && typeof prev.lastError === 'string' ? prev.lastError : null,
+          sameErrorRounds: Number.isInteger(Number(prev?.sameErrorRounds)) ? Number(prev.sameErrorRounds) : 0,
+        };
   return {
     ledger: {
       ...(ledger && typeof ledger === 'object' ? ledger : {}),
       [key]: {
         at: nowIso, pr, tries: (Number(prev?.tries) || 0) + 1,
-        ...(lastError ? { lastError } : {}),
+        ...streak,
       },
     },
     wrote: true,

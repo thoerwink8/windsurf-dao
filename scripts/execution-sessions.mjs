@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import {createExecutionRuntime} from './lib/execution-runtime.mjs';
+import {EXECUTION_WAITING,sessionStateOf} from './lib/execution-states.mjs';
 import {pathToFileURL} from 'node:url';
 export function normalizeExecutionSession(s) {
   const interactions=s.interactions||s.snapshot?.interactions||[];
-  const waiting=s.awaiting===true||['waiting','waiting_user','waiting_permission'].includes(s.phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
-  const failed=!!s.error||['error','failed','aborted'].includes(s.phase);
+  const phase=sessionStateOf(s)||'';
+  const waiting=s.awaiting===true||EXECUTION_WAITING.has(phase)||interactions.some(i=>!i.answered&&!i.answeredAt&&!i.resolvedAt&&!['answered','cancelled','resolved'].includes(i.status));
+  const failed=!!s.error||['error','failed','aborted'].includes(phase);
   const issue=Number(s.issue??s.issue_number);
   const pr=Number(s.pr??s.pr_number);
   return {key:s.sessionKey??s.key??s.id??null,sessionKey:s.sessionKey??null,title:s.title??null,
-    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':s.phase??s.runState??s.state??null,
+    state:failed?'failed':waiting?'waiting_user':s.incomplete?'incomplete':phase||null,
     cwd:s.workdir??s.cwd??null,lastActivityAt:s.seatAt??s.updatedAt??s.lastActivityAt??null,
     cleanupVerified:s.cleanupVerified===true,
     // 模型与落地：渠道在途数要用「这棵树在跑什么模型」把它归到渠道（#1145 的分子）。

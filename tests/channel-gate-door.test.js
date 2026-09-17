@@ -49,6 +49,7 @@ async function runtimeWith(wire, over = {}) {
     connect: async () => wire,
     now: () => T0,
     leaseCheck: freeLease,   // 隔离：本测只验渠道闸，租约恒放行
+    claimOccupancy: () => ({ ok: true, release() {} }),
     ...over,
   });
 }
@@ -408,9 +409,31 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
     assert.equal(rLots.cap, CONSERVATIVE_CAP);
   });
 
+  it('真表：gpt-5.6-sol 不因 grok/composer「不限」被生产入口放行', async () => {
+    const b = await bits();
+    const caps = b.buildChannelCaps(b.raw.腿);
+    const resolved = b.resolveModelChannel({
+      model: 'gpt-5.6-sol', legs: b.raw.腿, models: b.modelsFromJson(b.raw), caps: caps.caps,
+    });
+    assert.ok(resolved, 'gpt-5.6-sol 认不出渠道');
+    assert.ok(Number.isFinite(resolved.cap), `pending 腿继承了 Infinity：${resolved.channel} cap=${resolved.cap}`);
+    const jobs = [];
+    const trees = [];
+    for (let i = 1; i <= 8; i += 1) {
+      jobs.push({ pr: 9000 + i, model: 'gpt-5.6-sol' });
+      trees.push(`/root/mirasim-worktrees/windsurf-dao/dao-review-pr-${9000 + i}`);
+    }
+    const rLots = b.checkChannelCapacity({
+      model: 'gpt-5.6-sol', now: T0,
+      io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, trees, jobs),
+    });
+    assert.equal(rLots.verdict, 'full', `8 个 gpt-5.6-sol 在途仍 free（channel=${rLots.channel} cap=${rLots.cap}）`);
+    assert.equal(rLots.reason, 'at-cap');
+  });
+
   // 审官模型：#1145 的起因就是「一轮起 10 个审官全部 429」，所以判别点选审官这条腿。
-  // 不限模型钉「再多也不因上限拦」；有限上限钉「占满则拦」。
-  for (const model of ['gpt-5.6-luna', 'gpt-5.6-sol', 'grok-4.6']) {
+  // 不限模型（grok/composer）钉「再多也不因上限拦」；pending 模型钉「占满则拦」。
+  for (const model of ['gpt-5.6-luna', 'gpt-5.6-sol', 'grok-4.6', 'composer-2.5']) {
     it(`${model}：在途占满该渠道上限 → 生产入口判 full；少一个 → free`, async () => {
       const b = await bits();
       const caps = b.buildChannelCaps(b.raw.腿);
@@ -426,6 +449,8 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
         return { jobs, trees };
       };
 
+      // 腿表「不限」是拍板结论，不是没填。本用例对有限上限钉「满则拦」，
+      // 对不限钉「在途再多也不因上限判 full」——两条都是不变量，都不写死数字。
       if (!Number.isFinite(cap)) {
         const lots = mk(8);
         const rLots = b.checkChannelCapacity({ model, now: T0, io: ioWith(b.loadRoutingJsonRaw, b.modelsFromJson, lots.trees, lots.jobs) });

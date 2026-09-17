@@ -77,6 +77,7 @@ describe('外部会话形状的字段契约（防「读一个不存在的字段�
     assert.equal(classifySessionState({ state: 'stopping' }), 'reserved');
     assert.equal(classifySessionState({ state: 'running' }), 'live');
     assert.equal(classifySessionState({ state: 'streaming' }), 'live');
+    assert.equal(classifySessionState({ state: 'waiting_user' }), 'live', '等人仍占树，不是终态');
     assert.equal(classifySessionState({}), null, '读不出来必须与 live 分开——不许当成在跑');
   });
 
@@ -84,7 +85,8 @@ describe('外部会话形状的字段契约（防「读一个不存在的字段�
     const { classifySessionState, EXECUTION_FINISHED, EXECUTION_RESERVED } = await STATES;
     // 2026-09-11 实测出现过的全部状态值
     const SEEN = ['stopped', 'failed', 'incomplete', 'completed', 'gone', 'done', 'rejected',
-      'running', 'streaming', 'pending', 'stopping', 'uncertain'];
+      'running', 'streaming', 'pending', 'stopping', 'uncertain',
+      'waiting_user', 'waiting', 'waiting_permission'];
     for (const st of SEEN) {
       const c = classifySessionState({ state: st });
       assert.ok(['finished', 'reserved', 'live'].includes(c), `${st} 归不了类`);
@@ -94,6 +96,18 @@ describe('外部会话形状的字段契约（防「读一个不存在的字段�
     const R = [...EXECUTION_RESERVED];
     for (const st of F) assert.equal(classifySessionState({ state: st }), 'finished', `${st} 该判 finished`);
     for (const st of R) assert.equal(classifySessionState({ state: st }), 'reserved', `${st} 该判 reserved`);
+  });
+
+  it('waiting 词表与终态互斥，isWaitingState 只认正典', async () => {
+    const { EXECUTION_FINISHED, EXECUTION_WAITING, isWaitingState, classifySessionState } = await STATES;
+    for (const st of EXECUTION_WAITING) {
+      assert.equal(EXECUTION_FINISHED.has(st), false, `${st} 不许进终态`);
+      assert.equal(isWaitingState(st), true, st);
+      assert.equal(classifySessionState({ state: st }), 'live', `${st} 仍占树`);
+    }
+    assert.equal(isWaitingState('incomplete'), false);
+    assert.equal(isWaitingState('done'), false);
+    assert.equal(isWaitingState(''), false);
   });
 });
 
@@ -152,5 +166,16 @@ describe('状态词表只有一份正典（防手打副本漂移）', () => {
     const CORE_SRC = fs.readFileSync(path.join(LIB, 'commander-core.mjs'), 'utf8');
     assert.equal(/s\.runState\s*\?\?|s\.runState\s*\|\|/.test(CORE_SRC), false,
       'commander-core 同样走正典');
+    const ES = fs.readFileSync(path.join(REPO, 'scripts', 'execution-sessions.mjs'), 'utf8');
+    assert.match(ES, /sessionStateOf/, 'execution-sessions 必须走正典读状态，不许 phase 优先于 state');
+    assert.equal(/s\.phase\s*\?\?\s*s\.state/.test(ES), false,
+      'normalizeExecutionSession 不许再手写 phase??state（#1174 返工：waiting_user 会被盖成 running）');
+  });
+
+  it('execution-runtime ACP 默认策略走正典，不手写 worktreeScope 规则（#1174 T8b）', () => {
+    const src = fs.readFileSync(path.join(LIB, 'execution-runtime.mjs'), 'utf8');
+    assert.match(src, /resolveStartInteractionPolicy/, 'ACP 热路必须走 acp-interaction-policy 正典');
+    assert.equal(/worktreeScope\s*:\s*true/.test(src), false,
+      '不许在 execution-runtime 里再手写一份 worktree 规则');
   });
 });
