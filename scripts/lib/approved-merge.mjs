@@ -17,10 +17,21 @@ export function checksSucceeded(pr) {
     c && c.conclusion === 'SUCCESS' && c.status === 'COMPLETED');
 }
 
-export function canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead }) {
-  return !!(pr && issue && pr.isDraft === true && greenAtHead === true
+function approvalBound({ pr, issue, greenAtHead, expectedHead, requireDraft }) {
+  return !!(pr && issue && greenAtHead === true
     && expectedHead && pr.headRefOid === expectedHead
     && String(pr.mergeable).toUpperCase() === 'MERGEABLE'
     && explicitApprovalIssue(pr) === Number(issue.number)
-    && isApprovedExecutionTask(issue) && checksSucceeded(pr));
+    && isApprovedExecutionTask(issue) && checksSucceeded(pr)
+    && (requireDraft ? pr.isDraft === true : true));
+}
+
+export function canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead }) {
+  return approvalBound({ pr, issue, greenAtHead, expectedHead, requireDraft: true });
+}
+
+/** 非 draft 的 m=manual：证据与 draft 路相同，但不要求 isDraft。
+ *  不能复用 canReleaseApprovedDraft——那条要求 isDraft === true，吃不掉 #1218。 */
+export function canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead }) {
+  return approvalBound({ pr, issue, greenAtHead, expectedHead, requireDraft: false });
 }

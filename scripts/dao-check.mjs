@@ -129,9 +129,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { parseFrontmatter, collectExitTargets, judgeListExit, ingestPlanDocs } from './lib/session-brief.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkSkillLinks } from './lib/skill-link-check.mjs';
+import { agentHomes } from './lib/skill-homes.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { checkControlPlaneProduction, checkControlPlaneDropPoint } from './lib/control-plane-check.mjs';
 import { inspectCauseSlugs } from './lib/cause-slug-check.mjs';
@@ -143,6 +145,13 @@ import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-chec
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import {
+  createChildRegistry, suiteTimeoutMs, timeoutNote, SUITE_TIMEOUT_ENV,
+  OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
+  readProcStarttime, readProcBootId, listLinuxProcesses, killProcessTree,
+  formatOwnerToken,
+} from './lib/test-child-guard.mjs';
+import { inspectReviewTiers } from './lib/review-tier-check.mjs';
 import { validateLegs, crossCheckLegsTree, nPlusOneReport, inspectLegsFixtures } from './lib/legs.mjs';
 import {
   judgeHarvest, inspectHarvestFixtures,
@@ -277,6 +286,26 @@ function parseTapSummary(output) {
 // 池宽 6：再大收益递减且增加临时目录/端口互相踩踏的概率。输出仍按文件名序打印，与串行时代一致。
 const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
 
+// 起过的测试子进程都登记在这儿，dao-check 一走就全杀掉。
+// 2026-09-15 实咬：不登记的后果是一个 `node --test` 孤儿吃掉 5.98 GB 活了 35 小时。
+// 判据与两层分工见 scripts/lib/test-child-guard.mjs 头部。
+const testChildren = createChildRegistry({ listProcesses: listLinuxProcesses });
+const OWNER_STARTTIME = readProcStarttime(process.pid) || '';
+const OWNER_BOOT = readProcBootId() || '';
+const OWNER_TOKEN_VALUE = formatOwnerToken({ bootId: OWNER_BOOT, starttime: OWNER_STARTTIME });
+let childCleanupArmed = false;
+function armTestChildCleanup() {
+  if (childCleanupArmed) return;
+  childCleanupArmed = true;
+  // 'exit' 里只许同步调用——killAll 全同步，就是为了能挂在这里。
+  process.on('exit', () => { testChildren.killAll('SIGKILL'); });
+  // 装了 SIGINT/SIGTERM 处理器就没有默认终止了，必须自己退。
+  // 退出码沿用 shell 惯例（128+信号号），别让上游把「被打断」读成「检查通过」。
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(sig, () => { testChildren.killAll('SIGKILL'); process.exit(code); });
+  }
+}
+
 function runOneSuite(dir, f) {
   return new Promise((resolveOne) => {
     const p = join(dir, f);
@@ -289,13 +318,27 @@ function runOneSuite(dir, f) {
       // 测试 spawn 出去的子进程——要害正在这里，偷偷出网的往往是被调起的 CLI 而不是测试本身。
       // 判据与来历见 tests/helpers/no-network.mjs 头部。
       const guard = join(ROOT, 'tests', 'helpers', 'no-network.mjs');
+      // 第二道预加载：父进程被 SIGKILL 时上面那套超时跟着一起没了，只有子进程
+      // 自己能发现「爹没了」。判据见 tests/helpers/parent-alive.mjs。
+      const orphanGuard = join(ROOT, 'tests', 'helpers', 'parent-alive.mjs');
       const compileCache = process.env.NODE_COMPILE_CACHE || join(tmpdir(), 'dao-node-compile-cache');
       const env = {
         ...process.env,
         NODE_COMPILE_CACHE: compileCache,
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href}`.trim(),
+        [OWNER_PID_ENV]: String(process.pid),
+        [OWNER_TOKEN_ENV]: OWNER_TOKEN_VALUE,
+        [OWNER_STARTTIME_ENV]: OWNER_STARTTIME,
+        [OWNER_BOOT_ENV]: OWNER_BOOT,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import ${pathToFileURL(guard).href} --import ${pathToFileURL(orphanGuard).href}`.trim(),
       };
+      // **不要加 detached**（2026-09-15 实测否掉的第一版）：它让每套测试自成进程组，
+      // 而 acp-runtime.mjs:109 正是用 `pgid === pid` 判「这个进程是不是一个组的头」。
+      // 加了之后 acp-runtime / execution-runtime 在有负载时随机报红：master 三连绿、
+      // 带 detached 四跑两红、去掉后三连绿。组杀换来的那点覆盖面不值这个价——
+      // 超时按 ppid 树清后代，跳过 pgid===pid 的组头（ACP）。
+      armTestChildCleanup();
       child = spawn(cmd, args, { windowsHide: true, cwd: ROOT, env });
+      testChildren.add(child.pid, { label: f });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -303,7 +346,23 @@ function runOneSuite(dir, f) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const t0 = Date.now();
-    const finish = (extra) => resolveOne({ f, ...extra });
+    const { ms: budgetMs } = suiteTimeoutMs(process.env);
+    let timedOut = false;
+    let watchdog = null;
+    const finish = (extra) => {
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+      testChildren.remove(child.pid);
+      resolveOne({ f, timedOut, ...extra });
+    };
+    if (budgetMs > 0) {
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        out += timeoutNote(f, budgetMs);
+        // 杀 runner 及其非 detached 后代。dao-check 自己还活着，parent-alive
+        // 不会让孙子自杀——寿命归属在这一刀。ACP 等组头跳过。
+        try { killProcessTree(child.pid, { listProcesses: listLinuxProcesses }); } catch { /* 已经没了 */ }
+      }, budgetMs);
+    }
     child.on('error', (e) => finish({ status: 1, ms: Date.now() - t0, out: out + String(e && e.message ? e.message : e) }));
     child.on('close', (code) => finish({ status: code == null ? 1 : code, ms: Date.now() - t0, out }));
   });
@@ -382,9 +441,15 @@ async function runTests() {
   }
   await Promise.all(Array.from({ length: Math.min(TEST_POOL, suites.length) }, worker));
   results.sort((a, b) => (a.f < b.f ? -1 : 1));
-  for (const { f, status, out } of results) {
+  for (const { f, status, out, timedOut } of results) {
     const tap = parseTapSummary(out);
-    if (status === 0) {
+    if (timedOut) {
+      // 「这次没测到」不是「测试红」：下一步不一样，一个改代码、一个查为什么挂住。
+      const { ms: budgetMs } = suiteTimeoutMs(process.env);
+      fail(`测试没查成：${f}（跑满 ${(budgetMs / 1000).toFixed(0)}s 被中止）`,
+        `这套挂住了，本次拿不到它的结论。复现：node --test tests/${f}；确需更久：${SUITE_TIMEOUT_ENV}=<毫秒>`,
+        out.slice(-400));
+    } else if (status === 0) {
       // 零样本报红：node --test 跑了但一条测试都没扫到 = 本次没查成，不是绿。
       if (tap.tests === 0 || tap.tests == null) {
         fail(`测试没查成：${f}`, 'node --test 跑了但 0 条测试（发现规则/文件形态变了）', out.slice(0, 200));
@@ -1052,9 +1117,18 @@ function checkMemoryLinkAlive() {
 // 单独验判别力，不必跑整个 dao-check（那会递归）。
 
 function checkSkillLinksAlive() {
+  // 本机**每个**有装载面的家目录都查（判据在 lib/skill-homes.mjs）。2026-09-13 实咬：
+  // 只看 $HOME 会漏——单元 `User=orca` 与 dao-check（root）各看各的家，root 那份被劫
+  // 后自愈钟对 orca 说「无事可做」，红挂在那儿没人接。
+  const found = agentHomes();
+  if (!found.ok) {
+    skip(`本机有哪几个家目录要守没查成：${found.reason}`);
+    return;
+  }
   const r = checkSkillLinks({
     root: ROOT,
     home: process.env.HOME || process.env.USERPROFILE || '',
+    homes: found.homes,
     isCi: process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true',
   });
   if (r.green) green(r.green);
@@ -1352,6 +1426,109 @@ function checkInitiatives() {
   green(`西瓜清单：${active.length}/${limit} 在推，判据指针都还活着，每条都有下一步`);
 }
 
+// ── 清单退场闸（2026-09-08 拍板「联动退出」：挂的单全关了，清单/计划文档就该收摊）──────
+// 读取面与退出共用 status/issues 字段，见 docs/README.md。判官纯函数在 session-brief.mjs。
+
+function listExitPlanDocs() {
+  const dir = join(ROOT, 'docs', 'decisions');
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); }
+  catch (e) { return { unscanned: true, error: String(e.message || e).slice(0, 80) }; }
+  return ingestPlanDocs(files.map((f) => {
+    const file = `docs/decisions/${f}`;
+    try { return { file, ok: true, text: readFileSync(join(dir, f), 'utf8') }; }
+    catch (e) { return { file, ok: false, error: String(e.message || e).slice(0, 80) }; }
+  }));
+}
+
+function checkListExitSamples() {
+  // 故意违规样本：挂的单全 CLOSED 却还 active/in-progress → 必须被咬住，否则闸没生效。
+  const doc = { initiatives: [{ id: 'x', status: 'active', issues: [11, 12], next_action: 'n' }] };
+  const plans = [{ file: 'docs/decisions/p.md', fm: parseFrontmatter('---\nstatus: in-progress\nissues: [13]\n---\n正文') }];
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans });
+  if (targets.length !== 2) { fail('清单退场闸夹具：挂钩对象收集不对', '该收 2 个（西瓜 x + 计划 p.md）', `收到 ${targets.length}`); return; }
+  const red = judgeListExit({ targets, states: { 11: 'CLOSED', 12: 'CLOSED', 13: 'CLOSED' } });
+  if (red.ok || red.stale.length !== 2) { fail('清单退场闸夹具：全关单的赖着不走没被咬住', '判官对故意违规样本必须红', JSON.stringify(red).slice(0, 120)); return; }
+  const green_ = judgeListExit({ targets, states: { 11: 'OPEN', 12: 'CLOSED', 13: 'OPEN' } });
+  if (!green_.ok) { fail('清单退场闸夹具：还有单开着却被误咬', '有 OPEN 单就不该判退场', JSON.stringify(green_).slice(0, 120)); return; }
+  const un = judgeListExit({ targets, states: { 11: 'CLOSED' } });
+  if (!un.unscanned) { fail('清单退场闸夹具：缺号没判没查成', '单状态查不全必须 unscanned（fail-close），不许当查过没事', JSON.stringify(un).slice(0, 120)); return; }
+  const swallowed = ingestPlanDocs([
+    { file: 'docs/decisions/q.md', ok: true, text: '# 普通文档\n' },
+    { file: 'docs/decisions/r.md', ok: false, error: 'EACCES' },
+  ]);
+  if (!swallowed.unscanned) {
+    fail('清单退场闸夹具：单文件读失败没标没查成', '读失败必须 unscanned，不许当没这份文件（否则零目标会绿）', JSON.stringify(swallowed).slice(0, 160));
+    return;
+  }
+  const swallowedTargets = collectExitTargets({ initiativesDoc: { initiatives: [] }, planDocs: swallowed.entries });
+  if (swallowedTargets.length !== 0) {
+    fail('清单退场闸夹具：读失败文件不该变成挂钩对象', 'entries 只收读成的；没读成的走 unscanned', `收到 ${swallowedTargets.length}`);
+    return;
+  }
+  // 2026-09-16 实咬：scale-dozens 的 issues 只挂已关前置单，统领写在 done_when。
+  const leaked = collectExitTargets({
+    initiativesDoc: { initiatives: [{
+      id: 'scale-dozens',
+      status: 'active',
+      done_when: '统领 #1174 的 T1–T11 均有测试/部署/真实任务证据且已收口',
+      issues: [1145, 1146, 1147, 1151, 1152],
+    }] },
+    planDocs: [],
+  });
+  if (!leaked[0] || !leaked[0].issues.includes(1174)) {
+    fail('清单退场闸夹具：done_when 统领单漏挂没并进挂钩', 'done_when 里的 #单号必须进 issues 集合', JSON.stringify(leaked).slice(0, 160));
+    return;
+  }
+  const leakedVerdict = judgeListExit({
+    targets: leaked,
+    states: { 1145: 'CLOSED', 1146: 'CLOSED', 1147: 'CLOSED', 1151: 'CLOSED', 1152: 'CLOSED', 1174: 'OPEN' },
+  });
+  if (!leakedVerdict.ok || leakedVerdict.stale.length) {
+    fail('清单退场闸夹具：OPEN 统领单漏挂后误报 stale', 'done_when 指向的 OPEN 单不得因漏挂 issues 被判该收摊', JSON.stringify(leakedVerdict).slice(0, 160));
+    return;
+  }
+  const badCfg = collectExitTargets({
+    initiativesDoc: { initiatives: [{ id: 'bad', status: 'active', issues: ['not-an-issue'] }] },
+    planDocs: [],
+  });
+  if (!badCfg.length) {
+    fail('清单退场闸夹具：坏挂钩被滤成零目标', '非法 issues 必须进闸，不许消失后走 0 个对象绿', JSON.stringify(badCfg).slice(0, 160));
+    return;
+  }
+  const badVerdict = judgeListExit({ targets: badCfg, states: {} });
+  if (badVerdict.ok || !badVerdict.unscanned) {
+    fail('清单退场闸夹具：坏挂钩没判没查成', '非法 issues 必须 unscanned，不许零目标绿', JSON.stringify(badVerdict).slice(0, 160));
+    return;
+  }
+  green('清单退场闸夹具：故意违规被咬、在途放行、缺号判没查成、单文件读失败不静默绿、OPEN 统领单漏挂不误报 stale、坏挂钩不静默绿');
+}
+
+function checkListExitLive() {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(ROOT, 'docs', 'initiatives.json'), 'utf8')); }
+  catch (e) { skip(`清单退场闸：initiatives.json 读不了（${String(e.message || e).slice(0, 60)}）——本次没查成`); return; }
+  const plans = listExitPlanDocs();
+  if (plans.unscanned) { skip(`清单退场闸：${plans.error}——本次没查成，不是绿`); return; }
+  const targets = collectExitTargets({ initiativesDoc: doc, planDocs: plans.entries });
+  if (!targets.length) { green('清单退场闸：0 个挂钩对象（active 清单/计划都没挂 issues，不是没查成）'); return; }
+  const nums = [...new Set(targets.flatMap((t) => t.issues))];
+  const states = {};
+  for (const n of nums) {
+    const r = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { windowsHide: true, encoding: 'utf8', cwd: ROOT });
+    if (r.status === 0) states[n] = String(r.stdout || '').trim();
+  }
+  const verdict = judgeListExit({ targets, states });
+  if (verdict.unscanned) { skip(`清单退场闸：${verdict.error}——本次没查成，不是绿`); return; }
+  if (!verdict.ok) {
+    fail(`清单该收摊没收摊：${verdict.stale.length} 个对象挂的单全关了还标着在推`,
+      '人工核一眼 done_when，一行 commit 把 status 翻成 done（西瓜条目/计划文档 frontmatter）——联动退出见 docs/README.md',
+      verdict.stale.map((t) => `${t.kind}:${t.name}`).join('、'));
+    return;
+  }
+  green(`清单退场闸：${targets.length} 个挂钩对象都还有在途单，没有赖着的`);
+}
+
 // ── orca 产品面残留（linux 用户名 /home/orca 不是产品，不进这条）────────────────
 // 认这些才算还没退役：真 spawn orca CLI、createOrcaBinding、orca-serve 单元、
 // dao.mjs 标了「整段删」的那条脊。判例档案（docs/decisions、docs/observations）不扫。
@@ -1385,6 +1562,25 @@ function checkEphemeralLifecycle() {
     return;
   }
   green('短命会话：交卷停会话+入队、独立钟已删、审官书不合、指挥官并进盘面推进量');
+}
+
+// ── 红项分级接线闸（2026-09-16 用户拍板走甲，#1227）─────────────────────────
+// 这一条本身就是当天挖出的病的判据：规矩写了、模板指了，但没有任何东西核它，
+// 于是「机制装了但没生效」（#1051 同一形状）。分级制度若只活在 markdown 里，
+// 第一步就退化成「谁也不知道该标 P1 还是 P2」。
+//
+// 只核**可机械判定**的两件事：标准页三档齐全且两份任务书真指到它、
+// 熔断上限真有生产代码读（检查器自身 / 注释 / 字符串自命中不算）。
+// 判据在 lib/review-tier-check.mjs（不 import 那几个文档的任何解析器——
+// 自己查自己查不出错）。「审官标得对不对」是判断题，归审官与帅侧抽查，本闸不装作能判。
+function checkReviewTiers() {
+  const r = inspectReviewTiers({ root: ROOT });
+  if (r.kind === 'ok') { green(r.line); return; }
+  if (r.kind === 'unscanned') {
+    fail(r.line, r.howToFix || '落点被挪走时必须同轮改闸，否则闸静默开门', r.evidence || '');
+    return;
+  }
+  fail(r.line, r.howToFix || '把缺的那一层接上', r.evidence || '');
 }
 
 function checkOrcaRetirement() {
@@ -1988,7 +2184,10 @@ checkRepoOwnership();
 checkGitOwnershipSamples();
 checkGitOwnershipLive();
 checkInitiatives();
+checkListExitSamples();
+if (FULL) checkListExitLive(); else netParked('清单退场闸 live', '要打 gh issue view 查挂钩单状态');
 checkEphemeralLifecycle();
+checkReviewTiers();
 checkOrcaRetirement();
 checkRetiredVerbAdvertSamples();
 checkRetiredVerbAdvertLive();

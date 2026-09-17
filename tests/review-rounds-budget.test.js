@@ -16,6 +16,16 @@ const LIVE = path.join(REPO, 'docs', 'release-policy.json');
 const LIB = import('file://' + path.join(REPO, 'scripts', 'lib', 'review-rounds-budget.mjs').replace(/\\/g, '/'));
 const CORE = import('file://' + path.join(REPO, 'scripts', 'lib', 'commander-core.mjs').replace(/\\/g, '/'));
 const WD = import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'worker-done.mjs').replace(/\\/g, '/'));
+const ASK = import('file://' + path.join(REPO, 'scripts', 'lib', 'ask-gate.mjs').replace(/\\/g, '/'));
+
+/** #1225 之后合门读 askPolicy：缺了会 manual，本单「满额绿仍合」测不到合路。 */
+async function clearAskPolicy() {
+  return (await ASK).parsePolicy(JSON.stringify({
+    human_holds: ['独有红线词QQQ'],
+    confirm: { patch: { who: 'auto' }, minor: { who: 'admin:1' }, major: { who: 'admin:1' } },
+    version: { bump_by_commit_type: { fix: 'patch', feat: 'minor' } },
+  }));
+}
 
 function policyText(max) {
   return JSON.stringify({
@@ -226,6 +236,7 @@ describe('decide：超限停手，不派返工/复审', () => {
       labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
     };
     const r = decide(baseSituation({
+      askPolicy: await clearAskPolicy(),
       github: { scanned: true, issues: [labeledIssue(800)], prs: [pr] },
       prReviews: {
         scanned: true,

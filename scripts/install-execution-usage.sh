@@ -18,8 +18,19 @@ install -d -o orca -g orca -m 700 /home/orca/.dao/execution/usage
 install -d -o root -g root -m 755 /usr/local/lib/dao-execution-usage /usr/local/lib/dao-execution-usage/lib /var/lib/dao-execution-usage
 install -d -o root -g root -m 700 /var/lib/dao-execution-usage/private
 install -d -o root -g orca -m 750 /var/lib/dao-execution-usage/root-inbox
-install -o root -g root -m 644 "$usage_root/scripts/execution-usage-export.mjs" /usr/local/lib/dao-execution-usage/execution-usage-export.mjs
-install -o root -g root -m 644 "$usage_root/scripts/lib/execution-usage.mjs" /usr/local/lib/dao-execution-usage/lib/execution-usage.mjs
+# Copy the export entry plus every relative import/require it needs. Hand-writing
+# two files left execution-catalog.mjs behind and the live copy could not be
+# reinstalled (#1231).
+mapfile -t usage_files < <(
+  /usr/bin/node --input-type=module -e "import { usageExportInstallFiles } from 'file://${usage_root}/scripts/lib/execution-usage.mjs'; for (const f of usageExportInstallFiles({ scriptsDir: '${usage_root}/scripts' })) process.stdout.write(f + '\n');"
+)
+if [[ "${#usage_files[@]}" -eq 0 ]]; then
+  echo 'usage export install list was empty; no units installed.' >&2
+  exit 1
+fi
+for rel in "${usage_files[@]}"; do
+  install -D -o root -g root -m 644 "$usage_root/scripts/$rel" "/usr/local/lib/dao-execution-usage/$rel"
+done
 # env -i scrubs inherited provider/GitHub credentials and root HOME. No auth is
 # needed for a read-only report. Unknown/empty data (2) is expected before smoke.
 usage_probe=0

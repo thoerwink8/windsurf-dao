@@ -31,7 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
-  classifyDrainAttempt,
+  classifyDrainAttempt, judgeEnvFailure,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -41,14 +41,20 @@ import {
   gatewayIdemKey, escalateRoundSeed,
 } from './lib/escalate-group.mjs';
 import { attributedIssueNumber } from './lib/close-issue.mjs';
-import { canReleaseApprovedDraft, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
 import {
-  decide, heartbeatDue, hasLiveAction, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
+  loadLedgerContext, writeJobClosed, workerJobId, reviewerJobId, beijingIsoFrom,
+  findJobDispatch, mergedByForClosed, verdictStatsFromReviews, scopeOverridesFor,
+  isDuplicateWriteError,
+} from './lib/ledger-job.mjs';
+import { canReleaseApprovedDraft, canReleaseApprovedManual, explicitApprovalIssue, isApprovedExecutionTask } from './lib/approved-merge.mjs';
+import {
+  decide, heartbeatDue, hasLiveAction, countsAsProgress, actionsDigest, nextDigestStreak, reworkKey, pumpDraftKey, ticketHeadOid,
   rereviewKey, epochOf, foldFailureStreak,
   SITUATION_SECTIONS, dispatchMergePolicyArgs, analyzeReviewsAtHead, staleRedBallots,
   collectDockProofs,
 } from './lib/commander-core.mjs';
 import { loadPolicy } from './lib/ask-gate.mjs';
+import { loadReviewRoundsMax, fuseChoiceRequired } from './lib/review-cap.mjs';
 import { VERSION_PROBES, classifyVersionDrift, mergeVersionState, renderDrift, loadVersionState, saveVersionState } from './lib/cli-version.mjs';
 import { buildSoldierInject } from './lib/dispatch/template.mjs';
 import { loadDispatchPolicy } from './lib/preflight.mjs';
@@ -82,12 +88,16 @@ import {
 import { fetchPrMergeable } from './lib/dispatch/git.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
+import { writeEvent, nextSeq } from './lib/event-writer.mjs';
 import { desiredFromEvents } from './lib/session-reconcile.mjs';
 import { acceptSessionsFrame } from './mirasim-sessions.mjs';
 import { recordBroadcast, loadDigestState, saveDigestState, sendCardViaLark, updateCardViaLark } from './lib/broadcast-io.mjs';
 import { planHubCycle, applyHubCycle, loadAskPolicy } from './lib/feishu-hub-cycle.mjs';
 import { createStateStore, loadCredentials, DEFAULT_CREDS, DEFAULT_STATE } from './feishu-triage.mjs';
 import { runProgressWatch, pushExhaustedToShuai } from './progress-watch.mjs';
+import {
+  DIGEST_STUCK_ALERT_KEY, stallSeverity, planProgressWatchAlert,
+} from './lib/progress-detect.mjs';
 import { escalationKeyOf } from './lib/escalation-key.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
@@ -272,15 +282,31 @@ function scanSessions() {
  * 全量读（readLedgerEvents），不用 10 分钟去重窗的索引——差集要的是「现在该在的人」，
  * 裁掉 10 分钟前的未结派工等于把死工人洗成「账上没有」。
  */
-function scanDesiredJobs() {
+function readHomeLedger() {
   let dir;
   try { dir = ensureLocalLedger({ root: ROOT }).dir; }
-  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, items: [] }; }
-  const listed = readLedgerEvents(dir);
-  if (listed.unscanned) {
-    return { unscanned: true, error: listed.error || '事件账没查成', items: [] };
+  catch (e) { return { unscanned: true, error: `账本落点没定：${String(e.message || e)}`, events: [] }; }
+  return readLedgerEvents(dir);
+}
+
+function scanDesiredJobs(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { unscanned: true, error: src.error || '事件账没查成', items: [] };
   }
-  return desiredFromEvents(listed.events);
+  return desiredFromEvents(src.events);
+}
+
+/** 合并侧要的派工 merge-policy：未结/已结的 job.dispatch 都要，不能只用期望集。 */
+function scanDispatchLedger(listed) {
+  const src = listed || readHomeLedger();
+  if (src.unscanned) {
+    return { scanned: false, error: src.error || '事件账没查成', events: [] };
+  }
+  return {
+    scanned: true,
+    events: (src.events || []).filter((e) => e && e.type === 'job.dispatch'),
+  };
 }
 
 /**
@@ -633,7 +659,9 @@ function buildSituation({ state } = {}) {
   const stall = scanStall();
   const sessions = scanSessions();
   const lease = scanLease();
-  const desiredJobs = scanDesiredJobs();
+  const ledgerListed = readHomeLedger();
+  const desiredJobs = scanDesiredJobs(ledgerListed);
+  const dispatchLedger = scanDispatchLedger(ledgerListed);
   const policy = loadDispatchPolicy({ root: ROOT });
   let routingModels = null;
   let routingModelRecords = null;
@@ -689,7 +717,7 @@ function buildSituation({ state } = {}) {
   return {
     at: nowIso(), repo: REPO,
     github, orca, trees, reviewPending, prReviews, stall, otherRepos,
-    sessions, lease, desiredJobs,
+    sessions, lease, desiredJobs, dispatchLedger,
     viewMergeable,
     breakerIngest,
     wakeCounts: (state && state.wakeCounts) || {},
@@ -871,7 +899,7 @@ function execAction(action, { state, dryRun, log }) {
     case 'reap-orphan':
       return execReapOrphan(action, { dryRun, say });
     case 'merge':
-      return execMerge(action, { dryRun, say });
+      return execMerge(action, { dryRun, say, writeMergeLedger: recordPrMergeMilestone });
     case 'land':
       return runOrShow(['node', 'scripts/land.mjs'], { dryRun, say, why: action.why });
     case 'rework':
@@ -1125,7 +1153,9 @@ export function execReapTree(action, { dryRun, say, run = runCmd } = {}) {
  *
  * #1133：所有真实 `gh pr merge` 都钉 `--match-head-commit`。不因为没 approvalIssue 就跳过 HEAD 锁。
  */
-export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMergeFreshness } = {}) {
+export function execMerge(action, {
+  dryRun, say, run = runCmd, judge = judgeMergeFreshness, writeMergeLedger = null, ledgerClose = recordJobClosed,
+} = {}) {
   const GATING = new Set(['pr merge']);
   const expectedHead = String((action && action.head) || '').trim();
   const steps = [
@@ -1140,15 +1170,25 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     for (const g of GATING) if (s.includes(g)) return true;
     return false;
   };
+  const evidenceMode = action.evidenceMode
+    || (action.approvalIssue ? 'draft' : null);
+  if (evidenceMode === 'manual' && (!action.approvalIssue || !action.head)) {
+    say(`  #${action.pr} 非 draft manual 缺批准单或预期 HEAD，拒绝裸合`);
+    return { ok: false, error: 'manual-merge-unbound' };
+  }
   if (!expectedHead) {
     const error = 'merge 没带期望 HEAD，拒绝合入';
     say(`  #${action.pr} ${error}`);
     return { ok: false, error };
   }
-  const mergeArgv = steps.find((s) => s.includes('pr') && s.includes('merge'));
-  if (mergeArgv && !mergeArgv.includes('--match-head-commit')) {
-    mergeArgv.push('--match-head-commit', expectedHead);
-  }
+  const mergeArgv = () => steps.find((s) => s.includes('pr') && s.includes('merge'));
+  const pinHead = () => {
+    const merge = mergeArgv();
+    if (merge && !merge.includes('--match-head-commit')) {
+      merge.push('--match-head-commit', expectedHead);
+    }
+  };
+  pinHead();
 
   if (dryRun) {
     say(`[dry] merge #${action.pr}（${action.why || ''}）：squash 打到此刻 master（① 只报不拦）`
@@ -1170,17 +1210,22 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     say(`  #${action.pr} HEAD 已从判定时的 ${expectedHead} 变成 ${liveHead}，拒绝合入`);
     return { ok: true, skipped: 'head-changed' };
   }
-  if (action.approvalIssue) {
+  if (evidenceMode === 'draft' || evidenceMode === 'manual') {
     const issue = read(['issue', 'view', String(action.approvalIssue), '--json', 'number,state,labels']);
     const reviews = Array.isArray(pr?.reviews) ? pr.reviews.map(r => ({ ...r,
       commit_id: r.commit?.oid, submitted_at: r.submittedAt })) : null;
     const approval = analyzeReviewsAtHead(reviews, pr?.headRefOid);
-    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN'
-      || !canReleaseApprovedDraft({ pr, issue, greenAtHead: approval.scanned && approval.latestGreen === true, expectedHead })) {
+    const greenAtHead = approval.scanned && approval.latestGreen === true;
+    const bound = evidenceMode === 'draft'
+      ? canReleaseApprovedDraft({ pr, issue, greenAtHead, expectedHead })
+      : canReleaseApprovedManual({ pr, issue, greenAtHead, expectedHead });
+    if (pr?.state !== 'OPEN' || issue?.state !== 'OPEN' || !bound) {
       say(`  #${action.pr} 的批准或检查证据已变化，保留等待状态`);
       return { ok: true, skipped: 'approval-not-current' };
     }
-    steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    if (evidenceMode === 'draft') {
+      steps.splice(1, 0, ['node', 'scripts/gh-as.mjs', 'marshal', '--', 'pr', 'ready', String(action.pr)]);
+    }
   }
   // ① 仍查、只报：squash 不要求分支先含最新 master。judge 可注入，测试能钉「查了但没拦住」。
   const freshness = judge(action.pr, { run });
@@ -1208,10 +1253,174 @@ export function execMerge(action, { dryRun, say, run = runCmd, judge = judgeMerg
     if (s[4] === 'pr' && s[5] === 'ready') releasedDraft = true;
     if (s[4] === 'pr' && s[5] === 'merge') merged = true;
   }
+  if (merged && typeof writeMergeLedger === 'function') {
+    const logged = writeMergeLedger(action);
+    if (logged && logged.ok === false) {
+      failed.push({ step: 'merge-ledger', error: logged.error || '合并账本没落下' });
+      say(`  合并账本没落下（不挡已合）：${logged.error || '没查成'}`);
+    }
+  }
   say(failed.length
     ? `  已合并 #${action.pr}（${failed.length} 个记账步骤没成，见上）`
     : `  已合并 #${action.pr} 并关单`);
-  return { ok: true, calls, freshness, failed };
+  // 账本写失败不许把「合并成功」判成失败：合并已经发生、回滚不了，把它报成 failed
+  // 会让指挥官下一轮再合一次。写不了就当场说出来，⑰ 会红——那是 ⑰ 该管的事。
+  // 也不并进上面那个 failed（那是 #1235 的记账步骤）：job.closed 写不了同样不该触发再合一次。
+  let closed;
+  try { closed = ledgerClose({ pr: action.pr, why: action.why, say, run }); }
+  catch (e) { say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`); }
+  return { ok: true, calls, freshness, failed, ledger: closed };
+}
+
+/** 合并后重读当前 PR 的判别态 review。没查成必须标 unscanned，不许当成零返工。 */
+function loadPrReviewsForClosed(pr, { run = runCmd } = {}) {
+  const viewed = parseGhJson(run, ['pr', 'view', String(pr), '--json', 'reviews'], `PR #${pr} reviews`);
+  if (!viewed.ok) return { ok: false, unscanned: true, reviews: null, error: viewed.error };
+  if (!viewed.json || !Array.isArray(viewed.json.reviews)) {
+    return { ok: false, unscanned: true, reviews: null, error: `PR #${pr} 缺 reviews 数组（没查成，不许当零返工）` };
+  }
+  return { ok: true, unscanned: false, reviews: viewed.json.reviews };
+}
+
+/**
+ * 合并后补 `job.closed`（#581 的差集判据靠它，dao-check ⑰ 直接读它）。
+ *
+ * 2026-09-13 实咬：这条链**断了六周没人发现**。写 job.closed 的代码在
+ * `scripts/flow.mjs` 里，flow 被 #807（删 Windows 本机编排层）整段删除，
+ * 写口没接回来——账本里 `job.dispatch` 一路在写（commander/dao 各处都接了），
+ * 而 `job.closed` 自 09-08 起 0 条，**111 张已合并带标 PR 对不上**，⑰ 的
+ * 差集报告从那时起就是一片红。旧判据说「新代码会写 closed」，那时是对的，现在不是。
+ *
+ * 时机选在合并**成功之后**：失败路径不该记终态。写失败**不拦合并**（合并已经发生了，
+ * 回滚不了），但必须当场说出来——静默失败正是它上次断六周的原因。
+ *
+ * merged_by 取对应 job.dispatch 的真实模型（handoff 后是接手者），不是角色名
+ * commander/reviewer——能力账 buildSamples 优先信 merged_by，写错模型会污染正样本。
+ * 返工字段按当前 PR 的判别态 review 写入；reviews 或账本没查成走
+ * attribution_source=unscanned，不伪造 worker_rework=0。审官那条只在能确认
+ * job.dispatch（含可验证的 rename handoff）时才记——账本不完整且看不到
+ * dispatch，不许把「没有证据」写成终态。
+ */
+export function recordJobClosed({
+  pr, why = '', say = () => {},
+  ctx: injectedCtx,
+  run = runCmd,
+  reviews,
+  reviewsUnscanned = false,
+  reviewsError = '',
+} = {}) {
+  try {
+    const ctx = injectedCtx || loadLedgerContext({ root: ROOT });
+    const ts = beijingIsoFrom(new Date());
+    const ledger = readLedgerEvents(ctx.dir);
+    const events = ledger.events || [];
+    const ledgerUnscanned = ledger.unscanned === true;
+
+    let reviewList = reviews;
+    let unscanned = reviewsUnscanned === true;
+    let unscannedError = reviewsError || '';
+    if (reviewList === undefined && !unscanned) {
+      const loaded = loadPrReviewsForClosed(pr, { run });
+      if (!loaded.ok || loaded.unscanned) {
+        unscanned = true;
+        unscannedError = loaded.error || 'reviews 没查成';
+        reviewList = [];
+      } else {
+        reviewList = loaded.reviews;
+      }
+    }
+    if (!Array.isArray(reviewList)) {
+      unscanned = true;
+      unscannedError = unscannedError || `PR #${pr} reviews 不是数组`;
+      reviewList = [];
+    }
+    // 账本不完整时，overrides / dispatch 集合都不可信。reviews 读到了也不能据此
+    // 写成 inferred / worker_rework=0——那是把「没查成」当成「查过没事」。
+    if (ledgerUnscanned) {
+      unscanned = true;
+      const ledgerErr = ledger.error || '账本没查成';
+      unscannedError = unscannedError ? `${unscannedError}；${ledgerErr}` : ledgerErr;
+    }
+
+    const stats = verdictStatsFromReviews(reviewList, {
+      overrides: ledgerUnscanned ? [] : scopeOverridesFor(events, { prNumber: pr }),
+      unscanned,
+      unscannedError,
+    });
+    const statsUnscanned = stats.attributionSource === 'unscanned';
+    const knownRework = stats.workerRework != null;
+    const note = [stats.attributionNote, String(why || '').slice(0, 200)].filter(Boolean).join('；');
+
+    const out = {};
+    for (const [side, jobId] of [['工人', workerJobId(pr)], ['审官', reviewerJobId(pr)]]) {
+      const dispatch = findJobDispatch(events, jobId, { prNumber: pr });
+      // 审官那条只在能确认 job.dispatch（含 rename handoff）时才记。
+      // 账本没查成 ≠ 查过「没派过」——看不到 dispatch 就跳过，不许伪造终态。
+      if (side === '审官' && !dispatch) {
+        out[side] = { skipped: 'no-dispatch' };
+        continue;
+      }
+      const args = {
+        ...ctx, ts, jobId,
+        success: true,
+        rework: knownRework ? stats.workerRework > 0 : false,
+        mergedBy: mergedByForClosed({ events, jobId, dispatch }),
+        prNumber: pr,
+        attributionSource: stats.attributionSource || (statsUnscanned ? 'unscanned' : 'commander-merge'),
+        attributionNote: note || undefined,
+      };
+      if (!statsUnscanned) {
+        args.redFlags = stats.redFlags;
+        args.verdictRounds = stats.verdictRounds;
+        args.workerRework = stats.workerRework;
+        args.marshalRounds = stats.marshalRounds;
+        if (stats.triggeredBy) args.triggeredBy = stats.triggeredBy;
+      }
+      out[side] = writeJobClosed(args);
+    }
+    const failed = Object.entries(out).filter(([, r]) => r && r.ok === false);
+    if (failed.length) {
+      say(`  ⚠ 账本 job.closed 没写全（不拦合并，但 ⑰ 会红）：${failed.map(([k, r]) => `${k}:${r.error}`).join('；')}`);
+    }
+    return out;
+  } catch (e) {
+    say(`  ⚠ 账本 job.closed 写不了（不拦合并，但 ⑰ 会红）：${String(e && e.message || e).slice(0, 160)}`);
+    return { error: String(e && e.message || e).slice(0, 160) };
+  }
+}
+
+/** 指挥官 squash 不走 bash hook，必须自己落 session.milestone（#1223 第 4 点）。 */
+export function recordPrMergeMilestone(action, { ctx: given } = {}) {
+  try {
+    const ctx = given || loadLedgerContext({ root: ROOT });
+    const seq = nextSeq(ctx.dir, ctx.machine);
+    const repo = String(REPO || '').split('/')[1] || String(REPO || 'windsurf-dao');
+    const n = Number(action && action.pr);
+    writeEvent({
+      dir: ctx.dir,
+      type: 'session.milestone',
+      ts: beijingIsoFrom(new Date()),
+      machine: ctx.machine,
+      seq,
+      schema: ctx.schema,
+      payload: {
+        kind: 'pr-merge',
+        repo,
+        pr_number: Number.isInteger(n) ? n : null,
+        milestone_key: `pr-merge:pr-${action.pr}`,
+        evidence: [
+          `execMerge pr ${action.pr}`,
+          String((action && action.why) || '指挥官 squash'),
+        ],
+        identity: '协调者',
+        refs: [`PR #${action.pr}`],
+      },
+    });
+    return { ok: true };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true };
+    return { ok: false, error: String(e.message || e) };
+  }
 }
 
 /**
@@ -1801,6 +2010,10 @@ export function reworkBriefPath(action, { dir = null } = {}) {
 
 /** 红项全文正文：原样转录，不摘要、不改写（#931 的整个理由就是「别再让 AI 翻译一遍」）。 */
 export function reworkBriefText(action) {
+  const cap = Number.isFinite(Number(action.reviewRoundsMax)) && Number(action.reviewRoundsMax) > 0
+    ? Number(action.reviewRoundsMax)
+    : null;
+  const fuse = cap != null ? fuseChoiceRequired(action.redRounds, cap) : null;
   return [
     `# 返工任务：PR #${action.pr}`,
     '',
@@ -1808,6 +2021,8 @@ export function reworkBriefText(action) {
     // 不写 `署名 issue #null`（读任务书的人会去找那张单）。
     ...(action.issue != null ? [`- 审官红项打在 head ${action.head} 上；署名 issue #${action.issue}`] : [`- 审官红项打在 head ${action.head} 上；**无署名 issue**（快路 PR）`]),
     `- 当前 head 上的判红轮数：${action.redRounds}`,
+    ...(cap != null ? [`- 审查轮次上限：${cap}（docs/release-policy.json budget.per_issue.review_rounds_max）`] : []),
+    ...(fuse && fuse.required ? ['- **已到上限**：剩下的只能改判或拆单，不许再写一轮「请修 P2」'] : []),
     '- 下面是审官那条 CHANGES_REQUESTED review 的**正文全文**（未摘要、未改写）：',
     '',
     '---',
@@ -1924,10 +2139,20 @@ export function requestRereview(action, { state, dryRun, say, run }) {
   // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = state.reworkDispatched[key];
+  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」——回环 ws 断连时
+  // 这一轮一个审官都没起过。但写票这一刻还不知道审官起不起得来（drain 在下面才跑），
+  // 所以这里**照旧乐观记一次**，同时把记之前的值留在 triesBeforeAttempt：
+  // 等 drain 的真账回来，`rememberDrainFailure` 判出是环境就回滚到这个值。
+  //
+  // 为什么不改成「按上一轮的 envUnreachable 猜」：那样每次断连风暴的**第一轮**仍会烧掉
+  // 一次（判据落后一拍）。三次断连烧 1 次比烧 3 次好，但仍是错的——而这里有确定的事实
+  // 可用（本轮 drain 的回执），没有理由去猜。
+  const triesBefore = Number(prev?.tries) || 0;
   state.reworkDispatched[key] = {
     ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
-    tries: Number(action.tries) || 1,
+    tries: Number(action.tries) || triesBefore + 1,
+    triesBeforeAttempt: triesBefore,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
   return drainReviewPending(action, { state, dryRun, say, run });
@@ -1953,19 +2178,46 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
 
 /** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
  *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
- *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。
+ *
+ *  #1331：环境类失败（执行体自己够不着）**并原文、回滚 tries**。原文要留下来
+ *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），但这一轮
+ *  一个审官都没起过，不该算这张 PR 试过——回滚到 requestRereview 记下的
+ *  `triesBeforeAttempt`。判据见 judgeEnvFailure。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = (state.reworkDispatched || {})[key];
   if (!prev) return;                       // 没有这条账就没有要并的对象
   const verdict = classifyDrainAttempt(payload);
-  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
-  const pulled = verdict.reason === 'pulled';
+  const env = verdict.reason === 'env-unreachable';
+  if (!verdict.countTry && !env) return;   // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.countTry && verdict.reason === 'pulled';
   const err = pulled ? null : drainErrorText(payload);
   if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
-  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
+  state.reworkDispatched[key] = {
+    ...prev,
+    ...foldFailureStreak(prev, err),
+    ...(settleAttemptTries(prev, env) == null ? {} : { tries: settleAttemptTries(prev, env) }),
+    envUnreachable: env,
+  };
+}
+
+/**
+ * 这一轮该把 tries 回滚到几（#1331）。返回 `null` = 不动这个字段。
+ *
+ * 回滚只在**确知是环境**时发生，且只回滚到本轮开始前的值（`triesBeforeAttempt`），
+ * **不是清零**——清零会把「之前真试过 2 次」一起抹掉，那是往反方向错。
+ * 缺 `triesBeforeAttempt`（老账 / 别的写入路径写的）时维持现值，不猜。
+ */
+export function settleAttemptTries(prev, env) {
+  if (env !== true) return null;
+  // `prev` 必须显式判：`Number(null && x)` 是 **0**，不是 NaN——
+  // 拿它当「回滚到 0」就把「没有账」当成了「本轮之前一次都没试过」。
+  if (!prev || typeof prev !== 'object') return null;
+  const before = Number(prev.triesBeforeAttempt);
+  return Number.isInteger(before) && before >= 0 ? before : null;
 }
 
 export function drainPayloadOf(runResult) {
@@ -2016,15 +2268,37 @@ function mirasimStartCmd({ model, tree, spec, pr, issue }) {
   return cmd;
 }
 
+/**
+ * 这次派工失败，是「执行体自己够不着」还是「这张 PR 的事」（#1331）。
+ *
+ * 返工 / 收口泵派的是 `dao.mjs start`，回执是 runCmd 的形状（out 里一行 JSON）。
+ * 先按 drainPayloadOf 解出结构化回执，再交给与复审那侧**同一个**纯函数判——
+ * 同一个事实不许两处各判一次（#1233 的形状）。
+ *
+ * 解不出 / 没有 code（老回执、非 JSON、超时被杀）一律判「不是环境」，照旧记一次尝试：
+ * 宁可多烧一次，也不要把真失败悄悄变成无限重试。
+ */
+function envFailureOf(runResult) {
+  try {
+    return judgeEnvFailure({ attached: drainPayloadOf(runResult) });
+  } catch {
+    return { env: false, why: '回执解不出（没查成）——按真失败记账', code: null, stage: null };
+  }
+}
+
 function rememberRework(state, action, written, verdict) {
   if (verdict.busy === true) return;
   state.reworkDispatched = state.reworkDispatched || {};
   const rkey = action.reworkKey || reworkKey(action.pr, action.head);
   const prevTries = Number(state.reworkDispatched[rkey]?.tries) || 0;
+  // #1331：ws 断连这一轮**一个工人都没造出来**，不算这张 PR 试过返工。
+  // 实测 2026-09-17：#885 / #1284 的返工正是这样被烧掉预算的（7 天 66 次）。
+  const env = envFailureOf(verdict);
   state.reworkDispatched[rkey] = {
     at: nowIso(), pr: action.pr, head: action.head, issue: action.issue,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1,
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
   };
 }
 
@@ -2048,8 +2322,23 @@ function ensureTreeFromPr(action, { dryRun, say, run = runCmd }) {
   return { ok: true, tree: path, headRef };
 }
 
+function reviewRoundsMaxFromPolicy() {
+  try {
+    const r = loadReviewRoundsMax(readFileSync(join(ROOT, 'docs', 'release-policy.json'), 'utf8'));
+    return r.cap;
+  } catch {
+    return undefined;
+  }
+}
+
+function withReviewCap(action) {
+  if (Number.isFinite(Number(action.reviewRoundsMax)) && Number(action.reviewRoundsMax) > 0) return action;
+  const cap = reviewRoundsMaxFromPolicy();
+  return cap ? { ...action, reviewRoundsMax: cap } : action;
+}
+
 function dispatchRework(action, { state, dryRun, say, run = runCmd, briefDir = null }) {
-  const written = writeReworkBrief(action, { dir: briefDir });
+  const written = writeReworkBrief(withReviewCap(action), { dir: briefDir });
   if (!written.ok) { say(`  ${written.error}`); return { ok: false, unscanned: true, error: written.error }; }
   const spec = reworkSpec(action, written.path);
   try { buildSoldierInject({ spec, issue: action.issue }); }
@@ -2110,10 +2399,13 @@ function rememberPumpDraft(state, action, written, verdict) {
   state.reworkDispatched = state.reworkDispatched || {};
   const pkey = action.pumpKey || pumpDraftKey(action.pr);
   const prevTries = Number(state.reworkDispatched[pkey]?.tries) || 0;
+  const env = envFailureOf(verdict);   // #1331：同上，环境轮不算这张 PR 泵过
   state.reworkDispatched[pkey] = {
     at: nowIso(), pr: action.pr, issue: action.issue, head: action.head || null,
     brief: written.path, ok: verdict.ok === true, unscanned: verdict.unscanned === true,
-    tries: prevTries + 1, kind: 'pump-draft',
+    tries: env.env ? prevTries : prevTries + 1,
+    envUnreachable: env.env,
+    kind: 'pump-draft',
   };
 }
 
@@ -3044,18 +3336,21 @@ function cmdAct(argv) {
     dryRun,
     exhaustedPush: dryRun ? null : pushExhaustedToShuai,
   });
-  if (!progressWatch.ok) {
-    log.push(`  盘面推进量没查成：${progressWatch.error || progressWatch.report}`);
-  } else if (progressWatch.wake) {
-    log.push(`  盘面停滞：${progressWatch.report}`);
-    hubOnce({
-      state,
-      key: `progress-watch:${progressWatch.fingerprint || 'stall'}`,
-      text: `[指挥官] ${progressWatch.report}`,
-      dryRun,
-    });
-  } else {
-    log.push(`  盘面推进量：${progressWatch.report}`);
+  // wake ≠ stalled：认输推送会叫醒但盘面未必停。分流在 planProgressWatchAlert
+  // （独立常量键 + 独立文案）。同轮可以两条一起到，必须逐条 hubOnce，
+  // 否则停滞键的 6 小时窗口会把认输吞掉。节流交给 HUB_DEDUP_MS。
+  // 这里不加严重度：progressWatch.rounds 被快照窗口封顶，分档永远只能得出「注意」。
+  const plannedAlert = planProgressWatchAlert(progressWatch);
+  for (const surface of plannedAlert.surfaces) {
+    log.push(surface.log);
+    if (surface.key) {
+      hubOnce({
+        state,
+        key: surface.key,
+        text: `[指挥官] ${surface.text}`,
+        dryRun,
+      });
+    }
   }
   // 先回收上一轮的大脑（保证一次性会话不残留）
   reapBrains({ state, dryRun, say: (m) => log.push(m) });
@@ -3109,10 +3404,14 @@ function cmdAct(argv) {
     state.lastActionDigest = vac.digest;
     if (vac.stuck) {
       log.push(`  推进量：连续 ${vac.streak} 轮动作摘要完全相同——停住了，不是还在跑`);
+      // 键不许带 digest：停滞的定义就是「这套动作一直不变」，键跟着它走 ⇒ 越是真停住越只发一条。
+      // 实咬 2026-09-15：03:31 发过 `digest-stuck:escalate:missing-labels:i1174` 一条之后，
+      // 盘面又冻了 10 小时，播报账里再没第二条。改成常量键，节流交给 HUB_DEDUP_MS。
       hubOnce({
         state,
-        key: `digest-stuck:${vac.digest}`,
-        text: `[指挥官] 连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
+        key: DIGEST_STUCK_ALERT_KEY,
+        text: `[指挥官｜${stallSeverity(state.digestStreak, DIGEST_STREAK_ALERT)}] `
+          + `连续 ${state.digestStreak} 轮动作摘要完全相同（约 ${state.digestStreak * 20} 分钟）——`
           + `盘面没在推进。当前这一套动作：\n${log.filter((l) => l.startsWith('· ')).slice(0, 6).join('\n')}`,
         dryRun,
       });
@@ -3120,7 +3419,10 @@ function cmdAct(argv) {
   }
 
   // 心跳：一切正常连续静默 → 一条（假时钟走 state 的锚点）
-  if (hasLiveAction(actions)) state.lastActivityAt = nowIso();
+  // 不是 hasLiveAction：同一套动作重复 N 轮也「有动作」，但盘面没动。
+  // 拿它当锚点会让心跳永远不到期（实咬 10 小时，见 countsAsProgress 头部）。
+  // state.digestStreak 已是本轮 nextDigestStreak 写回后的值：0=新摘要，≥1=磨盘。
+  if (countsAsProgress({ actions, digestStreak: state.digestStreak })) state.lastActivityAt = nowIso();
   else {
     const hb = heartbeatDue({ state });
     if (hb.due) {

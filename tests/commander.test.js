@@ -376,6 +376,162 @@ describe('decide：自己做（确定性）', () => {
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'decide'));
   });
 
+  // #1225 返工：manual 合门曾不看当前 head 是否判绿，又排在返工逻辑之前。
+  // 复现形状：非 draft / draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE
+  // → 旧行为产「判绿待人工合并」然后 continue；期望落到既有返工分支。
+  function manualRedSit({ isDraft, number = 1225, issue = 1223, head = 'h1225' }) {
+    const labels = [
+      { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'type/体系' },
+    ];
+    const pr = {
+      ...redPr(number, head, issue),
+      isDraft,
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels,
+    };
+    return baseSituation({
+      github: { scanned: true, issues: [labeledIssue(issue, { labels })], prs: [pr] },
+      prReviews: { scanned: true, byPr: { [number]: { reviews: [redReview('红项全文：先改接线', head)] } } },
+    });
+  }
+  function assertReworkNotManualHub(r) {
+    assert.equal(byKind(r, 'rework').length, 1, '红 review 必须派返工');
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'rework')[0].brief, '红项全文：先改接线');
+    const hijack = byKind(r, 'notify-hub').filter((a) => a.moment === 'decide' || /判绿待人工合并/.test(a.subject || ''));
+    assert.equal(hijack.length, 0, '不许产「判绿待人工合并」把返工吃掉');
+  }
+  it('非 draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE → rework，不是 notify-hub', async () => {
+    const { decide } = await CORE;
+    assertReworkNotManualHub(decide(manualRedSit({ isDraft: false })));
+  });
+  it('draft + type/体系 + 当前 head CHANGES_REQUESTED + CI 绿 + MERGEABLE → rework，不是 notify-hub', async () => {
+    const { decide } = await CORE;
+    assertReworkNotManualHub(decide(manualRedSit({ isDraft: true })));
+  });
+  it('聚合 reviewDecision=APPROVED + 当前 HEAD CHANGES_REQUESTED → rework，不是待人工合并', async () => {
+    const { decide } = await CORE;
+    const sit = manualRedSit({ isDraft: false });
+    sit.github.prs[0].reviewDecision = 'APPROVED';
+    assertReworkNotManualHub(decide(sit));
+  });
+
+  it('当前 HEAD APPROVED + 署名单没查到 → 不合（没查成不许退回 auto）', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1225a';
+    const pr = {
+      number: 1225, title: 'manual 闸', isDraft: false, reviewDecision: 'APPROVED',
+      mergeable: 'MERGEABLE', headRefOid: HEAD, body: '署名 issue #1223',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1225: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, '署名单没查到不许自动合：' + JSON.stringify(byKind(r, 'merge')));
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'manual-not-draft'), '要报帅');
+    assert.ok(byKind(r, 'notify-hub').some((a) => /待人工合并/.test(a.subject || '')));
+  });
+
+  it('账本 manual、issue 缺失仍不降成 auto', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1225b';
+    const pr = {
+      number: 1225, title: 'ledger manual', isDraft: false, mergeable: 'MERGEABLE',
+      headRefOid: HEAD, body: '署名 issue #1223',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], attributedIssues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1225: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: HEAD }] } } },
+      dispatchLedger: {
+        scanned: true,
+        events: [{
+          type: 'job.dispatch', identity: '工人', pr_number: 1225, issue_number: 1223,
+          merge_policy: 'manual', merge_reason: 'type/体系 框架活', ts: '2026-09-13T08:00:00+08:00',
+        }],
+      },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, '账本 manual 必须保住');
+  });
+
+  it('账本 manual、issue 后来变成 type/写码仍不降成 auto', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1225c';
+    const issue = labeledIssue(1223, { labels: [{ name: 'type/写码' }, { name: '已消歧' }], body: '后来改成写码' });
+    const pr = {
+      number: 1225, title: 'later auto', isDraft: false, mergeable: 'MERGEABLE',
+      headRefOid: HEAD, body: '署名 issue #1223',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      labels: [{ name: 'type/写码' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1225: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: HEAD }] } } },
+      dispatchLedger: {
+        scanned: true,
+        events: [{
+          type: 'job.dispatch', identity: '工人', pr_number: 1225, issue_number: 1223,
+          merge_policy: 'manual', merge_reason: '当时是体系', ts: '2026-09-13T08:00:00+08:00',
+        }],
+      },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, 'issue 后来变了也不能把账本 manual 降成 auto');
+  });
+
+  it('认输 + type/体系 + 当前 HEAD 绿 + 无拍板证据 → 不合（认输不放开人工合门）', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1225d';
+    const issue = labeledIssue(1223, {
+      labels: [{ name: 'type/体系' }, { name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }],
+    });
+    const pr = {
+      number: 1225, title: '认输体系', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1223',
+      labels: [{ name: '卡死/自动化认输' }, { name: 'type/体系' }],
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [issue], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1225: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: HEAD }] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0, '认输例外必须走同一套 manual 闸：' + JSON.stringify(byKind(r, 'merge')));
+    assert.ok(byKind(r, 'notify-hub').some((a) => /待人工合并/.test(a.subject || '')));
+  });
+
+  it('非 draft manual 批准单只在 attributedIssues → action 仍带 approvalIssue/head/evidenceMode', async () => {
+    const { decide } = await CORE;
+    const HEAD = 'h1182';
+    const issue = {
+      number: 1182, title: '已关署名单', body: '',
+      labels: [{ name: '已拍板' }, { name: '已消歧' }, { name: 'type/体系' }],
+    };
+    const pr = {
+      number: 1191, title: '修复', isDraft: false, mergeable: 'MERGEABLE', headRefOid: HEAD,
+      body: '署名 issue #1182',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], attributedIssues: [issue], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 1191: { reviews: [{ state: 'APPROVED', body: '可合', commit_id: HEAD }] } } },
+    }));
+    const merge = byKind(r, 'merge')[0];
+    assert.ok(merge, '证据齐应产 bound merge：' + JSON.stringify(r.actions.map((a) => a.kind)));
+    assert.equal(merge.approvalIssue, 1182);
+    assert.equal(merge.head, HEAD);
+    assert.equal(merge.evidenceMode, 'manual');
+  });
+
+  it('kind:merge 生产出口只在 pushMergeIfReady 一处', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'commander-core.mjs'), 'utf8');
+    const hits = [...src.matchAll(/kind:\s*'merge'/g)];
+    assert.equal(hits.length, 2, '只该有 auto-merge 与 bound-merge 两处字面量，都在 pushMergeIfReady 里：' + hits.length);
+    assert.match(src, /const pushMergeIfReady/);
+    assert.match(src, /stuckException: true/);
+  });
+
   it('review-pending 队列有条目 → attach-reviewer', async () => {
     const { decide } = await CORE;
     const r = decide(baseSituation({
@@ -619,6 +775,7 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
     };
     const r = decide(baseSituation({
+      askPolicy: await policyFromHolds(['独有红线词QQQ']),
       github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
       prReviews: { scanned: true, byPr: { 1102: { reviews: [
         { state: 'APPROVED', body: '绿', commit_id: OLD },
@@ -640,6 +797,7 @@ describe('decide：红只对它当时那个 commit 有效（#911–#918 八张�
       statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
     };
     const r = decide(baseSituation({
+      askPolicy: await policyFromHolds(['独有红线词QQQ']),
       github: { scanned: true, issues: [labeledIssue(1102)], prs: [pr] },
       prReviews: { scanned: true, byPr: { 1102: { reviews: [
         { state: 'APPROVED', body: '绿', commit_id: OLD },
@@ -1069,6 +1227,16 @@ describe('act：返工的手（#931）', () => {
     assert.ok(text.includes('abcdef1234567890'), '写清红项打在哪个 head 上');
   });
 
+  it('到了审查轮次上限，任务书写明只能改判或拆单', async () => {
+    const M = await MOD();
+    const text = M.reworkBriefText({ ...action, redRounds: 6, reviewRoundsMax: 6 });
+    assert.ok(text.includes('审查轮次上限：6'), '上限必须是生产代码读出来的数，不是写死在任务书里');
+    assert.ok(text.includes('只能改判或拆单'), '到上限还判红就不能再写一轮请修 P2');
+    const under = M.reworkBriefText({ ...action, redRounds: 1, reviewRoundsMax: 6 });
+    assert.ok(under.includes('审查轮次上限：6'));
+    assert.ok(!under.includes('已到上限'), '没到上限不喊熔断');
+  });
+
   it('返工注入指针过得了 500 字节硬闸（长红项不进注入，只进文件）', async () => {
     const M = await MOD();
     const tpl = await import('file://' + path.join(__dirname, '..', 'scripts', 'lib', 'dispatch', 'template.mjs').replace(/\\/g, '/'));
@@ -1267,6 +1435,79 @@ describe('辅助纯函数', () => {
     assert.equal(hasLiveAction([{ kind: 'escalate', reason: 'unscanned' }]), false);
     assert.equal(hasLiveAction([{ kind: 'dispatch', issue: 1 }]), true);
     assert.equal(hasLiveAction([{ kind: 'escalate', reason: 'two-red' }]), true, '报帅算动静');
+  });
+
+  // 2026-09-15 实咬：连续 9 轮唯一动作都是同一条 escalate(missing-labels, #1174)，
+  // hasLiveAction 判 true ⇒ lastActivityAt 每 20 分钟刷新 ⇒ 心跳永远不到期，
+  // 系统自认一切正常，而盘面冻了 10 小时、22/26 张 PR 被跳过。
+  // 「有动作」不等于「有推进」，锚点判据要加上「这轮跟上轮不一样」。
+  it('countsAsProgress：同一套动作重复就不算推进（心跳锚点不许被磨盘刷新）', async () => {
+    const { countsAsProgress } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+
+    // streak 语义跟 nextDigestStreak 对齐：0=新摘要，≥1=已经连续相同。
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 0 }), true, '新摘要（streak=0）算推进');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 1 }), false, '第一轮重复（streak=1）就是磨盘');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 2 }), false, '第二轮重复');
+    assert.equal(countsAsProgress({ actions: stuck, digestStreak: 9 }), false, '实咬那一次：9 轮相同');
+
+    assert.equal(countsAsProgress({ actions: [{ kind: 'noop' }], digestStreak: 0 }), false,
+      'noop 本来就不算，streak 再新也不算');
+    assert.equal(countsAsProgress({ actions: [{ kind: 'escalate', reason: 'unscanned' }], digestStreak: 0 }), false,
+      '纯 unscanned-escalate 同理');
+  });
+
+  it('countsAsProgress：streak 没查成时退回旧行为（不许把正常运转误报成死机）', async () => {
+    const { countsAsProgress } = await CORE;
+    const live = [{ kind: 'dispatch', issue: 1 }];
+    assert.equal(countsAsProgress({ actions: live }), true, 'undefined');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: null }), true, 'null');
+    assert.equal(countsAsProgress({ actions: live, digestStreak: 'x' }), true, '非数');
+  });
+
+  it('countsAsProgress：真有新动作时照常算推进（别把闸修成永远不响）', async () => {
+    const { countsAsProgress } = await CORE;
+    assert.equal(countsAsProgress({ actions: [{ kind: 'dispatch', issue: 7 }], digestStreak: 0 }), true);
+    assert.equal(countsAsProgress({ actions: [{ kind: 'merge', pr: 9 }], digestStreak: 0 }), true);
+  });
+
+  // 审官红项：不要只手工传入与生产语义不一致的 streak:1。
+  // 生产路径是 nextDigestStreak 写回 state.digestStreak，再交给 countsAsProgress。
+  it('countsAsProgress ← nextDigestStreak：连续 9 轮同一摘要，从第一轮重复起就不算推进', async () => {
+    const { countsAsProgress, nextDigestStreak } = await CORE;
+    const stuck = [{ kind: 'escalate', issue: 1174, reason: 'missing-labels' }];
+    let lastDigest = null;
+    let lastStreak = 0;
+    const streaks = [];
+    const progress = [];
+    for (let i = 0; i < 9; i += 1) {
+      const vac = nextDigestStreak({
+        actions: stuck,
+        lastDigest,
+        lastStreak,
+        threshold: 6,
+      });
+      lastDigest = vac.digest;
+      lastStreak = vac.streak;
+      streaks.push(vac.streak);
+      progress.push(countsAsProgress({ actions: stuck, digestStreak: vac.streak }));
+    }
+    assert.deepEqual(streaks, [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      'nextDigestStreak：首个新摘要 0，第二轮相同才 1');
+    assert.deepEqual(progress, [true, false, false, false, false, false, false, false, false],
+      '磨盘从第一轮重复起就不刷新锚点（旧实现是 0:true, 1:true, 2:false）');
+
+    const moved = nextDigestStreak({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      lastDigest,
+      lastStreak,
+      threshold: 6,
+    });
+    assert.equal(moved.streak, 0, 'digest 变了归零');
+    assert.equal(countsAsProgress({
+      actions: [{ kind: 'dispatch', issue: 7 }],
+      digestStreak: moved.streak,
+    }), true, '真换动作后锚点恢复刷新');
   });
 
   it('actionsDigest：同一批动作稳定同键、顺序无关；noop 不入键', async () => {
@@ -2007,6 +2248,33 @@ describe('复审票存活：PR 合了/关了，票必须回收', () => {
     assert.equal(attach[0].repo, 'org/a');
     assert.equal(attach[0].pr, 12);
   });
+
+  it('本仓带同值 repo 的票、PR 不在开放列表 → reap-ticket', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      repo: 'thoerwink8/windsurf-dao',
+      github: { scanned: true, issues: [], prs: [] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 101, head: 'abc', reviewer: 'gpt-5.6-luna', worker: null, repo: 'thoerwink8/windsurf-dao' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket').map((a) => a.pr), [101]);
+    assert.deepEqual(byKind(r, 'attach-reviewer'), []);
+  });
+
+  it('本仓带同值 repo 的票、PR 还开着 → 不回收', async () => {
+    const { decide } = await CORE;
+    const r = decide(baseSituation({
+      repo: 'thoerwink8/windsurf-dao',
+      github: { scanned: true, issues: [], prs: [{ number: 890, isDraft: false, mergeable: 'MERGEABLE', headRefOid: 'aaa' }] },
+      reviewPending: {
+        scanned: true,
+        items: [{ pr: 890, head: 'aaa', reviewer: 'gpt-5.6-luna', worker: null, repo: 'thoerwink8/windsurf-dao' }],
+      },
+    }));
+    assert.deepEqual(byKind(r, 'reap-ticket'), []);
+  });
 });
 
 // ── 署名单已关时的标签补取（2026-09-06 实咬：#945 每轮报「标签没查成」，
@@ -2633,6 +2901,36 @@ describe('decide：human_holds → merge-policy（#1094）', () => {
     assert.equal(byKind(r, 'dispatch')[0].mergePolicy, 'auto');
   });
 
+  it('resolveLandMergePolicy：账本 manual 压过缺失/变化的 issue', async () => {
+    const { resolveLandMergePolicy } = await CORE;
+    const ledgerManual = { ok: true, mergePolicy: 'manual', mergeReason: '当时是体系' };
+    const missing = resolveLandMergePolicy({
+      issue: null, attributedNumber: 1223, ledgerPick: ledgerManual,
+    });
+    assert.equal(missing.mergePolicy, 'manual');
+    assert.equal(missing.mergePolicySource, 'ledger');
+    const later = labeledIssue(1223, { labels: [{ name: 'type/写码' }], body: '修空指针' });
+    const changed = resolveLandMergePolicy({
+      issue: later, attributedNumber: 1223, ledgerPick: ledgerManual, policy: await policyFromHolds(['独有红线词QQQ']),
+    });
+    assert.equal(changed.mergePolicy, 'manual');
+    assert.equal(changed.mergePolicySource, 'ledger');
+  });
+
+  it('resolveLandMergePolicy：署名单号有、对象没有 → unscanned，不许 auto', async () => {
+    const { resolveLandMergePolicy } = await CORE;
+    const r = resolveLandMergePolicy({ issue: null, attributedNumber: 1223, ledgerPick: { ok: false, state: 'none' } });
+    assert.equal(r.mergePolicy, 'manual');
+    assert.equal(r.mergePolicySource, 'unscanned');
+  });
+
+  it('resolveLandMergePolicy：无署名无账本 → auto（非派工链 PR）', async () => {
+    const { resolveLandMergePolicy } = await CORE;
+    const r = resolveLandMergePolicy({ issue: null, attributedNumber: null, ledgerPick: null });
+    assert.equal(r.mergePolicy, 'auto');
+    assert.equal(r.mergePolicySource, 'no-issue');
+  });
+
   it('fail-close：策略没查成 / human_holds 空数组 / 正文键缺失 → 一律 manual，不许 auto', async () => {
     const { resolveIssueMergePolicy } = await CORE;
     const emptyHolds = await policyFromHolds([]);
@@ -2951,16 +3249,18 @@ describe('对账循环 scan 真的接进态势', () => {
 
   it('buildSituation 采了 sessions 和 desiredJobs', () => {
     assert.match(src, /const sessions = scanSessions\(\);/);
-    assert.match(src, /const desiredJobs = scanDesiredJobs\(\);/);
+    assert.match(src, /const desiredJobs = scanDesiredJobs\(ledgerListed\)/);
+    assert.match(src, /const dispatchLedger = scanDispatchLedger\(ledgerListed\)/);
     assert.match(src, /const lease = scanLease\(\);/);
-    assert.match(src, /sessions, lease, desiredJobs,/);
+    assert.match(src, /sessions, lease, desiredJobs, dispatchLedger,/);
   });
 
   it('期望集走全量读事件账，不走 10 分钟去重窗', () => {
-    const i = src.indexOf('function scanDesiredJobs');
-    assert.ok(i > -1, '找不到 scanDesiredJobs');
-    const fn = src.slice(i, i + 700);
+    const i = src.indexOf('function readHomeLedger');
+    assert.ok(i > -1, '找不到 readHomeLedger');
+    const fn = src.slice(i, src.indexOf('function scanTrees'));
     assert.match(fn, /readLedgerEvents/);
+    assert.match(fn, /function scanDesiredJobs/);
     assert.ok(!/readDispatchEventsIndexed/.test(fn), '索引窗会把 10 分钟前的未结派工洗掉');
   });
 
