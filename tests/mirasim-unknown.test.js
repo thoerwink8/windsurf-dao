@@ -278,14 +278,13 @@ describe('④ GC 的成功证据与失败传播', () => {
     assert.equal(res.exit, 0);
     assert.ok(!res.nextState.sessions[KEY], '自证删成了就不用留状态');
   });
-  it('连树删但树还在 / 还在不在没查成 → 都非零', async () => {
+  it('分支已合并且树还在：只删会话、不连树，exit 0（树删除已禁用）', async () => {
     const { sweepOnce } = await import(CLI);
     const stay = await sweepOnce(gcDeps({ branch: 'feature-880x', treeExists: true }), { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(stay.gced[0].treeGone, false);
-    assert.notEqual(stay.exit, 0);
-    const blind = await sweepOnce(gcDeps({ branch: 'feature-880x', treeExists: null }), { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(blind.gced[0].treeGone, null);
-    assert.notEqual(blind.exit, 0);
+    assert.equal(stay.gced[0].removeTree, false);
+    assert.equal(stay.gced[0].treeGone, null, '没去拆树，不把树还在编成动作失败');
+    assert.equal(stay.exit, 0);
+    assert.equal(stay.gced[0].verified, true);
   });
 });
 
@@ -351,7 +350,7 @@ describe('⑥ TTL 闸不许把 null/空值当时间 0', () => {
   });
 });
 
-describe('⑦ 树 GC 在真机 branch:null 的会话上真能触发，且不误删', () => {
+describe('⑦ 树删除已禁用（#1353：须 fence 内重读后再删）', () => {
   function treeDeps(branchLookup) {
     const sessions = [{ sessionKey: KEY, agent: 'claude', runState: 'completed', updatedAt: T0 - 40 * MIN, workdir: '/w/merged-tree', branch: null, open: false }];
     const calls = [];
@@ -373,33 +372,17 @@ describe('⑦ 树 GC 在真机 branch:null 的会话上真能触发，且不误�
     };
   }
 
-  it('会话 branch:null，但从 workdir 反查到已合并分支 → 连树回收（原实现永远 false）', async () => {
+  it('即便 workdir 反查到已合并分支，也只删会话、不得把 removeWorktree 设成真', async () => {
     const { sweepOnce } = await import(CLI);
     const deps = treeDeps('feature-880x');
     const res = await sweepOnce(deps, { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(res.gced[0].removeTree, true, res.gced[0].treeReason);
-    assert.equal(res.gced[0].treeBranch, 'feature-880x');
-    assert.deepEqual(deps.calls, [{ removeWorktree: true }]);
+    assert.equal(res.gced.length, 1);
+    assert.equal(res.gced[0].removeTree, false, res.gced[0].treeReason);
+    assert.match(res.gced[0].treeReason, /#1353|禁用/);
+    assert.deepEqual(deps.calls, [{ removeWorktree: false }]);
+    assert.equal(res.exit, 0);
   });
-  it('反查到默认分支 master → 拒（--merged master 永远算已合并，删了就是误删）', async () => {
-    const { sweepOnce } = await import(CLI);
-    const res = await sweepOnce(treeDeps('master'), { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(res.gced[0].removeTree, false);
-    assert.match(res.gced[0].treeReason, /默认分支/);
-  });
-  it('反查不成（游离 HEAD / 不是 git 树）→ 拒', async () => {
-    const { sweepOnce } = await import(CLI);
-    const res = await sweepOnce(treeDeps(null), { sessions: {} }, { ttlMs: 30 * MIN });
-    assert.equal(res.gced[0].removeTree, false);
-    assert.match(res.gced[0].treeReason, /没查成/);
-  });
-  it('树在保护名单里（本仓根/主树）→ 拒', async () => {
-    const { sweepOnce } = await import(CLI);
-    const res = await sweepOnce(treeDeps('feature-880x'), { sessions: {} }, { ttlMs: 30 * MIN, protectPaths: ['/w/merged-tree'] });
-    assert.equal(res.gced[0].removeTree, false);
-    assert.match(res.gced[0].treeReason, /保护名单/);
-  });
-  it('judgeGcWorktree 的保护名单比路径写法（斜杠/大小写/尾斜杠）', async () => {
+  it('judgeGcWorktree 的保护名单比路径写法（斜杠/大小写/尾斜杠）——纯判官仍留给 #1353', async () => {
     const { judgeGcWorktree } = await import(MON);
     const r = judgeGcWorktree({ path: 'D:/frank/windsurf-dao', branch: 'b', merged: true, protectedPaths: ['D:\\frank\\WINDSURF-DAO\\'] });
     assert.equal(r.gc, false, r.reason);
@@ -619,10 +602,10 @@ describe('返工 P1（审官 round 2：读不到仍被编成已知值）', () =>
         issueOf: () => 880,
       }, { sessions: {} }, { ttlMs: 30 * MIN });
       assert.equal(res.gced[0].removeTree, false, res.gced[0].treeReason);
-      assert.equal(res.unscanned, true);
-      assert.equal(res.exit, 2);
       assert.equal(calls.length, 1);
       assert.equal(calls[0].removeWorktree, false);
+      assert.equal(res.gced[0].verified, true);
+      assert.equal(res.exit, 0, '树删除已禁用，外部仓归属失败不得再把整轮编成 unknown');
     } finally {
       spawnSync('git', ['branch', '-D', name], { cwd: root, encoding: 'utf8' });
       fs.rmSync(ext, { recursive: true, force: true });
@@ -1189,5 +1172,83 @@ describe('返工 P1（审官 round 6：枚举超时 / STALL_ONLY 共树）', () 
       if (prevOnly === undefined) delete process.env.MIRASIM_STALL_ONLY;
       else process.env.MIRASIM_STALL_ONLY = prevOnly;
     }
+  });
+});
+
+describe('返工 P1（审官熔断：禁用未经 fence 的连树删）', () => {
+  const fs = require('node:fs');
+  const LIVE_KEY = 'claude:c0ffeeee-7fe3-4d03-ae25-312b86952bf9';
+  const TREE = '/tmp/shared';
+
+  it('首轮只有终态、删除前插入同树 running/open，也不得把 removeWorktree 设成真', async () => {
+    const { sweepOnce } = await import(CLI);
+    const dead = {
+      sessionKey: KEY, agent: 'claude', state: 'completed',
+      updatedAt: T0 - 40 * MIN, workdir: TREE, branch: 'done-880x', open: false,
+    };
+    const live = {
+      sessionKey: LIVE_KEY, agent: 'claude', state: 'running',
+      updatedAt: T0, workdir: TREE, branch: 'live-880d', open: true,
+    };
+    let listed = [dead];
+    const calls = [];
+    const res = await sweepOnce({
+      now: () => T0,
+      listSessions: async () => listed,
+      readSession: async () => liveView({ phase: 'done' }),
+      readLedger: async () => okLedger,
+      stopSession: async () => ({ ok: true }),
+      deleteSession: async (k, o) => {
+        listed = [live];
+        calls.push({ k, o });
+        return { ok: true };
+      },
+      removeWorktree: async () => { throw new Error('本 PR 不得调 removeWorktree'); },
+      isBranchMerged: () => true,
+      worktreeOwnership: () => ({ ok: true, defaultBranch: 'master', why: null }),
+      branchOfWorktree: () => 'done-880x',
+      treeExists: () => true,
+      postComment: () => ({ ok: true }),
+      issueOf: () => 880,
+    }, { sessions: {} }, { ttlMs: 30 * MIN });
+
+    assert.equal(res.gced.length, 1, JSON.stringify(res.gced));
+    assert.equal(res.gced[0].removeTree, false, JSON.stringify(res.gced[0]));
+    assert.deepEqual(calls, [{ k: KEY, o: { removeWorktree: false } }]);
+    assert.equal(calls.some(c => c.o && c.o.removeWorktree === true), false);
+    assert.equal(res.gced[0].treeGone, null);
+    assert.equal(res.gced[0].verified, true);
+    assert.equal(res.exit, 0);
+  });
+
+  it('realDeps.deleteSession 就算被叫真值，线帧也不得带 removeWorktree', async () => {
+    const { realDeps } = await import(CLI);
+    const frames = [];
+    const fakeOpen = async () => ({
+      send(f) { frames.push(f); },
+      async waitFor() { return null; },
+      close() {},
+      closed: false,
+      failure: null,
+    });
+    const wired = await realDeps({
+      readSession: async () => ({ phase: 'done', missing: false, text: '', error: null }),
+      readLedger: async () => okLedger,
+      stopSession: async () => ({ ok: true }),
+    }, { open: fakeOpen });
+    const r = await wired.deleteSession(KEY, { removeWorktree: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(frames.length, 1);
+    assert.equal(frames[0].type, 'deleteSession');
+    assert.equal(frames[0].sessionKey, KEY);
+    assert.equal('removeWorktree' in frames[0], false, JSON.stringify(frames[0]));
+  });
+
+  it('源码：sweepOnce / realDeps 不得把 removeWorktree 设成真交给 deleteSession', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'agent-stall-watch-mirasim.mjs'), 'utf8');
+    assert.equal(/removeWorktree:\s*true/.test(src), false);
+    assert.equal(/removeWorktree:\s*!!o/.test(src), false);
+    assert.equal(/removeWorktree:\s*removeTree/.test(src), false);
+    assert.match(src, /removeWorktree:\s*false/);
   });
 });

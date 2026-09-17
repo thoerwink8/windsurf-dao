@@ -216,6 +216,8 @@ describe('sweepOnce —— 一遍扫：卡死停+评论、终态回收', () => {
     assert.equal(deps.calls.comment[0].issue, 880);
     assert.equal(res.gced.length, 1);
     assert.equal(deps.calls.del.length, 1);
+    assert.equal(deps.calls.del[0].o.removeWorktree, false);
+    assert.equal(deps.calls.removeTree.length, 0, '本 PR 禁用连树删，不得调 removeWorktree');
   });
 
   it('枚举失败 → 没查成 exit 2，不误动', async () => {

@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// scripts/agent-stall-watch-mirasim.mjs —— mirasim 会话保活与回收（#880 卡 D）
+// scripts/agent-stall-watch-mirasim.mjs —— mirasim 保活安全基础块（#880 卡 D；PR #885）
 //
 // 现役卡死发现是 scripts/progress-watch.mjs（#833 屏面指纹层已退役）。mirasim 没有屏面，
 // 这条路只看「该发生的事有没有发生」：phase 还在跑，但账本行数没涨、快照正文没变超过阈值
 // → 判卡死 → stopSession + 在关联 issue 落一条人话评论（复用 watchdog 报警形状）。
-// 顺带做会话 GC（终态过 TTL → deleteSession，分支已合并再连树一起删）与健康段落盘。
+// 顺带做会话 GC（终态过 TTL → deleteSession）。树删除本文件禁用：首轮活动集快照与
+// deleteSession 之间没有 workdir fence，会误拆删除前新出现的同树 live 会话（#1353 承接）。
+// --once 是可测 CLI，不是现役周期入口；接线与原子删树都留给 #1353。
 //
 // 判据全在 scripts/lib/mirasim-monitor.mjs（纯判官）；本文件只连线、读盘、记账、报帅。
 //
 // 用法：
-//   node scripts/agent-stall-watch-mirasim.mjs --once            扫一遍（判卡死+GC）
+//   node scripts/agent-stall-watch-mirasim.mjs --once            扫一遍（判卡死+会话 GC，不删树）
 //   node scripts/agent-stall-watch-mirasim.mjs --once --dry-run  只报决策不真停/删/评论
 //   node scripts/agent-stall-watch-mirasim.mjs --health [--json]  只出健康段并落额度文件
 //
@@ -37,8 +39,8 @@ import {
   createRuntime, readLedger, openWire, SESSIONS_TIMEOUT_MS,
 } from './lib/mirasim-runtime.mjs';
 import {
-  judgeStall, judgeGcSession, judgeGcWorktree, errorFingerprint,
-  activeWorkdirs, knownPositiveMs,
+  judgeStall, judgeGcSession, errorFingerprint,
+  knownPositiveMs,
   wireListSessions, wireDeleteSession, wireRemoveWorktree, probeMirasim,
 } from './lib/mirasim-monitor.mjs';
 import { classifySessionState } from './lib/execution-states.mjs';
@@ -217,11 +219,12 @@ function isBranchMerged(branch, workdir) {
 /**
  * 扫一遍（可测核心）。deps 全注入，测试给假的：
  *   listSessions() / readSession(k) / readLedger(k) / stopSession(k)
- *   deleteSession(k,{removeWorktree}) / removeWorktree(path)
+ *   deleteSession(k,{removeWorktree}) —— 本 PR 一律传 removeWorktree 假值；连树删留给 #1353
+ *   removeWorktree(path) —— 装配保留，sweepOnce 不调用
  *   isBranchMerged(branch, workdir) / worktreeOwnership(path) / branchOfWorktree(path) / treeExists(path)
  *   postComment({issue,body}) / now()
  *   issueOf(session) —— 从会话推关联 issue（推不出用 fallbackIssue）
- * opts: { stallMs, ttlMs, dryRun, fallbackIssue, protectPaths, only }
+ * opts: { stallMs, ttlMs, dryRun, fallbackIssue, only }
  * 返回 { scanned, stalled[], gced[], escalated[], live[], unknown[], unscanned, actionFailed, nextState, exit }
  * exit：2 = 有没查成的（枚举失败 / 任一会话读链路 unknown）；1 = 查成了但动作失败
  *      （停不成 / 评论没落 / 删了但回读没自证）；0 = 扫完且该做的都自证做成了。
@@ -229,9 +232,6 @@ function isBranchMerged(branch, workdir) {
 export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
   const now = deps.now || (() => Date.now());
   const dryRun = !!opts.dryRun;
-  // 绝不回收的树：本仓根（主树）。真机会话的 workdir 里就有挂 master 的树，
-  // 没这道闸 + branch 反查一开，第一遍就能把主树删掉。
-  const protectPaths = opts.protectPaths ?? [REPO_ROOT];
   const nextState = { sessions: {} };
   const out = { scanned: 0, stalled: [], gced: [], escalated: [], live: [], unknown: [], unscanned: false, actionFailed: false };
 
@@ -251,9 +251,8 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     out.unscanned = true;
     return { ...out, nextState: prevState, exit: 2, reason: '枚举会话没查成（listSessions 没回 sessions 帧）' };
   }
-  // 活动树必须看全局清单。MIRASIM_STALL_ONLY 只缩小 stop/报帅/GC 的候选，
-  // 不能把「同树还有活会话」筛出保护集（PR #885 审官实咬）。
-  const active = activeWorkdirs(sessions);
+  // MIRASIM_STALL_ONLY 只缩小 stop/报帅/会话 GC 的候选，清单仍全量。
+  // 树删除本 PR 禁用（#1353），不再用首轮 activeWorkdirs 决定连树删。
   const only = (opts.only == null || String(opts.only).trim() === '') ? null : String(opts.only);
   const pendingVerify = []; // 删过、等回读自证的（「送进去了」≠「删掉了」）
 
@@ -268,48 +267,22 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
     out.scanned++;
     const kind = classifySessionState(s);
 
-    // 终态 → GC
+    // 终态 → 会话 GC。树删除本 PR 禁用（#1353）：
+    // 首轮活动集快照与 deleteSession 之间没有与会话启动相同的 workdir fence，
+    // 删除前新出现的同树 running/open 会话会被误拆树。本块只删会话。
     if (kind === 'finished') {
       const g = judgeGcSession({ meta: s, now: now(), ttlMs });
       if (!g.gc) { nextState.sessions[key] = prev || { sig: null, sinceTs: now() }; continue; }
-      // 树 GC：分支已合并才连树删。
-      // 会话清单的 branch 字段不能当树的现状（真机 0.0.286 实测 65 条：一半 null、一半 'master'），
-      // 所以从 workdir 反查它**当前**在哪条分支；反查不成 → null → judgeGcWorktree 拒（审官第 7 条）。
-      let removeTree = false;
-      let treeBranch = null;
-      let treeReason = s.workdir ? 'workdir 还在活动集里，不动树' : '会话没登记 workdir，不动树';
-      if (s.workdir && !active.has(s.workdir)) {
-        treeBranch = deps.branchOfWorktree ? deps.branchOfWorktree(s.workdir) : null;
-        // 测试没注入 worktreeOwnership 时按「已证明归属」走（夹具自己管 isBranchMerged）；
-        // 真依赖必须注入，解不出归属 → 不删树并标 unknown。
-        const own = deps.worktreeOwnership
-          ? deps.worktreeOwnership(s.workdir)
-          : { ok: true, defaultBranch: 'master', why: null };
-        if (!own || own.ok !== true || !own.defaultBranch) {
-          removeTree = false;
-          treeReason = own?.why || '仓归属没查成（不删树）';
-          out.unknown.push({ key, reason: `树 ${s.workdir}：${treeReason}`, gaps: [{ name: '仓归属', why: treeReason }] });
-          out.unscanned = true;
-        } else {
-          const merged = treeBranch ? deps.isBranchMerged(treeBranch, s.workdir) : null;
-          const wj = judgeGcWorktree({
-            path: s.workdir,
-            branch: treeBranch,
-            merged,
-            defaultBranch: own.defaultBranch,
-            protectedPaths: protectPaths,
-          });
-          removeTree = wj.gc;
-          treeReason = wj.reason;
-        }
-      }
+      const removeTree = false;
+      const treeBranch = null;
+      const treeReason = '树删除已禁用（#1353：须在 workdir fence 内重读完整清单后再删）';
       if (dryRun) {
         out.gced.push({ key, reason: g.reason, removeTree, treeBranch, treeReason, dryRun: true });
         nextState.sessions[key] = prev || { sig: null, sinceTs: now() };
         continue;
       }
-      const del = await deps.deleteSession(key, { removeWorktree: removeTree });
-      // ok:true 只说明「送进去了」；删成没成一律等下面回读清单/看树还在不在自证（注释承诺的那道回读）。
+      const del = await deps.deleteSession(key, { removeWorktree: false });
+      // ok:true 只说明「送进去了」；会话删成没成一律等下面回读清单自证。
       const rec = { key, reason: g.reason, removeTree, treeBranch, treeReason, ok: del.ok, why: del.why, verified: null, treeGone: null };
       out.gced.push(rec);
       if (!del.ok) {
@@ -318,9 +291,7 @@ export async function sweepOnce(deps, prevState = { sessions: {} }, opts = {}) {
         nextState.sessions[key] = prev || { sig: null, sinceTs: now() };
         continue;
       }
-      pendingVerify.push({ rec, key, prev, workdir: removeTree ? s.workdir : null });
-      // 这里**不再**在 judgeGcWorktree 说「不回收」之后补一刀 removeWorktree：
-      // 原来那段绕过判官重算 merged，会把保护名单里的树和挂默认分支的树删掉。
+      pendingVerify.push({ rec, key, prev, workdir: null });
       continue;
     }
 
@@ -482,7 +453,8 @@ export async function realDeps(runtime, { open = openWire } = {}) {
     readSession: k => runtime.readSession(k),
     readLedger: k => readLedger({ sessionKey: k, homeDir: homedir() }),
     stopSession: k => runtime.stopSession(k),
-    deleteSession: (k, o) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: !!o?.removeWorktree }), { open }),
+    // 本 PR 硬禁用连树删：调用方就算传真值，线帧也不带 removeWorktree（#1353 接 fence 后再打开）。
+    deleteSession: (k) => withWire(w => wireDeleteSession(w, { sessionKey: k, removeWorktree: false }), { open }),
     removeWorktree: p => withWire(w => wireRemoveWorktree(w, { path: p }), { open }),
     isBranchMerged,
     worktreeOwnership,
@@ -515,7 +487,7 @@ async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.mode === 'health') { process.exit(await runHealth(args)); }
   if (args.mode !== 'once') {
-    console.error('要么 --once（保活+回收）要么 --health（健康段）');
+    console.error('要么 --once（保活+会话 GC，不删树）要么 --health（健康段）');
     process.exit(2);
   }
   const stallRaw = process.env.MIRASIM_STALL_MS;
