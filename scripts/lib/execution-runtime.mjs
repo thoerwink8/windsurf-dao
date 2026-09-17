@@ -309,6 +309,26 @@ export function createExecutionRuntime(opts={}) {
     });
     return {...view,execution:result};
   }
+  /**
+   * 树已回收 + 租约归别人：只结自己的记录。判据与主路一致——零进程、供应商侧终态或查无此会话；
+   * 任一不满足就原样留着（下轮再看），不许凭「树没了」一个证据就判清退。
+   */
+  async function settleOrphanRecord(key,meta,target) {
+    if(meta.backend==='acp')return {ok:false,why:'ACP record on a reaped worktree needs backend cleanup'};
+    const rt=backend(key,meta);
+    let procs;try{procs=processCheck(target);}catch{return {ok:false,why:'process cleanup scan incomplete'};}
+    if(procs.length)return {ok:false,why:'processes still run inside the reaped worktree'};
+    const stopped=await rt.stopSession(key).catch(e=>({ok:false,why:String(e?.message||e)}));
+    const view=await rt.readSession(key);
+    const terminal=view?.missing===true||TERMINAL_STATUS.has(judgeExecutionCompletion(view).status);
+    if(!terminal)return {ok:false,uncertain:true,why:'vendor session on a reaped worktree is not terminal'};
+    await fence(()=>{
+      const current=metadata(key);if(!current)return null;
+      atomic(metaFile(key),{...current,state:'stopped',cleanupVerified:true,cleanupToken:null,cleanupOwner:null,updatedAt:now(),taskCompleted:false});
+      return current;
+    });
+    return {ok:true,verified:true,treeGone:true,foreignLease:true,stopAcknowledged:stopped?.ok===true};
+  }
   async function stopSession(key,{workdir,expectedLease,automatic=false}={}) {
     assertMutationAllowed();
     let meta=metadata(key),target=meta?.workdir||workdir;
@@ -330,7 +350,13 @@ export function createExecutionRuntime(opts={}) {
     const file=leaseFile(target),cleanupToken=crypto.randomUUID();
     const claimed=await fence(()=>{
       const held=readJson(file);meta=metadata(key)||meta;
-      if(held&&held.sessionKey!==key)throw busy('session no longer owns this worktree');
+      if(held&&held.sessionKey!==key) {
+        // 树没了、租约也早归了后来者（同一路径被复用，实咬 26 条）：这条记录什么都握不住，
+        // 「session no longer owns this worktree」对它不是拦路而是判词。租约一个字不碰，
+        // 只按同样的判据（零进程 + 终态/missing）清自己的记录；树在时照旧拦。
+        if(treeGone&&meta)return {foreignLease:true,meta};
+        throw busy('session no longer owns this worktree');
+      }
       if(expectedLease&&!sameLease(held,expectedLease))throw busy('worktree lease changed before cleanup');
       if(held?.state==='pending')throw busy('launch is still awaiting acceptance','launch-pending');
       if(held?.state==='stopping'&&(automatic||held.cleanupOwner&&alive(held.cleanupOwner)))throw busy('session cleanup already owned');
@@ -344,6 +370,7 @@ export function createExecutionRuntime(opts={}) {
       atomic(file,lease);return {lease,meta:next,wasUncertain:m.state==='uncertain'||m.launchState==='uncertain'};
     });
     if(claimed.alreadyStopped)return {ok:true,verified:true,alreadyStopped:true};
+    if(claimed.foreignLease)return settleOrphanRecord(key,claimed.meta,target);
     let result={ok:false,why:'session cleanup failed'};
     try {
       const rt=backend(key,claimed.meta);
