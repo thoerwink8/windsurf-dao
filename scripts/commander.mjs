@@ -31,7 +31,7 @@ import { ghExecutable } from './lib/gh.mjs';
 import {
   reviewPendingDir, reviewPendingPath, listReviewPending, writeReviewPending,
   buildReviewPendingTicket,
-  classifyDrainAttempt,
+  classifyDrainAttempt, judgeEnvFailure,
   REVIEW_PENDING_SOURCE_COMMANDER_REREVIEW,
 } from './lib/dispatch/review-pending.mjs';
 import { doorOf, classifyDaipai, TWO_WAY_DEADLINE_MS, DAIPAI_MAX_PER_ROUND } from './lib/daipai.mjs';
@@ -2100,10 +2100,16 @@ export function requestRereview(action, { state, dryRun, say, run }) {
   // 的新对象，下一轮 drain 同错会从 1 再数，「同错两轮提前交人」永远走不到。
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = state.reworkDispatched[key];
+  // #1331：tries 只记「**起了审官但没落判定**」，不记「环境抖了一下」。回环 ws 断连时这一轮
+  // 一个审官都没起过，记 tries 的后果是 3 次断连（每次不到 1 秒、彼此隔几分钟）就把这张 PR
+  // 判永久认输，判词还写成「叫了 3 次审官，判定仍是 0」——环境恢复了也没人管它。
+  // 判据取上一轮账上的 envUnreachable（结构化字段判出来的，见 judgeEnvFailure）。
+  const envLast = prev && prev.envUnreachable === true;
   state.reworkDispatched[key] = {
     ...prev,
     at: nowIso(), pr: action.pr, head: action.head, kind: 'rereview', ticket: w.path,
-    tries: Number(action.tries) || 1,
+    tries: envLast ? (Number(prev.tries) || 0) : (Number(action.tries) || (Number(prev?.tries) || 0) + 1),
+    envUnreachable: envLast,
   };
   say(`  已写复审待办 ${w.path}，当场 drain --pr ${action.pr}`);
   return drainReviewPending(action, { state, dryRun, say, run });
@@ -2129,19 +2135,29 @@ function drainReviewPending(action, { state, dryRun, say, run }) {
 
 /** 把这一轮 drain 的失败原文并进复审账（`foldFailureStreak` 判连着几轮一模一样）。
  *  只在「真动手」时改 streak：背压 / 没查成 / 空队列不算尝试，成功拉起审官才清零。
- *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。 */
+ *  原文抽取与 applyDrainLedger 共用 drainErrorText：完整原文，不截行不截字。
+ *
+ *  #1331：环境类失败（执行体自己够不着）**并原文、不动 tries**。原文要留下来
+ *  （认输评论与排障都读它，而且它是「连着几轮同一个错」的比较键），
+ *  但不去加这个 PR 的重试次数——见 judgeEnvFailure 与 requestRereview 的 tries 那行。 */
 function rememberDrainFailure(state, action, payload) {
   if (!state || action == null || action.pr == null) return;
   const key = action.stateKey || rereviewKey(action.pr, action.head);
   const prev = (state.reworkDispatched || {})[key];
   if (!prev) return;                       // 没有这条账就没有要并的对象
   const verdict = classifyDrainAttempt(payload);
-  if (!verdict.countTry) return;           // 背压 / 没查成 / 空队列 / dry-run：保留 streak
-  const pulled = verdict.reason === 'pulled';
+  const env = verdict.reason === 'env-unreachable';
+  if (!verdict.countTry && !env) return;   // 背压 / 没查成 / 空队列 / dry-run：保留 streak
+  const pulled = verdict.countTry && verdict.reason === 'pulled';
   const err = pulled ? null : drainErrorText(payload);
   if (!pulled && !err) return;             // 失败但没原文：没查成，不算「一直是它」，也不清零
   state.reworkDispatched = state.reworkDispatched || {};
-  state.reworkDispatched[key] = { ...prev, ...foldFailureStreak(prev, err) };
+  state.reworkDispatched[key] = {
+    ...prev,
+    ...foldFailureStreak(prev, err),
+    // 写侧的唯一真相：这一轮起审官时执行体够不够得着。下一轮的 tries 判据读它。
+    envUnreachable: env,
+  };
 }
 
 export function drainPayloadOf(runResult) {
