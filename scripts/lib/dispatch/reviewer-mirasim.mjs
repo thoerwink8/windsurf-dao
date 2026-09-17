@@ -12,7 +12,7 @@
 // 分层：judge* / parse* / read* 是纯判官，只吃入参；mirasim* 是编排，IO（runtime / gh /
 // readTreeHead / registry）全注入，测试不碰真服务。跨厂闸复用 assertCrossVendor（照旧）。
 
-import { analyzeGithubReviews } from '../review-state.mjs';
+import { analyzeGithubReviews, verdictOnHead } from '../review-state.mjs';
 import { EXECUTION_FINISHED, EXECUTION_SUCCEEDED, sessionStateOf, classifySessionState } from '../execution-states.mjs';
 import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
 import { isCapacityDeath } from '../dianjiangtai-reviewer-slot.mjs';
@@ -709,7 +709,30 @@ export async function mirasimWorkerDone({
   let reuse = { reuse: false, checked: false, why: '登记里没有 sessionKey（确认缺失）→ 可新建' };
   if (sessionKey) {
     const peek = await peekReviewerSession(runtime, sessionKey);
-    reuse = judgeReviewerSessionReuse({ record, view: peek.view, force });
+    // #1289 返工（2026-09-17 实咬）：原来这一处**没传 verdictOnHead**，于是判据里
+    // 「会话收尾了但当前 head 上没有它交的判定 → 等于没审，可新建」这一支永远够不着
+    // （undefined === false 为假），直接落到「复用」。
+    // 现场：工人返工交卷 → reviewer-create 回 reused → 复用那个 phase=done 且只投过
+    // 旧 head 的会话 → 一个字都不发生 → PR 永久冻结。实测 #1287 因此起了 13 次会话、
+    // 票一次没落到 head 上。另两条调用点（judgeReviewerCreateRace / decideReviewerCreateStart）
+    // 都传了，唯独工人交卷这条生产正路漏了。
+    //
+    // 取数失败一律得 null（没查成）——判据把 null 当「没查成，维持复用」，
+    // 不许拿读不到去重复烧额度，也不许当成 false 去重复起会话。
+    let liveHead = null;
+    let verdict = null;
+    try {
+      const snap = gh(['pr', 'view', String(pr), '--json', 'headRefOid,reviews']);
+      if (snap && snap.ok) {
+        const parsed = JSON.parse(snap.out);
+        const head = String((parsed && parsed.headRefOid) || '').trim();
+        if (head && Array.isArray(parsed && parsed.reviews)) {
+          liveHead = head;
+          verdict = verdictOnHead(parsed.reviews, head);
+        }
+      }
+    } catch { /* 没查成 ⇒ 维持原来的复用行为 */ }
+    reuse = judgeReviewerSessionReuse({ record, view: peek.view, force, liveHead, verdictOnHead: verdict });
     reuse.view = peek.view;
     if (peek.why) reuse.peekWhy = peek.why;
   }
