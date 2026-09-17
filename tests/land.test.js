@@ -108,8 +108,17 @@ describe('land e2e（真 git 临时仓）', () => {
     g(work, 'worktree', 'add', path.join(tmp, 'wt-dm'), 'wtdm-b');
     fs.writeFileSync(path.join(tmp, 'wt-dm', 'scratch.txt'), '还在试的东西');
     commit('c2'); // master 领先 origin 1 个 → 该推；也让上面两条零提交支变成「主干上的严格祖先」（#898 真实时序）
-    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], { encoding: 'utf8', env: landEnv() });
+    const trace = path.join(tmp, 'git-trace.jsonl');
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'land.mjs'), work], {
+      encoding: 'utf8',
+      env: { ...landEnv(), GIT_TRACE2_EVENT: trace },
+    });
     assert.equal(r.status, 0, r.stdout + r.stderr);
+    const starts = fs.readFileSync(trace, 'utf8').trim().split(/\r?\n/).map(line => JSON.parse(line)).filter(event => event.event === 'start').map(event => event.argv || []);
+    const proofs = starts.filter(args => args.includes('merge-tree') || args.includes('merge-base'));
+    assert.deepEqual(proofs.filter(args => args.includes('wtdm-b') || args.includes('wtd-b')), []);
+    assert.equal(starts.filter(args => args.includes('merge-tree') && args.includes('wtm-b')).length, 1);
+    assert.equal(starts.filter(args => args.includes('status') && args.includes(work)).length, 0);
     // 推到了
     assert.equal(g(bare, 'rev-parse', 'master'), g(work, 'rev-parse', 'master'), '主分支要推上远端');
     const branches = g(work, 'for-each-ref', 'refs/heads', '--format=%(refname:short)').split(/\r?\n/);

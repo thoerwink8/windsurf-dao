@@ -78,7 +78,7 @@ describe('preflightReviewer：渠道满员剔除（#1145 审官侧运行时闭�
     const r = await preflightReviewer({
       order: ['gpt-5.6-sol', 'grok-4.6'], models: mixedModels, workerId: null, policy: POLICY, probe: allGreen,
       channelCaps: { caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
-      channelInFlight: { counts: { mirasim: 8 } },
+      channelInFlight: { counts: { mirasim: 3 } },
       legs,
     });
     assert.equal(r.stop, false);
@@ -99,7 +99,7 @@ describe('preflightReviewer：渠道满员剔除（#1145 审官侧运行时闭�
     const r = await preflightReviewer({
       order: ['gpt-5.6-sol'], models: mixedModels, workerId: null, policy: POLICY, probe: allGreen,
       channelCaps: { caps: { mirasim: Infinity }, states: { mirasim: 'unlimited' } },
-      channelInFlight: { counts: { mirasim: 8 } },
+      channelInFlight: { counts: { mirasim: 3 } },
       legs,
     });
     assert.equal(r.queued, true);

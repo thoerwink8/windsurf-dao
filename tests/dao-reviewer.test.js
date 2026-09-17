@@ -1137,8 +1137,8 @@ describe('dao 审官与完工', () => {
     await t.test('审官注入 manual 带 merge-reason', () => {
       assert.ok(/r=改协作约定/.test(reviewerManual) && !/[\r\n]/.test(reviewerManual), '审官注入 manual 带 merge-reason  →  ' + reviewerManual);
     });
-    await t.test('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', () => {
-      assert.ok(/--undo/.test(reviewerBook) && /pr ready/.test(reviewerBook) && /gh-as\.mjs reviewer/.test(reviewerBook), 'reviewer-book manual 模式含转 draft 机器落点（#498/#559）  →  ' + reviewerBook.slice(-400));
+    await t.test('reviewer-book manual 模式含转 draft 机器落点（#498/#559/#1223）', () => {
+      assert.ok(/pr-mark-draft\.mjs/.test(reviewerBook), 'reviewer-book manual 模式含转 draft 机器落点  →  ' + reviewerBook.slice(-400));
     });
 
     let threw = false, threwMsg = '';

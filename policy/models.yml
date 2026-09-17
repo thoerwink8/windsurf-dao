@@ -7,7 +7,7 @@
 # 加模型：先改 JSON 真相源，再同步本 registry。
 # ============================================================================
 
-updated: "2026-09-03"
+updated: "2026-09-17"
 currency: CNY
 fx_usd_per_cny: null      # 待补：汇率拍板后填，并给 fx_verified_at 打时间戳
 fx_verified_at: null
@@ -108,6 +108,40 @@ models:
     trial_since: "2026-09-03"
     why: 2026-09-03 用户拍板：pqapi 不可用时审官降级到 Windsurf luna（credit 5 vs sol 50）
     decided: "2026-09-03"
+    pricing:
+      verified_at: null
+      metered: null
+      subscription: null
+
+  - id: gpt-5.6-terra
+    provider: mirasim-relay
+    cli: codex
+    version: gpt-5.6-terra
+    context_window: null
+    max_output: null
+    roles: [审查]
+    status: 试用
+    retired: false
+    trial_since: "2026-09-17"
+    why: 2026-09-17 用户拍板「加」：审官顺位加席。profile id=codex-relay-gpt-5.6-terra，落地 mirasim-relay
+    decided: "2026-09-17"
+    pricing:
+      verified_at: null
+      metered: null
+      subscription: null
+
+  - id: gpt-6-astra
+    provider: mirasim-relay
+    cli: codex
+    version: gpt-6-astra
+    context_window: null
+    max_output: null
+    roles: [审查]
+    status: 试用
+    retired: false
+    trial_since: "2026-09-17"
+    why: 2026-09-17 用户拍板「加」：审官顺位加席。profile id=codex-relay-gpt-6-astra，落地 mirasim-relay
+    decided: "2026-09-17"
     pricing:
       verified_at: null
       metered: null

@@ -739,6 +739,18 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 装出来的 bin 名不等于包名，装完 `ls $bin\*.cmd` 对一眼再写路径
 （`@playwright/mcp` → `playwright-mcp.cmd`，`chrome-devtools-mcp` → 同名）。
 
+`fetch` 是 Python 包，同样别用 `uvx`（那也是现场解包），钉法：
+
+```powershell
+uv tool install mcp-server-fetch          # 落 ~\.local\bin\mcp-server-fetch.exe
+claude mcp add fetch -s user -- "$env:USERPROFILE\.local\bin\mcp-server-fetch.exe"
+```
+
+它默认**遵守 robots.txt**：模型主动发起的抓取撞上 disallow 会直接失败，看起来像"又断了"，
+真因在站点规则不在链路。确需绕过时给命令加 `--ignore-robots-txt`（这是放宽站点声明，按需再说）。
+另有一条无害告警 `A working NPM installation was not found`：readabilipy 在 Windows 上找不到
+`npm.cmd`，退回纯 Python 提取，正文照样出得来。
+
 两个执行坑（2026-09-01 本机各栽一次）：
 
 - **`claude mcp add` 必须在 PowerShell 里跑，别在 Git Bash**。Git Bash 会把 `/c`
@@ -768,6 +780,42 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 现场解包型就报 `mcp-slow-boot`（只报不修——那是用户自己的文件）。测单个 server 的启动耗时别用
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
+
+## 13a. 查资料的本机搜索 CLI（ddgs）——每台机器都要装
+
+内置 WebSearch 跑在 API 上游，慢或断的时候本机一点办法没有。`ddgs` 走本机出网、不碰那条链，
+所以 docs-lookup skill 把它定为搜索的默认路。**两台机器都装**：
+
+```bash
+uv tool install ddgs            # 落 ~/.local/bin/ddgs(.exe)
+ddgs text -q "关键词" -m 5 -nc
+```
+
+Linux 上若没有 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`（以服务用户跑，别用 root——
+root 会在服务用户家目录里留下 root 属主文件）。
+
+- **`~/.local/bin` 默认不在 PATH 上**（`uv tool install` 装完自己会警告）。调用写全路径，或把它加进 PATH。
+  法国 VPS 已经有了：systemd 单元的 `Environment=PATH=/home/orca/.local/bin:...` 和 orca 的登录 shell 都带着它，无需再动。
+  Windows 帅位 2026-09-17 补上了，但**要放在 PATH 末尾，别放开头**——`uv tool update-shell` 是往开头插的，
+  而这台机器的 `~/.local/bin` 里还躺着 `claude.exe`（233MB 原生版）、`agent`、`cursor-agent`、`grok`；
+  放开头会把全机器的裸 `claude` 从 nvm shim 换成那个原生二进制，是个没人要的副作用。
+  改完 **PATH 只对新进程生效**：Mirasim 起的会话继承的是 Mirasim 启动那一刻的环境块，得重启 Mirasim 才认。
+- **`-o json` 是存文件不是打印**，会在当前目录落 `text_<query>_<时间戳>.json`；在共用主树里跑等于
+  留垃圾（2026-09-17 实咬，落进了仓根）。要机器读就解析 stdout。
+- `-b google` 两台机器都回 0 条，别用。
+- **验**：`node scripts/onboard.mjs --dry-run` 会报 `search-cli-missing`（只报不修，装包要出网）。
+
+后端实测（2026-09-17，同一句查询，`-m 3`）：
+
+| 后端 | Windows 帅位 | 法国 VPS |
+|---|---|---|
+| `brave` | **1.36s** | 2.28s |
+| `duckduckgo` | 3.26s | **1.74s** |
+| `bing` | 3.86s | 5.54s |
+| `google` | 0 条 | 0 条 |
+| 默认 `auto` | 7.7s | 3.34s |
+
+哪家最快按机器不同，别把某台的数字当通例；不确定就用默认 `auto`，它会自己换家。
 
 ## 13b. Linux 服务器上的浏览器（2026-09-06 装，Ubuntu 24.04 实测）
 

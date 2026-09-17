@@ -181,6 +181,88 @@ describe('周期探针 responses 请求体不许再漂成裸字符串', () => {
   });
 });
 
+describe('#1174 T7 默认不打退役 newapi', () => {
+  it('主脚本默认 skip 池，诊断旗标才放行', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    assert.match(src, /includeRetiredGateway/);
+    assert.match(src, /selectPoolProbes/);
+    assert.match(src, /--include-retired-gw/);
+  });
+
+  function t7Policy() {
+    return {
+      pools: {
+        why: '测',
+        list: [{ alias: 'gpt-5.6', group: 'gptpool', legs: [{ nameLike: 'GptLeg', priority: 1 }] }],
+      },
+      probe: {
+        why: '测',
+        intervalMin: 30, strikesToAlert: 2, heartbeatDays: 7,
+        healthFile: '~/.dao/provider-health.json',
+        targets: [{ group: 'gptpool', model: 'gpt-5.6' }],
+      },
+    };
+  }
+
+  function t7OldTable() {
+    return {
+      updatedAt: '2026-09-01T00:00:00Z',
+      intervalMin: 30,
+      targets: {
+        'gw:gptpool/gpt-5.6': {
+          kind: 'pool', state: 'green', code: 200, ms: 12,
+          lastGreenAt: '2026-09-01T00:00:00Z', strikes: 0, why: 'old',
+        },
+        'native:xai-native': { kind: 'native-login', state: 'unscanned', why: 'file' },
+      },
+    };
+  }
+
+  function runT7Probe(args) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-probe-t7-'));
+    const policyFile = path.join(dir, 'gateway-policy.json');
+    const healthFile = path.join(dir, 'provider-health.json');
+    const stateFile = path.join(dir, 'state.json');
+    const oldTable = t7OldTable();
+    fs.writeFileSync(policyFile, JSON.stringify(t7Policy()));
+    fs.writeFileSync(healthFile, JSON.stringify(oldTable, null, 2));
+    const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        GW_POLICY: policyFile,
+        GW_HEALTH_FILE: healthFile,
+        GW_PROBE_STATE: stateFile,
+        GW_KEYS_DIR: path.join(dir, 'keys'),
+        HUB_SAY: path.join(dir, 'no-hub-say'),
+      },
+    });
+    return { r, healthFile, oldTable };
+  }
+
+  it('--only 命中默认跳过的 gw: 池时从表里拿掉该 key，不把旧绿留到新 updatedAt', () => {
+    const { r, healthFile, oldTable } = runT7Probe(['--only', 'gw:gptpool/gpt-5.6', '--quiet']);
+    assert.equal(r.status, 0, String(r.stderr || r.stdout || ''));
+    assert.match(String(r.stderr || ''), /跳过 1 个退役 newapi 池/);
+    const next = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    assert.equal(next.targets['gw:gptpool/gpt-5.6'], undefined);
+    assert.equal(next.targets['native:xai-native'].kind, 'native-login');
+    assert.notEqual(next.updatedAt, oldTable.updatedAt);
+    assert.doesNotMatch(String(r.stdout || ''), /gw:gptpool\/gpt-5\.6/);
+  });
+
+  it('--only 探别的 key 时，未点名的 gw: 旧行仍保留', () => {
+    const { r, healthFile, oldTable } = runT7Probe(['--only', 'native:does-not-exist', '--quiet']);
+    assert.equal(r.status, 0, String(r.stderr || r.stdout || ''));
+    const next = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    assert.equal(next.targets['gw:gptpool/gpt-5.6'].state, 'green');
+    assert.equal(next.targets['gw:gptpool/gpt-5.6'].lastGreenAt, oldTable.targets['gw:gptpool/gpt-5.6'].lastGreenAt);
+    assert.equal(next.targets['native:xai-native'].kind, 'native-login');
+  });
+});
+
 describe('直连 responses：空 content 不算通', () => {
   it('response.completed + content:[] 即使序列化很长也是红', async () => {
     const { responsesEventHasContent } = await import(HEALTH);

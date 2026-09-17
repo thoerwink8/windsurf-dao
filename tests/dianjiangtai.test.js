@@ -527,8 +527,14 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 12 个现役模型', () => {
-      assert.ok(models.length === 12 && models.some(m => m.id === DEVIN) && models.some(m => m.id === 'ox-alpha-free') && models.some(m => m.id === 'gpt-5.6-luna') && !models.some(m => m.id === 'glm-5.3'), 'models.yml 解析出 12 个现役模型（含 luna 审官降级）  →  ' + String(models.length));
+    await t.test('models.yml 解析出 14 个现役模型', () => {
+      assert.equal(models.length, 14, 'models.yml 现役模型数  →  ' + String(models.length));
+      assert.ok(models.some(m => m.id === DEVIN), '含 devin');
+      assert.ok(models.some(m => m.id === 'ox-alpha-free'), '含 ox-alpha-free');
+      assert.ok(models.some(m => m.id === 'gpt-5.6-luna'), '含 luna');
+      assert.ok(models.some(m => m.id === 'gpt-5.6-terra'), '含 terra（#1359）');
+      assert.ok(models.some(m => m.id === 'gpt-6-astra'), '含 astra（#1359）');
+      assert.equal(models.some(m => m.id === 'glm-5.3'), false, '不含 glm-5.3');
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。

@@ -25,7 +25,11 @@ const fs = require("fs");
 const path = require("path");
 
 const REPO = path.resolve(__dirname, "..");
-const SANDBOX = path.join(REPO, "_tmp", "skilllink-sandbox");
+// 沙盒名带进程号：两份 dao-check 并发时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, "_tmp"), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, "_tmp", "skilllink-sandbox-"));
+// 名字独占之后没人替它清了（原先靠下一次运行的 rmSync 顶掉同名目录），退出时自己收
+process.on("exit", () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });
 // 「目标/root 不在任何 git 仓内」样本必须放在仓外：_tmp 在仓内，向上探测会撞上本仓的 .git
 // （common-dir 相同 → 误判成同仓）。放系统临时目录才能拿到真的「无 .git 可解」。
 const OUTSIDE = path.join(require("os").tmpdir(), `skilllink-outside-${process.pid}`);

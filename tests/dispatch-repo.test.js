@@ -150,6 +150,10 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     mk(9002, null, '2026-09-12T02:00:00Z');                       // 无仓旧票（指挥官 rereview）
     mk(9003, 'acme/other-dao', '2026-09-12T03:00:00Z');           // 真别仓票
     const env = { DAO_REVIEW_PENDING_DIR: dir };
+    // #1174：这四次只验仓筛选。非早退 cliInProc 会走 admitReviewPull 读真实 runtime。
+    // 只给这四次加 --force，不改共享 helper、不改生产容量。
+    // PR #1292 对同一四处也加了 --force（合入 #1265 后 cap 满会把 tickets 抽空）。
+    // 两边产物都留：本单多 held=0 / why / 正控；#1292 的租约修法不在本树。
     const pull = async (args) => {
       const r = await cliInProc(args, env);
       return JSON.parse(r.stdout);
@@ -160,12 +164,48 @@ describe('#1024 FLAGS / 热路贯通 / CLI 早退', () => {
     // 断言看起来像「--pr 把本仓票筛掉了」。
     const p1 = await pull(['review-pending-drain', '--pr', '9001', '--dry-run', '--force']);
     assert.deepEqual(p1.tickets.map(t => t.pr), ['9001'], '本仓带 repo 的票被 --pr 筛掉了');
+    assert.equal(p1.held, 0);
+    assert.match(String(p1.why), /--force 人手逃生口/);
     const p2 = await pull(['review-pending-drain', '--pr', '9002', '--dry-run', '--force']);
     assert.deepEqual(p2.tickets.map(t => t.pr), ['9002'], '无仓旧票不该被 --pr 挡在外面');
+    assert.equal(p2.held, 0);
+    assert.match(String(p2.why), /--force 人手逃生口/);
     const p3 = await pull(['review-pending-drain', '--pr', '9003', '--dry-run', '--force']);
     assert.deepEqual(p3.tickets.map(t => t.pr), [], '别仓同号票不该被本仓 --pr 顺手拉走');
+    assert.equal(p3.held, 0);
+    assert.match(String(p3.why), /--force 人手逃生口/);
     const all = await pull(['review-pending-drain', '--dry-run', '--force']);
     assert.deepEqual(all.tickets.map(t => t.pr), ['9001', '9002'], '不带 --pr 时本仓票全吃，别仓票剔');
+    assert.equal(all.held, 0);
+    assert.match(String(all.why), /--force 人手逃生口/);
+  });
+
+  it('#1174 正控：同票 9001，假 runtime 容量行为不变', async () => {
+    const RP = await import('file://' + path.join(REPO, 'scripts', 'lib', 'dispatch', 'review-pending.mjs').replace(/\\/g, '/'));
+    const ticket = {
+      pr: '9001', repo: 'thoerwink8/windsurf-dao', ts: '2026-09-12T01:00:00Z',
+      reviewer: 'gpt-5.6-luna',
+    };
+    const full = RP.planReviewAdmission({ tickets: [ticket], liveReviewers: 1, cap: 1 });
+    assert.equal(full.ok, true);
+    assert.deepEqual(full.pull.map((x) => x.pr), []);
+    assert.deepEqual(full.held.map((x) => x.pr), ['9001']);
+    const room = RP.planReviewAdmission({ tickets: [ticket], liveReviewers: 0, cap: 1 });
+    assert.equal(room.ok, true);
+    assert.deepEqual(room.pull.map((x) => x.pr), ['9001']);
+    assert.deepEqual(room.held.map((x) => x.pr), []);
+    assert.equal(RP.DEFAULT_REVIEWER_CAP, 8);
+    assert.equal(RP.REVIEWER_CAP_FLOOR, 2);
+  });
+
+  it('#1174：共享 helper 不加全局 --force；生产容量仍只认 args.force', () => {
+    const harness = fs.readFileSync(path.join(REPO, 'tests', 'helpers', 'dao-harness.js'), 'utf8');
+    const fn = harness.slice(harness.indexOf('async function cliInProc'), harness.indexOf('const ROUTING_LOAD'));
+    assert.doesNotMatch(fn, /--force/);
+    const dao = fs.readFileSync(DAO, 'utf8');
+    const drain = dao.slice(dao.indexOf('async function cmdReviewPendingDrain'), dao.indexOf('function cmdSend'));
+    assert.match(drain, /const admit = args\.force/);
+    assert.match(drain, /await admitReviewPull\(scoped\)/);
   });
 
   it('ownerNameFromRemoteUrl 从常见 git remote 推出 owner/name', async () => {

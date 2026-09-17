@@ -36,6 +36,7 @@ import os from 'node:os';
 import { checkTreeLease, checkInFlight, claimTreeOccupancy, LEASE_BUSY_REASON } from './dispatch/lease.mjs';
 import {
   admitAndReserveChannel, recordChannelFailure, isCapacityError, CHANNEL_FULL_REASON,
+  loadSessionAttribution,
 } from './channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson } from './model-routing-json.mjs';
 import { attachControlPlaneHooksOrThrow } from './control-plane-write.mjs';
@@ -197,6 +198,55 @@ export class MirasimUnavailableError extends Error {
     this.code = 'unavailable';
     this.detail = detail;
   }
+}
+
+/** 开连接重试几次（含首次）。回环 ws 的抖动是几百毫秒级，两次补射足够盖住。 */
+export const WS_OPEN_TRIES = 3;
+/** 退避基数（毫秒）：第 n 次等 backoff × n，再叠 0–40% 抖动，避免多路同时重连撞在一起。 */
+export const WS_OPEN_BACKOFF_MS = 400;
+
+/**
+ * 这次失败**值不值得重开一次连接**。
+ *
+ * 只认「连不上」这一种：握手没成、端口没回应——下一瞬间自己就好了的那类。
+ * 契约不符 / 版本钉死 / 渠道满员 / 服务端明确拒绝，都是**判定**：输入没变，重试结果一样，
+ * 重来只会把真结论拖慢（本文件 MirasimContractError 那条注释：调用方不许把它当「重试一次就好」）。
+ *
+ * 判据挂在错误的 `code` 与握手失败标记上，**不看错误文案**——文案会改，
+ * 而按字样匹配只找得到见过的失败（memory whitelist-fingerprints-cannot-find-unseen-failures）。
+ */
+export function isWsOpenRetryable(err) {
+  if (!err || typeof err !== 'object') return false;
+  if (err.code !== 'unavailable') return false;              // 只有「没查成」这一类
+  const why = err.detail && err.detail.why;
+  // 契约那条也是 unavailable（「连上了但没收到 state 帧」）——它已经连上了，重开无用。
+  if (typeof err.message === 'string' && err.message.includes('连上了')) return false;
+  return why !== undefined || String(err.message || '').includes('连不上');
+}
+
+/** 带退避的开连接。不可重试的错误**原样抛**，不包一层、不改 code。 */
+export async function connectWithRetry({
+  connect, homeDir, port, openTimeoutMs,
+  tries = WS_OPEN_TRIES, backoffMs = WS_OPEN_BACKOFF_MS,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  random = Math.random,
+} = {}) {
+  const n = Number.isInteger(tries) && tries > 0 ? tries : 1;
+  let last = null;
+  for (let i = 1; i <= n; i += 1) {
+    try {
+      return await connect({ homeDir, port, openTimeoutMs });
+    } catch (e) {
+      if (!isWsOpenRetryable(e)) throw e;   // 判定类：立刻抛，别拖
+      last = e;
+      if (i === n) break;
+      await sleep(Math.round(backoffMs * i * (1 + 0.4 * random())));
+    }
+  }
+  // 重试完还是连不上 ⇒ 这不是抖动，是真不可用。把试了几次写进 detail，
+  // 好让看日志的人分得清「一次就死」和「试满都不行」。
+  if (last && last.detail && typeof last.detail === 'object') last.detail.wsOpenTries = n;
+  throw last;
 }
 
 /** 服务端明确拒了（error 帧 / ok:false）。 */
@@ -809,10 +859,11 @@ async function defaultConnect({ homeDir, port, openTimeoutMs }) {
 
 /**
  * 渠道并发闸的**取数薄壳**（#1145）。判定与占槽都在 lib/channel-concurrency.mjs，
- * 这里只负责把三份快照读出来：
+ * 这里只负责把快照读出来：
  *   · 路由表「腿」节 → 渠道上限（并发上限字段）
  *   · /proc 在途树 → 渠道在途数（**与租约闸同源**：同一个 checkInFlight，不复用 mirasim 自己的记账）
- *   · 派工账本未结 job → 树归哪个模型（树→模型→渠道的那一跳）
+ *   · 会话登记（~/.dao/execution/sessions）→ 树归哪个模型（cwd 对 cwd，不猜分支名）
+ *   · 派工账本未结 job → 上一条归不掉时的兜底
  *   · 熔断表 → 冷却中的渠道等同满员
  * 任一读不出来 ⇒ 返回 ok:false，门里 fail-close 拒起。
  *
@@ -839,6 +890,12 @@ function defaultChannelAdmit({ model, now } = {}) {
           const desired = desiredFromEvents(listed.events);
           return desired.items || [];
         } catch { return []; }
+      },
+      loadSessions: () => {
+        // 门里没有指挥官那份已扫名单；不在起会话路径上再 spawn 一次 40s 的 listSessions。
+        // 登记文件与名单同源（workdir+model），读盘失败回 []，回落账本。
+        try { return loadSessionAttribution(); }
+        catch { return []; }
       },
     },
   });
@@ -884,7 +941,20 @@ export function createRuntime(opts = {}) {
     return tree;
   };
 
-  const open = () => connect({ homeDir, port, openTimeoutMs: t.open });
+  // 开连接要重试：回环 ws 的抖动是**几百毫秒级**的瞬时故障，而这里一抛出去，
+  // 上层看到的是「起审官会话没查成：连不上回环 ws」——当场判这次派工失败、烧掉一次
+  // 复审预算，三次就打「卡死/自动化认输」。2026-09-14 实咬：12 小时内回环 ws 红 11 次，
+  // #1266/#1271 两张 PR 就这么被扣没的，而每一次故障本身都在下一轮自己好了。
+  //
+  // 只重试**连不上**这一种（MirasimUnavailableError 里的握手失败）。契约不符、版本钉死、
+  // 渠道满员这些是**判定**，不是抖动，重试一万次结果一样——重试它们只会把真结论拖慢
+  // （本文件上面那条注释写得很清楚：契约不符「调用方不许把它当重试一次就好」）。
+  const open = () => connectWithRetry({
+    connect, homeDir, port, openTimeoutMs: t.open,
+    tries: opts.wsOpenTries ?? WS_OPEN_TRIES,
+    backoffMs: opts.wsOpenBackoffMs ?? WS_OPEN_BACKOFF_MS,
+    sleep: opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))),
+  });
   const isolationEnv = opts.env || process.env;
   const usingRealWire = connect === defaultConnect;
 

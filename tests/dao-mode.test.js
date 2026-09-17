@@ -11,8 +11,12 @@
 // 判别力自检问句：把 hook 从 settings 里删掉、把 symlink 断开、把输出写死成一句话，
 // 这三件事里任何一件发生，下面是否都至少有一条断言变红？
 //
-// 状态文件一律走 DAO_STATE_FILE 指到沙箱，DAO_NO_ORCA=1 关掉态标——本测试不碰
-// 本机 ~/.claude/state.json，也不改任何 Orca 卡片。
+// 状态文件一律走 DAO_STATE_FILE 指到沙箱，盘面走 DAO_BOARD_FILE 指到本测试
+// 专用的不存在路径，DAO_NO_ORCA=1 关掉态标——本测试不碰本机 ~/.claude/state.json、
+// 也不读指挥官刚写的 ~/.dao/board-stuck.json，更不改任何 Orca 卡片。
+// 生产 hook 每次非常态都会 readBoard()；不钉死盘面路径，测试结果就取决于本机
+// 有没有一份新鲜健康盘面（审官用 DAO_BOARD_FILE 指向 stalledRounds:0 的文件，
+// 把旧时长/消息兜底断言打红了 4 条）。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -23,19 +27,31 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const SKILL_DIR = path.join(REPO, "host", "skills", "dao-mode");
 const HOOK = path.join(SKILL_DIR, "hooks", "dao-mode.mjs");
-const SANDBOX = path.join(REPO, "_tmp", "mode-sandbox");
+// 沙盒名带进程号：两份 dao-check 并发（审官 + land + 定时器）时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, "_tmp"), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, "_tmp", "mode-sandbox-"));
 const STATE = path.join(SANDBOX, "state.json");
+// 故意不创建：默认走「盘面没查成 → 时长/消息兜底」。要测盘面契约时用 opts.env 覆盖。
+const BOARD_ABSENT = path.join(SANDBOX, "board-stuck.absent.json");
 
 // 沙箱初始化（原文件在模块加载时清理重建；这里保持在 describe 的 it 运行前执行）
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 fs.mkdirSync(SANDBOX, { recursive: true });
 
-/** 跑 dao-mode.mjs 的一个子命令，状态文件固定指向沙箱。 */
+/** 跑 dao-mode.mjs 的一个子命令，状态文件与盘面都钉在沙箱（盘面默认不存在）。 */
 function mode(args, opts = {}) {
   const r = spawnSync(process.execPath, [HOOK, ...args], {
     encoding: "utf8",
     input: opts.input === undefined ? "" : opts.input,
-    env: { ...process.env, DAO_STATE_FILE: opts.state || STATE, DAO_NO_ORCA: "1", ...(opts.env || {}) },
+    env: {
+      ...process.env,
+      DAO_STATE_FILE: opts.state || STATE,
+      DAO_NO_ORCA: "1",
+      // 必须写在 process.env 之后、opts.env 之前：父进程 DAO_BOARD_FILE 不得泄漏，
+      // 单测仍可用 opts.env 注入一份真盘面。
+      DAO_BOARD_FILE: BOARD_ABSENT,
+      ...(opts.env || {}),
+    },
   });
   return { status: r.status, out: (r.stdout || "") + (r.stderr || ""), stdout: r.stdout || "" };
 }
@@ -275,11 +291,18 @@ describe('dao-mode', { concurrency: 1 }, () => {
         const hooksDir = path.join(home, ".claude", "skills", "dao-mode", "hooks");
         fs.mkdirSync(hooksDir, { recursive: true });
         // 命令原样抄仓内声明：带 ${CLAUDE_PLUGIN_ROOT}，检查器展开不对就会红。
-        fs.copyFileSync(path.join(SKILL_DIR, "hooks", "hooks.json"), path.join(hooksDir, "hooks.json"));
+        // 整目录拷，不列文件名（2026-09-15 实咬）：原来这里逐个列举
+        // hooks.json + dao-mode.mjs + should-ask-exit.mjs，于是 #1287 新增
+        // read-board.mjs 时沙箱里没有它，真脚本 import 失败退出码 1，本项当场红。
+        // 真机装载是整目录 symlink（NEW-MACHINE §12），本来就带全；
+        // 沙箱列清单 = 判据跟真装载不同形，而且每加一个模块都要有人记得改这里——
+        // 「凡是需要手打的清单早晚会漏」。所以照搬真装载的形状：整个 hooks 目录。
+        fs.cpSync(path.join(SKILL_DIR, "hooks"), hooksDir, { recursive: true });
         if (plugin !== null) {
+          // 假 hook 覆盖真脚本；其余模块保持真的，这样「假 hook」测的仍是装载面而不是模块缺失。
           fs.writeFileSync(path.join(hooksDir, "dao-mode.mjs"), plugin, "utf8");
-          // 真脚本会 import 同目录的 should-ask-exit.mjs（#607 纯函数）；假 hook 不 import 它，多拷无害。
-          fs.copyFileSync(path.join(SKILL_DIR, "hooks", "should-ask-exit.mjs"), path.join(hooksDir, "should-ask-exit.mjs"));
+        } else {
+          fs.rmSync(path.join(hooksDir, "dao-mode.mjs"), { force: true });
         }
       }
       return home;
@@ -399,11 +422,18 @@ describe('dao-mode', { concurrency: 1 }, () => {
       if (plugin !== undefined) {
         const hooksDir = path.join(home, ".claude", "skills", "dao-mode", "hooks");
         fs.mkdirSync(hooksDir, { recursive: true });
-        fs.copyFileSync(path.join(SKILL_DIR, "hooks", "hooks.json"), path.join(hooksDir, "hooks.json"));
+        // 整目录拷，不列文件名（2026-09-15 实咬）：原来这里逐个列举
+        // hooks.json + dao-mode.mjs + should-ask-exit.mjs，于是 #1287 新增
+        // read-board.mjs 时沙箱里没有它，真脚本 import 失败退出码 1，本项当场红。
+        // 真机装载是整目录 symlink（NEW-MACHINE §12），本来就带全；
+        // 沙箱列清单 = 判据跟真装载不同形，而且每加一个模块都要有人记得改这里——
+        // 「凡是需要手打的清单早晚会漏」。所以照搬真装载的形状：整个 hooks 目录。
+        fs.cpSync(path.join(SKILL_DIR, "hooks"), hooksDir, { recursive: true });
         if (plugin !== null) {
+          // 假 hook 覆盖真脚本；其余模块保持真的，这样「假 hook」测的仍是装载面而不是模块缺失。
           fs.writeFileSync(path.join(hooksDir, "dao-mode.mjs"), plugin, "utf8");
-          // 真脚本会 import 同目录的 should-ask-exit.mjs（#607 纯函数）；假 hook 不 import 它，多拷无害。
-          fs.copyFileSync(path.join(SKILL_DIR, "hooks", "should-ask-exit.mjs"), path.join(hooksDir, "should-ask-exit.mjs"));
+        } else {
+          fs.rmSync(path.join(hooksDir, "dao-mode.mjs"), { force: true });
         }
       }
       return home;
@@ -428,8 +458,13 @@ describe('dao-mode', { concurrency: 1 }, () => {
 
   it('⑨ shouldAskExit 纯函数（#607 ①）：三信号各自独立生效 + 防噪音', async (t) => {
     const { shouldAskExit, EXIT_DEFAULTS } = await import("../host/skills/dao-mode/hooks/should-ask-exit.mjs");
-    await t.test('默认阈值 = 8 小时 / 3 条消息 / 2 次偏离', () => {
-      assert.deepStrictEqual(EXIT_DEFAULTS, { hours: 8, messages: 3, offTopic: 2 });
+    await t.test('默认阈值 = 8 小时 / 3 条消息 / 2 次偏离 / 6 轮停滞', () => {
+      assert.deepStrictEqual(EXIT_DEFAULTS, {
+        hours: 8, messages: 3, offTopic: 2, stalled: 6,
+      });
+    });
+    await t.test('以下这组旧断言全部走「盘面没查成」兜底路（没传 board）', () => {
+      assert.strictEqual(shouldAskExit({ mode: 'standby', hours: 8, messages: 0 }).basis, 'fallback');
     });
     await t.test('值守 + 0 时长 + 0 消息 + 0 偏离 ⇒ 不提示（防噪音）', () => {
       assert.strictEqual(shouldAskExit({ mode: "standby", hours: 0, messages: 0 }).ask, false);
@@ -468,6 +503,340 @@ describe('dao-mode', { concurrency: 1 }, () => {
     });
     await t.test('未知态 ⇒ 不提示（unreadable 由调用方按「态没查成」处理）', () => {
       assert.strictEqual(shouldAskExit({ mode: "外星态", hours: 99 }).ask, false);
+    });
+  });
+
+  // 2026-09-15 用户拍板：值守的提问条件从「挂了多久 / 说了几句」换成「盘面是否卡住」。
+  // 原判据是为「过一夜」设计的（依据原文：一觉通常 ≤ 8 小时），而这位用户的用法是
+  // 长期挂着、随时插话——131 小时里 300 多条消息，三条阈值第一天就永久触发，
+  // 警告连响 130 小时。永远在响的警告等于没有警告。
+  it('#1287 值守提问闸：看盘面卡没卡，不看挂了多久', async (t) => {
+    const { shouldAskExit } = await import('../host/skills/dao-mode/hooks/should-ask-exit.mjs');
+    const healthy = { scanned: true, stalledRounds: 0, waitingUser: 0 };
+
+    await t.test('挂 131 小时、300 条消息，但盘面在动 ⇒ 不打扰（本次要治的就是这个）', () => {
+      const r = shouldAskExit({ mode: 'standby', hours: 131, messages: 300, board: healthy });
+      assert.strictEqual(r.ask, false, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'board');
+    });
+
+    await t.test('刚挂 0 小时、0 条消息，但盘面停了 9 轮 ⇒ 立刻打扰', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0,
+        board: { scanned: true, stalledRounds: 9, waitingUser: 0 },
+      });
+      assert.strictEqual(r.ask, true);
+      assert.ok(r.reasons.join('').includes('9 轮零推进'), r.reasons.join(''));
+    });
+
+    await t.test('停滞未到阈值（5 < 6）⇒ 不打扰', () => {
+      assert.strictEqual(shouldAskExit({
+        mode: 'standby', hours: 999, messages: 999,
+        board: { scanned: true, stalledRounds: 5, waitingUser: 0 },
+      }).ask, false);
+    });
+
+    await t.test('有对象挂着「等用户」⇒ 立刻打扰（只有人能解）', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: 3 },
+      });
+      assert.strictEqual(r.ask, true);
+      assert.ok(r.reasons.join('').includes('只有你能解'), r.reasons.join(''));
+    });
+
+    await t.test('偏离两次仍然独立生效（与盘面无关：用户在派新活）', () => {
+      assert.strictEqual(shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0, offTopicStreak: 2, board: healthy,
+      }).ask, true);
+    });
+
+    // 这条是本单最要命的一条：盘面读不到时，闸不许静默失效。
+    await t.test('盘面没查成 ⇒ 退回时长/消息数兜底，并说明是兜底判的', () => {
+      for (const bad of [null, undefined, {}, { scanned: false, why: '文件不在' }]) {
+        const r = shouldAskExit({ mode: 'standby', hours: 9, messages: 0, board: bad });
+        assert.strictEqual(r.ask, true, '没查成不许当成没卡住  →  ' + JSON.stringify([bad, r]));
+        assert.strictEqual(r.basis, 'fallback');
+        assert.ok(r.reasons.join('').includes('兜底'), r.reasons.join(''));
+      }
+    });
+
+    await t.test('scanned 不是严格 true 一律当没查成（"true" 字符串也不行）', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0,
+        board: { scanned: 'true', stalledRounds: 99 },
+      });
+      assert.strictEqual(r.basis, 'fallback');
+    });
+
+    // 审官红项：GitHub 未查成时 waitingUser 是 null。Number(null)===0，
+    // 若当「没有等用户」走 board 路，提问闸会静默失效。
+    await t.test('scanned:true 但 waitingUser:null ⇒ 强制兜底（不许 Number(null) 当 0）', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: null },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('scanned:true 但缺 waitingUser 字段 ⇒ 同样兜底', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0 },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('waitingUser:0 仍是「查过，没有」——挂再久也不打扰', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: 0 },
+      });
+      assert.strictEqual(r.ask, false, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'board');
+    });
+    await t.test('scanned:true 但 waitingUser 非法类型 ⇒ 强制兜底', () => {
+      const r = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0,
+        board: { scanned: true, stalledRounds: 0, waitingUser: 'corrupt' },
+      });
+      assert.strictEqual(r.ask, true, JSON.stringify(r));
+      assert.strictEqual(r.basis, 'fallback');
+    });
+    await t.test('scanned:true 但 stalledRounds 缺失/非法 ⇒ 强制兜底', () => {
+      for (const bad of [
+        { scanned: true, waitingUser: 0 },
+        { scanned: true, stalledRounds: 'corrupt', waitingUser: 0 },
+        { scanned: true, stalledRounds: -1, waitingUser: 0 },
+      ]) {
+        const r = shouldAskExit({ mode: 'standby', hours: 9, messages: 0, board: bad });
+        assert.strictEqual(r.ask, true, JSON.stringify({ bad, r }));
+        assert.strictEqual(r.basis, 'fallback', JSON.stringify({ bad, r }));
+      }
+    });
+  });
+
+  // ⚠️ 这里 import 的是 read-board.mjs，**不是** dao-mode.mjs。
+  // dao-mode.mjs 一被 import 就会跑 hook 并结束进程：测试文件在那一行当场退出，
+  // node --test 看到子进程 exit 0，报的是绿。第一版就踩了这个，
+  // 故意把断言改成 999 也照样绿，靠「上线前先造违规样本」才抓出来。
+  it('#1287 readBoard：读不到 / 读坏 / 过期，都要判成没查成', async (t) => {
+    const { readBoard } = await import('../host/skills/dao-mode/hooks/read-board.mjs');
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'dao-board-'));
+    const p = path.join(dir, 'board-stuck.json');
+    const T0 = Date.parse('2026-09-15T12:00:00Z');
+
+    await t.test('文件不在 ⇒ 没查成', () => {
+      assert.strictEqual(readBoard(p, T0).scanned, false);
+    });
+    await t.test('不是 JSON ⇒ 没查成', () => {
+      fs.writeFileSync(p, '{坏', 'utf8');
+      assert.strictEqual(readBoard(p, T0).scanned, false);
+    });
+    await t.test('没有 at ⇒ 没查成（不许拿一份不知何时的快照当现在）', () => {
+      fs.writeFileSync(p, JSON.stringify({ stalledRounds: 0 }), 'utf8');
+      assert.strictEqual(readBoard(p, T0).scanned, false);
+    });
+    await t.test('新鲜 ⇒ 查成，字段取得到', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 7, waitingUser: 2,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, true);
+      assert.strictEqual(r.stalledRounds, 7);
+      assert.strictEqual(r.waitingUser, 2);
+    });
+    // 指挥官死了，这份文件会停在最后一次的好消息上。拿它当真 = 把「编排不跑了」
+    // 读成「盘面很健康」，正是本单要治的病的镜像。
+    await t.test('过期 90 分钟以上 ⇒ 没查成，并说得出是过期', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 100 * 60000).toISOString(), stalledRounds: 0, waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false);
+      assert.ok(String(r.why).includes('过期'), r.why);
+    });
+    await t.test('waitingUser:null ⇒ 没查成（GitHub 未扫描，不是「没有等用户」）', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: null,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('waitingUser'), r.why);
+    });
+    await t.test('缺 waitingUser 字段 ⇒ 同样没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+    });
+    await t.test('waitingUser:0 ⇒ 查成，表示已查过且没有', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, true, JSON.stringify(r));
+      assert.strictEqual(r.waitingUser, 0);
+    });
+    // 审官红项：Number("corrupt")||0 会把坏快照读成健康 0，提问闸按 basis:board 放行。
+    await t.test('waitingUser 非法类型 ⇒ 没查成（不许 Number("corrupt") 当 0）', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 0, waitingUser: 'corrupt',
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('waitingUser'), r.why);
+    });
+    await t.test('缺 stalledRounds ⇒ 没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('stalledRounds'), r.why);
+    });
+    await t.test('stalledRounds 非法类型 ⇒ 没查成', () => {
+      fs.writeFileSync(p, JSON.stringify({
+        at: new Date(T0 - 60000).toISOString(), stalledRounds: 'corrupt', waitingUser: 0,
+      }), 'utf8');
+      const r = readBoard(p, T0);
+      assert.strictEqual(r.scanned, false, JSON.stringify(r));
+      assert.ok(String(r.why).includes('stalledRounds'), r.why);
+    });
+    await t.test('stalledRounds / waitingUser 负数 ⇒ 没查成', () => {
+      for (const bad of [
+        { stalledRounds: -1, waitingUser: 0 },
+        { stalledRounds: 0, waitingUser: -1 },
+      ]) {
+        fs.writeFileSync(p, JSON.stringify({
+          at: new Date(T0 - 60000).toISOString(), ...bad,
+        }), 'utf8');
+        const r = readBoard(p, T0);
+        assert.strictEqual(r.scanned, false, JSON.stringify({ bad, r }));
+      }
+    });
+  });
+
+  // 审官红项：从 commander 写侧串到 read / 判定。GitHub 没扫到时写 waitingUser:null，
+  // 读侧必须 scanned:false，判定侧在时长已超阈值时必须走兜底问，不许 ask:false/basis:board。
+  it('#1287 GitHub 未扫描：写侧 null → 读侧没查成 → 时长超阈值走兜底', async (t) => {
+    const { writeBoardStuck } = await import('../scripts/commander.mjs');
+    const { readBoard } = await import('../host/skills/dao-mode/hooks/read-board.mjs');
+    const { shouldAskExit } = await import('../host/skills/dao-mode/hooks/should-ask-exit.mjs');
+    const { WAITING_USER_LABEL } = await import('../scripts/lib/exhausted.mjs');
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'dao-board-write-'));
+    const p = path.join(dir, 'board-stuck.json');
+    const at = '2026-09-15T12:00:00.000Z';
+    const now = Date.parse(at) + 60 * 1000;
+
+    await t.test('github.scanned=false 写出 null，读成没查成，满 9 小时必须兜底问', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: false } },
+        digestStreak: 0,
+        file: p,
+      });
+      const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+      assert.strictEqual(written.waitingUser, null, '写侧 GitHub 没扫到必须记 null，不记 0');
+      assert.strictEqual(written.stalledRounds, 0);
+
+      const board = readBoard(p, now);
+      assert.strictEqual(board.scanned, false, JSON.stringify(board));
+      assert.ok(String(board.why).includes('waitingUser'), board.why);
+
+      const verdict = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board,
+      });
+      assert.strictEqual(verdict.ask, true, JSON.stringify(verdict));
+      assert.strictEqual(verdict.basis, 'fallback');
+    });
+
+    await t.test('github 已扫且无「等用户」→ waitingUser:0，挂再久也不打扰', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: true, prs: [] } },
+        digestStreak: 0,
+        file: p,
+      });
+      const healthy = readBoard(p, now);
+      assert.strictEqual(healthy.scanned, true, JSON.stringify(healthy));
+      assert.strictEqual(healthy.waitingUser, 0);
+      const quiet = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board: healthy,
+      });
+      assert.strictEqual(quiet.ask, false, JSON.stringify(quiet));
+      assert.strictEqual(quiet.basis, 'board');
+    });
+
+    await t.test('github 已扫且有「等用户」→ 立刻打扰', () => {
+      writeBoardStuck({
+        situation: {
+          at,
+          github: {
+            scanned: true,
+            prs: [{ number: 1, labels: [{ name: WAITING_USER_LABEL }] }],
+          },
+        },
+        digestStreak: 0,
+        file: p,
+      });
+      const waiting = readBoard(p, now);
+      assert.strictEqual(waiting.scanned, true, JSON.stringify(waiting));
+      assert.strictEqual(waiting.waitingUser, 1);
+      const stuck = shouldAskExit({
+        mode: 'standby', hours: 0, messages: 0, board: waiting,
+      });
+      assert.strictEqual(stuck.ask, true, JSON.stringify(stuck));
+      assert.strictEqual(stuck.basis, 'board');
+    });
+
+    // 写侧先落一份合法快照，再把字段改坏——模拟文件被写坏 / 旧写侧。
+    // 读侧必须 scanned:false，判定侧满 9 小时必须兜底问，不许 basis:board。
+    await t.test('写侧合法快照被改成 waitingUser:"corrupt" → 读没查成 → 时长超阈值走兜底', () => {
+      writeBoardStuck({
+        situation: { at, github: { scanned: true, prs: [] } },
+        digestStreak: 0,
+        file: p,
+      });
+      const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+      written.waitingUser = 'corrupt';
+      fs.writeFileSync(p, JSON.stringify(written), 'utf8');
+
+      const board = readBoard(p, now);
+      assert.strictEqual(board.scanned, false, JSON.stringify(board));
+      assert.ok(String(board.why).includes('waitingUser'), board.why);
+
+      const verdict = shouldAskExit({
+        mode: 'standby', hours: 9, messages: 0, board,
+      });
+      assert.strictEqual(verdict.ask, true, JSON.stringify(verdict));
+      assert.strictEqual(verdict.basis, 'fallback');
+    });
+
+    await t.test('写侧合法快照缺 stalledRounds / 改成非法值 → 读没查成 → 时长超阈值走兜底', () => {
+      for (const mutate of [
+        (row) => { delete row.stalledRounds; },
+        (row) => { row.stalledRounds = 'corrupt'; },
+        (row) => { row.stalledRounds = -3; },
+      ]) {
+        writeBoardStuck({
+          situation: { at, github: { scanned: true, prs: [] } },
+          digestStreak: 0,
+          file: p,
+        });
+        const written = JSON.parse(fs.readFileSync(p, 'utf8'));
+        mutate(written);
+        fs.writeFileSync(p, JSON.stringify(written), 'utf8');
+
+        const board = readBoard(p, now);
+        assert.strictEqual(board.scanned, false, JSON.stringify({ written, board }));
+        assert.ok(String(board.why).includes('stalledRounds'), board.why);
+
+        const verdict = shouldAskExit({
+          mode: 'standby', hours: 9, messages: 0, board,
+        });
+        assert.strictEqual(verdict.ask, true, JSON.stringify({ written, verdict }));
+        assert.strictEqual(verdict.basis, 'fallback');
+      }
     });
   });
 
@@ -541,6 +910,51 @@ describe('dao-mode', { concurrency: 1 }, () => {
     const crash = mode(["hook"], { input: JSON.stringify({ prompt: "x" }), state: path.join(SANDBOX, "none.json"), env: { DAO_MODE_TEST_CRASH: "1" } });
     await t.test('hook 崩溃 ⇒ exit 0 + 明说降级 + 不冒充常态（#607 补验 #488 那条）', () => {
       assert.ok(crash.status === 0 && /状态机自己出错了/.test(crash.out) && !/常态 · 无锁/.test(crash.out), `status=${crash.status} out=${crash.out.slice(0, 200)}`);
+    });
+  });
+
+  // 审官红项：mode() 以前只钉 DAO_STATE_FILE，父进程 DAO_BOARD_FILE 会漏进 hook。
+  // 指挥官写一份新鲜健康盘面，旧时长/消息兜底断言就被新契约屏蔽。
+  it('#1287 hook 测试不读宿主盘面：默认钉到不存在路径，opts.env 仍可覆盖', async (t) => {
+    const healthyPath = path.join(SANDBOX, "host-healthy-board.json");
+    fs.writeFileSync(healthyPath, JSON.stringify({
+      at: new Date().toISOString(), stalledRounds: 0, waitingUser: 0,
+    }), "utf8");
+    const oldFile = path.join(SANDBOX, "isolate-standby.json");
+    fs.writeFileSync(oldFile, JSON.stringify(stateDoc("standby", { hoursAgo: 8.5 })), "utf8");
+
+    const prev = process.env.DAO_BOARD_FILE;
+    process.env.DAO_BOARD_FILE = healthyPath;
+    try {
+      const leaked = injection("早安", oldFile);
+      await t.test('父进程 env 指向新鲜健康盘面 ⇒ 旧时长兜底仍注入', () => {
+        assert.ok(/现在必须问是否退出值守/.test(leaked.out), "→  " + leaked.out.slice(0, 300));
+      });
+      await t.test('时长超但消息未超 ⇒ 理由仍是时长（宿主盘面不得改断言）', () => {
+        assert.match(leaked.out, /已值守 8\.[0-9] 小时/, "→  " + leaked.out.slice(0, 300));
+        assert.equal(/此间用户发了/.test(leaked.out), false, "→  " + leaked.out.slice(0, 300));
+      });
+    } finally {
+      if (prev === undefined) delete process.env.DAO_BOARD_FILE;
+      else process.env.DAO_BOARD_FILE = prev;
+    }
+
+    const withBoard = mode(["hook"], {
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "早安" }),
+      state: oldFile,
+      env: { DAO_BOARD_FILE: healthyPath },
+    });
+    await t.test('opts.env 覆盖为健康盘面 ⇒ 屏蔽时长兜底', () => {
+      assert.ok(!/现在必须问是否退出值守/.test(withBoard.out), "→  " + withBoard.out.slice(0, 300));
+    });
+
+    const missingBoard = mode(["hook"], {
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "早安" }),
+      state: oldFile,
+      env: { DAO_BOARD_FILE: path.join(SANDBOX, "does-not-exist-board.json") },
+    });
+    await t.test('opts.env 指向不存在盘面 ⇒ 时长兜底仍在', () => {
+      assert.ok(/现在必须问是否退出值守/.test(missingBoard.out), "→  " + missingBoard.out.slice(0, 300));
     });
   });
 

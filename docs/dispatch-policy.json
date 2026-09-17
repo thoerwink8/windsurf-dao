@@ -12,7 +12,13 @@
     "failuresToTrip": 3,
     "cooldownHours": 24,
     "halfOpenProbes": 1,
-    "overrides": {}
+    "turnMinRequests": 8,
+    "turnFailRatePct": 60,
+    "turnWindowHours": 6,
+    "overrides": {
+      "relay:codex": { "cooldownHours": 1 },
+      "native:xai-native": { "cooldownHours": 1 }
+    }
   },
   "commander": {
     "requireModelInRouting": true,

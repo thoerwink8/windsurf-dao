@@ -32,6 +32,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { isRetiredNewApiUrl } from './retired-gateway-probe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -84,14 +85,22 @@ export const NATIVE_LOGIN_FILES = {
   'devin-native': '.local/share/devin/credentials.toml',
 };
 
+/** mirasim 起的 codex 会话的传输腿 key（与 lib/turn-outcomes.mjs 的 RELAY_CODEX_TARGET 同值，那边不 import 这边以免环）。 */
+export const RELAY_CODEX_TARGET = 'relay:codex';
+
 /**
  * 落地 → 健康表 target key（两仓共用契约，见 issue #842）。
- * gw:  `gw:<组短名>/<模型>`；codex 直连 / 现役 GPT relay： `direct:codex@pqapi/responses`。
+ * gw:  `gw:<组短名>/<模型>`；codex 直连 pqapi： `direct:codex@pqapi/responses`；
+ * 现役 GPT relay（mirasim 注入代理走 relay.mirasim.ai）： `relay:codex`。
  * 本地登录型： `native:<provider>`（只够验凭据文件在不在，见 NATIVE_LOGIN_FILES）。
  * 认不出的 provider → null（调用方据此判 unscanned）。
  *
- * `mirasim-relay` 与旧 `gpt` 共用这一条唯一 target：周期探针仍写这个 key，
- * 网关退役只改了选型落地的 provider 字符串，健康/熔断闸不能跟着摘掉。
+ * `mirasim-relay` 原来与旧 `gpt` **共用** pqapi 那把 key（2026-09-12 网关退役时的权宜：
+ * 「只改了落地字符串，闸不能跟着摘掉」）。2026-09-17 实咬：同机同时段 pqapi 探针 green、
+ * 熔断 closed，而 relay 上的生产 turn 2 ok / 6 error——两条传输腿一点关系都没有，
+ * 共用 key 等于拿 A 的体温判 B 的病。现在 relay 自己一把 key；它没有合成探针，
+ * 健康表里查不到 = unknown（不拦），成败由真实 turn 结果喂熔断器（ingest-turns）。
+ * #1174 T7：planProbe 也不许再拿 ~/.codex 的 4317 桥当现役 GPT 路去发请求。
  */
 export function probeTargetOf(landing) {
   if (!landing || typeof landing !== 'object') return null;
@@ -102,7 +111,8 @@ export function probeTargetOf(landing) {
     if (!parts) return null;
     return `gw:${groupShort(parts.group)}/${parts.model}`;
   }
-  if (provider === 'gpt' || provider === 'mirasim-relay') {
+  if (provider === 'mirasim-relay') return RELAY_CODEX_TARGET;
+  if (provider === 'gpt') {
     return 'direct:codex@pqapi/responses';
   }
   if (NATIVE_LOGIN_FILES[provider]) {
@@ -177,6 +187,14 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
     }
     const openai = parts.group === 'gw';
     const url = openai ? `${gw.gateway}/v1/chat/completions` : `${gw.gateway}/v1/messages`;
+    if (isRetiredNewApiUrl(gw.gateway) || isRetiredNewApiUrl(url)) {
+      return {
+        kind: 'unscanned',
+        provider,
+        target,
+        why: 'newapi 网关已从派工退役（#1174 T7）；派前探不打 sslip.io，人工诊断用 --include-retired-gw',
+      };
+    }
     const body = openai
       ? { model: parts.model, stream: true, max_tokens: PROBE_MAX_TOKENS, messages: [{ role: 'user', content: PROBE_MESSAGE }] }
       : { model: parts.model, stream: true, max_tokens: PROBE_MAX_TOKENS, messages: [{ role: 'user', content: PROBE_MESSAGE }] };
@@ -194,15 +212,35 @@ export function planProbe(landing, { gatewayConfig, codexConfig, home, read, exi
     };
   }
 
-  if (provider === 'gpt' || provider === 'mirasim-relay') {
+  // 现役 GPT 走 mirasim-relay：没有可对齐的合成探针（#1342 / #1174 T7）。
+  // 成败由真实 turn 喂熔断。不许读 ~/.codex 去打 4317→sslip.io。
+  if (provider === 'mirasim-relay') {
+    return {
+      kind: 'unscanned',
+      provider,
+      target,
+      why: 'mirasim-relay 没有合成探针（#1174 T7 / #1342）：成败由真实 turn 喂熔断；不许拿 ~/.codex 的 4317 桥当现役 GPT 路',
+    };
+  }
+
+  if (provider === 'gpt') {
     const cx = codexConfig || loadCodexConfig({ home, read, exists });
     if (!cx.ok) {
       return { kind: 'unscanned', provider, target, why: cx.error };
     }
+    const url = `${cx.baseUrl}/responses`;
+    if (isRetiredNewApiUrl(cx.baseUrl) || isRetiredNewApiUrl(url)) {
+      return {
+        kind: 'unscanned',
+        provider,
+        target,
+        why: `codex base_url 仍指向退役 newapi 桥（${cx.baseUrl}），不是现役 GPT 路（#1174 T7）`,
+      };
+    }
     const model = cliModel && cliModel.indexOf('/') < 0 ? cliModel : 'gpt-5.6-sol';
     return {
       kind: 'codex-responses',
-      url: `${cx.baseUrl}/responses`,
+      url,
       headers: { Authorization: 'Bearer <codex OPENAI_API_KEY>', 'Content-Type': 'application/json' },
       body: codexResponsesProbeBody({ model }),
       target,

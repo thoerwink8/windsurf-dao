@@ -2,6 +2,77 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.9.0 — 2026-09-17
+
+### 新功能
+- [cc] feat(execution): T8 等人不重派 + ACP 热路默认 worktree 策略 (#1174) (#1267)
+- [cc] feat(熔断): 真实 turn 结果喂熔断器；relay 自己一把 key；审官顺位问熔断（#1342） (#1369)
+- [cc] feat(查资料): 搜索默认改走 ddgs，配 onboard 检查（用户拍板）
+
+### 修复与维护
+- fix(并发): 渠道在途数的分子恒为 0——会话名单没带 model，闸永远判不出满 (#1266)
+- [grok] fix(routing): 审官顺位加 terra/astra 两席（#1359，#1360 同分支重开） (#1364)
+- [cc] fix(mirasim): 回环 ws 连不上时重试三次，别一次就判死 (#1277)
+- [patrol] docs(obs): #1226 已合，活 root 自愈钟仍钉 /root 且与 dao-sync 撞点
+- [grok] fix(审官): 换厂无合法目标时退回原席位重试（#1354）
+- [cc] docs(查资料): fetch MCP 重装接线 + WebSearch 断在上游的判据
+- [cc] fix(值守): 提问闸改看盘面卡没卡，不看挂了多久（用户拍板） (#1287)
+- [patrol] docs(obs): #1339 优先证据走裸 gh，审官环境取不到 CI
+- [cc] docs: 盘面排障产物归位——收件箱三条处置 + 盲设计题归档 (#1351)
+- [cc] fix(重试账): 控制面抖一下不算这张 PR 试过——三条路一起修（#1331） (#1348)
+- [cc] fix(审查标准): 第 3 条改成引用 CI 证据——审官重跑全量是走不到投票的主因 (#1339)
+- [cc] fix(闸): 已删 catalog 扫描排除 .claude/worktrees——别的分支的副本不是本树现行文档 (#1334)
+- [cc] fix(审官): 工人交卷那条路漏传 verdictOnHead——返工后复用死会话，一个字都不发生 (#1341)
+- [patrol] docs(obs): #1231 副本闸挂在没人跑的 server-check，活副本仍是 09-11
+- [patrol] docs(obs): #1324 分级闸绿，合门返工仍只认 GitHub 红绿
+
+### 其它
+- [grok] test(隔离): 审官拉取 dry-run 避开容量 IO；开工探针成对假时钟 (#1320)
+- [cc] test(禁网): 补上漏传的 DAO_GH_FAKE——14 次真打 api.github.com 清零，dao-check 首次全绿 (#1284)
+- release: v2.8.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
+## v2.8.0 — 2026-09-16
+
+### 新功能
+- [cc] feat(review): 红项分级 P1挡合/P2落单/P3不追 + 熔断二选一（用户拍板走甲） (#1324)
+- [cc] feat(清单): 任务清单读取面 + 联动退出——开场 hook 念清单，单全关了 dao-check 咬收摊 (#1154)
+- [grok] feat(execution): gpt-5.6-sol 单独 CODEX_HOME，两把 pqapi key 不再互相盖 (#1278)
+
+### 修复与维护
+- [cc] fix(merge): m=manual 改成明文闸——不再从 pr.isDraft 反推（#1223） (#1225)
+- [grok] fix(审官): 登记 oid 不是当前 PR head 时不许复用已结束的审官会话 (#1282)
+- [cc] fix(check): spawn 预算补上 #1288 记漏的 1 格——master 自身红挡住全部 PR 的 CI (#1328)
+- [cc] fix(ledger): 合并后补 job.closed——写口断在 #807 删 flow 那天（⑰ 111 张对不上） (#1228)
+- fix(dao-check): 测试子进程不再活过 dao-check——一个孤儿曾占 5.98 GB 活了 35 小时 (#1288)
+- [cc] fix(lease): 树根归一 + 死票不占名额 + 起会话占用锁 (#1291) (#1292)
+- [cc] fix(心跳): 锚点判据从「有动作」换成「盘面在推进」——磨盘不许刷新静默计时 (#1286)
+- [cc] fix(usage): 用量状态与故障分开，导出有界增量且装机跟 import 闭包 (#1231) (#1301)
+- [patrol] docs(obs): #1316 假活补丁已合，活事件桥仍是 12:14 的本地 isChildAlive
+- [grok] fix(gh-events): 外部信号退出后按已死重连，不再假活 (#1316)
+- [cc] fix(播报): 停滞告警的去重键不再带内容——抖动不刷屏，真死不静默 (#1285)
+- [cc] docs(inbox): 26 条巡检发现归并处置——同一形状挂 #1051，专属起因挂各自单
+- [cc] chore(execution): 删掉 deepseek 直连渠道（用户拍板） (#1276)
+- [cc] fix(merge): 纯对接须三态证明，全路径锁 HEAD（#1133） (#1308)
+- [cc] fix(并发): 在役腿并发上限按实测重写——静态数字换成「负载准入兜底」 (#1274)
+- [cc] fix(打标): 同前缀旧标要摘掉——换过模型的 PR 被旧标焊死，起不了审官 (#1258)
+- [cc] fix(认输): 闸确定性拒绝要能自己认出来，认输理由要带真因 (#1272)
+- [cc] fix(gh-events): EOF孤儿hook重连与初始ping丢失自愈 (#1299)
+- [cc] fix(now): JSON 排空后再退出 + 自扫去掉逐份 python (#1300)
+- [cc] fix(lifecycle): 名单没有仍占树的进程要回收 (#1133) (#1253)
+- [cc] fix(重试账): 判据集补上渠道上限与拉取预算——并发修法落地后旧账要作废 (#1281)
+- [cc] fix(审官): 复用前先问「它交判定了吗」——19 张 PR 被锁在没交卷的审官上 (#1293)
+- [cc] fix(commander): 复审票头过期不再烧重试名额，按当前 head 重写票（#1208） (#1209)
+- [cc] fix(返工): 派成功的返工在工人死后要能解冻——判据从「派出去过」改成「现在还有没有人在做」 (#1271)
+
+### 其它
+- [cc] 装载面自愈守全部家目录：root 那份不再没人接（#1146 的洞） (#1226)
+- [cc] test(dispatch): 给 reviewer-create 的 args/FLAGS 对账补回归网（#1057；#1103 已由 #1118 拆层） (#1111)
+- release: v2.7.1
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.7.1 — 2026-09-15
 
 ### 修复与维护
