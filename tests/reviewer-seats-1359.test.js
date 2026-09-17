@@ -156,8 +156,13 @@ describe('#1359 审官顺位加 terra/astra 两席', () => {
     });
     assert.notEqual(got.reviewerId, 'gpt-5.6-terra', JSON.stringify(got));
     assert.notEqual(got.reviewerId, 'gpt-6-astra', JSON.stringify(got));
-    // grok 工人 + 已验证 GPT 席只剩刚死的 sol → 没有已验证的合法候选，显式失败。
-    assert.equal(got.ok, false, '没有已验证的合法候选时应显式失败  →  ' + JSON.stringify(got));
+    // grok 工人 + 已验证 GPT 席只剩刚死的 sol → 剩余 grok 同厂。
+    // #1354：换厂无合法目标时留原席重试（原席与工人本就跨厂，#679 不破）；
+    // 不得落到 unverified 的 terra/astra（上面两条 notEqual 已钉）。
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.reviewerId, 'gpt-5.6-sol', JSON.stringify(got));
+    assert.equal(got.switched, false, JSON.stringify(got));
+    assert.match(String(got.why), /换厂无合法目标，留在原席位重试/);
   });
 
   it('生产容量换人：已验证的下一位仍能换到（claude 工人 + sol 满载 → grok）', async () => {

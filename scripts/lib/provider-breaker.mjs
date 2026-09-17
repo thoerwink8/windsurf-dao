@@ -25,6 +25,35 @@ export const BREAKER_DEFAULTS = Object.freeze({
   halfOpenProbes: 1,
 });
 
+/**
+ * 真实 turn 结果喂熔断的两道门（#1342，行业 circuit breaker 的 minimum_requests / failure_threshold_percentage）：
+ *   turnMinRequests  窗口内至少几条（ok+上游失败）才评——样本太少的比率是噪音；
+ *   turnFailRatePct  上游失败占比达到即记一次「失败」事件（每轮最多一次，见 ingestTurnOutcomes）。
+ * 60% 取自 2026-09-17 实测：好腿（桥 4/4、grok 探针）失败率 0–30%，坏腿（relay）52–75%，中间有清楚的空档。
+ */
+export const TURN_OUTCOME_DEFAULTS = Object.freeze({
+  turnMinRequests: 8,
+  turnFailRatePct: 60,
+  /** 算失败率的窗口。比 windowHours（失败事件的记账窗）短：腿修好了两小时，24h 均值仍是坏的。
+   *  6h 取自实测流量（relay 约 50 条/天 ⇒ 6h 约 12 条，刚过门槛）；全局一个值，不按 target。 */
+  turnWindowHours: 6,
+});
+
+export function resolveTurnPolicy(policy, target) {
+  const src = policy && typeof policy === 'object' ? policy : {};
+  const ov = src.overrides && target && src.overrides[target] && typeof src.overrides[target] === 'object'
+    ? src.overrides[target] : {};
+  const pick = (k, allowOverride = true) => {
+    const v = allowOverride && ov[k] !== undefined ? ov[k] : src[k];
+    return Number.isFinite(Number(v)) ? Number(v) : TURN_OUTCOME_DEFAULTS[k];
+  };
+  return {
+    turnMinRequests: pick('turnMinRequests'),
+    turnFailRatePct: pick('turnFailRatePct'),
+    turnWindowHours: pick('turnWindowHours', false),
+  };
+}
+
 export const ALL_OPEN_DEDUP_MS = 6 * 3600 * 1000;
 
 const BREAKER_REL = ['.dao', 'provider-breaker.json'];
@@ -316,6 +345,50 @@ export function ingestStall(strikes, breakerDoc, policy, now, { resolveTarget } 
   return doc;
 }
 
+/**
+ * 真实 turn 结果 → 熔断事件（#1342）。summary 是 lib/turn-outcomes.mjs 的 summarizeTurnOutcomes 输出。
+ *
+ * 每个 target 每轮**最多记一次**失败：以 lastTs（窗口内最后一条 turn 的时刻）做幂等戳
+ * （`lastTurnAt`），同一批数据重复喂不重复记——与健康表的 lastHealthAt 同一个形状。
+ * 于是走到 open 要连续 failuresToTrip 轮（默认 3 轮 ≈ 1 小时）都超阈值：
+ * 一小时的坏不是抖动。比率低于阈值时只在 half-open 合闸（closed 不吃绿，理由同 ingestHealthTable）。
+ *
+ * 样本不足（total < turnMinRequests）一律不动——没样本 ≠ 好了，也 ≠ 坏了。
+ */
+export function ingestTurnOutcomes(summary, breakerDoc, policy, now) {
+  const rows = summary && typeof summary === 'object' ? summary : {};
+  let doc = cloneDoc(breakerDoc);
+  const ms = nowMs(now);
+  for (const [key, row] of Object.entries(rows)) {
+    if (!row || typeof row !== 'object') continue;
+    const tp = resolveTurnPolicy(policy, key);
+    const total = Number(row.total) || 0;
+    if (total < tp.turnMinRequests) continue;
+    const prev = doc.targets[key];
+    if (row.lastTs && prev && prev.lastTurnAt === row.lastTs) continue;
+    const upstream = Number(row.upstream) || 0;
+    const pct = Math.round(upstream * 100 / total);
+    const bad = pct >= tp.turnFailRatePct;
+    if (!bad) {
+      const advanced = advanceTarget(prev || emptyTarget(), resolveBreakerPolicy(policy, key), ms);
+      if (advanced.state !== 'half-open') {
+        // 不吃绿，但幂等戳照盖：下一轮同一批数据不必再算一遍。
+        doc.targets[key] = { ...advanced, ...(row.lastTs ? { lastTurnAt: row.lastTs } : {}) };
+        continue;
+      }
+    }
+    doc = applyEvent(doc, {
+      type: bad ? 'failure' : 'success',
+      target: key,
+      why: bad
+        ? `真实 turn 上游失败率 ${pct}%（${upstream}/${total}，另有 ${Number(row.self) || 0} 条是我们自己停的不计）≥ ${tp.turnFailRatePct}%`
+        : `真实 turn 上游失败率 ${pct}%（${upstream}/${total}）< ${tp.turnFailRatePct}%`,
+    }, policy, ms);
+    if (doc.targets[key] && row.lastTs) doc.targets[key].lastTurnAt = row.lastTs;
+  }
+  return doc;
+}
+
 export function loadBreakerDoc({ home = os.homedir(), read = readFileSync, exists = existsSync } = {}) {
   const path = breakerPath(home);
   if (!exists(path)) return { ok: true, present: false, doc: { targets: {} }, path };
@@ -470,7 +543,7 @@ function stallDocFromHome(home, read, exists) {
 /** dao.mjs breaker 动词：reset / trip / ingest-health / ingest-stall。时钟由调用方传入。 */
 export function runBreakerCommand(args = {}, {
   home = os.homedir(), now, policy, read = readFileSync, exists = existsSync,
-  write, rename, hubSay, openIssue, hubAsk, resolveTarget, dryRun = false,
+  write, rename, hubSay, openIssue, hubAsk, resolveTarget, summarizeTurns, dryRun = false,
 } = {}) {
   const ms = now != null ? nowMs(now) : (() => { throw new Error('breaker 命令必须传入 now'); })();
   const pol = policy || BREAKER_DEFAULTS;
@@ -514,5 +587,16 @@ export function runBreakerCommand(args = {}, {
     saveBreakerDoc(doc, { home, write, rename });
     return { ok: true, action: 'ingest-stall', doc, path: breakerPath(home), alert, escalate };
   }
-  return { ok: false, error: `未知 breaker 动作: ${action}（只要 reset / trip / ingest-health / ingest-stall）` };
+  if (action === 'ingest-turns') {
+    // 真实 turn 结果（#1342）。数据源与 key 映射由调用方注入（summarize），本文件不读 ~/.mirasim、不 import 选型表。
+    const summarize = args.summarize || (typeof summarizeTurns === 'function' ? summarizeTurns : null);
+    if (typeof summarize !== 'function') return { ok: false, error: 'ingest-turns 要 summarize（真实 turn 汇总函数）注入' };
+    const s = summarize({ home, now: ms, policy: pol });
+    if (!s || s.unscanned) return { ok: true, action: 'ingest-turns', skipped: true, reason: (s && s.why) || 'turn 事件没查成' };
+    const ingested = ingestTurnOutcomes(s.summary, loaded.doc, pol, ms);
+    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, hubAsk, dryRun });
+    saveBreakerDoc(doc, { home, write, rename });
+    return { ok: true, action: 'ingest-turns', doc, path: breakerPath(home), alert, escalate, summary: s.summary, files: s.files };
+  }
+  return { ok: false, error: `未知 breaker 动作: ${action}（只要 reset / trip / ingest-health / ingest-stall / ingest-turns）` };
 }

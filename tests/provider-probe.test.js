@@ -143,13 +143,13 @@ describe('planProbe', () => {
     assert.ok(p.url.endsWith('/responses'), p.url);
     assert.equal(p.target, 'direct:codex@pqapi/responses');
   });
-  it('mirasim-relay 与 gpt 共用同一条健康 target，不能改 provider 就把闸摘掉', async () => {
-    const { planProbe, probeTargetOf } = await import(LIB);
-    assert.equal(probeTargetOf({ provider: 'mirasim-relay' }), 'direct:codex@pqapi/responses');
-    assert.equal(probeTargetOf({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }), 'direct:codex@pqapi/responses');
-    const p = planProbe({ provider: 'mirasim-relay', cli_model: 'gpt-5.6-sol' }, { codexConfig: { ok: true, baseUrl: base, authPath: '/x/auth.json' } });
-    assert.equal(p.kind, 'codex-responses');
-    assert.equal(p.target, 'direct:codex@pqapi/responses');
+  it('mirasim-relay 自己一把 key，不再借 pqapi 直连的体温判病（#1342）', async () => {
+    const { probeTargetOf, RELAY_CODEX_TARGET } = await import(LIB);
+    // 2026-09-17 实咬：同机同时段 pqapi 探针 green、熔断 closed，relay 上生产 turn 2 ok / 6 error。
+    assert.equal(probeTargetOf({ provider: 'mirasim-relay' }), RELAY_CODEX_TARGET);
+    assert.equal(probeTargetOf({ provider: 'mirasim-relay', cli_model: 'gpt-5.6-sol' }), RELAY_CODEX_TARGET, 'luna/sol 共用这条传输腿，坏是一起坏');
+    assert.equal(probeTargetOf({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }), 'direct:codex@pqapi/responses', '旧 gpt 直连仍归 pqapi');
+    assert.notEqual(RELAY_CODEX_TARGET, 'direct:codex@pqapi/responses');
   });
   it('codexResponsesProbeBody 的 input 是结构化 message，不是裸字符串', async () => {
     const { codexResponsesProbeBody } = await import(LIB);

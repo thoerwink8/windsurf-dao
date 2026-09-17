@@ -233,8 +233,10 @@ import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { resolveModelChannel } from './lib/channel-concurrency.mjs';
-import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder, orderForCapacityFailover } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, reviewerSelectOrder, usableReviewerOrder, orderForCapacityFailover } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
@@ -1517,7 +1519,13 @@ async function admitReviewPull(tickets) {
  */
 function usableReviewerIds() {
   try {
-    return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+    const raw = loadRoutingJsonRaw();
+    const profiles = loadExecutionProfiles();
+    // #1342：与指挥官同一个判据（healthRedIds）——目录里 available 的腿真实 turn 可以 25% 成功率，
+    // 熔断 open 的模型不许再被票上写着就照派。判红名单算不出（表没查成）= 不据此剔，只按目录。
+    let redIds = [];
+    try { redIds = healthRedIds({ models: modelsFromJson(raw), profiles, breaker: loadBreaker() }); } catch { redIds = []; }
+    return usableReviewerOrder(reviewerSelectOrder(raw), { profiles, redIds }).usable;
   } catch { return null; }
 }
 

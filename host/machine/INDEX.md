@@ -92,6 +92,8 @@
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |
+| E | ~/.mirasim/analytics | 归 `ai-gateway-stack`。mirasim 分析事件按天一份 ndjson（`events-<YYYY-MM-DD>.ndjson`；`turn.submit` 带 agent/model，`turn.finish` 带 ok/errorCode）。`scripts/lib/turn-outcomes.mjs` 只读它算每条腿的真实 turn 失败率喂熔断（#1342）；本仓只读、不写装法 |
+| E | ~/.mirasim/diag | 归 `ai-gateway-stack`。同上事件按 UTC 小时一份（`ev-<YYYYMMDDHH>.ndjson`），当天的事件在这里、隔天才归到 analytics。同一读者、同一用途；本仓只读、不写装法 |
 | E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
 | E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
 | E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |
