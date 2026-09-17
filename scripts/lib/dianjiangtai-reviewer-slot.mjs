@@ -45,7 +45,7 @@ export function reviewerOrder({ models = [], passerIds = [], order = [] } = {}) 
 export function nextReviewerAfter({ currentId, models = [], passerIds = [], workerId, order = [] } = {}) {
   const list = reviewerOrder({ models, passerIds, order });
   if (list.length === 0) {
-    return { ok: false, unscanned: false, exhausted: true, error: '审官选型序空（没查成候选）' };
+    return { ok: false, unscanned: false, exhausted: true, reason: 'empty_order', error: '审官选型序空（没查成候选）' };
   }
   const cur = String(currentId || '');
   const i = list.indexOf(cur);
@@ -57,7 +57,7 @@ export function nextReviewerAfter({ currentId, models = [], passerIds = [], work
     if (workerId != null && String(workerId).trim() !== '') {
       const gate = assertCrossVendor({ workerId, reviewerId: cand, models });
       if (gate.state === 'unscanned') {
-        return { ok: false, unscanned: true, exhausted: false, error: gate.error };
+        return { ok: false, unscanned: true, exhausted: false, reason: 'unscanned', error: gate.error };
       }
       if (gate.state === 'same_vendor') continue;
     }
@@ -65,11 +65,13 @@ export function nextReviewerAfter({ currentId, models = [], passerIds = [], work
   }
   // 文案分态（2026-08-22 #729/#730 排障被误导实证）：「没有下一位」≠「剩余全同厂」。
   // 循环没跑过 = 候选池空了，报同厂是把排障引向不存在的厂商冲突。
+  // reason 给上层分出口用（#1354）：同厂全剔可以退回原席位；真空仍 fail。
   if (checked === 0) {
     return {
       ok: false,
       unscanned: false,
       exhausted: true,
+      reason: 'empty_pool',
       error: `审官选型序没有下一位可换（当前 ${cur || '未知'}，序内共 ${list.length} 位）——候选池空了，不是厂商冲突`,
     };
   }
@@ -78,10 +80,11 @@ export function nextReviewerAfter({ currentId, models = [], passerIds = [], work
       ok: false,
       unscanned: false,
       exhausted: true,
+      reason: 'same_vendor',
       error: `选型序剩余 ${checked} 位全部与工人同厂，没法再换（不许降级同厂）`,
     };
   }
-  return { ok: false, unscanned: false, exhausted: true, error: '审官选型序走完，没法再换' };
+  return { ok: false, unscanned: false, exhausted: true, reason: 'walked_off', error: '审官选型序走完，没法再换' };
 }
 
 export function parseReviewerCardName(name) {
@@ -164,7 +167,15 @@ function nextAfterDead(f) {
     workerId: f.workerId,
     order: f.order || [],
   });
-  if (!next.ok) return { ok: false, unscanned: next.unscanned === true, error: next.error };
+  if (!next.ok) {
+    return {
+      ok: false,
+      unscanned: next.unscanned === true,
+      exhausted: next.exhausted === true,
+      reason: next.reason,
+      error: next.error,
+    };
+  }
   return {
     ok: true,
     next: next.next,
@@ -220,6 +231,18 @@ export function planReviewerOnCapacityDeath({ requested, capacityFailover } = {}
     // 若把 unscanned 往上抛，reviewer-create / worker-done 整条 fail——比合之前更起不成。
     if (f.deadModelId == null || String(f.deadModelId).trim() === '') {
       return { ok: true, reviewerId: requestedId, switched: false };
+    }
+    // #1354：换厂目标因「剩余全同厂」而 exhausted → 退回原席位重试。
+    // 原席位与工人本就跨厂，#679 没有被违反；被挡住的只是「再往下走一格」。
+    // 候选池真空（empty_pool / empty_order）与 unscanned 两种维持现状 fail。
+    if (next.unscanned === true) return next;
+    if (next.exhausted === true && next.reason === 'same_vendor') {
+      return {
+        ok: true,
+        reviewerId: requestedId,
+        switched: false,
+        why: '换厂无合法目标，留在原席位重试',
+      };
     }
     return next;
   }
