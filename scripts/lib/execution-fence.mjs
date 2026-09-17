@@ -12,6 +12,19 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 
+export const FLOCK_TIMEOUT_MS = 2000;
+
+// 「锁被别人占着」走的是 status===1 那条、不抛。所以抛出来的一定是 flock 本身没跑成：
+// 起不来（ENOENT/EAGAIN）、跑满 2000ms 超时、或被信号杀。三者后果与修法都不同，
+// 而原先一律只说 'flock unavailable'——谁看见都只能猜（#1358 与帅位各猜一个方向，都没验成）。
+// 判据不变，只把现场带出来：下一次抖动要能一锤定音，不必再复现一轮。纯函数，便于直接喂样本。
+export function describeFenceFailure(result,{elapsedMs,lockPath,timeoutMs}={}) {
+  const why = result?.error ? (result.error.code || result.error.message)
+    : result?.signal ? `killed by ${result.signal}` : `exit status ${result?.status}`;
+  const at = Number.isFinite(elapsedMs) ? `${elapsedMs.toFixed(0)}ms` : '耗时未知';
+  return `execution admission flock unavailable: ${why} (${at}, timeout ${timeoutMs}ms, ${lockPath})`;
+}
+
 export function acquireExecutionFence({stateDir} = {}) {
   if (process.platform !== 'linux') throw new Error('execution fence requires Linux flock');
   if (!stateDir || !path.isAbsolute(stateDir)) throw new Error('execution fence requires an absolute stateDir');
@@ -23,10 +36,13 @@ export function acquireExecutionFence({stateDir} = {}) {
     const stat=fs.fstatSync(fd);
     if (!stat.isFile()) throw new Error('execution admission lock is not a regular file');
     if ((stat.mode & 0o777) !== 0o644 && (stat.uid === process.getuid() || process.getuid() === 0)) fs.fchmodSync(fd,0o644);
+    const startedAt = process.hrtime.bigint();
     const result = spawnSync('/usr/bin/flock',['-x','-n','3'],{
-      stdio:['ignore','pipe','pipe',fd],timeout:2000,env:{PATH:'/usr/bin:/bin'},windowsHide:true,
+      stdio:['ignore','pipe','pipe',fd],timeout:FLOCK_TIMEOUT_MS,env:{PATH:'/usr/bin:/bin'},windowsHide:true,
     });
-    if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error('execution admission flock unavailable');
+    if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error(describeFenceFailure(result,{
+      elapsedMs:Number(process.hrtime.bigint()-startedAt)/1e6,lockPath,timeoutMs:FLOCK_TIMEOUT_MS,
+    }));
     if (result.status === 1) return {ok:false,busy:true,reason:'admission-held',path:lockPath};
     let released = false;
     const release = () => {
