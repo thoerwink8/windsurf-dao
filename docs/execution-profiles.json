@@ -532,18 +532,27 @@
         "gpt-5.6-terra"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "relay reported configured/ok and roster listed model; no scoped new execution proof"
+        "status": "available",
+        "checkedAt": "2026-09-17T20:42:04.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1370-terra-relay-execution",
+        "reason": "真实会话 codex:23ddf60d-3e84-494d-b19f-1e8aeec40ec3 在 /tmp/terra-verify 用 shell 工具读出 proof-terra.txt 全文（TERRA_VERIFY_TOKEN_1190bb），phase=done、error=null。此前只有 inventory 级证据（清单里列了模型），执行目录据此拒绝起审官（#1370）。"
       },
       "quality": {
         "status": "unverified",
         "tier": "unknown",
         "sourceId": null
       },
-      "capabilities": {},
+      "capabilities": {
+        "read": {
+          "status": "verified",
+          "sourceId": "1370-terra-relay-execution"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1370-terra-relay-execution"
+        }
+      },
       "pricing": {
         "status": "unknown",
         "currency": null,
@@ -588,18 +597,27 @@
         "gpt-6-astra"
       ],
       "availability": {
-        "status": "unverified",
-        "checkedAt": "2026-09-09T14:37:17.138Z",
-        "evidenceKind": "inventory",
-        "sourceId": "native-study",
-        "reason": "relay reported configured/ok and roster listed model; no scoped new execution proof"
+        "status": "available",
+        "checkedAt": "2026-09-17T20:42:04.000Z",
+        "evidenceKind": "execution",
+        "sourceId": "1370-astra-relay-execution",
+        "reason": "真实会话 codex:fecfd156-556e-4763-9989-1bfdf1fbf2c3 在 /tmp/astra-verify 用 shell 工具读出 proof-astra.txt 全文（ASTRA_VERIFY_TOKEN_eb837b），phase=done、error=null。此前只有 inventory 级证据（清单里列了模型），执行目录据此拒绝起审官（#1370）。"
       },
       "quality": {
         "status": "unverified",
         "tier": "unknown",
         "sourceId": null
       },
-      "capabilities": {},
+      "capabilities": {
+        "read": {
+          "status": "verified",
+          "sourceId": "1370-astra-relay-execution"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1370-astra-relay-execution"
+        }
+      },
       "pricing": {
         "status": "unknown",
         "currency": null,
