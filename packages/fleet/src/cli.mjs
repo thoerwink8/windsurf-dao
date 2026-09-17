@@ -56,8 +56,15 @@ function run(cmd, argv, { cwd, env, input } = {}) {
   });
 }
 
-async function ghAs(role, argv, { cwd } = {}) {
+async function ghAs(argv, { cwd, role } = {}) {
+  if (!role) return { ok: false, error: 'gh call without role' };
   return run(process.execPath, [join(REPO_ROOT, 'scripts', 'gh-as.mjs'), role, '--', ...argv], { cwd });
+}
+
+/** 判定层读 git 的退出码（status===0）；run() 只给 ok。适配在这一层做，不改判定语义。 */
+async function gitRun(argv, { cwd, env } = {}) {
+  const result = await run('git', argv, { cwd, env });
+  return result.ok ? { status: 0, out: result.out || '', err: '' } : { status: result.status ?? 1, out: result.out || '', err: result.error || '' };
 }
 
 function profileFamily(profileId) {
@@ -81,7 +88,7 @@ function specFromArgs(args) {
     repository: repo,
     issue,
     generation: Number(args.generation || 1),
-    contract: { requiredChecks: String(args.checks || 'check').split(',').map(x => x.trim()).filter(Boolean), deploymentRequired: args.deploy === true },
+    contract: { requiredChecks: String(args.checks || 'check').split(',').map(x => x.trim()).filter(Boolean), deploymentRequired: args.deploy === true, targetBranch: String(args.base || 'master') },
     limits: { reviewRounds: Number(args.rounds || 3), stepTimeoutSeconds: Number(args.timeout || 1800) },
     roles: {
       lead: { profile: lead, family: profileFamily(lead), accountPool: 'default' },
@@ -124,7 +131,8 @@ async function makeActivities() {
     runtime,
     projects: PROJECTS,
     gh: ghAs,
-    git: (argv, { cwd, env } = {}) => run('git', argv, { cwd, env }),
+    git: gitRun,
+    familiesOf: profileFamily,
     pushEnv: () => {
       const token = resolveToken('worker');
       if (!token.ok) throw new Error(`worker token unavailable: ${token.error}`);

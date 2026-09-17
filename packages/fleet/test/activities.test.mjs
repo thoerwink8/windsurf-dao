@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createActivities } from '../src/activities.mjs';
+import { createActivities, parseFindings, parsePlan, parseSingle } from '../src/activities.mjs';
 
 const H = 'a'.repeat(40);
+const B = 'b'.repeat(40);
 const task = { id: 'dao/owner/repo/issue/17/g1', repository: 'owner/repo', issue: 17, generation: 1,
-  contract: { requiredChecks: ['check'], deploymentRequired: false },
+  contract: { requiredChecks: ['check'], deploymentRequired: false, targetBranch: 'master' },
   limits: { reviewRounds: 2, stepTimeoutSeconds: 60 },
   roles: {
     lead: { profile: 'lead-profile', family: 'openai', accountPool: 'a' },
@@ -12,6 +13,7 @@ const task = { id: 'dao/owner/repo/issue/17/g1', repository: 'owner/repo', issue
     reviewer: { profile: 'review-profile', family: 'anthropic', accountPool: 'c' },
   } };
 const text = (value) => ({ text: value, snapshot: { model: 'review-model' } });
+const FAMILIES = { 'lead-profile': 'openai', 'exec-profile': 'xai', 'review-profile': 'anthropic' };
 
 function harness(overrides = {}) {
   const calls = [];
@@ -31,11 +33,29 @@ function harness(overrides = {}) {
   const activities = createActivities({
     runtime, gh, git,
     projects: { 'owner/repo': '/repos/repo' },
+    familiesOf: id => FAMILIES[id],
     leadPrompt: () => 'lead prompt', executorPrompt: () => 'exec prompt', reviewerPrompt: () => 'review prompt',
     ...overrides.deps,
   });
   return { activities, calls, sessions, runtime };
 }
+
+describe('review output parsing is fail-closed', () => {
+  it('takes the single findings document and refuses ambiguity', () => {
+    assert.deepEqual(parseFindings('```json\n{"findings":[]}\n```').findings, []);
+    assert.equal(parseFindings('{"findings":[{"id":"a","severity":"P1","detail":"x"}]}').findings.length, 1, '不带围栏时整段就是候选');
+    const ambiguous = '```json\n{"findings":[{"id":"a","severity":"P1","detail":"x"}]}\n```\n再看一遍模板：\n```json\n{"findings":[]}\n```';
+    assert.equal(parseFindings(ambiguous), null, '两份结论不同必须 unscanned，不许最后一块赢');
+    const same = '{"findings":[]}\n```json\n{"findings":[]}\n```';
+    assert.deepEqual(parseFindings(same).findings, []);
+    assert.equal(parseFindings('no json at all'), null);
+  });
+  it('parses plans the same way', () => {
+    assert.equal(parsePlan('```json\n{"plan":"do it"}\n```').plan, 'do it');
+    assert.equal(parsePlan('```json\n{"plan":"a"}\n```\n```json\n{"plan":"b"}\n```'), null);
+    assert.equal(parseSingle('{"plan":""}', value => typeof value.plan === 'string' && value.plan.length > 0), null);
+  });
+});
 
 describe('activities bind the workflow to real systems', () => {
   it('prepare maps the repository to its checkout and creates the deterministic branch', async () => {
@@ -43,7 +63,6 @@ describe('activities bind the workflow to real systems', () => {
     const prepared = await activities.prepare(task);
     assert.equal(prepared.repository, 'owner/repo');
     assert.equal(prepared.head, H);
-    assert.equal(prepared.checkpoint, '/trees/dao/issue-17-g1');
     assert.equal(prepared.branch, 'dao/issue-17-g1');
     assert.deepEqual(calls[0], ['ensureWorkspace', '/repos/repo', 'dao/issue-17-g1']);
   });
@@ -52,22 +71,27 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.prepare({ ...task, repository: 'other/repo' }), /no local checkout/);
   });
   it('execute pushes the branch and reuses the existing PR instead of opening a second one', async () => {
-    const { activities, calls } = harness({ gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19}]' } : { ok: true, out: '{}' }) });
-    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1' }, round: 0 });
+    const { activities, calls } = harness({ gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }) });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 });
     assert.equal(artifact.pr, 19);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), true);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[0] === 'pr' && rest[1] === 'create'), false);
   });
+  it('refuses to reuse an open PR that targets a branch other than the contract target', async () => {
+    const { activities, calls } = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"develop"}]' } : { ok: true, out: '{}' }) });
+    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /targets develop/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'create'), false);
+  });
   it('execute opens a draft PR only when none exists, and fails loudly when the number is unresolvable', async () => {
     const created = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[]' } : args[1] === 'create' ? { ok: true, out: 'https://github.com/owner/repo/pull/23' } : { ok: true, out: '{}' }) });
-    const artifact = await created.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 });
+    const artifact = await created.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 });
     assert.equal(artifact.pr, 23);
     const broken = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[]' } : { ok: true, out: 'no url here' }) });
-    await assert.rejects(broken.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 }), /pr number unresolved/);
+    await assert.rejects(broken.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /pr number unresolved/);
   });
   it('execute refuses to push when no new commit was produced', async () => {
-    const { activities, calls } = harness({ git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: 'b'.repeat(40) } : { status: 0, out: '' }) });
-    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: 'b'.repeat(40) }, round: 0 }), /no new commit/);
+    const { activities, calls } = harness({ git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: B } : { status: 0, out: '' }) });
+    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /no new commit/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
   });
   it('a session that does not finish is a failure, never an empty result', async () => {
@@ -76,7 +100,7 @@ describe('activities bind the workflow to real systems', () => {
   });
   it('verify reports unscanned when the rollup is unavailable instead of an empty passing set', async () => {
     const { activities } = harness({ gh: async () => ({ ok: true, out: '{"headRefOid":"' + H + '"}' }) });
-    const evidence = await activities.verify(task, { pr: 19, checkpoint: '/trees/b' });
+    const evidence = await activities.verify(task, { pr: 19, checkpoint: '/trees/b' }, { waitMs: 0 });
     assert.equal(evidence.scanned, false);
     assert.deepEqual(evidence.checks, []);
   });
@@ -84,20 +108,50 @@ describe('activities bind the workflow to real systems', () => {
     const { activities, calls } = harness({ runtime: { readSession: async () => text('no json here') } });
     const result = await activities.review(task, { head: H, checkpoint: '/trees/b', pr: 19 }, { checks: {} });
     assert.equal(result.completed, false);
+    assert.equal(result.identityVerified, false);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'checkout' && rest[1] === '--detach' && rest[2] === H), true);
   });
-  it('review returns parsed findings with the reviewer identity from the task contract', async () => {
-    const { activities } = harness({ runtime: { readSession: async () => text('```json\n{"findings":[{"id":"lost-write","severity":"P1","detail":"lost write"}]}\n```') } });
+  it('review derives families from the execution catalog, not from the contract claim', async () => {
+    const { activities } = harness({ runtime: { readSession: async () => text('```json\n{"findings":[]}\n```') } });
     const result = await activities.review(task, { head: H, checkpoint: '/trees/b', pr: 19 }, { checks: {} });
     assert.equal(result.completed, true);
-    assert.equal(result.family, 'anthropic');
-    assert.deepEqual(result.findings, [{ id: 'lost-write', severity: 'P1', detail: 'lost write' }]);
+    assert.equal(result.identityVerified, true);
+    assert.equal(result.reviewerFamily, 'anthropic');
+    assert.equal(result.executorFamily, 'xai');
+    const lying = harness({ runtime: { readSession: async () => text('```json\n{"findings":[]}\n```') }, deps: { familiesOf: id => (id === 'review-profile' ? 'xai' : FAMILIES[id]) } });
+    const forged = await lying.activities.review(task, { head: H, checkpoint: '/trees/b', pr: 19 }, { checks: {} });
+    assert.equal(forged.reviewerFamily, 'xai');
+    assert.equal(forged.executorFamily, 'xai');
   });
-  it('integrate reads the merge result back instead of trusting the merge command exit code', async () => {
-    const { activities } = harness({ gh: async (args) => (args[1] === 'merge' ? { ok: true, out: '' } : args[1] === 'view' ? { ok: true, out: JSON.stringify({ state: 'MERGED', number: 19, headRefOid: H, mergeCommit: { oid: 'c'.repeat(40) } }) } : { ok: true, out: '{}' }) });
+  it('integrate verifies head and target before merging, and reads the result back', async () => {
+    let views = 0;
+    const { activities, calls } = harness({ gh: async (args) => {
+      if (args[1] === 'view') {
+        views += 1;
+        return { ok: true, out: JSON.stringify(views === 1
+          ? { state: 'OPEN', number: 19, headRefOid: H, baseRefName: 'master' }
+          : { state: 'MERGED', number: 19, headRefOid: H, baseRefName: 'master', mergeCommit: { oid: 'c'.repeat(40) } }) };
+      }
+      if (args[1] === 'merge') return { ok: true, out: '' };
+      return { ok: true, out: '{}' };
+    } });
     const delivery = await activities.integrate(task, { pr: 19, head: H, checkpoint: '/trees/b' });
     assert.equal(delivery.merged, true);
+    assert.equal(delivery.baseRefName, 'master');
     assert.equal(delivery.mergeCommit, 'c'.repeat(40));
+    const mergeCallIndex = calls.findIndex(([kind, ...rest]) => kind === 'gh' && rest[1] === 'merge');
+    const viewBeforeIndex = calls.findIndex(([kind, ...rest]) => kind === 'gh' && rest[1] === 'view');
+    assert.equal(viewBeforeIndex < mergeCallIndex, true, '合并前必须先读回 PR 的 head 与目标枝');
+  });
+  it('integrate refuses when the PR head moved since review', async () => {
+    const { activities, calls } = harness({ gh: async (args) => (args[1] === 'view' ? { ok: true, out: JSON.stringify({ state: 'OPEN', headRefOid: B, baseRefName: 'master' }) } : { ok: true, out: '{}' }) });
+    await assert.rejects(activities.integrate(task, { pr: 19, head: H, checkpoint: '/trees/b' }), /head moved/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'merge'), false);
+  });
+  it('integrate refuses when the PR targets another branch', async () => {
+    const { activities, calls } = harness({ gh: async (args) => (args[1] === 'view' ? { ok: true, out: JSON.stringify({ state: 'OPEN', headRefOid: H, baseRefName: 'develop' }) } : { ok: true, out: '{}' }) });
+    await assert.rejects(activities.integrate(task, { pr: 19, head: H, checkpoint: '/trees/b' }), /target branch mismatch/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'merge'), false);
   });
   it('cleanup verifies both sessions and the workspace before claiming success', async () => {
     const ok = harness();

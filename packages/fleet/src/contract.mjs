@@ -19,6 +19,7 @@ export function normalizeTask(input) {
   const checks = input.contract?.requiredChecks;
   if (!Array.isArray(checks) || !checks.length || checks.some(name => !text(name)) || new Set(checks).size !== checks.length) throw new Error('required checks must be explicit and unique');
   if (typeof input.contract.deploymentRequired !== 'boolean') throw new Error('deployment requirement missing');
+  if (!text(input.contract.targetBranch || 'master')) throw new Error('invalid target branch');
   if (!positive(input.limits?.reviewRounds)) throw new Error('invalid review budget');
   if (!positive(input.limits?.stepTimeoutSeconds)) throw new Error('invalid step timeout');
   const roles = {};
@@ -30,16 +31,22 @@ export function normalizeTask(input) {
   if (roles.executor.family === roles.reviewer.family) throw new Error('reviewer must be independent of executor family');
   return {
     id, repository, issue: input.issue, generation: input.generation,
-    contract: { requiredChecks: [...checks], deploymentRequired: input.contract.deploymentRequired },
+    contract: { requiredChecks: [...checks], deploymentRequired: input.contract.deploymentRequired, targetBranch: (input.contract.targetBranch || 'master').trim() },
     limits: { reviewRounds: input.limits.reviewRounds, stepTimeoutSeconds: input.limits.stepTimeoutSeconds },
     roles,
   };
 }
 
+/** 审查判定。身份只认活动从执行目录**实际解析**出来的 family——契约里写的 family 是调用方的声明，
+ *  不能当证据用（同厂自审会因此恒过）。identityVerified 缺一即 unscanned，不放行。 */
 export function judgeReview(task, head, review) {
   if (!SHA.test(head || '') || !review || review.completed !== true || review.head !== head) return unknown('review-not-complete-on-head');
-  if (review.profile !== task.roles.reviewer.profile || review.family !== task.roles.reviewer.family) return unknown('reviewer-identity-mismatch');
-  if (review.family === task.roles.executor.family) return unknown('reviewer-not-independent');
+  if (review.identityVerified !== true) return unknown('reviewer-identity-unverified');
+  const reviewerFamily = text(review.reviewerFamily) ? review.reviewerFamily.trim().toLowerCase() : null;
+  const executorFamily = text(review.executorFamily) ? review.executorFamily.trim().toLowerCase() : null;
+  if (!reviewerFamily || !executorFamily) return unknown('reviewer-identity-unverified');
+  if (reviewerFamily === executorFamily) return unknown('reviewer-not-independent');
+  if (reviewerFamily !== task.roles.reviewer.family) return unknown('reviewer-family-mismatch');
   if (!Array.isArray(review.findings)) return unknown('review-findings-missing');
   const seen = new Set();
   for (const finding of review.findings) {
@@ -69,6 +76,7 @@ export function judgeDelivery(task, head, evidence) {
   if (!SHA.test(head || '') || !evidence || evidence.repository !== task.repository || evidence.issue !== task.issue || !positive(evidence.pr)) return unknown('delivery-identity-mismatch');
   if (evidence.merged !== true) return { state: 'pending', reason: 'pr-not-merged' };
   if (evidence.sourceHead !== head || !SHA.test(evidence.mergeCommit || '')) return unknown('merge-evidence-mismatch');
+  if (evidence.baseRefName !== task.contract.targetBranch) return unknown('merge-target-mismatch');
   if (task.contract.deploymentRequired) {
     const deployed = evidence.deployment;
     if (deployed?.checked !== true || deployed.commit !== evidence.mergeCommit) return unknown('deployment-not-verified-at-merge');

@@ -1,13 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFailure } from '../src/contract.mjs';
+import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFailure, taskIdOf } from '../src/contract.mjs';
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 const MERGED = 'c'.repeat(40);
 const input = () => ({
   repository: 'owner/repo', issue: 17, generation: 1,
-  contract: { requiredChecks: ['check'], deploymentRequired: false },
+  contract: { requiredChecks: ['check'], deploymentRequired: false, targetBranch: 'master' },
   limits: { reviewRounds: 6, stepTimeoutSeconds: 1800 },
   roles: {
     lead: { profile: 'lead', family: 'openai', accountPool: 'a' },
@@ -15,15 +15,16 @@ const input = () => ({
     reviewer: { profile: 'reviewer', family: 'anthropic', accountPool: 'c' },
   },
 });
-const review = () => ({ completed: true, head: HEAD, findings: [], profile: 'reviewer', family: 'anthropic' });
+const review = () => ({ completed: true, head: HEAD, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' });
 const checks = () => ({ scanned: true, head: HEAD, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] });
-const delivery = () => ({ repository: 'owner/repo', issue: 17, pr: 19, sourceHead: HEAD, merged: true, mergeCommit: MERGED });
+const delivery = () => ({ repository: 'owner/repo', issue: 17, pr: 19, sourceHead: HEAD, merged: true, mergeCommit: MERGED, baseRefName: 'master' });
 
 describe('one task identity across events, nodes and internal agents', () => {
   it('normalizes repository identity without conflating issue generations or repositories', () => {
     assert.equal(normalizeTask({ ...input(), repository: 'Owner/Repo' }).id, normalizeTask(input()).id);
     assert.notEqual(normalizeTask({ ...input(), generation: 2 }).id, normalizeTask(input()).id);
     assert.notEqual(normalizeTask({ ...input(), repository: 'owner/other' }).id, normalizeTask(input()).id);
+    assert.equal(taskIdOf({ repository: 'Owner/Repo', issue: 17 }), normalizeTask(input()).id);
   });
   it('refuses incomplete contracts, unknown budgets and unverified role identity', () => {
     for (const issue of [0, -1, '17', null]) assert.throws(() => normalizeTask({ ...input(), issue }), /issue/);
@@ -52,6 +53,17 @@ describe('review remains independent within the same task', () => {
       assert.equal(judgeReview(normalizeTask(input()), HEAD, evidence).state, 'unscanned');
     }
   });
+  it('does not trust the contract claim for identity: evidence must carry verified families', () => {
+    for (const evidence of [
+      { ...review(), identityVerified: false },
+      { ...review(), identityVerified: undefined },
+      { ...review(), executorFamily: undefined },
+      { ...review(), reviewerFamily: undefined },
+      { ...review(), executorFamily: 'anthropic' },
+      { ...review(), reviewerFamily: 'xai' },
+      { ...review(), reviewerFamily: 'google' },
+    ]) assert.equal(judgeReview(normalizeTask(input()), HEAD, evidence).state, 'unscanned', JSON.stringify(evidence));
+  });
   it('blocks P1, keeps P2/P3 advisory and preserves stable finding ids', () => {
     const p1 = { id: 'lost-write', severity: 'P1', detail: 'lost write' };
     const p2 = { id: 'naming', severity: 'P2', detail: 'naming' };
@@ -61,11 +73,9 @@ describe('review remains independent within the same task', () => {
     assert.deepEqual(r.advisory, [p2]);
     assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [p2] }).state, 'passed');
   });
-  it('rejects forged reviewer identity, duplicate findings and unsupported severities', () => {
+  it('rejects duplicate findings and unsupported severities', () => {
     const f = { id: 'x', severity: 'P1', detail: 'x' };
     for (const value of [
-      { ...review(), profile: 'executor' },
-      { ...review(), family: 'xai' },
       { ...review(), findings: [f, f] },
       { ...review(), findings: [{ ...f, severity: 'P0' }] },
     ]) assert.equal(judgeReview(normalizeTask(input()), HEAD, value).state, 'unscanned');
@@ -95,8 +105,13 @@ describe('acceptance is evidence, not an agent saying done', () => {
       assert.notEqual(judgeDelivery(task, HEAD, evidence).state, 'passed');
     }
   });
+  it('refuses a merge into any branch other than the contract target', () => {
+    const task = normalizeTask(input());
+    assert.equal(judgeDelivery(task, HEAD, { ...delivery(), baseRefName: 'develop' }).state, 'unscanned');
+    assert.equal(judgeDelivery(task, HEAD, { ...delivery(), baseRefName: undefined }).state, 'unscanned');
+  });
   it('requires production evidence at the merge commit when deployment is part of the contract', () => {
-    const task = normalizeTask({ ...input(), contract: { requiredChecks: ['check'], deploymentRequired: true } });
+    const task = normalizeTask({ ...input(), contract: { requiredChecks: ['check'], deploymentRequired: true, targetBranch: 'master' } });
     assert.equal(judgeDelivery(task, HEAD, delivery()).state, 'unscanned');
     assert.equal(judgeDelivery(task, HEAD, { ...delivery(), deployment: { checked: true, healthy: true, commit: HEAD } }).state, 'unscanned');
     assert.equal(judgeDelivery(task, HEAD, { ...delivery(), deployment: { checked: true, healthy: true, commit: MERGED } }).state, 'passed');

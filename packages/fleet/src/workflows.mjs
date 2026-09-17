@@ -31,9 +31,11 @@ export async function fusionTaskWorkflow(input, options = {}) {
         state = await runFusionTask(task, activities, { previous, cancelled: () => cancelled, onState: value => { state = value; } });
         if (state.state !== 'blocked') return state;
         previous = state;
-        if ((state.failureClass === 'retryable' || state.failureClass === 'pending') && transientRetries < 3) {
+        const transientBudget = state.failureClass === 'pending' ? 10 : 3;
+        if ((state.failureClass === 'retryable' || state.failureClass === 'pending') && transientRetries < transientBudget) {
           transientRetries += 1;
-          await sleep((2 ** transientRetries + Math.random()) * 1000);
+          // 退避必须确定性：工作流里出现随机/时间会让重放对不上历史（Temporal 沙箱外的 Math.random 不可重放）。
+          await sleep(state.failureClass === 'pending' ? '60s' : `${2 ** transientRetries}s`);
           continue;
         }
         await condition(() => resumed);
@@ -46,12 +48,16 @@ export async function fusionTaskWorkflow(input, options = {}) {
     state = { ...state, state: 'cancelled', reason: 'cancelled' };
   } finally {
     if (cancelled || state.state === 'cancelled') {
-      try {
-        const cleanup = await CancellationScope.nonCancellable(() => activities.cleanup(task, { checkpoint: state.artifact?.checkpoint || state.prepared?.checkpoint || null }));
-        if (cleanup?.verified !== true) throw new Error('cleanup not verified');
-      } catch {
-        state = { ...state, state: 'blocked', reason: 'cancel-cleanup-unconfirmed', cancelRequested: true };
+      const checkpoint = state.artifact?.checkpoint || state.prepared?.checkpoint || null;
+      let verified = false;
+      for (let attempt = 0; attempt < 5 && !verified; attempt += 1) {
+        try {
+          const cleanup = await CancellationScope.nonCancellable(() => activities.cleanup(task, { checkpoint }));
+          verified = cleanup?.verified === true;
+        } catch { verified = false; }
+        if (!verified) await CancellationScope.nonCancellable(() => sleep('5s'));
       }
+      if (!verified) state = { ...state, state: 'blocked', reason: 'cancel-cleanup-unconfirmed', cancelRequested: true };
     }
   }
   return state;

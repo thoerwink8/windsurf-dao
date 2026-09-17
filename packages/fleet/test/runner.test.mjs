@@ -6,7 +6,7 @@ const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const M = 'c'.repeat(40);
 const task = () => ({ repository: 'owner/repo', issue: 17, generation: 1,
-  contract: { requiredChecks: ['check'], deploymentRequired: false },
+  contract: { requiredChecks: ['check'], deploymentRequired: false, targetBranch: 'master' },
   limits: { reviewRounds: 2, stepTimeoutSeconds: 60 },
   roles: {
     lead: { profile: 'lead', family: 'openai', accountPool: 'a' },
@@ -14,6 +14,7 @@ const task = () => ({ repository: 'owner/repo', issue: 17, generation: 1,
     reviewer: { profile: 'reviewer', family: 'anthropic', accountPool: 'c' },
   },
 });
+const pass = () => ({ completed: true, head: A, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' });
 function fixture(overrides = {}) {
   const calls = [];
   const methods = {
@@ -21,8 +22,8 @@ function fixture(overrides = {}) {
     lead: async () => ({ plan: 'Implement the bounded task.' }),
     execute: async () => ({ repository: 'owner/repo', head: A, checkpoint: 'artifact' }),
     verify: async (_task, artifact) => ({ scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
-    review: async (_task, artifact) => ({ completed: true, head: artifact.head, findings: [], profile: 'reviewer', family: 'anthropic' }),
-    integrate: async (_task, artifact) => ({ repository: 'owner/repo', issue: 17, pr: 19, merged: true, sourceHead: artifact.head, mergeCommit: M }),
+    review: async (_task, artifact) => ({ ...pass(), head: artifact.head }),
+    integrate: async (_task, artifact) => ({ repository: 'owner/repo', issue: 17, pr: 19, merged: true, sourceHead: artifact.head, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
     closeIssue: async () => ({ repository: 'owner/repo', issue: 17, closed: true }),
     ...overrides,
@@ -43,7 +44,7 @@ describe('one durable task owns execution, review, rework and closure', () => {
     let reviews = 0;
     const f = fixture({
       execute: async () => ({ repository: 'owner/repo', head: reviews ? B : A, checkpoint: 'artifact' }),
-      review: async (_task, artifact) => ({ completed: true, head: artifact.head, profile: 'reviewer', family: 'anthropic', findings: reviews++ ? [] : [{ id: 'broken-edge', severity: 'P1', detail: 'Fix edge.' }] }),
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: reviews++ ? [] : [{ id: 'broken-edge', severity: 'P1', detail: 'Fix edge.' }] }),
     });
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
@@ -52,8 +53,19 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(f.calls.filter(name => name === 'integrate').length, 1);
     assert.equal(f.calls.filter(name => name === 'closeIssue').length, 1);
   });
+  it('turns a failed check into rework without spending a review round', async () => {
+    let verifies = 0;
+    const f = fixture({
+      execute: async () => ({ repository: 'owner/repo', head: verifies ? B : A, checkpoint: 'artifact' }),
+      verify: async (_task, artifact) => (verifies++ ? { scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] } : { scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'FAILURE' }] }),
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(f.calls.filter(name => name === 'review').length, 1, '检查失败那一轮不该进审查');
+    assert.equal(f.calls.filter(name => name === 'verify').length, 2);
+  });
   it('halts at the review budget without closing or manufacturing a new issue', async () => {
-    const f = fixture({ review: async () => ({ completed: true, head: A, profile: 'reviewer', family: 'anthropic', findings: [{ id: 'broken', severity: 'P1', detail: 'Still broken.' }] }) });
+    const f = fixture({ review: async () => ({ ...pass(), head: A, findings: [{ id: 'broken', severity: 'P1', detail: 'Still broken.' }] }) });
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'blocked');
     assert.equal(result.reason, 'review-budget-exhausted');
@@ -61,8 +73,14 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(f.calls.includes('integrate'), false);
     assert.equal(f.calls.includes('closeIssue'), false);
   });
-  it('never merges when the review is incomplete, stale or unauthenticated', async () => {
-    for (const review of [async () => null, async () => ({ completed: true, head: B, findings: [] }), async () => { throw Object.assign(new Error('login required'), { code: 'AUTH_REQUIRED' }); }]) {
+  it('never merges when the review is incomplete, stale, unauthenticated or identity-unverified', async () => {
+    for (const review of [
+      async () => null,
+      async () => ({ ...pass(), head: B }),
+      async () => ({ ...pass(), head: A, identityVerified: false }),
+      async () => ({ ...pass(), head: A, executorFamily: 'anthropic' }),
+      async () => { throw Object.assign(new Error('login required'), { code: 'AUTH_REQUIRED' }); },
+    ]) {
       const f = fixture({ review });
       const result = await runFusionTask(task(), f.io);
       assert.equal(result.state, 'blocked');

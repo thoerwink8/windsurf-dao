@@ -27,8 +27,8 @@ function activities(overrides = {}) {
     lead: async () => ({ plan: 'Implement.' }),
     execute: async task => ({ repository: task.repository, head: H, checkpoint: 'code' }),
     verify: async () => ({ scanned: true, head: H, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
-    review: async () => ({ completed: true, head: H, profile: 'reviewer', family: 'anthropic', findings: [] }),
-    integrate: async task => ({ repository: task.repository, issue: task.issue, pr: 19, merged: true, sourceHead: H, mergeCommit: M }),
+    review: async () => ({ completed: true, head: H, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' }),
+    integrate: async task => ({ repository: task.repository, issue: task.issue, pr: 19, merged: true, sourceHead: H, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
     closeIssue: async task => ({ repository: task.repository, issue: task.issue, closed: true }),
     cleanup: async () => ({ verified: true }),
@@ -74,7 +74,7 @@ describe('Temporal-backed task lifecycle', { concurrency: false }, () => {
     let authenticated = false;
     const f = activities({ review: async () => {
       if (!authenticated) throw ApplicationFailure.nonRetryable('Authentication required', 'AUTH_REQUIRED');
-      return { completed: true, head: H, profile: 'reviewer', family: 'anthropic', findings: [] };
+      return { completed: true, head: H, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' };
     } });
     let handle;
     const task = spec('owner/recovery');
