@@ -16,7 +16,9 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'redact.mjs');
 const CANONICAL = path.join(REPO, 'scripts', 'lib', 'redact.js');
-const SANDBOX = path.join(REPO, '_tmp', 'redact-session-sandbox');
+// 沙盒名带进程号：两份 dao-check 并发时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, '_tmp'), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, '_tmp', 'redact-session-sandbox-'));
 
 const toUrl = p => 'file://' + p.replace(/\\/g, '/');
 const LIB_LOAD = import(toUrl(LIB));

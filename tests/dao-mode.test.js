@@ -27,7 +27,9 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const SKILL_DIR = path.join(REPO, "host", "skills", "dao-mode");
 const HOOK = path.join(SKILL_DIR, "hooks", "dao-mode.mjs");
-const SANDBOX = path.join(REPO, "_tmp", "mode-sandbox");
+// 沙盒名带进程号：两份 dao-check 并发（审官 + land + 定时器）时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, "_tmp"), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, "_tmp", "mode-sandbox-"));
 const STATE = path.join(SANDBOX, "state.json");
 // 故意不创建：默认走「盘面没查成 → 时长/消息兜底」。要测盘面契约时用 opts.env 覆盖。
 const BOARD_ABSENT = path.join(SANDBOX, "board-stuck.absent.json");
