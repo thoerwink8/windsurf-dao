@@ -8,10 +8,11 @@ import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,Mirasim
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
-import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
+import {EXECUTION_FINISHED,EXECUTION_RESERVED,EXECUTION_VERDICT_FINISHED,EXECUTION_WAITING,isWaitingState,sessionStateOf,confirmedSessionState} from './execution-states.mjs';
 import {acpProcessIdentity,acpProcessAlive} from './acp-runtime.mjs';
 import {preparePiDirectLaunch} from './execution-pi-provider.mjs';
 import {attachControlPlaneHooksOrThrow} from './control-plane-write.mjs';
+import {resolveStartInteractionPolicy} from './acp-interaction-policy.mjs';
 
 // 终态读正典（execution-states.mjs）。这里原来手打一份，**漏了 rejected / incomplete / gone**，
 // 于是 judgeExecutionCompletion 把「已经死了」的会话判成 running（实测 rejected/gone → running）。
@@ -74,7 +75,7 @@ export function judgeExecutionCompletion(view) {
   const cancelled=['aborted','cancelled','canceled','stopped'].includes(phase);
   if(cancelled)return {status:'failed',reason:'session cancelled',confirmedBy:['session']};
   const pending=x=>x&&x.answered!==true&&!x.done&&!x.answeredAt&&!x.resolvedAt&&!['answered','cancelled','canceled','resolved','done'].includes(x.status);
-  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||['waiting_user','waiting_permission'].includes(phase))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
+  if(view.awaiting===true||snapshot.awaiting===true||[view.interactions,snapshot.interactions].some(xs=>Array.isArray(xs)&&xs.some(pending))||EXECUTION_WAITING.has(String(phase||'').toLowerCase()))return {status:'waiting_user',reason:'pending interaction',confirmedBy:['interaction']};
   if(!phase)return {status:'unknown',reason:'session phase unavailable',confirmedBy:[]};
   if(view.error||snapshot.error||view.incomplete===true||snapshot.incomplete===true||['failed','error','incomplete','auth_required','unsupported_interaction'].includes(phase))return {status:'failed',reason:'session did not complete',confirmedBy:['session']};
   if(!TERMINAL.has(phase))return {status:'running',reason:'session active',confirmedBy:['session']};
@@ -163,6 +164,8 @@ export function createExecutionRuntime(opts={}) {
     if(!['acp','mirasim'].includes(selected)||!/^[a-z][a-z0-9-]*$/.test(actual.agent||''))throw new Error('invalid execution backend or agent');
     actual.route??=selected==='acp'?'local':'auto';
     if(!(['local','native','direct'].includes(actual.route)&&selected==='acp')&&!(['local','cloud','auto'].includes(actual.route)&&selected==='mirasim'))throw new Error('invalid execution route');
+    // #1174 T8b：ACP 热路默认挂 worktree 已知权限。显式策略不合并。闸装在 prepare，四个调用点绕不开。
+    if(selected==='acp') actual.interactionPolicy=resolveStartInteractionPolicy({backend:selected,workdir:actual.workdir,interactionPolicy:spec.interactionPolicy});
     if(spec.resumeFrom) {
       const prior=metadata(spec.resumeFrom);if(!prior)throw new Error('resume requires persistent execution metadata');
       for(const [name,value] of Object.entries({backend:selected,agent:actual.agent,provider:actual.provider??null,accountPoolId:actual.accountPoolId??null,route:actual.route,actualModel:p?.model||actual.model,workdir:actual.workdir})) {
@@ -306,6 +309,26 @@ export function createExecutionRuntime(opts={}) {
     });
     return {...view,execution:result};
   }
+  /**
+   * 树已回收 + 租约归别人：只结自己的记录。判据与主路一致——零进程、供应商侧终态或查无此会话；
+   * 任一不满足就原样留着（下轮再看），不许凭「树没了」一个证据就判清退。
+   */
+  async function settleOrphanRecord(key,meta,target) {
+    if(meta.backend==='acp')return {ok:false,why:'ACP record on a reaped worktree needs backend cleanup'};
+    const rt=backend(key,meta);
+    let procs;try{procs=processCheck(target);}catch{return {ok:false,why:'process cleanup scan incomplete'};}
+    if(procs.length)return {ok:false,why:'processes still run inside the reaped worktree'};
+    const stopped=await rt.stopSession(key).catch(e=>({ok:false,why:String(e?.message||e)}));
+    const view=await rt.readSession(key);
+    const terminal=view?.missing===true||TERMINAL_STATUS.has(judgeExecutionCompletion(view).status);
+    if(!terminal)return {ok:false,uncertain:true,why:'vendor session on a reaped worktree is not terminal'};
+    await fence(()=>{
+      const current=metadata(key);if(!current)return null;
+      atomic(metaFile(key),{...current,state:'stopped',cleanupVerified:true,cleanupToken:null,cleanupOwner:null,updatedAt:now(),taskCompleted:false});
+      return current;
+    });
+    return {ok:true,verified:true,treeGone:true,foreignLease:true,stopAcknowledged:stopped?.ok===true};
+  }
   async function stopSession(key,{workdir,expectedLease,automatic=false}={}) {
     assertMutationAllowed();
     let meta=metadata(key),target=meta?.workdir||workdir;
@@ -318,16 +341,27 @@ export function createExecutionRuntime(opts={}) {
       }
     }
     if(!target||!path.isAbsolute(target))return {ok:false,unscanned:true,why:'session workdir unavailable'};
-    target=fs.realpathSync(target);
+    // 树已经被回收（reap-tree 跑在 stop 之前，或会话早就过期）：realpath 会 ENOENT 直接抛，
+    // 一个字都没落盘 → 下一轮同一条再来。2026-09-18 实咬（#1350）：117 条终态会话每轮全部
+    // 在这一行抛掉，stop-session 100% 空转。树没了不是「没查成」，是「残留进程已无处可占」：
+    // 照走清退，让 cleanupVerified 落下去，指挥官下一轮就不再点它。
+    let treeGone=false;
+    try{target=fs.realpathSync(target);}catch(e){if(e?.code!=='ENOENT')throw e;treeGone=true;target=path.resolve(target);}
     const file=leaseFile(target),cleanupToken=crypto.randomUUID();
     const claimed=await fence(()=>{
       const held=readJson(file);meta=metadata(key)||meta;
-      if(held&&held.sessionKey!==key)throw busy('session no longer owns this worktree');
+      if(held&&held.sessionKey!==key) {
+        // 树没了、租约也早归了后来者（同一路径被复用，实咬 26 条）：这条记录什么都握不住，
+        // 「session no longer owns this worktree」对它不是拦路而是判词。租约一个字不碰，
+        // 只按同样的判据（零进程 + 终态/missing）清自己的记录；树在时照旧拦。
+        if(treeGone&&meta)return {foreignLease:true,meta};
+        throw busy('session no longer owns this worktree');
+      }
       if(expectedLease&&!sameLease(held,expectedLease))throw busy('worktree lease changed before cleanup');
       if(held?.state==='pending')throw busy('launch is still awaiting acceptance','launch-pending');
       if(held?.state==='stopping'&&(automatic||held.cleanupOwner&&alive(held.cleanupOwner)))throw busy('session cleanup already owned');
       if(held?.cleanupVerified&&meta?.cleanupVerified)return {alreadyStopped:true};
-      if(automatic&&meta?.state==='waiting_user')throw busy('session is waiting for user');
+      if(automatic&&isWaitingState(meta))throw busy('session is waiting for user');
       const m=meta||{schemaVersion:1,recordKey:key,sessionKey:key,workdir:target,backend:String(key).startsWith('acp:')?'acp':'mirasim',state:'unknown',launchState:'accepted',taskCompleted:false,adopted:true};
       const clock=reservedClock(m,now());
       const next={...m,state:'stopping',cleanupVerified:false,cleanupToken,cleanupOwner:identity(process.pid),updatedAt:clock};
@@ -336,6 +370,7 @@ export function createExecutionRuntime(opts={}) {
       atomic(file,lease);return {lease,meta:next,wasUncertain:m.state==='uncertain'||m.launchState==='uncertain'};
     });
     if(claimed.alreadyStopped)return {ok:true,verified:true,alreadyStopped:true};
+    if(claimed.foreignLease)return settleOrphanRecord(key,claimed.meta,target);
     let result={ok:false,why:'session cleanup failed'};
     try {
       const rt=backend(key,claimed.meta);
@@ -345,7 +380,9 @@ export function createExecutionRuntime(opts={}) {
         if(!before||before.missing||before.partial||!before.phase)return {ok:false,uncertain:true,why:'vendor acceptance remains unconfirmed'};
       }
       const stopped=await rt.stopSession(key);
-      if(!stopped?.ok)return stopped||result;
+      // 树没了时 stop 回执不是判据（服务端可能早已归档这条会话、回「查无此会话」）；
+      // 下面的进程扫描 + 终态核实才是。stop 失败又树在，仍照旧返回。
+      if(!stopped?.ok&&!(treeGone&&claimed.meta.backend!=='acp'))return stopped||result;
       if(claimed.meta.backend==='acp')result=stopped.verified===true||stopped.cleanup?.verified===true?{...stopped,ok:true}:{ok:false,why:'ACP cleanup unverified'};
       else {
         result=await reapMirasim(target);
@@ -359,9 +396,13 @@ export function createExecutionRuntime(opts={}) {
             // 在正典里是终态、却不在那个手打清单 → 验不过 → 会话与租约双双回写 stopping
             // → 这棵树永久起不了新会话（2026-09-12 实咬）。
             if(TERMINAL_STATUS.has(judgeExecutionCompletion(view).status)){terminal=true;break;}
+            // 树没了 + 服务端查无此会话 + 零进程 = 没有任何东西可清。listSessions 那条路对同一形状
+            // 的判词就是 gone（「明确的 missing 记成 gone」），这里不另起一套。树在时 missing 仍是 unknown。
+            if(treeGone&&view?.missing===true){terminal=true;break;}
             if(i+1<(opts.stopVerifyTries??3))await wait(opts.cleanupPollMs??100);
           }
           if(!terminal)result={ok:false,uncertain:true,why:'vendor stop is not terminal; lease retained'};
+          else if(treeGone)result={...result,treeGone:true,stopAcknowledged:stopped?.ok===true};
         }
       }
       return result;

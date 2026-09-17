@@ -40,7 +40,14 @@ async function linkMemory(home, clone, root) {
   fs.symlinkSync(clone, memDir, 'junction');
   return memDir;
 }
-const mkCreds = (home) => fs.mkdirSync(path.join(home, '.dao', 'apps'), { recursive: true });
+// 只报不修那几项看的是家目录里的东西：凭据目录、查资料用的 ddgs。
+// 合成 home 里它们本来就不存在，不备上就每加一项这类检查、全绿基线就塌一次。
+const mkCreds = (home) => {
+  fs.mkdirSync(path.join(home, '.dao', 'apps'), { recursive: true });
+  const localBin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(localBin, { recursive: true });
+  fs.writeFileSync(path.join(localBin, process.platform === 'win32' ? 'ddgs.exe' : 'ddgs'), '');
+};
 
 describe('onboard', () => {
   it('全绿基线：0 问题，哨兵零输出（绿≠碰巧没扫）', async () => {
@@ -338,6 +345,35 @@ describe('onboard', () => {
     it('PATH 前面是分支、后面才是上游 → 绿（shell 只认第一个）', async () => {
       const S = await LIB_LOAD;
       assert.deepEqual(S.checkPiPackage({ pathDirs: [mkPath('pi-pkg-first', S.PI_PACKAGE), mkPath('pi-pkg-second', S.PI_WRONG_PACKAGE)] }), {});
+    });
+  });
+
+  describe('⑧ 查资料的本机搜索 CLI 在不在', () => {
+    const binName = process.platform === 'win32' ? 'ddgs.exe' : 'ddgs';
+    const mk = (tag, { onPath = false, inLocalBin = false } = {}) => {
+      const { home } = mkHome(tag);
+      const dir = path.join(home, 'bin');
+      fs.mkdirSync(dir);
+      const localBin = path.join(home, '.local', 'bin');
+      fs.mkdirSync(localBin, { recursive: true });
+      if (onPath) fs.writeFileSync(path.join(dir, binName), '');
+      if (inLocalBin) fs.writeFileSync(path.join(localBin, binName), '');
+      return { home, pathDirs: [dir] };
+    };
+    it('哪儿都没有 → search-cli-missing，msg 给出装法', async () => {
+      const S = await LIB_LOAD;
+      const r = S.checkSearchCli(mk('ddgs-none'));
+      assert.equal(r.problem?.id, 'search-cli-missing', JSON.stringify(r));
+      assert.match(r.problem.msg, /uv tool install ddgs/);
+      assert.ok(S.ONBOARD_REPORT_ONLY.has('search-cli-missing'), '装包要出网，只能报');
+    });
+    it('在 PATH 上 → 绿', async () => {
+      const S = await LIB_LOAD;
+      assert.deepEqual(S.checkSearchCli(mk('ddgs-onpath', { onPath: true })), {});
+    });
+    it('只在 ~/.local/bin（不在 PATH）→ 仍判绿：uv 就装那儿，两台机器都没把它挂上 PATH', async () => {
+      const S = await LIB_LOAD;
+      assert.deepEqual(S.checkSearchCli(mk('ddgs-localbin', { inLocalBin: true })), {});
     });
   });
 

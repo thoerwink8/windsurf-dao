@@ -149,6 +149,31 @@ linuxTest('ACP preallocates its durable key and preserves profile/account/model 
   const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});const r=await rt.startSession({...spec(f),agent:'cursor',model:profile.id,profileId:profile.id,provider:profile.provider,accountPoolId:profile.accountPoolId,route:'local'});
   assert.equal(a.calls.start[0].sessionKey,r.sessionKey);assert.match(r.sessionKey,/^acp:/);assert.equal(r.model,profile.model);assert.equal(r.actualVendor,'cursor');assert.equal(r.issue,1174);assert.equal(rt.profileForModel(profile.id).id,profile.id);
 });
+linuxTest('ACP start without policy attaches the canonical worktree interactionPolicy (#1174 T8b)',async t=>{
+  const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
+  await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture'});
+  const pol=a.calls.start[0].interactionPolicy;
+  assert.equal(pol.rules.length,1);
+  assert.equal(pol.rules[0].worktreeScope,true);
+  assert.equal(pol.rules[0].workdir,fs.realpathSync(f.workdir));
+  assert.equal(pol.rules[0].answer.grant,'once');
+  assert.deepEqual(pol.rules[0].toolKinds,['read','edit','execute']);
+  assert.equal(pol.rules.some(r=>r.method==='mcp/dao_ask_user_question'),false);
+});
+linuxTest('ACP start with explicit policy does not merge the default (#1174 T8b)',async t=>{
+  const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
+  const custom={rules:[{method:'mcp/dao_ask_user_question',answer:{answers:[{questionId:'choice',selectedOptionIds:['alpha']}]}}]};
+  await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture',interactionPolicy:custom});
+  assert.deepEqual(a.calls.start[0].interactionPolicy,custom);
+  const f2=fixture(t),empty=fakeRuntime(),rtEmpty=runtime(f2,{profiles:[profile],acpRuntime:empty});
+  await rtEmpty.startSession({profileId:profile.id,workdir:f2.workdir,prompt:'fixture',interactionPolicy:{rules:[]}});
+  assert.deepEqual(empty.calls.start[0].interactionPolicy,{rules:[]});
+});
+linuxTest('Mirasim start does not attach an ACP interactionPolicy (#1174 T8b)',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  await rt.startSession(spec(f));
+  assert.equal(m.calls.start[0].interactionPolicy,undefined);
+});
 linuxTest('profile route/account/backend/model overrides fail before launch',async t=>{
   const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});
   for(const patch of [{route:'cloud'},{accountPoolId:'different'},{provider:'different'},{agent:'devin'},{backend:'mirasim'},{model:'other'}])await assert.rejects(rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture',...patch}));
@@ -202,6 +227,75 @@ linuxTest('exclusive stopping reservation covers backend stop and process cleanu
 });
 linuxTest('empty processes plus weak stop acknowledgement cannot clear a queued vendor session',async t=>{
   const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'queued',text:''});const r=await rt.stopSession(s.sessionKey);assert.equal(r.ok,false);assert.equal(lease(f).value.state,'stopping');await assert.rejects(rt.startSession(spec(f)),e=>e.detail?.busy===true);
+});
+// #1350：树先被 reap-tree 收掉、会话终态、cleanupVerified 仍 false → stopSession 在 realpath 上 ENOENT
+// 直接抛，什么都不落盘；指挥官每轮把同一批（实咬 117 条）再点一遍，stop-session 100% 空转。
+linuxTest('#1350 stop on a reaped worktree verifies cleanup instead of throwing ENOENT',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));
+  m.views.set(s.sessionKey,{phase:'done',text:'delivered',toolCalls:[]});
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.treeGone,true);assert.equal(r.stopAcknowledged,true);
+  const rec=records(f).find(x=>x.sessionKey===s.sessionKey);
+  assert.equal(rec.cleanupVerified,true);assert.equal(rec.state,'stopped');
+  const again=await rt.stopSession(s.sessionKey);assert.equal(again.alreadyStopped,true);
+  assert.deepEqual(m.calls.stop,[s.sessionKey],'第二次不再打服务端');
+});
+linuxTest('#1350 reaped worktree: vendor says no such session and snapshot is missing → still terminal',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:false,why:'no such session'};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  m.views.delete(s.sessionKey);
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.stopAcknowledged,false);
+  assert.equal(records(f).find(x=>x.sessionKey===s.sessionKey).cleanupVerified,true);
+});
+linuxTest('#1350 reaped worktree does not excuse a vendor session that is still running',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,false);assert.equal(r.uncertain,true);
+  const rec=records(f).find(x=>x.sessionKey===s.sessionKey);
+  assert.equal(rec.cleanupVerified,false);assert.equal(rec.state,'stopping');
+});
+// 同一路径被后来者复用：租约文件归 B，A 的记录终态、树没了 → 原来永远 busy「session no longer owns」。
+linuxTest('#1350 reaped worktree whose lease moved to a later session: settle own record, leave the lease alone',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  m.views.set(a.sessionKey,{phase:'done',text:'delivered',toolCalls:[]});
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session',state:'stopped',cleanupVerified:true}));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(a.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.foreignLease,true);
+  const rec=records(f).find(x=>x.sessionKey===a.sessionKey);
+  assert.equal(rec.cleanupVerified,true);assert.equal(rec.state,'stopped');
+  assert.equal(JSON.parse(fs.readFileSync(file)).sessionKey,'codex:later-session','别人的租约一个字不碰');
+  assert.deepEqual(m.calls.stop,[a.sessionKey]);
+});
+linuxTest('#1350 foreign lease on an existing worktree is still busy',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session'}));
+  await assert.rejects(rt.stopSession(a.sessionKey),e=>e.detail?.busy===true);
+  assert.notEqual(records(f).find(x=>x.sessionKey===a.sessionKey).cleanupVerified,true);
+});
+linuxTest('#1350 foreign lease + reaped worktree but vendor still running: record stays',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const a=await rt.startSession(spec(f));
+  const {file,value}=lease(f);
+  fs.writeFileSync(file,JSON.stringify({...value,sessionKey:'codex:later-session',recordKey:'codex:later-session'}));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(a.sessionKey);
+  assert.equal(r.ok,false);assert.equal(r.uncertain,true);
+  assert.notEqual(records(f).find(x=>x.sessionKey===a.sessionKey).cleanupVerified,true);
+});
+linuxTest('#1350 missing snapshot on an existing worktree is still unknown, not terminal',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  m.views.delete(s.sessionKey);
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,false);
+  assert.equal(records(f).find(x=>x.sessionKey===s.sessionKey).cleanupVerified,false);
 });
 // #1174 缺陷二：失败的清理若写 updatedAt=now()，看门狗每轮再试一次就把宽限窗归零。
 linuxTest('failed cleanup does not refresh the grace clock on retry',async t=>{
@@ -327,7 +421,7 @@ linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
 linuxTest('test mutation guard prevents unisolated runtime operations',async t=>{const f=fixture(t),rt=createExecutionRuntime({homeDir:f.dir,profiles:[]});await assert.rejects(rt.startSession(spec(f)),/结构性够不着真执行体|live execution mutations/);await assert.rejects(rt.stopSession(key()),/live execution mutations/);await assert.rejects(rt.resumeSession(key(),'continue'),/live execution mutations/);});
 
 test('nested Mirasim interactions and awaiting override apparent completion/incomplete',()=>{
-  const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');
+  const snapshot={phase:'done',text:'Please choose',awaiting:true,interactions:[{promptId:'p'}]};assert.equal(judgeExecutionCompletion({phase:'done',text:snapshot.text,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',incomplete:true,snapshot}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting_permission'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'waiting'}).status,'waiting_user');assert.equal(judgeExecutionCompletion({phase:'done',text:'finished',snapshot:{interactions:[{promptId:'p',done:true}]}}).status,'done');
 });
 test('completion rejects partial/empty observations; task acceptance is separate',()=>{
   assert.equal(judgeExecutionCompletion({phase:'done',text:'preview',partial:true}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:''}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:null,error:'unreadable'}).status,'unknown');assert.equal(judgeExecutionCompletion({phase:'done',text:'unfinished',incomplete:true}).status,'failed');assert.match(judgeExecutionCompletion({phase:'done',text:'turn ended'}).reason,/artifacts/);

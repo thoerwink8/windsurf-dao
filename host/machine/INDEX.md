@@ -75,6 +75,7 @@
 | D | ~/.local/state | gw-remote-probe 报警状态（报过谁/心跳，#967）；mirasim-ws-probe 探活状态（~/.local/state/mirasim-ws-probe.json，#1151，仓内脚本 scripts/mirasim-ws-probe.mjs）。运行时自建，换机不拷 |
 | A | ~/.dao/provider-breaker.json | 编排层熔断表（#843 写）。`dao.mjs breaker reset/trip` 与派前探/健康表/撞死指纹三路 applyEvent 落盘；F15 只读判 open/half-open。缺失=无熔断。不进 git |
 | D | ~/.dao/progress-watch.json | 盘面推进量账本（#1004）。指挥官 `cmdAct` 每轮调 `progress-watch.mjs` 写停滞指纹，同一指纹不重推帅位。运行态，换机不拷 |
+| D | ~/.dao/board-stuck.json | 盘面卡况，值守提问闸的主判据（#1287）。写：指挥官 `cmdAct` 每轮覆盖（`writeBoardStuck`），字段只有 `at` / `stalledRounds` / `waitingUser`。`waitingUser: null` = GitHub 没查成（不是 0）。读：dao-mode 的 UserPromptSubmit hook（`read-board.mjs`），过期 90 分钟、`waitingUser` 为 null/缺字段、或 `stalledRounds`/`waitingUser` 不是非负整数，一律当没查成、退回时长兜底。运行态，换机不拷 |
 | D | ~/.dao/board-watch.json | 看板 v0 阶段超时告警账本（#818）。`board-watch.mjs` 写「主体:阶段」指纹，同一阶段不重报到总控群。运行态，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | E | ~/.ssh | 归 `ai-gateway-stack`（装机脚本要登 VPS；`deploy/machine-check.mjs` 查 `Host myserver` 条目、私钥、连接层配置）。本仓不写装法 |
@@ -91,6 +92,8 @@
 | E | ~/.mirasim/insights | 归 `ai-gateway-stack`。按月聚合的用量账（`usage-<YYYY-MM>.ndjson`，每次调用一行：agent/model/upstreamHost/status/leg）。server-check ㉒ 读两台（orca+root）对账选型腿表（#944）；本仓只读、不写装法 |
 | E | ~/.mirasim/traffic | 归 `ai-gateway-stack`。每次上游调用一行 ndjson 的账本，按会话 uuid 分目录。判完工的交叉核读它（#880）；本仓只读、不写装法 |
 | E | ~/.mirasim/sessions | 归 `ai-gateway-stack`。mirasim 会话档案（`<agent>/<id>/record.json`）。指挥官 #1007 准入读它用 liveness 判 active/silent/done，数在途真工人；本仓只读、不写装法 |
+| E | ~/.mirasim/analytics | 归 `ai-gateway-stack`。mirasim 分析事件按天一份 ndjson（`events-<YYYY-MM-DD>.ndjson`；`turn.submit` 带 agent/model，`turn.finish` 带 ok/errorCode）。`scripts/lib/turn-outcomes.mjs` 只读它算每条腿的真实 turn 失败率喂熔断（#1342）；本仓只读、不写装法 |
+| E | ~/.mirasim/diag | 归 `ai-gateway-stack`。同上事件按 UTC 小时一份（`ev-<YYYYMMDDHH>.ndjson`），当天的事件在这里、隔天才归到 analytics。同一读者、同一用途；本仓只读、不写装法 |
 | E | ~/.miraquota | 归 `miraquota-win`。额度账本与多机同步根。本仓不写装法 |
 | E | ~/.miraquota/sync.json | 归 `miraquota-win`。账本仓地址；Contabo 上经常没有，采样器退 DEFAULT_REMOTE |
 | E | ~/.miraquota/install.json | 归 `miraquota-win`。hostname 那行的 installId。本采样器不用它 |

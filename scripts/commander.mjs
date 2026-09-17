@@ -65,13 +65,14 @@ import { checkInFlight, scanSessionProcs, worktreesRoot } from './lib/dispatch/l
 import { linkErrorKind } from './lib/proc-cwds.mjs';
 import { buildChannelCaps, countInFlightByChannel, treeChannelResolver } from './lib/channel-concurrency.mjs';
 import { loadRoutingJsonRaw, modelsFromJson, rankOrderFromTree, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
-import { loadBreaker } from './lib/provider-health.mjs';
+import { loadBreaker, probeTargetForModel } from './lib/provider-health.mjs';
 import { healthRedIds } from './lib/model-admission.mjs';
+import { readTurnEvents, pairTurnEvents, summarizeTurnOutcomes, turnTargetOf } from './lib/turn-outcomes.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
 import {
   judgeBaseFreshness, UNKNOWN,
 } from './lib/handoff-check.mjs';
-import { runBreakerCommand } from './lib/provider-breaker.mjs';
+import { runBreakerCommand, resolveTurnPolicy } from './lib/provider-breaker.mjs';
 import {
   planAddLabelCmd, planRetryDrainCmd, planOpenIssueCmd, applyDrainLedger, drainErrorText,
   OPEN_ISSUE_CARD_DEDUP_MS, openIssueDedupKey,
@@ -115,6 +116,8 @@ const ADMISSION_SAMPLE_PATH = process.env.DAO_ADMISSION_SAMPLES
 const CAPACITY_SAMPLE_PATH = process.env.DAO_CAPACITY_SAMPLES
   || join(homedir(), '.dao', 'ephemeral-lifecycle', 'samples.ndjson');
 const STALL_FILE = process.env.AGENT_STALL_WATCH_FILE || stallWatchPath(homedir());
+// 值守提问闸的主判据落点（#1287）。读侧是 dao-mode 的 UserPromptSubmit hook。
+const BOARD_STUCK_PATH = process.env.DAO_BOARD_FILE || join(homedir(), '.dao', 'board-stuck.json');
 // 大脑：一次性 pi 会话，经网关 gw/grok-4.6。
 const BRAIN_MODEL = process.env.COMMANDER_BRAIN_MODEL || 'grok-4.6';
 const BRAIN_WORKTREE = process.env.COMMANDER_BRAIN_WORKTREE || 'path:/srv/projects/windsurf-dao';
@@ -386,6 +389,40 @@ function appendCapacitySample(row, file = CAPACITY_SAMPLE_PATH) {
 }
 
 /**
+ * 每轮覆盖写「盘面卡没卡」，给值守提问闸当主判据（2026-09-15 用户拍板）。
+ *
+ * 为什么另开一个小文件，而不是让 dao-mode 的 hook 去读 situation-*.json：
+ * dao-mode 是**跨项目**的全局 hook，不该知道 windsurf-dao 的内部状态长什么样。
+ * 这里约定一份项目无关、字段极少的落点，写坏了也只影响提问闸的主判据，
+ * 读侧会退回时长/消息数兜底。
+ *
+ * 只写两个量：
+ *   stalledRounds —— 连续多少轮动作摘要完全相同（= 磨盘轮数）
+ *   waitingUser   —— 挂着「卡死/等用户」的 PR 数（只有人能解的那些）
+ *
+ * **每轮都写**，哪怕一切正常（写 0）。不写的后果是文件停在最后一次的好消息上，
+ * 读侧会把「编排已经不跑了」读成「盘面很健康」——所以读侧还配了过期判定。
+ */
+function writeBoardStuck({ situation, digestStreak, log, file = BOARD_STUCK_PATH } = {}) {
+  const gh = (situation && situation.github) || {};
+  // 没扫到 GitHub 时 waitingUser 记 null，不记 0——0 是「查过，没有」，null 是「没查成」。
+  const waitingUser = gh.scanned === true && Array.isArray(gh.prs)
+    ? gh.prs.filter((p) => (p?.labels || []).some((l) => (l?.name || l) === WAITING_USER_LABEL)).length
+    : null;
+  const row = {
+    at: (situation && situation.at) || new Date().toISOString(),
+    stalledRounds: Number(digestStreak) || 0,
+    waitingUser,
+  };
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(row, null, 2), 'utf8');
+  } catch (e) {
+    if (log) log.push(`  盘面卡况没写成：${String(e.message || e).slice(0, 60)}`);
+  }
+}
+
+/**
  * 在途数 = 现在有几棵树被会话占着（#1007）。
  *
  * 判据换成租约闸那把尺（lib/dispatch/lease.mjs 的 /proc 扫描），删掉了原来的三层取数：
@@ -464,11 +501,14 @@ function scanAdmission({ worktrees, policy } = {}) {
  *
  * checkInFlight 没查成 → ok:false，调用方把渠道在途数当没查成（本闸这轮不据它放大准入）。
  */
-function scanChannelInFlight({ models, legs, caps } = {}) {
+function scanChannelInFlight({ models, legs, caps, sessions } = {}) {
   const flight = checkInFlight();
   if (!flight.ok) return { ok: false, unscanned: true, error: flight.error, counts: {}, unattributed: [] };
   const desired = scanDesiredJobs();
-  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps });
+  // 会话名单优先：它带 cwd+model，和在途树是精确 join。派工账本那条路从分支名抠号，
+  // 实测对在途树命中 0/1（861 条未结派工里一条都对不上），留作兜底。
+  const sessionItems = sessions && sessions.scanned === true && Array.isArray(sessions.items) ? sessions.items : null;
+  const resolver = treeChannelResolver({ jobs: desired.items || [], legs, models, caps, sessions: sessionItems });
   return countInFlightByChannel(flight.trees || [], resolver);
 }
 
@@ -539,10 +579,38 @@ function ingestBreakerSignals({ now = Date.now() } = {}) {
     const inj = { now, policy: policy.breaker, hubAsk };
     const health = runBreakerCommand({ action: 'ingest-health' }, inj);
     const stall = runBreakerCommand({ action: 'ingest-stall' }, inj);
-    return { ok: true, health, stall };
+    // #1342：第三路信号——真实 turn 结果。探针一分钟一针、真流量一小时几十条；
+    // 2026-09-17 实咬：pqapi 探针 green、熔断 closed，同时 relay 上生产 turn 2 ok / 6 error。
+    const turns = runBreakerCommand({ action: 'ingest-turns' }, { ...inj, summarizeTurns: summarizeTurnsFromHome });
+    return { ok: true, health, stall, turns };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
+}
+
+/**
+ * 真实 turn 结果 → 每条腿的成败汇总（给 breaker ingest-turns 注入）。
+ * 数据源是 mirasim 的分析事件（只读），key 映射与健康表同一套（probeTargetForModel）。
+ * 读不到一律 unscanned：熔断器据此什么都不动。
+ */
+export function summarizeTurnsFromHome({ home = homedir(), now = Date.now(), policy } = {}) {
+  const windowHours = resolveTurnPolicy(policy).turnWindowHours;
+  const sinceMs = now - windowHours * 3600 * 1000;
+  const read = readTurnEvents({
+    home, sinceMs,
+    readdir: (d) => readdirSync(d),
+    readFile: (p, enc) => readFileSync(p, enc),
+    stat: (p) => statSync(p),
+  });
+  if (!read.ok) return { unscanned: true, why: read.why, summary: {}, files: [] };
+  let models = null;
+  try { models = modelsFromJson(loadRoutingJsonRaw()); } catch { models = null; }
+  const turns = pairTurnEvents(read.events);
+  const summary = summarizeTurnOutcomes(turns, {
+    sinceMs,
+    targetOf: (t) => turnTargetOf(t, { models, probeTargetForModel }),
+  });
+  return { unscanned: false, summary, files: read.files, turns: turns.length };
 }
 
 /** 载体（agent CLI）版本漂移：读进态势，好让「某条腿突然不好使」时有第一条线索。
@@ -682,12 +750,13 @@ function buildSituation({ state } = {}) {
     // #1233：顺位表和执行目录是两条真相源，谁也不问谁。审官序第 2 位（gpt-5.6-sol）在执行
     // 目录里是 unverified，起审官必被拒 → 每张按顺位选了它的复审票 drain 必失败、试满 3 次
     // 打「自动化认输」。这里按执行目录的实际可用性把顺位过一遍，**剔了谁要说得出来**。
-    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles() });
+    // #1342：判红名单先算，审官顺位要问它——目录里 available 的腿真实 turn 可以 25% 成功率。
+    healthRedModels = loadHealthRedIds(models);
+    const availability = usableReviewerOrder(reviewerSelectOrder(raw), { profiles: loadExecutionProfiles(), redIds: healthRedModels });
     reviewerOrder = availability.usable;
     reviewerOrderSkipped = availability.skipped;
     if (availability.unscanned) reviewerOrderUnscanned = availability.unscanned;
     workerOrder = rankOrderFromTree(raw, '工人', '写码');
-    healthRedModels = loadHealthRedIds(models);
     defaultWorkerModel = pickDefaultWorkerModel(raw);
     routingLegs = raw['腿'];
     channelCaps = buildChannelCaps(routingLegs); // #1145：渠道上限表（路由表腿节的并发上限字段）
@@ -707,7 +776,7 @@ function buildSituation({ state } = {}) {
   const breakerIngest = ingestBreakerSignals();
   // #1145：渠道并发第二道闸的三份快照。缺任一 decide 侧闸 inert（不改既有派工路）。
   const channelInFlight = channelCaps && channelCaps.ok
-    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps })
+    ? scanChannelInFlight({ models: routingModelRecords, legs: routingLegs, caps: channelCaps.caps, sessions })
     : null;
   const breaker = loadBreaker();
   // 载体版本漂移：只入态势与台账，不进任何拦截路径（用户 2026-09-13 拍板「只做变了要说」）。
@@ -3432,6 +3501,9 @@ function cmdAct(argv) {
   }
   runHubProjection({ situation, dryRun, log });
   if (!dryRun) {
+    writeBoardStuck({ situation, digestStreak: state.digestStreak, log });
+  }
+  if (!dryRun) {
     const ad = situation.admission || {};
     appendCapacitySample(snapshotCapacity({
       at: situation.at,
@@ -3502,4 +3574,5 @@ export {
   alreadyAppended,
   scanSessions, scanDesiredJobs,
   ensureTreeFromPr, dispatchRework,
+  writeBoardStuck,
 };

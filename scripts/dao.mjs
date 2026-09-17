@@ -240,8 +240,10 @@ import {
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { resolveModelChannel } from './lib/channel-concurrency.mjs';
-import { loadRoutingJsonRaw, reviewerSelectOrder, usableReviewerOrder } from './lib/model-routing-json.mjs';
+import { loadRoutingJsonRaw, modelsFromJson, reviewerSelectOrder, usableReviewerOrder, orderForCapacityFailover } from './lib/model-routing-json.mjs';
 import { loadExecutionProfiles } from './lib/execution-runtime.mjs';
+import { loadBreaker } from './lib/provider-health.mjs';
+import { healthRedIds } from './lib/model-admission.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { scanMirasimTrees, probeDir } from './lib/mirasim-trees.mjs';
 import { checkTreeLease } from './lib/dispatch/lease.mjs';
@@ -1524,8 +1526,46 @@ async function admitReviewPull(tickets) {
  */
 function usableReviewerIds() {
   try {
-    return usableReviewerOrder(reviewerSelectOrder(loadRoutingJsonRaw()), { profiles: loadExecutionProfiles() }).usable;
+    const raw = loadRoutingJsonRaw();
+    const profiles = loadExecutionProfiles();
+    // #1342：与指挥官同一个判据（healthRedIds）——目录里 available 的腿真实 turn 可以 25% 成功率，
+    // 熔断 open 的模型不许再被票上写着就照派。判红名单算不出（表没查成）= 不据此剔，只按目录。
+    let redIds = [];
+    try { redIds = healthRedIds({ models: modelsFromJson(raw), profiles, breaker: loadBreaker() }); } catch { redIds = []; }
+    return usableReviewerOrder(reviewerSelectOrder(raw), { profiles, redIds }).usable;
   } catch { return null; }
+}
+
+/**
+ * 容量换人候选顺位：与默认选型同一把尺（#1233 / usableReviewerIds）。
+ *
+ * 病（#1359 审官 P1）：`planReviewerOnCapacityDeath` 拿裸 `reviewerOrder` 当候选，
+ * sol 满载就落到 `gpt-5.6-terra`（availability=unverified），`resolveExecutionProfile`
+ * 拒启动，自动复审继续失败。策略顺位纯函数仍认全表；过滤只发生在这里。
+ *
+ * 执行目录读得到 → 只用 usable；没查成 → 不据此剔除。
+ * usable 为空数组 = 查成了但一个能起的都没有 → 空候选，换人显式失败。
+ */
+function capacityFailoverReviewerOrder(routing) {
+  try {
+    return orderForCapacityFailover(reviewerOrderOf(routing), { profiles: loadExecutionProfiles() });
+  } catch {
+    return reviewerOrderOf(routing);
+  }
+}
+
+function capacityFailoverCtx({ failover, workerId, routing }) {
+  if (!failover || !failover.deadError) return null;
+  const order = capacityFailoverReviewerOrder(routing);
+  return {
+    deadModelId: failover.deadModelId,
+    deadError: failover.deadError,
+    workerId,
+    models: routing.models || [],
+    passerIds: order,
+    order,
+    legEvidence: legEvidenceFor(failover.deadModelId),
+  };
 }
 
 /**
@@ -2102,16 +2142,7 @@ async function cmdReviewerCreateMirasim(args) {
   // #1122 换厂凭证：只有「上一位审官的会话死于满载/看门狗」才配得上跨厂。
   // 证据从登记在案的那个会话上取——不是一个调用方能自己声明的旗标。
   const failover = await readReviewerDeathNote(bind.runtime, args, targetRepo.ownerName || null);
-  const failoverCtx = failover.deadError ? {
-    deadModelId: failover.deadModelId,
-    deadError: failover.deadError,
-    workerId: worker.modelId,
-    models: routing.models || [],
-    passerIds: reviewerOrderOf(routing),
-    order: reviewerOrderOf(routing),
-    // 第二条凭证：死因词表认不出的新死法，靠「这条腿最近跑不完」也算数（#1290）
-    legEvidence: legEvidenceFor(failover.deadModelId),
-  } : null;
+  const failoverCtx = capacityFailoverCtx({ failover, workerId: worker.modelId, routing });
   // 标签还钉着刚死的那位时，按顺位取下一位——否则闸口永远卡在「请求的必须等于下一位」。
   const planned = planReviewerOnCapacityDeath({
     requested: picked.modelId, capacityFailover: failoverCtx,
@@ -2382,15 +2413,7 @@ async function cmdWorkerDoneMirasim(args) {
   // #1122：登记会话死于满载时按顺位换下一位，再过同厂闸。闸必须在选人之后，
   // 否则标签上的死人会把退路自己砍掉。
   const failover = await readReviewerDeathNote(bind.runtime, args, targetRepo.ownerName || null);
-  const failoverCtx = failover.deadError ? {
-    deadModelId: failover.deadModelId,
-    deadError: failover.deadError,
-    workerId: workerModel,
-    models: routing.models || [],
-    passerIds: reviewerOrderOf(routing),
-    order: reviewerOrderOf(routing),
-    legEvidence: legEvidenceFor(failover.deadModelId),
-  } : null;
+  const failoverCtx = capacityFailoverCtx({ failover, workerId: workerModel, routing });
   const planned = planReviewerOnCapacityDeath({
     requested: plan.reviewer, capacityFailover: failoverCtx,
   });

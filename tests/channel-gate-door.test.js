@@ -102,6 +102,12 @@ describe('闸的位置：源码判据（照租约闸那套锚点断言）', () =
     assert.equal(/checkChannelCapacity\(/.test(切出默认闸()), false, '门里用只读判据＝两个并发都判没满都放行');
   });
 
+  it('默认闸把会话登记喂给占槽入口（门内归因，不只决策层）', () => {
+    const body = 切出默认闸();
+    assert.match(body, /loadSessions:/, '门内 io 没接 loadSessions——账本归不掉的在途树仍当 0');
+    assert.match(body, /loadSessionAttribution\(/, '生产取数必须读登记文件，不许再 spawn 40s 名单');
+  });
+
   it('占了槽的每条出路都退槽 —— release 在 finally 里', async () => {
     const { fn } = 切出();
     assert.match(fn, /releaseSlot\(\)/, '没退槽：预占泄漏会让该渠道少一个名额到 TTL 到点');
@@ -368,6 +374,39 @@ describe('生产入口 + 真腿表：第 N+1 个同渠道会话被拦（不变�
     checkInFlight: () => ({ ok: true, trees, count: trees.length }),
     loadJobs: () => jobs,
     loadBreaker: () => null,
+  });
+
+  it('夹具：pending 模型不因同渠道「不限」腿被生产入口放行', async () => {
+    const { checkChannelCapacity, buildChannelCaps, resolveModelChannel, CONSERVATIVE_CAP } = await import(CC);
+    const raw = {
+      腿: [
+        { id: 'grok@m', 状态: '在役', 模型: 'grok-4.6', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: '不限' },
+        { id: 'sol@m', 状态: '在役', 模型: 'gpt-5.6-sol', 供应商: 'mirasim', 执行侧: 'mirasim', 并发上限: null },
+      ],
+    };
+    const caps = buildChannelCaps(raw.腿);
+    assert.equal(caps.caps.mirasim, Infinity);
+    const resolved = resolveModelChannel({ model: 'gpt-5.6-sol', legs: raw.腿, caps: caps.caps });
+    assert.equal(resolved.cap, CONSERVATIVE_CAP);
+    const jobs = [];
+    const trees = [];
+    for (let i = 1; i <= 3; i += 1) {
+      jobs.push({ pr: 9000 + i, model: 'gpt-5.6-sol' });
+      trees.push(`/root/mirasim-worktrees/windsurf-dao/dao-review-pr-${9000 + i}`);
+    }
+    const rLots = checkChannelCapacity({
+      model: 'gpt-5.6-sol', now: T0,
+      io: {
+        loadRouting: () => raw,
+        loadModels: () => [],
+        checkInFlight: () => ({ ok: true, trees, count: trees.length }),
+        loadJobs: () => jobs,
+        loadBreaker: () => null,
+      },
+    });
+    assert.equal(rLots.verdict, 'full', `3 个 gpt-5.6-sol 在途仍 free（channel=${rLots.channel} cap=${rLots.cap}）`);
+    assert.equal(rLots.reason, 'at-cap');
+    assert.equal(rLots.cap, CONSERVATIVE_CAP);
   });
 
   it('真表：gpt-5.6-sol 不因 grok/composer「不限」被生产入口放行', async () => {

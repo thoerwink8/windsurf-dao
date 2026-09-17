@@ -70,6 +70,8 @@ describe('#826 发信人 handle：--from + 协调终端兜底', () => {
     const S = await S_LOAD;
     assert.ok(S.FLAGS_BY_VERB['reviewer-create'].has('--from'), 'reviewer-create 要 --from');
     assert.ok(S.FLAGS_BY_VERB['worker-done'].has('--from'), 'worker-done 要 --from');
+    assert.ok(S.FLAGS_BY_VERB['worker-done'].has('--merge-policy'), 'worker-done 要认 --merge-policy（账本 manual 缺 reason 时才能交卷）');
+    assert.ok(S.FLAGS_BY_VERB['worker-done'].has('--merge-reason'), 'worker-done 要认 --merge-reason');
     assert.ok(!S.FLAGS_BY_VERB['reviewer-create'].has('--skip-wait'),
       '--skip-wait 是 reviewer-attach 的，create 没有');
     const unknown = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '1', '--skip-wait'], {

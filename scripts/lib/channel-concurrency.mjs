@@ -37,6 +37,7 @@ import {
   inspectAvailability, resolveBreakerPolicy, applyEvent, loadBreakerDoc, saveBreakerDoc,
 } from './provider-breaker.mjs';
 import { acquireWorktreeLock } from './dispatch-lock.mjs';
+import { classifySessionState } from './execution-states.mjs';
 
 /** 「不限」哨兵：渠道容量已验证工人无限做也没出问题（grokpool）。与「待填」区分——一个放开，一个没人填过。 */
 export const CAP_UNLIMITED = '不限';
@@ -502,13 +503,72 @@ export function modelOfTree(tree, jobs) {
 }
 
 /**
+ * 树 → 模型，走**会话名单**（精确 join，不猜）。
+ *
+ * 会话登记每条都带 `cwd` + `model`，这是「这棵树现在在跑什么模型」的所有者。
+ * 比 `modelOfTree(jobs)` 硬在两处：
+ *   · 那条路是从**分支名**里正则抠号，再回派工账本查——分支名复用（#1256）就抠错；
+ *   · 账本里的 job.dispatch 是「当初打算派什么」，会话名单是「此刻真的在跑什么」。
+ *
+ * 同一棵树有多条记录时，**只认仍占树的那几条**，再在其中取 `lastActivityAt` 最新
+ * （同值取后出现的）。登记目录会留下已终态历史：终态条的时间戳经常比当前 running
+ * 还新（收尾写盘晚于启动），按时间取最大值会把树记到已经结束的渠道，当前渠道
+ * 的 cap 就被绕过去。没有可证明当前占树的记录 → `null`，调用方走账本兜底，
+ * **不许拿历史终态猜「此刻在跑什么」**。
+ *
+ * 「仍占树」读正典 `classifySessionState`：live / reserved 才算；finished 与
+ * 读不出状态（null）都不算。`cleanupVerified === true` 也不算——收尾已核过，树已释放。
+ *
+ * @param tree      树路径
+ * @param sessions  会话名单（execution-sessions.mjs 的 sessions 数组，或形状相同的对象数组）
+ * @returns 模型 id（字符串）或 null（**没查到**，调用方按 unattributed 处理，不许硬塞进某渠道）
+ */
+export function modelOfTreeFromSessions(tree, sessions) {
+  const want = String(tree || '').replace(/\/+$/, '');
+  if (!want) return null;
+  let best = null;
+  let bestAt = -Infinity;
+  for (const s of Array.isArray(sessions) ? sessions : []) {
+    if (!s || typeof s !== 'object') continue;
+    const cwd = String(s.cwd || s.workdir || '').replace(/\/+$/, '');
+    if (!cwd || cwd !== want) continue;
+    const model = s.model == null ? '' : String(s.model).trim();
+    if (!model) continue;
+    if (!sessionOccupiesTree(s)) continue;
+    const at = Number(s.lastActivityAt ?? s.updatedAt ?? s.seatAt);
+    const ts = Number.isFinite(at) ? at : -Infinity;
+    if (ts >= bestAt) { bestAt = ts; best = model; }
+  }
+  // 模型 id 上可能带执行修饰（实测见过 `composer-2.5[fast=true]`）。渠道按 id 本体查，
+  // 修饰不参与——不剥掉就查不到腿，整棵树白白掉进 unattributed。
+  return best ? best.replace(/\[[^\]]*\]\s*$/, '') : null;
+}
+
+/**
+ * 这条登记是否还能当「此刻占着这棵树」的证据。
+ * 读不出状态 ≠ 在跑；已核过收尾 ≠ 还占着。
+ */
+function sessionOccupiesTree(session) {
+  if (session.cleanupVerified === true) return false;
+  const cls = classifySessionState(session);
+  return cls === 'live' || cls === 'reserved';
+}
+
+/**
  * 造「树 → 渠道」解析器。**门里和决策层共用这一个**，不许各造一份：
  * 分子（在途数怎么归渠道）与分母（上限挂在哪个渠道）用同一把尺，否则闸会对着错的格子判满。
+ *
+ * 取模型的两条路，**会话名单优先**（2026-09-14）：
+ *   ① sessions —— 精确 join（cwd 对 cwd），是「此刻在跑什么」的所有者；
+ *   ② jobs    —— 从分支名抠号再回派工账本，是「当初打算派什么」的近似。
+ * 实测 ② 单独用时命中率 0/1：在途树 `dao-review-pr-1232` 在 861 条未结派工里一条都对不上，
+ * 于是渠道在途数恒为 `{}`，渠道闸对在途**永远不判满**——一道判不出满的闸等于没有闸。
+ * ② 留着是兜底（老夹具与没有会话名单的调用方），不是主路。
  */
-export function treeChannelResolver({ jobs, legs, models, caps } = {}) {
+export function treeChannelResolver({ jobs, legs, models, caps, sessions } = {}) {
   const capTable = caps && typeof caps === 'object' ? caps : (buildChannelCaps(legs).caps || {});
   return (tree) => {
-    const model = modelOfTree(tree, jobs);
+    const model = modelOfTreeFromSessions(tree, sessions) || modelOfTree(tree, jobs);
     if (!model) return null;
     const r = resolveModelChannel({ model, legs, models, caps: capTable });
     return r ? r.channel : null;
@@ -567,21 +627,43 @@ export function applyChannelFailure(doc, { target, now, roundMs = ROUND_MS, why,
 // ── 薄壳：门里用的生产入口（这两个碰盘，上面全是纯函数）──────────────────────
 
 /**
- * 门里的渠道上限判据（生产入口）。**取数与判据分离**：本函数只取数，判定全在
- * judgeChannelForModel。三态出口，与租约闸一一对应：
- *   { ok:true, verdict:'free' }              → 放行
- *   { ok:true, verdict:'full', reason, why } → 满员/熔断，调用方按**背压**排队下轮
- *   { ok:false, unscanned:true, error }      → 没查成，调用方 fail-close 拒起
- *
- * 哪些算「没查成」（收紧）：路由表读不出来、/proc 在途数读不出来。
- * 哪些**故意不收紧**：`model` 没给、或这个模型在腿表/选型里都认不出渠道。
- *   理由：那不是「读失败」，是**结构性缺席**（调用方没钉模型 / 模型没登记）。
- *   收紧的代价是**所有不带 model 的会话全起不来**（dao start、临时会话），
- *   那是全盘阻塞；而漏拦的代价有兜底——未登记模型在 commander 侧被
- *   assessDispatchModel 的 model-not-in-routing 拦着，机器总闸 admission 也仍在。
+ * 门内用的可持久化归因源：读 `~/.dao/execution/sessions/*.json`。
+ * 登记条带 workdir + model + 状态，形状喂给 `modelOfTreeFromSessions`
+ * （cwd / model / lastActivityAt / state / cleanupVerified）。状态必须带上：丢掉的话
+ * 下游只能按时间戳猜，历史终态会盖住当前在途。
+ * 目录不在、读不动、单条坏 JSON → 跳过（与 loadJobs 同：归不到渠道进 unattributed，不把整闸 fail-close）。
  */
+export function loadSessionAttribution({ home = os.homedir(), dir } = {}) {
+  const root = dir || join(home, '.dao', 'execution', 'sessions');
+  let names;
+  try { names = readdirSync(root); }
+  catch { return []; }
+  const out = [];
+  for (const name of Array.isArray(names) ? names : []) {
+    if (!String(name).endsWith('.json')) continue;
+    let rec;
+    try { rec = JSON.parse(String(readFileSync(join(root, String(name)), 'utf8'))); }
+    catch { continue; }
+    if (!rec || typeof rec !== 'object') continue;
+    const cwd = String(rec.workdir || rec.cwd || '').replace(/\/+$/, '');
+    const model = String(rec.model || rec.requestedModel || rec.actualModel || '').trim();
+    if (!cwd || !model) continue;
+    out.push({
+      cwd,
+      model,
+      lastActivityAt: rec.updatedAt ?? rec.lastActivityAt ?? rec.startedAt ?? rec.createdAt ?? null,
+      // 原样带给 classifySessionState / sessionOccupiesTree，不在这里编默认状态。
+      state: rec.state ?? null,
+      phase: rec.phase ?? null,
+      observedState: rec.observedState ?? null,
+      cleanupVerified: rec.cleanupVerified ?? null,
+    });
+  }
+  return out;
+}
+
 /**
- * 取数：把判渠道要的四份快照读出来。**故意放在锁外**——它是读，且是本段里最慢的一步
+ * 取数：把判渠道要的快照读出来。**故意放在锁外**——它是读，且是本段里最慢的一步
  * （/proc 扫几百个 pid）。放锁里会把临界区从毫秒级拉长，而 #849 那把锁的等待是**忙自旋**
  * （dispatch-lock.mjs 的 sleep 是 `while (Date.now() < t) {}`），临界区一长，等待者就烧 CPU，
  * 在这台常年负载 19-20 的机器上比原问题更糟。
@@ -613,8 +695,16 @@ export function readChannelFacts({ model, io = {} } = {}) {
     return { ok: false, unscanned: true, error: `渠道在途数没查成（${flight.error || '在途判据没给'}）` };
   }
   const jobs = typeof io.loadJobs === 'function' ? io.loadJobs() : [];
+  // 会话登记优先：门里没有指挥官那份已扫名单，不能再起一次 40s 的 listSessions。
+  // 同等准确的可持久化源是 ~/.dao/execution/sessions/*.json（workdir+model 实测全覆盖）。
+  // 没注入 / 读失败 → []，回落账本；归不掉进 unattributed，不把整闸 fail-close。
+  let sessions = [];
+  try {
+    const loaded = typeof io.loadSessions === 'function' ? io.loadSessions() : [];
+    if (Array.isArray(loaded)) sessions = loaded;
+  } catch { sessions = []; }
   const counted = countInFlightByChannel(flight.trees || [], treeChannelResolver({
-    jobs, legs: raw['腿'], models, caps: capsDoc.caps,
+    jobs, legs: raw['腿'], models, caps: capsDoc.caps, sessions,
   }));
   if (!counted.ok) return { ok: false, unscanned: true, error: `渠道在途数没查成（${counted.error}）` };
   const breaker = typeof io.loadBreaker === 'function' ? io.loadBreaker() : null;
@@ -643,6 +733,20 @@ function shapeVerdict(verdict, { unattributedTrees = 0, reservations = 0 } = {})
   };
 }
 
+/**
+ * 门里的渠道上限判据（生产入口）。**取数与判据分离**：本函数只取数，判定全在
+ * judgeChannelForModel。三态出口，与租约闸一一对应：
+ *   { ok:true, verdict:'free' }              → 放行
+ *   { ok:true, verdict:'full', reason, why } → 满员/熔断，调用方按**背压**排队下轮
+ *   { ok:false, unscanned:true, error }      → 没查成，调用方 fail-close 拒起
+ *
+ * 哪些算「没查成」（收紧）：路由表读不出来、/proc 在途数读不出来。
+ * 哪些**故意不收紧**：`model` 没给、或这个模型在腿表/选型里都认不出渠道。
+ *   理由：那不是「读失败」，是**结构性缺席**（调用方没钉模型 / 模型没登记）。
+ *   收紧的代价是**所有不带 model 的会话全起不来**（dao start、临时会话），
+ *   那是全盘阻塞；而漏拦的代价有兜底——未登记模型在 commander 侧被
+ *   assessDispatchModel 的 model-not-in-routing 拦着，机器总闸 admission 也仍在。
+ */
 export function checkChannelCapacity({
   model, now = Date.now(), io = {}, breakerPolicy,
 } = {}) {

@@ -2288,6 +2288,7 @@ function collectCandidates(situation) {
 
   // 短命会话：终态立刻停。树留着，下一轮差集再起短会话。
   // 放在候选列表前面，act 先杀再派，避免租约还握在死人口里。
+  // waiting_user 不是 incomplete：人还没回话，停了等于把问题扔掉，下一轮对账会当「人没了」重派（#1174 T8）。
   //
   // 旧口径只停 incomplete（mirasim「一轮跑完在等下一句」）。Codex 审官交卷后
   // phase=done，app-server 还占着渠道——2026-09-15 实咬：#1279 审官已落判定，
