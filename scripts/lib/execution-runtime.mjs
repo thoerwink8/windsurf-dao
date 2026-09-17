@@ -321,7 +321,12 @@ export function createExecutionRuntime(opts={}) {
       }
     }
     if(!target||!path.isAbsolute(target))return {ok:false,unscanned:true,why:'session workdir unavailable'};
-    target=fs.realpathSync(target);
+    // 树已经被回收（reap-tree 跑在 stop 之前，或会话早就过期）：realpath 会 ENOENT 直接抛，
+    // 一个字都没落盘 → 下一轮同一条再来。2026-09-18 实咬（#1350）：117 条终态会话每轮全部
+    // 在这一行抛掉，stop-session 100% 空转。树没了不是「没查成」，是「残留进程已无处可占」：
+    // 照走清退，让 cleanupVerified 落下去，指挥官下一轮就不再点它。
+    let treeGone=false;
+    try{target=fs.realpathSync(target);}catch(e){if(e?.code!=='ENOENT')throw e;treeGone=true;target=path.resolve(target);}
     const file=leaseFile(target),cleanupToken=crypto.randomUUID();
     const claimed=await fence(()=>{
       const held=readJson(file);meta=metadata(key)||meta;
@@ -348,7 +353,9 @@ export function createExecutionRuntime(opts={}) {
         if(!before||before.missing||before.partial||!before.phase)return {ok:false,uncertain:true,why:'vendor acceptance remains unconfirmed'};
       }
       const stopped=await rt.stopSession(key);
-      if(!stopped?.ok)return stopped||result;
+      // 树没了时 stop 回执不是判据（服务端可能早已归档这条会话、回「查无此会话」）；
+      // 下面的进程扫描 + 终态核实才是。stop 失败又树在，仍照旧返回。
+      if(!stopped?.ok&&!(treeGone&&claimed.meta.backend!=='acp'))return stopped||result;
       if(claimed.meta.backend==='acp')result=stopped.verified===true||stopped.cleanup?.verified===true?{...stopped,ok:true}:{ok:false,why:'ACP cleanup unverified'};
       else {
         result=await reapMirasim(target);
@@ -362,9 +369,13 @@ export function createExecutionRuntime(opts={}) {
             // 在正典里是终态、却不在那个手打清单 → 验不过 → 会话与租约双双回写 stopping
             // → 这棵树永久起不了新会话（2026-09-12 实咬）。
             if(TERMINAL_STATUS.has(judgeExecutionCompletion(view).status)){terminal=true;break;}
+            // 树没了 + 服务端查无此会话 + 零进程 = 没有任何东西可清。listSessions 那条路对同一形状
+            // 的判词就是 gone（「明确的 missing 记成 gone」），这里不另起一套。树在时 missing 仍是 unknown。
+            if(treeGone&&view?.missing===true){terminal=true;break;}
             if(i+1<(opts.stopVerifyTries??3))await wait(opts.cleanupPollMs??100);
           }
           if(!terminal)result={ok:false,uncertain:true,why:'vendor stop is not terminal; lease retained'};
+          else if(treeGone)result={...result,treeGone:true,stopAcknowledged:stopped?.ok===true};
         }
       }
       return result;
