@@ -124,6 +124,15 @@ describe('一 PR 一审官闸', () => {
     // 放行的那一条：同厂（GPT）、在顺位表里 → 换得成。这正是今天卡死 10 个审官的那一格。
     const sol = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-sol', routing });
     assert.ok(sol.ok === true && sol.switched === true && sol.modelId === 'gpt-5.6-sol', JSON.stringify(sol));
+    // #1359 加席：terra / astra 同属 GPT、已在顺位表 → 同厂换顺位同样放行（不靠满载例外）。
+    const terra = S.assertReviewerSeat({ reviewerId: 'gpt-5.6-terra', routing });
+    assert.equal(terra.ok, true, JSON.stringify(terra));
+    assert.equal(terra.switched, true, JSON.stringify(terra));
+    assert.equal(terra.modelId, 'gpt-5.6-terra', JSON.stringify(terra));
+    const astra = S.assertReviewerSeat({ reviewerId: 'gpt-6-astra', routing });
+    assert.equal(astra.ok, true, JSON.stringify(astra));
+    assert.equal(astra.switched, true, JSON.stringify(astra));
+    assert.equal(astra.modelId, 'gpt-6-astra', JSON.stringify(astra));
 
     // 故意违规样本①：异厂——路由表自己写着「备选登记，不顶审官位」，必须仍被拦。
     // 样本取 grok-4.6：2026-09-12 网关退役后，顺位表里剩下的异厂只剩它（kimi-k3/glm-5.2 已随网关禁用，
@@ -174,11 +183,12 @@ describe('一 PR 一审官闸', () => {
     assert.equal(sol.ok, true, JSON.stringify(sol));
     assert.equal(sol.switched, true);
 
-    // 上一位 sol 也死于满载 → 下一档跨厂 grok，且不是工人那一厂。
+    // 上一位 astra（GPT 席最后一位）也死于满载 → 下一档跨厂 grok，且不是工人那一厂。
+    // #1359 在 sol 后面插入了 terra/astra：再拿 sol 当死人去点 grok 是跳级。
     // 工人钉 claude-opus-5：若工人本身就是 grok，grok 与工人同厂会被挡（那正是 #679 同厂闸，另一条线）。
     const cross = S.assertReviewerSeat({
       reviewerId: 'grok-4.6', routing,
-      capacityFailover: { deadModelId: 'gpt-5.6-sol', deadError: DEAD, workerId: 'claude-opus-5' },
+      capacityFailover: { deadModelId: 'gpt-6-astra', deadError: DEAD, workerId: 'claude-opus-5' },
     });
     assert.equal(cross.ok, true, JSON.stringify(cross));
     assert.equal(cross.crossVendor, true);
