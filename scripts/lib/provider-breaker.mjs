@@ -381,8 +381,8 @@ export function ingestTurnOutcomes(summary, breakerDoc, policy, now) {
       type: bad ? 'failure' : 'success',
       target: key,
       why: bad
-        ? `真实 turn 上游失败率 ${pct}%（${upstream}/${total}，另有 ${Number(row.self) || 0} 条是我们自己停的不计）≥ ${tp.turnFailRatePct}%`
-        : `真实 turn 上游失败率 ${pct}%（${upstream}/${total}）< ${tp.turnFailRatePct}%`,
+        ? `真实 turn 上游失败率 ${pct}%（${upstream}/${total}，另有 ${Number(row.self) || 0} 条是我们自己停的、${Number(row.stream) || 0} 条是断流（#1386），均不计）≥ ${tp.turnFailRatePct}%`
+        : `真实 turn 上游失败率 ${pct}%（${upstream}/${total}，断流 ${Number(row.stream) || 0} 条不计）< ${tp.turnFailRatePct}%`,
     }, policy, ms);
     if (doc.targets[key] && row.lastTs) doc.targets[key].lastTurnAt = row.lastTs;
   }
