@@ -37,7 +37,7 @@ export function countSpawnCalls(source) {
   return (String(source).match(SPAWN_CALL_RE) || []).length;
 }
 
-/** tests/foo.test.js → foo.test.spawn-budget.json */
+/** tests/land.test.js → land.test.spawn-budget.json */
 export function declFileForTest(testFile) {
   return String(testFile).replace(/\.(js|mjs|cjs)$/i, DECL_SUFFIX);
 }
@@ -49,7 +49,7 @@ export function stemFromDeclFile(declFile) {
   return name.slice(0, -DECL_SUFFIX.length);
 }
 
-/** tests/foo.test.js → foo.test */
+/** tests/land.test.js → land.test */
 export function stemFromTestFile(testFile) {
   return String(testFile).replace(/\.(js|mjs|cjs)$/i, '');
 }
