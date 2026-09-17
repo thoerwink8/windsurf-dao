@@ -6,13 +6,13 @@
 
 ## 判绿前必核清单（逐条打勾，缺一不许绿）
 
-1. **审的就是这份代码**：`gh pr view <PR号> --json headRefOid` 取 A，树里 `git rev-parse HEAD` 取 B，
+1. **审的就是这份代码**：`node scripts/gh-as.mjs reviewer -- pr view <PR号> --json headRefOid` 取 A，树里 `git rev-parse HEAD` 取 B，
    A==B 才开审；对不上先停手报。判绿只对这个 commit 有效——合并前再比一次，变了重审。
 2. **被审文件真在树里**：`git show HEAD --stat` 里能看到 PR 改的文件。看不到 = 你的树建错了，
    报出去，**禁止凭 diff 想象内容**（#541 假审：树里没代码，审官编了行号和执行结果）。
 3. **检查真跑过**：目标仓有检查命令（本仓 `node scripts/dao-check.mjs`）就必须有它在**被审 commit 上**
    的结果。证据二选一，**优先前者**：
-   - **CI 已在本 commit 跑过**：引用 `gh pr checks <PR>` 的结论与 run URL 即可，**不要自己重跑**。
+   - **CI 已在本 commit 跑过**：引用 `node scripts/gh-as.mjs reviewer -- pr checks <PR>` 的结论与 run URL 即可，**不要自己重跑**。
      本仓 `.github/workflows/check.yml` 跑的是 `dao-check.mjs --all-tests`（显式全量），
      与审官自己跑的默认档覆盖相同。CI 在第三方环境由机器跑、审官改不动，**比审官自述更硬**。
    - CI 没跑 / 没有 CI / 对结论存疑：自己在被审 commit 上跑，正文贴**命令 + 输出末行**。

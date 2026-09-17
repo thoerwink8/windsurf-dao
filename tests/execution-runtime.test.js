@@ -228,6 +228,45 @@ linuxTest('exclusive stopping reservation covers backend stop and process cleanu
 linuxTest('empty processes plus weak stop acknowledgement cannot clear a queued vendor session',async t=>{
   const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));m.views.set(s.sessionKey,{phase:'queued',text:''});const r=await rt.stopSession(s.sessionKey);assert.equal(r.ok,false);assert.equal(lease(f).value.state,'stopping');await assert.rejects(rt.startSession(spec(f)),e=>e.detail?.busy===true);
 });
+// #1350：树先被 reap-tree 收掉、会话终态、cleanupVerified 仍 false → stopSession 在 realpath 上 ENOENT
+// 直接抛，什么都不落盘；指挥官每轮把同一批（实咬 117 条）再点一遍，stop-session 100% 空转。
+linuxTest('#1350 stop on a reaped worktree verifies cleanup instead of throwing ENOENT',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));
+  m.views.set(s.sessionKey,{phase:'done',text:'delivered',toolCalls:[]});
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.treeGone,true);assert.equal(r.stopAcknowledged,true);
+  const rec=records(f).find(x=>x.sessionKey===s.sessionKey);
+  assert.equal(rec.cleanupVerified,true);assert.equal(rec.state,'stopped');
+  const again=await rt.stopSession(s.sessionKey);assert.equal(again.alreadyStopped,true);
+  assert.deepEqual(m.calls.stop,[s.sessionKey],'第二次不再打服务端');
+});
+linuxTest('#1350 reaped worktree: vendor says no such session and snapshot is missing → still terminal',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:false,why:'no such session'};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  m.views.delete(s.sessionKey);
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,true);assert.equal(r.stopAcknowledged,false);
+  assert.equal(records(f).find(x=>x.sessionKey===s.sessionKey).cleanupVerified,true);
+});
+linuxTest('#1350 reaped worktree does not excuse a vendor session that is still running',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  fs.rmSync(f.workdir,{recursive:true,force:true});
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,false);assert.equal(r.uncertain,true);
+  const rec=records(f).find(x=>x.sessionKey===s.sessionKey);
+  assert.equal(rec.cleanupVerified,false);assert.equal(rec.state,'stopping');
+});
+linuxTest('#1350 missing snapshot on an existing worktree is still unknown, not terminal',async t=>{
+  const f=fixture(t),m=fakeRuntime({async stopSession(){return {ok:true};}}),rt=runtime(f,{mirasimRuntime:m});
+  const s=await rt.startSession(spec(f));
+  m.views.delete(s.sessionKey);
+  const r=await rt.stopSession(s.sessionKey);
+  assert.equal(r.ok,false);
+  assert.equal(records(f).find(x=>x.sessionKey===s.sessionKey).cleanupVerified,false);
+});
 // #1174 缺陷二：失败的清理若写 updatedAt=now()，看门狗每轮再试一次就把宽限窗归零。
 linuxTest('failed cleanup does not refresh the grace clock on retry',async t=>{
   let t0=1_700_000_000_000;
