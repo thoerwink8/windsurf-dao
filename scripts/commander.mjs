@@ -1653,6 +1653,7 @@ function execReapTicket(action, { state, dryRun, say }) {
   try { rmSync(path); removed = true; }
   catch (e) { if (e?.code !== 'ENOENT') { say(`  回收死票失败：${String(e.message || e)}`); return { ok: false, error: String(e.message || e) }; } }
   // 按 .pr 字段反查，不照抄键格式——键长什么样是 commander-verbs 的事，手打一份迟早对不上。
+  // #1217：这里是按主体清掉全部版本，不是取一条。死票的旧 head 账都该走。
   if (state && state.drainLedger) {
     for (const [k, v] of Object.entries(state.drainLedger)) {
       if (Number(v?.pr) === Number(action.pr)) delete state.drainLedger[k];

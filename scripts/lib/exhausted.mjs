@@ -162,6 +162,8 @@ export function planExhaustedPush({ prs = [], ledger = {}, epoch = null } = {}) 
       continue;
     }
     const key = exhaustedPushKey(n, head, epoch);
+    // #1217：键 pushed:<pr>@<head>[@e<epoch>]，一张 PR 多条。本处问「这一格推过没有」
+    // → 字典直查当前键。不要按 pr 取第一条（插入序最老，#1143 刷了 135 条评论）。
     if (book[key]) {
       skipped.push({ pr: n, why: 'already-pushed', key });
       continue;
@@ -270,9 +272,10 @@ export function planExhaustedLabelClear({
     if (names.includes(WAITING_USER_LABEL)) { skipped.push({ pr: n, why: 'waiting-user' }); continue; }
     const head = typeof pr.headRefOid === 'string' && pr.headRefOid.trim() ? pr.headRefOid.trim() : null;
     if (!head) { skipped.push({ pr: n, why: 'head-unscanned' }); continue; }  // 没查成不动手（摘错要重认输一轮）
-    // 找这张 PR 的认输记录。取 **at 最新**的那条，不是 Object.keys 里第一条——
-    // 一张 PR 在账本里有几十条（#1118 有 32 条），Object.keys 的顺序是插入顺序，
-    // 拿第一条 = 拿最老的，比较出来的「工人推了新东西」是拿 7 天前的 head 比的。
+    // #1217：键带 @head/@epoch，一张 PR 多条。本处要比「最新认输的 head」，
+    // 按 at 取最新——字典直查当前键会把「账本里只有旧 head」的真·新局面判丢
+    //（issue 三问第 2 条：两种语义要分开）。禁止按主体 find 第一条：那是插入序
+    // 最老（#1143 被刷 135 条评论；#1118 有 32 条，拿第一条 = 拿 7 天前的 head）。
     const mine = Object.keys(book)
       .filter((k) => { const v = book[k]; return v && Number(v.pr) === Number(n); })
       .map((k) => ({ key: k, at: Date.parse(book[k].at || '') || 0, head: String(book[k].head || '') }))
