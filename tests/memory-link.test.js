@@ -22,7 +22,11 @@ const fs = require("fs");
 const path = require("path");
 
 const REPO = path.resolve(__dirname, "..");
-const SANDBOX = path.join(REPO, "_tmp", "memlink-sandbox");
+// 沙盒名带进程号：两份 dao-check 并发时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, "_tmp"), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, "_tmp", "memlink-sandbox-"));
+// 名字独占之后没人替它清了（原先靠下一次运行的 rmSync 顶掉同名目录），退出时自己收
+process.on("exit", () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });
 
 function makeRoot(name) {
   const root = path.join(SANDBOX, "roots", name);

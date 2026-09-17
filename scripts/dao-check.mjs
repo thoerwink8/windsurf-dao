@@ -223,6 +223,7 @@ import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
 import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
+import { tapFailuresEvidence } from './lib/tap-failures.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -244,22 +245,8 @@ function fail(what, howToFix, evidence) {
 function green(line) { greens.push(line); }
 function skip(line) { skips.push(line); }
 
-/** 取测试失败行：只认 TAP 的 not ok 行（node --test 的输出形态），不按关键词匹配——
- * 测试名里带 fail/错误/红 字样的 ok 行不许冒充失败证据（#566 排查实证）。
- * 一套红多条就全列，不许只报第一条（只报头一条会让人以为修完就绿了，然后再红一轮）。
- * 退出非 0 却没标准 not ok 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
-function extractFailLines(output) {
-  const lines = String(output || '').split(/\r?\n/);
-  const fails = lines.filter(l => /^\s*not ok /.test(l));
-  if (fails.length) return fails.map(l => l.trim().replace(/^not ok \d+ - /, '').slice(0, 200));
-  return null;
-}
-
-function failLinesEvidence(output) {
-  const fails = extractFailLines(output);
-  if (fails) return `测试输出 ${fails.length} 条红：\n${fails.join('\n')}`;
-  return '退出非 0 但没扫到标准 not ok 行——测试崩了或输出格式变了，本次没查成，需人工复现';
-}
+// 测试红的证据（哪几条、各自为什么）在 scripts/lib/tap-failures.mjs：随机红当场那份输出是唯一现场，
+// 只留测试名不留断言正文会让人只能重猜（#1358）。
 
 /** 从 node --test 的 TAP 汇总抽计数（#608：自造 check() runner 退役，改 node:test）。
  * 每个检查必须自带「零样本报红」：tests=0 就报红。「数到 0」和「没看到样本」输出一样，
@@ -457,7 +444,7 @@ async function runTests() {
         green(`测试 ${f}（${tap.pass ?? '?'} 过 / ${tap.fail ?? 0} 红 / ${tap.skipped ?? 0} 跳过 / ${tap.tests} 条）`);
       }
     } else {
-      fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
+      fail(`测试红：${f}`, `复现：node --test tests/${f}`, tapFailuresEvidence(out));
     }
   }
   reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
