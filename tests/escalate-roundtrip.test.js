@@ -405,6 +405,58 @@ describe('#1240 残余：已关无对象 → reopen，同轮二次幂等', () =>
     assert.equal(cmds.some((c) => c.includes('reopen')), true);
     assert.equal(state.escalateLedger[key].issue, 1305);
   });
+
+  it('重开前读取没查成（失败/非 JSON/缺 closedAt）→ 不调 gateway、不写账本', async () => {
+    const { escalate, escalateDedupKey } = await CMD;
+    const key = escalateDedupKey(ACTION);
+    const booked = { issue: 1305, objects: [], at: '2026-09-15T21:00:00Z' };
+    const cases = [
+      ['view 失败', { ok: false, error: 'gh 超时' }],
+      ['非 JSON', { ok: true, out: '<html>502' }],
+      ['CLOSED 缺 closedAt', { ok: true, out: JSON.stringify({ state: 'CLOSED' }) }],
+      ['CLOSED closedAt=null', { ok: true, out: JSON.stringify({ state: 'CLOSED', closedAt: null }) }],
+    ];
+    for (const [name, viewResult] of cases) {
+      const state = {
+        escalateLedger: { [key]: { ...booked } },
+        escalateStreak: { unscanned: 5 },
+        hubSeen: { [`esc:${key}`]: new Date().toISOString() },
+      };
+      const ledgerBefore = JSON.stringify(state.escalateLedger);
+      const cmds = [];
+      const opens = [];
+      const logs = [];
+      const r = escalate(ACTION, {
+        state,
+        dryRun: false,
+        say: (m) => logs.push(m),
+        gh: (argv) => {
+          if (argv[0] === 'issue' && argv[1] === 'view') {
+            const jsonFlag = argv.indexOf('--json');
+            const fields = jsonFlag >= 0 ? String(argv[jsonFlag + 1] || '') : '';
+            // bookedState 用 --json state，必须成功返回 CLOSED 才能走进 reopenEscalation
+            if (fields.includes('closedAt')) return viewResult;
+            return { ok: true, out: 'CLOSED\n' };
+          }
+          if (argv[0] === 'search') return { ok: true, out: '[]' };
+          return { ok: false, error: `没夹具：${argv.join(' ')}` };
+        },
+        cmd: (argv) => { cmds.push(argv.slice()); return { ok: true, out: '{}\n' }; },
+        send: () => ({ ok: true }),
+        openIssue: (x) => { opens.push(x); return { ok: true, number: 42 }; },
+      });
+      assert.equal(opens.length, 0, `${name}: 不许 create`);
+      assert.equal(cmds.length, 0, `${name}: 不许调 gateway，实际：${cmds.map((c) => c.join(' ')).join(' || ')}`);
+      assert.notEqual(r.reopened, true, `${name}: 不得报 reopened，实际 ${JSON.stringify(r)}`);
+      assert.equal(r.skipped, 'reopen-unscanned', `${name}: 应跳过，实际 ${JSON.stringify(r)}`);
+      assert.equal(JSON.stringify(state.escalateLedger), ledgerBefore, `${name}: 不得写账本`);
+      assert.equal(
+        logs.some((l) => /没查成/.test(l) && /不写账本/.test(l)),
+        true,
+        `${name}: 日志应明说没查成且不写账本：${logs.join(' | ')}`,
+      );
+    }
+  });
 });
 
 // 审官第 4 轮红②后半：同样一份旧账本喂给 escalate()，不许再开一张。

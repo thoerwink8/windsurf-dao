@@ -3156,6 +3156,35 @@ function escalate(action, { state, dryRun, say,
 }
 
 /**
+ * 重开前读 issue 的 state + closedAt。
+ * 没查成 / 非 JSON / 非 OPEN 且拿不到 closedAt → unscanned（调用方 fail-closed）。
+ */
+function parseReopenIssueView(viewed) {
+  if (!viewed || viewed.ok !== true) {
+    return { unscanned: true, error: (viewed && viewed.error) || 'issue view 失败' };
+  }
+  const raw = String(viewed.out || '').trim();
+  if (!raw) return { unscanned: true, error: 'issue view 回执为空' };
+  let j;
+  try {
+    j = JSON.parse(raw);
+  } catch {
+    return { unscanned: true, error: 'issue view 回执不可解析' };
+  }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) {
+    return { unscanned: true, error: 'issue view 回执不是对象' };
+  }
+  const st = String(j.state || '').toUpperCase();
+  if (st === 'OPEN') return { open: true };
+  if (st !== 'CLOSED') {
+    return { unscanned: true, error: `state=${st || '空'}，无法确认 CLOSED` };
+  }
+  const closedAt = j.closedAt == null ? '' : String(j.closedAt).trim();
+  if (!closedAt) return { unscanned: true, error: 'CLOSED 但缺 closedAt' };
+  return { closedAt };
+}
+
+/**
  * 已关同因单的重开入口（#1240 残余）。
  * 幂等键 = issue + reason + closedAt：同一次关闭的同轮连发去重；下一次再关再开换新键。
  */
@@ -3165,27 +3194,27 @@ function reopenEscalation({ action, state, key, dryRun, say, send, cmd, gh, numb
     return { ok: true, dryRun: true, issue: number, reopened: true };
   }
   // closedAt 进键：同一轮两次 reopen 同键；关了又开一轮必须是新键，否则又撞旧账静默。
+  // 状态或 closedAt 没查成不许用 unknown 占位——同键
+  // commander-escalate:reopen:<issue>:<reason>:unknown 会让真重开被旧账静默。
   const viewed = gh(['issue', 'view', String(number), '--repo', REPO, '--json', 'state,closedAt'], 20000);
-  let closedAt = 'unknown';
-  if (viewed.ok) {
-    try {
-      const j = JSON.parse(String(viewed.out || '').trim() || '{}');
-      const st = String(j.state || '').toUpperCase();
-      if (st === 'OPEN') {
-        // 已是 OPEN（同轮第二发或别人先重开了）——写回账本，不再调 reopen。
-        const prevAt = state.escalateLedger?.[key]?.at;
-        state.escalateLedger[key] = {
-          issue: number,
-          at: prevAt || nowIso(),
-          objects: Array.isArray(objects) ? objects : [],
-        };
-        say(`  报帅重开 #${number}（已是 OPEN，不重复写）：${action.why}`);
-        askEscalateCard({ state, key, number, action, dryRun, say, send });
-        return { ok: true, number, issue: number, reopened: true, replay: true };
-      }
-      if (j.closedAt) closedAt = String(j.closedAt);
-    } catch { /* 回执不可解析时 closedAt 留 unknown，同轮仍可去重 */ }
+  const parsed = parseReopenIssueView(viewed);
+  if (parsed.unscanned) {
+    say(`  报帅重开前读 #${number} 没查成（本轮不调 gateway 也不写账本，下轮再试）：${parsed.error}`);
+    return { ok: true, skipped: 'reopen-unscanned', unscanned: true, error: parsed.error };
   }
+  if (parsed.open) {
+    // 已是 OPEN（同轮第二发或别人先重开了）——写回账本，不再调 reopen。
+    const prevAt = state.escalateLedger?.[key]?.at;
+    state.escalateLedger[key] = {
+      issue: number,
+      at: prevAt || nowIso(),
+      objects: Array.isArray(objects) ? objects : [],
+    };
+    say(`  报帅重开 #${number}（已是 OPEN，不重复写）：${action.why}`);
+    askEscalateCard({ state, key, number, action, dryRun, say, send });
+    return { ok: true, number, issue: number, reopened: true, replay: true };
+  }
+  const closedAt = parsed.closedAt;
   const body = reopenCommentBody({ reason: action.reason, objects, why, at: nowIso() });
   ensureDir(STATE_DIR);
   writeFileSync(join(STATE_DIR, `escalate-reopen-${Date.now()}.md`), body, 'utf8');
