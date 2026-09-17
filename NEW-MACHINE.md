@@ -781,6 +781,38 @@ claude mcp add fetch -s user -- "$env:USERPROFILE\.local\bin\mcp-server-fetch.ex
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
 
+## 13a. 查资料的本机搜索 CLI（ddgs）——每台机器都要装
+
+内置 WebSearch 跑在 API 上游，慢或断的时候本机一点办法没有。`ddgs` 走本机出网、不碰那条链，
+所以 docs-lookup skill 把它定为搜索的默认路。**两台机器都装**：
+
+```bash
+uv tool install ddgs            # 落 ~/.local/bin/ddgs(.exe)
+ddgs text -q "关键词" -m 5 -nc
+```
+
+Linux 上若没有 `uv`：`curl -LsSf https://astral.sh/uv/install.sh | sh`（以服务用户跑，别用 root——
+root 会在服务用户家目录里留下 root 属主文件）。
+
+- **`~/.local/bin` 不在 PATH 上**（两台机器都不在，`uv tool install` 装完自己会警告这件事）。
+  调用写全路径，或跑一次 `uv tool update-shell`。
+- **`-o json` 是存文件不是打印**，会在当前目录落 `text_<query>_<时间戳>.json`；在共用主树里跑等于
+  留垃圾（2026-09-17 实咬，落进了仓根）。要机器读就解析 stdout。
+- `-b google` 两台机器都回 0 条，别用。
+- **验**：`node scripts/onboard.mjs --dry-run` 会报 `search-cli-missing`（只报不修，装包要出网）。
+
+后端实测（2026-09-17，同一句查询，`-m 3`）：
+
+| 后端 | Windows 帅位 | 法国 VPS |
+|---|---|---|
+| `brave` | **1.36s** | 2.28s |
+| `duckduckgo` | 3.26s | **1.74s** |
+| `bing` | 3.86s | 5.54s |
+| `google` | 0 条 | 0 条 |
+| 默认 `auto` | 7.7s | 3.34s |
+
+哪家最快按机器不同，别把某台的数字当通例；不确定就用默认 `auto`，它会自己换家。
+
 ## 13b. Linux 服务器上的浏览器（2026-09-06 装，Ubuntu 24.04 实测）
 
 Windows 侧默认有 Chrome，playwright MCP 装上就能用；**Linux 无头机上一个浏览器都没有**，
