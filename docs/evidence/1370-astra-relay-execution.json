@@ -1,0 +1,27 @@
+{
+  "issue": 1370,
+  "taskId": "1370-astra-relay-execution",
+  "sessionKey": "codex:fecfd156-556e-4763-9989-1bfdf1fbf2c3",
+  "observedAt": "2026-09-17T20:42:04.000Z",
+  "backend": "mirasim",
+  "agent": "codex",
+  "model": "gpt-6-astra",
+  "workdir": "/tmp/astra-verify",
+  "phase": "done",
+  "numTurns": null,
+  "error": null,
+  "toolCalls": [
+    {
+      "id": "exec-9fb6b620-9a81-4e55-96af-a60a43d7dd44",
+      "name": "shell",
+      "status": "done"
+    }
+  ],
+  "probe": {
+    "file": "proof-astra.txt",
+    "expectedToken": "ASTRA_VERIFY_TOKEN_eb837b",
+    "tokenEchoed": true,
+    "text": "ASTRA_VERIFY_TOKEN_eb837b"
+  },
+  "why": "此前 availability 只有 inventory 级证据（relay 报 configured/ok 且清单列了模型），执行目录据此拒绝起审官（#1370：新席位要真跑过才准用，而真跑一次被同一道闸拦着）。本次把 profiles 复制到临时文件、只在取证进程内存里放行（DAO_EXECUTION_PROFILES），用 dao.mjs start 起真实会话读出 proof token，与 1174-luna/sol-relay-execution 同口径。目录本身由本 PR 写回。"
+}

@@ -12,7 +12,7 @@
 // 只是要看得见总量。降预算是显式动作——改这个数字本身就是一次记账。
 
 /** 当前允许的 spawnSync 调用总数。第二刀每做一批就把这个数改小，不许只加不减。 */
-export const SPAWN_BUDGET = 161;
+export const SPAWN_BUDGET = 162;
 
 /**
  * 数的是**调用**，不是「提到」。
@@ -50,7 +50,8 @@ export const BUDGET_NOTE = '第二刀做到 134；合入 dao now 测试 +3、再
   + '写的就是这 3 处，当时只记了账没落测试；本次测试随 #1226 真正进 master，账实对齐。'
   + '#1227 合入 master 后 review-rounds 跨仓 CLI 黑盒 +1（reviewer-create / worker-done '
   + '必须真走 dao.mjs 才能断言读的是目标仓策略，进程内跑等于不验接线），预算 160；'
-  + '#1359 审官加席 CLI 黑盒 +1（reviewer-create --dry-run 必须真走 dao.mjs 才能看见新席位进选型），预算 161。'
+  + '#1359 审官加席 CLI 黑盒 +1（reviewer-create --dry-run 必须真走 dao.mjs 才能看见新席位进选型），预算 161；'
+  + '#1174 T7 返工 --only 跳过退役池仍留旧绿：主流程 CLI 黑盒 +1（gw-remote-probe --only 必须真起进程写健康表，进程内跑等于不验落盘），预算 162。'
   + '剩下的是真建树/真发请求的动词，进程内跑会共享模块状态互相污染，转它们要先隔离状态；目标 ≤40';
 
 /**

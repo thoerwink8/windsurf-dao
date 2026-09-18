@@ -24,6 +24,16 @@ function payload(r) {
 }
 
 const GPT_SEATS = ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra'];
+const NEW_SEAT_PROFILES = new Set(['codex-relay-gpt-5.6-terra', 'codex-relay-gpt-6-astra']);
+
+// 「unverified 不当绿」测的是闸的性质，不是目录今天的状态：terra/astra 2026-09-18 已拿到执行证据
+// （docs/evidence/1370-*-relay-execution.json，#1370），活目录里它们是 available。下面这些用例把两席
+// 在夹具里钉回 unverified，闸才有东西可拦；读活目录的正控另起一条（见「已探过的席位进 usable」）。
+function withUnverifiedNewSeats(profiles) {
+  return profiles.map((p) => (NEW_SEAT_PROFILES.has(p.id)
+    ? { ...p, availability: { ...p.availability, status: 'unverified', evidenceKind: 'inventory', sourceId: 'fixture-inventory', reason: 'fixture: 未探过' } }
+    : p));
+}
 
 describe('#1359 审官顺位加 terra/astra 两席', () => {
   it('reviewerOrder 变成 5 席：前 4 席 GPT，grok 仍在最后', async () => {
@@ -104,7 +114,7 @@ describe('#1359 审官顺位加 terra/astra 两席', () => {
     const { usableReviewerOrder, loadRoutingPolicy } = await POLICY_LOAD;
     const { loadExecutionProfiles } = await RUNTIME_LOAD;
     const order = loadRoutingPolicy().reviewerOrder;
-    const profiles = loadExecutionProfiles();
+    const profiles = withUnverifiedNewSeats(loadExecutionProfiles());
     const r = usableReviewerOrder(order, { profiles });
     assert.equal(r.unscanned, undefined, '执行目录必须读得到  →  ' + JSON.stringify(r));
     assert.equal(r.usable.includes('gpt-5.6-terra'), false, 'terra unverified 不当绿  →  ' + JSON.stringify(r));
@@ -117,12 +127,28 @@ describe('#1359 审官顺位加 terra/astra 两席', () => {
     assert.match(astraSkip.why, /unverified/);
   });
 
+  it('已探过的席位进 usable：活目录里 terra/astra 带执行级证据（#1370），四席 GPT 全可用', async () => {
+    const { usableReviewerOrder, loadRoutingPolicy } = await POLICY_LOAD;
+    const { loadExecutionProfiles } = await RUNTIME_LOAD;
+    const profiles = loadExecutionProfiles();
+    for (const id of NEW_SEAT_PROFILES) {
+      const p = profiles.find((x) => x.id === id);
+      assert.equal(p.availability.evidenceKind, 'execution', id);
+      const evidence = JSON.parse(fs.readFileSync(path.join(REPO, 'docs', 'evidence', p.availability.sourceId + '.json'), 'utf8'));
+      assert.equal(evidence.probe.tokenEchoed, true, id + ' 的证据文件必须记着 token 回显');
+      assert.equal(evidence.sessionKey.startsWith('codex:'), true, id);
+    }
+    const r = usableReviewerOrder(loadRoutingPolicy().reviewerOrder, { profiles });
+    assert.equal(r.unscanned, undefined, JSON.stringify(r));
+    for (const seat of GPT_SEATS) assert.equal(r.usable.includes(seat), true, seat + ' 应可用  →  ' + JSON.stringify(r));
+  });
+
   it('生产容量换人：未验证席位不得被选中（sol 满载不得落到 terra/astra）', async () => {
     const slot = await SLOT_LOAD;
     const { loadRoutingPolicy, orderForCapacityFailover, usableReviewerOrder } = await POLICY_LOAD;
     const { loadExecutionProfiles, resolveExecutionProfile } = await RUNTIME_LOAD;
     const policy = loadRoutingPolicy();
-    const profiles = loadExecutionProfiles();
+    const profiles = withUnverifiedNewSeats(loadExecutionProfiles());
     const DEAD = 'Selected model is at capacity. Please try a different model.';
     const base = {
       deadModelId: 'gpt-5.6-sol',
@@ -165,12 +191,12 @@ describe('#1359 审官顺位加 terra/astra 两席', () => {
     assert.match(String(got.why), /换厂无合法目标，留在原席位重试/);
   });
 
-  it('生产容量换人：已验证的下一位仍能换到（claude 工人 + sol 满载 → grok）', async () => {
+  it('生产容量换人：已验证的下一位仍能换到（claude 工人 + sol 满载、terra/astra 未探 → grok）', async () => {
     const slot = await SLOT_LOAD;
     const { loadRoutingPolicy, orderForCapacityFailover } = await POLICY_LOAD;
     const { loadExecutionProfiles } = await RUNTIME_LOAD;
     const policy = loadRoutingPolicy();
-    const order = orderForCapacityFailover(policy.reviewerOrder, { profiles: loadExecutionProfiles() });
+    const order = orderForCapacityFailover(policy.reviewerOrder, { profiles: withUnverifiedNewSeats(loadExecutionProfiles()) });
     const got = slot.planReviewerOnCapacityDeath({
       requested: 'gpt-5.6-sol',
       capacityFailover: {
@@ -191,7 +217,7 @@ describe('#1359 审官顺位加 terra/astra 两席', () => {
     const { loadRoutingPolicy, orderForCapacityFailover } = await POLICY_LOAD;
     const { loadExecutionProfiles } = await RUNTIME_LOAD;
     const policy = loadRoutingPolicy();
-    const order = orderForCapacityFailover(policy.reviewerOrder, { profiles: loadExecutionProfiles() });
+    const order = orderForCapacityFailover(policy.reviewerOrder, { profiles: withUnverifiedNewSeats(loadExecutionProfiles()) });
     const DEAD = 'Selected model is at capacity. Please try a different model.';
     const got = assertReviewerSeat({
       reviewerId: 'grok-4.6',

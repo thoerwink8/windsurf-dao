@@ -1,0 +1,27 @@
+{
+  "issue": 1370,
+  "taskId": "1370-terra-relay-execution",
+  "sessionKey": "codex:23ddf60d-3e84-494d-b19f-1e8aeec40ec3",
+  "observedAt": "2026-09-17T20:42:04.000Z",
+  "backend": "mirasim",
+  "agent": "codex",
+  "model": "gpt-5.6-terra",
+  "workdir": "/tmp/terra-verify",
+  "phase": "done",
+  "numTurns": null,
+  "error": null,
+  "toolCalls": [
+    {
+      "id": "call_Ub82gWZNgcKazmuMbkG2yelg",
+      "name": "shell",
+      "status": "done"
+    }
+  ],
+  "probe": {
+    "file": "proof-terra.txt",
+    "expectedToken": "TERRA_VERIFY_TOKEN_1190bb",
+    "tokenEchoed": true,
+    "text": "TERRA_VERIFY_TOKEN_1190bb"
+  },
+  "why": "此前 availability 只有 inventory 级证据（relay 报 configured/ok 且清单列了模型），执行目录据此拒绝起审官（#1370：新席位要真跑过才准用，而真跑一次被同一道闸拦着）。本次把 profiles 复制到临时文件、只在取证进程内存里放行（DAO_EXECUTION_PROFILES），用 dao.mjs start 起真实会话读出 proof token，与 1174-luna/sol-relay-execution 同口径。目录本身由本 PR 写回。"
+}

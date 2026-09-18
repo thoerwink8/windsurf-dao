@@ -1911,7 +1911,9 @@ function collectCandidates(situation) {
         return true;
       }
 
-      if (readyToLand) return true;
+      // #1404：readyToLand 不是「已经合并」。CONFLICTING 必须落到下面既有维修入口。
+      // UNKNOWN 等非 CONFLICTING 仍不盲修（没查成 ≠ 有冲突）。
+      if (readyToLand && mergeableState !== 'CONFLICTING') return true;
       return false;
     };
 
