@@ -15,6 +15,7 @@ g() { git -C "$REPO" "$@"; }   # 本进程就是 orca，不再需要 sudo -u
 # 仓内单元变更后推到 /etc。钩子没装 / sudoers 没放行时只打日志，不挡同步——
 # 报警面在 dao-check ㊳（活单元对不上就红）。每次都跑：钩子是后装的，
 # 只在「本轮 diff 命中 systemd」时跑会把已经合进去、还没上机的那一次漏掉。
+# 钩子只装 manifest 登记过的特权行；merge 失败的工作树不当部署源。
 install_units() {
   sudo -n /usr/local/sbin/dao-install-units \
     || echo "单元上机没成（钩子未装或 sudoers 未放行）。仓内 host/machine/systemd 改了不等于机器上已装。装钩子：sudo bash $REPO/scripts/install-dao-sync.sh"
@@ -54,7 +55,7 @@ g fetch -q --prune origin
 if ! g merge -q --ff-only origin/master 2>"$ERRF"; then
   echo "主树无法快进（本地有未推提交或与远端发散），不动：$(head -c 200 "$ERRF")"
   relink
-  install_units
+  # 不调 install_units：失败时工作树可能脏或发散，不能当 root 部署源。
   exit 0
 fi
 after=$(g rev-parse HEAD)

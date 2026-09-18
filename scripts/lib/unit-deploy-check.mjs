@@ -11,7 +11,8 @@
 // 读不到（没 systemd、权限、单元不在这台机器上）= 没查成，不得与「一致」同形。
 //
 // 上机不走「root 解释仓内可写脚本」（2026-09-05 堵过的提权路）：
-// dao-sync 只 sudo -n /usr/local/sbin/dao-install-units，那份是 root 自己的副本。
+// dao-sync 只 sudo -n /usr/local/sbin/dao-install-units，那份是 root 自己的副本，
+// 并且只装与内钉 manifest 对得上的特权行（User/ExecStart 等）。
 
 import { calendarOverlap } from './on-calendar.mjs';
 

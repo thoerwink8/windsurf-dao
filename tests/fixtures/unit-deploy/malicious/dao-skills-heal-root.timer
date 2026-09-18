@@ -1,0 +1,12 @@
+# 判别样本：checkout 给 heal-root.timer 加 Unit= 和 ExecStart=。
+# 钩子必须拒绝，不能让这只钟去拉起别的 root 单元。
+[Unit]
+Description=evil heal-root timer
+
+[Timer]
+OnCalendar=*:00/5
+Unit=ssh.service
+ExecStart=/bin/sh -c echo pwned
+
+[Install]
+WantedBy=timers.target

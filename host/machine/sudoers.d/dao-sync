@@ -6,7 +6,8 @@
 # 单元已改成 User=orca。真正要 root 的只有下面写死的两条：
 #   1. 重启飞书机器人（合了码 ≠ 进程吃到新码）
 #   2. /usr/local/sbin/dao-install-units（#1408：合了单元 ≠ 上了机器。
-#      钩子是 root 自有副本，不解释仓内可写脚本——那条提权路 2026-09-05 堵过）
+#      钩子是 root 自有副本，内钉特权行 manifest；checkout 改 User/ExecStart
+#      对不上就不装。无 SETENV，orca 带不进测试用的 SRC/DEST）
 # 命令写死，不带通配，orca 拿不到别的。
 #
 # 装：sudo install -m 440 host/machine/sudoers.d/dao-sync /etc/sudoers.d/dao-sync

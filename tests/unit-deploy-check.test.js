@@ -9,7 +9,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'unit-deploy-check.mjs');
@@ -209,16 +211,22 @@ describe('unit-deploy-check 夹具与接线', () => {
     assert.match(helper, /REPO=\/srv\/projects\/windsurf-dao/);
     assert.match(helper, /install -m 644/);
     assert.match(helper, /systemctl daemon-reload/);
+    assert.match(helper, /<<'MANIFEST'/);
+    assert.match(helper, /拒绝特权行漂移/);
     assert.equal(/node\s+["']?\$\{?REPO/.test(helper), false, '钩子不许 node 仓内脚本');
     assert.equal(/bash\s+["']?\$\{?REPO/.test(helper), false, '钩子不许 bash 仓内脚本');
+    assert.equal(/source\s+["']?\$\{?REPO/.test(helper), false, '钩子不许 source 仓内文件');
 
     const sudoers = fs.readFileSync(path.join(REPO, 'host', 'machine', 'sudoers.d', 'dao-sync'), 'utf8');
     const rules = sudoers.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#'));
     assert.equal(rules.some((r) => r === 'orca ALL=(root) NOPASSWD: /usr/local/sbin/dao-install-units'), true);
     assert.equal(rules.some((r) => r === 'orca ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart feishu-triage'), true);
+    assert.equal(rules.some((r) => /SETENV/.test(r)), false, 'sudoers 不许 SETENV，否则测试用 SRC/DEST 能进生产钩子');
 
     const sync = fs.readFileSync(path.join(REPO, 'scripts', 'server-sync.sh'), 'utf8');
     assert.match(sync, /sudo -n \/usr\/local\/sbin\/dao-install-units/);
+    const failBlock = sync.split('if ! g merge')[1].split('after=')[0];
+    assert.equal(/^\s*install_units\b/m.test(failBlock), false, 'merge --ff-only 失败不得当 root 部署源');
 
     const install = fs.readFileSync(path.join(REPO, 'scripts', 'install-dao-sync.sh'), 'utf8');
     assert.match(install, /\/usr\/local\/sbin\/dao-install-units/);
@@ -234,5 +242,82 @@ describe('unit-deploy-check 夹具与接线', () => {
     const syncCal = S.parseOnCalendar(fs.readFileSync(syncPath, 'utf8'));
     const r = S.classifyHealSyncOverlap({ healCal, syncCal });
     assert.equal(r.state, 'ok', r.detail);
+  });
+});
+
+function runInstallUnits(src, dest) {
+  return spawnSync('bash', [path.join(REPO, 'scripts', 'dao-install-units.sh')], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DAO_INSTALL_UNITS_TEST: '1',
+      DAO_INSTALL_UNITS_SRC: src,
+      DAO_INSTALL_UNITS_DEST: dest,
+    },
+  });
+}
+
+describe('上机钩子的不可变 manifest', () => {
+  it('manifest 登记的单元名与仓内 *.service/*.timer 一一对应', () => {
+    const helper = fs.readFileSync(path.join(REPO, 'scripts', 'dao-install-units.sh'), 'utf8');
+    const names = [...helper.matchAll(/^### (\S+)/mg)].map((m) => m[1]).sort();
+    const files = fs.readdirSync(UNIT_DIR).filter((f) => /\.(service|timer)$/.test(f)).sort();
+    assert.ok(files.length > 0, '一个单元都没扫到 = 没查成');
+    assert.deepEqual(names, files);
+  });
+
+  it('仓内现行单元全部能装（特权行与 manifest 对得上）', () => {
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-units-ok-'));
+    try {
+      const r = runInstallUnits(UNIT_DIR, dest);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(/拒绝/.test(r.stderr), false, r.stderr);
+      const got = fs.readdirSync(dest).filter((f) => /\.(service|timer)$/.test(f)).sort();
+      const files = fs.readdirSync(UNIT_DIR).filter((f) => /\.(service|timer)$/.test(f)).sort();
+      assert.deepEqual(got, files);
+    } finally {
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('OnCalendar 变了、特权行没变 → 仍装', () => {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-units-cal-'));
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-units-cal-dest-'));
+    try {
+      const timer = 'dao-skills-heal-root.timer';
+      const text = fs.readFileSync(path.join(UNIT_DIR, timer), 'utf8')
+        .replace(/^OnCalendar=.*$/m, 'OnCalendar=*:03/5');
+      fs.writeFileSync(path.join(src, timer), text);
+      const r = runInstallUnits(src, dest);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /上机 1 个单元/);
+      assert.match(fs.readFileSync(path.join(dest, timer), 'utf8'), /OnCalendar=\*:03\/5/);
+    } finally {
+      fs.rmSync(src, { recursive: true, force: true });
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it('恶意 service/timer 样本不能把 root 命令装进 DEST', () => {
+    const src = path.join(FIX, 'malicious');
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-units-evil-'));
+    try {
+      fs.copyFileSync(path.join(UNIT_DIR, 'dao-skills-heal-root.service'), path.join(dest, 'dao-skills-heal-root.service'));
+      fs.copyFileSync(path.join(UNIT_DIR, 'dao-skills-heal-root.timer'), path.join(dest, 'dao-skills-heal-root.timer'));
+      const r = runInstallUnits(src, dest);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stderr, /拒绝特权行漂移：dao-skills-heal-root\.service/);
+      assert.match(r.stderr, /拒绝特权行漂移：dao-skills-heal-root\.timer/);
+      assert.match(r.stderr, /拒绝未登记单元：evil-root\.service/);
+      const service = fs.readFileSync(path.join(dest, 'dao-skills-heal-root.service'), 'utf8');
+      assert.match(service, /ExecStart=\/usr\/bin\/node \/usr\/local\/lib\/dao-skills-heal\/skills-heal\.mjs/);
+      assert.equal(/\/bin\/sh/.test(service), false);
+      const timer = fs.readFileSync(path.join(dest, 'dao-skills-heal-root.timer'), 'utf8');
+      assert.equal(/^Unit=/m.test(timer), false);
+      assert.equal(/^ExecStart=/m.test(timer), false);
+      assert.equal(fs.existsSync(path.join(dest, 'evil-root.service')), false);
+    } finally {
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
   });
 });
