@@ -228,7 +228,13 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       const checkedOut = await git(['checkout', '--detach', artifact.head], { cwd: tree.path });
       if (!gitOk(checkedOut)) throw fail('SERVICE_UNAVAILABLE', 'review checkout failed');
       const { key, status, view } = await runSession(task, tree.path, reviewerPrompt({ task, artifact, checks }), 'reviewer');
-      if (status !== 'done') return { completed: false, head: artifact.head, sessionKey: key, identityVerified: false };
+      if (status !== 'done' || view?.error) {
+        // 分开两件事：**上游容量/断流**是瞬时故障（503、限流、超时），判可重试；
+        // 会话正常结束但输出解析不了才是「审查没做完」，那要人看提示词，不该重试。
+        const detail = String(view?.error || `reviewer session ${status}`).slice(0, 200);
+        if (/503|capacity|rate.?limit|429|service unavailable|timed?\s*out|超时|容量/i.test(detail)) throw fail('SERVICE_UNAVAILABLE', `reviewer leg unavailable: ${detail}`);
+        return { completed: false, head: artifact.head, sessionKey: key, identityVerified: false };
+      }
       const parsed = parseFindings(view?.text);
       if (!parsed) return { completed: false, head: artifact.head, sessionKey: key, identityVerified: false };
       const reportedModel = view?.snapshot?.model || view?.model || null;
