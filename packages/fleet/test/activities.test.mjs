@@ -137,6 +137,18 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /unknown after grace/);
     assert.equal(calls.some(([kind]) => kind === 'stopSession'), true, '宽限用尽要停掉会话让树');
   });
+  it('宽限轮不再叠 sleep：每轮只等一次 waitForCompletion（复核实咬 P1）', async () => {
+    const sleeps = [];
+    const { activities } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: 'unknown' }),
+        readSession: async () => ({ phase: 'running', text: '' }),
+      },
+      deps: { sleepFn: async ms => { sleeps.push(ms); }, unknownWaitRounds: 3 },
+    });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /unknown after grace/);
+    assert.deepEqual(sleeps, [], '宽限里不许再 sleep——waitForCompletion 自己会等到点，叠了就是 2× 墙钟');
+  });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({
       git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),

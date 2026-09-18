@@ -1,4 +1,5 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import { DEFAULT_UNKNOWN_WAIT_MS, DEFAULT_UNKNOWN_WAIT_ROUNDS } from './limits.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -53,7 +54,7 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = 120000, unknownWaitRounds = 3, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -120,16 +121,17 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     }
     // unknown 是「这次没读到终态」，不是「会话失败」——多等几轮再判，
     // 不许把还在干活的会话当失败处理（g6 实咬：判 unknown 后立刻收尾 = 取消在跑的会话）。
+    // 每轮只等一次 waitForCompletion：它自己就会轮询到 timeoutMs 才返回（execution-runtime
+    // 对未定态睡满），这里再 sleep 一次会把墙钟变成 2×，活动预算就盖不住（复核实咬 P1）。
     for (let attempt = 0; attempt < unknownWaitRounds && settled?.status === 'unknown'; attempt += 1) {
-      await sleep(unknownWaitMs);
       settled = await runtime.waitForCompletion(key, { timeoutMs: unknownWaitMs });
       view = await runtime.readSession(key);
       // 宽限里变成等人也要立刻上报：晚到的 waiting_user 若漏过这里会被折成可重试，
       // 重试再问一遍同一句——#1442 掐掉的死循环会回来（复核实咬）。
       if (isWaiting(settled, view)) throw fail('WAITING_USER', `${role} session is waiting for an answer`, { sessionKey: key, role });
     }
-    // 只有终态才收尾：租约闸是「一棵树同时只许一个会话」，会话不释放下一轮起不来；
-    // 但非终态时收尾＝取消仍在跑的会话，宁可把未定抛给上层重试，也不杀活人。
+    // 只有终态才收尾；未知态先等满宽限（不许把还在干活的会话当失败），
+    // 宽限用尽仍未知才停掉让树——两件事分开写，别再合成「非终态一律不动」。
     if (settled?.status === 'done' || settled?.status === 'failed') {
       const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
       if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `session release unverified: ${String(released?.why || '').slice(0, 120)}`);
@@ -233,7 +235,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         const checks = rollup.map(check => ({ name: check.name || check.context, status: check.status, conclusion: check.conclusion ?? null }));
         const settled = head === artifact.head && checks.length > 0 && checks.every(check => check.status === 'COMPLETED');
         if (settled || Date.now() >= deadline) return { scanned: true, head, checks };
-        await sleep(15000);
+        await sleepFn(15000);
       }
     },
     async review(task, artifact, { checks }) {
