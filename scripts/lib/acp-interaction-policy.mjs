@@ -36,6 +36,10 @@ export const WORKTREE_EXECUTE_PREFIXES = Object.freeze([
   Object.freeze(['file']),
   Object.freeze(['tree']),
   Object.freeze(['node', '--test']),
+  // 跑仓库自己的测试（改 CI 接线的任务要看测试计数）。**不放 npm ci / npm install**：
+  // 那要联网、有供应链面；装依赖由系统在 prepare 阶段按 lock 做好。
+  Object.freeze(['npm', 'test']),
+  Object.freeze(['npm', 'run']),
 ]);
 
 export const WORKTREE_TOOL_KINDS = Object.freeze(['read', 'edit', 'execute']);
