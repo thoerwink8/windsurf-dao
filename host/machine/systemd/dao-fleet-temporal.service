@@ -1,0 +1,29 @@
+[Unit]
+Description=DAO fleet Temporal server (single node; SQLite persistence)
+Documentation=https://docs.temporal.io/production-deployment
+After=network-online.target
+Wants=network-online.target
+
+# 装法（幂等，要 root）：bash scripts/install-fleet.sh
+#
+# 为什么是「单节点 + SQLite」：第一版要在真实任务上验证闭环，先要一个**能持久化、能重启恢复**的
+# 服务端；Temporal 官方明写 `temporal server start-dev` 不是生产形态（跳过部分 HTTP 安全校验、
+# 单进程）。本机只有一个编排节点，先用它把闭环跑通；多节点高可用要换 PostgreSQL 持久化的
+# 生产部署（temporal server 二进制 + 数据库），那是下一步，**不要**把这里的形态当成终点。
+#
+# 数据落 <家目录>/.dao/temporal/temporal.db（D 类运行态，不进 git，换机不拷）。
+
+[Service]
+Type=simple
+User=orca
+Group=orca
+WorkingDirectory=/home/orca
+Environment=HOME=/home/orca
+ExecStart=/usr/local/bin/temporal server start-dev --ip 127.0.0.1 --port 7233 --db-filename /home/orca/.dao/temporal/temporal.db --log-level warn
+Restart=always
+RestartSec=5
+# 只绑回环：跨节点接入要显式设计（隧道或私网），不许默认对外
+# NoNewPrivileges 留给后续生产部署统一收口
+
+[Install]
+WantedBy=multi-user.target
