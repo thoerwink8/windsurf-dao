@@ -1938,6 +1938,7 @@ import {
 import {
   stopWorkerDoneSessions,
   workerDoneCleanupFailExtra,
+  settleWorkerDoneCleanup,
 } from './lib/dispatch/worker-done-cleanup.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
@@ -2677,13 +2678,9 @@ async function cleanupAfterWorkerDone(runtime, identity, receipts = {}) {
   } catch (e) {
     fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, workerDoneCleanupFailExtra(null, receipts));
   }
-  if (!stopped || stopped.ok !== true) {
-    fail(
-      `交卷收尾未完成：${(stopped && (stopped.error || stopped.why)) || '没查成'}`,
-      workerDoneCleanupFailExtra(stopped, receipts),
-    );
-  }
-  return stopped;
+  const settled = settleWorkerDoneCleanup(stopped, receipts);
+  if (!settled.ok) fail(settled.error, settled.extra);
+  return settled.stopped;
 }
 
 async function cmdSessionStop(args) {

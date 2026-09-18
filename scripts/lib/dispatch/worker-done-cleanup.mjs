@@ -246,3 +246,18 @@ export function workerDoneCleanupFailExtra(stopped, receipts = {}) {
     reviewPending: receipts.reviewPending ?? null,
   };
 }
+
+/**
+ * 把清退结果收成 CLI 出口：ok:false / 没查成 → 失败（非零）且 extra 里留评论回执。
+ * 主树拒绝清退是 ok:true（没停任何人），不是失败。
+ */
+export function settleWorkerDoneCleanup(stopped, receipts = {}) {
+  if (!stopped || stopped.ok !== true) {
+    return {
+      ok: false,
+      error: `交卷收尾未完成：${(stopped && (stopped.error || stopped.why)) || '没查成'}`,
+      extra: workerDoneCleanupFailExtra(stopped, receipts),
+    };
+  }
+  return { ok: true, stopped };
+}

@@ -226,6 +226,55 @@ describe('部分失败假成功', () => {
     assert.equal(extra.reviewPending.path, '/tmp/12.json');
     assert.equal(extra.stopped.ok, false);
   });
+
+  it('没传 PR 身份：不 list、不 stop，ok:false（#1322 两参旧调用也够不着前缀误杀）', async () => {
+    const { stopWorkerDoneSessions } = await CLEAN;
+    const rt = fakeRuntime(SESSIONS);
+    const r = await stopWorkerDoneSessions(rt, MAIN, {}, {
+      stopOne: async (key, workdir) => rt.stopSession(key, { workdir }),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.stopCount, 0);
+    assert.equal(rt.listed, 0);
+    assert.deepEqual(rt.stops, []);
+  });
+
+  it('settle：stop ok:false / 清单没查成 → CLI 失败形态，评论回执仍在', async () => {
+    const { settleWorkerDoneCleanup, stopWorkerDoneSessions } = await CLEAN;
+    const receipts = {
+      postedIssue: { ok: true },
+      postedPr: { ok: true },
+      action: 'queued-for-review',
+      reviewPending: { path: '/tmp/12.json' },
+    };
+    const rt = fakeRuntime(SESSIONS, { stopOk: false });
+    const stopped = await stopWorkerDoneSessions(rt, WORKER, IDENTITY, {
+      stopOne: async (key, workdir) => rt.stopSession(key, { workdir }),
+    });
+    const failed = settleWorkerDoneCleanup(stopped, receipts);
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /交卷收尾未完成/);
+    assert.equal(failed.extra.commentPosted, true);
+    assert.equal(failed.extra.cleanup, 'failed');
+    assert.equal(failed.extra.postedIssue.ok, true);
+    assert.equal(failed.extra.postedPr.ok, true);
+    assert.equal(failed.extra.reviewPending.path, '/tmp/12.json');
+
+    const listed = await stopWorkerDoneSessions(rt, WORKER, IDENTITY, {
+      listSessions: async () => ({ ok: false, error: '上游不可用' }),
+    });
+    const unscanned = settleWorkerDoneCleanup(listed, receipts);
+    assert.equal(unscanned.ok, false);
+    assert.equal(unscanned.extra.commentPosted, true);
+
+    const refused = settleWorkerDoneCleanup(
+      { ok: true, refused: true, refuseReason: 'main-tree', stopCount: 0, stopped: [] },
+      receipts,
+    );
+    assert.equal(refused.ok, true);
+    assert.equal(refused.stopped.refused, true);
+  });
 });
 
 describe('热路接线', () => {
@@ -240,5 +289,11 @@ describe('热路接线', () => {
     assert.equal(calls.length, 3);
     assert.equal(/stopSessionsAtCwd\(\s*[\w.]+\s*,\s*process\.cwd\(\)\s*\)/.test(dao), false);
     assert.match(dao, /workerDoneCleanupFailExtra/);
+    assert.match(dao, /settleWorkerDoneCleanup/);
+    const cleanupStart = dao.indexOf('async function cleanupAfterWorkerDone');
+    const cleanupEnd = dao.indexOf('async function cmdSessionStop', cleanupStart);
+    const cleanupBody = dao.slice(cleanupStart, cleanupEnd);
+    assert.match(cleanupBody, /settleWorkerDoneCleanup/);
+    assert.match(cleanupBody, /fail\(settled\.error,\s*settled\.extra\)/);
   });
 });
