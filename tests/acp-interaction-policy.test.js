@@ -53,6 +53,11 @@ test('default worktree rule grants git add inside the tree and refuses rm', asyn
   assert.equal(ok.permission, 'worktree_scoped');
   assert.equal(acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`rm -rf .`' } }, { cwd: workdir }), null);
   assert.ok(acpPermissionScope(rule, { toolCall: { kind: 'edit', rawInput: { path: path.join(workdir, 'a.txt') } } }, { cwd: workdir }));
+  // g2 实咬的命令原文：交卷前的存在性自查（test -f）必须被默认策略放行。
+  const precommit = acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`git status --porcelain && git diff --stat && git log -5 --oneline && test -f packages/fleet/README.md && echo "README_EXISTS"`' } }, { cwd: workdir });
+  assert.equal(precommit.permission, 'worktree_scoped');
+  // 同一套默认策略：前缀命中不等于读树外凭据放行。
+  assert.equal(acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`cat /home/orca/.dao/apps/marshal.json`' } }, { cwd: workdir }), null);
 });
 
 test('default policy requires an absolute workdir', async () => {
