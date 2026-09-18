@@ -262,7 +262,10 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
       const words = commandWords(segment);
       if (!words) return null;
       if (words[0] === 'cd') {
-        if (words.length !== 2 || canonicalPath(words[1], cwd) !== cwd) return null;
+        // 只许 cd 进**本树**（含子目录）：`cd <树>/packages/fleet && npm test` 是正常巡检，
+        // 早先只认树根，导致这类命令整句被拒（g21 实咬）。树外路径一律拒。
+        const target = words.length === 2 ? canonicalPath(words[1], cwd) : null;
+        if (!target || !(target === cwd || target.startsWith(cwd + path.sep))) return null;
       } else {
         // `git -C <dir> <subcommand>` names its own directory; that directory must be
         // the managed workdir, and the prefix is matched against the command without
