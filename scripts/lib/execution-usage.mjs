@@ -224,6 +224,7 @@ export function normalizeUsage({ agent, source = 'unknown', event = {}, context 
   const callIds = unique([callId, label(root.callId), label(root.relayCallId), s === 'mirasim-ledger' && sessionId && eventId?.startsWith(`${sessionId}:`) ? eventId.slice(sessionId.length + 1) : null]);
   const profileId = label(first(c.profileId, root.profileId));
   const reportedProvider = label(first(root.provider, e.provider));
+  // #1217：不是 <主体>@<版本> 账本。仅在 modelUsage 恰好 1 个 key 时取它；多个不猜。
   const model = displayLabel(first(e.model, root.model, u.model, root.agent?.model_name, envelope.model, c.model, Object.keys(object(u.modelUsage)).length === 1 ? Object.keys(u.modelUsage)[0] : null));
   const upstreamHost = label(first(root.upstreamHost, e.upstreamHost, c.upstreamHost));
   const provider = vendorName({
