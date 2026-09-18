@@ -226,7 +226,21 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     // 而被自动放行——那是读树外凭据，不是树内巡检（2026-09-18 发现）。字面参数里带 `/` 或
     // `..` 的按路径判：解析后必须留在树内；`~`/`$` 展开已由 commandWords 拒绝。
     const inTree = words => words.every(word => {
-      const candidates = word.startsWith('-') && word.includes('=') ? [word.slice(word.indexOf('=') + 1)] : [word];
+      const candidates = [];
+      if (word.startsWith('--')) {
+        if (word.includes('=')) candidates.push(word.slice(word.indexOf('=') + 1));
+      } else if (word.startsWith('-') && word.length > 1) {
+        // 单横线短选项可能把值紧贴在字母后：`-f/etc/passwd`、`-nf/etc/passwd`——只查整词会把它
+        // 当相对路径（<cwd>/-f/etc/passwd）放行，而 grep/sed 实际读的是树外文件（复核实咬）。
+        // 在头 3 个字符里找路径起点（`/` 或 `..`），从那里取候选；找不到就按无附着值处理。
+        // 代价：`-e's/x/y/'` 这类少见写法会被拒 → 退化成权限提问，fail-closed。
+        const rest = word.slice(1);
+        for (let j = 1; j <= 3 && j < rest.length; j += 1) {
+          if (rest[j] === '/' || rest.startsWith('..', j)) { candidates.push(rest.slice(j)); break; }
+        }
+      } else {
+        candidates.push(word);
+      }
       return candidates.every(candidate => {
         if (!candidate.includes('/') && candidate !== '..') return true;
         const resolved = canonicalPath(candidate, cwd);

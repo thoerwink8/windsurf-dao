@@ -152,9 +152,14 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
   assert.equal(scope('cat ' + path.join(outside, 'secret')), null, 'absolute outside path is refused');
   assert.equal(scope('cat ../outside/secret'), null, 'dot-dot escape is refused');
   assert.equal(scope('grep --file=/etc/passwd x'), null, 'flag=value paths are checked too');
+  assert.equal(scope('grep -f/etc/passwd x'), null, 'short option with attached absolute path is refused');
+  assert.equal(scope('grep -nf/etc/passwd x'), null, 'clustered short option with attached path is refused');
+  assert.equal(scope('sed -f../../outside/secret x'), null, 'attached dot-dot escape is refused');
   assert.equal(scope('cat /etc/passwd && git status'), null, 'one out-of-tree segment refuses the whole chain');
+  // 值在树内的紧贴写法照常放行。
+  assert.equal(scope('grep -f nested/pattern.txt x')?.permission, 'worktree_scoped', 'attached in-tree value stays allowed');
   // 不存在的树内新文件（ENOENT 走后缀拼接）也按树内处理。
-  assert.ok(scope('test -f nested/not-created-yet.txt'), 'a not-yet-created path inside the tree stays allowed');
+  assert.equal(scope('test -f nested/not-created-yet.txt')?.permission, 'worktree_scoped', 'a not-yet-created path inside the tree stays allowed');
 });
 
 test('worktree permission grant selects the server allow_once option without a preset optionId', async t => {
