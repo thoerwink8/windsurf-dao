@@ -161,10 +161,8 @@ describe('judgeEscalation 四个出口分得开', () => {
     assert.equal(v.verdict, 'noop');
   });
 
-  // #1240 改判：已关的单遇上**新对象**才重开。
-  // 原判据不看对象，只看「单关了没有」——于是同一件事每 20 分钟复读一次
-  // （#1154/#930 把已关的 #1204 报了上百轮，而线上没有新单）。
-  it('记着的单已关 + 新对象 → 重开一张', async () => {
+  // #1240 定路（2026-09-18）：已关 → 一律重开。跨轮看 issue 状态，不看对象、不靠幂等键。
+  it('记着的单已关 + 新对象 → 重开', async () => {
     const { judgeEscalation } = await LIB;
     const v = judgeEscalation({ reason: 'missing-labels', issue: 1063 },
       { booked: { issue: 900, objects: ['issue #1007'] }, bookedState: 'CLOSED' });
@@ -173,22 +171,33 @@ describe('judgeEscalation 四个出口分得开', () => {
     assert.deepEqual(v.objects, ['issue #1007', 'issue #1063']);
   });
 
-  // 这条就是 #1240 的现场：单关了、原因还在、对象还是那一个，线上什么都没变。
-  // 旧判据在这里判 open，于是每轮写一次「报帅开单 #1204」——而 #1204 早已 CLOSED，
-  // 幂等键把重复的开单请求退回同一个旧单号，账本也就永远记着它，循环不散。
-  it('记着的单已关 + 对象没变 → noop，不复读（#1240 防漂移）', async () => {
+  // 有对象但没变：以前 noop 挡噪音，结果把「真该重开」也吞了。现在 reopen，
+  // 接缝由 commander 走 gateway reopen（不是 create 撞旧幂等账）。
+  it('记着的单已关 + 对象没变 → 仍重开（#1240 残余：状态看 issue）', async () => {
     const { judgeEscalation } = await LIB;
     const v = judgeEscalation({ reason: 'missing-labels', issue: 1007 },
       { booked: { issue: 900, objects: ['issue #1007'] }, bookedState: 'CLOSED' });
-    assert.equal(v.verdict, 'noop');
+    assert.equal(v.verdict, 'open');
+    assert.equal(v.reopenedFrom, 900);
     assert.deepEqual(v.objects, ['issue #1007']);
   });
 
-  it('记着的单已关 + 没认得出对象 → noop，无对象可增', async () => {
+  // #1240 正控：无对象（unscanned / model-health-red）关单后再发，必须能重开。
+  it('记着的单已关 + 没认得出对象 → 重开（#1240 正控，不再永久静默）', async () => {
     const { judgeEscalation } = await LIB;
     const v = judgeEscalation({ reason: 'model-health-red' },
       { booked: { issue: 900, objects: [] }, bookedState: 'CLOSED' });
-    assert.equal(v.verdict, 'noop');
+    assert.equal(v.verdict, 'open');
+    assert.equal(v.reopenedFrom, 900);
+    assert.deepEqual(v.objects, []);
+  });
+
+  it('unscanned 满 streak + 已关无对象 → 重开（#1305 现场）', async () => {
+    const { judgeEscalation, UNSCANNED_STREAK_TO_OPEN } = await LIB;
+    const v = judgeEscalation({ reason: 'unscanned' },
+      { booked: { issue: 1305, objects: [] }, bookedState: 'CLOSED', streak: UNSCANNED_STREAK_TO_OPEN });
+    assert.equal(v.verdict, 'open');
+    assert.equal(v.reopenedFrom, 1305);
   });
 
   // fail-closed 的方向：开单是**写**动作、不可撤（只能关），核不出状态时宁可不开。
