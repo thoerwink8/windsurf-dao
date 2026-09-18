@@ -75,9 +75,30 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     if (!listed?.ok) return null;
     return (listed.sessions || []).filter(session => session.cwd === workdir || String(session.cwd || '').startsWith(`${workdir}/`));
   };
+  const reapWorkdirSessions = async workdir => {
+    const sessions = await sessionsIn(workdir);
+    if (sessions === null) return { ok: false, why: 'session list unscanned' };
+    const stopped = [];
+    for (const session of sessions) {
+      const key = session.sessionKey || session.key;
+      if (!key) continue;
+      const result = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
+      stopped.push({ key, ok: result?.ok === true });
+    }
+    return { ok: stopped.every(item => item.ok), stopped };
+  };
   const runSession = async (task, workdir, prompt, role) => {
     const profile = task.roles[role];
-    const started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
+    let started;
+    try {
+      started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
+    } catch (error) {
+      // 启动失败会在树里留下「未定」会话记录，重试会被租约闸判「已有活跃或未知会话」而拒绝——
+      // 于是瞬时故障变成死循环（真跑实咬：回环 ws 抖动 → 重试 → 撞租约闸）。
+      // 先收掉本树自己的会话再抛；收不干净也要抛，让上层按可重试处理。
+      await reapWorkdirSessions(workdir).catch(() => {});
+      throw error;
+    }
     const key = started?.sessionKey || started?.key;
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
     const settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
@@ -202,15 +223,9 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     },
     async cleanup(task, { checkpoint }) {
       if (!checkpoint) return { verified: true, skipped: 'no workspace' };
-      const sessions = await sessionsIn(checkpoint);
-      if (sessions === null) return { verified: false, why: 'session list unscanned' };
-      const stopped = [];
-      for (const session of sessions) {
-        const key = session.sessionKey || session.key;
-        if (!key) continue;
-        const result = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
-        stopped.push({ key, ok: result?.ok === true });
-      }
+      const sessions = await reapWorkdirSessions(checkpoint);
+      if (sessions.why) return { verified: false, why: sessions.why };
+      const stopped = sessions.stopped;
       const removed = await git(['worktree', 'remove', checkpoint], { cwd: projectPath(task.repository) });
       const stillThere = gitOk(await git(['status', '--porcelain'], { cwd: checkpoint }));
       const gone = gitOk(removed) || !stillThere;

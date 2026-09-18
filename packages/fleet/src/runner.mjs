@@ -122,6 +122,7 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
   } catch (error) {
     const code = error?.code || error?.cause?.type || (error?.name === 'CancelledFailure' ? 'CANCELLED' : 'UNKNOWN');
     if (code === 'CANCELLED') return finish('cancelled', 'cancelled');
-    return finish('blocked', `step-failed:${code}`, { failureClass: classifyStepFailure({ code, reason: error?.cause?.message }) });
+    const detail = String(error?.cause?.message || error?.message || '').slice(0, 160);
+    return finish('blocked', `step-failed:${code}${detail ? `：${detail}` : ''}`, { failureClass: classifyStepFailure({ code, reason: detail }) });
   }
 }
