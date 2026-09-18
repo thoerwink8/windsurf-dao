@@ -51,7 +51,7 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = 120000, unknownWaitRounds = 3, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, gitIdentity, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = 120000, unknownWaitRounds = 3, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -157,6 +157,8 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
       const branch = branchOf(task);
       const tree = await runtime.ensureWorkspace(repo, branch);
       if (!tree?.path) throw fail('SERVICE_UNAVAILABLE', 'workspace not created');
+      // 提交身份由系统设：让会话自己跑 gh-as 是白名单外命令，会卡在权限提问（g9 实咬）。
+      if (typeof gitIdentity === 'function') { try { await gitIdentity(tree.path); } catch { /* 设不上不挡开工：身份另有核对 */ } }
       return { repository: task.repository, head: await headOf(tree.path), checkpoint: tree.path, branch };
     },
     async lead(task, { prepared, artifact, feedback, round }) {
