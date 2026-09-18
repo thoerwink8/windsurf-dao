@@ -21,6 +21,7 @@ export const WORKTREE_EXECUTE_PREFIXES = Object.freeze([
   Object.freeze(['git', 'diff']),
   Object.freeze(['git', 'show']),
   Object.freeze(['git', 'branch']),
+  Object.freeze(['echo']),
   Object.freeze(['ls']),
   Object.freeze(['cat']),
   Object.freeze(['head']),
