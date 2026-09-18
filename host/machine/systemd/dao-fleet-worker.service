@@ -21,6 +21,11 @@ Type=simple
 User=orca
 Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# REQUIRES_GIT_PUSH=1：worker 要写远端 git（activities 里 push 任务分支）。
+# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 gh 凭据助手找不到 hosts.yml。
+# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs 与 tests/systemd-push-declaration.test.js。
 Environment=HOME=/home/orca
 Environment=DAO_REAL_EXECUTOR=1
 Environment=DAO_FLEET_TEMPORAL=127.0.0.1:7233

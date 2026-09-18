@@ -18,6 +18,10 @@ Type=simple
 User=orca
 Group=orca
 WorkingDirectory=/home/orca
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# 本单元不写远端 git：必须设空目录挡住 ~/.config/gh（设反见 issue-gateway-check.mjs）。
+Environment=GH_CONFIG_DIR=/var/empty
 Environment=HOME=/home/orca
 ExecStart=/usr/local/bin/temporal server start-dev --ip 127.0.0.1 --port 7233 --db-filename /home/orca/.dao/temporal/temporal.db --log-level warn
 Restart=always
