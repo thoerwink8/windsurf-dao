@@ -5,7 +5,7 @@
 //   ensureWorkspace(repo, branch)             → {path}
 //   startSession({agent, workdir, prompt})    → {sessionKey, taskId}
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
-//   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
+//   listSessions()                            → {ok, sessions}（读不到或条目缺合法 sessionKey → sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
 // handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
@@ -419,6 +419,39 @@ export function judgeSnapshot(msg, sessionKey) {
     snapshot: full,
     seq: Number.isFinite(msg.seq) ? msg.seq : null,
   };
+}
+
+/**
+ * 会话清单整份的可用形状。每个条目必须是对象且带非空 sessionKey。
+ * 非对象 / 缺合法 sessionKey → 整份没查成（sessions:null），不许静默跳过。
+ * 改这段前必须知道：跳过坏条目会把 scanned=0 报成查过没事，连带丢掉该条 workdir，
+ * 下游 stop/GC 会把「没看见」当成「树上没人」（#1336）。
+ */
+export function judgeSessionList(sessions) {
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, sessions: null, why: '会话清单不是数组（没查成）' };
+  }
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i];
+    if (!s || typeof s !== 'object' || Array.isArray(s)) {
+      return {
+        ok: false,
+        unscanned: true,
+        sessions: null,
+        why: `会话清单第 ${i} 条不是对象（没查成，整轮不扫）`,
+      };
+    }
+    const key = s.sessionKey;
+    if (typeof key !== 'string' || key.trim() === '') {
+      return {
+        ok: false,
+        unscanned: true,
+        sessions: null,
+        why: `会话清单第 ${i} 条缺合法 sessionKey（没查成，整轮不扫）`,
+      };
+    }
+  }
+  return { ok: true, unscanned: false, sessions, why: null };
 }
 
 /**
@@ -1341,7 +1374,11 @@ export function createRuntime(opts = {}) {
         if (!msg || !Array.isArray(msg.sessions)) {
           return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
         }
-        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+        const judged = judgeSessionList(msg.sessions);
+        if (!judged.ok) {
+          return { ok: false, missing: true, unscanned: true, sessions: null, why: judged.why };
+        }
+        if (msg.hasMore === false) return { ok: true, missing: false, sessions: judged.sessions, scope: 'global', complete: true };
         if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
       }
       return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };

@@ -904,6 +904,111 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
   });
 });
 
+describe('#1336 会话清单坏条目 fail-closed', () => {
+  const BAD = { state: 'running', workdir: '/w/bad', open: true };
+
+  it('最小反例：缺 sessionKey 的 running 条目 → 整份没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([BAD]);
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /sessionKey/);
+  });
+
+  it('非对象 / 不是数组的清单同样整份没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    assert.equal(judgeSessionList(null).ok, false);
+    assert.equal(judgeSessionList([null]).unscanned, true);
+    assert.equal(judgeSessionList(['x']).sessions, null);
+    assert.equal(judgeSessionList([[]]).ok, false);
+  });
+
+  it('空串 / 空白 sessionKey 也算缺合法 key', async () => {
+    const { judgeSessionList } = await import(LIB);
+    assert.equal(judgeSessionList([{ sessionKey: '' }]).ok, false);
+    assert.equal(judgeSessionList([{ sessionKey: '   ' }]).ok, false);
+  });
+
+  it('混进一条坏的，好的那条也不能当查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([
+      { sessionKey: KEY, state: 'running', workdir: '/w/good' },
+      BAD,
+    ]);
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+  });
+
+  it('空名单是查成了的 0 条，不是没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([]);
+    assert.equal(r.ok, true);
+    assert.equal(r.unscanned, false);
+    assert.deepEqual(r.sessions, []);
+  });
+
+  it('正常 running/finished 原样交出，stop/GC 仍看得见 key 和 workdir', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const sessions = [
+      { sessionKey: KEY, state: 'running', workdir: '/w/live', open: true },
+      { sessionKey: 'codex:dead', state: 'completed', workdir: '/w/done', open: false },
+    ];
+    const r = judgeSessionList(sessions);
+    assert.equal(r.ok, true);
+    assert.equal(r.unscanned, false);
+    assert.deepEqual(r.sessions, sessions);
+  });
+
+  it('listSessions 动词：坏条目 → missing + sessions null', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{
+      type: 'sessions',
+      sessions: [BAD],
+      hasMore: false,
+    }] : []));
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.missing, true);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /sessionKey/);
+  });
+
+  it('分页中途遇到坏条目立刻没查成，不继续扩大 limit', async () => {
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{
+      type: 'sessions',
+      sessions: [BAD],
+      hasMore: true,
+    }] : []);
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.equal(wire.sent.filter(f => f.type === 'listSessions').length, 1);
+  });
+
+  it('listSessions 动词：正常条目仍 ok 原样交出', async () => {
+    const sessions = [
+      { sessionKey: KEY, state: 'running', workdir: '/w/live' },
+      { sessionKey: 'codex:dead', state: 'completed', workdir: '/w/done' },
+    ];
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions, hasMore: false }] : []));
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.sessions, sessions);
+  });
+
+  it('保活脚本若在仓里，必须走 judgeSessionList，不得 continue 掉缺 key 的条目', () => {
+    const p = path.join(__dirname, '..', 'scripts', 'agent-stall-watch-mirasim.mjs');
+    if (!fs.existsSync(p)) {
+      assert.equal(fs.existsSync(p), false);
+      return;
+    }
+    const src = fs.readFileSync(p, 'utf8');
+    assert.match(src, /judgeSessionList/);
+    assert.equal(/if\s*\(\s*!s\s*\|\|\s*typeof s\.sessionKey !== ['"]string['"]\s*\)\s*continue/.test(src), false);
+  });
+});
+
 describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）', () => {
   it('installedVersion 读出本机在役版本号', async () => {
     const { installedVersion } = await import(LIB);
