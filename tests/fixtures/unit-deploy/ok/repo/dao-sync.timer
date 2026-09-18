@@ -1,0 +1,6 @@
+[Unit]
+Description=ok sample dao-sync
+
+[Timer]
+OnCalendar=*:1/5
+Persistent=true

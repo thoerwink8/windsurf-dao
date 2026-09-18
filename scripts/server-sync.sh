@@ -3,12 +3,22 @@
 # 2026-09-04 实咬：总控群对话的 PR 合了，飞书机器人进程还跑着旧码——「合并了」≠「生效了」。
 # 由 dao-sync.timer 每 5 分钟跑一次，**以 orca 身份**（2026-09-05 安全修：原来是 root 解释这个
 # orca 可写的脚本，等于给每个能写仓的 agent 一条 root 通道）。幂等：没新提交就什么都不做。
-# 唯一要 root 的是重启飞书机器人，走 /etc/sudoers.d/dao-sync 里那一条写死的白名单。
+# 要 root 的两步都走 /etc/sudoers.d/dao-sync 写死的白名单：重启飞书机器人，
+# 以及 /usr/local/sbin/dao-install-units（#1408：合了单元 ≠ 上了机器。
+# 钩子是 root 自有副本，不解释本脚本、不解释仓内任何可写文件）。
 set -euo pipefail
 REPO=/srv/projects/windsurf-dao
 BOT_PATHS='^(scripts/feishu-triage\.mjs|scripts/lib/feishu-triage-core\.mjs|scripts/lib/plain-words\.mjs|host/skills/feishu-triage/)'
 
 g() { git -C "$REPO" "$@"; }   # 本进程就是 orca，不再需要 sudo -u
+
+# 仓内单元变更后推到 /etc。钩子没装 / sudoers 没放行时只打日志，不挡同步——
+# 报警面在 dao-check ㊳（活单元对不上就红）。每次都跑：钩子是后装的，
+# 只在「本轮 diff 命中 systemd」时跑会把已经合进去、还没上机的那一次漏掉。
+install_units() {
+  sudo -n /usr/local/sbin/dao-install-units \
+    || echo "单元上机没成（钩子未装或 sudoers 未放行）。仓内 host/machine/systemd 改了不等于机器上已装。装钩子：sudo bash $REPO/scripts/install-dao-sync.sh"
+}
 
 # 每一轮都重接家目录，不只是「有新提交时」：skill 链接、pi 扩展、全局约定的落点在
 # ~/.claude 和 ~/.pi，不在仓里，git pull 到了不等于生效；而它们也会因为跟提交无关的原因断
@@ -44,12 +54,14 @@ g fetch -q --prune origin
 if ! g merge -q --ff-only origin/master 2>"$ERRF"; then
   echo "主树无法快进（本地有未推提交或与远端发散），不动：$(head -c 200 "$ERRF")"
   relink
+  install_units
   exit 0
 fi
 after=$(g rev-parse HEAD)
 if [ "$before" = "$after" ]; then
   echo "已是最新 ${after:0:7}"
   relink
+  install_units
   exit 0
 fi
 echo "主树 ${before:0:7} → ${after:0:7}"
@@ -59,3 +71,4 @@ if g diff --name-only "$before" "$after" | grep -qE "$BOT_PATHS"; then
   echo "飞书机器人代码有变，已请求重启让它吃到新码"
 fi
 relink
+install_units

@@ -2,6 +2,8 @@
 status: new
 ---
 
+处置：#1408
+
 # 机制巡检：#1226 合进 master 23 小时了，活着的 root 自愈钟仍钉 `DAO_SKILL_HOMES=/root`，OnCalendar 仍是会跟 dao-sync 撞点的 `*:06/5`
 
 ## 结论
