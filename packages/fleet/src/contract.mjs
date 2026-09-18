@@ -94,6 +94,9 @@ export function classifyStepFailure(error) {
   // 这些在实测里几分钟内自愈（回环 ws 12 小时红 11 次、每次下一轮自己好），
   // 判成 unscanned 会让每张单都要人点一次 resume——那不是谨慎，是把自动闭环变成半自动。
   if (code === 'MirasimUnavailableError' || code === 'busy') return 'retryable';
+  // ACP 启动超时是瞬时故障（g17 实咬：执行会话已交出提交，下一步起会话超时被判 unscanned）。
+  // 只认超时这一类；其它 AcpRuntimeError（会话已存在、恢复不支持、清理未核实）仍留 unscanned。
+  if (code === 'AcpRuntimeError' && /timed?\s*out|timeout/i.test(String(error?.reason || ''))) return 'retryable';
   // 会话在等人回答：重试只会再问一次——这是要人/要策略介入的第三态，不是传输故障。
   if (code === 'WAITING_USER') return 'blocked';
   if (['lease-held', 'channel-full', 'maintenance', 'launch-uncertain'].includes(error?.reason)) return 'retryable';
