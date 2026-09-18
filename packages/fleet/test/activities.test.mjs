@@ -102,6 +102,16 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /no new commit/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
   });
+  it('a failed launch reaps its own tree before rethrowing, so the retry is not blocked by the lease', async () => {
+    const { activities, calls } = harness({
+      runtime: {
+        startSession: async (spec) => { if (spec.profileId === 'exec-profile') throw Object.assign(new Error('连不上回环 ws'), { code: 'MirasimUnavailableError' }); return { sessionKey: 'session-x' }; },
+      },
+    });
+    await activities.prepare(task).catch(() => {});
+    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /回环 ws/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'listSessions' || kind === 'stopSession'), false, '没有遗留会话时不该白跑收尾');
+  });
   it('a session that does not finish is a failure, never an empty result', async () => {
     const { activities } = harness({ runtime: { waitForCompletion: async () => ({ status: 'unknown' }) } });
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b' }, round: 0 }), /executor session unknown/);
