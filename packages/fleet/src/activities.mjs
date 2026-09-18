@@ -7,23 +7,42 @@ const fail = (code, message) => ApplicationFailure.nonRetryable(message, code);
 
 /** 审查输出解析：只认**恰好一份**含 findings 数组的 JSON。模型先给结论、再回显空模板时，
  *  取「最后一块」会把有阻塞的审查读成通过——宁可 unscanned，不猜。 */
-export function parseSingle(text, predicate) {
+/** 扫出文本里**所有**能解析的平衡 JSON 对象（含围栏内外、含嵌套）。
+ *  只取「围栏内容 ∪ 全文首尾大括号」是不够的：模型常把真结论写成裸对象、再用围栏回显一份空模板，
+ *  那样「唯一进得了候选集的那块」就是空结论——有 P1 的审查被读成通过。 */
+export function jsonObjects(text) {
   const source = String(text || '');
-  const candidates = [];
-  const fence = /```(?:json)?\s*([\s\S]*?)```/g;
-  for (const match of source.matchAll(fence)) candidates.push(match[1]);
-  candidates.push(source);
-  const parsed = [];
-  for (const candidate of candidates) {
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start < 0 || end <= start) continue;
-    try {
-      const value = JSON.parse(candidate.slice(start, end + 1));
-      if (value && predicate(value)) parsed.push(JSON.stringify(value));
-    } catch { /* 这一块不是 JSON */ }
+  const out = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < source.length; j += 1) {
+      const ch = source[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try { out.push(JSON.parse(source.slice(i, j + 1))); } catch { /* 不是 JSON */ }
+          break;
+        }
+      }
+    }
   }
-  const unique = [...new Set(parsed)];
+  return out;
+}
+
+export function parseSingle(text, predicate) {
+  const hits = jsonObjects(text).filter(value => value && predicate(value)).map(value => JSON.stringify(value));
+  const unique = [...new Set(hits)];
   if (unique.length !== 1) return null;
   return JSON.parse(unique[0]);
 }

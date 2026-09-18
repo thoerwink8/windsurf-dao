@@ -50,6 +50,14 @@ describe('review output parsing is fail-closed', () => {
     assert.deepEqual(parseFindings(same).findings, []);
     assert.equal(parseFindings('no json at all'), null);
   });
+  it('does not let a fenced empty template beat a bare real conclusion', () => {
+    const review = '{"findings":[{"id":"a","severity":"P1","detail":"x"}]}\n\n再看一遍模板：\n```json\n{"findings":[]}\n```\n';
+    assert.equal(parseFindings(review), null, '裸结论与围栏模板同时出现必须 unscanned');
+    const single = '结论如下：\n```json\n{"findings":[{"id":"a","severity":"P1","detail":"x"}]}\n```\n';
+    assert.equal(parseFindings(single).findings[0].id, 'a');
+    const nested = '```json\n{"findings":[{"id":"a","severity":"P1","detail":"x"}]}\n```';
+    assert.equal(parseFindings(nested).findings.length, 1, '嵌套对象不得被当成第二份结论');
+  });
   it('parses plans the same way', () => {
     assert.equal(parsePlan('```json\n{"plan":"do it"}\n```').plan, 'do it');
     assert.equal(parsePlan('```json\n{"plan":"a"}\n```\n```json\n{"plan":"b"}\n```'), null);
