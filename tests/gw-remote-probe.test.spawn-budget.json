@@ -1,4 +1,4 @@
 {
-  "budget": 2,
-  "why": "远程探针 CLI 黑盒。"
+  "budget": 3,
+  "why": "远程探针 CLI 黑盒：缺 targets 主流程、T7 --only 写健康表、退役 --install 退出码。进程内跑等于不验落盘与退出码。"
 }

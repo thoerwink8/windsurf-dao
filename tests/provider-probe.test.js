@@ -151,6 +151,39 @@ describe('planProbe', () => {
     assert.equal(probeTargetOf({ provider: 'gpt', cli_model: 'gpt-5.6-sol' }), 'direct:codex@pqapi/responses', '旧 gpt 直连仍归 pqapi');
     assert.notEqual(RELAY_CODEX_TARGET, 'direct:codex@pqapi/responses');
   });
+  it('planProbe(mirasim-relay) 不拼 ~/.codex / 4317 URL（#1174 T7）', async () => {
+    const { planProbe } = await import(LIB);
+    const p = planProbe(
+      { provider: 'mirasim-relay', cli_model: 'gpt-5.6-luna' },
+      { codexConfig: { ok: true, baseUrl: 'http://127.0.0.1:4317/v1', authPath: '/x/auth.json' } },
+    );
+    assert.equal(p.kind, 'unscanned');
+    assert.equal(p.url, undefined);
+    assert.match(p.why, /4317|合成探针/);
+  });
+  it('planProbe(gpt) 撞上 4317/sslip.io 也不发请求', async () => {
+    const { planProbe } = await import(LIB);
+    const bridge = planProbe(
+      { provider: 'gpt', cli_model: 'gpt-5.6-sol' },
+      { codexConfig: { ok: true, baseUrl: 'http://127.0.0.1:4317/v1', authPath: '/x/auth.json' } },
+    );
+    assert.equal(bridge.kind, 'unscanned');
+    assert.match(bridge.why, /4317|退役/);
+    const sslip = planProbe(
+      { provider: 'gpt', cli_model: 'gpt-5.6-sol' },
+      { codexConfig: { ok: true, baseUrl: 'https://156.224.28.95.sslip.io/v1', authPath: '/x/auth.json' } },
+    );
+    assert.equal(sslip.kind, 'unscanned');
+  });
+  it('planProbe(gw) 对退役 newapi 主机 unscanned，假网关仍可探', async () => {
+    const { planProbe } = await import(LIB);
+    const dead = planProbe(
+      { provider: 'gw', cli_model: 'gw/grok-4.6' },
+      { gatewayConfig: { ok: true, gateway: 'https://156.224.28.95.sslip.io', providers: [{ id: 'gw', token: 'x', models: ['grok-4.6'] }] } },
+    );
+    assert.equal(dead.kind, 'unscanned');
+    assert.match(dead.why, /退役|sslip/);
+  });
   it('codexResponsesProbeBody 的 input 是结构化 message，不是裸字符串', async () => {
     const { codexResponsesProbeBody } = await import(LIB);
     const b = codexResponsesProbeBody({ model: 'gpt-5.6-luna', text: 'ping', maxOutputTokens: 8 });
