@@ -133,6 +133,30 @@ test('worktree execute approves a command with no cd, because the session cwd is
   assert.deepEqual(scope.segments, [['git', 'status'], ['git', 'log', '-3', '--oneline']]);
 });
 
+test('worktree execute scopes literal path arguments to the tree', async t => {
+  const { acpPermissionScope } = await mod;
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-paths-')));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-out-')));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(cwd, 'nested'));
+  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true, commandPrefixes: [['cat'], ['grep'], ['test'], ['git', 'status']] };
+  const scope = title => acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`' + title + '`' } }, { cwd });
+  // 树内的只读巡检照常放行。
+  assert.ok(scope('cat README.md'), 'bare filename resolves inside the tree');
+  assert.ok(scope('cat nested/file.txt'), 'relative path inside the tree');
+  assert.ok(scope('test -f packages/fleet/README.md'), 'test -f is the common pre-commit self-check');
+  assert.ok(scope('grep -n dao nested/file.txt && git status'), 'paths inside a chain stay allowed');
+  // 树外的字面路径必须拒绝：前缀命中不等于读凭据放行。
+  assert.equal(scope('cat /etc/passwd'), null, 'absolute path outside the tree is refused');
+  assert.equal(scope('cat ' + path.join(outside, 'secret')), null, 'absolute outside path is refused');
+  assert.equal(scope('cat ../outside/secret'), null, 'dot-dot escape is refused');
+  assert.equal(scope('grep --file=/etc/passwd x'), null, 'flag=value paths are checked too');
+  assert.equal(scope('cat /etc/passwd && git status'), null, 'one out-of-tree segment refuses the whole chain');
+  // 不存在的树内新文件（ENOENT 走后缀拼接）也按树内处理。
+  assert.ok(scope('test -f nested/not-created-yet.txt'), 'a not-yet-created path inside the tree stays allowed');
+});
+
 test('worktree permission grant selects the server allow_once option without a preset optionId', async t => {
   const { acpPermissionScope } = await mod;
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-grant-')));

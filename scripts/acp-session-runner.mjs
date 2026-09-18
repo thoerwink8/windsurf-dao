@@ -222,6 +222,17 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (!Array.isArray(rule.commandPrefixes) || !rule.commandPrefixes.length) return null;
     const allowed = words => rule.commandPrefixes.some(prefix =>
       Array.isArray(prefix) && prefix.length && prefix.every((word, index) => typeof word === 'string' && word === words[index]));
+    // 前缀只判命令名、不看参数：`cat /home/orca/.dao/apps/marshal.json` 会因 `cat` 命中前缀
+    // 而被自动放行——那是读树外凭据，不是树内巡检（2026-09-18 发现）。字面参数里带 `/` 或
+    // `..` 的按路径判：解析后必须留在树内；`~`/`$` 展开已由 commandWords 拒绝。
+    const inTree = words => words.every(word => {
+      const candidates = word.startsWith('-') && word.includes('=') ? [word.slice(word.indexOf('=') + 1)] : [word];
+      return candidates.every(candidate => {
+        if (!candidate.includes('/') && candidate !== '..') return true;
+        const resolved = canonicalPath(candidate, cwd);
+        return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
+      });
+    });
     if (!worktree) {
       if (actualCwd === undefined) return null;
       const words = commandWords(raw.argv ?? raw.command);
@@ -244,7 +255,7 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (line === null && typeof call.title === 'string') line = call.title.trim().replace(/^`(.*)`$/s, '$1');
     if (Array.isArray(line)) {
       const words = commandWords(line);
-      return words && allowed(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
+      return words && allowed(words) && inTree(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
     }
     if (typeof line !== 'string' || !line.trim()) return null;
     // Only `&&` may join segments. Every other operator (| < > & ; and any
@@ -276,6 +287,7 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
           effective = [words[0], ...words.slice(3)];
         }
         if (!allowed(effective)) return null;
+        if (!inTree(words)) return null;
       }
       parsed.push(words.map(word => restoreHeredocs(word, literals)));
     }
