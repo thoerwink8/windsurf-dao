@@ -90,6 +90,9 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
   const runSession = async (task, workdir, prompt, role) => {
     const profile = task.roles[role];
     let started;
+    // 起会话前先收本树：上一次失败的启动/未终态的会话会让租约闸判「已有活跃或未知会话」而拒绝，
+    // 于是可重试的瞬时故障变成死循环（真跑实咬两轮）。同一任务同一棵树里同时只有一个会话，先收是安全的。
+    await reapWorkdirSessions(workdir).catch(() => {});
     try {
       started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
     } catch (error) {
