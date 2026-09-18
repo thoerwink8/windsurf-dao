@@ -38,6 +38,7 @@ import {
 } from './commander-verbs.mjs';
 import { buildMarkExhausted, prHasStuckLabel, planExhaustedLabelClear } from './exhausted.mjs';
 import { judgeNextReviewRound, buildReviewRoundsStopAction } from './review-rounds-budget.mjs';
+import { judgeDispatchDay, nextDispatchDayBlocked } from './dispatch-day-budget.mjs';
 // #1236：重试键的三件套（判据版本 / 键拼装 / drain 账键）转出去，让**测试与生产共用同一把键**。
 // 手拼字面量的测试在加版本那天会静默失配（测试假绿、生产卡死）——今天漏的是测试，
 // 明天就是写侧（#909 的形状）。
@@ -1147,6 +1148,44 @@ function collectCandidates(situation) {
     out.push(withNeeds(hub(`渠道 ${ch} ${what}，本轮不再往它派新会话（${admit.why || ''}）——票留队列等下轮`, 'decide'), kind));
   };
 
+  // #1227：每日工人派工上限。budget 没注入（老夹具）→ 闸 inert。
+  const dayJudged = judgeDispatchDay({
+    events: situation.dispatchDayBudget == null
+      ? undefined
+      : (situation.dispatchLedger && situation.dispatchLedger.scanned === true
+        ? situation.dispatchLedger.events
+        : null),
+    budget: situation.dispatchDayBudget,
+    now: situation.at,
+  });
+  const dayBlocked = nextDispatchDayBlocked(dayJudged);
+  let dayBudgetReported = false;
+  const reportDayBudget = (kind) => {
+    if (dayBudgetReported) return;
+    dayBudgetReported = true;
+    if (dayJudged.state === 'unscanned') {
+      out.push(withNeeds(esc(
+        `今日派工上限没查成（${dayJudged.error || '没查成'}）——工人派工排队到次日`,
+        {
+          reason: 'unscanned',
+          detail: 'dispatch-day-unscanned',
+          missing: dayJudged.missing || ['dispatchDayBudget'],
+        },
+      ), kind));
+      return;
+    }
+    out.push(withNeeds(hub(
+      `今日工人派工 ${dayJudged.count}/${dayJudged.max}，已满（docs/release-policy.json 的 budget.per_day.dispatch_max）。排队到次日，不另起工人会话。`,
+      'decide',
+      { count: dayJudged.count, max: dayJudged.max, day: dayJudged.day },
+    ), kind));
+  };
+  const allowWorkerLaunch = (kind) => {
+    if (!dayBlocked) return true;
+    reportDayBudget(kind);
+    return false;
+  };
+
   if (ready.kind === 'ready') {
     const readyIssues = ready.ready
       .map((n) => (gh.issues || []).find((i) => i && i.number === n))
@@ -1193,6 +1232,7 @@ function collectCandidates(situation) {
         if (live.live) continue;
         const fwChannel = channelAdmits(model);
         if (!fwChannel.ok) { reportChannelQueue(N.dispatch, fwChannel); continue; }
+        if (!allowWorkerLaunch(N.dispatch)) continue;
         if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
           reportAdmission(N.dispatch);
           continue;
@@ -1273,6 +1313,7 @@ function collectCandidates(situation) {
       // 渠道并发第二道闸（#1145）：工人 model 由标签钉死，渠道满员/熔断时排队下轮，不擅自换模型。
       const chAdmit = channelAdmits(model);
       if (!chAdmit.ok) { reportChannelQueue(N.dispatch, chAdmit); continue; }
+      if (!allowWorkerLaunch(N.dispatch)) continue;
       // 新活只能用「留给收尾之后剩下的」那部分名额，且照样要从共用池里领一个。
       if (dispatchedThisRound >= newWorkSlots || !takeSlot()) {
         reportAdmission(N.dispatch);
@@ -1537,6 +1578,7 @@ function collectCandidates(situation) {
         out.push(withNeeds(esc(`PR #${pr.number} 要返工，但${g0.why}`, { reason: g0.reason, pr: pr.number, model: rModel0 }), N.rework));
         return;
       }
+      if (!allowWorkerLaunch(N.rework)) return;
       if (!takeFinishSlot()) { reportAdmission(N.rework); return; }
       reworkThisRound += 1;
       out.push(withNeeds({
@@ -1600,6 +1642,7 @@ function collectCandidates(situation) {
     // 返工属于「收尾」，领**收尾名额**（与「新活名额」两笔账，见上面 finishSlots 的定义）。
     // 机器满载时新活一个不派，但返工照领——它不增在制品，是把已有 PR 推过终点线。
     // 收尾名额自有上限（FINISH_SLOTS_MAX），用尽则排队下轮，不丢、不 escalate。
+    if (!allowWorkerLaunch(N.rework)) return;
     if (!takeFinishSlot()) {
       reportAdmission(N.rework);
       return;
@@ -2137,6 +2180,7 @@ function collectCandidates(situation) {
       }), N['pump-draft']));
       return;
     }
+    if (!allowWorkerLaunch(N['pump-draft'])) return;
     if (!takeFinishSlot()) {
       reportAdmission(N['pump-draft']);
       return;
@@ -2220,6 +2264,7 @@ function collectCandidates(situation) {
         }), N.dispatch));
         continue;
       }
+      if (!allowWorkerLaunch(N.dispatch)) continue;
       if (!takeSlot()) {
         reportAdmission(N.dispatch);
         continue;

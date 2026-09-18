@@ -7,7 +7,9 @@
 // 旧键 maxDispatchPerRound / maxInFlightWorkers 读到不算红（兼容一轮）。缺 commander 节不拦（#842 旧夹具兼容）。
 // hubChat（#852 总帅入口）：enabled 布尔；allowedActions ⊆ {situation,decision,guide} 非空；
 // upstream.redThreshold 整数 ∈ [1,99]，upstream.decisions / upstream.digest 布尔（三类上行分级）。
-// board（#818 看板 v0）：workerWallHoursMax ∈ [0.25,168]；alertBatchMax 若有必为整数 1~20；channel 若有必为非空字符串。缺 board 节兼容旧夹具；真身 docs/dispatch-policy.json 必须带。
+// board（#818 看板 v0）：workerWallHoursMax ∈ [0.25,168]，真身还必须与
+// docs/release-policy.json 的 budget.per_issue.worker_wall_hours_max 相同（看板读后者）；
+// alertBatchMax 若有必为整数 1~20；channel 若有必为非空字符串。缺 board 节兼容旧夹具；真身 docs/dispatch-policy.json 必须带。
 // 三态可分：文件不在 / 坏 JSON / 缺 preflight 或 hubChat 节 = 没查成（unscanned）；越界 / 缺 breaker = 红；齐且合范围 = 绿。
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -206,7 +208,28 @@ function inspectFile(file, { requireBoard = false } = {}) {
 
 export function inspectDispatchPolicyLive(root) {
   if (!root) return { ok: false, unscanned: true, problems: ['没给仓库根（没查成）'] };
-  return inspectFile(join(root, POLICY_REL), { requireBoard: true });
+  const r = inspectFile(join(root, POLICY_REL), { requireBoard: true });
+  const releaseFile = join(root, 'docs', 'release-policy.json');
+  if (!existsSync(releaseFile)) {
+    const problems = [...(r.problems || []), 'docs/release-policy.json 不在，对不上 board.workerWallHoursMax'];
+    return { ok: false, unscanned: true, problems };
+  }
+  let hours;
+  let copy;
+  try {
+    const rel = JSON.parse(readFileSync(releaseFile, 'utf8'));
+    hours = rel?.budget?.per_issue?.worker_wall_hours_max;
+    const disp = JSON.parse(readFileSync(join(root, POLICY_REL), 'utf8'));
+    copy = disp?.board?.workerWallHoursMax;
+  } catch (e) {
+    const problems = [...(r.problems || []), `release-policy 对不上：${String(e.message || e).slice(0, 80)}`];
+    return { ok: false, unscanned: true, problems };
+  }
+  if (Number(copy) !== Number(hours)) {
+    const problems = [...(r.problems || []), `board.workerWallHoursMax=${copy} 与 release-policy budget.per_issue.worker_wall_hours_max=${hours} 对不上（看板读后者）`];
+    return { ok: false, unscanned: r.unscanned === true, problems };
+  }
+  return r;
 }
 
 /** 夹具判别力：red 必须拦（ok:false 非 unscanned）、ok 必须绿、empty 必须没查成。 */

@@ -82,6 +82,7 @@ import {
   EXHAUSTED_LABEL, WAITING_USER_LABEL, exhaustedComment, waitingUserComment, exhaustedPushPath,
 } from './lib/exhausted.mjs';
 import { loadReviewRoundsBudgetFile, POLICY_REL as RELEASE_POLICY_REL } from './lib/review-rounds-budget.mjs';
+import { loadDispatchDayBudgetFile } from './lib/dispatch-day-budget.mjs';
 import {
   argvFromFields, fieldsFromEscalate, fieldsFromBreaker, hubAskScriptPath,
   runHubAsk, sendCardViaLarkCli, pendingFromAsk,
@@ -836,6 +837,7 @@ function buildSituation({ state } = {}) {
     breaker,
     askPolicy,
     reviewRoundsBudget: loadReviewRoundsBudgetFile(join(ROOT, RELEASE_POLICY_REL)),
+    dispatchDayBudget: loadDispatchDayBudgetFile(join(ROOT, RELEASE_POLICY_REL)),
   };
 }
 

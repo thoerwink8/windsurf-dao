@@ -17,7 +17,8 @@ import { AWAITING_CALL_LABEL } from './now-board.mjs';
 import { EXHAUSTED_LABEL, WAITING_USER_LABEL } from './exhausted.mjs';
 import { ensurePlain, plainViolations, threeLines } from './plain-words.mjs';
 
-/** 跟 docs/release-policy.json budget.per_issue.worker_wall_hours_max 对齐。 */
+/** 策略文件没读到时的最后一档。生产路径读 docs/release-policy.json 的
+ *  budget.per_issue.worker_wall_hours_max，不许把这个数当真相源。 */
 export const DEFAULT_WORKER_WALL_HOURS = 4;
 /** 一轮扫描最多往群里丢几条；超了改发一条摘要，挡第一枪刷屏。 */
 export const DEFAULT_ALERT_BATCH_MAX = 3;
@@ -558,6 +559,27 @@ export function formatBoardTable(board) {
   }
   const text = lines.join('\n');
   return ensurePlain(text, 'board-table');
+}
+
+/** 从 release-policy 正文读墙钟上限。纯函数，不碰文件系统。 */
+export function parseWorkerWallHours(text) {
+  if (text == null) {
+    return { unscanned: true, error: '没给 docs/release-policy.json 正文（没查成）' };
+  }
+  let doc;
+  try {
+    doc = JSON.parse(String(text).replace(/^\uFEFF/, ''));
+  } catch (e) {
+    return { unscanned: true, error: `docs/release-policy.json 解析不了：${String(e && e.message ? e.message : e).split(/\r?\n/)[0].slice(0, 160)}` };
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    return { unscanned: true, error: 'docs/release-policy.json 顶层不是对象' };
+  }
+  const hours = Number(doc?.budget?.per_issue?.worker_wall_hours_max);
+  if (!Number.isFinite(hours) || hours < 0.25 || hours > 168) {
+    return { unscanned: true, error: 'docs/release-policy.json 的 budget.per_issue.worker_wall_hours_max 不是 0.25~168 的数' };
+  }
+  return { unscanned: false, hours };
 }
 
 export function loadBoardThreshold(doc) {

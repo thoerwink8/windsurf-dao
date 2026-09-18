@@ -237,6 +237,10 @@ import {
   HALT_CODE as REVIEW_ROUNDS_HALT, UNSCANNED_CODE as REVIEW_ROUNDS_UNSCANNED,
   POLICY_REL as RELEASE_POLICY_REL,
 } from './lib/review-rounds-budget.mjs';
+import {
+  loadDispatchDayBudgetFile, judgeDispatchDay, nextDispatchDayBlocked,
+  dispatchDayExceededError, dispatchDayUnscannedError,
+} from './lib/dispatch-day-budget.mjs';
 import { runBreakerCommand } from './lib/provider-breaker.mjs';
 import { ROUTING_POLICY_FILE } from './lib/dispatch/constants.mjs';
 import { resolveModelChannel } from './lib/channel-concurrency.mjs';
@@ -766,6 +770,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
       mergePolicy: (gate && gate.mergePolicy) || 'auto',
       ...(gate && gate.mergeReason ? { mergeReason: gate.mergeReason } : {}),
       disambiguation, dup,
+      dispatchDay: judgeLiveDispatchDay(args.now),
       preflight: { skipped: true, why: 'dry-run 默认不探' },
       note: '预览不碰 mirasim：没建树、没起会话、没烧额度',
     });
@@ -774,6 +779,16 @@ async function cmdDispatchMirasim(args, routing, gate) {
 
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   if (dup.blocked) fail(dup.error, { dup });
+
+  const dispatchDay = judgeLiveDispatchDay(args.now);
+  if (nextDispatchDayBlocked(dispatchDay)) {
+    fail(
+      dispatchDay.state === 'exceeded'
+        ? dispatchDayExceededError(dispatchDay)
+        : dispatchDayUnscannedError(dispatchDay),
+      { dispatchDay },
+    );
+  }
 
   // #1152：测试环境结构性够不着真执行体。拒派闸失手时这一道仍拦住建树/起会话。
   const isolation = judgeTestExecutorIsolation(process.env);
@@ -1945,6 +1960,20 @@ import {
 
 function reviewRoundsBudgetOf(root = ROOT) {
   return loadReviewRoundsBudgetFile(join(root, RELEASE_POLICY_REL));
+}
+
+function judgeLiveDispatchDay(now) {
+  let listed;
+  try {
+    listed = readLedgerEvents(loadLedgerContext({ root: ROOT }).dir);
+  } catch (e) {
+    listed = { unscanned: true, error: String(e.message || e), events: [] };
+  }
+  return judgeDispatchDay({
+    events: listed.unscanned ? null : listed.events,
+    budget: loadDispatchDayBudgetFile(join(ROOT, RELEASE_POLICY_REL)),
+    now: now || new Date(),
+  });
 }
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */

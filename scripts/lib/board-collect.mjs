@@ -14,7 +14,7 @@ import { defaultLedgerDir } from './ledger-home.mjs';
 import { readLedgerEvents } from './ledger-query.mjs';
 import {
   DEFAULT_WORKER_WALL_HOURS, DEFAULT_ALERT_BATCH_MAX,
-  loadBoardThreshold, loadBoardAlertBatchMax, renderBoard,
+  loadBoardAlertBatchMax, parseWorkerWallHours, renderBoard,
 } from './board-v0.mjs';
 
 function parseJson(text, what) {
@@ -26,29 +26,43 @@ function parseJson(text, what) {
 }
 
 export function loadBoardPolicy(root) {
-  const file = join(root || '', 'docs', 'dispatch-policy.json');
-  if (!root || !existsSync(file)) {
-    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, alertBatchMax: DEFAULT_ALERT_BATCH_MAX, error: null };
+  const dispatchFile = join(root || '', 'docs', 'dispatch-policy.json');
+  const releaseFile = join(root || '', 'docs', 'release-policy.json');
+  let alertBatchMax = DEFAULT_ALERT_BATCH_MAX;
+  let thresholdHours = DEFAULT_WORKER_WALL_HOURS;
+  let error = null;
+  let doc = null;
+
+  if (root && existsSync(dispatchFile)) {
+    let src;
+    try { src = readFileSync(dispatchFile, 'utf8'); }
+    catch (e) {
+      error = `策略读不了：${String(e.message || e).slice(0, 80)}`;
+    }
+    if (src != null) {
+      const p = parseJson(src, 'dispatch-policy');
+      if (!p.ok) error = p.error;
+      else {
+        doc = p.value;
+        alertBatchMax = loadBoardAlertBatchMax(p.value);
+      }
+    }
   }
-  let src;
-  try { src = readFileSync(file, 'utf8'); }
-  catch (e) {
-    return {
-      thresholdHours: DEFAULT_WORKER_WALL_HOURS,
-      alertBatchMax: DEFAULT_ALERT_BATCH_MAX,
-      error: `策略读不了：${String(e.message || e).slice(0, 80)}`,
-    };
+
+  // 墙钟上限只认 release-policy。dispatch-policy 里那份是镜像，改那边看板不会动。
+  if (root && existsSync(releaseFile)) {
+    try {
+      const parsed = parseWorkerWallHours(readFileSync(releaseFile, 'utf8'));
+      if (!parsed.unscanned) thresholdHours = parsed.hours;
+      else error = error || parsed.error;
+    } catch (e) {
+      error = error || `release-policy 读不了：${String(e.message || e).slice(0, 80)}`;
+    }
+  } else if (root) {
+    error = error || `${releaseFile} 不在`;
   }
-  const p = parseJson(src, 'dispatch-policy');
-  if (!p.ok) {
-    return { thresholdHours: DEFAULT_WORKER_WALL_HOURS, alertBatchMax: DEFAULT_ALERT_BATCH_MAX, error: p.error };
-  }
-  return {
-    thresholdHours: loadBoardThreshold(p.value),
-    alertBatchMax: loadBoardAlertBatchMax(p.value),
-    error: null,
-    doc: p.value,
-  };
+
+  return { thresholdHours, alertBatchMax, error, doc };
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
