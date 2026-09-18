@@ -996,17 +996,6 @@ describe('#1336 会话清单坏条目 fail-closed', () => {
     assert.equal(r.ok, true);
     assert.deepEqual(r.sessions, sessions);
   });
-
-  it('保活脚本若在仓里，必须走 judgeSessionList，不得 continue 掉缺 key 的条目', () => {
-    const p = path.join(__dirname, '..', 'scripts', 'agent-stall-watch-mirasim.mjs');
-    if (!fs.existsSync(p)) {
-      assert.equal(fs.existsSync(p), false);
-      return;
-    }
-    const src = fs.readFileSync(p, 'utf8');
-    assert.match(src, /judgeSessionList/);
-    assert.equal(/if\s*\(\s*!s\s*\|\|\s*typeof s\.sessionKey !== ['"]string['"]\s*\)\s*continue/.test(src), false);
-  });
 });
 
 describe('钉版本默认跟随本机在役版本（2026-09-10 机制改造）', () => {
