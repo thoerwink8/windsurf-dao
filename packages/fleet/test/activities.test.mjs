@@ -34,6 +34,7 @@ function harness(overrides = {}) {
     runtime, gh, git,
     projects: { 'owner/repo': '/repos/repo' },
     profileOf: id => (FAMILIES[id] ? { agent: id === 'review-profile' ? 'codex' : 'grok', family: FAMILIES[id] } : null),
+    unknownWaitMs: 1, unknownWaitRounds: 1,
     leadPrompt: () => 'lead prompt', executorPrompt: () => 'exec prompt', reviewerPrompt: () => 'review prompt',
     ...overrides.deps,
   });
@@ -101,6 +102,36 @@ describe('activities bind the workflow to real systems', () => {
     const { activities, calls } = harness({ git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: B } : { status: 0, out: '' }) });
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /no new commit/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
+  });
+  it('never cancels a session that is still working when the verdict is unknown', async () => {
+    const { activities, calls } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: 'unknown' }),
+        readSession: async () => text('```json\n{"plan":"Implement."}\n```'),
+      },
+    });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /lead session unknown/);
+    assert.equal(calls.some(([kind]) => kind === 'stopSession'), false, 'unknown 时不许停会话（那是在杀活人）');
+  });
+  it('does not reap a session that is still running', async () => {
+    const stopped = [];
+    const fresh = createActivities({
+      runtime: {
+        listSessions: async () => ({ ok: true, sessions: [{ sessionKey: 's1', cwd: '/trees/b', state: 'streaming' }] }),
+        stopSession: async key => { stopped.push(key); return { ok: true }; },
+        startSession: async () => { throw Object.assign(new Error('boom'), { code: 'MirasimUnavailableError' }); },
+        readSession: async () => ({ phase: 'running', text: '' }),
+        waitForCompletion: async () => ({ status: 'unknown' }),
+      },
+      gh: async () => ({ ok: true, out: '{}' }),
+      git: async () => ({ status: 0, out: H }),
+      projects: { 'owner/repo': '/repos/repo' },
+      profileOf: () => ({ agent: 'grok', family: 'xai' }),
+      leadPrompt: () => 'p', executorPrompt: () => 'p', reviewerPrompt: () => 'p',
+      unknownWaitMs: 1, unknownWaitRounds: 1,
+    });
+    await assert.rejects(fresh.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /boom/);
+    assert.deepEqual(stopped, [], 'streaming 的会话不许被收树杀掉');
   });
   it('releases the tree lease when a round ends, so the next round can start', async () => {
     const { activities, calls } = harness({ runtime: { readSession: async () => text('```json\n{"plan":"Implement."}\n```') } });
