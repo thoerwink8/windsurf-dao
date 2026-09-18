@@ -131,5 +131,7 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'ActivityFailure', reason: 'channel-full' }), 'retryable');
     assert.equal(classifyStepFailure({ code: 'SomethingElse' }), 'unscanned', '认不出的不放行');
     assert.equal(classifyStepFailure({ code: 'WAITING_USER' }), 'blocked', '等人在回答不是传输故障，重试只会再问一次');
+    assert.equal(classifyStepFailure({ code: 'AcpRuntimeError', reason: 'ACP session/new timed out' }), 'retryable', 'ACP 启动超时是瞬时故障');
+    assert.equal(classifyStepFailure({ code: 'AcpRuntimeError', reason: 'session_exists' }), 'unscanned', '其它 ACP 错误不放行');
   });
 });
