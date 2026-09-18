@@ -110,6 +110,10 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
     let settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
     let view = await runtime.readSession(key);
+    if (settled?.status === 'waiting_user' || view?.phase === 'waiting_user') {
+      // 会话在等人回答（权限/问题）：重试只会再问一次，也不是传输故障——单独一态，交上层停手。
+      throw fail('WAITING_USER', `${role} session is waiting for an answer`);
+    }
     // unknown 是「这次没读到终态」，不是「会话失败」——多等几轮再判，
     // 不许把还在干活的会话当失败处理（g6 实咬：判 unknown 后立刻收尾 = 取消在跑的会话）。
     for (let attempt = 0; attempt < unknownWaitRounds && settled?.status === 'unknown'; attempt += 1) {
@@ -137,6 +141,15 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     } catch { return null; }
   };
   const prView = async (number, fields, { cwd, role = 'marshal' }) => runGh(['pr', 'view', String(number), '--json', fields], { cwd, role });
+  /** issue 标题+正文由活动取回后塞进提示词：会话里跑 gh 是白名单外的命令，会卡在权限提问（g7 实咬）。 */
+  const issueBrief = async task => {
+    try {
+      const view = await runGh(['issue', 'view', String(task.issue), '--json', 'title,body'], { cwd: projectPath(task.repository), role: 'marshal' });
+      return `issue #${task.issue} 标题：${String(view?.title || '').slice(0, 200)}\nissue 正文（截断）：\n${String(view?.body || '').slice(0, 6000)}`;
+    } catch (error) {
+      return `（issue #${task.issue} 正文取不到：${String(error?.message || error).slice(0, 120)}——按标题与仓库现状判断，不要自己联网取）`;
+    }
+  };
 
   return {
     async prepare(task) {
@@ -147,14 +160,14 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
       return { repository: task.repository, head: await headOf(tree.path), checkpoint: tree.path, branch };
     },
     async lead(task, { prepared, artifact, feedback, round }) {
-      const { key, status, view } = await runSession(task, prepared.checkpoint, leadPrompt({ task, prepared, artifact, feedback, round }), 'lead');
+      const { key, status, view } = await runSession(task, prepared.checkpoint, leadPrompt({ task, prepared, artifact, feedback, round, issue: await issueBrief(task) }), "lead");
       if (status !== 'done') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `lead session ${status}`);
       const plan = parsePlan(view?.text);
       if (!plan) throw fail('UNSUPPORTED_CAPABILITY', 'lead output not parseable');
       return { plan: plan.plan, sessionKey: key, at: now() };
     },
     async execute(task, { plan, prepared, feedback, round }) {
-      const { key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round }), 'executor');
+      const { key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task) }), "executor");
       if (status !== 'done') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `executor session ${status}`);
       const head = await headOf(prepared.checkpoint);
       const expectedNew = feedback?.head || prepared.head;

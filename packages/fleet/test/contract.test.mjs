@@ -130,5 +130,6 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'busy', reason: 'lease-held' }), 'retryable', '背压不是失败');
     assert.equal(classifyStepFailure({ code: 'ActivityFailure', reason: 'channel-full' }), 'retryable');
     assert.equal(classifyStepFailure({ code: 'SomethingElse' }), 'unscanned', '认不出的不放行');
+    assert.equal(classifyStepFailure({ code: 'WAITING_USER' }), 'blocked', '等人在回答不是传输故障，重试只会再问一次');
   });
 });
