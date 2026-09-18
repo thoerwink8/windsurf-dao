@@ -356,4 +356,10 @@ test('⑬ 注释和字符串里的 spawnSync( 不当调用（#1405 审官 P1）'
   assert.equal(countSpawnCalls('const c = `spawnSync(tmpl)`;'), 0);
   assert.equal(countSpawnCalls('spawnSync /* gap */ ("x");'), 1);
   assert.equal(countSpawnCalls('const d = `x ${spawnSync("inner")} y`;'), 1, '模板插值里的调用要数');
+  const regexThenCalls = [
+    'assert.doesNotMatch(x, /input:\\s*["\']reply["\']/);',
+    'spawnSync("a");',
+    'spawnSync("b");',
+  ].join('\n');
+  assert.equal(countSpawnCalls(regexThenCalls), 2, '正则里的引号不许吞掉后面的真调用');
 });

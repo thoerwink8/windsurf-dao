@@ -58,14 +58,15 @@ function skipQuoted(s, i, n, quote) {
   return n;
 }
 
+function isWs(c) {
+  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
+}
+
 /** spawnSync 与 ( 之间只允许空白和注释。 */
 function skipWsComments(s, i, n) {
   while (i < n) {
     const c = s[i];
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v') {
-      i++;
-      continue;
-    }
+    if (isWs(c)) { i++; continue; }
     if (c === '/' && s[i + 1] === '/') {
       i = skipLineComment(s, i, n);
       continue;
@@ -79,12 +80,37 @@ function skipWsComments(s, i, n) {
   return i;
 }
 
+function skipRegex(s, i, n) {
+  i += 1;
+  let inClass = false;
+  while (i < n) {
+    const c = s[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '[' && !inClass) { inClass = true; i++; continue; }
+    if (c === ']' && inClass) { inClass = false; i++; continue; }
+    if (c === '/' && !inClass) {
+      i++;
+      while (i < n && isIdentChar(s[i])) i++;
+      return i;
+    }
+    if (c === '\n' || c === '\r') return i;
+    i++;
+  }
+  return n;
+}
+
+const REGEX_AFTER_KEYWORD = new Set([
+  'return', 'case', 'throw', 'new', 'typeof', 'void', 'delete',
+  'await', 'yield', 'in', 'of', 'instanceof',
+]);
+
 /**
  * 数的是**调用**，不是「提到」。
  * 2026-09-06 首版按 /spawnSync/ 计数，import 行和注释里的字都被算进去。
  * 2026-09-18 #1405 审官 P1：`\bspawnSync\s*\(` 扫原文，仍会把 `// spawnSync(`
  * 和 `"spawnSync("` 当成调用。词法扫描跳过注释、引号串、模板字面量；
  * 模板插值 `${...}` 里的代码照数（那是真调用）。
+ * 正则字面量也要跳过：`/["'].../` 若不跳，里面的引号会把后面的真调用吞掉。
  */
 export function countSpawnCalls(source) {
   const s = String(source);
@@ -92,6 +118,23 @@ export function countSpawnCalls(source) {
   let i = 0;
   let count = 0;
   const stack = [{ kind: 'code', braces: 0 }];
+  // 'Z' = 上一枚是值（标识符/数字/字符串/正则/模板/)/]），否则是那一枚标点。
+  let lastSig = '';
+  let lastWord = '';
+
+  function noteValue(word) {
+    lastSig = 'Z';
+    lastWord = word || '';
+  }
+  function notePunct(ch) {
+    lastSig = ch;
+    lastWord = '';
+  }
+  function slashIsRegex() {
+    if (!lastSig) return true;
+    if (lastSig === 'Z') return REGEX_AFTER_KEYWORD.has(lastWord);
+    return '([{,;=!&|?:~^%*+-'.includes(lastSig);
+  }
 
   while (i < n) {
     const ctx = stack[stack.length - 1];
@@ -107,8 +150,19 @@ export function countSpawnCalls(source) {
         i = skipBlockComment(s, i, n);
         continue;
       }
+      if (c === '/') {
+        if (slashIsRegex()) {
+          i = skipRegex(s, i, n);
+          noteValue('');
+          continue;
+        }
+        notePunct('/');
+        i++;
+        continue;
+      }
       if (c === "'" || c === '"') {
         i = skipQuoted(s, i, n, c);
+        noteValue('');
         continue;
       }
       if (c === '`') {
@@ -116,10 +170,11 @@ export function countSpawnCalls(source) {
         i++;
         continue;
       }
-      if (c === '{') { ctx.braces++; i++; continue; }
+      if (c === '{') { ctx.braces++; notePunct('{'); i++; continue; }
       if (c === '}') {
         if (ctx.braces > 0) ctx.braces--;
         else if (stack.length > 1) stack.pop();
+        notePunct('}');
         i++;
         continue;
       }
@@ -131,17 +186,32 @@ export function countSpawnCalls(source) {
           const j = skipWsComments(s, afterPos, n);
           if (j < n && s[j] === '(') count++;
         }
+        noteValue(SPAWN_IDENT);
         i += SPAWN_IDENT.length;
         continue;
       }
+      if (isWs(c)) { i++; continue; }
+      if (isIdentChar(c)) {
+        lastWord = lastSig === 'Z' && lastWord ? lastWord + c : c;
+        lastSig = 'Z';
+        i++;
+        continue;
+      }
+      notePunct(c);
       i++;
       continue;
     }
 
     if (c === '\\') { i += 2; continue; }
-    if (c === '`') { stack.pop(); i++; continue; }
+    if (c === '`') {
+      stack.pop();
+      noteValue('');
+      i++;
+      continue;
+    }
     if (c === '$' && c2 === '{') {
       stack.push({ kind: 'code', braces: 0 });
+      notePunct('{');
       i += 2;
       continue;
     }
