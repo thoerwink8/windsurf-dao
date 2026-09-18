@@ -542,6 +542,23 @@ linuxTest('ensureGitWorkspace refuses a bad branch name and an unregistered occu
   assert.throws(()=>ensureGitWorkspace(repo,'feature/squat',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
 });
 
+linuxTest('ensureGitWorkspace reuses a detached review tree at its deterministic path',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  const first=ensureGitWorkspace(repo,'dao/review-1-abc',{homeDir:dir,base:'HEAD'});
+  // 审查流程检出确切 HEAD 后会 detach；此时 worktree list 里只剩 detached 行。
+  git(['checkout','--detach','HEAD'],first.path);
+  const second=ensureGitWorkspace(repo,'dao/review-1-abc',{homeDir:dir,base:'HEAD'});
+  assert.equal(second.created,false);
+  assert.equal(second.path,first.path);
+});
+
+linuxTest('ensureGitWorkspace still refuses the slot when a different branch occupies it',t=>{
+  const {dir,repo}=gitRepo(t);
+  // slot/branch 与 slot-branch 会算出同一个目标路径；占位者是别的分支（非 detached）时必须照旧拒绝。
+  ensureGitWorkspace(repo,'slot/branch',{homeDir:dir,base:'HEAD'});
+  assert.throws(()=>ensureGitWorkspace(repo,'slot-branch',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
 linuxTest('ensureGitWorkspace reuses an existing branch instead of rebranching it',t=>{
   const {dir,repo,git}=gitRepo(t);
   git(['branch','existing/work']);

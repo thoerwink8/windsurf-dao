@@ -53,9 +53,13 @@ export function promotedVersion(homeDir,fallback) {
 export function ensureGitWorkspace(repo,branch,{homeDir=os.homedir(),base='origin/master',exec=execFileSync}={}) {
   const root=fs.realpathSync(repo);const git=args=>String(exec('git',['-C',root,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim();
   git(['check-ref-format','--branch',branch]);
-  const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
-  for(const b of blocks){const lines=b.split('\n');if(lines.includes('branch refs/heads/'+branch)){const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(dir&&fs.existsSync(dir)){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}}
   const target=path.join(homeDir,'mirasim-worktrees',path.basename(root),branch.replace(/[^\w.-]/g,'-'));
+  const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
+  for(const b of blocks){const lines=b.split('\n');const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(!dir||!fs.existsSync(dir))continue;
+    // 按分支名找是主路。审查树在 review 里被 checkout --detach 后分支行消失（只剩 detached 行），
+    // 只认分支名会让重试把已有树判成「未注册占位」而永久卡死（g1 实咬）。目标路径由分支名
+    // 确定性推出：路径相符且处于 detached 就是这棵树的树位，直接复用；占位是别的分支仍拒绝。
+    if(lines.includes('branch refs/heads/'+branch)||(dir===target&&lines.includes('detached'))){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}
   if(fs.existsSync(target))throw new Error('unregistered worktree path already exists: '+target);
   fs.mkdirSync(path.dirname(target),{recursive:true});let exists=false;try{git(['show-ref','--verify','--quiet','refs/heads/'+branch]);exists=true;}catch{}
   if(exists)git(['worktree','add',target,branch]);else git(['worktree','add','-b',branch,target,base]);
