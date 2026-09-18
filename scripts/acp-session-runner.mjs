@@ -99,6 +99,28 @@ export function liftLiteralHeredocs(line) {
 }
 const restoreHeredocs = (word, literals) =>
   word.replace(/\u0000H(\d+)\u0000/g, (match, index) => literals[Number(index)] ?? match);
+/** 把一行 shell 拆成 `&&` / `;` 分隔的段，**引号内的分隔符不算**（如 `-m "a;b"` 是内容）。
+ *  引号外的 | < > & $( ) 等重定向/替换仍由 commandWords 逐词拒绝；本函数只负责分段。 */
+export function splitCommandSegments(line) {
+  const out = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+    if (ch === ';') { out.push(current); current = ''; continue; }
+    if (ch === '&' && line[i + 1] === '&') { out.push(current); current = ''; i += 1; continue; }
+    current += ch;
+  }
+  out.push(current);
+  return out.map(part => part.trim()).filter(Boolean);
+}
+
 function commandWords(input) {
   if (Array.isArray(input)) return input.length && input.every(word => typeof word === 'string') ? input : null;
   if (typeof input !== 'string' || /[\r\n]/.test(input)) return null;
@@ -229,7 +251,11 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     // substitution) is refused by commandWords below, because it rejects an
     // unquoted metacharacter in any word of a segment.
     const { lifted, literals } = liftLiteralHeredocs(line);
-    const segments = lifted.split(/\s*&&\s*/).filter(part => part.trim());
+    // `;` 与 `&&` 同等对待：都只是分段符，每段仍要各自命中前缀白名单。
+    // 2026-09-18 实咬：只认 `&&` 时，`git log …; ls …` 这类复合只读命令整句被拒，
+    // 而报错还把已在白名单里的 git 命令列成「不在白名单」——真因被盖住，会话停在 waiting_user。
+    // 必须**引号感知**：引号里的 `;`（如 `-m "a;b"`）是内容不是分隔符。
+    const segments = splitCommandSegments(lifted);
     if (!segments.length) return null;
     const parsed = [];
     for (const segment of segments) {
