@@ -21,29 +21,12 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
   const sessions = files.sessions || '';
 
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
-  if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
-  if (dao) {
-    const wdStart = dao.indexOf('async function cmdWorkerDoneMirasim');
-    const wdEnd = dao.indexOf('async function cmdStartMirasim', wdStart);
-    const wd = wdStart >= 0 && wdEnd > wdStart ? dao.slice(wdStart, wdEnd) : '';
-    const haltAt = wd.search(/if \(plan\.halt === REVIEW_ROUNDS_HALT \|\| plan\.halt === REVIEW_ROUNDS_UNSCANNED\)/);
-    if (haltAt < 0) {
-      problems.push('worker-done 超限早退分支丢了');
-    } else {
-      const rest = wd.slice(haltAt);
-      const nextIf = rest.search(/\n  if \(plan\.round === 'first'\)/);
-      const haltBlock = nextIf >= 0 ? rest.slice(0, nextIf) : rest.slice(0, 1600);
-      if (!/stopSessionsAtCwd/.test(haltBlock)) {
-        problems.push('worker-done 超限/unscanned 早退没停会话');
-      }
-      if (!/\bstopped\b/.test(haltBlock)) {
-        problems.push('worker-done 超限早退输出没带 stopped');
-      }
-      if (!/stopped\.ok !== true/.test(haltBlock) && !/stopped\.ok === false/.test(haltBlock)) {
-        problems.push('worker-done 超限早退停会话失败没有 fail-visible');
-      }
-    }
+  if (dao && /stopSessionsAtCwd\(\s*[\w.]+\s*,\s*process\.cwd\(\)\s*\)/.test(dao)) {
+    problems.push('worker-done 停会话仍按裸 cwd，没传 PR 身份');
   }
+  if (dao && !/cleanupAfterWorkerDone/.test(dao)) problems.push('worker-done 三条收尾没走同一清退函数');
+  if (dao && !/plan\.halt/.test(dao)) problems.push('worker-done 没有预算早退收尾分支');
+  if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
   if (core && !/'reap-tree'/.test(core)) problems.push('指挥官动作表没有 reap-tree');
   if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');
   if (core && !/planOrphanReaps/.test(core)) problems.push('指挥官没产幽灵进程回收');

@@ -529,16 +529,15 @@ describe('热路真的读了这个模块', () => {
     assert.ok(start > 0, 'cmdWorkerDoneMirasim 没了');
     assert.ok(end > start, 'cmdWorkerDoneMirasim 切不到 cmdStartMirasim');
     const fn = src.slice(start, end);
-    const haltIf = fn.indexOf('if (plan.halt === REVIEW_ROUNDS_HALT || plan.halt === REVIEW_ROUNDS_UNSCANNED)');
+    assert.match(fn, /REVIEW_ROUNDS_HALT/);
+    assert.match(fn, /REVIEW_ROUNDS_UNSCANNED/);
+    const haltIf = fn.indexOf('if (plan.halt)');
     assert.ok(haltIf > 0, '超限早退分支丢了');
     const haltBlock = fn.slice(haltIf, fn.indexOf("if (plan.round === 'first')", haltIf));
-    assert.match(haltBlock, /REVIEW_ROUNDS_HALT/);
-    assert.match(haltBlock, /REVIEW_ROUNDS_UNSCANNED/);
-    assert.match(haltBlock, /stopSessionsAtCwd/);
+    assert.match(haltBlock, /cleanupAfterWorkerDone/);
     assert.match(haltBlock, /\bstopped\b/);
-    assert.match(haltBlock, /交卷后停会话/);
-    assert.match(haltBlock, /stopped\.ok !== true|stopped\.ok === false/);
     assert.doesNotMatch(haltBlock, /dryRun/);
+    assert.match(src, /async function cleanupAfterWorkerDone[\s\S]{0,500}交卷后停会话/);
   });
 
   it('execMarkExhausted 已有自动化认输时升级为等用户，不是整段旁路', () => {

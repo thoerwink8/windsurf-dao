@@ -246,6 +246,8 @@ export function spentStaleReds({ prs, staleRedAt, reworkDispatched } = {}) {
     const k = rereviewBudgetKey(pr.number, head, reds);
     const marker = k.lastIndexOf('@red:');
     if (marker < 0) continue;
+    // #1217：键 rereview:<pr>@<head>@e<epoch>[@red:<oid>]，一张 PR 多条。
+    // 本处问「这一格试满了没有」→ 字典直查 rereviewBudgetKey。不要按 pr 取第一条。
     const tries = Number(book[k]?.tries) || 0;
     if (tries < MAX_REREVIEW_TRIES) continue;
     const red = k.slice(marker + 5);
@@ -979,6 +981,7 @@ function collectCandidates(situation) {
       branch: pr.headRefName,
     });
     if (live.live || live.unavailable) return false;
+    // #1217：pump-draft:<pr>@e<epoch> 按张计不按 head，仍带 epoch。字典直查当前键。
     const prev = reworkDispatched[pumpDraftKey(pr.number)];
     if (prev && prev.unscanned === true) return false;
     return true;
@@ -1429,6 +1432,9 @@ function collectCandidates(situation) {
       reviews, situation, out, exhaustedThisRound, homeRepo,
     })) continue;
     if (livePr && prHasStuckLabel(livePr) && !staleTicket) continue; // #1000：已认输 / 等用户，省额度不重试 drain
+    // #1217：drain 账键 pr:<pr>@<head>@e<epoch>，一张 PR 多条。validateRetryDrain
+    // 字典直查 drainLedgerKey(pr, head)，不要按 pr 取第一条。结论写在调用点——
+    // commander-verbs.mjs 在 EPOCH_FILES 里，旁注会无故换代重试账。
     const drain = validateRetryDrain({
       pr: it.pr,
       head: itHead,
@@ -1491,6 +1497,7 @@ function collectCandidates(situation) {
   // 而 reviews-missing 在下面是静默 continue，写在后面会被那一条吃掉。
   function pushRework(pr, { brief, head, redRounds, why, hubText, conflict = false }) {
     const rkey = reworkKey(pr.number, head);
+    // #1217：字典直查 rework:<pr>@<head>@e<epoch>，不要按 pr 取最老一条。
     // 「派了 ≠ 成了」这条早就为 drain 定过（tries + 宽限 + 试满 escalate），却没接到返工这条路上：
     // 原判据只看「这条账在不在」，不看它成没成。于是一次**失败**的派工（ok:false，压根没造出工人）
     // 也会把这个 PR 在这个 head 上永久挡住。2026-09-06 实咬：PR #909 的返工 21:11 因署名单缺
@@ -2071,6 +2078,7 @@ function collectCandidates(situation) {
         continue;
       }
       const rrKey = rereviewBudgetKey(pr.number, headForAction, staleRedAt);
+      // #1217：字典直查当前复审键（带 @red: 时也是确切一格），不要按 pr 取第一条。
       const prev = reworkDispatched[rrKey];
       const tries = Number(prev?.tries) || 0;
       const ageMin = prev ? (nowMs - (Date.parse(prev.at || '') || 0)) / 60000 : Infinity;
