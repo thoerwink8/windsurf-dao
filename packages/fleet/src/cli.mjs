@@ -119,7 +119,7 @@ const executorPrompt = ({ task, plan, feedback, round, issue }) => `你是本任
 ${issue}
 计划：${plan.plan}
 ${feedback ? `上一轮审查阻塞项（必须逐条解决）：${JSON.stringify(feedback.blocking)}` : ''}
-要求：改动尽量小（能改 1 个文件就别动 3 个）；提交作者身份系统已经设好，不用管；完成后必须 git add + git commit。依赖系统已按 lock 装好（packages/fleet），直接 npm test 即可；不要跑 npm ci / npm install（要联网，会被权限闸拦住）。不要跑全量自检——验证由系统做。**不要推送、不要开 PR、不要合并**——推送与开 PR 由系统做。最后用一句话说明你改了什么、跑了什么。`;
+要求：改动尽量小（能改 1 个文件就别动 3 个）；提交作者身份系统已经设好，不用管；完成后必须 git add + git commit。**提交完就停手**：不要再跑任何命令、不要推送、不要开 PR——推送、开 PR、跑检查、合并、关单全由系统接手。若确实要先验证，只用 npm test（依赖系统已按 lock 装好），不要 npm ci / npm install，不要跑全量自检。**不要推送、不要开 PR、不要合并**——推送与开 PR 由系统做。最后用一句话说明你改了什么、跑了什么。`;
 
 async function makeActivities() {
   const { createExecutionRuntime } = await import('../../../scripts/lib/execution-runtime.mjs');
