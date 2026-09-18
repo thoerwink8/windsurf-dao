@@ -171,8 +171,20 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       return { plan: plan.plan, sessionKey: key, at: now() };
     },
     async execute(task, { plan, prepared, feedback, round }) {
-      const { key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task) }), "executor");
-      if (status !== 'done') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `executor session ${status}`);
+      let key = null;
+      let status = 'done';
+      try {
+        ({ key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task) }), "executor"));
+      } catch (error) {
+        if (error?.type !== 'WAITING_USER') throw error;
+        // 边界画在「交卷」上：工人在等人回答权限，但它可能**已经交卷**（提交就是交卷）。
+        // 有提交就按完成接手；没有提交才真的是卡住——不追着它发明的每条命令去放宽白名单。
+        const committed = await headOf(prepared.checkpoint);
+        if (committed === (feedback?.head || prepared.head)) throw error;
+        await reapWorkdirSessions(prepared.checkpoint).catch(() => {});
+        status = 'waiting_user-with-commit';
+      }
+      if (status !== 'done' && status !== 'waiting_user-with-commit') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `executor session ${status}`);
       const head = await headOf(prepared.checkpoint);
       const expectedNew = feedback?.head || prepared.head;
       if (head === expectedNew) throw fail('UNSUPPORTED_CAPABILITY', 'executor produced no new commit');

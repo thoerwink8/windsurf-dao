@@ -148,6 +148,16 @@ describe('activities bind the workflow to real systems', () => {
     const reapIdx = calls.findIndex(([kind]) => kind === 'listSessions');
     assert.equal(reapIdx >= 0 && reapIdx < startIdx, true, '起会话前必须先收本树（否则重试撞租约闸）');
   });
+  it('a worker still asking for permission but already committed is treated as delivered', async () => {
+    const { activities, calls } = harness({
+      git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),
+      gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+      runtime: { waitForCompletion: async () => ({ status: 'waiting_user' }), readSession: async () => ({ phase: 'waiting_user', text: '' }) },
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 });
+    assert.equal(artifact.head, H, '有提交就按交卷接手');
+    assert.equal(calls.some(([k]) => k === 'stopSession'), true, '接手前要释放租约');
+  });
   it('a session that does not finish is a failure, never an empty result', async () => {
     const { activities } = harness({ runtime: { waitForCompletion: async () => ({ status: 'unknown' }) } });
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b' }, round: 0 }), /executor session unknown/);
