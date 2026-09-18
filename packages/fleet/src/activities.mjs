@@ -51,7 +51,7 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = 120000, unknownWaitRounds = 3, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -75,13 +75,17 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     if (!listed?.ok) return null;
     return (listed.sessions || []).filter(session => session.cwd === workdir || String(session.cwd || '').startsWith(`${workdir}/`));
   };
-  const reapWorkdirSessions = async workdir => {
+  // 正在干活的会话不许被「收尾/收树」误杀：ACP 读取会返回 unknown（未定），
+  // 那时会话其实还在跑（g6 实咬：4 个会话都在干到一半被自己的收尾取消）。
+  const ACTIVE_STATES = new Set(['running', 'streaming', 'pending', 'active']);
+  const reapWorkdirSessions = async (workdir, { keepActive = true } = {}) => {
     const sessions = await sessionsIn(workdir);
     if (sessions === null) return { ok: false, why: 'session list unscanned' };
     const stopped = [];
     for (const session of sessions) {
       const key = session.sessionKey || session.key;
       if (!key) continue;
+      if (keepActive && ACTIVE_STATES.has(String(session.state || '').toLowerCase())) continue;
       const result = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
       stopped.push({ key, ok: result?.ok === true });
     }
@@ -104,12 +108,21 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     }
     const key = started?.sessionKey || started?.key;
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
-    const settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
-    const view = await runtime.readSession(key);
-    // 一轮结束就把它停掉：租约闸是「一棵树同时只许一个会话」，会话不释放，
-    // 下一轮（执行/复审/返工）在同一棵树里起不来——首跑实咬：lead 完成后 execute 被拒。
-    const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
-    if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `session release unverified: ${String(released?.why || '').slice(0, 120)}`);
+    let settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
+    let view = await runtime.readSession(key);
+    // unknown 是「这次没读到终态」，不是「会话失败」——多等几轮再判，
+    // 不许把还在干活的会话当失败处理（g6 实咬：判 unknown 后立刻收尾 = 取消在跑的会话）。
+    for (let attempt = 0; attempt < unknownWaitRounds && settled?.status === 'unknown'; attempt += 1) {
+      await sleep(unknownWaitMs);
+      settled = await runtime.waitForCompletion(key, { timeoutMs: unknownWaitMs });
+      view = await runtime.readSession(key);
+    }
+    // 只有终态才收尾：租约闸是「一棵树同时只许一个会话」，会话不释放下一轮起不来；
+    // 但非终态时收尾＝取消仍在跑的会话，宁可把未定抛给上层重试，也不杀活人。
+    if (settled?.status === 'done' || settled?.status === 'failed') {
+      const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
+      if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `session release unverified: ${String(released?.why || '').slice(0, 120)}`);
+    }
     return { key, status: settled?.status, view };
   };
   /** 执行档的 agent 与 family 都从执行目录取：agent 决定起哪个执行体，family 决定跨厂判定。
