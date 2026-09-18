@@ -9,7 +9,8 @@ const fail = (code, message) => ApplicationFailure.nonRetryable(message, code);
  *  取「最后一块」会把有阻塞的审查读成通过——宁可 unscanned，不猜。 */
 /** 扫出文本里**所有**能解析的平衡 JSON 对象（含围栏内外、含嵌套）。
  *  只取「围栏内容 ∪ 全文首尾大括号」是不够的：模型常把真结论写成裸对象、再用围栏回显一份空模板，
- *  那样「唯一进得了候选集的那块」就是空结论——有 P1 的审查被读成通过。 */
+ *  那样「唯一进得了候选集的那块」就是空结论——有 P1 的审查被读成通过。
+ *  命中的对象按 JSON.stringify 去重；谓词命中数 ≠ 1 一律 null（宁可 unscanned，不猜哪份是真的）。 */
 export function jsonObjects(text) {
   const source = String(text || '');
   const out = [];
@@ -50,7 +51,7 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, projects, familiesOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -76,17 +77,23 @@ export function createActivities({ runtime, gh, git, projects, familiesOf, revie
   };
   const runSession = async (task, workdir, prompt, role) => {
     const profile = task.roles[role];
-    const started = await runtime.startSession({ profileId: profile.profile, agent: role === 'reviewer' ? 'codex' : 'grok', model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
+    const started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
     const key = started?.sessionKey || started?.key;
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
     const settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
     const view = await runtime.readSession(key);
     return { key, status: settled?.status, view };
   };
-  const familyFromCatalog = profileId => {
-    if (typeof familiesOf !== 'function') return null;
-    try { const family = familiesOf(profileId); return typeof family === 'string' && family.trim() ? family.trim().toLowerCase() : null; }
-    catch { return null; }
+  /** 执行档的 agent 与 family 都从执行目录取：agent 决定起哪个执行体，family 决定跨厂判定。
+   *  两者都不采信契约里的声明——契约能写「我是另一家」，执行目录不能。 */
+  const profileMeta = profileId => {
+    if (typeof profileOf !== 'function') return null;
+    try {
+      const meta = profileOf(profileId);
+      if (!meta) return null;
+      const family = typeof meta.family === 'string' && meta.family.trim() ? meta.family.trim().toLowerCase() : null;
+      return { agent: typeof meta.agent === 'string' && meta.agent.trim() ? meta.agent.trim() : undefined, family };
+    } catch { return null; }
   };
   const prView = async (number, fields, { cwd, role = 'marshal' }) => runGh(['pr', 'view', String(number), '--json', fields], { cwd, role });
 
@@ -141,8 +148,8 @@ export function createActivities({ runtime, gh, git, projects, familiesOf, revie
       }
     },
     async review(task, artifact, { checks }) {
-      const executorFamily = familyFromCatalog(task.roles.executor.profile);
-      const reviewerFamily = familyFromCatalog(task.roles.reviewer.profile);
+      const executorFamily = profileMeta(task.roles.executor.profile)?.family || null;
+      const reviewerFamily = profileMeta(task.roles.reviewer.profile)?.family || null;
       const repo = projectPath(task.repository);
       const reviewBranch = `dao/review-${task.issue}-g${task.generation}-${artifact.head.slice(0, 12)}`;
       const tree = await runtime.ensureWorkspace(repo, reviewBranch);

@@ -68,12 +68,17 @@ async function gitRun(argv, { cwd, env } = {}) {
 }
 
 function profileFamily(profileId) {
-  const doc = JSON.parse(readFileSync(join(REPO_ROOT, 'docs', 'execution-profiles.json'), 'utf8'));
-  const profile = (doc.profiles || []).find(item => item.id === profileId);
-  if (!profile) throw new Error(`unknown execution profile: ${profileId}`);
+  const profile = profileEntry(profileId);
   const family = profile.modelFamily || profile.provider;
   if (!family) throw new Error(`profile ${profileId} has no model family`);
   return String(family).toLowerCase();
+}
+
+function profileEntry(profileId) {
+  const doc = JSON.parse(readFileSync(join(REPO_ROOT, 'docs', 'execution-profiles.json'), 'utf8'));
+  const profile = (doc.profiles || []).find(item => item.id === profileId);
+  if (!profile) throw new Error(`unknown execution profile: ${profileId}`);
+  return profile;
 }
 
 function specFromArgs(args) {
@@ -98,21 +103,25 @@ function specFromArgs(args) {
   });
 }
 
+const readIssue = (task) => `读 issue 正文：node scripts/gh-as.mjs marshal -- issue view ${task.issue} --json title,body,labels`;
+
 const reviewerPrompt = ({ task, artifact, checks }) => `你是本任务的独立审查者，只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD，不要改代码、不要提交、不要推送。
-必查项：契约要求的检查在 ${artifact.head} 上全绿（当前证据：${JSON.stringify(checks)}）。
+必查项：契约要求的检查在 ${artifact.head} 上全绿（当前证据：${JSON.stringify(checks)}）。要自己核 CI 用 node scripts/gh-as.mjs marshal -- pr checks ${artifact.pr}（不要用裸 gh，会话环境里它没有凭据）。
 请给出你的发现，只输出一个 JSON 对象，不要输出其它文字：
 {"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","detail":"<文件:行号 + 现象 + 期望改法>"}]}
 没有任何问题时输出 {"findings":[]}。P1 只用于会导致错误结果、数据丢失、安全或协议破坏的问题；风格与建议用 P3。`;
 
-const leadPrompt = ({ task, prepared, artifact, feedback, round }) => `你是本任务的主脑（lead）。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录 ${prepared.checkpoint}。
-${feedback ? `上一轮审查阻塞项：${JSON.stringify(feedback.blocking)}\n本轮必须只针对这些阻塞项收敛。` : '这是第一轮：先读清仓库与 issue，给出最小、可验证的实施计划。'}
+const leadPrompt = ({ task, prepared, artifact, feedback, round }) => `你是本任务的主脑（lead）。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录 ${prepared.checkpoint}（该 issue 的专用分支）。
+${readIssue(task)}
+${feedback ? `上一轮审查阻塞项：${JSON.stringify(feedback.blocking)}\n本轮必须只针对这些阻塞项收敛。` : '这是第一轮：先读清 issue 与相关代码，给出最小、可验证的实施计划。'}
 ${artifact ? `当前已有实现提交 ${artifact.head}。` : ''}
-只输出一个 JSON 对象：{"plan":"<分步计划，包含要跑的命令与成功判据>"}。`;
+只输出一个 JSON 对象：{"plan":"<分步计划：改哪些文件、跑哪些命令、成功判据是什么>"}。`;
 
 const executorPrompt = ({ task, plan, feedback, round }) => `你是本任务的执行者。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录就是任务分支，直接在这里改代码。
+${readIssue(task)}
 计划：${plan.plan}
 ${feedback ? `上一轮审查阻塞项（必须逐条解决）：${JSON.stringify(feedback.blocking)}` : ''}
-要求：改动尽量小；跑仓库自检（如 node scripts/dao-check.mjs）；完成后必须 git add + git commit（提交作者用仓库约定身份）。不要推送、不要开 PR、不要合并。最后用一句话说明你改了什么、跑了什么。`;
+要求：改动尽量小；跑仓库自检（如 node scripts/dao-check.mjs）；提交前先跑 node scripts/gh-as.mjs worker --set-git-identity 把提交作者设成仓库约定的身份；完成后必须 git add + git commit。**不要推送、不要开 PR、不要合并**——推送与开 PR 由系统做。最后用一句话说明你改了什么、跑了什么。`;
 
 async function makeActivities() {
   const { createExecutionRuntime } = await import('../../../scripts/lib/execution-runtime.mjs');
@@ -132,7 +141,10 @@ async function makeActivities() {
     projects: PROJECTS,
     gh: ghAs,
     git: gitRun,
-    familiesOf: profileFamily,
+    profileOf: profileId => {
+      const profile = profileEntry(profileId);
+      return { agent: profile.agent, family: profile.modelFamily || profile.provider };
+    },
     pushEnv: () => {
       const token = resolveToken('worker');
       if (!token.ok) throw new Error(`worker token unavailable: ${token.error}`);
