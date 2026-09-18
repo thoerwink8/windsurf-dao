@@ -103,15 +103,51 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /no new commit/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
   });
-  it('never cancels a session that is still working when the verdict is unknown', async () => {
+  it('unknown 宽限里会话自己完成 → 不提前杀，按终态释放一次', async () => {
+    let waits = 0;
+    const { activities, calls } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: (waits += 1) === 1 ? 'unknown' : 'done' }),
+        readSession: async () => text('```json\n{"plan":"Implement."}\n```'),
+      },
+      deps: { unknownWaitRounds: 3 },
+    });
+    const plan = await activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 });
+    assert.equal(plan.plan, 'Implement.');
+    assert.equal(calls.filter(([kind]) => kind === 'stopSession').length, 1, '只在终态释放一次，宽限里不杀');
+  });
+  it('宽限里变成等人 → 立刻报 WAITING_USER，不折成可重试', async () => {
+    let waits = 0;
+    const { activities } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: (waits += 1) === 1 ? 'unknown' : 'waiting_user' }),
+        readSession: async () => ({ phase: 'running', text: '' }),
+      },
+      deps: { unknownWaitRounds: 3 },
+    });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type === 'WAITING_USER');
+  });
+  it('宽限用尽仍未知 → 停掉会话让树，报可重试（不能既不起新的也杀不掉）', async () => {
     const { activities, calls } = harness({
       runtime: {
         waitForCompletion: async () => ({ status: 'unknown' }),
-        readSession: async () => text('```json\n{"plan":"Implement."}\n```'),
+        readSession: async () => ({ phase: 'running', text: '' }),
       },
     });
-    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /lead session unknown/);
-    assert.equal(calls.some(([kind]) => kind === 'stopSession'), false, 'unknown 时不许停会话（那是在杀活人）');
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /unknown after grace/);
+    assert.equal(calls.some(([kind]) => kind === 'stopSession'), true, '宽限用尽要停掉会话让树');
+  });
+  it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
+    const { activities, calls } = harness({
+      git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),
+      runtime: {
+        waitForCompletion: async () => ({ status: 'waiting_user' }),
+        readSession: async () => ({ phase: 'waiting_user', text: '' }),
+        stopSession: async () => ({ ok: false, why: 'vendor alive' }),
+      },
+    });
+    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /handoff session release unverified/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false, '树没释放就不许 push');
   });
   it('does not reap a session that is still running', async () => {
     const stopped = [];

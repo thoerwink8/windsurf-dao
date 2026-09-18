@@ -15,8 +15,14 @@ export async function fusionTaskWorkflow(input, options = {}) {
   let cancelled = false;
   let transientRetries = 0;
   const scope = new CancellationScope();
+  // 活动超时要覆盖 runSession 的最坏路径：首轮 waitForCompletion(stepTimeout) + unknown 宽限
+  // (unknownWaitMs × unknownWaitRounds) + 收尾余量——不然宽限在生产根本跑不完，活动先被 Temporal
+  // 掐死（复核实咬：单测把等待改成 1ms 所以测不到）。默认值与 createActivities 的默认保持一致。
+  const unknownWaitMs = Number.isFinite(options.unknownWaitMs) ? options.unknownWaitMs : 120000;
+  const unknownWaitRounds = Number.isFinite(options.unknownWaitRounds) ? options.unknownWaitRounds : 3;
+  const graceSeconds = Math.ceil((unknownWaitMs * unknownWaitRounds) / 1000);
   const activityOptions = {
-    startToCloseTimeout: `${task.limits.stepTimeoutSeconds}s`,
+    startToCloseTimeout: `${task.limits.stepTimeoutSeconds + graceSeconds + 120}s`,
     retry: { maximumAttempts: 1 },
     ...(options.activityTaskQueue ? { taskQueue: options.activityTaskQueue } : {}),
   };
