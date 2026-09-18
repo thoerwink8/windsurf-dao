@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Client, Connection } from '@temporalio/client';
-import { Worker } from '@temporalio/worker';
+import { NativeConnection, Worker } from '@temporalio/worker';
 import { normalizeTask, taskIdOf } from './contract.mjs';
 import { createActivities } from './activities.mjs';
 
@@ -168,16 +168,23 @@ async function main() {
   const client = new Client({ connection, namespace: NAMESPACE });
   try {
     if (command === 'worker') {
-      const activities = await makeActivities();
-      const worker = await Worker.create({
-        connection,
-        namespace: NAMESPACE,
-        taskQueue: String(args.queue || QUEUE),
-        workflowsPath: join(import.meta.dirname, 'workflows.mjs'),
-        activities,
-      });
-      process.stdout.write(`[fleet] worker 已启动：queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`);
-      await worker.run();
+      // Worker 要的是 worker 包自己的 NativeConnection，不是 client 的 Connection：
+      // 传错类型会在原生桥 downcast 失败（真跑实咬，单测的 mock 看不出来）。
+      const native = await NativeConnection.connect({ address: ADDRESS });
+      try {
+        const activities = await makeActivities();
+        const worker = await Worker.create({
+          connection: native,
+          namespace: NAMESPACE,
+          taskQueue: String(args.queue || QUEUE),
+          workflowsPath: join(import.meta.dirname, 'workflows.mjs'),
+          activities,
+        });
+        process.stdout.write(`[fleet] worker 已启动：queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`);
+        await worker.run();
+      } finally {
+        await native.close();
+      }
       return 0;
     }
     if (command === 'start') {
