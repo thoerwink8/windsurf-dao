@@ -518,12 +518,16 @@ export async function stopSessionAndReap(runtime, sessionKey, { workdir = null }
     catch (e) {
       return { ok: false, unscanned: true, why: `会话清单没查成：${String(e?.message || e)}` };
     }
-    if (!listed || listed.ok !== true) {
+    const rows = Array.isArray(listed?.sessions) ? listed.sessions : null;
+    if (!rows) {
       return { ok: false, unscanned: true, why: listed?.error || listed?.why || '会话清单没查成' };
     }
-    const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
+    const hit = rows.find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
     if (!hit) {
-      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 不在会话清单，无法核实 worktree` };
+      const why = listed && listed.ok !== true
+        ? (listed.error || listed.why || '会话清单没查成')
+        : `会话 ${sessionKey} 不在会话清单，无法核实 worktree`;
+      return { ok: false, unscanned: true, why };
     }
     target = hit.cwd || hit.workdir || hit.worktree || null;
     if (!target) {
@@ -2649,18 +2653,26 @@ async function stopSessionsAtCwd(runtime, cwd) {
     return { ok: false, unscanned: true, error: 'runtime 没有 listSessions', stopped: [] };
   }
   const listed = await runtime.listSessions();
-  if (!listed || listed.ok === false) {
+  const sessions = Array.isArray(listed?.sessions) ? listed.sessions : null;
+  if (!sessions) {
     return {
       ok: false, unscanned: true,
-      error: (listed && listed.error) || '会话清单没查成',
+      error: (listed && (listed.error || listed.why)) || '会话清单没查成',
       stopped: [],
     };
   }
-  const sessions = Array.isArray(listed.sessions) ? listed.sessions : [];
   const hits = sessions.filter((s) => {
     const cwd = String((s && (s.cwd || s.workdir || s.worktree)) || '').replace(/\\/g, '/').replace(/\/+$/, '');
     return cwd && (cwd === want || cwd.startsWith(`${want}/`));
   });
+  if (listed && listed.ok === false && hits.length === 0) {
+    return {
+      ok: false, unscanned: true,
+      error: listed.error || listed.why || '会话清单没查成',
+      stopped: [],
+      counts: listed.counts || undefined,
+    };
+  }
   const stopped = [];
   for (const s of hits) {
     const key = s.sessionKey || s.key || s.id;

@@ -873,7 +873,8 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     const r = await rt.listSessions();
     assert.equal(r.ok, false);
     assert.equal(r.sessions, null);
-    assert.match(r.why, /没查成/);
+    assert.equal(r.stage, 'timeout');
+    assert.match(r.why, /超时/);
   });
 
   it('hasMore=true 扩大明确 global 查询，直到服务端证明完整', async () => {
@@ -931,8 +932,18 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     const r = await rt.listSessions();
     assert.equal(r.ok, false);
     assert.equal(r.sessions, null);
+    assert.equal(r.stage, 'timeout');
     assert.equal(wire.hungUp, true);
-    assert.match(String(r.why || ''), /没查成|超时|预算/);
+    assert.match(String(r.why || ''), /超时|预算|没查成/);
+  });
+
+  it('#1397 坏帧与超时分得开：回了非数组 sessions 是 list，不是 timeout', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions' }] : []));
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.equal(r.stage, 'list');
+    assert.match(r.why, /没回可用的 sessions 帧/);
   });
 
   it('prompt 已发送但 ACK 丢失是 uncertain，不能释放后重复派', async () => {

@@ -55,4 +55,20 @@ describe('session-stop 后核实并回收 mirasim 子进程', () => {
     assert.match(r.why, /上游不可用/);
     assert.equal(stops, 0);
   });
+
+  it('部分名单里已扫到的会话仍可停，不因 M 条失败把 N 清零', async () => {
+    const { stopSessionAndReap } = await DAO;
+    let stops = 0;
+    const r = await stopSessionAndReap({
+      listSessions: async () => ({
+        ok: false, complete: false, partial: true,
+        sessions: [{ sessionKey: 'codex:seen', cwd: '/tmp/seen-tree' }],
+        errors: [{ error: 'managed active scan limit' }],
+        counts: { observed: 1, unknown: 1, errors: 1 },
+      }),
+      stopSession: async () => { stops += 1; return { ok: true }; },
+    }, 'codex:seen', { workdir: null });
+    assert.equal(r.ok, true);
+    assert.equal(stops, 1);
+  });
 });

@@ -118,6 +118,44 @@ export function allocateManagedScanBudget({
   const listMs = Math.max(0, usable - fallbackMs);
   return { remainingMs, wrapUpMs: wrap, fallbackMs, listMs, exhausted: usable <= 0 };
 }
+
+/** N 条成功 + M 条失败必须都能从返回体读出来；缺数组 = 没扫到任何样本。 */
+export function summarizeScanObservation({ sessions, errors } = {}) {
+  const list = Array.isArray(sessions) ? sessions : null;
+  const errs = Array.isArray(errors) ? errors : [];
+  const byError = {};
+  for (const e of errs) {
+    const k = String((e && (e.error || e.why)) || 'unknown');
+    byError[k] = (byError[k] || 0) + 1;
+  }
+  let observed = 0;
+  let unknown = 0;
+  if (list) {
+    for (const s of list) {
+      const st = s && String(s.state || s.phase || '');
+      if (st && st !== 'unknown') observed += 1;
+      else unknown += 1;
+    }
+  }
+  return {
+    total: list ? list.length : 0,
+    observed,
+    unknown: list ? unknown : 0,
+    missing: list == null,
+    errors: errs.length,
+    byError,
+  };
+}
+
+export function formatIncompleteScanWhy(counts, why) {
+  const c = counts && typeof counts === 'object' ? counts : {};
+  const n = Number.isInteger(c.observed) ? c.observed : 0;
+  const m = Number.isInteger(c.unknown) ? c.unknown : 0;
+  const e = Number.isInteger(c.errors) ? c.errors : 0;
+  const head = `会话名单不完整：观察到 ${n}，未知 ${m}，错误 ${e}`;
+  const extra = why ? `（${String(why)}）` : '';
+  return `${head}${extra}——没查成，不许折成完整空名单`;
+}
 // 已经停在 stopping 时，宽限时钟不许被重试或失败回写刷新。
 // 看门狗每轮对 stopping 再 stop-session；失败路径若写 updatedAt=now()，
 // 重置它的正是等它的那个循环，宽限窗永远到不了（#1174 缺陷二，2026-09-12 实咬）。
@@ -493,7 +531,7 @@ export function createExecutionRuntime(opts={}) {
             }
             const why=String(listed?.why||'');
             stages.list = listed?.stage==='connect' ? 'connect'
-              : /超时|预算|deadline|建连/.test(why) ? 'timeout'
+              : listed?.stage==='timeout' || /超时|预算|deadline|建连/.test(why) ? 'timeout'
               : listed?.partial ? 'partial'
               : 'error';
           } catch { stages.list = 'error'; stages.listMs = now()-tList; }
@@ -605,8 +643,12 @@ export function createExecutionRuntime(opts={}) {
         }
       }
     }
+    const counts=summarizeScanObservation({sessions,errors});
+    stages.snapshots.observed=counts.observed;
+    stages.snapshots.unknown=counts.unknown;
+    stages.byError=counts.byError;
     const partial=errors.length>0;
-    return {ok:!partial,scope:includeExternal?'managed+external':'managed',includesExternal:includeExternal,sessions,errors,partial,complete:!partial,stages};
+    return {ok:!partial,scope:includeExternal?'managed+external':'managed',includesExternal:includeExternal,sessions,errors,partial,complete:!partial,counts,stages};
   }
   async function waitForCompletion(key,{timeoutMs=600000,pollMs=1500}={}) {
     const deadline=now()+timeoutMs;

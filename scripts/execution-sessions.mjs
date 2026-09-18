@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {COMMANDER_SCAN_BUDGET_MS,createExecutionRuntime} from './lib/execution-runtime.mjs';
+import {COMMANDER_SCAN_BUDGET_MS,createExecutionRuntime,formatIncompleteScanWhy,summarizeScanObservation} from './lib/execution-runtime.mjs';
 import {EXECUTION_WAITING,sessionStateOf} from './lib/execution-states.mjs';
 import {pathToFileURL} from 'node:url';
 export function scanBudgetMs(env=process.env) {
@@ -35,6 +35,8 @@ try {
   const r=await createExecutionRuntime({managedListTimeoutMs:budgetMs}).listSessions();
   const complete=r.ok===true&&r.partial!==true&&r.complete!==false;
   const sessions=Array.isArray(r.sessions)?r.sessions.map(normalizeExecutionSession):null;
+  const counts=r.counts||summarizeScanObservation({sessions,errors:r.errors});
+  const why=complete?null:formatIncompleteScanWhy(counts);
   console.log(JSON.stringify({
     type:'sessions',
     sessions,
@@ -45,9 +47,12 @@ try {
     complete,
     stages:r.stages||null,
     errors:r.errors||[],
+    counts,
+    why,
   }));
   if(!complete){
-    console.error('execution session scan incomplete: '+JSON.stringify(r.errors||[]));
+    // 计数走 stdout 协议帧；stderr 只留短 why，避免再被 200 字节截成 "ma"
+    console.error(why);
     process.exitCode=2;
   }
 } catch(e) {console.error(e.message);process.exitCode=2;}

@@ -41,15 +41,23 @@ export function acceptSessionsFrame(f) {
   }
   const complete = f.complete !== false && f.partial !== true && f.ok !== false;
   if (!complete) {
+    const counts = f.counts && typeof f.counts === 'object' ? f.counts : null;
+    const why = typeof f.why === 'string' && f.why.trim()
+      ? f.why
+      : (counts && Number.isInteger(counts.observed)
+        ? `会话名单不完整：观察到 ${counts.observed}，未知 ${counts.unknown}，错误 ${counts.errors}——没查成，不许折成完整空名单`
+        : '会话名单不完整（partial/超时）——没查成，不许折成完整空名单');
     return {
       ok: false,
       partial: true,
       list: f.sessions,
       stages: f.stages || null,
-      why: '会话名单不完整（partial/超时）——没查成，不许折成完整空名单',
+      errors: Array.isArray(f.errors) ? f.errors : [],
+      counts,
+      why,
     };
   }
-  return { ok: true, list: f.sessions, stages: f.stages || null };
+  return { ok: true, list: f.sessions, stages: f.stages || null, counts: f.counts || null };
 }
 
 function readToken() {

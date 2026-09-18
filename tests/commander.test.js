@@ -3373,7 +3373,11 @@ describe('scanSessions：零输出/坏形状 = 没查成，不许折成空名单
       assert.equal(r.scanned, false);
       assert.equal(r.partial, true);
       assert.equal(Array.isArray(r.items), true);
-      assert.equal(r.items.length, 1);
+      assert.equal(r.items.length, 2, 'M 条失败不许把 N 条成功清零');
+      assert.equal(r.counts.observed, 1);
+      assert.equal(r.counts.unknown, 1);
+      assert.equal(r.counts.errors, 1);
+      assert.match(String(r.error || ''), /观察到 1，未知 1，错误 1/);
     } finally { restore(); }
   });
 });

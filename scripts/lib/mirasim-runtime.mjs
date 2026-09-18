@@ -1372,7 +1372,8 @@ export function createRuntime(opts = {}) {
         if (waitMs <= 0) return fail('会话枚举未证明完整（hasMore 缺失或超时）', { partial: true, stage: 'list' });
         wire.send({ type: 'listSessions', scope: listOpts.scope || 'global', limit });
         const msg = await wire.waitFor(m => m.type === 'sessions', Math.max(1, waitMs));
-        if (!msg || !Array.isArray(msg.sessions)) {
+        if (!msg) return fail('会话名单等帧超时', { stage: 'timeout', partial: true });
+        if (!Array.isArray(msg.sessions)) {
           return fail('服务端没回可用的 sessions 帧（没查成）', { stage: 'list' });
         }
         if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
@@ -1396,12 +1397,17 @@ export function createRuntime(opts = {}) {
    * 等帧预算跟 listSessions 同一格（t.list / SESSIONS_TIMEOUT_MS），不是 snapshot 的 6s。
    */
   async function handshake() {
-    const wire = await open();
+    const deadline = now() + t.list;
+    const remaining = () => Math.max(0, deadline - now());
+    const wire = await open({ deadlineMs: now() + remaining() });
     try {
+      if (remaining() <= 0) {
+        return { ok: false, unscanned: true, errors: ['建连耗尽握手预算'] };
+      }
       const contract = judgeContract(wire.state, { pinnedVersion });
       if (contract.unscanned) return contract;
       wire.send({ type: 'listSessions' });
-      const listed = await wire.waitFor(m => m.type === 'sessions', t.list);
+      const listed = await wire.waitFor(m => m.type === 'sessions', Math.max(1, remaining()));
       if (!listed || !Array.isArray(listed.sessions)) {
         return {
           ok: false,

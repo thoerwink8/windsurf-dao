@@ -274,6 +274,8 @@ function scanSessions() {
         partial: accepted.partial === true,
         items: Array.isArray(accepted.list) ? accepted.list : undefined,
         stages: accepted.stages || undefined,
+        errors: accepted.errors || undefined,
+        counts: accepted.counts || undefined,
         error: accepted.why,
       };
     }
@@ -289,7 +291,7 @@ function scanSessions() {
     }
     return { scanned: false, error: '会话名单没打 type=sessions 协议帧（零输出/坏形状）——观测面没查成，不许折成空名单' };
   }
-  return { scanned: true, items: frame.list, stages: frame.stages || undefined };
+  return { scanned: true, items: frame.list, stages: frame.stages || undefined, counts: frame.counts || undefined };
 }
 
 /**
