@@ -24,7 +24,7 @@ function harness(overrides = {}) {
     startSession: async (spec) => { const key = `session-${++nextKey}`; sessions.set(key, spec); calls.push(['startSession', spec.profileId, spec.workdir]); return { sessionKey: key }; },
     waitForCompletion: async (key) => ({ status: sessions.get(key).settle || 'done' }),
     readSession: async (key) => sessions.get(key).view ?? text('{}'),
-    listSessions: async () => ({ ok: true, sessions: [...sessions].map(([key, spec]) => ({ sessionKey: key, cwd: spec.workdir })) }),
+    listSessions: async () => { calls.push(['listSessions']); return { ok: true, sessions: [...sessions].map(([key, spec]) => ({ sessionKey: key, cwd: spec.workdir })) }; },
     stopSession: async (key) => { calls.push(['stopSession', key]); return { ok: true }; },
     ...overrides.runtime,
   };
@@ -110,15 +110,12 @@ describe('activities bind the workflow to real systems', () => {
     const blocked = harness({ runtime: { readSession: async () => text('```json\n{"plan":"Implement."}\n```'), stopSession: async () => ({ ok: false }) } });
     await assert.rejects(blocked.activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /release unverified/);
   });
-  it('a failed launch reaps its own tree before rethrowing, so the retry is not blocked by the lease', async () => {
-    const { activities, calls } = harness({
-      runtime: {
-        startSession: async (spec) => { if (spec.profileId === 'exec-profile') throw Object.assign(new Error('连不上回环 ws'), { code: 'MirasimUnavailableError' }); return { sessionKey: 'session-x' }; },
-      },
-    });
-    await activities.prepare(task).catch(() => {});
-    await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /回环 ws/);
-    assert.equal(calls.some(([kind, ...rest]) => kind === 'listSessions' || kind === 'stopSession'), false, '没有遗留会话时不该白跑收尾');
+  it('reaps the tree before starting, so a retry is never blocked by a stale session', async () => {
+    const { activities, calls } = harness({ runtime: { readSession: async () => text('```json\n{"plan":"Implement."}\n```') } });
+    await activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 });
+    const startIdx = calls.findIndex(([kind]) => kind === 'startSession');
+    const reapIdx = calls.findIndex(([kind]) => kind === 'listSessions');
+    assert.equal(reapIdx >= 0 && reapIdx < startIdx, true, '起会话前必须先收本树（否则重试撞租约闸）');
   });
   it('a session that does not finish is a failure, never an empty result', async () => {
     const { activities } = harness({ runtime: { waitForCompletion: async () => ({ status: 'unknown' }) } });
