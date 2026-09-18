@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
+import {createRuntime as createMirasimRuntime,judgeCompletion,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
@@ -82,6 +82,23 @@ export function judgeExecutionCompletion(view) {
   if(!String(view.text??snapshot.text??'').trim()&&!(view.toolCalls||snapshot.toolCalls)?.length)return {status:'unknown',reason:'terminal session has no observable output',confirmedBy:['session']};
   return {status:'done',reason:'agent turn ended with observable output; task artifacts still require acceptance',confirmedBy:['session','output']};
 }
+// 托管 Mirasim 完工：会话层先判（等人 / 无产出 / 已死）；会话说 done 再走
+// route-aware 账本交叉核。cloud/relay 缺账本不得 done；local/ACP 可以。
+// 生产入口 readSession / waitForCompletion 必须走这里——只信 judgeExecutionCompletion
+// 会把缺账本的 cloud 判成 done（#1174 T6 / PR #1375 审官 P1）。
+function judgeManagedCompletion(view, meta = {}, cross = {}) {
+  const sessionVerdict = judgeExecutionCompletion(view);
+  if (sessionVerdict.status !== 'done') return sessionVerdict;
+  return judgeCompletion({
+    view,
+    snapshotMissing: view?.missing === true,
+    ledger: cross.ledger,
+    journal: cross.journal,
+    since: Number(meta.startedAt || meta.createdAt) || 0,
+    route: meta.route,
+    backend: meta.backend,
+  });
+}
 function busy(message,reason='lease-held'){const e=new Error(message);e.code='busy';e.detail={busy:true,reason};return e;}
 // 终态/预留态的正典在 lib/execution-states.mjs——回收侧（board-gc）读同一份，
 // 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
@@ -128,6 +145,30 @@ export function createExecutionRuntime(opts={}) {
   function metadata(key){return readJson(metaFile(key));}
   const backend=(key,m)=>((m?.backend||(String(key).startsWith('acp:')?'acp':'mirasim'))==='acp'?acp:mirasim);
   const keyOf=m=>m.recordKey||m.sessionKey;
+  // 账本交叉核给完工判据用。ACP 没有 relay 账本；注入的 fake 可以没有 crossCheck，
+  // 缺了就记「没给账本」——cloud 因此不得 done，local/ACP 仍可跳过。
+  function managedCrossCheck(key, meta) {
+    const backendName = meta?.backend || (String(key).startsWith('acp:') ? 'acp' : 'mirasim');
+    if (backendName === 'acp' || String(key).startsWith('acp:')) {
+      return { ledger: { readable: false, why: 'ACP usage is independently collected' }, journal: { readable: false } };
+    }
+    if (typeof mirasim.crossCheck !== 'function') {
+      return { ledger: { readable: false, why: '没给账本' }, journal: { readable: false } };
+    }
+    try {
+      const x = mirasim.crossCheck(meta?.sessionKey || key);
+      return {
+        ledger: x?.ledger || { readable: false, why: '没给账本' },
+        journal: x?.journal || { readable: false },
+      };
+    } catch (e) {
+      return { ledger: { readable: false, why: String(e?.message || e) }, journal: { readable: false } };
+    }
+  }
+  function managedVerdict(view, meta, key) {
+    const record = { ...(meta || {}), backend: meta?.backend || (String(key).startsWith('acp:') ? 'acp' : 'mirasim') };
+    return judgeManagedCompletion(view, record, managedCrossCheck(key, record));
+  }
   function registry() {
     let names;try{names=fs.readdirSync(sessionsDir).filter(n=>n.endsWith('.json')).sort();}catch(e){if(e.code==='ENOENT')return [];throw e;}
     if(names.length>(opts.registryLimit??10000))throw new Error('managed registry limit reached');
@@ -296,10 +337,10 @@ export function createExecutionRuntime(opts={}) {
     }
     if(initial&&!initial.sessionKey)return {phase:initial.state,text:'',toolCalls:[],missing:false,partial:false,via:'managed-registry',execution:initial,launchUncertain:initial.state==='uncertain'};
     const view=await backend(key,initial).readSession(initial?.sessionKey||key);
+    const verdict=managedVerdict(view, initial, key);
     let result=initial;
     if(initial)result=await fence(()=>{
       const current=metadata(key);if(!current)return null;
-      const verdict=judgeExecutionCompletion(view);
       let state=RESERVED.has(current.state)||current.cleanupVerified?current.state:verdict.status;
       // 快照读不成（unknown）不许把已经落盘的终态改回 unknown，否则死人登记永久占树。
       // #1176 返工实咬：peek 一次就把 completed 写成 unknown，下一跳 startSession 被挡。
@@ -549,7 +590,16 @@ export function createExecutionRuntime(opts={}) {
   }
   async function waitForCompletion(key,{timeoutMs=600000,pollMs=1500}={}) {
     const deadline=now()+timeoutMs;
-    for(;;){const view=await readSession(key),verdict=judgeExecutionCompletion(view);if(!['running','unknown'].includes(verdict.status))return {...verdict,view};if(now()>=deadline)return {status:'unknown',reason:'completion wait timed out',confirmedBy:[],view};await wait(pollMs);}
+    for(;;){
+      const view=await readSession(key);
+      const meta=view.execution||metadata(key);
+      const verdict=managedVerdict(view, meta, key);
+      // unknown 继续轮询（账本可能稍后出现）；到点把最后一次判据原样交出去，
+      // 不要盖成笼统的 timeout——cloud 缺账本的 reason 必须能被看见。
+      if(verdict.status!=='running'&&(verdict.status!=='unknown'||now()>=deadline))return {...verdict,view};
+      if(now()>=deadline)return {status:'unknown',reason:'completion wait timed out',confirmedBy:[],view};
+      await wait(pollMs);
+    }
   }
   async function resumeSession(key,prompt) {
     assertMutationAllowed();const m=metadata(key);if(!m||!m.sessionKey)throw new Error('resume requires confirmed persistent execution metadata');

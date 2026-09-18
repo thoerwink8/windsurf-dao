@@ -434,6 +434,39 @@ linuxTest('resume uses new ACP key through the same fence and preserves task/acc
   const r=await rt.resumeSession(s.sessionKey,'continue');assert.notEqual(r.sessionKey,s.sessionKey);assert.equal(r.taskId,'same-task');assert.equal(r.resumeFrom,s.sessionKey);assert.equal(r.accountPoolId,profile.accountPoolId);assert.equal(a.calls.resume[0].options.sessionKey,r.sessionKey);
 });
 linuxTest('completion timeout is unknown rather than successful running',async t=>{const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));assert.equal((await rt.waitForCompletion(s.sessionKey,{timeoutMs:0})).status,'unknown');});
+// #1174 T6 / PR #1375 审官 P1：生产入口 createExecutionRuntime 必须走 route-aware 判据。
+// 纯函数 judgeCompletion 测过 local 可 done、cloud 缺账本 unknown，但 waitForCompletion
+// 之前只调 judgeExecutionCompletion(view)，cloud 缺账本会被直接判 done。
+linuxTest('生产入口：cloud 缺账本不得 done，local/ACP 无账本可 done',async t=>{
+  const doneView={phase:'done',text:'PONG',toolCalls:[],missing:false,error:null};
+  const unread={ledger:{readable:false,rows:[],why:'这个会话还没有账本目录'},journal:{readable:false}};
+  async function viaRuntime({route,acp}={}) {
+    const f=fixture(t),m=fakeRuntime();
+    m.crossCheck=()=>unread;
+    const a=acp?fakeRuntime():undefined;
+    const rt=runtime(f,{mirasimRuntime:m,...(a?{acpRuntime:a,profiles:[profile]}:{})});
+    const started=acp
+      ?await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'PONG'})
+      :await rt.startSession({...spec(f),route});
+    (acp?a:m).views.set(started.sessionKey,doneView);
+    const peeked=await rt.readSession(started.sessionKey);
+    const waited=await rt.waitForCompletion(started.sessionKey,{timeoutMs:0,pollMs:1});
+    return {peeked,waited,meta:records(f)[0]};
+  }
+  const cloud=await viaRuntime({route:'cloud'});
+  assert.notEqual(cloud.waited.status,'done','cloud/relay 缺账本不得 done');
+  assert.equal(cloud.waited.status,'unknown');
+  assert.match(cloud.waited.reason,/账本|没查成/);
+  assert.notEqual(cloud.peeked.execution.observedState,'done');
+  assert.equal(cloud.meta.route,'cloud');
+  const local=await viaRuntime({route:'local'});
+  assert.equal(local.waited.status,'done');
+  assert.equal(local.peeked.execution.observedState,'done');
+  assert.equal(local.meta.route,'local');
+  const acpDone=await viaRuntime({acp:true});
+  assert.equal(acpDone.waited.status,'done');
+  assert.equal(acpDone.meta.backend,'acp');
+});
 linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
   const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
   const started=await rt.startSession(spec(f));

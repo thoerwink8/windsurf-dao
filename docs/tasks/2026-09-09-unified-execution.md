@@ -18,6 +18,8 @@
 - [ ] T4 Mirasim 周期升级：官方最新版发现、候选契约验证、在途排空、原子切换、故障回退；部署 orca 用户并验证定时器；负责人 Boyle。
 - [ ] T5 扩展执行目录：模型、agent、后端、渠道、账户池、角色、成本分开；确认真实供应商模型列表及 DeepSeek V4.1 Flash 是否可用；负责人 Chandrasekhar。
 - [ ] T6 指挥官接线：一套调度消费 Mirasim/ACP；首帧透传 local/cloud，完成判据不再要求 direct 必须有 relay 账本；负责人主会话。
+  - [x] T6a 首帧透传 local/cloud：execution profile 命中时 `startSession` 带 `profileId`/`backend`/`route`；ACP 模型（composer-2.5）不得掉回 pi。无 profile 时 relay 腿 `route=cloud`、direct 腿 `route=local`。mirasim 第一帧 `prompt` 把 local/cloud 原样送出。证据：`scripts/lib/executor-binding.mjs` `wireExecutionRoute` / `resolveWorkerStartRoute`；`tests/executor-binding.test.js`「#1174 T6」；`tests/mirasim-runtime.test.js`「首帧透传 local / cloud」。
+  - [x] T6b direct 完成不要求 relay 账本：`judgeCompletion` 在 `route=local|direct|native` 或 `backend=acp` 时快照 done + 无死因即 done；`route=cloud|relay` 仍要账本交叉核。#1121 死因仍优先。证据：`scripts/lib/mirasim-runtime.mjs` `completionSkipsRelayLedger`；`tests/mirasim-runtime.test.js`「direct/local/ACP 快照 done 不要求 relay 账本」。
 - [ ] T7 直接渠道：实际模型请求不用旧 2核2G New API；Windsurf/OpenCode/CommandCode 优先性价比模型，有权限/协议/计费证据才启用；负责人主会话。
   - [x] T7a 周期探针/派前探默认不再对退役 newapi 发模型请求：`gw:` 池默认 skip（人工诊断 `--include-retired-gw`）；`planProbe(mirasim-relay)` 不拼 4317；sslip.io / `127.0.0.1:4317` 判退役。证据：`scripts/lib/retired-gateway-probe.mjs`、`tests/retired-gateway-probe.test.js`、`tests/provider-probe.test.js`。T7 顶层仍缺：Windsurf/OpenCode/CommandCode 有证据才启用；本机 `responses-chat-bridge` 仍在跑（不在本切片）。
 - [ ] T8 自动交互：任务内已知答案自动回应、必要人工问题持久 waiting_user；等待不被当卡死重派，取消和恢复验证通过；负责人主会话。

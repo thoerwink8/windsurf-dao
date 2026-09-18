@@ -22,8 +22,10 @@
 //  1. 起会话前先断言契约：state.version 必须等于钉死的版本，且 prompt / snapshot 真正要读的
 //     那几个字段形状对得上。不符 → 抛 MirasimContractError，一帧 prompt 都不发。
 //  2. 判完工不能只信自己这条连接的 snapshot：prompt 之后推送不保证送到发起连接
-//     （§72 实咬：我方只见 queued，服务端其实 2.7 秒就干完了）。要 phase 是 done
+//     （§72 实咬：我方只见 queued，服务端其实 2.7 秒就干完了）。relay/cloud 要 phase 是 done
 //     **且** 账本交叉核对得上；两边不一致 → 判「没查成」，不判成。
+//     #1174 T6：direct/local/native/ACP 流量不经 mirasim relay，账本目录结构上就不存在，
+//     再要交叉核只会把「真干完了」判成 unknown（2026-09-06 真机：grok 回 PONG 后一直等到超时）。
 //  3. snapshot 取不到本身也是「没查成」——服务端对它不认识的会话直接不回帧（实测超时，
 //     不是回一个空 snapshot），这跟「跑完了但没内容」是两件事，不许合成一种。
 //
@@ -555,15 +557,27 @@ export function parseTurnTiming(text) {
 }
 
 /**
+ * direct/local/native 和 ACP 不经 mirasim relay，~/.mirasim/traffic 下没有账本目录。
+ * 对它们再要账本交叉核 = 把「真干完了」判成 unknown（#1174 T6）。
+ * cloud/relay 仍要账本。没给 route/backend 时保持旧行为（fail-closed，当 relay）。
+ */
+export function completionSkipsRelayLedger({ route, backend } = {}) {
+  if (String(backend || '').trim().toLowerCase() === 'acp') return true;
+  const r = String(route || '').trim().toLowerCase();
+  return r === 'local' || r === 'direct' || r === 'native';
+}
+
+/**
  * 判完工。这是本文件的核心判据，规矩只有一条：**不许把「没查成」说成「成」**。
  *  view          —— readSessionView 的结果（phase/text/…）
  *  snapshotMissing —— 服务端没回 snapshot 帧
  *  ledger        —— readLedger 的结果 {readable, rows, why}
  *  journal       —— 可选次级判据 {readable, turns, why}
  *  since         —— 起针时刻（毫秒），只认这之后的账本行
+ *  route/backend —— #1174 T6：direct/local/ACP 跳过 relay 账本交叉核
  * 返回 {status:'done'|'running'|'failed'|'unknown', confirmedBy[], reason}
  */
-export function judgeCompletion({ view, snapshotMissing = false, ledger, journal, since = 0 } = {}) {
+export function judgeCompletion({ view, snapshotMissing = false, ledger, journal, since = 0, route, backend } = {}) {
   if (snapshotMissing) {
     return { status: 'unknown', confirmedBy: [], reason: '取不到 snapshot：服务端没回帧，这一针的状态没查成' };
   }
@@ -611,6 +625,16 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       confirmedBy: ['snapshot'],
       reason: `快照报 ${phase}，但会话带着死因：${deathNote}——被打断的一针不算完工`,
       error: deathNote,
+    };
+  }
+
+  // #1174 T6：direct/local/ACP 不经 relay，账本目录结构上就不存在。快照 done 且无死因即成。
+  // cloud/relay 仍走下面的交叉核。没给 route 时不猜，保持旧行为。
+  if (completionSkipsRelayLedger({ route, backend })) {
+    return {
+      status: 'done',
+      confirmedBy: ['snapshot'],
+      reason: `快照 ${phase}（direct/local 不经 relay，不要求账本交叉核）`,
     };
   }
 
@@ -881,6 +905,8 @@ export function createRuntime(opts = {}) {
   const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
   // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
   const channelFailed = opts.recordChannelFailure || recordChannelFailure;
+  // startSession 记下的 route，给同一 runtime 上的 waitForCompletion 用。跨进程仍要显式传。
+  const launchRouteBySession = new Map();
   const t = {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
@@ -1143,6 +1169,7 @@ export function createRuntime(opts = {}) {
           }
           throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
+        if (route && route !== 'auto') launchRouteBySession.set(verdict.sessionKey, route);
         return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
       } finally {
         wire.close();
@@ -1297,14 +1324,18 @@ export function createRuntime(opts = {}) {
    * 等完工。轮询 snapshot，到终态再做交叉核。
    * 超时不叫失败也不叫成功，叫「没查成」——它俩在盘面上的处置完全不同。
    */
-  async function waitForCompletion(sessionKey, { since = 0, timeoutMs = 600_000, pollMs = 3_000 } = {}) {
+  async function waitForCompletion(sessionKey, { since = 0, timeoutMs = 600_000, pollMs = 3_000, route, backend } = {}) {
     const deadline = now() + timeoutMs;
     let last = null;
     for (;;) {
       const view = await readSession(sessionKey);
       last = view;
       const { ledger, journal } = crossCheck(sessionKey);
-      const verdict = judgeCompletion({ view, snapshotMissing: view.missing, ledger, journal, since });
+      const verdict = judgeCompletion({
+        view, snapshotMissing: view.missing, ledger, journal, since,
+        route: route ?? launchRouteBySession.get(sessionKey) ?? undefined,
+        backend,
+      });
       if (verdict.status !== 'running') {
         if (verdict.status !== 'unknown' || now() >= deadline) return { ...verdict, view };
       }
