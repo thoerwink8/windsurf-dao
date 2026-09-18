@@ -94,6 +94,8 @@ export function classifyStepFailure(error) {
   // 这些在实测里几分钟内自愈（回环 ws 12 小时红 11 次、每次下一轮自己好），
   // 判成 unscanned 会让每张单都要人点一次 resume——那不是谨慎，是把自动闭环变成半自动。
   if (code === 'MirasimUnavailableError' || code === 'busy') return 'retryable';
+  // 会话在等人回答：重试只会再问一次——这是要人/要策略介入的第三态，不是传输故障。
+  if (code === 'WAITING_USER') return 'blocked';
   if (['lease-held', 'channel-full', 'maintenance', 'launch-uncertain'].includes(error?.reason)) return 'retryable';
   return 'unscanned';
 }
