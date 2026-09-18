@@ -19,6 +19,7 @@ import {
   declFileForTest,
   parseBudgetDeclaration,
   SECOND_CUT_TARGET,
+  SPAWN_CALL_RE,
 } from '../scripts/lib/spawn-budget.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -340,4 +341,19 @@ test('⑫ 迁移后声明合计覆盖本仓既有调用（不隐式按实际数�
   }
   const files = readdirSync(HERE).filter((f) => f.endsWith('.spawn-budget.json'));
   assert.equal(files.length > 0, true, '声明文件必须进 git，不能只靠运行时按实际数生成');
+});
+
+test('⑬ 注释和字符串里的 spawnSync( 不当调用（#1405 审官 P1）', () => {
+  const src = [
+    'spawnSync("real");',
+    '// spawnSync("comment");',
+    'const s = "spawnSync(str)";',
+  ].join('\n');
+  assert.equal((src.match(SPAWN_CALL_RE) || []).length, 3, '正则扫原文仍会把注释/字符串算进去');
+  assert.equal(countSpawnCalls(src), 1, '词法扫描只留那一处真调用');
+  assert.equal(countSpawnCalls('/* spawnSync("block"); */'), 0);
+  assert.equal(countSpawnCalls("const b = 'spawnSync(str)';"), 0);
+  assert.equal(countSpawnCalls('const c = `spawnSync(tmpl)`;'), 0);
+  assert.equal(countSpawnCalls('spawnSync /* gap */ ("x");'), 1);
+  assert.equal(countSpawnCalls('const d = `x ${spawnSync("inner")} y`;'), 1, '模板插值里的调用要数');
 });

@@ -23,18 +23,131 @@ export const SECOND_CUT_TARGET = 40;
 export const DECL_SUFFIX = '.spawn-budget.json';
 
 /**
- * 数的是**调用**，不是「提到」。
- * 2026-09-06 首版按 /spawnSync/ 计数，结果本闸自己的测试文件里
- * `import { classifySpawnBudget }` 那行、注释里写的 `spawnSync` 全被算进去，
- * 总数凭空多出几处——判据把「提到」当成了「使用」，这类闸最典型的假阳性。
- * 只认后面紧跟 `(` 的形态。
+ * 调用形态（标识符 + 括号）。不要拿它扫原文：注释和字符串里的同形文本不是调用。
+ * 计数走 countSpawnCalls 的词法扫描。
  */
 export const SPAWN_CALL_RE = /\bspawnSync\s*\(/g;
 
 export const TEST_FILE_RE = /\.test\.(js|mjs|cjs)$/i;
 
+const SPAWN_IDENT = 'spawnSync';
+
+function isIdentChar(c) {
+  return c != null && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '_' || c === '$');
+}
+
+function skipLineComment(s, i, n) {
+  i += 2;
+  while (i < n && s[i] !== '\n' && s[i] !== '\r') i++;
+  return i;
+}
+
+function skipBlockComment(s, i, n) {
+  i += 2;
+  while (i + 1 < n && !(s[i] === '*' && s[i + 1] === '/')) i++;
+  return i + 1 < n ? i + 2 : n;
+}
+
+function skipQuoted(s, i, n, quote) {
+  i += 1;
+  while (i < n) {
+    if (s[i] === '\\') { i += 2; continue; }
+    if (s[i] === quote) return i + 1;
+    i++;
+  }
+  return n;
+}
+
+/** spawnSync 与 ( 之间只允许空白和注释。 */
+function skipWsComments(s, i, n) {
+  while (i < n) {
+    const c = s[i];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v') {
+      i++;
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '/') {
+      i = skipLineComment(s, i, n);
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      i = skipBlockComment(s, i, n);
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/**
+ * 数的是**调用**，不是「提到」。
+ * 2026-09-06 首版按 /spawnSync/ 计数，import 行和注释里的字都被算进去。
+ * 2026-09-18 #1405 审官 P1：`\bspawnSync\s*\(` 扫原文，仍会把 `// spawnSync(`
+ * 和 `"spawnSync("` 当成调用。词法扫描跳过注释、引号串、模板字面量；
+ * 模板插值 `${...}` 里的代码照数（那是真调用）。
+ */
 export function countSpawnCalls(source) {
-  return (String(source).match(SPAWN_CALL_RE) || []).length;
+  const s = String(source);
+  const n = s.length;
+  let i = 0;
+  let count = 0;
+  const stack = [{ kind: 'code', braces: 0 }];
+
+  while (i < n) {
+    const ctx = stack[stack.length - 1];
+    const c = s[i];
+    const c2 = s[i + 1];
+
+    if (ctx.kind === 'code') {
+      if (c === '/' && c2 === '/') {
+        i = skipLineComment(s, i, n);
+        continue;
+      }
+      if (c === '/' && c2 === '*') {
+        i = skipBlockComment(s, i, n);
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        i = skipQuoted(s, i, n, c);
+        continue;
+      }
+      if (c === '`') {
+        stack.push({ kind: 'template' });
+        i++;
+        continue;
+      }
+      if (c === '{') { ctx.braces++; i++; continue; }
+      if (c === '}') {
+        if (ctx.braces > 0) ctx.braces--;
+        else if (stack.length > 1) stack.pop();
+        i++;
+        continue;
+      }
+      if (c === 's' && s.startsWith(SPAWN_IDENT, i)) {
+        const prev = i > 0 ? s[i - 1] : '';
+        const afterPos = i + SPAWN_IDENT.length;
+        const after = afterPos < n ? s[afterPos] : '';
+        if (!isIdentChar(prev) && !isIdentChar(after)) {
+          const j = skipWsComments(s, afterPos, n);
+          if (j < n && s[j] === '(') count++;
+        }
+        i += SPAWN_IDENT.length;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (c === '\\') { i += 2; continue; }
+    if (c === '`') { stack.pop(); i++; continue; }
+    if (c === '$' && c2 === '{') {
+      stack.push({ kind: 'code', braces: 0 });
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return count;
 }
 
 /** tests/land.test.js → land.test.spawn-budget.json */
