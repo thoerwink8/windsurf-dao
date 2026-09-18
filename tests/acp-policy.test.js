@@ -146,7 +146,7 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
   assert.ok(scope('cat README.md'), 'bare filename resolves inside the tree');
   assert.ok(scope('cat nested/file.txt'), 'relative path inside the tree');
   assert.ok(scope('test -f packages/fleet/README.md'), 'test -f is the common pre-commit self-check');
-  assert.ok(scope('grep -n dao nested/file.txt && git status'), 'paths inside a chain stay allowed');
+  assert.equal(scope('grep -n dao nested/file.txt && git status').permission, 'worktree_scoped', 'paths inside a chain stay allowed');
   // 树外的字面路径必须拒绝：前缀命中不等于读凭据放行。
   assert.equal(scope('cat /etc/passwd'), null, 'absolute path outside the tree is refused');
   assert.equal(scope('cat ' + path.join(outside, 'secret')), null, 'absolute outside path is refused');
