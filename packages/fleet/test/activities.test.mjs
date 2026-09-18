@@ -33,7 +33,7 @@ function harness(overrides = {}) {
   const activities = createActivities({
     runtime, gh, git,
     projects: { 'owner/repo': '/repos/repo' },
-    familiesOf: id => FAMILIES[id],
+    profileOf: id => (FAMILIES[id] ? { agent: id === 'review-profile' ? 'codex' : 'grok', family: FAMILIES[id] } : null),
     leadPrompt: () => 'lead prompt', executorPrompt: () => 'exec prompt', reviewerPrompt: () => 'review prompt',
     ...overrides.deps,
   });
@@ -126,7 +126,7 @@ describe('activities bind the workflow to real systems', () => {
     assert.equal(result.identityVerified, true);
     assert.equal(result.reviewerFamily, 'anthropic');
     assert.equal(result.executorFamily, 'xai');
-    const lying = harness({ runtime: { readSession: async () => text('```json\n{"findings":[]}\n```') }, deps: { familiesOf: id => (id === 'review-profile' ? 'xai' : FAMILIES[id]) } });
+    const lying = harness({ runtime: { readSession: async () => text('```json\n{"findings":[]}\n```') }, deps: { profileOf: id => (FAMILIES[id] ? { agent: 'codex', family: id === 'review-profile' ? 'xai' : FAMILIES[id] } : null) } });
     const forged = await lying.activities.review(task, { head: H, checkpoint: '/trees/b', pr: 19 }, { checks: {} });
     assert.equal(forged.reviewerFamily, 'xai');
     assert.equal(forged.executorFamily, 'xai');
