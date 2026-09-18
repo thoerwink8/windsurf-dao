@@ -5,6 +5,7 @@
 //   node src/cli.mjs start   --repo owner/name --issue N [--generation G] [--wait]
 //                            --lead-profile P --executor-profile E --reviewer-profile R
 //                            [--checks a,b] [--rounds 3] [--deploy]
+//                            档可以不给：--selection auto（默认，按腿表选）| ask（只打印候选）
 //   node src/cli.mjs status  --repo owner/name --issue N [--generation G]
 //   node src/cli.mjs signal  --repo owner/name --issue N [--generation G] --name resume|cancel
 //
@@ -81,14 +82,10 @@ function profileEntry(profileId) {
   return profile;
 }
 
-function specFromArgs(args) {
+function specFromArgs(args, roles) {
   const repo = String(args.repo || '');
   const issue = Number(args.issue);
-  const lead = String(args['lead-profile'] || '');
-  const executor = String(args['executor-profile'] || '');
-  const reviewer = String(args['reviewer-profile'] || '');
   if (!repo || !Number.isSafeInteger(issue) || issue <= 0) throw new Error('需要 --repo owner/name 与 --issue N');
-  for (const [name, id] of [['lead', lead], ['executor', executor], ['reviewer', reviewer]]) if (!id) throw new Error(`需要 --${name}-profile`);
   return normalizeTask({
     repository: repo,
     issue,
@@ -96,11 +93,45 @@ function specFromArgs(args) {
     contract: { requiredChecks: String(args.checks || 'check').split(',').map(x => x.trim()).filter(Boolean), deploymentRequired: args.deploy === true, targetBranch: String(args.base || 'master') },
     limits: { reviewRounds: Number(args.rounds || 3), stepTimeoutSeconds: Number(args.timeout || 1800) },
     roles: {
-      lead: { profile: lead, family: profileFamily(lead), accountPool: 'default' },
-      executor: { profile: executor, family: profileFamily(executor), accountPool: 'default' },
-      reviewer: { profile: reviewer, family: profileFamily(reviewer), accountPool: 'default' },
+      lead: { profile: roles.lead, family: profileFamily(roles.lead), accountPool: 'default' },
+      executor: { profile: roles.executor, family: profileFamily(roles.executor), accountPool: 'default' },
+      reviewer: { profile: roles.reviewer, family: profileFamily(roles.reviewer), accountPool: 'default' },
     },
   });
+}
+
+/** 选腿（#816 用户拍板）：显式档优先；没给档时按 --selection 走腿表。
+ *  auto = 用 leg-choice 直接选（跨厂约束在候选阶段淘汰）；
+ *  ask  = 只打印候选列表就退出，让人挑完带 --*-profile 重来（无人值守链路里由指挥官转飞书卡片）。 */
+async function resolveRoles(args) {
+  const explicit = {
+    lead: String(args['lead-profile'] || ''),
+    executor: String(args['executor-profile'] || ''),
+    reviewer: String(args['reviewer-profile'] || ''),
+  };
+  if (explicit.lead && explicit.executor && explicit.reviewer) return explicit;
+  const selection = String(args.selection || 'auto');
+  if (selection !== 'auto' && selection !== 'ask') throw new Error('--selection 只能是 auto 或 ask');
+  const { chooseLeg, renderLegTable, loadLegChoiceData } = await import('../../../scripts/lib/leg-choice.mjs');
+  const data = loadLegChoiceData({});
+  const pick = (role, excludeFamilies = []) => {
+    const result = chooseLeg({ profiles: data.profiles, role, excludeFamilies, health: data.health, breaker: data.breaker, headroom: data.headroom, history: data.history, now: Date.now() });
+    result.notes = [...data.notes, ...result.notes];
+    if (!result.recommended) throw new Error(`${role} 没有可用候选：\n${renderLegTable(result)}`);
+    return result;
+  };
+  const lead = explicit.lead || pick('lead').recommended;
+  const executor = explicit.executor || pick('executor').recommended;
+  const executorFamily = profileFamily(executor);
+  const reviewer = explicit.reviewer || pick('reviewer', executorFamily ? [executorFamily] : []).recommended;
+  if (selection === 'ask' && !(explicit.lead && explicit.executor && explicit.reviewer)) {
+    const tables = ['lead', 'executor', 'reviewer'].map(role => renderLegTable(chooseLeg({ profiles: data.profiles, role, excludeFamilies: role === 'reviewer' && executorFamily ? [executorFamily] : [], health: data.health, breaker: data.breaker, headroom: data.headroom, history: data.history, now: Date.now() })));
+    process.stdout.write(`${tables.join('\n\n')}\n\n候选如上（ask 模式不自动开工）。选定后带 --lead-profile/--executor-profile/--reviewer-profile 重新 start。\n`);
+    process.exitCode = 3;
+    return null;
+  }
+  process.stdout.write(`[fleet] 选腿：lead=${lead} executor=${executor} reviewer=${reviewer}\n`);
+  return { lead, executor, reviewer };
 }
 
 const reviewerPrompt = ({ task, artifact, checks }) => `你是本任务的独立审查者，只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD，不要改代码、不要提交、不要推送。
@@ -188,7 +219,9 @@ async function main() {
       return 0;
     }
     if (command === 'start') {
-      const task = specFromArgs(args);
+      const roles = await resolveRoles(args);
+      if (!roles) return 3;
+      const task = specFromArgs(args, roles);
       const handle = await client.workflow.start('fusionTaskWorkflow', {
         taskQueue: String(args.queue || QUEUE),
         workflowId: task.id,
