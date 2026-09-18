@@ -103,6 +103,10 @@ export function createActivities({ runtime, gh, git, projects, profileOf, review
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
     const settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
     const view = await runtime.readSession(key);
+    // 一轮结束就把它停掉：租约闸是「一棵树同时只许一个会话」，会话不释放，
+    // 下一轮（执行/复审/返工）在同一棵树里起不来——首跑实咬：lead 完成后 execute 被拒。
+    const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
+    if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `session release unverified: ${String(released?.why || '').slice(0, 120)}`);
     return { key, status: settled?.status, view };
   };
   /** 执行档的 agent 与 family 都从执行目录取：agent 决定起哪个执行体，family 决定跨厂判定。

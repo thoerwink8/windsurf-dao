@@ -102,6 +102,14 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 }), /no new commit/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'push'), false);
   });
+  it('releases the tree lease when a round ends, so the next round can start', async () => {
+    const { activities, calls } = harness({ runtime: { readSession: async () => text('```json\n{"plan":"Implement."}\n```') } });
+    const plan = await activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 });
+    assert.equal(plan.plan, 'Implement.');
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'stopSession'), true, '一轮结束必须释放租约');
+    const blocked = harness({ runtime: { readSession: async () => text('```json\n{"plan":"Implement."}\n```'), stopSession: async () => ({ ok: false }) } });
+    await assert.rejects(blocked.activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /release unverified/);
+  });
   it('a failed launch reaps its own tree before rethrowing, so the retry is not blocked by the lease', async () => {
     const { activities, calls } = harness({
       runtime: {
