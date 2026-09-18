@@ -90,5 +90,10 @@ export function classifyStepFailure(error) {
   if (code === 'CANCELLED') return 'cancelled';
   if (['AUTH_REQUIRED', 'PERMISSION_DENIED', 'INVALID_CONTRACT', 'INVALID_MODEL', 'UNSUPPORTED_CAPABILITY'].includes(code)) return 'blocked';
   if (['RATE_LIMITED', 'TRANSPORT_CLOSED', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED'].includes(code)) return 'retryable';
+  // 执行体自己抛的瞬时故障：回环 ws 连不上、租约/渠道背压、维护窗口。
+  // 这些在实测里几分钟内自愈（回环 ws 12 小时红 11 次、每次下一轮自己好），
+  // 判成 unscanned 会让每张单都要人点一次 resume——那不是谨慎，是把自动闭环变成半自动。
+  if (code === 'MirasimUnavailableError' || code === 'busy') return 'retryable';
+  if (['lease-held', 'channel-full', 'maintenance', 'launch-uncertain'].includes(error?.reason)) return 'retryable';
   return 'unscanned';
 }

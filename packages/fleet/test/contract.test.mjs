@@ -126,5 +126,9 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'INVALID_CONTRACT' }), 'blocked');
     assert.equal(classifyStepFailure({ code: 'CANCELLED' }), 'cancelled');
     assert.equal(classifyStepFailure({ code: 'UNKNOWN' }), 'unscanned');
+    assert.equal(classifyStepFailure({ code: 'MirasimUnavailableError' }), 'retryable', '回环 ws 连不上是瞬时故障，实测几分钟自愈');
+    assert.equal(classifyStepFailure({ code: 'busy', reason: 'lease-held' }), 'retryable', '背压不是失败');
+    assert.equal(classifyStepFailure({ code: 'ActivityFailure', reason: 'channel-full' }), 'retryable');
+    assert.equal(classifyStepFailure({ code: 'SomethingElse' }), 'unscanned', '认不出的不放行');
   });
 });

@@ -31,11 +31,12 @@ export async function fusionTaskWorkflow(input, options = {}) {
         state = await runFusionTask(task, activities, { previous, cancelled: () => cancelled, onState: value => { state = value; } });
         if (state.state !== 'blocked') return state;
         previous = state;
-        const transientBudget = state.failureClass === 'pending' ? 10 : 3;
+        const transientBudget = state.failureClass === 'pending' ? 10 : 5;
         if ((state.failureClass === 'retryable' || state.failureClass === 'pending') && transientRetries < transientBudget) {
           transientRetries += 1;
           // 退避必须确定性：工作流里出现随机/时间会让重放对不上历史（Temporal 沙箱外的 Math.random 不可重放）。
-          await sleep(state.failureClass === 'pending' ? '60s' : `${2 ** transientRetries}s`);
+          // 可重试档退避 4/8/16/32/64s——回环 ws 抖动实测是几十秒到几分钟级的瞬时故障。
+          await sleep(state.failureClass === 'pending' ? '60s' : `${2 ** (transientRetries + 1)}s`);
           continue;
         }
         await condition(() => resumed);
